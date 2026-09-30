@@ -84,7 +84,9 @@ async def test_executor_dispatches_all_allowed_actions(monkeypatch, action, fiel
         return FakeContext(page), None
 
     monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
-    executor = executor_module.BrowserRecipeExecutor()
+    # upload/api_call 은 외부 쓰기라 승인 근거가 필요하다. 이 테스트는 dispatch 를 보므로
+    # 서버측 검증자가 승인을 확인해 준 상황으로 둔다(승인 없는 경우는 아래 별도 테스트).
+    executor = executor_module.BrowserRecipeExecutor(approval_verifier=lambda payload, level: True)
     result = await executor({"action": action, "risk": "READ", **fields})
 
     assert result["ok"] is True
@@ -294,3 +296,169 @@ def test_local_agent_honors_explicit_navigation_timeout_above_default():
     assert _LocalAgentPage._playwright_timeout_seconds(90_000, 30.0) == 90.0
     assert _LocalAgentPage._playwright_timeout_seconds(None, 30.0) == 30.0
     assert _LocalAgentPage._playwright_timeout_seconds(300_000, 30.0) == 120.0
+
+
+# ---------------------------------------------------------------- Auto-review 게이트
+
+
+def _patch_page(monkeypatch):
+    page = FakePage()
+
+    async def acquire(**kwargs):
+        return FakeContext(page), None
+
+    monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
+    return page
+
+
+LOGIN_CLICK = {"action": "click", "selector": "#login-btn", "risk": "READ",
+               "url": "https://shop.example.com/", "seq": 3}
+
+
+async def test_write_step_without_approval_evidence_is_stopped_in_any_mode(monkeypatch):
+    """반환값 무시 결함 교정: 플래그와 무관하게 승인 없는 WRITE_EXTERNAL 은 실행되지 않는다."""
+    monkeypatch.delenv("WORK_RECIPE_AUTOREVIEW", raising=False)
+    page = _patch_page(monkeypatch)
+    result = await executor_module.BrowserRecipeExecutor()(
+        {"action": "upload", "selector": "#file", "value": "/tmp/a.txt", "risk": "READ", "seq": 1}
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "blocked"
+    assert result["risk"] == "WRITE_EXTERNAL"
+    assert result["llm_calls"] == 0
+    assert result["recovery"]["reason"] == "approval_required"
+    assert result["recovery"]["route"] == "human_gateway"
+    assert page.calls == []
+
+
+@pytest.mark.parametrize("mode", ["observe", "enforce"])
+async def test_self_reported_approval_flags_do_not_unlock_write_step(monkeypatch, mode):
+    monkeypatch.setenv("WORK_RECIPE_AUTOREVIEW", mode)
+    page = _patch_page(monkeypatch)
+    result = await executor_module.BrowserRecipeExecutor()(
+        {
+            "action": "upload", "selector": "#file", "value": "/tmp/a.txt", "risk": "READ",
+            "seq": 1, "approved": True, "screen_verified": True, "succeeded": True,
+            "context": {"approved": True, "approval_id": "forged", "run_id": "r1"},
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "blocked"
+    assert page.calls == []
+
+
+async def test_verifier_must_return_literal_true(monkeypatch):
+    page = _patch_page(monkeypatch)
+    result = await executor_module.BrowserRecipeExecutor(approval_verifier=lambda p, lv: "yes")(
+        {"action": "upload", "selector": "#file", "value": "/tmp/a.txt", "risk": "READ", "seq": 1}
+    )
+
+    assert result["ok"] is False
+    assert page.calls == []
+
+
+async def test_db_backed_approval_must_match_run_step_action_and_risk(monkeypatch):
+    from app.services.work_recipe import approval as approval_module
+
+    page = _patch_page(monkeypatch)
+    row = {"status": "approved", "run_id": "run-1", "step_seq": 1,
+           "action": "upload", "risk": "WRITE_EXTERNAL"}
+
+    async def fake_get(approval_id):
+        return dict(row) if approval_id == "ap-1" else None
+
+    monkeypatch.setattr(approval_module, "get_approval", fake_get)
+    step = {"action": "upload", "selector": "#file", "value": "/tmp/a.txt", "risk": "READ", "seq": 1}
+
+    async def run(**ctx):
+        return await executor_module.BrowserRecipeExecutor()({**step, "context": ctx})
+
+    assert (await run(approval_id="ap-1", run_id="run-1"))["ok"] is True
+    assert (await run(approval_id="ap-1", run_id="run-OTHER"))["ok"] is False
+    assert (await run(approval_id="ap-unknown", run_id="run-1"))["ok"] is False
+    assert (await run(approval_id="ap-1"))["ok"] is False
+    row["step_seq"] = 2
+    assert (await run(approval_id="ap-1", run_id="run-1"))["ok"] is False
+    row.update(step_seq=1, status="pending")
+    assert (await run(approval_id="ap-1", run_id="run-1"))["ok"] is False
+    row.update(status="approved", risk="READ")
+    assert (await run(approval_id="ap-1", run_id="run-1"))["ok"] is False
+    assert len([c for c in page.calls if c[0] == "upload"]) == 1
+
+
+async def test_observe_mode_records_verdict_but_does_not_block_login_submit(monkeypatch):
+    monkeypatch.delenv("WORK_RECIPE_AUTOREVIEW", raising=False)
+    page = _patch_page(monkeypatch)
+    result = await executor_module.BrowserRecipeExecutor()({**LOGIN_CLICK, "approved": True})
+
+    assert result["ok"] is True
+    assert result["risk"] == "READ"  # player 계약: 정적 등급 유지
+    assert result["llm_calls"] == 0
+    review = result["autoreview"]
+    assert review["verdict"] == "APPROVE_EACH"
+    assert review["mode"] == "observe" and review["enforced"] is False
+    assert review["ignored_claims"] == ["approved"]
+    assert any(call[0] == "click" for call in page.calls)
+
+
+async def test_enforce_mode_blocks_login_submit_without_verified_approval(monkeypatch):
+    monkeypatch.setenv("WORK_RECIPE_AUTOREVIEW", "enforce")
+    page = _patch_page(monkeypatch)
+    result = await executor_module.BrowserRecipeExecutor()(
+        {**LOGIN_CLICK, "approved": True, "screen_verified": True}
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "blocked"
+    assert result["autoreview"]["verdict"] == "APPROVE_EACH"
+    assert result["autoreview"]["enforced"] is True
+    assert result["llm_calls"] == 0
+    assert page.calls == []
+
+
+async def test_enforce_mode_runs_login_submit_with_server_verified_approval(monkeypatch):
+    monkeypatch.setenv("WORK_RECIPE_AUTOREVIEW", "enforce")
+    page = _patch_page(monkeypatch)
+    seen = []
+
+    def verifier(payload, level):
+        seen.append(level.value)
+        return True
+
+    result = await executor_module.BrowserRecipeExecutor(approval_verifier=verifier)(LOGIN_CLICK)
+
+    assert result["ok"] is True
+    assert seen == ["WRITE_EXTERNAL"]
+    assert any(call[0] == "click" for call in page.calls)
+
+
+@pytest.mark.parametrize("mode", ["observe", "enforce"])
+async def test_handoff_step_never_runs_even_with_approval_in_enforce(monkeypatch, mode):
+    monkeypatch.setenv("WORK_RECIPE_AUTOREVIEW", mode)
+    page = _patch_page(monkeypatch)
+    step = {"action": "click", "selector": "#change-password-btn", "risk": "READ",
+            "url": "https://aads.newtalk.kr/account", "seq": 2}
+    result = await executor_module.BrowserRecipeExecutor(approval_verifier=lambda p, lv: True)(step)
+
+    assert result["autoreview"]["verdict"] == "HANDOFF"
+    if mode == "enforce":
+        assert result["ok"] is False
+        assert result["recovery"]["reason"] == "handoff_required"
+        assert page.calls == []
+    else:
+        assert result["ok"] is True
+
+
+async def test_read_step_passes_and_costs_no_llm_call(monkeypatch):
+    monkeypatch.setenv("WORK_RECIPE_AUTOREVIEW", "enforce")
+    _patch_page(monkeypatch)
+    result = await executor_module.BrowserRecipeExecutor()(
+        {"action": "snapshot", "risk": "READ", "url": "https://aads.newtalk.kr/ops", "seq": 1}
+    )
+
+    assert result["ok"] is True
+    assert result["autoreview"]["verdict"] == "ALLOW"
+    assert result["llm_calls"] == 0 and result["autoreview"]["llm_calls"] == 0
+    assert set(result) >= {"ok", "risk", "llm_calls", "evidence", "route", "output"}

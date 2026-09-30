@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+import inspect
+import logging
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from app.browser_bridge.aads_adapter import acquire_browser_context
@@ -10,11 +12,20 @@ from app.browser_bridge.service import BrowserBridgeError, get_browser_bridge_se
 from app.services.screenshot_store import save_png
 from app.services.work_recipe.audit import mask_secrets
 from app.services.work_recipe.guard import (
+    SELF_REPORTED_CLAIM_KEYS,
+    ApprovalMissing,
+    AutoReviewBlocked,
+    AutoReviewDecision,
+    AutoReviewVerdict,
+    RiskLevel,
     assert_not_page_derived,
+    autoreview_step,
     classify_step,
     requires_approval,
 )
 from app.services.work_recipe.schema import ALLOWED_ACTIONS
+
+logger = logging.getLogger(__name__)
 
 # Smart Browser is the normal execution lane.  A local PC lane is deliberately
 # opt-in: it is reserved for native security software/certificates or an
@@ -109,7 +120,16 @@ class BrowserRecipeExecutor:
         browser_session_id: str | None = None,
         browser_work_key: str | None = None,
         page_texts: list[str] | None = None,
+        instruction: Any = None,
+        custom_rules: list[Mapping[str, Any]] | None = None,
+        pre_approvals: list[Any] | None = None,
+        approval_verifier: Callable[[Mapping[str, Any], RiskLevel], Any] | None = None,
     ) -> None:
+        # 아래 네 값은 서버 코드가 생성자로만 넣는다. payload 로 들어온 값은 신뢰하지 않는다.
+        self.instruction = instruction
+        self.custom_rules = list(custom_rules or [])
+        self.pre_approvals = list(pre_approvals or [])
+        self._approval_verifier = approval_verifier
         self.browser_session_id = browser_session_id
         self.browser_work_key = browser_work_key
         self.page_texts = list(page_texts or [])
@@ -170,11 +190,10 @@ class BrowserRecipeExecutor:
         return is_server_ip_blocked(url=str(evidence.get("url") or ""), text=text)
 
     async def _attempt(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        level = RiskLevel.READ
         try:
             level = classify_step(payload, domain=self._domain(payload))
-            # 승인 집행은 orchestrator의 GuardedRunRecorder가 담당한다. 여기서도
-            # 반드시 같은 판정을 수행해 우회 실행 경로가 정책을 건너뛰지 않게 한다.
-            requires_approval(level)
+            review = await self._gate(payload, level)
             self._assert_trusted_arguments(payload)
             page = await self._get_page(payload)
             output = await self._execute(page, action, payload)
@@ -187,6 +206,25 @@ class BrowserRecipeExecutor:
                 "narration": self._narration(action, payload),
                 "route": self._route(payload)["runtime"],
                 "evidence": evidence,
+                "autoreview": review.to_dict(),
+            }
+        except (ApprovalMissing, AutoReviewBlocked) as exc:
+            reason = "handoff_required" if isinstance(exc, AutoReviewBlocked) else "approval_required"
+            review = exc.decision
+            return {
+                "ok": False,
+                "status": "blocked",
+                "error": mask_secrets(str(exc)),
+                "risk": level.value,
+                "llm_calls": 0,
+                "route": "human_gateway",
+                "evidence": {},
+                "recovery": {
+                    "route": "human_gateway",
+                    "reason": reason,
+                    "resume": "after_approval" if reason == "approval_required" else "human_completes_step",
+                },
+                **({"autoreview": review.to_dict()} if review else {}),
             }
         except BrowserBridgeError as exc:
             return {
@@ -201,6 +239,82 @@ class BrowserRecipeExecutor:
                 "error": mask_secrets(f"{type(exc).__name__}: {exc}"),
                 "recovery": smart_browser_recovery(url=url, error=str(exc)),
             }
+
+    async def _gate(self, payload: Mapping[str, Any], level: RiskLevel) -> AutoReviewDecision:
+        """실행 직전 게이트. 통과하면 심사 결정을, 막으면 GuardError 계열 예외를 던진다."""
+        context = self._context_payload(payload)
+        rules = list(self.custom_rules)
+        supplied_rules = context.get("custom_rules")
+        if isinstance(supplied_rules, (list, tuple)):
+            rules.extend(supplied_rules)  # payload 규칙은 조이는 효과만 유효하다(guard 가 거른다)
+        claims = {
+            key: value
+            for source in (context, payload)
+            for key, value in source.items()
+            if key in SELF_REPORTED_CLAIM_KEYS
+        }
+        review = autoreview_step(
+            payload,
+            instruction=self.instruction if self.instruction is not None else context.get("instruction"),
+            custom_rules=rules,
+            claims=claims,
+            pre_approvals=self.pre_approvals,
+            domain=self._domain(payload),
+        )
+
+        # 1) 정적 승인 요구는 모드와 무관하게 항상 집행한다 — 판정값을 버리던 결함의 교정.
+        if (
+            requires_approval(level)
+            and review.verdict is not AutoReviewVerdict.PRE_APPROVED
+            and not await self._approval_verified(payload, level)
+        ):
+            raise ApprovalMissing(level.value, "static_level", review)
+
+        # 2) 동적 심사는 enforce 에서만 막고, observe 는 사유만 남긴다.
+        if review.needs_human:
+            if not review.enforced:
+                logger.warning(
+                    "work_recipe autoreview(observe) would block: verdict=%s level=%s reasons=%s",
+                    review.verdict.value, review.level.value, ",".join(review.reasons),
+                )
+            elif review.verdict is AutoReviewVerdict.HANDOFF:
+                raise AutoReviewBlocked(review)
+            elif not await self._approval_verified(payload, review.level):
+                raise ApprovalMissing(review.level.value, ",".join(review.reasons), review)
+        return review
+
+    async def _approval_verified(self, payload: Mapping[str, Any], required: RiskLevel) -> bool:
+        """서버가 확인한 승인만 인정한다. payload 의 approved=true 같은 플래그는 보지 않는다.
+
+        확인 수단은 둘이다. 생성자로 주입한 ``approval_verifier`` (True 를 그대로
+        돌려줘야 통과), 없으면 context 의 ``approval_id``+``run_id`` 를 DB 승인 행과
+        대조한다(승인됨·같은 run·같은 step_seq·같은 action·요구 등급 이상). 어떤
+        오류든 미승인으로 본다.
+        """
+        try:
+            if self._approval_verifier is not None:
+                outcome = self._approval_verifier(payload, required)
+                if inspect.isawaitable(outcome):
+                    outcome = await outcome
+                return outcome is True
+            context = self._context_payload(payload)
+            approval_id, run_id = context.get("approval_id"), context.get("run_id")
+            if not approval_id or not run_id:
+                return False
+            from app.services.work_recipe import approval as approval_module
+
+            row = await approval_module.get_approval(approval_id)
+            if not row or str(row.get("status") or "") != approval_module.STATUS_APPROVED:
+                return False
+            if str(row.get("run_id") or "") != str(run_id):
+                return False
+            if int(row.get("step_seq")) != int(payload.get("seq")):
+                return False
+            if row.get("action") and str(row["action"]) != str(payload.get("action") or ""):
+                return False
+            return RiskLevel.from_any(row.get("risk")).rank >= required.rank
+        except Exception:  # noqa: BLE001 - 확인 실패는 곧 미승인
+            return False
 
     @staticmethod
     def _domain(payload: Mapping[str, Any]) -> str:

@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -203,6 +204,379 @@ def describe_step(step: Any, *, domain: str | None = None) -> str:
     description = str(read("description") or "")
     summary = f"{action} {target}".strip()
     return f"{summary} — {description}" if description else summary
+
+
+# ------------------------------------------- 실행 직전 심사 (Auto-review)
+#
+# classify_step 은 레시피에 **적힌** 신호어를 정적으로 본다. 여기서는 실행 직전에
+# 한 번 더, 같은 단계를 원 지시·custom rule·불변 안전요구에 대조한다. 결정론적
+# 프로그램이다 — LLM 을 부르지 않고(llm_calls 는 항상 0), 호출자가 낸 자기신고
+# (approved/screen_verified 등)는 판정에 쓰지 않는다. 신뢰하지 않는 것이 이 게이트의
+# 존재 이유다.
+
+AUTOREVIEW_ENV = "WORK_RECIPE_AUTOREVIEW"
+MODE_OBSERVE = "observe"
+MODE_ENFORCE = "enforce"
+
+# 호출자가 payload 에 실어 보낼 수 있는 자기신고 키. 판정에는 쓰이지 않고 기록만 된다.
+SELF_REPORTED_CLAIM_KEYS: tuple[str, ...] = (
+    "approved", "approval", "screen_verified", "succeeded", "verified", "safe",
+)
+
+
+def autoreview_mode(value: Any = None) -> str:
+    """``observe``(기본, 기록만) 또는 ``enforce``(차단). 모르는 값은 observe."""
+    raw = os.getenv(AUTOREVIEW_ENV, "") if value is None else value
+    return MODE_ENFORCE if str(raw or "").strip().lower() == MODE_ENFORCE else MODE_OBSERVE
+
+
+class AutoReviewVerdict(str, Enum):
+    ALLOW = "ALLOW"                # 무승인 실행
+    PRE_APPROVED = "PRE_APPROVED"  # 서버가 발급한 사전승인 범위 안
+    APPROVE_EACH = "APPROVE_EACH"  # 실행마다 검증된 승인 필요
+    HANDOFF = "HANDOFF"            # 사람이 직접 끝내야 함 — 승인으로도 대체 불가
+
+
+class ApprovalMissing(GuardError):
+    """승인 근거 없이 승인이 필요한 단계를 실행하려 했다."""
+
+    def __init__(
+        self, level: str, reason: str = "", decision: "AutoReviewDecision | None" = None,
+    ) -> None:
+        self.level = level
+        self.reason = reason
+        self.decision = decision
+        super().__init__(
+            f"검증된 승인 근거가 없어 실행하지 않습니다: risk={level}"
+            + (f" ({reason})" if reason else "")
+        )
+
+
+class AutoReviewBlocked(GuardError):
+    """enforce 모드에서 Auto-review 가 실행을 막았다."""
+
+    def __init__(self, decision: "AutoReviewDecision") -> None:
+        self.decision = decision
+        super().__init__(
+            f"Auto-review 가 실행을 막았습니다: verdict={decision.verdict.value} "
+            f"reasons={', '.join(decision.reasons) or '-'}"
+        )
+
+
+@dataclass(frozen=True)
+class PreApproval:
+    """서버가 발급한 사전승인 범위. **이 타입의 인스턴스만** 인정한다.
+
+    payload/컨텍스트에서 온 dict 는 자기신고이므로 무시한다. 범위는 좁게 —
+    도메인+action 을 모두 지정해야 하고, WRITE_EXTERNAL 을 넘는 등급은 덮지 못한다.
+    """
+
+    domain: str
+    actions: frozenset[str] = frozenset()
+    max_risk: RiskLevel = RiskLevel.WRITE_EXTERNAL
+    source: str = ""
+
+    def covers(self, host: str, action: str, level: RiskLevel) -> bool:
+        if not self.actions or not host or action not in self.actions:
+            return False
+        domain = normalize_domain(self.domain)
+        if not domain or not (host == domain or host.endswith("." + domain)):
+            return False
+        return level.rank <= min(self.max_risk.rank, RiskLevel.WRITE_EXTERNAL.rank)
+
+
+@dataclass(frozen=True)
+class AutoReviewDecision:
+    verdict: AutoReviewVerdict
+    level: RiskLevel          # 실효 등급 — 정적 등급 아래로 내려가지 않는다
+    static_level: RiskLevel
+    mode: str
+    reasons: tuple[str, ...] = ()
+    ignored_claims: tuple[str, ...] = ()
+    ignored_rules: tuple[str, ...] = ()
+    llm_calls: int = 0
+
+    @property
+    def enforced(self) -> bool:
+        return self.mode == MODE_ENFORCE
+
+    @property
+    def needs_human(self) -> bool:
+        return self.verdict in (AutoReviewVerdict.APPROVE_EACH, AutoReviewVerdict.HANDOFF)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "verdict": self.verdict.value,
+            "level": self.level.value,
+            "static_level": self.static_level.value,
+            "mode": self.mode,
+            "enforced": self.enforced,
+            "reasons": list(self.reasons),
+            "ignored_claims": list(self.ignored_claims),
+            "ignored_rules": list(self.ignored_rules),
+            "llm_calls": self.llm_calls,
+        }
+
+
+_CREDENTIAL_SUBMIT_ACTIONS: frozenset[str] = frozenset({"click", "press", "submit", "api_call"})
+_LOGIN_SIGNALS: tuple[str, ...] = (
+    "login", "log-in", "log_in", "logon", "log-on", "signin", "sign-in", "sign_in",
+    "signon", "sign-on", "로그인", "로그온",
+)
+_CREDENTIAL_FIELD_SIGNALS: tuple[str, ...] = ("password", "passwd", "비밀번호", "패스워드")
+_SUBMIT_KEYS: frozenset[str] = frozenset({"", "enter", "return"})
+
+# 승인으로도 대체할 수 없는 불변 안전요구 (dots 기본 정책과 같은 취지).
+_PASSWORD_CHANGE_SIGNALS: tuple[str, ...] = (
+    "비밀번호 변경", "비밀번호변경", "비밀번호 재설정", "비밀번호재설정", "비번 변경", "비번변경",
+    "패스워드 변경", "패스워드변경",
+    "change password", "change-password", "change_password", "changepassword",
+    "password change", "password-change", "password_change", "passwordchange",
+    "reset password", "reset-password", "reset_password", "resetpassword",
+    "update-password", "update_password", "updatepassword",
+    "new-password", "new_password", "newpassword",
+)
+_TRANSFER_SIGNALS: tuple[str, ...] = (
+    "송금", "이체", "transfer", "remit",
+    "send money", "send-money", "send_money", "sendmoney",
+)
+# 조회성 복합어는 이체/송금 실행이 아니다. 정확히 이 낱말만 지우고 나머지를 본다 —
+# "이체내역 … 이체 실행" 처럼 실행 표현이 함께 있으면 그대로 남아 걸린다.
+_TRANSFER_BENIGN: tuple[str, ...] = (
+    "이체내역", "이체 내역", "이체조회", "이체 조회", "송금내역", "송금 내역", "송금조회", "송금 조회",
+    "transfer history", "transfer-history", "transfer_history",
+    "transfer list", "transfer-list", "transfer_list",
+    "transfer log", "transfer-log", "transfer_log",
+)
+
+
+def _is_credential_submit(step: Any, action: str) -> bool:
+    """로그인/자격증명 제출인가. 정적 판정은 이걸 READ 로 흘린다."""
+    if action not in _CREDENTIAL_SUBMIT_ACTIONS:
+        return False
+    read = _field_reader(step)
+    text = _signal_text(step)
+    if _matches_any(text, _LOGIN_SIGNALS):
+        return True
+    if action == "press":
+        key = str(read("key") or read("value") or "").strip().lower()
+        intent = _signal_text(step, fields=_INTENT_FIELDS)
+        return key in _SUBMIT_KEYS and _matches_any(intent, _CREDENTIAL_FIELD_SIGNALS)
+    return False
+
+
+def _handoff_signals(step: Any, action: str) -> list[str]:
+    """비밀번호 변경·송금/이체 신호. 조회성 action 은 보지 않는다."""
+    if action in _READ_ACTIONS:
+        return []
+    text = _signal_text(step)
+    found: list[str] = []
+    if _matches_any(text, _PASSWORD_CHANGE_SIGNALS):
+        found.append("password_change")
+    for benign in _TRANSFER_BENIGN:
+        text = text.replace(benign, " ")
+    if _matches_any(text, _TRANSFER_SIGNALS):
+        found.append("money_transfer")
+    return found
+
+
+def _host_within(host: str, domains: Iterable[str]) -> bool:
+    return any(host == known or host.endswith("." + known) for known in domains)
+
+
+_HOST_IN_TEXT = re.compile(r"[a-z0-9][a-z0-9.-]{0,120}\.[a-z]{2,24}")
+
+
+def _as_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Iterable):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _parse_instruction(instruction: Any) -> tuple[frozenset[str], frozenset[str], bool]:
+    """원 지시에서 (허용 도메인, 허용 action, 읽기 전용 여부). 적혀 있지 않으면 비어 있다."""
+    if instruction is None:
+        return frozenset(), frozenset(), False
+    goal = ""
+    domains: list[str] = []
+    actions: list[str] = []
+    read_only = False
+    if isinstance(instruction, Mapping):
+        goal = str(instruction.get("goal") or "")
+        domains = _as_list(instruction.get("domains")) + _as_list(instruction.get("allowed_domains"))
+        domains += _as_list(instruction.get("domain"))
+        actions = _as_list(instruction.get("allowed_actions"))
+        read_only = bool(instruction.get("read_only"))
+    else:
+        goal = str(instruction)
+    domains += _HOST_IN_TEXT.findall(goal.lower())
+    hosts = {normalize_domain(item) for item in domains}
+    hosts.discard("")
+    return (
+        frozenset(hosts),
+        frozenset(item.strip().lower() for item in actions if item.strip()),
+        read_only,
+    )
+
+
+_RULE_EFFECTS: dict[str, AutoReviewVerdict] = {
+    "approve_each": AutoReviewVerdict.APPROVE_EACH,
+    "require_approval": AutoReviewVerdict.APPROVE_EACH,
+    "ask": AutoReviewVerdict.APPROVE_EACH,
+    "handoff": AutoReviewVerdict.HANDOFF,
+    "deny": AutoReviewVerdict.HANDOFF,
+    "block": AutoReviewVerdict.HANDOFF,
+}
+
+
+def _apply_custom_rules(
+    rules: Iterable[Any], step: Any, action: str, host: str,
+) -> tuple[list[AutoReviewVerdict], list[str], list[str]]:
+    """custom rule 은 **조이는 쪽으로만** 작동한다.
+
+    ``allow`` 처럼 판정을 낮추려는 효과는 무시하고 ignored 로 남긴다 — 사용자가
+    적은 규칙이라도 핵심 요구를 끌 수 없다(dots FAQ 와 같은 원칙).
+    """
+    text = _signal_text(step)
+    hits: list[AutoReviewVerdict] = []
+    reasons: list[str] = []
+    ignored: list[str] = []
+    for index, raw in enumerate(rules or ()):
+        if not isinstance(raw, Mapping):
+            ignored.append(f"rule[{index}]:not_a_mapping")
+            continue
+        name = str(raw.get("name") or f"rule[{index}]")
+        effect = _RULE_EFFECTS.get(str(raw.get("effect") or "").strip().lower())
+        if effect is None:
+            ignored.append(f"{name}:effect_cannot_relax_core_requirements")
+            continue
+        domains = {normalize_domain(item) for item in _as_list(raw.get("domains"))} - {""}
+        actions = {item.strip().lower() for item in _as_list(raw.get("actions"))} - {""}
+        signals = [item.strip().lower() for item in _as_list(raw.get("signals")) if item.strip()]
+        if not (domains or actions or signals):
+            ignored.append(f"{name}:no_match_criteria")
+            continue
+        if domains and not (host and _host_within(host, domains)):
+            continue
+        if actions and action not in actions:
+            continue
+        if signals and not _matches_any(text, signals):
+            continue
+        hits.append(effect)
+        reasons.append(f"custom_rule:{name}:{effect.value}")
+    return hits, reasons, ignored
+
+
+def _bump(level: RiskLevel) -> RiskLevel:
+    return RiskLevel(RISK_LEVELS[min(level.rank + 1, len(RISK_LEVELS) - 1)])
+
+
+def _max_level(left: RiskLevel, right: RiskLevel) -> RiskLevel:
+    return left if left.rank >= right.rank else right
+
+
+def autoreview_step(
+    step: Any,
+    *,
+    instruction: Any = None,
+    custom_rules: Iterable[Any] = (),
+    claims: Mapping[str, Any] | None = None,
+    pre_approvals: Iterable[Any] = (),
+    domain: str | None = None,
+    mode: str | None = None,
+) -> AutoReviewDecision:
+    """실행 **직전** 단계를 심사해 ALLOW/PRE_APPROVED/APPROVE_EACH/HANDOFF 로 판정한다.
+
+    - ``classify_step`` 의 정적 등급을 하한으로 깔고 그 위에 얹는다(내리지 않는다).
+    - ``claims`` (approved/screen_verified 등 호출자 자기신고)는 판정에 쓰지 않는다.
+      어떤 키를 무시했는지만 결정에 남긴다.
+    - ``custom_rules`` 는 조이는 효과(approve_each/handoff)만 받아들인다.
+    - ``pre_approvals`` 는 :class:`PreApproval` 인스턴스만 인정한다. 자격증명 제출·
+      HANDOFF·지시 범위 밖·custom rule 에 걸린 단계는 사전승인으로 덮지 못한다.
+    - 비밀번호 변경·송금/이체 신호가 있으면 무조건 HANDOFF.
+    """
+    read = _field_reader(step)
+    action = str(read("action") or "").strip().lower()
+    static = classify_step(step, domain=domain)
+    host = normalize_domain(read("url") or "") or normalize_domain(domain or "")
+    resolved_mode = autoreview_mode(mode)
+
+    level = static
+    reasons: list[str] = []
+    needs_each = requires_approval(static)
+    if needs_each:
+        reasons.append(f"static_level:{static.value}")
+
+    credential_submit = _is_credential_submit(step, action)
+    if credential_submit:
+        needs_each = True
+        level = _max_level(level, RiskLevel.WRITE_EXTERNAL)
+        reasons.append("credential_submit")
+
+    handoff = _handoff_signals(step, action)
+    reasons.extend(f"handoff:{item}" for item in handoff)
+
+    scope_violation = False
+    domains, allowed_actions, read_only = _parse_instruction(instruction)
+    if domains:
+        if not host:
+            scope_violation = True
+            reasons.append("intent:target_domain_unknown")
+        elif not _host_within(host, domains):
+            scope_violation = True
+            reasons.append("intent:domain_out_of_scope")
+    if allowed_actions and action not in allowed_actions:
+        scope_violation = True
+        reasons.append("intent:action_out_of_scope")
+    if read_only and (static.rank > RiskLevel.READ.rank or credential_submit or handoff):
+        scope_violation = True
+        reasons.append("intent:write_in_read_only_scope")
+    if scope_violation:
+        needs_each = True
+        level = _bump(level)
+
+    rule_hits, rule_reasons, ignored_rules = _apply_custom_rules(custom_rules, step, action, host)
+    reasons.extend(rule_reasons)
+    if AutoReviewVerdict.HANDOFF in rule_hits:
+        handoff.append("custom_rule")
+    if rule_hits:
+        needs_each = True
+
+    ignored_claims = tuple(sorted(str(key) for key, value in (claims or {}).items() if value))
+
+    if handoff:
+        verdict = AutoReviewVerdict.HANDOFF
+        level = RiskLevel.IRREVERSIBLE
+    elif needs_each:
+        grants = [item for item in pre_approvals or () if isinstance(item, PreApproval)]
+        covered = (
+            static.rank <= RiskLevel.WRITE_EXTERNAL.rank
+            and not (credential_submit or scope_violation or rule_hits)
+            and any(item.covers(host, action, level) for item in grants)
+        )
+        if covered:
+            verdict = AutoReviewVerdict.PRE_APPROVED
+            reasons.append("pre_approved_scope")
+        else:
+            verdict = AutoReviewVerdict.APPROVE_EACH
+            level = _max_level(level, RiskLevel.WRITE_EXTERNAL)
+    else:
+        verdict = AutoReviewVerdict.ALLOW
+
+    return AutoReviewDecision(
+        verdict=verdict,
+        level=level,
+        static_level=static,
+        mode=resolved_mode,
+        reasons=tuple(reasons),
+        ignored_claims=ignored_claims,
+        ignored_rules=tuple(ignored_rules),
+        llm_calls=0,
+    )
 
 
 # ------------------------------------------------------- 도메인 허용목록

@@ -621,3 +621,226 @@ def test_audit_service_never_updates_or_deletes_step_history():
     ]
     # recipe_runs(상태 테이블)의 갱신은 허용된다 — append-only 계약은 steps 쪽이다.
     assert re.search(r"(?is)\bupdate\s+recipe_runs\b", source)
+
+
+# ------------------------------------------------ Auto-review (실행 직전 심사)
+
+from app.services.work_recipe.guard import (  # noqa: E402
+    AutoReviewVerdict,
+    PreApproval,
+    autoreview_mode,
+    autoreview_step,
+)
+
+_V = AutoReviewVerdict
+_EXTERNAL = "https://shop.example.com/"
+
+
+def _review(step, **kwargs):
+    kwargs.setdefault("mode", "enforce")
+    return autoreview_step(step, **kwargs)
+
+
+def test_login_submit_without_signal_words_is_promoted_from_read():
+    step = {"action": "click", "selector": "#login-btn", "url": _EXTERNAL}
+    assert classify_step(step) is RiskLevel.READ  # 정적 판정은 이걸 놓친다
+
+    decision = _review(step)
+    assert decision.verdict is _V.APPROVE_EACH
+    assert decision.level.rank >= RiskLevel.WRITE_EXTERNAL.rank
+    assert "credential_submit" in decision.reasons
+
+
+def test_enter_in_password_field_and_login_api_call_are_credential_submits():
+    press = {"action": "press", "selector": "input#password", "value": "Enter", "url": _EXTERNAL}
+    api = {"action": "click", "selector": "#go", "endpoint": "/api/v1/session/login", "url": _EXTERNAL}
+    tab = {"action": "press", "selector": "input#password", "value": "Tab", "url": _EXTERNAL}
+    assert _review(press).verdict is _V.APPROVE_EACH
+    assert _review(api).verdict is _V.APPROVE_EACH
+    assert _review(tab).verdict is _V.ALLOW
+
+
+def test_navigating_to_a_login_page_is_still_a_plain_read():
+    step = {"action": "navigate", "url": "https://shop.example.com/login"}
+    assert _review(step).verdict is _V.ALLOW
+
+
+def test_self_reported_claims_never_lower_or_raise_the_verdict():
+    step = {"action": "click", "selector": "#login-btn", "url": _EXTERNAL}
+    claims = {"approved": True, "screen_verified": True, "succeeded": True, "safe": False}
+    bare = _review(step)
+    claimed = _review(step, claims=claims)
+
+    assert claimed.verdict is bare.verdict is _V.APPROVE_EACH
+    assert claimed.level is bare.level
+    assert claimed.ignored_claims == ("approved", "screen_verified", "succeeded")
+
+    write = {"action": "submit", "url": _EXTERNAL, "selector": "form"}
+    assert _review(write, claims=claims).verdict is _V.APPROVE_EACH
+    # 신고값만으로는 승인 요구도 만들어지지 않는다
+    assert _review({"action": "snapshot"}, claims={"approved": False, "safe": False}).verdict is _V.ALLOW
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        {"action": "click", "selector": "#change-password-btn", "url": "https://aads.newtalk.kr/me"},
+        {"action": "click", "selector": "button.go", "description": "비밀번호 변경", "url": _EXTERNAL},
+        {"action": "click", "selector": "button.go", "description": "계좌 송금 실행", "url": _EXTERNAL},
+        {"action": "click", "selector": "#btn-transfer", "url": _EXTERNAL},
+        {"action": "api_call", "endpoint": "/bank/이체", "url": _EXTERNAL},
+        {"action": "fill", "selector": "input#new_password", "value": "x", "url": _EXTERNAL},
+    ],
+)
+def test_password_change_and_money_transfer_are_always_handoff(step):
+    decision = _review(step)
+    assert decision.verdict is _V.HANDOFF
+    assert decision.level is RiskLevel.IRREVERSIBLE
+
+
+def test_custom_rule_cannot_relax_handoff_or_approve_each():
+    step = {"action": "click", "selector": "#btn-transfer", "url": _EXTERNAL}
+    allow_rule = {"name": "trust-shop", "effect": "allow", "domains": ["shop.example.com"]}
+    pre_approve_rule = {"name": "ok", "effect": "pre_approved", "actions": ["click"]}
+    grant = PreApproval(domain="shop.example.com", actions=frozenset({"click"}))
+
+    decision = _review(step, custom_rules=[allow_rule, pre_approve_rule], pre_approvals=[grant])
+    assert decision.verdict is _V.HANDOFF
+    assert len(decision.ignored_rules) == 2
+
+    login = {"action": "click", "selector": "#login-btn", "url": _EXTERNAL}
+    assert _review(login, custom_rules=[allow_rule], pre_approvals=[grant]).verdict is _V.APPROVE_EACH
+
+
+def test_custom_rule_can_only_tighten():
+    step = {"action": "snapshot", "url": _EXTERNAL}
+    assert _review(step).verdict is _V.ALLOW
+    rule = {"name": "no-snap", "effect": "approve_each", "actions": ["snapshot"]}
+    assert _review(step, custom_rules=[rule]).verdict is _V.APPROVE_EACH
+    deny = {"name": "no-shop", "effect": "handoff", "domains": ["example.com"]}
+    assert _review(step, custom_rules=[deny]).verdict is _V.HANDOFF
+    # 기준 없는 규칙은 전역 잠금이 되지 않도록 무시한다
+    assert _review(step, custom_rules=[{"name": "x", "effect": "handoff"}]).verdict is _V.ALLOW
+
+
+def test_transfer_history_lookup_is_not_handoff_but_real_transfer_next_to_it_is():
+    history = {"action": "click", "selector": "#tab", "description": "이체내역 보기", "url": _EXTERNAL}
+    assert _review(history).verdict is not _V.HANDOFF
+    mixed = {"action": "click", "selector": "#tab", "description": "이체내역 확인 후 이체 실행", "url": _EXTERNAL}
+    assert _review(mixed).verdict is _V.HANDOFF
+
+
+def test_intent_mismatch_raises_the_level_above_the_static_verdict():
+    step = {"action": "click", "selector": "#next", "url": "https://other.example.org/"}
+    assert _review(step).verdict is _V.ALLOW
+    instruction = {"goal": "shop 주문 조회", "domains": ["shop.example.com"]}
+    decision = _review(step, instruction=instruction)
+    assert decision.verdict is _V.APPROVE_EACH
+    assert "intent:domain_out_of_scope" in decision.reasons
+
+    in_scope = {"action": "click", "selector": "#next", "url": _EXTERNAL}
+    assert _review(in_scope, instruction=instruction).verdict is _V.ALLOW
+
+    only_read = {"allowed_actions": ["navigate", "snapshot"]}
+    assert _review(in_scope, instruction=only_read).verdict is _V.APPROVE_EACH
+    assert _review({"action": "snapshot", "url": _EXTERNAL}, instruction=only_read).verdict is _V.ALLOW
+    ro = {"read_only": True}
+    assert _review({"action": "submit", "url": _EXTERNAL}, instruction=ro).level.rank >= RiskLevel.WRITE_EXTERNAL.rank
+
+
+def test_domain_named_in_goal_text_defines_the_scope():
+    step = {"action": "click", "selector": "#next", "url": "https://evil.example.net/"}
+    assert _review(step, instruction="aads.newtalk.kr 대시보드 확인").verdict is _V.APPROVE_EACH
+
+
+def test_pre_approval_applies_only_to_server_issued_narrow_scope():
+    step = {"action": "submit", "selector": "form.memo", "url": "https://memo.example.com/new"}
+    grant = PreApproval(domain="memo.example.com", actions=frozenset({"submit"}), source="grant-1")
+
+    assert _review(step).verdict is _V.APPROVE_EACH
+    assert _review(step, pre_approvals=[grant]).verdict is _V.PRE_APPROVED
+    # dict(자기신고)는 사전승인이 아니다
+    forged = {"domain": "memo.example.com", "actions": ["submit"]}
+    assert _review(step, pre_approvals=[forged]).verdict is _V.APPROVE_EACH
+    # 다른 도메인/action, 그리고 되돌릴 수 없는 등급은 덮지 못한다
+    other = PreApproval(domain="other.example.com", actions=frozenset({"submit"}))
+    assert _review(step, pre_approvals=[other]).verdict is _V.APPROVE_EACH
+    pay = {"action": "click", "selector": "#pay", "description": "결제", "url": "https://memo.example.com/"}
+    wide = PreApproval(domain="memo.example.com", actions=frozenset({"click"}), max_risk=RiskLevel.IRREVERSIBLE)
+    assert _review(pay, pre_approvals=[wide]).verdict is _V.APPROVE_EACH
+    # 자격증명 제출은 사전승인으로 덮지 못한다
+    login = {"action": "click", "selector": "#login-btn", "url": "https://memo.example.com/"}
+    assert _review(login, pre_approvals=[wide]).verdict is _V.APPROVE_EACH
+
+
+def test_mode_defaults_to_observe_and_only_enforce_is_enforced(monkeypatch):
+    monkeypatch.delenv("WORK_RECIPE_AUTOREVIEW", raising=False)
+    step = {"action": "click", "selector": "#login-btn", "url": _EXTERNAL}
+    assert autoreview_mode() == "observe"
+    decision = autoreview_step(step)
+    assert decision.verdict is _V.APPROVE_EACH  # 판정은 observe 에서도 그대로 기록된다
+    assert decision.mode == "observe" and decision.enforced is False
+
+    for value, expected in [("enforce", "enforce"), (" ENFORCE ", "enforce"),
+                            ("observe", "observe"), ("enforc", "observe"), ("", "observe")]:
+        monkeypatch.setenv("WORK_RECIPE_AUTOREVIEW", value)
+        assert autoreview_mode() == expected
+    monkeypatch.setenv("WORK_RECIPE_AUTOREVIEW", "enforce")
+    assert autoreview_step(step).enforced is True
+    assert autoreview_step(step, mode="observe").enforced is False
+
+
+_STATIC_SAMPLES = [
+    {"action": "navigate", "url": "https://shop.example.com/checkout"},
+    {"action": "click", "selector": "button.checkout-pay", "description": "결제 확정"},
+    {"action": "submit", "url": "https://aads.newtalk.kr/api/x"},
+    {"action": "submit", "url": "https://shop.example.com/x"},
+    {"action": "upload", "selector": "#f", "url": "https://shop.example.com"},
+    {"action": "click", "selector": "#a", "risk": "WRITE_EXTERNAL"},
+    {"action": "click", "selector": "#a", "risk": "IRREVERSIBLE"},
+    {"action": "fill", "selector": "#q", "value": "삭제"},
+    {"action": "click", "selector": "button", "description": "삭제"},
+    {"action": "snapshot", "selector": "main"},
+]
+
+
+@pytest.mark.parametrize("step", _STATIC_SAMPLES)
+def test_autoreview_never_lowers_the_static_classification(step):
+    static = classify_step(step, domain="shop.example.com")
+    decision = autoreview_step(step, domain="shop.example.com", mode="enforce")
+
+    assert decision.static_level is static
+    assert decision.level.rank >= static.rank
+    if requires_approval(static):
+        assert decision.verdict in (_V.APPROVE_EACH, _V.HANDOFF)
+
+
+def test_static_classification_contract_is_unchanged():
+    assert classify_step({"action": "click", "selector": "#login-btn"}) is RiskLevel.READ
+    assert classify_step({"action": "submit", "url": "https://aads.newtalk.kr/x"}) is RiskLevel.WRITE_INTERNAL
+    assert classify_step({"action": "submit", "url": "https://shop.example.com/x"}) is RiskLevel.WRITE_EXTERNAL
+    assert classify_step({"action": "click", "description": "결제"}) is RiskLevel.IRREVERSIBLE
+    assert classify_step({"action": "navigate", "url": "https://s.example.com/checkout"}) is RiskLevel.READ
+    assert requires_approval(RiskLevel.WRITE_EXTERNAL) and not requires_approval(RiskLevel.WRITE_INTERNAL)
+    # 감사 경로가 여전히 같은 두 함수를 쓴다
+    assert audit.classify_step is classify_step
+    assert audit.requires_approval is requires_approval
+
+
+def test_autoreview_is_deterministic_and_makes_no_llm_call():
+    step = {"action": "click", "selector": "#login-btn", "url": _EXTERNAL}
+    first, second = _review(step), _review(step)
+    assert first == second
+    assert first.llm_calls == 0 and first.to_dict()["llm_calls"] == 0
+
+    import ast
+
+    tree = ast.parse(Path(guard.__file__).read_text(encoding="utf-8"))
+    imported = {
+        (node.module or "") if isinstance(node, ast.ImportFrom) else alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in (node.names if isinstance(node, ast.Import) else [None])
+    }
+    for name in imported:
+        assert not any(bad in name for bad in ("anthropic", "litellm", "openai", "httpx", "requests")), name

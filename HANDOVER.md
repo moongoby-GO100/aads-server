@@ -1,3 +1,22 @@
+## 2026-09-30 — work_recipe 사전 행동 심사(Auto-review) 게이트 + executor 승인 판정 무시 결함 교정 (AADS-WORKRECIPE-AUTOREVIEW-GATE-20260930)
+
+**코드 완료 / 운영 반영(배포) / 게이트 실제 차단 검증은 별개다.** 아래는 코드 완료분만이다.
+
+- 코드 완료 — `guard.py`: `autoreview_step()` 신설(ALLOW/PRE_APPROVED/APPROVE_EACH/HANDOFF). `classify_step` 정적 등급을 하한으로 깔고 그 위에 얹는다(`classify_step`·`requires_approval`·audit.py 경로 무수정). LLM 호출 0(결정론, `llm_calls=0`).
+  - 로그인/자격증명 제출(`click`/`press`/`submit`/`api_call` + login 신호, 비밀번호 필드 Enter)은 정적으로 READ 여도 APPROVE_EACH(실효 등급 ≥ WRITE_EXTERNAL).
+  - 비밀번호 변경·송금/이체 신호는 무조건 HANDOFF. custom rule·`PreApproval`·승인으로 낮출 수 없다(`이체내역` 같은 조회성 복합어만 제외).
+  - 자기신고(`approved`/`screen_verified`/`succeeded` 등)는 판정에 쓰지 않고 `ignored_claims` 로만 남긴다. custom rule 은 조이는 효과(approve_each/handoff)만 유효, `allow` 류는 `ignored_rules`. 사전승인은 서버가 만든 `PreApproval` 인스턴스만(dict 무시, WRITE_EXTERNAL 초과·자격증명 제출·지시 범위 밖은 못 덮음).
+  - 의도 대조: 원 지시(`domains`/`allowed_actions`/`read_only`/goal 안의 도메인)와 어긋나면 등급 +1, APPROVE_EACH 이상.
+- 코드 완료 — `executor.py` `_attempt()`: 확인된 결함 교정. 예전엔 `requires_approval(level)` 반환값을 버려 아무것도 막지 않았다. 이제 **모드와 무관하게** 승인 필요 단계는 서버측 승인 근거가 없으면 실행하지 않고 `status=blocked`/`recovery.route=human_gateway`(`reason=approval_required|handoff_required`)로 멈춘다. 반환 스키마(`ok/risk/llm_calls/evidence/recovery`)는 유지, 성공·차단 결과에 `autoreview` 키가 추가된다. player 는 human_gateway 를 즉시 blocked 로 처리(재시도 없음).
+  - 승인 근거는 생성자 주입 `approval_verifier`(리터럴 `True` 만 인정) 또는 context 의 `approval_id`+`run_id` 를 `recipe_approvals` 행과 대조(approved·같은 run·같은 step_seq·같은 action·요구 등급 이상). payload 플래그는 보지 않는다. 오류는 미승인.
+- 모드: `WORK_RECIPE_AUTOREVIEW=observe|enforce`, 기본 **observe**(판정·사유 기록 + 로그 경고, 차단 안 함). enforce 에서만 APPROVE_EACH(검증된 승인 없으면)/HANDOFF 를 차단. env 만 바꾸면 끄고 켤 수 있다. 모르는 값은 observe.
+- 검증: `bash scripts/run_unit_tests.sh tests/unit/test_work_recipe_guard.py tests/unit/test_work_recipe_executor.py` → 101 passed, exit 0. 연관 회귀(`test_work_recipe`·`_recorder`·`_registration`·`test_browser_recipe_recovery`·`test_coupangeats_recipe_drafts`·`test_ovis_recipe_canonical`·`test_dup_guard`) 78 passed, exit 0.
+- 기존 테스트 조정(약화 아님): `test_executor_dispatches_all_allowed_actions` 는 upload/api_call 이 외부 쓰기라 승인 근거 없이는 이제 막히므로, 서버측 검증자가 승인을 확인해 준 상황(`approval_verifier`)으로 실행기를 만들도록 바꿨다. dispatch 검증 내용은 그대로. 승인 없는 경우는 신규 테스트가 따로 고정.
+- **운영 반영(배포): 미실시.** push 까지만, 빌드·배포는 별도 승인. 그 전까지 운영 동작은 그대로다.
+- **게이트 실제 차단 검증: 미실시.** 단위 테스트(가짜 페이지)에서만 차단을 확인했다. 운영에서 observe 로그(`work_recipe autoreview(observe) would block`)로 오탐률을 본 뒤 enforce 로 올리는 단계가 남아 있다.
+- 알아둘 점(후속 필요): orchestrator(`GuardedRunRecorder`/`play_recipe`)는 executor 에 승인 근거를 넘기지 않는다(M7/M13 담당이라 미수정). 지금도 `before_step` 이 승인 없는 WRITE_EXTERNAL 을 먼저 끊으므로 실제 영향은 작지만, 승인 후 재개 경로를 열 때는 orchestrator 가 `approval_verifier` 또는 context `approval_id`/`run_id` 를 넘겨야 executor 에서 막히지 않는다.
+- 오류 사전: 확정 원인(`executor` 반환값 무시)은 fix 커밋 SHA 가 생긴 뒤 `error_book.py register` 로 넣어야 한다(추측 방지 — 커밋 전이라 미등록). 비용 미측정.
+
 ## 2026-09-30 — 오비서 PWA 출퇴근 1차: manifest·서비스워커·출근/퇴근·GPS 반경 판정·위치 동의 (AADS-OBYS-PWA-GPS-ATTENDANCE-20260930)
 
 - 직원 본인 API 신설(`/api/v1/workspaces/{business_id}/…`): `attendance/clock/state`, `attendance/consent`, `attendance/check-in`, `attendance/check-out`, `attendance/me/{record_id}`. 관리자: `attendance/locations`(좌표 원본 포함), `branches/geofence`(GET), `branches/{branch_id}/geofence`(PATCH, 감사로그). 경로는 지시서의 `/api/v1/obys/…` 가 아니라 실제 마운트(`/api/v1/workspaces`, PRD r2 §9)에 두었다 — `/api/v1/obys` 프리픽스는 존재하지 않는다.
