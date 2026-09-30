@@ -985,6 +985,38 @@ def _split_exempt_private_symbols(
     return kept, exempted
 
 
+# .patch/.diff 파일은 실행되는 소스가 아니고 import 대상도 아니다. 그 본문에 든
+# `def`/`class`/`@router.` 문자열은 삭제된 계약이 아니라 다른 diff 를 담은 텍스트다.
+# 러너가 추적하던 .runner_full_diff.patch 를 지우는 diff 가 문맥줄(앞 한 칸 공백)을
+# 바깥 diff 에서 `- @router.get(...)` 형태로 다시 보이게 해 "public 라우터 삭제"로
+# 오판된 사례(runner-0ebc83ce, FLAG 0.3)를 막는다. 보존 판정 입력에만 적용한다 —
+# 범위 게이트·LLM 리뷰 입력·DB 저장 diff 는 원본을 그대로 쓴다.
+_PATCH_FILE_SUFFIXES = (".patch", ".diff")
+_DIFF_SECTION_SPLIT_RE = re.compile(r"(?=^diff --git )", re.MULTILINE)
+_DIFF_SECTION_PATHS_RE = re.compile(r"^diff --git a/(\S+) b/(\S+)\s*$")
+
+
+def _strip_patch_file_sections(diff: str) -> tuple[str, list[str], int]:
+    """(패치 파일 구간을 뺀 diff, 제외한 경로, 제외한 +/- 줄 수).
+
+    a/b 두 경로가 모두 .patch/.diff 인 구간만 뺀다. 소스 파일을 .patch 로 개명하며
+    심볼을 지우는 변경은 b 경로만 .patch 이므로 그대로 판정 대상에 남는다.
+    헤더를 해석할 수 없는 구간(공백 경로 등)도 남긴다 — 애매하면 종전대로 판정한다.
+    """
+    kept: list[str] = []
+    ignored_paths: list[str] = []
+    ignored_lines = 0
+    for section in _DIFF_SECTION_SPLIT_RE.split(diff or ""):
+        header = _DIFF_SECTION_PATHS_RE.match(section.split("\n", 1)[0])
+        if header and all(path.endswith(_PATCH_FILE_SUFFIXES) for path in header.groups()):
+            ignored_paths.append(header.group(2))
+            added, removed = _diff_line_counts(section)
+            ignored_lines += added + removed
+            continue
+        kept.append(section)
+    return "".join(kept), ignored_paths, ignored_lines
+
+
 def _precheck_preservation_gate(
     diff: str,
     instruction: str,
@@ -992,13 +1024,24 @@ def _precheck_preservation_gate(
     exemption_out: Optional[dict] = None,
     project: Optional[str] = None,
 ) -> Optional[ReviewVerdict]:
-    additions, deletions = _diff_line_counts(diff)
+    # 아래 비율·심볼 판정은 패치 파일 구간을 뺀 diff 로 한다. 범위 게이트는 원본 diff 기준이다.
+    # 변경이 패치 파일뿐이면 additions/deletions 가 0 이라 두 게이트 모두 이슈를 내지 않는다.
+    preservation_diff, ignored_patch_paths, ignored_patch_lines = _strip_patch_file_sections(diff)
+    additions, deletions = _diff_line_counts(preservation_diff)
     issues: list[str] = []
     feedback: dict[str, object] = {
         "summary": "기존 구현 보존 하드 게이트",
         "additions": additions,
         "deletions": deletions,
     }
+    if ignored_patch_paths:
+        ignored_notes: dict[str, object] = {
+            "preservation_ignored_patch_files": ignored_patch_paths[:20],
+            "preservation_ignored_patch_lines": ignored_patch_lines,
+        }
+        feedback.update(ignored_notes)
+        if exemption_out is not None:
+            exemption_out.update(ignored_notes)
 
     net_removal = deletions - additions
     # 아주 작은 diff 는 비율만으로 판정할 근거가 못 된다(하한 임계치).
@@ -1022,7 +1065,7 @@ def _precheck_preservation_gate(
 
     exemption_notes: dict[str, object] = {}
     symbol_matches, exempted_symbols = _split_exempt_private_symbols(
-        diff, _removed_preservation_symbols(diff), project, exemption_notes
+        preservation_diff, _removed_preservation_symbols(preservation_diff), project, exemption_notes
     )
     if exempted_symbols:
         exemption_notes["preservation_exempted_private_symbols"] = exempted_symbols

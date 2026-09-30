@@ -1263,6 +1263,67 @@ resolve_job_base_sha() {
 }
 # ─── SHARED-BLOCK END: job_diff_contract ──────────────────────────────
 
+# AADS-RUNNER-REVIEW-DIFF-TRUNCATION (2026-09-30): capture_job_diff_text 는 45000/5000/
+# 50000B 에서 조용히 자른다. 리뷰어는 앞부분만 보고 "뒤에 있어야 할 파일이 없다"고
+# 반려했다(runner-0e9ce12d/0f81541a/67757d58). 잘렸다는 사실과 전체 변경 파일 목록을
+# 리뷰 요청 본문에만 앞머리로 붙인다. 공유 블록의 출력은 DB git_diff 와 스위퍼의
+# drift 비교 기준이라 건드리지 않는다 — 여기서 만든 앞머리는 저장하지 않는다.
+# 아래 상한은 capture_job_diff_text 의 head -c 값과 같아야 한다(단위 테스트가 대조).
+review_diff_stat_section() {
+    local repo="$1" title="$2"
+    shift 2
+    local stat="" shown="" file_count=""
+    stat=$(git -C "$repo" diff --stat=200 "$@" 2>/dev/null) || stat=""
+    [[ -n "$stat" ]] || return 0
+    if [[ $(printf '%s' "$stat" | wc -c) -le 6000 ]]; then
+        printf 'DIFFSTAT (%s — 절단 없음)\n%s\n' "$title" "$stat"
+        return 0
+    fi
+    # 잘린 마지막 줄(반쪽 경로·깨진 UTF-8)은 버린다. 파일 수는 잘리지 않은 출력에서 센다.
+    shown=$(head -c 6000 <<< "$stat" | sed '$d')
+    file_count=$(git -C "$repo" diff --name-only "$@" 2>/dev/null | wc -l | tr -d '[:space:]')
+    printf 'DIFFSTAT (%s — 앞부분만)\n%s\n[DIFFSTAT TRUNCATED — 파일 %s개]\n' "$title" "$shown" "${file_count:-0}"
+    return 0
+}
+
+review_diff_truncation_notice() {
+    local full_bytes="$1" included_bytes="$2"
+    printf '[DIFF TRUNCATED] 전체 %sB 중 앞 %sB 만 아래에 포함됨. 아래 diff 에 특정 파일이 보이지 않는 것은 "그 파일이 없다"는 뜻이 아니다. 변경 파일 전체 목록은 바로 아래 DIFFSTAT 을 근거로 판정하라.\n' \
+        "$full_bytes" "$included_bytes"
+    return 0
+}
+
+# stdout: 잘렸으면 앞머리(고지 + diffstat + 구분선), 잘리지 않았으면 빈 출력.
+build_review_diff_prefix() {
+    local repo="$1" base_sha="${2:-}"
+    local cap_committed=45000 cap_uncommitted=5000 cap_single=50000
+    local head_sha="" full_bytes=0 included_bytes=0 c_full=0 u_full=0
+    head_sha=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head_sha=""
+    local stat_text=""
+    if [[ -n "$base_sha" && -n "$head_sha" && "$base_sha" != "$head_sha" ]]; then
+        c_full=$(git -C "$repo" diff "${base_sha}..${head_sha}" 2>/dev/null | wc -c | tr -d '[:space:]') || c_full=0
+        u_full=$(git -C "$repo" diff HEAD 2>/dev/null | wc -c | tr -d '[:space:]') || u_full=0
+        full_bytes=$(( c_full + u_full ))
+        included_bytes=$(( (c_full > cap_committed ? cap_committed : c_full) + (u_full > cap_uncommitted ? cap_uncommitted : u_full) ))
+        if (( c_full <= cap_committed && u_full <= cap_uncommitted )); then
+            return 0
+        fi
+        stat_text=$(review_diff_stat_section "$repo" "전체 변경 파일" "${base_sha}..${head_sha}")
+        if (( u_full > 0 )); then
+            stat_text="${stat_text}
+$(review_diff_stat_section "$repo" "미커밋 변경 — git diff HEAD --stat" HEAD)"
+        fi
+    else
+        full_bytes=$(git -C "$repo" diff HEAD 2>/dev/null | wc -c | tr -d '[:space:]') || full_bytes=0
+        (( full_bytes > cap_single )) || return 0
+        included_bytes=$cap_single
+        stat_text=$(review_diff_stat_section "$repo" "전체 변경 파일" HEAD)
+    fi
+    printf '%s\n%s\n=== DIFF (원문 시작) ===\n' \
+        "$(review_diff_truncation_notice "$full_bytes" "$included_bytes")" "$stat_text"
+    return 0
+}
+
 # 계약: stdout 은 40자 hex commit SHA 단 하나만 낸다 — 호출부가
 # `approval_commit_sha=$(commit_job_worktree_for_approval ...)` 로 그대로
 # 캡처한다. 정보성 로그는 반드시 stderr(`log ... >&2`)로 보내라 — 2026-09-18
@@ -1275,7 +1336,9 @@ commit_job_worktree_for_approval() {
         _fail_job "$job_id" "$session_id" "approval_worktree_not_isolated" "BLOCK: awaiting_approval 거부 — runner isolated worktree 검증 실패 (${worktree_dir})"
         return 1
     fi
-    git -C "$worktree_dir" add -A >/dev/null 2>&1 || {
+    # .runner_full_diff.patch 는 사람이 보라고 워크트리에 남기는 파일이다. .gitignore 와
+    # 무관하게(과거 커밋을 체크아웃해 추적 상태로 돌아온 경우 포함) 커밋에 넣지 않는다.
+    git -C "$worktree_dir" add -A -- . ':(exclude).runner_full_diff.patch' >/dev/null 2>&1 || {
         _fail_job "$job_id" "$session_id" "approval_commit_stage_failed" "awaiting_approval 거부 — runner worktree stage 실패"
         return 1
     }
@@ -3360,7 +3423,7 @@ $out_tail")
             | grep -vE '(^|/)(node_modules|__pycache__|\.venv|venv|dist|build|\.next)/' \
             | grep -vE '(^|/)\.[A-Za-z0-9_.-]+_cache/' \
             | grep -vE '(^|/)(\.git|\.tox|\.nox|\.eggs|\.idea|\.vscode|\.turbo|htmlcov|coverage|\.gradle|target)/' \
-            | grep -vE '(^|/)(\.coverage|\.DS_Store|coverage\.xml)$' \
+            | grep -vE '(^|/)(\.coverage|\.DS_Store|coverage\.xml|\.runner_full_diff\.patch)$' \
             | grep -vE '\.(pyc|pyo|pyd|log|orig|rej|bak|swp|tmp)$') || true
         local _ignored_new=""
         if [[ -n "${_ignored_cand//[[:space:]]/}" ]]; then
@@ -3545,6 +3608,13 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     # review_failed 등에서 워크트리가 삭제되면 git apply 로 복구할 방법이
     # 없다(runner-1f09e9e5, 저장 48,400자 = 상한 절단 실측). 잘렸으면 전량을
     # 파일로 남긴다.
+    # 리뷰어에게 "잘렸다"는 사실을 알리는 앞머리 — 캡처와 같은 워크트리 상태에서(검수 전
+    # 커밋·.runner_full_diff.patch 생성 이전) 계산한다. DB git_diff 에는 섞지 않는다.
+    local review_diff_prefix=""
+    review_diff_prefix=$(build_review_diff_prefix "$workdir" "$pre_exec_sha") || review_diff_prefix=""
+    if [[ -n "$review_diff_prefix" ]]; then
+        log "  REVIEW_DIFF_TRUNCATED_NOTICE job=$job_id — 리뷰 입력에 절단 고지 + DIFFSTAT 동봉"
+    fi
     _persist_full_diff_if_truncated "$job_id" "$worktree_dir" "$pre_exec_sha" "$_current_head" "$git_diff"
 
     # 리뷰 판정과 산출물 보존을 분리한다. 리뷰가 실패하거나 인프라 장애로
@@ -3591,12 +3661,18 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             local changed_files=""
             changed_files=$(echo "$git_diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
 
+            # 리뷰 입력 = (잘렸을 때만) 절단 고지 앞머리 + git_diff. git_diff 자체는 그대로 저장된다.
+            local review_diff="$git_diff"
+            if [[ -n "$review_diff_prefix" ]]; then
+                review_diff="${review_diff_prefix}"$'\n'"${git_diff}"
+            fi
+
             # JSON body 생성 (jq 사용)
             local review_body=""
             review_body=$(jq -n \
                 --arg jid "$job_id" \
                 --arg proj "$project" \
-                --arg diff "$git_diff" \
+                --arg diff "$review_diff" \
                 --arg inst "$instruction" \
                 --arg files "$changed_files" \
                 '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
@@ -3616,7 +3692,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
                 --arg rid "$review_request_id" \
                 --arg jid "$job_id" \
                 --arg proj "$project" \
-                --arg diff "$git_diff" \
+                --arg diff "$review_diff" \
                 --arg inst "$instruction" \
                 --arg files "$changed_files" \
                 '{request_id: $rid, job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
@@ -3923,7 +3999,7 @@ _preserve_worktree_patch() {
     local patch_file="/root/aads/runner-artifacts/${job_id}.patch"
     (
         cd "$worktree_dir" || exit 0
-        git add -A >/dev/null 2>&1
+        git add -A -- . ':(exclude).runner_full_diff.patch' >/dev/null 2>&1
         git diff HEAD > "$patch_file" 2>/dev/null
         if [[ ! -s "$patch_file" ]]; then
             # reject_job 등에서 이미 전부 커밋된 경우 working-tree diff는 비어도
