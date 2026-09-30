@@ -176,3 +176,61 @@ def test_local_backend_rejects_non_http_url(monkeypatch):
                         lambda *a, **k: pytest.fail("bytes 를 못 얻었는데 OCR 을 불렀다"))
     with pytest.raises(ValueError, match="image_base64"):
         asyncio.run(bridge.ocr_extract(image_url="/home/partner/obys/data/a.png"))
+
+
+def test_tesseract_command_uses_tuned_psm_and_langs(monkeypatch):
+    """psm 기본값 4 는 실측으로 고른 값이다 — 되돌아가면 읽히는 항목이 준다."""
+    captured: dict[str, list[str]] = {}
+
+    class Langs:
+        returncode = 0
+        stdout = "List of available languages (3):\nkor\neng\nosd\n"
+        stderr = ""
+
+    class Done:
+        returncode = 0
+        stdout = TSV_HEADER + "\n" + _row(1, 1, 1, 1, 90, "상호")
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        if "--list-langs" in command:
+            return Langs()
+        captured["command"] = list(command)
+        return Done()
+
+    monkeypatch.setattr(bridge, "_tesseract_bin", lambda: "/usr/bin/tesseract")
+    monkeypatch.setattr(bridge.subprocess, "run", fake_run)
+    monkeypatch.delenv("OCR_TESSERACT_PSM", raising=False)
+
+    result = bridge.tesseract_extract(b"\x89PNG fake image")
+    command = captured["command"]
+    assert command[command.index("--psm") + 1] == "4"
+    assert command[command.index("-l") + 1] == "kor+eng"
+    assert command[-1] == "tsv"
+    assert result["text"] == "상호"
+    assert result["confidence"] == 0.9
+
+    monkeypatch.setenv("OCR_TESSERACT_PSM", "6")
+    bridge.tesseract_extract(b"\x89PNG fake image")
+    command = captured["command"]
+    assert command[command.index("--psm") + 1] == "6"
+
+
+def test_tesseract_failure_surfaces_stderr(monkeypatch):
+    class Langs:
+        returncode = 0
+        stdout = "List:\neng\n"
+        stderr = ""
+
+    class Failed:
+        returncode = 1
+        stdout = ""
+        stderr = "Error in pixReadStream: Pdf reading is not supported\n"
+
+    def fake_run(command, **kwargs):
+        return Langs() if "--list-langs" in command else Failed()
+
+    monkeypatch.setattr(bridge, "_tesseract_bin", lambda: "/usr/bin/tesseract")
+    monkeypatch.setattr(bridge.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="rc=1"):
+        bridge.tesseract_extract(b"not-an-image")

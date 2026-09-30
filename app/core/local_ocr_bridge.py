@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 PC_AGENT_URL = os.getenv("PC_AGENT_BASE_URL", "http://127.0.0.1:8102/api/v1/pc-agent")
 DEFAULT_LANGUAGE = "kor+eng"
+# 사업자등록증은 단일 컬럼 서식이다. 2026-10-01 진아서버 실측에서
+# psm 3(자동)은 7줄 중 2항목만 읽었고 psm 4·6 은 6항목 전부(신뢰도 0.92)를
+# 읽었다. psm 12 는 1항목이었다. 그래서 기본값을 4 로 둔다.
+DEFAULT_PSM = "4"
 BACKENDS = ("auto", "pc_agent", "local")
 
 
@@ -165,7 +169,7 @@ def tesseract_extract(data: bytes, language: str = DEFAULT_LANGUAGE) -> dict:
         source.write_bytes(payload)
         done = subprocess.run(
             [binary, str(source), "stdout", "-l", langs,
-             "--psm", _env("OCR_TESSERACT_PSM", "3"), "tsv"],
+             "--psm", _env("OCR_TESSERACT_PSM", DEFAULT_PSM), "tsv"],
             capture_output=True, text=True, timeout=_timeout(),
         )
     if done.returncode != 0:
