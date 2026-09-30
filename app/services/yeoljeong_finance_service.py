@@ -2222,7 +2222,30 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
     email = str(payload.get("email") or _email(user)).strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="직원 이메일이 필요합니다")
-    existing = next((row for row in rows if str(row.get("email") or "").strip().lower() == email), None)
+    # 겸직: 가입요청의 식별 키는 (email, business_id) 다. 사업자가 다르면 별개 고용주라 별개 요청이다.
+    payload_branch = str(payload.get("branch") or "").strip()
+    payload_branch = BRANCH_ALIASES.get(payload_branch, payload_branch)
+    payload_business_id = str(payload.get("business_id") or "").strip() or str(BUSINESS_BY_BRANCH.get(payload_branch) or "")
+    same_email_rows = [row for row in rows if str(row.get("email") or "").strip().lower() == email]
+    existing = None
+    if not payload_business_id:
+        # payload 가 사업자를 특정하지 않으면 종전처럼 이메일만으로 매칭한다.
+        existing = next(iter(same_email_rows), None)
+    else:
+        existing = next(
+            (row for row in same_email_rows if str(row.get("business_id") or "").strip() == payload_business_id),
+            None,
+        )
+        if existing is None:
+            legacy_blank_rows = [row for row in same_email_rows if not str(row.get("business_id") or "").strip()]
+            if len(legacy_blank_rows) == 1:
+                # business_id 가 비어 있던 기존 1건에 채운다 — 새 행을 만들면 유령 요청이 남는다.
+                existing = legacy_blank_rows[0]
+            elif len(legacy_blank_rows) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="같은 이메일의 사업자 미지정 가입요청이 2건 이상이라 자동으로 연결할 수 없습니다 — 수동 정리가 필요합니다",
+                )
     now = _now()
     record = dict(existing) if existing else {"id": str(uuid4()), "requested_at": now}
     branch = BRANCH_ALIASES.get(
@@ -2665,6 +2688,18 @@ def _record_business_id(record: dict[str, Any]) -> str:
     return explicit if explicit in CANONICAL_BUSINESS_IDS else str(BUSINESS_BY_BRANCH.get(branch) or "")
 
 
+def _row_in_business(row: dict[str, Any], business_id: str) -> bool:
+    """business_id 가 비어 있으면 스코프하지 않는다(종전 동작). 행의 사업자를 못 정하는 레거시 행은 제외하지 않는다."""
+    wanted = str(business_id or "").strip()
+    if not wanted:
+        return True
+    row_business = _record_business_id(row)
+    if not row_business:
+        snapshot = row.get("signed_snapshot") if isinstance(row.get("signed_snapshot"), dict) else {}
+        row_business = _record_business_id(snapshot) if snapshot else ""
+    return not row_business or row_business == wanted
+
+
 ONBOARDING_PROFILE_FIELDS = (
     "address",
     "birth_date",
@@ -2761,14 +2796,33 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
                 employee[field] = document_profile[field]
         employee["onboarding_documents"] = document_profile["onboarding_documents"]
         employee["onboarding_document_summary"] = document_profile["onboarding_document_summary"]
-        employee["onboarding_document_count"] = sum(1 for item in docs if str(item.get("employee_email") or "").strip().lower() == email)
-        employee["contract_count"] = sum(1 for item in contracts if str(item.get("employee_email") or "").strip().lower() == email)
-        employee["payroll_statement_count"] = sum(1 for item in payroll if str(item.get("employee_email") or "").strip().lower() == email)
+        # 겸직 직원은 매장(사업자)마다 별개 고용이다 — 다른 매장 서류가 이 매장의 "있음"으로 섞이지 않게 집계한다.
+        employee["onboarding_document_count"] = sum(
+            1
+            for item in docs
+            if str(item.get("employee_email") or "").strip().lower() == email
+            and _row_in_business(item, employee_business_id)
+        )
+        employee["contract_count"] = sum(
+            1
+            for item in contracts
+            if str(item.get("employee_email") or "").strip().lower() == email
+            and _row_in_business(item, employee_business_id)
+        )
+        employee["payroll_statement_count"] = sum(
+            1
+            for item in payroll
+            if str(item.get("employee_email") or "").strip().lower() == email
+            and _row_in_business(item, employee_business_id)
+        )
         employee["needs_onboarding_documents"] = employee["onboarding_document_count"] == 0
         employee["needs_contract"] = employee["contract_count"] == 0
         employee["needs_payroll"] = employee["payroll_statement_count"] == 0
         derived = _derive_current_employment(
-            contracts, employee_email=email, employee_request_id=str(employee.get("id") or "")
+            contracts,
+            employee_email=email,
+            employee_request_id=str(employee.get("id") or ""),
+            business_id=employee_business_id,
         )
         employee["current_employment"] = employee.get("current_employment") or None
         employee["current_employment_contract_id"] = employee.get("current_employment_contract_id") or ""
@@ -4541,9 +4595,9 @@ def _signed_contract_sort_key(contract: dict[str, Any]) -> tuple[datetime, str]:
 
 
 def _employee_signed_contracts(
-    contracts: list[dict[str, Any]], *, employee_email: str, employee_request_id: str
+    contracts: list[dict[str, Any]], *, employee_email: str, employee_request_id: str, business_id: str = ""
 ) -> list[dict[str, Any]]:
-    """직원의 서명 완료 계약서(삭제 제외)를 서명 시각 오름차순으로."""
+    """직원의 서명 완료 계약서(삭제 제외)를 서명 시각 오름차순으로. business_id 가 있으면 그 사업자 계약만."""
     email = str(employee_email or "").strip().lower()
     request_id = str(employee_request_id or "").strip()
     rows = [
@@ -4551,6 +4605,7 @@ def _employee_signed_contracts(
         for row in contracts
         if _contract_is_live_signed(row)
         and _contract_belongs_to(row, employee_email=email, employee_request_id=request_id)
+        and _row_in_business(row, business_id)
     ]
     return sorted(rows, key=_signed_contract_sort_key)
 
@@ -4569,13 +4624,19 @@ def _employment_terms_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
 
 
 def _derive_current_employment(
-    contracts: list[dict[str, Any]], *, employee_email: str, employee_request_id: str
+    contracts: list[dict[str, Any]], *, employee_email: str, employee_request_id: str, business_id: str = ""
 ) -> dict[str, Any] | None:
-    """최신 서명 근로·용역 계약 1건에서 고용조건을 만든다. 비밀유지 서약은 원본이 아니다."""
+    """최신 서명 근로·용역 계약 1건에서 고용조건을 만든다. 비밀유지 서약은 원본이 아니다.
+
+    business_id 가 있으면 그 사업자의 서명계약 중 최신 1건(겸직 직원의 매장별 고용조건), 없으면 전체 최신 1건.
+    """
     sources = [
         row
         for row in _employee_signed_contracts(
-            contracts, employee_email=employee_email, employee_request_id=employee_request_id
+            contracts,
+            employee_email=employee_email,
+            employee_request_id=employee_request_id,
+            business_id=business_id,
         )
         if str(row.get("contract_type") or "") in EMPLOYMENT_SOURCE_CONTRACT_TYPES
     ]
@@ -4698,6 +4759,7 @@ def _sync_employee_employment(
         _read_hr("contracts", user),
         employee_email=str(employee.get("email") or ""),
         employee_request_id=request_id,
+        business_id=_record_business_id(employee),
     )
     if derived is None:
         # 원본이 없으면 기존 스냅샷도 지우지 않는다(이력 보존).
@@ -4830,7 +4892,12 @@ def employee_employment_history(request_id: str, user: dict[str, Any]) -> dict[s
     if not _is_admin(user) and (not _email(user) or _email(user) != email):
         raise denied
     contracts = []
-    for row in _employee_signed_contracts(_read_hr("contracts", user), employee_email=email, employee_request_id=request_id):
+    for row in _employee_signed_contracts(
+        _read_hr("contracts", user),
+        employee_email=email,
+        employee_request_id=request_id,
+        business_id=_record_business_id(employee),
+    ):
         terms = _employment_terms_from_contract(row)
         contracts.append(
             {
@@ -4947,6 +5014,7 @@ def payroll_defaults(employee_email: str, payroll_month: str, user: dict[str, An
         _read_hr("contracts", user),
         employee_email=str(employee.get("email") or ""),
         employee_request_id=str(employee.get("id") or ""),
+        business_id=_record_business_id(employee),
     )
     result = _payroll_defaults_from_employment(derived)
     result["employee_email"] = str(employee.get("email") or "")
@@ -5019,6 +5087,7 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
             _read_hr("contracts", user),
             employee_email=str(employee.get("email") or ""),
             employee_request_id=str(employee.get("id") or ""),
+            business_id=_record_business_id(employee),
         )
         if employee
         else None

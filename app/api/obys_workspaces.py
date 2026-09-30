@@ -857,7 +857,7 @@ async def create_attendance_record(
                        work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,
                        source,status,memo,created_by)
                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'manual',$12,$13,$14)
-                    ON CONFLICT (employee_email,work_date,start_at) DO UPDATE SET
+                    ON CONFLICT (employee_email,business_id,work_date,start_at) DO UPDATE SET
                       employee_email_masked=EXCLUDED.employee_email_masked,
                       employee_name=EXCLUDED.employee_name, branch=EXCLUDED.branch,
                       end_at=EXCLUDED.end_at, break_minutes=EXCLUDED.break_minutes,

@@ -50,6 +50,9 @@ migrations/20260930_obys_business_registration_documents.sql
 # OBYS 업무 DB 전용(yeoljeong_audit_logs 인덱스). AADS DB 자동 적용 대상이 아니다 —
 # docs/operations/OBYS_CONTRACT_EMPLOYMENT_PAYROLL.md 절차로 수동 적용.
 migrations/20260930_obys_employment_audit_lookup.sql
+# OBYS 업무 DB 전용(yeoljeong_attendance_weekly·yeoljeong_attendance_records 유니크 키). AADS DB 자동
+# 적용 대상이 아니다 — 진아서버 운영 반영은 별도 승인 릴리스에서 수동 적용.
+migrations/20261001_obys_attendance_business_scoped_unique.sql
 # OBYS 업무 DB 전용(yeoljeong_business_documents). AADS DB 자동 적용 대상이 아니다 —
 # docs/operations/OBYS_BUSINESS_DOCUMENTS.md 절차로 수동 적용.
 migrations/20260930_obys_business_documents.sql
