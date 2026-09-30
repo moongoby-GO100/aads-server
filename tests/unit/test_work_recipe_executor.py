@@ -462,3 +462,179 @@ async def test_read_step_passes_and_costs_no_llm_call(monkeypatch):
     assert result["autoreview"]["verdict"] == "ALLOW"
     assert result["llm_calls"] == 0 and result["autoreview"]["llm_calls"] == 0
     assert set(result) >= {"ok", "risk", "llm_calls", "evidence", "route", "output"}
+
+
+# ---- GenericVerificationExecutor (phase='verify', read-only predicates) ----
+
+from app.services.work_recipe import orchestrator as orchestrator_module  # noqa: E402
+from app.services.work_recipe.schema import parse_recipe  # noqa: E402
+
+VERIFY_SCREEN = "https://aads.newtalk.kr/screenshots/recipe_verify.png"
+
+
+class VerifyPage(FakePage):
+    """evaluate() returns only the predicates; page text stays inside the browser."""
+
+    def __init__(self, url="https://aads.newtalk.kr/ohvis", *, visible=True, contains=True, shot=b"png"):
+        super().__init__()
+        self.url = url
+        self._visible, self._contains, self._shot = visible, contains, shot
+        self.evaluated = []
+
+    async def evaluate(self, expression, argument=None, **kwargs):
+        self.evaluated.append(argument)
+        return {"url": self.url, "visible": self._visible, "contains": self._contains}
+
+    async def screenshot(self, **kwargs):
+        if self._shot is None:
+            raise RuntimeError("no screen")
+        return self._shot
+
+
+def _verify_recipe(domain="aads.newtalk.kr", verify=None):
+    return parse_recipe({
+        "name": "generic_verify", "domain": domain, "version": 2,
+        "steps": [{"action": "navigate", "url": f"https://{domain}/ohvis"}],
+        "verify": verify or [{"action": "snapshot", "selector": "body", "assertion": "element_visible"}],
+    })
+
+
+def _generic(monkeypatch, page, recipe, *, browser_work_key=None, context=None):
+    async def fake_save(data, *, prefix=""):
+        return VERIFY_SCREEN
+
+    monkeypatch.setattr(executor_module, "save_png", fake_save)
+    executor = executor_module.BrowserRecipeExecutor(browser_work_key=browser_work_key)
+    executor._page = page
+    return orchestrator_module.GenericVerificationExecutor(executor, recipe)
+
+
+def _payload(recipe, index=0, **overrides):
+    step = recipe.verify[index].to_dict(include_seq=True)
+    step.update({"phase": "verify", **overrides})
+    return step
+
+
+def test_verify_step_carries_assertion_in_extra_without_schema_change():
+    recipe = _verify_recipe(verify=[
+        {"action": "snapshot", "selector": "h1", "assertion": "text_contains", "expected": "OHVIS"}])
+    assert recipe.verify[0].extra == {"assertion": "text_contains", "expected": "OHVIS"}
+    assert recipe.verify[0].to_dict()["expected"] == "OHVIS"
+
+
+@pytest.mark.parametrize("step", [
+    {"action": "snapshot", "selector": "main", "assertion": "element_visible"},
+    {"action": "snapshot", "assertion": "url_equals", "expected": "https://aads.newtalk.kr/ohvis/"},
+    {"action": "snapshot", "assertion": "text_contains", "expected": "OHVIS"},
+])
+async def test_generic_verify_passes_three_read_only_assertions(monkeypatch, step):
+    recipe = _verify_recipe(verify=[step])
+    page = VerifyPage()
+    result = await _generic(monkeypatch, page, recipe)(_payload(recipe))
+
+    assert result["ok"] is True
+    assert result["route"] == "browser_agent"
+    assert result["output"] == {"verified": True, "screenshot_path": VERIFY_SCREEN}
+    assert result["evidence"]["screenshot"]["status"] == "captured"
+    assert "OHVIS" not in repr(result["output"])
+
+
+@pytest.mark.parametrize("page_kwargs", [{"visible": False, "contains": False}])
+async def test_generic_verify_fails_when_predicate_is_false(monkeypatch, page_kwargs):
+    for assertion, extra in (("element_visible", {"selector": "main"}), ("text_contains", {"expected": "x"})):
+        recipe = _verify_recipe(verify=[{"action": "snapshot", "assertion": assertion, **extra}])
+        result = await _generic(monkeypatch, VerifyPage(**page_kwargs), recipe)(_payload(recipe))
+        assert result["ok"] is False and result["error"] == "verification_failed"
+    recipe = _verify_recipe(verify=[{"action": "snapshot", "assertion": "url_equals", "expected": "https://aads.newtalk.kr/other"}])
+    result = await _generic(monkeypatch, VerifyPage(), recipe)(_payload(recipe))
+    assert result["ok"] is False and result["error"] == "verification_failed"
+
+
+@pytest.mark.parametrize("step", [
+    {"action": "snapshot", "selector": "main", "assertion": "login_form_visible"},
+    {"action": "snapshot", "selector": "main", "assertion": "password_filled"},
+    {"action": "snapshot", "selector": "main"},
+    {"action": "snapshot", "assertion": "text_contains"},
+    {"action": "snapshot", "assertion": "element_visible"},
+])
+async def test_generic_verify_rejects_unsupported_or_incomplete_assertion(monkeypatch, step):
+    recipe = _verify_recipe(verify=[step])
+    page = VerifyPage()
+    result = await _generic(monkeypatch, page, recipe)(_payload(recipe))
+    assert result["ok"] is False and result["error"] == "unsupported_verify_assertion"
+    assert page.evaluated == []
+
+
+async def test_generic_verify_refuses_server_lane_for_external_domain(monkeypatch):
+    recipe = _verify_recipe(domain="example.com")
+    page = VerifyPage(url="https://example.com/")
+    result = await _generic(monkeypatch, page, recipe)(_payload(recipe))
+    assert result == {"ok": False, "error": "pc_agent_lane_required", "route": "browser_agent"}
+    assert page.evaluated == []
+
+
+async def test_generic_verify_allows_pc_lane_for_external_domain(monkeypatch):
+    recipe = _verify_recipe(domain="example.com")
+    payload = _payload(recipe, context={"smart_browser": {"server_access_blocked": True}})
+    result = await _generic(monkeypatch, VerifyPage(url="https://example.com/"), recipe)(payload)
+    assert result["ok"] is True and result["route"] == "pc_agent"
+
+
+async def test_generic_verify_rejects_page_that_left_the_recipe_domain(monkeypatch):
+    recipe = _verify_recipe()
+    result = await _generic(monkeypatch, VerifyPage(url="https://evil.example/ohvis"), recipe)(_payload(recipe))
+    assert result["ok"] is False and result["error"] == "verification_failed"
+
+
+async def test_generic_verify_fails_closed_without_captured_screenshot(monkeypatch):
+    recipe = _verify_recipe()
+    result = await _generic(monkeypatch, VerifyPage(shot=None), recipe)(_payload(recipe))
+    assert result["ok"] is False and result["error"] == "verification_screen_artifact_required"
+
+    async def no_url(data, *, prefix=""):
+        return ""
+
+    generic = _generic(monkeypatch, VerifyPage(), recipe)
+    monkeypatch.setattr(executor_module, "save_png", no_url)
+    result = await generic(_payload(recipe))
+    assert result["ok"] is False and result["error"] == "verification_screen_artifact_required"
+
+
+async def test_generic_verify_drops_page_text_from_evidence(monkeypatch):
+    recipe = _verify_recipe()
+    result = await _generic(monkeypatch, VerifyPage(), recipe)(_payload(recipe))
+    assert "text" not in result["evidence"]["dom"] and result["evidence"]["dom"]["sha256"]
+
+
+async def test_generic_verify_delegates_non_verify_phase(monkeypatch):
+    recipe = _verify_recipe()
+    page = VerifyPage()
+
+    async def acquire(**kwargs):
+        return FakeContext(page), None
+
+    monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
+    generic = _generic(monkeypatch, None, recipe)
+    result = await generic({"action": "navigate", "url": "https://aads.newtalk.kr/ohvis", "phase": "step", "risk": "READ"})
+    assert result["ok"] is True and ("navigate", {"url": "https://aads.newtalk.kr/ohvis", "timeout": 30000}) in page.calls
+
+
+def test_run_directive_wires_generic_executor_only_for_non_coupang_verify_recipes():
+    src = orchestrator_module.run_directive.__code__.co_names
+    assert "GenericVerificationExecutor" in src and "CoupangVerificationExecutor" in src
+
+
+async def test_coupang_executor_behaviour_is_unchanged_by_generic_executor():
+    class WrongLane:
+        _page = object()
+
+        def _route(self, payload):
+            return {"runtime": "browser_agent"}
+
+        async def __call__(self, payload):
+            raise AssertionError("browser action must not run")
+
+    recipe = _verify_recipe(domain="store.coupangeats.com")
+    wrapper = orchestrator_module.CoupangVerificationExecutor(WrongLane(), recipe, {})
+    result = await wrapper({"action": "snapshot", "phase": "verify", "assertion": "element_visible", "selector": "x"})
+    assert result == {"ok": False, "error": "pc_agent_lane_required", "route": "browser_agent"}

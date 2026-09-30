@@ -450,3 +450,29 @@ def test_secret_inputs_are_masked_before_storage():
     masked = _maskable(recipe, {"shop_id": "42", "password": "pw"})
     assert masked["password"] == "***"
     assert masked["shop_id"] == "42"
+
+
+async def test_verify_phase_recorded_with_zero_llm_calls_for_generic_recipe():
+    from app.services.work_recipe.orchestrator import GenericVerificationExecutor
+
+    class Inner:
+        _page = object()
+        seen = []
+
+        def _route(self, payload):
+            return {"runtime": "browser_agent"}
+
+        async def __call__(self, payload):
+            self.seen.append(payload["phase"])
+            return {"ok": True, "output": {"url": "x"}, "route": "browser_agent"}
+
+    recipe = parse_recipe({
+        "name": "aads_verify_shape", "domain": "aads.newtalk.kr",
+        "steps": [{"action": "navigate", "url": "https://aads.newtalk.kr/ohvis"}],
+        "verify": [{"action": "snapshot", "selector": "body", "assertion": "element_visible"}],
+    })
+    inner = Inner()
+    result = await play_recipe(recipe, GenericVerificationExecutor(inner, recipe))
+    assert inner.seen == ["step"]  # verify never reaches the delegate
+    assert [s.phase for s in result.steps] == ["step", "verify"]
+    assert result.llm_calls == 0

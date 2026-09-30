@@ -10,6 +10,7 @@ from app.services.channel_router import ActionIntent, ChannelRouter
 from app.services.work_recipe.audit import GuardedRunRecorder
 from app.services.work_recipe.credential_scope import assert_credential_allowed
 from app.services.work_recipe.executor import BrowserRecipeExecutor
+from app.services.work_recipe.guard import is_internal_host
 from app.services.work_recipe.player import RunResult, play_recipe
 from app.services.work_recipe.schema import WorkRecipe, parse_recipe
 from app.services.work_recipe.store import list_recipes, normalize_domain, row_to_recipe
@@ -112,7 +113,12 @@ async def run_directive(
         browser_session_id=browser_session_id,
         browser_work_key=browser_work_key,
     )
-    step_executor = CoupangVerificationExecutor(executor, recipe, resolved_inputs) if coupang else executor
+    if coupang:
+        step_executor = CoupangVerificationExecutor(executor, recipe, resolved_inputs)
+    elif recipe.verify:
+        step_executor = GenericVerificationExecutor(executor, recipe)
+    else:
+        step_executor = executor
     return await play_recipe(
         recipe,
         step_executor,
@@ -252,6 +258,90 @@ class CoupangVerificationExecutor:
         if screenshot.get("status") != "captured" or not screenshot.get("url"):
             return {"ok": False, "error": "coupangeats_screen_artifact_required", "route": "pc_agent"}
         return {"ok": True, "route": "pc_agent",
+                "output": {"verified": True, "screenshot_path": screenshot["url"]},
+                "evidence": evidence}
+
+
+GENERIC_VERIFY_ASSERTIONS = frozenset({"element_visible", "url_equals", "text_contains"})
+
+_GENERIC_VERIFY_SCRIPT = """(args) => {
+    const norm = s => String(s ?? '').replace(/\\s+/g, ' ').trim().toLowerCase();
+    const el = args.selector ? document.querySelector(args.selector) : null;
+    const visible = !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+    const scope = args.selector ? el : document.body;
+    const contains = !!scope && !!args.expected &&
+        norm(scope.innerText ?? scope.textContent).includes(norm(args.expected));
+    return {url: window.location.href, visible, contains};
+}"""
+
+
+def _url_host(url: str) -> str:
+    match = _URL_HOST.match(str(url or "").strip())
+    return normalize_domain(match.group(1)) if match else ""
+
+
+def _host_within(url: str, domain: str) -> bool:
+    host, base = _url_host(url), normalize_domain(domain)
+    return bool(host and base and (host == base or host.endswith("." + base)))
+
+
+class GenericVerificationExecutor:
+    """Read-only verify phase for recipes that are not tied to one vendor.
+
+    Only predicates leave the browser: page text and field values never enter
+    the result.  A server-lane browser may vouch only for internal hosts; any
+    other domain must be verified from the PC lane.
+    """
+
+    def __init__(self, executor: BrowserRecipeExecutor, recipe: WorkRecipe):
+        self.executor = executor
+        self.recipe = recipe
+
+    async def __call__(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("phase") != "verify":
+            return await self.executor(payload)
+        lane = self.executor._route(payload)["runtime"]
+        internal = is_internal_host(self.recipe.domain)
+        if not internal and lane != "pc_agent":
+            return {"ok": False, "error": "pc_agent_lane_required", "route": lane}
+        page = self.executor._page
+        if page is None:
+            return {"ok": False, "error": "missing_verify_page", "route": lane}
+        assertion = payload.get("assertion")
+        expected = payload.get("expected")
+        selector = str(payload.get("selector") or "")
+        if (assertion not in GENERIC_VERIFY_ASSERTIONS
+                or (assertion == "element_visible" and not selector)
+                or (assertion != "element_visible" and not str(expected or ""))):
+            return {"ok": False, "error": "unsupported_verify_assertion", "route": lane}
+        try:
+            screen = await page.evaluate(_GENERIC_VERIFY_SCRIPT, {
+                "selector": selector, "expected": str(expected or ""),
+            })
+            if not isinstance(screen, dict):
+                raise ValueError("invalid_verify_screen_state")
+            current_url = str(screen.get("url") or "")
+            if assertion == "element_visible":
+                valid = bool(screen.get("visible"))
+            elif assertion == "text_contains":
+                valid = bool(screen.get("contains"))
+            else:
+                valid = current_url.rstrip("/") == str(expected).rstrip("/")
+            valid = valid and _host_within(current_url, self.recipe.domain)
+        except Exception:
+            valid = False
+        if not valid:
+            return {"ok": False, "error": "verification_failed", "route": lane}
+        evidence = await self.executor._collect_evidence(page)
+        if self.executor._evidence_shows_block({"evidence": evidence}):
+            return {"ok": False, "error": "verification_blocked_page", "route": lane}
+        for key in ("dom", "aria"):
+            if isinstance(evidence.get(key), dict):
+                evidence[key].pop("text", None)
+        screenshot = evidence.get("screenshot") or {}
+        if screenshot.get("status") != "captured" or not screenshot.get("url"):
+            return {"ok": False, "error": "verification_screen_artifact_required", "route": lane}
+        return {"ok": True, "route": lane,
                 "output": {"verified": True, "screenshot_path": screenshot["url"]},
                 "evidence": evidence}
 

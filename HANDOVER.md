@@ -1,3 +1,26 @@
+## 2026-09-30 — 일반 verify 실행기 + aads.newtalk.kr 레시피 v2 verify 절, phase='verify' 실행기록 1건 생산 (AADS-WORKRECIPE-GENERIC-VERIFY-EVIDENCE-20260930)
+
+세 가지를 분리해 적는다.
+
+**1) 코드 완료 (커밋 전 — Runner 가 승인 후 commit/push)**
+- `orchestrator.py`: `GenericVerificationExecutor` 를 `CoupangVerificationExecutor` 옆에 추가(쿠팡 실행기는 무수정). `phase!='verify'` 는 `BrowserRecipeExecutor` 로 위임. 지원 assertion 은 읽기 전용 3종 `element_visible`/`url_equals`/`text_contains` 뿐, 그 밖·필수값 누락은 `unsupported_verify_assertion`. 술어 불리언만 반환하고 화면 텍스트/필드값은 output·evidence(dom/aria text 제거, sha256 만 유지)에 넣지 않는다. 사내 도메인(`guard.is_internal_host`)만 서버 브라우저 레인 허용, 그 외는 `pc_agent_lane_required`. 현재 URL 호스트가 레시피 도메인을 벗어나면 실패. 스크린샷이 `captured`+url 이 아니면 `verification_screen_artifact_required` 로 실패. LLM 호출 0. `run_directive` 는 쿠팡 레시피 → 쿠팡 실행기, `recipe.verify` 가 있는 그 외 레시피 → 일반 실행기.
+- `schema.py` 는 **수정하지 않았다** — verify 단계의 `assertion`/`expected` 는 이미 `RecipeStep.extra` 로 담기고 `to_dict()` 가 payload 로 내보낸다(테스트로 고정).
+- 신규 `scripts/work_recipe_aads_ohvis_verify_v2.py`(TARGET 밖, 지시서가 허용한 새 파일 1개): v2 등록(`save_recipe` = 새 버전 INSERT)과 1회 재생. 기존 scripts 파일 무수정.
+- 테스트: `bash scripts/run_unit_tests.sh tests/unit/test_work_recipe.py tests/unit/test_work_recipe_executor.py tests/unit/test_coupangeats_recipe_drafts.py` → 79 passed, exit 0 (쿠팡 회귀 포함). ruff F821/F811 통과.
+
+**2) 실행기록 생산 (운영 DB 에 실제로 만들었다)**
+- `work_recipes`: `aads_ohvis_public_screen_check` **v2** 신규(verify 3절: url_equals `/login?redirect=%2Fohvis`, h1 element_visible, h1 text_contains `OHVIS`; max_risk=READ; enabled). v1 은 무수정(verify 0).
+- 재생 대상은 `https://aads.newtalk.kr/ohvis` 공개 GET 뿐(로그인 화면으로 307). 로그인·입력·쓰기 없음. 운영 이미지 + 워킹트리 마운트 컨테이너에서 실행(커밋 전 코드).
+- 성공 run `45d74b1e-516b-48cf-93a5-07134bac4d70` (status=success, llm_calls=0, triggered_by=`task:AADS-WORKRECIPE-GENERIC-VERIFY-EVIDENCE-20260930`): `recipe_run_steps` seq 4/5/6 `phase='verify'`·`status='success'`·`output->'output'->>'verified'='true'`, 스크린샷 URL 3건 모두 `/screenshots/…png`(HTTP 200 확인).
+- **첫 시도는 실패 기록으로 남아 있다**: run `db1dd9ba-3ec4-48e0-bbaa-85aca671c0de`(failed). 원인은 임시 컨테이너에 `--add-host host.docker.internal`·`/root/.ssh` 마운트가 없어 `screenshot_store.save_png` 가 None → 게이트가 `verification_screen_artifact_required` 로 닫음(설계대로). append-only 라 지우지 않았다. 재실행은 운영 컨테이너와 같은 조건으로 성공.
+- 조건 형태 SQL(`r.status='success' AND s.phase='verify' AND s.status='success' AND s.output->'output'->>'verified'='true'`, triggered_by 확인)은 위 3행으로 만족. 단 `lookup_coupangeats_run_evidence` 는 `domain='store.coupangeats.com'` 하드코딩이라 aads 도메인에서는 호출되지 않는다.
+
+**3) 후속(이번에 하지 않음)**
+- 증거 대조 도메인 일반화: `browser_recipe_registry.lookup_coupangeats_run_evidence` 의 도메인 하드코딩 제거는 별건. 이번 job 은 그 함수를 수정하지 않았다.
+- `browser_artifacts` 는 여전히 0건(artifact 경로는 이번 범위 아님).
+- 비용은 미측정(LLM 호출 0 이라 LLM 비용은 없음, 브라우저 실행 자원은 미측정).
+- TARGET 밖 변경: `scripts/work_recipe_aads_ohvis_verify_v2.py` 신규 1건뿐(지시서 허용).
+
 ## 2026-09-30 — work_recipe 사전 행동 심사(Auto-review) 게이트 + executor 승인 판정 무시 결함 교정 (AADS-WORKRECIPE-AUTOREVIEW-GATE-20260930)
 
 **코드 완료 / 운영 반영(배포) / 게이트 실제 차단 검증은 별개다.** 아래는 코드 완료분만이다.
