@@ -86,3 +86,39 @@ SELECT count(*) FROM pg_tables
 
 Revoke with `ALTER DEFAULT PRIVILEGES FOR ROLE partner IN SCHEMA public REVOKE
 ALL ON TABLES FROM obys_app;` (and the same for `SEQUENCES`).
+
+## Business-registration OCR on Jinah (2026-10-01)
+
+`app/core/local_ocr_bridge.py` used to call the CEO PC Agent at
+`127.0.0.1:8102` and nothing else. Jinah has no PC Agent, so every OCR call
+failed there and the business-registration screen could only be filled by hand.
+`OCR_BACKEND` now selects the path:
+
+| value | behaviour |
+|---|---|
+| `auto` (default) | PC Agent first, server `tesseract` if it is absent or fails |
+| `pc_agent` | PC Agent only — the pre-2026-10-01 behaviour |
+| `local` | server `tesseract` only |
+
+Jinah runs `local` (set in `obys.env.sh`) because there is no PC Agent to wait
+for. `tesseract 5.3.4` with `kor`+`eng` and `pdftoppm` are already installed;
+nothing was added to the venv — the binary is called directly.
+
+Other knobs, all optional: `OCR_TESSERACT_BIN`, `OCR_TESSERACT_PSM`,
+`OCR_PREPROCESS`, `OCR_PDFTOPPM_BIN`, `OCR_PDF_DPI`, `OCR_LOCAL_TIMEOUT_SEC`,
+`PC_AGENT_BASE_URL`.
+
+Two defaults were measured on the real 열정국밥 성신여대점 certificate
+(JPEG, 2008x2844), not guessed. Changing them back costs read fields:
+
+- **psm 4** (`--psm`): psm 3 read 2 of 6 fields, psm 4 and 6 read all 6,
+  psm 12 read 1. Auto page segmentation splits the form into the wrong blocks.
+- **grayscale PNG preprocessing** (`OCR_PREPROCESS=1`): feeding the original
+  JPEG read 2 of 6 fields (number, address); converting to 8-bit grayscale PNG
+  first read all 6, adding 대표자 and 개업연월일. Upscaling 2-3x made it worse
+  (confidence 0.82 → 0.58), so the bridge does not resize.
+
+OCR only proposes. It never writes to the business record — the admin confirms
+each field. Korean output still carries per-syllable spaces
+(`열 정 국밥`, `서 물 특 별시`), so 상호/주소 usually need a touch-up before
+saving; the registration number and dates come through clean.
