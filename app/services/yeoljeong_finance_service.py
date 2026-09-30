@@ -1984,14 +1984,12 @@ def _is_admin(user: dict[str, Any]) -> bool:
                 row
                 for row in (_read_hr("employee_join_requests", user) if membership_valid else [])
                 if str(row.get("email") or "").strip().lower() == email
+                and str(row.get("status") or "").strip().lower() == "approved"
             ),
             None,
         )
         if employee_record:
-            return (
-                str(employee_record.get("status") or "").strip().lower() == "approved"
-                and _employee_access_role(employee_record.get("role")) == "admin"
-            )
+            return _employee_access_role(employee_record.get("role")) == "admin"
     tenant_role = str(user.get("tenant_role") or "").strip().lower()
     membership_role = str((user.get("current_membership") or {}).get("role") or "").strip().lower()
     return bool(

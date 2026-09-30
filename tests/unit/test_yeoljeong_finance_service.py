@@ -5680,3 +5680,93 @@ def test_bank_upload_backfills_db_when_legacy_file_already_has_row(tmp_path, mon
 
     assert backfilled["imported_rows"] == 1
     assert len(service._read_file_rows("bank_transactions")) == 1
+
+
+_ADMIN_JUDGE_TENANT = "15055cac-71b0-45ec-b714-7093dde189ff"
+
+
+def _membership_user(email, membership_role, **extra):
+    return {
+        "email": email,
+        "tenant_id": _ADMIN_JUDGE_TENANT,
+        "tenant_role": membership_role,
+        "current_membership": {
+            "tenant_id": _ADMIN_JUDGE_TENANT,
+            "status": "active",
+            "role": membership_role,
+        },
+        **extra,
+    }
+
+
+def _seed_join_request(email, status, role="employee"):
+    service._write("employee_join_requests", [{
+        "id": "join-judge", "name": "판정 대상", "email": email,
+        "branch": "미아점", "status": status, "role": role,
+    }])
+
+
+@pytest.mark.parametrize("status", ["pending", "rejected", "", "unknown"])
+def test_is_admin_owner_ignores_unapproved_own_join_request(status):
+    user = _membership_user("owner@example.com", "owner", is_admin=False)
+    _seed_join_request("owner@example.com", status)
+
+    assert service._is_admin(user) is True
+
+
+def test_is_admin_owner_with_pending_request_still_sees_all_contracts():
+    owner = _membership_user("owner@example.com", "owner", is_admin=False)
+    seed_approved_employee()
+    saved = service.save_contract(valid_employment_contract(), {"email": "boss@example.com", "is_admin": True})
+    _seed_join_request("owner@example.com", "pending")
+
+    assert service._filter_user([saved], owner, "employee_email") == [saved]
+
+
+def test_is_admin_approved_employee_role_is_not_admin():
+    user = _membership_user("owner@example.com", "owner")
+    _seed_join_request("owner@example.com", "approved", "employee")
+
+    assert service._is_admin(user) is False
+
+
+def test_is_admin_approved_admin_role_is_admin():
+    user = _membership_user("staff@example.com", "member")
+    _seed_join_request("staff@example.com", "approved", "admin")
+
+    assert service._is_admin(user) is True
+
+
+def test_is_admin_member_without_join_request_is_not_admin():
+    assert service._is_admin(_membership_user("staff@example.com", "member")) is False
+
+
+def test_is_admin_pending_request_does_not_promote_member():
+    user = _membership_user("staff@example.com", "member")
+    _seed_join_request("staff@example.com", "pending", "admin")
+
+    assert service._is_admin(user) is False
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"is_internal_admin": True}, {"user_role": "ceo"}, {"user_role": "admin"}, {"user_role": "system"}],
+)
+def test_is_admin_privileged_principals(extra):
+    user = _membership_user("ops@example.com", "member", **extra)
+    _seed_join_request("ops@example.com", "approved", "employee")
+
+    assert service._is_admin(user) is True
+
+
+def test_owner_with_pending_request_still_cannot_sign_for_employee():
+    seed_approved_employee()
+    admin = {"email": "owner@example.com", "is_admin": True}
+    saved = service.save_contract(valid_employment_contract(), admin)
+    token = service.request_contract_signature(saved["id"], admin)["sign_token"]
+    owner = _membership_user("owner@example.com", "owner")
+    _seed_join_request("owner@example.com", "pending")
+
+    with pytest.raises(service.HTTPException) as exc:
+        service.sign_contract(valid_signature_payload(token), owner)
+    assert exc.value.status_code == 403
