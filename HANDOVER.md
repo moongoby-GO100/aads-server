@@ -1,3 +1,14 @@
+## 2026-09-30 — 오비서 계약서 서명요청 알림 + 서명본 PDF 보관·교부 (AADS-OBYS-CONTRACT-NOTIFY-PDF-20260930)
+
+- 서명요청(`request-signature`) 뒤 알림 발송·채널별 이력(`yeoljeong_contract_notifications`), 서명(`contracts/signing`) 뒤 `signed_snapshot` 기반 PDF 보관(`OBYS_UPLOAD_ROOT/<tenant>/contracts/`)·`contract_signed` 알림. 둘 다 실패해도 서명요청/서명은 성공으로 남는다.
+- 신규 API: `resend-signature-notice`(관리자, requested, 5분 제한), `GET signed-pdf`(관리자·당사자, 그 외 403, 당사자 다운로드=교부 기록), `POST signed-pdf/regenerate`(관리자).
+- 외부 발송은 `OBYS_CONTRACT_NOTIFY_CHANNELS` opt-in(기본 `inapp`). 알림톡은 템플릿 env 있을 때만.
+- 신규 모듈 `app/services/yeoljeong_contract_{notify,pdf}.py`, 폰트 `app/assets/fonts/NanumGothic-Regular.ttf`(OFL), 의존성 `reportlab==4.4.10`(pyproject·runtime.lock).
+- 마이그레이션 `migrations/20260930_obys_contract_notify_signed_pdf.sql` — 오비서 업무 DB 전용·스키마 추가만, AADS 자동 적용은 baseline HOLD. 진아서버 적용·반영은 별도 승인.
+- 테스트 `tests/unit/test_obys_contract_notify_pdf.py` 14건. 현 운영 이미지엔 reportlab 이 없어 PDF 3건은 skip(11 passed/3 skipped), reportlab 을 얹은 testdeps 로는 14 passed. 이미지 재빌드 후 skip 없이 돈다.
+- 운영 문서: `docs/operations/OBYS_CONTRACT_NOTIFY_SIGNED_PDF.md`.
+- 기존 실패(이번 변경 무관, HEAD 에서도 동일): test_yeoljeong_finance_api 은행 흐름 4건, test_obys_db_separation::test_finance_service_keeps_its_own_priority_chain_and_feature_flag.
+
 ## 2026-09-29 — deploy.sh 조상 릴리스 거부 가드 R2 (AADS-DEPLOY-ANCESTOR-RELEASE-GUARD-R2-20260929)
 
 - R1(runner-42338110, 3362daa7)은 리뷰 0.858·테스트 통과 후 stale_base 로 푸시되지 못했다. 설계 변경 없이 최신 main(cac17f1a, 0543b4a9·389882dd 포함) 위에 같은 내용을 다시 얹었다.

@@ -34,6 +34,8 @@ NOTIFICATION_TYPE_META: dict[str, dict[str, str]] = {
     "approval_requested": {"icon": "clock", "color": "amber"},
     "approval_approved": {"icon": "check-circle", "color": "green"},
     "approval_rejected": {"icon": "x-circle", "color": "red"},
+    "contract_signature_requested": {"icon": "file-signature", "color": "amber"},
+    "contract_signed": {"icon": "file-check", "color": "green"},
     "system": {"icon": "info", "color": "blue"},
     "warning": {"icon": "alert-triangle", "color": "orange"},
     "error": {"icon": "alert-circle", "color": "red"},

@@ -351,6 +351,14 @@ CONTRACT_SNAPSHOT_EXCLUDED_FIELDS = {
     "signed_snapshot_sha256",
     "signature_data_uri",
     "updated_at",
+    # 서명 뒤에 붙는 보관·교부 메타. 봉인 스냅샷에 섞이면 해시가 흔들린다.
+    "signed_pdf_path",
+    "signed_pdf_sha256",
+    "signed_pdf_bytes",
+    "signed_pdf_generated_at",
+    "signed_pdf_error",
+    "delivered_at",
+    "delivery_channel",
 }
 
 CANONICAL_BUSINESSES: list[dict[str, Any]] = [
@@ -3170,6 +3178,336 @@ def delete_contract(contract_id: str, user: dict[str, Any]) -> None:
     if str(contract.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="서명 완료 계약서는 삭제할 수 없습니다")
     _delete_hr_record("contracts", contract_id, user)
+
+
+# ---------------------------------------------------------------------------
+# 계약서 서명요청 알림 · 서명본 PDF 보관/교부
+#
+# 알림과 PDF 는 서명요청·서명 트랜잭션이 끝난 **뒤에** 돈다. 어느 쪽이 실패해도
+# 서명요청/서명 자체는 성공으로 남는다 — 서명은 이미 봉인된 법적 행위이고,
+# 알림은 부가 수단이다. 실패는 이력(sent/failed/skipped)과 signed_pdf_error 로 남긴다.
+# ---------------------------------------------------------------------------
+CONTRACT_NOTIFICATION_LOG = "contract_notifications"
+CONTRACT_NOTIFICATION_TABLE = "yeoljeong_contract_notifications"
+CONTRACT_NOTICE_RESEND_COOLDOWN_SECONDS = 300
+CONTRACT_DELIVERY_COLUMNS = ("signed_pdf_path", "signed_pdf_sha256", "signed_pdf_bytes", "delivered_at", "delivery_channel")
+
+
+def _run_coroutine(coro: Any) -> Any:
+    """sync 서비스에서 코루틴을 돌린다. ``_run_db`` 와 달리 예외를 삼키지 않는다."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+async def _db_insert_contract_notifications(rows: list[dict[str, Any]]) -> bool:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{CONTRACT_NOTIFICATION_TABLE}"):
+            return False
+        await conn.executemany(
+            """
+            INSERT INTO yeoljeong_contract_notifications
+                (tenant_id, contract_id, event, channel, status, target_masked, error_detail)
+            VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
+            """,
+            [
+                (
+                    UUID(row["tenant_id"]),
+                    row["contract_id"],
+                    row["event"],
+                    row["channel"],
+                    row["status"],
+                    row["target_masked"],
+                    row["error_detail"],
+                )
+                for row in rows
+            ],
+        )
+        return True
+    finally:
+        await conn.close()
+
+
+async def _db_fetch_contract_notifications(tenant_id: str, contract_id: str) -> list[dict[str, Any]] | None:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{CONTRACT_NOTIFICATION_TABLE}"):
+            return None
+        rows = await conn.fetch(
+            """
+            SELECT id, tenant_id, contract_id, event, channel, status, target_masked, error_detail, created_at
+              FROM yeoljeong_contract_notifications
+             WHERE tenant_id = $1::uuid AND contract_id = $2
+             ORDER BY created_at DESC, id DESC
+             LIMIT 100
+            """,
+            UUID(tenant_id),
+            contract_id,
+        )
+        return [{**dict(row), "id": str(row["id"]), "tenant_id": str(row["tenant_id"]), "created_at": _iso(row["created_at"])} for row in rows]
+    finally:
+        await conn.close()
+
+
+async def _db_update_contract_delivery_columns(contract: dict[str, Any]) -> bool:
+    """마이그레이션이 적용된 경우에만 계약서 컬럼에도 보관·교부 메타를 쓴다.
+
+    값의 원본은 contract_payload 이고, 컬럼은 조회 쿼리용 사본이다. 컬럼이 아직
+    없을 때 upsert 에 섞으면 계약서 저장 전체가 깨지므로 따로 갱신한다.
+    """
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        present = await conn.fetchval(
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'yeoljeong_contracts' AND column_name = ANY($1::text[])",
+            list(CONTRACT_DELIVERY_COLUMNS),
+        )
+        if int(present or 0) < len(CONTRACT_DELIVERY_COLUMNS):
+            return False
+        result = await conn.execute(
+            """
+            UPDATE yeoljeong_contracts
+               SET signed_pdf_path = $3, signed_pdf_sha256 = $4, signed_pdf_bytes = $5,
+                   delivered_at = $6::timestamptz, delivery_channel = $7
+             WHERE id = $1 AND tenant_id = $2::uuid AND deleted_at IS NULL
+            """,
+            str(contract.get("id") or ""),
+            UUID(str(contract.get("tenant_id") or "")),
+            str(contract.get("signed_pdf_path") or "") or None,
+            str(contract.get("signed_pdf_sha256") or "") or None,
+            int(contract.get("signed_pdf_bytes") or 0) or None,
+            _pg_ts(contract.get("delivered_at")),
+            str(contract.get("delivery_channel") or "") or None,
+        )
+        return result.endswith(" 1")
+    finally:
+        await conn.close()
+
+
+def _append_contract_notification_logs(contract: dict[str, Any], event: str, results: list[dict[str, Any]]) -> bool:
+    now = _now()
+    rows = [
+        {
+            "id": str(uuid4()),
+            "tenant_id": str(contract.get("tenant_id") or ""),
+            "contract_id": str(contract.get("id") or ""),
+            "event": event,
+            "channel": str(item.get("channel") or ""),
+            "status": str(item.get("status") or "failed"),
+            "target_masked": str(item.get("target_masked") or ""),
+            "error_detail": str(item.get("error_detail") or "")[:500],
+            "created_at": now,
+        }
+        for item in results
+    ]
+    if not rows:
+        return True
+    if _db_available():
+        return bool(_run_db(_db_insert_contract_notifications(rows)))
+    _write_file_rows(CONTRACT_NOTIFICATION_LOG, rows + _read_file_rows(CONTRACT_NOTIFICATION_LOG))
+    return True
+
+
+def _contract_notification_history(tenant_id: str, contract_id: str) -> list[dict[str, Any]] | None:
+    """최신순 이력. 저장소를 확인할 수 없으면 None."""
+    if _db_available():
+        rows = _run_db(_db_fetch_contract_notifications(tenant_id, contract_id))
+        return rows if isinstance(rows, list) else None
+    rows = [
+        row
+        for row in _read_file_rows(CONTRACT_NOTIFICATION_LOG)
+        if str(row.get("tenant_id") or "") == tenant_id and str(row.get("contract_id") or "") == contract_id
+    ]
+    return sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)
+
+
+def _notify_contract_event(contract: dict[str, Any], event: str) -> dict[str, Any]:
+    """알림 발송 + 이력 기록. 어떤 실패도 예외로 올리지 않는다."""
+    try:
+        from app.services import yeoljeong_contract_notify as contract_notify
+
+        results = _run_coroutine(contract_notify.dispatch(contract, event))
+        status = contract_notify.summarize(results)
+    except Exception as exc:  # noqa: BLE001 — 알림 실패가 서명 흐름을 깨면 안 된다
+        logger.warning("contract notify dispatch failed: contract=%s event=%s err=%s", contract.get("id"), event, exc)
+        results = [{"channel": "dispatch", "status": "failed", "target_masked": "", "error_detail": f"{type(exc).__name__}: {exc}"[:500]}]
+        status = "failed"
+    try:
+        logged = _append_contract_notification_logs(contract, event, results)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("contract notify log failed: contract=%s err=%s", contract.get("id"), exc)
+        logged = False
+    if not logged:
+        logger.warning("contract notify history not stored: contract=%s event=%s", contract.get("id"), event)
+    return {"event": event, "status": status, "channels": results, "logged": logged}
+
+
+def request_contract_signature_with_notice(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    contract = request_contract_signature(contract_id, user)
+    return {"contract": contract, "notify": _notify_contract_event(contract, "signature_requested")}
+
+
+def resend_contract_signature_notice(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    tenant_id = _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="서명 요청 재발송 권한이 없습니다")
+    contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="계약서를 찾을 수 없습니다")
+    if str(contract.get("status") or "") != "requested":
+        raise HTTPException(status_code=409, detail="서명 요청 상태의 계약서만 알림을 재발송할 수 있습니다")
+    history = _contract_notification_history(tenant_id, str(contract.get("id") or ""))
+    if history is None:
+        # 이력을 못 읽으면 rate limit 도 못 건다 — 열어두지 않고 막는다.
+        raise HTTPException(status_code=503, detail="알림 발송 이력을 확인할 수 없어 재발송할 수 없습니다")
+    stamps = [
+        stamp
+        for stamp in (_pg_ts(row.get("created_at")) for row in history if row.get("event") == "signature_requested")
+        if stamp
+    ]
+    if stamps:
+        last_sent = max(stamps)
+        elapsed = (datetime.now(KST) - last_sent).total_seconds()
+        if elapsed < CONTRACT_NOTICE_RESEND_COOLDOWN_SECONDS:
+            wait = int(CONTRACT_NOTICE_RESEND_COOLDOWN_SECONDS - elapsed) + 1
+            raise HTTPException(status_code=429, detail=f"서명 요청 알림은 5분에 한 번만 보낼 수 있습니다. {wait}초 후 다시 시도하십시오")
+    return {"contract_id": str(contract.get("id") or ""), "notify": _notify_contract_event(contract, "signature_requested")}
+
+
+def _contract_pdf_root() -> Path:
+    configured = str(os.getenv("OBYS_UPLOAD_ROOT") or "").strip()
+    return Path(configured) if configured else DATA_DIR / "uploads" / "ledgers"
+
+
+def _contract_pdf_relpath(contract: dict[str, Any]) -> Path:
+    tenant = str(UUID(str(contract.get("tenant_id") or "")))
+    digest = hashlib.sha256(str(contract.get("id") or "").encode("utf-8")).hexdigest()[:32]
+    return Path(tenant) / "contracts" / f"{digest}.signed.pdf"
+
+
+def _verified_signed_pdf_path(contract: dict[str, Any]) -> Path | None:
+    relative = str(contract.get("signed_pdf_path") or "")
+    expected = str(contract.get("signed_pdf_sha256") or "")
+    if not relative or not expected:
+        return None
+    root = _contract_pdf_root().resolve()
+    path = (root / relative).resolve()
+    if root not in path.parents or not path.is_file():
+        return None
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        logger.error("signed contract pdf hash mismatch: contract=%s", contract.get("id"))
+        return None
+    return path
+
+
+def _persist_contract_delivery(contract: dict[str, Any], user: dict[str, Any] | None) -> None:
+    _write_hr_record("contracts", contract, user)
+    if _db_available():
+        _run_db(_db_update_contract_delivery_columns(contract))
+
+
+def _store_signed_contract_pdf(contract: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+    """봉인 스냅샷으로 PDF 를 만들어 보관하고 계약서에 메타를 남긴다. 예외를 올리지 않는다."""
+    result: dict[str, Any]
+    try:
+        from app.services import yeoljeong_contract_pdf as contract_pdf
+
+        data = contract_pdf.render_signed_contract_pdf(contract)
+        relative = _contract_pdf_relpath(contract)
+        path = _contract_pdf_root() / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{secrets.token_hex(4)}.tmp")
+        tmp.write_bytes(data)
+        os.chmod(tmp, 0o600)
+        tmp.replace(path)
+        digest = hashlib.sha256(data).hexdigest()
+        contract["signed_pdf_path"] = str(relative)
+        contract["signed_pdf_sha256"] = digest
+        contract["signed_pdf_bytes"] = len(data)
+        contract["signed_pdf_generated_at"] = _now()
+        contract["signed_pdf_error"] = ""
+        result = {"status": "stored", "sha256": digest, "bytes": len(data)}
+    except Exception as exc:  # noqa: BLE001 — 서명은 유지하고 실패만 기록한다
+        logger.error("signed contract pdf failed: contract=%s err=%s", contract.get("id"), exc)
+        contract["signed_pdf_error"] = f"{_now()} {type(exc).__name__}: {exc}"[:500]
+        result = {"status": "failed", "error": contract["signed_pdf_error"]}
+    try:
+        _persist_contract_delivery(contract, user)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("signed contract pdf meta not recorded: contract=%s err=%s", contract.get("id"), exc)
+        result = {**result, "recorded": False}
+    return result
+
+
+def sign_contract_and_deliver(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
+    contract = sign_contract(payload, user)
+    signed_pdf = _store_signed_contract_pdf(contract, user)
+    return {"contract": contract, "signed_pdf": signed_pdf, "notify": _notify_contract_event(contract, "signed")}
+
+
+def regenerate_signed_contract_pdf(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="서명본 PDF 재생성 권한이 없습니다")
+    contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="계약서를 찾을 수 없습니다")
+    if str(contract.get("status") or "") != "signed":
+        raise HTTPException(status_code=409, detail="서명 완료 계약서만 PDF 를 만들 수 있습니다")
+    return {"contract_id": str(contract.get("id") or ""), "signed_pdf": _store_signed_contract_pdf(contract, user)}
+
+
+def signed_contract_pdf_for_download(contract_id: str, user: dict[str, Any]) -> tuple[Path, str]:
+    """관리자와 계약 당사자 본인만. 다른 테넌트·제3자는 존재 여부와 무관하게 403."""
+    denied = HTTPException(status_code=403, detail="이 계약서 PDF 에 접근할 권한이 없습니다")
+    _tenant_id(user)
+    try:
+        contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise denied from None
+        raise
+    email = _email(user)
+    admin = _is_admin(user)
+    is_party = bool(email) and email == str(contract.get("employee_email") or "").strip().lower()
+    if not admin and not is_party:
+        raise denied
+    if str(contract.get("status") or "") != "signed":
+        raise HTTPException(status_code=409, detail="서명 완료 계약서만 PDF 를 내려받을 수 있습니다")
+    path = _verified_signed_pdf_path(contract)
+    if path is None:
+        stored = _store_signed_contract_pdf(contract, user)
+        path = _verified_signed_pdf_path(contract) if stored.get("status") == "stored" else None
+        if path is None:
+            raise HTTPException(status_code=503, detail="서명본 PDF 를 준비하지 못했습니다. 관리자에게 재생성을 요청하십시오")
+    if is_party and not admin:
+        # 교부 기록: 최초 교부 시각은 덮어쓰지 않고, 매 다운로드는 이력에 남긴다.
+        if not contract.get("delivered_at"):
+            contract["delivered_at"] = _now()
+            contract["delivery_channel"] = "download"
+            try:
+                _persist_contract_delivery(contract, user)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("contract delivery not recorded: contract=%s err=%s", contract.get("id"), exc)
+        try:
+            from app.services.yeoljeong_contract_notify import mask_email
+
+            _append_contract_notification_logs(
+                contract, "delivered", [{"channel": "download", "status": "sent", "target_masked": mask_email(email)}]
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("contract delivery log failed: contract=%s err=%s", contract.get("id"), exc)
+    title = str(contract.get("print_title") or "계약서")
+    filename = f"{_safe_filename(title)}_{str(contract.get('employee_name') or '').strip() or 'signed'}_서명본.pdf"
+    return path, _safe_filename(filename)
 
 
 def list_payroll(user: dict[str, Any]) -> list[dict[str, Any]]:

@@ -46,6 +46,8 @@ dependencies = [
     "python-docx>=1.1.0",
     # PDF 텍스트 추출 (Ephemeral Document Context)
     "pdfplumber>=0.11.0",
+    # 서명 완료 계약서 PDF 생성 (순수 파이썬 — OS 패키지 불필요, 오비서 진아서버 venv 호환)
+    "reportlab==4.4.10",
     # Redis
     "redis[hiredis]>=5.0.0",
     "upstash-redis>=1.0.0",

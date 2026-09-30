@@ -620,7 +620,24 @@ async def save_contract(payload: GenericPayload, current_user: dict = Depends(ge
 
 @router.post("/contracts/{contract_id}/request-signature")
 async def request_contract_signature(contract_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"contract": await run_in_threadpool(svc.request_contract_signature, contract_id, current_user)}
+    # 알림 실패는 200 을 유지하고 notify.status 로만 알린다.
+    return await run_in_threadpool(svc.request_contract_signature_with_notice, contract_id, current_user)
+
+
+@router.post("/contracts/{contract_id}/resend-signature-notice")
+async def resend_contract_signature_notice(contract_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.resend_contract_signature_notice, contract_id, current_user)
+
+
+@router.get("/contracts/{contract_id}/signed-pdf")
+async def download_signed_contract_pdf(contract_id: str, current_user: dict = Depends(get_current_user)) -> FileResponse:
+    path, filename = await run_in_threadpool(svc.signed_contract_pdf_for_download, contract_id, current_user)
+    return FileResponse(path, media_type="application/pdf", filename=filename, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/contracts/{contract_id}/signed-pdf/regenerate")
+async def regenerate_signed_contract_pdf(contract_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.regenerate_signed_contract_pdf, contract_id, current_user)
 
 
 @router.get("/contracts/signing/{token}")
@@ -641,7 +658,7 @@ async def sign_contract(
         "audit_ip": client_ip[:64],
         "audit_user_agent": str(request.headers.get("user-agent") or "")[:512],
     }
-    return {"contract": await run_in_threadpool(svc.sign_contract, sign_payload, current_user)}
+    return await run_in_threadpool(svc.sign_contract_and_deliver, sign_payload, current_user)
 
 
 @router.delete("/contracts/{contract_id}")
