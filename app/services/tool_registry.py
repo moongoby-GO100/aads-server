@@ -2739,7 +2739,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "db_safe_write": {
         "name": "db_safe_write",
-        "description": "안전한 DB 쓰기 (INSERT/UPDATE/DELETE만 허용, DDL 차단, 트랜잭션 강제, 전후 카운트 검증, dry-run 지원)",
+        "description": "안전한 DB 쓰기 (단일 INSERT/UPDATE/DELETE 문 1개만 허용 — 다중 문장·BEGIN/COMMIT/ROLLBACK/SAVEPOINT/SET/DO/CALL 차단, DDL 차단, 트랜잭션 강제, 전후 카운트 검증, dry-run 지원). saas_users/tenant_memberships/tenants 쓰기는 활성 Vault 자격증명이 참조하는 로그인 계정·멤버십·조직을 비활성화하면 전체 롤백된다",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -2755,7 +2755,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
                 "dry_run": {
                     "type": "boolean",
-                    "description": "true면 실행하지 않고 검증만 (기본 false)",
+                    "description": "true면 커밋하지 않고 검증만 (기본 false). 보호 테이블 쓰기는 트랜잭션 안에서 실행해 실제와 같은 보호 판정을 한 뒤 롤백한다",
                     "default": False,
                 },
             },

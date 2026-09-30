@@ -42,6 +42,25 @@ class _MaxAffectedExceeded(Exception):
         self.limit = limit
 
 
+class _GuardedDryRunRollback(Exception):
+    """db_safe_write dry_run: 실제 실행과 같은 보호 판정을 마친 뒤 트랜잭션을 되돌린다."""
+
+    def __init__(self, result: str, protected_count: int):
+        self.result = result
+        self.protected_count = protected_count
+
+
+async def _execute_single_statement(conn: Any, sql: str, params: list) -> str:
+    """확장 쿼리 프로토콜(prepare)로 실행한다.
+
+    params 없는 conn.execute 는 simple query 라 여러 문장을 한 번에 돌린다.
+    prepare 는 서버가 다중 문장을 거부하므로 렉서(db_write_sql_guard) 뒤의 2차 방어선이다.
+    """
+    stmt = await conn.prepare(sql)
+    await stmt.fetch(*params)
+    return stmt.get_statusmsg()
+
+
 def _json_default(obj: Any) -> Any:
     """Custom JSON serializer for objects not handled by default json encoder."""
     if isinstance(obj, (datetime, date)):
@@ -2802,6 +2821,7 @@ class ToolExecutor:
 
     _DB_SAFE_BLOCKED_KEYWORDS = {"DROP", "CREATE", "ALTER", "TRUNCATE", "GRANT", "REVOKE", "VACUUM", "REINDEX"}
 
+    # 도달 불가 — 도구 등록은 아래 정의에 바인딩된다(보존 목적으로 유지)
     async def _db_safe_write(self, inp: Dict[str, Any]) -> Any:
         """안전한 DB 쓰기 — 트랜잭션 + DDL 차단 + max_affected 검증."""
         sql = (inp.get("sql") or "").strip()
@@ -4215,7 +4235,17 @@ class ToolExecutor:
     # ── db_safe_write ────────────────────────────────────────────────────────
 
     async def _db_safe_write(self, inp: Dict[str, Any]) -> Any:
-        """DB 쓰기 안전 실행 (트랜잭션 강제, 사전/사후 카운트 검증, dry-run)."""
+        """DB 쓰기 안전 실행 (트랜잭션 강제, 사전/사후 카운트 검증, dry-run).
+
+        - 단일 INSERT/UPDATE/DELETE 만 받는다. 다중 문장·트랜잭션 제어는 DB 연결 전에
+          거부한다(P1-B, db_write_sql_guard). dry_run 도 같은 검사를 거친다.
+        - saas_users/tenant_memberships/tenants 를 건드리는 쓰기는 같은 트랜잭션 안에서
+          Vault 참조 로그인 경로 보호 판정을 받는다(P1-A, vault_cleanup_guard).
+          위반이면 전체 롤백 — 부분 성공 없음. dry_run 은 같은 판정 후 롤백한다.
+        """
+        from app.services.db_write_sql_guard import SqlGuardError, validate_single_write
+        from app.services.vault_cleanup_guard import references_login_tables
+
         sql = str(inp.get("sql", "") or "").strip()
         params_raw = inp.get("params") or []
         dry_run = bool(inp.get("dry_run", False))
@@ -4227,6 +4257,12 @@ class ToolExecutor:
                 return {"error": f"차단된 명령: {kw.strip()}"}
         if not any(sql_upper.startswith(k) for k in ("INSERT", "UPDATE", "DELETE")):
             return {"error": "INSERT/UPDATE/DELETE만 허용"}
+        try:
+            statement = validate_single_write(sql)
+        except SqlGuardError as exc:
+            return {"error": f"SQL 차단: {exc}", "blocked": True, "dry_run": dry_run}
+        if not isinstance(params_raw, list):
+            return {"error": "params 는 배열이어야 함", "blocked": True, "dry_run": dry_run}
         table_name = ""
         if sql_upper.startswith("INSERT"):
             parts = sql_upper.split("INTO", 1)
@@ -4244,6 +4280,10 @@ class ToolExecutor:
             from app.core.db_pool import get_pool
             pool = get_pool()
             async with pool.acquire() as conn:
+                if references_login_tables(statement.words + statement.literals):
+                    return await self._db_safe_write_vault_guarded(
+                        conn, sql, params_raw, dry_run, table_name,
+                    )
                 pre_count = None
                 if table_name:
                     try:
@@ -4254,7 +4294,7 @@ class ToolExecutor:
                 if dry_run:
                     return {"dry_run": True, "sql": sql[:500], "table": table_name, "pre_count": pre_count, "message": "dry_run — 실행하지 않음"}
                 async with conn.transaction():
-                    result = await conn.execute(sql, *params_raw)
+                    result = await _execute_single_statement(conn, sql, params_raw)
                 post_count = None
                 if table_name:
                     try:
@@ -4272,6 +4312,43 @@ class ToolExecutor:
                 }
         except Exception as e:
             return {"error": str(e), "sql": sql[:200]}
+
+    async def _db_safe_write_vault_guarded(
+        self, conn: Any, sql: str, params: list, dry_run: bool, table_name: str,
+    ) -> Dict[str, Any]:
+        """보호 테이블 쓰기: 스냅샷 → 실행 → 재조회 → 판정. 위반·실패는 전체 롤백."""
+        from app.services.vault_cleanup_guard import (
+            VaultGuardUnavailable, VaultLoginProtected, assert_login_preserved,
+            protected_login_snapshot, reload_snapshot,
+        )
+
+        base = {"table": table_name, "dry_run": dry_run, "vault_guard": True}
+        try:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL lock_timeout = '5s'")
+                before = await protected_login_snapshot(conn)
+                result = await _execute_single_statement(conn, sql, params)
+                after = await reload_snapshot(conn, before)
+                assert_login_preserved(before, after)
+                if dry_run:
+                    raise _GuardedDryRunRollback(str(result), len(before.users))
+        except _GuardedDryRunRollback as rollback:
+            return {
+                **base, "success": True, "result": rollback.result,
+                "vault_protected_accounts": rollback.protected_count,
+                "message": "dry_run — 실제 실행과 같은 보호 판정 후 롤백됨",
+            }
+        except VaultGuardUnavailable as exc:
+            return {**base, "success": False, "blocked": True, "error": str(exc),
+                    "message": "보호 대상 확정 실패(fail closed) — 트랜잭션 롤백됨"}
+        except VaultLoginProtected as exc:
+            return {**base, "success": False, "blocked": True, "error": str(exc),
+                    "message": "트랜잭션 전체 롤백됨"}
+        except Exception as exc:
+            return {**base, "success": False, "error": f"DB 오류: {str(exc)[:200]}",
+                    "message": "트랜잭션 롤백됨", "sql": sql[:200]}
+        return {**base, "success": True, "result": str(result),
+                "vault_protected_accounts": len(before.users)}
 
     # ── notify_channel ───────────────────────────────────────────────────────
 

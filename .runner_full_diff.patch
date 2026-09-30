@@ -1,1017 +1,1474 @@
-diff --git a/app/api/ops.py b/app/api/ops.py
-index 5753152c..3163cd1c 100644
---- a/app/api/ops.py
-+++ b/app/api/ops.py
-@@ -463,6 +463,13 @@ async def api_acquire_deploy_lock(project: str, session_id: str):
-     return acquire_deploy_lock(project, session_id)
- 
- 
-+@router.post("/ops/locks/deploy/renew")
-+async def api_renew_deploy_lock(project: str, session_id: str):
-+    """배포 잠금 TTL 갱신 (본인 잠금만)."""
-+    from app.services.deploy_lock import renew_deploy_lock
-+    return renew_deploy_lock(project, session_id)
+diff --git a/HANDOVER.md b/HANDOVER.md
+index 7f40953c..48d34cd3 100644
+--- a/HANDOVER.md
++++ b/HANDOVER.md
+@@ -14557,3 +14557,16 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
+ - 잔여: 5198 이전에 인증됐으나 계보 없는 AADS/api run 74건(기능 도입 전 run — 범위 밖, 기본 3일 창 안에는 5196 1건). 5248/5250 은 아직 success_partial — sync-standby 인증 시 자동 기록된다.
+ - 검증: `bash -n` 2종 통과, `verify-bluegreen-release-contract.sh` PASS, 관련 테스트 171 passed(test_deploy_autoheal / test_sync_standby_contract / test_deploy_terminal_state_contract / test_goal_release_evidence). 전체 `run_unit_tests.sh` 는 42 failed — 전부 sandbox/finance/governance/pipeline-runner 등 이 변경과 무관한 파일이다.
+ - DB handover key: `release-provenance-deferred-cert-20260929` (AADS/verification) — handover_write 도구가 이 세션에 없어 HANDOVER.md 에만 기록했다.
++
++## 2026-09-30 — S1 Vault 참조 계정·조직 보호 재구현 (AADS-VAULT-CLEANUP-GUARD-R2-20260930)
++
++- 배경: 2026-09-22 테스트계정 정리(`db_safe_write` 일괄 soft delete)가 Vault 참조 검증 계정과 실사용 조직까지 지웠다(오류사전 `auth.test_account_sweep_deletes_real_tenants`). 선행 runner-41d47d2b 는 REQUEST_CHANGES(P1-A 저장 조직 기준 매칭, P1-B 다중 문장 미차단, 테스트 미실행)로 끝났고 이번이 재구현이다.
++- P1-B: `app/services/db_write_sql_guard.py` 신규 — PostgreSQL 렉서 규칙(작은따옴표·E''·인용 식별자·`$tag$` 달러 인용·중첩 블록 주석·라인 주석)으로 최상위 세미콜론을 세어 단일 INSERT/UPDATE/DELETE 만 허용. BEGIN/START/COMMIT/END/ROLLBACK/ABORT/SAVEPOINT/RELEASE/PREPARE/SET/DO/CALL 거부, 닫히지 않은 인용·U& 이스케이프는 fail closed. 거부는 `get_pool()` 전(실행·dry_run 동일). 실행은 `prepare()`(확장 프로토콜)로 바꿔 서버가 다중 문장을 2차 거부.
++- P1-A: `app/services/vault_cleanup_guard.py` 신규 — 활성(`is_active IS NOT FALSE`) `agent_vault_credentials.origin` / `e2e_credentials.login_url`(비면 `service ∈ {aads, aads-dashboard, aads.newtalk.kr}`) 의 호스트가 내부 인증 호스트(`aads.newtalk.kr` + `AADS_PUBLIC_BASE_URL` 호스트 + `AADS_VAULT_GUARD_INTERNAL_HOSTS`)일 때만 `decrypt_value()` 로 메모리 복호화 → `strip().lower()` 이메일로 saas_users 를 파이썬에서 매칭. Vault `tenant_id`·`created_by` 는 판정에 쓰지 않는다. 보호: 계정 삭제/soft delete/status·is_active 비활성/이메일 변경/default_tenant NULL, 활성 멤버십 삭제·해제, 로그인 조직(default + 활성 멤버십 조직) 삭제·비활성. 위반·복호화/조회 실패 → 전체 롤백(fail closed). dry_run 은 같은 트랜잭션 판정 후 롤백.
++- 중복 정의(R3 보정): `ToolExecutor._db_safe_write` 앞 정의와 `_DB_SAFE_BLOCKED_KEYWORDS`·`_DryRunRollback`·`_MaxAffectedExceeded` 는 **삭제하지 않고 main 그대로 보존**한다(보존 게이트: 삭제·이름변경 모두 삭제로 판정). 앞 정의는 도달 불가 — 도구 등록(`_dispatch`)은 클래스 본문 마지막 정의에 바인딩되며, 그 정의가 가드(P1-A·P1-B)를 탄다. 앞 정의 바로 위에 도달 불가 주석. `tests/unit/test_db_safe_write.py` 가 마지막 정의 바인딩·보존 심볼·`_dispatch` 다중 문장 선차단(get_pool 전)을 단정한다. tool_executor.py 삭제는 가드 적용에 필요한 2줄(docstring·execute→prepare 교체)뿐.
++- 지시서 외 파일: `app/services/tool_registry.py` db_safe_write 설명 — 단일 문장·보호 롤백·dry_run 실행 후 롤백 계약을 모델에게 알리기 위해 문구만 수정. `tests/unit/test_db_safe_write.py` — 실행이 prepare 로 바뀌어 fake 에 prepare 추가 + P1-B 회귀 2건 추가(기존 테스트 삭제 없음).
++- 검증: 신규 단위 83 passed(test_vault_cleanup_guard + test_db_safe_write, run_unit_tests.sh rc=0). 격리 pgvector/pgvector:pg15(127.0.0.1, vault_guard_test) 통합 15 passed — 교차 조직·두 저장소·is_active=false·외부 origin·이메일 정규화·복호화 실패·schema-qualified/alias·soft delete/status/is_active·멤버십·조직·혼합 일괄 전체 롤백·dry-run 동등성·P1-B 실행/dry_run 변경 0건. 전체 단위 36 failed/5671 passed, base(origin/main c85b26bb) 36 failed/5595 passed — 실패 목록 diff 동일(신규 실패 0). ruff F821/F811 0건.
++- 잔여 위험: 보호 테이블 이름이 SQL 에 전혀 나타나지 않는 간접 경로(저장 함수·트리거가 saas_users 를 바꾸는 경우)는 가드를 타지 않는다. `is_active` NULL 자격증명은 활성으로 본다(보수적).
++- 오류사전: `db.safe_write_multi_statement_commits_before_guard` 신규 등록(fix-commit 은 Runner 커밋 후 채울 것). DB handover key: `aads-vault-cleanup-guard-20260923` (AADS/verification).
++- stale_base 교정(R3 재작업 1/2): 반려 커밋 d633c329 의 base 가 0ad92b6a 로 origin/main 보다 3커밋 뒤졌다. `.runner_full_diff.patch` 를 제외한 변경을 origin/main(c85b26bb) 위에 `git apply --3way` 로 그대로 얹었고(충돌 0), 코드 변경은 없다.
++- 승인 후 Runner 커밋 대상. 배포 전.
+diff --git a/app/services/db_write_sql_guard.py b/app/services/db_write_sql_guard.py
+new file mode 100644
+index 00000000..96709e11
+--- /dev/null
++++ b/app/services/db_write_sql_guard.py
+@@ -0,0 +1,177 @@
++"""db_safe_write 입력 SQL 을 DB 연결 전에 한 문장으로 확정한다.
++
++2026-09-30 리뷰 P1-B. params 없는 ``UPDATE ...; COMMIT; BEGIN`` 은 asyncpg 가
++simple query 프로토콜로 보내므로 한 번에 여러 문장이 실행된다. 보호 검사가 뒤에서
++"롤백" 을 말해도 COMMIT 이 이미 변경을 확정한다. 그래서 사후 검사가 아니라
++실행 전에 막는다.
++
++``split(";")`` 는 쓰지 않는다. 문자열 리터럴·인용 식별자·달러 인용·주석 안의
++세미콜론은 구분자가 아니고, 반대로 그렇게 보이는 곳에 숨긴 세미콜론은 구분자다.
++PostgreSQL 렉서 규칙(standard_conforming_strings=on, 중첩 블록 주석)을 따라
++한 글자씩 훑는다. 모호하면(닫히지 않은 인용, U& 이스케이프) 거부한다.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++
++ALLOWED_WRITE_KEYWORDS = frozenset({"insert", "update", "delete"})
++
++# 문장 첫 단어가 이것이면 트랜잭션 경계를 바꾸거나 임의 코드를 실행한다.
++TRANSACTION_CONTROL_KEYWORDS = frozenset({
++    "begin", "start", "commit", "end", "rollback", "abort",
++    "savepoint", "release", "prepare", "set",
++})
++PROCEDURAL_KEYWORDS = frozenset({"do", "call"})
 +
 +
- @router.post("/ops/locks/deploy/release")
- async def api_release_deploy_lock(project: str, session_id: str):
-     """배포 잠금 해제."""
-diff --git a/app/services/deploy_lock.py b/app/services/deploy_lock.py
-index 50e46063..06dcb203 100644
---- a/app/services/deploy_lock.py
-+++ b/app/services/deploy_lock.py
-@@ -252,6 +252,32 @@ def release_deploy_lock(project: str, session_id: str) -> bool:
-         return False
- 
- 
-+def renew_deploy_lock(project: str, session_id: str, timeout: int = 600) -> dict:
-+    """배포 잠금 TTL 갱신. 본인이 쥔 잠금만 연장하고 그 외에는 renewed=False.
++class SqlGuardError(ValueError):
++    """단일 INSERT/UPDATE/DELETE 로 확정할 수 없는 SQL."""
 +
-+    acquire_deploy_lock 은 SET NX 라 홀더가 다시 불러도 TTL 이 늘지 않는다.
-+    반환: {"renewed": bool, "holder": str|None, "ttl": int, "reason": str}
++
++@dataclass
++class SqlStatementInfo:
++    keyword: str
++    # 식별자·키워드(소문자). 인용 식별자도 소문자로 넣는다 — 보호 대상 탐지는 보수적으로.
++    words: list[str] = field(default_factory=list)
++    # 문자열 리터럴·달러 인용 본문(소문자). 동적 SQL 로 테이블 이름을 넘기는 경우 탐지용.
++    literals: list[str] = field(default_factory=list)
++
++
++def _is_ident_start(ch: str) -> bool:
++    return ch.isalpha() or ch == "_" or ord(ch) >= 0x80
++
++
++def _is_ident_char(ch: str) -> bool:
++    return ch.isalnum() or ch in "_$" or ord(ch) >= 0x80
++
++
++def _dollar_tag_at(sql: str, i: int) -> str | None:
++    """sql[i] == '$' 에서 시작하는 달러 인용 태그(``$tag$``)를 돌려준다. 아니면 None."""
++    n = len(sql)
++    j = i + 1
++    if j < n and sql[j] == "$":
++        return "$$"
++    if j < n and _is_ident_start(sql[j]):
++        j += 1
++        while j < n and (sql[j].isalnum() or sql[j] == "_" or ord(sql[j]) >= 0x80):
++            j += 1
++        if j < n and sql[j] == "$":
++            return sql[i:j + 1]
++    return None
++
++
++def _split_statements(sql: str) -> list[tuple[list[str], list[str]]]:
++    """최상위 세미콜론으로 나눈 문장별 (words, literals)."""
++    statements: list[tuple[list[str], list[str]]] = []
++    words: list[str] = []
++    literals: list[str] = []
++    n = len(sql)
++    i = 0
++    while i < n:
++        ch = sql[i]
++        if ch.isspace():
++            i += 1
++        elif ch == ";":
++            statements.append((words, literals))
++            words, literals = [], []
++            i += 1
++        elif sql.startswith("--", i):
++            end = sql.find("\n", i)
++            i = n if end < 0 else end + 1
++        elif sql.startswith("/*", i):
++            depth = 1
++            i += 2
++            while i < n and depth:
++                if sql.startswith("/*", i):
++                    depth += 1
++                    i += 2
++                elif sql.startswith("*/", i):
++                    depth -= 1
++                    i += 2
++                else:
++                    i += 1
++            if depth:
++                raise SqlGuardError("닫히지 않은 블록 주석")
++        elif ch == "'":
++            i = _scan_quoted(sql, i, "'", backslash=False, out=literals)
++        elif ch == '"':
++            i = _scan_quoted(sql, i, '"', backslash=False, out=words)
++        elif ch == "$":
++            tag = _dollar_tag_at(sql, i)
++            if tag is None:
++                i += 1  # $1 같은 바인드 파라미터 또는 연산자
++                continue
++            body_start = i + len(tag)
++            end = sql.find(tag, body_start)
++            if end < 0:
++                raise SqlGuardError("닫히지 않은 달러 인용")
++            literals.append(sql[body_start:end].lower())
++            i = end + len(tag)
++        elif _is_ident_start(ch):
++            j = i + 1
++            while j < n and _is_ident_char(sql[j]):
++                j += 1
++            word = sql[i:j].lower()
++            nxt = sql[j] if j < n else ""
++            if word == "u" and nxt == "&":
++                # U&'..' / U&".." 는 \0075 같은 이스케이프로 이름을 숨길 수 있다.
++                raise SqlGuardError("U& 유니코드 이스케이프는 허용하지 않음")
++            if word == "e" and nxt == "'":
++                i = _scan_quoted(sql, j, "'", backslash=True, out=literals)
++                continue
++            if word in ("b", "x", "n") and nxt == "'":
++                i = _scan_quoted(sql, j, "'", backslash=False, out=literals)
++                continue
++            words.append(word)
++            i = j
++        else:
++            i += 1
++    statements.append((words, literals))
++    return statements
++
++
++def _scan_quoted(sql: str, start: int, quote: str, *, backslash: bool, out: list[str]) -> int:
++    """sql[start] == quote. 닫는 따옴표 다음 위치를 돌려주고 본문(소문자)을 out 에 넣는다."""
++    n = len(sql)
++    i = start + 1
++    buf: list[str] = []
++    while i < n:
++        ch = sql[i]
++        if backslash and ch == "\\":
++            buf.append(sql[i:i + 2])
++            i += 2
++            continue
++        if ch == quote:
++            if i + 1 < n and sql[i + 1] == quote:
++                buf.append(quote)
++                i += 2
++                continue
++            out.append("".join(buf).lower())
++            return i + 1
++        buf.append(ch)
++        i += 1
++    raise SqlGuardError("닫히지 않은 따옴표")
++
++
++def validate_single_write(sql: str) -> SqlStatementInfo:
++    """단일 INSERT/UPDATE/DELETE 문이면 정보를, 아니면 SqlGuardError 를 낸다.
++
++    끝의 세미콜론 하나(뒤에 공백·주석뿐)는 허용한다.
 +    """
-+    r = _get_redis()
-+    if r is None:
-+        return {"renewed": True, "holder": None, "ttl": 0, "reason": "redis_unavailable_no_lock"}
++    statements = [s for s in _split_statements(sql) if s[0] or s[1]]
++    if not statements:
++        raise SqlGuardError("빈 SQL")
++    for words, _ in statements:
++        first = words[0] if words else ""
++        if first in TRANSACTION_CONTROL_KEYWORDS:
++            raise SqlGuardError(f"트랜잭션 제어문 차단: {first.upper()}")
++        if first in PROCEDURAL_KEYWORDS:
++            raise SqlGuardError(f"{first.upper()} 차단")
++    if len(statements) != 1:
++        raise SqlGuardError(f"단일 문장만 허용 (감지된 문장 {len(statements)}개)")
++    words, literals = statements[0]
++    keyword = words[0] if words else ""
++    if keyword not in ALLOWED_WRITE_KEYWORDS:
++        raise SqlGuardError("INSERT/UPDATE/DELETE만 허용")
++    return SqlStatementInfo(keyword=keyword, words=words, literals=literals)
+diff --git a/app/services/tool_executor.py b/app/services/tool_executor.py
+index 083ef049..7cea41bf 100644
+--- a/app/services/tool_executor.py
++++ b/app/services/tool_executor.py
+@@ -42,6 +42,25 @@ class _MaxAffectedExceeded(Exception):
+         self.limit = limit
+ 
+ 
++class _GuardedDryRunRollback(Exception):
++    """db_safe_write dry_run: 실제 실행과 같은 보호 판정을 마친 뒤 트랜잭션을 되돌린다."""
 +
-+    key = f"deploy_lock:{project}"
++    def __init__(self, result: str, protected_count: int):
++        self.result = result
++        self.protected_count = protected_count
++
++
++async def _execute_single_statement(conn: Any, sql: str, params: list) -> str:
++    """확장 쿼리 프로토콜(prepare)로 실행한다.
++
++    params 없는 conn.execute 는 simple query 라 여러 문장을 한 번에 돌린다.
++    prepare 는 서버가 다중 문장을 거부하므로 렉서(db_write_sql_guard) 뒤의 2차 방어선이다.
++    """
++    stmt = await conn.prepare(sql)
++    await stmt.fetch(*params)
++    return stmt.get_statusmsg()
++
++
+ def _json_default(obj: Any) -> Any:
+     """Custom JSON serializer for objects not handled by default json encoder."""
+     if isinstance(obj, (datetime, date)):
+@@ -2802,6 +2821,7 @@ class ToolExecutor:
+ 
+     _DB_SAFE_BLOCKED_KEYWORDS = {"DROP", "CREATE", "ALTER", "TRUNCATE", "GRANT", "REVOKE", "VACUUM", "REINDEX"}
+ 
++    # 도달 불가 — 도구 등록은 아래 정의에 바인딩된다(보존 목적으로 유지)
+     async def _db_safe_write(self, inp: Dict[str, Any]) -> Any:
+         """안전한 DB 쓰기 — 트랜잭션 + DDL 차단 + max_affected 검증."""
+         sql = (inp.get("sql") or "").strip()
+@@ -4215,7 +4235,17 @@ class ToolExecutor:
+     # ── db_safe_write ────────────────────────────────────────────────────────
+ 
+     async def _db_safe_write(self, inp: Dict[str, Any]) -> Any:
+-        """DB 쓰기 안전 실행 (트랜잭션 강제, 사전/사후 카운트 검증, dry-run)."""
++        """DB 쓰기 안전 실행 (트랜잭션 강제, 사전/사후 카운트 검증, dry-run).
++
++        - 단일 INSERT/UPDATE/DELETE 만 받는다. 다중 문장·트랜잭션 제어는 DB 연결 전에
++          거부한다(P1-B, db_write_sql_guard). dry_run 도 같은 검사를 거친다.
++        - saas_users/tenant_memberships/tenants 를 건드리는 쓰기는 같은 트랜잭션 안에서
++          Vault 참조 로그인 경로 보호 판정을 받는다(P1-A, vault_cleanup_guard).
++          위반이면 전체 롤백 — 부분 성공 없음. dry_run 은 같은 판정 후 롤백한다.
++        """
++        from app.services.db_write_sql_guard import SqlGuardError, validate_single_write
++        from app.services.vault_cleanup_guard import references_login_tables
++
+         sql = str(inp.get("sql", "") or "").strip()
+         params_raw = inp.get("params") or []
+         dry_run = bool(inp.get("dry_run", False))
+@@ -4227,6 +4257,12 @@ class ToolExecutor:
+                 return {"error": f"차단된 명령: {kw.strip()}"}
+         if not any(sql_upper.startswith(k) for k in ("INSERT", "UPDATE", "DELETE")):
+             return {"error": "INSERT/UPDATE/DELETE만 허용"}
++        try:
++            statement = validate_single_write(sql)
++        except SqlGuardError as exc:
++            return {"error": f"SQL 차단: {exc}", "blocked": True, "dry_run": dry_run}
++        if not isinstance(params_raw, list):
++            return {"error": "params 는 배열이어야 함", "blocked": True, "dry_run": dry_run}
+         table_name = ""
+         if sql_upper.startswith("INSERT"):
+             parts = sql_upper.split("INTO", 1)
+@@ -4244,6 +4280,10 @@ class ToolExecutor:
+             from app.core.db_pool import get_pool
+             pool = get_pool()
+             async with pool.acquire() as conn:
++                if references_login_tables(statement.words + statement.literals):
++                    return await self._db_safe_write_vault_guarded(
++                        conn, sql, params_raw, dry_run, table_name,
++                    )
+                 pre_count = None
+                 if table_name:
+                     try:
+@@ -4254,7 +4294,7 @@ class ToolExecutor:
+                 if dry_run:
+                     return {"dry_run": True, "sql": sql[:500], "table": table_name, "pre_count": pre_count, "message": "dry_run — 실행하지 않음"}
+                 async with conn.transaction():
+-                    result = await conn.execute(sql, *params_raw)
++                    result = await _execute_single_statement(conn, sql, params_raw)
+                 post_count = None
+                 if table_name:
+                     try:
+@@ -4273,6 +4313,43 @@ class ToolExecutor:
+         except Exception as e:
+             return {"error": str(e), "sql": sql[:200]}
+ 
++    async def _db_safe_write_vault_guarded(
++        self, conn: Any, sql: str, params: list, dry_run: bool, table_name: str,
++    ) -> Dict[str, Any]:
++        """보호 테이블 쓰기: 스냅샷 → 실행 → 재조회 → 판정. 위반·실패는 전체 롤백."""
++        from app.services.vault_cleanup_guard import (
++            VaultGuardUnavailable, VaultLoginProtected, assert_login_preserved,
++            protected_login_snapshot, reload_snapshot,
++        )
++
++        base = {"table": table_name, "dry_run": dry_run, "vault_guard": True}
++        try:
++            async with conn.transaction():
++                await conn.execute("SET LOCAL lock_timeout = '5s'")
++                before = await protected_login_snapshot(conn)
++                result = await _execute_single_statement(conn, sql, params)
++                after = await reload_snapshot(conn, before)
++                assert_login_preserved(before, after)
++                if dry_run:
++                    raise _GuardedDryRunRollback(str(result), len(before.users))
++        except _GuardedDryRunRollback as rollback:
++            return {
++                **base, "success": True, "result": rollback.result,
++                "vault_protected_accounts": rollback.protected_count,
++                "message": "dry_run — 실제 실행과 같은 보호 판정 후 롤백됨",
++            }
++        except VaultGuardUnavailable as exc:
++            return {**base, "success": False, "blocked": True, "error": str(exc),
++                    "message": "보호 대상 확정 실패(fail closed) — 트랜잭션 롤백됨"}
++        except VaultLoginProtected as exc:
++            return {**base, "success": False, "blocked": True, "error": str(exc),
++                    "message": "트랜잭션 전체 롤백됨"}
++        except Exception as exc:
++            return {**base, "success": False, "error": f"DB 오류: {str(exc)[:200]}",
++                    "message": "트랜잭션 롤백됨", "sql": sql[:200]}
++        return {**base, "success": True, "result": str(result),
++                "vault_protected_accounts": len(before.users)}
++
+     # ── notify_channel ───────────────────────────────────────────────────────
+ 
+     async def _notify_channel(self, inp: Dict[str, Any]) -> Any:
+diff --git a/app/services/tool_registry.py b/app/services/tool_registry.py
+index 58f9bd65..8739eb51 100644
+--- a/app/services/tool_registry.py
++++ b/app/services/tool_registry.py
+@@ -2739,7 +2739,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
+     },
+     "db_safe_write": {
+         "name": "db_safe_write",
+-        "description": "안전한 DB 쓰기 (INSERT/UPDATE/DELETE만 허용, DDL 차단, 트랜잭션 강제, 전후 카운트 검증, dry-run 지원)",
++        "description": "안전한 DB 쓰기 (단일 INSERT/UPDATE/DELETE 문 1개만 허용 — 다중 문장·BEGIN/COMMIT/ROLLBACK/SAVEPOINT/SET/DO/CALL 차단, DDL 차단, 트랜잭션 강제, 전후 카운트 검증, dry-run 지원). saas_users/tenant_memberships/tenants 쓰기는 활성 Vault 자격증명이 참조하는 로그인 계정·멤버십·조직을 비활성화하면 전체 롤백된다",
+         "input_schema": {
+             "type": "object",
+             "properties": {
+@@ -2755,7 +2755,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
+                 },
+                 "dry_run": {
+                     "type": "boolean",
+-                    "description": "true면 실행하지 않고 검증만 (기본 false)",
++                    "description": "true면 커밋하지 않고 검증만 (기본 false). 보호 테이블 쓰기는 트랜잭션 안에서 실행해 실제와 같은 보호 판정을 한 뒤 롤백한다",
+                     "default": False,
+                 },
+             },
+diff --git a/app/services/vault_cleanup_guard.py b/app/services/vault_cleanup_guard.py
+new file mode 100644
+index 00000000..cba50559
+--- /dev/null
++++ b/app/services/vault_cleanup_guard.py
+@@ -0,0 +1,269 @@
++"""Vault 가 참조하는 AADS 로그인 계정·조직을 db_safe_write 정리에서 보호한다.
++
++판정 기준 (CEO 승인 2026-09-30, 리뷰 P1-A 교정)
++- 보호 대상은 활성 자격증명이 가리키는 **로그인 계정** 이다. 정규화 이메일
++  (``strip().lower()``)과 내부 인증 origin 으로만 식별한다.
++  authenticate_saas_user 가 이메일만으로 계정을 찾으므로, 자격증명을 **저장한 조직**
++  (Vault 행의 tenant_id)은 로그인 가능 여부와 무관하다. 조직 A 의 Vault 에 조직 B
++  계정이 들어 있어도 보호한다. tenant_id·created_by(소유자)는 판정에 쓰지 않는다.
++- 외부 사이트 자격증명은 매칭하지 않는다. origin 호스트가 내부 인증 호스트일 때만
++  대상이다 — ``aads.newtalk.kr`` + ``AADS_PUBLIC_BASE_URL`` 의 호스트 +
++  ``AADS_VAULT_GUARD_INTERNAL_HOSTS``(쉼표, 오비서 standalone 호스트용).
++  e2e_credentials 에 login_url 이 비어 있으면 service 가 AADS 대시보드일 때만 내부로 본다.
++- 두 저장소(agent_vault_credentials, e2e_credentials)를 모두 본다. username_enc 는
++  기존 credential_vault.decrypt_value 로 메모리에서만 풀고, 평문을 SQL 파라미터로
++  보내지 않는다(계정 매칭은 파이썬에서). 결과·예외 메시지에 평문·암호문을 넣지 않는다.
++- 복호화·조회 실패는 fail closed — VaultGuardUnavailable 로 쓰기 전체를 롤백시킨다.
++- 보호 범위: saas_users 삭제·soft delete·status/is_active 비활성·이메일 변경,
++  tenant_memberships 삭제·해제, 로그인 조직(default_tenant_id·활성 멤버십 조직)의
++  tenants 삭제·비활성.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import re
++from dataclasses import dataclass, field
++from typing import Any
++from urllib.parse import urlparse
++
++from app.core.credential_vault import decrypt_value
++
++PROTECTED_TABLES = ("saas_users", "tenant_memberships", "tenants")
++DEFAULT_INTERNAL_HOSTS = ("aads.newtalk.kr",)
++INTERNAL_E2E_SERVICES = frozenset({"aads", "aads-dashboard", "aads.newtalk.kr"})
++
++_PROTECTED_NAME_RE = re.compile("|".join(PROTECTED_TABLES))
++
++
++class VaultLoginProtected(Exception):
++    """쓰기가 활성 Vault 자격증명의 로그인 경로를 끊는다."""
++
++
++class VaultGuardUnavailable(VaultLoginProtected):
++    """보호 대상을 확정하지 못했다 — fail closed."""
++
++
++def internal_hosts() -> frozenset[str]:
++    hosts = set(DEFAULT_INTERNAL_HOSTS)
++    public = urlparse(os.getenv("AADS_PUBLIC_BASE_URL", "")).hostname
++    if public:
++        hosts.add(public.lower())
++    for raw in os.getenv("AADS_VAULT_GUARD_INTERNAL_HOSTS", "").split(","):
++        if raw.strip():
++            hosts.add(raw.strip().lower().rstrip("."))
++    return frozenset(hosts)
++
++
++def is_internal_origin(value: str | None, hosts: frozenset[str] | None = None) -> bool:
++    raw = (value or "").strip()
++    if not raw:
++        return False
++    if "://" not in raw:
++        raw = "https://" + raw
 +    try:
-+        holder = r.get(key)
-+        if holder is None:
-+            return {"renewed": False, "holder": None, "ttl": 0, "reason": "expired_or_released"}
-+        if holder != session_id:
-+            logger.warning("[deploy_lock] 갱신 거부: %s — holder=%s, 요청=%s", project, holder, session_id)
-+            return {"renewed": False, "holder": holder, "ttl": max(r.ttl(key), 0), "reason": "not_owner"}
-+        if not r.expire(key, timeout):
-+            return {"renewed": False, "holder": None, "ttl": 0, "reason": "expired_or_released"}
-+        return {"renewed": True, "holder": session_id, "ttl": timeout, "reason": "ok"}
-+    except Exception as e:
-+        logger.warning("[deploy_lock] 갱신 실패: %s", e)
-+        return {"renewed": False, "holder": None, "ttl": 0, "reason": "redis_error"}
++        parsed = urlparse(raw)
++        host = (parsed.hostname or "").rstrip(".")
++    except ValueError:
++        return False
++    if parsed.scheme not in ("http", "https") or not host:
++        return False
++    return host in (hosts if hosts is not None else internal_hosts())
 +
 +
- @contextmanager
- def deploy_lock_context(project: str, session_id: str, timeout: int = 600):
-     """배포 잠금 컨텍스트 매니저. with 문으로 사용."""
-diff --git a/scripts/pipeline-runner.sh b/scripts/pipeline-runner.sh
-index 39533d1b..e923aefd 100755
---- a/scripts/pipeline-runner.sh
-+++ b/scripts/pipeline-runner.sh
-@@ -240,6 +240,12 @@ _release_deploy_lock() {
-     local project="$1" job_id="$2"
-     curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
- }
-+# 배포 락 TTL 갱신 — 응답 JSON 을 그대로 출력한다(무응답이면 빈 문자열). acquire 는 SET NX 라
-+# 홀더가 다시 불러도 TTL 이 늘지 않으므로 전용 엔드포인트를 쓴다.
-+_renew_deploy_lock() {
-+    local project="$1" job_id="$2"
-+    curl -sf --connect-timeout 3 --max-time 10 -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/renew?project=${project}&session_id=${job_id}" 2>/dev/null || true
-+}
- 
- # DB 접속 방식
- DB_MODE="${DB_MODE:-auto}"
-@@ -4150,6 +4156,129 @@ approved_sha_is_live() {
-     [[ "$active_digest" == "$release_digest" ]] || return 1
-     curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
- }
-+
-+# ── autoheal 인계 추적 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD-RETRY, 2026-09-30) ──
-+# deploy.sh 는 target_drain_busy·dirty_worktree 로 멈추면 EXIT 트랩에서 같은
-+# 릴리스의 successor run 을 띄우고 자기 행을 superseded_by_autoheal_* 로 바꾼 뒤
-+# rc=1 로 나간다. 러너는 그 rc 만 보고 bluegreen_failed 로 확정했다.
-+# 2026-09-30 실측: runner-a5f21866(da6b42d1) 이 01:25 에 error 로 종결됐는데,
-+# 같은 SHA 의 successor #5290→#5291→#5292→#5293 이 01:46 에 success_partial 로
-+# 배포를 끝냈다. 산출물은 운영에 나갔고 작업만 실패로 남았다.
-+#
-+# 인계가 확인된 경우에만 successor 사슬을 끝까지 따라가 결과를 판정한다.
-+# 인계 흔적이 없으면 즉시 1 — 기존 실패 판정을 그대로 유지한다.
-+#   0: 같은 릴리스가 success/success_partial 로 끝났거나, 다른 run 에 흡수돼
-+#      approved_sha_is_live 가 확인됨
-+#   1: 인계 없음 / 사슬이 실패로 끝남 / 상한 소진
-+# stdout 마지막 줄은 판정 요약이다(review_feedback 에 남긴다).
-+AADS_AUTOHEAL_FOLLOW_MAX_SEC="${AADS_AUTOHEAL_FOLLOW_MAX_SEC:-2700}"
-+AADS_AUTOHEAL_FOLLOW_POLL_SEC="${AADS_AUTOHEAL_FOLLOW_POLL_SEC:-30}"
-+# successor 가 blocked 로 멈춘 직후 autoheal 이 다음 successor 를 등록하기까지의 틈.
-+# 이 시간 안의 failed/blocked 는 확정으로 보지 않는다.
-+AADS_AUTOHEAL_FOLLOW_SETTLE_SEC="${AADS_AUTOHEAL_FOLLOW_SETTLE_SEC:-90}"
-+# 세 시간 값의 관계 (2026-09-30 검수 확정 결함):
-+#   배포 락 TTL 600s (deploy_lock.py acquire_deploy_lock, 갱신 없음) <
-+#   DEPLOY_LOCK_MAX_WAIT_SEC 900s (대기하는 쪽) < AADS_AUTOHEAL_FOLLOW_MAX_SEC 2700s (추적하는 쪽)
-+# 실측 autoheal 사슬(#5290→#5293)이 1,080s 라 추적은 예측 가능하게 락 TTL 을 넘는다.
-+# 갱신 없이 추적하면 t=600s 에 락이 풀려 다른 잡이 병행 배포를 시작한다(배포 #414 를 죽인 조합).
-+# 그래서 매 poll 마다 renew 로 TTL 을 되돌리고, 갱신이 거부되면 추적을 멈춘다(fail-closed).
-+# 대기 측 상한(900s)이 추적 측(2700s)보다 짧으므로 대기 중인 잡은 holder 가 추적 중이어도
-+# 먼저 deploy_lock_fail 에 닿을 수 있다 — 그래서 재큐잉 메시지에 holder 추적 표시를 남긴다.
-+# 갱신 API 가 일시적으로 무응답인 경우(bluegreen 전환 중 API 재기동)는 TTL 여유(600s) 안에서만
-+# 연속 AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL 회(기본 3 × poll 30s = 90s)까지 견딘다.
-+AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL="${AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL:-3}"
-+AUTOHEAL_FOLLOW_TAG="[배포추적]"
-+
-+# 이 holder 잡이 autoheal successor 를 추적 중인지 — 대기 측 재큐잉 메시지용.
-+# 추적 중 heartbeat(updated_at)가 poll 마다 갱신되므로 신선도로 "지금" 을 판정한다.
-+_deploy_holder_follow_tag() {
-+    local holder="$1"
-+    [[ "$holder" =~ ^[A-Za-z0-9._:-]+$ ]] || return 0
-+    local hit
-+    hit=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE job_id='${holder}' AND status='deploying'
-+        AND position('${AUTOHEAL_FOLLOW_TAG}' in COALESCE(review_feedback, '')) > 0
-+        AND updated_at > NOW() - INTERVAL '180 seconds';" 2>/dev/null | tail -1 | tr -cd '0-9') || hit=""
-+    [[ "${hit:-0}" -gt 0 ]] && printf ' %s' "successor-추적중"
-+    return 0
-+}
-+
-+follow_autoheal_successor() {
-+    local job_id="$1" sha="$2" since_epoch="$3" repo="$4" state_dir="$5" project="${6:-AADS}"
-+    local max_wait="$AADS_AUTOHEAL_FOLLOW_MAX_SEC" poll="$AADS_AUTOHEAL_FOLLOW_POLL_SEC"
-+    local settle="$AADS_AUTOHEAL_FOLLOW_SETTLE_SEC"
-+    [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=2700
-+    [[ "$poll" =~ ^[0-9]+$ && "$poll" -gt 0 ]] || poll=30
-+    [[ "$settle" =~ ^[0-9]+$ ]] || settle=90
-+    local renew_max="$AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL"
-+    [[ "$renew_max" =~ ^[0-9]+$ && "$renew_max" -gt 0 ]] || renew_max=3
-+    if [[ ! "$sha" =~ ^[0-9a-f]{12,40}$ || ! "$since_epoch" =~ ^[0-9]+$ ]]; then
-+        echo "autoheal_follow: skip (sha/since 형식 오류)"
-+        return 1
-+    fi
-+    local scope="upper(trim(project))='AADS'
-+        AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
-+        AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
-+        AND length(release_sha) >= 12 AND '${sha}' LIKE release_sha || '%'
-+        AND created_at >= to_timestamp(${since_epoch})"
-+    local handoff=""
-+    handoff=$(db_exec "SELECT count(*) FROM deploy_runs WHERE ${scope}
-+        AND status='superseded' AND phase LIKE 'superseded_by_autoheal%';" 2>/dev/null | tail -1 | tr -cd '0-9') || handoff=""
-+    if [[ "${handoff:-0}" -le 0 ]]; then
-+        echo "autoheal_follow: no_handoff"
-+        return 1
-+    fi
-+    log "  AUTOHEAL_FOLLOW job=$job_id sha=${sha:0:12} — deploy.sh 가 successor 에 인계함, 최대 ${max_wait}s 추적"
-+    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n${AUTOHEAL_FOLLOW_TAG} deploy.sh 가 autoheal successor 에 인계함 — 최대 ${max_wait}s 추적, 배포 락 매 poll 갱신', updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-+
-+    local waited=0 row="" run_id="" status="" phase="" age="" lock_out="" lock_reason="" renew_fail=0
-+    while :; do
-+        row=$(db_exec "SELECT id || '|' || status || '|' || COALESCE(phase, '') || '|'
-+            || GREATEST(0, EXTRACT(EPOCH FROM (NOW() - updated_at)))::bigint
-+            FROM deploy_runs WHERE ${scope} ORDER BY id DESC LIMIT 1;" 2>/dev/null | tail -1) || row=""
-+        IFS='|' read -r run_id status phase age <<< "$row"
-+        [[ "$age" =~ ^[0-9]+$ ]] || age=0
-+        case "$status" in
-+            success|success_partial)
-+                echo "autoheal_follow: success run=#${run_id} status=${status} phase=${phase} waited=${waited}s"
-+                return 0 ;;
-+            failed|blocked|cancelled)
-+                if (( age >= settle )); then
-+                    echo "autoheal_follow: failed run=#${run_id} status=${status} phase=${phase} waited=${waited}s"
-+                    return 1
-+                fi ;;
-+            superseded)
-+                # autoheal 사슬은 다음 행이 곧 보인다. 그 밖의 superseded(배치 흡수·
-+                # 신규 릴리스)는 이 SHA 를 담은 다른 run 이 나갔는지로 판정한다.
-+                if [[ "$phase" != superseded_by_autoheal* ]] \
-+                    && approved_sha_is_live "$repo" "$sha" "$state_dir"; then
-+                    echo "autoheal_follow: success run=#${run_id} status=superseded phase=${phase} live=contained waited=${waited}s"
-+                    return 0
-+                fi ;;
-+        esac
-+        if (( waited >= max_wait )); then
-+            echo "autoheal_follow: timeout run=#${run_id:-none} status=${status:-none} phase=${phase:-none} waited=${waited}s"
-+            return 1
-+        fi
-+        # 터미널 판정 뒤에 갱신한다 — 사슬이 이미 끝났다면 락 상태와 무관하게 결과를 따른다.
-+        lock_out=$(_renew_deploy_lock "$project" "$job_id") || lock_out=""
-+        if [[ "$lock_out" == *'"renewed":true'* ]]; then
-+            renew_fail=0
-+        elif [[ "$lock_out" == *'"renewed":false'* ]]; then
-+            lock_reason=$(printf '%s' "$lock_out" | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)
-+            echo "autoheal_follow: lock_lost run=#${run_id:-none} reason=${lock_reason:-unknown} waited=${waited}s"
-+            return 1
-+        else
-+            renew_fail=$((renew_fail + 1))
-+            if (( renew_fail >= renew_max )); then
-+                echo "autoheal_follow: lock_renew_unreachable run=#${run_id:-none} fails=${renew_fail} waited=${waited}s"
-+                return 1
-+            fi
-+        fi
-+        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-+        sleep "$poll"
-+        waited=$((waited + poll))
-+    done
-+}
- # ── 배포 락 대기 + 재큐잉 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD, 2026-09-29) ──
- # 예전 셸 경로는 30+60+90=180초만 기다리고 status='error' 로 확정했다. AADS
- # bluegreen 배포 실측(deploy_runs success, 24h n=16)은 중앙값 514s·최대 631s 라
-@@ -4168,7 +4297,7 @@ DEPLOY_LOCK_WAIT_PHASE="deploy_lock_wait"
- 
- acquire_deploy_lock_with_requeue() {
-     local job_id="$1" project="$2" session_id="$3"
--    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" waited=0 requeue=0 backoff
-+    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" holder_note="" waited=0 requeue=0 backoff
-     [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=900
-     local -a backoffs=()
-     for backoff in $DEPLOY_LOCK_BACKOFF_SEC; do
-@@ -4195,22 +4324,25 @@ acquire_deploy_lock_with_requeue() {
-         fi
-         holder=$(printf '%s' "$result" | sed -n 's/.*"holder":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._:-' | cut -c1-80)
-         [[ -n "$holder" ]] || holder="unknown"
-+        # holder 가 autoheal successor 를 추적 중이면 락이 갱신되며 최대 AADS_AUTOHEAL_FOLLOW_MAX_SEC
-+        # 까지 유지된다 — 대기 상한(DEPLOY_LOCK_MAX_WAIT_SEC)이 먼저 닿을 수 있음을 표시한다.
-+        holder_note=$(_deploy_holder_follow_tag "$holder" 2>/dev/null) || holder_note=""
-         (( waited >= max_wait )) && break
-         # 백오프 한 바퀴를 다 돌아도 못 잡았으면 재큐잉으로 기록한다(Python 경로와 같은 단위).
-         if (( idx >= ${#backoffs[@]} )); then
-             idx=0
-             requeue=$((requeue + 1))
--            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=$holder waited=${waited}s/${max_wait}s requeue=${requeue}"
-+            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=${holder}${holder_note} waited=${waited}s/${max_wait}s requeue=${requeue}"
-             db_update "UPDATE pipeline_jobs SET status='queued', phase='${DEPLOY_LOCK_WAIT_PHASE}',
--                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}, 누적대기 ${waited}s/${max_wait}s)',
-+                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}${holder_note}, 누적대기 ${waited}s/${max_wait}s)',
-                        updated_at=NOW() WHERE job_id='${job_id}' AND status IN ('deploying','queued');"
--            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
-+            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"holder_following_successor\":$([[ -n "$holder_note" ]] && echo true || echo false),\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
-             (( requeue == 1 )) && post_to_chat "$session_id" "⏳ [Pipeline Runner] 다른 배포 진행 중(holder=${holder}) — 배포 대기로 재큐잉, 최대 ${max_wait}초 대기: $job_id"
-         fi
-         backoff=${backoffs[$idx]}
-         idx=$((idx + 1))
-         (( waited + backoff > max_wait )) && backoff=$((max_wait - waited))
--        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=$holder — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
-+        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=${holder}${holder_note} — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
-         sleep "$backoff"
-         waited=$((waited + backoff))
-     done
-@@ -4516,6 +4648,9 @@ deploy_job() {
- 
-                 if [[ "$_release_relevant" == "true" ]]; then
-                     local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
-+                    local _aads_deploy_since _aads_follow_out=""
-+                    # deploy_runs.created_at 과 비교한다 — 시계 오차를 감안해 5초 앞당긴다.
-+                    _aads_deploy_since=$(( $(date +%s) - 5 ))
-                     log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
-                     if AADS_DEPLOY_FOREGROUND=1 \
-                        AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
-@@ -4523,13 +4658,22 @@ deploy_job() {
-                        bash "$worktree_dir/deploy.sh" bluegreen >"$_aads_deploy_log" 2>&1; then
-                         tail -20 "$_aads_deploy_log" 2>/dev/null || true
-                         log "  BLUEGREEN aads-server 완료 — deploy.sh certification gates passed"
-+                    elif _aads_follow_out=$(follow_autoheal_successor "$job_id" "$current_sha" \
-+                            "$_aads_deploy_since" "$worktree_dir" "$main_workdir" "$project"); then
-+                        # deploy.sh 는 rc=1 이지만 같은 릴리스를 successor 가 끝까지 배포했다.
-+                        _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
-+                        log "  BLUEGREEN aads-server 완료 — autoheal successor 인계 성공: ${_aads_follow_out}"
-+                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포인계] deploy.sh rc≠0 이었으나 autoheal successor 가 같은 릴리스를 배포함 — ' || $(sql_escape "$_aads_follow_out") WHERE job_id='${job_id}';"
-+                        record_runner_event "$job_id" "deploy_autoheal_successor_succeeded" "deploying" "deploying" "" "" "" "" "{\"sha\":\"${current_sha}\"}"
-                     else
-+                        _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
-+                        log "  AUTOHEAL_FOLLOW 결과: ${_aads_follow_out:-none}"
-                         local _aads_deploy_tail
-                         _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
-                         log "  ERROR: isolated bluegreen 실패 — 기존 라우팅 유지/내부 롤백: ${_aads_deploy_tail//$'\n'/ }"
-                         post_to_chat "$session_id" "🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지: ${_aads_deploy_tail:0:500}"
-                         _build_fail="${_build_fail:+${_build_fail};}aads-server:bluegreen_failed"
--                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "$_aads_deploy_tail") WHERE job_id='${job_id}';"
-+                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "[${_aads_follow_out:-autoheal_follow: none}] ${_aads_deploy_tail}") WHERE job_id='${job_id}';"
-                     fi
-                     rm -f "$_aads_deploy_log" 2>/dev/null || true
-                 else
-diff --git a/scripts/pipeline-runner.sh.local b/scripts/pipeline-runner.sh.local
-index 39533d1b..e923aefd 100755
---- a/scripts/pipeline-runner.sh.local
-+++ b/scripts/pipeline-runner.sh.local
-@@ -240,6 +240,12 @@ _release_deploy_lock() {
-     local project="$1" job_id="$2"
-     curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/release?project=${project}&session_id=${job_id}" 2>/dev/null || true
- }
-+# 배포 락 TTL 갱신 — 응답 JSON 을 그대로 출력한다(무응답이면 빈 문자열). acquire 는 SET NX 라
-+# 홀더가 다시 불러도 TTL 이 늘지 않으므로 전용 엔드포인트를 쓴다.
-+_renew_deploy_lock() {
-+    local project="$1" job_id="$2"
-+    curl -sf --connect-timeout 3 --max-time 10 -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/deploy/renew?project=${project}&session_id=${job_id}" 2>/dev/null || true
-+}
- 
- # DB 접속 방식
- DB_MODE="${DB_MODE:-auto}"
-@@ -4150,6 +4156,129 @@ approved_sha_is_live() {
-     [[ "$active_digest" == "$release_digest" ]] || return 1
-     curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
- }
-+
-+# ── autoheal 인계 추적 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD-RETRY, 2026-09-30) ──
-+# deploy.sh 는 target_drain_busy·dirty_worktree 로 멈추면 EXIT 트랩에서 같은
-+# 릴리스의 successor run 을 띄우고 자기 행을 superseded_by_autoheal_* 로 바꾼 뒤
-+# rc=1 로 나간다. 러너는 그 rc 만 보고 bluegreen_failed 로 확정했다.
-+# 2026-09-30 실측: runner-a5f21866(da6b42d1) 이 01:25 에 error 로 종결됐는데,
-+# 같은 SHA 의 successor #5290→#5291→#5292→#5293 이 01:46 에 success_partial 로
-+# 배포를 끝냈다. 산출물은 운영에 나갔고 작업만 실패로 남았다.
-+#
-+# 인계가 확인된 경우에만 successor 사슬을 끝까지 따라가 결과를 판정한다.
-+# 인계 흔적이 없으면 즉시 1 — 기존 실패 판정을 그대로 유지한다.
-+#   0: 같은 릴리스가 success/success_partial 로 끝났거나, 다른 run 에 흡수돼
-+#      approved_sha_is_live 가 확인됨
-+#   1: 인계 없음 / 사슬이 실패로 끝남 / 상한 소진
-+# stdout 마지막 줄은 판정 요약이다(review_feedback 에 남긴다).
-+AADS_AUTOHEAL_FOLLOW_MAX_SEC="${AADS_AUTOHEAL_FOLLOW_MAX_SEC:-2700}"
-+AADS_AUTOHEAL_FOLLOW_POLL_SEC="${AADS_AUTOHEAL_FOLLOW_POLL_SEC:-30}"
-+# successor 가 blocked 로 멈춘 직후 autoheal 이 다음 successor 를 등록하기까지의 틈.
-+# 이 시간 안의 failed/blocked 는 확정으로 보지 않는다.
-+AADS_AUTOHEAL_FOLLOW_SETTLE_SEC="${AADS_AUTOHEAL_FOLLOW_SETTLE_SEC:-90}"
-+# 세 시간 값의 관계 (2026-09-30 검수 확정 결함):
-+#   배포 락 TTL 600s (deploy_lock.py acquire_deploy_lock, 갱신 없음) <
-+#   DEPLOY_LOCK_MAX_WAIT_SEC 900s (대기하는 쪽) < AADS_AUTOHEAL_FOLLOW_MAX_SEC 2700s (추적하는 쪽)
-+# 실측 autoheal 사슬(#5290→#5293)이 1,080s 라 추적은 예측 가능하게 락 TTL 을 넘는다.
-+# 갱신 없이 추적하면 t=600s 에 락이 풀려 다른 잡이 병행 배포를 시작한다(배포 #414 를 죽인 조합).
-+# 그래서 매 poll 마다 renew 로 TTL 을 되돌리고, 갱신이 거부되면 추적을 멈춘다(fail-closed).
-+# 대기 측 상한(900s)이 추적 측(2700s)보다 짧으므로 대기 중인 잡은 holder 가 추적 중이어도
-+# 먼저 deploy_lock_fail 에 닿을 수 있다 — 그래서 재큐잉 메시지에 holder 추적 표시를 남긴다.
-+# 갱신 API 가 일시적으로 무응답인 경우(bluegreen 전환 중 API 재기동)는 TTL 여유(600s) 안에서만
-+# 연속 AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL 회(기본 3 × poll 30s = 90s)까지 견딘다.
-+AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL="${AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL:-3}"
-+AUTOHEAL_FOLLOW_TAG="[배포추적]"
-+
-+# 이 holder 잡이 autoheal successor 를 추적 중인지 — 대기 측 재큐잉 메시지용.
-+# 추적 중 heartbeat(updated_at)가 poll 마다 갱신되므로 신선도로 "지금" 을 판정한다.
-+_deploy_holder_follow_tag() {
-+    local holder="$1"
-+    [[ "$holder" =~ ^[A-Za-z0-9._:-]+$ ]] || return 0
-+    local hit
-+    hit=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE job_id='${holder}' AND status='deploying'
-+        AND position('${AUTOHEAL_FOLLOW_TAG}' in COALESCE(review_feedback, '')) > 0
-+        AND updated_at > NOW() - INTERVAL '180 seconds';" 2>/dev/null | tail -1 | tr -cd '0-9') || hit=""
-+    [[ "${hit:-0}" -gt 0 ]] && printf ' %s' "successor-추적중"
-+    return 0
-+}
-+
-+follow_autoheal_successor() {
-+    local job_id="$1" sha="$2" since_epoch="$3" repo="$4" state_dir="$5" project="${6:-AADS}"
-+    local max_wait="$AADS_AUTOHEAL_FOLLOW_MAX_SEC" poll="$AADS_AUTOHEAL_FOLLOW_POLL_SEC"
-+    local settle="$AADS_AUTOHEAL_FOLLOW_SETTLE_SEC"
-+    [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=2700
-+    [[ "$poll" =~ ^[0-9]+$ && "$poll" -gt 0 ]] || poll=30
-+    [[ "$settle" =~ ^[0-9]+$ ]] || settle=90
-+    local renew_max="$AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL"
-+    [[ "$renew_max" =~ ^[0-9]+$ && "$renew_max" -gt 0 ]] || renew_max=3
-+    if [[ ! "$sha" =~ ^[0-9a-f]{12,40}$ || ! "$since_epoch" =~ ^[0-9]+$ ]]; then
-+        echo "autoheal_follow: skip (sha/since 형식 오류)"
-+        return 1
-+    fi
-+    local scope="upper(trim(project))='AADS'
-+        AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
-+        AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
-+        AND length(release_sha) >= 12 AND '${sha}' LIKE release_sha || '%'
-+        AND created_at >= to_timestamp(${since_epoch})"
-+    local handoff=""
-+    handoff=$(db_exec "SELECT count(*) FROM deploy_runs WHERE ${scope}
-+        AND status='superseded' AND phase LIKE 'superseded_by_autoheal%';" 2>/dev/null | tail -1 | tr -cd '0-9') || handoff=""
-+    if [[ "${handoff:-0}" -le 0 ]]; then
-+        echo "autoheal_follow: no_handoff"
-+        return 1
-+    fi
-+    log "  AUTOHEAL_FOLLOW job=$job_id sha=${sha:0:12} — deploy.sh 가 successor 에 인계함, 최대 ${max_wait}s 추적"
-+    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n${AUTOHEAL_FOLLOW_TAG} deploy.sh 가 autoheal successor 에 인계함 — 최대 ${max_wait}s 추적, 배포 락 매 poll 갱신', updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-+
-+    local waited=0 row="" run_id="" status="" phase="" age="" lock_out="" lock_reason="" renew_fail=0
-+    while :; do
-+        row=$(db_exec "SELECT id || '|' || status || '|' || COALESCE(phase, '') || '|'
-+            || GREATEST(0, EXTRACT(EPOCH FROM (NOW() - updated_at)))::bigint
-+            FROM deploy_runs WHERE ${scope} ORDER BY id DESC LIMIT 1;" 2>/dev/null | tail -1) || row=""
-+        IFS='|' read -r run_id status phase age <<< "$row"
-+        [[ "$age" =~ ^[0-9]+$ ]] || age=0
-+        case "$status" in
-+            success|success_partial)
-+                echo "autoheal_follow: success run=#${run_id} status=${status} phase=${phase} waited=${waited}s"
-+                return 0 ;;
-+            failed|blocked|cancelled)
-+                if (( age >= settle )); then
-+                    echo "autoheal_follow: failed run=#${run_id} status=${status} phase=${phase} waited=${waited}s"
-+                    return 1
-+                fi ;;
-+            superseded)
-+                # autoheal 사슬은 다음 행이 곧 보인다. 그 밖의 superseded(배치 흡수·
-+                # 신규 릴리스)는 이 SHA 를 담은 다른 run 이 나갔는지로 판정한다.
-+                if [[ "$phase" != superseded_by_autoheal* ]] \
-+                    && approved_sha_is_live "$repo" "$sha" "$state_dir"; then
-+                    echo "autoheal_follow: success run=#${run_id} status=superseded phase=${phase} live=contained waited=${waited}s"
-+                    return 0
-+                fi ;;
-+        esac
-+        if (( waited >= max_wait )); then
-+            echo "autoheal_follow: timeout run=#${run_id:-none} status=${status:-none} phase=${phase:-none} waited=${waited}s"
-+            return 1
-+        fi
-+        # 터미널 판정 뒤에 갱신한다 — 사슬이 이미 끝났다면 락 상태와 무관하게 결과를 따른다.
-+        lock_out=$(_renew_deploy_lock "$project" "$job_id") || lock_out=""
-+        if [[ "$lock_out" == *'"renewed":true'* ]]; then
-+            renew_fail=0
-+        elif [[ "$lock_out" == *'"renewed":false'* ]]; then
-+            lock_reason=$(printf '%s' "$lock_out" | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)
-+            echo "autoheal_follow: lock_lost run=#${run_id:-none} reason=${lock_reason:-unknown} waited=${waited}s"
-+            return 1
-+        else
-+            renew_fail=$((renew_fail + 1))
-+            if (( renew_fail >= renew_max )); then
-+                echo "autoheal_follow: lock_renew_unreachable run=#${run_id:-none} fails=${renew_fail} waited=${waited}s"
-+                return 1
-+            fi
-+        fi
-+        db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-+        sleep "$poll"
-+        waited=$((waited + poll))
-+    done
-+}
- # ── 배포 락 대기 + 재큐잉 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD, 2026-09-29) ──
- # 예전 셸 경로는 30+60+90=180초만 기다리고 status='error' 로 확정했다. AADS
- # bluegreen 배포 실측(deploy_runs success, 24h n=16)은 중앙값 514s·최대 631s 라
-@@ -4168,7 +4297,7 @@ DEPLOY_LOCK_WAIT_PHASE="deploy_lock_wait"
- 
- acquire_deploy_lock_with_requeue() {
-     local job_id="$1" project="$2" session_id="$3"
--    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" waited=0 requeue=0 backoff
-+    local max_wait="$DEPLOY_LOCK_MAX_WAIT_SEC" result="" holder="unknown" holder_note="" waited=0 requeue=0 backoff
-     [[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -gt 0 ]] || max_wait=900
-     local -a backoffs=()
-     for backoff in $DEPLOY_LOCK_BACKOFF_SEC; do
-@@ -4195,22 +4324,25 @@ acquire_deploy_lock_with_requeue() {
-         fi
-         holder=$(printf '%s' "$result" | sed -n 's/.*"holder":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._:-' | cut -c1-80)
-         [[ -n "$holder" ]] || holder="unknown"
-+        # holder 가 autoheal successor 를 추적 중이면 락이 갱신되며 최대 AADS_AUTOHEAL_FOLLOW_MAX_SEC
-+        # 까지 유지된다 — 대기 상한(DEPLOY_LOCK_MAX_WAIT_SEC)이 먼저 닿을 수 있음을 표시한다.
-+        holder_note=$(_deploy_holder_follow_tag "$holder" 2>/dev/null) || holder_note=""
-         (( waited >= max_wait )) && break
-         # 백오프 한 바퀴를 다 돌아도 못 잡았으면 재큐잉으로 기록한다(Python 경로와 같은 단위).
-         if (( idx >= ${#backoffs[@]} )); then
-             idx=0
-             requeue=$((requeue + 1))
--            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=$holder waited=${waited}s/${max_wait}s requeue=${requeue}"
-+            log "  DEPLOY_LOCK_REQUEUE job=$job_id project=$project holder=${holder}${holder_note} waited=${waited}s/${max_wait}s requeue=${requeue}"
-             db_update "UPDATE pipeline_jobs SET status='queued', phase='${DEPLOY_LOCK_WAIT_PHASE}',
--                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}, 누적대기 ${waited}s/${max_wait}s)',
-+                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] deploy lock 점유로 재큐잉 ${requeue} (holder=${holder}${holder_note}, 누적대기 ${waited}s/${max_wait}s)',
-                        updated_at=NOW() WHERE job_id='${job_id}' AND status IN ('deploying','queued');"
--            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
-+            record_runner_event "$job_id" "deploy_lock_requeued" "queued" "$DEPLOY_LOCK_WAIT_PHASE" "" "" "" "" "{\"holder\":\"${holder}\",\"holder_following_successor\":$([[ -n "$holder_note" ]] && echo true || echo false),\"waited_sec\":${waited},\"max_wait_sec\":${max_wait},\"requeue\":${requeue}}"
-             (( requeue == 1 )) && post_to_chat "$session_id" "⏳ [Pipeline Runner] 다른 배포 진행 중(holder=${holder}) — 배포 대기로 재큐잉, 최대 ${max_wait}초 대기: $job_id"
-         fi
-         backoff=${backoffs[$idx]}
-         idx=$((idx + 1))
-         (( waited + backoff > max_wait )) && backoff=$((max_wait - waited))
--        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=$holder — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
-+        log "  DEPLOY_LOCK_WAIT job=$job_id project=$project holder=${holder}${holder_note} — ${backoff}초 후 재시도 (누적 ${waited}s/${max_wait}s)"
-         sleep "$backoff"
-         waited=$((waited + backoff))
-     done
-@@ -4516,6 +4648,9 @@ deploy_job() {
- 
-                 if [[ "$_release_relevant" == "true" ]]; then
-                     local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
-+                    local _aads_deploy_since _aads_follow_out=""
-+                    # deploy_runs.created_at 과 비교한다 — 시계 오차를 감안해 5초 앞당긴다.
-+                    _aads_deploy_since=$(( $(date +%s) - 5 ))
-                     log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
-                     if AADS_DEPLOY_FOREGROUND=1 \
-                        AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
-@@ -4523,13 +4658,22 @@ deploy_job() {
-                        bash "$worktree_dir/deploy.sh" bluegreen >"$_aads_deploy_log" 2>&1; then
-                         tail -20 "$_aads_deploy_log" 2>/dev/null || true
-                         log "  BLUEGREEN aads-server 완료 — deploy.sh certification gates passed"
-+                    elif _aads_follow_out=$(follow_autoheal_successor "$job_id" "$current_sha" \
-+                            "$_aads_deploy_since" "$worktree_dir" "$main_workdir" "$project"); then
-+                        # deploy.sh 는 rc=1 이지만 같은 릴리스를 successor 가 끝까지 배포했다.
-+                        _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
-+                        log "  BLUEGREEN aads-server 완료 — autoheal successor 인계 성공: ${_aads_follow_out}"
-+                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포인계] deploy.sh rc≠0 이었으나 autoheal successor 가 같은 릴리스를 배포함 — ' || $(sql_escape "$_aads_follow_out") WHERE job_id='${job_id}';"
-+                        record_runner_event "$job_id" "deploy_autoheal_successor_succeeded" "deploying" "deploying" "" "" "" "" "{\"sha\":\"${current_sha}\"}"
-                     else
-+                        _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
-+                        log "  AUTOHEAL_FOLLOW 결과: ${_aads_follow_out:-none}"
-                         local _aads_deploy_tail
-                         _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
-                         log "  ERROR: isolated bluegreen 실패 — 기존 라우팅 유지/내부 롤백: ${_aads_deploy_tail//$'\n'/ }"
-                         post_to_chat "$session_id" "🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지: ${_aads_deploy_tail:0:500}"
-                         _build_fail="${_build_fail:+${_build_fail};}aads-server:bluegreen_failed"
--                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "$_aads_deploy_tail") WHERE job_id='${job_id}';"
-+                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "[${_aads_follow_out:-autoheal_follow: none}] ${_aads_deploy_tail}") WHERE job_id='${job_id}';"
-                     fi
-                     rm -f "$_aads_deploy_log" 2>/dev/null || true
-                 else
-diff --git a/scripts/pre_commit_test_map.py b/scripts/pre_commit_test_map.py
-index d015a330..0152ce36 100644
---- a/scripts/pre_commit_test_map.py
-+++ b/scripts/pre_commit_test_map.py
-@@ -74,9 +74,12 @@ GROUPS: tuple[Group, ...] = (
-             "tests/unit/test_pipeline_runner_rejected_artifact_preserve.py",
-             "tests/unit/test_pipeline_runner_approval_patchid_inherit.py",
-             "tests/unit/test_pipeline_runner_rebase_requeue_guard.py",
-+            "tests/unit/test_pipeline_runner_autoheal_successor_follow.py",
-+            "tests/unit/test_deploy_lock_renew.py",
-         ),
-         globs=(
-             "app/services/pipeline_runner_service.py",
-+            "app/services/deploy_lock.py",
-             "app/api/pipeline_runner.py",
-             "scripts/pipeline-runner.sh",
-         ),
-diff --git a/tests/unit/test_deploy_lock_renew.py b/tests/unit/test_deploy_lock_renew.py
-new file mode 100644
-index 00000000..03591a93
---- /dev/null
-+++ b/tests/unit/test_deploy_lock_renew.py
-@@ -0,0 +1,128 @@
-+"""배포 락 TTL 갱신(renew_deploy_lock) 계약.
-+
-+acquire_deploy_lock 은 SET NX 라 홀더가 다시 불러도 TTL 이 늘지 않는다. 락 TTL 은
-+600초인데 autoheal successor 추적은 최대 2700초라, 갱신 없이는 추적 도중 락이 풀려
-+다른 잡이 병행 배포를 시작한다. 갱신은 소유자일 때만 성공해야 한다.
-+"""
-+
-+import asyncio
-+from unittest.mock import patch
-+
-+from app.services import deploy_lock
++def normalize_email(value: str | None) -> str:
++    return (value or "").strip().lower()
 +
 +
-+class FakeRedis:
-+    def __init__(self, data=None, fail=False):
-+        self.data = dict(data or {})
-+        self.ttls = {k: 100 for k in self.data}
-+        self.fail = fail
-+        self.expire_calls = []
-+
-+    def get(self, key):
-+        if self.fail:
-+            raise RuntimeError("boom")
-+        return self.data.get(key)
-+
-+    def ttl(self, key):
-+        return self.ttls.get(key, -2)
-+
-+    def expire(self, key, seconds):
-+        self.expire_calls.append((key, seconds))
-+        if key not in self.data:
-+            return False
-+        self.ttls[key] = seconds
-+        return True
-+
-+    def set(self, key, value, nx=False, ex=None):
-+        if nx and key in self.data:
-+            return None
-+        self.data[key] = value
-+        self.ttls[key] = ex or -1
-+        return True
++def references_login_tables(sql_texts: list[str]) -> bool:
++    """보호 테이블 이름이 식별자·리터럴 어디에든 보이면 True (보수적 부분일치)."""
++    return any(_PROTECTED_NAME_RE.search(text.lower()) for text in sql_texts)
 +
 +
-+def _with(fake):
-+    return patch.object(deploy_lock, "_get_redis", return_value=fake)
++@dataclass
++class LoginSnapshot:
++    users: dict[str, dict[str, Any]] = field(default_factory=dict)
++    memberships: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
++    tenants: dict[str, dict[str, Any]] = field(default_factory=dict)
++    reference_count: int = 0
 +
 +
-+def test_holder_renewal_extends_ttl():
-+    fake = FakeRedis({"deploy_lock:AADS": "runner-a"})
-+    with _with(fake):
-+        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
-+    assert res["renewed"] is True
-+    assert fake.expire_calls == [("deploy_lock:AADS", 600)]
-+    assert fake.ttls["deploy_lock:AADS"] == 600
++def _row_json(value: Any) -> dict[str, Any]:
++    if isinstance(value, dict):
++        return value
++    return json.loads(value) if value else {}
 +
 +
-+def test_reacquire_by_holder_does_not_extend_ttl_which_is_why_renew_exists():
-+    fake = FakeRedis({"deploy_lock:AADS": "runner-a"})
-+    with _with(fake):
-+        res = deploy_lock.acquire_deploy_lock("AADS", "runner-a")
-+    assert res["acquired"] is False
-+    assert fake.ttls["deploy_lock:AADS"] == 100
++def _user_state(row: dict[str, Any]) -> dict[str, Any]:
++    # 컬럼 구성이 배포 이력마다 달라(039 는 is_active, auth.py 는 status/deleted_at)
++    # to_jsonb 로 받아 있는 것만 본다.
++    return {
++        "email": normalize_email(row.get("email")),
++        "status": row.get("status"),
++        "is_active": row.get("is_active"),
++        "deleted_at": row.get("deleted_at"),
++        "default_tenant_id": row.get("default_tenant_id"),
++    }
 +
 +
-+def test_non_owner_cannot_renew_and_ttl_is_untouched():
-+    fake = FakeRedis({"deploy_lock:AADS": "runner-other"})
-+    with _with(fake):
-+        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
-+    assert res["renewed"] is False
-+    assert res["reason"] == "not_owner"
-+    assert res["holder"] == "runner-other"
-+    assert fake.expire_calls == []
-+    assert fake.ttls["deploy_lock:AADS"] == 100
++def _state(row: dict[str, Any]) -> dict[str, Any]:
++    return {"status": row.get("status"), "deleted_at": row.get("deleted_at")}
 +
 +
-+def test_expired_lock_is_not_revived():
-+    fake = FakeRedis()
-+    with _with(fake):
-+        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
-+    assert res["renewed"] is False
-+    assert res["reason"] == "expired_or_released"
-+    assert "deploy_lock:AADS" not in fake.data
++async def _referenced_emails(conn) -> tuple[set[str], int]:
++    """활성 내부 origin 자격증명이 가리키는 정규화 이메일 집합."""
++    hosts = internal_hosts()
++    try:
++        # 트랜잭션이 끝날 때까지 참조 집합을 고정한다(동시 등록·비활성화 차단).
++        await conn.execute(
++            "LOCK TABLE public.agent_vault_credentials, public.e2e_credentials IN SHARE MODE"
++        )
++        rows = await conn.fetch("""
++            SELECT origin AS login_origin, NULL::text AS service, username_enc
++              FROM public.agent_vault_credentials
++             WHERE is_active IS NOT FALSE
++            UNION ALL
++            SELECT login_url, service, username_enc
++              FROM public.e2e_credentials
++             WHERE is_active IS NOT FALSE
++        """)
++    except Exception as exc:
++        raise VaultGuardUnavailable(
++            f"Vault 참조 조회 실패({type(exc).__name__}) — 쓰기 차단"
++        ) from None
++    emails: set[str] = set()
++    references = 0
++    for row in rows:
++        origin = row["login_origin"]
++        if (origin or "").strip():
++            internal = is_internal_origin(origin, hosts)
++        else:
++            internal = normalize_email(row["service"]) in INTERNAL_E2E_SERVICES
++        if not internal:
++            continue
++        references += 1
++        try:
++            username = decrypt_value(row["username_enc"])
++        except Exception as exc:
++            raise VaultGuardUnavailable(
++                f"Vault 로그인 참조 복호화 실패({type(exc).__name__}) — 쓰기 차단"
++            ) from None
++        email = normalize_email(username)
++        # 로그인은 이메일로만 한다. '@' 없는 아이디는 어떤 saas_users 행과도 맞지 않는다.
++        if "@" in email:
++            emails.add(email)
++    return emails, references
 +
 +
-+def test_key_expiring_between_get_and_expire_is_a_failure():
-+    class Racy(FakeRedis):
-+        def expire(self, key, seconds):
-+            self.data.pop(key, None)
-+            return super().expire(key, seconds)
-+
-+    fake = Racy({"deploy_lock:AADS": "runner-a"})
-+    with _with(fake):
-+        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
-+    assert res["renewed"] is False
-+
-+
-+def test_redis_error_is_fail_closed():
-+    with _with(FakeRedis({"deploy_lock:AADS": "runner-a"}, fail=True)):
-+        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
-+    assert res["renewed"] is False
-+    assert res["reason"] == "redis_error"
-+
-+
-+def test_no_redis_mirrors_acquire_graceful_degradation():
-+    with _with(None):
-+        assert deploy_lock.acquire_deploy_lock("AADS", "runner-a")["acquired"] is True
-+        res = deploy_lock.renew_deploy_lock("AADS", "runner-a")
-+    assert res["renewed"] is True
-+    assert res["reason"] == "redis_unavailable_no_lock"
-+
-+
-+def test_custom_timeout_is_applied():
-+    fake = FakeRedis({"deploy_lock:AADS": "runner-a"})
-+    with _with(fake):
-+        deploy_lock.renew_deploy_lock("AADS", "runner-a", timeout=900)
-+    assert fake.expire_calls == [("deploy_lock:AADS", 900)]
-+
-+
-+def test_renew_endpoint_delegates_to_service():
-+    from app.api import ops
-+
-+    fake = FakeRedis({"deploy_lock:AADS": "runner-a"})
-+    with _with(fake):
-+        res = asyncio.run(ops.api_renew_deploy_lock("AADS", "runner-a"))
-+    assert res["renewed"] is True
-+    assert any(
-+        getattr(r, "path", "") == "/ops/locks/deploy/renew" for r in ops.router.routes
++async def _load_state(conn, user_ids: list[str]) -> LoginSnapshot:
++    snap = LoginSnapshot()
++    if not user_ids:
++        return snap
++    users = await conn.fetch(
++        "SELECT u.id::text AS id, to_jsonb(u) AS row FROM public.saas_users u "
++        "WHERE u.id::text = ANY($1::text[]) FOR UPDATE",
++        user_ids,
 +    )
-diff --git a/tests/unit/test_pipeline_runner_autoheal_successor_follow.py b/tests/unit/test_pipeline_runner_autoheal_successor_follow.py
++    for row in users:
++        snap.users[row["id"]] = _user_state(_row_json(row["row"]))
++    members = await conn.fetch(
++        "SELECT m.user_id::text AS user_id, m.tenant_id::text AS tenant_id, to_jsonb(m) AS row "
++        "FROM public.tenant_memberships m WHERE m.user_id::text = ANY($1::text[]) FOR UPDATE",
++        user_ids,
++    )
++    for row in members:
++        snap.memberships[(row["user_id"], row["tenant_id"])] = _state(_row_json(row["row"]))
++    return snap
++
++
++async def _load_tenants(conn, tenant_ids: list[str]) -> dict[str, dict[str, Any]]:
++    if not tenant_ids:
++        return {}
++    rows = await conn.fetch(
++        "SELECT t.id::text AS id, to_jsonb(t) AS row FROM public.tenants t "
++        "WHERE t.id::text = ANY($1::text[]) FOR UPDATE",
++        tenant_ids,
++    )
++    return {row["id"]: _state(_row_json(row["row"])) for row in rows}
++
++
++def _active(state: dict[str, Any]) -> bool:
++    return state.get("deleted_at") is None and state.get("status") in (None, "active")
++
++
++async def protected_login_snapshot(conn) -> LoginSnapshot:
++    """보호 대상 계정·멤버십·조직을 잠그고 상태를 읽는다. 호출자가 트랜잭션을 연다."""
++    emails, references = await _referenced_emails(conn)
++    if not emails:
++        return LoginSnapshot(reference_count=references)
++    try:
++        # 이메일 매칭은 파이썬에서 — 복호화한 평문을 SQL 로 보내지 않는다.
++        rows = await conn.fetch(
++            "SELECT u.id::text AS id, u.email FROM public.saas_users u"
++        )
++        user_ids = sorted(r["id"] for r in rows if normalize_email(r["email"]) in emails)
++        snap = await _load_state(conn, user_ids)
++        # 잠근 뒤 다시 확인한다(스캔과 잠금 사이 이메일 변경).
++        snap.users = {k: v for k, v in snap.users.items() if v["email"] in emails}
++        snap.memberships = {
++            k: v for k, v in snap.memberships.items() if k[0] in snap.users and _active(v)
++        }
++        tenant_ids = {t for _, t in snap.memberships}
++        tenant_ids |= {
++            str(v["default_tenant_id"]) for v in snap.users.values() if v["default_tenant_id"]
++        }
++        snap.tenants = await _load_tenants(conn, sorted(tenant_ids))
++    except Exception as exc:
++        raise VaultGuardUnavailable(
++            f"보호 계정 조회 실패({type(exc).__name__}) — 쓰기 차단"
++        ) from None
++    snap.reference_count = references
++    return snap
++
++
++async def reload_snapshot(conn, before: LoginSnapshot) -> LoginSnapshot:
++    """before 와 같은 키(id)로 쓰기 후 상태를 다시 읽는다."""
++    try:
++        after = await _load_state(conn, sorted(before.users))
++        after.tenants = await _load_tenants(conn, sorted(before.tenants))
++    except Exception as exc:
++        raise VaultGuardUnavailable(
++            f"보호 계정 재조회 실패({type(exc).__name__}) — 쓰기 차단"
++        ) from None
++    after.reference_count = before.reference_count
++    return after
++
++
++def _user_lost(old: dict[str, Any], new: dict[str, Any] | None) -> bool:
++    if new is None or new["email"] != old["email"]:
++        return True
++    if old["deleted_at"] is None and new["deleted_at"] is not None:
++        return True
++    if old["status"] in (None, "active") and new["status"] not in (None, "active"):
++        return True
++    if old["is_active"] is not False and new["is_active"] is False:
++        return True
++    return bool(old["default_tenant_id"]) and not new["default_tenant_id"]
++
++
++def _state_lost(old: dict[str, Any], new: dict[str, Any] | None) -> bool:
++    return _active(old) and (new is None or not _active(new))
++
++
++def assert_login_preserved(before: LoginSnapshot, after: LoginSnapshot) -> None:
++    """비활성·삭제 전이가 하나라도 있으면 VaultLoginProtected. 부분 성공은 없다."""
++    users = sorted(k for k, v in before.users.items() if _user_lost(v, after.users.get(k)))
++    members = sorted(
++        k for k, v in before.memberships.items() if _state_lost(v, after.memberships.get(k))
++    )
++    tenants = sorted(k for k, v in before.tenants.items() if _state_lost(v, after.tenants.get(k)))
++    if users or members or tenants:
++        parts = []
++        if users:
++            parts.append(f"saas_users={','.join(users)}")
++        if members:
++            parts.append("tenant_memberships=" + ",".join(f"{u}@{t}" for u, t in members))
++        if tenants:
++            parts.append(f"tenants={','.join(tenants)}")
++        raise VaultLoginProtected("Vault 참조 로그인 경로 변경 차단: " + " ".join(parts))
+diff --git a/tests/integration/test_vault_cleanup_guard_postgres.py b/tests/integration/test_vault_cleanup_guard_postgres.py
 new file mode 100644
-index 00000000..3103c956
+index 00000000..3061faab
 --- /dev/null
-+++ b/tests/unit/test_pipeline_runner_autoheal_successor_follow.py
-@@ -0,0 +1,365 @@
-+"""AADS-LLM-M6-DEPLOY-REGRESSION-GUARD-RETRY: 러너가 autoheal 인계를 실패로 읽지 않는다.
++++ b/tests/integration/test_vault_cleanup_guard_postgres.py
+@@ -0,0 +1,346 @@
++"""db_safe_write Vault 보호(P1-A)·단일 문장 선차단(P1-B)을 실제 PostgreSQL 로 검증한다.
 +
-+2026-09-30 runner-a5f21866(da6b42d1) 은 deploy.sh 가 target_drain_busy 로 rc=1 을
-+내자 01:25 에 bluegreen_failed 로 종결됐다. 그런데 deploy.sh 는 EXIT 트랩에서 같은
-+릴리스의 successor 를 띄우고 나간 것이었고, #5290→#5291→#5292→#5293 사슬이
-+01:46 에 success_partial 로 배포를 끝냈다. 산출물은 운영에 나갔는데 작업만
-+실패로 남았고, 목표 마일스톤이 재작업 예산을 소진해 blocked 가 됐다.
++격리된 일회용 DB 전용이다. 운영 DB 에 돌리지 않는다.
++  AADS_VAULT_GUARD_TEST_DATABASE_URL=postgresql://u:p@127.0.0.1:5432/<이름>_test
++호스트가 127.0.0.1/localhost 가 아니거나 DB 이름이 _test 로 끝나지 않으면 건너뛴다.
++각 테스트는 public 스키마의 대상 테이블을 지우고 새로 만든다.
 +
-+scripts/pipeline-runner.sh 의 follow_autoheal_successor() 를 격리 실행해
-+  - 인계 흔적이 없으면 기존 실패 판정을 그대로 유지하고(즉시 1, 대기 없음)
-+  - 인계가 있으면 사슬을 끝까지 따라가 success/success_partial 을 성공으로 본다
-+는 계약을 고정한다.
++자격증명은 테스트마다 새로 만든 Fernet 키로 암호화한 가짜 값이다. 출력에는
++계정 id 와 상태만 찍고 이메일·암호문은 찍지 않는다.
 +"""
++from __future__ import annotations
 +
-+import shutil
-+import subprocess
-+from pathlib import Path
++import os
++from contextlib import asynccontextmanager
++from unittest.mock import patch
++from urllib.parse import urlparse
 +
 +import pytest
 +
-+ROOT = Path(__file__).resolve().parents[2]
-+SCRIPT = (ROOT / "scripts" / "pipeline-runner.sh").read_text(encoding="utf-8")
-+SHA = "da6b42d1d9b869edd6e611977d7fa79c8e10dd4a"
++asyncpg = pytest.importorskip("asyncpg")
 +
++URL = os.getenv("AADS_VAULT_GUARD_TEST_DATABASE_URL", "")
++_parsed = urlparse(URL)
++pytestmark = pytest.mark.skipif(
++    not URL
++    or _parsed.hostname not in ("127.0.0.1", "localhost")
++    or not _parsed.path.lstrip("/").endswith("_test"),
++    reason="격리 PostgreSQL(127.0.0.1, *_test) 미설정",
++)
 +
-+def _function(name: str) -> str:
-+    start = SCRIPT.index(f"{name}() {{")
-+    return SCRIPT[start : SCRIPT.index("\n}\n", start) + 3]
++T_A = "00000000-0000-0000-0000-00000000000a"  # Vault 를 저장한 조직
++T_B = "00000000-0000-0000-0000-00000000000b"  # 교차 조직 계정의 실제 소속
++T_C = "00000000-0000-0000-0000-00000000000c"  # 보호 계정이 없는 조직
 +
++INTERNAL = "https://aads.newtalk.kr/login"
++EXTERNAL = "https://shop.external.example/login"
 +
-+def _config_lines() -> str:
-+    return "\n".join(
-+        line
-+        for line in SCRIPT.splitlines()
-+        if line.startswith(("AADS_AUTOHEAL_FOLLOW_", "AUTOHEAL_FOLLOW_TAG="))
-+    )
-+
-+
-+# rows 파일의 각 줄이 폴링 한 번의 "최신 deploy_runs 행" 이다. 마지막 줄은 계속 반복된다.
-+HARNESS = r"""
-+set -eo pipefail
-+log() { echo "LOG $*" >&2; }
-+db_update() { printf '%s\n---\n' "$1" >> "$WORK/db.log"; }
-+sleep() { echo "$1" >> "$WORK/sleep.log"; }
-+approved_sha_is_live() { echo "LIVE $*" >> "$WORK/live.log"; [[ "$FAKE_LIVE" == "1" ]]; }
-+_renew_deploy_lock() {
-+    echo "RENEW $*" >> "$WORK/renew.log"
-+    local n
-+    n=$(wc -l < "$WORK/renew.log")
-+    case "$FAKE_RENEW" in
-+        ok) echo '{"renewed":true,"holder":"runner-x","ttl":600,"reason":"ok"}' ;;
-+        lost:*) echo "{\"renewed\":false,\"holder\":null,\"ttl\":0,\"reason\":\"${FAKE_RENEW#lost:}\"}" ;;
-+        down) return 0 ;;
-+        down_first:*)
-+            if (( n <= ${FAKE_RENEW#down_first:} )); then return 0; fi
-+            echo '{"renewed":true,"holder":"runner-x","ttl":600,"reason":"ok"}' ;;
-+    esac
-+}
-+db_exec() {
-+    printf '%s\n---\n' "$1" >> "$WORK/sql.log"
-+    if [[ "$1" == *"count(*)"* ]]; then
-+        echo "$FAKE_HANDOFF"
-+        return 0
-+    fi
-+    local n total
-+    n=$(( $(cat "$WORK/poll" 2>/dev/null || echo 0) + 1 ))
-+    echo "$n" > "$WORK/poll"
-+    total=$(wc -l < "$WORK/rows")
-+    (( n > total )) && n=$total
-+    sed -n "${n}p" "$WORK/rows"
-+}
++SCHEMA = """
++DROP TABLE IF EXISTS public.agent_vault_credentials, public.e2e_credentials,
++    public.tenant_memberships, public.misc_notes CASCADE;
++DROP TABLE IF EXISTS public.saas_users, public.tenants CASCADE;
++CREATE TABLE public.tenants (
++    id uuid PRIMARY KEY, slug text UNIQUE NOT NULL, name text NOT NULL,
++    status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','archived')),
++    deleted_at timestamptz);
++CREATE TABLE public.saas_users (
++    id text PRIMARY KEY, email text UNIQUE NOT NULL, password_hash text NOT NULL DEFAULT 'x',
++    name text, is_active boolean DEFAULT true, default_tenant_id uuid,
++    status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','deleted')),
++    deleted_at timestamptz);
++CREATE TABLE public.tenant_memberships (
++    id serial PRIMARY KEY,
++    tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
++    user_id text NOT NULL REFERENCES public.saas_users(id) ON DELETE CASCADE,
++    status text NOT NULL DEFAULT 'active'
++        CHECK (status IN ('active','invited','suspended','removed')),
++    deleted_at timestamptz, UNIQUE (tenant_id, user_id));
++CREATE TABLE public.agent_vault_credentials (
++    id serial PRIMARY KEY,
++    tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
++    work_key text NOT NULL DEFAULT 'w', origin text NOT NULL, label text NOT NULL DEFAULT 'd',
++    username_enc text NOT NULL, password_enc text NOT NULL,
++    is_active boolean NOT NULL DEFAULT true, created_by text NOT NULL DEFAULT '');
++CREATE TABLE public.e2e_credentials (
++    id serial PRIMARY KEY, service varchar(100) NOT NULL, project varchar(20),
++    label varchar(100) NOT NULL DEFAULT '기본', login_url text,
++    username_enc text NOT NULL, password_enc text NOT NULL,
++    is_active boolean DEFAULT true, tenant_id uuid REFERENCES public.tenants(id));
++CREATE TABLE public.misc_notes (id int PRIMARY KEY, body text);
 +"""
 +
-+
-+@pytest.fixture(scope="module")
-+def fn_file(tmp_path_factory):
-+    if shutil.which("bash") is None:
-+        pytest.skip("bash 미설치 환경")
-+    path = tmp_path_factory.mktemp("ah") / "fn.sh"
-+    path.write_text(
-+        HARNESS + "\n" + _config_lines() + "\n" + _function("follow_autoheal_successor"),
-+        encoding="utf-8",
-+    )
-+    return path
-+
-+
-+def _run(fn_file: Path, work: Path, rows: list[str], handoff: int = 1, live: bool = False,
-+         max_wait: str = "300", poll: str = "30", renew: str = "ok"):
-+    work.mkdir(parents=True, exist_ok=True)
-+    (work / "rows").write_text("\n".join(rows) + "\n", encoding="utf-8")
-+    env = {
-+        "PATH": "/usr/bin:/bin",
-+        "WORK": str(work),
-+        "FAKE_HANDOFF": str(handoff),
-+        "FAKE_LIVE": "1" if live else "0",
-+        "FAKE_RENEW": renew,
-+        "AADS_AUTOHEAL_FOLLOW_MAX_SEC": max_wait,
-+        "AADS_AUTOHEAL_FOLLOW_POLL_SEC": poll,
-+    }
-+    # set -e 아래에서 호출부와 같은 형태(if out=$(f); then)로 부른다.
-+    cmd = (
-+        f'source "{fn_file}"; '
-+        f'if out=$(follow_autoheal_successor runner-x {SHA} 1790698700 /repo /state AADS); '
-+        'then rc=0; else rc=$?; fi; echo "$out" | tail -1; echo "RC=$rc"'
-+    )
-+    proc = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True, timeout=30)
-+    assert proc.returncode == 0, proc.stderr
-+    lines = proc.stdout.strip().splitlines()
-+    rc = int(lines[-1].removeprefix("RC="))
-+    summary = lines[-2] if len(lines) > 1 else ""
-+    slept = sum(int(x) for x in (work / "sleep.log").read_text().split()) if (work / "sleep.log").exists() else 0
-+    return rc, summary, slept
++# id, email(저장값), default_tenant, 멤버십 조직
++USERS = [
++    ("u_cross", "cross@b.example", T_B, T_B),      # T_A Vault 에 저장된 T_B 계정 (P1-A)
++    ("u_e2e", "e2e@a.example", T_A, T_A),          # e2e_credentials 참조
++    ("u_mixed", "mixed@b.example", T_B, T_B),      # Vault 에 " MIXED@B.Example " 로 저장
++    ("u_inactive", "inactive@c.example", T_C, T_C),  # is_active=false 자격증명만 있음
++    ("u_ext", "ext@c.example", T_C, T_C),          # 외부 origin 자격증명만 있음
++    ("u_free", "free@c.example", T_C, T_C),
++    ("u_free2", "free2@c.example", T_C, T_C),
++    ("u_ctrl", "ctrl@c.example", T_C, T_C),
++]
++PROTECTED = ("u_cross", "u_e2e", "u_mixed")
 +
 +
-+def test_no_handoff_keeps_failure_without_waiting(fn_file, tmp_path):
-+    rc, summary, slept = _run(fn_file, tmp_path, ["5300|blocked|target_slot_drain|500"], handoff=0)
-+    assert rc == 1
-+    assert "no_handoff" in summary
-+    assert slept == 0
-+    assert not (tmp_path / "poll").exists(), "인계가 없으면 run 폴링도 하지 않는다"
++@pytest.fixture
++def vault_key(monkeypatch):
++    from cryptography.fernet import Fernet
++
++    from app.core import credential_vault
++
++    monkeypatch.setattr(credential_vault, "_VAULT_KEY", Fernet.generate_key())
++    monkeypatch.setattr(credential_vault, "_VAULT_PREVIOUS_KEYS", ())
++    monkeypatch.setattr(credential_vault, "_STANDALONE_KEY_SOURCE", None)
++    monkeypatch.delenv("AADS_VAULT_GUARD_INTERNAL_HOSTS", raising=False)
++    monkeypatch.delenv("AADS_PUBLIC_BASE_URL", raising=False)
++    return credential_vault.encrypt_value
 +
 +
-+def test_real_incident_chain_ends_success_partial(fn_file, tmp_path):
-+    # runner-a5f21866 실측 사슬: 5290 superseded → 5291·5292 running/superseded → 5293 success_partial
-+    rows = [
-+        "5291|running|target_slot_drain|3",
-+        "5291|superseded|superseded_by_autoheal_drain_retry|1",
-+        "5292|running|target_slot_drain|5",
-+        "5293|running|build_candidate_image|2",
-+        "5293|success_partial|completed|0",
-+    ]
-+    rc, summary, slept = _run(fn_file, tmp_path, rows, max_wait="2700")
-+    assert rc == 0
-+    assert "success run=#5293 status=success_partial" in summary
-+    assert slept == 4 * 30
-+    heartbeats = (tmp_path / "db.log").read_text()
-+    assert "status='deploying'" in heartbeats, "대기 중 작업 heartbeat 를 갱신해야 한다"
++@asynccontextmanager
++async def environment(encrypt):
++    pool = await asyncpg.create_pool(URL, min_size=1, max_size=3, timeout=10)
++    try:
++        async with pool.acquire() as conn:
++            await conn.execute(SCHEMA)
++            for tid, slug in ((T_A, "a"), (T_B, "b"), (T_C, "c")):
++                await conn.execute(
++                    "INSERT INTO public.tenants(id, slug, name) VALUES ($1::uuid, $2, $2)", tid, slug)
++            for uid, email, tenant, member in USERS:
++                await conn.execute(
++                    "INSERT INTO public.saas_users(id, email, default_tenant_id) VALUES ($1,$2,$3::uuid)",
++                    uid, email, tenant)
++                await conn.execute(
++                    "INSERT INTO public.tenant_memberships(tenant_id, user_id) VALUES ($1::uuid,$2)",
++                    member, uid)
++            pw = encrypt("not-a-real-password")
++            # 교차 조직: 조직 A 의 Vault 에 조직 B 계정. created_by 는 다른 사람이다.
++            await conn.execute(
++                "INSERT INTO public.agent_vault_credentials(tenant_id, origin, username_enc, password_enc, created_by)"
++                " VALUES ($1::uuid, $2, $3, $4, 'u_free')", T_A, INTERNAL, encrypt("cross@b.example"), pw)
++            await conn.execute(
++                "INSERT INTO public.agent_vault_credentials(tenant_id, origin, username_enc, password_enc)"
++                " VALUES ($1::uuid, $2, $3, $4)", T_C, EXTERNAL, encrypt("ext@c.example"), pw)
++            await conn.execute(
++                "INSERT INTO public.e2e_credentials(service, login_url, username_enc, password_enc, tenant_id)"
++                " VALUES ('aads-dashboard', $1, $2, $3, $4::uuid)", INTERNAL, encrypt("e2e@a.example"), pw, T_A)
++            await conn.execute(
++                "INSERT INTO public.e2e_credentials(service, label, login_url, username_enc, password_enc, tenant_id)"
++                " VALUES ('aads-dashboard', 'mixed', NULL, $1, $2, $3::uuid)",
++                encrypt("  MIXED@B.Example \n"), pw, T_C)
++            await conn.execute(
++                "INSERT INTO public.e2e_credentials(service, label, login_url, username_enc, password_enc,"
++                " is_active, tenant_id) VALUES ('aads-dashboard', 'old', $1, $2, $3, false, $4::uuid)",
++                INTERNAL, encrypt("inactive@c.example"), pw, T_C)
++            await conn.execute("INSERT INTO public.misc_notes VALUES (1, 'n')")
++        from app.services.tool_executor import ToolExecutor
++
++        with patch("app.core.db_pool.get_pool", return_value=pool):
++            yield pool, ToolExecutor()
++    finally:
++        await pool.close()
 +
 +
-+def test_blocked_inside_settle_window_is_not_final(fn_file, tmp_path):
-+    # successor 가 blocked 로 바뀐 직후엔 다음 successor 가 아직 안 보일 수 있다.
-+    rows = [
-+        "5292|blocked|target_slot_drain|10",
-+        "5293|queued|queued_for_deploy|2",
-+        "5293|success|completed|0",
-+    ]
-+    rc, summary, _ = _run(fn_file, tmp_path, rows)
-+    assert rc == 0
-+    assert "run=#5293" in summary
++async def dump(pool) -> dict:
++    """대상 테이블 전체 상태(부작용 비교용). 암호문 컬럼은 넣지 않는다."""
++    async with pool.acquire() as conn:
++        return {
++            "users": [tuple(r) for r in await conn.fetch(
++                "SELECT id, email, status, is_active, deleted_at, default_tenant_id"
++                " FROM public.saas_users ORDER BY id")],
++            "members": [tuple(r) for r in await conn.fetch(
++                "SELECT user_id, tenant_id, status, deleted_at FROM public.tenant_memberships"
++                " ORDER BY user_id, tenant_id")],
++            "tenants": [tuple(r) for r in await conn.fetch(
++                "SELECT id, status, deleted_at FROM public.tenants ORDER BY id")],
++            "notes": [tuple(r) for r in await conn.fetch("SELECT * FROM public.misc_notes")],
++        }
 +
 +
-+def test_settled_failure_ends_chain_as_failure(fn_file, tmp_path):
-+    rows = ["5293|running|candidate_health|5", "5293|failed|candidate_health|120"]
-+    rc, summary, _ = _run(fn_file, tmp_path, rows)
-+    assert rc == 1
-+    assert "failed run=#5293 status=failed" in summary
++async def protected_rows(pool) -> list[tuple]:
++    async with pool.acquire() as conn:
++        rows = await conn.fetch(
++            "SELECT u.id, u.status, u.is_active, u.deleted_at IS NULL AS alive,"
++            " m.status AS membership, t.status AS tenant"
++            " FROM public.saas_users u"
++            " JOIN public.tenant_memberships m ON m.user_id = u.id"
++            " JOIN public.tenants t ON t.id = u.default_tenant_id"
++            " WHERE u.id = ANY($1::text[]) ORDER BY u.id", list(PROTECTED))
++    return [tuple(r) for r in rows]
 +
 +
-+def test_timeout_is_failure_and_bounded(fn_file, tmp_path):
-+    rc, summary, slept = _run(fn_file, tmp_path, ["5293|running|target_slot_drain|1"], max_wait="120")
-+    assert rc == 1
-+    assert "timeout" in summary
-+    assert slept == 120
++def show(label, rows):
++    print(f"  [{label}]")
++    for row in rows:
++        print("    ", row)
 +
 +
-+def test_absorbed_into_other_release_uses_live_check(fn_file, tmp_path):
-+    rows = ["5294|superseded|included_in_release_batch|40"]
-+    rc, summary, _ = _run(fn_file, tmp_path, rows, live=True)
-+    assert rc == 0
-+    assert "live=contained" in summary
-+    assert f"LIVE /repo {SHA} /state" in (tmp_path / "live.log").read_text()
++async def both(executor, pool, sql, params=None):
++    """dry_run → 실행 순서로 호출하고 dry_run 이 부작용 0 인지 확인한다."""
++    before = await dump(pool)
++    dry = await executor._db_safe_write({"sql": sql, "params": params or [], "dry_run": True})
++    assert await dump(pool) == before, f"dry_run 부작용: {sql}"
++    real = await executor._db_safe_write({"sql": sql, "params": params or []})
++    # dry-run 동등성: 같은 보호 판정.
++    assert bool(dry.get("blocked")) == bool(real.get("blocked")), (dry, real)
++    assert dry.get("success") == real.get("success"), (dry, real)
++    return dry, real, before
 +
 +
-+def test_absorbed_but_not_live_waits_then_fails(fn_file, tmp_path):
-+    rows = ["5294|superseded|included_in_release_batch|40"]
-+    rc, summary, slept = _run(fn_file, tmp_path, rows, live=False, max_wait="60")
-+    assert rc == 1
-+    assert "timeout" in summary
-+    assert slept == 60
++BLOCKED_CASES = [
++    # P1-A 교차 조직, schema-qualified + alias, soft delete
++    ("UPDATE public.saas_users AS u SET deleted_at = NOW() WHERE u.id = $1", ["u_cross"]),
++    # alias 없이 비한정 이름, status 비활성 전이
++    ("UPDATE saas_users SET status = 'deleted' WHERE id = 'u_cross'", None),
++    ("UPDATE saas_users su SET status = 'suspended' WHERE su.id = $1", ["u_e2e"]),
++    ("UPDATE public.saas_users SET is_active = false WHERE id = $1", ["u_e2e"]),
++    # 이메일 정규화(저장값 대소문자·공백)
++    ("UPDATE public.saas_users u SET deleted_at = NOW() WHERE u.id = 'u_mixed'", None),
++    # 하드 삭제
++    ('DELETE FROM "public"."saas_users" x WHERE x.id = $1', ["u_e2e"]),
++    # 멤버십 해제
++    ("UPDATE public.tenant_memberships m SET status = 'removed' WHERE m.user_id = $1", ["u_cross"]),
++    ("DELETE FROM tenant_memberships WHERE user_id = 'u_e2e'", None),
++    # 로그인 조직 끊김: 교차 계정의 실제 소속 T_B, e2e 계정 소속 T_A
++    ("UPDATE public.tenants t SET status = 'suspended' WHERE t.id = $1::uuid", [T_B]),
++    ("UPDATE tenants SET deleted_at = NOW() WHERE id = $1::uuid", [T_A]),
++]
 +
 +
-+def test_autoheal_superseded_row_never_uses_live_shortcut(fn_file, tmp_path):
-+    rows = ["5290|superseded|superseded_by_autoheal_drain_retry|0"]
-+    rc, _, _ = _run(fn_file, tmp_path, rows, live=True, max_wait="30")
-+    assert rc == 1
-+    assert not (tmp_path / "live.log").exists()
++@pytest.mark.asyncio
++@pytest.mark.parametrize("sql,params", BLOCKED_CASES)
++async def test_protected_write_blocked_dry_and_real(vault_key, sql, params):
++    async with environment(vault_key) as (pool, ex):
++        dry, real, before = await both(ex, pool, sql, params)
++        assert dry["blocked"] is True and real["blocked"] is True, (dry, real)
++        assert await dump(pool) == before
 +
 +
-+def test_query_scope_is_same_release_api_production_since_deploy_start(fn_file, tmp_path):
-+    _run(fn_file, tmp_path, ["5293|success|completed|0"])
-+    sql = (tmp_path / "sql.log").read_text()
-+    assert f"'{SHA}' LIKE release_sha || '%'" in sql
-+    assert "length(release_sha) >= 12" in sql
-+    assert "created_at >= to_timestamp(1790698700)" in sql
-+    assert "'api')='api'" in sql and "'production')='production'" in sql
-+    assert "phase LIKE 'superseded_by_autoheal%'" in sql
++@pytest.mark.asyncio
++async def test_unreferenced_inactive_and_external_are_cleanable(vault_key):
++    async with environment(vault_key) as (pool, ex):
++        for uid in ("u_free", "u_inactive", "u_ext"):
++            sql = "UPDATE public.saas_users AS u SET deleted_at = NOW(), status = 'deleted' WHERE u.id = $1"
++            dry, real, before = await both(ex, pool, sql, [uid])
++            assert dry["success"] is True and dry["dry_run"] is True, dry
++            assert real["success"] is True and real["result"] == "UPDATE 1", real
++            async with pool.acquire() as conn:
++                row = await conn.fetchrow(
++                    "SELECT status, deleted_at FROM public.saas_users WHERE id = $1", uid)
++            assert row["status"] == "deleted" and row["deleted_at"] is not None
++        # 보호 계정이 없는 조직(T_C)은 비활성화할 수 있다.
++        dry, real, _ = await both(
++            ex, pool, "UPDATE public.tenants SET status = 'suspended' WHERE id = $1::uuid", [T_C])
++        assert real["success"] is True, real
++        # Vault 를 저장만 한 조직(T_A) 이라도 거기 소속 보호 계정(u_e2e)이 있으면 막힌다 — 위 케이스.
++        # 보호 테이블과 무관한 쓰기는 가드를 타지 않는다.
++        res = await ex._db_safe_write({"sql": "UPDATE misc_notes SET body = 'm' WHERE id = 1"})
++        assert res["success"] is True and "vault_guard" not in res
 +
 +
-+def test_invalid_sha_is_rejected_without_db(fn_file, tmp_path):
-+    tmp_path.mkdir(parents=True, exist_ok=True)
-+    (tmp_path / "rows").write_text("x\n", encoding="utf-8")
-+    cmd = (
-+        f'source "{fn_file}"; if out=$(follow_autoheal_successor j "abc;drop" 1 /r /s); '
-+        'then echo RC=0; else echo RC=$?; fi'
-+    )
-+    proc = subprocess.run(
-+        ["bash", "-c", cmd],
-+        env={"PATH": "/usr/bin:/bin", "WORK": str(tmp_path), "FAKE_HANDOFF": "1", "FAKE_LIVE": "0",
-+             "FAKE_RENEW": "ok"},
-+        capture_output=True, text=True, timeout=30,
-+    )
-+    assert proc.stdout.strip().endswith("RC=1")
-+    assert not (tmp_path / "sql.log").exists()
++@pytest.mark.asyncio
++async def test_mixed_batch_rolls_back_entirely(vault_key):
++    async with environment(vault_key) as (pool, ex):
++        before_rows = await protected_rows(pool)
++        sql = ("UPDATE public.saas_users SET deleted_at = NOW(), status = 'deleted'"
++               " WHERE id = ANY($1::text[])")
++        dry, real, before = await both(ex, pool, sql, [["u_cross", "u_free2"]])
++        assert dry["blocked"] is True and real["blocked"] is True
++        after = await dump(pool)
++        assert after == before  # 정상 건(u_free2)도 롤백됨
++        async with pool.acquire() as conn:
++            free2 = await conn.fetchrow(
++                "SELECT status, deleted_at FROM public.saas_users WHERE id = 'u_free2'")
++        assert free2["status"] == "active" and free2["deleted_at"] is None
++        after_rows = await protected_rows(pool)
++        print("\n[혼합 일괄요청 u_cross+u_free2] blocked:", real["error"])
++        show("보호대상 before", before_rows)
++        show("보호대상 after ", after_rows)
++        assert before_rows == after_rows
 +
 +
-+def test_deploy_job_consults_successor_before_declaring_bluegreen_failed():
-+    body = _function("deploy_job")
-+    deploy_call = body.index('bash "$worktree_dir/deploy.sh" bluegreen')
-+    since = body.index("_aads_deploy_since=$(( $(date +%s) - 5 ))")
-+    follow = body.index("follow_autoheal_successor \"$job_id\" \"$current_sha\"")
-+    failed = body.index("aads-server:bluegreen_failed")
-+    assert since < deploy_call < follow < failed
-+    # set -e 환경에서 rc=1 이 스크립트를 죽이지 않도록 조건문 안에서 호출해야 한다.
-+    assert "elif _aads_follow_out=$(follow_autoheal_successor" in body
++@pytest.mark.asyncio
++async def test_decrypt_failure_fails_closed(vault_key):
++    async with environment(vault_key) as (pool, ex):
++        async with pool.acquire() as conn:
++            await conn.execute(
++                "INSERT INTO public.e2e_credentials(service, label, login_url, username_enc, password_enc)"
++                " VALUES ('aads-dashboard', 'corrupt', $1, 'not-a-fernet-token', 'x')", INTERNAL)
++        dry, real, before = await both(
++            ex, pool, "UPDATE public.saas_users SET deleted_at = NOW() WHERE id = 'u_free'")
++        assert dry["blocked"] is True and real["blocked"] is True
++        assert "복호화 실패" in real["error"] and "not-a-fernet-token" not in str(real)
++        assert await dump(pool) == before
++        # 외부 origin 의 깨진 행은 판정에 쓰지 않으므로 막지 않는다.
++        async with pool.acquire() as conn:
++            await conn.execute("UPDATE public.e2e_credentials SET login_url = $1"
++                               " WHERE label = 'corrupt'", EXTERNAL)
++        res = await ex._db_safe_write(
++            {"sql": "UPDATE public.saas_users SET deleted_at = NOW() WHERE id = 'u_free'"})
++        assert res["success"] is True, res
 +
 +
-+# ── 배포 락 갱신 (검수 확정 결함: 락 TTL 600s < 추적 상한 2700s) ──────────────────
++@pytest.mark.asyncio
++async def test_credential_deactivation_releases_protection(vault_key):
++    async with environment(vault_key) as (pool, ex):
++        async with pool.acquire() as conn:
++            await conn.execute("UPDATE public.agent_vault_credentials SET is_active = false"
++                               " WHERE origin = $1", INTERNAL)
++        res = await ex._db_safe_write(
++            {"sql": "UPDATE public.saas_users SET deleted_at = NOW() WHERE id = 'u_cross'"})
++        assert res["success"] is True, res
 +
 +
-+def _renew_calls(work: Path) -> list[str]:
-+    path = work / "renew.log"
-+    return path.read_text().splitlines() if path.exists() else []
++P1B_SQL = [
++    "UPDATE public.saas_users SET deleted_at = NOW() WHERE id = 'u_free'; COMMIT; BEGIN",
++    "UPDATE public.saas_users SET deleted_at = NOW() WHERE id = 'u_cross'; COMMIT; BEGIN",
++    "UPDATE misc_notes SET body = 'x' WHERE id = 1; COMMIT",
++    "UPDATE public.saas_users SET status = 'deleted' WHERE id = 'u_e2e';"
++    " DO $$BEGIN PERFORM 1; END$$",
++]
 +
 +
-+def test_lock_is_renewed_on_every_poll_with_job_id_as_owner(fn_file, tmp_path):
-+    rows = [
-+        "5291|running|target_slot_drain|3",
-+        "5292|running|target_slot_drain|3",
-+        "5293|running|build_candidate_image|2",
-+        "5293|success_partial|completed|0",
-+    ]
-+    rc, _, slept = _run(fn_file, tmp_path, rows, max_wait="2700")
-+    assert rc == 0
-+    calls = _renew_calls(tmp_path)
-+    # 터미널 행을 본 마지막 poll 에서는 갱신하지 않는다 — 대기한 poll 수와 같다.
-+    assert len(calls) == slept // 30 == 3
-+    assert all(c == "RENEW AADS runner-x" for c in calls)
++@pytest.mark.asyncio
++async def test_p1b_multi_statement_rejected_with_zero_changes(vault_key):
++    async with environment(vault_key) as (pool, ex):
++        # 대조군: 가드 없이 asyncpg 로 보내면 COMMIT 이 트랜잭션을 깨고 변경이 남는다.
++        async with pool.acquire() as conn:
++            tr = conn.transaction()
++            await tr.start()
++            await conn.execute(
++                "UPDATE public.saas_users SET deleted_at = NOW() WHERE id = 'u_ctrl'; COMMIT; BEGIN")
++            await tr.rollback()
++            leaked = await conn.fetchval(
++                "SELECT deleted_at IS NOT NULL FROM public.saas_users WHERE id = 'u_ctrl'")
++        print("\n[P1-B 대조군] 가드 없는 asyncpg simple query + 외부 ROLLBACK 후 u_ctrl 삭제 잔존:", leaked)
++        assert leaked is True
++
++        # 2차 방어선: prepare 는 서버가 다중 문장을 거부한다.
++        from app.services.tool_executor import _execute_single_statement
++        async with pool.acquire() as conn:
++            with pytest.raises(asyncpg.PostgresSyntaxError):
++                await _execute_single_statement(conn, P1B_SQL[0], [])
++
++        print("[P1-B 회귀] 실행 전후 행 수 대조")
++        print("   mode    | sql# | alive_before | alive_after | notes_body_before→after | blocked")
++        for idx, sql in enumerate(P1B_SQL):
++            for dry_run in (True, False):
++                before = await dump(pool)
++                async with pool.acquire() as conn:
++                    alive_before = await conn.fetchval(
++                        "SELECT count(*) FROM public.saas_users WHERE deleted_at IS NULL"
++                        " AND status = 'active'")
++                with patch("app.core.db_pool.get_pool",
++                           side_effect=AssertionError("P1-B 는 연결 전에 거부해야 한다")):
++                    res = await ex._db_safe_write({"sql": sql, "dry_run": dry_run})
++                async with pool.acquire() as conn:
++                    alive_after = await conn.fetchval(
++                        "SELECT count(*) FROM public.saas_users WHERE deleted_at IS NULL"
++                        " AND status = 'active'")
++                after = await dump(pool)
++                print(f"   {'dry_run' if dry_run else 'execute':7} | {idx}    | {alive_before:12} |"
++                      f" {alive_after:11} | {before['notes'][0][1]}→{after['notes'][0][1]}"
++                      f"                     | {res.get('blocked')}")
++                assert res["blocked"] is True and "error" in res, res
++                assert alive_before == alive_after
++                assert before == after
+diff --git a/tests/unit/test_db_safe_write.py b/tests/unit/test_db_safe_write.py
+index fdc31af6..d060213b 100644
+--- a/tests/unit/test_db_safe_write.py
++++ b/tests/unit/test_db_safe_write.py
+@@ -40,6 +40,23 @@ class _FakeConn:
+         self.execute_calls.append((query, args))
+         return self._execute_result
+ 
++    async def prepare(self, query):
++        # db_safe_write 는 다중 문장 차단을 위해 확장 프로토콜(prepare)로 실행한다.
++        return _FakeStatement(self, query)
 +
 +
-+def test_renewal_outlasts_lock_ttl(fn_file, tmp_path):
-+    # 락 TTL 600s 를 넘겨 추적해도(1,080s 사슬) 갱신이 끊기지 않는다.
-+    rows = ["5291|running|target_slot_drain|3"] * 40 + ["5293|success|completed|0"]
-+    rc, _, slept = _run(fn_file, tmp_path, rows, max_wait="2700")
-+    assert rc == 0
-+    assert slept == 40 * 30 > 600
-+    assert len(_renew_calls(tmp_path)) == 40
++class _FakeStatement:
++    def __init__(self, conn, query):
++        self._conn = conn
++        self._query = query
++
++    async def fetch(self, *args):
++        self._conn.execute_calls.append((self._query, args))
++        return []
++
++    def get_statusmsg(self):
++        return self._conn._execute_result
++
+ 
+ class _FakeAcquire:
+     def __init__(self, conn):
+@@ -123,3 +140,72 @@ async def test_db_safe_write_execute_returns_counts():
+     assert result["pre_count"] == 10
+     assert result["post_count"] == 10
+     assert len(conn.execute_calls) == 1
 +
 +
-+@pytest.mark.parametrize("reason", ["not_owner", "expired_or_released", "redis_error"])
-+def test_renewal_refused_stops_following_fail_closed(fn_file, tmp_path, reason):
-+    rows = ["5291|running|target_slot_drain|3"]
-+    rc, summary, slept = _run(fn_file, tmp_path, rows, max_wait="2700", renew=f"lost:{reason}")
-+    assert rc == 1
-+    assert f"lock_lost run=#5291 reason={reason}" in summary
-+    assert slept == 0, "락을 잃으면 더 기다리지 않는다"
-+    assert len(_renew_calls(tmp_path)) == 1
++@pytest.mark.asyncio
++@pytest.mark.parametrize("dry_run", [False, True])
++async def test_db_safe_write_rejects_multi_statement_before_connecting(dry_run):
++    # P1-B: 다중 문장·트랜잭션 제어는 DB 연결 전에 거부한다(실행·dry_run 동일).
++    def _no_pool():
++        raise AssertionError("pool must not be acquired")
++
++    with patch("app.core.db_pool.get_pool", side_effect=_no_pool):
++        result = await ToolExecutor()._db_safe_write({
++            "sql": "UPDATE public.saas_users SET deleted_at=NOW() WHERE id='x'; COMMIT; BEGIN",
++            "dry_run": dry_run,
++        })
++    assert result["blocked"] is True
++    assert result["dry_run"] is dry_run
 +
 +
-+def test_chain_already_succeeded_wins_over_lock_state(fn_file, tmp_path):
-+    # 사슬이 끝났다면 갱신 거부와 무관하게 결과를 따른다(갱신은 터미널 판정 뒤에 있다).
-+    rc, summary, _ = _run(fn_file, tmp_path, ["5293|success|completed|0"], renew="lost:not_owner")
-+    assert rc == 0
-+    assert "success run=#5293" in summary
-+    assert _renew_calls(tmp_path) == []
++def _class_db_safe_write_defs():
++    import ast
++    import inspect
++
++    from app.services import tool_executor as te
++
++    tree = ast.parse(inspect.getsource(te))
++    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ToolExecutor")
++    return [n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "_db_safe_write"]
 +
 +
-+def test_renew_api_unreachable_tolerates_short_blip_then_recovers(fn_file, tmp_path):
-+    rows = ["5291|running|target_slot_drain|3"] * 4 + ["5293|success|completed|0"]
-+    rc, summary, _ = _run(fn_file, tmp_path, rows, renew="down_first:2")
-+    assert rc == 0
-+    assert "success run=#5293" in summary
++def test_db_safe_write_effective_definition_is_last_and_guarded():
++    # 클래스 본문의 마지막 정의가 효력을 갖는다. 앞 정의는 보존용(도달 불가)으로 남는다.
++    import inspect
++
++    defs = _class_db_safe_write_defs()
++    assert len(defs) >= 2, "앞 정의(보존용)가 삭제됨"
++    last = defs[-1]
++    assert ToolExecutor._db_safe_write.__code__.co_firstlineno == last.lineno
++
++    body = inspect.getsource(ToolExecutor._db_safe_write)
++    assert "validate_single_write" in body
++    assert "references_login_tables" in body
++    assert "_db_safe_write_vault_guarded" in body
++    for earlier in defs[:-1]:
++        assert earlier.lineno != last.lineno
 +
 +
-+def test_renew_api_unreachable_beyond_limit_is_fail_closed(fn_file, tmp_path):
-+    rows = ["5291|running|target_slot_drain|3"]
-+    rc, summary, slept = _run(fn_file, tmp_path, rows, max_wait="2700", renew="down")
-+    assert rc == 1
-+    assert "lock_renew_unreachable" in summary and "fails=3" in summary
-+    assert slept == 2 * 30
-+    assert len(_renew_calls(tmp_path)) == 3
++def test_db_safe_write_preserved_symbols_still_defined():
++    from app.services import tool_executor as te
++
++    assert issubclass(te._DryRunRollback, Exception)
++    assert issubclass(te._MaxAffectedExceeded, Exception)
++    assert "DROP" in ToolExecutor._DB_SAFE_BLOCKED_KEYWORDS
 +
 +
-+def test_follow_start_marks_holder_for_waiters(fn_file, tmp_path):
-+    _run(fn_file, tmp_path, ["5293|success|completed|0"])
-+    db = (tmp_path / "db.log").read_text()
-+    assert "[배포추적]" in db and "review_feedback" in db
++@pytest.mark.asyncio
++@pytest.mark.parametrize("dry_run", [False, True])
++async def test_dispatch_db_safe_write_binds_guarded_implementation(dry_run):
++    # 도구 등록(_dispatch 맵)의 db_safe_write 가 가드 구현을 탄다:
++    # 다중 문장 SQL 은 get_pool() 호출 전에 거부되어야 한다.
++    def _no_pool():
++        raise AssertionError("pool must not be acquired")
 +
++    with patch("app.core.db_pool.get_pool", side_effect=_no_pool):
++        result = await ToolExecutor()._dispatch("db_safe_write", {
++            "sql": "DELETE FROM public.tenants WHERE id='x'; DELETE FROM public.saas_users",
++            "dry_run": dry_run,
++        })
++    assert result["blocked"] is True
++    assert result["dry_run"] is dry_run
+diff --git a/tests/unit/test_vault_cleanup_guard.py b/tests/unit/test_vault_cleanup_guard.py
+new file mode 100644
+index 00000000..f4f24b6f
+--- /dev/null
++++ b/tests/unit/test_vault_cleanup_guard.py
+@@ -0,0 +1,380 @@
++"""Vault 참조 로그인 보호(P1-A) + db_safe_write 단일 문장 선차단(P1-B) 단위 테스트.
 +
-+def test_time_values_relation_is_documented_and_ordered():
-+    def default(name: str) -> int:
-+        line = next(ln for ln in SCRIPT.splitlines() if ln.startswith(f"{name}="))
-+        return int(line.split(":-")[1].split("}")[0])
-+
-+    follow = default("AADS_AUTOHEAL_FOLLOW_MAX_SEC")
-+    wait = default("DEPLOY_LOCK_MAX_WAIT_SEC")
-+    assert wait < follow
-+    body = _function("follow_autoheal_successor")
-+    assert "_renew_deploy_lock" in body
-+    assert "deploy_lock:" not in body
-+    assert "락 TTL 600s" in SCRIPT and "DEPLOY_LOCK_MAX_WAIT_SEC 900s" in SCRIPT
-+    assert "AADS_AUTOHEAL_FOLLOW_MAX_SEC 2700s" in SCRIPT
-+    assert "/ops/locks/deploy/renew?" in _function("_renew_deploy_lock")
-+
-+
-+def test_deploy_job_passes_project_to_follow_for_lock_renewal():
-+    body = _function("deploy_job")
-+    call = body.index('follow_autoheal_successor "$job_id" "$current_sha"')
-+    assert '"$main_workdir" "$project")' in body[call : call + 200]
-+
-+
-+def _waiter_file(tmp_path_factory_dir: Path) -> Path:
-+    cfg = "\n".join(
-+        line for line in SCRIPT.splitlines()
-+        if line.startswith(("DEPLOY_LOCK_", "AUTOHEAL_FOLLOW_TAG="))
-+    )
-+    harness = r"""
-+set -eo pipefail
-+AADS_API_URL="http://fake-api"
-+log() { echo "LOG $*" >> "$WORK/log.txt"; }
-+db_update() { printf '%s\n---\n' "$1" >> "$WORK/db.log"; }
-+record_runner_event() { echo "EVENT $*" >> "$WORK/events.log"; }
-+post_to_chat() { :; }
-+_release_deploy_lock() { :; }
-+_notify_ai() { :; }
-+promote_next_queued() { :; }
-+sleep() { :; }
-+db_exec() { echo "$FAKE_FOLLOWING"; }
-+curl() { echo '{"acquired":false,"holder":"runner-holder","wait_seconds":300}'; }
++DB 없이 판정 로직만 본다. 실제 PostgreSQL 동작은
++tests/integration/test_vault_cleanup_guard_postgres.py 가 검증한다.
 +"""
-+    path = tmp_path_factory_dir / "waiter.sh"
-+    path.write_text(
-+        harness + cfg + "\n" + _function("_deploy_holder_follow_tag") + "\n"
-+        + _function("acquire_deploy_lock_with_requeue"),
-+        encoding="utf-8",
-+    )
-+    return path
++from __future__ import annotations
++
++from unittest.mock import patch
++
++import pytest
++
++from app.services.db_write_sql_guard import SqlGuardError, validate_single_write
++from app.services.tool_executor import ToolExecutor
++from app.services.vault_cleanup_guard import (
++    LoginSnapshot,
++    VaultGuardUnavailable,
++    VaultLoginProtected,
++    assert_login_preserved,
++    is_internal_origin,
++    normalize_email,
++    protected_login_snapshot,
++    references_login_tables,
++)
++
++# ── P1-B: 단일 문장 렉서 ─────────────────────────────────────────────────────
 +
 +
-+@pytest.mark.parametrize("following,expect", [("1", True), ("0", False)])
-+def test_waiter_requeue_message_shows_holder_following_successor(tmp_path, following, expect):
-+    if shutil.which("bash") is None:
-+        pytest.skip("bash 미설치 환경")
-+    fn = _waiter_file(tmp_path)
-+    work = tmp_path / "w"
-+    work.mkdir()
-+    subprocess.run(
-+        ["bash", "-c", f'source "{fn}"; acquire_deploy_lock_with_requeue job-w AADS sess || true'],
-+        env={"PATH": "/usr/bin:/bin", "WORK": str(work), "FAKE_FOLLOWING": following,
-+             "DEPLOY_LOCK_MAX_WAIT_SEC": "200"},
-+        capture_output=True, text=True, timeout=30,
++@pytest.mark.parametrize("sql", [
++    "UPDATE public.saas_users SET deleted_at=NOW() WHERE id='x'; COMMIT; BEGIN",
++    "UPDATE t SET a=1; COMMIT",
++    "UPDATE t SET a=1;COMMIT;",
++    "UPDATE t SET a=1; ROLLBACK",
++    "UPDATE t SET a=1; SAVEPOINT s",
++    "UPDATE t SET a=1; RELEASE SAVEPOINT s",
++    "UPDATE t SET a=1; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
++    "UPDATE t SET a=1; DO $$BEGIN PERFORM 1; END$$",
++    "UPDATE t SET a=1; CALL p()",
++    "UPDATE t SET a=1; END",
++    "UPDATE t SET a='x'; DELETE FROM t",
++    "UPDATE t SET a=$$;$$; DELETE FROM t",
++    "UPDATE t SET a=1 /* c */; COMMIT",
++    "UPDATE t SET a=1 -- c\n; COMMIT",
++    "UPDATE t SET a=E'\\''; COMMIT; --'",
++])
++def test_multi_statement_rejected(sql):
++    with pytest.raises(SqlGuardError):
++        validate_single_write(sql)
++
++
++@pytest.mark.parametrize("sql", [
++    "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT a", "RELEASE a", "SET TRANSACTION READ WRITE",
++    "START TRANSACTION", "DO $$BEGIN END$$", "CALL p()", "SELECT 1", "WITH x AS (SELECT 1) DELETE FROM t",
++])
++def test_non_write_statement_rejected(sql):
++    with pytest.raises(SqlGuardError):
++        validate_single_write(sql)
++
++
++@pytest.mark.parametrize("sql", [
++    "UPDATE t SET a='x;y' WHERE b=1",
++    "UPDATE t SET a='it''s; ok'",
++    'UPDATE "we;ird" SET a=1',
++    "UPDATE t SET a=$$ ; COMMIT; $$",
++    "UPDATE t SET a=$tag$ ; $$ ; $tag$",
++    "UPDATE t SET a=E'\\'; still string'",
++    "UPDATE t SET a=1 /* ; COMMIT; /* nested ; */ ; */",
++    "UPDATE t SET a=1 -- ; COMMIT",
++    "UPDATE t SET a=$1 WHERE b=$2;",
++    "UPDATE t SET a=1;  -- trailing\n",
++    "INSERT INTO t(a) VALUES ('BEGIN; COMMIT')",
++    "DELETE FROM t WHERE a = 'x'",
++])
++def test_single_statement_accepted(sql):
++    info = validate_single_write(sql)
++    assert info.keyword in {"insert", "update", "delete"}
++
++
++@pytest.mark.parametrize("sql", [
++    "UPDATE t SET a='x", "UPDATE t SET a=$$x", "UPDATE t SET a=1 /* x", 'UPDATE "t SET a=1',
++    "UPDATE U&\"saas\\0075sers\" SET status='deleted'", "UPDATE t SET a=U&'\\0041'",
++])
++def test_ambiguous_sql_fails_closed(sql):
++    with pytest.raises(SqlGuardError):
++        validate_single_write(sql)
++
++
++def test_protected_table_detection_includes_quoted_and_qualified():
++    for sql in (
++        "UPDATE public.saas_users AS u SET deleted_at=NOW()",
++        'UPDATE "public"."SAAS_USERS" SET status=\'deleted\'',
++        "DELETE FROM tenant_memberships m WHERE m.user_id='a'",
++        "UPDATE tenants t SET status='archived'",
++        "UPDATE goals SET note = format('%I', 'saas_users')",
++    ):
++        info = validate_single_write(sql)
++        assert references_login_tables(info.words + info.literals), sql
++    info = validate_single_write("UPDATE goals SET title='x'")
++    assert not references_login_tables(info.words + info.literals)
++
++
++# ── P1-A: origin / 이메일 ─────────────────────────────────────────────────────
++
++
++def test_internal_origin_only():
++    assert is_internal_origin("https://aads.newtalk.kr/login")
++    assert is_internal_origin("aads.newtalk.kr")
++    assert is_internal_origin("https://AADS.newtalk.kr./chat")
++    assert not is_internal_origin("https://aads.newtalk.kr.evil.example/login")
++    assert not is_internal_origin("https://aads.newtalk.kr@evil.example/login")
++    assert not is_internal_origin("https://go100.newtalk.kr/login")
++    assert not is_internal_origin("javascript://aads.newtalk.kr")
++    assert not is_internal_origin("")
++    assert not is_internal_origin(None)
++
++
++def test_internal_hosts_env(monkeypatch):
++    monkeypatch.setenv("AADS_VAULT_GUARD_INTERNAL_HOSTS", "obys.example.kr, other.example")
++    assert is_internal_origin("https://obys.example.kr/login")
++    assert is_internal_origin("https://other.example/")
++
++
++def test_normalize_email():
++    assert normalize_email("  User@Example.COM \n") == "user@example.com"
++
++
++class FakeConn:
++    """protected_login_snapshot 이 보내는 쿼리만 흉내 낸다."""
++
++    def __init__(self, credentials, users, memberships, tenants, fail_on=None):
++        self.credentials = credentials
++        self.users = users
++        self.memberships = memberships
++        self.tenants = tenants
++        self.fail_on = fail_on
++        self.sql_params: list = []
++
++    async def execute(self, sql, *args):
++        assert "LOCK TABLE" in sql
++
++    async def fetch(self, sql, *args):
++        self.sql_params.append(args)
++        if self.fail_on and self.fail_on in sql:
++            raise RuntimeError("boom")
++        if "UNION ALL" in sql:
++            return self.credentials
++        if "to_jsonb(u)" in sql:
++            return [{"id": u["id"], "row": u} for u in self.users if u["id"] in args[0]]
++        if "FROM public.saas_users" in sql:
++            return [{"id": u["id"], "email": u["email"]} for u in self.users]
++        if "FROM public.tenant_memberships" in sql:
++            return [{"user_id": m["user_id"], "tenant_id": m["tenant_id"], "row": m}
++                    for m in self.memberships if m["user_id"] in args[0]]
++        if "FROM public.tenants" in sql:
++            return [{"id": t["id"], "row": t} for t in self.tenants if t["id"] in args[0]]
++        raise AssertionError(sql)
++
++
++def _user(uid, email, tenant):
++    return {"id": uid, "email": email, "default_tenant_id": tenant, "status": "active",
++            "is_active": True, "deleted_at": None}
++
++
++@pytest.fixture
++def conn():
++    credentials = [
++        # 조직 T1 의 Vault 에 조직 T2 계정(cross)이 저장돼 있다 — tenant 는 판정에 쓰지 않는다.
++        {"login_origin": "https://aads.newtalk.kr/login", "service": None, "username_enc": "c-cross"},
++        {"login_origin": None, "service": "aads-dashboard", "username_enc": "c-e2e"},
++        {"login_origin": "https://external.example/login", "service": None, "username_enc": "c-ext"},
++    ]
++    users = [
++        _user("u-cross", "cross@b.example", "T2"),
++        _user("u-e2e", "E2E@A.example", "T1"),
++        _user("u-ext", "ext@a.example", "T1"),
++        _user("u-free", "free@a.example", "T1"),
++    ]
++    memberships = [
++        {"user_id": "u-cross", "tenant_id": "T2", "status": "active", "deleted_at": None},
++        {"user_id": "u-cross", "tenant_id": "T3", "status": "removed", "deleted_at": None},
++        {"user_id": "u-free", "tenant_id": "T1", "status": "active", "deleted_at": None},
++    ]
++    tenants = [{"id": t, "status": "active", "deleted_at": None} for t in ("T1", "T2", "T3")]
++    return FakeConn(credentials, users, memberships, tenants)
++
++
++PLAIN = {"c-cross": " Cross@B.example ", "c-e2e": "e2e@a.example", "c-ext": "ext@a.example"}
++
++
++@pytest.mark.asyncio
++async def test_snapshot_matches_by_email_and_internal_origin_not_vault_tenant(conn):
++    with patch("app.services.vault_cleanup_guard.decrypt_value", side_effect=PLAIN.__getitem__):
++        snap = await protected_login_snapshot(conn)
++    assert set(snap.users) == {"u-cross", "u-e2e"}           # 외부 origin(u-ext)·비참조(u-free) 제외
++    assert set(snap.memberships) == {("u-cross", "T2")}      # removed 멤버십은 보호 대상 아님
++    assert set(snap.tenants) == {"T1", "T2"}
++    assert snap.reference_count == 2
++    # 복호화한 평문은 SQL 파라미터로 나가지 않는다.
++    flat = repr(conn.sql_params).lower()
++    assert "@" not in flat
++
++
++@pytest.mark.asyncio
++async def test_decrypt_failure_fails_closed(conn):
++    with patch("app.services.vault_cleanup_guard.decrypt_value",
++               side_effect=ValueError("secret-cipher-text")):
++        with pytest.raises(VaultGuardUnavailable) as err:
++            await protected_login_snapshot(conn)
++    assert "secret-cipher-text" not in str(err.value)
++
++
++@pytest.mark.asyncio
++async def test_lookup_failure_fails_closed(conn):
++    conn.fail_on = "UNION ALL"
++    with pytest.raises(VaultGuardUnavailable):
++        await protected_login_snapshot(conn)
++
++
++@pytest.mark.asyncio
++async def test_external_decrypt_failure_is_not_needed(conn):
++    # 외부 origin 행은 복호화하지 않는다 — 깨진 외부 자격증명이 보호 판정을 막지 않는다.
++    plain = dict(PLAIN)
++    del plain["c-ext"]
++    with patch("app.services.vault_cleanup_guard.decrypt_value", side_effect=plain.__getitem__):
++        snap = await protected_login_snapshot(conn)
++    assert "u-ext" not in snap.users
++
++
++def _snap():
++    return LoginSnapshot(
++        users={"u1": {"email": "a@x", "status": "active", "is_active": True,
++                      "deleted_at": None, "default_tenant_id": "T1"}},
++        memberships={("u1", "T1"): {"status": "active", "deleted_at": None}},
++        tenants={"T1": {"status": "active", "deleted_at": None}},
 +    )
-+    db = (work / "db.log").read_text()
-+    events = (work / "events.log").read_text()
-+    assert ("holder=runner-holder successor-추적중" in db) is expect
-+    assert ('"holder_following_successor":true' in events) is expect
++
++
++@pytest.mark.parametrize("mutate", [
++    lambda s: s.users["u1"].update(deleted_at="2026-09-30"),
++    lambda s: s.users["u1"].update(status="deleted"),
++    lambda s: s.users["u1"].update(status="suspended"),
++    lambda s: s.users["u1"].update(is_active=False),
++    lambda s: s.users["u1"].update(email="b@x"),
++    lambda s: s.users["u1"].update(default_tenant_id=None),
++    lambda s: s.users.pop("u1"),
++    lambda s: s.memberships[("u1", "T1")].update(status="removed"),
++    lambda s: s.memberships[("u1", "T1")].update(deleted_at="2026-09-30"),
++    lambda s: s.memberships.pop(("u1", "T1")),
++    lambda s: s.tenants["T1"].update(status="archived"),
++    lambda s: s.tenants["T1"].update(deleted_at="2026-09-30"),
++    lambda s: s.tenants.pop("T1"),
++])
++def test_deactivation_blocked(mutate):
++    before, after = _snap(), _snap()
++    mutate(after)
++    with pytest.raises(VaultLoginProtected):
++        assert_login_preserved(before, after)
++
++
++def test_unrelated_change_allowed():
++    before, after = _snap(), _snap()
++    after.users["u1"]["default_tenant_id"] = "T9"
++    assert_login_preserved(before, after)
++
++
++# ── db_safe_write 경로 ───────────────────────────────────────────────────────
++
++
++class _Txn:
++    def __init__(self, log):
++        self.log = log
++
++    async def __aenter__(self):
++        self.log.append("begin")
++
++    async def __aexit__(self, exc_type, *args):
++        self.log.append("rollback" if exc_type else "commit")
++        return False
++
++
++class _Stmt:
++    def __init__(self, log):
++        self.log = log
++
++    async def fetch(self, *args):
++        self.log.append("write")
++        return []
++
++    def get_statusmsg(self):
++        return "UPDATE 1"
++
++
++class _GuardConn:
++    def __init__(self):
++        self.log: list[str] = []
++
++    def transaction(self):
++        return _Txn(self.log)
++
++    async def execute(self, sql, *args):
++        self.log.append("set")
++
++    async def prepare(self, sql):
++        return _Stmt(self.log)
++
++
++class _Pool:
++    def __init__(self, conn):
++        self.conn = conn
++
++    def acquire(self):
++        conn = self.conn
++
++        class _A:
++            async def __aenter__(self):
++                return conn
++
++            async def __aexit__(self, *args):
++                return False
++        return _A()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("dry_run", [False, True])
++async def test_guarded_violation_rolls_back_whole_transaction(dry_run):
++    conn = _GuardConn()
++    before, after = _snap(), _snap()
++    after.users["u1"]["deleted_at"] = "now"
++
++    async def _before(c):
++        return before
++
++    async def _after(c, b):
++        return after
++
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)), \
++            patch("app.services.vault_cleanup_guard.protected_login_snapshot", _before), \
++            patch("app.services.vault_cleanup_guard.reload_snapshot", _after):
++        result = await ToolExecutor()._db_safe_write({
++            "sql": "UPDATE public.saas_users u SET deleted_at=NOW() WHERE u.id IN ('u1','u2')",
++            "dry_run": dry_run,
++        })
++    assert result["blocked"] is True and result["success"] is False
++    assert result["dry_run"] is dry_run
++    assert conn.log[-1] == "rollback"
++    assert "u1" in result["error"]
++
++
++@pytest.mark.asyncio
++async def test_guarded_dry_run_rolls_back_even_when_allowed():
++    conn = _GuardConn()
++
++    async def _snap_fn(c, *a):
++        return _snap()
++
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)), \
++            patch("app.services.vault_cleanup_guard.protected_login_snapshot", _snap_fn), \
++            patch("app.services.vault_cleanup_guard.reload_snapshot", _snap_fn):
++        dry = await ToolExecutor()._db_safe_write({
++            "sql": "UPDATE saas_users SET name='n' WHERE id='u1'", "dry_run": True})
++        real = await ToolExecutor()._db_safe_write({
++            "sql": "UPDATE saas_users SET name='n' WHERE id='u1'"})
++    assert dry["success"] is True and dry["dry_run"] is True
++    assert real["success"] is True and real["dry_run"] is False
++    assert dry["vault_protected_accounts"] == real["vault_protected_accounts"] == 1
++    assert conn.log == ["begin", "set", "write", "rollback", "begin", "set", "write", "commit"]
++
++
++@pytest.mark.asyncio
++async def test_guard_unavailable_blocks():
++    conn = _GuardConn()
++
++    async def _fail(c):
++        raise VaultGuardUnavailable("Vault 로그인 참조 복호화 실패(InvalidToken) — 쓰기 차단")
++
++    with patch("app.core.db_pool.get_pool", return_value=_Pool(conn)), \
++            patch("app.services.vault_cleanup_guard.protected_login_snapshot", _fail):
++        result = await ToolExecutor()._db_safe_write({
++            "sql": "UPDATE tenants SET status='archived' WHERE id=$1::uuid", "params": ["x"]})
++    assert result["blocked"] is True
++    assert "write" not in conn.log
