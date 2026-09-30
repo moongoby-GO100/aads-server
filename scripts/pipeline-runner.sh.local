@@ -1052,6 +1052,91 @@ attempt_stale_base_rebase() {
     return 0
 }
 
+# ── 단일 커밋의 patch-id (AADS-RUNNER-APPROVAL-PATCHID-INHERIT) ────────────
+# `git diff <sha>^ <sha> | git patch-id --stable` 의 첫 필드를 stdout 으로 낸다.
+# 부모가 정확히 하나인 커밋만 계산한다 — 루트 커밋(<sha>^ 없음)·머지 커밋은
+# "내용이 같다"를 증명할 수 없으므로 빈 문자열을 낸다. 실패는 항상 빈 문자열이고
+# 반환값은 0 이다. 호출 측은 빈 값을 "재승인 필요" 로 읽어야 한다.
+commit_patch_id() {
+    local repo="$1" sha="$2" parents="" pid=""
+    [[ -n "$repo" && "$sha" =~ ^[0-9a-f]{40}$ ]] || return 0
+    git -C "$repo" cat-file -e "${sha}^{commit}" 2>/dev/null || return 0
+    parents=$(git -C "$repo" rev-list --parents -n 1 "$sha" 2>/dev/null | awk '{print NF-1}') || parents=""
+    [[ "$parents" == "1" ]] || return 0
+    pid=$(git -C "$repo" diff "${sha}^" "$sha" 2>/dev/null | git -C "$repo" patch-id --stable 2>/dev/null | awk 'NR==1{print $1}') || pid=""
+    [[ "$pid" =~ ^[0-9a-f]{40}$ ]] || return 0
+    printf '%s' "$pid"
+    return 0
+}
+
+# ── 자동 rebase 결과가 이전 CEO 승인을 상속할 수 있는가 ─────────────────
+# 2026-09-30 runner-e3b882c2 는 patch-id 가 같은 SHA 4개(cd3e96f1→cddf31b8→
+# 488e5764→136b739e)로 승인을 세 번 받다가 MAX_RUNTIME 7200s 에 zombie_killed 됐다.
+# SHA 만 바뀌고 내용은 한 줄도 바뀌지 않았다.
+#
+# 상속은 **증명 가능한 조건** 에서만 한다. 하나라도 어긋나면 재승인이다.
+#   - 마지막 approval_decision 이 approved 이고, 그것이 마지막 approval_requested
+#     보다 뒤에 있다. 승인 SHA 는 그 approval_requested.metadata.commit_hash 다
+#     (approval_decision metadata 에는 commit_hash 가 없다 — app/api/pipeline_runner.py).
+#   - 승인 SHA 와 rebase SHA 가 모두 단일 커밋 변경이다(<sha>^ 가 origin/main 조상).
+#     여러 커밋이면 마지막 커밋의 patch-id 만으로는 전체 내용을 증명할 수 없다.
+#   - 두 patch-id 가 모두 계산되고 서로 같다.
+#   - 이 잡의 누적 상속 횟수가 AADS_APPROVAL_INHERIT_MAX 미만이다.
+#
+# stdout: "inherit <사유> <승인SHA> <patch-id>" 또는 "reapprove <사유> <승인SHA|-> <patch-id|->"
+inherit_approval_decision() {
+    local job_id="$1" repo="$2" new_sha="$3"
+    local max="${AADS_APPROVAL_INHERIT_MAX:-5}" approved_sha="" count="" old_pid="" new_pid="" c=""
+    [[ "$max" =~ ^[0-9]+$ ]] || max=5
+
+    approved_sha=$(db_exec "WITH req AS (
+                              SELECT id, COALESCE(metadata->>'commit_hash','') AS sha
+                              FROM pipeline_runner_events
+                              WHERE job_id='${job_id}' AND event_type='approval_requested'
+                              ORDER BY id DESC LIMIT 1),
+                            dec AS (
+                              SELECT id, status FROM pipeline_runner_events
+                              WHERE job_id='${job_id}' AND event_type='approval_decision'
+                              ORDER BY id DESC LIMIT 1)
+                            SELECT req.sha FROM req, dec
+                            WHERE dec.status='approved' AND dec.id > req.id;" 2>/dev/null | tr -d '[:space:]') || approved_sha=""
+    if [[ ! "$approved_sha" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "reapprove no_approved_sha - -"
+        return 0
+    fi
+
+    count=$(db_exec "SELECT COUNT(*) FROM pipeline_runner_events
+                     WHERE job_id='${job_id}' AND event_type='approval_inherited_same_patch_id';" 2>/dev/null | tr -d '[:space:]') || count=""
+    if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+        echo "reapprove inherit_count_unknown ${approved_sha} -"
+        return 0
+    fi
+    if (( count >= max )); then
+        echo "reapprove inherit_limit_exceeded(${count}/${max}) ${approved_sha} -"
+        return 0
+    fi
+
+    for c in "$approved_sha" "$new_sha"; do
+        if ! git -C "$repo" merge-base --is-ancestor "${c}^" origin/main 2>/dev/null; then
+            echo "reapprove not_single_commit ${approved_sha} -"
+            return 0
+        fi
+    done
+
+    old_pid=$(commit_patch_id "$repo" "$approved_sha")
+    new_pid=$(commit_patch_id "$repo" "$new_sha")
+    if [[ -z "$old_pid" || -z "$new_pid" ]]; then
+        echo "reapprove patch_id_unavailable ${approved_sha} -"
+        return 0
+    fi
+    if [[ "$old_pid" != "$new_pid" ]]; then
+        echo "reapprove patch_id_changed ${approved_sha} ${new_pid}"
+        return 0
+    fi
+    echo "inherit same_patch_id ${approved_sha} ${new_pid}"
+    return 0
+}
+
 # ── 지시서가 배포를 금지했는가 (AADS-RUNNER-DEPLOY-DIRECTIVE-GATE) ──────
 # 0 = 금지(배포하지 마라), 1 = 제약 없음.
 # 오탐(배포해도 되는데 건너뜀)은 사람이 별도 승인으로 배포하면 끝이지만,
@@ -4004,8 +4089,36 @@ deploy_job() {
         if rebased_sha=$(attempt_stale_base_rebase "$worktree_dir" "$current_sha" "$job_id"); then
             log "  PUSH_AUTO_REBASED job=$job_id ${current_sha} -> ${rebased_sha}"
             record_runner_event "$job_id" "push_stale_base_rebased" "info" "auto_rebase" "" "" "" "" "{\"from\":\"${current_sha}\",\"to\":\"${rebased_sha}\"}"
+            local inherit_verdict="" inherit_reason="" inherit_from="" inherit_pid=""
             if [[ "$project" == "AADS" ]]; then
-                # 승인된 SHA 와 달라졌으므로 새 diff 를 AI 재검수하고 CEO 재승인을 받는다.
+                read -r inherit_verdict inherit_reason inherit_from inherit_pid \
+                    <<< "$(inherit_approval_decision "$job_id" "$worktree_dir" "$rebased_sha")" || true
+                log "  APPROVAL_INHERIT_CHECK job=$job_id verdict=${inherit_verdict:-none} reason=${inherit_reason:-none} approved=${inherit_from:--} patch_id=${inherit_pid:--}"
+            fi
+            if [[ "$project" == "AADS" && "$inherit_verdict" == "inherit" ]]; then
+                # 내용(patch-id)이 승인된 SHA 와 같다 — 승인을 상속해 배포를 이어간다.
+                # review_verdict / review_request_id 는 승인 이력이므로 지우지 않는다.
+                db_update "UPDATE pipeline_jobs SET commit_hash='${rebased_sha}',
+                           review_feedback=COALESCE(review_feedback,'') || E'\n' || $(sql_escape "[승인상속] patch-id 동일(${inherit_pid}) — ${current_sha}→${rebased_sha}"),
+                           updated_at=NOW()
+                           WHERE job_id='${job_id}' AND status='deploying' AND commit_hash='${current_sha}';"
+                if [[ "$(db_exec "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]')" != "$rebased_sha" ]]; then
+                    _fail_job "$job_id" "$session_id" "deploy_rebase_inherit_persist_failed" "승인 상속 SHA 저장 실패"
+                    _release_deploy_lock "$project" "$job_id"
+                    return 1
+                fi
+                record_runner_event "$job_id" "approval_inherited_same_patch_id" "info" "approved" "" "" "" "" "{\"from\":\"${current_sha}\",\"to\":\"${rebased_sha}\",\"patch_id\":\"${inherit_pid}\",\"approved_sha\":\"${inherit_from}\"}"
+                current_sha="$rebased_sha"
+                expected_sha="$rebased_sha"
+                _pre_sha=$(git -C "$worktree_dir" rev-parse "${current_sha}^" 2>/dev/null || true)
+                push_state="fast_forward"
+            elif [[ "$project" == "AADS" ]]; then
+                record_runner_event "$job_id" "approval_inherit_skipped" "info" "auto_rebase" "" "" "" "" "{\"reason\":\"${inherit_reason:-unknown}\",\"from\":\"${current_sha}\",\"to\":\"${rebased_sha}\",\"approved_sha\":\"${inherit_from:--}\"}"
+                if [[ "$inherit_reason" == inherit_limit_exceeded* ]]; then
+                    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || $(sql_escape "[승인상속 중단] ${inherit_reason} — base 경합 반복, 사람 재승인 필요 (AADS_APPROVAL_INHERIT_MAX=${AADS_APPROVAL_INHERIT_MAX:-5})"),
+                               updated_at=NOW() WHERE job_id='${job_id}';"
+                fi
+                # 승인된 SHA 와 내용이 다르거나 증명할 수 없으므로 새 diff 를 AI 재검수하고 CEO 재승인을 받는다.
                 db_update "UPDATE pipeline_jobs SET status='running', phase='ai_review',
                            commit_hash='${rebased_sha}', review_verdict=NULL,
                            review_request_id=NULL, runner_pid=${BASHPID}, completed_at=NULL,
@@ -4024,10 +4137,11 @@ deploy_job() {
                 db_update "UPDATE pipeline_jobs SET runner_pid=${review_worker_pid}, updated_at=NOW()
                            WHERE job_id='${job_id}' AND status='running' AND commit_hash='${rebased_sha}';"
                 return 0
+            else
+                db_update "UPDATE pipeline_jobs SET commit_hash='${rebased_sha}', updated_at=NOW() WHERE job_id='${job_id}';"
+                current_sha="$rebased_sha"
+                push_state="fast_forward"
             fi
-            db_update "UPDATE pipeline_jobs SET commit_hash='${rebased_sha}', updated_at=NOW() WHERE job_id='${job_id}';"
-            current_sha="$rebased_sha"
-            push_state="fast_forward"
         else
             if [[ "$project" == "AADS" ]]; then
                 _fail_job "$job_id" "$session_id" "deploy_isolated_push_state" "승인 SHA push 사전판별 실패: stale_base; 자동 rebase 안전 조건 미충족" "deploy_isolated_push_state: stale_base"
