@@ -6,6 +6,7 @@ Developer(Claude Sonnet)와 다른 모델로 에코챔버 방지.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import json
@@ -758,7 +759,45 @@ def _truncate_diff_for_review(diff: str) -> tuple[str, bool]:
     return f"{stat_summary}\n\n{head}{marker}{tail}", True
 
 
-def _removed_preservation_symbols(diff: str) -> list[str]:
+@dataclass(frozen=True)
+class _RemovedSymbol:
+    symbol: str
+    path: Optional[str]
+    old_line: Optional[int]
+
+
+_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def _deleted_symbol_lines(file_diff: str) -> list[tuple[str, Optional[int]]]:
+    """(삭제된 선언 심볼, 그 줄의 pre-image 줄 번호). hunk 헤더가 없으면 줄 번호는 None."""
+    old_line: Optional[int] = None
+    found: list[tuple[str, Optional[int]]] = []
+    for line in file_diff.split("\n"):
+        hunk = _HUNK_HEADER_RE.match(line)
+        if hunk:
+            old_line = int(hunk.group(1))
+        elif line.startswith("-"):
+            found.extend((symbol, old_line) for symbol in _DELETED_SYMBOL_RE.findall(line))
+            if old_line is not None:
+                old_line += 1
+        elif line.startswith(("+", "\\")):
+            continue
+        elif old_line is not None:
+            old_line += 1
+    return found
+
+
+def _removed_preservation_symbols(
+    diff: str, project: Optional[str] = None, notes_out: Optional[dict] = None
+) -> list[str]:
+    """삭제 심볼 목록. project 를 주면 스코프 기반 면제(규칙 A/B/C)까지 적용한다."""
+    return _split_scope_exempt_symbols(
+        diff, _removed_preservation_symbol_records(diff), project, notes_out
+    )
+
+
+def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
     """Keep hard gates for removals, without calling private edits deletions.
 
     Match a declaration only when it occurs exactly once on each side of the
@@ -767,9 +806,10 @@ def _removed_preservation_symbols(diff: str) -> list[str]:
     still goes through the normal review. Renames, routes whose path is not in
     the symbol, and ambiguous duplicate names remain gated.
     """
-    removed: list[str] = []
+    removed: list[_RemovedSymbol] = []
     for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
-        deletions = _DELETED_SYMBOL_RE.findall(file_diff)
+        deleted_lines = _deleted_symbol_lines(file_diff)
+        deletions = [symbol for symbol, _ in deleted_lines]
         # Only additions may cancel a removed declaration.
         additions = _DELETED_SYMBOL_RE.findall(
             "\n".join(
@@ -787,7 +827,7 @@ def _removed_preservation_symbols(diff: str) -> list[str]:
                 surplus = count - deleted_counts[symbol]
                 if surplus > 0 and _TEST_FUNCTION_RE.fullmatch(symbol):
                     rename_pool[symbol] = surplus
-        for symbol in deletions:
+        for symbol, old_line in deleted_lines:
             # 같은 파일 diff 에서 같은 선언이 정확히 한 번 사라지고 한 번 다시
             # 생겼으면 그것은 삭제가 아니라 시그니처 재작성·들여쓰기 이동이다.
             # 종전에는 이 면제를 private 함수(_foo)로만 한정했고, 그래서 공개
@@ -815,7 +855,9 @@ def _removed_preservation_symbols(diff: str) -> list[str]:
                     rename_pool[pair] -= 1
                     preserved = True
             if not preserved:
-                removed.append(symbol)
+                removed.append(
+                    _RemovedSymbol(symbol, header.group(2) if header else None, old_line)
+                )
     return removed
 
 
@@ -838,6 +880,7 @@ _PRIVATE_EXEMPT_EXCLUDE_DIRS = (
     ".git", "node_modules", ".next", "__pycache__", ".venv", "venv", ".mypy_cache", ".ruff_cache",
 )
 _PRIVATE_FUNC_SYMBOL_RE = re.compile(r"(?:async[ \t]+def|def)[ \t]+(_[A-Za-z0-9_]*)")
+_PRIVATE_CLASS_SYMBOL_RE = re.compile(r"class[ \t]+(_[A-Za-z0-9_]*)")
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 # (job_id, 면제 심볼). job_id 가 다르면 쓰지 않는다 — 앞선 리뷰의 목록이 뒤 리뷰로 새지 않게.
 _PRESERVATION_EXEMPTIONS: ContextVar[Optional[tuple]] = ContextVar(
@@ -845,8 +888,9 @@ _PRESERVATION_EXEMPTIONS: ContextVar[Optional[tuple]] = ContextVar(
 )
 
 
-def _private_symbol_name(symbol: str) -> Optional[str]:
-    match = _PRIVATE_FUNC_SYMBOL_RE.fullmatch(symbol)
+def _private_symbol_name(symbol: str, kind: str = "function") -> Optional[str]:
+    pattern = _PRIVATE_CLASS_SYMBOL_RE if kind == "class" else _PRIVATE_FUNC_SYMBOL_RE
+    match = pattern.fullmatch(symbol)
     if not match:
         return None
     name = match.group(1)
@@ -892,8 +936,8 @@ def _find_symbol_reference_files(names: set[str], roots: list[str]) -> Optional[
     return found
 
 
-def _resolve_deleted_file_defining(path: str, name: str) -> Optional[str]:
-    """삭제 파일이 _REPO_ROOT 안의 실제 .py 이고 `def name` 이 거기 있으면 그 realpath, 아니면 None."""
+def _read_repo_python_file(path: str) -> Optional[tuple[str, str]]:
+    """(realpath, 본문). _REPO_ROOT 안의 실제 .py 가 아니면 None."""
     if not path.endswith(".py") or os.path.isabs(path):
         return None
     root = os.path.realpath(_REPO_ROOT)
@@ -902,10 +946,19 @@ def _resolve_deleted_file_defining(path: str, name: str) -> Optional[str]:
         return None
     try:
         with open(resolved, encoding="utf-8", errors="replace") as handle:
-            text = handle.read()
+            return resolved, handle.read()
     except OSError:
         return None
-    definition = re.compile(rf"^[ \t]*(?:async[ \t]+)?def[ \t]+{re.escape(name)}\b", re.MULTILINE)
+
+
+def _resolve_deleted_file_defining(path: str, name: str, kind: str = "function") -> Optional[str]:
+    """삭제 파일이 _REPO_ROOT 안의 실제 .py 이고 `def name`(class 면 `class name`)이 거기 있으면 그 realpath, 아니면 None."""
+    loaded = _read_repo_python_file(path)
+    if loaded is None:
+        return None
+    resolved, text = loaded
+    keyword = r"class" if kind == "class" else r"(?:async[ \t]+)?def"
+    definition = re.compile(rf"^[ \t]*{keyword}[ \t]+{re.escape(name)}\b", re.MULTILINE)
     return resolved if definition.search(text) else None
 
 
@@ -914,13 +967,17 @@ def _split_exempt_private_symbols(
     symbols: list[str],
     project: Optional[str] = None,
     notes_out: Optional[dict] = None,
+    kind: str = "function",
 ) -> tuple[list[str], list[str]]:
-    """(계속 차단할 심볼, 면제한 심볼). 조금이라도 불확실하면 면제하지 않는다."""
+    """(계속 차단할 심볼, 면제한 심볼). 조금이라도 불확실하면 면제하지 않는다.
+
+    kind="class" 는 밑줄 클래스를 같은 증거 규칙으로 판정한다(함수 심볼은 건드리지 않는다).
+    """
     if str(project or "").strip().upper() not in _PRIVATE_EXEMPT_PROJECTS:
         return symbols, []
     candidates: dict[str, str] = {}
     for symbol in symbols:
-        name = _private_symbol_name(symbol)
+        name = _private_symbol_name(symbol, kind)
         if name:
             candidates[symbol] = name
     if not candidates:
@@ -941,7 +998,7 @@ def _split_exempt_private_symbols(
                 continue
             if line.startswith("-"):
                 for symbol in _DELETED_SYMBOL_RE.findall(line):
-                    name = _private_symbol_name(symbol)
+                    name = _private_symbol_name(symbol, kind)
                     if name in deleted_in:
                         deleted_in[name].add(path)
             elif line.startswith("+"):
@@ -953,7 +1010,7 @@ def _split_exempt_private_symbols(
     for name in names:
         if len(deleted_in[name]) != 1 or not referenced_by_diff[name] <= deleted_in[name]:
             continue
-        resolved = _resolve_deleted_file_defining(next(iter(deleted_in[name])), name)
+        resolved = _resolve_deleted_file_defining(next(iter(deleted_in[name])), name, kind)
         if resolved is not None:
             deleted_file_real[name] = resolved
     if not deleted_file_real:
@@ -1017,6 +1074,232 @@ def _strip_patch_file_sections(diff: str) -> tuple[str, list[str], int]:
     return "".join(kept), ignored_paths, ignored_lines
 
 
+# 스코프 기반 면제(runner 5cfd3fed 후속, 실사례 525fce0d).
+# 삭제 심볼 판정은 이름만 보므로 (A) 같은 클래스에 동명 메서드가 둘 있던 死코드의 앞 정의,
+# (B) 파일 밖 참조가 없는 private 클래스, (C) 그 클래스 본문 멤버(`__init__` 등)가 사라진 것도
+# 순삭제로 잡혔다. 세 경우 모두 "이름"이 아니라 "스코프 경로"로만 판정한다.
+#
+# 근거는 tree 의 pre-image 파일에 diff 를 **엄격하게** 적용해 얻는다: hunk 의 문맥·삭제 줄이
+# tree 와 한 줄이라도 다르거나 줄 수가 헤더와 안 맞으면 적용 실패 = 면제하지 않는다.
+# 조건문 안(if/try) 정의는 스코프 경로만으로 살아남는지 알 수 없으므로 표에 넣지 않는다.
+_UNSUPPORTED_DIFF_HEADERS = (
+    "new file mode", "deleted file mode", "rename ", "copy ", "Binary files", "GIT binary patch",
+)
+
+
+@dataclass(frozen=True)
+class _DefinitionSite:
+    kind: str  # "def" | "async def" | "class"
+    name: str
+    scope: tuple  # ((("class" | "def"), 이름), ...) 바깥쪽부터
+
+
+@dataclass(frozen=True)
+class _ScopeContext:
+    pre_sites: dict  # pre-image 줄 번호 -> _DefinitionSite
+    post_keys: frozenset  # post-image 의 (scope, kind, name)
+    deleted_lines: frozenset  # diff 가 삭제한 pre-image 줄 번호(tree 와 일치 확인됨)
+
+
+def _collect_definition_sites(tree: ast.Module) -> dict[int, _DefinitionSite]:
+    sites: dict[int, _DefinitionSite] = {}
+
+    def walk(body: list, scope: tuple) -> None:
+        for node in body:
+            if isinstance(node, ast.ClassDef):
+                kind = "class"
+            elif isinstance(node, ast.AsyncFunctionDef):
+                kind = "async def"
+            elif isinstance(node, ast.FunctionDef):
+                kind = "def"
+            else:
+                continue
+            sites[node.lineno] = _DefinitionSite(kind, node.name, scope)
+            walk(node.body, scope + (("class" if kind == "class" else "def", node.name),))
+
+    walk(tree.body, ())
+    return sites
+
+
+def _apply_file_diff_to_text(
+    pre_text: str, file_diff: str, path: str
+) -> Optional[tuple[str, frozenset]]:
+    """pre_text 에 한 파일의 diff 를 적용한 (post 본문, 삭제된 pre 줄 번호). 어긋나면 None."""
+    lines = file_diff.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    idx = 0
+    header: list[str] = []
+    while idx < len(lines) and not _HUNK_HEADER_RE.match(lines[idx]):
+        header.append(lines[idx])
+        idx += 1
+    if any(line.startswith(_UNSUPPORTED_DIFF_HEADERS) for line in header):
+        return None
+    if f"--- a/{path}" not in header or f"+++ b/{path}" not in header:
+        return None
+
+    pre_lines = pre_text.split("\n")
+    if pre_lines and pre_lines[-1] == "":
+        pre_lines.pop()
+    out: list[str] = []
+    deleted: set[int] = set()
+    pos = 0
+    hunks = 0
+    while idx < len(lines):
+        hunk = _HUNK_HEADER_RE.match(lines[idx])
+        if not hunk:
+            return None
+        idx += 1
+        hunks += 1
+        old_start = int(hunk.group(1))
+        old_count = 1 if hunk.group(2) is None else int(hunk.group(2))
+        new_count = 1 if hunk.group(4) is None else int(hunk.group(4))
+        start = old_start - 1 if old_count > 0 else old_start
+        if start < pos or start > len(pre_lines):
+            return None
+        out.extend(pre_lines[pos:start])
+        pos = start
+        seen_old = seen_new = 0
+        while idx < len(lines) and not _HUNK_HEADER_RE.match(lines[idx]):
+            line = lines[idx]
+            idx += 1
+            if line.startswith("\\"):
+                continue
+            if seen_old >= old_count and seen_new >= new_count:
+                if line == "":
+                    continue
+                return None
+            tag, content = (line[:1] or " "), line[1:]
+            if tag in (" ", "-"):
+                if seen_old >= old_count or pos >= len(pre_lines) or pre_lines[pos] != content:
+                    return None
+                if tag == "-":
+                    deleted.add(pos + 1)
+                else:
+                    if seen_new >= new_count:
+                        return None
+                    out.append(content)
+                    seen_new += 1
+                pos += 1
+                seen_old += 1
+            elif tag == "+":
+                if seen_new >= new_count:
+                    return None
+                out.append(content)
+                seen_new += 1
+            else:
+                return None
+        if seen_old != old_count or seen_new != new_count:
+            return None
+    if hunks == 0:
+        return None
+    out.extend(pre_lines[pos:])
+    return "\n".join(out) + "\n", frozenset(deleted)
+
+
+def _build_scope_context(path: str, file_diff: str) -> Optional[_ScopeContext]:
+    loaded = _read_repo_python_file(path)
+    if loaded is None:
+        return None
+    pre_text = loaded[1]
+    applied = _apply_file_diff_to_text(pre_text, file_diff, path)
+    if applied is None:
+        return None
+    post_text, deleted_lines = applied
+    try:
+        pre_tree = ast.parse(pre_text)
+        post_tree = ast.parse(post_text)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    post_keys = frozenset(
+        (site.scope, site.kind, site.name) for site in _collect_definition_sites(post_tree).values()
+    )
+    return _ScopeContext(_collect_definition_sites(pre_tree), post_keys, deleted_lines)
+
+
+def _scope_label(site: _DefinitionSite) -> str:
+    dotted = ".".join([*(name for _, name in site.scope), site.name])
+    return f"{site.kind} {dotted}"
+
+
+def _split_scope_exempt_symbols(
+    diff: str,
+    records: list[_RemovedSymbol],
+    project: Optional[str] = None,
+    notes_out: Optional[dict] = None,
+) -> list[str]:
+    """스코프 근거로 면제되지 않은 삭제 심볼만 돌려준다. 확정 못 하면 면제하지 않는다."""
+    symbols = [record.symbol for record in records]
+    if not records or str(project or "").strip().upper() not in _PRIVATE_EXEMPT_PROJECTS:
+        return symbols
+
+    file_diffs: dict[str, Optional[str]] = {}
+    for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
+        header = _DIFF_HEADER_PATH_RE.match(file_diff)
+        if header:
+            path = header.group(2)
+            file_diffs[path] = None if path in file_diffs else file_diff
+    contexts: dict[str, Optional[_ScopeContext]] = {}
+
+    def site_of(record: _RemovedSymbol) -> Optional[tuple[_ScopeContext, _DefinitionSite]]:
+        if record.path is None or record.old_line is None or file_diffs.get(record.path) is None:
+            return None
+        if record.path not in contexts:
+            contexts[record.path] = _build_scope_context(record.path, file_diffs[record.path])
+        context = contexts[record.path]
+        if context is None or record.old_line not in context.deleted_lines:
+            return None
+        site = context.pre_sites.get(record.old_line)
+        if site is None or f"{site.kind} {site.name}" != " ".join(record.symbol.split()):
+            return None
+        return context, site
+
+    # 규칙 A — 같은 스코프에 같은 종류·이름의 정의가 post-image 에 남아 있다.
+    shadowed: list[str] = []
+    remaining: list[_RemovedSymbol] = []
+    for record in records:
+        found = site_of(record)
+        if found is not None and (found[1].scope, found[1].kind, found[1].name) in found[0].post_keys:
+            shadowed.append(_scope_label(found[1]))
+        else:
+            remaining.append(record)
+
+    # 규칙 B — 파일 밖 참조가 없는 private 클래스(함수와 같은 증거 규칙).
+    _, exempt_class_symbols = _split_exempt_private_symbols(
+        diff, [record.symbol for record in remaining], project, notes_out, kind="class"
+    )
+    exempt_class_set = set(exempt_class_symbols)
+    class_records = [record for record in remaining if record.symbol in exempt_class_set]
+    remaining = [record for record in remaining if record.symbol not in exempt_class_set]
+
+    # 규칙 C — 면제된 클래스의 pre-image 본문 안에 속한 멤버(이름이 아니라 스코프 경로로 판정).
+    class_scopes: dict[str, list[tuple]] = {}
+    for record in class_records:
+        found = site_of(record)
+        if found is not None and record.path is not None:
+            class_scopes.setdefault(record.path, []).append(
+                found[1].scope + (("class", found[1].name),)
+            )
+    members: list[str] = []
+    still_removed: list[_RemovedSymbol] = []
+    for record in remaining:
+        found = site_of(record)
+        prefixes = class_scopes.get(record.path or "", [])
+        if found is not None and any(found[1].scope[: len(prefix)] == prefix for prefix in prefixes):
+            members.append(_scope_label(found[1]))
+        else:
+            still_removed.append(record)
+
+    if notes_out is not None:
+        if shadowed:
+            notes_out["preservation_exempted_shadowed_symbols"] = shadowed
+        if exempt_class_symbols:
+            notes_out["preservation_exempted_private_classes"] = exempt_class_symbols
+        if members:
+            notes_out["preservation_exempted_class_members"] = members
+    return [record.symbol for record in still_removed]
+
+
 def _precheck_preservation_gate(
     diff: str,
     instruction: str,
@@ -1065,10 +1348,14 @@ def _precheck_preservation_gate(
 
     exemption_notes: dict[str, object] = {}
     symbol_matches, exempted_symbols = _split_exempt_private_symbols(
-        preservation_diff, _removed_preservation_symbols(preservation_diff), project, exemption_notes
+        preservation_diff,
+        _removed_preservation_symbols(preservation_diff, project, exemption_notes),
+        project,
+        exemption_notes,
     )
     if exempted_symbols:
         exemption_notes["preservation_exempted_private_symbols"] = exempted_symbols
+    if exemption_notes:
         feedback.update(exemption_notes)
         if exemption_out is not None:
             exemption_out.update(exemption_notes)
