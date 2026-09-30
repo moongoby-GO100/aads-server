@@ -46,7 +46,10 @@ def test_go100_frontend_uses_canonical_bluegreen_script():
     block = _go100_block(_read_script())
 
     assert 'scripts/deploy_frontend_blue_green.sh"' in block
-    assert 'bash "$_fe_bg_script" --apply 2>&1 | tail -30' in block
+    # 전체 출력은 파일로 받아 분류하고 runner.log 에는 tail -30 만 남긴다
+    # (AADS-RUNNER-GO100-FE-FAILURE-LABELS-20260930 — 파이프 앞단의 tail 은 분류를 망친다)
+    assert 'bash "$_fe_bg_script" --apply >"$_fe_bg_outf" 2>&1' in block
+    assert 'tail -30 "$_fe_bg_outf"' in block
     assert "go100-frontend:bluegreen_script_missing" in block
     # masked 서비스 재시작, 활성 슬롯에 닿지 않는 직접 빌드는 다시 들어오면 안 된다
     assert "systemctl restart go100-frontend" not in block
@@ -227,8 +230,9 @@ def test_bluegreen_runs_in_release_worktree_of_pushed_sha():
     assert create < call
     assert 'GO100_RELEASE_WORKDIR="$_fe_release_dir"' in block
     assert "go100-frontend:release_worktree_failed" in block
-    # 기존 라벨은 그대로, 생성 실패는 별도 코드
-    assert "go100-frontend:build_failed" in block
+    # build_failed 는 이제 분류 함수가 실제 빌드 실패 문자열일 때만 낸다
+    assert "go100-frontend:build_failed" in _extract_function(_read_script(), "go100_fe_failure_label")
+    assert 'go100_fe_bg_classify "$_fe_bg_rc" "$_fe_bg_outf"' in block
     # 런타임 HEAD 를 배포 대상으로 쓰거나 게이트를 우회하면 안 된다
     assert "GO100_ALLOW_DIRTY_DEPLOY" not in block
     assert "GO100_GATE_SKIP" not in block

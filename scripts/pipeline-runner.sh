@@ -1637,6 +1637,71 @@ verify_go100_bundle_fresh() {
     return 0
 }
 
+# ── GO100 프론트 BG 배포 실패 사유 분류 (AADS-RUNNER-GO100-FE-FAILURE-LABELS-20260930) ──
+# 2026-09-30 runner-06e8ddf5: Deploy Gate 의 dirty worktree 차단이 go100-frontend:build_failed 로
+# 보고됐다. BG 스크립트(GO100 저장소 소유)는 모든 실패를 exit 1 로 내므로 종료코드로는
+# 구분할 수 없고, 락이 잡혀 있으면 요청을 큐에 넣고 exit 0 한다(배포 안 됨).
+# 그래서 rc 가 아니라 전체 출력의 고정 문자열로 분류한다. 라벨 문자열은 이 두 함수에만 둔다.
+
+# kind → 라벨. 모르는 kind 는 bg_failed_unclassified 로 보낸다("분류 못 함"을 "빌드 실패"로 부르지 않는다).
+go100_fe_failure_label() {
+    case "${1:-}" in
+        deploy_gate_blocked)     echo "go100-frontend:deploy_gate_blocked" ;;
+        deploy_lock_busy)        echo "go100-frontend:deploy_lock_busy" ;;
+        deploy_queued_not_applied) echo "go100-frontend:deploy_queued_not_applied" ;;
+        build_failed)            echo "go100-frontend:build_failed" ;;
+        health_failed)           echo "go100-frontend:health_failed" ;;
+        release_worktree_failed) echo "go100-frontend:release_worktree_failed" ;;
+        bluegreen_script_missing) echo "go100-frontend:bluegreen_script_missing" ;;
+        *)                       echo "go100-frontend:bg_failed_unclassified" ;;
+    esac
+    return 0
+}
+
+# 0 = 출력 파일에 고정 문자열이 있다. 파일이 없거나 비어 있으면 1.
+_go100_fe_out_has() {
+    [ -n "${1:-}" ] && [ -r "$1" ] && grep -qF -- "$2" "$1" 2>/dev/null
+}
+
+# $1=BG 스크립트 rc  $2=전체 출력 파일
+# stdout: 실패 라벨, 성공이면 빈 문자열. 항상 0 으로 끝난다 (set -e 안전).
+go100_fe_bg_classify() {
+    local _rc="${1:-1}" _out="${2:-}"
+    if [ "$_rc" = "0" ]; then
+        # rc=0 이어도 큐에 넣고 빠진 것이면 아무것도 배포되지 않았다.
+        if _go100_fe_out_has "$_out" "queued_for_deploy"; then
+            go100_fe_failure_label deploy_queued_not_applied
+        fi
+    elif _go100_fe_out_has "$_out" "Deploy Gate 차단"; then
+        go100_fe_failure_label deploy_gate_blocked
+    elif _go100_fe_out_has "$_out" "동시 배포 차단" || _go100_fe_out_has "$_out" "release worktree 사용 중"; then
+        go100_fe_failure_label deploy_lock_busy
+    elif _go100_fe_out_has "$_out" "빌드 실패"; then
+        go100_fe_failure_label build_failed
+    elif _go100_fe_out_has "$_out" "standby health 실패" \
+        || _go100_fe_out_has "$_out" "외부 프론트 헬스 확인 실패" \
+        || _go100_fe_out_has "$_out" "inactive 서비스 health 실패"; then
+        go100_fe_failure_label health_failed
+    else
+        go100_fe_failure_label bg_failed_unclassified
+    fi
+    return 0
+}
+
+# $1=라벨 $2=rc → 채팅 알림 문구
+go100_fe_failure_chat_text() {
+    local _label="${1:-}" _rc="${2:-?}"
+    case "$_label" in
+        *:deploy_gate_blocked)       echo "GO100 프론트엔드 배포 안 됨 — Deploy Gate 차단(빌드는 시작되지 않음, rc=$_rc)" ;;
+        *:deploy_lock_busy)          echo "GO100 프론트엔드 배포 안 됨 — 다른 배포가 락 점유 중(rc=$_rc)" ;;
+        *:deploy_queued_not_applied) echo "GO100 프론트엔드 배포 안 됨 — 락 경합으로 큐에 이관됨(rc=$_rc, 이번 SHA 는 아직 미반영)" ;;
+        *:health_failed)             echo "GO100 프론트엔드 blue-green 배포 실패 — 헬스 확인 실패(rc=$_rc)" ;;
+        *:bg_failed_unclassified)    echo "GO100 프론트엔드 blue-green 배포 실패 — 사유 미분류(rc=$_rc, runner.log 확인)" ;;
+        *)                           echo "GO100 프론트엔드 blue-green 배포 실패 (rc=$_rc)" ;;
+    esac
+    return 0
+}
+
 # ── GO100 프론트 clean 릴리스 워크트리 (AADS-RUNNER-GO100-FE-CLEAN-WORKTREE-20260930) ──
 # 2026-09-30 14:18 go100-frontend:build_failed 는 빌드 오류가 아니었다. BG 스크립트를
 # 여러 세션이 공유하는 런타임 워크트리(상시 dirty)에서 돌려 Deploy Gate 가 dirty 로 막았고,
@@ -4636,21 +4701,27 @@ deploy_job() {
                             # HEARTBEAT: GO100 프론트엔드 BG 배포 시작 직전 갱신
                             db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
                             log "  ZERO-DOWNTIME go100-frontend blue-green start (changed: $(echo "$_fe_changed" | wc -l) files, sha=${current_sha}, release=${_fe_release_dir})"
-                            local _fe_bg_rc=0
-                            # pipefail: tail/tee 가 성공해도 스크립트 실패 rc 가 그대로 올라온다.
+                            local _fe_bg_rc=0 _fe_bg_outf="" _fe_bg_label=""
+                            # 전체 출력을 파일에 받아 분류하고, runner.log 에는 마지막 30줄만 남긴다.
+                            # (tail -30 을 분류보다 앞에 두면 초반의 Deploy Gate 차단 메시지가 잘려 나간다.)
+                            # 파일로 리다이렉트하므로 rc 는 BG 스크립트의 것이 그대로 남는다.
                             # .next-build-cache 시드·회수와 슬롯 교체는 GO100_RUNTIME_WORKDIR(런타임) 기준으로 그대로 돈다.
+                            _fe_bg_outf=$(mktemp "/tmp/go100-fe-bg-${job_id}.XXXXXX")
                             if GO100_RELEASE_WORKDIR="$_fe_release_dir" GO100_RUNTIME_WORKDIR="$GO100_REPO_DIR" \
-                                bash "$_fe_bg_script" --apply 2>&1 | tail -30 | tee -a "$LOG_DIR/runner.log"; then
+                                bash "$_fe_bg_script" --apply >"$_fe_bg_outf" 2>&1; then
                                 _fe_bg_rc=0
                             else
                                 _fe_bg_rc=$?
                             fi
+                            tail -30 "$_fe_bg_outf" | tee -a "$LOG_DIR/runner.log" || true
+                            _fe_bg_label=$(go100_fe_bg_classify "$_fe_bg_rc" "$_fe_bg_outf") || _fe_bg_label=""
+                            rm -f "$_fe_bg_outf"
                             # HEARTBEAT: GO100 프론트엔드 BG 배포 종료 직후 갱신
                             db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-                            if [ "$_fe_bg_rc" -ne 0 ]; then
-                                log "  ERROR: go100-frontend blue-green 배포 실패 (rc=$_fe_bg_rc)"
-                                post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 blue-green 배포 실패 (rc=$_fe_bg_rc)"
-                                _build_fail="${_build_fail:+${_build_fail};}go100-frontend:build_failed"
+                            if [ -n "$_fe_bg_label" ]; then
+                                log "  ERROR: go100-frontend blue-green 배포 실패 (rc=$_fe_bg_rc label=${_fe_bg_label})"
+                                post_to_chat "$session_id" "🔴 [Runner] $(go100_fe_failure_chat_text "$_fe_bg_label" "$_fe_bg_rc")"
+                                _build_fail="${_build_fail:+${_build_fail};}${_fe_bg_label}"
                             fi
                         fi
                         rm -f "$_fe_release_errf"
