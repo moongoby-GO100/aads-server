@@ -1,2274 +1,1720 @@
-diff --git a/HANDOVER.md b/HANDOVER.md
-index c4987603..7f40953c 100644
---- a/HANDOVER.md
-+++ b/HANDOVER.md
-@@ -1,3 +1,14 @@
-+## 2026-09-30 — 오비서 PWA 출퇴근 1차: manifest·서비스워커·출근/퇴근·GPS 반경 판정·위치 동의 (AADS-OBYS-PWA-GPS-ATTENDANCE-20260930)
-+
-+- 직원 본인 API 신설(`/api/v1/workspaces/{business_id}/…`): `attendance/clock/state`, `attendance/consent`, `attendance/check-in`, `attendance/check-out`, `attendance/me/{record_id}`. 관리자: `attendance/locations`(좌표 원본 포함), `branches/geofence`(GET), `branches/{branch_id}/geofence`(PATCH, 감사로그). 경로는 지시서의 `/api/v1/obys/…` 가 아니라 실제 마운트(`/api/v1/workspaces`, PRD r2 §9)에 두었다 — `/api/v1/obys` 프리픽스는 존재하지 않는다.
-+- 반경: 지시서의 기본 100m 대신 **PRD r3 의 CEO 결정 D1(50m, 여유 없음, 상한 50m, 설정 30~50m)** 을 따랐다. 상수 `GEOFENCE_DEFAULT/MIN/MAX_RADIUS_M` 한 곳만 바꾸면 된다. 정확도 > 반경 → unknown/pending.
-+- 신원은 로그인 세션에서만(본문 employee_email 무시), 멤버십은 기존 `_require_write`, 테넌트는 기존 `_business`(404→403 변환). 테넌트 게이트·`_is_admin` 무수정. 감사로그는 `_attendance_audit` 재사용. 근무분은 `attendance_worked_minutes` 재사용.
-+- 퇴근 전 행은 `end_at=start_at, worked_minutes=0`, `check_out_at IS NULL` 로 표시(운영 end_at NOT NULL 여부 미확인이라 스키마를 완화하지 않음).
-+- PWA: `app/static/apps/obys/{manifest.webmanifest, sw.js, clock.html, attendance-admin.html, icons/obys-clock-{192,512}.png}`. SW scope `/static/apps/obys/`, 셸만 캐시(API·토큰 불가), 오프라인 큐잉 없음, `getCurrentPosition` 1회. index.html 은 지점 목록에 관리 화면 링크 1줄.
-+- 마이그레이션 `migrations/20260930_obys_attendance_pwa_gps.sql`(+`rollback/…down.sql`) — 오비서 업무 DB 전용·추가만, baseline HOLD. 운영 문서 `docs/operations/OBYS_ATTENDANCE_PWA_GPS.md`.
-+- 테스트 `tests/unit/test_obys_attendance_pwa_gps.py` 33건 + 기존 `test_obys_attendance_api.py` 27건 → 60 passed, exit 0. AAG `--check-baseline` 증가 없음.
-+- 남은 위험: 기존 제네릭 근태 목록(`/attendance/records`)은 역할 필터가 없어 멤버십 R2 반영 후 member 가 전 직원 근태를 볼 수 있다(좌표는 노출 안 됨) — 별도 작업 필요. 좌표 90일 파기는 수동 쿼리(문서 §7).
-+
- ## 2026-09-30 — 오비서 계약서 서명요청 알림 + 서명본 PDF 보관·교부 (AADS-OBYS-CONTRACT-NOTIFY-PDF-20260930)
+diff --git a/app/api/obys_finance.py b/app/api/obys_finance.py
+index 0340573c..28ad047d 100644
+--- a/app/api/obys_finance.py
++++ b/app/api/obys_finance.py
+@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
  
- - 서명요청(`request-signature`) 뒤 알림 발송·채널별 이력(`yeoljeong_contract_notifications`), 서명(`contracts/signing`) 뒤 `signed_snapshot` 기반 PDF 보관(`OBYS_UPLOAD_ROOT/<tenant>/contracts/`)·`contract_signed` 알림. 둘 다 실패해도 서명요청/서명은 성공으로 남는다.
-diff --git a/app/api/obys_workspaces.py b/app/api/obys_workspaces.py
-index 6b9b3d0a..6641cfe3 100644
---- a/app/api/obys_workspaces.py
-+++ b/app/api/obys_workspaces.py
-@@ -6,10 +6,11 @@ copying data into a second set of tables or falling back to demo rows.
- """
- from __future__ import annotations
- 
--from datetime import date, datetime, time
-+from datetime import date, datetime, time, timedelta
- from zoneinfo import ZoneInfo
- from decimal import Decimal
- import json
-+import math
- import re
- from typing import Any, Annotated, Literal
- from uuid import UUID
-@@ -966,6 +967,512 @@ async def delete_attendance_record(
-     return {"deleted": True, "id": record_id}
+ from app.auth import get_current_user
+ from app.core.obys_tenant import is_legacy_obys_tenant, require_legacy_obys_access
++from app.services import obys_registration_ocr as registration_ocr
+ from app.services import obys_upload_service as upload_svc
+ from app.services import yeoljeong_finance_service as svc
+ from app.services.yeoljeong_bank_collector_harness import (
+@@ -933,6 +934,71 @@ async def delete_card_upload(upload_id: UUID, current_user: dict = Depends(get_c
+     return {"ok": True}
  
  
-+# ── PWA 출퇴근 (직원 본인) ──────────────────────────────────────────────────
-+# 버튼을 누른 순간의 위치 1점만 받는다. 연속 추적·오프라인 큐잉은 하지 않는다.
-+# 신원은 로그인 세션에서만 가져온다 — 본문의 employee_email 은 모델이 버린다.
-+# 관리자 대리 타각은 이 경로로 허용하지 않는다(관리자는 수기 입력 경로를 쓴다).
-+#
-+# 반경: CEO 결정 D1(2026-09-30, docs/prd/20260930_OBYS_ATTENDANCE_PWA_GPS_PRD.md §8.1)
-+# "매장 반경 50m 안", 정확도 여유 없음. 지점별 geofence_radius_m 이 있으면 그 값을
-+# 쓰되 상한을 넘지 않는다. 정확도(오차)가 반경보다 크면 안/밖을 판정하지 않는다.
-+#
-+# 퇴근 전 행: 운영 스키마의 end_at 이 NOT NULL 일 수 있어(확인 불가) 출근 시
-+# end_at=start_at, worked_minutes=0 으로 두고 check_out_at IS NULL 을 "근무 중" 표지로 쓴다.
-+GEOFENCE_DEFAULT_RADIUS_M = 50
-+GEOFENCE_MIN_RADIUS_M = 30
-+GEOFENCE_MAX_RADIUS_M = 50
-+GEOFENCE_RESULTS = frozenset({"inside", "outside", "unknown"})
-+ATTENDANCE_SOURCES = frozenset({"manual", "pwa"})
-+CLOCK_OPEN_WINDOW = timedelta(hours=24)  # 퇴근은 24시간 안의 열린 출근에만 붙는다
-+CLOCK_CONSENT_ACTIONS = ("attendance.consent", "attendance.consent_withdraw")
-+_KST = ZoneInfo("Asia/Seoul")
-+_EARTH_RADIUS_M = 6_371_008.8
-+
-+# 직원 본인에게 돌려주는 열 — 좌표 원본·기기 정보는 넣지 않는다.
-+ATTENDANCE_CLOCK_COLUMNS = (
-+    ATTENDANCE_COLUMNS + ",source,check_in_at,check_out_at,check_in_accuracy_m,"
-+    "check_out_accuracy_m,check_in_distance_m,check_out_distance_m,geofence_result,"
-+    "location_consent_at"
-+)
-+# 관리자 위치 조회 전용 — 좌표 원본 포함.
-+ATTENDANCE_LOCATION_COLUMNS = (
-+    ATTENDANCE_CLOCK_COLUMNS + ",employee_email_masked,check_in_lat,check_in_lng,"
-+    "check_out_lat,check_out_lng,device_info"
-+)
-+_CLOCK_PRIVATE_KEYS = frozenset(
-+    {"employee_email", "check_in_lat", "check_in_lng", "check_out_lat", "check_out_lng", "device_info"}
-+)
-+_BRANCH_GEOFENCE_SQL = (
-+    "SELECT id,name,latitude,longitude,geofence_radius_m FROM yeoljeong_branches"
-+    " WHERE business_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id"
-+)
-+
-+
-+class AttendanceClockIn(BaseModel):
-+    # employee_email·status 등 본문의 신원·판정 값은 받지 않고 버린다.
-+    model_config = {"extra": "ignore"}
-+    latitude: float | None = Field(default=None, ge=-90, le=90)
-+    longitude: float | None = Field(default=None, ge=-180, le=180)
-+    accuracy_m: float | None = Field(default=None, ge=0, le=1_000_000)
-+    device_info: str = Field(default="", max_length=300)
-+    location_consent: bool = False
-+    branch_id: str = Field(default="", max_length=64)
-+
-+
-+class AttendanceConsentIn(BaseModel):
-+    model_config = {"extra": "forbid"}
-+    agree: bool
-+
-+
-+class BranchGeofenceIn(BaseModel):
-+    model_config = {"extra": "forbid"}
-+    latitude: float = Field(ge=-90, le=90)
-+    longitude: float = Field(ge=-180, le=180)
-+    radius_m: int | None = None
-+
-+
-+def haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-+    p1, p2 = math.radians(lat1), math.radians(lat2)
-+    a = (math.sin((p2 - p1) / 2) ** 2
-+         + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lng2 - lng1) / 2) ** 2)
-+    return 2 * _EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(a)))
-+
-+
-+def geofence_radius_m(branch: dict[str, Any] | None) -> int:
-+    value = (branch or {}).get("geofence_radius_m")
-+    if value is None or int(value) <= 0:
-+        return GEOFENCE_DEFAULT_RADIUS_M
-+    return min(int(value), GEOFENCE_MAX_RADIUS_M)
-+
-+
-+def judge_geofence(*, consent: bool, latitude: float | None, longitude: float | None,
-+                   accuracy_m: float | None, branch: dict[str, Any] | None) -> dict[str, Any]:
-+    """반경 판정. 확실히 안일 때만 inside/approved — 나머지는 전부 확인필요(pending)."""
-+    radius = geofence_radius_m(branch)
-+    verdict: dict[str, Any] = {
-+        "result": "unknown", "status": "pending", "radius_m": radius,
-+        "distance_m": None, "accuracy_m": None, "latitude": None, "longitude": None,
-+    }
-+    if not consent:
-+        return {**verdict, "reason": "위치정보 미동의 — 위치 미수집"}
-+    has_coords = latitude is not None and longitude is not None
-+    accuracy = None if accuracy_m is None else math.ceil(accuracy_m)
-+    if has_coords:
-+        verdict.update(latitude=latitude, longitude=longitude, accuracy_m=accuracy)
-+    if not branch or branch.get("latitude") is None or branch.get("longitude") is None:
-+        return {**verdict, "reason": "지점 좌표 미등록 — 관리자 확인 필요"}
-+    if not has_coords:
-+        return {**verdict, "reason": "위치 측정 실패(권한 거부·시간 초과)"}
-+    # 올림: 반경 경계에서 "안" 쪽으로 반올림하지 않는다.
-+    distance = math.ceil(haversine_m(latitude, longitude,
-+                                     float(branch["latitude"]), float(branch["longitude"])))
-+    verdict["distance_m"] = distance
-+    if accuracy is None:
-+        return {**verdict, "reason": f"GPS 정확도 정보 없음 — 매장에서 {distance}m"}
-+    if accuracy > radius:
-+        return {**verdict, "reason": f"GPS 오차 {accuracy}m 가 반경 {radius}m 보다 큼 — 판정 불가"}
-+    if distance <= radius:
-+        return {**verdict, "result": "inside", "status": "approved",
-+                "reason": f"매장에서 {distance}m (반경 {radius}m 안)"}
-+    return {**verdict, "result": "outside", "reason": f"매장에서 {distance}m (반경 {radius}m 밖)"}
-+
-+
-+def combined_geofence(check_in: str | None, check_out: str | None) -> str:
-+    if check_in == "inside" and check_out == "inside":
-+        return "inside"
-+    if "outside" in (check_in, check_out):
-+        return "outside"
-+    return "unknown"
-+
-+
-+def _clock_now() -> datetime:
-+    return datetime.now(_KST)
-+
-+
-+def _clock_identity(user: dict[str, Any]) -> dict[str, str]:
-+    # 테넌트 활성 멤버십(owner/admin/member) 판정은 기존 함수를 그대로 쓴다.
-+    upload_svc._require_write(user)
-+    email = str(user.get("email") or "").strip().lower()
-+    if "@" not in email:
-+        raise HTTPException(status_code=403, detail="로그인 계정의 이메일이 있어야 출퇴근을 기록할 수 있습니다")
-+    local, _, domain = email.partition("@")
-+    return {"email": email, "masked": f"{local[:1]}***@{domain}",
-+            "name": str(user.get("name") or "").strip()[:100] or local}
-+
-+
-+async def _clock_business(user: dict[str, Any], business_id: str) -> dict[str, Any]:
++async def _read_registration_upload(file: UploadFile) -> bytes:
 +    try:
-+        return await _business(user, business_id)
++        return await _read_limited_upload(file)
 +    except HTTPException as exc:
-+        if exc.status_code == 404:
-+            raise HTTPException(status_code=403, detail="현재 테넌트의 사업자가 아니므로 출퇴근을 기록·조회할 수 없습니다") from exc
-+        raise
++        raise HTTPException(status_code=400, detail=exc.detail) from exc
 +
 +
-+def _require_attendance_admin(user: dict[str, Any]) -> None:
-+    if not upload_svc.tenant_session_for_user(user)["permissions"]["can_manage_settings"]:
-+        raise HTTPException(status_code=403, detail="소유자·관리자만 출퇴근 위치를 조회·설정할 수 있습니다")
-+
-+
-+def _clock_view(row: Any) -> dict[str, Any]:
-+    value = {key: _json_value(item) for key, item in dict(row).items() if key not in _CLOCK_PRIVATE_KEYS}
-+    value["open"] = bool(value.get("check_in_at")) and not value.get("check_out_at")
-+    return value
-+
-+
-+def _pick_branch(branches: list[dict[str, Any]], branch_id: str,
-+                 branch_name: str | None) -> dict[str, Any] | None:
-+    if branch_id:
-+        match = next((item for item in branches if str(item["id"]) == branch_id), None)
-+        if match is None:
-+            raise HTTPException(status_code=404, detail="현재 사업자의 지점을 찾을 수 없습니다")
-+        return match
-+    if branch_name is not None:  # 퇴근: 출근 행에 적힌 지점만 본다(없으면 좌표 미등록과 같다)
-+        return next((item for item in branches if branch_name and item["name"] == branch_name), None)
-+    if len(branches) > 1:
-+        raise HTTPException(status_code=400, detail="출근할 지점을 선택하십시오")
-+    return branches[0] if branches else None
-+
-+
-+async def _clock_consent(connection, business_id: str, user: dict[str, Any]) -> dict[str, Any]:
-+    row = await connection.fetchrow(
-+        """SELECT action,created_at FROM yeoljeong_audit_logs
-+            WHERE business_id=$1 AND actor=$2 AND resource_type='attendance'
-+              AND action = ANY($3::text[])
-+            ORDER BY created_at DESC LIMIT 1""",
-+        business_id, upload_svc._actor(user), list(CLOCK_CONSENT_ACTIONS),
++@router.post("/businesses/{business_id}/registration-document", status_code=201)
++async def upload_business_registration_document(
++    business_id: str,
++    file: UploadFile = File(...),
++    current_user: dict = Depends(get_current_user),
++) -> dict[str, Any]:
++    upload_svc._require_admin(current_user)
++    data = await _read_registration_upload(file)
++    document = await upload_svc.create_registration_document(
++        user=current_user, business_id=business_id,
++        filename=file.filename or "registration.bin",
++        content_type=file.content_type or "application/octet-stream", data=data,
 +    )
-+    agreed = row is not None and row["action"] == "attendance.consent"
-+    return {"agreed": agreed, "at": row["created_at"] if agreed else None}
++    return {"document": document}
 +
 +
-+async def _clock_judge(connection, business_id: str, user: dict[str, Any],
-+                       payload: AttendanceClockIn, *, branch_id: str, branch_name: str | None):
-+    branches = [dict(item) for item in await connection.fetch(_BRANCH_GEOFENCE_SQL, business_id)]
-+    branch = _pick_branch(branches, branch_id, branch_name)
-+    consent = await _clock_consent(connection, business_id, user)
-+    # 서버에 남은 동의와 이번 요청의 동의가 둘 다 있어야 위치를 저장한다(철회 우선).
-+    agreed = bool(payload.location_consent and consent["agreed"])
-+    verdict = judge_geofence(consent=agreed, latitude=payload.latitude, longitude=payload.longitude,
-+                             accuracy_m=payload.accuracy_m, branch=branch)
-+    return branch, (consent["at"] if agreed else None), verdict
-+
-+
-+async def _clock_lock(connection, business_id: str, email: str) -> None:
-+    # 두 번 누름·두 기기 동시 요청이 같은 직원의 열린 출근을 두 개 만들지 않게 한다.
-+    await connection.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"obys-clock:{business_id}:{email}")
-+
-+
-+def _clock_memo(previous: str | None, label: str, reason: str) -> str:
-+    text = f"{label}: {reason}"
-+    return (f"{previous} / {text}" if previous else text)[:500]
-+
-+
-+def _clock_audit(verdict: dict[str, Any], branch: dict[str, Any] | None) -> dict[str, Any]:
-+    # 감사로그에는 직원 좌표 원문을 남기지 않는다 — 판정·거리·정확도만.
-+    return {key: verdict[key] for key in ("result", "status", "distance_m", "accuracy_m", "radius_m", "reason")} | {
-+        "branch": (branch or {}).get("name") or ""}
-+
-+
-+def _clock_response(business: dict[str, Any], row: Any, verdict: dict[str, Any]) -> dict[str, Any]:
-+    return {
-+        "business": {"id": business["id"], "name": business["name"]},
-+        "record": _clock_view(row),
-+        "judgement": {key: verdict[key] for key in ("result", "status", "distance_m", "accuracy_m", "radius_m", "reason")},
-+        "source": "yeoljeong_attendance_records",
-+    }
-+
-+
-+@router.get("/{business_id}/attendance/clock/state")
-+async def attendance_clock_state(
++@router.get("/businesses/{business_id}/registration-document")
++async def list_business_registration_documents(
 +    business_id: str,
-+    current_user: dict[str, Any] = Depends(get_current_user),
++    current_user: dict = Depends(get_current_user),
 +) -> dict[str, Any]:
-+    identity = _clock_identity(current_user)
-+    business = await _clock_business(current_user, business_id)
-+    now = _clock_now()
-+    connection = await upload_svc._connect()
-+    try:
-+        branches = [dict(item) for item in await connection.fetch(_BRANCH_GEOFENCE_SQL, business_id)]
-+        consent = await _clock_consent(connection, business_id, current_user)
-+        rows = await connection.fetch(
-+            f"""SELECT {ATTENDANCE_CLOCK_COLUMNS} FROM yeoljeong_attendance_records
-+                 WHERE business_id=$1 AND employee_email=$2 AND deleted_at IS NULL
-+                 ORDER BY work_date DESC, start_at DESC LIMIT 31""",
-+            business_id, identity["email"],
-+        )
-+    finally:
-+        await connection.close()
-+    open_row = next((row for row in rows if row["source"] == "pwa" and row["check_out_at"] is None
-+                     and row["check_in_at"] is not None and row["check_in_at"] >= now - CLOCK_OPEN_WINDOW), None)
-+    recent = [_clock_view(row) for row in rows]
-+    return {
-+        "business": {"id": business["id"], "name": business["name"]},
-+        "employee": {"name": identity["name"], "email_masked": identity["masked"]},
-+        "consent": _json_value(consent),
-+        "open_record": _clock_view(open_row) if open_row is not None else None,
-+        "today": [item for item in recent if item["work_date"] == now.date().isoformat()],
-+        "recent": recent,
-+        "branches": [
-+            {"id": str(item["id"]), "name": item["name"],
-+             "has_geofence": item.get("latitude") is not None and item.get("longitude") is not None,
-+             "radius_m": geofence_radius_m(item)}
-+            for item in branches
-+        ],
-+        "policy": {"default_radius_m": GEOFENCE_DEFAULT_RADIUS_M, "max_radius_m": GEOFENCE_MAX_RADIUS_M},
-+        "server_time": now.isoformat(),
-+    }
++    return await upload_svc.list_registration_documents(user=current_user, business_id=business_id)
 +
 +
-+@router.post("/{business_id}/attendance/consent")
-+async def attendance_location_consent(
++@router.get("/businesses/{business_id}/registration-document/{document_id}/download")
++async def download_business_registration_document(
 +    business_id: str,
-+    payload: AttendanceConsentIn,
-+    current_user: dict[str, Any] = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    identity = _clock_identity(current_user)
-+    await _clock_business(current_user, business_id)
-+    action = CLOCK_CONSENT_ACTIONS[0] if payload.agree else CLOCK_CONSENT_ACTIONS[1]
-+    connection = await upload_svc._connect()
-+    try:
-+        async with connection.transaction():
-+            await _attendance_audit(connection, business_id, current_user, action,
-+                                    f"consent:{identity['masked']}",
-+                                    {"agree": payload.agree, "scope": "출퇴근 버튼을 누른 순간 위치 1점",
-+                                     "purpose": "근태 확인"})
-+    finally:
-+        await connection.close()
-+    return {"consent": {"agreed": payload.agree, "at": _clock_now().isoformat() if payload.agree else None}}
++    document_id: UUID,
++    current_user: dict = Depends(get_current_user),
++) -> FileResponse:
++    path, filename, content_type = await upload_svc.registration_document_download(
++        user=current_user, business_id=business_id, document_id=document_id,
++    )
++    return FileResponse(path, media_type=content_type, filename=filename, headers={"Cache-Control": "no-store"})
 +
 +
-+@router.post("/{business_id}/attendance/check-in", status_code=201)
-+async def attendance_check_in(
++@router.post("/businesses/{business_id}/registration-document/{document_id}/ocr")
++async def suggest_business_registration_from_ocr(
 +    business_id: str,
-+    payload: AttendanceClockIn,
-+    current_user: dict[str, Any] = Depends(get_current_user),
++    document_id: UUID,
++    current_user: dict = Depends(get_current_user),
 +) -> dict[str, Any]:
-+    identity = _clock_identity(current_user)
-+    business = await _clock_business(current_user, business_id)
-+    now = _clock_now()
-+    start_at = time(now.hour, now.minute)
-+    connection = await upload_svc._connect()
-+    try:
-+        async with connection.transaction():
-+            await _clock_lock(connection, business_id, identity["email"])
-+            branch, consent_at, verdict = await _clock_judge(
-+                connection, business_id, current_user, payload,
-+                branch_id=payload.branch_id.strip(), branch_name=None)
-+            already_open = await connection.fetchval(
-+                """SELECT id FROM yeoljeong_attendance_records
-+                    WHERE business_id=$1 AND employee_email=$2 AND work_date=$3 AND source='pwa'
-+                      AND check_in_at IS NOT NULL AND check_out_at IS NULL AND deleted_at IS NULL
-+                    LIMIT 1""",
-+                business_id, identity["email"], now.date(),
-+            )
-+            if already_open is not None:
-+                raise HTTPException(status_code=409, detail="오늘 이미 출근이 기록되어 있습니다. 퇴근을 먼저 기록하십시오")
-+            row = await connection.fetchrow(
-+                f"""INSERT INTO yeoljeong_attendance_records
-+                      (business_id,employee_email,employee_email_masked,employee_name,branch,
-+                       work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,
-+                       source,status,memo,created_by,check_in_at,check_in_lat,check_in_lng,
-+                       check_in_accuracy_m,check_in_distance_m,geofence_result,device_info,
-+                       location_consent_at)
-+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$7,0,0,0,'pwa',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-+                    RETURNING {ATTENDANCE_CLOCK_COLUMNS}""",
-+                business_id, identity["email"], identity["masked"], identity["name"],
-+                (branch or {}).get("name") or "", now.date(), start_at, verdict["status"],
-+                _clock_memo("", "출근", verdict["reason"]), upload_svc._actor(current_user), now,
-+                verdict["latitude"], verdict["longitude"], verdict["accuracy_m"], verdict["distance_m"],
-+                verdict["result"], payload.device_info.strip(), consent_at,
-+            )
-+            await _attendance_audit(connection, business_id, current_user, "attendance.check_in",
-+                                    str(row["id"]), _clock_audit(verdict, branch))
-+    except asyncpg.UniqueViolationError as exc:
-+        raise HTTPException(status_code=409, detail="같은 시각의 출근이 이미 기록되어 있습니다") from exc
-+    finally:
-+        await connection.close()
-+    return _clock_response(business, row, verdict)
++    # 제안 전용. 사업자 레코드는 바꾸지 않는다 — 저장은 관리자가 확인 후 기존 경로로 한다.
++    return await registration_ocr.suggest_from_document(
++        user=current_user, business_id=business_id, document_id=document_id,
++    )
 +
 +
-+@router.post("/{business_id}/attendance/check-out")
-+async def attendance_check_out(
++@router.delete("/businesses/{business_id}/registration-document/{document_id}")
++async def delete_business_registration_document(
 +    business_id: str,
-+    payload: AttendanceClockIn,
-+    current_user: dict[str, Any] = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    identity = _clock_identity(current_user)
-+    business = await _clock_business(current_user, business_id)
-+    now = _clock_now()
-+    end_at = time(now.hour, now.minute)
-+    connection = await upload_svc._connect()
-+    try:
-+        async with connection.transaction():
-+            await _clock_lock(connection, business_id, identity["email"])
-+            record = await connection.fetchrow(
-+                f"""SELECT {ATTENDANCE_CLOCK_COLUMNS} FROM yeoljeong_attendance_records
-+                     WHERE business_id=$1 AND employee_email=$2 AND source='pwa'
-+                       AND check_in_at IS NOT NULL AND check_in_at >= $3
-+                       AND check_out_at IS NULL AND deleted_at IS NULL
-+                     ORDER BY check_in_at DESC LIMIT 1 FOR UPDATE""",
-+                business_id, identity["email"], now - CLOCK_OPEN_WINDOW,
-+            )
-+            if record is None:
-+                raise HTTPException(status_code=409, detail="출근 기록이 없어 퇴근을 기록할 수 없습니다")
-+            # 퇴근은 출근한 지점 기준으로 판정한다.
-+            branch, consent_at, verdict = await _clock_judge(
-+                connection, business_id, current_user, payload,
-+                branch_id="", branch_name=record["branch"] or "")
-+            # 근무분은 수기 입력과 같은 함수로 계산한다(자정 넘김·24시간 상한 동일).
-+            worked = attendance_worked_minutes(record["start_at"], end_at, int(record["break_minutes"] or 0))
-+            combined = combined_geofence(record["geofence_result"], verdict["result"])
-+            status = ("rejected" if record["status"] == "rejected"
-+                      else "approved" if combined == "inside" else "pending")
-+            row = await connection.fetchrow(
-+                f"""UPDATE yeoljeong_attendance_records SET
-+                      check_out_at=$3, end_at=$4, worked_minutes=$5, check_out_lat=$6,
-+                      check_out_lng=$7, check_out_accuracy_m=$8, check_out_distance_m=$9,
-+                      geofence_result=$10, status=$11, memo=$12,
-+                      device_info=COALESCE(NULLIF(device_info,''),$13),
-+                      location_consent_at=COALESCE(location_consent_at,$14), updated_at=now()
-+                    WHERE id=$1 AND business_id=$2 AND check_out_at IS NULL AND deleted_at IS NULL
-+                    RETURNING {ATTENDANCE_CLOCK_COLUMNS}""",
-+                record["id"], business_id, now, end_at, worked, verdict["latitude"],
-+                verdict["longitude"], verdict["accuracy_m"], verdict["distance_m"], combined, status,
-+                _clock_memo(record["memo"], "퇴근", verdict["reason"]), payload.device_info.strip(),
-+                consent_at,
-+            )
-+            if row is None:
-+                raise HTTPException(status_code=409, detail="이미 퇴근이 기록되었습니다")
-+            await _attendance_audit(connection, business_id, current_user, "attendance.check_out",
-+                                    str(row["id"]), _clock_audit(verdict, branch) | {"worked_minutes": worked})
-+    finally:
-+        await connection.close()
-+    return _clock_response(business, row, verdict)
++    document_id: UUID,
++    current_user: dict = Depends(get_current_user),
++) -> dict[str, bool]:
++    await upload_svc.delete_registration_document(user=current_user, business_id=business_id, document_id=document_id)
++    return {"ok": True}
 +
 +
-+@router.get("/{business_id}/attendance/me/{record_id}")
-+async def get_my_attendance_record(
-+    business_id: str,
-+    record_id: str,
-+    current_user: dict[str, Any] = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    identity = _clock_identity(current_user)
-+    business = await _clock_business(current_user, business_id)
-+    connection = await upload_svc._connect()
-+    try:
-+        row = await connection.fetchrow(
-+            f"""SELECT employee_email,{ATTENDANCE_CLOCK_COLUMNS} FROM yeoljeong_attendance_records
-+                 WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL""",
-+            record_id, business_id,
-+        )
-+    finally:
-+        await connection.close()
-+    if row is None:
-+        raise HTTPException(status_code=404, detail="현재 사업자의 근태를 찾을 수 없습니다")
-+    if str(row["employee_email"] or "").lower() != identity["email"]:
-+        raise HTTPException(status_code=403, detail="본인 근태만 조회할 수 있습니다")
-+    return {"business": {"id": business["id"], "name": business["name"]}, "record": _clock_view(row)}
-+
-+
-+@router.get("/{business_id}/attendance/locations")
-+async def attendance_locations(
-+    business_id: str,
-+    date_from: str | None = Query(None),
-+    date_to: str | None = Query(None),
-+    result: str = Query("", max_length=10),
-+    current_user: dict[str, Any] = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    """관리자 확인용 위치 요약. 좌표 원본은 이 경로에서만 나간다."""
-+    _require_attendance_admin(current_user)
-+    business = await _business(current_user, business_id)
-+    _filter_source_dates([], date_from, date_to)  # 날짜 형식·순서 검증
-+    if result and result not in GEOFENCE_RESULTS:
-+        raise HTTPException(status_code=400, detail="판정은 inside·outside·unknown 중 하나여야 합니다")
-+    conditions = ["business_id=$1", "source='pwa'", "deleted_at IS NULL"]
-+    params: list[Any] = [business_id]
-+    for column, op, value in (("work_date", ">=", date_from), ("work_date", "<=", date_to),
-+                              ("geofence_result", "=", result)):
-+        if value:
-+            params.append(date.fromisoformat(value) if column == "work_date" else value)
-+            conditions.append(f"{column} {op} ${len(params)}")
-+    connection = await upload_svc._connect()
-+    try:
-+        rows = await connection.fetch(
-+            f"SELECT {ATTENDANCE_LOCATION_COLUMNS} FROM yeoljeong_attendance_records"
-+            f" WHERE {' AND '.join(conditions)} ORDER BY work_date DESC, start_at DESC LIMIT 500",
-+            *params,
-+        )
-+    finally:
-+        await connection.close()
-+    records = [{key: _json_value(item) for key, item in dict(row).items()} for row in rows]
-+    return {
-+        "business": {"id": business["id"], "name": business["name"]},
-+        "records": records,
-+        "count": len(records),
-+        "summary": {name: sum(1 for item in records if item.get("geofence_result") == name)
-+                    for name in sorted(GEOFENCE_RESULTS)}
-+                   | {"pending": sum(1 for item in records if item.get("status") == "pending")},
-+    }
-+
-+
-+@router.get("/{business_id}/branches/geofence")
-+async def list_branch_geofences(
-+    business_id: str,
-+    current_user: dict[str, Any] = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    _require_attendance_admin(current_user)
-+    business = await _business(current_user, business_id)
-+    connection = await upload_svc._connect()
-+    try:
-+        rows = await connection.fetch(_BRANCH_GEOFENCE_SQL, business_id)
-+    finally:
-+        await connection.close()
-+    return {
-+        "business": {"id": business["id"], "name": business["name"]},
-+        "branches": [{**{key: _json_value(item) for key, item in dict(row).items()},
-+                      "effective_radius_m": geofence_radius_m(dict(row))} for row in rows],
-+        "policy": {"default_radius_m": GEOFENCE_DEFAULT_RADIUS_M, "min_radius_m": GEOFENCE_MIN_RADIUS_M,
-+                   "max_radius_m": GEOFENCE_MAX_RADIUS_M},
-+    }
-+
-+
-+@router.patch("/{business_id}/branches/{branch_id}/geofence")
-+async def update_branch_geofence(
-+    business_id: str,
-+    branch_id: str,
-+    payload: BranchGeofenceIn,
-+    current_user: dict[str, Any] = Depends(get_current_user),
-+) -> dict[str, Any]:
-+    _require_attendance_admin(current_user)
-+    business = await _business(current_user, business_id)
-+    radius = GEOFENCE_DEFAULT_RADIUS_M if payload.radius_m is None else payload.radius_m
-+    if not GEOFENCE_MIN_RADIUS_M <= radius <= GEOFENCE_MAX_RADIUS_M:
-+        raise HTTPException(
-+            status_code=400,
-+            detail=f"반경은 {GEOFENCE_MIN_RADIUS_M}~{GEOFENCE_MAX_RADIUS_M}m 사이여야 합니다(CEO 결정 상한 {GEOFENCE_MAX_RADIUS_M}m)",
-+        )
-+    connection = await upload_svc._connect()
-+    try:
-+        async with connection.transaction():
-+            row = await connection.fetchrow(
-+                """UPDATE yeoljeong_branches SET latitude=$3, longitude=$4, geofence_radius_m=$5,
-+                          updated_by=$6, updated_at=now()
-+                    WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL
-+                    RETURNING id,name,latitude,longitude,geofence_radius_m""",
-+                branch_id, business_id, payload.latitude, payload.longitude, radius,
-+                upload_svc._actor(current_user),
-+            )
-+            if row is None:
-+                raise HTTPException(status_code=404, detail="현재 사업자의 지점을 찾을 수 없습니다")
-+            await _attendance_audit(connection, business_id, current_user, "attendance.geofence_config",
-+                                    branch_id, dict(row))
-+    finally:
-+        await connection.close()
-+    return {"business": {"id": business["id"], "name": business["name"]},
-+            "branch": {key: _json_value(item) for key, item in dict(row).items()}}
-+
-+
- @router.get("/{business_id}/{route}/records")
- async def workspace_records(
+ @router.get("/uploaded-ledger")
+ async def list_uploaded_ledger(
      business_id: str,
-diff --git a/app/static/apps/obys/attendance-admin.html b/app/static/apps/obys/attendance-admin.html
+diff --git a/app/services/obys_registration_ocr.py b/app/services/obys_registration_ocr.py
 new file mode 100644
-index 00000000..4305e669
+index 00000000..25d3c35c
 --- /dev/null
-+++ b/app/static/apps/obys/attendance-admin.html
-@@ -0,0 +1,205 @@
-+<!doctype html>
-+<html lang="ko">
-+<head>
-+  <meta charset="utf-8">
-+  <meta name="viewport" content="width=device-width, initial-scale=1">
-+  <title>오비서 · 출퇴근 위치 설정</title>
-+  <style>
-+    :root { color-scheme: light; --bg: #f4f5f7; --panel: #fff; --text: #1d2330; --muted: #5b6475; --line: #dde1e8; --primary: #2f6fed; --err: #b42318; --warn: #8a5a00; --ok: #0f7b52; }
-+    * { box-sizing: border-box; }
-+    body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; font-size: 15px; line-height: 1.5; word-break: keep-all; }
-+    main { max-width: 1080px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
-+    h1 { font-size: 20px; margin: 0; }
-+    h2 { font-size: 16px; margin: 0 0 10px; }
-+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-+    .muted { color: var(--muted); }
-+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
-+    label { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
-+    input, select, button { min-height: 44px; font-size: 15px; border-radius: 8px; border: 1px solid var(--line); padding: 0 10px; background: #fff; }
-+    button { cursor: pointer; font-weight: 700; color: var(--primary); }
-+    button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
-+    table { width: 100%; border-collapse: collapse; }
-+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-+    th { font-size: 13px; color: var(--muted); font-weight: 600; }
-+    .table-wrap { overflow-x: auto; }
-+    .err { color: var(--err); }
-+    .warn { color: var(--warn); font-weight: 700; }
-+    .ok { color: var(--ok); font-weight: 700; }
-+    .coords { font-family: ui-monospace, monospace; font-size: 13px; }
-+    [hidden] { display: none !important; }
-+  </style>
-+</head>
-+<body>
-+<main>
-+  <div class="toolbar" style="justify-content:space-between">
-+    <h1>출퇴근 위치 설정 · 확인필요</h1>
-+    <a href="/static/apps/obys/index.html">오비서로 돌아가기</a>
-+  </div>
-+  <p class="muted">소유자·관리자 전용 화면입니다. 직원 출퇴근 화면은 <a href="/static/apps/obys/clock.html">/static/apps/obys/clock.html</a> 입니다.</p>
-+  <div id="error" class="panel err" role="alert" hidden></div>
-+
-+  <section class="panel">
-+    <div class="toolbar">
-+      <label>사업자 <select id="businessSelect"></select></label>
-+    </div>
-+  </section>
-+
-+  <section class="panel">
-+    <h2>지점 좌표·반경</h2>
-+    <p class="muted" id="policyText"></p>
-+    <div class="table-wrap">
-+      <table>
-+        <thead><tr><th>지점</th><th>위도</th><th>경도</th><th>반경(m)</th><th></th></tr></thead>
-+        <tbody id="branchRows"></tbody>
-+      </table>
-+    </div>
-+    <p class="muted">"지금 위치로" 는 이 기기로 매장 안에서 한 번 측정한 값을 넣습니다. 저장해야 반영됩니다.</p>
-+  </section>
-+
-+  <section class="panel">
-+    <h2>출퇴근 위치 판정</h2>
-+    <div class="toolbar">
-+      <label>시작일 <input type="date" id="dateFrom"></label>
-+      <label>종료일 <input type="date" id="dateTo"></label>
-+      <label>판정
-+        <select id="resultFilter">
-+          <option value="">전체</option>
-+          <option value="outside">반경 밖</option>
-+          <option value="unknown">판정 불가</option>
-+          <option value="inside">반경 안</option>
-+        </select>
-+      </label>
-+      <button id="loadLocationsBtn" type="button">조회</button>
-+      <label><span><input type="checkbox" id="showCoords" style="min-height:auto"> 좌표 원본 보기</span></label>
-+    </div>
-+    <p class="muted" id="locationSummary"></p>
-+    <div class="table-wrap">
-+      <table>
-+        <thead><tr><th>근무일</th><th>직원</th><th>지점</th><th>출근</th><th>퇴근</th><th>근무</th><th>판정</th><th>상태</th><th>사유</th></tr></thead>
-+        <tbody id="locationRows"></tbody>
-+      </table>
-+    </div>
-+    <p class="muted">확인필요 건의 승인·반려는 오비서 근태 화면에서 기존 방식(수정 → 상태 변경)으로 처리합니다.</p>
-+  </section>
-+</main>
-+<script>
-+(() => {
-+  "use strict";
-+  const $ = id => document.getElementById(id);
-+  const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-+  const state = { businessId: "", locations: [] };
-+
-+  function cookieValue(name) {
-+    const target = `${encodeURIComponent(name)}=`;
-+    return document.cookie.split(";").map(item => item.trim()).find(item => item.startsWith(target))?.slice(target.length) || "";
-+  }
-+  function token() {
-+    return localStorage.getItem("aads_token") || localStorage.getItem("fb_access_token")
-+      || cookieValue("aads_token") || cookieValue("fb_access_token");
-+  }
-+  async function api(path, options = {}) {
-+    const response = await fetch(`/api/v1/workspaces${path}`, {
-+      ...options, cache: "no-store",
-+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` }
-+    });
-+    const payload = await response.json().catch(() => ({}));
-+    if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : `오류 ${response.status}`);
-+    return payload;
-+  }
-+  function showError(error) { $("error").textContent = error ? error.message : ""; $("error").hidden = !error; }
-+  const biz = () => encodeURIComponent(state.businessId);
-+
-+  async function loadBranches() {
-+    const data = await api(`/${biz()}/branches/geofence`);
-+    const policy = data.policy;
-+    $("policyText").textContent = `반경은 ${policy.min_radius_m}~${policy.max_radius_m}m(기본 ${policy.default_radius_m}m). 정확도(오차)가 반경보다 크면 자동 확정하지 않습니다.`;
-+    $("branchRows").innerHTML = data.branches.map(item => `
-+      <tr data-branch="${esc(item.id)}">
-+        <td>${esc(item.name)}${item.latitude == null ? ' <span class="warn">좌표 미등록</span>' : ""}</td>
-+        <td><input name="latitude" inputmode="decimal" value="${esc(item.latitude ?? "")}" size="11"></td>
-+        <td><input name="longitude" inputmode="decimal" value="${esc(item.longitude ?? "")}" size="11"></td>
-+        <td><input name="radius" type="number" min="${policy.min_radius_m}" max="${policy.max_radius_m}" value="${esc(item.geofence_radius_m ?? policy.default_radius_m)}" style="width:6em"></td>
-+        <td><button type="button" data-action="here">지금 위치로</button> <button type="button" class="primary" data-action="save">저장</button></td>
-+      </tr>`).join("") || '<tr><td colspan="5" class="muted">등록된 지점이 없습니다.</td></tr>';
-+  }
-+
-+  $("branchRows").addEventListener("click", event => {
-+    const button = event.target.closest("button[data-action]");
-+    if (!button) return;
-+    const row = button.closest("tr");
-+    showError(null);
-+    if (button.dataset.action === "here") {
-+      // 1회 측정. 연속 추적하지 않는다.
-+      navigator.geolocation.getCurrentPosition(position => {
-+        row.querySelector('[name="latitude"]').value = position.coords.latitude.toFixed(6);
-+        row.querySelector('[name="longitude"]').value = position.coords.longitude.toFixed(6);
-+        if (position.coords.accuracy > 30) showError(new Error(`측정 오차가 ${Math.round(position.coords.accuracy)}m 입니다. 매장 입구 근처에서 다시 측정하는 것이 좋습니다.`));
-+      }, error => showError(new Error(`위치를 읽지 못했습니다: ${error.message}`)), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
-+      return;
-+    }
-+    const raw = ["latitude", "longitude"].map(name => row.querySelector(`[name="${name}"]`).value.trim());
-+    if (raw.some(value => value === "" || !Number.isFinite(Number(value)))) {
-+      showError(new Error("위도·경도를 숫자로 입력하거나 '지금 위치로'를 누르십시오."));
-+      return;
-+    }
-+    const body = {
-+      latitude: Number(row.querySelector('[name="latitude"]').value),
-+      longitude: Number(row.querySelector('[name="longitude"]').value),
-+      radius_m: Number(row.querySelector('[name="radius"]').value)
-+    };
-+    api(`/${biz()}/branches/${encodeURIComponent(row.dataset.branch)}/geofence`, { method: "PATCH", body: JSON.stringify(body) })
-+      .then(loadBranches).catch(showError);
-+  });
-+
-+  const resultLabel = { inside: '<span class="ok">반경 안</span>', outside: '<span class="warn">반경 밖</span>', unknown: '<span class="warn">판정 불가</span>' };
-+  const statusLabel = { approved: "자동 확정", pending: "확인필요", rejected: "반려" };
-+  const time = iso => iso ? new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
-+  function point(item, prefix) {
-+    const distance = item[`${prefix}_distance_m`] == null ? "거리 없음" : `${item[`${prefix}_distance_m`]}m`;
-+    const accuracy = item[`${prefix}_accuracy_m`] == null ? "" : ` · 오차 ${item[`${prefix}_accuracy_m`]}m`;
-+    const coords = $("showCoords").checked && item[`${prefix}_lat`] != null
-+      ? `<div class="coords">${esc(item[`${prefix}_lat`])}, ${esc(item[`${prefix}_lng`])}</div>` : "";
-+    return `${time(item[`${prefix}_at`])}<div class="muted">${esc(distance + accuracy)}</div>${coords}`;
-+  }
-+  function renderLocations() {
-+    $("locationRows").innerHTML = state.locations.map(item => `
-+      <tr>
-+        <td>${esc(item.work_date)}</td><td>${esc(item.employee_name)}<div class="muted">${esc(item.employee_email_masked)}</div></td>
-+        <td>${esc(item.branch)}</td><td>${point(item, "check_in")}</td><td>${item.check_out_at ? point(item, "check_out") : "근무 중"}</td>
-+        <td>${item.check_out_at ? `${Math.floor(item.worked_minutes / 60)}시간 ${item.worked_minutes % 60}분` : "—"}</td>
-+        <td>${resultLabel[item.geofence_result] || "—"}</td><td>${esc(statusLabel[item.status] || item.status)}</td><td>${esc(item.memo)}</td>
-+      </tr>`).join("") || '<tr><td colspan="9" class="muted">PWA 출퇴근 기록이 없습니다.</td></tr>';
-+  }
-+  async function loadLocations() {
-+    const params = new URLSearchParams();
-+    if ($("dateFrom").value) params.set("date_from", $("dateFrom").value);
-+    if ($("dateTo").value) params.set("date_to", $("dateTo").value);
-+    if ($("resultFilter").value) params.set("result", $("resultFilter").value);
-+    const data = await api(`/${biz()}/attendance/locations?${params}`);
-+    state.locations = data.records;
-+    const s = data.summary;
-+    $("locationSummary").textContent = `${data.count}건 · 반경 안 ${s.inside} · 반경 밖 ${s.outside} · 판정 불가 ${s.unknown} · 확인필요 ${s.pending}`;
-+    renderLocations();
-+  }
-+  $("loadLocationsBtn").addEventListener("click", () => loadLocations().catch(showError));
-+  $("showCoords").addEventListener("change", renderLocations);
-+  $("businessSelect").addEventListener("change", event => {
-+    state.businessId = event.target.value;
-+    Promise.all([loadBranches(), loadLocations()]).catch(showError);
-+  });
-+
-+  (async () => {
-+    try {
-+      const { businesses } = await api("/businesses");
-+      $("businessSelect").innerHTML = businesses.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("");
-+      state.businessId = businesses[0]?.id || "";
-+      if (!state.businessId) throw new Error("현재 테넌트에 사업자가 없습니다.");
-+      await Promise.all([loadBranches(), loadLocations()]);
-+    } catch (error) {
-+      showError(error);
-+    }
-+  })();
-+})();
-+</script>
-+</body>
-+</html>
-diff --git a/app/static/apps/obys/clock.html b/app/static/apps/obys/clock.html
-new file mode 100644
-index 00000000..006a8e34
---- /dev/null
-+++ b/app/static/apps/obys/clock.html
-@@ -0,0 +1,441 @@
-+<!doctype html>
-+<html lang="ko">
-+<head>
-+  <meta charset="utf-8">
-+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-+  <meta name="theme-color" content="#2f6fed">
-+  <meta name="apple-mobile-web-app-capable" content="yes">
-+  <meta name="apple-mobile-web-app-title" content="출퇴근">
-+  <link rel="manifest" href="/static/apps/obys/manifest.webmanifest">
-+  <link rel="icon" href="/static/apps/obys/icons/obys-clock-192.png">
-+  <link rel="apple-touch-icon" href="/static/apps/obys/icons/obys-clock-192.png">
-+  <title>오비서 출퇴근</title>
-+  <style>
-+    :root {
-+      color-scheme: light;
-+      --bg: #f4f5f7;
-+      --panel: #ffffff;
-+      --text: #1d2330;
-+      --muted: #5b6475;
-+      --line: #dde1e8;
-+      --primary: #2f6fed;
-+      --primary-dark: #1b4ec2;
-+      --out: #0f7b52;
-+      --warn-bg: #fff6e5;
-+      --warn-text: #8a5a00;
-+      --err-bg: #fdecec;
-+      --err-text: #b42318;
-+      --ok-bg: #e8f6ef;
-+      --ok-text: #0f7b52;
-+    }
-+    * { box-sizing: border-box; }
-+    html, body { margin: 0; background: var(--bg); color: var(--text); }
-+    body {
-+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
-+      font-size: 17px; line-height: 1.5; min-height: 100vh;
-+      padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
-+      word-break: keep-all; overflow-wrap: anywhere;
-+    }
-+    main { max-width: 480px; margin: 0 auto; padding: 16px 16px 32px; display: flex; flex-direction: column; gap: 14px; min-height: 100vh; }
-+    header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-+    header h1 { font-size: 20px; margin: 0; }
-+    header .who { color: var(--muted); font-size: 14px; text-align: right; }
-+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
-+    .panel h2 { font-size: 17px; margin: 0 0 8px; }
-+    .muted { color: var(--muted); font-size: 15px; }
-+    .status-line { font-size: 22px; font-weight: 700; margin: 4px 0; }
-+    .elapsed { font-size: 32px; font-weight: 800; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
-+    .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 14px; font-weight: 700; }
-+    .badge.ok { background: var(--ok-bg); color: var(--ok-text); }
-+    .badge.warn { background: var(--warn-bg); color: var(--warn-text); }
-+    .spacer { flex: 1; }
-+    .big-btn {
-+      display: block; width: 100%; min-height: 96px; border: 0; border-radius: 18px;
-+      font-size: 28px; font-weight: 800; color: #fff; background: var(--primary);
-+      box-shadow: 0 4px 12px rgba(47, 111, 237, .25); touch-action: manipulation;
-+    }
-+    .big-btn.out { background: var(--out); box-shadow: 0 4px 12px rgba(15, 123, 82, .25); }
-+    .big-btn:disabled { opacity: .55; }
-+    .btn {
-+      display: inline-flex; align-items: center; justify-content: center; width: 100%;
-+      min-height: 56px; border-radius: 12px; border: 1px solid var(--line); background: #fff;
-+      color: var(--primary-dark); font-size: 17px; font-weight: 700; text-decoration: none; touch-action: manipulation;
-+    }
-+    .btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
-+    .row { display: flex; gap: 10px; }
-+    .row > * { flex: 1; }
-+    select { width: 100%; min-height: 56px; font-size: 17px; border-radius: 12px; border: 1px solid var(--line); padding: 0 12px; background: #fff; }
-+    .alert { border-radius: 12px; padding: 14px; font-size: 16px; }
-+    .alert.err { background: var(--err-bg); color: var(--err-text); }
-+    .alert.warn { background: var(--warn-bg); color: var(--warn-text); }
-+    .alert .btn { margin-top: 10px; }
-+    ul.consent { margin: 8px 0; padding-left: 20px; }
-+    ul.consent li { margin-bottom: 6px; }
-+    .link-btn { background: none; border: 0; color: var(--muted); text-decoration: underline; font-size: 15px; min-height: 44px; padding: 0 4px; }
-+    footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 12px; }
-+    [hidden] { display: none !important; }
-+  </style>
-+</head>
-+<body>
-+<main>
-+  <header>
-+    <h1>출퇴근</h1>
-+    <div class="who"><div id="whoName"></div><div id="whoBusiness"></div></div>
-+  </header>
-+
-+  <!-- 로그인 필요 -->
-+  <section id="loginView" class="panel" hidden>
-+    <h2>로그인이 필요합니다</h2>
-+    <p class="muted">오비서에 직원 계정으로 로그인한 뒤 이 화면으로 돌아오십시오.</p>
-+    <a class="btn primary" href="/static/apps/obys/index.html">오비서 로그인</a>
-+  </section>
-+
-+  <!-- 사업자 선택(여러 곳에 소속된 경우) -->
-+  <section id="businessView" class="panel" hidden>
-+    <h2>근무하는 사업장</h2>
-+    <select id="businessSelect" aria-label="사업장 선택"></select>
-+  </section>
-+
-+  <!-- 위치정보 수집·이용 동의 (최초 1회) -->
-+  <section id="consentView" class="panel" hidden>
-+    <h2>위치정보 수집·이용 동의</h2>
-+    <ul class="consent">
-+      <li><b>수집 항목</b>: 출근·퇴근 버튼을 누른 순간의 위치 1점(위도·경도·오차 범위). 근무 중 위치를 계속 추적하지 않습니다.</li>
-+      <li><b>목적</b>: 근태 확인 — 매장 반경 안에서 기록했는지 판정합니다.</li>
-+      <li><b>보관 기간</b>: 위치 좌표는 90일 보관 후 파기합니다. 출퇴근 시각 기록은 근로기준법에 따라 3년 보관합니다.</li>
-+      <li><b>거부할 수 있습니다</b>: 동의하지 않아도 출퇴근은 기록됩니다. 다만 위치를 확인할 수 없어 모든 기록이 <b>확인필요</b>로 남고 사장님·관리자가 확인한 뒤 확정됩니다.</li>
-+      <li>동의는 이 화면 아래 <b>위치 동의 철회</b>로 언제든 철회할 수 있습니다.</li>
-+    </ul>
-+    <div class="row">
-+      <button id="consentDeclineBtn" class="btn" type="button">동의하지 않음</button>
-+      <button id="consentAgreeBtn" class="btn primary" type="button">동의합니다</button>
-+    </div>
-+  </section>
-+
-+  <!-- 오늘 상태 -->
-+  <section id="todayView" class="panel" hidden>
-+    <div class="muted" id="todayDate"></div>
-+    <div class="status-line" id="todayStatus">불러오는 중…</div>
-+    <div class="elapsed" id="todayElapsed" hidden></div>
-+    <div id="todayVerdict"></div>
-+    <p class="muted" id="todayReason"></p>
-+  </section>
-+
-+  <section id="branchView" class="panel" hidden>
-+    <h2>근무 지점</h2>
-+    <select id="branchSelect" aria-label="근무 지점 선택"></select>
-+  </section>
-+
-+  <!-- 위치 권한 거부 안내 -->
-+  <section id="permissionView" class="alert warn" hidden>
-+    <b>위치 권한이 꺼져 있습니다.</b>
-+    <p>휴대폰 설정 &gt; 브라우저(또는 오비서 출퇴근 앱) &gt; 위치 권한을 <b>허용</b>으로 바꾼 뒤 다시 누르십시오.
-+      위치 없이 기록하면 <b>확인필요</b>로 남습니다.</p>
-+    <div class="row">
-+      <button id="retryLocationBtn" class="btn" type="button">다시 시도</button>
-+      <button id="withoutLocationBtn" class="btn" type="button">위치 없이 기록</button>
-+    </div>
-+  </section>
-+
-+  <!-- 마지막 오류 + 재시도 -->
-+  <section id="errorView" class="alert err" role="alert" hidden>
-+    <b id="errorTitle">지금 기록할 수 없음</b>
-+    <p id="errorText"></p>
-+    <button id="retryBtn" class="btn" type="button">다시 시도</button>
-+  </section>
-+
-+  <div class="spacer"></div>
-+
-+  <button id="clockBtn" class="big-btn" type="button" hidden>출근</button>
-+
-+  <section id="installView" class="panel" hidden>
-+    <h2>홈 화면에 설치</h2>
-+    <p class="muted" id="installHint">설치하면 앱처럼 바로 열 수 있습니다.</p>
-+    <button id="installBtn" class="btn" type="button" hidden>홈 화면에 추가</button>
-+  </section>
-+
-+  <footer>
-+    <button id="refreshBtn" class="link-btn" type="button">새로고침</button>
-+    <button id="consentToggleBtn" class="link-btn" type="button" hidden>위치 동의 철회</button>
-+    <a class="link-btn" href="/static/apps/obys/index.html">오비서 전체 화면</a>
-+  </footer>
-+</main>
-+
-+<script>
-+(() => {
-+  "use strict";
-+  // 인증 토큰은 오비서 본 화면(index.html)과 같은 키를 읽기만 한다. 서비스워커는 토큰을 보지 않는다.
-+  const SERVER_AUTH_TOKEN_KEY = "aads_token";
-+  const FB_ACCESS_TOKEN_KEY = "fb_access_token";
-+  const BUSINESS_KEY = "obys_clock_business_id";
-+  const BRANCH_KEY = "obys_clock_branch_id";
-+  const DECLINED_KEY = "obys_clock_location_declined";  // "동의하지 않음" 을 고른 기기
-+  const $ = id => document.getElementById(id);
-+  const state = { businessId: "", clock: null, pending: null, timer: null, installPrompt: null };
-+
-+  function cookieValue(name) {
-+    const target = `${encodeURIComponent(name)}=`;
-+    return document.cookie.split(";").map(item => item.trim())
-+      .find(item => item.startsWith(target))?.slice(target.length) || "";
-+  }
-+  function token() {
-+    return localStorage.getItem(SERVER_AUTH_TOKEN_KEY) || localStorage.getItem(FB_ACCESS_TOKEN_KEY)
-+      || cookieValue(SERVER_AUTH_TOKEN_KEY) || cookieValue(FB_ACCESS_TOKEN_KEY);
-+  }
-+
-+  async function api(path, options = {}) {
-+    if (!navigator.onLine) throw Object.assign(new Error("인터넷에 연결되어 있지 않습니다."), { offline: true });
-+    const controller = new AbortController();
-+    const timeoutId = setTimeout(() => controller.abort(), 15000);
-+    let response;
-+    try {
-+      response = await fetch(`/api/v1/workspaces${path}`, {
-+        ...options,
-+        cache: "no-store",
-+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
-+        signal: controller.signal
-+      });
-+    } catch (error) {
-+      throw Object.assign(new Error(error?.name === "AbortError"
-+        ? "서버 응답이 15초 안에 오지 않았습니다." : "서버에 연결할 수 없습니다."), { offline: true });
-+    } finally {
-+      clearTimeout(timeoutId);
-+    }
-+    const payload = await response.json().catch(() => ({}));
-+    if (!response.ok) {
-+      const detail = typeof payload.detail === "string" ? payload.detail : (payload.detail?.message || `오류 ${response.status}`);
-+      throw Object.assign(new Error(detail), { status: response.status });
-+    }
-+    return payload;
-+  }
-+
-+  function show(id, visible) { $(id).hidden = !visible; }
-+
-+  function showError(error, retry) {
-+    state.pending = retry || null;
-+    $("errorTitle").textContent = error.offline ? "지금 기록할 수 없음" : "기록하지 못했습니다";
-+    $("errorText").textContent = error.offline
-+      ? `${error.message} 연결을 확인한 뒤 다시 시도하십시오. 오프라인 기록은 저장하지 않습니다.`
-+      : error.message;
-+    show("retryBtn", Boolean(retry));
-+    show("errorView", true);
-+  }
-+  function clearError() { show("errorView", false); state.pending = null; }
-+
-+  function hhmm(iso) {
-+    if (!iso) return "";
-+    return new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
-+  }
-+  function verdictBadge(record) {
-+    if (!record) return "";
-+    if (record.status === "approved") return '<span class="badge ok">자동 확정</span>';
-+    if (record.status === "rejected") return '<span class="badge warn">반려</span>';
-+    if (record.geofence_result === "outside") return '<span class="badge warn">확인필요 · 매장 반경 밖</span>';
-+    return '<span class="badge warn">확인필요</span>';
-+  }
-+  function tickElapsed(since) {
-+    clearInterval(state.timer);
-+    const el = $("todayElapsed");
-+    if (!since) { el.hidden = true; return; }
-+    const render = () => {
-+      const minutes = Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 60000));
-+      el.textContent = `${Math.floor(minutes / 60)}시간 ${String(minutes % 60).padStart(2, "0")}분 근무 중`;
-+    };
-+    render();
-+    el.hidden = false;
-+    state.timer = setInterval(render, 30000);
-+  }
-+
-+  function consentAgreed() { return Boolean(state.clock?.consent?.agreed); }
-+
-+  function render() {
-+    const clock = state.clock;
-+    $("whoName").textContent = clock.employee.name;
-+    $("whoBusiness").textContent = clock.business.name;
-+    const needsConsent = !consentAgreed() && localStorage.getItem(DECLINED_KEY) !== "1";
-+    show("consentView", needsConsent);
-+    show("todayView", !needsConsent);
-+    show("clockBtn", !needsConsent);
-+    $("consentToggleBtn").textContent = consentAgreed() ? "위치 동의 철회" : "위치 동의하기";
-+    show("consentToggleBtn", !needsConsent);
-+
-+    const open = clock.open_record;
-+    const last = open || clock.today[0] || null;
-+    $("todayDate").textContent = new Date(clock.server_time).toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" });
-+    if (open) {
-+      $("todayStatus").textContent = `근무 중 · ${hhmm(open.check_in_at)} 출근`;
-+      tickElapsed(open.check_in_at);
-+    } else if (last && last.check_out_at) {
-+      $("todayStatus").textContent = `퇴근 완료 · ${hhmm(last.check_in_at)}~${hhmm(last.check_out_at)} (${Math.floor(last.worked_minutes / 60)}시간 ${last.worked_minutes % 60}분)`;
-+      tickElapsed(null);
-+    } else {
-+      $("todayStatus").textContent = "아직 출근 전입니다";
-+      tickElapsed(null);
-+    }
-+    $("todayVerdict").innerHTML = verdictBadge(last);
-+    $("todayReason").textContent = last?.memo || (consentAgreed() ? "" : "위치 미동의 — 기록은 확인필요로 남습니다.");
-+
-+    const btn = $("clockBtn");
-+    btn.textContent = open ? "퇴근" : "출근";
-+    btn.classList.toggle("out", Boolean(open));
-+    btn.disabled = false;
-+
-+    const branches = clock.branches || [];
-+    show("branchView", !open && branches.length > 1);
-+    if (branches.length > 1) {
-+      const saved = localStorage.getItem(BRANCH_KEY) || "";
-+      $("branchSelect").innerHTML = branches.map(item =>
-+        `<option value="${encodeURIComponent(item.id)}">${item.name.replace(/[<>&"]/g, "")}${item.has_geofence ? "" : " (위치 미등록)"}</option>`).join("");
-+      if (branches.some(item => item.id === saved)) $("branchSelect").value = encodeURIComponent(saved);
-+    }
-+  }
-+
-+  async function loadState() {
-+    clearError();
-+    try {
-+      state.clock = await api(`/${encodeURIComponent(state.businessId)}/attendance/clock/state`);
-+      render();
-+    } catch (error) {
-+      if (error.status === 401) { show("loginView", true); return; }
-+      showError(error, loadState);
-+    }
-+  }
-+
-+  async function loadBusinesses() {
-+    if (!token()) { show("loginView", true); return; }
-+    try {
-+      const { businesses } = await api("/businesses");
-+      if (!businesses.length) throw new Error("연결된 사업장이 없습니다. 사장님께 직원 등록을 요청하십시오.");
-+      const saved = localStorage.getItem(BUSINESS_KEY);
-+      state.businessId = businesses.some(item => item.id === saved) ? saved : businesses[0].id;
-+      if (businesses.length > 1) {
-+        $("businessSelect").innerHTML = businesses.map(item =>
-+          `<option value="${encodeURIComponent(item.id)}">${item.name.replace(/[<>&"]/g, "")}</option>`).join("");
-+        $("businessSelect").value = encodeURIComponent(state.businessId);
-+        show("businessView", true);
-+      }
-+      await loadState();
-+    } catch (error) {
-+      if (error.status === 401) { show("loginView", true); return; }
-+      showError(error, loadBusinesses);
-+    }
-+  }
-+
-+  // 위치는 버튼을 누른 순간 1회만 읽는다. 연속 추적·백그라운드·주기 수집은 쓰지 않는다.
-+  function readPositionOnce() {
-+    return new Promise((resolve, reject) => {
-+      if (!("geolocation" in navigator)) { reject(Object.assign(new Error("이 기기는 위치를 지원하지 않습니다."), { code: 2 })); return; }
-+      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
-+    });
-+  }
-+
-+  async function submitClock(withLocation) {
-+    const open = state.clock.open_record;
-+    const action = open ? "check-out" : "check-in";
-+    const body = {
-+      location_consent: consentAgreed() && withLocation,
-+      device_info: navigator.userAgent.slice(0, 300)
-+    };
-+    if (!open && (state.clock.branches || []).length > 1) {
-+      body.branch_id = decodeURIComponent($("branchSelect").value);
-+      localStorage.setItem(BRANCH_KEY, body.branch_id);
-+    }
-+    if (body.location_consent) {
-+      try {
-+        const position = await readPositionOnce();
-+        body.latitude = position.coords.latitude;
-+        body.longitude = position.coords.longitude;
-+        body.accuracy_m = position.coords.accuracy;
-+      } catch (error) {
-+        if (error.code === 1) {  // PERMISSION_DENIED
-+          show("permissionView", true);
-+          return;
-+        }
-+        showError(new Error(`위치를 읽지 못했습니다(${error.code === 3 ? "시간 초과" : "측정 실패"}). 다시 시도하거나 '위치 없이 기록'을 누르십시오.`),
-+                  () => runClock(true));
-+        show("permissionView", true);
-+        return;
-+      }
-+    }
-+    await api(`/${encodeURIComponent(state.businessId)}/attendance/${action}`, { method: "POST", body: JSON.stringify(body) });
-+    show("permissionView", false);
-+    await loadState();
-+  }
-+
-+  async function runClock(withLocation) {
-+    clearError();
-+    const btn = $("clockBtn");
-+    btn.disabled = true;
-+    btn.textContent = "기록 중…";
-+    try {
-+      await submitClock(withLocation);
-+    } catch (error) {
-+      // 409(이미 출근·출근 없음)는 화면 상태가 낡은 것이다 — 새 상태를 받은 뒤 오류를 보인다.
-+      if (error.status === 409) await loadState();
-+      showError(error, () => runClock(withLocation));
-+    } finally {
-+      if (state.clock) render();
-+    }
-+  }
-+
-+  async function saveConsent(agree) {
-+    clearError();
-+    try {
-+      await api(`/${encodeURIComponent(state.businessId)}/attendance/consent`, { method: "POST", body: JSON.stringify({ agree }) });
-+      if (agree) localStorage.removeItem(DECLINED_KEY); else localStorage.setItem(DECLINED_KEY, "1");
-+      await loadState();
-+    } catch (error) {
-+      showError(error, () => saveConsent(agree));
-+    }
-+  }
-+
-+  $("consentAgreeBtn").addEventListener("click", () => saveConsent(true));
-+  $("consentDeclineBtn").addEventListener("click", () => { localStorage.setItem(DECLINED_KEY, "1"); render(); });
-+  $("consentToggleBtn").addEventListener("click", () => {
-+    if (consentAgreed()) {
-+      if (confirm("위치 동의를 철회하면 이후 출퇴근은 위치 없이 기록되고 모두 확인필요로 남습니다. 철회할까요?")) saveConsent(false);
-+    } else {
-+      saveConsent(true);
-+    }
-+  });
-+  $("clockBtn").addEventListener("click", () => runClock(true));
-+  $("retryLocationBtn").addEventListener("click", () => { show("permissionView", false); runClock(true); });
-+  $("withoutLocationBtn").addEventListener("click", () => { show("permissionView", false); runClock(false); });
-+  $("retryBtn").addEventListener("click", () => state.pending?.());
-+  $("refreshBtn").addEventListener("click", () => (state.businessId ? loadState() : loadBusinesses()));
-+  $("businessSelect").addEventListener("change", event => {
-+    state.businessId = decodeURIComponent(event.target.value);
-+    localStorage.setItem(BUSINESS_KEY, state.businessId);
-+    loadState();
-+  });
-+  window.addEventListener("online", () => { if (!$("errorView").hidden && state.pending) state.pending(); });
-+
-+  // 설치 안내 — Android 는 설치 버튼, iOS 는 공유 메뉴 안내.
-+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
-+  if (!standalone) {
-+    show("installView", true);
-+    if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
-+      $("installHint").textContent = "Safari 아래쪽 공유 버튼 → '홈 화면에 추가'를 누르면 앱처럼 설치됩니다.";
-+    }
-+  }
-+  window.addEventListener("beforeinstallprompt", event => {
-+    event.preventDefault();
-+    state.installPrompt = event;
-+    show("installBtn", true);
-+  });
-+  $("installBtn").addEventListener("click", async () => {
-+    if (!state.installPrompt) return;
-+    state.installPrompt.prompt();
-+    await state.installPrompt.userChoice.catch(() => null);
-+    state.installPrompt = null;
-+    show("installBtn", false);
-+  });
-+
-+  if ("serviceWorker" in navigator) {
-+    navigator.serviceWorker.register("/static/apps/obys/sw.js", { scope: "/static/apps/obys/" }).catch(() => {});
-+  }
-+  loadBusinesses();
-+})();
-+</script>
-+</body>
-+</html>
-diff --git a/app/static/apps/obys/icons/obys-clock-192.png b/app/static/apps/obys/icons/obys-clock-192.png
-new file mode 100644
-index 00000000..33ea99f8
-Binary files /dev/null and b/app/static/apps/obys/icons/obys-clock-192.png differ
-diff --git a/app/static/apps/obys/icons/obys-clock-512.png b/app/static/apps/obys/icons/obys-clock-512.png
-new file mode 100644
-index 00000000..e280e4a9
-Binary files /dev/null and b/app/static/apps/obys/icons/obys-clock-512.png differ
-diff --git a/app/static/apps/obys/index.html b/app/static/apps/obys/index.html
-index 81e256bf..98cc066b 100644
---- a/app/static/apps/obys/index.html
-+++ b/app/static/apps/obys/index.html
-@@ -4365,6 +4365,7 @@
-           <section class="panel">
-             <div class="panel-head">
-               <h2 class="panel-title">지점 목록</h2>
-+              <a href="/static/apps/obys/attendance-admin.html" class="badge info">출퇴근 위치(좌표·반경) 설정</a>
-               <span id="branchPageListBadge" class="badge info">0개</span>
-             </div>
-             <div class="panel-body">
-diff --git a/app/static/apps/obys/manifest.webmanifest b/app/static/apps/obys/manifest.webmanifest
-new file mode 100644
-index 00000000..653885b4
---- /dev/null
-+++ b/app/static/apps/obys/manifest.webmanifest
-@@ -0,0 +1,27 @@
-+{
-+  "id": "/static/apps/obys/clock.html",
-+  "name": "오비서 출퇴근",
-+  "short_name": "출퇴근",
-+  "description": "오비서 직원 출퇴근 기록 — 버튼을 누른 순간의 위치로 매장 반경을 확인합니다.",
-+  "lang": "ko",
-+  "start_url": "/static/apps/obys/clock.html",
-+  "scope": "/static/apps/obys/",
-+  "display": "standalone",
-+  "orientation": "portrait",
-+  "background_color": "#f4f5f7",
-+  "theme_color": "#2f6fed",
-+  "icons": [
-+    {
-+      "src": "/static/apps/obys/icons/obys-clock-192.png",
-+      "sizes": "192x192",
-+      "type": "image/png",
-+      "purpose": "any maskable"
-+    },
-+    {
-+      "src": "/static/apps/obys/icons/obys-clock-512.png",
-+      "sizes": "512x512",
-+      "type": "image/png",
-+      "purpose": "any maskable"
-+    }
-+  ]
-+}
-diff --git a/app/static/apps/obys/sw.js b/app/static/apps/obys/sw.js
-new file mode 100644
-index 00000000..147e5211
---- /dev/null
-+++ b/app/static/apps/obys/sw.js
-@@ -0,0 +1,58 @@
-+/* 오비서 출퇴근 PWA 서비스워커 — scope: /static/apps/obys/
-+ *
-+ * 캐시하는 것은 앱 셸(HTML·아이콘·manifest)뿐이다. 근태 데이터·API 응답·인증 토큰은
-+ * 캐시에 넣지 않는다 — 아래 fetch 핸들러는 APP_SHELL 경로가 아니면 손대지 않고
-+ * 브라우저 기본 네트워크 요청으로 흘려보낸다(respondWith 도 호출하지 않는다).
-+ *
-+ * 오프라인 출퇴근을 기기에 쌓아 나중에 올리는 기능은 없다(시각 위조 위험).
-+ * 오프라인이면 화면이 "지금 기록할 수 없음 + 재시도" 를 보여준다.
-+ *
-+ * 배포 시 셸을 바꾸면 CACHE_VERSION 을 올린다. 셸은 네트워크 우선이라 버전을
-+ * 깜빡해도 온라인 상태에서는 새 파일을 받는다. 캐시는 오프라인 안내용 사본이다.
-+ */
-+const CACHE_VERSION = "obys-clock-shell-20260930-r1";
-+const CACHE_PREFIX = "obys-clock-shell-";
-+const APP_SHELL = [
-+  "/static/apps/obys/clock.html",
-+  "/static/apps/obys/manifest.webmanifest",
-+  "/static/apps/obys/icons/obys-clock-192.png",
-+  "/static/apps/obys/icons/obys-clock-512.png"
-+];
-+const APP_SHELL_PATHS = new Set(APP_SHELL);
-+
-+self.addEventListener("install", event => {
-+  event.waitUntil(
-+    caches.open(CACHE_VERSION)
-+      .then(cache => cache.addAll(APP_SHELL.map(path => new Request(path, { cache: "reload", credentials: "omit" }))))
-+      .then(() => self.skipWaiting())
-+  );
-+});
-+
-+self.addEventListener("activate", event => {
-+  event.waitUntil(
-+    caches.keys()
-+      .then(keys => Promise.all(keys
-+        .filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE_VERSION)
-+        .map(key => caches.delete(key))))
-+      .then(() => self.clients.claim())
-+  );
-+});
-+
-+self.addEventListener("fetch", event => {
-+  const request = event.request;
-+  if (request.method !== "GET") return;
-+  const url = new URL(request.url);
-+  if (url.origin !== self.location.origin) return;
-+  if (!APP_SHELL_PATHS.has(url.pathname)) return;  // API·근태·기타 화면은 캐시하지 않는다
-+  event.respondWith(
-+    fetch(request, { cache: "no-store" })
-+      .then(response => {
-+        if (response.ok) {
-+          const copy = response.clone();
-+          caches.open(CACHE_VERSION).then(cache => cache.put(url.pathname, copy));
-+        }
-+        return response;
-+      })
-+      .catch(() => caches.match(url.pathname).then(cached => cached || Response.error()))
-+  );
-+});
-diff --git a/docs/operations/OBYS_ATTENDANCE_PWA_GPS.md b/docs/operations/OBYS_ATTENDANCE_PWA_GPS.md
-new file mode 100644
-index 00000000..44a9565b
---- /dev/null
-+++ b/docs/operations/OBYS_ATTENDANCE_PWA_GPS.md
-@@ -0,0 +1,156 @@
-+# 오비서 PWA 출퇴근(GPS 반경) 운영 절차
-+
-+TASK: AADS-OBYS-PWA-GPS-ATTENDANCE-20260930 · 작성 2026-09-30 KST
-+관련: `docs/prd/20260930_OBYS_ATTENDANCE_PWA_GPS_PRD.md`(r3), `app/api/obys_workspaces.py`
-+
-+## 0. 선행 조건
-+
-+- **직원 테넌트 멤버십(runner-0f81541a, R2)** 이 운영에 반영되어야 한다. 직원 계정이 고용주
-+  테넌트의 활성 멤버십(owner/admin/member)을 가져야 출퇴근 API가 열린다. 없으면 403 이 정상이다.
-+  이 기능은 테넌트 게이트를 우회하지 않는다.
-+- 아래 §1 마이그레이션이 오비서 업무 DB 에 적용되어야 한다. 적용 전에는 출퇴근 API 가 500
-+  (없는 컬럼)을 낸다. 기존 근태 목록·수기 입력 API 는 새 컬럼을 읽지 않으므로 영향이 없다.
-+
-+## 1. 마이그레이션 (수동, 오비서 업무 DB 전용)
-+
-+AADS DB 에 돌리지 않는다. `scripts/migrations_auto_apply_baseline.txt` 에 HOLD 로 올라가 있다.
-+
-+```bash
-+psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_attendance_pwa_gps.sql
-+```
-+
-+- 추가만 한다: `yeoljeong_branches` 3열, `yeoljeong_attendance_records` 13열, 모두 NULL 허용·기본값 없음.
-+- `source` 에 CHECK 가 있으면 기존 조건에 `OR source = 'pwa'` 만 더한다. 원래 조건은 새 제약
-+  `yeoljeong_attendance_records_source_pwa_check` 의 COMMENT 에 남는다(NOTICE 로도 출력).
-+- 기존 근태 행의 status 를 재판정하지 않는다.
-+
-+롤백: `migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql` — `source='pwa'` 행이 있으면 멈춘다(§8).
-+
-+## 2. 반경 판정 규칙
-+
-+반경은 CEO 결정 D1(2026-09-30) "매장 반경 50m 안" 을 따른다. 코드 상수:
-+`GEOFENCE_DEFAULT_RADIUS_M=50`, `GEOFENCE_MIN_RADIUS_M=30`, `GEOFENCE_MAX_RADIUS_M=50`.
-+지점별 `geofence_radius_m` 이 있으면 그 값(상한 50m), 없으면 기본 50m. 정확도 여유를 더하지 않는다.
-+
-+| 입력 조건 (위에서부터 먼저 걸리는 것) | geofence_result | status |
-+|---|---|---|
-+| 위치 미동의(서버 동의 없음 또는 요청 `location_consent=false`) — 좌표 저장 안 함 | `unknown` | `pending` |
-+| 지점 좌표 미등록(또는 지점 없음) — 사유 "지점 좌표 미등록" | `unknown` | `pending` |
-+| 좌표 없음(권한 거부·측정 실패) | `unknown` | `pending` |
-+| `accuracy_m` 없음 | `unknown` | `pending` |
-+| `accuracy_m` > 반경 (오차가 반경보다 큼 — 안으로 판정하지 않음) | `unknown` | `pending` |
-+| 거리(하버사인, 올림) ≤ 반경 | `inside` | `approved` |
-+| 거리 > 반경 — memo 에 거리(m) 기록 | `outside` | `pending` |
-+
-+퇴근 시 행 전체 판정: 출근·퇴근 **둘 다** `inside` 면 `inside`/`approved`, 한쪽이라도 `outside` 면
-+`outside`/`pending`, 그 밖은 `unknown`/`pending`. 관리자가 이미 `rejected` 로 둔 행은 `rejected` 유지.
-+
-+## 3. 지점 좌표·반경 등록
-+
-+관리 화면: 오비서 → 사업자/지점 화면 "지점 목록" 옆 **출퇴근 위치(좌표·반경) 설정**
-+(`/static/apps/obys/attendance-admin.html`, 소유자·관리자만).
-+
-+1. 사장님이 매장 안(입구 근처)에서 관리 화면을 연다.
-+2. 해당 지점의 **지금 위치로** → 측정 오차가 30m 를 넘으면 경고가 뜬다. 다시 측정한다.
-+3. 반경(30~50m, 기본 50m)을 확인하고 **저장**. `PATCH /api/v1/workspaces/{business_id}/branches/{branch_id}/geofence`
-+   가 호출되고 감사로그 `attendance.geofence_config` 가 남는다.
-+4. 좌표를 모르면 지도 서비스에서 매장 좌표(위도, 경도)를 복사해 입력해도 된다.
-+
-+성신여대점처럼 주소가 비어 있는 지점은 좌표가 등록될 때까지 모든 출퇴근이 "지점 좌표 미등록" 확인필요로 남는다.
-+
-+## 4. 직원 설치 안내
-+
-+주소: `https://<오비서 도메인>/static/apps/obys/clock.html`
-+
-+- 먼저 오비서(`/static/apps/obys/index.html`)에 직원 계정으로 로그인한다(같은 브라우저).
-+- **Android(Chrome)**: 출퇴근 화면 아래 **홈 화면에 추가** 버튼, 또는 메뉴 ⋮ → 앱 설치.
-+- **iPhone(Safari)**: 공유 버튼 → **홈 화면에 추가**. iOS 는 설치 앱과 Safari 의 저장소가 분리될 수
-+  있어, 설치 후 첫 실행에서 로그인 안내가 나오면 설치 앱 안에서 로그인한다.
-+- 서비스워커 범위는 `/static/apps/obys/` 다. 캐시는 앱 셸(clock.html·manifest·아이콘)만 담고
-+  API 응답·근태·토큰은 담지 않는다. 셸을 바꿔 배포하면 `sw.js` 의 `CACHE_VERSION` 을 올린다.
-+- 오프라인이면 "지금 기록할 수 없음 + 재시도" 만 보인다. 기기에 쌓았다가 나중에 올리는 기능은 없다.
-+
-+## 5. 위치정보 동의·철회
-+
-+- 최초 실행 시 동의 화면: 수집 항목(버튼 누른 순간의 위치 1점), 목적(근태 확인), 보관 기간,
-+  거부 시 결과(출퇴근은 되지만 확인필요)를 보여준다.
-+- **동의합니다** → `POST .../attendance/consent {"agree": true}` → 감사로그 `attendance.consent`.
-+  이후 기록 행의 `location_consent_at` 에 동의 시각이 들어간다.
-+- **동의하지 않음** → 서버에는 동의가 없으므로 위치를 보내더라도 저장하지 않는다. 모두 pending.
-+- 철회: 화면 아래 **위치 동의 철회** → `{"agree": false}` → 감사로그 `attendance.consent_withdraw`.
-+  서버는 가장 최근 동의/철회 기록을 기준으로 판단한다(기기를 바꿔도 같다).
-+- 위치는 `getCurrentPosition` 1회만 읽는다. 연속 추적·백그라운드 수집은 없다.
-+- 보관: 화면 안내는 "좌표 90일, 출퇴근 시각 3년" 이다(PRD D2 권장안). **자동 파기 작업은 1차 범위에 없다** —
-+  §7 의 파기 쿼리를 월 1회 운영자가 실행한다. D2 가 확정되면 기간을 바꾸고 자동화한다.
-+
-+## 6. 확인필요(pending) 처리 흐름
-+
-+1. 관리 화면 "출퇴근 위치 판정" 에서 판정=반경 밖/판정 불가 로 조회한다
-+   (`GET .../attendance/locations?result=outside`). 거리·정확도·사유가 보인다. 좌표 원본은 체크박스로만 표시.
-+2. 사유별 조치
-+   - 반경 밖: 배달·외근 등 정당한 사유가 확인되면 오비서 근태 화면에서 해당 행을 **수정 → 상태 확정**.
-+   - GPS 오차 과대: 실내 오차가 원인인 경우가 많다. 직원 확인 후 확정.
-+   - 지점 좌표 미등록: §3 으로 좌표를 먼저 등록한다(과거 행은 자동 재판정하지 않는다). 개별 확정.
-+   - 위치 미동의: 출근부·CCTV 등 다른 근거로 확정.
-+3. 상태 변경은 기존 `PUT .../attendance/records/{id}` 로 하며 감사로그 `attendance.update` 가 남는다.
-+4. 첫 주 확인필요 비율이 20% 를 넘으면 매장 QR(FR-15) 앞당김을 CEO 에게 올린다(반경 확대는 CEO 결정 사항).
-+
-+## 7. 확인 쿼리 (오비서 업무 DB, 읽기 전용)
-+
-+```sql
-+-- 컬럼 적용 확인
-+SELECT column_name, is_nullable FROM information_schema.columns
-+ WHERE table_name IN ('yeoljeong_branches','yeoljeong_attendance_records')
-+   AND column_name IN ('latitude','longitude','geofence_radius_m','check_in_at','check_out_at',
-+                       'geofence_result','location_consent_at') ORDER BY table_name, column_name;
-+
-+-- 지점 좌표 등록 현황
-+SELECT business_id, id, name, latitude IS NOT NULL AS has_coords, geofence_radius_m
-+  FROM yeoljeong_branches WHERE deleted_at IS NULL ORDER BY business_id, sort_order;
-+
-+-- 오늘 PWA 출퇴근 판정 분포
-+SELECT business_id, geofence_result, status, count(*)
-+  FROM yeoljeong_attendance_records
-+ WHERE source = 'pwa' AND deleted_at IS NULL AND work_date = (now() AT TIME ZONE 'Asia/Seoul')::date
-+ GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
-+
-+-- 퇴근 누락(24시간 넘게 열린 출근)
-+SELECT id, business_id, employee_email_masked, work_date, check_in_at
-+  FROM yeoljeong_attendance_records
-+ WHERE source = 'pwa' AND check_out_at IS NULL AND deleted_at IS NULL
-+   AND check_in_at < now() - interval '24 hours';
-+
-+-- 동의 없이 좌표가 저장된 행(항상 0 이어야 한다)
-+SELECT count(*) FROM yeoljeong_attendance_records
-+ WHERE source = 'pwa' AND location_consent_at IS NULL
-+   AND (check_in_lat IS NOT NULL OR check_out_lat IS NOT NULL);
-+```
-+
-+좌표 파기(보관기간 경과분, 운영자 승인 후 실행 — 거리·판정·시각은 남기고 좌표만 지운다):
-+
-+```sql
-+UPDATE yeoljeong_attendance_records
-+   SET check_in_lat = NULL, check_in_lng = NULL, check_out_lat = NULL, check_out_lng = NULL, updated_at = now()
-+ WHERE source = 'pwa' AND work_date < (now() AT TIME ZONE 'Asia/Seoul')::date - 90
-+   AND (check_in_lat IS NOT NULL OR check_out_lat IS NOT NULL);
-+```
-+
-+## 8. 되돌리기
-+
-+1. 코드 되돌림(출퇴근 라우트 제거)을 먼저 배포한다 — 신규 PWA 기록이 멈춘다.
-+2. `source='pwa'` 행을 내보내 보관한다(`\copy (SELECT ... WHERE source='pwa') TO ...`).
-+3. 남길 행은 관리자 판단으로 수기 행으로 옮기거나 soft delete 한다(데이터 변경은 CEO 승인 사항).
-+4. 그 뒤에만 롤백 SQL 을 실행한다 — `pwa` 행이 남아 있으면 롤백 SQL 이 스스로 멈춘다.
-+
-+## 9. API 목록
-+
-+| 메서드 | 경로 (`/api/v1/workspaces` 아래) | 권한 |
-+|---|---|---|
-+| GET | `/{business_id}/attendance/clock/state` | 직원 본인 (좌표 원본 없음) |
-+| POST | `/{business_id}/attendance/consent` | 직원 본인 |
-+| POST | `/{business_id}/attendance/check-in` | 직원 본인 (본문 이메일 무시, 대리 불가) |
-+| POST | `/{business_id}/attendance/check-out` | 직원 본인 |
-+| GET | `/{business_id}/attendance/me/{record_id}` | 직원 본인 (타인 기록 403) |
-+| GET | `/{business_id}/attendance/locations` | 소유자·관리자 (좌표 원본 포함) |
-+| GET | `/{business_id}/branches/geofence` | 소유자·관리자 |
-+| PATCH | `/{business_id}/branches/{branch_id}/geofence` | 소유자·관리자 (감사로그) |
-diff --git a/migrations/20260930_obys_attendance_pwa_gps.sql b/migrations/20260930_obys_attendance_pwa_gps.sql
-new file mode 100644
-index 00000000..a3d4ae6b
---- /dev/null
-+++ b/migrations/20260930_obys_attendance_pwa_gps.sql
-@@ -0,0 +1,98 @@
-+-- AADS-OBYS-PWA-GPS-ATTENDANCE-20260930
-+-- 오비서 PWA 출퇴근 1차 — 지점 좌표·반경, 근태 행의 출퇴근 시각·위치 1점·판정·동의 시각.
-+--
-+-- 적용 대상: 오비서 업무 DB(OBYS_DATABASE_URL, 진아서버)만. AADS DB 에 돌리지 않는다.
-+--   scripts/migrations_auto_apply_baseline.txt 에 올려 자동 적용에서 HOLD 한다.
-+--   적용: psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_attendance_pwa_gps.sql
-+--   절차: docs/operations/OBYS_ATTENDANCE_PWA_GPS.md
-+-- 스키마 추가만 한다. ADD COLUMN 은 전부 NULL 허용·기본값 없음이라 기존 근태·지점 행을
-+--   다시 쓰지 않고, 기존 근태의 status 를 재판정하지 않는다(신규 PWA 기록부터 적용).
-+-- source 에 CHECK 가 있으면 기존 조건에 `OR source = 'pwa'` 만 더한다(허용 범위 확장).
-+--   원래 조건은 새 제약의 COMMENT 에 남겨 롤백이 그대로 되돌린다.
-+-- 멱등하다(IF NOT EXISTS, 이미 확장된 제약은 건너뜀).
-+-- 롤백: migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql
-+
-+BEGIN;
-+
-+DO $$
-+BEGIN
-+    IF to_regclass('public.yeoljeong_attendance_records') IS NULL
-+       OR to_regclass('public.yeoljeong_branches') IS NULL THEN
-+        RAISE EXCEPTION '오비서 업무 DB 전용이다 (yeoljeong_attendance_records / yeoljeong_branches 없음)';
-+    END IF;
-+END
-+$$;
-+
-+-- 1) 지점 좌표·반경. 반경이 NULL 이면 코드 기본값(GEOFENCE_DEFAULT_RADIUS_M)을 쓴다.
-+ALTER TABLE yeoljeong_branches ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
-+ALTER TABLE yeoljeong_branches ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
-+ALTER TABLE yeoljeong_branches ADD COLUMN IF NOT EXISTS geofence_radius_m INTEGER;
-+
-+-- 2) 근태 행: 버튼을 누른 순간의 시각·위치 1점·판정.
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_in_at TIMESTAMPTZ;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_out_at TIMESTAMPTZ;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_in_lat DOUBLE PRECISION;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_in_lng DOUBLE PRECISION;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_in_accuracy_m INTEGER;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_out_lat DOUBLE PRECISION;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_out_lng DOUBLE PRECISION;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_out_accuracy_m INTEGER;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_in_distance_m INTEGER;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS check_out_distance_m INTEGER;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS geofence_result TEXT;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS device_info TEXT;
-+ALTER TABLE yeoljeong_attendance_records ADD COLUMN IF NOT EXISTS location_consent_at TIMESTAMPTZ;
-+
-+DO $$
-+BEGIN
-+    IF NOT EXISTS (
-+        SELECT 1 FROM pg_constraint
-+         WHERE conrelid = 'public.yeoljeong_attendance_records'::regclass
-+           AND conname = 'yeoljeong_attendance_records_geofence_result_check'
-+    ) THEN
-+        ALTER TABLE yeoljeong_attendance_records
-+            ADD CONSTRAINT yeoljeong_attendance_records_geofence_result_check
-+            CHECK (geofence_result IS NULL OR geofence_result IN ('inside', 'outside', 'unknown'));
-+    END IF;
-+END
-+$$;
-+
-+-- 3) source = 'pwa' 허용. CHECK 가 없으면 할 일이 없다(코드 상수 ATTENDANCE_SOURCES 가 정본).
-+DO $$
-+DECLARE
-+    con RECORD;
-+BEGIN
-+    FOR con IN
-+        SELECT DISTINCT c.oid, c.conname, pg_get_constraintdef(c.oid) AS def
-+          FROM pg_constraint c
-+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
-+         WHERE c.conrelid = 'public.yeoljeong_attendance_records'::regclass
-+           AND c.contype = 'c'
-+           AND a.attname = 'source'
-+           AND c.conname <> 'yeoljeong_attendance_records_source_pwa_check'
-+    LOOP
-+        IF position('''pwa''' IN con.def) > 0 THEN
-+            CONTINUE;  -- 이미 pwa 를 허용한다
-+        END IF;
-+        -- def 는 'CHECK (...)' 형태다. 조건부만 떼어 OR 로 넓힌다.
-+        EXECUTE format(
-+            'ALTER TABLE yeoljeong_attendance_records ADD CONSTRAINT yeoljeong_attendance_records_source_pwa_check CHECK ((%s) OR source = %L)',
-+            substring(con.def FROM 7), 'pwa'
-+        );
-+        EXECUTE format(
-+            'COMMENT ON CONSTRAINT yeoljeong_attendance_records_source_pwa_check ON yeoljeong_attendance_records IS %L',
-+            json_build_object('original_name', con.conname, 'original_def', con.def)::text
-+        );
-+        EXECUTE format('ALTER TABLE yeoljeong_attendance_records DROP CONSTRAINT %I', con.conname);
-+        RAISE NOTICE 'source CHECK % 를 pwa 허용으로 확장했다: %', con.conname, con.def;
-+        EXIT;  -- source 제약은 하나만 확장한다
-+    END LOOP;
-+END
-+$$;
-+
-+-- 4) 열린 출근(퇴근 전) 조회용.
-+CREATE INDEX IF NOT EXISTS idx_yeoljeong_attendance_pwa_open
-+    ON yeoljeong_attendance_records (business_id, employee_email, work_date)
-+    WHERE source = 'pwa' AND check_out_at IS NULL AND deleted_at IS NULL;
-+
-+COMMIT;
-diff --git a/migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql b/migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql
-new file mode 100644
-index 00000000..c3a38253
---- /dev/null
-+++ b/migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql
-@@ -0,0 +1,64 @@
-+-- Rollback: AADS-OBYS-PWA-GPS-ATTENDANCE-20260930
-+-- 오비서 업무 DB 전용, 수동 적용. AADS DB 에 돌리지 않는다.
-+--   psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/rollback/20260930_obys_attendance_pwa_gps.down.sql
-+--
-+-- 주의: PWA 로 기록된 근태(source='pwa')가 하나라도 있으면 멈춘다. 그 행의 출퇴근
-+-- 위치·판정·동의 시각은 이 컬럼에만 있어서, 컬럼을 지우면 근거가 사라진다.
-+-- 먼저 코드를 되돌려 신규 PWA 기록을 막고, 남길 행을 내보낸 뒤(운영 문서 §7 쿼리)
-+-- 관리자 판단으로 처리한 다음 실행한다. 기존 수기·CSV 근태는 영향 없다.
-+
-+BEGIN;
-+
-+DO $$
-+BEGIN
-+    IF to_regclass('public.yeoljeong_attendance_records') IS NULL
-+       OR to_regclass('public.yeoljeong_branches') IS NULL THEN
-+        RAISE EXCEPTION '오비서 업무 DB 전용이다';
-+    END IF;
-+    IF EXISTS (SELECT 1 FROM yeoljeong_attendance_records WHERE source = 'pwa') THEN
-+        RAISE EXCEPTION 'source=pwa 근태가 남아 있어 롤백하지 않는다 — docs/operations/OBYS_ATTENDANCE_PWA_GPS.md §8';
-+    END IF;
-+END
-+$$;
-+
-+-- source CHECK 를 원래 조건으로 되돌린다(확장하지 않았으면 할 일 없음).
-+DO $$
-+DECLARE
-+    saved JSONB;
-+BEGIN
-+    SELECT obj_description(c.oid, 'pg_constraint')::jsonb INTO saved
-+      FROM pg_constraint c
-+     WHERE c.conrelid = 'public.yeoljeong_attendance_records'::regclass
-+       AND c.conname = 'yeoljeong_attendance_records_source_pwa_check';
-+    IF saved IS NULL THEN
-+        RETURN;
-+    END IF;
-+    EXECUTE format('ALTER TABLE yeoljeong_attendance_records ADD CONSTRAINT %I %s',
-+                   saved->>'original_name', saved->>'original_def');
-+    ALTER TABLE yeoljeong_attendance_records DROP CONSTRAINT yeoljeong_attendance_records_source_pwa_check;
-+END
-+$$;
-+
-+DROP INDEX IF EXISTS idx_yeoljeong_attendance_pwa_open;
-+ALTER TABLE yeoljeong_attendance_records DROP CONSTRAINT IF EXISTS yeoljeong_attendance_records_geofence_result_check;
-+
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_in_at;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_out_at;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_in_lat;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_in_lng;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_in_accuracy_m;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_out_lat;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_out_lng;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_out_accuracy_m;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_in_distance_m;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS check_out_distance_m;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS geofence_result;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS device_info;
-+ALTER TABLE yeoljeong_attendance_records DROP COLUMN IF EXISTS location_consent_at;
-+
-+-- 지점 좌표는 매장 위치(개인정보 아님)지만 이 기능 전용이므로 함께 걷는다.
-+ALTER TABLE yeoljeong_branches DROP COLUMN IF EXISTS latitude;
-+ALTER TABLE yeoljeong_branches DROP COLUMN IF EXISTS longitude;
-+ALTER TABLE yeoljeong_branches DROP COLUMN IF EXISTS geofence_radius_m;
-+
-+COMMIT;
-diff --git a/scripts/migrations_auto_apply_baseline.txt b/scripts/migrations_auto_apply_baseline.txt
-index 963fe533..8d97effb 100644
---- a/scripts/migrations_auto_apply_baseline.txt
-+++ b/scripts/migrations_auto_apply_baseline.txt
-@@ -41,3 +41,6 @@ migrations/20260930_obys_e2e_credentials_jinah.sql
- # OBYS 업무 DB 전용(yeoljeong_contracts). AADS DB 자동 적용 대상이 아니다 —
- # docs/operations/OBYS_CONTRACT_NOTIFY_SIGNED_PDF.md 절차로 수동 적용.
- migrations/20260930_obys_contract_notify_signed_pdf.sql
-+# OBYS 업무 DB 전용(yeoljeong_branches·yeoljeong_attendance_records). AADS DB 자동 적용
-+# 대상이 아니다 — docs/operations/OBYS_ATTENDANCE_PWA_GPS.md 절차로 수동 적용.
-+migrations/20260930_obys_attendance_pwa_gps.sql
-diff --git a/tests/unit/test_obys_attendance_pwa_gps.py b/tests/unit/test_obys_attendance_pwa_gps.py
-new file mode 100644
-index 00000000..4813d82d
---- /dev/null
-+++ b/tests/unit/test_obys_attendance_pwa_gps.py
-@@ -0,0 +1,597 @@
-+"""PWA 출퇴근 — 반경 판정·본인 한정·동의·멱등·PWA 자산 정적 검사.
-+
-+메모리 DB 로 라우터를 HTTP 로 부른다. 운영 스키마의 UNIQUE(employee_email, work_date, start_at)
-+와 soft delete 를 흉내 낸다. SQL 은 키워드로만 분기한다 — 테스트에 SQL 전문을 적지 않는다
-+(scripts/dup_guard.py 가 테스트 안의 SQL 리터럴을 실제 SQL 로 본다).
++++ b/app/services/obys_registration_ocr.py
+@@ -0,0 +1,270 @@
++"""사업자등록증 OCR 제안 (AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930).
++
++OCR 결과는 **제안만** 한다. 사업자 레코드에 쓰지 않는다 — 저장은 관리자가
++확인한 뒤 기존 update_business / 기초설정 저장 경로로 이루어진다.
++
++- OCR 호출은 app.core.local_ocr_bridge.ocr_extract 를 그대로 쓴다.
++- 읽지 못한 항목은 값을 만들지 않고 value=None + reason 으로 돌려준다.
++- 감사로그에는 항목별 성공/실패와 길이만 남긴다. OCR 원문·추출값은 남기지 않는다.
 +"""
 +from __future__ import annotations
 +
-+import itertools
-+import json
-+import math
++import base64
++import logging
 +import re
++import time
++from datetime import date, datetime, timedelta, timezone
++from typing import Any
++from uuid import UUID
++
++from app.core import local_ocr_bridge
++from app.services import obys_upload_service as upload_svc
++
++logger = logging.getLogger(__name__)
++KST = timezone(timedelta(hours=9))
++
++AUTOFILL_FIELDS = ("name", "registration_no", "representative", "opened_at", "address")
++EXTRA_FIELDS = ("corporate_registration_no", "tax_type")
++FIELD_LABELS: dict[str, tuple[str, ...]] = {
++    "corporate_registration_no": ("법인등록번호",),
++    "registration_no": ("사업자등록번호", "등록번호"),
++    "name": ("법인명(단체명)", "법인명", "단체명", "상호"),
++    "representative": ("대표자", "성명"),
++    "opened_at": ("개업연월일", "개업년월일", "개업일자", "개업일"),
++    "address": ("사업장소재지", "본점소재지", "사업장주소", "소재지"),
++}
++# 값 뒤에 같은 줄로 붙어 나오는 다른 항목. 여기서 값을 끊는다.
++STOP_LABELS = (
++    "생년월일", "주민등록번호", "법인등록번호", "전화번호", "사업의종류", "업태", "종목",
++    "발급사유", "공동사업자", "개업연월일", "사업장소재지", "본점소재지", "대표자", "성명", "상호",
++)
++EXCLUDED_PREFIXES = {"registration_no": ("법인", "주민")}
++TAX_TYPES = (("간이과세자", "간이과세"), ("일반과세자", "일반과세"), ("면세사업자", "면세"))
++
++
++def _spaced(label: str) -> str:
++    return r"\s*".join(re.escape(char) for char in label.replace(" ", ""))
++
++
++def _clean(value: Any) -> str:
++    return re.sub(r"\s+", " ", str(value or "")).strip()
++
++
++def _snippet(line: str) -> str:
++    return _clean(line)[:80]
++
++
++def _field(field: str, value: Any = None, *, confidence: float = 0.0, source: str | None = None,
++           valid: bool = False, reason: str | None = None) -> dict[str, Any]:
++    return {
++        "field": field,
++        "value": value,
++        "valid": bool(valid and value is not None),
++        "confidence": round(confidence, 3) if value is not None else 0.0,
++        "source": source,
++        "reason": reason,
++        "autofill_candidate": bool(valid and value is not None and field in AUTOFILL_FIELDS),
++    }
++
++
++def _cut_at_stop_label(value: str, own_labels: tuple[str, ...]) -> str:
++    own = {label.replace(" ", "") for label in own_labels}
++    end = len(value)
++    for label in STOP_LABELS:
++        if label in own:
++            continue
++        match = re.search(_spaced(label), value)
++        if match and match.start() > 0:
++            end = min(end, match.start())
++    return value[:end]
++
++
++def _labelled_value(lines: list[str], field: str) -> tuple[str, str, float] | None:
++    """(value, source line, factor) for the first line carrying the field label."""
++    labels = FIELD_LABELS[field]
++    for index, line in enumerate(lines):
++        for label in labels:
++            for match in re.finditer(_spaced(label), line):
++                before = re.sub(r"\s+", "", line[:match.start()])
++                if any(before.endswith(prefix) for prefix in EXCLUDED_PREFIXES.get(field, ())):
++                    continue
++                rest = re.sub(r"^\s*(?:\([^)]*\))?\s*[:：]?\s*", "", line[match.end():])
++                value = _clean(_cut_at_stop_label(rest, labels))
++                if value:
++                    return value, _snippet(line), 1.0
++                # 표 형식이라 값이 다음 줄에 있는 경우. 다음 줄이 또 다른 항목이면 포기한다.
++                following = next((item for item in lines[index + 1:] if item.strip()), "")
++                compact = re.sub(r"\s+", "", following)
++                if following and not any(compact.startswith(stop) for stop in (*STOP_LABELS, "등록번호", "사업장")):
++                    return _clean(_cut_at_stop_label(following, labels)), _snippet(following), 0.8
++                return "", _snippet(line), 1.0
++    return None
++
++
++# --- 검증 규칙 ---------------------------------------------------------------
++def business_registration_checksum_ok(digits: str) -> bool:
++    """국세청 사업자등록번호 검증번호(10번째 자리)."""
++    if not re.fullmatch(r"\d{10}", digits):
++        return False
++    weights = (1, 3, 7, 1, 3, 7, 1, 3, 5)
++    numbers = [int(char) for char in digits]
++    total = sum(number * weight for number, weight in zip(numbers, weights))
++    total += (numbers[8] * 5) // 10
++    return (10 - total % 10) % 10 == numbers[9]
++
++
++def normalize_registration_no(raw: str) -> tuple[str | None, bool, str | None]:
++    """Return (formatted value, valid, reason)."""
++    match = re.search(r"(?<!\d)(\d{3})\s*-?\s*(\d{2})\s*-?\s*(\d{5})(?!\d)", str(raw or ""))
++    if not match:
++        return None, False, "사업자등록번호 10자리를 읽지 못했습니다"
++    digits = "".join(match.groups())
++    formatted = f"{digits[:3]}-{digits[3:5]}-{digits[5:]}"
++    if not business_registration_checksum_ok(digits):
++        return formatted, False, "사업자등록번호 검증번호(체크섬)가 맞지 않습니다"
++    return formatted, True, None
++
++
++def normalize_opened_at(raw: str, *, today: date | None = None) -> tuple[str | None, bool, str | None]:
++    match = re.search(r"(\d{4})\s*(?:년|[.\-/])\s*(\d{1,2})\s*(?:월|[.\-/])\s*(\d{1,2})", str(raw or ""))
++    if not match:
++        return None, False, "개업일 날짜 형식을 읽지 못했습니다"
++    try:
++        opened = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
++    except ValueError:
++        return None, False, "존재하지 않는 날짜입니다"
++    if opened > (today or datetime.now(KST).date()):
++        return opened.isoformat(), False, "개업일이 미래 날짜입니다"
++    return opened.isoformat(), True, None
++
++
++def _confidence(raw: Any) -> float:
++    try:
++        value = float(raw or 0.0)
++    except (TypeError, ValueError):
++        return 0.0
++    if value > 1:
++        value /= 100
++    return max(0.0, min(value, 1.0))
++
++
++def parse_registration_text(text: str, ocr_confidence: Any = 0.0, *, today: date | None = None) -> dict[str, dict[str, Any]]:
++    """Extract suggestion fields from OCR text. Never invents a value."""
++    base = _confidence(ocr_confidence)
++    lines = [line for line in str(text or "").splitlines() if line.strip()]
++    result: dict[str, dict[str, Any]] = {}
++    if not lines:
++        for field in (*AUTOFILL_FIELDS, *EXTRA_FIELDS):
++            result[field] = _field(field, reason="OCR 결과에 글자가 없습니다")
++        return result
++
++    for field in ("name", "representative", "address"):
++        found = _labelled_value(lines, field)
++        if not found:
++            result[field] = _field(field, reason="등록증에서 해당 항목 표시를 찾지 못했습니다")
++        elif not found[0]:
++            result[field] = _field(field, source=found[1], reason="항목 표시는 있으나 값을 읽지 못했습니다")
++        else:
++            result[field] = _field(field, found[0], confidence=base * found[2], source=found[1], valid=True)
++
++    found = _labelled_value(lines, "registration_no")
++    factor, source, raw = (found[2], found[1], found[0]) if found else (0.6, None, "")
++    if not found or not raw:
++        # 표시를 못 찾았으면 원문 전체에서 000-00-00000 모양이 정확히 한 종류일 때만 쓴다.
++        candidates = {m.group(0) for m in re.finditer(r"(?<![\d-])\d{3}-\d{2}-\d{5}(?![\d-])", "\n".join(lines))}
++        if len(candidates) == 1:
++            raw = candidates.pop()
++            source = _snippet(next(line for line in lines if raw in line))
++            factor = 0.6
++    value, valid, reason = normalize_registration_no(raw) if raw else (None, False, "사업자등록번호를 찾지 못했습니다")
++    result["registration_no"] = _field("registration_no", value, confidence=base * factor, source=source, valid=valid, reason=reason)
++
++    found = _labelled_value(lines, "opened_at")
++    if not found or not found[0]:
++        result["opened_at"] = _field("opened_at", source=found[1] if found else None, reason="개업연월일을 찾지 못했습니다")
++    else:
++        value, valid, reason = normalize_opened_at(found[0], today=today)
++        result["opened_at"] = _field("opened_at", value, confidence=base * found[2], source=found[1], valid=valid, reason=reason)
++
++    found = _labelled_value(lines, "corporate_registration_no")
++    corp = re.search(r"(?<!\d)(\d{6})\s*-\s*(\d{7})(?!\d)", found[0]) if found and found[0] else None
++    result["corporate_registration_no"] = (
++        _field("corporate_registration_no", f"{corp.group(1)}-{corp.group(2)}", confidence=base * found[2], source=found[1], valid=True)
++        if corp else _field("corporate_registration_no", reason="법인등록번호가 없거나 읽지 못했습니다")
++    )
++
++    compact = re.sub(r"\s+", "", "\n".join(lines))
++    tax = next(((marker, label) for marker, label in TAX_TYPES if marker in compact), None)
++    result["tax_type"] = (
++        _field("tax_type", tax[1], confidence=base, source=tax[0], valid=True)
++        if tax else _field("tax_type", reason="과세유형 표시를 찾지 못했습니다")
++    )
++    return result
++
++
++def _audit_summary(suggested: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
++    return {
++        field: {
++            "found": item["value"] is not None,
++            "valid": item["valid"],
++            "value_length": len(str(item["value"])) if item["value"] is not None else 0,
++        }
++        for field, item in suggested.items()
++    }
++
++
++async def suggest_from_document(*, user: dict[str, Any], business_id: str, document_id: UUID) -> dict[str, Any]:
++    document, business, data = await upload_svc.read_registration_document(
++        user=user, business_id=business_id, document_id=document_id,
++    )
++    started = time.monotonic()
++    error: str | None = None
++    text, confidence = "", 0.0
++    try:
++        ocr = await local_ocr_bridge.ocr_extract(image_base64=base64.b64encode(data).decode("ascii"))
++        text, confidence = str(ocr.get("text") or ""), ocr.get("confidence") or 0.0
++        if ocr.get("error") and not text.strip():
++            error = str(ocr["error"])[:200]
++    except Exception as exc:  # noqa: BLE001 — OCR 실패는 손입력으로 계속한다
++        error = f"OCR 실행 실패: {str(exc)[:200]}"
++    elapsed_ms = int((time.monotonic() - started) * 1000)
++    if error:
++        suggested = {field: _field(field, reason=error) for field in (*AUTOFILL_FIELDS, *EXTRA_FIELDS)}
++    else:
++        suggested = parse_registration_text(text, confidence)
++
++    current = {field: business.get(field) or "" for field in (*AUTOFILL_FIELDS, "tax_type")}
++    for field, item in suggested.items():
++        item["current"] = current.get(field)
++        item["matches_current"] = item["value"] is not None and item["value"] == (current.get(field) or None)
++
++    audit_logged = True
++    try:
++        await upload_svc.record_registration_audit(
++            user=user, business_id=business_id, document_id=document["id"],
++            action="business_registration.ocr_suggest",
++            details={
++                "document_id": document["id"],
++                "version": document.get("version"),
++                "ocr_ok": error is None,
++                "elapsed_ms": elapsed_ms,
++                "text_length": len(text),
++                "fields": _audit_summary(suggested),
++                "error": error,
++            },
++        )
++    except Exception:  # noqa: BLE001
++        audit_logged = False
++        logger.warning("business registration OCR audit insert failed business=%s document=%s", business_id, document["id"])
++
++    return {
++        "document": document,
++        "business_id": business_id,
++        "ocr": {"ok": error is None, "error": error, "confidence": _confidence(confidence), "elapsed_ms": elapsed_ms, "text_length": len(text)},
++        "suggested": suggested,
++        "current": current,
++        "needs_registration_info": business.get("needs_registration_info", False),
++        "missing_registration_fields": business.get("missing_registration_fields", []),
++        "applied": False,
++        "audit_logged": audit_logged,
++    }
+diff --git a/app/services/obys_upload_service.py b/app/services/obys_upload_service.py
+index b9d7c2be..f06cc756 100644
+--- a/app/services/obys_upload_service.py
++++ b/app/services/obys_upload_service.py
+@@ -27,8 +27,14 @@ CATEGORY_EXTENSIONS = {
+     "purchase": {".csv", ".xlsx", ".pdf", ".jpg", ".jpeg", ".png"},
+     "transaction": {".csv", ".xlsx"},
+     "card": {".csv", ".xlsx", ".pdf"},
++    # 사업자등록증 원본. 원장이 아니므로 LEDGER_CATEGORIES 에 넣지 않는다 —
++    # create_upload/_canonical/_raw_rows 경로를 타지 않는다.
++    "business_registration": {".pdf", ".jpg", ".jpeg", ".png"},
+ }
+ LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction", "card"})
++REGISTRATION_CATEGORY = "business_registration"
++# seed/마이그레이션 113 이 채워 둔 자리표시자. 값이 아니라 "미비" 상태다.
++REGISTRATION_PLACEHOLDERS = frozenset({"-", "미등록", "기초등록 필요"})
+ GENERIC_LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction"})
+ MIME_BY_EXTENSION = {
+     ".csv": {"text/csv", "application/csv", "text/plain", "application/vnd.ms-excel"},
+@@ -260,12 +266,38 @@ async def _require_business(conn: Any, tenant_id: UUID, business_id: str) -> Non
+         raise HTTPException(status_code=404, detail="현재 테넌트의 사업자를 찾을 수 없습니다")
+ 
+ 
++def is_registration_placeholder(value: Any) -> bool:
++    text = str(value or "").strip()
++    return not text or text in REGISTRATION_PLACEHOLDERS
++
++
++def registration_info_gaps(item: dict[str, Any], fields: tuple[str, ...]) -> list[str]:
++    """Blank placeholder values in place and return the fields still missing."""
++    missing: list[str] = []
++    for field in fields:
++        if is_registration_placeholder(item.get(field)):
++            item[field] = ""
++            missing.append(field)
++    return missing
++
++
++REGISTRY_REQUIRED_FIELDS = ("registration_no", "representative", "opened_at", "address")
++
++
++def _registry_business(row: Any) -> dict[str, Any]:
++    item = dict(row)
++    missing = registration_info_gaps(item, REGISTRY_REQUIRED_FIELDS)
++    item["needs_registration_info"] = bool(missing)
++    item["missing_registration_fields"] = missing
++    return item
++
++
+ async def list_businesses(*, user: dict[str, Any]) -> list[dict[str, Any]]:
+     tenant_id = _tenant(user)
+     conn = await _connect()
+     try:
+         rows = await conn.fetch("SELECT id,entity_type,name,registration_no,representative,tax_type,opened_at,address,memo,created_at,updated_at FROM yeoljeong_businesses WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id", tenant_id)
+-        return [dict(row) for row in rows]
++        return [_registry_business(row) for row in rows]
+     finally:
+         await conn.close()
+ 
+@@ -1040,3 +1072,226 @@ async def reverse_journal(*, user: dict[str, Any], voucher_id: UUID) -> dict[str
+         return dict(reversal)
+     finally:
+         await conn.close()
++
++
++# ---------------------------------------------------------------------------
++# 사업자등록증 원본 (AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930)
++#
++# 원본은 UPLOAD_ROOT/<tenant>/<business 해시>/business_registration/<uuid><ext>
++# 에 두고 yeoljeong_business_registration_documents 에 버전으로 쌓는다.
++# 이전 버전은 지우지 않는다(재발급·정정 이력). 최신 활성 1건이 현행이다.
++# ---------------------------------------------------------------------------
++REGISTRATION_DOCUMENT_COLUMNS = (
++    "id,business_id,version,original_filename,content_type,extension,"
++    "byte_size,sha256,created_by,created_at"
++)
++
++
++def _require_admin(user: dict[str, Any]) -> None:
++    membership = user.get("current_membership") or {}
++    same_tenant = str(membership.get("tenant_id") or "") == str(user.get("tenant_id") or "")
++    role = str(membership.get("role") or "").strip().lower()
++    status = str(membership.get("status") or "").strip().lower()
++    if not same_tenant or status != "active" or role not in {"owner", "admin"}:
++        raise HTTPException(status_code=403, detail="사업자등록증은 관리자만 다룰 수 있습니다")
++
++
++def _registration_directory(tenant_id: UUID, business_id: str) -> Path:
++    return UPLOAD_ROOT / str(tenant_id) / hashlib.sha256(business_id.encode()).hexdigest()[:32] / REGISTRATION_CATEGORY
++
++
++def _registration_document(row: Any, *, current_id: Any = None) -> dict[str, Any]:
++    item = dict(row)
++    item["id"] = str(item["id"])
++    item["uploaded_by"] = item.get("created_by")
++    item["uploaded_at"] = item.get("created_at")
++    item["is_current"] = current_id is not None and str(current_id) == item["id"]
++    return item
++
++
++def validate_registration_file(filename: str, content_type: str, data: bytes) -> tuple[str, str]:
++    """Reuse the ledger validator; any rejection of the file itself is a 400."""
++    try:
++        return _validate_file(REGISTRATION_CATEGORY, filename, content_type, data)
++    except HTTPException as exc:
++        raise HTTPException(status_code=400, detail=exc.detail) from exc
++
++
++async def _audit(conn: Any, *, business_id: str, user: dict[str, Any], action: str, resource_id: str, details: dict[str, Any]) -> None:
++    from app.services.yeoljeong_ops_service import _insert_audit_log_conn
++
++    await _insert_audit_log_conn(
++        conn, business_id=business_id, actor=_actor(user), action=action,
++        resource_type="business_registration_document", resource_id=resource_id, details=details,
++    )
++
++
++async def create_registration_document(
++    *, user: dict[str, Any], business_id: str, filename: str, content_type: str, data: bytes,
++) -> dict[str, Any]:
++    _require_admin(user)
++    tenant_id = _tenant(user)
++    original, ext = validate_registration_file(filename, content_type, data)
++    digest, document_id = hashlib.sha256(data).hexdigest(), uuid4()
++    target = _registration_directory(tenant_id, business_id) / f"{document_id.hex}{ext}"
++    written = False
++    conn = await _connect()
++    try:
++        await _require_business(conn, tenant_id, business_id)
++        async with conn.transaction():
++            # 같은 사업자의 버전 번호를 직렬화한다.
++            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"registration:{tenant_id}:{business_id}")
++            latest = await conn.fetchrow(
++                f"""SELECT {REGISTRATION_DOCUMENT_COLUMNS} FROM yeoljeong_business_registration_documents
++                     WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL
++                     ORDER BY version DESC LIMIT 1""",
++                tenant_id, business_id,
++            )
++            if latest and latest["sha256"] == digest:
++                result = _registration_document(latest, current_id=latest["id"])
++                result["status"] = "duplicate"
++                return result
++            # 삭제된 버전 번호도 재사용하지 않는다.
++            version = await conn.fetchval(
++                "SELECT COALESCE(MAX(version),0)+1 FROM yeoljeong_business_registration_documents WHERE tenant_id=$1 AND business_id=$2",
++                tenant_id, business_id,
++            )
++            target.parent.mkdir(parents=True, exist_ok=True)
++            target.write_bytes(data)
++            written = True
++            row = await conn.fetchrow(
++                f"""INSERT INTO yeoljeong_business_registration_documents
++                        (id,tenant_id,business_id,version,original_filename,stored_filename,content_type,
++                         extension,byte_size,sha256,created_by)
++                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
++                     RETURNING {REGISTRATION_DOCUMENT_COLUMNS}""",
++                document_id, tenant_id, business_id, version, original, target.name,
++                (content_type or "").split(";", 1)[0].strip().lower(), ext, len(data), digest, _actor(user),
++            )
++            await _audit(
++                conn, business_id=business_id, user=user, action="business_registration.upload",
++                resource_id=str(document_id),
++                details={"version": version, "sha256": digest, "byte_size": len(data), "extension": ext},
++            )
++        result = _registration_document(row, current_id=document_id)
++        result["status"] = "stored"
++        return result
++    except Exception:
++        if written and target.exists():
++            target.unlink()
++        raise
++    finally:
++        await conn.close()
++
++
++async def list_registration_documents(*, user: dict[str, Any], business_id: str) -> dict[str, Any]:
++    _require_admin(user)
++    tenant_id = _tenant(user)
++    conn = await _connect()
++    try:
++        await _require_business(conn, tenant_id, business_id)
++        rows = await conn.fetch(
++            f"""SELECT {REGISTRATION_DOCUMENT_COLUMNS} FROM yeoljeong_business_registration_documents
++                 WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL
++                 ORDER BY version DESC LIMIT 100""",
++            tenant_id, business_id,
++        )
++    finally:
++        await conn.close()
++    current_id = rows[0]["id"] if rows else None
++    documents = [_registration_document(row, current_id=current_id) for row in rows]
++    return {"documents": documents, "current": documents[0] if documents else None, "count": len(documents)}
++
++
++async def _registration_document_row(conn: Any, tenant_id: UUID, business_id: str, document_id: UUID) -> Any:
++    await _require_business(conn, tenant_id, business_id)
++    row = await conn.fetchrow(
++        f"""SELECT {REGISTRATION_DOCUMENT_COLUMNS},stored_filename FROM yeoljeong_business_registration_documents
++             WHERE id=$1 AND tenant_id=$2 AND business_id=$3 AND deleted_at IS NULL""",
++        document_id, tenant_id, business_id,
++    )
++    if not row:
++        raise HTTPException(status_code=404, detail="사업자등록증을 찾을 수 없습니다")
++    return row
++
++
++def _registration_file(tenant_id: UUID, business_id: str, stored_filename: str) -> Path:
++    path = _registration_directory(tenant_id, business_id) / stored_filename
++    if not path.is_file() or UPLOAD_ROOT.resolve() not in path.resolve().parents:
++        raise HTTPException(status_code=404, detail="사업자등록증 원본 파일을 찾을 수 없습니다")
++    return path
++
++
++def registration_download_name(original_filename: str, version: int, extension: str) -> str:
++    stem = Path(str(original_filename or "")).stem
++    stem = re.sub(r"[^0-9A-Za-z._가-힣-]+", "_", stem).strip("._")[:80] or "document"
++    ext = extension if extension in CATEGORY_EXTENSIONS[REGISTRATION_CATEGORY] else ".bin"
++    return f"사업자등록증_v{int(version)}_{stem}{ext}"
++
++
++async def registration_document_download(
++    *, user: dict[str, Any], business_id: str, document_id: UUID,
++) -> tuple[Path, str, str]:
++    _require_admin(user)
++    tenant_id = _tenant(user)
++    conn = await _connect()
++    try:
++        row = await _registration_document_row(conn, tenant_id, business_id, document_id)
++    finally:
++        await conn.close()
++    path = _registration_file(tenant_id, business_id, row["stored_filename"])
++    return path, registration_download_name(row["original_filename"], row["version"], row["extension"]), row["content_type"]
++
++
++async def read_registration_document(
++    *, user: dict[str, Any], business_id: str, document_id: UUID,
++) -> tuple[dict[str, Any], dict[str, Any], bytes]:
++    """Return (document, current business registry values, original bytes) for OCR."""
++    _require_admin(user)
++    tenant_id = _tenant(user)
++    conn = await _connect()
++    try:
++        row = await _registration_document_row(conn, tenant_id, business_id, document_id)
++        business = await conn.fetchrow(
++            "SELECT id,name,registration_no,representative,tax_type,opened_at,address FROM yeoljeong_businesses WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL",
++            business_id, tenant_id,
++        )
++    finally:
++        await conn.close()
++    if not business:
++        raise HTTPException(status_code=404, detail="현재 테넌트의 사업자를 찾을 수 없습니다")
++    data = _registration_file(tenant_id, business_id, row["stored_filename"]).read_bytes()
++    document = _registration_document(row)
++    document.pop("stored_filename", None)
++    return document, _registry_business(business), data
++
++
++async def record_registration_audit(
++    *, user: dict[str, Any], business_id: str, document_id: str, action: str, details: dict[str, Any],
++) -> None:
++    conn = await _connect()
++    try:
++        await _audit(conn, business_id=business_id, user=user, action=action, resource_id=document_id, details=details)
++    finally:
++        await conn.close()
++
++
++async def delete_registration_document(*, user: dict[str, Any], business_id: str, document_id: UUID) -> bool:
++    """Soft delete only — the original file stays on disk as the evidence copy."""
++    _require_admin(user)
++    tenant_id = _tenant(user)
++    conn = await _connect()
++    try:
++        await _require_business(conn, tenant_id, business_id)
++        async with conn.transaction():
++            command = await conn.execute(
++                """UPDATE yeoljeong_business_registration_documents SET deleted_at=NOW(),deleted_by=$4
++                     WHERE id=$1 AND tenant_id=$2 AND business_id=$3 AND deleted_at IS NULL""",
++                document_id, tenant_id, business_id, _actor(user),
++            )
++            if command.endswith(" 0"):
++                raise HTTPException(status_code=404, detail="사업자등록증을 찾을 수 없습니다")
++            await _audit(conn, business_id=business_id, user=user, action="business_registration.delete", resource_id=str(document_id), details={})
++        return True
++    finally:
++        await conn.close()
+diff --git a/app/services/yeoljeong_finance_service.py b/app/services/yeoljeong_finance_service.py
+index 02c1773d..352e71d4 100644
+--- a/app/services/yeoljeong_finance_service.py
++++ b/app/services/yeoljeong_finance_service.py
+@@ -377,8 +377,8 @@ CANONICAL_BUSINESSES: list[dict[str, Any]] = [
+         "id": "biz-sungshin",
+         "entityType": "individual",
+         "name": "열정국밥 성신여대점",
+-        "registrationNo": "기초등록 필요",
+-        "representative": "미등록",
++        "registrationNo": "",
++        "representative": "",
+         "taxType": "일반과세",
+         "openedAt": "",
+         "address": "",
+@@ -388,8 +388,8 @@ CANONICAL_BUSINESSES: list[dict[str, Any]] = [
+         "id": "biz-eonni-naengmyeon",
+         "entityType": "individual",
+         "name": "언니냉면",
+-        "registrationNo": "기초등록 필요",
+-        "representative": "미등록",
++        "registrationNo": "",
++        "representative": "",
+         "taxType": "일반과세",
+         "openedAt": "",
+         "address": "",
+@@ -414,6 +414,9 @@ CANONICAL_BRANCHES: list[dict[str, Any]] = [
+     {"id": "branch-gangbuk-mia", "name": "열정국밥_미아점", "businessId": "biz-mia", "status": "active", "phone": "", "address": "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)"},
+ ]
+ 
++# 사업자등록증 기준 미비 여부를 판정하는 항목(설정 JSON 키). 자리표시자는 값이 아니라
++# 상태이므로 needs_registration_info / missing_registration_fields 로만 내보낸다.
++BUSINESS_REGISTRATION_FIELDS = ("registrationNo", "representative", "openedAt", "address")
+ CANONICAL_BUSINESS_IDS = {item["id"] for item in CANONICAL_BUSINESSES}
+ CANONICAL_BRANCH_NAMES = {item["name"] for item in CANONICAL_BRANCHES}
+ MIA_BUSINESS_ID = "biz-mia"
+@@ -1301,15 +1304,18 @@ def _merge_by_id(current_items: Any, default_items: list[dict[str, Any]]) -> lis
+ 
+ 
+ def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
++    from app.services.obys_upload_service import registration_info_gaps
++
+     businesses = _merge_by_id(settings.get("businesses"), CANONICAL_BUSINESSES)
+     canonical_names = {item["id"]: item["name"] for item in CANONICAL_BUSINESSES}
+     for item in businesses:
+         item["entityType"] = item.get("entityType") or "individual"
+-        if item["id"] in canonical_names:
+-            item["name"] = canonical_names[item["id"]]
+-        else:
+-            item["name"] = str(item.get("name") or "").strip()
++        # 저장된 상호가 이긴다. canonical 상호는 저장값이 비었을 때만 쓴다(id 는 그대로).
++        item["name"] = str(item.get("name") or "").strip() or canonical_names.get(item["id"], "")
+         item["status"] = item.get("status") or "active"
++        missing = registration_info_gaps(item, BUSINESS_REGISTRATION_FIELDS)
++        item["needs_registration_info"] = bool(missing)
++        item["missing_registration_fields"] = missing
+ 
+     branches = _merge_by_id(settings.get("branches"), CANONICAL_BRANCHES)
+     canonical_branch_names = {item["id"]: item["name"] for item in CANONICAL_BRANCHES}
+@@ -1318,7 +1324,7 @@ def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
+     normalized_branches: list[dict[str, Any]] = []
+     for item in branches:
+         if item["id"] in canonical_branch_names:
+-            item["name"] = canonical_branch_names[item["id"]]
++            item["name"] = str(item.get("name") or "").strip() or canonical_branch_names[item["id"]]
+             item["businessId"] = canonical_branch_businesses[item["id"]]
+         else:
+             item["name"] = str(item.get("name") or "").strip()
+diff --git a/app/static/apps/obys/index.html b/app/static/apps/obys/index.html
+index 98cc066b..7d1107c1 100644
+--- a/app/static/apps/obys/index.html
++++ b/app/static/apps/obys/index.html
+@@ -4265,9 +4265,10 @@
+                     <input name="address" placeholder="사업자등록증 기준 주소">
+                   </label>
+                   <label class="span-2">사업자등록증 파일
+-                    <input name="registrationDocument" type="file" accept=".pdf,image/*">
+-                    <span class="field-note">업로드 파일은 OCR/원본대조 대상입니다. 현재 화면에서는 파일명과 보완 메모를 등록 기록에 남깁니다.</span>
++                    <input name="registrationDocument" type="file" accept=".pdf,.jpg,.jpeg,.png">
++                    <span class="field-note">파일을 고르면 원본을 서버에 보관(버전 이력·sha256)하고 OCR 제안을 보여줍니다. [적용]을 누른 항목만 폼에 채워지며, 저장은 [사업자 저장]으로 합니다. 업로드·OCR 이 실패해도 손입력으로 계속할 수 있습니다.</span>
+                   </label>
++                  <div class="span-2" id="businessRegistrationOcrPanel" data-registration-ocr-panel hidden></div>
+                   <label class="span-2">메모
+                     <textarea name="memo" placeholder="세무대리인, 신고 특이사항, 법인/개인 구분, 서류 보완사항"></textarea>
+                   </label>
+@@ -5389,8 +5390,8 @@
+           id: "biz-sungshin",
+           entityType: "individual",
+           name: "열정국밥 성신여대점",
+-          registrationNo: "기초등록 필요",
+-          representative: "미등록",
++          registrationNo: "",
++          representative: "",
+           taxType: "일반과세",
+           openedAt: "",
+           address: "",
+@@ -6482,7 +6483,7 @@
+       if (foodRate > 0.38) alerts.push(["식재료율이 38%를 초과했습니다.", "bad"]);
+       if (laborRate > 0.28) alerts.push(["인건비율이 28%를 초과했습니다.", "bad"]);
+       if (!scopedEntries().length) alerts.push(["이번 달 거래 데이터가 없습니다.", "warn"]);
+-      if (settings().businesses.some(item => !item.registrationNo || item.registrationNo === "기초등록 필요")) alerts.push(["사업자등록번호 미등록 사업자가 있습니다.", "warn"]);
++      if (settings().businesses.some(item => businessNeedsRegistrationInfo(item))) alerts.push(["사업자등록번호 미등록 사업자가 있습니다.", "warn"]);
+       if (!settings().accounts.length) alerts.push(["은행 계좌 기초등록이 필요합니다.", "warn"]);
+       if ((settings().integrations || []).some(item => item.status === "blocked")) alerts.push(["외부계정 자동화 연결 확인이 필요합니다.", "warn"]);
+       if (!alerts.length) alerts.push(["현재 월마감 위험 신호가 없습니다.", "good"]);
+@@ -8639,10 +8640,28 @@
+ 
+     function businessCompleteness(item) {
+       const required = [item.name, item.registrationNo, item.representative, item.taxType, item.address];
+-      const complete = required.filter(value => String(value || "").trim()).length;
++      const complete = required.filter(value => !isBlankOrPlaceholder(value)).length;
+       return Math.round((complete / required.length) * 100);
+     }
+ 
++    const BUSINESS_REGISTRATION_FIELDS = ["registrationNo", "representative", "openedAt", "address"];
++
++    function businessMissingRegistrationFields(item) {
++      return BUSINESS_REGISTRATION_FIELDS.filter(field => isBlankOrPlaceholder(item?.[field]));
++    }
++
++    function businessNeedsRegistrationInfo(item) {
++      // 서버가 내려준 플래그가 기준이다. 로컬 수정 직후에는 같은 규칙으로 다시 계산한다.
++      return typeof item?.needs_registration_info === "boolean"
++        ? item.needs_registration_info
++        : businessMissingRegistrationFields(item).length > 0;
++    }
++
++    function businessRegistrationNoHtml(item) {
++      if (isBlankOrPlaceholder(item?.registrationNo)) return badgeHtml("기초등록 필요", "warn");
++      return escapeHtml(item.registrationNo);
++    }
++
+     function businessPageSyncBadges() {
+       if (els.businessPageEditBadge) {
+         const editing = els.businessPageForm?.dataset.editId;
+@@ -8660,6 +8679,7 @@
+       if (!els.businessPageForm) return;
+       delete els.businessPageForm.dataset.editId;
+       els.businessPageForm.reset();
++      resetBusinessRegistrationOcr(els.businessPageForm);
+       businessPageSyncBadges();
+       els.businessPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
+     }
+@@ -8684,6 +8704,8 @@
+       els.businessPageForm.openedAt.value = item.openedAt || "";
+       els.businessPageForm.address.value = item.address || "";
+       els.businessPageForm.memo.value = item.memo || "";
++      resetBusinessRegistrationOcr(els.businessPageForm);
++      loadBusinessRegistrationCurrent(els.businessPageForm, item.id).catch(() => {});
+       setSelectedSettingsBusinessId(item.id);
+       businessPageSyncBadges();
+       els.businessPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
+@@ -8702,13 +8724,146 @@
+       els.branchPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
+     }
+ 
++    const BUSINESS_OCR_FIELDS = [
++      ["name", "name", "상호"],
++      ["registration_no", "registrationNo", "사업자등록번호"],
++      ["representative", "representative", "대표자"],
++      ["opened_at", "openedAt", "개업일"],
++      ["address", "address", "사업장 주소"],
++      ["corporate_registration_no", "", "법인등록번호(참고)"],
++      ["tax_type", "", "과세유형(참고)"]
++    ];
++
++    function businessRegistrationOcrPanel(form) {
++      return form?.querySelector("[data-registration-ocr-panel]") || null;
++    }
++
++    function resetBusinessRegistrationOcr(form) {
++      if (!form) return;
++      ["registrationDocumentId", "registrationDocumentVersion", "registrationDocumentSha256", "registrationDocumentName", "registrationDocumentUploadedAt"].forEach(key => delete form.dataset[key]);
++      form._registrationOcr = null;
++      const panel = businessRegistrationOcrPanel(form);
++      if (panel) {
++        panel.hidden = true;
++        panel.innerHTML = "";
++      }
++    }
++
++    function businessRegistrationDocumentRef(form) {
++      if (!form?.dataset.registrationDocumentId) return null;
++      return {
++        id: form.dataset.registrationDocumentId,
++        version: Number(form.dataset.registrationDocumentVersion || 0),
++        sha256: form.dataset.registrationDocumentSha256 || "",
++        originalFilename: form.dataset.registrationDocumentName || "",
++        uploadedAt: form.dataset.registrationDocumentUploadedAt || ""
++      };
++    }
++
++    function renderBusinessRegistrationOcr(form, state) {
++      const panel = businessRegistrationOcrPanel(form);
++      if (!panel) return;
++      panel.hidden = false;
++      const doc = state.document;
++      const docLine = doc
++        ? `<div class="settings-note">원본 보관 v${escapeHtml(doc.version)} · ${escapeHtml(doc.original_filename || "")} · ${Number(doc.byte_size || 0).toLocaleString("ko-KR")} bytes · sha256 ${escapeHtml(String(doc.sha256 || "").slice(0, 16))}…${doc.status === "duplicate" ? " · 최신본과 동일 파일" : ""}</div>`
++        : "";
++      const message = state.message ? `<div class="settings-note">${badgeHtml(state.messageLabel || "안내", state.messageClass || "info")} ${escapeHtml(state.message)}</div>` : "";
++      const suggestion = state.suggestion;
++      let table = "";
++      if (suggestion?.suggested) {
++        const rows = BUSINESS_OCR_FIELDS.map(([key, formField, label]) => {
++          const item = suggestion.suggested[key] || {};
++          const current = formField ? String(form[formField]?.value || "") : String(item.current || "");
++          const ocrValue = item.value == null
++            ? `<span class="muted">읽지 못함${item.reason ? ` · ${escapeHtml(item.reason)}` : ""}</span>`
++            : `${escapeHtml(item.value)}${item.valid ? "" : ` ${badgeHtml(item.reason || "검증 실패", "bad")}`}<br><span class="muted">신뢰도 ${Math.round(Number(item.confidence || 0) * 100)}%</span>`;
++          const canApply = Boolean(formField && item.autofill_candidate);
++          const action = canApply
++            ? `<button type="button" data-apply-registration-ocr="${escapeHtml(key)}">적용</button>`
++            : `<span class="muted">${formField ? "적용 불가" : "참고"}</span>`;
++          return `<tr><td>${escapeHtml(label)}</td><td>${ocrValue}</td><td>${escapeHtml(current || "-")}</td><td>${action}</td></tr>`;
++        }).join("");
++        table = `<table><thead><tr><th>항목</th><th>OCR 값</th><th>현재 값</th><th>적용</th></tr></thead><tbody>${rows}</tbody></table>`;
++      }
++      panel.innerHTML = `${docLine}${message}${table}`;
++    }
++
++    function applyBusinessRegistrationOcr(form, key) {
++      const suggestion = form?._registrationOcr;
++      const entry = BUSINESS_OCR_FIELDS.find(([field]) => field === key);
++      const item = suggestion?.suggested?.[key];
++      if (!entry || !entry[1] || !item?.autofill_candidate || item.value == null) return;
++      form[entry[1]].value = item.value;
++      renderBusinessRegistrationOcr(form, { document: suggestion.document, suggestion, message: `${entry[2]} 에 OCR 값을 채웠습니다. [사업자 저장]을 눌러야 저장됩니다.`, messageLabel: "적용", messageClass: "good" });
++    }
++
++    async function loadBusinessRegistrationCurrent(form, businessId) {
++      // 문서 참조의 원본은 서버 표(business_id 기준)다. settings JSON 의 registrationDocument 는
++      // DB 모드에서 다시 읽을 때 남지 않으므로, 수정 화면을 열 때 현행본을 서버에서 읽는다.
++      if (!form || !businessId || !canManageSettings()) return;
++      const payload = await financeApi(`/businesses/${encodeURIComponent(businessId)}/registration-document`);
++      if (form.dataset.editId !== businessId || form.dataset.registrationDocumentId) return;
++      const current = payload.current;
++      renderBusinessRegistrationOcr(form, current
++        ? { message: `보관된 현행 등록증 v${current.version} · ${current.original_filename || ""} · 전체 ${payload.count}개 버전`, messageLabel: "원본", messageClass: "good" }
++        : { message: "보관된 사업자등록증이 없습니다. 파일을 고르면 원본을 보관하고 OCR 제안을 보여줍니다.", messageLabel: "원본", messageClass: "warn" });
++    }
++
++    async function handleBusinessRegistrationDocument(form) {
++      const file = form?.registrationDocument?.files?.[0];
++      resetBusinessRegistrationOcr(form);
++      if (!file) return;
++      const businessId = form.dataset.editId || "";
++      const fail = (message, doc = null) => renderBusinessRegistrationOcr(form, { document: doc, message, messageLabel: "실패", messageClass: "warn" });
++      if (!canManageSettings()) return fail("사업자등록증 원본 보관·OCR 은 관리자만 할 수 있습니다. 손입력으로 계속하십시오.");
++      if (!businessId) return fail("등록된 사업자를 목록에서 [수정]으로 연 뒤 등록증을 올리십시오. 신규 사업자는 먼저 저장하십시오.");
++      if (file.size > 10 * 1024 * 1024) return fail("사업자등록증 파일은 10MB 이하여야 합니다.");
++      renderBusinessRegistrationOcr(form, { message: "원본을 서버에 보관하는 중입니다…" });
++      let doc = null;
++      try {
++        const formData = new FormData();
++        formData.append("file", file);
++        const response = await fetch(`/api/v1/yeoljeong-finance/businesses/${encodeURIComponent(businessId)}/registration-document`, {
++          method: "POST",
++          headers: apiAuthOnlyHeaders(),
++          body: formData
++        });
++        const payload = await response.json().catch(() => ({}));
++        if (!response.ok) throw new Error(payload.detail || payload.message || `UPLOAD ${response.status}`);
++        doc = payload.document;
++      } catch (err) {
++        return fail(`원본 업로드 실패: ${err.message}. 손입력으로 계속할 수 있습니다.`);
++      }
++      if (form.dataset.editId !== businessId) return;
++      form.dataset.registrationDocumentId = doc.id;
++      form.dataset.registrationDocumentVersion = String(doc.version || "");
++      form.dataset.registrationDocumentSha256 = doc.sha256 || "";
++      form.dataset.registrationDocumentName = doc.original_filename || "";
++      form.dataset.registrationDocumentUploadedAt = String(doc.created_at || "");
++      renderBusinessRegistrationOcr(form, { document: doc, message: "OCR 제안을 받는 중입니다…" });
++      try {
++        const suggestion = await financeApi(
++          `/businesses/${encodeURIComponent(businessId)}/registration-document/${encodeURIComponent(doc.id)}/ocr`,
++          { method: "POST", timeoutMs: 130000 }
++        );
++        if (form.dataset.registrationDocumentId !== doc.id) return;
++        suggestion.document = doc;
++        form._registrationOcr = suggestion;
++        if (!suggestion.ocr?.ok) {
++          return renderBusinessRegistrationOcr(form, { document: doc, suggestion, message: `OCR 실패: ${suggestion.ocr?.error || "알 수 없는 오류"}. 원본은 보관되었습니다. 손입력으로 계속하십시오.`, messageLabel: "실패", messageClass: "warn" });
++        }
++        renderBusinessRegistrationOcr(form, { document: doc, suggestion, message: "OCR 값은 제안입니다. 확인한 항목만 [적용]하고 [사업자 저장]으로 저장하십시오." });
++      } catch (err) {
++        fail(`OCR 제안 실패: ${err.message}. 원본은 보관되었습니다. 손입력으로 계속하십시오.`, doc);
++      }
++    }
++
+     function saveBusinessFromPage(form) {
+       const data = Object.fromEntries(new FormData(form).entries());
+       const editId = form.dataset.editId || "";
+       const target = editId ? settings().businesses.find(item => item.id === editId) : null;
+-      const uploadedFile = form.registrationDocument?.files?.[0];
+-      const uploadMemo = uploadedFile ? `사업자등록증 파일: ${uploadedFile.name}` : "";
+-      const memo = [String(data.memo || "").trim(), uploadMemo].filter(Boolean).join("\n");
++      const memo = String(data.memo || "").trim();
+       const next = {
+         id: editId || uid(),
+         entityType: data.entityType,
+@@ -8720,10 +8875,16 @@
+         address: String(data.address || "").trim(),
+         memo
+       };
++      // 등록증은 서버 문서 레코드로 참조한다. 새로 올린 문서가 없으면 기존 참조를 유지한다.
++      const registrationDocument = businessRegistrationDocumentRef(form);
++      if (registrationDocument) next.registrationDocument = registrationDocument;
++      next.missing_registration_fields = businessMissingRegistrationFields(next);
++      next.needs_registration_info = next.missing_registration_fields.length > 0;
+       if (target) Object.assign(target, next);
+       else settings().businesses.push(next);
+       setSelectedSettingsBusinessId(next.id);
+       delete form.dataset.editId;
++      resetBusinessRegistrationOcr(form);
+       saveState();
+       syncSettingsToServer();
+       form.reset();
+@@ -8796,7 +8957,8 @@
+       if (els.businessPageSelectedDetail) {
+         els.businessPageSelectedDetail.innerHTML = selectedBusiness ? `
+           <b>${escapeHtml(selectedBusiness.name)}</b><br>
+-          등록번호 ${escapeHtml(selectedBusiness.registrationNo || "미등록")} · 대표 ${escapeHtml(selectedBusiness.representative || "미등록")} · 과세 ${escapeHtml(selectedBusiness.taxType || "미등록")}<br>
++          등록번호 ${businessRegistrationNoHtml(selectedBusiness)} · 대표 ${escapeHtml(selectedBusiness.representative || "미등록")} · 과세 ${escapeHtml(selectedBusiness.taxType || "미등록")}<br>
++          ${selectedBusiness.registrationDocument?.id ? `등록증 원본 v${escapeHtml(selectedBusiness.registrationDocument.version)} · ${escapeHtml(selectedBusiness.registrationDocument.originalFilename || "")} · sha256 ${escapeHtml(String(selectedBusiness.registrationDocument.sha256 || "").slice(0, 12))}…<br>` : ""}
+           주소 ${escapeHtml(selectedBusiness.address || "미등록")}<br>
+           연결 지점 ${selectedBranches.length}개 · 정산계좌 ${selectedAccounts.length}개 · 연동 ${selectedIntegrations.length}개
+         ` : "사업자를 신규 등록하십시오.";
+@@ -8812,7 +8974,7 @@
+           return `
+             <tr>
+               <td><strong>${escapeHtml(item.name || "상호 미입력")}</strong><br><span class="muted">${escapeHtml(entityTypeLabels[item.entityType] || item.entityType || "사업자")}</span></td>
+-              <td>${escapeHtml(item.registrationNo || "미등록")}</td>
++              <td>${businessRegistrationNoHtml(item)}${businessNeedsRegistrationInfo(item) && !isBlankOrPlaceholder(item.registrationNo) ? `<br>${badgeHtml("기초등록 필요", "warn")}` : ""}</td>
+               <td>${escapeHtml(item.representative || "미등록")}<br><span class="muted">${escapeHtml(item.taxType || "미등록")}</span></td>
+               <td>${branches.length ? branches.map(branch => escapeHtml(branch.name)).join("<br>") : "미등록"}</td>
+               <td>${integrations.length}개</td>
+@@ -13268,6 +13430,17 @@
+         saveBusinessFromPage(els.businessPageForm);
+       });
+ 
++      els.businessPageForm?.registrationDocument?.addEventListener("change", () => {
++        handleBusinessRegistrationDocument(els.businessPageForm).catch(err => showToast(`사업자등록증 처리 실패: ${err.message}`));
++      });
++
++      els.businessPageForm?.addEventListener("click", event => {
++        const button = event.target.closest("[data-apply-registration-ocr]");
++        if (!button) return;
++        event.preventDefault();
++        applyBusinessRegistrationOcr(els.businessPageForm, button.dataset.applyRegistrationOcr);
++      });
++
+       els.branchPageForm?.addEventListener("submit", event => {
+         event.preventDefault();
+         saveBranchFromPage(els.branchPageForm);
+diff --git a/docs/operations/OBYS_BUSINESS_REGISTRATION_OCR.md b/docs/operations/OBYS_BUSINESS_REGISTRATION_OCR.md
+new file mode 100644
+index 00000000..b1541a4c
+--- /dev/null
++++ b/docs/operations/OBYS_BUSINESS_REGISTRATION_OCR.md
+@@ -0,0 +1,139 @@
++# 오비서 사업자등록증 원본 보관 · OCR 제안 · 관리자 확인 저장
++
++TASK: AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930 (2026-09-30)
++
++## 1. 흐름
++
++```
++[사업자 페이지] 목록에서 [수정] → 사업자등록증 파일 선택
++   │ ① POST /api/v1/yeoljeong-finance/businesses/{id}/registration-document   (원본 보관, 버전 +1)
++   │ ② POST .../registration-document/{document_id}/ocr                       (제안만, 저장 안 함)
++   ▼
++폼 아래 비교표: 항목 | OCR 값(검증·신뢰도) | 현재 값 | [적용]
++   │ 관리자가 [적용] 누른 항목만 폼 칸에 채워짐
++   ▼
++[사업자 저장] (기존 경로 그대로: settings().businesses → PUT /settings)
++```
++
++- OCR 은 **제안만** 한다. OCR 엔드포인트는 사업자 레코드를 바꾸지 않는다.
++- 업로드·OCR 이 실패해도 폼 입력은 그대로 남는다. 화면에 실패 사유가 나오고, 손으로 입력해 계속 저장하면 된다.
++- 등록증은 **기존 사업자**에만 올릴 수 있다(`yeoljeong_businesses` 에 현재 테넌트 행이 있어야 한다). 신규 사업자는 먼저 저장한 뒤 [수정]으로 다시 열어서 올린다.
++- 모두 **관리자(멤버십 role owner/admin)만** 할 수 있다. 다른 역할은 403, 다른 테넌트의 사업자는 404 다.
++
++## 2. 엔드포인트
++
++| 메서드 | 경로 (`/api/v1/yeoljeong-finance` 아래) | 설명 |
++|---|---|---|
++| POST | `/businesses/{business_id}/registration-document` | multipart `file`. `.pdf/.jpg/.jpeg/.png`, 10MB 이하. 형식·크기·서명 위반은 400 |
++| GET | `/businesses/{business_id}/registration-document` | `documents`(최신순), `current`(최신 활성 1건), `count` |
++| GET | `/businesses/{business_id}/registration-document/{document_id}/download` | 원본. 파일명 `사업자등록증_v{n}_{정리된 원본명}{ext}`, `Cache-Control: no-store` |
++| POST | `/businesses/{business_id}/registration-document/{document_id}/ocr` | 제안 전용: `suggested`, `current`, `ocr`, `applied=false` |
++| DELETE | `/businesses/{business_id}/registration-document/{document_id}` | soft delete(`deleted_at`, `deleted_by`)만. 파일은 남는다 |
++
++응답의 문서 항목: `id, business_id, version, original_filename, content_type, extension, byte_size, sha256, uploaded_by(created_by), uploaded_at(created_at), is_current`.
++업로드 응답의 `status` 는 `stored`(새 버전) 또는 `duplicate`(최신본과 sha256 이 같음 — 새 버전을 만들지 않는다)다.
++
++## 3. 저장 위치
++
++| 무엇 | 어디 | 비고 |
++|---|---|---|
++| 화면 사업자 정보(상호·등록번호·대표자·개업일·주소·메모) | 화면 `settings().businesses` → `PUT /settings`. 서버는 파일 `settings.json` 의 `ui_settings.businesses` 에 쓰고, DB 풀이 있으면 `yeoljeong_businesses` 열로 upsert 한다(`save_settings_persisted`, 기존 동작). DB 모드의 `GET /settings` 는 `yeoljeong_businesses` 에서 다시 읽는다 | `yeoljeong_settings(scope='ui')` 에는 계좌·직원·연동만 있다 |
++| 사업자 레지스트리 | `yeoljeong_businesses` 표 (`tenant-registry` API 의 `update_business` 도 같은 표) | 이번 작업에서 두 경로를 통합하지 않았다 |
++| 등록증 버전 메타데이터(원본명·크기·확장자·sha256·업로더·시각) | `yeoljeong_business_registration_documents` 표 (신규) | 사업자별 `version` 1,2,3… 삭제된 번호도 재사용하지 않는다 |
++| 등록증 원본 파일 | `$OBYS_UPLOAD_ROOT/<tenant_id>/<sha256(business_id) 앞 32자>/business_registration/<uuid>.<ext>` | 기본 `OBYS_UPLOAD_ROOT=app/data/yeoljeong_finance/uploads/ledgers`. 원장과 같은 루트, 다른 하위 폴더 |
++| 화면 → 문서 참조 | 원본은 `yeoljeong_business_registration_documents` (business_id 기준 최신 활성 1건). 수정 화면을 열 때 `GET …/registration-document` 로 현행본을 읽는다. 저장 시 `ui_settings.businesses[].registrationDocument = {id, version, sha256, originalFilename, uploadedAt}` 도 함께 붙지만, 표에 열이 없어 **파일 모드에서만** 남는 편의 사본이다 | 예전의 메모 문자열 `사업자등록증 파일: <파일명>` 은 더 이상 만들지 않는다(기존 메모는 그대로 둠) |
++| OCR 실행 기록 | `yeoljeong_audit_logs` (`action=business_registration.ocr_suggest`) | 문서 id·버전·성공 여부·소요 ms·원문 길이·항목별 `found/valid/value_length`. **OCR 원문과 추출값은 남기지 않는다** |
++| 업로드·삭제 기록 | `yeoljeong_audit_logs` (`business_registration.upload` / `.delete`) | 버전·sha256·크기·확장자 |
++
++## 4. OCR 항목 → 사업자 필드
++
++| OCR 항목 | 화면 필드 / 표 열 | 정규화 | 검증 | 자동채움 후보 |
++|---|---|---|---|---|
++| 상호(`name`) | `name` / `name` | 공백만 정리 | 없음(교정 금지) | 예 |
++| 사업자등록번호(`registration_no`) | `registrationNo` / `registration_no` | `000-00-00000` (하이픈 없는 10자리도 붙임) | 국세청 검증번호(체크섬). 불일치면 `valid=false` + 사유 | 체크섬 통과 시만 |
++| 대표자(`representative`) | `representative` / `representative` | 공백만 정리 | 없음 | 예 |
++| 개업일(`opened_at`) | `openedAt` / `opened_at` | `YYYY-MM-DD` ("2025년 4월 1일", `2025.04.01` 도 처리) | 존재하는 날짜, 미래 날짜면 `valid=false` | 유효할 때만 |
++| 사업장 주소(`address`) | `address` / `address` | 공백만 정리 | 없음 | 예 |
++| 법인등록번호(`corporate_registration_no`) | — | `000000-0000000` | 형식 | 아니오(참고) |
++| 과세유형(`tax_type`) | — | 일반과세/간이과세/면세 | 표시 문구 | 아니오(참고) |
++
++읽지 못한 항목은 `value=null` + `reason` 이다. 값을 추측해 만들지 않는다. 등록번호는 "등록번호" 표시를 못 찾았을 때만, 원문 전체에서 `000-00-00000` 모양이 **정확히 한 종류**일 때 그것을 쓰고 신뢰도를 낮춘다(0.6배).
++
++OCR 호출은 기존 브리지 `app/core/local_ocr_bridge.py:ocr_extract` (CEO PC Agent 경유)다. PC Agent 가 없으면 `ocr.ok=false` 와 사유를 돌려주고, 원본은 이미 보관된 상태로 남는다. PDF 를 PC Agent OCR 이 읽는지는 에이전트 쪽 구현에 달려 있다 — 읽지 못하면 이미지(jpg/png)로 다시 올린다.
++
++## 5. 코드 기본값이 등록값을 덮지 않는다
++
++- `_canonicalize_ui_settings` 는 이제 **저장된 상호를 그대로** 쓴다. canonical 상호(`CANONICAL_BUSINESSES`)는 저장값이 비어 있을 때만 쓴다. 지점명(`CANONICAL_BRANCHES`)도 같다. id 와 별칭 맵, 지점→사업자 매핑은 바꾸지 않았다.
++- `"기초등록 필요"` / `"미등록"` / `"-"` 는 값이 아니라 상태다. API 로 나갈 때 빈 문자열로 바꾸고, 대신 다음을 붙인다.
++  - settings: `needs_registration_info`, `missing_registration_fields` (`registrationNo/representative/openedAt/address`)
++  - `GET /tenant-registry/businesses`: 같은 두 필드 (`registration_no/representative/opened_at/address`)
++- 화면은 이 플래그로 "기초등록 필요" 배지를 보여준다. 등록번호 칸에 자리표시자를 넣지 않는다.
++- seed 의 성신여대점·언니냉면 자리표시자는 빈 값으로 바꿨다. 이 값을 읽는 곳을 확인했다: 계약서 기본값(`employer_registration_no`)은 빈 값이면 채우지 않고 `_missing_contract_value` 가 전과 같이 누락으로 판정한다. 은행 범위(`entityType`)는 해당 없음.
++- **영향:** 다음에 관리자가 [사업자 저장]을 누르면 `save_settings_persisted` 가 `yeoljeong_businesses.registration_no` 에 자리표시자 대신 빈 값을, `name` 에 canonical 상호 대신 저장된 상호를 쓴다. 이 작업은 운영 DB 를 직접 고치지 않는다.
++
++## 6. 마이그레이션 (오비서 업무 DB 전용, 수동)
++
++`migrations/20260930_obys_business_registration_documents.sql` — 표 1개와 인덱스 2개 추가만 한다. 멱등하다.
++`scripts/migrations_auto_apply_baseline.txt` 에 HOLD 로 올라 있어 AADS 배포가 자동 적용하지 않는다.
++
++```bash
++psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_business_registration_documents.sql
++psql "$OBYS_DATABASE_URL" -c "\d yeoljeong_business_registration_documents"
++```
++
++롤백: `migrations/rollback/20260930_obys_business_registration_documents.down.sql` (표를 먼저 덤프한다. 원본 파일은 디스크에 남는다).
++마이그레이션 전에 이 코드가 배포되면 등록증 엔드포인트만 500 이 나고, 기존 사업자·원장 화면은 영향이 없다.
++
++## 7. 보존
++
++- 원본과 모든 이전 버전을 보관한다. 자동 삭제는 없다. DELETE 는 soft delete 라 파일과 행이 남는다.
++- 보존 기간 기준: 국세기본법의 장부·증빙서류 보존기간(법정신고기한부터 5년)을 따른다. 폐업한 사업자도 마지막 신고기한부터 5년이 지나기 전에는 파기하지 않는다. 파기는 별도 승인을 받아 수동으로 하고, 파기한 `sha256` 목록을 남긴다.
++- 원본대조: 파일 `sha256sum` 과 표의 `sha256` 이 같아야 한다.
++
++```bash
++sha256sum "$OBYS_UPLOAD_ROOT/<tenant>/<hash>/business_registration/<uuid>.pdf"
++```
++
++## 8. 사업자번호 미비 사업자 조회
++
++레지스트리 표:
++
++```sql
++SELECT tenant_id, id, name, registration_no, representative, opened_at, address
++  FROM yeoljeong_businesses
++ WHERE deleted_at IS NULL
++   AND (COALESCE(btrim(registration_no), '') IN ('', '-', '미등록', '기초등록 필요')
++        OR COALESCE(btrim(representative), '') IN ('', '-', '미등록', '기초등록 필요')
++        OR COALESCE(btrim(opened_at), '') IN ('', '-')
++        OR COALESCE(btrim(address), '') IN ('', '-'))
++ ORDER BY tenant_id, sort_order, id;
++```
++
++화면 settings 파일 모드(`$YEOLJEONG_FINANCE_DATA_DIR/settings.json`):
++
++```bash
++jq -r '.ui_settings.businesses[] | select((.registrationNo // "" | gsub("^\\s+|\\s+$";"")) as $n | ($n == "" or $n == "-" or $n == "미등록" or $n == "기초등록 필요")) | [.id, .name] | @tsv' settings.json
++```
++
++API 로는 `GET /api/v1/yeoljeong-finance/settings` 의 `businesses[].needs_registration_info=true`, 또는 `GET /api/v1/yeoljeong-finance/tenant-registry/businesses` 의 `needs_registration_info=true` 행이다.
++
++등록증이 한 번도 안 올라온 사업자:
++
++```sql
++SELECT b.tenant_id, b.id, b.name
++  FROM yeoljeong_businesses b
++ WHERE b.deleted_at IS NULL
++   AND NOT EXISTS (SELECT 1 FROM yeoljeong_business_registration_documents d
++                    WHERE d.tenant_id = b.tenant_id AND d.business_id = b.id AND d.deleted_at IS NULL);
++```
++
++## 9. 화면 검증
++
++1. 관리자로 로그인 → 오비서 `/apps/obys/` → 사업자 페이지(사업자 신규등록/수정).
++2. 목록에서 "언니냉면" 행 → 등록번호 칸이 "기초등록 필요" **배지**로 나오는지 본다(글자값이 아님). 보완 % 가 자리표시자를 채운 값으로 세지 않는지 본다.
++3. [수정] → 사업자등록증 파일에 jpg/png/pdf 를 고른다 → "원본 보관 v1 · 파일명 · bytes · sha256…" 줄이 나오는지 본다.
++4. PC Agent 가 붙어 있으면 비교표가 나온다. 체크섬이 틀린 번호는 빨간 사유 배지와 "적용 불가"로 나온다. [적용]을 누른 칸만 바뀌는지, 누르기 전에는 폼이 그대로인지 본다.
++5. PC Agent 가 없으면 "OCR 실패 … 손입력으로 계속" 이 나오고 폼 입력이 그대로인지 본다.
++6. [사업자 저장] → 상세현황에 "등록증 원본 v1 …" 이 나오고 메모에 파일명 문자열이 붙지 않는지 본다.
++7. 같은 파일을 다시 고르면 "최신본과 동일 파일"이 나오고, 다른 파일이면 v2 가 된다.
++8. 비관리자 계정에서는 파일 선택 시 "관리자만" 안내가 나오고 업로드하지 않는지 본다.
+diff --git a/migrations/20260930_obys_business_registration_documents.sql b/migrations/20260930_obys_business_registration_documents.sql
+new file mode 100644
+index 00000000..24f4aa2e
+--- /dev/null
++++ b/migrations/20260930_obys_business_registration_documents.sql
+@@ -0,0 +1,48 @@
++-- AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930
++-- 사업자등록증 원본 보관(버전 이력). 원본 파일은 OBYS_UPLOAD_ROOT 아래
++--   <tenant_id>/<sha256(business_id)[:32]>/business_registration/<uuid><ext>
++-- 에 있고, 이 표는 그 메타데이터(원본 파일명·크기·확장자·sha256·업로더·시각)다.
++--
++-- 적용 대상: 오비서 업무 DB(OBYS_DATABASE_URL, 진아서버)만. AADS DB 에 돌리지 않는다.
++--   scripts/migrations_auto_apply_baseline.txt 에 올려 자동 적용에서 HOLD 한다.
++--   적용: psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_business_registration_documents.sql
++-- 스키마 추가만 한다. 기존 행을 쓰지 않는다. 멱등하다(IF NOT EXISTS).
++-- 삭제는 soft delete(deleted_at)만 한다. 이전 버전은 지우지 않는다.
++-- 롤백: migrations/rollback/20260930_obys_business_registration_documents.down.sql
++
++BEGIN;
++
++DO $$
++BEGIN
++    IF to_regclass('public.yeoljeong_businesses') IS NULL
++       OR to_regclass('public.yeoljeong_business_tenant_mapping') IS NULL THEN
++        RAISE EXCEPTION '오비서 업무 DB 전용이다 (yeoljeong_businesses / yeoljeong_business_tenant_mapping 없음)';
++    END IF;
++END
++$$;
++
++CREATE TABLE IF NOT EXISTS yeoljeong_business_registration_documents (
++    id UUID PRIMARY KEY,
++    tenant_id UUID NOT NULL,
++    business_id TEXT NOT NULL REFERENCES yeoljeong_businesses(id) ON UPDATE CASCADE,
++    version INTEGER NOT NULL CHECK (version >= 1),
++    original_filename TEXT NOT NULL,
++    stored_filename TEXT NOT NULL,
++    content_type TEXT NOT NULL,
++    extension TEXT NOT NULL CHECK (extension IN ('.pdf','.jpg','.jpeg','.png')),
++    byte_size BIGINT NOT NULL CHECK (byte_size BETWEEN 1 AND 10485760),
++    sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
++    created_by TEXT NOT NULL,
++    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    deleted_at TIMESTAMPTZ,
++    deleted_by TEXT
++);
++
++-- 버전 번호는 삭제된 것까지 포함해 사업자별로 유일하다(재사용하지 않는다).
++CREATE UNIQUE INDEX IF NOT EXISTS uq_yeoljeong_business_registration_documents_version
++    ON yeoljeong_business_registration_documents (tenant_id, business_id, version);
++CREATE INDEX IF NOT EXISTS idx_yeoljeong_business_registration_documents_current
++    ON yeoljeong_business_registration_documents (tenant_id, business_id, version DESC)
++    WHERE deleted_at IS NULL;
++
++COMMIT;
+diff --git a/migrations/rollback/20260930_obys_business_registration_documents.down.sql b/migrations/rollback/20260930_obys_business_registration_documents.down.sql
+new file mode 100644
+index 00000000..ba77b14f
+--- /dev/null
++++ b/migrations/rollback/20260930_obys_business_registration_documents.down.sql
+@@ -0,0 +1,20 @@
++-- Rollback: AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930
++-- 오비서 업무 DB 전용, 수동 적용. AADS DB 에 돌리지 않는다.
++-- 주의: 등록증 버전 메타데이터(sha256·업로더·시각)가 사라진다. 원본 파일은
++-- OBYS_UPLOAD_ROOT/<tenant>/<business 해시>/business_registration/ 에 그대로 남는다.
++-- 되돌리기 전에 표를 덤프해 두어라:
++--   pg_dump "$OBYS_DATABASE_URL" -t yeoljeong_business_registration_documents > registration_documents.sql
++
++BEGIN;
++
++DO $$
++BEGIN
++    IF to_regclass('public.yeoljeong_businesses') IS NULL THEN
++        RAISE EXCEPTION '오비서 업무 DB 전용이다';
++    END IF;
++END
++$$;
++
++DROP TABLE IF EXISTS yeoljeong_business_registration_documents;
++
++COMMIT;
+diff --git a/scripts/migrations_auto_apply_baseline.txt b/scripts/migrations_auto_apply_baseline.txt
+index 8d97effb..435cd315 100644
+--- a/scripts/migrations_auto_apply_baseline.txt
++++ b/scripts/migrations_auto_apply_baseline.txt
+@@ -44,3 +44,6 @@ migrations/20260930_obys_contract_notify_signed_pdf.sql
+ # OBYS 업무 DB 전용(yeoljeong_branches·yeoljeong_attendance_records). AADS DB 자동 적용
+ # 대상이 아니다 — docs/operations/OBYS_ATTENDANCE_PWA_GPS.md 절차로 수동 적용.
+ migrations/20260930_obys_attendance_pwa_gps.sql
++# OBYS 업무 DB 전용(yeoljeong_business_registration_documents). AADS DB 자동 적용
++# 대상이 아니다 — docs/operations/OBYS_BUSINESS_REGISTRATION_OCR.md 절차로 수동 적용.
++migrations/20260930_obys_business_registration_documents.sql
+diff --git a/tests/unit/test_obys_business_registration_ocr.py b/tests/unit/test_obys_business_registration_ocr.py
+new file mode 100644
+index 00000000..5d86e499
+--- /dev/null
++++ b/tests/unit/test_obys_business_registration_ocr.py
+@@ -0,0 +1,461 @@
++"""AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930
++
++사업자등록증 원본 보관 · OCR 제안(자동 저장 금지) · canonical 상호 덮어쓰기 차단.
++
++SQL 은 가짜 연결에서 토큰 단위로만 판별한다(dup_guard 가 완전한 SQL 리터럴을
++실제 SQL 로 오인한 사례가 있다).
++"""
++from __future__ import annotations
++
++import asyncio
++import copy
++import hashlib
++import io
++import json
 +from contextlib import asynccontextmanager
-+from datetime import date, datetime, time, timedelta
++from datetime import date, datetime, timezone
 +from pathlib import Path
-+from zoneinfo import ZoneInfo
++from uuid import UUID
 +
-+import asyncpg
 +import pytest
-+from fastapi import FastAPI
-+from fastapi.testclient import TestClient
++from fastapi import HTTPException, UploadFile
 +
-+from app.api import obys_workspaces as api
-+from app.auth import get_current_user
++from app.api import obys_finance as api
++from app.services import obys_registration_ocr as ocr
++from app.services import obys_upload_service as service
++from app.services import yeoljeong_finance_service as finance
 +
-+
-+ROOT = Path(__file__).resolve().parents[2]
-+KST = ZoneInfo("Asia/Seoul")
-+TENANT = "d1695f15-6b68-4929-bc8d-646827363ff9"
-+OTHER_TENANT = "0b0b0b0b-1111-4222-8333-444444444444"
-+BUSINESS = {"id": "biz-lylon-e2e", "name": "주식회사 라일론"}
-+STORE = (37.5665, 126.9780)
-+M_PER_DEG_LAT = api._EARTH_RADIUS_M * math.pi / 180
-+
-+
-+def _member(email, role="member", tenant=TENANT, name="김직원"):
-+    return {"tenant_id": tenant, "email": email, "name": name,
-+            "current_membership": {"tenant_id": tenant, "status": "active", "role": role}}
-+
-+
-+EMPLOYEE = _member("Staff@Example.com")
-+COWORKER = _member("coworker@example.com", name="이동료")
-+OWNER = _member("owner@example.com", role="owner", name="대표")
-+VIEWER = _member("viewer@example.com", role="viewer")
-+FOREIGN = _member("intruder@example.com", tenant=OTHER_TENANT)
-+
-+BASE = f"/api/v1/workspaces/{BUSINESS['id']}"
++TENANT_A = UUID("15055cac-71b0-45ec-b714-7093dde189ff")
++TENANT_B = UUID("2d701a8c-9596-4757-8588-faa4f7837112")
++BUSINESS = "biz-eonni-naengmyeon"
++PNG = b"\x89PNG\r\n\x1a\n" + b"registration-image" * 8
++PDF = b"%PDF-1.4\nregistration-pdf\n"
++VALID_NO = "123-45-67891"  # 국세청 검증번호 일치
++BAD_NO = "123-45-67890"  # 검증번호 불일치
++OCR_TEXT = "\n".join([
++    "사 업 자 등 록 증",
++    "( 일반과세자 )",
++    f"등록번호 : {VALID_NO}",
++    "상 호 : 언니냉면 테스트",
++    "성 명 : 김테스트        생 년 월 일 : 1980 년 01 월 01 일",
++    "개 업 연 월 일 : 2025 년 4 월 1 일",
++    "사업장 소재지 : 서울특별시  성북구   테스트로 1",
++    "사업의 종류 : 업태 음식점업 종목 한식",
++])
 +
 +
-+def _north(meters: float) -> tuple[float, float]:
-+    # 서버는 거리를 올림한다. 0.5m 덜 가서 올림 결과가 정확히 meters 가 되게 한다.
-+    return STORE[0] + (meters - 0.5) / M_PER_DEG_LAT, STORE[1]
-+
-+
-+def _columns(sql: str) -> list[str]:
-+    for const in (api.ATTENDANCE_LOCATION_COLUMNS, api.ATTENDANCE_CLOCK_COLUMNS):
-+        if const in sql:
-+            cols = const.split(",")
-+            return (["employee_email"] + cols) if "SELECT employee_email," in sql else cols
-+    raise AssertionError("unknown projection")
++def _user(tenant: UUID, role: str = "owner") -> dict:
++    return {
++        "email": f"{role}@example.com",
++        "user_id": f"user-{role}",
++        "tenant_id": str(tenant),
++        "current_membership": {"tenant_id": str(tenant), "status": "active", "role": role},
++    }
 +
 +
 +class FakeDB:
-+    def __init__(self):
-+        self.rows: dict[str, dict] = {}
-+        self.branches: dict[str, dict] = {}
-+        self.audit: list[dict] = []
-+        self.locks: list[str] = []
-+        self._ids = itertools.count(1)
++    def __init__(self) -> None:
++        self.businesses = {
++            BUSINESS: {
++                "id": BUSINESS, "tenant_id": TENANT_A, "name": "언니냉면",
++                "registration_no": "기초등록 필요", "representative": "미등록",
++                "tax_type": "일반과세", "opened_at": "", "address": "",
++            },
++        }
++        self.documents: list[dict] = []
++        self.audits: list[dict] = []
 +
-+    def add_branch(self, branch_id, name, lat=None, lng=None, radius=None, business_id=BUSINESS["id"]):
-+        self.branches[branch_id] = {"id": branch_id, "business_id": business_id, "name": name,
-+                                    "latitude": lat, "longitude": lng, "geofence_radius_m": radius,
-+                                    "deleted_at": None, "updated_by": ""}
 +
-+
-+class FakeConnection:
-+    def __init__(self, db: FakeDB):
++class FakeConn:
++    def __init__(self, db: FakeDB) -> None:
 +        self.db = db
 +
 +    @asynccontextmanager
 +    async def transaction(self):
 +        yield
 +
-+    async def close(self):
-+        pass
++    async def close(self) -> None:
++        return None
++
++    def _business(self, business_id, tenant_id):
++        row = self.db.businesses.get(business_id)
++        return row if row and row["tenant_id"] == tenant_id else None
++
++    @staticmethod
++    def _project(doc, sql):
++        # RETURNING/SELECT 가 고른 열만 돌려준다(asyncpg Record 와 같게).
++        columns = service.REGISTRATION_DOCUMENT_COLUMNS.split(",")
++        if ",stored_filename FROM" in sql:
++            columns.append("stored_filename")
++        return {column: doc[column] for column in columns}
++
++    def _active(self, tenant_id, business_id):
++        rows = [d for d in self.db.documents if d["tenant_id"] == tenant_id and d["business_id"] == business_id and d["deleted_at"] is None]
++        return sorted(rows, key=lambda d: d["version"], reverse=True)
++
++    async def fetchval(self, sql, *args):
++        if "EXISTS" in sql:
++            return self._business(args[0], args[1]) is not None
++        if "MAX(version)" in sql:
++            versions = [d["version"] for d in self.db.documents if d["tenant_id"] == args[0] and d["business_id"] == args[1]]
++            return max(versions, default=0) + 1
++        raise AssertionError(sql)
 +
 +    async def execute(self, sql, *args):
 +        if "pg_advisory_xact_lock" in sql:
-+            self.db.locks.append(args[0])
 +            return "SELECT 1"
-+        assert "INSERT INTO yeoljeong_audit_logs" in sql
-+        business_id, actor, action, record_id, details = args
-+        self.db.audit.append({"business_id": business_id, "actor": actor, "action": action,
-+                              "resource_id": record_id, "details": details,
-+                              "created_at": datetime.now(KST) + timedelta(microseconds=len(self.db.audit))})
-+        return "INSERT 0 1"
-+
-+    def _branches(self, business_id):
-+        return [dict(b) for b in self.db.branches.values()
-+                if b["business_id"] == business_id and b["deleted_at"] is None]
++        if "deleted_at=NOW()" in sql:
++            hits = [d for d in self._active(args[1], args[2]) if d["id"] == args[0]]
++            for doc in hits:
++                doc["deleted_at"], doc["deleted_by"] = datetime.now(timezone.utc), args[3]
++            return f"UPDATE {len(hits)}"
++        raise AssertionError(sql)
 +
 +    async def fetch(self, sql, *args):
-+        if "FROM yeoljeong_branches" in sql:
-+            return self._branches(args[0])
-+        assert "FROM yeoljeong_attendance_records" in sql
-+        cols = _columns(sql)
-+        rows = [r for r in self.db.rows.values() if r["business_id"] == args[0] and r["deleted_at"] is None]
-+        if "employee_email=$2" in sql:
-+            rows = [r for r in rows if r["employee_email"] == args[1]]
-+        if "source='pwa'" in sql:
-+            rows = [r for r in rows if r["source"] == "pwa"]
-+        return [{c: r.get(c) for c in cols} for r in sorted(rows, key=lambda r: r["work_date"], reverse=True)]
-+
-+    async def fetchval(self, sql, business_id, email, work_date):
-+        assert "check_out_at IS NULL" in sql
-+        return next((r["id"] for r in self.db.rows.values()
-+                     if r["business_id"] == business_id and r["employee_email"] == email
-+                     and r["work_date"] == work_date and r["source"] == "pwa"
-+                     and r["check_in_at"] is not None and r["check_out_at"] is None
-+                     and r["deleted_at"] is None), None)
++        assert "yeoljeong_business_registration_documents" in sql
++        return [self._project(d, sql) for d in self._active(args[0], args[1])]
 +
 +    async def fetchrow(self, sql, *args):
-+        db = self.db
-+        head = sql.lstrip()
-+        if "FROM yeoljeong_audit_logs" in sql:
-+            business_id, actor, actions = args
-+            hits = [a for a in db.audit if a["business_id"] == business_id and a["actor"] == actor
-+                    and a["action"] in actions]
-+            return {"action": hits[-1]["action"], "created_at": hits[-1]["created_at"]} if hits else None
-+        if head.startswith("INSERT INTO yeoljeong_attendance_records"):
-+            (business_id, email, masked, name, branch, work_date, start_at, status, memo, actor,
-+             check_in_at, lat, lng, accuracy, distance, result, device, consent_at) = args
-+            if any(r["employee_email"] == email and r["work_date"] == work_date and r["start_at"] == start_at
-+                   for r in db.rows.values()):
-+                raise asyncpg.UniqueViolationError("duplicate key")
-+            row_id = f"att-{next(db._ids):06d}"
-+            now = datetime.now(KST)
-+            db.rows[row_id] = {
-+                "id": row_id, "business_id": business_id, "employee_email": email,
-+                "employee_email_masked": masked, "employee_name": name, "branch": branch,
-+                "work_date": work_date, "start_at": start_at, "end_at": start_at, "break_minutes": 0,
-+                "worked_minutes": 0, "hourly_wage": 0, "source": "pwa", "status": status, "memo": memo,
-+                "created_by": actor, "created_at": now, "updated_at": now, "deleted_at": None,
-+                "check_in_at": check_in_at, "check_out_at": None, "check_in_lat": lat, "check_in_lng": lng,
-+                "check_in_accuracy_m": accuracy, "check_in_distance_m": distance, "check_out_lat": None,
-+                "check_out_lng": None, "check_out_accuracy_m": None, "check_out_distance_m": None,
-+                "geofence_result": result, "device_info": device, "location_consent_at": consent_at,
-+            }
-+            return {c: db.rows[row_id][c] for c in _columns(sql)}
-+        if "FOR UPDATE" in sql:
-+            business_id, email, since = args
-+            open_rows = [r for r in db.rows.values()
-+                         if r["business_id"] == business_id and r["employee_email"] == email
-+                         and r["source"] == "pwa" and r["check_in_at"] is not None
-+                         and r["check_in_at"] >= since and r["check_out_at"] is None and r["deleted_at"] is None]
-+            if not open_rows:
-+                return None
-+            row = max(open_rows, key=lambda r: r["check_in_at"])
-+            return {c: row[c] for c in _columns(sql)}
-+        if head.startswith("UPDATE yeoljeong_attendance_records"):
-+            (record_id, business_id, check_out_at, end_at, worked, lat, lng, accuracy, distance,
-+             result, status, memo, device, consent_at) = args
-+            row = db.rows.get(record_id)
-+            if not row or row["business_id"] != business_id or row["check_out_at"] is not None:
-+                return None
-+            row.update({"check_out_at": check_out_at, "end_at": end_at, "worked_minutes": worked,
-+                        "check_out_lat": lat, "check_out_lng": lng, "check_out_accuracy_m": accuracy,
-+                        "check_out_distance_m": distance, "geofence_result": result, "status": status,
-+                        "memo": memo, "device_info": row["device_info"] or device,
-+                        "location_consent_at": row["location_consent_at"] or consent_at})
-+            return {c: row[c] for c in _columns(sql)}
-+        if head.startswith("SELECT employee_email,"):
-+            row = db.rows.get(args[0])
-+            if row and row["business_id"] == args[1] and row["deleted_at"] is None:
-+                return {c: row[c] for c in _columns(sql)}
-+            return None
-+        if head.startswith("UPDATE yeoljeong_branches"):
-+            branch_id, business_id, lat, lng, radius, actor = args
-+            branch = db.branches.get(branch_id)
-+            if not branch or branch["business_id"] != business_id or branch["deleted_at"] is not None:
-+                return None
-+            branch.update({"latitude": lat, "longitude": lng, "geofence_radius_m": radius, "updated_by": actor})
-+            return {k: branch[k] for k in ("id", "name", "latitude", "longitude", "geofence_radius_m")}
-+        raise AssertionError(f"unexpected SQL: {sql[:80]}")
++        if "yeoljeong_audit_logs" in sql:
++            entry = dict(zip(("business_id", "actor", "action", "resource_type", "resource_id", "details", "ip_address"), args))
++            self.db.audits.append(entry)
++            return entry
++        if "INSERT" in sql and "yeoljeong_business_registration_documents" in sql:
++            keys = ("id", "tenant_id", "business_id", "version", "original_filename", "stored_filename",
++                    "content_type", "extension", "byte_size", "sha256", "created_by")
++            doc = dict(zip(keys, args))
++            doc.update(created_at=datetime.now(timezone.utc), deleted_at=None, deleted_by=None)
++            self.db.documents.append(doc)
++            return self._project(doc, sql)
++        if "yeoljeong_business_registration_documents" in sql and "LIMIT 1" in sql:
++            active = self._active(args[0], args[1])
++            return self._project(active[0], sql) if active else None
++        if "yeoljeong_business_registration_documents" in sql:
++            hits = [d for d in self._active(args[1], args[2]) if d["id"] == args[0]]
++            return self._project(hits[0], sql) if hits else None
++        if "yeoljeong_businesses" in sql:
++            row = self._business(args[0], args[1])
++            return dict(row) if row else None
++        raise AssertionError(sql)
 +
 +
 +@pytest.fixture
-+def db():
++def db(tmp_path, monkeypatch):
 +    fake = FakeDB()
-+    fake.add_branch("br-junghwa", "중화점", *STORE)
++
++    async def connect():
++        return FakeConn(fake)
++
++    monkeypatch.setattr(service, "UPLOAD_ROOT", tmp_path / "uploads")
++    monkeypatch.setattr(service, "_connect", connect)
 +    return fake
 +
 +
-+@pytest.fixture
-+def clock(monkeypatch):
-+    now = {"value": datetime(2026, 9, 30, 10, 0, tzinfo=KST)}
-+    monkeypatch.setattr(api, "_clock_now", lambda: now["value"])
-+    return now
++def _upload(user, data=PNG, filename="등록증.png", content_type="image/png", business_id=BUSINESS):
++    return asyncio.run(service.create_registration_document(
++        user=user, business_id=business_id, filename=filename, content_type=content_type, data=data,
++    ))
 +
 +
-+@pytest.fixture
-+def as_user():
-+    return {"user": EMPLOYEE}
++# --- A. 원본 보관 --------------------------------------------------------------
++def test_upload_stores_original_under_tenant_business_hash_with_sha256(db, tmp_path):
++    document = _upload(_user(TENANT_A))
++
++    business_hash = hashlib.sha256(BUSINESS.encode()).hexdigest()[:32]
++    directory = tmp_path / "uploads" / str(TENANT_A) / business_hash / "business_registration"
++    stored = list(directory.iterdir())
++    assert len(stored) == 1 and stored[0].read_bytes() == PNG
++    assert stored[0].name == f"{UUID(document['id']).hex}.png"
++    assert document["sha256"] == hashlib.sha256(PNG).hexdigest()
++    assert document["original_filename"] == "등록증.png"
++    assert document["byte_size"] == len(PNG) and document["extension"] == ".png"
++    assert document["uploaded_by"] == "owner@example.com" and document["uploaded_at"]
++    assert document["version"] == 1 and document["is_current"] is True and document["status"] == "stored"
++    assert "stored_filename" not in document
++    assert db.audits[-1]["action"] == "business_registration.upload"
 +
 +
-+@pytest.fixture
-+def client(monkeypatch, db, clock, as_user):
-+    async def businesses(*, user):
-+        return [BUSINESS] if user["tenant_id"] == TENANT else []
++def test_registration_category_stays_out_of_ledger_paths():
++    assert service.REGISTRATION_CATEGORY not in service.LEDGER_CATEGORIES
++    with pytest.raises(HTTPException) as exc:
++        asyncio.run(service.create_upload(
++            user=_user(TENANT_A), business_id=BUSINESS, category="business_registration",
++            filename="a.pdf", content_type="application/pdf", data=PDF,
++        ))
++    assert exc.value.status_code == 400
++
++
++def test_second_upload_keeps_previous_version_and_latest_is_current(db):
++    admin = _user(TENANT_A)
++    first = _upload(admin)
++    second = _upload(admin, data=PDF, filename="재발급.pdf", content_type="application/pdf")
++    again = _upload(admin, data=PDF, filename="재발급.pdf", content_type="application/pdf")
++
++    listed = asyncio.run(service.list_registration_documents(user=admin, business_id=BUSINESS))
++    assert [d["version"] for d in listed["documents"]] == [2, 1]
++    assert listed["current"]["id"] == second["id"] and listed["current"]["is_current"] is True
++    assert listed["documents"][1]["id"] == first["id"] and listed["documents"][1]["is_current"] is False
++    assert again["status"] == "duplicate" and again["id"] == second["id"]
++    assert len(db.documents) == 2
++
++
++def test_soft_delete_keeps_file_and_row(db, tmp_path):
++    admin = _user(TENANT_A)
++    first = _upload(admin)
++    second = _upload(admin, data=PDF, filename="b.pdf", content_type="application/pdf")
++    assert asyncio.run(service.delete_registration_document(user=admin, business_id=BUSINESS, document_id=UUID(second["id"])))
++
++    assert len(db.documents) == 2 and db.documents[1]["deleted_at"] is not None
++    assert len(list((tmp_path / "uploads").rglob("*.pdf"))) == 1
++    listed = asyncio.run(service.list_registration_documents(user=admin, business_id=BUSINESS))
++    assert listed["current"]["id"] == first["id"]
++    third = _upload(admin, data=PDF + b"v3", filename="c.pdf", content_type="application/pdf")
++    assert third["version"] == 3  # 삭제된 버전 번호는 재사용하지 않는다
++
++
++@pytest.mark.parametrize(
++    ("filename", "content_type", "data"),
++    [
++        ("virus.exe", "application/octet-stream", b"MZ" + b"0" * 10),
++        ("ledger.csv", "text/csv", b"date,amount\n2026-09-30,1"),
++        ("fake.png", "image/png", b"not-a-png"),
++        ("big.pdf", "application/pdf", b"%PDF-" + b"0" * service.MAX_BYTES),
++    ],
++)
++def test_disallowed_file_or_oversize_is_400(db, filename, content_type, data):
++    with pytest.raises(HTTPException) as exc:
++        _upload(_user(TENANT_A), data=data, filename=filename, content_type=content_type)
++    assert exc.value.status_code == 400
++    assert db.documents == []
++
++
++def test_router_oversize_stream_is_400():
++    upload = UploadFile(file=io.BytesIO(b"0" * (service.MAX_BYTES + 1)), filename="big.pdf")
++    with pytest.raises(HTTPException) as exc:
++        asyncio.run(api._read_registration_upload(upload))
++    assert exc.value.status_code == 400
++
++
++def test_non_admin_is_403_for_every_registration_operation(db):
++    document = _upload(_user(TENANT_A))
++    member = _user(TENANT_A, role="member")
++    document_id = UUID(document["id"])
++    calls = [
++        lambda: service.create_registration_document(user=member, business_id=BUSINESS, filename="a.png", content_type="image/png", data=PNG),
++        lambda: service.list_registration_documents(user=member, business_id=BUSINESS),
++        lambda: service.registration_document_download(user=member, business_id=BUSINESS, document_id=document_id),
++        lambda: ocr.suggest_from_document(user=member, business_id=BUSINESS, document_id=document_id),
++        lambda: service.delete_registration_document(user=member, business_id=BUSINESS, document_id=document_id),
++    ]
++    for call in calls:
++        with pytest.raises(HTTPException) as exc:
++            asyncio.run(call())
++        assert exc.value.status_code == 403
++    with pytest.raises(HTTPException) as router_exc:
++        asyncio.run(api.upload_business_registration_document(BUSINESS, UploadFile(file=io.BytesIO(PNG), filename="a.png"), member))
++    assert router_exc.value.status_code == 403
++
++
++def test_other_tenant_admin_gets_404(db):
++    document = _upload(_user(TENANT_A))
++    other = _user(TENANT_B)
++    document_id = UUID(document["id"])
++    calls = [
++        lambda: service.create_registration_document(user=other, business_id=BUSINESS, filename="a.png", content_type="image/png", data=PNG),
++        lambda: service.list_registration_documents(user=other, business_id=BUSINESS),
++        lambda: service.registration_document_download(user=other, business_id=BUSINESS, document_id=document_id),
++        lambda: ocr.suggest_from_document(user=other, business_id=BUSINESS, document_id=document_id),
++        lambda: service.delete_registration_document(user=other, business_id=BUSINESS, document_id=document_id),
++    ]
++    for call in calls:
++        with pytest.raises(HTTPException) as exc:
++            asyncio.run(call())
++        assert exc.value.status_code == 404
++    assert len(db.documents) == 1
++
++
++def test_download_returns_sanitized_name_and_original_bytes(db):
++    admin = _user(TENANT_A)
++    document = _upload(admin, filename="등록증 (원본);x.png")
++    path, filename, content_type = asyncio.run(service.registration_document_download(
++        user=admin, business_id=BUSINESS, document_id=UUID(document["id"]),
++    ))
++    assert path.read_bytes() == PNG and content_type == "image/png"
++    assert filename.startswith("사업자등록증_v1_") and filename.endswith(".png")
++    assert not set(filename) & set('/\\";\r\n')
++
++
++# --- B. OCR 제안 ---------------------------------------------------------------
++def test_checksum_rule():
++    assert ocr.business_registration_checksum_ok("1234567891")
++    assert not ocr.business_registration_checksum_ok("1234567890")
++    assert ocr.normalize_registration_no("1234567891") == (VALID_NO, True, None)
++    value, valid, reason = ocr.normalize_registration_no(BAD_NO)
++    assert value == BAD_NO and valid is False and "체크섬" in reason
++
++
++def test_parse_extracts_five_fields_and_extras():
++    result = ocr.parse_registration_text(OCR_TEXT, 92, today=date(2026, 9, 30))
++    assert result["name"]["value"] == "언니냉면 테스트"
++    assert result["registration_no"]["value"] == VALID_NO and result["registration_no"]["valid"] is True
++    assert result["representative"]["value"] == "김테스트"
++    assert result["opened_at"]["value"] == "2025-04-01"
++    assert result["address"]["value"] == "서울특별시 성북구 테스트로 1"
++    for field in ocr.AUTOFILL_FIELDS:
++        assert result[field]["autofill_candidate"] is True
++        assert 0 < result[field]["confidence"] <= 1 and result[field]["source"]
++    assert result["tax_type"]["value"] == "일반과세" and result["tax_type"]["autofill_candidate"] is False
++
++
++def test_bad_checksum_is_invalid_and_not_autofill():
++    result = ocr.parse_registration_text(OCR_TEXT.replace(VALID_NO, "1234567890"), 0.9)
++    item = result["registration_no"]
++    assert item["value"] == BAD_NO
++    assert item["valid"] is False and item["autofill_candidate"] is False and item["reason"]
++
++
++def test_opened_at_korean_date_and_future_date():
++    assert ocr.normalize_opened_at("2025년 4월 1일", today=date(2026, 9, 30)) == ("2025-04-01", True, None)
++    assert ocr.normalize_opened_at("2025. 04. 01", today=date(2026, 9, 30))[0] == "2025-04-01"
++    value, valid, reason = ocr.normalize_opened_at("2099 년 01 월 01 일", today=date(2026, 9, 30))
++    assert value == "2099-01-01" and valid is False and "미래" in reason
++    assert ocr.normalize_opened_at("2025년 2월 30일", today=date(2026, 9, 30))[0] is None
++    future = ocr.parse_registration_text(OCR_TEXT.replace("2025 년 4 월 1 일", "2099 년 1 월 1 일"), 0.9, today=date(2026, 9, 30))
++    assert future["opened_at"]["valid"] is False and future["opened_at"]["autofill_candidate"] is False
++
++
++def test_missing_fields_are_null_with_reason_not_guessed():
++    result = ocr.parse_registration_text("사 업 자 등 록 증\n상 호 : 언니냉면", 0.9)
++    assert result["name"]["value"] == "언니냉면"
++    for field in ("registration_no", "representative", "opened_at", "address", "corporate_registration_no", "tax_type"):
++        assert result[field]["value"] is None, field
++        assert result[field]["reason"], field
++        assert result[field]["autofill_candidate"] is False
++    empty = ocr.parse_registration_text("", 0.9)
++    assert all(item["value"] is None and item["reason"] for item in empty.values())
++
++
++def test_ocr_suggestion_never_changes_business_record(db, monkeypatch):
++    admin = _user(TENANT_A)
++    document = _upload(admin)
++    before = copy.deepcopy(db.businesses)
++    seen = {}
++
++    async def fake_ocr(image_url=None, image_base64=None, language="kor+eng"):
++        seen["base64"] = image_base64
++        return {"text": OCR_TEXT, "confidence": 0.93, "language": language, "error": None}
++
++    monkeypatch.setattr(ocr.local_ocr_bridge, "ocr_extract", fake_ocr)
++    result = asyncio.run(ocr.suggest_from_document(user=admin, business_id=BUSINESS, document_id=UUID(document["id"])))
++
++    assert db.businesses == before
++    assert seen["base64"]  # 기존 브리지로 원본을 넘겼다
++    assert result["applied"] is False and result["ocr"]["ok"] is True
++    assert result["suggested"]["registration_no"]["value"] == VALID_NO
++    assert result["current"]["registration_no"] == ""  # 자리표시자는 현재값으로 내보내지 않는다
++    assert result["needs_registration_info"] is True
++
++
++def test_audit_log_has_field_results_without_ocr_text(db, monkeypatch):
++    admin = _user(TENANT_A)
++    document = _upload(admin)
++
++    async def fake_ocr(image_url=None, image_base64=None, language="kor+eng"):
++        return {"text": OCR_TEXT, "confidence": 0.93, "language": language, "error": None}
++
++    monkeypatch.setattr(ocr.local_ocr_bridge, "ocr_extract", fake_ocr)
++    asyncio.run(ocr.suggest_from_document(user=admin, business_id=BUSINESS, document_id=UUID(document["id"])))
++
++    entry = db.audits[-1]
++    assert entry["action"] == "business_registration.ocr_suggest"
++    raw = entry["details"]
++    details = json.loads(raw)
++    assert details["document_id"] == document["id"] and details["ocr_ok"] is True
++    assert details["text_length"] == len(OCR_TEXT) and details["elapsed_ms"] >= 0
++    assert details["fields"]["registration_no"] == {"found": True, "valid": True, "value_length": len(VALID_NO)}
++    for fragment in ("김테스트", "언니냉면 테스트", VALID_NO, "성북구", "사업의 종류"):
++        assert fragment not in raw
++
++
++def test_ocr_failure_returns_nulls_and_is_audited(db, monkeypatch):
++    admin = _user(TENANT_A)
++    document = _upload(admin)
++
++    async def broken(*_args, **_kwargs):
++        raise RuntimeError("PC Agent 연결 없음 — OCR 불가")
++
++    monkeypatch.setattr(ocr.local_ocr_bridge, "ocr_extract", broken)
++    result = asyncio.run(ocr.suggest_from_document(user=admin, business_id=BUSINESS, document_id=UUID(document["id"])))
++    assert result["ocr"]["ok"] is False and "PC Agent" in result["ocr"]["error"]
++    assert all(item["value"] is None and item["reason"] for item in result["suggested"].values())
++    assert json.loads(db.audits[-1]["details"])["ocr_ok"] is False
++
++
++def test_router_exposes_registration_document_routes():
++    paths = {(route.path, method) for route in api.router.routes for method in getattr(route, "methods", ())}
++    base = "/yeoljeong-finance/businesses/{business_id}/registration-document"
++    assert (base, "POST") in paths
++    assert (base, "GET") in paths
++    assert (base + "/{document_id}/download", "GET") in paths
++    assert (base + "/{document_id}/ocr", "POST") in paths
++    assert (base + "/{document_id}", "DELETE") in paths
++
++
++# --- C. 코드 기본값이 등록값을 덮지 않는다 -----------------------------------------
++def test_saved_business_and_branch_names_survive_canonicalize():
++    settings = finance._canonicalize_ui_settings({
++        "businesses": [{"id": BUSINESS, "name": "언니냉면 성신여대역점", "registrationNo": VALID_NO}],
++        "branches": [{"id": "branch-junghwa", "name": "열정국밥 중화본점", "businessId": "biz-other"}],
++    })
++    business = next(item for item in settings["businesses"] if item["id"] == BUSINESS)
++    branch = next(item for item in settings["branches"] if item["id"] == "branch-junghwa")
++    assert business["name"] == "언니냉면 성신여대역점"
++    assert business["registrationNo"] == VALID_NO
++    assert branch["name"] == "열정국밥 중화본점"
++    assert branch["businessId"] == "biz-junghwa"  # id 매핑은 그대로 canonical
++    # 저장값이 비었을 때만 canonical 상호를 쓴다
++    blank = finance._canonicalize_ui_settings({"businesses": [{"id": "biz-mia", "name": "  "}]})
++    assert next(item for item in blank["businesses"] if item["id"] == "biz-mia")["name"] == "열정국밥_미아점"
++    assert finance.CANONICAL_BUSINESS_IDS == {"biz-junghwa", "biz-sungshin", "biz-eonni-naengmyeon", "biz-mia"}
++
++
++def test_placeholder_only_business_is_flagged_not_valued():
++    settings = finance._canonicalize_ui_settings({
++        "businesses": [{"id": "biz-sungshin", "registrationNo": "기초등록 필요", "representative": "미등록"}],
++    })
++    by_id = {item["id"]: item for item in settings["businesses"]}
++    for business_id in ("biz-sungshin", BUSINESS):
++        item = by_id[business_id]
++        assert item["needs_registration_info"] is True
++        assert "registrationNo" in item["missing_registration_fields"]
++        assert item["registrationNo"] == "" and item["representative"] == ""
++    assert by_id["biz-junghwa"]["needs_registration_info"] is False
++    assert by_id["biz-junghwa"]["missing_registration_fields"] == []
++    dumped = json.dumps(settings, ensure_ascii=False)
++    assert "기초등록 필요" not in dumped
++    for seed in finance.CANONICAL_BUSINESSES:
++        assert seed["registrationNo"] not in service.REGISTRATION_PLACEHOLDERS
++
++
++def test_registry_list_flags_placeholder_business(db, monkeypatch):
++    class ListConn(FakeConn):
++        async def fetch(self, sql, *args):
++            return [dict(self.db.businesses[BUSINESS], memo="", entity_type="individual", created_at=None, updated_at=None)]
 +
 +    async def connect():
-+        return FakeConnection(db)
-+
-+    monkeypatch.setattr(api.upload_svc, "list_businesses", businesses)
-+    monkeypatch.setattr(api.upload_svc, "_connect", connect)
-+    app = FastAPI()
-+    app.include_router(api.router, prefix="/api/v1")
-+    app.dependency_overrides[get_current_user] = lambda: as_user["user"]
-+    return TestClient(app)
-+
-+
-+def _consent(client, agree=True):
-+    response = client.post(f"{BASE}/attendance/consent", json={"agree": agree})
-+    assert response.status_code == 200, response.text
-+
-+
-+def _punch(client, action, meters=None, accuracy=10, consent=True, **extra):
-+    body = {"location_consent": consent, "device_info": "test-agent", **extra}
-+    if meters is not None:
-+        body["latitude"], body["longitude"] = _north(meters)
-+        body["accuracy_m"] = accuracy
-+    return client.post(f"{BASE}/attendance/{action}", json=body)
-+
-+
-+def _stored(db, response):
-+    return db.rows[response.json()["record"]["id"]]
-+
-+
-+# ── 반경 판정 ────────────────────────────────────────────────────────────────
-+
-+def test_inside_radius_is_auto_approved_as_pwa(client, db):
-+    _consent(client)
-+    response = _punch(client, "check-in", meters=20)
-+    assert response.status_code == 201, response.text
-+    body = response.json()
-+    assert body["record"]["status"] == "approved"
-+    assert body["record"]["geofence_result"] == "inside"
-+    assert body["record"]["source"] == "pwa"
-+    assert body["judgement"]["distance_m"] == 20
-+    row = _stored(db, response)
-+    assert row["check_in_lat"] == pytest.approx(_north(20)[0]) and row["check_in_distance_m"] == 20
-+    assert row["location_consent_at"] is not None and row["check_in_at"] == datetime(2026, 9, 30, 10, 0, tzinfo=KST)
-+    # 직원 응답에는 좌표 원본·기기 정보·이메일 원문이 없다.
-+    assert not {"check_in_lat", "check_in_lng", "device_info", "employee_email"} & set(body["record"])
-+    # 감사로그는 기존 _attendance_audit 경로 — 좌표 원문을 남기지 않는다.
-+    entry = db.audit[-1]
-+    assert entry["action"] == "attendance.check_in" and entry["resource_id"] == row["id"]
-+    assert str(row["check_in_lat"])[:7] not in entry["details"] and "latitude" not in entry["details"]
-+
-+
-+def test_outside_radius_is_pending_with_distance(client, db):
-+    _consent(client)
-+    response = _punch(client, "check-in", meters=80)
-+    assert response.status_code == 201
-+    record = response.json()["record"]
-+    assert (record["status"], record["geofence_result"]) == ("pending", "outside")
-+    assert record["check_in_distance_m"] == 80
-+    assert "80m" in record["memo"] and "밖" in record["memo"]
-+
-+
-+def test_accuracy_worse_than_radius_is_unknown_not_inside(client, db):
-+    _consent(client)
-+    # 매장에서 5m 로 찍혔더라도 오차가 반경(50m)보다 크면 안으로 판정하지 않는다.
-+    response = _punch(client, "check-in", meters=5, accuracy=120)
-+    record = response.json()["record"]
-+    assert (record["status"], record["geofence_result"]) == ("pending", "unknown")
-+    assert "오차 120m" in record["memo"]
-+
-+
-+def test_branch_without_coordinates_is_unknown_with_reason(client, db):
-+    db.branches["br-junghwa"].update(latitude=None, longitude=None)
-+    _consent(client)
-+    response = _punch(client, "check-in", meters=0)
-+    record = response.json()["record"]
-+    assert (record["status"], record["geofence_result"]) == ("pending", "unknown")
-+    assert "지점 좌표 미등록" in record["memo"]
-+    assert db.audit[-1]["action"] == "attendance.check_in" and "지점 좌표 미등록" in db.audit[-1]["details"]
-+
-+
-+def test_without_consent_location_is_not_stored_and_pending(client, db):
-+    # 서버 동의 없음 + 요청은 동의했다고 보내도 위치를 저장하지 않는다.
-+    response = _punch(client, "check-in", meters=10, consent=True)
-+    row = _stored(db, response)
-+    assert row["check_in_lat"] is None and row["check_in_lng"] is None
-+    assert row["check_in_accuracy_m"] is None and row["check_in_distance_m"] is None
-+    assert row["location_consent_at"] is None
-+    assert (row["status"], row["geofence_result"]) == ("pending", "unknown")
-+    assert "미동의" in row["memo"]
-+
-+
-+def test_withdrawn_consent_stops_location_collection(client, db, clock):
-+    _consent(client)
-+    assert _punch(client, "check-in", meters=10).json()["record"]["status"] == "approved"
-+    _consent(client, agree=False)
-+    clock["value"] = datetime(2026, 9, 30, 18, 0, tzinfo=KST)
-+    out = _punch(client, "check-out", meters=10)
-+    assert out.status_code == 200, out.text
-+    row = _stored(db, out)
-+    assert row["check_out_lat"] is None and row["check_out_distance_m"] is None
-+    assert row["status"] == "pending" and row["geofence_result"] == "unknown"
-+    assert [a["action"] for a in db.audit if "consent" in a["action"]] == [
-+        "attendance.consent", "attendance.consent_withdraw"]
-+
-+
-+def test_request_consent_false_overrides_server_consent(client, db):
-+    _consent(client)
-+    row = _stored(db, _punch(client, "check-in", meters=10, consent=False))
-+    assert row["check_in_lat"] is None and row["status"] == "pending"
-+
-+
-+@pytest.mark.parametrize(("meters", "expected"), [(49, "inside"), (50, "inside"), (51, "outside")])
-+def test_radius_boundary(meters, expected):
-+    branch = {"latitude": STORE[0], "longitude": STORE[1], "geofence_radius_m": None}
-+    lat, lng = _north(meters)
-+    verdict = api.judge_geofence(consent=True, latitude=lat, longitude=lng, accuracy_m=10, branch=branch)
-+    assert verdict["distance_m"] == meters and verdict["result"] == expected
-+
-+
-+@pytest.mark.parametrize(("accuracy", "expected"), [(50, "inside"), (50.2, "unknown"), (None, "unknown")])
-+def test_accuracy_boundary(accuracy, expected):
-+    branch = {"latitude": STORE[0], "longitude": STORE[1], "geofence_radius_m": 50}
-+    lat, lng = _north(10)
-+    verdict = api.judge_geofence(consent=True, latitude=lat, longitude=lng, accuracy_m=accuracy, branch=branch)
-+    assert verdict["result"] == expected
-+    assert verdict["status"] == ("approved" if expected == "inside" else "pending")
-+
-+
-+def test_branch_radius_is_used_but_capped():
-+    assert api.geofence_radius_m({"geofence_radius_m": None}) == api.GEOFENCE_DEFAULT_RADIUS_M
-+    assert api.geofence_radius_m({"geofence_radius_m": 35}) == 35
-+    assert api.geofence_radius_m({"geofence_radius_m": 300}) == api.GEOFENCE_MAX_RADIUS_M
-+    assert "pwa" in api.ATTENDANCE_SOURCES and "manual" in api.ATTENDANCE_SOURCES
-+
-+
-+# ── 멱등·상태 ─────────────────────────────────────────────────────────────────
-+
-+def test_second_check_in_same_day_is_409(client, db, clock):
-+    _consent(client)
-+    assert _punch(client, "check-in", meters=10).status_code == 201
-+    clock["value"] = datetime(2026, 9, 30, 10, 5, tzinfo=KST)
-+    again = _punch(client, "check-in", meters=10)
-+    assert again.status_code == 409
-+    assert len(db.rows) == 1
-+    assert db.locks and all(key == f"obys-clock:{BUSINESS['id']}:staff@example.com" for key in db.locks)
-+
-+
-+def test_check_out_without_check_in_is_409(client, db):
-+    response = _punch(client, "check-out", meters=10)
-+    assert response.status_code == 409
-+    assert db.rows == {}
-+
-+
-+def test_check_out_uses_existing_worked_minutes_function(client, db, clock):
-+    _consent(client)
-+    _punch(client, "check-in", meters=10)
-+    clock["value"] = datetime(2026, 9, 30, 18, 30, tzinfo=KST)
-+    out = _punch(client, "check-out", meters=15)
-+    assert out.status_code == 200, out.text
-+    record = out.json()["record"]
-+    assert record["worked_minutes"] == api.attendance_worked_minutes(time(10, 0), time(18, 30), 0) == 510
-+    assert (record["start_at"], record["end_at"]) == ("10:00:00", "18:30:00")
-+    assert record["status"] == "approved" and record["geofence_result"] == "inside"
-+    assert record["open"] is False
-+    # 두 번째 퇴근은 열린 출근이 없으므로 409.
-+    assert _punch(client, "check-out", meters=15).status_code == 409
-+
-+
-+def test_overnight_shift_and_outside_check_out_is_pending(client, db, clock):
-+    _consent(client)
-+    clock["value"] = datetime(2026, 9, 30, 22, 0, tzinfo=KST)
-+    _punch(client, "check-in", meters=10)
-+    clock["value"] = datetime(2026, 10, 1, 6, 0, tzinfo=KST)
-+    out = _punch(client, "check-out", meters=300)
-+    record = out.json()["record"]
-+    assert record["work_date"] == "2026-09-30"
-+    assert record["worked_minutes"] == api.attendance_worked_minutes(time(22, 0), time(6, 0), 0) == 480
-+    assert (record["status"], record["geofence_result"]) == ("pending", "outside")
-+    assert "출근:" in record["memo"] and "퇴근:" in record["memo"] and "300m" in record["memo"]
-+
-+
-+def test_multiple_branches_require_selection(client, db):
-+    db.add_branch("br-mia", "미아점", 37.62, 127.03)
-+    _consent(client)
-+    assert _punch(client, "check-in", meters=10).status_code == 400
-+    assert _punch(client, "check-in", meters=10, branch_id="br-none").status_code == 404
-+    ok = _punch(client, "check-in", meters=10, branch_id="br-junghwa")
-+    assert ok.status_code == 201 and ok.json()["record"]["branch"] == "중화점"
-+
-+
-+# ── 본인 한정·테넌트 ────────────────────────────────────────────────────────────
-+
-+def test_body_employee_email_is_ignored(client, db):
-+    _consent(client)
-+    response = _punch(client, "check-in", meters=10, employee_email="boss@example.com",
-+                      employee_name="대표", status="approved")
-+    row = _stored(db, response)
-+    assert row["employee_email"] == "staff@example.com"
-+    assert row["employee_name"] == "김직원"
-+    assert row["created_by"] == "Staff@Example.com"
-+
-+
-+def test_other_employee_record_is_403(client, db, as_user):
-+    _consent(client)
-+    mine = _punch(client, "check-in", meters=10).json()["record"]["id"]
-+    assert client.get(f"{BASE}/attendance/me/{mine}").status_code == 200
-+    as_user["user"] = COWORKER
-+    assert client.get(f"{BASE}/attendance/me/{mine}").status_code == 403
-+    # 동료의 퇴근 버튼은 내 열린 출근을 닫지 못한다.
-+    assert _punch(client, "check-out", meters=10).status_code == 409
-+    assert db.rows[mine]["check_out_at"] is None
-+    state = client.get(f"{BASE}/attendance/clock/state").json()
-+    assert state["recent"] == [] and state["open_record"] is None
-+
-+
-+def test_other_tenant_account_is_403(client, db, as_user):
-+    as_user["user"] = FOREIGN
-+    assert _punch(client, "check-in", meters=10).status_code == 403
-+    assert client.get(f"{BASE}/attendance/clock/state").status_code == 403
-+    assert client.post(f"{BASE}/attendance/consent", json={"agree": True}).status_code == 403
-+    assert db.rows == {} and db.audit == []
-+
-+
-+def test_membership_mismatch_and_viewer_are_403(client, db, as_user):
-+    as_user["user"] = {**EMPLOYEE, "current_membership": {"tenant_id": OTHER_TENANT, "status": "active", "role": "member"}}
-+    assert _punch(client, "check-in", meters=10).status_code == 403
-+    as_user["user"] = VIEWER
-+    assert _punch(client, "check-in", meters=10).status_code == 403
-+    assert db.rows == {}
-+
-+
-+def test_state_shows_own_open_record_without_coordinates(client, db):
-+    _consent(client)
-+    _punch(client, "check-in", meters=10)
-+    state = client.get(f"{BASE}/attendance/clock/state")
-+    assert state.status_code == 200
-+    body = state.json()
-+    assert body["consent"]["agreed"] is True
-+    assert body["open_record"]["geofence_result"] == "inside"
-+    assert body["employee"] == {"name": "김직원", "email_masked": "s***@example.com"}
-+    assert body["branches"] == [{"id": "br-junghwa", "name": "중화점", "has_geofence": True, "radius_m": 50}]
-+    assert "check_in_lat" not in json.dumps(body) and "latitude" not in json.dumps(body["branches"])
-+
-+
-+# ── 관리자 ────────────────────────────────────────────────────────────────────
-+
-+def test_admin_location_summary_has_coordinates_member_forbidden(client, db, as_user):
-+    _consent(client)
-+    _punch(client, "check-in", meters=80)
-+    assert client.get(f"{BASE}/attendance/locations").status_code == 403
-+    as_user["user"] = OWNER
-+    response = client.get(f"{BASE}/attendance/locations", params={"result": "outside"})
-+    assert response.status_code == 200, response.text
-+    body = response.json()
-+    assert body["count"] == 1 and body["summary"]["outside"] == 1 and body["summary"]["pending"] == 1
-+    record = body["records"][0]
-+    assert record["check_in_distance_m"] == 80 and record["check_in_accuracy_m"] == 10
-+    assert record["check_in_lat"] == pytest.approx(_north(80)[0])
-+    assert "employee_email" not in record and record["employee_email_masked"] == "s***@example.com"
-+    assert client.get(f"{BASE}/attendance/locations", params={"result": "bogus"}).status_code == 400
-+
-+
-+def test_admin_cannot_clock_for_someone_else(client, db, as_user):
-+    # 관리자가 이 경로를 쓰면 관리자 본인 기록이 된다 — 대리 체크인은 불가.
-+    as_user["user"] = OWNER
-+    response = _punch(client, "check-in", consent=False, employee_email="staff@example.com")
-+    assert _stored(db, response)["employee_email"] == "owner@example.com"
-+
-+
-+def test_branch_geofence_patch_is_admin_only_and_audited(client, db, as_user):
-+    body = {"latitude": 37.5, "longitude": 127.0, "radius_m": 40}
-+    assert client.patch(f"{BASE}/branches/br-junghwa/geofence", json=body).status_code == 403
-+    as_user["user"] = OWNER
-+    response = client.patch(f"{BASE}/branches/br-junghwa/geofence", json=body)
-+    assert response.status_code == 200, response.text
-+    assert db.branches["br-junghwa"]["geofence_radius_m"] == 40
-+    assert db.audit[-1]["action"] == "attendance.geofence_config" and db.audit[-1]["resource_id"] == "br-junghwa"
-+    assert client.patch(f"{BASE}/branches/br-junghwa/geofence", json={**body, "radius_m": 51}).status_code == 400
-+    assert client.patch(f"{BASE}/branches/br-junghwa/geofence", json={**body, "radius_m": 29}).status_code == 400
-+    assert client.patch(f"{BASE}/branches/br-other/geofence", json=body).status_code == 404
-+    default = client.patch(f"{BASE}/branches/br-junghwa/geofence", json={"latitude": 37.5, "longitude": 127.0})
-+    assert default.json()["branch"]["geofence_radius_m"] == api.GEOFENCE_DEFAULT_RADIUS_M
-+    listed = client.get(f"{BASE}/branches/geofence").json()
-+    assert listed["branches"][0]["latitude"] == 37.5 and listed["policy"]["max_radius_m"] == 50
-+
-+
-+def test_clock_routes_are_registered_before_generic_routes():
-+    paths = [(route.path, sorted(route.methods)) for route in api.router.routes]
-+    generic_post = paths.index(("/workspaces/{business_id}/{route}/records", ["POST"]))
-+    generic_get = paths.index(("/workspaces/{business_id}/{route}/records/{record_id}", ["GET"]))
-+    generic_summary = paths.index(("/workspaces/{business_id}/{route}/summary", ["GET"]))
-+    for path, method in [("/workspaces/{business_id}/attendance/check-in", "POST"),
-+                         ("/workspaces/{business_id}/attendance/check-out", "POST"),
-+                         ("/workspaces/{business_id}/attendance/consent", "POST"),
-+                         ("/workspaces/{business_id}/attendance/me/{record_id}", "GET"),
-+                         ("/workspaces/{business_id}/attendance/locations", "GET"),
-+                         ("/workspaces/{business_id}/branches/geofence", "GET"),
-+                         ("/workspaces/{business_id}/branches/{branch_id}/geofence", "PATCH")]:
-+        index = paths.index((path, [method]))
-+        assert index < generic_post and index < generic_get
-+    # clock/state 는 세그먼트 수가 달라 제네릭 summary 와 겹치지 않지만 그래도 먼저 둔다.
-+    assert paths.index(("/workspaces/{business_id}/attendance/clock/state", ["GET"])) < generic_get
-+    assert generic_summary < generic_get
-+
-+
-+# ── PWA 자산 정적 검사 ────────────────────────────────────────────────────────
-+OBYS = ROOT / "app" / "static" / "apps" / "obys"
-+
-+
-+def test_manifest_required_fields():
-+    manifest = json.loads((OBYS / "manifest.webmanifest").read_text(encoding="utf-8"))
-+    for key in ("name", "short_name", "start_url", "scope", "display", "icons"):
-+        assert manifest.get(key), key
-+    assert manifest["scope"] == "/static/apps/obys/"
-+    assert manifest["start_url"].startswith(manifest["scope"])
-+    assert manifest["display"] in {"standalone", "fullscreen", "minimal-ui"}
-+    sizes = {icon["sizes"] for icon in manifest["icons"]}
-+    assert {"192x192", "512x512"} <= sizes
-+    for icon in manifest["icons"]:
-+        assert (ROOT / "app" / icon["src"].lstrip("/")).is_file(), icon["src"]
-+
-+
-+def _app_shell(sw: str) -> list[str]:
-+    block = re.search(r"const APP_SHELL = \[(.*?)\];", sw, re.S).group(1)
-+    return re.findall(r'"([^"]+)"', block)
-+
-+
-+def test_service_worker_caches_only_app_shell():
-+    sw = (OBYS / "sw.js").read_text(encoding="utf-8")
-+    shell = _app_shell(sw)
-+    assert shell and all(path.startswith("/static/apps/obys/") for path in shell)
-+    for path in shell:
-+        assert "/api/" not in path and "token" not in path.lower() and "?" not in path
-+        assert (ROOT / "app" / path.lstrip("/")).is_file(), path
-+    # 셸이 아닌 요청(API·근태)은 손대지 않는다 — respondWith 이전에 반환.
-+    fetch_handler = sw[sw.index('addEventListener("fetch"'):]
-+    assert fetch_handler.index("if (!APP_SHELL_PATHS.has(url.pathname)) return;") < fetch_handler.index("respondWith")
-+    assert 'request.method !== "GET"' in fetch_handler
-+    for forbidden in ("Authorization", "localStorage", "aads_token", "/api/v1", "indexedDB", "sync"):
-+        assert forbidden not in sw.replace("// API·근태·기타 화면은 캐시하지 않는다", ""), forbidden
-+    assert re.search(r'const CACHE_VERSION = "obys-clock-shell-\d{8}-r\d+";', sw)
-+
-+
-+def test_clock_screen_reads_location_once_and_never_queues_offline():
-+    html = (OBYS / "clock.html").read_text(encoding="utf-8")
-+    assert "getCurrentPosition" in html
-+    for forbidden in ("watchPosition", "indexedDB", "SyncManager", "periodicSync", "setInterval(readPosition"):
-+        assert forbidden not in html, forbidden
-+    assert 'navigator.serviceWorker.register("/static/apps/obys/sw.js", { scope: "/static/apps/obys/" })' in html
-+    assert '<link rel="manifest" href="/static/apps/obys/manifest.webmanifest">' in html
-+    # 동의 화면: 항목·목적·보관기간·거부 결과·철회 경로
-+    for text in ("수집 항목", "목적", "보관 기간", "확인필요", "위치 동의 철회"):
-+        assert text in html, text
-+    assert "attendance/${action}" in html  # check-in / check-out
-+    assert "attendance/consent" in html
-+    # 오프라인이면 기록하지 않고 재시도 안내만 한다.
-+    assert "지금 기록할 수 없음" in html and "오프라인 기록은 저장하지 않습니다" in html
-+    # 직원 화면에 관리자 설정(지점 좌표·반경 저장)이 없다.
-+    assert "/geofence" not in html and "attendance/locations" not in html
-+
-+
-+def test_admin_geofence_screen_is_separate_and_linked():
-+    admin = (OBYS / "attendance-admin.html").read_text(encoding="utf-8")
-+    assert "/branches/${encodeURIComponent(row.dataset.branch)}/geofence" in admin and 'method: "PATCH"' in admin
-+    assert "watchPosition" not in admin
-+    index = (OBYS / "index.html").read_text(encoding="utf-8")
-+    assert 'href="/static/apps/obys/attendance-admin.html"' in index
-+
-+
-+# ── 마이그레이션 ─────────────────────────────────────────────────────────────
-+
-+def test_migration_is_additive_manual_and_has_rollback():
-+    name = "20260930_obys_attendance_pwa_gps"
-+    sql = (ROOT / "migrations" / f"{name}.sql").read_text(encoding="utf-8")
-+    adds = [line for line in sql.splitlines() if line.startswith("ALTER TABLE") and "ADD COLUMN" in line]
-+    assert len(adds) == 16
-+    assert all("NOT NULL" not in line and "DEFAULT" not in line for line in adds)
-+    for column in ("latitude", "longitude", "geofence_radius_m", "check_in_at", "check_out_at",
-+                   "check_in_lat", "check_in_lng", "check_in_accuracy_m", "check_out_lat", "check_out_lng",
-+                   "check_out_accuracy_m", "check_in_distance_m", "check_out_distance_m",
-+                   "geofence_result", "device_info", "location_consent_at"):
-+        assert re.search(rf"ADD COLUMN IF NOT EXISTS {column} ", sql), column
-+    assert not re.search(r"\b(UPDATE|DELETE|TRUNCATE)\s+(FROM\s+)?yeoljeong_", sql)
-+    baseline = (ROOT / "scripts" / "migrations_auto_apply_baseline.txt").read_text(encoding="utf-8").splitlines()
-+    assert f"migrations/{name}.sql" in baseline
-+    assert (ROOT / "migrations" / "rollback" / f"{name}.down.sql").is_file()
-+    assert date(2026, 9, 30)  # 적용일 기준 스냅샷
++        return ListConn(db)
++
++    monkeypatch.setattr(service, "_connect", connect)
++    rows = asyncio.run(service.list_businesses(user=_user(TENANT_A)))
++    assert rows[0]["registration_no"] == "" and rows[0]["representative"] == ""
++    assert rows[0]["needs_registration_info"] is True
++    assert rows[0]["missing_registration_fields"] == ["registration_no", "representative", "opened_at", "address"]
++
++
++def test_ui_uploads_original_and_drops_filename_memo():
++    html = Path("app/static/apps/obys/index.html").read_text(encoding="utf-8")
++    assert "사업자등록증 파일: ${uploadedFile.name}" not in html
++    assert "/registration-document`" in html and "/ocr`" in html
++    assert "data-apply-registration-ocr" in html
++    assert "businessNeedsRegistrationInfo" in html
++    assert 'registrationNo: "기초등록 필요"' not in html
+diff --git a/tests/unit/test_yeoljeong_finance_service.py b/tests/unit/test_yeoljeong_finance_service.py
+index 70e1b596..d014cdc7 100644
+--- a/tests/unit/test_yeoljeong_finance_service.py
++++ b/tests/unit/test_yeoljeong_finance_service.py
+@@ -626,8 +626,9 @@ def test_save_settings_preserves_custom_businesses_and_branches(tmp_path, monkey
+     saved = service.save_settings(payload, user)
+     settings = saved["settings"]
+ 
++    # 저장된 상호가 canonical 상호로 되돌아가지 않는다(AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930).
+     assert [item["name"] for item in settings["businesses"][:4]] == [
+-        "열정국밥 중화점",
++        "오입력",
+         "열정국밥 성신여대점",
+         "언니냉면",
+         "열정국밥_미아점",

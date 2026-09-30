@@ -27,8 +27,14 @@ CATEGORY_EXTENSIONS = {
     "purchase": {".csv", ".xlsx", ".pdf", ".jpg", ".jpeg", ".png"},
     "transaction": {".csv", ".xlsx"},
     "card": {".csv", ".xlsx", ".pdf"},
+    # 사업자등록증 원본. 원장이 아니므로 LEDGER_CATEGORIES 에 넣지 않는다 —
+    # create_upload/_canonical/_raw_rows 경로를 타지 않는다.
+    "business_registration": {".pdf", ".jpg", ".jpeg", ".png"},
 }
 LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction", "card"})
+REGISTRATION_CATEGORY = "business_registration"
+# seed/마이그레이션 113 이 채워 둔 자리표시자. 값이 아니라 "미비" 상태다.
+REGISTRATION_PLACEHOLDERS = frozenset({"-", "미등록", "기초등록 필요"})
 GENERIC_LEDGER_CATEGORIES = frozenset({"sales", "purchase", "transaction"})
 MIME_BY_EXTENSION = {
     ".csv": {"text/csv", "application/csv", "text/plain", "application/vnd.ms-excel"},
@@ -260,12 +266,38 @@ async def _require_business(conn: Any, tenant_id: UUID, business_id: str) -> Non
         raise HTTPException(status_code=404, detail="현재 테넌트의 사업자를 찾을 수 없습니다")
 
 
+def is_registration_placeholder(value: Any) -> bool:
+    text = str(value or "").strip()
+    return not text or text in REGISTRATION_PLACEHOLDERS
+
+
+def registration_info_gaps(item: dict[str, Any], fields: tuple[str, ...]) -> list[str]:
+    """Blank placeholder values in place and return the fields still missing."""
+    missing: list[str] = []
+    for field in fields:
+        if is_registration_placeholder(item.get(field)):
+            item[field] = ""
+            missing.append(field)
+    return missing
+
+
+REGISTRY_REQUIRED_FIELDS = ("registration_no", "representative", "opened_at", "address")
+
+
+def _registry_business(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    missing = registration_info_gaps(item, REGISTRY_REQUIRED_FIELDS)
+    item["needs_registration_info"] = bool(missing)
+    item["missing_registration_fields"] = missing
+    return item
+
+
 async def list_businesses(*, user: dict[str, Any]) -> list[dict[str, Any]]:
     tenant_id = _tenant(user)
     conn = await _connect()
     try:
         rows = await conn.fetch("SELECT id,entity_type,name,registration_no,representative,tax_type,opened_at,address,memo,created_at,updated_at FROM yeoljeong_businesses WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id", tenant_id)
-        return [dict(row) for row in rows]
+        return [_registry_business(row) for row in rows]
     finally:
         await conn.close()
 
@@ -1038,5 +1070,228 @@ async def reverse_journal(*, user: dict[str, Any], voucher_id: UUID) -> dict[str
             )
             await conn.execute("UPDATE yeoljeong_journal_vouchers SET status='reversed',reversed_at=NOW(),updated_at=NOW() WHERE id=$1", voucher_id)
         return dict(reversal)
+    finally:
+        await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 사업자등록증 원본 (AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930)
+#
+# 원본은 UPLOAD_ROOT/<tenant>/<business 해시>/business_registration/<uuid><ext>
+# 에 두고 yeoljeong_business_registration_documents 에 버전으로 쌓는다.
+# 이전 버전은 지우지 않는다(재발급·정정 이력). 최신 활성 1건이 현행이다.
+# ---------------------------------------------------------------------------
+REGISTRATION_DOCUMENT_COLUMNS = (
+    "id,business_id,version,original_filename,content_type,extension,"
+    "byte_size,sha256,created_by,created_at"
+)
+
+
+def _require_admin(user: dict[str, Any]) -> None:
+    membership = user.get("current_membership") or {}
+    same_tenant = str(membership.get("tenant_id") or "") == str(user.get("tenant_id") or "")
+    role = str(membership.get("role") or "").strip().lower()
+    status = str(membership.get("status") or "").strip().lower()
+    if not same_tenant or status != "active" or role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="사업자등록증은 관리자만 다룰 수 있습니다")
+
+
+def _registration_directory(tenant_id: UUID, business_id: str) -> Path:
+    return UPLOAD_ROOT / str(tenant_id) / hashlib.sha256(business_id.encode()).hexdigest()[:32] / REGISTRATION_CATEGORY
+
+
+def _registration_document(row: Any, *, current_id: Any = None) -> dict[str, Any]:
+    item = dict(row)
+    item["id"] = str(item["id"])
+    item["uploaded_by"] = item.get("created_by")
+    item["uploaded_at"] = item.get("created_at")
+    item["is_current"] = current_id is not None and str(current_id) == item["id"]
+    return item
+
+
+def validate_registration_file(filename: str, content_type: str, data: bytes) -> tuple[str, str]:
+    """Reuse the ledger validator; any rejection of the file itself is a 400."""
+    try:
+        return _validate_file(REGISTRATION_CATEGORY, filename, content_type, data)
+    except HTTPException as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+async def _audit(conn: Any, *, business_id: str, user: dict[str, Any], action: str, resource_id: str, details: dict[str, Any]) -> None:
+    from app.services.yeoljeong_ops_service import _insert_audit_log_conn
+
+    await _insert_audit_log_conn(
+        conn, business_id=business_id, actor=_actor(user), action=action,
+        resource_type="business_registration_document", resource_id=resource_id, details=details,
+    )
+
+
+async def create_registration_document(
+    *, user: dict[str, Any], business_id: str, filename: str, content_type: str, data: bytes,
+) -> dict[str, Any]:
+    _require_admin(user)
+    tenant_id = _tenant(user)
+    original, ext = validate_registration_file(filename, content_type, data)
+    digest, document_id = hashlib.sha256(data).hexdigest(), uuid4()
+    target = _registration_directory(tenant_id, business_id) / f"{document_id.hex}{ext}"
+    written = False
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        async with conn.transaction():
+            # 같은 사업자의 버전 번호를 직렬화한다.
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"registration:{tenant_id}:{business_id}")
+            latest = await conn.fetchrow(
+                f"""SELECT {REGISTRATION_DOCUMENT_COLUMNS} FROM yeoljeong_business_registration_documents
+                     WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL
+                     ORDER BY version DESC LIMIT 1""",
+                tenant_id, business_id,
+            )
+            if latest and latest["sha256"] == digest:
+                result = _registration_document(latest, current_id=latest["id"])
+                result["status"] = "duplicate"
+                return result
+            # 삭제된 버전 번호도 재사용하지 않는다.
+            version = await conn.fetchval(
+                "SELECT COALESCE(MAX(version),0)+1 FROM yeoljeong_business_registration_documents WHERE tenant_id=$1 AND business_id=$2",
+                tenant_id, business_id,
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            written = True
+            row = await conn.fetchrow(
+                f"""INSERT INTO yeoljeong_business_registration_documents
+                        (id,tenant_id,business_id,version,original_filename,stored_filename,content_type,
+                         extension,byte_size,sha256,created_by)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                     RETURNING {REGISTRATION_DOCUMENT_COLUMNS}""",
+                document_id, tenant_id, business_id, version, original, target.name,
+                (content_type or "").split(";", 1)[0].strip().lower(), ext, len(data), digest, _actor(user),
+            )
+            await _audit(
+                conn, business_id=business_id, user=user, action="business_registration.upload",
+                resource_id=str(document_id),
+                details={"version": version, "sha256": digest, "byte_size": len(data), "extension": ext},
+            )
+        result = _registration_document(row, current_id=document_id)
+        result["status"] = "stored"
+        return result
+    except Exception:
+        if written and target.exists():
+            target.unlink()
+        raise
+    finally:
+        await conn.close()
+
+
+async def list_registration_documents(*, user: dict[str, Any], business_id: str) -> dict[str, Any]:
+    _require_admin(user)
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        rows = await conn.fetch(
+            f"""SELECT {REGISTRATION_DOCUMENT_COLUMNS} FROM yeoljeong_business_registration_documents
+                 WHERE tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL
+                 ORDER BY version DESC LIMIT 100""",
+            tenant_id, business_id,
+        )
+    finally:
+        await conn.close()
+    current_id = rows[0]["id"] if rows else None
+    documents = [_registration_document(row, current_id=current_id) for row in rows]
+    return {"documents": documents, "current": documents[0] if documents else None, "count": len(documents)}
+
+
+async def _registration_document_row(conn: Any, tenant_id: UUID, business_id: str, document_id: UUID) -> Any:
+    await _require_business(conn, tenant_id, business_id)
+    row = await conn.fetchrow(
+        f"""SELECT {REGISTRATION_DOCUMENT_COLUMNS},stored_filename FROM yeoljeong_business_registration_documents
+             WHERE id=$1 AND tenant_id=$2 AND business_id=$3 AND deleted_at IS NULL""",
+        document_id, tenant_id, business_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="사업자등록증을 찾을 수 없습니다")
+    return row
+
+
+def _registration_file(tenant_id: UUID, business_id: str, stored_filename: str) -> Path:
+    path = _registration_directory(tenant_id, business_id) / stored_filename
+    if not path.is_file() or UPLOAD_ROOT.resolve() not in path.resolve().parents:
+        raise HTTPException(status_code=404, detail="사업자등록증 원본 파일을 찾을 수 없습니다")
+    return path
+
+
+def registration_download_name(original_filename: str, version: int, extension: str) -> str:
+    stem = Path(str(original_filename or "")).stem
+    stem = re.sub(r"[^0-9A-Za-z._가-힣-]+", "_", stem).strip("._")[:80] or "document"
+    ext = extension if extension in CATEGORY_EXTENSIONS[REGISTRATION_CATEGORY] else ".bin"
+    return f"사업자등록증_v{int(version)}_{stem}{ext}"
+
+
+async def registration_document_download(
+    *, user: dict[str, Any], business_id: str, document_id: UUID,
+) -> tuple[Path, str, str]:
+    _require_admin(user)
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        row = await _registration_document_row(conn, tenant_id, business_id, document_id)
+    finally:
+        await conn.close()
+    path = _registration_file(tenant_id, business_id, row["stored_filename"])
+    return path, registration_download_name(row["original_filename"], row["version"], row["extension"]), row["content_type"]
+
+
+async def read_registration_document(
+    *, user: dict[str, Any], business_id: str, document_id: UUID,
+) -> tuple[dict[str, Any], dict[str, Any], bytes]:
+    """Return (document, current business registry values, original bytes) for OCR."""
+    _require_admin(user)
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        row = await _registration_document_row(conn, tenant_id, business_id, document_id)
+        business = await conn.fetchrow(
+            "SELECT id,name,registration_no,representative,tax_type,opened_at,address FROM yeoljeong_businesses WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL",
+            business_id, tenant_id,
+        )
+    finally:
+        await conn.close()
+    if not business:
+        raise HTTPException(status_code=404, detail="현재 테넌트의 사업자를 찾을 수 없습니다")
+    data = _registration_file(tenant_id, business_id, row["stored_filename"]).read_bytes()
+    document = _registration_document(row)
+    document.pop("stored_filename", None)
+    return document, _registry_business(business), data
+
+
+async def record_registration_audit(
+    *, user: dict[str, Any], business_id: str, document_id: str, action: str, details: dict[str, Any],
+) -> None:
+    conn = await _connect()
+    try:
+        await _audit(conn, business_id=business_id, user=user, action=action, resource_id=document_id, details=details)
+    finally:
+        await conn.close()
+
+
+async def delete_registration_document(*, user: dict[str, Any], business_id: str, document_id: UUID) -> bool:
+    """Soft delete only — the original file stays on disk as the evidence copy."""
+    _require_admin(user)
+    tenant_id = _tenant(user)
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant_id, business_id)
+        async with conn.transaction():
+            command = await conn.execute(
+                """UPDATE yeoljeong_business_registration_documents SET deleted_at=NOW(),deleted_by=$4
+                     WHERE id=$1 AND tenant_id=$2 AND business_id=$3 AND deleted_at IS NULL""",
+                document_id, tenant_id, business_id, _actor(user),
+            )
+            if command.endswith(" 0"):
+                raise HTTPException(status_code=404, detail="사업자등록증을 찾을 수 없습니다")
+            await _audit(conn, business_id=business_id, user=user, action="business_registration.delete", resource_id=str(document_id), details={})
+        return True
     finally:
         await conn.close()

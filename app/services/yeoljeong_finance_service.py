@@ -377,8 +377,8 @@ CANONICAL_BUSINESSES: list[dict[str, Any]] = [
         "id": "biz-sungshin",
         "entityType": "individual",
         "name": "열정국밥 성신여대점",
-        "registrationNo": "기초등록 필요",
-        "representative": "미등록",
+        "registrationNo": "",
+        "representative": "",
         "taxType": "일반과세",
         "openedAt": "",
         "address": "",
@@ -388,8 +388,8 @@ CANONICAL_BUSINESSES: list[dict[str, Any]] = [
         "id": "biz-eonni-naengmyeon",
         "entityType": "individual",
         "name": "언니냉면",
-        "registrationNo": "기초등록 필요",
-        "representative": "미등록",
+        "registrationNo": "",
+        "representative": "",
         "taxType": "일반과세",
         "openedAt": "",
         "address": "",
@@ -414,6 +414,9 @@ CANONICAL_BRANCHES: list[dict[str, Any]] = [
     {"id": "branch-gangbuk-mia", "name": "열정국밥_미아점", "businessId": "biz-mia", "status": "active", "phone": "", "address": "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)"},
 ]
 
+# 사업자등록증 기준 미비 여부를 판정하는 항목(설정 JSON 키). 자리표시자는 값이 아니라
+# 상태이므로 needs_registration_info / missing_registration_fields 로만 내보낸다.
+BUSINESS_REGISTRATION_FIELDS = ("registrationNo", "representative", "openedAt", "address")
 CANONICAL_BUSINESS_IDS = {item["id"] for item in CANONICAL_BUSINESSES}
 CANONICAL_BRANCH_NAMES = {item["name"] for item in CANONICAL_BRANCHES}
 MIA_BUSINESS_ID = "biz-mia"
@@ -1301,15 +1304,18 @@ def _merge_by_id(current_items: Any, default_items: list[dict[str, Any]]) -> lis
 
 
 def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    from app.services.obys_upload_service import registration_info_gaps
+
     businesses = _merge_by_id(settings.get("businesses"), CANONICAL_BUSINESSES)
     canonical_names = {item["id"]: item["name"] for item in CANONICAL_BUSINESSES}
     for item in businesses:
         item["entityType"] = item.get("entityType") or "individual"
-        if item["id"] in canonical_names:
-            item["name"] = canonical_names[item["id"]]
-        else:
-            item["name"] = str(item.get("name") or "").strip()
+        # 저장된 상호가 이긴다. canonical 상호는 저장값이 비었을 때만 쓴다(id 는 그대로).
+        item["name"] = str(item.get("name") or "").strip() or canonical_names.get(item["id"], "")
         item["status"] = item.get("status") or "active"
+        missing = registration_info_gaps(item, BUSINESS_REGISTRATION_FIELDS)
+        item["needs_registration_info"] = bool(missing)
+        item["missing_registration_fields"] = missing
 
     branches = _merge_by_id(settings.get("branches"), CANONICAL_BRANCHES)
     canonical_branch_names = {item["id"]: item["name"] for item in CANONICAL_BRANCHES}
@@ -1318,7 +1324,7 @@ def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
     normalized_branches: list[dict[str, Any]] = []
     for item in branches:
         if item["id"] in canonical_branch_names:
-            item["name"] = canonical_branch_names[item["id"]]
+            item["name"] = str(item.get("name") or "").strip() or canonical_branch_names[item["id"]]
             item["businessId"] = canonical_branch_businesses[item["id"]]
         else:
             item["name"] = str(item.get("name") or "").strip()

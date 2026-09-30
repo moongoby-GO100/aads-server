@@ -4265,9 +4265,10 @@
                     <input name="address" placeholder="사업자등록증 기준 주소">
                   </label>
                   <label class="span-2">사업자등록증 파일
-                    <input name="registrationDocument" type="file" accept=".pdf,image/*">
-                    <span class="field-note">업로드 파일은 OCR/원본대조 대상입니다. 현재 화면에서는 파일명과 보완 메모를 등록 기록에 남깁니다.</span>
+                    <input name="registrationDocument" type="file" accept=".pdf,.jpg,.jpeg,.png">
+                    <span class="field-note">파일을 고르면 원본을 서버에 보관(버전 이력·sha256)하고 OCR 제안을 보여줍니다. [적용]을 누른 항목만 폼에 채워지며, 저장은 [사업자 저장]으로 합니다. 업로드·OCR 이 실패해도 손입력으로 계속할 수 있습니다.</span>
                   </label>
+                  <div class="span-2" id="businessRegistrationOcrPanel" data-registration-ocr-panel hidden></div>
                   <label class="span-2">메모
                     <textarea name="memo" placeholder="세무대리인, 신고 특이사항, 법인/개인 구분, 서류 보완사항"></textarea>
                   </label>
@@ -5389,8 +5390,8 @@
           id: "biz-sungshin",
           entityType: "individual",
           name: "열정국밥 성신여대점",
-          registrationNo: "기초등록 필요",
-          representative: "미등록",
+          registrationNo: "",
+          representative: "",
           taxType: "일반과세",
           openedAt: "",
           address: "",
@@ -6482,7 +6483,7 @@
       if (foodRate > 0.38) alerts.push(["식재료율이 38%를 초과했습니다.", "bad"]);
       if (laborRate > 0.28) alerts.push(["인건비율이 28%를 초과했습니다.", "bad"]);
       if (!scopedEntries().length) alerts.push(["이번 달 거래 데이터가 없습니다.", "warn"]);
-      if (settings().businesses.some(item => !item.registrationNo || item.registrationNo === "기초등록 필요")) alerts.push(["사업자등록번호 미등록 사업자가 있습니다.", "warn"]);
+      if (settings().businesses.some(item => businessNeedsRegistrationInfo(item))) alerts.push(["사업자등록번호 미등록 사업자가 있습니다.", "warn"]);
       if (!settings().accounts.length) alerts.push(["은행 계좌 기초등록이 필요합니다.", "warn"]);
       if ((settings().integrations || []).some(item => item.status === "blocked")) alerts.push(["외부계정 자동화 연결 확인이 필요합니다.", "warn"]);
       if (!alerts.length) alerts.push(["현재 월마감 위험 신호가 없습니다.", "good"]);
@@ -8639,8 +8640,26 @@
 
     function businessCompleteness(item) {
       const required = [item.name, item.registrationNo, item.representative, item.taxType, item.address];
-      const complete = required.filter(value => String(value || "").trim()).length;
+      const complete = required.filter(value => !isBlankOrPlaceholder(value)).length;
       return Math.round((complete / required.length) * 100);
+    }
+
+    const BUSINESS_REGISTRATION_FIELDS = ["registrationNo", "representative", "openedAt", "address"];
+
+    function businessMissingRegistrationFields(item) {
+      return BUSINESS_REGISTRATION_FIELDS.filter(field => isBlankOrPlaceholder(item?.[field]));
+    }
+
+    function businessNeedsRegistrationInfo(item) {
+      // 서버가 내려준 플래그가 기준이다. 로컬 수정 직후에는 같은 규칙으로 다시 계산한다.
+      return typeof item?.needs_registration_info === "boolean"
+        ? item.needs_registration_info
+        : businessMissingRegistrationFields(item).length > 0;
+    }
+
+    function businessRegistrationNoHtml(item) {
+      if (isBlankOrPlaceholder(item?.registrationNo)) return badgeHtml("기초등록 필요", "warn");
+      return escapeHtml(item.registrationNo);
     }
 
     function businessPageSyncBadges() {
@@ -8660,6 +8679,7 @@
       if (!els.businessPageForm) return;
       delete els.businessPageForm.dataset.editId;
       els.businessPageForm.reset();
+      resetBusinessRegistrationOcr(els.businessPageForm);
       businessPageSyncBadges();
       els.businessPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
     }
@@ -8684,6 +8704,8 @@
       els.businessPageForm.openedAt.value = item.openedAt || "";
       els.businessPageForm.address.value = item.address || "";
       els.businessPageForm.memo.value = item.memo || "";
+      resetBusinessRegistrationOcr(els.businessPageForm);
+      loadBusinessRegistrationCurrent(els.businessPageForm, item.id).catch(() => {});
       setSelectedSettingsBusinessId(item.id);
       businessPageSyncBadges();
       els.businessPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -8702,13 +8724,146 @@
       els.branchPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
     }
 
+    const BUSINESS_OCR_FIELDS = [
+      ["name", "name", "상호"],
+      ["registration_no", "registrationNo", "사업자등록번호"],
+      ["representative", "representative", "대표자"],
+      ["opened_at", "openedAt", "개업일"],
+      ["address", "address", "사업장 주소"],
+      ["corporate_registration_no", "", "법인등록번호(참고)"],
+      ["tax_type", "", "과세유형(참고)"]
+    ];
+
+    function businessRegistrationOcrPanel(form) {
+      return form?.querySelector("[data-registration-ocr-panel]") || null;
+    }
+
+    function resetBusinessRegistrationOcr(form) {
+      if (!form) return;
+      ["registrationDocumentId", "registrationDocumentVersion", "registrationDocumentSha256", "registrationDocumentName", "registrationDocumentUploadedAt"].forEach(key => delete form.dataset[key]);
+      form._registrationOcr = null;
+      const panel = businessRegistrationOcrPanel(form);
+      if (panel) {
+        panel.hidden = true;
+        panel.innerHTML = "";
+      }
+    }
+
+    function businessRegistrationDocumentRef(form) {
+      if (!form?.dataset.registrationDocumentId) return null;
+      return {
+        id: form.dataset.registrationDocumentId,
+        version: Number(form.dataset.registrationDocumentVersion || 0),
+        sha256: form.dataset.registrationDocumentSha256 || "",
+        originalFilename: form.dataset.registrationDocumentName || "",
+        uploadedAt: form.dataset.registrationDocumentUploadedAt || ""
+      };
+    }
+
+    function renderBusinessRegistrationOcr(form, state) {
+      const panel = businessRegistrationOcrPanel(form);
+      if (!panel) return;
+      panel.hidden = false;
+      const doc = state.document;
+      const docLine = doc
+        ? `<div class="settings-note">원본 보관 v${escapeHtml(doc.version)} · ${escapeHtml(doc.original_filename || "")} · ${Number(doc.byte_size || 0).toLocaleString("ko-KR")} bytes · sha256 ${escapeHtml(String(doc.sha256 || "").slice(0, 16))}…${doc.status === "duplicate" ? " · 최신본과 동일 파일" : ""}</div>`
+        : "";
+      const message = state.message ? `<div class="settings-note">${badgeHtml(state.messageLabel || "안내", state.messageClass || "info")} ${escapeHtml(state.message)}</div>` : "";
+      const suggestion = state.suggestion;
+      let table = "";
+      if (suggestion?.suggested) {
+        const rows = BUSINESS_OCR_FIELDS.map(([key, formField, label]) => {
+          const item = suggestion.suggested[key] || {};
+          const current = formField ? String(form[formField]?.value || "") : String(item.current || "");
+          const ocrValue = item.value == null
+            ? `<span class="muted">읽지 못함${item.reason ? ` · ${escapeHtml(item.reason)}` : ""}</span>`
+            : `${escapeHtml(item.value)}${item.valid ? "" : ` ${badgeHtml(item.reason || "검증 실패", "bad")}`}<br><span class="muted">신뢰도 ${Math.round(Number(item.confidence || 0) * 100)}%</span>`;
+          const canApply = Boolean(formField && item.autofill_candidate);
+          const action = canApply
+            ? `<button type="button" data-apply-registration-ocr="${escapeHtml(key)}">적용</button>`
+            : `<span class="muted">${formField ? "적용 불가" : "참고"}</span>`;
+          return `<tr><td>${escapeHtml(label)}</td><td>${ocrValue}</td><td>${escapeHtml(current || "-")}</td><td>${action}</td></tr>`;
+        }).join("");
+        table = `<table><thead><tr><th>항목</th><th>OCR 값</th><th>현재 값</th><th>적용</th></tr></thead><tbody>${rows}</tbody></table>`;
+      }
+      panel.innerHTML = `${docLine}${message}${table}`;
+    }
+
+    function applyBusinessRegistrationOcr(form, key) {
+      const suggestion = form?._registrationOcr;
+      const entry = BUSINESS_OCR_FIELDS.find(([field]) => field === key);
+      const item = suggestion?.suggested?.[key];
+      if (!entry || !entry[1] || !item?.autofill_candidate || item.value == null) return;
+      form[entry[1]].value = item.value;
+      renderBusinessRegistrationOcr(form, { document: suggestion.document, suggestion, message: `${entry[2]} 에 OCR 값을 채웠습니다. [사업자 저장]을 눌러야 저장됩니다.`, messageLabel: "적용", messageClass: "good" });
+    }
+
+    async function loadBusinessRegistrationCurrent(form, businessId) {
+      // 문서 참조의 원본은 서버 표(business_id 기준)다. settings JSON 의 registrationDocument 는
+      // DB 모드에서 다시 읽을 때 남지 않으므로, 수정 화면을 열 때 현행본을 서버에서 읽는다.
+      if (!form || !businessId || !canManageSettings()) return;
+      const payload = await financeApi(`/businesses/${encodeURIComponent(businessId)}/registration-document`);
+      if (form.dataset.editId !== businessId || form.dataset.registrationDocumentId) return;
+      const current = payload.current;
+      renderBusinessRegistrationOcr(form, current
+        ? { message: `보관된 현행 등록증 v${current.version} · ${current.original_filename || ""} · 전체 ${payload.count}개 버전`, messageLabel: "원본", messageClass: "good" }
+        : { message: "보관된 사업자등록증이 없습니다. 파일을 고르면 원본을 보관하고 OCR 제안을 보여줍니다.", messageLabel: "원본", messageClass: "warn" });
+    }
+
+    async function handleBusinessRegistrationDocument(form) {
+      const file = form?.registrationDocument?.files?.[0];
+      resetBusinessRegistrationOcr(form);
+      if (!file) return;
+      const businessId = form.dataset.editId || "";
+      const fail = (message, doc = null) => renderBusinessRegistrationOcr(form, { document: doc, message, messageLabel: "실패", messageClass: "warn" });
+      if (!canManageSettings()) return fail("사업자등록증 원본 보관·OCR 은 관리자만 할 수 있습니다. 손입력으로 계속하십시오.");
+      if (!businessId) return fail("등록된 사업자를 목록에서 [수정]으로 연 뒤 등록증을 올리십시오. 신규 사업자는 먼저 저장하십시오.");
+      if (file.size > 10 * 1024 * 1024) return fail("사업자등록증 파일은 10MB 이하여야 합니다.");
+      renderBusinessRegistrationOcr(form, { message: "원본을 서버에 보관하는 중입니다…" });
+      let doc = null;
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const response = await fetch(`/api/v1/yeoljeong-finance/businesses/${encodeURIComponent(businessId)}/registration-document`, {
+          method: "POST",
+          headers: apiAuthOnlyHeaders(),
+          body: formData
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || payload.message || `UPLOAD ${response.status}`);
+        doc = payload.document;
+      } catch (err) {
+        return fail(`원본 업로드 실패: ${err.message}. 손입력으로 계속할 수 있습니다.`);
+      }
+      if (form.dataset.editId !== businessId) return;
+      form.dataset.registrationDocumentId = doc.id;
+      form.dataset.registrationDocumentVersion = String(doc.version || "");
+      form.dataset.registrationDocumentSha256 = doc.sha256 || "";
+      form.dataset.registrationDocumentName = doc.original_filename || "";
+      form.dataset.registrationDocumentUploadedAt = String(doc.created_at || "");
+      renderBusinessRegistrationOcr(form, { document: doc, message: "OCR 제안을 받는 중입니다…" });
+      try {
+        const suggestion = await financeApi(
+          `/businesses/${encodeURIComponent(businessId)}/registration-document/${encodeURIComponent(doc.id)}/ocr`,
+          { method: "POST", timeoutMs: 130000 }
+        );
+        if (form.dataset.registrationDocumentId !== doc.id) return;
+        suggestion.document = doc;
+        form._registrationOcr = suggestion;
+        if (!suggestion.ocr?.ok) {
+          return renderBusinessRegistrationOcr(form, { document: doc, suggestion, message: `OCR 실패: ${suggestion.ocr?.error || "알 수 없는 오류"}. 원본은 보관되었습니다. 손입력으로 계속하십시오.`, messageLabel: "실패", messageClass: "warn" });
+        }
+        renderBusinessRegistrationOcr(form, { document: doc, suggestion, message: "OCR 값은 제안입니다. 확인한 항목만 [적용]하고 [사업자 저장]으로 저장하십시오." });
+      } catch (err) {
+        fail(`OCR 제안 실패: ${err.message}. 원본은 보관되었습니다. 손입력으로 계속하십시오.`, doc);
+      }
+    }
+
     function saveBusinessFromPage(form) {
       const data = Object.fromEntries(new FormData(form).entries());
       const editId = form.dataset.editId || "";
       const target = editId ? settings().businesses.find(item => item.id === editId) : null;
-      const uploadedFile = form.registrationDocument?.files?.[0];
-      const uploadMemo = uploadedFile ? `사업자등록증 파일: ${uploadedFile.name}` : "";
-      const memo = [String(data.memo || "").trim(), uploadMemo].filter(Boolean).join("\n");
+      const memo = String(data.memo || "").trim();
       const next = {
         id: editId || uid(),
         entityType: data.entityType,
@@ -8720,10 +8875,16 @@
         address: String(data.address || "").trim(),
         memo
       };
+      // 등록증은 서버 문서 레코드로 참조한다. 새로 올린 문서가 없으면 기존 참조를 유지한다.
+      const registrationDocument = businessRegistrationDocumentRef(form);
+      if (registrationDocument) next.registrationDocument = registrationDocument;
+      next.missing_registration_fields = businessMissingRegistrationFields(next);
+      next.needs_registration_info = next.missing_registration_fields.length > 0;
       if (target) Object.assign(target, next);
       else settings().businesses.push(next);
       setSelectedSettingsBusinessId(next.id);
       delete form.dataset.editId;
+      resetBusinessRegistrationOcr(form);
       saveState();
       syncSettingsToServer();
       form.reset();
@@ -8796,7 +8957,8 @@
       if (els.businessPageSelectedDetail) {
         els.businessPageSelectedDetail.innerHTML = selectedBusiness ? `
           <b>${escapeHtml(selectedBusiness.name)}</b><br>
-          등록번호 ${escapeHtml(selectedBusiness.registrationNo || "미등록")} · 대표 ${escapeHtml(selectedBusiness.representative || "미등록")} · 과세 ${escapeHtml(selectedBusiness.taxType || "미등록")}<br>
+          등록번호 ${businessRegistrationNoHtml(selectedBusiness)} · 대표 ${escapeHtml(selectedBusiness.representative || "미등록")} · 과세 ${escapeHtml(selectedBusiness.taxType || "미등록")}<br>
+          ${selectedBusiness.registrationDocument?.id ? `등록증 원본 v${escapeHtml(selectedBusiness.registrationDocument.version)} · ${escapeHtml(selectedBusiness.registrationDocument.originalFilename || "")} · sha256 ${escapeHtml(String(selectedBusiness.registrationDocument.sha256 || "").slice(0, 12))}…<br>` : ""}
           주소 ${escapeHtml(selectedBusiness.address || "미등록")}<br>
           연결 지점 ${selectedBranches.length}개 · 정산계좌 ${selectedAccounts.length}개 · 연동 ${selectedIntegrations.length}개
         ` : "사업자를 신규 등록하십시오.";
@@ -8812,7 +8974,7 @@
           return `
             <tr>
               <td><strong>${escapeHtml(item.name || "상호 미입력")}</strong><br><span class="muted">${escapeHtml(entityTypeLabels[item.entityType] || item.entityType || "사업자")}</span></td>
-              <td>${escapeHtml(item.registrationNo || "미등록")}</td>
+              <td>${businessRegistrationNoHtml(item)}${businessNeedsRegistrationInfo(item) && !isBlankOrPlaceholder(item.registrationNo) ? `<br>${badgeHtml("기초등록 필요", "warn")}` : ""}</td>
               <td>${escapeHtml(item.representative || "미등록")}<br><span class="muted">${escapeHtml(item.taxType || "미등록")}</span></td>
               <td>${branches.length ? branches.map(branch => escapeHtml(branch.name)).join("<br>") : "미등록"}</td>
               <td>${integrations.length}개</td>
@@ -13266,6 +13428,17 @@
       els.businessPageForm?.addEventListener("submit", event => {
         event.preventDefault();
         saveBusinessFromPage(els.businessPageForm);
+      });
+
+      els.businessPageForm?.registrationDocument?.addEventListener("change", () => {
+        handleBusinessRegistrationDocument(els.businessPageForm).catch(err => showToast(`사업자등록증 처리 실패: ${err.message}`));
+      });
+
+      els.businessPageForm?.addEventListener("click", event => {
+        const button = event.target.closest("[data-apply-registration-ocr]");
+        if (!button) return;
+        event.preventDefault();
+        applyBusinessRegistrationOcr(els.businessPageForm, button.dataset.applyRegistrationOcr);
       });
 
       els.branchPageForm?.addEventListener("submit", event => {

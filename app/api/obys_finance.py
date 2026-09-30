@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
 from app.core.obys_tenant import is_legacy_obys_tenant, require_legacy_obys_access
+from app.services import obys_registration_ocr as registration_ocr
 from app.services import obys_upload_service as upload_svc
 from app.services import yeoljeong_finance_service as svc
 from app.services.yeoljeong_bank_collector_harness import (
@@ -930,6 +931,71 @@ async def download_card_upload(upload_id: UUID, current_user: dict = Depends(get
 @router.delete("/card-uploads/{upload_id}")
 async def delete_card_upload(upload_id: UUID, current_user: dict = Depends(get_current_user)) -> dict[str, bool]:
     await upload_svc.delete_card_upload(user=current_user, upload_id=upload_id)
+    return {"ok": True}
+
+
+async def _read_registration_upload(file: UploadFile) -> bytes:
+    try:
+        return await _read_limited_upload(file)
+    except HTTPException as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@router.post("/businesses/{business_id}/registration-document", status_code=201)
+async def upload_business_registration_document(
+    business_id: str,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    upload_svc._require_admin(current_user)
+    data = await _read_registration_upload(file)
+    document = await upload_svc.create_registration_document(
+        user=current_user, business_id=business_id,
+        filename=file.filename or "registration.bin",
+        content_type=file.content_type or "application/octet-stream", data=data,
+    )
+    return {"document": document}
+
+
+@router.get("/businesses/{business_id}/registration-document")
+async def list_business_registration_documents(
+    business_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return await upload_svc.list_registration_documents(user=current_user, business_id=business_id)
+
+
+@router.get("/businesses/{business_id}/registration-document/{document_id}/download")
+async def download_business_registration_document(
+    business_id: str,
+    document_id: UUID,
+    current_user: dict = Depends(get_current_user),
+) -> FileResponse:
+    path, filename, content_type = await upload_svc.registration_document_download(
+        user=current_user, business_id=business_id, document_id=document_id,
+    )
+    return FileResponse(path, media_type=content_type, filename=filename, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/businesses/{business_id}/registration-document/{document_id}/ocr")
+async def suggest_business_registration_from_ocr(
+    business_id: str,
+    document_id: UUID,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    # 제안 전용. 사업자 레코드는 바꾸지 않는다 — 저장은 관리자가 확인 후 기존 경로로 한다.
+    return await registration_ocr.suggest_from_document(
+        user=current_user, business_id=business_id, document_id=document_id,
+    )
+
+
+@router.delete("/businesses/{business_id}/registration-document/{document_id}")
+async def delete_business_registration_document(
+    business_id: str,
+    document_id: UUID,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, bool]:
+    await upload_svc.delete_registration_document(user=current_user, business_id=business_id, document_id=document_id)
     return {"ok": True}
 
 

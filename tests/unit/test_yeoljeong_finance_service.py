@@ -626,8 +626,9 @@ def test_save_settings_preserves_custom_businesses_and_branches(tmp_path, monkey
     saved = service.save_settings(payload, user)
     settings = saved["settings"]
 
+    # 저장된 상호가 canonical 상호로 되돌아가지 않는다(AADS-OBYS-BIZLICENSE-ORIGINAL-OCR-20260930).
     assert [item["name"] for item in settings["businesses"][:4]] == [
-        "열정국밥 중화점",
+        "오입력",
         "열정국밥 성신여대점",
         "언니냉면",
         "열정국밥_미아점",
