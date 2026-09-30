@@ -2683,6 +2683,538 @@ def delete_onboarding_document(document_id: str, user: dict[str, Any]) -> None:
     _delete_hr_record("onboarding_documents", document_id, user)
 
 
+# --- 사업자 서류 (AADS-OBYS-BUSINESS-DOCUMENTS-20260930) ----------------------
+# 사업자(법인/개인) 단위 서류. 원본은 디스크(OBYS_UPLOAD_ROOT)에, DB 에는 경로·해시만 둔다.
+# 같은 종류를 다시 올리면 이전 건을 지우지 않고 superseded 로 남긴다 — 세무·노무 분쟁의 근거다.
+# 서류 종류 목록은 여기가 원본이다. 화면은 목록 응답의 document_types 를 받아 쓴다.
+BUSINESS_DOCUMENT_TYPES: list[dict[str, str]] = [
+    {"type": "business_registration", "label": "사업자등록증", "requirement": "필수", "notice": "세무서 발급본. 정정 발급 시 새로 올립니다."},
+    {"type": "business_permit", "label": "영업신고증", "requirement": "선택", "notice": "구청 위생과 발급본입니다."},
+    {"type": "bankbook", "label": "통장사본", "requirement": "선택", "notice": "사업용 계좌 확인용입니다."},
+    {"type": "lease_contract", "label": "임대차계약서", "requirement": "선택", "notice": "계약 만료일을 만료일에 적습니다."},
+    {"type": "hygiene_training", "label": "위생교육수료증", "requirement": "선택", "notice": "영업자 위생교육 수료증입니다."},
+    {"type": "fire_insurance", "label": "화재보험증서", "requirement": "선택", "notice": "보험 만기일을 만료일에 적습니다."},
+    {"type": "corporate_registry", "label": "법인등기부등본", "requirement": "법인 조건부", "notice": "법인 사업자만 해당합니다."},
+    {"type": "seal_certificate", "label": "인감증명서", "requirement": "선택", "notice": "발급일로부터 3개월 이내본을 권장합니다."},
+    {"type": "representative_id", "label": "대표자신분증", "requirement": "선택", "notice": "주민등록번호 뒷자리는 마스킹합니다."},
+    {"type": "tax_agent_delegation", "label": "세무대리인위임장", "requirement": "선택", "notice": "세무대리인 수임 동의 서류입니다."},
+    {"type": "mail_order_report", "label": "통신판매업신고증", "requirement": "선택", "notice": "온라인 판매 시 해당합니다."},
+    {"type": "other", "label": "기타", "requirement": "선택", "notice": "서류 이름을 메모에 남깁니다."},
+]
+BUSINESS_DOCUMENT_TYPE_CODES = {item["type"] for item in BUSINESS_DOCUMENT_TYPES}
+BUSINESS_DOCUMENT_REQUIRED_TYPE = "business_registration"
+BUSINESS_DOCUMENT_EXPIRY_WARNING_DAYS = 30
+BUSINESS_DOCUMENT_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".tif", ".tiff", ".hwp", ".doc", ".docx"}
+BUSINESS_DOCUMENT_MEMO_MAX = 1000
+BUSINESS_DOCUMENT_TABLE = "yeoljeong_business_documents"
+
+
+def list_business_document_types() -> list[dict[str, str]]:
+    return BUSINESS_DOCUMENT_TYPES
+
+
+def _business_document_meta(document_type: str) -> dict[str, str]:
+    code = str(document_type or "").strip()
+    meta = next((item for item in BUSINESS_DOCUMENT_TYPES if item["type"] == code), None)
+    if not meta:
+        raise HTTPException(status_code=400, detail="지원하지 않는 서류 종류입니다")
+    return meta
+
+
+def _business_document_date(value: Any, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{label}은 YYYY-MM-DD 형식이어야 합니다") from None
+
+
+def _business_document_dates(issue_date: Any, expires_at: Any) -> tuple[str, str]:
+    issued = _business_document_date(issue_date, "발급일")
+    expires = _business_document_date(expires_at, "만료일")
+    if issued and expires and expires < issued:
+        raise HTTPException(status_code=400, detail="만료일이 발급일보다 빠릅니다")
+    return issued, expires
+
+
+def _business_document_memo(value: Any) -> str:
+    memo = str(value or "").strip()
+    if len(memo) > BUSINESS_DOCUMENT_MEMO_MAX:
+        raise HTTPException(status_code=400, detail=f"메모는 {BUSINESS_DOCUMENT_MEMO_MAX}자 이하여야 합니다")
+    return memo
+
+
+def _business_document_scope(business_id: Any, user: dict[str, Any]) -> tuple[str, str]:
+    """관리자 + 테넌트 + 사업자 소속을 코드에서 강제한다. SQL WHERE 에도 같은 조건이 들어간다."""
+    tenant_id = _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="사업자 서류는 관리자만 다룰 수 있습니다")
+    normalized = str(business_id or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="사업자를 선택하십시오")
+    if _db_available():
+        matched = _run_db(_db_business_tenant_matches(normalized, tenant_id))
+        if matched is None:
+            raise HTTPException(status_code=503, detail="사업자 소속을 확인할 수 없습니다")
+        if not matched:
+            raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
+        return tenant_id, normalized
+    known = {str(item.get("id") or "") for item in get_settings(user)["settings"].get("businesses") or []}
+    if normalized not in known:
+        raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
+    return tenant_id, normalized
+
+
+def _business_document_relpath(tenant_id: str, document_id: str, suffix: str) -> Path:
+    # 계약서 PDF 와 같은 루트(OBYS_UPLOAD_ROOT)·같은 <tenant>/<종류>/ 배치, 파일명은 입사서류처럼 <id><ext>.
+    return Path(str(UUID(tenant_id))) / "business_documents" / f"{document_id}{suffix}"
+
+
+def _business_document_file(record: dict[str, Any]) -> Path | None:
+    relative = str(record.get("stored_path") or "")
+    if not relative:
+        return None
+    root = _contract_pdf_root().resolve()
+    path = (root / relative).resolve()
+    if root not in path.parents or not path.is_file():
+        return None
+    return path
+
+
+def _business_document_view(record: dict[str, Any], today: date | None = None) -> dict[str, Any]:
+    row = dict(record)
+    row.pop("stored_path", None)
+    meta = next((item for item in BUSINESS_DOCUMENT_TYPES if item["type"] == row.get("document_type")), None)
+    row["document_label"] = (meta or {}).get("label") or row.get("document_label") or "기타"
+    row["requirement"] = (meta or {}).get("requirement") or "선택"
+    row["status_label"] = {"current": "최신", "superseded": "이전본", "deleted": "삭제"}.get(str(row.get("status") or ""), "")
+    expiry_status, expiry_label, days_left = "", "", None
+    expires = str(row.get("expires_at") or "")[:10]
+    if expires:
+        try:
+            days_left = (date.fromisoformat(expires) - (today or datetime.now(KST).date())).days
+        except ValueError:
+            days_left = None
+        if days_left is not None and days_left < 0:
+            expiry_status, expiry_label = "expired", "만료"
+        elif days_left is not None and days_left <= BUSINESS_DOCUMENT_EXPIRY_WARNING_DAYS:
+            expiry_status, expiry_label = "expiring", "만료 임박"
+    row["expiry_status"] = expiry_status
+    row["expiry_label"] = expiry_label
+    row["days_until_expiry"] = days_left
+    row["is_expired"] = expiry_status == "expired"
+    row["is_expiring"] = expiry_status == "expiring"
+    return row
+
+
+def _business_document_restatus(rows: list[dict[str, Any]], tenant_id: str, business_id: str, document_types: set[str]) -> None:
+    """(사업자, 종류)마다 삭제되지 않은 최신 1건만 current, 나머지는 superseded."""
+    for document_type in document_types:
+        group = [
+            row for row in rows
+            if str(row.get("tenant_id") or "") == tenant_id
+            and str(row.get("business_id") or "") == business_id
+            and str(row.get("document_type") or "") == document_type
+            and not row.get("deleted_at")
+        ]
+        group.sort(key=lambda row: (str(row.get("uploaded_at") or ""), str(row.get("id") or "")), reverse=True)
+        for index, row in enumerate(group):
+            row["status"] = "current" if index == 0 else "superseded"
+
+
+_BUSINESS_DOCUMENT_COLUMNS = (
+    "id, tenant_id, business_id, document_type, document_label, original_filename, content_type, stored_path, "
+    "sha256, byte_size, issue_date, expires_at, memo, status, uploaded_by, uploaded_at, updated_at, deleted_at"
+)
+
+
+def _db_business_document_record(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    return {
+        **item,
+        "id": str(item.get("id") or ""),
+        "tenant_id": str(item.get("tenant_id") or ""),
+        "issue_date": item["issue_date"].isoformat() if item.get("issue_date") else "",
+        "expires_at": item["expires_at"].isoformat() if item.get("expires_at") else "",
+        "byte_size": int(item.get("byte_size") or 0),
+        "uploaded_at": _iso(item.get("uploaded_at")),
+        "updated_at": _iso(item.get("updated_at")),
+        "deleted_at": _iso(item.get("deleted_at")) if item.get("deleted_at") else "",
+    }
+
+
+async def _db_business_documents_restatus(conn: Any, tenant_id: UUID, business_id: str, document_type: str) -> None:
+    # 두 단계로 나눈다. 한 문장으로 current 를 옮기면 부분 유일 인덱스가 행 단위로 검사돼 중간에 충돌한다.
+    await conn.execute(
+        f"UPDATE {BUSINESS_DOCUMENT_TABLE} SET status = 'superseded' "
+        "WHERE tenant_id = $1 AND business_id = $2 AND document_type = $3 AND deleted_at IS NULL AND status <> 'superseded'",
+        tenant_id, business_id, document_type,
+    )
+    await conn.execute(
+        f"UPDATE {BUSINESS_DOCUMENT_TABLE} SET status = 'current' WHERE id = ("
+        f"SELECT l.id FROM {BUSINESS_DOCUMENT_TABLE} l "
+        "WHERE l.tenant_id = $1 AND l.business_id = $2 AND l.document_type = $3 AND l.deleted_at IS NULL "
+        "ORDER BY l.uploaded_at DESC, l.id DESC LIMIT 1)",
+        tenant_id, business_id, document_type,
+    )
+
+
+async def _db_business_documents_fetch(tenant_id: str, business_id: str | None) -> list[dict[str, Any]] | None:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{BUSINESS_DOCUMENT_TABLE}"):
+            return None
+        rows = await conn.fetch(
+            f"SELECT {_BUSINESS_DOCUMENT_COLUMNS} FROM {BUSINESS_DOCUMENT_TABLE} d "
+            "WHERE d.tenant_id = $1 AND d.deleted_at IS NULL AND ($2::text IS NULL OR d.business_id = $2) "
+            "AND EXISTS (SELECT 1 FROM yeoljeong_business_tenant_mapping m "
+            "WHERE m.business_id = d.business_id AND m.tenant_id = d.tenant_id) "
+            "ORDER BY d.uploaded_at DESC, d.id DESC",
+            UUID(tenant_id), business_id,
+        )
+        return [_db_business_document_record(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def _db_business_document_get(tenant_id: str, document_id: str) -> dict[str, Any] | None | bool:
+    """테넌트 안의 행을 돌려준다. 없으면 None, 다른 테넌트 행이면 False."""
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        row = await conn.fetchrow(
+            f"SELECT {_BUSINESS_DOCUMENT_COLUMNS} FROM {BUSINESS_DOCUMENT_TABLE} WHERE id = $1 AND deleted_at IS NULL",
+            UUID(document_id),
+        )
+        if not row:
+            return None
+        if str(row["tenant_id"]) != tenant_id:
+            return False
+        return _db_business_document_record(row)
+    finally:
+        await conn.close()
+
+
+async def _db_business_document_insert(record: dict[str, Any]) -> bool:
+    import asyncpg
+
+    tenant_id = UUID(record["tenant_id"])
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        async with conn.transaction():
+            # 같은 사업자에 대한 동시 업로드가 current 를 둘 만들지 않게 직렬화한다.
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"{tenant_id}|{record['business_id']}")
+            await conn.execute(
+                f"INSERT INTO {BUSINESS_DOCUMENT_TABLE} ({_BUSINESS_DOCUMENT_COLUMNS}) VALUES "
+                "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::date, $12::date, $13, $14, $15, "
+                "$16::timestamptz, $17::timestamptz, NULL)",
+                UUID(record["id"]), tenant_id, record["business_id"], record["document_type"], record["document_label"],
+                record["original_filename"], record["content_type"], record["stored_path"], record["sha256"],
+                int(record["byte_size"]), _pg_date(record.get("issue_date")), _pg_date(record.get("expires_at")),
+                record["memo"], "superseded", record["uploaded_by"],
+                _pg_ts(record["uploaded_at"]), _pg_ts(record["updated_at"]),
+            )
+            await _db_business_documents_restatus(conn, tenant_id, record["business_id"], record["document_type"])
+        return True
+    finally:
+        await conn.close()
+
+
+async def _db_business_document_update(record: dict[str, Any], previous_type: str) -> bool:
+    import asyncpg
+
+    tenant_id = UUID(record["tenant_id"])
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"{tenant_id}|{record['business_id']}")
+            # 파일 관련 열(stored_path·sha256·byte_size·original_filename)은 여기서 바꾸지 않는다.
+            result = await conn.execute(
+                f"UPDATE {BUSINESS_DOCUMENT_TABLE} SET document_type = $4, document_label = $5, issue_date = $6::date, "
+                "expires_at = $7::date, memo = $8, updated_at = $9::timestamptz, status = 'superseded' "
+                "WHERE id = $1 AND tenant_id = $2 AND business_id = $3 AND deleted_at IS NULL",
+                UUID(record["id"]), tenant_id, record["business_id"], record["document_type"], record["document_label"],
+                _pg_date(record.get("issue_date")), _pg_date(record.get("expires_at")), record["memo"],
+                _pg_ts(record["updated_at"]),
+            )
+            if not result.endswith(" 1"):
+                return False
+            # 위에서 잠시 superseded 로 내렸다. 두 종류 모두 최신 1건을 다시 current 로 세운다.
+            for document_type in {previous_type, record["document_type"]}:
+                await _db_business_documents_restatus(conn, tenant_id, record["business_id"], document_type)
+        return True
+    finally:
+        await conn.close()
+
+
+async def _db_business_document_soft_delete(record: dict[str, Any], deleted_at: str) -> bool:
+    import asyncpg
+
+    tenant_id = UUID(record["tenant_id"])
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"{tenant_id}|{record['business_id']}")
+            result = await conn.execute(
+                f"UPDATE {BUSINESS_DOCUMENT_TABLE} SET deleted_at = $4::timestamptz, updated_at = $4::timestamptz, "
+                "status = 'deleted' WHERE id = $1 AND tenant_id = $2 AND business_id = $3 AND deleted_at IS NULL",
+                UUID(record["id"]), tenant_id, record["business_id"], _pg_ts(deleted_at),
+            )
+            if not result.endswith(" 1"):
+                return False
+            # 현행본을 지우면 바로 앞 리비전이 다시 현행이 된다.
+            await _db_business_documents_restatus(conn, tenant_id, record["business_id"], record["document_type"])
+        return True
+    finally:
+        await conn.close()
+
+
+def _pg_date(value: Any) -> date | None:
+    text = str(value or "").strip()
+    return date.fromisoformat(text[:10]) if text else None
+
+
+def _business_document_rows(tenant_id: str, business_id: str | None) -> list[dict[str, Any]]:
+    if _db_available():
+        rows = _run_db(_db_business_documents_fetch(tenant_id, business_id))
+        if rows is None:
+            raise HTTPException(status_code=503, detail="사업자 서류 저장소를 읽을 수 없습니다")
+        return rows
+    return [
+        row for row in _read_file_rows("business_documents")
+        if str(row.get("tenant_id") or "") == tenant_id
+        and not row.get("deleted_at")
+        and (business_id is None or str(row.get("business_id") or "") == business_id)
+    ]
+
+
+def _business_document_record(document_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    """문서 1건을 찾아 테넌트·관리자·사업자 소속을 다시 확인한다."""
+    tenant_id = _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="사업자 서류는 관리자만 다룰 수 있습니다")
+    try:
+        normalized_id = str(UUID(str(document_id)))
+    except (TypeError, ValueError, AttributeError):
+        raise HTTPException(status_code=404, detail="사업자 서류를 찾을 수 없습니다") from None
+    if _db_available():
+        found = _run_db(_db_business_document_get(tenant_id, normalized_id))
+    else:
+        row = next(
+            (item for item in _read_file_rows("business_documents")
+             if str(item.get("id") or "") == normalized_id and not item.get("deleted_at")),
+            None,
+        )
+        found = None if row is None else (row if str(row.get("tenant_id") or "") == tenant_id else False)
+    if found is False:
+        raise HTTPException(status_code=403, detail="다른 테넌트의 사업자 서류입니다")
+    if not found:
+        raise HTTPException(status_code=404, detail="사업자 서류를 찾을 수 없습니다")
+    _business_document_scope(found.get("business_id"), user)
+    return found
+
+
+def _business_document_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    summary: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item = summary.setdefault(str(row.get("business_id") or ""), {"count": 0, "has_required": False, "expiring": 0, "expired": 0})
+        item["count"] += 1
+        if row.get("status") != "current":
+            continue
+        if row.get("document_type") == BUSINESS_DOCUMENT_REQUIRED_TYPE:
+            item["has_required"] = True
+        if row.get("expiry_status") == "expiring":
+            item["expiring"] += 1
+        elif row.get("expiry_status") == "expired":
+            item["expired"] += 1
+    for item in summary.values():
+        item["needs_documents"] = not item["has_required"]
+    return summary
+
+
+def list_business_documents(user: dict[str, Any], business_id: str | None = None) -> dict[str, Any]:
+    tenant_id = _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="사업자 서류는 관리자만 조회할 수 있습니다")
+    scoped = _business_document_scope(business_id, user)[1] if str(business_id or "").strip() else None
+    rows = _business_document_rows(tenant_id, scoped)
+    if scoped is None and not _db_available():
+        # 파일 모드는 테넌트-사업자 매핑 표가 없으므로 설정에 등록된 사업자만 보여준다.
+        known = {str(item.get("id") or "") for item in get_settings(user)["settings"].get("businesses") or []}
+        rows = [row for row in rows if str(row.get("business_id") or "") in known]
+    today = datetime.now(KST).date()
+    documents = sorted(
+        (_business_document_view(row, today) for row in rows),
+        key=lambda row: (str(row.get("uploaded_at") or ""), str(row.get("id") or "")),
+        reverse=True,
+    )
+    return {
+        "documents": documents,
+        "document_types": BUSINESS_DOCUMENT_TYPES,
+        "required_document_type": BUSINESS_DOCUMENT_REQUIRED_TYPE,
+        "summary": _business_document_summary(documents),
+    }
+
+
+def save_business_document(
+    *,
+    business_id: str,
+    document_type: str,
+    issue_date: str,
+    expires_at: str,
+    memo: str,
+    filename: str,
+    content_type: str,
+    data: bytes,
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    tenant_id, normalized_business = _business_document_scope(business_id, user)
+    meta = _business_document_meta(document_type)
+    issued, expires = _business_document_dates(issue_date, expires_at)
+    clean_memo = _business_document_memo(memo)
+    if not data:
+        raise HTTPException(status_code=400, detail="빈 파일은 등록할 수 없습니다")
+    if len(data) > _business_document_upload_limit():
+        raise HTTPException(status_code=413, detail="파일은 10MB 이하여야 합니다")
+    original = _safe_filename(filename or "document.bin")
+    suffix = Path(original).suffix.lower()
+    if suffix not in BUSINESS_DOCUMENT_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="PDF·이미지·한글/워드 문서만 등록할 수 있습니다")
+    guessed = mimetypes.guess_type(original)[0] or "application/octet-stream"
+    declared = str(content_type or "").strip().lower()
+    mime = declared if re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", declared) and declared != "application/octet-stream" else guessed
+    document_id = str(uuid4())
+    relative = _business_document_relpath(tenant_id, document_id, suffix)
+    path = _contract_pdf_root() / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{secrets.token_hex(4)}.tmp")
+    tmp.write_bytes(data)
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+    now = _now()
+    record = {
+        "id": document_id,
+        "tenant_id": tenant_id,
+        "business_id": normalized_business,
+        "document_type": meta["type"],
+        "document_label": meta["label"],
+        "original_filename": original,
+        "content_type": mime,
+        "stored_path": str(relative),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "byte_size": len(data),
+        "issue_date": issued,
+        "expires_at": expires,
+        "memo": clean_memo,
+        "status": "current",
+        "uploaded_by": _email(user),
+        "uploaded_at": now,
+        "updated_at": now,
+        "deleted_at": "",
+    }
+    if _db_available():
+        if not _run_db(_db_business_document_insert(record)):
+            # 메타를 못 남긴 원본은 고아가 된다 — 지우고 실패를 그대로 올린다(거짓 성공 금지).
+            path.unlink(missing_ok=True)
+            raise HTTPException(status_code=503, detail="사업자 서류를 저장하지 못했습니다")
+    else:
+        rows = _read_file_rows("business_documents")
+        rows.insert(0, record)
+        _business_document_restatus(rows, tenant_id, normalized_business, {meta["type"]})
+        _write_file_rows("business_documents", rows)
+    stored = next(
+        (row for row in _business_document_rows(tenant_id, normalized_business) if str(row.get("id")) == document_id),
+        record,
+    )
+    return _business_document_view(stored)
+
+
+def _business_document_upload_limit() -> int:
+    # 업로드 상한의 원본은 obys_upload_service.MAX_BYTES(10MB) — API 의 _read_limited_upload 와 같은 값.
+    from app.services.obys_upload_service import MAX_BYTES
+
+    return MAX_BYTES
+
+
+def update_business_document(document_id: str, payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    record = _business_document_record(document_id, user)
+    tenant_id = str(record["tenant_id"])
+    previous_type = str(record.get("document_type") or "")
+    updated = dict(record)
+    if "document_type" in payload and payload["document_type"] is not None:
+        meta = _business_document_meta(payload["document_type"])
+        updated["document_type"], updated["document_label"] = meta["type"], meta["label"]
+    issued, expires = _business_document_dates(
+        payload["issue_date"] if payload.get("issue_date") is not None else record.get("issue_date"),
+        payload["expires_at"] if payload.get("expires_at") is not None else record.get("expires_at"),
+    )
+    updated["issue_date"], updated["expires_at"] = issued, expires
+    if payload.get("memo") is not None:
+        updated["memo"] = _business_document_memo(payload["memo"])
+    updated["updated_at"] = _now()
+    if _db_available():
+        if not _run_db(_db_business_document_update(updated, previous_type)):
+            raise HTTPException(status_code=503, detail="사업자 서류를 수정하지 못했습니다")
+    else:
+        rows = _read_file_rows("business_documents")
+        target = next(
+            (row for row in rows if str(row.get("id")) == str(record["id"])
+             and str(row.get("tenant_id") or "") == tenant_id
+             and str(row.get("business_id") or "") == str(record["business_id"])
+             and not row.get("deleted_at")),
+            None,
+        )
+        if target is None:
+            raise HTTPException(status_code=404, detail="사업자 서류를 찾을 수 없습니다")
+        for key in ("document_type", "document_label", "issue_date", "expires_at", "memo", "updated_at"):
+            target[key] = updated[key]
+        _business_document_restatus(rows, tenant_id, str(record["business_id"]), {previous_type, updated["document_type"]})
+        _write_file_rows("business_documents", rows)
+    return _business_document_view(_business_document_record(str(record["id"]), user))
+
+
+def delete_business_document(document_id: str, user: dict[str, Any]) -> None:
+    """soft delete 만 한다. 행과 원본 파일은 남는다."""
+    record = _business_document_record(document_id, user)
+    tenant_id = str(record["tenant_id"])
+    now = _now()
+    if _db_available():
+        if not _run_db(_db_business_document_soft_delete(record, now)):
+            raise HTTPException(status_code=503, detail="사업자 서류를 삭제하지 못했습니다")
+        return
+    rows = _read_file_rows("business_documents")
+    target = next(
+        (row for row in rows if str(row.get("id")) == str(record["id"])
+         and str(row.get("tenant_id") or "") == tenant_id
+         and str(row.get("business_id") or "") == str(record["business_id"])
+         and not row.get("deleted_at")),
+        None,
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="사업자 서류를 찾을 수 없습니다")
+    target["deleted_at"] = now
+    target["updated_at"] = now
+    target["status"] = "deleted"
+    _business_document_restatus(rows, tenant_id, str(record["business_id"]), {str(record.get("document_type") or "")})
+    _write_file_rows("business_documents", rows)
+
+
+def get_business_document_file(document_id: str, user: dict[str, Any]) -> tuple[dict[str, Any], Path]:
+    record = _business_document_record(document_id, user)
+    path = _business_document_file(record)
+    if path is None:
+        raise HTTPException(status_code=404, detail="사업자 서류 원본 파일이 없습니다")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != str(record.get("sha256") or ""):
+        logger.error("business document hash mismatch: document=%s", record.get("id"))
+        raise HTTPException(status_code=409, detail="사업자 서류 원본이 등록 당시와 다릅니다")
+    return record, path
+
+
 def _contract_business(payload: dict[str, Any], employee: dict[str, Any] | None) -> tuple[str, str]:
     employee = employee or {}
     employee_branch = BRANCH_ALIASES.get(str(employee.get("branch") or "").strip(), str(employee.get("branch") or "").strip())

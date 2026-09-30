@@ -4266,7 +4266,7 @@
                   </label>
                   <label class="span-2">사업자등록증 파일
                     <input name="registrationDocument" type="file" accept=".pdf,.jpg,.jpeg,.png">
-                    <span class="field-note">파일을 고르면 원본을 서버에 보관(버전 이력·sha256)하고 OCR 제안을 보여줍니다. [적용]을 누른 항목만 폼에 채워지며, 저장은 [사업자 저장]으로 합니다. 업로드·OCR 이 실패해도 손입력으로 계속할 수 있습니다.</span>
+                    <span class="field-note">파일을 고르면 원본을 서버에 보관(버전 이력·sha256)하고 OCR 제안을 보여줍니다. [적용]을 누른 항목만 폼에 채워지며, 저장은 [사업자 저장]으로 합니다. 업로드·OCR 이 실패해도 손입력으로 계속할 수 있습니다. 발급일·만료일을 관리하거나 영업신고증·통장사본 등 다른 서류를 보관하려면 아래 <a href="#businessDocumentsPanel">[사업자 서류]</a>에서 등록하십시오.</span>
                   </label>
                   <div class="span-2" id="businessRegistrationOcrPanel" data-registration-ocr-panel hidden></div>
                   <label class="span-2">메모
@@ -4350,6 +4350,40 @@
               </div>
             </section>
           </div>
+
+          <section class="panel" id="businessDocumentsPanel">
+            <div class="panel-head">
+              <h2 class="panel-title">사업자 서류</h2>
+              <span id="businessDocumentsBadge" class="badge info">선택 사업자</span>
+            </div>
+            <div class="panel-body">
+              <div id="businessDocumentsNotice" class="settings-note">사업자를 선택하면 등록된 서류가 표시됩니다.</div>
+              <form id="businessDocumentForm" class="form-grid" hidden>
+                <label>서류 종류
+                  <select name="documentType" required></select>
+                </label>
+                <label>파일
+                  <input name="file" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.tif,.tiff,.hwp,.doc,.docx" required>
+                </label>
+                <label>발급일
+                  <input name="issueDate" type="date">
+                </label>
+                <label>만료일
+                  <input name="expiresAt" type="date">
+                </label>
+                <label class="span-2">메모
+                  <input name="memo" maxlength="1000" placeholder="발급처, 정정 사유, 보완 요청 사항">
+                </label>
+                <div class="span-2 business-page-actions">
+                  <span class="field-note">사업자 저장과 따로 동작합니다. 같은 종류를 다시 올리면 이전 파일은 이전본으로 남습니다. 파일은 10MB 이하입니다.</span>
+                  <button type="submit" class="primary">서류 등록</button>
+                </div>
+              </form>
+              <div class="table-wrap">
+                <table><thead><tr><th>종류</th><th>파일명</th><th>발급일</th><th>만료</th><th>상태</th><th>메모</th><th>관리</th></tr></thead><tbody id="businessDocumentRows"></tbody></table>
+              </div>
+            </div>
+          </section>
 
           <section class="panel">
             <div class="panel-head">
@@ -8708,6 +8742,7 @@
       loadBusinessRegistrationCurrent(els.businessPageForm, item.id).catch(() => {});
       setSelectedSettingsBusinessId(item.id);
       businessPageSyncBadges();
+      renderBusinessPage(); // 사업자 서류 패널을 이 사업자 것으로 바꾼다.
       els.businessPageForm.scrollIntoView({ behavior: "smooth", block: "center" });
     }
 
@@ -8961,6 +8996,7 @@
           ${selectedBusiness.registrationDocument?.id ? `등록증 원본 v${escapeHtml(selectedBusiness.registrationDocument.version)} · ${escapeHtml(selectedBusiness.registrationDocument.originalFilename || "")} · sha256 ${escapeHtml(String(selectedBusiness.registrationDocument.sha256 || "").slice(0, 12))}…<br>` : ""}
           주소 ${escapeHtml(selectedBusiness.address || "미등록")}<br>
           연결 지점 ${selectedBranches.length}개 · 정산계좌 ${selectedAccounts.length}개 · 연동 ${selectedIntegrations.length}개
+          ${businessDocumentBadgesHtml(selectedBusiness) ? `<br>서류 ${businessDocumentBadgesHtml(selectedBusiness)}` : ""}
         ` : "사업자를 신규 등록하십시오.";
       }
       if (els.businessPageListBadge) els.businessPageListBadge.textContent = `${cfg.businesses.length}개`;
@@ -8978,7 +9014,7 @@
               <td>${escapeHtml(item.representative || "미등록")}<br><span class="muted">${escapeHtml(item.taxType || "미등록")}</span></td>
               <td>${branches.length ? branches.map(branch => escapeHtml(branch.name)).join("<br>") : "미등록"}</td>
               <td>${integrations.length}개</td>
-              <td>${badgeHtml(complete === 100 ? "완료" : `보완 ${complete}%`, statusClass)}</td>
+              <td>${badgeHtml(complete === 100 ? "완료" : `보완 ${complete}%`, statusClass)}${businessDocumentBadgesHtml(item) ? `<br>${businessDocumentBadgesHtml(item)}` : ""}</td>
               <td><div style="display:flex; gap:6px; flex-wrap:wrap"><button type="button" data-edit-business-page="${escapeHtml(item.id)}">수정</button><button type="button" data-new-branch-for-business="${escapeHtml(item.id)}">지점추가</button><button type="button" class="danger" data-delete-business="${escapeHtml(item.id)}">삭제</button></div></td>
             </tr>`;
         }).join("") : tableEmpty(7, "사업자를 신규 등록하십시오.");
@@ -8996,6 +9032,312 @@
         `).join("") : tableEmpty(6, "지점을 신규 등록하십시오.");
       }
       businessPageSyncBadges();
+      syncBusinessDocumentsScope(selectedBusiness?.id || "");
+      renderBusinessDocuments();
+    }
+
+    // 사업자 서류 — 종류 목록·라벨은 서버(BUSINESS_DOCUMENT_TYPES)가 원본이다. 여기서 다시 적지 않는다.
+    const businessDocuments = {
+      businessId: "",
+      requestedFor: "",
+      documents: [],
+      types: [],
+      requiredType: "",
+      summary: {},
+      summaryLoaded: false,
+      summaryRequested: false,
+      requestedWithAccess: false,
+      editingId: "",
+      loading: false,
+      error: ""
+    };
+
+    function businessDocumentTypeLabel(code) {
+      return businessDocuments.types.find(item => item.type === code)?.label || "기타";
+    }
+
+    function businessDocumentsApplyPayload(payload) {
+      if (Array.isArray(payload?.document_types) && payload.document_types.length) businessDocuments.types = payload.document_types;
+      if (payload?.required_document_type) businessDocuments.requiredType = payload.required_document_type;
+    }
+
+    function businessNeedsDocuments(item) {
+      // 목록 요약을 못 받았으면 판단하지 않는다(모르는 것을 "필요"로 단정하지 않는다).
+      if (!item || !businessDocuments.summaryLoaded) return false;
+      if (item.registrationDocument?.id) return false; // OCR 경로로 보관한 등록증 원본도 인정한다.
+      return !businessDocuments.summary[item.id]?.has_required;
+    }
+
+    function businessDocumentBadgesHtml(item) {
+      if (!item || !businessDocuments.summaryLoaded) return "";
+      const info = businessDocuments.summary[item.id] || {};
+      const badges = [];
+      if (businessNeedsDocuments(item)) badges.push(badgeHtml("서류 필요", "warn"));
+      if (info.expired) badges.push(badgeHtml(`만료 ${info.expired}건`, "bad"));
+      if (info.expiring) badges.push(badgeHtml(`만료 임박 ${info.expiring}건`, "warn"));
+      return badges.join(" ");
+    }
+
+    async function loadBusinessDocumentSummary() {
+      if (!canManageSettings()) return;
+      businessDocuments.summaryRequested = true;
+      try {
+        const payload = await financeApi("/business-documents");
+        businessDocumentsApplyPayload(payload);
+        businessDocuments.summary = payload.summary || {};
+        businessDocuments.summaryLoaded = true;
+      } catch (err) {
+        businessDocuments.summaryLoaded = false;
+      }
+      renderBusinessPage();
+    }
+
+    async function loadBusinessDocuments(businessId) {
+      businessDocuments.requestedFor = businessId || "";
+      businessDocuments.editingId = "";
+      if (!businessId || !canManageSettings()) {
+        businessDocuments.businessId = businessId || "";
+        businessDocuments.documents = [];
+        renderBusinessDocuments();
+        return;
+      }
+      businessDocuments.loading = true;
+      businessDocuments.error = "";
+      renderBusinessDocuments();
+      try {
+        const payload = await financeApi(`/business-documents?business_id=${encodeURIComponent(businessId)}`);
+        if (businessDocuments.requestedFor !== businessId) return;
+        businessDocumentsApplyPayload(payload);
+        businessDocuments.businessId = businessId;
+        businessDocuments.documents = payload.documents || [];
+        businessDocuments.summary = { ...businessDocuments.summary, [businessId]: (payload.summary || {})[businessId] || { has_required: false, count: 0 } };
+      } catch (err) {
+        if (businessDocuments.requestedFor !== businessId) return;
+        businessDocuments.businessId = businessId;
+        businessDocuments.documents = [];
+        businessDocuments.error = err.message || "서류 목록을 불러오지 못했습니다.";
+      } finally {
+        if (businessDocuments.requestedFor === businessId) businessDocuments.loading = false;
+      }
+      renderBusinessPage();
+    }
+
+    function syncBusinessDocumentsScope(businessId) {
+      const access = canManageSettings();
+      if (access && !businessDocuments.summaryRequested) loadBusinessDocumentSummary();
+      // 로그인 정보가 늦게 들어오면 권한이 바뀐 시점에 다시 불러온다.
+      if ((businessId || "") !== businessDocuments.requestedFor || access !== businessDocuments.requestedWithAccess) {
+        businessDocuments.requestedWithAccess = access;
+        loadBusinessDocuments(businessId || "");
+      }
+    }
+
+    function renderBusinessDocumentTypeOptions(select, selected = "") {
+      if (!select) return;
+      const current = selected || select.value;
+      select.innerHTML = businessDocuments.types.map(item =>
+        `<option value="${escapeHtml(item.type)}">${escapeHtml(item.label)}${item.requirement === "필수" ? " (필수)" : ""}</option>`
+      ).join("");
+      if (current && businessDocuments.types.some(item => item.type === current)) select.value = current;
+    }
+
+    function businessDocumentExpiryHtml(doc) {
+      if (!doc.expires_at) return '<span class="muted">없음</span>';
+      const badge = doc.expiry_status === "expired" ? ` ${badgeHtml("만료", "bad")}`
+        : doc.expiry_status === "expiring" ? ` ${badgeHtml(`만료 임박 D-${doc.days_until_expiry}`, "warn")}` : "";
+      return `${escapeHtml(doc.expires_at)}${badge}`;
+    }
+
+    function businessDocumentRowHtml(doc) {
+      const id = escapeHtml(doc.id);
+      if (businessDocuments.editingId === doc.id) {
+        const options = businessDocuments.types.map(item =>
+          `<option value="${escapeHtml(item.type)}"${item.type === doc.document_type ? " selected" : ""}>${escapeHtml(item.label)}</option>`
+        ).join("");
+        return `
+          <tr data-business-document-row="${id}">
+            <td><select data-business-document-field="document_type">${options}</select></td>
+            <td>${escapeHtml(doc.original_filename || "")}<br><span class="muted">파일 교체는 재등록으로 합니다</span></td>
+            <td><input type="date" data-business-document-field="issue_date" value="${escapeHtml(doc.issue_date || "")}"></td>
+            <td><input type="date" data-business-document-field="expires_at" value="${escapeHtml(doc.expires_at || "")}"></td>
+            <td>${badgeHtml(doc.status_label || "", doc.status === "current" ? "good" : "info")}</td>
+            <td><input data-business-document-field="memo" maxlength="1000" value="${escapeHtml(doc.memo || "")}"></td>
+            <td><div style="display:flex; gap:6px; flex-wrap:wrap"><button type="button" class="primary" data-save-business-document="${id}">저장</button><button type="button" data-cancel-business-document="${id}">취소</button></div></td>
+          </tr>`;
+      }
+      const required = doc.requirement === "필수" ? ` ${badgeHtml("필수", "info")}` : "";
+      return `
+        <tr>
+          <td><strong>${escapeHtml(doc.document_label || businessDocumentTypeLabel(doc.document_type))}</strong>${required}</td>
+          <td>${escapeHtml(doc.original_filename || "")}<br><span class="muted">${Math.max(1, Math.round(Number(doc.byte_size || 0) / 1024)).toLocaleString("ko-KR")}KB · ${escapeHtml(formatDateTime(doc.uploaded_at))}</span></td>
+          <td>${escapeHtml(doc.issue_date || "-")}</td>
+          <td>${businessDocumentExpiryHtml(doc)}</td>
+          <td>${badgeHtml(doc.status_label || "", doc.status === "current" ? "good" : "info")}</td>
+          <td>${escapeHtml(doc.memo || "")}</td>
+          <td><div style="display:flex; gap:6px; flex-wrap:wrap"><button type="button" data-download-business-document="${id}">다운로드</button><button type="button" data-edit-business-document="${id}">수정</button><button type="button" class="danger" data-delete-business-document="${id}">삭제</button></div></td>
+        </tr>`;
+    }
+
+    function renderBusinessDocuments() {
+      const form = els.businessDocumentForm;
+      const rows = els.businessDocumentRows;
+      const notice = els.businessDocumentsNotice;
+      if (!rows) return;
+      const businessId = businessDocuments.requestedFor;
+      const business = settings().businesses.find(item => item.id === businessId) || null;
+      if (els.businessDocumentsBadge) {
+        els.businessDocumentsBadge.textContent = business ? business.name : "사업자 없음";
+        els.businessDocumentsBadge.className = `badge ${business ? "good" : "warn"}`;
+      }
+      if (!canManageSettings()) {
+        if (form) form.hidden = true;
+        if (notice) notice.textContent = "사업자 서류는 관리자(대표·운영 관리자)만 조회·등록할 수 있습니다.";
+        rows.innerHTML = tableEmpty(7, "조회 권한이 없습니다.");
+        return;
+      }
+      if (!business) {
+        if (form) form.hidden = true;
+        if (notice) notice.textContent = "사업자를 선택하면 등록된 서류가 표시됩니다.";
+        rows.innerHTML = tableEmpty(7, "사업자를 먼저 선택하십시오.");
+        return;
+      }
+      if (form) {
+        form.hidden = !businessDocuments.types.length;
+        renderBusinessDocumentTypeOptions(form.documentType);
+      }
+      const docs = businessDocuments.businessId === businessId ? businessDocuments.documents : [];
+      const hasRequired = docs.some(doc => doc.status === "current" && doc.document_type === businessDocuments.requiredType);
+      const ocrRef = business.registrationDocument?.id
+        ? ` 사업자등록증 원본은 등록증 OCR 칸에서 v${escapeHtml(business.registrationDocument.version)}(${escapeHtml(business.registrationDocument.originalFilename || "")})로도 보관돼 있습니다.`
+        : "";
+      if (notice) {
+        notice.innerHTML = businessDocuments.loading ? "서류 목록을 불러오는 중입니다."
+          : businessDocuments.error ? `${badgeHtml("조회 실패", "bad")} ${escapeHtml(businessDocuments.error)}`
+          : `${escapeHtml(business.name)} · 등록 서류 ${docs.filter(doc => doc.status === "current").length}종(이전본 포함 ${docs.length}건)`
+            + (hasRequired || business.registrationDocument?.id ? "" : ` ${badgeHtml("서류 필요", "warn")} 사업자등록증을 등록하십시오.`)
+            + ocrRef;
+      }
+      if (businessDocuments.loading || businessDocuments.error) {
+        rows.innerHTML = tableEmpty(7, businessDocuments.loading ? "불러오는 중입니다." : "서류 목록을 불러오지 못했습니다.");
+        return;
+      }
+      rows.innerHTML = docs.length
+        ? docs.map(businessDocumentRowHtml).join("")
+        : `<tr><td colspan="7"><div class="empty">등록된 서류가 없습니다. <button type="button" class="primary" data-focus-business-document-form>서류 등록</button></div></td></tr>`;
+    }
+
+    async function submitBusinessDocument(form) {
+      const businessId = businessDocuments.requestedFor;
+      const file = form.file?.files?.[0];
+      if (!businessId) return showToast("사업자를 먼저 선택하십시오.");
+      if (!file) return showToast("등록할 파일을 고르십시오.");
+      if (file.size > 10 * 1024 * 1024) return showToast("서류 등록 실패: 파일은 10MB 이하여야 합니다.");
+      const data = new FormData();
+      data.append("business_id", businessId);
+      data.append("document_type", form.documentType.value);
+      data.append("issue_date", form.issueDate.value || "");
+      data.append("expires_at", form.expiresAt.value || "");
+      data.append("memo", form.memo.value || "");
+      data.append("file", file);
+      const button = form.querySelector('button[type="submit"]');
+      if (button) button.disabled = true;
+      try {
+        const response = await fetch("/api/v1/yeoljeong-finance/business-documents", {
+          method: "POST",
+          headers: apiAuthOnlyHeaders(),
+          body: data
+        });
+        const payload = await response.json().catch(() => ({}));
+        // 서버가 원본을 보관했다고 답하기 전에는 성공으로 보이지 않는다.
+        if (!response.ok || !payload.document?.id) throw new Error(payload.detail || payload.message || `등록 ${response.status}`);
+        form.reset();
+        businessDocuments.requestedFor = "";
+        await loadBusinessDocuments(businessId);
+        showToast(`${payload.document.document_label || "서류"}를 등록했습니다.`);
+      } catch (err) {
+        showToast(`서류 등록 실패: ${err.message}`);
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    async function saveBusinessDocumentEdit(documentId, row) {
+      const field = name => row.querySelector(`[data-business-document-field="${name}"]`)?.value ?? "";
+      try {
+        await financeApi(`/business-documents/${encodeURIComponent(documentId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            document_type: field("document_type"),
+            issue_date: field("issue_date"),
+            expires_at: field("expires_at"),
+            memo: field("memo")
+          })
+        });
+        const businessId = businessDocuments.requestedFor;
+        businessDocuments.requestedFor = "";
+        await loadBusinessDocuments(businessId);
+        showToast("서류 정보를 수정했습니다.");
+      } catch (err) {
+        showToast(`서류 수정 실패: ${err.message}`);
+      }
+    }
+
+    async function deleteBusinessDocument(documentId) {
+      const doc = businessDocuments.documents.find(item => item.id === documentId);
+      if (!confirm(`${doc?.document_label || "선택한 서류"}(${doc?.original_filename || ""})를 삭제 처리하시겠습니까? 기록은 보관되고 목록에서만 빠집니다.`)) return;
+      try {
+        await financeApi(`/business-documents/${encodeURIComponent(documentId)}`, { method: "DELETE" });
+        const businessId = businessDocuments.requestedFor;
+        businessDocuments.requestedFor = "";
+        await loadBusinessDocuments(businessId);
+        showToast("서류를 삭제했습니다.");
+      } catch (err) {
+        showToast(`서류 삭제 실패: ${err.message}`);
+      }
+    }
+
+    async function downloadBusinessDocument(documentId) {
+      const doc = businessDocuments.documents.find(item => item.id === documentId) || {};
+      try {
+        const response = await fetch(`/api/v1/yeoljeong-finance/business-documents/${encodeURIComponent(documentId)}/download`, {
+          headers: apiAuthOnlyHeaders()
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || payload.message || `다운로드 ${response.status}`);
+        }
+        const url = URL.createObjectURL(await response.blob());
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = doc.original_filename || "사업자서류";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      } catch (err) {
+        showToast(`서류 다운로드 실패: ${err.message}`);
+      }
+    }
+
+    function handleBusinessDocumentsClick(event) {
+      const target = event.target.closest("button");
+      if (!target) return;
+      const data = target.dataset;
+      if (data.focusBusinessDocumentForm !== undefined) {
+        els.businessDocumentForm?.file?.focus();
+        return;
+      }
+      if (data.downloadBusinessDocument) return downloadBusinessDocument(data.downloadBusinessDocument);
+      if (data.deleteBusinessDocument) return deleteBusinessDocument(data.deleteBusinessDocument);
+      if (data.editBusinessDocument) {
+        businessDocuments.editingId = data.editBusinessDocument;
+        return renderBusinessDocuments();
+      }
+      if (data.cancelBusinessDocument) {
+        businessDocuments.editingId = "";
+        return renderBusinessDocuments();
+      }
+      if (data.saveBusinessDocument) return saveBusinessDocumentEdit(data.saveBusinessDocument, target.closest("tr"));
     }
 
     function renderSettings() {
@@ -13429,6 +13771,13 @@
         event.preventDefault();
         saveBusinessFromPage(els.businessPageForm);
       });
+
+      els.businessDocumentForm?.addEventListener("submit", event => {
+        event.preventDefault();
+        submitBusinessDocument(els.businessDocumentForm);
+      });
+
+      els.businessDocumentsPanel?.addEventListener("click", handleBusinessDocumentsClick);
 
       els.businessPageForm?.registrationDocument?.addEventListener("change", () => {
         handleBusinessRegistrationDocument(els.businessPageForm).catch(err => showToast(`사업자등록증 처리 실패: ${err.message}`));

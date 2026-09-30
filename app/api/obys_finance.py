@@ -620,6 +620,80 @@ async def delete_onboarding_document(document_id: str, current_user: dict = Depe
     return {"ok": True}
 
 
+class BusinessDocumentUpdatePayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    # 파일 교체는 재업로드로만 한다. 여기서는 메타만 고친다.
+    document_type: str | None = Field(default=None, max_length=64)
+    issue_date: str | None = Field(default=None, max_length=10)
+    expires_at: str | None = Field(default=None, max_length=10)
+    memo: str | None = Field(default=None, max_length=1000)
+
+
+@router.get("/business-documents")
+async def list_business_documents(
+    business_id: str | None = None,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return await run_in_threadpool(svc.list_business_documents, current_user, business_id)
+
+
+@router.post("/business-documents", status_code=201)
+async def upload_business_document(
+    business_id: str = Form(...),
+    document_type: str = Form(...),
+    issue_date: str = Form(""),
+    expires_at: str = Form(""),
+    memo: str = Form(""),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    # 권한·소속을 먼저 본다 — 비관리자·타 사업자의 본문은 읽지도 않는다.
+    await run_in_threadpool(svc._business_document_scope, business_id, current_user)
+    data = await _read_limited_upload(file)
+    document = await run_in_threadpool(
+        partial(
+            svc.save_business_document,
+            business_id=business_id,
+            document_type=document_type,
+            issue_date=issue_date,
+            expires_at=expires_at,
+            memo=memo,
+            filename=file.filename or "document.bin",
+            content_type=file.content_type or "application/octet-stream",
+            data=data,
+            user=current_user,
+        )
+    )
+    return {"document": document}
+
+
+@router.get("/business-documents/{document_id}/download")
+async def download_business_document(document_id: str, current_user: dict = Depends(get_current_user)) -> FileResponse:
+    document, path = await run_in_threadpool(svc.get_business_document_file, document_id, current_user)
+    return FileResponse(
+        path,
+        media_type=document.get("content_type") or "application/octet-stream",
+        filename=document.get("original_filename") or path.name,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.patch("/business-documents/{document_id}")
+async def update_business_document(
+    document_id: str,
+    payload: BusinessDocumentUpdatePayload,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    changes = payload.model_dump(exclude_unset=True)
+    return {"document": await run_in_threadpool(svc.update_business_document, document_id, changes, current_user)}
+
+
+@router.delete("/business-documents/{document_id}")
+async def delete_business_document(document_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, bool]:
+    await run_in_threadpool(svc.delete_business_document, document_id, current_user)
+    return {"ok": True}
+
+
 @router.get("/contracts")
 async def list_contracts(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"contracts": await run_in_threadpool(svc.list_contracts, current_user)}
