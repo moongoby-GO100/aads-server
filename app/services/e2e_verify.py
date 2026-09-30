@@ -34,6 +34,10 @@ def _renders_nothing(raw_path: str) -> bool:
     path = str(raw_path).lower().replace("\\", "/")
     if path.endswith(_NON_RENDERING_SUFFIXES):
         return True
+    # Extensionless files (.gitignore, Dockerfile, Makefile) are never parsed as markup/styles by a browser, so exempt them regardless of path markers.
+    basename = path.rstrip("/").rsplit("/", 1)[-1]
+    if path and not path.endswith("/") and basename and "." not in basename.lstrip("."):
+        return True
     if not path.endswith(_NON_RENDERING_DATA_SUFFIXES):
         return False
     return not any(marker in f"/{path}" for marker in _SCREEN_PATH_MARKERS)
