@@ -1227,8 +1227,37 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("stale_execution_watchdog_failed: %s", str(e)[:200])
 
-        scheduler = AsyncIOScheduler()
+        # 사용자 예약(user_*) 전용 영속 jobstore. default(메모리)는 그대로 둔다 —
+        # 시스템 잡은 _add_active_only_job 클로저라 pickle 불가.
+        # 실패해도 startup 을 막지 않고 persistent 없이 기동한다.
+        _scheduler_jobstores: dict = {}
+        try:
+            from app.core.db_urls import to_sync_psycopg_url
+            from app.core.persistent_jobstore import (
+                PERSISTENT_JOBS_TABLE,
+                PERSISTENT_JOBSTORE_ALIAS,
+                SlotGatedJobStore,
+            )
+
+            _persistent_store = SlotGatedJobStore(
+                url=to_sync_psycopg_url(os.getenv("DATABASE_URL", "")),
+                tablename=PERSISTENT_JOBS_TABLE,
+                engine_options={"connect_args": {"connect_timeout": 5}},
+                is_active=_is_active_api_container_for_background_jobs,
+            )
+            # scheduler.start() 가 여기서 실패하면 시스템 잡 전체가 죽으므로 미리 연결을 확인한다.
+            with _persistent_store.engine.connect():
+                pass
+            _scheduler_jobstores[PERSISTENT_JOBSTORE_ALIAS] = _persistent_store
+        except Exception as _js_exc:
+            logger.warning(
+                "apscheduler_persistent_jobstore_unavailable",
+                error_type=type(_js_exc).__name__,
+            )
+
+        scheduler = AsyncIOScheduler(jobstores=_scheduler_jobstores)
         _scheduler_add_job = scheduler.add_job
+        app.state.scheduler_add_job_raw = _scheduler_add_job
 
         def _add_active_only_job(func, *args, **kwargs):
             job_name = str(kwargs.get("id") or getattr(func, "__name__", "background_job"))

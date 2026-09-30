@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import copy
 import asyncio
+import functools
+import json
 import logging
+import sys
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -35,6 +38,36 @@ def get_scheduler():
 
 def _execute_scheduled_job_sync(job_id: str, action_type: str, action_config: Dict[str, Any]):
     asyncio.run(_execute_scheduled_job(job_id, action_type, action_config))
+
+
+PERSISTENT_JOBSTORE = "persistent"
+PERSISTENT_MISFIRE_GRACE_SECONDS = 3600
+
+
+def _raw_add_job(scheduler):
+    """main.py 가 덮어쓴 클로저 래퍼(pickle 불가)를 우회하는 원본 add_job."""
+    main_mod = sys.modules.get("app.main")
+    state = getattr(getattr(main_mod, "app", None), "state", None)
+    raw = getattr(state, "scheduler_add_job_raw", None)
+    if raw is not None and getattr(state, "scheduler", None) is scheduler:
+        return raw
+    cls_add_job = getattr(type(scheduler), "add_job", None)
+    if cls_add_job is not None:
+        return functools.partial(cls_add_job, scheduler)
+    return scheduler.add_job
+
+
+def _jsonable(value: Any) -> Any:
+    """pickle/JSON 안전한 순수 값만 남긴다."""
+    return json.loads(json.dumps(value, default=str))
+
+
+def _persisted_job_ids(scheduler) -> set:
+    try:
+        return {job.id for job in scheduler.get_jobs(jobstore=PERSISTENT_JOBSTORE)}
+    except Exception as exc:
+        logger.warning("list_scheduled_tasks_persistent_lookup_failed: %s", type(exc).__name__)
+        return set()
 
 
 def _ensure_scheduler():
@@ -219,7 +252,10 @@ async def schedule_task(
 
     job_id = f"user_{name.strip().replace(' ', '_')}"
     schedule_config = schedule_config or {}
-    effective_action_config = copy.deepcopy(action_config or {})
+    try:
+        effective_action_config = _jsonable(copy.deepcopy(action_config or {}))
+    except (TypeError, ValueError) as exc:
+        return {"error": f"action_config 는 JSON 직렬화 가능해야 합니다: {exc}"}
     effective_report_session_id = str(
         report_session_id
         or effective_action_config.get("report_session_id")
@@ -241,12 +277,40 @@ async def schedule_task(
     if existing:
         return {"error": f"이름 '{name}'의 작업이 이미 존재합니다. 삭제 후 다시 등록하세요."}
 
+    volatile_scheduler = bool(getattr(scheduler, "_aads_tool_local_scheduler", False))
+    persisted = False
+    persist_error = ""
+
+    def _register(job_func, *trigger_args, **job_kwargs):
+        """persistent 에 먼저 등록하고, 실패하면 메모리로 폴백하되 사유를 남긴다."""
+        nonlocal persisted, persist_error
+        args = [job_id, action_type, effective_action_config]
+        if volatile_scheduler:
+            persist_error = "tool_local_scheduler_is_memory_only"
+            logger.error("schedule_task_volatile_fallback: job=%s", job_id)
+        else:
+            try:
+                _raw_add_job(scheduler)(
+                    job_func,
+                    *trigger_args,
+                    args=args,
+                    id=job_id,
+                    jobstore=PERSISTENT_JOBSTORE,
+                    replace_existing=False,
+                    misfire_grace_time=PERSISTENT_MISFIRE_GRACE_SECONDS,
+                    **job_kwargs,
+                )
+                persisted = True
+                return
+            except Exception as exc:
+                persist_error = f"{type(exc).__name__}: {str(exc)[:200]}"
+                logger.error(
+                    "schedule_task_persist_failed: job=%s reason=%s", job_id, persist_error
+                )
+        scheduler.add_job(job_func, *trigger_args, args=args, id=job_id, **job_kwargs)
+
     try:
-        job_func = (
-            _execute_scheduled_job_sync
-            if getattr(scheduler, "_aads_tool_local_scheduler", False)
-            else _execute_scheduled_job
-        )
+        job_func = _execute_scheduled_job_sync if volatile_scheduler else _execute_scheduled_job
         if schedule_type == "cron":
             from apscheduler.triggers.cron import CronTrigger
             # KST → UTC 변환 (KST = UTC+9)
@@ -255,14 +319,12 @@ async def schedule_task(
             day_of_week = schedule_config.get("day_of_week", "mon-fri")
             hour_utc = (hour_kst - 9) % 24
 
-            scheduler.add_job(
+            _register(
                 job_func,
                 CronTrigger(
                     hour=hour_utc, minute=minute,
                     day_of_week=day_of_week, timezone="UTC"
                 ),
-                args=[job_id, action_type, effective_action_config],
-                id=job_id,
             )
             desc = f"cron: {day_of_week} {hour_kst:02d}:{minute:02d} KST"
 
@@ -272,12 +334,10 @@ async def schedule_task(
             if not minutes and not hours:
                 return {"error": "interval에는 minutes 또는 hours가 필요합니다"}
 
-            scheduler.add_job(
+            _register(
                 job_func,
                 "interval",
                 minutes=minutes if minutes else hours * 60,
-                args=[job_id, action_type, effective_action_config],
-                id=job_id,
             )
             desc = f"interval: {'매 ' + str(minutes) + '분' if minutes else '매 ' + str(hours) + '시간'}"
 
@@ -285,17 +345,11 @@ async def schedule_task(
             delay = schedule_config.get("delay_minutes", 1)
             run_time = datetime.now(ZoneInfo("Asia/Seoul")) + timedelta(minutes=delay)
 
-            scheduler.add_job(
-                job_func,
-                "date",
-                run_date=run_time,
-                args=[job_id, action_type, effective_action_config],
-                id=job_id,
-            )
+            _register(job_func, "date", run_date=run_time)
             desc = f"once: {run_time.strftime('%Y-%m-%d %H:%M KST')}"
 
-        logger.info(f"schedule_task: registered | job={job_id} {desc}")
-        return {
+        logger.info(f"schedule_task: registered | job={job_id} {desc} persisted={persisted}")
+        result = {
             "status": "registered",
             "job_id": job_id,
             "name": name,
@@ -305,7 +359,11 @@ async def schedule_task(
             "report_session_id": effective_report_session_id,
             "report_to_session": effective_report_to_session,
             "trigger_session_reaction": effective_trigger_session_reaction,
+            "persisted": persisted,
         }
+        if not persisted:
+            result["persisted_reason"] = persist_error
+        return result
 
     except Exception as e:
         return {"error": f"스케줄 등록 실패: {str(e)}"}
@@ -334,6 +392,7 @@ async def list_scheduled_tasks() -> Dict[str, Any]:
         return {"error": "스케줄러가 초기화되지 않았습니다. 서버 재시작 후 다시 시도하세요."}
 
     jobs = scheduler.get_jobs()
+    persisted_ids = _persisted_job_ids(scheduler)
     result = []
     for job in jobs:
         next_run = job.next_run_time
@@ -343,6 +402,7 @@ async def list_scheduled_tasks() -> Dict[str, Any]:
             "trigger": str(job.trigger),
             "next_run": next_run.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST") if next_run else "N/A",
             "is_user_job": job.id.startswith("user_"),
+            "persisted": job.id in persisted_ids,
         })
 
     return {
