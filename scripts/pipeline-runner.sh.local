@@ -3781,6 +3781,20 @@ _cleanup_artifacts() {
     rm -f "/tmp/pipeline-notify-count-${job_id}" 2>/dev/null || true
 }
 
+_finalize_rebase_review_worker() {
+    local job_id="$1" session_id="$2" rc="$3"
+    [[ "$rc" == "0" ]] && return 0
+    # 함수가 스스로 처리한 실패는 이미 상태를 바꿨다. running 이면 처리되지 않은 즉사다.
+    [[ "$(get_job_status "$job_id")" != "running" ]] && return 0
+    log "  REBASE_REVIEW_WORKER_DIED job=$job_id rc=$rc — review_hold 로 회수"
+    db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold',
+               error_detail='rebase_review_worker_died: rc=${rc}', runner_pid=NULL, updated_at=NOW()
+               WHERE job_id='${job_id}' AND status='running';"
+    record_runner_event "$job_id" "job_terminal" "review_hold" "review_hold" "" "" "" "" "{\"error_detail\":\"rebase_review_worker_died\",\"rc\":\"${rc}\"}"
+    _notify_ai "$job_id"
+    promote_next_queued "AADS"
+}
+
 # Rebased AADS commits require a fresh durable AI review and a new approval.
 review_rebased_aads_sha() {
     local job_id="$1" session_id="$2" repo="$3" sha="$4"
@@ -3808,12 +3822,31 @@ review_rebased_aads_sha() {
         promote_next_queued "AADS"
         return 1
     fi
-    body=$(jq -n --arg rid "$request_id" --arg jid "$job_id" --arg diff "$diff" \
+    # Linux MAX_ARG_STRLEN(131072B)는 argv 한 개의 상한이다. 잘리지 않은 rebase diff
+    # (실측 180,545B)를 --arg 로 넘기면 jq 가 exit 126 으로 죽고, set -e + 출력
+    # /dev/null 때문에 분리 워커가 흔적 없이 사라진다(2026-09-30 runner-7f5feba1).
+    local diff_file body_file
+    diff_file=$(mktemp "${TMPDIR:-/tmp}/aads-rebase-diff-XXXXXX") || diff_file=""
+    body_file=$(mktemp "${TMPDIR:-/tmp}/aads-rebase-body-XXXXXX") || body_file=""
+    if [[ -z "$diff_file" || -z "$body_file" ]]; then
+        rm -f "$diff_file" "$body_file"
+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_tmp_failed" "새 SHA 재검수 임시파일 생성 실패"
+        _notify_ai "$job_id"
+        return 1
+    fi
+    printf '%s' "$diff" > "$diff_file"
+    if ! jq -n --arg rid "$request_id" --arg jid "$job_id" --rawfile diff "$diff_file" \
         --arg inst "$instruction" --arg files "$changed_files" \
-        '{request_id:$rid, job_id:$jid, project:"AADS", diff:$diff, instruction:$inst, files_changed:($files|split(","))}')
+        '{request_id:$rid, job_id:$jid, project:"AADS", diff:$diff, instruction:$inst, files_changed:($files|split(","))}' > "$body_file"; then
+        rm -f "$diff_file" "$body_file"
+        _fail_job "$job_id" "$session_id" "deploy_rebase_review_body_failed" "새 SHA 재검수 요청 본문 생성 실패"
+        _notify_ai "$job_id"
+        return 1
+    fi
     response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST \
         "${AADS_API_URL}/api/v1/review/code-diff/requests" -H "Content-Type: application/json" \
-        -d "$body" --connect-timeout 10 --max-time 20 2>/dev/null) || response=""
+        --data-binary "@${body_file}" --connect-timeout 10 --max-time 60 2>/dev/null) || response=""
+    rm -f "$diff_file" "$body_file"
     http_code=$(printf '%s\n' "$response" | tail -1)
     response=$(printf '%s\n' "$response" | sed '$d')
     if [[ "$http_code" == "200" ]]; then
@@ -4119,8 +4152,9 @@ deploy_job() {
                                updated_at=NOW() WHERE job_id='${job_id}';"
                 fi
                 # 승인된 SHA 와 내용이 다르거나 증명할 수 없으므로 새 diff 를 AI 재검수하고 CEO 재승인을 받는다.
+                # 재큐잉은 새 실행이다. started_at 을 두면 승인 대기 시간까지 MAX_RUNTIME 에 합산돼 좀비로 오진된다(2026-09-30 runner-e3b882c2, 7710s).
                 db_update "UPDATE pipeline_jobs SET status='running', phase='ai_review',
-                           commit_hash='${rebased_sha}', review_verdict=NULL,
+                           started_at=NOW(), commit_hash='${rebased_sha}', review_verdict=NULL,
                            review_request_id=NULL, runner_pid=${BASHPID}, completed_at=NULL,
                            updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
                 if [[ "$(get_job_status "$job_id")" != "running" ]]; then
@@ -4132,7 +4166,10 @@ deploy_job() {
                 _release_deploy_lock "$project" "$job_id"
                 # The durable request is polled in a separate process; the
                 # deploy worker can accept another job while review runs.
-                review_rebased_aads_sha "$job_id" "$session_id" "$worktree_dir" "$rebased_sha" 9>&- </dev/null >/dev/null 2>&1 &
+                (
+                    trap '_rc=$?; _finalize_rebase_review_worker "'"$job_id"'" "'"$session_id"'" "$_rc"; exit $_rc' EXIT
+                    review_rebased_aads_sha "$job_id" "$session_id" "$worktree_dir" "$rebased_sha"
+                ) 9>&- </dev/null >/dev/null 2>&1 &
                 local review_worker_pid=$!
                 db_update "UPDATE pipeline_jobs SET runner_pid=${review_worker_pid}, updated_at=NOW()
                            WHERE job_id='${job_id}' AND status='running' AND commit_hash='${rebased_sha}';"
@@ -4838,6 +4875,7 @@ _recover_stuck_jobs() {
                              AND runner_pid IS NOT NULL
                              AND started_at IS NOT NULL
                              AND started_at < NOW() - INTERVAL '${MAX_RUNTIME} seconds'
+                             AND updated_at < NOW() - INTERVAL '10 minutes'
                              $filter;" 2>/dev/null) || true
     if [[ -n "$zombie_rows" ]]; then
         while IFS=$'\x1e' read -r z_job z_pid z_session z_project; do

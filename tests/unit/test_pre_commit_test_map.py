@@ -43,6 +43,7 @@ def test_runner_service_change_selects_runner_bundle():
 def test_runner_shell_change_selects_runner_bundle():
     chosen = _selected(["scripts/pipeline-runner.sh"])
     assert "tests/unit/test_pipeline_runner_shell_deploy_lock_requeue.py" in chosen["runner"]
+    assert "tests/unit/test_pipeline_runner_rebase_requeue_guard.py" in chosen["runner"]
 
 
 def test_deploy_script_change_selects_deploy_bundle():
