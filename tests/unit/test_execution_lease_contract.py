@@ -87,8 +87,14 @@ def test_bluegreen_api_slots_mount_live_project_docs_readonly():
     green = compose.split("  aads-server-green:", 1)[1].split("  yeoljeong-finance:", 1)[0]
 
     for service in (blue, green):
-        assert "/root/aads/aads-server/docs:/app/docs:ro" in service
-        assert "/root/aads/aads-server/reports:/app/reports:ro" in service
+        # d1ea8ea5("preserve release docs in runtime image") 이후의 계약이다.
+        # 호스트 산출물은 /host/aads-server 아래에만 읽기전용으로 붙는다. /app/docs·
+        # /app/reports 를 덮으면 낡은 호스트 체크아웃이 불변 릴리스 이미지에 담긴
+        # 파일을 가리므로, 그 마운트는 존재해서는 안 된다.
+        assert "/root/aads/aads-server/docs:/host/aads-server/docs:ro" in service
+        assert "/root/aads/aads-server/reports:/host/aads-server/reports:ro" in service
+        assert ":/app/docs:" not in service
+        assert ":/app/reports:" not in service
 
 
 def test_placeholder_repair_uses_the_actual_assistant_execution_unique_index():
