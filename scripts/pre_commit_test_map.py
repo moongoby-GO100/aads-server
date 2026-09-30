@@ -59,6 +59,21 @@ GROUPS: tuple[Group, ...] = (
         py_regex=r"tool_executor|tool_registry|ceo_chat_tools|chat_tools|model_selector|system_prompt|test_tools",
     ),
     Group(
+        name="cost_catalog",
+        tests=(
+            "tests/unit/test_oauth_usage_catalog_model_normalize.py",
+            "tests/unit/test_llm_cost_basis.py",
+        ),
+        globs=(
+            "app/services/oauth_usage_tracker.py",
+            "app/services/llm_cost_basis.py",
+            "scripts/runner_cli_usage.py",
+            "migrations/20260930_oauth_usage_cost_basis.sql",
+            "migrations/20260930_oauth_usage_catalog_model_normalize_backfill.sql",
+            "migrations/rollback/20260930_oauth_usage_*.down.sql",
+        ),
+    ),
+    Group(
         name="runner",
         tests=(
             "tests/unit/test_pipeline_runner_deploy_lock_requeue.py",

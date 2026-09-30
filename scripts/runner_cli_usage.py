@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -40,6 +41,24 @@ CALL_SOURCE = {
     "codex_cli": "runner_codex_cli",
 }
 _INT_MAX = 2_147_483_647
+
+
+_DISPLAY_SUFFIX_RE = re.compile(r"\s*\([^)]*\bcli\b[^)]*\)\s*$", re.IGNORECASE)
+_CODEX_PREFIX_RE = re.compile(r"^codex:", re.IGNORECASE)
+
+
+def canonical_model_id(name: Any) -> str:
+    """표시명("GPT-6 Sol (Codex CLI)")·`codex:` 접두를 model_id 슬러그로 바꾼다.
+
+    표시명이 model 컬럼에 들어가면 llm_catalog_cost_usd() 의 정확일치가 깨진다.
+    접두·꼬리표가 없는 값(claude-opus-5 등)은 그대로 둔다. DB 쪽 정본은
+    llm_resolve_model_id() 의 display_name 역조회이고, 이것은 그 보조 규칙과 같다.
+    """
+    text = str(name or "").strip()
+    stripped = _CODEX_PREFIX_RE.sub("", _DISPLAY_SUFFIX_RE.sub("", text)).strip()
+    if stripped == text:
+        return text
+    return re.sub(r"\s+", "-", stripped).lower() or text
 
 
 def _int(value: Any) -> int:
@@ -161,11 +180,12 @@ def build_insert_sql(
     for r in rows:
         cost = r.get("cost_usd")
         cost_sql = "NULL" if cost is None else repr(float(cost))
+        model = canonical_model_id(r["model"])[:60]
         values.append(
             "(" + ", ".join([
                 _lit((account_slot or "runner")[:20]),
                 "''",
-                _lit(r["model"]),
+                _lit(model),
                 str(_int(r["input_tokens"])),
                 str(_int(r["output_tokens"])),
                 str(_int(r["cache_creation_tokens"])),
@@ -173,7 +193,7 @@ def build_insert_sql(
                 cost_sql,
                 _lit(r["cost_source"]),
                 "llm_catalog_cost_usd(%s, %d, %d)" % (
-                    _lit(r["model"]), _int(r["input_tokens"]), _int(r["output_tokens"])
+                    _lit(model), _int(r["input_tokens"]), _int(r["output_tokens"])
                 ),
                 _lit(call_source[:30]),
                 _lit((session_id or "")[:100]),

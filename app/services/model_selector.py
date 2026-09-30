@@ -4537,7 +4537,8 @@ async def _stream_codex_relay_once(
                         try:
                             _log_oauth_usage(
                                 token="",
-                                model=display_model,
+                                # 표시명을 적으면 llm_models.model_id 조인이 깨져 cost_usd_catalog 가 NULL 이 된다.
+                                model=_canonical_codex_model_id(model),
                                 input_tokens=int(in_tok or 0),
                                 output_tokens=int(out_tok or 0),
                                 cost_usd=float(cost),
