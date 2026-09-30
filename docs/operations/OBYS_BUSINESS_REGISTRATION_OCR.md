@@ -69,7 +69,7 @@ OCR 호출은 기존 브리지 `app/core/local_ocr_bridge.py:ocr_extract` (CEO P
   - `GET /tenant-registry/businesses`: 같은 두 필드 (`registration_no/representative/opened_at/address`)
 - 화면은 이 플래그로 "기초등록 필요" 배지를 보여준다. 등록번호 칸에 자리표시자를 넣지 않는다.
 - seed 의 성신여대점·언니냉면 자리표시자는 빈 값으로 바꿨다. 이 값을 읽는 곳을 확인했다: 계약서 기본값(`employer_registration_no`)은 빈 값이면 채우지 않고 `_missing_contract_value` 가 전과 같이 누락으로 판정한다. 은행 범위(`entityType`)는 해당 없음.
-- **영향:** 다음에 관리자가 [사업자 저장]을 누르면 `save_settings_persisted` 가 `yeoljeong_businesses.registration_no` 에 자리표시자 대신 빈 값을, `name` 에 canonical 상호 대신 저장된 상호를 쓴다. 이 작업은 운영 DB 를 직접 고치지 않는다.
+- **영향:** 다음에 관리자가 [사업자 저장]을 누르면 `save_settings_persisted` 가 `name` 에 canonical 상호 대신 저장된 상호를 쓴다. 등록 4항목은 DB 값이 비어 있을 때만 채운다(10절). 이 작업은 운영 DB 를 직접 고치지 않는다.
 
 ## 6. 마이그레이션 (오비서 업무 DB 전용, 수동)
 
@@ -137,3 +137,33 @@ SELECT b.tenant_id, b.id, b.name
 6. [사업자 저장] → 상세현황에 "등록증 원본 v1 …" 이 나오고 메모에 파일명 문자열이 붙지 않는지 본다.
 7. 같은 파일을 다시 고르면 "최신본과 동일 파일"이 나오고, 다른 파일이면 v2 가 된다.
 8. 비관리자 계정에서는 파일 선택 시 "관리자만" 안내가 나오고 업로드하지 않는지 본다.
+
+## 10. 사업자 기초정보 우선순위와 설정 동기화 (AADS-OBYS-BIZ-DEFAULTS-NO-OVERWRITE-20260930)
+
+우선순위: **관리자 직접 입력 > DB 실값 > 파일 원장 > 코드 기본값(`CANONICAL_BUSINESSES`)**.
+
+- 관리자 직접 입력 = `obys_upload_service.update_business`. 보낸 항목은 그대로 덮어쓴다.
+- 설정 동기화 = `yeoljeong_finance_service.save_settings_persisted`. `registration_no`·`representative`·`opened_at`·`address` 네 컬럼은 **DB 값이 비어 있을 때만** 채운다. 나머지(`name`·`entity_type`·`tax_type`·`memo`·`sort_order`)는 예전처럼 덮어쓴다.
+- 자리표시자(`BUSINESS_PLACEHOLDER_VALUES` = `기초등록 필요`, `미등록`)는 빈 값과 같다 — 들어오는 값이 자리표시자면 빈 값으로 바꿔 보내고, DB 에 이미 자리표시자가 들어 있으면 "비어 있음"으로 보아 실값이 채운다.
+- SQL 은 `BUSINESS_SETTINGS_UPSERT_SQL`(`_build_business_settings_upsert_sql`)에서 만든다. 스키마 변경 없음.
+- 한계: 설정 화면에서 이미 값이 있는 네 항목을 바꿔 저장해도 반영되지 않는다. 바꾸려면 사업자 수정(`update_business`)을 쓴다.
+
+| DB 기존 값 | 들어온 값 | 결과 |
+|---|---|---|
+| 실값 | 실값 / 빈값 / 자리표시자 | 기존 실값 유지 |
+| 빈값·공백 | 실값 | 들어온 실값으로 채움 |
+| 빈값·공백 | 빈값 / 자리표시자 | 빈값 |
+| 자리표시자 | 실값 | 들어온 실값으로 채움 |
+| 자리표시자 | 빈값 / 자리표시자 | 빈값으로 정리됨(기존 자리표시자는 빈 것으로 간주돼 빈 EXCLUDED 로 교체) |
+
+확인 쿼리(등록 4항목이 비었거나 자리표시자인 사업자):
+
+```sql
+SELECT id, name, registration_no, representative, opened_at, address, updated_by, updated_at
+  FROM yeoljeong_businesses
+ WHERE deleted_at IS NULL
+   AND (COALESCE(TRIM(registration_no), '') IN ('', '기초등록 필요', '미등록')
+     OR COALESCE(TRIM(representative), '') IN ('', '기초등록 필요', '미등록')
+     OR COALESCE(TRIM(opened_at), '') = ''
+     OR COALESCE(TRIM(address), '') = '');
+```

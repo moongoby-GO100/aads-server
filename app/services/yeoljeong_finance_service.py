@@ -418,6 +418,49 @@ CANONICAL_BRANCHES: list[dict[str, Any]] = [
 # 상태이므로 needs_registration_info / missing_registration_fields 로만 내보낸다.
 BUSINESS_REGISTRATION_FIELDS = ("registrationNo", "representative", "openedAt", "address")
 CANONICAL_BUSINESS_IDS = {item["id"] for item in CANONICAL_BUSINESSES}
+
+# 사업자 등록 4항목의 자리표시자. 값이 아니라 "아직 없음" 이므로 설정 동기화(save_settings_persisted)
+# 에서는 빈 값과 같게 취급한다 — 들어오는 쪽도, DB 에 이미 들어 있는 쪽도.
+BUSINESS_PLACEHOLDER_VALUES = ("기초등록 필요", "미등록")
+# 설정 동기화가 "비어 있을 때만" 채우는 컬럼. 관리자 직접 수정(obys_upload_service.update_business)은 별개 경로.
+BUSINESS_FILL_ONLY_COLUMNS = ("registration_no", "representative", "opened_at", "address")
+
+
+def _business_registration_value(value: Any) -> str:
+    text = str(value or "").strip()
+    return "" if text in BUSINESS_PLACEHOLDER_VALUES else text
+
+
+def _build_business_settings_upsert_sql() -> str:
+    placeholders = ", ".join("'" + value.replace("'", "''") + "'" for value in BUSINESS_PLACEHOLDER_VALUES)
+    fill_only = ",\n".join(
+        f"""                               {column} = CASE
+                                   WHEN COALESCE(TRIM(yeoljeong_businesses.{column}), '') = ''
+                                     OR TRIM(yeoljeong_businesses.{column}) IN ({placeholders})
+                                   THEN EXCLUDED.{column}
+                                   ELSE yeoljeong_businesses.{column}
+                               END"""
+        for column in BUSINESS_FILL_ONLY_COLUMNS
+    )
+    return f"""
+                        INSERT INTO yeoljeong_businesses
+                            (id, entity_type, name, registration_no, representative, tax_type,
+                             opened_at, address, memo, sort_order, updated_by)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        ON CONFLICT (id) DO UPDATE
+                           SET entity_type = EXCLUDED.entity_type,
+                               name = EXCLUDED.name,
+{fill_only},
+                               tax_type = EXCLUDED.tax_type,
+                               memo = EXCLUDED.memo,
+                               sort_order = EXCLUDED.sort_order,
+                               updated_by = EXCLUDED.updated_by,
+                               updated_at = NOW(),
+                               deleted_at = NULL
+                        """
+
+
+BUSINESS_SETTINGS_UPSERT_SQL = _build_business_settings_upsert_sql()
 CANONICAL_BRANCH_NAMES = {item["name"] for item in CANONICAL_BRANCHES}
 MIA_BUSINESS_ID = "biz-mia"
 MIA_BRANCH_NAME = "열정국밥_미아점"
@@ -5029,33 +5072,15 @@ async def save_settings_persisted(payload: dict[str, Any], user: dict[str, Any])
             async with conn.transaction():
                 for sort_order, item in enumerate(settings["businesses"], start=1):
                     await conn.execute(
-                        """
-                        INSERT INTO yeoljeong_businesses
-                            (id, entity_type, name, registration_no, representative, tax_type,
-                             opened_at, address, memo, sort_order, updated_by)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                        ON CONFLICT (id) DO UPDATE
-                           SET entity_type = EXCLUDED.entity_type,
-                               name = EXCLUDED.name,
-                               registration_no = EXCLUDED.registration_no,
-                               representative = EXCLUDED.representative,
-                               tax_type = EXCLUDED.tax_type,
-                               opened_at = EXCLUDED.opened_at,
-                               address = EXCLUDED.address,
-                               memo = EXCLUDED.memo,
-                               sort_order = EXCLUDED.sort_order,
-                               updated_by = EXCLUDED.updated_by,
-                               updated_at = NOW(),
-                               deleted_at = NULL
-                        """,
+                        BUSINESS_SETTINGS_UPSERT_SQL,
                         item["id"],
                         item.get("entityType") or "individual",
                         item["name"],
-                        item.get("registrationNo") or "",
-                        item.get("representative") or "",
+                        _business_registration_value(item.get("registrationNo")),
+                        _business_registration_value(item.get("representative")),
                         item.get("taxType") or "",
-                        item.get("openedAt") or "",
-                        item.get("address") or "",
+                        _business_registration_value(item.get("openedAt")),
+                        _business_registration_value(item.get("address")),
                         item.get("memo") or "",
                         sort_order,
                         updated_by,
