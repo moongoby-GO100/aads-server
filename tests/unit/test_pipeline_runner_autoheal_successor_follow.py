@@ -85,7 +85,7 @@ def fn_file(tmp_path_factory):
 
 
 def _run(fn_file: Path, work: Path, rows: list[str], handoff: int = 1, live: bool = False,
-         max_wait: str = "300", poll: str = "30", renew: str = "ok"):
+         max_wait: str = "300", poll: str = "30", renew: str = "ok", extra_env: dict | None = None):
     work.mkdir(parents=True, exist_ok=True)
     (work / "rows").write_text("\n".join(rows) + "\n", encoding="utf-8")
     env = {
@@ -96,6 +96,7 @@ def _run(fn_file: Path, work: Path, rows: list[str], handoff: int = 1, live: boo
         "FAKE_RENEW": renew,
         "AADS_AUTOHEAL_FOLLOW_MAX_SEC": max_wait,
         "AADS_AUTOHEAL_FOLLOW_POLL_SEC": poll,
+        **(extra_env or {}),
     }
     # set -e 아래에서 호출부와 같은 형태(if out=$(f); then)로 부른다.
     cmd = (
@@ -261,7 +262,7 @@ def test_renewal_refused_stops_following_fail_closed(fn_file, tmp_path, reason):
     rows = ["5291|running|target_slot_drain|3"]
     rc, summary, slept = _run(fn_file, tmp_path, rows, max_wait="2700", renew=f"lost:{reason}")
     assert rc == 1
-    assert f"lock_lost run=#5291 reason={reason}" in summary
+    assert f"deploy_lock_lost run=#5291 reason={reason}" in summary
     assert slept == 0, "락을 잃으면 더 기다리지 않는다"
     assert len(_renew_calls(tmp_path)) == 1
 
@@ -285,9 +286,46 @@ def test_renew_api_unreachable_beyond_limit_is_fail_closed(fn_file, tmp_path):
     rows = ["5291|running|target_slot_drain|3"]
     rc, summary, slept = _run(fn_file, tmp_path, rows, max_wait="2700", renew="down")
     assert rc == 1
-    assert "lock_renew_unreachable" in summary and "fails=3" in summary
+    assert "deploy_lock_unreadable" in summary and "fails=3" in summary
     assert slept == 2 * 30
     assert len(_renew_calls(tmp_path)) == 3
+
+
+def test_unreadable_renew_closes_immediately_when_tolerance_is_one(fn_file, tmp_path):
+    rows = ["5291|running|target_slot_drain|3"]
+    rc, summary, slept = _run(fn_file, tmp_path, rows, max_wait="2700", renew="down",
+                              extra_env={"AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL": "1"})
+    assert rc == 1
+    assert "deploy_lock_unreadable run=#5291 fails=1" in summary
+    assert slept == 0
+    assert len(_renew_calls(tmp_path)) == 1
+
+
+def test_lock_abandon_reasons_are_distinct_from_each_other_and_from_timeout(fn_file, tmp_path):
+    rows = ["5291|running|target_slot_drain|3"]
+    _, lost, _ = _run(fn_file, tmp_path / "a", rows, max_wait="2700", renew="lost:not_owner")
+    _, unreadable, _ = _run(fn_file, tmp_path / "b", rows, max_wait="2700", renew="down")
+    _, timeout, _ = _run(fn_file, tmp_path / "c", rows, max_wait="60")
+    assert "deploy_lock_lost" in lost and "deploy_lock_unreadable" not in lost
+    assert "deploy_lock_unreadable" in unreadable and "deploy_lock_lost" not in unreadable
+    assert "timeout" in timeout and "deploy_lock_" not in timeout
+
+
+def test_continuous_renewal_follows_to_success_without_bluegreen_failed(fn_file, tmp_path):
+    rows = ["5291|running|target_slot_drain|3"] * 5 + ["5293|success_partial|completed|0"]
+    rc, summary, _ = _run(fn_file, tmp_path, rows, max_wait="2700")
+    assert rc == 0 and "success run=#5293" in summary
+    body = _function("deploy_job")
+    success_branch = body[body.index("elif _aads_follow_out=$(follow_autoheal_successor"):]
+    success_branch = success_branch[: success_branch.index("\n                    else\n")]
+    assert "bluegreen_failed" not in success_branch
+
+
+def test_deploy_job_records_lock_abandon_event_with_reason():
+    body = _function("deploy_job")
+    else_branch = body[body.index("AUTOHEAL_FOLLOW 결과:"):body.index("aads-server:bluegreen_failed")]
+    assert "deploy_autoheal_follow_abandoned" in else_branch
+    assert "deploy_lock_lost" in else_branch and "deploy_lock_unreadable" in else_branch
 
 
 def test_follow_start_marks_holder_for_waiters(fn_file, tmp_path):

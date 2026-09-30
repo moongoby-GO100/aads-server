@@ -4273,6 +4273,9 @@ AADS_AUTOHEAL_FOLLOW_SETTLE_SEC="${AADS_AUTOHEAL_FOLLOW_SETTLE_SEC:-90}"
 # 그래서 매 poll 마다 renew 로 TTL 을 되돌리고, 갱신이 거부되면 추적을 멈춘다(fail-closed).
 # 대기 측 상한(900s)이 추적 측(2700s)보다 짧으므로 대기 중인 잡은 holder 가 추적 중이어도
 # 먼저 deploy_lock_fail 에 닿을 수 있다 — 그래서 재큐잉 메시지에 holder 추적 표시를 남긴다.
+# 이탈 사유는 구분해 남긴다: timeout(상한 소진) / deploy_lock_lost(갱신 거부 — 다른 잡이 락을
+# 쥐었거나 만료) / deploy_lock_unreadable(갱신 응답 불능). 마지막 둘은 배포 결과가 아니라
+# 락 기인 이탈이라 deploy_job 이 runner 이벤트(deploy_autoheal_follow_abandoned)로도 남긴다.
 # 갱신 API 가 일시적으로 무응답인 경우(bluegreen 전환 중 API 재기동)는 TTL 여유(600s) 안에서만
 # 연속 AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL 회(기본 3 × poll 30s = 90s)까지 견딘다.
 AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL="${AADS_AUTOHEAL_FOLLOW_RENEW_MAX_FAIL:-3}"
@@ -4354,12 +4357,12 @@ follow_autoheal_successor() {
             renew_fail=0
         elif [[ "$lock_out" == *'"renewed":false'* ]]; then
             lock_reason=$(printf '%s' "$lock_out" | sed -n 's/.*"reason":"\([^"]*\)".*/\1/p' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)
-            echo "autoheal_follow: lock_lost run=#${run_id:-none} reason=${lock_reason:-unknown} waited=${waited}s"
+            echo "autoheal_follow: deploy_lock_lost run=#${run_id:-none} reason=${lock_reason:-unknown} waited=${waited}s"
             return 1
         else
             renew_fail=$((renew_fail + 1))
             if (( renew_fail >= renew_max )); then
-                echo "autoheal_follow: lock_renew_unreachable run=#${run_id:-none} fails=${renew_fail} waited=${waited}s"
+                echo "autoheal_follow: deploy_lock_unreadable run=#${run_id:-none} fails=${renew_fail} waited=${waited}s"
                 return 1
             fi
         fi
@@ -4737,7 +4740,7 @@ deploy_job() {
 
                 if [[ "$_release_relevant" == "true" ]]; then
                     local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
-                    local _aads_deploy_since _aads_follow_out=""
+                    local _aads_deploy_since _aads_follow_out="" _aads_follow_reason=""
                     # deploy_runs.created_at 과 비교한다 — 시계 오차를 감안해 5초 앞당긴다.
                     _aads_deploy_since=$(( $(date +%s) - 5 ))
                     log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
@@ -4757,6 +4760,12 @@ deploy_job() {
                     else
                         _aads_follow_out=$(tail -1 <<< "$_aads_follow_out")
                         log "  AUTOHEAL_FOLLOW 결과: ${_aads_follow_out:-none}"
+                        case "$_aads_follow_out" in
+                            *deploy_lock_lost*|*deploy_lock_unreadable*)
+                                _aads_follow_reason="deploy_lock_lost"
+                                [[ "$_aads_follow_out" == *deploy_lock_unreadable* ]] && _aads_follow_reason="deploy_lock_unreadable"
+                                record_runner_event "$job_id" "deploy_autoheal_follow_abandoned" "deploying" "deploying" "" "" "" "" "{\"sha\":\"${current_sha}\",\"reason\":\"${_aads_follow_reason}\"}" ;;
+                        esac
                         local _aads_deploy_tail
                         _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
                         log "  ERROR: isolated bluegreen 실패 — 기존 라우팅 유지/내부 롤백: ${_aads_deploy_tail//$'\n'/ }"
