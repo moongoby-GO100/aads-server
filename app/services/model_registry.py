@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ import asyncpg
 import httpx
 
 from app.core.db_pool import get_pool
+from app.services import cli_model_autoreg
 
 logger = logging.getLogger(__name__)
 
@@ -1223,6 +1225,13 @@ async def _fetch_kimi_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     return rows, {"status": "ok", "count": len(rows), "model_source": "discovery"}
 
 
+async def _fetch_codex_cli_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """codex CLI 가 ChatGPT 백엔드에서 받아 둔 카탈로그. 발견만 한다 — 실행가능 판정은 probe 몫."""
+    from app.services.cli_model_autoreg import read_codex_models_cache
+
+    return await asyncio.to_thread(read_codex_models_cache)
+
+
 async def discover_provider_model_rows(
     key_rows: Iterable[dict[str, Any]],
     *,
@@ -1240,6 +1249,7 @@ async def discover_provider_model_rows(
         "gemini": _fetch_gemini_models,
         "litellm": _fetch_litellm_models,
         "kimi": _fetch_kimi_models,
+        "codex": _fetch_codex_cli_models,
     }
     all_rows: list[dict[str, Any]] = []
     run_results: list[dict[str, Any]] = []
@@ -1266,7 +1276,7 @@ async def discover_provider_model_rows(
                     display_name=item.get("display_name") or item["model_id"],
                     key_state=key_state,
                     raw=item.get("raw") or {},
-                    source=f"{provider}_api",
+                    source=result.get("discovery_source") or f"{provider}_api",
                 )
                 for item in raw_rows
             ]
@@ -1283,6 +1293,11 @@ async def discover_provider_model_rows(
                 "template_model_count": len(_PROVIDER_TEMPLATES.get(provider, ())),
                 "discovered_model_count": len(discovered),
                 "model_source": result.get("model_source") or ("discovery" if discovered else "template"),
+                **{
+                    key: result[key]
+                    for key in ("discovery_source", "source_path", "fetched_at", "hidden_count")
+                    if key in result
+                },
             })
         except Exception as exc:
             logger.warning("model_registry.discovery_failed: %s: %s", provider, str(exc)[:200])
@@ -1880,6 +1895,12 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
         manual_rows = await conn.fetch(
             "SELECT provider, model_id FROM llm_models WHERE activation_source = 'manual' AND is_active = TRUE"
         )
+        # sync 이전에 이미 있던 행 — 이번 sync 에서 "새로 발견" 된 모델을 가려내는 기준.
+        existing_keys = {
+            (r["provider"], r["model_id"])
+            for r in await conn.fetch("SELECT provider, model_id FROM llm_models")
+        }
+        verified_codex_ids = await cli_model_autoreg.fetch_verified_codex_ids(conn)
     manual_active_keys = {(r["provider"], r["model_id"]) for r in manual_rows}
     template_rows, provider_rows = build_registry_snapshots(key_rows)
     key_state = _build_key_state(key_rows)
@@ -1892,6 +1913,11 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
             row["is_selectable"] = True
             row["is_executable"] = True
             row["activation_source"] = "manual"
+    cli_model_autoreg.apply_verified_codex(model_rows, verified_codex_ids)
+    # 캐시를 못 읽은 회차에는 codex_cli_cache 행을 은퇴시키지 않는다 — probe 가 세운 is_executable 을 지킨다.
+    preserve_codex_cli_rows = not any(
+        run.get("provider") == "codex" and run.get("status") == "ok" for run in discovery_runs
+    )
     review_required_providers = sorted(
         {
             row["provider"]
@@ -2005,8 +2031,10 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                         updated_at = NOW()
                     WHERE activation_source <> 'manual'
                       AND COALESCE(metadata->>'sync_token', '') <> $1
+                      AND NOT ($2::boolean AND COALESCE(discovery_source, '') = 'codex_cli_cache')
                     """,
                     sync_token,
+                    preserve_codex_cli_rows,
                 )
 
                 await append_key_audit_log(
@@ -2053,12 +2081,28 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                 "review_required_providers": review_required_providers,
             }
 
+    # 후보 자동등록은 본 sync 트랜잭션 밖에서 한다 — 후보 테이블 문제로 레지스트리 sync 가 롤백되면 안 된다.
+    cli_autoreg: dict[str, Any] = {}
+    try:
+        async with pool.acquire() as conn:
+            cli_autoreg = await cli_model_autoreg.autoregister_after_sync(
+                conn,
+                model_rows=model_rows,
+                existing_keys=existing_keys,
+                template_codex_ids=_PROVIDER_MODELS.get("codex", ()),
+                verified_codex_ids=verified_codex_ids,
+            )
+    except Exception as exc:
+        logger.warning("model_registry.cli_autoreg_failed: %s", str(exc)[:200])
+        cli_autoreg = {"error": str(exc)[:200]}
+
     invalidate_registry_cache()
     return {
         "ok": True,
         "models_synced": len(model_rows),
         "providers": provider_rows,
         "discovery": discovery_runs,
+        "cli_autoreg": cli_autoreg,
         "normalized_providers": normalized_providers,
         "review_required_providers": review_required_providers,
     }

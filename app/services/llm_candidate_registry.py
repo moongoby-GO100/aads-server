@@ -17,6 +17,9 @@ PRICE_STATUSES = ("official_verified", "unverified_official", "estimated")
 PRICING_KINDS = ("api_per_token", "subscription", "per_image", "per_minute")
 TRAINING_USES = ("not_used", "used_for_training", "unknown")
 CANDIDATE_STATUSES = ("candidate", "testing", "approved", "rejected", "retired")
+# CLI 발견·실호출 검증 상태 (migrations/20260930_cli_model_autoreg.sql)
+CLI_PROBE_STATUSES = ("discovered", "verified", "blocked_account", "probe_failed")
+CANDIDATE_STATUSES = CANDIDATE_STATUSES + CLI_PROBE_STATUSES
 VERDICTS = ("equivalent", "candidate_better", "candidate_worse", "insufficient_sample", "not_run")
 # 표본이 선언된 최소값 미달일 때 허용되는 판정. 결론(동등/우세/열위)은 미검증이다.
 UNDERSAMPLED_VERDICTS = ("insufficient_sample", "not_run")

@@ -471,6 +471,20 @@ async def _get_db_model_config(size: str) -> list[str]:
                 """,
                 requested_size,
             )
+            # openai 행은 _routing_model 이 codex:<id> 로 바꿔 codex CLI 로 실행한다.
+            # openai API 에만 있는 모델(2026-09-30 gpt-6.1-sol: ChatGPT 계정 codex 400)이
+            # 체인에 들어가지 않도록 codex 쪽 llm_models 행이 실행가능할 때만 남긴다.
+            codex_executable: set[str] | None = None
+            if any((row["provider"] or "").strip().lower() == "openai" for row in rows):
+                try:
+                    codex_rows = await conn.fetch(
+                        "SELECT model_id FROM llm_models WHERE provider = 'codex' AND is_executable = TRUE"
+                    )
+                    codex_executable = {str(r["model_id"]) for r in codex_rows}
+                except Exception as exc:
+                    # 조회 실패 시 판정 불가 — 안전 쪽(제외)으로 둔다.
+                    logger.warning("pipeline_c_codex_executable_lookup_failed error=%s", str(exc)[:120])
+                    codex_executable = set()
         models: list[str] = []
         seen: set[str] = set()
         for row in rows:
@@ -480,6 +494,17 @@ async def _get_db_model_config(size: str) -> list[str]:
                 else str(row["model"] or "").strip()
             )
             if not raw_model or raw_model in seen:
+                continue
+            if (
+                (row["provider"] or "").strip().lower() == "openai"
+                and raw_model.startswith("codex:")
+                and raw_model[len("codex:"):] not in (codex_executable or set())
+            ):
+                logger.info(
+                    "pipeline_c_model_chain_excluded model=%s provider=openai reason=codex_not_executable "
+                    "(llm_models codex 행 없음 또는 is_executable=false — codex CLI 실호출 검증 전)",
+                    raw_model,
+                )
                 continue
             seen.add(raw_model)
             models.append(raw_model)

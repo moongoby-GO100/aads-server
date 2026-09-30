@@ -84,6 +84,8 @@ app/data/yeoljeong_finance/onboarding_documents.json
 app/data/yeoljeong_finance/pc_agent_collection_queue.json
 app/data/yeoljeong_finance/settings.json
 app/data/yeoljeong_finance/uploads/
+# codex CLI 카탈로그 사본 — scripts/codex_model_probe.py 가 매시 갱신(런타임 산출물)
+app/data/codex_cli/
 card310_entry_pause_mode
 card310_entry_paused_exit_only,
 nginx-aads-upstream.conf

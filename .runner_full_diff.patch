@@ -1,1720 +1,1409 @@
-diff --git a/HANDOVER.md b/HANDOVER.md
-index db957a8d..c4987603 100644
---- a/HANDOVER.md
-+++ b/HANDOVER.md
-@@ -1,3 +1,14 @@
-+## 2026-09-30 — 오비서 계약서 서명요청 알림 + 서명본 PDF 보관·교부 (AADS-OBYS-CONTRACT-NOTIFY-PDF-20260930)
-+
-+- 서명요청(`request-signature`) 뒤 알림 발송·채널별 이력(`yeoljeong_contract_notifications`), 서명(`contracts/signing`) 뒤 `signed_snapshot` 기반 PDF 보관(`OBYS_UPLOAD_ROOT/<tenant>/contracts/`)·`contract_signed` 알림. 둘 다 실패해도 서명요청/서명은 성공으로 남는다.
-+- 신규 API: `resend-signature-notice`(관리자, requested, 5분 제한), `GET signed-pdf`(관리자·당사자, 그 외 403, 당사자 다운로드=교부 기록), `POST signed-pdf/regenerate`(관리자).
-+- 외부 발송은 `OBYS_CONTRACT_NOTIFY_CHANNELS` opt-in(기본 `inapp`). 알림톡은 템플릿 env 있을 때만.
-+- 신규 모듈 `app/services/yeoljeong_contract_{notify,pdf}.py`, 폰트 `app/assets/fonts/NanumGothic-Regular.ttf`(OFL), 의존성 `reportlab==4.4.10`(pyproject·runtime.lock).
-+- 마이그레이션 `migrations/20260930_obys_contract_notify_signed_pdf.sql` — 오비서 업무 DB 전용·스키마 추가만, AADS 자동 적용은 baseline HOLD. 진아서버 적용·반영은 별도 승인.
-+- 테스트 `tests/unit/test_obys_contract_notify_pdf.py` 14건. 현 운영 이미지엔 reportlab 이 없어 PDF 3건은 skip(11 passed/3 skipped), reportlab 을 얹은 testdeps 로는 14 passed. 이미지 재빌드 후 skip 없이 돈다.
-+- 운영 문서: `docs/operations/OBYS_CONTRACT_NOTIFY_SIGNED_PDF.md`.
-+- 기존 실패(이번 변경 무관, HEAD 에서도 동일): test_yeoljeong_finance_api 은행 흐름 4건, test_obys_db_separation::test_finance_service_keeps_its_own_priority_chain_and_feature_flag.
-+
- ## 2026-09-29 — deploy.sh 조상 릴리스 거부 가드 R2 (AADS-DEPLOY-ANCESTOR-RELEASE-GUARD-R2-20260929)
- 
- - R1(runner-42338110, 3362daa7)은 리뷰 0.858·테스트 통과 후 stale_base 로 푸시되지 못했다. 설계 변경 없이 최신 main(cac17f1a, 0543b4a9·389882dd 포함) 위에 같은 내용을 다시 얹었다.
-diff --git a/app/api/obys_finance.py b/app/api/obys_finance.py
-index 1cec76f9..0340573c 100644
---- a/app/api/obys_finance.py
-+++ b/app/api/obys_finance.py
-@@ -620,7 +620,24 @@ async def save_contract(payload: GenericPayload, current_user: dict = Depends(ge
- 
- @router.post("/contracts/{contract_id}/request-signature")
- async def request_contract_signature(contract_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
--    return {"contract": await run_in_threadpool(svc.request_contract_signature, contract_id, current_user)}
-+    # 알림 실패는 200 을 유지하고 notify.status 로만 알린다.
-+    return await run_in_threadpool(svc.request_contract_signature_with_notice, contract_id, current_user)
-+
-+
-+@router.post("/contracts/{contract_id}/resend-signature-notice")
-+async def resend_contract_signature_notice(contract_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-+    return await run_in_threadpool(svc.resend_contract_signature_notice, contract_id, current_user)
-+
-+
-+@router.get("/contracts/{contract_id}/signed-pdf")
-+async def download_signed_contract_pdf(contract_id: str, current_user: dict = Depends(get_current_user)) -> FileResponse:
-+    path, filename = await run_in_threadpool(svc.signed_contract_pdf_for_download, contract_id, current_user)
-+    return FileResponse(path, media_type="application/pdf", filename=filename, headers={"Cache-Control": "no-store"})
-+
-+
-+@router.post("/contracts/{contract_id}/signed-pdf/regenerate")
-+async def regenerate_signed_contract_pdf(contract_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-+    return await run_in_threadpool(svc.regenerate_signed_contract_pdf, contract_id, current_user)
- 
- 
- @router.get("/contracts/signing/{token}")
-@@ -641,7 +658,7 @@ async def sign_contract(
-         "audit_ip": client_ip[:64],
-         "audit_user_agent": str(request.headers.get("user-agent") or "")[:512],
-     }
--    return {"contract": await run_in_threadpool(svc.sign_contract, sign_payload, current_user)}
-+    return await run_in_threadpool(svc.sign_contract_and_deliver, sign_payload, current_user)
- 
- 
- @router.delete("/contracts/{contract_id}")
-diff --git a/app/assets/fonts/NanumGothic-OFL.txt b/app/assets/fonts/NanumGothic-OFL.txt
+diff --git a/.gitignore b/.gitignore
+index aa79d522..61a8ce5f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -84,6 +84,8 @@ app/data/yeoljeong_finance/onboarding_documents.json
+ app/data/yeoljeong_finance/pc_agent_collection_queue.json
+ app/data/yeoljeong_finance/settings.json
+ app/data/yeoljeong_finance/uploads/
++# codex CLI 카탈로그 사본 — scripts/codex_model_probe.py 가 매시 갱신(런타임 산출물)
++app/data/codex_cli/
+ card310_entry_pause_mode
+ card310_entry_paused_exit_only,
+ nginx-aads-upstream.conf
+diff --git a/app/services/cli_model_autoreg.py b/app/services/cli_model_autoreg.py
 new file mode 100644
-index 00000000..69ff4015
+index 00000000..3d5359a1
 --- /dev/null
-+++ b/app/assets/fonts/NanumGothic-OFL.txt
-@@ -0,0 +1,96 @@
-+Copyright (c) 2010, NHN Corporation (http://www.nhncorp.com),
-+with Reserved Font Name Nanum, Naver Nanum, NanumGothic, Naver 
-+NanumGothic, NanumMyeongjo, Naver NanumMyeongjo, NanumBrush, Naver
-+NanumBrush, NanumPen, Naver NanumPen.
++++ b/app/services/cli_model_autoreg.py
+@@ -0,0 +1,295 @@
++"""CLI 모델(codex CLI) 신규 모델 자동등록 (AADS-CLI-MODEL-AUTOREG-20260930).
 +
-+This Font Software is licensed under the SIL Open Font License, Version 1.1.
-+This license is copied below, and is also available with a FAQ at:
-+http://scripts.sil.org/OFL
++발견과 실행가능 판정을 분리한다. codex CLI 카탈로그(models_cache.json)에 있다고
++실행 가능한 것이 아니다 — 2026-09-30 gpt-6.1-sol 은 목록(visibility=list)에 있었지만
++`codex exec -m gpt-6.1-sol` 은 "not supported when using Codex with a ChatGPT account"
++400 으로 실패했다.
 +
++    발견(여기, 컨테이너 sync)       → llm_models codex 행 inactive/non-executable
++                                     + llm_model_candidates status='discovered'
++    실호출 검증(scripts/codex_model_probe.py, 호스트) → verified | blocked_account | probe_failed
++    라우팅 후보(여기)               → model_routing_preferences(runner_llm) is_enabled=false 로만 추가
 +
-+-----------------------------------------------------------
-+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
-+-----------------------------------------------------------
-+
-+PREAMBLE
-+The goals of the Open Font License (OFL) are to stimulate worldwide
-+development of collaborative font projects, to support the font creation
-+efforts of academic and linguistic communities, and to provide a free and
-+open framework in which fonts may be shared and improved in partnership
-+with others.
-+
-+The OFL allows the licensed fonts to be used, studied, modified and
-+redistributed freely as long as they are not sold by themselves. The
-+fonts, including any derivative works, can be bundled, embedded, 
-+redistributed and/or sold with any software provided that any reserved
-+names are not used by derivative works. The fonts and derivatives,
-+however, cannot be released under any other type of license. The
-+requirement for fonts to remain under this license does not apply
-+to any document created using the fonts or their derivatives.
-+
-+DEFINITIONS
-+"Font Software" refers to the set of files released by the Copyright
-+Holder(s) under this license and clearly marked as such. This may
-+include source files, build scripts and documentation.
-+
-+"Reserved Font Name" refers to any names specified as such after the
-+copyright statement(s).
-+
-+"Original Version" refers to the collection of Font Software components as
-+distributed by the Copyright Holder(s).
-+
-+"Modified Version" refers to any derivative made by adding to, deleting,
-+or substituting -- in part or in whole -- any of the components of the
-+Original Version, by changing formats or by porting the Font Software to a
-+new environment.
-+
-+"Author" refers to any designer, engineer, programmer, technical
-+writer or other person who contributed to the Font Software.
-+
-+PERMISSION & CONDITIONS
-+Permission is hereby granted, free of charge, to any person obtaining
-+a copy of the Font Software, to use, study, copy, merge, embed, modify,
-+redistribute, and sell modified and unmodified copies of the Font
-+Software, subject to the following conditions:
-+
-+1) Neither the Font Software nor any of its individual components,
-+in Original or Modified Versions, may be sold by itself.
-+
-+2) Original or Modified Versions of the Font Software may be bundled,
-+redistributed and/or sold with any software, provided that each copy
-+contains the above copyright notice and this license. These can be
-+included either as stand-alone text files, human-readable headers or
-+in the appropriate machine-readable metadata fields within text or
-+binary files as long as those fields can be easily viewed by the user.
-+
-+3) No Modified Version of the Font Software may use the Reserved Font
-+Name(s) unless explicit written permission is granted by the corresponding
-+Copyright Holder. This restriction only applies to the primary font name as
-+presented to the users.
-+
-+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
-+Software shall not be used to promote, endorse or advertise any
-+Modified Version, except to acknowledge the contribution(s) of the
-+Copyright Holder(s) and the Author(s) or with their explicit written
-+permission.
-+
-+5) The Font Software, modified or unmodified, in part or in whole,
-+must be distributed entirely under this license, and must not be
-+distributed under any other license. The requirement for fonts to
-+remain under this license does not apply to any document created
-+using the Font Software.
-+
-+TERMINATION
-+This license becomes null and void if any of the above conditions are
-+not met.
-+
-+DISCLAIMER
-+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
-+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
-+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
-+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
-+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
-+OTHER DEALINGS IN THE FONT SOFTWARE.
-diff --git a/app/assets/fonts/NanumGothic-Regular.ttf b/app/assets/fonts/NanumGothic-Regular.ttf
-new file mode 100644
-index 00000000..2aa2b209
-Binary files /dev/null and b/app/assets/fonts/NanumGothic-Regular.ttf differ
-diff --git a/app/services/yeoljeong_contract_notify.py b/app/services/yeoljeong_contract_notify.py
-new file mode 100644
-index 00000000..b49ff905
---- /dev/null
-+++ b/app/services/yeoljeong_contract_notify.py
-@@ -0,0 +1,195 @@
-+"""계약서 서명요청/서명완료 알림 발송 (오비서/열정국밥).
-+
-+채널은 사내 알림센터(inapp) → SMS → 알림톡 순서로 본다. 외부 발송(SMS·알림톡)은
-+``OBYS_CONTRACT_NOTIFY_CHANNELS`` 로 opt-in 해야만 나간다. 기본값은 ``inapp`` 이라
-+기본 설정에서는 실제 직원에게 문자가 가지 않는다.
-+
-+이 모듈은 발송만 하고 저장은 하지 않는다. 발송 결과(채널별 sent/failed/skipped)를
-+돌려주면 호출자(yeoljeong_finance_service)가 이력 테이블에 남긴다.
-+어떤 채널이 실패해도 예외를 밖으로 던지지 않는다 — 알림 실패가 서명 요청을
-+실패시키면 안 된다.
++활성화는 CEO 설정 UI 토글로만 한다. 이 모듈은 기존 행을 바꾸지 않는다(INSERT … DO NOTHING).
++asyncpg 에 의존하지 않는다 — conn 은 호출자가 넘긴다.
 +"""
 +from __future__ import annotations
 +
++import json
 +import logging
 +import os
-+import re
-+from typing import Any
++from typing import Any, Iterable, Mapping, Sequence
 +
 +logger = logging.getLogger(__name__)
 +
-+CHANNELS_ENV = "OBYS_CONTRACT_NOTIFY_CHANNELS"
-+DEFAULT_CHANNELS = ("inapp",)
-+KNOWN_CHANNELS = ("inapp", "sms", "alimtalk")
-+SIGN_URL_ENV = "OBYS_CONTRACT_SIGN_BASE_URL"
-+ALIMTALK_TEMPLATE_ENV = {
-+    "signature_requested": "OBYS_CONTRACT_ALIMTALK_TEMPLATE_SIGN_REQUEST",
-+    "signed": "OBYS_CONTRACT_ALIMTALK_TEMPLATE_SIGNED",
-+}
-+NOTIFICATION_TYPES = {
-+    "signature_requested": "contract_signature_requested",
-+    "signed": "contract_signed",
-+}
++CODEX_CACHE_ENV = "AADS_CODEX_MODELS_CACHE"
++CODEX_CACHE_DEFAULT = "/root/.codex/models_cache.json"
++# 컨테이너에는 /root/.codex 가 마운트돼 있지 않다(2026-09-30 docker inspect 실측).
++# 호스트 probe 가 민감정보(identity/etag)를 뺀 사본을 app/data 아래(컨테이너 /app/app/data 로 마운트)에 둔다.
++CODEX_CACHE_MIRROR_ENV = "AADS_CODEX_MODELS_CACHE_MIRROR"
++CODEX_CACHE_MIRROR_DEFAULT = "/app/app/data/codex_cli/models_cache.json"
++
++DISCOVERY_SOURCE = "codex_cli_cache"
++RUNNER_ROUTE_KEY = "runner_llm"
++AUTO_DISCOVERY_ACTOR = "auto_discovery"
++# 러너가 실제로 태울 수 있는 CLI 계열만 라우팅 후보로 올린다(Claude CLI / codex CLI).
++RUNNER_CANDIDATE_PROVIDERS = frozenset({"anthropic", "openai", "codex"})
++RUNNER_CANDIDATE_DISPLAY_ORDER = 900
++# 템플릿/수동 행은 "새로 발견" 이 아니다.
++_NON_DISCOVERY_SOURCES = frozenset({"", "template", "accepted_alias", "manual_seed"})
++_RAW_KEYS = ("slug", "display_name", "visibility", "supported_in_api", "context_window", "priority")
++VERIFIED_ALERT_TITLE = "신규 CLI 모델 실행 확인 — 설정에서 활성화 가능"
 +
 +
-+def enabled_channels() -> set[str]:
-+    raw = str(os.getenv(CHANNELS_ENV) or "").strip().lower()
-+    parts = {part.strip() for part in re.split(r"[,\s]+", raw) if part.strip()}
-+    selected = {part for part in parts if part in KNOWN_CHANNELS}
-+    unknown = parts - selected
-+    if unknown:
-+        logger.warning("%s 에 알 수 없는 채널 무시: %s", CHANNELS_ENV, ",".join(sorted(unknown)))
-+    return selected or set(DEFAULT_CHANNELS)
++def codex_cache_paths() -> list[str]:
++    paths = [
++        (os.getenv(CODEX_CACHE_ENV) or CODEX_CACHE_DEFAULT).strip(),
++        (os.getenv(CODEX_CACHE_MIRROR_ENV) or CODEX_CACHE_MIRROR_DEFAULT).strip(),
++    ]
++    out: list[str] = []
++    for path in paths:
++        if path and path not in out:
++            out.append(path)
++    return out
 +
 +
-+def mask_email(email: str) -> str:
-+    email = str(email or "").strip().lower()
-+    if "@" not in email:
-+        return "***" if email else ""
-+    local, domain = email.split("@", 1)
-+    return f"{local[:2]}{'*' * max(1, len(local) - 2)}@{domain}"
++def parse_codex_models_cache(payload: Any) -> tuple[list[dict[str, Any]], int]:
++    """models[] 중 visibility=='list' 만 돌려준다. (rows, hidden_count)."""
++    models = payload.get("models") if isinstance(payload, Mapping) else None
++    rows: list[dict[str, Any]] = []
++    hidden = 0
++    seen: set[str] = set()
++    for item in models or []:
++        if not isinstance(item, Mapping):
++            continue
++        slug = str(item.get("slug") or "").strip()
++        if not slug:
++            continue
++        if str(item.get("visibility") or "").strip().lower() != "list":
++            hidden += 1
++            continue
++        if slug in seen:
++            continue
++        seen.add(slug)
++        raw = {key: item.get(key) for key in _RAW_KEYS if key in item}
++        rows.append({
++            "model_id": slug,
++            "display_name": str(item.get("display_name") or slug),
++            "raw": raw,
++        })
++    return rows, hidden
 +
 +
-+def mask_phone(phone: str) -> str:
-+    """수신번호 원문은 저장하지 않는다. 7자리 미만이면 전부 가린다."""
-+    digits = re.sub(r"\D+", "", str(phone or ""))
-+    if not digits:
-+        return ""
-+    if len(digits) < 7:
-+        return "***"
-+    return f"{digits[:3]}-****-{digits[-4:]}"
-+
-+
-+def _phone_digits(contract: dict[str, Any]) -> str:
-+    return re.sub(r"\D+", "", str(contract.get("employee_phone") or ""))
-+
-+
-+def sign_url(contract: dict[str, Any]) -> str:
-+    base = str(os.getenv(SIGN_URL_ENV) or "").strip()
-+    token = str(contract.get("sign_token") or "")
-+    if not base or not token:
-+        return ""
-+    separator = "&" if "?" in base else "?"
-+    return f"{base}{separator}yf_contract_token={token}"
-+
-+
-+def compose_message(contract: dict[str, Any], event: str) -> tuple[str, str]:
-+    """(제목, 본문). 외부 채널 본문에는 급여 등 계약 조건을 넣지 않는다."""
-+    name = str(contract.get("employee_name") or "").strip() or "직원"
-+    title = str(contract.get("print_title") or "계약서").strip()
-+    workplace = str(contract.get("branch") or contract.get("employer_name") or "").strip()
-+    where = f"[{workplace}] " if workplace else ""
-+    if event == "signed":
-+        return (
-+            f"{title} 서명 완료",
-+            f"{where}{name}님, {title} 전자서명이 완료되었습니다. "
-+            "오비서 앱의 계약서 메뉴에서 서명본 PDF 를 내려받아 보관하십시오.",
-+        )
-+    link = sign_url(contract)
-+    body = f"{where}{name}님, {title} 서명 요청이 도착했습니다. 오비서 앱에 본인 계정으로 로그인해 내용을 확인하고 서명해 주십시오."
-+    if link:
-+        body += f"\n{link}"
-+    return f"{title} 서명 요청", body
-+
-+
-+def _result(channel: str, status: str, target_masked: str, error_detail: str = "") -> dict[str, Any]:
-+    return {
-+        "channel": channel,
-+        "status": status,
-+        "target_masked": target_masked,
-+        "error_detail": str(error_detail or "")[:500],
++def read_codex_models_cache(paths: Sequence[str] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
++    """캐시를 읽는다. 읽을 수 없으면 조용히 넘기지 않고 status=unavailable + 사유를 돌려준다."""
++    reasons: list[str] = []
++    for path in list(paths or codex_cache_paths()):
++        try:
++            with open(path, "r", encoding="utf-8") as fh:
++                payload = json.load(fh)
++        except FileNotFoundError:
++            reasons.append(f"not_found:{path}")
++            continue
++        except PermissionError:
++            reasons.append(f"permission_denied:{path}")
++            continue
++        except (OSError, ValueError) as exc:
++            reasons.append(f"unreadable:{path}:{type(exc).__name__}")
++            continue
++        if not isinstance(payload, Mapping) or not isinstance(payload.get("models"), list):
++            reasons.append(f"invalid_format:{path}")
++            continue
++        rows, hidden = parse_codex_models_cache(payload)
++        return rows, {
++            "status": "ok",
++            "count": len(rows),
++            "hidden_count": hidden,
++            "source_path": path,
++            "fetched_at": payload.get("fetched_at"),
++            "client_version": payload.get("client_version"),
++            "discovery_source": DISCOVERY_SOURCE,
++            "runtime_executable": False,
++            "auto_discovery_supported": True,
++            "discovery_requirement": "codex CLI models_cache.json (host) 또는 probe 가 둔 사본",
++            "model_source": "discovery",
++        }
++    return [], {
++        "status": "unavailable",
++        "count": 0,
++        "error": "; ".join(reasons) or "no_path",
++        "discovery_source": DISCOVERY_SOURCE,
++        "runtime_executable": False,
++        "auto_discovery_supported": False,
++        "discovery_requirement": f"{CODEX_CACHE_ENV} 또는 {CODEX_CACHE_MIRROR_ENV} 경로의 파일",
++        "model_source": "template",
 +    }
 +
 +
-+async def dispatch(contract: dict[str, Any], event: str) -> list[dict[str, Any]]:
-+    """채널별로 발송을 시도하고 결과 목록을 돌려준다. 예외를 던지지 않는다."""
-+    if event not in NOTIFICATION_TYPES:
-+        raise ValueError(f"unknown contract notify event: {event}")
-+    channels = enabled_channels()
-+    title, body = compose_message(contract, event)
-+    email = str(contract.get("employee_email") or "").strip().lower()
-+    phone = _phone_digits(contract)
-+    results: list[dict[str, Any]] = []
++def is_codex_cli_row(row: Mapping[str, Any]) -> bool:
++    return row.get("provider") == "codex" and row.get("discovery_source") == DISCOVERY_SOURCE
 +
-+    # 1) 사내 알림센터 — 기존 알림센터 INSERT 경로를 그대로 쓴다.
-+    if "inapp" not in channels:
-+        results.append(_result("inapp", "skipped", mask_email(email), "channel_disabled"))
-+    elif not email:
-+        results.append(_result("inapp", "skipped", "", "no_employee_email"))
-+    else:
-+        try:
-+            from app.services import yeoljeong_ops_service
 +
-+            await yeoljeong_ops_service.create_notification(
-+                business_id=str(contract.get("business_id") or ""),
-+                target_user=email,
-+                notification_type=NOTIFICATION_TYPES[event],
-+                title=title,
-+                body=compose_message({**contract, "sign_token": ""}, event)[1],
-+                reference_type="contract",
-+                reference_id=str(contract.get("id") or ""),
++def apply_verified_codex(model_rows: Iterable[dict[str, Any]], verified_ids: set[str]) -> int:
++    """probe 가 verified 로 판정한 codex 행은 sync 가 다시 non-executable 로 덮지 않게 한다."""
++    changed = 0
++    for row in model_rows:
++        if not is_codex_cli_row(row) or row.get("model_id") not in verified_ids:
++            continue
++        row["is_executable"] = True
++        row["is_selectable"] = True
++        row["verification_status"] = "verified"
++        changed += 1
++    return changed
++
++
++def select_new_codex_rows(
++    model_rows: Iterable[Mapping[str, Any]],
++    *,
++    template_ids: Iterable[str],
++    existing_keys: set[tuple[str, str]],
++) -> list[Mapping[str, Any]]:
++    """템플릿에도, sync 이전 llm_models codex 행에도 없는 codex_cli_cache 발견분."""
++    templates = set(template_ids)
++    return [
++        row for row in model_rows
++        if is_codex_cli_row(row)
++        and row["model_id"] not in templates
++        and ("codex", row["model_id"]) not in existing_keys
++    ]
++
++
++def select_runner_candidates(
++    model_rows: Iterable[Mapping[str, Any]],
++    *,
++    existing_keys: set[tuple[str, str]],
++    verified_codex_ids: Iterable[str] = (),
++) -> list[tuple[str, str]]:
++    """runner_llm 에 비활성 후보로 올릴 (provider, model_id).
++
++    - API discovery(openai_api/anthropic_api)로 이번 sync 에 처음 llm_models 에 들어온 실행가능 모델
++    - probe 로 verified 된 codex CLI 모델
++    """
++    picked: list[tuple[str, str]] = []
++    for row in model_rows:
++        provider = str(row.get("provider") or "")
++        model_id = str(row.get("model_id") or "")
++        key = (provider, model_id)
++        if provider not in RUNNER_CANDIDATE_PROVIDERS or provider == "codex" or not model_id:
++            continue
++        if str(row.get("discovery_source") or "") in _NON_DISCOVERY_SOURCES:
++            continue
++        if key in existing_keys or not row.get("is_executable"):
++            continue
++        if key not in picked:
++            picked.append(key)
++    for model_id in sorted(set(verified_codex_ids)):
++        key = ("codex", model_id)
++        if key not in picked:
++            picked.append(key)
++    return picked
++
++
++async def fetch_verified_codex_ids(conn: Any) -> set[str]:
++    try:
++        rows = await conn.fetch(
++            "SELECT model_id FROM llm_model_candidates WHERE provider = 'codex' AND status = 'verified'"
++        )
++    except Exception as exc:  # 테이블/컬럼 미적용 환경에서도 sync 는 계속한다.
++        logger.warning("cli_model_autoreg.verified_lookup_failed: %s", str(exc)[:160])
++        return set()
++    return {str(row["model_id"]) for row in rows or []}
++
++
++async def register_codex_candidates(conn: Any, rows: Sequence[Mapping[str, Any]]) -> list[str]:
++    """llm_model_candidates 에 status='discovered' 로 넣는다. 이미 있으면 건드리지 않는다."""
++    inserted: list[str] = []
++    for row in rows:
++        raw = (row.get("metadata") or {}).get("raw") if isinstance(row.get("metadata"), Mapping) else {}
++        result = await conn.fetch(
++            """
++            INSERT INTO llm_model_candidates (
++                provider, model_id, product_name, surface_scope, pricing_kind,
++                price_status, training_use, status, discovery_source, notes
 +            )
-+            results.append(_result("inapp", "sent", mask_email(email)))
-+        except Exception as exc:  # noqa: BLE001 — 알림 실패는 기록만 한다
-+            logger.warning("contract notify inapp failed: contract=%s err=%s", contract.get("id"), type(exc).__name__)
-+            results.append(_result("inapp", "failed", mask_email(email), f"{type(exc).__name__}: {exc}"))
++            VALUES ('codex', $1, $2, ARRAY['terminal_cli','runner']::TEXT[], 'subscription',
++                    'estimated', 'unknown', 'discovered', $3, $4)
++            ON CONFLICT (provider, model_id) DO NOTHING
++            RETURNING model_id
++            """,
++            row["model_id"],
++            f"{row.get('display_name') or row['model_id']} (codex CLI)",
++            DISCOVERY_SOURCE,
++            "codex CLI models_cache 자동 발견. 실호출 검증 전 — scripts/codex_model_probe.py 가 판정한다. "
++            f"supported_in_api={(raw or {}).get('supported_in_api')}",
++        )
++        inserted.extend(str(r["model_id"]) for r in result or [])
++    return inserted
 +
-+    # 외부 채널이 꺼져 있으면 알리고 클라이언트를 아예 건드리지 않는다.
-+    aligo = None
-+    if channels & {"sms", "alimtalk"}:
-+        try:
-+            from app.services import aligo_client as aligo
-+        except Exception as exc:  # noqa: BLE001
-+            logger.warning("aligo client import failed: %s", exc)
 +
-+    # 2) SMS
-+    if "sms" not in channels:
-+        results.append(_result("sms", "skipped", mask_phone(phone), "channel_disabled"))
-+    elif aligo is None or not aligo.is_available():
-+        results.append(_result("sms", "skipped", mask_phone(phone), "aligo_unavailable"))
-+    elif not phone:
-+        results.append(_result("sms", "skipped", "", "no_employee_phone"))
-+    else:
-+        try:
-+            response = await aligo.send_sms(phone, body, title=title)
-+            if str(response.get("result_code")) == "1":
-+                results.append(_result("sms", "sent", mask_phone(phone)))
-+            else:
-+                results.append(
-+                    _result("sms", "failed", mask_phone(phone), f"result_code={response.get('result_code')} {response.get('message') or ''}")
++async def register_runner_llm_candidates(conn: Any, candidates: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
++    """model_routing_preferences(runner_llm) 에 is_enabled=false 로만 추가한다. 기존 행 불변."""
++    inserted: list[tuple[str, str]] = []
++    for provider, model_id in candidates:
++        result = await conn.fetch(
++            """
++            INSERT INTO model_routing_preferences (
++                route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_by
++            )
++            VALUES ($1, $2, $3, $4, FALSE, FALSE, $5, $6)
++            ON CONFLICT (route_key, provider, model_id) DO NOTHING
++            RETURNING provider, model_id
++            """,
++            RUNNER_ROUTE_KEY,
++            provider,
++            model_id,
++            RUNNER_CANDIDATE_DISPLAY_ORDER,
++            "자동 발견 후보 — 설정 UI 에서 활성화해야 러너가 사용",
++            AUTO_DISCOVERY_ACTOR,
++        )
++        inserted.extend((str(r["provider"]), str(r["model_id"])) for r in result or [])
++    return inserted
++
++
++async def _notify_verified(models: Sequence[str]) -> None:
++    if not models:
++        return
++    try:
++        from app.services.ohvis_alert import INFO, notify
++
++        await notify(
++            VERIFIED_ALERT_TITLE,
++            "codex CLI 실호출 검증 통과: " + ", ".join(models)
++            + " — runner_llm 에 비활성 후보로 등록됨. 설정 > 모델 라우팅에서 켜면 러너가 사용한다.",
++            severity=INFO,
++            category="llm_model",
++            project="AADS",
++        )
++    except Exception as exc:
++        logger.warning("cli_model_autoreg.notify_failed: %s", str(exc)[:160])
++
++
++async def autoregister_after_sync(
++    conn: Any,
++    *,
++    model_rows: Sequence[Mapping[str, Any]],
++    existing_keys: set[tuple[str, str]],
++    template_codex_ids: Iterable[str],
++    verified_codex_ids: set[str],
++) -> dict[str, Any]:
++    new_codex_rows = select_new_codex_rows(model_rows, template_ids=template_codex_ids, existing_keys=existing_keys)
++    codex_inserted = await register_codex_candidates(conn, new_codex_rows)
++    runner_candidates = select_runner_candidates(
++        model_rows, existing_keys=existing_keys, verified_codex_ids=verified_codex_ids
++    )
++    runner_inserted = await register_runner_llm_candidates(conn, runner_candidates)
++    newly_verified = [model_id for provider, model_id in runner_inserted if provider == "codex"]
++    await _notify_verified(newly_verified)
++    summary = {
++        "codex_new": [row["model_id"] for row in new_codex_rows],
++        "codex_candidates_inserted": codex_inserted,
++        "runner_candidates_inserted": [f"{p}:{m}" for p, m in runner_inserted],
++        "verified_notified": newly_verified,
++    }
++    if codex_inserted or runner_inserted:
++        logger.info("cli_model_autoreg.registered %s", summary)
++    return summary
+diff --git a/app/services/llm_candidate_registry.py b/app/services/llm_candidate_registry.py
+index e8f41dc6..95bf5014 100644
+--- a/app/services/llm_candidate_registry.py
++++ b/app/services/llm_candidate_registry.py
+@@ -17,6 +17,9 @@ PRICE_STATUSES = ("official_verified", "unverified_official", "estimated")
+ PRICING_KINDS = ("api_per_token", "subscription", "per_image", "per_minute")
+ TRAINING_USES = ("not_used", "used_for_training", "unknown")
+ CANDIDATE_STATUSES = ("candidate", "testing", "approved", "rejected", "retired")
++# CLI 발견·실호출 검증 상태 (migrations/20260930_cli_model_autoreg.sql)
++CLI_PROBE_STATUSES = ("discovered", "verified", "blocked_account", "probe_failed")
++CANDIDATE_STATUSES = CANDIDATE_STATUSES + CLI_PROBE_STATUSES
+ VERDICTS = ("equivalent", "candidate_better", "candidate_worse", "insufficient_sample", "not_run")
+ # 표본이 선언된 최소값 미달일 때 허용되는 판정. 결론(동등/우세/열위)은 미검증이다.
+ UNDERSAMPLED_VERDICTS = ("insufficient_sample", "not_run")
+diff --git a/app/services/model_registry.py b/app/services/model_registry.py
+index 0a987572..d3eef33a 100644
+--- a/app/services/model_registry.py
++++ b/app/services/model_registry.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import asyncio
+ import json
+ import logging
+ import os
+@@ -14,6 +15,7 @@ import asyncpg
+ import httpx
+ 
+ from app.core.db_pool import get_pool
++from app.services import cli_model_autoreg
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -1223,6 +1225,13 @@ async def _fetch_kimi_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+     return rows, {"status": "ok", "count": len(rows), "model_source": "discovery"}
+ 
+ 
++async def _fetch_codex_cli_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
++    """codex CLI 가 ChatGPT 백엔드에서 받아 둔 카탈로그. 발견만 한다 — 실행가능 판정은 probe 몫."""
++    from app.services.cli_model_autoreg import read_codex_models_cache
++
++    return await asyncio.to_thread(read_codex_models_cache)
++
++
+ async def discover_provider_model_rows(
+     key_rows: Iterable[dict[str, Any]],
+     *,
+@@ -1240,6 +1249,7 @@ async def discover_provider_model_rows(
+         "gemini": _fetch_gemini_models,
+         "litellm": _fetch_litellm_models,
+         "kimi": _fetch_kimi_models,
++        "codex": _fetch_codex_cli_models,
+     }
+     all_rows: list[dict[str, Any]] = []
+     run_results: list[dict[str, Any]] = []
+@@ -1266,7 +1276,7 @@ async def discover_provider_model_rows(
+                     display_name=item.get("display_name") or item["model_id"],
+                     key_state=key_state,
+                     raw=item.get("raw") or {},
+-                    source=f"{provider}_api",
++                    source=result.get("discovery_source") or f"{provider}_api",
+                 )
+                 for item in raw_rows
+             ]
+@@ -1283,6 +1293,11 @@ async def discover_provider_model_rows(
+                 "template_model_count": len(_PROVIDER_TEMPLATES.get(provider, ())),
+                 "discovered_model_count": len(discovered),
+                 "model_source": result.get("model_source") or ("discovery" if discovered else "template"),
++                **{
++                    key: result[key]
++                    for key in ("discovery_source", "source_path", "fetched_at", "hidden_count")
++                    if key in result
++                },
+             })
+         except Exception as exc:
+             logger.warning("model_registry.discovery_failed: %s: %s", provider, str(exc)[:200])
+@@ -1880,6 +1895,12 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
+         manual_rows = await conn.fetch(
+             "SELECT provider, model_id FROM llm_models WHERE activation_source = 'manual' AND is_active = TRUE"
+         )
++        # sync 이전에 이미 있던 행 — 이번 sync 에서 "새로 발견" 된 모델을 가려내는 기준.
++        existing_keys = {
++            (r["provider"], r["model_id"])
++            for r in await conn.fetch("SELECT provider, model_id FROM llm_models")
++        }
++        verified_codex_ids = await cli_model_autoreg.fetch_verified_codex_ids(conn)
+     manual_active_keys = {(r["provider"], r["model_id"]) for r in manual_rows}
+     template_rows, provider_rows = build_registry_snapshots(key_rows)
+     key_state = _build_key_state(key_rows)
+@@ -1892,6 +1913,11 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
+             row["is_selectable"] = True
+             row["is_executable"] = True
+             row["activation_source"] = "manual"
++    cli_model_autoreg.apply_verified_codex(model_rows, verified_codex_ids)
++    # 캐시를 못 읽은 회차에는 codex_cli_cache 행을 은퇴시키지 않는다 — probe 가 세운 is_executable 을 지킨다.
++    preserve_codex_cli_rows = not any(
++        run.get("provider") == "codex" and run.get("status") == "ok" for run in discovery_runs
++    )
+     review_required_providers = sorted(
+         {
+             row["provider"]
+@@ -2005,8 +2031,10 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
+                         updated_at = NOW()
+                     WHERE activation_source <> 'manual'
+                       AND COALESCE(metadata->>'sync_token', '') <> $1
++                      AND NOT ($2::boolean AND COALESCE(discovery_source, '') = 'codex_cli_cache')
+                     """,
+                     sync_token,
++                    preserve_codex_cli_rows,
+                 )
+ 
+                 await append_key_audit_log(
+@@ -2053,12 +2081,28 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
+                 "review_required_providers": review_required_providers,
+             }
+ 
++    # 후보 자동등록은 본 sync 트랜잭션 밖에서 한다 — 후보 테이블 문제로 레지스트리 sync 가 롤백되면 안 된다.
++    cli_autoreg: dict[str, Any] = {}
++    try:
++        async with pool.acquire() as conn:
++            cli_autoreg = await cli_model_autoreg.autoregister_after_sync(
++                conn,
++                model_rows=model_rows,
++                existing_keys=existing_keys,
++                template_codex_ids=_PROVIDER_MODELS.get("codex", ()),
++                verified_codex_ids=verified_codex_ids,
++            )
++    except Exception as exc:
++        logger.warning("model_registry.cli_autoreg_failed: %s", str(exc)[:200])
++        cli_autoreg = {"error": str(exc)[:200]}
++
+     invalidate_registry_cache()
+     return {
+         "ok": True,
+         "models_synced": len(model_rows),
+         "providers": provider_rows,
+         "discovery": discovery_runs,
++        "cli_autoreg": cli_autoreg,
+         "normalized_providers": normalized_providers,
+         "review_required_providers": review_required_providers,
+     }
+diff --git a/app/services/pipeline_runner_service.py b/app/services/pipeline_runner_service.py
+index 310185ab..850d7649 100644
+--- a/app/services/pipeline_runner_service.py
++++ b/app/services/pipeline_runner_service.py
+@@ -471,6 +471,20 @@ async def _get_db_model_config(size: str) -> list[str]:
+                 """,
+                 requested_size,
+             )
++            # openai 행은 _routing_model 이 codex:<id> 로 바꿔 codex CLI 로 실행한다.
++            # openai API 에만 있는 모델(2026-09-30 gpt-6.1-sol: ChatGPT 계정 codex 400)이
++            # 체인에 들어가지 않도록 codex 쪽 llm_models 행이 실행가능할 때만 남긴다.
++            codex_executable: set[str] | None = None
++            if any((row["provider"] or "").strip().lower() == "openai" for row in rows):
++                try:
++                    codex_rows = await conn.fetch(
++                        "SELECT model_id FROM llm_models WHERE provider = 'codex' AND is_executable = TRUE"
++                    )
++                    codex_executable = {str(r["model_id"]) for r in codex_rows}
++                except Exception as exc:
++                    # 조회 실패 시 판정 불가 — 안전 쪽(제외)으로 둔다.
++                    logger.warning("pipeline_c_codex_executable_lookup_failed error=%s", str(exc)[:120])
++                    codex_executable = set()
+         models: list[str] = []
+         seen: set[str] = set()
+         for row in rows:
+@@ -481,6 +495,17 @@ async def _get_db_model_config(size: str) -> list[str]:
+             )
+             if not raw_model or raw_model in seen:
+                 continue
++            if (
++                (row["provider"] or "").strip().lower() == "openai"
++                and raw_model.startswith("codex:")
++                and raw_model[len("codex:"):] not in (codex_executable or set())
++            ):
++                logger.info(
++                    "pipeline_c_model_chain_excluded model=%s provider=openai reason=codex_not_executable "
++                    "(llm_models codex 행 없음 또는 is_executable=false — codex CLI 실호출 검증 전)",
++                    raw_model,
 +                )
-+        except Exception as exc:  # noqa: BLE001
-+            results.append(_result("sms", "failed", mask_phone(phone), f"{type(exc).__name__}: {exc}"))
-+
-+    # 3) 알림톡 — 사전심사된 템플릿 코드가 환경변수로 있을 때만
-+    template_code = str(os.getenv(ALIMTALK_TEMPLATE_ENV[event]) or "").strip()
-+    if "alimtalk" not in channels:
-+        results.append(_result("alimtalk", "skipped", mask_phone(phone), "channel_disabled"))
-+    elif not template_code:
-+        results.append(_result("alimtalk", "skipped", mask_phone(phone), f"template_not_configured ({ALIMTALK_TEMPLATE_ENV[event]})"))
-+    elif aligo is None or not aligo.is_available():
-+        results.append(_result("alimtalk", "skipped", mask_phone(phone), "aligo_unavailable"))
-+    elif not phone:
-+        results.append(_result("alimtalk", "skipped", "", "no_employee_phone"))
-+    else:
-+        try:
-+            response = await aligo.send_alimtalk(phone, template_code, body, subject=title, failover_sms=False)
-+            if str(response.get("code")) == "0":
-+                results.append(_result("alimtalk", "sent", mask_phone(phone)))
-+            else:
-+                results.append(
-+                    _result("alimtalk", "failed", mask_phone(phone), f"code={response.get('code')} {response.get('message') or ''}")
-+                )
-+        except Exception as exc:  # noqa: BLE001
-+            results.append(_result("alimtalk", "failed", mask_phone(phone), f"{type(exc).__name__}: {exc}"))
-+    return results
-+
-+
-+def summarize(results: list[dict[str, Any]]) -> str:
-+    """응답용 요약: 하나라도 sent 면 sent, 전부 skipped 면 skipped, 아니면 failed."""
-+    statuses = {str(item.get("status")) for item in results}
-+    if "sent" in statuses:
-+        return "sent"
-+    if statuses <= {"skipped"}:
-+        return "skipped"
-+    return "failed"
-diff --git a/app/services/yeoljeong_contract_pdf.py b/app/services/yeoljeong_contract_pdf.py
++                continue
+             seen.add(raw_model)
+             models.append(raw_model)
+         return await filter_executable_models(models)
+diff --git a/migrations/20260930_cli_model_autoreg.sql b/migrations/20260930_cli_model_autoreg.sql
 new file mode 100644
-index 00000000..d2ca3403
+index 00000000..4df99952
 --- /dev/null
-+++ b/app/services/yeoljeong_contract_pdf.py
-@@ -0,0 +1,334 @@
-+"""서명 완료 계약서 PDF 렌더러 (오비서/열정국밥).
++++ b/migrations/20260930_cli_model_autoreg.sql
+@@ -0,0 +1,22 @@
++-- CLI 모델(codex CLI) 신규 모델 자동등록 (AADS-CLI-MODEL-AUTOREG-20260930).
++-- llm_model_candidates 에 CLI 발견·실호출 검증 상태를 싣는다. 추가 전용, 여러 번 실행해도 결과가 같다.
++--   discovered      : codex models_cache 에서 발견, 아직 실호출 검증 전
++--   verified        : codex exec 실호출 성공 (llm_models codex 행 is_executable=true)
++--   blocked_account : "not supported when using Codex with a ChatGPT account" — 24시간 후 재시도
++--   probe_failed    : 그 밖의 실패 — 24시간 후 재시도
++-- 목록에 있다고 실행 가능한 것이 아니다(2026-09-30 gpt-6.1-sol 실측) — 발견과 실행가능 판정을 분리한다.
++-- status CHECK 는 값 목록만 넓힌다(기존 행·값 불변). 제약 교체 외 데이터 삭제 없음.
++BEGIN;
 +
-+원본은 계약서의 ``signed_snapshot`` 하나뿐이다. 서명 뒤 계약서 레코드가 바뀌어도
-+PDF 는 봉인 시점 내용이어야 하므로, 렌더링 전에 스냅샷 해시를 다시 계산해
-+``signed_snapshot_sha256`` 과 대조하고 어긋나면 만들지 않는다.
++ALTER TABLE llm_model_candidates ADD COLUMN IF NOT EXISTS discovery_source TEXT;
++ALTER TABLE llm_model_candidates ADD COLUMN IF NOT EXISTS last_probe_at TIMESTAMPTZ;
 +
-+라이브러리는 reportlab(순수 파이썬)만 쓴다. 진아서버 venv 에는 OS 패키지를
-+설치할 수 없으므로 weasyprint·wkhtmltopdf·chromium 계열은 쓰지 않는다.
-+한글 글리프가 없는 폰트로 그리면 네모 칸만 남은 "빈칸 PDF" 가 나오므로,
-+Hangul 글리프를 가진 TTF 를 찾지 못하면 실패로 처리한다.
++ALTER TABLE llm_model_candidates DROP CONSTRAINT IF EXISTS ck_llm_model_candidates_status;
++ALTER TABLE llm_model_candidates ADD CONSTRAINT ck_llm_model_candidates_status
++    CHECK (status IN ('candidate','testing','approved','rejected','retired',
++                      'discovered','verified','blocked_account','probe_failed'));
++
++CREATE INDEX IF NOT EXISTS idx_llm_model_candidates_probe
++    ON llm_model_candidates(provider, status, last_probe_at);
++
++COMMIT;
+diff --git a/migrations/rollback/20260930_cli_model_autoreg.down.sql b/migrations/rollback/20260930_cli_model_autoreg.down.sql
+new file mode 100644
+index 00000000..20b51903
+--- /dev/null
++++ b/migrations/rollback/20260930_cli_model_autoreg.down.sql
+@@ -0,0 +1,18 @@
++-- Rollback of migrations/20260930_cli_model_autoreg.sql.
++-- 확장 상태 행은 지우지 않고 'candidate' 로 되돌린다(원래 상태는 notes 앞에 남김) — 그래야 원 CHECK 를 다시 걸 수 있다.
++BEGIN;
++
++UPDATE llm_model_candidates
++SET notes = '[rollback cli_autoreg status=' || status || '] ' || COALESCE(notes, ''),
++    status = 'candidate'
++WHERE status IN ('discovered','verified','blocked_account','probe_failed');
++
++ALTER TABLE llm_model_candidates DROP CONSTRAINT IF EXISTS ck_llm_model_candidates_status;
++ALTER TABLE llm_model_candidates ADD CONSTRAINT ck_llm_model_candidates_status
++    CHECK (status IN ('candidate','testing','approved','rejected','retired'));
++
++DROP INDEX IF EXISTS idx_llm_model_candidates_probe;
++ALTER TABLE llm_model_candidates DROP COLUMN IF EXISTS last_probe_at;
++ALTER TABLE llm_model_candidates DROP COLUMN IF EXISTS discovery_source;
++
++COMMIT;
+diff --git a/scripts/aads-crontab.txt b/scripts/aads-crontab.txt
+index dc0e9b84..dd9673f0 100644
+--- a/scripts/aads-crontab.txt
++++ b/scripts/aads-crontab.txt
+@@ -38,3 +38,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin
+ # GO100 #119 상따 실매매 감시 — 2026-08-03 KST only; wrapper handles KST window.
+ */5 * 3 8 * /root/aads/aads-server/scripts/run_go100_card119_watch.sh 5m-check >> /var/log/go100-card119-watch-20260803.log 2>&1 # GO100_CARD119_CHAT_WATCH_5M
+ 5-59/10 * 3 8 * /root/aads/aads-server/scripts/run_go100_card119_watch.sh 10m-report --chat >> /var/log/go100-card119-watch-20260803.log 2>&1 # GO100_CARD119_CHAT_WATCH_10M
++
++# codex CLI 신규 모델 실호출 검증 — 매시 35분 (AADS-CLI-MODEL-AUTOREG-20260930)
++#   카탈로그 사본(app/data/codex_cli/) 갱신 + discovered/blocked_account/probe_failed 후보 1회 codex exec.
++#   모델당 24시간 1회 상한, 전체 timeout 1200s(스크립트 내부 900s), 단일 실행 락.
++35 * * * * cd /root/aads/aads-server && timeout 1200 /usr/bin/python3 scripts/codex_model_probe.py >> /var/log/aads-codex-model-probe.log 2>&1 # AADS_CODEX_MODEL_PROBE
+diff --git a/scripts/codex_model_probe.py b/scripts/codex_model_probe.py
+new file mode 100755
+index 00000000..6c809aff
+--- /dev/null
++++ b/scripts/codex_model_probe.py
+@@ -0,0 +1,360 @@
++#!/usr/bin/env python3
++"""codex CLI 신규 모델 실호출 검증 (AADS-CLI-MODEL-AUTOREG-20260930). 호스트 전용.
++
++발견은 컨테이너 model_registry sync 가 한다(llm_model_candidates status='discovered').
++여기서는 두 가지만 한다.
++
++1. **카탈로그 사본.** 컨테이너에는 /root/.codex 가 마운트돼 있지 않다(2026-09-30 docker
++   inspect 실측). codex CLI 캐시에서 identity/etag 를 뺀 사본을 app/data/codex_cli/ 에
++   둔다 — 컨테이너에서는 /app/app/data/codex_cli/models_cache.json 으로 보인다.
++2. **실호출 검증.** status in (discovered, blocked_account, probe_failed) 인 codex 후보마다
++   `timeout 120 codex exec --skip-git-repo-check -m <id> "Reply with exactly: OK"` 1회.
++       성공                                   → verified (+ llm_models codex 행 is_executable=true,
++                                                runner_llm 비활성 후보 + 알림 1건)
++       "not supported when using Codex with a ChatGPT account" → blocked_account (notes 에 원문 1줄)
++       그 밖                                  → probe_failed
++   모델당 24시간에 1회(last_probe_at). verified 는 다시 치지 않는다.
++
++목록에 있다고 실행 가능한 것이 아니다 — 2026-09-30 gpt-6.1-sol 은 visibility=list 였지만
++ChatGPT 계정 codex 로는 400 이었다. 그래서 발견과 판정을 분리했다.
++
++R-BG: 전체 상한(--total-timeout), 모델별 timeout 120, 프로세스 그룹 회수, 단일 실행 락.
++
++    python3 scripts/codex_model_probe.py              # 사본 갱신 + 대상 검증
++    python3 scripts/codex_model_probe.py --dry-run    # DB 변경 없이 대상만 출력
++    python3 scripts/codex_model_probe.py --mirror-only
 +"""
 +from __future__ import annotations
 +
-+import base64
-+import hashlib
-+import io
++import argparse
++import fcntl
 +import json
 +import os
++import signal
++import subprocess
++import sys
++import tempfile
++import time
++from datetime import datetime, timedelta, timezone
 +from pathlib import Path
-+from typing import Any
-+from xml.sax.saxutils import escape
++from typing import Any, Iterable, Mapping, Optional
 +
-+FONT_ENV = "OBYS_CONTRACT_PDF_FONT_PATH"
-+FONT_NAME = "ObysContractKR"
-+BUNDLED_FONT = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "NanumGothic-Regular.ttf"
-+SYSTEM_FONT_CANDIDATES = (
-+    Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
-+    Path("/usr/share/fonts/nanum/NanumGothic.ttf"),
-+    Path("/usr/share/fonts/truetype/unfonts-core/UnDotum.ttf"),
++ENV_FILE = "/root/aads/aads-server/.env"
++CODEX_CACHE = os.getenv("AADS_CODEX_MODELS_CACHE", "/root/.codex/models_cache.json")
++MIRROR_PATH = os.getenv(
++    "AADS_CODEX_MODELS_CACHE_MIRROR_HOST",
++    "/root/aads/aads-server/app/data/codex_cli/models_cache.json",
 +)
-+# 한글 검증용 코드포인트: '가', '계', '약'
-+_HANGUL_PROBE = (0xAC00, 0xACC4, 0xC57D)
++LOCK_PATH = os.getenv("CODEX_MODEL_PROBE_LOCK", "/tmp/aads-codex-model-probe.lock")
++CODEX_BIN = os.getenv("CODEX_BIN", "codex")
++# 카탈로그(models_cache.json)를 받은 계정과 같은 계정으로 친다. blocked_account 는 계정별 판정이다.
++# 러너 셸은 CODEX_HOME 이 다른 계정 홈을 가리킬 수 있다(2026-09-30 실측: 무효 토큰 계정 → 401).
++PROBE_CODEX_HOME = os.getenv("CODEX_PROBE_HOME", str(Path(CODEX_CACHE).parent))
 +
-+CONTRACT_TYPE_LABELS = {
-+    "part_time": "단시간(아르바이트) 근로계약",
-+    "regular": "정규직 근로계약",
-+    "manager": "관리자 근로계약",
-+    "freelancer": "3.3% 프리랜서 용역계약",
-+    "confidentiality": "보안 및 개인정보 보호 서약",
-+}
-+
-+# (키, 라벨) — 계약서 본문에 표시할 순서. 목록에 없는 키는 "기타 기재사항"에 원문 키로 표시한다.
-+PARTY_FIELDS = (
-+    ("employer_name", "상호"),
-+    ("employer_representative", "대표자"),
-+    ("employer_registration_no", "사업자등록번호"),
-+    ("employer_address", "사업장 주소"),
-+    ("employer_phone", "사업장 연락처"),
-+)
-+EMPLOYEE_FIELDS = (
-+    ("employee_name", "성명"),
-+    ("employee_birth_date", "생년월일"),
-+    ("employee_address", "주소"),
-+    ("employee_nationality", "국적"),
-+    ("visa_status", "체류자격"),
-+    ("foreign_registration_no_masked", "외국인등록번호"),
-+)
-+TERM_FIELDS = (
-+    ("start_date", "근로(용역) 개시일"),
-+    ("end_date", "종료일"),
-+    ("workplace", "근무장소"),
-+    ("job_description", "업무내용"),
-+    ("work_time", "근무시간"),
-+    ("rest_time", "휴게시간"),
-+    ("weekly_hours", "주 소정근로시간"),
-+    ("work_days", "근무일/요일"),
-+    ("daily_work_schedule", "근로일별 근로시간"),
-+    ("holidays", "휴일/주휴"),
-+    ("wage_type", "임금 산정 방식"),
-+    ("wage", "임금(용역비)"),
-+    ("base_salary", "기본급"),
-+    ("non_tax_meal_allowance", "비과세 식대"),
-+    ("taxable_allowance", "기타 과세수당"),
-+    ("wage_composition", "임금 구성/공제"),
-+    ("pay_date", "급여지급일"),
-+    ("pay_method", "지급방법"),
-+    ("bank_name", "지급 은행"),
-+    ("bank_account_holder", "예금주"),
-+    ("bank_account_masked", "계좌번호"),
-+    ("overtime_terms", "연장·야간·휴일근로"),
-+    ("leave_terms", "연차/휴가/결근"),
-+    ("insurance_terms", "4대보험/세무 처리"),
-+    ("probation_terms", "수습"),
-+    ("freelancer_scope", "용역 업무범위/산출물"),
-+    ("freelancer_settlement_terms", "용역비 정산/해지"),
-+    ("special_terms", "특약사항"),
-+)
-+# PDF 에 싣지 않는 키: 내부 식별자·감사 원문·서명 증적(별도 섹션에 표시)
-+HIDDEN_FIELDS = {
-+    "id",
-+    "tenant_id",
-+    "business_id",
-+    "employee_request_id",
-+    "employee_email",
-+    "employee_phone",
-+    "created_at",
-+    "created_by",
-+    "requested_by",
-+    "requested_at",
-+    "status",
-+    "signed_at",
-+    "signer_name",
-+    "signer_email",
-+    "signature_sha256",
-+    "signature_consent",
-+    "signature_audit",
-+    "document_kind",
-+    "template_version",
-+    "print_title",
-+    "contract_type",
-+    "employee_email_masked",
-+    "branch",
-+    "contract_date",
-+}
++PROBE_PROMPT = "Reply with exactly: OK"
++PER_MODEL_TIMEOUT_SECONDS = 120
++RETRY_INTERVAL = timedelta(hours=24)
++PROBE_STATUSES = ("discovered", "blocked_account", "probe_failed")
++BLOCKED_ACCOUNT_MARKER = "not supported when using codex with a chatgpt account"
++# 인증 실패는 모델 판정이 아니다 — 기록하지 않고(24h 상한 소모 안 함) 이번 회차를 멈춘다.
++AUTH_ERROR_MARKERS = ("401 unauthorized", "invalidated oauth token", "refresh token", "not logged in")
++RUNNER_DISPLAY_ORDER = 900
++VERIFIED_ALERT_TITLE = "신규 CLI 모델 실행 확인 — 설정에서 활성화 가능"
++_MIRROR_MODEL_KEYS = ("slug", "display_name", "visibility", "supported_in_api", "context_window", "priority")
 +
 +
-+class ContractPdfError(RuntimeError):
-+    """PDF 를 만들 수 없음 — 서명은 유지하고 실패만 기록한다."""
++def log(msg: str) -> None:
++    print(f"[{datetime.now(timezone.utc).isoformat(timespec='seconds')}] {msg}", flush=True)
 +
 +
-+def snapshot_sha256(snapshot: dict[str, Any]) -> str:
-+    """``_signed_contract_snapshot`` 과 같은 직렬화 규칙으로 해시를 다시 계산한다."""
-+    encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-+    return hashlib.sha256(encoded).hexdigest()
++# ---------------------------------------------------------------------------
++# 판정 (순수 함수 — tests/unit/test_cli_model_autoreg.py)
++# ---------------------------------------------------------------------------
++
++def _first_line(text: str, needle: str = "") -> str:
++    for line in (text or "").splitlines():
++        stripped = line.strip()
++        if not stripped:
++            continue
++        if not needle or needle in stripped.lower():
++            return stripped[:300]
++    return ""
 +
 +
-+def resolve_font_path() -> Path:
-+    configured = str(os.getenv(FONT_ENV) or "").strip()
-+    candidates = [Path(configured)] if configured else [BUNDLED_FONT, *SYSTEM_FONT_CANDIDATES]
-+    for path in candidates:
-+        if path.is_file():
-+            return path
-+    if configured:
-+        raise ContractPdfError(f"CJK 폰트 파일이 없습니다: {FONT_ENV}={configured}")
-+    raise ContractPdfError("CJK 폰트 파일을 찾지 못했습니다 — 한글이 깨진 PDF 를 만들지 않습니다")
++def classify_probe(returncode: Optional[int], stdout: str, stderr: str, *, timed_out: bool = False) -> tuple[str, str]:
++    """(status, note). note 는 한 줄."""
++    combined = f"{stdout or ''}\n{stderr or ''}"
++    if BLOCKED_ACCOUNT_MARKER in combined.lower():
++        return "blocked_account", _first_line(combined, BLOCKED_ACCOUNT_MARKER)
++    if timed_out or returncode == 124:
++        return "probe_failed", f"timeout {PER_MODEL_TIMEOUT_SECONDS}s"
++    if returncode == 0 and any(line.strip().strip(".").upper() == "OK" for line in (stdout or "").splitlines()):
++        return "verified", "codex exec 응답 OK"
++    lowered = combined.lower()
++    for marker in AUTH_ERROR_MARKERS:
++        if marker in lowered:
++            return "auth_error", _first_line(combined, marker)
++    detail = _first_line(stderr, "error") or _first_line(stdout, "error") or _first_line(stderr) or _first_line(stdout)
++    return "probe_failed", f"rc={returncode} {detail}".strip()[:300]
 +
 +
-+def _register_font() -> str:
-+    from reportlab.pdfbase import pdfmetrics
-+    from reportlab.pdfbase.ttfonts import TTFont, TTFError
++def is_due(row: Mapping[str, Any], now: datetime) -> bool:
++    if row.get("status") not in PROBE_STATUSES:
++        return False
++    last = row.get("last_probe_at")
++    if last is None:
++        return True
++    if last.tzinfo is None:
++        last = last.replace(tzinfo=timezone.utc)
++    return now - last >= RETRY_INTERVAL
 +
-+    path = resolve_font_path()
++
++def build_mirror(payload: Mapping[str, Any], source_path: str) -> dict[str, Any]:
++    """identity/etag 등 계정 정보는 빼고 모델 목록만 옮긴다."""
++    models = []
++    for item in payload.get("models") or []:
++        if isinstance(item, Mapping) and item.get("slug"):
++            models.append({key: item.get(key) for key in _MIRROR_MODEL_KEYS if key in item})
++    return {
++        "fetched_at": payload.get("fetched_at"),
++        "client_version": payload.get("client_version"),
++        "mirrored_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
++        "mirrored_from": source_path,
++        "models": models,
++    }
++
++
++# ---------------------------------------------------------------------------
++# 카탈로그 사본
++# ---------------------------------------------------------------------------
++
++def write_mirror(source: str = CODEX_CACHE, target: str = MIRROR_PATH) -> dict[str, Any]:
 +    try:
-+        font = TTFont(FONT_NAME, str(path))
-+    except (TTFError, OSError) as exc:
-+        raise ContractPdfError(f"CJK 폰트를 읽을 수 없습니다: {path.name}: {exc}") from None
-+    glyphs = getattr(font.face, "charToGlyph", {}) or {}
-+    if not all(glyphs.get(code) for code in _HANGUL_PROBE):
-+        raise ContractPdfError(f"폰트에 한글 글리프가 없습니다: {path.name}")
-+    pdfmetrics.registerFont(font)
-+    return FONT_NAME
-+
-+
-+def _signature_png(signature_data_uri: str, expected_sha256: str) -> bytes:
-+    prefix = "data:image/png;base64,"
-+    value = str(signature_data_uri or "")
-+    if not value.startswith(prefix):
-+        raise ContractPdfError("자필서명 이미지가 없습니다")
++        with open(source, "r", encoding="utf-8") as fh:
++            payload = json.load(fh)
++    except (OSError, ValueError) as exc:
++        return {"status": "unavailable", "error": f"{type(exc).__name__}:{source}"}
++    if not isinstance(payload, Mapping) or not isinstance(payload.get("models"), list):
++        return {"status": "unavailable", "error": f"invalid_format:{source}"}
++    mirror = build_mirror(payload, source)
++    target_path = Path(target)
++    target_path.parent.mkdir(parents=True, exist_ok=True)
++    fd, tmp = tempfile.mkstemp(prefix=".models_cache.", dir=str(target_path.parent))
 +    try:
-+        raw = base64.b64decode(value[len(prefix):], validate=True)
-+    except ValueError:
-+        raise ContractPdfError("자필서명 이미지를 해석할 수 없습니다") from None
-+    if not expected_sha256 or hashlib.sha256(raw).hexdigest() != expected_sha256:
-+        raise ContractPdfError("자필서명 이미지가 봉인된 서명 해시와 일치하지 않습니다")
++        with os.fdopen(fd, "w", encoding="utf-8") as fh:
++            json.dump(mirror, fh, ensure_ascii=False, indent=1)
++        os.chmod(tmp, 0o644)
++        os.replace(tmp, target_path)
++    finally:
++        if os.path.exists(tmp):
++            os.unlink(tmp)
++    listed = sum(1 for m in mirror["models"] if str(m.get("visibility") or "").lower() == "list")
++    return {"status": "ok", "models": len(mirror["models"]), "listed": listed, "fetched_at": mirror["fetched_at"]}
++
++
++# ---------------------------------------------------------------------------
++# 실호출
++# ---------------------------------------------------------------------------
++
++def run_codex_probe(model_id: str, *, deadline: float) -> tuple[str, str]:
++    remaining = deadline - time.monotonic()
++    if remaining < 10:
++        return "skipped", "total timeout reached"
++    wait = min(PER_MODEL_TIMEOUT_SECONDS + 10, remaining)
++    cmd = ["timeout", str(PER_MODEL_TIMEOUT_SECONDS), CODEX_BIN, "exec", "--skip-git-repo-check", "-m", model_id, PROBE_PROMPT]
++    env = dict(os.environ, CODEX_HOME=PROBE_CODEX_HOME)
++    with tempfile.TemporaryDirectory(prefix="codex-probe-") as workdir:
++        proc = subprocess.Popen(
++            cmd,
++            cwd=workdir,
++            env=env,
++            stdin=subprocess.DEVNULL,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.PIPE,
++            text=True,
++            start_new_session=True,  # 자식(codex 하위 프로세스)까지 그룹으로 회수
++        )
++        timed_out = False
++        try:
++            stdout, stderr = proc.communicate(timeout=wait)
++        except subprocess.TimeoutExpired:
++            timed_out = True
++            _reap_group(proc)
++            stdout, stderr = proc.communicate()
++        finally:
++            if proc.poll() is None:
++                _reap_group(proc)
++    return classify_probe(proc.returncode, stdout, stderr, timed_out=timed_out)
++
++
++def _reap_group(proc: subprocess.Popen) -> None:
 +    try:
-+        from PIL import Image as PILImage
-+
-+        with PILImage.open(io.BytesIO(raw)) as probe:
-+            probe.verify()
-+    except Exception:
-+        raise ContractPdfError("자필서명 PNG 를 읽을 수 없습니다") from None
-+    return raw
-+
-+
-+def _text(value: Any) -> str:
-+    if value is None:
-+        return ""
-+    if isinstance(value, bool):
-+        return "예" if value else "아니오"
-+    if isinstance(value, float) and value.is_integer():
-+        value = int(value)
-+    if isinstance(value, int):
-+        return f"{value:,}"
-+    if isinstance(value, (list, tuple)):
-+        return "\n".join(_text(item) for item in value if _text(item))
-+    if isinstance(value, dict):
-+        return "\n".join(f"{key}: {_text(item)}" for key, item in value.items() if _text(item))
-+    return str(value).strip()
++        os.killpg(proc.pid, signal.SIGKILL)
++    except (ProcessLookupError, PermissionError):
++        pass
++    try:
++        proc.wait(timeout=5)
++    except subprocess.TimeoutExpired:
++        pass
 +
 +
-+def _mask_email(email: str) -> str:
-+    email = str(email or "").strip().lower()
-+    if "@" not in email:
-+        return email
-+    local, domain = email.split("@", 1)
-+    return f"{local[:2]}{'*' * max(1, len(local) - 2)}@{domain}"
++# ---------------------------------------------------------------------------
++# DB
++# ---------------------------------------------------------------------------
++
++def _load_db_env() -> dict[str, str]:
++    env: dict[str, str] = {}
++    with open(ENV_FILE, "r", encoding="utf-8", errors="replace") as fh:
++        for line in fh:
++            line = line.strip()
++            if not line or line.startswith("#") or "=" not in line:
++                continue
++            key, value = line.split("=", 1)
++            if key.startswith("AADS_DB_"):
++                env[key] = value.strip().strip('"').strip("'")
++    return env
 +
 +
-+def render_signed_contract_pdf(contract: dict[str, Any]) -> bytes:
-+    """봉인 스냅샷으로 서명본 PDF 바이트를 만든다. 같은 입력이면 같은 바이트가 나온다."""
-+    snapshot = contract.get("signed_snapshot")
-+    recorded_sha = str(contract.get("signed_snapshot_sha256") or "")
-+    if not isinstance(snapshot, dict) or not snapshot:
-+        raise ContractPdfError("봉인 스냅샷(signed_snapshot)이 없습니다")
-+    if snapshot_sha256(snapshot) != recorded_sha:
-+        raise ContractPdfError("봉인 스냅샷 해시가 일치하지 않습니다 — PDF 를 만들지 않습니다")
-+    signature_png = _signature_png(
-+        str(contract.get("signature_data_uri") or ""),
-+        str(snapshot.get("signature_sha256") or ""),
++def connect_db():
++    import psycopg2  # 호스트 실행 전제
++
++    env = _load_db_env()
++    return psycopg2.connect(
++        host=os.getenv("PROBE_DB_HOST", "127.0.0.1"),
++        port=int(os.getenv("PROBE_DB_PORT", "5433")),
++        dbname=env.get("AADS_DB_NAME", "aads"),
++        user=env.get("AADS_DB_USER", "aads"),
++        password=env.get("AADS_DB_PASSWORD", ""),
++        connect_timeout=10,
 +    )
-+    try:
-+        from reportlab.lib import colors
-+        from reportlab.lib.pagesizes import A4
-+        from reportlab.lib.styles import ParagraphStyle
-+        from reportlab.lib.units import mm
-+        from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-+    except ImportError:
-+        raise ContractPdfError("reportlab 이 설치되어 있지 않습니다") from None
 +
-+    font = _register_font()
-+    base = ParagraphStyle("body", fontName=font, fontSize=9.5, leading=13.5, wordWrap="CJK")
-+    small = ParagraphStyle("small", parent=base, fontSize=7.5, leading=10, textColor=colors.HexColor("#444444"))
-+    label = ParagraphStyle("label", parent=base, textColor=colors.HexColor("#222222"))
-+    heading = ParagraphStyle("heading", parent=base, fontSize=11.5, leading=16, spaceBefore=8, spaceAfter=4)
-+    title_style = ParagraphStyle("title", parent=base, fontSize=17, leading=24, alignment=1, spaceAfter=6)
 +
-+    def para(value: Any, style: ParagraphStyle = base) -> Paragraph:
-+        return Paragraph(escape(_text(value)).replace("\n", "<br/>"), style)
++class ProbeStore:
++    """llm_model_candidates / llm_models / model_routing_preferences / alert_history 접점."""
 +
-+    def table(rows: list[tuple[str, Any]]) -> Table:
-+        data = [[para(name, label), para(value)] for name, value in rows]
-+        grid = Table(data, colWidths=[42 * mm, 128 * mm])
-+        grid.setStyle(
-+            TableStyle(
-+                [
-+                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#999999")),
-+                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f2f2f2")),
-+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-+                ]
++    def __init__(self, conn):
++        self.conn = conn
++
++    def candidates(self) -> list[dict[str, Any]]:
++        with self.conn.cursor() as cur:
++            cur.execute(
++                "SELECT model_id, status, last_probe_at FROM llm_model_candidates "
++                "WHERE provider = 'codex' AND status = ANY(%s) ORDER BY id",
++                (list(PROBE_STATUSES),),
 +            )
-+        )
-+        return grid
++            return [{"model_id": r[0], "status": r[1], "last_probe_at": r[2]} for r in cur.fetchall()]
 +
-+    def rows_for(fields: tuple[tuple[str, str], ...]) -> list[tuple[str, Any]]:
-+        return [(name, snapshot.get(key)) for key, name in fields if _text(snapshot.get(key))]
-+
-+    contract_type = str(snapshot.get("contract_type") or "")
-+    consent = snapshot.get("signature_consent") if isinstance(snapshot.get("signature_consent"), dict) else {}
-+    audit = snapshot.get("signature_audit") if isinstance(snapshot.get("signature_audit"), dict) else {}
-+    story: list[Any] = [
-+        para(snapshot.get("print_title") or "계약서", title_style),
-+        para(
-+            f"계약서 ID {snapshot.get('id') or ''} · 양식 {snapshot.get('template_version') or ''}",
-+            small,
-+        ),
-+        Spacer(1, 4 * mm),
-+        para("계약 개요", heading),
-+        table(
-+            [
-+                ("계약 유형", CONTRACT_TYPE_LABELS.get(contract_type, contract_type)),
-+                ("문서 종류", snapshot.get("document_kind")),
-+                ("사업장", snapshot.get("branch")),
-+                ("계약일", snapshot.get("contract_date")),
-+            ]
-+        ),
-+        para("사용자(사업주)", heading),
-+        table(rows_for(PARTY_FIELDS) or [("상호", "")]),
-+        para("근로자(계약 상대방)", heading),
-+        table(rows_for(EMPLOYEE_FIELDS) + [("계정", snapshot.get("employee_email_masked") or _mask_email(snapshot.get("employee_email") or ""))]),
-+    ]
-+    terms = rows_for(TERM_FIELDS)
-+    if terms:
-+        story += [para("계약 조건", heading), table(terms)]
-+    known = {key for key, _ in PARTY_FIELDS + EMPLOYEE_FIELDS + TERM_FIELDS} | HIDDEN_FIELDS
-+    extra = [(key, snapshot[key]) for key in sorted(snapshot) if key not in known and _text(snapshot[key])]
-+    if extra:
-+        story += [para("기타 기재사항", heading), table(extra)]
-+
-+    signature = Image(io.BytesIO(signature_png))
-+    ratio = (signature.imageHeight or 1) / (signature.imageWidth or 1)
-+    signature.drawWidth = 60 * mm
-+    signature.drawHeight = min(30 * mm, 60 * mm * ratio)
-+    sign_grid = Table(
-+        [
-+            [para("서명자", label), para(snapshot.get("signer_name"))],
-+            [para("서명 일시", label), para(snapshot.get("signed_at"))],
-+            [para("인증 계정", label), para(_mask_email(audit.get("authenticated_email") or snapshot.get("signer_email") or ""))],
-+            [para("전자서명 동의", label), para(f"동의함 ({consent.get('version') or ''})" if consent.get("accepted") else "")],
-+            [para("자필서명", label), signature],
-+        ],
-+        colWidths=[42 * mm, 128 * mm],
-+    )
-+    sign_grid.setStyle(
-+        TableStyle(
-+            [
-+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#999999")),
-+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f2f2f2")),
-+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-+            ]
-+        )
-+    )
-+    story += [
-+        para("전자서명", heading),
-+        sign_grid,
-+        Spacer(1, 5 * mm),
-+        para(f"봉인 스냅샷 SHA-256: {recorded_sha}", small),
-+        para(f"자필서명 SHA-256: {snapshot.get('signature_sha256') or ''}", small),
-+        para(
-+            "이 문서는 전자서명 시점에 봉인된 계약 내용(signed_snapshot)으로 생성되었습니다. "
-+            "근로기준법 제17조에 따른 근로조건 서면 명시·교부 증빙으로 보관됩니다.",
-+            small,
-+        ),
-+    ]
-+
-+    buffer = io.BytesIO()
-+    doc = SimpleDocTemplate(
-+        buffer,
-+        pagesize=A4,
-+        leftMargin=20 * mm,
-+        rightMargin=20 * mm,
-+        topMargin=18 * mm,
-+        bottomMargin=18 * mm,
-+        title=str(snapshot.get("print_title") or "계약서"),
-+        author="오비서",
-+        invariant=1,
-+    )
-+    try:
-+        doc.build(story)
-+    except Exception as exc:
-+        raise ContractPdfError(f"PDF 조판 실패: {type(exc).__name__}: {exc}") from None
-+    data = buffer.getvalue()
-+    if not data.startswith(b"%PDF-"):
-+        raise ContractPdfError("PDF 헤더가 올바르지 않습니다")
-+    return data
-diff --git a/app/services/yeoljeong_finance_service.py b/app/services/yeoljeong_finance_service.py
-index fcc7d4e9..0e3cbaba 100644
---- a/app/services/yeoljeong_finance_service.py
-+++ b/app/services/yeoljeong_finance_service.py
-@@ -351,6 +351,14 @@ CONTRACT_SNAPSHOT_EXCLUDED_FIELDS = {
-     "signed_snapshot_sha256",
-     "signature_data_uri",
-     "updated_at",
-+    # 서명 뒤에 붙는 보관·교부 메타. 봉인 스냅샷에 섞이면 해시가 흔들린다.
-+    "signed_pdf_path",
-+    "signed_pdf_sha256",
-+    "signed_pdf_bytes",
-+    "signed_pdf_generated_at",
-+    "signed_pdf_error",
-+    "delivered_at",
-+    "delivery_channel",
- }
- 
- CANONICAL_BUSINESSES: list[dict[str, Any]] = [
-@@ -3172,6 +3180,336 @@ def delete_contract(contract_id: str, user: dict[str, Any]) -> None:
-     _delete_hr_record("contracts", contract_id, user)
- 
- 
-+# ---------------------------------------------------------------------------
-+# 계약서 서명요청 알림 · 서명본 PDF 보관/교부
-+#
-+# 알림과 PDF 는 서명요청·서명 트랜잭션이 끝난 **뒤에** 돈다. 어느 쪽이 실패해도
-+# 서명요청/서명 자체는 성공으로 남는다 — 서명은 이미 봉인된 법적 행위이고,
-+# 알림은 부가 수단이다. 실패는 이력(sent/failed/skipped)과 signed_pdf_error 로 남긴다.
-+# ---------------------------------------------------------------------------
-+CONTRACT_NOTIFICATION_LOG = "contract_notifications"
-+CONTRACT_NOTIFICATION_TABLE = "yeoljeong_contract_notifications"
-+CONTRACT_NOTICE_RESEND_COOLDOWN_SECONDS = 300
-+CONTRACT_DELIVERY_COLUMNS = ("signed_pdf_path", "signed_pdf_sha256", "signed_pdf_bytes", "delivered_at", "delivery_channel")
-+
-+
-+def _run_coroutine(coro: Any) -> Any:
-+    """sync 서비스에서 코루틴을 돌린다. ``_run_db`` 와 달리 예외를 삼키지 않는다."""
-+    try:
-+        asyncio.get_running_loop()
-+    except RuntimeError:
-+        return asyncio.run(coro)
-+    import concurrent.futures
-+
-+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-+        return pool.submit(asyncio.run, coro).result()
-+
-+
-+async def _db_insert_contract_notifications(rows: list[dict[str, Any]]) -> bool:
-+    import asyncpg
-+
-+    conn = await asyncpg.connect(_db_url(), timeout=5)
-+    try:
-+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{CONTRACT_NOTIFICATION_TABLE}"):
-+            return False
-+        await conn.executemany(
-+            """
-+            INSERT INTO yeoljeong_contract_notifications
-+                (tenant_id, contract_id, event, channel, status, target_masked, error_detail)
-+            VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
-+            """,
-+            [
-+                (
-+                    UUID(row["tenant_id"]),
-+                    row["contract_id"],
-+                    row["event"],
-+                    row["channel"],
-+                    row["status"],
-+                    row["target_masked"],
-+                    row["error_detail"],
++    def record(self, model_id: str, status: str, note: str) -> dict[str, Any]:
++        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
++        out: dict[str, Any] = {"runner_candidate_inserted": False}
++        with self.conn, self.conn.cursor() as cur:
++            cur.execute(
++                "UPDATE llm_model_candidates SET status = %s, notes = %s, last_probe_at = NOW() "
++                "WHERE provider = 'codex' AND model_id = %s",
++                (status, f"[probe {stamp}] {status}: {note}"[:1000], model_id),
++            )
++            if status != "verified":
++                return out
++            cur.execute(
++                "UPDATE llm_models SET is_executable = TRUE, is_selectable = TRUE, "
++                "       verification_status = 'verified', last_verified_at = NOW(), updated_at = NOW() "
++                "WHERE provider = 'codex' AND model_id = %s",
++                (model_id,),
++            )
++            cur.execute(
++                "INSERT INTO model_routing_preferences "
++                "  (route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_by) "
++                "VALUES ('runner_llm', 'codex', %s, %s, FALSE, FALSE, %s, 'auto_discovery') "
++                "ON CONFLICT (route_key, provider, model_id) DO NOTHING RETURNING model_id",
++                (model_id, RUNNER_DISPLAY_ORDER, "자동 발견 후보 — 설정 UI 에서 활성화해야 러너가 사용"),
++            )
++            inserted = cur.fetchone() is not None
++            out["runner_candidate_inserted"] = inserted
++            if inserted:
++                cur.execute(
++                    "INSERT INTO alert_history (severity, category, title, message, project, server, acknowledged) "
++                    "VALUES ('info', 'llm_model', %s, %s, 'AADS', NULL, false)",
++                    (
++                        VERIFIED_ALERT_TITLE,
++                        f"codex CLI 실호출 검증 통과: {model_id} — runner_llm 에 비활성 후보로 등록됨. "
++                        "설정 > 모델 라우팅에서 켜면 러너가 사용한다.",
++                    ),
 +                )
-+                for row in rows
-+            ],
-+        )
-+        return True
-+    finally:
-+        await conn.close()
++        return out
 +
 +
-+async def _db_fetch_contract_notifications(tenant_id: str, contract_id: str) -> list[dict[str, Any]] | None:
-+    import asyncpg
-+
-+    conn = await asyncpg.connect(_db_url(), timeout=5)
-+    try:
-+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{CONTRACT_NOTIFICATION_TABLE}"):
-+            return None
-+        rows = await conn.fetch(
-+            """
-+            SELECT id, tenant_id, contract_id, event, channel, status, target_masked, error_detail, created_at
-+              FROM yeoljeong_contract_notifications
-+             WHERE tenant_id = $1::uuid AND contract_id = $2
-+             ORDER BY created_at DESC, id DESC
-+             LIMIT 100
-+            """,
-+            UUID(tenant_id),
-+            contract_id,
-+        )
-+        return [{**dict(row), "id": str(row["id"]), "tenant_id": str(row["tenant_id"]), "created_at": _iso(row["created_at"])} for row in rows]
-+    finally:
-+        await conn.close()
-+
-+
-+async def _db_update_contract_delivery_columns(contract: dict[str, Any]) -> bool:
-+    """마이그레이션이 적용된 경우에만 계약서 컬럼에도 보관·교부 메타를 쓴다.
-+
-+    값의 원본은 contract_payload 이고, 컬럼은 조회 쿼리용 사본이다. 컬럼이 아직
-+    없을 때 upsert 에 섞으면 계약서 저장 전체가 깨지므로 따로 갱신한다.
-+    """
-+    import asyncpg
-+
-+    conn = await asyncpg.connect(_db_url(), timeout=5)
-+    try:
-+        present = await conn.fetchval(
-+            "SELECT count(*) FROM information_schema.columns "
-+            "WHERE table_schema = 'public' AND table_name = 'yeoljeong_contracts' AND column_name = ANY($1::text[])",
-+            list(CONTRACT_DELIVERY_COLUMNS),
-+        )
-+        if int(present or 0) < len(CONTRACT_DELIVERY_COLUMNS):
-+            return False
-+        result = await conn.execute(
-+            """
-+            UPDATE yeoljeong_contracts
-+               SET signed_pdf_path = $3, signed_pdf_sha256 = $4, signed_pdf_bytes = $5,
-+                   delivered_at = $6::timestamptz, delivery_channel = $7
-+             WHERE id = $1 AND tenant_id = $2::uuid AND deleted_at IS NULL
-+            """,
-+            str(contract.get("id") or ""),
-+            UUID(str(contract.get("tenant_id") or "")),
-+            str(contract.get("signed_pdf_path") or "") or None,
-+            str(contract.get("signed_pdf_sha256") or "") or None,
-+            int(contract.get("signed_pdf_bytes") or 0) or None,
-+            _pg_ts(contract.get("delivered_at")),
-+            str(contract.get("delivery_channel") or "") or None,
-+        )
-+        return result.endswith(" 1")
-+    finally:
-+        await conn.close()
-+
-+
-+def _append_contract_notification_logs(contract: dict[str, Any], event: str, results: list[dict[str, Any]]) -> bool:
-+    now = _now()
-+    rows = [
-+        {
-+            "id": str(uuid4()),
-+            "tenant_id": str(contract.get("tenant_id") or ""),
-+            "contract_id": str(contract.get("id") or ""),
-+            "event": event,
-+            "channel": str(item.get("channel") or ""),
-+            "status": str(item.get("status") or "failed"),
-+            "target_masked": str(item.get("target_masked") or ""),
-+            "error_detail": str(item.get("error_detail") or "")[:500],
-+            "created_at": now,
-+        }
-+        for item in results
++def probe_candidates(
++    store,
++    *,
++    probe=run_codex_probe,
++    now: Optional[datetime] = None,
++    deadline: Optional[float] = None,
++    max_models: int = 5,
++    dry_run: bool = False,
++    only: Iterable[str] = (),
++) -> list[dict[str, Any]]:
++    now = now or datetime.now(timezone.utc)
++    deadline = deadline if deadline is not None else time.monotonic() + 900
++    only_set = set(only)
++    due = [
++        row for row in store.candidates()
++        if (not only_set or row["model_id"] in only_set) and (only_set or is_due(row, now))
 +    ]
-+    if not rows:
-+        return True
-+    if _db_available():
-+        return bool(_run_db(_db_insert_contract_notifications(rows)))
-+    _write_file_rows(CONTRACT_NOTIFICATION_LOG, rows + _read_file_rows(CONTRACT_NOTIFICATION_LOG))
-+    return True
++    results: list[dict[str, Any]] = []
++    for row in due[:max(0, max_models)]:
++        model_id = row["model_id"]
++        if dry_run:
++            results.append({"model_id": model_id, "status": "due", "previous": row["status"]})
++            continue
++        status, note = probe(model_id, deadline=deadline)
++        if status in {"skipped", "auth_error"}:
++            # 시간 초과·인증 실패는 모델 판정이 아니다. 기록하지 않고 다음 회차에 다시 본다.
++            results.append({"model_id": model_id, "status": status, "note": note})
++            break
++        extra = store.record(model_id, status, note)
++        results.append({"model_id": model_id, "status": status, "previous": row["status"], "note": note, **extra})
++    return results
 +
 +
-+def _contract_notification_history(tenant_id: str, contract_id: str) -> list[dict[str, Any]] | None:
-+    """최신순 이력. 저장소를 확인할 수 없으면 None."""
-+    if _db_available():
-+        rows = _run_db(_db_fetch_contract_notifications(tenant_id, contract_id))
-+        return rows if isinstance(rows, list) else None
-+    rows = [
-+        row
-+        for row in _read_file_rows(CONTRACT_NOTIFICATION_LOG)
-+        if str(row.get("tenant_id") or "") == tenant_id and str(row.get("contract_id") or "") == contract_id
-+    ]
-+    return sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)
++def main(argv: Optional[list[str]] = None) -> int:
++    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    parser.add_argument("--dry-run", action="store_true")
++    parser.add_argument("--mirror-only", action="store_true")
++    parser.add_argument("--model", action="append", default=[], help="지정 모델만(24h 상한 무시)")
++    parser.add_argument("--max-models", type=int, default=int(os.getenv("CODEX_PROBE_MAX_MODELS", "5")))
++    parser.add_argument("--total-timeout", type=int, default=int(os.getenv("CODEX_PROBE_TOTAL_TIMEOUT", "900")))
++    args = parser.parse_args(argv)
++    deadline = time.monotonic() + max(30, args.total_timeout)
 +
-+
-+def _notify_contract_event(contract: dict[str, Any], event: str) -> dict[str, Any]:
-+    """알림 발송 + 이력 기록. 어떤 실패도 예외로 올리지 않는다."""
++    lock_fh = open(LOCK_PATH, "w")
 +    try:
-+        from app.services import yeoljeong_contract_notify as contract_notify
++        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
++    except BlockingIOError:
++        log("다른 probe 가 실행 중 — 건너뜀")
++        return 0
 +
-+        results = _run_coroutine(contract_notify.dispatch(contract, event))
-+        status = contract_notify.summarize(results)
-+    except Exception as exc:  # noqa: BLE001 — 알림 실패가 서명 흐름을 깨면 안 된다
-+        logger.warning("contract notify dispatch failed: contract=%s event=%s err=%s", contract.get("id"), event, exc)
-+        results = [{"channel": "dispatch", "status": "failed", "target_masked": "", "error_detail": f"{type(exc).__name__}: {exc}"[:500]}]
-+        status = "failed"
++    mirror = write_mirror() if not args.dry_run else {"status": "skipped_dry_run"}
++    log(f"mirror {json.dumps(mirror, ensure_ascii=False)}")
++    if args.mirror_only:
++        return 0 if mirror.get("status") in {"ok", "skipped_dry_run"} else 1
++
++    conn = connect_db()
 +    try:
-+        logged = _append_contract_notification_logs(contract, event, results)
-+    except Exception as exc:  # noqa: BLE001
-+        logger.warning("contract notify log failed: contract=%s err=%s", contract.get("id"), exc)
-+        logged = False
-+    if not logged:
-+        logger.warning("contract notify history not stored: contract=%s event=%s", contract.get("id"), event)
-+    return {"event": event, "status": status, "channels": results, "logged": logged}
++        results = probe_candidates(
++            ProbeStore(conn),
++            deadline=deadline,
++            max_models=args.max_models,
++            dry_run=args.dry_run,
++            only=args.model,
++        )
++    finally:
++        conn.close()
++    for item in results:
++        log(f"probe {json.dumps(item, ensure_ascii=False, default=str)}")
++    if not results:
++        log("probe 대상 없음")
++    return 0
 +
 +
-+def request_contract_signature_with_notice(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
-+    contract = request_contract_signature(contract_id, user)
-+    return {"contract": contract, "notify": _notify_contract_event(contract, "signature_requested")}
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tests/unit/test_cli_model_autoreg.py b/tests/unit/test_cli_model_autoreg.py
+new file mode 100644
+index 00000000..98049589
+--- /dev/null
++++ b/tests/unit/test_cli_model_autoreg.py
+@@ -0,0 +1,474 @@
++"""AADS-CLI-MODEL-AUTOREG-20260930 — codex CLI 신규 모델 자동등록.
++
++발견(models_cache) → 후보(discovered) → 실호출 검증(probe) → runner_llm 비활성 후보.
++발견과 실행가능 판정을 분리하는지, 기존 라우팅 행을 건드리지 않는지 본다.
++"""
++from __future__ import annotations
++
++import importlib.util
++import json
++from datetime import datetime, timedelta, timezone
++from pathlib import Path
++from unittest.mock import AsyncMock
++
++import pytest
++
++from app.services import cli_model_autoreg, model_registry
++
++REPO_ROOT = Path(__file__).resolve().parents[2]
 +
 +
-+def resend_contract_signature_notice(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
-+    tenant_id = _tenant_id(user)
-+    if not _is_admin(user):
-+        raise HTTPException(status_code=403, detail="서명 요청 재발송 권한이 없습니다")
-+    contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="계약서를 찾을 수 없습니다")
-+    if str(contract.get("status") or "") != "requested":
-+        raise HTTPException(status_code=409, detail="서명 요청 상태의 계약서만 알림을 재발송할 수 있습니다")
-+    history = _contract_notification_history(tenant_id, str(contract.get("id") or ""))
-+    if history is None:
-+        # 이력을 못 읽으면 rate limit 도 못 건다 — 열어두지 않고 막는다.
-+        raise HTTPException(status_code=503, detail="알림 발송 이력을 확인할 수 없어 재발송할 수 없습니다")
-+    stamps = [
-+        stamp
-+        for stamp in (_pg_ts(row.get("created_at")) for row in history if row.get("event") == "signature_requested")
-+        if stamp
-+    ]
-+    if stamps:
-+        last_sent = max(stamps)
-+        elapsed = (datetime.now(KST) - last_sent).total_seconds()
-+        if elapsed < CONTRACT_NOTICE_RESEND_COOLDOWN_SECONDS:
-+            wait = int(CONTRACT_NOTICE_RESEND_COOLDOWN_SECONDS - elapsed) + 1
-+            raise HTTPException(status_code=429, detail=f"서명 요청 알림은 5분에 한 번만 보낼 수 있습니다. {wait}초 후 다시 시도하십시오")
-+    return {"contract_id": str(contract.get("id") or ""), "notify": _notify_contract_event(contract, "signature_requested")}
++def _load_probe():
++    spec = importlib.util.spec_from_file_location("codex_model_probe", REPO_ROOT / "scripts" / "codex_model_probe.py")
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
 +
 +
-+def _contract_pdf_root() -> Path:
-+    configured = str(os.getenv("OBYS_UPLOAD_ROOT") or "").strip()
-+    return Path(configured) if configured else DATA_DIR / "uploads" / "ledgers"
++probe = _load_probe()
 +
 +
-+def _contract_pdf_relpath(contract: dict[str, Any]) -> Path:
-+    tenant = str(UUID(str(contract.get("tenant_id") or "")))
-+    digest = hashlib.sha256(str(contract.get("id") or "").encode("utf-8")).hexdigest()[:32]
-+    return Path(tenant) / "contracts" / f"{digest}.signed.pdf"
++# ---------------------------------------------------------------------------
++# fixtures / fakes
++# ---------------------------------------------------------------------------
++
++CACHE_PAYLOAD = {
++    "fetched_at": "2026-09-30T04:14:00Z",
++    "etag": "secret-etag",
++    "client_version": "0.159.2",
++    "identity": {"account": "someone@example.com"},
++    "models": [
++        {"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "visibility": "list", "supported_in_api": True},
++        {"slug": "gpt-6-sol", "display_name": "GPT-6 Sol", "visibility": "list", "supported_in_api": True},
++        {"slug": "gpt-reserve", "display_name": "reserve", "visibility": "hide", "supported_in_api": True},
++    ],
++}
 +
 +
-+def _verified_signed_pdf_path(contract: dict[str, Any]) -> Path | None:
-+    relative = str(contract.get("signed_pdf_path") or "")
-+    expected = str(contract.get("signed_pdf_sha256") or "")
-+    if not relative or not expected:
-+        return None
-+    root = _contract_pdf_root().resolve()
-+    path = (root / relative).resolve()
-+    if root not in path.parents or not path.is_file():
-+        return None
-+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-+        logger.error("signed contract pdf hash mismatch: contract=%s", contract.get("id"))
-+        return None
++@pytest.fixture
++def cache_file(tmp_path, monkeypatch):
++    path = tmp_path / "models_cache.json"
++    path.write_text(json.dumps(CACHE_PAYLOAD), encoding="utf-8")
++    monkeypatch.setenv(cli_model_autoreg.CODEX_CACHE_ENV, str(path))
++    monkeypatch.setenv(cli_model_autoreg.CODEX_CACHE_MIRROR_ENV, str(tmp_path / "no-mirror.json"))
 +    return path
 +
 +
-+def _persist_contract_delivery(contract: dict[str, Any], user: dict[str, Any] | None) -> None:
-+    _write_hr_record("contracts", contract, user)
-+    if _db_available():
-+        _run_db(_db_update_contract_delivery_columns(contract))
-+
-+
-+def _store_signed_contract_pdf(contract: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
-+    """봉인 스냅샷으로 PDF 를 만들어 보관하고 계약서에 메타를 남긴다. 예외를 올리지 않는다."""
-+    result: dict[str, Any]
-+    try:
-+        from app.services import yeoljeong_contract_pdf as contract_pdf
-+
-+        data = contract_pdf.render_signed_contract_pdf(contract)
-+        relative = _contract_pdf_relpath(contract)
-+        path = _contract_pdf_root() / relative
-+        path.parent.mkdir(parents=True, exist_ok=True)
-+        tmp = path.with_name(f"{path.name}.{secrets.token_hex(4)}.tmp")
-+        tmp.write_bytes(data)
-+        os.chmod(tmp, 0o600)
-+        tmp.replace(path)
-+        digest = hashlib.sha256(data).hexdigest()
-+        contract["signed_pdf_path"] = str(relative)
-+        contract["signed_pdf_sha256"] = digest
-+        contract["signed_pdf_bytes"] = len(data)
-+        contract["signed_pdf_generated_at"] = _now()
-+        contract["signed_pdf_error"] = ""
-+        result = {"status": "stored", "sha256": digest, "bytes": len(data)}
-+    except Exception as exc:  # noqa: BLE001 — 서명은 유지하고 실패만 기록한다
-+        logger.error("signed contract pdf failed: contract=%s err=%s", contract.get("id"), exc)
-+        contract["signed_pdf_error"] = f"{_now()} {type(exc).__name__}: {exc}"[:500]
-+        result = {"status": "failed", "error": contract["signed_pdf_error"]}
-+    try:
-+        _persist_contract_delivery(contract, user)
-+    except Exception as exc:  # noqa: BLE001
-+        logger.error("signed contract pdf meta not recorded: contract=%s err=%s", contract.get("id"), exc)
-+        result = {**result, "recorded": False}
-+    return result
-+
-+
-+def sign_contract_and_deliver(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
-+    contract = sign_contract(payload, user)
-+    signed_pdf = _store_signed_contract_pdf(contract, user)
-+    return {"contract": contract, "signed_pdf": signed_pdf, "notify": _notify_contract_event(contract, "signed")}
-+
-+
-+def regenerate_signed_contract_pdf(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
-+    _tenant_id(user)
-+    if not _is_admin(user):
-+        raise HTTPException(status_code=403, detail="서명본 PDF 재생성 권한이 없습니다")
-+    contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="계약서를 찾을 수 없습니다")
-+    if str(contract.get("status") or "") != "signed":
-+        raise HTTPException(status_code=409, detail="서명 완료 계약서만 PDF 를 만들 수 있습니다")
-+    return {"contract_id": str(contract.get("id") or ""), "signed_pdf": _store_signed_contract_pdf(contract, user)}
-+
-+
-+def signed_contract_pdf_for_download(contract_id: str, user: dict[str, Any]) -> tuple[Path, str]:
-+    """관리자와 계약 당사자 본인만. 다른 테넌트·제3자는 존재 여부와 무관하게 403."""
-+    denied = HTTPException(status_code=403, detail="이 계약서 PDF 에 접근할 권한이 없습니다")
-+    _tenant_id(user)
-+    try:
-+        contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="")
-+    except HTTPException as exc:
-+        if exc.status_code == 404:
-+            raise denied from None
-+        raise
-+    email = _email(user)
-+    admin = _is_admin(user)
-+    is_party = bool(email) and email == str(contract.get("employee_email") or "").strip().lower()
-+    if not admin and not is_party:
-+        raise denied
-+    if str(contract.get("status") or "") != "signed":
-+        raise HTTPException(status_code=409, detail="서명 완료 계약서만 PDF 를 내려받을 수 있습니다")
-+    path = _verified_signed_pdf_path(contract)
-+    if path is None:
-+        stored = _store_signed_contract_pdf(contract, user)
-+        path = _verified_signed_pdf_path(contract) if stored.get("status") == "stored" else None
-+        if path is None:
-+            raise HTTPException(status_code=503, detail="서명본 PDF 를 준비하지 못했습니다. 관리자에게 재생성을 요청하십시오")
-+    if is_party and not admin:
-+        # 교부 기록: 최초 교부 시각은 덮어쓰지 않고, 매 다운로드는 이력에 남긴다.
-+        if not contract.get("delivered_at"):
-+            contract["delivered_at"] = _now()
-+            contract["delivery_channel"] = "download"
-+            try:
-+                _persist_contract_delivery(contract, user)
-+            except Exception as exc:  # noqa: BLE001
-+                logger.error("contract delivery not recorded: contract=%s err=%s", contract.get("id"), exc)
-+        try:
-+            from app.services.yeoljeong_contract_notify import mask_email
-+
-+            _append_contract_notification_logs(
-+                contract, "delivered", [{"channel": "download", "status": "sent", "target_masked": mask_email(email)}]
-+            )
-+        except Exception as exc:  # noqa: BLE001
-+            logger.warning("contract delivery log failed: contract=%s err=%s", contract.get("id"), exc)
-+    title = str(contract.get("print_title") or "계약서")
-+    filename = f"{_safe_filename(title)}_{str(contract.get('employee_name') or '').strip() or 'signed'}_서명본.pdf"
-+    return path, _safe_filename(filename)
-+
-+
- def list_payroll(user: dict[str, Any]) -> list[dict[str, Any]]:
-     return sorted(_filter_user(_read_hr("payroll_statements", user), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
- 
-diff --git a/app/services/yeoljeong_ops_service.py b/app/services/yeoljeong_ops_service.py
-index f424e974..c035d182 100644
---- a/app/services/yeoljeong_ops_service.py
-+++ b/app/services/yeoljeong_ops_service.py
-@@ -34,6 +34,8 @@ NOTIFICATION_TYPE_META: dict[str, dict[str, str]] = {
-     "approval_requested": {"icon": "clock", "color": "amber"},
-     "approval_approved": {"icon": "check-circle", "color": "green"},
-     "approval_rejected": {"icon": "x-circle", "color": "red"},
-+    "contract_signature_requested": {"icon": "file-signature", "color": "amber"},
-+    "contract_signed": {"icon": "file-check", "color": "green"},
-     "system": {"icon": "info", "color": "blue"},
-     "warning": {"icon": "alert-triangle", "color": "orange"},
-     "error": {"icon": "alert-circle", "color": "red"},
-diff --git a/docs/operations/OBYS_CONTRACT_NOTIFY_SIGNED_PDF.md b/docs/operations/OBYS_CONTRACT_NOTIFY_SIGNED_PDF.md
-new file mode 100644
-index 00000000..6e189465
---- /dev/null
-+++ b/docs/operations/OBYS_CONTRACT_NOTIFY_SIGNED_PDF.md
-@@ -0,0 +1,110 @@
-+# 오비서 계약서 — 서명요청 알림 · 서명본 PDF 보관/교부 운영 문서
-+
-+TASK: AADS-OBYS-CONTRACT-NOTIFY-PDF-20260930 · 대상: 오비서(열정국밥) 진아서버 인스턴스
-+
-+## 1. 무엇이 바뀌었나
-+
-+| 시점 | 동작 | 실패 시 |
-+|---|---|---|
-+| `POST /api/v1/yeoljeong-finance/contracts/{id}/request-signature` | sign_token 발급 후 직원에게 알림 발송, 채널별 이력 기록 | 서명요청은 200 유지, 응답 `notify.status=failed`, 이력 `failed` |
-+| `POST /api/v1/yeoljeong-finance/contracts/signing` | 서명 봉인 후 `signed_snapshot` 으로 PDF 생성·보관, `contract_signed` 알림 | 서명은 유지, 계약서 `signed_pdf_error` 에 사유, 응답 `signed_pdf.status=failed` |
-+| `POST /api/v1/yeoljeong-finance/contracts/{id}/resend-signature-notice` (신규) | 관리자만, `status=requested` 만, 최근 이력 기준 5분 제한 | 403 / 409 / 429, 이력 저장소를 못 읽으면 503 |
-+| `GET /api/v1/yeoljeong-finance/contracts/{id}/signed-pdf` (신규) | 관리자·계약 당사자 본인만. 당사자 다운로드 시 교부 기록 | 다른 테넌트·제3자·없는 ID 모두 403, 미서명 409 |
-+| `POST /api/v1/yeoljeong-finance/contracts/{id}/signed-pdf/regenerate` (신규) | 관리자만. 봉인 스냅샷으로 다시 만들기 | 미서명 409 |
-+
-+응답 호환: 기존 `{"contract": ...}` 키는 그대로이고 `notify`, `signed_pdf` 키가 추가됐다.
-+
-+## 2. 알림 채널 활성화 (환경변수, `.env` 에만 둔다 — R-KEY)
-+
-+| 변수 | 기본값 | 의미 |
-+|---|---|---|
-+| `OBYS_CONTRACT_NOTIFY_CHANNELS` | `inapp` | 쉼표 구분. `inapp`, `sms`, `alimtalk`. **기본값에서는 문자·알림톡이 절대 나가지 않는다** |
-+| `OBYS_CONTRACT_ALIMTALK_TEMPLATE_SIGN_REQUEST` | (없음) | 서명요청 알림톡 템플릿 코드(카카오 사전심사 완료분). 없으면 알림톡 skip |
-+| `OBYS_CONTRACT_ALIMTALK_TEMPLATE_SIGNED` | (없음) | 서명완료 알림톡 템플릿 코드 |
-+| `OBYS_CONTRACT_SIGN_BASE_URL` | (없음) | 문자 본문에 넣을 서명 화면 주소. 예: `https://<오비서 도메인>/apps/obys/` → `?yf_contract_token=...` 가 붙는다. 없으면 링크 없이 "앱에서 확인" 문구만 |
-+| `ALIGO_API_KEY` / `ALIGO_USER_ID` / `ALIGO_SENDER` / `ALIGO_SENDER_KEY` | 기존 | 알리고 인증·발신번호. 미설정이면 sms/alimtalk 은 `skipped (aligo_unavailable)` |
-+
-+- 채널 순서는 inapp → sms → alimtalk 이고, **켜진 채널은 모두 시도한다**(sms 와 alimtalk 을 둘 다 켜면 둘 다 간다).
-+- 알림톡은 `failover_sms=False` 로 보낸다(대체 문자 이중 발송 방지).
-+- 외부 채널 본문에는 급여 등 계약 조건을 넣지 않는다. 사내 알림(inapp) 본문에는 sign_token 을 넣지 않는다.
-+- **실직원 대상 시험 금지.** 켜기 전에는 테스트 직원 계정(본인 번호)으로만 확인한다.
-+
-+활성화 예 (진아서버, 승인 후):
-+
-+```bash
-+# .env
-+OBYS_CONTRACT_NOTIFY_CHANNELS=inapp,sms
-+OBYS_CONTRACT_SIGN_BASE_URL=https://<오비서 도메인>/apps/obys/
-+```
-+
-+## 3. PDF 보관 경로
-+
-+- 경로: `${OBYS_UPLOAD_ROOT}/<tenant_id>/contracts/<sha256(contract_id)[:32]>.signed.pdf` (권한 0600)
-+  - `OBYS_UPLOAD_ROOT` 미설정 시 `${YEOLJEONG_FINANCE_DATA_DIR}/uploads/ledgers` (obys_upload_service 기본값과 동일)
-+  - 웹 정적 경로가 아니다. 다운로드는 위 API 로만 한다.
-+- DB 에는 **상대 경로**와 파일 sha256·바이트 수를 남긴다: `contract_payload` 의 `signed_pdf_path`/`signed_pdf_sha256`/`signed_pdf_bytes`/`signed_pdf_generated_at`/`signed_pdf_error` (원본), 마이그레이션 적용 후에는 같은 값이 `yeoljeong_contracts` 컬럼에도 복사된다.
-+- `yeoljeong_uploads` 는 재사용하지 않았다 — `category CHECK IN ('sales','purchase','transaction')` 라 계약서를 넣으려면 기존 제약을 바꿔야 한다.
-+- PDF 원본은 `signed_snapshot` 하나다. 생성 전에 스냅샷 해시를 다시 계산해 `signed_snapshot_sha256` 과 다르면 만들지 않는다. 자필서명 PNG 도 봉인된 `signature_sha256` 과 대조한다.
-+- 폰트: `app/assets/fonts/NanumGothic-Regular.ttf` (SIL OFL, 저장소 동봉). `OBYS_CONTRACT_PDF_FONT_PATH` 로 바꿀 수 있다. 폰트가 없거나 한글 글리프가 없으면 **생성 실패로 기록**한다(빈칸 PDF 를 만들지 않는다).
-+- 라이브러리: `reportlab==4.4.10` (순수 파이썬, `pyproject.toml`·`requirements.runtime.lock` 에 고정). 진아서버 venv 에는 `pip install -r requirements.runtime.lock` 로 들어간다 — OS 패키지 불필요.
-+- 렌더링은 결정적(invariant)이다. 같은 스냅샷이면 같은 바이트·같은 해시가 나온다.
-+
-+## 4. 재생성 절차
-+
-+1. 실패 확인: 아래 5-③ 쿼리로 `signed_pdf_error` 가 있는 서명 계약서를 찾는다.
-+2. 원인 조치(폰트 경로, `OBYS_UPLOAD_ROOT` 쓰기 권한, reportlab 설치 여부).
-+3. 관리자 계정으로 `POST /api/v1/yeoljeong-finance/contracts/{id}/signed-pdf/regenerate` → 응답 `signed_pdf.status=stored`, `sha256`, `bytes` 확인.
-+   - 다운로드 API 도 파일이 없거나 해시가 다르면 한 번 자동 재생성을 시도한다(실패 시 503).
-+4. 서명 완료 계약서의 수정·삭제 금지는 그대로다. 재생성은 PDF 메타만 갱신하고 스냅샷·서명은 건드리지 않는다.
-+
-+## 5. 마이그레이션과 확인 쿼리
-+
-+마이그레이션: `migrations/20260930_obys_contract_notify_signed_pdf.sql` (롤백 `migrations/rollback/20260930_obys_contract_notify_signed_pdf.down.sql`).
-+**오비서 업무 DB 전용**이고 스키마 추가만 한다(기존 계약서 행 값 불변). AADS 자동 적용에서는 baseline 으로 HOLD 된다.
-+
-+```bash
-+psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_contract_notify_signed_pdf.sql
-+```
-+
-+마이그레이션 전에도 코드는 동작한다: 이력 INSERT 는 테이블이 없으면 기록하지 않고(`notify.logged=false`), 재발송은 이력을 못 읽으므로 503 으로 막힌다. 컬럼 복사는 컬럼이 다 있을 때만 한다.
-+
-+① 계약서별 발송 이력
-+
-+```sql
-+SELECT created_at, event, channel, status, target_masked, error_detail
-+  FROM yeoljeong_contract_notifications
-+ WHERE tenant_id = '<tenant uuid>' AND contract_id = '<contract id>'
-+ ORDER BY created_at DESC;
-+```
-+
-+② 교부 기록 (최초 교부 시각 + 모든 다운로드)
-+
-+```sql
-+SELECT c.id, c.employee_name, c.signed_at, c.delivered_at, c.delivery_channel,
-+       c.signed_pdf_sha256, c.signed_pdf_bytes
-+  FROM yeoljeong_contracts c
-+ WHERE c.tenant_id = '<tenant uuid>' AND c.status = 'signed' AND c.deleted_at IS NULL
-+ ORDER BY c.signed_at DESC;
-+
-+SELECT contract_id, created_at, target_masked
-+  FROM yeoljeong_contract_notifications
-+ WHERE tenant_id = '<tenant uuid>' AND event = 'delivered'
-+ ORDER BY created_at DESC;
-+```
-+
-+③ PDF 미생성·실패 서명 계약서
-+
-+```sql
-+SELECT id, employee_name, signed_at, contract_payload->>'signed_pdf_error' AS pdf_error
-+  FROM yeoljeong_contracts
-+ WHERE status = 'signed' AND deleted_at IS NULL
-+   AND COALESCE(contract_payload->>'signed_pdf_sha256', '') = '';
-+```
-+
-+- `delivered_at` 은 **계약 당사자 본인이 처음 내려받은 시각**이고 덮어쓰지 않는다. 관리자 다운로드는 교부로 치지 않는다. 매 다운로드는 이력(event=`delivered`, channel=`download`)에 남는다.
-+- 수신번호·이메일 원문은 이력에 없다(마스킹 `010-****-5678`, `me****@example.com`).
-+
-+## 6. 알려진 한계
-+
-+- 재발송 5분 제한은 이력 조회 후 발송하는 방식이라, 같은 순간 두 번 누르면 둘 다 통과할 수 있다(잠금 없음).
-+- 파일 모드(업무 DB DSN 미설정, 개발용)에서는 이력이 `${YEOLJEONG_FINANCE_DATA_DIR}/contract_notifications.json` 에 쌓인다.
-diff --git a/migrations/20260930_obys_contract_notify_signed_pdf.sql b/migrations/20260930_obys_contract_notify_signed_pdf.sql
-new file mode 100644
-index 00000000..5f3a21e2
---- /dev/null
-+++ b/migrations/20260930_obys_contract_notify_signed_pdf.sql
-@@ -0,0 +1,47 @@
-+-- AADS-OBYS-CONTRACT-NOTIFY-PDF-20260930
-+-- 계약서 서명요청 알림 발송 이력 + 서명 완료본 PDF 보관·교부 컬럼.
-+--
-+-- 적용 대상: 오비서 업무 DB(OBYS_DATABASE_URL, 진아서버)만. AADS DB 에 돌리지 않는다.
-+--   scripts/migrations_auto_apply_baseline.txt 에 올려 자동 적용에서 HOLD 한다.
-+--   적용: psql "$OBYS_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20260930_obys_contract_notify_signed_pdf.sql
-+-- 스키마 추가만 한다. 기존 계약서 행(tenant 15055cac-…, draft 6건)의 값은 바꾸지 않는다.
-+--   ADD COLUMN 은 전부 NULL 허용·기본값 없음이라 기존 행을 다시 쓰지 않는다.
-+-- 멱등하다(IF NOT EXISTS).
-+-- 롤백: migrations/rollback/20260930_obys_contract_notify_signed_pdf.down.sql
-+
-+BEGIN;
-+
-+DO $$
-+BEGIN
-+    IF to_regclass('public.yeoljeong_contracts') IS NULL
-+       OR to_regclass('public.yeoljeong_business_tenant_mapping') IS NULL THEN
-+        RAISE EXCEPTION '오비서 업무 DB 전용이다 (yeoljeong_contracts / yeoljeong_business_tenant_mapping 없음)';
-+    END IF;
-+END
-+$$;
-+
-+-- 발송 이력. 수신번호·이메일 원문은 저장하지 않고 마스킹 값만 둔다.
-+CREATE TABLE IF NOT EXISTS yeoljeong_contract_notifications (
-+    id BIGSERIAL PRIMARY KEY,
-+    tenant_id UUID NOT NULL,
-+    contract_id TEXT NOT NULL,
-+    event TEXT NOT NULL DEFAULT 'signature_requested'
-+        CHECK (event IN ('signature_requested', 'signed', 'delivered')),
-+    channel TEXT NOT NULL,
-+    status TEXT NOT NULL CHECK (status IN ('sent', 'failed', 'skipped')),
-+    target_masked TEXT NOT NULL DEFAULT '',
-+    error_detail TEXT NOT NULL DEFAULT '',
-+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-+);
-+
-+CREATE INDEX IF NOT EXISTS idx_yf_contract_notifications_contract
-+    ON yeoljeong_contract_notifications (tenant_id, contract_id, created_at DESC);
-+
-+-- 서명본 PDF 보관·교부. 값의 원본은 contract_payload 이고 컬럼은 조회용 사본이다.
-+ALTER TABLE yeoljeong_contracts ADD COLUMN IF NOT EXISTS signed_pdf_path TEXT;
-+ALTER TABLE yeoljeong_contracts ADD COLUMN IF NOT EXISTS signed_pdf_sha256 TEXT;
-+ALTER TABLE yeoljeong_contracts ADD COLUMN IF NOT EXISTS signed_pdf_bytes BIGINT;
-+ALTER TABLE yeoljeong_contracts ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
-+ALTER TABLE yeoljeong_contracts ADD COLUMN IF NOT EXISTS delivery_channel TEXT;
-+
-+COMMIT;
-diff --git a/migrations/rollback/20260930_obys_contract_notify_signed_pdf.down.sql b/migrations/rollback/20260930_obys_contract_notify_signed_pdf.down.sql
-new file mode 100644
-index 00000000..77a53b13
---- /dev/null
-+++ b/migrations/rollback/20260930_obys_contract_notify_signed_pdf.down.sql
-@@ -0,0 +1,24 @@
-+-- Rollback: AADS-OBYS-CONTRACT-NOTIFY-PDF-20260930
-+-- 오비서 업무 DB 전용, 수동 적용. AADS DB 에 돌리지 않는다.
-+-- 주의: 발송 이력과 PDF 보관·교부 컬럼 사본이 사라진다. 같은 값은
-+-- yeoljeong_contracts.contract_payload(jsonb) 에 남아 있고, PDF 파일 자체는
-+-- OBYS_UPLOAD_ROOT/<tenant>/contracts/ 에 그대로 있다.
-+
-+BEGIN;
-+
-+DO $$
-+BEGIN
-+    IF to_regclass('public.yeoljeong_contracts') IS NULL THEN
-+        RAISE EXCEPTION '오비서 업무 DB 전용이다';
-+    END IF;
-+END
-+$$;
-+
-+DROP TABLE IF EXISTS yeoljeong_contract_notifications;
-+ALTER TABLE yeoljeong_contracts DROP COLUMN IF EXISTS signed_pdf_path;
-+ALTER TABLE yeoljeong_contracts DROP COLUMN IF EXISTS signed_pdf_sha256;
-+ALTER TABLE yeoljeong_contracts DROP COLUMN IF EXISTS signed_pdf_bytes;
-+ALTER TABLE yeoljeong_contracts DROP COLUMN IF EXISTS delivered_at;
-+ALTER TABLE yeoljeong_contracts DROP COLUMN IF EXISTS delivery_channel;
-+
-+COMMIT;
-diff --git a/pyproject.toml b/pyproject.toml
-index d19da395..df9e70bb 100644
---- a/pyproject.toml
-+++ b/pyproject.toml
-@@ -46,6 +46,8 @@ dependencies = [
-     "python-docx>=1.1.0",
-     # PDF 텍스트 추출 (Ephemeral Document Context)
-     "pdfplumber>=0.11.0",
-+    # 서명 완료 계약서 PDF 생성 (순수 파이썬 — OS 패키지 불필요, 오비서 진아서버 venv 호환)
-+    "reportlab==4.4.10",
-     # Redis
-     "redis[hiredis]>=5.0.0",
-     "upstash-redis>=1.0.0",
-diff --git a/requirements.runtime.lock b/requirements.runtime.lock
-index 5feae6b3..d6db9e03 100644
---- a/requirements.runtime.lock
-+++ b/requirements.runtime.lock
-@@ -69,6 +69,7 @@ cffi==2.1.1
- charset-normalizer==3.5.1
-     # via
-     #   pdfminer-six
-+    #   reportlab
-     #   requests
- chromadb==1.5.9
-     # via aads-server (pyproject.toml)
-@@ -359,7 +360,9 @@ pdfplumber==0.11.10
- pgvector==0.5.0
-     # via aads-server (pyproject.toml)
- pillow==12.3.0
--    # via pdfplumber
-+    # via
-+    #   pdfplumber
-+    #   reportlab
- propcache==0.5.2
-     # via
-     #   aiohttp
-@@ -474,6 +477,8 @@ referencing==0.37.0
-     #   jsonschema-specifications
- regex==2026.9.3
-     # via tiktoken
-+reportlab==4.4.10
-+    # via aads-server (pyproject.toml)
- requests==2.34.2
-     # via
-     #   docker
-diff --git a/scripts/migrations_auto_apply_baseline.txt b/scripts/migrations_auto_apply_baseline.txt
-index b675c538..963fe533 100644
---- a/scripts/migrations_auto_apply_baseline.txt
-+++ b/scripts/migrations_auto_apply_baseline.txt
-@@ -38,3 +38,6 @@ migrations/20260923_obys_auth_bootstrap_jinah.sql
- # Jinah-only (오비서 인증 DB). Never auto-apply to the AADS DB; run by hand per
- # docs/operations/OBYS_VAULT_SEPARATION_RUNBOOK.md.
- migrations/20260930_obys_e2e_credentials_jinah.sql
-+# OBYS 업무 DB 전용(yeoljeong_contracts). AADS DB 자동 적용 대상이 아니다 —
-+# docs/operations/OBYS_CONTRACT_NOTIFY_SIGNED_PDF.md 절차로 수동 적용.
-+migrations/20260930_obys_contract_notify_signed_pdf.sql
-diff --git a/tests/unit/test_obys_contract_notify_pdf.py b/tests/unit/test_obys_contract_notify_pdf.py
-new file mode 100644
-index 00000000..9ef4df57
---- /dev/null
-+++ b/tests/unit/test_obys_contract_notify_pdf.py
-@@ -0,0 +1,385 @@
-+"""AADS-OBYS-CONTRACT-NOTIFY-PDF-20260930 — 서명요청 알림 + 서명본 PDF 보관·교부."""
-+import base64
-+import hashlib
-+import json
-+import os
-+from datetime import datetime, timedelta
-+from io import BytesIO
-+from pathlib import Path
-+
-+import pytest
-+from fastapi import FastAPI
-+from fastapi.testclient import TestClient
-+
-+os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-that-is-at-least-32-bytes-long")
-+
-+from app.api import obys_finance as api
-+from app.services import aligo_client, yeoljeong_ops_service
-+
-+svc = api.svc
-+TENANT = "15055cac-71b0-45ec-b714-7093dde189ff"
-+OTHER_TENANT = "2a1b3c4d-0000-4000-8000-000000000001"
-+MEMBERSHIP = {"tenant_id": TENANT, "status": "active"}
-+ADMIN = {"email": "owner@example.com", "is_admin": True, "tenant_id": TENANT, "current_membership": MEMBERSHIP}
-+EMPLOYEE = {"email": "member@example.com", "is_admin": False, "tenant_id": TENANT, "current_membership": MEMBERSHIP}
-+THIRD_PARTY = {"email": "other@example.com", "is_admin": False, "tenant_id": TENANT, "current_membership": MEMBERSHIP}
-+OTHER_TENANT_ADMIN = {
-+    "email": "boss@other.example.com",
-+    "is_admin": True,
-+    "tenant_id": OTHER_TENANT,
-+    "current_membership": {"tenant_id": OTHER_TENANT, "status": "active"},
-+}
-+EMPLOYEE_PHONE = "010-1234-5678"
-+
-+
-+def _disable_db(coroutine):
-+    close = getattr(coroutine, "close", None)
-+    if close:
-+        close()
-+    return None
-+
-+
-+@pytest.fixture(autouse=True)
-+def isolated(tmp_path, monkeypatch):
-+    """파일 모드로만 돈다 — 운영 DB·운영 업로드 경로·실제 알리고를 절대 건드리지 않는다."""
-+    for name in ("OBYS_DATABASE_URL", "YEOLJEONG_FINANCE_DATABASE_URL", "OBYS_CONTRACT_NOTIFY_CHANNELS",
-+                 "OBYS_CONTRACT_ALIMTALK_TEMPLATE_SIGN_REQUEST", "OBYS_CONTRACT_ALIMTALK_TEMPLATE_SIGNED",
-+                 "OBYS_CONTRACT_PDF_FONT_PATH", "OBYS_CONTRACT_SIGN_BASE_URL"):
-+        monkeypatch.delenv(name, raising=False)
-+    monkeypatch.setenv("OBYS_UPLOAD_ROOT", str(tmp_path / "upload-root"))
-+    monkeypatch.setattr(svc, "DATA_DIR", tmp_path / "data")
-+    monkeypatch.setattr(svc, "UPLOAD_DIR", tmp_path / "data" / "uploads" / "onboarding")
-+    monkeypatch.setattr(svc, "_run_db", _disable_db)
-+
-+    inapp_calls = []
-+
-+    async def fake_create_notification(**kwargs):
-+        inapp_calls.append(kwargs)
-+        return {"id": f"ntf-{len(inapp_calls)}", **kwargs}
-+
-+    monkeypatch.setattr(yeoljeong_ops_service, "create_notification", fake_create_notification)
-+
-+    aligo_calls = {"sms": [], "alimtalk": []}
-+
-+    async def fake_send_sms(receiver, msg, sender=None, **kwargs):
-+        aligo_calls["sms"].append(receiver)
-+        return {"result_code": 1, "message": "success"}
-+
-+    async def fake_send_alimtalk(receiver, template_code, message, **kwargs):
-+        aligo_calls["alimtalk"].append((receiver, template_code))
-+        return {"code": 0, "message": "성공"}
-+
-+    monkeypatch.setattr(aligo_client, "is_available", lambda: True)
-+    monkeypatch.setattr(aligo_client, "send_sms", fake_send_sms)
-+    monkeypatch.setattr(aligo_client, "send_alimtalk", fake_send_alimtalk)
-+
-+    svc._write("employee_join_requests", [{
-+        "id": "join-mia", "name": "가입 직원", "email": EMPLOYEE["email"],
-+        "address": "서울시 직원 주소", "phone": EMPLOYEE_PHONE, "birth_date": "1990-01-01",
-+        "tenant_id": TENANT, "business_id": "biz-mia", "branch": "열정국밥_미아점", "status": "approved",
-+    }])
-+    return {"inapp": inapp_calls, "aligo": aligo_calls, "tmp": tmp_path}
-+
-+
-+def _contract_payload(**overrides):
-+    payload = {
-+        "employee_request_id": "join-mia", "business_id": "biz-mia", "branch": "열정국밥_미아점",
-+        "contract_type": "regular", "employment_tax_type": "four_insurance",
-+        "start_date": "2026-07-22", "contract_date": "2026-07-22", "wage_type": "monthly",
-+        "wage": 2800000, "workplace": "열정국밥 미아점", "job_description": "매장 운영",
-+        "work_time": "09:00-18:00", "rest_time": "12:00-13:00", "weekly_hours": "주 40시간",
-+        "work_days": "주 5일", "holidays": "매주 일요일", "pay_date": "매월 10일",
-+        "pay_method": "계좌이체", "wage_composition": "기본급 및 법정수당",
-+        "overtime_terms": "사전 승인 및 법정 가산수당", "leave_terms": "법정 연차유급휴가",
-+        "insurance_terms": "4대보험 법정 기준 적용",
++@pytest.fixture
++def no_cache(tmp_path, monkeypatch):
++    monkeypatch.setenv(cli_model_autoreg.CODEX_CACHE_ENV, str(tmp_path / "missing.json"))
++    monkeypatch.setenv(cli_model_autoreg.CODEX_CACHE_MIRROR_ENV, str(tmp_path / "missing-mirror.json"))
++
++
++def _skip_fetch(**extra):
++    return AsyncMock(return_value=([], {"status": "skipped", "error": "test", **extra}))
++
++
++@pytest.fixture
++def api_fetchers_off(monkeypatch):
++    for name in ("_fetch_openai_models", "_fetch_anthropic_models", "_fetch_gemini_models",
++                 "_fetch_litellm_models", "_fetch_kimi_models"):
++        monkeypatch.setattr(model_registry, name, _skip_fetch())
++
++
++class _Tx:
++    async def __aenter__(self):
++        return self
++
++    async def __aexit__(self, *exc):
++        return False
++
++
++class _Acquire:
++    def __init__(self, conn):
++        self.conn = conn
++
++    async def __aenter__(self):
++        return self.conn
++
++    async def __aexit__(self, *exc):
++        return False
++
++
++class _Pool:
++    def __init__(self, conn):
++        self.conn = conn
++
++    def acquire(self):
++        return _Acquire(self.conn)
++
++
++class DbConn:
++    """sync 가 쓰는 SQL 만 흉내 낸다. 후보·라우팅 테이블은 PK 충돌 시 DO NOTHING."""
++
++    def __init__(self, *, existing=(), verified=(), candidates=None, routing=None):
++        self.existing = set(existing)
++        self.verified = set(verified)
++        self.candidates = dict(candidates or {})
++        self.routing = dict(routing or {})
++        self.llm_models: dict[tuple[str, str], dict] = {}
++        self.execute_calls: list[tuple[str, tuple]] = []
++        self.discovery_runs: list[tuple] = []
++
++    def transaction(self):
++        return _Tx()
++
++    async def fetch(self, query, *args):
++        if "activation_source = 'manual'" in query:
++            return []
++        if query.strip() == "SELECT provider, model_id FROM llm_models":
++            return [{"provider": p, "model_id": m} for p, m in self.existing]
++        if "FROM llm_model_candidates" in query and "status = 'verified'" in query:
++            return [{"model_id": m} for m in self.verified]
++        if "INSERT INTO llm_model_candidates" in query:
++            assert "DO NOTHING" in query and "'discovered'" in query
++            key = ("codex", args[0])
++            if key in self.candidates:
++                return []
++            self.candidates[key] = {"status": "discovered", "product_name": args[1], "source": args[2]}
++            return [{"model_id": args[0]}]
++        if "INSERT INTO model_routing_preferences" in query:
++            assert "DO NOTHING" in query and "VALUES ($1, $2, $3, $4, FALSE, FALSE" in query
++            key = (args[0], args[1], args[2])
++            if key in self.routing:
++                return []
++            self.routing[key] = {"is_enabled": False, "updated_by": args[5]}
++            return [{"provider": args[1], "model_id": args[2]}]
++        raise AssertionError(f"unexpected fetch: {query[:80]}")
++
++    async def execute(self, query, *args):
++        self.execute_calls.append((query, args))
++        if "INSERT INTO llm_models" in query:
++            self.llm_models[(args[0], args[1])] = {
++                "is_active": args[11], "discovery_source": args[16],
++                "verification_status": args[17], "is_executable": args[22],
++            }
++        if "INSERT INTO llm_model_discovery_runs" in query:
++            self.discovery_runs.append(args)
++        return "OK"
++
++
++async def _sync(monkeypatch, conn, key_rows=()):
++    monkeypatch.setattr(model_registry, "get_pool", lambda: _Pool(conn))
++    monkeypatch.setattr(model_registry, "_fetch_key_rows", AsyncMock(return_value=list(key_rows)))
++    monkeypatch.setattr(model_registry, "append_key_audit_log", AsyncMock())
++    notify = AsyncMock(return_value=True)
++    monkeypatch.setattr("app.services.ohvis_alert.notify", notify)
++    result = await model_registry.sync_model_registry(triggered_by="test", reason="unit")
++    return result, notify
++
++
++# ---------------------------------------------------------------------------
++# A/B — 발견
++# ---------------------------------------------------------------------------
++
++def test_parse_cache_keeps_only_list_visibility():
++    rows, hidden = cli_model_autoreg.parse_codex_models_cache(CACHE_PAYLOAD)
++    assert [r["model_id"] for r in rows] == ["gpt-6.1-sol", "gpt-6-sol"]
++    assert hidden == 1
++    # 계정 정보는 raw 로 옮기지 않는다.
++    assert all("identity" not in r["raw"] and "etag" not in r["raw"] for r in rows)
++
++
++@pytest.mark.asyncio
++async def test_discovery_adds_codex_cli_source_hide_excluded(cache_file, api_fetchers_off):
++    rows, runs = await model_registry.discover_provider_model_rows([], enabled=True)
++    codex_rows = [r for r in rows if r["provider"] == "codex"]
++    assert {r["model_id"] for r in codex_rows} == {"gpt-6.1-sol", "gpt-6-sol"}
++    assert all(r["discovery_source"] == "codex_cli_cache" for r in codex_rows)
++    # 목록에 있다고 실행 가능한 것이 아니다.
++    assert all(r["is_active"] is False and r["is_executable"] is False for r in codex_rows)
++    codex_run = next(run for run in runs if run["provider"] == "codex")
++    assert codex_run["status"] == "ok" and codex_run["count"] == 2 and codex_run["hidden_count"] == 1
++
++
++@pytest.mark.asyncio
++async def test_sync_registers_new_codex_slug_inactive_and_candidate(monkeypatch, cache_file, api_fetchers_off):
++    conn = DbConn(existing={("codex", "gpt-6-sol")})
++    result, notify = await _sync(monkeypatch, conn)
++
++    assert result["ok"] is True
++    new_row = conn.llm_models[("codex", "gpt-6.1-sol")]
++    assert new_row["is_active"] is False and new_row["is_executable"] is False
++    assert new_row["discovery_source"] == "codex_cli_cache"
++    # 신규 1건만 후보로. 템플릿 slug(gpt-6-sol)·hide(gpt-reserve)는 후보를 만들지 않는다.
++    assert set(conn.candidates) == {("codex", "gpt-6.1-sol")}
++    assert conn.candidates[("codex", "gpt-6.1-sol")]["source"] == "codex_cli_cache"
++    assert ("codex", "gpt-reserve") not in conn.llm_models
++    # 발견만으로는 runner_llm 에 넣지 않는다(검증 전).
++    assert not any(k[1] == "codex" for k in conn.routing)
++    notify.assert_not_awaited()
++    # 템플릿 하드코딩은 늘리지 않는다.
++    assert "gpt-6.1-sol" not in model_registry._PROVIDER_MODELS["codex"]
++
++
++@pytest.mark.asyncio
++async def test_template_slug_and_existing_row_not_duplicated(monkeypatch, cache_file, api_fetchers_off):
++    conn = DbConn(existing={("codex", "gpt-6-sol"), ("codex", "gpt-6.1-sol")})
++    await _sync(monkeypatch, conn)
++    assert conn.candidates == {}
++    # 템플릿 행은 템플릿 출처로 남는다.
++    assert conn.llm_models[("codex", "gpt-6-sol")]["discovery_source"] == "template"
++
++
++@pytest.mark.asyncio
++async def test_missing_cache_records_unavailable_run(monkeypatch, no_cache, api_fetchers_off):
++    rows, runs = await model_registry.discover_provider_model_rows([], enabled=True)
++    codex_run = next(run for run in runs if run["provider"] == "codex")
++    assert codex_run["status"] == "unavailable"
++    assert "not_found:" in codex_run["error"] and "missing-mirror.json" in codex_run["error"]
++    assert not [r for r in rows if r["provider"] == "codex"]
++
++    conn = DbConn()
++    await _sync(monkeypatch, conn)
++    recorded = [args for args in conn.discovery_runs if args[0] == "codex"]
++    assert recorded and recorded[0][1] == "unavailable"
++    # 캐시를 못 읽은 회차에는 codex_cli_cache 행을 은퇴시키지 않는다.
++    retire = next(args for q, args in conn.execute_calls if "retired_at = COALESCE" in q)
++    assert retire[1] is True
++
++
++@pytest.mark.asyncio
++async def test_sync_keeps_probe_verified_codex_row_executable(monkeypatch, cache_file, api_fetchers_off):
++    conn = DbConn(existing={("codex", "gpt-6-sol"), ("codex", "gpt-6.1-sol")}, verified={"gpt-6.1-sol"})
++    _, notify = await _sync(monkeypatch, conn)
++    row = conn.llm_models[("codex", "gpt-6.1-sol")]
++    assert row["is_executable"] is True and row["verification_status"] == "verified"
++    # verified → runner_llm 비활성 후보 + 알림 1건
++    assert conn.routing[("runner_llm", "codex", "gpt-6.1-sol")] == {"is_enabled": False, "updated_by": "auto_discovery"}
++    notify.assert_awaited_once()
++    assert notify.await_args.args[0] == cli_model_autoreg.VERIFIED_ALERT_TITLE
++
++    # 두 번째 sync: 행이 이미 있으니 알림도 다시 안 간다.
++    _, notify2 = await _sync(monkeypatch, conn)
++    notify2.assert_not_awaited()
++
++
++# ---------------------------------------------------------------------------
++# C — probe 상태 전이
++# ---------------------------------------------------------------------------
++
++def test_classify_probe_three_outcomes():
++    assert probe.classify_probe(0, "OK\n", "") == ("verified", "codex exec 응답 OK")
++    status, note = probe.classify_probe(
++        1, "",
++        "ERROR: unexpected status 400 Bad Request: {\"detail\":\"The 'gpt-6.1-sol' model is not supported "
++        "when using Codex with a ChatGPT account.\"}\nmore noise",
++    )
++    assert status == "blocked_account"
++    assert "not supported when using Codex with a ChatGPT account" in note and "\n" not in note
++    assert probe.classify_probe(1, "", "error: stream disconnected")[0] == "probe_failed"
++    assert probe.classify_probe(124, "", "", timed_out=True)[0] == "probe_failed"
++
++
++class FakeStore:
++    def __init__(self, rows):
++        self.rows = rows
++        self.recorded: list[tuple[str, str, str]] = []
++
++    def candidates(self):
++        return [dict(r) for r in self.rows]
++
++    def record(self, model_id, status, note):
++        self.recorded.append((model_id, status, note))
++        for r in self.rows:
++            if r["model_id"] == model_id:
++                r["status"] = status
++        return {"runner_candidate_inserted": status == "verified"}
++
++
++def test_probe_transitions_and_daily_cap():
++    now = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
++    store = FakeStore([
++        {"model_id": "m-ok", "status": "discovered", "last_probe_at": None},
++        {"model_id": "m-blocked", "status": "discovered", "last_probe_at": None},
++        {"model_id": "m-fail", "status": "discovered", "last_probe_at": None},
++        # 24시간이 안 지난 blocked_account 는 건너뛴다.
++        {"model_id": "m-recent", "status": "blocked_account", "last_probe_at": now - timedelta(hours=3)},
++        # 24시간 지난 blocked_account 는 재시도.
++        {"model_id": "m-retry", "status": "blocked_account", "last_probe_at": now - timedelta(hours=25)},
++    ])
++    outcomes = {
++        "m-ok": ("verified", "ok"),
++        "m-blocked": ("blocked_account", "not supported when using Codex with a ChatGPT account"),
++        "m-fail": ("probe_failed", "rc=1"),
++        "m-retry": ("blocked_account", "still"),
 +    }
-+    payload.update(overrides)
-+    return payload
++    calls = []
++
++    def fake_probe(model_id, *, deadline):
++        calls.append(model_id)
++        return outcomes[model_id]
++
++    results = probe.probe_candidates(store, probe=fake_probe, now=now, deadline=1e12, max_models=10)
++    assert calls == ["m-ok", "m-blocked", "m-fail", "m-retry"]
++    assert [(r["model_id"], r["status"]) for r in results] == [
++        ("m-ok", "verified"), ("m-blocked", "blocked_account"),
++        ("m-fail", "probe_failed"), ("m-retry", "blocked_account"),
++    ]
++    # verified 는 다시 치지 않는다.
++    assert probe.is_due({"status": "verified", "last_probe_at": None}, now) is False
 +
 +
-+def _real_signature_png() -> bytes:
-+    from PIL import Image, ImageDraw
++class _Cursor:
++    def __init__(self, conn):
++        self.conn = conn
 +
-+    image = Image.new("RGB", (320, 120), "white")
-+    ImageDraw.Draw(image).line((12, 96, 300, 24), fill="black", width=5)
-+    buffer = BytesIO()
-+    image.save(buffer, "PNG")
-+    return buffer.getvalue()
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *exc):
++        return False
++
++    def execute(self, sql, params=()):
++        self.conn.sql.append((sql, params))
++
++    def fetchone(self):
++        return ("x",) if self.conn.insert_result else None
 +
 +
-+def _sign_payload(token):
-+    return {
-+        "token": token,
-+        "signer_name": "가입 직원",
-+        "consent": True,
-+        "consent_version": "yeoljeong-contract-sign-v1",
-+        "signature_data_uri": "data:image/png;base64," + base64.b64encode(_real_signature_png()).decode("ascii"),
-+        "audit_ip": "203.0.113.10",
-+        "audit_user_agent": "pytest",
++class _PgConn:
++    def __init__(self, insert_result=True):
++        self.sql = []
++        self.insert_result = insert_result
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *exc):
++        return False
++
++    def cursor(self):
++        return _Cursor(self)
++
++
++def test_probe_store_record_sql():
++    blocked = _PgConn()
++    probe.ProbeStore(blocked).record("gpt-6.1-sol", "blocked_account", "400 not supported ...")
++    assert len(blocked.sql) == 1 and "UPDATE llm_model_candidates" in blocked.sql[0][0]
++    assert blocked.sql[0][1][0] == "blocked_account"
++
++    ok = _PgConn(insert_result=True)
++    out = probe.ProbeStore(ok).record("gpt-7", "verified", "ok")
++    joined = "\n".join(s for s, _ in ok.sql)
++    assert "SET is_executable = TRUE" in joined and "provider = 'codex'" in joined
++    assert "is_enabled" not in joined.split("INSERT INTO model_routing_preferences")[0]
++    assert "FALSE, FALSE" in joined and "DO NOTHING" in joined
++    assert "INSERT INTO alert_history" in joined and out["runner_candidate_inserted"] is True
++
++    again = _PgConn(insert_result=False)
++    probe.ProbeStore(again).record("gpt-7", "verified", "ok")
++    assert not any("alert_history" in s for s, _ in again.sql)
++
++
++def test_build_mirror_strips_account_fields():
++    mirror = probe.build_mirror(CACHE_PAYLOAD, "/root/.codex/models_cache.json")
++    assert "identity" not in mirror and "etag" not in mirror
++    assert [m["slug"] for m in mirror["models"]] == ["gpt-6.1-sol", "gpt-6-sol", "gpt-reserve"]
++    rows, hidden = cli_model_autoreg.parse_codex_models_cache(mirror)
++    assert len(rows) == 2 and hidden == 1
++
++
++# ---------------------------------------------------------------------------
++# D — runner_llm 후보 자동등록
++# ---------------------------------------------------------------------------
++
++@pytest.mark.asyncio
++async def test_runner_candidates_idempotent_and_existing_rows_untouched():
++    existing = {
++        ("runner_llm", "openai", "gpt-6.1-sol"): {"is_enabled": False, "updated_by": "CEO-chat:gpt61sol-candidate"},
++        ("runner_llm", "codex", "gpt-6-sol"): {"is_enabled": True, "updated_by": "CEO:9102c970-runner-tail"},
 +    }
++    conn = DbConn(routing={k: dict(v) for k, v in existing.items()})
++    wanted = [("openai", "gpt-6.1-sol"), ("codex", "gpt-6-sol"), ("codex", "gpt-7")]
++
++    first = await cli_model_autoreg.register_runner_llm_candidates(conn, wanted)
++    second = await cli_model_autoreg.register_runner_llm_candidates(conn, wanted)
++
++    assert first == [("codex", "gpt-7")]
++    assert second == []
++    for key, value in existing.items():
++        assert conn.routing[key] == value
++    assert conn.routing[("runner_llm", "codex", "gpt-7")] == {"is_enabled": False, "updated_by": "auto_discovery"}
++    assert not any("UPDATE model_routing_preferences" in q for q, _ in conn.execute_calls)
 +
 +
-+def _client(user):
-+    app = FastAPI()
-+    app.include_router(api.router)
-+    app.dependency_overrides[api.get_current_user] = lambda: user
-+    return TestClient(app)
++@pytest.mark.asyncio
++async def test_claude_api_discovery_gets_runner_candidate(monkeypatch, no_cache, api_fetchers_off):
++    """F: Claude 는 별도 CLI 카탈로그가 없다 — anthropic_api discovery 가 D 경로를 그대로 탄다."""
++    monkeypatch.setattr(model_registry, "_fetch_anthropic_models", AsyncMock(return_value=(
++        [{"model_id": "claude-nova-6", "display_name": "Claude Nova 6", "raw": {}}], {"status": "ok"},
++    )))
++    now = datetime.now(timezone.utc)
++    key_rows = [{
++        "id": 1, "provider": "anthropic", "key_name": "ANTHROPIC_AUTH_TOKEN", "priority": 1,
++        "is_active": True, "rate_limited_until": None, "last_used_at": now, "last_verified_at": now,
++    }]
++    conn = DbConn(routing={("runner_llm", "anthropic", "claude-sonnet-5-5"): {"is_enabled": True, "updated_by": "x"}})
++    await _sync(monkeypatch, conn, key_rows=key_rows)
++    assert conn.routing[("runner_llm", "anthropic", "claude-nova-6")] == {"is_enabled": False, "updated_by": "auto_discovery"}
++    assert conn.routing[("runner_llm", "anthropic", "claude-sonnet-5-5")] == {"is_enabled": True, "updated_by": "x"}
++    # 템플릿 모델은 "새로 발견" 이 아니다.
++    assert ("runner_llm", "anthropic", "claude-opus-5-5") not in conn.routing
++
++    # 이미 llm_models 에 있던 모델은 다시 후보로 올리지 않는다.
++    conn2 = DbConn(existing={("anthropic", "claude-nova-6")})
++    await _sync(monkeypatch, conn2, key_rows=key_rows)
++    assert conn2.routing == {}
 +
 +
-+def _history():
-+    return svc._read_file_rows(svc.CONTRACT_NOTIFICATION_LOG)
++# ---------------------------------------------------------------------------
++# E — 러너 안전장치
++# ---------------------------------------------------------------------------
++
++class _RunnerConn:
++    def __init__(self, rows, codex_exec):
++        self.rows = rows
++        self.codex_exec = codex_exec
++
++    async def fetch(self, query, *args):
++        if "FROM llm_models WHERE provider = 'codex' AND is_executable = TRUE" in query:
++            return [{"model_id": m} for m in self.codex_exec]
++        return self.rows
 +
 +
-+def _requested_contract():
-+    saved = svc.save_contract(_contract_payload(), ADMIN)
-+    return svc.request_contract_signature_with_notice(saved["id"], ADMIN)
++@pytest.mark.asyncio
++async def test_routing_guard_drops_openai_models_not_executable_on_codex(monkeypatch):
++    from app.services import pipeline_runner_service as prs
++
++    rows = [
++        {"group_order": 2, "model": "claude-sonnet-5-5", "priority": 1, "provider": "anthropic"},
++        {"group_order": 2, "model": "gpt-6.1-sol", "priority": 2, "provider": "openai"},
++        {"group_order": 2, "model": "gpt-5.5", "priority": 3, "provider": "openai"},
++        {"group_order": 2, "model": "gpt-6-sol", "priority": 4, "provider": "codex"},
++    ]
++    conn = _RunnerConn(rows, codex_exec={"gpt-5.5", "gpt-6-sol"})
++    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _Pool(conn))
++    monkeypatch.setattr(model_registry, "filter_executable_models", AsyncMock(side_effect=lambda m: list(m)))
++
++    models = await prs._get_db_model_config("M")
++    assert models == ["claude-sonnet-5-5", "codex:gpt-5.5", "codex:gpt-6-sol"]
++    assert "codex:gpt-6.1-sol" not in models
 +
 +
-+def _signed_contract():
-+    requested = _requested_contract()["contract"]
-+    return svc.sign_contract_and_deliver(_sign_payload(requested["sign_token"]), EMPLOYEE)
++def test_auth_error_is_not_a_model_verdict():
++    """인증 실패(무효 토큰 401)는 기록하지 않고 회차를 멈춘다 — 모델의 24h 상한을 소모하지 않는다."""
++    status, note = probe.classify_probe(
++        1, "", "ERROR codex: unexpected status 401 Unauthorized: Encountered invalidated oauth token for user"
++    )
++    assert status == "auth_error" and "401" in note
++
++    store = FakeStore([
++        {"model_id": "m1", "status": "discovered", "last_probe_at": None},
++        {"model_id": "m2", "status": "discovered", "last_probe_at": None},
++    ])
++    results = probe.probe_candidates(
++        store, probe=lambda model_id, *, deadline: ("auth_error", "401"), deadline=1e12, max_models=10
++    )
++    assert store.recorded == []
++    assert [r["status"] for r in results] == ["auth_error"]
 +
 +
-+# --- A. 서명 요청 알림 ------------------------------------------------------
-+
-+
-+def test_signature_request_records_history_per_channel(isolated):
-+    result = _requested_contract()
-+    contract, notify = result["contract"], result["notify"]
-+
-+    assert contract["status"] == "requested"
-+    assert notify["status"] == "sent"
-+    by_channel = {item["channel"]: item for item in notify["channels"]}
-+    assert by_channel["inapp"]["status"] == "sent"
-+    assert by_channel["sms"]["status"] == "skipped"
-+    assert by_channel["alimtalk"]["status"] == "skipped"
-+
-+    assert len(isolated["inapp"]) == 1
-+    call = isolated["inapp"][0]
-+    assert call["notification_type"] == "contract_signature_requested"
-+    assert call["reference_type"] == "contract"
-+    assert call["reference_id"] == contract["id"]
-+    assert call["target_user"] == EMPLOYEE["email"]
-+    assert call["business_id"] == "biz-mia"
-+
-+    rows = _history()
-+    assert {(row["channel"], row["status"]) for row in rows} == {("inapp", "sent"), ("sms", "skipped"), ("alimtalk", "skipped")}
-+    assert all(row["event"] == "signature_requested" and row["tenant_id"] == TENANT for row in rows)
-+    assert all(row["contract_id"] == contract["id"] for row in rows)
-+    # 수신 원문은 이력에 남지 않는다.
-+    stored = json.dumps(rows, ensure_ascii=False)
-+    assert EMPLOYEE["email"] not in stored
-+    assert "01012345678" not in stored and EMPLOYEE_PHONE not in stored
-+
-+
-+def test_default_channel_setting_never_calls_aligo(isolated, monkeypatch):
-+    # 템플릿이 설정돼 있어도 채널 opt-in 이 없으면 외부 발송은 0회다.
-+    monkeypatch.setenv("OBYS_CONTRACT_ALIMTALK_TEMPLATE_SIGN_REQUEST", "TPL_SIGN_REQ")
-+    monkeypatch.setenv("OBYS_CONTRACT_ALIMTALK_TEMPLATE_SIGNED", "TPL_SIGNED")
-+    requested = _requested_contract()["contract"]
-+    svc.sign_contract_and_deliver(_sign_payload(requested["sign_token"]), EMPLOYEE)
-+
-+    assert isolated["aligo"] == {"sms": [], "alimtalk": []}
-+    skipped = [row for row in _history() if row["channel"] in {"sms", "alimtalk"}]
-+    assert skipped and all(row["status"] == "skipped" and row["error_detail"] == "channel_disabled" for row in skipped)
-+
-+
-+def test_opt_in_sms_sends_to_employee_phone_and_stores_masked_target(isolated, monkeypatch):
-+    monkeypatch.setenv("OBYS_CONTRACT_NOTIFY_CHANNELS", "inapp,sms,alimtalk")
-+    notify = _requested_contract()["notify"]
-+
-+    assert isolated["aligo"]["sms"] == ["01012345678"]
-+    # 알림톡은 템플릿 코드가 없으면 시도하지 않는다.
-+    assert isolated["aligo"]["alimtalk"] == []
-+    by_channel = {item["channel"]: item for item in notify["channels"]}
-+    assert by_channel["sms"] == {"channel": "sms", "status": "sent", "target_masked": "010-****-5678", "error_detail": ""}
-+    assert by_channel["alimtalk"]["status"] == "skipped"
-+    assert by_channel["alimtalk"]["error_detail"].startswith("template_not_configured")
-+    assert "01012345678" not in json.dumps(_history(), ensure_ascii=False)
-+
-+
-+def test_notification_failure_does_not_fail_signature_request_api(isolated, monkeypatch):
-+    async def broken_notification(**kwargs):
-+        raise ConnectionError("notification db down")
-+
-+    monkeypatch.setattr(yeoljeong_ops_service, "create_notification", broken_notification)
-+    saved = svc.save_contract(_contract_payload(), ADMIN)
-+
-+    response = _client(ADMIN).post(f"/yeoljeong-finance/contracts/{saved['id']}/request-signature")
-+
-+    assert response.status_code == 200
-+    body = response.json()
-+    assert body["contract"]["status"] == "requested"
-+    assert body["contract"]["sign_token"]
-+    assert body["notify"]["status"] == "failed"
-+    inapp = [row for row in _history() if row["channel"] == "inapp"]
-+    assert inapp and inapp[0]["status"] == "failed"
-+    assert "notification db down" in inapp[0]["error_detail"]
-+
-+
-+def test_dispatch_crash_is_recorded_and_request_still_succeeds(isolated, monkeypatch):
-+    from app.services import yeoljeong_contract_notify
-+
-+    async def crash(contract, event):
-+        raise RuntimeError("dispatcher exploded")
-+
-+    monkeypatch.setattr(yeoljeong_contract_notify, "dispatch", crash)
-+    result = _requested_contract()
-+
-+    assert result["contract"]["status"] == "requested"
-+    assert result["notify"]["status"] == "failed"
-+    assert _history()[0]["status"] == "failed"
-+
-+
-+def test_resend_signature_notice_rate_limit_and_guards(isolated):
-+    contract = _requested_contract()["contract"]
-+    client = _client(ADMIN)
-+    url = f"/yeoljeong-finance/contracts/{contract['id']}/resend-signature-notice"
-+
-+    limited = client.post(url)
-+    assert limited.status_code == 429
-+    assert len(isolated["inapp"]) == 1
-+
-+    # 최근 이력을 6분 전으로 돌리면 다시 보낼 수 있다.
-+    old = (datetime.now(svc.KST) - timedelta(minutes=6)).isoformat(timespec="seconds")
-+    svc._write_file_rows(svc.CONTRACT_NOTIFICATION_LOG, [{**row, "created_at": old} for row in _history()])
-+    resent = client.post(url)
-+    assert resent.status_code == 200
-+    assert resent.json()["notify"]["status"] == "sent"
-+    assert len(isolated["inapp"]) == 2
-+    assert client.post(url).status_code == 429
-+
-+    assert _client(EMPLOYEE).post(url).status_code == 403
-+
-+    draft = svc.save_contract(_contract_payload(), ADMIN)
-+    assert client.post(f"/yeoljeong-finance/contracts/{draft['id']}/resend-signature-notice").status_code == 409
-+
-+
-+# --- B. 서명본 PDF 보관·교부 ------------------------------------------------
-+
-+
-+def test_signing_stores_pdf_with_sha256_and_size(isolated):
-+    pytest.importorskip("reportlab")
-+    result = _signed_contract()
-+    contract = result["contract"]
-+
-+    assert contract["status"] == "signed"
-+    assert result["signed_pdf"]["status"] == "stored"
-+    path = Path(os.environ["OBYS_UPLOAD_ROOT"]) / contract["signed_pdf_path"]
-+    data = path.read_bytes()
-+    assert data.startswith(b"%PDF-")
-+    assert contract["signed_pdf_sha256"] == hashlib.sha256(data).hexdigest() == result["signed_pdf"]["sha256"]
-+    assert contract["signed_pdf_bytes"] == len(data) == result["signed_pdf"]["bytes"]
-+    assert contract["signed_pdf_path"].startswith(f"{TENANT}/contracts/")
-+    assert contract["signed_pdf_error"] == ""
-+    # 저장된 레코드에도 메타가 남는다.
-+    stored = svc._find(svc._read_hr("contracts", ADMIN), contract["id"])
-+    assert stored["signed_pdf_sha256"] == contract["signed_pdf_sha256"]
-+    # 보관·교부 메타는 봉인 스냅샷에 섞이지 않는다.
-+    assert "signed_pdf_sha256" not in contract["signed_snapshot"]
-+    # 서명 완료 알림도 같은 경로로 남는다.
-+    assert isolated["inapp"][-1]["notification_type"] == "contract_signed"
-+    assert any(row["event"] == "signed" and row["channel"] == "inapp" for row in _history())
-+
-+
-+def test_pdf_is_bound_to_signed_snapshot_not_current_body(isolated):
-+    pytest.importorskip("reportlab")
-+    contract = _signed_contract()["contract"]
-+    original_sha = contract["signed_pdf_sha256"]
-+    original_bytes = (Path(os.environ["OBYS_UPLOAD_ROOT"]) / contract["signed_pdf_path"]).read_bytes()
-+
-+    # 서명 뒤 저장소의 본문을 직접 바꾸고 PDF 파일도 지운다(재생성 강제).
-+    rows = svc._read_file_rows("contracts")
-+    for row in rows:
-+        if row["id"] == contract["id"]:
-+            row["job_description"] = "서명 후 몰래 바꾼 업무"
-+            row["wage"] = 1
-+    svc._write_file_rows("contracts", rows)
-+    (Path(os.environ["OBYS_UPLOAD_ROOT"]) / contract["signed_pdf_path"]).unlink()
-+
-+    regenerated = _client(ADMIN).post(f"/yeoljeong-finance/contracts/{contract['id']}/signed-pdf/regenerate")
-+    assert regenerated.status_code == 200
-+    assert regenerated.json()["signed_pdf"]["sha256"] == original_sha
-+
-+    download = _client(ADMIN).get(f"/yeoljeong-finance/contracts/{contract['id']}/signed-pdf")
-+    assert download.status_code == 200
-+    assert download.content == original_bytes
-+
-+
-+def test_pdf_generation_failure_keeps_signature_and_records_error(isolated, monkeypatch):
-+    monkeypatch.setenv("OBYS_CONTRACT_PDF_FONT_PATH", str(isolated["tmp"] / "missing-font.ttf"))
-+    result = _signed_contract()
-+    contract = result["contract"]
-+
-+    assert contract["status"] == "signed"
-+    assert contract["signed_snapshot_sha256"]
-+    assert result["signed_pdf"]["status"] == "failed"
-+    assert contract["signed_pdf_error"]
-+    assert not contract.get("signed_pdf_path")
-+    assert not list((isolated["tmp"] / "upload-root").rglob("*.pdf"))
-+    stored = svc._find(svc._read_hr("contracts", ADMIN), contract["id"])
-+    assert stored["status"] == "signed" and stored["signed_pdf_error"]
-+
-+
-+def test_signed_pdf_download_access_and_delivery_record(isolated):
-+    pytest.importorskip("reportlab")
-+    contract = _signed_contract()["contract"]
-+    url = f"/yeoljeong-finance/contracts/{contract['id']}/signed-pdf"
-+
-+    assert _client(THIRD_PARTY).get(url).status_code == 403
-+    assert _client(OTHER_TENANT_ADMIN).get(url).status_code == 403
-+    # 없는 계약서도 같은 403 — 다른 테넌트에 존재하는지 드러내지 않는다.
-+    assert _client(OTHER_TENANT_ADMIN).get("/yeoljeong-finance/contracts/no-such/signed-pdf").status_code == 403
-+
-+    admin_download = _client(ADMIN).get(url)
-+    assert admin_download.status_code == 200
-+    assert admin_download.content.startswith(b"%PDF-")
-+    assert admin_download.headers["content-type"] == "application/pdf"
-+    assert not svc._find(svc._read_hr("contracts", ADMIN), contract["id"]).get("delivered_at")
-+
-+    party_download = _client(EMPLOYEE).get(url)
-+    assert party_download.status_code == 200
-+    assert hashlib.sha256(party_download.content).hexdigest() == contract["signed_pdf_sha256"]
-+    stored = svc._find(svc._read_hr("contracts", ADMIN), contract["id"])
-+    assert stored["delivered_at"]
-+    assert stored["delivery_channel"] == "download"
-+    delivered = [row for row in _history() if row["event"] == "delivered"]
-+    assert delivered and delivered[0]["channel"] == "download" and delivered[0]["status"] == "sent"
-+    assert EMPLOYEE["email"] not in delivered[0]["target_masked"]
-+
-+
-+def test_unsigned_contract_pdf_download_is_conflict(isolated):
-+    contract = _requested_contract()["contract"]
-+    assert _client(ADMIN).get(f"/yeoljeong-finance/contracts/{contract['id']}/signed-pdf").status_code == 409
-+
-+
-+def test_signed_contract_stays_immutable(isolated):
-+    contract = _signed_contract()["contract"]
-+    with pytest.raises(svc.HTTPException) as edit:
-+        svc.save_contract({**contract, "wage": 1}, ADMIN)
-+    assert edit.value.status_code == 409
-+    with pytest.raises(svc.HTTPException) as delete:
-+        svc.delete_contract(contract["id"], ADMIN)
-+    assert delete.value.status_code == 409
-+
-+
-+def test_migration_is_schema_only_and_held_from_aads_auto_apply():
-+    root = Path(__file__).resolve().parents[2]
-+    sql = (root / "migrations" / "20260930_obys_contract_notify_signed_pdf.sql").read_text(encoding="utf-8")
-+    upper = sql.upper()
-+    assert "CREATE TABLE IF NOT EXISTS YEOLJEONG_CONTRACT_NOTIFICATIONS" in upper
-+    assert "CHECK (STATUS IN ('SENT', 'FAILED', 'SKIPPED'))" in upper
-+    for column in ("signed_pdf_path", "signed_pdf_sha256", "signed_pdf_bytes", "delivered_at", "delivery_channel"):
-+        assert f"ADD COLUMN IF NOT EXISTS {column}" in sql
-+    for forbidden in ("UPDATE ", "DELETE ", "DROP ", "TRUNCATE"):
-+        assert forbidden not in upper
-+    baseline = (root / "scripts" / "migrations_auto_apply_baseline.txt").read_text(encoding="utf-8").splitlines()
-+    assert "migrations/20260930_obys_contract_notify_signed_pdf.sql" in baseline
-+    assert (root / "migrations" / "rollback" / "20260930_obys_contract_notify_signed_pdf.down.sql").is_file()
-+
-+
-+def test_reportlab_is_pinned_in_runtime_lock():
-+    root = Path(__file__).resolve().parents[2]
-+    lock = (root / "requirements.runtime.lock").read_text(encoding="utf-8").splitlines()
-+    assert any(line.startswith("reportlab==") for line in lock)
-+    assert (root / "app" / "assets" / "fonts" / "NanumGothic-Regular.ttf").is_file()
++def test_probe_uses_catalog_account_home():
++    # 카탈로그를 받은 계정(/root/.codex)으로 친다 — 러너 셸의 CODEX_HOME 을 따라가지 않는다.
++    assert probe.PROBE_CODEX_HOME == str(Path(probe.CODEX_CACHE).parent)

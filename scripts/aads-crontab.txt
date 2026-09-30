@@ -38,3 +38,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin
 # GO100 #119 상따 실매매 감시 — 2026-08-03 KST only; wrapper handles KST window.
 */5 * 3 8 * /root/aads/aads-server/scripts/run_go100_card119_watch.sh 5m-check >> /var/log/go100-card119-watch-20260803.log 2>&1 # GO100_CARD119_CHAT_WATCH_5M
 5-59/10 * 3 8 * /root/aads/aads-server/scripts/run_go100_card119_watch.sh 10m-report --chat >> /var/log/go100-card119-watch-20260803.log 2>&1 # GO100_CARD119_CHAT_WATCH_10M
+
+# codex CLI 신규 모델 실호출 검증 — 매시 35분 (AADS-CLI-MODEL-AUTOREG-20260930)
+#   카탈로그 사본(app/data/codex_cli/) 갱신 + discovered/blocked_account/probe_failed 후보 1회 codex exec.
+#   모델당 24시간 1회 상한, 전체 timeout 1200s(스크립트 내부 900s), 단일 실행 락.
+35 * * * * cd /root/aads/aads-server && timeout 1200 /usr/bin/python3 scripts/codex_model_probe.py >> /var/log/aads-codex-model-probe.log 2>&1 # AADS_CODEX_MODEL_PROBE
