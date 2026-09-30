@@ -85,6 +85,26 @@ async def _relay_paused(goal_id: Optional[str], relay_id: str) -> bool:
 
 
 _CANDIDATE_LIMIT = 10
+_CANDIDATE_ACTIVE_DAYS_DEFAULT = 7
+
+
+def _candidate_active_days() -> int:
+    """후보로 인정할 최근 활동 기간(일). `RELAY_CANDIDATE_ACTIVE_DAYS`, 기본 7, 최소 1."""
+    try:
+        days = int(os.getenv("RELAY_CANDIDATE_ACTIVE_DAYS", str(_CANDIDATE_ACTIVE_DAYS_DEFAULT)))
+    except ValueError:
+        days = _CANDIDATE_ACTIVE_DAYS_DEFAULT
+    return max(1, days)
+
+
+def _is_recent(ts: Any, days: int) -> bool:
+    from datetime import datetime, timedelta, timezone
+
+    if not isinstance(ts, datetime):
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts >= datetime.now(timezone.utc) - timedelta(days=days)
 
 
 def _pick(stage: str, target: str, rows: list) -> Optional[Dict[str, Any]]:
@@ -94,17 +114,31 @@ def _pick(stage: str, target: str, rows: list) -> Optional[Dict[str, Any]]:
     role_key='CTO' 세션이 둘(모멘텀 전략가·#119 전략관리자) 있었는데
     `ORDER BY updated_at DESC LIMIT 1` 이 최근에 쓰인 쪽을 골라 지시가
     엉뚱한 세션에 도착했다. 가장 최근 세션이 맞는 담당이라는 보장은 없다.
+
+    2건 이상일 때는 먼저 최근 활동(`updated_at`) 세션만 남긴다 — 한 달 전에 끝난
+    세션이 후보에 섞여 되묻기 목록을 흐리고 불필요한 되묻기를 만든다.
+    최근 활동이 0건이면 필터를 풀고 전체로 판정하며 `stale_only` 로 표시한다.
     """
     if not rows:
         return None
     if len(rows) == 1:
         return dict(rows[0])
-    return {
+    days = _candidate_active_days()
+    recent = [r for r in rows if _is_recent(r.get("updated_at"), days)]
+    stale_only = not recent
+    cands = rows if stale_only else recent
+    if len(cands) == 1:
+        return dict(cands[0])
+    out: Dict[str, Any] = {
         "ambiguous": True,
         "stage": stage,
         "target": target,
-        "candidates": [dict(r) for r in rows],
+        "candidates": [dict(r) for r in cands],
     }
+    if stale_only:
+        out["stale_only"] = True
+        out["active_days"] = days
+    return out
 
 
 async def _resolve_target(target: str, origin_session_id: str) -> Optional[Dict[str, Any]]:
@@ -119,6 +153,7 @@ async def _resolve_target(target: str, origin_session_id: str) -> Optional[Dict[
       - {"ambiguous": True, ...} 한 단계에서 2건 이상 — 호출자가 발신 쪽에 되묻는다.
         하위 단계로 내려가지 않는다(다른 세션을 골라 버리는 우회 방지).
     발신 세션 자신은 후보에서 제외한다. UUID 직접 지정은 그대로 그 세션이다.
+    후보가 여럿이면 최근 활동(`RELAY_CANDIDATE_ACTIVE_DAYS`) 세션만 남기고, 없으면 전체(`stale_only`).
     """
     from app.core.db_pool import get_pool
 
@@ -213,6 +248,10 @@ def _ambiguous_response(amb: Dict[str, Any]) -> Dict[str, Any]:
         f"- {c.get('title') or '(제목 없음)'} · id={c['id']} · 최근 사용 {_kst(c.get('updated_at'))}"
         for c in cands
     ]
+    stale_note = (
+        f"최근 {amb.get('active_days') or _candidate_active_days()}일 내 활동이 없습니다. "
+        if amb.get("stale_only") else ""
+    )
     return {
         "sent": False,
         "error": "ambiguous_target",
@@ -224,8 +263,10 @@ def _ambiguous_response(amb: Dict[str, Any]) -> Dict[str, Any]:
             for c in cands
         ],
         "message": f"같은 역할({label}) 세션이 {len(cands)}개 있습니다. "
+                   + stale_note +
                    "세션 id 로 다시 지정해 주세요. 지시는 아직 아무에게도 전달되지 않았습니다.\n"
                    + "\n".join(lines),
+        **({"stale_only": True} if amb.get("stale_only") else {}),
     }
 
 

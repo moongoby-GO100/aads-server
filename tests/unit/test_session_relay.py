@@ -269,3 +269,80 @@ def test_origin_session_is_excluded_from_candidates(monkeypatch):
 def test_notify_does_not_deliver_when_ambiguous():
     src = inspect.getsource(session_relay.notify)
     assert "ambiguous_target" in src
+
+
+# ── 후보 산정의 최근성 필터 (2026-09-30) ─────────────────────────────────────
+# 휴면 세션(한 달 전 활동)까지 후보가 되어 되묻기 목록이 흐려지고, 최근 세션이
+# 하나뿐인데도 불필요하게 되묻는 문제. `RELAY_CANDIDATE_ACTIVE_DAYS`(기본 7일).
+S3 = "b3b3b3b3-0000-0000-0000-000000000003"
+
+
+def _aged(sid, title, role, days_ago):
+    ts = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days_ago)
+    return {"id": sid, "title": title, "role_key": role, "workspace_id": WS, "updated_at": ts}
+
+
+def test_one_recent_of_three_is_returned_without_asking(monkeypatch):
+    """① 후보 3건 중 최근 7일 활동 1건 → 되묻지 않고 그 세션."""
+    monkeypatch.delenv("RELAY_CANDIDATE_ACTIVE_DAYS", raising=False)
+    pool = _AmbigPool([_s(ORIGIN, "백억이", "GO100Owner"),
+                       _aged(S1, "최근", "CTO", 1), _aged(S2, "휴면A", "CTO", 27), _aged(S3, "휴면B", "CTO", 29)])
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target("CTO", ORIGIN))
+    assert tgt["id"] == S1 and not tgt.get("ambiguous")
+
+
+def test_two_recent_are_ambiguous_and_exclude_dormant(monkeypatch):
+    """② 최근 활동 2건 → 모호, 후보에 휴면 세션 미포함, 안내문 개수도 일치."""
+    monkeypatch.delenv("RELAY_CANDIDATE_ACTIVE_DAYS", raising=False)
+    pool = _AmbigPool([_s(ORIGIN, "백억이", "GO100Owner"),
+                       _aged(S1, "최근A", "CTO", 1), _aged(S2, "최근B", "CTO", 3), _aged(S3, "휴면", "CTO", 28)])
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target("CTO", ORIGIN))
+    assert tgt["ambiguous"] and not tgt.get("stale_only")
+    assert {c["id"] for c in tgt["candidates"]} == {S1, S2}
+    out = session_relay._ambiguous_response(tgt)
+    assert len(out["candidates"]) == 2 and "2개" in out["message"]
+    assert S3 not in out["message"] and "활동이 없습니다" not in out["message"]
+    assert "stale_only" not in out
+
+
+def test_all_dormant_falls_back_to_all_with_stale_flag(monkeypatch):
+    """③ 전부 휴면 → target_not_found 가 아니라 전체 후보로 모호 + stale_only."""
+    monkeypatch.delenv("RELAY_CANDIDATE_ACTIVE_DAYS", raising=False)
+    pool = _AmbigPool([_s(ORIGIN, "백억이", "GO100Owner"),
+                       _aged(S1, "휴면A", "CTO", 20), _aged(S2, "휴면B", "CTO", 25), _aged(S3, "휴면C", "CTO", 30)])
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target("CTO", ORIGIN))
+    assert tgt["ambiguous"] is True and tgt["stale_only"] is True
+    assert {c["id"] for c in tgt["candidates"]} == {S1, S2, S3}
+    out = session_relay._ambiguous_response(tgt)
+    assert out["error"] == "ambiguous_target" and out["stale_only"] is True
+    assert "최근 7일 내 활동이 없습니다" in out["message"] and "3개" in out["message"]
+    assert len(out["candidates"]) == 3
+
+
+def test_env_threshold_changes_verdict(monkeypatch):
+    """④ 환경변수로 임계값을 바꾸면 판정이 바뀐다. 0 이하는 최소 1일로 보정."""
+    pool = _AmbigPool([_s(ORIGIN, "백억이", "GO100Owner"),
+                       _aged(S1, "A", "CTO", 2), _aged(S2, "B", "CTO", 10)])
+    _patch_pool(monkeypatch, pool)
+    monkeypatch.setenv("RELAY_CANDIDATE_ACTIVE_DAYS", "7")
+    assert asyncio.run(session_relay._resolve_target("CTO", ORIGIN))["id"] == S1
+    monkeypatch.setenv("RELAY_CANDIDATE_ACTIVE_DAYS", "14")
+    tgt = asyncio.run(session_relay._resolve_target("CTO", ORIGIN))
+    assert tgt["ambiguous"] and {c["id"] for c in tgt["candidates"]} == {S1, S2}
+    monkeypatch.setenv("RELAY_CANDIDATE_ACTIVE_DAYS", "0")
+    assert session_relay._candidate_active_days() == 1
+    monkeypatch.setenv("RELAY_CANDIDATE_ACTIVE_DAYS", "abc")
+    assert session_relay._candidate_active_days() == 7
+
+
+def test_uuid_target_ignores_recency(monkeypatch):
+    """⑤ UUID 직접 지정은 최근성과 무관하게 그 세션 — 회귀 잠금."""
+    monkeypatch.delenv("RELAY_CANDIDATE_ACTIVE_DAYS", raising=False)
+    pool = _AmbigPool([_s(ORIGIN, "백억이", "GO100Owner"),
+                       _aged(S1, "최근", "CTO", 1), _aged(S2, "휴면", "CTO", 60)])
+    _patch_pool(monkeypatch, pool)
+    tgt = asyncio.run(session_relay._resolve_target(S2, ORIGIN))
+    assert tgt["id"] == S2 and not tgt.get("ambiguous") and not tgt.get("stale_only")
