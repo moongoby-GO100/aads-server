@@ -12115,7 +12115,8 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
                 WHERE q.id = c.id
                   AND q.attempts < 8
                 RETURNING q.id::text, q.session_id::text, q.system_message,
-                          q.ohvis_task_id, q.attempts, q.runner_job_id
+                          q.ohvis_task_id, q.attempts, q.runner_job_id,
+                          q.dedupe_key
                 """,
                 max_rows,
                 _EXECUTION_OWNER_INSTANCE,
@@ -12172,9 +12173,40 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
                 )
             continue
 
+        message = row["system_message"]
+        # 다음단계 지시만 대상이다. 완료·실패 보고는 종결 잡을 가리키는 게 정상이다.
+        if str(row.get("dedupe_key") or "").startswith("next_step:"):
+            from app.services.deferred_reaction_freshness import annotate_or_skip
+
+            async with get_pool().acquire() as fresh_conn:
+                message, stale_reason = await annotate_or_skip(fresh_conn, message)
+                if stale_reason is not None:
+                    await fresh_conn.execute(
+                        """
+                        UPDATE chat_deferred_reactions
+                        SET status = 'skipped_stale',
+                            error_message = $3,
+                            claimed_by = NULL,
+                            lease_expires_at = NULL,
+                            completed_at = NOW(),
+                            updated_at = NOW()
+                        WHERE id = $1 AND claimed_by = $2
+                        """,
+                        uuid.UUID(row["id"]),
+                        _EXECUTION_OWNER_INSTANCE,
+                        stale_reason,
+                    )
+            if stale_reason is not None:
+                logger.info(
+                    "deferred_reaction_skipped_stale id=%s reason=%s",
+                    row["id"],
+                    stale_reason,
+                )
+                continue
+
         task = await trigger_ai_reaction(
             sid,
-            row["system_message"],
+            message,
             row["ohvis_task_id"],
             _already_safe=True,
             _from_deferred_queue=True,
