@@ -1221,16 +1221,27 @@ _GEMINI_THINKING_MODELS = {
 _GROQ_MODELS = {"groq-gpt-oss-120b", "groq-gpt-oss-20b", "groq-qwen3.8-27b"}
 # OpenAI 모델 (LiteLLM/OpenAI-compatible 경유)
 _OPENAI_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
-_OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "o3", "o3-mini", "o3-pro"}
+_OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "o3", "o3-mini", "o3-pro"}
 # OpenAI 직결 경로는 LiteLLM 프록시와 달리 파라미터를 번역해 주지 않는다.
 # 2026-09-19 실측: gpt-5.6-sol 채팅이 매 턴 HTTP 400 으로 죽고 "[... 실행 불가 →
 # Codex CLI 전환]" 배너만 남았다. 세 제약이 동시에 걸려 있었다.
 #   1) max_tokens 불가 → max_completion_tokens
 #   2) tools 배열 128개 상한
 #   3) temperature 커스텀값 불가 (기본 1만 허용)
-_OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+#
+# gpt-6.1-sol (2026-10-01 실측, api.openai.com 직결 4회 호출):
+#   max_tokens          → 400 "Use 'max_completion_tokens' instead"
+#   temperature=0.3     → 400 "Only the default (1) value is supported"
+#   max_completion_tokens + reasoning_effort=low → 200 "pong"
+#   function tools      → 400 "Function tools with reasoning_effort are not
+#                         supported for gpt-6.1-sol in /v1/chat/completions.
+#                         To use function tools, use /v1/responses"
+#   reasoning_effort="none" → 400 (low/medium/high/xhigh 만 허용)
+# gpt-6-sol 과 달리 'none' 이 없으므로 도구 턴을 Chat Completions 로 살릴 방법이
+# 없다. gpt-6-astra 와 같은 처리(Responses API 필요)로 묶는다.
+_OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 _OPENAI_DIRECT_MAX_TOOLS = 128
-_OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra"}
+_OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra", "gpt-6.1-sol"}
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
 _CODEX_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}

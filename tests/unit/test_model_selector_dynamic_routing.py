@@ -169,6 +169,53 @@ async def test_sol_direct_tools_use_none_effort(monkeypatch, execution_model):
     assert events[-1]["type"] == "done"
 
 
+@pytest.mark.asyncio
+async def test_gpt61_sol_direct_body_matches_openai_contract(monkeypatch):
+    """2026-10-01 실측: max_tokens·temperature 를 보내면 둘 다 400 이다."""
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+
+    client = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(model_selector.httpx, "AsyncClient", lambda **kwargs: client(transport=transport, **kwargs))
+    events = [event async for event in model_selector._stream_litellm_openai(
+        "gpt-6.1-sol", "system", [{"role": "user", "content": "hello"}],
+        base_url="https://api.openai.com/v1", api_key="test-key",
+        display_model="gpt-6.1-sol",
+    )]
+    assert "max_tokens" not in requests[0]
+    assert requests[0]["max_completion_tokens"] > 0
+    assert "temperature" not in requests[0]
+    assert requests[0]["reasoning_effort"] == "low"
+    assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_gpt61_sol_tool_turn_fails_before_http(monkeypatch):
+    """도구 턴은 Chat Completions 로 살릴 수 없다 — HTTP 전에 끊는다."""
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, text='data: [DONE]\n\n')
+
+    client = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(model_selector.httpx, "AsyncClient", lambda **kwargs: client(transport=transport, **kwargs))
+    events = [event async for event in model_selector._stream_litellm_openai(
+        "gpt-6.1-sol", "system", [{"role": "user", "content": "hello"}],
+        tools=[{"name": "ping", "input_schema": {"type": "object"}}],
+        base_url="https://api.openai.com/v1", api_key="test-key",
+        display_model="gpt-6.1-sol",
+    )]
+    assert requests == []
+    assert events[-1]["type"] == "error"
+    assert "Responses API" in events[-1]["content"]
+
+
 def test_sol_reasoning_tools_are_rejected_before_http():
     body = {"model": "gpt-6-sol", "max_tokens": 100, "tools": [{"type": "function"}]}
     with pytest.raises(ValueError, match="reasoning_effort=none"):
