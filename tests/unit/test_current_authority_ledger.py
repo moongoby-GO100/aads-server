@@ -128,9 +128,10 @@ def test_both_entrypoints_inject_the_same_ledger(entrypoint):
 
 
 @pytest.mark.parametrize("entrypoint", ["build_messages_context", "build"])
-def test_both_entrypoints_stash_provenance_for_their_session(entrypoint):
+def test_entrypoints_keep_no_session_level_state(entrypoint):
     src = inspect.getsource(getattr(cb, entrypoint))
-    assert "_stash_ledger_provenance(session_id" in src
+    assert "_stash_ledger_provenance" not in src
+    assert "_LEDGER_PROVENANCE_BY_SESSION" not in src
 
 
 def test_ledger_is_not_inside_the_ttl_cache():
@@ -208,9 +209,19 @@ def test_no_module_level_last_provenance():
 
 def test_ledger_provenance_reaches_prompt_compiler():
     block = cb.build_server_ledger_block()
-    cb._stash_ledger_provenance("sess-reach", block.provenance)
-
-    prov = pc._server_ledger_snapshot("sess-reach")
+    compiled = pc.CompiledPrompt(system_prompt="x", provenance={})
+    asyncio.run(
+        pc.record_prompt_provenance(
+            conn=_NoTableConn(),
+            session_id="sess-reach",
+            execution_id=None,
+            intent="status_check",
+            model="claude-opus-5",
+            compiled_prompt=compiled,
+            server_ledger=block.provenance,
+        )
+    )
+    prov = compiled.provenance["server_ledger"]
     assert prov["available"] is True
     assert prov["source"] == cb._LEDGER_SOURCE
     assert prov["ledger_count"] == 4
@@ -223,29 +234,38 @@ def test_ledger_provenance_reaches_prompt_compiler():
     assert "servers" not in prov
 
 
-def test_two_concurrent_sessions_do_not_mix_provenance():
-    """세션 B 의 조립이 세션 A 의 증거를 덮지 않는다 (root 검수 2026-10-01)."""
-    a = cb.build_server_ledger_block()
-    cb._stash_ledger_provenance("sess-A", {**a.provenance, "marker": "A"})
-    # A 가 기록되기 **전에** B 가 조립을 끝내는 순서를 재현한다.
-    b = cb.build_server_ledger_block()
-    cb._stash_ledger_provenance("sess-B", {**b.provenance, "marker": "B"})
-
-    assert pc._server_ledger_snapshot("sess-A")["marker"] == "A"
-    assert pc._server_ledger_snapshot("sess-B")["marker"] == "B"
+def test_snapshot_carries_registry_read_at_equal_to_observed_at():
+    snap = cb.build_server_ledger_snapshot()
+    assert snap["registry_read_at"] == snap["observed_at"]
 
 
-def test_taking_clears_the_slot_so_the_next_turn_cannot_inherit_it():
-    cb._stash_ledger_provenance("sess-once", {"available": True, "marker": "once"})
-    assert pc._server_ledger_snapshot("sess-once")["marker"] == "once"
-    # 두 번째 턴에 원장 주입이 없었다면 증거도 없어야 한다.
-    assert pc._server_ledger_snapshot("sess-once") == {}
+def test_session_level_stash_is_gone():
+    """세션 칸은 같은 세션의 동시 턴을 섞는다 — 전역 보관소 자체를 금지한다."""
+    assert not hasattr(cb, "_LEDGER_PROVENANCE_BY_SESSION")
+    assert not hasattr(cb, "_LEDGER_STASH_MAX")
+    # 호환용 함수는 남아 있되 어떤 상태도 읽거나 쓰지 않는다.
+    assert cb.take_ledger_provenance("any") == {
+        "available": False,
+        "reason": "no_request_local_snapshot",
+    }
+    assert pc._server_ledger_snapshot("any") == {
+        "available": False,
+        "reason": "no_request_local_snapshot",
+    }
 
 
 def test_stash_is_bounded():
-    for i in range(cb._LEDGER_STASH_MAX + 20):
-        cb._stash_ledger_provenance(f"bound-{i}", {"available": True})
-    assert len(cb._LEDGER_PROVENANCE_BY_SESSION) <= cb._LEDGER_STASH_MAX
+    """호환 stash 는 몇 번을 불러도 모듈에 아무것도 남기지 않는다(상한 0)."""
+    before = {k for k in vars(cb) if not k.startswith("__")}
+    for i in range(200):
+        assert cb._stash_ledger_provenance(f"bound-{i}", {"available": True, "marker": i}) is None
+    after = {k for k in vars(cb) if not k.startswith("__")}
+    assert after == before
+    assert cb.take_ledger_provenance("bound-0") == {
+        "available": False,
+        "reason": "no_request_local_snapshot",
+    }
+    assert pc._server_ledger_snapshot("bound-199")["available"] is False
 
 
 # ─── 6. 조기-return 경로에도 증거가 붙는다 ──────────────────────────────────
@@ -267,7 +287,6 @@ def test_evidence_is_attached_even_when_the_table_is_missing():
     호출자가 메모리 provenance 를 읽는 경로는 증거 없이 끝났다.
     """
     block = cb.build_server_ledger_block()
-    cb._stash_ledger_provenance("sess-notable", block.provenance)
     compiled = pc.CompiledPrompt(system_prompt="x", provenance={})
 
     asyncio.run(
@@ -278,6 +297,7 @@ def test_evidence_is_attached_even_when_the_table_is_missing():
             intent="status_check",
             model="claude-opus-5",
             compiled_prompt=compiled,
+            server_ledger=block.provenance,
         )
     )
 

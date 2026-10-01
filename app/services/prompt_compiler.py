@@ -251,22 +251,12 @@ def _section_chars_snapshot() -> dict:
 
 
 def _server_ledger_snapshot(session_id: str) -> dict:
-    """**이 세션** 이 이번 턴에 주입한 서버 원장의 출처·조회시각·hash.
+    """폐기된 세션 칸 읽기. 어떤 상태도 읽지 않는다 — 외부 import 호환용.
 
-    이것을 남기지 않으면 "그 턴이 어떤 서버 구성을 보고 답했는지" 를 나중에
-    증명도 반증도 할 수 없다. 2026-06 "3서버" 오인이 그래서 추적에 오래 걸렸다.
-
-    `session_id` 를 반드시 받는다. 예전에는 모듈 전역 "직전 값" 을 읽었는데,
-    두 세션이 동시에 조립하면 나중 조립이 앞 값을 덮어 **세션 A 의 기록에
-    세션 B 의 원장** 이 들어갔다(2026-10-01 root 검수 지적). 꺼낼 때 칸을
-    비우므로, 원장 주입이 없었던 턴은 빈 값이 되어 이전 턴 값을 물려받지 않는다.
+    기록부는 호출자가 그 요청의 조립에서 받아 넘긴 `server_ledger` 만 쓴다.
+    이 함수가 값을 돌려주면 다른 턴의 원장이 이 턴의 근거로 둔갑한다.
     """
-    try:
-        from app.services.context_builder import take_ledger_provenance
-
-        return dict(take_ledger_provenance(session_id) or {})
-    except Exception:
-        return {}
+    return {"available": False, "reason": "no_request_local_snapshot"}
 
 
 class PromptCompiler:
@@ -484,17 +474,17 @@ async def record_prompt_provenance(
     # 조회 실패도 그대로 남긴다 — `available: false` 가 보이면 그 턴의 서버
     # 발언은 근거가 없었다는 뜻이고, 그 판정을 사후에 할 수 있어야 한다.
     #
-    # 호출자가 조립 직후 꺼내 둔 값(`server_ledger`)을 **우선** 쓴다. 그 값은
-    # 그 턴의 조립이 반환한 것이라 다른 세션·다른 턴과 섞일 길이 없다.
-    # 넘기지 않은 호출자만 세션 칸에서 꺼낸다(하위 호환).
+    # 값은 **호출자가 그 요청의 조립에서 받아 넘긴 것만** 쓴다. 전역·세션 칸을
+    # 되읽지 않으므로 같은 세션의 다른 턴과 섞일 길이 없다. 못 받았으면
+    # 키를 빼지 않고 `available: false` 를 남긴다 — "증거 없음" 도 증거다.
     try:
-        ledger = (
-            dict(server_ledger)
-            if server_ledger is not None
-            else _server_ledger_snapshot(session_id)
-        )
-        if ledger:
-            compiled_prompt.provenance["server_ledger"] = ledger
+        if server_ledger:
+            compiled_prompt.provenance["server_ledger"] = dict(server_ledger)
+        else:
+            compiled_prompt.provenance["server_ledger"] = {
+                "available": False,
+                "reason": "caller_did_not_pass_snapshot",
+            }
     except Exception:
         pass
 

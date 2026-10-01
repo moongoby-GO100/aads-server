@@ -72,41 +72,24 @@ class ServerLedgerBlock:
     provenance: Dict[str, Any]
 
 
-# 세션별 원장 provenance 보관함.
-#
-# **모듈 전역 "직전 값" 을 쓰지 않는다.** 조립(context_builder)과 기록
-# (prompt_compiler)이 다른 모듈이라 값을 넘길 인자 경로가 없는데, 여기에
-# 단일 전역을 두면 세션 A 의 기록에 세션 B 의 원장이 들어간다 — 두 세션이
-# 동시에 조립하면 나중 호출이 앞 호출의 값을 덮기 때문이다. 그래서
-# `take_rag_ms()` 와 같은 방식으로 **session_id 로 칸을 나누고 꺼낼 때
-# 비운다**. 꺼내 가지 않은 칸이 쌓이지 않도록 상한을 둔다.
-_LEDGER_PROVENANCE_BY_SESSION: Dict[str, Dict[str, Any]] = {}
-_LEDGER_STASH_MAX = 64
-
-
 def _stash_ledger_provenance(session_id: str, provenance: Dict[str, Any]) -> None:
-    """이 턴의 원장 provenance 를 세션 칸에 둔다. 기록부가 꺼내 간다."""
-    key = str(session_id or "")
-    if not key:
-        return
-    try:
-        if len(_LEDGER_PROVENANCE_BY_SESSION) >= _LEDGER_STASH_MAX:
-            # 소비자가 없는(기록 경로를 타지 않는) 세션이 섞여 있어도
-            # 무한히 자라지 않게 가장 오래된 칸부터 버린다.
-            for stale in list(_LEDGER_PROVENANCE_BY_SESSION)[:8]:
-                _LEDGER_PROVENANCE_BY_SESSION.pop(stale, None)
-        _LEDGER_PROVENANCE_BY_SESSION[key] = dict(provenance)
-    except Exception:  # noqa: BLE001 — 기록 보조 경로가 조립을 깨지 않는다
-        pass
+    """폐기된 세션 칸 쓰기. **아무것도 저장하지 않는다** — 외부 import 호환용.
+
+    예전에는 session_id 만 키로 쓰는 모듈 전역 칸에 넣었다. 같은 세션의 동시
+    턴(compaction await 중 끼어든 조립, 꺼내 가지 않는 이어쓰기·토론 조립)이
+    그 칸을 서로 덮거나 비웠다(2026-10-01 root 검수). 원장 provenance 는
+    `build_messages_context(ledger_out=)` 나 `ContextResult.server_ledger` 로만 넘긴다.
+    """
+    return None
 
 
 def take_ledger_provenance(session_id: str) -> Dict[str, Any]:
-    """세션 칸에서 원장 provenance 를 **꺼내 비운다**(prompt_compiler 전용).
+    """폐기된 세션 칸 읽기. 어떤 상태도 읽지 않는다 — 외부 import 호환용.
 
-    비우는 이유: 남겨 두면 다음 턴에 원장 주입이 실패했을 때 이전 턴 값이
-    그대로 기록되어 "그 턴이 원장을 봤다" 는 거짓 증거가 된다.
+    원장 provenance 는 요청 단위 값이다. `build_messages_context(ledger_out=)` 또는
+    `ContextResult.server_ledger` 로만 받는다.
     """
-    return _LEDGER_PROVENANCE_BY_SESSION.pop(str(session_id or ""), {}) or {}
+    return {"available": False, "reason": "no_request_local_snapshot"}
 
 
 def _registry_file_mtime() -> str:
@@ -143,9 +126,12 @@ def build_server_ledger_snapshot() -> Dict[str, Any]:
     # hash 는 **구성만** 담는다. 조회시각을 섞으면 매 턴 달라져서 "구성이
     # 바뀌었는지" 를 hash 로 판정할 수 없게 된다.
     payload = json.dumps(servers, sort_keys=True, ensure_ascii=False)
+    observed_at = datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds")
     return {
         "source": _LEDGER_SOURCE,
-        "observed_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds"),
+        "observed_at": observed_at,
+        # 실제로 원장을 읽은 시각(observed_at 과 같은 값). 기록 시점에 다시 읽어 바꾸지 않는다.
+        "registry_read_at": observed_at,
         "snapshot_hash": hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16],
         "ledger_count": len(servers),
         "health_monitored_count": sum(1 for s in servers if s["health_monitored"]),
@@ -186,11 +172,10 @@ def build_server_ledger_block() -> ServerLedgerBlock:
     )
     prov = {k: v for k, v in snap.items() if k != "servers"}
     prov["available"] = True
-    # 대표님 지시 표현(`registry_read_at`)과 PRD 표현(`observed_at`)을 둘 다 남긴다.
-    # 둘은 **구성 레지스트리를 읽은 시각**이다. 서비스 건강 실측시각도,
-    # 원장 파일이 바뀐 날(`registry_file_mtime`)도 아니다 — 셋을 섞으면
-    # "지금 살아 있다" 를 구성 조회 시각으로 주장하게 된다.
-    prov["registry_read_at"] = snap["observed_at"]
+    # `registry_read_at`·`observed_at` 은 **구성 레지스트리를 읽은 시각**이다
+    # (스냅샷이 같은 값으로 채운다). 서비스 건강 실측시각도, 원장 파일이 바뀐
+    # 날(`registry_file_mtime`)도 아니다 — 섞으면 "지금 살아 있다" 를 구성
+    # 조회 시각으로 주장하게 된다.
     prov["server_ids"] = [s["server_id"] for s in snap["servers"]]
 
     return ServerLedgerBlock(
@@ -840,9 +825,11 @@ async def build_messages_context(
     document_context: str = "",
     intent: str = "",
     apply_prompt_assets: bool = True,
+    ledger_out: Optional[Dict[str, Any]] = None,
 ) -> tuple[List[Dict[str, Any]], str]:
     """
     3+D 계층 컨텍스트 구성 → (messages, system_prompt) 반환.
+    ledger_out: 주면 이 호출이 주입한 서버 원장 provenance 를 채운다(요청 단위 값).
     system_prompt: Layer 1 + Layer 2 + (Layer D: 임시 문서 컨텍스트)
     messages: Layer 3 대화 히스토리
     intent: 인텐트명 (Prompt Compression — 단순 인텐트 시 경량 프롬프트)
@@ -966,8 +953,10 @@ async def build_messages_context(
     # 조회시각이 분마다 바뀌어 프리픽스 캐시가 전부 미스가 된다.
     _ledger_block = build_server_ledger_block()
     server_ledger = _ledger_block.section
-    # 이 호출이 만든 provenance 를 이 세션 칸에 둔다(전역 "직전 값" 금지).
-    _stash_ledger_provenance(session_id, _ledger_block.provenance)
+    # 이 호출의 provenance 는 호출자가 넘긴 요청 단위 dict 로만 돌려준다(전역 칸 금지).
+    if ledger_out is not None:
+        ledger_out.clear()
+        ledger_out.update(_ledger_block.provenance)
     system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer + "\n\n" + _layer4 + "\n\n" + approved_documents + "\n\n" + server_ledger + f"\n\n<currentTime>\n{_kst_now}\n</currentTime>"
 
     # 구간별 계측.
@@ -1145,7 +1134,6 @@ async def build(
     # 없을 수도 있는데, 원장은 DB 를 보지 않으므로 그래도 들어간다.
     _ledger_block = build_server_ledger_block()
     server_ledger = _ledger_block.section
-    _stash_ledger_provenance(session_id, _ledger_block.provenance)
     system_text = layer1 + "\n\n---\n\n" + layer2_full + "\n\n" + _layer4 + "\n\n" + approved_documents + "\n\n" + server_ledger + "\n\n" + _kst_block
     # system_blocks 꼬리에 KST 시각 주입 (비캐시 블록 — 캐시 프리픽스를 깨지 않는 위치)
     system_blocks = system_blocks + [

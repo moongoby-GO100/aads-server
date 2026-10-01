@@ -13421,6 +13421,13 @@ async def send_message_stream(
             # 4. 3계층 컨텍스트 빌드 (AADS-CRITICAL-FIX #7: fallback 방어)
             from app.services.context_builder import build_messages_context
             _timer.mark("ctx_start")
+            # 서버 원장 provenance 는 **이 요청의 지역 변수**로만 받는다. 모듈 전역·
+            # 세션 칸을 거치면 같은 세션의 다른 조립(이어쓰기·토론·동시 턴)과 섞인다.
+            _ledger_out: dict = {}
+            _turn_server_ledger: dict = {
+                "available": False,
+                "reason": "context_not_built",
+            }
             try:
                 messages, system_prompt = await build_messages_context(
                     workspace_name=workspace_name,
@@ -13430,21 +13437,20 @@ async def send_message_stream(
                     db_conn=conn,
                     document_context=_ephemeral_doc_context,
                     apply_prompt_assets=False,
+                    ledger_out=_ledger_out,
                 )
+                _turn_server_ledger = dict(_ledger_out)
             except Exception as _ctx_err:
                 logger.error(f"context_builder failed, using raw fallback: {_ctx_err}")
+                # 예외 직전에 _ledger_out 이 채워졌어도 이 턴은 원장을 본 것이 아니다.
+                _turn_server_ledger = {
+                    "available": False,
+                    "reason": "context_build_failed",
+                    "error": str(_ctx_err)[:200],
+                }
                 system_prompt = base_prompt or "You are a helpful AI assistant."
                 messages = [{"role": m["role"], "content": m["content"]} for m in raw_messages[-20:]]
             _timer.mark("ctx_done")
-            # 이 조립이 주입한 서버 원장 provenance 를 **지금** 꺼내 지역 변수로
-            # 들고 간다. 기록 시점에 다시 찾으면 그 사이 같은 세션의 다른 조립이
-            # 끼어들 수 있고, SDK 경로처럼 기록 없이 return 하는 길에서는 값이
-            # 버려진다(2026-10-01 root 검수 지적). 조립이 실패했으면 빈 값이다.
-            try:
-                from app.services.context_builder import take_ledger_provenance as _take_ledger
-                _turn_server_ledger = _take_ledger(str(session_id))
-            except Exception:
-                _turn_server_ledger = {}
             _timer.prompt_chars = len(system_prompt or "")
             _timer.history_count = len(messages or [])
             system_prompt = (
@@ -14237,7 +14243,7 @@ async def send_message_stream(
                                     intent=intent,
                                     model=_selected_model_id or "claude-opus-5",
                                     compiled_prompt=_compiled_sdk_prompt,
-                                    server_ledger=locals().get("_turn_server_ledger"),
+                                    server_ledger=_turn_server_ledger,
                                 )
                         except Exception as _sdk_prov_err:
                             logger.warning(f"[PROMPT_COMPILER_SDK] provenance_insert_failed: {_sdk_prov_err}")
@@ -14426,7 +14432,7 @@ async def send_message_stream(
                         intent=intent,
                         model=_prompt_model_id,
                         compiled_prompt=_compiled_prompt,
-                        server_ledger=locals().get("_turn_server_ledger"),
+                        server_ledger=_turn_server_ledger,
                     )
                 logger.info(f"[PROMPT_COMPILER] provenance recorded sid={str(session_id)[:8]} exec={(_execution_id_str or '-')[:8]}")
             except Exception as _prov_err:
