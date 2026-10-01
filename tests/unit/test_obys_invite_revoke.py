@@ -253,14 +253,19 @@ def test_delete_route_is_registered_without_shadowing_resolve_and_accept():
     assert ("POST", f"{base}/accept") in {(m, p.split("yeoljeong-finance", 1)[-1]) for m, p in routes}
 
 
-def test_v41_screen_has_revoke_button_and_status_badge():
+def test_v41_screen_has_delete_and_copy_link_actions():
     html = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
-    assert "<th>상태</th><th>관리</th>" in html
+    assert "<th>상태</th><th>초대 링크</th><th>관리</th>" in html
+    assert 'data-invite-link="${escapeHtml(invite.token)}"' in html
+    assert ">링크 복사</button>" in html
+    assert "async function copyInviteLinkV41(token)" in html
+    assert "yf_invite_token=${encodeURIComponent(token" in html
     assert 'data-invite-revoke="${escapeHtml(invite.id)}"' in html
-    assert 'status==="revoked")return["취소","bad"]' in html
+    assert ">삭제</button>" in html
+    assert '.filter(invite=>String(invite.status||"").toLowerCase()!=="revoked")' in html
     assert "async function revokeInviteV41(inviteId)" in html
-    assert "이 초대를 취소할까요? 보낸 링크는 더 이상 쓸 수 없습니다." in html
+    assert "이 초대를 삭제할까요? 보낸 링크는 즉시 폐기되며 목록에서도 사라집니다." in html
     assert '"/employees/invites/"+encodeURIComponent(inviteId),{method:"DELETE"}' in html
-    assert "직원 초대 취소는 대표·운영관리자만 할 수 있습니다." in html
-    # 수락된 초대에는 취소 버튼을 그리지 않는다.
-    assert 'toLowerCase()==="accepted"?""' in html
+    assert "직원 초대 삭제는 대표·운영관리자만 할 수 있습니다." in html
+    # 수락된 초대에는 링크·삭제 버튼을 그리지 않는다.
+    assert 'const pending=String(invite.status||"pending").toLowerCase()==="pending"' in html
