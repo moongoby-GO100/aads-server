@@ -10938,6 +10938,10 @@
       const params = new URLSearchParams(window.location.search);
       if (params.get("legacy") === "1" && params.get("view") === "legacy") return false;
       if (readPostLoginRedirectFromUrl() || params.has("yf_contract_token")) return false;
+      // 초대 링크는 로그인 상태여도 V4.1 로 넘기지 않는다 — shouldOpenV41App() 이
+      // readInviteTokenFromUrl() 보다 먼저 돌아 pendingPhoneInviteToken 이 아직 비어 있다
+      // (2026-10-01: 계정이 있는 직원이 초대 링크를 열면 초대가 사라졌다).
+      if (params.has("yf_invite_token") || params.has("invite_token")) return false;
       const hash = String(window.location.hash || "").replace(/^#/, "");
       if (hash.startsWith("invite") || pendingPhoneInviteToken) return false;
       return hasServerAuth();
