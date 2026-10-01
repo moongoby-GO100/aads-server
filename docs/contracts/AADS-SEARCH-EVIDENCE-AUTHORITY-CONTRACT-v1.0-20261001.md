@@ -150,3 +150,27 @@ bash scripts/run_unit_tests.sh tests/unit/test_canonical_documents.py tests/unit
 | 1 | `approved_brief()` 의 `revision`·`source_path` 반환 | 미구현 — §1 공백 유지 |
 | 2 | go100 사본의 커밋 출처 확보 | 미조치 — 미추적 유지 |
 | 3 | `doc14bf770` 리비전 해석 | 미검증 — 추정 매핑을 만들지 않는다 |
+
+### 9-5. go100 사본 커밋 출처 확보 — §5·§9-2 의 ❌ 판정 해소 (16:20 KST)
+
+`AADS-3SERVER-OPERATING-TOPOLOGY-20260623.md` 의 historical 머리표시를 contabo14
+`kis-autotrade-v4` 에 커밋했다. 이로써 §5 가 요구한 **커밋 출처 + hash 일치** 두 조건이 함께 성립한다.
+
+| 항목 | 값 |
+|---|---|
+| 커밋 | `85ccc3911` (contabo14 `/root/kis-autotrade-v4`, 1파일 +45줄, Deploy Safety hook 통과) |
+| 커밋된 blob | `6015aa7bc0fa56eb34946379da1ebfbfef867f3f` |
+| 커밋된 파일 sha256 | `7b98fdfe9ae7a7e0629946e15b440045cba9a44c066373654f7ff7f3b501b28d` |
+| 색인 `doc_sha256` (`/root/aads/go100/docs/…`) | `7b98fdfe9ae7a7e0629946e15b440045cba9a44c066373654f7ff7f3b501b28d` — **64자 전체 일치** |
+
+따라서 §5·§9-2 의 `/root/aads/go100/docs/…` 행은 "❌ 커밋 출처 없음" 에서
+**✅ historical 태그 적격**으로 바뀐다. 추정이 아니라 전체 hash 일치로 판정했다.
+
+머리표시 본문의 주장은 커밋 전에 소스로 검증했다: `server_registry.py:89` `CANONICAL_SERVER_IDS`(3)
+· `:90` `LEDGER_SERVER_IDS`(4) · `:75` jinah244 `http_health_urls: []` · `ops.py:3804` `@router.get("/ops/status")`
+존재 / `"/servers"` 0건 · `project_document_heads.approved_revision_id` 여전히 NULL(draft 유지).
+
+**남은 제약.** 이 커밋은 contabo14 **로컬에만** 있다. 해당 저장소 `main` 은 origin 대비
+`ahead 16 / behind 81` 이라 push 하려면 무관한 16커밋 rebase 가 선행돼야 하고, rebase 는
+pre-commit 서명을 무효화한다(R-PUSH). 그래서 이번 범위에서는 push 하지 않았다 —
+출처는 성립하지만 **원격 미반영**이므로 그 서버가 사라지면 출처도 사라진다.
