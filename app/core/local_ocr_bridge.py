@@ -213,7 +213,193 @@ def tesseract_extract(data: bytes, language: str = DEFAULT_LANGUAGE) -> dict:
         "language": langs,
         "error": None,
         "backend": "local",
+        "engine": "tesseract",
     }
+
+
+# --- PaddleOCR 폴백 (저해상도·저신뢰 전용) -------------------------------------
+# 2026-10-01 진아244 실측: tesseract 10/12, PaddleOCR 원본 7/12, PaddleOCR+줄 병합 10/12.
+# 595x835 등록증에서 tesseract 는 '서울'을 'ASSIA' 로 틀렸고 PaddleOCR 은 맞혔다.
+# 동점에 20~59초(tesseract 1~2초)라 전면 교체하지 않고 폴백으로만 쓴다.
+# paddleocr 는 requirements 에 없다 — 진아 전용 venv 에만 있고, 없으면 폴백만 꺼진다.
+# 오류 사전 obys.paddleocr_cpu_setup_three_traps:
+#   1) 버전을 고정하지 않는다  2) enable_mkldnn=False 필수  3) 장변 1600px 선축소(없으면 29.7GB OOM)
+PADDLE_MAX_LONG_SIDE = 1600
+LEGAL_FIELDS = ("registration_no", "name", "representative", "opened_at")
+_paddle_engines: dict[str, object] = {}
+_paddle_state = {"available": True}
+
+
+def paddle_available() -> bool:
+    """초기화에 한 번 실패하면 프로세스가 끝날 때까지 폴백을 끈다(매 요청 재시도 방지)."""
+    return _paddle_state["available"]
+
+
+def fallback_engine() -> str:
+    """OCR_FALLBACK_ENGINE. 기본 off, 알려진 값은 paddle 뿐이다."""
+    value = _env("OCR_FALLBACK_ENGINE", "off").lower()
+    return "paddle" if value in ("paddle", "paddleocr") else "off"
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(_env(name, str(default)))
+    except ValueError:
+        return default
+
+
+def merge_boxes_to_lines(items: list[dict], tol_ratio: float = 0.6) -> str:
+    """텍스트 박스(text/score/y/x/h) → 줄 단위 텍스트.
+
+    PaddleOCR 은 박스 단위로 돌려주지만 parse_registration_text 는 라벨과 값이 같은 줄에
+    있다고 가정한다. y 중심을 중앙값 높이 x tol_ratio 허용오차로 묶고 x 순으로 이어 붙인다.
+    """
+    boxes = [item for item in items if str(item.get("text") or "").strip()]
+    if not boxes:
+        return ""
+    heights = sorted(float(item.get("h") or 0) for item in boxes)
+    median_h = heights[len(heights) // 2]
+    tolerance = median_h * tol_ratio
+    rows: list[dict] = []
+    for item in sorted(boxes, key=lambda b: float(b.get("y") or 0)):
+        y = float(item.get("y") or 0)
+        row = rows[-1] if rows else None
+        if row is not None and abs(y - row["y"]) <= tolerance:
+            row["items"].append(item)
+            row["y"] = sum(float(b.get("y") or 0) for b in row["items"]) / len(row["items"])
+        else:
+            rows.append({"y": y, "items": [item]})
+    return "\n".join(
+        " ".join(str(b["text"]).strip() for b in sorted(row["items"], key=lambda b: float(b.get("x") or 0)))
+        for row in rows
+    )
+
+
+def _paddle_engine(language: str):
+    """지연 import + 인스턴스 캐시. 실패하면 예외를 그대로 올린다(호출부가 폴백을 끈다)."""
+    engine = _paddle_engines.get(language)
+    if engine is None:
+        try:
+            from paddleocr import PaddleOCR  # noqa: PLC0415 — 진아 전용 venv 에만 있다
+
+            engine = PaddleOCR(
+                lang=language,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+                enable_mkldnn=False,
+            )
+        except Exception:
+            _paddle_state["available"] = False
+            raise
+        _paddle_engines[language] = engine
+    return engine
+
+
+def _downscale_for_paddle(data: bytes):
+    """장변 PADDLE_MAX_LONG_SIDE 이하로 줄인 RGB numpy 배열."""
+    import numpy as np  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
+
+    with Image.open(io.BytesIO(data)) as image:
+        image = image.convert("RGB")
+        long_side = max(image.size)
+        if long_side > PADDLE_MAX_LONG_SIDE:
+            ratio = PADDLE_MAX_LONG_SIDE / long_side
+            image = image.resize((max(1, round(image.width * ratio)), max(1, round(image.height * ratio))))
+        return np.array(image)
+
+
+def _paddle_items(prediction) -> list[dict]:
+    items: list[dict] = []
+    for page in prediction or []:
+        data = page.get("res", page) if hasattr(page, "get") else {}
+        texts = data.get("rec_texts") or []
+        scores = data.get("rec_scores") or []
+        polys = data.get("rec_polys")
+        if polys is None:
+            polys = data.get("dt_polys")
+        if polys is None:
+            polys = []
+        for index, text in enumerate(texts):
+            if index >= len(polys):
+                break
+            points = [(float(p[0]), float(p[1])) for p in polys[index]]
+            xs, ys = [p[0] for p in points], [p[1] for p in points]
+            items.append({
+                "text": str(text),
+                "score": float(scores[index]) if index < len(scores) else 0.0,
+                "x": min(xs),
+                "y": (min(ys) + max(ys)) / 2,
+                "h": max(ys) - min(ys),
+            })
+    return items
+
+
+def paddle_extract(data: bytes, language: str = "korean") -> dict:
+    """동기 호출. PaddleOCR 결과를 tesseract 와 같은 모양으로 돌려준다."""
+    if not data:
+        raise ValueError("OCR 대상 데이터가 비어 있습니다")
+    engine = _paddle_engine(language)
+    image = _downscale_for_paddle(data)
+    items = _paddle_items(engine.predict(image))
+    scores = [item["score"] for item in items]
+    return {
+        "text": merge_boxes_to_lines(items),
+        "confidence": round(sum(scores) / len(scores), 3) if scores else 0.0,
+        "language": language,
+        "error": None,
+        "backend": "local",
+        "engine": "paddle",
+    }
+
+
+def _long_side(data: bytes) -> int | None:
+    try:
+        from PIL import Image  # noqa: PLC0415
+
+        with Image.open(io.BytesIO(data)) as image:
+            return max(image.size)
+    except Exception:  # noqa: BLE001 — 크기를 모르면 크기 조건은 판정하지 않는다
+        return None
+
+
+def _legal_filled(text: str, confidence: float) -> int:
+    try:
+        from app.services.obys_registration_ocr import parse_registration_text  # noqa: PLC0415 — 순환 import 회피
+
+        parsed = parse_registration_text(text, confidence)
+    except Exception:  # noqa: BLE001
+        return 0
+    return sum(1 for field in LEGAL_FIELDS if parsed.get(field, {}).get("valid"))
+
+
+def _should_try_fallback(data: bytes, result: dict, filled: int) -> bool:
+    if _float_env("OCR_FALLBACK_MIN_CONFIDENCE", 0.80) > float(result.get("confidence") or 0.0):
+        return True
+    side = _long_side(data)
+    if side is not None and side < _float_env("OCR_FALLBACK_MIN_LONG_SIDE", 1200):
+        return True
+    return filled < 3
+
+
+def _with_fallback(data: bytes, language: str, primary: dict) -> dict:
+    """tesseract 결과가 약하면 PaddleOCR 로 재시도해 법정 항목이 더 많이 채워진 쪽을 쓴다."""
+    if fallback_engine() == "off" or not paddle_available():
+        return primary
+    primary_text, primary_conf = str(primary.get("text") or ""), primary.get("confidence") or 0.0
+    primary_filled = _legal_filled(primary_text, primary_conf)
+    if not _should_try_fallback(data, primary, primary_filled):
+        return primary
+    try:
+        candidate = paddle_extract(data, "korean")
+    except Exception as exc:  # noqa: BLE001 — ImportError 포함, 폴백만 꺼지고 기본 경로는 유지
+        logger.info("PaddleOCR 폴백 건너뜀: %s", str(exc)[:200])
+        return primary
+    candidate_filled = _legal_filled(str(candidate.get("text") or ""), candidate.get("confidence") or 0.0)
+    if candidate_filled > primary_filled:
+        return candidate
+    return primary
 
 
 # --- CEO PC Agent ------------------------------------------------------------
@@ -260,6 +446,7 @@ async def pc_agent_extract(
         "language": result.get("language", language),
         "error": result.get("error"),
         "backend": "pc_agent",
+        "engine": "pc_agent",
     }
 
 
@@ -299,7 +486,11 @@ async def ocr_extract(
 
     data = await _load_bytes(image_url, image_base64)
     try:
-        return await asyncio.to_thread(tesseract_extract, data, language)
+        result = await asyncio.to_thread(tesseract_extract, data, language)
+        result.setdefault("engine", "tesseract")
+        if fallback_engine() == "off":
+            return result
+        return await asyncio.to_thread(_with_fallback, data, language, result)
     except Exception as exc:  # noqa: BLE001 — 실패 경로를 모아서 알린다
         failures.append(f"local: {str(exc)[:120]}")
         raise RuntimeError("OCR 실패 — " + " / ".join(failures)) from exc
