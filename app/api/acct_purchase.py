@@ -126,6 +126,7 @@ _DEFAULT_OBYS_ACCT_COMPANY_MAP = {
     "biz-sungshin": (9, 9),
     "biz-eonni-naengmyeon": (10, 10),
     "biz-lylon-e2e": (11, 11),
+    "biz-tdh": (12, 12),
 }
 
 
