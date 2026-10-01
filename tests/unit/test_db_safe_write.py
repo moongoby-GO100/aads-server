@@ -84,31 +84,31 @@ class _FakePool:
 @pytest.mark.asyncio
 async def test_db_safe_write_blocks_drop():
     result = await ToolExecutor()._db_safe_write({"sql": "DROP TABLE chat_messages"})
-    assert result == {"error": "차단된 명령: DROP"}
+    assert result == {"error": "차단된 명령: DROP", "project": "AADS"}
 
 
 @pytest.mark.asyncio
 async def test_db_safe_write_blocks_truncate():
     result = await ToolExecutor()._db_safe_write({"sql": "TRUNCATE users"})
-    assert result == {"error": "차단된 명령: TRUNCATE"}
+    assert result == {"error": "차단된 명령: TRUNCATE", "project": "AADS"}
 
 
 @pytest.mark.asyncio
 async def test_db_safe_write_blocks_alter():
     result = await ToolExecutor()._db_safe_write({"sql": "ALTER TABLE users ADD COLUMN x int"})
-    assert result == {"error": "차단된 명령: ALTER"}
+    assert result == {"error": "차단된 명령: ALTER", "project": "AADS"}
 
 
 @pytest.mark.asyncio
 async def test_db_safe_write_rejects_select():
     result = await ToolExecutor()._db_safe_write({"sql": "SELECT * FROM chat_messages"})
-    assert result == {"error": "INSERT/UPDATE/DELETE만 허용"}
+    assert result == {"error": "INSERT/UPDATE/DELETE만 허용", "project": "AADS"}
 
 
 @pytest.mark.asyncio
 async def test_db_safe_write_rejects_empty_sql():
     result = await ToolExecutor()._db_safe_write({"sql": ""})
-    assert result == {"error": "sql 파라미터 필수"}
+    assert result == {"error": "sql 파라미터 필수", "project": "AADS"}
 
 
 @pytest.mark.asyncio

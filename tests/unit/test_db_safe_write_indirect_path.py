@@ -400,7 +400,7 @@ async def test_multi_statement_still_rejected_before_pool():
 async def test_select_without_call_keeps_legacy_message():
     with patch("app.core.db_pool.get_pool", side_effect=_no_pool):
         result = await ToolExecutor()._db_safe_write({"sql": "SELECT * FROM chat_messages"})
-    assert result == {"error": "INSERT/UPDATE/DELETE만 허용"}
+    assert result == {"error": "INSERT/UPDATE/DELETE만 허용", "project": "AADS"}
 
 
 # ── 운영 문서 ────────────────────────────────────────────────────────────────

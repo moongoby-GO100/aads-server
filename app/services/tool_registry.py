@@ -2758,6 +2758,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "description": "true면 커밋하지 않고 검증만 (기본 false). 보호 테이블 쓰기는 트랜잭션 안에서 실행해 실제와 같은 보호 판정을 한 뒤 롤백한다",
                     "default": False,
                 },
+                "project": {
+                    "type": "string",
+                    "description": "대상 프로젝트 DB (선택). 생략 시 AADS DB. GO100/KIS 는 contabo14 kisautotrade 로 라우팅. SF/NTV2/ACCT 미지원 (지원 외 값은 차단되며 AADS 로 폴백하지 않음)",
+                },
             },
             "required": ["sql"],
         },

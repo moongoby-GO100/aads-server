@@ -129,6 +129,23 @@ def _code_relevant_text(blob: str) -> str:
     return _PATH_TOKEN.sub(" ", blob)
 
 
+_PROJECT_UNKNOWN_TOOLS = frozenset({"db_safe_write"})
+
+
+def _approval_project(tool_name: str, tool_input: Dict[str, Any]) -> str:
+    """승인 범위(goal 자동승인·project 범위 승인)가 보는 대상 프로젝트.
+
+    db_safe_write 는 입력에 project 가 있어도 항상 '' (프로젝트 미상)으로 취급한다.
+    2026-10-01 발견: db_safe_write 에 project 라우팅(GO100/KIS)이 생기면 이 값이
+    채워져, 지금까지 `$3 <> ''` / `$7 <> ''` 조건 때문에 절대 걸리지 않던
+    goal·project 범위 자동승인이 DB 쓰기에도 걸리게 된다. 그 완화는 이번 승인
+    범위가 아니므로, 도구명으로 명시해 계속 항상 CEO 승인 카드가 뜨게 고정한다.
+    """
+    if tool_name in _PROJECT_UNKNOWN_TOOLS:
+        return ""
+    return str(tool_input.get("project") or "").strip().upper()
+
+
 def _work_key(session_id: str, tool_name: str, summary: str) -> str:
     """요청을 가리키는 키. **프로세스가 달라도 같아야 한다.**
 
@@ -360,7 +377,7 @@ async def request_approval(
                 "target": _target_key(tool_input),
                 # 프로젝트 범위 승인이 나중에 이 값을 본다. 승인 시점에는
                 # tool_input 이 없어 다시 계산할 수 없다 — 대상 지문과 같은 이유다.
-                "project": str(tool_input.get("project") or "").strip().upper(),
+                "project": _approval_project(tool_name, tool_input),
                 # 요청 시점 파일 내용 지문. mission/session/project 범위가
                 # 소비 시점에 이 값과 비교해, 그 사이 파일이 바뀌면 재승인을
                 # 요구한다 (_file_fingerprint 참고).
@@ -483,7 +500,7 @@ async def goal_policy_allows(
     #
     # 대상 프로젝트를 알 수 없는 호출(예: db_safe_write)은 통과시키지
     # 않는다. 무엇을 여는지 모르는 채로 여는 것이 가장 나쁘다.
-    target_project = str(tool_input.get("project") or "").strip().upper()
+    target_project = _approval_project(tool_name, tool_input)
     try:
         pool = get_pool()
         row = await pool.fetchrow(
@@ -584,7 +601,16 @@ async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: st
     goal_ids = await _active_goal_ids(session_id)
     # 넓은 범위를 쓸 수 있는가. critical 이면 아래 두 절이 통째로 꺼진다.
     wide_ok = (risk_level or "") != "critical"
-    target_project = str(tool_input.get("project") or "").strip().upper()
+    # db_safe_write 가 AADS 밖(GO100/KIS 등) DB 를 향하면 대상을 묻지 않는 넓은 범위
+    # (goal·session)로는 통과시키지 않는다. 그 승인들은 project 라우팅이 생기기 전
+    # AADS DB 쓰기를 전제로 받은 것이라, 그대로 두면 라우팅 추가만으로 다른 DB 까지 열린다.
+    # 미지원 project 는 어차피 실행 단계에서 차단되므로 여기서는 AADS 외 값이면 모두 좁힌다.
+    if tool_name in _PROJECT_UNKNOWN_TOOLS:
+        raw_project = str(tool_input.get("project") or "").strip().upper()
+        if raw_project and raw_project != "AADS":
+            wide_ok = False
+            goal_ids = []
+    target_project = _approval_project(tool_name, tool_input)
     # 지금 이 파일이 승인 당시와 같은 내용인가. 다르면 mission/session/
     # project 범위 아래에서도 이 요청은 맞지 않는다 (_file_fingerprint 참고).
     file_fp = _file_fingerprint(tool_input)

@@ -209,7 +209,7 @@ def test_request_records_project_for_later_project_scope():
     import inspect
 
     body = inspect.getsource(guard.request_approval)
-    assert '"project": str(tool_input.get("project") or "").strip().upper()' in body
+    assert '"project": _approval_project(tool_name, tool_input)' in body
 
 
 def test_decide_endpoint_accepts_the_new_scopes():

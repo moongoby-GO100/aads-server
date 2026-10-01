@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import uuid
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -59,6 +60,47 @@ async def _execute_single_statement(conn: Any, sql: str, params: list) -> str:
     stmt = await conn.prepare(sql)
     await stmt.fetch(*params)
     return stmt.get_statusmsg()
+
+
+# db_safe_write 가 쓸 수 있는 DB. SF/NTV2 는 MySQL, ACCT 는 읽기전용 롤이라 허용하지 않는다.
+# 미등록·미지원 값은 AADS 로 폴백하지 않고 차단한다 — 엉뚱한 DB 에 쓰는 것이 최악의 실패다.
+_DB_SAFE_WRITE_PROJECTS = frozenset({"GO100"})
+
+
+def _resolve_db_safe_write_project(raw: Any) -> tuple[Optional[str], Optional[str]]:
+    """(resolved, error). 생략/AADS → 'AADS', KIS → GO100. 지원 외·접속정보 없음은 error."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return "AADS", None
+    name = str(raw).strip().upper()
+    if name == "AADS":
+        return "AADS", None
+    from app.api.ceo_chat_tools_db import (
+        _PROJECT_ALIAS, _get_db_type, _get_project_db_config,
+    )
+    resolved = _PROJECT_ALIAS.get(name, name)
+    if resolved not in _DB_SAFE_WRITE_PROJECTS or _get_db_type(resolved) != "postgresql":
+        return None, (
+            f"db_safe_write 미지원 project: {raw} "
+            "(지원: 생략/AADS, GO100/KIS. SF/NTV2/ACCT 미지원)"
+        )
+    config = _get_project_db_config(resolved)
+    if not config or not config.get("database"):
+        return None, f"프로젝트 {resolved} DB 접속 정보 미설정"
+    return resolved, None
+
+
+@asynccontextmanager
+async def _db_safe_write_conn(resolved: str):
+    """resolved 프로젝트 DB 커넥션. AADS 는 내부 풀, 그 외는 프로젝트 풀 — 서로 폴백하지 않는다."""
+    if resolved == "AADS":
+        from app.core.db_pool import get_pool
+        async with get_pool().acquire() as conn:
+            yield conn
+    else:
+        from app.api.ceo_chat_tools_db import _borrow_pg_pool
+        async with _borrow_pg_pool(resolved) as pool:
+            async with pool.acquire() as conn:
+                yield conn
 
 
 def _json_default(obj: Any) -> Any:
@@ -4237,6 +4279,8 @@ class ToolExecutor:
     async def _db_safe_write(self, inp: Dict[str, Any]) -> Any:
         """DB 쓰기 안전 실행 (트랜잭션 강제, 사전/사후 카운트 검증, dry-run).
 
+        - project 생략/AADS 는 AADS DB, GO100/KIS 는 contabo14 kisautotrade 로 라우팅한다.
+          지원 외 project 는 차단하며 AADS 로 폴백하지 않는다. 반환에 쓴 DB(project)를 싣는다.
         - 단일 INSERT/UPDATE/DELETE 만 받는다. 다중 문장·트랜잭션 제어는 DB 연결 전에
           거부한다(P1-B, db_write_sql_guard). dry_run 도 같은 검사를 거친다.
         - saas_users/tenant_memberships/tenants 를 건드리는 쓰기는 같은 트랜잭션 안에서
@@ -4251,29 +4295,38 @@ class ToolExecutor:
             target_unresolved,
         )
 
+        raw_project = inp.get("project")
+        resolved_project, project_error = _resolve_db_safe_write_project(raw_project)
+        if project_error:
+            return {"error": project_error, "blocked": True, "project": raw_project}
+
+        def _tag(result: Dict[str, Any]) -> Dict[str, Any]:
+            result["project"] = resolved_project
+            return result
+
         sql = str(inp.get("sql", "") or "").strip()
         params_raw = inp.get("params") or []
         dry_run = bool(inp.get("dry_run", False))
         if not sql:
-            return {"error": "sql 파라미터 필수"}
+            return _tag({"error": "sql 파라미터 필수"})
         sql_upper = sql.upper().strip()
         for kw in ("DROP ", "TRUNCATE ", "ALTER ", "CREATE DATABASE", "DROP DATABASE"):
             if kw in sql_upper:
-                return {"error": f"차단된 명령: {kw.strip()}"}
+                return _tag({"error": f"차단된 명령: {kw.strip()}"})
         if not any(sql_upper.startswith(k) for k in ("INSERT", "UPDATE", "DELETE")):
             try:
                 validate_single_write(sql)
             except IndirectWriteBlocked as exc:
-                return {"error": f"SQL 차단: {exc}", "blocked": True, "dry_run": dry_run}
+                return _tag({"error": f"SQL 차단: {exc}", "blocked": True, "dry_run": dry_run})
             except SqlGuardError:
                 pass
-            return {"error": "INSERT/UPDATE/DELETE만 허용"}
+            return _tag({"error": "INSERT/UPDATE/DELETE만 허용"})
         try:
             statement = validate_single_write(sql)
         except SqlGuardError as exc:
-            return {"error": f"SQL 차단: {exc}", "blocked": True, "dry_run": dry_run}
+            return _tag({"error": f"SQL 차단: {exc}", "blocked": True, "dry_run": dry_run})
         if not isinstance(params_raw, list):
-            return {"error": "params 는 배열이어야 함", "blocked": True, "dry_run": dry_run}
+            return _tag({"error": "params 는 배열이어야 함", "blocked": True, "dry_run": dry_run})
         table_name = ""
         if sql_upper.startswith("INSERT"):
             parts = sql_upper.split("INTO", 1)
@@ -4288,18 +4341,16 @@ class ToolExecutor:
         if table_name and not re.match(r'^[a-z_][a-z0-9_.]*$', table_name):
             table_name = ""
         try:
-            from app.core.db_pool import get_pool
-            pool = get_pool()
-            async with pool.acquire() as conn:
+            async with _db_safe_write_conn(resolved_project) as conn:
                 try:
                     await assert_target_not_view(conn, statement.target)
                 except VaultLoginProtected as exc:
-                    return {"error": str(exc), "blocked": True, "dry_run": dry_run, "vault_guard": True}
+                    return _tag({"error": str(exc), "blocked": True, "dry_run": dry_run, "vault_guard": True})
                 # 대상 테이블을 확정 못 한 쓰기는 이름 검사가 빗나갈 수 있으니 보호 검사를 강제한다.
                 if references_login_tables(statement.words + statement.literals) or target_unresolved(statement.target):
-                    return await self._db_safe_write_vault_guarded(
+                    return _tag(await self._db_safe_write_vault_guarded(
                         conn, sql, params_raw, dry_run, table_name,
-                    )
+                    ))
                 pre_count = None
                 if table_name:
                     try:
@@ -4308,7 +4359,7 @@ class ToolExecutor:
                     except Exception:
                         pass
                 if dry_run:
-                    return {"dry_run": True, "sql": sql[:500], "table": table_name, "pre_count": pre_count, "message": "dry_run — 실행하지 않음"}
+                    return _tag({"dry_run": True, "sql": sql[:500], "table": table_name, "pre_count": pre_count, "message": "dry_run — 실행하지 않음"})
                 async with conn.transaction():
                     result = await _execute_single_statement(conn, sql, params_raw)
                 post_count = None
@@ -4318,16 +4369,16 @@ class ToolExecutor:
                         post_count = int(row["cnt"]) if row else None
                     except Exception:
                         pass
-                return {
+                return _tag({
                     "success": True,
                     "result": str(result),
                     "table": table_name,
                     "pre_count": pre_count,
                     "post_count": post_count,
                     "diff": (post_count - pre_count) if pre_count is not None and post_count is not None else None,
-                }
+                })
         except Exception as e:
-            return {"error": str(e), "sql": sql[:200]}
+            return _tag({"error": str(e), "sql": sql[:200]})
 
     async def _db_safe_write_vault_guarded(
         self, conn: Any, sql: str, params: list, dry_run: bool, table_name: str,
