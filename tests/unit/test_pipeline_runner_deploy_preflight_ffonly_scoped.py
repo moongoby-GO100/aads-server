@@ -335,7 +335,7 @@ def test_isolated_fails_closed(isolated_case, isolated_fn_file, tmp_path, case):
     assert fail_out.exists()
     assert fail_out.read_text().strip() == {
         "wrong_sha": "deploy_isolated_sha_or_dirty",
-        "dirty_release": "deploy_isolated_sha_or_dirty",
+        "dirty_release": "deploy_isolated_worktree_dirty",
         "fetch_failure": "deploy_fetch_failed",
     }[case]
 
