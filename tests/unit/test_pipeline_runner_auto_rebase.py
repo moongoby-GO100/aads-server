@@ -208,3 +208,132 @@ def test_kill_switch_disables_auto_rebase(fn_file, case_disjoint):
 
     assert proc.returncode == 1
     assert _git(worktree, "rev-parse", "HEAD") == job_sha
+
+
+# ── 3) 검수자 명시 확인([REBASE-ATTESTED]) 예외 ─────────────────────────
+# 겹침 차단의 유일한 예외다. 표식이 없으면 종전과 같고, 표식이 있어도
+# 실제 충돌·비FF 는 막는다.
+
+
+def test_attested_marker_logic_present_in_both_runner_scripts():
+    for script_name in SCRIPTS:
+        fn = _extract_function(_read_script(script_name), "attempt_stale_base_rebase")
+        assert "[REBASE-ATTESTED]" in fn
+        assert "AUTO_REBASE_ATTESTED" in fn
+        assert 'record_runner_event "$job_id" "auto_rebase_attested" "info"' in fn
+        # 표식이 있어도 남아야 하는 안전장치
+        assert "AUTO_REBASE_FAIL" in fn and "AUTO_REBASE_REVERT" in fn
+        assert "AUTO_REBASE_SKIP" in fn
+
+
+@pytest.fixture(scope="module")
+def attest_fn_file(tmp_path_factory):
+    if shutil.which("git") is None or shutil.which("comm") is None:
+        pytest.skip("git/comm 미설치 환경 — 동작 테스트 생략")
+    script = _read_script("pipeline-runner.sh")
+    path = tmp_path_factory.mktemp("auto_rebase_attest_fn") / "fn.sh"
+    path.write_text(
+        "set -eo pipefail\n"
+        'log() { echo "$*" >&2; }\n'
+        # DB 스텁: ATTEST_DB=t|f|fail|empty 로 조회 결과를 흉내낸다
+        'db_exec() { case "${ATTEST_DB:-empty}" in t) echo t;; f) echo f;; fail) return 1;; *) ;; esac; }\n'
+        'record_runner_event() { echo "EVENT $*" >> "${EVENT_LOG:-/dev/null}"; }\n'
+        + _extract_function(script, "classify_push_state")
+        + _extract_function(script, "attempt_stale_base_rebase"),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _call_attest(fn_file: Path, repo: Path, sha: str, job_id: str, attest_db: str, event_log: Path):
+    return subprocess.run(
+        ["bash", "-c", f'source "{fn_file}"; attempt_stale_base_rebase "{repo}" "{sha}" "{job_id}"'],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "ATTEST_DB": attest_db, "EVENT_LOG": str(event_log)},
+    )
+
+
+@pytest.fixture
+def case_overlap_clean(tmp_path):
+    """같은 파일을 건드리지만 서로 다른 줄이라 리베이스는 깨끗하게 붙는다."""
+    job_id = f"test{uuid.uuid4().hex[:10]}"
+    remote = tmp_path / "remote.git"
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "clone", str(remote), str(clone)], check=True, capture_output=True)
+    _git(clone, "config", "user.email", "runner@aads.local")
+    _git(clone, "config", "user.name", "AADS Runner Test")
+    (clone / "shared.txt").write_text("top\n" + "pad\n" * 10 + "bottom\n", encoding="utf-8")
+    _git(clone, "add", "-A")
+    _git(clone, "commit", "-m", "base")
+    _git(clone, "push", "origin", "main")
+    worktree = Path(f"/tmp/aads-wt-{job_id}")
+    _git(clone, "worktree", "add", "--detach", str(worktree), "HEAD")
+    (worktree / "shared.txt").write_text("job top\n" + "pad\n" * 10 + "bottom\n", encoding="utf-8")
+    _git(worktree, "add", "-A")
+    _git(worktree, "commit", "-m", "job commit")
+    job_sha = _git(worktree, "rev-parse", "HEAD")
+    (clone / "shared.txt").write_text("top\n" + "pad\n" * 10 + "other bottom\n", encoding="utf-8")
+    _git(clone, "add", "-A")
+    _git(clone, "commit", "-m", "incoming")
+    _git(clone, "push", "origin", "main")
+    yield job_id, worktree, job_sha
+    shutil.rmtree(worktree, ignore_errors=True)
+    _git(clone, "worktree", "prune")
+
+
+def test_attested_overlap_with_clean_rebase_is_rebased(attest_fn_file, case_overlap_clean, tmp_path):
+    job_id, worktree, job_sha = case_overlap_clean
+    events = tmp_path / "events.log"
+
+    proc = _call_attest(attest_fn_file, worktree, job_sha, job_id, "t", events)
+
+    assert proc.returncode == 0, proc.stderr
+    new_sha = proc.stdout.strip()
+    assert SHA_RE.match(new_sha) and new_sha != job_sha
+    assert "AUTO_REBASE_ATTESTED" in proc.stderr and "shared.txt" in proc.stderr
+    assert "AUTO_REBASE_OK" in proc.stderr
+    assert "auto_rebase_attested" in events.read_text(encoding="utf-8")
+    content = (worktree / "shared.txt").read_text(encoding="utf-8")
+    assert content.startswith("job top\n") and content.endswith("other bottom\n")
+
+
+@pytest.mark.parametrize("attest_db", ["f", "empty", "fail"])
+def test_overlap_without_marker_stays_skipped(attest_fn_file, case_overlap_clean, tmp_path, attest_db):
+    """표식 없음·조회 실패·빈 결과는 모두 종전과 같이 SKIP (fail-closed)."""
+    job_id, worktree, job_sha = case_overlap_clean
+    events = tmp_path / "events.log"
+
+    proc = _call_attest(attest_fn_file, worktree, job_sha, job_id, attest_db, events)
+
+    assert proc.returncode == 1
+    assert "AUTO_REBASE_SKIP" in proc.stderr
+    assert "AUTO_REBASE_ATTESTED" not in proc.stderr
+    assert not events.exists()
+    assert _git(worktree, "rev-parse", "HEAD") == job_sha
+
+
+def test_attested_marker_does_not_override_real_conflict(attest_fn_file, case_overlap, tmp_path):
+    """표식이 있어도 같은 줄 충돌이면 AUTO_REBASE_FAIL 로 원래 SHA 에 남는다."""
+    job_id, _clone, worktree, job_sha = case_overlap
+    events = tmp_path / "events.log"
+
+    proc = _call_attest(attest_fn_file, worktree, job_sha, job_id, "t", events)
+
+    assert proc.returncode == 1
+    assert "AUTO_REBASE_ATTESTED" in proc.stderr
+    assert "AUTO_REBASE_FAIL" in proc.stderr
+    assert _git(worktree, "rev-parse", "HEAD") == job_sha
+    assert _git(worktree, "status", "--porcelain") == ""
+
+
+def test_marker_is_not_consulted_when_files_do_not_overlap(attest_fn_file, case_disjoint, tmp_path):
+    job_id, _clone, worktree, job_sha = case_disjoint
+    events = tmp_path / "events.log"
+
+    proc = _call_attest(attest_fn_file, worktree, job_sha, job_id, "fail", events)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "AUTO_REBASE_OK" in proc.stderr
+    assert "AUTO_REBASE_ATTESTED" not in proc.stderr

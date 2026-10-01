@@ -1027,15 +1027,16 @@ classify_push_state() {
 # 규칙으로만 남은 것은 또 일어난다(R-ERRBOOK).
 #
 # 다만 **양쪽이 건드린 파일이 하나도 겹치지 않으면** 옮겨 붙이는 것은 안전하다.
-# 한 파일이라도 겹치면 하지 않는다. 텍스트로 안 겹쳐도 같은 파일이면 의미가
-# 충돌할 수 있고, 그 판단은 사람 몫이다.
+# 겹치면 사람의 명시 확인(review_feedback 의 `[REBASE-ATTESTED]`)이 있을 때만
+# 시도한다. 텍스트로 안 겹쳐도 같은 파일이면 의미가 충돌할 수 있고, 그 판단은
+# 사람 몫이기 때문이다. 확인이 있어도 실제 충돌·비FF 는 여전히 막는다.
 #
 # 성공하면 새 SHA 를 stdout 으로 돌려주고 0, 그 외에는 1 을 돌려준다.
 # 내부 로그는 전부 stderr 로 보낸다 — stdout 은 SHA 전용이다.
 # 실패해도 워크트리는 원래 SHA 로 되돌린다.
 attempt_stale_base_rebase() {
     local repo="$1" sha="$2" job_id="$3" remote_branch="${4:-main}"
-    local remote_sha="" base="" job_files="" inc_files="" overlap="" new_sha="" n_commits=""
+    local remote_sha="" base="" job_files="" inc_files="" overlap="" new_sha="" n_commits="" attested=""
 
     [[ "${AUTO_REBASE_STALE_BASE:-1}" == "0" ]] && return 1
 
@@ -1060,8 +1061,17 @@ attempt_stale_base_rebase() {
     [[ -n "$job_files" ]] || return 1
     overlap=$(comm -12 <(printf '%s\n' "$job_files") <(printf '%s\n' "$inc_files") | head -5)
     if [[ -n "$overlap" ]]; then
-        log "  AUTO_REBASE_SKIP job=$job_id — 같은 파일을 양쪽이 건드림: $(printf '%s' "$overlap" | tr '\n' ' ')" >&2
-        return 1
+        # 조회 실패·빈 결과·job_id 형식 이상은 모두 "표식 없음" (fail-closed)
+        attested=""
+        if [[ "$job_id" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            attested=$(db_exec "SELECT position('[REBASE-ATTESTED]' in COALESCE(review_feedback,'')) > 0 FROM pipeline_jobs WHERE job_id='${job_id}' LIMIT 1;" 2>/dev/null | tr -d '[:space:]') || attested=""
+        fi
+        if [[ "$attested" != "t" ]]; then
+            log "  AUTO_REBASE_SKIP job=$job_id — 같은 파일을 양쪽이 건드림: $(printf '%s' "$overlap" | tr '\n' ' ')" >&2
+            return 1
+        fi
+        log "  AUTO_REBASE_ATTESTED job=$job_id overlap=$(printf '%s' "$overlap" | tr '\n' ' ')" >&2
+        record_runner_event "$job_id" "auto_rebase_attested" "info" >/dev/null 2>&1 || true
     fi
 
     if ! git -C "$repo" rebase --quiet --onto "$remote_sha" "$base" "$sha" >/dev/null 2>&1; then
@@ -1081,7 +1091,7 @@ attempt_stale_base_rebase() {
         return 1
     fi
 
-    log "  AUTO_REBASE_OK job=$job_id ${sha:0:8} -> ${new_sha:0:8} (겹친 파일 0, 커밋 ${n_commits}개)" >&2
+    log "  AUTO_REBASE_OK job=$job_id ${sha:0:8} -> ${new_sha:0:8} (겹친 파일 $(printf '%s' "$overlap" | grep -c .), 커밋 ${n_commits}개)" >&2
     printf '%s' "$new_sha"
     return 0
 }
