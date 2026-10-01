@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -130,11 +130,28 @@ async def build_auto_rag_context(
             if origin == "cross_session":
                 sim *= _CROSS_SESSION_WEIGHT
 
-            line = f"- [{source}] ({ts}, 유사도:{sim:.2f}) {text}"
+            # 문서 근거는 머리말을 따로 만든다. `timestamp` 한 칸만 찍으면
+            # 경로·hash·승인상태가 **최종 문자열에서** 사라지고, 읽는 쪽은
+            # 그 문장을 "출처를 확인할 수 없는 현재 사실" 로 읽는다.
+            # dict 에 값을 담아 두는 것만으로는 부족하다 — LLM 이 보는 것은
+            # 아래 한 줄뿐이다.
+            is_doc = r.get("kind") == "doc"
+            stamp = _doc_evidence_header(r) if is_doc else ts
+            head = f"- [{source}] ({stamp}, 유사도:{sim:.2f}) "
+            line = head + text
             line_tokens = estimate_tokens(line)
 
             if total_tokens + line_tokens > _RAG_TOKEN_BUDGET:
-                break
+                # 문서는 줄째로 버리지 않고 본문만 줄인다. 예산이 모자라
+                # 통째로 떨어뜨리면 그 근거의 출처·날짜·승인상태까지 같이
+                # 사라져, 남는 것이 "어디서 왔는지 모르는 문장" 이 된다.
+                if not is_doc:
+                    break
+                trimmed = _fit_doc_line(head, text, _RAG_TOKEN_BUDGET - total_tokens)
+                if trimmed is None:
+                    break
+                line = trimmed
+                line_tokens = estimate_tokens(line)
 
             lines.append(line)
             total_tokens += line_tokens
@@ -265,9 +282,10 @@ async def _search_documents(
         path = r.get("doc_path", "")
         heading = r.get("heading", "")
         title = r.get("title", "")
-        # 포맷터가 읽는 키는 `text`/`source`/`timestamp` 다. 문서 출처는
-        # **파일 경로**여야 한다 — "어디에 그렇게 적혀 있나" 에 답할 수
-        # 있어야 근거로서 쓸모가 있다.
+        # 포맷터가 읽는 키는 `text`/`source` 와, 문서일 때 머리말을 만드는
+        # `path`/`doc_sha256`/`doc_mtime`/`indexed_at`/`authority_status`/
+        # `currency_status` 다. 문서 출처는 **파일 경로**여야 한다 — "어디에
+        # 그렇게 적혀 있나" 에 답할 수 있어야 근거로서 쓸모가 있다.
         where = f"{title} › {heading}" if heading else title
         # The caller merges documents with other semantic sources by `similarity`.
         # Preserve RRF ordering with a tiny monotonic offset while retaining the
@@ -275,15 +293,21 @@ async def _search_documents(
         similarity = r.get("similarity", 0.0)
         if r.get("rrf_score") is not None:
             similarity = fused_base - (position * 1e-6)
-        # `timestamp` 칸에는 **문서가 쓰인 시각**을 넣는다. 2026-10-01 이전에는
-        # 여기에 파일 경로가 들어가 있었다. 포맷터(_format 의 `({ts}, 유사도:…)`)가
-        # 이 값을 그대로 찍으므로, 4월에 쓰인 문서가 날짜 없이 경로만 달고
-        # 올라왔고 읽는 쪽은 그것이 몇 달 전 자료인지 알 수 없었다.
-        # 경로는 이미 `path`·`msg_id` 에 있으니 중복도 아니었다.
+        # 날짜는 **종류를 밝혀서만** 내보낸다.
+        #
+        #   mtime       파일이 마지막으로 바뀐 시각. 문서가 쓰인 시각도,
+        #               운영에서 검증된 시각도 아니다.
+        #   indexed_at  우리가 색인한 시각. 문서의 나이와 무관하다.
+        #
+        # 2026-10-01 이전에는 이 칸에 파일 경로가 들어가 있었고(포맷터가
+        # `({ts}, 유사도:…)` 로 그대로 찍는다), 그 다음 판에서는 둘 중 아무
+        # 거나 집어 날짜 하나만 찍었다. 둘 다 같은 오인을 만든다 — 색인일만
+        # 찍히면 반년 전 문서가 오늘 자료로 읽힌다. 그래서 fallback 을 없애고
+        # 두 날짜를 각자 이름표를 달아 내보낸다(`_doc_evidence_header`).
         doc_mtime = r.get("mtime")
         indexed_at = r.get("indexed_at")
-        stamp_source = doc_mtime or indexed_at
-        stamp = _format_doc_stamp(stamp_source)
+        file_changed = _format_doc_stamp(doc_mtime)
+        stamp = f"파일변경일 {file_changed}" if file_changed else "작성일 미상"
 
         # 색인은 "이 문서가 승인된 정본인가" 와 "지금도 유효한가" 를 확인하지
         # 않는다. doc_chunks.label 은 위치 설명자일 뿐이고(예: "KIS 문서(contabo14)")
@@ -309,19 +333,80 @@ async def _search_documents(
 
 
 def _format_doc_stamp(value: object) -> str:
-    """문서 시각을 `YYYY-MM-DD` 로 돌려준다. 모르면 빈 문자열.
+    """**검증된 날짜만** `YYYY-MM-DD` 로 돌려준다. 아니면 빈 문자열.
 
-    경로가 시각 칸으로 다시 흘러드는 것을 여기서 막는다 — 구분자가 들어
-    있으면 시각이 아니라고 보고 버린다.
+    문자열은 실제로 파싱되는 것만 통과시킨다. 앞 10자를 잘라 그대로
+    내보내던 판에서는 "문서가 쓰인 시각" 같은 설명문이나 깨진 값이 날짜
+    자리에 찍혔고, 읽는 쪽은 날짜 자리에 있는 것을 날짜로 믿는다. 그
+    오인이 이 작업의 출발점이다.
+
+    날짜 종류(파일변경일·색인일)는 여기서 붙이지 않는다 — 값만 만들고
+    이름표는 `_doc_evidence_header` 가 붙인다.
     """
-    if value is None:
+    if value is None or isinstance(value, bool):
         return ""
-    if hasattr(value, "strftime"):
+    if isinstance(value, (datetime, date)):  # datetime 은 date 의 하위형
         return value.strftime("%Y-%m-%d")
-    text = str(value).strip()
-    if not text or "/" in text or "\\" in text:
+    if not isinstance(value, str):
         return ""
-    return text[:10]
+    text = value.strip()
+    if not text:
+        return ""
+    # DB 문자열(`2026-09-18 10:49:12+09`, `2026-09-18T10:49:12`)의 날짜부만 본다.
+    candidate = text.replace("T", " ", 1).split(" ", 1)[0]
+    try:
+        return date.fromisoformat(candidate).strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
+def _doc_evidence_header(r: Dict[str, Any]) -> str:
+    """문서 근거의 머리말. 최종 RAG 문자열에 실제로 찍히는 줄이다.
+
+    담는 것은 다섯 가지다 — 파일변경일, 색인일, 승인상태, 현재상태, 그리고
+    전체 경로와 내용 hash. 날짜는 **종류를 숨기지 않는다.** 한 날짜만 이름표
+    없이 찍으면 읽는 쪽이 그것을 작성일이나 승인일로 읽는다.
+
+    `mtime` 이 없으면 작성일을 모른다고 적고 색인일만 남긴다 — 색인일을
+    작성일 자리에 올리지 않는다.
+    """
+    file_changed = _format_doc_stamp(r.get("doc_mtime"))
+    indexed = _format_doc_stamp(r.get("indexed_at"))
+    parts = [
+        f"파일변경일 {file_changed}" if file_changed else "작성일 미상(파일변경일 없음)",
+        f"색인일 {indexed}" if indexed else "색인일 미상",
+        str(r.get("authority_status") or "승인미확인"),
+        str(r.get("currency_status") or "현재상태미검증"),
+    ]
+    path = str(r.get("path") or "").strip()
+    if path:
+        parts.append(f"경로 {path}")
+    sha = str(r.get("doc_sha256") or "").strip()
+    if sha:
+        parts.append(f"hash {sha[:12]}")
+    return " · ".join(parts)
+
+
+_DOC_BODY_TRIM_MARK = "…(본문 예산초과로 줄임)"
+
+
+def _fit_doc_line(head: str, text: str, budget_tokens: int) -> Optional[str]:
+    """남은 예산에 맞춰 문서 **본문만** 줄인다. 머리말이 안 들어가면 None.
+
+    머리말은 줄이지 않는다. 출처·날짜·승인상태를 지우고 본문만 남기면 그
+    본문이 어디서 왔는지 확인할 수 없고, 확인할 수 없는 문장은 근거가
+    아니다. 예산이 머리말조차 못 담으면 그 줄은 포기한다.
+    """
+    from app.core.token_utils import estimate_tokens
+
+    if estimate_tokens(head + _DOC_BODY_TRIM_MARK) > budget_tokens:
+        return None
+    if estimate_tokens(head + text) <= budget_tokens:
+        return head + text
+    body = text
+    while body and estimate_tokens(head + body + _DOC_BODY_TRIM_MARK) > budget_tokens:
+        body = body[: len(body) - max(8, len(body) // 8)]
+    return head + body.rstrip() + _DOC_BODY_TRIM_MARK
 
 
 async def _search_memory_facts(query_emb: list, project: Optional[str]) -> List[Dict]:
