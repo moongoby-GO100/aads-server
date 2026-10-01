@@ -39,6 +39,19 @@ STOP_LABELS = (
     "발급사유", "공동사업자", "개업연월일", "사업장소재지", "본점소재지", "대표자", "성명", "상호",
 )
 EXCLUDED_PREFIXES = {"registration_no": ("법인", "주민")}
+# 정확한 표시를 못 찾았을 때만 쓴다. 진아 실측(2026-10-01)에서 tesseract 가 표시 글자 하나를
+# 잘못 읽어 값 전체를 놓쳤다: 성명→'a 명', 상호→'a 호', 소재지→'소 재 A'.
+FUZZY_LABEL_PATTERNS: dict[str, tuple[str, ...]] = {
+    "name": (r"^\s*\S\s*호\s*[:：]",),
+    "representative": (r"^\s*\S\s*명\s*[:：]",),
+    "address": (r"사\s*업\s*장\s*소\s*재\s*\S?\s*[:：]",),
+}
+SIDO_NAMES = (
+    "서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시", "대전광역시", "울산광역시",
+    "세종특별자치시", "경기도", "강원특별자치도", "충청북도", "충청남도", "전북특별자치도", "전라남도",
+    "경상북도", "경상남도", "제주특별자치도",
+)
+ADDRESS_UNITS = ("길", "로", "층", "호", "동", "가", "번지", "번길")
 TAX_TYPES = (("간이과세자", "간이과세"), ("일반과세자", "일반과세"), ("면세사업자", "면세"))
 
 
@@ -48,6 +61,44 @@ def _spaced(label: str) -> str:
 
 def _clean(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _join_hangul_syllables(value: str) -> str:
+    """tesseract kor 가 '서 울 특 별시' 처럼 음절마다 띄운 것을 붙인다.
+
+    한 음절짜리 토막 뒤의 공백만 지운다. '주식회사 윤 희' 처럼 앞이 여러 음절이면 띄어쓰기를
+    남긴다. 숫자 뒤 한 글자 단위(27 길, 1 층, 102 호)도 붙인다.
+    """
+    text = re.sub(r"\(\s+", "(", _clean(value))
+    text = re.sub(r"\s+\)", ")", text)
+    tokens = text.split(" ") if text else []
+    out: list[str] = []
+    previous_was_unit = False
+    for index, token in enumerate(tokens):
+        previous = tokens[index - 1] if index else ""
+        # '(좌측)(미' 처럼 괄호로 이어진 토막은 마지막 괄호 뒤 글자만 본다.
+        prev_tail = re.split(r"[()\s,.]", previous)[-1]
+        core = token.strip("(),.")
+        single_before = bool(re.fullmatch(r"[가-힣]", prev_tail)) and not previous_was_unit
+        unit_after_number = bool(re.fullmatch(r"\d+", previous)) and core in ADDRESS_UNITS
+        if out and ((single_before and re.match(r"[(]?[가-힣]", token)) or unit_after_number):
+            out[-1] += token
+        else:
+            out.append(token)
+        # '1 층 점 포' 의 층은 숫자에 붙은 단위다 — 다음 음절을 끌어오지 않는다.
+        previous_was_unit = unit_after_number
+    return " ".join(out)
+
+
+def _fix_sido(address: str) -> str:
+    """첫 토막이 시도 이름과 한 글자만 다르면 고친다(서물특별시→서울특별시)."""
+    head, _, tail = address.partition(" ")
+    if not head or head in SIDO_NAMES:
+        return address
+    for name in SIDO_NAMES:
+        if len(name) == len(head) and sum(a != b for a, b in zip(name, head)) == 1 and head[-1] == name[-1]:
+            return f"{name} {tail}".strip()
+    return address
 
 
 def _snippet(line: str) -> str:
@@ -98,6 +149,13 @@ def _labelled_value(lines: list[str], field: str) -> tuple[str, str, float] | No
                 if following and not any(compact.startswith(stop) for stop in (*STOP_LABELS, "등록번호", "사업장")):
                     return _clean(_cut_at_stop_label(following, labels)), _snippet(following), 0.8
                 return "", _snippet(line), 1.0
+    for pattern in FUZZY_LABEL_PATTERNS.get(field, ()):
+        for line in lines:
+            match = re.search(pattern, line)
+            if match:
+                value = _clean(_cut_at_stop_label(line[match.end():], labels))
+                if value:
+                    return value, _snippet(line), 0.7
     return None
 
 
@@ -126,7 +184,8 @@ def normalize_registration_no(raw: str) -> tuple[str | None, bool, str | None]:
 
 
 def normalize_opened_at(raw: str, *, today: date | None = None) -> tuple[str | None, bool, str | None]:
-    match = re.search(r"(\d{4})\s*(?:년|[.\-/])\s*(\d{1,2})\s*(?:월|[.\-/])\s*(\d{1,2})", str(raw or ""))
+    # 월 은 tesseract 가 뭘·윌 로 자주 읽는다 — 숫자 사이 한 글자는 받아들인다.
+    match = re.search(r"(\d{4})\s*(?:년|[.\-/])\s*(\d{1,2})\s*(?:월|[.\-/]|[^\d\s])\s*(\d{1,2})", str(raw or ""))
     if not match:
         return None, False, "개업일 날짜 형식을 읽지 못했습니다"
     try:
@@ -165,7 +224,10 @@ def parse_registration_text(text: str, ocr_confidence: Any = 0.0, *, today: date
         elif not found[0]:
             result[field] = _field(field, source=found[1], reason="항목 표시는 있으나 값을 읽지 못했습니다")
         else:
-            result[field] = _field(field, found[0], confidence=base * found[2], source=found[1], valid=True)
+            value = _join_hangul_syllables(found[0])
+            if field == "address":
+                value = _fix_sido(value)
+            result[field] = _field(field, value, confidence=base * found[2], source=found[1], valid=True)
 
     found = _labelled_value(lines, "registration_no")
     factor, source, raw = (found[2], found[1], found[0]) if found else (0.6, None, "")

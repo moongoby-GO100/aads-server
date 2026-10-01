@@ -459,3 +459,42 @@ def test_ui_uploads_original_and_drops_filename_memo():
     assert "data-apply-registration-ocr" in html
     assert "businessNeedsRegistrationInfo" in html
     assert 'registrationNo: "기초등록 필요"' not in html
+
+
+# --- 진아 실측 오인식 보정 (2026-10-01) ------------------------------------------
+# 실제 등록증 4장을 tesseract 로 읽은 원문의 모양을 가상 값으로 재현한다(실명·실번호 아님).
+SPACED_TEXT = """사 업 자 등 록 증
+( 일 반 과세자 )
+등 록 번호 : 123-45-67891
+a 호 ： 행 복 국수
+a 명 ： 홍 길동 생 년 월 일 ：1980 년 01 월 02 일
+개 업 연 월 일 : 2024 년 03 뭘 15 일
+사 업 장 소 재 지 ： 서 물 특 별시 강북구 도 봉 로 76 길 42, 1 층 점 포 일 부 ( 좌 측 )( 미 아동)
+"""
+
+
+def test_spaced_syllables_are_joined_without_merging_words():
+    assert ocr._join_hangul_syllables("주식회사 윤 희 에 프 엔비") == "주식회사 윤희에프엔비"
+    assert ocr._join_hangul_syllables("서 울 특 별시 성북구 동 소 문 로 90, 1 층 ( 동 소 문 동 5 가)") == (
+        "서울특별시 성북구 동소문로 90, 1층 (동소문동 5가)"
+    )
+    # 숫자에 붙은 단위(층)는 뒤 음절을 끌어오지 않는다.
+    assert ocr._join_hangul_syllables("42, 1 층 점 포 일 부") == "42, 1층 점포일부"
+
+
+def test_sido_one_letter_misread_is_corrected_only_when_unambiguous():
+    assert ocr._fix_sido("서물특별시 중랑구") == "서울특별시 중랑구"
+    assert ocr._fix_sido("서울특별시 중랑구") == "서울특별시 중랑구"
+    assert ocr._fix_sido("ASSIA 성북구") == "ASSIA 성북구"
+
+
+def test_misread_labels_and_month_still_yield_fields():
+    result = ocr.parse_registration_text(SPACED_TEXT, 0.8, today=date(2026, 10, 1))
+
+    assert result["name"]["value"] == "행복국수"
+    assert result["representative"]["value"] == "홍길동"
+    assert result["opened_at"]["value"] == "2024-03-15"
+    assert result["opened_at"]["valid"] is True
+    assert result["address"]["value"] == "서울특별시 강북구 도봉로 76길 42, 1층 점포일부(좌측)(미아동)"
+    # 흐린 표시로 찾은 값은 확신도를 낮춰 제안한다.
+    assert result["representative"]["confidence"] < 0.8
