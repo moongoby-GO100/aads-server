@@ -222,6 +222,12 @@ def _filter_source_dates(
     return filtered
 
 
+def _employee_label(kind: str, value: dict[str, Any]) -> str:
+    name = str(value.get("employee_name") or "")
+    masked = str(value.get("employee_email_masked") or "")
+    return f"{name} ({masked})" if kind == "employees" and name and masked else name
+
+
 def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any]:
     value = {key: _json_value(item) for key, item in row.items()}
     record_id = str(value.get("id") or value.get("voucher_no") or "")
@@ -240,7 +246,7 @@ def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any
         "담당자": str(value.get("created_by") or ""),
         "업무": str(value.get("title") or value.get("description") or value.get("action") or ""),
         "문서": str(value.get("original_filename") or value.get("document_label") or ""),
-        "직원": str(value.get("employee_name") or ""),
+        "직원": _employee_label(kind, value),
         "지점": str(value.get("branch") or value.get("branch_id") or ""),
         "품목": str(value.get("name") or value.get("description") or ""),
         "수량": str(value.get("current_stock") or value.get("worked_minutes") or ""),

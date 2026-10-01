@@ -161,6 +161,11 @@ async def register(req: RegisterRequest, request: Request):
         if missing:
             raise HTTPException(status_code=400, detail=f"필수 동의 항목입니다: {', '.join(missing)}")
 
+    # 승인자가 사람을 알아볼 수 있어야 한다 — 빈 이름이나 이메일 로컬파트를 이름으로 저장하지 않는다.
+    name = (req.name or "").strip()
+    if not name or name.casefold() == req.email.split("@")[0].strip().casefold():
+        raise HTTPException(status_code=400, detail="실명을 입력해 주십시오")
+
     await auth_module.require_saas_schema_ready()
 
     existing = await auth_module.get_saas_user_by_email(req.email)
@@ -170,7 +175,7 @@ async def register(req: RegisterRequest, request: Request):
     user = await auth_module.create_saas_user(
         req.email,
         req.password,
-        req.name,
+        name,
         attach_internal_tenant=False,
         consents=[c.model_dump() for c in req.consents] or None,
         ip=request.client.host if request.client else None,
@@ -182,7 +187,7 @@ async def register(req: RegisterRequest, request: Request):
     uid = str(user["id"])  # DB returns int, JWT/response need str
     tenant = await auth_module.create_tenant_for_user(
         user_id=uid,
-        name=req.organization_name or (req.name and f"{req.name} Workspace") or f"{req.email.split('@')[0]} Workspace",
+        name=req.organization_name or f"{name} Workspace",
         plan_key="free",
     )
     tenant_id = str(tenant.get("tenant_id") or "") or None

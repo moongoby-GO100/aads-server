@@ -1295,6 +1295,24 @@ async def _db_business_invite_info(business_id: str) -> dict[str, Any] | None:
         await conn.close()
 
 
+async def _db_business_ids_by_branch_name(branch: str) -> list[str]:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        rows = await conn.fetch(
+            """SELECT DISTINCT b.business_id
+                 FROM yeoljeong_branches b
+                 JOIN yeoljeong_businesses biz ON biz.id = b.business_id AND biz.deleted_at IS NULL
+                WHERE b.name = $1 AND b.deleted_at IS NULL
+                ORDER BY b.business_id""",
+            branch,
+        )
+        return [str(row["business_id"]) for row in rows]
+    finally:
+        await conn.close()
+
+
 async def _db_hr_record_tenant(name: str, row_id: str) -> str | None:
     import asyncpg
 
@@ -2537,6 +2555,20 @@ def _validate_join_business_branch(business_id: str, branch: str) -> None:
     raise HTTPException(status_code=400, detail=JOIN_BRANCH_MISMATCH_ERROR)
 
 
+def _resolve_join_business_by_branch(branch: str) -> str:
+    """상수 BUSINESS_BY_BRANCH 에 없는 지점 이름을 DB 로 사업자에 해석한다. 파일 모드·미등록 지점은 빈 문자열."""
+    if not (branch and _db_available()):
+        return ""
+    found = _run_db(_db_business_ids_by_branch_name(branch))
+    business_ids = sorted({str(item).strip() for item in (found or []) if str(item).strip()})
+    if len(business_ids) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="같은 이름의 지점이 여러 사업자에 있습니다 — 사업자를 지정해 주십시오",
+        )
+    return business_ids[0] if business_ids else ""
+
+
 def _prepare_join_request(
     payload: dict[str, Any], user: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
@@ -2548,7 +2580,11 @@ def _prepare_join_request(
     # 겸직: 가입요청의 식별 키는 (email, business_id) 다. 사업자가 다르면 별개 고용주라 별개 요청이다.
     payload_branch = str(payload.get("branch") or "").strip()
     payload_branch = BRANCH_ALIASES.get(payload_branch, payload_branch)
-    payload_business_id = str(payload.get("business_id") or "").strip() or str(BUSINESS_BY_BRANCH.get(payload_branch) or "")
+    payload_business_id = (
+        str(payload.get("business_id") or "").strip()
+        or str(BUSINESS_BY_BRANCH.get(payload_branch) or "")
+        or _resolve_join_business_by_branch(payload_branch)
+    )
     # 요청 레코드는 호출자(직원)의 새 테넌트가 아니라 대상 사업자의 고용주 테넌트에 귀속한다.
     scope_user = _join_request_scope(payload_business_id, email, user) if payload_business_id else user
     rows = _read_hr("employee_join_requests", scope_user)
@@ -2578,7 +2614,9 @@ def _prepare_join_request(
         str(payload.get("branch") or record.get("branch") or "").strip(),
         str(payload.get("branch") or record.get("branch") or "").strip(),
     )
-    business_id = str(payload.get("business_id") or record.get("business_id") or BUSINESS_BY_BRANCH.get(branch) or "").strip()
+    business_id = str(
+        payload.get("business_id") or record.get("business_id") or BUSINESS_BY_BRANCH.get(branch) or payload_business_id
+    ).strip()
     _validate_join_business_branch(business_id, branch)
     if business_id and business_id != payload_business_id:
         # 기존 요청에서 이어받은 사업자 — 읽은 테넌트와 다르면 다른 테넌트에 쓰지 않는다.

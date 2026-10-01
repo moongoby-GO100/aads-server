@@ -192,6 +192,7 @@ class InviteAccept(BaseModel):
 class JoinRequestCreate(BaseModel):
     name: str
     email: str = ""
+    business_id: str = ""
     branch: str = ""
     phone: str = ""
     address: str = ""

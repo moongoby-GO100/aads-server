@@ -90,7 +90,7 @@ def test_register_without_consents_keeps_existing_behavior(monkeypatch):
     client = TestClient(_build_app())
     resp = client.post(
         "/api/v1/auth/register",
-        json={"email": "a@example.com", "password": "abcdef", "name": "A"},
+        json={"email": "a@example.com", "password": "abcdef", "name": "김에이"},
     )
 
     assert resp.status_code == 200, resp.text
@@ -148,6 +148,7 @@ def test_register_optional_marketing_consent_false_is_allowed(monkeypatch):
         json={
             "email": "c@example.com",
             "password": "abcdef",
+            "name": "김씨",
             "consents": [
                 {"consent_key": "terms", "version": "v1", "agreed": True},
                 {"consent_key": "privacy", "version": "v1", "agreed": True},
