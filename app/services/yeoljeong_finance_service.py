@@ -2423,12 +2423,69 @@ def _invite_view(invite: dict[str, Any], names: dict[str, str]) -> dict[str, Any
     return view
 
 
+def _invite_scope_tenant(user: dict[str, Any]) -> str | None:
+    """초대 열람·취소 범위. None 은 내부관리자(전체 열람), 그 밖에는 호출자의 검증된 테넌트."""
+    role = str(user.get("user_role") or "").strip().lower()
+    if user.get("is_internal_admin") or role in {"ceo", "admin", "system"}:
+        return None
+    return _tenant_id(user)
+
+
+def _invite_owner_tenants(invite: dict[str, Any]) -> set[str]:
+    """초대 대상 사업자들의 소유 테넌트. _validated_invite_targets 와 같은 _db_business_tenant_id 판정을 쓴다."""
+    targets = _clean_invite_targets(invite.get("targets"))
+    if not targets:
+        branch = str(invite.get("branch") or "").strip()
+        branch = BRANCH_ALIASES.get(branch, branch)
+        targets = [{"business_id": str(invite.get("business_id") or BUSINESS_BY_BRANCH.get(branch) or "").strip(), "branch": branch}]
+    owners: set[str] = set()
+    if not _db_available():
+        return owners
+    for target in targets:
+        if target["business_id"]:
+            owner = _run_db(_db_business_tenant_id(target["business_id"]))
+            if owner and str(owner).strip():
+                owners.add(str(owner).strip())
+    return owners
+
+
+def _invite_in_scope(invite: dict[str, Any], scope_tenant: str | None) -> bool:
+    if scope_tenant is None:
+        return True
+    owners = _invite_owner_tenants(invite)
+    # 테넌트를 특정할 수 없는 레거시 초대(매핑 없음·파일 모드)는 종전처럼 관리자에게 그대로 보인다.
+    return not owners or scope_tenant in owners
+
+
 def list_invites(user: dict[str, Any]) -> list[dict[str, Any]]:
     if not _is_admin(user):
         return []
+    scope_tenant = _invite_scope_tenant(user)
     names: dict[str, str] = {}
     rows = sorted(_read("employee_invites"), key=lambda row: row.get("created_at", ""), reverse=True)
-    return [_invite_view(row, names) for row in rows]
+    return [_invite_view(row, names) for row in rows if _invite_in_scope(row, scope_tenant)]
+
+
+def revoke_invite(invite_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="직원 초대 취소 권한이 없습니다")
+    rows = _read("employee_invites")
+    invite = _find(rows, invite_id)
+    if not invite:
+        raise HTTPException(status_code=404, detail="초대를 찾을 수 없습니다")
+    if not _invite_in_scope(invite, _invite_scope_tenant(user)):
+        raise HTTPException(status_code=403, detail="다른 사업자의 초대는 취소할 수 없습니다")
+    status = str(invite.get("status") or "").strip().lower()
+    if status == "accepted":
+        raise HTTPException(status_code=409, detail="이미 수락된 초대는 취소할 수 없습니다. 가입요청을 반려하십시오.")
+    if status == "revoked":
+        return _invite_view(invite, {})
+    invite["status"] = "revoked"
+    invite["revoked_at"] = _now()
+    invite["revoked_by"] = _email(user)
+    invite.pop("token", None)
+    _write("employee_invites", rows)
+    return _invite_view(invite, {})
 
 
 def create_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -2463,6 +2520,8 @@ def _find_invite(token: str) -> dict[str, Any]:
     invite = next((row for row in _read("employee_invites") if row.get("token") == token), None)
     if not invite:
         raise HTTPException(status_code=404, detail="초대를 찾을 수 없습니다")
+    if str(invite.get("status") or "").strip().lower() == "revoked":
+        raise HTTPException(status_code=404, detail="취소된 초대입니다")
     return invite
 
 

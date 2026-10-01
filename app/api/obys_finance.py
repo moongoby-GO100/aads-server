@@ -517,6 +517,11 @@ async def create_employee_invite(payload: InviteCreate, current_user: dict = Dep
     return {"invite": await run_in_threadpool(svc.create_invite, payload.model_dump(), current_user)}
 
 
+@router.delete("/employees/invites/{invite_id}")
+async def revoke_employee_invite(invite_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"invite": await run_in_threadpool(svc.revoke_invite, invite_id, current_user)}
+
+
 @router.get("/employees/invites/resolve")
 async def resolve_employee_invite(token: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"invite": await run_in_threadpool(svc.resolve_invite, token)}
