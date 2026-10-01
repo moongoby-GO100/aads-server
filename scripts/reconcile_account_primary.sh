@@ -9,28 +9,55 @@
 # 주기) 동안 옛 계정을 계속 쓴다.
 set -uo pipefail
 
-STATE_DIR="/root/aads/aads-server"
+STATE_DIR="${AADS_SERVER_DIR:-/root/aads/aads-server}"
+ENV_FILE="${AADS_ENV_FILE:-${STATE_DIR}/.env}"
+FAIL_STATE="${AADS_RECONCILE_FAIL_STATE:-/tmp/aads-account-primary.fail}"
 PORT="$(cat "${STATE_DIR}/.active_port" 2>/dev/null || echo 8100)"
 [[ "$PORT" =~ ^[0-9]+$ ]] || PORT=8100
 
 log() { echo "$(TZ=Asia/Seoul date '+%F %T KST') $*"; }
 
-resp="$(curl -s --max-time 20 -X POST \
+# JWT 미들웨어(app/main.py)는 X-Monitor-Key 헤더가 있는 내부 호출을 통과시킨다.
+# 키는 .env 에서만 읽는다(R-KEY).
+MONITOR_KEY="${AADS_MONITOR_KEY:-}"
+if [[ -z "$MONITOR_KEY" && -f "$ENV_FILE" ]]; then
+    MONITOR_KEY="$(grep '^AADS_MONITOR_KEY=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '[:space:]"'"'"'')"
+fi
+
+body_file="$(mktemp)"
+trap 'rm -f "$body_file"' EXIT
+
+code="$(curl -s --max-time 20 -o "$body_file" -w '%{http_code}' -X POST \
+    -H "X-Monitor-Key: ${MONITOR_KEY}" \
     "http://127.0.0.1:${PORT}/api/v1/ops/account-primary/reconcile" 2>/dev/null || true)"
-if [[ -z "$resp" ]]; then
-    log "조정 API 무응답 (port=${PORT}) — state.json 갱신만 진행한다"
-else
-    changed="$(printf '%s' "$resp" | python3 -c '
+[[ "$code" =~ ^[0-9]{3}$ ]] || code="000"
+
+parsed_ok=0
+if [[ "$code" =~ ^2 ]]; then
+    changed="$(python3 -c '
 import json, sys
 try:
-    out = json.load(sys.stdin).get("results", [])
+    out = json.load(open(sys.argv[1])).get("results")
 except Exception:
-    sys.exit(0)
+    sys.exit(3)
+if not isinstance(out, list):
+    sys.exit(3)
 for r in out:
     if r.get("changed"):
         print("%s: 주계정 → %s" % (r.get("provider"), r.get("primary")))
-' 2>/dev/null)"
-    [[ -n "$changed" ]] && log "$changed"
+' "$body_file" 2>/dev/null)" && parsed_ok=1
+fi
+
+if [[ "$parsed_ok" == 1 ]]; then
+    rm -f "$FAIL_STATE"
+    [[ -n "${changed:-}" ]] && log "$changed"
+else
+    # 같은 실패를 2분마다 되풀이해 적지 않는다 — 상태가 바뀔 때만 기록한다.
+    sig="port=${PORT}, http=${code}"
+    if [[ "$(cat "$FAIL_STATE" 2>/dev/null)" != "$sig" ]]; then
+        log "조정 API 실패 (${sig}) — state.json 갱신만 진행한다"
+        echo "$sig" > "$FAIL_STATE" 2>/dev/null || true
+    fi
 fi
 
 # 사용량 수집 없이 DB 값만 내린다 — 2분 주기에 CLI 를 돌리면 안 된다.
