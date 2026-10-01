@@ -397,6 +397,11 @@ def cmd_index(args) -> None:
         psql("BEGIN;" + "".join(stmts) + "COMMIT;")
         print(f"[index_docs] {min(i+20, len(changed)):,}/{len(changed):,} 문서", flush=True)
     print(f"[index_docs] 청크 {inserted:,}개 저장. 임베딩은 contabo116 백필이 채운다.")
+    # 변경이 있었던 런도 기록한다. 2026-10-01 실측 — record_run() 이 위
+    # `if not changed:` 조기반환 안에만 있어서, 문서가 바뀐 런 11회
+    # (09-29 06:10 ~ 10-01 06:10 CEST)가 doc_index_runs 에 한 줄도 남지 않았다.
+    # 그래서 원장은 "무변경 런" 만 모은 표가 되고, 색인 정지와 구분이 안 됐다.
+    record_run(srv, len(docs), len(changed), inserted, time.time() - t0)
 
 
 OLLAMA_URL = os.getenv("LOCAL_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
