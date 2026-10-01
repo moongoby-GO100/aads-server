@@ -3251,15 +3251,29 @@ fi
 # warning record; the old bare ``CRITICAL`` branch treated those as release
 # failures. It also missed structlog's JSON form ("level": "error").
 MONITOR_PATTERN="${AADS_DEPLOY_MONITOR_PATTERN:-\"level\"[[:space:]]*:[[:space:]]*\"(error|critical)\"|level=(error|critical)([[:space:]]|$)|Traceback [(]most recent call last[)]:|^CRITICAL([[:space:]:]|$)}"
+# 채팅 세션이 사용자 입력 SQL 오타(없는 테이블/컬럼 등)로 남기는 기록은
+# 서버 앱 결함이 아니므로 릴리스 실패 사유에서 뺀다. 앱은 해당 기록에
+# 리터럴 토큰 USER_SQL_ERROR 를 넣는다(ceo_chat_tools_db._is_user_sql_error).
+# logger 이름 전체를 제외하면 그 모듈의 진짜 버그도 묻히므로 토큰 한 가지만 쓴다.
+MONITOR_EXCLUDE_PATTERN="${AADS_DEPLOY_MONITOR_EXCLUDE_PATTERN:-USER_SQL_ERROR}"
 MONITOR_SINCE="$(date --iso-8601=seconds)"
 MONITOR_ELAPSED=0
 echo "[deploy.sh] Phase 7: P0/P1 모니터링 (${MONITOR_SECONDS}초, since=${MONITOR_SINCE})..."
 while [[ "$MONITOR_ELAPSED" -lt "$MONITOR_SECONDS" ]]; do
     sleep "$MONITOR_INTERVAL"
     MONITOR_ELAPSED=$((MONITOR_ELAPSED + MONITOR_INTERVAL))
+    # 제외는 tail 보다 먼저 적용한다 — 제외 대상 20줄이 진짜 오류를 밀어내면 안 된다.
+    MONITOR_RAW="$(docker logs "$ACTIVE_CONTAINER" --since "$MONITOR_SINCE" 2>&1 | grep -E "$MONITOR_PATTERN" || true)"
+    MONITOR_SUPPRESSED=0
+    if [[ -n "$MONITOR_RAW" ]]; then
+        MONITOR_SUPPRESSED="$(printf '%s\n' "$MONITOR_RAW" | grep -Ec "$MONITOR_EXCLUDE_PATTERN" || true)"
+    fi
+    MONITOR_HITS="$(printf '%s\n' "$MONITOR_RAW" | grep -Ev "$MONITOR_EXCLUDE_PATTERN" | grep -E "$MONITOR_PATTERN" | tail -20 || true)"
+    if [[ "$MONITOR_SUPPRESSED" != "0" ]]; then
+        echo "[deploy.sh] Phase 7: 사용자 SQL 오류 ${MONITOR_SUPPRESSED}건 제외 (릴리스 실패 사유 아님)"
+    fi
     deploy_observe_update "verifying" "p0p1_monitoring" \
-        "elapsed=${MONITOR_ELAPSED}s; max=${MONITOR_SECONDS}s"
-    MONITOR_HITS="$(docker logs "$ACTIVE_CONTAINER" --since "$MONITOR_SINCE" 2>&1 | grep -E "$MONITOR_PATTERN" | tail -20 || true)"
+        "elapsed=${MONITOR_ELAPSED}s; max=${MONITOR_SECONDS}s; suppressed_user_sql=${MONITOR_SUPPRESSED}"
     if [[ -n "$MONITOR_HITS" ]]; then
         echo "[deploy.sh] ❌ Phase 7: P0/P1 의심 로그 감지"
         echo "$MONITOR_HITS"

@@ -641,6 +641,55 @@ def _is_ssh_tunnel_usable(info: Dict[str, Any]) -> bool:
         return False
 
 
+# 사용자가 보낸 SQL 자체가 틀린 경우(없는 테이블/컬럼, 문법, 권한). 이 오류는 서버
+# 결함이 아니므로 error 가 아닌 warning 으로 기록한다. deploy.sh Phase 7 은 error
+# 레벨 로그를 릴리스 실패로 보기 때문에, 채팅 세션의 SQL 오타가 무관한 배포를
+# 죽이던 문제(deploy_runs#5440)를 막는다. USER_SQL_ERROR 는 deploy.sh
+# MONITOR_EXCLUDE_PATTERN 의 제외 키이므로 문자열을 바꾸지 않는다.
+_USER_SQL_ERROR_SIGNATURES = (
+    "does not exist",
+    "syntax error at or near",
+    "permission denied for",
+    "unknown column",
+    "doesn't exist",
+    "no such table",
+    "undefined table",
+    "undefined column",
+)
+_USER_SQL_ERROR_CLASS_NAMES = frozenset({
+    "UndefinedTableError",
+    "UndefinedColumnError",
+    "UndefinedFunctionError",
+    "SyntaxOrAccessError",
+    "InsufficientPrivilegeError",
+    "PostgresSyntaxError",
+})
+# 1146 Table doesn't exist, 1054 Unknown column, 1064 syntax, 1142 table access denied, 1045 access denied
+_USER_SQL_MYSQL_ERRNOS = frozenset({1146, 1054, 1064, 1142, 1045})
+_NON_SQL_MISSING_OBJECT_RE = re.compile(r"\b(database|role|user|extension)\b[^\n]{0,80}does not exist", re.IGNORECASE)
+
+
+def _is_user_sql_error(exc: BaseException) -> bool:
+    """사용자가 보낸 SQL 이 틀려서 난 오류인지 판정한다 (연결/풀/터널 장애는 False)."""
+    if type(exc).__name__ in _USER_SQL_ERROR_CLASS_NAMES:
+        return True
+
+    sqlstate = getattr(exc, "sqlstate", None)
+    if isinstance(sqlstate, str) and sqlstate:
+        # 42 = syntax error or access rule violation. 그 외 SQLSTATE(08 연결, 53 자원,
+        # 3D000 DB 없음 등)는 인프라 신호이므로 메시지가 비슷해도 user error 가 아니다.
+        return sqlstate.startswith("42")
+
+    args = getattr(exc, "args", ())
+    if args and isinstance(args[0], int) and not isinstance(args[0], bool):
+        return args[0] in _USER_SQL_MYSQL_ERRNOS
+
+    text = str(exc).lower()
+    if _NON_SQL_MISSING_OBJECT_RE.search(text):
+        return False
+    return any(sig in text for sig in _USER_SQL_ERROR_SIGNATURES)
+
+
 def _redact_ssh_key_paths(message: str) -> str:
     """로그/응답에 SSH 키 경로가 노출되지 않도록 치환한다."""
     safe = message or ""
@@ -1002,9 +1051,14 @@ async def query_project_database(
     except Exception as e:
         # H3: credentials가 포함될 수 있는 에러 메시지는 로그에만 기록
         safe_msg = _redact_ssh_key_paths(str(e))
-        logger.error(
-            f"query_project_database: FAIL | project={project} error={safe_msg}"
-        )
+        if _is_user_sql_error(e):
+            logger.warning(
+                f"query_project_database: USER_SQL_ERROR | project={project} error={safe_msg}"
+            )
+        else:
+            logger.error(
+                f"query_project_database: FAIL | project={project} error={safe_msg}"
+            )
         # DSN/credentials 패턴 제거
         if any(kw in safe_msg.lower() for kw in ("password", "postgresql://", "mysql://", "credentials")):
             safe_msg = "연결 오류가 발생했습니다 (상세 내용은 서버 로그 참조)"
@@ -1147,7 +1201,10 @@ async def query_acct_database(
                 safe_msg = safe_msg.replace(secret, "<redacted>")
         if any(kw in safe_msg.lower() for kw in ("password", "postgresql://", "credentials")):
             safe_msg = "쿼리 실행 오류가 발생했습니다 (상세 내용은 서버 로그 참조)"
-        logger.error(f"query_acct_database: FAIL | error={safe_msg}")
+        if _is_user_sql_error(exc):
+            logger.warning(f"query_acct_database: USER_SQL_ERROR | error={safe_msg}")
+        else:
+            logger.error(f"query_acct_database: FAIL | error={safe_msg}")
         return {"error": f"ACCT DB 쿼리 실패: {safe_msg}"}
     finally:
         await conn.close()

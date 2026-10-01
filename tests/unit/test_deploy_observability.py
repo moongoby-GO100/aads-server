@@ -656,3 +656,69 @@ def test_external_release_title_survives_missing_git_and_payload():
 
     assert rows[0]["release_title"] == "GO100-LEDGER-DEPLOY-20260915"
     assert rows[0]["release_summary"] == "ceo-approved-p0-ledger-integrity"
+
+
+def test_p0p1_monitor_excludes_user_sql_errors_before_tail():
+    script = DEPLOY_SCRIPT.read_text()
+
+    assert (
+        'MONITOR_EXCLUDE_PATTERN="${AADS_DEPLOY_MONITOR_EXCLUDE_PATTERN:-USER_SQL_ERROR}"'
+        in script
+    )
+    exclude = script.index('grep -Ev "$MONITOR_EXCLUDE_PATTERN"')
+    tail = script.index("tail -20", exclude)
+    # 제외가 tail 보다 먼저여야 제외 대상 20줄이 진짜 오류를 밀어내지 못한다.
+    assert exclude < tail
+    assert "suppressed_user_sql=${MONITOR_SUPPRESSED}" in script
+
+
+def test_p0p1_monitor_exclude_drops_only_user_sql_error_token():
+    script = DEPLOY_SCRIPT.read_text()
+    pattern = re.search(
+        r'MONITOR_PATTERN="\$\{AADS_DEPLOY_MONITOR_PATTERN:-(.+)\}"', script
+    ).group(1)
+    exclude = re.search(
+        r'MONITOR_EXCLUDE_PATTERN="\$\{AADS_DEPLOY_MONITOR_EXCLUDE_PATTERN:-(.+)\}"',
+        script,
+    ).group(1)
+
+    def hits(logs: str) -> str:
+        # deploy.sh Phase 7 과 같은 순서: 패턴 → 제외 → 패턴 재적용 → tail.
+        cmd = (
+            f'printf "%s\\n" "$LOGS" | grep -E "$PATTERN" || true; '
+        )
+        raw = subprocess.run(
+            ["bash", "-c", cmd],
+            env={"LOGS": logs, "PATTERN": pattern, "PATH": "/usr/bin:/bin"},
+            text=True,
+            capture_output=True,
+            check=False,
+        ).stdout.rstrip("\n")
+        final = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'printf "%s\\n" "$RAW" | grep -Ev "$EXCLUDE" | grep -E "$PATTERN" | tail -20 || true',
+            ],
+            env={"RAW": raw, "EXCLUDE": exclude, "PATTERN": pattern, "PATH": "/usr/bin:/bin"},
+            text=True,
+            capture_output=True,
+            check=False,
+        ).stdout
+        return final.strip()
+
+    user_sql = (
+        '{"event": "query_project_database: USER_SQL_ERROR | project=GO100 '
+        'error=relation \\"go100_strategy_card_decisions\\" does not exist", '
+        '"level": "error", "logger": "app.api.ceo_chat_tools_db"}'
+    )
+    real_error = '{"event":"background task escaped","level":"error"}'
+    traceback_line = "Traceback (most recent call last):"
+
+    assert hits(user_sql) == ""
+    assert hits("") == ""
+    assert hits(real_error) == real_error
+    assert hits(traceback_line) == traceback_line
+    # 제외 대상이 20줄을 넘어도 진짜 오류가 밀려나지 않는다.
+    flood = "\n".join([user_sql] * 30 + [real_error])
+    assert hits(flood) == real_error
