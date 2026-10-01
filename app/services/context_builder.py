@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import time
@@ -37,6 +38,192 @@ async def _get_cached_or_build(key: str, builder_coro) -> str:
     result = await builder_coro
     _layer_cache[key] = (now, result)
     return result
+
+# ─── 현재 서버 원장 (매 턴 비캐시) ──────────────────────────────────────────
+#
+# PRD `aads-current-authority-context` v1.0.0 §4 (P0), 2026-10-01 대표님 지시.
+#
+# GO100 자원 분석에서 2026-06-23 "3서버" 문서를 현재 구성처럼 읽는 사고가 났다.
+# 원인은 **소스가 둘로 갈린 것**이다. `/ops` 원장은 코드
+# `server_registry.list_ledger_servers()` 를 보는데, 여기 Layer 2 는 DB
+# `server_registry` 테이블을 60초 TTL 캐시 안에서 읽고 있었다. DB 가 없는
+# 진입점이나 조회 실패에서는 서버 문맥이 **통째로 비었고**, 빈자리를 세션이
+# 과거 문서·과거 대화에서 주워 채웠다.
+#
+# 그래서 셋을 지킨다.
+#   1. 출처는 `/ops` 와 **같은 함수** 하나다. 여기서 DB 를 보지 않는다.
+#   2. 매 턴 새로 만든다. 60초 캐시(`_get_cached_or_build`)에 넣지 않는다.
+#   3. **구성 조회시각과 건강 실측시각을 같은 수치로 쓰지 않는다.** 원장 4대와
+#      감시 3대도 별개 값으로 적는다 — jinah244 는 감시 대상이 아니므로
+#      상태가 `unknown` 인 것이지 장애가 아니다.
+_LEDGER_SOURCE = "code:app/services/server_registry.py::list_ledger_servers"
+
+
+@dataclass(frozen=True)
+class ServerLedgerBlock:
+    """주입한 구역 텍스트와 **그 호출이 만든** provenance 를 함께 들고 다닌다.
+
+    둘을 따로 돌려주면 기록하는 쪽이 "직전 값" 을 다시 찾아야 하고, 그 순간
+    동시 세션이 섞인다(2026-10-01 root 검수 지적). 한 번의 호출이 만든 값은
+    그 호출의 반환값에만 있어야 한다.
+    """
+
+    section: str
+    provenance: Dict[str, Any]
+
+
+# 세션별 원장 provenance 보관함.
+#
+# **모듈 전역 "직전 값" 을 쓰지 않는다.** 조립(context_builder)과 기록
+# (prompt_compiler)이 다른 모듈이라 값을 넘길 인자 경로가 없는데, 여기에
+# 단일 전역을 두면 세션 A 의 기록에 세션 B 의 원장이 들어간다 — 두 세션이
+# 동시에 조립하면 나중 호출이 앞 호출의 값을 덮기 때문이다. 그래서
+# `take_rag_ms()` 와 같은 방식으로 **session_id 로 칸을 나누고 꺼낼 때
+# 비운다**. 꺼내 가지 않은 칸이 쌓이지 않도록 상한을 둔다.
+_LEDGER_PROVENANCE_BY_SESSION: Dict[str, Dict[str, Any]] = {}
+_LEDGER_STASH_MAX = 64
+
+
+def _stash_ledger_provenance(session_id: str, provenance: Dict[str, Any]) -> None:
+    """이 턴의 원장 provenance 를 세션 칸에 둔다. 기록부가 꺼내 간다."""
+    key = str(session_id or "")
+    if not key:
+        return
+    try:
+        if len(_LEDGER_PROVENANCE_BY_SESSION) >= _LEDGER_STASH_MAX:
+            # 소비자가 없는(기록 경로를 타지 않는) 세션이 섞여 있어도
+            # 무한히 자라지 않게 가장 오래된 칸부터 버린다.
+            for stale in list(_LEDGER_PROVENANCE_BY_SESSION)[:8]:
+                _LEDGER_PROVENANCE_BY_SESSION.pop(stale, None)
+        _LEDGER_PROVENANCE_BY_SESSION[key] = dict(provenance)
+    except Exception:  # noqa: BLE001 — 기록 보조 경로가 조립을 깨지 않는다
+        pass
+
+
+def take_ledger_provenance(session_id: str) -> Dict[str, Any]:
+    """세션 칸에서 원장 provenance 를 **꺼내 비운다**(prompt_compiler 전용).
+
+    비우는 이유: 남겨 두면 다음 턴에 원장 주입이 실패했을 때 이전 턴 값이
+    그대로 기록되어 "그 턴이 원장을 봤다" 는 거짓 증거가 된다.
+    """
+    return _LEDGER_PROVENANCE_BY_SESSION.pop(str(session_id or ""), {}) or {}
+
+
+def _registry_file_mtime() -> str:
+    """원장 **파일이 바뀐 날**. 관측시각이 아니다 — 둘을 섞으면 안 된다."""
+    try:
+        from app.services import server_registry as _sr
+
+        path = getattr(_sr, "__file__", "") or ""
+        if not path:
+            return "unknown"
+        return datetime.fromtimestamp(
+            os.path.getmtime(path), ZoneInfo("Asia/Seoul")
+        ).strftime("%Y-%m-%d %H:%M KST")
+    except Exception:
+        return "unknown"
+
+
+def build_server_ledger_snapshot() -> Dict[str, Any]:
+    """현재 서버 원장 스냅샷. **DB 를 보지 않는다** — DB 없는 진입점도 같은 값."""
+    from app.services.server_registry import CANONICAL_SERVER_IDS, list_ledger_servers
+
+    servers: List[Dict[str, Any]] = []
+    for entry in list_ledger_servers():
+        sid = str(entry.get("id") or "")
+        servers.append(
+            {
+                "server_id": sid,
+                "display_name": str(entry.get("display_name") or sid),
+                "host": str(entry.get("host") or ""),
+                "projects": [str(p) for p in (entry.get("projects") or [])],
+                "health_monitored": sid in CANONICAL_SERVER_IDS,
+            }
+        )
+    # hash 는 **구성만** 담는다. 조회시각을 섞으면 매 턴 달라져서 "구성이
+    # 바뀌었는지" 를 hash 로 판정할 수 없게 된다.
+    payload = json.dumps(servers, sort_keys=True, ensure_ascii=False)
+    return {
+        "source": _LEDGER_SOURCE,
+        "observed_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds"),
+        "snapshot_hash": hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16],
+        "ledger_count": len(servers),
+        "health_monitored_count": sum(1 for s in servers if s["health_monitored"]),
+        "registry_file_mtime": _registry_file_mtime(),
+        "servers": servers,
+    }
+
+
+def build_server_ledger_block() -> ServerLedgerBlock:
+    """두 진입점이 같이 쓰는 '현재 서버 원장'. 매 턴 호출한다(캐시 금지).
+
+    구역 텍스트와 provenance 를 **함께** 돌려준다 — 기록부가 전역을 되읽지
+    않아야 동시 세션이 섞이지 않는다.
+    """
+    try:
+        snap = build_server_ledger_snapshot()
+    except Exception as exc:  # noqa: BLE001 — 실패를 다른 소스로 조용히 덮지 않는다
+        logger.warning("server_ledger_unavailable: %s", str(exc)[:200])
+        failed = {
+            "source": _LEDGER_SOURCE,
+            "available": False,
+            "error": str(exc)[:200],
+        }
+        return ServerLedgerBlock(
+            "## 현재 서버 원장 — 조회 실패\n"
+            f"출처: `{_LEDGER_SOURCE}` / 사유: {str(exc)[:120]}\n"
+            "원장을 읽지 못했다. **과거 문서나 이전 대화로 서버 구성을 보충해 "
+            "단정하지 마라** — `server_status` 또는 `/api/v1/ops/status` 로 직접 "
+            "확인하고, 확인하지 못하면 '미검증' 으로 보고해라.",
+            failed,
+        )
+
+    rows = "\n".join(
+        f"| {s['display_name']} | `{s['server_id']}` | {s['host']} | "
+        f"{', '.join(s['projects']) or '-'} | "
+        f"{'감시' if s['health_monitored'] else '감시대상 아님'} |"
+        for s in snap["servers"]
+    )
+    prov = {k: v for k, v in snap.items() if k != "servers"}
+    prov["available"] = True
+    # 대표님 지시 표현(`registry_read_at`)과 PRD 표현(`observed_at`)을 둘 다 남긴다.
+    # 둘은 **구성 레지스트리를 읽은 시각**이다. 서비스 건강 실측시각도,
+    # 원장 파일이 바뀐 날(`registry_file_mtime`)도 아니다 — 셋을 섞으면
+    # "지금 살아 있다" 를 구성 조회 시각으로 주장하게 된다.
+    prov["registry_read_at"] = snap["observed_at"]
+    prov["server_ids"] = [s["server_id"] for s in snap["servers"]]
+
+    return ServerLedgerBlock(
+        "## 현재 서버 원장 (구성 사실 — 매 턴 재조회)\n"
+        f"출처: `{snap['source']}` · 구성 조회시각: {snap['observed_at']} · "
+        f"스냅샷 hash: `{snap['snapshot_hash']}`\n"
+        f"원장 서버 {snap['ledger_count']}대 / 건강 감시 대상 "
+        f"{snap['health_monitored_count']}대 — **두 수치는 별개다.**\n"
+        f"원장 파일 변경일: {snap['registry_file_mtime']} "
+        "(파일이 바뀐 날이다. 서비스 건강 실측시각이 아니다.)\n\n"
+        "| 서버 | ID | 주소 | 프로젝트 | 건강감시 |\n|---|---|---|---|---|\n"
+        f"{rows}\n\n"
+        "- 이 구역은 **구성(원장)** 이다. 위 조회시각은 구성을 읽은 시각이며 "
+        "서비스 건강·CPU·메모리의 실측시각이 아니다 — 건강을 말할 때는 \"지금 "
+        "죽어 있는 서비스\" 구역의 검사시각이나 운영 API 의 관측시각을 따로 "
+        "인용해라.\n"
+        "- 감시 대상이 아닌 서버의 상태는 `unknown` 이다. **장애로 해석하지 "
+        "마라.**\n"
+        "- 과거 문서(예: 2026-06 \"3서버\" 토폴로지)가 검색 상위에 있어도 현재 "
+        "서버 구성의 근거로 쓰지 마라. 현재 구성의 근거는 이 구역이다.",
+        prov,
+    )
+
+
+def build_server_ledger_section() -> str:
+    """구역 텍스트만 필요한 호출자용 얇은 래퍼.
+
+    **조립 경로(두 builder)는 이것을 쓰지 마라** — provenance 를 버리므로
+    그 턴이 어떤 구성을 보고 답했는지 증명할 수 없게 된다. 조립은
+    `build_server_ledger_block()` 을 쓴다.
+    """
+    return build_server_ledger_block().section
+
 
 # ─── Layer 1: system_prompt_v2.py 에서 로드 ──────────────────────────────────
 
@@ -102,34 +289,18 @@ async def _build_layer2_dynamic(
     ws_display = workspace_name or "CEO"
     parts.append(f"현재 워크스페이스: {ws_display}")
 
-    # 서버 사실과 지금 죽어 있는 것.
+    # 서버 **구성(원장)** 은 여기서 읽지 않는다.
     #
-    # 2026-09-14 대표님 지적: "서버정보 등 최신 변경사항이 세션에 주입이
-    # 안 되나? 왜 옛날 정보를 보고하지". 실측해 보니 Layer 2 에는 시각과
-    # 지시 건수뿐이고 **서버에 관한 것이 하나도 없었다.** 세션이 도구를
-    # 직접 부르지 않으면 과거 대화에서 주워온 옛 수치를 말하게 된다.
+    # 2026-10-01 까지 이 자리에서 DB `server_registry` 테이블을 읽었다. 그런데
+    # `/ops` 원장은 코드 `list_ledger_servers()` 를 본다 — 소스가 둘로 갈려
+    # 있었고, 이 구역은 60초 TTL 캐시 안이라 DB 가 없는 진입점이나 조회 실패에
+    # 서는 서버 문맥이 통째로 비었다. 그 빈자리를 세션이 2026-06 "3서버" 문서로
+    # 채운 것이 이번 오인의 경로다.
     #
-    # 정적 프롬프트에는 "## 3개 서버" 라고 손으로 적혀 있었는데 등록부에는
-    # 4대가 있었다(진아 서버가 같은 날 추가됨). 손으로 적은 목록은 반드시
-    # 틀어지므로 여기서 등록부를 읽는다.
+    # 원장은 `build_server_ledger_section()` 이 **캐시 밖에서 매 턴** 만든다.
+    # 여기서 남기는 것은 **관측(감시 결과)** 뿐이다 — 구성과 관측은 시각이
+    # 다르므로 한 구역에 섞지 않는다.
     if db_conn:
-        try:
-            srv = await db_conn.fetch(
-                "SELECT server_key, ip, coalesce(project,'') AS project, "
-                "       coalesce(description,'') AS description "
-                "FROM server_registry ORDER BY server_key"
-            )
-            if srv:
-                lines = [
-                    f"- {r['server_key']} ({r['ip']})"
-                    + (f" {r['project']}" if r["project"] else "")
-                    + (f" — {r['description'][:46]}" if r["description"] else "")
-                    for r in srv
-                ]
-                parts.append(f"\n## 서버 {len(srv)}대 (등록부)\n" + "\n".join(lines))
-        except Exception as e:
-            logger.debug(f"context_builder 서버 등록부 조회 실패: {e}")
-
         try:
             # **최근에 검사한 것만 본다.** 오래된 행을 그대로 읽으면 낡은
             # 판정을 현재처럼 말하게 된다 — 고치려던 문제를 그대로 되풀이한다.
@@ -791,7 +962,13 @@ async def build_messages_context(
     # 모델이 시각을 읽는 데에는 위치가 상관없으므로 맥락 손실 없이 적중만 올린다.
     _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
     approved_documents = await _build_approved_document_layer(session_id, db_conn)
-    system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer + "\n\n" + _layer4 + "\n\n" + approved_documents + f"\n\n<currentTime>\n{_kst_now}\n</currentTime>"
+    # 원장은 **캐시 밖·꼬리**다. 캐시에 넣으면 60초간 낡고, 머리에 넣으면
+    # 조회시각이 분마다 바뀌어 프리픽스 캐시가 전부 미스가 된다.
+    _ledger_block = build_server_ledger_block()
+    server_ledger = _ledger_block.section
+    # 이 호출이 만든 provenance 를 이 세션 칸에 둔다(전역 "직전 값" 금지).
+    _stash_ledger_provenance(session_id, _ledger_block.provenance)
+    system_prompt = layer1 + "\n\n" + layer2 + memory_layer + preload_layer + auto_rag_layer + artifact_layer + "\n\n" + _layer4 + "\n\n" + approved_documents + "\n\n" + server_ledger + f"\n\n<currentTime>\n{_kst_now}\n</currentTime>"
 
     # 구간별 계측.
     #
@@ -810,6 +987,7 @@ async def build_messages_context(
         "auto_rag": len(auto_rag_layer),
         "artifact": len(artifact_layer),
         "approved_documents": len(approved_documents),
+        "server_ledger": len(server_ledger),
         "layer4": len(_layer4),
     }
     _sp_chars = len(system_prompt)
@@ -878,6 +1056,10 @@ class ContextResult:
     workspace_name: str = "CEO"
     workspace_id: str = ""
     layer2_text: str = ""
+    # 이 빌드가 주입한 서버 원장의 출처·조회시각·hash. 호출자가 그대로 실행
+    # provenance 에 실을 수 있도록 **반환값에 담아** 넘긴다 — 전역을 되읽게
+    # 하면 동시 세션이 섞인다.
+    server_ledger: Dict[str, Any] = field(default_factory=dict)
 
 
 async def build(
@@ -959,9 +1141,18 @@ async def build(
     _kst_now = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST (%A)")
     _kst_block = f"<currentTime>\n{_kst_now}\n</currentTime>"
     approved_documents = await _build_approved_document_layer(session_id, db_conn)
-    system_text = layer1 + "\n\n---\n\n" + layer2_full + "\n\n" + _layer4 + "\n\n" + approved_documents + "\n\n" + _kst_block
+    # 두 진입점이 **같은 함수**로 같은 원장을 주입한다. 이 경로는 `db_conn` 이
+    # 없을 수도 있는데, 원장은 DB 를 보지 않으므로 그래도 들어간다.
+    _ledger_block = build_server_ledger_block()
+    server_ledger = _ledger_block.section
+    _stash_ledger_provenance(session_id, _ledger_block.provenance)
+    system_text = layer1 + "\n\n---\n\n" + layer2_full + "\n\n" + _layer4 + "\n\n" + approved_documents + "\n\n" + server_ledger + "\n\n" + _kst_block
     # system_blocks 꼬리에 KST 시각 주입 (비캐시 블록 — 캐시 프리픽스를 깨지 않는 위치)
-    system_blocks = system_blocks + [{"type": "text", "text": approved_documents}, {"type": "text", "text": _kst_block}]
+    system_blocks = system_blocks + [
+        {"type": "text", "text": approved_documents},
+        {"type": "text", "text": server_ledger},
+        {"type": "text", "text": _kst_block},
+    ]
 
     # 토큰 절감 측정 로깅
     _sp_chars = len(system_text)
@@ -973,4 +1164,5 @@ async def build(
         workspace_name=ws_key,
         workspace_id=workspace_id,
         layer2_text=layer2_full,
+        server_ledger=_ledger_block.provenance,
     )

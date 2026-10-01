@@ -13436,6 +13436,15 @@ async def send_message_stream(
                 system_prompt = base_prompt or "You are a helpful AI assistant."
                 messages = [{"role": m["role"], "content": m["content"]} for m in raw_messages[-20:]]
             _timer.mark("ctx_done")
+            # 이 조립이 주입한 서버 원장 provenance 를 **지금** 꺼내 지역 변수로
+            # 들고 간다. 기록 시점에 다시 찾으면 그 사이 같은 세션의 다른 조립이
+            # 끼어들 수 있고, SDK 경로처럼 기록 없이 return 하는 길에서는 값이
+            # 버려진다(2026-10-01 root 검수 지적). 조립이 실패했으면 빈 값이다.
+            try:
+                from app.services.context_builder import take_ledger_provenance as _take_ledger
+                _turn_server_ledger = _take_ledger(str(session_id))
+            except Exception:
+                _turn_server_ledger = {}
             _timer.prompt_chars = len(system_prompt or "")
             _timer.history_count = len(messages or [])
             system_prompt = (
@@ -14214,6 +14223,24 @@ async def send_message_stream(
                             f"[PROMPT_COMPILER_SDK] compiled assets={len(_sdk_prov.get('applied_assets') or [])} "
                             f"layers={_sdk_prov.get('layers_applied')} chars={_sdk_prov.get('system_prompt_chars')}"
                         )
+                        # SDK 경로는 성공하면 아래에서 바로 return 한다. 여기서 기록하지
+                        # 않으면 이 턴은 provenance 가 **한 줄도 없이** 끝난다 — 어떤 원장·
+                        # 어떤 에셋을 보고 답했는지 사후에 증명할 수 없다.
+                        try:
+                            from app.services.prompt_compiler import record_prompt_provenance as _rec_sdk_prov
+
+                            async with get_pool().acquire() as _sdk_prov_conn:
+                                await _rec_sdk_prov(
+                                    conn=_sdk_prov_conn,
+                                    session_id=str(session_id),
+                                    execution_id=_execution_id_str,
+                                    intent=intent,
+                                    model=_selected_model_id or "claude-opus-5",
+                                    compiled_prompt=_compiled_sdk_prompt,
+                                    server_ledger=locals().get("_turn_server_ledger"),
+                                )
+                        except Exception as _sdk_prov_err:
+                            logger.warning(f"[PROMPT_COMPILER_SDK] provenance_insert_failed: {_sdk_prov_err}")
                     except Exception as _sdk_prompt_err:
                         logger.warning(f"prompt_compiler_sdk_failed: {_sdk_prompt_err}")
 
@@ -14399,6 +14426,7 @@ async def send_message_stream(
                         intent=intent,
                         model=_prompt_model_id,
                         compiled_prompt=_compiled_prompt,
+                        server_ledger=locals().get("_turn_server_ledger"),
                     )
                 logger.info(f"[PROMPT_COMPILER] provenance recorded sid={str(session_id)[:8]} exec={(_execution_id_str or '-')[:8]}")
             except Exception as _prov_err:

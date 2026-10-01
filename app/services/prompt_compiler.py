@@ -250,6 +250,25 @@ def _section_chars_snapshot() -> dict:
         return {}
 
 
+def _server_ledger_snapshot(session_id: str) -> dict:
+    """**이 세션** 이 이번 턴에 주입한 서버 원장의 출처·조회시각·hash.
+
+    이것을 남기지 않으면 "그 턴이 어떤 서버 구성을 보고 답했는지" 를 나중에
+    증명도 반증도 할 수 없다. 2026-06 "3서버" 오인이 그래서 추적에 오래 걸렸다.
+
+    `session_id` 를 반드시 받는다. 예전에는 모듈 전역 "직전 값" 을 읽었는데,
+    두 세션이 동시에 조립하면 나중 조립이 앞 값을 덮어 **세션 A 의 기록에
+    세션 B 의 원장** 이 들어갔다(2026-10-01 root 검수 지적). 꺼낼 때 칸을
+    비우므로, 원장 주입이 없었던 턴은 빈 값이 되어 이전 턴 값을 물려받지 않는다.
+    """
+    try:
+        from app.services.context_builder import take_ledger_provenance
+
+        return dict(take_ledger_provenance(session_id) or {})
+    except Exception:
+        return {}
+
+
 class PromptCompiler:
     async def compile(
         self,
@@ -439,21 +458,48 @@ async def record_prompt_provenance(
     intent: str,
     model: str,
     compiled_prompt: CompiledPrompt,
+    server_ledger: dict | None = None,
 ) -> None:
-    if not await _table_exists(conn, "compiled_prompt_provenance"):
-        return
+    # 증거는 **테이블 존재 확인보다 먼저** 채운다.
+    #
+    # 예전에는 `_table_exists()` 가 거짓이면 여기서 바로 return 했고, 그
+    # 경로에서는 `section_chars`·`server_ledger` 가 `compiled_prompt` 에
+    # 아예 붙지 않았다. DB INSERT 를 건너뛰는 것은 맞지만, 호출자가 메모리의
+    # provenance 를 읽는 경로(SDK 조기-return 등)까지 같이 비어 버린다 —
+    # 2026-10-01 root 검수가 지적한 조기-return 증거 손실이 이것이다.
+    # 채우는 일은 DB 와 무관하므로 순서를 바꾸는 것만으로 양쪽이 산다.
 
-    # 구간별 자수는 **여기서** 채운다. 컴파일 시점에 넣으면 아직 조립 전이라
-    # 비어 있거나 직전 턴 값이 들어간다(2026-09-16 실측: 전부 `{}`).
-    # 이 함수는 조립이 끝난 뒤 호출되므로 그때 값이 맞다.
-    # 총량만 남기면 구간 크기를 뺄셈으로 추정하게 되고, 그 추정이 틀린다 —
-    # 파일 상단 예산표와 오류 사전 prompt.token_budget_estimated_by_chars 참고.
+    # 구간별 자수. 컴파일 시점에 넣으면 아직 조립 전이라 비어 있거나 직전 턴
+    # 값이 들어간다(2026-09-16 실측: 전부 `{}`). 이 함수는 조립이 끝난 뒤
+    # 호출되므로 그때 값이 맞다. 총량만 남기면 구간 크기를 뺄셈으로 추정하게
+    # 되고 그 추정이 틀린다 — 오류 사전 prompt.token_budget_estimated_by_chars.
     try:
         sections = _section_chars_snapshot()
         if sections:
             compiled_prompt.provenance["section_chars"] = sections
     except Exception:
         pass
+
+    # 어떤 서버 원장을 보고 이 턴을 처리했는지 남긴다 (PRD §7).
+    # 조회 실패도 그대로 남긴다 — `available: false` 가 보이면 그 턴의 서버
+    # 발언은 근거가 없었다는 뜻이고, 그 판정을 사후에 할 수 있어야 한다.
+    #
+    # 호출자가 조립 직후 꺼내 둔 값(`server_ledger`)을 **우선** 쓴다. 그 값은
+    # 그 턴의 조립이 반환한 것이라 다른 세션·다른 턴과 섞일 길이 없다.
+    # 넘기지 않은 호출자만 세션 칸에서 꺼낸다(하위 호환).
+    try:
+        ledger = (
+            dict(server_ledger)
+            if server_ledger is not None
+            else _server_ledger_snapshot(session_id)
+        )
+        if ledger:
+            compiled_prompt.provenance["server_ledger"] = ledger
+    except Exception:
+        pass
+
+    if not await _table_exists(conn, "compiled_prompt_provenance"):
+        return
 
     await conn.execute(
         """
