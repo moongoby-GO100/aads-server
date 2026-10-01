@@ -297,7 +297,18 @@ async def list_businesses(*, user: dict[str, Any]) -> list[dict[str, Any]]:
     conn = await _connect()
     try:
         rows = await conn.fetch("SELECT id,entity_type,name,registration_no,representative,tax_type,opened_at,address,memo,created_at,updated_at FROM yeoljeong_businesses WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id", tenant_id)
-        return [_registry_business(row) for row in rows]
+        items = [_registry_business(row) for row in rows]
+        by_id = {item.get("id"): item for item in items}
+        for item in items:
+            item["branches"] = []
+        if by_id:
+            # yeoljeong_branches 에는 tenant_id 가 없다 — 이 테넌트 사업자 id 로만 좁혀 읽는다.
+            branch_rows = await conn.fetch("SELECT id,business_id,name,status FROM yeoljeong_branches WHERE business_id = ANY($1::text[]) AND deleted_at IS NULL ORDER BY sort_order,id", list(by_id))
+            for branch in branch_rows or []:
+                owner = by_id.get(branch.get("business_id"))
+                if owner is not None:
+                    owner["branches"].append({"id": branch["id"], "name": branch["name"], "status": branch["status"]})
+        return items
     finally:
         await conn.close()
 

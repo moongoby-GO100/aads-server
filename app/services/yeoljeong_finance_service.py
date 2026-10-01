@@ -1275,6 +1275,26 @@ async def _db_business_tenant_id(business_id: str) -> str | None:
         await conn.close()
 
 
+async def _db_business_invite_info(business_id: str) -> dict[str, Any] | None:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        name = await conn.fetchval(
+            "SELECT name FROM yeoljeong_businesses WHERE id = $1 AND deleted_at IS NULL",
+            business_id,
+        )
+        if name is None:
+            return None
+        rows = await conn.fetch(
+            "SELECT name FROM yeoljeong_branches WHERE business_id = $1 AND deleted_at IS NULL ORDER BY sort_order, id",
+            business_id,
+        )
+        return {"name": str(name), "branches": [str(row["name"]) for row in rows]}
+    finally:
+        await conn.close()
+
+
 async def _db_hr_record_tenant(name: str, row_id: str) -> str | None:
     import asyncpg
 
@@ -2265,25 +2285,121 @@ def session_for_user(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+INVITE_BUSINESS_ERROR = "초대할 수 없는 사업자입니다"
+
+
+def _business_invite_info(business_id: str) -> dict[str, Any] | None:
+    """사업자 상호와 지점명 목록. DB 모드는 DB 가 기준, 파일 모드는 기본 사업자·지점 목록이 기준이다."""
+    if _db_available():
+        info = _run_db(_db_business_invite_info(business_id))
+        return info if isinstance(info, dict) else None
+    business = next((item for item in CANONICAL_BUSINESSES if item["id"] == business_id), None)
+    if not business:
+        return None
+    branches = [item["name"] for item in CANONICAL_BRANCHES if item["businessId"] == business_id]
+    branches += [name for name, owner in BUSINESS_BY_BRANCH.items() if owner == business_id and name not in branches]
+    return {"name": business["name"], "branches": branches}
+
+
+def _invite_target_label(business_name: str, branch: str) -> str:
+    return f"{business_name} · {branch}" if branch else business_name
+
+
+def _clean_invite_targets(raw: Any) -> list[dict[str, str]]:
+    cleaned: list[dict[str, str]] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        business_id = str(item.get("business_id") or "").strip()
+        branch = str(item.get("branch") or "").strip()
+        branch = BRANCH_ALIASES.get(branch, branch)
+        if {"business_id": business_id, "branch": branch} not in cleaned:
+            cleaned.append({"business_id": business_id, "branch": branch})
+    return cleaned
+
+
+def _validated_invite_targets(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, str]]:
+    caller_tenant = _tenant_id(user)
+    targets = _clean_invite_targets(payload.get("targets"))
+    legacy = not targets
+    if legacy:
+        # 하위호환: targets 없이 branch 만 오면 종전처럼 지점명으로 사업자를 정한다.
+        branch = str(payload.get("branch") or "").strip()
+        branch = BRANCH_ALIASES.get(branch, branch)
+        business_id = str(BUSINESS_BY_BRANCH.get(branch) or "")
+        if not business_id:
+            return []
+        targets = [{"business_id": business_id, "branch": branch}]
+    business_ids = [target["business_id"] for target in targets]
+    if len(set(business_ids)) != len(business_ids):
+        # 가입요청의 키는 (이메일, 사업자)라 같은 사업자의 지점 둘은 요청 하나로 합쳐진다.
+        raise HTTPException(status_code=400, detail="한 사업자에서는 매장을 하나만 고를 수 있습니다")
+    for target in targets:
+        business_id, branch = target["business_id"], target["branch"]
+        if not business_id:
+            raise HTTPException(status_code=400, detail=INVITE_BUSINESS_ERROR)
+        if _db_available():
+            owner = _run_db(_db_business_tenant_id(business_id))
+            if not owner or str(owner).strip() != caller_tenant:
+                raise HTTPException(status_code=400, detail=INVITE_BUSINESS_ERROR)
+        elif business_id not in CANONICAL_BUSINESS_IDS:
+            raise HTTPException(status_code=400, detail=INVITE_BUSINESS_ERROR)
+        info = _business_invite_info(business_id)
+        if info is None:
+            raise HTTPException(status_code=400, detail=INVITE_BUSINESS_ERROR)
+        if branch and not legacy and branch not in info["branches"]:
+            raise HTTPException(status_code=400, detail=f"{info['name']}의 지점이 아닙니다: {branch}")
+    return targets
+
+
+def _invite_view(invite: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
+    """저장된 초대에 사업자 상호·매장 표시 문자열을 붙인다. 예전 초대(targets 없음)는 지점명에서 유추한다."""
+    view = dict(invite)
+    targets = _clean_invite_targets(invite.get("targets"))
+    if not targets:
+        branch = str(invite.get("branch") or "").strip()
+        branch = BRANCH_ALIASES.get(branch, branch)
+        business_id = str(invite.get("business_id") or BUSINESS_BY_BRANCH.get(branch) or "").strip()
+        targets = [{"business_id": business_id, "branch": branch}] if (business_id or branch) else []
+    labels: list[str] = []
+    for target in targets:
+        business_id = target["business_id"]
+        if business_id and business_id not in names:
+            info = _business_invite_info(business_id)
+            names[business_id] = str(info["name"]) if info else ""
+        business_name = names.get(business_id) or str(invite.get("business_name") or "") or business_id
+        labels.append(_invite_target_label(business_name, target["branch"]) if business_name else target["branch"])
+    first_id = targets[0]["business_id"] if targets else ""
+    view["targets"] = targets
+    view["business_id"] = first_id
+    view["business_name"] = (names.get(first_id) or str(invite.get("business_name") or "")) if first_id else ""
+    view["branch_labels"] = labels
+    return view
+
+
 def list_invites(user: dict[str, Any]) -> list[dict[str, Any]]:
     if not _is_admin(user):
         return []
-    return sorted(_read("employee_invites"), key=lambda row: row.get("created_at", ""), reverse=True)
+    names: dict[str, str] = {}
+    rows = sorted(_read("employee_invites"), key=lambda row: row.get("created_at", ""), reverse=True)
+    return [_invite_view(row, names) for row in rows]
 
 
 def create_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="직원 초대 권한이 없습니다")
+    targets = _validated_invite_targets(payload, user)
     rows = _read("employee_invites")
     now = _now()
     token = secrets.token_urlsafe(24)
+    branch = targets[0]["branch"] if targets else str(payload.get("branch") or "").strip()
     invite = {
         "id": str(uuid4()),
         "token": token,
         "phone": str(payload.get("phone") or "").strip(),
         "phone_masked": _mask_phone(str(payload.get("phone") or "")),
         "name": str(payload.get("name") or "").strip(),
-        "branch": str(payload.get("branch") or "").strip(),
+        "branch": branch,
         "role": str(payload.get("role") or "member"),
         "status": "pending",
         "memo": str(payload.get("memo") or ""),
@@ -2291,33 +2407,83 @@ def create_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
         "created_at": now,
         "expires_at": (datetime.now(KST) + timedelta(hours=int(payload.get("expires_in_hours") or 72))).isoformat(timespec="seconds"),
     }
+    invite.update(_invite_view({**invite, "targets": targets}, {}))
     rows.insert(0, invite)
     _write("employee_invites", rows)
     return invite
 
 
-def resolve_invite(token: str) -> dict[str, Any]:
+def _find_invite(token: str) -> dict[str, Any]:
     invite = next((row for row in _read("employee_invites") if row.get("token") == token), None)
     if not invite:
         raise HTTPException(status_code=404, detail="초대를 찾을 수 없습니다")
     return invite
 
 
+def resolve_invite(token: str) -> dict[str, Any]:
+    view = _invite_view(_find_invite(token), {})
+    view.pop("token", None)
+    return view
+
+
+def _rollback_join_requests(done: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]]) -> None:
+    for scope_user, saved, previous in reversed(done):
+        try:
+            if previous:
+                _write_hr_record("employee_join_requests", previous, scope_user)
+            else:
+                _delete_hr_record("employee_join_requests", str(saved.get("id") or ""), scope_user)
+        except Exception:
+            logger.exception("초대 수락 롤백 실패: %s", saved.get("id"))
+
+
 def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
-    invite = resolve_invite(str(payload.get("token") or ""))
+    invite = _find_invite(str(payload.get("token") or ""))
     # 초대 토큰이 가리키는 매장이 기준이다 — 본문 branch 로 다른 사업자에 갈아타지 못한다.
     # upsert_join_request 가 그 사업자의 고용주 테넌트(매핑)에 요청을 귀속한다.
-    request = upsert_join_request(
-        {
+    stored_targets = _clean_invite_targets(invite.get("targets"))
+    if stored_targets:
+        targets = stored_targets
+    else:
+        targets = [{"business_id": "", "branch": str(invite.get("branch") or payload.get("branch") or "")}]
+    requests_payloads = []
+    for target in targets:
+        item = {
             "name": payload.get("name") or invite.get("name") or _email(user),
             "email": _email(user),
-            "branch": invite.get("branch") or payload.get("branch") or "",
+            "branch": target["branch"],
             "phone": payload.get("phone") or invite.get("phone") or "",
             "memo": payload.get("memo") or "전화번호 초대 링크로 회원가입",
             "invite_id": invite.get("id"),
-        },
-        user,
-    )
+        }
+        if target["business_id"]:
+            item["business_id"] = target["business_id"]
+        requests_payloads.append(item)
+
+    def _reject(exc: HTTPException, item: dict[str, Any]) -> HTTPException:
+        where = item.get("branch") or item.get("business_id") or ""
+        return HTTPException(status_code=400, detail=f"초대 수락 실패({where}): {exc.detail}" if where else str(exc.detail))
+
+    # 1단계: 저장 없이 전 매장을 먼저 검증한다 — 한 곳이라도 안 되면 아무것도 만들지 않는다.
+    for item in requests_payloads:
+        try:
+            _prepare_join_request(item, user)
+        except HTTPException as exc:
+            raise _reject(exc, item) from exc
+    # 2단계: 저장. 중간에 실패하면 이미 만든 요청을 되돌린다.
+    created: list[dict[str, Any]] = []
+    done: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]] = []
+    for item in requests_payloads:
+        try:
+            _record, scope_user, previous = _prepare_join_request(item, user)
+            saved = upsert_join_request(item, user)
+        except Exception as exc:
+            _rollback_join_requests(done)
+            if isinstance(exc, HTTPException):
+                raise _reject(exc, item) from exc
+            raise
+        created.append(saved)
+        done.append((scope_user, saved, previous))
     rows = _read("employee_invites")
     target = _find(rows, invite["id"])
     if target:
@@ -2325,7 +2491,8 @@ def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
         target["accepted_at"] = _now()
         target["accepted_email"] = _email(user)
         _write("employee_invites", rows)
-    return request
+    # 단일 매장 호출부 호환: 첫 가입요청의 필드를 최상위에도 펼친다.
+    return {**created[0], "requests": created, "request": created[0]}
 
 
 def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2342,7 +2509,10 @@ def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(_read_join_requests_by_email(email), key=lambda row: row.get("requested_at", ""), reverse=True)
 
 
-def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+def _prepare_join_request(
+    payload: dict[str, Any], user: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    """가입요청 레코드를 검증·구성만 한다(저장 없음). (record, scope_user, 기존 레코드)를 돌려준다."""
     _tenant_id(user)
     email = str(payload.get("email") or _email(user)).strip().lower()
     if not email:
@@ -2417,6 +2587,11 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
     elif not existing:
         record["registered_by"] = requester_email
     record = _owned_hr_record(record, scope_user)
+    return record, scope_user, existing
+
+
+def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    record, scope_user, _existing = _prepare_join_request(payload, user)
     _write_hr_record("employee_join_requests", record, scope_user)
     return record
 

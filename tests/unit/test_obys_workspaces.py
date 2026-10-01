@@ -385,8 +385,7 @@ def test_v41_employees_page_invites_and_reviews_join_requests():
     assert 'financeApiV41("/employees/join-requests")' in v41
     assert "/employees/join-requests/${encodeURIComponent(requestId)}`,{method:\"PATCH\"" in v41
     assert "/static/apps/obys/index.html?yf_invite_token=" in v41
-    # 근무 지점 값은 서버 BUSINESS_BY_BRANCH 키여야 가입요청이 매장에 붙는다.
-    from app.services.yeoljeong_finance_service import BUSINESS_BY_BRANCH
-    for branch in ("중화점", "성신여대점", "열정국밥_미아점", "성신여대역점"):
-        assert f'["{branch}",' in v41
-        assert branch in BUSINESS_BY_BRANCH
+    # 초대 대상 매장은 하드코딩이 아니라 DB(사업자별 지점)에서 받아 복수선택 targets 로 보낸다 (AADS-OBYS-INVITE-BUSINESS-MULTISTORE-20261001).
+    assert "INVITE_BRANCHES_V41" not in v41
+    assert 'financeApiV41("/tenant-registry/businesses")' in v41
+    assert 'name="invite_target"' in v41

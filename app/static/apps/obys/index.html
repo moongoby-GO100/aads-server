@@ -3437,6 +3437,7 @@
                     <tr>
                       <th>전화번호</th>
                       <th>직원</th>
+                      <th>매장</th>
                       <th>권한</th>
                       <th>만료</th>
                       <th>상태</th>
@@ -7337,23 +7338,24 @@
       });
       if (!els.employeeInviteRows) return;
       if (!hasServerAuth()) {
-        els.employeeInviteRows.innerHTML = `<tr><td colspan="5"><div class="empty">로그인 후 직원 초대와 가입요청을 관리할 수 있습니다.</div></td></tr>`;
+        els.employeeInviteRows.innerHTML = `<tr><td colspan="6"><div class="empty">로그인 후 직원 초대와 가입요청을 관리할 수 있습니다.</div></td></tr>`;
         if (els.employeeJoinRows) els.employeeJoinRows.innerHTML = `<tr><td colspan="5"><div class="empty">회원가입 또는 로그인 후 가입요청을 보낼 수 있습니다.</div></td></tr>`;
         renderEmployeeDocumentReviewRows();
         return;
       }
       if (!canManage) {
-        els.employeeInviteRows.innerHTML = `<tr><td colspan="5"><div class="empty">직원 초대와 전체 서류 검수는 관리자 권한이 필요합니다. 직원은 입사서류 탭에서 본인 서류만 업로드할 수 있습니다.</div></td></tr>`;
+        els.employeeInviteRows.innerHTML = `<tr><td colspan="6"><div class="empty">직원 초대와 전체 서류 검수는 관리자 권한이 필요합니다. 직원은 입사서류 탭에서 본인 서류만 업로드할 수 있습니다.</div></td></tr>`;
       } else {
         els.employeeInviteRows.innerHTML = employeeInvites.length ? employeeInvites.map(invite => `
           <tr>
             <td>${escapeHtml(invite.phone_masked || invite.phone || "-")}</td>
-            <td>${escapeHtml(invite.name || "-")}<br><span class="muted">${escapeHtml(invite.branch || "")}</span></td>
+            <td>${escapeHtml(invite.name || "-")}</td>
+            <td>${(Array.isArray(invite.branch_labels) && invite.branch_labels.length ? invite.branch_labels : [invite.branch || ""]).map(label => escapeHtml(label || "-")).join("<br>")}</td>
             <td>${escapeHtml(roleLabel(invite.role || "member"))}</td>
             <td>${escapeHtml(String(invite.expires_at || invite.expiresAt || "-").slice(0, 16))}</td>
             <td><span class="badge ${invite.status === "accepted" ? "good" : (invite.status === "expired" ? "bad" : "warn")}">${escapeHtml(invite.status || "pending")}</span></td>
           </tr>
-        `).join("") : `<tr><td colspan="5"><div class="empty">대기 중인 초대가 없습니다. 직원 전화번호로 새 초대 링크를 생성하십시오.</div></td></tr>`;
+        `).join("") : `<tr><td colspan="6"><div class="empty">대기 중인 초대가 없습니다. 직원 전화번호로 새 초대 링크를 생성하십시오.</div></td></tr>`;
       }
       renderEmployeeJoinRows();
       renderEmployeeDocumentReviewRows();
@@ -11550,7 +11552,9 @@
       });
       pendingPhoneInviteToken = "";
       pendingPhoneInvite = null;
-      employeeJoinRequests = [payload.request, ...employeeJoinRequests.filter(item => item.id !== payload.request?.id)];
+      const acceptedRequests = (Array.isArray(payload.requests) && payload.requests.length ? payload.requests : [payload.request]).filter(Boolean);
+      const acceptedIds = new Set(acceptedRequests.map(item => item.id));
+      employeeJoinRequests = [...acceptedRequests, ...employeeJoinRequests.filter(item => !acceptedIds.has(item.id))];
       await refreshFinanceSession();
 	      renderEmployees();
 	      setView("onboarding");

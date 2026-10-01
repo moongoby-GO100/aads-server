@@ -166,10 +166,16 @@ class TenantBusinessUpdatePayload(BaseModel):
     memo: str | None = None
 
 
+class InviteTarget(BaseModel):
+    business_id: str
+    branch: str = ""
+
+
 class InviteCreate(BaseModel):
     phone: str = ""
     name: str = ""
     branch: str = ""
+    targets: list[InviteTarget] = []
     role: str = "member"
     expires_in_hours: int = 72
     memo: str = ""
@@ -517,7 +523,8 @@ async def resolve_employee_invite(token: str, current_user: dict = Depends(get_c
 
 @router.post("/employees/invites/accept")
 async def accept_employee_invite(payload: InviteAccept, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"request": await run_in_threadpool(svc.accept_invite, payload.model_dump(), current_user)}
+    result = await run_in_threadpool(svc.accept_invite, payload.model_dump(), current_user)
+    return {"request": result["request"], "requests": result["requests"]}
 
 
 @router.get("/employees/join-requests")
