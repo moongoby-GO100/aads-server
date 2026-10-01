@@ -796,6 +796,11 @@ def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
             "created_at": payload.get("created_at") or _iso(item.get("created_at")),
             "updated_at": payload.get("updated_at") or _iso(item.get("updated_at")),
             "tenant_id": str(item.get("tenant_id") or ""),
+            # 무결성·이력 필드는 물리 컬럼이 원본이다. metadata 에 같은 키가 있어도 컬럼이 이긴다.
+            "expires_at": _iso(item.get("expires_at")) or str(payload.get("expires_at") or ""),
+            "sha256": str(item.get("sha256") or payload.get("sha256") or ""),
+            "stored_path": str(item.get("stored_path") or payload.get("stored_path") or ""),
+            "superseded_by": str(item.get("superseded_by") or payload.get("superseded_by") or ""),
         }
     if name == "contracts":
         payload = _payload_dict(item.get("contract_payload"))
@@ -987,9 +992,11 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                 INSERT INTO yeoljeong_onboarding_documents
                     (id, employee_request_id, employee_email, employee_email_masked, employee_name, business_id, branch,
                      document_type, document_label, requirement, status, original_filename, stored_filename, content_type,
-                     size_bytes, issue_date, memo, review_memo, uploaded_by, reviewed_by, uploaded_at, reviewed_at, updated_at, tenant_id, metadata, deleted_at)
+                     size_bytes, issue_date, memo, review_memo, uploaded_by, reviewed_by, uploaded_at, reviewed_at, updated_at, tenant_id, metadata,
+                     expires_at, sha256, stored_path, superseded_by, deleted_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                        $21::timestamptz, $22::timestamptz, $23::timestamptz, $24::uuid, $25::jsonb, NULL)
+                        $21::timestamptz, $22::timestamptz, $23::timestamptz, $24::uuid, $25::jsonb,
+                        $26::date, $27, $28, $29, NULL)
                 ON CONFLICT (id) DO UPDATE SET
                     employee_request_id = EXCLUDED.employee_request_id,
                     employee_email = EXCLUDED.employee_email,
@@ -1014,6 +1021,10 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                     reviewed_at = EXCLUDED.reviewed_at,
                     updated_at = EXCLUDED.updated_at,
                     metadata = EXCLUDED.metadata,
+                    expires_at = EXCLUDED.expires_at,
+                    sha256 = EXCLUDED.sha256,
+                    stored_path = EXCLUDED.stored_path,
+                    superseded_by = EXCLUDED.superseded_by,
                     deleted_at = NULL
                 WHERE yeoljeong_onboarding_documents.tenant_id = EXCLUDED.tenant_id
                 """,
@@ -1042,6 +1053,10 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                 _pg_ts(record.get("updated_at") or now),
                 _record_tenant_uuid(record),
                 payload,
+                _pg_date(record.get("expires_at")),
+                str(record.get("sha256") or ""),
+                str(record.get("stored_path") or ""),
+                str(record.get("superseded_by") or ""),
             )
             return result != "INSERT 0 0"
         if name == "contracts":
@@ -1234,7 +1249,7 @@ def _read_hr(name: str, user: dict[str, Any] | None) -> list[dict[str, Any]]:
     return [
         row
         for row in _read_file_rows(name)
-        if str(row.get("tenant_id") or "").strip() == tenant_id
+        if str(row.get("tenant_id") or "").strip() == tenant_id and not row.get("deleted_at")
     ]
 
 
@@ -1464,11 +1479,24 @@ def _delete_hr_record(name: str, row_id: str, user: dict[str, Any] | None) -> No
         return
     rows = _read_file_rows(name)
     matched = next(
-        (row for row in rows if str(row.get("id")) == str(row_id) and str(row.get("tenant_id") or "") == tenant_id),
+        (
+            row
+            for row in rows
+            if str(row.get("id")) == str(row_id)
+            and str(row.get("tenant_id") or "") == tenant_id
+            and not row.get("deleted_at")
+        ),
         None,
     )
     if not matched:
         raise HTTPException(status_code=404, detail="대상을 찾을 수 없습니다")
+    if name == "onboarding_documents":
+        # DB 모드(deleted_at)와 같게 행을 남긴다. 입사서류는 노무 분쟁의 근거다.
+        now = _now()
+        matched["deleted_at"] = now
+        matched["updated_at"] = now
+        _write_file_rows(name, rows)
+        return
     _write_file_rows(name, [row for row in rows if row is not matched])
 
 
@@ -3096,7 +3124,7 @@ def _employee_onboarding_profile(
     matched = [
         row
         for row in documents
-        if str(row.get("status") or "").strip().lower() != "missing"
+        if str(row.get("status") or "").strip().lower() not in {"missing", "superseded"}
         and (
             (request_id and str(row.get("employee_request_id") or "").strip() == request_id)
             or (email and str(row.get("employee_email") or "").strip().lower() == email)
@@ -3173,6 +3201,7 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
             1
             for item in docs
             if str(item.get("employee_email") or "").strip().lower() == email
+            and str(item.get("status") or "").strip().lower() != "superseded"
             and _row_in_business(item, employee_business_id)
         )
         employee["contract_count"] = sum(
@@ -3203,6 +3232,175 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
     return sorted(result, key=lambda row: row.get("reviewed_at") or row.get("updated_at") or row.get("requested_at") or "", reverse=True)
 
 
+ONBOARDING_DOCUMENT_EXPIRY_WARNING_DAYS = 30
+# 보건증·외국인 체류 관련 서류는 만료일이 실무상 필수다. 외국인 고용 신고/변동 확인(foreign_employment_report)은
+# 처리일을 적는 서류라 만료 개념이 없어 뺀다.
+ONBOARDING_EXPIRY_REQUIRED_TYPES = frozenset(
+    {"health_certificate", "foreign_registration", "visa_status_certificate", "work_permission_confirmation"}
+)
+ONBOARDING_SUPERSEDABLE_STATUSES = ("uploaded", "approved", "needs_fix", "rejected")
+ONBOARDING_RESUBMIT_STATUSES = frozenset({"rejected", "needs_fix"})
+_DOCUMENT_HEIC_BRANDS = frozenset({b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1"})
+_DOCUMENT_HEAD_BYTES = 16
+
+
+def _normalize_document_mime(content_type: Any, original_filename: str) -> str:
+    guessed = mimetypes.guess_type(original_filename)[0] or "application/octet-stream"
+    declared = str(content_type or "").strip().lower()
+    if re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", declared) and declared != "application/octet-stream":
+        return declared
+    return guessed
+
+
+def _document_signature_ok(suffix: str, head: bytes) -> bool:
+    """pdf·이미지는 선두 바이트가 포맷 시그니처여야 한다. 그 밖의 확장자는 확인하지 않는다."""
+    if suffix == ".pdf":
+        return head.startswith(b"%PDF-")
+    if suffix in {".jpg", ".jpeg"}:
+        return head.startswith(b"\xff\xd8\xff")
+    if suffix == ".png":
+        return head.startswith(b"\x89PNG")
+    if suffix == ".webp":
+        return head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    if suffix in {".tif", ".tiff"}:
+        return head[:4] in {b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+"}
+    if suffix == ".heic":
+        return head[4:8] == b"ftyp" and head[8:12] in _DOCUMENT_HEIC_BRANDS
+    return True
+
+
+def _document_expiry_fields(expires_at: Any, warning_days: int, today: date | None = None) -> dict[str, Any]:
+    expiry_status, expiry_label, days_left = "", "", None
+    expires = str(expires_at or "")[:10]
+    if expires:
+        try:
+            days_left = (date.fromisoformat(expires) - (today or datetime.now(KST).date())).days
+        except ValueError:
+            days_left = None
+        if days_left is not None and days_left < 0:
+            expiry_status, expiry_label = "expired", "만료"
+        elif days_left is not None and days_left <= warning_days:
+            expiry_status, expiry_label = "expiring", "만료 임박"
+    return {
+        "expiry_status": expiry_status,
+        "expiry_label": expiry_label,
+        "days_until_expiry": days_left,
+        "is_expired": expiry_status == "expired",
+        "is_expiring": expiry_status == "expiring",
+    }
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _onboarding_document_view(record: dict[str, Any], today: date | None = None) -> dict[str, Any]:
+    row = dict(record)
+    row.pop("stored_path", None)
+    row["expires_at"] = str(row.get("expires_at") or "")[:10]
+    row.update(_document_expiry_fields(row["expires_at"], ONBOARDING_DOCUMENT_EXPIRY_WARNING_DAYS, today))
+    if str(row.get("status") or "").strip().lower() == "superseded":
+        # 대체된 이전본의 만료는 더 이상 조치 대상이 아니다.
+        row.update(expiry_status="", expiry_label="", is_expired=False, is_expiring=False)
+    return row
+
+
+def _onboarding_document_path(record: dict[str, Any]) -> Path | None:
+    relative = str(record.get("stored_path") or record.get("stored_filename") or "")
+    if not relative:
+        return None
+    root = UPLOAD_DIR.resolve()
+    path = (root / relative).resolve()
+    if root not in path.parents or not path.is_file():
+        return None
+    return path
+
+
+def _admin_business_ids(user: dict[str, Any]) -> set[str] | None:
+    """None 이면 테넌트의 모든 사업장. 승인된 직원 레코드로 관리자가 된 사용자는 그 사업장만 본다."""
+    user_role = str(user.get("user_role") or "").strip().lower()
+    email = _email(user)
+    if bool(user.get("is_internal_admin")) or user_role in {"ceo", "admin", "system"} or not email:
+        return None
+    own = [
+        row
+        for row in _read_hr("employee_join_requests", user)
+        if str(row.get("email") or "").strip().lower() == email
+        and str(row.get("status") or "").strip().lower() == "approved"
+    ]
+    if not own:
+        return None
+    return {
+        _record_business_id(row)
+        for row in own
+        if _employee_access_role(row.get("role")) == "admin" and _record_business_id(row)
+    }
+
+
+def _require_onboarding_business_scope(record: dict[str, Any], user: dict[str, Any]) -> None:
+    """관리자가 자기 사업장 밖의 입사서류를 열람·검수·삭제하지 못하게 한다. 직원 본인 접근은 호출부가 막는다."""
+    if not _is_admin(user):
+        return
+    allowed = _admin_business_ids(user)
+    if allowed is not None and _record_business_id(record) not in allowed:
+        raise HTTPException(status_code=403, detail="해당 사업장의 서류에 접근할 수 없습니다")
+
+
+async def _db_supersede_onboarding_documents(record: dict[str, Any]) -> int:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        result = await conn.execute(
+            """
+            UPDATE yeoljeong_onboarding_documents
+               SET status = 'superseded', superseded_by = $1, updated_at = $2::timestamptz,
+                   metadata = metadata || jsonb_build_object('status', 'superseded', 'superseded_by', $1::text, 'updated_at', $3::text)
+             WHERE tenant_id = $4::uuid AND business_id = $5 AND lower(employee_email) = $6
+               AND document_type = $7 AND id <> $1 AND deleted_at IS NULL
+               AND status = ANY($8::text[])
+               AND (uploaded_at, id) < ($9::timestamptz, $1)
+            """,
+            str(record["id"]),
+            _pg_ts(record.get("updated_at")),
+            str(record.get("updated_at") or ""),
+            UUID(str(record["tenant_id"])),
+            str(record.get("business_id") or ""),
+            str(record.get("employee_email") or "").strip().lower(),
+            str(record.get("document_type") or ""),
+            list(ONBOARDING_SUPERSEDABLE_STATUSES),
+            _pg_ts(record.get("uploaded_at")),
+        )
+        return int(result.rsplit(" ", 1)[-1])
+    finally:
+        await conn.close()
+
+
+def _supersede_onboarding_file_rows(rows: list[dict[str, Any]], record: dict[str, Any]) -> list[str]:
+    superseded: list[str] = []
+    wanted_email = str(record.get("employee_email") or "").strip().lower()
+    for row in rows:
+        if (
+            row.get("deleted_at")
+            or str(row.get("id")) == str(record["id"])
+            or str(row.get("tenant_id") or "") != str(record["tenant_id"])
+            or _record_business_id(row) != str(record.get("business_id") or "")
+            or str(row.get("employee_email") or "").strip().lower() != wanted_email
+            or str(row.get("document_type") or "") != str(record.get("document_type") or "")
+            or str(row.get("status") or "uploaded").strip().lower() not in ONBOARDING_SUPERSEDABLE_STATUSES
+        ):
+            continue
+        row["status"] = "superseded"
+        row["superseded_by"] = record["id"]
+        row["updated_at"] = record["updated_at"]
+        superseded.append(str(row.get("id")))
+    return superseded
+
+
 async def save_onboarding_document(
     *,
     employee_name: str,
@@ -3213,6 +3411,7 @@ async def save_onboarding_document(
     memo: str,
     upload: UploadFile,
     user: dict[str, Any],
+    expires_at: str = "",
 ) -> dict[str, Any]:
     tenant_id = _tenant_id(user)
     email = str(employee_email or _email(user)).strip().lower()
@@ -3240,23 +3439,44 @@ async def save_onboarding_document(
     if not business_id or (_db_available() and not await _db_business_tenant_matches(business_id, tenant_id)):
         raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
     meta = _document_meta(document_type)
+    issued, expires = _business_document_dates(issue_date, expires_at)
+    if str(document_type or "").strip() in ONBOARDING_EXPIRY_REQUIRED_TYPES and not expires:
+        raise HTTPException(status_code=400, detail=f"{meta['label']}은(는) 만료일을 입력해야 합니다")
     original = _safe_filename(upload.filename or "document.bin")
     suffix = Path(original).suffix.lower()
+    if suffix not in ONBOARDING_DOCUMENT_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="PDF·이미지·한글/워드 문서만 등록할 수 있습니다")
+    mime = _normalize_document_mime(upload.content_type, original)
     doc_id = str(uuid4())
-    stored_name = f"{doc_id}{suffix or '.bin'}"
+    stored_name = f"{doc_id}{suffix}"
     destination = UPLOAD_DIR / stored_name
     _ensure_dirs()
+    tmp = destination.with_name(f"{stored_name}.{secrets.token_hex(4)}.tmp")
+    digest = hashlib.sha256()
     size = 0
-    with destination.open("wb") as out:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > MAX_UPLOAD_BYTES:
-                destination.unlink(missing_ok=True)
-                raise HTTPException(status_code=413, detail="파일은 최대 15MB까지 업로드할 수 있습니다")
-            out.write(chunk)
+    head = b""
+    try:
+        with tmp.open("wb") as out:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="파일은 최대 15MB까지 업로드할 수 있습니다")
+                if len(head) < _DOCUMENT_HEAD_BYTES:
+                    head = (head + chunk)[:_DOCUMENT_HEAD_BYTES]
+                digest.update(chunk)
+                out.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="빈 파일은 등록할 수 없습니다")
+        if not _document_signature_ok(suffix, head):
+            raise HTTPException(status_code=400, detail="파일 내용이 확장자와 일치하지 않습니다")
+        os.chmod(tmp, 0o600)
+        tmp.replace(destination)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     now = _now()
     record = {
         "id": doc_id,
@@ -3269,11 +3489,15 @@ async def save_onboarding_document(
         "document_type": document_type,
         "document_label": meta["label"],
         "requirement": meta["requirement"],
-        "issue_date": issue_date,
+        "issue_date": issued,
+        "expires_at": expires,
         "memo": memo,
         "original_filename": original,
         "stored_filename": stored_name,
-        "content_type": upload.content_type or mimetypes.guess_type(original)[0] or "application/octet-stream",
+        "stored_path": stored_name,
+        "sha256": digest.hexdigest(),
+        "superseded_by": "",
+        "content_type": mime,
         "size_bytes": size,
         "status": "uploaded",
         "uploaded_by": _email(user),
@@ -3281,12 +3505,25 @@ async def save_onboarding_document(
         "updated_at": now,
         "tenant_id": tenant_id,
     }
-    if _db_available():
-        if not await _db_upsert_ledger("onboarding_documents", record):
-            raise HTTPException(status_code=404, detail="입사서류를 저장할 수 없습니다")
-    else:
-        _write_hr_record("onboarding_documents", record, user)
-    return record
+    try:
+        if _db_available():
+            if not await _db_upsert_ledger("onboarding_documents", record):
+                raise HTTPException(status_code=404, detail="입사서류를 저장할 수 없습니다")
+            try:
+                await _db_supersede_onboarding_documents(record)
+            except Exception:
+                # 새 서류는 이미 저장됐다. 이전본 정리만 실패한 것이므로 다음 업로드가 다시 정리한다.
+                logger.exception("onboarding document supersede failed: document=%s", doc_id)
+        else:
+            rows = _read_file_rows("onboarding_documents")
+            _supersede_onboarding_file_rows(rows, record)
+            rows.insert(0, record)
+            _write_file_rows("onboarding_documents", rows)
+    except Exception:
+        # 메타를 못 남긴 원본은 고아가 된다 — 지우고 실패를 그대로 올린다.
+        destination.unlink(missing_ok=True)
+        raise
+    return _onboarding_document_view(record)
 
 
 def _evidence_kind_label(kind: str) -> str:
@@ -3414,13 +3651,23 @@ def _onboarding_missing_document_rows(
     business_id: str | None = None,
 ) -> list[dict[str, Any]]:
     email_filter = "" if _is_admin(user) else _email(user)
+    live_rows = [row for row in existing_rows if not row.get("deleted_at")]
+    # 반려·보완요청·대체된 행은 "제출됨"이 아니다. 제출로 치는 것은 검수를 통과했거나 검수 대기 중인 행뿐이다.
     existing_keys = {
         (
             str(row.get("employee_email") or "").strip().lower(),
             str(row.get("document_type") or "").strip(),
         )
-        for row in existing_rows
+        for row in live_rows
+        if str(row.get("status") or "uploaded").strip().lower() not in ONBOARDING_RESUBMIT_STATUSES | {"superseded"}
     }
+    resubmit_rows: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in sorted(live_rows, key=lambda item: str(item.get("uploaded_at") or ""), reverse=True):
+        if str(row.get("status") or "").strip().lower() in ONBOARDING_RESUBMIT_STATUSES:
+            resubmit_rows.setdefault(
+                (str(row.get("employee_email") or "").strip().lower(), str(row.get("document_type") or "").strip()),
+                row,
+            )
     rows: list[dict[str, Any]] = []
     admin_view = _is_admin(user)
     for employee in _read_hr("employee_join_requests", user):
@@ -3442,6 +3689,7 @@ def _onboarding_missing_document_rows(
             document_type = meta["type"]
             if (employee_email, document_type) in existing_keys:
                 continue
+            previous = resubmit_rows.get((employee_email, document_type))
             rows.append(
                 {
                     "id": f"missing-{employee_id}-{document_type}",
@@ -3454,8 +3702,11 @@ def _onboarding_missing_document_rows(
                     "document_type": document_type,
                     "document_label": meta["label"],
                     "requirement": meta["requirement"],
-                    "status": "missing",
-                    "status_label": "작성 필요",
+                    "status": "resubmit_required" if previous else "missing",
+                    "status_label": "재제출 필요" if previous else "작성 필요",
+                    "previous_document_id": str(previous.get("id") or "") if previous else "",
+                    "previous_status": str(previous.get("status") or "") if previous else "",
+                    "review_memo": str(previous.get("review_memo") or "") if previous else "",
                     "original_filename": "",
                     "size_bytes": 0,
                     "uploaded_at": "",
@@ -3463,6 +3714,8 @@ def _onboarding_missing_document_rows(
                     "is_placeholder": True,
                     "missing_document": True,
                     "employee_request_status": status,
+                    **_document_expiry_fields("", ONBOARDING_DOCUMENT_EXPIRY_WARNING_DAYS),
+                    "expires_at": "",
                 }
             )
     return rows
@@ -3478,7 +3731,7 @@ def list_onboarding_documents(user: dict[str, Any], business_id: str | None = No
         row["branch"] = BRANCH_ALIASES.get(str(row.get("branch") or ""), str(row.get("branch") or ""))
         if business_id and _is_admin(user) and row["business_id"] != business_id:
             continue
-        normalized_rows.append(row)
+        normalized_rows.append(_onboarding_document_view(row))
     rows = normalized_rows + _onboarding_missing_document_rows(
         existing_rows=stored_rows,
         user=user,
@@ -3489,11 +3742,16 @@ def list_onboarding_documents(user: dict[str, Any], business_id: str | None = No
 
 def get_onboarding_document(document_id: str, user: dict[str, Any]) -> tuple[dict[str, Any], Path]:
     record = _require_hr_record(_find(_read_hr("onboarding_documents", user), document_id), user, detail="입사서류를 찾을 수 없습니다")
+    _require_onboarding_business_scope(record, user)
     if not _is_admin(user) and str(record.get("employee_email") or "").strip().lower() != _email(user):
         raise HTTPException(status_code=403, detail="본인 서류만 열람할 수 있습니다")
-    path = UPLOAD_DIR / str(record.get("stored_filename") or "")
-    if not path.exists():
+    path = _onboarding_document_path(record)
+    if path is None:
         raise HTTPException(status_code=404, detail="업로드 파일이 없습니다")
+    expected_sha256 = str(record.get("sha256") or "")
+    if expected_sha256 and _file_sha256(path) != expected_sha256:
+        logger.error("onboarding document hash mismatch: document=%s", record.get("id"))
+        raise HTTPException(status_code=409, detail="입사서류 원본이 등록 당시와 다릅니다")
     return record, path
 
 
@@ -3502,19 +3760,23 @@ def review_onboarding_document(document_id: str, status: str, memo: str, user: d
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="서류 검수 권한이 없습니다")
     record = _require_hr_record(_find(_read_hr("onboarding_documents", user), document_id), user, detail="입사서류를 찾을 수 없습니다")
+    _require_onboarding_business_scope(record, user)
     if status not in {"approved", "rejected", "needs_fix", "uploaded"}:
         raise HTTPException(status_code=400, detail="올바르지 않은 서류 상태입니다")
+    if str(record.get("status") or "").strip().lower() == "superseded":
+        raise HTTPException(status_code=409, detail="재제출로 대체된 이전본은 검수할 수 없습니다")
     record["status"] = status
     record["review_memo"] = memo
     record["reviewed_by"] = _email(user)
     record["reviewed_at"] = _now()
     record["updated_at"] = record["reviewed_at"]
     _write_hr_record("onboarding_documents", record, user)
-    return record
+    return _onboarding_document_view(record)
 
 
 def delete_onboarding_document(document_id: str, user: dict[str, Any]) -> None:
     record = _require_hr_record(_find(_read_hr("onboarding_documents", user), document_id), user, detail="입사서류를 찾을 수 없습니다")
+    _require_onboarding_business_scope(record, user)
     if not _is_admin(user) and str(record.get("employee_email") or "").strip().lower() != _email(user):
         raise HTTPException(status_code=403, detail="본인 서류만 삭제할 수 있습니다")
     _delete_hr_record("onboarding_documents", document_id, user)
@@ -3542,6 +3804,7 @@ BUSINESS_DOCUMENT_TYPE_CODES = {item["type"] for item in BUSINESS_DOCUMENT_TYPES
 BUSINESS_DOCUMENT_REQUIRED_TYPE = "business_registration"
 BUSINESS_DOCUMENT_EXPIRY_WARNING_DAYS = 30
 BUSINESS_DOCUMENT_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".tif", ".tiff", ".hwp", ".doc", ".docx"}
+ONBOARDING_DOCUMENT_EXTENSIONS = set(BUSINESS_DOCUMENT_EXTENSIONS)
 BUSINESS_DOCUMENT_MEMO_MAX = 1000
 BUSINESS_DOCUMENT_TABLE = "yeoljeong_business_documents"
 
@@ -3627,22 +3890,7 @@ def _business_document_view(record: dict[str, Any], today: date | None = None) -
     row["document_label"] = (meta or {}).get("label") or row.get("document_label") or "기타"
     row["requirement"] = (meta or {}).get("requirement") or "선택"
     row["status_label"] = {"current": "최신", "superseded": "이전본", "deleted": "삭제"}.get(str(row.get("status") or ""), "")
-    expiry_status, expiry_label, days_left = "", "", None
-    expires = str(row.get("expires_at") or "")[:10]
-    if expires:
-        try:
-            days_left = (date.fromisoformat(expires) - (today or datetime.now(KST).date())).days
-        except ValueError:
-            days_left = None
-        if days_left is not None and days_left < 0:
-            expiry_status, expiry_label = "expired", "만료"
-        elif days_left is not None and days_left <= BUSINESS_DOCUMENT_EXPIRY_WARNING_DAYS:
-            expiry_status, expiry_label = "expiring", "만료 임박"
-    row["expiry_status"] = expiry_status
-    row["expiry_label"] = expiry_label
-    row["days_until_expiry"] = days_left
-    row["is_expired"] = expiry_status == "expired"
-    row["is_expiring"] = expiry_status == "expiring"
+    row.update(_document_expiry_fields(row.get("expires_at"), BUSINESS_DOCUMENT_EXPIRY_WARNING_DAYS, today))
     return row
 
 
@@ -3922,9 +4170,7 @@ def save_business_document(
     suffix = Path(original).suffix.lower()
     if suffix not in BUSINESS_DOCUMENT_EXTENSIONS:
         raise HTTPException(status_code=400, detail="PDF·이미지·한글/워드 문서만 등록할 수 있습니다")
-    guessed = mimetypes.guess_type(original)[0] or "application/octet-stream"
-    declared = str(content_type or "").strip().lower()
-    mime = declared if re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", declared) and declared != "application/octet-stream" else guessed
+    mime = _normalize_document_mime(content_type, original)
     document_id = str(uuid4())
     relative = _business_document_relpath(tenant_id, document_id, suffix)
     path = _contract_pdf_root() / relative

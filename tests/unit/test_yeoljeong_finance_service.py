@@ -4935,7 +4935,7 @@ async def test_registered_employee_upload_keeps_join_request_business_scope():
             }
         ],
     )
-    upload = UploadFile(filename="bankbook.pdf", file=BytesIO(b"pdf"))
+    upload = UploadFile(filename="bankbook.pdf", file=BytesIO(b"%PDF-1.4 bankbook"))
 
     saved = await service.save_onboarding_document(
         employee_name="가입 직원",

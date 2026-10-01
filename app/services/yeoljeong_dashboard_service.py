@@ -163,7 +163,7 @@ def get_kpis(business_id: str = "") -> dict[str, Any]:
                 )
                 p_docs = await conn.fetchrow(
                     f"SELECT COUNT(*) AS cnt FROM yeoljeong_onboarding_documents "
-                    f"WHERE COALESCE(status, '') NOT IN ('approved','rejected') "
+                    f"WHERE COALESCE(status, '') NOT IN ('approved','rejected','superseded') "
                     f"AND deleted_at IS NULL {employee_biz}",
                     *employee_args,
                 )
@@ -251,7 +251,7 @@ def get_tasks(business_id: str = "") -> list[dict[str, Any]]:
                 for row in await conn.fetch(
                     f"SELECT id, employee_name, document_label, document_type "
                     f"FROM yeoljeong_onboarding_documents "
-                    f"WHERE COALESCE(status, '') NOT IN ('approved','rejected') "
+                    f"WHERE COALESCE(status, '') NOT IN ('approved','rejected','superseded') "
                     f"AND deleted_at IS NULL {biz} "
                     f"ORDER BY created_at DESC LIMIT 20",
                     *biz_args,
