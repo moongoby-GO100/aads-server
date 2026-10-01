@@ -48,6 +48,13 @@
 - legacy 경로 `search_docs_legacy()`(`:287`)는 컬럼을 화이트리스트로 다시 적으므로 두 곳을 같이 고쳐야 한다.
 - 회귀: `tests/unit/test_doc_search_authority_metadata.py` 가 두 경로를 **실제로 호출해** 9종을 확인한다(소스 문자열 검사만으로 판정하지 않는다).
 
+### 3-1. 필수의 기준과 위반 처리 (2026-10-01, CTO 검토 반영, 25f31bd1)
+
+- "필수" = 키가 있고 값이 null·빈 문자열이 아니다. `mtime`·`indexed_at` 은 실제 날짜로 파싱돼야 한다. `label` 은 DB 기본값이 `''` 이라 NOT NULL 만으로는 보장되지 않는다.
+- 위반 행은 버리지도 예외를 던지지도 않는다. `auto_rag._check_doc_contract` 가 필드명을 돌려주고, `DOC_CONTRACT_VIOLATIONS` 에 필드별로 집계하며 `doc_contract_violation` 경고 로그를 남긴다. 최종 머리말에 `계약위반 <필드,…>` 가 찍힌다.
+- 회귀: `tests/unit/test_doc_search_authority_metadata.py` 의 `test_contract_*`·`test_violation_*`.
+- DB 제약(`mtime` NOT NULL 등) 추가는 CEO 승인 사항이며 이번 범위가 아니다.
+
 ## 4. RAG 최종 문자열 계약
 
 `app/services/auto_rag.py`
