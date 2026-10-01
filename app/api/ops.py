@@ -2880,6 +2880,15 @@ class CompanySlotAssign(BaseModel):
     account: Optional[str] = None
 
 
+def _anthropic_slot_from_key_name(key_name: str) -> str:
+    """ANTHROPIC_AUTH_TOKEN → "1", ANTHROPIC_AUTH_TOKEN_<n> → "<n>", 그 외 ""."""
+    if key_name == "ANTHROPIC_AUTH_TOKEN":
+        return "1"
+    prefix = "ANTHROPIC_AUTH_TOKEN_"
+    suffix = key_name[len(prefix):] if key_name.startswith(prefix) else ""
+    return suffix if suffix.isascii() and suffix.isdigit() else ""
+
+
 @router.get("/ops/oauth-slot-projects")
 async def get_oauth_slot_projects():
     """회사별 계정 배정 현황 — 설정 화면이 이 한 벌로 표를 그린다."""
@@ -2938,10 +2947,43 @@ async def get_oauth_slot_projects():
                 "priority": record.get("priority", 0),
                 "last_resort": slot in LAST_RESORT_SLOTS,
                 "rate_limited": bool(record.get("rate_limited_until")),
+                "is_active": True,
+                "needs_login": False,
             })
-        accounts.sort(key=lambda a: (a["last_resort"], a["priority"], a["slot"]))
     except Exception as exc:
         logger.warning("oauth_slot_projects_accounts_failed", error=str(exc)[:160])
+
+    # get_oauth_key_records_async 는 비활성 키를 뺀다 — 로그인 대기 슬롯도 배정표에 보이게 보충한다.
+    try:
+        seen_key_names = {a["key_name"] for a in accounts}
+        for row in await get_pool().fetch(
+            "SELECT key_name, label, priority FROM llm_api_keys "
+            "WHERE provider = 'anthropic' ORDER BY priority, id"
+        ):
+            key_name = str(row["key_name"] or "")
+            if not key_name or key_name in seen_key_names:
+                continue
+            slot = _anthropic_slot_from_key_name(key_name)
+            if not slot:
+                continue
+            seen_key_names.add(key_name)
+            accounts.append({
+                "provider": "anthropic",
+                "account": slot,
+                "slot": slot,
+                "label": row["label"] or f"slot{slot}",
+                "key_name": key_name,
+                "priority": row["priority"],
+                "last_resort": slot in LAST_RESORT_SLOTS,
+                "rate_limited": False,
+                "is_active": False,
+                "needs_login": True,
+            })
+    except Exception as exc:
+        logger.warning("oauth_slot_projects_inactive_accounts_failed", error=str(exc)[:160])
+    accounts.sort(
+        key=lambda a: (not a["is_active"], a["last_resort"], a["priority"], a["slot"])
+    )
 
     try:
         rows = await get_pool().fetch(
@@ -2962,6 +3004,8 @@ async def get_oauth_slot_projects():
                 "priority": row["priority"],
                 "last_resort": False,
                 "rate_limited": bool(limited_until and limited_until > now),
+                "is_active": True,
+                "needs_login": False,
             })
     except Exception as exc:
         logger.warning("oauth_slot_projects_codex_accounts_failed", error=str(exc)[:160])
