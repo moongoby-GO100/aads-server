@@ -1,5 +1,7 @@
 # AADS 시스템 프롬프트 아키텍처 (2026-03-31)
 
+> **자료 상태: 과거 설계 참고.** 2026-10-01 서버 안내를 보정했으며, 나머지 구조·도구·역할은 3월 설계 기록이다. 현재 동작은 활성 코드와 승인 포인터로 확인한다. [현재 정본·서버 원장 조회 안내](operations/CURRENT_AUTHORITY_AND_SERVER_LEDGER.md)를 먼저 읽는다.
+
 > **소스 파일**: `app/core/prompts/system_prompt_v2.py`
 > **조립기**: `app/services/context_builder.py`
 > **설계 기반**: Anthropic "Effective Context Engineering" 가이드
@@ -64,9 +66,9 @@
 | 워크스페이스 | 역할 정의 |
 |------------|----------|
 | **CEO** (기본) | AADS CTO AI — 6개 서비스 전체 아키텍처 이해, Orchestrator |
-| **AADS** | AADS 프로젝트 전담 PM/CTO AI — 서버68, FastAPI+Next.js+PostgreSQL |
-| **KIS** | KIS 자동매매 프로젝트 전담 PM/CTO AI — 서버211, 매매전략/포지션/리스크 |
-| **GO100** | GO100(빡억이) 투자분석 프로젝트 전담 PM/CTO AI — 서버211 |
+| **AADS** | AADS 프로젝트 전담 PM/CTO AI — 콘타보116, FastAPI+Next.js+PostgreSQL |
+| **KIS** | KIS 자동매매 프로젝트 전담 PM/CTO AI — 콘타보14, 매매전략/포지션/리스크 |
+| **GO100** | GO100(빡억이) 투자분석 프로젝트 전담 PM/CTO AI — 콘타보14 |
 | **SF** | ShortFlow 숏폼 동영상 자동화 전담 PM/CTO AI — 서버114:7916 |
 | **NTV2** | NewTalk V2 소셜플랫폼 전담 PM/CTO AI — 서버114, Laravel12+Next.js16 |
 | **NAS** | NAS 이미지처리 프로젝트 전담 PM/CTO AI — Cafe24 |
@@ -91,14 +93,17 @@ Orchestrator: 직접 호출 | pipeline_runner_submit(코드/배포) | delegate_t
 
 ### ④ 프로젝트/서버 정보 (워크스페이스별 분화)
 
-**CEO/미등록**: 전체 6개 프로젝트 + 3개 서버 표시
+**현재 구성 조회 기준(2026-10-01)**: 접근 권한 내 프로젝트와 원장 4개 서버. 건강 감시 대상 3개는 별도 표시한다. 현재 프로젝트 수와 상태는 운영 원장에서 조회한다.
 **개별 워크스페이스**: 해당 프로젝트 상세 + 타 프로젝트 요약 표
 
 | 서버 | IP | 용도 |
 |------|-----|------|
-| 서버68 | 68.183.183.11 | AADS Backend + Dashboard + PostgreSQL |
-| 서버211 | 211.188.51.113 | Hub, Bridge, KIS/GO100 |
-| 서버114 | 116.120.58.155 | SF/NTV2/NAS (포트 7916) |
+| 콘타보116 (`contabo116`) | 5.104.86.116 | AADS |
+| 콘타보14 (`contabo14`) | 5.104.86.14 | KIS/GO100 |
+| 카페24-114 (`cafe24_114`) | 114.207.244.86 | SF/NTV2/NAS (SSH 포트 7916) |
+| 진아서버 (`jinah244`) | 5.104.85.244 | ACCT, 건강 감시 미포함 |
+
+구성 정본은 `list_ledger_servers()` 및 `/api/v1/ops/status`이다. 현재 세션 문맥의 공통 주입 개선은 AADS PRD `aads-current-authority-context`로 구현 지시됐으며, 문서 표 보정과 운영 코드 반영은 별개다.
 
 ### ⑤ 도구 안내 (6개 티어)
 
