@@ -39,8 +39,20 @@ _AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS = float(
     os.getenv("AADS_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS", "45")
 )
 _E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS = float(
-    os.getenv("AADS_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS", "20")
+    os.getenv("AADS_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS", "40")
 )
+_E2E_CREDENTIAL_HEADLESS_MARGIN_SECONDS = 5.0
+
+
+def _e2e_credential_browser_timeout() -> float:
+    """바깥 wait_for 는 adapter 의 headless 기동 상한보다 항상 커야 한다 (상한 역전 방지)."""
+    from app.browser_bridge.aads_adapter import _HEADLESS_LAUNCH_TIMEOUT_SECONDS
+
+    return max(
+        _E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS,
+        _HEADLESS_LAUNCH_TIMEOUT_SECONDS + _E2E_CREDENTIAL_HEADLESS_MARGIN_SECONDS,
+    )
+
 
 _AGENT_VAULT_API_LOGIN_TARGETS = {
     "go100.newtalk.kr": {
@@ -5345,45 +5357,68 @@ async def tool_credential_test_login(
             except Exception as api_exc:
                 browser_error = f"API_LOGIN_ERROR: {api_exc}"
 
+        browser_route = "headless"
+        e2e_timeout = _E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS
         try:
             from app.browser_bridge.aads_adapter import acquire_browser_context
 
-            work_key = browser_work_key or f"e2e-{str(cred.get('service') or 'credential').lower().replace('_', '-')}"
+            e2e_timeout = _e2e_credential_browser_timeout()
+            work_key = str(browser_work_key or "")
+            if browser_session_id:
+                browser_route = "session_id"
+                acquire_kwargs: dict[str, Any] = {
+                    "browser_session_id": browser_session_id,
+                    "browser_work_key": None,
+                }
+            elif work_key:
+                browser_route = "work_key"
+                acquire_kwargs = {
+                    "browser_session_id": None,
+                    "browser_work_key": work_key,
+                }
+            else:
+                browser_route = "headless"
+                acquire_kwargs = {
+                    "browser_session_id": None,
+                    "browser_work_key": None,
+                    "prefer_headless": True,
+                }
             ctx, err = await asyncio.wait_for(
-                acquire_browser_context(
-                    browser_session_id=browser_session_id or None,
-                    browser_work_key=work_key if not browser_session_id else None,
-                    url=cred["login_url"],
-                ),
-                timeout=_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS,
+                acquire_browser_context(url=cred["login_url"], **acquire_kwargs),
+                timeout=e2e_timeout,
             )
             if err:
-                browser_error = err
+                browser_error = f"[{browser_route}] {err}"
             else:
                 page = await ctx.new_page()
                 if not cred.get("login_steps"):
                     await page.goto(cred["login_url"], wait_until="domcontentloaded", timeout=15000)
                 success = await asyncio.wait_for(
                     execute_login_steps(page, cred),
-                    timeout=_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS,
+                    timeout=e2e_timeout,
                 )
                 success = bool(success) and await asyncio.wait_for(
                     login_session_completed(page, cred["login_url"]),
-                    timeout=_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS,
+                    timeout=e2e_timeout,
                 )
                 final_url = page.url
+                work_key_label = work_key or (
+                    "(none, server_headless)"
+                    if browser_route == "headless"
+                    else f"(none, session_id={browser_session_id})"
+                )
                 await mark_verified(credential_id, success=bool(success), tenant_id=tenant_id or None)
                 return (
                     "[Browser E2E 로그인 테스트]\n"
                     f"status: {'success' if success else 'failed'}\n"
                     f"vault_type: {vault_type}\n"
                     f"final_url: {final_url}\n"
-                    f"browser_work_key: {work_key}"
+                    f"browser_work_key: {work_key_label}"
                 )
         except asyncio.TimeoutError:
-            browser_error = f"TIMEOUT_AFTER_{_E2E_CREDENTIAL_BROWSER_TEST_TIMEOUT_SECONDS}s"
+            browser_error = f"[{browser_route}] TIMEOUT_AFTER_{e2e_timeout}s"
         except Exception as be:
-            browser_error = str(be)
+            browser_error = f"[{browser_route}] {be}"
 
         # HTTP 폴백 — 브라우저 세션/로그인 스텝 실패 시 접근 가능 여부 확인
         try:
