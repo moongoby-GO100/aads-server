@@ -275,16 +275,53 @@ async def _search_documents(
         similarity = r.get("similarity", 0.0)
         if r.get("rrf_score") is not None:
             similarity = fused_base - (position * 1e-6)
+        # `timestamp` 칸에는 **문서가 쓰인 시각**을 넣는다. 2026-10-01 이전에는
+        # 여기에 파일 경로가 들어가 있었다. 포맷터(_format 의 `({ts}, 유사도:…)`)가
+        # 이 값을 그대로 찍으므로, 4월에 쓰인 문서가 날짜 없이 경로만 달고
+        # 올라왔고 읽는 쪽은 그것이 몇 달 전 자료인지 알 수 없었다.
+        # 경로는 이미 `path`·`msg_id` 에 있으니 중복도 아니었다.
+        doc_mtime = r.get("mtime")
+        indexed_at = r.get("indexed_at")
+        stamp_source = doc_mtime or indexed_at
+        stamp = _format_doc_stamp(stamp_source)
+
+        # 색인은 "이 문서가 승인된 정본인가" 와 "지금도 유효한가" 를 확인하지
+        # 않는다. doc_chunks.label 은 위치 설명자일 뿐이고(예: "KIS 문서(contabo14)")
+        # 승인 정보가 없다. 그래서 날짜나 label 로 승인을 추정하지 않고
+        # 두 상태를 모두 미확인으로 고정해 표시한다. 승격은 명시 manifest 가
+        # 있을 때만 하고, 그 manifest 는 아직 없다(2026-10-01).
         out.append({
             "kind": "doc",
-            "source": f"문서 {os.path.basename(path)}",
+            "source": f"문서 {os.path.basename(path)} · 승인미확인",
             "msg_id": f"doc:{path}",
             "similarity": similarity,
             "text": f"[{where}] {r.get('content', '')}",
-            "timestamp": path,
+            "timestamp": stamp,
             "path": path,
+            "doc_sha256": r.get("doc_sha256"),
+            "doc_mtime": doc_mtime,
+            "indexed_at": indexed_at,
+            "label": r.get("label"),
+            "authority_status": "승인미확인",
+            "currency_status": "현재상태미검증",
         })
     return out
+
+
+def _format_doc_stamp(value: object) -> str:
+    """문서 시각을 `YYYY-MM-DD` 로 돌려준다. 모르면 빈 문자열.
+
+    경로가 시각 칸으로 다시 흘러드는 것을 여기서 막는다 — 구분자가 들어
+    있으면 시각이 아니라고 보고 버린다.
+    """
+    if value is None:
+        return ""
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
+    text = str(value).strip()
+    if not text or "/" in text or "\\" in text:
+        return ""
+    return text[:10]
 
 
 async def _search_memory_facts(query_emb: list, project: Optional[str]) -> List[Dict]:

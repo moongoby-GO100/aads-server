@@ -168,6 +168,7 @@ async def search_docs_qwen3(
         rows = await get_pool().fetch(
             """
             SELECT d.doc_path, d.server, d.project, d.title, d.heading, d.content,
+                   d.doc_sha256, d.label, d.mtime, d.indexed_at,
                    1 - (q.embedding <=> $1::vector) AS similarity
             FROM doc_chunk_embeddings_qwen3 q
             JOIN doc_chunks d ON d.id = q.chunk_id
@@ -300,6 +301,7 @@ async def search_docs_legacy(
         rows = await get_pool().fetch(
             """
             SELECT doc_path, server, project, title, heading, content,
+                   doc_sha256, label, mtime, indexed_at,
                    1 - (embedding <=> $1::vector) AS similarity
             FROM doc_chunks
             WHERE embedding IS NOT NULL
@@ -327,6 +329,12 @@ async def search_docs_legacy(
             "title": r["title"],
             "heading": r["heading"],
             "content": r["content"],
+            # 아래 4종은 "이 근거가 언제 것이고 무엇에서 왔나" 에 답하는 값이다.
+            # 조회에서 떨어뜨리면 RAG 까지 살려 보낼 방법이 없다(2026-10-01).
+            "doc_sha256": r["doc_sha256"],
+            "label": r["label"],
+            "mtime": r["mtime"],
+            "indexed_at": r["indexed_at"],
         })
     return out
 
