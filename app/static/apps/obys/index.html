@@ -2656,7 +2656,9 @@
             <a id="ownerSignupFromGateBtn" href="/static/apps/obys/signup.html" style="display:flex;align-items:center;justify-content:center;min-height:44px;margin-top:8px;border-radius:8px;text-decoration:none;font-weight:700;color:#fff;background:#2f6fed;border:1px solid #2f6fed">사업자 회원가입 (대표님 · 신규 사업자)</a>
           </form>
           <form id="gateSignupForm" class="panel-body hidden">
-            <input name="name" type="hidden">
+            <label>직원 이름(실명)
+              <input name="name" type="text" autocomplete="name" placeholder="주민등록상 실명" required>
+            </label>
             <label>이메일
               <input name="email" type="email" autocomplete="email" required>
             </label>
@@ -4743,7 +4745,9 @@
       </div>
       <div class="panel-body grid">
         <form id="signupForm" class="grid">
-          <input name="name" type="hidden">
+          <label>직원 이름(실명)
+            <input name="name" type="text" autocomplete="name" placeholder="주민등록상 실명" required>
+          </label>
           <label>이메일
             <input name="email" type="email" autocomplete="username" placeholder="user@fb.newtalk.kr" required>
           </label>
@@ -11949,7 +11953,13 @@
 
     async function signupToServer(formData) {
       const email = String(formData.email || "").trim();
-      const name = String(formData.name || "").trim() || email.split("@")[0] || "직원";
+      const name = String(formData.name || "").trim();
+      if (!name) {
+        throw new Error("직원 이름(실명)을 입력해 주십시오.");
+      }
+      if (name.toLowerCase() === String(email.split("@")[0] || "").trim().toLowerCase()) {
+        throw new Error("이름에 이메일 아이디를 넣지 말고 실명을 입력해 주십시오.");
+      }
       const organizationName = String(formData.organizationName || "").trim();
       const password = String(formData.password || "");
       const passwordConfirm = String(formData.passwordConfirm || "");
