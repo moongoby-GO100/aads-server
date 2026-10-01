@@ -1606,11 +1606,16 @@ deploy_git_preflight() {
 
 # 승인된 AADS 격리 릴리스는 공유 main 의 ahead/dirty 상태와 독립적이다.
 # 공유 본체를 동기화하는 기존 4인자 preflight 계약은 그대로 둔다.
+# 성공 시 DEPLOY_ISOLATED_EFFECTIVE_SHA 에 이후 단계가 써야 할 SHA 를 남긴다.
+# patch-id 승인 상속이 일어났으면 격리 worktree HEAD, 아니면 인자로 받은 승인 SHA 와 같다.
+DEPLOY_ISOLATED_EFFECTIVE_SHA=""
 deploy_isolated_git_preflight() {
     local job_id="$1" project="$2" session_id="$3" main_workdir="$4"
     local worktree_dir="$5" approved_sha="$6" main_root worktree_root
     local main_common worktree_common registered remote_sha head_sha worktree_status push_state
+    local inherit_verdict="" inherit_reason="" inherit_from="" inherit_pid="" dirty_head=""
 
+    DEPLOY_ISOLATED_EFFECTIVE_SHA=""
     if [[ "$project" != "AADS" || ! "$job_id" =~ ^[a-zA-Z0-9_-]+$ \
         || ! "$approved_sha" =~ ^[0-9a-f]{40}$ ]]; then
         _fail_job "$job_id" "$session_id" "deploy_isolated_identity_invalid" "격리 릴리스 소유권 또는 승인 SHA 오류"
@@ -1643,14 +1648,38 @@ deploy_isolated_git_preflight() {
     fi
     head_sha=$(git -C "$worktree_root" rev-parse HEAD 2>/dev/null) || head_sha=""
     worktree_status=$(git -C "$worktree_root" status --porcelain --untracked-files=all 2>/dev/null) || worktree_status="status_failed"
-    if [[ "$head_sha" != "$approved_sha" || -n "$worktree_status" ]]; then
-        _fail_job "$job_id" "$session_id" "deploy_isolated_sha_or_dirty" "격리 worktree HEAD/승인 SHA 불일치 또는 dirty"
+    if [[ -n "$worktree_status" ]]; then
+        # dirty 는 patch-id 로 구제하지 않는다 — 커밋되지 않은 변경은 승인 대상이 아니다.
+        dirty_head=$(printf '%s\n' "$worktree_status" | sed -n '1,5p' | tr '\n' '|')
+        _fail_job "$job_id" "$session_id" "deploy_isolated_worktree_dirty" "격리 worktree dirty (git status --porcelain 앞 5줄): ${dirty_head}"
         return 1
     fi
     git -C "$worktree_root" fetch --prune origin >/dev/null 2>&1 || {
         _fail_job "$job_id" "$session_id" "deploy_fetch_failed" "격리 릴리스 origin fetch 실패"
         return 1
     }
+    if [[ "$head_sha" != "$approved_sha" ]]; then
+        # 승인 후 base 가 들어와 리베이스되면 내용이 같아도 SHA 가 달라진다.
+        # patch-id 가 같음을 증명할 수 있을 때만 승인을 상속한다 (fetch 뒤라야 origin/main 이 최신이다).
+        read -r inherit_verdict inherit_reason inherit_from inherit_pid \
+            <<< "$(inherit_approval_decision "$job_id" "$worktree_root" "$head_sha")" || true
+        log "  DEPLOY_PREFLIGHT_PATCHID_CHECK job=$job_id verdict=${inherit_verdict:-none} reason=${inherit_reason:-none} approved=${inherit_from:--} patch_id=${inherit_pid:--}"
+        if [[ "$inherit_verdict" != "inherit" ]]; then
+            _fail_job "$job_id" "$session_id" "deploy_isolated_sha_or_dirty" "격리 worktree HEAD/승인 SHA 불일치 — patch-id 동등성 증명 실패 (${inherit_reason:-unknown}): head=${head_sha} approved=${approved_sha}"
+            return 1
+        fi
+        db_update "UPDATE pipeline_jobs SET commit_hash='${head_sha}',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n' || $(sql_escape "[승인상속] patch-id 동일(${inherit_pid}) — ${approved_sha}→${head_sha}"),
+                   updated_at=NOW()
+                   WHERE job_id='${job_id}' AND status='deploying' AND commit_hash='${approved_sha}';"
+        if [[ "$(db_exec "SELECT COALESCE(commit_hash,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | tr -d '[:space:]')" != "$head_sha" ]]; then
+            _fail_job "$job_id" "$session_id" "deploy_rebase_inherit_persist_failed" "승인 상속 SHA 저장 실패"
+            return 1
+        fi
+        record_runner_event "$job_id" "approval_inherited_same_patch_id" "info" "approved" "" "" "" "" "{\"from\":\"${approved_sha}\",\"to\":\"${head_sha}\",\"patch_id\":\"${inherit_pid}\",\"approved_sha\":\"${inherit_from}\"}"
+        log "  DEPLOY_PREFLIGHT_PATCHID_INHERIT job=$job_id from=${approved_sha} to=${head_sha} patch_id=${inherit_pid}"
+        approved_sha="$head_sha"
+    fi
     remote_sha=$(git -C "$worktree_root" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || remote_sha=""
     if [[ ! "$remote_sha" =~ ^[0-9a-f]{40}$ \
         || "$(git -C "$worktree_root" rev-parse --verify origin/main 2>/dev/null)" != "$remote_sha" \
@@ -1670,6 +1699,7 @@ deploy_isolated_git_preflight() {
             return 1
             ;;
     esac
+    DEPLOY_ISOLATED_EFFECTIVE_SHA="$approved_sha"
     log "  DEPLOY_ISOLATED_PREFLIGHT_OK: job=$job_id sha=$approved_sha origin=$remote_sha"
 }
 
@@ -4556,6 +4586,7 @@ deploy_job() {
             promote_next_queued "$project"
             return 1
         fi
+        expected_sha="${DEPLOY_ISOLATED_EFFECTIVE_SHA:-$expected_sha}"
     elif ! deploy_git_preflight "$job_id" "$project" "$session_id" "$main_workdir"; then
         _release_deploy_lock "$project" "$job_id"
         promote_next_queued "$project"
