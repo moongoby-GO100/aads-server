@@ -283,3 +283,103 @@ def test_both_search_queries_select_metadata() -> None:
     for i, block in enumerate(blocks):
         missing = [c for c in METADATA_COLUMNS if c not in block]
         assert not missing, f"{i + 1}번째 검색 SELECT 가 {missing} 를 뽑지 않는다"
+
+
+# ── 6) 검색 row 필수 9종 계약 ───────────────────────────────────────────
+# 계약 문서(docs/contracts/AADS-SEARCH-EVIDENCE-AUTHORITY-CONTRACT-v1.0-20261001.md §3)
+# 가 고정한 목록이다. 둘 중 한 경로만 지켜도 나머지 경로에서 근거가 사라진다.
+CONTRACT_FIELDS = (
+    "doc_path", "title", "heading", "content", "similarity",
+    "doc_sha256", "mtime", "indexed_at", "label",
+)
+
+CONTRACT_DOC = ROOT / "docs/contracts/AADS-SEARCH-EVIDENCE-AUTHORITY-CONTRACT-v1.0-20261001.md"
+
+
+def _fake_pool(rows, monkeypatch) -> None:
+    class _Pool:
+        async def fetch(self, *args, **kwargs):
+            return [dict(r) for r in rows]
+
+    pool_mod = types.ModuleType("app.core.db_pool")
+    pool_mod.get_pool = lambda: _Pool()
+    monkeypatch.setitem(sys.modules, "app.core.db_pool", pool_mod)
+
+
+def test_search_docs_legacy_returns_nine_contract_fields(monkeypatch) -> None:
+    _fake_pool([_row()], monkeypatch)
+    out = asyncio.run(doc_index.search_docs_legacy([0.1] * 8, top_k=3, project="AADS"))
+    assert out, "유사도 0.81 행이 걸러졌다"
+    expected = _row()
+    missing = [f for f in CONTRACT_FIELDS if f not in out[0]]
+    assert not missing, f"legacy 경로가 {missing} 를 돌려주지 않는다"
+    for field in CONTRACT_FIELDS:
+        if field == "similarity":
+            continue
+        assert out[0][field] == expected[field], f"{field} 값이 바뀌었다"
+
+
+def test_search_docs_qwen3_returns_nine_contract_fields(monkeypatch) -> None:
+    """qwen3 경로는 `**dict(r)` 로 펼치므로 SELECT 에서 빠지면 복구 경로가 없다."""
+    _fake_pool([_row()], monkeypatch)
+    out = asyncio.run(
+        doc_index.search_docs_qwen3([0.1] * doc_index.QWEN_DIMENSION, top_k=3, project="AADS"),
+    )
+    assert out, "qwen3 경로가 행을 버렸다"
+    missing = [f for f in CONTRACT_FIELDS if f not in out[0]]
+    assert not missing, f"qwen3 경로가 {missing} 를 돌려주지 않는다"
+    assert out[0]["kind"] == "doc"
+    assert out[0]["doc_sha256"] == DOC_SHA
+
+
+def test_contract_doc_lists_every_required_field() -> None:
+    """계약 문서와 코드가 어긋나면(문서만 낡으면) 다음 사람이 낡은 쪽을 믿는다."""
+    assert CONTRACT_DOC.is_file(), f"계약 문서가 없다: {CONTRACT_DOC}"
+    text = CONTRACT_DOC.read_text(encoding="utf-8")
+    missing = [f for f in CONTRACT_FIELDS if f"`{f}`" not in text]
+    assert not missing, f"계약 문서가 {missing} 를 적지 않았다"
+    for needle in ("승인미확인", "현재상태미검증", "list_ledger_servers", "approved_revision_id"):
+        assert needle in text, f"계약 문서에 {needle!r} 가 없다"
+
+
+# ── 7) 값이 없으면 unknown 으로 나간다 (추정 금지) ──────────────────────
+def test_absent_metadata_renders_unknown_and_omits_empty_fields(monkeypatch) -> None:
+    docs = _docs_from(
+        [_row(mtime=None, indexed_at=None, doc_sha256=None, label=None)], monkeypatch,
+    )
+    doc = docs[0]
+    assert doc["authority_status"] == "승인미확인"
+    assert doc["currency_status"] == "현재상태미검증"
+    assert doc["doc_sha256"] is None and doc["label"] is None
+
+    line = _doc_line(_render(docs, monkeypatch))
+    assert "작성일 미상(파일변경일 없음)" in line
+    assert "색인일 미상" in line
+    # 없는 값을 날짜·hash 자리에 만들어 넣지 않는다.
+    assert "hash " not in line, f"hash 칸이 빈 값으로 찍혔다:\n{line}"
+    assert "None" not in line, f"None 이 그대로 새어 나갔다:\n{line}"
+    assert "파일변경일 " not in line.split("작성일 미상")[0]
+
+
+# ── 8) 역사 명시 파일도 자동 승격되지 않는다 ────────────────────────────
+HISTORICAL_PATH = "/root/aads/aads-docs/reports/GO100-SERVER-MIGRATION-RECORD-20260619.md"
+HISTORICAL_SHA = "5aa8ce2a4ab9f723706534136afbe2b020367c506fcab825a61e7ce7c864421f"
+
+
+def test_known_historical_file_is_not_auto_promoted(monkeypatch) -> None:
+    """경로·hash 가 계약 문서 §5 표와 맞아도 승인 상태는 올라가지 않는다.
+
+    historical 매핑은 사람이 읽는 표이고, 승격은 `approve` API 의 권한 경로만이다.
+    """
+    docs = _docs_from(
+        [_row(doc_path=HISTORICAL_PATH, doc_sha256=HISTORICAL_SHA, label="공용 리포트")],
+        monkeypatch,
+    )
+    doc = docs[0]
+    assert doc["authority_status"] == "승인미확인"
+    assert doc["currency_status"] == "현재상태미검증"
+
+    line = _doc_line(_render(docs, monkeypatch))
+    assert "승인미확인" in line and "현재상태미검증" in line
+    for forbidden in ("승인됨", "승인 정본", "현행", "authoritative"):
+        assert forbidden not in line, f"{forbidden!r} 가 근거 줄에 찍혔다:\n{line}"
