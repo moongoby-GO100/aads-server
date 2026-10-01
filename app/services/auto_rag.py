@@ -16,6 +16,9 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# 문서 검색 행 계약(docs/contracts/AADS-015-…§3-1) 위반 누적. 프로세스 수명 동안의 필드별 건수.
+DOC_CONTRACT_VIOLATIONS: Dict[str, int] = {}
+
 _AUTO_RAG_ENABLED = os.getenv("AUTO_RAG_ENABLED", "true").lower() == "true"
 _RAG_TOP_K = int(os.getenv("AUTO_RAG_TOP_K", "5"))
 _RAG_TOKEN_BUDGET = int(os.getenv("AUTO_RAG_TOKEN_BUDGET", "2000"))
@@ -306,6 +309,7 @@ async def _search_documents(
         # 두 날짜를 각자 이름표를 달아 내보낸다(`_doc_evidence_header`).
         doc_mtime = r.get("mtime")
         indexed_at = r.get("indexed_at")
+        violations = _check_doc_contract(r)
         file_changed = _format_doc_stamp(doc_mtime)
         stamp = f"파일변경일 {file_changed}" if file_changed else "작성일 미상"
 
@@ -326,10 +330,33 @@ async def _search_documents(
             "doc_mtime": doc_mtime,
             "indexed_at": indexed_at,
             "label": r.get("label"),
+            "contract_violations": violations,
             "authority_status": "승인미확인",
             "currency_status": "현재상태미검증",
         })
     return out
+
+
+def _check_doc_contract(r: Dict[str, Any]) -> List[str]:
+    """필수 4필드(doc_sha256·mtime·indexed_at·label)가 비었거나 날짜가 아니면 이름을 돌려준다.
+
+    행은 버리지 않고 예외도 던지지 않는다 — 버리면 근거가 말없이 사라지고, 던지면 RAG 전체가 멈춘다.
+    대신 카운터와 로그를 남기고 호출자가 머리말에 표시한다.
+    """
+    bad: List[str] = []
+    if not str(r.get("doc_sha256") or "").strip():
+        bad.append("doc_sha256")
+    if not str(r.get("label") or "").strip():
+        bad.append("label")
+    if not _format_doc_stamp(r.get("mtime")):
+        bad.append("mtime")
+    if not _format_doc_stamp(r.get("indexed_at")):
+        bad.append("indexed_at")
+    for name in bad:
+        DOC_CONTRACT_VIOLATIONS[name] = DOC_CONTRACT_VIOLATIONS.get(name, 0) + 1
+    if bad:
+        logger.warning("doc_contract_violation", fields=bad, path=str(r.get("doc_path") or ""))
+    return bad
 
 
 def _format_doc_stamp(value: object) -> str:
@@ -384,6 +411,9 @@ def _doc_evidence_header(r: Dict[str, Any]) -> str:
     sha = str(r.get("doc_sha256") or "").strip()
     if sha:
         parts.append(f"hash {sha[:12]}")
+    violations = r.get("contract_violations") or []
+    if violations:
+        parts.append("계약위반 " + ",".join(violations))
     return " · ".join(parts)
 
 

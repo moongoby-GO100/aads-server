@@ -383,3 +383,59 @@ def test_known_historical_file_is_not_auto_promoted(monkeypatch) -> None:
     assert "승인미확인" in line and "현재상태미검증" in line
     for forbidden in ("승인됨", "승인 정본", "현행", "authoritative"):
         assert forbidden not in line, f"{forbidden!r} 가 근거 줄에 찍혔다:\n{line}"
+
+
+# --- 계약 §3-1: 필수 4필드 위반은 버리지도 던지지도 않고 표시·집계한다 -------------
+
+_FULL_ROW = {
+    "doc_path": "/x/a.md",
+    "doc_sha256": "a" * 64,
+    "label": "AADS 문서",
+    "mtime": datetime.datetime(2026, 9, 1, 10, 0, 0),
+    "indexed_at": datetime.datetime(2026, 10, 1, 9, 0, 0),
+}
+
+
+def test_contract_complete_row_has_no_violation():
+    before = dict(rag.DOC_CONTRACT_VIOLATIONS)
+    assert rag._check_doc_contract(dict(_FULL_ROW)) == []
+    assert rag.DOC_CONTRACT_VIOLATIONS == before
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("label", ""),
+        ("label", "   "),
+        ("doc_sha256", None),
+        ("mtime", None),
+        ("mtime", "문서가 쓰인 시각"),
+        ("indexed_at", ""),
+    ],
+)
+def test_contract_violation_is_reported_and_counted(field, value):
+    row = dict(_FULL_ROW, **{field: value})
+    before = rag.DOC_CONTRACT_VIOLATIONS.get(field, 0)
+    assert rag._check_doc_contract(row) == [field]
+    assert rag.DOC_CONTRACT_VIOLATIONS[field] == before + 1
+
+
+def test_violation_appears_in_final_header_without_dropping_row():
+    row = dict(_FULL_ROW, label="", mtime=None)
+    header = rag._doc_evidence_header(
+        {
+            "path": row["doc_path"],
+            "doc_sha256": row["doc_sha256"],
+            "doc_mtime": row["mtime"],
+            "indexed_at": row["indexed_at"],
+            "contract_violations": rag._check_doc_contract(row),
+        }
+    )
+    assert "계약위반 label,mtime" in header
+    assert "작성일 미상" in header
+    assert "경로 /x/a.md" in header
+
+
+def test_header_has_no_violation_marker_for_complete_row():
+    header = rag._doc_evidence_header({"path": "/x/a.md", "contract_violations": []})
+    assert "계약위반" not in header
