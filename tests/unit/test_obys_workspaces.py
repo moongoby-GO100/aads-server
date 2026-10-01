@@ -374,3 +374,19 @@ def test_v41_business_detail_registers_registration_and_business_documents():
     assert 'financeApiV41("/business-documents",{method:"POST",body:form})' in v41
     assert '/tenant-registry/businesses/${encodeURIComponent(businessId)}`,{method:"PATCH"' in v41
     assert '{action:"사업자 상세·서류 등록"' in v41
+
+
+def test_v41_employees_page_invites_and_reviews_join_requests():
+    # 로그인하면 V4.1 로 넘어가므로 직원 초대·가입 승인이 V4.1 직원 현황에 있어야 한다 (2026-10-01).
+    v41 = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+
+    assert 'if(state.route==="employees")renderEmployeeOnboardingV41();' in v41
+    assert 'financeApiV41("/employees/invites",{method:"POST"' in v41
+    assert 'financeApiV41("/employees/join-requests")' in v41
+    assert "/employees/join-requests/${encodeURIComponent(requestId)}`,{method:\"PATCH\"" in v41
+    assert "/static/apps/obys/index.html?yf_invite_token=" in v41
+    # 근무 지점 값은 서버 BUSINESS_BY_BRANCH 키여야 가입요청이 매장에 붙는다.
+    from app.services.yeoljeong_finance_service import BUSINESS_BY_BRANCH
+    for branch in ("중화점", "성신여대점", "열정국밥_미아점", "성신여대역점"):
+        assert f'["{branch}",' in v41
+        assert branch in BUSINESS_BY_BRANCH
