@@ -96,3 +96,57 @@ bash scripts/run_unit_tests.sh tests/unit/test_canonical_documents.py tests/unit
 - `approved_brief()`의 `revision`/`source_path` 공백(§1) — 계약 확장 여부는 015 판단.
 - `doc14bf770` 리비전 해석(§5) — 명시 manifest가 필요하면 그때 기록한다. 지금은 추정 매핑을 만들지 않는다.
 - 이 문서는 파일 저장과 커밋까지다. 문서 API 승인(`approved_revision_id` 변경)과 배포 반영은 별도 확인 대상이다.
+
+## 9. 2026-10-01 16:05 KST 실측 갱신 (§2·§5 보강·정정)
+
+이 절은 위 절을 **대체하지 않고 보강**한다. 날짜가 적힌 사실은 그 시각의 실측이며
+재색인·배포로 바뀐다. 그래서 적은 시각을 같이 남긴다.
+
+**계약 문서는 이 파일 1벌이다.** 같은 날 별도로 작성된
+`AADS-015-CURRENT-AUTHORITY-SOURCE-CONTRACT-20261001.md`(로컬 커밋 `95f3baa3`)는 범위가
+이 문서와 겹쳐 **푸시하지 않고 폐기**했다. 규칙 문서를 두 벌로 두면 한쪽이 반드시 낡는다(R-RELEASE).
+
+### 9-1. 원장 소비 지점 두 곳 추가 (§2 보강)
+
+| 소비 지점 | 현재 소스 | 확인된 동작 |
+|---|---|---|
+| 배포 화면 서버 그룹 | `app/api/admin.py:86` `_deploy_server_groups()` → `:95` `list_ledger_servers()` | 원장 4대를 그대로 순회 |
+| 채팅 문맥 주입 | `app/services/context_builder.py:218` `build_server_ledger_section()` | **60초 레이어 캐시에 넣지 않는다**(`:55` 주석, `_get_cached_or_build` 미경유). 세션 단위 보관소 `_LEDGER_PROVENANCE_BY_SESSION`(`:83`, 상한 초과 시 오래된 8건 축출)을 거쳐 provenance 에 남긴다 |
+
+운영 provenance 실측(16:05 KST 직전 30분 11건, 전건 동일 9키):
+`source` · `server_ids` · `available` · `ledger_count` · `health_monitored_count` ·
+`observed_at` · `registry_read_at` · `registry_file_mtime` · `snapshot_hash`
+
+`registry_read_at` = `observed_at`(원장 등록 조회시각)이다. `registry_file_mtime` 은 파일
+변경일이며 **조회시각도 health 관측시각도 아니다** — §2 분리 규칙의 코드 측 근거다.
+
+### 9-2. §5 역사 매핑 — 재색인으로 바뀐 부분 (정정)
+
+`AADS-3SERVER-OPERATING-TOPOLOGY-20260623.md` 동명 파일의 현재 색인은 **2행뿐이다**
+(`doc_chunks` 조회, 16:05 KST).
+
+| doc_path | 현재 `doc_sha256`(앞 16) | 최종 색인(KST) | 판정 |
+|---|---|---|---|
+| `/root/aads/go100/docs/…` | `7b98fdfe9ae7a7e0` | 2026-10-01 15:13 | ❌ 커밋 출처 없음. go100 저장소에서 여전히 `??`(미추적) — §5 판정 유지 |
+| `/root/aads/_remote_docs/cafe24_114/newtalk-v2/docs/operations/…` | `c1f0f25a9f72219a` | 2026-10-01 15:52 | 재동기(파일 mtime 10-01 08:51) 후 재색인. **§5 에 적힌 옛 판 `93c9a8d1…` 은 더 이상 이 경로의 색인 hash 가 아니다** |
+
+- §5 의 `_remote_docs/contabo14/kis-autotrade-v4/…` 행은 지금 `doc_chunks` 에 **없다**
+  (동명 파일 조회 2행에 포함되지 않음). 색인에서 빠졌으므로 그 행의 적격 판정은 적용 대상이 없다.
+- 그래도 §5 의 규칙 자체는 유지된다: 매핑은 파일명이 아니라 `doc_path` + `doc_sha256` 쌍으로만 한다.
+
+### 9-3. 운영 반영 상태 (§8 세 번째 항목 해소)
+
+`origin/main` 의 §2·§4 코드는 **운영에 반영됐다**(16:05 KST 실측).
+
+- 라이브 슬롯 8100 = `aads-server:f4b0866d64fe` healthy, nginx 기준 8102 는 `backup`
+- 컨테이너 내부 `build_server_ledger_section` 2건 · `_doc_evidence_header` 4건 (배포 전 0건)
+- `compiled_prompt_provenance` 최근 전건에 `server_ledger` 존재 (배포 전 0/3)
+- standby(8102) 동기화는 `deploy_runs 5462`(release `78f297e5a3d1`) 진행 중
+
+### 9-4. 남은 미완료
+
+| # | 항목 | 상태 |
+|---|---|---|
+| 1 | `approved_brief()` 의 `revision`·`source_path` 반환 | 미구현 — §1 공백 유지 |
+| 2 | go100 사본의 커밋 출처 확보 | 미조치 — 미추적 유지 |
+| 3 | `doc14bf770` 리비전 해석 | 미검증 — 추정 매핑을 만들지 않는다 |
