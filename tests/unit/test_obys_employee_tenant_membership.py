@@ -424,10 +424,20 @@ def test_request_not_bound_to_requester_account_links_by_approver_vouched_email(
     assert _audit()[0]["employee_user_id"] == EMP_ID
 
 
-def test_employee_cannot_file_join_request_from_personal_workspace():
-    """지적 8 의 전제: 가입요청 경로는 레거시 테넌트 전용이라 개인 워크스페이스 JWT 는 403."""
-    assert not obys_tenant._is_tenant_scoped_path("/api/v1/yeoljeong-finance/employees/join-requests", "POST")
-    assert not obys_tenant._is_tenant_scoped_path("/api/v1/yeoljeong-finance/employees/invites/accept", "POST")
+def test_employee_can_file_join_request_but_admin_only_paths_stay_closed():
+    """2026-10-01: 직원 본인 경로(가입요청·초대 확인/수락)만 연다. 관리자 전용 경로는 닫힌 채다."""
+    for path in (
+        "/api/v1/yeoljeong-finance/employees/join-requests",
+        "/api/v1/yeoljeong-finance/employees/invites/resolve",
+        "/api/v1/yeoljeong-finance/employees/invites/accept",
+    ):
+        assert obys_tenant._is_tenant_scoped_path(path, "POST")
+    for path in (
+        "/api/v1/yeoljeong-finance/employees/invites",
+        "/api/v1/yeoljeong-finance/employees/approved",
+        "/api/v1/yeoljeong-finance/employees/approved/x/role",
+    ):
+        assert not obys_tenant._is_tenant_scoped_path(path, "POST")
 
 
 def test_unbound_request_without_account_stays_pending(env):
@@ -1066,7 +1076,7 @@ async def test_gate_opens_only_signing_routes_for_non_legacy_tenant(monkeypatch,
         ("DELETE", "/api/v1/yeoljeong-finance/contracts/signing"),
         ("GET", "/api/v1/yeoljeong-finance/contracts/signing/signed-pdf"),
         ("POST", "/api/v1/yeoljeong-finance/contracts/signing/signed-pdf/regenerate"),
-        ("GET", "/api/v1/yeoljeong-finance/employees/join-requests"),
+        ("GET", "/api/v1/yeoljeong-finance/employees/invites"),
     ],
 )
 async def test_gate_keeps_other_contract_routes_closed(monkeypatch, method, path):

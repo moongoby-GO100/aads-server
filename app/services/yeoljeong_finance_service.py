@@ -1261,6 +1261,120 @@ def _require_business_for_tenant(business_id: Any, user: dict[str, Any] | None) 
     return normalized
 
 
+async def _db_business_tenant_id(business_id: str) -> str | None:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        value = await conn.fetchval(
+            "SELECT tenant_id::text FROM yeoljeong_business_tenant_mapping WHERE business_id = $1",
+            business_id,
+        )
+        return str(value) if value else None
+    finally:
+        await conn.close()
+
+
+async def _db_hr_record_tenant(name: str, row_id: str) -> str | None:
+    import asyncpg
+
+    table = DB_LEDGER_TABLE_BY_NAME.get(name)
+    if name not in HR_TENANT_LEDGER_NAMES or not table:
+        return None
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        value = await conn.fetchval(
+            f"SELECT tenant_id::text FROM {table} WHERE id = $1 AND deleted_at IS NULL",
+            str(row_id),
+        )
+        return str(value) if value else None
+    finally:
+        await conn.close()
+
+
+async def _db_fetch_join_requests_by_email(email: str) -> list[dict[str, Any]] | None:
+    import asyncpg
+
+    table = DB_LEDGER_TABLE_BY_NAME["employee_join_requests"]
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        ready = await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{table}")
+        if not ready:
+            return None
+        rows = await conn.fetch(
+            f"SELECT * FROM {table} h WHERE h.deleted_at IS NULL AND h.tenant_id IS NOT NULL "
+            "AND lower(h.employee_email) = $1 "
+            "AND EXISTS (SELECT 1 FROM yeoljeong_business_tenant_mapping m "
+            "WHERE m.business_id = h.business_id AND m.tenant_id = h.tenant_id) "
+            "ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC",
+            email,
+        )
+        return [_db_row_to_record("employee_join_requests", row) for row in rows]
+    finally:
+        await conn.close()
+
+
+def _employer_scope_user(user: dict[str, Any], employer_tenant_id: str) -> dict[str, Any]:
+    """가입요청 한 건을 고용주 테넌트에 읽고 쓰기 위한 범위 한정용 사용자 사본.
+
+    호출자는 그 테넌트의 멤버가 아니다 — 이 사본은 upsert_join_request 안에서만 쓰고,
+    권한 판정(_is_admin 등)에는 절대 넘기지 않는다.
+    """
+    scoped = dict(user)
+    scoped["tenant_id"] = employer_tenant_id
+    scoped["current_membership"] = {"tenant_id": employer_tenant_id, "status": "active", "role": "applicant"}
+    return scoped
+
+
+def _join_request_scope(business_id: str, email: str, user: dict[str, Any]) -> dict[str, Any]:
+    """대상 사업자의 고용주 테넌트로 가입요청을 귀속시킬 범위를 정한다.
+
+    호출자 JWT 테넌트가 아니라 yeoljeong_business_tenant_mapping 의 테넌트가 기준이다.
+    다른 테넌트의 사업자에는 본인 이메일 요청만 낼 수 있다(남을 대신해 남의 테넌트에 쓰지 못한다).
+    DB 가 없는 파일 모드에는 매핑이 없어 종전처럼 호출자 테넌트를 쓴다(_require_business_for_tenant 와 같은 규칙).
+    """
+    caller_tenant = _tenant_id(user)
+    if not _db_available():
+        return user
+    employer = _run_db(_db_business_tenant_id(business_id))
+    if not employer:
+        raise HTTPException(status_code=400, detail="등록되지 않은 사업자입니다")
+    employer = str(employer).strip()
+    if employer == caller_tenant:
+        return user
+    if not email or email != _email(user):
+        raise HTTPException(status_code=403, detail="다른 사업자에는 본인 가입요청만 등록할 수 있습니다")
+    return _employer_scope_user(user, employer)
+
+
+def _join_request_owner_tenant(request_id: str) -> str:
+    if _db_available():
+        return str(_run_db(_db_hr_record_tenant("employee_join_requests", request_id)) or "").strip()
+    record = _find(_read_file_rows("employee_join_requests"), request_id)
+    return str((record or {}).get("tenant_id") or "").strip()
+
+
+def _require_review_tenant(request_id: str, user: dict[str, Any]) -> str:
+    """가입요청의 귀속 테넌트와 호출자 테넌트가 같을 때만 승인·반려를 허용한다(다르면 403)."""
+    tenant_id = _tenant_id(user)
+    owner = _join_request_owner_tenant(request_id)
+    if owner and owner != tenant_id:
+        raise HTTPException(status_code=403, detail="다른 테넌트의 가입요청은 처리할 수 없습니다")
+    return tenant_id
+
+
+def _read_join_requests_by_email(email: str) -> list[dict[str, Any]]:
+    """직원 본인 이메일의 가입요청을 고용주 테넌트와 무관하게 읽는다(본인 레코드만)."""
+    if _db_available():
+        rows = _run_db(_db_fetch_join_requests_by_email(email))
+        return rows if isinstance(rows, list) else []
+    return [
+        row
+        for row in _read_file_rows("employee_join_requests")
+        if str(row.get("tenant_id") or "").strip() and str(row.get("email") or "").strip().lower() == email
+    ]
+
+
 def _require_hr_record(record: dict[str, Any] | None, user: dict[str, Any] | None, *, detail: str) -> dict[str, Any]:
     tenant_id = _tenant_id(user)
     if not record or str(record.get("tenant_id") or "").strip() != tenant_id:
@@ -2191,6 +2305,19 @@ def resolve_invite(token: str) -> dict[str, Any]:
 
 def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     invite = resolve_invite(str(payload.get("token") or ""))
+    # 초대 토큰이 가리키는 매장이 기준이다 — 본문 branch 로 다른 사업자에 갈아타지 못한다.
+    # upsert_join_request 가 그 사업자의 고용주 테넌트(매핑)에 요청을 귀속한다.
+    request = upsert_join_request(
+        {
+            "name": payload.get("name") or invite.get("name") or _email(user),
+            "email": _email(user),
+            "branch": invite.get("branch") or payload.get("branch") or "",
+            "phone": payload.get("phone") or invite.get("phone") or "",
+            "memo": payload.get("memo") or "전화번호 초대 링크로 회원가입",
+            "invite_id": invite.get("id"),
+        },
+        user,
+    )
     rows = _read("employee_invites")
     target = _find(rows, invite["id"])
     if target:
@@ -2198,27 +2325,25 @@ def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
         target["accepted_at"] = _now()
         target["accepted_email"] = _email(user)
         _write("employee_invites", rows)
-    request = upsert_join_request(
-        {
-            "name": payload.get("name") or invite.get("name") or _email(user),
-            "email": _email(user),
-            "branch": payload.get("branch") or invite.get("branch") or "",
-            "phone": payload.get("phone") or invite.get("phone") or "",
-            "memo": payload.get("memo") or "전화번호 초대 링크로 회원가입",
-            "invite_id": invite.get("id"),
-        },
-        user,
-    )
     return request
 
 
 def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = _read_hr("employee_join_requests", user)
-    return sorted(_filter_user(rows, user, "email"), key=lambda row: row.get("requested_at", ""), reverse=True)
+    from app.core.obys_tenant import is_legacy_obys_tenant
+
+    if is_legacy_obys_tenant(user):
+        rows = _read_hr("employee_join_requests", user)
+        return sorted(_filter_user(rows, user, "email"), key=lambda row: row.get("requested_at", ""), reverse=True)
+    # 레거시 테넌트가 아니면 직원 본인이다 — 가입요청은 고용주 테넌트에 있으므로 본인 이메일 것만 읽는다.
+    _tenant_id(user)
+    email = _email(user)
+    if not email:
+        return []
+    return sorted(_read_join_requests_by_email(email), key=lambda row: row.get("requested_at", ""), reverse=True)
 
 
 def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
-    rows = _read_hr("employee_join_requests", user)
+    _tenant_id(user)
     email = str(payload.get("email") or _email(user)).strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="직원 이메일이 필요합니다")
@@ -2226,6 +2351,9 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
     payload_branch = str(payload.get("branch") or "").strip()
     payload_branch = BRANCH_ALIASES.get(payload_branch, payload_branch)
     payload_business_id = str(payload.get("business_id") or "").strip() or str(BUSINESS_BY_BRANCH.get(payload_branch) or "")
+    # 요청 레코드는 호출자(직원)의 새 테넌트가 아니라 대상 사업자의 고용주 테넌트에 귀속한다.
+    scope_user = _join_request_scope(payload_business_id, email, user) if payload_business_id else user
+    rows = _read_hr("employee_join_requests", scope_user)
     same_email_rows = [row for row in rows if str(row.get("email") or "").strip().lower() == email]
     existing = None
     if not payload_business_id:
@@ -2255,6 +2383,10 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
     business_id = str(payload.get("business_id") or record.get("business_id") or BUSINESS_BY_BRANCH.get(branch) or "").strip()
     if branch and (business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id):
         raise HTTPException(status_code=400, detail="직원의 사업자와 지점 연결이 일치하지 않습니다")
+    if business_id and business_id != payload_business_id:
+        # 기존 요청에서 이어받은 사업자 — 읽은 테넌트와 다르면 다른 테넌트에 쓰지 않는다.
+        if _tenant_id(_join_request_scope(business_id, email, user)) != _tenant_id(scope_user):
+            raise HTTPException(status_code=403, detail="다른 테넌트의 데이터는 저장할 수 없습니다")
     record.update(
         {
             "name": str(payload.get("name") or record.get("name") or "").strip(),
@@ -2284,13 +2416,13 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
         record["requested_by"] = requester_email
     elif not existing:
         record["registered_by"] = requester_email
-    record = _owned_hr_record(record, user)
-    _write_hr_record("employee_join_requests", record, user)
+    record = _owned_hr_record(record, scope_user)
+    _write_hr_record("employee_join_requests", record, scope_user)
     return record
 
 
 def review_join_request(request_id: str, action: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:
-    _tenant_id(user)
+    _require_review_tenant(request_id, user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="가입요청 승인 권한이 없습니다")
     record = _require_hr_record(_find(_read_hr("employee_join_requests", user), request_id), user, detail="가입요청을 찾을 수 없습니다")
@@ -2607,7 +2739,7 @@ def _precheck_join_review(request_id: str, action: str, user: dict[str, Any]) ->
     승인 저장 뒤에 컨텍스트 오류가 나면 '승인됐는데 멤버십 없음' 이 남는다 — 그래서
     저장 전에 막는다(403/404, 아무것도 저장되지 않음).
     """
-    _tenant_id(user)
+    _require_review_tenant(request_id, user)
     record = _find(_read_hr("employee_join_requests", user), request_id)
     if record and action == "approved" and _join_request_allows_email_lookup(record):
         _require_employee_membership_context(record, user)

@@ -37,6 +37,14 @@ _TENANT_SCOPED_PREFIXES = (
     # 전부 _tenant(user) 로 JWT tenant_id 를 잡고 _require_business() 로 사업자
     # 귀속을 확인한다. 이 줄이 없어 신규 테넌트가 전표 호출마다 403 을 받았다.
     "/api/v1/yeoljeong-finance/journals",
+    # 직원 본인이 매장에 붙는 세 경로만 연다(2026-10-01 직원 가입요청 403 실측: 신규 가입자는
+    # 반드시 자기 새 테넌트를 받아 레거시 허용목록에 없다).  /employees 전체를 열지 않는다 —
+    # /employees/invites(목록·생성)·/employees/approved* 는 관리자 전용이라 종전 판정을 그대로 탄다.
+    # 서비스가 가입요청 레코드를 고용주 테넌트(사업자 매핑)에 귀속하고, 목록은 본인 이메일 레코드만,
+    # 승인·반려(PATCH /join-requests/{id}, 같은 prefix 에 걸린다)는 레코드 테넌트 == 호출자 테넌트일 때만 허용한다.
+    "/api/v1/yeoljeong-finance/employees/join-requests",
+    "/api/v1/yeoljeong-finance/employees/invites/resolve",
+    "/api/v1/yeoljeong-finance/employees/invites/accept",
 )
 
 # 계약서 서명 두 라우트만 연다 — 조회 GET /contracts/signing/{token}, 서명 POST
