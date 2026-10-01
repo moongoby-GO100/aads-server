@@ -92,6 +92,14 @@ def db(tmp_path, monkeypatch):
     async def fake_fetch_by_email(email):
         return [dict(r) for r in fake.rows if str(r.get("email") or "").lower() == email and fake.mapping.get(r.get("business_id")) == r["tenant_id"]]
 
+    async def fake_business_invite_info(business_id):
+        # 사업자·지점 검증은 DB 기준이다 — 매핑이 있는 사업자는 기본 사업자·지점 목록으로 응답한다.
+        if business_id not in fake.mapping:
+            return None
+        business = next((b for b in svc.CANONICAL_BUSINESSES if b["id"] == business_id), None)
+        branches = [name for name, owner in svc.BUSINESS_BY_BRANCH.items() if owner == business_id]
+        return {"name": business["name"] if business else business_id, "branches": branches}
+
     def run_db(coro):
         # 가짜 코루틴만 실행한다 — 그 밖의 DB 접근(감사 INSERT 등)은 실패(None)로 취급해 파일 폴백을 탄다.
         if coro.__name__.startswith("fake_"):
@@ -107,6 +115,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_db_business_tenant_matches", fake_business_tenant_matches)
     monkeypatch.setattr(svc, "_db_hr_record_tenant", fake_hr_record_tenant)
     monkeypatch.setattr(svc, "_db_fetch_join_requests_by_email", fake_fetch_by_email)
+    monkeypatch.setattr(svc, "_db_business_invite_info", fake_business_invite_info)
 
     fake.linked = []
 

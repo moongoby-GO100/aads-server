@@ -2509,6 +2509,34 @@ def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(_read_join_requests_by_email(email), key=lambda row: row.get("requested_at", ""), reverse=True)
 
 
+JOIN_BRANCH_MISMATCH_ERROR = "직원의 사업자와 지점 연결이 일치하지 않습니다"
+
+
+def _validate_join_business_branch(business_id: str, branch: str) -> None:
+    """가입요청의 사업자·지점이 유효한지 판정한다. accept_invite 도 _prepare_join_request 로 여기를 거친다.
+
+    DB 모드는 yeoljeong_businesses/branches 가 기준이라 새로 만든 사업자·지점도 통과한다.
+    파일 모드(DB 없음)는 종전 코드 상수 판정을 그대로 쓴다. 테넌트 격리 판정은 여기가 아니라
+    _join_request_scope·_owned_hr_record 가 맡는다.
+    """
+    if not (business_id and _db_available()):
+        if branch and (business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id):
+            raise HTTPException(status_code=400, detail=JOIN_BRANCH_MISMATCH_ERROR)
+        return
+    info = _business_invite_info(business_id)
+    if info is None:
+        raise HTTPException(status_code=400, detail="등록되지 않은 사업자입니다")
+    if not branch:
+        return
+    branches = list(info.get("branches") or [])
+    if branch in branches:
+        return
+    # 지점이 하나도 없는 사업자는 사업자 자체가 매장이다 — 지점 칸에 사업자명을 적은 경우만 같은 매장으로 본다.
+    if not branches and branch == str(info.get("name") or ""):
+        return
+    raise HTTPException(status_code=400, detail=JOIN_BRANCH_MISMATCH_ERROR)
+
+
 def _prepare_join_request(
     payload: dict[str, Any], user: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
@@ -2551,8 +2579,7 @@ def _prepare_join_request(
         str(payload.get("branch") or record.get("branch") or "").strip(),
     )
     business_id = str(payload.get("business_id") or record.get("business_id") or BUSINESS_BY_BRANCH.get(branch) or "").strip()
-    if branch and (business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id):
-        raise HTTPException(status_code=400, detail="직원의 사업자와 지점 연결이 일치하지 않습니다")
+    _validate_join_business_branch(business_id, branch)
     if business_id and business_id != payload_business_id:
         # 기존 요청에서 이어받은 사업자 — 읽은 테넌트와 다르면 다른 테넌트에 쓰지 않는다.
         if _tenant_id(_join_request_scope(business_id, email, user)) != _tenant_id(scope_user):
