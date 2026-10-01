@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Iterable, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
@@ -250,6 +251,95 @@ async def register_runner_llm_candidates(conn: Any, candidates: Sequence[tuple[s
     return inserted
 
 
+CHAT_ROUTE_KEY = "llm"
+CHAT_CANDIDATE_DISPLAY_ORDER = 200
+CHAT_CANDIDATE_NOTE = "자동 반영 후보 — 운영 화면에서 켜야 사용"
+_CHAT_EXCLUDED_CATEGORIES = frozenset({"embedding", "search", "research"})
+_CHAT_OK_STATUSES = frozenset({"verified", "ok"})
+_DATE_SNAPSHOT_RE = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+
+def select_chat_llm_candidates(
+    registry_rows: Iterable[Mapping[str, Any]],
+    existing_keys: set[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """llm_models 중 채팅 LLM 후보로 올릴 (provider, model_id) 를 고른다. 순수 함수.
+
+    existing_keys 는 route_key='llm' 에 이미 있는 (provider, model_id). 레지스트리의
+    model_id 또는 execution_model_id 가 거기 있으면 이미 반영된 것으로 본다.
+    """
+    seen = set(existing_keys)
+    picked: list[tuple[str, str]] = []
+    for row in registry_rows:
+        if row.get("retired_at") is not None:
+            continue
+        if not (row.get("is_active") and row.get("is_selectable") and row.get("is_executable")):
+            continue
+        if str(row.get("verification_status") or "") not in _CHAT_OK_STATUSES:
+            continue
+        category = str(row.get("category") or "")
+        if category in _CHAT_EXCLUDED_CATEGORIES or category.startswith("media"):
+            continue
+        provider = str(row.get("provider") or "")
+        model_id = str(row.get("model_id") or "")
+        if not provider or not model_id:
+            continue
+        if (
+            provider == "openai"
+            and row.get("discovery_source") == "openai_api"
+            and _DATE_SNAPSHOT_RE.search(model_id)
+        ):
+            continue
+        execution_id = str(row.get("execution_model_id") or "")
+        if (provider, model_id) in seen or (execution_id and (provider, execution_id) in seen):
+            continue
+        picked.append((provider, model_id))
+        seen.add((provider, model_id))
+        if execution_id:
+            seen.add((provider, execution_id))
+    return picked
+
+
+async def register_chat_llm_candidates(conn: Any) -> list[tuple[str, str]]:
+    """model_routing_preferences(llm) 에 is_enabled=false 후보로만 추가한다. 기존 행 불변, 멱등."""
+    registry_rows = await conn.fetch(
+        """
+        SELECT provider, model_id, execution_model_id, category, discovery_source,
+               is_active, is_selectable, is_executable, verification_status, retired_at
+        FROM llm_models
+        WHERE retired_at IS NULL
+        ORDER BY provider, model_id
+        """
+    )
+    existing = await conn.fetch(
+        "SELECT provider, model_id FROM model_routing_preferences WHERE route_key = $1",
+        CHAT_ROUTE_KEY,
+    )
+    existing_keys = {(str(r["provider"]), str(r["model_id"])) for r in existing or []}
+    inserted: list[tuple[str, str]] = []
+    for provider, model_id in select_chat_llm_candidates(registry_rows or [], existing_keys):
+        result = await conn.fetch(
+            """
+            INSERT INTO model_routing_preferences (
+                route_key, provider, model_id, display_order, is_enabled, is_default, notes, updated_by
+            )
+            VALUES ($1, $2, $3, $4, FALSE, FALSE, $5, $6)
+            ON CONFLICT (route_key, provider, model_id) DO NOTHING
+            RETURNING provider, model_id
+            """,
+            CHAT_ROUTE_KEY,
+            provider,
+            model_id,
+            CHAT_CANDIDATE_DISPLAY_ORDER,
+            CHAT_CANDIDATE_NOTE,
+            AUTO_DISCOVERY_ACTOR,
+        )
+        inserted.extend((str(r["provider"]), str(r["model_id"])) for r in result or [])
+    if inserted:
+        logger.info("cli_model_autoreg.chat_llm_registered %s", [f"{p}:{m}" for p, m in inserted])
+    return inserted
+
+
 async def _notify_verified(models: Sequence[str]) -> None:
     if not models:
         return
@@ -282,14 +372,16 @@ async def autoregister_after_sync(
         model_rows, existing_keys=existing_keys, verified_codex_ids=verified_codex_ids
     )
     runner_inserted = await register_runner_llm_candidates(conn, runner_candidates)
+    chat_inserted = await register_chat_llm_candidates(conn)
     newly_verified = [model_id for provider, model_id in runner_inserted if provider == "codex"]
     await _notify_verified(newly_verified)
     summary = {
+        "chat_llm_candidates_inserted": [f"{p}:{m}" for p, m in chat_inserted],
         "codex_new": [row["model_id"] for row in new_codex_rows],
         "codex_candidates_inserted": codex_inserted,
         "runner_candidates_inserted": [f"{p}:{m}" for p, m in runner_inserted],
         "verified_notified": newly_verified,
     }
-    if codex_inserted or runner_inserted:
+    if codex_inserted or runner_inserted or chat_inserted:
         logger.info("cli_model_autoreg.registered %s", summary)
     return summary

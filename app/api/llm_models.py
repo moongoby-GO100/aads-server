@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from app.core.db_pool import get_pool
+from app.services import cli_model_autoreg
 from app.services.model_registry import (
     list_provider_summaries,
     list_registered_models,
@@ -15,6 +17,8 @@ from app.services.model_registry import (
     sync_model_registry,
 )
 from app.services.ai_route_resolver import AI_ROUTE_KEYS, ROUTE_GROUPS
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/llm-models", tags=["llm-models"])
 
@@ -622,6 +626,11 @@ async def update_chat_model_preferences(items: list[ChatModelPreferenceInput]) -
 async def get_model_routing_preferences() -> dict[str, Any]:
     await _ensure_model_routing_preferences_table()
     pool = get_pool()
+    try:
+        async with pool.acquire() as conn:
+            await cli_model_autoreg.register_chat_llm_candidates(conn)
+    except Exception as exc:
+        logger.warning("llm_models.chat_llm_autosync_failed: %s", str(exc)[:200])
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """

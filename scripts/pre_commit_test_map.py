@@ -74,6 +74,17 @@ GROUPS: tuple[Group, ...] = (
         ),
     ),
     Group(
+        name="cli_model_autoreg",
+        tests=(
+            "tests/unit/test_cli_model_autoreg.py",
+            "tests/unit/test_cli_model_autoreg_chat_llm.py",
+        ),
+        globs=(
+            "app/services/cli_model_autoreg.py",
+            "app/api/llm_models.py",
+        ),
+    ),
+    Group(
         name="llm_quality",
         tests=("tests/unit/test_llm_model_quality.py",),
         globs=(

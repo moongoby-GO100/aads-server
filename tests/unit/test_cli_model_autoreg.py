@@ -127,6 +127,10 @@ class DbConn:
                 return []
             self.candidates[key] = {"status": "discovered", "product_name": args[1], "source": args[2]}
             return [{"model_id": args[0]}]
+        if "SELECT provider, model_id, execution_model_id" in query:
+            return []  # 채팅 LLM 후보 반영(register_chat_llm_candidates)은 별도 테스트에서 다룬다.
+        if "FROM model_routing_preferences WHERE route_key" in query:
+            return [{"provider": k[1], "model_id": k[2]} for k in self.routing if k[0] == args[0]]
         if "INSERT INTO model_routing_preferences" in query:
             assert "DO NOTHING" in query and "VALUES ($1, $2, $3, $4, FALSE, FALSE" in query
             key = (args[0], args[1], args[2])
