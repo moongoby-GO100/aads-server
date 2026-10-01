@@ -25,7 +25,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from index_docs import psql  # noqa: E402
+from index_docs import lit, psql, server_name  # noqa: E402
 
 RUN_LOG = os.getenv("DOC_INDEX_RUN_LOG", "/var/log/index_docs.log")
 MAX_AGE_H = float(os.getenv("DOC_INDEX_MAX_AGE_H", "24"))
@@ -55,6 +55,29 @@ def last_run_utc() -> dt.datetime | None:
     return None
 
 
+def last_run_db() -> dt.datetime | None:
+    """doc_index_runs 의 마지막 런 — 판정의 정본은 이 원장이다.
+
+    2026-10-01 실측. doc_index_runs 가 런 11회(2.5일) 비어 있는데도 이 감시는
+    계속 OK 였다 — ran_h 를 호스트 로그에서 읽었기 때문이다. 로그는 호스트에만
+    있고 로테이션되면 사라지므로 감시와 원장이 서로 다른 것을 보고 있었다.
+    판정은 DB 로 하고, 테이블이 없거나 비면 로그로 폴백한다.
+    """
+    try:
+        raw = psql(
+            f"SELECT max(ran_at) FROM doc_index_runs WHERE server={lit(server_name())};",
+            quiet=True,
+        ).strip()
+    except SystemExit:
+        return None
+    if not raw:
+        return None
+    try:
+        return dt.datetime.fromisoformat(raw).astimezone(dt.timezone.utc)
+    except ValueError:
+        return None
+
+
 def main() -> int:
     now = dt.datetime.now(dt.timezone.utc)
     raw = psql("SELECT max(indexed_at) FROM doc_chunks;").strip()
@@ -65,7 +88,9 @@ def main() -> int:
     else:
         fresh_h, fresh_s = float("inf"), "none"
 
-    run = last_run_utc()
+    run, src = last_run_db(), "db"
+    if run is None:
+        run, src = last_run_utc(), "log"
     if run is None:
         ran_h, ran_s = float("inf"), "none"
     else:
@@ -76,7 +101,7 @@ def main() -> int:
     verdict = "OK" if ok else "STALE"
     print(
         f"{now.astimezone(KST):%F %T} KST {verdict} "
-        f"ran={ran_s} fresh={fresh_s} limit={MAX_AGE_H:.0f}h",
+        f"ran={ran_s}({src}) fresh={fresh_s} limit={MAX_AGE_H:.0f}h",
         flush=True,
     )
     return 0 if ok else 1
