@@ -779,6 +779,7 @@ codex_pick_account_home() {
     python3 - "$state" <<'PY' || return 1
 import json
 import os
+import re
 import sys
 import time
 
@@ -789,11 +790,16 @@ except Exception:
     raise SystemExit(1)
 
 now = time.time()
+prefix = os.environ.get("AADS_CODEX_REVOKED_MARKER_PREFIX") or "/tmp/aads-codex-revoked-"
 best = None
 for acct in payload.get("accounts", []):
     if not isinstance(acct, dict):
         continue
     if not acct.get("is_active") or not acct.get("has_auth"):
+        continue
+    # 서버측 폐기(401 token_revoked)는 로컬 만료와 무관하다. codex_usage.py 가 state.json 에
+    # 내려주는 auth_usable 이 false 면 건너뛴다. 필드가 없으면(옛 state.json) 쓸 수 있는 것으로 본다.
+    if acct.get("auth_usable") is False:
         continue
     until = acct.get("rate_limited_until_epoch")
     try:
@@ -808,6 +814,15 @@ for acct in payload.get("accounts", []):
     name = acct.get("key_name") or ""
     if not name:
         continue
+    # 러너가 401 을 직접 본 계정의 계정별 마커(mark_codex_account_revoked). 전역 마커가 아니다.
+    marker = prefix + re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+    try:
+        with open(marker, "r", encoding="utf-8") as handle:
+            if float(handle.read().strip() or 0) > now:
+                continue
+        os.unlink(marker)
+    except (OSError, ValueError):
+        pass
     if best is None or prio < best[0]:
         best = (prio, name)
 
@@ -2019,6 +2034,44 @@ mark_codex_auth_disabled() {
     log "  CODEX_AUTH_DISABLED_SET reason=${reason:0:80} until_epoch=$until_ts ttl=${ttl}s"
 }
 
+# 서버가 계정 토큰을 폐기하면(401 token_revoked) 로컬 만료 검사로는 알 수 없고, 계정을
+# 1순위로 고르는 한 매 시도가 401 로 죽는다(2026-10-01 CODEX_OAUTH_JINAH). 전역 마커는
+# 2026-09-19 에 사다리 6칸을 통째로 skip 시킨 전력이 있어 쓰지 않고, 해당 계정만 제외한다.
+# 마커 경로 규칙(키 이름의 [^A-Za-z0-9_.-] → _)은 codex_pick_account_home 의 파이썬과 같다.
+codex_revoked_marker_path() {
+    local key="${1:-}"
+    key="${key//[^A-Za-z0-9_.-]/_}"
+    printf '%s%s' "${AADS_CODEX_REVOKED_MARKER_PREFIX:-/tmp/aads-codex-revoked-}" "$key"
+}
+
+# 실패한 codex 실행의 stderr/stdout 에서 서버측 폐기 신호를 찾는다. 401 과 폐기 문구가 둘 다
+# 있어야 한다. stdout 은 모델 본문이 섞일 수 있어 짧은 것(에러 본문 크기)만 본다.
+codex_failure_is_token_revoked() {
+    local err_file="${1:-}" out_file="${2:-}" f size
+    for f in "$err_file" "$out_file"; do
+        [[ -n "$f" && -s "$f" ]] || continue
+        if [[ "$f" == "$out_file" && "$f" != "$err_file" ]]; then
+            size=$(wc -c < "$f" 2>/dev/null || echo 999999)
+            [[ "$size" -le 4096 ]] || continue
+        fi
+        if grep -qiE 'token_revoked|invalidated oauth token|workspace routing discovery unauthorized' "$f" 2>/dev/null \
+           && grep -qE '(^|[^0-9])401([^0-9]|$)' "$f" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+mark_codex_account_revoked() {
+    local key="${1:-}" reason="${2:-http401_revoked}"
+    [[ -n "$key" ]] || return 0
+    local ttl="${AADS_CODEX_REVOKED_TTL:-${AADS_CODEX_AUTH_DISABLED_TTL:-7200}}"
+    [[ "$ttl" =~ ^[0-9]+$ ]] || ttl=7200
+    local until_ts=$(( $(date +%s) + ttl ))
+    printf '%s\n' "$until_ts" > "$(codex_revoked_marker_path "$key")" 2>/dev/null || true
+    log "  CODEX_ACCOUNT_REVOKED_SET key=$key reason=${reason:0:60} until_epoch=$until_ts ttl=${ttl}s"
+}
+
 # ── 사전 검증 (Pre-validation) ─────────────────────────────────────────
 pre_validate() {
     local job_id="$1" project="$2" session_id="$3"
@@ -3212,6 +3265,18 @@ ${safe_instruction}"
             if ! restore_runner_claude_output "$job_id" "$output_file"; then
                 exit_code=1
             fi
+        fi
+
+        # 서버측 토큰 폐기(401): 이 계정만 사다리에서 뺀다. 아래 루프가 "unauthorized" 로
+        # 즉시 폴백하므로 여기서는 표시만 한다. 다음 시도는 codex_pick_account_home 이 다른 계정을 고른다.
+        if [[ $exit_code -ne 0 && "$current_model" == codex:* && -n "${_codex_home:-}" ]] \
+           && codex_failure_is_token_revoked "$err_file" "$output_file"; then
+            local _revoked_key
+            _revoked_key="$(basename "$_codex_home")"
+            mark_codex_account_revoked "$_revoked_key" "http401_token_revoked"
+            db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 계정 ${_revoked_key} 토큰 폐기(401) → 해당 계정만 제외' WHERE job_id='${job_id}';"
+            # 고른 계정이 없을 때 이 홈이 export 된 채 남아 폐기 계정으로 다시 돌지 않게 한다.
+            [[ "${CODEX_HOME:-}" == "$_codex_home" ]] && unset CODEX_HOME
         fi
 
         # AADS-241: Codex 연결 재시도 (5초 x 12회 = 60초, 에러/리밋 즉시 폴백)

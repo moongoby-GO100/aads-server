@@ -49,6 +49,30 @@ def psql(sql: str) -> list[list[str]]:
     return [line.split("|") for line in out.stdout.strip().splitlines() if line]
 
 
+def snapshot_auth(key_name: str) -> str:
+    """최신 codex_usage_snapshots 의 가용성 표시. 조회가 안 되면 빈 문자열.
+
+    state.json 은 이 스크립트가 아니라 codex_usage.py 가 쓴다(db_accounts/write_state).
+    여기서는 계정을 구성할 때 운영자가 보는 줄에 같은 값을 보여줄 뿐이다.
+    """
+    k = key_name.replace("'", "")
+    for sql in (
+        "SELECT auth_usable, COALESCE(auth_revoked_reason,'') "
+        f"FROM codex_usage_snapshots WHERE key_name='{k}'",
+        f"SELECT auth_usable, '' FROM codex_usage_snapshots WHERE key_name='{k}'",
+    ):
+        try:
+            rows = psql(sql)
+        except (RuntimeError, OSError, subprocess.SubprocessError):
+            continue
+        if not rows:
+            return "auth_usable=없음(true 로 간주)"
+        usable = "true" if rows[0][0] == "t" else "false"
+        reason = rows[0][1] if len(rows[0]) > 1 else ""
+        return f"auth_usable={usable}" + (f" revoked={reason}" if reason else "")
+    return ""
+
+
 def decrypt(ciphertext: str) -> str:
     from cryptography.fernet import Fernet
 
@@ -138,7 +162,7 @@ def main() -> int:
         if apply:
             print(f"MAIN  {MAIN_KEY_NAME:<20} {_link_main()} -> {LEGACY_AUTH}")
         else:
-            print(f"PLAN  {MAIN_KEY_NAME:<20} -> {LEGACY_AUTH} (심볼릭 링크)")
+            print(f"PLAN  {MAIN_KEY_NAME:<20} -> {LEGACY_AUTH} (심볼릭 링크) {snapshot_auth(MAIN_KEY_NAME)}")
     else:
         print(f"WARN  {LEGACY_AUTH} 가 없다 — MAIN 계정 홈을 만들 수 없다")
 
@@ -149,7 +173,8 @@ def main() -> int:
         target = ACCOUNTS_ROOT / key_name / "auth.json"
 
         if target.exists() and not force:
-            print(f"KEEP  {key_name:<20} 계정 홈이 이미 있다 — 건드리지 않음 (재구성은 --force)")
+            print(f"KEEP  {key_name:<20} 계정 홈이 이미 있다 — 건드리지 않음 (재구성은 --force)"
+                  f" p{priority} active={is_active} {snapshot_auth(key_name)}")
             skipped += 1
             continue
 
@@ -167,7 +192,8 @@ def main() -> int:
             failed += 1
             continue
 
-        note = f"fp={fp(refresh)} account={account_id[:8]} p{priority} active={is_active} {label}"
+        note = (f"fp={fp(refresh)} account={account_id[:8]} p{priority} active={is_active} "
+                f"{snapshot_auth(key_name)} {label}")
         if not apply:
             print(f"PLAN  {key_name:<20} {note}")
             built += 1

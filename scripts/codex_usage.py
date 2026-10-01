@@ -35,6 +35,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -51,6 +52,20 @@ PSQL = ["/usr/bin/docker", "exec", "aads-postgres", "psql", "-U", "aads", "-d", 
 # resets_at 1789805594 == 2026-09-19 17:13:14 KST == 메시지의 5:13 PM).
 _RETRY_RE = re.compile(r"try again at ([A-Za-z]{3} \d{1,2}\w{2}, \d{4} \d{1,2}:\d{2} [AP]M)")
 _LIMIT_RE = re.compile(r"usage limit", re.I)
+
+# 서버측 토큰 폐기 신호. 2026-10-01 실측(CODEX_OAUTH_JINAH): 로컬 토큰은 멀쩡한데
+# 서버가 401 {"code":"token_revoked"} 로 거부했다. HTTP 401 과 아래 중 하나가
+# 같이 보여야 폐기로 본다 — 401 만으로는 일시적 인증 오류와 구분이 안 된다.
+_HTTP_401_RE = re.compile(r"(?<!\d)401(?!\d)")
+_REVOKED_SIGNALS = (
+    ("token_revoked", re.compile(r"token_revoked", re.I)),
+    ("invalidated_oauth_token", re.compile(r"invalidated oauth token", re.I)),
+    ("workspace_routing_unauthorized",
+     re.compile(r"workspace routing discovery unauthorized", re.I)),
+)
+REVOKED_NOTIFY_COOLDOWN_SEC = 6 * 3600
+NOTIFY_STATE_FILE = ACCOUNTS_ROOT / "revoked_notified.json"
+ENV_FILES = (Path("/root/aads/aads-server/.env"), Path("/root/aads/.env"))
 
 
 def psql(sql: str) -> list[list[str]]:
@@ -166,7 +181,18 @@ def collect(max_files_per_home: int = 40) -> dict:
     return acc
 
 
-def live_rate_limits(account_home: Path, timeout: int = 25) -> dict | None:
+def revoked_reason(text: str) -> str:
+    """서버 응답/에러 문자열에서 토큰 폐기 사유를 뽑는다. 없으면 빈 문자열.
+
+    돌려주는 값은 고정 태그뿐이다 — 원문은 절대 저장·출력하지 않는다(R-KEY).
+    """
+    if not text or not _HTTP_401_RE.search(text):
+        return ""
+    hits = [tag for tag, rx in _REVOKED_SIGNALS if rx.search(text)]
+    return ("401 " + "+".join(hits)) if hits else ""
+
+
+def live_probe(account_home: Path, timeout: int = 25) -> tuple[dict | None, str]:
     """codex app-server JSON-RPC 로 계정의 현재 한도를 직접 묻는다.
 
     rollout 파일 수집만으로는 값이 낡는다 — 한도에 걸린 호출은 사용률을 갱신해
@@ -174,27 +200,32 @@ def live_rate_limits(account_home: Path, timeout: int = 25) -> dict | None:
     토큰도 쓰지 않는다. 릴레이의 _query_codex_rate_limits() 와 같은 방식이며,
     다른 점은 CODEX_HOME 을 계정 홈으로 지정해 **계정별로** 묻는다는 것이다.
 
-    CLI 업데이트로 스키마가 바뀌어도 죽지 않게 방어적으로 읽고, 실패하면
-    None 을 돌려 호출부가 rollout 수집으로 되돌아가게 한다.
+    CLI 업데이트로 스키마가 바뀌어도 죽지 않게 방어적으로 읽는다. 돌려주는 값은
+    (한도 | None, 서버가 준 에러 문자열). 에러 문자열은 revoked_reason() 에만 넘기고
+    저장하지 않는다 — 서버측 폐기(401)는 이 문자열로만 알 수 있다.
     """
     import select
 
     if not (account_home / "auth.json").exists():
-        return None
+        return None, ""
     env = dict(os.environ, CODEX_HOME=str(account_home))
+    errlog = tempfile.TemporaryFile(mode="w+")
     try:
         proc = subprocess.Popen(
             [os.getenv("CODEX_BIN", "codex"), "app-server"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, env=env,
+            stderr=errlog, text=True, env=env,
         )
     except OSError:
-        return None
+        errlog.close()
+        return None, ""
 
     def send(obj):
         proc.stdin.write(json.dumps(obj) + "\n")
         proc.stdin.flush()
 
+    errs: list[str] = []
+    result = None
     deadline = time.time() + timeout
     try:
         send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -206,11 +237,14 @@ def live_rate_limits(account_home: Path, timeout: int = 25) -> dict | None:
                 continue
             line = proc.stdout.readline()
             if not line:
-                return None
+                break
             try:
                 msg = json.loads(line)
             except ValueError:
                 continue
+            if msg.get("error"):
+                errs.append(json.dumps(msg["error"], ensure_ascii=False)[:500])
+                break
             if stage == "init" and msg.get("id") == 1:
                 send({"jsonrpc": "2.0", "method": "notifications/initialized"})
                 send({"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read", "params": {}})
@@ -220,9 +254,9 @@ def live_rate_limits(account_home: Path, timeout: int = 25) -> dict | None:
                 rl = (msg.get("result") or {}).get("rateLimits") or {}
                 pri = rl.get("primary") or {}
                 if not pri:
-                    return None
+                    break
                 # 이름이 camelCase 다. rollout 쪽(snake_case)과 모양을 맞춰 돌려준다.
-                return {
+                result = {
                     "primary": {
                         "used_percent": pri.get("usedPercent"),
                         "window_minutes": pri.get("windowDurationMins"),
@@ -231,22 +265,39 @@ def live_rate_limits(account_home: Path, timeout: int = 25) -> dict | None:
                     "plan_type": rl.get("planType"),
                     "rate_limit_reached": rl.get("rateLimitReachedType") is not None,
                 }
-        return None
+                break
     except (OSError, ValueError):
-        return None
+        pass
     finally:
         try:
             proc.kill()
-        except OSError:
+            proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
             pass
+    try:
+        errlog.seek(0)
+        errs.append(errlog.read(4096))
+    except (OSError, ValueError):
+        pass
+    finally:
+        errlog.close()
+    return result, "\n".join(e for e in errs if e)
 
 
-def auth_usable(path: Path) -> bool:
+def live_rate_limits(account_home: Path, timeout: int = 25) -> dict | None:
+    return live_probe(account_home, timeout)[0]
+
+
+def auth_usable(path: Path, server_response: str = "") -> bool:
     """auth.json 이 '있다'가 아니라 '지금 쓸 수 있다'를 판정한다.
 
     2026-09-19: CODEX_OAUTH_JINAH 의 access_token 이 04:41 KST 에 만료됐는데
     has_auth 는 파일 존재만 봐서 true 였다. 러너(codex_pick_account_home)가
     그 계정을 1순위로 골라 매 시도를 401 로 태웠다. 만료분은 false 로 준다.
+
+    2026-10-01: 로컬 만료 검사만으로는 서버측 폐기를 못 잡는다 — JINAH 는 토큰이
+    살아 있는데 서버가 401 token_revoked 로 거부했고 스냅샷은 auth_usable=true 였다.
+    server_response(서버가 준 에러 문자열)에 폐기 신호가 있으면 false 로 준다.
     """
     try:
         payload = json.loads(path.read_text())
@@ -256,21 +307,99 @@ def auth_usable(path: Path) -> bool:
         exp = json.loads(base64.urlsafe_b64decode(chunk)).get("exp", 0)
     except Exception:  # noqa: BLE001 — 파일 없음/형식 변경 모두 '못 쓴다'로 본다
         return False
-    return float(exp) > time.time() + 60
+    if float(exp) <= time.time() + 60:
+        return False
+    return not revoked_reason(server_response)
+
+
+def resolve_revoked(prev_reason: str, prev_at: float | None, probe_reason: str,
+                    probe_ok: bool, auth_mtime: float | None, now: float) -> tuple[str, float | None]:
+    """이번 수집의 폐기 판정 (사유, 감지 시각 epoch). 사유가 비면 폐기 아님.
+
+    - 이번에 폐기 신호를 받았다 → 폐기. 이미 폐기 중이었으면 감지 시각은 유지한다.
+    - 실시간 조회가 성공했다 → 서버가 지금 받아준다는 뜻이므로 해제.
+    - 결론이 안 나는 조회(타임아웃·CLI 없음)는 이전 판정을 유지해 깜박이지 않게 한다.
+      단 감지 뒤에 auth.json 이 다시 쓰였으면(재로그인) 이전 판정은 낡은 것이라 버린다.
+    """
+    if probe_reason:
+        return probe_reason, (prev_at if prev_reason and prev_at else now)
+    if probe_ok:
+        return "", None
+    if prev_reason and prev_at and not (auth_mtime and auth_mtime > prev_at):
+        return prev_reason, prev_at
+    return "", None
+
+
+def effective_auth_usable(has_auth: bool, snap_usable: bool, reason: str,
+                          revoked_at: float | None, auth_mtime: float | None) -> bool:
+    """state.json 에 내릴 auth_usable. 스냅샷이 없으면 호출부가 snap_usable=True 를 준다.
+
+    폐기 사유가 남아 있어도 그 뒤에 auth.json 이 다시 쓰였다면(재로그인) 로컬 판정만 본다 —
+    다음 10분 수집을 기다리지 않고 바로 사다리에 복귀시키기 위해서다.
+    """
+    if not has_auth:
+        return False
+    if reason:
+        return bool(revoked_at and auth_mtime and auth_mtime > revoked_at)
+    return snap_usable
+
+
+# 스냅샷을 붙여 읽는 질의. 폐기 사유 컬럼(마이그레이션 20261001)이 아직 없는 DB 에서도
+# 죽지 않도록 한 단계씩 물러난다 — state.json 갱신이 멈추면 릴레이가 낡은 한도를 쓴다.
+_DB_ACCOUNTS_SELECTS = (
+    "SELECT k.key_name, COALESCE(k.label,''), k.priority, k.is_active, "
+    "COALESCE(EXTRACT(EPOCH FROM k.rate_limited_until)::bigint::text,''), "
+    "COALESCE(s.auth_usable::text,''), COALESCE(s.auth_revoked_reason,''), "
+    "COALESCE(EXTRACT(EPOCH FROM s.auth_revoked_at)::bigint::text,'') "
+    "FROM llm_api_keys k LEFT JOIN codex_usage_snapshots s ON s.key_name = k.key_name "
+    "WHERE k.provider='codex' ORDER BY k.priority ASC, k.id ASC",
+    "SELECT k.key_name, COALESCE(k.label,''), k.priority, k.is_active, "
+    "COALESCE(EXTRACT(EPOCH FROM k.rate_limited_until)::bigint::text,''), "
+    "COALESCE(s.auth_usable::text,''), '', '' "
+    "FROM llm_api_keys k LEFT JOIN codex_usage_snapshots s ON s.key_name = k.key_name "
+    "WHERE k.provider='codex' ORDER BY k.priority ASC, k.id ASC",
+    "SELECT key_name, COALESCE(label,''), priority, is_active, "
+    "COALESCE(EXTRACT(EPOCH FROM rate_limited_until)::bigint::text,''), '', '', '' "
+    "FROM llm_api_keys WHERE provider='codex' ORDER BY priority ASC, id ASC",
+)
+
+
+def _auth_mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
 
 
 def db_accounts() -> list[dict]:
-    rows = psql(
-        "SELECT key_name, COALESCE(label,''), priority, is_active, "
-        "COALESCE(EXTRACT(EPOCH FROM rate_limited_until)::bigint::text,'') "
-        "FROM llm_api_keys WHERE provider='codex' ORDER BY priority ASC, id ASC"
-    )
-    return [{
-        "key_name": r[0], "label": r[1], "priority": int(r[2]),
-        "is_active": r[3] == "t",
-        "rate_limited_until_epoch": int(r[4]) if r[4] else None,
-        "has_auth": auth_usable(ACCOUNTS_ROOT / r[0] / "auth.json"),
-    } for r in rows]
+    rows = None
+    for i, sql in enumerate(_DB_ACCOUNTS_SELECTS):
+        try:
+            rows = psql(sql)
+            break
+        except RuntimeError:
+            if i == len(_DB_ACCOUNTS_SELECTS) - 1:
+                raise
+    out = []
+    for r in rows:
+        auth_path = ACCOUNTS_ROOT / r[0] / "auth.json"
+        has_auth = auth_usable(auth_path)
+        # 스냅샷이 없으면 보수적으로 true — 기존 동작을 깨지 않는다.
+        snap_usable = r[5] != "f"
+        reason = r[6]
+        revoked_at = float(r[7]) if r[7] else None
+        out.append({
+            "key_name": r[0], "label": r[1], "priority": int(r[2]),
+            "is_active": r[3] == "t",
+            "rate_limited_until_epoch": int(r[4]) if r[4] else None,
+            "has_auth": has_auth,
+            # has_auth 는 로컬 만료만 본다(기존 계약). auth_usable 은 서버측 폐기까지 반영한다.
+            "auth_usable": effective_auth_usable(
+                has_auth, snap_usable, reason, revoked_at, _auth_mtime(auth_path)),
+            "auth_revoked_reason": reason,
+            "auth_revoked_at_epoch": revoked_at,
+        })
+    return out
 
 
 def write_state(accounts: list[dict]) -> None:
@@ -316,6 +445,31 @@ auth_usable=EXCLUDED.auth_usable, collected_at=NOW()
 """
 
 
+_SNAPSHOT_UPSERT_REVOKE = """
+INSERT INTO codex_usage_snapshots
+(key_name, used_percent, window_minutes, resets_at, snapshot_at,
+ ok_72h, limit_72h, sessions, tokens_recent, auth_usable, collected_at,
+ auth_revoked_reason, auth_revoked_at)
+VALUES ('{k}', {used}, {win}, {resets}, {snap_at}, {ok}, {lim}, {sess}, {tok}, {auth}, NOW(),
+ {rreason}, {rat})
+ON CONFLICT (key_name) DO UPDATE SET
+used_percent=EXCLUDED.used_percent, window_minutes=EXCLUDED.window_minutes,
+resets_at=EXCLUDED.resets_at, snapshot_at=EXCLUDED.snapshot_at,
+ok_72h=EXCLUDED.ok_72h, limit_72h=EXCLUDED.limit_72h,
+sessions=EXCLUDED.sessions, tokens_recent=EXCLUDED.tokens_recent,
+auth_usable=EXCLUDED.auth_usable, collected_at=NOW(),
+auth_revoked_reason=EXCLUDED.auth_revoked_reason, auth_revoked_at=EXCLUDED.auth_revoked_at
+"""
+
+# 컬럼이 없는 DB 에서 한 번 실패하면 이후 호출은 옛 UPSERT 로 바로 간다.
+_revoke_columns_ok = True
+
+
+def _sql_reason(reason: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_ +().-]", "", reason or "")[:120]
+    return f"'{safe}'" if safe else "NULL"
+
+
 def push_snapshots(accounts: list[dict], usage: dict) -> None:
     """계정별 최신 사용량을 DB 에 올린다 — API 컨테이너는 호스트 파일을 못 본다."""
     for a in accounts:
@@ -323,7 +477,8 @@ def push_snapshots(accounts: list[dict], usage: dict) -> None:
         snap = (u.get("snapshot") or {}).get("primary") or {}
         used = a.get("used_percent")
         resets = snap.get("resets_at")
-        psql(_SNAPSHOT_UPSERT.format(
+        revoked_at = a.get("auth_revoked_at_epoch")
+        fields = dict(
             k=a["key_name"],
             used="NULL" if used is None else f"{float(used):.1f}",
             win=snap.get("window_minutes") or "NULL",
@@ -334,8 +489,22 @@ def push_snapshots(accounts: list[dict], usage: dict) -> None:
             # 한도가 남아도 자격증명이 죽었으면 쓸 수 없는 계정이다. API 컨테이너는
             # 호스트의 auth.json 을 못 보므로 이 값이 유일한 판단 근거다
             # (2026-09-19: JINAH 한도 37% 인데 토큰 만료로 호출이 전부 실패했다).
-            auth="TRUE" if a.get("has_auth") else "FALSE",
-        ))
+            # 2026-10-01: 서버측 폐기(401 token_revoked)도 여기서 false 가 된다.
+            auth="TRUE" if a.get("auth_usable", a.get("has_auth")) else "FALSE",
+        )
+        global _revoke_columns_ok
+        if _revoke_columns_ok:
+            try:
+                psql(_SNAPSHOT_UPSERT_REVOKE.format(
+                    rreason=_sql_reason(a.get("auth_revoked_reason", "")),
+                    rat=f"to_timestamp({int(revoked_at)})" if revoked_at else "NULL",
+                    **fields))
+                continue
+            except RuntimeError as exc:
+                if "auth_revoked" not in str(exc):
+                    raise
+                _revoke_columns_ok = False
+        psql(_SNAPSHOT_UPSERT.format(**fields))
 
 
 def push_rate_limit_epoch(key_name: str, resets_at) -> None:
@@ -368,6 +537,110 @@ def push_last_used(accounts: list[dict]) -> None:
              % (stamp, a["key_name"], stamp))
 
 
+def _telegram_creds() -> tuple[str, str]:
+    """codex_auth_sync.sh 의 load_telegram_creds 와 같은 방식 — .env 에서 두 줄만 뽑는다."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat = os.getenv("TELEGRAM_CHAT_ID", "")
+    for f in ENV_FILES:
+        try:
+            lines = f.read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+                if line.startswith(name + "="):
+                    val = line[len(name) + 1:].strip().strip("\"'")
+                    if val and name == "TELEGRAM_BOT_TOKEN":
+                        token = val
+                    elif val:
+                        chat = val
+    return token, chat
+
+
+def send_telegram(text: str) -> bool:
+    """텔레그램 통보. 성공 여부를 돌려준다 — 실패한 통보를 보낸 것으로 기록하면 안 된다.
+
+    자격증명·엔드포인트는 codex_auth_sync.sh 의 send_telegram 과 같다(같은 봇).
+    """
+    import urllib.parse
+    import urllib.request
+
+    token, chat = _telegram_creds()
+    if not token or not chat:
+        return False
+    body = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
+    try:
+        with urllib.request.urlopen(
+                urllib.request.Request(
+                    f"https://api.telegram.org/bot{token}/sendMessage", data=body),
+                timeout=10) as resp:
+            return resp.status == 200
+    except Exception:  # noqa: BLE001 — 예외 문자열에 URL(=토큰)이 들어가므로 삼킨다
+        return False
+
+
+def _load_notify_state() -> dict:
+    try:
+        data = json.loads(NOTIFY_STATE_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_notify_state(state: dict) -> None:
+    try:
+        ACCOUNTS_ROOT.mkdir(parents=True, exist_ok=True)
+        tmp = NOTIFY_STATE_FILE.with_name(NOTIFY_STATE_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        tmp.replace(NOTIFY_STATE_FILE)
+    except OSError:
+        pass
+
+
+def notify_revoked(accounts: list[dict], now: float, sender=None) -> list[str]:
+    """폐기를 새로 감지한 계정만 통보한다. 통보한 key_name 목록을 돌려준다.
+
+    - 같은 폐기 상태가 이어지는 동안은 다시 보내지 않는다(active).
+    - 풀렸다가 다시 폐기돼도 마지막 통보로부터 6시간이 안 지났으면 보내지 않는다.
+    - 전송이 실패하면 기록하지 않아 다음 수집(10분)에 다시 시도한다.
+    상태는 DB 가 아니라 파일에 둔다 — 마이그레이션 전에도 통보 규칙이 지켜져야 한다.
+    """
+    sender = sender or send_telegram
+    state = _load_notify_state()
+    sent: list[str] = []
+    for a in accounts:
+        key = a["key_name"]
+        entry = state.get(key) if isinstance(state.get(key), dict) else {}
+        reason = a.get("auth_revoked_reason") or ""
+        if not reason:
+            if entry.get("active"):
+                entry["active"] = False
+                state[key] = entry
+            continue
+        if entry.get("active"):
+            continue
+        last = float(entry.get("notified_at") or 0)
+        if last and now - last < REVOKED_NOTIFY_COOLDOWN_SEC:
+            entry["active"] = True
+            state[key] = entry
+            continue
+        when = datetime.fromtimestamp(a.get("auth_revoked_at_epoch") or now, KST)
+        msg = (
+            "🚨 [Codex] 계정 토큰 서버측 폐기 감지\n"
+            f"계정: {key} ({a.get('label') or '-'})\n"
+            f"사유: {reason}\n"
+            f"감지 시각: {when.strftime('%Y-%m-%d %H:%M KST')}\n"
+            f"조치: 해당 계정으로 `codex login` 재로그인이 필요하다 "
+            f"(CODEX_HOME={ACCOUNTS_ROOT}/{key}).\n"
+            "러너 사다리에서는 자동 제외됐고 is_active 는 바꾸지 않았다."
+        )
+        if sender(msg):
+            state[key] = {"active": True, "notified_at": now}
+            sent.append(key)
+    _save_notify_state(state)
+    return sent
+
+
 def clear_rate_limit(key_name: str) -> None:
     """계정이 지금 멀쩡하면 남은 정지 표시를 지운다."""
     psql("UPDATE llm_api_keys SET rate_limited_until=NULL, updated_at=NOW() "
@@ -398,8 +671,16 @@ def main() -> int:
     for a in accounts:
         u = usage.get(a["key_name"], {})
         # 실시간 조회를 먼저 쓴다. 실패하면 rollout 수집값으로 되돌아간다.
-        live = live_rate_limits(ACCOUNTS_ROOT / a["key_name"])
+        live, probe_err = live_probe(ACCOUNTS_ROOT / a["key_name"])
         a["live"] = live
+        # 서버측 폐기 판정. 로컬 만료(has_auth)와 별개로 서버가 401 로 거부했는지 본다.
+        auth_path = ACCOUNTS_ROOT / a["key_name"] / "auth.json"
+        reason, revoked_at = resolve_revoked(
+            a.get("auth_revoked_reason", ""), a.get("auth_revoked_at_epoch"),
+            revoked_reason(probe_err), live is not None, _auth_mtime(auth_path), now)
+        a["auth_revoked_reason"] = reason
+        a["auth_revoked_at_epoch"] = revoked_at
+        a["auth_usable"] = a["has_auth"] and not reason
         if live:
             u = dict(u)
             u["snapshot"] = live
@@ -453,6 +734,13 @@ def main() -> int:
         write_state(accounts)
         push_snapshots(accounts, usage)
         push_last_used(accounts)
+        # is_active 는 건드리지 않는다 — 계정 비활성화는 CEO 승인 사항이다.
+        # 여기서는 가용성 false 기록(위)과 통보까지만 한다.
+        try:
+            for key in notify_revoked(accounts, now):
+                print(f"폐기 통보 발송: {key}")
+        except Exception as exc:  # noqa: BLE001 — 통보 실패가 수집을 막으면 안 된다
+            print(f"폐기 통보 실패: {type(exc).__name__}")
 
     if args.json:
         print(json.dumps(accounts, ensure_ascii=False, indent=2))
@@ -465,6 +753,8 @@ def main() -> int:
         limited = a["rate_limited_until_epoch"] and a["rate_limited_until_epoch"] > now
         if not a["has_auth"]:
             status = "자격없음"
+        elif a.get("auth_revoked_reason"):
+            status = "토큰폐기"
         elif not a["is_active"]:
             status = "비활성"
         elif limited:

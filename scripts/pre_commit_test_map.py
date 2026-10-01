@@ -99,6 +99,7 @@ GROUPS: tuple[Group, ...] = (
             "tests/unit/test_pipeline_runner_approval_patchid_inherit.py",
             "tests/unit/test_pipeline_runner_rebase_requeue_guard.py",
             "tests/unit/test_pipeline_runner_autoheal_successor_follow.py",
+            "tests/unit/test_codex_token_revoked_detect.py",
             "tests/unit/test_deploy_lock_renew.py",
             "tests/unit/test_stale_approval_trigger_guard.py",
         ),
@@ -108,6 +109,16 @@ GROUPS: tuple[Group, ...] = (
             "app/api/pipeline_runner.py",
             "scripts/pipeline-runner.sh",
             "scripts/pipeline-runner.sh.local",
+        ),
+    ),
+    Group(
+        name="codex_auth_revoked",
+        tests=("tests/unit/test_codex_token_revoked_detect.py",),
+        globs=(
+            "scripts/codex_usage.py",
+            "scripts/materialize_codex_accounts.py",
+            "migrations/20261001_codex_usage_snapshots_auth_revoked.sql",
+            "migrations/rollback/20261001_codex_usage_snapshots_auth_revoked.down.sql",
         ),
     ),
     Group(
