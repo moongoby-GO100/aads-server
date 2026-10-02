@@ -4120,3 +4120,103 @@ async def ops_llm_comparisons(
         },
         "generated_at": datetime.now(KST).isoformat(),
     }
+
+
+AI_RESPONSE_ERROR_KINDS = (
+    "fallback_exhausted",
+    "llm_outage",
+    "interrupted",
+    "low_quality",
+    "error_book_chat",
+)
+
+
+@router.get(
+    "/ops/ai-response-errors",
+    dependencies=[Depends(require_internal_admin)],
+)
+async def ops_ai_response_errors(
+    since: Optional[datetime] = Query(None, description="occurred_at 하한(기본: 7일 전)"),
+    kind: Optional[str] = Query(
+        None,
+        description="fallback_exhausted | llm_outage(전체 LLM 장애 접두 일치) | interrupted(장애 아닌 중단) | low_quality | error_book_chat",
+    ),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """AI 응답 오류 통합 조회(읽기 전용). VIEW ai_response_errors 를 읽는다."""
+    if kind is not None and kind not in AI_RESPONSE_ERROR_KINDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"kind must be one of {list(AI_RESPONSE_ERROR_KINDS)}",
+        )
+    if since is None:
+        since = datetime.now(timezone.utc) - timedelta(days=7)
+    elif since.tzinfo is None:
+        since = since.replace(tzinfo=KST)
+
+    try:
+        conn = await _get_conn()
+        try:
+            summary_rows = await conn.fetch(
+                """
+                SELECT kind, COUNT(*) AS cnt, MIN(occurred_at) AS first_at, MAX(occurred_at) AS last_at
+                FROM ai_response_errors
+                WHERE occurred_at >= $1::timestamptz
+                  AND ($2::text IS NULL OR kind = $2::text)
+                GROUP BY kind
+                """,
+                since, kind,
+            )
+            rows = await conn.fetch(
+                """
+                SELECT kind, occurred_at, source_table, source_id, session_id,
+                       model_used, summary, detail, error_book_key
+                FROM ai_response_errors
+                WHERE occurred_at >= $1::timestamptz
+                  AND ($2::text IS NULL OR kind = $2::text)
+                ORDER BY occurred_at DESC, source_id DESC
+                LIMIT $3::int
+                """,
+                since, kind, limit,
+            )
+        finally:
+            await conn.close()
+    except asyncpg.UndefinedTableError:
+        raise HTTPException(status_code=503, detail="ai_response_errors view not installed")
+    except Exception as e:
+        logger.error("ops_ai_response_errors_error", error=str(e))
+        raise HTTPException(status_code=500, detail="ai response errors query failed")
+
+    by_kind = {
+        r["kind"]: {
+            "count": int(r["cnt"]),
+            "first_at": _iso_or_none(r["first_at"]),
+            "last_at": _iso_or_none(r["last_at"]),
+        }
+        for r in summary_rows
+    }
+    items = [
+        {
+            "kind": r["kind"],
+            "occurred_at": _iso_or_none(r["occurred_at"]),
+            "source_table": r["source_table"],
+            "source_id": r["source_id"],
+            "session_id": str(r["session_id"]) if r["session_id"] else None,
+            "model_used": r["model_used"],
+            "summary": r["summary"],
+            "detail": _coerce_json(r["detail"]),
+            "error_book_key": r["error_book_key"],
+        }
+        for r in rows
+    ]
+    return {
+        "summary": {
+            "total": sum(v["count"] for v in by_kind.values()),
+            "by_kind": by_kind,
+        },
+        "items": items,
+        "count": len(items),
+        "limit": limit,
+        "filters": {"since": since.isoformat(), "kind": kind},
+        "generated_at": datetime.now(KST).isoformat(),
+    }
