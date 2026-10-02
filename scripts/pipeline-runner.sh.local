@@ -1752,6 +1752,11 @@ deploy_isolated_git_preflight() {
     fi
     head_sha=$(git -C "$worktree_root" rev-parse HEAD 2>/dev/null) || head_sha=""
     worktree_status=$(git -C "$worktree_root" status --porcelain --untracked-files=all 2>/dev/null) || worktree_status="status_failed"
+    # 러너 자신이 남기는 산출물 한 경로만 제외한다(.gitignore 비의존 — dashboard 는 무시 규칙이 없다).
+    # 추적 상태로 수정된 경우(" M ...")나 다른 untracked 파일은 그대로 차단한다.
+    if [[ "$worktree_status" != "status_failed" ]]; then
+        worktree_status=$(printf '%s\n' "$worktree_status" | grep -vxF -- '?? .runner_full_diff.patch' | sed '/^$/d') || true
+    fi
     if [[ -n "$worktree_status" ]]; then
         # dirty 는 patch-id 로 구제하지 않는다 — 커밋되지 않은 변경은 승인 대상이 아니다.
         dirty_head=$(printf '%s\n' "$worktree_status" | sed -n '1,5p' | tr '\n' '|')
