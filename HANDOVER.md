@@ -1,3 +1,24 @@
+## 2026-10-02 — session_relay 고아 pending 회수: 재개된 대상 응답을 답으로 수거해 회신 (AADS-SESSION-RELAY-RESUME-ORPHAN-20261002)
+
+**원인(코드 확정).** `ask()` 가 띄운 `_run_relay` 는 프로세스 안 asyncio 태스크라 블루그린 컷오버로 사라진다. 대상 응답은 `main.py` execution_resume 스캐너가 다른 프로세스에서 이어 써 완성하는데 relay 행은 그 execution 을 몰랐고, `dispatch_queued_relays` 는 queued/blocked 만 처리해 pending 을 회수하는 경로가 없었다. `_pair_in_flight` 가 pending 을 2시간 막아 같은 쌍의 새 질문도 막혔다(relay 9fe3c45c·b9c0ff35).
+
+**execution_resume 의 execution_id 재사용 여부(확인 결과): 재사용한다.** `main.py:3100` `_resume_single_stream(..., execution_id=execution_id)` 가 원 execution_id 를 그대로 넘기고, 완료 시 `chat_service._save_and_update_session(execution_id=_execution_uuid)` 가 같은 execution_id 의 `streaming_placeholder` 를 최종 메시지로 UPDATE 한다(`chat_service.py` 11623행~). 새 id 를 만들지 않으므로 별도 연결 컬럼은 필요 없고 `execution_id` 하나로 완성본을 찾는다. 단, 더 새 사용자 메시지에 밀려 superseded 된 경우는 그 execution 이 답 없이 종료 → `orphaned_no_answer`.
+
+**변경(코드 완료, 커밋 전 — Runner 가 승인 후 commit/push).** STEP 0 분류:
+- 수정 `app/services/session_relay.py`
+  - `_run_relay`: 스트림에서 execution_id 를 잡는 즉시 `_record_target_execution` 으로 `session_relay.target_execution_id` 기록(컬럼 없으면 경고만, 릴레이는 계속). 시작/종료에 `_active_relays` 등록/해제(finally). 회신 전 `_claim_reply` 로 배달권 선점 — 선점 실패(고아 회수가 먼저 집음/운영이 닫음)면 배달하지 않는다. 성공 시 `pending_reply=NULL`.
+  - 신규 `_format_reply`: 회신 포맷을 `_run_relay` 에서 그대로 추출(문구 불변) — 회수 경로와 공유.
+  - 신규 `reconcile_orphan_relays` / `_reconcile_relay` / `_orphan_candidates` / `_find_tagged_execution` / `_execution_answer` / `_fail_orphan`: `status='pending' AND pending_reply IS NULL`, 생성 후 `SESSION_RELAY_ORPHAN_AFTER_SEC`(120) 이상, `SESSION_RELAY_ORPHAN_MAX_AGE_HOURS`(6) 이내인 행 중 이 프로세스 `_active_relays` 에 없는 것. ① `target_execution_id` 가 있으면 그 execution ② 없으면 대상 세션에서 `(relay_id=<id>)` 표식이 마지막에 붙은 user 메시지 → `chat_turn_executions.user_message_id` 로 execution 을 특정(찾으면 컬럼에 기록). 답은 그 execution 의 assistant 메시지 중 `_NOT_ANSWER_INTENTS` 가 아니고 비어 있지 않은 최신 것. execution 이 running/retrying 이면 대기, 종료됐는데 답이 없으면 `failed(error='orphaned_no_answer')`. execution 정보를 끝내 못 찾으면 `SESSION_RELAY_ORPHAN_GIVEUP_SEC`(1800) 까지 대기, 이후 대상이 안 바쁘면 failed. "최근 assistant 메시지" 추정은 쓰지 않는다.
+  - 중복 회신 방지: 배달 전 `UPDATE ... SET pending_reply=… WHERE id=$1 AND status='pending' AND pending_reply IS NULL` 로 선점(살아 있는 태스크·회수·다중 프로세스가 같은 단일 관문). 배달은 기존 `_resume_blocked_reply` 를 별도 태스크로 재사용(원 세션이 바쁘면 최대 10분 대기하므로 사이클을 붙잡지 않음; 멈춘 목표면 blocked 로 넘어가 기존 해제 경로가 이어받음).
+  - `dispatch_queued_relays`: 맨 끝에서 `reconcile_orphan_relays` 호출(예외는 사이클을 막지 않음), 반환 dict 에 `reclaimed`·`orphan_failed` 추가(기존 키 유지). 로그 `session_relay_orphan_reclaimed` / `session_relay_orphan_failed`(relay·target·method).
+- 신규 `migrations/20261002_session_relay_target_execution.sql`: `ADD COLUMN IF NOT EXISTS target_execution_id uuid` + pending 부분 인덱스. DROP 없음, 롤백 파일 없음(NULL 허용 컬럼이라 남겨 둬도 무해). **운영 DB 에는 적용하지 않았다 — 릴리스 때 적용.** 적용 전에도 코드는 relay_tag 경로로 동작한다.
+- 삭제 없음. `app/main.py` 는 변경 없음(기존 30초 `dispatch_queued_relays` 주기에 얹음).
+- 기존 테스트 수정 2곳(삭제 아님): `test_session_relay.py` 의 `test_reply_tells_what_to_do_next`, `test_marker_roundtrip_for_question_and_reply` 가 `_run_relay` 소스에서 회신 문구/표식을 찾았는데 그 문구를 `_format_reply` 로 옮겼으므로 `_format_reply` 소스를 검사하도록 바꿨다.
+
+**검증.** `bash scripts/run_unit_tests.sh` — 신규 `tests/unit/test_session_relay_orphan.py` 19건(태스크 소멸+재개 후 완성 답 → answered·회신 1회 / placeholder·running → pending 유지 / 종료·답 없음 → failed / 같은 relay 순차·동시 reconcile → 회신 1회 / 살아 있는 로컬 태스크 skip / relay_tag 경로 / 실행 정보 없음 대기→포기 / 컬럼 없음 폴백 / 무관 메시지 미사용 / blocked 복귀 / `_run_relay` 기록·선점·finally / dispatch 연결 / 마이그레이션 무DROP) + `test_session_relay.py` + `test_goal_pause_all_paths.py` + `test_session_notify.py` + `test_standby_session_ownership.py` + `test_ask_session_origin_binding.py` **103 passed**, `test_tools_and_pipeline.py` + `test_dup_guard.py` **104 passed**. ruff F821/F811 통과, compileall 통과.
+
+**남은 미검증 / 알고 둔 것.** 운영 DB·실제 컷오버로는 재현하지 않았다(가짜 풀 단위 테스트). `_NOT_ANSWER_INTENTS` 는 `_run_relay` 지역 목록과 같은 값의 사본이다(테스트가 대조) — 바꿀 땐 둘 다. 6시간보다 묵은 기존 pending(운영에 230건대로 쌓인 과거 행)은 일부러 건드리지 않았다 — 며칠 전 답을 지금 회신하면 맥락이 달라 엉뚱한 답이 된다. 정리가 필요하면 별도 작업. 같은 프로세스에서 스트림이 답 없이 끝난 relay 는 기존대로 즉시 failed("대상 세션이 답을 완성하지 못했다")이고 이후 재개로 완성돼도 되살리지 않는다 — 범위 밖. 오류 사전 등록은 하지 않았다(운영 재현 전 추측 기재 금지, R-ERRBOOK).
+
 ## 2026-10-02 — PC 레인 browser_eval 시한 · late result 재사용 · 시한 뒤 명령 중단 · close 대상 검증 (AADS-PCLANE-EVAL-DEADLINE-CLOSEGUARD-20261002)
 
 **원인(코드 확정).** (1) `_LocalAgentPage.goto` 가 navigate 성공 뒤 항상 href 확인 `browser_eval` 을 보내, 잔여 시간과 무관하게 90초 상한(`run_with_pc_agent_deadline`)을 태웠다. (2) 명령 시한 뒤 도착한 결과는 `receive_result` 가 `late_result` 표식만 남기고 버렸다. (3) 시한 경과 후에도 같은 호출 맥락이 eval 을 계속 보낼 수 있었다. (4) `api/pc_agent.py:_normalize_browser_command_params` 가 work_key 없는 모든 `browser_*` 명령에 `aads-ceo-browser` 를 기본 주입하므로, 타임아웃된 eval 의 정리(`_cleanup_browser_session_on_timeout`)가 그 값으로 `browser_close_session` 을 CEO 브라우저 세션에 보냈다.

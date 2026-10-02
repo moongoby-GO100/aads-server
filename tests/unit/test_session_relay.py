@@ -85,7 +85,8 @@ def test_delivery_waits_for_busy_origin():
 
 def test_reply_tells_what_to_do_next():
     """답만 던지면 무엇을 하라는 건지 모른다."""
-    src = inspect.getsource(session_relay._run_relay)
+    assert "_format_reply(" in inspect.getsource(session_relay._run_relay)
+    src = inspect.getsource(session_relay._format_reply)
     assert "이제 할 일" in src, "회신에 다음 행동 안내가 없다"
     assert "ask_session" in src
 
@@ -475,7 +476,8 @@ def test_marker_roundtrip_for_question_and_reply():
     assert session_relay._relay_id_from(q) == RID_Q
     assert session_relay._looks_like_relay(q)
     assert session_relay._relay_id_from(session_relay._build_question("T", "", OTHER, "", "q", "")) is None
-    assert "_relay_tag(relay_id)" in inspect.getsource(session_relay._run_relay)
+    assert "_format_reply(" in inspect.getsource(session_relay._run_relay)
+    assert "_relay_tag(relay_id)" in inspect.getsource(session_relay._format_reply)
 
 
 def test_unidentifiable_turn_uses_conservative_path(monkeypatch):

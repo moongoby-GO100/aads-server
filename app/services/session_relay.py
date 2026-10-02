@@ -50,6 +50,8 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 # 2026-09-14 에 `chat_messages.embedding` 이 정확히 그 방식으로 소리 없이
 # 실패하고 있었다 — assistant 메시지의 9.6% 만 임베딩돼 있었다.
 _running: set[asyncio.Task] = set()
+# 이 프로세스에서 `_run_relay` 가 지금 돌고 있는 relay id. 고아 회수가 살아 있는 태스크를 건드리지 않게 한다.
+_active_relays: set[str] = set()
 
 
 async def _relay_goal(origin_session_id: str, target_session_id: str, question: str) -> Optional[str]:
@@ -516,6 +518,49 @@ async def _deliver_answer(origin_session_id: str, content: str,
     return True
 
 
+def _format_reply(target_name: str, question: str, answer: str, relay_id: str) -> str:
+    # 회신 — 답을 요구하지 않는다. 회신에 또 답하면 그게 루프의 시작이다.
+    return (
+        f"📨 **{target_name}의 답이 도착했습니다**\n"
+        f"> 물어본 질문: {question.strip()[:120]}\n\n"
+        f"{answer[:ANSWER_LIMIT]}\n\n"
+        "── 이제 할 일 ──\n"
+        "이 답을 반영해 다음을 진행하세요. 다른 담당의 의견이 더 필요하면 "
+        "`ask_session` 으로 물으세요(한 줄기당 3회까지). 충분하면 결론을 내고 "
+        "CEO 에게 보고하세요. 이 메시지에 인사만 하고 끝내지 마세요."
+        + _relay_tag(relay_id)
+    )
+
+
+async def _record_target_execution(pool: Any, relay_id: str, execution_id: str) -> None:
+    """대상 실행 id 를 relay 행에 남긴다 — 이 프로세스가 죽어도 다른 프로세스가 답을 되짚는 열쇠다.
+
+    컬럼이 아직 없어도(마이그레이션 전) 릴레이 자체는 돌아야 하므로 실패는 삼킨다.
+    """
+    try:
+        await pool.execute(
+            "UPDATE session_relay SET target_execution_id = $2::uuid "
+            "WHERE id = $1::uuid AND target_execution_id IS NULL",
+            relay_id, execution_id,
+        )
+    except Exception as exc:
+        logger.warning("session_relay_target_execution_unrecorded relay=%s error=%s",
+                       relay_id[:8], str(exc)[:160])
+
+
+async def _claim_reply(pool: Any, relay_id: str, reply: str, answer_id: Optional[str]) -> bool:
+    """회신 배달권을 선점한다. `pending_reply` 가 채워진 행은 다른 경로가 건드리지 않는다.
+
+    살아 있는 태스크와 고아 회수가 같은 답을 동시에 배달하지 못하게 하는 단일 관문이다.
+    """
+    claimed = await pool.execute(
+        "UPDATE session_relay SET pending_reply = $2, answer_message_id = $3::uuid "
+        "WHERE id = $1::uuid AND status = 'pending' AND pending_reply IS NULL",
+        relay_id, reply, answer_id,
+    )
+    return str(claimed).split()[-1] == "1"
+
+
 async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
                      origin_session_id: str, question: str,
                      goal_id: Optional[str] = None) -> None:
@@ -526,6 +571,7 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
     pool = get_pool()
     answer = ""
     execution_id = ""
+    _active_relays.add(relay_id)
     try:
         if await _relay_paused(goal_id, relay_id):
             await pool.execute(
@@ -553,6 +599,9 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
                     execution_id = str(_d.get("execution_id") or "")
                 except Exception:
                     pass
+                if execution_id:
+                    # 스트림이 끝나기 전에 남긴다. 컷오버로 이 태스크가 사라져도 회수가 이 id 로 답을 찾는다.
+                    await _record_target_execution(pool, relay_id, execution_id)
 
         if not execution_id:
             raise RuntimeError("대상 세션의 실행 id 를 잡지 못했다 — 답을 특정할 수 없다")
@@ -576,25 +625,15 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
         if intent in _NOT_ANSWERS or not answer.strip():
             raise RuntimeError(f"대상 세션이 답을 완성하지 못했다 (intent={intent or '없음'})")
 
-        # 회신 — 답을 요구하지 않는다. 회신에 또 답하면 그게 루프의 시작이다.
-        #
-        # `send_message_stream` 으로 넣으면 물어본 세션이 **그 회신에 또
-        # 답한다.** 그래서 assistant 메시지로 직접 넣는다 — 화면에는
-        # 보이지만 새 응답을 유발하지 않는다.
         target_name = await pool.fetchval(
             "SELECT coalesce(role_key, title) FROM chat_sessions WHERE id = $1::uuid",
             target_session_id,
         ) or "담당"
-        reply = (
-            f"📨 **{target_name}의 답이 도착했습니다**\n"
-            f"> 물어본 질문: {question.strip()[:120]}\n\n"
-            f"{answer[:ANSWER_LIMIT]}\n\n"
-            "── 이제 할 일 ──\n"
-            "이 답을 반영해 다음을 진행하세요. 다른 담당의 의견이 더 필요하면 "
-            "`ask_session` 으로 물으세요(한 줄기당 3회까지). 충분하면 결론을 내고 "
-            "CEO 에게 보고하세요. 이 메시지에 인사만 하고 끝내지 마세요."
-            + _relay_tag(relay_id)
-        )
+        reply = _format_reply(target_name, question, answer, relay_id)
+        if not await _claim_reply(pool, relay_id, reply, answer_id):
+            # 고아 회수가 먼저 집었거나 운영이 닫은 행이다. 다시 배달하면 중복이다.
+            logger.info("session_relay_reply_already_claimed relay=%s", relay_id[:8])
+            return
         if not await _deliver_answer(origin_session_id, reply, goal_id, relay_id):
             await pool.execute(
                 "UPDATE session_relay SET status='blocked', pending_reply=$2, "
@@ -605,7 +644,7 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
 
         await pool.execute(
             "UPDATE session_relay SET status='answered', answer_message_id=$2::uuid, "
-            "answered_at=now() WHERE id=$1::uuid",
+            "answered_at=now(), pending_reply=NULL WHERE id=$1::uuid",
             relay_id, answer_id,
         )
         logger.info("session_relay_answered relay=%s target=%s chars=%d",
@@ -619,6 +658,8 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
             )
         except Exception:
             pass
+    finally:
+        _active_relays.discard(relay_id)
 
 
 async def ask(origin_session_id: str, target: str, question: str,
@@ -804,6 +845,164 @@ async def _resume_blocked_reply(relay_id: str, origin_session_id: str,
                 relay_id[:8], origin_session_id[:8])
 
 
+# ── 고아 pending 회수 ─────────────────────────────────────────────────────
+#
+# 2026-10-02 relay 9fe3c45c·b9c0ff35 가 대상 응답을 완성하고도 pending 으로 남아
+# 물어본 세션에 회신이 안 갔다. `ask()` 가 띄운 `_run_relay` 는 프로세스 안
+# 태스크라 블루그린 컷오버로 사라지고, 대상 응답은 execution_resume 스캐너가 다른
+# 프로세스에서 **같은 execution_id 로** 이어 써 완성한다(chat_service
+# `_resume_single_stream` → `_save_and_update_session` 이 streaming_placeholder 를
+# 같은 execution_id 의 최종 메시지로 UPDATE). 그래서 relay 행에 execution_id 만
+# 남겨 두면 어느 프로세스든 완성본을 되짚을 수 있다.
+#
+# 답은 execution_id 또는 relay_tag 로만 특정한다. "최근 assistant 메시지" 추정은
+# 2026-09-14 에 무관한 답을 회신한 사고가 있어 쓰지 않는다.
+_ORPHAN_AFTER_SEC = max(30, int(os.getenv("SESSION_RELAY_ORPHAN_AFTER_SEC", "120")))
+# 실행 정보를 끝내 못 찾는 행을 포기하는 나이.
+_ORPHAN_GIVEUP_SEC = max(_ORPHAN_AFTER_SEC, int(os.getenv("SESSION_RELAY_ORPHAN_GIVEUP_SEC", "1800")))
+# 이보다 묵은 pending 은 건드리지 않는다. 며칠 전 답을 지금 회신하면 맥락이 달라 엉뚱한 답이 된다.
+_ORPHAN_MAX_AGE_HOURS = max(1, int(os.getenv("SESSION_RELAY_ORPHAN_MAX_AGE_HOURS", "6")))
+_ORPHAN_BATCH = max(1, int(os.getenv("SESSION_RELAY_ORPHAN_BATCH", "50")))
+# `_run_relay` 의 목록과 같아야 한다(tests/unit/test_session_relay.py 가 대조한다).
+_NOT_ANSWER_INTENTS = frozenset({
+    "streaming_placeholder", "stale_empty_placeholder", "_archived_partial",
+    "interrupted_partial", "interruption_notice", "resume_failure_notice",
+    "rate_limited",
+})
+_EXECUTION_IN_PROGRESS = ("running", "retrying")
+
+_ORPHAN_SELECT = (
+    "SELECT id::text AS id, origin_session_id::text AS origin, "
+    "target_session_id::text AS target, goal_id::text AS goal_id, question, "
+    "{exec_col} AS target_execution_id, created_at, "
+    "extract(epoch FROM now() - created_at)::int AS age_sec "
+    "FROM session_relay "
+    "WHERE status = 'pending' AND pending_reply IS NULL "
+    "AND created_at <= now() - ($1::int * interval '1 second') "
+    "AND created_at > now() - ($2::int * interval '1 hour') "
+    "ORDER BY created_at ASC LIMIT $3"
+)
+
+
+async def _orphan_candidates(pool: Any) -> list:
+    args = (_ORPHAN_AFTER_SEC, _ORPHAN_MAX_AGE_HOURS, _ORPHAN_BATCH)
+    try:
+        return list(await pool.fetch(
+            _ORPHAN_SELECT.format(exec_col="target_execution_id::text"), *args))
+    except Exception as exc:
+        # 마이그레이션 전이라 컬럼이 없다 — relay_tag 경로만으로 회수한다.
+        logger.info("session_relay_orphan_no_execution_column error=%s", str(exc)[:120])
+        return list(await pool.fetch(_ORPHAN_SELECT.format(exec_col="NULL::text"), *args))
+
+
+async def _find_tagged_execution(pool: Any, relay: Dict[str, Any]) -> Optional[str]:
+    """대상 세션에서 이 relay 의 표식이 붙은 user 메시지가 촉발한 실행 id."""
+    rows = await pool.fetch(
+        "SELECT m.content, te.id::text AS execution_id "
+        "FROM chat_messages m "
+        "JOIN chat_turn_executions te ON te.user_message_id = m.id "
+        "WHERE m.session_id = $1::uuid AND m.role = 'user' "
+        "AND m.created_at >= $2::timestamptz "
+        "AND strpos(m.content, $3) > 0 "
+        "ORDER BY m.created_at ASC, te.started_at DESC LIMIT 5",
+        relay["target"], relay["created_at"], f"(relay_id={relay['id']})",
+    )
+    for row in rows:
+        if _relay_id_from(row["content"]) == relay["id"].lower():
+            return row["execution_id"]
+    return None
+
+
+async def _execution_answer(pool: Any, execution_id: str) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """(실행 상태, 답으로 쓸 수 있는 가장 최신 assistant 메시지). 재개 후 완성본도 같은 execution_id 다."""
+    status = await pool.fetchval(
+        "SELECT status FROM chat_turn_executions WHERE id = $1::uuid", execution_id,
+    )
+    rows = await pool.fetch(
+        "SELECT id::text AS id, content, coalesce(intent,'') AS intent FROM chat_messages "
+        "WHERE execution_id = $1::uuid AND role = 'assistant' ORDER BY created_at DESC",
+        execution_id,
+    )
+    for row in rows:
+        if (row["intent"] or "") not in _NOT_ANSWER_INTENTS and (row["content"] or "").strip():
+            return status, dict(row)
+    return status, None
+
+
+async def _fail_orphan(pool: Any, relay: Dict[str, Any], method: str, detail: str) -> str:
+    claimed = await pool.execute(
+        "UPDATE session_relay SET status='failed', error='orphaned_no_answer' "
+        "WHERE id=$1::uuid AND status='pending' AND pending_reply IS NULL",
+        relay["id"],
+    )
+    if str(claimed).split()[-1] != "1":
+        return "skipped"
+    logger.warning("session_relay_orphan_failed relay=%s target=%s method=%s detail=%s",
+                   relay["id"][:8], relay["target"][:8], method, detail)
+    return "failed"
+
+
+async def _reconcile_relay(pool: Any, relay: Dict[str, Any]) -> str:
+    """고아가 된 pending 한 건을 처리한다. 반환: answered|failed|waiting|skipped."""
+    relay_id = relay["id"]
+    if relay_id in _active_relays:
+        return "skipped"
+
+    method = "execution_id"
+    execution_id = relay.get("target_execution_id") or ""
+    if not execution_id:
+        method = "relay_tag"
+        execution_id = await _find_tagged_execution(pool, relay) or ""
+        if execution_id:
+            await _record_target_execution(pool, relay_id, execution_id)
+
+    if not execution_id:
+        # 대상이 질문을 받았는지조차 알 수 없다. 대상이 바쁘면 그 실행일 수 있어 기다린다.
+        if relay["age_sec"] >= _ORPHAN_GIVEUP_SEC and not await _target_is_busy(relay["target"]):
+            return await _fail_orphan(pool, relay, method, "no_execution_found")
+        return "waiting"
+
+    status, found = await _execution_answer(pool, execution_id)
+    if status in _EXECUTION_IN_PROGRESS:
+        return "waiting"
+    if not found:
+        return await _fail_orphan(pool, relay, method, f"execution_status={status or 'missing'}")
+
+    target_name = await pool.fetchval(
+        "SELECT coalesce(role_key, title) FROM chat_sessions WHERE id = $1::uuid",
+        relay["target"],
+    ) or "담당"
+    reply = _format_reply(target_name, relay["question"], found["content"], relay_id)
+    # 선점이 곧 중복 방지다 — 먼저 집은 쪽만 배달하고, 못 집은 쪽은 아무것도 하지 않는다.
+    if not await _claim_reply(pool, relay_id, reply, found["id"]):
+        return "skipped"
+    logger.info("session_relay_orphan_reclaimed relay=%s target=%s method=%s execution=%s chars=%d",
+                relay_id[:8], relay["target"][:8], method, execution_id[:8], len(found["content"]))
+    # 배달은 원 대상 세션이 응답 중이면 기다리므로 사이클을 붙잡지 않게 따로 띄운다.
+    task = asyncio.create_task(_resume_blocked_reply(
+        relay_id, relay["origin"], reply, relay["goal_id"],
+    ))
+    _running.add(task)
+    task.add_done_callback(_running.discard)
+    return "answered"
+
+
+async def reconcile_orphan_relays() -> Dict[str, int]:
+    """실행 태스크가 사라진 pending relay 를 대상 실행의 답으로 회신하거나 실패로 닫는다."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    counts = {"answered": 0, "failed": 0, "waiting": 0, "skipped": 0}
+    for relay in await _orphan_candidates(pool):
+        try:
+            counts[await _reconcile_relay(pool, dict(relay))] += 1
+        except Exception as exc:
+            # 한 건의 실패로 나머지 회수가 멈추면 안 된다.
+            logger.warning("session_relay_orphan_error relay=%s error=%s",
+                           str(relay["id"])[:8], str(exc)[:200])
+    return counts
+
+
 async def dispatch_queued_relays() -> Dict[str, int]:
     """대상이 한가해진 대기 질문을 배달한다.
 
@@ -931,9 +1130,19 @@ async def dispatch_queued_relays() -> Dict[str, int]:
         logger.info("session_relay_queue_dispatched relay=%s target=%s",
                     r["id"][:8], r["target"][:8])
 
-    if sent or expired:
-        logger.info("session_relay_queue_swept sent=%d expired=%d", sent, expired)
-    return {"sent": sent, "expired": expired}
+    # 위에서 띄운 태스크가 `_active_relays` 에 오른 뒤 보도록 맨 끝에 둔다.
+    reclaimed = 0
+    orphan_failed = 0
+    try:
+        orphans = await reconcile_orphan_relays()
+        reclaimed, orphan_failed = orphans["answered"], orphans["failed"]
+    except Exception as exc:
+        logger.warning("session_relay_orphan_sweep_error error=%s", str(exc)[:200])
+
+    if sent or expired or reclaimed or orphan_failed:
+        logger.info("session_relay_queue_swept sent=%d expired=%d reclaimed=%d orphan_failed=%d",
+                    sent, expired, reclaimed, orphan_failed)
+    return {"sent": sent, "expired": expired, "reclaimed": reclaimed, "orphan_failed": orphan_failed}
 
 
 # ── 단방향 알림 ────────────────────────────────────────────────────────────
