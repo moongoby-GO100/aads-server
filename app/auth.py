@@ -233,8 +233,17 @@ async def require_saas_schema_ready() -> None:
             log.error("saas_schema_not_ready", missing=missing)
             raise HTTPException(status_code=503, detail="SaaS schema is not initialized")
 
+        # 정본은 slug 가 아니라 aads_internal_tenant_id() 가 반환하는 tenant 다.
+        # 독립 후보(slug 'internal' 없음)는 함수가 명시한 tenant 로 판정한다.
         has_internal_tenant = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM public.tenants WHERE slug = 'internal' AND deleted_at IS NULL)"
+            """
+            SELECT EXISTS(
+                SELECT 1
+                  FROM public.tenants
+                 WHERE id = public.aads_internal_tenant_id()
+                   AND deleted_at IS NULL
+            )
+            """
         )
         if not has_internal_tenant:
             log.error("saas_internal_tenant_missing")
