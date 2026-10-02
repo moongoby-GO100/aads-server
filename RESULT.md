@@ -1,3 +1,47 @@
+# AADS-CHAT-RETRY-SILENT-MODEL-SWITCH-20261002 (자동 재작업 1/2)
+
+## 리뷰 지적 처리
+
+1. **삭제 라인 544 > 추가 라인 134 의 50% / 순삭제 410줄** — 지적은 수치상 맞지만 원인은 코드 삭제가 아니다.
+   - 반려 커밋 a2c6661a 의 numstat: `RESULT.md +28/-548`, `chat_service.py +109/-3`, `model_selector.py +7/-1`, 테스트 `+130/-0`.
+   - 삭제 548줄 중 코드 삭제는 4줄(아래 표)이고 나머지는 **git 에 추적 중인 이전 작업(AADS-SMARTBROWSER-M11-E2E-RELEASE-R5-20260920)의 RESULT.md 를 통째로 덮어써서** 생긴 것이다. 이전 작업의 검증 근거를 지운 것이므로 잘못이었다.
+   - 조치: origin/main(3362b518) 기준 새 worktree 에서 코드·테스트 diff 만 가져왔고, RESULT.md 는 **이 절을 맨 위에 추가만** 했다. 기존 내용은 한 줄도 지우지 않았다(RESULT.md 삭제 0줄).
+   - 코드 삭제 4줄 상세(모두 같은 줄의 치환이며 기능 삭제 아님):
+
+| 위치 | 삭제 줄 | 사유 | 호출처 영향 / 롤백 |
+|---|---|---|---|
+| chat_service.py `_cross_provider_chat_fallback_chain` | `if normalized.startswith(("claude-", "claude_")):` → `elif` 로 바뀜 | 앞에 `openai:` 분기를 끼우려고 `if`→`elif` | claude 경로 결과 불변. 롤백: 새 분기 제거 후 `elif`→`if` |
+| chat_service.py `send_message_stream` | `_missing_done_fallback_models = ..._chain(...)[1:3]` 한 줄 | codex 후보 필터(`_drop_unregistered_codex_retry_candidates`)를 거치도록 여러 줄로 재작성 | 슬라이스 `[1:3]` 동일 유지 |
+| chat_service.py `_save_and_update_session` | `fallback_info: Optional[dict] = None,` | 타입 힌트만 `Optional[dict \| list]` 로 확장(체인은 list). 본문은 `json.dumps` 라 list 도 처리 | 기존 dict 호출처 영향 없음 |
+| model_selector.py `call_stream` | `if _model_locked:` → `elif` | `retry_override` 분기를 앞에 끼우려고 `if`→`elif` | `retry_override=False` 기본값이면 기존 동작과 동일 |
+
+## STEP 0 기존 구현 조사 (분류)
+
+| 접점 | 분류 | 내용 |
+|---|---|---|
+| `_cross_provider_chat_fallback_chain` | 수정 | `openai:<id>` 요청이면 `codex:<id>` 를 1순위 재시도 후보로 |
+| `_drop_unregistered_codex_retry_candidates` | 신규 | 레지스트리에 활성·실행 가능한 codex 행이 없으면 후보에서 제외(재시도 1회 낭비 방지). `model_selector._get_registered_model_row` 재사용 |
+| `_model_switch_banner` | 신규 | model_selector 의 `[<모델> 실행 불가 → ... 전환]` 과 같은 문구 |
+| `_note_retry_model_switch` | 신규 | 모델이 바뀌면 fallback_chain 에 `{from,to,reason,at}` 기록, 배너 반환 |
+| `send_message_stream` 재시도 루프 | 수정 | 전환 기록·배너·`retry_override` 전달·실패 사유 수집. 루프 구조/재시도 횟수 유지 |
+| `_save_and_update_session` | 수정(타입만) | list 체인 수용. DB 컬럼 `chat_turn_executions.fallback_chain` 기존 경로 사용 |
+| `model_selector.call_stream` | 수정 | `retry_override` 인자(기본 False) 추가, 로그 문구 `cascade_skip: retry_override` 로 구분 |
+| 삭제 | 없음 | 기능·테스트·파일 삭제 없음 |
+
+## 요구사항별 구현
+1. 전환 시 fallback_chain 기록 + requested_model 유지 + 본문 맨 앞 배너(기존 형식 재사용): `_note_retry_model_switch`, `_pending_switch_banner`(실패한 시도에는 붙지 않고 첫 delta/tool_use 에서 출력).
+2. 재시도 override 에는 "user explicitly selected" 대신 "retry_override" 로그.
+3. `openai:gpt-6.1-sol` 실패 → `codex:gpt-6.1-sol` 1순위(레지스트리 행 있을 때만).
+4. 단위 테스트 `tests/unit/test_chat_retry_model_switch.py` 6건: (i) codex 재시도 선택·미등록 시 제외, (ii) fallback_chain 비어 있지 않음 + 배너 접두, (iii) retry_override 에 'user explicitly selected' 로그 없음 / 일반 명시 선택은 유지.
+
+## 검증 (실제 실행)
+- `bash scripts/run_unit_tests.sh tests/unit/test_chat_retry_model_switch.py` → 6 passed
+- `bash scripts/run_unit_tests.sh tests/unit/test_model_selector_codex_db_route.py tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_chat_service.py` → 161 passed
+- `ruff check --select F821,F811` (변경 3개 파일) → All checks passed
+- 빌드·배포·커밋·push 는 실행하지 않음(승인 후 Runner 담당).
+
+---
+
 # AADS-SMARTBROWSER-M11-E2E-RELEASE-R5-20260920
 
 ## STEP 0 기존 구현 조사 및 분류

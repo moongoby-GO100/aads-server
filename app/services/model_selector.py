@@ -2134,9 +2134,13 @@ async def call_stream(
     model_override: Optional[str] = None,
     session_id: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    retry_override: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     인텐트 결과에 따라 LiteLLM 또는 Anthropic SDK로 SSE 스트리밍.
+
+    retry_override: 스트림 재시도 체인이 고른 모델이다(사용자 선택이 아님).
+    라우팅은 명시 모델과 같게 취급하되 로그에서 사용자 선택과 구분한다.
 
     Yields dict with keys:
       type: 'delta' | 'thinking' | 'tool_use' | 'tool_result' | 'done' | 'error'
@@ -2267,7 +2271,9 @@ async def call_stream(
                 model = resolved_model
             _qualified_provider = str((resolved_row or {}).get("provider") or _qualified_provider or "").strip().lower() or None
     else:
-        if _model_locked:
+        if retry_override:
+            logger.info(f"cascade_skip: retry_override '{model}', intent='{_intent}' — stream retry chain model, not a user choice")
+        elif _model_locked:
             logger.info(f"cascade_skip: user explicitly selected '{model}', intent='{_intent}' — respecting user choice")
         elif _db_default_applied:
             logger.info(

@@ -1238,7 +1238,12 @@ def _cross_provider_chat_fallback_chain(base_model: Optional[str]) -> List[str]:
     """Return same-grade chat fallbacks with Claude and Codex as peer providers."""
     base = str(base_model or "").strip()
     normalized = base.lower()
-    if normalized.startswith(("claude-", "claude_")):
+    openai_raw_id = base.split(":", 1)[1].strip() if normalized.startswith("openai:") else ""
+    if openai_raw_id:
+        # openai: 직결은 도구 호출을 못 해 첫 시도부터 죽는다(2026-10-02 실측).
+        # 같은 model_id 의 구독 CLI(codex:) 행을 1순위 재시도 후보로 둔다.
+        preferred = [base, f"codex:{openai_raw_id}", "claude-fable-5-1", "claude-opus-5-5", "claude-opus"]
+    elif normalized.startswith(("claude-", "claude_")):
         preferred = [base, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"]
     elif normalized.startswith("codex:") or normalized.startswith("gpt-"):
         preferred = [base, "claude-fable-5-1", "claude-opus-5-5", "claude-opus"]
@@ -1257,6 +1262,62 @@ def _cross_provider_chat_fallback_chain(base_model: Optional[str]) -> List[str]:
         seen.add(key)
         chain.append(model)
     return chain
+
+
+async def _drop_unregistered_codex_retry_candidates(chain: List[str], base_model: Optional[str]) -> List[str]:
+    """체인에 끼워 넣은 `codex:<id>` 후보 중 레지스트리에 실행 가능한 행이 없는 것을 뺀다.
+
+    행이 없는 후보를 그대로 두면 재시도 한 번이 "registered route unavailable" 로
+    소진된다. 원 모델(체인 첫 항목)은 건드리지 않는다.
+    """
+    from app.services.model_selector import _get_registered_model_row
+
+    base_key = str(base_model or "").strip().lower()
+    kept: List[str] = []
+    for candidate in chain:
+        key = str(candidate or "").strip().lower()
+        if key == base_key or not key.startswith("codex:"):
+            kept.append(candidate)
+            continue
+        try:
+            row = await _get_registered_model_row(candidate.split(":", 1)[1].strip(), provider="codex")
+        except Exception as exc:
+            logger.warning("retry_candidate_lookup_failed model=%s error=%s", candidate, type(exc).__name__)
+            row = None
+        if row and row.get("is_active") is True and row.get("is_executable") is not False:
+            kept.append(candidate)
+        else:
+            logger.info("retry_candidate_skipped_unregistered model=%s", candidate)
+    return kept
+
+
+def _model_switch_banner(requested_model: object, actual_model: object) -> str:
+    """model_selector 의 "[<모델> 실행 불가 → ... 전환]" 배너와 같은 형식."""
+    return f"\n\n[{requested_model} 실행 불가 → {actual_model} 전환]\n\n"
+
+
+def _note_retry_model_switch(
+    chain: List[Dict[str, Any]],
+    *,
+    prev_model: object,
+    new_model: object,
+    base_model: object,
+    reason: Optional[str],
+) -> str:
+    """재시도가 직전 시도와 다른 모델로 나가면 fallback_chain 에 남기고, 응답 앞에 붙일 배너를 돌려준다.
+
+    배너는 요청 모델(base)과 실제 모델이 다를 때만 있다. 요청 모델로 되돌아온 시도는 빈 문자열.
+    """
+    if _fallback_model_key(new_model) != _fallback_model_key(prev_model):
+        chain.append({
+            "from": prev_model,
+            "to": new_model,
+            "reason": reason or "요청 오류",
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+    if _fallback_model_key(new_model) == _fallback_model_key(base_model):
+        return ""
+    return _model_switch_banner(base_model, new_model)
 
 
 # ── 폴백 단계 구분 (M5, 2026-09-29) ─────────────────────────────────────
@@ -11222,7 +11283,7 @@ async def _save_and_update_session(
     parent_artifact_id: Optional[uuid.UUID] = None,
     edit_intent: bool = False,
     notify_user_id: Optional[str] = None,
-    fallback_info: Optional[dict] = None,
+    fallback_info: Optional[dict | list] = None,
     expected_owner_epoch: Optional[int] = None,
 ) -> None:
     """#19: Phase C — 별도 커넥션으로 응답 저장 + 세션 비용 업데이트.
@@ -14623,7 +14684,16 @@ async def send_message_stream(
         output_tokens = 0
         tools_called: list = []  # 구조화된 tool_events 리스트 (프론트 UI 복원용)
         _base_stream_model = str(model_override or intent_result.model or "").strip()
-        _missing_done_fallback_models = _cross_provider_chat_fallback_chain(_base_stream_model)[1:3]
+        _missing_done_fallback_models = (
+            await _drop_unregistered_codex_retry_candidates(
+                _cross_provider_chat_fallback_chain(_base_stream_model), _base_stream_model
+            )
+        )[1:3]
+        # 재시도가 모델을 바꾸면 화면(배너)·DB(fallback_chain) 양쪽에 남긴다.
+        _retry_fallback_chain: list = []
+        _pending_switch_banner = ""
+        _attempt_failure_reason = ""
+        _prev_attempt_model = _base_stream_model
 
         # ── LLM 스트림 호출 + 즉시 재시도 (AADS-003: 최대 3회, 에러 유형별 백오프) ──
         for _stream_attempt in range(3):
@@ -14632,6 +14702,30 @@ async def send_message_stream(
             _attempt_model_override = model_override
             if _stream_attempt > 0 and _stream_attempt - 1 < len(_missing_done_fallback_models):
                 _attempt_model_override = _missing_done_fallback_models[_stream_attempt - 1]
+            _attempt_is_retry_override = _stream_attempt > 0 and _attempt_model_override != model_override
+            _attempt_effective_model = str(_attempt_model_override or _base_stream_model or "").strip()
+            if _stream_attempt > 0:
+                _switch_banner = _note_retry_model_switch(
+                    _retry_fallback_chain,
+                    prev_model=_prev_attempt_model,
+                    new_model=_attempt_effective_model,
+                    base_model=_base_stream_model,
+                    reason=_attempt_failure_reason,
+                )
+                if _fallback_model_key(_attempt_effective_model) != _fallback_model_key(_prev_attempt_model):
+                    _switch_event = _fallback_stage_event(
+                        [], "fallback_attempt",
+                        from_model=_prev_attempt_model, to_model=_attempt_effective_model,
+                    )
+                    yield f"data: {json.dumps(_switch_event, ensure_ascii=False)}\n\n"
+                    logger.warning(
+                        "stream_retry_model_switch: session=%s %s -> %s reason=%s",
+                        session_id[:8], _prev_attempt_model, _attempt_effective_model,
+                        _attempt_failure_reason or "요청 오류",
+                    )
+                _prev_attempt_model = _attempt_effective_model
+                _pending_switch_banner = _switch_banner
+            _attempt_failure_reason = ""
             try:
                 from app.core.interrupt_queue import has_interrupt as _has_interrupt
 
@@ -14667,12 +14761,20 @@ async def send_message_stream(
                     model_override=_attempt_model_override,
                     session_id=session_id,
                     tenant_id=resolved_tenant_id,
+                    **({"retry_override": True} if _attempt_is_retry_override else {}),
                 ):
                     etype = event.get("type", "")
                     # 하트비트는 첫 토큰이 아니다. 모델이 아직 아무것도
                     # 내놓지 않았는데 체감 시간을 짧게 적으면 계측이 거짓말을 한다.
                     if etype in ("delta", "thinking", "tool_use"):
                         _timer.mark("first_token")
+
+                    # 재시도가 모델을 바꿨다면 응답 맨 앞에 전환 배너를 붙인다.
+                    # 실패한 시도에는 붙이지 않도록 첫 본문 이벤트에서 낸다.
+                    if _pending_switch_banner and etype in ("delta", "tool_use"):
+                        full_response += _pending_switch_banner
+                        yield f"data: {json.dumps({'type': 'delta', 'content': _pending_switch_banner})}\n\n"
+                        _pending_switch_banner = ""
 
                     # 중간 추가지시가 들어왔는지 **모든 경로에서** 확인한다.
                     #
@@ -14752,6 +14854,7 @@ async def send_message_stream(
                     elif etype == "error":
                         _err_content = event.get('content', '오류')
                         _err_lower = _err_content.lower()
+                        _attempt_failure_reason = _safe_fallback_reason(_err_content)
                         _is_auth_err = any(k in _err_lower for k in ("401", "403", "unauthorized", "forbidden"))
 
                         if _stream_attempt < 2 and not _is_auth_err:
@@ -14818,6 +14921,7 @@ async def send_message_stream(
                 else:
                     # async for 정상 완료 (break 없이) → 성공
                     if not _stream_done_seen:
+                        _attempt_failure_reason = "빈 응답"
                         _reason = (
                             "missing_done_event_stream_closed:"
                             f"attempt={_stream_attempt + 1};"
@@ -14872,6 +14976,7 @@ async def send_message_stream(
                     break  # retry 루프 탈출
             except Exception as _stream_exc:
                 # call_stream 자체 예외 (ConnectionError, TimeoutError 등)
+                _attempt_failure_reason = _safe_fallback_reason(_stream_exc)
                 if _stream_attempt < 2:
                     _backoff = 0.5 * (2 ** _stream_attempt)
                     logger.warning(f"stream_exception_retry: session={session_id[:8]} attempt={_stream_attempt+1}/3 exc={type(_stream_exc).__name__}: {str(_stream_exc)[:80]} backoff={_backoff}s")
@@ -15562,6 +15667,7 @@ async def send_message_stream(
             response_duration_sec=_final_response_duration_sec,
             auto_save_check=True,
             notify_user_id=user_id,
+            fallback_info=_retry_fallback_chain or None,
             **_artifact_chain_kwargs,
         )
 
