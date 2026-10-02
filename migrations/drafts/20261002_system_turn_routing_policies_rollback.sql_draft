@@ -1,0 +1,43 @@
+-- ============================================================================
+-- DRAFT -- 실행 금지. 20261002_system_turn_routing_policies.sql_draft 를 적용한 뒤에만 쓴다.
+-- TASK_ID: AADS-SYSTEM-TURN-ROUTING-FLAG-20261002
+--
+-- 백업 테이블 system_turn_routing_backup_20261002 에서 두 행을 적용 전 상태로 되돌린다.
+--   * runner_response : 백업된 default_model / allowed_models 로 복원
+--   * system_trigger  : 적용 전에 없던 행이면 삭제(이 마이그레이션이 만든 행만), 있었으면 복원
+-- 그 사이 다른 경로로 바뀐 행은 덮어쓰지 않도록 updated_by 가 이 작업이 쓴 값일 때만 되돌린다.
+-- ============================================================================
+
+BEGIN;
+
+UPDATE intent_policies p
+   SET default_model = b.row_data->>'default_model',
+       allowed_models = ARRAY(SELECT jsonb_array_elements_text(b.row_data->'allowed_models')),
+       updated_by = b.row_data->>'updated_by',
+       updated_at = now()
+  FROM system_turn_routing_backup_20261002 b
+ WHERE b.row_key = 'runner_response' AND b.existed
+   AND p.intent = 'runner_response'
+   AND p.updated_by = 'system_turn_routing';
+
+DELETE FROM intent_policies p
+ USING system_turn_routing_backup_20261002 b
+ WHERE b.row_key = 'system_trigger' AND NOT b.existed
+   AND p.intent = 'system_trigger'
+   AND p.updated_by = 'system_turn_routing';
+
+UPDATE intent_policies p
+   SET default_model = b.row_data->>'default_model',
+       allowed_models = ARRAY(SELECT jsonb_array_elements_text(b.row_data->'allowed_models')),
+       updated_by = b.row_data->>'updated_by',
+       updated_at = now()
+  FROM system_turn_routing_backup_20261002 b
+ WHERE b.row_key = 'system_trigger' AND b.existed
+   AND p.intent = 'system_trigger'
+   AND p.updated_by = 'system_turn_routing';
+
+SELECT intent, default_model, allowed_models, updated_by
+  FROM intent_policies WHERE intent IN ('runner_response', 'system_trigger') ORDER BY intent;
+
+-- 백업 테이블은 롤백 확인 뒤 사람이 지운다: DROP TABLE system_turn_routing_backup_20261002;
+COMMIT;

@@ -1,0 +1,69 @@
+-- ============================================================================
+-- DRAFT -- 실행 금지. CEO 승인 + 점검 창구 전에는 어떤 DB 에도 적용하지 않는다.
+-- TASK_ID: AADS-SYSTEM-TURN-ROUTING-FLAG-20261002
+--
+-- 확장자가 .sql_draft 이고 migrations/drafts/ 아래인 이유: scripts/apply_release_migrations.sh 는
+-- migrations/*.sql 만 자동 적용한다. 이 파일은 그 패턴에 걸리지 않아야 한다.
+-- 적용하려면 사람이 내용을 확인한 뒤 직접 실행한다. 롤백: 20261002_system_turn_routing_policies_rollback.sql_draft
+--
+-- 목적: 시스템 발신 턴(feature flag system_turn_routing_live)이 읽을 intent_policies 를 준비한다.
+--   * runner_response : default_model -> claude-sonnet-5-5, allowed_models 에 claude-sonnet-5-5 추가
+--   * system_trigger  : 행 신설. default 는 지금 시스템 턴이 실제로 쓰는 운영 기본 모델
+--                       (model_routing_preferences route_key='llm' 기본 행, 없으면 claude-opus-5-5)
+--                       과 같게 두고 allowed_models 만 정의한다. 기본 live 대상 목록에 없으므로 섀도 전용이다.
+--
+-- 이 초안만으로는 서빙 모델이 바뀌지 않는다. 플래그가 꺼져 있으면 후보를 섀도로만 기록한다.
+-- 20261002_routing_ssot_cleanup.sql_draft §4 도 runner_response 의 claude-sonnet-5 를 건드린다.
+-- 어느 쪽이 먼저 적용돼도 결과가 같도록 두 파일 모두 가드를 건다(멱등).
+-- ============================================================================
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS system_turn_routing_backup_20261002 (
+    row_key      TEXT        PRIMARY KEY,
+    existed      BOOLEAN     NOT NULL,
+    row_data     JSONB,
+    backed_up_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO system_turn_routing_backup_20261002 (row_key, existed, row_data)
+SELECT k.intent,
+       p.intent IS NOT NULL,
+       CASE WHEN p.intent IS NOT NULL THEN to_jsonb(p) END
+FROM (VALUES ('runner_response'), ('system_trigger')) AS k(intent)
+LEFT JOIN intent_policies p ON p.intent = k.intent
+ON CONFLICT (row_key) DO NOTHING;
+
+-- 1. runner_response : 기본 모델 교체 + 허용 목록 추가 (기존 허용 모델은 유지)
+UPDATE intent_policies
+   SET default_model = 'claude-sonnet-5-5',
+       allowed_models = CASE WHEN 'claude-sonnet-5-5' = ANY (allowed_models)
+                             THEN allowed_models
+                             ELSE array_append(allowed_models, 'claude-sonnet-5-5') END,
+       updated_by = 'system_turn_routing', updated_at = now()
+ WHERE intent = 'runner_response'
+   AND default_model IN ('claude-sonnet-5', 'claude-sonnet-5-5');
+
+-- 2. system_trigger : 신설. default 는 현재 운영 기본 모델과 동일, allowed 만 정의.
+INSERT INTO intent_policies (intent, allowed_models, default_model, cascade_downgrade, description, updated_by)
+SELECT 'system_trigger',
+       ARRAY(SELECT DISTINCT m FROM unnest(ARRAY[d.model, 'claude-sonnet-5-5', 'claude-opus-5-5']) AS m),
+       d.model,
+       FALSE,
+       'System-originated turns (intent_override=system_trigger). Shadow-only: not in the default live intent list.',
+       'system_turn_routing'
+FROM (
+    SELECT COALESCE(
+        (SELECT CASE WHEN lower(provider) = 'anthropic' THEN model_id ELSE lower(provider) || ':' || model_id END
+           FROM model_routing_preferences
+          WHERE route_key = 'llm' AND is_default = TRUE AND is_enabled = TRUE
+          LIMIT 1),
+        'claude-opus-5-5') AS model
+) d
+ON CONFLICT (intent) DO NOTHING;
+
+-- 확인용 조회
+SELECT intent, default_model, allowed_models, cascade_downgrade, updated_by
+  FROM intent_policies WHERE intent IN ('runner_response', 'system_trigger') ORDER BY intent;
+
+COMMIT;

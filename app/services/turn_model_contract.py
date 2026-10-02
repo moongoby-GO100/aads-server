@@ -20,6 +20,16 @@ SOURCE_RESUME_ORIGIN = "resume_origin"
 SOURCE_SESSION_FALLBACK = "session_fallback"
 # 선택창 지정 없이 운영 기본 모델로 시작한 일반 자동 라우팅 턴.
 SOURCE_AUTO_ROUTED = "auto_routed"
+# intent_override 로 들어온 시스템 발신 턴(사용자가 이 턴의 모델을 고르지 않았다).
+# 정책 면제 대상이 아니다 — 서빙 동작은 auto_routed 와 같고 출처만 구분한다.
+SOURCE_SYSTEM_ORIGIN = "system_origin"
+
+# intent_override → intent_policies 조회 키. chat_service 가 auto_reaction 응답을
+# intent='runner_response' 로 저장하는 규칙(B안)과 같다.
+SYSTEM_ORIGIN_POLICY_INTENTS = {
+    "auto_reaction": "runner_response",
+    "system_trigger": "system_trigger",
+}
 
 # chat_service / model_selector 의 _AUTO_ROUTED_DB_DEFAULT_MODELS 와 같아야 한다
 # (tests/unit/test_turn_model_contract.py 가 일치를 검사한다).
@@ -52,6 +62,12 @@ class TurnModelContract:
     fallback_chain: List[Dict[str, Any]] = field(default_factory=list)
     # 서브에이전트·보조 호출이 쓴 모델. actual_model 에 섞이지 않게 따로 둔다.
     aux_models: List[str] = field(default_factory=list)
+    # 시스템 발신 턴의 intent_policies 조회 키. 사용자 지정·재개 턴은 None.
+    system_origin_intent: Optional[str] = None
+    intent_override: Optional[str] = None
+    response_mode: Optional[str] = None
+    # call_stream 이 턴마다 한 번만 계산·기록하도록 결과를 붙여 둔다(재호출 시 재사용).
+    system_turn_route: Optional[Dict[str, Any]] = None
 
     @property
     def policy_exempt(self) -> bool:
@@ -125,6 +141,7 @@ class TurnModelContract:
         return (
             f"requested={self.requested_model} source={self.source} "
             f"pinned={self.user_pinned} switches={len(self.fallback_chain)}"
+            + (f" system_origin_intent={self.system_origin_intent}" if self.system_origin_intent else "")
         )
 
 
@@ -161,8 +178,17 @@ def build_turn_contract(
     if override and not is_auto_selection(override):
         return TurnModelContract(requested_model=override, source=SOURCE_USER_SELECT, user_pinned=True)
     requested = str(operational_default or intent_model or "").strip()
-    source = SOURCE_AUTO_REACTION_DEFAULT if intent_override == "auto_reaction" else SOURCE_AUTO_ROUTED
-    return TurnModelContract(requested_model=requested, source=source, user_pinned=False)
+    system_intent = SYSTEM_ORIGIN_POLICY_INTENTS.get(str(intent_override or ""))
+    if intent_override == "auto_reaction":
+        source = SOURCE_AUTO_REACTION_DEFAULT
+    elif system_intent:
+        source = SOURCE_SYSTEM_ORIGIN
+    else:
+        source = SOURCE_AUTO_ROUTED
+    return TurnModelContract(
+        requested_model=requested, source=source, user_pinned=False,
+        system_origin_intent=system_intent, intent_override=str(intent_override) if system_intent else None,
+    )
 
 
 def build_resume_contract(

@@ -14123,6 +14123,7 @@ async def send_message_stream(
             intent_model=intent_result.model,
             operational_default=_db_default_model,
         )
+        _turn_contract.response_mode = response_mode
         _turn_contract.apply_to_intent_result(intent_result)
         logger.info("turn_model_contract session=%s %s", session_id[:8], _turn_contract.as_log())
 

@@ -1023,6 +1023,113 @@ async def _record_ceiling_shadow(
         return None
 
 
+_SYSTEM_TURN_FLAG = "system_turn_routing_live"
+_SYSTEM_TURN_INTENTS_ENV = "SYSTEM_TURN_ROUTING_INTENTS"
+# system_trigger 는 milestone_review·goals 처럼 response_mode="quality" 판정 턴이 섞여 있어 기본 목록에 없다.
+_SYSTEM_TURN_INTENTS_DEFAULT = "runner_response,runner_notification"
+
+
+def _system_turn_live_intents() -> frozenset:
+    raw = os.getenv(_SYSTEM_TURN_INTENTS_ENV)
+    if raw is None:
+        raw = _SYSTEM_TURN_INTENTS_DEFAULT
+    return frozenset(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _is_runnable_registry_row(row: Optional[Dict[str, Any]]) -> bool:
+    if not row:
+        return False
+    return row.get("is_active") is not False and row.get("is_executable") is not False and not row.get("retired_at")
+
+
+async def _plan_system_turn_route(*, route_intent: str, served_model: str) -> Dict[str, Any]:
+    """시스템 발신 턴의 intent_policies 후보와 적용 가능 여부. 부작용 없음(조회만)."""
+    plan: Dict[str, Any] = {
+        "would_select": None, "resolved_model": None, "applicable": False,
+        "executable": None, "reason": "policy_undefined",
+    }
+    policy = (await _load_intent_policies()).get(route_intent)
+    candidate = str((policy or {}).get("default_model") or "").strip()
+    if not candidate:
+        return plan
+    plan["would_select"] = candidate
+    if _normalize_intent_policy_model(served_model) == candidate:
+        plan["reason"] = "same_model"
+        return plan
+    provider, raw_model = _split_provider_qualified_model(candidate)
+    resolved, row = await _resolve_registered_model_alias(raw_model, provider=provider)
+    plan["executable"] = _is_runnable_registry_row(row)
+    if not plan["executable"]:
+        plan["reason"] = "candidate_not_executable"
+        return plan
+    cur_rank = _CEILING_SHADOW_RANK.get(_normalize_intent_policy_model(served_model))
+    cand_rank = _CEILING_SHADOW_RANK.get(candidate)
+    if cur_rank is not None and cand_rank is not None and cand_rank > cur_rank:
+        plan["reason"] = "would_upgrade"
+        return plan
+    plan["resolved_model"] = resolved
+    plan["applicable"] = True
+    plan["reason"] = "ok"
+    return plan
+
+
+async def _route_system_origin_turn(
+    *,
+    contract: Any,
+    served_model: str,
+    session_id: Optional[str] = None,
+) -> Optional[str]:
+    """시스템 발신 턴: 섀도(항상)를 기록하고, live 플래그·대상 intent 일 때만 적용할 모델을 돌려준다."""
+    try:
+        memo = getattr(contract, "system_turn_route", None)
+        if memo is not None:
+            return memo.get("apply_model")
+        route_intent = str(getattr(contract, "system_origin_intent", "") or "")
+        plan = await _plan_system_turn_route(route_intent=route_intent, served_model=served_model)
+        reason = plan["reason"]
+        apply_model: Optional[str] = None
+        if plan["applicable"]:
+            if route_intent not in _system_turn_live_intents():
+                reason = "intent_not_in_live_list"
+            else:
+                from app.core.feature_flags import get_flag
+
+                if await get_flag(_SYSTEM_TURN_FLAG, default=False):
+                    apply_model = plan["resolved_model"]
+        contract.system_turn_route = {"apply_model": apply_model, "reason": reason}
+        would = plan["would_select"]
+        await _append_governance_audit_log(
+            event="system_turn_shadow",
+            mode="live" if apply_model else "shadow",
+            legacy_result={
+                "served": served_model, "intent": route_intent, "source": getattr(contract, "source", None),
+            },
+            db_result={
+                "would_select": would,
+                "intent": route_intent,
+                "intent_override": getattr(contract, "intent_override", None),
+                "response_mode": getattr(contract, "response_mode", None),
+                "executable": plan["executable"],
+                "applied": bool(apply_model),
+                "reason": reason,
+            },
+            diff_summary=(
+                f"selected_model: {served_model} -> {would} ({reason})" if would
+                else f"policy undefined for intent={route_intent}"
+            ),
+            trace_id=session_id,
+        )
+        if apply_model:
+            contract.note_switch(
+                served_model, apply_model,
+                reason=f"시스템 발신 턴 라우팅({route_intent})", kind="system_turn_route",
+            )
+        return apply_model
+    except Exception as exc:
+        logger.warning("system_turn_route_failed: %s", exc)
+        return None
+
+
 async def _resolve_governed_intent_model(
     *,
     intent: str,
@@ -2404,6 +2511,29 @@ async def call_stream(
                 model,
                 _intent,
             )
+
+    # 시스템 발신 턴(intent_override): 사용자가 모델을 고르지 않은 턴이라 정책 후보를 섀도로 남기고,
+    # 플래그가 켜진 경우에만 intent_policies 기본 모델로 바꾼다.
+    if (
+        not retry_override
+        and not _effective_override
+        and not _model_locked
+        and not _pinned_no_switch
+        and getattr(_turn_contract, "system_origin_intent", None)
+    ):
+        _system_route_model = await _route_system_origin_turn(
+            contract=_turn_contract, served_model=model, session_id=session_id,
+        )
+        if _system_route_model and _system_route_model != model:
+            logger.info(
+                "system_turn_route: %s → %s (intent=%s)",
+                model, _system_route_model, _turn_contract.system_origin_intent,
+            )
+            model = _system_route_model
+            resolved_model, resolved_row = await _resolve_registered_model_alias(model)
+            if resolved_model and resolved_model != model:
+                model = resolved_model
+            _qualified_provider = str((resolved_row or {}).get("provider") or "").strip().lower() or None
 
     from app.services.intent_router import resolve_intent_temperature as _rit
     _ctx_temperature.set(await _rit(_intent))
