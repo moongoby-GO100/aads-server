@@ -1,3 +1,19 @@
+## 2026-10-03 — 전 서버 문서 인벤토리 산출물 재적재·재검산, 누락 범위 검증 (AADS-PROJECT-DOCUMENTS-ALLSERVER-INVENTORY-RECOVER-20261003)
+
+**상태: 전체 완료 아님.** 보존된 5파일(runner-ac46eda6 error/stale_recovered)을 `/root/aads-preserved/project_documents_inventory_20261003/` 에 해시와 함께 보존하고 origin/main 격리 worktree 에 재적재했다. 상세: `reports/20261003_project_documents_inventory_recovery_RESULT.md`. commit/push/DB/배포 없음(Runner 승인 후).
+
+**확인된 것.** CSV 합계(14,973 + 145,844 = 160,817)·부록 713루트 대조·경로 위생·등록 일치(316행/185 id)는 코드로 재검산해 이전 보고와 일치. 집중 테스트 73건, 연관 포함 106건 통과.
+
+**이전 보고에서 교정이 필요한 것.** `root_kind` 는 경로 이름만 본다. cafe24 `project-docs*` 가 전부 original 이라 original 비어 있지 않은 행의 3,065개가 다른 서버 original 과 해시 동일하고(cafe24 사본 0 으로 보고됨), 미등록 14,657행은 고유 내용 기준 약 5,295, 기획·설계·PRD 1,503행은 약 693. original 14,796행 중 커밋된 것은 12,046. 기존 CSV 는 옛 규칙 그대로 두었다(raw 소실, 판정 CSV·운영 DB 쓰기 금지) — 수치를 의사결정에 쓸 때 고유 내용 기준으로 읽을 것.
+
+**코드 수정(스크립트·테스트만).** `find_git_top` 이 파일시스템 루트 `/.git` 을 저장소로 오인해 jinah244 전 파일이 untracked 로 나오던 것 수정, `.bak` 루트를 backup 으로 분류, jinah244 를 수집 대상 서버에 추가. 기존 테스트 삭제 없음.
+
+**jinah244.** 2026-10-03 07:12 KST `ssh jinah244`(partner)로 읽기 전용 접속 성공 — "공개키 거부" 사유는 낡았다. 1,220파일 수집, 1,208개의 해시가 기존 CSV 기본 행에 존재(대부분 contabo116 OBYS). ACCT runner-52a46b5e 는 queued(미시작) 그대로 — 중복 제출·재시작 안 함, ACCT 쪽 완료로 간주 금지.
+
+**저장공간(07:12 KST).** contabo116 `/` 93%(여유 14.8GB), contabo14 91%(37GB), cafe24_114 89%(98GB), jinah244 40%(179GB).
+
+**미검증/남은 것.** 프로젝트 키 귀속(CSV 에 컬럼 없음), 상대경로 매칭 편향(contabo116·aads-server 만 상대경로), kind 추정 표본 검수, 비밀 적중 5,614 중 기본 CSV 밖 4,608건(raw 소실), pdf 는 개수만(루트 안 91·밖 385, cafe24 루트 밖은 420초 상한 부분값), 2MB 초과 22개는 스트리밍 검사해 적중 0. 서버 간 `copy_of_original` 적용은 설계 결정 필요 — 후속 승인 단계. 비용 미측정.
+
 ## 2026-10-02 — session_relay 고아 pending 회수: 재개된 대상 응답을 답으로 수거해 회신 (AADS-SESSION-RELAY-RESUME-ORPHAN-20261002)
 
 **원인(코드 확정).** `ask()` 가 띄운 `_run_relay` 는 프로세스 안 asyncio 태스크라 블루그린 컷오버로 사라진다. 대상 응답은 `main.py` execution_resume 스캐너가 다른 프로세스에서 이어 써 완성하는데 relay 행은 그 execution 을 몰랐고, `dispatch_queued_relays` 는 queued/blocked 만 처리해 pending 을 회수하는 경로가 없었다. `_pair_in_flight` 가 pending 을 2시간 막아 같은 쌍의 새 질문도 막혔다(relay 9fe3c45c·b9c0ff35).
