@@ -211,3 +211,16 @@ def test_no_base_branch_uses_single_cap(repo):
 
     assert re.match(r"\[DIFF TRUNCATED\] 전체 \d+B 중 앞 50000B 만", out)
     assert "app/big.py" in out
+
+
+def test_git_add_all_does_not_use_exclude_pathspec_for_ignored_patch():
+    """.gitignore 에 오른 파일을 ':(exclude)' 로 지정하면 git add 가 rc=1 을 낸다.
+
+    2026-10-02 15:19 KST runner-805e8cb8 이 그렇게 approval_commit_stage_failed 로 죽었다
+    (5cb1f84e 가 패치 파일을 .gitignore 에 올린 직후). add -A 후 reset 으로 빼야 한다.
+    """
+    script = _runner()
+    lines = [ln for ln in script.splitlines() if "add -A" in ln and not ln.lstrip().startswith("#")]
+    for ln in lines:
+        assert ":(exclude)" not in ln, ln
+        assert f"reset -q -- {PATCH_NAME}" in ln, ln

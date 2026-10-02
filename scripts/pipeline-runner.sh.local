@@ -1387,7 +1387,7 @@ commit_job_worktree_for_approval() {
     fi
     # .runner_full_diff.patch 는 사람이 보라고 워크트리에 남기는 파일이다. .gitignore 와
     # 무관하게(과거 커밋을 체크아웃해 추적 상태로 돌아온 경우 포함) 커밋에 넣지 않는다.
-    git -C "$worktree_dir" add -A -- . ':(exclude).runner_full_diff.patch' >/dev/null 2>&1 || {
+    { git -C "$worktree_dir" add -A -- . && { git -C "$worktree_dir" reset -q -- .runner_full_diff.patch || true; }; } >/dev/null 2>&1 || {
         _fail_job "$job_id" "$session_id" "approval_commit_stage_failed" "awaiting_approval 거부 — runner worktree stage 실패"
         return 1
     }
@@ -4143,7 +4143,7 @@ _preserve_worktree_patch() {
     local patch_file="/root/aads/runner-artifacts/${job_id}.patch"
     (
         cd "$worktree_dir" || exit 0
-        git add -A -- . ':(exclude).runner_full_diff.patch' >/dev/null 2>&1
+        { git add -A -- . && { git reset -q -- .runner_full_diff.patch || true; }; } >/dev/null 2>&1
         git diff HEAD > "$patch_file" 2>/dev/null
         if [[ ! -s "$patch_file" ]]; then
             # reject_job 등에서 이미 전부 커밋된 경우 working-tree diff는 비어도
