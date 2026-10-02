@@ -528,6 +528,10 @@ _INTENT_POLICY_CLAUDE_RANK = {
 _INTENT_POLICY_RANK_MODEL = {
     rank: model for model, rank in _INTENT_POLICY_CLAUDE_RANK.items()
 }
+# 상한형 라우팅 섀도 전용. live 경로(_INTENT_POLICY_CLAUDE_RANK)에 claude-opus-5 를 넣으면
+# 플래그와 무관하게 실서빙 강등이 양방향으로 바뀌므로, 섀도 계산에서만 rank 3 으로 취급한다.
+_CEILING_SHADOW_RANK = {**_INTENT_POLICY_CLAUDE_RANK, "claude-opus-5": 3}
+_CEILING_LIVE_SOURCES = frozenset({"auto_reaction_default"})
 _HAIKU_FALLBACK_INTENTS = {"greeting", "casual"}
 _SONNET_INTENTS = {
     "search", "url_read", "browser", "task_query",
@@ -826,12 +830,17 @@ async def _load_intent_policies() -> Dict[str, Dict[str, Any]]:
     return policies
 
 
-def _resolve_intent_policy_cascade_model(current_model: str, policy: Optional[Dict[str, Any]]) -> Optional[str]:
+def _resolve_intent_policy_cascade_model(
+    current_model: str,
+    policy: Optional[Dict[str, Any]],
+    rank_map: Optional[Dict[str, int]] = None,
+) -> Optional[str]:
     if not policy:
         return None
 
+    rank_map = _INTENT_POLICY_CLAUDE_RANK if rank_map is None else rank_map
     current_policy_model = _normalize_intent_policy_model(current_model)
-    current_rank = _INTENT_POLICY_CLAUDE_RANK.get(current_policy_model)
+    current_rank = rank_map.get(current_policy_model)
     if current_rank is None:
         return None
 
@@ -841,14 +850,14 @@ def _resolve_intent_policy_cascade_model(current_model: str, policy: Optional[Di
     ]
     allowed_claude_ranks = sorted(
         {
-            _INTENT_POLICY_CLAUDE_RANK[model]
+            rank_map[model]
             for model in allowed_models
-            if model in _INTENT_POLICY_CLAUDE_RANK
+            if model in rank_map
         }
     )
     if not allowed_claude_ranks:
         default_model = _normalize_intent_policy_model(policy.get("default_model"))
-        default_rank = _INTENT_POLICY_CLAUDE_RANK.get(default_model)
+        default_rank = rank_map.get(default_model)
         if default_rank is not None:
             allowed_claude_ranks = [default_rank]
 
@@ -957,6 +966,61 @@ async def _append_governance_audit_log(
         logger.debug("governance_audit_log_table_missing")
     except Exception as exc:
         logger.warning("governance_audit_log_write_failed: %s", exc)
+
+
+def _ceiling_shadow_candidate(
+    intent: str,
+    current_model: str,
+    policy: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """섀도 랭크 맵으로 계산한 상한 후보. 강등이 없으면 None. 부작용 없음."""
+    if not intent:
+        return None
+    return _resolve_intent_policy_cascade_model(current_model, policy, _CEILING_SHADOW_RANK)
+
+
+async def _record_ceiling_shadow(
+    *,
+    intent: str,
+    current_model: str,
+    skip_reason: str,
+    turn_source: str,
+    session_id: Optional[str] = None,
+) -> Optional[str]:
+    """강등이 건너뛰어진 턴에서 상한 정책이 골랐을 모델을 기록한다. 후보를 돌려주되 모델은 바꾸지 않는다."""
+    try:
+        policy = (await _load_intent_policies()).get(intent)
+        candidate = _ceiling_shadow_candidate(intent, current_model, policy)
+        if not candidate:
+            return None
+        served = _build_intent_resolution_result(
+            intent=intent,
+            input_model=current_model,
+            resolved_model=None,
+            applied=False,
+            reason=skip_reason,
+            source=turn_source,
+        )
+        would = _build_intent_resolution_result(
+            intent=intent,
+            input_model=current_model,
+            resolved_model=candidate,
+            applied=True,
+            reason="ceiling would_select",
+            source="ceiling_shadow",
+        )
+        await _append_governance_audit_log(
+            event="ceiling_shadow",
+            mode="shadow",
+            legacy_result=served,
+            db_result=would,
+            diff_summary=f"selected_model: {current_model} -> {candidate} (skipped: {skip_reason})",
+            trace_id=session_id,
+        )
+        return candidate
+    except Exception as exc:
+        logger.warning("ceiling_shadow_record_failed: %s", exc)
+        return None
 
 
 async def _resolve_governed_intent_model(
@@ -2284,6 +2348,26 @@ async def call_stream(
             "cascade_skip: turn contract exempt model='%s' intent='%s' source=%s",
             model, _intent, getattr(_turn_contract, "source", "?"),
         )
+        _exempt_source = str(getattr(_turn_contract, "source", "") or "unknown")
+        _ceiling_model = await _record_ceiling_shadow(
+            intent=_intent, current_model=model, skip_reason="policy_exempt",
+            turn_source=_exempt_source, session_id=session_id,
+        )
+        if _ceiling_model and _exempt_source in _CEILING_LIVE_SOURCES and not _pinned_no_switch:
+            from app.core.feature_flags import get_flag
+
+            if await get_flag("intent_ceiling_routing_live", default=False):
+                logger.info(f"ceiling_downgrade: {_intent} → {_ceiling_model} (source={_exempt_source})")
+                if _turn_contract is not None:
+                    _turn_contract.note_switch(
+                        model, _ceiling_model,
+                        reason=f"intent 상한 라우팅({_intent})", kind="ceiling_downgrade",
+                    )
+                model = _ceiling_model
+                resolved_model, resolved_row = await _resolve_registered_model_alias(model, provider=_qualified_provider)
+                if resolved_model and resolved_model != model:
+                    model = resolved_model
+                _qualified_provider = str((resolved_row or {}).get("provider") or _qualified_provider or "").strip().lower() or None
     elif not _explicit_model_requested:
         _policy_model, _policy_reason = await _resolve_governed_intent_model(
             intent=_intent,
@@ -2304,6 +2388,12 @@ async def call_stream(
                 model = resolved_model
             _qualified_provider = str((resolved_row or {}).get("provider") or _qualified_provider or "").strip().lower() or None
     else:
+        if not retry_override:
+            await _record_ceiling_shadow(
+                intent=_intent, current_model=model,
+                skip_reason="user_pinned" if (_pinned_no_switch or _effective_override or _model_locked or _provider_pinned) else "explicit_model",
+                turn_source=str(getattr(_turn_contract, "source", "") or "unknown"), session_id=session_id,
+            )
         if retry_override:
             logger.info(f"cascade_skip: retry_override '{model}', intent='{_intent}' — stream retry chain model, not a user choice")
         elif _model_locked:
