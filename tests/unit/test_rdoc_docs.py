@@ -7,6 +7,7 @@
      문서가 스스로 선언한 sha256 과 앞부분의 해시를 대조하는 오프라인 검사는 항상 돈다.
   2. spec 에 게이트 단계(off/shadow)와 fail-open 이 적혀 있다.
   3. enforce 는 모든 줄이 "미구현" 맥락이고, 차단·강제는 현재 동작처럼 쓰이지 않는다.
+  4. spec 15항: 새 document_key 정규식, 기존 키 보존(grandfather), 파일명과 key 의 구분.
 """
 from __future__ import annotations
 
@@ -101,7 +102,7 @@ def test_paths_are_ascii(path: Path):
 def test_versions_declared():
     assert "version 1.2.0" in PLAN.read_text(encoding="utf-8")
     assert "version 1.2.0" in PRD.read_text(encoding="utf-8")
-    assert "version 1.1.0" in SPEC.read_text(encoding="utf-8")
+    assert "version 1.2.0" in SPEC.read_text(encoding="utf-8")
 
 
 # ── 승인본 보존 ───────────────────────────────────────────────────────
@@ -192,3 +193,85 @@ def test_environment_does_not_leak_into_docs():
         assert "sk-ant-" not in text
         if pw:
             assert pw not in text
+
+
+# ── spec 15항: document_key 규칙·기존 키 보존 ──────────────────────────
+
+
+def _spec_key_regex() -> re.Pattern[str]:
+    text = SPEC.read_text(encoding="utf-8")
+    m = re.search(r"검사 정규식: `([^`]+)`", text)
+    assert m, "spec 15.1 에 검사 정규식이 없다"
+    return re.compile(m.group(1))
+
+
+def _spec_exception_sql() -> str:
+    m = re.search(r"```sql\n(.*?)```", SPEC.read_text(encoding="utf-8"), re.S)
+    assert m, "spec 15.2 에 예외 목록 쿼리가 없다"
+    return m.group(1)
+
+
+_DATE_IN_KEY = re.compile(r"(?:^|[^0-9])(?:19|20)[0-9]{2}-?(?:0[1-9]|1[0-2])")
+
+
+def _conforms(key: str, kind: str, rx: re.Pattern[str]) -> bool:
+    return bool(rx.fullmatch(key)) and key.endswith("-" + kind) and not _DATE_IN_KEY.search(key)
+
+
+def test_spec_new_key_regex_accepts_and_rejects():
+    rx = _spec_key_regex()
+    assert _conforms("rdoc-storage-rule-spec", "spec", rx)
+    assert _conforms("rdoc-storage-rule-plan", "plan", rx)
+    for bad, kind in [
+        ("20261003_AADS_RDOC_STORAGE_RULE_PLAN", "plan"),
+        ("plan:7d9f483b5dba", "plan"),
+        ("OBYS-CAFE24-CONSOLIDATION-PLAN-20261002", "plan"),
+        ("acct-clobe-dual-collection-prd-20261003", "prd"),
+        ("go100-data-engine-optimization", "prd"),
+        ("docs/rdoc-plan", "plan"),
+        ("rdoc-storage-rule-plan", "prd"),
+    ]:
+        assert not _conforms(bad, kind, rx), bad
+
+
+def test_spec_declares_grandfather_and_no_rename():
+    text = SPEC.read_text(encoding="utf-8")
+    sec = text[text.index("## 15."):]
+    assert "grandfather" in sec
+    assert "이름 변경·이전(migrate)·재키잉·삭제·재연결을 하지 않는다" in sec
+    assert "새 head 를 만들 때만" in sec
+    assert "project_document_heads" in _spec_exception_sql()
+
+
+def test_spec_separates_filename_date_from_document_key():
+    text = SPEC.read_text(encoding="utf-8")
+    sec = text[text.index("### 15.3"):text.index("### 15.4")]
+    assert "YYYYMMDD_" in sec and "넣지 않는다" in sec
+    assert "20261003_AADS_RDOC_STORAGE_RULE_PLAN.md" in sec and "rdoc-storage-rule-plan" in sec
+
+
+def _fetch_rows(sql: str):
+    try:
+        import psycopg2  # type: ignore
+
+        conn = psycopg2.connect(connect_timeout=5)
+        try:
+            conn.set_session(readonly=True, autocommit=True)
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                return cur.fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def test_exception_sql_matches_python_regex_on_live_heads():
+    """spec 의 SQL 과 정규식이 같은 예외 집합을 낸다. DB 에 닿지 못하면 건너뛴다."""
+    heads = _fetch_rows("SELECT tenant_id::text, project_key, document_key, kind FROM project_document_heads")
+    exc = _fetch_rows(_spec_exception_sql())
+    if heads is None or exc is None:
+        pytest.skip("DB 에 닿지 못했다(PG* 환경 없음)")
+    rx = _spec_key_regex()
+    expected = {(t, p, k) for t, p, k, kind in heads if not _conforms(k, kind, rx)}
+    assert {(str(r[0]), r[1], r[2]) for r in exc} == expected

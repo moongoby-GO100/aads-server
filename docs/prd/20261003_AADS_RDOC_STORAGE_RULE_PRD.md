@@ -30,7 +30,7 @@
 
 > 개정 근거: 대상 head `prd:848c81d57565` 는 "OHVIS 문서 정본관리 게이트 — 운영 PRD"(AADS)이고, 위 담당 범위 표에 `goal_documents` 대장·문서 표류 게이트가 있다. R-DOC 는 그 직접 연장이므로 같은 head 의 새 revision 으로 등록한다 [DB 조회: project_document_heads 2c4e95fb…, 2026-10-03].
 > version 1.2.0 (직전 승인본 1.0.0 = revision 1. 1.1.0 = 저장 규칙 절, 1.2.0 = 아래 화면 개발 절 추가이며 둘 다 승인 전 초안 내용). 위쪽 승인본 원문은 글자 그대로이며 sha256 `8cacc274a62a1108001211109139c32c13dbd1b57e4d09f594d344b011ab1d7f` 이다 [DB 조회: project_document_revisions 686c817c… 의 content_hash].
-> 배경과 로드맵: `docs/plans/20261003_AADS_RDOC_STORAGE_RULE_PLAN.md`(1.2.0). 저장 위치·파일명·등록 절차·게이트 현황: `docs/specs/rdoc-storage-rule/spec.md`(1.1.0 의 1~5항). 화면 개발 절차의 상세 계약: 같은 spec 의 6~14항.
+> 배경과 로드맵: `docs/plans/20261003_AADS_RDOC_STORAGE_RULE_PLAN.md`(1.2.0). 저장 위치·파일명·등록 절차·게이트 현황: `docs/specs/rdoc-storage-rule/spec.md`(1.2.0 의 1~5항). RDOC-3 의 `document_key` 규칙 확정과 기존 키 보존(grandfather)은 같은 spec 의 15항. 화면 개발 절차의 상세 계약: 같은 spec 의 6~14항.
 
 ### 요구사항
 

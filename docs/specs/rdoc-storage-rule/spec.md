@@ -1,6 +1,6 @@
 # R-DOC 문서 저장 규칙 — 명세 (spec)
 
-- version 1.1.0 · 작성 2026-10-03 KST · 프로젝트 AADS (1.1.0 = 6~14항 화면 개발 절차 추가, 1~5항 의미 불변)
+- version 1.2.0 · 작성 2026-10-03 KST · 프로젝트 AADS (1.1.0 = 6~14항 화면 개발 절차 추가, 1.2.0 = 15항 document_key 규칙·기존 키 보존 추가. 1~14항 의미 불변)
 - 짝 문서: 기획서 `docs/plans/20261003_AADS_RDOC_STORAGE_RULE_PLAN.md`(1.2.0), PRD `docs/prd/20261003_AADS_RDOC_STORAGE_RULE_PRD.md`(1.2.0)
 - 상태: 초안. 정본 등록 전이며, 파일명 규칙의 최종 결정은 CEO 가 한다.
 - 출처 표기: [DB 조회] [코드 확인] [지시서 인용] [미측정]
@@ -42,7 +42,7 @@ ASCII 권장 근거(한 줄): 2026-10-03 셸 러너가 한글 파일명 때문�
 대상 코드: `app/api/canonical_documents.py` (`/api/v1` 아래 `/projects/{project_key}/documents`) [코드 확인].
 
 1. `POST /api/v1/projects/{project_key}/documents` 로 revision 을 만든다. 필수 입력: `document_key`, `kind`, `title`, `version`, `expected_generation`, 그리고 `content` 또는 `source_path` [코드 확인: RevisionInput].
-2. `document_key` 는 소문자 kebab `{주제}-{kind}` 로 한다. 슬래시·날짜·버전을 넣지 않는다. 예: `rdoc-storage-rule-plan`. 이는 이 프로젝트의 운영 규약이다. API 의 검증 정규식은 대소문자·`.`·`:`·`_` 도 받으므로 [코드 확인: KEY], 형식 점검은 호출하는 쪽의 몫이다.
+2. 새 head 의 `document_key` 는 소문자 kebab `{주제}-{kind}` 로 한다. 슬래시·날짜·버전을 넣지 않는다. 예: `rdoc-storage-rule-plan`. 이는 이 프로젝트의 운영 규약이다. API 의 검증 정규식은 대소문자·`.`·`:`·`_` 도 받으므로 [코드 확인: KEY], 형식 점검은 호출하는 쪽의 몫이다. 정규식·기존 키 보존(grandfather)·파일명과의 구분은 15항에서 확정한다.
 3. 프로젝트는 URL 의 `project_key` 로 구분한다. `kind` 는 `plan|prd|spec|design|architecture|contract|tasks|report|reference` 중 하나를 명시한다. 같은 키에 다른 kind 를 보내면 409 `document_kind_conflict` 이다 [코드 확인].
 4. 갱신은 같은 `document_key` 로 새 revision 을 올린다(`expected_generation` 필요). 새 파일을 만들지 않는다.
 5. 채팅 도구는 초안 등록까지만 한다. 승인은 기존 `POST …/{document_key}/approve` 경로이고, latest revision 만 승인할 수 있다 [코드 확인].
@@ -190,3 +190,70 @@ ASCII 권장 근거(한 줄): 2026-10-03 셸 러너가 한글 파일명 때문�
 | WCAG 2.2 목표 크기(최소), 포커스 가림 없음(최소) | 11항 접근성 기준 | 없음 |
 
 OHVIS 권장 방향(제안): 정보 가독성, 작업 상태, 핵심 행동이 뚜렷한 업무 화면을 우선한다. 장식·투명 효과는 접근성·성능 검증 뒤 제한해서 적용한다. 이 방향도 승인 전에는 제안이다.
+
+## 15. document_key 규칙 확정과 기존 키 보존 (RDOC-NAMING)
+
+2026-10-03 CEO 승인 범위("보류건 권장안으로 진행해")의 권장안을 적는다 [지시서 인용: AADS-RDOC-NAMING-COVERAGE-20261003]. 1~14항의 의미는 바꾸지 않는다. 측정표와 근거는 `reports/20261003_rdoc_naming_registration_coverage_RESULT.md` 에 있다. 이 항의 규칙은 문서 규약이며 어떤 API·훅도 지금 이 규칙을 검사하지 않는다(현재 검사는 15.4).
+
+### 15.1 새 키 규칙
+
+- 형식은 `{주제}-{kind}` 이다. 소문자 `a-z`·숫자·하이픈만 쓰고 128자 이하다. 검사 정규식: `^[a-z0-9]+(?:-[a-z0-9]+)*-(plan|prd|spec|design|architecture|contract|tasks|report|reference)$`.
+- 끝 토큰은 그 head 의 `kind` 와 같다. 같은 키에 다른 kind 를 보내면 409 인 것은 3항 3번 그대로다.
+- 넣지 않는다: 슬래시·역슬래시, 날짜(`YYYYMM`, `YYYYMMDD`, `YYYY-MM[-DD]`), 버전 토큰(`v1` 등), 대문자, 밑줄, `.`, `:`, 해시형 접미. 날짜와 버전은 revision 의 `created_at`·`version` 이 기록한다.
+- 프로젝트 접두사는 `project_key` 가 맡는다. 주제어 자체가 제품명이면(`go100-…`) 써도 되고 의무는 아니다.
+- 예: `rdoc-storage-rule-spec` 는 맞다. `20261003_AADS_RDOC_STORAGE_RULE_PLAN`(날짜·대문자·밑줄), `prd:848c81d57565`(콜론·kind 접미 없음), `go100-data-engine-optimization`(kind 접미 없음)은 새 키로는 맞지 않는다.
+- 갱신은 같은 키의 새 revision 이다(3항 4번). 키를 바꿔 새 head 를 만드는 것은 갱신이 아니다.
+- 이 규칙은 **새 head 를 만들 때만** 적용한다.
+
+### 15.2 기존 키는 전부 인정한다 (grandfather)
+
+- DB 에 이미 있는 모든 `(tenant, project_key, document_key)` 는 규칙에 맞지 않아도 그대로 유효하다. 이름 변경·이전(migrate)·재키잉·삭제·재연결을 하지 않는다. 승인 포인터(`approved_revision_id`)와 과거 revision 은 불변이다.
+- 이유: 키는 목표 링크·이벤트·legacy 링크·승인 포인터의 참조점이다. 바꾸면 기존 참조와 승인본이 끊긴다.
+- 기존 head 에 새 revision 을 올리는 것은 15.1 검사 대상이 아니다. 형식이 맞지 않는다는 이유로 갱신이 거절되지 않아야 한다.
+- 예외 목록은 외운 숫자가 아니라 그때의 SELECT 로 산출한다. 과거에 쓰인 '9개' 같은 숫자를 다시 쓰지 않는다. 읽기 전용 쿼리:
+
+```sql
+SELECT tenant_id, project_key, document_key, kind
+FROM project_document_heads
+WHERE document_key !~ '^[a-z0-9]+(-[a-z0-9]+)*-(plan|prd|spec|design|architecture|contract|tasks|report|reference)$'
+   OR document_key !~ ('-' || kind || '$')
+   OR document_key ~ '(^|[^0-9])(19|20)[0-9]{2}-?(0[1-9]|1[0-2])'
+ORDER BY 1, 2, 3;
+```
+
+- 2026-10-03 KST 실측: heads 13건 중 새 규칙에 맞는 것 0건, 예외 13건이다 [DB 조회]. 사유별 목록은 RESULT 의 표에 둔다. 이 숫자는 그날의 스냅샷이며 이후 head 가 늘면 위 쿼리로 다시 낸다.
+
+### 15.3 파일명과 `document_key` 는 다른 규칙이다
+
+| 항목 | 파일명 (2항, CEO 결정 전 권장안) | `document_key` (15.1) |
+|---|---|---|
+| 날짜 | 앞에 `YYYYMMDD_` 를 둔다 | 넣지 않는다 |
+| 문자 | TITLE 은 ASCII 대문자·숫자·밑줄 | 소문자·숫자·하이픈 |
+| 프로젝트 | `{PROJECT}` 토큰이 들어간다 | `project_key` 가 맡는다 |
+| kind | TITLE 끝 `_PLAN`·`_PRD` | 끝 `-plan`·`-prd` |
+| 갱신 | 새 파일을 만들지 않고 같은 문서를 고친다 | 같은 키의 새 revision |
+
+- 변환 예(새 head): `20261003_AADS_RDOC_STORAGE_RULE_PLAN.md` → `rdoc-storage-rule-plan`. 날짜와 `AADS_` 를 빼고 소문자·하이픈으로 바꾼다.
+- 이미 head 가 있는 문서는 변환하지 않고 그 키를 쓴다. R-DOC 기획서·PRD 는 `plan:7d9f483b5dba`·`prd:848c81d57565` 의 새 revision 이다. 이 두 키는 15.2 의 예외이고 바꾸지 않는다. 이 spec 은 아직 head 가 없어 새 키 `rdoc-storage-rule-spec` 이 후보이지만, 등록 여부는 승인 뒤 정본관리자가 정한다.
+- 파일명 규칙의 최종 결정은 여전히 CEO 이며(2항), 이 항은 파일명을 바꾸지 않는다.
+
+### 15.4 채팅 등록 도구의 키 검사와 이 spec 의 불일치
+
+- 대조 대상: 채팅 정본 등록 도구 `validate_document_key` (runner-4fabf5b5 계열, 커밋 fafa85ff, 재작업 1ccf4f78 = runner-d869f5bc, 작업 상태 awaiting_approval). origin/main 에는 아직 없다 [git조회, DB조회: 2026-10-03]. 이 작업은 앱·도구·훅 파일을 고치지 않는다.
+- 불일치 1: 이 도구는 소문자 kebab·슬래시·날짜·버전만 보고 끝 kind 토큰을 보지 않는다. 15.1 은 kind 접미를 요구하므로 `go100-data-engine-optimization` 같은 키가 통과한다 [코드 확인: 정규식 재현].
+- 불일치 2: 이 도구는 head 를 조회하기 전에 키 형식을 검사한다. 15.2 는 기존 head 의 갱신을 거절하지 않는다고 하므로, 현재 예외 13건 중 10건에는 이 도구로 새 revision 을 올릴 수 없다. 정본 API 로는 올릴 수 있다 [코드 확인: 정규식 재현].
+- 두 불일치의 후속은 도구 검수 담당(runner-d869f5bc 검수 세션)과 PM 세션 8bf0405a 에 전달하도록 RESULT 에 적었다. 테스트를 풀어 우회하지 않는다.
+
+### 15.5 R-DOC head 의 등록 상태
+
+- plan head `plan:7d9f483b5dba`·prd head `prd:848c81d57565` 는 각각 revision 1(1.0.0) 하나뿐이고, latest 와 approved 가 같은 revision 이다 [DB 조회, 2026-10-03]. 승인본 content 의 sha256 은 기획서·PRD 파일의 승인본 원문 앞부분과 일치한다(`tests/unit/test_rdoc_docs.py`).
+- 이 개정(1.2.0 파일)의 draft revision 은 아직 올라가 있지 않다. 이 작업은 새 head·승인·L1 활성화를 하지 않는다. 후속 draft 등록은 이 변경의 검수·승인·push 뒤에, 정상 tenant 인증이 된 정본 API 로, 위 두 head 에만 한다. 인증이 안 되면 SQL 직접 쓰기나 토큰 추출 없이 미등록 사유와 담당을 기록한다.
+
+### 15.6 정본 등록률 측정 규칙
+
+- 분모는 서버·저장소별로 나눈다. 7일 창은 측정 시각(KST)의 시작·끝을 적어 고정한다.
+- "신규" 는 파일 수정시각이 아니라 `git log --diff-filter=A` 로 센다. git 으로 확인할 수 없는 곳은 신규 여부를 [미측정] 으로 둔다.
+- "등록" 은 파일 내용 sha256 이 `project_document_revisions.content_hash` 와 같을 때만 센다. 같은 title 만으로 등록을 확정하지 않는다. `goal_documents.doc_path` 경로 일치는 내용 일치가 아니므로 따로 센다.
+- 수집하지 못했거나 접근할 수 없는 서버는 분모에서 빼지 않고 [미측정] 행으로 남긴다.
+- 사본은 같은 sha256 을 하나로 세는 고유 수와 파일 수를 함께 적는다.
+- 2026-10-03 측정 결과: 측정한 범위(aads-server, aads-dashboard, aads-docs, contabo14 의 kis-autotrade-v4)에서 고유 문서 35건 중 내용 일치 등록 3건이다. 미측정 범위가 있어 전체 등록률이 아니다 [git조회] [DB조회] [미측정]. 표는 RESULT 에 있다.

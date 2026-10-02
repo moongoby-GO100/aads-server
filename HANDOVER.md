@@ -1,3 +1,13 @@
+## 2026-10-03 — R-DOC document_key 규칙 확정·등록률·귀속 점검 (AADS-RDOC-NAMING-COVERAGE-20261003)
+
+**상태: 문서·테스트 완료, 커밋/푸시는 Runner 승인 단계 대기.** spec 1.2.0 15항에 새 키 규칙(`{주제}-{kind}`, 소문자 kebab, 날짜·슬래시 없음)과 기존 키 전부 보존(grandfather)을 적었다. 현재 heads 13건은 SELECT 로 낸 예외 13건이고 규칙 적합은 0건이다 [DB조회]. 파일명 날짜 규칙과 document_key 는 15.3 표로 구분했다. PLAN/PRD 는 spec 버전 참조 한 줄씩만 고쳤고 승인본 앞부분 해시는 그대로다.
+
+**확인된 것.** 채팅 등록 도구 validator(미병합 1ccf4f78)는 kind 접미를 보지 않고 head 조회 전에 형식을 검사해, 예외 13건 중 10건에는 이 도구로 새 revision 을 올릴 수 없다. 앱·도구는 고치지 않았고 후속은 runner-d869f5bc 검수 세션과 PM 8bf0405a 에 있다. 등록률은 측정 범위 고유 35건 중 내용 일치 3건이며 ACCT(runner-52a46b5e queued)·jinah244·cafe24_114 는 [미측정] 이라 전체 등록률이 아니다. acct-clobe 문서는 오귀속 증거가 없어 유지 판정. M4/M6 completed 는 증거가 비어 있어 PM 재판정을 권고하고 상태는 바꾸지 않았다.
+
+**검증.** 호스트 pytest 26 passed, 운영 이미지 임시 컨테이너 23 passed·3 skipped(DB 없음), `git diff --check`·ruff F821/F811·dup_guard 통과. 운영·브라우저 검증은 하지 않았다.
+
+**미실행.** commit/push, 정본 API 로의 후속 draft 등록(tenant 인증 수단 없음, 승인·push 뒤 같은 두 head 에만), DB 인수인계 기록(같은 이유), 오류 사전 등록(확인된 원인 없음). 상세는 `reports/20261003_rdoc_naming_registration_coverage_RESULT.md`. 비용 $ 미측정.
+
 ## 2026-10-03 — 정본 검색 보존 산출물 재적재 R2: 보고서의 시크릿 모양 리터럴 제거 (AADS-DOC-SEARCH-CANONICAL-RECOVER-R2-20261003)
 
 **상태: 코드·테스트·보고서 완료, 커밋/푸시·운영 색인은 Runner 승인 단계 대기.** runner-8559f49d 의 `approval_commit_failed` 원인은 테스트가 아니라 보고서 8행이 옛 테스트의 가짜 자격증명 문자열(키 이름=값 형태)을 인용한 것(gitleaks `generic-api-key`)이었다. 보존 워크트리의 staged diff 를 재구현 없이 `8df4d4bc`(stale_base 교정 후 최신 origin/main) 위에 적용하고(HANDOVER 만 수동 병합), 보고서·HANDOVER 에서 값 있는 리터럴을 없앴다. 파일 전체 스캔에 걸리던 `scripts/index_docs.py` 의 기존 주석(go100 클론 디렉터리 이름 나열)도 이름 없이 바꿨다(주석만, 정규식 불변). allow 주석·`.gitleaksignore`·규칙 완화·`--no-verify` 없음.
