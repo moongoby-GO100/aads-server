@@ -11,7 +11,7 @@ import pathlib
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.auth as auth_module
@@ -130,5 +130,25 @@ app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inv
 app.include_router(obys_workspaces.router, prefix="/api/v1", tags=["obys-workspaces"])
 
 _static_dir = pathlib.Path(__file__).resolve().parent / "static"
+_obys_index = _static_dir / "apps" / "obys" / "index.html"
+
+
+# StaticFiles(html=False) 는 디렉터리 URL 을 404 로 돌린다. 오비서 정식 URL 만 정확히 열고
+# 다른 static 디렉터리는 그대로 404 로 둔다. mount 보다 먼저 등록해야 이 라우트가 잡힌다.
+@app.api_route("/static/apps/obys/", methods=["GET", "HEAD"], include_in_schema=False)
+async def obys_directory_index():
+    if not _obys_index.is_file():
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    return FileResponse(_obys_index, media_type="text/html")
+
+
+@app.api_route("/static/apps/obys", methods=["GET", "HEAD"], include_in_schema=False)
+async def obys_directory_redirect(request: Request):
+    target = "/static/apps/obys/"
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return RedirectResponse(target, status_code=307)
+
+
 if _static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
