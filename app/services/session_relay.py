@@ -306,23 +306,145 @@ async def _pair_in_flight(origin: str, target: str) -> bool:
         return False
 
 
-async def _current_hop(origin_session_id: str) -> int:
-    """이 세션이 받은 질문의 홉 수. 답하면서 또 물으면 +1 이 된다."""
+# 질문·회신 끝에 붙이는 표식. 이 턴이 어느 relay 줄기에서 왔는지 DB 에서 되짚는 열쇠다.
+_RELAY_TAG_RE = re.compile(r"\(relay_id=([0-9a-fA-F-]{36})\)")
+# 표식이 없는 옛 형식(배포 전 이미 들어간 메시지)이 relay 메시지처럼 보이는지 판별한다.
+_RELAY_QUESTION_HEAD_RE = re.compile(r"^\s*\[[^\]\n]*에게 — .*\([0-9a-f]{8}\)의 질문\]")
+_RELAY_REPLY_HEAD_RE = re.compile(r"^\s*📨 \*\*.*의 답이 도착했습니다\*\*")
+# 판별 불가일 때 보수 경로가 보는 진행 중 relay 의 최대 나이(분).
+_HOP_FALLBACK_MIN = max(1, int(os.getenv("SESSION_RELAY_HOP_FALLBACK_MIN", "90")))
+
+
+def _relay_tag(relay_id: str) -> str:
+    return f"\n\n(relay_id={relay_id})" if relay_id else ""
+
+
+def _relay_id_from(content: str) -> Optional[str]:
+    """메시지 안의 마지막 relay 표식. 답 본문이 표식을 인용해도 꼬리의 것이 우리 것이다."""
+    found = _RELAY_TAG_RE.findall(content or "")
+    return found[-1].lower() if found else None
+
+
+def _looks_like_relay(content: str) -> bool:
+    return bool(_RELAY_QUESTION_HEAD_RE.match(content or "") or _RELAY_REPLY_HEAD_RE.match(content or ""))
+
+
+async def _turn_trigger_content(pool: Any, session_id: str) -> Optional[str]:
+    """이 세션이 지금 처리 중인 턴을 촉발한 user 메시지 본문.
+
+    진행 중(running/retrying) 실행의 user_message 를 먼저 본다. 실행 행이 없으면
+    가장 최근 user 메시지로 대신한다.
+    """
+    content = await pool.fetchval(
+        "SELECT m.content FROM chat_turn_executions te "
+        "JOIN chat_messages m ON m.id = te.user_message_id "
+        "WHERE te.session_id = $1::uuid AND te.status IN ('running','retrying') "
+        "ORDER BY te.created_at DESC LIMIT 1",
+        session_id,
+    )
+    if content is not None:
+        return str(content)
+    content = await pool.fetchval(
+        "SELECT content FROM chat_messages "
+        "WHERE session_id = $1::uuid AND role = 'user' "
+        "ORDER BY created_at DESC LIMIT 1",
+        session_id,
+    )
+    return None if content is None else str(content)
+
+
+async def _conservative_hop(pool: Any, session_id: str, reason: str) -> tuple[int, str]:
+    """판별 불가일 때: 최근 진행 중(pending) relay 의 최대 hop.
+
+    이 세션이 대상(질문에 답하는 중)이거나 발신자(회신을 받는 중)인 pending relay 를
+    본다. 판별을 못 했다고 0 으로 열어 주면 relay 줄기 안에서 hop 제한이 풀려 루프가
+    생길 수 있다. 반대로 6시간 max 처럼 오래된 이력까지 보면 직접 지시한 협의가 막힌다
+    (2026-10-02). 그래서 `_HOP_FALLBACK_MIN` 분 안의 pending 만 본다 — 발신자 쪽이 방금
+    보낸 질문까지 잡혀 과하게 막을 수 있으나, 이 경로는 판별 실패 때만 타므로 감수한다.
+    """
+    try:
+        h = await pool.fetchval(
+            "SELECT max(hop) FROM session_relay "
+            "WHERE status = 'pending' AND hop > 0 "
+            "AND created_at > now() - ($2::int * interval '1 minute') "
+            "AND (target_session_id = $1::uuid OR origin_session_id = $1::uuid)",
+            session_id, _HOP_FALLBACK_MIN,
+        )
+    except Exception as exc:
+        return 0, f"{reason}+fallback_error:{type(exc).__name__}"
+    h = int(h or 0)
+    if h:
+        return h, f"{reason}:fallback_pending_relay_hop{h}"
+    return 0, f"{reason}:no_pending_relay"
+
+
+async def _hop_basis(origin_session_id: str) -> tuple[int, str]:
+    """지금 이 세션이 답하는 질문 줄기의 hop 과 그 판별 기준.
+
+    예전에는 `target 이 이 세션인 최근 6시간 relay 의 max(hop)` 이었다. 그러면 몇 시간
+    전에 다른 담당에게서 hop3 질문을 받은 세션이, CEO 가 직접 시킨 새 협의(hop 1)도
+    hop4 로 막았다. 줄기는 세션이 아니라 **턴**에 속한다.
+
+    판별: 현재 턴을 촉발한 user 메시지(진행 중 실행의 user_message)를 읽는다.
+      - 끝에 `(relay_id=…)` 표식이 있고 그 relay 의 target 이 이 세션 → 질문에 답하는 턴 → 그 hop
+      - 같은 relay 의 origin 이 이 세션 → 회신을 받은 턴 → 그 hop (또 물으면 +1: 기존 루프 방지 유지)
+      - 표식도 relay 머리말도 없음 → CEO/사용자 직접 턴 → 0 (`direct_turn`)
+      - 표식이 없는데 relay 머리말 형태이거나, 메시지/행을 못 찾거나, 조회가 실패 → `_conservative_hop`
+
+    contextvar(`_run_relay` 에서 세팅) 방식을 쓰지 않은 이유: `ask_session` 은 Agent SDK/MCP
+    경로에서도 불리고, 그 경로는 contextvar 가 비어 있어 세션 id 를 프로세스 전역
+    (`get_active_chat_session_id`)으로 찾는다(`ToolExecutor._ask_session`). 전파되지 않는
+    경로에서는 hop 이 0 으로 읽혀 루프 방지가 무력화된다. DB 는 어느 경로에서든 같은 답을 준다.
+    """
     from app.core.db_pool import get_pool
 
+    pool = get_pool()
     try:
-        h = await get_pool().fetchval(
-            "SELECT max(hop) FROM session_relay "
-            "WHERE target_session_id = $1::uuid AND created_at > now() - interval '6 hours'",
-            origin_session_id,
-        )
-        return int(h or 0)
-    except Exception:
-        return 0
+        content = await _turn_trigger_content(pool, origin_session_id)
+    except Exception as exc:
+        return await _conservative_hop(pool, origin_session_id, f"lookup_error:{type(exc).__name__}")
+    if content is None:
+        return await _conservative_hop(pool, origin_session_id, "no_trigger_message")
+
+    rid = _relay_id_from(content)
+    if rid:
+        try:
+            row = await pool.fetchrow(
+                "SELECT hop, origin_session_id::text AS origin, target_session_id::text AS target "
+                "FROM session_relay WHERE id = $1::uuid",
+                rid,
+            )
+        except Exception as exc:
+            return await _conservative_hop(pool, origin_session_id, f"relay_lookup_error:{type(exc).__name__}")
+        if not row:
+            return await _conservative_hop(pool, origin_session_id, f"relay_row_missing:{rid[:8]}")
+        hop = int(row["hop"] or 0)
+        if row["target"] == origin_session_id:
+            return hop, f"relay_question:{rid[:8]}:hop{hop}"
+        if row["origin"] == origin_session_id:
+            return hop, f"relay_reply:{rid[:8]}:hop{hop}"
+        return await _conservative_hop(pool, origin_session_id, f"relay_row_foreign:{rid[:8]}")
+
+    if _looks_like_relay(content):
+        return await _conservative_hop(pool, origin_session_id, "relay_marker_missing")
+    return 0, "direct_turn"
+
+
+async def _current_hop(origin_session_id: str) -> int:
+    """이 세션이 지금 답하는 질문 줄기의 홉 수. 답하면서 또 물으면 +1 이 된다.
+
+    2026-10-02 변경: 예전에는 `target 이 이 세션인 최근 6시간 relay 의 max(hop)` 였으나
+    지금은 `_hop_basis` 가 현재 턴의 줄기로 판별한다. 이 함수는 그 hop 값만 돌려주는
+    얇은 래퍼이며 기존 호출처·테스트 호환을 위해 남긴다. 판별 기준 문자열이 필요한
+    `ask()` 는 `_hop_basis` 를 직접 부른다.
+    """
+    hop, _basis = await _hop_basis(origin_session_id)
+    return hop
 
 
 def _build_question(origin_title: str, origin_role: str, origin_id: str,
-                    target_role: str, question: str, context: str) -> str:
+                    target_role: str, question: str, context: str,
+                    relay_id: str = "") -> str:
     who = origin_role or origin_title or origin_id[:8]
     head = f"[{target_role or '담당'}에게 — {who}({origin_id[:8]})의 질문]"
     body = [head, "", question.strip()]
@@ -334,7 +456,7 @@ def _build_question(origin_title: str, origin_role: str, origin_id: str,
         "이 답은 물어본 대화로 자동 전달됩니다. 결론을 먼저 쓰세요.",
         "자기 담당 범위에서 판단하고, 동의만 하지 말고 위험이 보이면 그렇게 쓰세요.",
     ]
-    return "\n".join(body)
+    return "\n".join(body) + _relay_tag(relay_id)
 
 
 async def _deliver_answer(origin_session_id: str, content: str,
@@ -471,6 +593,7 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
             "이 답을 반영해 다음을 진행하세요. 다른 담당의 의견이 더 필요하면 "
             "`ask_session` 으로 물으세요(한 줄기당 3회까지). 충분하면 결론을 내고 "
             "CEO 에게 보고하세요. 이 메시지에 인사만 하고 끝내지 마세요."
+            + _relay_tag(relay_id)
         )
         if not await _deliver_answer(origin_session_id, reply, goal_id, relay_id):
             await pool.execute(
@@ -529,12 +652,15 @@ async def ask(origin_session_id: str, target: str, question: str,
 
     pool = get_pool()
 
-    hop = await _current_hop(origin_session_id) + 1
+    base_hop, hop_basis = await _hop_basis(origin_session_id)
+    hop = base_hop + 1
     if hop > MAX_HOP:
-        logger.warning("session_relay_hop_exceeded origin=%s hop=%d", origin_session_id[:8], hop)
+        logger.warning("session_relay_hop_exceeded origin=%s hop=%d basis=%s",
+                       origin_session_id[:8], hop, hop_basis)
         return {
             "sent": False, "error": "hop_limit",
-            "message": f"이 대화 줄기는 이미 {MAX_HOP}회 오갔습니다. "
+            "hop_basis": hop_basis,
+            "message": f"이 대화 줄기는 이미 {MAX_HOP}회 오갔습니다 (판별 기준: {hop_basis}). "
                        "더 묻지 말고 지금까지 받은 답으로 결론을 내고 CEO 에게 보고하세요.",
         }
 
@@ -575,8 +701,8 @@ async def ask(origin_session_id: str, target: str, question: str,
             "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued', $6::uuid)",
             queued_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
         )
-        logger.info("session_relay_queued relay=%s origin=%s target=%s",
-                    queued_id[:8], origin_session_id[:8], tgt["id"][:8])
+        logger.info("session_relay_queued relay=%s origin=%s target=%s hop=%d basis=%s",
+                    queued_id[:8], origin_session_id[:8], tgt["id"][:8], hop, hop_basis)
         return {
             "sent": True,
             "queued": True,
@@ -593,12 +719,12 @@ async def ask(origin_session_id: str, target: str, question: str,
         "SELECT title, coalesce(role_key,'') AS role_key FROM chat_sessions WHERE id = $1::uuid",
         origin_session_id,
     )
+    relay_id = str(uuid.uuid4())
     prompt = _build_question(
         origin["title"] if origin else "", origin["role_key"] if origin else "",
-        origin_session_id, tgt.get("role_key") or "", question, context,
+        origin_session_id, tgt.get("role_key") or "", question, context, relay_id,
     )
 
-    relay_id = str(uuid.uuid4())
     await pool.execute(
         "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
         "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'pending', $6::uuid)",
@@ -611,8 +737,8 @@ async def ask(origin_session_id: str, target: str, question: str,
     _running.add(task)
     task.add_done_callback(_running.discard)
 
-    logger.info("session_relay_sent relay=%s origin=%s target=%s hop=%d",
-                relay_id[:8], origin_session_id[:8], tgt["id"][:8], hop)
+    logger.info("session_relay_sent relay=%s origin=%s target=%s hop=%d basis=%s",
+                relay_id[:8], origin_session_id[:8], tgt["id"][:8], hop, hop_basis)
     return {
         "sent": True,
         "relay_id": relay_id,
@@ -794,7 +920,7 @@ async def dispatch_queued_relays() -> Dict[str, int]:
         )
         prompt = _build_question(
             origin["title"] if origin else "", origin["role_key"] if origin else "",
-            r["origin"], tgt_role or "", r["question"], "",
+            r["origin"], tgt_role or "", r["question"], "", r["id"],
         )
         task = asyncio.create_task(
             _run_relay(r["id"], r["target"], prompt, r["origin"], r["question"], r["goal_id"])

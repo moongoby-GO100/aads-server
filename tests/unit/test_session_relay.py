@@ -214,9 +214,9 @@ def test_two_same_role_sessions_are_ambiguous_and_no_relay_row(monkeypatch):
     assert {c["id"] for c in tgt["candidates"]} == {S1, S2}
 
     async def _no_hop(_o):
-        return 0
+        return 0, "direct_turn"
 
-    monkeypatch.setattr(session_relay, "_current_hop", _no_hop)
+    monkeypatch.setattr(session_relay, "_hop_basis", _no_hop)
     out = asyncio.run(session_relay.ask(ORIGIN, "CTO", "목표등록 지시"))
     assert out["sent"] is False
     assert out["status"] == "ambiguous_target" and out["error"] == "ambiguous_target"
@@ -346,3 +346,227 @@ def test_uuid_target_ignores_recency(monkeypatch):
     _patch_pool(monkeypatch, pool)
     tgt = asyncio.run(session_relay._resolve_target(S2, ORIGIN))
     assert tgt["id"] == S2 and not tgt.get("ambiguous") and not tgt.get("stale_only")
+
+
+# ── hop 은 세션 6시간 max 가 아니라 "지금 답하는 질문 줄기" 기준 (2026-10-02) ──
+# 세션 3ad8d4c5 가 14:13/14:41/16:39 에 다른 담당에게서 hop3 질문을 받았다는 이유로
+# 17:24 CEO 가 직접 지시한 협의(hop 1 이어야 함)가 hop4 로 막혔다.
+RID_Q = "11111111-aaaa-aaaa-aaaa-000000000001"
+RID_OLD = "22222222-aaaa-aaaa-aaaa-000000000002"
+OTHER = "33333333-0000-0000-0000-00000000000c"
+
+
+class _HopPool:
+    """현재 턴 촉발 메시지·relay 행·pending relay 를 흉내 낸다."""
+
+    def __init__(self, trigger="__none__", relays=None, pending_hop=0,
+                 lookup_error=False, fallback_error=False):
+        self.trigger = trigger
+        self.relays = relays or {}
+        self.pending_hop = pending_hop
+        self.lookup_error = lookup_error
+        self.fallback_error = fallback_error
+        self.sqls = []
+
+    async def fetchval(self, sql, *args):
+        self.sqls.append(sql)
+        if "FROM chat_turn_executions" in sql or "FROM chat_messages" in sql:
+            if self.lookup_error:
+                raise RuntimeError("db down")
+            if "FROM chat_turn_executions" in sql:
+                return None if self.trigger == "__none__" else self.trigger
+            return None
+        if "max(hop)" in sql:
+            if self.fallback_error:
+                raise RuntimeError("db down")
+            return self.pending_hop or None
+        raise AssertionError(sql)
+
+    async def fetchrow(self, sql, *args):
+        assert "FROM session_relay WHERE id" in sql
+        return self.relays.get(args[0])
+
+
+def _relay(hop, origin, target):
+    return {"hop": hop, "origin": origin, "target": target}
+
+
+def _hop(monkeypatch, pool):
+    _patch_pool(monkeypatch, pool)
+    return asyncio.run(session_relay._hop_basis(ORIGIN))
+
+
+def test_direct_turn_ignores_old_hop3_history(monkeypatch):
+    """① 6시간 내 hop3 질문을 받은 이력이 있어도 직접 메시지 턴이면 hop 0 → ask 는 hop=1."""
+    pool = _HopPool(
+        trigger="TASK_ID: X — 이 협의를 진행하세요",
+        relays={RID_OLD: _relay(3, OTHER, ORIGIN)},
+        pending_hop=3,
+    )
+    assert _hop(monkeypatch, pool) == (0, "direct_turn")
+    assert not any("max(hop)" in q for q in pool.sqls), "직접 턴인데 세션 이력(max)을 봤다"
+
+    class _AskPool(_AmbigPool):
+        async def fetchval(self, sql, *args):
+            return None  # _pair_in_flight / _target_is_busy / _relay_goal 모두 비어 있음
+
+    async def _fake_hop(_o):
+        return 0, "direct_turn"
+
+    ask_pool = _AskPool([_s(ORIGIN, "백억이", "GO100Owner"), _s(S1, "전략가", "CTO")])
+    _patch_pool(monkeypatch, ask_pool)
+    monkeypatch.setattr(session_relay, "_hop_basis", _fake_hop)
+
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(session_relay, "_pair_in_flight", lambda *a: _false())
+    monkeypatch.setattr(session_relay, "_target_is_busy", lambda *a: _false())
+    monkeypatch.setattr(session_relay, "_relay_goal", _noop)
+    monkeypatch.setattr(session_relay, "_relay_paused", lambda *a: _false())
+    monkeypatch.setattr(session_relay, "_run_relay", _noop)
+
+    async def _go():
+        out = await session_relay.ask(ORIGIN, "CTO", "협의 요청")
+        await asyncio.sleep(0)
+        return out
+
+    out = asyncio.run(_go())
+    assert out["sent"] is True and out["hop"] == 1
+
+
+async def _false():
+    return False
+
+
+def test_answering_hop2_question_allows_hop3_and_hop3_is_blocked(monkeypatch):
+    """② hop2 질문에 답하는 턴 → 새 질문 hop3 허용. hop3 질문에 답하는 턴 → hop_limit."""
+    prompt2 = session_relay._build_question("T", "CTO", OTHER, "GO100Owner", "질문", "", RID_Q)
+    pool = _HopPool(trigger=prompt2, relays={RID_Q: _relay(2, OTHER, ORIGIN)})
+    base, basis = _hop(monkeypatch, pool)
+    assert (base, basis) == (2, f"relay_question:{RID_Q[:8]}:hop2")
+    assert base + 1 <= session_relay.MAX_HOP == 3
+
+    prompt3 = session_relay._build_question("T", "CTO", OTHER, "GO100Owner", "질문", "", RID_Q)
+    pool = _HopPool(trigger=prompt3, relays={RID_Q: _relay(3, OTHER, ORIGIN)})
+    _patch_pool(monkeypatch, pool)
+    out = asyncio.run(session_relay.ask(ORIGIN, "CTO", "또 묻기"))
+    assert out["sent"] is False and out["error"] == "hop_limit"
+    assert f"relay_question:{RID_Q[:8]}:hop3" in out["message"]
+    assert out["hop_basis"] == f"relay_question:{RID_Q[:8]}:hop3"
+
+
+def test_turn_that_received_reply_uses_relay_hop(monkeypatch):
+    """③ 회신을 받은 턴에서 다시 물으면 해당 relay hop + 1 (루프 방지 유지)."""
+    reply = (
+        "📨 **CTO의 답이 도착했습니다**\n> 물어본 질문: 뭐였지\n\n답 본문 "
+        f"(relay_id={RID_OLD}) 를 인용함\n\n── 이제 할 일 ──\n진행하세요."
+        + session_relay._relay_tag(RID_Q)
+    )
+    pool = _HopPool(trigger=reply, relays={RID_Q: _relay(2, ORIGIN, OTHER),
+                                           RID_OLD: _relay(1, OTHER, S1)})
+    base, basis = _hop(monkeypatch, pool)
+    # 본문이 인용한 표식이 아니라 꼬리의 우리 표식을 쓴다.
+    assert (base, basis) == (2, f"relay_reply:{RID_Q[:8]}:hop2")
+
+
+def test_marker_roundtrip_for_question_and_reply():
+    q = session_relay._build_question("T", "CTO", OTHER, "GO100Owner", "질문", "ctx", RID_Q)
+    assert session_relay._relay_id_from(q) == RID_Q
+    assert session_relay._looks_like_relay(q)
+    assert session_relay._relay_id_from(session_relay._build_question("T", "", OTHER, "", "q", "")) is None
+    assert "_relay_tag(relay_id)" in inspect.getsource(session_relay._run_relay)
+
+
+def test_unidentifiable_turn_uses_conservative_path(monkeypatch):
+    """④ 판별 실패 → 최근 pending relay 의 hop, 없으면 0, 기준이 기록된다."""
+    # 표식 없는 옛 형식 relay 질문
+    legacy = "[CTO에게 — 백억이(3ad8d4c5)의 질문]\n\n질문"
+    base, basis = _hop(monkeypatch, _HopPool(trigger=legacy, pending_hop=3))
+    assert base == 3 and basis.startswith("relay_marker_missing:fallback_pending_relay_hop3")
+    base, basis = _hop(monkeypatch, _HopPool(trigger=legacy))
+    assert base == 0 and basis == "relay_marker_missing:no_pending_relay"
+    # 표식은 있는데 relay 행이 없다
+    base, basis = _hop(monkeypatch, _HopPool(trigger=f"x (relay_id={RID_Q})", pending_hop=2))
+    assert base == 2 and basis.startswith("relay_row_missing:")
+    # 다른 세션 사이의 relay 표식
+    foreign = {RID_Q: _relay(3, OTHER, S1)}
+    base, basis = _hop(monkeypatch, _HopPool(trigger=f"x (relay_id={RID_Q})", relays=foreign, pending_hop=1))
+    assert base == 1 and basis.startswith("relay_row_foreign:")
+    # 촉발 메시지를 못 찾음
+    base, basis = _hop(monkeypatch, _HopPool(trigger="__none__", pending_hop=2))
+    assert base == 2 and basis.startswith("no_trigger_message:")
+    # 조회 오류 → 보수 경로 → 그것도 오류면 0 + 기준 기록
+    base, basis = _hop(monkeypatch, _HopPool(lookup_error=True, pending_hop=2))
+    assert base == 2 and basis.startswith("lookup_error:RuntimeError")
+    base, basis = _hop(monkeypatch, _HopPool(lookup_error=True, fallback_error=True))
+    assert base == 0 and "fallback_error" in basis
+
+
+def test_fallback_is_time_bounded_and_pending_only():
+    src = inspect.getsource(session_relay._conservative_hop)
+    assert "status = 'pending'" in src and "_HOP_FALLBACK_MIN" in src
+    assert "6 hours" not in inspect.getsource(session_relay._hop_basis)
+
+
+def test_current_hop_is_thin_wrapper_over_hop_basis(monkeypatch):
+    """`_current_hop` 은 삭제되지 않고 `_hop_basis` 의 hop 값만 돌려준다."""
+    assert asyncio.iscoroutinefunction(session_relay._current_hop)
+    assert list(inspect.signature(session_relay._current_hop).parameters) == ["origin_session_id"]
+
+    async def _basis(_o):
+        return 2, "relay_question:deadbeef:hop2"
+
+    monkeypatch.setattr(session_relay, "_hop_basis", _basis)
+    assert asyncio.run(session_relay._current_hop(ORIGIN)) == 2
+
+
+def test_ceo_direct_turn_with_three_old_hop3_relays_sends_hop1(monkeypatch):
+    """세션 3ad8d4c5 실측: 6시간 내 hop3 질문 3건(pending/answered) 이력이 있어도
+    CEO 직접 턴의 ask() 는 실제 `_hop_basis`/`_current_hop` 경로로 hop=1 로 전송된다."""
+    old = [(f"4444444{i}-aaaa-aaaa-aaaa-00000000000{i}", st) for i, st in
+           enumerate(["pending", "answered", "answered"], start=1)]
+    relays = {rid: _relay(3, OTHER, ORIGIN) for rid, _ in old}
+
+    class _P(_AmbigPool):
+        async def fetchval(self, sql, *args):
+            if "FROM chat_turn_executions" in sql:
+                return "TASK_ID: X — CEO 가 직접 시킨 협의를 진행하세요"
+            if "max(hop)" in sql:
+                return 3  # 옛 구현이 읽던 6시간 이력 — 직접 턴이면 읽으면 안 된다
+            return None
+
+        async def fetchrow(self, sql, *args):
+            if "FROM session_relay WHERE id" in sql:
+                return relays.get(args[0])
+            return await super().fetchrow(sql, *args)
+
+    pool = _P([_s(ORIGIN, "백억이", "GO100Owner"), _s(S1, "전략가", "CTO")])
+    _patch_pool(monkeypatch, pool)
+
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(session_relay, "_pair_in_flight", lambda *a: _false())
+    monkeypatch.setattr(session_relay, "_target_is_busy", lambda *a: _false())
+    monkeypatch.setattr(session_relay, "_relay_goal", _noop)
+    monkeypatch.setattr(session_relay, "_relay_paused", lambda *a: _false())
+    monkeypatch.setattr(session_relay, "_run_relay", _noop)
+
+    assert asyncio.run(session_relay._current_hop(ORIGIN)) == 0
+
+    async def _go():
+        out = await session_relay.ask(ORIGIN, "CTO", "협의 요청")
+        await asyncio.sleep(0)
+        return out
+
+    out = asyncio.run(_go())
+    assert out["sent"] is True and out["hop"] == 1
+
+
+def test_max_hop_env_and_notify_path_unchanged():
+    """MAX_HOP 기본 3 · env 동작 불변, 알림 경로는 hop 판별을 타지 않는다."""
+    src = inspect.getsource(session_relay)
+    assert 'int(os.getenv("SESSION_RELAY_MAX_HOP", "3"))' in src
+    notify_src = inspect.getsource(session_relay.notify) + inspect.getsource(session_relay._run_notify)
+    assert "_hop_basis" not in notify_src and "_relay_tag" not in notify_src
