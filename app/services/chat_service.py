@@ -1375,6 +1375,78 @@ async def _persist_retry_model_switch(
         logger.warning("retry_switch_record_failed execution=%s: %s", str(execution_id)[:8], type(exc).__name__)
 
 
+# 값이 모델이 아니라 공급자 이름뿐인 model_used (2026-10-02 실측: codex 727건/7일)
+_PROVIDER_ONLY_MODEL_LABELS = frozenset({
+    "codex", "claude", "anthropic", "openai", "litellm", "gemini", "deepseek", "groq",
+})
+# LLM 을 거치지 않은 응답 경로의 표지 — 모델 전환이 아니다
+_NON_LLM_RESPONSE_LABELS = frozenset({"semantic_cache", "discussion-orchestrator", "loop_handler"})
+
+
+def _normalize_turn_model_record(
+    *,
+    requested_model: object,
+    actual_model: object,
+    fallback_info: object = None,
+    existing_chain: object = None,
+    model_used: object = None,
+) -> Dict[str, Any]:
+    """턴 최종 기록에 넣을 모델 값을 기록 시점에 정규화한다.
+
+    requested_model 은 호출 인자 → 행 기존값, actual_model 은 호출 인자 → model_used →
+    행 기존값 순으로 합친 값이어야 한다. actual_model 이 비면 SQL 이 요청 모델로 채우므로
+    전환 판정도, model_used 보정도 하지 않는다(요청 모델을 실제 모델처럼 쓰지 않는다).
+
+    반환
+      actual_to_store  — 모델이면 정규화 슬러그, 상태값(model=None)이면 원문 그대로
+      raw_actual_model — 원문 (슬러그와 다를 때만, 아니면 None)
+      fallback_chain   — fallback_chain 에 쓸 값. 기존 기록이 있으면 None(건드리지 않음)
+      model_used       — 공급자 이름뿐이던 값을 실제 모델 슬러그로 채운 값
+    """
+    from app.services.llm_metric_normalization import classify_fallback_chain, normalize_model_dimension
+
+    actual_raw = str(actual_model or "").strip()
+    req_dim = normalize_model_dimension(requested_model)
+    act_dim = normalize_model_dimension(actual_raw)
+
+    actual_to_store: Optional[str] = act_dim["model"] if act_dim["model"] else (actual_raw or None)
+    raw_actual = actual_raw if act_dim["model"] and actual_raw != act_dim["model"] else None
+    # 공급자 이름뿐인 값("codex")은 모델이 아니므로 actual 로 취급하지 않는다.
+    if act_dim["model"] in _PROVIDER_ONLY_MODEL_LABELS or act_dim["model"] in _NON_LLM_RESPONSE_LABELS:
+        act_dim = {"model": None, "state": "non_model_label", "raw": actual_raw}
+        actual_to_store = actual_raw or None
+
+    chain: Optional[Any] = None
+    if fallback_info:
+        chain = fallback_info
+    elif (
+        req_dim["model"]
+        and act_dim["model"]
+        and req_dim["model"] != act_dim["model"]
+        and classify_fallback_chain(existing_chain) == "none_recorded"
+    ):
+        chain = {
+            "from": req_dim["model"],
+            "to": act_dim["model"],
+            "reason": "model_switch_unrecorded",
+            "stages": [],
+        }
+        if raw_actual:
+            chain["raw_actual_model"] = raw_actual
+
+    used_text = str(model_used or "").strip()
+    used_out = used_text
+    if used_text.lower() in _PROVIDER_ONLY_MODEL_LABELS and act_dim["model"]:
+        used_out = act_dim["model"]
+
+    return {
+        "actual_to_store": actual_to_store,
+        "raw_actual_model": raw_actual,
+        "fallback_chain": chain,
+        "model_used": used_out,
+    }
+
+
 # ── 폴백 단계 구분 (M5, 2026-09-29) ─────────────────────────────────────
 #
 # Claude 경로 폴백이 사용자에게 "전환합니다" 한 줄만 보여 주고, DB 에는 성공한
@@ -11427,6 +11499,7 @@ async def _save_and_update_session(
     async with get_pool().acquire() as conn:
         async with conn.transaction():
             _exec_generation_id = None
+            _turn_model_record: Optional[Dict[str, Any]] = None
             generated_image_urls = _generated_image_urls_from_tool_events(normalized_tools_called)
             if not generated_image_urls:
                 try:
@@ -11467,7 +11540,8 @@ async def _save_and_update_session(
             if _execution_uuid:
                 _exec_row = await conn.fetchrow(
                     """
-                    SELECT status, completed_at, owner_instance, owner_epoch, generation_id
+                    SELECT status, completed_at, owner_instance, owner_epoch, generation_id,
+                           requested_model, actual_model, fallback_chain
                     FROM chat_turn_executions
                     WHERE id = $1
                     FOR UPDATE
@@ -11499,6 +11573,18 @@ async def _save_and_update_session(
                 _exec_owner = _exec_row.get("owner_instance", _EXECUTION_OWNER_INSTANCE)
                 _exec_epoch = _exec_row.get("owner_epoch", _expected_owner_epoch or 0)
                 _exec_generation_id = _exec_row.get("generation_id")
+                _actual_candidates = [actual_model, model_used, _exec_row.get("actual_model")]
+                _actual_pick = next(
+                    (c for c in _actual_candidates if c and str(c).strip().lower() not in _PROVIDER_ONLY_MODEL_LABELS),
+                    None,
+                ) or next((c for c in _actual_candidates if c), None)
+                _turn_model_record = _normalize_turn_model_record(
+                    requested_model=requested_model or _exec_row.get("requested_model"),
+                    actual_model=_actual_pick,
+                    fallback_info=fallback_info,
+                    existing_chain=_exec_row.get("fallback_chain"),
+                    model_used=model_used,
+                )
                 if (
                     _exec_owner != _EXECUTION_OWNER_INSTANCE
                     or (
@@ -11593,7 +11679,8 @@ async def _save_and_update_session(
                            sources = $7::jsonb, tools_called = $8::jsonb,
                            thinking_summary = $9, execution_id = COALESCE(execution_id, $10), edited_at = NOW()
                        WHERE id = $11""",
-                    clean_content, intent or None, model_used,
+                    clean_content, intent or None,
+                    _turn_model_record["model_used"] if _turn_model_record else model_used,
                     cost, tokens_in, tokens_out,
                     json.dumps(sources or []), json.dumps(normalized_tools_called),
                     thinking_summary, _execution_uuid, placeholder_id,
@@ -11628,7 +11715,8 @@ async def _save_and_update_session(
                 _saved_msg = await _save_message(
                     conn, sid, "assistant", content,
                     execution_id=_execution_uuid,
-                    model_used=model_used, intent=intent, cost=cost,
+                    model_used=_turn_model_record["model_used"] if _turn_model_record else model_used,
+                    intent=intent, cost=cost,
                     tokens_in=tokens_in, tokens_out=tokens_out,
                     sources=sources or [], tools_called=normalized_tools_called,
                     thinking_summary=thinking_summary,
@@ -11643,12 +11731,14 @@ async def _save_and_update_session(
                         "duration_sec": _response_duration_sec,
                         "duration_ms": int(round(_response_duration_sec * 1000)),
                         "response_duration_source": "server_monotonic",
-                        "response_model": model_used or None,
+                        "response_model": (_turn_model_record["model_used"] if _turn_model_record else model_used) or None,
                         "response_intent": intent or None,
                         "tool_event_count": len(normalized_tools_called or []),
                         "tokens_in": int(tokens_in or 0),
                         "tokens_out": int(tokens_out or 0),
                     }
+                    if _turn_model_record and _turn_model_record["raw_actual_model"]:
+                        _response_telemetry["raw_actual_model"] = _turn_model_record["raw_actual_model"]
                     await conn.execute(
                         """
                         UPDATE chat_messages
@@ -11733,7 +11823,11 @@ async def _save_and_update_session(
                     _assistant_msg_id,
                     reason="final_save_completed",
                 )
-                _fallback_chain_json = json.dumps(fallback_info) if fallback_info else None
+                _record_chain = _turn_model_record["fallback_chain"] if _turn_model_record else fallback_info
+                _fallback_chain_json = json.dumps(_record_chain, ensure_ascii=False) if _record_chain else None
+                _actual_for_row = (
+                    _turn_model_record["actual_to_store"] if _turn_model_record else None
+                ) or actual_model or model_used or None
                 await conn.execute(
                     """
                     UPDATE chat_turn_executions
@@ -11760,7 +11854,7 @@ async def _save_and_update_session(
                     _execution_uuid,
                     _assistant_msg_id,
                     requested_model,
-                    actual_model or model_used or None,
+                    _actual_for_row,
                     _EXECUTION_OWNER_INSTANCE,
                     int(_exec_epoch or 0),
                     _fallback_chain_json,
