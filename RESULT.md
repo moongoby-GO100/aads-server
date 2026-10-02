@@ -1,3 +1,81 @@
+# AADS-CHAT-TURN-MODEL-CONTRACT-20261002
+
+턴 모델 결정 6곳을 `TurnModelContract` 하나로 통일. 요청 모델은 턴 시작에 한 번 정하고 이후 경로는 읽기만 한다. (이 절은 맨 위에 추가한 것이며 아래 기존 RESULT.md 내용은 한 줄도 지우지 않았다. runner-0cd99c37 은 이 작업이 대체한다.)
+
+## 브리프 밖 파일 사전 설명
+- 브리프 파일: `app/services/chat_service.py`, `app/services/model_selector.py` (수정).
+- 신규 `app/services/turn_model_contract.py` — 계약 객체. 두 파일 모두에서 import 하므로 한 곳에 두어야 한다(양쪽 사본을 두면 R-ERRBOOK 이 경고한 "두 벌" 이 된다).
+- 신규 `tests/unit/test_turn_model_contract.py` — 요구된 행렬 테스트.
+- 수정 `scripts/pre_commit_test_map.py` — 새 테스트를 기존 `chat_stall_codex_auth_fallback` 묶음에 등록(chat_service/model_selector/turn_model_contract 변경 시 pre-commit 이 같이 돌린다). 3줄.
+
+## STEP 0 기존 구현 분류
+
+| 대상 | 분류 | 내용 |
+|---|---|---|
+| `chat_service.send_message_stream` 턴 시작 블록(요청 모델 결정·`chat_turn_executions.requested_model` UPDATE) | 수정 | 선택창 값을 정규화 → `build_turn_contract` 1회 → UPDATE 는 계약의 구체 모델로. 이전에는 `model_override or intent_result.model` 이라 "auto"/"mixture" 토큰이 그대로 기록될 수 있었다 |
+| 선택창 `openai:<id>` → `codex:<id>` 정규화 (32745da4, `call_stream` 안) | 이관 | `turn_model_contract.normalize_selected_model` 로 계약 생성 시점에 수행. `call_stream` 쪽 처리는 이미 codex 인 값에는 no-op 이라 그대로 둔다(동작 동일) |
+| `send_message_stream` 재시도 루프 (`iter_with_stall_timeout`, `_persist_retry_model_switch`, `_note_retry_model_switch`) | 수정 | 구조·횟수·앵커 문자열 유지. 예비 모델 목록과 시도별 모델 계산만 `_turn_retry_fallback_models` / `_plan_attempt_model` 로 뽑아 루프와 테스트가 같은 코드를 쓴다. 고정 턴은 예비 모델 `[]` |
+| `chat_service._turn_retry_fallback_models`, `_plan_attempt_model` | 신규 | 순수 함수. 고정이면 같은 모델, 비고정일 때만 `_cross_provider_chat_fallback_chain` |
+| `chat_service._note_retry_model_switch`, `_persist_retry_model_switch`, `_safe_fallback_reason`, `iter_with_stall_timeout`, `StreamStallError`, 인터럽트 중단 처리 | 유지 | 5cf57465(인터럽트는 재시도 안 함), 62feede6(스톨 타임아웃·Codex 401 표시) 되돌리지 않음. 체인 항목 4키 모양 {from,to,reason,at} 그대로 |
+| `chat_service._resume_single_stream` 모델 결정 | 수정 | 원 턴 `requested_model` 우선(5cf57465 의 순서 유지: `resume_model_from_execution` → `session_current`). 계약 생성·`fallback_info` 저장 추가 |
+| `model_selector.call_stream` 정책 강등(cascade/allowed_models) | 수정 | 계약이 면제(`policy_exempt`)한 턴은 건너뛰고, 면제가 아닌 실제 강등은 `fallback_chain` 에 `kind=policy_downgrade` 로 사유와 함께 기록 |
+| `call_stream` Codex 오류→Claude Fable 전환 (`codex_cli` 등록행 폴백 체인, quota 우회, `_CODEX_FB` 분기) | 수정 | `user_pinned` 이면 전환 없이 분류된 오류 이벤트로 종료 |
+| `call_stream` Claude 최후 sonnet 강등 | 수정 | `and not _pinned_no_switch` |
+| `call_stream` gemini/deepseek/openrouter 등 나머지 내부 폴백, `_stream_direct_openai_provider` | 유지 | 범위 밖(아래 "남은 항목") |
+| `scripts/claude_model_contract.py` `ModelObservation`, `intent_router.IntentResult`·`get_model_for_override` | 유지 | 변경 없음. `IntentResult` 에는 필드를 추가하지 않고 동적 속성(`turn_model_contract`, `policy_exempt`)만 붙인다(`asdict` 사용처 보호) |
+| `turn_model_contract.py` 전체 | 신규 | `TurnModelContract`, `build_turn_contract`, `build_resume_contract`, `normalize_selected_model`, `pinned_failure_notice`, `note_switch`, `note_done` |
+| 삭제 | 없음 | 기존 함수·테스트 삭제 없음 |
+
+## 결정 지점 6곳 — 이전 / 이후
+
+| # | 결정 지점 | 이전 | 이후 |
+|---|---|---|---|
+| 1 | 선택창 저장값 | `model_override` 가 곳곳에서 그대로 쓰이고 auto 토큰도 `requested_model` 로 기록. `openai:` → codex 정규화는 `call_stream` 안이라 기록 모델과 실행 모델이 어긋날 수 있었다 | 턴 시작에 정규화 후 계약 `source=user_select`, `user_pinned=true`. `chat_turn_executions.requested_model` 에 구체 모델 한 번 기록 |
+| 2 | session.current_model | 재개에서 원 턴 기록보다 먼저/동등하게 쓰여 다른 턴이 남긴 값으로 바뀜(24h 8건: Opus 5.5 요청이 gpt-5.6-sol 로 이어짐) | 원 턴 기록이 없을 때만 `source=session_fallback` + `origin_requested_model_missing:<tier>` 를 `fallback_chain` 에 남기며 사용 |
+| 3 | intent_policies / cascade_downgrade | 자동응답(`auto_reaction`)의 운영 기본 모델이 `allowed_models` 에 없으면 조용히 강등 | 자동응답 기본값은 `source=auto_reaction_default` 로 면제. 실제 강등이 일어나면 `kind=policy_downgrade` 로 `fallback_chain` + 로그(`cascade_downgrade`)에 사유 기록 |
+| 4 | 재시도 루프 예비 모델 | 사용자가 고른 모델도 실패하면 예비 모델로 전환 | 고정 턴: 같은 모델 재시도, 최종 실패 시 `pinned_failure_notice` + error 이벤트(`reason=pinned_model_failed`, `failure_class`) 로 전환 없음. 비고정 턴만 전환 + 배너 + `fallback_chain` + `actual_model` |
+| 5 | 재개 | `resume_model_override`(첫 응답 지연 예비 모델)가 원 턴 모델을 덮을 수 있었고 `fallback_info` 미저장 | 원 턴 `requested_model` 유지(`source=resume_origin`). 고정 턴은 override 무시(`resume_override_ignored_pinned` 로그), 재개 재시도도 같은 모델만. 비고정이고 override 가 적용되면 `kind=resume_override` 기록 |
+| 6 | CLI 보고 actual_model | done 이벤트의 `actual_model` 과 `used_models` 를 요청 모델과 대조하지 않음 | `note_done` 이 보조 모델(`aux_models`)을 분리해 `turn_model_aux` 로그, 전환 기록이 없는데 요청과 다르면 `turn_model_actual_differs` 경고. 원인 불명의 차이를 전환으로 위조해 기록하지 않음 |
+
+SSE done 의 `requested_model` 필드는 고정 턴에서 `model_used` 와 다를 때만 실린다.
+
+## actual_model 이 opus-4-8 로 찍힌 건 — 원인 근거
+
+- 관측: 5행, 세션 `acc75e55-…0002`, 09:36–10:14 KST, `requested_model=claude-opus-5-5`, `fallback_chain=[]`. 같은 세션의 다른 56행은 opus-5.
+- (a) 보조(서브에이전트) 모델이 첫 키로 잡힌 경우 — **배제**. `scripts/claude_model_contract.py` `ModelObservation.observe` 는 `actual_model` 을 메인 스레드 `assistant.message.model`(`parent_tool_use_id` 비어 있음)에서만 취하고, 보조 모델은 `used_models`/`model_mismatch` 로 따로 낸다. `tests/unit/test_claude_model_contract.py::test_primary_model_not_first_subagent_usage_and_mismatch_detected` 가 이를 검증한다(실행 통과).
+- (b) 별칭 매핑이 4-8 로 바꾼 경우 — **앱 코드에서는 배제**. `claude-opus-4-8` 은 `EXACT_MODEL_IDS` 에만 있고, `claude-opus-5-5`/`claude-opus` 가 4-8 로 풀리는 매핑이 없다(`resolve_model` 은 명시 버전을 바꾸지 않는다 — `test_explicit_version_never_changes`).
+- (c) CLI/제공자가 실제로 다른 모델을 보고 — **잠정 결론**. 원시 relay 로그를 찾지 못해 CLI 가 보낸 `assistant.message.model` 원문은 확인하지 못했다. 따라서 (c) 는 (a)(b) 배제에서 나온 추정이며 확정이 아니다.
+- 조치: (c) 이므로 고치지 않았다. 앞으로 같은 일이 생기면 `turn_model_actual_differs`(요청·실제·source·pinned·model_mismatch) 와 `turn_model_aux`(used_models) 로그로 원문 근거가 남는다.
+
+## 동작 변경·주의
+- 자동 선택 턴의 재시도 기준 모델이 "mixture"/"auto" 토큰이 아니라 운영 DB 기본 모델(예: claude-opus-5-5)이 되어, 예비 모델 목록이 그 모델 기준(예: gpt-6-astra, gpt-5.6-sol)으로 계산된다.
+- 재개의 "고정 여부"는 DB 컬럼이 없어(스키마 변경 없음) 원 턴 user 메시지 `model_used` 가 비어 있지 않고 auto 토큰이 아니면 고정으로 본다.
+- 기존 잠재 버그 수정: 재개의 Redis 완료 분기에서 `_resume_model_used` 가 미바인딩이던 것을 `_resume_model` 로 설정.
+- `call_stream` 의 gemini/deepseek/openrouter 등 비-Claude/비-Codex 모델 내부 폴백과 `_stream_direct_openai_provider` 폴백은 여전히 배너와 함께 전환한다 — 요구 행렬({Opus 5.5, codex gpt-6.1-sol}) 범위 밖이라 건드리지 않았다.
+
+## 테스트 결과 (실제 실행한 것만)
+
+`bash scripts/run_unit_tests.sh` 로 실행.
+
+- 신규 `tests/unit/test_turn_model_contract.py` + 기존 3개(`test_chat_retry_model_switch`, `test_chat_stall_codex_auth_fallback`, `test_chat_interrupt_no_model_switch`) + `test_claude_model_contract`: **166 passed**.
+- 관련 묶음(위 + test_chat_service, test_chat_auto_reaction_integrity, test_chat_retry_partial_lifecycle, test_chat_status_retry_projection, test_chat_resume_owner_fence_v2, test_chat_stream_completion_static, test_model_selector_codex_db_route, test_model_selector_dynamic_routing, test_chat_interrupt_receipt_failclose, test_stream_watchdog_liveness, test_relay_resume_persistence, test_dup_guard): **422 passed, 1 warning**(FastAPI `regex` deprecation, 이 작업과 무관).
+- `ruff check --select F821,F811` (chat_service, model_selector, turn_model_contract, 신규 테스트): All checks passed.
+- `python3 -m compileall` (chat_service, model_selector, turn_model_contract): 통과.
+- 실행하지 않은 것: 전체 `tests/unit` 스위트, `scripts/dup_guard.py` 단독 실행, 운영 환경 검증. 이 작업에서는 빌드·배포·재시작·git 조작을 하지 않았다.
+
+행렬 커버리지 ({Opus 5.5, codex gpt-6.1-sol} × 시나리오):
+
+| 시나리오 | 검증 내용 |
+|---|---|
+| 정상 | 고정 턴은 3회 시도 모두 요청 모델, 예비 모델 없음. 자동 턴은 구체 기본 모델로 실행 |
+| 인터럽트 | 계약·체인 불변, 인터럽트 분기가 재시도 이월보다 앞(5cf57465 앵커) |
+| 재개 | 원 턴 모델 유지, 고정 턴 override 무시, 비고정 override 기록, 원 턴 기록 없음→`session_fallback` + 체인 |
+| 자동응답 | 운영 기본 모델이 `requested_model`, 정책 강등 면제, 비고정이라 전환 시 체인·배너 기록 |
+| 401 인증 실패 | 고정: `call_stream` 수준에서 Claude 전환 없이 error(`codex:` 접두사·무접두사·무잠금 3경로). 비고정: 기존 폴백 유지. 재시도 루프 수준에서 고정은 체인 비어 있음 |
+| 스톨/타임아웃 | 고정: 같은 모델, 전환 없음, 분류된 안내문. 비고정: 전환 + 체인 + 배너 |
+
+---
+
 # AADS-CHAT-STALL-CODEX401-FALLBACK-20261002
 
 채팅 무출력 정지 방지 — 스톨 타임아웃 + Codex 401 인증 오류 표시 + 전환 기록. (이 절은 맨 위에 추가한 것이며 아래 기존 RESULT.md 내용은 한 줄도 지우지 않았다.)

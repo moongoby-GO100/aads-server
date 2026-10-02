@@ -2274,7 +2274,17 @@ async def call_stream(
     _intent = getattr(intent_result, "intent", "")
     _model_locked = getattr(intent_result, "model_locked", False)
     _explicit_model_requested = bool(_effective_override) or bool(_model_locked) or _provider_pinned
-    if not _explicit_model_requested:
+    # 턴 모델 계약이 정한 요청 모델(사용자 선택·자동응답 운영 기본값·재개 원 모델)은 intent 정책이 강등하지 않는다.
+    _turn_contract = getattr(intent_result, "turn_model_contract", None)
+    _policy_exempt = bool(getattr(intent_result, "policy_exempt", False))
+    # 사용자가 직접 고른 모델이 실패하면 다른 모델로 바꾸지 않고 오류를 그대로 올린다.
+    _pinned_no_switch = bool(getattr(_turn_contract, "user_pinned", False))
+    if _policy_exempt and not _explicit_model_requested:
+        logger.info(
+            "cascade_skip: turn contract exempt model='%s' intent='%s' source=%s",
+            model, _intent, getattr(_turn_contract, "source", "?"),
+        )
+    elif not _explicit_model_requested:
         _policy_model, _policy_reason = await _resolve_governed_intent_model(
             intent=_intent,
             current_model=model,
@@ -2282,6 +2292,11 @@ async def call_stream(
         )
         if _policy_model:
             logger.info(f"cascade_downgrade: {_intent} → {_policy_model} ({_policy_reason})")
+            if _turn_contract is not None:
+                _turn_contract.note_switch(
+                    model, _policy_model,
+                    reason=f"intent 정책 강등({_intent}: {_policy_reason})", kind="policy_downgrade",
+                )
             model = _policy_model
             resolved_model, resolved_row = await _resolve_registered_model_alias(model, provider=_qualified_provider)
             if resolved_model and resolved_model != model:
@@ -2426,7 +2441,7 @@ async def call_stream(
         elif backend == "codex_cli":
             _cx_blocked, _cx_detail = await _codex_quota_exhausted()
             if _cx_blocked:
-                if _provider_pinned:
+                if _provider_pinned or _pinned_no_switch:
                     yield {"type": "error", "content": f"provider=codex model={model}: quota unavailable: {_cx_detail}"}
                     return
                 logger.warning("codex_preflight_skip: 주간 한도 소진(%s) — Claude 경로로 우회", _cx_detail)
@@ -2469,7 +2484,8 @@ async def call_stream(
                 logger.warning("codex_empty_response model=%s — 폴백으로 전환", model)
             if not _codex_had_error:
                 return
-            if _provider_pinned:
+            if _provider_pinned or _pinned_no_switch:
+                logger.warning("codex_pinned_no_switch: %s failed — user pinned, no fallback", model)
                 yield {"type": "error", "content": f"provider=codex model={model}: {_codex_error_content}"}
                 return
             if _codex_is_tool_error:
@@ -2911,7 +2927,11 @@ async def call_stream(
                 logger.warning(f"samegrade_fallback_failed model={_sg_model}: {_sg_err}")
                 continue
 
-        if _normalize_intent_policy_model(_original_model) in ("claude-opus",) and not _samegrade_success:
+        if (
+            _normalize_intent_policy_model(_original_model) in ("claude-opus",)
+            and not _samegrade_success
+            and not _pinned_no_switch
+        ):
             logger.warning(f"all_samegrade_failed: {_original_model} → last_resort claude-sonnet")
             try:
                 async for event in _stream_with_slots("claude-sonnet"):
@@ -3055,12 +3075,17 @@ async def call_stream(
             if event.get("type") == "error":
                 _had_error = True
                 _cf_kind = _classify_claude_auth_error(event.get("content", ""))
+                _cf_error_content = event.get("content", "")
                 logger.warning(
                     "codex_fallback: %s failed (%s), falling back to claude-fable-5-1",
                     model, "Codex 인증 실패(재로그인 필요)" if _cf_kind != "error" else "error",
                 )
                 break
             yield event
+        if _had_error and _pinned_no_switch:
+            logger.warning("codex_pinned_no_switch: %s failed (%s) — user pinned, no fallback", model, _cf_kind)
+            yield {"type": "error", "content": _cf_error_content}
+            return
         if _had_error:
             _cf_label = "Codex 인증 실패(재로그인 필요)" if _cf_kind != "error" else f"{model} (Codex) 오류"
             yield {"type": "delta", "content": f"\n\n[{_cf_label} → Claude Fable 5.1 전환]\n\n"}

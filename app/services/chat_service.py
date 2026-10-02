@@ -1293,6 +1293,34 @@ async def _drop_unregistered_codex_retry_candidates(chain: List[str], base_model
     return kept
 
 
+async def _turn_retry_fallback_models(contract: Any) -> List[str]:
+    """재시도 예비 모델 목록. 사용자가 고른 모델(user_pinned)은 예비 모델이 없다."""
+    if contract.user_pinned:
+        return []
+    base = str(contract.requested_model or "").strip()
+    chain = await _drop_unregistered_codex_retry_candidates(_cross_provider_chat_fallback_chain(base), base)
+    return chain[1:3]
+
+
+def _plan_attempt_model(
+    model_override: Optional[str],
+    base_model: str,
+    fallback_models: List[str],
+    attempt: int,
+) -> tuple[Optional[str], str, bool]:
+    """시도 번호별 (call_stream 에 넘길 override, 실제 모델, 재시도가 고른 모델 여부)."""
+    from app.services.turn_model_contract import is_auto_selection
+
+    attempt_override = model_override
+    if attempt > 0 and attempt - 1 < len(fallback_models):
+        attempt_override = fallback_models[attempt - 1]
+    is_retry_override = attempt > 0 and attempt_override != model_override
+    effective = str(
+        (attempt_override if not is_auto_selection(attempt_override) else "") or base_model or ""
+    ).strip()
+    return attempt_override, effective, is_retry_override
+
+
 def _model_switch_banner(requested_model: object, actual_model: object) -> str:
     """model_selector 의 "[<모델> 실행 불가 → ... 전환]" 배너와 같은 형식."""
     return f"\n\n[{requested_model} 실행 불가 → {actual_model} 전환]\n\n"
@@ -8593,19 +8621,45 @@ async def _resume_single_stream(
             # BUG-4 FIX v4: 세션/워크스페이스/DB 기본까지만 이어쓰기 모델로 허용한다.
             # 우선순위: 1) requested_model → 2) user model_override → 3) assistant model_used
             #          → 4) workspace default_model → 5) DB default model
+            from app.services import turn_model_contract as _tmc
+
             _resume_model: Optional[str] = None
+            _resume_tier = "execution"
+            _resume_override_applied: Optional[str] = None
+            _origin_requested_model = str(requested_model or "").strip() or None
+            _origin_pinned = False
             try:
                 async with pool.acquire() as conn:
-                    if resume_model_override:
+                    # 원 턴이 선택창에서 고른 모델이면(user 메시지 model_used) 고정 턴이다.
+                    # 고정 턴은 resume_model_override(첫 응답 지연 예비 모델)로 바꾸지 않는다.
+                    if _execution_uuid:
+                        _origin_user_model = await conn.fetchval(
+                            "SELECT um.model_used FROM chat_turn_executions te "
+                            "JOIN chat_messages um ON um.id = te.user_message_id WHERE te.id = $1",
+                            _execution_uuid,
+                        )
+                        _origin_pinned = bool(
+                            _origin_user_model and not _tmc.is_auto_selection(_origin_user_model)
+                        )
+                        if _origin_pinned and not _origin_requested_model:
+                            _origin_requested_model = str(_origin_user_model).strip()
+                    if resume_model_override and _origin_pinned:
+                        logger.info(
+                            "resume_override_ignored_pinned session=%s override=%s origin=%s",
+                            session_id[:8], resume_model_override, _origin_requested_model,
+                        )
+                    elif resume_model_override:
                         from app.services.intent_router import get_model_for_override
                         _resume_model = get_model_for_override(resume_model_override)
+                        _resume_override_applied = _resume_model
+                        _resume_tier = "override"
                         logger.info(f"resume_model_from_explicit_override session={session_id[:8]} model={_resume_model}")
                     # 이어쓰기는 끊긴 그 턴의 요청 모델로 한다. 세션 current_model 을 먼저 보면
                     # 다른 턴(재시도 강등 등)이 남긴 값으로 바뀐다 — 24h 8건이 Opus 5.5 요청인데
                     # gpt-5.6-sol 로 이어졌다(2026-10-02 실측).
-                    if not _resume_model and requested_model:
+                    if not _resume_model and _origin_requested_model:
                         from app.services.intent_router import get_model_for_override
-                        _resume_model = get_model_for_override(requested_model)
+                        _resume_model = get_model_for_override(_origin_requested_model)
                         logger.info(f"resume_model_from_execution session={session_id[:8]} model={_resume_model}")
                     # P1 FIX: 세션 설정 모델 (CEO 드롭다운 — frontend fallback 오염 방지)
                     if not _resume_model:
@@ -8617,6 +8671,7 @@ async def _resume_single_stream(
                             _normalized_session = get_model_for_override(_session_current_model)
                             if _normalized_session not in _AUTO_ROUTED_RESUME_SKIP_MODELS:
                                 _resume_model = _normalized_session
+                                _resume_tier = "session_current"
                                 logger.info(f"resume_model_from_session_current session={session_id[:8]} model={_resume_model}")
                     # 1순위: 마지막 user 메시지의 model_used (CEO가 선택한 model_override)
                     if not _resume_model:
@@ -8635,6 +8690,7 @@ async def _resume_single_stream(
                         _normalized_user = get_model_for_override(_user_model)
                         if _normalized_user not in _AUTO_ROUTED_RESUME_SKIP_MODELS:
                             _resume_model = _normalized_user
+                            _resume_tier = "user_message"
                             logger.info(f"resume_model_from_user_override session={session_id[:8]} model={_resume_model}")
                         else:
                             logger.info(f"resume_model_skip_auto_routed_user session={session_id[:8]} skipped={_normalized_user}")
@@ -8654,6 +8710,7 @@ async def _resume_single_stream(
                             # 자동 라우팅 전용 모델은 resume 대상에서 제외 (CEO가 직접 선택하지 않는 모델)
                             if _normalized_asst not in _AUTO_ROUTED_RESUME_SKIP_MODELS:
                                 _resume_model = _normalized_asst
+                                _resume_tier = "assistant_message"
                                 logger.info(f"resume_model_from_assistant session={session_id[:8]} model={_resume_model}")
                             else:
                                 logger.info(f"resume_model_skip_auto_routed session={session_id[:8]} skipped={_normalized_asst}")
@@ -8668,6 +8725,7 @@ async def _resume_single_stream(
                         if _ws_settings and isinstance(_ws_settings, dict):
                             _resume_model = _ws_settings.get("default_model")
                         if _resume_model:
+                            _resume_tier = "workspace"
                             logger.info(f"resume_model_from_workspace session={session_id[:8]} model={_resume_model}")
             except Exception as _model_err:
                 logger.warning(f"resume_model_lookup_failed session={session_id[:8]}: {_model_err}")
@@ -8680,6 +8738,7 @@ async def _resume_single_stream(
                     logger.warning(f"resume_model_db_default_failed session={session_id[:8]}: {_db_model_err}")
                     _resume_model = None
                 if _resume_model:
+                    _resume_tier = "db_default"
                     logger.info(f"resume_model_from_db_default session={session_id[:8]} model={_resume_model}")
                 else:
                     logger.error(
@@ -8695,6 +8754,17 @@ async def _resume_single_stream(
                 use_tools=True,
                 tool_group="all",
             )
+            # 재개 계약: 원 턴 requested_model 을 유지한다. 원 턴 기록이 없을 때만
+            # session_fallback 으로 대체 모델을 쓰고 그 사실을 fallback_chain 에 남긴다.
+            _resume_contract = _tmc.build_resume_contract(
+                resolved_model=_resume_model,
+                origin_requested_model=_origin_requested_model,
+                origin_user_pinned=_origin_pinned,
+                fallback_tier=_resume_tier,
+                override_applied=_resume_override_applied,
+            )
+            _resume_contract.apply_to_intent_result(intent_result)
+            logger.info("resume_model_contract session=%s %s", session_id[:8], _resume_contract.as_log())
 
             from app.services.tool_registry import ToolRegistry
             tools_for_api = ToolRegistry().get_tools("all")
@@ -8743,6 +8813,7 @@ async def _resume_single_stream(
                 full_response = redis_content
                 cost_usd = Decimal("0")
                 _resume_model = "recovered_from_redis"
+                _resume_model_used = _resume_model
                 tools_called = []
             else:
                 # 4-B. Redis에 완성 응답 없음 → LLM 재호출 + Redis Stream에 토큰 발행
@@ -8781,8 +8852,13 @@ async def _resume_single_stream(
                 full_response = partial_content  # 기존 부분 응답에 이어붙임
                 cost_usd = Decimal("0")
                 tools_called = []
-                _resume_model_chain = _cross_provider_chat_fallback_chain(_resume_model)
+                # 고정 모델은 예비 모델 없이 같은 모델로만 재시도한다.
+                _resume_model_chain = (
+                    [_resume_model] if _resume_contract.user_pinned
+                    else _cross_provider_chat_fallback_chain(_resume_model)
+                )
                 _resume_model_used = _resume_model_chain[0] if _resume_model_chain else _resume_model
+                _resume_prev_attempt_model = _resume_model_used
 
                 _resume_attempt_charge = {"charged": False}
                 for attempt in range(len(retry_delays) + 1):
@@ -8796,6 +8872,12 @@ async def _resume_single_stream(
                         if _resume_model_chain else _resume_model
                     )
                     _resume_model_used = _resume_model_attempt
+                    if attempt > 0:
+                        _resume_contract.note_switch(
+                            _resume_prev_attempt_model, _resume_model_attempt,
+                            reason="재개 재시도", kind="resume_retry",
+                        )
+                    _resume_prev_attempt_model = _resume_model_attempt
 
                     _raise_if_fenced_out("between_model_attempts")
                     if _execution_uuid:
@@ -8986,10 +9068,11 @@ async def _resume_single_stream(
                 full_response,
                 session_id_str=session_id,
                 execution_id=_execution_uuid,
-                requested_model=requested_model or _resume_model,
+                requested_model=_resume_contract.requested_model or _resume_model,
                 model_used=_resume_model_used,
                 cost=cost_usd,
                 tools_called=tools_called,
+                fallback_info=_resume_contract.fallback_chain or None,
                 expected_owner_epoch=owner_epoch,
             )
 
@@ -13901,10 +13984,13 @@ async def send_message_stream(
             intent = "file_read"
             logger.info(f"[INTENT_OVERRIDE] file_read forced for content containing file keywords")
 
-        _model_override_value = str(model_override or "").strip()
-        _auto_default_requested = _model_override_value in _AUTO_ROUTED_DB_DEFAULT_MODELS
+        # ── 턴 모델 계약: 이 턴이 어떤 모델로 실행돼야 하는지를 여기서 한 번만 정한다 ──
+        # 선택창 저장값 정규화(openai:→codex:), 운영 기본 모델 조회, user_pinned 판정이 전부 이 블록이다.
+        # 이후 재시도·재개·정책 강등은 이 계약을 읽기만 하고 requested_model 을 다시 정하지 않는다.
+        from app.services import turn_model_contract as _tmc
 
-        if model_override and model_override not in ("mixture", "auto") and not _auto_default_requested:
+        if model_override and not _tmc.is_auto_selection(model_override):
+            model_override = await _tmc.normalize_selected_model(model_override)
             intent_result.model = get_model_for_override(model_override)
             intent_result.model_locked = True
             intent_result.use_gemini_direct = False
@@ -13916,7 +14002,8 @@ async def send_message_stream(
                 if not intent_result.tool_group:
                     intent_result.tool_group = "all"
 
-        if not model_override or str(model_override).strip() in ("mixture", "auto", "") or _auto_default_requested:
+        _db_default_model = None
+        if _tmc.is_auto_selection(model_override):
             try:
                 from app.services.model_selector import _get_default_llm_model_from_db
                 _db_default_model = await _get_default_llm_model_from_db()
@@ -13934,7 +14021,16 @@ async def send_message_stream(
                 intent_result.model = _db_default_model
                 intent_result.use_gemini_direct = False
 
-        if _execution_id_str:
+        _turn_contract = _tmc.build_turn_contract(
+            model_override=model_override,
+            intent_override=intent_override,
+            intent_model=intent_result.model,
+            operational_default=_db_default_model,
+        )
+        _turn_contract.apply_to_intent_result(intent_result)
+        logger.info("turn_model_contract session=%s %s", session_id[:8], _turn_contract.as_log())
+
+        if _execution_id_str and _turn_contract.requested_model:
             try:
                 async with get_pool().acquire() as _exec_conn:
                     await _exec_conn.execute(
@@ -13945,7 +14041,7 @@ async def send_message_stream(
                         WHERE id = $1
                         """,
                         uuid.UUID(_execution_id_str),
-                        model_override or intent_result.model,
+                        _turn_contract.requested_model,
                     )
             except Exception as _exec_model_err:
                 logger.debug(f"execution_requested_model_update_failed: {_exec_model_err}")
@@ -13996,7 +14092,7 @@ async def send_message_stream(
                 session_id_str=session_id,
                 raw_messages=raw_messages,
                 model_used=_DISCUSSION_MODEL_USED,
-                requested_model=model_override or intent_result.model,
+                requested_model=_turn_contract.requested_model or intent_result.model,
                 intent=intent,
                 cost=Decimal(str(discussion_result['cost_usd'])),
                 tools_called=discussion_result["tools_called"],
@@ -14720,14 +14816,13 @@ async def send_message_stream(
         input_tokens = 0
         output_tokens = 0
         tools_called: list = []  # 구조화된 tool_events 리스트 (프론트 UI 복원용)
-        _base_stream_model = str(model_override or intent_result.model or "").strip()
-        _missing_done_fallback_models = (
-            await _drop_unregistered_codex_retry_candidates(
-                _cross_provider_chat_fallback_chain(_base_stream_model), _base_stream_model
-            )
-        )[1:3]
+        # 요청 모델은 턴 시작에 확정한 계약의 값이다. 재시도 루프는 이것을 다시 정하지 않는다.
+        _base_stream_model = str(_turn_contract.requested_model or intent_result.model or "").strip()
+        # 사용자가 고른 모델(user_pinned)은 예비 모델 없이 같은 모델로만 재시도한다.
+        _missing_done_fallback_models = await _turn_retry_fallback_models(_turn_contract)
         # 재시도가 모델을 바꾸면 화면(배너)·DB(fallback_chain) 양쪽에 남긴다.
-        _retry_fallback_chain: list = []
+        # 계약의 fallback_chain 과 같은 리스트라 정책 강등 기록도 함께 저장된다.
+        _retry_fallback_chain: list = _turn_contract.fallback_chain
         _pending_switch_banner = ""
         _attempt_failure_reason = ""
         _prev_attempt_model = _base_stream_model
@@ -14736,11 +14831,9 @@ async def send_message_stream(
         for _stream_attempt in range(3):
             _stream_error = False
             _stream_done_seen = False
-            _attempt_model_override = model_override
-            if _stream_attempt > 0 and _stream_attempt - 1 < len(_missing_done_fallback_models):
-                _attempt_model_override = _missing_done_fallback_models[_stream_attempt - 1]
-            _attempt_is_retry_override = _stream_attempt > 0 and _attempt_model_override != model_override
-            _attempt_effective_model = str(_attempt_model_override or _base_stream_model or "").strip()
+            _attempt_model_override, _attempt_effective_model, _attempt_is_retry_override = _plan_attempt_model(
+                model_override, _base_stream_model, _missing_done_fallback_models, _stream_attempt,
+            )
             if _stream_attempt > 0:
                 _switch_banner = _note_retry_model_switch(
                     _retry_fallback_chain,
@@ -14894,6 +14987,7 @@ async def send_message_stream(
                         _done_actual_model = event.get("actual_model") or _done_display_model
                         model_used = _done_display_model
                         actual_model_used = _done_actual_model
+                        _turn_contract.note_done(event, _done_actual_model)
                         cost_usd = Decimal(str(event.get("cost", "0")))
                         input_tokens = event.get("input_tokens", 0) or 0
                         output_tokens = event.get("output_tokens", 0) or 0
@@ -14937,7 +15031,19 @@ async def send_message_stream(
                         # ── 마지막 시도 또는 인증 에러: 기존 로직 ──
                         if _stream_attempt > 0:
                             logger.error(f"stream_retry_exhausted: session={session_id[:8]} attempts=3 error={_err_content[:80]}")
-                        yield f"data: {json.dumps({'type': 'error', 'content': _err_content, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                        _terminal_err_event = {'type': 'error', 'content': _err_content, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens}
+                        if _turn_contract.user_pinned:
+                            # 직접 고른 모델은 바꾸지 않는다. 분류된 실패 원인만 덧붙여 그대로 알린다.
+                            _terminal_err_event['content'] = _err_content + _tmc.pinned_failure_notice(
+                                _turn_contract.requested_model, _attempt_failure_reason, retried=_stream_attempt > 0,
+                            )
+                            _terminal_err_event['reason'] = 'pinned_model_failed'
+                            _terminal_err_event['failure_class'] = _attempt_failure_reason or '요청 오류'
+                            logger.warning(
+                                "pinned_turn_failed_no_switch session=%s model=%s class=%s attempt=%s",
+                                session_id[:8], _turn_contract.requested_model, _attempt_failure_reason, _stream_attempt + 1,
+                            )
+                        yield f"data: {json.dumps(_terminal_err_event)}\n\n"
                         # Terminal LLM/provider errors must not promote a partial
                         # answer as completed. Keep the same visible bubble as an
                         # interrupted partial so auto-resume/UI recovery can continue.
@@ -14998,7 +15104,12 @@ async def send_message_stream(
                                 full_response = ""
                                 thinking_summary = ""
                                 tools_called = []
-                            yield f"data: {json.dumps({'type': 'retry_progress', 'attempt': _stream_attempt + 2, 'max_attempts': 3, 'content': '완료 신호 미수신으로 동급 모델에 재시도합니다.'})}\n\n"
+                            _retry_progress_text = (
+                                '완료 신호 미수신으로 같은 모델에 재시도합니다.'
+                                if _turn_contract.user_pinned
+                                else '완료 신호 미수신으로 동급 모델에 재시도합니다.'
+                            )
+                            yield f"data: {json.dumps({'type': 'retry_progress', 'attempt': _stream_attempt + 2, 'max_attempts': 3, 'content': _retry_progress_text})}\n\n"
                             yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
                             _stream_error = True
                             continue
@@ -15019,7 +15130,13 @@ async def send_message_stream(
                                     partial_content=full_response,
                                     delete_empty_placeholder=False,
                                 )
-                        yield f"data: {json.dumps({'type': 'error', 'content': 'LLM 스트림이 완료 신호 없이 종료되어 완료 처리하지 않았습니다. 중간 응답은 보존했고 동급 모델 재시도도 실패했습니다.', 'recoverable': True, 'reason': 'missing_done_event', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                        _missing_done_text = (
+                            'LLM 스트림이 완료 신호 없이 종료되어 완료 처리하지 않았습니다. 중간 응답은 보존했고 동급 모델 재시도도 실패했습니다.'
+                            if not _turn_contract.user_pinned
+                            else 'LLM 스트림이 완료 신호 없이 종료되어 완료 처리하지 않았습니다. 중간 응답은 보존했고 '
+                            + _tmc.pinned_failure_notice(_turn_contract.requested_model, '빈 응답').strip()
+                        )
+                        yield f"data: {json.dumps({'type': 'error', 'content': _missing_done_text, 'recoverable': True, 'reason': 'missing_done_event', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
                         return
                     break  # retry 루프 탈출
             except Exception as _stream_exc:
@@ -15046,7 +15163,13 @@ async def send_message_stream(
                                 partial_content=full_response,
                                 delete_empty_placeholder=False,
                             )
-                    yield f"data: {json.dumps({'type': 'error', 'content': 'LLM 응답이 멈춰 시도를 취소했고 대체 모델도 응답하지 못했습니다. 중간 응답은 보존했습니다.', 'recoverable': True, 'reason': 'stream_stall_timeout', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                    _stall_text = (
+                        'LLM 응답이 멈춰 시도를 취소했고 대체 모델도 응답하지 못했습니다. 중간 응답은 보존했습니다.'
+                        if not _turn_contract.user_pinned
+                        else 'LLM 응답이 멈춰 시도를 취소했습니다. 중간 응답은 보존했습니다.'
+                        + _tmc.pinned_failure_notice(_turn_contract.requested_model, '시간 초과')
+                    )
+                    yield f"data: {json.dumps({'type': 'error', 'content': _stall_text, 'recoverable': True, 'reason': 'stream_stall_timeout', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
                     return
                 if _stream_attempt < 2:
                     _backoff = 0.5 * (2 ** _stream_attempt)
@@ -15947,7 +16070,7 @@ async def send_message_stream(
         _stream_state_map = globals().get("_streaming_state", {})
         _done_stream_state = _stream_state_map.get(session_id, {}) if isinstance(_stream_state_map, dict) else {}
         _fb_info = _done_stream_state.get("fallback_info") if isinstance(_done_stream_state, dict) else None
-        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'requested_model': (model_override or None) if model_override and model_override != model_used else None, 'fallback_reason': (_fb_info or {}).get('reason') if _fb_info else None, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'duration_sec': _final_response_duration_sec, 'duration_ms': int(round(_final_response_duration_sec * 1000)), 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'stream_id': _stream_id, 'intent': intent, 'model': model_used, 'requested_model': _turn_contract.requested_model if _turn_contract.user_pinned and _turn_contract.requested_model != model_used else None, 'fallback_reason': (_fb_info or {}).get('reason') if _fb_info else None, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens, 'duration_sec': _final_response_duration_sec, 'duration_ms': int(round(_final_response_duration_sec * 1000)), 'thinking_summary': (thinking_summary[:2000] if thinking_summary else None), 'session_cost': f'${_session_cost:.2f}', 'session_turns': _session_turns, 'confidence_label': _confidence_label})}\n\n"
 
     finally:
         # ContextVar set/reset이 async generator/Task 경계에서 분리되면 ValueError 발생.
