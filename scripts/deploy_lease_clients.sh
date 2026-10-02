@@ -16,12 +16,14 @@
 #
 # 멱등이다. 몇 번을 돌려도 같은 결과가 되고, 기존 파일은 .bak_lease_<날짜> 로 남는다.
 #
-#   deploy_lease_clients.sh                     # 기본 대상 3대
+#   deploy_lease_clients.sh                     # 기본 대상 2대 (jinah244 제외)
 #   LEASE_CLIENT_TARGETS="root@1.2.3.4" deploy_lease_clients.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-TARGETS="${LEASE_CLIENT_TARGETS:-root@5.104.86.14 root@114.207.244.86 root@5.104.85.244}"
+# 2026-10-02 CEO 결정: 진아서버(jinah244, root@5.104.85.244)는 신규 사용 중단이라
+# 기본 대상에서 뺐다. 되살리려면 LEASE_CLIENT_TARGETS 에 root@5.104.85.244 를 명시하라.
+TARGETS="${LEASE_CLIENT_TARGETS:-root@5.104.86.14 root@114.207.244.86}"
 STAMP="$(date '+%Y%m%d')"
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=8)
 

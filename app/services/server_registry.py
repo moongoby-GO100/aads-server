@@ -14,6 +14,9 @@ SERVER_REGISTRY 내 동일 객체 참조로 계속 동작한다.
 """
 from typing import Dict, List, Any
 
+STATUS_ACTIVE = "active"
+STATUS_DECOMMISSIONING = "decommissioning"
+
 # ─── 서버 정의 (정규 명칭) ────────────────────────────────────────────────
 _CONTABO116: Dict[str, Any] = {
     "id": "contabo116",
@@ -73,8 +76,12 @@ _JINAH244: Dict[str, Any] = {
     "projects": ["ACCT"],
     "directive_base": "/root/.genspark/directives",
     "http_health_urls": [],
-    "display_name": "진아실장 서버 / 회계비서",
+    "display_name": "진아실장 서버 / 회계비서 (사용 중단·이관 대기)",
     "legacy_ids": ["244"],
+    # 2026-10-02 CEO 결정: 신규 사용 중단. 원장에는 남긴다 — ACCT DB 터널이
+    # get_server_host("jinah244") 를 쓰고 OBYS 재무 API(8210 터널)도 아직 이 서버에 의존한다.
+    "status": STATUS_DECOMMISSIONING,
+    "status_label": "사용 중단(이관 대기)",
 }
 
 # 헬스체크 대상 서버 ID 목록 — 워치독과 헬스 집계는 이 리스트 기준
@@ -160,6 +167,16 @@ def get_server_for_project(project: str) -> str:
 def get_server_config(server_id: str) -> Dict[str, Any]:
     """서버 ID(구/신 모두 허용) → 서버 설정 반환."""
     return SERVER_REGISTRY.get(resolve_server_id(server_id), {})
+
+
+def get_server_status(server_id: str) -> str:
+    """서버 ID(구/신 모두 허용) → 운영 상태. 상태 필드가 없으면 active."""
+    return get_server_config(server_id).get("status", STATUS_ACTIVE)
+
+
+def is_server_decommissioning(server_id: str) -> bool:
+    """신규 배포·동기화 대상에서 빠진 '사용 중단' 서버인가."""
+    return get_server_status(server_id) == STATUS_DECOMMISSIONING
 
 
 def get_server_host(server_id: str) -> str:

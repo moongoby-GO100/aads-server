@@ -6,8 +6,12 @@ Codex 는 API 키로 붙지 않는다. ChatGPT 구독 계정의 OAuth 다. 그�
 넣는다 (provider='codex', key_name='CODEX_OAUTH_JINAH').
 
 access_token 은 짧게 만료된다. 그래서 refresh_token 으로 그때그때 발급받아
-쓰고 **프로세스 메모리에만** 캐시한다. 디스크에 쓰지 않는다 — 진아서버의
-`/root/.codex/auth.json` 이 정본이고 이쪽은 사본이다.
+쓰고 **프로세스 메모리에만** 캐시한다. 디스크에 쓰지 않는다.
+
+`CODEX_OAUTH_JINAH` 는 서버가 아니라 ChatGPT **계정 이름**(진아 계정)이다. 진아서버
+(jinah244)는 2026-10-02 CEO 결정으로 사용 중단(이관 대기)이며, 그 서버의
+`/root/.codex/auth.json` 을 정본으로 보지 않는다. 이 어댑터가 읽는 것은 `llm_api_keys`
+의 암호화된 JSON 이다.
 
 2026-09-15 실측으로 확인한 두 가지를 적어 둔다.
 
