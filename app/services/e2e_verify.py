@@ -25,7 +25,7 @@ _NON_RENDERING_SUFFIXES = (
 # Data/manifest files render nothing on their own, so a backend release manifest
 # must not demand screen evidence. They count as screen work only inside a UI
 # source tree (dashboard config, i18n strings), where the path markers apply.
-_NON_RENDERING_DATA_SUFFIXES = (".json",)
+_NON_RENDERING_DATA_SUFFIXES = (".json", ".csv", ".tsv")
 _BROWSER_FLOW_TIMEOUT_SECONDS = 150.0
 _DOM_SETTLE_TIMEOUT_MS = 20_000
 _DOM_ASSERTION_BUDGET_SECONDS = 20.0

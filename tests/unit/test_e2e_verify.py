@@ -111,6 +111,28 @@ def test_screen_gate_ignores_backend_data_manifests():
     )
 
 
+def test_screen_gate_ignores_report_csv():
+    """A report CSV is data, not markup; runner-1eb91c6f was blocked by this false positive."""
+    instruction = "화면 증거가 없으면 완료로 적지 마라"
+    assert not screen_verification_required(
+        instruction,
+        [
+            "reports/20261003_approved_canonical_aag_crosscheck.csv",
+            "reports/20261003_approved_canonical_aag_crosscheck_RESULT.md",
+        ],
+    )
+    assert not screen_verification_required(instruction, ["reports/export.tsv"])
+    # CSV inside a UI source tree still needs screen proof.
+    assert screen_verification_required(instruction, ["src/app/dashboard/data.csv"])
+    assert screen_verification_required(
+        instruction, ["reports/summary.csv", "src/app/dashboard/data.csv"],
+    )
+    # Real UI source keeps the gate on.
+    assert screen_verification_required(
+        instruction, ["reports/summary.csv", "src/components/Login.tsx"],
+    )
+
+
 def test_screen_gate_ignores_local_shell_copy():
     """scripts/*.sh.local is a byte-identical shell copy, not UI source."""
     instruction = "화면 증거 게이트 오탐 교정"
