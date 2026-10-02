@@ -14636,3 +14636,16 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 ## 2026-09-30 — 직원 승인 멤버십 R3 실결함 3건 (AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-R3-20260930)
 - b3c3f444 산출물 위에 ①이메일 조회 테넌트 컨텍스트 코드 강제+SQL 테넌트 조건 ②flock → `pg_advisory_xact_lock`(tenant,email) ③서명 게이트 GET 명시적 화이트리스트. 상세 `docs/operations/OBYS_EMPLOYEE_TENANT_MEMBERSHIP.md` "R3". 테스트 128 passed(test_obys_employee_tenant_membership), 배포 전 — 마이그레이션은 여전히 HOLD(수동 적용).
 - R4(AADS-OBYS-EMPLOYEE-TENANT-MEMBERSHIP-R4-20260930): stale_base 교정 — f6c59fe1(base a9ddd6b0) 변경을 `.runner_full_diff.patch` 제외 후 origin/main(4eb4a182) 위에 `git apply --3way` 로 이관. 기능 변경 없음. 충돌은 HANDOVER.md·migrations_auto_apply_baseline.txt 뿐이며 양쪽 줄을 모두 보존했다.
+
+## 2026-10-02 — browser_* 스마트브라우저 경로 통일 + 반복 성공 자동 레시피 초안화 (AADS-SMARTBROWSER-UNIFY-AUTORECORD-20261002)
+
+- 변경: `app/services/work_recipe/auto_record.py` 신규. `ToolExecutor._dispatch` 가 browser_navigate/click/fill/press_key/select_option/check/snapshot/screenshot 을 `_auto_record_wrap` 으로 감싼다. `SMART_BROWSER_AUTO_RECORD=0` 이면 원본 핸들러를 그대로 반환(완전 no-op, 기본 1). 기록 실패·5초 초과는 삼키고 도구 결과는 바꾸지 않는다.
+- 동작: (chat_session_id, browser_work_key|browser_session_id) 묶음별 단계를 메모리에 모으고, 성공 응답 마커가 있는 단계만 기록한다. 시퀀스는 첫 단계가 navigate 이고 이후 snapshot/screenshot 증거가 있을 때 확정한다. 증거 화면이 오류(Access Denied·로그인 실패·CAPTCHA·4xx/5xx 문구, 로그인 리다이렉트, 도메인 이탈)이거나 navigate 결과가 오류 화면이면 폐기한다. navigate 성공만으로는 집계하지 않는다.
+- 초안화: 서명 = (도메인, 단계별 action + URL path 패턴 + selector). 서로 다른 채팅 세션 2개 이상에서 성공하면 `smart_browser_auto_drafts` 에 선점(PK 충돌로 멱등) 후 `registration.request_registration` 으로 pending 초안 1건. 같은 서명의 기존 승인 레시피가 있으면 `skipped_existing`. 초안 생성 예외 시 선점을 해제해 다음 성공 때 재시도. 자동 승인 없음.
+- 비밀값: fill 값은 읽지도 저장하지도 않는다(상태·DB·로그·레시피 모두). 비밀 입력칸(recorder `_CREDENTIAL_HINT` + 추가 힌트)은 recorder 의 `{{credential_N}}`(secret input), 그 외는 `{{fill_N}}`(non-secret input). URL 은 query/fragment 제거, 토큰 모양 path 세그먼트·한 글자 press_key 는 시퀀스 폐기. 인터랙션이 있는 초안의 위험도는 recorder 의 WRITE_* 보수 기본값, 읽기 전용(navigate 뿐)은 READ.
+- 노출: `smart_browser(action="list")` 결과에 `drafts`(승인 대기 초안: registration_id/name/domain/proposed_version/max_risk/step_count/auto_recorded/status/requested_at; 스펙·단계 미포함) 추가. run 은 기존대로 approved 만. `tool_registry.py` 의 smart_browser·browser_navigate 설명에 "먼저 list → 있으면 run, 없으면 browser_*(자동 기록)" 안내.
+- DB: `scripts/sql/20261002_smart_browser_auto_record.sql` (smart_browser_auto_traces, smart_browser_auto_drafts; CREATE IF NOT EXISTS, DROP/TRUNCATE 없음). **미적용 — 적용 전에는 기록이 로그 경고만 남기고 건너뛴다.** 적용은 CEO 승인 후.
+- 설정: 기본 최소 세션 2(`SMART_BROWSER_AUTO_RECORD_MIN_SESSIONS`), 기본 최소 단계 2 = navigate + 1(`..._MIN_STEPS`; navigate 뿐인 단일 페이지 열람이 초안으로 넘치는 것을 막기 위한 판단 — 지시서 외 결정).
+- 한계: 진행 중 시퀀스는 프로세스 메모리라 워커 재시작·다른 워커로 가면 끊긴다(그 시퀀스는 기록되지 않을 뿐 잘못된 초안은 만들지 않는다). check 는 click+checked 로 기록(토글 의미). 
+- 검증: `bash scripts/run_unit_tests.sh tests/unit/test_smart_browser_auto_record.py` 20 passed. browser/work_recipe/coupangeats/smart_browser/test_tools_and_pipeline/test_dup_guard 628 passed 2 skipped, 도구 계층 6개 파일 50 passed. ruff F821/F811/F401 0건. 마이그레이션은 실DB 미적용·미검증(테스트는 가짜 풀).
+- commit/push·릴리스는 Runner 승인 후.

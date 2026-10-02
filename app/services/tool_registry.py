@@ -1955,7 +1955,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "Playwright 헤드리스 브라우저로 URL에 접속한다. "
             "AADS 대시보드(aads.newtalk.kr), GitHub 등 허용 도메인만 접근 가능. "
             "로그인 필요 페이지는 tenant_id를 전달하면 Agent Vault 자동 로그인을 시도한다. "
-            "'여기 확인해', '이 페이지 봐줘', '화면 열어봐'에 사용."
+            "'여기 확인해', '이 페이지 봐줘', '화면 열어봐'에 사용. "
+            "먼저 smart_browser list 로 승인 레시피를 확인하고 있으면 run, 없으면 browser_* (성공 경로는 자동 기록됨)."
         ),
         "input_schema": {
             "type": "object",
@@ -2169,8 +2170,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "description": (
             "채팅 세션에서 Smart Browser 승인 레시피를 조회·실행하거나, 화면 E2E가 성공한 "
             "브라우저 단계들을 세션 증거와 함께 승인 대기 레시피로 등록한다. "
-            "action=list는 레시피 조회, run은 자연어 지시에 정확히 매칭되는 승인 레시피 실행, "
-            "register_e2e는 screen_verified=true와 화면 증거가 있을 때만 등록한다."
+            "action=list는 레시피 조회(승인 레시피 recipes + 승인 대기 초안 drafts), run은 자연어 지시에 정확히 매칭되는 승인 레시피 실행, "
+            "register_e2e는 screen_verified=true와 화면 증거가 있을 때만 등록한다. "
+            "browser_* 를 쓰기 전에 먼저 list 로 승인 레시피를 확인하고, 있으면 run, 없으면 browser_* 를 쓴다 "
+            "(browser_* 성공 경로는 자동 기록되어 서로 다른 세션에서 반복되면 승인 대기 초안이 된다)."
         ),
         "input_schema": {
             "type": "object",

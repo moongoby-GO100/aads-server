@@ -1143,7 +1143,32 @@ class ToolExecutor:
         fn = dispatch.get(tool_name)
         if fn is None:
             return {"error": f"unknown_tool: {tool_name}"}
-        return await fn(tool_input)
+        return await self._auto_record_wrap(tool_name, fn)(tool_input)
+
+    def _auto_record_wrap(self, tool_name: str, fn: Any) -> Any:
+        """browser_* 성공 경로 자동 기록. SMART_BROWSER_AUTO_RECORD=0 이면 fn 을 그대로 돌려준다."""
+        from app.services.work_recipe import auto_record
+
+        if tool_name not in auto_record.RECORDED_TOOLS or not auto_record.is_enabled():
+            return fn
+
+        async def _recorded(inp: Dict[str, Any]) -> Any:
+            result = await fn(inp)
+            try:
+                session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+                if session_id:
+                    tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+                    await asyncio.wait_for(
+                        auto_record.observe(
+                            tool_name, inp, result, session_id=session_id, tenant_id=tenant_id
+                        ),
+                        timeout=5.0,
+                    )
+            except Exception as exc:
+                logger.warning("auto_record_skipped tool=%s err=%s", tool_name, type(exc).__name__)
+            return result
+
+        return _recorded
 
     # ── system 도구 ─────────────────────────────────────────────────────────
 
@@ -5621,9 +5646,18 @@ class ToolExecutor:
             from app.services.work_recipe.store import list_recipes
 
             rows = await list_recipes(tenant_id=tenant_id)
+            drafts: list[Dict[str, Any]] = []
+            try:
+                from app.services.work_recipe.auto_record import list_pending_drafts
+
+                drafts = await list_pending_drafts(tenant_id)
+            except Exception as exc:
+                logger.warning("smart_browser_list_drafts_failed err=%s", type(exc).__name__)
             return {
                 "status": "ok",
                 "session_id": session_id,
+                "drafts": drafts,
+                "drafts_note": "drafts 는 승인 대기 초안이다. run 은 approved recipes 만 실행한다.",
                 "recipes": [
                     {
                         "id": str(row.get("id") or ""),
