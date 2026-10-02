@@ -8600,7 +8600,14 @@ async def _resume_single_stream(
                         from app.services.intent_router import get_model_for_override
                         _resume_model = get_model_for_override(resume_model_override)
                         logger.info(f"resume_model_from_explicit_override session={session_id[:8]} model={_resume_model}")
-                    # P1 FIX: 세션 설정 모델 우선 (CEO 드롭다운 — frontend fallback 오염 방지)
+                    # 이어쓰기는 끊긴 그 턴의 요청 모델로 한다. 세션 current_model 을 먼저 보면
+                    # 다른 턴(재시도 강등 등)이 남긴 값으로 바뀐다 — 24h 8건이 Opus 5.5 요청인데
+                    # gpt-5.6-sol 로 이어졌다(2026-10-02 실측).
+                    if not _resume_model and requested_model:
+                        from app.services.intent_router import get_model_for_override
+                        _resume_model = get_model_for_override(requested_model)
+                        logger.info(f"resume_model_from_execution session={session_id[:8]} model={_resume_model}")
+                    # P1 FIX: 세션 설정 모델 (CEO 드롭다운 — frontend fallback 오염 방지)
                     if not _resume_model:
                         _session_current_model = await conn.fetchval(
                             "SELECT current_model FROM chat_sessions WHERE id = $1", sid,
@@ -8611,10 +8618,6 @@ async def _resume_single_stream(
                             if _normalized_session not in _AUTO_ROUTED_RESUME_SKIP_MODELS:
                                 _resume_model = _normalized_session
                                 logger.info(f"resume_model_from_session_current session={session_id[:8]} model={_resume_model}")
-                    if not _resume_model and requested_model:
-                        from app.services.intent_router import get_model_for_override
-                        _resume_model = get_model_for_override(requested_model)
-                        logger.info(f"resume_model_from_execution session={session_id[:8]} model={_resume_model}")
                     # 1순위: 마지막 user 메시지의 model_used (CEO가 선택한 model_override)
                     if not _resume_model:
                         _user_model = await conn.fetchval("""
@@ -14763,6 +14766,7 @@ async def send_message_stream(
                 _prev_attempt_model = _attempt_effective_model
                 _pending_switch_banner = _switch_banner
             _attempt_failure_reason = ""
+            _interrupt_stream_break = False
             try:
                 from app.core.interrupt_queue import has_interrupt as _has_interrupt
 
@@ -14876,6 +14880,7 @@ async def send_message_stream(
                             from app.core.interrupt_queue import has_interrupt as _has_intr_check
                             if _has_intr_check(session_id):
                                 logger.info(f"interrupt_after_tool_result session={session_id[:8]}")
+                                _interrupt_stream_break = True
                                 break
                         except Exception:
                             pass
@@ -15067,6 +15072,12 @@ async def send_message_stream(
                     _stream_error = True
                     continue  # 다음 시도
                 raise  # 마지막 시도 실패 → 상위 try/except로 전파
+            # CEO 추가 지시로 async for 를 끊은 것은 실패가 아니다. 여기서 루프를
+            # 빠져나가 아래 deferred interrupt 처리로 넘긴다. 빠져나가지 않으면 다음
+            # 시도가 예비 모델로 나가 "[claude-opus-5-5 실행 불가 → gpt-6-astra 전환]"
+            # 배너가 붙었다(2026-10-02 13:01 KST, 세션 9102c970·009efbfa 실측).
+            if _interrupt_stream_break:
+                break
 
         # 도구 루프가 없는 긴 텍스트 스트림에서는 model_selector 내부 인터럽트 체크 지점이 없다.
         # 이 경우 최종 저장 전에 남은 CEO 추가 지시를 한 번 더 반영해 현재 버블을 교체한다.

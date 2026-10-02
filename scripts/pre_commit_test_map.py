@@ -68,6 +68,7 @@ GROUPS: tuple[Group, ...] = (
         tests=(
             "tests/unit/test_chat_stall_codex_auth_fallback.py",
             "tests/unit/test_chat_retry_model_switch.py",
+            "tests/unit/test_chat_interrupt_no_model_switch.py",
         ),
         py_regex=r"app/services/(chat_service|model_selector)\.py",
     ),
