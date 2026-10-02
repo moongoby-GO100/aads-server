@@ -4029,8 +4029,19 @@ async def tool_browser_navigate(
             except Exception as vault_err:
                 logger.warning("vault auto-login failed: %s", vault_err)
 
-        title = await page.title()
-        return f"[탐색 완료]\n제목: {title}\nURL: {page.url}"
+        from app.browser_bridge.pc_agent_budget import PcAgentDeadlineExceeded
+
+        eval_skipped = str(getattr(page, "eval_skipped_reason", "") or "")
+        title = ""
+        if not eval_skipped:
+            try:
+                title = await page.title()
+            except PcAgentDeadlineExceeded as exc:
+                eval_skipped = str(exc)
+        summary = f"[탐색 완료]\n제목: {title}\nURL: {page.url}"
+        if eval_skipped:
+            summary += f"\n[참고] 이동은 성공했으나 후속 browser_eval 은 실행하지 않았습니다: {eval_skipped}"
+        return summary
     except Exception as e:
         return f"[ERROR] 브라우저 탐색 실패: {e}"
 

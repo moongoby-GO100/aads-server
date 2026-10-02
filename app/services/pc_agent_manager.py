@@ -11,6 +11,7 @@ import math
 import os
 import subprocess
 import tempfile
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ from typing import Any, Deque, Dict, Optional, Set
 
 from fastapi import WebSocket
 
+from app.browser_bridge import pc_agent_budget
 from app.models.pc_agent import AgentInfo, CommandResult, StreamConfig, WSMessage
 
 logger = logging.getLogger(__name__)
@@ -195,6 +197,10 @@ class PCAgentManager:
         self._late_result_grace_seconds = max(
             5.0, float(os.getenv("PC_AGENT_LATE_RESULT_GRACE_SECONDS", "30") or "30")
         )
+        self._command_upper_deadlines: Dict[str, float] = {}
+        self._late_result_reuse_seconds = max(
+            0.0, float(os.getenv("PC_AGENT_LATE_RESULT_REUSE_SECONDS", "15") or "15")
+        )
         self._agent_commands: Dict[str, Set[str]] = {}
         self._streaming_subscribers: Dict[str, Set[WebSocket]] = {}  # agent_id → 대시보드 WS
         self._heartbeat_timeout_seconds = int(os.getenv("PC_AGENT_HEARTBEAT_TIMEOUT_SECONDS", "90") or "90")
@@ -341,9 +347,25 @@ class PCAgentManager:
                 return result
             raise ValueError(f"command_id '{command_id}'를 찾을 수 없습니다.")
 
+        timed_out = False
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
+            timed_out = True
+            # 명령 시한은 넘겼지만 상위(도구 호출) 시한이 남아 있으면 같은 command_id 의 결과를 더 기다린다.
+            extra = self._late_result_wait_seconds(command_id)
+            if extra > 0:
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=extra)
+                    timed_out = False
+                    logger.info(
+                        "pc_agent_late_result_reused command_id=%s waited_after_timeout_ms=%d",
+                        command_id,
+                        int(extra * 1000),
+                    )
+                except asyncio.TimeoutError:
+                    pass
+        if timed_out:
             result = self._results.get(command_id)
             if result:
                 result.status = "timeout"
@@ -368,6 +390,7 @@ class PCAgentManager:
             )
 
         self._pending_commands.pop(command_id, None)
+        self._command_upper_deadlines.pop(command_id, None)
         result = self._results[command_id]
         self._untrack_command(command_id, result.agent_id)
         return result
@@ -401,14 +424,44 @@ class PCAgentManager:
             return
 
         if command_id in self._timed_out_commands or stored.status == "timeout":
+            now_mono = time.monotonic()
+            expires_at = self._timed_out_commands.pop(command_id, None)
+            try:
+                loop_now = asyncio.get_running_loop().time()
+            except RuntimeError:
+                loop_now = None
+            delay_ms = (
+                int(max(0.0, loop_now - (expires_at - self._late_result_grace_seconds)) * 1000)
+                if expires_at is not None and loop_now is not None
+                else -1
+            )
+            upper_deadline = self._command_upper_deadlines.pop(command_id, None)
+            if upper_deadline is not None and now_mono < upper_deadline:
+                # 상위 시한 안에 도착한 late result 는 같은 command_id 의 정상 결과로 승격한다.
+                stored.status = result.get("status", "success")
+                stored.result = result.get("data")
+                stored.completed_at = datetime.utcnow()
+                logger.info(
+                    "pc_agent_late_result_reused command_id=%s status=%s delay_ms=%d upper_remaining_ms=%d",
+                    command_id,
+                    stored.status,
+                    delay_ms,
+                    int((upper_deadline - now_mono) * 1000),
+                )
+                return
             stored.result = {
                 "late_result": True,
                 "late_status": result.get("status", "success"),
                 "late_data": result.get("data"),
             }
             stored.completed_at = datetime.utcnow()
-            self._timed_out_commands.pop(command_id, None)
-            logger.warning("pc_agent_late_result_received command_id=%s status=%s", command_id, result.get("status"))
+            logger.warning(
+                "pc_agent_late_result_discarded command_id=%s status=%s delay_ms=%d upper_deadline=%s",
+                command_id,
+                result.get("status"),
+                delay_ms,
+                "exceeded" if upper_deadline is not None else "none",
+            )
             return
 
         stored.status = result.get("status", "success")
@@ -441,13 +494,22 @@ class PCAgentManager:
         for command_id in expired:
             self._timed_out_commands.pop(command_id, None)
             self._results.pop(command_id, None)
+            self._command_upper_deadlines.pop(command_id, None)
 
     def forget_result(self, command_id: str) -> None:
         """Release transient live-tab frames after delivery."""
         result = self._results.pop(command_id, None)
         self._pending_commands.pop(command_id, None)
         self._timed_out_commands.pop(command_id, None)
+        self._command_upper_deadlines.pop(command_id, None)
         self._untrack_command(command_id, result.agent_id if result else "")
+
+    def _late_result_wait_seconds(self, command_id: str) -> float:
+        upper_deadline = self._command_upper_deadlines.get(command_id)
+        if upper_deadline is None:
+            return 0.0
+        remaining = upper_deadline - time.monotonic() - pc_agent_budget.BUDGET_RESERVE_SECONDS
+        return max(0.0, min(self._late_result_reuse_seconds, remaining))
 
     def update_heartbeat(self, agent_id: str) -> None:
         """에이전트 하트비트 갱신."""
@@ -877,6 +939,35 @@ class PCAgentManager:
 
         return dispatched_type, normalized_params
 
+    @staticmethod
+    def _protected_close_work_keys() -> set[str]:
+        keys = {"aads-ceo-browser"}
+        env_key = os.environ.get("PC_AGENT_DEFAULT_BROWSER_WORK_KEY", "").strip().lower()
+        if env_key:
+            keys.add(env_key)
+        return keys
+
+    def _cleanup_close_skip_reason(self, params: Dict[str, Any]) -> str:
+        """정리용 close 를 보내면 안 되는 이유. 빈 문자열이면 보내도 된다.
+
+        - owned_work_key 가 있으면(호출이 스스로 연 세션) work_key 와 일치할 때만.
+        - 기본 CEO 브라우저 work_key 는 allow_default_work_key_close=True 명시 없이는 금지.
+          API 계층이 work_key 없는 browser_* 명령에 이 값을 기본 주입하므로, 타임아웃된
+          eval 의 정리가 CEO 브라우저 세션으로 새는 경로를 막는다.
+        """
+        work_key = str((params or {}).get("work_key") or "").strip()
+        if not work_key:
+            return "work_key_missing"
+        owned = str((params or {}).get("owned_work_key") or "").strip()
+        if owned and owned.lower() != work_key.lower():
+            return "work_key_not_owned_by_call"
+        if (
+            work_key.lower() in self._protected_close_work_keys()
+            and (params or {}).get("allow_default_work_key_close") is not True
+        ):
+            return "default_ceo_browser_work_key_protected"
+        return ""
+
     async def _cleanup_browser_session_on_timeout(
         self,
         *,
@@ -890,6 +981,16 @@ class PCAgentManager:
             return
         work_key = str((params or {}).get("work_key") or "").strip()
         if not work_key:
+            return
+        skip_reason = self._cleanup_close_skip_reason(params)
+        if skip_reason:
+            logger.warning(
+                "pc_agent_cleanup_close_skipped path=timeout reason=%s agent_id=%s command_type=%s work_key=%s",
+                skip_reason,
+                agent_id,
+                normalized_command,
+                work_key,
+            )
             return
         close_params: Dict[str, Any] = {
             "work_key": work_key,
@@ -972,6 +1073,16 @@ class PCAgentManager:
         work_key = str((params or {}).get("work_key") or "").strip()
         if not work_key:
             return {"status": "skipped", "reason": "work_key_missing"}
+        skip_reason = self._cleanup_close_skip_reason(params)
+        if skip_reason:
+            logger.warning(
+                "pc_agent_cleanup_close_skipped path=completion reason=%s agent_id=%s command_type=%s work_key=%s",
+                skip_reason,
+                agent_id,
+                normalized_command,
+                work_key,
+            )
+            return {"status": "skipped", "reason": skip_reason}
         cleanup_params: Dict[str, Any] = {
             "work_key": work_key,
             "close_browser": bool((params or {}).get("close_browser_on_complete", False)),
@@ -1686,6 +1797,13 @@ class PCAgentManager:
         owner_user_id: str = "",
     ) -> dict[str, Any]:
         request_params: Dict[str, Any] = dict(params or {})
+        # 호출자(도구 프로세스)가 알려 준 상위 시한 잔여 초. 에이전트로는 보내지 않는다.
+        upper_deadline_seconds = request_params.pop("upper_deadline_seconds", None)
+        if str(command_type or "").strip().lower().startswith("browser_"):
+            pc_agent_budget.ensure_open(command_type)
+            budget_remaining = pc_agent_budget.remaining_seconds()
+            if upper_deadline_seconds is None and budget_remaining is not None:
+                upper_deadline_seconds = budget_remaining
         effective_command_timeout_seconds = self._effective_command_timeout_seconds(
             command_timeout_seconds,
             request_params,
@@ -1791,6 +1909,11 @@ class PCAgentManager:
                 "lease": refreshed or lease_payload,
             }
 
+        try:
+            if upper_deadline_seconds is not None:
+                self._command_upper_deadlines[command_id] = time.monotonic() + max(0.0, float(upper_deadline_seconds))
+        except (TypeError, ValueError):
+            pass
         command_result = await self.get_result(command_id, timeout=effective_command_timeout_seconds)
         lease_for_return = await self.get_lease(lease_id)
 

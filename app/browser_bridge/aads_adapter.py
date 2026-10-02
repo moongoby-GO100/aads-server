@@ -7,6 +7,7 @@ import logging
 import os
 from typing import Any, Optional
 
+from .pc_agent_budget import begin_call_budget, end_call_budget
 from .service import get_browser_bridge_service
 
 logger = logging.getLogger(__name__)
@@ -68,15 +69,25 @@ def pc_agent_timeout_message(stage: str = "") -> str:
 
 async def run_with_pc_agent_deadline(awaitable: Any, stage: str = "") -> Any:
     """PC Agent 경로 awaitable 을 총 시한 안에 끝내고, 넘으면 오류 JSON 문자열을 반환."""
+    # wait_for 가 task 를 만들 때 이 맥락을 복사하므로 budget 은 반드시 그 전에 건다.
+    budget, token = begin_call_budget(PC_AGENT_BROWSER_TOTAL_TIMEOUT_SECONDS, stage)
+    # 안쪽이 CancelledError 를 삼키고 계속 가는 경우에도 시한 시점에 플래그가 먼저 선다.
+    cancel_timer = asyncio.get_running_loop().call_later(
+        PC_AGENT_BROWSER_TOTAL_TIMEOUT_SECONDS, budget.cancel
+    )
     try:
         return await asyncio.wait_for(awaitable, timeout=PC_AGENT_BROWSER_TOTAL_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
+        budget.cancel()
         logger.warning(
             "pc_agent_browser_timeout stage=%s limit=%.0fs",
             stage,
             PC_AGENT_BROWSER_TOTAL_TIMEOUT_SECONDS,
         )
         return pc_agent_timeout_message(stage)
+    finally:
+        cancel_timer.cancel()
+        end_call_budget(token)
 
 
 async def _acquire_pc_context(

@@ -13,6 +13,7 @@ import urllib.request
 from datetime import timedelta
 from typing import Any, Optional
 
+from . import pc_agent_budget
 from .models import BrowserBridgeSession, BrowserEndpoint, BrowserEndpointKind, PairingCreated, utcnow
 from .registry import PairingManager, SessionRegistry, new_session_id
 from .security import validate_bridge_endpoint
@@ -171,6 +172,7 @@ class _LocalAgentPage:
         self._session = session
         self._service = service
         self._recovered_error_codes: set[str] = set()
+        self.eval_skipped_reason = ""
         self._sync_from_session(session)
 
     def _sync_from_session(self, session: BrowserBridgeSession | None = None) -> None:
@@ -200,9 +202,27 @@ class _LocalAgentPage:
         requested_url = str((params or {}).get("url") or self.url or "about:blank")
 
         while True:
+            # 상위 시한이 지난 호출 맥락이면 여기서 막는다(복구 재시도 continue 포함).
+            budget_remaining = pc_agent_budget.ensure_open(command_type)
             merged = self._params(params)
             if "work_key" not in merged and hasattr(self._session, "work_key") and self._session.work_key:
                 merged["work_key"] = self._session.work_key
+            if budget_remaining is not None:
+                if command_type == "browser_eval":
+                    usable = budget_remaining - pc_agent_budget.BUDGET_RESERVE_SECONDS
+                    if usable < 1.0:
+                        raise pc_agent_budget.PcAgentDeadlineExceeded(
+                            f"pc_agent_deadline_exceeded: browser_eval not sent, remaining={budget_remaining:.1f}s"
+                        )
+                    queue_wait_timeout_seconds = min(float(queue_wait_timeout_seconds), max(1.0, usable / 3.0))
+                    command_timeout_seconds = min(float(command_timeout_seconds), max(1.0, usable - queue_wait_timeout_seconds))
+                    if "timeout_ms" in merged:
+                        try:
+                            merged["timeout_ms"] = int(min(float(merged["timeout_ms"]), command_timeout_seconds * 1000))
+                        except (TypeError, ValueError):
+                            pass
+                # 서버(API 프로세스)가 late result 재사용 가능 여부를 판단할 상위 시한.
+                merged["upper_deadline_seconds"] = round(max(0.0, budget_remaining), 1)
             if command_type in LOCAL_AGENT_JS_COMMANDS and requested_url and requested_url != "about:blank":
                 merged.setdefault("target_url", requested_url)
             if command_type in LOCAL_AGENT_JS_COMMANDS:
@@ -345,17 +365,33 @@ class _LocalAgentPage:
         # (e.g., AADS URL → /login). Without this, page.url always returns the
         # requested URL, so redirect detection in callers never fires.
         actual_url = url
-        try:
-            href_data = await self._run_browser_command(
-                "browser_eval",
-                {"expression": "window.location.href"},
-                command_timeout_seconds=10.0,
+        self.eval_skipped_reason = ""
+        remaining = pc_agent_budget.remaining_seconds()
+        if remaining is not None and remaining < pc_agent_budget.HREF_EVAL_ESTIMATE_SECONDS:
+            # navigate 는 이미 성공했다. 남은 시간으로 eval 을 못 끝내면 보내지 않고 성공을 유지한다.
+            self.eval_skipped_reason = (
+                f"deadline_remaining_{max(0.0, remaining):.1f}s_below_eval_estimate_"
+                f"{pc_agent_budget.HREF_EVAL_ESTIMATE_SECONDS:.0f}s"
             )
-            href = str(href_data.get("value") or "").strip()
-            if href.startswith("http"):
-                actual_url = href
-        except Exception:
-            pass
+            logger.info(
+                "pc_agent_goto_href_eval_skipped url=%s reason=%s",
+                url,
+                self.eval_skipped_reason,
+            )
+        else:
+            try:
+                href_data = await self._run_browser_command(
+                    "browser_eval",
+                    {"expression": "window.location.href"},
+                    command_timeout_seconds=10.0,
+                )
+                href = str(href_data.get("value") or "").strip()
+                if href.startswith("http"):
+                    actual_url = href
+            except pc_agent_budget.PcAgentDeadlineExceeded as exc:
+                self.eval_skipped_reason = str(exc)
+            except Exception:
+                pass
         self.url = actual_url
         metadata = dict(self._session.endpoint.metadata or {})
         metadata["last_url"] = actual_url
@@ -1396,6 +1432,8 @@ class BrowserBridgeService:
         command_timeout_seconds: float = 90,
     ) -> dict[str, Any] | None:
         """Fallback for tool processes that do not own the PC Agent websocket."""
+        if str(command_type or "").startswith("browser_"):
+            pc_agent_budget.ensure_open(command_type)
         active_ports = self._active_api_ports()
         if not active_ports:
             return None
