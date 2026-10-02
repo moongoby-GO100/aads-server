@@ -21,7 +21,8 @@
 contabo116 의 백필이 채운다.
 
     index_docs.py scan     무엇이 색인될지만 본다 (쓰기 없음)
-    index_docs.py index    수집·분할·업서트
+    index_docs.py index    수집·분할·업서트 (뒤이어 정본 문서도 색인)
+    index_docs.py index-canonical [--dry-run]  정본 문서(label='정본')만 색인
     index_docs.py embed    임베딩 채우기 (Ollama 있는 서버에서만)
     index_docs.py status   서버별 현황과 임베딩 커버리지
 
@@ -163,7 +164,7 @@ EXCLUDE = (
     "/aads-dashboard-unni/", "/backups/", "/backup/", "/.tmp-",
     "/site-packages/", "/dist/", "/build/",
 )
-# go100 클론들(go100-token-opt, go100-direct-yBauuU ...). 정본은 /root/aads/go100 하나다.
+# go100 클론 디렉터리(go100- 또는 go100_ 접두 이름). 정본은 /root/aads/go100 하나다.
 _GO100_CLONE = re.compile(r"/go100[-_][A-Za-z0-9._-]+/")
 
 EXTENSIONS = {".md", ".html"}
@@ -397,6 +398,192 @@ def record_run(srv: str, docs: int, changed: int, chunks: int, secs: float) -> N
     )
 
 
+# ── 정본 문서(project_document_heads / revisions) 색인 ─────────────────────
+#
+# 정본은 API 로 등록돼 파일시스템에 없으므로 위 ROOTS 루프에 걸리지 않는다. 그래서
+# 문서 내용 검색에서 빠져 있었다(2026-10-02 실측, revisions 15건 중 검색 0건).
+#
+# 롤백은 `DELETE FROM doc_chunks WHERE label='정본'` 한 줄이어야 한다 — label 을
+# 이 값 하나로 고정하고 다른 용도로 쓰지 않는다.
+CANONICAL_LABEL = "정본"
+CANONICAL_PREFIX = "canonical://"
+
+# app/api/canonical_documents.py 의 SECRET 과 **같은 패턴**이다. 이 스크립트는 모든
+# 서버 공용이라 app 패키지를 import 할 수 없어 사본을 둔다. 두 정의가 갈라지지
+# 않게 tests/unit/test_doc_index_canonical.py 가 패턴 문자열을 대조한다.
+SECRET = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
+    r"\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+    r"xox[baprs]-[A-Za-z0-9-]{16,}|AIza[0-9A-Za-z_-]{20,}|AKIA[0-9A-Z]{16})|"
+    r"(?i:(?:api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|secret[_-]?key|private[_-]?key|database[_-]?url)['\"]?\s*[:=]\s*['\"]?[^\s'\"]+)"
+)
+
+
+def canonical_doc_path(project_key: str, document_key: str, revision_id: str) -> str:
+    """실제 파일 경로와 겹치지 않는 가상 키."""
+    return f"{CANONICAL_PREFIX}{project_key}/{document_key}@{revision_id}"
+
+
+def is_canonical_path(path: str) -> bool:
+    return path.startswith(CANONICAL_PREFIX)
+
+
+def pick_canonical_revisions(heads: list[dict]) -> list[tuple[str, dict]]:
+    """head 마다 색인할 revision 을 고른다. (상태, revision) 목록을 돌려준다.
+
+    - 보관(archived) head 는 통째로 제외한다.
+    - 승인본(approved_revision_id)이 있으면 "승인" 으로 넣는다.
+    - 최신 revision 이 승인본과 다르면(승인본이 없거나 승인본보다 새로우면) "초안" 으로 추가한다.
+    """
+    picked: list[tuple[str, dict]] = []
+    for h in heads:
+        if h.get("archived"):
+            continue
+        by_id = {str(r["id"]): r for r in (h.get("revisions") or [])}
+        approved_id = h.get("approved_revision_id")
+        latest_id = h.get("latest_revision_id")
+        approved = by_id.get(str(approved_id)) if approved_id else None
+        latest = by_id.get(str(latest_id)) if latest_id else None
+        if approved is not None:
+            picked.append(("승인", {**approved, "project_key": h["project_key"],
+                                    "document_key": h["document_key"]}))
+        if latest is not None and (approved is None or str(latest["id"]) != str(approved["id"])):
+            picked.append(("초안", {**latest, "project_key": h["project_key"],
+                                    "document_key": h["document_key"]}))
+    return picked
+
+
+def build_canonical_docs(heads: list[dict]) -> tuple[list[dict], int]:
+    """collect() 가 만드는 dict 와 같은 모양으로 바꾼다. (문서, SECRET 으로 거른 수)."""
+    docs: list[dict] = []
+    skipped = 0
+    for status, r in pick_canonical_revisions(heads):
+        text = r.get("content") or ""
+        title = r.get("title") or r["document_key"]
+        if not text.strip() or SECRET.search(text) or SECRET.search(title):
+            skipped += 1
+            continue
+        docs.append({
+            "path": canonical_doc_path(r["project_key"], r["document_key"], str(r["id"])),
+            "project": r["project_key"],
+            "label": CANONICAL_LABEL,
+            "sha256": r["content_hash"],
+            "size": len(text.encode("utf-8")),
+            "mtime": float(r.get("mtime") or 0),
+            "title": f"[{status} v{r['version']}] {title}"[:300],
+            "text": text,
+        })
+    return docs, skipped
+
+
+def canonical_chunks(text: str) -> list[tuple[str, str]]:
+    """chunk() 를 재사용하되, 짧은 정본도 검색되도록 최소 한 조각은 남긴다."""
+    return chunk(text) or [("", text.strip())]
+
+
+def stale_paths(known: dict, live: set[str], *, canonical: bool) -> list[str]:
+    """지울 doc_path. 파일 단계는 canonical:// 을, 정본 단계는 파일 경로를 건드리지 않는다."""
+    return [p for p in known if is_canonical_path(p) == canonical and p not in live]
+
+
+# 정본 도메인은 **내부 테넌트 것만** 읽는다. doc_chunks 에는 tenant 칸이 없고
+# /project-docs/search 는 테넌트 권한을 확인하지 않는다 — 고객 테넌트 정본을 넣으면
+# project 값이 같을 때 다른 테넌트에 그대로 노출된다.
+CANONICAL_HEADS_SQL = (
+    "SELECT json_build_object("
+    "'project_key', h.project_key, 'document_key', h.document_key,"
+    "'approved_revision_id', h.approved_revision_id,"
+    "'latest_revision_id', h.latest_revision_id,"
+    "'archived', (h.approved_revision_id IS NULL AND COALESCE((SELECT e.action"
+    " FROM project_document_events e WHERE e.head_id=h.id"
+    " AND e.action IN ('approved','archived') ORDER BY e.id DESC LIMIT 1),'')='archived'),"
+    "'revisions', (SELECT json_agg(json_build_object("
+    "'id', r.id, 'version', r.version, 'title', r.title, 'content', r.content,"
+    "'content_hash', r.content_hash, 'mtime', extract(epoch from r.created_at)))"
+    " FROM project_document_revisions r"
+    " WHERE r.head_id=h.id AND r.id IN (h.approved_revision_id, h.latest_revision_id)))::text"
+    " FROM project_document_heads h"
+    " WHERE h.tenant_id = public.aads_internal_tenant_id()"
+    " ORDER BY h.project_key, h.document_key;"
+)
+
+
+def fetch_canonical_heads() -> list[dict] | None:
+    """정본 head 를 읽는다. 테이블이 없는 DB 면 None."""
+    if not psql("SELECT to_regclass('project_document_heads') IS NOT NULL;").strip().startswith("t"):
+        return None
+    # psql -At 은 줄 단위 출력이라 본문 개행이 섞이면 깨진다 — json 은 개행을 이스케이프한다.
+    return [json.loads(line) for line in psql(CANONICAL_HEADS_SQL).splitlines() if line.strip()]
+
+
+def index_canonical(srv: str, *, dry_run: bool = False) -> dict:
+    """정본을 doc_chunks 에 맞춘다. 파일 청크는 읽지도 지우지도 않는다."""
+    heads = fetch_canonical_heads()
+    if heads is None:
+        print("[index_docs] 정본 테이블 없음 — 정본 색인 건너뜀")
+        return {"docs": 0, "changed": 0, "chunks": 0, "removed": 0, "skipped_secret": 0}
+    docs, skipped = build_canonical_docs(heads)
+    if skipped:
+        print(f"[index_docs] 정본 {skipped}건은 SECRET 패턴이 있어 색인에서 뺐다")
+
+    # title 도 비교한다. 초안이 승인되면 revision(=doc_path)과 content_hash 는 그대로고
+    # `[초안 v1]` → `[승인 v1]` 접두만 바뀐다 — sha 만 보면 표시가 낡은 채 남는다.
+    known: dict[str, tuple[str, str]] = {}
+    for line in psql(
+        f"SELECT doc_path, doc_sha256, title FROM doc_chunks WHERE server={lit(srv)} "
+        f"AND label={lit(CANONICAL_LABEL)} AND doc_path LIKE {lit(CANONICAL_PREFIX + '%')} "
+        f"GROUP BY doc_path, doc_sha256, title"
+    ).splitlines():
+        parts = line.split("\x1f", 2)
+        if len(parts) == 3:
+            known[parts[0]] = (parts[1], parts[2])
+
+    live = {d["path"] for d in docs}
+    changed = [d for d in docs if known.get(d["path"]) != (d["sha256"], d["title"])]
+    stale = stale_paths(known, live, canonical=True)
+    n_chunks = sum(len(canonical_chunks(d["text"])) for d in changed)
+    print(f"[index_docs] 정본 {len(docs)}건 중 변경/신규 {len(changed)}건, 제거 {len(stale)}건"
+          + (" (dry-run: 쓰지 않음)" if dry_run else ""))
+    if dry_run or not (changed or stale):
+        return {"docs": len(docs), "changed": len(changed), "chunks": n_chunks,
+                "removed": len(stale), "skipped_secret": skipped}
+
+    stmts = []
+    if stale:
+        batch = ",".join(lit(p) for p in stale)
+        stmts.append(f"DELETE FROM doc_chunks WHERE server={lit(srv)} AND doc_path IN ({batch});")
+    for d in changed:
+        stmts.append(f"DELETE FROM doc_chunks WHERE server={lit(srv)} AND doc_path={lit(d['path'])};")
+        rows = [
+            f"({lit(srv)},{lit(d['path'])},{lit(d['sha256'])},{lit(d['project'])},"
+            f"{lit(d['label'])},{lit(d['title'])},{lit(heading)},{idx},{lit(body)},"
+            f"to_timestamp({d['mtime']:.0f}))"
+            for idx, (heading, body) in enumerate(canonical_chunks(d["text"]))
+        ]
+        stmts.append(
+            "INSERT INTO doc_chunks (server,doc_path,doc_sha256,project,label,"
+            "title,heading,chunk_index,content,mtime) VALUES " + ",".join(rows) + ";"
+        )
+    psql("BEGIN;" + "".join(stmts) + "COMMIT;")
+    print(f"[index_docs] 정본 청크 {n_chunks:,}개 저장. 임베딩은 embed 가 채운다.")
+    return {"docs": len(docs), "changed": len(changed), "chunks": n_chunks,
+            "removed": len(stale), "skipped_secret": skipped}
+
+
+def run_canonical_stage(srv: str) -> None:
+    """파일 색인 뒤에 돈다. 정본 단계가 실패해도 파일 색인 결과는 이미 반영됐다 —
+    실패를 삼키지 않고 종료코드로 드러낸다."""
+    try:
+        index_canonical(srv)
+    except SystemExit:
+        print("[index_docs] 정본 색인 실패 — 파일 색인은 반영됨", file=sys.stderr)
+        raise
+
+
+def cmd_index_canonical(args) -> None:
+    index_canonical(server_name(), dry_run=args.dry_run)
+
+
 def cmd_index(args) -> None:
     srv = server_name()
     t0 = time.time()
@@ -407,6 +594,7 @@ def cmd_index(args) -> None:
     known = {}
     for line in psql(
         f"SELECT doc_path, doc_sha256 FROM doc_chunks WHERE server={lit(srv)} "
+        f"AND doc_path NOT LIKE {lit(CANONICAL_PREFIX + '%')} "
         f"GROUP BY doc_path, doc_sha256"
     ).splitlines():
         if "\x1f" in line:
@@ -417,10 +605,11 @@ def cmd_index(args) -> None:
     print(f"[index_docs] 변경/신규 {len(changed):,}개 (그대로 {len(docs)-len(changed):,}개 건너뜀)")
     if not changed:
         record_run(srv, len(docs), 0, 0, time.time() - t0)
+        run_canonical_stage(srv)
         return
 
     live = {d["path"] for d in docs}
-    stale = [p for p in known if p not in live]
+    stale = stale_paths(known, live, canonical=False)
     if stale:
         batch = ",".join(lit(p) for p in stale)
         psql(f"DELETE FROM doc_chunks WHERE server={lit(srv)} AND doc_path IN ({batch});")
@@ -455,6 +644,7 @@ def cmd_index(args) -> None:
     # (09-29 06:10 ~ 10-01 06:10 CEST)가 doc_index_runs 에 한 줄도 남지 않았다.
     # 그래서 원장은 "무변경 런" 만 모은 표가 되고, 색인 정지와 구분이 안 됐다.
     record_run(srv, len(docs), len(changed), inserted, time.time() - t0)
+    run_canonical_stage(srv)
 
 
 OLLAMA_URL = os.getenv("LOCAL_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -600,6 +790,9 @@ def main() -> None:
     p = sub.add_parser("index")
     p.add_argument("--limit", type=int, default=0, help="문서 수 제한 (시험용)")
     p.set_defaults(fn=cmd_index)
+    ic = sub.add_parser("index-canonical", help="정본 문서만 색인 (index 가 파일 색인 뒤 자동 호출)")
+    ic.add_argument("--dry-run", action="store_true", help="DB 에 쓰지 않고 계획만 출력")
+    ic.set_defaults(fn=cmd_index_canonical)
     e = sub.add_parser("embed")
     e.add_argument("--limit", type=int, default=0, help="개수 제한 (시험용)")
     e.set_defaults(fn=cmd_embed)

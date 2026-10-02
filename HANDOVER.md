@@ -1,3 +1,11 @@
+## 2026-10-03 — 정본 검색 보존 산출물 재적재 R2: 보고서의 시크릿 모양 리터럴 제거 (AADS-DOC-SEARCH-CANONICAL-RECOVER-R2-20261003)
+
+**상태: 코드·테스트·보고서 완료, 커밋/푸시·운영 색인은 Runner 승인 단계 대기.** runner-8559f49d 의 `approval_commit_failed` 원인은 테스트가 아니라 보고서 8행이 옛 테스트의 가짜 자격증명 문자열(키 이름=값 형태)을 인용한 것(gitleaks `generic-api-key`)이었다. 보존 워크트리의 staged diff 를 재구현 없이 `8df4d4bc`(stale_base 교정 후 최신 origin/main) 위에 적용하고(HANDOVER 만 수동 병합), 보고서·HANDOVER 에서 값 있는 리터럴을 없앴다. 파일 전체 스캔에 걸리던 `scripts/index_docs.py` 의 기존 주석(go100 클론 디렉터리 이름 나열)도 이름 없이 바꿨다(주석만, 정규식 불변). allow 주석·`.gitleaksignore`·규칙 완화·`--no-verify` 없음.
+
+**테넌트 판정: 위험.** `search_docs_semantic` 에 테넌트 의존성이 없고 `doc_chunks` 에 tenant 칸이 없다. 미인증은 전역 JWT 미들웨어가 막지만 `/auth/register` 가 비내부 테넌트 JWT 를 즉시 발급하므로 가입자는 내부 테넌트 정본(미승인 초안 포함)의 스니펫을 검색할 수 있다. 색인기는 내부 테넌트 head 만 읽어 고객 간 유출은 만들지 않는다. 코드 변경 범위는 넓히지 않았고 후속 AADS-DOC-SEARCH-TENANT-GATE(검색에 `require_tenant_member` + `canonical://` 내부 한정 또는 tenant 칸 필터, 그 전엔 초안 제외 여부 CEO 결정, `x-monitor-key` 비검증 통과 점검)로 분리한다. **이것이 들어가기 전에는 `index-canonical` 운영 실행을 권하지 않는다.**
+
+**미실행.** 운영 DB 조회·쓰기, `index-canonical` 실행, 재색인, 임베딩, 배포, commit/push. 전후 SELECT·dry-run·파일럿 5건(goal_documents 74·92·109·110·119) 노출 확인·되돌림 절차는 `reports/20261002_doc_search_canonical_include_RESULT.md` 에 준비돼 있다. DB handover_write 는 인증 토큰이 없어 이 세션에서 쓰지 못했으므로 Runner/후속 세션이 위 내용으로 기록해야 한다. 비용 미측정.
+
 ## 2026-10-03 — 승인 E2E 증거 게이트의 보고서 CSV 거짓 양성 교정 (AADS-E2E-GATE-CSV-NONRENDER-20261003)
 
 **코드 완료 (커밋 전 — Runner 가 승인 후 commit/push). 운영 반영·승인·배포 없음.** runner-1eb91c6f(`reports/*.csv` + `reports/*.md` 만 변경)가 HTTP 409 `screen_e2e_evidence_required` 로 막힌 원인: `app/services/e2e_verify.py` 의 `_NON_RENDERING_DATA_SUFFIXES` 가 `(".json",)` 뿐이라 `.csv` 가 `_renders_nothing` False → 화면 마커 지시서에서 증거 요구. `(".json", ".csv", ".tsv")` 로 확장했고 UI 경로 마커(`/app/`·`/components/` 등) 안의 CSV 는 `.json` 과 같은 규칙으로 계속 화면 작업이다. 다른 분류 규칙·마커는 불변. 회귀 테스트 `test_screen_gate_ignores_report_csv` 추가(reports CSV+MD → False, src/app/.../data.csv → True, .tsx 혼합 → True). 검증: `run_unit_tests.sh test_e2e_verify.py test_tools_and_pipeline.py` 90 passed, ruff F821/F811·`git diff --check` 통과. API 코드라 배포 전에는 운영 게이트에 반영되지 않는다 — 배포 후 runner-1eb91c6f 승인을 재시도한다.
