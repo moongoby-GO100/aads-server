@@ -6323,7 +6323,6 @@ async def _interim_save_streaming(session_id: str, state: Dict[str, Any], *, for
                         str(_orphan["id"])[:8] if _orphan else "-",
                     )
                     return
-        state["_last_content_len"] = len(content)
         _sc = state.get("_save_count", 0) + 1
         state["_save_count"] = _sc
         (logger.info if _sc <= 2 else logger.debug)(
@@ -6594,7 +6593,6 @@ def _begin_streaming_turn_state(session_id: str) -> Dict[str, Any]:
         "last_event_at": started_at,
         "first_response_at": None,
         "last_idle_save": 0.0,
-        "_last_content_len": None,
         "client_gone": False,
         "client_gone_since": None,
         "completed": False,
@@ -6650,9 +6648,8 @@ async def with_background_completion(
     async def _maybe_interim_save_after_disconnect() -> bool:
         if state.get("completed") or state.get("_terminal_execution_closed"):
             return False
-        content_len = len(state.get("content", "") or "")
-        if state.get("_last_content_len") == content_len:
-            return False
+        # 본문 길이만으로 단락하지 않는다: 도구만 도는 구간은 본문이 0자로 유지되므로
+        # 변경 감지·lease heartbeat 는 _interim_save_streaming 의 save_key 가 단독으로 맡는다.
         await _interim_save_streaming(session_id, state)
         return not bool(state.get("_terminal_execution_closed"))
 
