@@ -19,6 +19,8 @@ _SCREEN_SUFFIXES = (".html", ".css", ".scss", ".sass", ".less", ".tsx", ".jsx", 
 _SCREEN_PATH_MARKERS = ("/static/", "/templates/", "/frontend/", "/components/", "/pages/", "/app/")
 _NON_RENDERING_SUFFIXES = (
     ".py", ".sql", ".md", ".txt", ".yml", ".yaml", ".toml", ".cfg", ".ini", ".sh", ".env.example", ".local",
+    # Drafts/backups/patches are never served to a browser, even when the stem is a UI file (a.tsx.bak).
+    ".sql_draft", ".md_draft", ".draft", ".bak", ".orig", ".patch", ".diff",
 )
 # Data/manifest files render nothing on their own, so a backend release manifest
 # must not demand screen evidence. They count as screen work only inside a UI
