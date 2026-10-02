@@ -147,85 +147,90 @@ async def _head(conn: Any, tenant: str, project: str, key: str, lock: bool = Fal
     )
 
 
+async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str, body: RevisionInput) -> dict:
+    """Create a draft revision inside the caller's transaction. Never approves; approved_revision_id is untouched."""
+    content, source, digest = _body(body.content, body.source_path)
+    _safe_metadata(body.title, body.change_summary, body.source_task_id,
+                   body.document_key, body.idempotency_key, source)
+    if body.goal_id and not await conn.fetchval(
+        "SELECT 1 FROM goals WHERE id=$1 AND tenant_id=$2::uuid AND project=$3",
+        body.goal_id, tenant, project,
+    ):
+        raise HTTPException(404, "goal_not_found")
+    if body.source_session_id and not await conn.fetchval(
+        "SELECT 1 FROM chat_sessions s JOIN chat_workspaces w ON w.id=s.workspace_id "
+        "WHERE s.id=$1 AND s.tenant_id=$2::uuid AND w.tenant_id=$2::uuid AND upper(w.project_key)=$3",
+        body.source_session_id, tenant, project,
+    ):
+        raise HTTPException(404, "session_not_found")
+    if body.source_task_id and not await conn.fetchval(
+        "SELECT 1 FROM goal_task_links l LEFT JOIN milestones m ON m.id=l.milestone_id "
+        "JOIN goals g ON g.id=COALESCE(l.goal_id,m.goal_id) "
+        "WHERE l.task_id=$1 AND l.tenant_id=$2::uuid AND g.tenant_id=$2::uuid "
+        "AND g.project=$3 AND ($4::uuid IS NULL OR g.id=$4::uuid) LIMIT 1",
+        body.source_task_id, tenant, project, body.goal_id,
+    ):
+        raise HTTPException(404, "task_not_found")
+    await conn.execute(
+        "INSERT INTO project_document_heads(tenant_id,project_key,document_key,kind,title) "
+        "VALUES($1::uuid,$2,$3,$4,$5) ON CONFLICT(tenant_id,project_key,document_key) DO NOTHING",
+        tenant, project, body.document_key, body.kind, body.title,
+    )
+    head = await _head(conn, tenant, project, body.document_key, lock=True)
+    if head["kind"] != body.kind:
+        raise HTTPException(409, "document_kind_conflict")
+    matches = await conn.fetch(
+        "SELECT * FROM project_document_revisions WHERE head_id=$1 AND "
+        "(content_hash=$2 OR version=$3 OR ($4::text IS NOT NULL AND idempotency_key=$4))",
+        head["id"], digest, body.version, body.idempotency_key,
+    )
+    if matches:
+        keyed = next((row for row in matches if body.idempotency_key and row["idempotency_key"] == body.idempotency_key), None)
+        if keyed and (keyed["content_hash"] != digest or keyed["version"] != body.version):
+            raise HTTPException(409, "idempotency_key_conflict")
+        versioned = next((row for row in matches if row["version"] == body.version), None)
+        if versioned and versioned["content_hash"] != digest:
+            raise HTTPException(409, "revision_conflict")
+        same = next((row for row in matches if row["content_hash"] == digest and row["version"] == body.version), None)
+        if same:
+            return {"document_id": head["id"], "revision_id": same["id"], "generation": head["generation"], "idempotent": True}
+        raise HTTPException(409, "revision_conflict")
+    if body.expected_generation != head["generation"]:
+        raise HTTPException(409, "generation_conflict")
+    next_revision = await conn.fetchval(
+        "SELECT COALESCE(max(revision),0)+1 FROM project_document_revisions WHERE head_id=$1", head["id"],
+    )
+    revision = await conn.fetchrow(
+        "INSERT INTO project_document_revisions(head_id,tenant_id,project_key,revision,version,title,content,content_hash,source_path,source_kind,source_task_id,source_session_id,goal_id,change_summary,author_id,idempotency_key) "
+        "VALUES($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id",
+        head["id"], tenant, project, next_revision, body.version, body.title, content, digest,
+        source, "repository" if source else "api", body.source_task_id, body.source_session_id,
+        body.goal_id, body.change_summary, actor, body.idempotency_key,
+    )
+    await conn.execute(
+        "UPDATE project_document_heads SET latest_revision_id=$2,generation=generation+1,title=$3,updated_at=now() WHERE id=$1",
+        head["id"], revision["id"], body.title,
+    )
+    await conn.execute(
+        "INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
+        "VALUES($1::uuid,$2,$3,$4,$5,$6)", tenant, project, head["id"], revision["id"],
+        "created" if head["generation"] == 0 else "revised", actor,
+    )
+    if body.goal_id:
+        await conn.execute(
+            "INSERT INTO project_document_goal_links(head_id,tenant_id,project_key,goal_id) "
+            "VALUES($1,$2::uuid,$3,$4) ON CONFLICT DO NOTHING",
+            head["id"], tenant, project, body.goal_id,
+        )
+    return {"document_id": head["id"], "revision_id": revision["id"], "generation": head["generation"] + 1, "idempotent": False}
+
+
 @router.post("", status_code=201)
 async def create_revision(project_key: str, body: RevisionInput, context: dict = WRITE):
     project = _project(project_key)
     async with get_pool().acquire() as conn, conn.transaction():
         tenant, actor = await _authorize(conn, context, project, "write")
-        content, source, digest = _body(body.content, body.source_path)
-        _safe_metadata(body.title, body.change_summary, body.source_task_id,
-                       body.document_key, body.idempotency_key, source)
-        if body.goal_id and not await conn.fetchval(
-            "SELECT 1 FROM goals WHERE id=$1 AND tenant_id=$2::uuid AND project=$3",
-            body.goal_id, tenant, project,
-        ):
-            raise HTTPException(404, "goal_not_found")
-        if body.source_session_id and not await conn.fetchval(
-            "SELECT 1 FROM chat_sessions s JOIN chat_workspaces w ON w.id=s.workspace_id "
-            "WHERE s.id=$1 AND s.tenant_id=$2::uuid AND w.tenant_id=$2::uuid AND upper(w.project_key)=$3",
-            body.source_session_id, tenant, project,
-        ):
-            raise HTTPException(404, "session_not_found")
-        if body.source_task_id and not await conn.fetchval(
-            "SELECT 1 FROM goal_task_links l LEFT JOIN milestones m ON m.id=l.milestone_id "
-            "JOIN goals g ON g.id=COALESCE(l.goal_id,m.goal_id) "
-            "WHERE l.task_id=$1 AND l.tenant_id=$2::uuid AND g.tenant_id=$2::uuid "
-            "AND g.project=$3 AND ($4::uuid IS NULL OR g.id=$4::uuid) LIMIT 1",
-            body.source_task_id, tenant, project, body.goal_id,
-        ):
-            raise HTTPException(404, "task_not_found")
-        await conn.execute(
-            "INSERT INTO project_document_heads(tenant_id,project_key,document_key,kind,title) "
-            "VALUES($1::uuid,$2,$3,$4,$5) ON CONFLICT(tenant_id,project_key,document_key) DO NOTHING",
-            tenant, project, body.document_key, body.kind, body.title,
-        )
-        head = await _head(conn, tenant, project, body.document_key, lock=True)
-        if head["kind"] != body.kind:
-            raise HTTPException(409, "document_kind_conflict")
-        matches = await conn.fetch(
-            "SELECT * FROM project_document_revisions WHERE head_id=$1 AND "
-            "(content_hash=$2 OR version=$3 OR ($4::text IS NOT NULL AND idempotency_key=$4))",
-            head["id"], digest, body.version, body.idempotency_key,
-        )
-        if matches:
-            keyed = next((row for row in matches if body.idempotency_key and row["idempotency_key"] == body.idempotency_key), None)
-            if keyed and (keyed["content_hash"] != digest or keyed["version"] != body.version):
-                raise HTTPException(409, "idempotency_key_conflict")
-            versioned = next((row for row in matches if row["version"] == body.version), None)
-            if versioned and versioned["content_hash"] != digest:
-                raise HTTPException(409, "revision_conflict")
-            same = next((row for row in matches if row["content_hash"] == digest and row["version"] == body.version), None)
-            if same:
-                return {"document_id": head["id"], "revision_id": same["id"], "generation": head["generation"], "idempotent": True}
-            raise HTTPException(409, "revision_conflict")
-        if body.expected_generation != head["generation"]:
-            raise HTTPException(409, "generation_conflict")
-        next_revision = await conn.fetchval(
-            "SELECT COALESCE(max(revision),0)+1 FROM project_document_revisions WHERE head_id=$1", head["id"],
-        )
-        revision = await conn.fetchrow(
-            "INSERT INTO project_document_revisions(head_id,tenant_id,project_key,revision,version,title,content,content_hash,source_path,source_kind,source_task_id,source_session_id,goal_id,change_summary,author_id,idempotency_key) "
-            "VALUES($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id",
-            head["id"], tenant, project, next_revision, body.version, body.title, content, digest,
-            source, "repository" if source else "api", body.source_task_id, body.source_session_id,
-            body.goal_id, body.change_summary, actor, body.idempotency_key,
-        )
-        await conn.execute(
-            "UPDATE project_document_heads SET latest_revision_id=$2,generation=generation+1,title=$3,updated_at=now() WHERE id=$1",
-            head["id"], revision["id"], body.title,
-        )
-        await conn.execute(
-            "INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
-            "VALUES($1::uuid,$2,$3,$4,$5,$6)", tenant, project, head["id"], revision["id"],
-            "created" if head["generation"] == 0 else "revised", actor,
-        )
-        if body.goal_id:
-            await conn.execute(
-                "INSERT INTO project_document_goal_links(head_id,tenant_id,project_key,goal_id) "
-                "VALUES($1,$2::uuid,$3,$4) ON CONFLICT DO NOTHING",
-                head["id"], tenant, project, body.goal_id,
-            )
-        return {"document_id": head["id"], "revision_id": revision["id"], "generation": head["generation"] + 1, "idempotent": False}
+        return await create_revision_in_tx(conn, tenant, actor, project, body)
 
 
 @router.get("")

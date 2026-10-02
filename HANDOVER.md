@@ -1,3 +1,11 @@
+## 2026-10-03 — 승인된 정본 등록 도구 최신 origin/main 재적용 (AADS-RDOC-PENDING-CHANGES-OPERATIONS-RELEASE-20261003)
+
+**상태: 코드 재적용·검증 완료, commit/push/배포는 Runner 승인 단계 대기.** runner-d869f5bc 의 `stale_base`(검토 커밋 1ccf4f78 은 origin/main 미포함)를 교정하려 1ccf4f78 의 diff 를 `b6122893` 위에 재구현 없이 그대로 적용했다(`git apply`, patch-id 3d2d4557… 원본 동일; tool_executor.py 는 b6122893 의 `defer_screen_evidence` 변경과 겹치지 않는 별개 헝크, 충돌은 HANDOVER.md 뿐이어서 양쪽 기록 보존). 새 기능 없음 — 아래 항목과 같은 8개 파일. 코드 배포 상태와 정본 문서 등록·승인은 별개이며, 정본 문서 승인·enforce 활성화는 하지 않았다. 호스트 스크립트 SHA 비교·배포 큐 등록·DB handover_write 는 이 세션에서 실행하지 않았다(샌드박스 제한).
+
+## 2026-10-03 — 문서 정본 등록 채팅 도구 2종 (AADS-DOC-CANONICAL-TOOL-PRECOMMIT-WARN-R2-20261003)
+
+**코드 완료 (커밋 전 — Runner 가 승인 후 commit/push). 빌드·배포·재시작·운영 DB 쓰기 없음.** `canonical_document_register`(초안 리비전 등록, approve 호출 없음·approved_revision_id 불변)와 `canonical_document_lookup`(읽기 전용)을 추가했다. 생성 로직은 `app/api/canonical_documents.py` 라우트에서 `create_revision_in_tx` 로 그대로 추출(라우트·등록 순서 불변). 로직: `app/services/canonical_document_tools.py`. 게이트 4번째 진입점 `chat_tool` 은 `canonical_gate.check_chat_register`(shadow·fail-open·300ms) — 이벤트 기록은 `migrations/20261003_canonical_gate_events_chat_tool.sql` 적용 전까지 건너뛴다(롤백 SQL 동봉, 미적용). pre-commit 은 1816e2c0 의 정본 게이트 블록(scripts/hooks/pre-commit "정본 게이트")으로 충족되어 수정하지 않았다. DB handover_write 는 이 세션에서 호출 불가.
+
 ## 2026-10-03 — R-DOC document_key 규칙 확정·등록률·귀속 점검 (AADS-RDOC-NAMING-COVERAGE-20261003)
 
 **상태: 문서·테스트 완료, 커밋/푸시는 Runner 승인 단계 대기.** spec 1.2.0 15항에 새 키 규칙(`{주제}-{kind}`, 소문자 kebab, 날짜·슬래시 없음)과 기존 키 전부 보존(grandfather)을 적었다. 현재 heads 13건은 SELECT 로 낸 예외 13건이고 규칙 적합은 0건이다 [DB조회]. 파일명 날짜 규칙과 document_key 는 15.3 표로 구분했다. PLAN/PRD 는 spec 버전 참조 한 줄씩만 고쳤고 승인본 앞부분 해시는 그대로다.

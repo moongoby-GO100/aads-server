@@ -34,6 +34,8 @@ _DEFER_LOADING: Dict[str, bool] = {
     "handover_write": False,             # 전 프로젝트 공통 핸드오버 정본 기록
     "handover_search": False,            # 현재 상태·과거 기록 검색
     "handover_export": True,             # Markdown 호환 내보내기
+    "canonical_document_register": True, # 문서 정본 초안 리비전 등록 (승인 없음)
+    "canonical_document_lookup": True,   # 문서 정본 등록 여부 조회 (읽기 전용)
     "list_project_databases": True,      # DB 목록 — 온디맨드
     "task_history": False,               # 작업 현황 — 빈번 조회
     "list_remote_dir": False,            # 파일 탐색 — 빈번 사용
@@ -3358,6 +3360,67 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"project": "GO100", "entry_key": "GO100-310-release", "entry_type": "verification", "title": "#310 운영 검증", "body": "API 200, 서비스 active", "status": "resolved", "priority": "P1"},
         ],
     },
+    "canonical_document_register": {
+        "name": "canonical_document_register",
+        "description": (
+            "프로젝트 문서를 정본(project_document_heads)에 **초안 리비전**으로 등록합니다. "
+            "기존 document_key 면 새 리비전이 추가되고 승인본(approved_revision_id)은 바뀌지 않습니다. "
+            "승인은 이 도구로 할 수 없습니다(기존 승인 경로로만). "
+            "document_key 는 소문자 kebab(예: ovis-recipe-spec), 슬래시·날짜·버전 금지. "
+            "content 또는 file_path(서버 저장소 기준 docs/·reports/ 상대경로) 중 하나가 필요합니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "MCP 브리지 등 채팅 컨텍스트가 없는 호출에서만 명시. 생략 시 현재 채팅 세션을 사용.",
+                },
+                "project": {"type": "string", "description": "프로젝트 키(AADS/GO100/KIS/SF/NTV2 등)"},
+                "document_key": {"type": "string", "description": "소문자 kebab 문서 키. 재사용하면 새 리비전으로 처리"},
+                "kind": {
+                    "type": "string",
+                    "enum": ["plan", "prd", "spec", "design", "architecture", "contract", "tasks", "report", "reference"],
+                },
+                "title": {"type": "string"},
+                "content": {"type": "string", "description": "본문. file_path 와 함께 주면 파일 내용과 같아야 함"},
+                "file_path": {"type": "string", "description": "저장소 상대경로(docs/… 또는 reports/…). 서버가 읽어 본문으로 사용"},
+                "change_summary": {"type": "string"},
+                "version": {"type": "string", "description": "x.y.z. 생략 시 1.0.<기존 리비전 수> 자동"},
+                "expected_generation": {"type": "integer", "minimum": 0, "description": "생략 시 현재 generation 사용"},
+                "source_task_id": {"type": "string"},
+                "goal_id": {"type": "string", "description": "연결할 목표 UUID(같은 프로젝트여야 함)"},
+                "idempotency_key": {"type": "string"},
+            },
+            "required": ["project", "document_key", "kind", "title"],
+        },
+        "input_examples": [
+            {"project": "AADS", "document_key": "ovis-recipe-spec", "kind": "spec", "title": "오비스 레시피 명세",
+             "file_path": "docs/plans/PRD-OVIS-RECIPE.md", "change_summary": "최초 등록"},
+        ],
+    },
+    "canonical_document_lookup": {
+        "name": "canonical_document_lookup",
+        "description": (
+            "문서 정본 등록 여부를 조회합니다(읽기 전용). document_key, query(키·제목 검색어), "
+            "file_path(저장소 상대경로) 중 하나로 찾고, latest/approved 리비전과 generation 을 돌려줍니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "MCP 브리지 등 채팅 컨텍스트가 없는 호출에서만 명시. 생략 시 현재 채팅 세션을 사용.",
+                },
+                "project": {"type": "string"},
+                "document_key": {"type": "string"},
+                "query": {"type": "string"},
+                "file_path": {"type": "string"},
+            },
+            "required": ["project"],
+        },
+        "input_examples": [{"project": "AADS", "document_key": "ovis-recipe-spec"}, {"project": "AADS", "query": "레시피"}],
+    },
     "handover_search": {
         "name": "handover_search",
         "description": "현재 테넌트의 전 프로젝트 핸드오버를 프로젝트·상태·유형·키워드로 검색합니다.",
@@ -3516,7 +3579,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
+    "action": ["directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)

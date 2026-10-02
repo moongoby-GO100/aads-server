@@ -29,6 +29,7 @@ _MODES = (MODE_OFF, MODE_SHADOW, MODE_ENFORCE)
 ENTRY_GOAL_API = "goal_api"
 ENTRY_COMMIT = "commit"
 ENTRY_RUNNER_SUBMIT = "runner_submit"
+ENTRY_CHAT_TOOL = "chat_tool"
 
 VERDICT_OK = "ok"
 VERDICT_MISSING = "missing_canonical"
@@ -88,6 +89,15 @@ SELECT (SELECT count(*) FROM project_document_heads h
        ) AS goal_approved
 """
 
+_CHAT_REGISTER_SQL = """
+SELECT EXISTS (SELECT 1 FROM project_document_heads h
+                WHERE h.tenant_id = $1::uuid AND h.project_key = $2
+                  AND h.document_key = $3) AS key_match,
+       EXISTS (SELECT 1 FROM project_document_revisions r
+                WHERE r.tenant_id = $1::uuid AND r.project_key = $2
+                  AND $4::text IS NOT NULL AND r.source_path = $4) AS path_match
+"""
+
 _INSERT_EVENT_SQL = (
     "INSERT INTO canonical_gate_events "
     "(entrypoint, project, ref, verdict, detail, mode) "
@@ -124,6 +134,14 @@ def judge_runner_goal_rows(row: Any) -> tuple[str, dict[str, Any]]:
     if detail["goal_approved"] == 0 and detail["project_approved"] == 0:
         return VERDICT_MISSING, detail
     return VERDICT_OK, detail
+
+
+def judge_chat_register_row(row: Any) -> tuple[str, dict[str, Any]]:
+    """채팅 도구 등록 판정 규칙(순수 함수). 등록 직후 key 의 head 가 없으면 missing."""
+    if row is None:
+        return VERDICT_UNKNOWN, {"reason": "no_row"}
+    detail = {"key_match": bool(row["key_match"]), "path_match": bool(row["path_match"])}
+    return (VERDICT_OK if detail["key_match"] else VERDICT_MISSING), detail
 
 
 def _warning(verdict: str, mode: str, entrypoint: str, ref: str, detail: dict[str, Any]) -> dict[str, Any]:
@@ -228,3 +246,18 @@ async def check_runner_submit(
         return verdict, {**detail, "goal_id": goal_id}, project
 
     return await _run(ENTRY_RUNNER_SUBMIT, ref=job_id, project=project, judge=judge, pool=pool)
+
+
+async def check_chat_register(
+    *, tenant_id: str, project: str, document_key: str, source_path: Optional[str],
+    ref: str, pool: Any = None,
+) -> Optional[dict[str, Any]]:
+    """채팅 도구(canonical_document_register) 등록 커밋 후 호출. 트랜잭션 밖, 새 커넥션."""
+
+    async def judge(p: Any) -> tuple[str, dict[str, Any], Optional[str]]:
+        async with p.acquire() as conn:
+            row = await conn.fetchrow(_CHAT_REGISTER_SQL, tenant_id, project, document_key, source_path)
+        verdict, detail = judge_chat_register_row(row)
+        return verdict, detail, project
+
+    return await _run(ENTRY_CHAT_TOOL, ref=ref, project=project, judge=judge, pool=pool)

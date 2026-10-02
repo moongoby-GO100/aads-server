@@ -273,6 +273,8 @@ _DATABASE_TOOLS = frozenset({
     "handover_write",
     "handover_search",
     "handover_export",
+    "canonical_document_register",
+    "canonical_document_lookup",
 })
 
 
@@ -975,6 +977,8 @@ class ToolExecutor:
             "handover_write":         self._handover_write,
             "handover_search":        self._handover_search,
             "handover_export":        self._handover_export,
+            "canonical_document_register": self._canonical_document_register,
+            "canonical_document_lookup":   self._canonical_document_lookup,
             "dashboard_query":        self._dashboard_query,
             "task_history":           self._task_history,
             "server_status":          self._server_status,
@@ -1447,6 +1451,26 @@ class ToolExecutor:
         except (ValueError, TypeError) as exc:
             return {"error": "invalid_input", "message": str(exc)}
         return {"project": project.upper(), "total": total, "markdown": markdown}
+
+    async def _canonical_document_register(self, inp: Dict[str, Any]) -> Any:
+        """Register a draft canonical document revision (never approves)."""
+        from app.services.canonical_document_tools import register_document
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+        if not tenant_id:
+            return _missing_tenant_id_result("canonical_document_register")
+        return await register_document(tenant_id=tenant_id, session_id=session_id, inp=inp)
+
+    async def _canonical_document_lookup(self, inp: Dict[str, Any]) -> Any:
+        """Read-only canonical document registration lookup."""
+        from app.services.canonical_document_tools import lookup_documents
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+        if not tenant_id:
+            return _missing_tenant_id_result("canonical_document_lookup")
+        return await lookup_documents(tenant_id=tenant_id, inp=inp)
 
     async def _health_check(self, inp: Dict[str, Any]) -> Any:
         try:
