@@ -5559,7 +5559,12 @@ class ToolExecutor:
             resp = await client.post(
                 get_pipeline_runner_api_url(f"jobs/{job_id}/approve"),
                 headers=INTERNAL_PIPELINE_HEADERS,
-                json={"action": action, "feedback": inp.get("feedback", "")},
+                json={
+                    "action": action,
+                    "feedback": inp.get("feedback", ""),
+                    "defer_screen_evidence": bool(inp.get("defer_screen_evidence", False)),
+                    "defer_reason": inp.get("defer_reason", "") or "",
+                },
                 timeout=10,
             )
             result = resp.json()

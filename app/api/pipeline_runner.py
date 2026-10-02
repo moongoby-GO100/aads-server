@@ -836,6 +836,10 @@ def _normalize_worker_model_override(worker_model: str, reason: str) -> tuple[st
 class JobApproveRequest(BaseModel):
     action: str = Field(..., description="approve 또는 reject")
     feedback: str = Field("", max_length=2000, description="피드백")
+    defer_screen_evidence: bool = Field(
+        False, description="CEO 명시 승인 시에만: 화면 증거를 배포 후 검증으로 미룬다(기본 fail-closed)"
+    )
+    defer_reason: str = Field("", max_length=2000, description="defer 사유(10자 이상)")
 
     @field_validator('action')
     @classmethod
@@ -2689,6 +2693,9 @@ async def approve_or_reject(
                         job_id=job_id,
                         instruction=row["instruction"] or "",
                         changed_files=list(gate_files),
+                        defer_screen_evidence=req.defer_screen_evidence,
+                        defer_reason=req.defer_reason,
+                        approver=str(context.get("user", {}).get("user_id") or tenant_id),  # type: ignore[union-attr]
                     )
                 except ValueError as exc:
                     raise HTTPException(status_code=409, detail=str(exc)) from exc

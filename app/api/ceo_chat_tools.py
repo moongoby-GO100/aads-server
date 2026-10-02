@@ -1044,13 +1044,15 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "pipeline_runner_approve",
-        "description": "Pipeline Runner 작업 승인 또는 거부. awaiting_approval 상태에서만 가능.",
+        "description": "Pipeline Runner 작업 승인 또는 거부. awaiting_approval 상태에서만 가능. 화면 증거 게이트로 막힌 신규 페이지는 CEO 명시 승인이 있을 때만 defer_screen_evidence=true 로 배포 후 검증으로 미룰 수 있다(60분 내 증거 없으면 경보).",
         "input_schema": {
             "type": "object",
             "properties": {
                 "job_id": {"type": "string", "description": "작업 ID"},
                 "action": {"type": "string", "enum": ["approve", "reject"], "description": "승인/거부"},
                 "feedback": {"type": "string", "description": "피드백 (거부 시 사유)"},
+                "defer_screen_evidence": {"type": "boolean", "description": "CEO 명시 승인이 있을 때만 true. 화면 E2E 증거를 배포 후 검증으로 미룬다. 기본 false(증거 없으면 409)."},
+                "defer_reason": {"type": "string", "description": "defer 사유(10자 이상, defer_screen_evidence=true 일 때 필수)"},
             },
             "required": ["job_id", "action"],
         },
@@ -6008,7 +6010,12 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             resp = await client.post(
                 get_pipeline_runner_api_url(f"jobs/{quote(job_id, safe='')}/approve"),
                 headers=INTERNAL_PIPELINE_HEADERS,
-                json={"action": action, "feedback": params.get("feedback", "")},
+                json={
+                    "action": action,
+                    "feedback": params.get("feedback", ""),
+                    "defer_screen_evidence": bool(params.get("defer_screen_evidence", False)),
+                    "defer_reason": params.get("defer_reason", "") or "",
+                },
                 timeout=10,
             )
             text = resp.text

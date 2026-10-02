@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 from urllib.parse import urljoin, urlparse
 
@@ -94,17 +94,162 @@ async def load_passing_evidence(conn: Any, job_id: str) -> dict[str, Any] | None
     return evidence if evidence_passes_gate(evidence) else None
 
 
+DEFERRED_LOG_TYPE = "e2e_evidence_deferred"
+OVERDUE_LOG_TYPE = "screen_evidence_overdue"
+DEFER_REASON_MIN_CHARS = 10
+DEFER_DEADLINE_MINUTES = 60
+
+
+def _as_metadata_dict(metadata: Any) -> dict[str, Any]:
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            return {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def validate_defer_reason(reason: Any) -> str:
+    text = str(reason or "").strip()
+    if len(text) < DEFER_REASON_MIN_CHARS:
+        raise ValueError("screen_evidence_defer_reason_required")
+    return text
+
+
+async def load_deferred_evidence(conn: Any, job_id: str) -> dict[str, Any] | None:
+    """Latest CEO-approved 'verify after deploy' record for the job, if any."""
+    row = await conn.fetchrow(
+        """SELECT metadata FROM task_logs
+             WHERE task_id=$1 AND log_type='e2e_evidence_deferred'
+             ORDER BY created_at DESC LIMIT 1""",
+        job_id,
+    )
+    if not row:
+        return None
+    metadata = _as_metadata_dict(row["metadata"])
+    if not metadata.get("deadline_at") or not metadata.get("reason"):
+        return None
+    return metadata
+
+
+async def record_screen_evidence_deferral(
+    conn: Any,
+    *,
+    job_id: str,
+    approver: str,
+    reason: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    deferred_at = now or datetime.now(timezone.utc)
+    metadata = {
+        "approver": approver or "unknown",
+        "reason": reason,
+        "deferred_at": deferred_at.isoformat(),
+        "deadline_at": (deferred_at + timedelta(minutes=DEFER_DEADLINE_MINUTES)).isoformat(),
+    }
+    await conn.execute(
+        """INSERT INTO task_logs (task_id, log_type, content, phase, metadata)
+           VALUES ($1, 'e2e_evidence_deferred', $2, 'e2e_verify', $3::jsonb)""",
+        job_id,
+        f"screen evidence deferred to post-deploy: {reason}"[:2000],
+        json.dumps(metadata, ensure_ascii=False),
+    )
+    return metadata
+
+
 async def assert_screen_evidence_gate(
     conn: Any,
     *,
     job_id: str,
     instruction: str,
     changed_files: list[str] | None = None,
+    defer_screen_evidence: bool = False,
+    defer_reason: str = "",
+    approver: str = "",
 ) -> None:
+    reason = validate_defer_reason(defer_reason) if defer_screen_evidence else ""
     if not screen_verification_required(instruction, changed_files):
         return
-    if not await load_passing_evidence(conn, job_id):
-        raise ValueError("screen_e2e_evidence_required")
+    if await load_passing_evidence(conn, job_id):
+        return
+    if await load_deferred_evidence(conn, job_id):
+        return
+    if defer_screen_evidence:
+        await record_screen_evidence_deferral(conn, job_id=job_id, approver=approver, reason=reason)
+        return
+    raise ValueError("screen_e2e_evidence_required")
+
+
+async def check_overdue_deferred_evidence(
+    conn: Any,
+    *,
+    now: datetime | None = None,
+    notify: Callable[..., Awaitable[Any]] | None = None,
+) -> list[str]:
+    """Alert once per job whose deferred screen evidence is still missing past its deadline.
+
+    Alert only; never rolls anything back. Returns the job_ids alerted this pass.
+    """
+    current = now or datetime.now(timezone.utc)
+    rows = await conn.fetch(
+        """SELECT t.task_id AS job_id, t.metadata
+             FROM task_logs t
+            WHERE t.log_type='e2e_evidence_deferred'
+              AND t.created_at > NOW() - INTERVAL '7 days'
+              AND NOT EXISTS (
+                    SELECT 1 FROM task_logs o
+                     WHERE o.task_id=t.task_id AND o.log_type='screen_evidence_overdue')
+            ORDER BY t.created_at LIMIT 20"""
+    )
+    alerted: list[str] = []
+    for row in rows or []:
+        job_id = row["job_id"]
+        metadata = _as_metadata_dict(row["metadata"])
+        try:
+            deadline = datetime.fromisoformat(str(metadata.get("deadline_at") or ""))
+        except ValueError:
+            continue
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        if current < deadline:
+            continue
+        if await load_passing_evidence(conn, job_id):
+            continue
+        claimed = await conn.fetchrow(
+            """UPDATE pipeline_jobs
+                  SET logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+                          'ts', NOW()::text,
+                          'event', 'screen_evidence_overdue',
+                          'deadline_at', $2::text)),
+                      updated_at = NOW()
+                WHERE job_id = $1
+                  AND NOT (COALESCE(logs, '[]'::jsonb) @> '[{"event":"screen_evidence_overdue"}]'::jsonb)
+            RETURNING chat_session_id, project""",
+            job_id,
+            str(metadata.get("deadline_at")),
+        )
+        if not claimed:
+            continue
+        await conn.execute(
+            """INSERT INTO task_logs (task_id, log_type, content, phase, metadata)
+               VALUES ($1, 'screen_evidence_overdue', $2, 'e2e_verify', $3::jsonb)""",
+            job_id,
+            "deferred screen evidence overdue",
+            json.dumps({"deadline_at": metadata.get("deadline_at"), "reason": metadata.get("reason")}, ensure_ascii=False),
+        )
+        alerted.append(job_id)
+        if notify is not None:
+            try:
+                await notify(
+                    job_id=job_id,
+                    session_id=claimed["chat_session_id"],
+                    project=claimed["project"] or "",
+                    deadline_at=str(metadata.get("deadline_at")),
+                    reason=str(metadata.get("reason") or ""),
+                )
+            except Exception:
+                pass
+    return alerted
 
 
 async def _http_probe(url: str, timeout: float = 10.0) -> dict[str, Any]:

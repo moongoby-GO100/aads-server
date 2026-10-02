@@ -3796,6 +3796,7 @@ async def _watchdog_loop(interval: int):
             await asyncio.sleep(interval)
             await _check_stalled_jobs()
             await _collect_orphan_results()
+            await _check_deferred_screen_evidence()
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -3882,6 +3883,46 @@ async def _check_stalled_jobs():
                     logger.warning(f"pipeline_c_watchdog_auto_killed job={job.job_id} after {stall_minutes}min")
                 except Exception as _ke:
                     logger.error(f"pipeline_c_watchdog_kill_err job={job.job_id}: {_ke}")
+
+
+async def _notify_deferred_screen_evidence_overdue(
+    *, job_id: str, session_id: Any, project: str, deadline_at: str, reason: str
+) -> None:
+    if not session_id:
+        logger.warning("screen_evidence_overdue_no_session job=%s", job_id)
+        return
+    from app.services.session_reporter import post_session_report
+
+    await post_session_report(
+        session_id=session_id,
+        title=f"배포 후 화면 증거 미제출: {job_id}",
+        body=(
+            f"⚠️ **배포 후 화면 증거 미제출 — 롤백 검토** `{job_id}`\n"
+            f"프로젝트: {project} | 기한: {deadline_at}\n"
+            f"미룬 사유: {reason}\n\n"
+            "기한까지 통과한 화면 E2E 증거(e2e_verify)가 없습니다. 공개 URL로 e2e_verify 를 실행하거나 롤백을 검토하세요. "
+            "(자동 롤백은 하지 않습니다.)"
+        ),
+        status="error",
+        source="pipeline_runner",
+        project=project,
+        metadata={"job_id": job_id, "event": "screen_evidence_overdue", "deadline_at": deadline_at},
+        intent="pipeline_c",
+        idempotency_key=f"screen_evidence_overdue:{job_id}",
+    )
+
+
+async def _check_deferred_screen_evidence() -> None:
+    """워치독 주기마다: 미룬 화면 증거가 기한을 넘기면 1회 경보(job 로그에 screen_evidence_overdue 표시)."""
+    try:
+        from app.core.db_pool import get_pool
+        from app.services.e2e_verify import check_overdue_deferred_evidence
+
+        async with get_pool().acquire() as conn:
+            await check_overdue_deferred_evidence(conn, notify=_notify_deferred_screen_evidence_overdue)
+    except Exception as e:
+        if "DB pool" not in str(e):
+            logger.warning(f"deferred_screen_evidence_check_error: {e}")
 
 
 _ORPHAN_RESULT_COLLECTED_MARKER = "[watchdog_result_collected]"

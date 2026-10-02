@@ -8,6 +8,7 @@ cancelled 로 종결시키므로, 이런 잡은 승인 단계까지 도달하지
 예외를 둔다.
 """
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -146,7 +147,10 @@ def test_approve_endpoint_bypasses_diff_gates_for_deploy_only_jobs():
     assert "SELECT job_id, project, status, phase, git_diff, instruction," in api
 
     approve_fn_start = api.index("async def approve_or_reject(")
-    approve_fn = api[approve_fn_start:approve_fn_start + 4000]
+    body_start = api.index("\n", approve_fn_start)
+    next_top_level = re.search(r"\n(?:@router\.|async def |def )", api[body_start:])
+    approve_fn_end = body_start + next_top_level.start() if next_top_level else len(api)
+    approve_fn = api[approve_fn_start:approve_fn_end]
 
     assert "deploy_only = _is_deploy_only_instruction(row[\"instruction\"])" in approve_fn
     assert 'if not deploy_only and "diff --git " not in git_diff:' in approve_fn
