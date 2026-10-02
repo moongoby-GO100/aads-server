@@ -1,3 +1,26 @@
+# ACCT-CAFE24-DATA-FILE-COLLECTION-CLOSEOUT-20261003-R10
+
+공개 전환 **불가**, M1/M3 BLOCK 유지(M3 완료 신고 안 함). 이 절은 맨 위에 추가한 것이며 아래 기존 RESULT.md 내용은 한 줄도 지우지 않았다. 전문: 서버 114 `/srv/acct/evidence/data-file-collection-r10/RESULT.md` (sha256 551f239f…a74e1).
+
+## STEP 0 분류
+- 저장소 파일 전부 [유지](변경 0, git 변경 없음). 서버 114 증거 영역 `data-file-collection-r10/` [신규]. `selected/` [신규, 비어 있음]. DB handover `acct-cafe24-data-file-collection-r10-20261003` [신규]. 삭제 없음.
+
+## 실제 검증 결과
+| 항목 | 결과 |
+|---|---|
+| obys 18 테이블 + acct + obys_auth 재조회 | 과거 수치와 일치. 차이는 `ddl_audit_log` GRANT 3행(31,261 대 31,258)뿐 |
+| 라일론 유입 게이트 | 조회한 11개 항목 전부 0 (`gate_zero_lylon.out`) |
+| source_file 귀속 | 비라일론(7–10) 0행 / 라일론(11) 604 / NULL 45,559 — "0행"은 귀속 근거 없음이지 무누락 증명이 아님 |
+| "315 source rows", 서명 PDF, 최신성 | 재현 불가·미확인·UNKNOWN (사실로 기재하지 않음) |
+| 백업 `서버_20261002_1130.tar.gz` 분류 (범위 2,435 파일) | LYLON 내용 676 / LYLON 경로 837(미열람) / 귀속 불가 922 / **비라일론 확인 0** → 적재 0건, 무누락 선언 불가 |
+| 격리 파일 테스트(저장·재읽기·해시·중복·권한 거부·변조 감지) | 8/8 PASS, 기존 데이터·APP 경로 접촉 없음 |
+| 수집 의존성 | 단독 앱에 수집 라우터 없음, 큐 소비자는 AADS `app/main.py` 뿐, PC agent 는 aads.newtalk.kr 의존. Cafe24 전용 JSON 큐 경로안은 문서화만(미활성) |
+
+## APP 인계
+- `app/yeoljeong_main.py`/`auth.py` 의 수집 라우터 반영은 APP 소유자 몫(본 작업 미수정). 순서: 라우터 마운트 → JSON 큐 env(`AADS_PC_AGENT_COLLECTION_QUEUE_PATH`, DATABASE_URL 미설정) → 소비자 구성.
+- 승인 후 Runner 빌드 검증 대상: 위 APP 변경이 생길 경우에 한함.
+- 외부 수집·클로브 가입·외부제공 동의는 수행/대행하지 않음.
+
 # AADS-CHAT-TURN-MODEL-CONTRACT-20261002
 
 턴 모델 결정 6곳을 `TurnModelContract` 하나로 통일. 요청 모델은 턴 시작에 한 번 정하고 이후 경로는 읽기만 한다. (이 절은 맨 위에 추가한 것이며 아래 기존 RESULT.md 내용은 한 줄도 지우지 않았다. runner-0cd99c37 은 이 작업이 대체한다.)
