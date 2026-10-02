@@ -19,6 +19,17 @@ SCP_OPTS=(
     -o ConnectTimeout=15
 )
 
+# 설치 원본은 항상 origin/main export 여야 한다 (AADS-RUNNER-SYNC-SOURCE-ORIGIN-MAIN).
+# 공유 체크아웃의 작업본/HEAD 는 다른 세션이 쓰는 중이라 62커밋 뒤처지거나 미커밋일 수 있고,
+# 그 파일로 원격 러너를 덮으면 최신 정본을 옛 것으로 되돌린다. 직접 실행해도 런처를 거쳐
+# export 안의 이 스크립트가 다시 실행되도록 한다. 런처가 AADS_RUNNER_SYNC_EXPORTED=1 을 건다.
+if [[ "${AADS_RUNNER_SYNC_EXPORTED:-0}" != "1" ]]; then
+    case " $* " in
+        *" -h "*|*" --help "*) ;;
+        *) exec bash "${SCRIPT_DIR}/runner_sync_launcher.sh" "$@" ;;
+    esac
+fi
+
 DRY_RUN=0
 RESTART_SERVICES=1
 SYNC_REMOTE_UNITS="${AADS_RUNNER_SYNC_UNITS:-0}"
@@ -307,47 +318,9 @@ sync_one_target() {
     return 0
 }
 
-# 소스 미커밋으로 연속 defer 되면 조용히 성공(exit 0)하지 말고 실패로 드러낸다.
-# 2026-10-02 08:55 KST 부터 공유 체크아웃의 scripts/pipeline-runner.sh 가 미커밋이라
-# 5분 타이머가 257회 넘게 "deferred" 만 찍고 exit 0 으로 끝났다 — 그동안 contabo14 는
-# 핫픽스 이전 스크립트로 돌며 approval_commit_stage_failed 4건을 냈고 아무도 몰랐다.
-DEFER_STATE_FILE="${AADS_RUNNER_SYNC_DEFER_STATE:-/tmp/aads-pipeline-runner-sync.defer-count}"
-DEFER_ESCALATE_AFTER="${AADS_RUNNER_SYNC_DEFER_ESCALATE_AFTER:-6}"
-
-note_source_deferral() {
-    local reason="$1" n=0
-    n=$(cat "$DEFER_STATE_FILE" 2>/dev/null || echo 0)
-    [[ "$n" =~ ^[0-9]+$ ]] || n=0
-    n=$((n + 1))
-    printf '%s' "$n" > "$DEFER_STATE_FILE" 2>/dev/null || true
-    if [[ "$DEFER_ESCALATE_AFTER" =~ ^[0-9]+$ && "$n" -ge "$DEFER_ESCALATE_AFTER" ]]; then
-        log "ERROR sync stalled: ${n} consecutive deferrals (${reason}) — 원격 러너가 최신 정본을 받지 못하고 있다. ${REPO_ROOT} 의 해당 파일을 커밋하거나 정리해야 한다"
-        return 1
-    fi
-    return 0
-}
-
-reset_source_deferral() {
-    rm -f "$DEFER_STATE_FILE" 2>/dev/null || true
-}
-
 main() {
-    # The timer must never publish edits from an in-progress shared worktree.
-    local source_file committed_sha working_sha
-    for source_file in scripts/pipeline-runner.sh scripts/claude_model_contract.py scripts/sync_pipeline_runner_remote.sh scripts/runner_busy_lib.sh scripts/runner_cli_usage.py tools/aag/brief.py; do
-        committed_sha=$(git -C "$REPO_ROOT" show "HEAD:${source_file}" 2>/dev/null | sha256sum | awk '{print $1}') || {
-            log "source not committed: ${source_file}; sync deferred"
-            note_source_deferral "source not committed: ${source_file}"
-            return $?
-        }
-        working_sha=$(sha256_file "${REPO_ROOT}/${source_file}")
-        if [[ "$committed_sha" != "$working_sha" ]]; then
-            log "source has uncommitted changes: ${source_file}; sync deferred"
-            note_source_deferral "source has uncommitted changes: ${source_file}"
-            return $?
-        fi
-    done
-    reset_source_deferral
+    # 원본은 런처가 만든 origin/main export 라 항상 커밋본이다 — 작업본 비교 게이트는 없다.
+    log "source=${AADS_RUNNER_SYNC_SOURCE_SHA:-unknown} root=${REPO_ROOT}"
     [[ -f "$CANONICAL_RUNNER" ]] || { echo "ERROR: canonical runner missing: $CANONICAL_RUNNER" >&2; exit 2; }
     bash -n "$CANONICAL_RUNNER"
 

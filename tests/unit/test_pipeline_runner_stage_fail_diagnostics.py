@@ -86,13 +86,15 @@ def test_scope_guard_runs_before_staging(name):
         assert forbidden not in guard, forbidden
 
 
-def test_sync_script_escalates_persistent_deferral():
+def test_sync_script_has_no_working_tree_gate_and_launcher_escalates_failures():
+    """원본이 항상 origin/main export 라 작업본 비교 defer 는 없고, 승격은 fetch/export 실패에 건다."""
     s = _read("sync_pipeline_runner_remote.sh")
-    assert "note_source_deferral()" in s
-    assert "reset_source_deferral()" in s
-    assert s.count("note_source_deferral \"") == 2
-    # 소스 검사를 통과하면 카운터를 비운다
-    assert s.index("reset_source_deferral\n") > s.index("for source_file in")
+    assert "note_source_deferral" not in s
+    assert "git -C" not in s
+    launcher = _read("runner_sync_launcher.sh")
+    assert "note_export_failure()" in launcher
+    assert "reset_export_failure()" in launcher
+    assert launcher.index("reset_export_failure\n") > launcher.index("git -C \"$SYNC_REPO\" archive")
 
 
 # ── 실행 동작: stage 실패 시 git 의 stderr 가 _fail_job 에 실린다 ─────────
@@ -304,23 +306,27 @@ def test_worktree_busy_pids_finds_process_with_cwd_inside(tmp_path):
 # ── sync 연속 defer 승격 ──────────────────────────────────────────────────
 
 
-def test_sync_deferral_escalates_to_failure_after_threshold(tmp_path):
-    s = _read("sync_pipeline_runner_remote.sh")
-    start = s.index("DEFER_STATE_FILE=")
-    end = s.index("main() {", start)
-    f = tmp_path / "defer.sh"
-    f.write_text('log() { echo "$*"; }\nREPO_ROOT=/repo\n' + s[start:end], encoding="utf-8")
+def test_launcher_export_failure_escalates_after_threshold(tmp_path):
+    s = _read("runner_sync_launcher.sh")
+    start = s.index("note_export_failure() {")
+    end = s.index("EXPORT_DIR=", start)
+    f = tmp_path / "fail.sh"
+    f.write_text(
+        'log() { echo "$*"; }\nSYNC_REPO=/repo\nSYNC_REMOTE=origin\n'
+        'FAIL_STATE_FILE="$AADS_STATE"\nFAIL_ESCALATE_AFTER=3\n' + s[start:end],
+        encoding="utf-8",
+    )
     state = tmp_path / "state"
-    env = {"PATH": os.environ["PATH"], "AADS_RUNNER_SYNC_DEFER_STATE": str(state), "AADS_RUNNER_SYNC_DEFER_ESCALATE_AFTER": "3"}
+    env = {"PATH": os.environ["PATH"], "AADS_STATE": str(state)}
 
     def call(fn: str) -> subprocess.CompletedProcess:
         return subprocess.run(["bash", "-c", f'source "{f}"; {fn}'], capture_output=True, text=True, env=env)
 
-    assert call('note_source_deferral "dirty"').returncode == 0
-    assert call('note_source_deferral "dirty"').returncode == 0
-    third = call('note_source_deferral "dirty"')
-    assert third.returncode == 1
+    assert "sync stalled" not in call('note_export_failure "fetch"').stdout
+    assert "sync stalled" not in call('note_export_failure "fetch"').stdout
+    third = call('note_export_failure "fetch"')
     assert "sync stalled" in third.stdout
-    call("reset_source_deferral")
+    assert "3 consecutive" in third.stdout
+    call("reset_export_failure")
     assert not state.exists()
-    assert call('note_source_deferral "dirty"').returncode == 0
+    assert "sync stalled" not in call('note_export_failure "fetch"').stdout

@@ -1,0 +1,16 @@
+[Unit]
+Description=AADS Pipeline Runner remote script sync (origin/main export)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+# 공유 체크아웃 밖의 고정 경로 런처 — 설치 절차는 scripts/runner_sync_launcher.sh 머리말 참조.
+# 런처가 origin/main 을 fetch 해 깨끗한 export 를 만들고 그 안의 sync 스크립트를 실행한다.
+WorkingDirectory=/
+ExecStart=/usr/local/sbin/aads-runner-sync-launcher
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-pipeline-runner-sync
+TimeoutStartSec=240

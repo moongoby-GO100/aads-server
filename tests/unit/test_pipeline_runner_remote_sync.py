@@ -6,6 +6,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SYNC_SCRIPT = ROOT / "scripts" / "sync_pipeline_runner_remote.sh"
+LAUNCHER = ROOT / "scripts" / "runner_sync_launcher.sh"
 
 
 def test_remote_runner_sync_script_has_fail_closed_install_flow():
@@ -36,12 +37,17 @@ def test_remote_runner_sync_targets_cover_all_remote_runner_hosts():
 
 def test_remote_runner_sync_timer_runs_periodically():
     timer = (ROOT / "scripts" / "aads-pipeline-runner-sync.timer").read_text(encoding="utf-8")
-    service = (ROOT / "scripts" / "aads-pipeline-runner-sync.service").read_text(encoding="utf-8")
+    service = (ROOT / "scripts" / "systemd" / "aads-pipeline-runner-sync.service").read_text(encoding="utf-8")
 
     assert "OnBootSec=2min" in timer
     assert "OnUnitActiveSec=5min" in timer
     assert "Persistent=true" in timer
-    assert "ExecStart=/root/aads/aads-server/scripts/sync_pipeline_runner_remote.sh" in service
+    # 체크아웃 밖의 런처를 실행한다 — 체크아웃 안의 스크립트를 가리키면 낡은 HEAD 로 되돌아간다.
+    assert "ExecStart=/usr/local/sbin/aads-runner-sync-launcher" in service
+    assert "/root/aads/aads-server" not in "\n".join(
+        ln for ln in service.splitlines() if not ln.lstrip().startswith("#")
+    )
+    assert not (ROOT / "scripts" / "aads-pipeline-runner-sync.service").exists()
 
 
 # ── 실행중 러너 보호 (AADS-RUNNER-SYNC-BUSY-DEFER, 2026-09-16) ──────────
@@ -58,6 +64,10 @@ def _extract_function(script: str, name: str) -> str:
     start = script.index(f"{name}() {{")
     end = script.index("\n}\n", start) + len("\n}\n")
     return script[start:end]
+
+
+def _launcher() -> str:
+    return LAUNCHER.read_text(encoding="utf-8")
 
 
 def _busy_lib() -> str:
@@ -79,17 +89,19 @@ def test_busy_rule_lives_in_one_place_shared_by_both_restart_paths():
         assert 'source "${SCRIPT_DIR}/runner_busy_lib.sh"' in caller
 
 
-def test_uncommitted_guard_covers_every_sourced_file():
-    """타이머는 미커밋 소스를 배포하지 않는다 — source 하는 라이브러리도 같은 규칙을 받아야 한다."""
-    sync = _sync_script()
-
-    guard = sync[sync.index("for source_file in") : sync.index("; do", sync.index("for source_file in"))]
-    for required in (
+def test_launcher_exports_every_file_the_sync_installs_or_sources():
+    """export 에 빠진 파일은 sync 가 못 찾거나(실패), 더 나쁘게는 옛 파일로 대체된다."""
+    launcher = _launcher()
+    required = launcher[launcher.index("REQUIRED_FILES=("):launcher.index(")", launcher.index("REQUIRED_FILES=("))]
+    for needed in (
         "scripts/pipeline-runner.sh",
+        "scripts/claude_model_contract.py",
         "scripts/sync_pipeline_runner_remote.sh",
         "scripts/runner_busy_lib.sh",
+        "scripts/runner_cli_usage.py",
+        "tools/aag/brief.py",
     ):
-        assert required in guard
+        assert needed in required
 
 
 def test_busy_gate_exists_and_is_configurable():
@@ -269,12 +281,6 @@ echo "scp: /tmp/upload: No space left on device" >&2
 exit 1
 """
 
-# 미커밋 가드는 git show HEAD:<path> 와 워킹트리를 비교한다 — 테스트에서는 같게 둔다.
-_FAKE_GIT = """#!/usr/bin/env bash
-if [[ "$1" == "-C" && "$3" == "show" ]]; then cat "$2/${4#HEAD:}"; exit $?; fi
-exit 1
-"""
-
 _FAKE_DOCKER = """#!/usr/bin/env bash
 echo "${FAKE_BUSY_COUNT:-0}"
 """
@@ -289,13 +295,14 @@ def _run_sync(tmp_path: Path, targets: list[str], **env_extra: str) -> subproces
         pytest.skip("bash/flock 미설치 환경")
     fakebin = tmp_path / "bin"
     fakebin.mkdir()
-    for name, body in (("ssh", _FAKE_SSH), ("scp", _FAKE_SCP), ("git", _FAKE_GIT), ("docker", _FAKE_DOCKER)):
+    for name, body in (("ssh", _FAKE_SSH), ("scp", _FAKE_SCP), ("docker", _FAKE_DOCKER)):
         (fakebin / name).write_text(body, encoding="utf-8")
         (fakebin / name).chmod(0o755)
     env = {
         "PATH": f"{fakebin}:/usr/local/bin:/usr/bin:/bin",
         "HOME": str(tmp_path),
         "FAKE_REPO": str(ROOT),
+        "AADS_RUNNER_SYNC_EXPORTED": "1",
         "CANONICAL_RUNNER": str(ROOT / "scripts" / "pipeline-runner.sh"),
         "AADS_RUNNER_SYNC_LOCK": str(tmp_path / "sync.lock"),
         "AADS_RUNNER_SYNC_TARGETS": "\n".join(_target(t) for t in targets),
@@ -376,5 +383,4 @@ def test_sync_ships_runner_cli_usage_helper():
     script = (ROOT / "scripts" / "sync_pipeline_runner_remote.sh").read_text(encoding="utf-8")
 
     assert '"${SCRIPT_DIR}/runner_cli_usage.py" "$(dirname "$remote_runner")/runner_cli_usage.py"' in script
-    guard = script[script.index("for source_file in"):]
-    assert "scripts/runner_cli_usage.py" in guard.splitlines()[0]
+    assert "scripts/runner_cli_usage.py" in _launcher()
