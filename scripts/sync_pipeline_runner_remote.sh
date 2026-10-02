@@ -246,6 +246,13 @@ sync_one_target() {
     sync_remote_file_if_changed "$name" "$host" "${REPO_ROOT}/tools/aag/brief.py" "$(dirname "$remote_runner")/aag-brief.py" "0644" || aag_brief_status=$?
     [[ "$aag_brief_status" == "0" || "$aag_brief_status" == "1" ]] || return "$aag_brief_status"
 
+    # Claude CLI json 영수증 파서(37203be4). 러너가 job 마다 subprocess 로 부르므로 재시작이
+    # 필요 없다(changed 에 반영하지 않는다). 이 파일이 없으면 runner_cli_usage_ready 가 거짓이라
+    # 원격 러너의 actual_model 이 영영 unverified 로 남는다 — 2026-10-02 contabo14 실측.
+    local cli_usage_status=0
+    sync_remote_file_if_changed "$name" "$host" "${SCRIPT_DIR}/runner_cli_usage.py" "$(dirname "$remote_runner")/runner_cli_usage.py" "0644" || cli_usage_status=$?
+    [[ "$cli_usage_status" == "0" || "$cli_usage_status" == "1" ]] || return "$cli_usage_status"
+
     if [[ "$current_sha" != "$local_sha" ]]; then
         changed=1
         if [[ "$DRY_RUN" == "1" ]]; then
@@ -301,7 +308,7 @@ sync_one_target() {
 main() {
     # The timer must never publish edits from an in-progress shared worktree.
     local source_file committed_sha working_sha
-    for source_file in scripts/pipeline-runner.sh scripts/claude_model_contract.py scripts/sync_pipeline_runner_remote.sh scripts/runner_busy_lib.sh tools/aag/brief.py; do
+    for source_file in scripts/pipeline-runner.sh scripts/claude_model_contract.py scripts/sync_pipeline_runner_remote.sh scripts/runner_busy_lib.sh scripts/runner_cli_usage.py tools/aag/brief.py; do
         committed_sha=$(git -C "$REPO_ROOT" show "HEAD:${source_file}" 2>/dev/null | sha256sum | awk '{print $1}') || {
             log "source not committed: ${source_file}; sync deferred"
             return 0

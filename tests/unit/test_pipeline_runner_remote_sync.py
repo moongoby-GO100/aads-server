@@ -251,6 +251,7 @@ case "$cmd" in
             pipeline-runner.sh) f="$CANONICAL_RUNNER" ;;
             claude_model_contract.py) f="$FAKE_REPO/scripts/claude_model_contract.py" ;;
             aag-brief.py) f="$FAKE_REPO/tools/aag/brief.py" ;;
+            runner_cli_usage.py) f="$FAKE_REPO/scripts/runner_cli_usage.py" ;;
             *) exit 0 ;;
         esac
         sha256sum "$f" | awk '{print $1}' ;;
@@ -368,3 +369,12 @@ def test_busy_host_is_reported_deferred(tmp_path):
     assert proc.returncode == 0
     assert "hostA=deferred" in _summary(proc)
     assert "deferred=1" in proc.stdout
+
+
+def test_sync_ships_runner_cli_usage_helper():
+    """원격 러너에 영수증 파서가 없으면 actual_model 이 unverified 로 고정된다 (2026-10-02 contabo14)."""
+    script = (ROOT / "scripts" / "sync_pipeline_runner_remote.sh").read_text(encoding="utf-8")
+
+    assert '"${SCRIPT_DIR}/runner_cli_usage.py" "$(dirname "$remote_runner")/runner_cli_usage.py"' in script
+    guard = script[script.index("for source_file in"):]
+    assert "scripts/runner_cli_usage.py" in guard.splitlines()[0]
