@@ -14751,3 +14751,14 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 한계: 진행 중 시퀀스는 프로세스 메모리라 워커 재시작·다른 워커로 가면 끊긴다(그 시퀀스는 기록되지 않을 뿐 잘못된 초안은 만들지 않는다). check 는 click+checked 로 기록(토글 의미). 
 - 검증: `bash scripts/run_unit_tests.sh tests/unit/test_smart_browser_auto_record.py` 20 passed. browser/work_recipe/coupangeats/smart_browser/test_tools_and_pipeline/test_dup_guard 628 passed 2 skipped, 도구 계층 6개 파일 50 passed. ruff F821/F811/F401 0건. 마이그레이션은 실DB 미적용·미검증(테스트는 가짜 풀).
 - commit/push·릴리스는 Runner 승인 후.
+
+## 2026-10-03 — R-DOC 기획·설계·PRD 에 화면 개발 절차와 디자인 조사 계약 추가 (AADS-RDOC-UI-WORKFLOW-DESIGN-REFERENCES-20261003)
+
+- 변경: 기획서(1.1.0→1.2.0)·PRD(1.1.0→1.2.0)·spec(1.0.0→1.1.0)에 새 section 과 `RDOC-UI-1~11`/`AC-UI-1~12` 를 추가했다. 승인 원문 prefix 는 바이트 동일(plan sha256 `b0a54223…`, prd `8cacc274…`)하고 기존 RDOC-1~9·AC-1~5 의미·`document_key` 는 그대로다. 새 head·날짜 사본은 만들지 않았다.
+- 내용: 화면 필요성 분류와 backend-only 의 "UI 불필요" 기록, 9단계 절차와 역할, 추적 필드 12종(설계 계약 — 현재 API 지원으로 쓰지 않음, approved/latest 구분), 디자인 조사 기록 8항목과 새 revision 제안 원칙, 설계 패키지, QA 4축 판정(평가불가 분리·API 200 불인정), 릴리스 4승인 분리, 현재 기반과 미구현 구분.
+- 지시서 외 파일: `tests/unit/test_rdoc_docs.py` — 새 버전 표기(1.2.0/1.2.0/1.1.0)에 맞춘 `test_versions_declared` 만 수정. 신규 테스트는 추가하지 않았다.
+- 미해결: AAG `aag_brief`(2026-10-03)는 stale/not_proven, coverage=0 이라 구조 정합 근거로 쓰지 않았다 — 최신 SHA 고정 AAG 갱신과 코드 대조는 후속 검수 조건이다. 아키텍트 질문(relay_id=2f575da0-1613-40ba-9fe3-594d4c5f4fc4)의 회신은 받지 못했고 합의 완료로 쓰지 않았다. 외부 근거 4건은 지시서 인용이며 이 작업에서 다시 조회하지 않았다.
+- 정본 draft 등록: 수행하지 않았다(이 세션에 인증된 정본 API 도구가 없고, SQL 우회·토큰 추출은 하지 않는다). approved 포인터는 건드리지 않았다.
+- 검증: `bash scripts/run_unit_tests.sh tests/unit/test_rdoc_docs.py` 20 passed, 2 skipped(DB 승인본 대조 2건 — DB 미접속, 오프라인 sha256 검사는 통과). `git diff --check` 통과.
+- DB handover entry_key: 미기록(handover_write 도구가 이 세션에 없어 HANDOVER.md 에만 기록). 등록할 때 쓸 키 제안: `rdoc-ui-workflow-design-references-20261003`.
+- commit/push 는 Runner 승인 후. 목표 M1 완료로 판정하지 않는다.
