@@ -107,17 +107,23 @@ def _normalize_claude_cli_model(model: str) -> str:
     return resolve_model(value)
 
 
+_READ_ONLY_MARKER_RE = re.compile(r"^\s*MODE\s*:\s*READ_ONLY\s*$", re.IGNORECASE)
+_READ_ONLY_HEADER_LINES = 20
+
+
 def _is_read_only_instruction(instruction: str) -> bool:
-    text = (instruction or "").lower()
-    markers = (
-        "read-only",
-        "do not modify",
-        "no file changes",
-        "파일 수정 금지",
-        "수정하지",
-        "변경하지",
+    """지시문 앞부분 헤더 줄에 `MODE: READ_ONLY` 가 있을 때만 참. 본문 자연어 문구는 보지 않는다."""
+    lines = (instruction or "").splitlines()[:_READ_ONLY_HEADER_LINES]
+    return any(_READ_ONLY_MARKER_RE.match(line) for line in lines)
+
+
+def _is_read_only_done(instruction: str, git_diff: str, result_output: str) -> bool:
+    """읽기전용 완료 조건: 마커 + 변경(untracked 포함) 0건 + 출력 있음."""
+    return (
+        not (git_diff or "").strip()
+        and _is_read_only_instruction(instruction)
+        and bool((result_output or "").strip())
     )
-    return any(marker in text for marker in markers)
 
 
 # AADS-290: 프로젝트별 litellm_runner.py 경로 매핑
@@ -959,13 +965,9 @@ class PipelineCJob:
                 self.cycle += 1
 
                 # git diff 가져오기 (작업 시작 시점 대비 — 실행 중 커밋된 변경 포함)
-                self.git_diff = (await self._ssh_command(f"git diff {pre_exec_sha or 'HEAD'}"))[:_MAX_DIFF_CHARS]
+                self.git_diff = await self._collect_change_diff(pre_exec_sha)
 
-                if (
-                    not self.git_diff.strip()
-                    and _is_read_only_instruction(self.instruction)
-                    and self.result_output.strip()
-                ):
+                if _is_read_only_done(self.instruction, self.git_diff, self.result_output):
                     try:
                         await self._require_screen_evidence()
                     except ValueError as exc:
@@ -1103,7 +1105,7 @@ class PipelineCJob:
                 )
 
             # Phase 4: 승인 대기 (작업 시작 시점 대비 — 실행 중 커밋된 변경 포함)
-            self.git_diff = (await self._ssh_command(f"git diff {pre_exec_sha or 'HEAD'}"))[:_MAX_DIFF_CHARS]
+            self.git_diff = await self._collect_change_diff(pre_exec_sha)
             self._log("awaiting_approval", "세션 AI 자동 검수 진행. 검토 후 승인/거부합니다.")
             self.status = "awaiting_approval"
             await self._save_to_db()
@@ -2330,6 +2332,17 @@ class PipelineCJob:
         return results
 
     # ─── SSH 유틸 ───────────────────────────────────────────────────────────
+
+    async def _collect_change_diff(self, pre_exec_sha: str = "") -> str:
+        """작업 시작 시점 대비 tracked diff + untracked 새 파일 diff (인덱스는 건드리지 않는다)."""
+        base = shlex.quote(pre_exec_sha or "HEAD")
+        tracked = await self._ssh_command(f"git diff {base}")
+        untracked = await self._ssh_command(
+            "git ls-files --others --exclude-standard -z | head -z -n 200 "
+            "| xargs -0 -r -n1 git diff --no-index -- /dev/null || true"
+        )
+        parts = [p for p in (tracked, untracked) if p and p.strip()]
+        return "\n".join(parts)[:_MAX_DIFF_CHARS]
 
     async def _ssh_command(self, command: str, timeout: int = 30, retries: int = 0) -> str:
         """원격 서버 명령 실행 (내부용, 보안 화이트리스트 없음 — 오케스트레이터 전용).
