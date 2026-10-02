@@ -49,11 +49,16 @@ _BG_FALLBACK_MODELS_ENV = [
     ).split(",")
     if m.strip()
 ]
-# AADS-204(2026-09-18): 배경 LLM 1순위 = Groq 무료 모델(input/output $0).
-# 종전 1순위 qwen-turbo(DashScope)는 계정 연체로 400 Access denied — 30일 8,255회
-# 전량 실패하고 claude-haiku 폴백으로 OAuth 정액 한도를 잠식했다.
-# 되돌릴 때는 LLM_BG_PRIMARY_MODEL=qwen-turbo 로 바꾸고 reload-api.sh 만 실행한다.
-_BG_PRIMARY_MODEL = os.getenv("LLM_BG_PRIMARY_MODEL", "groq-gpt-oss-120b")
+# AADS-204(2026-09-18): 배경 LLM 1순위를 Groq 무료 모델로 시도했으나(종전 qwen-turbo 는
+# DashScope 계정 연체로 전량 실패), Groq 도 2026-09-28 부터 계속 실패했다 — 7일 2,496콜 중
+# 94.9% bg_primary_failed. 실제 처리는 매번 haiku 폴백이 했고 Groq 시도는 지연만 더했다.
+# AADS-BG-LLM-DEAD-PRIMARY-REMOVAL(2026-10-02): 기본 1순위를 claude-haiku 로 직행시킨다.
+# 되돌릴 때는 LLM_BG_PRIMARY_MODEL=groq-gpt-oss-120b 설정 후
+# `docker exec aads-server bash /app/scripts/reload-api.sh`.
+_BG_HAIKU_MODEL = "claude-haiku-4-5-20251001"
+_BG_PRIMARY_MODEL = os.getenv("LLM_BG_PRIMARY_MODEL", _BG_HAIKU_MODEL)
+_BG_PRIMARY_BREAKER_THRESHOLD = 3  # 비-Claude 1순위 연속 실패 N회 → 서킷 오픈
+_BG_PRIMARY_COOLDOWN_SEC = 600.0
 _CLAUDE_RETRY_BASE_SEC = 2.0
 _CLAUDE_RETRY_MAX_DELAY_SEC = 30.0
 _CLAUDE_RETRY_JITTER_SEC = 1.5
@@ -70,7 +75,8 @@ def _retry_delay(attempt: int, status_code: int | None = None) -> float:
     delay = min(base * (2 ** min(attempt, 6)), _CLAUDE_RETRY_MAX_DELAY_SEC)
     return delay + random.uniform(0, _CLAUDE_RETRY_JITTER_SEC)
 
-_bg_primary_fail_streak: int = 0  # 배경 LLM 1순위 연속 실패 카운터 (AADS-204)
+_bg_primary_fail_streak: int = 0  # 배경 LLM 비-Claude 1순위 연속 실패 카운터 (AADS-204)
+_bg_primary_skip_until: float = 0.0  # time.monotonic() 기준, 이 시각까지 1순위 건너뜀
 
 
 # ── LiteLLM 응답 래퍼 (Anthropic Message 호환) ──────────────────────
@@ -506,51 +512,76 @@ async def call_background_llm(
     max_tokens: int = 1000,
     tenant_id: Optional[str] = None,
 ) -> str:
-    """배경 서비스용 LLM 호출 — groq-gpt-oss-120b(무료) 1순위, claude-haiku 폴백.
+    """배경 서비스용 LLM 호출 — 기본 1순위 claude-haiku 직행, 비-Claude 1순위는 서킷브레이커.
 
     compaction, memory_manager, fact_extractor, experience_learner,
-    quality_feedback_loop, self_evaluator, smart_search, code_reviewer 등
-    OAuth 한도를 소비하지 않는 배경 작업에서 사용.
+    quality_feedback_loop, self_evaluator, smart_search, code_reviewer 등 배경 작업에서 사용.
     1순위 모델은 LLM_BG_PRIMARY_MODEL 로 바꿀 수 있다(_BG_PRIMARY_MODEL).
+    - 1순위가 claude-* 이면 Groq/LiteLLM 시도 없이 call_llm_with_fallback 으로 바로 간다.
+    - 1순위가 비-Claude(groq/qwen 등)이면 시도하되, 연속 3회 실패 시 600초간 건너뛰고
+      claude-haiku 로 직행한다. 쿨다운 후 1회 재시도하여 성공하면 카운터를 리셋한다.
     """
-    global _bg_primary_fail_streak
+    global _bg_primary_fail_streak, _bg_primary_skip_until
     if tenant_id:
         from app.services.tenant_usage_limits import check_tenant_usage_limit
 
         await check_tenant_usage_limit(tenant_id, operation="background_llm", projected_calls=1)
     t0 = time.time()
-
-    # 1순위: _BG_PRIMARY_MODEL (기본 groq-gpt-oss-120b, LiteLLM 경유 / 무료)
-    # qwen* 로 되돌린 경우에만 DashScope 직접 경로를 탄다.
     _primary = _BG_PRIMARY_MODEL
-    try:
-        if _primary.startswith("qwen"):
-            result = await _call_dashscope(prompt, _primary, max_tokens, system or None)
-        else:
-            result = await _call_litellm(prompt, _primary, max_tokens, system or None)
+
+    if _primary.startswith("claude-"):
+        result = await call_llm_with_fallback(
+            prompt=prompt,
+            system=system or None,
+            model=_primary,
+            max_tokens=max_tokens,
+            tenant_id=tenant_id,
+        )
         if result:
-            _bg_primary_fail_streak = 0
             await _bg_llm_log(
                 "background", _primary, True,
                 latency_ms=int((time.time() - t0) * 1000),
                 tenant_id=tenant_id,
             )
             return result
-    except Exception as e:
-        logger.warning("call_background_llm_primary_failed: model=%s error=%s", _primary, str(e)[:80])
-        _bg_primary_fail_streak += 1
         await _bg_llm_log(
             "background", _primary, False,
             error_code="bg_primary_failed", tenant_id=tenant_id,
         )
-        if _bg_primary_fail_streak >= 3:  # 조기 감지를 위해 3회 (AADS-204)
-            await _notify_bg_llm_alert(_bg_primary_fail_streak, _primary)
+        if _primary == _BG_HAIKU_MODEL:
+            return ""
+    elif time.monotonic() >= _bg_primary_skip_until:
+        # qwen* 로 지정한 경우에만 DashScope 직접 경로를 탄다.
+        try:
+            if _primary.startswith("qwen"):
+                result = await _call_dashscope(prompt, _primary, max_tokens, system or None)
+            else:
+                result = await _call_litellm(prompt, _primary, max_tokens, system or None)
+            if result:
+                _bg_primary_fail_streak = 0
+                _bg_primary_skip_until = 0.0
+                await _bg_llm_log(
+                    "background", _primary, True,
+                    latency_ms=int((time.time() - t0) * 1000),
+                    tenant_id=tenant_id,
+                )
+                return result
+        except Exception as e:
+            logger.warning("call_background_llm_primary_failed: model=%s error=%s", _primary, str(e)[:80])
+            _bg_primary_fail_streak += 1
+            await _bg_llm_log(
+                "background", _primary, False,
+                error_code="bg_primary_failed", tenant_id=tenant_id,
+            )
+            if _bg_primary_fail_streak >= _BG_PRIMARY_BREAKER_THRESHOLD:
+                _bg_primary_skip_until = time.monotonic() + _BG_PRIMARY_COOLDOWN_SEC
+                await _notify_bg_llm_alert(_bg_primary_fail_streak, _primary)
 
     # 2순위: claude-haiku (OAuth 폴백)
     fallback = await call_llm_with_fallback(
         prompt=prompt,
         system=system or None,
-        model="claude-haiku-4-5-20251001",
+        model=_BG_HAIKU_MODEL,
         max_tokens=max_tokens,
         tenant_id=tenant_id,
     )
@@ -595,7 +626,7 @@ async def _notify_bg_llm_alert(streak: int, model: str = "") -> None:
             await bot.send_message(
                 f"\U0001f6a8 *배경 LLM 1순위 연속 실패 ({streak}회)*\n"
                 f"model={_model} 이 {streak}회 연속 실패했습니다.\n"
-                f"claude-haiku 폴백 중 — 프로바이더 상태 확인 필요. (AADS-204)"
+                f"claude-haiku 폴백 중, 600초간 1순위 시도 중단 — 프로바이더 상태 확인 필요. (AADS-204)"
             )
     except Exception as e:
         logger.debug("bg_llm_alert_failed: %s", str(e)[:80])

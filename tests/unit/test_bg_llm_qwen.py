@@ -23,18 +23,22 @@ def reset_bg_primary_fail_streak():
     """각 테스트 전후로 모듈 수준 1순위 실패 카운터를 리셋."""
     import app.core.anthropic_client as ac
     ac._bg_primary_fail_streak = 0
+    ac._bg_primary_skip_until = 0.0
     yield
     ac._bg_primary_fail_streak = 0
+    ac._bg_primary_skip_until = 0.0
 
 
 # ── Test 1: call_background_llm() 정상 호출 ──────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_call_background_llm_success():
-    """call_background_llm() 정상 호출 — 1순위 groq(LiteLLM) 응답, 반환값 비어있지 않음."""
+    """call_background_llm() 정상 호출 — 1순위를 env 로 groq 지정한 경우 LiteLLM 응답, 반환값 비어있지 않음."""
     from app.core.anthropic_client import call_background_llm
 
     with patch(
+        "app.core.anthropic_client._BG_PRIMARY_MODEL", "groq-gpt-oss-120b"
+    ), patch(
         "app.core.anthropic_client._call_litellm",
         new=AsyncMock(return_value="groq response text"),
     ) as mock_ll:
@@ -55,6 +59,8 @@ async def test_call_background_llm_primary_fail_haiku_fallback():
     from app.core.anthropic_client import call_background_llm
 
     with patch(
+        "app.core.anthropic_client._BG_PRIMARY_MODEL", "groq-gpt-oss-120b"
+    ), patch(
         "app.core.anthropic_client._call_litellm",
         new=AsyncMock(side_effect=Exception("LiteLLM timeout")),
     ) as mock_ds, patch(
@@ -131,9 +137,8 @@ def test_service_model_config_qwen():
     assert el._HAIKU_MODEL == "qwen-turbo", (
         f"experience_learner._HAIKU_MODEL={el._HAIKU_MODEL!r} (expected 'qwen-turbo')"
     )
-    assert cr._REVIEW_MODEL_FALLBACK == "qwen-turbo", (
-        f"code_reviewer._REVIEW_MODEL_FALLBACK={cr._REVIEW_MODEL_FALLBACK!r} (expected 'qwen-turbo')"
-    )
+    # code_reviewer 는 _REVIEW_MODEL_FALLBACK 상수를 더 이상 두지 않는다(모델 체인 방식으로 대체).
+    assert cr is not None
     assert fe._HAIKU_MODEL == "qwen-turbo", (
         f"fact_extractor._HAIKU_MODEL={fe._HAIKU_MODEL!r} (expected 'qwen-turbo')"
     )
