@@ -2721,7 +2721,10 @@ async def call_stream(
                 if _slot == _ACCOUNT_SLOTS[0] and not _is_cli_auth_error(_err_msg):
                     _err = False
                     logger.info(f"relay_failed: SDK for {_target_model}[{_si}]")
-                    async for event in _stream_agent_sdk(_target_model, system_prompt, messages, session_id=session_id):
+                    async for event in iter_with_stall_timeout(
+                        _stream_agent_sdk(_target_model, system_prompt, messages, session_id=session_id),
+                        label=f"agent_sdk:{_target_model}", as_error_event=True,
+                    ):
                         if event.get("type") == "error":
                             _err = True
                             logger.warning(f"sdk_err: {_target_model}[{_si}] — {event.get('content', '')[:80]}")
@@ -2821,7 +2824,10 @@ async def call_stream(
             if _fs == _ACCOUNT_SLOTS[0] and not _is_cli_auth_error(_err_msg):
                 _err = False
                 logger.info(f"relay_failed: SDK for {_fm}[{_fi}]")
-                async for event in _stream_agent_sdk(_fm, system_prompt, messages, session_id=session_id):
+                async for event in iter_with_stall_timeout(
+                    _stream_agent_sdk(_fm, system_prompt, messages, session_id=session_id),
+                    label=f"agent_sdk:{_fm}", as_error_event=True,
+                ):
                     if event.get("type") == "error":
                         _err = True
                         logger.warning(f"sdk_err: {_fm}[{_fi}] — {event.get('content', '')[:80]}")
@@ -3044,14 +3050,20 @@ async def call_stream(
     # Codex CLI 모델 → Relay /codex-stream 경유 (ChatGPT Plus OAuth, 실패 시 Claude Fable 폴백)
     if route_backend == "codex_cli" or model in _CODEX_MODELS:
         _had_error = False
+        _cf_kind = "error"
         async for event in _stream_codex_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
             if event.get("type") == "error":
                 _had_error = True
-                logger.warning(f"codex_fallback: {model} failed, falling back to claude-fable-5-1")
+                _cf_kind = _classify_claude_auth_error(event.get("content", ""))
+                logger.warning(
+                    "codex_fallback: %s failed (%s), falling back to claude-fable-5-1",
+                    model, "Codex 인증 실패(재로그인 필요)" if _cf_kind != "error" else "error",
+                )
                 break
             yield event
         if _had_error:
-            yield {"type": "delta", "content": f"\n\n[{model} (Codex) 오류 → Claude Fable 5.1 전환]\n\n"}
+            _cf_label = "Codex 인증 실패(재로그인 필요)" if _cf_kind != "error" else f"{model} (Codex) 오류"
+            yield {"type": "delta", "content": f"\n\n[{_cf_label} → Claude Fable 5.1 전환]\n\n"}
             _fallback_intent = IntentResult(
                 intent=intent_result.intent,
                 model="claude-fable-5-1",
@@ -4131,6 +4143,7 @@ _RELAY_NON_RETRYABLE_ERROR_MARKERS = (
     "invalid api key",
     "authentication",
     "permission denied",
+    "codex_auth_failed",
 )
 _CODEX_RETRY_DELAYS = _RELAY_RETRY_DELAYS
 _CLI_RETRY_DELAYS = _RELAY_RETRY_DELAYS
@@ -4143,6 +4156,139 @@ def _is_cli_auth_error(error_content: str) -> bool:
         any(marker in str(error_content) for marker in ("oauth_slot_unavailable", "oauth_slot_busy"))
         or _classify_claude_auth_error(error_content) != "error"
     )
+
+
+# ── 스트림 스톨 감시 (2026-10-02, 세션 9102c970) ───────────────────────────
+# 폴백 SDK 경로가 model_info 만 내고 35분간 아무 출력 없이 멈춘 채 방치됐다.
+# heartbeat·model_info 는 살아 있다는 증거이지 응답이 아니므로 시계를 되돌리지 않는다.
+# 기본값은 기존 관례를 따른다: 첫 출력은 첫응답 워치독(AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC
+# 180s + 큰 컨텍스트 가산 최대 210s)보다 길게 420s, 이후 무출력은 heartbeat_idle_ceiling 과 같은 600s.
+# 0 이하로 두면 그 구간의 감시를 끈다.
+_STREAM_STALL_FIRST_OUTPUT_SEC = float(os.getenv("AADS_STREAM_STALL_FIRST_OUTPUT_SEC", "420"))
+_STREAM_STALL_IDLE_SEC = float(os.getenv("AADS_STREAM_STALL_IDLE_SEC", "600"))
+_STALL_PROGRESS_EVENT_TYPES = frozenset(
+    {"delta", "thinking", "tool_use", "tool_result", "done", "error", "interrupt_applied"}
+)
+
+
+class StreamStallError(Exception):
+    """스트림이 출력 없이 멈춰 시도를 취소했다."""
+
+    def __init__(self, label: str, phase: str, waited: float):
+        self.label = label
+        self.phase = phase
+        self.waited = waited
+        super().__init__(
+            "stream_stall_timeout: %s — %s 단계에서 %d초 동안 출력 없음" % (label, phase, int(waited))
+        )
+
+
+def stream_stall_limits(grace: float = 0.0) -> Tuple[float, float]:
+    """(첫 출력, 이후 무출력) 제한 초. 0 은 감시 끔. grace 는 바깥 감시가 안쪽보다 늦게 걸리게 하는 여유."""
+    first = _STREAM_STALL_FIRST_OUTPUT_SEC
+    idle = _STREAM_STALL_IDLE_SEC
+    return (first + grace if first > 0 else 0.0, idle + grace if idle > 0 else 0.0)
+
+
+async def iter_with_stall_timeout(
+    stream: AsyncGenerator[Dict[str, Any], None],
+    *,
+    label: str,
+    first_output_sec: Optional[float] = None,
+    idle_sec: Optional[float] = None,
+    as_error_event: bool = False,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """이벤트를 그대로 흘리되, 실제 출력이 제한 시간 동안 없으면 시도를 취소한다.
+
+    멈추면 as_error_event 일 때 error 이벤트 하나로 끝내고(호출자의 다음 폴백 단계로 이어짐),
+    아니면 StreamStallError 를 올린다.
+    """
+    if first_output_sec is None or idle_sec is None:
+        _first, _idle = stream_stall_limits()
+        first_output_sec = _first if first_output_sec is None else first_output_sec
+        idle_sec = _idle if idle_sec is None else idle_sec
+    loop = asyncio.get_running_loop()
+    iterator = stream.__aiter__()
+    last_progress = loop.time()
+    seen_output = False
+    pending: Optional["asyncio.Future[Dict[str, Any]]"] = None
+    stall: Optional[StreamStallError] = None
+    try:
+        while True:
+            limit = idle_sec if seen_output else first_output_sec
+            remaining: Optional[float] = None
+            if limit and limit > 0:
+                remaining = limit - (loop.time() - last_progress)
+                if remaining <= 0:
+                    stall = StreamStallError(label, "첫 출력 대기" if not seen_output else "출력 이후 대기", limit)
+                    break
+            pending = asyncio.ensure_future(iterator.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=remaining)
+            if not done:
+                stall = StreamStallError(label, "첫 출력 대기" if not seen_output else "출력 이후 대기", limit or 0)
+                break
+            try:
+                event = pending.result()
+            except StopAsyncIteration:
+                pending = None
+                return
+            pending = None
+            if isinstance(event, dict) and event.get("type") in _STALL_PROGRESS_EVENT_TYPES:
+                seen_output = True
+                last_progress = loop.time()
+            yield event
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        aclose = getattr(iterator, "aclose", None)
+        if aclose is not None:
+            try:
+                await aclose()
+            except Exception:
+                pass
+    if stall is not None:
+        logger.error("stream_stall_timeout: label=%s phase=%s waited=%ds", label, stall.phase, int(stall.waited))
+        if as_error_event:
+            yield {"type": "error", "content": str(stall)}
+            return
+        raise stall
+
+
+def _codex_auth_failure_message(kind: str, accounts: Optional[List[str]] = None) -> str:
+    """Codex 인증 실패 문구. 분류명과 계정 이름만 담고 인증값·오류 원문은 담지 않는다."""
+    text = "codex_auth_failed: Codex 인증 실패(재로그인 필요)"
+    if kind and kind != "error":
+        text += " [%s]" % kind
+    if accounts:
+        text += " — 대상 계정: %s" % ", ".join(accounts[:5])
+    return text
+
+
+async def _codex_revoked_account_names() -> List[str]:
+    """스냅샷 수집기가 인증 불능으로 표시한 활성 codex 계정 이름. 조회 실패는 빈 목록."""
+    try:
+        try:
+            from app.db import get_pool  # type: ignore
+        except ImportError:
+            from app.core.db_pool import get_pool
+        rows = await asyncio.wait_for(
+            get_pool().fetch(
+                """
+                SELECT k.key_name
+                FROM llm_api_keys k
+                JOIN codex_usage_snapshots s ON s.key_name = k.key_name
+                WHERE k.provider = 'codex' AND k.is_active
+                  AND (s.auth_usable IS FALSE OR s.auth_revoked_reason IS NOT NULL)
+                ORDER BY k.priority, k.id
+                """
+            ),
+            timeout=3.0,
+        )
+        return [str(r["key_name"]) for r in rows]
+    except Exception as exc:
+        logger.debug("codex_revoked_lookup_failed: %s", type(exc).__name__)
+        return []
 
 
 def _is_stale_resume_error(error_content: str) -> bool:
@@ -4561,7 +4707,15 @@ async def _stream_codex_relay_once(
                             )
                         yield tool_event
                     elif evt_type == "error":
-                        yield {"type": "error", "content": event.get("content", "Codex error")}
+                        _codex_err = str(event.get("content", "Codex error"))
+                        _codex_auth_kind = _classify_claude_auth_error(_codex_err)
+                        if _codex_auth_kind != "error":
+                            logger.error(
+                                "codex_auth_failed: model=%s session=%s kind=%s",
+                                model, (session_id or "default")[:8], _codex_auth_kind,
+                            )
+                            _codex_err = _codex_auth_failure_message(_codex_auth_kind)
+                        yield {"type": "error", "content": _codex_err}
                         return
                     elif evt_type == "result":
                         in_tok = event.get("input_tokens", 0)
@@ -4572,6 +4726,24 @@ async def _stream_codex_relay_once(
                             and not int(in_tok or 0)
                             and not int(out_tok or 0)
                         ):
+                            # 릴레이는 CLI stderr 를 전달하지 않는다. 결과 이벤트에 진단 문자열이
+                            # 실려 오면 그것을, 아니면 스냅샷 수집기가 표시한 인증 불능 계정을 본다.
+                            _diag = " ".join(
+                                str(event.get(k) or "") for k in ("error", "stderr", "detail", "error_type")
+                            )
+                            _empty_kind = _classify_claude_auth_error(_diag)
+                            _revoked_accounts = await _codex_revoked_account_names()
+                            if _empty_kind != "error" or _revoked_accounts:
+                                logger.error(
+                                    "codex_auth_failed: model=%s session=%s kind=%s accounts=%s (빈 결과)",
+                                    model, (session_id or "default")[:8], _empty_kind,
+                                    ",".join(_revoked_accounts) or "-",
+                                )
+                                yield {
+                                    "type": "error",
+                                    "content": _codex_auth_failure_message(_empty_kind, _revoked_accounts),
+                                }
+                                return
                             logger.warning(
                                 "codex_empty_result: model=%s session=%s — CLI 가 출력 없이 종료",
                                 model, (session_id or "default")[:8],

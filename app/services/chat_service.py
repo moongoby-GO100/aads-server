@@ -355,6 +355,7 @@ _INTERRUPT_REASON_CATEGORIES = {
         "stale_execution",
         "active_stream_hard_timeout",
         "stale_retrying_cleanup_after",
+        "stream_stall_timeout",
     ),
     "user_action": ("stopped by user",),
     "superseded": ("superseded", "newer"),
@@ -417,6 +418,7 @@ _INTERRUPT_REASON_CATEGORIES = {
         "all llm providers failed",
         "litellm",
         "codex_empty_result",
+        "codex_auth_failed",
         "session limit",
         "본인 계정 키가 등록",
     ),
@@ -1320,6 +1322,31 @@ def _note_retry_model_switch(
     return _model_switch_banner(base_model, new_model)
 
 
+async def _persist_retry_model_switch(
+    execution_id: Optional[str],
+    chain: List[Dict[str, Any]],
+    actual_model: object,
+) -> None:
+    """전환 시점에 fallback_chain·actual_model 을 실행 행에 남긴다.
+
+    완료 저장(`_save_and_update_session`)에서만 쓰면 전부 실패한 턴에는 전환 이력이 없다
+    (2026-10-02 세션 9102c970). 같은 chain 리스트를 쓰므로 완료 저장과 모양이 같다.
+    """
+    if not execution_id or not chain:
+        return
+    try:
+        async with get_pool().acquire() as conn:
+            await conn.execute(
+                "UPDATE chat_turn_executions SET fallback_chain = $1::jsonb, "
+                "actual_model = COALESCE($2, actual_model), updated_at = NOW() WHERE id = $3",
+                json.dumps(chain, ensure_ascii=False),
+                str(actual_model) if actual_model else None,
+                uuid.UUID(str(execution_id)),
+            )
+    except Exception as exc:
+        logger.warning("retry_switch_record_failed execution=%s: %s", str(execution_id)[:8], type(exc).__name__)
+
+
 # ── 폴백 단계 구분 (M5, 2026-09-29) ─────────────────────────────────────
 #
 # Claude 경로 폴백이 사용자에게 "전환합니다" 한 줄만 보여 주고, DB 에는 성공한
@@ -1345,6 +1372,8 @@ def _safe_fallback_reason(error: object) -> str:
         return "한도 초과"
     if "overloaded" in detail or "529" in detail:
         return "과부하"
+    if "codex_auth_failed" in detail:
+        return "Codex 인증 실패(재로그인 필요)"
     if re.search(r"\b40[13]\b", detail) or "unauthorized" in detail or "authentication" in detail:
         return "인증 오류"
     if "timeout" in detail or "timed out" in detail:
@@ -14665,7 +14694,12 @@ async def send_message_stream(
 
         # 9. 모델 선택기 → SSE 스트리밍
         logger.info("chat_stream_start: session=%s model=%s intent=%s", session_id[:8], intent_result.model, intent)
-        from app.services.model_selector import call_stream
+        from app.services.model_selector import (
+            StreamStallError,
+            call_stream,
+            iter_with_stall_timeout,
+            stream_stall_limits,
+        )
         # Langfuse: llm_generation span 시작
         if _lf_trace is not None:
             try:
@@ -14713,6 +14747,9 @@ async def send_message_stream(
                     reason=_attempt_failure_reason,
                 )
                 if _fallback_model_key(_attempt_effective_model) != _fallback_model_key(_prev_attempt_model):
+                    await _persist_retry_model_switch(
+                        _execution_id_str, _retry_fallback_chain, _attempt_effective_model
+                    )
                     _switch_event = _fallback_stage_event(
                         [], "fallback_attempt",
                         from_model=_prev_attempt_model, to_model=_attempt_effective_model,
@@ -14753,15 +14790,21 @@ async def send_message_stream(
                 except Exception:
                     pass
                 _timer.mark("request_sent")
-                async for event in call_stream(
-                    intent_result=intent_result,
-                    system_prompt=system_prompt,
-                    messages=messages,
-                    tools=tools_for_api,
-                    model_override=_attempt_model_override,
-                    session_id=session_id,
-                    tenant_id=resolved_tenant_id,
-                    **({"retry_override": True} if _attempt_is_retry_override else {}),
+                _stall_first, _stall_idle = stream_stall_limits(grace=60.0)
+                async for event in iter_with_stall_timeout(
+                    call_stream(
+                        intent_result=intent_result,
+                        system_prompt=system_prompt,
+                        messages=messages,
+                        tools=tools_for_api,
+                        model_override=_attempt_model_override,
+                        session_id=session_id,
+                        tenant_id=resolved_tenant_id,
+                        **({"retry_override": True} if _attempt_is_retry_override else {}),
+                    ),
+                    label=_attempt_effective_model or "llm",
+                    first_output_sec=_stall_first,
+                    idle_sec=_stall_idle,
                 ):
                     etype = event.get("type", "")
                     # 하트비트는 첫 토큰이 아니다. 모델이 아직 아무것도
@@ -14977,6 +15020,29 @@ async def send_message_stream(
             except Exception as _stream_exc:
                 # call_stream 자체 예외 (ConnectionError, TimeoutError 등)
                 _attempt_failure_reason = _safe_fallback_reason(_stream_exc)
+                if isinstance(_stream_exc, StreamStallError) and _stream_attempt >= 2:
+                    # 마지막 시도까지 멈췄다. 예외로 던지면 사용자 화면에는 아무것도 남지 않는다.
+                    _stall_reason = f"stream_stall_timeout:{_stream_exc.label}:{int(_stream_exc.waited)}s"
+                    logger.error("stream_stall_exhausted: session=%s %s", session_id[:8], _stall_reason)
+                    if full_response.strip():
+                        await _save_interrupted_partial_message(
+                            session_id=session_id,
+                            content=full_response,
+                            reason=_stall_reason,
+                            execution_id=_execution_id_str,
+                        )
+                    if _execution_id_str:
+                        async with get_pool().acquire() as _conn:
+                            await _mark_execution_interrupted(
+                                _conn,
+                                session_id,
+                                _execution_id_str,
+                                _stall_reason,
+                                partial_content=full_response,
+                                delete_empty_placeholder=False,
+                            )
+                    yield f"data: {json.dumps({'type': 'error', 'content': 'LLM 응답이 멈춰 시도를 취소했고 대체 모델도 응답하지 못했습니다. 중간 응답은 보존했습니다.', 'recoverable': True, 'reason': 'stream_stall_timeout', 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens})}\n\n"
+                    return
                 if _stream_attempt < 2:
                     _backoff = 0.5 * (2 ** _stream_attempt)
                     logger.warning(f"stream_exception_retry: session={session_id[:8]} attempt={_stream_attempt+1}/3 exc={type(_stream_exc).__name__}: {str(_stream_exc)[:80]} backoff={_backoff}s")

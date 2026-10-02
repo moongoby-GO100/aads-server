@@ -69,7 +69,7 @@ def test_legacy_tool_pattern_still_selects_tools_test():
 def test_unmapped_change_is_skipped_with_exit_zero():
     calls = []
     logs = []
-    rc = gate.run(["README.md", "app/services/chat_service.py"],
+    rc = gate.run(["README.md", "app/services/memory_manager.py"],
                   runner=lambda tests: calls.append(tests) or (0, ""), log=logs.append)
     assert rc == 0
     assert calls == []

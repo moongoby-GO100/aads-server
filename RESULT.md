@@ -1,3 +1,51 @@
+# AADS-CHAT-STALL-CODEX401-FALLBACK-20261002
+
+채팅 무출력 정지 방지 — 스톨 타임아웃 + Codex 401 인증 오류 표시 + 전환 기록. (이 절은 맨 위에 추가한 것이며 아래 기존 RESULT.md 내용은 한 줄도 지우지 않았다.)
+
+## STEP 0 기존 구현 조사 (분류)
+
+| 접점 | 분류 | 내용 |
+|---|---|---|
+| `chat_service.send_message_stream` 재시도 루프 (`for _stream_attempt in range(3)`) | 수정 | `call_stream` 소비부를 `iter_with_stall_timeout` 로 감쌈. 루프 구조·재시도 횟수·백오프 유지. 마지막 시도가 멈추면 예외 대신 명시적 error 이벤트 + `_mark_execution_interrupted` |
+| `chat_service._note_retry_model_switch` / `_retry_fallback_chain` (7fbaa57d) | 유지 | 그대로 재사용. 중복 기록 로직을 만들지 않음 |
+| `chat_service._persist_retry_model_switch` | 신규 | 전환 시점에 `chat_turn_executions.fallback_chain`(같은 `[{from,to,reason,at}]` 리스트) + `actual_model` 즉시 기록. 완료 저장(`_save_and_update_session`)의 `COALESCE($7::jsonb, fallback_chain)` 와 모양 동일 |
+| `chat_service._safe_fallback_reason` | 수정 | `codex_auth_failed` → "Codex 인증 실패(재로그인 필요)" 분기 추가(기존 "인증 오류" 앞) |
+| `chat_service._INTERRUPT_REASON_CATEGORIES` | 수정 | `stream_stall_timeout` → watchdog_timeout(자동 재개 대상), `codex_auth_failed` → llm_provider_error |
+| `model_selector.iter_with_stall_timeout` / `StreamStallError` / `stream_stall_limits` | 신규 | 실제 출력(delta/thinking/tool_use/tool_result/done/error) 기준 스톨 감시. heartbeat·model_info·retry_progress 는 시계를 되돌리지 않음 |
+| `model_selector.call_stream` 의 `_stream_agent_sdk` 두 호출(~2724, ~2824) | 수정 | 스톨 가드로 감싸 `as_error_event=True` → 기존 `_err=True; break` 경로로 다음 슬롯/모델 단계 진행 |
+| `model_selector._stream_codex_relay_once` error·empty result | 수정 | `_classify_claude_auth_error`(기존 분류 유틸) 재사용. 인증 계열이면 `codex_auth_failed: Codex 인증 실패(재로그인 필요) [분류]` 로 올림. 새 분류기 없음 |
+| `model_selector._codex_auth_failure_message`, `_codex_revoked_account_names` | 신규 | 문구 조립 / `codex_usage_snapshots.auth_usable·auth_revoked_reason` 로 인증 불능 계정 이름 조회(3초 상한, 실패 시 빈 목록) |
+| `_RELAY_NON_RETRYABLE_ERROR_MARKERS` | 수정 | `codex_auth_failed` 추가 — 같은 모델 재시도 안 함 |
+| `call_stream` codex_cli 분기 | 수정 | 폴백 로그·배너에 인증 실패 구분(분류명만) |
+| `scripts/pre_commit_test_map.py` | 수정 | chat_service/model_selector → 신규 테스트 + test_chat_retry_model_switch 묶음 추가 |
+| `tests/unit/test_pre_commit_test_map.py` | 수정(승인 범위 밖, 사유 아래) | |
+| 삭제 | 없음 | 기능·테스트·파일 삭제 없음 |
+
+삭제된 줄(diff `-`)은 전부 같은 문장의 치환이다: `call_stream` 호출을 스톨 가드로 감싸며 재들여쓰기, `_stream_agent_sdk` 호출 2줄을 가드 호출로 치환, codex 폴백 로그/배너를 인증 구분 포함 문구로 치환, error 이벤트 패스스루를 분류 후 패스스루로 치환. 롤백은 `git revert` 한 번이며 환경변수 `AADS_STREAM_STALL_FIRST_OUTPUT_SEC=0`, `AADS_STREAM_STALL_IDLE_SEC=0` 으로 스톨 감시만 끌 수도 있다.
+
+## 지시서 밖 파일을 바꾼 사유
+
+`tests/unit/test_pre_commit_test_map.py::test_unmapped_change_is_skipped_with_exit_zero` 가 "매핑 없는 파일" 예시로 `app/services/chat_service.py` 를 쓰고 있었다. 지시서가 chat_service.py 매핑 추가를 요구하므로 그 예시가 거짓이 된다. 테스트를 지우지 않고 예시 파일만 `app/services/memory_manager.py`(매핑 없음)로 바꿨다(1줄).
+
+## 요구사항별 구현
+
+1. **스톨 타임아웃.** 기본값은 기존 관례에서 정했다: 첫 출력 420s(첫응답 워치독 `AADS_STREAM_FIRST_RESPONSE_TIMEOUT_SEC`=180s + 큰 컨텍스트 가산 최대 210s 보다 길게), 출력 이후 600s(`heartbeat_idle_ceiling` 과 동일). 환경변수 `AADS_STREAM_STALL_FIRST_OUTPUT_SEC`, `AADS_STREAM_STALL_IDLE_SEC`(0=끔). 두 곳에 건다 — (a) `call_stream` 안의 폴백 SDK 단계: 멈추면 error 이벤트로 다음 슬롯/모델로 진행, (b) `send_message_stream` 재시도 루프 전체: 60초 여유를 더해 안쪽이 먼저 걸리게 했고, 멈추면 `StreamStallError` → 기존 예외 재시도 경로(백오프·다음 폴백 모델), 마지막 시도면 명시적 error + 실행 중단 기록.
+2. **Codex 401.** 릴레이(`scripts/claude_relay_server.py` ~2492)는 CLI stderr 를 로그에만 남기고 클라이언트에 전달하지 않는다. 그래서 401 이 error 이벤트로 오면 분류해서 올리고, 이벤트 없이 빈 `result` 로 끝나면 (a) result 이벤트에 진단 문자열(error/stderr/detail)이 실려 있으면 분류, (b) 없으면 `codex_usage_snapshots` 가 인증 불능으로 표시한 활성 계정이 있는지 본다. 어느 쪽 증거도 없으면 기존 `codex_empty_result` 를 그대로 둔다 — 근거 없이 인증 문제라고 단정하지 않는다. 오류 원문·토큰은 문구/로그에 넣지 않고 분류명(revoked/unauthorized 등)과 계정 key_name 만 쓴다.
+   - **한계(후속 필요):** 스냅샷 수집이 늦거나 계정이 정상 표시인데 실제로는 401 인 경우, 릴레이가 stderr 를 전달하기 전에는 `codex_empty_result` 로 남는다. 릴레이는 인증 핵심 파일이라 이번 승인 범위 밖이다.
+3. **전환 기록.** 재시도 루프의 `_note_retry_model_switch` 직후 `_persist_retry_model_switch` 로 즉시 DB 에 쓴다. 이전에는 완료 저장에서만 써서 전부 실패한 턴(이번 사고)에는 기록이 없었다. 사유는 `_safe_fallback_reason` 고정 분류(Codex 401 이면 "Codex 인증 실패(재로그인 필요)"). `call_stream` 내부에서 일어나는 전환(슬롯 교체, Codex→Fable 직접 폴백)은 chat_service 가 신호를 받지 못해 이번에는 기록 대상이 아니다.
+
+## 검증 (실제 실행)
+- `bash scripts/run_unit_tests.sh tests/unit/test_chat_stall_codex_auth_fallback.py` → 15 passed (신규)
+- `bash scripts/run_unit_tests.sh tests/unit/test_chat_service.py tests/unit/test_model_selector_codex_db_route.py tests/unit/test_model_selector_dynamic_routing.py tests/unit/test_chat_retry_model_switch.py tests/unit/test_chat_stall_codex_auth_fallback.py tests/unit/test_codex_token_revoked_detect.py` → 225 passed
+- `bash scripts/run_unit_tests.sh tests/unit/test_pre_commit_test_map.py` → 12 passed
+- `bash scripts/run_unit_tests.sh tests/unit/test_tools_and_pipeline.py` → 79 passed
+- `ruff check --select F821,F811` (chat_service.py, model_selector.py, 신규 테스트, pre_commit_test_map.py, test_pre_commit_test_map.py) → All checks passed
+- `python3 -m compileall` (chat_service.py, model_selector.py) → 통과
+- 신규 테스트 매핑: (i) 출력 없는 시도 타임아웃 + `call_stream` 이 멈춘 SDK 단계를 취소하고 다음으로 진행 / (ii) Codex 401·빈 결과 인증 분류, 원문 미노출, 재시도 안 함 / (iii) 전환 시 fallback_chain·actual_model 기록 모양.
+- 빌드·배포는 실행하지 않았다.
+
+---
+
 # AADS-CHAT-RETRY-SILENT-MODEL-SWITCH-20261002 (자동 재작업 1/2)
 
 ## 리뷰 지적 처리
