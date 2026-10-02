@@ -5,6 +5,8 @@ import json
 import logging
 from typing import Any
 
+import asyncpg
+
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
@@ -59,54 +61,77 @@ def _coerce_json_object(value: Any) -> dict[str, Any]:
     return {}
 
 
+_chat_model_preferences_schema_ready = False
+
+
 async def _ensure_chat_model_preferences_table() -> None:
+    """chat_model_preferences 스키마 보정 — 프로세스당 한 번, 락을 기다리지 않는다.
+
+    2026-10-02: 매일 10:00 KST pg_dump 가 AccessShareLock 을 잡는 동안 아래
+    ALTER TABLE(AccessExclusiveLock)이 매 조회마다 대기하다 30초 TimeoutError 로
+    /chat-preferences 가 500 → 설정 화면 '채팅창 노출 모델' 이 비었다.
+    """
+    global _chat_model_preferences_schema_ready
+    if _chat_model_preferences_schema_ready:
+        return
     pool = get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_model_preferences (
-                preference_key TEXT PRIMARY KEY,
-                provider TEXT NOT NULL DEFAULT 'legacy',
-                model_id TEXT NOT NULL,
-                display_order INTEGER NOT NULL DEFAULT 0,
-                is_hidden BOOLEAN NOT NULL DEFAULT FALSE,
-                is_favorite BOOLEAN NOT NULL DEFAULT FALSE,
-                is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_by TEXT
-            )
-            """
+        try:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL lock_timeout = '2s'")
+                await _apply_chat_model_preferences_schema(conn)
+        except asyncpg.exceptions.LockNotAvailableError:
+            logger.warning("chat_model_preferences_schema_skipped: lock busy (backup?) — serving existing table")
+            return
+    _chat_model_preferences_schema_ready = True
+
+
+async def _apply_chat_model_preferences_schema(conn) -> None:
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_model_preferences (
+            preference_key TEXT PRIMARY KEY,
+            provider TEXT NOT NULL DEFAULT 'legacy',
+            model_id TEXT NOT NULL,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            is_hidden BOOLEAN NOT NULL DEFAULT FALSE,
+            is_favorite BOOLEAN NOT NULL DEFAULT FALSE,
+            is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_by TEXT
         )
-        await conn.execute("ALTER TABLE chat_model_preferences ADD COLUMN IF NOT EXISTS provider TEXT")
-        await conn.execute("ALTER TABLE chat_model_preferences ADD COLUMN IF NOT EXISTS preference_key TEXT")
-        await conn.execute(
-            """
-            UPDATE chat_model_preferences
-            SET provider = CASE
-                    WHEN model_id IN ('mixture', 'auto') THEN 'auto'
-                    WHEN provider IS NULL OR provider = '' THEN 'legacy'
-                    ELSE provider
-                END
-            WHERE provider IS NULL OR provider = ''
-            """
-        )
-        await conn.execute(
-            """
-            UPDATE chat_model_preferences
-            SET preference_key = CASE
-                    WHEN model_id IN ('mixture', 'auto') THEN 'mixture'
-                    WHEN preference_key IS NULL OR preference_key = '' THEN provider || ':' || model_id
-                    ELSE preference_key
-                END
-            WHERE preference_key IS NULL OR preference_key = ''
-            """
-        )
-        await conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_chat_model_preferences_order
-            ON chat_model_preferences(is_pinned DESC, is_favorite DESC, display_order ASC, provider ASC, model_id ASC)
-            """
-        )
+        """
+    )
+    await conn.execute("ALTER TABLE chat_model_preferences ADD COLUMN IF NOT EXISTS provider TEXT")
+    await conn.execute("ALTER TABLE chat_model_preferences ADD COLUMN IF NOT EXISTS preference_key TEXT")
+    await conn.execute(
+        """
+        UPDATE chat_model_preferences
+        SET provider = CASE
+                WHEN model_id IN ('mixture', 'auto') THEN 'auto'
+                WHEN provider IS NULL OR provider = '' THEN 'legacy'
+                ELSE provider
+            END
+        WHERE provider IS NULL OR provider = ''
+        """
+    )
+    await conn.execute(
+        """
+        UPDATE chat_model_preferences
+        SET preference_key = CASE
+                WHEN model_id IN ('mixture', 'auto') THEN 'mixture'
+                WHEN preference_key IS NULL OR preference_key = '' THEN provider || ':' || model_id
+                ELSE preference_key
+            END
+        WHERE preference_key IS NULL OR preference_key = ''
+        """
+    )
+    await conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_chat_model_preferences_order
+        ON chat_model_preferences(is_pinned DESC, is_favorite DESC, display_order ASC, provider ASC, model_id ASC)
+        """
+    )
 
 
 async def _seed_media_models(conn) -> None:
