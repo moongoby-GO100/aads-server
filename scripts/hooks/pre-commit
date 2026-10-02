@@ -587,6 +587,14 @@ if [ -x "$ENV_DUP_SCRIPT" ]; then
     fi
 fi
 
+# ── 정본 게이트 (그림자 모드, AADS-CANONICAL-GATE-SHADOW-20261002) ───
+# docs/(prd|plans|design|contracts)/** 를 커밋할 때 경고하고 .git/canonical_gate.log 에 남긴다.
+# **차단하지 않는다** — 위 게이트가 모두 통과한 뒤에만 도달하며, 이 블록은 종료코드를 바꾸지 않는다
+# (fail-open: 스크립트가 없거나 죽어도 `|| true`). CANONICAL_GATE_MODE=off 로 끈다.
+if [ -f "scripts/canonical_gate_commit.py" ]; then
+    timeout 10 python3 scripts/canonical_gate_commit.py || true
+fi
+
 # ── 감사: hook 통과 서명 (--no-verify 우회 감지용) ──────────────────
 HOOK_SIG="hook-verified:$(date +%s)"
 # 호스트 경로 고정. 쓰기 불가(ex. 컨테이너 RO mount)면 git rev-parse fallback.

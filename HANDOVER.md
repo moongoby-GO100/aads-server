@@ -1,3 +1,7 @@
+## 2026-10-03 — 정본 강제 게이트 그림자 모드 보존 복구 R2 (AADS-CANONICAL-GATE-SHADOW-PRESERVE-R2-20261003)
+
+**코드 완료 (커밋 전 — Runner 가 승인 후 commit/push). 운영 DB·배포·enforce 전환 없음.** runner-58991158 이 PRESERVATION_HARD_GATE 에 막힌 원인은 삭제가 아니라 `@router.post("/pipeline/jobs", ...)` 데코레이터 줄을 `response_model_exclude_none=True` 로 고쳐 쓴 것이다(`_DELETED_SYMBOL_RE` 가 `-@router.*` 줄을 삭제로 센다, 실제 게이트 함수로 원 diff=FLAG / 신 diff=None 재현). 데코레이터를 원문 그대로 두고 `JobSubmitResponse` 에 `@model_serializer(mode="wrap")` 로 `canonical_gate` None 키를 생략해 응답 형태를 보존했다. 보존 커밋 989e7360 의 게이트를 현 HEAD 위에 선택 복구하고 두 가지를 고쳤다: 300ms 는 판정+기록 **합산** 상한(기존엔 각 300ms 라 최악 ~600ms), 배치 제출은 `asyncio.gather` 로 동시 판정(기존 순차 N×300ms). 라우트·OpenAPI 전후 동일, 격리 PG 마이그레이션 멱등·e2e 17/17, 실제 핸들러/HTTP/hook 경유 장애 주입 포함 신규 34건. 롤백은 `CANONICAL_GATE_MODE=off`(쿼리 0) 또는 승인된 revert 이며 운영 DROP 은 하지 않는다. 후속 반영은 클린 릴리스 SHA 의 `deploy.sh bluegreen`(/root/aads/AGENTS.md 계약) + P0/P1 5분 모니터링. prototype 면제는 head `kind` CHECK 에서 도출한 것이며 승인 지시문 원문으로는 확인하지 못했다 — CEO 확인 필요. 무관한 기존 실패: `test_output_validator::test_tool_backed_status_progress_tail_is_not_progress_only_blocked` 는 HEAD a7e3d1f8 에서도 동일하게 실패. 상세: `reports/20261002_canonical_gate_shadow_RESULT.md`.
+
 ## 2026-10-03 — 전 서버 문서 인벤토리 산출물 재적재·재검산, 누락 범위 검증 (AADS-PROJECT-DOCUMENTS-ALLSERVER-INVENTORY-RECOVER-20261003)
 
 **상태: 전체 완료 아님.** 보존된 5파일(runner-ac46eda6 error/stale_recovered)을 `/root/aads-preserved/project_documents_inventory_20261003/` 에 해시와 함께 보존하고 origin/main 격리 worktree 에 재적재했다. 상세: `reports/20261003_project_documents_inventory_recovery_RESULT.md`. commit/push/DB/배포 없음(Runner 승인 후).

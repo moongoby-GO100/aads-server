@@ -772,7 +772,17 @@ async def add_goal_document(
         )
         if row is None:
             raise HTTPException(status_code=404, detail="goal_not_found")
-    return dict(row)
+    result = dict(row)
+    # 정본 게이트(그림자): 트랜잭션 밖에서 판정·기록만 하고 절대 막지 않는다.
+    from app.services.canonical_gate import check_goal_document
+
+    gate = await check_goal_document(
+        goal_id=goal_id, tenant_id=_tenant_id(context), ref=str(result.get("id", "")),
+        kind=req.kind, path=path, document_key=document_key,
+    )
+    if gate:
+        result["canonical_gate"] = gate
+    return result
 
 
 @router.get("/goals/for-session/{session_id}")

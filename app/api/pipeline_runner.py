@@ -15,7 +15,7 @@ from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer
 
 from app.auth import TenantRole, get_current_user, tenant_role_allows
 from app.core.project_config import PROJECT_MAP
@@ -810,6 +810,15 @@ class JobSubmitResponse(BaseModel):
     job_id: str
     status: str
     message: str
+    canonical_gate: Optional[dict] = Field(None, description="정본 미등록 경고(그림자 모드, 선택)")
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_canonical_gate(self, handler):
+        # 데코레이터를 건드리지 않고 기존 응답 shape 를 유지한다: 경고가 없으면 키 자체를 뺀다.
+        data = handler(self)
+        if data.get("canonical_gate") is None:
+            data.pop("canonical_gate", None)
+        return data
 
 
 def _normalize_worker_model_override(worker_model: str, reason: str) -> tuple[str, str]:
@@ -1620,8 +1629,18 @@ async def submit_job(
             await _persist_job_goal_context(pool, job_id, goal_link.goal_id, goal_link.milestone_id)
             msg += f" 목표 {goal_link.goal_id} 에 연결되었습니다."
     except Exception as exc:
+        goal_link = None
         logger.warning("pipeline_runner.goal_link_fail", job_id=job_id, error=str(exc))
-    return JobSubmitResponse(job_id=job_id, status="queued", message=msg)
+
+    # 정본 게이트(그림자): 목표가 확정된 제출만 판정·기록한다. 제출 결과는 바꾸지 않는다.
+    gate = None
+    if goal_link:
+        from app.services.canonical_gate import check_runner_submit
+        gate = await check_runner_submit(
+            goal_id=goal_link.goal_id, tenant_id=_tenant_id(context),
+            project=req.project, job_id=job_id,
+        )
+    return JobSubmitResponse(job_id=job_id, status="queued", message=msg, canonical_gate=gate)
 
 
 # ── 끝난 작업은 큐 테이블에 남지 않는다 (AADS-RUNNER-ARCHIVE-VISIBILITY) ──
@@ -3182,6 +3201,7 @@ async def submit_batch(
         key_to_job_id[item.key] = f"runner-{uuid.uuid4().hex[:8]}"
 
     results = []
+    gate_targets: list[tuple[str, str]] = []
     batch_file_owner: dict[str, str] = {}
     try:
         async with pool.acquire() as conn:
@@ -3410,9 +3430,11 @@ async def submit_batch(
                         from app.services.pipeline_runner_service import _link_job_to_goal_explicit
                         # 배치도 동일 규칙 — 지시서 GOAL_ID/MILESTONE_ID 메타데이터가
                         # 있을 때만 연결하고, 없으면 어떤 목표에도 붙이지 않는다.
-                        await _link_job_to_goal_explicit(
+                        batch_goal_link = await _link_job_to_goal_explicit(
                             job_id, req.project, instruction=item.instruction,
                         )
+                        if batch_goal_link:
+                            gate_targets.append((job_id, batch_goal_link.goal_id))
                     except Exception as exc:
                         logger.warning("pipeline_runner.goal_link_fail", job_id=job_id, error=str(exc))
                     for path in item_target_files:
@@ -3437,6 +3459,24 @@ async def submit_batch(
 
     logger.info("pipeline_runner.batch_submitted",
                  project=req.project, count=len(results), parallel_group=pg)
+
+    # 정본 게이트(그림자): 커밋된 뒤 판정·기록만 한다. 실패해도 응답은 그대로다.
+    if gate_targets:
+        import asyncio
+
+        from app.services.canonical_gate import check_runner_submit
+        by_job = {r["job_id"]: r for r in results}
+        # 동시에 돌려 배치 전체 추가 지연을 잡 수와 무관하게 게이트 상한(300ms) 안에 둔다.
+        gates = await asyncio.gather(*(
+            check_runner_submit(
+                goal_id=gate_goal_id, tenant_id=_tenant_id(context),
+                project=req.project, job_id=gate_job_id,
+            )
+            for gate_job_id, gate_goal_id in gate_targets
+        ))
+        for (gate_job_id, _goal_id), gate in zip(gate_targets, gates):
+            if gate and gate_job_id in by_job:
+                by_job[gate_job_id]["canonical_gate"] = gate
 
     return {
         "parallel_group": pg,
