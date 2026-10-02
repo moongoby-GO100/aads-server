@@ -6,7 +6,7 @@ DesignAuditor 클래스:
   - audit_multiple(screenshot_paths) → List[AuditResult]
   - generate_report(audit_results) → str (마크다운)
 
-LLM: Gemini 2.5 Flash Vision (primary) → Claude Sonnet Vision (fallback)
+LLM: Claude Haiku Vision via anthropic_client (primary) → Gemini 2.5 Flash via LiteLLM (fallback)
 결과: experience_memory에 experience_type="design_audit"로 저장
 """
 from __future__ import annotations
@@ -25,6 +25,9 @@ from typing import Any, Dict, List, Optional
 import structlog
 
 logger = structlog.get_logger()
+
+CLAUDE_VISION_MODEL = "claude-haiku-4-5-20251001"
+GEMINI_VISION_MODEL = "gemini-2.5-flash"
 
 # ---------------------------------------------------------------------------
 # 프롬프트 상수
@@ -268,7 +271,7 @@ async def _call_gemini_vision(image_b64: str, prompt: str, project_context: str)
     full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt
 
     payload = {
-        "model": "gemini-2.5-flash",
+        "model": GEMINI_VISION_MODEL,
         "max_tokens": 16384,
         "messages": [
             {
@@ -294,40 +297,64 @@ async def _call_gemini_vision(image_b64: str, prompt: str, project_context: str)
         return resp.json()["choices"][0]["message"]["content"]
 
 
-async def _call_claude_vision(image_b64: str, prompt: str, project_context: str) -> str:
-    """Claude Vision 폴백 — LiteLLM 프록시 경유 (채팅창과 동일 방식, R-AUTH 준수)."""
-    import httpx
+def _image_media_type(image_b64: str) -> str:
+    """base64 선두 시그니처로 media_type 추정 (기본 png)."""
+    head = image_b64[:8]
+    if head.startswith("/9j/"):
+        return "image/jpeg"
+    if head.startswith("UklGR"):
+        return "image/webp"
+    if head.startswith("R0lGO"):
+        return "image/gif"
+    return "image/png"
 
-    litellm_url = os.getenv("LITELLM_BASE_URL", "http://aads-litellm:4000")
-    litellm_key = os.getenv("LITELLM_MASTER_KEY", "")
+
+async def _call_claude_vision(image_b64: str, prompt: str, project_context: str) -> str:
+    """Claude Vision — anthropic_client.call_llm_with_fallback 경유 (OAuth 직접, R-AUTH 준수).
+
+    LiteLLM 은 OAuth 토큰으로 Anthropic 을 호출하다 oauth_not_allowed_for_organization 으로 막힌다.
+    """
+    from app.core.anthropic_client import call_llm_with_fallback
 
     full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt
-
-    payload = {
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 4096,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
-                    },
-                    {"type": "text", "text": full_prompt},
-                ],
-            }
-        ],
+    image_block = {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": _image_media_type(image_b64),
+            "data": image_b64,
+        },
     }
+    text = await call_llm_with_fallback(
+        prompt=full_prompt,
+        model=CLAUDE_VISION_MODEL,
+        max_tokens=4096,
+        images=[image_block],
+    )
+    if not text:
+        raise RuntimeError("claude_vision_empty_response")
+    return text
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            f"{litellm_url}/v1/chat/completions",
-            json=payload,
-            headers={"Authorization": f"Bearer {litellm_key}"},
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+
+async def _call_vision_with_fallback(
+    image_b64: str, prompt: str, project_context: str
+) -> tuple[str, str]:
+    """Claude(anthropic_client) 1순위 → Gemini(LiteLLM) 2순위. (응답 텍스트, 실제 호출 모델) 반환.
+
+    둘 다 실패하면 두 오류를 합친 RuntimeError.
+    """
+    try:
+        text = await _call_claude_vision(image_b64, prompt, project_context)
+        return text, CLAUDE_VISION_MODEL
+    except Exception as e:
+        logger.warning("claude_vision_failed_fallback", error=str(e)[:200])
+        claude_err = e
+    try:
+        text = await _call_gemini_vision(image_b64, prompt, project_context)
+        return text, GEMINI_VISION_MODEL
+    except Exception as e2:
+        logger.error("all_vision_providers_failed", claude_error=str(claude_err)[:200], gemini_error=str(e2)[:200])
+        raise RuntimeError(f"claude: {str(claude_err)[:200]} | gemini: {str(e2)[:200]}") from e2
 
 
 # ---------------------------------------------------------------------------
@@ -346,8 +373,8 @@ class DesignAuditor:
         단일 스크린샷 LLM 검수.
 
         1. 이미지 → base64
-        2. Gemini 2.5 Flash Vision 호출 (primary)
-        3. 실패 시 Claude Sonnet Vision fallback
+        2. Claude Haiku Vision (anthropic_client, primary)
+        3. 실패 시 Gemini 2.5 Flash Vision (LiteLLM) fallback
         4. JSON 파싱 → AuditResult 반환
         5. experience_memory에 저장
         """
@@ -366,21 +393,13 @@ class DesignAuditor:
         raw_text: str = ""
         provider_used: str = ""
 
-        # Primary: Gemini 2.5 Flash Vision
         try:
-            raw_text = await _call_gemini_vision(image_b64, AUDIT_PROMPT, project_context)
-            provider_used = "gemini-2.5-flash"
-            logger.info("gemini_vision_success", path=screenshot_path)
+            raw_text, provider_used = await _call_vision_with_fallback(
+                image_b64, AUDIT_PROMPT, project_context
+            )
+            logger.info("vision_success", path=screenshot_path, provider=provider_used)
         except Exception as e:
-            logger.warning("gemini_vision_failed_fallback", error=str(e))
-            # Fallback: Claude Sonnet Vision
-            try:
-                raw_text = await _call_claude_vision(image_b64, AUDIT_PROMPT, project_context)
-                provider_used = "claude-sonnet-4-5"
-                logger.info("claude_vision_fallback_success", path=screenshot_path)
-            except Exception as e2:
-                logger.error("all_vision_providers_failed", error=str(e2))
-                return AuditResult.error_result(screenshot_path, f"LLM 호출 실패: {e2}")
+            return AuditResult.error_result(screenshot_path, f"LLM 호출 실패: {e}")
 
         # JSON 파싱
         try:
@@ -487,24 +506,18 @@ class DesignAuditor:
         raw_text = ""
         provider_used = ""
         try:
-            raw_text = await _call_gemini_vision(image_b64, IMAGE_AUDIT_PROMPT, "")
-            provider_used = "gemini-2.5-flash"
-        except Exception as e:
-            logger.warning("image_audit_gemini_failed", error=str(e))
-            try:
-                raw_text = await _call_claude_vision(image_b64, IMAGE_AUDIT_PROMPT, "")
-                provider_used = "claude-sonnet-4-5"
-            except Exception as e2:
-                logger.error("image_audit_all_llm_failed", error=str(e2))
-                return {
-                    "image_ref": image_ref,
-                    "scores": {},
-                    "total_score": 0,
-                    "verdict": "ERROR",
-                    "summary": f"LLM 호출 실패: {e2}",
-                    "critical_issues": [],
-                    "error": str(e2),
-                }
+            raw_text, provider_used = await _call_vision_with_fallback(image_b64, IMAGE_AUDIT_PROMPT, "")
+        except Exception as e2:
+            logger.error("image_audit_all_llm_failed", error=str(e2))
+            return {
+                "image_ref": image_ref,
+                "scores": {},
+                "total_score": 0,
+                "verdict": "ERROR",
+                "summary": f"LLM 호출 실패: {e2}",
+                "critical_issues": [],
+                "error": str(e2),
+            }
 
         try:
             data = _extract_json(raw_text)
@@ -619,25 +632,19 @@ class DesignAuditor:
         raw_text = ""
         provider_used = ""
         try:
-            raw_text = await _call_gemini_vision(image_b64, prompt, "")
-            provider_used = "gemini-2.5-flash"
-        except Exception as e:
-            logger.warning("mobile_audit_gemini_failed", error=str(e))
-            try:
-                raw_text = await _call_claude_vision(image_b64, prompt, "")
-                provider_used = "claude-sonnet-4-5"
-            except Exception as e2:
-                logger.error("mobile_audit_all_llm_failed", error=str(e2))
-                return {
-                    "image_ref": image_ref,
-                    "scores": {},
-                    "total_score": 0,
-                    "verdict": "ERROR",
-                    "platform": platform,
-                    "summary": f"LLM 호출 실패: {e2}",
-                    "critical_issues": [],
-                    "error": str(e2),
-                }
+            raw_text, provider_used = await _call_vision_with_fallback(image_b64, prompt, "")
+        except Exception as e2:
+            logger.error("mobile_audit_all_llm_failed", error=str(e2))
+            return {
+                "image_ref": image_ref,
+                "scores": {},
+                "total_score": 0,
+                "verdict": "ERROR",
+                "platform": platform,
+                "summary": f"LLM 호출 실패: {e2}",
+                "critical_issues": [],
+                "error": str(e2),
+            }
 
         try:
             data = _extract_json(raw_text)

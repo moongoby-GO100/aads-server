@@ -12,6 +12,8 @@ run_full_qa(project_id, deploy_url, pages) → QAResult dict
     - 테스트 PASS + Visual PASS + 디자인 35+ → AUTO PASS
     - 테스트 PASS + (Visual diff있음 OR 디자인 25-34) → CEO 확인 요청 (CONDITIONAL)
     - 테스트 FAIL OR 디자인 24 이하 → AUTO FAIL
+    - 채점기 장애(모든 디자인 감사 ERROR) → 점수를 믿을 수 없으므로 CEO 확인 요청
+      (테스트 FAIL 이면 그대로 AUTO FAIL)
 """
 from __future__ import annotations
 
@@ -41,14 +43,23 @@ def _calc_verdict(
     test_status: str,
     visual_status: str,
     design_score: int,
+    design_verdict: str = "",
 ) -> str:
     """
     종합 판정 로직.
     - 테스트 PASS + Visual PASS + 디자인 35+ → AUTO PASS
     - 테스트 PASS + (Visual diff있음 OR 디자인 25-34) → CEO 확인 요청
     - 테스트 FAIL OR 디자인 24 이하 → AUTO FAIL
+    - design_verdict == "ERROR"(채점기 장애, 점수 0 은 실측이 아님) → 테스트 FAIL 만 AUTO FAIL,
+      그 외는 CEO 확인 요청
     """
-    if test_status == "FAIL" or design_score <= 24:
+    if test_status == "FAIL":
+        return VERDICT_AUTO_FAIL
+
+    if design_verdict == "ERROR":
+        return VERDICT_CONDITIONAL
+
+    if design_score <= 24:
         return VERDICT_AUTO_FAIL
 
     if test_status == "PASS" and visual_status == "PASS" and design_score >= 35:
@@ -310,7 +321,13 @@ async def run_full_qa(
         effective_test_status,
         result["visual_status"],
         result["design_score"],
+        result["design_verdict"],
     )
+    if result["design_verdict"] == "ERROR":
+        result["report_markdown"] = (
+            (result.get("report_markdown") or "")
+            + "\n⚠️ 디자인 채점기 장애(모든 LLM 호출 실패) — 화면 점수 미측정, 판정불가로 CEO 확인 요청"
+        )
     logger.info(
         "qa_pipeline_step5_verdict",
         verdict=result["verdict"],
