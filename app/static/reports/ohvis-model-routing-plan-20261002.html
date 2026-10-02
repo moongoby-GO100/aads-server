@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>오비스 모델 라우팅 기획 v2 — 공식 문서 대조·가용 모델·용도별 배치 (2026-10-02)</title>
+<style>
+:root{--fg:#1d1f23;--dim:#5f6670;--line:#dfe3e8;--bg:#fff;--card:#f6f8fa;--bar:#3b6fb6;--warn:#b35c00;--bad:#b42318;--ok:#1a7f37}
+@media (prefers-color-scheme:dark){:root{--fg:#e6e8eb;--dim:#9aa3ad;--line:#30363d;--bg:#0f1115;--card:#171a20;--bar:#6c9be0;--warn:#e3a34a;--bad:#f07167;--ok:#4cc38a}}
+body{font-family:-apple-system,"Pretendard","Noto Sans KR",sans-serif;color:var(--fg);background:var(--bg);max-width:1100px;margin:0 auto;padding:28px 20px 60px;line-height:1.6}
+h1{font-size:24px;margin:0 0 4px}h2{font-size:19px;margin:36px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}h3{font-size:16px;margin:22px 0 8px}
+.meta,.src{color:var(--dim);font-size:13px}.src{font-size:12px}
+.summary{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:18px 0}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0 4px}
+th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bad{color:var(--bad);font-weight:600}.warn{color:var(--warn);font-weight:600}.ok{color:var(--ok);font-weight:600}
+.barrow{display:grid;grid-template-columns:260px 1fr 90px;align-items:center;gap:10px;font-size:13px;margin:5px 0}
+.bartrack{background:var(--card);border-radius:3px;height:14px}.barfill{background:var(--bar);height:14px;border-radius:3px}
+.barval{text-align:right;font-variant-numeric:tabular-nums}
+code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:12.5px}
+</style>
+</head>
+<body>
+<h1>오비스 모델 라우팅 기획 v2 — 공식 문서 대조 · 가용 모델 · 용도별 배치</h1>
+<div class="meta">작성 2026-10-02 16:10 KST · 앞선 보고서(<a href="ohvis-harness-routing-cost-20261002.html">하네스·라우팅 비용 분석</a>)의 후속 · 근거: 공식 문서 + 운영 DB 7일 실측</div>
+
+<div class="summary">
+<b>대표님 질문에 대한 답</b><br>
+① 현재 어떤 모델을 어떻게 쓰는지: 지난 보고에서는 모델별 건수와 비용만 봤습니다. 이번에는 질문 종류별·경로별 사용 현황까지 확인했습니다.<br>
+② 최신 모델 공식 문서: <b>지난 보고에서는 확인하지 않았습니다.</b> 이번에 Anthropic 공식 문서 3종을 직접 읽었고, OpenAI·Google 가격은 검색으로 확인했습니다.<br>
+③ 가용 모델 정리: <b>지난 보고에서는 하지 않았습니다.</b> 이번에 등록부 194개를 전수 조회했습니다. 이 중 최근 7일에 실제로 쓰인 것은 약 12개입니다.<br>
+④ 결론: <b>모델을 낮추기 전에 올리는 것이 먼저입니다.</b> 주력인 Opus 5는 구형이고, 최신 Opus 5.5보다 비쌉니다(입력 $5 → $4, 캐시 읽기 $0.50 → $0.20). Anthropic 공식 문서도 "대부분의 작업은 Opus 5.5로 시작하라"고 권장합니다.
+</div>
+
+<div class="summary" style="border-color:var(--warn)"><b class="warn">정정 (2026-10-02 16:20 KST)</b> — 채팅 주력 모델은 <b>2026-10-01 16:00 KST부터 이미 Opus 5.5로 바뀌어 있었습니다</b>(requested_model 시간대별 집계). 위 비용 환산(-47%)은 전환 이전 7일 데이터 기준입니다. 남은 코드 하드코딩은 runner-8efa91e5가 정리합니다. 또 채팅 사용량 기록(oauth_usage_log cli_relay)이 2026-09-30 04:01 KST 이후 멈춰 있어, 그 뒤 비용은 측정되지 않습니다.</div>
+<h2>1. 공식 문서로 확인한 최신 모델 (가격 단위: 100만 토큰당 $)</h2>
+<table>
+<tr><th>모델</th><th class="n">입력</th><th class="n">출력</th><th class="n">캐시 읽기</th><th>공식 포지셔닝</th><th>오비스 사용 경로</th></tr>
+<tr><td>Claude Fable 5.1</td><td class="n">10</td><td class="n">50</td><td class="n">0.25</td><td>최고 난도 추론·장시간 에이전트·심층 리서치</td><td>CLI 릴레이 (7일 2콜)</td></tr>
+<tr><td><b>Claude Opus 5.5</b></td><td class="n">4</td><td class="n">20</td><td class="n">0.20</td><td><b>"대부분 작업의 시작점"</b>. 장시간 코딩·지식 업무. 기본 effort는 medium</td><td>CLI 릴레이 262콜, 러너</td></tr>
+<tr><td class="warn">Claude Opus 5 (구형)</td><td class="n">5</td><td class="n">25</td><td class="n">0.50</td><td>이전 세대 (추가 모델 목록)</td><td class="warn">CEO 채팅 주력 869콜</td></tr>
+<tr><td>Claude Sonnet 5.5</td><td class="n">2</td><td class="n">10</td><td class="n">0.20</td><td>속도와 지능의 최적 조합. 일상 코딩·에이전트·분석</td><td>러너 1순위</td></tr>
+<tr><td>Claude Haiku 4.5</td><td class="n">1</td><td class="n">5</td><td class="n">0.10</td><td>최저 지연·대량 처리·서브에이전트. <span class="warn">은퇴 시점 "2026-10-15 이후"</span></td><td>백그라운드 폴백 920콜</td></tr>
+<tr><td>GPT-6 Astra</td><td class="n">10</td><td class="n">50</td><td class="n">1.00</td><td>OpenAI 최상위 (2026-09-03)</td><td>Codex CLI 139콜 · 원장 $1,618</td></tr>
+<tr><td>GPT-6.1 Sol</td><td class="n">2</td><td class="n">10</td><td class="n">0.10</td><td>"Astra에 근접한 성능을 낮은 비용으로" (2026-09-29)</td><td>러너 S·M·L</td></tr>
+<tr><td>GPT-6 Sol</td><td class="n">2</td><td class="n">10</td><td class="n">0.20</td><td>복잡한 코딩·에이전트 작업</td><td>Codex 173콜</td></tr>
+<tr><td>GPT-6 Luna</td><td class="n">0.10</td><td class="n">0.50</td><td class="n">0.01</td><td>대량·집중 작업용 최고 효율</td><td>러너 XS·S</td></tr>
+<tr><td>Gemini 3.8 Flash</td><td class="n">0.75</td><td class="n">3.75</td><td class="n">0.075</td><td>2026-12-31까지 할인가. 2027년부터 1.50 / 7.50</td><td>LiteLLM 등록. 실사용 없음</td></tr>
+<tr><td>Gemini 3.1 Pro (preview)</td><td class="n">2</td><td class="n">12</td><td class="n">—</td><td>추론. 200K 초과 시 4 / 18</td><td>등록만 되어 있음</td></tr>
+</table>
+<div class="src">출처: docs.claude.com pricing · models/overview · choosing-a-model · optimizing-for-cost-and-intelligence [공식문서, 2026-10-02 조회] / developers.openai.com pricing·models [검색 요약, 2026-10-02, ⚠️ 원문 미대조] / ai.google.dev pricing [검색 요약, 2026-10-02, ⚠️ 원문 미대조]</div>
+
+<h3>공식 문서가 말하는 비용 레버 (Anthropic, 효과 큰 순서)</h3>
+<table>
+<tr><th>레버</th><th>공식 문서 내용</th><th>오비스 현황</th></tr>
+<tr><td>프롬프트 캐싱</td><td>가장 큰 레버. 좋은 하네스는 입력의 84% 이상을 캐시에서 읽음</td><td class="ok">Opus 5 릴레이 97.5% — 이미 상위 수준 [DB 조회]</td></tr>
+<tr><td>최신 모델로 업그레이드</td><td>"새 모델은 이전 모델 이상을 풀고, 보통 완료 작업당 비용이 더 낮다"</td><td class="bad">주력이 구형 Opus 5. 등록부 일부 기본값은 Opus 4.6</td></tr>
+<tr><td>effort 조정</td><td>"모델을 바꾸는 것보다 나은 레버인 경우가 많다"</td><td class="warn">질문 종류별 effort 정책 없음 [코드 확인]</td></tr>
+<tr><td>작업 예산·경과 시간 표시</td><td>비용이 큰 소수 루프에는 작업 예산을 건다. 경과 시간을 보여주면 비용 28~54% 감소</td><td class="bad">5M 넘는 콜 13%가 캐시 읽기의 41% 차지 [DB 조회]</td></tr>
+<tr><td>비교 기준</td><td>토큰당 단가가 아니라 "완료 작업당 비용"으로 비교</td><td class="warn">완료 작업당 비용 지표 없음. 비교 테이블 0행 [DB 조회]</td></tr>
+<tr><td>멀티 모델</td><td>실행 모델 + 어려운 결정만 상위 자문 모델에 묻기, 또는 오케스트레이터 + 저가 작업자</td><td>러너는 일부 적용. 채팅은 미적용</td></tr>
+</table>
+
+<h2>2. 현재 오비스가 실제로 쓰는 방식 (7일 실측)</h2>
+<table>
+<tr><th>질문 종류(intent)</th><th class="n">건수</th><th class="n">Opus</th><th class="n">GPT</th><th>해석</th></tr>
+<tr><td>runner_response (러너 완료 알림에 대한 응답)</td><td class="n">1,550</td><td class="n">1,550</td><td class="n">0</td><td rowspan="2" class="warn">사람이 아니라 시스템이 보낸 메시지가 전체의 80%. 전부 Opus로 처리</td></tr>
+<tr><td>system_trigger (승인된 다음단계 자동 실행)</td><td class="n">422</td><td class="n">422</td><td class="n">0</td></tr>
+<tr><td>status_check</td><td class="n">228</td><td class="n">154</td><td class="n">71</td><td>단순 조회인데도 Opus 비중이 높음</td></tr>
+<tr><td>pipeline_runner</td><td class="n">122</td><td class="n">81</td><td class="n">40</td><td></td></tr>
+<tr><td>cto_directive / cto_strategy / 기타</td><td class="n">약 120</td><td class="n">—</td><td class="n">—</td><td>Opus가 정당한 영역</td></tr>
+</table>
+<div class="src">출처: compiled_prompt_provenance 7일 intent×model [DB 조회]</div>
+
+<h3>라우팅 기준이 5곳에 흩어져 서로 다름</h3>
+<table>
+<tr><th>위치</th><th>백그라운드 LLM 설정값</th><th>기타 이상</th></tr>
+<tr><td>코드 기본값 <code>LLM_BG_PRIMARY_MODEL</code></td><td>groq-gpt-oss-120b (실패율 94.9%)</td><td>— (러너 a5bb1225가 교정 예정)</td></tr>
+<tr><td><code>llm_fallback_chains</code></td><td>Haiku 4.5 1순위</td><td>폴백 목록은 코드가 DB에서 먼저 읽음. 1순위는 env가 정함 (16:35 정정)</td></tr>
+<tr><td><code>model_routing_preferences</code></td><td>qwen-turbo (연체로 400 실패 이력)</td><td>architect·strategist·supervisor 기본값이 Opus 4.6. intent_* 행 20여 개가 아래 intent_policies와 중복</td></tr>
+<tr><td><code>intent_policies</code></td><td>—</td><td>Opus 5 순위표 결함으로 사실상 무효(러너 05efba69가 교정 예정)</td></tr>
+<tr><td><code>runner_model_config</code></td><td>—</td><td>비교적 최신. XS 체인에 gpt-5.6-luna가 남아 있음</td></tr>
+</table>
+
+<h3>가용 모델 등록부</h3>
+<p>활성 행 194개: OpenAI 66(검증 13), Qwen 34, Gemini 18, Codex 11, Anthropic 11, OpenRouter 9, Kimi 7, 기타 38. <b>최근 7일 실제 호출은 Anthropic 6종, Codex 5종 정도</b>입니다. 나머지는 등록만 되어 있고 라우팅에 쓰이지 않습니다. <span class="src">[DB 조회 llm_models, oauth_usage_log]</span></p>
+
+<h2>3. 같은 토큰을 다른 모델로 처리했다면 (Opus 5 릴레이 7일분)</h2>
+<div class="barrow"><span>Opus 5 (현재)</span><div class="bartrack"><div class="barfill" style="width:100%"></div></div><span class="barval">$1,905</span></div>
+<div class="barrow"><span>Opus 5.5 (업그레이드)</span><div class="bartrack"><div class="barfill" style="width:53.4%"></div></div><span class="barval">$1,018</span></div>
+<div class="barrow"><span>Sonnet 5.5 (하향)</span><div class="bartrack"><div class="barfill" style="width:40%"></div></div><span class="barval">$762</span></div>
+<div class="src">계산: 캐시 읽기 2,532.8M · 캐시 쓰기 64.4M · 출력 9.4M 토큰 [DB 조회] × 공식 단가(5분 캐시 쓰기 1.25배). 정액 OAuth 경로라 실제 청구액이 아니라 한도 소모의 상대 비교값. effort 차이로 출력량이 달라지는 효과는 반영하지 않음 [추정]</div>
+<p><b>핵심:</b> Opus 5 → Opus 5.5는 상위 모델로 올라가면서 <b>약 47% 절감</b>됩니다. 거기서 Sonnet 5.5로 더 내려가도 추가 절감은 약 25%뿐입니다. 비용의 대부분인 캐시 읽기 단가가 Opus 5.5와 Sonnet 5.5 모두 $0.20으로 같기 때문입니다. <b>신뢰 위험을 감수하고 낮추는 것보다, 올리고 나서 긴 턴을 줄이는 쪽이 효과가 큽니다.</b></p>
+
+<h2>4. 용도별 모델 배치안 — 언제 무엇을 쓰나</h2>
+<table>
+<tr><th>업무</th><th>기본 모델 · effort</th><th>올릴 때 (상향 조건)</th><th>이유</th></tr>
+<tr><td>대표님 전략·진단·기획·보고 (cto_*, diagnosis, report, planning)</td><td><b>Opus 5.5 · medium</b></td><td>P0 장애·아키텍처·금융 판단이면 effort high. 몇 시간 걸리는 심층 리서치·문서 완성이면 Fable 5.1</td><td>공식 권장 기본값. 구형 Opus 5보다 싸고 최신</td></tr>
+<tr><td>러너 완료 알림·자동 다음단계 (runner_response, system_trigger — 전체의 80%)</td><td>1단계: <b>Opus 5.5</b>로 업그레이드<br>2단계: 섀도 비교를 통과하면 Sonnet 5.5</td><td>리뷰 반려·배포·DB 변경·금융이 걸리면 Opus 5.5 high</td><td>건수가 가장 많음. 하향은 비교 근거가 생긴 뒤에만</td></tr>
+<tr><td>단순 상태조회·인사 (status_check, task_query, casual)</td><td>Sonnet 5.5 · low (섀도 통과 후)</td><td>도구 오류나 정정 요청이 나오면 Opus 5.5</td><td>출력이 짧아 모델 차이 체감이 작음</td></tr>
+<tr><td>코드 러너 XS·S</td><td>Sonnet 5.5 → GPT-6.1 Sol</td><td>2회 실패 시 Opus 5.5</td><td>현행 유지. XS 체인의 gpt-5.6-luna는 GPT-6 Luna로 교체</td></tr>
+<tr><td>코드 러너 M·L</td><td>Sonnet 5.5 → GPT-6.1 Sol → Opus 5.5</td><td>설계 변경이 크면 Opus 5.5 high</td><td>공식 문서상 GPT-6.1 Sol은 Astra 근접 성능에 1/5 가격</td></tr>
+<tr><td>코드 러너 XL</td><td>Opus 5.5 → Fable 5.1</td><td>—</td><td>Astra($10/$50, 캐시 읽기 미기록)는 교차 검수용으로만</td></tr>
+<tr><td>AI 리뷰</td><td>작성 모델과 <b>다른 계열</b> (Claude가 작성하면 GPT가 리뷰)</td><td>점수 0.6~0.75 경계면 반대 계열로 2차 리뷰</td><td>같은 계열끼리는 같은 맹점을 공유함</td></tr>
+<tr><td>백그라운드 (요약·추출·메모리)</td><td>Haiku 4.5 (러너 a5bb1225)</td><td>—</td><td><span class="warn">Haiku 4.5 은퇴가 2026-10-15 이후 가능</span> → 대체 후보(Gemini 3.8 Flash, Sonnet 5.5 low)를 사전 비교</td></tr>
+<tr><td>임베딩</td><td>로컬 nomic-embed-text</td><td>—</td><td>비용 $0, 현행 유지</td></tr>
+</table>
+
+<h2>4-1. GPT·기타 모델 보강 (2026-10-02 16:30 KST)</h2><table><tr><th>모델군</th><th>공식 단가 확인</th><th>7일 채팅 품질점수(표본)</th><th>권장 역할</th></tr><tr><td>GPT-6.1 Sol</td><td class="ok">developers.openai.com pricing.md 원문 대조: $2 / 캐시 $0.10 / $10</td><td>0.677 (11)</td><td>러너 2순위, Claude 결과물 교차 리뷰. Codex 구독이라 Claude와 별개의 한도 풀</td></tr><tr><td>GPT-6 Luna</td><td class="ok">원문 대조: $0.10 / $0.01 / $0.50</td><td>표본 없음</td><td>XS 러너·대량 분류 후보 (블라인드 비교 대상)</td></tr><tr><td>GPT-6 Astra</td><td class="ok">원문 대조: $10 / $1.00 / $50</td><td>0.641~0.690 (46)</td><td>XL 교차 검수 전용. 채팅 기본값으로는 비권장</td></tr><tr><td>GPT-6 Sol / 5.6 Sol</td><td class="ok">원문 대조: 6 Sol $2 / $0.20 / $10</td><td>0.630~0.768 (49)</td><td>6.1 Sol로 대체</td></tr><tr><td>Gemini 3.8 Flash / 3.1 Pro</td><td class="warn">검색 요약만, 원문 미대조</td><td>사용 없음</td><td>Haiku 4.5 대체 후보 비교에만 포함</td></tr><tr><td>DeepSeek·Kimi·Qwen·Mistral·MiniMax·OpenRouter·Groq</td><td class="bad">미확인</td><td>사용 없음</td><td>평가 전까지 라우팅 제외. Groq 94.9% 실패, Qwen(DashScope) 계정 연체 이력</td></tr></table><p class="src">품질점수는 질문 종류가 서로 달라 직접 비교가 불가하고, 채점기가 Claude 계열이면 편향 가능성이 있음 [DB 조회 chat_messages]. codex로만 기록된 727건은 채점 0건</p>
+<h2>5. 리스크</h2>
+<table>
+<tr><th>리스크</th><th>영향</th><th>대응</th></tr>
+<tr><td>Opus 5.5의 동작 차이 (공식 breaking changes: 강제 tool_choice, thinking 끄기 금지 등)</td><td>일부 경로 오류 가능</td><td>CLI 릴레이 경로는 해당 옵션을 쓰는지 착수 전 확인. 이미 262콜이 정상 처리됨 [DB 조회]</td></tr>
+<tr><td>Haiku 4.5 은퇴</td><td>백그라운드 전체 중단</td><td>10-15 전에 대체 모델 비교·전환 경로 준비</td></tr>
+<tr><td>OpenAI·Google 가격은 검색 요약 기반</td><td>단가 오차 가능</td><td>공식 페이지 원문 대조 후 등록부 pricing 갱신</td></tr>
+<tr><td>라우팅 기준 5곳 분산</td><td>바꿔도 다른 곳이 덮어씀</td><td>단일 정본(intent_policies + runner_model_config)으로 통합하고 나머지는 읽기 전용으로</td></tr>
+</table>
+</body>
+</html>

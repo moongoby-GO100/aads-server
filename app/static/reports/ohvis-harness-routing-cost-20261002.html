@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>오비스 하네스·AI 모델 라우팅 성능/비용 최적화 분석 — 2026-10-02</title>
+<style>
+:root{--fg:#1d1f23;--dim:#5f6670;--line:#dfe3e8;--bg:#fff;--card:#f6f8fa;--bar:#3b6fb6;--warn:#b35c00;--bad:#b42318;--ok:#1a7f37}
+@media (prefers-color-scheme:dark){:root{--fg:#e6e8eb;--dim:#9aa3ad;--line:#30363d;--bg:#0f1115;--card:#171a20;--bar:#6c9be0;--warn:#e3a34a;--bad:#f07167;--ok:#4cc38a}}
+body{font-family:-apple-system,"Pretendard","Noto Sans KR",sans-serif;color:var(--fg);background:var(--bg);max-width:1080px;margin:0 auto;padding:28px 20px 60px;line-height:1.6}
+h1{font-size:24px;margin:0 0 4px}h2{font-size:19px;margin:36px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}h3{font-size:16px;margin:22px 0 8px}
+.meta{color:var(--dim);font-size:13px}
+.summary{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:18px 0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:14px 0}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi b{display:block;font-size:22px}.kpi span{color:var(--dim);font-size:12.5px}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0 4px}
+th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.src{color:var(--dim);font-size:12px}
+.bad{color:var(--bad);font-weight:600}.warn{color:var(--warn);font-weight:600}.ok{color:var(--ok);font-weight:600}
+.barrow{display:grid;grid-template-columns:230px 1fr 90px;align-items:center;gap:10px;font-size:13px;margin:5px 0}
+.bartrack{background:var(--card);border-radius:3px;height:14px}
+.barfill{background:var(--bar);height:14px;border-radius:3px}
+.barval{text-align:right;font-variant-numeric:tabular-nums}
+code{background:var(--card);padding:1px 5px;border-radius:4px;font-size:12.5px}
+.tag{display:inline-block;font-size:11.5px;border:1px solid var(--line);border-radius:10px;padding:0 7px;color:var(--dim)}
+</style>
+</head>
+<body>
+<h1>오비스(OHVIS) 하네스 · AI 모델 라우팅 — 최고성능 구현 + 비용 최적화 분석</h1>
+<div class="meta">작성 2026-10-02 15:45 KST · 분석 구간: 최근 7일(2026-09-25 ~ 2026-10-02) · 대상: contabo116 aads-server · 작성: AADS CTO AI (claude-opus-5-5)</div>
+
+<div class="summary">
+<b>결론.</b> 비용과 지연의 대부분은 모델 단가 때문이 아닙니다. <b>CEO 채팅이 모든 의도(intent)에 대해 Opus로 고정</b>되어 있고, Opus 한 턴이 평균 <b>약 290만 토큰의 캐시를 다시 읽는</b> 구조(약 4만 자 시스템 프롬프트 × 도구 반복 호출)라서 생깁니다.
+여기에 <b>죽은 경로가 계속 호출</b>되고 있습니다. 백그라운드 1순위 Groq은 실패율 94.9%, 러너 Codex gpt-5.6 계열은 실패율 100%입니다. 또 <b>비용 원장 두 개가 서로 35배 차이</b>가 나서, 지금 상태로는 어느 쪽이 맞는지 최적화 효과를 측정할 수 없습니다.<br>
+<b>핵심 개선 3개(P0):</b> ① 고정 모델을 '하한(floor)'이 아닌 '상한(ceiling)'으로 바꿔서 의도별 하향 라우팅을 실제로 켠다 ② 컨텍스트 다이어트(시스템 프롬프트 중복 제거 + 도구 결과 압축 + 도구 반복 상한) ③ 죽은 모델 경로를 제거하고 서킷브레이커를 단다.
+</div>
+
+<div class="summary" style="border-color:var(--warn)"><b class="warn">정정 (2026-10-02 15:45 KST)</b> — Codex gpt-5.6 실패율 100%는 <b>러너 CLI 경로(runner_codex_cli)에만</b> 해당합니다. 마지막 실패는 09-30 18:03 KST였고, 이후 러너 체인은 gpt-6 계열로 바뀌었습니다. 채팅 경로(codex_relay)의 GPT-5.6 Sol은 43콜 중 실패 0건입니다. 따라서 아래 표에서 intent_policies의 codex 모델을 "죽은 경로"로 분류한 부분은 철회합니다. 조치 C는 백그라운드 Groq 경로만 대상으로 합니다(runner-a5bb1225).</div>
+<div class="kpis">
+<div class="kpi"><b>67.7%</b><span>채팅 턴 중 Opus 처리 비중 (1,674 / 2,472)</span></div>
+<div class="kpi"><b>79.7%</b><span>7일 원장 비용 중 Opus-5 CLI 릴레이 비중 ($10,400 / $13,048)</span></div>
+<div class="kpi"><b>2.91M</b><span>Opus-5 릴레이 1콜당 평균 캐시 읽기 토큰</span></div>
+<div class="kpi"><b>94.9%</b><span>백그라운드 LLM 1순위(Groq) 실패율 (2,368 / 2,496)</span></div>
+<div class="kpi"><b>15.1%</b><span>채팅 턴 중단율 (373 / 2,472)</span></div>
+<div class="kpi"><b>0.04%</b><span>fallback_chain 기록률 (1 / 2,472) — 폴백 관측 불가</span></div>
+</div>
+<div class="src">출처: chat_turn_executions · oauth_usage_log · bg_llm_usage_log · compiled_prompt_provenance · intent_policies [DB 조회, 2026-10-02 15:33~15:40 KST]</div>
+
+<h2>1. 현재 구조 (코드 실측)</h2>
+<table>
+<tr><th>계층</th><th>모듈</th><th>역할</th><th>관찰</th></tr>
+<tr><td>하네스 레지스트리</td><td><code>app/services/ohvis_harness.py</code> (1,291줄)</td><td>스킬 레지스트리, 위험 정책(read/write/deploy/auth/financial), Wiki·오류사전 조회, LLMOps 원장 8테이블</td><td>"읽기 지향" 계약 계층. 라우팅 결정에는 관여하지 않음 → <span class="warn">하네스 관측값(trace·score)이 라우팅에 피드백되지 않음</span></td></tr>
+<tr><td>트레이스</td><td><code>ohvis_harness_trace.py</code> (235줄)</td><td>ohvis_harness_traces 기록 (M4에서 latency_ms 충전, 93.85%)</td><td>지연시간은 쌓이지만 모델 선택에는 쓰지 않음</td></tr>
+<tr><td>의도 분류</td><td><code>intent_router.py</code> (949줄)</td><td>intent 판정</td><td>17개 intent 정책이 DB <code>intent_policies</code>에 있음</td></tr>
+<tr><td>모델 선택·스트리밍</td><td><code>model_selector.py</code> (호스트 6,153줄 / 컨테이너 6,392줄)</td><td>OAuth 슬롯 1~4 순환, CLI 릴레이, Codex, LiteLLM(Gemini/DeepSeek/Groq/Qwen 등), BYOK, 쿨다운, 의도 정책 cascade</td><td><span class="warn">단일 파일 6천 줄 이상 모놀리스</span>, 호스트와 컨테이너 줄 수 불일치(미확인 배포 차이). 릴레이 재시도 최대 <code>30회 × 3초 = 90초</code></td></tr>
+<tr><td>백그라운드 LLM</td><td><code>app/core/anthropic_client.py</code> <code>call_llm_with_fallback</code></td><td>1순위 <code>LLM_BG_PRIMARY_MODEL=groq-gpt-oss-120b</code> → Haiku 폴백</td><td><span class="bad">1순위가 실제로는 거의 항상 실패</span> → 매번 실패를 한 번 겪은 뒤 Haiku로 넘어감</td></tr>
+</table>
+
+<h2>2. 실측 — 어디서 비용과 지연이 나오나</h2>
+<h3>2-1. 7일 비용 원장 (oauth_usage_log, cost_usd 기준)</h3>
+<div class="barrow"><span>claude-opus-5 · cli_relay (869콜)</span><div class="bartrack"><div class="barfill" style="width:100%"></div></div><span class="barval">$10,400</span></div>
+<div class="barrow"><span>GPT-6 Astra · codex_relay (139콜)</span><div class="bartrack"><div class="barfill" style="width:15.6%"></div></div><span class="barval">$1,618</span></div>
+<div class="barrow"><span>GPT-5.6 Sol · codex_relay (43콜)</span><div class="bartrack"><div class="barfill" style="width:3.0%"></div></div><span class="barval">$311</span></div>
+<div class="barrow"><span>GPT-6 Sol · codex_relay (173콜)</span><div class="bartrack"><div class="barfill" style="width:2.3%"></div></div><span class="barval">$240</span></div>
+<div class="barrow"><span>claude-opus-5-5 · cli_relay (262콜)</span><div class="bartrack"><div class="barfill" style="width:2.0%"></div></div><span class="barval">$211</span></div>
+<div class="barrow"><span>claude-sonnet-5-5 · runner CLI (111콜)</span><div class="bartrack"><div class="barfill" style="width:1.4%"></div></div><span class="barval">$144</span></div>
+<div class="barrow"><span>claude-haiku-4-5 · bg 폴백 (920콜)</span><div class="bartrack"><div class="barfill" style="width:0.1%"></div></div><span class="barval">$3</span></div>
+<div class="src">[DB 조회] 막대 길이는 opus-5 릴레이 비용 대비 비율. 이 금액은 OAuth 구독 경로라서 실제 청구액이 아니라 원장 환산값이다(3절 참조).</div>
+
+<h3>2-2. 토큰 구조 — Opus 비용의 정체</h3>
+<table>
+<tr><th>경로</th><th class="n">콜</th><th class="n">입력(비캐시)</th><th class="n">캐시 읽기</th><th class="n">캐시 생성</th><th class="n">출력</th><th class="n">콜당 캐시 읽기</th></tr>
+<tr><td>claude-opus-5 · cli_relay</td><td class="n">869</td><td class="n">21,244</td><td class="n">2,532,814,647</td><td class="n">64,447,252</td><td class="n">9,435,723</td><td class="n bad">2,914,631</td></tr>
+<tr><td>claude-opus-5-5 · cli_relay</td><td class="n">262</td><td class="n">1,594</td><td class="n">73,667,906</td><td class="n">9,794,362</td><td class="n">1,046,167</td><td class="n">281,175</td></tr>
+<tr><td>claude-sonnet-5-5 · runner</td><td class="n">111</td><td class="n">32,666</td><td class="n">170,258,079</td><td class="n">8,246,794</td><td class="n">2,229,183</td><td class="n">1,533,857</td></tr>
+<tr><td>GPT-6 Astra · codex_relay</td><td class="n">139</td><td class="n">157,733,271</td><td class="n">0 (미기록)</td><td class="n">0</td><td class="n">811,855</td><td class="n warn">입력 1.13M/콜</td></tr>
+</table>
+<p>Opus-5 릴레이에서 <b>캐시 읽기 : 출력 = 약 268 : 1</b>입니다. 한 턴 안에서 도구를 부를 때마다 약 4만 자짜리 시스템 프롬프트(compiled_prompt_provenance 평균 40,316자, p95 42,849자)와 그때까지 쌓인 도구 결과를 통째로 다시 읽습니다. 단가가 낮은 캐시 읽기라도 턴당 수백만 토큰이 쌓이면 지배적인 비용이 됩니다. 같은 Opus 계열인데도 opus-5-5 경로는 콜당 28만 토큰으로 <b>10배 적습니다</b>. 즉 모델이 아니라 <b>세션·턴 구성 방식</b>이 비용을 결정합니다. <span class="src">[DB 조회 · 원인 해석은 추론, 턴별 도구 반복 횟수는 미측정]</span></p>
+
+<h3>2-3. 라우팅이 실제로 어떻게 움직였나</h3>
+<table>
+<tr><th>요청 모델 → 실제 모델</th><th class="n">턴</th><th>해석</th></tr>
+<tr><td>claude-opus-5 → claude-opus-5</td><td class="n">1,377</td><td>워크스페이스 고정 모델이 그대로 사용됨</td></tr>
+<tr><td>claude-opus-5 → (기록 없음)</td><td class="n bad">276</td><td>중단 턴. 실제 모델이 남지 않음</td></tr>
+<tr><td>claude-opus-5-5 → claude-opus-5-5</td><td class="n">242</td><td></td></tr>
+<tr><td>claude-opus-5-5 → claude-sonnet-5-5</td><td class="n">73</td><td>하향 폴백 발생 — 그런데 fallback_chain에는 기록이 없음</td></tr>
+<tr><td>claude-opus-5 → gpt-5.6-sol / gpt-6-astra / mixture</td><td class="n">130</td><td>공급자 교차 폴백</td></tr>
+</table>
+<p><b>intent_policies</b> 17개는 status_check·task_query를 Haiku 기본으로 두는 등 설계상으로는 계층형입니다. 하지만 ① 17개 모두 <code>cascade_downgrade=false</code>이고 ② 요청 모델이 고정되면 그 모델을 그대로 써서, <b>"~됐나?" 같은 단순 조회도 Opus로 처리</b>됩니다. 또 정책의 기본값이 구세대 id(<code>claude-sonnet-5</code>, <code>claude-opus-5</code>)와 실패 중인 <code>codex:gpt-5.6-sol</code>, <code>codex:gpt-5.5</code>를 가리킵니다. <span class="src">[DB 조회 intent_policies]</span></p>
+
+<h3>2-4. 실패·지연</h3>
+<table>
+<tr><th>항목</th><th class="n">실측</th><th>판정</th></tr>
+<tr><td>백그라운드 1순위 groq-gpt-oss-120b</td><td class="n">2,496콜 중 2,368 실패 (94.9%)<br>2026-09-28 10:36 → 10-02 15:33 KST 계속</td><td class="bad">죽은 경로. 2026-09 PRD v2 R-9에서 이미 지적됐지만 미조치</td></tr>
+<tr><td>러너 Codex gpt-5.6-sol / gpt-5.6-luna</td><td class="n">oauth 20콜 20실패(exit_1)<br>runner 총계 96.3% / 100%</td><td class="bad">은퇴 모델이 체인에 남아 시간만 소모</td></tr>
+<tr><td>러너 claude-sonnet-5-5 (job 단위)</td><td class="n">168건 중 129 실패 (76.8%), p50 13분</td><td class="warn">AI 리뷰 반려 등이 섞인 job 단위 값. 모델 실패율로 단정하면 안 됨</td></tr>
+<tr><td>러너 시도 단위 p50</td><td class="n">gpt-6-luna 42초 · gpt-6-sol 151초 · sonnet-5-5 100초(n=8)</td><td>시도 단위 모델 라벨의 상당수가 "unverified" → 비교 신뢰도 낮음</td></tr>
+<tr><td>채팅 중단 373건 사유</td><td class="n">superseded 249 · first_response_timeout 36 · completion_contract 34 · provider_error 27</td><td class="warn">시스템성 중단 약 105건(4.2%)</td></tr>
+<tr><td>OAuth primary 슬롯</td><td class="n">5시간 사용률 최대 0.99 · 7일 최대 0.80</td><td class="warn">슬롯 2·3·4는 사용률 헤더가 미기록 → 분산 판단 불가</td></tr>
+</table>
+
+<h2>3. 비용 원장 신뢰도 문제</h2>
+<table>
+<tr><th>cost_source</th><th class="n">행</th><th class="n">cost_usd</th><th class="n">cost_usd_catalog</th><th class="n">배율</th></tr>
+<tr><td>relay_reported</td><td class="n">1,304</td><td class="n">$10,855.55</td><td class="n">$305.88</td><td class="n bad">35.5×</td></tr>
+<tr><td>catalog_estimated</td><td class="n">355</td><td class="n">$2,168.61</td><td class="n">$2,272.14</td><td class="n">0.95×</td></tr>
+<tr><td>unknown</td><td class="n">956</td><td class="n">$24.33</td><td class="n">$6.41</td><td class="n">3.8×</td></tr>
+</table>
+<p>같은 행에 대한 두 금액이 35배 차이 납니다. 어느 값이 맞는지는 <b>미검증</b>입니다. 릴레이가 캐시 읽기를 정가로 계산했거나, 카탈로그 쪽에 Opus-5 단가가 빠졌을 가능성이 있습니다. OAuth 구독 경로에서는 실제 제약이 달러가 아니라 <b>5시간/7일 사용률</b>입니다. 따라서 최적화의 주 지표를 "콜당 토큰"과 "슬롯 사용률"로 바꾸고, 달러는 단가표 하나로 통일해야 합니다.</p>
+
+<h2>4. 문제점 · 영향</h2>
+<table>
+<tr><th>#</th><th>문제점</th><th>원인</th><th>근거</th><th>영향</th></tr>
+<tr><td>1</td><td>단순 조회도 Opus로 처리</td><td>고정 모델이 intent 정책보다 우선함. cascade_downgrade 전부 false</td><td>Opus 67.7% 턴 [DB]</td><td>사용률 소진(primary 5h 0.99), 응답 지연</td></tr>
+<tr><td>2</td><td>턴당 캐시 읽기 폭증</td><td>약 4만 자 프롬프트(중복 규칙 다수) × 도구 반복 × 도구 결과 원문 누적</td><td>2.91M/콜 [DB]</td><td>비용·한도의 80% 차지, 첫 토큰 지연</td></tr>
+<tr><td>3</td><td>죽은 경로 상시 호출</td><td>Groq 1순위 env 기본값, 은퇴한 Codex 모델이 정책에 남음</td><td>94.9% / 100% 실패 [DB]</td><td>매 호출마다 실패 1회분 지연, 러너 시간 낭비</td></tr>
+<tr><td>4</td><td>폴백·실모델 관측 불가</td><td>fallback_chain 미기록, 모델 라벨 24종 비정규화, actual_model 누락 276건</td><td>1/2,472 [DB]</td><td>라우팅 품질을 학습·개선할 데이터가 없음</td></tr>
+<tr><td>5</td><td>비용 원장 불일치</td><td>relay_reported와 catalog 이중 기준</td><td>35.5× [DB]</td><td>최적화 효과를 측정할 수 없음</td></tr>
+<tr><td>6</td><td>하네스가 라우팅에 피드백하지 않음</td><td>ohvis_harness는 조회 전용 계약, trace latency·리뷰 점수가 선택기로 가지 않음</td><td>코드 구조 [코드 확인]</td><td>"진화"가 수동 정책 수정에만 의존</td></tr>
+<tr><td>7</td><td>릴레이 재시도가 김</td><td>30회 × 3초 고정 간격</td><td>model_selector.py:51-52 [코드]</td><td>장애 시 최대 90초 무응답 후 폴백</td></tr>
+</table>
+
+<h2>5. 개선안 비교</h2>
+<table>
+<tr><th>옵션</th><th>내용</th><th>기대효과</th><th>리스크</th><th>판정</th></tr>
+<tr><td>A. 상한형 라우팅 (권장)</td><td>워크스페이스 고정 모델을 '상한'으로 해석한다. status_check·task_query·greeting·runner_response는 Haiku/Sonnet으로, report·diagnosis는 Sonnet-5-5로 보내고, cto_strategy·심층분석·고위험만 Opus를 쓴다. CEO가 명시하면 고정 유지</td><td>Opus 턴 비중 67.7% → 목표 30% 이하 [미측정 목표치]</td><td>품질 저하 우려 → 리뷰 점수·재질문률로 A/B 검증</td><td class="ok">권장</td></tr>
+<tr><td>B. 컨텍스트 다이어트 (권장, A와 병렬)</td><td>시스템 프롬프트 중복 L1 규칙 통합(목표 2만 자 이하), 도구 결과 요약 저장(recall_tool_result로 원문 접근), 턴당 도구 라운드 상한, 장기 턴은 서브에이전트로 위임</td><td>콜당 캐시 읽기 2.9M → 목표 1M 이하 [미측정 목표치]</td><td>규칙 누락 → provenance 회귀 테스트로 방지</td><td class="ok">권장</td></tr>
+<tr><td>C. 죽은 경로 제거 + 서킷브레이커</td><td>bg 1순위를 Haiku 또는 로컬 모델로 교체(Groq 원인 확인 후 재편입). intent_policies에서 gpt-5.6-*/gpt-5.5 제거. 5분 실패율 50%가 넘는 경로는 자동 차단</td><td>bg 실패율 94.9% → 5% 미만</td><td>낮음</td><td class="ok">권장 (즉시)</td></tr>
+<tr><td>D. 관측 정규화</td><td>fallback_chain·actual_model 필수 기록, 모델 라벨 정규화 함수 1곳, 비용 단가표 단일화</td><td>라우팅 효과 측정이 가능해짐</td><td>낮음</td><td class="ok">권장</td></tr>
+<tr><td>E. 하네스 → 라우터 피드백</td><td>ohvis_harness_traces latency·리뷰 점수·실패율을 intent×model 점수로 집계해 선택기에 반영(밴딧)</td><td>자동 최적화 루프</td><td>D가 선행되지 않으면 잘못된 데이터로 학습함</td><td>대안 (D 후)</td></tr>
+<tr><td>F. 전 턴 저가 모델 일괄 강등</td><td>기본 모델을 Sonnet으로 고정</td><td>비용 즉시 감소</td><td>전략·장애 분석 품질 저하, CEO 지시와 충돌</td><td class="bad">비권장</td></tr>
+</table>
+
+<h2>6. 실행 계획</h2>
+<table>
+<tr><th>순위</th><th>조치</th><th>병렬</th><th>의존</th><th>검증기준</th></tr>
+<tr><td>P0</td><td>C: bg 1순위 교체 + intent_policies 은퇴 모델 제거 (anthropic_client.py env 기본값, intent_policies UPSERT)</td><td>A</td><td>없음</td><td>bg_llm_usage_log 24시간 실패율 &lt; 5%, runner Codex exit_1 0건</td></tr>
+<tr><td>P0</td><td>D: fallback_chain·actual_model 기록 + 라벨 정규화</td><td>A</td><td>없음</td><td>신규 턴 fallback 발생분 기록률 100%, distinct label ≤ 10</td></tr>
+<tr><td>P0</td><td>A: 상한형 라우팅 (model_selector._resolve_governed_intent_model)</td><td>B</td><td>D 후 (효과 측정용)</td><td>7일 Opus 턴 비중 ≤ 30%, 리뷰 점수·재질문률 비열화</td></tr>
+<tr><td>P1</td><td>B: 프롬프트 다이어트 + 도구 결과 압축 + 라운드 상한</td><td>B</td><td>없음</td><td>콜당 cache_read ≤ 1M, compiled system_prompt_chars ≤ 20,000</td></tr>
+<tr><td>P1</td><td>비용 원장 단일화 + 슬롯 2~4 사용률 헤더 수집</td><td>C</td><td>D 후</td><td>relay vs catalog 배율 0.9~1.1×</td></tr>
+<tr><td>P2</td><td>릴레이 재시도 지수 백오프(최대 20초) + E 피드백 루프 + model_selector 분할</td><td>—</td><td>A·D 후</td><td>first_response_timeout 중단 50% 감소</td></tr>
+</table>
+
+<h2>7. 한계 · 미검증</h2>
+<ul>
+<li>Groq 실패의 근본 원인(키·한도·LiteLLM 라우트)은 이번 조사에서 확인하지 못했습니다. 최근 30분 컨테이너 로그에 관련 줄이 없었습니다.</li>
+<li>달러 금액은 원장 환산값이며 실제 청구액이 아닙니다. 두 기준이 35배 차이 나므로 절대 금액보다 비중으로 읽어야 합니다.</li>
+<li>기대효과 목표치는 측정값이 아닌 목표입니다. 4절 검증기준으로 판정합니다.</li>
+<li>model_selector.py는 호스트(6,153줄)와 컨테이너(6,392줄)가 서로 다릅니다. 배포 이미지와 작업 트리의 차이는 별도로 확인해야 합니다.</li>
+</ul>
+<div class="src">조회 쿼리: chat_turn_executions(requested/actual_model, status, interrupt_category, fallback_chain) · oauth_usage_log(model, call_source, tokens, cost_source, unified_*) · bg_llm_usage_log · intent_policies · compiled_prompt_provenance · llm_response_metrics(168h)</div>
+</body>
+</html>
