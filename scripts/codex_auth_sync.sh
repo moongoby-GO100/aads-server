@@ -286,4 +286,67 @@ check_account_homes() {
 
 check_account_homes || log "ACCOUNT_SCAN: 예외 발생 — 건너뜀"
 
+# ── DB 사본 감시 (2026-10-02 추가) ──
+#
+# llm_api_keys(provider='codex') 의 암호화 JSON 은 app/core/codex_oauth.py 가 갱신 때마다
+# 회전된 refresh_token 을 되써야 유지된다. 위 계정 홈 감시는 auth.json 파일만 보므로
+# DB 사본만 있는 계정(auth.json 없음)은 조용히 죽어 있어도 아무도 몰랐다.
+# 여기서는 **행 메타(key_name·시각)만** 읽는다. encrypted_value 는 SELECT 하지 않고,
+# 토큰 엔드포인트로 DB 토큰을 검증하지 않는다 — refresh 호출 자체가 회전을 일으켜
+# 정본을 무효화한다.
+DB_COPY_STALE_DAYS="${DB_COPY_STALE_DAYS:-7}"
+DB_COPY_ALERT_STAMP="${DB_COPY_ALERT_STAMP:-/var/tmp/codex_db_copy_alert.stamp}"
+PG_CONTAINER="${PG_CONTAINER:-aads-postgres}"
+
+check_db_copies() {
+    local root="${CODEX_ACCOUNTS_ROOT:-/root/.codex-accounts}"
+    local rows key age_sec rotated_sec created_age_sec has_file age_days risks="" reason
+    rows="$(docker exec "$PG_CONTAINER" psql -U "${PGUSER:-aads}" -d "${PGDATABASE:-aads}" -qAt -F '|' -c \
+        "SELECT key_name,
+                COALESCE(EXTRACT(EPOCH FROM (NOW() - updated_at))::bigint, -1),
+                COALESCE(EXTRACT(EPOCH FROM (updated_at - created_at))::bigint, 0),
+                COALESCE(EXTRACT(EPOCH FROM (NOW() - created_at))::bigint, 0)
+           FROM llm_api_keys WHERE provider = 'codex' AND is_active ORDER BY key_name" 2>&1)" || {
+        log "DBCOPY: llm_api_keys 조회 실패 — ${rows:0:150}"
+        return 0
+    }
+    while IFS='|' read -r key age_sec rotated_sec created_age_sec; do
+        [[ -n "$key" ]] || continue
+        has_file=0
+        if [[ -f "${root}/${key}/auth.json" ]]; then has_file=1; fi
+        if [[ "$age_sec" == "-1" ]]; then
+            age_days="미상"
+        else
+            age_days=$(( age_sec / 86400 ))
+        fi
+        log "DBCOPY $key: 마지막 갱신 ${age_days}일 전 / 회전 흔적 ${rotated_sec}초 / auth.json $([[ $has_file -eq 1 ]] && echo 있음 || echo 없음)"
+        reason=""
+        if [[ "$age_sec" == "-1" || "$age_sec" -gt $(( DB_COPY_STALE_DAYS * 86400 )) ]]; then
+            reason="마지막 갱신 ${age_days}일 (>${DB_COPY_STALE_DAYS}일)"
+        elif [[ $has_file -eq 0 && "$rotated_sec" -lt 60 && "$created_age_sec" -gt 86400 ]]; then
+            reason="auth.json 없음 + 회전 흔적 없음"
+        fi
+        if [[ -n "$reason" ]]; then
+            log "DBCOPY $key: DB 사본 위험 — $reason"
+            risks="${risks}
+- ${key}: ${reason}"
+        fi
+    done <<< "$rows"
+
+    if [[ -n "$risks" ]]; then
+        # 하루 1회만 보낸다 (30분 크론이 같은 경보를 48번 내지 않게)
+        local today last=""
+        today="$(TZ=Asia/Seoul date +%F)"
+        [[ -f "$DB_COPY_ALERT_STAMP" ]] && last="$(cat "$DB_COPY_ALERT_STAMP" 2>/dev/null || true)"
+        if [[ "$last" != "$today" ]]; then
+            send_telegram "🟡 [Codex Auth] ${NODE_LABEL} DB 사본 위험 — 토큰 회전값이 DB 에 저장되지 않았을 수 있다. 사용 시 401 이면 재로그인 필요:${risks}"
+            echo "$today" > "$DB_COPY_ALERT_STAMP" 2>/dev/null || true
+        else
+            log "DBCOPY: 오늘 이미 경보함 — 재전송 생략"
+        fi
+    fi
+}
+
+check_db_copies || log "DBCOPY_SCAN: 예외 발생 — 건너뜀"
+
 exit 0
