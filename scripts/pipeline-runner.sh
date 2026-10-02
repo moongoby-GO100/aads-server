@@ -1373,6 +1373,49 @@ $(review_diff_stat_section "$repo" "미커밋 변경 — git diff HEAD --stat" H
     return 0
 }
 
+# 서버 재시작/러너 종료로 재큐잉된 적이 있는 job 인가 (review_feedback 의 재큐잉 표지).
+job_was_requeued() {
+    local job_id="$1" flag=""
+    [[ "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ ]] || return 1
+    flag=$(db_exec "SELECT CASE WHEN position('[SERVER_RESTART_REQUEUE]' in COALESCE(review_feedback,'')) > 0
+                                 OR position('[RUNNER_SHUTDOWN_REQUEUE]' in COALESCE(review_feedback,'')) > 0
+                           THEN 1 ELSE 0 END FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || flag=""
+    flag="${flag//[[:space:]]/}"
+    [[ "$flag" == "1" ]]
+}
+
+# 재큐잉 job 의 워크트리에서 "지시서가 언급하지 않은 기존 추적 파일의 수정/삭제" 를 찾는다.
+# 2026-10-02 GO100 4건은 재큐잉 뒤 지시서와 무관한 card119/키움 수집기 파일 11개가
+# actual_changed_files 에 섞여 들어왔다. 새 파일(A)은 워커가 정당하게 만들므로 보지 않고,
+# docs/HANDOVER.md 는 R-001 로 모든 job 이 고치므로 제외한다. 파일을 되돌리거나 지우지 않는다.
+# stdout: 위반 경로(한 줄에 하나). 반환: 0=위반 없음/적용 대상 아님, 1=위반 있음.
+# 끄는 법: RUNNER_REQUEUE_SCOPE_GUARD=0
+requeue_scope_violations() {
+    local job_id="$1" worktree_dir="$2" instruction="$3" pre_exec_sha="${4:-}"
+    [[ "${RUNNER_REQUEUE_SCOPE_GUARD:-1}" == "1" ]] || return 0
+    job_was_requeued "$job_id" || return 0
+    local changed="" committed="" head_sha="" path base dir violations=""
+    changed=$(git -C "$worktree_dir" diff --name-only --diff-filter=MDTR HEAD 2>/dev/null) || changed=""
+    head_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null) || head_sha=""
+    if [[ "$pre_exec_sha" =~ ^[0-9a-f]{40}$ && -n "$head_sha" && "$pre_exec_sha" != "$head_sha" ]]; then
+        committed=$(git -C "$worktree_dir" diff --name-only --diff-filter=MDTR "${pre_exec_sha}..${head_sha}" 2>/dev/null) || committed=""
+    fi
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        case "$path" in
+            .runner_full_diff.patch|HANDOVER.md|*/HANDOVER.md) continue ;;
+        esac
+        base="${path##*/}"
+        dir="${path%/*}"
+        [[ "$instruction" == *"$path"* || "$instruction" == *"$base"* ]] && continue
+        [[ "$path" == */* && "$instruction" == *"$dir"* ]] && continue
+        violations+="${path}"$'\n'
+    done < <(printf '%s\n%s\n' "$changed" "$committed" | sed '/^[[:space:]]*$/d' | sort -u)
+    [[ -z "$violations" ]] && return 0
+    printf '%s' "$violations"
+    return 1
+}
+
 # 계약: stdout 은 40자 hex commit SHA 단 하나만 낸다 — 호출부가
 # `approval_commit_sha=$(commit_job_worktree_for_approval ...)` 로 그대로
 # 캡처한다. 정보성 로그는 반드시 stderr(`log ... >&2`)로 보내라 — 2026-09-18
@@ -1387,10 +1430,32 @@ commit_job_worktree_for_approval() {
     fi
     # .runner_full_diff.patch 는 사람이 보라고 워크트리에 남기는 파일이다. .gitignore 와
     # 무관하게(과거 커밋을 체크아웃해 추적 상태로 돌아온 경우 포함) 커밋에 넣지 않는다.
-    { git -C "$worktree_dir" add -A -- . && { git -C "$worktree_dir" reset -q -- .runner_full_diff.patch || true; }; } >/dev/null 2>&1 || {
-        _fail_job "$job_id" "$session_id" "approval_commit_stage_failed" "awaiting_approval 거부 — runner worktree stage 실패"
+    # 재큐잉을 거친 job 이면 지시서가 언급하지 않은 기존 파일의 변경을 스테이징 전에 막는다.
+    # 파일을 되돌리거나 지우지 않는다 — 차단하고 보고할 뿐이며 워크트리는 그대로 남는다.
+    local scope_violations=""
+    if scope_violations=$(requeue_scope_violations "$job_id" "$worktree_dir" "$instruction" "$pre_exec_sha"); then
+        :
+    else
+        local scope_list
+        scope_list=$(printf '%s\n' "$scope_violations" | head -20 | tr '\n' ',' | sed 's/,$//')
+        _fail_job "$job_id" "$session_id" "approval_requeue_scope_violation" \
+            "awaiting_approval 거부 — 재큐잉 job 의 워크트리에 지시서 밖 파일 변경이 있음(워크트리 보존, 자동 되돌림 없음): ${scope_list:0:900}"
         return 1
-    }
+    fi
+    # stderr 를 버리면 실패 원인이 영영 남지 않는다 — 2026-10-02 GO100 4건이
+    # 같은 approval_commit_stage_failed 로 끝났는데 git 의 오류 문구가 없어 원인 확정이 불가능했다.
+    local stage_err stage_rc=0
+    stage_err=$(mktemp "/tmp/pipeline-approval-stage-${job_id}.err.XXXXXX")
+    { git -C "$worktree_dir" add -A -- . && { git -C "$worktree_dir" reset -q -- .runner_full_diff.patch || true; }; } >/dev/null 2>"$stage_err" || stage_rc=$?
+    if [[ "$stage_rc" -ne 0 ]]; then
+        local stage_msg
+        stage_msg=$(head -c 1024 "$stage_err" | tr -d '\r' | mask_git_diagnostics | head -c 1024)
+        record_git_diagnostics "$job_id" "approval_commit_stage_failed" "$worktree_dir" "$stage_rc" "" "$stage_msg" >/dev/null
+        rm -f "$stage_err"
+        _fail_job "$job_id" "$session_id" "approval_commit_stage_failed" "awaiting_approval 거부 — runner worktree stage 실패 (rc=${stage_rc}): ${stage_msg:-stderr 없음}"
+        return 1
+    fi
+    rm -f "$stage_err"
     # 워커가 격리 워크트리 안에서 자기 변경을 이미 커밋해 두는 경우가 있다.
     # 그러면 스테이징에 남는 것이 없어 git commit 이 1 을 반환하고, 그것을
     # 실패로 처리하면 멀쩡한 산출물이 통째로 버려진다 — 2026-09-17 13:08 KST
@@ -1477,6 +1542,19 @@ job_target_files() {
     printf '%s\n' "$files" | sed '/^[[:space:]]*$/d' | sort -u
 }
 
+# cwd 가 해당 디렉터리 안인 프로세스 PID 목록(공백 구분). 없으면 빈 문자열.
+worktree_busy_pids() {
+    local dir="$1" p cwd out=""
+    [[ -n "$dir" && -d "$dir" ]] || return 0
+    for p in /proc/[0-9]*; do
+        [[ "${p#/proc/}" == "$$" || "${p#/proc/}" == "${BASHPID:-$$}" ]] && continue
+        cwd=$(readlink "$p/cwd" 2>/dev/null) || continue
+        [[ "$cwd" == "$dir" || "$cwd" == "$dir"/* ]] && out+="${p#/proc/} "
+    done
+    printf '%s' "${out% }"
+    return 0
+}
+
 prepare_clean_job_worktree() {
     local job_id="$1" project="$2" session_id="$3" main_workdir="$4" worktree_dir="$5"
 
@@ -1499,6 +1577,11 @@ prepare_clean_job_worktree() {
     }
 
     if [[ -e "$worktree_dir" ]]; then
+        # 재큐잉이면 이전 실행의 워커 프로세스가 같은 경로에서 아직 돌 수 있다. 지우기 전에 증거만 남긴다
+        # (종료시키지 않는다 — 프로세스 정리는 이 함수의 일이 아니다).
+        local _busy_pids
+        _busy_pids=$(worktree_busy_pids "$worktree_dir")
+        [[ -n "$_busy_pids" ]] && log "  WORKTREE_REUSE_PATH_BUSY job=$job_id path=$worktree_dir pids=${_busy_pids} — 이전 실행 프로세스가 같은 경로를 쓰는 중, 기존 워크트리를 재생성함" >&2
         git -C "$main_workdir" worktree remove "$worktree_dir" --force >/dev/null 2>&1 || rm -rf "$worktree_dir" 2>/dev/null || true
     fi
     git -C "$main_workdir" worktree add --detach "$worktree_dir" origin/main >/dev/null 2>&1 || {

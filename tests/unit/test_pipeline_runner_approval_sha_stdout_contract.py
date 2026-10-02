@@ -89,6 +89,8 @@ record_git_diagnostics() {{
     echo "diag-detail"
 }}
 verify_isolated_job_worktree() {{ return 0; }}
+requeue_scope_violations() {{ return 0; }}
+mask_git_diagnostics() {{ cat; }}
 record_runner_event() {{
     echo "LEAK_EVENT_STDOUT:$2"
     echo "EVENT:$2" >> "$EVENT_LOG_FILE"

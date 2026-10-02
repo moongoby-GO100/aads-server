@@ -307,20 +307,47 @@ sync_one_target() {
     return 0
 }
 
+# 소스 미커밋으로 연속 defer 되면 조용히 성공(exit 0)하지 말고 실패로 드러낸다.
+# 2026-10-02 08:55 KST 부터 공유 체크아웃의 scripts/pipeline-runner.sh 가 미커밋이라
+# 5분 타이머가 257회 넘게 "deferred" 만 찍고 exit 0 으로 끝났다 — 그동안 contabo14 는
+# 핫픽스 이전 스크립트로 돌며 approval_commit_stage_failed 4건을 냈고 아무도 몰랐다.
+DEFER_STATE_FILE="${AADS_RUNNER_SYNC_DEFER_STATE:-/tmp/aads-pipeline-runner-sync.defer-count}"
+DEFER_ESCALATE_AFTER="${AADS_RUNNER_SYNC_DEFER_ESCALATE_AFTER:-6}"
+
+note_source_deferral() {
+    local reason="$1" n=0
+    n=$(cat "$DEFER_STATE_FILE" 2>/dev/null || echo 0)
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    n=$((n + 1))
+    printf '%s' "$n" > "$DEFER_STATE_FILE" 2>/dev/null || true
+    if [[ "$DEFER_ESCALATE_AFTER" =~ ^[0-9]+$ && "$n" -ge "$DEFER_ESCALATE_AFTER" ]]; then
+        log "ERROR sync stalled: ${n} consecutive deferrals (${reason}) — 원격 러너가 최신 정본을 받지 못하고 있다. ${REPO_ROOT} 의 해당 파일을 커밋하거나 정리해야 한다"
+        return 1
+    fi
+    return 0
+}
+
+reset_source_deferral() {
+    rm -f "$DEFER_STATE_FILE" 2>/dev/null || true
+}
+
 main() {
     # The timer must never publish edits from an in-progress shared worktree.
     local source_file committed_sha working_sha
     for source_file in scripts/pipeline-runner.sh scripts/claude_model_contract.py scripts/sync_pipeline_runner_remote.sh scripts/runner_busy_lib.sh scripts/runner_cli_usage.py tools/aag/brief.py; do
         committed_sha=$(git -C "$REPO_ROOT" show "HEAD:${source_file}" 2>/dev/null | sha256sum | awk '{print $1}') || {
             log "source not committed: ${source_file}; sync deferred"
-            return 0
+            note_source_deferral "source not committed: ${source_file}"
+            return $?
         }
         working_sha=$(sha256_file "${REPO_ROOT}/${source_file}")
         if [[ "$committed_sha" != "$working_sha" ]]; then
             log "source has uncommitted changes: ${source_file}; sync deferred"
-            return 0
+            note_source_deferral "source has uncommitted changes: ${source_file}"
+            return $?
         fi
     done
+    reset_source_deferral
     [[ -f "$CANONICAL_RUNNER" ]] || { echo "ERROR: canonical runner missing: $CANONICAL_RUNNER" >&2; exit 2; }
     bash -n "$CANONICAL_RUNNER"
 
