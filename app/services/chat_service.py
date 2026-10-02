@@ -335,6 +335,8 @@ async def _archive_competing_stream_placeholder(
             placeholder["id"], partial or placeholder["content"], not bool(partial),
         )
 
+_DEFAULT_PREMIUM_CLAUDE = "claude-opus-5-5"
+
 _MODEL_TIMEOUT_OVERRIDES = {
     "gpt-5.6-sol": 1500,
     "codex:gpt-5.6-sol": 1500,
@@ -7229,12 +7231,12 @@ async def with_background_completion(
                     _FALLBACK_CHAIN_429 = {
                         "claude-opus-5-5": ["claude-fable-5-1", "gpt-5.6-sol"],
                         "claude-opus-5": ["claude-fable-5-1", "gpt-5.6-sol"],
-                        "claude-opus-4-6": ["claude-opus-5", "claude-fable-5-1"],
-                        "claude-fable-5-1": ["claude-opus-5", "gpt-5.6-sol"],
-                        "gpt-5.6-sol": ["claude-fable-5-1", "claude-opus-5"],
-                        "gpt-6-astra": ["gpt-5.6-sol", "claude-opus-5"],
+                        "claude-opus-4-6": ["claude-opus-5-5", "claude-fable-5-1"],
+                        "claude-fable-5-1": ["claude-opus-5-5", "gpt-5.6-sol"],
+                        "gpt-5.6-sol": ["claude-fable-5-1", "claude-opus-5-5"],
+                        "gpt-6-astra": ["gpt-5.6-sol", "claude-opus-5-5"],
                         "claude-haiku-4-5-20251001": ["claude-fable-5-1", "gpt-5.6-sol"],
-                        "claude-sonnet-5": ["claude-fable-5-1", "claude-opus-5"],
+                        "claude-sonnet-5": ["claude-fable-5-1", "claude-opus-5-5"],
                         "claude-sonnet-5-5": ["claude-sonnet-5", "gpt-5.6-sol"],
                     }
                     # 단계 기록은 실행 하나에 한 벌이다. 재개 경로가 같은 state 를
@@ -14484,7 +14486,7 @@ async def send_message_stream(
                 try:
                     full_response = ""
                     _captured_sdk_sid: Optional[str] = None
-                    model_used = "claude-opus-5"
+                    model_used = _DEFAULT_PREMIUM_CLAUDE
                     cost_usd = Decimal("0")
                     tools_called: list = []
                     _sdk_system_prompt = system_prompt
@@ -14499,11 +14501,11 @@ async def send_message_stream(
                         _compiled_sdk_prompt = await PromptCompiler().compile(
                             workspace_name=_normalized_project or workspace_name,
                             intent=intent,
-                            model=_selected_model_id or "claude-opus-5",
+                            model=_selected_model_id or _DEFAULT_PREMIUM_CLAUDE,
                             session_id=str(session_id),
                             role=_session_role_key or "",
                             selected_model_id=_selected_model_id or (model_override or ""),
-                            execution_model_id="claude-opus-5",
+                            execution_model_id=_DEFAULT_PREMIUM_CLAUDE,
                             base_system_prompt=system_prompt,
                         )
                         _sdk_system_prompt = _compiled_sdk_prompt.system_prompt
@@ -14524,7 +14526,7 @@ async def send_message_stream(
                                     session_id=str(session_id),
                                     execution_id=_execution_id_str,
                                     intent=intent,
-                                    model=_selected_model_id or "claude-opus-5",
+                                    model=_selected_model_id or _DEFAULT_PREMIUM_CLAUDE,
                                     compiled_prompt=_compiled_sdk_prompt,
                                     server_ledger=_turn_server_ledger,
                                 )
@@ -14538,6 +14540,7 @@ async def send_message_stream(
                         session_id=sdk_session_id,
                         chat_session_id=str(sid),
                         system_prompt=_sdk_system_prompt,
+                        model=model_used,
                     ):
                         yield sse_line
                         # 이벤트 파싱: session_id 캡처 + 텍스트 수집

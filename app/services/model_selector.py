@@ -600,7 +600,7 @@ def _codex_to_claude_equivalent(model: Any) -> str:
     """Codex 모델을 같은 급의 Claude 모델로 대응시킨다."""
     m = str(model or "").lower()
     if "astra" in m or "gpt-6" in m:
-        return "claude-opus-5"
+        return "claude-opus-5-5"
     return os.getenv("AADS_CODEX_BYPASS_MODEL", "claude-sonnet-5-5")
 
 

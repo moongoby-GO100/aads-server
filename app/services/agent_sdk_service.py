@@ -329,6 +329,7 @@ class AgentSDKService:
         self,
         resume_session_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Any:
         """ClaudeAgentOptions 구성."""
         from app.services.agent_hooks import pre_tool_use_hook, post_tool_use_hook
@@ -358,7 +359,7 @@ class AgentSDKService:
             # version-pinned container CLI as the model-selector SDK path.
             # Otherwise the SDK silently falls back to its older bundled CLI.
             cli_path="/app/scripts/claude-oauth-wrapper.sh",
-            model="claude-opus-4-6",
+            model=model or "claude-opus-4-6",
             max_turns=self.max_turns,
             max_budget_usd=self.max_budget_usd,
             permission_mode="acceptEdits",  # Docker stdin 없음 → default 모드 시 permission prompt에서 exit=1
@@ -499,6 +500,7 @@ class AgentSDKService:
         session_id: Optional[str] = None,
         chat_session_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Agent SDK 실행 — CEO Chat SSE 스트림.
@@ -521,7 +523,7 @@ class AgentSDKService:
 
         from claude_agent_sdk import query as sdk_query  # type: ignore[import]
 
-        options = self._build_options(resume_session_id=session_id, system_prompt=system_prompt)
+        options = self._build_options(resume_session_id=session_id, system_prompt=system_prompt, model=model)
         captured_session_id: Optional[str] = None
         sdk_iter: Any = None
         _pids_before = set(_find_claude_child_pids())
