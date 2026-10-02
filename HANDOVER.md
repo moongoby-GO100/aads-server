@@ -1,3 +1,23 @@
+## 2026-10-02 — browser_* 도구 서버 Playwright 우선: work_key 만으로 PC Agent 로 보내지 않기 + PC 경로 90초 시한 (AADS-BROWSER-SERVER-PW-FIRST-20261002)
+
+**원인(실측 2026-10-02 14:07~14:09 KST).** `aads_adapter.acquire_browser_context` 가 `browser_work_key` 만 있으면 `ensure_work_session` → PC Agent(browser_bridge lease, 전 세션 공유 직렬)로 보냈다. 도구 설명이 work_key 를 "전용 Browser Bridge 세션"이라 적어 모델이 공개 사이트에도 붙였고, COMMAND_TIMEOUT/CDP_NOT_READY 재시도가 Codex MCP `tool_timeout_sec=120` 을 넘겨 같은 stdio 연결의 다른 도구가 전부 "Transport closed" 가 됐다(세션 5090a247, b8a8651b).
+
+**변경(코드 완료, 커밋 전 — Runner 가 승인 후 commit/push).**
+- `browser_bridge/aads_adapter.py`: `acquire_browser_context(..., browser_lane="server")`. PC Agent 는 (a) `browser_session_id` 명시 (b) `browser_lane="pc"`+work_key 에서만. work_key 단독은 서버 Playwright 의 work_key 단위 컨텍스트(`service._headless_work_context`). 서버 실패 시 PC 로 조용히 전환하지 않고 사유 반환(기존 정책). PC 경로 총 대기 상한 `PC_AGENT_BROWSER_TOTAL_TIMEOUT_SECONDS`(env `AADS_PC_AGENT_BROWSER_TIMEOUT_SECONDS`, 기본 90, 상한 110). 초과 시 `{"error":"pc_agent_browser_timeout","limit_seconds":..,"stage":..}` JSON 문자열.
+- `browser_bridge/service.py`: `_headless_work_context(work_key)` 추가 — 공유 headless 브라우저 안에 work_key 별 context 를 만들어 재사용(같은 키 연속 호출 = 같은 페이지, navigate→snapshot→click 유지). 최대 `AADS_BROWSER_HEADLESS_WORK_CONTEXT_MAX`(8)개 LRU. PC Agent lease 로직은 무수정.
+- `api/ceo_chat_tools.py`: `_acquire_pw_context(browser_lane)`, `browser_*` 11개 + `capture_screenshot` 에 `browser_lane` 관통, `@_pc_agent_deadline` 데코레이터가 PC 경로 호출의 acquire+명령 실행 전체를 90초로 묶음(서버 레인은 비적용). capture_screenshot 의 work_key 회수(close_work_session)는 PC 레인일 때만.
+- `services/tool_registry.py`·`ceo_chat_tools.TOOL_DEFINITIONS`: `browser_work_key` 설명 갱신 + `browser_lane`(enum server/pc) 추가. MCP 브리지는 레지스트리에서 스키마를 만들어 자동 정합. `tool_executor.py`: 12개 핸들러가 `browser_lane` 전달.
+- **기존 PC 전용 호출부는 `browser_lane="pc"` 명시**: `work_recipe/executor.py`(route=pc_agent), `media_generation_service._acquire_genspark_page`, `ceo_chat_tools` 의 agent-vault 로그인 테스트·E2E credential 테스트(work_key 경로). `e2e_verify` 는 서버 기본으로 둔다(일반 URL 검증).
+- 주의: PC 경로 취소는 `asyncio.wait_for` 로 호출자 대기만 끊는다. 이미 PC Agent 에 들어간 명령/lease 는 에이전트 쪽 TTL 로 정리된다.
+
+**검증.** `bash scripts/run_unit_tests.sh` — 신규(`test_browser_bridge_routing.py`: work_key→서버, 같은 키 재사용, lane=pc/session_id→PC, 시한 초과 오류·서버 전환 없음, 도구 수준 시한, 스키마 정합) + 갱신(`test_pc_agent_recovery_p0`, `test_pc_agent_tool_exposure`, `test_media_generation_service`). browser/work_recipe/coupangeats/pc_agent/tool/e2e/cred/media/yeoljeong 관련 76개 파일: 1332 passed, 11 failed. 11건은 이번 변경과 무관한 기존 실패(HEAD 사본에서 tool_archive_flow·pc_agent_collection_queue·yeoljeong_finance_api 8건 동일 실패 확인; 나머지 3건은 compose/nginx/정적 HTML 검사). ruff F821/F811 통과.
+
+**재커밋 메모(runner-3ba2bb27).** runner-025fe5da 는 pre-commit gitleaks(generic-api-key)가 `test_browser_bridge_routing.py` 의 고엔트로피 work_key 리터럴을 시크릿으로 오인해 커밋 실패. 리터럴만 `go100-ops-test` 로 교체(allowlist·`.gitleaks.toml`·ignore 주석 미사용). 변경 12파일 gitleaks 개별 스캔 무탐지, 관련 테스트 247 passed.
+
+**재커밋 메모(runner-aa91e06d).** 021525167/805e8cb8/3ba2bb27/025fe5da 는 pre-commit `[중복 재적용]`(dup_guard dup-block, 12줄 이상 동일 블록)에서 실패. `ceo_chat_tools.py`·`tool_registry.py` 의 browser_session_id/work_key/lane 3종 스키마 반복을 `tool_registry.browser_session_props(short_session_desc=False)` 한 곳으로 공통화(ceo_chat_tools 는 import). 호출마다 새 dict 반환. 공통화 전후 `ceo_chat_tools.TOOL_DEFINITIONS`(86)·`tool_registry._TOOLS`(140) JSON 덤프 바이트 동일 확인, `test_pc_agent_tool_exposure` 에 browser_* 12종 스키마 동치 테스트 추가. dup_guard 신규 중복 0, 지정 테스트 328 passed.
+
+**남은 일.** 오류 사전 등록은 fix 커밋 SHA 가 생긴 뒤: `scripts/error_book.py register --key browser.work_key_routes_to_pc_agent_timeout --symptom "browser_* 가 COMMAND_TIMEOUT/CDP_NOT_READY 후 MCP 120s 타임아웃, 이어 Transport closed" --cause "browser_work_key 만으로 PC Agent lease 경로 선택(공유 직렬), 총 대기 상한 없음" --prevention "work_key 는 서버 세션 키, PC 는 browser_lane='pc' 또는 session_id 명시. PC 경로는 90s 시한" --signature "pc_agent_browser_timeout|timed out awaiting tools/call after 120s" --fix-commit <sha> --fix-file app/browser_bridge/aads_adapter.py --fix-note "서버 Playwright 기본 + PC 레인 명시 + 90s 시한"`.
+
 ## 2026-09-30 — 일반 verify 실행기 + aads.newtalk.kr 레시피 v2 verify 절, phase='verify' 실행기록 1건 생산 (AADS-WORKRECIPE-GENERIC-VERIFY-EVIDENCE-20260930)
 
 세 가지를 분리해 적는다.

@@ -359,6 +359,7 @@ class BrowserRecipeExecutor:
             browser_work_key=self.browser_work_key if route["runtime"] == "pc_agent" else None,
             url=str(payload.get("url") or "about:blank"),
             prefer_headless=route["runtime"] == "browser_agent",
+            browser_lane="pc" if route["runtime"] == "pc_agent" else "server",
         )
         if self._context is None:
             raise BrowserBridgeError(error or "브라우저 컨텍스트를 확보하지 못했습니다")

@@ -18,7 +18,9 @@ import asyncio
 import json
 import asyncpg
 import base64
+import functools
 import httpx
+import inspect
 import ipaddress
 import logging
 import os
@@ -30,8 +32,10 @@ import uuid
 from datetime import datetime
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
+
+from app.services.tool_registry import browser_session_props
 
 logger = logging.getLogger(__name__)
 _GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
@@ -277,14 +281,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "이동할 URL (예: https://aads.newtalk.kr/)",
                 },
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": ["url"],
         },
@@ -295,14 +292,7 @@ TOOL_DEFINITIONS: List[Dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": [],
         },
@@ -313,14 +303,7 @@ TOOL_DEFINITIONS: List[Dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": [],
         },
@@ -335,14 +318,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "클릭할 요소의 CSS selector (예: button#submit, text=로그인)",
                 },
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": ["selector"],
         },
@@ -361,14 +337,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "입력할 텍스트",
                 },
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": ["selector", "value"],
         },
@@ -381,8 +350,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "properties": {
                 "key": {"type": "string", "description": "입력할 키. 예: Enter, Tab, Escape, ArrowDown, a"},
                 "selector": {"type": "string", "description": "포커스할 요소 CSS selector (선택)"},
-                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
-                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+                **browser_session_props(short_session_desc=True),
             },
             "required": ["key"],
         },
@@ -395,8 +363,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "properties": {
                 "selector": {"type": "string", "description": "select 요소 CSS selector"},
                 "value": {"type": "string", "description": "선택할 option value 또는 표시 텍스트"},
-                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
-                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+                **browser_session_props(short_session_desc=True),
             },
             "required": ["selector", "value"],
         },
@@ -409,8 +376,7 @@ TOOL_DEFINITIONS: List[Dict] = [
             "properties": {
                 "selector": {"type": "string", "description": "checkbox/radio 요소 CSS selector"},
                 "checked": {"type": "boolean", "description": "체크 여부", "default": True},
-                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
-                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+                **browser_session_props(short_session_desc=True),
             },
             "required": ["selector"],
         },
@@ -424,8 +390,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "selector": {"type": "string", "description": "input[type=file] CSS selector"},
                 "file_paths": {"type": "array", "items": {"type": "string"}, "description": "업로드할 파일 경로 목록"},
                 "file_path": {"type": "string", "description": "단일 업로드 파일 경로"},
-                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
-                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+                **browser_session_props(short_session_desc=True),
             },
             "required": ["selector"],
         },
@@ -439,8 +404,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                 "selector": {"type": "string", "description": "다운로드 버튼/링크 CSS selector 또는 text=..."},
                 "download_dir": {"type": "string", "description": "저장 디렉터리. PC Agent 세션은 CEO PC 경로, 서버 세션은 서버 경로"},
                 "timeout_seconds": {"type": "number", "description": "다운로드 대기 시간", "default": 60},
-                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
-                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+                **browser_session_props(short_session_desc=True),
             },
             "required": ["selector"],
         },
@@ -451,14 +415,7 @@ TOOL_DEFINITIONS: List[Dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": [],
         },
@@ -1732,14 +1689,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "boolean",
                     "description": "전체 페이지 캡처 여부 (기본 false = 뷰포트만)",
                 },
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
                 "close_on_complete": {
                     "type": "boolean",
                     "description": "독립 캡처 완료 후 비보호 PC Agent 업무 세션 탭을 회수할지 여부. 기본 true",
@@ -3469,15 +3419,14 @@ async def _acquire_pw_context(
     browser_work_key: str = "",
     url: str = "about:blank",
     prefer_headless: bool = True,
+    browser_lane: str = "",
 ) -> Tuple[Any, Optional[str]]:
     """Playwright 컨텍스트 싱글턴 취득. 실패 시 (None, 에러메시지).
 
-    ``browser_session_id``/``browser_work_key``를 명시하지 않으면 서버
-    Playwright(headless)를 기본으로 쓴다 — PC Agent가 이미 전역 active
-    세션이어도 일반 사이트 조작이 거기로 딸려가지 않게 한다(정책:
-    "일반 사이트는 서버 Playwright 1순위, PC Agent는 로컬 PC 필수 작업만").
-    PC Agent를 쓰려면 호출마다 browser_session_id 또는 browser_work_key를
-    명시해야 한다.
+    기본은 서버 Playwright(headless)다. ``browser_work_key`` 는 서버 세션을
+    묶는 키일 뿐 PC Agent 선택 신호가 아니다 — PC Agent 는 호출마다
+    ``browser_session_id`` 를 명시하거나 ``browser_lane="pc"`` 를 줄 때만 쓴다
+    (정책: "일반 사이트는 서버 Playwright 1순위, PC Agent는 로컬 PC 필수 작업만").
     """
     from app.browser_bridge.aads_adapter import acquire_browser_context
 
@@ -3486,7 +3435,28 @@ async def _acquire_pw_context(
         browser_work_key=browser_work_key or None,
         url=url or "about:blank",
         prefer_headless=prefer_headless,
+        browser_lane=browser_lane or "server",
     )
+
+
+def _pc_agent_deadline(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """PC Agent 경로(session_id 명시 또는 lane=pc)의 도구 1회 호출 총 대기를 제한한다."""
+    sig = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        from app.browser_bridge.aads_adapter import normalize_browser_lane, run_with_pc_agent_deadline
+
+        arguments = sig.bind_partial(*args, **kwargs).arguments
+        uses_pc = bool(arguments.get("browser_session_id")) or (
+            bool(arguments.get("browser_work_key"))
+            and normalize_browser_lane(arguments.get("browser_lane")) == "pc"
+        )
+        if not uses_pc:
+            return await fn(*args, **kwargs)
+        return await run_with_pc_agent_deadline(fn(*args, **kwargs), stage=fn.__name__)
+
+    return wrapper
 
 
 async def _current_page(ctx: Any) -> Any:
@@ -3946,17 +3916,19 @@ async def _pre_inject_vault_token(
     return False
 
 
+@_pc_agent_deadline
 async def tool_browser_navigate(
     url: str,
     browser_session_id: str = "",
     browser_work_key: str = "",
     tenant_id: str = "",
+    browser_lane: str = "",
 ) -> str:
     """브라우저로 URL 이동 (도메인 화이트리스트 검사 포함)."""
     blocked = _browser_domain_ok(url)
     if blocked:
         return blocked
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, url)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, url, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -4200,9 +4172,10 @@ async def tool_browser_connect(
         return f"[ERROR] Browser Bridge 처리 실패: {e}"
 
 
-async def tool_browser_snapshot(browser_session_id: str = "", browser_work_key: str = "") -> str:
+@_pc_agent_deadline
+async def tool_browser_snapshot(browser_session_id: str = "", browser_work_key: str = "", browser_lane: str = "") -> str:
     """현재 페이지의 UI 구조를 텍스트로 추출 (LLM 최적)."""
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -4262,9 +4235,10 @@ async def tool_browser_snapshot(browser_session_id: str = "", browser_work_key: 
         return f"[ERROR] 스냅샷 실패: {e}"
 
 
-async def tool_browser_screenshot(browser_session_id: str = "", browser_work_key: str = "") -> str:
+@_pc_agent_deadline
+async def tool_browser_screenshot(browser_session_id: str = "", browser_work_key: str = "", browser_lane: str = "") -> str:
     """현재 페이지 PNG 스크린샷 촬영 (base64 반환)."""
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -4276,6 +4250,7 @@ async def tool_browser_screenshot(browser_session_id: str = "", browser_work_key
         return f"[ERROR] 스크린샷 실패: {e}"
 
 
+@_pc_agent_deadline
 async def tool_capture_screenshot(
     url: str,
     full_page: bool = False,
@@ -4283,6 +4258,7 @@ async def tool_capture_screenshot(
     browser_work_key: str = "",
     tenant_id: str = "",
     close_on_complete: bool = True,
+    browser_lane: str = "",
 ) -> str:
     """URL 스크린샷을 캡처하여 이미지 URL 반환 (채팅에 인라인 표시용)."""
     if not url:
@@ -4293,16 +4269,20 @@ async def tool_capture_screenshot(
     # Only an explicitly supplied bridge session/work key may use a Browser
     # Bridge (including a LOCAL_AGENT).  Vault auto-login without one remains
     # server-managed/headless even when another session is globally active.
+    from app.browser_bridge.aads_adapter import normalize_browser_lane
+
+    pc_lane = normalize_browser_lane(browser_lane) == "pc"
     capture_work_key = browser_work_key
     ctx, err = await _acquire_pw_context(
         browser_session_id,
         capture_work_key,
         url,
-        prefer_headless=not bool(browser_session_id or capture_work_key),
+        prefer_headless=not bool(browser_session_id or (capture_work_key and pc_lane)),
+        browser_lane=browser_lane,
     )
     if err:
         return err
-    if not browser_session_id and not capture_work_key:
+    if not browser_session_id and not (capture_work_key and pc_lane):
         route_used = "server_playwright"
     else:
         from app.browser_bridge.service import get_browser_bridge_service as _gbs_route
@@ -4317,7 +4297,9 @@ async def tool_capture_screenshot(
             if _route_session
             else "browser_bridge:unresolved"
         )
-    cleanup_work_key = capture_work_key if close_on_complete and capture_work_key and not browser_session_id else ""
+    cleanup_work_key = (
+        capture_work_key if close_on_complete and capture_work_key and pc_lane and not browser_session_id else ""
+    )
     cleanup_summary = ""
     try:
         page = await ctx.new_page()
@@ -4404,13 +4386,15 @@ async def tool_capture_screenshot(
     return result_message + cleanup_summary
 
 
+@_pc_agent_deadline
 async def tool_browser_click(
     selector: str,
     browser_session_id: str = "",
     browser_work_key: str = "",
+    browser_lane: str = "",
 ) -> str:
     """CSS selector로 요소 클릭."""
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -4421,14 +4405,16 @@ async def tool_browser_click(
         return f"[ERROR] 클릭 실패 ({selector}): {e}"
 
 
+@_pc_agent_deadline
 async def tool_browser_fill(
     selector: str,
     value: str,
     browser_session_id: str = "",
     browser_work_key: str = "",
+    browser_lane: str = "",
 ) -> str:
     """입력 필드에 텍스트 채우기."""
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -4439,16 +4425,18 @@ async def tool_browser_fill(
         return f"[ERROR] 입력 실패 ({selector}): {e}"
 
 
+@_pc_agent_deadline
 async def tool_browser_press_key(
     key: str,
     selector: str = "",
     browser_session_id: str = "",
     browser_work_key: str = "",
+    browser_lane: str = "",
 ) -> str:
     """키 입력."""
     if not key:
         return "[ERROR] key 필수"
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -4466,16 +4454,18 @@ async def tool_browser_press_key(
         return f"[ERROR] 키 입력 실패 ({key}): {e}"
 
 
+@_pc_agent_deadline
 async def tool_browser_select_option(
     selector: str,
     value: str,
     browser_session_id: str = "",
     browser_work_key: str = "",
+    browser_lane: str = "",
 ) -> str:
     """select 옵션 선택."""
     if not selector:
         return "[ERROR] selector 필수"
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -4486,16 +4476,18 @@ async def tool_browser_select_option(
         return f"[ERROR] 옵션 선택 실패 ({selector}): {e}"
 
 
+@_pc_agent_deadline
 async def tool_browser_check(
     selector: str,
     checked: bool = True,
     browser_session_id: str = "",
     browser_work_key: str = "",
+    browser_lane: str = "",
 ) -> str:
     """체크박스/라디오 상태 설정."""
     if not selector:
         return "[ERROR] selector 필수"
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -4510,12 +4502,14 @@ async def tool_browser_check(
         return f"[ERROR] 체크 상태 설정 실패 ({selector}): {e}"
 
 
+@_pc_agent_deadline
 async def tool_browser_upload_file(
     selector: str,
     file_paths: Any = None,
     file_path: str = "",
     browser_session_id: str = "",
     browser_work_key: str = "",
+    browser_lane: str = "",
 ) -> str:
     """file input에 파일 지정."""
     if not selector:
@@ -4523,7 +4517,7 @@ async def tool_browser_upload_file(
     paths = _browser_file_paths(file_paths, file_path)
     if not paths:
         return "[ERROR] file_path 또는 file_paths 필수"
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -4534,17 +4528,19 @@ async def tool_browser_upload_file(
         return f"[ERROR] 파일 업로드 입력 실패 ({selector}): {e}"
 
 
+@_pc_agent_deadline
 async def tool_browser_download(
     selector: str,
     download_dir: str = "",
     timeout_seconds: float = 60,
     browser_session_id: str = "",
     browser_work_key: str = "",
+    browser_lane: str = "",
 ) -> str:
     """다운로드를 유발하는 요소 클릭 후 파일 저장."""
     if not selector:
         return "[ERROR] selector 필수"
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -4570,9 +4566,10 @@ async def tool_browser_download(
         return f"[ERROR] 다운로드 실패 ({selector}): {e}"
 
 
-async def tool_browser_tab_list(browser_session_id: str = "", browser_work_key: str = "") -> str:
+@_pc_agent_deadline
+async def tool_browser_tab_list(browser_session_id: str = "", browser_work_key: str = "", browser_lane: str = "") -> str:
     """열린 탭 목록 반환."""
-    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key)
+    ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
@@ -5278,6 +5275,7 @@ async def tool_credential_test_login(
                         browser_session_id=browser_session_id or None,
                         browser_work_key=work_key if not browser_session_id else None,
                         url=agent_cred["origin"],
+                        browser_lane="pc",
                     ),
                     timeout=_AGENT_VAULT_BROWSER_TEST_TIMEOUT_SECONDS,
                 )
@@ -5375,6 +5373,7 @@ async def tool_credential_test_login(
                 acquire_kwargs = {
                     "browser_session_id": None,
                     "browser_work_key": work_key,
+                    "browser_lane": "pc",
                 }
             else:
                 browser_route = "headless"
@@ -5828,6 +5827,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("url", ""),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
             tenant_id=str(params.get("tenant_id") or ""),
             close_on_complete=bool(params.get("close_on_complete", True)),
         )
@@ -5835,17 +5835,20 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         return await tool_browser_snapshot(
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name == "browser_screenshot":
         return await tool_browser_screenshot(
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name == "browser_click":
         return await tool_browser_click(
             params.get("selector", ""),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name == "browser_fill":
         return await tool_browser_fill(
@@ -5853,6 +5856,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("value", ""),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name == "browser_press_key":
         return await tool_browser_press_key(
@@ -5860,6 +5864,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             selector=params.get("selector", ""),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name == "browser_select_option":
         return await tool_browser_select_option(
@@ -5867,6 +5872,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("value", ""),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name == "browser_check":
         return await tool_browser_check(
@@ -5874,6 +5880,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             checked=bool(params.get("checked", True)),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name == "browser_upload_file":
         return await tool_browser_upload_file(
@@ -5882,6 +5889,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             file_path=params.get("file_path", ""),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name == "browser_download":
         return await tool_browser_download(
@@ -5890,11 +5898,13 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             timeout_seconds=float(params.get("timeout_seconds", 60) or 60),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name == "browser_tab_list":
         return await tool_browser_tab_list(
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name in {"pc_execute", "device_execute"}:
         from app.services.tool_executor import ToolExecutor
@@ -6256,6 +6266,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("full_page", False),
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
             tenant_id=str(params.get("tenant_id") or ""),
         )
     elif name == "e2e_verify":

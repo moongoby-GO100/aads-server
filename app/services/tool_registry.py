@@ -315,6 +315,29 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
 
 # ─── 도구 스키마 정의 (Anthropic Tool Use 포맷) ──────────────────────────────
 
+_BROWSER_SESSION_ID_DESC_SHORT = "특정 Browser Bridge session id"
+_BROWSER_SESSION_ID_DESC = "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행"
+
+
+def browser_session_props(*, short_session_desc: bool = False) -> Dict[str, Any]:
+    """browser_* 도구 공통 세션/레인 스키마. 호출마다 새 dict 를 돌려준다(도구별 변형 방지)."""
+    return {
+        "browser_session_id": {
+            "type": "string",
+            "description": _BROWSER_SESSION_ID_DESC_SHORT if short_session_desc else _BROWSER_SESSION_ID_DESC,
+        },
+        "browser_work_key": {
+            "type": "string",
+            "description": "서버 Playwright 세션 묶음 키. 같은 키로 이어서 호출하면 같은 서버 브라우저 세션/페이지를 재사용(navigate→snapshot→click 흐름 유지). 이 키만으로는 PC Agent 로 가지 않음",
+        },
+        "browser_lane": {
+            "type": "string",
+            "enum": ["server", "pc"],
+            "description": "실행 레인. 기본 'server'(서버 Playwright, 일반/공개 사이트). 로컬 PC·로그인된 CEO 브라우저가 꼭 필요할 때만 'pc'(browser_work_key 와 함께). PC 경로는 90초 안에 끝나지 않으면 pc_agent_browser_timeout 오류를 반환하며 서버로 자동 전환하지 않음",
+        },
+    }
+
+
 _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── 협업 그룹 ────────────────────────────────────────────────────────────
     "my_milestones": {
@@ -1941,14 +1964,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "접속할 URL (https://aads.newtalk.kr/chat 등)",
                 },
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
                 "tenant_id": {
                     "type": "string",
                     "description": "테넌트 UUID. 로그인 필요 페이지에서 Agent Vault 자동 로그인에 필요. 미지정 시 세션에서 자동 주입",
@@ -1972,14 +1988,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": [],
         },
@@ -1993,14 +2002,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": [],
         },
@@ -2025,14 +2027,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "boolean",
                     "description": "전체 페이지 캡처 여부 (기본: false, 뷰포트만)",
                 },
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
                 "tenant_id": {
                     "type": "string",
                     "description": "테넌트 UUID. 로그인 필요 페이지에서 Agent Vault 자동 로그인에 필요. 미지정 시 세션에서 자동 주입",
@@ -2055,14 +2050,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "클릭할 요소의 CSS selector 또는 'text=버튼텍스트'",
                 },
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": ["selector"],
         },
@@ -2086,14 +2074,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "입력할 텍스트",
                 },
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": ["selector", "value"],
         },
@@ -2107,8 +2088,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "key": {"type": "string", "description": "입력할 키. 예: Enter, Tab, Escape, ArrowDown, a"},
                 "selector": {"type": "string", "description": "포커스할 요소 CSS selector (선택)"},
-                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
-                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+                **browser_session_props(short_session_desc=True),
             },
             "required": ["key"],
         },
@@ -2122,8 +2102,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "selector": {"type": "string", "description": "select 요소 CSS selector"},
                 "value": {"type": "string", "description": "선택할 option value 또는 표시 텍스트"},
-                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
-                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+                **browser_session_props(short_session_desc=True),
             },
             "required": ["selector", "value"],
         },
@@ -2137,8 +2116,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "selector": {"type": "string", "description": "checkbox/radio 요소 CSS selector"},
                 "checked": {"type": "boolean", "description": "체크 여부", "default": True},
-                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
-                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+                **browser_session_props(short_session_desc=True),
             },
             "required": ["selector"],
         },
@@ -2153,8 +2131,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "selector": {"type": "string", "description": "input[type=file] CSS selector"},
                 "file_paths": {"type": "array", "items": {"type": "string"}, "description": "업로드할 파일 경로 목록"},
                 "file_path": {"type": "string", "description": "단일 업로드 파일 경로"},
-                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
-                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+                **browser_session_props(short_session_desc=True),
             },
             "required": ["selector"],
         },
@@ -2169,8 +2146,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "selector": {"type": "string", "description": "다운로드 버튼/링크 CSS selector 또는 text=..."},
                 "download_dir": {"type": "string", "description": "저장 디렉터리"},
                 "timeout_seconds": {"type": "number", "description": "다운로드 대기 시간", "default": 60},
-                "browser_session_id": {"type": "string", "description": "특정 Browser Bridge session id"},
-                "browser_work_key": {"type": "string", "description": "업무 키 기반 전용 Browser Bridge 세션"},
+                **browser_session_props(short_session_desc=True),
             },
             "required": ["selector"],
         },
@@ -2182,14 +2158,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "browser_session_id": {
-                    "type": "string",
-                    "description": "특정 Browser Bridge session id. 지정하면 전역 active 세션을 바꾸지 않고 해당 세션에서 실행",
-                },
-                "browser_work_key": {
-                    "type": "string",
-                    "description": "업무 키 기반 전용 Browser Bridge 세션. 지정하면 전역 active 세션을 바꾸지 않고 전용 세션을 확보/재사용",
-                },
+                **browser_session_props(),
             },
             "required": [],
         },

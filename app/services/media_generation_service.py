@@ -1019,6 +1019,8 @@ class MediaGenerationService:
             browser_session_id or "",
             "" if browser_session_id else work_key,
             acquire_url,
+            # Genspark UI 는 로그인된 PC 브라우저 업무 세션이 필요하다.
+            browser_lane="pc",
         )
         if err:
             raise RuntimeError(err)

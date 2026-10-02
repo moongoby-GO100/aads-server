@@ -77,6 +77,7 @@ async def test_work_session_failure_uses_explicit_headless_fallback(monkeypatch)
     context, error = await aads_adapter.acquire_browser_context(
         browser_work_key="auth-recovery",
         url="https://aads.newtalk.kr/login",
+        browser_lane="pc",
     )
 
     assert context is headless_context
@@ -123,6 +124,7 @@ async def test_explicit_browser_context_identifiers_keep_bridge_routing(monkeypa
     work_context, work_error = await aads_adapter.acquire_browser_context(
         browser_work_key="explicit-work",
         prefer_headless=True,
+        browser_lane="pc",
     )
 
     assert session_context is not None

@@ -415,7 +415,7 @@ def test_browser_e2e_vault_autologin_is_not_limited_to_newtalk_domains() -> None
     assert 'tenant_id and browser_work_key and "newtalk.kr" in url' not in capture_source
     assert "if dedicated_session and tenant_id:" in navigate_source
     assert "capture_work_key = browser_work_key" in capture_source
-    assert "prefer_headless=not bool(browser_session_id or capture_work_key)" in capture_source
+    assert "prefer_headless=not bool(browser_session_id or (capture_work_key and pc_lane))" in capture_source
     assert "if tenant_id:" in capture_source
 
 
@@ -473,6 +473,7 @@ async def test_capture_screenshot_headless_only_without_explicit_bridge_identifi
         browser_work_key="",
         url="about:blank",
         prefer_headless=False,
+        browser_lane="",
     ):
         calls.append(
             {
@@ -511,10 +512,19 @@ async def test_capture_screenshot_headless_only_without_explicit_bridge_identifi
         close_on_complete=False,
     )
 
-    assert [call["prefer_headless"] for call in calls] == [True, True, False, False]
+    await ceo_chat_tools.tool_capture_screenshot(
+        "https://aads.newtalk.kr/",
+        browser_work_key="work-pc",
+        browser_lane="pc",
+        close_on_complete=False,
+    )
+
+    # work_key 단독은 서버 Playwright(headless), session_id 또는 lane=pc 만 PC 경로.
+    assert [call["prefer_headless"] for call in calls] == [True, True, False, True, False]
     assert calls[1]["browser_work_key"] == ""
     assert calls[2]["browser_session_id"] == "bb-explicit"
     assert calls[3]["browser_work_key"] == "work-explicit"
+    assert calls[4]["browser_work_key"] == "work-pc"
 
 
 @pytest.mark.asyncio
@@ -999,3 +1009,78 @@ def test_local_agent_page_exposes_playwright_is_closed_contract() -> None:
     page = object.__new__(_LocalAgentPage)
 
     assert page.is_closed() is False
+
+
+_BROWSER_TOOL_REQUIRED = {
+    "browser_navigate": ["url"],
+    "browser_snapshot": [],
+    "browser_screenshot": [],
+    "browser_click": ["selector"],
+    "browser_fill": ["selector", "value"],
+    "browser_press_key": ["key"],
+    "browser_select_option": ["selector", "value"],
+    "browser_check": ["selector"],
+    "browser_upload_file": ["selector"],
+    "browser_download": ["selector"],
+    "browser_tab_list": [],
+    "capture_screenshot": ["url"],
+}
+_SHORT_SESSION_DESC_TOOLS = {
+    "browser_press_key",
+    "browser_select_option",
+    "browser_check",
+    "browser_upload_file",
+    "browser_download",
+}
+
+
+def _browser_tool_schemas() -> list[tuple[str, str, dict]]:
+    ceo = {t["name"]: t["input_schema"] for t in ceo_chat_tools.TOOL_DEFINITIONS}
+    reg = {n: t["input_schema"] for n, t in tool_registry._TOOLS.items() if "input_schema" in t}
+    return [
+        (src, name, tools[name])
+        for src, tools in (("ceo_chat_tools", ceo), ("tool_registry", reg))
+        for name in _BROWSER_TOOL_REQUIRED
+    ]
+
+
+def test_browser_tool_session_schema_unchanged_after_dedup() -> None:
+    for src, name, schema in _browser_tool_schemas():
+        where = f"{src}.{name}"
+        props = schema["properties"]
+        assert schema["required"] == _BROWSER_TOOL_REQUIRED[name], where
+
+        sid = props["browser_session_id"]
+        assert sid["type"] == "string", where
+        if name in _SHORT_SESSION_DESC_TOOLS:
+            assert sid["description"] == "특정 Browser Bridge session id", where
+        else:
+            assert sid["description"].startswith("특정 Browser Bridge session id. 지정하면"), where
+
+        wk = props["browser_work_key"]
+        assert wk["type"] == "string", where
+        assert "이 키만으로는 PC Agent 로 가지 않음" in wk["description"], where
+
+        lane = props["browser_lane"]
+        assert lane["type"] == "string", where
+        assert lane["enum"] == ["server", "pc"], where
+        assert "pc_agent_browser_timeout" in lane["description"], where
+        assert "90초" in lane["description"], where
+
+        keys = list(props)
+        assert keys.index("browser_session_id") + 1 == keys.index("browser_work_key"), where
+        assert keys.index("browser_work_key") + 1 == keys.index("browser_lane"), where
+
+
+def test_browser_session_props_returns_independent_copies() -> None:
+    first = tool_registry.browser_session_props()
+    second = tool_registry.browser_session_props()
+    assert first == second
+    first["browser_lane"]["enum"].append("mutated")
+    first["browser_session_id"]["description"] = "mutated"
+    assert tool_registry.browser_session_props()["browser_lane"]["enum"] == ["server", "pc"]
+    assert second["browser_session_id"]["description"] != "mutated"
+    short = tool_registry.browser_session_props(short_session_desc=True)
+    assert short["browser_session_id"]["description"] == "특정 Browser Bridge session id"
+    assert short["browser_work_key"] == second["browser_work_key"]
+    assert short["browser_lane"] == second["browser_lane"]

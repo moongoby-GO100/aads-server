@@ -4002,6 +4002,7 @@ class ToolExecutor:
             full_page,
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
+            browser_lane=str(inp.get("browser_lane") or ""),
             tenant_id=str(inp.get("tenant_id") or ""),
             close_on_complete=bool(inp.get("close_on_complete", True)),
         )
@@ -5799,6 +5800,7 @@ class ToolExecutor:
             url,
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
+            browser_lane=str(inp.get("browser_lane") or ""),
             tenant_id=str(inp.get("tenant_id") or ""),
         )
 
@@ -5810,6 +5812,7 @@ class ToolExecutor:
         return await tool_browser_snapshot(
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
+            browser_lane=str(inp.get("browser_lane") or ""),
         )
 
     async def _browser_screenshot(self, inp: Dict[str, Any]) -> Any:
@@ -5820,6 +5823,7 @@ class ToolExecutor:
         return await tool_browser_screenshot(
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
+            browser_lane=str(inp.get("browser_lane") or ""),
         )
 
     async def _browser_click(self, inp: Dict[str, Any]) -> Any:
@@ -5834,6 +5838,7 @@ class ToolExecutor:
             selector,
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
+            browser_lane=str(inp.get("browser_lane") or ""),
         )
 
     async def _browser_fill(self, inp: Dict[str, Any]) -> Any:
@@ -5850,6 +5855,7 @@ class ToolExecutor:
             value,
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
+            browser_lane=str(inp.get("browser_lane") or ""),
         )
 
     async def _browser_press_key(self, inp: Dict[str, Any]) -> Any:
@@ -5863,6 +5869,7 @@ class ToolExecutor:
             selector=inp.get("selector", ""),
             browser_session_id=inp.get("browser_session_id", ""),
             browser_work_key=inp.get("browser_work_key", ""),
+            browser_lane=str(inp.get("browser_lane") or ""),
         )
 
     async def _browser_select_option(self, inp: Dict[str, Any]) -> Any:
@@ -5876,6 +5883,7 @@ class ToolExecutor:
             inp.get("value", ""),
             browser_session_id=inp.get("browser_session_id", ""),
             browser_work_key=inp.get("browser_work_key", ""),
+            browser_lane=str(inp.get("browser_lane") or ""),
         )
 
     async def _browser_check(self, inp: Dict[str, Any]) -> Any:
@@ -5889,6 +5897,7 @@ class ToolExecutor:
             checked=bool(inp.get("checked", True)),
             browser_session_id=inp.get("browser_session_id", ""),
             browser_work_key=inp.get("browser_work_key", ""),
+            browser_lane=str(inp.get("browser_lane") or ""),
         )
 
     async def _browser_upload_file(self, inp: Dict[str, Any]) -> Any:
@@ -5903,6 +5912,7 @@ class ToolExecutor:
             file_path=inp.get("file_path", ""),
             browser_session_id=inp.get("browser_session_id", ""),
             browser_work_key=inp.get("browser_work_key", ""),
+            browser_lane=str(inp.get("browser_lane") or ""),
         )
 
     async def _browser_download(self, inp: Dict[str, Any]) -> Any:
@@ -5917,6 +5927,7 @@ class ToolExecutor:
             timeout_seconds=float(inp.get("timeout_seconds", 60) or 60),
             browser_session_id=inp.get("browser_session_id", ""),
             browser_work_key=inp.get("browser_work_key", ""),
+            browser_lane=str(inp.get("browser_lane") or ""),
         )
 
     async def _browser_tab_list(self, inp: Dict[str, Any]) -> Any:
@@ -5927,6 +5938,7 @@ class ToolExecutor:
         return await tool_browser_tab_list(
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
+            browser_lane=str(inp.get("browser_lane") or ""),
         )
 
     async def _semantic_code_search(self, inp: Dict[str, Any]) -> Any:

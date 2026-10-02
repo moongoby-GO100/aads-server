@@ -489,7 +489,8 @@ async def test_acquire_genspark_page_separates_work_session_from_genspark_naviga
     page = _FakePage()
     calls: list[tuple[str, str, str]] = []
 
-    async def fake_acquire(browser_session_id="", browser_work_key="", url="about:blank"):
+    async def fake_acquire(browser_session_id="", browser_work_key="", url="about:blank", browser_lane=""):
+        assert browser_lane == "pc"
         calls.append((browser_session_id, browser_work_key, url))
         return _FakeContext(page), None
 

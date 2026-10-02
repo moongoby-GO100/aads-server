@@ -106,6 +106,7 @@ SIDECAR_COMMAND_TIMEOUT_SECONDS = 90
 SIDECAR_NAVIGATION_TIMEOUT_SECONDS = 150
 SIDECAR_LAUNCH_TIMEOUT_SECONDS = 120
 SIDECAR_SNAPSHOT_TIMEOUT_SECONDS = 90
+HEADLESS_WORK_CONTEXT_MAX = max(1, int(os.getenv("AADS_BROWSER_HEADLESS_WORK_CONTEXT_MAX", "8")))
 
 
 def normalize_work_key(work_key: str) -> str:
@@ -528,6 +529,7 @@ class BrowserBridgeService:
         self._pw_handle: Any = None
         self._headless_browser: Any = None
         self._headless_context: Any = None
+        self._headless_work_contexts: dict[str, tuple[Any, Any]] = {}
         self._session_contexts: dict[str, Any] = {}
         self._session_browsers: dict[str, Any] = {}
         self._active_api_route_url_cache: str = ""
@@ -1846,6 +1848,35 @@ class BrowserBridgeService:
                 java_script_enabled=True,
             )
         return self._headless_context
+
+    async def _headless_work_context(self, work_key: str) -> Any:
+        """work_key 단위로 분리된 서버 Playwright 컨텍스트(재사용).
+
+        같은 work_key 로 연속 호출하면 같은 컨텍스트(=같은 페이지)를 돌려줘서
+        navigate→snapshot→click 흐름이 이어진다. PC Agent 를 거치지 않는다.
+        """
+        key = normalize_work_key(work_key)
+        await self._headless_fallback_context()
+        browser = self._headless_browser
+        cached = self._headless_work_contexts.get(key)
+        if cached is not None and cached[0] is browser:
+            self._headless_work_contexts[key] = self._headless_work_contexts.pop(key)
+            return cached[1]
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 720},
+            java_script_enabled=True,
+        )
+        self._headless_work_contexts.pop(key, None)
+        self._headless_work_contexts[key] = (browser, context)
+        while len(self._headless_work_contexts) > HEADLESS_WORK_CONTEXT_MAX:
+            _old_key, (old_browser, old_context) = next(iter(self._headless_work_contexts.items()))
+            del self._headless_work_contexts[_old_key]
+            if old_browser is browser:
+                try:
+                    await old_context.close()
+                except Exception:
+                    pass
+        return context
 
     async def _context_for_session(self, session: BrowserBridgeSession) -> Any:
         cached = self._session_contexts.get(session.session_id)
