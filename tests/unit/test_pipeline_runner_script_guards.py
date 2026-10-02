@@ -189,7 +189,7 @@ def test_pipeline_runner_read_only_no_diff_completes_without_approval():
     assert "NO_CHANGES_READ_ONLY job=$job_id" in script
     assert "status='done', phase='done'" in script
     assert "completed_at=NOW()" in script
-    assert "읽기[[:space:]]*전용" in script
+    assert "MODE[[:space:]]*:[[:space:]]*READ_ONLY" in script
     assert "read-only 작업 완료 — 변경사항 0건이 정상 조건" in script
 
 
@@ -347,8 +347,8 @@ def test_pipeline_runner_records_actual_changed_files_to_db():
 
     assert "record_actual_changed_files()" in script
     assert "actual_changed_files=" in script
-    assert "git diff --name-only" in script
-    assert "git ls-files --others --exclude-standard" in script
+    assert "core.quotePath=false diff --name-only" in script
+    assert "ls-files --others --exclude-standard" in script
     assert "actual_changed_files_recorded" in script
     assert "worktree_path" in script
 

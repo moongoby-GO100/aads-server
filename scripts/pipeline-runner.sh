@@ -846,9 +846,36 @@ print(home)
 PY
 }
 
+# 읽기전용은 앞 20줄 안에서 줄 전체가 `MODE: READ_ONLY`(대소문자 무시, 앞뒤 공백 허용)일 때만 참이다.
+# app/services/pipeline_runner_service.py 의 _is_read_only_instruction 과 같은 규칙이다 — 한쪽만 고치지 마라.
+# 2026-10-03 실측: 본문 자연어("수정하지", "read-only" 등)로 판정하던 때 새 파일만 만든 작업
+# (runner-4bc5f67e, runner-cb6d75c2)이 읽기전용으로 오판돼 done 처리 후 worktree 째 소실됐다.
 is_read_only_instruction() {
     local instruction="${1:-}"
-    printf '%s' "$instruction" | grep -Eiq 'read-only|do not modify|no file changes|읽기[[:space:]]*전용|파일[[:space:]]*수정[[:space:]]*금지|수정하지|변경하지'
+    printf '%s' "$instruction" | head -20 | grep -qiE '^[[:space:]]*MODE[[:space:]]*:[[:space:]]*READ_ONLY[[:space:]]*$'
+}
+
+# stdin: NUL 구분 경로 목록. $1: git add 플래그(-N 기본, 무시된 파일 복구는 -fN).
+# ls-files 결과를 줄 단위로 xargs 에 넘기면 core.quotePath 때문에 한글 파일명이
+# "d/\352\270\260...md" 로 따옴표·8진수 출력돼 pathspec 불일치로 명령 전체가 실패(rc=123)하고,
+# ASCII 파일까지 하나도 intent-to-add 되지 않았다. 일괄 실패 시 파일별로 재시도하고 결과를 log 로 남긴다.
+_intent_to_add_nul() {
+    local _flag="${1:--N}" _p="" _total=0 _failed=0 _rc=0
+    local -a _paths=()
+    while IFS= read -r -d '' _p; do
+        [[ -n "$_p" ]] && _paths+=("$_p")
+    done
+    _total=${#_paths[@]}
+    [[ $_total -eq 0 ]] && return 0
+    printf '%s\0' "${_paths[@]}" | xargs -0 -r git add "$_flag" -- 2>/dev/null
+    _rc=$?
+    if [[ $_rc -ne 0 ]]; then
+        for _p in "${_paths[@]}"; do
+            git add "$_flag" -- "$_p" 2>/dev/null || _failed=$((_failed + 1))
+        done
+        log "  INTENT_TO_ADD_BATCH_FAILED flag=$_flag batch_rc=$_rc files=$_total failed=$_failed — 파일별 재시도"
+    fi
+    return 0
 }
 
 is_deploy_only_instruction() {
@@ -3669,9 +3696,10 @@ $out_tail")
     # 실제로 파일을 만들었어도 git_diff가 항상 비어 no_changes로 오판된다.
     # intent-to-add(-N)로 신규 파일을 표시해 git diff가 내용을 포함하게 한다.
     local _new_untracked=""
-    _new_untracked=$(git ls-files --others --exclude-standard 2>/dev/null) || true
+    # 2026-10-03: ls-files 는 -z / core.quotePath=false 로만 다룬다(_intent_to_add_nul 주석 참조).
+    _new_untracked=$(git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null) || true
     if [[ -n "$_new_untracked" ]]; then
-        printf '%s\n' "$_new_untracked" | xargs -d '\n' -r git add -N -- 2>/dev/null || true
+        git -c core.quotePath=false ls-files -z --others --exclude-standard 2>/dev/null | _intent_to_add_nul -N || true
     fi
     # v2.4 (2026-09-15, ACCT-FLOWMAP 5연속 no_changes 원인 수정):
     # v2.3 의 intent-to-add 는 --exclude-standard 를 쓴다. 그런데 진아실장 저장소는
@@ -3703,7 +3731,7 @@ $out_tail")
         # 그래도 안전하게 워크트리 생성시각(.git mtime)보다 새 것만 통과시킨다.
         # find 단독으로 훑으면 체크아웃된 추적 파일이 전부 걸려 200개 상한을 잡아먹는다.
         local _ignored_cand=""
-        _ignored_cand=$(git ls-files --others 2>/dev/null \
+        _ignored_cand=$(git -c core.quotePath=false ls-files --others 2>/dev/null \
             | grep -vE '(^|/)(node_modules|__pycache__|\.venv|venv|dist|build|\.next)/' \
             | grep -vE '(^|/)\.[A-Za-z0-9_.-]+_cache/' \
             | grep -vE '(^|/)(\.git|\.tox|\.nox|\.eggs|\.idea|\.vscode|\.turbo|htmlcov|coverage|\.gradle|target)/' \
@@ -3717,7 +3745,7 @@ $out_tail")
         fi
         if [[ -n "${_ignored_new//[[:space:]]/}" ]]; then
             log "  UNTRACKED_IGNORED_RESCUE job=$job_id files=$(printf '%s\n' "$_ignored_new" | sed '/^$/d' | wc -l) — .gitignore 에 가려진 신규 산출물 복구"
-            printf '%s\n' "$_ignored_new" | sed '/^$/d' | xargs -d '\n' -r git add -fN -- 2>/dev/null || true
+            printf '%s\n' "$_ignored_new" | sed '/^$/d' | tr '\n' '\0' | _intent_to_add_nul -fN || true
             _new_untracked="$_ignored_new"
         fi
     fi
@@ -3730,16 +3758,16 @@ $out_tail")
     git_diff=$(capture_job_diff_text "$workdir" "$pre_exec_sha")
     local actual_changed_files=""
     if [[ -n "$pre_exec_sha" && -n "$_current_head" && "$pre_exec_sha" != "$_current_head" ]]; then
-        actual_changed_files=$(git diff --name-only "${pre_exec_sha}..${_current_head}" 2>/dev/null) || true
+        actual_changed_files=$(git -c core.quotePath=false diff --name-only "${pre_exec_sha}..${_current_head}" 2>/dev/null) || true
         local _uncommitted_files=""
-        _uncommitted_files=$(git diff --name-only HEAD 2>/dev/null) || true
+        _uncommitted_files=$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null) || true
         [[ -n "$_uncommitted_files" ]] && actual_changed_files="${actual_changed_files}
 ${_uncommitted_files}"
     else
-        actual_changed_files=$(git diff --name-only HEAD 2>/dev/null) || true
+        actual_changed_files=$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null) || true
     fi
     local _untracked_files=""
-    _untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null) || true
+    _untracked_files=$(git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null) || true
     [[ -n "$_untracked_files" ]] && actual_changed_files="${actual_changed_files}
 ${_untracked_files}"
     actual_changed_files=$(printf '%s\n' "$actual_changed_files" | sed '/^[[:space:]]*$/d' | sort -u)
@@ -3777,12 +3805,12 @@ ${_untracked_files}"
         if [[ "$git_diff" =~ [^[:space:]] ]]; then
             local _recheck_elapsed=$(( $(date +%s) - _recheck_start_ts ))
             log "  NO_CHANGES_RECHECK_RECOVERED job=$job_id attempts=$_recheck_attempt elapsed=${_recheck_elapsed}s"
-            actual_changed_files=$(git diff --name-only "${pre_exec_sha}..${_current_head}" 2>/dev/null) || true
+            actual_changed_files=$(git -c core.quotePath=false diff --name-only "${pre_exec_sha}..${_current_head}" 2>/dev/null) || true
             local _uncommitted_files=""
-            _uncommitted_files=$(git diff --name-only HEAD 2>/dev/null) || true
+            _uncommitted_files=$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null) || true
             [[ -n "$_uncommitted_files" ]] && actual_changed_files="${actual_changed_files}
 ${_uncommitted_files}"
-            _untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null) || true
+            _untracked_files=$(git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null) || true
             [[ -n "$_untracked_files" ]] && actual_changed_files="${actual_changed_files}
 ${_untracked_files}"
             actual_changed_files=$(printf '%s\n' "$actual_changed_files" | sed '/^[[:space:]]*$/d' | sort -u)
