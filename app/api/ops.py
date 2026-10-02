@@ -428,11 +428,46 @@ async def get_lock_status():
     return get_all_lock_status()
 
 
+async def _fetch_job_statuses(job_ids: list[str]) -> dict[str, str]:
+    """pipeline_jobs.status 조회. 실패 시 예외를 그대로 올려 호출자가 회수를 포기하게 한다."""
+    from app.core.db_pool import get_pool
+
+    if not job_ids:
+        return {}
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT job_id, status FROM pipeline_jobs WHERE job_id = ANY($1::text[])",
+            job_ids,
+        )
+    return {r["job_id"]: r["status"] for r in rows}
+
+
 @router.post("/ops/locks/work/acquire")
-async def api_acquire_work_lock(project: str, session_id: str, scope: str = ""):
-    """프로젝트 작업 잠금 획득."""
-    from app.services.deploy_lock import acquire_work_lock
-    return acquire_work_lock(project, session_id, scope=scope)
+async def api_acquire_work_lock(
+    project: str,
+    session_id: str,
+    scope: str = "",
+    max_concurrent: Optional[int] = Query(None, alias="max", description="호출자 상한(러너 MAX_CONCURRENT_PER_PROJECT), 최대 50"),
+):
+    """프로젝트 작업 잠금 획득. 상한에 걸리면 종료된 작업의 잠금을 회수하고 1회 재시도."""
+    from app.services.deploy_lock import (
+        acquire_work_lock,
+        list_work_lock_holders,
+        reclaim_terminal_work_lock_holders,
+    )
+
+    result = acquire_work_lock(project, session_id, scope=scope, max_concurrent=max_concurrent)
+    if result.get("acquired"):
+        return result
+    try:
+        holders = list_work_lock_holders(project, scope)
+        statuses = await _fetch_job_statuses(holders)
+    except Exception as e:
+        logger.warning("work_lock_reclaim_skipped", reason="db_lookup_failed", error=str(e))
+        return result
+    if reclaim_terminal_work_lock_holders(project, statuses, scope=scope):
+        return acquire_work_lock(project, session_id, scope=scope, max_concurrent=max_concurrent)
+    return result
 
 
 @router.post("/ops/locks/work/release")

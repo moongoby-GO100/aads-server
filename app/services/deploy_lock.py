@@ -76,16 +76,51 @@ def _work_lock_max_concurrent(project: str) -> int:
     return _env_int("MAX_CONCURRENT_PER_PROJECT", 6)
 
 
+WORK_LOCK_MAX_CAP = 50
+
+# 종료 상태 집합은 pipeline_cleanup 의 것을 그대로 쓴다 — 두 벌로 두면 한쪽이 낡는다.
+from app.services.pipeline_cleanup import _TERMINAL_STATUSES as TERMINAL_JOB_STATUSES  # noqa: E402
+
+
+def _project_specific_cap(project: str) -> Optional[int]:
+    """프로젝트 전용 env(MAX_CONCURRENT_PER_PROJECT_<P>) 와 NAS 직렬 정책은 호출자 max 로도 못 넘는 천장."""
+    project_key = re.sub(r"[^A-Z0-9_]", "_", (project or "").upper())
+    if project_key and os.getenv(f"MAX_CONCURRENT_PER_PROJECT_{project_key}"):
+        return _env_int(f"MAX_CONCURRENT_PER_PROJECT_{project_key}", 1)
+    if project_key == "NAS":
+        return 1
+    return None
+
+
+def _resolve_work_lock_limit(project: str, max_concurrent: Optional[int] = None) -> int:
+    """호출자가 상한(max)을 넘기면 min(max, 50), 1 미만/None 이면 env 기반 기본값."""
+    if max_concurrent is not None:
+        try:
+            requested = int(max_concurrent)
+        except (TypeError, ValueError):
+            requested = 0
+        if requested >= 1:
+            limit = min(requested, WORK_LOCK_MAX_CAP)
+            cap = _project_specific_cap(project)
+            return min(limit, cap) if cap is not None else limit
+    return _work_lock_max_concurrent(project)
+
+
 def _work_lock_key(project: str, scope: str = "") -> str:
     clean_scope = re.sub(r"[^A-Za-z0-9_.:-]", "_", (scope or "").strip())
     return f"work_lock:{project}:{clean_scope}" if clean_scope else f"work_lock:{project}"
 
 
 def acquire_work_lock(
-    project: str, session_id: str, timeout: int = 7200, scope: str = ""
+    project: str,
+    session_id: str,
+    timeout: int = 7200,
+    scope: str = "",
+    max_concurrent: Optional[int] = None,
 ) -> dict:
     """
     프로젝트 작업 잠금 획득.
+    max_concurrent 가 주어지면(1 이상) min(max_concurrent, 50) 을 이 호출의 상한으로 쓴다.
     반환: {"acquired": bool, "holder": str|None, "queue_position": int}
     """
     r = _get_redis()
@@ -93,7 +128,7 @@ def acquire_work_lock(
         return {"acquired": True, "holder": None, "queue_position": 0}
 
     key = _work_lock_key(project, scope)
-    max_concurrent = _work_lock_max_concurrent(project)
+    max_concurrent = _resolve_work_lock_limit(project, max_concurrent)
 
     try:
         # 현재 활성 세션 수 확인
@@ -121,6 +156,42 @@ def acquire_work_lock(
     except Exception as e:
         logger.warning("[work_lock] Redis 오류 — 잠금 없이 진행: %s", e)
         return {"acquired": True, "holder": None, "queue_position": 0}
+
+
+def list_work_lock_holders(project: str, scope: str = "") -> list[str]:
+    """현재 작업 잠금을 쥔 session_id 목록. Redis 불가/오류 시 빈 목록."""
+    r = _get_redis()
+    if r is None:
+        return []
+    try:
+        return list(r.hgetall(_work_lock_key(project, scope)).keys())
+    except Exception as e:
+        logger.warning("[work_lock] 보유자 조회 실패: %s", e)
+        return []
+
+
+def reclaim_terminal_work_lock_holders(
+    project: str, statuses: dict[str, str], scope: str = ""
+) -> list[str]:
+    """종료 상태(pipeline_jobs.status)인 보유자의 잠금만 제거하고 제거한 id 를 돌려준다.
+
+    statuses 는 session_id -> status. 모르는(없는) id 는 건드리지 않는다.
+    """
+    r = _get_redis()
+    if r is None:
+        return []
+    reclaimed: list[str] = []
+    key = _work_lock_key(project, scope)
+    for holder, status in statuses.items():
+        if status not in TERMINAL_JOB_STATUSES:
+            continue
+        try:
+            if r.hdel(key, holder):
+                reclaimed.append(holder)
+                logger.info("work_lock_reclaimed holder=%s status=%s", holder, status)
+        except Exception as e:
+            logger.warning("[work_lock] 종료 보유자 회수 실패 %s: %s", holder, e)
+    return reclaimed
 
 
 def release_work_lock(project: str, session_id: str, scope: str = "") -> bool:

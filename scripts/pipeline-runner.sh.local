@@ -2426,24 +2426,37 @@ check_duplicate() {
         return 1
     fi
 
-    # 중복 제출 방지: 10분 내 done이면 차단, 30분 내면 경고
+    # 중복 제출 방지: 10분 내 done이면 경고, 진행 중인 동일 작업이 있으면 차단.
+    # 이미 cancelled/dedup_blocked 인 작업은 "진행 중"이 아니다 — 예전에는 NOT IN (done,error,
+    # rejected_done) 이라 제출 측 dedup 으로 취소된 형제를 근거로 자신을 취소해 둘 다 사라졌다
+    # (runner-62f55395 ↔ runner-7f065ebd, 2026-10-02). queued/claimed 끼리는 (created_at, job_id)
+    # 가 앞선 쪽만 근거가 되므로 동시에 서로를 취소하는 일도 없다.
     local dup_job
-    dup_job=$(db_exec "SELECT job_id FROM pipeline_jobs
-                       WHERE project='${project}'
-                         AND instruction_hash='${inst_hash}'
-                         AND job_id != '${job_id}'
+    dup_job=$(db_exec "SELECT d.job_id FROM pipeline_jobs d, pipeline_jobs me
+                       WHERE me.job_id='${job_id}'
+                         AND d.project='${project}'
+                         AND d.instruction_hash='${inst_hash}'
+                         AND d.job_id != me.job_id
+                         AND COALESCE(d.phase,'') <> 'dedup_blocked'
                          AND (
-                           status NOT IN ('done','error','rejected_done')
-                           OR (status = 'done' AND updated_at > NOW() - INTERVAL '10 minutes')
+                           (d.status NOT IN ('done','error','rejected_done','cancelled','queued','claimed'))
+                           OR (d.status IN ('queued','claimed')
+                               AND (d.created_at, d.job_id) < (me.created_at, me.job_id))
+                           OR (d.status = 'done' AND d.updated_at > NOW() - INTERVAL '10 minutes')
                          )
                        LIMIT 1;" 2>/dev/null) || true
     if [[ -n "$dup_job" ]]; then
         dup_job="${dup_job// /}"
         # 10분 내 done이거나 아직 진행 중이면 차단
-        local dup_status
+        local dup_status dup_phase
         dup_status=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id='${dup_job}';" 2>/dev/null) || true
         dup_status="${dup_status// /}"
-        if [[ "$dup_status" != "done" ]]; then
+        dup_phase=$(db_exec "SELECT COALESCE(phase,'') FROM pipeline_jobs WHERE job_id='${dup_job}';" 2>/dev/null) || true
+        dup_phase="${dup_phase// /}"
+        # 취소 직전 재확인: 가리키는 작업이 그 사이 취소/종료됐으면 자신이 진행한다.
+        if [[ -z "$dup_status" || "$dup_status" =~ ^(cancelled|error|rejected_done)$ || "$dup_phase" == "dedup_blocked" ]]; then
+            log "  DEDUP_SKIP: 기존 작업 $dup_job 이 이미 비활성(${dup_status:-없음}/${dup_phase}) — $job_id 는 계속 진행"
+        elif [[ "$dup_status" != "done" ]]; then
             log "  DEDUP_BLOCK: 동일 작업 진행 중: $dup_job ($dup_status) — $job_id 차단"
             db_update "UPDATE pipeline_jobs SET status='cancelled', phase='dedup_blocked',
                        error_detail='dedup_blocked: 기존 작업 ${dup_job} 계속 진행',
@@ -2451,10 +2464,11 @@ check_duplicate() {
                        completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
             record_runner_event "$job_id" "job_terminal" "cancelled" "dedup_blocked" "" "" "" "" "{\"reason\":\"dedup_blocked\",\"existing_job\":\"${dup_job}\"}"
             return 1
+        else
+            log "  DEDUP_WARN: 10분 내 동일 작업 완료: $dup_job (계속 실행하되 경고)"
+            db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[DEDUP 경고] 유사 작업: ${dup_job}',
+                       updated_at=NOW() WHERE job_id='${job_id}';"
         fi
-        log "  DEDUP_WARN: 10분 내 동일 작업 완료: $dup_job (계속 실행하되 경고)"
-        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[DEDUP 경고] 유사 작업: ${dup_job}',
-                   updated_at=NOW() WHERE job_id='${job_id}';"
     fi
 
     return 0
@@ -2621,6 +2635,40 @@ _claim_queued_job() {
                 FOR UPDATE SKIP LOCKED
              )
              RETURNING job_id, project, encode(convert_to(instruction, 'UTF8'), 'hex'), chat_session_id, max_cycles, ${model_return_expr}, COALESCE(size,'M'), COALESCE(parallel_group,'');"
+}
+
+# 러너 재기동 직후 status=claimed / started_at NULL 로 고착된 작업을 되돌린다
+# (runner-14f2dd22, 2026-10-02). claim 은 DB 에서만 일어나고 run_job 서브셸이 죽으면
+# 그 행을 아무도 running 으로 올리지 않는다. 살아 있는 서브셸(_bg_jobs)의 job 은 제외하고,
+# 같은 호스트의 다른 엔진 러너가 집은 작업을 건드리지 않도록 이 엔진이 claim 하는 집합으로만 한정한다.
+reclaim_orphan_claims() {
+    local _entry _pid _jid _live="" _engine_pred _rows
+    for _pid in "${!_bg_jobs[@]}"; do
+        kill -0 "$_pid" 2>/dev/null || continue
+        _entry="${_bg_jobs[$_pid]}"
+        _jid="${_entry%%|*}"
+        [[ "$_jid" =~ ^[A-Za-z0-9_-]+$ ]] && _live+="${_live:+,}'${_jid}'"
+    done
+    [[ -n "${_current_job_id:-}" && "$_current_job_id" =~ ^[A-Za-z0-9_-]+$ ]] && _live+="${_live:+,}'${_current_job_id}'"
+    if [[ "$RUNNER_ENGINE_MODE" == "litellm" ]]; then
+        _engine_pred="AND COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), '') LIKE 'litellm:%'"
+    else
+        _engine_pred="AND NOT (COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), '') LIKE 'litellm:%' AND project IN ('GO100','KIS','SF','NTV2'))"
+    fi
+    _rows=$(db_exec "UPDATE pipeline_jobs SET status='queued', phase='queued', runner_host=NULL, updated_at=NOW()
+                     WHERE status='claimed'
+                       AND runner_host=$(sql_escape "$RUNNER_HOST_NAME")
+                       AND started_at IS NULL
+                       AND updated_at < NOW() - INTERVAL '2 minutes'
+                       ${_live:+AND job_id NOT IN (${_live})}
+                       ${_engine_pred}
+                     RETURNING job_id;" 2>/dev/null) || return 0
+    while IFS= read -r _jid; do
+        _jid="${_jid// /}"
+        [[ -n "$_jid" ]] || continue
+        log "  ORPHAN_CLAIM_REQUEUE job=${_jid} host=${RUNNER_HOST_NAME} — claimed/started_at NULL 고아를 queued 로 회수"
+        record_runner_event "$_jid" "job_requeued" "queued" "queued" "" "" "" "" "{\"error_detail\":\"orphan_claim_requeued\"}"
+    done <<< "$_rows"
 }
 
 # claim 결과의 instruction_hex를 Bash 내장 printf로 디코딩한다. 외부 도구
@@ -2798,7 +2846,11 @@ run_job() {
     local lock_result
     local work_lock_scope_param=""
     [[ -n "$parallel_group" ]] && work_lock_scope_param="&scope=${parallel_group}"
-    lock_result=$(curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/work/acquire?project=${project}&session_id=${job_id}${work_lock_scope_param}" 2>/dev/null) || true
+    # 상한 단일 출처: Redis 작업잠금 상한을 API env 기본값(6)에 맡기지 않고 러너의
+    # MAX_CONCURRENT_PER_PROJECT 를 그대로 넘긴다 (API 가 min(max,50) 으로 클램프).
+    local work_lock_max_param=""
+    [[ "${MAX_CONCURRENT_PER_PROJECT:-}" =~ ^[1-9][0-9]{0,2}$ ]] && work_lock_max_param="&max=${MAX_CONCURRENT_PER_PROJECT}"
+    lock_result=$(curl -sf -X POST -H "X-Monitor-Key: internal" "${AADS_API_URL}/api/v1/ops/locks/work/acquire?project=${project}&session_id=${job_id}${work_lock_scope_param}${work_lock_max_param}" 2>/dev/null) || true
     if echo "$lock_result" | grep -q '"acquired":false'; then
         local holder
         holder=$(echo "$lock_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('holder','unknown'))" 2>/dev/null) || holder="unknown"
@@ -5761,6 +5813,7 @@ main() {
 
     # C3: 시작 시 stuck 작업 복구
     _recover_stuck_jobs "$project_filter"
+    reclaim_orphan_claims
 
     local _cycle=0
     # BUG-7: STUCK_CHECK_INTERVAL(기본 300초/5분) 기반 동적 cycle 계산
@@ -5772,8 +5825,15 @@ main() {
         # Legacy hosts retain the global limit. Hosts with an explicit server
         # budget enforce it atomically at claim time and keep servicing reviews.
         if [[ -z "${MAX_CONCURRENT_SERVER:-}" ]]; then
-        local _running_count
-        _running_count=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE status IN ('running','claimed');" 2>/dev/null) || _running_count="0"
+        # 기본은 이 호스트(runner_host)가 쥔 건수만 센다. 예전에는 전 서버 합계를
+        # MAX_CONCURRENT_GLOBAL 과 비교해, contabo14 상한을 20 으로 올리자 AADS 러너가
+        # 자기 실행 1건으로 THROTTLE 10/10 에 굶었다(2026-10-02). 전 서버 합계는
+        # RUNNER_THROTTLE_SCOPE=global 로 명시한 경우에만 쓴다.
+        local _running_count _throttle_host_filter=""
+        if [[ "${RUNNER_THROTTLE_SCOPE:-host}" != "global" ]]; then
+            _throttle_host_filter="AND runner_host=$(sql_escape "$RUNNER_HOST_NAME")"
+        fi
+        _running_count=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE status IN ('running','claimed') ${_throttle_host_filter};" 2>/dev/null) || _running_count="0"
         _running_count="${_running_count// /}"
 
         if [[ "$_running_count" -ge "${MAX_CONCURRENT_GLOBAL:-10}" ]]; then
@@ -5850,6 +5910,7 @@ main() {
         if (( _cycle % _stuck_check_cycles == 0 )); then
             runner_heartbeat
             _recover_stuck_jobs "$project_filter"
+            reclaim_orphan_claims
             _watchdog_check "$project_filter"
             _cleanup_old_artifacts
             _check_runtime_alerts "$project_filter"
