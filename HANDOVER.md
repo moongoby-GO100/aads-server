@@ -1,3 +1,18 @@
+## 2026-10-02 — 스마트브라우저 자동 기록 0행 원인 규명 + 조용한 skip 제거 (AADS-SMARTBROWSER-AUTORECORD-NOWRITE-20261002)
+
+**원인(코드 확정).** 관측된 흐름 navigate→snapshot 은 단계가 1개(snapshot/screenshot 은 단계로 안 센다)라 `auto_record.py` `_finish` 의 `MIN_STEPS`(기본 2) 에서 **로그 없이** 거부된다. TraceBook 에 같은 입력을 직접 넣어 `None` 확인. 배관(MCP 브리지 `aads_tools_bridge._call_tool` → `current_chat_session_id.set(AADS_SESSION_ID)` → `ToolExecutor.execute` → `_auto_record_wrap`)은 정상이다 — 후보 1·2 는 아님. `execute()` 가 세션·테넌트를 먼저 해석하고 `_auto_record_wrap` 도 contextvar 로 세션을 구한다.
+- 로그가 안 보인 이유: 브리지는 `docker exec ... python3 -m mcp_servers.aads_tools_bridge` 서브프로세스라 stderr 가 Claude CLI 로 가고 `docker logs` 에 안 나온다. 게다가 브리지 루트 로거가 WARNING 이라 INFO 는 어디에도 안 남는다.
+- 덤으로 찾은 결함: ARIA 스냅샷은 URL 이 `URL:` 줄이 아니라 헤더 `[ARIA 스냅샷 — url]` 에 있어 `_screen_problem` 의 login_redirect 판정이 스냅샷에는 동작하지 않았다(로그인 화면이 성공으로 기록될 수 있었음). `_ARIA_HEADER_URL` 로 보강.
+
+**변경(코드 완료, 커밋 전 — Runner 가 승인 후 commit/push).**
+- `work_recipe/auto_record.py`: 모든 거부 분기에 `auto_record_skipped tool= session=<8자> reason=<고정 어휘>` INFO 로그(`_skip`). reason: flag_off/no_session/no_open_sequence/step_failed/evidence_not_success/unrecordable_url/error_screen/unrecordable_input/too_many_steps/first_step_not_navigate/login_redirect·domain_changed·unrecordable_url(화면 판정)/evidence_too_short/too_few_steps(steps·min_steps 포함). 시퀀스 완성 후 테넌트 없음은 WARNING `reason=no_tenant`, 기록 결과는 INFO `auto_record_result status= sessions=`. 입력값·selector·URL 은 로그에 싣지 않는다. `observe` 반환값은 그대로(None).
+- `services/tool_executor.py` `_auto_record_wrap`: 세션 없음 WARNING `reason=no_session`(전엔 `if session_id:` 로 무로그), 플래그 off INFO, 예외 WARNING `reason=exception err=<종류>`. 도구 결과는 불변.
+- `mcp_servers/aads_tools_bridge.py`: `app.services.work_recipe.auto_record` 로거만 INFO 로 올림(루트 WARNING 이라 skip 사유가 사라지던 것).
+- 정책은 건드리지 않았다: `MIN_STEPS` 기본 2, `SMART_BROWSER_AUTO_APPROVE_READ` 기본값, .env·docker-compose 무변경. **navigate+snapshot 만으로 된 단순 조회를 기록하려면 `SMART_BROWSER_AUTO_RECORD_MIN_STEPS=1` 이 필요하나 모든 페이지 방문이 초안 후보가 되므로 CEO 결정 사항.**
+- 알려진 한계: 브리지 로그는 여전히 docker logs 가 아니라 CLI stderr 로 간다. 운영 확인은 일반 채팅 경로(aads-server 프로세스) 로그 또는 `smart_browser_auto_traces` 행 수로 한다. `smart_browser_auto_*` 테이블 SQL 은 2026-10-02 17:08 KST 운영 DB 적용 완료(위 이전 항목의 "미적용" 서술은 낡음).
+
+**검증.** `bash scripts/run_unit_tests.sh tests/unit/test_smart_browser_auto_record.py tests/unit/test_smart_browser_auto_approve.py` 60 passed(신규 10: MCP 경로 session_id 입력 없이 traces 행 생성 / 세션 없음 skip 로그 / 플래그 off 로그 / navigate+snapshot too_few_steps / evidence_not_success·step_failed / no_open_sequence / ARIA 헤더 login_redirect / no_tenant WARNING / auto_record_result). `test_aads_tools_bridge.py`·`test_dup_guard.py` 29 passed. ruff F821/F811 통과. handover DB entry_key `aads-smartbrowser-autorecord-ddl-20261002` 는 이 세션에서 쓸 도구가 없어 갱신하지 못했다 — Runner/후속 세션이 위 내용으로 갱신해야 한다.
+
 ## 2026-10-02 — 조회 전용(READ) 작업 레시피 자동 승인 정책 (AADS-WORKRECIPE-READONLY-AUTOAPPROVE-20261002)
 
 **코드 완료 (커밋 전 — Runner 가 승인 후 commit/push).** 원 지시서는 runner-f6fc2a26(`AADS-SMARTBROWSER-READ-AUTOAPPROVE-20261002`) — pipeline_jobs 에서 읽어 그 범위만 수행. 위에 얹은 기반은 acbb4641(`auto_record.py`).

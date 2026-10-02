@@ -81,6 +81,7 @@ _ERROR_SCREEN = re.compile(
 )
 _LOGIN_PATH = re.compile(r"/(?:login|signin|sign-in|auth)(?:/|$)", re.IGNORECASE)
 _URL_LINE = re.compile(r"^URL:\s*(\S+)", re.MULTILINE)
+_ARIA_HEADER_URL = re.compile(r"^\[(?:ARIA 스냅샷|UI 요소 추출) — ([^\s\]]+)\]", re.MULTILINE)
 
 _UUID_SEGMENT = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
@@ -98,6 +99,15 @@ _EXTRA_SECRET_HINT = re.compile(
 
 def is_enabled() -> bool:
     return str(os.getenv(FLAG_ENV, "1")).strip().lower() not in {"0", "false", "off", "no", ""}
+
+
+def _skip(tool_name: str, session_id: str, reason: str, **detail: Any) -> None:
+    """기록을 건너뛴 사유를 남긴다. 사유는 고정 어휘이고 입력값은 싣지 않는다."""
+    extra = "".join(f" {key}={value}" for key, value in detail.items())
+    logger.info(
+        "auto_record_skipped tool=%s session=%s reason=%s%s",
+        tool_name, str(session_id or "-")[:8], reason, extra,
+    )
 
 
 def _int_env(name: str, default: int) -> int:
@@ -187,7 +197,7 @@ def _screen_problem(text: str, *, domain: str, first_path: str) -> str | None:
     head = text.split("DATA:", 1)[0]
     if _ERROR_SCREEN.search(head):
         return "error_screen"
-    match = _URL_LINE.search(head)
+    match = _URL_LINE.search(head) or _ARIA_HEADER_URL.search(head)
     if match:
         parts = _split_url(match.group(1))
         if parts is None:
@@ -241,7 +251,10 @@ class TraceBook:
     ) -> CompletedSequence | None:
         action = RECORDED_TOOLS.get(tool_name)
         session_id = str(session_id or "").strip()
-        if not action or not session_id:
+        if not action:
+            return None
+        if not session_id:
+            _skip(tool_name, session_id, "no_session")
             return None
         bundle = str(inp.get("browser_work_key") or inp.get("browser_session_id") or "").strip()
         key = (session_id, bundle)
@@ -253,20 +266,27 @@ class TraceBook:
         trace = self._traces.get(key)
 
         if action in {"snapshot", "screenshot"}:
-            if trace is None or not trace.steps or not succeeded:
+            if trace is None or not trace.steps:
+                _skip(tool_name, session_id, "no_open_sequence")
                 return None
-            return self._finish(key, trace, action, text)
+            if not succeeded:
+                _skip(tool_name, session_id, "evidence_not_success")
+                return None
+            return self._finish(key, trace, action, text, tool_name, session_id)
 
         if not succeeded:
+            _skip(tool_name, session_id, "step_failed")
             return None  # 실패한 단계는 기록하지 않는다. 직전 성공 단계는 유지.
 
         if action == "navigate":
             parts = _split_url(inp.get("url"))
             if parts is None:
                 self._traces.pop(key, None)
+                _skip(tool_name, session_id, "unrecordable_url")
                 return None
             if _ERROR_SCREEN.search(text):
                 self._traces.pop(key, None)  # 이동한 곳이 오류 화면이면 이 시퀀스는 성공이 아니다.
+                _skip(tool_name, session_id, "error_screen")
                 return None
             domain, path, clean_url = parts
             if trace is None or trace.domain != domain:
@@ -275,14 +295,17 @@ class TraceBook:
             step = {"action": "navigate", "url": clean_url}
         else:
             if trace is None:
+                _skip(tool_name, session_id, "no_open_sequence")
                 return None
             step = self._interaction_step(action, inp, trace)
             if step is None:
                 self._traces.pop(key, None)  # 기록할 수 없는 입력 — 시퀀스 폐기
+                _skip(tool_name, session_id, "unrecordable_input")
                 return None
 
         if len(trace.steps) >= _MAX_STEPS:
             self._traces.pop(key, None)
+            _skip(tool_name, session_id, "too_many_steps", limit=_MAX_STEPS)
             return None
         trace.steps.append(step)
         trace.touched = now
@@ -319,19 +342,36 @@ class TraceBook:
         return {"action": "click", "selector": selector}
 
     def _finish(
-        self, key: tuple[str, str], trace: _Trace, action: str, text: str
+        self,
+        key: tuple[str, str],
+        trace: _Trace,
+        action: str,
+        text: str,
+        tool_name: str,
+        session_id: str,
     ) -> CompletedSequence | None:
         self._traces.pop(key, None)  # 성공이든 실패든 이 시퀀스는 여기서 끝난다.
         if trace.steps[0]["action"] != "navigate":
+            _skip(tool_name, session_id, "first_step_not_navigate", domain=trace.domain)
             return None
-        if _screen_problem(text, domain=trace.domain, first_path=trace.first_path):
+        problem = _screen_problem(text, domain=trace.domain, first_path=trace.first_path)
+        if problem:
+            _skip(tool_name, session_id, problem, domain=trace.domain)
             return None
         if action == "snapshot":
-            if len(text.split("\n", 1)[-1].strip()) < _MIN_EVIDENCE_CHARS:
-                return None
-        elif len(text.split("DATA:", 1)[-1].strip()) < _MIN_SCREENSHOT_B64:
+            too_short = len(text.split("\n", 1)[-1].strip()) < _MIN_EVIDENCE_CHARS
+        else:
+            too_short = len(text.split("DATA:", 1)[-1].strip()) < _MIN_SCREENSHOT_B64
+        if too_short:
+            _skip(tool_name, session_id, "evidence_too_short", domain=trace.domain)
             return None
-        if len(trace.steps) < _int_env(MIN_STEPS_ENV, 2):
+        min_steps = _int_env(MIN_STEPS_ENV, 2)
+        if len(trace.steps) < min_steps:
+            # snapshot/screenshot 은 단계로 세지 않는다 — navigate 하나 뒤 snapshot 은 여기서 걸린다.
+            _skip(
+                tool_name, session_id, "too_few_steps",
+                domain=trace.domain, steps=len(trace.steps), min_steps=min_steps,
+            )
             return None
         steps = [dict(step) for step in trace.steps]
         return CompletedSequence(
@@ -502,12 +542,25 @@ async def observe(
 ) -> dict[str, Any] | None:
     """browser_* 한 번의 실행 결과를 관찰한다. 어떤 실패도 도구 결과에 영향을 주지 않는다."""
     if not is_enabled():
+        _skip(tool_name, session_id, "flag_off")
         return None
     try:
         seq = _book.feed(tool_name, inp, result, session_id=session_id)
-        if seq is None or not tenant_id:
+        if seq is None:
             return None
-        return await record_success(seq, tenant_id=tenant_id, session_id=session_id)
+        if not tenant_id:
+            logger.warning(
+                "auto_record_skipped tool=%s session=%s reason=no_tenant domain=%s",
+                tool_name, str(session_id or "-")[:8], seq.domain,
+            )
+            return None
+        outcome = await record_success(seq, tenant_id=tenant_id, session_id=session_id)
+        logger.info(
+            "auto_record_result tool=%s session=%s domain=%s status=%s sessions=%s",
+            tool_name, str(session_id or "-")[:8], seq.domain,
+            outcome.get("status"), outcome.get("sessions"),
+        )
+        return outcome
     except Exception as exc:
         # 입력값(fill value 등)이 섞일 수 있어 예외 문구가 아니라 종류만 남긴다.
         logger.warning("smart_browser_auto_record_failed tool=%s err=%s", tool_name, type(exc).__name__)

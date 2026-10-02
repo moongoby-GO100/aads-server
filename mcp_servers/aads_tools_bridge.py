@@ -25,6 +25,8 @@ import mcp.types as types
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger("aads_tools_bridge")
+# 루트가 WARNING 이라 auto_record 의 skip 사유(INFO)가 브리지에서 사라진다.
+logging.getLogger("app.services.work_recipe.auto_record").setLevel(logging.INFO)
 
 # structlog가 stdout에 쓰면 MCP JSON-RPC 전송이 깨진다 — stderr로 강제 지정
 import structlog

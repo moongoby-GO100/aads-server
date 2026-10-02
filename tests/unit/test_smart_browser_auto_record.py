@@ -293,6 +293,152 @@ async def test_wrapper_records_and_never_changes_result(env, monkeypatch):
         tool_executor_module.current_chat_session_id.reset(token)
 
 
+def _skip_reasons(caplog):
+    return [
+        rec.getMessage().split("reason=")[1].split()[0]
+        for rec in caplog.records
+        if "auto_record_skipped" in rec.getMessage() and "reason=" in rec.getMessage()
+    ]
+
+
+async def _mcp_style_flow(executor, session_env_var):
+    """MCP 브리지처럼: contextvar 만 세팅하고 도구 입력에는 session_id 를 싣지 않는다."""
+    handlers = {
+        "browser_navigate": NAV_OK,
+        "browser_click": "[클릭 완료] selector=button.go",
+        "browser_snapshot": SNAP_OK,
+    }
+    token = tool_executor_module.current_chat_session_id.set(session_env_var)
+    try:
+        for tool, out in handlers.items():
+            async def handler(inp, out=out):
+                return out
+
+            inp = {"browser_work_key": "wk"}
+            if tool == "browser_navigate":
+                inp["url"] = "https://shop.example.com/orders"
+            if tool == "browser_click":
+                inp["selector"] = "button.go"
+            assert await executor._auto_record_wrap(tool, handler)(inp) == out
+    finally:
+        tool_executor_module.current_chat_session_id.reset(token)
+
+
+async def test_mcp_path_without_session_id_in_input_writes_trace_row(env, monkeypatch):
+    async def tenant(*args, **kwargs):
+        return TENANT
+
+    monkeypatch.setattr(tool_executor_module, "resolve_bound_tenant_id", tenant)
+    await _mcp_style_flow(ToolExecutor(), "7fb5f50a-9fe7-4a29-9333-9c023125aa6e")
+    assert len(env["traces"]) == 1
+    (tenant_id, domain, _sig, chat_session), count = next(iter(env["traces"].items()))
+    assert (tenant_id, domain, chat_session, count) == (
+        TENANT, "shop.example.com", "7fb5f50a-9fe7-4a29-9333-9c023125aa6e", 1,
+    )
+
+
+async def test_wrapper_without_session_logs_reason_and_keeps_result(env, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(tool_executor_module, "_resolve_bound_chat_session_id", lambda *_: "")
+
+    async def handler(inp):
+        return NAV_OK
+
+    wrapped = ToolExecutor()._auto_record_wrap("browser_navigate", handler)
+    assert await wrapped({"url": "https://shop.example.com/orders"}) == NAV_OK
+    assert env["traces"] == {} and len(auto_record.get_book()) == 0
+    assert "auto_record_skipped tool=browser_navigate reason=no_session" in caplog.text
+
+
+async def test_flag_off_logs_reason(env, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv(auto_record.FLAG_ENV, "0")
+
+    async def handler(inp):
+        return "[클릭 완료]"
+
+    ToolExecutor()._auto_record_wrap("browser_click", handler)
+    assert await auto_record.observe(
+        "browser_click", {}, "[클릭 완료]", session_id="s", tenant_id=TENANT
+    ) is None
+    assert _skip_reasons(caplog) == ["flag_off", "flag_off"]
+
+
+async def test_navigate_then_snapshot_only_is_skipped_with_reason(env, caplog):
+    caplog.set_level(logging.INFO)
+    key = {"browser_work_key": "wk"}
+    plan = [
+        ("browser_navigate", {"url": "https://shop.example.com/orders", **key}, NAV_OK),
+        ("browser_snapshot", dict(key), SNAP_OK),
+    ]
+    assert await run_flow("session-a", steps=plan) is None
+    assert env["traces"] == {}
+    assert _skip_reasons(caplog) == ["too_few_steps"]
+    assert "steps=1 min_steps=2" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "plan_tail, reason",
+    [
+        ([("browser_snapshot", {}, "[ERROR] 스냅샷 실패: boom")], "evidence_not_success"),
+        ([("browser_click", {"selector": "a"}, "[ERROR] 클릭 실패")], "step_failed"),
+    ],
+)
+async def test_failed_evidence_and_failed_step_log_reason(env, caplog, plan_tail, reason):
+    caplog.set_level(logging.INFO)
+    key = {"browser_work_key": "wk"}
+    plan = [("browser_navigate", {"url": "https://shop.example.com/orders", **key}, NAV_OK)]
+    plan += [(tool, {**inp, **key}, out) for tool, inp, out in plan_tail]
+    await run_flow("session-a", steps=plan)
+    assert reason in _skip_reasons(caplog)
+
+
+async def test_snapshot_without_open_sequence_logs_reason(env, caplog):
+    caplog.set_level(logging.INFO)
+    assert await auto_record.observe(
+        "browser_snapshot", {"browser_work_key": "wk"}, SNAP_OK, session_id="s", tenant_id=TENANT
+    ) is None
+    assert _skip_reasons(caplog) == ["no_open_sequence"]
+
+
+async def test_login_redirect_is_detected_on_aria_snapshot_header(env, caplog):
+    """ARIA 스냅샷은 `URL:` 줄이 아니라 헤더에 URL 이 있다 — 로그인 화면을 성공으로 기록하면 안 된다."""
+    caplog.set_level(logging.INFO)
+    key = {"browser_work_key": "wk"}
+    login_snap = "[ARIA 스냅샷 — https://shop.example.com/login]\n- heading 로그인\n- textbox 이메일"
+    plan = [
+        ("browser_navigate", {"url": "https://shop.example.com/orders", **key}, NAV_OK),
+        ("browser_click", {"selector": "a.more", **key}, "[클릭 완료] selector=a.more"),
+        ("browser_snapshot", dict(key), login_snap),
+    ]
+    assert await run_flow("session-a", steps=plan) is None
+    assert env["traces"] == {}
+    assert _skip_reasons(caplog) == ["login_redirect"]
+
+
+async def test_completed_sequence_without_tenant_warns(env, caplog):
+    caplog.set_level(logging.INFO)
+    key = {"browser_work_key": "wk"}
+    plan = [
+        ("browser_navigate", {"url": "https://shop.example.com/orders", **key}, NAV_OK),
+        ("browser_click", {"selector": "a.more", **key}, "[클릭 완료] selector=a.more"),
+    ]
+    for tool, inp, out in plan:
+        await auto_record.observe(tool, inp, out, session_id="default", tenant_id="")
+    assert await auto_record.observe(
+        "browser_snapshot", dict(key), SNAP_OK, session_id="default", tenant_id=""
+    ) is None
+    assert env["traces"] == {}
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("reason=no_tenant" in r.getMessage() for r in warnings)
+
+
+async def test_recorded_sequence_logs_result(env, caplog):
+    caplog.set_level(logging.INFO)
+    await run_flow("session-a")
+    assert "auto_record_result" in caplog.text and "status=recorded" in caplog.text
+
+
 async def test_smart_browser_list_exposes_pending_drafts(monkeypatch):
     async def tenant(**kwargs):
         return TENANT

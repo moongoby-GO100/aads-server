@@ -1149,23 +1149,30 @@ class ToolExecutor:
         """browser_* 성공 경로 자동 기록. SMART_BROWSER_AUTO_RECORD=0 이면 fn 을 그대로 돌려준다."""
         from app.services.work_recipe import auto_record
 
-        if tool_name not in auto_record.RECORDED_TOOLS or not auto_record.is_enabled():
+        if tool_name not in auto_record.RECORDED_TOOLS:
+            return fn
+        if not auto_record.is_enabled():
+            logger.info("auto_record_skipped tool=%s reason=flag_off", tool_name)
             return fn
 
         async def _recorded(inp: Dict[str, Any]) -> Any:
             result = await fn(inp)
             try:
                 session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
-                if session_id:
-                    tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
-                    await asyncio.wait_for(
-                        auto_record.observe(
-                            tool_name, inp, result, session_id=session_id, tenant_id=tenant_id
-                        ),
-                        timeout=5.0,
-                    )
+                if not session_id:
+                    logger.warning("auto_record_skipped tool=%s reason=no_session", tool_name)
+                    return result
+                tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+                await asyncio.wait_for(
+                    auto_record.observe(
+                        tool_name, inp, result, session_id=session_id, tenant_id=tenant_id
+                    ),
+                    timeout=5.0,
+                )
             except Exception as exc:
-                logger.warning("auto_record_skipped tool=%s err=%s", tool_name, type(exc).__name__)
+                logger.warning(
+                    "auto_record_skipped tool=%s reason=exception err=%s", tool_name, type(exc).__name__
+                )
             return result
 
         return _recorded
