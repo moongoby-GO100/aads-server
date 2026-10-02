@@ -8,7 +8,8 @@
      성공하면 registration.request_registration 으로 pending 초안 1건을 만든다.
 
 비밀값 규칙: fill 값은 어떤 경로로도 이 모듈의 상태·DB·로그에 들어오지 않는다.
-쿠키·토큰이 실리기 쉬운 URL query/fragment 도 저장하지 않는다. 자동 승인은 하지 않는다.
+쿠키·토큰이 실리기 쉬운 URL query/fragment 도 저장하지 않는다. 자동 승인은 기본 꺼짐이며
+조회 전용 초안만 auto_approve 정책이 처리한다(SMART_BROWSER_AUTO_APPROVE_READ).
 """
 
 from __future__ import annotations
@@ -480,7 +481,15 @@ async def record_success(
                 tenant, seq.domain, seq.signature,
             )
         raise
-    return {"status": outcome, "sessions": sessions, "registration_id": registration_id}
+    result = {"status": outcome, "sessions": sessions, "registration_id": registration_id}
+    if registration_id:
+        from app.services.work_recipe import auto_approve  # 순환 import 방지 — auto_approve 가 이 모듈을 쓴다
+
+        if auto_approve.is_enabled():
+            result["auto_approve"] = await auto_approve.maybe_auto_approve(
+                registration_id, tenant_id=tenant
+            )
+    return result
 
 
 async def observe(

@@ -1,3 +1,20 @@
+## 2026-10-02 — 조회 전용(READ) 작업 레시피 자동 승인 정책 (AADS-WORKRECIPE-READONLY-AUTOAPPROVE-20261002)
+
+**코드 완료 (커밋 전 — Runner 가 승인 후 commit/push).** 원 지시서는 runner-f6fc2a26(`AADS-SMARTBROWSER-READ-AUTOAPPROVE-20261002`) — pipeline_jobs 에서 읽어 그 범위만 수행. 위에 얹은 기반은 acbb4641(`auto_record.py`).
+- 신규 `app/services/work_recipe/auto_approve.py`: auto_record 가 만든 pending 초안을 아래 **전부** 만족할 때만 `registration.decide_registration(approve, decided_by='system:auto_read_policy')` 로 승인. 어긋나면 pending 유지(기존 CEO 승인 경로).
+  1. 레시피 `max_risk()==READ` + dry_run.max_risk==READ + 모든 단계 동작이 `navigate`/`snapshot` 뿐(click/fill/select/press 등은 선언 risk 와 무관하게 제외) + `guard.classify_step` 가 단계마다 READ + 화면 증거 snapshot 단계 존재.
+  2. 비밀 입력(`inputs.secret`)·`credential*`/`secret` 단계·`{{변수}}`·로그인 경로(`auto_record._LOGIN_PATH`, `recorder._CREDENTIAL_HINT`) 없음.
+  3. `smart_browser_auto_traces` 장부에서 같은 서명이 **서로 다른 chat_session_id 2개 이상** (장부의 관찰 단계도 navigate 뿐이고 서명 재계산이 일치해야 인정). 환경변수로도 2 미만으로 못 내린다.
+  4. 도메인·경로 차단 목록(상수 `BLOCKED_HOST_FRAGMENTS`/`BLOCKED_PATH_TOKENS`/`BLOCKED_PATH_SUBSTRINGS`): 결제·금융·관리자 콘솔 + 지시서 외 추가로 localhost/사설 호스트/IP 리터럴. 경로 토큰은 정확 일치(`/payload` 는 통과), 호스트는 부분 문자열.
+- 연결: `auto_record.record_success` 가 **새 초안(drafted)** 을 만든 직후에만 `auto_approve.maybe_auto_approve` 호출(플래그 켜졌을 때). `already_drafted`/`skipped_existing` 은 호출 안 함. 예외·DB 오류·사람이 먼저 결정한 경우는 모두 pending 유지, 도구 결과는 불변.
+- 플래그 `SMART_BROWSER_AUTO_APPROVE_READ` — **기본 꺼짐(0)**. 이번 지시서 본문("기본 off")을 따랐다(원 지시서 f6fc2a26 은 "기본 1"이었음 — 상충하여 더 안전한 쪽 선택). 켜는 것은 CEO 승인 후. `SMART_BROWSER_AUTO_RECORD` 가 꺼져 있으면 초안 자체가 안 생기므로 자동 승인도 일어나지 않는다.
+- 감사: `registration.decision_reason` 에 JSON(`policy=auto_read_v1`, signature, domain, max_risk, session_ids[2+], evidence_refs=`smart_browser_auto_traces:<id>`) 저장 + `decided_by` 로 구분. **원 지시서의 "audit.py 에 저장" 은 적용하지 않았다** — audit.py 는 실행(`recipe_run_steps`) 단위 기록이라 등록 결정을 담을 자리가 없고, 신규 테이블은 범위 밖. 대신 승인 행 자체(불변)가 근거를 가진다.
+- 알림: 승인 1건당 `telegram_bot.get_telegram_bot().send_message("자동 승인: 레시피명/도메인")` (best-effort, 실패 삼킴).
+- 롤백: 플래그 0 + `scripts/smart_browser_revoke_auto_read.py [--apply] [--tenant ID]` — `work_recipes.created_by='system:auto_read_policy' AND enabled` 를 `enabled=FALSE` (기본 dry-run, 삭제 없음, 같은 트랜잭션 `FOR UPDATE`). OVIS 미러(`ovis_recipes`)는 건드리지 않는다 — 플레이어는 `work_recipes.enabled` 를 본다.
+- 한계(알고 둔 것): 현재 `auto_record._build_recording` 은 click/fill 이 하나라도 있으면 전체를 WRITE_* 로 올리므로, **자동 승인 대상은 navigate 만으로 이뤄진 조회 레시피**(최소 2 navigate + 증거 snapshot)다. 클릭이 낀 조회 경로는 계속 사람 승인. 플래그를 켜기 전에 이미 만들어진 pending 초안은 소급 평가하지 않는다. DB 스키마 변경 없음(`smart_browser_auto_*` 테이블 SQL 은 여전히 미적용 상태 — 적용 전엔 기록 자체가 건너뛰어진다).
+
+**검증.** `bash scripts/run_unit_tests.sh` — 신규 `tests/unit/test_smart_browser_auto_approve.py`(READ+2세션→승인·감사·알림 / 같은 세션 2회·click·fill·비밀입력·로그인 경로·차단 도메인 7종·차단 경로 4종·변조 spec→pending / 플래그 0→미호출 / 사람이 먼저·DB 오류→pending / record_success 연결 / revoke dry-run·apply) + 기존 `test_smart_browser_auto_record.py` 합쳐 50 passed. work_recipe·recorder·registration·guard·executor·smart_browser_chat_tool·dup_guard·coupangeats_recipe_drafts 포함 11개 파일 293 passed, 4 failed — 실패 4건은 모두 `tests/unit/test_ohvis_console_api.py`(live_frame base64 / trigger_reply_collection, `chat_service` 가짜 커넥션 `fetch` 부재)로 변경 파일과 무관, HEAD 기준선에서 재현은 못 확인(워크트리 조작 금지). ruff F821/F811 통과, `scripts/dup_guard.py` 4개 파일 위반 0.
+
 ## 2026-10-02 — browser_* 도구 서버 Playwright 우선: work_key 만으로 PC Agent 로 보내지 않기 + PC 경로 90초 시한 (AADS-BROWSER-SERVER-PW-FIRST-20261002)
 
 **원인(실측 2026-10-02 14:07~14:09 KST).** `aads_adapter.acquire_browser_context` 가 `browser_work_key` 만 있으면 `ensure_work_session` → PC Agent(browser_bridge lease, 전 세션 공유 직렬)로 보냈다. 도구 설명이 work_key 를 "전용 Browser Bridge 세션"이라 적어 모델이 공개 사이트에도 붙였고, COMMAND_TIMEOUT/CDP_NOT_READY 재시도가 Codex MCP `tool_timeout_sec=120` 을 넘겨 같은 stdio 연결의 다른 도구가 전부 "Transport closed" 가 됐다(세션 5090a247, b8a8651b).
