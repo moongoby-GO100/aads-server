@@ -59,6 +59,7 @@ from app.api.agenda import router as agenda_router
 from app.api.assistant import router as assistant_router
 from app.api.hot_reload import router as hot_reload_router
 from app.api.credential_vault import router as credential_vault_router
+from app.api.clobe_integration import router as clobe_integration_router
 from app.api.llm_keys import router as llm_keys_router
 from app.api.llm_models import router as llm_models_router
 from app.api.llm_report import router as llm_report_router
@@ -3779,6 +3780,9 @@ _SERVICE_AUTH_EXACT_PATHS = {
     # JWT 미들웨어가 먼저 401 을 내면 그 검사에 닿지도 못한다 — 2026-09-21 실측.
     # prefix 가 아니라 정확 경로 하나만 면제한다.
     "/pc-ollama/v1/chat/completions",
+    # 클로브 MCP OAuth 콜백: 브라우저 리다이렉트라 Bearer 가 없다. 단회·10분 state 검증이
+    # 인증을 대신한다(app/services/clobe_mcp_client.py:_consume_state). 정확 경로 하나만 면제.
+    "/api/v1/integrations/clobe/oauth/callback",
 }
 
 # Public read-only routes must be listed individually. Never place the
@@ -3923,6 +3927,7 @@ app.include_router(obys_ops.router, prefix="/api/v1", tags=["yeoljeong-ops"])
 app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"])
 app.include_router(acct_sales.router, prefix="/api/v1", tags=["acct-sales"])
 app.include_router(credential_vault_router, prefix="/api/v1", tags=["credential-vault"])
+app.include_router(clobe_integration_router, prefix="/api/v1", tags=["clobe-integration"])
 app.include_router(google_sheets.router, prefix="/api/v1", tags=["google-sheets"])
 app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])
 app.include_router(llm_keys_router, prefix="/api/v1", tags=["llm-keys"])
