@@ -106,6 +106,54 @@ ROOTS = [
     ("/root/aads/aads-server/CLAUDE.md", "AADS", "프로젝트 규칙"),
 ]
 
+# AADS 서버 문서·리포트의 읽기 원본.
+#
+# 2026-10-02 실측. 위 ROOTS 의 /root/aads/aads-server/{docs,reports} 는 개발
+# 작업트리라 `main...origin/main [ahead 4, behind 48]` 로 뒤처져 있었고,
+# origin/main 에만 있는 신규 문서 5건의 doc_chunks 가 0건이었다. 그 트리는
+# 사용자 작업 커밋을 들고 있어 fetch/reset 을 할 수 없다. 그래서 색인은
+# origin/main 전용 미러(scripts/refresh_docs_mirror.sh 가 갱신)에서 읽는다.
+#
+# **doc_chunks.doc_path 는 바꾸지 않는다.** 읽는 위치만 미러로 옮기고 저장하는
+# 경로는 ROOTS 의 원래 경로(/root/aads/aads-server/...)로 되돌려 쓴다. 경로가
+# 바뀌면 cmd_index 의 known/sha 비교가 어긋나 전 문서가 새로 INSERT 되고 옛 행은
+# "사라진 문서" 로 지워진다.
+LIVE_TREE = "/root/aads/aads-server"
+MIRROR_SUBDIRS = ("docs", "reports")
+DEFAULT_MIRROR_DIR = "/root/aads/mirrors/aads-server"
+
+
+def mirror_dir() -> str:
+    return os.getenv("AADS_DOCS_MIRROR") or DEFAULT_MIRROR_DIR
+
+
+def mirror_ready(mirror: str | None = None) -> bool:
+    """미러가 쓸 수 있는 상태인가 — git 저장소이고 docs/ 가 체크아웃돼 있다."""
+    m = Path(mirror or mirror_dir())
+    return (m / ".git").exists() and (m / "docs").is_dir()
+
+
+def resolve_root(root: str, mirror: str | None = None, *, use_mirror: bool | None = None) -> str:
+    """ROOTS 의 논리 경로를 실제로 읽을 경로로 바꾼다. 미러 대상이 아니면 그대로."""
+    m = (mirror or mirror_dir()).rstrip("/")
+    if use_mirror is None:
+        use_mirror = mirror_ready(m)
+    if not use_mirror:
+        return root
+    for sub in MIRROR_SUBDIRS:
+        base = f"{LIVE_TREE}/{sub}"
+        if root == base or root.startswith(base + "/"):
+            return m + root[len(LIVE_TREE):]
+    return root
+
+
+def to_logical_path(physical: str, logical_root: str, physical_root: str) -> str:
+    """읽은 경로를 doc_chunks 에 저장할 원래(논리) 경로로 되돌린다."""
+    if physical_root == logical_root:
+        return physical
+    return logical_root + physical[len(physical_root):]
+
+
 # 경로에 이 조각이 들어가면 제외한다. 전부 "같은 문서의 다른 사본"이 생기는
 # 곳이다. 파일을 지우는 것이 아니라 색인에서만 뺀다 — 지우는 것은 되돌릴 수
 # 없고, 지금 문제는 용량이 아니라 색인이다.
@@ -213,11 +261,16 @@ def collect() -> list[dict]:
     by_hash: dict[str, dict] = {}
     scanned = 0
     seen_roots: set[str] = set()
+    use_mirror = mirror_ready()
+    if not use_mirror and any(Path(f"{LIVE_TREE}/{sub}").is_dir() for sub in MIRROR_SUBDIRS):
+        print(f"[index_docs] 경고: 미러 {mirror_dir()} 없음 — 개발 작업트리({LIVE_TREE})로 "
+              f"폴백한다. origin/main 의 신규 문서가 빠질 수 있다.", file=sys.stderr)
     for root, project, label in ROOTS:
-        base = Path(root)
         if root in seen_roots:
             continue
         seen_roots.add(root)
+        phys_root = resolve_root(root, use_mirror=use_mirror)
+        base = Path(phys_root)
         # ROOTS 항목은 디렉터리일 수도, 파일 하나일 수도 있다.
         if base.is_dir():
             entries = base.rglob("*")
@@ -229,7 +282,7 @@ def collect() -> list[dict]:
             try:
                 if not p.is_file() or p.suffix.lower() not in EXTENSIONS:
                     continue
-                full = str(p)
+                full = to_logical_path(str(p), root, phys_root)
                 if excluded(full):
                     continue
                 st = p.stat()
