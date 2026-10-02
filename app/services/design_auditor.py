@@ -161,6 +161,8 @@ class AuditResult:
     critical_issues: List[str]
     error: Optional[str] = None
     audited_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    provider_used: str = ""
+    vision_route: str = ""
 
     @classmethod
     def error_result(cls, screenshot_path: str, error: str) -> "AuditResult":
@@ -188,6 +190,8 @@ class AuditResult:
             "critical_issues": self.critical_issues,
             "error": self.error,
             "audited_at": self.audited_at,
+            "provider_used": self.provider_used,
+            "vision_route": self.vision_route,
         }
 
 
@@ -336,25 +340,88 @@ async def _call_claude_vision(image_b64: str, prompt: str, project_context: str)
     return text
 
 
-async def _call_vision_with_fallback(
+_CODEX_VISION_SYSTEM_PROMPT = (
+    "You are a strict UI/UX design auditor. Look at the attached image and answer "
+    "only with the JSON object the user asks for. Do not run commands or use tools."
+)
+
+
+async def _call_codex_cli_vision(
     image_b64: str, prompt: str, project_context: str
 ) -> tuple[str, str]:
-    """Claude(anthropic_client) 1순위 → Gemini(LiteLLM) 2순위. (응답 텍스트, 실제 호출 모델) 반환.
+    """Codex CLI 비전 — 릴레이 /codex-stream 경유(model_selector 의 기존 릴레이 호출 재사용).
 
-    둘 다 실패하면 두 오류를 합친 RuntimeError.
+    컨테이너에는 codex 바이너리가 없으므로 호스트 릴레이가 이미지를 --image 로 넘긴다.
+    (응답 텍스트, 실제 사용 모델) 반환.
     """
+    from app.services import model_selector as ms
+
+    model = await ms._get_codex_cli_fallback_model_from_db()
+    full_prompt = f"{prompt}\n\n[프로젝트 컨텍스트]\n{project_context}" if project_context else prompt
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": full_prompt},
+                {
+                    "type": "image",
+                    "name": "screenshot",
+                    "source": {
+                        "type": "base64",
+                        "media_type": _image_media_type(image_b64),
+                        "data": image_b64,
+                    },
+                },
+            ],
+        }
+    ]
+    chunks: List[str] = []
+    async for event in ms._stream_codex_relay_once(model, _CODEX_VISION_SYSTEM_PROMPT, messages):
+        kind = event.get("type")
+        if kind == "delta":
+            chunks.append(str(event.get("content", "")))
+        elif kind == "error":
+            raise RuntimeError(f"codex_cli_error: {str(event.get('content', ''))[:200]}")
+    text = "".join(chunks).strip()
+    if not text:
+        raise RuntimeError("codex_cli_empty_response")
+    return text, model
+
+
+async def _call_vision_with_fallback(
+    image_b64: str, prompt: str, project_context: str
+) -> tuple[str, str, str]:
+    """Claude(anthropic_client) → Codex CLI(릴레이) → Gemini(LiteLLM) 순.
+
+    (응답 텍스트, 실제 호출 모델, 경로 claude|codex_cli|gemini) 반환.
+    예외·빈 응답·JSON 파싱 불가는 모두 다음 순위로 넘긴다(마지막 Gemini 는 파싱 검증 없이 반환).
+    모두 실패하면 오류를 합친 RuntimeError.
+    """
+    errors: List[str] = []
+
     try:
         text = await _call_claude_vision(image_b64, prompt, project_context)
-        return text, CLAUDE_VISION_MODEL
+        _extract_json(text)
+        return text, CLAUDE_VISION_MODEL, "claude"
     except Exception as e:
         logger.warning("claude_vision_failed_fallback", error=str(e)[:200])
-        claude_err = e
+        errors.append(f"claude: {str(e)[:200]}")
+
+    try:
+        text, codex_model = await _call_codex_cli_vision(image_b64, prompt, project_context)
+        _extract_json(text)
+        return text, codex_model, "codex_cli"
+    except Exception as e:
+        logger.warning("codex_cli_vision_failed_fallback", error=str(e)[:200])
+        errors.append(f"codex_cli: {str(e)[:200]}")
+
     try:
         text = await _call_gemini_vision(image_b64, prompt, project_context)
-        return text, GEMINI_VISION_MODEL
-    except Exception as e2:
-        logger.error("all_vision_providers_failed", claude_error=str(claude_err)[:200], gemini_error=str(e2)[:200])
-        raise RuntimeError(f"claude: {str(claude_err)[:200]} | gemini: {str(e2)[:200]}") from e2
+        return text, GEMINI_VISION_MODEL, "gemini"
+    except Exception as e:
+        errors.append(f"gemini: {str(e)[:200]}")
+        logger.error("all_vision_providers_failed", errors=errors)
+        raise RuntimeError(" | ".join(errors)) from e
 
 
 # ---------------------------------------------------------------------------
@@ -392,12 +459,13 @@ class DesignAuditor:
 
         raw_text: str = ""
         provider_used: str = ""
+        vision_route: str = ""
 
         try:
-            raw_text, provider_used = await _call_vision_with_fallback(
+            raw_text, provider_used, vision_route = await _call_vision_with_fallback(
                 image_b64, AUDIT_PROMPT, project_context
             )
-            logger.info("vision_success", path=screenshot_path, provider=provider_used)
+            logger.info("vision_success", path=screenshot_path, provider=provider_used, route=vision_route)
         except Exception as e:
             return AuditResult.error_result(screenshot_path, f"LLM 호출 실패: {e}")
 
@@ -416,6 +484,8 @@ class DesignAuditor:
             verdict=verdict,
             summary=summary,
             critical_issues=critical_issues,
+            provider_used=provider_used,
+            vision_route=vision_route,
         )
 
         logger.info(
@@ -424,6 +494,7 @@ class DesignAuditor:
             total_score=total_score,
             verdict=verdict,
             provider=provider_used,
+            route=vision_route,
         )
 
         # experience_memory 저장 (graceful degradation)
@@ -505,8 +576,9 @@ class DesignAuditor:
 
         raw_text = ""
         provider_used = ""
+        vision_route = ""
         try:
-            raw_text, provider_used = await _call_vision_with_fallback(image_b64, IMAGE_AUDIT_PROMPT, "")
+            raw_text, provider_used, vision_route = await _call_vision_with_fallback(image_b64, IMAGE_AUDIT_PROMPT, "")
         except Exception as e2:
             logger.error("image_audit_all_llm_failed", error=str(e2))
             return {
@@ -563,6 +635,7 @@ class DesignAuditor:
             "critical_issues": critical_issues,
             "error": None,
             "provider_used": provider_used,
+            "vision_route": vision_route,
         }
 
     async def audit_mobile_screen(
@@ -631,8 +704,9 @@ class DesignAuditor:
 
         raw_text = ""
         provider_used = ""
+        vision_route = ""
         try:
-            raw_text, provider_used = await _call_vision_with_fallback(image_b64, prompt, "")
+            raw_text, provider_used, vision_route = await _call_vision_with_fallback(image_b64, prompt, "")
         except Exception as e2:
             logger.error("mobile_audit_all_llm_failed", error=str(e2))
             return {
@@ -693,6 +767,7 @@ class DesignAuditor:
             "critical_issues": critical_issues,
             "error": None,
             "provider_used": provider_used,
+            "vision_route": vision_route,
         }
 
     async def audit_product_images_batch(
@@ -806,6 +881,7 @@ class DesignAuditor:
                     for k, v in result.scores.items()
                 },
                 "provider_used": provider_used,
+                "vision_route": result.vision_route,
                 "project_context": project_context[:500] if project_context else "",
                 "audited_at": result.audited_at,
             }
