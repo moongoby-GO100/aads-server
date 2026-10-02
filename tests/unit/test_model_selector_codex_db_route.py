@@ -66,3 +66,28 @@ async def test_explicit_openai_provider_keeps_openai_row(monkeypatch):
     _patch(monkeypatch, _rows("gpt-6.1-sol"))
     row = await model_selector._get_registered_model_row("gpt-6.1-sol", provider="openai")
     assert row["provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_openai_pinned_with_verified_codex_row_reroutes_to_codex(monkeypatch):
+    _patch(monkeypatch, _rows("gpt-6.1-sol"))
+    assert await model_selector._prefer_codex_for_openai_pinned("openai", "gpt-6.1-sol") == "codex"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs", [
+    {"codex_status": "discovered"},
+    {"codex_backend": "openai_compatible_direct"},
+    {"is_executable": False},
+    {"retired_at": "2026-10-01T00:00:00+00:00"},
+])
+async def test_openai_pinned_without_runnable_codex_row_stays_openai(monkeypatch, kwargs):
+    _patch(monkeypatch, _rows("gpt-9-test", **kwargs))
+    assert await model_selector._prefer_codex_for_openai_pinned("openai", "gpt-9-test") == "openai"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [None, "codex", "anthropic"])
+async def test_non_openai_provider_is_untouched(monkeypatch, provider):
+    _patch(monkeypatch, _rows("gpt-6.1-sol"))
+    assert await model_selector._prefer_codex_for_openai_pinned(provider, "gpt-6.1-sol") == provider

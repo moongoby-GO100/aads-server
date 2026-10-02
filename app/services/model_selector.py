@@ -1559,6 +1559,22 @@ def _is_runnable_codex_cli_row(row: Dict[str, Any]) -> bool:
     return str(metadata.get("execution_backend") or "").strip() == "codex_cli"
 
 
+async def _prefer_codex_for_openai_pinned(provider: str | None, model_id: str) -> str | None:
+    """`openai:<id>` 선택을 같은 id 의 검증된 codex_cli(구독) 행으로 돌린다.
+
+    2026-10-02: 선택창에 저장된 openai:gpt-6.1-sol 은 api.openai.com 직결이라 도구
+    턴마다 400 → 재시도가 다른 모델로 넘어갔다. CEO 지시는 "CLI 모델만 사용" 이다.
+    실행 가능한 codex 행이 없으면 provider 를 그대로 둔다.
+    """
+    if provider != "openai":
+        return provider
+    row = await _get_registered_model_row(model_id, provider="codex")
+    if row and _is_runnable_codex_cli_row(row):
+        logger.info("openai_pinned_rerouted_to_codex_cli: '%s' — verified codex_cli row preferred", model_id)
+        return "codex"
+    return provider
+
+
 async def _get_registered_model_row(model_id: str, provider: str | None = None) -> Optional[Dict[str, Any]]:
     rows = await _list_registered_models(active_only=False)
     normalized_provider = str(provider or "").strip().lower()
@@ -2213,6 +2229,8 @@ async def call_stream(
     _provider_pinned = bool(_qualified_provider and not _db_default_applied)
     if _qualified_provider:
         model = _qualified_model
+    if not _db_default_applied:
+        _qualified_provider = await _prefer_codex_for_openai_pinned(_qualified_provider, model)
     model = _canonical_codex_model_id(model)
     resolved_model, resolved_row = await _resolve_registered_model_alias(model, provider=_qualified_provider)
     if resolved_model and resolved_model != model:
