@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -108,6 +109,19 @@ SIDECAR_NAVIGATION_TIMEOUT_SECONDS = 150
 SIDECAR_LAUNCH_TIMEOUT_SECONDS = 120
 SIDECAR_SNAPSHOT_TIMEOUT_SECONDS = 90
 HEADLESS_WORK_CONTEXT_MAX = max(1, int(os.getenv("AADS_BROWSER_HEADLESS_WORK_CONTEXT_MAX", "8")))
+
+HEADLESS_WORK_CONTEXT_TTL_DEFAULT_SECONDS = 1800.0
+
+
+def headless_work_context_ttl_seconds() -> float:
+    """유휴 work 컨텍스트 TTL(초). 0 이하면 정리를 끈다. 호출 시점에 env 를 읽는다."""
+    raw = os.getenv("AADS_BROWSER_HEADLESS_WORK_CONTEXT_TTL_SECONDS")
+    if raw is None or not raw.strip():
+        return HEADLESS_WORK_CONTEXT_TTL_DEFAULT_SECONDS
+    try:
+        return float(raw)
+    except ValueError:
+        return HEADLESS_WORK_CONTEXT_TTL_DEFAULT_SECONDS
 
 
 def normalize_work_key(work_key: str) -> str:
@@ -566,6 +580,7 @@ class BrowserBridgeService:
         self._headless_browser: Any = None
         self._headless_context: Any = None
         self._headless_work_contexts: dict[str, tuple[Any, Any]] = {}
+        self._headless_work_last_used: dict[str, float] = {}
         self._session_contexts: dict[str, Any] = {}
         self._session_browsers: dict[str, Any] = {}
         self._active_api_route_url_cache: str = ""
@@ -1915,6 +1930,41 @@ class BrowserBridgeService:
                 except Exception:
                     pass
         return context
+
+    def _mark_headless_work_context_used(self, work_key: str) -> None:
+        self._headless_work_last_used[normalize_work_key(work_key)] = time.monotonic()
+
+    async def _evict_idle_headless_work_contexts(self, ttl: float | None = None) -> int:
+        """ttl 초 넘게 쓰지 않은 work 컨텍스트를 닫고 캐시에서 뺀다. 닫은 개수를 반환.
+
+        last_used 가 기록되지 않은 항목은 지금 시각으로 기록만 하고 남겨둔다
+        (이 함수 도입 이전에 만들어졌거나 다른 경로로 만든 컨텍스트).
+        """
+        if ttl is None:
+            ttl = headless_work_context_ttl_seconds()
+        if ttl <= 0:
+            return 0
+        now = time.monotonic()
+        last_used = self._headless_work_last_used
+        for stale in [k for k in last_used if k not in self._headless_work_contexts]:
+            del last_used[stale]
+        evicted = 0
+        for key in list(self._headless_work_contexts):
+            seen = last_used.setdefault(key, now)
+            if now - seen <= ttl:
+                continue
+            entry = self._headless_work_contexts.pop(key, None)
+            last_used.pop(key, None)
+            if entry is None:
+                continue
+            evicted += 1
+            try:
+                await entry[1].close()
+            except Exception:
+                pass
+        if evicted:
+            logger.info("headless_work_contexts_evicted count=%d ttl=%.0fs", evicted, ttl)
+        return evicted
 
     async def _context_for_session(self, session: BrowserBridgeSession) -> Any:
         cached = self._session_contexts.get(session.session_id)

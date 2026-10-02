@@ -5,10 +5,11 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any, Optional
 
 from .pc_agent_budget import begin_call_budget, end_call_budget
-from .service import get_browser_bridge_service
+from .service import get_browser_bridge_service, headless_work_context_ttl_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,28 @@ async def _headless_context_with_timeout(service: Any) -> Any:
         service._headless_fallback_context(),
         timeout=_HEADLESS_LAUNCH_TIMEOUT_SECONDS,
     )
+
+
+def server_lane_scope_key(browser_work_key: str | None = None) -> str:
+    """서버 레인 컨텍스트 격리 키: work_key > chat:<채팅 세션> > chat:no-session."""
+    if browser_work_key:
+        return browser_work_key
+    try:
+        from app.services.tool_executor import current_chat_session_id
+
+        session_id = str(current_chat_session_id.get("") or "").strip().lower()
+    except Exception:
+        session_id = ""
+    session_id = re.sub(r"[^a-z0-9._:-]", "-", session_id)[:100].strip("-._:")
+    return f"chat:{session_id or 'no-session'}"
+
+
+async def _server_lane_context(service: Any, browser_work_key: str | None = None) -> Any:
+    scope_key = server_lane_scope_key(browser_work_key)
+    await service._evict_idle_headless_work_contexts(headless_work_context_ttl_seconds())
+    context = await service._headless_work_context(scope_key)
+    service._mark_headless_work_context_used(scope_key)
+    return context
 
 
 def _float_env(name: str, default: float) -> float:
@@ -165,15 +188,13 @@ async def acquire_browser_context(
     # active LOCAL_AGENT/CDP session become its implicit execution target.
     if browser_work_key or prefer_headless:
         try:
-            if browser_work_key:
-                return (
-                    await asyncio.wait_for(
-                        service._headless_work_context(browser_work_key),
-                        timeout=_HEADLESS_LAUNCH_TIMEOUT_SECONDS,
-                    ),
-                    None,
-                )
-            return await _headless_context_with_timeout(service), None
+            return (
+                await asyncio.wait_for(
+                    _server_lane_context(service, browser_work_key),
+                    timeout=_HEADLESS_LAUNCH_TIMEOUT_SECONDS,
+                ),
+                None,
+            )
         except asyncio.TimeoutError:
             return None, (
                 "[브라우저 도구 사용 불가] server_playwright(headless) 초기화가 "

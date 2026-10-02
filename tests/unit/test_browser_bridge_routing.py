@@ -52,7 +52,15 @@ class _FakeService:
 
     async def _headless_work_context(self, work_key: str):
         self.work_context_calls.append(work_key)
+        if self._headless_delay:
+            await asyncio.sleep(self._headless_delay)
         return self._work_contexts.setdefault(work_key, _FakeHeadlessContext())
+
+    async def _evict_idle_headless_work_contexts(self, ttl=None):
+        return 0
+
+    def _mark_headless_work_context_used(self, work_key: str) -> None:
+        return None
 
     async def ensure_work_session(self, *, work_key: str, url: str = "about:blank", **_kwargs):
         self.ensure_work_session_calls.append(work_key)
@@ -79,7 +87,9 @@ async def test_no_session_or_work_key_prefers_server_headless_even_with_active_p
 
     assert err is None
     assert isinstance(ctx, _FakeHeadlessContext)
-    assert fake_service.headless_calls == 1
+    # work_key 없는 서버 레인은 공용 fallback 컨텍스트가 아니라 채팅 세션 단위 컨텍스트.
+    assert fake_service.headless_calls == 0
+    assert fake_service.work_context_calls == ["chat:no-session"]
     assert fake_service.playwright_context_calls == []
 
 
