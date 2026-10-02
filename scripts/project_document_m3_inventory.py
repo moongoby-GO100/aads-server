@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -18,6 +20,17 @@ from uuid import UUID
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BYTES = 262144
 PROJECT = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
+# Same pattern as app/api/canonical_documents.py SECRET (kept in sync by a unit test).
+SECRET = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
+    r"\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+    r"xox[baprs]-[A-Za-z0-9-]{16,}|AIza[0-9A-Za-z_-]{20,}|AKIA[0-9A-Z]{16})|"
+    r"(?i:(?:api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|secret[_-]?key|private[_-]?key|database[_-]?url)['\"]?\s*[:=]\s*['\"]?[^\s'\"]+)"
+)
+CANONICAL_KINDS = frozenset({"plan", "prd", "spec", "design", "architecture", "contract",
+                             "tasks", "report", "reference"})
+VERDICTS = ("ready", "needs_canonical_import", "path_not_allowed", "missing_file",
+            "secret_detected", "superseded", "duplicate_key")
 
 # Every row query is scoped before any data leaves PostgreSQL. No legacy write is used.
 GOALS_SQL = """SELECT d.id, d.goal_id, d.kind, d.doc_path, d.document_key, d.version
@@ -42,42 +55,67 @@ COUNT_SQL = {
     "grants": "SELECT count(*) FROM project_document_grants WHERE tenant_id=$1::uuid AND project_key=$2",
     "legacy_links": "SELECT count(*) FROM project_document_legacy_links WHERE tenant_id=$1::uuid AND project_key=$2",
 }
-def source_hash(path: str, root: Path = ROOT) -> tuple[str, str | None]:
-    """Return status and digest without exposing a path or document body."""
+# Row-level verdict queries: SELECT only, no LIMIT, no tenant narrowing, so the row count
+# can be compared with SELECT count(*) FROM goal_documents.
+_ROW_COLUMNS = """SELECT d.id, d.goal_id::text AS goal_id, g.tenant_id::text AS tenant_id,
+COALESCE(g.project, 'UNKNOWN') AS project, d.kind, d.doc_path, d.title, d.document_key,
+d.version, d.status, d.is_latest, d.change_summary
+FROM goal_documents d LEFT JOIN goals g ON g.id=d.goal_id"""
+VERDICT_ROWS_SQL = _ROW_COLUMNS + " ORDER BY d.id"
+VERDICT_ROWS_PROJECT_SQL = _ROW_COLUMNS + " WHERE g.project=$1 ORDER BY d.id"
+VERDICT_COUNT_SQL = "SELECT count(*) FROM goal_documents"
+VERDICT_COUNT_PROJECT_SQL = ("SELECT count(*) FROM goal_documents d JOIN goals g ON g.id=d.goal_id "
+                             "WHERE g.project=$1")
+VERDICT_REVISIONS_SQL = """SELECT h.tenant_id::text AS tenant_id, h.project_key, h.kind, r.version,
+r.source_path, r.content_hash
+FROM project_document_heads h JOIN project_document_revisions r ON r.head_id=h.id"""
+VERDICT_LINKED_SQL = "SELECT goal_document_id FROM project_document_legacy_links"
+
+
+def _load_source(path: str, root: Path = ROOT) -> tuple[str, bytes | None, int | None]:
+    """Return status, body and size. The body never leaves this module's callers unhashed."""
     if not isinstance(path, str) or len(path) > 512 or "\\" in path or "://" in path or "\x00" in path:
-        return "invalid_path", None
+        return "invalid_path", None, None
     relative = Path(path)
     if (relative.is_absolute() or not relative.parts or ".." in relative.parts
             or relative.parts[0] not in {"docs", "reports"}
             or any(part.startswith(".") for part in relative.parts)):
-        return "invalid_path", None
+        return "invalid_path", None, None
+    size = None
     try:
         resolved = (root / relative).resolve(strict=True)
         root_resolved = root.resolve()
         if not resolved.is_relative_to(root_resolved) or not resolved.is_file():
-            return "invalid_path", None
+            return "invalid_path", None, None
         # M1 accepts only public repository paths after symlink resolution too.
         resolved_parts = resolved.relative_to(root_resolved).parts
         if (not resolved_parts or resolved_parts[0] not in {"docs", "reports"}
                 or any(part.startswith(".") for part in resolved_parts)):
-            return "invalid_path", None
-        if resolved.stat().st_size > MAX_BYTES:
-            return "too_large", None
+            return "invalid_path", None, None
+        size = resolved.stat().st_size
+        if size > MAX_BYTES:
+            return "too_large", None, size
         with resolved.open("rb") as stream:
             body = stream.read(MAX_BYTES + 1)
         if len(body) > MAX_BYTES:
-            return "too_large", None
+            return "too_large", None, len(body)
         body.decode("utf-8")
     except UnicodeDecodeError:
-        return "non_utf8", None
+        return "non_utf8", None, size
     except RuntimeError:
         # Path.resolve raises RuntimeError for a symlink loop on some Python versions.
-        return "invalid_path", None
+        return "invalid_path", None, None
     except (OSError, ValueError):
-        return "missing_or_unreadable", None
+        return "missing_or_unreadable", None, None
     if not body:
-        return "empty", None
-    return "ok", hashlib.sha256(body).hexdigest()
+        return "empty", None, 0
+    return "ok", body, len(body)
+
+
+def source_hash(path: str, root: Path = ROOT) -> tuple[str, str | None]:
+    """Return status and digest without exposing a path or document body."""
+    status, body, _ = _load_source(path, root)
+    return status, (hashlib.sha256(body).hexdigest() if status == "ok" else None)
 
 
 def compare(goal_rows, artifact_rows, chat_rows, revisions, canonical_counts, root: Path = ROOT):
@@ -177,6 +215,157 @@ def compare(goal_rows, artifact_rows, chat_rows, revisions, canonical_counts, ro
     }
 
 
+
+def classify_path(path) -> str:
+    """Coarse path class. Only docs_relative/reports_relative can ever be linked."""
+    if not isinstance(path, str) or not path:
+        return "other"
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", path):
+        return "external_url"
+    if path.startswith("/"):
+        return "server_absolute"
+    parts = Path(path).parts
+    if parts and parts[0] == "docs":
+        return "docs_relative"
+    if parts and parts[0] == "reports":
+        return "reports_relative"
+    if parts[:2] == ("app", "static"):
+        return "app_static"
+    return "other"
+
+
+def judge(*, path_class: str, file_status: str | None, secret: bool | None, status: str,
+          is_latest: bool, key_active_count: int, kind: str, canonical_exact: bool,
+          canonical_kind_version: bool, canonical_hash_match: bool,
+          legacy_linked: bool) -> tuple[str, str]:
+    """Return (verdict, reason). Priority is the order below; every row gets exactly one verdict."""
+    if secret:
+        return "secret_detected", "credential pattern found (body or metadata); content not shown"
+    if status != "active" or not is_latest:
+        return "superseded", f"status={status} is_latest={str(bool(is_latest)).lower()}"
+    if path_class not in {"docs_relative", "reports_relative"} or file_status == "invalid_path":
+        return "path_not_allowed", f"path class {path_class}: canonical accepts only public docs/ or reports/ paths"
+    if file_status != "ok":
+        return "missing_file", f"file not usable: {file_status}"
+    if legacy_linked:
+        return "ready", "already linked (idempotent)"
+    if key_active_count > 1:
+        return "duplicate_key", f"{key_active_count} active rows share this project/document_key"
+    if canonical_exact:
+        return "ready", "canonical revision with same kind/version/path/hash exists"
+    if kind not in CANONICAL_KINDS:
+        return "needs_canonical_import", f"kind {kind} is not a canonical kind; classification decision needed"
+    if canonical_hash_match:
+        return "needs_canonical_import", "same kind/version revision has identical hash but different source_path"
+    if canonical_kind_version:
+        return "needs_canonical_import", "same kind/version revision exists, but path and hash differ (kind/version match only, not proof of same document)"
+    return "needs_canonical_import", "file ok; no canonical revision for this kind/version"
+
+
+def _cell(value):
+    """Booleans as true/false and a leading formula character neutralised for spreadsheets."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return ""
+    text = str(value)
+    return "'" + text if text[:1] in "=+-@" else text
+
+
+ROW_COLUMNS = (
+    "id", "project", "goal_id", "kind", "document_key", "version", "status", "is_latest",
+    "path_class", "public_path", "path_sha256", "file_exists", "file_sha256", "size_bytes",
+    "too_large", "secret_detected", "key_row_count", "key_active_count",
+    "superseded_or_archived", "canonical_kind_version_exists", "canonical_exact_match",
+    "canonical_hash_match", "legacy_linked", "verdict", "reason",
+)
+
+
+def build_verdict_rows(goal_rows, revisions, linked_ids, root: Path = ROOT):
+    """One verdict row per goal_documents row. Bodies, titles and absolute paths are never emitted."""
+    key_rows = Counter()
+    key_active = Counter()
+    for row in goal_rows:
+        ident = (row["project"], row["document_key"])
+        key_rows[ident] += 1
+        if row["status"] == "active" and row["is_latest"]:
+            key_active[ident] += 1
+    canonical = defaultdict(list)
+    for rev in revisions:
+        canonical[(rev["tenant_id"], rev["project_key"], rev["kind"], rev["version"])].append(
+            (rev["source_path"], rev["content_hash"]))
+    linked = set(linked_ids)
+    out = []
+    for row in goal_rows:
+        path = row["doc_path"]
+        path_class = classify_path(path)
+        status, body, size = _load_source(path, root) if path_class in {
+            "docs_relative", "reports_relative"} else ("not_checked", None, None)
+        digest = hashlib.sha256(body).hexdigest() if body is not None else None
+        metadata_secret = any(SECRET.search(str(row[name]))
+                              for name in ("document_key", "title", "change_summary") if row.get(name))
+        body_secret = bool(body is not None and SECRET.search(body.decode("utf-8")))
+        secret = True if (metadata_secret or body_secret) else (
+            False if status == "ok" else None)
+        targets = canonical.get((row["tenant_id"], row["project"], row["kind"], row["version"]), [])
+        exact = bool(digest) and any(sp == path and ch == digest for sp, ch in targets)
+        hash_match = bool(digest) and any(ch == digest for _, ch in targets)
+        ident = (row["project"], row["document_key"])
+        file_state = status if status != "not_checked" else None
+        verdict, reason = judge(
+            path_class=path_class, file_status=file_state, secret=secret, status=row["status"],
+            is_latest=bool(row["is_latest"]), key_active_count=key_active[ident], kind=row["kind"],
+            canonical_exact=exact, canonical_kind_version=bool(targets),
+            canonical_hash_match=hash_match, legacy_linked=row["id"] in linked,
+        )
+        public = path if path_class in {"docs_relative", "reports_relative"} and status != "invalid_path" else None
+        out.append({
+            "id": row["id"], "project": row["project"], "goal_id": row["goal_id"], "kind": row["kind"],
+            "document_key": "[redacted]" if metadata_secret else row["document_key"],
+            "version": row["version"], "status": row["status"], "is_latest": bool(row["is_latest"]),
+            "path_class": path_class, "public_path": public,
+            "path_sha256": hashlib.sha256(str(path).encode()).hexdigest(),
+            "file_exists": "n/a" if file_state in (None, "invalid_path") else (
+                "false" if file_state == "missing_or_unreadable" else "true"),
+            "file_sha256": digest, "size_bytes": size,
+            "too_large": "n/a" if file_state in (None, "invalid_path") else (file_state == "too_large"),
+            "secret_detected": "n/a" if secret is None else secret,
+            "key_row_count": key_rows[ident], "key_active_count": key_active[ident],
+            "superseded_or_archived": row["status"] != "active" or not row["is_latest"],
+            "canonical_kind_version_exists": bool(targets),
+            "canonical_exact_match": exact if digest else "n/a",
+            "canonical_hash_match": hash_match if digest else "n/a",
+            "legacy_linked": row["id"] in linked, "verdict": verdict, "reason": reason,
+        })
+    return out
+
+
+def summarize_verdicts(rows, db_count: int) -> dict:
+    """Counts only. total_matches_db / verdict_sum_matches_total are the acceptance checks."""
+    by_verdict = {name: 0 for name in VERDICTS}
+    by_project = defaultdict(lambda: {name: 0 for name in VERDICTS})
+    for row in rows:
+        by_verdict[row["verdict"]] += 1
+        by_project[row["project"]][row["verdict"]] += 1
+    return {
+        "total_rows": len(rows), "db_count": db_count,
+        "total_matches_db": len(rows) == db_count,
+        "verdict_sum_matches_total": sum(by_verdict.values()) == len(rows),
+        "by_verdict": by_verdict,
+        "by_project": {name: {**counts, "total": sum(counts.values())}
+                       for name, counts in sorted(by_project.items())},
+    }
+
+
+def rows_to_csv(rows) -> str:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(ROW_COLUMNS)
+    for row in rows:
+        writer.writerow([_cell(row[name]) for name in ROW_COLUMNS])
+    return buffer.getvalue()
+
+
 def connection_params() -> dict:
     """Use DATABASE_URL when present; otherwise use libpq-style PG variables."""
     url = os.environ.get("DATABASE_URL")
@@ -254,16 +443,61 @@ async def inventory(tenant: str | None, project: str, root: Path = ROOT):
         await conn.close()
 
 
+async def verdict_inventory(project: str | None, root: Path = ROOT):
+    """Fetch every goal_documents row (read-only transaction, SELECT only) and judge it."""
+    import asyncpg
+
+    if project is not None and not PROJECT.fullmatch(project):
+        raise ValueError("invalid project key")
+    conn = await asyncio.wait_for(asyncpg.connect(
+        **connection_params(), timeout=5,
+        server_settings={"default_transaction_read_only": "on", "statement_timeout": "30000"},
+    ), timeout=10)
+    try:
+        async with conn.transaction(readonly=True, isolation="repeatable_read"):
+            args = (project,) if project else ()
+            rows = await conn.fetch(VERDICT_ROWS_PROJECT_SQL if project else VERDICT_ROWS_SQL, *args)
+            db_count = await conn.fetchval(
+                VERDICT_COUNT_PROJECT_SQL if project else VERDICT_COUNT_SQL, *args)
+            revisions = await conn.fetch(VERDICT_REVISIONS_SQL)
+            linked = [r["goal_document_id"] for r in await conn.fetch(VERDICT_LINKED_SQL)]
+        verdict_rows = build_verdict_rows([dict(r) for r in rows], [dict(r) for r in revisions],
+                                          linked, root)
+        return verdict_rows, db_count
+    finally:
+        await conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tenant-id", help="Optional UUID, checked against the DB internal tenant")
-    parser.add_argument("--project-key", required=True)
+    parser.add_argument("--project-key", help="Required without --rows; optional filter with --rows")
+    parser.add_argument("--rows", action="store_true",
+                        help="Row-level verdict table for every goal_documents row (CSV)")
+    parser.add_argument("--output", help="With --rows: write CSV here and print the summary JSON")
     args = parser.parse_args()
+    if not args.rows and not args.project_key:
+        parser.error("--project-key is required unless --rows is given")
+    if args.output and not args.rows:
+        parser.error("--output requires --rows")
     try:
-        result = asyncio.run(inventory(args.tenant_id, args.project_key))
+        if args.rows:
+            rows, db_count = asyncio.run(verdict_inventory(args.project_key))
+        else:
+            result = asyncio.run(inventory(args.tenant_id, args.project_key))
     except Exception as exc:
         print(f"inventory unavailable: {classified_error(exc)}", file=sys.stderr)
         return 1
+    if args.rows:
+        summary = summarize_verdicts(rows, db_count)
+        text = rows_to_csv(rows)
+        if args.output:
+            Path(args.output).write_text(text, encoding="utf-8")
+            print(json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2))
+        else:
+            sys.stdout.write(text)
+            print(json.dumps(summary, ensure_ascii=False, sort_keys=True), file=sys.stderr)
+        return 0 if summary["total_matches_db"] and summary["verdict_sum_matches_total"] else 1
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
     return 0
 
