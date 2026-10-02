@@ -309,6 +309,12 @@ async def approve_document(project_key: str, document_key: str, body: DecisionIn
         return {"approved_revision_id": body.revision_id, "idempotent": False}
 
 
+async def _archive_approved(conn: Any, tenant: str, project: str, head_id: Any, revision_id: Any, actor: str) -> None:
+    await conn.execute("UPDATE project_document_heads SET approved_revision_id=NULL,generation=generation+1,updated_at=now() WHERE id=$1", head_id)
+    await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
+                       "VALUES($1::uuid,$2,$3,$4,'archived',$5)", tenant, project, head_id, revision_id, actor)
+
+
 @router.post("/{document_key}/archive")
 async def archive_document(project_key: str, document_key: str, body: DecisionInput, context: dict = WRITE):
     project = _project(project_key)
@@ -323,9 +329,7 @@ async def archive_document(project_key: str, document_key: str, body: DecisionIn
             return {"archived": True, "idempotent": True}
         if head["generation"] != body.expected_generation or head["approved_revision_id"] != body.revision_id:
             raise HTTPException(409, "generation_conflict")
-        await conn.execute("UPDATE project_document_heads SET approved_revision_id=NULL,generation=generation+1,updated_at=now() WHERE id=$1", head["id"])
-        await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
-                           "VALUES($1::uuid,$2,$3,$4,'archived',$5)", tenant, project, head["id"], body.revision_id, actor)
+        await _archive_approved(conn, tenant, project, head["id"], body.revision_id, actor)
         return {"archived": True}
 
 
@@ -554,3 +558,41 @@ async def list_legacy_goal_document_links(project_key: str, document_key: str, c
             "ORDER BY l.created_at DESC LIMIT 100", head["id"], tenant, project,
         )
         return {"links": [dict(row) for row in rows]}
+
+
+@router.delete("/{document_key}/legacy-links/{goal_document_id}")
+async def unlink_legacy_goal_document(project_key: str, document_key: str, goal_document_id: int,
+                                      archive_head: bool = False, context: dict = WRITE):
+    """Remove one legacy link and audit it. goal_documents and its file are never touched."""
+    if goal_document_id <= 0:
+        raise HTTPException(422, "invalid_goal_document_id")
+    project = _project(project_key)
+    async with get_pool().acquire() as conn, conn.transaction():
+        tenant, actor = await _authorize(conn, context, project, "approve" if archive_head else "write")
+        head = await _head(conn, tenant, project, document_key, lock=True)
+        if not head:
+            raise HTTPException(404, "document_not_found")
+        # Transaction-local switch: the legacy_links trigger rejects every other DELETE.
+        await conn.execute("SELECT set_config('aads.legacy_unlink','on',true)")
+        removed = await conn.fetchrow(
+            "DELETE FROM project_document_legacy_links l USING project_document_revisions r "
+            "WHERE l.revision_id=r.id AND r.head_id=$1 AND l.tenant_id=$2::uuid AND l.project_key=$3 "
+            "AND l.goal_document_id=$4 RETURNING l.revision_id", head["id"], tenant, project, goal_document_id,
+        )
+        if not removed:
+            raise HTTPException(404, "legacy_link_not_found")
+        await conn.execute(
+            "INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id,goal_document_id) "
+            "VALUES($1::uuid,$2,$3,$4,'legacy_unlinked',$5,$6)", tenant, project, head["id"],
+            removed["revision_id"], actor, goal_document_id,
+        )
+        remaining = await conn.fetchval(
+            "SELECT count(*) FROM project_document_legacy_links l JOIN project_document_revisions r ON r.id=l.revision_id "
+            "WHERE r.head_id=$1 AND l.tenant_id=$2::uuid AND l.project_key=$3", head["id"], tenant, project,
+        )
+        archived = False
+        if archive_head and remaining == 0 and head["approved_revision_id"] is not None:
+            await _archive_approved(conn, tenant, project, head["id"], head["approved_revision_id"], actor)
+            archived = True
+        return {"unlinked": True, "goal_document_id": goal_document_id, "revision_id": removed["revision_id"],
+                "remaining_links": remaining, "archived": archived}
