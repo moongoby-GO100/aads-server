@@ -355,6 +355,40 @@ def test_runner_script_restores_and_records_usage_before_output_is_read():
     assert 'RUNNER_CLI_USAGE_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_cli_usage.py"' in script
 
 
+def test_runner_receipt_model_is_main_thread_not_first_key():
+    payload = _claude_payload()
+    # 보조 모델(haiku)을 앞에 둬도 출력 토큰이 많은 메인 모델을 고른다.
+    payload["modelUsage"] = dict(reversed(list(payload["modelUsage"].items())))
+    assert runner_usage.primary_model_from_claude_result(payload) == "claude-opus-5"
+
+
+def test_runner_receipt_model_empty_without_evidence():
+    assert runner_usage.primary_model_from_claude_result({"type": "result"}) == ""
+    assert runner_usage.primary_model_from_claude_result({"modelUsage": "x"}) == ""
+
+
+def test_runner_receipt_model_cli_mode_reads_preserved_json(tmp_path, capsys):
+    out = tmp_path / "runner-r.out"
+    out.write_text(json.dumps(_claude_payload()), encoding="utf-8")
+    assert runner_usage.main(["restore", "--output-file", str(out)]) == 0
+    capsys.readouterr()
+    assert runner_usage.main(["model", "--output-file", str(out)]) == 0
+    assert capsys.readouterr().out == "claude-opus-5"
+    plain = tmp_path / "plain.out"
+    plain.write_text("text only", encoding="utf-8")
+    assert runner_usage.main(["model", "--output-file", str(plain)]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_runner_script_records_receipt_model_before_actual_model():
+    script = (ROOT / "scripts" / "pipeline-runner.sh").read_text(encoding="utf-8")
+    receipt = script.index('_receipt_model=$(runner_claude_receipt_model "$output_file")')
+    usage = script.index('claude_cli) record_runner_cli_usage "$job_id"')
+    actual = script.index("UPDATE pipeline_jobs SET actual_model='${effective_model}'")
+    assert usage < receipt < actual
+    assert "The runner does not use the JSON model receipt" not in script
+
+
 def test_runner_local_template_is_byte_identical():
     """pipeline-runner.sh.local 은 HEAD 에서 .sh 와 바이트 동일한 사본이었다 — 같이 고친다."""
     sh = (ROOT / "scripts" / "pipeline-runner.sh").read_bytes()

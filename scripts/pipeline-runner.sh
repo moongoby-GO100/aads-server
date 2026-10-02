@@ -438,6 +438,17 @@ restore_runner_claude_output() {
     return 0
 }
 
+# 실행 모델 영수증 (2026-10-02). claude_cli 를 json 으로 띄우면 CLI 가 실제로 쓴
+# 모델을 modelUsage 로 보고한다. 그 메인 모델을 actual_model 로 남긴다. 근거가 없으면
+# 빈 문자열 — 호출자는 unverified 를 유지한다(추측하지 않는다).
+runner_claude_receipt_model() {
+    local output_file="$1" m=""
+    runner_cli_usage_ready || return 0
+    m=$(timeout 15 python3 "$RUNNER_CLI_USAGE_BIN" model --output-file "$output_file" 2>/dev/null) || m=""
+    [[ "$m" =~ ^[A-Za-z0-9._:-]{1,60}$ ]] && printf '%s' "$m"
+    return 0
+}
+
 record_runner_cli_usage() {
     local job_id="$1" kind="$2" output_file="$3" slot="$4" model="$5" exit_code="$6" duration_ms="$7"
     [[ -n "$job_id" ]] || return 0
@@ -3236,7 +3247,8 @@ ${safe_instruction}"
                 log "MODEL_CONTRACT_REJECTED job=$job_id requested=$current_model"
                 attempt=$((attempt + 1)); sleep 2; continue
             fi
-            # The runner does not use the JSON model receipt for the model contract.
+            # 실행 전에는 모델 근거가 없다. 성공 후 CLI json 영수증(modelUsage)으로
+            # 확정한다(runner_claude_receipt_model). 영수증이 없으면 unverified 그대로.
             effective_model="unverified"
             log "MODEL_CONTRACT job=$job_id requested=$current_model cli_model=$claude_cli_model verification=cli_argument_only"
             # AADS-LLM-M9-COST-BASIS (2026-09-30): json 으로 받아야 CLI 가 보고한
@@ -3394,6 +3406,20 @@ ${safe_instruction}"
             claude_cli) record_runner_cli_usage "$job_id" "$runner_kind" "$output_file" "$token_slot" "${claude_cli_model:-$current_model}" "$exit_code" "$attempt_duration_ms" ;;
             codex_cli) record_runner_cli_usage "$job_id" "$runner_kind" "$output_file" "" "${current_model#codex:}" "$exit_code" "$attempt_duration_ms" ;;
         esac
+        if [[ "$runner_kind" == "claude_cli" && $exit_code -eq 0 ]]; then
+            local _receipt_model=""
+            _receipt_model=$(runner_claude_receipt_model "$output_file")
+            if [[ -n "$_receipt_model" ]]; then
+                effective_model="$_receipt_model"
+                if [[ "$_receipt_model" == "${claude_cli_model:-}" ]]; then
+                    log "  MODEL_RECEIPT job=$job_id requested=$current_model receipt=$_receipt_model"
+                else
+                    log "  MODEL_RECEIPT_MISMATCH job=$job_id requested=$current_model cli_model=${claude_cli_model:-} receipt=$_receipt_model"
+                fi
+            else
+                log "  MODEL_RECEIPT_MISSING job=$job_id requested=$current_model → actual_model=unverified 유지"
+            fi
+        fi
         record_runner_event "$job_id" "model_attempt_completed" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "$attempt_duration_ms" "{\"attempt\":$((attempt+1)),\"exit_code\":${exit_code},\"success\":$([[ $exit_code -eq 0 ]] && echo true || echo false)}"
 
         if [[ $exit_code -eq 0 ]]; then

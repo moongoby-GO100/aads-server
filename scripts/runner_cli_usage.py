@@ -20,6 +20,10 @@ AADS-LLM-M9-COST-BASIS-20260930.
                           결과 객체가 없으면 비용 미측정 행 하나를 적는다.
               codex_cli:  Codex exec 출력에는 토큰 분해·비용이 없다. 추측하지
                           않고 비용 미측정(unknown) 행 하나로 귀속만 남긴다.
+  model       claude_cli 결과 객체의 modelUsage 에서 메인 모델 하나를 낸다
+              (출력 토큰이 가장 많은 모델 = 메인 스레드, 보조 모델 제외).
+              결과 객체·modelUsage 가 없으면 빈 출력 — 러너는 unverified 를 유지한다.
+              2026-10-02: 러너 actual_model 이 claude 작업 전부 unverified 로 남던 것 수정.
 
 usage 는 표준출력으로 INSERT SQL 을 낸다. 실행은 러너의 db_update 가 한다 — 여기서 DB 에
 붙지 않는 이유는 러너가 이미 docker/원격 두 방식의 접속을 한 곳(_psql_cmd)에서
@@ -141,6 +145,27 @@ def usage_rows_from_claude_result(
             "cost_source": "relay_reported" if cost is not None else "unknown",
         })
     return rows
+
+
+def primary_model_from_claude_result(payload: Dict[str, Any]) -> str:
+    """CLI 가 보고한 메인 모델. modelUsage 에서 출력 토큰이 가장 많은 모델.
+
+    서브에이전트·보조 호출(haiku 등)도 modelUsage 에 같이 실리므로 첫 키를 쓰지
+    않는다. 동률이면 costUSD 가 큰 쪽. 근거가 없으면 "" — 추측하지 않는다.
+    """
+    model_usage = payload.get("modelUsage")
+    if not isinstance(model_usage, dict):
+        return ""
+    best = ""
+    best_key = (-1, -1.0)
+    for name, mu in model_usage.items():
+        if not isinstance(mu, dict):
+            continue
+        key = (_int(mu.get("outputTokens")), _cost(mu.get("costUSD")) or 0.0)
+        if key > best_key:
+            best_key = key
+            best = str(name).split("[")[0].strip()[:60]
+    return best
 
 
 def unmeasured_row(model: str) -> Dict[str, Any]:
@@ -324,7 +349,7 @@ def process(kind: str, output_file: str, **kwargs: Any) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("mode", nargs="?", choices=("restore", "usage"), default="usage")
+    ap.add_argument("mode", nargs="?", choices=("restore", "usage", "model"), default="usage")
     ap.add_argument("--kind", default="claude_cli")
     ap.add_argument("--output-file", required=True)
     ap.add_argument("--job-id", default="")
@@ -340,6 +365,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("runner_cli_usage: restore failed: %s" % e, file=sys.stderr)
             return 2
         sys.stdout.write(status)
+        return 0
+    if args.mode == "model":
+        payload = _read_usage_payload(args.output_file)
+        sys.stdout.write(primary_model_from_claude_result(payload) if payload else "")
         return 0
     sql = usage_sql(
         args.kind,
