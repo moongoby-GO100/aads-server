@@ -1244,9 +1244,10 @@ _OPENAI_DIRECT_MAX_TOOLS = 128
 _OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra", "gpt-6.1-sol"}
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
-_CODEX_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
+_CODEX_MODELS = {"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
 _CODEX_MODEL_DISPLAY = {
     "gpt-6-astra": "GPT-6 Astra (Codex CLI)",
+    "gpt-6.1-sol": "GPT-6.1 Sol (Codex CLI)",
     "gpt-6-sol": "GPT-6 Sol (Codex CLI)",
     "gpt-6-luna": "GPT-6 Luna (Codex CLI)",
     "gpt-5.6-sol": "GPT-5.6 Sol (Codex CLI)",
@@ -1260,6 +1261,8 @@ _CODEX_MODEL_DISPLAY = {
 _CODEX_MODEL_ALIASES = {
     "codex:gpt-6-astra": "gpt-6-astra",
     "gpt-6 astra (codex cli)": "gpt-6-astra",
+    "codex:gpt-6.1-sol": "gpt-6.1-sol",
+    "gpt-6.1 sol (codex cli)": "gpt-6.1-sol",
     "codex:gpt-6-sol": "gpt-6-sol",
     "gpt-6 sol (codex cli)": "gpt-6-sol",
     "codex:gpt-6-luna": "gpt-6-luna",
@@ -1547,6 +1550,15 @@ def _split_provider_qualified_model(model_id: str) -> tuple[str | None, str]:
     return None, value
 
 
+def _is_runnable_codex_cli_row(row: Dict[str, Any]) -> bool:
+    if row.get("is_active") is False or row.get("is_executable") is False or row.get("retired_at"):
+        return False
+    if str(row.get("verification_status") or "").strip().lower() not in {"verified", "ok"}:
+        return False
+    metadata = _coerce_metadata(row.get("metadata"))
+    return str(metadata.get("execution_backend") or "").strip() == "codex_cli"
+
+
 async def _get_registered_model_row(model_id: str, provider: str | None = None) -> Optional[Dict[str, Any]]:
     rows = await _list_registered_models(active_only=False)
     normalized_provider = str(provider or "").strip().lower()
@@ -1560,9 +1572,15 @@ async def _get_registered_model_row(model_id: str, provider: str | None = None) 
     # "[gpt-5.6-sol 실행 불가 → Codex CLI 전환]" 배너가 붙었다.
     # CEO 지시는 "CLI 모델만 사용" 이므로 provider 를 명시하지 않았으면 구독 CLI 행을
     # 먼저 본다. provider 를 붙여 부른 쪽(openai:...)은 그대로 그 행을 받는다.
-    if not normalized_provider and target_model in _CODEX_MODELS:
+    # 2026-10-02: gpt-6.1-sol 이 _CODEX_MODELS 에 없어 openai 행(api.openai.com 직결)이
+    # 잡혔고, 도구 턴마다 400 → "[gpt-6.1-sol 실행 불가 → Codex CLI gpt-5.6-sol 전환]"
+    # 으로 강등됐다. 하드코딩 집합만 보면 새 Codex 모델마다 같은 일이 반복되므로,
+    # DB 에 실행 가능한 codex_cli 행으로 검증된 모델도 구독 CLI 를 먼저 본다.
+    if not normalized_provider:
         for row in rows:
-            if row.get("provider") == "codex" and str(row.get("model_id") or "").strip() == target_model:
+            if row.get("provider") != "codex" or str(row.get("model_id") or "").strip() != target_model:
+                continue
+            if target_model in _CODEX_MODELS or _is_runnable_codex_cli_row(row):
                 return row
 
     def _candidate_ids(row: Dict[str, Any]) -> set[str]:

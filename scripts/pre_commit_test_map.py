@@ -59,6 +59,11 @@ GROUPS: tuple[Group, ...] = (
         py_regex=r"tool_executor|tool_registry|ceo_chat_tools|chat_tools|model_selector|system_prompt|test_tools",
     ),
     Group(
+        name="model_selector_codex_route",
+        tests=("tests/unit/test_model_selector_codex_db_route.py",),
+        py_regex=r"app/services/model_selector\.py",
+    ),
+    Group(
         name="cost_catalog",
         tests=(
             "tests/unit/test_oauth_usage_catalog_model_normalize.py",
