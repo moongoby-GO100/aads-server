@@ -1,0 +1,90 @@
+-- ============================================================================
+-- DRAFT -- 실행 금지. 20261002_routing_ssot_cleanup.sql_draft 의 롤백 짝.
+-- TASK_ID: AADS-ROUTING-SSOT-DESIGN-20261002   설계: docs/routing-ssot/DESIGN.md §6-C
+--
+-- routing_ssot_backup_20261002 의 원본 값으로 복원한다. 정방향 초안이 건드린 뒤
+-- 다른 사람이 다시 고친 행(updated_by 가 routing_ssot 가 아닌 행)은 복원하지 않는다.
+-- 행 제거 문장 없음. 백업 테이블은 남겨 둔다(정리는 별도 승인).
+-- ============================================================================
+
+BEGIN;
+
+-- 1. mrp background_llm : 기본값 플래그 복원. 유니크 인덱스(route 당 기본 1개) 때문에
+--    haiku 의 기본값을 먼저 내리고 qwen 을 올린다.
+UPDATE model_routing_preferences m
+   SET is_default = (b.row_data ->> 'is_default')::boolean,
+       is_enabled = (b.row_data ->> 'is_enabled')::boolean,
+       display_order = (b.row_data ->> 'display_order')::integer,
+       updated_by = b.row_data ->> 'updated_by',
+       updated_at = (b.row_data ->> 'updated_at')::timestamptz
+  FROM routing_ssot_backup_20261002 b
+ WHERE b.store = 'mrp'
+   AND b.row_key = 'background_llm|anthropic|claude-haiku-4-5-20251001'
+   AND m.route_key = 'background_llm' AND m.provider = 'anthropic'
+   AND m.model_id = 'claude-haiku-4-5-20251001'
+   AND m.updated_by = 'routing_ssot';
+
+UPDATE model_routing_preferences m
+   SET is_default = (b.row_data ->> 'is_default')::boolean,
+       is_enabled = (b.row_data ->> 'is_enabled')::boolean,
+       display_order = (b.row_data ->> 'display_order')::integer,
+       updated_by = b.row_data ->> 'updated_by',
+       updated_at = (b.row_data ->> 'updated_at')::timestamptz
+  FROM routing_ssot_backup_20261002 b
+ WHERE b.store = 'mrp'
+   AND b.row_key = 'background_llm|qwen|qwen-turbo'
+   AND m.route_key = 'background_llm' AND m.provider = 'qwen'
+   AND m.model_id = 'qwen-turbo'
+   AND m.updated_by = 'routing_ssot'
+   AND NOT EXISTS (SELECT 1 FROM model_routing_preferences d
+                   WHERE d.route_key = 'background_llm' AND d.is_default);
+
+-- 2. mrp agent_* : model_id 를 claude-opus-4-6 으로 되돌린다.
+UPDATE model_routing_preferences m
+   SET model_id = b.row_data ->> 'model_id',
+       updated_by = b.row_data ->> 'updated_by',
+       updated_at = (b.row_data ->> 'updated_at')::timestamptz
+  FROM routing_ssot_backup_20261002 b
+ WHERE b.store = 'mrp'
+   AND b.row_data ->> 'route_key' = m.route_key
+   AND b.row_data ->> 'provider' = m.provider
+   AND b.row_data ->> 'model_id' = 'claude-opus-4-6'
+   AND m.route_key IN ('agent_architect', 'agent_strategist_analyze', 'agent_supervisor')
+   AND m.model_id = 'claude-opus-5-5'
+   AND m.updated_by = 'routing_ssot';
+
+-- 3. runner_model_config XS
+UPDATE runner_model_config r
+   SET models = b.row_data -> 'models',
+       updated_by = b.row_data ->> 'updated_by',
+       updated_at = (b.row_data ->> 'updated_at')::timestamptz
+  FROM routing_ssot_backup_20261002 b
+ WHERE b.store = 'runner_model_config' AND b.row_key = r.size
+   AND r.updated_by = 'routing_ssot';
+
+-- 4. intent_policies
+UPDATE intent_policies p
+   SET default_model = b.row_data ->> 'default_model',
+       allowed_models = ARRAY(SELECT jsonb_array_elements_text(b.row_data -> 'allowed_models')),
+       updated_by = b.row_data ->> 'updated_by',
+       updated_at = (b.row_data ->> 'updated_at')::timestamptz
+  FROM routing_ssot_backup_20261002 b
+ WHERE b.store = 'intent_policies' AND b.row_key = p.intent
+   AND p.updated_by = 'routing_ssot';
+
+-- 5. directive_model_config
+UPDATE directive_model_config d
+   SET models = b.row_data -> 'models',
+       updated_by = b.row_data ->> 'updated_by',
+       updated_at = (b.row_data ->> 'updated_at')::timestamptz
+  FROM routing_ssot_backup_20261002 b
+ WHERE b.store = 'directive_model_config' AND b.row_key = d.role
+   AND d.updated_by = 'routing_ssot';
+
+SELECT 'remaining routing_ssot rows' AS check_name,
+       (SELECT count(*) FROM model_routing_preferences WHERE updated_by = 'routing_ssot')
+     + (SELECT count(*) FROM intent_policies WHERE updated_by = 'routing_ssot')
+     + (SELECT count(*) FROM runner_model_config WHERE updated_by = 'routing_ssot')
+     + (SELECT count(*) FROM directive_model_config WHERE updated_by = 'routing_ssot') AS n;
+
+COMMIT;

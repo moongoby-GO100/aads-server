@@ -1,0 +1,168 @@
+-- ============================================================================
+-- DRAFT -- 실행 금지. CEO 승인 + 점검 창구 전에는 어떤 DB 에도 적용하지 않는다.
+-- TASK_ID: AADS-ROUTING-SSOT-DESIGN-20261002   설계: docs/routing-ssot/DESIGN.md §6
+--
+-- 확장자가 .sql_draft 인 이유: scripts/apply_release_migrations.sh 와
+-- scripts/deploy_release_assets.sh 는 migrations/ 아래 *.sql 을 (하위 디렉터리 포함)
+-- 자동 적용한다. 이 파일은 그 패턴에 걸리지 않아야 한다.
+-- 적용하려면 사람이 내용을 확인한 뒤 .sql 로 복사해 직접 실행한다.
+--
+-- 성격: 구형·실패 이력 모델 id 를 현행 id 로 치환하는 UPDATE 만 있다. 행 제거 문장 없음.
+-- 모든 UPDATE 는 "현재 값이 예상과 같을 때만" 조건이라, 그 사이 대시보드에서 바꾼 값은
+-- 덮어쓰지 않고 재실행해도 결과가 같다(멱등).
+-- 변경 직전 원본 행을 routing_ssot_backup_20261002 에 보관하고, 롤백은 그 백업에서 복원한다.
+--
+-- 이 초안이 일부러 바꾸지 않는 것 (DESIGN §6-B):
+--   * intent_policies 의 claude-opus-5 (허용 8행, 기본 2행) -- 상한 정책이 바뀌므로 CEO 결정 D1
+--   * mrp llm / runner_llm 의 후보 목록 -- 폴백 순서가 바뀐다
+--   * 코드 상수 qwen-turbo (_AUTO_ROUTED_DB_DEFAULT_MODELS) -- "자동 선택" 표식이지 모델이 아니다
+-- ============================================================================
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS routing_ssot_backup_20261002 (
+    store        TEXT        NOT NULL,
+    row_key      TEXT        NOT NULL,
+    row_data     JSONB       NOT NULL,
+    backed_up_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (store, row_key)
+);
+
+-- ---------------------------------------------------------------------------
+-- 1. mrp background_llm : 기본값 qwen-turbo(실패 이력) -> claude-haiku-4-5-20251001
+--    이 route 를 읽는 런타임 코드는 없다(READ-MAP §1-1). 화면 표시 정리다.
+--    일방 비활성화로 기본값이 비는 일을 막으려고 haiku 행이 활성인 경우에만 바꾼다.
+-- ---------------------------------------------------------------------------
+INSERT INTO routing_ssot_backup_20261002 (store, row_key, row_data)
+SELECT 'mrp', m.route_key || '|' || m.provider || '|' || m.model_id, to_jsonb(m)
+FROM model_routing_preferences m
+WHERE m.route_key = 'background_llm'
+  AND ((m.provider = 'qwen' AND m.model_id = 'qwen-turbo' AND m.is_default)
+    OR (m.provider = 'anthropic' AND m.model_id = 'claude-haiku-4-5-20251001' AND NOT m.is_default))
+  AND EXISTS (SELECT 1 FROM model_routing_preferences q
+              WHERE q.route_key = 'background_llm' AND q.provider = 'qwen'
+                AND q.model_id = 'qwen-turbo' AND q.is_default)
+  AND EXISTS (SELECT 1 FROM model_routing_preferences h
+              WHERE h.route_key = 'background_llm' AND h.provider = 'anthropic'
+                AND h.model_id = 'claude-haiku-4-5-20251001' AND h.is_enabled)
+ON CONFLICT (store, row_key) DO NOTHING;
+
+UPDATE model_routing_preferences
+   SET is_default = false, is_enabled = false, display_order = 20,
+       updated_by = 'routing_ssot', updated_at = now()
+ WHERE route_key = 'background_llm' AND provider = 'qwen' AND model_id = 'qwen-turbo'
+   AND is_default
+   AND EXISTS (SELECT 1 FROM model_routing_preferences h
+               WHERE h.route_key = 'background_llm' AND h.provider = 'anthropic'
+                 AND h.model_id = 'claude-haiku-4-5-20251001' AND h.is_enabled);
+
+-- route 당 기본값은 1개(부분 유니크 인덱스)이므로 위 문장 뒤에 실행해야 한다.
+UPDATE model_routing_preferences
+   SET is_default = true, display_order = 10,
+       updated_by = 'routing_ssot', updated_at = now()
+ WHERE route_key = 'background_llm' AND provider = 'anthropic'
+   AND model_id = 'claude-haiku-4-5-20251001'
+   AND is_enabled AND NOT is_default
+   AND NOT EXISTS (SELECT 1 FROM model_routing_preferences d
+                   WHERE d.route_key = 'background_llm' AND d.is_default);
+
+-- ---------------------------------------------------------------------------
+-- 2. mrp agent_* : claude-opus-4-6 -> claude-opus-5-5 (같은 행의 model_id 교체)
+--    agent_* 는 읽는 런타임 코드가 없다. 폐기 전까지의 표시 정리다(DESIGN D3).
+--    같은 route 에 opus-5-5 행이 이미 있으면 기본키가 충돌하므로 건드리지 않는다.
+-- ---------------------------------------------------------------------------
+INSERT INTO routing_ssot_backup_20261002 (store, row_key, row_data)
+SELECT 'mrp', m.route_key || '|' || m.provider || '|' || m.model_id, to_jsonb(m)
+FROM model_routing_preferences m
+WHERE m.route_key IN ('agent_architect', 'agent_strategist_analyze', 'agent_supervisor')
+  AND m.provider = 'anthropic' AND m.model_id = 'claude-opus-4-6'
+  AND NOT EXISTS (SELECT 1 FROM model_routing_preferences x
+                  WHERE x.route_key = m.route_key AND x.provider = 'anthropic'
+                    AND x.model_id = 'claude-opus-5-5')
+ON CONFLICT (store, row_key) DO NOTHING;
+
+UPDATE model_routing_preferences m
+   SET model_id = 'claude-opus-5-5', updated_by = 'routing_ssot', updated_at = now()
+ WHERE m.route_key IN ('agent_architect', 'agent_strategist_analyze', 'agent_supervisor')
+   AND m.provider = 'anthropic' AND m.model_id = 'claude-opus-4-6'
+   AND NOT EXISTS (SELECT 1 FROM model_routing_preferences x
+                   WHERE x.route_key = m.route_key AND x.provider = 'anthropic'
+                     AND x.model_id = 'claude-opus-5-5');
+
+-- ---------------------------------------------------------------------------
+-- 3. runner_model_config XS : codex:gpt-5.6-luna 를 codex:gpt-6-luna 로 합친다
+--    gpt-5.6-luna 는 llm_models 상 아직 실행 가능이다. "실패 모델 제거"가 아니라
+--    같은 계열 중복 정리이며 XS 체인이 한 칸 짧아진다(DESIGN §6-A #3).
+--    현재 값이 아래 배열과 정확히 같을 때만 바꾼다.
+-- ---------------------------------------------------------------------------
+INSERT INTO routing_ssot_backup_20261002 (store, row_key, row_data)
+SELECT 'runner_model_config', r.size, to_jsonb(r)
+FROM runner_model_config r
+WHERE r.size = 'XS'
+  AND r.models = '["claude-sonnet-5-5", "codex:gpt-6-luna", "codex:gpt-5.6-luna", "codex:gpt-6.1-sol"]'::jsonb
+ON CONFLICT (store, row_key) DO NOTHING;
+
+UPDATE runner_model_config
+   SET models = '["claude-sonnet-5-5", "codex:gpt-6-luna", "codex:gpt-6.1-sol"]'::jsonb,
+       updated_by = 'routing_ssot', updated_at = now()
+ WHERE size = 'XS'
+   AND models = '["claude-sonnet-5-5", "codex:gpt-6-luna", "codex:gpt-5.6-luna", "codex:gpt-6.1-sol"]'::jsonb;
+
+-- ---------------------------------------------------------------------------
+-- 4. intent_policies : claude-sonnet-5 -> claude-sonnet-5-5 (기본 모델 + 허용 목록, 17행 중 해당 행)
+--    두 id 모두 등급 2 로 매핑되고 등급 2 대표 모델이 이미 claude-sonnet-5-5 라서
+--    강등 동작은 같다(READ-MAP §2-D). 허용 목록은 순서를 유지하고 중복을 제거한다.
+--    claude-opus-5 는 여기서 바꾸지 않는다(상한 정책 변경, D1).
+-- ---------------------------------------------------------------------------
+INSERT INTO routing_ssot_backup_20261002 (store, row_key, row_data)
+SELECT 'intent_policies', p.intent, to_jsonb(p)
+FROM intent_policies p
+WHERE p.default_model = 'claude-sonnet-5' OR 'claude-sonnet-5' = ANY (p.allowed_models)
+ON CONFLICT (store, row_key) DO NOTHING;
+
+UPDATE intent_policies p
+   SET default_model = CASE WHEN p.default_model = 'claude-sonnet-5'
+                            THEN 'claude-sonnet-5-5' ELSE p.default_model END,
+       allowed_models = (
+           SELECT array_agg(s.m ORDER BY s.first_pos)
+           FROM (
+               SELECT t.m, min(t.pos) AS first_pos
+               FROM (
+                   SELECT CASE WHEN a.m = 'claude-sonnet-5' THEN 'claude-sonnet-5-5' ELSE a.m END AS m,
+                          a.pos
+                   FROM unnest(p.allowed_models) WITH ORDINALITY AS a(m, pos)
+               ) t
+               GROUP BY t.m
+           ) s
+       ),
+       updated_by = 'routing_ssot', updated_at = now()
+ WHERE p.default_model = 'claude-sonnet-5' OR 'claude-sonnet-5' = ANY (p.allowed_models);
+
+-- ---------------------------------------------------------------------------
+-- 5. directive_model_config(generation) : sonnet-5 -> sonnet-5-5, opus-5 -> opus-5-5
+--    주의: 지시서 생성에 Opus 5.5 가 쓰이게 된다(버전 상향, 단가·성능이 다를 수 있다).
+--    현재 값이 아래 배열과 정확히 같을 때만 바꾼다.
+-- ---------------------------------------------------------------------------
+INSERT INTO routing_ssot_backup_20261002 (store, row_key, row_data)
+SELECT 'directive_model_config', d.role, to_jsonb(d)
+FROM directive_model_config d
+WHERE d.role = 'generation'
+  AND d.models = '["claude-haiku", "claude-opus-5", "codex:gpt-5.6-sol", "codex:gpt-5.6-terra", "claude-sonnet-5", "claude-fable-5-1", "codex:gpt-6-astra"]'::jsonb
+ON CONFLICT (store, row_key) DO NOTHING;
+
+UPDATE directive_model_config
+   SET models = '["claude-haiku", "claude-opus-5-5", "codex:gpt-5.6-sol", "codex:gpt-5.6-terra", "claude-sonnet-5-5", "claude-fable-5-1", "codex:gpt-6-astra"]'::jsonb,
+       updated_by = 'routing_ssot', updated_at = now()
+ WHERE role = 'generation'
+   AND models = '["claude-haiku", "claude-opus-5", "codex:gpt-5.6-sol", "codex:gpt-5.6-terra", "claude-sonnet-5", "claude-fable-5-1", "codex:gpt-6-astra"]'::jsonb;
+
+-- ---------------------------------------------------------------------------
+-- 확인용 조회. 남은 구형 id 가 보이면 그 행은 가드 때문에 건너뛴 것이다(원인 확인 후 별도 처리).
+-- ---------------------------------------------------------------------------
+SELECT store, count(*) AS backed_up_rows FROM routing_ssot_backup_20261002 GROUP BY store ORDER BY store;
+SELECT route_key, provider, model_id, is_default, is_enabled FROM model_routing_preferences
+ WHERE route_key = 'background_llm' OR model_id = 'claude-opus-4-6' ORDER BY route_key, display_order;
+SELECT intent FROM intent_policies
+ WHERE default_model = 'claude-sonnet-5' OR 'claude-sonnet-5' = ANY (allowed_models);
+
+COMMIT;
