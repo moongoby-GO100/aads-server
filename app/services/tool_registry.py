@@ -2187,9 +2187,26 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "recipe_name": {"type": "string", "description": "register_e2e 레시피 이름"},
                 "domain": {"type": "string", "description": "register_e2e 대상 URL 또는 도메인"},
                 "steps": {"type": "array", "items": {"type": "object"}},
+                "verify": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": (
+                        "register_e2e 화면 검증 목록(e2e_evidence.verify 도 허용, 둘 다 주면 동일해야 함). "
+                        "항목: {assertion: element_visible|url_equals|text_contains, "
+                        "expected(element_visible 외 필수), selector(element_visible 필수), "
+                        "description, risk=READ, action=snapshot}. 허용 외 assertion 은 등록 오류. "
+                        "이 값이 있어야 승인 후 실행 시 화면 검증(GenericVerificationExecutor)을 탄다"
+                    ),
+                },
+                "starts_when": {"type": "string", "description": "register_e2e 시작 조건(spec.metadata 저장)"},
+                "succeeds_when": {"type": "string", "description": "register_e2e 성공 조건(spec.metadata 저장)"},
+                "lane": {"type": "string", "description": "register_e2e 실행 lane(spec.metadata 저장)"},
                 "e2e_evidence": {
                     "type": "object",
-                    "description": "screen_verified=true 및 screenshot_url 또는 snapshot_ref 필수",
+                    "description": (
+                        "screen_verified=true 및 screenshot_url 또는 snapshot_ref 필수. "
+                        "verify, starts_when, succeeds_when, lane 도 여기에 넣을 수 있다"
+                    ),
                 },
                 "browser_session_id": {"type": "string"},
                 "browser_work_key": {"type": "string"},

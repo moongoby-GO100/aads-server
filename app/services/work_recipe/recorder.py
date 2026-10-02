@@ -26,12 +26,16 @@ class WorkRecipeRecorder:
         *,
         session_id: str = "",
         e2e_evidence: Mapping[str, Any] | None = None,
+        verify: list[Mapping[str, Any]] | None = None,
+        flow_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         self.name = str(name or "").strip()
         self.domain = store.normalize_domain(domain)
         self.tenant_id = tenant_id
         self.session_id = str(session_id or "").strip()
         self.e2e_evidence = dict(e2e_evidence or {})
+        self.verify = [dict(item) for item in verify or []]
+        self.flow_metadata = dict(flow_metadata or {})
         if not self.name or not self.domain:
             raise ValueError("레시피 name과 domain이 필요합니다")
         self.steps: list[RecipeStep] = []
@@ -85,17 +89,23 @@ class WorkRecipeRecorder:
         if not self.steps:
             raise ValueError("성공한 단계가 없어 레시피를 저장할 수 없습니다")
         self._finished = True
+        verify_steps = [
+            RecipeStep.from_dict(raw, seq=len(self.steps) + index)
+            for index, raw in enumerate(self.verify, start=1)
+        ]
         recipe = WorkRecipe(
             name=self.name,
             domain=self.domain,
             version=1,
             inputs=list(self.inputs),
             steps=list(self.steps),
+            verify=verify_steps,
             metadata={
                 "recorded": True,
                 "credentials": "credential_scope",
                 "source_chat_session_id": self.session_id,
                 "screen_e2e": self.e2e_evidence,
+                **self.flow_metadata,
             },
         )
         # FR-17: 성공했다고 즉시 실행 가능 레시피로 올리지 않는다. 단계·권한·
@@ -127,6 +137,8 @@ def start_recording(
     *,
     session_id: str = "",
     e2e_evidence: Mapping[str, Any] | None = None,
+    verify: list[Mapping[str, Any]] | None = None,
+    flow_metadata: Mapping[str, Any] | None = None,
 ) -> WorkRecipeRecorder:
     return WorkRecipeRecorder(
         name,
@@ -134,6 +146,8 @@ def start_recording(
         tenant_id,
         session_id=session_id,
         e2e_evidence=e2e_evidence,
+        verify=verify,
+        flow_metadata=flow_metadata,
     )
 
 

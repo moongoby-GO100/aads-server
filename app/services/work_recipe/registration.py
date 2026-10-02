@@ -33,6 +33,71 @@ def _json_object(value: Any) -> dict[str, Any]:
     raise RegistrationError("registration spec is not an object")
 
 
+_VERIFY_KEYS = frozenset({"risk", "action", "assertion", "expected", "selector", "description", "phase"})
+_FLOW_METADATA_KEYS = ("starts_when", "succeeds_when", "lane")
+
+
+def normalize_verify_steps(raw: Any) -> list[dict[str, Any]]:
+    """Validate register_e2e verify items against what GenericVerificationExecutor can run.
+
+    Raises ValueError (never drops silently) so the caller can return it as a registration error.
+    """
+    from app.services.work_recipe.orchestrator import GENERIC_VERIFY_ASSERTIONS
+
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("invalid_verify_spec")
+    allowed = ", ".join(sorted(GENERIC_VERIFY_ASSERTIONS))
+    result: list[dict[str, Any]] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"invalid_verify_step:{index}")
+        unknown = sorted(set(item) - _VERIFY_KEYS)
+        if unknown:
+            raise ValueError(f"unsupported_verify_field:{index}:{','.join(map(str, unknown))}")
+        if item.get("phase") not in (None, "verify"):
+            raise ValueError(f"invalid_verify_step:{index}")
+        assertion = item.get("assertion")
+        if assertion not in GENERIC_VERIFY_ASSERTIONS:
+            raise ValueError(f"unsupported_verify_assertion:{index}:{assertion} (allowed: {allowed})")
+        action = str(item.get("action") or "snapshot").strip()
+        if action != "snapshot":
+            raise ValueError(f"unsupported_verify_action:{index}:{action}")
+        risk = str(item.get("risk") or "READ").strip().upper()
+        if risk != "READ":
+            raise ValueError(f"verify_risk_must_be_read:{index}")
+        selector = str(item.get("selector") or "").strip()
+        expected = item.get("expected")
+        if assertion == "element_visible":
+            if not selector:
+                raise ValueError(f"verify_selector_required:{index}")
+        elif not str(expected or ""):
+            raise ValueError(f"verify_expected_required:{index}")
+        step: dict[str, Any] = {"risk": risk, "action": action, "assertion": assertion}
+        if expected is not None and str(expected) != "":
+            step["expected"] = str(expected)
+        if selector:
+            step["selector"] = selector
+        if item.get("description"):
+            step["description"] = str(item["description"])
+        result.append(step)
+    return result
+
+
+def normalize_flow_metadata(source: Mapping[str, Any]) -> dict[str, str]:
+    """Pick starts_when/succeeds_when/lane from a mapping; non-string values are errors."""
+    result: dict[str, str] = {}
+    for key in _FLOW_METADATA_KEYS:
+        value = source.get(key)
+        if value is None or value == "":
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"invalid_{key}")
+        result[key] = value.strip()[:1000]
+    return result
+
+
 def build_dry_run(recipe: WorkRecipe, *, proposed_version: int) -> dict[str, Any]:
     """Return the exact, secret-free registration preview shown before approval."""
     return {

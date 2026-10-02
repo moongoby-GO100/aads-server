@@ -5804,6 +5804,22 @@ class ToolExecutor:
             }
             safe_evidence["screen_verified"] = True
             from app.services.work_recipe import recorder as recorder_module
+            from app.services.work_recipe.registration import (
+                normalize_flow_metadata, normalize_verify_steps,
+            )
+
+            try:
+                top_verify = inp.get("verify")
+                evidence_verify = evidence.get("verify")
+                if top_verify and evidence_verify and top_verify != evidence_verify:
+                    raise ValueError("verify_conflict")
+                verify_steps = normalize_verify_steps(top_verify or evidence_verify)
+                flow_metadata = {
+                    **normalize_flow_metadata(evidence),
+                    **normalize_flow_metadata(inp),
+                }
+            except ValueError as exc:
+                return {"error": str(exc)}
 
             recording = recorder_module.start_recording(
                 name,
@@ -5811,6 +5827,8 @@ class ToolExecutor:
                 tenant_id,
                 session_id=session_id,
                 e2e_evidence=safe_evidence,
+                verify=verify_steps,
+                flow_metadata=flow_metadata,
             )
             for raw_step in steps:
                 if not isinstance(raw_step, dict):
