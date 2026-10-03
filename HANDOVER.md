@@ -14804,3 +14804,14 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 시험: 신규 `tests/unit/test_deploy_standby_digest_failclosed.py` 18건(실제 함수 본문 + stub 서브프로세스, routed-health 롤백 포함), 변이 시험으로 검출력 확인. 기존 `test_deploy_stream_reconcile` 의 문자열 시험 1건을 함수 추출에 맞게 갱신.
 - 미실행: 운영 반영·실제 deploy. 기존 실패 `test_standby_session_ownership`(goal_dispatch) 1건은 무관해서 손대지 않음.
 - 상세: `reports/20261003_standby_digest_failclosed_RESULT.md`. DB handover 미기록(도구·토큰 없음). commit/push 는 Runner 승인 후.
+
+## 2026-10-03 — 카페24 이전 최우선·클로브 기능/디자인 실행 연결
+
+- DB 정본: AADS / task / `acct-cafe24-clobe-feature-design-execution-20261003` (entry `0bea2c7d-9b67-4767-ac85-1079c09882c1`). 전체 이전·클로브 화면 반영은 아직 완료 아님.
+- 러너 원장 잠금: pg_dump의 AccessShareLock 뒤에서 스위퍼의 기존 컬럼 ADD COLUMN IF NOT EXISTS가 AccessExclusiveLock을 기다려 후행 조회·갱신 차단. 확인한 no-op 대기 DDL만 취소, 백업 보존.
+- 코드 보완 `289bf198`: `scripts/review-hold-sweeper.sh`는 3컬럼 존재 시 DDL 생략, 누락 시 lock_timeout=2s/다음 주기 재시도. bash -n, git diff --check 통과; main push 완료. 오류사전 `runner.retry_schema_pg_dump_lock` 등록.
+- 이전 전환 R17 `8f026523` lint 통과 후 AADS build disk preflight 실패(로그 available=8148MB, required=8192MB); 실제 카페24 apply 미실행. 새 이전 작업은 불필요한 AADS 재빌드 없이 카페24 실제 운영 적용·검증 대상으로 등록.
+- 배치 `acct-cafe24-clobe-priority-20261003`: `runner-f442c544`(S/P0 이전 최종검증) → `runner-6aeed147`(M/P1 다사업자 읽기수집·검토·대사) → `runner-7f790efa`(M/P1 기능·화면·통합 릴리스). 파일충돌/native depends_on으로 순차 연결.
+- 기존 이전 목표 `df479771-f250-4a11-90a3-220432da2bfa` M5 및 수집 목표 `4226a834-d5de-4ac2-9080-b0ad8b49ca2c` M2A/M3에 GoalStateMachine으로 작업 연결, pipeline_jobs context 저장 확인. 구현·대사·로그인 화면·300초 감시는 후속 러너 완료 판정 항목.
+- 공개 `fb.newtalk.kr` HTTP302 및 서버 Playwright 캡처 성공(로그인 미사용): https://aads.newtalk.kr/screenshots/screenshot_20261003_101058_544ff3.png . 공개 화면 가용성과 카페24 서비스 독립성을 혼동하지 않는다.
+- 진아서버 사용·복귀/라일론 자료 제외 유지. OAuth 동의 재요청 금지. 원 TODO는 in_progress 유지. 이번 스위퍼 변경은 host 운영 스크립트이며 API 이미지 배포는 수행하지 않음.
