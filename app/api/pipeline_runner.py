@@ -1588,6 +1588,77 @@ def _enforce_owner_resolved_gate(instruction: str, project: str) -> None:
     )
 
 
+async def _run_mockup_gate(
+    context: TenantContext, *, phase: str, project: str, task_id: str, instruction: str, goal_id: str | None,
+) -> dict:
+    """Verify the approved mockup bundle named in the instruction. Unrelated tasks return without touching the DB.
+
+    The gate runs in its own short transaction so a denial's audit row is committed even though the caller then
+    answers 409. It only reads and records; it never stops or restarts any running job.
+    """
+    from app.api.canonical_documents import _authorize, _scope
+    from app.core.db_pool import get_pool
+    from app.services import mockup_gate_rules as rules
+    from app.services import mockup_review_service as mockup
+
+    info = rules.classify(instruction)
+    if not info["applicable"]:
+        return {"applicable": False, "allowed": True, "mode": info["mode"], "phase": phase, "reasons": []}
+    project_key = project.upper()
+    try:
+        actor = _scope(context)[1]
+        async with get_pool().acquire() as conn, conn.transaction():
+            async def authorize() -> None:
+                await _authorize(conn, context, project_key, "write")
+
+            result = await mockup.gate_check(
+                conn, phase=phase, tenant=_tenant_id(context), project=project_key, task_id=task_id,
+                instruction=instruction, goal_id=goal_id, actor=actor, authorize=authorize)
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 - pool exhausted / DB down
+        logger.warning("mockup_gate_unavailable", phase=phase, task_id=task_id, exc_info=True)
+        return {"applicable": True, "mode": info["mode"], "phase": phase, "ui_task": info["ui_task"],
+                "declared": info["declared"], **rules.unavailable_decision(info)}
+    if result["allowed"] and result.get("shadow"):
+        logger.warning("mockup_gate_shadow", phase=phase, task_id=task_id, reasons=result["reasons"])
+    return result
+
+
+def _mockup_denial(result: dict) -> HTTPException:
+    return HTTPException(status_code=409, detail={"code": "mockup_approval_required", **result})
+
+
+class MockupGateRequest(BaseModel):
+    phase: str = Field("pre_execution", pattern="^(pre_execution|checkpoint)$")
+
+
+@router.post("/pipeline/jobs/{job_id}/mockup-gate", tags=["pipeline-runner"])
+async def mockup_gate_for_job(
+    job_id: str,
+    body: MockupGateRequest | None = None,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """Worker-side gate: re-verify the same approval bundle right before the worker starts (or at a checkpoint).
+
+    Answers 200 {"allowed": true|false}; a worker that gets allowed=false must not start the job. The endpoint
+    only reads the job row, so calling it can never change or stop a running job.
+    """
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=422, detail="invalid job_id")
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn:
+        job = await conn.fetchrow(
+            "SELECT project, instruction FROM pipeline_jobs WHERE job_id = $1 AND tenant_id = $2::uuid",
+            job_id, _tenant_id(context))
+    if not job:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    from app.services import mockup_gate_rules as rules
+    return await _run_mockup_gate(
+        context, phase=(body.phase if body else "pre_execution"), project=job["project"], task_id=job_id,
+        instruction=job["instruction"] or "", goal_id=rules.declared_goal_id(job["instruction"] or ""))
+
+
 @router.post("/pipeline/jobs", response_model=JobSubmitResponse, tags=["pipeline-runner"])
 async def submit_job(
     req: JobSubmitRequest,
@@ -1600,6 +1671,12 @@ async def submit_job(
 
     job_id = f"runner-{uuid.uuid4().hex[:8]}"
     session_id = req.session_id  # 필수 필드 — validator에서 이미 검증됨
+    from app.services import mockup_gate_rules as _mockup_rules
+    mockup_gate = await _run_mockup_gate(
+        context, phase="submit", project=req.project, task_id=job_id, instruction=req.instruction,
+        goal_id=req.goal_id or _mockup_rules.declared_goal_id(req.instruction))
+    if not mockup_gate["allowed"]:
+        raise _mockup_denial(mockup_gate)
     instruction_hash = _compute_instruction_hash(req.project, req.instruction)
     write_scope = _parse_write_scope(req.instruction)
     target_files = set(write_scope.write)

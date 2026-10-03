@@ -237,3 +237,21 @@ class VerifyBundle(BaseModel):
         if not SHA256.fullmatch(value):
             raise ValueError("manifest_hash must be 64 lowercase hex chars")
         return value
+
+
+class ChangeIntake(IdempotentWrite):
+    """Chat-side change request. The server, not the client, decides which review/revision it targets."""
+    expected_generation: int | None = Field(None, ge=0)
+    change_request_id: UUID
+    session_id: UUID
+    source_message_id: UUID
+    comment: str = Field(max_length=4000)
+    reply_to_id: UUID | None = None
+    artifact_id: UUID | None = None
+    review_id: UUID | None = None
+    screen_id: str | None = None
+
+    @field_validator("screen_id")
+    @classmethod
+    def valid_screen(cls, value: str | None) -> str | None:
+        return _id(value, "screen_id") if value is not None else None

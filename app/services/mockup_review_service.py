@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import posixpath
 import re
@@ -16,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -24,9 +25,12 @@ from fastapi.encoders import jsonable_encoder
 
 from app.api.canonical_documents import SECRET
 from app.models.mockup_review import (
-    STATES, ApproveReview, ChangeCreate, ReviewCreate, RevisingStart, RevisionCreate, RevokeReview,
+    STATES, ApproveReview, ChangeCreate, ChangeIntake, ReviewCreate, RevisingStart, RevisionCreate, RevokeReview,
     SubmitReview, VerifyBundle,
 )
+from app.services import mockup_gate_rules as rules
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSET_SCHEME = "internal://"
@@ -657,13 +661,14 @@ async def submit_review(conn: Any, tenant: str, project: str, review_id: UUID, a
         fail(422, "missing_artifacts", missing=issues, blocked_evidence=any(i["code"] == "blocked_evidence" for i in issues))
     generation = head["generation"] + 1
     await _update_head(conn, head["id"], status="review_ready", generation=generation)
-    _, response = await _event(
+    event_id, response = await _event(
         conn, head, "submitted", actor, generation_after=generation, revision_id=revision["id"],
         key=body.idempotency_key, rhash=rhash, payload={"manifest_hash": revision["manifest_hash"]},
         build_response=lambda _eid: {"review_id": str(head["id"]), "revision_id": str(revision["id"]),
                                      "revision": revision["revision"], "manifest_hash": revision["manifest_hash"],
                                      "status": "review_ready", "generation": generation, "approved": False,
                                      "idempotent": False})
+    await _notify_submitted(conn, head, revision, actor, event_id)
     return response
 
 
@@ -725,7 +730,7 @@ async def request_changes(conn: Any, tenant: str, project: str, review_id: UUID,
         await _update_head(conn, head["id"], status=status, generation=generation)
     position = await conn.fetchval(
         "SELECT count(*) FROM mockup_review_change_requests WHERE head_id=$1 AND status<>'resolved'", head["id"])
-    _, response = await _event(
+    event_id, response = await _event(
         conn, head, "changes_requested", actor, generation_after=generation, revision_id=body.base_revision_id,
         key=body.idempotency_key, rhash=rhash,
         payload={"change_request_id": str(body.change_request_id), "queued": queued, "bindings_held": held},
@@ -735,6 +740,8 @@ async def request_changes(conn: Any, tenant: str, project: str, review_id: UUID,
             "status": status, "request_status": "open", "queued": queued, "pending_change_requests": position,
             "generation": generation, "approved": False, "implementation_command": False,
             "bindings_held": held, "idempotent": False})
+    await _emit(conn, head, "change_received", event_id=event_id, actor=actor, revision_id=body.base_revision_id,
+                audience=("owners", "approvers"), detail=comment.strip()[:200])
     return response
 
 
@@ -777,6 +784,8 @@ async def approve_review(conn: Any, tenant: str, project: str, review_id: UUID, 
                                     "idempotent": False})
     await _update_head(conn, head["id"], status="approved", approved_revision_id=revision["id"],
                        approval_event_id=event_id, generation=generation)
+    await _emit(conn, head, "approved", event_id=event_id, actor=actor, revision_id=revision["id"],
+                revision=revision["revision"], audience=("owners", "requesters"))
     return response
 
 
@@ -796,7 +805,7 @@ async def revoke_review(conn: Any, tenant: str, project: str, review_id: UUID, a
     status = "revoked" if head["status"] == "approved" else head["status"]
     generation = head["generation"] + 1
     held = await _hold_bindings(conn, head["id"])
-    _, response = await _event(
+    event_id, response = await _event(
         conn, head, "revoked", actor, generation_after=generation, revision_id=revoked, key=body.idempotency_key,
         rhash=rhash, payload={"approval_id": body.approval_id, "reason": body.reason, "bindings_held": held},
         build_response=lambda _eid: {"review_id": str(head["id"]), "revoked_revision_id": str(revoked),
@@ -804,11 +813,18 @@ async def revoke_review(conn: Any, tenant: str, project: str, review_id: UUID, a
                                      "bindings_held": held, "idempotent": False})
     await _update_head(conn, head["id"], status=status, approved_revision_id=None, approval_event_id=None,
                        generation=generation)
+    await _emit(conn, head, "revoked", event_id=event_id, actor=actor, revision_id=revoked,
+                audience=("owners", "requesters"), detail=(body.reason or "")[:200])
     return response
 
 
-async def verify_bundle(conn: Any, tenant: str, project: str, review_id: UUID, actor: str, body: VerifyBundle) -> dict:
-    """Execution-time gate. Returns {"allowed": bool, ...}; a denial is audited and the caller answers 409."""
+async def verify_bundle(conn: Any, tenant: str, project: str, review_id: UUID, actor: str, body: VerifyBundle,
+                        declared_goal_id: str | None = None) -> dict:
+    """Execution-time gate. Returns {"allowed": bool, ...}; a denial is audited and the caller answers 409.
+
+    declared_goal_id only matters at phase=submit, when the task has no goal_task_links row yet: the goal named in
+    the submission counts as scope if it is a goal of this tenant/project (and of this review, when it has one).
+    """
     head = await _lock(conn, tenant, project, review_id)
     reasons: list[str] = []
     detail: dict[str, Any] = {}
@@ -817,6 +833,10 @@ async def verify_bundle(conn: Any, tenant: str, project: str, review_id: UUID, a
         "JOIN goals g ON g.id=COALESCE(l.goal_id,m.goal_id) WHERE l.task_id=$1 AND l.tenant_id=$2::uuid AND l.link_state='active' "
         "AND g.tenant_id=$2::uuid AND g.project=$3 AND ($4::uuid IS NULL OR g.id=$4::uuid) LIMIT 1",
         body.task_id, tenant, project, head["goal_id"])
+    if not in_scope and body.phase == "submit" and declared_goal_id:
+        in_scope = await conn.fetchval(
+            "SELECT 1 FROM goals WHERE id=$1::uuid AND tenant_id=$2::uuid AND project=$3 "
+            "AND ($4::uuid IS NULL OR id=$4::uuid)", declared_goal_id, tenant, project, head["goal_id"])
     if not in_scope:
         reasons.append("task_out_of_scope")
     approved = head["approved_revision_id"]
@@ -858,6 +878,10 @@ async def verify_bundle(conn: Any, tenant: str, project: str, review_id: UUID, a
             conn, head, "verify_denied", actor, generation_after=head["generation"], revision_id=body.revision_id
             if revision is not None else None,
             payload={"task_id": body.task_id, "phase": body.phase, "reasons": reasons, **detail})
+        await _emit(conn, head, "failed", event_id=event_id, actor=actor, revision_id=body.revision_id
+                    if revision is not None else None, audience=("owners", "approvers"),
+                    detail=f"{body.phase}: {', '.join(reasons)}"[:200],
+                    dedupe=f"failed:{head['id']}:{body.task_id}:{body.phase}:{','.join(sorted(reasons))}")
         return {"allowed": False, "code": "approval_required", "reasons": reasons, "audit_event_id": event_id,
                 "status": head["status"], "generation": head["generation"], **detail}
     target = "bound" if body.phase == "submit" else "running"
@@ -878,6 +902,272 @@ async def verify_bundle(conn: Any, tenant: str, project: str, review_id: UUID, a
             "manifest_hash": body.manifest_hash, "approval_id": head["approval_event_id"],
             "approval_generation": head["generation"], "binding_status": target,
             "expires_at": (datetime.now(timezone.utc) + VERIFY_TTL).isoformat()}
+
+
+# -------------------------------------------------------- notifications (OHVIS inbox only)
+# Rows in ohvis_notifications are the whole delivery: nothing here talks to Telegram, mail, SMS or Slack, and a
+# failed insert is logged and dropped rather than falling back to another channel.
+
+NOTIFICATION_KINDS = ("review_requested", "change_received", "re_reported", "approval_waiting", "approved",
+                      "revoked", "failed")
+_TITLES = {
+    "review_requested": "목업 검토 요청", "change_received": "목업 수정 요청 접수", "re_reported": "수정본 재보고",
+    "approval_waiting": "목업 승인 대기", "approved": "목업 승인", "revoked": "목업 승인 철회/반려",
+    "failed": "목업 실행 게이트 차단",
+}
+_ELEVATED_ROLES = ("admin", "owner")
+
+
+def notification_link(project: str, review_id: Any, revision_id: Any, session_id: Any) -> str:
+    """Dashboard deep link that opens the exact review revision (query keys are read by the chat page)."""
+    query = f"mockup_review={review_id}&mockup_project={quote(project, safe='')}"
+    if revision_id:
+        query += f"&mockup_revision={revision_id}"
+    return f"/chat?{query}" + (f"#{session_id}" if session_id else "")
+
+
+async def _eligible(conn: Any, tenant: str, project: str, user_ids: list[str], access: tuple[str, ...],
+                    session_owner: str | None) -> list[str]:
+    """Users in this tenant who may see the review (grant or admin/owner) and, if session-bound, its session."""
+    if not user_ids:
+        return []
+    rows = await conn.fetch(
+        "SELECT m.user_id,m.role FROM tenant_memberships m WHERE m.tenant_id=$1::uuid AND m.status='active' "
+        "AND m.deleted_at IS NULL AND m.user_id=ANY($2::text[]) AND (m.role=ANY($5::text[]) OR EXISTS("
+        "SELECT 1 FROM project_document_grants g WHERE g.tenant_id=m.tenant_id AND g.project_key=$3 "
+        "AND g.user_id=m.user_id AND g.access=ANY($4::text[])))",
+        tenant, user_ids, project, list(access), list(_ELEVATED_ROLES))
+    return [r["user_id"] for r in rows
+            if session_owner is None or r["user_id"] == session_owner or r["role"] in _ELEVATED_ROLES]
+
+
+async def _session_owner(conn: Any, tenant: str, head: Any) -> str | None:
+    if not head["session_id"]:
+        return None
+    return await conn.fetchval("SELECT user_id FROM chat_sessions WHERE id=$1 AND tenant_id=$2::uuid",
+                               head["session_id"], tenant)
+
+
+async def _audience(conn: Any, head: Any, tags: tuple[str, ...], actor: str) -> list[str]:
+    tenant, project = str(head["tenant_id"]), head["project_key"]
+    owner = await _session_owner(conn, tenant, head)
+    candidates: set[str] = set()
+    if "owners" in tags:
+        candidates |= {u for u in (head["created_by"], owner) if u}
+    if "requesters" in tags:
+        rows = await conn.fetch("SELECT DISTINCT requested_by FROM mockup_review_change_requests WHERE head_id=$1",
+                                head["id"])
+        candidates |= {r["requested_by"] for r in rows}
+    if "approvers" in tags:
+        rows = await conn.fetch(
+            "SELECT m.user_id FROM tenant_memberships m WHERE m.tenant_id=$1::uuid AND m.status='active' "
+            "AND m.deleted_at IS NULL AND (m.role=ANY($3::text[]) OR EXISTS(SELECT 1 FROM project_document_grants g "
+            "WHERE g.tenant_id=m.tenant_id AND g.project_key=$2 AND g.user_id=m.user_id AND g.access='approve')) "
+            "LIMIT 50", tenant, project, list(_ELEVATED_ROLES))
+        candidates |= {r["user_id"] for r in rows}
+    candidates.discard(actor)  # the person who acted already knows
+    return sorted(await _eligible(conn, tenant, project, sorted(candidates), ("read", "write", "approve"), owner))
+
+
+async def _emit(conn: Any, head: Any, kind: str, *, event_id: int | None, actor: str, revision_id: Any,
+                audience: tuple[str, ...], revision: int | None = None, detail: str = "",
+                dedupe: str | None = None) -> int:
+    """Insert one inbox row per eligible recipient. Never raises into the review operation; returns rows added."""
+    assert kind in NOTIFICATION_KINDS
+    try:
+        async with conn.transaction():  # savepoint: a failed insert must not poison the surrounding transaction
+            recipients = await _audience(conn, head, audience, actor)
+            if revision is None and revision_id:
+                revision = await conn.fetchval("SELECT revision FROM mockup_review_revisions WHERE id=$1", revision_id)
+            link = notification_link(head["project_key"], head["id"], revision_id, head["session_id"])
+            key = dedupe or f"{kind}:{event_id}"
+            body = detail or f"{head['title']}" + (f" · r{revision}" if revision else "")
+            payload = json.dumps({"actor": actor, "generation": head["generation"]})
+            added = 0
+            for user_id in recipients:
+                status = await conn.execute(
+                    "INSERT INTO ohvis_notifications(tenant_id,project_key,recipient_user_id,kind,review_id,"
+                    "revision_id,revision,session_id,event_id,title,body,link,payload,dedupe_key) "
+                    "VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14) "
+                    "ON CONFLICT (tenant_id,recipient_user_id,dedupe_key) DO NOTHING",
+                    head["tenant_id"], head["project_key"], user_id, kind, head["id"], revision_id, revision,
+                    head["session_id"], event_id, _TITLES[kind], body, link, payload, key)
+                added += 1 if str(status).endswith(" 1") else 0
+            return added
+    except Exception:  # noqa: BLE001 - inbox is best effort, the audited review state is the source of truth
+        logger.warning("ohvis notification %s dropped for review %s", kind, head["id"], exc_info=True)
+        return 0
+
+
+async def _notify_submitted(conn: Any, head: Any, revision: Any, actor: str, event_id: int) -> None:
+    if revision["revision"] > 1:
+        await _emit(conn, head, "re_reported", event_id=event_id, actor=actor, revision_id=revision["id"],
+                    revision=revision["revision"], audience=("requesters", "owners"))
+    else:
+        await _emit(conn, head, "review_requested", event_id=event_id, actor=actor, revision_id=revision["id"],
+                    revision=revision["revision"], audience=("approvers",))
+    await _emit(conn, head, "approval_waiting", event_id=event_id, actor=actor, revision_id=revision["id"],
+                revision=revision["revision"], audience=("approvers",))
+
+
+async def list_notifications(conn: Any, tenant: str, user: str, *, unread_only: bool = False,
+                             project: str | None = None, limit: int = 50) -> dict:
+    """Only the caller's own rows in the caller's tenant; there is no way to ask for someone else's inbox."""
+    limit = max(1, min(limit, 200))
+    rows = await conn.fetch(
+        "SELECT * FROM ohvis_notifications WHERE tenant_id=$1::uuid AND recipient_user_id=$2 "
+        "AND ($3::bool IS FALSE OR read_at IS NULL) AND ($4::text IS NULL OR project_key=$4) "
+        "ORDER BY created_at DESC,id DESC LIMIT $5", tenant, user, unread_only, project, limit)
+    unread = await conn.fetchval(
+        "SELECT count(*) FROM ohvis_notifications WHERE tenant_id=$1::uuid AND recipient_user_id=$2 "
+        "AND read_at IS NULL", tenant, user)
+    items = [{"id": r["id"], "kind": r["kind"], "title": r["title"], "body": r["body"], "link": r["link"],
+              "project": r["project_key"], "review_id": str(r["review_id"]) if r["review_id"] else None,
+              "revision_id": str(r["revision_id"]) if r["revision_id"] else None, "revision": r["revision"],
+              "session_id": str(r["session_id"]) if r["session_id"] else None,
+              "read": r["read_at"] is not None, "created_at": r["created_at"].isoformat()} for r in rows]
+    return {"items": items, "unread": unread}
+
+
+async def mark_notification_read(conn: Any, tenant: str, user: str, notification_id: int) -> dict:
+    updated = await conn.fetchval(
+        "UPDATE ohvis_notifications SET read_at=COALESCE(read_at,now()) WHERE id=$1 AND tenant_id=$2::uuid "
+        "AND recipient_user_id=$3 RETURNING id", notification_id, tenant, user)
+    if updated is None:
+        fail(404, "notification_not_found")
+    return {"id": updated, "read": True}
+
+
+# ------------------------------------------------------------- execution gate
+
+def _gate_result(info: dict, phase: str, decision: dict, **extra: Any) -> dict:
+    return {"applicable": info["applicable"], "mode": info["mode"], "phase": phase, "ui_task": info["ui_task"],
+            "declared": info["declared"], **decision, **extra}
+
+
+async def gate_check(conn: Any, *, phase: str, tenant: str, project: str, task_id: str, instruction: str,
+                     goal_id: str | None, actor: str, authorize: Any = None,
+                     environ: dict[str, str] | None = None) -> dict:
+    """Decide whether this instruction may be submitted / started. Never raises: every failure is a denial.
+
+    Tasks that neither declare a bundle nor look like UI work return applicable=False and are left alone. A declared
+    bundle is always verified (so a half-written declaration cannot slip through). A UI task without a bundle is
+    denied under MOCKUP_GATE_MODE=enforce and only recorded under shadow. A database failure on an applicable task
+    denies (fail closed) except when the mode is shadow and no bundle was declared.
+    """
+    info = rules.classify(instruction, environ)
+    if not info["applicable"]:
+        return _gate_result(info, phase, {"allowed": True, "reasons": []})
+    bundle = info["bundle"]
+    if not bundle["declared"]:
+        return _gate_result(info, phase, rules.no_bundle_decision(info["mode"]), ui_reasons=info["ui_reasons"])
+    if bundle["errors"]:
+        return _gate_result(info, phase, {"allowed": False, "reasons": [f"bundle_{e}" for e in bundle["errors"]]})
+    try:
+        if authorize is not None:
+            await authorize()
+        result = await verify_bundle(
+            conn, tenant, project, UUID(bundle["review_id"]), actor,
+            VerifyBundle(task_id=task_id, revision_id=UUID(bundle["revision_id"]),
+                         manifest_hash=bundle["manifest_hash"], phase=phase),
+            declared_goal_id=goal_id)
+    except HTTPException as exc:
+        code = exc.detail if isinstance(exc.detail, str) else (exc.detail or {}).get("code", "gate_error")
+        return _gate_result(info, phase, {"allowed": False, "reasons": [str(code)]})
+    except Exception:  # noqa: BLE001 - DB unavailable, timeout, bad row: never allow on an unverified state
+        logger.warning("mockup gate unavailable (phase=%s task=%s)", phase, task_id, exc_info=True)
+        return _gate_result(info, phase, {"allowed": False, "reasons": ["gate_unavailable"]})
+    keep = {k: result[k] for k in ("review_id", "revision_id", "manifest_hash", "approval_id", "binding_status",
+                                   "audit_event_id", "status", "generation") if k in result}
+    return _gate_result(info, phase, {"allowed": bool(result["allowed"]), "reasons": result.get("reasons", [])}, **keep)
+
+
+# --------------------------------------------------------------- chat intake
+
+_ACTIVE_STATES = ("review_ready", "changes_requested", "revising", "approved")
+
+
+async def resolve_change_target(conn: Any, tenant: str, project: str, body: ChangeIntake) -> Any:
+    """Which review does this chat message refer to? Decided only from server state, never from client claims.
+
+    Order: explicit review_id, then the artifact (or the replied-to message's artifact) that carries
+    metadata.mockup_review_id, then the single active review bound to the session. More than one candidate is
+    ambiguous and rejected; a conflict between hints is rejected.
+    """
+    session = await conn.fetchrow("SELECT id,user_id FROM chat_sessions WHERE id=$1 AND tenant_id=$2::uuid",
+                                  body.session_id, tenant)
+    if not session:
+        fail(404, "session_not_found")
+    artifact_id = body.artifact_id
+    if body.reply_to_id:
+        replied = await conn.fetchrow(
+            "SELECT session_id,artifact_id FROM chat_messages WHERE id=$1 AND tenant_id=$2::uuid "
+            "AND deleted_at IS NULL", body.reply_to_id, tenant)
+        if not replied:
+            fail(404, "reply_target_not_found")
+        if replied["session_id"] != body.session_id:
+            fail(422, "reply_target_session_mismatch")
+        if artifact_id and replied["artifact_id"] and replied["artifact_id"] != artifact_id:
+            fail(422, "review_target_conflict", reason="artifact_vs_reply")
+        artifact_id = artifact_id or replied["artifact_id"]
+    hinted: set[UUID] = set()
+    if artifact_id:
+        art = await conn.fetchrow("SELECT session_id,metadata FROM chat_artifacts WHERE id=$1", artifact_id)
+        if not art or art["session_id"] != body.session_id:
+            fail(404, "artifact_not_found")
+        raw = _json(art["metadata"]).get("mockup_review_id")
+        try:
+            hinted.add(UUID(str(raw)))
+        except (TypeError, ValueError):
+            if body.artifact_id:  # an explicitly selected artifact must actually be a mockup
+                fail(422, "artifact_not_a_mockup")
+    if body.review_id:
+        if hinted and body.review_id not in hinted:
+            fail(422, "review_target_conflict", reason="review_vs_artifact")
+        hinted = {body.review_id}
+    if hinted:
+        head = await conn.fetchrow(
+            "SELECT * FROM mockup_review_heads WHERE id=$1 AND tenant_id=$2::uuid AND project_key=$3 FOR UPDATE",
+            next(iter(hinted)), tenant, project)
+        if not head:
+            fail(404, "review_not_found")
+    else:
+        rows = await conn.fetch(
+            "SELECT id FROM mockup_review_heads WHERE tenant_id=$1::uuid AND project_key=$2 AND session_id=$3 "
+            "AND status=ANY($4::text[]) ORDER BY updated_at DESC LIMIT 5", tenant, project, body.session_id,
+            list(_ACTIVE_STATES))
+        if not rows:
+            fail(404, "review_target_not_found")
+        if len(rows) > 1:
+            fail(409, "ambiguous_review_target", candidates=[str(r["id"]) for r in rows])
+        head = await _lock(conn, tenant, project, rows[0]["id"])
+    if head["session_id"] and head["session_id"] != body.session_id:
+        fail(422, "review_session_mismatch")
+    return head
+
+
+async def intake_change(conn: Any, tenant: str, project: str, actor: str, elevated: bool, body: ChangeIntake) -> dict:
+    """Chat message -> change_request on the server-chosen latest revision. It is never an approval or a command."""
+    await _session_scope(conn, tenant, project, body.session_id, actor, elevated)
+    source_session = await conn.fetchval(
+        "SELECT session_id FROM chat_messages WHERE id=$1 AND tenant_id=$2::uuid AND deleted_at IS NULL",
+        body.source_message_id, tenant)
+    if source_session is None:
+        fail(404, "source_message_not_found")
+    if source_session != body.session_id:
+        fail(422, "source_message_session_mismatch")
+    head = await resolve_change_target(conn, tenant, project, body)
+    if not head["latest_revision_id"]:
+        fail(409, "invalid_state", status=head["status"], required="submitted revision")
+    expected = body.expected_generation if body.expected_generation is not None else head["generation"]
+    result = await request_changes(
+        conn, tenant, project, head["id"], actor, elevated,
+        ChangeCreate(idempotency_key=body.idempotency_key, expected_generation=expected,
+                     change_request_id=body.change_request_id, base_revision_id=head["latest_revision_id"],
+                     source_message_id=body.source_message_id, comment=body.comment, screen_id=body.screen_id))
+    return {**result, "target": {"review_id": str(head["id"]), "revision_id": str(head["latest_revision_id"]),
+                                 "resolved_by": "server"},
+            "next": "revise_then_resubmit", "approved": False, "implementation_command": False}
 
 
 # -------------------------------------------------------------------- queries

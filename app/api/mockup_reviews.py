@@ -4,14 +4,14 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path, Response
+from fastapi import APIRouter, Depends, Path, Query, Response
 from fastapi.responses import JSONResponse
 
 from app.api.canonical_documents import _authorize, _project, _scope
 from app.auth import TenantRole, require_tenant_role
 from app.core.db_pool import get_pool
 from app.models.mockup_review import (
-    ApproveReview, ChangeCreate, ReviewCreate, RevisingStart, RevisionCreate, RevokeReview, SubmitReview,
+    ApproveReview, ChangeCreate, ChangeIntake, ReviewCreate, RevisingStart, RevisionCreate, RevokeReview, SubmitReview,
     VerifyBundle,
 )
 from app.services import mockup_review_service as svc
@@ -34,6 +34,29 @@ async def _run(project_key: str, context: dict, access: str, work: Any) -> Any:
 async def create_review(project_key: str, body: ReviewCreate, response: Response, context: dict = WRITE):
     result = await _run(project_key, context, "write",
                         lambda c, t, p, a, e: svc.create_review(c, t, p, a, e, body))
+    if result.get("idempotent"):
+        response.status_code = 200
+    return result
+
+
+@router.get("/notifications")
+async def list_notifications(project_key: str, unread_only: bool = False, limit: int = Query(50, ge=1, le=200),
+                             context: dict = VIEW):
+    return await _run(project_key, context, "read",
+                      lambda c, t, p, a, e: svc.list_notifications(c, t, a, unread_only=unread_only, project=p,
+                                                                    limit=limit))
+
+
+@router.post("/notifications/{notification_id}/read")
+async def read_notification(project_key: str, notification_id: int, context: dict = VIEW):
+    return await _run(project_key, context, "read",
+                      lambda c, t, p, a, e: svc.mark_notification_read(c, t, a, notification_id))
+
+
+@router.post("/change-intake", status_code=201)
+async def change_intake(project_key: str, body: ChangeIntake, response: Response, context: dict = WRITE):
+    result = await _run(project_key, context, "write",
+                        lambda c, t, p, a, e: svc.intake_change(c, t, p, a, e, body))
     if result.get("idempotent"):
         response.status_code = 200
     return result

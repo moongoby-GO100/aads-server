@@ -2977,6 +2977,25 @@ run_job() {
     # ── 사전 검증 (Pre-validation) ──
     pre_validate "$job_id" "$project" "$session_id" "$instruction" || { _release_work_lock "$project" "$job_id" "$parallel_group"; return 1; }
 
+    # ── 목업 승인 bundle 실행 직전 재검증 (submit 때와 같은 bundle, 같은 규칙) ──
+    # 0=통과/해당없음, 10=승인 상태가 맞지 않음, 20=게이트 판정 불가. 10·20 은 워커를 시작하지 않는다.
+    # 실행 중인 다른 작업은 건드리지 않는다.
+    local _mockup_out _mockup_rc=0
+    _mockup_out=$(printf '%s' "$instruction" | timeout 30 python3 "$(dirname "${BASH_SOURCE[0]}")/verify_mockup_approval.py" \
+        --job-id "$job_id" --phase pre_execution --instruction-file - 2>&1) || _mockup_rc=$?
+    # 게이트 스크립트 자체의 오류(rc 가 10/20 이 아님)는 목업·대시보드 작업일 때만 차단한다 — 무관한 작업이 인프라 오류로 멈추지 않게.
+    if [ "$_mockup_rc" -ne 0 ] && [ "$_mockup_rc" -ne 10 ] && [ "$_mockup_rc" -ne 20 ] \
+        && ! printf '%s' "$instruction" | grep -qE 'MOCKUP_REVIEW_ID|aads-dashboard|UI_TASK'; then
+        log "  MOCKUP_GATE job=$job_id script_error rc=$_mockup_rc (non-UI task, continuing)"
+        _mockup_rc=0
+    fi
+    if [ "$_mockup_rc" -ne 0 ]; then
+        log "  MOCKUP_GATE job=$job_id rc=$_mockup_rc ${_mockup_out:0:300}"
+        _fail_job "$job_id" "$session_id" "mockup_approval_required" "목업 승인 bundle 검증 실패(rc=$_mockup_rc): ${_mockup_out:0:300}"
+        _release_work_lock "$project" "$job_id" "$parallel_group"
+        return 1
+    fi
+
     # ── 중복 작업 확인 ──
     check_duplicate "$job_id" "$project" "$instruction" || { _release_work_lock "$project" "$job_id" "$parallel_group"; return 0; }
 
