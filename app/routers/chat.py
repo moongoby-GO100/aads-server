@@ -1430,6 +1430,45 @@ async def get_workspace_session_messages(
     return payload
 
 
+_IDEMPOTENCY_KEY_MAX_LENGTH = 64  # app.models.chat.MessageSendRequest.idempotency_key / chat_messages.idempotency_key varchar(64)
+
+
+def _invalid_message_payload(errors: list[dict[str, Any]], status_code: int = 422) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": "invalid_message_payload", "accepted": False, "errors": errors},
+    )
+
+
+def _sanitize_validation_errors(exc: ValidationError) -> list[dict[str, Any]]:
+    """field/type/수치 ctx 만 남긴다. input(사용자 원문)·msg 는 응답에 넣지 않는다."""
+    sanitized: list[dict[str, Any]] = []
+    for err in exc.errors(include_input=False, include_url=False):
+        item: dict[str, Any] = {
+            "field": ".".join(str(part) for part in err.get("loc", ())) or "body",
+            "type": str(err.get("type", "value_error")),
+        }
+        for key, value in (err.get("ctx") or {}).items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                item[key] = value
+        sanitized.append(item)
+    return sanitized
+
+
+def _parse_message_send_body(body: Any):
+    from app.models.chat import MessageSendRequest
+
+    if not isinstance(body, dict):
+        raise _invalid_message_payload([{"field": "body", "type": "dict_type"}])
+    try:
+        return MessageSendRequest(**body)
+    except ValidationError as exc:
+        raise _invalid_message_payload(_sanitize_validation_errors(exc)) from exc
+    except TypeError as exc:
+        # 비문자열 키 등 **body 전개 자체가 실패하는 경우
+        raise _invalid_message_payload([{"field": "body", "type": "dict_type"}]) from exc
+
+
 @router.post("/chat/messages/send", tags=["chat-message"])
 async def send_message(
     request: Request,
@@ -1459,6 +1498,12 @@ async def send_message(
         response_mode = str(form.get("response_mode") or "quality")
         reply_to_id = str(form.get("reply_to_id")) if form.get("reply_to_id") else None
         idempotency_key = str(form.get("idempotency_key")) if form.get("idempotency_key") else None
+        if idempotency_key is not None and len(idempotency_key) > _IDEMPOTENCY_KEY_MAX_LENGTH:
+            raise _invalid_message_payload([{
+                "field": "idempotency_key",
+                "type": "string_too_long",
+                "max_length": _IDEMPOTENCY_KEY_MAX_LENGTH,
+            }])
         attachments = []
         for f in form.getlist("files"):
             if hasattr(f, "read"):
@@ -1519,9 +1564,13 @@ async def send_message(
                         logger.debug("첨부파일 텍스트 디코딩 실패", filename=fname, error=str(e))
                         attachments.append({"type": "file", "name": fname})
     else:
-        body = await request.json()
-        from app.models.chat import MessageSendRequest
-        req = MessageSendRequest(**body)
+        try:
+            body = await request.json()
+        except ValueError as exc:
+            raise _invalid_message_payload(
+                [{"field": "body", "type": "json_invalid"}], status_code=400,
+            ) from exc
+        req = _parse_message_send_body(body)
         session_id_str = str(req.session_id)
         content = _strip_codex_reconnect_notice(req.content)
         model_override = req.model_override
