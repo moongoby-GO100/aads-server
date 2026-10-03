@@ -178,3 +178,97 @@ async def test_read_uploaded_file_not_found_when_both_tables_miss(monkeypatch):
     executor = te.ToolExecutor.__new__(te.ToolExecutor)
     result = await executor._read_uploaded_file({"filename": "nope.png"})
     assert result["status"] == "not_found"
+
+
+# ④ chat_files 폴백의 세션 범위 --------------------------------------------------
+
+def _scoped_conn(rows):
+    """SQL 의 조건(id / session_id / ILIKE)을 인자로 흉내 내는 fetchrow."""
+    async def _fetchrow(sql, *args):
+        out = list(rows)
+        if "WHERE id = $1" in sql:
+            out = [r for r in out if r["id"] == args[0]]
+        if "session_id = $2" in sql:
+            out = [r for r in out if r["session_id"] == args[1]]
+        if "ILIKE" in sql:
+            needle = args[0].strip("%").lower()
+            out = [r for r in out if needle in r["original_name"].lower()]
+        return out[0] if out else None
+
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[])
+    conn.fetchrow = AsyncMock(side_effect=_fetchrow)
+    return conn
+
+
+async def _fallback(monkeypatch, conn, query, session):
+    from app.core import db_pool
+    from app.services import tool_executor as te
+
+    monkeypatch.setattr(db_pool, "get_pool", lambda: _pool_returning(conn))
+    executor = te.ToolExecutor.__new__(te.ToolExecutor)
+    token = te.current_chat_session_id.set(session)
+    try:
+        return await executor._read_chat_files_fallback(query)
+    finally:
+        te.current_chat_session_id.reset(token)
+
+
+def _file_row(sess, path, name="image.png"):
+    return {
+        "id": uuid.uuid4(), "session_id": sess, "original_name": name,
+        "mime_type": "image/png", "file_size": len(PNG_BYTES),
+        "storage_path": str(path), "created_at": None,
+    }
+
+
+async def test_fallback_file_id_of_other_session_is_none(monkeypatch, tmp_path):
+    img = tmp_path / "o.png"
+    img.write_bytes(PNG_BYTES)
+    mine, other = uuid.uuid4(), uuid.uuid4()
+    row = _file_row(other, img)
+    result = await _fallback(monkeypatch, _scoped_conn([row]), str(row["id"]), str(mine))
+    assert result is None
+
+
+async def test_fallback_file_id_of_same_session_is_found(monkeypatch, tmp_path):
+    img = tmp_path / "m.png"
+    img.write_bytes(PNG_BYTES)
+    mine = uuid.uuid4()
+    row = _file_row(mine, img)
+    result = await _fallback(monkeypatch, _scoped_conn([row]), str(row["id"]), str(mine))
+    assert result["status"] == "image" and result["file_id"] == str(row["id"])
+
+
+async def test_fallback_filename_does_not_fall_through_to_other_session(monkeypatch, tmp_path):
+    img = tmp_path / "o.png"
+    img.write_bytes(PNG_BYTES)
+    mine, other = uuid.uuid4(), uuid.uuid4()
+    conn = _scoped_conn([_file_row(other, img)])
+    assert await _fallback(monkeypatch, conn, "image.png", str(mine)) is None
+
+
+async def test_fallback_without_session_keeps_global_lookup(monkeypatch, tmp_path):
+    img = tmp_path / "o.png"
+    img.write_bytes(PNG_BYTES)
+    row = _file_row(uuid.uuid4(), img)
+    by_id = await _fallback(monkeypatch, _scoped_conn([row]), str(row["id"]), "")
+    by_name = await _fallback(monkeypatch, _scoped_conn([row]), "image.png", "")
+    assert by_id["file_id"] == by_name["file_id"] == str(row["id"])
+
+
+async def test_read_uploaded_file_other_session_file_id_is_not_found(monkeypatch, tmp_path):
+    from app.core import db_pool
+    from app.services import tool_executor as te
+
+    img = tmp_path / "o.png"
+    img.write_bytes(PNG_BYTES)
+    row = _file_row(uuid.uuid4(), img)
+    monkeypatch.setattr(db_pool, "get_pool", lambda: _pool_returning(_scoped_conn([row])))
+    executor = te.ToolExecutor.__new__(te.ToolExecutor)
+    token = te.current_chat_session_id.set(str(uuid.uuid4()))
+    try:
+        result = await executor._read_uploaded_file({"filename": str(row["id"])})
+    finally:
+        te.current_chat_session_id.reset(token)
+    assert result["status"] == "not_found"

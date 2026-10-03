@@ -6181,7 +6181,7 @@ class ToolExecutor:
     async def _read_chat_files_fallback(self, query: str) -> Optional[Dict[str, Any]]:
         """chat_drive_files 에 없을 때 채팅 첨부 테이블 chat_files 에서 찾는다.
 
-        현재 세션을 우선하고, 파일명 ILIKE 또는 file_id(uuid) 로 매칭한다.
+        현재 세션이 있으면 그 세션 첨부만, 없으면 전체에서 파일명 ILIKE 또는 file_id(uuid) 로 매칭한다.
         붙여넣은 이미지는 여기에만 저장된다. 못 찾으면 None.
         """
         import uuid as _uuid
@@ -6201,15 +6201,32 @@ class ToolExecutor:
             except ValueError:
                 sess_uuid = None
 
+        # 현재 세션이 있으면 다른 세션 첨부는 file_id 로도 파일명으로도 읽지 못한다.
+        # 세션이 없을 때(MCP 브리지 등)만 기존의 전체 조회를 유지한다.
+        if session_id and sess_uuid is None:
+            return None
+
         cols = "id, session_id, original_name, mime_type, file_size, storage_path, created_at"
         async with get_pool().acquire() as conn:
             if file_uuid is not None:
-                row = await conn.fetchrow(f"SELECT {cols} FROM chat_files WHERE id = $1", file_uuid)
+                if sess_uuid is not None:
+                    row = await conn.fetchrow(
+                        f"SELECT {cols} FROM chat_files WHERE id = $1 AND session_id = $2::uuid",
+                        file_uuid, sess_uuid,
+                    )
+                else:
+                    row = await conn.fetchrow(f"SELECT {cols} FROM chat_files WHERE id = $1", file_uuid)
+            elif sess_uuid is not None:
+                row = await conn.fetchrow(
+                    f"SELECT {cols} FROM chat_files WHERE original_name ILIKE $1 "
+                    "AND session_id = $2::uuid ORDER BY created_at DESC LIMIT 1",
+                    f"%{query}%", sess_uuid,
+                )
             else:
                 row = await conn.fetchrow(
                     f"SELECT {cols} FROM chat_files WHERE original_name ILIKE $1 "
-                    "ORDER BY (session_id = $2::uuid) DESC NULLS LAST, created_at DESC LIMIT 1",
-                    f"%{query}%", sess_uuid,
+                    "ORDER BY created_at DESC LIMIT 1",
+                    f"%{query}%",
                 )
         if not row:
             return None
