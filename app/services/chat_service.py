@@ -8693,6 +8693,10 @@ async def _resume_single_stream(
                     session_id, raw_messages,
                 )
                 if _resume_vision:
+                    from app.core.vision_budget import fit_image_blocks as _fit_image_blocks
+                    _resume_vision, _resume_notice = await _heartbeat_asyncio.to_thread(
+                        _fit_image_blocks, _resume_vision,
+                    )
                     _target_vi = None
                     for _vi in range(len(messages) - 1, -1, -1):
                         _vm = messages[_vi]
@@ -8704,10 +8708,12 @@ async def _resume_single_stream(
                             _target_vi = _vi
                             break
                     if _target_vi is not None:
+                        _resume_text = messages[_target_vi]["content"]
+                        if _resume_notice:
+                            _resume_text = f"{_resume_text}\n\n{_resume_notice}"
                         messages[_target_vi] = {
                             "role": "user",
-                            "content": [{"type": "text", "text": messages[_target_vi]["content"]}]
-                            + _resume_vision,
+                            "content": [{"type": "text", "text": _resume_text}] + _resume_vision,
                         }
                         logger.info(
                             "resume_vision_restored session=%s images=%d",
@@ -13225,6 +13231,7 @@ async def send_message_stream(
         #    히스토리에는 참조 요약만 저장하여 컨텍스트 낭비 방지.
         _ephemeral_doc_context = ""
         _vision_images: list = []  # Claude Vision API용 이미지 content blocks
+        _vision_names: list = []  # _vision_images 와 같은 순서의 파일명 (제외 안내용)
         from app.core.document_context import summarize_attachments_for_log as _att_log
         logger.info(f"[ATTACH] session={session_id[:8]} attachments={_att_log(attachments)}")
         if attachments:
@@ -13243,7 +13250,15 @@ async def send_message_stream(
             # Vision: 이미지 파일 추출 → Claude Vision API content blocks 구성
             # 포맷 변환(bmp/tiff→png)·5MB 초과 리샘플·중복 제거는
             # build_vision_blocks 한 곳에 모아 둔다 (AADS-VISION-UNIFY).
-            _vision_images.extend(build_vision_blocks(_file_contents))
+            _new_vision = build_vision_blocks(_file_contents)
+            _vision_images.extend(_new_vision)
+            _cand_names = [
+                f.get("name") for f in _file_contents
+                if f.get("is_image") and f.get("readable", True) and f.get("base64_data")
+            ]
+            _vision_names.extend(
+                _cand_names if len(_cand_names) == len(_new_vision) else [None] * len(_new_vision)
+            )
             if _vision_images:
                 logger.info(f"[VISION] {len(_vision_images)} image(s) extracted for Vision API")
 
@@ -13266,6 +13281,7 @@ async def send_message_stream(
                         _vblock = await _load_chat_file_vision_block(att["file_id"])
                         if _vblock:
                             _vision_images.append(_vblock)
+                            _vision_names.append(att.get("name") or att["file_id"][:8])
                             logger.info(f"[VISION] file_id={att['file_id'][:8]} loaded from disk")
                     except Exception as _fe:
                         logger.warning(f"[VISION] file_id load failed: {_fe}")
@@ -13318,14 +13334,16 @@ async def send_message_stream(
                 mime = uf.get("mime_type", "application/octet-stream")
                 if mime.startswith("image/"):
                     from app.core.document_context import build_vision_blocks
-                    _vision_images.extend(build_vision_blocks([{
+                    _uf_blocks = build_vision_blocks([{
                         "name": fname,
                         "ext": Path(fname).suffix.lower(),
                         "is_image": True,
                         "readable": True,
                         "media_type": mime,
                         "base64_data": _uf_b64.b64encode(data).decode(),
-                    }]))
+                    }])
+                    _vision_images.extend(_uf_blocks)
+                    _vision_names.extend([fname] * len(_uf_blocks))
                     _uf_ref_lines.append(f"- [이미지: {fname}] (Vision API 분석)")
                 elif mime.startswith("video/"):
                     _vtext = await process_video_with_gemini(uf, content)
@@ -13810,10 +13828,17 @@ async def send_message_stream(
 
             # Vision: 이미지가 있으면 마지막 user 메시지를 멀티모달 content 배열로 교체
             if _vision_images:
+                # relay 1MiB 요청 한도 — LLM 전송용 사본만 축소한다(원본 파일은 그대로).
+                from app.core.vision_budget import fit_image_blocks as _fit_image_blocks
+                _vision_images, _vision_notice = await _heartbeat_asyncio.to_thread(
+                    _fit_image_blocks, _vision_images, _vision_names,
+                )
                 for _vi in range(len(messages) - 1, -1, -1):
                     if messages[_vi].get("role") == "user":
                         _text = messages[_vi].get("content", "")
                         if isinstance(_text, str):
+                            if _vision_notice:
+                                _text = f"{_text}\n\n{_vision_notice}"
                             messages[_vi] = {
                                 "role": "user",
                                 "content": [{"type": "text", "text": _text}] + _vision_images,
