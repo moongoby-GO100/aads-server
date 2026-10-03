@@ -1,3 +1,12 @@
+## 2026-10-03 — ACCT 카페24 이전 목표 마일스톤 자동진행 복구 (ACCT-CAFE24-MILESTONE-AUTO-RECOVERY-20261003-R1)
+
+**df479771 목표 한정 운영 DB 복구 적용 완료 / 코드(스크립트·테스트)는 미커밋 — Runner 가 승인 후 commit/push. API 배포 없음.** DB handover: `acct-cafe24-milestone-auto-recovery-20261003-r1` (AADS/decision, rev1). 상세·롤백 값은 거기에 있다.
+- 원인: ① 7개 마일스톤 auto_advance=false ② M3 허위 완료 — `check_milestone_completion` 은 활성 링크가 전부 done 이면 증거 없이 completed (runner-362971f1 종료를 완료로 집계, 결과문은 "M3 완료로 신고하지 않음") ③ 마일스톤 소유자가 stale AADS-011 세션(8ad08cc2) ④ M1/M2 재작업 후보 소진(만료 카드/결과 없는 큐).
+- 적용: auto_advance 7개 false→true / M3 링크 28d5b29f detach + 공식 rewind(pending, dispatch_count 3→0) / M1 stale 링크 7e41ba90 detach / M1~M6 owner 8ad08cc2→acc75e55(같은 목표) / 재작업 큐 M2 `20f51c55-38ae-45b6-8390-4642d8070a61`, M3 `04e4de60-9b37-455b-ada7-dbcc0cd0ec99`. 재실행 시 plan=[] (멱등).
+- 하지 않음: goal 은 **blocked 유지**(M1·M2 실패 링크 실재), approval_policy·재작업 예산 불변(후속 R2 소관), M1 큐 미생성(공개전환 live job runner-57d7916a·runner-4e41bb30 이 M1 id 를 달고 있어 중복 디스패치 금지).
+- 미해결: 완료 판정 자체에 증거 게이트가 없다(데이터만 복구, 코드 게이트는 별도 작업). 오류사전 `goal.milestone_completed_without_evidence` 등록(fix-commit 은 Runner 커밋 후 채울 것).
+- 검증: `bash scripts/run_unit_tests.sh tests/unit/test_acct_cafe24_milestone_recovery.py` 7 passed, ruff F821/F811 통과, compileall 통과.
+
 ## 2026-10-03 — 정본 검색 tenant·문서 권한 격리 (AADS-DOC-SEARCH-TENANT-GUARD-20261003)
 
 **코드 완료 (미커밋 — Runner 가 승인 후 commit/push). 운영 DB·마이그레이션 적용·재색인·배포 없음. runner-e1828cce 의 `stale_base` 를 교정하려 변경을 최신 origin/main(98ead1c9) 위에 재적용했고(HANDOVER 만 수동 병합) 단위 186·격리 PG 통합 31 을 다시 통과시켰다.** 정본 검색(`/api/v1/project-docs/search`, Auto-RAG)이 신뢰된 tenant 컨텍스트 + 프로젝트/문서 grant 를 SQL WHERE(LIMIT 앞)에서 강제한다. 닫은 유출 3곳: 엔드포인트 tenant 의존성 부재, `doc_chunks` tenant 칸 부재(마이그레이션 `20261003_doc_chunks_tenant_scope.sql` 로 nullable 3칸 추가), `build_kg.py` 가 정본 본문을 KG 로 만들어 전 tenant Auto-RAG 에 섞던 우회(범위 밖 수정, 4줄). 미인증 401/403, tenant 불명 정본은 fail-closed, 파일 검색·응답 키 계약 불변. 검증: fake 단위 186 passed(6개 파일), 격리 PG 통합 31 passed(legacy/qwen3 양 경로), 변이 검사에서 tenant 조건 제거 시 elevated 케이스 2건이 유출로 실패. 상세·정확한 명령: `reports/20261003_doc_search_tenant_guard_RESULT.md`.
