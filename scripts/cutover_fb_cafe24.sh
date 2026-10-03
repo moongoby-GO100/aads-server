@@ -455,7 +455,7 @@ edge_install() { # $1 = rendered file; backs up, tests, reloads. Caller holds th
 # In-lock check: one bounded request to the local edge, no sleep, no ssh.
 routed_health_local() { # $1 = nonce
   local code
-  code=$(curl -sk --connect-timeout 2 -m 5 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST/health/live?probe=$1" || true)
+  code=$(curl -sk --connect-timeout 2 -m 5 --retry 4 --retry-delay 1 --retry-max-time 6 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST/health/live?probe=$1" || true)
   [[ $code == 200 ]] || { say "routed health -> $code"; return 1; }
 }
 
