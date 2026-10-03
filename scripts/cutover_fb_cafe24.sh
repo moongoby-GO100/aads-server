@@ -59,6 +59,7 @@ render_edge() {
       print "        proxy_ssl_name " host ";"
       print "        proxy_ssl_protocols TLSv1.2 TLSv1.3;"
       print "        proxy_ssl_verify on;"
+      print "        proxy_ssl_verify_depth 3;"
       print "        proxy_ssl_trusted_certificate " ca ";"
       next }
     { print }' "$1"
