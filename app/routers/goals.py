@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.auth import TenantRole, require_tenant_role
 from app.core.goal_work_hierarchy_policy import goal_work_hierarchy_enabled
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 require_tenant_viewer = require_tenant_role(TenantRole.VIEWER)
 require_tenant_member = require_tenant_role(TenantRole.MEMBER)
@@ -67,6 +69,13 @@ class MilestoneCreateRequest(BaseModel):
     sequence: int
     completion_criteria: Optional[str] = None
     auto_advance: bool = True
+    owner_session_id: Optional[UUID] = None
+    owner_role_key: Optional[str] = Field(None, max_length=100)
+
+
+class MilestoneOwnerRequest(BaseModel):
+    owner_session_id: UUID
+    owner_role_key: Optional[str] = Field(None, max_length=100)
 
 
 class GoalCreateRequest(BaseModel):
@@ -124,6 +133,9 @@ async def create_goal(
 ):
     from app.services.goal_manager import goal_state_machine
     tenant_id = _tenant_id(context)
+    if any(ms.owner_session_id or ms.owner_role_key for ms in req.milestones or []):
+        # 담당 세션은 목표에 연결된 세션만 가능한데 목표 생성 시점엔 연결이 없다.
+        raise HTTPException(status_code=422, detail="milestone_owner_requires_existing_goal")
     result = await goal_state_machine.create_goal(
         project=req.project,
         title=req.title,
@@ -365,6 +377,47 @@ async def _validated_tenant_goal(
     async with get_pool().acquire() as conn:
         await _require_tenant_goal(conn, goal_id, tenant_id)
     return tenant_id
+
+
+async def _require_tenant_goal_row(conn: Any, goal_id: str, tenant_id: str) -> Any:
+    goal = await conn.fetchrow(
+        "SELECT id, COALESCE(project,'') AS project "
+        "FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
+        goal_id, tenant_id,
+    )
+    if not goal:
+        raise HTTPException(status_code=404, detail="goal_not_found")
+    return goal
+
+
+async def _validate_milestone_owner_session(
+    conn: Any, goal_id: str, goal_project: str, session_id: str, tenant_id: str,
+) -> None:
+    """404 타 tenant/없는 세션 · 403 프로젝트 경계 위반 · 422 목표에 미연결."""
+    sess = await conn.fetchrow(
+        "SELECT s.id::text AS id, COALESCE(w.project_key,'') AS project_key "
+        "FROM chat_sessions s "
+        "LEFT JOIN chat_workspaces w ON w.id = s.workspace_id "
+        "WHERE s.id = $1::uuid AND s.tenant_id = $2::uuid "
+        "AND (w.id IS NULL OR w.tenant_id = $2::uuid)",
+        session_id, tenant_id,
+    )
+    if not sess:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    allowed, reason = goal_owner_binding_policy(
+        goal_project, str(sess["project_key"] or ""), "project_owner", as_lead=False,
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
+    linked = await conn.fetchval(
+        "SELECT 1 FROM goal_task_links l JOIN goals g ON g.id = l.goal_id "
+        "WHERE l.goal_id = $1::uuid AND g.tenant_id = $3::uuid "
+        "AND l.task_type = 'chat_session' AND l.task_id = $2 "
+        "AND l.link_state = 'active' LIMIT 1",
+        goal_id, session_id, tenant_id,
+    )
+    if not linked:
+        raise HTTPException(status_code=422, detail="owner_not_linked")
 
 
 @router.post("/goals/{goal_id}/work-items", status_code=201)
@@ -1539,16 +1592,81 @@ async def add_milestone(
     goal_id: str, req: MilestoneCreateRequest,
     context: dict[str, Any] = Depends(require_tenant_member),
 ):
+    from app.core.db_pool import get_pool
     from app.services.goal_manager import goal_state_machine
-    await _validated_tenant_goal(goal_id, context, member=True)
+    tenant_id = _tenant_id(context)
+    owner_session_id = str(req.owner_session_id) if req.owner_session_id else None
+    owner_role_key = (req.owner_role_key or "").strip() or None
+    async with get_pool().acquire() as conn:
+        goal = await _require_tenant_goal_row(conn, goal_id, tenant_id)
+        if owner_session_id:
+            await _validate_milestone_owner_session(
+                conn, goal_id, str(goal["project"] or ""), owner_session_id, tenant_id,
+            )
     result = await goal_state_machine.add_milestone(
         goal_id=goal_id,
         title=req.title,
         sequence=req.sequence,
         completion_criteria=req.completion_criteria,
         auto_advance=req.auto_advance,
+        owner_session_id=owner_session_id,
+        owner_role_key=owner_role_key,
     )
     return result
+
+
+@router.patch("/goals/{goal_id}/milestones/{milestone_id}/owner")
+async def set_milestone_owner(
+    goal_id: UUID, milestone_id: UUID, req: MilestoneOwnerRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
+    """기존 마일스톤의 담당 세션을 지정한다. 같은 값이면 아무것도 쓰지 않는다."""
+    from app.core.db_pool import get_pool
+
+    gid, mid = str(goal_id), str(milestone_id)
+    new_session = str(req.owner_session_id)
+    tenant_id = _tenant_id(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        goal = await _require_tenant_goal_row(conn, gid, tenant_id)
+        ms = await conn.fetchrow(
+            "SELECT owner_session_id::text AS owner_session_id, owner_role_key, version "
+            "FROM milestones "
+            "WHERE id = $1::uuid AND goal_id = $2::uuid AND tenant_id = $3::uuid "
+            "FOR UPDATE",
+            mid, gid, tenant_id,
+        )
+        if not ms:
+            raise HTTPException(status_code=404, detail="milestone_not_found")
+        await _validate_milestone_owner_session(
+            conn, gid, str(goal["project"] or ""), new_session, tenant_id,
+        )
+
+        old_session = ms["owner_session_id"]
+        old_role = ms["owner_role_key"]
+        new_role = (req.owner_role_key or "").strip() or old_role
+        if old_session == new_session and (old_role or None) == (new_role or None):
+            return {
+                "goal_id": gid, "milestone_id": mid, "owner_session_id": new_session,
+                "owner_role_key": old_role, "version": ms["version"], "changed": False,
+            }
+
+        version = await conn.fetchval(
+            "UPDATE milestones SET owner_session_id = $4::uuid, owner_role_key = $5, "
+            "       version = version + 1, updated_at = NOW() "
+            "WHERE id = $1::uuid AND goal_id = $2::uuid AND tenant_id = $3::uuid "
+            "RETURNING version",
+            mid, gid, tenant_id, new_session, new_role,
+        )
+    logger.info(
+        "milestone_owner_set goal=%s milestone=%s tenant=%s actor=%s "
+        "owner_session=%s->%s role=%s->%s",
+        gid, mid, tenant_id, (context.get("user") or {}).get("user_id"),
+        old_session, new_session, old_role, new_role,
+    )
+    return {
+        "goal_id": gid, "milestone_id": mid, "owner_session_id": new_session,
+        "owner_role_key": new_role, "version": version, "changed": True,
+    }
 
 
 @router.post("/goals/{goal_id}/link-task")

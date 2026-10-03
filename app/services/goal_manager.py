@@ -430,6 +430,8 @@ class GoalStateMachine:
         sequence: int,
         completion_criteria: Optional[str] = None,
         auto_advance: bool = True,
+        owner_session_id: Optional[str] = None,
+        owner_role_key: Optional[str] = None,
     ) -> dict[str, Any]:
         started_at = _trace_started_at()
         pool = await self._pool()
@@ -437,11 +439,13 @@ class GoalStateMachine:
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO milestones (id, goal_id, title, sequence_order, completion_criteria, auto_advance, status)
-                VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'pending')
+                INSERT INTO milestones (id, goal_id, title, sequence_order, completion_criteria, auto_advance, status,
+                                        owner_session_id, owner_role_key)
+                VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'pending', $7::uuid, $8)
                 """,
                 ms_id, goal_id, title, sequence,
                 completion_criteria, auto_advance,
+                owner_session_id, owner_role_key,
             )
         await self._trace(
             "milestone_add",
@@ -453,10 +457,15 @@ class GoalStateMachine:
                 "sequence": sequence,
                 "auto_advance": auto_advance,
                 "has_completion_criteria": bool(completion_criteria),
+                "owner_session_id": owner_session_id,
+                "owner_role_key": owner_role_key,
             },
             started_at=started_at,
         )
-        return {"milestone_id": ms_id, "status": "pending"}
+        return {
+            "milestone_id": ms_id, "status": "pending",
+            "owner_session_id": owner_session_id, "owner_role_key": owner_role_key,
+        }
 
     async def link_task(
         self,

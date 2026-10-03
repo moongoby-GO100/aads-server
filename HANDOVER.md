@@ -1,3 +1,12 @@
+## 2026-10-03 — 표준 목표 API 마일스톤 담당 세션 지정 (AADS-GOAL-MILESTONE-OWNER-API-P1-20261003)
+
+**DB handover entry_key `goal-milestone-owner-api-20261003`. 상태: 코드·테스트 완료(커밋 전 — Runner 가 승인 후 commit/push). 배포·운영 데이터 변경 없음 — 기존 NULL owner 10건(sequence 701-705, 711-715)은 아직 채워지지 않았고, 배포 후 이 API 로 지정해야 한다.**
+- 계약: `POST /api/v1/goals/{goal_id}/milestones` 본문에 `owner_session_id`(UUID, 선택)·`owner_role_key`(≤100자, 선택) 추가, 응답에 두 값 포함. 신규 `PATCH /api/v1/goals/{goal_id}/milestones/{milestone_id}/owner` 본문 `{owner_session_id, owner_role_key?}` → `{goal_id, milestone_id, owner_session_id, owner_role_key, version, changed}`. `owner_role_key` 생략 시 기존 값 유지.
+- 오류: 404 `goal_not_found`/`milestone_not_found`/`session_not_found`(타 tenant 포함), 403 `cross_project_owner_denied`(`goal_owner_binding_policy` 재사용), 422 `owner_not_linked`(goal_task_links 에 chat_session active 아님). 같은 값이면 쓰기 없이 `changed:false`. 변경 시 `dispatch_note`/`dispatch_blocked_at` 미접촉, `updated_at`·`version`+1, 로그 `milestone_owner_set`.
+- 생성 경로도 같은 검증을 쓴다(지시서 범위 밖 판단: tenant/프로젝트 경계 우회 방지). `POST /goals` 의 중첩 마일스톤에 owner 필드를 주면 422 `milestone_owner_requires_existing_goal`(생성 시점엔 연결 세션이 없음).
+- 변경: `app/routers/goals.py`, `app/services/goal_manager.py`(add_milestone INSERT), `tests/unit/test_goal_milestone_owner_api.py`(신규 15건, 상태 가진 가짜 DB).
+- 검증: goal*/milestone*/owner* 단위 608 passed(`bash scripts/run_unit_tests.sh`), ruff F821/F811 통과. 실DB/실 API 호출은 하지 않았다.
+
 ## 2026-10-03 — R-DOC 목업 검토 운영 배포·채팅 실사용 검증 (AADS-RDOC-MOCKUP-OPERATIONS-20261003) — 선행 미충족으로 차단
 
 **DB handover entry_key `rdoc-mockup-operations-20261003`. 상태: blocked. 배포·큐 등록·5분 관찰·채팅 실사용 검증은 수행하지 않았고 완료가 아니다. M6~M9 미달성.** 상세: `docs/reports/20261003_RDOC_MOCKUP_RELEASE.md`.
