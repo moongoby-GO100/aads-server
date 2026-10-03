@@ -1,0 +1,247 @@
+{
+  "package": "rdoc-mockup-review-v2",
+  "document_version": "2.0.0",
+  "status": "draft_unapproved",
+  "task_id": "AADS-RDOC-CHAT-MOCKUP-REVISION-20261003",
+  "goal_id": "0361c451-cc03-4bd1-a423-76051b0546b2",
+  "generated_at_kst": "2026-10-03",
+  "mockup_url": "https://aads.newtalk.kr/screenshots/rdoc-mockup-review-v2/index.html",
+  "published_dir": "/var/www/certbot/screenshots/rdoc-mockup-review-v2/",
+  "published_index_sha256_equals_mockup_v2": true,
+  "note_served_bytes": "Cloudflare appends challenge scripts to served HTML; host file hash equals local file hash",
+  "real_chat_before": "blocked_evidence (login redirect; no credentials used)",
+  "runtime_enforcement": "not_implemented",
+  "canonical_documents": {
+    "plan": {
+      "revision": 3,
+      "revision_id": "bd8aa614-019f-46c9-adf0-e960572083e4"
+    },
+    "prd": {
+      "revision": 2,
+      "revision_id": "d98a04e0-bb89-439d-82e8-505030c00698"
+    },
+    "spec": {
+      "revision": 2,
+      "revision_id": "230fa6b9-2f26-485d-bcef-a4da74557892"
+    }
+  },
+  "chat_artifact": {
+    "artifact_id": "ba75b010-af90-5c98-b96d-8e71aaa0327a",
+    "session_id": "8bf0405a-1f22-4ad9-bb09-6e0fce8c6339",
+    "type": "html_preview",
+    "panel_opened_in_browser": false
+  },
+  "v1_package_unchanged": [
+    "mockup-v1.html",
+    "manifest-v1.json",
+    "VERIFICATION.md",
+    "evidence-v1/"
+  ],
+  "assets": [
+    {
+      "path": "docs/plans/20261003_AADS_RDOC_MOCKUP_REVIEW_PLAN.md",
+      "sha256": "4d56465d584125dca92b4ea0abbc7b5fe7e0f35a1602aeed351fa6f7b80cf234",
+      "bytes": 11682
+    },
+    {
+      "path": "docs/prd/20261003_AADS_RDOC_MOCKUP_REVIEW_PRD.md",
+      "sha256": "07c8fd9f350e2b8024e9b7f06175a096fb3f03eaab7f28ee0a27d16b4b767892",
+      "bytes": 12555
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/spec.md",
+      "sha256": "6c1d251bf6c299b75280f2a6844c60b340f9ce8a3aea531c0808c1acbeae0462",
+      "bytes": 17219
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/VERIFICATION-v2.md",
+      "sha256": "5cbc66331b2119e1376c899bfebe4a64fde6db23efb61b097f24a36d5aaca0da",
+      "bytes": 5051
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/HANDOVER-v2.md",
+      "sha256": "be0fdb8831bbf6af931be37d8e4547d4b4b1b6e3e6ab295c83b7dcefe1417a76",
+      "bytes": 4566
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/build_v2.py",
+      "sha256": "38ca8faefff12bd597a51bf41ef5f8768aa059cb82854300d297b4c40cb2310d",
+      "bytes": 24788
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/artifact-v2.src.html",
+      "sha256": "7c31359442e0b210125cb5d0e23f5469943c27f086eb74e3234013553737067f",
+      "bytes": 11046
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/artifact-v2.html",
+      "sha256": "74cd890d7b54e18c40c3d3a0ff8fff850810a7464eaba65932f5cf09acbd2e4a",
+      "bytes": 11058
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/mockup-v2.html",
+      "sha256": "e4744deabfa2fe039daea6311f9d400bb6ec342de4cdffb4ce70a5f34cd21a89",
+      "bytes": 25021
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/preview-v1.html",
+      "sha256": "e19016e972f8faa7248ff881a2c3a76e49055e66573a7cbf1da45534a3d557cc",
+      "bytes": 2078
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/preview-v2.html",
+      "sha256": "3b768e7518ab9377fb878255b6f9251c637ea8d4350fd5056e9975ad050456db",
+      "bytes": 2204
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-desktop-1-initial.png",
+      "sha256": "f1404a265f5cb4f44c1b8a7fdeb774298b7ef36faa5e831b2a6417f5ad8ba165",
+      "bytes": 136316
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-desktop-10-target-select.png",
+      "sha256": "0406e38aff4dde2405a3a9ec74858186c3166d620e54eb6ca91903a2a4513ca3",
+      "bytes": 213888
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-desktop-2-panel-v1.png",
+      "sha256": "32f3fa78c08e91876905337a5b8d591a6b94cae17f4b3ca0ca020cb0626d568a",
+      "bytes": 136848
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-desktop-3-request-typed.png",
+      "sha256": "3fee05113a21d7bd656ddb5a1861466b8d8b2a0c629d52e692e556b0dd92defc",
+      "bytes": 139954
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-desktop-4-editing.png",
+      "sha256": "a3033bf2c00d034b1ef45700fda37ebda1a77658154ec6221bd6056b0d0930fc",
+      "bytes": 164847
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-desktop-5-rereport.png",
+      "sha256": "699520d3cfaacdc8a2dda023915ee34806f9bf26a4dfde6aad4e4c837e839a04",
+      "bytes": 185316
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-desktop-6-stale-rejected.png",
+      "sha256": "3376002816d466b5a979bcf1869505eee73c7aea927b054aafb1058c414c1044",
+      "bytes": 189832
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-desktop-7-compare.png",
+      "sha256": "53394fa918a72e1ac6a181366296195b6301b2bc554e23fad53e4294ce7fbc47",
+      "bytes": 189950
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-desktop-8-approve-confirm.png",
+      "sha256": "14e438f776c5e9948340dc154c0de66fc058c341ae910dddcc0c579a7050ef1b",
+      "bytes": 206605
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-desktop-9-approved-demo.png",
+      "sha256": "77f4345be71200c3731658e3f8bca85cdc7ae7b508e8af3289b2e0f162ce2235",
+      "bytes": 199748
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-mobile-1-initial.png",
+      "sha256": "ae24431f8f28310aafa14982c1dd28a06ccc501ab51fae68119307c33ca552fa",
+      "bytes": 74792
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-mobile-10-target-select.png",
+      "sha256": "3c2eb09c8a8489d6d86a93dddcf31615d02c417b80c2b947d89d09c1c246bd11",
+      "bytes": 88613
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-mobile-2-panel-v1.png",
+      "sha256": "c1bcd14390bd0372cc1ec4d981a1fa07d25b9d7ea4fff5a7058382816b36ebb7",
+      "bytes": 50727
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-mobile-3-request-typed.png",
+      "sha256": "31cc5c3472e431e7bbe28139558c51d1286bedb6eb68e296077a0d7c8b0e3ee3",
+      "bytes": 78977
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-mobile-4-editing.png",
+      "sha256": "16febb3dcd5349ad9b227b3e858e6555cf3d27b13b96b101588ef344b99b3b84",
+      "bytes": 90235
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-mobile-5-rereport.png",
+      "sha256": "57276c7d8ca8c3587132b1bc5a38087460a1a844f3192f25e034c124a328ec3b",
+      "bytes": 96657
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-mobile-6-stale-rejected.png",
+      "sha256": "8838ffe1bd688c70d6615de37f1f090ca5f69d8b2b921023757483578b14fc0a",
+      "bytes": 59577
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-mobile-7-compare.png",
+      "sha256": "d5cf9571e501e6f39e180a5b5a465aa17dd81b385519041d5adec815b8c6cb78",
+      "bytes": 66651
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-mobile-8-approve-confirm.png",
+      "sha256": "9501ad2281177897915e5f802b040c038136f9728b2cb8c1c7ab53de0437e159",
+      "bytes": 60209
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/after-mobile-9-approved-demo.png",
+      "sha256": "459be000d4edd3b57b0d78a3e6a8cbd07b81f57c1a2253102c3066d20a16b409",
+      "bytes": 105017
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/artifact-panel-desktop-tab1.png",
+      "sha256": "d27faf748d61a5fc0332f8a31653a76b71bb1427d4d14cf636c6bd922fafe48f",
+      "bytes": 156508
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/artifact-panel-desktop-tab2.png",
+      "sha256": "d1138f5f6638839e2d331669791180fe86537ab1fbf0d614ecc541eb2be68fbd",
+      "bytes": 105738
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/artifact-panel-desktop-tab3.png",
+      "sha256": "bb0825bf1148e5b3b831403de2d2785541b37cc22c279ac6a4efbee62fa9e88b",
+      "bytes": 157666
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/artifact-panel-desktop-tab4.png",
+      "sha256": "7c503c0d32278bfeb617b804c098a3cc990f46d31fc51e63ac674a81642de374",
+      "bytes": 135432
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/artifact-panel-desktop-tab5.png",
+      "sha256": "9bbaedeec5b06d9d6aa0771e8132aca39af5ef94f97b0534b42a97280644ed2c",
+      "bytes": 106941
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/artifact-panel-mobile-tab1.png",
+      "sha256": "a44aea4f989381e02c485cf32273f23b4aba236a71e23b8c96ed6c5e65844a8c",
+      "bytes": 96305
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/blocked-before-login-desktop.png",
+      "sha256": "ad8602394821bfd0f73cfe101d35f5f03e59f6ac6c827afea308f434bb6ee138",
+      "bytes": 21539
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/blocked-before-login-mobile.png",
+      "sha256": "63b6ca56a12cf39d30ce22f30c08548eb43234e5b540bb4aa43711934649997c",
+      "bytes": 17672
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/verification-v2.json",
+      "sha256": "94d9122bd0d3796bdec8795a5458fa96a59c67fcaf90dbb26cec3709760ff7b9",
+      "bytes": 4014
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v2/verify_v2.py",
+      "sha256": "eeb0a7423caac847788575d8385ae5dfa33bfed6802faa14ca6a9a2ed13fab69",
+      "bytes": 11596
+    }
+  ]
+}
