@@ -4,17 +4,20 @@
 #   lint              offline checks of this script, the Apache template and the edge rendering
 #   preflight         read-only: candidate image/health/auth/cert/apache readiness on cafe24
 #   apply-origin      install the fb vhost on cafe24 apache (configtest -> graceful -> verify -> auto rollback)
-#   allow-edge-fw     (opt-in) let the contabo116 edge reach cafe24 80/443 (CONFIRM_FIREWALL_CHANGE=1)
-#   revoke-edge-fw    remove that firewall rule
-#   apply-edge        contabo116 nginx fb.conf: yeoljeong_finance_api -> https://cafe24 (lock, nginx -t, reload, verify)
+#   allow-edge-fw     (opt-in) let contabo116 (EDGE_IP/32) reach cafe24 origin TCP 443 ONLY (CONFIRM_FIREWALL_CHANGE=1)
+#   revoke-edge-fw    remove exactly that rule (a broader legacy rule is only reported unless CONFIRM_REMOVE_BROAD_FW=1)
+#   edge-fw-status    read-only: exact 443 rule vs broader fb-edge rules on cafe24 CF-WEB
+#   apply-edge        contabo116 nginx fb.conf: yeoljeong_finance_api -> https://cafe24. Candidate/ssh prep happens
+#                     BEFORE the nginx lock; the lock covers only config+marker, nginx -t, reload and one bounded
+#                     local routed-health; cafe24 log proof, QA run after unlock and re-lock only to roll back.
 #   maintenance       fb-only 503 on the edge (rollback target; never reverts to the retired jinah upstream)
 #   monitor           public P0/P1 watch (default 300 s)
 #   status            show where the edge and the origin currently point
 #
 # Cloudflare DNS origin flip is NOT done here: no Cloudflare credential is read or written.
-# apply-edge needs cafe24 :80/:443 reachable from contabo116, which the cafe24 iptables CF-WEB chain
+# apply-edge needs cafe24 :443 reachable from contabo116, which the cafe24 iptables CF-WEB chain
 # denies by default (Cloudflare ranges only). Either flip the Cloudflare origin for fb to
-# 114.207.244.86 (preferred) or run allow-edge-fw first.
+# 114.207.244.86 (preferred) or run allow-edge-fw first. Port 80 is never opened by this script.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,7 +32,12 @@ FB_HOST="fb.newtalk.kr"
 EDGE_CONF="${EDGE_CONF:-/etc/nginx/conf.d/fb.conf}"
 EDGE_IP="${EDGE_IP:-5.104.86.116}"
 NGINX_CONTAINER="${NGINX_CONTAINER:-aads-nginx}"
-NGINX_SWITCH_LOCK="/tmp/aads-nginx-upstream.lock"
+NGINX_SWITCH_LOCK="${NGINX_SWITCH_LOCK:-/tmp/aads-nginx-upstream.lock}"
+NGINX_LOCK_MAX_HOLD="${NGINX_LOCK_MAX_HOLD:-30}"
+FB_STATE_MARKER="${FB_STATE_MARKER:-/tmp/aads-fb-cutover.state}"
+FW_CHAIN="CF-WEB"
+FW_COMMENT="fb-edge-contabo116"
+FW_PORT=443
 CA_BUNDLE="${CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10)
 
@@ -152,6 +160,8 @@ cmd_lint() {
   bash -n "${BASH_SOURCE[0]}"
   lint_envvars_regression
   lint_vhost_order_regression
+  [[ $FW_PORT == 443 ]] || die "edge firewall must be limited to TCP 443 (FW_PORT=$FW_PORT)"
+  grep -q -- '-p tcp -m tcp --dport "\$FW_PORT"' <<<"$FW_REMOTE" || die "FW_REMOTE exact rule lost its tcp/dport restriction"
   [[ -f $TEMPLATE ]] || die "template missing: $TEMPLATE"
   [[ $(grep -c '# BEGIN-ROUTES' "$TEMPLATE") == 2 && $(grep -c '# END-ROUTES' "$TEMPLATE") == 2 ]] \
     || die "template must have exactly two BEGIN/END-ROUTES blocks"
@@ -343,58 +353,166 @@ cmd_apply_origin() {
   ssh_c "$(remote_env) TEMPLATE_B64=$b64 bash -s" <<<"$REMOTE_LIB"$'\n'"$REMOTE_APPLY" || die "apply-origin failed (rolled back)"
 }
 
-fw_rule() { # action: add|del
-  [[ ${CONFIRM_FIREWALL_CHANGE:-} == 1 ]] || die "set CONFIRM_FIREWALL_CHANGE=1 (changes cafe24 iptables CF-WEB)"
+# ---- cafe24 firewall: contabo116 -> origin TCP 443 only --------------------------------------------
+# Remote side (bash -s on cafe24). Exact approved rule: -s EDGE_IP/32 -p tcp --dport 443, comment FW_COMMENT.
+# "broad" = any other ACCEPT for that source (no tcp/443 restriction). Broad rules are never treated as the
+# approved rule, never widened into one, and only deleted when the operator also sets CONFIRM_REMOVE_BROAD_FW=1
+# (and then only if they carry our comment).
+read -r -d '' FW_REMOTE <<'EOS' || true
+set -u
+EXACT=(-s "$EDGE_IP/32" -p tcp -m tcp --dport "$FW_PORT" -m comment --comment "$FW_COMMENT" -j ACCEPT)
+broad_rules() {
+  iptables -S "$FW_CHAIN" 2>/dev/null | awk -v c="$FW_COMMENT" -v ip="$EDGE_IP/32" -v port="$FW_PORT" '
+    $1 == "-A" && / -j ACCEPT/ && (index($0, "--comment " c) || index($0, " -s " ip " ")) {
+      if ($0 ~ / -p tcp / && $0 ~ (" --dport " port "( |$)")) next
+      print }'
+}
+state() {
+  if iptables -C "$FW_CHAIN" "${EXACT[@]}" 2>/dev/null; then EX=present; else EX=absent; fi
+  BROAD="$(broad_rules)"; BN=0; [[ -n $BROAD ]] && BN=$(wc -l <<<"$BROAD")
+  echo "FWSTATE exact_${FW_PORT}=$EX broad=$BN"
+  [[ -z $BROAD ]] || { echo "FWBROAD (not approved, not reused):"; sed 's/^/  /' <<<"$BROAD"; }
+}
+case "$FW_ACTION" in
+  add)
+    state
+    [[ $BN == 0 ]] || { echo "FAIL broad fb-edge rule present; refusing to treat it as the approved ${FW_PORT}-only rule. Reconcile: CONFIRM_FIREWALL_CHANGE=1 CONFIRM_REMOVE_BROAD_FW=1 revoke-edge-fw"; exit 3; }
+    if [[ $EX == present ]]; then echo "OK   exact ${FW_PORT} rule already present (idempotent)"
+    else iptables -I "$FW_CHAIN" 1 "${EXACT[@]}" || { echo "FAIL iptables insert"; exit 1; }; fi
+    state
+    [[ $EX == present && $BN == 0 ]] || { echo "FAIL rule not in the expected state after add"; exit 1; } ;;
+  del)
+    n=0
+    while iptables -C "$FW_CHAIN" "${EXACT[@]}" 2>/dev/null && (( n < 10 )); do
+      iptables -D "$FW_CHAIN" "${EXACT[@]}" || { echo "FAIL iptables delete"; exit 1; }
+      n=$((n+1))
+    done
+    state
+    if [[ $BN != 0 ]]; then
+      if [[ ${FW_REMOVE_BROAD:-0} == 1 ]]; then
+        while IFS= read -r line; do
+          [[ $line == *"--comment $FW_COMMENT"* ]] || { echo "SKIP not our comment: $line"; continue; }
+          read -ra parts <<<"${line#-A $FW_CHAIN }"
+          iptables -D "$FW_CHAIN" "${parts[@]}" || { echo "FAIL deleting broad rule"; exit 1; }
+          echo "REMOVED broad: $line"
+        done <<<"$BROAD"
+        state
+      else
+        echo "WARN broad rule(s) remain; only the approved ${FW_PORT} rule was revoked (CONFIRM_REMOVE_BROAD_FW=1 to remove ours)"
+      fi
+    fi
+    [[ $EX == absent ]] || { echo "FAIL exact rule still present"; exit 1; } ;;
+  audit)
+    state
+    [[ $BN == 0 ]] || exit 3 ;;
+  *) echo "bad FW_ACTION"; exit 2 ;;
+esac
+EOS
+
+fw_remote() { # $1 = add|del|audit
   [[ $EDGE_IP =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "bad EDGE_IP"
-  ssh_c "set -e; R='-s $EDGE_IP/32 -m comment --comment fb-edge-contabo116 -j ACCEPT'
-    if [ '$1' = add ]; then iptables -C CF-WEB \$R 2>/dev/null || iptables -I CF-WEB 1 \$R
-    else iptables -D CF-WEB \$R; fi; iptables -S CF-WEB | grep fb-edge-contabo116 || true"
-  [[ $1 == add ]] && say "rule is not persisted by this script; it vanishes on iptables reload/reboot"
+  local rb=0; [[ ${CONFIRM_REMOVE_BROAD_FW:-} == 1 ]] && rb=1
+  ssh_c "EDGE_IP=$EDGE_IP FW_ACTION=$1 FW_REMOVE_BROAD=$rb FW_CHAIN=$FW_CHAIN FW_COMMENT=$FW_COMMENT FW_PORT=$FW_PORT bash -s" <<<"$FW_REMOTE"
 }
 
-edge_locked() { # run "$@" while holding the shared nginx switch lock
+fw_rule() { # action: add|del
+  [[ ${CONFIRM_FIREWALL_CHANGE:-} == 1 ]] || die "set CONFIRM_FIREWALL_CHANGE=1 (changes cafe24 iptables $FW_CHAIN)"
+  fw_remote "$1" || die "edge firewall $1 failed"
+  [[ $1 == add ]] && say "rule is TCP $FW_PORT only, not persisted by this script; it vanishes on iptables reload/reboot"
+  return 0
+}
+
+cmd_edge_fw_status() { fw_remote audit; }
+
+# ---- contabo116 nginx -------------------------------------------------------------------------------
+edge_locked() { # run "$@" while holding the shared nginx switch lock; nothing slow belongs inside
   exec 8>"$NGINX_SWITCH_LOCK"
   flock -w 300 8 || die "nginx switch lock busy"
-  local rc=0
+  local rc=0 t0=$SECONDS held
   "$@" || rc=$?
+  held=$((SECONDS - t0))
   flock -u 8
+  exec 8>&-
+  say "nginx switch lock held ${held}s"
+  (( held <= NGINX_LOCK_MAX_HOLD )) || say "WARN nginx switch lock held longer than ${NGINX_LOCK_MAX_HOLD}s"
   return $rc
+}
+
+edge_marker() { # state marker of this cutover (tiny atomic write; also called inside the lock)
+  local tmp; tmp="$(mktemp "$FB_STATE_MARKER.XXXXXX")" || return 1
+  printf 'state=%s ts=%s\n' "$1" "$(date -Is)" >"$tmp" && mv -f "$tmp" "$FB_STATE_MARKER"
 }
 
 edge_install() { # $1 = rendered file; backs up, tests, reloads. Caller holds the lock.
   local ts bk; ts=$(date +%Y%m%d_%H%M%S); bk="$EDGE_CONF.bak.pre_cafe24_cutover_$ts"
-  cp -p "$EDGE_CONF" "$bk"; say "backup (audit only, never a rollback target): $bk"
-  install -m 0644 "$1" "$EDGE_CONF"
+  cp -p "$EDGE_CONF" "$bk" || return 1
+  say "backup (audit only, never a rollback target): $bk"
+  install -m 0644 "$1" "$EDGE_CONF" || return 1
   docker exec "$NGINX_CONTAINER" nginx -t || { cp -p "$bk" "$EDGE_CONF"; die "nginx -t failed; previous file restored"; }
-  docker exec "$NGINX_CONTAINER" nginx -s reload
+  docker exec "$NGINX_CONTAINER" nginx -s reload || { say "nginx reload failed"; return 1; }
 }
 
-probe_served_by_cafe24() {
-  local nonce="cutover$(date +%s)$RANDOM" code
-  code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST/health/live?probe=$nonce")
+# In-lock check: one bounded request to the local edge, no sleep, no ssh.
+routed_health_local() { # $1 = nonce
+  local code
+  code=$(curl -s --connect-timeout 2 -m 5 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST/health/live?probe=$1" || true)
   [[ $code == 200 ]] || { say "routed health -> $code"; return 1; }
-  sleep 1
-  ssh_c "grep -c 'probe=$nonce' /var/log/apache2/$FB_HOST-access.log" 2>/dev/null | grep -qx '[1-9][0-9]*' \
-    && say "routed probe $nonce seen in cafe24 apache access log" \
-    || { say "routed probe $nonce NOT seen on cafe24 (still served elsewhere)"; return 1; }
+}
+
+# Post-unlock proof that the request really reached cafe24 apache (sleep + ssh: never inside the lock).
+verify_served_by_cafe24() { # $1 = nonce
+  local i
+  for i in 1 2 3; do
+    sleep 1
+    if timeout 30 ssh "${SSH_OPTS[@]}" "$CAFE24_SSH" "grep -c 'probe=$1' /var/log/apache2/$FB_HOST-access.log" 2>/dev/null | grep -qx '[1-9][0-9]*'; then
+      say "routed probe $1 seen in cafe24 apache access log"; return 0
+    fi
+  done
+  say "routed probe $1 NOT seen on cafe24 (still served elsewhere)"; return 1
+}
+
+edge_qa() { # post-unlock QA through the local edge
+  local p c
+  for p in /health/live /static/apps/obys/index.html; do
+    c=$(curl -s -m 15 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST$p" || true)
+    [[ $c == 200 ]] || { say "QA $p -> $c"; return 1; }
+  done
+  c=$(curl -s -m 15 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST/api/v1/health" || true)
+  [[ $c == 401 || $c == 200 ]] || { say "QA /api/v1/health -> $c"; return 1; }
 }
 
 cmd_apply_edge() {
   cmd_lint
-  local code
+  # ---- prepare: nothing in this block holds the nginx lock ----
+  local code nonce out
   code=$(curl -s -m 8 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:$CAFE24_IP" "https://$FB_HOST/health/live" || true)
-  [[ $code == 200 ]] || die "cafe24 vhost not reachable from this edge (HTTP $code). Apply the origin first; if TCP 80/443 time out the cafe24 CF-WEB firewall blocks this host - flip the Cloudflare origin or run allow-edge-fw"
-  local out; out="$(mktemp)"; render_edge "$EDGE_CONF" >"$out"
-  _do_apply_edge() {
-    edge_install "$out"
-    if ! probe_served_by_cafe24; then
-      say "routed check failed -> fb maintenance response (not the retired jinah upstream)"
-      write_maintenance && docker exec "$NGINX_CONTAINER" nginx -t && docker exec "$NGINX_CONTAINER" nginx -s reload
+  [[ $code == 200 ]] || die "cafe24 vhost not reachable from this edge (HTTP $code). Apply the origin first; if TCP 443 times out the cafe24 CF-WEB firewall blocks this host - flip the Cloudflare origin or run allow-edge-fw"
+  fw_remote audit >/dev/null || die "cafe24 firewall state unverifiable or a broad (non-443) fb-edge rule exists; run edge-fw-status, nothing changed"
+  timeout 30 ssh "${SSH_OPTS[@]}" "$CAFE24_SSH" "test -r /var/log/apache2/$FB_HOST-access.log" || die "cafe24 access log not readable over ssh; nothing changed"
+  out="$(mktemp)"; render_edge "$EDGE_CONF" >"$out"
+  grep -q "proxy_pass https://$CAFE24_IP" "$out" || { rm -f "$out"; die "rendered edge config has no cafe24 proxy_pass; nothing changed"; }
+  nonce="cutover$(date +%s)$RANDOM"
+  # ---- lock window: config + marker, nginx -t, reload, one bounded local routed-health ----
+  _edge_cutover_locked() {
+    edge_marker cafe24-applying || return 1
+    edge_install "$out" || return 1
+    if ! routed_health_local "$nonce"; then
+      say "routed check failed inside the lock -> fb maintenance response (not the retired jinah upstream)"
+      edge_maintenance_locked
       return 1
     fi
+    edge_marker cafe24-routed-ok
   }
-  edge_locked _do_apply_edge || { rm -f "$out"; die "apply-edge failed"; }
-  rm -f "$out"; say "edge now proxies fb to https://$CAFE24_IP (aads_dashboard locations unchanged)"
+  edge_locked _edge_cutover_locked || { rm -f "$out"; die "apply-edge failed"; }
+  rm -f "$out"
+  # ---- lock released: cafe24 log proof and QA; a failure re-locks only to roll back ----
+  if ! verify_served_by_cafe24 "$nonce" || ! edge_qa; then
+    say "post-unlock verification failed -> re-lock and roll back to fb maintenance"
+    edge_locked edge_maintenance_locked || say "rollback to maintenance FAILED; edge may still point at cafe24"
+    die "apply-edge failed after unlock (rolled back to maintenance)"
+  fi
+  edge_marker cafe24-verified || true
+  say "edge now proxies fb to https://$CAFE24_IP (aads_dashboard locations unchanged)"
 }
 
 write_maintenance() {
@@ -416,16 +534,16 @@ server {
 EOF
 }
 
-cmd_maintenance() {
-  _do_maintenance() {
-    local bk="$EDGE_CONF.bak.pre_maintenance_$(date +%Y%m%d_%H%M%S)"
-    cp -p "$EDGE_CONF" "$bk"
-    write_maintenance
-    docker exec "$NGINX_CONTAINER" nginx -t || { cp -p "$bk" "$EDGE_CONF"; die "nginx -t failed; restored"; }
-    docker exec "$NGINX_CONTAINER" nginx -s reload
-  }
-  edge_locked _do_maintenance
+edge_maintenance_locked() { # caller holds the lock
+  local bk="$EDGE_CONF.bak.pre_maintenance_$(date +%Y%m%d_%H%M%S)"
+  cp -p "$EDGE_CONF" "$bk" || return 1
+  write_maintenance
+  docker exec "$NGINX_CONTAINER" nginx -t || { cp -p "$bk" "$EDGE_CONF"; say "nginx -t failed on maintenance config; restored"; return 1; }
+  docker exec "$NGINX_CONTAINER" nginx -s reload || return 1
+  edge_marker maintenance || true
 }
+
+cmd_maintenance() { edge_locked edge_maintenance_locked || die "maintenance failed"; }
 
 cmd_monitor() {
   local dur="${MONITOR_SECONDS:-300}" end fails=0 n=0 base
@@ -455,9 +573,10 @@ case "${1:-}" in
   apply-origin) cmd_apply_origin ;;
   allow-edge-fw) fw_rule add ;;
   revoke-edge-fw) fw_rule del ;;
+  edge-fw-status) cmd_edge_fw_status ;;
   apply-edge) cmd_apply_edge ;;
   maintenance) cmd_maintenance ;;
   monitor) cmd_monitor ;;
   status) cmd_status ;;
-  *) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

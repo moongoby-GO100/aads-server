@@ -3,7 +3,15 @@
 # Wraps scripts/cutover_fb_cafe24.sh in the unified worker's "<release_sha> <run_id>" convention.
 # Never touches the AADS API/dashboard images and never routes fb back to the retired jinah upstream.
 #
-# Exit codes: 2 bad SHA | 3 already running | 4 HEAD != release | 5 cutover files dirty/untracked
+# Release source (never the host checkout's HEAD, which may be ahead/behind/dirty):
+#   - AADS_DEPLOY_REPO_DIR set  -> that clean release worktree is used as is (HEAD must equal the release SHA).
+#   - otherwise                 -> an isolated detached worktree at exactly the requested FULL 40-hex release SHA
+#                                  is created from AADS_DEPLOY_SOURCE_REPO (objects only; its HEAD/tree are not
+#                                  touched), must be pushed to origin, and is removed on exit.
+# The firewall approval file must contain that same full SHA; this script never writes it.
+#
+# Exit codes: 2 bad SHA | 3 already running | 4 HEAD != release / release worktree unavailable
+#             5 cutover files dirty/untracked or SHA not pushed
 #             6 apply-edge failed | 7 monitor failed | 8 edge firewall change not approved
 #             9 lint/preflight/apply-origin failed | 10 allow-edge-fw failed | 124 time budget | 129/143 HUP/TERM
 #
@@ -15,8 +23,9 @@ set -euo pipefail
 
 RELEASE_SHA="${1:-}"
 RUN_ID="${2:-0}"
-REPO="${AADS_DEPLOY_REPO_DIR:-/root/aads/aads-server}"
-CUTOVER="${REPO}/scripts/cutover_fb_cafe24.sh"
+REPO="${AADS_DEPLOY_REPO_DIR:-}"
+SOURCE_REPO="${AADS_DEPLOY_SOURCE_REPO:-/root/aads/aads-server}"
+WORKTREE_ROOT="${ACCT_FB_RELEASE_ROOT:-/root/aads/state/acct-fb-releases}"
 EDGE_CONF="${EDGE_CONF:-/etc/nginx/conf.d/fb.conf}"
 CAFE24_IP="${CAFE24_IP:-114.207.244.86}"
 LOCK="${ACCT_FB_LOCK_FILE:-/tmp/aads-acct-fb-cutover.lock}"
@@ -32,6 +41,7 @@ if [[ ! "$RELEASE_SHA" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
     echo "invalid release SHA"
     exit 2
 fi
+RELEASE_SHA="${RELEASE_SHA,,}"
 if [[ ! "$MONITOR_SECONDS" =~ ^[0-9]+$ ]]; then
     echo "invalid MONITOR_SECONDS"
     exit 2
@@ -43,10 +53,67 @@ if ! flock -n 9; then
     exit 3
 fi
 
+child=0
+fw_pending=0
+edge_attempted=0
+completed=0
+release_wt=""
+
+cleanup_release_wt() {
+    [[ -n "$release_wt" ]] || return 0
+    git -C "$SOURCE_REPO" worktree remove --force "$release_wt" >/dev/null 2>&1 || rm -rf "$release_wt"
+    git -C "$SOURCE_REPO" worktree prune >/dev/null 2>&1 || true
+    release_wt=""
+}
+
+# Isolated clean worktree at exactly $RELEASE_SHA (AGENTS.md rule 10). Sets REPO. Exit 4/5 on failure.
+make_release_worktree() {
+    if [[ ! "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        echo "ACCT fb cutover blocked: without AADS_DEPLOY_REPO_DIR the full 40-hex release SHA is required"
+        exit 2
+    fi
+    if ! git -C "$SOURCE_REPO" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "ACCT fb cutover blocked: source repository $SOURCE_REPO unavailable"
+        exit 4
+    fi
+    local full="$RELEASE_SHA"
+    if ! git -C "$SOURCE_REPO" cat-file -e "${full}^{commit}" 2>/dev/null; then
+        timeout 120 git -C "$SOURCE_REPO" fetch --no-tags -q origin '+refs/heads/*:refs/remotes/origin/*' >/dev/null 2>&1 || true
+    fi
+    if ! git -C "$SOURCE_REPO" cat-file -e "${full}^{commit}" 2>/dev/null; then
+        echo "ACCT fb cutover blocked: release ${full:0:12} not found in $SOURCE_REPO even after fetching origin"
+        exit 4
+    fi
+    if [[ -z "$(git -C "$SOURCE_REPO" branch -r --contains "$full" 2>/dev/null)" ]]; then
+        timeout 120 git -C "$SOURCE_REPO" fetch --no-tags -q origin '+refs/heads/*:refs/remotes/origin/*' >/dev/null 2>&1 || true
+        if [[ -z "$(git -C "$SOURCE_REPO" branch -r --contains "$full" 2>/dev/null)" ]]; then
+            echo "ACCT fb cutover blocked: release ${full:0:12} is not pushed to any origin branch"
+            exit 5
+        fi
+    fi
+    mkdir -p "$WORKTREE_ROOT" || { echo "ACCT fb cutover blocked: cannot create $WORKTREE_ROOT"; exit 4; }
+    release_wt="$(mktemp -d "$WORKTREE_ROOT/${full:0:12}.XXXXXX")" || { echo "ACCT fb cutover blocked: cannot create release worktree dir"; exit 4; }
+    if ! git -C "$SOURCE_REPO" worktree add --detach -q "$release_wt" "$full" >/dev/null 2>&1; then
+        echo "ACCT fb cutover blocked: git worktree add failed for ${full:0:12}"
+        cleanup_release_wt
+        exit 4
+    fi
+    REPO="$release_wt"
+    say "isolated release worktree ${full:0:12} at $REPO (source $SOURCE_REPO untouched)"
+}
+
+trap cleanup_release_wt EXIT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+if [[ -z "$REPO" ]]; then
+    make_release_worktree
+fi
+CUTOVER="${REPO}/scripts/cutover_fb_cafe24.sh"
+
 git -C "$REPO" cat-file -e "${RELEASE_SHA}^{commit}"
 head_sha="$(git -C "$REPO" rev-parse HEAD)"
 if [[ "$head_sha" != "$RELEASE_SHA"* ]]; then
-    echo "ACCT fb cutover blocked: host HEAD ${head_sha:0:12} != release ${RELEASE_SHA:0:12}"
+    echo "ACCT fb cutover blocked: release worktree HEAD ${head_sha:0:12} != release ${RELEASE_SHA:0:12}"
     exit 4
 fi
 if ! git -C "$REPO" ls-files --error-unmatch scripts/cutover_fb_cafe24.sh config/apache/fb-cafe24.conf >/dev/null 2>&1; then
@@ -68,11 +135,6 @@ fw_approved() {
     [[ "${CONFIRM_FIREWALL_CHANGE:-}" == 1 ]] && return 0
     [[ -f "$FW_APPROVAL_FILE" ]] && grep -Fxq "$head_sha" "$FW_APPROVAL_FILE"
 }
-
-child=0
-fw_pending=0
-edge_attempted=0
-completed=0
 
 run_timed() { # run_timed <seconds> <cmd...>: background + wait so TERM/HUP reach the child immediately
     local secs="$1" rc=0
@@ -109,6 +171,7 @@ on_exit() {
     if [[ $completed != 1 ]]; then
         recover
     fi
+    cleanup_release_wt
     exit "$rc"
 }
 
