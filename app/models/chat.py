@@ -213,6 +213,8 @@ class StreamingStatusOut(BaseModel):
     # Advertised chat protocol capabilities; clients only switch adapters when
     # "chat.protocol.v2" is present, so an empty/legacy list keeps v1 behaviour.
     capabilities: List[str] = Field(default_factory=list)
+    # 추가 지시 상태 스냅샷: id/state/wait_reason/summary/received_at/applied_at/done_at ...
+    interrupts: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatEventEnvelopeV2(BaseModel):

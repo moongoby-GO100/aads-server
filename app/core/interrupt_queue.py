@@ -17,14 +17,22 @@ _streaming_sessions: set[str] = set()
 _pending_interrupts: dict[str, list[dict[str, Any]]] = {}
 
 
-def push_interrupt(session_id: str, message: str, attachments: list[dict] | None = None) -> None:
-    """CEO 중간 메시지를 큐에 추가 (텍스트 + 선택적 첨부파일)"""
+def push_interrupt(
+    session_id: str,
+    message: str,
+    attachments: list[dict] | None = None,
+    message_id: str | None = None,
+) -> None:
+    """CEO 중간 메시지를 큐에 추가 (텍스트 + 선택적 첨부파일). message_id 는 상태 추적용."""
     if session_id not in _interrupt_queues:
         _interrupt_queues[session_id] = []
-    _interrupt_queues[session_id].append({
+    item: dict[str, Any] = {
         "content": message,
         "attachments": attachments or [],
-    })
+    }
+    if message_id:
+        item["message_id"] = str(message_id)
+    _interrupt_queues[session_id].append(item)
     logger.info("interrupt_pushed session_id=%s message=%s attachments=%d",
                 session_id, message[:50], len(attachments or []))
 

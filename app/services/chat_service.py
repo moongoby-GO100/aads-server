@@ -20,6 +20,7 @@ from anthropic import APIStatusError
 from app.config import Settings
 from app.core.anthropic_client import get_client
 from app.core.db_pool import get_pool
+from app.services import chat_interrupt_lifecycle as _interrupt_lifecycle
 from app.core.project_config import normalize_project_label, resolve_project, get_display_name
 
 logger = logging.getLogger(__name__)
@@ -2391,11 +2392,8 @@ async def _apply_deferred_interrupts_to_state(
             interrupt_pass + 1,
             len(interrupts),
         )
-        for intr_item in interrupts:
-            yield (
-                "event: interrupt_applied\n"
-                f"data: {json.dumps({'type': 'interrupt_applied', 'content': str(intr_item.get('content') or '')[:100]})}\n\n"
-            )
+        for _applied_ev in await _interrupt_lifecycle.apply_interrupts(session_id, interrupts):
+            yield _interrupt_lifecycle.applied_sse(_applied_ev)
 
         previous_response = str(state.get("full_response") or "")
         interrupt_messages = list(messages)
@@ -2408,7 +2406,7 @@ async def _apply_deferred_interrupts_to_state(
                 "방금 스트리밍 중 CEO가 아래 추가 지시를 보냈습니다. "
                 "이미 작성한 답변을 그대로 반복하지 말고, 추가 지시를 반영해 최종 답변을 다시 작성하세요. "
                 "추가 지시가 기존 답변과 충돌하면 CEO의 추가 지시를 우선합니다.\n\n"
-                f"{interrupt_text}{attachment_note}"
+                f"{interrupt_text}{attachment_note}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
             ),
         })
 
@@ -2420,6 +2418,7 @@ async def _apply_deferred_interrupts_to_state(
                 f"{interrupt_text}{attachment_note}\n\n"
                 "CEO 추가 지시를 우선하여 최종 답변만 다시 작성하세요. "
                 "기존 답변과 충돌하는 내용은 제거하고, 추가 지시가 요구한 형식과 결론을 반드시 반영하세요."
+                f"{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
             )
             revised_response = ""
             try:
@@ -2478,7 +2477,7 @@ async def _apply_deferred_interrupts_to_state(
                     state["model_used"] = event.get("model", state.get("model_used"))
                     yield f"data: {json.dumps({'type': 'model_info', 'model': state.get('model_used')})}\n\n"
                 elif etype == "interrupt_applied":
-                    yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
+                    yield _interrupt_lifecycle.applied_sse(event)
                 elif etype == "delta":
                     if not reset_sent:
                         preserved_message = await _save_interrupted_partial_message(
@@ -2630,6 +2629,12 @@ async def sweep_stale_interrupts(
             return int(str(result).split()[-1])
         except (ValueError, IndexError):
             return 0
+
+    if _n(expired):
+        try:
+            await _interrupt_lifecycle.mark_expired(conn, _uid)
+        except Exception as state_exc:
+            logger.warning("interrupt_expire_state_failed error=%s", str(state_exc)[:160])
 
     return {"expired": _n(expired), "needs_confirm": _n(needs_confirm)}
 
@@ -2792,7 +2797,11 @@ async def _fetch_persisted_interrupts(
                 attachments = json.loads(attachments)
             except Exception:
                 attachments = []
-        interrupts.append({"content": content, "attachments": attachments})
+        interrupts.append({
+            "content": content,
+            "attachments": attachments,
+            "message_id": str(row["id"]),
+        })
         seen.add(content)
 
     if rows:
@@ -7024,6 +7033,12 @@ async def with_background_completion(
                         _event_type = _t
                         if _t:
                             state["last_event_type"] = _t
+                        # APPLIED 이후 첫 실제 출력이 나오면 WORKING 으로 올린다.
+                        if _t == "interrupt_applied":
+                            state["_interrupt_work_pending"] = True
+                        elif _t in ("delta", "tool_use") and state.get("_interrupt_work_pending"):
+                            state["_interrupt_work_pending"] = False
+                            await _interrupt_lifecycle.promote_working(session_id, state.get("execution_id"))
                         if _t == "stream_start":
                             _execution_id = _d.get("execution_id")
                             if _execution_id:
@@ -7885,6 +7900,47 @@ async def with_background_completion(
 
     hb_task = _heartbeat_asyncio.create_task(_heartbeat_pump())
 
+    # 진행 중인 추가 지시가 있으면 12초마다 상태를 흘려보낸다. 변화가 없으면 unchanged=true.
+    _intr_status_digest = ""
+
+    async def _interrupt_status_pump():
+        nonlocal _intr_status_digest
+        from app.core.interrupt_queue import has_interrupt, has_pending_interrupts
+
+        _tick = 0
+        while not _hb_stop.is_set():
+            try:
+                await _heartbeat_asyncio.wait_for(
+                    _hb_stop.wait(), timeout=_interrupt_lifecycle.STATUS_HEARTBEAT_SECONDS
+                )
+                break
+            except _heartbeat_asyncio.TimeoutError:
+                if _client_gone:
+                    break
+                _tick += 1
+                # 지시가 없는 스트림은 DB 를 매 틱 읽지 않는다.
+                if not _interrupt_lifecycle.should_poll_status(
+                    queue_has_items=has_interrupt(session_id) or has_pending_interrupts(session_id),
+                    last_digest=_intr_status_digest,
+                    tick=_tick,
+                ):
+                    continue
+                try:
+                    _reason = _interrupt_lifecycle.classify_wait_reason(
+                        status="running",
+                        tool_events=state.get("tool_events") or [],
+                        has_output=bool(state.get("first_response_at")),
+                    )
+                    _ev, _intr_status_digest = await _interrupt_lifecycle.poll_status_event(
+                        session_id, _intr_status_digest, wait_reason=_reason,
+                    )
+                    if _ev:
+                        queue.put_nowait((f"data: {json.dumps(_ev, ensure_ascii=False)}\n\n", None))
+                except Exception as _isp_exc:
+                    logger.debug("interrupt_status_pump_error session=%s error=%s", session_id[:8], str(_isp_exc)[:160])
+
+    _intr_status_task = _heartbeat_asyncio.create_task(_interrupt_status_pump())
+
     # SSE retry 헤더: 클라이언트 자동 재연결 간격 3초 (EventSource 표준)
     yield f"retry: 3000\n\n"
     # P0-FIX: 초기 heartbeat 즉시 전송 — 연결 수립 직후 SSE 채널 활성화 확인
@@ -7932,6 +7988,8 @@ async def with_background_completion(
     finally:
         _hb_stop.set()
         hb_task.cancel()
+        _intr_status_task.cancel()
+        await _heartbeat_asyncio.gather(_intr_status_task, return_exceptions=True)
 
 
 def get_active_bg_tasks() -> Dict[str, bool]:
@@ -11929,6 +11987,10 @@ async def _save_and_update_session(
                     """,
                     sid,
                 )
+                try:
+                    await _interrupt_lifecycle.mark_done(conn, sid, str(_execution_uuid) if _execution_uuid else None)
+                except Exception as _done_err:
+                    logger.warning("interrupt_done_state_failed session=%s error=%s", str(sid)[:8], str(_done_err)[:160])
             else:
                 await conn.execute(
                     "UPDATE chat_sessions SET cost_total = cost_total + $1, updated_at = NOW() WHERE id = $2",
@@ -15100,7 +15162,7 @@ async def send_message_stream(
                         actual_model_used = event.get("actual_model", actual_model_used or model_used)
                         yield f"data: {json.dumps({'type': 'model_info', 'model': model_used})}\n\n"
                     elif etype == "interrupt_applied":
-                        yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
+                        yield _interrupt_lifecycle.applied_sse(event)
                     elif etype == "delta":
                         full_response += event.get("content", "")
                         yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
@@ -15390,8 +15452,8 @@ async def send_message_stream(
                 _deferred_interrupt_pass + 1,
                 len(_deferred_interrupts),
             )
-            for _intr_item in _deferred_interrupts:
-                yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': str(_intr_item.get('content') or '')[:100]})}\n\n"
+            for _applied_ev in await _interrupt_lifecycle.apply_interrupts(session_id, _deferred_interrupts):
+                yield _interrupt_lifecycle.applied_sse(_applied_ev)
 
             _previous_response = full_response
             _interrupt_messages = list(messages)
@@ -15406,7 +15468,7 @@ async def send_message_stream(
                     "방금 스트리밍 중 CEO가 아래 추가 지시를 보냈습니다. "
                     "원래 질문의 맥락을 유지하면서, 추가 지시를 반영해 최종 답변을 다시 작성하세요. "
                     "추가 지시가 기존 답변과 충돌하면 CEO의 추가 지시를 우선합니다.\n\n"
-                    f"{_interrupt_text}{_attachment_note}"
+                    f"{_interrupt_text}{_attachment_note}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
                 ),
             })
 
@@ -15428,7 +15490,7 @@ async def send_message_stream(
                     actual_model_used = event.get("actual_model", actual_model_used or model_used)
                     yield f"data: {json.dumps({'type': 'model_info', 'model': model_used})}\n\n"
                 elif etype == "interrupt_applied":
-                    yield f"event: interrupt_applied\ndata: {json.dumps({'type': 'interrupt_applied', 'content': event.get('content', '')})}\n\n"
+                    yield _interrupt_lifecycle.applied_sse(event)
                 elif etype == "delta":
                     if not _reset_sent:
                         _preserved_message = await _save_interrupted_partial_message(

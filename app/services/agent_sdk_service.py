@@ -15,6 +15,8 @@ import os
 import signal
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
+from app.services.chat_interrupt_lifecycle import INTERRUPT_REPLY_INSTRUCTION, apply_interrupts
+
 logger = logging.getLogger(__name__)
 
 # ─── 환경 플래그 ───────────────────────────────────────────────────────────────
@@ -460,22 +462,15 @@ class AgentSDKService:
             "[대표님 추가 지시] 작업 도중 대표님이 새 지시를 보내셨습니다. "
             "지금까지의 결과를 고려하고 이 지시를 반영해 다음 행동을 정하세요. "
             "기존 작업과 충돌하면 **대표님 지시를 우선합니다.**\n\n" + text
+            + INTERRUPT_REPLY_INSTRUCTION
         )
         try:
             await client.query(body)
         except Exception as exc:
             logger.warning("sdk_interrupt_inject_failed error=%s", str(exc)[:160])
             return
-        for item in items:
-            yield (
-                "data: "
-                + json.dumps(
-                    {"type": "interrupt_applied",
-                     "content": str(item.get("content") or "")[:100]},
-                    ensure_ascii=False,
-                )
-                + "\n\n"
-            )
+        for event in await apply_interrupts(chat_session_id, items):
+            yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
         logger.info(
             "sdk_interrupt_injected session=%s count=%d",
             chat_session_id[:8], len(items),

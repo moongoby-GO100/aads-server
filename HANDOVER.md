@@ -15,6 +15,20 @@
 - CEO 결정 반영: 알림은 오비스 내부 알림만(외부 채널·fallback 금지). A 코드에는 외부 sender 가 없으나 목업 검토 이벤트와 오비스 알림 연결도 없어 정책 충족은 **검증 불가 = 미달**(릴리스 인증 금지).
 - 재개: A/B/C 검수·push 후 마이그레이션 먼저 → bluegreen/ops 큐 → 5분 관찰 → 권한 있는 fixture 승인과 실사용자 승인 경로 분리한 /chat 검증. 대상·영향·rollback 은 보고서 §4.
 
+## 2026-10-03 — 추가 지시 접수·반영 수명주기 서버 계약 (AADS-CHAT-INTERRUPT-ACK-LIFECYCLE-SERVER-P0-20261003)
+
+**DB handover entry_key `chat-interrupt-ack-lifecycle-20261003`. 상태: 코드·마이그레이션·테스트 완료(미커밋 — Runner 가 승인 후 commit/push). SHA·배포·운영 실측은 없다(미수행).** DB handover POST·오류 사전 등록은 이 세션에서 실행하지 않았다(아래 미수행).
+- 문제: 작업 중 추가 지시의 "접수"가 `queued=true` 한 단어였고, 반영(APPLIED) 여부·대기 사유·반영 시각이 서버 어디에도 남지 않았다. 최근 7일 실측(M1, 읽기 전용): 사용자 메시지 intent 별 `edited_at − created_at` — interrupt_applied(아직 applied 상태라 접수→반영 실측) n=7 p50 109.8s·p95 380.3s·max 481.0s. interrupt_completed n=164 p50 1098s·p95 6823s 는 완료 시점으로 덮어쓰인 **상한**이지 반영 지연이 아니다. recovered_interrupt n=88 p50 822s, interrupt_expired n=14(≈24h), needs_confirm 3, 미소비 queued 0.
+- 신규: `chat_interrupt_states` 테이블(`migrations/20261003_chat_interrupt_states.sql`, idempotent, 운영 미적용 — 테이블이 없으면 코드는 상태 기록만 건너뛰고 intent 로 상태를 유도), `app/services/chat_interrupt_lifecycle.py`, `tests/unit/test_chat_interrupt_ack_lifecycle.py`(재작업 2라운드 후 50건 안팎).
+- 상태: RECEIVED→QUEUED→APPLIED→WORKING→DONE (+CANCELLED/EXPIRED). 앞으로만 간다. wait_reason: tool_running / relay_wait / model_pre_output / none.
+- API: `POST /chat/sessions/{id}/interrupt` 본문에 `idempotency_key?` 추가, 응답에 `command_id,state,wait_reason,summary,received_at,idempotency_key` 추가(기존 필드 유지). 같은 키 재전송은 새 행 없이 현재 상태를 돌려준다. 저장 실패는 503 `interrupt_receipt_failed`. SSE `interrupt_applied` 에 `message_id,state,applied_at,public_reply`. SSE `interrupt_status` 약 12초 heartbeat(변화 없으면 `unchanged:true`). `GET /streaming-status` 에 `interrupts:[…]`, `GET /chat/sessions/{id}/interrupt/status` 신규.
+- 수정: `routers/chat.py`, `models/chat.py`, `core/interrupt_queue.py`(message_id 전달), `services/chat_service.py`(반영·WORKING·DONE·만료·heartbeat·시스템 프롬프트 형식 지시), `services/model_selector.py`·`services/agent_sdk_service.py`(소비 지점에서 APPLIED 기록), `services/chat_protocol.py`(`interrupt_status`→`command.status`). 유지: 기존 intent 값, 120초 문구 중복 억제, 취소 의미.
+- 편차(의도): 공개 반영 문구는 대화 메시지가 아니라 상태 행 `public_reply` 에 둔다(전사·placeholder·lease 로직을 건드리지 않기 위해).
+- 한계: model_selector 의 CLI relay 경로(~4257)는 message_id 없는 peek 알림만 낸다. 프로세스 내 pop 지점은 DB intent 를 바꾸지 않는 기존 동작 그대로다(상태 전이는 단조라 퇴행 없음).
+- 재작업 2/2(AI 리뷰 반려 8건 교정): 상태 테이블 쿼리 전부 savepoint(`_guarded`) 로 감싸 호출자 트랜잭션 보호; 같은 idempotency_key 동시 접수는 `pg_advisory_xact_lock` 으로 직렬화 후 재조회; `mark_applied` 는 한 건당 SELECT FOR UPDATE + 단일 UPDATE(상태·공개문구 원자); WORKING/DONE 은 `applied_execution_id` 로 반영한 실행만 승격; heartbeat 는 큐/직전 활성/5틱 probe 일 때만 상태 테이블 1회 조회, 종료 시 pump await; 재전송은 `get_receipt`(상태 행 없으면 intent 로 유도). 마이그레이션에 `applied_execution_id` 컬럼 추가(idempotent).
+- 검증(실측): `bash scripts/run_unit_tests.sh` 로 interrupt·lease·watchdog·protocol·model_selector·dup_guard 13개 파일 209 passed; ruff F821/F811·compileall·dup_guard 통과. 검증 중 ruff 가 `mark_done` 경고 로그의 정의 안 된 이름을 잡아 고쳤다.
+- 미수행: commit/push, 운영 마이그레이션 적용, 실브라우저·운영 SSE 확인, DB handover POST, 오류 사전 등록(`error_book.py register --key chat.interrupt_ack_not_durable` — fix 커밋 SHA 가 생긴 뒤 등록해야 한다).
+
 ## 2026-10-03 — 오비서 클로브 자료현황·거래검토·경영요약 UI (ACCT-CLOBE-OBYS-FEATURE-DESIGN-20261003-R5)
 
 **DB handover entry_key `acct-clobe-ui-held-resume-20261003-r5`. 상태: 코드·테스트·합성 데이터 화면 검증 완료(미커밋 — Runner 가 승인 후 commit/push). 실제 SHA·digest·운영 URL·실로그인·운영 캡처·ops deploy_run_id·300초 모니터링은 아직 없다(해당 없음이 아니라 미수행). 전체 이관 완료가 아니다.**

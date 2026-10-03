@@ -72,6 +72,7 @@ from app.models.chat import (
     WorkspaceUpdate,
 )
 from app.services import chat_service as svc
+from app.services import chat_interrupt_lifecycle as _ilc
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -291,6 +292,16 @@ async def _finalize_streaming_status(session_id: UUID, result: Optional[dict], c
         payload.setdefault("message_revision", None)
         payload.setdefault("placeholder_revision", None)
         payload.setdefault("artifact_revision", None)
+    try:
+        if conn is None:
+            from app.core.db_pool import get_pool
+            async with get_pool().acquire() as intr_conn:
+                payload["interrupts"] = await _ilc.fetch_snapshot(intr_conn, session_id)
+        else:
+            payload["interrupts"] = await _ilc.fetch_snapshot(conn, session_id)
+    except Exception as e:
+        logger.debug("streaming-status interrupts 조회 실패", error=str(e), session_id=str(session_id))
+        payload.setdefault("interrupts", [])
     return payload
 
 
@@ -3450,6 +3461,10 @@ async def stop_session_streaming(
 class InterruptRequest(BaseModel):
     content: str = Field(..., description="스트리밍 중 CEO가 추가로 보내는 지시")
     attachments: list[dict] = Field(default_factory=list, description="첨부파일 (이미지/PDF 등)")
+    idempotency_key: Optional[str] = Field(
+        default=None, max_length=128,
+        description="같은 키로 재전송하면 새 지시를 만들지 않고 기존 접수를 돌려준다",
+    )
 
 
 @router.post("/chat/sessions/{session_id}/interrupt", tags=["chat-session"])
@@ -3472,6 +3487,7 @@ async def interrupt_session(
     if is_streaming(sid):
         accepts_interrupt = False
         stale_reason = ""
+        wait_reason = "none"
         try:
             from app.core.db_pool import get_pool
             pool = get_pool()
@@ -3480,6 +3496,7 @@ async def interrupt_session(
                     """
                     SELECT te.id::text AS execution_id,
                            te.status,
+                           te.error_message,
                            te.last_event_id,
                            EXTRACT(EPOCH FROM (NOW() - te.updated_at))::int AS updated_age_seconds,
                            EXTRACT(EPOCH FROM (NOW() - te.started_at))::int AS started_age_seconds,
@@ -3550,6 +3567,12 @@ async def interrupt_session(
                         row["execution_id"],
                     )
                 accepts_interrupt = not (_empty_stale or _hard_stale or _superseded)
+                wait_reason = _ilc.classify_wait_reason(
+                    status=row["status"],
+                    tool_events=svc.normalize_tool_events(row["tools_called"]),
+                    has_output=svc._has_meaningful_partial_content(_clean_partial) or _tool_count > 0,
+                    error_message=row.get("error_message"),
+                )
                 if not accepts_interrupt:
                     stale_reason = (
                         f"stale execution age={_started_age}s updated_age={_updated_age}s "
@@ -3582,6 +3605,12 @@ async def interrupt_session(
             import json as _json
             pool = get_pool()
             async with pool.acquire() as conn:
+                # 같은 idempotency_key 는 문구와 시간창에 상관없이 한 건이다.
+                _idem_key = (req.idempotency_key or "").strip() or None
+                duplicate_of = (
+                    await _ilc.find_by_idempotency_key(conn, session_id, _idem_key)
+                    if _idem_key else None
+                )
                 # 같은 문구를 연달아 보내면 화면은 한 건으로 접어 보여주는데
                 # (page.tsx duplicatePending) POST 는 그대로 나가 행이 두 개
                 # 생겼다. 2026-09-16 08:28:10·08:29:59 실측 — 동일 문구 2행,
@@ -3593,7 +3622,7 @@ async def interrupt_session(
                 # 창은 30초가 아니라 2분이다. 2026-09-16 실측 중복쌍이
                 # 12:24:54 / 12:26:26 으로 **92초** 벌어져 있어 30초로는 못 잡았다.
                 # 진행 중 답변을 기다리다 다시 보내는 간격이 그 정도다.
-                duplicate_of = await conn.fetchval(
+                duplicate_of = duplicate_of or await conn.fetchval(
                     """
                     SELECT id
                       FROM chat_messages
@@ -3608,8 +3637,11 @@ async def interrupt_session(
                     session_id,
                     (req.content or "").strip(),
                 )
+                target_execution_id = str(row["execution_id"]) if row and row["execution_id"] else None
+                target_generation_id = None
                 if duplicate_of:
                     interrupt_message_id = duplicate_of
+                    receipt = await _ilc.get_receipt(conn, duplicate_of)
                     logger.info(
                         "interrupt_duplicate_suppressed",
                         session_id=sid,
@@ -3617,23 +3649,64 @@ async def interrupt_session(
                         content=req.content[:100],
                     )
                 else:
+                    if target_execution_id:
+                        try:
+                            target_generation_id = await conn.fetchval(
+                                """
+                                SELECT generation_id::text
+                                  FROM chat_execution_generations
+                                 WHERE execution_id = $1::uuid
+                                   AND ended_at IS NULL
+                                 ORDER BY attempt DESC
+                                 LIMIT 1
+                                """,
+                                target_execution_id,
+                            )
+                        except Exception as _gen_err:
+                            # 세대 조회는 표시용이다. 실패해도 접수는 확정할 수 있다.
+                            logger.warning("interrupt_generation_lookup_failed session_id=%s error=%s",
+                                           sid, str(_gen_err)[:160])
                     async with conn.transaction():
-                        interrupt_message_id = await conn.fetchval(
-                            """INSERT INTO chat_messages
-                               (session_id, role, content, intent, attachments)
-                               VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb)
-                               RETURNING id""",
-                            session_id,
-                            f"[추가 지시] {req.content}",
-                            _json.dumps(req.attachments or []),
-                        )
-                        updated = await conn.execute(
-                            "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
-                            session_id,
-                        )
-                        if updated != "UPDATE 1":
-                            raise RuntimeError("interrupt receipt session update did not match")
-                    logger.info("interrupt_saved_to_db", session_id=sid, intent="queued_interrupt", content=req.content[:100])
+                        if _idem_key:
+                            # 조회→INSERT 사이의 경쟁을 막는다. 락을 얻은 뒤 다시 보면, 먼저
+                            # 커밋한 같은 키의 접수가 있을 때 새 행 없이 그것을 돌려준다.
+                            await _ilc.lock_idempotency(conn, session_id, _idem_key)
+                            duplicate_of = await _ilc.find_by_idempotency_key(conn, session_id, _idem_key)
+                        if duplicate_of:
+                            interrupt_message_id = duplicate_of
+                            receipt = await _ilc.get_receipt(conn, duplicate_of)
+                        else:
+                            interrupt_message_id = await conn.fetchval(
+                                """INSERT INTO chat_messages
+                                   (session_id, role, content, intent, attachments)
+                                   VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb)
+                                   RETURNING id""",
+                                session_id,
+                                f"[추가 지시] {req.content}",
+                                _json.dumps(req.attachments or []),
+                            )
+                            updated = await conn.execute(
+                                "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
+                                session_id,
+                            )
+                            if updated != "UPDATE 1":
+                                raise RuntimeError("interrupt receipt session update did not match")
+                            receipt = await _ilc.record_receipt(
+                                conn,
+                                message_id=interrupt_message_id,
+                                session_id=session_id,
+                                content=req.content,
+                                wait_reason=wait_reason,
+                                execution_id=target_execution_id,
+                                generation_id=target_generation_id,
+                                owner_instance=svc._EXECUTION_OWNER_INSTANCE,
+                                idempotency_key=_idem_key,
+                            )
+                    if duplicate_of:
+                        logger.info("interrupt_duplicate_suppressed", session_id=sid,
+                                    message_id=str(duplicate_of), content=req.content[:100])
+                    else:
+                        logger.info("interrupt_saved_to_db", session_id=sid, intent="queued_interrupt", content=req.content[:100])
         except Exception as e:
             logger.error("interrupt_db_save_failed", session_id=sid, error=str(e))
             raise HTTPException(
@@ -3646,34 +3719,18 @@ async def interrupt_session(
             ) from e
 
         if not duplicate_of:
-            push_interrupt(sid, req.content, req.attachments if req.attachments else None)
+            push_interrupt(
+                sid,
+                req.content,
+                req.attachments if req.attachments else None,
+                message_id=str(interrupt_message_id) if interrupt_message_id else None,
+            )
             logger.info("interrupt_queued", session_id=sid, content=req.content[:100],
                          attachments=len(req.attachments))
 
         # 접수 응답에 대상 실행/세대를 실어 보낸다. 내구성 커맨드 래퍼가 이
         # 값을 chat_commands 에 찍고(지시↔응답 연결), 프론트는 이 값으로
         # 지시 버블을 어느 응답 버블에 붙일지 판단한다.
-        target_execution_id = str(row["execution_id"]) if row and row["execution_id"] else None
-        target_generation_id = None
-        if target_execution_id:
-            try:
-                async with pool.acquire() as _gen_conn:
-                    target_generation_id = await _gen_conn.fetchval(
-                        """
-                        SELECT generation_id::text
-                          FROM chat_execution_generations
-                         WHERE execution_id = $1::uuid
-                           AND ended_at IS NULL
-                         ORDER BY attempt DESC
-                         LIMIT 1
-                        """,
-                        target_execution_id,
-                    )
-            except Exception as _gen_err:
-                # 세대 조회는 표시용이다. 실패해도 접수는 이미 확정됐다.
-                logger.warning("interrupt_generation_lookup_failed session_id=%s error=%s",
-                               sid, str(_gen_err)[:160])
-
         return {
             "queued": True,
             "duplicate": bool(duplicate_of),
@@ -3683,11 +3740,32 @@ async def interrupt_session(
                 else "추가 지시가 현재 스트림 종료 전 또는 다음 도구 완료 시점에 반영됩니다."
             ),
             "message_id": str(interrupt_message_id) if interrupt_message_id else None,
+            "command_id": str(interrupt_message_id) if interrupt_message_id else None,
+            "state": (receipt or {}).get("state") or ("QUEUED" if target_execution_id else "RECEIVED"),
+            "wait_reason": (receipt or {}).get("wait_reason") or wait_reason,
+            "summary": (receipt or {}).get("summary") or _ilc.build_summary(req.content),
+            "received_at": (receipt or {}).get("received_at"),
+            "idempotency_key": _idem_key,
             "execution_id": target_execution_id,
             "generation_id": target_generation_id,
         }
     else:
         return {"queued": False, "message": "현재 AI가 응답 생성 중이 아닙니다. 일반 메시지로 전송하세요."}
+
+
+@router.get("/chat/sessions/{session_id}/interrupt/status", tags=["chat-session"])
+async def get_interrupt_status(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """세션의 추가 지시 상태 스냅샷 (DB 기준 — 새로고침·재연결·다른 슬롯에서 동일)."""
+    if not await svc.get_session(str(session_id), tenant_id=_tenant_id(context)):
+        raise _NOT_FOUND("session")
+    from app.core.db_pool import get_pool
+
+    async with get_pool().acquire() as conn:
+        items = await _ilc.fetch_snapshot(conn, session_id)
+    return {"session_id": str(session_id), "interrupts": items}
 
 
 class CancelInterruptRequest(BaseModel):
@@ -3761,6 +3839,14 @@ async def cancel_queued_interrupts(
             session_id,
             target_ids or None,
         )
+
+    if rows:
+        try:
+            async with pool.acquire() as state_conn:
+                await _ilc.mark_cancelled(state_conn, session_id, [r["id"] for r in rows])
+        except Exception as state_exc:
+            # 취소는 이미 원문 행에 반영됐다. 상태 표시만 못 맞춘 것이다.
+            logger.warning("interrupt_cancel_state_failed", session_id=sid, error=str(state_exc)[:160])
 
     contents = [str(r["content"] or "") for r in rows]
     from app.core.interrupt_queue import cancel_interrupts

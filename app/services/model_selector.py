@@ -33,6 +33,7 @@ from app.services.model_registry import get_executable_model_ids as _get_registr
 from app.services.model_registry import list_registered_models as _list_registered_models  # noqa: E402
 from app.services.model_registry import normalize_provider as _normalize_registry_provider  # noqa: E402
 from app.services.intent_router import IntentResult  # noqa: E402
+from app.services import chat_interrupt_lifecycle as _interrupt_lifecycle  # noqa: E402
 from scripts.claude_model_contract import (  # noqa: E402
     AADS_MODEL_IDS, CONTRACT_VERSION, ModelObservation, resolve_model,
     runtime_alias, session_key,
@@ -3634,7 +3635,7 @@ async def _stream_litellm_anthropic(
                         interrupts = pop_interrupts(session_id)
                         interrupt_text = "\n".join(i["content"] for i in interrupts)
                         # 인터럽트 첨부파일 → Vision content blocks
-                        _intr_content: list | str = f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}"
+                        _intr_content: list | str = f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
                         _intr_images = []
                         for _intr_item in interrupts:
                             for att in _intr_item.get("attachments", []):
@@ -3647,8 +3648,8 @@ async def _stream_litellm_anthropic(
                             _intr_content = [{"type": "text", "text": _intr_content}] + _intr_images
                         current_msgs.append({"role": "user", "content": _intr_content})
                         # 각 interrupt마다 개별 이벤트 yield (프론트 큐 동기화용)
-                        for _intr_item in interrupts:
-                            yield {"type": "interrupt_applied", "content": _intr_item["content"][:100]}
+                        for _applied_ev in await _interrupt_lifecycle.apply_interrupts(session_id, interrupts):
+                            yield _applied_ev
 
     except Exception as e:
         logger.error(f"model_selector litellm_anthropic error: {e}")
@@ -6578,7 +6579,7 @@ async def _stream_anthropic(
                 interrupts = pop_interrupts(session_id)
                 interrupt_text = "\n".join(i["content"] for i in interrupts)
                 # 인터럽트 첨부파일 → Claude Vision content blocks
-                _intr_content: list | str = f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}"
+                _intr_content: list | str = f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
                 _intr_images = []
                 for _intr_item in interrupts:
                     for att in _intr_item.get("attachments", []):
@@ -6595,8 +6596,8 @@ async def _stream_anthropic(
                     _intr_content = [{"type": "text", "text": _intr_content}] + _intr_images
                 current_messages.append({"role": "user", "content": _intr_content})
                 # 각 interrupt마다 개별 이벤트 yield (프론트 큐 동기화용)
-                for _intr_item in interrupts:
-                    yield {"type": "interrupt_applied", "content": _intr_item["content"][:100]}
+                for _applied_ev in await _interrupt_lifecycle.apply_interrupts(session_id, interrupts):
+                    yield _applied_ev
 
         _turn += 1
 

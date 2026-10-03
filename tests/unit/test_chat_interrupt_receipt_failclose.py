@@ -98,7 +98,17 @@ def _live_connection(*, superseded: bool = False, insert_error: Exception | None
     the turn to count as the session's current turn.
     """
     connection = AsyncMock()
-    connection.fetchrow.return_value = _live_execution_row()
+
+    def _fetchrow(sql, *_args, **_kwargs):
+        if "INSERT INTO chat_interrupt_states" in str(sql):
+            return {
+                "message_id": MESSAGE_ID, "state": "QUEUED", "wait_reason": "model_pre_output",
+                "summary": "추가 지시 반영해 주세요", "public_reply": None,
+                "received_at": None, "execution_id": EXECUTION_ID,
+            }
+        return _live_execution_row()
+
+    connection.fetchrow.side_effect = _fetchrow
     connection.fetchval.side_effect = _fetchval_router(
         superseded=superseded, insert_error=insert_error
     )
@@ -214,9 +224,11 @@ async def test_committed_receipt_is_enqueued_and_acknowledged():
         str(session_id),
         "추가 지시 반영해 주세요",
         None,
+        message_id=MESSAGE_ID,
     )
     assert transaction.exit_exception_type is None
-    connection.transaction.assert_called_once_with()
+    # 접수 트랜잭션 1개 + 상태 기록용 savepoint 1개
+    assert connection.transaction.call_count == 2
 
 
 @pytest.mark.asyncio

@@ -51,6 +51,7 @@ _LEGACY_EVENT_TYPES: dict[str, str] = {
     "research_progress": "research.progress",
     "research_complete": "research.completed",
     "interrupt_applied": "command.applied",
+    "interrupt_status": "command.status",
     "error": "stream.error",
 }
 
