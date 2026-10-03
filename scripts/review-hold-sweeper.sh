@@ -313,10 +313,20 @@ review_hold_dirty_recovery() {
     return 10
 }
 
-# 재시도 추적 컬럼 — 멱등 생성
-db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_retry_count INTEGER NOT NULL DEFAULT 0;"
-db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_retry_last_at TIMESTAMPTZ;"
-db_exec "ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_request_id UUID;"
+# Existing columns need no table lock. A waiting ALTER would also block runner
+# reads/writes behind a pg_dump snapshot, even with ADD COLUMN IF NOT EXISTS.
+retry_columns=$(db_query "SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='pipeline_jobs'
+      AND column_name IN ('review_retry_count','review_retry_last_at','review_request_id');")
+if [[ "$retry_columns" != 3 ]]; then
+    if ! db_exec "SET lock_timeout='2s';
+        ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_retry_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_retry_last_at TIMESTAMPTZ;
+        ALTER TABLE pipeline_jobs ADD COLUMN IF NOT EXISTS review_request_id UUID;"; then
+        log "retry-column initialization busy or failed — retry next sweep"
+        exit 0
+    fi
+fi
 
 select_sql="SELECT job_id, project, COALESCE(review_retry_count,0), COALESCE(chat_session_id,''), COALESCE(review_request_id::text,''),
        COALESCE(error_detail,''),
