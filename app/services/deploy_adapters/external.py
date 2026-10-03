@@ -186,6 +186,17 @@ class FoodStoreAssistantAdapter(ProjectRunnerAdapter):
     supports_rollback = True
 
 
+class AcctFbCutoverAdapter(ProjectRunnerAdapter):
+    project = "ACCT"
+    component = "fb-cutover"
+    deploy_type = "edge_origin_cutover"
+    remote_host = "contabo116 (local host) -> cafe24_114 (114.207.244.86)"
+    remote_command = "bash /root/aads/aads-server/scripts/deploy_acct_fb_cutover.sh <release_sha>"
+    health_url = "https://fb.newtalk.kr/health/live"
+    route_url = "https://fb.newtalk.kr"
+    supports_rollback = False
+
+
 class AadsDatabaseAdapter(ProjectRunnerAdapter):
     project = "AADS"
     component = "db"

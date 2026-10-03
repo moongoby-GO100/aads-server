@@ -99,7 +99,7 @@ def test_registry_covers_aads_and_project_owned_targets():
     assert {
         "FOOD/store-assistant", "NTV2/frontend", "NTV2/app",
         "SF/worker", "SF/dashboard", "SF/saas", "NAS/backup",
-        "AADS/db", "AADS/config", "AADS/prompt",
+        "AADS/db", "AADS/config", "AADS/prompt", "ACCT/fb-cutover",
     }.issubset(targets)
     assert coverage["central_worker"] >= 16
     assert coverage["project_runner"] == 0
@@ -243,7 +243,7 @@ def test_drain_script_dispatches_api_and_dashboard():
     assert "start_aads_dashboard_deploy_worker.sh" in drain
     assert "start_unified_component_deploy_worker.sh" in drain
     assert "queued_for_deploy" in drain
-    for target in ("FOOD/store-assistant", "NTV2/frontend", "SF/worker", "NAS/backup", "AADS/prompt"):
+    for target in ("FOOD/store-assistant", "ACCT/fb-cutover", "NTV2/frontend", "SF/worker", "NAS/backup", "AADS/prompt"):
         assert target in drain
 
 
@@ -256,6 +256,16 @@ def test_unified_worker_enforces_sha_dirty_lease_and_health_contracts():
     assert "status" in worker and "--porcelain" in worker
     assert "post-deploy health failed" in worker
     assert "get_execution_target" in worker
+
+
+def test_acct_fb_cutover_target_runs_wrapper_without_aads_image_build():
+    target = sys.modules["app.services.deploy_adapters.targets"].get_execution_target("ACCT", "fb-cutover")
+    assert target is not None and target.executor == "local"
+    assert target.command[-1].endswith("scripts/deploy_acct_fb_cutover.sh")
+    adapter = registry.resolve_adapter("ACCT", "fb-cutover")
+    assert adapter.ownership == "central_worker"
+    assert target.timeout_seconds == 1200
+    # ordering, recovery and exit codes of the wrapper: tests/unit/test_acct_fb_cutover_wrapper.py
 
 
 def test_food_deploy_reuses_release_image_and_only_replaces_food_service():
