@@ -1,3 +1,11 @@
+## 2026-10-03 — R-DOC 목업 검토 운영 배포·채팅 실사용 검증 (AADS-RDOC-MOCKUP-OPERATIONS-20261003) — 선행 미충족으로 차단
+
+**DB handover entry_key `rdoc-mockup-operations-20261003`. 상태: blocked. 배포·큐 등록·5분 관찰·채팅 실사용 검증은 수행하지 않았고 완료가 아니다. M6~M9 미달성.** 상세: `docs/reports/20261003_RDOC_MOCKUP_RELEASE.md`.
+- 사유: 기준 SHA f20da86b(= origin/main)에 A(백엔드)·B(채팅 UI)·C(게이트·오비스 알림 연결)가 없다. A 는 runner-2f93e68d 워크트리에 스테이징만 된 미커밋 상태, B/C 는 변경 자체가 없다. 운영 DB 에 `mockup%` 테이블 0개(읽기 전용 조회).
+- deploy_run_id 없음, 배포 대상 두 repo SHA 없음(API f20da86b·dashboard 6d0cfb6 은 현재 HEAD 일 뿐 이 기능 미포함). 승인 상태·`approved_revision_id`·알림 설정 변경 없음.
+- CEO 결정 반영: 알림은 오비스 내부 알림만(외부 채널·fallback 금지). A 코드에는 외부 sender 가 없으나 목업 검토 이벤트와 오비스 알림 연결도 없어 정책 충족은 **검증 불가 = 미달**(릴리스 인증 금지).
+- 재개: A/B/C 검수·push 후 마이그레이션 먼저 → bluegreen/ops 큐 → 5분 관찰 → 권한 있는 fixture 승인과 실사용자 승인 경로 분리한 /chat 검증. 대상·영향·rollback 은 보고서 §4.
+
 ## 2026-10-03 — 오비서 클로브 자료현황·거래검토·경영요약 UI (ACCT-CLOBE-OBYS-FEATURE-DESIGN-20261003-R5)
 
 **DB handover entry_key `acct-clobe-ui-held-resume-20261003-r5`. 상태: 코드·테스트·합성 데이터 화면 검증 완료(미커밋 — Runner 가 승인 후 commit/push). 실제 SHA·digest·운영 URL·실로그인·운영 캡처·ops deploy_run_id·300초 모니터링은 아직 없다(해당 없음이 아니라 미수행). 전체 이관 완료가 아니다.**
