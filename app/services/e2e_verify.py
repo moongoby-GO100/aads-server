@@ -94,8 +94,12 @@ async def load_passing_evidence(conn: Any, job_id: str) -> dict[str, Any] | None
     return evidence if evidence_passes_gate(evidence) else None
 
 
-DEFERRED_LOG_TYPE = "e2e_evidence_deferred"
-OVERDUE_LOG_TYPE = "screen_evidence_overdue"
+# task_logs_log_type_check only allows info/command/output/error/phase_change/e2e_evidence,
+# so deferral/overdue rows are 'info' and told apart by phase (varchar(50), unconstrained).
+DEFERRED_LOG_TYPE = "info"
+OVERDUE_LOG_TYPE = "info"
+DEFERRED_PHASE = "e2e_screen_evidence_deferred"
+OVERDUE_PHASE = "e2e_screen_evidence_overdue"
 DEFER_REASON_MIN_CHARS = 10
 DEFER_DEADLINE_MINUTES = 60
 
@@ -120,9 +124,11 @@ async def load_deferred_evidence(conn: Any, job_id: str) -> dict[str, Any] | Non
     """Latest CEO-approved 'verify after deploy' record for the job, if any."""
     row = await conn.fetchrow(
         """SELECT metadata FROM task_logs
-             WHERE task_id=$1 AND log_type='e2e_evidence_deferred'
+             WHERE task_id=$1 AND log_type=$2 AND phase=$3
              ORDER BY created_at DESC LIMIT 1""",
         job_id,
+        DEFERRED_LOG_TYPE,
+        DEFERRED_PHASE,
     )
     if not row:
         return None
@@ -149,9 +155,11 @@ async def record_screen_evidence_deferral(
     }
     await conn.execute(
         """INSERT INTO task_logs (task_id, log_type, content, phase, metadata)
-           VALUES ($1, 'e2e_evidence_deferred', $2, 'e2e_verify', $3::jsonb)""",
+           VALUES ($1, $2, $3, $4, $5::jsonb)""",
         job_id,
+        DEFERRED_LOG_TYPE,
         f"screen evidence deferred to post-deploy: {reason}"[:2000],
+        DEFERRED_PHASE,
         json.dumps(metadata, ensure_ascii=False),
     )
     return metadata
@@ -194,12 +202,16 @@ async def check_overdue_deferred_evidence(
     rows = await conn.fetch(
         """SELECT t.task_id AS job_id, t.metadata
              FROM task_logs t
-            WHERE t.log_type='e2e_evidence_deferred'
+            WHERE t.log_type=$1 AND t.phase=$2
               AND t.created_at > NOW() - INTERVAL '7 days'
               AND NOT EXISTS (
                     SELECT 1 FROM task_logs o
-                     WHERE o.task_id=t.task_id AND o.log_type='screen_evidence_overdue')
-            ORDER BY t.created_at LIMIT 20"""
+                     WHERE o.task_id=t.task_id AND o.log_type=$3 AND o.phase=$4)
+            ORDER BY t.created_at LIMIT 20""",
+        DEFERRED_LOG_TYPE,
+        DEFERRED_PHASE,
+        OVERDUE_LOG_TYPE,
+        OVERDUE_PHASE,
     )
     alerted: list[str] = []
     for row in rows or []:
@@ -232,9 +244,11 @@ async def check_overdue_deferred_evidence(
             continue
         await conn.execute(
             """INSERT INTO task_logs (task_id, log_type, content, phase, metadata)
-               VALUES ($1, 'screen_evidence_overdue', $2, 'e2e_verify', $3::jsonb)""",
+               VALUES ($1, $2, $3, $4, $5::jsonb)""",
             job_id,
+            OVERDUE_LOG_TYPE,
             "deferred screen evidence overdue",
+            OVERDUE_PHASE,
             json.dumps({"deadline_at": metadata.get("deadline_at"), "reason": metadata.get("reason")}, ensure_ascii=False),
         )
         alerted.append(job_id)

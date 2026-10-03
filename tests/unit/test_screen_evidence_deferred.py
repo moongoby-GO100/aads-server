@@ -14,6 +14,9 @@ SCREEN_INSTRUCTION = "UI 변경: 새 화면 페이지 추가"
 SCREEN_FILES = ["public/ext-auth.html"]
 JOB = "runner-4d94bec8"
 
+# task_logs_log_type_check (live DB constraint) and column widths: log_type varchar(20), phase varchar(50)
+ALLOWED_LOG_TYPES = {"info", "command", "output", "error", "phase_change", "e2e_evidence"}
+
 PASSING_EVIDENCE = {
     "schema": "aads.e2e_verify.v1",
     "passed": True,
@@ -31,8 +34,11 @@ class FakeConn:
         if evidence is not None:
             self.task_logs.append({"task_id": JOB, "log_type": "e2e_evidence", "metadata": {"evidence": evidence}})
 
-    def _latest(self, job_id, log_type):
-        rows = [r for r in self.task_logs if r["task_id"] == job_id and r["log_type"] == log_type]
+    def _latest(self, job_id, log_type, phase=None):
+        rows = [
+            r for r in self.task_logs
+            if r["task_id"] == job_id and r["log_type"] == log_type and r.get("phase") == phase
+        ]
         return rows[-1] if rows else None
 
     async def fetchrow(self, query, *args):
@@ -44,24 +50,31 @@ class FakeConn:
             logs.append({"event": "screen_evidence_overdue", "deadline_at": args[1]})
             session, project = self.job_sessions.get(job_id, ("sess-1", "AADS"))
             return {"chat_session_id": session, "project": project}
-        for log_type in ("e2e_evidence_deferred", "e2e_evidence"):
-            if f"log_type='{log_type}'" in query:
-                row = self._latest(args[0], log_type)
-                return {"metadata": row["metadata"]} if row else None
+        if "log_type='e2e_evidence'" in query:
+            row = self._latest(args[0], "e2e_evidence")
+            return {"metadata": row["metadata"]} if row else None
+        if "log_type=$2 AND phase=$3" in query:
+            row = self._latest(args[0], args[1], args[2])
+            return {"metadata": row["metadata"]} if row else None
         raise AssertionError(query)
 
     async def fetch(self, query, *args):
-        assert "e2e_evidence_deferred" in query
-        done = {r["task_id"] for r in self.task_logs if r["log_type"] == "screen_evidence_overdue"}
+        deferred_type, deferred_phase, overdue_type, overdue_phase = args
+        done = {
+            r["task_id"] for r in self.task_logs
+            if r["log_type"] == overdue_type and r.get("phase") == overdue_phase
+        }
         return [
             {"job_id": r["task_id"], "metadata": r["metadata"]}
             for r in self.task_logs
-            if r["log_type"] == "e2e_evidence_deferred" and r["task_id"] not in done
+            if r["log_type"] == deferred_type and r.get("phase") == deferred_phase and r["task_id"] not in done
         ]
 
     async def execute(self, query, *args):
-        log_type = "e2e_evidence_deferred" if "'e2e_evidence_deferred'" in query else "screen_evidence_overdue"
-        self.task_logs.append({"task_id": args[0], "log_type": log_type, "metadata": json.loads(args[2])})
+        task_id, log_type, _content, phase, metadata = args
+        assert log_type in ALLOWED_LOG_TYPES and len(log_type) <= 20
+        assert len(phase) <= 50
+        self.task_logs.append({"task_id": task_id, "log_type": log_type, "phase": phase, "metadata": json.loads(metadata)})
         return "INSERT 0 1"
 
 
@@ -84,7 +97,8 @@ async def test_b_defer_with_reason_passes_and_records():
     conn = FakeConn()
     await _gate(conn, defer_screen_evidence=True, defer_reason="신규 공개 페이지라 배포 후에만 검증 가능", approver="ceo-1")
     [row] = conn.task_logs
-    assert row["log_type"] == "e2e_evidence_deferred"
+    assert row["log_type"] == e2e_verify.DEFERRED_LOG_TYPE == "info"
+    assert row["phase"] == e2e_verify.DEFERRED_PHASE == "e2e_screen_evidence_deferred"
     meta = row["metadata"]
     assert meta["approver"] == "ceo-1"
     assert "배포 후에만" in meta["reason"]
@@ -204,3 +218,26 @@ def test_approve_request_defaults_and_mcp_schema():
     assert props["defer_reason"]["type"] == "string"
     assert "CEO 명시 승인" in tool["description"]
     assert tool["input_schema"]["required"] == ["job_id", "action"]
+
+
+def test_log_types_fit_db_check_constraint_and_column_widths():
+    assert e2e_verify.DEFERRED_LOG_TYPE in ALLOWED_LOG_TYPES
+    assert e2e_verify.OVERDUE_LOG_TYPE in ALLOWED_LOG_TYPES
+    assert e2e_verify.DEFERRED_LOG_TYPE != "e2e_evidence" and e2e_verify.OVERDUE_LOG_TYPE != "e2e_evidence"
+    for log_type in (e2e_verify.DEFERRED_LOG_TYPE, e2e_verify.OVERDUE_LOG_TYPE):
+        assert len(log_type) <= 20
+    assert e2e_verify.DEFERRED_PHASE != e2e_verify.OVERDUE_PHASE
+    for phase in (e2e_verify.DEFERRED_PHASE, e2e_verify.OVERDUE_PHASE):
+        assert len(phase) <= 50
+
+
+@pytest.mark.asyncio
+async def test_overdue_row_uses_allowed_log_type_and_overdue_phase():
+    conn = FakeConn()
+    start = datetime(2026, 10, 3, 9, 0, tzinfo=timezone.utc)
+    await e2e_verify.record_screen_evidence_deferral(conn, job_id=JOB, approver="ceo", reason="배포 후에만 검증 가능", now=start)
+    await check_overdue_deferred_evidence(conn, now=start + timedelta(hours=2))
+    assert [(r["log_type"], r["phase"]) for r in conn.task_logs] == [
+        ("info", "e2e_screen_evidence_deferred"),
+        ("info", "e2e_screen_evidence_overdue"),
+    ]
