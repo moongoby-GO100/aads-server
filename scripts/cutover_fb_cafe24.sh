@@ -455,7 +455,7 @@ edge_install() { # $1 = rendered file; backs up, tests, reloads. Caller holds th
 # In-lock check: one bounded request to the local edge, no sleep, no ssh.
 routed_health_local() { # $1 = nonce
   local code
-  code=$(curl -s --connect-timeout 2 -m 5 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST/health/live?probe=$1" || true)
+  code=$(curl -sk --connect-timeout 2 -m 5 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST/health/live?probe=$1" || true)
   [[ $code == 200 ]] || { say "routed health -> $code"; return 1; }
 }
 
@@ -474,10 +474,10 @@ verify_served_by_cafe24() { # $1 = nonce
 edge_qa() { # post-unlock QA through the local edge
   local p c
   for p in /health/live /static/apps/obys/index.html; do
-    c=$(curl -s -m 15 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST$p" || true)
+    c=$(curl -sk -m 15 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST$p" || true)
     [[ $c == 200 ]] || { say "QA $p -> $c"; return 1; }
   done
-  c=$(curl -s -m 15 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST/api/v1/health" || true)
+  c=$(curl -sk -m 15 -o /dev/null -w '%{http_code}' --resolve "$FB_HOST:443:127.0.0.1" "https://$FB_HOST/api/v1/health" || true)
   [[ $c == 401 || $c == 200 ]] || { say "QA /api/v1/health -> $c"; return 1; }
 }
 
