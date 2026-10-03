@@ -1,3 +1,14 @@
+## 2026-10-03 — 목업 구현 연쇄 산출물 검증 및 릴리스 준비 (AADS-RDOC-MOCKUP-RELEASE-EVIDENCE-20261003) — blocked
+
+**DB handover entry_key 제안 `rdoc-mockup-release-recovery-20261003`: 미기록(인증 토큰·`psql`·`asyncpg` 없음, 이 세션에 `handover_write`/Vault/bridge 도구 없음 → HANDOVER.md 에만 기록. 충돌 시 DB 기록 우선, Runner/후속 세션이 아래 내용으로 기록). 상태: blocked. 배포·운영 DB migration·재시작·commit/push 없음, 완료/릴리스 인증 주장 없음. M9 는 completed 로 바꾸지 않았다.** 상세: `docs/reports/20261003_RDOC_MOCKUP_RELEASE_RECOVERY.md`.
+- 정정: 바로 아래쪽 `rdoc-mockup-operations-20261003` 항목의 "A 는 미커밋" 은 이후 사실이 아니다. A 는 `1d19322f27b3de994723c4d09048b042906859c3` 로 origin/main 에 반영됨(`git fetch` 후 확인).
+- A(runner-aad81f4d) **검증됨**: mockup API 12개 엔드포인트·모델·서비스·additive migration(5테이블, rollback SQL 없음)·테스트. 이 러너 재실행: `scripts/run_unit_tests.sh tests/unit/test_mockup_reviews.py` 50 passed, ruff F821/F811 통과, compileall rc=0. Postgres 통합 15개는 이 호스트에 DB 가 없어 **미실행**(통과로 적지 않음).
+- B(runner-fe81943c) **blocked**: dashboard 커밋 `ad2fa25` 가 로컬 `backup/runner-fe81943c-ad2fa25` 에만 있고 origin/main·로컬 HEAD 의 조상이 아니다. 자체 보고서도 `page.tsx` 연결 보류(부분 완료).
+- C(runner-48e5aafb) **blocked**: 두 저장소 어디에도 커밋·워크트리 없음. submit/worker gate 호출처 없음(`verify` 엔드포인트만 존재), 오비스 내부 알림 생산자 없음. A·B 소스에 외부 sender 코드는 없음.
+- 운영 확인(읽기 전용): `aads-server`·`aads-server-green` 모두 이미지 `f20da86b056c`, A 파일·migration 없음 → 운영 미배포. 기존 운영 배포 승인 기록은 **미확인**(DB 조회 불가).
+- 릴리스 범위 경고: f20da86b→1d19322f 는 6커밋이며 목업 외 채팅 interrupt·세션 effort·payload 검증·마일스톤 owner API 가 함께 나간다. migration 3개(mockup_reviews·chat_session_effort·chat_interrupt_states), down SQL 은 effort 만 있음.
+- 미수행: 브라우저 E2E(/chat desktop/mobile·권한·세션복구), 알림 표시·정확한 revision 클릭 증거, 배포. 시각 E2E 는 완료가 아니다. 다음: B push → C 구현 → 원 세션 CEO 배포 승인 → Runner 가 `bash deploy.sh bluegreen`(1 SHA 1 build, `--no-build`, candidate health 후 lock, epoch fencing, drain, same-digest standby, routed health 실패 시 즉시 rollback, 5분 P0/P1 관찰). 비용 $ 미측정.
+
 ## 2026-10-03 — 표준 목표 API 마일스톤 담당 세션 지정 (AADS-GOAL-MILESTONE-OWNER-API-P1-20261003)
 
 **DB handover entry_key `goal-milestone-owner-api-20261003`. 상태: 코드·테스트 완료(커밋 전 — Runner 가 승인 후 commit/push). 배포·운영 데이터 변경 없음 — 기존 NULL owner 10건(sequence 701-705, 711-715)은 아직 채워지지 않았고, 배포 후 이 API 로 지정해야 한다.**
