@@ -175,7 +175,7 @@ cmd_lint() {
   local src="$EDGE_CONF"
   [[ -f $src ]] || src="$REPO_ROOT/nginx-fb.conf"
   [[ -f $src ]] || die "no nginx fb.conf to test rendering against"
-  local out; out="$(mktemp)"; trap 'rm -f "$out"' RETURN
+  local out; out="$(mktemp)"; trap 'rm -f "${out:-}"; trap - RETURN' RETURN
   render_edge "$src" >"$out"
   ! grep -q 'yeoljeong_finance_api' "$out" || die "edge render left a yeoljeong_finance_api proxy_pass"
   local pp ssl dash_in dash_out
