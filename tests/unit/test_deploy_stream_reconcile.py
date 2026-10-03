@@ -146,14 +146,15 @@ def test_deploy_db_exec_preserves_successful_query_output():
 
 def test_standby_sync_failure_cannot_be_certified_as_partial_success():
     deploy_script = (Path(__file__).parents[2] / "deploy.sh").read_text()
-    failure_path = deploy_script.split(
-        'case "${_standby_rc:-0}" in', 1
-    )[1].split('HEALTH_URL="http://localhost:${NEW_PORT}', 1)[0]
-    hard_failure = failure_path.split("*)", 1)[1]
+    handler = deploy_script.split("handle_standby_sync_result() {", 1)[1].split(
+        "\n}\n", 1
+    )[0]
+    hard_failure = handler.split("*)", 1)[1]
 
     assert 'record_deploy "failed" "$MODE"' in hard_failure
-    assert "exit 1" in hard_failure
+    assert "return 1" in hard_failure
     assert "success_partial" not in hard_failure
+    assert 'handle_standby_sync_result "$_standby_rc" || exit 1' in deploy_script
 
 
 def test_standby_drain_timeout_preserves_streams_but_blocks_certification():

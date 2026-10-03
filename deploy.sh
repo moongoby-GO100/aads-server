@@ -2383,6 +2383,87 @@ restart_old_slot_after_drain() {
     disown
 }
 
+# 양 슬롯이 같은 이미지 digest 를 실제로 돌리는지 docker 로 직접 확인한다.
+# 어느 한쪽이라도 읽지 못하면 불일치로 본다(fail closed).
+standby_same_digest_verified() {
+    local active_container="${1:-}"
+    local standby_container="${2:-}"
+    STANDBY_VERIFY_ACTIVE_IMAGE=""
+    STANDBY_VERIFY_STANDBY_IMAGE=""
+    [[ -n "$active_container" && -n "$standby_container" ]] || return 1
+    STANDBY_VERIFY_ACTIVE_IMAGE="$(docker inspect "$active_container" --format '{{.Image}}' 2>/dev/null || true)"
+    STANDBY_VERIFY_STANDBY_IMAGE="$(docker inspect "$standby_container" --format '{{.Image}}' 2>/dev/null || true)"
+    [[ -n "$STANDBY_VERIFY_ACTIVE_IMAGE" && -n "$STANDBY_VERIFY_STANDBY_IMAGE" ]] || return 1
+    [[ "$STANDBY_VERIFY_ACTIVE_IMAGE" == "$STANDBY_VERIFY_STANDBY_IMAGE" ]]
+}
+
+# sync_standby_slot_after_drain 의 종료코드를 릴리스 인증 상태로 번역한다.
+#   0 = 동기화·검증 완료. 단, 호출자가 digest 를 독립적으로 다시 확인해야만 인증.
+#   2 = 대기 슬롯에 활성 스트림이 남아 drain 미완료 (pending)
+#   3 = 동기화를 건너뜀: lock busy / stale generation / ownership 변경 (skipped)
+#   그 외 = 실패
+# 반환: 0 = 배포 계속(인증 보류 가능), 1 = 치명 실패(호출자가 exit 1).
+# STANDBY_SYNC_DEFERRED=true 이면 최종 상태는 success_partial 이다.
+handle_standby_sync_result() {
+    local rc="${1:-1}"
+    STANDBY_SYNC_DEFERRED=false
+    STANDBY_SYNC_DEFER_REASON=""
+    case "$rc" in
+        0)
+            if standby_same_digest_verified "${NEW_CONTAINER:-}" "${OLD_CONTAINER:-}"; then
+                deploy_phase_end "standby_same_digest_sync" "success" ""
+                return 0
+            fi
+            notify "❌ Blue-Green 인증 실패: standby same-digest 동기화 실패"
+            deploy_phase_end "standby_same_digest_sync" "failed" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}: digest not verified after sync"
+            record_deploy "failed" "$MODE" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}: digest not verified after sync"
+            return 1
+            ;;
+        2)
+            # 활성 스트림이 남아 드레인하지 못한 경우. 진행 중인 대화를 끊지
+            # 않으려는 의도된 동작이며 서비스에는 영향이 없다. 배포를 여기서
+            # 중단하지 않고 검증을 계속한 뒤 success_partial 로 닫는다.
+            STANDBY_SYNC_DEFERRED=true
+            STANDBY_SYNC_DEFER_REASON="active streams"
+            notify "⚠️ standby 동기화 보류: 활성 스트림 때문에 ${OLD_CONTAINER} 가 구버전으로 남음"
+            deploy_phase_end "standby_same_digest_sync" "skipped" "deferred: active streams on ${OLD_CONTAINER}:${OLD_PORT}"
+            schedule_standby_sync_retry "$DEPLOY_RUN_ID" || true
+            echo "[deploy.sh] ⚠️ standby 동기화 보류 — 활성 슬롯은 새 릴리스로 정상 동작"
+            return 0
+            ;;
+        3)
+            STANDBY_SYNC_DEFERRED=true
+            STANDBY_SYNC_DEFER_REASON="skipped: ${STANDBY_SYNC_SKIP_REASON:-unknown}"
+            notify "⚠️ standby 동기화 건너뜀(${STANDBY_SYNC_SKIP_REASON:-unknown}): ${OLD_CONTAINER} 가 같은 digest 로 인증되지 않음"
+            deploy_phase_end "standby_same_digest_sync" "skipped" "skipped: ${STANDBY_SYNC_SKIP_REASON:-unknown} on ${OLD_CONTAINER}:${OLD_PORT}; same-digest not verified"
+            schedule_standby_sync_retry "$DEPLOY_RUN_ID" || true
+            echo "[deploy.sh] ⚠️ standby 동기화 건너뜀 — 릴리스 인증 보류 (${STANDBY_SYNC_SKIP_REASON:-unknown})"
+            return 0
+            ;;
+        *)
+            notify "❌ Blue-Green 인증 실패: standby same-digest 동기화 실패"
+            deploy_phase_end "standby_same_digest_sync" "failed" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
+            record_deploy "failed" "$MODE" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
+            return 1
+            ;;
+    esac
+}
+
+# 최종 상태 결정. 인증(success)은 standby 가 보류되지 않았고, bluegreen 이면
+# 5분 모니터링 뒤에도 양 슬롯 digest 가 같을 때만 허용한다.
+resolve_final_deploy_status() {
+    FINAL_DEPLOY_STATUS="success"
+    FINAL_DEPLOY_ERROR=""
+    if [[ "${STANDBY_SYNC_DEFERRED:-false}" == "true" ]]; then
+        FINAL_DEPLOY_STATUS="success_partial"
+        FINAL_DEPLOY_ERROR="standby sync deferred: ${STANDBY_SYNC_DEFER_REASON:-active streams}"
+    elif [[ "${MODE:-}" == "bluegreen" ]] \
+            && ! standby_same_digest_verified "${NEW_CONTAINER:-}" "${OLD_CONTAINER:-}"; then
+        FINAL_DEPLOY_STATUS="success_partial"
+        FINAL_DEPLOY_ERROR="standby sync deferred: active/standby image digest mismatch at final certification"
+    fi
+}
+
 sync_standby_slot_after_drain() {
     local old_container="$1"
     local old_port="$2"
@@ -2400,13 +2481,17 @@ sync_standby_slot_after_drain() {
         fi
 
         exec 9>"/tmp/aads-standby-sync.lock"
+        # return 3 = skipped. 동기화를 하지 않았으므로 same-digest 인증은 성립하지
+        # 않는다. 예전에는 return 0 이라 호출자가 "성공"으로 읽었다(SHA 520b5326).
         flock -w 30 9 || {
-            audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "standby lock busy"
-            return 0
+            STANDBY_SYNC_SKIP_REASON="standby lock busy"
+            audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "$STANDBY_SYNC_SKIP_REASON"
+            return 3
         }
         if ! standby_ownership_valid "$old_container" "$old_port" "$expected_generation"; then
-            audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "stale generation or slot became active"
-            return 0
+            STANDBY_SYNC_SKIP_REASON="stale generation or slot became active"
+            audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "$STANDBY_SYNC_SKIP_REASON"
+            return 3
         fi
         reconcile_inactive_target_recovery_executions "$old_container"
         echo "[deploy.sh] standby sync pre-drain graceful shutdown trigger on inactive slot :${old_port}"
@@ -2474,9 +2559,11 @@ sync_standby_slot_after_drain() {
 
         if ! standby_ownership_valid "$old_container" "$old_port" "$expected_generation"; then
             # RC7: ownership change after drain is not a release failure — the slot was
-            # re-activated by a newer deploy generation. Skip, do not fail the release.
-            audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "ownership changed after drain"
-            return 0
+            # re-activated by a newer deploy generation. 실패로 기록하지는 않지만
+            # 이 릴리스의 standby 는 동기화되지 않았으므로 인증도 하지 않는다.
+            STANDBY_SYNC_SKIP_REASON="ownership changed after drain"
+            audit_control "standby-sync" "${old_container}:${old_port}" "skipped" "$STANDBY_SYNC_SKIP_REASON"
+            return 3
         fi
 
         echo "[deploy.sh] standby sync PC Agent reconnect trigger on drained old slot :${old_port}"
@@ -2497,10 +2584,8 @@ sync_standby_slot_after_drain() {
 
         if wait_port_health "$old_port" 90; then
             active_container="$(tr -d '[:space:]' < "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true)"
-            active_image="$(docker inspect "$active_container" --format '{{.Image}}' 2>/dev/null || true)"
-            standby_image="$(docker inspect "$old_container" --format '{{.Image}}' 2>/dev/null || true)"
-            if [[ -z "$active_image" || -z "$standby_image" || "$active_image" != "$standby_image" ]]; then
-                echo "[deploy.sh] standby sync ERROR: image digest mismatch active=${active_image:-missing} standby=${standby_image:-missing}"
+            if ! standby_same_digest_verified "$active_container" "$old_container"; then
+                echo "[deploy.sh] standby sync ERROR: image digest mismatch active=${STANDBY_VERIFY_ACTIVE_IMAGE:-missing} standby=${STANDBY_VERIFY_STANDBY_IMAGE:-missing}"
                 audit_control "standby-sync" "${old_container}:${old_port}" "failed" "active/standby image digest mismatch"
                 return 1
             fi
@@ -3037,29 +3122,9 @@ case "$MODE" in
         write_active_slot_state "$NEW_PORT" "$NEW_CONTAINER" "deploy.sh" "bluegreen routed health passed"
         docker exec "$NEW_CONTAINER" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
         docker exec "$OLD_CONTAINER" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-        STANDBY_SYNC_DEFERRED=false
+        _standby_rc=0
         sync_standby_slot_after_drain "$OLD_CONTAINER" "$OLD_PORT" "$DEPLOY_GENERATION" || _standby_rc=$?
-        case "${_standby_rc:-0}" in
-            0)
-                deploy_phase_end "standby_same_digest_sync" "success" ""
-                ;;
-            2)
-                # 활성 스트림이 남아 드레인하지 못한 경우. 진행 중인 대화를 끊지
-                # 않으려는 의도된 동작이며 서비스에는 영향이 없다. 배포를 여기서
-                # 중단하지 않고 검증을 계속한 뒤 success_partial 로 닫는다.
-                STANDBY_SYNC_DEFERRED=true
-                notify "⚠️ standby 동기화 보류: 활성 스트림 때문에 ${OLD_CONTAINER} 가 구버전으로 남음"
-                deploy_phase_end "standby_same_digest_sync" "skipped" "deferred: active streams on ${OLD_CONTAINER}:${OLD_PORT}"
-                schedule_standby_sync_retry "$DEPLOY_RUN_ID" || true
-                echo "[deploy.sh] ⚠️ standby 동기화 보류 — 활성 슬롯은 새 릴리스로 정상 동작"
-                ;;
-            *)
-                notify "❌ Blue-Green 인증 실패: standby same-digest 동기화 실패"
-                deploy_phase_end "standby_same_digest_sync" "failed" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
-                record_deploy "failed" "$MODE" "standby same-digest sync failed for ${OLD_CONTAINER}:${OLD_PORT}"
-                exit 1
-                ;;
-        esac
+        handle_standby_sync_result "$_standby_rc" || exit 1
 
         HEALTH_URL="http://localhost:${NEW_PORT}/api/v1/health"
         echo "[deploy.sh] ✅ Blue-Green active 전환 + standby same-digest 동기화 완료: :${NEW_PORT} 활성"
@@ -3303,15 +3368,12 @@ done
 deploy_phase_end "p0p1_monitoring" "success" "seconds=${MONITOR_ELAPSED}"
 
 stop_downtime_monitor
-FINAL_DEPLOY_STATUS="success"
-FINAL_DEPLOY_ERROR=""
-if [[ "${STANDBY_SYNC_DEFERRED:-false}" == "true" ]]; then
-    # Cutover is healthy, but the old slot is still serving a live stream and
-    # therefore cannot yet be replaced by the immutable release image. Keep the
-    # run explicitly uncertified until both digests match.
-    FINAL_DEPLOY_STATUS="success_partial"
-    FINAL_DEPLOY_ERROR="standby sync deferred: active streams"
-    echo "[deploy.sh] ⚠️ 트래픽 전환 성공, 릴리스 인증 보류 — standby same-digest 미충족"
+resolve_final_deploy_status
+if [[ "$FINAL_DEPLOY_STATUS" == "success_partial" ]]; then
+    # Cutover is healthy, but the standby slot was not proven to run the same
+    # immutable release image (active streams, skipped sync, or digest drift).
+    # Keep the run explicitly uncertified until both digests match.
+    echo "[deploy.sh] ⚠️ 트래픽 전환 성공, 릴리스 인증 보류 — standby same-digest 미충족 (${FINAL_DEPLOY_ERROR})"
     notify "⚠️ 트래픽 전환 성공, 릴리스 인증 보류 — standby 동기화 필요"
 else
     echo "[deploy.sh] ✅ 배포 완료 — 필수 검증 통과 (mode=${MODE}, frontend_qa=${FRONTEND_QA_STATUS})"

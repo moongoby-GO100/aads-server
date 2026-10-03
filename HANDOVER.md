@@ -14787,3 +14787,11 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 검증: `bash scripts/run_unit_tests.sh tests/unit/test_rdoc_docs.py` 20 passed, 2 skipped(DB 승인본 대조 2건 — DB 미접속, 오프라인 sha256 검사는 통과). `git diff --check` 통과.
 - DB handover entry_key: 미기록(handover_write 도구가 이 세션에 없어 HANDOVER.md 에만 기록). 등록할 때 쓸 키 제안: `rdoc-ui-workflow-design-references-20261003`.
 - commit/push 는 Runner 승인 후. 목표 M1 완료로 판정하지 않는다.
+
+## 2026-10-03 — standby skipped 의 릴리스 성공 오판 교정 (AADS-DEPLOY-STANDBY-DIGEST-FAILCLOSED-R2-20261003)
+
+- 최신 코드(ca75c842)에서 재현: `sync_standby_slot_after_drain` 의 lock busy/stale generation/ownership 변경 3경로가 `return 0` → 호출부가 phase `success`·최종 `success` 로 인증(digest 미비교).
+- 변경(`deploy.sh`): skipped 는 `return 3`(+`STANDBY_SYNC_SKIP_REASON`), 호출부를 `handle_standby_sync_result` 로 추출(rc 0 도 `standby_same_digest_verified` 로 독립 재검증, 3 은 success_partial+재시도), 최종 상태는 `resolve_final_deploy_status`(bluegreen 은 모니터링 뒤 digest 재확인). `scripts/sync-standby.sh` 는 이미 fail-closed 라 무변경.
+- 시험: 신규 `tests/unit/test_deploy_standby_digest_failclosed.py` 18건(실제 함수 본문 + stub 서브프로세스, routed-health 롤백 포함), 변이 시험으로 검출력 확인. 기존 `test_deploy_stream_reconcile` 의 문자열 시험 1건을 함수 추출에 맞게 갱신.
+- 미실행: 운영 반영·실제 deploy. 기존 실패 `test_standby_session_ownership`(goal_dispatch) 1건은 무관해서 손대지 않음.
+- 상세: `reports/20261003_standby_digest_failclosed_RESULT.md`. DB handover 미기록(도구·토큰 없음). commit/push 는 Runner 승인 후.
