@@ -1,0 +1,184 @@
+{
+ "kst": "2026-10-03 14:18:02",
+ "login": 200,
+ "searches": [
+  {
+   "label": "pilot74 AADS contract",
+   "q": "W-14F 평가기 실행기 인터페이스 계약",
+   "project": null,
+   "status": 200,
+   "count": 20,
+   "canonical": [
+    {
+     "path": "canonical://AADS/contract:b4ad294d9869@ebda53f5-91b9-4517-a3c3-40c76540fb30",
+     "project": "AADS",
+     "title": "[승인 v1.0.0] W-14F 평가기·실행기 인터페이스 계약 v1",
+     "chunks": 8,
+     "similarity": 0.7875
+    }
+   ]
+  },
+  {
+   "label": "pilot92 AADS prd",
+   "q": "Blue/Green 무중단 배포 최적화 PRD",
+   "project": null,
+   "status": 200,
+   "count": 14,
+   "canonical": []
+  },
+  {
+   "label": "pilot109/110 AADS plan/prd",
+   "q": "OHVIS 문서 정본관리 게이트 기획서",
+   "project": "AADS",
+   "status": 200,
+   "count": 17,
+   "canonical": [
+    {
+     "path": "canonical://AADS/plan:7d9f483b5dba@6dfc2221-6219-4f75-bc11-47e505dd2b4c",
+     "project": "AADS",
+     "title": "[승인 v1.0.0] OHVIS 문서 정본관리 게이트 — 운영 기획서",
+     "chunks": 2,
+     "similarity": 0.8105
+    },
+    {
+     "path": "canonical://AADS/plan:7d9f483b5dba@7cdeae42-09b3-4760-831b-1594e6464753",
+     "project": "AADS",
+     "title": "[초안 v1.2.0] OHVIS 문서 정본관리 게이트 — 운영 기획서",
+     "chunks": 11,
+     "similarity": 0.8042
+    },
+    {
+     "path": "canonical://AADS/prd:848c81d57565@686c817c-c69e-41d3-a89a-0cba301e447b",
+     "project": "AADS",
+     "title": "[승인 v1.0.0] OHVIS 문서 정본관리 게이트 — 운영 PRD",
+     "chunks": 2,
+     "similarity": 0.7983
+    },
+    {
+     "path": "canonical://AADS/prd:848c81d57565@594b891d-7202-4932-bed6-1315552eee32",
+     "project": "AADS",
+     "title": "[초안 v1.2.0] OHVIS 문서 정본관리 게이트 — 운영 PRD",
+     "chunks": 11,
+     "similarity": 0.7929
+    }
+   ]
+  },
+  {
+   "label": "pilot119 ACCT spec",
+   "q": "obys-v4 approve spec 승인 흐름",
+   "project": "ACCT",
+   "status": 200,
+   "count": 4,
+   "canonical": [
+    {
+     "path": "canonical://ACCT/spec:304b66102a6f@c1082af2-a3ee-4222-a0c6-666502dc60ef",
+     "project": "ACCT",
+     "title": "[승인 v1.0.0] obys-v4/approve — spec",
+     "chunks": 1,
+     "similarity": 0.8549
+    },
+    {
+     "path": "canonical://ACCT/OBYS-CAFE24-CONSOLIDATION-TASKS-20261002@35313800-ca27-49d1-a28f-f58d04bdafd6",
+     "project": "ACCT",
+     "title": "[초안 v1.2.0] 오비서 비라일론 통합·카페24 업무계층",
+     "chunks": 19,
+     "similarity": 0.596
+    },
+    {
+     "path": "canonical://ACCT/OBYS-CAFE24-CONSOLIDATION-PLAN-20261002@e19e3744-8685-4bb2-adc7-251961f1d396",
+     "project": "ACCT",
+     "title": "[초안 v1.2.0] 오비서 비라일론 통합·카페24 보완계획",
+     "chunks": 7,
+     "similarity": 0.5937
+    },
+    {
+     "path": "canonical://ACCT/OBYS-CAFE24-CONSOLIDATION-PRD-20261002@71c1d695-c859-44a8-b805-e5903311119c",
+     "project": "ACCT",
+     "title": "[초안 v1.2.0] 오비서 비라일론 회계업무 통합·카페24 독립 운영 PRD",
+     "chunks": 15,
+     "similarity": 0.5879
+    }
+   ]
+  },
+  {
+   "label": "GO100 draft canonical",
+   "q": "GO100 파동 리스 리비전 무결성 데이터엔진",
+   "project": "GO100",
+   "status": 200,
+   "count": 20,
+   "canonical": []
+  }
+ ],
+ "pilot_doc_api": [
+  {
+   "project": "AADS",
+   "key": "contract:b4ad294d9869",
+   "status": 200,
+   "doc_status": "approved",
+   "authoritative": true,
+   "rev": 1,
+   "approved_only": {
+    "status": 200,
+    "doc_status": "approved",
+    "authoritative": true,
+    "rev": 1
+   }
+  },
+  {
+   "project": "AADS",
+   "key": "prd:e677db2cb301",
+   "status": 200,
+   "doc_status": "approved",
+   "authoritative": true,
+   "rev": 1,
+   "approved_only": {
+    "status": 200,
+    "doc_status": "approved",
+    "authoritative": true,
+    "rev": 1
+   }
+  },
+  {
+   "project": "AADS",
+   "key": "plan:7d9f483b5dba",
+   "status": 200,
+   "doc_status": "draft",
+   "authoritative": false,
+   "rev": 2,
+   "approved_only": {
+    "status": 200,
+    "doc_status": "approved",
+    "authoritative": true,
+    "rev": 1
+   }
+  },
+  {
+   "project": "AADS",
+   "key": "prd:848c81d57565",
+   "status": 200,
+   "doc_status": "draft",
+   "authoritative": false,
+   "rev": 2,
+   "approved_only": {
+    "status": 200,
+    "doc_status": "approved",
+    "authoritative": true,
+    "rev": 1
+   }
+  },
+  {
+   "project": "ACCT",
+   "key": "spec:304b66102a6f",
+   "status": 200,
+   "doc_status": "approved",
+   "authoritative": true,
+   "rev": 1,
+   "approved_only": {
+    "status": 200,
+    "doc_status": "approved",
+    "authoritative": true,
+    "rev": 1
+   }
+  }
+ ]
+}

@@ -1,0 +1,51 @@
+--- A. by project/tenant/server/label
+   server   | project | label |              tenant_id               | chunks | docs | emb | no_head | no_rev
+------------+---------+-------+--------------------------------------+--------+------+-----+---------+--------
+ vmi3267555 | AADS    | 정본  | tenant-a |    137 |   16 | 137 |       0 |      0
+ vmi3267555 | ACCT    | 정본  | tenant-a |     42 |    4 |  42 |       0 |      0
+ vmi3267555 | GO100   | 정본  | tenant-a |     81 |    3 |  81 |       0 |      0
+(3 rows)
+
+--- B. integrity vs heads/revisions (per distinct doc_path)
+ docs | head_missing | head_tenant_proj_mismatch | rev_missing | rev_head_mismatch | hash_mismatch | path_mismatch | is_approved_ptr | is_latest_not_approved | stale_pointer | t_approved | t_draft | t_approved_but_not_approved_ptr | t_draft_but_is_approved_ptr
+------+--------------+---------------------------+-------------+-------------------+---------------+---------------+-----------------+------------------------+---------------+------------+---------+---------------------------------+-----------------------------
+   23 |            0 |                         0 |           0 |                 0 |             0 |             0 |               5 |                     18 |             0 |          5 |      18 |                               0 |                           0
+(1 row)
+
+--- C. internal-tenant heads vs indexed (missing/extra)
+ heads_all | heads_internal | heads_other_tenant | heads_indexed | heads_internal_not_indexed | approved_rev_not_indexed | draft_rev_not_indexed | idx_orphans
+-----------+----------------+--------------------+---------------+----------------------------+--------------------------+-----------------------+-------------
+        21 |             21 |                  0 |            21 |                          0 |                        0 |                     0 |           0
+(1 row)
+
+--- D. duplicates
+ dup_path_chunkidx
+-------------------
+                 0
+(1 row)
+
+ heads_with_multi_rev_indexed
+------------------------------
+                            2
+(1 row)
+
+ empty_content_chunks
+----------------------
+                    0
+(1 row)
+
+--- E. non-canonical rows leaking canonical markers (should be 0)
+ label_jeongbon_non_canonical_path
+-----------------------------------
+                                 0
+(1 row)
+
+ canonical_path_without_label
+------------------------------
+                            0
+(1 row)
+
+ tenant_set_on_non_canonical
+-----------------------------
+                           0
+(1 row)

@@ -1,0 +1,7 @@
+== 이전 관리자 JWT 노출 — 회수/만료 안전 점검 (코드·메타데이터만, 토큰 값은 읽지 않음)
+app/auth.py:36  TOKEN_EXPIRE_HOURS = 24 * 7  (발급 후 7일 만료)
+app/auth.py:83-95 create_token payload = sub,email,is_admin,tenant_id,iat,exp  → jti 없음
+grep -rn auth_revoked_tokens app --include=*.py → 참조 0건 (테이블은 존재하나 검증 경로에서 쓰지 않음)
+auth_revoked_tokens 컬럼: jti,user_id,expires_at,revoked_at,revoked_reason / 행수 14 (R5 노출 토큰은 jti 가 없어 개별 회수 불가)
+추정 만료: R5 노출 시각 2026-10-03 약 14:20~14:30 KST + 7일 = 약 2026-10-10 14:20~14:30 KST (정확한 iat 는 토큰을 읽지 않아 확인하지 못함)
+결론: 개별 회수 수단 없음. 확실한 무효화는 JWT 서명키 교체(전 세션 로그아웃)뿐이며 CEO 판단·승인 사항이다. 이 세션은 키/자격증명을 변경하지 않았다.

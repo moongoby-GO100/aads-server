@@ -1,0 +1,25 @@
+== aads-server
+7
+33:require_tenant_member = require_tenant_role(TenantRole.MEMBER)
+1058:    context: TenantContext = Depends(require_tenant_member),
+1080:    context: TenantContext = Depends(require_tenant_member),
+962b33f9876c36f791c8e9406ba7b216  /app/app/services/doc_index.py
+72dc37eae0d1e527ac7ea354006fe8fe  /app/app/api/project_docs.py
+== aads-server-green
+7
+33:require_tenant_member = require_tenant_role(TenantRole.MEMBER)
+1058:    context: TenantContext = Depends(require_tenant_member),
+1080:    context: TenantContext = Depends(require_tenant_member),
+962b33f9876c36f791c8e9406ba7b216  /app/app/services/doc_index.py
+72dc37eae0d1e527ac7ea354006fe8fe  /app/app/api/project_docs.py
+962b33f9876c36f791c8e9406ba7b216  app/services/doc_index.py
+72dc37eae0d1e527ac7ea354006fe8fe  app/api/project_docs.py
+== nginx active upstream
+/etc/nginx/conf.d/aads-upstream.conf.bak.20260714-chat-fields:2:# 적용 위치: /etc/nginx/conf.d/aads-upstream.conf
+/etc/nginx/conf.d/aads-upstream.conf.bak.20260714-chat-fields:8:    server 127.0.0.1:8102 max_fails=0;
+/etc/nginx/conf.d/aads-upstream.conf.bak.20260714-chat-fields:9:    server 127.0.0.1:8100 max_fails=3 fail_timeout=30s backup;
+/etc/nginx/conf.d/aads-upstream.conf.bak.20260714-chat-fields:17:    server 127.0.0.1:8102 max_fails=0;
+/etc/nginx/conf.d/aads-upstream.conf.bak.20260714-chat-fields:18:    server 127.0.0.1:8100 max_fails=3 fail_timeout=30s backup;
+== 5557 events / p0p1
+id project release_sha runner_job_id deploy_history_id status phase phase_started_at phase_completed_at duration_ms estimated_remaining_ms current_slot candidate_slot image_digest standby_digest queue_position error_summary created_at updated_at deploy_pid deploy_generation last_heartbeat_at requested_by request_source commit_status push_status auto_start request_payload requested_at component deploy_type target_env release_title release_summary rollback_plan approval_policy chat_session_id session_notification_status session_notification_attempts session_notification_owner session_notification_claimed_at session_notified_at session_notification_error
+deploy_batch_inclusions deploy_components deploy_history deploy_locks deploy_phase_events deploy_recent_durations deploy_release_manifests deploy_release_provenance deploy_runs deploy_standby_holds

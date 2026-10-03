@@ -1,0 +1,31 @@
+--- heads (no content)
+ project_key |                document_key                 |   head   | g | has_approved | latest_is_approved | latest_rev | version | source_kind |                       src_path                        | chunks |                                   idx_titles                                    |  last_event
+-------------+---------------------------------------------+----------+---+--------------+--------------------+------------+---------+-------------+-------------------------------------------------------+--------+---------------------------------------------------------------------------------+---------------
+ AADS        | aads-current-authority-context              | 1e4290e6 | 1 | f            |                    |          1 | 1.0.0   | api         |                                                       |      7 | [초안 v1.0.0] AADS 현재 정본·운영 근거                                          | created
+ AADS        | acct-clobe-dual-collection-prd-20261003     | 4ee1c5a2 | 1 | f            |                    |          1 | 1.0.0   | api         |                                                       |     18 | [초안 v1.0.0] 오비서 수집 A안 우선 및 B                                         | goal_linked
+ AADS        | contract:b4ad294d9869                       | bb9e8e7e | 2 | t            | t                  |          1 | 1.0.0   | repository  | docs/contracts/GOAL_POLICY_FOUNDATION_INTERFACE_V1.md |      8 | [승인 v1.0.0] W-14F 평가기·실행기 인터                                          | legacy_linked
+ AADS        | plan:7d9f483b5dba                           | 679ce7d2 | 3 | t            | f                  |          2 | 1.2.0   | repository  | docs/plans/20261003_AADS_RDOC_STORAGE_RULE_PLAN.md    |     13 | [승인 v1.0.0] OHVIS 문서 정본관리 게이 | [초안 v1.2.0] OHVIS 문서 정본관리 게이 | revised
+ AADS        | prd:848c81d57565                            | 2c4e95fb | 3 | t            | f                  |          2 | 1.2.0   | repository  | docs/prd/20261003_AADS_RDOC_STORAGE_RULE_PRD.md       |     13 | [승인 v1.0.0] OHVIS 문서 정본관리 게이 | [초안 v1.2.0] OHVIS 문서 정본관리 게이 | revised
+ AADS        | prd:e677db2cb301                            | 39974168 | 2 | t            | t                  |          1 | 1.3.0   | repository  | docs/goals/deployment-optimization/v1.3.0/PRD.md      |      2 | [승인 v1.3.0] AADS Blue/Green                                                   | legacy_linked
+ AADS        | rdoc-mockup-review-plan                     | 47566ba9 | 3 | f            |                    |          3 | 2.0.0   | api         |                                                       |      7 | [초안 v2.0.0] R-DOC 목업 필수 제출·승                                           | revised
+ AADS        | rdoc-mockup-review-prd                      | bc2bbc3c | 2 | f            |                    |          2 | 2.0.0   | api         |                                                       |      7 | [초안 v2.0.0] R-DOC 목업 필수 제출·승                                           | revised
+ AADS        | rdoc-mockup-review-spec                     | ea8a0fbd | 2 | f            |                    |          2 | 2.0.0   | api         |                                                       |     12 | [초안 v2.0.0] R-DOC 목업 필수 제출·승                                           | revised
+ AADS        | rdoc-storage-rule-spec                      | 9d5777ef | 1 | f            |                    |          1 | 1.2.0   | repository  | docs/specs/rdoc-storage-rule/spec.md                  |     16 | [초안 v1.2.0] R-DOC 문서 저장 규칙 —                                            | created
+ ACCT        | OBYS-CAFE24-CONSOLIDATION-PLAN-20261002     | 24f6334c | 3 | f            |                    |          3 | 1.2.0   | api         |                                                       |      7 | [초안 v1.2.0] 오비서 비라일론 통합·카페24                                       | revised
+ ACCT        | OBYS-CAFE24-CONSOLIDATION-PRD-20261002      | c3bc80f0 | 3 | f            |                    |          3 | 1.2.0   | api         |                                                       |     15 | [초안 v1.2.0] 오비서 비라일론 회계업무 통합                                     | revised
+ ACCT        | OBYS-CAFE24-CONSOLIDATION-TASKS-20261002    | 763b6823 | 3 | f            |                    |          3 | 1.2.0   | api         |                                                       |     19 | [초안 v1.2.0] 오비서 비라일론 통합·카페24                                       | revised
+ ACCT        | spec:304b66102a6f                           | 7992513d | 2 | t            | t                  |          1 | 1.0.0   | repository  | docs/specs/obys-v4/approve/spec.md                    |      1 | [승인 v1.0.0] obys-v4/approve                                                   | legacy_linked
+ GO100       | go100-data-engine-optimization              | a1784829 | 1 | f            |                    |          1 | 1.1.0   | api         |                                                       |      8 | [초안 v1.1.0] GO100 데이터엔진 최적화                                           | created
+ GO100       | go100-data-wave-architecture-audit-20260929 | 5c115454 | 1 | f            |                    |          1 | 1.0.0   | api         |                                                       |     13 | [초안 v1.0.0] GO100 데이터엔진에서 파동                                         | created
+ GO100       | go100-wave-lease-revision-integrity         | a9fe83d7 | 3 | f            |                    |          3 | 1.5.1   | api         |                                                       |     60 | [초안 v1.5.1] GO100 파동 상태 계승·신                                           | revised
+(17 rows)
+
+--- events with goal_document_id (pilot candidates)
+ goal_document_id | project_key | document_key | action | kst
+------------------+-------------+--------------+--------+-----
+(0 rows)
+
+--- grants (user ids hashed)
+ tenant_id | project_key | access | user_hash | kst
+-----------+-------------+--------+-----------+-----
+(0 rows)

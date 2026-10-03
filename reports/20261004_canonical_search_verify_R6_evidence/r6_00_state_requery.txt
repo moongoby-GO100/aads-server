@@ -1,0 +1,26 @@
+== R6 state re-query (2026-10-04 06:59:05 KST, read-only default_transaction_read_only=on)
+-- doc_chunks: now_kst | total | canonical | canonical_with_embedding | canonical_max_indexed_at
+2026-10-04 06:59:05 | 28368 | 260 | 260 | 2026-10-03 19:10:20.607816+09
+-- project_document_grants rows
+0
+-- deploy_runs id>=5573: id|status|phase|sha12|image_digest19|standby_digest19|type|component|done_kst
+5573 | success | completed | f20da86b056c | sha256:92e2776ba0fd | sha256:92e2776ba0fd | api_bluegreen | api | 10-03 14:31
+5577 | success | released | d2762b05b |  |  | bluegreen | backend | 10-03 15:25
+5581 | success | certified | e782e8f03 |  |  | bluegreen | backend | 10-03 16:33
+5582 | success | completed | e915d1b533e0 |  |  | bluegreen | dashboard | 10-03 16:44
+5584 | success | completed | a4ed107cdb92 |  |  | bluegreen | dashboard | 10-03 17:03
+5585 | running | build_candidate_image | 3b6f861274a4 |  |  | bluegreen | dashboard |
+-- containers
+aads-server aads-server:f20da86b056c Up 16 hours (healthy)
+aads-server-green aads-server:f20da86b056c Up 17 hours (healthy)
+aads-server image=sha256:92e2776ba0fd
+aads-server-green image=sha256:92e2776ba0fd
+health 127.0.0.1:8100 -> 200
+health 127.0.0.1:8102 -> 200
+health public -> 200
+-- e2e_credentials metadata only (tenant alias: 2d701a8c..=tenant-a, 1637fc0d..=tenant-b)
+aads-dashboard | AADS | TEMP-SESSION-E2E-20260721 | f | tenant-a | 07-21 13:25 |
+aads-dashboard | AADS | E2E 자동 검증용 | t | tenant-b |  |
+aads-dashboard | AADS | E2E 자동 검증용 | t | tenant-a | 09-22 15:57 | 09-21 16:20
+-- agent_vault_credentials by tenant (count, active)
+tenant-a | 366 | 366

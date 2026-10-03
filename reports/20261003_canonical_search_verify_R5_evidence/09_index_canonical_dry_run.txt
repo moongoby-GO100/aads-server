@@ -1,0 +1,3 @@
+== 2026-10-03 14:14:43 KST index_docs.py index-canonical --dry-run (psql shim forces default_transaction_read_only=on)
+[index_docs] 정본 19건 중 변경/신규 0건, 제거 0건 (dry-run: 쓰지 않음)
+exit=0

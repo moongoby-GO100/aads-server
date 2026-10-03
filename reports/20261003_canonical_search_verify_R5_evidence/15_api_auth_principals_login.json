@@ -1,0 +1,23 @@
+{
+ "started_kst": "2026-10-03 14:16:24",
+ "principals": {
+  "internal": {
+   "login_status": 401,
+   "tenant_id_of_credential": "tenant-a",
+   "login_error_keys": [
+    "detail"
+   ]
+  },
+  "e2e-auto-d5e74cf2": {
+   "login_status": 401,
+   "tenant_id_of_credential": "tenant-b",
+   "login_error_keys": [
+    "detail"
+   ]
+  }
+ },
+ "credential_tenants_found": [
+  "e2e-auto-d5e74cf2",
+  "internal"
+ ]
+}

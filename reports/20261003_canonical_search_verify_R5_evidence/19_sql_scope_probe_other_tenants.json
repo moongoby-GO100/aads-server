@@ -1,0 +1,30 @@
+{
+ "kst": "2026-10-03 14:17:41",
+ "note": "production _visible_sql + _HEAD_JOIN imported from running code; read-only connection; real/synthetic ids only as bind params",
+ "transaction_read_only": "on",
+ "raw_canonical_chunks_total": 226,
+ "S1_internal_elevated": {
+  "chunks": 226,
+  "docs": 19
+ },
+ "S2_internal_nonelevated_no_grant_real_member_id": {
+  "chunks": 0,
+  "docs": 0
+ },
+ "S2b_internal_nonelevated_empty_user": {
+  "chunks": 0,
+  "docs": 0
+ },
+ "S2c_internal_elevated_but_empty_user": {
+  "chunks": 0,
+  "docs": 0
+ },
+ "S2_file_chunks_still_visible_to_nonelevated": {
+  "chunks": 28053,
+  "docs": 3415
+ },
+ "grants_rows_total": 0,
+ "other_tenants_checked": 68,
+ "other_tenants_x_elevated_and_non_leaks": [],
+ "tenant_null_canonical_rows": 0
+}

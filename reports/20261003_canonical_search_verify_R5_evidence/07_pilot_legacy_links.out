@@ -1,0 +1,19 @@
+--- goal_documents 74/92/109/110/119 + legacy link -> head/canonical chunks
+ gdoc |   kind   |       gdoc_key        | version | status | is_latest |                        doc_path                        | link_proj |       head_key        |   head   | link_rev_is_approved | chunks_for_link_rev
+------+----------+-----------------------+---------+--------+-----------+--------------------------------------------------------+-----------+-----------------------+----------+----------------------+---------------------
+   74 | contract | contract:b4ad294d9869 | 1.0.0   | active | t         | docs/contracts/GOAL_POLICY_FOUNDATION_INTERFACE_V1.md  | AADS      | contract:b4ad294d9869 | bb9e8e7e | t                    |                   8
+   92 | prd      | prd:e677db2cb301      | 1.3.0   | active | t         | docs/goals/deployment-optimization/v1.3.0/PRD.md       | AADS      | prd:e677db2cb301      | 39974168 | t                    |                   2
+  109 | plan     | plan:7d9f483b5dba     | 1.0.0   | active | t         | docs/plans/20260922_OHVIS_DOC_GOVERNANCE_OPS_기획서.md | AADS      | plan:7d9f483b5dba     | 679ce7d2 | t                    |                   2
+  110 | prd      | prd:848c81d57565      | 1.0.0   | active | t         | docs/prd/20260922_OHVIS_DOC_GOVERNANCE_OPS_PRD.md      | AADS      | prd:848c81d57565      | 2c4e95fb | t                    |                   2
+  119 | spec     | spec:304b66102a6f     | 1.0.0   | active | t         | docs/specs/obys-v4/approve/spec.md                     | ACCT      | spec:304b66102a6f     | 7992513d | t                    |                   1
+(5 rows)
+
+--- all legacy links
+ gdoc | project_key |     document_key      | is_approved
+------+-------------+-----------------------+-------------
+   74 | AADS        | contract:b4ad294d9869 | t
+   92 | AADS        | prd:e677db2cb301      | t
+  109 | AADS        | plan:7d9f483b5dba     | t
+  110 | AADS        | prd:848c81d57565      | t
+  119 | ACCT        | spec:304b66102a6f     | t
+(5 rows)

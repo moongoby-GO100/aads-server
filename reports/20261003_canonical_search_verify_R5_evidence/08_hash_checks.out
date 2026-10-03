@@ -1,0 +1,34 @@
+--- revision content_hash == sha256(content) for indexed revisions; legacy validated_hash; chunk concat vs content length
+ revs | sha_matches_content | sha_mismatch
+------+---------------------+--------------
+   19 |                  19 |            0
+(1 row)
+
+ legacy_links | legacy_hash_eq_rev_hash
+--------------+-------------------------
+            5 |                       5
+(1 row)
+
+--- indexed chunk text covers revision content? (per rev: chunk content length sum vs content length; chunk_index contiguous)
+ revs | contiguous_idx | chunk_text_under_50pct
+------+----------------+------------------------
+   19 |             19 |                      0
+(1 row)
+
+--- secret-pattern spot check on indexed canonical chunks (count only)
+ chunks_matching_secretish
+---------------------------
+                         0
+(1 row)
+
+docs/contracts/GOAL_POLICY_FOUNDATION_INTERFACE_V1.md 2651d430221d2540
+docs/goals/deployment-optimization/v1.3.0/PRD.md ac94fa364775d6b1
+docs/specs/obys-v4/approve/spec.md 71f34cab5354deaf
+docs/prd/20260922_OHVIS_DOC_GOVERNANCE_OPS_PRD.md 8cacc274a62a1108
+                          sp                           |        h
+-------------------------------------------------------+------------------
+ docs/contracts/GOAL_POLICY_FOUNDATION_INTERFACE_V1.md | 2651d430221d2540
+ docs/goals/deployment-optimization/v1.3.0/PRD.md      | ac94fa364775d6b1
+ docs/prd/20260922_OHVIS_DOC_GOVERNANCE_OPS_PRD.md     | 8cacc274a62a1108
+ docs/specs/obys-v4/approve/spec.md                    | 71f34cab5354deaf
+(4 rows)

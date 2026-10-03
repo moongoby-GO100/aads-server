@@ -1,0 +1,38 @@
+                                             Table "public.deploy_phase_events"
+         Column         |           Type           | Collation | Nullable |                     Default
+------------------------+--------------------------+-----------+----------+-------------------------------------------------
+ id                     | bigint                   |           | not null | nextval('deploy_phase_events_id_seq'::regclass)
+ deploy_run_id          | bigint                   |           | not null |
+ phase                  | text                     |           | not null |
+ status                 | text                     |           | not null |
+ phase_started_at       | timestamp with time zone |           | not null | now()
+ phase_completed_at     | timestamp with time zone |           |          |
+ duration_ms            | bigint                   |           |          |
+ estimated_remaining_ms | bigint                   |           |          |
+ current_slot           | text                     |           |          |
+ candidate_slot         | text                     |           |          |
+ image_digest           | text                     |           |          |
+  id  | deploy_run_id |             phase              | status  |       phase_started_at        |      phase_completed_at       | duration_ms | estimated_remaining_ms | current_slot | candidate_slot |                              image_digest
+------+---------------+--------------------------------+---------+-------------------------------+-------------------------------+-------------+------------------------+--------------+----------------+-----------------------------------------------------------
+ 9155 |          5557 | preflight                      | success | 2026-10-03 09:20:12+09        | 2026-10-03 09:20:15.027935+09 |        2000 |                        | 8100         |                | sha256:a17a331f3292468d7aded38f4ae205b92b69a1c5d9b22c2a810
+ 9156 |          5557 | dependency_check               | success | 2026-10-03 09:20:15+09        | 2026-10-03 09:20:16.896757+09 |        1000 |                        | 8100         |                | sha256:a17a331f3292468d7aded38f4ae205b92b69a1c5d9b22c2a810
+ 9157 |          5557 | code_validation                | success | 2026-10-03 09:20:17+09        | 2026-10-03 09:20:41.148955+09 |       23000 |                        | 8100         |                | sha256:a17a331f3292468d7aded38f4ae205b92b69a1c5d9b22c2a810
+ 9158 |          5557 | schema_migration_plan          | success | 2026-10-03 09:20:42+09        | 2026-10-03 09:20:49.26806+09  |        6000 |                        | 8100         | 8102           | sha256:a17a331f3292468d7aded38f4ae205b92b69a1c5d9b22c2a810
+ 9159 |          5557 | build_candidate_image          | success | 2026-10-03 09:20:49+09        | 2026-10-03 09:22:04.586244+09 |       75000 |                        | 8100         | 8102           | sha256:a17a331f3292468d7aded38f4ae205b92b69a1c5d9b22c2a810
+ 9160 |          5557 | target_slot_drain              | success | 2026-10-03 09:22:04+09        | 2026-10-03 09:22:07.306113+09 |        2000 |                        | 8100         | 8102           | sha256:a17a331f3292468d7aded38f4ae205b92b69a1c5d9b22c2a810
+ 9161 |          5557 | schema_migrations              | success | 2026-10-03 09:22:07+09        | 2026-10-03 09:22:17.610446+09 |       10000 |                        | 8100         | 8102           | sha256:a17a331f3292468d7aded38f4ae205b92b69a1c5d9b22c2a810
+ 9162 |          5557 | start_candidate_container      | success | 2026-10-03 09:22:17+09        | 2026-10-03 09:22:27.451795+09 |       10000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9163 |          5557 | candidate_health               | failed  | 2026-10-03 09:22:27+09        | 2026-10-03 09:22:59.257079+09 |       31000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9164 |          5557 | candidate_health               | success | 2026-10-03 09:22:27+09        | 2026-10-03 09:23:00.931071+09 |       33000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9165 |          5557 | active_slot_drain              | success | 2026-10-03 09:23:00+09        | 2026-10-03 09:23:03.208768+09 |        2000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9166 |          5557 | nginx_cutover                  | success | 2026-10-03 09:23:03+09        | 2026-10-03 09:23:08.304335+09 |        4000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9167 |          5557 | mounted_sidecar_reload         | success | 2026-10-03 09:23:08+09        | 2026-10-03 09:23:16.998918+09 |        8000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9168 |          5557 | standby_same_digest_sync       | skipped | 2026-10-03 09:23:17+09        | 2026-10-03 09:23:19.490636+09 |        2000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9169 |          5557 | post_switch_health             | success | 2026-10-03 09:23:20+09        | 2026-10-03 09:23:23.162985+09 |        2000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9170 |          5557 | db_schema_check                | success | 2026-10-03 09:23:23+09        | 2026-10-03 09:23:24.687078+09 |        1000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9171 |          5557 | chat_table_check               | success | 2026-10-03 09:23:24+09        | 2026-10-03 09:23:26.440131+09 |        1000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9172 |          5557 | llm_health_check               | success | 2026-10-03 09:23:26+09        | 2026-10-03 09:23:27.675051+09 |        1000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9173 |          5557 | frontend_qa                    | success | 2026-10-03 09:23:27+09        | 2026-10-03 09:23:28.935455+09 |        1000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9174 |          5557 | p0p1_monitoring                | success | 2026-10-03 09:23:28+09        | 2026-10-03 09:28:38.205137+09 |      309000 |                        | 8100         | 8102           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+ 9175 |          5557 | standby_same_digest_sync_retry | success | 2026-10-03 09:29:25.795084+09 | 2026-10-03 09:29:25.795084+09 |           0 |                        | 8102         | 8100           | sha256:fe6142182d70d38d9602fed5ed7b5e6d03033e5f5301c2a2983
+(21 rows)

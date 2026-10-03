@@ -1,0 +1,76 @@
+{
+ "kst": "2026-10-03 14:19:25",
+ "login": 200,
+ "searches": [
+  {
+   "label": "pilot92 by title",
+   "q": "AADS Blue/Green 병목 최적화 PRD v1.3.0",
+   "project": "AADS",
+   "status": 200,
+   "count": 15,
+   "canonical": [
+    {
+     "path": "canonical://AADS/prd:e677db2cb301@79944e05-9c4a-4bd8-9e31-a81a8d017299",
+     "project": "AADS",
+     "title": "[승인 v1.3.0] AADS Blue/Green 병목 최적화 PRD v1.3.0",
+     "chunks": 2,
+     "similarity": 0.903
+    },
+    {
+     "path": "canonical://AADS/aads-current-authority-context@1aed18f5-6541-47e5-8d4b-c0d427863769",
+     "project": "AADS",
+     "title": "[초안 v1.0.0] AADS 현재 정본·운영 근거 제공 PRD v1.0.0",
+     "chunks": 7,
+     "similarity": 0.7648
+    }
+   ]
+  },
+  {
+   "label": "GO100 audit by title",
+   "q": "GO100 데이터엔진에서 파동신호까지 구조 실사",
+   "project": "GO100",
+   "status": 200,
+   "count": 20,
+   "canonical": []
+  },
+  {
+   "label": "GO100 opt by title",
+   "q": "GO100 데이터엔진 최적화 PRD v1.1",
+   "project": "GO100",
+   "status": 200,
+   "count": 13,
+   "canonical": [
+    {
+     "path": "canonical://GO100/go100-data-engine-optimization@dff9c273-5f59-491c-8cf1-0690e05503ce",
+     "project": "GO100",
+     "title": "[초안 v1.1.0] GO100 데이터엔진 최적화 PRD v1.1",
+     "chunks": 8,
+     "similarity": 0.8967
+    },
+    {
+     "path": "canonical://GO100/go100-wave-lease-revision-integrity@27fa0758-31b1-4908-85db-1b3943915c6e",
+     "project": "GO100",
+     "title": "[초안 v1.5.1] GO100 파동 상태 계승·신규 60~120봉 초기화 PRD v1.5.1",
+     "chunks": 60,
+     "similarity": 0.8745
+    }
+   ]
+  },
+  {
+   "label": "GO100 wave by title",
+   "q": "GO100 파동 상태 계승·신규 60~120봉 초기화 PRD v1.5.1",
+   "project": "GO100",
+   "status": 200,
+   "count": 12,
+   "canonical": [
+    {
+     "path": "canonical://GO100/go100-wave-lease-revision-integrity@27fa0758-31b1-4908-85db-1b3943915c6e",
+     "project": "GO100",
+     "title": "[초안 v1.5.1] GO100 파동 상태 계승·신규 60~120봉 초기화 PRD v1.5.1",
+     "chunks": 60,
+     "similarity": 0.914
+    }
+   ]
+  }
+ ]
+}

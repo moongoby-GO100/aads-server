@@ -1,0 +1,5 @@
+aads-server aads-server:f20da86b056c Up 2 minutes (healthy)
+vigorous_shirley aads-server:a16ec3cfab91 Up 9 minutes
+aads-server-green aads-server:f20da86b056c Up 24 minutes (healthy)
+yeoljeong-finance aads-server-yeoljeong-finance Up 24 minutes (healthy)
+health=200

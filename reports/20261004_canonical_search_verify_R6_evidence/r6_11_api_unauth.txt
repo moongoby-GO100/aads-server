@@ -1,0 +1,3 @@
+== R6 무인증 재확인 (2026-10-04 06:56 KST, 공개 URL, 자격증명 없음)
+https://aads.newtalk.kr/api/v1/project-docs/search?q=x -> 401
+https://aads.newtalk.kr/api/v1/projects/ACCT/documents -> 401

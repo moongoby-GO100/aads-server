@@ -1,0 +1,38 @@
+{
+ "kst": "2026-10-03 14:33:24",
+ "acct_list_status": 200,
+ "keys": [
+  "documents"
+ ],
+ "n": 4,
+ "rows": [
+  {
+   "document_key": "spec:304b66102a6f",
+   "title": "obys-v4/approve — spec",
+   "approved_revision_id": "c1082af2-a3ee-4222-a0c6-666502dc60ef",
+   "id": "7992513d-2358-402d-b1da-636896ae4dcd",
+   "status": "approved"
+  },
+  {
+   "document_key": "OBYS-CAFE24-CONSOLIDATION-TASKS-20261002",
+   "title": "오비서 비라일론 통합·카페24 업무계층",
+   "approved_revision_id": null,
+   "id": "763b6823-b8de-450e-bb4d-b9003f323f15",
+   "status": "draft"
+  },
+  {
+   "document_key": "acct-draft-plan",
+   "title": "오비서 비라일론 통합·카페24 보완계획",
+   "approved_revision_id": null,
+   "id": "24f6334c-c7ce-4987-b886-a0232cd6ede8",
+   "status": "draft"
+  },
+  {
+   "document_key": "acct-draft-prd",
+   "title": "오비서 비라일론 회계업무 통합·카페24 독립 운영 PRD",
+   "approved_revision_id": null,
+   "id": "c3bc80f0-ec01-45aa-82d5-20775124743d",
+   "status": "draft"
+  }
+ ]
+}

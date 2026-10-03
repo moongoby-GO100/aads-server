@@ -1,0 +1,22 @@
+--- revision content_hash == sha256(content) for indexed revisions; legacy validated_hash; chunk concat vs content length
+ revs | sha_matches_content | sha_mismatch
+------+---------------------+--------------
+   23 |                  23 |            0
+(1 row)
+
+ legacy_links | legacy_hash_eq_rev_hash
+--------------+-------------------------
+            5 |                       5
+(1 row)
+
+--- indexed chunk text covers revision content? (per rev: chunk content length sum vs content length; chunk_index contiguous)
+ revs | contiguous_idx | chunk_text_under_50pct
+------+----------------+------------------------
+   23 |             23 |                      0
+(1 row)
+
+--- secret-pattern spot check on indexed canonical chunks (count only)
+ chunks_matching_secretish
+---------------------------
+                         0
+(1 row)

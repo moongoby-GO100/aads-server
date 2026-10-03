@@ -1,0 +1,30 @@
+== end 2026-10-03 14:33:33 KST
+ total | canon | canon_emb |       canon_max_indexed       |        all_max_indexed
+-------+-------+-----------+-------------------------------+-------------------------------
+ 28279 |   226 |       226 | 2026-10-03 13:11:59.736658+09 | 2026-10-03 13:11:59.736658+09
+(1 row)
+
+ heads
+-------
+    17
+(1 row)
+
+ revs
+------
+   31
+(1 row)
+
+ grants
+--------
+      0
+(1 row)
+
+ERROR:  column "finished_at" does not exist
+LINE 1: select id,status,finished_at from deploy_runs order by id de...
+                         ^
+  id  | status  |          created_at
+------+---------+-------------------------------
+ 5573 | success | 2026-10-03 14:05:31.383292+09
+ 5572 | success | 2026-10-03 13:55:06.585835+09
+ 5570 | success | 2026-10-03 13:33:10.131669+09
+(3 rows)

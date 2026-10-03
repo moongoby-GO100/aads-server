@@ -1,0 +1,139 @@
+{
+ "started_kst": "2026-10-03 14:16:34",
+ "principals": {
+  "internal": {
+   "login_status": 200,
+   "tenant_id_of_credential": "tenant-a",
+   "membership_role": "owner",
+   "is_internal_tenant": true,
+   "grants_for_user": 0,
+   "search": [
+    {
+     "q": "R-DOC 문서 저장 규칙 정본 승인",
+     "status": 200,
+     "count": 9,
+     "canonical_hits": 3,
+     "file_hits": 6,
+     "canonical_paths": [
+      "canonical://AADS/rdoc-storage-rule-spec@700fa4f0-24be-45a4-84f4-27928fcb6357",
+      "canonical://AADS/rdoc-mockup-review-spec@230fa6b9-2f26-485d-bcef-a4da74557892",
+      "canonical://AADS/rdoc-mockup-review-plan@bd8aa614-019f-46c9-adf0-e960572083e4"
+     ],
+     "projects": [
+      "AADS"
+     ],
+     "index": {
+      "docs": 3434,
+      "chunks": 28279,
+      "searchable": 28279,
+      "coverage_pct": 100.0
+     },
+     "detail": null
+    },
+    {
+     "q": "오비서 카페24 통합 수집",
+     "status": 200,
+     "count": 12,
+     "canonical_hits": 4,
+     "file_hits": 8,
+     "canonical_paths": [
+      "canonical://ACCT/OBYS-CAFE24-CONSOLIDATION-PLAN-20261002@e19e3744-8685-4bb2-adc7-251961f1d396",
+      "canonical://ACCT/OBYS-CAFE24-CONSOLIDATION-TASKS-20261002@35313800-ca27-49d1-a28f-f58d04bdafd6",
+      "canonical://ACCT/OBYS-CAFE24-CONSOLIDATION-PRD-20261002@71c1d695-c859-44a8-b805-e5903311119c",
+      "canonical://AADS/acct-clobe-dual-collection-prd-20261003@d0f7ef99-1fff-4b30-9f5b-4fb199830cc0"
+     ],
+     "projects": [
+      "AADS",
+      "ACCT",
+      "GO100"
+     ],
+     "index": {
+      "docs": 3434,
+      "chunks": 28279,
+      "searchable": 28279,
+      "coverage_pct": 100.0
+     },
+     "detail": null
+    },
+    {
+     "q": "GO100 파동 상태 계승 리비전",
+     "status": 200,
+     "count": 20,
+     "canonical_hits": 0,
+     "file_hits": 20,
+     "canonical_paths": [],
+     "projects": [
+      "AADS",
+      "GO100"
+     ],
+     "index": {
+      "docs": 3434,
+      "chunks": 28279,
+      "searchable": 28279,
+      "coverage_pct": 100.0
+     },
+     "detail": null
+    }
+   ],
+   "search_project_filter": {
+    "AADS": {
+     "status": 200,
+     "canonical_hits": 3
+    },
+    "ACCT": {
+     "status": 200,
+     "canonical_hits": 4
+    },
+    "GO100": {
+     "status": 200,
+     "canonical_hits": 0
+    }
+   },
+   "documents_list": {
+    "AADS": {
+     "status": 200,
+     "documents": 10,
+     "detail": null,
+     "statuses": [
+      "approved",
+      "draft"
+     ]
+    },
+    "ACCT": {
+     "status": 200,
+     "documents": 4,
+     "detail": null,
+     "statuses": [
+      "approved",
+      "draft"
+     ]
+    },
+    "GO100": {
+     "status": 200,
+     "documents": 3,
+     "detail": null,
+     "statuses": [
+      "draft"
+     ]
+    }
+   },
+   "x_tenant_id_internal_spoof": {
+    "status": 200,
+    "canonical_hits": 3,
+    "detail": null
+   },
+   "x_tenant_id_internal_spoof_documents": {
+    "status": 200,
+    "documents": 10,
+    "detail": null
+   }
+  },
+  "e2e-auto-d5e74cf2": {
+   "skipped": "stored e2e credential already returned 401 in first attempt (not retried)"
+  }
+ },
+ "credential_tenants_found": [
+  "e2e-auto-d5e74cf2",
+  "internal"
+ ]
+}

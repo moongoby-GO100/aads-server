@@ -1,0 +1,27 @@
+== deploy_runs #5557 + latest 5 (KST 14:13:35)
+  id  |  status   |      phase      |               release_sha                |           img           |          stby           | current_slot | candidate_slot |           c_kst            |          done_kst          |        runner_job_id
+------+-----------+-----------------+------------------------------------------+-------------------------+-------------------------+--------------+----------------+----------------------------+----------------------------+------------------------------
+ 5557 | success   | completed       | 34007c6b391f724f979229be8fa889ded9648282 | sha256:fe6142182d70d38d | sha256:fe6142182d70d38d | 8100         | 8102           | 2026-10-03 09:19:54.522336 | 2026-10-03 09:29:25.795084 |
+ 5570 | success   | completed       | a16ec3cfab91                             | sha256:d5c72791ed2d4a8e | sha256:d5c72791ed2d4a8e | 8102         | 8100           | 2026-10-03 13:33:10.131669 | 2026-10-03 13:46:22.51419  |
+ 5572 | success   | monitoring      | 48a7b9dce                                |                         |                         | blue         | green          | 2026-10-03 13:55:06.585835 | 2026-10-03 13:55:06.585835 | root-all-wave-chart-20261003
+ 5573 | verifying | p0p1_monitoring | f20da86b056c                             | sha256:92e2776ba0fdb3d3 | sha256:d5c72791ed2d4a8e | 8100         | 8102           | 2026-10-03 14:05:31.383292 | 2026-10-03 14:09:42.981111 |
+(4 rows)
+
+== running containers
+aads-server-green aads-server:f20da86b056c Up 4 minutes (healthy)
+aads-server aads-server:a16ec3cfab91 Up 38 minutes (healthy)
+yeoljeong-finance aads-server-yeoljeong-finance Up 4 minutes (healthy)
+== container labels / sha
+aads-server: sha256:d5c72791ed2d4a8e9cb91115c7ca64221e0f13029c2bd210ad1b4b55efe05dc9
+aads-server-green: sha256:92e2776ba0fdb3d39105cd8aba1b8a5ebdb4c32442c809bfe5b3617c219aa7f1
+== health
+port 8100
+200
+port 8102
+200
+{"pipeline_healthy":true,"stalled_count":0,"stalled_queue":0,"stalled_running":0,"active_count":0,"completed_today":0,"running_count":0,"error_count":213,"recent_completed_30m":0,"checks":{"queue_stall":{"ok":true,"count":0,"label":"큐 정체"},"execution_stall":{"ok":true,"count":0,"label":"실행 정체"},"pipeline_flow":{"ok":true,"count":0,"label":"파이프라인 흐름"},"bridge_integrity":{"ok":true,"count":0,"label":"브릿지 정합성"},"commit_integrity":{"ok":true,"count":0,"label":"커밋 정합성"},"cost_tracking":{"ok":true,"count":0,"label":"비용 추적"},"env_trend":{"ok":
+== ancestry
+34007c6b is ancestor of worktree HEAD f20da86b
+34007c6b Pipeline-Runner: runner-ced9aa7e — ALLOW_DUP_JOB SUPERSEDES: runner-9b9c2cb6 (done — 선행 미충족으로 정상 중단 보고만 커밋. 배포·재색인·
+ec05ab03 Pipeline-Runner: runner-e61debec — ALLOW_DUP_JOB SUPERSEDES: runner-e6174e48 (cancelled/blocked_dependency: parent
+ca75c842 Pipeline-Runner: runner-d8de94d0 — ALLOW_DUP_JOB AUTO_REWORK_OF: runner-e1828cce AUTO_REWORK_ROUND: 1/2 TASK_ID: AA
