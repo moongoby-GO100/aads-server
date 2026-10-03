@@ -1,0 +1,163 @@
+.clobe-shell { display: grid; gap: 14px; max-width: 1180px; margin: 0 auto; padding-bottom: 40px; position: relative; }
+.clobe-shell * { box-sizing: border-box; }
+.clobe-hero h1 { margin: 2px 0 4px; font-size: 24px; line-height: 1.25; word-break: keep-all; }
+.clobe-hero p { margin: 0; color: var(--muted); line-height: 1.55; word-break: keep-all; overflow-wrap: anywhere; }
+.clobe-eyebrow { color: var(--accent-strong); font-size: 11px; font-weight: 800; letter-spacing: .08em; }
+.clobe-muted { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0; overflow-wrap: anywhere; }
+
+.clobe-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 14px; }
+.clobe-toolbar label, .clobe-filters label, .clobe-run-form label, .clobe-link-form label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 700; min-width: 0; }
+.clobe-company-meta { color: var(--muted); font-size: 13px; padding-bottom: 10px; }
+.clobe-shell select, .clobe-shell input[type="date"], .clobe-shell input[type="search"] {
+  min-height: 44px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); font: inherit; font-size: 15px; max-width: 100%;
+}
+.clobe-shell button {
+  min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; touch-action: manipulation; word-break: keep-all;
+}
+.clobe-shell button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.clobe-shell button.primary:hover:not(:disabled) { background: var(--accent-strong); }
+.clobe-shell button:disabled { opacity: .5; cursor: not-allowed; }
+.clobe-shell button:focus-visible, .clobe-shell select:focus-visible, .clobe-shell input:focus-visible { outline: 3px solid rgba(55,120,212,.45); outline-offset: 1px; }
+.clobe-danger { color: var(--red); border-color: rgba(220,76,76,.4); }
+
+.clobe-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); display: grid; gap: 12px; min-width: 0; }
+.clobe-panel h2, .clobe-recon h3 { margin: 0; font-size: 16px; }
+.clobe-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+.clobe-state { display: grid; gap: 6px; padding: 16px; border: 1px dashed var(--line); border-radius: 12px; background: var(--panel-strong); line-height: 1.55; overflow-wrap: anywhere; }
+.clobe-state span { color: var(--muted); font-size: 14px; word-break: keep-all; }
+.clobe-state.error { border: 1px solid rgba(220,76,76,.35); background: #fdf1f1; }
+.clobe-state.loading { border-style: solid; }
+.clobe-state-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+.clobe-notice { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); background: #fff; line-height: 1.5; font-size: 14px; overflow-wrap: anywhere; }
+.clobe-notice.ok { border-color: rgba(21,147,107,.4); background: #eefaf5; }
+.clobe-notice.warn { border-color: rgba(183,121,31,.45); background: #fff8eb; }
+.clobe-notice.error { border-color: rgba(220,76,76,.4); background: #fdf1f1; }
+.clobe-notice.info { background: #f1f6fd; border-color: rgba(55,120,212,.35); }
+
+.clobe-badge { display: inline-flex; align-items: center; min-height: 24px; padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 800; background: #eef0f4; color: #4b5260; white-space: nowrap; }
+.clobe-badge.succeeded, .clobe-badge.confirmed { background: #e3f6ee; color: #0e6e4f; }
+.clobe-badge.partial, .clobe-badge.stale, .clobe-badge.mixed, .clobe-badge.review_box { background: #fff1d6; color: #8a5a10; }
+.clobe-badge.failed, .clobe-badge.needs_reauth, .clobe-badge.rejected { background: #fde4e4; color: #a62f2f; }
+.clobe-badge.reviewed { background: #e4eefc; color: #245aa6; }
+
+.clobe-todo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.clobe-todo-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-strong); line-height: 1.5; }
+.clobe-todo-list li > span { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; word-break: keep-all; }
+.clobe-todo-list li.error { border-color: rgba(220,76,76,.4); background: #fdf1f1; }
+.clobe-todo-list li.warn { border-color: rgba(183,121,31,.4); background: #fff8eb; }
+.clobe-todo.empty { color: var(--muted); }
+
+.clobe-freshness { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 16px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+.clobe-freshness small { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.clobe-freshness strong { font-size: 15px; overflow-wrap: anywhere; }
+.clobe-freshness .clobe-stale { grid-column: 1 / -1; margin: 0; color: #8a5a10; font-size: 13px; line-height: 1.5; }
+.clobe-freshness.failed, .clobe-freshness.needs_reauth { border-color: rgba(220,76,76,.4); }
+.clobe-freshness.partial, .clobe-freshness.stale { border-color: rgba(183,121,31,.45); }
+
+.clobe-kind-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.clobe-kind-card { display: grid; gap: 8px; align-content: start; padding: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; min-width: 0; }
+.clobe-kind-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.clobe-kind-card dl, .clobe-detail { margin: 0; display: grid; gap: 6px; }
+.clobe-kind-card dl > div, .clobe-detail > div { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.clobe-kind-card dt, .clobe-detail dt { color: var(--muted); flex: 0 0 auto; }
+.clobe-kind-card dd, .clobe-detail dd { margin: 0; text-align: right; overflow-wrap: anywhere; min-width: 0; }
+.clobe-kind-error { margin: 0; color: #a62f2f; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.clobe-kind-retry { margin: 0; color: var(--muted); font-size: 12px; }
+
+.clobe-stage-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.clobe-stage-chip { display: grid; gap: 2px; text-align: left; padding: 10px 12px; }
+.clobe-stage-chip small { color: var(--muted); font-weight: 600; }
+.clobe-stage-chip strong { font-size: 18px; }
+
+.clobe-run-form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.clobe-run-summary { display: grid; gap: 6px; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-strong); }
+.clobe-run-summary.partial, .clobe-run-summary.needs_reauth, .clobe-run-summary.failed { border-color: rgba(183,121,31,.45); background: #fff8eb; }
+.clobe-run-summary ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.clobe-run-summary li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; }
+.clobe-run-list { display: grid; gap: 6px; }
+.clobe-run-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; line-height: 1.5; }
+.clobe-run-row .detail { flex: 1 1 200px; color: var(--muted); overflow-wrap: anywhere; }
+.clobe-unsupported { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.clobe-unsupported li { display: grid; gap: 6px; }
+.clobe-unsupported span { color: var(--muted); font-size: 13px; line-height: 1.5; word-break: keep-all; }
+
+.clobe-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; align-items: end; padding: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+.clobe-filters .wide { grid-column: span 2; }
+.clobe-actionbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 12px; position: sticky; top: 0; z-index: 3; line-height: 1.5; }
+.clobe-actionbar.confirm { border-color: rgba(183,121,31,.55); background: #fff8eb; }
+.clobe-actionbar.confirm > div:first-child { display: grid; gap: 2px; flex: 1 1 260px; min-width: 0; }
+.clobe-list-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 4px 4px 0; }
+.clobe-list { display: grid; gap: 6px; }
+.clobe-item { display: flex; align-items: stretch; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.clobe-item.active { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(55,120,212,.18); }
+.clobe-check { display: grid; place-items: center; min-width: 44px; min-height: 44px; }
+.clobe-check input { width: 20px; height: 20px; }
+.clobe-shell .clobe-item-main { flex: 1; min-width: 0; display: grid; grid-template-columns: 92px 92px minmax(0, 1fr) 56px 140px auto; gap: 8px; align-items: center; text-align: left; border: 0; background: transparent; padding: 8px 10px 8px 0; font-weight: 500; }
+.clobe-item-main .party { display: grid; min-width: 0; overflow-wrap: anywhere; font-weight: 700; }
+.clobe-item-main .party small { color: var(--muted); font-weight: 500; }
+.clobe-item-main .amt { text-align: right; font-weight: 800; font-variant-numeric: tabular-nums; }
+.clobe-item-main .when, .clobe-item-main .kind, .clobe-item-main .dir { font-size: 13px; color: var(--muted); }
+.clobe-rev { margin-left: 6px; font-style: normal; font-size: 11px; color: #8a5a10; font-weight: 800; }
+
+.clobe-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); background: #fff; border-left: 1px solid var(--line); box-shadow: -12px 0 32px rgba(16,24,40,.14); padding: 16px; overflow-y: auto; transform: translateX(105%); transition: transform .18s ease; z-index: 1900; display: grid; gap: 14px; align-content: start; visibility: hidden; }
+.clobe-drawer.open { transform: none; visibility: visible; }
+.clobe-drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.clobe-drawer-head h2 { margin: 0; font-size: 17px; }
+.clobe-drawer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.clobe-stepper { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.clobe-stepper li { display: grid; gap: 4px; justify-items: center; text-align: center; font-size: 11px; color: var(--muted); }
+.clobe-stepper b { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #eef0f4; color: #4b5260; font-size: 12px; }
+.clobe-stepper li.done b { background: var(--green); color: #fff; }
+.clobe-stepper li.active b { background: var(--accent); color: #fff; }
+.clobe-stepper li.active { color: var(--ink); font-weight: 800; }
+.clobe-recon { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-strong); }
+.clobe-recon p { margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.clobe-recon p.ok { color: #0e6e4f; }
+.clobe-recon p.bad { color: #a62f2f; }
+.clobe-ack { display: flex !important; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--ink); font-weight: 600; }
+.clobe-ack input { width: 20px; height: 20px; flex: 0 0 auto; }
+
+.clobe-basis { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 13px; color: var(--muted); }
+.clobe-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.clobe-metric { display: grid; gap: 4px; padding: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); min-width: 0; }
+.clobe-metric small { color: var(--muted); font-weight: 700; }
+.clobe-metric strong { font-size: 20px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.clobe-metric span { color: var(--muted); font-size: 12px; }
+.clobe-metric.neg strong { color: var(--red); }
+.clobe-month-table { display: grid; gap: 2px; overflow-x: auto; }
+.clobe-month-table > div { display: grid; grid-template-columns: 90px repeat(4, minmax(110px, 1fr)); gap: 8px; padding: 8px 4px; border-bottom: 1px solid var(--line); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 560px; }
+.clobe-month-table > .head { color: var(--muted); font-weight: 800; }
+.clobe-month-table > div > span:not(:first-child) { text-align: right; }
+.clobe-links { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.clobe-company-list { display: grid; gap: 10px; }
+.clobe-company-card { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-strong); min-width: 0; }
+.clobe-company-card header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.clobe-company-card small.ok { color: #0e6e4f; }
+.clobe-company-card small.bad { color: #a62f2f; }
+.clobe-link-form { display: grid; gap: 8px; max-width: 420px; }
+
+@media (max-width: 820px) {
+  .clobe-hero h1 { font-size: 21px; }
+  .clobe-freshness { grid-template-columns: 1fr; }
+  .clobe-stage-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .clobe-filters .wide { grid-column: 1 / -1; }
+  .clobe-shell .clobe-item-main { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "party amt" "meta stage"; row-gap: 4px; }
+  .clobe-item-main .party { grid-area: party; }
+  .clobe-item-main .amt { grid-area: amt; }
+  .clobe-item-main .when, .clobe-item-main .kind, .clobe-item-main .dir { display: inline; grid-area: meta; }
+  .clobe-item-main .kind, .clobe-item-main .dir { display: none; }
+  .clobe-item-main .stage { grid-area: stage; justify-self: end; }
+  .clobe-drawer { width: 100vw; border-left: 0; }
+  .clobe-toolbar select { width: 100%; }
+  .clobe-toolbar label { flex: 1 1 100%; }
+  .clobe-run-form label { flex: 1 1 140px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clobe-drawer { transition: none; }
+}
+
+.clobe-drawer .clobe-actionbar.confirm { position: static; }

@@ -1,3 +1,16 @@
+## 2026-10-03 — 오비서 클로브 자료현황·거래검토·경영요약 UI (ACCT-CLOBE-OBYS-FEATURE-DESIGN-20261003-R5)
+
+**DB handover entry_key `acct-clobe-ui-held-resume-20261003-r5`. 상태: 코드·테스트·합성 데이터 화면 검증 완료(미커밋 — Runner 가 승인 후 commit/push). 실제 SHA·digest·운영 URL·실로그인·운영 캡처·ops deploy_run_id·300초 모니터링은 아직 없다(해당 없음이 아니라 미수행). 전체 이관 완료가 아니다.**
+- 선행 이력: runner-386e6127·runner-485c61b8 은 취소/dedup_blocked 상태로 보존. 선행 커밋 9ae4335e 는 리베이스로 SHA 가 바뀌어 직접 조상은 아니며, 같은 변경 cb32e187 이 HEAD 의 조상이다.
+- 신규: `modules/clobe-collection.js`(IIFE, `window.obysClobe`), `modules/clobe-collection.css`, `tests/unit/test_obys_clobe_ui_static.py`. 수정: `index.html`(CSS/JS 태그, 사이드·모바일 상단 탭, 4개 뷰 섹션, appViewNames, setView 훅), `sw.js`(CACHE_VERSION → `obys-clock-shell-20261003-r5`). 유지: 원장·매장도우미·인사급여 화면과 직원용 뷰 목록(변경 없음).
+- 화면: 자료현황(수집 상태·마지막 수집 시각·받은 기간·부분 수신·오류·재시도·수집 실행·처리할 일) / 거래 검토함(검색+기간·기관·구분·단계 필터, 상세→대사→검토 승인→원장 확정, 확정 전 경고) / 경영요약(확정 건만 합산, 현금영수증·카드는 금액 합계 제외 안내, 미수집 종류 경고) / 자료 연결 설정(승인·권한 확인·회사 연결). 만료·권한·네트워크·연결 없음·자료 없음·세션 만료마다 원인과 복구 행동을 표시.
+- 진입 경로: 로그인 상태의 기본 진입은 V4.1(mockup-v4-1.html)이다. 새 화면은 기존 "기존 관리화면" 버튼(`index.html?legacy=1&view=legacy`)에서 사이드 메뉴 "자료·검토" 또는 모바일 상단 탭으로 열린다. V4.1 은 수정하지 않았다.
+- 백엔드 계약 한계: 요약 API 가 없어 경영요약은 확정 항목을 클라이언트에서 정수 센트로 합산한다(5,000건 상한, 넘으면 "일부만 집계" 표시). 현금영수증·카드는 취소 구분이 없어 금액 합산에서 뺐다. 대사는 최근 수집 run 의 reconcile 결과 + 같은 날짜·금액·거래처 중복 후보로 보여준다.
+- 검증(실측): `bash scripts/run_unit_tests.sh tests/unit/test_obys_clobe_ui_static.py` 11 passed; obys/sw 관련 13개 파일 223 passed·1 failed(`test_yeoljeong_finance_nginx.py` — `nginx-fb.conf` 를 읽는 기존 실패, 이번 변경 파일과 무관); `node --check` 통과; ruff F821/F811 통과. Playwright(headless chromium, 합성 API 응답 — 실제 금융 데이터 아님) 61/61: 데스크톱 1440·모바일 390 에서 회사 선택→자료현황→검토→상세 대사→승인→확정→경영요약, 세션 만료·네트워크·연결 없음·자료 없음·재승인 필요, viewer 읽기 전용, 비로그인, 새로고침 후 조건 유지, 가로 넘침 0, 기존 화면 회귀. 캡처: `/tmp/clobe_verify/shots/*.png`(저장소 밖). 이 캡처는 운영 화면 증거가 아니다.
+- 검증 중 발견·수정한 결함: ①서랍(상세)이 열린 채 시작한 확정 확인창이 서랍 뒤에 가려져 누를 수 없었음 → 확인창을 시작 위치(상세/일괄)에 표시 ②모바일에는 사이드바가 없어 새 화면에 진입 불가 → 모바일 상단 탭에 추가 ③서랍이 모바일 하단 내비에 가려짐 → z-index 1900.
+- 미수행(분리): 코드리뷰, commit/push, 큐 등록, 카페24 실제 반영, 운영 인증, 실로그인 캡처, 전체 이관. 이 환경에서 확인한 것은 yeoljeong_main.py·main.py 의 obys_collections 라우터 등록(파일 기준)과 마이그레이션 파일 존재까지이며, 카페24 DB 적용 여부는 확인하지 못했다 — 미적용이면 `migrations/20261003_obys_clobe_collection.sql`(롤백 동봉, 비파괴 스키마 추가)에 대한 ops 적용 요청이 필요하다. 카페24 통합 반영은 verify 가 공개 origin/health 와 UI AI 리뷰를 증명하고 커밋·푸시가 준비된 뒤에만, 기존 ops 비동기 큐에 정확한 SHA 로 올린다.
+- 기존 테스트 개수(unit 148 / integration 35)는 이번 배포 증거가 아니다.
+
 ## 2026-10-03 — 오비서 클로브 다회사 수집 서버·데이터 계약 (ACCT-CLOBE-OBYS-COMPANY-COLLECTION-20261003-R2)
 
 **상태: 코드·마이그레이션·테스트 완료(커밋 전 — Runner 가 승인 후 commit/push). 실수집·UI·전체 이관 완료가 아니다.** 백엔드 변경은 마이그레이션(OBYS DB, `migrations/20261003_obys_clobe_collection.sql`, 롤백 동봉, 운영 미적용) + API 라 *필수 릴리스*이며 이후 블루그린 소유자가 처리한다(이 작업은 릴리스 경쟁을 만들지 않았다). UI(index/CSS/JS)는 다음 작업.

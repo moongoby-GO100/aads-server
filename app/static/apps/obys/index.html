@@ -2563,6 +2563,7 @@
   </style>
   <link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">
   <link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20260921-r3">
+  <link rel="stylesheet" href="/static/apps/obys/modules/clobe-collection.css?v=20261003-r5">
   <style>
     /* 사업자(대표) 회원가입 진입 — 로그인 전에만 보인다. 헤더의 로그인/회원가입 버튼은
        renderAuthState 가 항상 hidden 으로 두므로 별도 앵커로 노출한다. */
@@ -2721,6 +2722,10 @@
           <button class="tab" data-view="purchaseLedger">매입 상세</button>
           <button class="tab" data-view="bankLedger">은행 거래내역</button>
           <button class="tab" data-view="cardLedger">카드 사용내역</button>
+          <div class="side-label">자료·검토</div>
+          <button class="tab" data-view="clobeOverview">자료현황</button>
+          <button class="tab" data-view="clobeReview">거래 검토함</button>
+          <button class="tab" data-view="clobeSummary">경영요약</button>
           <div class="side-label">운영</div>
           <button class="tab" data-view="employees">직원관리</button>
           <button class="tab" data-view="payroll">급여관리</button>
@@ -2735,6 +2740,7 @@
           <div class="side-label">설정</div>
           <button class="tab" data-view="business">사업자·지점</button>
           <button class="tab" data-view="integrations">연동 관리</button>
+          <button class="tab" data-view="clobeSettings">자료 연결 설정</button>
           <button class="tab" data-view="margins">원가·마진</button>
           <button class="tab" data-view="audit">회원·권한관리</button>
           <a class="tab" data-external-tab="recipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">레시피</a>
@@ -2755,11 +2761,15 @@
               <button class="tab active" data-view="dashboard">통합 홈</button>
               <button class="tab" data-view="tasks">할일</button>
               <button class="tab" data-view="sales">매출</button>
+              <button class="tab" data-view="clobeOverview">자료현황</button>
+              <button class="tab" data-view="clobeReview">검토함</button>
+              <button class="tab" data-view="clobeSummary">경영요약</button>
               <button class="tab" data-view="approvals">승인함</button>
               <button class="tab" data-view="contracts">계약서</button>
               <button class="tab" data-view="onboarding">입사서류</button>
               <button class="tab" data-view="payroll">급여관리</button>
               <button class="tab" data-view="integrations">연동관리</button>
+              <button class="tab" data-view="clobeSettings">자료설정</button>
               <button class="tab" data-view="audit">회원권한</button>
             </nav>
             <button id="csvBtn" class="primary">CSV 추가</button>
@@ -2963,6 +2973,10 @@
       <section id="purchaseLedgerView" class="hidden ledger-detail-view" data-ledger-kind="purchase"></section>
       <section id="bankLedgerView" class="hidden ledger-detail-view" data-ledger-kind="bank"></section>
       <section id="cardLedgerView" class="hidden ledger-detail-view" data-ledger-kind="card"></section>
+      <section id="clobeOverviewView" class="hidden"></section>
+      <section id="clobeReviewView" class="hidden"></section>
+      <section id="clobeSummaryView" class="hidden"></section>
+      <section id="clobeSettingsView" class="hidden"></section>
 
       <section id="inventoryView" class="hidden">
         <div class="grid content-grid">
@@ -5381,6 +5395,10 @@
       "purchaseLedger",
       "bankLedger",
       "cardLedger",
+      "clobeOverview",
+      "clobeReview",
+      "clobeSummary",
+      "clobeSettings",
       "employees",
       "inventory",
       "tax",
@@ -10657,6 +10675,9 @@
       if (["salesLedger", "purchaseLedger", "bankLedger", "cardLedger"].includes(currentView)) {
         window.obysLedgerDetails?.open(currentView);
       }
+      if (["clobeOverview", "clobeReview", "clobeSummary", "clobeSettings"].includes(currentView)) {
+        window.obysClobe?.open(currentView);
+      }
       applyAccessPolicy();
     }
 
@@ -14415,6 +14436,7 @@
     init();
   </script>
   <script src="/static/apps/obys/modules/ledger-details.js?v=20260921-r3"></script>
+  <script src="/static/apps/obys/modules/clobe-collection.js?v=20261003-r5"></script>
   <script src="/static/apps/obys/modules/store-assistant-v2.js"></script>
 </body>
 </html>
