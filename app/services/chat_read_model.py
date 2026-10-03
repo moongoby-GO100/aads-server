@@ -906,6 +906,19 @@ async def get_changes_v2(
     }
 
 
+def _effort_payload(values: dict[str, Any]) -> dict[str, Any] | None:
+    """실행 행의 effort_status(JSONB)를 응답용으로 정리한다. 내부 attempts 는 싣지 않는다."""
+    raw = values.get("effort_status")
+    if isinstance(raw, (str, bytes)):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(raw, dict) or not raw:
+        return None
+    return {k: v for k, v in raw.items() if k != "attempts"}
+
+
 async def get_streaming_status_projection(
     *,
     session_id: UUID,
@@ -926,6 +939,7 @@ async def get_streaming_status_projection(
                        te.status,
                        te.last_event_id,
                        te.owner_epoch,
+                       te.effort_status,
                        (te.owner_instance IS NOT NULL AND te.lease_expires_at > NOW()) AS lease_valid,
                        am.id::text AS final_message_id,
                        am.intent AS final_message_intent,
@@ -1170,6 +1184,7 @@ async def get_streaming_status_projection(
             "last_tool": last_tool,
             "execution_id": execution_id,
             "last_event_id": values.get("last_event_id"),
+            "effort": _effort_payload(values),
             "placeholder_message_id": values.get("placeholder_message_id")
             or values.get("placeholder_id"),
             "placeholder_ready": bool(
@@ -1202,6 +1217,7 @@ async def get_streaming_status_projection(
             "last_tool": last_tool,
             "execution_id": execution_id,
             "last_event_id": values.get("last_event_id"),
+            "effort": _effort_payload(values),
             "final_message_id": values.get("final_message_id"),
             "final_message_ready": final_ready,
             "repair_required": not final_ready,
@@ -1217,6 +1233,7 @@ async def get_streaming_status_projection(
             "last_tool": last_tool,
             "execution_id": execution_id,
             "last_event_id": values.get("last_event_id"),
+            "effort": _effort_payload(values),
             "final_message_id": values.get("final_message_id"),
             "final_message_ready": False,
         }

@@ -34,6 +34,7 @@ from app.services.model_registry import list_registered_models as _list_register
 from app.services.model_registry import normalize_provider as _normalize_registry_provider  # noqa: E402
 from app.services.intent_router import IntentResult  # noqa: E402
 from app.services import chat_interrupt_lifecycle as _interrupt_lifecycle  # noqa: E402
+from app.services import session_effort as _session_effort  # noqa: E402
 from scripts.claude_model_contract import (  # noqa: E402
     AADS_MODEL_IDS, CONTRACT_VERSION, ModelObservation, resolve_model,
     runtime_alias, session_key,
@@ -3798,13 +3799,32 @@ async def _stream_litellm_openai(
                     req_body["tools"] = (
                         _oai_tools[:_OPENAI_DIRECT_MAX_TOOLS] if _openai_direct else _oai_tools
                     )
+                _effort_decision = _session_effort.current_decision(session_id)
+                _effort_res = None
+                _requested_effort = reasoning_effort
+                if _effort_decision is not None:
+                    _effort_res = _session_effort.resolve_for_provider(
+                        _effort_decision, path=_session_effort.PATH_OPENAI_CHAT,
+                        model=display_model or model, has_tools=bool(req_body.get("tools")),
+                    )
+                    if _effort_res.value:
+                        _requested_effort = _effort_res.value
                 try:
                     req_body = _prepare_openai_chat_request(
-                        req_body, display_model or model, direct=_openai_direct, requested_effort=reasoning_effort,
+                        req_body, display_model or model, direct=_openai_direct, requested_effort=_requested_effort,
                     )
                 except ValueError as exc:
                     yield {"type": "error", "content": str(exc)}
                     return
+                if _effort_decision is not None and _effort_res is not None:
+                    # 요청 body 의 reasoning_effort 가 적용 증거다. 세션 강도를 못 싣는 모델이면 sent=None.
+                    _effort_event = await _session_effort.record_applied(
+                        _effort_decision, path=_session_effort.PATH_OPENAI_CHAT,
+                        model=display_model or model, resolution=_effort_res,
+                        sent=req_body.get("reasoning_effort") if _effort_res.value else None,
+                    )
+                    if _effort_event:
+                        yield _effort_event
 
                 async with client.stream(
                     "POST",
@@ -4070,6 +4090,26 @@ async def _stream_cli_relay_once(
     if force_oauth_refresh:
         req_body["force_oauth_refresh"] = True
 
+    # 세션 추론 강도: CLI 는 실행 중 프로세스를 바꿀 수 없다. 이번 요청이 띄우는 새 프로세스의
+    # --effort 인자로만 전달하고, 릴레이가 effort_ack 로 확인해 줄 때만 적용으로 기록한다.
+    _effort_decision = _session_effort.current_decision(session_id)
+    _effort_res = None
+    _effort_ack_pending = False
+    if _effort_decision is not None:
+        _effort_res = _session_effort.resolve_for_provider(
+            _effort_decision, path=_session_effort.PATH_CLAUDE_CLI, model=sdk_model,
+        )
+        if _effort_res.value:
+            req_body["effort"] = _effort_res.value
+            _effort_ack_pending = True
+        else:
+            _effort_event = await _session_effort.record_applied(
+                _effort_decision, path=_session_effort.PATH_CLAUDE_CLI, model=sdk_model,
+                resolution=_effort_res, sent=None,
+            )
+            if _effort_event:
+                yield _effort_event
+
     if isinstance(formatted, list):
         # 이미지 포함: content block 배열로 전달 → relay가 --input-format stream-json 사용
         req_body["content_blocks"] = formatted
@@ -4146,6 +4186,27 @@ async def _stream_cli_relay_once(
                     try:
                         event = json.loads(line)
                     except json.JSONDecodeError:
+                        continue
+
+                    if _effort_ack_pending and event.get("type") != "heartbeat":
+                        _effort_ack_pending = False
+                        if event.get("type") == "effort_ack" and event.get("effort") == req_body.get("effort"):
+                            _effort_event = await _session_effort.record_applied(
+                                _effort_decision, path=_session_effort.PATH_CLAUDE_CLI, model=sdk_model,
+                                resolution=_effort_res, sent=str(event.get("effort")),
+                            )
+                        else:
+                            _effort_event = await _session_effort.record_applied(
+                                _effort_decision, path=_session_effort.PATH_CLAUDE_CLI, model=sdk_model,
+                                resolution=_session_effort.Resolution(
+                                    None, _session_effort.APPLY_UNSUPPORTED,
+                                    "릴레이가 effort 인자 적용을 확인하지 않음(구버전 릴레이)",
+                                ),
+                                sent=None,
+                            )
+                        if _effort_event:
+                            yield _effort_event
+                    if event.get("type") == "effort_ack":
                         continue
 
                     # Observe provider receipts locally as well as at the relay.
@@ -4924,6 +4985,23 @@ async def _stream_codex_relay_once(
         req_body["account_order"] = account_order
     if image_attachments:
         req_body["image_attachments"] = image_attachments
+    _effort_decision = _session_effort.current_decision(session_id)
+    _effort_res = None
+    _effort_ack_pending = False
+    if _effort_decision is not None:
+        _effort_res = _session_effort.resolve_for_provider(
+            _effort_decision, path=_session_effort.PATH_CODEX_CLI, model=model,
+        )
+        if _effort_res.value:
+            req_body["effort"] = _effort_res.value
+            _effort_ack_pending = True
+        else:
+            _effort_event = await _session_effort.record_applied(
+                _effort_decision, path=_session_effort.PATH_CODEX_CLI, model=model,
+                resolution=_effort_res, sent=None,
+            )
+            if _effort_event:
+                yield _effort_event
     display_model = _CODEX_MODEL_DISPLAY.get(model, model)
     # 2026-09-19 실측: 코덱스 계정 refresh_token 이 무효가 되면 CLI 가 401 만 찍고
     # 본문 없이 끝난다. 릴레이는 그래도 200 + {"result":""} 를 돌려주므로 여기서
@@ -4963,6 +5041,26 @@ async def _stream_codex_relay_once(
                     except json.JSONDecodeError:
                         continue
                     evt_type = event.get("type", "")
+                    if _effort_ack_pending and evt_type != "heartbeat":
+                        _effort_ack_pending = False
+                        if evt_type == "effort_ack" and event.get("effort") == req_body.get("effort"):
+                            _effort_event = await _session_effort.record_applied(
+                                _effort_decision, path=_session_effort.PATH_CODEX_CLI, model=model,
+                                resolution=_effort_res, sent=str(event.get("effort")),
+                            )
+                        else:
+                            _effort_event = await _session_effort.record_applied(
+                                _effort_decision, path=_session_effort.PATH_CODEX_CLI, model=model,
+                                resolution=_session_effort.Resolution(
+                                    None, _session_effort.APPLY_UNSUPPORTED,
+                                    "릴레이가 effort 인자 적용을 확인하지 않음(구버전 릴레이)",
+                                ),
+                                sent=None,
+                            )
+                        if _effort_event:
+                            yield _effort_event
+                    if evt_type == "effort_ack":
+                        continue
                     if evt_type == "assistant" and event.get("subtype") == "text":
                         if event.get("text"):
                             _saw_output = True
@@ -6228,6 +6326,28 @@ async def _stream_anthropic(
             }
         # Extended Thinking + tool_choice="any" 비호환 — auto로 복귀
         _drop_tool_choice_for_thinking(api_kwargs, thinking_config)
+
+        # 세션 추론 강도: 이 요청 body 의 output_config.effort 가 적용 증거다(모델 재결정·폴백마다 재검증).
+        _effort_decision = _session_effort.current_decision(session_id)
+        if _effort_decision is not None:
+            _effort_res = _session_effort.resolve_for_provider(
+                _effort_decision, path=_session_effort.PATH_ANTHROPIC, model=model_id,
+            )
+            _oc = dict(api_kwargs.get("output_config") or {})
+            if _effort_res.value:
+                _oc["effort"] = _effort_res.value
+            else:
+                _oc.pop("effort", None)
+            if _oc:
+                api_kwargs["output_config"] = _oc
+            else:
+                api_kwargs.pop("output_config", None)
+            _effort_event = await _session_effort.record_applied(
+                _effort_decision, path=_session_effort.PATH_ANTHROPIC, model=model_id,
+                resolution=_effort_res, sent=(api_kwargs.get("output_config") or {}).get("effort"),
+            )
+            if _effort_event:
+                yield _effort_event
 
         # 디버그: API 호출 전 payload 요약 로깅
         _n_msgs = len(api_kwargs.get("messages", []))

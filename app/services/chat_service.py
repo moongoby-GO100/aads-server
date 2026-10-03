@@ -9826,6 +9826,48 @@ async def get_session(session_id: str, tenant_id: Optional[str] = None) -> Optio
         return _row_to_dict(row) if row else None
 
 
+async def get_session_detail(session_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """세션 + 최근 실행의 effort 기록. 폴링 경로(get_session)에는 추가 쿼리를 얹지 않는다."""
+    result = await get_session(session_id, tenant_id=tenant_id)
+    if not result:
+        return None
+    try:
+        from app.services import session_effort
+
+        result["effort"] = await session_effort.get_store().latest_execution_record(session_id)
+    except Exception as exc:  # noqa: BLE001 — 강도 표시 실패가 세션 복원을 막으면 안 된다
+        logger.debug("session_effort_latest_failed session=%s err=%s", session_id[:8], str(exc)[:120])
+    return result
+
+
+async def get_session_effort(session_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """세션 추론 강도 설정 + 최근 실행 기록. 테넌트 밖 세션은 None."""
+    from app.services import session_effort
+
+    if not await get_session(session_id, tenant_id=tenant_id):
+        return None
+    return await session_effort.session_view(session_id)
+
+
+async def update_session_effort(
+    session_id: str, mode: str, level: Optional[str], tenant_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """이 세션의 effort 설정만 바꾼다. 잘못된 mode/level 은 ValueError."""
+    from app.services import session_effort
+
+    tenant_uuid = _require_tenant_uuid(tenant_id, "update_session_effort")
+    try:
+        out = await session_effort.update_session_setting(
+            session_id=session_id, tenant_id=str(tenant_uuid), mode=mode, level=level,
+        )
+    except session_effort.EffortSettingError as exc:
+        raise ValueError(str(exc)) from exc
+    if out is None:
+        return None
+    out["latest_execution"] = (await session_effort.session_view(session_id) or {}).get("latest_execution")
+    return out
+
+
 async def list_sessions(workspace_id: str, limit: int = 50, tag: Optional[str] = None, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     tenant_uuid = _require_tenant_uuid(tenant_id, "list_sessions")
     async with get_pool().acquire() as conn:
@@ -14264,6 +14306,23 @@ async def send_message_stream(
             except Exception as _exec_model_err:
                 logger.debug(f"execution_requested_model_update_failed: {_exec_model_err}")
 
+        # 세션 추론 강도: 새 요청 시작에서 한 번만 정한다(같은 execution 재호출은 기록 재사용).
+        _effort_decision = None
+        try:
+            from app.services import session_effort as _session_effort
+
+            _effort_decision = await _session_effort.begin_request(
+                session_id=session_id,
+                execution_id=_execution_id_str,
+                intent=str(intent or ""),
+                content=content,
+            )
+            _session_effort.set_current_decision(_effort_decision)
+            if _effort_decision is not None:
+                yield f"data: {json.dumps(_effort_decision.event(), ensure_ascii=False)}\n\n"
+        except Exception as _effort_err:
+            logger.warning("session_effort_begin_failed session=%s err=%s", session_id[:8], str(_effort_err)[:160])
+
         if intent == "discussion":
             from app.services.intent_router import _discussion_guard_fallback, is_explicit_debate_request
             if not is_explicit_debate_request(content):
@@ -15161,6 +15220,9 @@ async def send_message_stream(
                         model_used = event.get("model", model_used)
                         actual_model_used = event.get("actual_model", actual_model_used or model_used)
                         yield f"data: {json.dumps({'type': 'model_info', 'model': model_used})}\n\n"
+                    elif etype == "effort_status":
+                        # 공급사 요청 body 에 실제로 실은 값 기준 기록(적용 증거). 숨은 추론 본문은 싣지 않는다.
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     elif etype == "interrupt_applied":
                         yield _interrupt_lifecycle.applied_sse(event)
                     elif etype == "delta":
@@ -15212,6 +15274,15 @@ async def send_message_stream(
                         output_tokens = event.get("output_tokens", 0) or 0
                         thinking_summary = event.get("thinking_summary") or thinking_summary
                         # tools_called는 스트리밍 중 직접 누적한 구조화 이벤트 유지 (done 이벤트로 덮어쓰지 않음)
+                        if _effort_decision is not None and _effort_decision.apply_path is None:
+                            try:
+                                from app.services import session_effort as _session_effort
+
+                                _closing = await _session_effort.finalize_unreported(_effort_decision, _done_actual_model)
+                                if _closing:
+                                    yield f"data: {json.dumps(_closing, ensure_ascii=False)}\n\n"
+                            except Exception as _effort_close_err:
+                                logger.debug("session_effort_finalize_failed: %s", _effort_close_err)
                     elif etype == "error":
                         _err_content = event.get('content', '오류')
                         _err_lower = _err_content.lower()
@@ -17100,6 +17171,8 @@ async def list_research_history(limit: int = 50) -> List[Dict[str, Any]]:
 
 # #8: JSONB 필드 목록 (파싱 필요한 컬럼만)
 _JSONB_FIELDS = frozenset({
+    "effort_pending",
+    "effort_status",
     "attachments",
     "sources",
     "tools_called",

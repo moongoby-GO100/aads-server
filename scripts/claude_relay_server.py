@@ -1589,6 +1589,27 @@ def _build_codex_home(session_id, mcp_cfg=None, account_order=None):
     return str(home)
 
 
+# 세션 추론 강도(effort) — 실행 중인 CLI 프로세스는 바꿀 수 없다. 요청마다 새로 띄우는
+# 프로세스의 인자로만 전달하고, 실제로 인자에 실었을 때만 effort_ack 로 앱에 알린다.
+# claude CLI 는 잘못된 값을 경고만 하고 무시하고, codex 는 값을 검증하지 않으므로 여기서 거른다.
+_CLAUDE_EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
+_CODEX_EFFORT_VALUES = ("low", "medium", "high", "xhigh")
+
+
+def _normalize_effort(value, allowed):
+    value = str(value or "").strip().lower()
+    return value if value in allowed else ""
+
+
+async def _write_effort_ack(response, effort):
+    if not effort:
+        return
+    try:
+        await _stream_write(response, json.dumps({"type": "effort_ack", "effort": effort}).encode() + b"\n")
+    except Exception as exc:  # 끊김은 이후 출력 쓰기에서 다시 감지되어 정리된다
+        logger.debug("effort_ack write failed: %s", str(exc)[:120])
+
+
 async def handle_stream(request):
     try:
         body = await request.json()
@@ -1602,6 +1623,7 @@ async def handle_stream(request):
     content_blocks = body.get("content_blocks")
     model = body.get("model", "claude-opus")
     aads_session_id = body.get("session_id", "")
+    effort = _normalize_effort(body.get("effort"), _CLAUDE_EFFORT_VALUES)
 
     if not messages_text and not content_blocks:
         return web.json_response({"error": "messages_text or content_blocks required"}, status=400)
@@ -1784,6 +1806,8 @@ async def handle_stream(request):
                 cmd.extend(["--input-format", "stream-json"])
             if is_resume:
                 cmd.extend(["--resume", cli_session_id])
+            if effort:
+                cmd.extend(["--effort", effort])
 
             _stdin_data = stdin_payload if use_stream_json_input else prompt
             logger.info("CLI: model=%s aads=%s cli=%s resume=%s prompt_len=%d cmd_mode=%s mcp_mode=%s",
@@ -1811,6 +1835,7 @@ async def handle_stream(request):
             # AADS-191B: lease registry에 PID/모델 등록
             _lease.attach_proc(proc.pid, cli_model)
 
+            await _write_effort_ack(response, effort)
             proc.stdin.write(_stdin_data.encode("utf-8"))
             await proc.stdin.drain()
             proc.stdin.close()
@@ -2225,6 +2250,7 @@ async def handle_codex_stream(request):
     tool_schemas = body.get("tool_schemas", [])
     image_attachments = body.get("image_attachments", [])
     model = body.get("model", "gpt-5.5")
+    codex_effort = _normalize_effort(body.get("effort"), _CODEX_EFFORT_VALUES)
     session_id = body.get("session_id", "")
     account_order = body.get("account_order")
     if account_order is not None and not isinstance(account_order, list):
@@ -2342,6 +2368,8 @@ async def handle_codex_stream(request):
                 cmd.extend(["--image", image_path])
             if codex_model:
                 cmd.extend(["-m", codex_model])
+            if codex_effort:
+                cmd.extend(["-c", f'model_reasoning_effort="{codex_effort}"'])
             # Codex reads '-' from stdin. Never put a chat transcript in argv:
             # long sessions exceed the OS per-argument limit (E2BIG).
             cmd.append("-")
@@ -2381,6 +2409,7 @@ async def handle_codex_stream(request):
             full_text = ""
             input_tokens = output_tokens = 0
             result_sent = False
+            await _write_effort_ack(response, codex_effort)
             try:
                 proc.stdin.write(prompt.encode("utf-8"))
                 await proc.stdin.drain()

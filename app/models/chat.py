@@ -79,8 +79,28 @@ class SessionOut(BaseModel):
     current_model: Optional[str] = None
     role_key: Optional[str] = None
     current_execution_id: Optional[uuid.UUID] = None
+    effort_mode: str = "auto"
+    effort_manual: Optional[str] = None
+    effort_pending: Optional[Dict[str, Any]] = None
+    effort: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
+
+
+class SessionEffortUpdate(BaseModel):
+    """PUT /chat/sessions/{id}/effort 요청. mode=auto 이면 level 은 비운다."""
+
+    mode: Literal["auto", "manual"]
+    level: Optional[Literal["medium", "high", "xhigh"]] = None
+
+
+class SessionEffortOut(BaseModel):
+    mode: str
+    level: Optional[str] = None
+    pending: Optional[Dict[str, Any]] = None
+    status: Optional[str] = None
+    policy_version: str
+    latest_execution: Optional[Dict[str, Any]] = None
 
 
 class SessionAttentionOut(BaseModel):
@@ -210,6 +230,7 @@ class StreamingStatusOut(BaseModel):
     completion_token: Optional[str] = None
     final_message_id: Optional[str] = None
     final_message_ready: bool = False
+    effort: Optional[Dict[str, Any]] = None
     # Advertised chat protocol capabilities; clients only switch adapters when
     # "chat.protocol.v2" is present, so an empty/legacy list keeps v1 behaviour.
     capabilities: List[str] = Field(default_factory=list)

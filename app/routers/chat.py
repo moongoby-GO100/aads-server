@@ -60,6 +60,8 @@ from app.models.chat import (
     MessageUpdateRequest,
     ResearchOut,
     SessionCreate,
+    SessionEffortOut,
+    SessionEffortUpdate,
     SessionAttentionAckOut,
     SessionAttentionSummaryOut,
     SessionOut,
@@ -1152,7 +1154,7 @@ async def get_session(
     context: TenantContext = Depends(require_tenant_viewer),
 ):
     """단일 세션 조회 (해시 기반 세션 복원용)."""
-    result = await svc.get_session(str(session_id), tenant_id=_tenant_id(context))
+    result = await svc.get_session_detail(str(session_id), tenant_id=_tenant_id(context))
     if not result:
         raise _NOT_FOUND("session")
     return result
@@ -1208,6 +1210,36 @@ async def update_session(
 ):
     """세션 수정 (title, pinned)."""
     result = await svc.update_session(str(session_id), req.model_dump(exclude_none=True), tenant_id=_tenant_id(context))
+    if not result:
+        raise _NOT_FOUND("session")
+    return result
+
+
+@router.get("/chat/sessions/{session_id}/effort", response_model=SessionEffortOut, tags=["chat-session"])
+async def get_session_effort(
+    session_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """세션 추론 강도 설정 + 가장 최근 실행의 requested/effective 기록."""
+    result = await svc.get_session_effort(str(session_id), tenant_id=_tenant_id(context))
+    if not result:
+        raise _NOT_FOUND("session")
+    return result
+
+
+@router.put("/chat/sessions/{session_id}/effort", response_model=SessionEffortOut, tags=["chat-session"])
+async def update_session_effort(
+    session_id: UUID,
+    req: SessionEffortUpdate,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """이 세션의 추론 강도만 바꾼다. 진행 중 실행이 있으면 status=pending_next_request 로 다음 요청부터 적용."""
+    try:
+        result = await svc.update_session_effort(
+            str(session_id), req.mode, req.level, tenant_id=_tenant_id(context),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     if not result:
         raise _NOT_FOUND("session")
     return result

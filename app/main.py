@@ -2450,6 +2450,10 @@ async def lifespan(app: FastAPI):
                     ("chat_messages", "execution_id", "UUID DEFAULT NULL"),
                     ("chat_messages", "is_hidden", "BOOLEAN NOT NULL DEFAULT FALSE"),
                     ("chat_sessions", "current_execution_id", "UUID DEFAULT NULL"),
+                    ("chat_sessions", "effort_mode", "VARCHAR(10) NOT NULL DEFAULT 'auto'"),
+                    ("chat_sessions", "effort_manual", "VARCHAR(10) DEFAULT NULL"),
+                    ("chat_sessions", "effort_pending", "JSONB DEFAULT NULL"),
+                    ("chat_sessions", "effort_updated_at", "TIMESTAMPTZ DEFAULT NULL"),
                     ("milestones", "dispatch_blocked_at", "TIMESTAMPTZ DEFAULT NULL"),
                     ("tool_results_archive", "is_error", "BOOLEAN DEFAULT FALSE"),
                     ("tool_results_archive", "result_summary", "TEXT"),
@@ -2491,6 +2495,10 @@ async def lifespan(app: FastAPI):
                 await conn.execute(
                     "ALTER TABLE chat_turn_executions "
                     "ADD COLUMN IF NOT EXISTS interrupt_category VARCHAR(50) DEFAULT NULL"
+                )
+                await conn.execute(
+                    "ALTER TABLE chat_turn_executions "
+                    "ADD COLUMN IF NOT EXISTS effort_status JSONB DEFAULT NULL"
                 )
                 await conn.execute(
                     "ALTER TABLE chat_turn_executions "
