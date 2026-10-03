@@ -1,0 +1,24 @@
+{
+  "tested_at_kst": "2026-10-03T11:16:11.970399+09:00",
+  "source": "local Playwright Chromium; file URL; no login; no production approval",
+  "checks": [
+    "empty_comment_rejected",
+    "revision_resubmission_requires_new_confirmation",
+    "approval_confirmation_exact_version_and_demo_disclaimer",
+    "existing_screen_before_missing_blocks_submission",
+    "loading_recovery_preserves_input",
+    "empty_recovery_preserves_input",
+    "error_recovery_preserves_input",
+    "permission_recovery_preserves_input",
+    "expired_recovery_preserves_input",
+    "offline_recovery_preserves_input",
+    "preview_viewport_switch",
+    "no_horizontal_overflow_390",
+    "no_horizontal_overflow_360",
+    "no_horizontal_overflow_768",
+    "no_horizontal_overflow_1440",
+    "no_browser_page_errors"
+  ],
+  "console_page_errors": [],
+  "result": "pass"
+}

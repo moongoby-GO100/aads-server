@@ -14828,3 +14828,11 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 기존 이전 목표 `df479771-f250-4a11-90a3-220432da2bfa` M5 및 수집 목표 `4226a834-d5de-4ac2-9080-b0ad8b49ca2c` M2A/M3에 GoalStateMachine으로 작업 연결, pipeline_jobs context 저장 확인. 구현·대사·로그인 화면·300초 감시는 후속 러너 완료 판정 항목.
 - 공개 `fb.newtalk.kr` HTTP302 및 서버 Playwright 캡처 성공(로그인 미사용): https://aads.newtalk.kr/screenshots/screenshot_20261003_101058_544ff3.png . 공개 화면 가용성과 카페24 서비스 독립성을 혼동하지 않는다.
 - 진아서버 사용·복귀/라일론 자료 제외 유지. OAuth 동의 재요청 금지. 원 TODO는 in_progress 유지. 이번 스위퍼 변경은 host 운영 스크립트이며 API 이미지 배포는 수행하지 않음.
+
+## 2026-10-03 — R-DOC 목업 필수 제출·승인 검토 패키지
+
+- 기획·PRD·설계 v1.0.1 초안과 신규 목업 검토 화면 HTML, 데스크톱/모바일/실패 상태 캡처·manifest 작성. 원본은 docs/specs/rdoc-mockup-review/ 및 관련 plan/prd 파일.
+- 신규 화면 전체 목업, 기존 수정 실제 Before/After 의무와 제출 누락 차단·승인 버전 고정·수정본 재승인·실행 직전 검증을 명세화. 운영 게이트 구현 완료가 아님.
+- DB 초안 정본 rdoc-mockup-review-plan/prd/spec을 R-DOC 목표 0361c451-cc03-4bd1-a423-76051b0546b2에 연결. approved_revision_id null, 본문 해시=로컬 파일 확인. 경로 입력 거절로 content 등록했으므로 source_path는 null; 원본 매핑은 manifest·등록 change_summary에 보존.
+- 미리보기 https://aads.newtalk.kr/screenshots/rdoc-mockup-review-v1/index.html — 공개 서버 Playwright 화면·상호작용 및 문서 링크 검증 통과. 승인 버튼은 메모리 내 시연이며 실제 승인·DB 저장 없음. 검증 상세: docs/specs/rdoc-mockup-review/VERIFICATION.md.
+- DB handover: AADS / verification / rdoc-mockup-mandatory-review-20261003 (36adc8a2-492f-48ac-8b97-eec80596b6f3). 앱 빌드·배포·재시작 없음. 다음: 문서·시안 검토 후 승인본을 고정하고 실제 게이트·검토 화면 구현.

@@ -1,0 +1,114 @@
+{
+  "package": "rdoc-mockup-review-v1",
+  "document_version": "1.0.1",
+  "status": "draft_unapproved",
+  "goal_id": "0361c451-cc03-4bd1-a423-76051b0546b2",
+  "mockup_url": "https://aads.newtalk.kr/screenshots/rdoc-mockup-review-v1/index.html",
+  "assets": [
+    {
+      "path": "docs/plans/20261003_AADS_RDOC_MOCKUP_REVIEW_PLAN.md",
+      "sha256": "d3f016d31b5378980235a166e0e543e5e4d2e25462220afa7c0870aa4fc5d1f2",
+      "bytes": 7411
+    },
+    {
+      "path": "docs/prd/20261003_AADS_RDOC_MOCKUP_REVIEW_PRD.md",
+      "sha256": "33929843b1b671787858649de180f1761d3e54e70885d160a4053af8ba947686",
+      "bytes": 7213
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/VERIFICATION.md",
+      "sha256": "76c17200f32f4e6408d7cd012c8b3492dab9f78488e8c73e0c69bd9aecc5491d",
+      "bytes": 4625
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/approval-confirmation.png",
+      "sha256": "4f9edfb7c415358eecb3c02df57f9d501bf3a2ffcd28e49ed4cc403277892138",
+      "bytes": 272224
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/before-missing.png",
+      "sha256": "7357d9aa7509ac73c879cf5821b126bd4154583afda884ba5955013166efc55c",
+      "bytes": 263232
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/changes-requested.png",
+      "sha256": "35cd4fb61963ff757bb1f75fcd246233b7659b6ca8205b051e338cf79d9df601",
+      "bytes": 258011
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/desktop.png",
+      "sha256": "07da674fe6eecffa7d2d1c277c139b1cb9a19590546e7ea0c9b493ca7c73a16a",
+      "bytes": 245069
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/mobile.png",
+      "sha256": "ad9f2cfb341d197bac06aec414b743122e91391d4420837e0614a9c78a962e5a",
+      "bytes": 229358
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/public-desktop.png",
+      "sha256": "07da674fe6eecffa7d2d1c277c139b1cb9a19590546e7ea0c9b493ca7c73a16a",
+      "bytes": 245069
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/public-mobile.png",
+      "sha256": "ad9f2cfb341d197bac06aec414b743122e91391d4420837e0614a9c78a962e5a",
+      "bytes": 229358
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/public-verification.json",
+      "sha256": "e895b0939ee27b220f71db625cbc205cf7dc70ccfc7121f7b539aac61a13974a",
+      "bytes": 706
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/state-empty.png",
+      "sha256": "a208370cd7cf68a9e2fe946c4656c4dca24a8430b130653b58f63ed671ef2398",
+      "bytes": 224174
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/state-error.png",
+      "sha256": "2577327dffdca990d95f8af772acd36a7935a9d853b1f304f2686ab0f8390803",
+      "bytes": 222207
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/state-expired.png",
+      "sha256": "c2000706e38120cf9d0cedcde250d4d4b72dca4d82830ea8a7c81bbb0d5d0135",
+      "bytes": 223638
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/state-loading.png",
+      "sha256": "2d441badbb43d01d0e35405d6e2ea1453772e35177fb69110cefac11a5bd56eb",
+      "bytes": 211681
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/state-offline.png",
+      "sha256": "7347562c6d1ee3d7d35fa658850e22d511e7f8da5c669a951461adb5af69fe8e",
+      "bytes": 224242
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/state-permission.png",
+      "sha256": "71d02e684374e682d58bac3be8a6305d0e962f3c950e7511de36cc3a463b649d",
+      "bytes": 223530
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/verification.json",
+      "sha256": "bda64ffd9e126f6624c160cf1ff6c62ef3f4eec5497f58f75c5b283479833d10",
+      "bytes": 851
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/evidence-v1/verify_preview.py",
+      "sha256": "8bd2465291a8983a797abcc27db4cbebb31b139f04981dee5cd649f8ce1fe92c",
+      "bytes": 3904
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/mockup-v1.html",
+      "sha256": "5dbc7b23d6afda884b6b685c9603078f8addf6b1264ff33c0db1d7957d2cc331",
+      "bytes": 20344
+    },
+    {
+      "path": "docs/specs/rdoc-mockup-review/spec.md",
+      "sha256": "4563a3b64ccda5de4c55e43b86d3b0467b4cf3b543cca441cdacb57b3e1b40df",
+      "bytes": 9287
+    }
+  ]
+}

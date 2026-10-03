@@ -1,0 +1,18 @@
+{
+  "tested_at_kst": "2026-10-03T11:19:28.042577+09:00",
+  "url": "https://aads.newtalk.kr/screenshots/rdoc-mockup-review-v1/index.html",
+  "login_used": false,
+  "browser": "Playwright Chromium",
+  "result": "pass",
+  "checks": [
+    "published_origin_file_same_sha256",
+    "public_http_200_and_original_css_js_unchanged_CDN_additions_allowed",
+    "public_revision_request_resubmit_and_demo_approval",
+    "public_mobile_render",
+    "plan_link_http_200_and_version_101",
+    "prd_link_http_200_and_version_101",
+    "spec_link_http_200_and_version_101"
+  ],
+  "page_errors": [],
+  "transport_note": "CDN inserts markup/scripts; origin file hash equals source. Original CSS/JS preserved in response."
+}
