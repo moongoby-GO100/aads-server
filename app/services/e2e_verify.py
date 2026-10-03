@@ -25,7 +25,15 @@ _NON_RENDERING_SUFFIXES = (
 # Data/manifest files render nothing on their own, so a backend release manifest
 # must not demand screen evidence. They count as screen work only inside a UI
 # source tree (dashboard config, i18n strings), where the path markers apply.
-_NON_RENDERING_DATA_SUFFIXES = (".json", ".csv", ".tsv")
+#
+# Raster images follow the same rule: a report evidence screenshot (reports/x/01.png)
+# is an artifact, not a UI change, but dashboard public/components assets still render.
+# .svg is deliberately NOT listed: it is XML markup the browser renders and can carry
+# script/CSS, so it stays screen work everywhere.
+_NON_RENDERING_DATA_SUFFIXES = (
+    ".json", ".csv", ".tsv",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico",
+)
 _BROWSER_FLOW_TIMEOUT_SECONDS = 150.0
 _DOM_SETTLE_TIMEOUT_MS = 20_000
 _DOM_ASSERTION_BUDGET_SECONDS = 20.0

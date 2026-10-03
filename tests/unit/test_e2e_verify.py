@@ -6,6 +6,7 @@ import types
 import pytest
 
 from app.services.e2e_verify import (
+    _renders_nothing,
     assert_screen_evidence_gate,
     evidence_passes_gate,
     run_e2e_verify,
@@ -17,7 +18,9 @@ class _Conn:
     def __init__(self, metadata=None):
         self.metadata = metadata
 
-    async def fetchrow(self, query, job_id):
+    async def fetchrow(self, query, job_id, *args):
+        if args:  # deferral lookup (log_type, phase): no deferral recorded in these cases
+            return None
         assert "e2e_evidence" in query
         return {"metadata": self.metadata} if self.metadata is not None else None
 
@@ -131,6 +134,33 @@ def test_screen_gate_ignores_report_csv():
     assert screen_verification_required(
         instruction, ["reports/summary.csv", "src/components/Login.tsx"],
     )
+
+
+def test_screen_gate_ignores_report_evidence_images():
+    """Report evidence screenshots are artifacts; runner-d08c33b4 was blocked by this false positive."""
+    assert _renders_nothing("reports/20261003_x_evidence/01.png")
+    assert _renders_nothing("reports/x/photo.JPG")
+    assert not screen_verification_required(
+        "화면 캡처 증거 회수",
+        ["reports/a_RESULT.md", "reports/a_evidence/01.png", "reports/a_evidence/02.txt"],
+    )
+    # Images inside a UI source tree are still screen work (regression guard).
+    assert not _renders_nothing("src/components/logo.png")
+    assert not _renders_nothing("aads-dashboard/public/static/hero.webp")
+    assert screen_verification_required(
+        "화면 캡처 증거 회수", ["reports/a_evidence/01.png", "src/components/logo.png"],
+    )
+    # A UI source file next to the evidence images keeps the gate on.
+    assert screen_verification_required(
+        "화면 캡처 증거 회수", ["reports/a_evidence/01.png", "src/components/Login.tsx"],
+    )
+
+
+def test_svg_is_never_treated_as_non_rendering():
+    """Policy: .svg is renderable markup, so it is screen work even under reports/."""
+    assert not _renders_nothing("reports/x_evidence/diagram.svg")
+    assert not _renders_nothing("src/components/icon.svg")
+    assert screen_verification_required("화면 캡처 증거 회수", ["reports/x_evidence/diagram.svg"])
 
 
 def test_screen_gate_ignores_local_shell_copy():
