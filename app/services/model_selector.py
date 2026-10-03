@@ -2917,6 +2917,9 @@ async def call_stream(
                         _err = True
                         _err_msg = event.get("content", "")
                         logger.warning(f"relay_err: {_target_model}/slot{_slot}[{_si}] — {_err_msg[:80]}")
+                        if _is_request_rejected_error(_err_msg):
+                            yield _request_rejected_event(_err_msg)
+                            return
                         if any(k in _err_msg.lower() for k in ("429", "rate", "limit", "overloaded", "quota")):
                             _reset_secs = _parse_quota_reset_seconds(_err_msg)
                             _mark_slot_cooldown(_slot, duration_override=_reset_secs)
@@ -2957,9 +2960,8 @@ async def call_stream(
                 if _slot == _ACCOUNT_SLOTS[0] and not _is_cli_auth_error(_err_msg):
                     _err = False
                     logger.info(f"relay_failed: SDK for {_target_model}[{_si}]")
-                    async for event in iter_with_stall_timeout(
-                        _stream_agent_sdk(_target_model, system_prompt, messages, session_id=session_id),
-                        label=f"agent_sdk:{_target_model}", as_error_event=True,
+                    async for event in _iter_agent_sdk_fallback(
+                        _target_model, system_prompt, messages, session_id,
                     ):
                         if event.get("type") == "error":
                             _err = True
@@ -2992,6 +2994,9 @@ async def call_stream(
                     _err = True
                     _err_msg = event.get("content", "")
                     logger.warning(f"relay_err: {_fm}/slot{_fs}[{_fi}] — {_err_msg[:80]}")
+                    if _is_request_rejected_error(_err_msg):
+                        yield _request_rejected_event(_err_msg)
+                        return
                     _err_lower = _err_msg.lower()
                     # 429/한도/크레딧 오류 → 복구 시간 파싱 후 쿨다운 등록
                     if any(k in _err_lower for k in ("429", "rate", "limit", "overloaded", "quota")):
@@ -3060,9 +3065,8 @@ async def call_stream(
             if _fs == _ACCOUNT_SLOTS[0] and not _is_cli_auth_error(_err_msg):
                 _err = False
                 logger.info(f"relay_failed: SDK for {_fm}[{_fi}]")
-                async for event in iter_with_stall_timeout(
-                    _stream_agent_sdk(_fm, system_prompt, messages, session_id=session_id),
-                    label=f"agent_sdk:{_fm}", as_error_event=True,
+                async for event in _iter_agent_sdk_fallback(
+                    _fm, system_prompt, messages, session_id,
                 ):
                     if event.get("type") == "error":
                         _err = True
@@ -4547,6 +4551,73 @@ def _is_stale_resume_error(error_content: str) -> bool:
     """
     lowered = str(error_content or "").lower()
     return "no conversation found" in lowered and "session id" in lowered
+
+
+_REQUEST_REJECTED_BODY_MARKERS = (
+    "invalid json",
+    "json object required",
+    "request entity too large",
+    "payload too large",
+    "maximum request body size",
+)
+_REQUEST_REJECTED_USER_MESSAGE = (
+    "요청이 너무 커서(첨부 이미지 등) 모델 서버가 받지 못했습니다 — "
+    "이미지 수/크기를 줄여 다시 보내 주세요"
+)
+
+
+def _is_request_rejected_error(error_content: str) -> bool:
+    """릴레이가 요청 자체를 400/413 으로 거절했는가 — 결정적 오류.
+
+    본문이 깨졌거나 너무 크면 슬롯·모델·경로를 바꿔도 같은 요청이라 결과가 같다.
+    2026-10-03 03:48Z `CLI Relay 400: invalid JSON` 뒤에 SDK 폴백이 같은 거대 본문을
+    들고 202초간 무응답이었다. 그래서 재전송하지 않고 사용자에게 바로 알린다.
+    """
+    lowered = str(error_content or "").lower()
+    status = _re_mod.search(r"cli relay (400|413)\b", lowered)
+    if not status:
+        return False
+    if status.group(1) == "413":
+        return True
+    return any(marker in lowered for marker in _REQUEST_REJECTED_BODY_MARKERS)
+
+
+def _request_rejected_event(error_content: str) -> Dict[str, Any]:
+    code = str(error_content or "").strip()[:200]
+    return {
+        "type": "error",
+        "content": f"{_REQUEST_REJECTED_USER_MESSAGE} [relay_request_rejected: {code}]",
+        "error_type": "relay_request_rejected",
+        "terminal": True,
+    }
+
+
+# SDK 폴백 첫 출력 상한. 일반 스톨 상한(420s)은 첫응답 워치독(180s)보다 길어
+# 폴백이 멈추면 사용자 쪽 타임아웃이 먼저 터진다. 일반 상한보다 길어지지는 않는다.
+# 0 이하면 이 전용 상한을 끄고 일반 상한을 따른다(None).
+def _sdk_first_event_timeout_sec() -> Optional[float]:
+    try:
+        value = float(os.getenv("AADS_SDK_FALLBACK_FIRST_EVENT_SEC", "60"))
+    except ValueError:
+        value = 60.0
+    if value <= 0:
+        return None
+    general_first = stream_stall_limits()[0]
+    return min(value, general_first) if general_first > 0 else value
+
+
+def _iter_agent_sdk_fallback(
+    model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    session_id: Optional[str],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    return iter_with_stall_timeout(
+        _stream_agent_sdk(model, system_prompt, messages, session_id=session_id),
+        label=f"agent_sdk:{model}",
+        first_output_sec=_sdk_first_event_timeout_sec(),
+        as_error_event=True,
+    )
 
 
 _NO_SLOT_ALERT_AT: Dict[str, float] = {}
