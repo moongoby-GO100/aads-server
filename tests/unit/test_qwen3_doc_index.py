@@ -6,6 +6,10 @@ import pytest
 
 from app.services import doc_index
 
+SCOPE = doc_index.DocSearchScope(
+    tenant_id="00000000-0000-0000-0000-0000000000a1", user_id="u-1",
+)
+
 
 def test_qwen_contract_and_instruction_pairing():
     assert doc_index.QWEN_DIMENSION == 1024
@@ -134,7 +138,7 @@ async def test_mode_call_order_and_qwen_success_skips_legacy(monkeypatch):
     monkeypatch.setattr(doc_index, "search_docs_legacy", legacy)
     monkeypatch.setattr(doc_index, "embed_qwen_query", embed)
     monkeypatch.setattr(doc_index, "search_docs_qwen3", qwen)
-    rows = await doc_index.search_docs([0.0] * 768, query_text="질문")
+    rows = await doc_index.search_docs([0.0] * 768, query_text="질문", scope=SCOPE)
     assert rows[0]["doc_path"] == "qwen"
     assert calls == ["embed", "qwen"]
 
@@ -148,7 +152,7 @@ async def test_qwen_mode_falls_back_to_legacy(monkeypatch):
     monkeypatch.setattr(doc_index, "_QWEN_MODE", "qwen3")
     monkeypatch.setattr(doc_index, "search_docs_legacy", legacy)
     monkeypatch.setattr(doc_index, "embed_qwen_query", broken)
-    assert (await doc_index.search_docs([0.0] * 768, query_text="질문"))[0]["doc_path"] == "legacy"
+    assert (await doc_index.search_docs([0.0] * 768, query_text="질문", scope=SCOPE))[0]["doc_path"] == "legacy"
 
 
 @pytest.mark.asyncio
@@ -160,7 +164,7 @@ async def test_qwen_empty_falls_back_to_legacy(monkeypatch):
     monkeypatch.setattr(doc_index, "search_docs_legacy", legacy)
     monkeypatch.setattr(doc_index, "embed_qwen_query", embed)
     monkeypatch.setattr(doc_index, "search_docs_qwen3", empty)
-    assert (await doc_index.search_docs([0.0] * 768, query_text="질문"))[0]["doc_path"] == "legacy"
+    assert (await doc_index.search_docs([0.0] * 768, query_text="질문", scope=SCOPE))[0]["doc_path"] == "legacy"
 
 
 @pytest.mark.asyncio
@@ -184,7 +188,7 @@ async def test_hybrid_runs_independently_and_fuses_ranks(monkeypatch):
     monkeypatch.setattr(doc_index, "search_docs_legacy", legacy)
     monkeypatch.setattr(doc_index, "embed_qwen_query", embed)
     monkeypatch.setattr(doc_index, "search_docs_qwen3", qwen)
-    rows = await doc_index.search_docs([0.0] * 768, query_text="질문")
+    rows = await doc_index.search_docs([0.0] * 768, query_text="질문", scope=SCOPE)
     assert rows[0]["fusion_hits"] == 2
 
 
@@ -199,7 +203,7 @@ async def test_shadow_returns_legacy_before_tracked_observation_finishes(monkeyp
     monkeypatch.setattr(doc_index, "search_docs_legacy", legacy)
     monkeypatch.setattr(doc_index, "embed_qwen_query", embed)
     rows = await asyncio.wait_for(
-        doc_index.search_docs([0.0] * 768, query_text="질문"), .2,
+        doc_index.search_docs([0.0] * 768, query_text="질문", scope=SCOPE), .2,
     )
     assert rows[0]["doc_path"] == "legacy"
     assert len(doc_index._shadow_tasks) == 1

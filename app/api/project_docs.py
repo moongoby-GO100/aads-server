@@ -1947,6 +1947,7 @@ async def search_docs_semantic(
     q: str = Query(..., min_length=2, max_length=300, description="찾는 내용 (뜻으로 찾는다)"),
     limit: int = Query(5, ge=1, le=50),
     project: Optional[str] = Query(None, description="프로젝트 한정 (AADS/GO100/KIS)"),
+    context: TenantContext = Depends(require_tenant_member),
 ):
     """문서 **내용** 으로 찾는다 — 파일명이 아니라 뜻으로.
 
@@ -1962,14 +1963,29 @@ async def search_docs_semantic(
     색인은 `scripts/index_docs.py` 가 만든다. 아직 임베딩이 안 채워진
     조각은 검색되지 않으므로, 응답에 진행률을 같이 준다 — 결과가 적을 때
     "없는 것" 인지 "아직 안 된 것" 인지 구분할 수 있어야 한다.
+
+    접근 범위는 인증 의존성이 푼 tenant·user 에서만 만든다(query 로 받은 tenant 는
+    읽지 않는다). 정본(`canonical://`)은 그 tenant 의 프로젝트 grant 가 있을 때만,
+    색인 건수·문서별 조각 수도 같은 범위로만 센다.
     """
-    from app.core.db_pool import get_pool
     from app.services.chat_embedding_service import EmbeddingRouteUnavailable
-    from app.services.doc_index import embed_query, index_status, search_docs
+    from app.services.doc_index import (
+        DocScopeError,
+        embed_query,
+        index_status,
+        scope_from_tenant_context,
+        search_docs,
+        visible_chunk_counts,
+    )
+
+    try:
+        scope = scope_from_tenant_context(context)
+    except DocScopeError as exc:
+        raise HTTPException(status_code=403, detail="user_identity_required") from exc
 
     status = {}
     try:
-        status = await index_status()
+        status = await index_status(scope)
     except Exception:
         status = {}
 
@@ -1987,7 +2003,7 @@ async def search_docs_semantic(
         raise HTTPException(status_code=503, detail="내용 검색 일시 불가") from exc
 
     rows = await search_docs(
-        query_vector, top_k=limit * 3, project=project, query_text=q,
+        query_vector, top_k=limit * 3, project=project, query_text=q, scope=scope,
     )
 
     # 같은 문서의 여러 조각이 잡히면 가장 잘 맞는 것 하나만 남긴다.
@@ -2008,17 +2024,15 @@ async def search_docs_semantic(
         key=lambda r: (r.get("fusion_rank", float("inf")), -r.get("similarity", 0)),
     )[:limit]
 
-    pool = get_pool()
+    try:
+        totals = await visible_chunk_counts([r["doc_path"] for r in results], scope)
+    except Exception:
+        totals = None
     out = []
     for r in results:
         path = r["doc_path"]
         content = (r.get("content") or "").strip()
-        try:
-            total = await pool.fetchval(
-                "SELECT count(*) FROM doc_chunks WHERE doc_path = $1", path
-            )
-        except Exception:
-            total = None
+        total = totals.get(path) if totals is not None else None
         out.append({
             "path": path,
             "name": os.path.basename(path),

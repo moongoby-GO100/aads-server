@@ -39,6 +39,10 @@ from app.core.token_utils import estimate_tokens
 rag = importlib.import_module("app.services.auto_rag")
 doc_index = importlib.import_module("app.services.doc_index")
 
+SCOPE = doc_index.DocSearchScope(
+    tenant_id="00000000-0000-0000-0000-0000000000a1", user_id="u-1", elevated=False,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 DOC_INDEX_SRC = ROOT / "app/services/doc_index.py"
 
@@ -74,11 +78,16 @@ def _row(**overrides) -> dict:
 def _docs_from(rows, monkeypatch) -> list:
     """실제 `_search_documents` 를 돌려 RAG 가 받는 dict 를 만든다."""
 
-    async def fake_search_docs(embedding, *, top_k=5, project=None, query_text=None):
+    async def fake_search_docs(embedding, *, top_k=5, project=None, query_text=None, scope=None):
+        assert scope == SCOPE, "문서 검색은 세션에서 확정한 범위로만 호출돼야 한다"
         return [dict(r) for r in rows]
 
+    async def fake_scope(session_id):
+        return SCOPE
+
     monkeypatch.setattr("app.services.doc_index.search_docs", fake_search_docs)
-    return asyncio.run(rag._search_documents([0.1] * 8, "AADS", "원장 서버 몇 대인가"))
+    monkeypatch.setattr(rag, "_resolve_doc_scope", fake_scope)
+    return asyncio.run(rag._search_documents([0.1] * 8, "AADS", "원장 서버 몇 대인가", "sess-1"))
 
 
 def _render(docs, monkeypatch, budget=None) -> str:
@@ -263,7 +272,7 @@ def test_search_docs_legacy_preserves_metadata(monkeypatch) -> None:
     pool_mod.get_pool = lambda: _Pool()
     monkeypatch.setitem(sys.modules, "app.core.db_pool", pool_mod)
 
-    out = asyncio.run(doc_index.search_docs_legacy([0.1] * 8, top_k=3, project="AADS"))
+    out = asyncio.run(doc_index.search_docs_legacy([0.1] * 8, top_k=3, project="AADS", scope=SCOPE))
     assert out, "유사도 0.81 행이 걸러졌다"
     expected = _row()
     for column in METADATA_COLUMNS:
@@ -308,7 +317,7 @@ def _fake_pool(rows, monkeypatch) -> None:
 
 def test_search_docs_legacy_returns_nine_contract_fields(monkeypatch) -> None:
     _fake_pool([_row()], monkeypatch)
-    out = asyncio.run(doc_index.search_docs_legacy([0.1] * 8, top_k=3, project="AADS"))
+    out = asyncio.run(doc_index.search_docs_legacy([0.1] * 8, top_k=3, project="AADS", scope=SCOPE))
     assert out, "유사도 0.81 행이 걸러졌다"
     expected = _row()
     missing = [f for f in CONTRACT_FIELDS if f not in out[0]]
@@ -323,7 +332,7 @@ def test_search_docs_qwen3_returns_nine_contract_fields(monkeypatch) -> None:
     """qwen3 경로는 `**dict(r)` 로 펼치므로 SELECT 에서 빠지면 복구 경로가 없다."""
     _fake_pool([_row()], monkeypatch)
     out = asyncio.run(
-        doc_index.search_docs_qwen3([0.1] * doc_index.QWEN_DIMENSION, top_k=3, project="AADS"),
+        doc_index.search_docs_qwen3([0.1] * doc_index.QWEN_DIMENSION, top_k=3, project="AADS", scope=SCOPE),
     )
     assert out, "qwen3 경로가 행을 버렸다"
     missing = [f for f in CONTRACT_FIELDS if f not in out[0]]

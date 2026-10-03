@@ -15,7 +15,9 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import uuid
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -54,6 +56,96 @@ _shadow_tasks: set[asyncio.Task[Any]] = set()
 _shadow_semaphore = asyncio.BoundedSemaphore(_QWEN_SHADOW_MAX_IN_FLIGHT)
 _shadow_reserved = 0
 _shadow_metrics = {"created": 0, "completed": 0, "dropped": 0, "timeout": 0, "error": 0}
+
+
+# ── 접근 범위(tenant · 프로젝트 권한) ───────────────────────────────────────
+#
+# 검색은 **신뢰할 수 있는 컨텍스트**(인증 의존성이 푼 tenant/user, 또는 영속된
+# 채팅 세션 행)에서 만든 `DocSearchScope` 없이는 아무것도 돌려주지 않는다.
+# 요청자가 query/body 로 준 tenant·URI 는 어디에서도 읽지 않는다.
+#
+# 가시성 규칙은 SQL WHERE 에 둔다 — ORDER BY … LIMIT 앞이라 다른 tenant 의
+# 청크가 top_k 를 먼저 채워 버릴 수 없고, 애플리케이션 단 후처리 필터가 한 곳이라도
+# 빠져 새는 경로가 생기지 않는다.
+#
+#   파일 문서  tenant_id IS NULL 이고 canonical 표지가 전혀 없는 청크 (기존 계약).
+#   정본 문서  tenant_id = 요청 tenant 이고, 요청 user 가 그 프로젝트의
+#              project_document_grants(read/write/approve)를 갖거나 elevated 이며,
+#              **지금 이 순간** head 가 그 revision 을 승인본 또는 최신 초안으로
+#              가리키고 보관(archived)되지 않았을 때만. 색인 이후에 승인 포인터가
+#              바뀌었거나 보관된 revision 은 재색인 전에도 즉시 사라진다.
+#   tenant 를 모르는 canonical 청크는 어느 분기에도 맞지 않아 fail-closed 다.
+
+
+class DocScopeError(ValueError):
+    """tenant/user 를 신뢰할 수 있게 확정하지 못했다 — 호출자는 거부해야 한다."""
+
+
+@dataclass(frozen=True)
+class DocSearchScope:
+    tenant_id: str
+    user_id: str
+    elevated: bool = False
+
+    def __post_init__(self) -> None:
+        try:
+            object.__setattr__(self, "tenant_id", str(uuid.UUID(str(self.tenant_id))))
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise DocScopeError("tenant_id must be a UUID") from exc
+        # user_id 가 비어도 범위는 만들 수 있다 — 파일 문서만 보이고(정본은 grant 를
+        # 확인할 주체가 없어 열리지 않는다). 사용자가 반드시 있어야 하는 API 경로는
+        # scope_from_tenant_context 에서 따로 거부한다.
+        object.__setattr__(self, "user_id", str(self.user_id or "").strip())
+        object.__setattr__(self, "elevated", bool(self.elevated))
+
+
+def scope_from_tenant_context(context: Dict[str, Any]) -> DocSearchScope:
+    """`require_tenant_role` 가 돌려준 컨텍스트에서 범위를 만든다.
+
+    `app/api/canonical_documents.py::_scope` 와 같은 규칙이다(elevated =
+    내부 관리자이거나 tenant admin/owner). 두 정의가 갈라지지 않게
+    tests/unit/test_doc_search_tenant_guard.py 가 대조한다.
+    """
+    try:
+        tenant = context["tenant"]["id"]
+        user = context["user"]
+        membership = context.get("membership") or {}
+    except (KeyError, TypeError) as exc:
+        raise DocScopeError("tenant context is incomplete") from exc
+    uid = str(user.get("user_id") or user.get("id") or "")
+    if not uid:
+        raise DocScopeError("user_id is required")
+    elevated = bool(user.get("is_internal_admin")) or membership.get("role") in ("admin", "owner")
+    return DocSearchScope(tenant_id=str(tenant), user_id=uid, elevated=elevated)
+
+
+# 정본 청크가 가리키는 head. 파일 청크는 canonical_head_id 가 NULL 이라 h.* 가 전부 NULL 이다.
+_HEAD_JOIN = (
+    "LEFT JOIN project_document_heads h ON h.id = d.canonical_head_id "
+    "AND h.tenant_id = d.tenant_id AND h.project_key = d.project"
+)
+
+
+def _visible_sql(tenant: int, user: int, elevated: int) -> str:
+    """WHERE 에 그대로 AND 로 붙이는 가시성 조건. 인자는 바인드 파라미터 번호다."""
+    return (
+        "("
+        "(d.tenant_id IS NULL AND d.canonical_head_id IS NULL AND d.canonical_revision_id IS NULL "
+        "AND d.doc_path NOT LIKE 'canonical://%' AND d.label IS DISTINCT FROM '정본')"
+        " OR "
+        f"(d.tenant_id = ${tenant}::uuid AND d.doc_path LIKE 'canonical://%' "
+        "AND d.canonical_head_id IS NOT NULL AND d.canonical_revision_id IS NOT NULL "
+        "AND h.id IS NOT NULL "
+        "AND (h.approved_revision_id = d.canonical_revision_id "
+        "OR h.latest_revision_id = d.canonical_revision_id) "
+        "AND NOT (h.approved_revision_id IS NULL AND COALESCE((SELECT e.action "
+        "FROM project_document_events e WHERE e.head_id = h.id "
+        "AND e.action IN ('approved','archived') ORDER BY e.id DESC LIMIT 1),'') = 'archived') "
+        f"AND ((${elevated}::bool AND ${user}::text <> '') OR EXISTS (SELECT 1 FROM project_document_grants g "
+        f"WHERE g.tenant_id = d.tenant_id AND g.project_key = d.project "
+        f"AND g.user_id = ${user}::text AND g.access = ANY(ARRAY['read','write','approve']))))"
+        ")"
+    )
 
 
 def shadow_metrics() -> Dict[str, int]:
@@ -159,26 +251,33 @@ async def embed_qwen_query(query: str) -> List[float]:
 
 async def search_docs_qwen3(
     query_embedding: List[float], *, top_k: int = 5, project: Optional[str] = None,
+    scope: Optional[DocSearchScope] = None,
 ) -> List[Dict[str, Any]]:
     if len(query_embedding) != QWEN_DIMENSION:
+        return []
+    if scope is None:
+        logger.warning("doc_qwen_search_denied", reason="no_scope")
         return []
     from app.core.db_pool import get_pool
     started = time.monotonic()
     try:
         rows = await get_pool().fetch(
-            """
+            f"""
             SELECT d.doc_path, d.server, d.project, d.title, d.heading, d.content,
                    d.doc_sha256, d.label, d.mtime, d.indexed_at,
                    1 - (q.embedding <=> $1::vector) AS similarity
             FROM doc_chunk_embeddings_qwen3 q
             JOIN doc_chunks d ON d.id = q.chunk_id
+            {_HEAD_JOIN}
             WHERE q.state = 'ready' AND q.embedding IS NOT NULL
               AND q.model_id = $4 AND q.instruction_version = $5
               AND ($3::text IS NULL OR d.project = $3::text)
+              AND {_visible_sql(6, 7, 8)}
             ORDER BY q.embedding <=> $1::vector LIMIT $2
             """,
             str(query_embedding), min(max(1, top_k), _QWEN_TOP_N), project,
             QWEN_MODEL_ID, QWEN_INSTRUCTION_VERSION,
+            scope.tenant_id, scope.user_id, scope.elevated,
         )
     except Exception as exc:
         logger.warning("doc_qwen_search_failed", error=str(exc))
@@ -289,27 +388,34 @@ async def search_docs_legacy(
     *,
     top_k: int = 5,
     project: Optional[str] = None,
+    scope: Optional[DocSearchScope] = None,
 ) -> List[Dict[str, Any]]:
     """문서 청크에서 시맨틱 검색.
 
     결과에 **출처 경로**를 반드시 넣는다. 근거 없이 답이 나오면 비전문가는
     그 답을 검증할 방법이 없다.
     """
+    if scope is None:
+        logger.warning("doc_search_denied", reason="no_scope")
+        return []
     from app.core.db_pool import get_pool
 
     try:
         rows = await get_pool().fetch(
-            """
-            SELECT doc_path, server, project, title, heading, content,
-                   doc_sha256, label, mtime, indexed_at,
-                   1 - (embedding <=> $1::vector) AS similarity
-            FROM doc_chunks
-            WHERE embedding IS NOT NULL
-              AND ($3::text IS NULL OR project = $3::text)
-            ORDER BY embedding <=> $1::vector
+            f"""
+            SELECT d.doc_path, d.server, d.project, d.title, d.heading, d.content,
+                   d.doc_sha256, d.label, d.mtime, d.indexed_at,
+                   1 - (d.embedding <=> $1::vector) AS similarity
+            FROM doc_chunks d
+            {_HEAD_JOIN}
+            WHERE d.embedding IS NOT NULL
+              AND ($3::text IS NULL OR d.project = $3::text)
+              AND {_visible_sql(4, 5, 6)}
+            ORDER BY d.embedding <=> $1::vector
             LIMIT $2
             """,
             str(query_embedding), max(1, top_k), project,
+            scope.tenant_id, scope.user_id, scope.elevated,
         )
     except Exception as exc:
         logger.debug("doc_search_failed", error=str(exc))
@@ -342,19 +448,27 @@ async def search_docs_legacy(
 async def search_docs(
     query_embedding: List[float], *, top_k: int = 5,
     project: Optional[str] = None, query_text: Optional[str] = None,
+    scope: Optional[DocSearchScope] = None,
 ) -> List[Dict[str, Any]]:
-    """Route modes without adding work from a mode the caller did not select."""
+    """Route modes without adding work from a mode the caller did not select.
+
+    `scope` 가 없으면 어느 모드에서도 검색하지 않는다 — 두 임베딩 경로와 RRF 가
+    모두 같은 범위 안에서만 후보를 만든다.
+    """
+    if scope is None:
+        logger.warning("doc_search_denied", reason="no_scope")
+        return []
     limit = max(1, top_k)
     mode = _QWEN_MODE if _QWEN_MODE in {"legacy", "shadow", "qwen3", "hybrid"} else "shadow"
 
     async def legacy() -> List[Dict[str, Any]]:
-        return await search_docs_legacy(query_embedding, top_k=limit, project=project)
+        return await search_docs_legacy(query_embedding, top_k=limit, project=project, scope=scope)
 
     async def qwen() -> List[Dict[str, Any]]:
         if not query_text:
             return []
         vector = await embed_qwen_query(query_text)
-        return await search_docs_qwen3(vector, top_k=limit, project=project)
+        return await search_docs_qwen3(vector, top_k=limit, project=project, scope=scope)
 
     async def observe_shadow() -> None:
         rows = await asyncio.wait_for(qwen(), timeout=_QWEN_SHADOW_TIMEOUT)
@@ -388,19 +502,27 @@ async def search_docs(
     return qwen_rows[:limit]
 
 
-async def index_status() -> Dict[str, Any]:
-    """색인 현황 — 운영 확인용."""
+async def index_status(scope: Optional[DocSearchScope] = None) -> Dict[str, Any]:
+    """색인 현황 — 호출자가 볼 수 있는 청크만 센다.
+
+    전역 건수는 다른 tenant 의 정본이 몇 건 있는지를 알려 주므로 범위 없이는 비운다.
+    """
+    if scope is None:
+        return {}
     from app.core.db_pool import get_pool
 
     row = await get_pool().fetchrow(
-        """
+        f"""
         SELECT count(*) AS chunks,
-               count(embedding) AS embedded,
-               count(DISTINCT doc_path) AS docs,
-               count(DISTINCT server) AS servers,
-               max(indexed_at) AS last_indexed
-        FROM doc_chunks
-        """
+               count(d.embedding) AS embedded,
+               count(DISTINCT d.doc_path) AS docs,
+               count(DISTINCT d.server) AS servers,
+               max(d.indexed_at) AS last_indexed
+        FROM doc_chunks d
+        {_HEAD_JOIN}
+        WHERE {_visible_sql(1, 2, 3)}
+        """,
+        scope.tenant_id, scope.user_id, scope.elevated,
     )
     if not row:
         return {}
@@ -414,3 +536,22 @@ async def index_status() -> Dict[str, Any]:
         "servers": int(row["servers"] or 0),
         "last_indexed": row["last_indexed"].isoformat() if row["last_indexed"] else None,
     }
+
+
+async def visible_chunk_counts(paths: List[str], scope: Optional[DocSearchScope]) -> Dict[str, int]:
+    """문서별 청크 수 — 보이는 청크만 센다(없으면 빈 dict)."""
+    if scope is None or not paths:
+        return {}
+    from app.core.db_pool import get_pool
+
+    rows = await get_pool().fetch(
+        f"""
+        SELECT d.doc_path, count(*) AS chunks
+        FROM doc_chunks d
+        {_HEAD_JOIN}
+        WHERE d.doc_path = ANY($1::text[]) AND {_visible_sql(2, 3, 4)}
+        GROUP BY d.doc_path
+        """,
+        list(paths), scope.tenant_id, scope.user_id, scope.elevated,
+    )
+    return {r["doc_path"]: int(r["chunks"]) for r in rows}

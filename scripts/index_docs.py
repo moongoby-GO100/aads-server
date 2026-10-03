@@ -444,12 +444,12 @@ def pick_canonical_revisions(heads: list[dict]) -> list[tuple[str, dict]]:
         latest_id = h.get("latest_revision_id")
         approved = by_id.get(str(approved_id)) if approved_id else None
         latest = by_id.get(str(latest_id)) if latest_id else None
+        owner = {"project_key": h["project_key"], "document_key": h["document_key"],
+                 "head_id": h.get("head_id"), "tenant_id": h.get("tenant_id")}
         if approved is not None:
-            picked.append(("승인", {**approved, "project_key": h["project_key"],
-                                    "document_key": h["document_key"]}))
+            picked.append(("승인", {**approved, **owner}))
         if latest is not None and (approved is None or str(latest["id"]) != str(approved["id"])):
-            picked.append(("초안", {**latest, "project_key": h["project_key"],
-                                    "document_key": h["document_key"]}))
+            picked.append(("초안", {**latest, **owner}))
     return picked
 
 
@@ -472,6 +472,9 @@ def build_canonical_docs(heads: list[dict]) -> tuple[list[dict], int]:
             "mtime": float(r.get("mtime") or 0),
             "title": f"[{status} v{r['version']}] {title}"[:300],
             "text": text,
+            "tenant_id": r.get("tenant_id"),
+            "head_id": r.get("head_id"),
+            "revision_id": str(r["id"]),
         })
     return docs, skipped
 
@@ -486,11 +489,13 @@ def stale_paths(known: dict, live: set[str], *, canonical: bool) -> list[str]:
     return [p for p in known if is_canonical_path(p) == canonical and p not in live]
 
 
-# 정본 도메인은 **내부 테넌트 것만** 읽는다. doc_chunks 에는 tenant 칸이 없고
-# /project-docs/search 는 테넌트 권한을 확인하지 않는다 — 고객 테넌트 정본을 넣으면
-# project 값이 같을 때 다른 테넌트에 그대로 노출된다.
+# 정본 도메인은 **내부 테넌트 것만** 읽는다. 정본 청크에는 tenant_id / canonical_head_id /
+# canonical_revision_id 를 함께 기록하고(migrations/20261003_doc_chunks_tenant_scope.sql),
+# 검색(app/services/doc_index.py)은 그 값과 서버가 확정한 테넌트·권한으로 SQL 에서 거른다.
+# 이 값이 없는 정본 청크는 검색에 절대 나오지 않는다(fail-closed).
 CANONICAL_HEADS_SQL = (
     "SELECT json_build_object("
+    "'head_id', h.id, 'tenant_id', h.tenant_id,"
     "'project_key', h.project_key, 'document_key', h.document_key,"
     "'approved_revision_id', h.approved_revision_id,"
     "'latest_revision_id', h.latest_revision_id,"
@@ -516,30 +521,53 @@ def fetch_canonical_heads() -> list[dict] | None:
     return [json.loads(line) for line in psql(CANONICAL_HEADS_SQL).splitlines() if line.strip()]
 
 
+SCOPE_COLUMNS_SQL = (
+    "SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+    "AND table_name = 'doc_chunks' AND column_name IN "
+    "('tenant_id','canonical_head_id','canonical_revision_id');"
+)
+SCOPE_KEY_SQL = (
+    "coalesce(tenant_id::text,'') || '|' || coalesce(canonical_head_id::text,'')"
+    " || '|' || coalesce(canonical_revision_id::text,'')"
+)
+
+
+def canonical_scope_key(d: dict) -> str:
+    return f"{d.get('tenant_id') or ''}|{d.get('head_id') or ''}|{d.get('revision_id') or ''}"
+
+
 def index_canonical(srv: str, *, dry_run: bool = False) -> dict:
     """정본을 doc_chunks 에 맞춘다. 파일 청크는 읽지도 지우지도 않는다."""
     heads = fetch_canonical_heads()
     if heads is None:
         print("[index_docs] 정본 테이블 없음 — 정본 색인 건너뜀")
         return {"docs": 0, "changed": 0, "chunks": 0, "removed": 0, "skipped_secret": 0}
+    if psql(SCOPE_COLUMNS_SQL).strip() != "3":
+        # tenant 칸 없이 정본을 넣으면 검색에서 전부 사라지거나(fail-closed) 격리 근거가 없다.
+        print("[index_docs] doc_chunks 에 tenant 칸이 없다 — "
+              "migrations/20261003_doc_chunks_tenant_scope.sql 을 먼저 적용하라", file=sys.stderr)
+        raise SystemExit(2)
     docs, skipped = build_canonical_docs(heads)
     if skipped:
         print(f"[index_docs] 정본 {skipped}건은 SECRET 패턴이 있어 색인에서 뺐다")
 
     # title 도 비교한다. 초안이 승인되면 revision(=doc_path)과 content_hash 는 그대로고
     # `[초안 v1]` → `[승인 v1]` 접두만 바뀐다 — sha 만 보면 표시가 낡은 채 남는다.
-    known: dict[str, tuple[str, str]] = {}
+    # tenant/head/revision 값도 비교한다 — 칸이 비어 있는 기존 정본 청크는 본문이 같아도
+    # 다시 써서 격리 값을 채운다(이 값이 없으면 검색에 나오지 않는다).
+    known: dict[str, tuple[str, str, str]] = {}
     for line in psql(
-        f"SELECT doc_path, doc_sha256, title FROM doc_chunks WHERE server={lit(srv)} "
+        f"SELECT doc_path, doc_sha256, {SCOPE_KEY_SQL}, title FROM doc_chunks WHERE server={lit(srv)} "
         f"AND label={lit(CANONICAL_LABEL)} AND doc_path LIKE {lit(CANONICAL_PREFIX + '%')} "
-        f"GROUP BY doc_path, doc_sha256, title"
+        f"GROUP BY doc_path, doc_sha256, {SCOPE_KEY_SQL}, title"
     ).splitlines():
-        parts = line.split("\x1f", 2)
-        if len(parts) == 3:
-            known[parts[0]] = (parts[1], parts[2])
+        parts = line.split("\x1f", 3)
+        if len(parts) == 4:
+            known[parts[0]] = (parts[1], parts[2], parts[3])
 
     live = {d["path"] for d in docs}
-    changed = [d for d in docs if known.get(d["path"]) != (d["sha256"], d["title"])]
+    changed = [d for d in docs
+               if known.get(d["path"]) != (d["sha256"], canonical_scope_key(d), d["title"])]
     stale = stale_paths(known, live, canonical=True)
     n_chunks = sum(len(canonical_chunks(d["text"])) for d in changed)
     print(f"[index_docs] 정본 {len(docs)}건 중 변경/신규 {len(changed)}건, 제거 {len(stale)}건"
@@ -557,12 +585,14 @@ def index_canonical(srv: str, *, dry_run: bool = False) -> dict:
         rows = [
             f"({lit(srv)},{lit(d['path'])},{lit(d['sha256'])},{lit(d['project'])},"
             f"{lit(d['label'])},{lit(d['title'])},{lit(heading)},{idx},{lit(body)},"
-            f"to_timestamp({d['mtime']:.0f}))"
+            f"to_timestamp({d['mtime']:.0f}),{lit(d['tenant_id'])}::uuid,"
+            f"{lit(d['head_id'])}::uuid,{lit(d['revision_id'])}::uuid)"
             for idx, (heading, body) in enumerate(canonical_chunks(d["text"]))
         ]
         stmts.append(
             "INSERT INTO doc_chunks (server,doc_path,doc_sha256,project,label,"
-            "title,heading,chunk_index,content,mtime) VALUES " + ",".join(rows) + ";"
+            "title,heading,chunk_index,content,mtime,tenant_id,canonical_head_id,"
+            "canonical_revision_id) VALUES " + ",".join(rows) + ";"
         )
     psql("BEGIN;" + "".join(stmts) + "COMMIT;")
     print(f"[index_docs] 정본 청크 {n_chunks:,}개 저장. 임베딩은 embed 가 채운다.")

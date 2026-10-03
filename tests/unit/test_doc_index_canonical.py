@@ -27,8 +27,16 @@ def _rev(rid, version="1.0.0", title="문서", content=BODY, digest=None):
             "content_hash": digest or (rid * 64)[:64], "mtime": 1790000000}
 
 
+TENANT = "00000000-0000-0000-0000-0000000000a1"
+HEAD = "00000000-0000-0000-0000-0000000000b1"
+
+
+def _scope_key(rid, tenant=TENANT, head=HEAD):
+    return f"{tenant}|{head}|{rid}"
+
+
 def _head(key="doc-a", project="AADS", approved=None, latest=None, archived=False, revs=()):
-    return {"project_key": project, "document_key": key, "approved_revision_id": approved,
+    return {"head_id": HEAD, "tenant_id": TENANT, "project_key": project, "document_key": key, "approved_revision_id": approved,
             "latest_revision_id": latest, "archived": archived, "revisions": list(revs)}
 
 
@@ -148,7 +156,8 @@ def test_stale_paths_do_not_cross_between_file_and_canonical():
 # ── DB 대역으로 cmd_index / index_canonical 실행 ───────────────────────────
 
 class FakeDB:
-    def __init__(self, heads=None, file_known=(), canon_known=(), table=True):
+    def __init__(self, heads=None, file_known=(), canon_known=(), table=True, scope_columns=True):
+        self.scope_columns = scope_columns
         self.heads = heads
         self.file_known = list(file_known)      # (path, sha)
         self.canon_known = list(canon_known)    # (path, sha, title)
@@ -159,11 +168,17 @@ class FakeDB:
     def __call__(self, sql, *, quiet=False):
         if "to_regclass" in sql:
             return "t\n" if self.table else "f\n"
+        if "information_schema.columns" in sql:
+            return "3\n" if self.scope_columns else "0\n"
         if sql.startswith("SELECT json_build_object"):
             return "".join(json.dumps(h, ensure_ascii=False) + "\n" for h in (self.heads or []))
-        if sql.startswith("SELECT doc_path, doc_sha256, title FROM doc_chunks"):
+        if sql.startswith("SELECT doc_path, doc_sha256, coalesce(tenant_id"):
             self.queries.append(sql)
-            return "".join(SEP.join(r) + "\n" for r in self.canon_known)
+            # canon_known: (path, sha, title) 또는 (path, sha, title, scope_key)
+            return "".join(
+                SEP.join((r[0], r[1], r[3] if len(r) > 3 else _scope_key(r[0].rsplit("@", 1)[-1]), r[2])) + "\n"
+                for r in self.canon_known
+            )
         if sql.startswith("SELECT doc_path, doc_sha256 FROM doc_chunks"):
             self.queries.append(sql)
             return "".join(SEP.join(r) + "\n" for r in self.file_known)
@@ -308,3 +323,66 @@ def test_heads_sql_is_internal_tenant_only():
     sql = m.CANONICAL_HEADS_SQL
     assert "public.aads_internal_tenant_id()" in sql
     assert "approved_revision_id IS NULL" in sql and "'archived'" in sql
+
+
+# ── tenant 격리 칸 (AADS-DOC-SEARCH-TENANT-GUARD-20261003) ─────────────────
+
+def test_built_docs_carry_tenant_head_and_revision_ids():
+    m = _load()
+    docs, _ = m.build_canonical_docs([_head("doc-a", approved="a", latest="b",
+                                            revs=[_rev("a"), _rev("b", "1.1.0")])])
+    assert {(d["tenant_id"], d["head_id"], d["revision_id"]) for d in docs} == {
+        (TENANT, HEAD, "a"), (TENANT, HEAD, "b")}
+
+
+def test_canonical_insert_writes_scope_columns():
+    m = _load()
+    db = FakeDB(heads=[_head("doc-a", approved="a", latest="a", revs=[_rev("a")])])
+    m.psql = db
+    m.index_canonical("srv")
+    insert = [w for w in db.writes if "INSERT INTO doc_chunks" in w][0]
+    assert "tenant_id,canonical_head_id,canonical_revision_id" in insert
+    assert f"'{TENANT}'::uuid" in insert and f"'{HEAD}'::uuid" in insert and "'a'::uuid" in insert
+
+
+def test_existing_canonical_rows_without_scope_are_rewritten_even_if_content_same():
+    m = _load()
+    heads = [_head("doc-a", approved="a", latest="a", revs=[_rev("a", "1.0.0", "문서", digest="a" * 64)])]
+    legacy = FakeDB(heads=heads, canon_known=[
+        ("canonical://AADS/doc-a@a", "a" * 64, "[승인 v1.0.0] 문서", "||")])
+    m.psql = legacy
+    assert m.index_canonical("srv")["changed"] == 1
+    assert any("INSERT INTO doc_chunks" in w and f"'{TENANT}'::uuid" in w for w in legacy.writes)
+    other_tenant = FakeDB(heads=heads, canon_known=[
+        ("canonical://AADS/doc-a@a", "a" * 64, "[승인 v1.0.0] 문서",
+         _scope_key("a", tenant="00000000-0000-0000-0000-0000000000ff"))])
+    m.psql = other_tenant
+    assert m.index_canonical("srv")["changed"] == 1
+
+
+def test_indexer_refuses_to_write_canonical_without_tenant_columns():
+    import pytest
+    m = _load()
+    db = FakeDB(heads=_canon_heads(), scope_columns=False)
+    m.psql = db
+    with pytest.raises(SystemExit) as exc:
+        m.index_canonical("srv")
+    assert exc.value.code == 2 and db.writes == []
+
+
+def test_file_chunk_insert_does_not_write_scope_columns(monkeypatch):
+    m = _load()
+    db = FakeDB(heads=[])
+    _run_cmd_index(m, monkeypatch, db, [_file_doc("/docs/a.md")])
+    inserts = [w for w in db.writes if "INSERT INTO doc_chunks" in w]
+    assert inserts and not any("tenant_id" in w for w in inserts)
+
+
+def test_migration_is_additive_nullable_and_has_rollback():
+    sql = (_REPO / "migrations" / "20261003_doc_chunks_tenant_scope.sql").read_text(encoding="utf-8")
+    down = (_REPO / "migrations" / "rollback" / "20261003_doc_chunks_tenant_scope.down.sql").read_text(encoding="utf-8")
+    for col in ("tenant_id", "canonical_head_id", "canonical_revision_id"):
+        assert f"ADD COLUMN IF NOT EXISTS {col} uuid;" in sql
+        assert f"DROP COLUMN IF EXISTS {col}" in down
+    assert "ADD COLUMN IF NOT EXISTS" in sql and " uuid NOT NULL" not in sql and "DROP" not in sql and "DELETE" not in sql and "UPDATE" not in sql
+    assert "CREATE INDEX IF NOT EXISTS" in sql

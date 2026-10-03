@@ -1,3 +1,10 @@
+## 2026-10-03 — 정본 검색 tenant·문서 권한 격리 (AADS-DOC-SEARCH-TENANT-GUARD-20261003)
+
+**코드 완료 (미커밋 — Runner 가 승인 후 commit/push). 운영 DB·마이그레이션 적용·재색인·배포 없음. runner-e1828cce 의 `stale_base` 를 교정하려 변경을 최신 origin/main(98ead1c9) 위에 재적용했고(HANDOVER 만 수동 병합) 단위 186·격리 PG 통합 31 을 다시 통과시켰다.** 정본 검색(`/api/v1/project-docs/search`, Auto-RAG)이 신뢰된 tenant 컨텍스트 + 프로젝트/문서 grant 를 SQL WHERE(LIMIT 앞)에서 강제한다. 닫은 유출 3곳: 엔드포인트 tenant 의존성 부재, `doc_chunks` tenant 칸 부재(마이그레이션 `20261003_doc_chunks_tenant_scope.sql` 로 nullable 3칸 추가), `build_kg.py` 가 정본 본문을 KG 로 만들어 전 tenant Auto-RAG 에 섞던 우회(범위 밖 수정, 4줄). 미인증 401/403, tenant 불명 정본은 fail-closed, 파일 검색·응답 키 계약 불변. 검증: fake 단위 186 passed(6개 파일), 격리 PG 통합 31 passed(legacy/qwen3 양 경로), 변이 검사에서 tenant 조건 제거 시 elevated 케이스 2건이 유출로 실패. 상세·정확한 명령: `reports/20261003_doc_search_tenant_guard_RESULT.md`.
+
+**운영 후속(순서 중요).** 마이그레이션이 코드보다 먼저다. 적용 후 `index-canonical` 재색인 전에는 기존 정본 청크가 보이지 않는다(fail-closed, 정상). 재색인·롤백(`migrations/rollback/20261003_doc_chunks_tenant_scope.down.sql`)은 CEO/운영 승인 사항. 일반 멤버는 grant 없이는 정본이 안 보인다(의도적 축소). DB handover_write 는 인증 토큰이 없어 이 세션에서 쓰지 못해 HANDOVER.md 에만 기록했다. 비용 미측정.
+
+
 ## 2026-10-03 — 승인된 정본 등록 도구 최신 origin/main 재적용 (AADS-RDOC-PENDING-CHANGES-OPERATIONS-RELEASE-20261003)
 
 **상태: 코드 재적용·검증 완료, commit/push/배포는 Runner 승인 단계 대기.** runner-d869f5bc 의 `stale_base`(검토 커밋 1ccf4f78 은 origin/main 미포함)를 교정하려 1ccf4f78 의 diff 를 `b6122893` 위에 재구현 없이 그대로 적용했다(`git apply`, patch-id 3d2d4557… 원본 동일; tool_executor.py 는 b6122893 의 `defer_screen_evidence` 변경과 겹치지 않는 별개 헝크, 충돌은 HANDOVER.md 뿐이어서 양쪽 기록 보존). 새 기능 없음 — 아래 항목과 같은 8개 파일. 코드 배포 상태와 정본 문서 등록·승인은 별개이며, 정본 문서 승인·enforce 활성화는 하지 않았다. 호스트 스크립트 SHA 비교·배포 큐 등록·DB handover_write 는 이 세션에서 실행하지 않았다(샌드박스 제한).

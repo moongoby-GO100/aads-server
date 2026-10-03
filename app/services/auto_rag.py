@@ -227,7 +227,7 @@ async def _search_relevant(
         fact_results, msg_results, doc_results = await asyncio.gather(
             _search_memory_facts(query_emb, project),
             _search_chat_messages(ask_emb, session_id, project),
-            _search_documents(ask_emb, project, query_text),
+            _search_documents(ask_emb, project, query_text, session_id),
             return_exceptions=True,
         )
 
@@ -252,8 +252,37 @@ async def _search_relevant(
         return []
 
 
+async def _resolve_doc_scope(session_id: str):
+    """세션에 **저장된** tenant·user 로 문서 검색 범위를 만든다.
+
+    요청 본문이나 질문 텍스트에서 읽지 않는다. 확정하지 못하면 None — 호출자는
+    문서 검색을 하지 않는다(fail-closed). Auto-RAG 는 관리자 승격을 하지 않는다:
+    정본 문서는 그 사용자에게 project grant 가 있을 때만 맥락에 들어간다.
+    """
+    from app.services.doc_index import DocScopeError, DocSearchScope
+
+    if not session_id:
+        return None
+    try:
+        from app.core.db_pool import get_pool
+
+        row = await get_pool().fetchrow(
+            "SELECT tenant_id::text AS tenant_id, user_id FROM chat_sessions WHERE id = $1::uuid",
+            session_id,
+        )
+    except Exception as e:
+        logger.debug("auto_rag_doc_scope_failed", error=str(e))
+        return None
+    if not row or not row["tenant_id"]:
+        return None
+    try:
+        return DocSearchScope(tenant_id=row["tenant_id"], user_id=row["user_id"] or "", elevated=False)
+    except DocScopeError:
+        return None
+
+
 async def _search_documents(
-    query_emb: list, project: Optional[str], query_text: str = ""
+    query_emb: list, project: Optional[str], query_text: str = "", session_id: str = ""
 ) -> List[Dict]:
     """저장소 문서에서 검색. 결과에 출처 경로를 넣는다.
 
@@ -267,8 +296,11 @@ async def _search_documents(
         # 벡터로 찾느니 안 찾는 편이 낫다.
         if query_emb is None:
             return []
+        scope = await _resolve_doc_scope(session_id)
+        if scope is None:
+            return []
         rows = await search_docs(
-            query_emb, top_k=_RAG_TOP_K, project=project, query_text=query_text,
+            query_emb, top_k=_RAG_TOP_K, project=project, query_text=query_text, scope=scope,
         )
     except Exception as e:
         logger.debug("auto_rag_doc_search_failed", error=str(e))

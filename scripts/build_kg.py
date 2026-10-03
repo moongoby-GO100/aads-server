@@ -203,6 +203,9 @@ def collect_doc_mentions(g: Graph) -> int:
 
     "이 파일에 대한 문서가 어디 있나" 가 지금 제일 답하기 어려운 질문이다.
     본문에서 경로처럼 생긴 문자열만 뽑는다 — LLM 없이 되는 범위다.
+
+    정본(canonical://)은 뺀다 — 그래프는 모든 tenant 의 Auto-RAG 가 읽으므로 tenant 격리
+    없이 doc 노드(경로·제목)를 만들면 검색 접근 제어를 우회한다.
     """
     known = {name for (etype, name) in g.nodes if etype == "file"}
     by_base: dict[str, list[str]] = {}
@@ -215,6 +218,7 @@ def collect_doc_mentions(g: Graph) -> int:
         SELECT doc_path, coalesce(title,''), content
         FROM doc_chunks
         WHERE content ~ '[A-Za-z0-9_/.-]+\\.(py|tsx|ts|sh|sql|md)'
+          AND doc_path NOT LIKE 'canonical://%' AND coalesce(label,'') <> '정본'
         LIMIT 6000;
     """):
         if len(r) < 3:

@@ -4,6 +4,8 @@ import pytest
 
 from app.services import doc_index
 
+SCOPE = doc_index.DocSearchScope(tenant_id="00000000-0000-0000-0000-0000000000a1", user_id="u-1")
+
 
 def _reset_shadow_scheduler(monkeypatch, *, in_flight=1, queue_max=1):
     monkeypatch.setattr(doc_index, "_QWEN_SHADOW_MAX_IN_FLIGHT", in_flight)
@@ -37,7 +39,7 @@ async def test_shadow_is_bounded_and_drops_without_delaying_legacy(monkeypatch):
     monkeypatch.setattr(doc_index, "embed_qwen_query", embed)
 
     results = await asyncio.gather(*(
-        asyncio.wait_for(doc_index.search_docs([0.0] * 768, query_text="q"), .2)
+        asyncio.wait_for(doc_index.search_docs([0.0] * 768, query_text="q", scope=SCOPE), .2)
         for _ in range(4)
     ))
     assert all(rows[0]["doc_path"] == "legacy" for rows in results)
@@ -66,7 +68,7 @@ async def test_shadow_timeout_is_counted_and_does_not_escape(monkeypatch):
     monkeypatch.setattr(doc_index, "_QWEN_SHADOW_TIMEOUT", .01)
     monkeypatch.setattr(doc_index, "search_docs_legacy", legacy)
     monkeypatch.setattr(doc_index, "embed_qwen_query", embed)
-    assert (await doc_index.search_docs([0.0] * 768, query_text="q"))[0]["doc_path"] == "legacy"
+    assert (await doc_index.search_docs([0.0] * 768, query_text="q", scope=SCOPE))[0]["doc_path"] == "legacy"
     await asyncio.gather(*tuple(doc_index._shadow_tasks))
     assert doc_index.shadow_metrics()["timeout"] == 1
 
