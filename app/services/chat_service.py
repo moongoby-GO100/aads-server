@@ -8685,6 +8685,40 @@ async def _resume_single_stream(
                 messages = raw_messages[-20:]
             system_prompt = ((system_prompt or "") + "\n\n" + resume_instruction).strip()
 
+            # 붙여넣은 이미지 복원: 히스토리 텍스트에는 이미지 블록이 없으므로
+            # `[첨부이미지: … file_id=…]` 참조로 디스크 이미지를 다시 vision 블록으로 넣는다.
+            # first_response_timeout 폴백도 이 경로로 재개된다.
+            try:
+                _resume_vision, _resume_vision_text = await _build_resume_vision_blocks(
+                    session_id, raw_messages,
+                )
+                if _resume_vision:
+                    _target_vi = None
+                    for _vi in range(len(messages) - 1, -1, -1):
+                        _vm = messages[_vi]
+                        if _vm.get("role") != "user" or not isinstance(_vm.get("content"), str):
+                            continue
+                        if _target_vi is None:
+                            _target_vi = _vi
+                        if _vm["content"] == _resume_vision_text:
+                            _target_vi = _vi
+                            break
+                    if _target_vi is not None:
+                        messages[_target_vi] = {
+                            "role": "user",
+                            "content": [{"type": "text", "text": messages[_target_vi]["content"]}]
+                            + _resume_vision,
+                        }
+                        logger.info(
+                            "resume_vision_restored session=%s images=%d",
+                            session_id[:8], len(_resume_vision),
+                        )
+            except Exception as _rv_err:
+                logger.warning(
+                    "resume_vision_restore_failed session=%s error=%s",
+                    session_id[:8], str(_rv_err)[:200],
+                )
+
             # 4. LLM 호출 (도구 포함)
             from app.services.model_selector import call_stream
             from app.services.intent_router import IntentResult
@@ -13191,13 +13225,15 @@ async def send_message_stream(
         #    히스토리에는 참조 요약만 저장하여 컨텍스트 낭비 방지.
         _ephemeral_doc_context = ""
         _vision_images: list = []  # Claude Vision API용 이미지 content blocks
-        logger.info(f"[ATTACH] session={session_id[:8]} attachments={attachments}")
+        from app.core.document_context import summarize_attachments_for_log as _att_log
+        logger.info(f"[ATTACH] session={session_id[:8]} attachments={_att_log(attachments)}")
         if attachments:
             from app.core.document_context import (
                 extract_file_contents,
                 build_vision_blocks,
                 build_ephemeral_document_layer,
                 build_file_reference_summary,
+                image_ext_from_media_type,
             )
             _file_contents = extract_file_contents(attachments)
             _readable_count = sum(1 for f in _file_contents if f.get("readable"))
@@ -13211,25 +13247,26 @@ async def send_message_stream(
             if _vision_images:
                 logger.info(f"[VISION] {len(_vision_images)} image(s) extracted for Vision API")
 
+            # 붙여넣은 인라인 이미지 → 디스크/chat_files 저장 (응답 재개·재조회용).
+            # 이번 턴 vision 은 위에서 이미 base64 로 만들었으므로 저장 실패가 턴을 막지 않는다.
+            _pasted_saved = await _persist_inline_image_attachments(session_id, attachments)
+            for _pi, _pinfo in _pasted_saved.items():
+                if _pi < len(_file_contents):
+                    _pe_entry = _file_contents[_pi]
+                    _pe_entry["file_id"] = _pinfo["file_id"]
+                    _pe_entry["name"] = _pinfo["name"]
+                    _pe_entry["ext"] = (
+                        image_ext_from_media_type(_pinfo["media_type"]) or _pe_entry.get("ext", "")
+                    )
+
             # file_id 기반 첨부파일 처리 (디스크 저장 파일 → Vision)
             for att in attachments:
                 if isinstance(att, dict) and att.get("file_id"):
                     try:
-                        _finfo = await get_chat_file(att["file_id"])
-                        if _finfo and _finfo["mime_type"].startswith("image/"):
-                            import base64 as _cf_b64
-                            _fpath = Path(_finfo["storage_path"])
-                            if _fpath.exists():
-                                _img_data = _fpath.read_bytes()
-                                _vision_images.append({
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": _finfo["mime_type"],
-                                        "data": _cf_b64.b64encode(_img_data).decode(),
-                                    },
-                                })
-                                logger.info(f"[VISION] file_id={att['file_id'][:8]} loaded from disk")
+                        _vblock = await _load_chat_file_vision_block(att["file_id"])
+                        if _vblock:
+                            _vision_images.append(_vblock)
+                            logger.info(f"[VISION] file_id={att['file_id'][:8]} loaded from disk")
                     except Exception as _fe:
                         logger.warning(f"[VISION] file_id load failed: {_fe}")
 
@@ -17411,6 +17448,117 @@ async def get_chat_file(file_id: str) -> Optional[Dict[str, Any]]:
     if not row:
         return None
     return dict(row)
+
+
+_VISION_EXT_TO_MEDIA_TYPE = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
+
+
+async def _load_chat_file_vision_block(
+    file_id: str,
+    session_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """chat_files 의 이미지를 디스크에서 읽어 Vision image block 으로 만든다.
+
+    session_id 를 주면 그 세션 소속 파일만 허용한다(본문에서 파싱한 file_id 는
+    사용자 입력이므로 다른 세션의 파일을 끌어오지 못하게 한다).
+    이미지가 아니거나 파일이 없으면 None. 예외는 호출자가 처리한다.
+    """
+    import base64 as _vb64
+
+    finfo = await get_chat_file(file_id)
+    if not finfo or not str(finfo.get("mime_type") or "").startswith("image/"):
+        return None
+    if session_id and str(finfo.get("session_id")) != str(session_id):
+        logger.warning("[VISION] file_id=%s belongs to another session — skipped", str(file_id)[:8])
+        return None
+    fpath = Path(finfo["storage_path"])
+    if not fpath.exists():
+        return None
+    # save_chat_file 은 이미지를 WebP 로 재저장하면서 mime_type 은 업로드 원본을 남긴다.
+    # 실제 바이트와 media_type 이 어긋나지 않게 확장자 기준으로 바로잡는다.
+    media_type = _VISION_EXT_TO_MEDIA_TYPE.get(fpath.suffix.lower(), finfo["mime_type"])
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": media_type,
+            "data": _vb64.b64encode(fpath.read_bytes()).decode(),
+        },
+    }
+
+
+async def _persist_inline_image_attachments(
+    session_id: str,
+    attachments: List[Any],
+) -> Dict[int, Dict[str, Any]]:
+    """인라인 base64 이미지(Ctrl+V 붙여넣기)를 디스크·chat_files 에 저장한다.
+
+    반환: {첨부 인덱스: {"file_id", "name", "media_type"}}. 저장에 실패한 항목은
+    빠진다 — 이번 턴의 vision 전달은 base64 로 이미 가능하므로 턴을 막지 않는다.
+    첨부 dict 에는 `saved_file_id` 로 기록한다(`file_id` 로 쓰면 이번 턴 vision 이
+    base64 경로에서 디스크 경로로 바뀐다).
+    """
+    import base64 as _pb64
+    from types import SimpleNamespace
+    from app.core.document_context import image_ext_from_media_type
+
+    saved: Dict[int, Dict[str, Any]] = {}
+    for idx, att in enumerate(attachments or []):
+        if not (isinstance(att, dict) and att.get("type") == "image"
+                and att.get("base64") and not att.get("file_id")):
+            continue
+        try:
+            media_type = att.get("media_type") or "image/jpeg"
+            name = str(att.get("name") or "").strip()
+            if not name or name == "unknown":
+                name = f"pasted-{int(_time.time() * 1000)}{image_ext_from_media_type(media_type) or '.png'}"
+            data = _pb64.b64decode(att["base64"])
+            result = await save_chat_file(
+                session_id,
+                SimpleNamespace(filename=name, content_type=media_type),
+                data,
+            )
+            att["saved_file_id"] = result["file_id"]
+            saved[idx] = {"file_id": result["file_id"], "name": name, "media_type": media_type}
+        except Exception as _pe:
+            logger.warning(
+                "[ATTACH] pasted image persist failed session=%s idx=%s: %s: %s",
+                str(session_id)[:8], idx, type(_pe).__name__, str(_pe)[:200],
+            )
+    return saved
+
+
+async def _build_resume_vision_blocks(
+    session_id: str,
+    raw_messages: List[Dict[str, Any]],
+) -> tuple:
+    """재개·폴백용: 사용자 메시지 본문의 `file_id=` 참조에서 vision 블록을 복원한다.
+
+    가장 마지막으로 file_id 참조를 가진 user 메시지 하나만 대상으로 한다.
+    반환: (blocks, 참조가 있던 메시지의 본문 문자열 또는 "").
+    """
+    from app.core.document_context import extract_image_file_ids
+
+    for msg in reversed(raw_messages or []):
+        if msg.get("role") != "user" or not isinstance(msg.get("content"), str):
+            continue
+        file_ids = extract_image_file_ids(msg["content"])
+        if not file_ids:
+            continue
+        blocks: List[Dict[str, Any]] = []
+        for fid in file_ids:
+            try:
+                block = await _load_chat_file_vision_block(fid, session_id=session_id)
+            except Exception as _re_err:
+                logger.warning("[VISION] resume file_id load failed %s: %s", fid[:8], _re_err)
+                continue
+            if block:
+                blocks.append(block)
+        return blocks, msg["content"]
+    return [], ""
 
 
 # ════════════════════════════════════════════════════════════════════════════════

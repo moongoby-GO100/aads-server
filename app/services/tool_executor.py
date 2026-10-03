@@ -6130,6 +6130,11 @@ class ToolExecutor:
                         "ORDER BY created_at DESC LIMIT 20",
                     )
 
+        if not rows and filename:
+            chat_file_result = await self._read_chat_files_fallback(filename)
+            if chat_file_result is not None:
+                return chat_file_result
+
         if not rows:
             return {"status": "not_found", "message": f"'{filename}' 파일을 찾을 수 없습니다.", "hint": "filename을 비워서 전체 목록을 조회해 보세요."}
 
@@ -6172,6 +6177,72 @@ class ToolExecutor:
                 "hint": "특정 파일을 읽으려면 filename에 정확한 이름을 지정하세요."}
 
 
+
+    async def _read_chat_files_fallback(self, query: str) -> Optional[Dict[str, Any]]:
+        """chat_drive_files 에 없을 때 채팅 첨부 테이블 chat_files 에서 찾는다.
+
+        현재 세션을 우선하고, 파일명 ILIKE 또는 file_id(uuid) 로 매칭한다.
+        붙여넣은 이미지는 여기에만 저장된다. 못 찾으면 None.
+        """
+        import uuid as _uuid
+
+        from app.core.db_pool import get_pool
+
+        session_id = str(current_chat_session_id.get("") or "").strip()
+        file_uuid = None
+        try:
+            file_uuid = _uuid.UUID(query)
+        except (ValueError, AttributeError):
+            pass
+        sess_uuid = None
+        if session_id:
+            try:
+                sess_uuid = _uuid.UUID(session_id)
+            except ValueError:
+                sess_uuid = None
+
+        cols = "id, session_id, original_name, mime_type, file_size, storage_path, created_at"
+        async with get_pool().acquire() as conn:
+            if file_uuid is not None:
+                row = await conn.fetchrow(f"SELECT {cols} FROM chat_files WHERE id = $1", file_uuid)
+            else:
+                row = await conn.fetchrow(
+                    f"SELECT {cols} FROM chat_files WHERE original_name ILIKE $1 "
+                    "ORDER BY (session_id = $2::uuid) DESC NULLS LAST, created_at DESC LIMIT 1",
+                    f"%{query}%", sess_uuid,
+                )
+        if not row:
+            return None
+
+        fpath = row["storage_path"]
+        fname = row["original_name"]
+        base = {
+            "file_id": str(row["id"]),
+            "filename": fname,
+            "media_type": row["mime_type"],
+            "file_size": row["file_size"],
+            "path": fpath,
+        }
+        if not os.path.isfile(fpath):
+            return {"status": "file_missing", "message": "디스크에서 파일을 찾을 수 없습니다.", **base}
+        if str(row["mime_type"] or "").startswith("image/"):
+            return {
+                "status": "image",
+                **base,
+                "hint": (
+                    "도구 결과로는 이미지 픽셀을 다시 볼 수 없어 메타만 반환합니다. "
+                    "이미지가 첨부된 턴의 응답을 재개할 때는 자동으로 다시 첨부됩니다."
+                ),
+            }
+        text_exts = {".txt", ".md", ".csv", ".json", ".py", ".js", ".ts", ".html", ".css",
+                     ".yaml", ".yml", ".toml", ".sh", ".sql", ".log", ".xml", ".ini", ".cfg", ".conf"}
+        if os.path.splitext(fpath)[1].lower() in text_exts:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read(100000)
+            return {"status": "ok", "filename": fname, "file_size": row["file_size"], "content": content,
+                    "truncated": len(content) >= 100000}
+        return {"status": "binary_file", **base,
+                "message": "바이너리 파일은 텍스트로 읽을 수 없습니다."}
 
     async def _add_agenda(self, inp: Dict[str, Any]) -> Any:
         """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""

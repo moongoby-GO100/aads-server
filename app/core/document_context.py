@@ -17,6 +17,7 @@ import hashlib
 import io
 import logging
 import os
+import re as _re_mod
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,7 @@ def extract_file_contents(
             _fext = os.path.splitext(_fname)[1].lower() if _fname else ""
             entry["name"] = _fname
             entry["ext"] = _fext
+            entry["file_id"] = str(att["file_id"])
             _mime = att.get("media_type", att.get("mime_type", ""))
             if _mime.startswith("image/") or att.get("type") == "image" or _fext in IMAGE_EXTENSIONS:
                 entry["is_image"] = True
@@ -406,6 +408,60 @@ def build_ephemeral_document_layer(
     return "\n".join(parts)
 
 
+_MEDIA_TYPE_TO_EXT: Dict[str, str] = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
+# 히스토리 참조 요약의 file_id 를 되찾는 패턴. build_file_reference_summary 의
+# 이미지 줄 형식과 짝이다 — 한쪽을 바꾸면 다른 쪽도 같이 바꾼다.
+_IMAGE_FILE_ID_RE = _re_mod.compile(
+    r"\[첨부이미지:[^\n]*?\bfile_id=("
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r")\]"
+)
+
+
+def image_ext_from_media_type(media_type: Optional[str]) -> str:
+    """image/png → '.png'. 모르는 값은 빈 문자열."""
+    return _MEDIA_TYPE_TO_EXT.get((media_type or "").strip().lower(), "")
+
+
+def extract_image_file_ids(text: Optional[str], limit: int = 5) -> List[str]:
+    """히스토리 본문의 `[첨부이미지: … file_id=<uuid>]` 에서 file_id 를 순서대로(중복 제거) 뽑는다."""
+    if not text or not isinstance(text, str):
+        return []
+    found: List[str] = []
+    for m in _IMAGE_FILE_ID_RE.finditer(text):
+        fid = m.group(1).lower()
+        if fid not in found:
+            found.append(fid)
+            if len(found) >= limit:
+                break
+    return found
+
+
+def summarize_attachments_for_log(attachments: Any) -> str:
+    """로그용 첨부 요약. name/type/len 만 — base64 원문은 절대 싣지 않는다."""
+    if not attachments:
+        return "[]"
+    parts = []
+    for att in attachments if isinstance(attachments, list) else [attachments]:
+        if not isinstance(att, dict):
+            parts.append(f"<{type(att).__name__}>")
+            continue
+        payload = att.get("base64") or att.get("content") or ""
+        parts.append(
+            f"{{name={att.get('name', '')!s:.60} type={att.get('type', '')} "
+            f"len={len(payload) if isinstance(payload, str) else 0}"
+            f"{' file_id=' + str(att['file_id'])[:8] if att.get('file_id') else ''}}}"
+        )
+    return "[" + ", ".join(parts) + "]"
+
+
 def build_file_reference_summary(
     file_contents: List[Dict[str, Any]],
 ) -> str:
@@ -423,7 +479,10 @@ def build_file_reference_summary(
         if f.get("is_video") and readable:
             summaries.append(f"[첨부동영상: {name} ({ext})]")
         elif f.get("is_image") and readable:
-            summaries.append(f"[첨부이미지: {name} ({ext})]")
+            _img_ext = ext or image_ext_from_media_type(f.get("media_type"))
+            _fid = f.get("file_id")
+            _fid_part = f" file_id={_fid}" if _fid else ""
+            summaries.append(f"[첨부이미지: {name} ({_img_ext}){_fid_part}]")
         elif readable and tokens > 0:
             # 파일 첫 200자 미리보기
             preview = f["content"][:200].replace("\n", " ").strip()
