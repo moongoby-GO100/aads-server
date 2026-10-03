@@ -18,6 +18,7 @@
 # apply-edge needs cafe24 :443 reachable from contabo116, which the cafe24 iptables CF-WEB chain
 # denies by default (Cloudflare ranges only). Either flip the Cloudflare origin for fb to
 # 114.207.244.86 (preferred) or run allow-edge-fw first. Port 80 is never opened by this script.
+# The edge render INPUT (EDGE_SOURCE, see resolve_edge_source) is separate from the install target EDGE_CONF.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,6 +64,62 @@ render_edge() {
       print "        proxy_ssl_trusted_certificate " ca ";"
       next }
     { print }' "$1"
+}
+
+# Pick the file render_edge reads. It is a render INPUT only: the result is always installed over
+# EDGE_CONF, and nothing here ever restores or reloads a pre-cutover (retired jinah) upstream.
+# Sets EDGE_SRC and EDGE_SRC_MODE; dies (fail closed) when no usable source exists. Call directly, not in $(...).
+#   explicit        EDGE_SOURCE=<file> (must hold a yeoljeong_finance_api or cafe24 proxy_pass)
+#   edge-conf       EDGE_CONF still has yeoljeong_finance_api
+#   already-cafe24  EDGE_CONF already proxies to https://$CAFE24_IP (idempotent re-run)
+#   backup          newest "$EDGE_CONF.bak.pre_cafe24_cutover_*" that still has yeoljeong_finance_api
+#                   (EDGE_CONF was overwritten, e.g. by the maintenance conf, after a failed run)
+#   repo-fallback   lint only: $REPO_ROOT/nginx-fb.conf when EDGE_CONF does not exist on this host
+edge_has_legacy() { [[ -f $1 ]] && grep -q 'yeoljeong_finance_api' "$1"; }
+edge_has_cafe24() { [[ -f $1 ]] && grep -q "proxy_pass https://$CAFE24_IP" "$1"; }
+resolve_edge_source() { # $1 = lint|apply
+  local f
+  EDGE_SRC=""; EDGE_SRC_MODE=""
+  if [[ -n ${EDGE_SOURCE:-} ]]; then
+    [[ -f $EDGE_SOURCE ]] || die "EDGE_SOURCE is not a file: $EDGE_SOURCE"
+    edge_has_legacy "$EDGE_SOURCE" || edge_has_cafe24 "$EDGE_SOURCE" \
+      || die "EDGE_SOURCE has neither a yeoljeong_finance_api nor a cafe24 proxy_pass: $EDGE_SOURCE"
+    EDGE_SRC="$EDGE_SOURCE"; EDGE_SRC_MODE=explicit; return 0
+  fi
+  if edge_has_legacy "$EDGE_CONF"; then EDGE_SRC="$EDGE_CONF"; EDGE_SRC_MODE=edge-conf; return 0; fi
+  if edge_has_cafe24 "$EDGE_CONF"; then EDGE_SRC="$EDGE_CONF"; EDGE_SRC_MODE=already-cafe24; return 0; fi
+  while IFS= read -r f; do
+    if edge_has_legacy "$f"; then EDGE_SRC="$f"; EDGE_SRC_MODE=backup; return 0; fi
+  done < <(compgen -G "$EDGE_CONF.bak.pre_cafe24_cutover_*" | sort -r)
+  if [[ ${1:-} == lint && ! -f $EDGE_CONF ]] && edge_has_legacy "$REPO_ROOT/nginx-fb.conf"; then
+    EDGE_SRC="$REPO_ROOT/nginx-fb.conf"; EDGE_SRC_MODE=repo-fallback; return 0
+  fi
+  die "no edge render source: $EDGE_CONF has neither yeoljeong_finance_api nor a cafe24 proxy_pass, and no $EDGE_CONF.bak.pre_cafe24_cutover_* holds yeoljeong_finance_api. Set EDGE_SOURCE=<pre-cutover fb.conf>; nothing changed"
+}
+
+# Render $EDGE_SRC in memory and check the result. Sets EDGE_RENDERED, EDGE_PP and EDGE_DASH.
+lint_edge_render() {
+  local pp ssl depth dash_in dash_out
+  EDGE_RENDERED="$(render_edge "$EDGE_SRC")" || die "edge render failed for $EDGE_SRC"
+  ! grep -q 'yeoljeong_finance_api' <<<"$EDGE_RENDERED" || die "edge render left a yeoljeong_finance_api proxy_pass"
+  pp=$(grep -c "proxy_pass https://$CAFE24_IP" <<<"$EDGE_RENDERED" || true)
+  ssl=$(grep -c 'proxy_ssl_verify on' <<<"$EDGE_RENDERED" || true)
+  depth=$(grep -cE '^[[:space:]]*proxy_ssl_verify_depth[[:space:]]+[2-9][[:space:]]*;' <<<"$EDGE_RENDERED" || true)
+  dash_in=$(grep -c 'aads_dashboard' "$EDGE_SRC" || true)
+  dash_out=$(grep -c 'aads_dashboard' <<<"$EDGE_RENDERED" || true)
+  [[ $pp -ge 1 && $pp == "$ssl" ]] || die "edge render: proxy_pass=$pp ssl_verify=$ssl"
+  [[ $depth == "$pp" ]] || die "edge render: proxy_ssl_verify_depth>=2 on $depth of $pp cafe24 locations (depth 1 fails the LE chain -> 502)"
+  [[ $dash_in == "$dash_out" ]] || die "edge render changed aads_dashboard locations"
+  EDGE_PP=$pp; EDGE_DASH=$dash_out
+}
+
+lint_apache_chain() {
+  local blk
+  [[ -f $TEMPLATE ]] || die "template missing: $TEMPLATE"
+  blk="$(awk '/<VirtualHost[ \t]+[^>]*:443>/{i=1} i{print} /<\/VirtualHost>/{i=0}' "$TEMPLATE")"
+  [[ -n $blk ]] || die "template has no :443 VirtualHost block"
+  grep -qE '^[[:space:]]*SSLCertificateChainFile[[:space:]]+[^[:space:]#]' <<<"$blk" \
+    || die "template :443 block lacks SSLCertificateChainFile (clients without the intermediate fail verification)"
 }
 
 lint_envvars_regression() {
@@ -173,18 +230,10 @@ cmd_lint() {
     die "template references a retired upstream or secret material"
   fi
   render_apache "http://127.0.0.1:1" | grep -q '__FB_UPSTREAM__' && die "placeholder left after render"
-  local src="$EDGE_CONF"
-  [[ -f $src ]] || src="$REPO_ROOT/nginx-fb.conf"
-  [[ -f $src ]] || die "no nginx fb.conf to test rendering against"
-  local out; out="$(mktemp)"; trap 'rm -f "${out:-}"; trap - RETURN' RETURN
-  render_edge "$src" >"$out"
-  ! grep -q 'yeoljeong_finance_api' "$out" || die "edge render left a yeoljeong_finance_api proxy_pass"
-  local pp ssl dash_in dash_out
-  pp=$(grep -c "proxy_pass https://$CAFE24_IP" "$out"); ssl=$(grep -c 'proxy_ssl_verify on' "$out")
-  dash_in=$(grep -c 'aads_dashboard' "$src"); dash_out=$(grep -c 'aads_dashboard' "$out")
-  [[ $pp -ge 1 && $pp == "$ssl" ]] || die "edge render: proxy_pass=$pp ssl_verify=$ssl"
-  [[ $dash_in == "$dash_out" ]] || die "edge render changed aads_dashboard locations"
-  say "lint OK (source=$src, cafe24 proxy_pass=$pp, dashboard locations preserved=$dash_out)"
+  lint_apache_chain
+  resolve_edge_source lint
+  lint_edge_render
+  say "lint OK (source=$EDGE_SRC mode=$EDGE_SRC_MODE, cafe24 proxy_pass=$EDGE_PP, dashboard locations preserved=$EDGE_DASH)"
 }
 
 # ---- remote (cafe24) fragments; sent to `bash -s` over ssh -----------------------------------------
@@ -490,7 +539,9 @@ cmd_apply_edge() {
   [[ $code == 200 ]] || die "cafe24 vhost not reachable from this edge (HTTP $code). Apply the origin first; if TCP 443 times out the cafe24 CF-WEB firewall blocks this host - flip the Cloudflare origin or run allow-edge-fw"
   fw_remote audit >/dev/null || die "cafe24 firewall state unverifiable or a broad (non-443) fb-edge rule exists; run edge-fw-status, nothing changed"
   timeout 30 ssh "${SSH_OPTS[@]}" "$CAFE24_SSH" "test -r /var/log/apache2/$FB_HOST-access.log" || die "cafe24 access log not readable over ssh; nothing changed"
-  out="$(mktemp)"; render_edge "$EDGE_CONF" >"$out"
+  resolve_edge_source apply
+  say "edge render source: $EDGE_SRC ($EDGE_SRC_MODE); installs over $EDGE_CONF"
+  out="$(mktemp)"; render_edge "$EDGE_SRC" >"$out"
   grep -q "proxy_pass https://$CAFE24_IP" "$out" || { rm -f "$out"; die "rendered edge config has no cafe24 proxy_pass; nothing changed"; }
   nonce="cutover$(date +%s)$RANDOM"
   # ---- lock window: config + marker, nginx -t, reload, one bounded local routed-health ----
@@ -568,16 +619,18 @@ cmd_status() {
   ssh_c "ls -l /etc/apache2/sites-enabled/00-zz-fb.newtalk.kr.conf 2>&1; apache2ctl -S 2>/dev/null | grep -E 'namevhost $FB_HOST'" || true
 }
 
-case "${1:-}" in
-  lint) cmd_lint ;;
-  preflight) cmd_preflight ;;
-  apply-origin) cmd_apply_origin ;;
-  allow-edge-fw) fw_rule add ;;
-  revoke-edge-fw) fw_rule del ;;
-  edge-fw-status) cmd_edge_fw_status ;;
-  apply-edge) cmd_apply_edge ;;
-  maintenance) cmd_maintenance ;;
-  monitor) cmd_monitor ;;
-  status) cmd_status ;;
-  *) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 2 ;;
-esac
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  case "${1:-}" in
+    lint) cmd_lint ;;
+    preflight) cmd_preflight ;;
+    apply-origin) cmd_apply_origin ;;
+    allow-edge-fw) fw_rule add ;;
+    revoke-edge-fw) fw_rule del ;;
+    edge-fw-status) cmd_edge_fw_status ;;
+    apply-edge) cmd_apply_edge ;;
+    maintenance) cmd_maintenance ;;
+    monitor) cmd_monitor ;;
+    status) cmd_status ;;
+    *) sed -n '2,21p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  esac
+fi

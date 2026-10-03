@@ -385,11 +385,11 @@ exit 0
 [[ -n ${FAKE_NGINX_T_FAIL:-} && " $* " == *" -t "* ]] && exit 1
 exit 0
 """,
-    "curl": _LOCKSTATE + r"""args="$*"; max=""; prev=""
-for a in "$@"; do [[ $prev == -m ]] && max=$a; prev=$a; done
+    "curl": _LOCKSTATE + r"""args="$*"; max=""; prev=""; insecure=0
+for a in "$@"; do [[ $prev == -m ]] && max=$a; [[ $a == --insecure || $a =~ ^-[a-zA-Z]*k[a-zA-Z]*$ ]] && insecure=1; prev=$a; done
 if [[ $args == *":127.0.0.1"* ]]; then kind=routed; else kind=direct; fi
 url="${@: -1}"
-echo "curl kind=$kind max=$max url=$url lock=$(lockstate)" >> "$FAKE_DIR/calls.log"
+echo "curl kind=$kind max=$max insecure=$insecure url=$url lock=$(lockstate)" >> "$FAKE_DIR/calls.log"
 code=200
 if [[ $kind == direct ]]; then
   [[ -n ${FAKE_DIRECT_CODE:-} ]] && code=$FAKE_DIRECT_CODE
@@ -628,3 +628,171 @@ def test_wrapper_failure_exit_revokes_the_443_rule_and_leaves_maintenance(cut, s
     assert _rules(cut) == []
     assert "503" in cut.edge.read_text()
     assert "state=maintenance" in cut.marker.read_text()
+
+
+# ---------------------------------------------------------------------------------------------------
+# Re-runnable edge render: EDGE_SOURCE is the render input, EDGE_CONF only the install target
+# ---------------------------------------------------------------------------------------------------
+
+MAINT_CONF = """# fb maintenance response written by cutover_fb_cafe24.sh
+server { listen 80; server_name fb.newtalk.kr; location / { return 503 "maintenance\\n"; } }
+"""
+CAFE24_CONF = f"""server {{
+    listen 443 ssl;
+    location /api/ {{
+        proxy_pass https://{CAFE24_IP};
+        proxy_ssl_server_name on;
+        proxy_ssl_verify on;
+        proxy_ssl_verify_depth 3;
+    }}
+    location /dash/ {{ proxy_pass http://aads_dashboard; }}
+}}
+"""
+
+
+def _sourced(c, body, **extra):
+    """Run `body` in a set -euo pipefail shell that sourced the real cutover script (no subcommand runs)."""
+    script = f"set -euo pipefail; . {CUTOVER}\n{body}"
+    return subprocess.run(["bash", "-c", script], env={**c.env, **extra}, capture_output=True, text=True, timeout=60)
+
+
+def _backup(c, stamp, text):
+    f = c.tmp / f"edge-fb.conf.bak.pre_cafe24_cutover_{stamp}"
+    f.write_text(text)
+    return f
+
+
+def test_sourcing_the_script_runs_no_subcommand(cut):
+    proc = _sourced(cut, "declare -F cmd_lint resolve_edge_source routed_health_local >/dev/null && echo LOADED")
+    assert proc.returncode == 0 and "LOADED" in proc.stdout and proc.stderr == ""
+
+
+def test_lint_leaves_no_return_trap_so_later_function_returns_survive_set_u(cut):
+    body = """
+outer() { cmd_lint; return 0; }
+outer
+trap -p RETURN
+after() { local x=1; return 0; }
+after; after
+echo SURVIVED
+"""
+    proc = _sourced(cut, body)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SURVIVED" in proc.stdout and "RETURN" not in proc.stdout
+    assert "unbound variable" not in proc.stderr
+
+
+def test_lint_cli_passes_with_the_default_fixture(cut):
+    proc = _cut(cut, "lint")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "mode=edge-conf" in proc.stdout
+
+
+def test_overwritten_edge_conf_renders_from_the_newest_backup_that_has_the_legacy_upstream(cut):
+    cut.edge.write_text(MAINT_CONF)
+    _backup(cut, "20261003_090000", EDGE_FIXTURE.replace("/api/", "/api-old/"))
+    newer = _backup(cut, "20261003_100000", EDGE_FIXTURE)
+    _backup(cut, "20261003_110000", MAINT_CONF)  # a later backup of the maintenance conf has nothing to render
+    proc = _cut(cut, "lint")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"source={newer} mode=backup" in proc.stdout
+    assert cut.edge.read_text() == MAINT_CONF  # lint never writes the install target
+    assert not _kind(_log(cut), "docker ")
+
+
+def test_apply_edge_recovers_from_a_maintenance_conf_using_the_backup_and_never_reloads_the_old_upstream(cut):
+    cut.edge.write_text(MAINT_CONF)
+    _backup(cut, "20261003_100000", EDGE_FIXTURE)
+    proc = _apply_edge(cut)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = cut.edge.read_text()
+    assert f"proxy_pass https://{CAFE24_IP}" in body and "http://aads_dashboard" in body
+    assert "yeoljeong_finance_api" not in body and "jinah" not in body.lower() and "503" not in body
+    assert "mode=backup" in proc.stdout and "state=cafe24-verified" in cut.marker.read_text()
+
+
+def test_edge_conf_that_already_points_at_cafe24_is_idempotent(cut):
+    cut.edge.write_text(CAFE24_CONF)
+    proc = _cut(cut, "lint")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "mode=already-cafe24" in proc.stdout and cut.edge.read_text() == CAFE24_CONF
+
+
+def test_already_cafe24_conf_without_chain_depth_is_rejected(cut):
+    cut.edge.write_text(CAFE24_CONF.replace("proxy_ssl_verify_depth 3;", ""))
+    proc = _cut(cut, "lint")
+    assert proc.returncode != 0 and "proxy_ssl_verify_depth" in proc.stderr
+
+
+@pytest.mark.parametrize("with_unusable_backup", [False, True])
+def test_no_render_source_fails_closed_with_a_clear_message(cut, with_unusable_backup):
+    cut.edge.write_text(MAINT_CONF)
+    if with_unusable_backup:
+        _backup(cut, "20261003_100000", MAINT_CONF)
+    proc = _cut(cut, "lint")
+    assert proc.returncode != 0
+    assert "no edge render source" in proc.stderr and "EDGE_SOURCE" in proc.stderr
+    assert not _kind(_log(cut), "docker ") and cut.edge.read_text() == MAINT_CONF
+
+
+def test_apply_edge_without_a_source_fails_closed_before_touching_nginx(cut):
+    cut.edge.write_text(MAINT_CONF)
+    proc = _apply_edge(cut)
+    assert proc.returncode != 0 and "no edge render source" in proc.stderr
+    assert not _kind(_log(cut), "docker ") and "nginx switch lock held" not in proc.stdout
+    assert cut.edge.read_text() == MAINT_CONF and not cut.marker.exists()
+
+
+def test_explicit_edge_source_is_the_render_input_and_must_be_usable(cut):
+    cut.edge.write_text(MAINT_CONF)
+    good = cut.tmp / "pre-cutover.conf"
+    good.write_text(EDGE_FIXTURE)
+    proc = _cut(cut, "lint", EDGE_SOURCE=str(good))
+    assert proc.returncode == 0 and f"source={good} mode=explicit" in proc.stdout
+    junk = cut.tmp / "junk.conf"
+    junk.write_text(MAINT_CONF)
+    assert _cut(cut, "lint", EDGE_SOURCE=str(junk)).returncode != 0
+    assert _cut(cut, "lint", EDGE_SOURCE=str(cut.tmp / "missing.conf")).returncode != 0
+
+
+def test_render_adds_chain_depth_3_to_every_cafe24_location(cut):
+    proc = _sourced(cut, 'render_edge "$EDGE_CONF"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.count(f"proxy_pass https://{CAFE24_IP}") == 1
+    assert re.search(r"^\s*proxy_ssl_verify_depth 3;$", proc.stdout, re.M)
+    assert proc.stdout.count("proxy_ssl_verify_depth") == proc.stdout.count("proxy_ssl_verify on")
+    assert "http://aads_dashboard" in proc.stdout and "yeoljeong_finance_api" not in proc.stdout
+
+
+def test_lint_rejects_a_render_without_verify_depth(cut):
+    body = """
+render_edge() { sed -E '/proxy_ssl_verify_depth/d' < <(awk -v ip="$CAFE24_IP" '/yeoljeong_finance_api/{sub(/http:\\/\\/yeoljeong_finance_api/,"https://" ip); print; print "proxy_ssl_verify on;"; next}{print}' "$1"); }
+EDGE_SRC="$EDGE_CONF"; lint_edge_render
+"""
+    proc = _sourced(cut, body)
+    assert proc.returncode != 0 and "proxy_ssl_verify_depth" in proc.stderr
+
+
+def test_lint_requires_the_chain_file_in_the_apache_443_block(cut):
+    tpl = (ROOT / "config/apache/fb-cafe24.conf").read_text()
+    assert re.search(r"^\s*SSLCertificateChainFile\s+\S+", tpl, re.M)
+    assert _cut(cut, "lint").returncode == 0
+    no_chain = cut.tmp / "no-chain.conf"
+    no_chain.write_text(re.sub(r"^\s*SSLCertificateChainFile.*\n", "", tpl, flags=re.M))
+    proc = _cut(cut, "lint", TEMPLATE=str(no_chain))
+    assert proc.returncode != 0 and "SSLCertificateChainFile" in proc.stderr
+    # a chain file only in the :80 block (or only commented out) must not satisfy the :443 check
+    commented = cut.tmp / "commented.conf"
+    commented.write_text(re.sub(r"^(\s*)(SSLCertificateChainFile)", r"\1# \2", tpl, flags=re.M))
+    assert _cut(cut, "lint", TEMPLATE=str(commented)).returncode != 0
+
+
+def test_routed_health_local_ignores_the_expired_edge_certificate(cut):
+    proc = _apply_edge(cut)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    routed = [line for line in _kind(_log(cut), "curl kind=routed")]
+    assert routed and all("insecure=1" in line for line in routed), routed
+    probe = [line for line in routed if "probe=" in line]
+    assert len(probe) == 1 and probe[0].endswith("lock=held")
+    direct = _kind(_log(cut), "curl kind=direct")
+    assert direct and all("insecure=0" in line for line in direct)  # cafe24 origin is verified normally
