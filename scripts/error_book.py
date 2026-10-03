@@ -191,6 +191,11 @@ def do_match(text: str, bump: bool, record: bool = False, source: str = "") -> i
     return 0
 
 
+def register_status(cause) -> str:
+    """원인이 비었거나 공백뿐이면 candidate — 모르는 원인을 active 로 올리지 않는다 (R-ERRBOOK)."""
+    return "active" if (cause or "").strip() else "candidate"
+
+
 def do_register(a) -> int:
     """항목을 등록한다.
 
@@ -210,16 +215,20 @@ def do_register(a) -> int:
         fix["recorded_at"] = time.strftime("%F %T")
         meta["fix"] = fix
     meta_json = json.dumps(meta, ensure_ascii=False)
+    status = register_status(a.cause)
     psql(
         "INSERT INTO ohvis_wiki_error_book "
         "(project, error_key, symptom, root_cause, prevention, status, metadata) VALUES ("
         f"{lit(a.project)}, {lit(a.key)}, {lit(a.symptom)}, {lit(a.cause)}, "
-        f"{lit(a.prevention)}, 'active', {lit(meta_json)}::jsonb) "
+        f"{lit(a.prevention)}, {lit(status)}, {lit(meta_json)}::jsonb) "
         "ON CONFLICT (project, error_key) DO UPDATE SET "
         "  symptom=EXCLUDED.symptom, root_cause=EXCLUDED.root_cause, "
         "  prevention=EXCLUDED.prevention, metadata=EXCLUDED.metadata, updated_at=NOW();"
     )
-    print(f"등록: {a.key}")
+    if status == "candidate":
+        print(f"등록: {a.key} (candidate — 원인 미상, 원인을 밝히면 promote)")
+    else:
+        print(f"등록: {a.key} (active)")
     return 0
 
 
