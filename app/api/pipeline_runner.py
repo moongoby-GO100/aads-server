@@ -8,8 +8,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import posixpath
 import re
 import uuid
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
@@ -230,23 +232,37 @@ async def _pipeline_column_exists(conn, column_name: str) -> bool:
 
 
 def _normalize_target_file_path(path: str) -> str:
-    """Normalize file references so jobs touching the same file serialize."""
-    value = (path or "").strip().strip(_PATH_TRAILING_CHARS)
+    """Normalize file references so jobs touching the same file serialize.
+
+    `a/./b`, `a//b`, `a/../b` 는 접어서 같은 파일로 본다. 저장소 밖으로 나가는
+    경로(`../x`)는 빈 문자열 — 호출부는 빈 값을 건너뛴다.
+    """
+    value = (path or "").strip().strip(_PATH_TRAILING_CHARS.replace(".", "")).rstrip(_PATH_TRAILING_CHARS)
     value = value.replace("\\", "/")
     if not value:
         return ""
+    repo = ""
     if value.startswith("/root/aads/aads-server/"):
-        return f"server:{value.removeprefix('/root/aads/aads-server/')}"
-    if value.startswith("/root/aads/aads-dashboard/"):
-        return f"dashboard:{value.removeprefix('/root/aads/aads-dashboard/')}"
-    value = re.sub(r"^\./+", "", value)
-    if value.startswith("aads-server/"):
-        return f"server:{value.removeprefix('aads-server/')}"
-    if value.startswith("aads-dashboard/"):
-        return f"dashboard:{value.removeprefix('aads-dashboard/')}"
-    if value.startswith(("src/", "public/")) or value in {"package.json", "package-lock.json"}:
-        return f"dashboard:{value}"
-    return f"server:{value}"
+        repo, rel = "server", value.removeprefix("/root/aads/aads-server/")
+    elif value.startswith("/root/aads/aads-dashboard/"):
+        repo, rel = "dashboard", value.removeprefix("/root/aads/aads-dashboard/")
+    else:
+        rel = re.sub(r"^\./+", "", value)
+    rel = posixpath.normpath(rel) if rel else ""
+    if rel == ".":
+        rel = ""
+    if rel == ".." or rel.startswith(("../", "/")):
+        return ""
+    if not repo:
+        if rel.startswith("aads-server/"):
+            repo, rel = "server", rel.removeprefix("aads-server/")
+        elif rel.startswith("aads-dashboard/"):
+            repo, rel = "dashboard", rel.removeprefix("aads-dashboard/")
+        elif rel.startswith(("src/", "public/")) or rel in {"package.json", "package-lock.json"}:
+            repo = "dashboard"
+        else:
+            repo = "server"
+    return f"{repo}:{rel}"
 
 
 def _line_is_exec_command(line: str) -> bool:
@@ -274,23 +290,15 @@ def _line_prefix_has_exec_command(prefix: str) -> bool:
     return any(token in cleaned for token in _EXEC_COMMAND_PREFIXES)
 
 
-def _extract_target_files(instruction: str) -> set[str]:
-    """Extract explicit target files from a runner instruction.
-
-    검증/실행 명령의 인자로 등장한 경로(예: 검증 명령 줄의
-    `scripts/run_unit_tests.sh tests/unit/test_a.py`)는 제외한다 — 그런
-    경로는 실제 수정 대상이 아니라 두 지시서를 오탐으로 충돌시켜 큐 전체를
-    직렬화한다(AADS-RUNNERGUARD-VERIFY-PATH-FALSEPOSITIVE-R2). 판정은 "그 경로가
-    속한 줄이 실행 명령으로 시작하는가" 뿐 아니라 "매치 이전, 같은 줄에 실행 명령
-    토큰이 등장하는가"도 함께 본다(AADS-RUNNERGUARD-VERIFY-PATH-MIDLINE-P1). 같은
-    파일이라도 수정 대상으로 명시된 문장, 또는 다른 줄에서는 그대로 남는다.
-    """
+def _scan_instruction_paths(text: str, skip_lines: frozenset[int] = frozenset()) -> set[str]:
+    """지시문 본문에서 경로처럼 생긴 토큰을 모은다(실행 명령 인자는 제외)."""
     files: set[str] = set()
-    text = instruction or ""
     lines = text.splitlines()
     matches = list(_TARGET_FILE_RE.finditer(text)) + list(_SPECIAL_TARGET_RE.finditer(text))
     for match in matches:
         line_idx = text.count("\n", 0, match.start())
+        if line_idx in skip_lines:
+            continue
         line = lines[line_idx] if 0 <= line_idx < len(lines) else ""
         if _line_is_exec_command(line):
             continue
@@ -302,6 +310,226 @@ def _extract_target_files(instruction: str) -> set[str]:
         if normalized:
             files.add(normalized)
     return files
+
+
+_SCOPE_MARKER_RE = re.compile(
+    r"^[\s>*`#-]*\**(TARGET_FILES|READ_ONLY_FILES|REFERENCE_FILES|FORBIDDEN_FILES)\**\s*[:=]\s*(.*)$"
+)
+_SCOPE_BULLET_RE = re.compile(r"^\s*[-*]\s+(.+)$")
+_SCOPE_NONE_TOKENS = frozenset({"none", "n/a", "na", "-", "없음", "(none)"})
+_SCOPE_TOKEN_RE = re.compile(
+    r"^(?:/root/aads/aads-(?:server|dashboard)/|\./)?"
+    r"[A-Za-z0-9_.@-]+(?:/[A-Za-z0-9_.@-]+)*/?$"
+)
+_COMMON_RECORD_FILE_RE = re.compile(
+    r"(?:^|[:/])(?:[A-Za-z0-9_-]*HANDOVER|CHANGELOG[A-Za-z0-9_.-]*)\.md$",
+    re.IGNORECASE,
+)
+_WRITE_SCOPE_KEYS = {
+    "TARGET_FILES": "write",
+    "READ_ONLY_FILES": "read",
+    "REFERENCE_FILES": "read",
+    "FORBIDDEN_FILES": "forbidden",
+}
+
+
+@dataclass(frozen=True)
+class _WriteScope:
+    """지시서가 선언한 실제 수정 범위.
+
+    explicit=True 이면 `write` 는 TARGET_FILES(+본문이 언급한 공통 기록 파일)뿐이고
+    본문에서 읽기 참조로 언급된 경로는 `undeclared` 로만 남는다. explicit=False 는
+    기존 보수적 판정 — 본문의 모든 비명령 경로가 `write`.
+    """
+
+    explicit: bool
+    write: frozenset[str]
+    read: frozenset[str] = frozenset()
+    forbidden: frozenset[str] = frozenset()
+    undeclared: frozenset[str] = frozenset()
+    error: str = ""
+
+
+def _is_dir_scope(path: str) -> bool:
+    return path.endswith("/") or path.endswith(":")
+
+
+def _is_common_record_file(path: str) -> bool:
+    return bool(_COMMON_RECORD_FILE_RE.search(path))
+
+
+def _scope_paths_overlap(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if _is_dir_scope(a) and b.startswith(a):
+        return True
+    return _is_dir_scope(b) and a.startswith(b)
+
+
+def _scope_overlap(a: set[str] | frozenset[str], b: set[str] | frozenset[str]) -> list[str]:
+    """같은 파일 또는 디렉터리 포함 관계인 쌍을 더 좁은 쪽 경로로 돌려준다."""
+    out: set[str] = set()
+    for x in a:
+        for y in b:
+            if _scope_paths_overlap(x, y):
+                if _is_dir_scope(x) and _is_dir_scope(y):
+                    out.add(max(x, y, key=len))
+                else:
+                    out.add(y if _is_dir_scope(x) else x)
+    return sorted(out)
+
+
+def _parse_scope_token(token: str) -> str | None:
+    """마커 값 한 토큰 → 정규화 경로. 파일은 `repo:rel`, 디렉터리는 끝에 `/`. 잘못되면 None."""
+    value = token.strip().strip("`'\"").rstrip(",;")
+    value = re.sub(r":\d+(?:-\d+)?$", "", value)
+    if not value or not _SCOPE_TOKEN_RE.match(value):
+        return None
+    is_dir = value.endswith("/")
+    core = value.rstrip("/")
+    last = core.rsplit("/", 1)[-1]
+    if not is_dir:
+        if "." in last or last in {"Dockerfile", "Makefile"}:
+            pass
+        elif "/" in core:
+            is_dir = True
+        else:
+            return None
+    normalized = _normalize_target_file_path(core)
+    if not normalized:
+        return None
+    if is_dir:
+        return normalized if normalized.endswith(":") else f"{normalized}/"
+    return normalized
+
+
+def _scope_marker_tokens(value: str, *, block: bool) -> list[str]:
+    value = re.sub(r"\([^)]*\)", " ", value)
+    if block:
+        value = value.strip().strip("`").split(None, 1)[0] if value.strip() else ""
+        return [value] if value else []
+    return [t for t in re.split(r"[\s,;]+", value.replace("`", " ")) if t]
+
+
+def _parse_write_scope(instruction: str) -> _WriteScope:
+    """지시서의 TARGET_FILES / READ_ONLY_FILES / REFERENCE_FILES / FORBIDDEN_FILES 를 해석한다.
+
+    - TARGET_FILES 가 없거나 비어 있으면 explicit=False — 기존처럼 본문 경로 전부가 쓰기.
+    - 마커 값이 잘못됐거나(경로 아님) TARGET_FILES 와 FORBIDDEN_FILES 가 모순이면 같은
+      보수적 판정으로 되돌리고 `error` 에 사유를 남긴다 — 선언을 믿을 수 없을 때
+      읽기로 추정해 직렬화를 풀지 않는다.
+    - 읽기 선언에 같은 경로가 있어도 TARGET_FILES 에 있으면 쓰기가 이긴다.
+    - 본문이 언급한 공통 기록 파일(HANDOVER/CHANGELOG)은 읽기/금지로 선언되지 않았다면
+      explicit 모드에서도 쓰기로 유지한다.
+    """
+    text = instruction or ""
+    lines = text.splitlines()
+    declared: dict[str, set[str]] = {"write": set(), "read": set(), "forbidden": set()}
+    marker_lines: set[int] = set()
+    error = ""
+    idx = 0
+    while idx < len(lines):
+        m = _SCOPE_MARKER_RE.match(lines[idx])
+        if not m:
+            idx += 1
+            continue
+        kind = _WRITE_SCOPE_KEYS[m.group(1)]
+        marker_lines.add(idx)
+        inline = m.group(2).strip()
+        raw_tokens: list[str] = []
+        if inline:
+            raw_tokens = _scope_marker_tokens(inline, block=False)
+        else:
+            while idx + 1 < len(lines):
+                b = _SCOPE_BULLET_RE.match(lines[idx + 1])
+                if not b:
+                    break
+                idx += 1
+                marker_lines.add(idx)
+                raw_tokens.extend(_scope_marker_tokens(b.group(1), block=True))
+        idx += 1
+        for raw in raw_tokens:
+            if raw.strip("`'\"").lower() in _SCOPE_NONE_TOKENS:
+                continue
+            parsed = _parse_scope_token(raw)
+            if parsed is None:
+                error = error or f"{m.group(1)} 값이 경로가 아님: {raw[:60]}"
+                continue
+            declared[kind].add(parsed)
+
+    write, read, forbidden = declared["write"], declared["read"], declared["forbidden"]
+    if not error:
+        for w in write:
+            if any(w == f or (_is_dir_scope(f) and w.startswith(f)) for f in forbidden):
+                error = f"TARGET_FILES 와 FORBIDDEN_FILES 가 모순: {w}"
+                break
+
+    legacy = _scan_instruction_paths(text)
+    if error or not write:
+        return _WriteScope(explicit=False, write=frozenset(legacy), error=error)
+
+    prose = _scan_instruction_paths(text, frozenset(marker_lines))
+    explicit_read_or_forbidden = read | forbidden
+
+    def _declared_non_write(path: str) -> bool:
+        return any(
+            path == d or (_is_dir_scope(d) and path.startswith(d))
+            for d in explicit_read_or_forbidden
+        )
+
+    common = {p for p in prose if _is_common_record_file(p) and not _declared_non_write(p)}
+    undeclared = {
+        p for p in prose
+        if p not in common
+        and not any(_scope_paths_overlap(p, w) for w in write)
+        and not _declared_non_write(p)
+    }
+    return _WriteScope(
+        explicit=True,
+        write=frozenset(write | common),
+        read=frozenset(read),
+        forbidden=frozenset(forbidden),
+        undeclared=frozenset(undeclared),
+    )
+
+
+def _extract_target_files(instruction: str) -> set[str]:
+    """Extract the files a runner instruction will modify (conflict scope).
+
+    TARGET_FILES 가 명시되면 그 범위(+공통 기록 파일)만 쓰기로 본다. 없으면 기존처럼
+    본문의 모든 경로를 쓰기로 본다 — 검증/실행 명령 인자는 어느 쪽이든 제외한다
+    (AADS-RUNNERGUARD-VERIFY-PATH-FALSEPOSITIVE-R2, ...-MIDLINE-P1). 상세는
+    `_parse_write_scope`.
+    """
+    return set(_parse_write_scope(instruction).write)
+
+
+def _log_write_scope(scope: _WriteScope, *, job_id: str, project: str) -> None:
+    if scope.error:
+        logger.warning(
+            "pipeline_runner.write_scope_malformed",
+            job_id=job_id, project=project, error=scope.error,
+        )
+    elif scope.explicit and scope.undeclared:
+        logger.info(
+            "pipeline_runner.write_scope_undeclared_paths",
+            job_id=job_id, project=project,
+            write=sorted(scope.write), undeclared=sorted(scope.undeclared),
+        )
+
+
+def _batch_scope_owners(
+    item_files: set[str] | frozenset[str],
+    batch_file_owner: dict[str, str],
+) -> list[tuple[str, str]]:
+    """배치 앞선 항목 중 item_files 와 겹치는 (겹친 경로, 선행 job_id), 경로순."""
+    pairs: dict[str, str] = {}
+    for path in item_files:
+        for owner_path, owner_job in batch_file_owner.items():
+            if _scope_paths_overlap(path, owner_path):
+                narrow = _scope_overlap({path}, {owner_path})[0]
+                pairs.setdefault(narrow, owner_job)
+    return sorted(pairs.items())
 
 
 async def _find_active_file_conflict(
@@ -354,7 +582,7 @@ async def _find_active_file_conflict(
         if existing_job_id in ignored:
             continue
         existing_files = _extract_target_files(row["instruction"] or "")
-        overlap = target_files & existing_files
+        overlap = _scope_overlap(target_files, existing_files)
         if overlap:
             existing_order = await _resolve_milestone_order(
                 conn,
@@ -367,7 +595,7 @@ async def _find_active_file_conflict(
                     "job_id": existing_job_id,
                     "status": row["status"],
                     "phase": row["phase"],
-                    "overlap": sorted(overlap),
+                    "overlap": overlap,
                     "dependency_inversion": True,
                     "incoming_sequence": incoming_order[2],
                     "parent_sequence": existing_order[2],
@@ -377,7 +605,7 @@ async def _find_active_file_conflict(
                 "job_id": existing_job_id,
                 "status": row["status"],
                 "phase": row["phase"],
-                "overlap": sorted(overlap),
+                "overlap": overlap,
             }
     if inverted_conflict:
         return inverted_conflict
@@ -1373,7 +1601,9 @@ async def submit_job(
     job_id = f"runner-{uuid.uuid4().hex[:8]}"
     session_id = req.session_id  # 필수 필드 — validator에서 이미 검증됨
     instruction_hash = _compute_instruction_hash(req.project, req.instruction)
-    target_files = _extract_target_files(req.instruction)
+    write_scope = _parse_write_scope(req.instruction)
+    target_files = set(write_scope.write)
+    _log_write_scope(write_scope, job_id=job_id, project=req.project)
     auto_depends_on = ""
     auto_dependency_reason = ""
     relinked_orphans: list[str] = []
@@ -3233,7 +3463,9 @@ async def submit_batch(
                 for item in req.jobs:
                     job_id = key_to_job_id[item.key]
                     depends_on = key_to_job_id.get(item.depends_on_key) if item.depends_on_key else None
-                    item_target_files = _extract_target_files(item.instruction)
+                    item_scope = _parse_write_scope(item.instruction)
+                    item_target_files = set(item_scope.write)
+                    _log_write_scope(item_scope, job_id=job_id, project=req.project)
                     auto_dependency_reason = ""
 
                     if item.depends_on_key and _dependency_order_is_inverted(
@@ -3359,11 +3591,10 @@ async def submit_batch(
                         continue
 
                     if not depends_on:
-                        internal_conflicts = sorted(
-                            path for path in item_target_files if path in batch_file_owner
-                        )
+                        internal_owners = _batch_scope_owners(item_target_files, batch_file_owner)
+                        internal_conflicts = [path for path, _owner in internal_owners]
                         if internal_conflicts:
-                            depends_on = batch_file_owner[internal_conflicts[0]]
+                            depends_on = internal_owners[0][1]
                             parent_key = next(
                                 key for key, mapped_job_id in key_to_job_id.items()
                                 if mapped_job_id == depends_on
@@ -3454,6 +3685,7 @@ async def submit_batch(
                         "depends_on": depends_on,
                         "auto_dependency": bool(auto_dependency_reason),
                         "target_files": sorted(item_target_files),
+                        "write_scope": "explicit" if item_scope.explicit else "legacy",
                     })
 
     except HTTPException:
