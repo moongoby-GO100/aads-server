@@ -1,5 +1,5 @@
 # R-DOC 목업 필수 제출·승인 — 기획
-- 프로젝트: AADS · 버전: 1.0.0 · 작성일: 2026-10-03 KST
+- 프로젝트: AADS · 버전: 1.0.1 · 작성일: 2026-10-03 KST
 - 상태: 검토용 초안. 문서 작성 지시는 승인됐지만 이 설계·시안의 구현 승인은 아직 없다.
 - 상위 목표: 0361c451-cc03-4bd1-a423-76051b0546b2 (기존 R-DOC 목표, 조회 확인)
 - 근거: CEO의 “화면 구현이 필요한 기획·설계·PRD는 목업까지, 기존 화면 수정은 전후 페이지까지 보고” 지시.
@@ -12,7 +12,6 @@
 ## 문제와 확인 근거
 기존 R-DOC spec §6~12에는 화면 분류, 디자인 조사, 시안, 승인 기준이 있으나 모든 UI 변경의 전체 페이지 목업 제출을 확인하는 구현은 확인되지 않았다. origin/main의 canonical_gate.py는 shadow/fail-open이며 enforce를 설정하는 것만으로 차단 기능이 생기지 않는다. 기존 Workbench는 before/after 이미지와 QA 채점 중심이다. 이것을 버전 고정 승인 화면으로 간주하지 않는다. [코드 확인]
 프로젝트 진행 표준(app/static/reports/aads-project-lifecycle-guide.html)의 Layout은 텍스트 와이어프레임을 허용하고 XS/S 변경은 텍스트 Before/After로 보고할 수 있다. UI 변경에는 이 완화 규정을 적용하지 않는 보완이 필요하다. 같은 URL 내용 덮어쓰기 대신 목업 리비전별 불변 주소를 제공해야 한다. [코드 확인]
-기존 R-DOC plan/prd의 DB 최신 제목 첫 줄과 source_path가 서로 다른 문서를 가리키는 정황이 조회됐다. 본 작업은 이를 덮어쓰지 않고 새 기능 패키지로 분리한다. 기존 정본 정합 복구는 별도 대조 후 수행한다. [DB 조회]
 
 ## 대상 사용자와 목표
 대표님/승인권자는 문서와 실제 시안을 한 화면에서 보고 승인하거나 수정 요청한다. PM은 화면 목록과 제출 누락을 확인한다. 디자이너·개발자는 어떤 버전으로 만들어야 하는지 확인한다. QA는 승인 시안과 구현 화면의 차이를 검증한다.
@@ -28,7 +27,7 @@
 - 문서 승인, 목업 승인, 착수·예산 승인, 코드 검수, 배포 승인은 별개의 범위다. 채팅의 포괄적 “진행”을 특정 목업 버전 승인으로 추정하지 않는다.
 
 ## 이번 패키지의 자기 적용
-신규 독립 화면 “목업 검토”가 필요하므로 실제 HTML 목업을 첨부한다. 제안 route는 /design/reviews/{review_id} (미구현), 시안은 app/static/exports/rdoc-mockup-review-v1.html 이다.
+신규 독립 화면 “목업 검토”가 필요하므로 실제 HTML 목업을 첨부한다. 제안 route는 /design/reviews/{review_id} (미구현), 시안은 docs/specs/rdoc-mockup-review/mockup-v1.html 이다.
 현재 운영에 동일 route가 없으므로 기존 페이지 Before는 해당 없음이다. 기존 Workbench·채팅 UI를 이번 MVP에서 변경하지 않으며 채팅에는 기존 일반 링크를 사용한다. 나중에 Workbench나 채팅 카드를 변경하면 그 변경의 실제 Before와 After 제출을 다시 요구한다.
 시안의 신규/기존 분류, 승인, 수정 요청, 재제출, 증거 누락, 세션 만료 조작은 데모다. 버튼을 눌러도 운영 승인·작업 제출·DB 저장은 일어나지 않는다.
 
@@ -53,3 +52,8 @@ MVP는 단일 검토 화면, 수정 요청, 불변 리비전, 서버 승인 게�
 이번 산출물의 완료는 문서 초안 등록·목업 제시·목업 동작 검증까지다. 서버 차단 구현·활성화는 완료 대상이 아니다.
 비용: 외부 디자인/LLM 추가 호출 없음. 전체 세션 비용 $ 미측정. 구현 예산·일정은 승인 범위 확정 뒤 산정한다.
 
+
+## 검토 패키지 v1
+- [클릭 가능한 목업](https://aads.newtalk.kr/screenshots/rdoc-mockup-review-v1/index.html) · [데스크톱 전체 캡처](https://aads.newtalk.kr/screenshots/rdoc-mockup-review-v1/evidence-v1/desktop.png) · [모바일 전체 캡처](https://aads.newtalk.kr/screenshots/rdoc-mockup-review-v1/evidence-v1/mobile.png)
+- 원본 HTML: `docs/specs/rdoc-mockup-review/mockup-v1.html`. 게시 사본은 같은 바이트로 보존하고 manifest로 대조한다.
+- 시연 승인과 실제 승인은 분리한다. 이 문서와 시안은 초안이며 승인본 자동 지정·운영 강제 게이트 활성화를 수행하지 않았다.

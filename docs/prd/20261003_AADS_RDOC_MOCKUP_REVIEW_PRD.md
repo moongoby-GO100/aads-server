@@ -1,5 +1,5 @@
 # R-DOC 목업 필수 제출·승인 — PRD
-- 프로젝트: AADS · 버전: 1.0.0 · 작성일: 2026-10-03 KST
+- 프로젝트: AADS · 버전: 1.0.1 · 작성일: 2026-10-03 KST
 - 상태: 검토용 초안. 문서 작성 지시는 승인됐지만 이 설계·시안의 구현 승인은 아직 없다.
 - 상위 목표: 0361c451-cc03-4bd1-a423-76051b0546b2 (기존 R-DOC 목표, 조회 확인)
 - 근거: CEO의 “화면 구현이 필요한 기획·설계·PRD는 목업까지, 기존 화면 수정은 전후 페이지까지 보고” 지시.
@@ -55,3 +55,8 @@
 실서비스 승인 API/스키마 변경, L1 활성화, 강제 게이트 배포, 기존 Workbench/채팅 UI 변경은 이 문서 작성 작업의 비범위다.
 UI 분류를 거짓 backend-only로 우회할 위험은 파일 변경·route 영향 대조와 리뷰로 보완한다. 직접 root 편집까지 완전히 막는다고 주장하지 않는다. emergency UI 변경도 암묵 면제는 없고 기존 승인된 긴급 절차와 증거 채무를 명시해야 한다.
 
+
+## 검토 패키지 v1
+- [클릭 가능한 목업](https://aads.newtalk.kr/screenshots/rdoc-mockup-review-v1/index.html) · [데스크톱 전체 캡처](https://aads.newtalk.kr/screenshots/rdoc-mockup-review-v1/evidence-v1/desktop.png) · [모바일 전체 캡처](https://aads.newtalk.kr/screenshots/rdoc-mockup-review-v1/evidence-v1/mobile.png)
+- 원본 HTML: `docs/specs/rdoc-mockup-review/mockup-v1.html`. 게시 사본은 같은 바이트로 보존하고 manifest로 대조한다.
+- 시연 승인과 실제 승인은 분리한다. 이 문서와 시안은 초안이며 승인본 자동 지정·운영 강제 게이트 활성화를 수행하지 않았다.
