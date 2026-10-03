@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.auth as auth_module
-from app.api import acct_purchase, auth, obys_finance, obys_inventory, obys_workspaces
+from app.api import acct_purchase, auth, obys_collections, obys_finance, obys_inventory, obys_workspaces
 
 
 logger = logging.getLogger(__name__)
@@ -128,6 +128,7 @@ app.include_router(obys_finance.router, prefix="/api/v1", tags=["yeoljeong-finan
 app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"])
 app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])
 app.include_router(obys_workspaces.router, prefix="/api/v1", tags=["obys-workspaces"])
+app.include_router(obys_collections.router, prefix="/api/v1", tags=["obys-collections"])
 
 _static_dir = pathlib.Path(__file__).resolve().parent / "static"
 _obys_index = _static_dir / "apps" / "obys" / "index.html"

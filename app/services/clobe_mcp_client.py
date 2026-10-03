@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -57,6 +58,15 @@ class ClobeToolDenied(ClobeError):
 
 class ClobeReauthRequired(ClobeError):
     pass
+
+
+# initialize·tools/call 의 401 은 모두 이 메시지로 올라온다. 갱신 재시도 경로는 이 값만 탄다.
+# 토큰 갱신 자체의 실패(refresh_failed:* 등)는 다른 메시지라 재시도 없이 재동의로 간다.
+UNAUTHORIZED = "mcp_unauthorized"
+
+
+class ClobeTransientError(ClobeError):
+    """재시도하면 풀릴 수 있는 장애(네트워크·429·5xx). 상태를 바꾸지 않는다."""
 
 
 SCHEMA_DDL = """
@@ -408,9 +418,9 @@ async def refresh_access_token(*, force: bool = False) -> None:
             except httpx.HTTPError as exc:
                 # 일시 장애: 상태는 유지하고 재시도 여지를 남긴다.
                 logger.warning("clobe_refresh_network_error type=%s", type(exc).__name__)
-                raise ClobeError("refresh_network_error") from None
+                raise ClobeTransientError("refresh_network_error") from None
             if resp.status_code >= 500:
-                raise ClobeError(f"refresh_server_error:{resp.status_code}")
+                raise ClobeTransientError(f"refresh_server_error:{resp.status_code}")
             if resp.status_code != 200:
                 err = _safe_oauth_error(resp)
                 logger.warning("clobe_refresh_failed error=%s", err)
@@ -513,9 +523,15 @@ class _McpSession:
     async def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         self._next_id += 1
         rid = self._next_id
-        resp = await self._post({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}})
+        try:
+            resp = await self._post({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}})
+        except httpx.HTTPError as exc:
+            logger.warning("clobe_mcp_network_error type=%s", type(exc).__name__)
+            raise ClobeTransientError("mcp_network_error") from None
         if resp.status_code == 401:
-            raise ClobeReauthRequired("mcp_unauthorized")
+            raise ClobeReauthRequired(UNAUTHORIZED)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            raise ClobeTransientError(f"mcp_http_{resp.status_code}")
         if resp.status_code != 200:
             raise ClobeError(f"mcp_http_{resp.status_code}")
         sid = resp.headers.get("mcp-session-id")
@@ -536,7 +552,13 @@ class _McpSession:
             "capabilities": {},
             "clientInfo": {"name": "aads-obys-readonly", "version": "1"},
         })
-        await self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        try:
+            ack = await self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        except httpx.HTTPError as exc:
+            logger.warning("clobe_mcp_network_error type=%s", type(exc).__name__)
+            raise ClobeTransientError("mcp_network_error") from None
+        if ack.status_code == 401:
+            raise ClobeReauthRequired(UNAUTHORIZED)
         return result
 
 
@@ -550,7 +572,7 @@ async def _with_session(fn):
                 await session.initialize()
                 result = await fn(session)
             except ClobeReauthRequired as exc:
-                if str(exc) != "mcp_unauthorized":
+                if str(exc) != UNAUTHORIZED:
                     raise
                 if attempt == 2:
                     await _mark(STATUS_REAUTH, "mcp_unauthorized_after_refresh")
@@ -632,9 +654,12 @@ async def get_status() -> dict[str, Any]:
     else:
         status = conn["status"]
     last = conn.get("last_success_at") if conn else None
+    expires = conn.get("token_expires_at") if conn else None
     return {
         "status": status,
         "last_success_at": last.isoformat() if last else None,
+        "token_expires_at": expires.isoformat() if expires else None,
+        "reauth_required": status in (STATUS_REAUTH, STATUS_REVOKED, STATUS_NOT_CONNECTED),
         "allowed_tool_count": int(allowed or 0),
         "observed_tool_count": int(observed or 0),
         "last_error": conn.get("last_error") if conn else None,
@@ -666,3 +691,146 @@ async def verify_connection() -> dict[str, Any]:
         content = out.get("content")
         result["company_response_items"] = len(content) if isinstance(content, list) else None
     return result
+
+
+# ── 수집 전용 읽기 계약 ───────────────────────────────────
+# 위의 일반 허용목록(classify_tool)보다 한 겹 더 좁다. 클로브 tools/list 에는 직원·급여·
+# 보안계정·전자신고처럼 수집과 무관한 조회 도구도 있고, 그것들은 수집 경로에서 호출하지 않는다.
+# 값은 데이터 종류. 이름·입력 스키마는 2026-10-03 실제 tools/list(DB clobe_mcp_tools)에서 확인했다.
+COLLECTION_TOOLS: dict[str, str] = {
+    "get_my_context": "context",
+    "get_scraping_status": "scraping_status",
+    "get_bank_accounts": "bank_account",
+    "get_labeled_transactions": "bank_transaction",
+    "get_tax_invoices": "tax_invoice",
+    "get_cash_receipts": "cash_receipt",
+    "get_card_approvals": "card_approval",
+}
+COLLECTION_DATA_TOOLS: dict[str, str] = {
+    "bank_transaction": "get_labeled_transactions",
+    "tax_invoice": "get_tax_invoices",
+    "cash_receipt": "get_cash_receipts",
+    "card_approval": "get_card_approvals",
+}
+
+
+def parse_tool_json(result: dict[str, Any]) -> dict[str, Any]:
+    """tools/call 결과에서 JSON 객체 하나를 꺼낸다. 오류·비JSON 은 분류 코드만 담아 거부한다."""
+    if result.get("isError"):
+        raise ClobeError("tool_error")
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict):
+        return structured
+    content = result.get("content")
+    if isinstance(content, list) and content and isinstance(content[0], dict):
+        try:
+            data = json.loads(content[0].get("text") or "")
+        except (TypeError, json.JSONDecodeError):
+            raise ClobeError("tool_non_json") from None
+        if isinstance(data, dict):
+            return data
+    raise ClobeError("tool_unexpected_shape")
+
+
+async def assert_collection_tool(name: str) -> None:
+    """수집 허용목록 → 이름 규칙 → tools/list 실측 기록. 하나라도 실패하면 네트워크 호출 전에 거부."""
+    if name not in COLLECTION_TOOLS:
+        raise ClobeToolDenied("tool_denied:not_in_collection_allowlist")
+    await assert_tool_callable(name)
+
+
+class ReadSession:
+    """수집용 읽기 전용 MCP 세션. 한 번 열어 여러 페이지를 읽는다.
+
+    401 은 토큰을 한 번만 강제 갱신해 이어가고(세션 열기 중의 401 포함), 일시 장애(네트워크·429·5xx)는
+    TRANSIENT_RETRIES 번까지 세션을 새로 열어 재시도한다. last_success_at 은 호출마다가 아니라 세션을 닫을 때 한 번 기록한다.
+    """
+
+    TRANSIENT_RETRIES = 2
+    TRANSIENT_BACKOFF_SECONDS = 0.5
+
+    def __init__(self) -> None:
+        self._http: httpx.AsyncClient | None = None
+        self._session: _McpSession | None = None
+        self._succeeded = False
+
+    async def __aenter__(self) -> "ReadSession":
+        self._http = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
+        return self
+
+    async def __aexit__(self, exc_type: Any, _exc: Any, _tb: Any) -> None:
+        if self._http is not None:
+            await self._http.aclose()
+        self._http = None
+        self._session = None
+        succeeded, self._succeeded = self._succeeded, False
+        # 예외로 끝난 세션은 일부 호출이 성공했어도 성공으로 기록하지 않는다(last_error 도 지우지 않는다).
+        if succeeded and exc_type is None:
+            try:
+                await get_pool().execute(
+                    "UPDATE clobe_mcp_connection SET last_success_at = now(), last_error = NULL WHERE id = $1",
+                    CONNECTION_ID,
+                )
+            except Exception as exc:  # noqa: BLE001 - 상태 기록 실패가 이미 읽은 결과를 덮으면 안 된다
+                logger.warning("clobe_last_success_update_failed type=%s", type(exc).__name__)
+
+    async def _open(self) -> None:
+        token = await _valid_access_token()
+        assert self._http is not None
+        session = _McpSession(self._http, token)
+        await session.initialize()
+        self._session = session
+
+    async def call(self, name: str, tool_input: dict[str, Any] | None = None) -> dict[str, Any]:
+        """허용된 조회 도구를 호출해 JSON 본문을 돌려준다. 인자는 항상 {"input": {...}} 로 감싼다."""
+        await assert_collection_tool(name)
+        arguments = {"input": dict(tool_input or {})}
+        force_refresh = refreshed_once = False
+        transient_left = self.TRANSIENT_RETRIES
+        while True:
+            try:
+                if self._session is None:
+                    if force_refresh:
+                        await refresh_access_token(force=True)
+                        force_refresh = False
+                    await self._open()
+                result = await self._session.request("tools/call", {"name": name, "arguments": arguments})
+                break
+            except ClobeReauthRequired as exc:
+                self._session = None
+                if str(exc) != UNAUTHORIZED:
+                    raise
+                if refreshed_once:
+                    await _mark(STATUS_REAUTH, "mcp_unauthorized_after_refresh")
+                    raise
+                refreshed_once = force_refresh = True
+            except ClobeTransientError:
+                self._session = None
+                if transient_left <= 0:
+                    raise
+                transient_left -= 1
+                await asyncio.sleep(self.TRANSIENT_BACKOFF_SECONDS)
+        self._succeeded = True
+        return parse_tool_json(result)
+
+
+def normalize_reg_no(value: Any) -> str:
+    return re.sub(r"\D", "", str(value or ""))
+
+
+def parse_companies(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """get_my_context 응답에서 회사 목록을 정규화한다. companyId 가 없는 항목은 버린다."""
+    companies = context.get("companies")
+    if not isinstance(companies, list):
+        raise ClobeError("context_unexpected_shape")
+    out: list[dict[str, Any]] = []
+    for item in companies:
+        if not isinstance(item, dict) or not item.get("companyId"):
+            continue
+        out.append({
+            "company_id": str(item["companyId"]),
+            "name": str(item.get("companyName") or "").strip(),
+            "reg_no": normalize_reg_no(item.get("businessRegNo")),
+            "role": str(item.get("role") or ""),
+        })
+    return out

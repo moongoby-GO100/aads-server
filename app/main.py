@@ -60,6 +60,7 @@ from app.api.assistant import router as assistant_router
 from app.api.hot_reload import router as hot_reload_router
 from app.api.credential_vault import router as credential_vault_router
 from app.api.clobe_integration import router as clobe_integration_router
+from app.api.obys_collections import router as obys_collections_router
 from app.api.llm_keys import router as llm_keys_router
 from app.api.llm_models import router as llm_models_router
 from app.api.llm_report import router as llm_report_router
@@ -3928,6 +3929,7 @@ app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"
 app.include_router(acct_sales.router, prefix="/api/v1", tags=["acct-sales"])
 app.include_router(credential_vault_router, prefix="/api/v1", tags=["credential-vault"])
 app.include_router(clobe_integration_router, prefix="/api/v1", tags=["clobe-integration"])
+app.include_router(obys_collections_router, prefix="/api/v1", tags=["obys-collections"])
 app.include_router(google_sheets.router, prefix="/api/v1", tags=["google-sheets"])
 app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])
 app.include_router(llm_keys_router, prefix="/api/v1", tags=["llm-keys"])

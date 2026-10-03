@@ -59,6 +59,22 @@ async def status(_: dict[str, Any] = Depends(require_internal_admin)) -> dict[st
     return await clobe.get_status()
 
 
+@router.post("/reauth")
+async def reauth(admin: dict[str, Any] = Depends(require_internal_admin)) -> dict[str, Any]:
+    """동의가 필요한 상태(reauth_required·revoked·not_connected)에서만 인가 URL 을 발급한다.
+
+    not_connected 를 열어 두는 것은 의도다: 아직 동의가 없으므로 이 URL 이 첫 연결 경로가 된다(재동의 아님).
+    connected 에서는 409 로 거부해 이미 승인된 연결에 동의를 다시 요청하지 않는다. 관리자 전용.
+    """
+    current = await clobe.get_status()
+    if not current["reauth_required"]:
+        raise HTTPException(status_code=409, detail="reauth_not_needed")
+    try:
+        return await clobe.start_authorization(created_by=str(admin.get("user_id") or ""))
+    except clobe.ClobeError as exc:
+        raise _http_error(exc) from None
+
+
 @router.post("/tools/refresh")
 async def tools_refresh(_: dict[str, Any] = Depends(require_internal_admin)) -> dict[str, Any]:
     try:
