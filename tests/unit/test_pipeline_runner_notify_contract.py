@@ -128,7 +128,7 @@ async def test_awaiting_approval_dispatches_internal_ai_trigger(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_done_job_notification_is_a_noop(monkeypatch):
+async def test_done_job_notification_enqueues_terminal_followup_not_a_trigger(monkeypatch):
     from app.api import pipeline_runner
     import app.core.db_pool as db_pool
     import app.services.pipeline_runner_service as pipeline_runner_service
@@ -178,7 +178,16 @@ async def test_done_job_notification_is_a_noop(monkeypatch):
         SimpleNamespace(info=lambda *_args, **_kwargs: None, warning=lambda *_args, **_kwargs: None),
     )
 
+    enqueued: list[str] = []
+
+    async def _fake_followup(_pool, row, *, job_id, session_id):
+        enqueued.append(job_id)
+        return {"status": "followup_queued", "followup_kind": "completed", "session_id": session_id}
+
+    monkeypatch.setattr(pipeline_runner, "_enqueue_terminal_followup", _fake_followup)
+
     result = await pipeline_runner.notify_completion("runner-done1234")
 
-    assert result["status"] == "skipped"
-    assert result["reason"] == "terminal status: done"
+    # 승인 재검수 트리거는 만들지 않고, 종결 결과 검토만 내구 큐로 넘긴다.
+    assert enqueued == ["runner-done1234"]
+    assert result["status"] == "followup_queued"

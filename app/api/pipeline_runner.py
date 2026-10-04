@@ -13,7 +13,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional
+from typing import Literal, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -110,6 +110,7 @@ def require_pipeline_tenant_role(minimum: TenantRole):
 
 require_tenant_viewer = require_pipeline_tenant_role(TenantRole.VIEWER)
 require_tenant_member = require_pipeline_tenant_role(TenantRole.MEMBER)
+require_tenant_admin = require_pipeline_tenant_role(TenantRole.ADMIN)
 
 
 def _tenant_id(context: TenantContext) -> str:
@@ -321,6 +322,10 @@ _SCOPE_TOKEN_RE = re.compile(
     r"^(?:/root/aads/aads-(?:server|dashboard)/|\./)?"
     r"[A-Za-z0-9_.@-]+(?:/[A-Za-z0-9_.@-]+)*/?$"
 )
+# 읽기/금지 선언에서 두 저장소 밖의 절대경로(/root/aads/AGENTS.md 등)는 쓰기 범위와 겹칠 수
+# 없다. 이것을 "경로 아님" 오류로 처리하면 선언 전체가 비명시 모드로 되돌아가 READ_ONLY_FILES
+# 와 본문 basename 이 전부 쓰기로 승격된다 (실측: 이 작업 자신의 지시서 헤더).
+_EXTERNAL_ABS_PATH_RE = re.compile(r"^/(?:[A-Za-z0-9_.@-]+/)*[A-Za-z0-9_.@-]+/?$")
 _COMMON_RECORD_FILE_RE = re.compile(
     r"(?:^|[:/])(?:[A-Za-z0-9_-]*HANDOVER|CHANGELOG[A-Za-z0-9_.-]*)\.md$",
     re.IGNORECASE,
@@ -452,6 +457,10 @@ def _parse_write_scope(instruction: str) -> _WriteScope:
             if raw.strip("`'\"").lower() in _SCOPE_NONE_TOKENS:
                 continue
             parsed = _parse_scope_token(raw)
+            if parsed is None and kind != "write" and _EXTERNAL_ABS_PATH_RE.match(
+                raw.strip().strip("`'\"").rstrip(",;")
+            ):
+                continue
             if parsed is None:
                 error = error or f"{m.group(1)} 값이 경로가 아님: {raw[:60]}"
                 continue
@@ -1280,6 +1289,362 @@ async def _cascade_cleanup_orphans_with_ids(conn, failed_job_id: str) -> list[st
     if cleaned:
         logger.info("pipeline_runner.orphan_cascade_total", count=len(cleaned), root=failed_job_id)
     return cleaned
+
+
+# ── 잘못된 자동(파일 충돌 추론) 의존 edge 복구 ─────────────────────────────
+# 자동 edge 는 "같은 파일을 만진다" 는 추론이 만든 줄 세우기일 뿐이다. 추론 근거가
+# 파일명 오탐이었다면 실제 교집합이 없는데도 무관한 작업을 막는다. 명시 depends_on 과
+# 구분해서, 현재의 권위 있는 쓰기 범위(_parse_write_scope)로 다시 판정하고 교집합이
+# 정말 없는 queued 자식의 edge 만 풀 수 있게 한다. 기본은 dry-run 이고, 적용은 검토한
+# 계획의 plan_hash 가 일치할 때만, 되돌리기는 기록된 이벤트로만 한다.
+_AUTO_DEP_RELEASED_EVENT = "false_auto_dependency_released"
+_AUTO_DEP_RESTORED_EVENT = "false_auto_dependency_restored"
+_SUPERSEDED_RELINK_EVENT = "superseded_dependency_relinked"
+_DEP_RESET_EVENTS = frozenset({
+    "file_conflict_dependency_requeued", _AUTO_DEP_RELEASED_EVENT,
+})
+_ANY_PARENT = "*"
+
+
+def _logs_list(logs: object) -> list:
+    if isinstance(logs, str):
+        try:
+            logs = json.loads(logs)
+        except ValueError:
+            return []
+    return logs if isinstance(logs, list) else []
+
+
+def _is_auto_dependency_edge(logs: object, current_parent: str) -> bool:
+    """현재 depends_on 이 자동 추론이 만든 것인가 (마지막 의존 관련 이벤트가 결정한다)."""
+    owner: str | None = None
+    for entry in _logs_list(logs):
+        if not isinstance(entry, dict):
+            continue
+        event = entry.get("event")
+        if event == _AUTO_FILE_DEPENDENCY_EVENT:
+            owner = entry.get("depends_on") or _ANY_PARENT
+        elif event == _AUTO_DEP_RESTORED_EVENT:
+            owner = entry.get("restored_parent") or _ANY_PARENT
+        elif event == _SUPERSEDED_RELINK_EVENT:
+            owner = None
+        elif event in _DEP_RESET_EVENTS:
+            owner = None
+    return owner is not None and owner in (_ANY_PARENT, current_parent)
+
+
+def _dependency_cycle_nodes(edges: dict[str, str]) -> set[str]:
+    """job -> depends_on 함수 그래프에서 순환에 속한 노드."""
+    in_cycle: set[str] = set()
+    done: set[str] = set()
+    for start in edges:
+        path: list[str] = []
+        seen_at: dict[str, int] = {}
+        node: str | None = start
+        while node is not None and node not in done:
+            if node in seen_at:
+                in_cycle.update(path[seen_at[node]:])
+                break
+            seen_at[node] = len(path)
+            path.append(node)
+            node = edges.get(node)
+        done.update(path)
+    return in_cycle
+
+
+def _is_weak_overlap(overlap: list[str], *scopes: set[str] | frozenset[str]) -> bool:
+    """교집합이 전부 '디렉터리 없는 파일명' 이고 다른 쪽에 같은 이름의 경로 파일이 있는가.
+
+    TARGET_FILES 없이 본문만 훑은 범위에서 `page.tsx·extensions 는 건드리지 마라` 같은
+    문장이 기본 저장소의 `page.tsx` 쓰기로 읽힌다. 이런 교집합은 근거가 약해서
+    기계가 단정하지 않고 사람이 검토하게 한다.
+    """
+    if not overlap:
+        return False
+    names = {
+        path.split(":", 1)[1].rsplit("/", 1)[-1]
+        for scope in scopes for path in scope
+        if "/" in path.split(":", 1)[1].rstrip("/")
+    }
+    for path in overlap:
+        rel = path.split(":", 1)[1]
+        if _is_dir_scope(path) or "/" in rel or rel not in names:
+            return False
+    return True
+
+
+def plan_auto_dependency_repair(rows: list[dict], *, include_weak_overlap: bool = False) -> list[dict]:
+    """모든 depends_on edge 를 분류한다. verdict == 'false_auto_edge' 만 복구 대상이다.
+
+    rows 는 활성 작업 + 그 부모들. 각 항목: job_id, status, depends_on, instruction, logs.
+    include_weak_overlap=False 면 파일명만 겹친 edge 는 weak_overlap_review 로 보고만 한다.
+    """
+    by_id = {r["job_id"]: r for r in rows}
+    edges = {r["job_id"]: r["depends_on"] for r in rows if r.get("depends_on")}
+    cycle_nodes = _dependency_cycle_nodes(edges)
+    active = set(_ACTIVE_PIPELINE_STATUSES)
+    scopes = {jid: _extract_target_files(r.get("instruction") or "") for jid, r in by_id.items()}
+
+    def _descendants(root: str) -> set[str]:
+        found: set[str] = set()
+        for jid in edges:
+            node, hops = jid, 0
+            while node in edges and hops <= len(edges):
+                node = edges[node]
+                hops += 1
+                if node == root:
+                    found.add(jid)
+                    break
+        return found
+
+    plan: list[dict] = []
+    for row in rows:
+        parent_id = row.get("depends_on")
+        if not parent_id:
+            continue
+        child_id = row["job_id"]
+        parent = by_id.get(parent_id)
+        auto = _is_auto_dependency_edge(row.get("logs"), parent_id)
+        child_files = scopes[child_id]
+        parent_files = scopes.get(parent_id, set())
+        overlap = _scope_overlap(child_files, parent_files) if parent else []
+        weak = _is_weak_overlap(overlap, child_files, parent_files)
+        other_conflicts: list[str] = []
+        verdict = "explicit_keep"
+        if auto:
+            if parent is None:
+                verdict = "parent_unknown_keep"
+            elif parent["status"] not in active:
+                verdict = "parent_terminal_keep"
+            elif overlap and not weak:
+                verdict = "real_conflict_keep"
+            elif weak and not include_weak_overlap:
+                verdict = "weak_overlap_review"
+            elif row["status"] != "queued":
+                verdict = "child_not_queued_keep"
+            else:
+                skip = {child_id, parent_id} | _descendants(child_id)
+                other_conflicts = sorted(
+                    jid for jid, other in by_id.items()
+                    if jid not in skip and other["status"] in active
+                    and _scope_overlap(child_files, scopes[jid])
+                )
+                verdict = "other_conflict_manual" if other_conflicts else "false_auto_edge"
+        plan.append({
+            "job_id": child_id,
+            "parent_job_id": parent_id,
+            "child_status": row["status"],
+            "parent_status": parent["status"] if parent else None,
+            "edge_kind": "auto" if auto else "explicit",
+            "verdict": verdict,
+            "in_cycle": child_id in cycle_nodes,
+            "child_files": sorted(child_files),
+            "parent_files": sorted(parent_files),
+            "overlap": overlap,
+            "weak_overlap": weak,
+            "other_conflicts": other_conflicts,
+        })
+    return sorted(plan, key=lambda e: (e["job_id"], e["parent_job_id"]))
+
+
+def auto_dependency_plan_hash(plan: list[dict]) -> str:
+    repairs = [(e["job_id"], e["parent_job_id"]) for e in plan if e["verdict"] == "false_auto_edge"]
+    return hashlib.sha256(json.dumps(sorted(repairs)).encode()).hexdigest()[:16]
+
+
+async def _load_dependency_rows(conn, *, project: str, tenant_id: str) -> list[dict]:
+    rows = [dict(r) for r in await conn.fetch(
+        """
+        SELECT job_id, status, depends_on, instruction, logs
+          FROM pipeline_jobs
+         WHERE tenant_id = $1::uuid AND project = $2 AND status = ANY($3::text[])
+        """,
+        tenant_id, project, list(_ACTIVE_PIPELINE_STATUSES),
+    )]
+    known = {r["job_id"] for r in rows}
+    missing = sorted({r["depends_on"] for r in rows if r["depends_on"]} - known)
+    if missing:
+        rows += [dict(r) for r in await conn.fetch(
+            """
+            SELECT job_id, status, depends_on, instruction, logs
+              FROM pipeline_jobs
+             WHERE tenant_id = $1::uuid AND job_id = ANY($2::text[])
+            """,
+            tenant_id, missing,
+        )]
+    return rows
+
+
+async def apply_auto_dependency_repair(
+    conn, *, project: str, tenant_id: str, plan: list[dict], plan_hash: str,
+    actor: str, reason: str, only_job_ids: set[str] | None = None,
+) -> list[dict]:
+    """검토된 계획의 false_auto_edge 만 풀고 before/after 를 돌려준다 (compare-and-set)."""
+    changes: list[dict] = []
+    for edge in plan:
+        if edge["verdict"] != "false_auto_edge":
+            continue
+        if only_job_ids is not None and edge["job_id"] not in only_job_ids:
+            continue
+        updated = await conn.fetchrow(
+            """
+            UPDATE pipeline_jobs
+               SET depends_on = NULL,
+                   logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(
+                       jsonb_build_object(
+                           'ts', NOW()::text,
+                           'event', $5::text,
+                           'from_parent', $3::text,
+                           'actor', $6::text,
+                           'reason', $7::text,
+                           'plan_hash', $8::text,
+                           'child_files', $9::jsonb,
+                           'parent_files', $10::jsonb
+                       )
+                   ),
+                   updated_at = NOW()
+             WHERE job_id = $1 AND tenant_id = $2::uuid AND project = $4
+               AND status = 'queued' AND depends_on = $3
+             RETURNING job_id
+            """,
+            edge["job_id"], tenant_id, edge["parent_job_id"], project,
+            _AUTO_DEP_RELEASED_EVENT, actor, reason, plan_hash,
+            json.dumps(edge["child_files"]), json.dumps(edge["parent_files"]),
+        )
+        changes.append({
+            "job_id": edge["job_id"],
+            "before": {"status": "queued", "depends_on": edge["parent_job_id"]},
+            "after": {"status": "queued", "depends_on": None} if updated else None,
+            "applied": bool(updated),
+        })
+        if updated:
+            await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", edge["job_id"])
+    return changes
+
+
+async def rollback_auto_dependency_repair(
+    conn, *, project: str, tenant_id: str, job_ids: list[str], actor: str, reason: str,
+) -> list[dict]:
+    """false_auto_dependency_released 이벤트가 기록한 부모로 edge 를 복원한다."""
+    results: list[dict] = []
+    active = list(_ACTIVE_PIPELINE_STATUSES)
+    for job_id in job_ids:
+        row = await conn.fetchrow(
+            "SELECT status, depends_on, logs FROM pipeline_jobs "
+            "WHERE job_id = $1 AND tenant_id = $2::uuid AND project = $3",
+            job_id, tenant_id, project,
+        )
+        if not row:
+            results.append({"job_id": job_id, "restored": False, "reason": "not_found"})
+            continue
+        released = [
+            e for e in _logs_list(row["logs"])
+            if isinstance(e, dict) and e.get("event") == _AUTO_DEP_RELEASED_EVENT and e.get("from_parent")
+        ]
+        if not released:
+            results.append({"job_id": job_id, "restored": False, "reason": "no_release_event"})
+            continue
+        parent_id = released[-1]["from_parent"]
+        updated = await conn.fetchrow(
+            """
+            UPDATE pipeline_jobs c
+               SET depends_on = $3::text,
+                   logs = COALESCE(c.logs, '[]'::jsonb) || jsonb_build_array(
+                       jsonb_build_object(
+                           'ts', NOW()::text,
+                           'event', $5::text,
+                           'restored_parent', $3::text,
+                           'actor', $6::text,
+                           'reason', $7::text
+                       )
+                   ),
+                   updated_at = NOW()
+             WHERE c.job_id = $1 AND c.tenant_id = $2::uuid AND c.project = $4
+               AND c.status = 'queued' AND c.depends_on IS NULL
+               AND EXISTS (SELECT 1 FROM pipeline_jobs p
+                            WHERE p.job_id = $3 AND p.tenant_id = $2::uuid
+                              AND p.status = ANY($8::text[]))
+            RETURNING c.job_id
+            """,
+            job_id, tenant_id, parent_id, project,
+            _AUTO_DEP_RESTORED_EVENT, actor, reason, active,
+        )
+        results.append({
+            "job_id": job_id, "restored": bool(updated), "parent_job_id": parent_id,
+            "reason": None if updated else "state_changed_or_parent_terminal",
+            "before": {"depends_on": None},
+            "after": {"depends_on": parent_id} if updated else None,
+        })
+    return results
+
+
+class DependencyRepairRequest(BaseModel):
+    project: str = Field(..., description="대상 프로젝트")
+    action: Literal["dry_run", "apply", "rollback"] = "dry_run"
+    job_ids: list[str] = Field(default_factory=list, max_length=50,
+                               description="적용/되돌릴 자식 job 제한. rollback 은 필수")
+    plan_hash: str = Field("", max_length=64, description="apply 는 dry_run 이 돌려준 값을 그대로 넣는다")
+    reason: str = Field("", max_length=500, description="apply/rollback 사유(10자 이상)")
+    include_weak_overlap: bool = Field(
+        False, description="파일명(디렉터리 없음)만 겹친 edge 도 해제 후보에 넣는다. dry_run 근거를 사람이 본 뒤에만")
+
+    @field_validator("job_ids")
+    @classmethod
+    def _valid_job_ids(cls, value: list[str]) -> list[str]:
+        for job_id in value:
+            if not _JOB_ID_RE.match(job_id):
+                raise ValueError(f"유효하지 않은 job_id: {job_id[:40]}")
+        return value
+
+
+@router.post("/pipeline/dependency-repair", tags=["pipeline-runner"])
+async def repair_false_auto_dependencies(
+    req: DependencyRepairRequest,
+    context: TenantContext = Depends(require_tenant_admin),
+):
+    """잘못된 자동 의존 edge 점검(dry_run)·해제(apply)·복원(rollback). 승인/취소는 하지 않는다."""
+    if req.project not in _VALID_PROJECTS:
+        raise HTTPException(status_code=400, detail="유효하지 않은 프로젝트")
+    from app.core.db_pool import get_pool
+
+    tenant_id = _tenant_id(context)
+    actor = str(context.get("user", {}).get("user_id") or tenant_id)  # type: ignore[union-attr]
+    if req.action != "dry_run" and len((req.reason or "").strip()) < 10:
+        raise HTTPException(status_code=422, detail="reason 은 10자 이상 필요합니다")
+
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            if req.action == "rollback":
+                if not req.job_ids:
+                    raise HTTPException(status_code=422, detail="rollback 은 job_ids 가 필요합니다")
+                results = await rollback_auto_dependency_repair(
+                    conn, project=req.project, tenant_id=tenant_id,
+                    job_ids=req.job_ids, actor=actor, reason=req.reason.strip(),
+                )
+                return {"action": "rollback", "results": results}
+
+            plan = plan_auto_dependency_repair(
+                await _load_dependency_rows(conn, project=req.project, tenant_id=tenant_id),
+                include_weak_overlap=req.include_weak_overlap,
+            )
+            plan_hash = auto_dependency_plan_hash(plan)
+            summary: dict[str, int] = {}
+            for edge in plan:
+                summary[edge["verdict"]] = summary.get(edge["verdict"], 0) + 1
+            if req.action == "dry_run":
+                return {"action": "dry_run", "plan_hash": plan_hash, "summary": summary, "edges": plan}
+
+            if req.plan_hash != plan_hash:
+                raise HTTPException(
+                    status_code=409,
+                    detail="계획이 검토 시점과 다릅니다 — dry_run 을 다시 실행해 plan_hash 를 확인하세요",
+                )
+            changes = await apply_auto_dependency_repair(
+                conn, project=req.project, tenant_id=tenant_id, plan=plan, plan_hash=plan_hash,
+                actor=actor, reason=req.reason.strip(),
+                only_job_ids=set(req.job_ids) if req.job_ids else None,
+            )
+            return {"action": "apply", "plan_hash": plan_hash, "changes": changes}
 
 
 _SUPERSEDES_RE = re.compile(r"^\s*(?:SUPERSEDES|AUTO_REWORK_OF)\s*:\s*(.+)$", re.M)
@@ -2697,6 +3062,104 @@ async def _record_terminal_failure_candidate(row: object) -> None:
         )
 
 
+# 종결 결과 검토 대상: 완료와 실패만. rejected_done 은 검수자가 이미 반려한 결과이고
+# cancelled 는 의존 정리·수동 취소라 자동 검토 턴을 만들면 루프/소음이 된다.
+_TERMINAL_FOLLOWUP_KINDS = {"done": "completed", "completed": "completed", "error": "failed"}
+_TERMINAL_FOLLOWUP_KEY_PREFIX = "runner_terminal:"
+
+
+def _terminal_followup_dedupe_key(job_id: str, status: str, commit_sha: str | None) -> str:
+    """종결 검토 멱등키. 접두가 `next_step:` 이 아니므로 다음단계 신선도 스킵을 타지 않는다."""
+    sha = (commit_sha or "").strip().lower()
+    sha = sha if re.fullmatch(r"[0-9a-f]{7,40}", sha) else "nosha"
+    return f"{_TERMINAL_FOLLOWUP_KEY_PREFIX}{job_id}:{status}:{sha}"
+
+
+def _terminal_followup_message(row, *, kind: str, commit_sha: str | None) -> str:
+    # 문구에 "AI 검수 대기" 를 넣지 않는다 — chat_service 의 stale 승인 가드가 그 표식으로
+    # 종결 잡 대상 트리거를 폐기하므로, 종결 결과 검토는 그 가드와 분리돼야 한다.
+    job_id = row["job_id"]
+    output = (row["output_preview"] or "")[:300]
+    head = (
+        f"**Job**: {job_id}\n**프로젝트**: {row['project']}\n"
+        f"**종결 상태**: {row['status']}\n**커밋**: {commit_sha or '미기록'}\n"
+        f"**원 지시**: {(row['instruction_preview'] or '')[:200]}\n"
+    )
+    guard = (
+        "\n진행 중인 CEO 응답이나 추가 지시는 중단하지 말고, 이 검토는 job/상태/SHA 당 한 번만 전달됩니다."
+    )
+    if kind == "completed":
+        return (
+            "[시스템] Pipeline Runner 작업 종결 결과 검토 (완료)\n\n" + head
+            + f"**결과**:\n{output}\n\n"
+            "산출물이 실제로 반영됐는지(커밋·변경 파일·테스트·배포 상태)를 도구로 직접 확인하고, "
+            "남은 후속 단계가 있으면 이어서 수행한 뒤 확인한 사실만 CEO에게 보고하세요. "
+            "도구 확인 없이 '정상 완료'로 보고하지 마세요." + guard
+        )
+    error_detail = _record_get(row, "error_detail") or "unknown"
+    return (
+        "[시스템] Pipeline Runner 작업 종결 결과 검토 (실패)\n\n" + head
+        + f"**에러 분류**: {error_detail}\n**에러**:\n{output}\n\n"
+        "원인을 작업 로그·diff 로 진단하고, 안전한 후속 조치(재시도·분할·차단 사유 보고)를 이어서 수행하세요." + guard
+    )
+
+
+async def _enqueue_terminal_followup(pool, row, *, job_id: str, session_id: str | None) -> dict | None:
+    """종결 잡의 결과 검토를 내구 큐에 한 번만 넣는다. 대상이 아니면 None.
+
+    큐 적재는 응답 전에 await 한다 — 셸의 notify POST 가 성공했다면 이후 API 슬롯 교체·
+    재시작이 있어도 후속 event 가 DB 에 남아 있다. 배달(active 슬롯 펜싱, CEO 응답
+    비중단)은 chat_deferred_reactions 드레인 루프가 맡는다.
+    """
+    status = row["status"]
+    kind = _TERMINAL_FOLLOWUP_KINDS.get(status)
+    if not kind:
+        return None
+    if not session_id or not _UUID_RE.match(session_id):
+        return {"status": "skipped", "reason": "session_id 없음"}
+
+    async with pool.acquire() as conn:
+        has_commit = await _pipeline_column_exists(conn, "commit_hash")
+        meta = await conn.fetchrow(
+            f"SELECT {'commit_hash' if has_commit else 'NULL::text'} AS commit_hash, "
+            "EXISTS (SELECT 1 FROM chat_sessions s WHERE s.id = $2::uuid "
+            "AND s.tenant_id = pipeline_jobs.tenant_id) AS session_ok "
+            "FROM pipeline_jobs WHERE job_id = $1",
+            job_id, session_id,
+        )
+    if not meta:
+        return {"status": "skipped", "reason": "not_found"}
+    if not meta["session_ok"]:
+        logger.warning("pipeline_runner.terminal_followup_tenant_mismatch", job_id=job_id)
+        return {"status": "skipped", "reason": "session_tenant_mismatch"}
+
+    commit_sha = (meta["commit_hash"] or "").strip() or None
+    dedupe_key = _terminal_followup_dedupe_key(job_id, status, commit_sha)
+    from app.services.chat_service import enqueue_next_step_reaction
+
+    try:
+        queued = await enqueue_next_step_reaction(
+            session_id,
+            _terminal_followup_message(row, kind=kind, commit_sha=commit_sha),
+            dedupe_key=dedupe_key,
+        )
+    except Exception as exc:
+        logger.warning("pipeline_runner.terminal_followup_enqueue_failed", job_id=job_id, error=str(exc)[:200])
+        return {"status": "error", "reason": "terminal_followup_enqueue_failed", "detail": str(exc)[:200]}
+    logger.info(
+        "pipeline_runner.terminal_followup_queued",
+        job_id=job_id, status=status, created=queued["created"], queue_status=queued["queue_status"],
+    )
+    return {
+        "status": "followup_queued" if queued["created"] else "skipped",
+        "reason": None if queued["created"] else "terminal_followup_already_queued",
+        "followup_kind": kind,
+        "dedupe_key": dedupe_key,
+        "queue_id": queued["queue_id"],
+        "session_id": session_id,
+    }
+
+
 @router.post("/pipeline/jobs/{job_id}/notify", tags=["pipeline-runner"])
 async def notify_completion(job_id: str):
     """Runner가 작업 완료 시 호출 — 채팅AI에 자동 반응 트리거."""
@@ -2801,6 +3264,14 @@ async def notify_completion(job_id: str):
     from app.services.pipeline_runner_service import TERMINAL_JOB_STATUSES
 
     if status in TERMINAL_JOB_STATUSES:
+        # 승인 재검수 트리거는 아래에서 계속 차단한다. 종결 결과 검토는 별도 event type
+        # (dedupe_key runner_terminal:<job>:<status>:<sha>) 로 내구 큐에 넣는다.
+        followup = await _enqueue_terminal_followup(
+            pool, row, job_id=job_id, session_id=row["chat_session_id"],
+        )
+        if followup is not None:
+            followup["promoted_job_id"] = promoted_job_id
+            return followup
         logger.info("pipeline_runner.notify_terminal_suppressed", job_id=job_id, status=status)
         return {
             "status": "skipped",
