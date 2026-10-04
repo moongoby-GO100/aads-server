@@ -1229,8 +1229,25 @@ inherit_approval_decision() {
 # "빌드·배포 실행 금지" 처럼 트리거 단어와 금지어 사이에 다른 말이 낀 표현을 못 잡았다.
 # 그래서 정규식으로 바꾸되, 트리거(배포/재기동/...)와 금지어(금지/하지 마/말라) 사이의
 # 간격을 최대 12자로 좁게 묶어 무관한 문장까지 걸리는 것을 막는다.
+#
+# 2026-10-04 (AADS-RUNNER-PUSH-ONLY-ENFORCE): runner-9d5d8d45 지시문에
+# "PUSH_ONLY. 빌드·배포·운영 migration 금지." 가 있었는데 게이트가 둘 다 놓쳐
+# 07:54 KST 에 blue/green 배포가 실행됐다. 원인은 둘이다.
+#   1) PUSH_ONLY 라는 구조화 선언을 아무도 읽지 않았다.
+#   2) "배포" 와 "금지" 사이 간격이 12자로 묶여, "·운영 migration " (14자) 에서 빗나갔다.
+# 아래 규칙은 기존 규칙에 **더하기만** 한다 — 이전에 막던 표현은 계속 막는다.
+# 정규식은 줄/절 단위로 쪼갠 뒤 짧은 입력에만 적용한다(중첩 반복 금지, R-BG).
 instruction_forbids_deploy() {
-    local text="$1" lowered=""
+    local text="$1" lowered="" scrubbed="" line="" clause="" rest="" gap="" trigger="" sep="" nl=$'\n'
+    local re_sep='[_[:space:]-]?' re_bullet='^[[:space:]>*#-]*' re_word='([^[:alnum:]_]|$)'
+    local re_off_push='push[_-]?only[[:space:]]*[:=][[:space:]]*(false|no|0|off)([^[:alnum:]_]|$)'
+    local re_push_any='(^|[^[:alnum:]_])push[_-]?only([^[:alnum:]_]|$)'
+    local re_push_line="${re_bullet}push[[:space:]]+only${re_word}"
+    local re_policy_val="(push${re_sep}only|commit${re_sep}only|no${re_sep}deploy|forbid(den)?|deny|denied|none|block(ed)?)${re_word}"
+    local re_policy="${re_bullet}(deploy(ment)?|release)${re_sep}policy[[:space:]]*[:=][[:space:]]*${re_policy_val}"
+    local re_deploy_off="${re_bullet}deploy(ment)?[[:space:]]*[:=][[:space:]]*(false|no|off|0|forbid(den)?|deny|denied|none)${re_word}"
+    local re_wide="(배포|재기동|deploy)([^${nl}]{0,40})(금지|하지[[:space:]]*마|말라)"
+    local re_seq='(후|뒤|이후|다음|하되|하고|하며|하면|전에|먼저|then|after|before)'
     [[ -n "$text" ]] || return 1
     lowered=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
     if [[ "$lowered" =~ (배포|재기동|빌드.{0,4}배포|deploy).{0,12}(금지|하지[[:space:]]*마|말라) ]]; then
@@ -1242,6 +1259,58 @@ instruction_forbids_deploy() {
     if [[ "$lowered" =~ do[[:space:]_-]*not[[:space:]_-]*deploy ]] || [[ "$lowered" =~ no[[:space:]_-]*deploy ]]; then
         return 0
     fi
+
+    # 구조화 선언: PUSH_ONLY / DEPLOY_POLICY: push_only / DEPLOY: false.
+    # "PUSH_ONLY: false" 처럼 명시적으로 끈 표기만 제외한다(그 외 애매한 것은 막는다).
+    scrubbed="$lowered"
+    while [[ "$scrubbed" =~ $re_off_push ]]; do
+        scrubbed="${scrubbed/"${BASH_REMATCH[0]}"/ }"
+    done
+    if [[ "$scrubbed" =~ $re_push_any ]]; then
+        return 0
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ $re_push_line ]] || [[ "$line" =~ $re_policy ]] || [[ "$line" =~ $re_deploy_off ]]; then
+            return 0
+        fi
+    done <<< "$scrubbed"
+
+    # 긴 한글 문구: 같은 절 안에서 트리거와 금지어 사이를 40자까지 허용한다.
+    # "배포 후 … 하지 마" 처럼 순서/연결어가 낀 간격은 별개 문장으로 보고 건너뛴다.
+    clause="$lowered"
+    for sep in '.' '!' '?' ';' '。'; do
+        clause="${clause//"$sep"/$nl}"
+    done
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        rest="$line"
+        while [[ "$rest" =~ $re_wide ]]; do
+            trigger="${BASH_REMATCH[1]}"
+            gap="${BASH_REMATCH[2]}"
+            if ! [[ "$gap" =~ $re_seq ]]; then
+                return 0
+            fi
+            rest="${rest#*"$trigger"}"
+        done
+    done <<< "$clause"
+    return 1
+}
+
+# 승인 시점/빌드 직전에 지시서를 DB 에서 다시 읽는다. 조회 실패·빈 값을 "제약 없음" 으로
+# 해석하면 안 된다 — 그러면 DB 순단 한 번이 배포 허용이 된다(fail-closed).
+# stdout=지시서, rc 0=읽음 / 1=확인 불가.
+read_job_instruction_strict() {
+    local job_id="$1" attempt=0 out="" rc=0
+    [[ "$job_id" =~ ^[a-zA-Z0-9_-]+$ ]] || return 1
+    while (( attempt < ${DEPLOY_DIRECTIVE_LOOKUP_ATTEMPTS:-3} )); do
+        attempt=$((attempt + 1))
+        rc=0
+        out=$(db_exec "SELECT COALESCE(instruction,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || rc=$?
+        if [[ "$rc" -eq 0 && -n "${out//[[:space:]]/}" ]]; then
+            printf '%s' "$out"
+            return 0
+        fi
+        (( attempt < ${DEPLOY_DIRECTIVE_LOOKUP_ATTEMPTS:-3} )) && sleep "${DEPLOY_DIRECTIVE_LOOKUP_RETRY_SLEEP:-2}"
+    done
     return 1
 }
 
@@ -5022,8 +5091,13 @@ deploy_job() {
     # 절대 금지" 가 명시돼 있었는데 승인 즉시 push→빌드→배포가 돌았고, 그 배포가
     # 헬스체크에 실패해 11:09 에 P0 청산 안전장치를 자동 revert 시켰다.
     # 사람이 쓴 제약은 코드가 막지 않으면 지켜지지 않는다(R-ERRBOOK).
-    local job_instruction=""
-    job_instruction=$(db_exec "SELECT COALESCE(instruction,'') FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || job_instruction=""
+    local job_instruction="" _deploy_directive_state=""
+    if ! job_instruction=$(read_job_instruction_strict "$job_id"); then
+        _fail_job "$job_id" "$session_id" "deploy_directive_unverifiable" "지시서 조회 실패/빈 값 — 배포 금지 제약을 확인할 수 없어 빌드·배포를 중단 (push 는 완료됨, 재승인 필요)"
+        _release_deploy_lock "$project" "$job_id"
+        promote_next_queued "$project"
+        return 1
+    fi
     if instruction_forbids_deploy "$job_instruction"; then
         log "  DEPLOY_SKIPPED_BY_DIRECTIVE job=$job_id — 지시서가 배포를 금지함, push 까지만 수행"
         db_update "UPDATE pipeline_jobs SET status='done', phase='push_only_by_directive',
@@ -5036,10 +5110,19 @@ deploy_job() {
         promote_next_queued "$project"
         return 0
     fi
+    _deploy_directive_state="allowed:${job_id}"
 
     # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
     local _build_fail=""
+    # 빌드 직전 불변식: 위 게이트가 이 잡에 대해 "허용" 으로 끝났을 때만 빌드한다.
+    # 게이트를 건너뛰는 경로가 생겨도(리팩터·분기 추가) 여기서 fail-closed 로 막힌다.
+    if [[ "$_deploy_directive_state" != "allowed:${job_id}" ]]; then
+        _fail_job "$job_id" "$session_id" "deploy_directive_gate_bypassed" "배포 금지 게이트 통과 기록 없이 빌드 단계에 도달 — 빌드·배포 중단"
+        _release_deploy_lock "$project" "$job_id"
+        promote_next_queued "$project"
+        return 1
+    fi
 
     case "$project" in
         AADS)
