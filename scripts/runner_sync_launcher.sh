@@ -42,6 +42,7 @@ REQUIRED_FILES=(
     scripts/sync_pipeline_runner_remote.sh
     scripts/runner_busy_lib.sh
     scripts/runner_cli_usage.py
+    scripts/reclaim_runner_worktrees.sh
     tools/aag/brief.py
 )
 EXPORT_PATHSPECS=(

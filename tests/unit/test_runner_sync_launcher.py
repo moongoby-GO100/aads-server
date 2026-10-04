@@ -27,6 +27,7 @@ SUPPORT_FILES = [
     "scripts/runner_busy_lib.sh",
     "scripts/claude_model_contract.py",
     "scripts/runner_cli_usage.py",
+    "scripts/reclaim_runner_worktrees.sh",
     "scripts/aads-pipeline-litellm-runner.114.service",
     "scripts/aads-pipeline-litellm-runner.211.service",
     "scripts/aads-pipeline-runner.244.service",
@@ -149,6 +150,7 @@ class Fixture:
             "claude_model_contract.py": (ROOT / "scripts/claude_model_contract.py").read_bytes(),
             "aag-brief.py": (ROOT / "tools/aag/brief.py").read_bytes(),
             "runner_cli_usage.py": (ROOT / "scripts/runner_cli_usage.py").read_bytes(),
+            "reclaim_runner_worktrees.sh": (ROOT / "scripts/reclaim_runner_worktrees.sh").read_bytes(),
         }
         for name, data in names.items():
             (self.remote / name).write_bytes(data)
@@ -198,6 +200,8 @@ def test_installs_origin_main_not_the_dirty_stale_shared_checkout(tmp_path):
     assert b"DIRTY" not in installed and b"v1-old" not in installed
     assert f"export origin/main={fx.origin_sha}" in proc.stdout
     assert f"source={fx.origin_sha}" in proc.stdout
+    # 러너와 같은 디렉터리에 회수 스크립트도 함께 설치된다 (contabo14 에 없어 회수가 멈췄던 결함)
+    assert (fx.remote / "reclaim_runner_worktrees.sh").read_bytes() == (ROOT / "scripts/reclaim_runner_worktrees.sh").read_bytes()
     # scp 로 올린 원본은 export 경로(공유 체크아웃 밖)에서 왔다
     scp_sources = [ln.split(" ", 1)[1] for ln in fx.log_lines() if ln.startswith("SCP ")]
     assert scp_sources

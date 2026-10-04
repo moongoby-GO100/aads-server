@@ -5887,8 +5887,70 @@ _cleanup_old_artifacts() {
     if [[ -x "$_reclaim_script" ]]; then
         timeout 90 bash "$_reclaim_script" || true
     else
-        log "  STALE_WORKTREE_CLEANUP: reclaimer unavailable: $_reclaim_script"
+        _warn_reclaimer_unavailable "$_reclaim_script"
     fi
+}
+
+# 회수 스크립트는 러너와 같은 디렉터리에 있어야 한다(sync_pipeline_runner_remote.sh 가 함께 배치).
+_reclaimer_script_path() {
+    printf '%s/reclaim_runner_worktrees.sh' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+}
+
+# 회수 스크립트 부재 경고. 2026-10-05 contabo14 는 이 스크립트가 없어 5분 주기 정리마다
+# "reclaimer unavailable" 이 조용히 181회/일 찍혔고 RUNNER_WT_MAX_KEEP 상한이 한 번도 돌지 않았다.
+# 결함은 지속되므로 주기마다 알리면 스팸이다 — 로그·텔레그램·오류사전을 RECLAIMER_WARN_INTERVAL_MIN(기본 24h)에 한 번만 낸다.
+_warn_reclaimer_unavailable() {
+    local script="$1"
+    local flag="${RECLAIMER_MISSING_FLAG:-/tmp/aads-runner-reclaimer-missing.flag}"
+    local interval="${RECLAIMER_WARN_INTERVAL_MIN:-1440}"
+    [[ "$interval" =~ ^[0-9]+$ ]] || interval=1440
+    if [[ -f "$flag" && -z "$(find "$flag" -mmin +"$interval" 2>/dev/null)" ]]; then
+        return 0
+    fi
+    : > "$flag" 2>/dev/null || true
+    local msg="STALE_WORKTREE_CLEANUP: reclaimer unavailable: ${script}"
+    log "  WARN ${msg} — worktree 수량 상한(RUNNER_WT_MAX_KEEP)·보존기간 정리·즉시 회수가 동작하지 않는다. sync_pipeline_runner_remote.sh 로 같은 디렉터리에 배치하라 (이 경고는 ${interval}분에 한 번)"
+    if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+        curl -s -m 10 -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "text=⚠️ [Runner] ${RUNNER_HOST_NAME:-$(hostname -s)}: ${msg} — worktree 회수 정지 (디스크 누적 위험)" \
+            -d "parse_mode=HTML" >/dev/null 2>&1 || true
+    fi
+    local err_file
+    err_file=$(mktemp /tmp/reclaimer-missing.XXXXXX 2>/dev/null) || return 0
+    printf '%s (host=%s)\n' "$msg" "${RUNNER_HOST_NAME:-unknown}" > "$err_file"
+    lookup_error_book "$err_file" "reclaimer-missing"
+    rm -f "$err_file"
+}
+
+# 종료한 job 의 worktree 가 깨끗하면 즉시 회수한다 (AADS-RUNNER-WT-RECLAIM-ON-FINISH).
+# 판정은 reclaim_runner_worktrees.sh 의 즉시 회수 모드가 한다 — 종료 상태 여부, 미커밋/ignored 변경,
+# origin/main 에 없는 커밋, 열린 프로세스. 하나라도 걸리면 보존하고 기존 24h 정책에 맡긴다.
+# awaiting_approval·review_hold 등 비종료 상태는 DB 상태 확인에서 걸러진다(승인 시 커밋에 필요).
+_reclaim_finished_worktree() {
+    local job_id="$1" status script out line
+    [[ "${RUNNER_WT_IMMEDIATE_RECLAIM:-1}" == "1" ]] || return 0
+    [[ "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ ]] || return 0
+    [[ -d "/tmp/aads-wt-${job_id}" ]] || return 0
+    status=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id=$(sql_escape "$job_id");" 2>/dev/null | tr -d '[:space:]') || status=""
+    case "$status" in
+        done|error|cancelled|rejected_done|failed) ;;
+        *)
+            log "  WORKTREE_RECLAIM_SKIP job=$job_id status=${status:-unknown} (비종료 상태 — 보존)"
+            return 0
+            ;;
+    esac
+    script="$(_reclaimer_script_path)"
+    if [[ ! -x "$script" ]]; then
+        _warn_reclaimer_unavailable "$script"
+        return 0
+    fi
+    out=$(RUNNER_WT_ONLY_JOB="$job_id" RUNNER_WT_ONLY_STATUS="$status" timeout 45 bash "$script" 2>&1) || true
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && log "  WORKTREE_RECLAIM job=$job_id ${line}"
+    done <<< "$out"
+    return 0
 }
 
 # BUG-5: 소요시간 이상치 알림 — running 작업 60분/120분 초과 시 텔레그램 알림 (중복 방지 플래그)
@@ -6151,6 +6213,7 @@ _reap_bg_jobs() {
     for _pid in "${!_bg_jobs[@]}"; do
         if ! kill -0 "$_pid" 2>/dev/null; then
             wait "$_pid" 2>/dev/null || true
+            _reclaim_finished_worktree "${_bg_jobs[$_pid]%%|*}"
             unset '_bg_jobs[$_pid]'
         fi
     done

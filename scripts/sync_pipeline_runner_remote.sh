@@ -266,6 +266,20 @@ sync_one_target() {
     sync_remote_file_if_changed "$name" "$host" "${SCRIPT_DIR}/runner_cli_usage.py" "$(dirname "$remote_runner")/runner_cli_usage.py" "0644" || cli_usage_status=$?
     [[ "$cli_usage_status" == "0" || "$cli_usage_status" == "1" ]] || return "$cli_usage_status"
 
+    # worktree 회수 스크립트. 러너가 자기 디렉터리에서 이 이름으로 찾는다(_reclaimer_script_path).
+    # 없으면 5분 정리와 즉시 회수가 모두 멈춘다 — 2026-10-05 contabo14 실측(/tmp/aads-wt-runner-* 52개 11.5GB).
+    # 러너가 job 마다 bash 로 새로 실행하므로 갱신에 재시작이 필요 없다(changed 에 반영하지 않는다).
+    # 옛 런처가 export 하지 않은 경우(원본 없음)는 실패시키지 않고 경고만 남긴다 — 런처 재설치가 필요하다.
+    local reclaim_src="${SCRIPT_DIR}/reclaim_runner_worktrees.sh"
+    if [[ -s "$reclaim_src" ]]; then
+        bash -n "$reclaim_src"
+        local reclaim_status=0
+        sync_remote_file_if_changed "$name" "$host" "$reclaim_src" "$(dirname "$remote_runner")/reclaim_runner_worktrees.sh" "0755" || reclaim_status=$?
+        [[ "$reclaim_status" == "0" || "$reclaim_status" == "1" ]] || return "$reclaim_status"
+    else
+        log "WARN ${name}: reclaim_runner_worktrees.sh 원본 없음(${reclaim_src}) — 설치된 런처(/usr/local/sbin/aads-runner-sync-launcher)가 옛 버전이면 재설치하라. 원격 worktree 회수가 동작하지 않는다"
+    fi
+
     if [[ "$current_sha" != "$local_sha" ]]; then
         changed=1
         if [[ "$DRY_RUN" == "1" ]]; then

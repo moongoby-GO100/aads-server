@@ -264,6 +264,7 @@ case "$cmd" in
             claude_model_contract.py) f="$FAKE_REPO/scripts/claude_model_contract.py" ;;
             aag-brief.py) f="$FAKE_REPO/tools/aag/brief.py" ;;
             runner_cli_usage.py) f="$FAKE_REPO/scripts/runner_cli_usage.py" ;;
+            reclaim_runner_worktrees.sh) f="$FAKE_REPO/scripts/reclaim_runner_worktrees.sh" ;;
             *) exit 0 ;;
         esac
         sha256sum "$f" | awk '{print $1}' ;;
