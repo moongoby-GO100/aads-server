@@ -141,21 +141,17 @@ def test_persistent_failure_falls_back_to_memory_and_reports(fake_sched):
     assert sched.jobs["user_fallback"] == "default"
 
 
-def test_tool_local_scheduler_is_reported_volatile(fake_sched):
-    sched = fake_sched()
-    sched._aads_tool_local_scheduler = True
-    result = _run(sched_tools.schedule_task(
-        name="volatile",
-        schedule_type="interval",
-        action_type="url_check",
-        action_config={"url": "http://x"},
-        schedule_config={"minutes": 1},
-    ))
+def test_no_scheduler_never_creates_memory_only_local_scheduler(monkeypatch):
+    """브리지(스케줄러 없음)에서 메모리 BackgroundScheduler 를 만들지 않는다 — 위임만 한다."""
+    import sys
+    import types
 
-    assert result["persisted"] is False
-    assert len(sched.calls) == 1
-    assert "jobstore" not in sched.calls[0]
-    assert sched.calls[0]["func"] is sched_tools._execute_scheduled_job_sync
+    monkeypatch.setattr(sched_tools, "_scheduler", None)
+    monkeypatch.setitem(
+        sys.modules, "app.main", types.SimpleNamespace(app=types.SimpleNamespace(state=types.SimpleNamespace()))
+    )
+    assert sched_tools._ensure_scheduler() is None
+    assert sched_tools._scheduler is None
 
 
 def test_list_reports_persisted_flag(fake_sched):

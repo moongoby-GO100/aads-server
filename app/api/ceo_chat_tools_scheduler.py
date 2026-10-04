@@ -7,6 +7,8 @@ CEO 채팅에서 예약 작업을 추가/삭제/조회.
 - 작업 유형: cron(반복), interval(주기), once(1회)
 - 실행 내용: run_remote_command 기반 원격 명령 또는 URL 헬스체크
 - 결과는 Telegram 및 연결된 채팅 세션으로 알림
+- API 프로세스 밖(MCP 브리지)에서는 스케줄러를 만들지 않고 API 의 내부 엔드포인트
+  (app/api/internal_scheduler.py)에 위임한다 — 영속 jobstore 는 API 프로세스에만 있다.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import asyncio
 import functools
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -71,33 +74,80 @@ def _persisted_job_ids(scheduler) -> set:
 
 
 def _ensure_scheduler():
-    """Return an active scheduler, creating a tool-local fallback if needed."""
+    """API 프로세스의 스케줄러를 반환한다. 없으면(브리지 등) None — 로컬로 만들지 않는다.
+
+    브리지가 만든 BackgroundScheduler 는 메모리 전용이라 세션이 끝나면 예약이 사라졌다.
+    """
     global _scheduler
     if _scheduler:
         return _scheduler
 
-    try:
-        from app.main import app
-
-        scheduler = getattr(getattr(app, "state", None), "scheduler", None)
-        if scheduler:
-            _scheduler = scheduler
-            return _scheduler
-    except Exception:
-        pass
-
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-
-        scheduler = BackgroundScheduler(timezone="Asia/Seoul")
-        setattr(scheduler, "_aads_tool_local_scheduler", True)
-        scheduler.start()
+    main_mod = sys.modules.get("app.main")
+    scheduler = getattr(getattr(getattr(main_mod, "app", None), "state", None), "scheduler", None)
+    if scheduler:
         _scheduler = scheduler
-        logger.warning("schedule_task_lazy_scheduler_started")
         return _scheduler
+    return None
+
+
+SCHEDULER_DELEGATE_PREFIX = "/api/v1/internal/scheduler"
+_DELEGATE_TIMEOUT_SECONDS = 15.0
+
+
+def _delegate_failure(reason: str) -> Dict[str, Any]:
+    logger.error("scheduler_delegate_failed: %s", reason)
+    return {
+        "error": f"예약 작업을 API 스케줄러에 위임하지 못했습니다 ({reason}). 등록/변경되지 않았습니다.",
+        "persisted": False,
+        "persisted_reason": f"scheduler_delegate_failed: {reason}",
+        "delegated": False,
+    }
+
+
+async def _delegate_to_api(method: str, op: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """브리지 → API 프로세스 내부 엔드포인트 호출. 실패해도 메모리 스케줄러로 떨어지지 않는다."""
+    import httpx
+
+    monitor_key = os.getenv("AADS_MONITOR_KEY", "").strip()
+    if not monitor_key:
+        return _delegate_failure("AADS_MONITOR_KEY_missing")
+    base = os.getenv("AADS_API_BASE", "http://localhost:8080").rstrip("/")
+    url = f"{base}{SCHEDULER_DELEGATE_PREFIX}/{op}"
+    try:
+        async with httpx.AsyncClient(timeout=_DELEGATE_TIMEOUT_SECONDS) as client:
+            resp = await client.request(
+                method, url, json=payload if method != "GET" else None,
+                headers={"x-monitor-key": monitor_key},
+            )
     except Exception as exc:
-        logger.warning("schedule_task_lazy_scheduler_failed: %s", exc)
-        return None
+        return _delegate_failure(f"{type(exc).__name__}: {str(exc)[:120]}")
+    if resp.status_code != 200:
+        return _delegate_failure(f"http_{resp.status_code}: {resp.text[:120]}")
+    try:
+        data = resp.json()
+    except ValueError:
+        return _delegate_failure("invalid_json_response")
+    if not isinstance(data, dict):
+        return _delegate_failure("unexpected_response_shape")
+    data["delegated"] = True
+    return data
+
+
+def _bridge_session_id() -> str:
+    try:
+        from app.services.tool_executor import current_chat_session_id
+
+        ctx = str(current_chat_session_id.get("") or "").strip()
+    except Exception:
+        ctx = ""
+    return ctx or str(os.getenv("AADS_SESSION_ID", "") or "").strip()
+
+
+def _job_report_session_id(job) -> str:
+    args = getattr(job, "args", None) or ()
+    if len(args) >= 3 and isinstance(args[2], dict):
+        return str(args[2].get("report_session_id") or "").strip()
+    return ""
 
 
 async def _execute_scheduled_job(job_id: str, action_type: str, action_config: Dict[str, Any]):
@@ -218,6 +268,45 @@ async def schedule_task(
     report_to_session: bool = True,
     trigger_session_reaction: bool = True,
 ) -> Dict[str, Any]:
+    """예약 작업 등록. API 프로세스면 직접, 브리지면 API 에 위임한다."""
+    scheduler = _ensure_scheduler()
+    if scheduler:
+        return await schedule_task_on(
+            scheduler, name, schedule_type, action_type, action_config, schedule_config,
+            report_session_id, report_to_session, trigger_session_reaction,
+        )
+    action_config = action_config or {}
+    session_id = str(
+        report_session_id
+        or action_config.get("report_session_id")
+        or action_config.get("session_report_session_id")
+        or action_config.get("chat_session_id")
+        or _bridge_session_id()
+    ).strip()
+    return await _delegate_to_api("POST", "schedule", {
+        "name": name,
+        "schedule_type": schedule_type,
+        "action_type": action_type,
+        "action_config": action_config,
+        "schedule_config": schedule_config,
+        "report_session_id": session_id,
+        "report_to_session": report_to_session,
+        "trigger_session_reaction": trigger_session_reaction,
+    })
+
+
+async def schedule_task_on(
+    scheduler,
+    name: str,
+    schedule_type: str,
+    action_type: str,
+    action_config: Dict[str, Any],
+    schedule_config: Optional[Dict[str, Any]] = None,
+    report_session_id: str = "",
+    report_to_session: bool = True,
+    trigger_session_reaction: bool = True,
+    replace_same_session: bool = False,
+) -> Dict[str, Any]:
     """
     예약 작업 등록.
 
@@ -233,11 +322,8 @@ async def schedule_task(
         report_session_id: 실행 결과를 자동 보고할 chat_sessions.id
         report_to_session: False면 세션 자동보고 비활성화
         trigger_session_reaction: 세션 자동보고 후 해당 세션 AI 후속 반응 트리거
+        replace_same_session: 같은 report_session_id 가 만든 동명 작업이면 교체(위임 재시도 멱등용)
     """
-    scheduler = _ensure_scheduler()
-    if not scheduler:
-        return {"error": "스케줄러가 초기화되지 않았습니다"}
-
     if not name or not name.strip():
         return {"error": "name은 필수입니다"}
 
@@ -274,10 +360,19 @@ async def schedule_task(
 
     # 기존 작업 중복 체크
     existing = scheduler.get_job(job_id)
+    replace = False
     if existing:
-        return {"error": f"이름 '{name}'의 작업이 이미 존재합니다. 삭제 후 다시 등록하세요."}
+        if (
+            replace_same_session
+            and effective_report_session_id
+            and _job_report_session_id(existing) == effective_report_session_id
+        ):
+            replace = True
+            if getattr(existing, "_jobstore_alias", PERSISTENT_JOBSTORE) != PERSISTENT_JOBSTORE:
+                scheduler.remove_job(job_id)
+        else:
+            return {"error": f"이름 '{name}'의 작업이 이미 존재합니다. 삭제 후 다시 등록하세요."}
 
-    volatile_scheduler = bool(getattr(scheduler, "_aads_tool_local_scheduler", False))
     persisted = False
     persist_error = ""
 
@@ -285,32 +380,28 @@ async def schedule_task(
         """persistent 에 먼저 등록하고, 실패하면 메모리로 폴백하되 사유를 남긴다."""
         nonlocal persisted, persist_error
         args = [job_id, action_type, effective_action_config]
-        if volatile_scheduler:
-            persist_error = "tool_local_scheduler_is_memory_only"
-            logger.error("schedule_task_volatile_fallback: job=%s", job_id)
-        else:
-            try:
-                _raw_add_job(scheduler)(
-                    job_func,
-                    *trigger_args,
-                    args=args,
-                    id=job_id,
-                    jobstore=PERSISTENT_JOBSTORE,
-                    replace_existing=False,
-                    misfire_grace_time=PERSISTENT_MISFIRE_GRACE_SECONDS,
-                    **job_kwargs,
-                )
-                persisted = True
-                return
-            except Exception as exc:
-                persist_error = f"{type(exc).__name__}: {str(exc)[:200]}"
-                logger.error(
-                    "schedule_task_persist_failed: job=%s reason=%s", job_id, persist_error
-                )
+        try:
+            _raw_add_job(scheduler)(
+                job_func,
+                *trigger_args,
+                args=args,
+                id=job_id,
+                jobstore=PERSISTENT_JOBSTORE,
+                replace_existing=replace,
+                misfire_grace_time=PERSISTENT_MISFIRE_GRACE_SECONDS,
+                **job_kwargs,
+            )
+            persisted = True
+            return
+        except Exception as exc:
+            persist_error = f"{type(exc).__name__}: {str(exc)[:200]}"
+            logger.error(
+                "schedule_task_persist_failed: job=%s reason=%s", job_id, persist_error
+            )
         scheduler.add_job(job_func, *trigger_args, args=args, id=job_id, **job_kwargs)
 
     try:
-        job_func = _execute_scheduled_job_sync if volatile_scheduler else _execute_scheduled_job
+        job_func = _execute_scheduled_job
         if schedule_type == "cron":
             from apscheduler.triggers.cron import CronTrigger
             # KST → UTC 변환 (KST = UTC+9)
@@ -370,11 +461,14 @@ async def schedule_task(
 
 
 async def unschedule_task(name: str) -> Dict[str, Any]:
-    """예약 작업 삭제."""
+    """예약 작업 삭제. API 프로세스면 직접, 브리지면 API 에 위임한다."""
     scheduler = _ensure_scheduler()
-    if not scheduler:
-        return {"error": "스케줄러가 초기화되지 않았습니다"}
+    if scheduler:
+        return await unschedule_task_on(scheduler, name)
+    return await _delegate_to_api("POST", "unschedule", {"name": name})
 
+
+async def unschedule_task_on(scheduler, name: str) -> Dict[str, Any]:
     job_id = f"user_{name.strip().replace(' ', '_')}"
     job = scheduler.get_job(job_id)
     if not job:
@@ -386,11 +480,14 @@ async def unschedule_task(name: str) -> Dict[str, Any]:
 
 
 async def list_scheduled_tasks() -> Dict[str, Any]:
-    """등록된 예약 작업 목록 조회."""
+    """등록된 예약 작업 목록 조회. API 프로세스면 직접, 브리지면 API 에 위임한다."""
     scheduler = _ensure_scheduler()
-    if not scheduler:
-        return {"error": "스케줄러가 초기화되지 않았습니다. 서버 재시작 후 다시 시도하세요."}
+    if scheduler:
+        return await list_scheduled_tasks_on(scheduler)
+    return await _delegate_to_api("GET", "jobs")
 
+
+async def list_scheduled_tasks_on(scheduler) -> Dict[str, Any]:
     jobs = scheduler.get_jobs()
     persisted_ids = _persisted_job_ids(scheduler)
     result = []
