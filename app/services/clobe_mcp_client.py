@@ -667,29 +667,62 @@ async def get_status() -> dict[str, Any]:
 
 
 _COMPANY_TOOL_RE = re.compile(r"(company|companies|corp|business|organization|workspace)", re.I)
+VERIFY_PREFERRED_COMPANY_TOOL = "get_my_context"
+
+
+def _count_companies(result: dict[str, Any]) -> int:
+    """회사 조회 응답에서 회사 수만 센다. 오류·형식 불명은 분류 코드로 거부하고 내용은 꺼내지 않는다."""
+    if result.get("isError"):
+        raise ClobeError("tool_error")
+    data: Any = result.get("structuredContent")
+    if not isinstance(data, (dict, list)):
+        content = result.get("content")
+        if not (isinstance(content, list) and content and isinstance(content[0], dict)):
+            raise ClobeError("tool_unexpected_shape")
+        try:
+            data = json.loads(content[0].get("text") or "")
+        except (TypeError, json.JSONDecodeError):
+            raise ClobeError("tool_non_json") from None
+    if isinstance(data, dict):
+        data = data.get("companies")
+    if not isinstance(data, list):
+        raise ClobeError("context_unexpected_shape")
+    return sum(1 for item in data if isinstance(item, dict))
 
 
 async def verify_connection() -> dict[str, Any]:
-    """tools/list → 회사 목록류 조회 도구 1회 호출. 읽기만. 응답 내용은 반환하지 않는다."""
+    """tools/list → 회사 조회 도구 1회 호출. 읽기만. 회사 수만 반환하고 식별자·상호 원문은 남기지 않는다.
+
+    get_my_context(필수 입력 없음)를 우선 쓰고, 허용목록에 없을 때만 이름 규칙으로 폴백한다.
+    """
     listing = await list_tools()
     rows = await get_pool().fetch(
         "SELECT name, input_schema FROM clobe_mcp_tools WHERE allowed IS TRUE ORDER BY name"
     )
-    candidate = None
+    no_input: list[str] = []
     for row in rows:
         schema = row["input_schema"]
         if isinstance(schema, str):
             schema = json.loads(schema)
-        if _COMPANY_TOOL_RE.search(row["name"]) and not (schema or {}).get("required"):
-            candidate = row["name"]
-            break
+        if not (schema or {}).get("required"):
+            no_input.append(row["name"])
+    if VERIFY_PREFERRED_COMPANY_TOOL in no_input:
+        candidate: str | None = VERIFY_PREFERRED_COMPANY_TOOL
+    else:
+        candidate = next((n for n in no_input if _COMPANY_TOOL_RE.search(n)), None)
     result: dict[str, Any] = {"tools_total": listing["total"], "tools_allowed": listing["allowed"],
                               "company_tool": candidate, "company_call_ok": None}
-    if candidate:
-        out = await call_tool(candidate, {})
-        result["company_call_ok"] = not out.get("isError", False)
-        content = out.get("content")
-        result["company_response_items"] = len(content) if isinstance(content, list) else None
+    if not candidate:
+        result["company_tool_reason"] = "no_company_tool_available"
+        return result
+    try:
+        result["company_count"] = _count_companies(await call_tool(candidate, {}))
+        result["company_call_ok"] = True
+    except ClobeReauthRequired:
+        raise
+    except ClobeError as exc:
+        result["company_call_ok"] = False
+        result["company_call_error"] = str(exc)
     return result
 
 

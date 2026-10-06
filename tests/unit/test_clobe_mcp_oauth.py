@@ -116,6 +116,8 @@ class Server:
             {"name": "delete_voucher", "description": "삭제", "inputSchema": {"type": "object"}},
         ]
         self.mcp_calls: list[str] = []
+        self.called_tool: str | None = None
+        self.call_result: dict | None = None
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -138,8 +140,9 @@ class Server:
             if method == "tools/list":
                 return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": {"tools": self.tools}})
             if method == "tools/call":
-                return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"],
-                                                 "result": {"content": [{"type": "text", "text": "[]"}]}})
+                self.called_tool = body["params"]["name"]
+                result = self.call_result or {"content": [{"type": "text", "text": "[]"}]}
+                return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
         return httpx.Response(404)
 
 
@@ -382,8 +385,91 @@ async def test_verify_calls_company_tool_once_and_hides_content(env):
     await _connect(pool)
     result = await clobe.verify_connection()
     assert result["company_tool"] == "list_companies" and result["company_call_ok"] is True
+    assert result["company_count"] == 0
     assert server.mcp_calls.count("tools/call") == 1
     assert "text" not in json.dumps(result)
+
+
+CTX_SECRETS = ("company-id-SECRET-1", "1234567890", "상호비밀주식회사")
+
+
+def _context_server(server, *, tool_result=None):
+    server.tools.append({"name": "get_my_context", "description": "ctx", "inputSchema": {"type": "object"}})
+    payload = {"companies": [{"companyId": CTX_SECRETS[0], "businessRegNo": CTX_SECRETS[1],
+                              "companyName": CTX_SECRETS[2], "role": "admin"}]}
+    server.call_result = tool_result if tool_result is not None else {
+        "content": [{"type": "text", "text": json.dumps(payload)}]}
+
+
+@pytest.mark.asyncio
+async def test_verify_prefers_get_my_context_over_name_rule(env):
+    pool, server = env
+    _context_server(server)
+    await _connect(pool)
+    result = await clobe.verify_connection()
+    assert result["company_tool"] == "get_my_context"
+    assert server.called_tool == "get_my_context"
+    assert result["company_call_ok"] is True and result["company_count"] == 1
+    assert server.mcp_calls.count("tools/call") == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_context_tool_with_required_input_is_not_used(env):
+    pool, server = env
+    _context_server(server)
+    server.tools[-1]["inputSchema"] = {"type": "object", "required": ["x"]}
+    await _connect(pool)
+    result = await clobe.verify_connection()
+    assert result["company_tool"] == "list_companies"
+
+
+@pytest.mark.asyncio
+async def test_verify_falls_back_to_name_rule_without_context_tool(env):
+    pool, server = env
+    await _connect(pool)
+    result = await clobe.verify_connection()
+    assert result["company_tool"] == "list_companies" and result["company_call_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_verify_returns_null_with_reason_when_no_tool(env):
+    pool, server = env
+    server.tools = [t for t in server.tools if t["name"] == "get_vat_summary"]
+    await _connect(pool)
+    result = await clobe.verify_connection()
+    assert result["company_tool"] is None and result["company_call_ok"] is None
+    assert result["company_tool_reason"] == "no_company_tool_available"
+    assert server.mcp_calls.count("tools/call") == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_result", [
+    {"isError": True, "content": [{"type": "text", "text": "company-id-SECRET-1 failed"}]},
+    {"content": [{"type": "text", "text": "not json 상호비밀주식회사"}]},
+    {"content": [{"type": "text", "text": json.dumps({"other": 1})}]},
+])
+async def test_verify_call_failure_is_not_ok_and_leaks_nothing(env, tool_result):
+    pool, server = env
+    _context_server(server, tool_result=tool_result)
+    await _connect(pool)
+    result = await clobe.verify_connection()
+    assert result["company_tool"] == "get_my_context"
+    assert result["company_call_ok"] is False
+    assert "company_count" not in result
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert not any(secret in dumped for secret in CTX_SECRETS)
+
+
+@pytest.mark.asyncio
+async def test_verify_response_has_no_raw_identifiers(env, caplog):
+    pool, server = env
+    _context_server(server)
+    await _connect(pool)
+    with caplog.at_level(logging.DEBUG):
+        result = await clobe.verify_connection()
+    haystack = json.dumps(result, ensure_ascii=False) + caplog.text
+    assert not any(secret in haystack for secret in CTX_SECRETS)
+    assert result["company_count"] == 1
 
 
 # ── refresh / reauth / revoke ────────────────────────────
