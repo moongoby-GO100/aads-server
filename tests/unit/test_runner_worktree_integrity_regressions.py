@@ -78,7 +78,10 @@ def repo(tmp_path, runner):
     base = git(main, "rev-parse", "HEAD")
     git(main, "worktree", "add", "--detach", str(worktree), base)
     yield {"main": main, "wt": worktree, "base": base, "git": git, "jid": jid}
-    git(main, "worktree", "remove", "--force", str(worktree))
+    if worktree.exists():
+        git(main, "worktree", "remove", "--force", str(worktree))
+    else:
+        git(main, "worktree", "prune")
 
 
 def test_live_cwd_preserves_worktree_inode_head_and_dirty_files(runner, repo):
@@ -222,3 +225,59 @@ def test_deploy_only_current_base_remains_supported(runner, repo):
                     "DEPLOY_ONLY: true", repo["base"])
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == repo["base"]
+
+
+@pytest.mark.parametrize("state", ["root_absent", "root_recreated", "child_root_absent"])
+def test_deleted_cwd_blocks_reuse_even_if_original_path_is_absent(runner, repo, state):
+    w, git, main = repo["wt"], repo["git"], repo["main"]
+    cwd = w / "nested" / "worker" if state == "child_root_absent" else w
+    cwd.mkdir(parents=True, exist_ok=True)
+    worker = subprocess.Popen(["sleep", "30"], cwd=cwd)
+    try:
+        git(main, "worktree", "remove", "--force", str(w))
+        deleted_cwd = os.readlink(f"/proc/{worker.pid}/cwd")
+        assert deleted_cwd == str(cwd) + " (deleted)"
+        if state == "root_recreated":
+            git(main, "worktree", "add", "--detach", str(w), repo["base"])
+            (w / "tracked.txt").write_text("new path edits must survive\n")
+            (w / "new_evidence.txt").write_text("new path evidence must survive\n")
+            preserved = (w.stat().st_ino, git(w, "rev-parse", "HEAD"), git(w, "status", "--porcelain"))
+        else:
+            assert not w.exists()
+        main_head = git(main, "rev-parse", "HEAD")
+        origin_head = git(main, "rev-parse", "origin/main")
+
+        result = runner("prepare_clean_job_worktree", repo["jid"], "GO100", "qa", main, w)
+
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert "worktree_path_busy" in runner.failure.read_text()
+        assert worker.poll() is None
+        assert os.readlink(f"/proc/{worker.pid}/cwd") == deleted_cwd
+        assert git(main, "rev-parse", "HEAD") == main_head
+        assert git(main, "rev-parse", "origin/main") == origin_head
+        if state == "root_recreated":
+            assert (w.stat().st_ino, git(w, "rev-parse", "HEAD"), git(w, "status", "--porcelain")) == preserved
+            assert (w / "tracked.txt").read_text() == "new path edits must survive\n"
+            assert (w / "new_evidence.txt").read_text() == "new path evidence must survive\n"
+        else:
+            assert not w.exists(), "busy deleted cwd must prevent a new worktree at its old path"
+    finally:
+        worker.terminate()
+        worker.wait(timeout=5)
+
+
+def test_deleted_sibling_prefix_does_not_block_an_unrelated_worktree(runner, repo):
+    # /tmp/job-other is not /tmp/job or a child of /tmp/job.
+    sibling = repo["wt"].with_name(repo["wt"].name + "-other")
+    sibling.mkdir()
+    worker = subprocess.Popen(["sleep", "30"], cwd=sibling)
+    try:
+        sibling.rmdir()
+        assert os.readlink(f"/proc/{worker.pid}/cwd") == str(sibling) + " (deleted)"
+        result = runner("prepare_clean_job_worktree", repo["jid"], "GO100", "qa", repo["main"], repo["wt"])
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert worker.poll() is None
+        assert repo["git"](repo["wt"], "rev-parse", "HEAD") == repo["base"]
+    finally:
+        worker.terminate()
+        worker.wait(timeout=5)

@@ -1666,13 +1666,16 @@ job_target_files() {
     printf '%s\n' "$files" | sed '/^[[:space:]]*$/d' | sort -u
 }
 
-# cwd 가 해당 디렉터리 안인 프로세스 PID 목록(공백 구분). 없으면 빈 문자열.
+# cwd 가 해당 경로 또는 하위인 PID 목록. 삭제된 cwd도 이전 작성자가 살아 있는 증거다.
 worktree_busy_pids() {
     local dir="$1" p cwd out=""
-    [[ -n "$dir" && -d "$dir" ]] || return 0
+    [[ -n "$dir" ]] || return 0
     for p in /proc/[0-9]*; do
         [[ "${p#/proc/}" == "$$" || "${p#/proc/}" == "${BASHPID:-$$}" ]] && continue
         cwd=$(readlink "$p/cwd" 2>/dev/null) || continue
+        # /proc 는 unlinked cwd에 이 literal suffix를 붙인다. 경로가 없어도
+        # 이전 프로세스가 같은 이름을 다시 열 수 있으므로 재생성을 차단한다.
+        cwd="${cwd%" (deleted)"}"
         [[ "$cwd" == "$dir" || "$cwd" == "$dir"/* ]] && out+="${p#/proc/} "
     done
     printf '%s' "${out% }"
@@ -1691,14 +1694,13 @@ prepare_clean_job_worktree() {
         return 1
     fi
 
-    if [[ -e "$worktree_dir" ]]; then
-        local _busy_pids
-        _busy_pids=$(worktree_busy_pids "$worktree_dir")
-        if [[ -n "$_busy_pids" ]]; then
-            _fail_job "$job_id" "$session_id" "worktree_path_busy" \
-                "worktree 재사용 거부 — 기존 프로세스와 산출물 보존: path=${worktree_dir} pids=${_busy_pids}"
-            return 1
-        fi
+    # 경로가 이미 삭제됐어도 그 cwd를 보유한 이전 시도가 남을 수 있다.
+    local _busy_pids
+    _busy_pids=$(worktree_busy_pids "$worktree_dir")
+    if [[ -n "$_busy_pids" ]]; then
+        _fail_job "$job_id" "$session_id" "worktree_path_busy" \
+            "worktree 재사용 거부 — 기존 프로세스와 산출물 보존: path=${worktree_dir} pids=${_busy_pids}"
+        return 1
     fi
 
     git -C "$main_workdir" fetch --prune origin >/dev/null 2>&1 || {
@@ -1710,14 +1712,14 @@ prepare_clean_job_worktree() {
         return 1
     }
 
+    # fetch 동안 새 소유자가 들어오거나 경로가 삭제된 경우도 보존한다.
+    _busy_pids=$(worktree_busy_pids "$worktree_dir")
+    if [[ -n "$_busy_pids" ]]; then
+        _fail_job "$job_id" "$session_id" "worktree_path_busy" \
+            "worktree 재사용 거부 — 기존 프로세스와 산출물 보존: path=${worktree_dir} pids=${_busy_pids}"
+        return 1
+    fi
     if [[ -e "$worktree_dir" ]]; then
-        # fetch 동안 새 소유자가 들어온 경우도 보존한다. 프로세스는 종료하지 않는다.
-        _busy_pids=$(worktree_busy_pids "$worktree_dir")
-        if [[ -n "$_busy_pids" ]]; then
-            _fail_job "$job_id" "$session_id" "worktree_path_busy" \
-                "worktree 재사용 거부 — 기존 프로세스와 산출물 보존: path=${worktree_dir} pids=${_busy_pids}"
-            return 1
-        fi
         git -C "$main_workdir" worktree remove "$worktree_dir" --force >/dev/null 2>&1 || rm -rf "$worktree_dir" 2>/dev/null || true
     fi
     git -C "$main_workdir" worktree add --detach "$worktree_dir" origin/main >/dev/null 2>&1 || {
