@@ -212,3 +212,12 @@ def test_contract_type_switch_replaces_previous_type_defaults():
     block = _block(EDITOR, "function switchContractType(", "function applyDefaults(")
     assert "C.defaultsFor(prevType, prevTax)" in block
     assert "String(E.values[key] ?? \"\").trim() === String(value ?? \"\").trim()" in block
+
+
+def test_legacy_sign_screen_contract_table_fits_a4_and_is_not_sticky():
+    """직원 서명 화면(index.html)의 공통 table{min-width:760px}·th{position:sticky} 가 계약서 표에 새지 않아야 한다."""
+    assert re.search(r"table \{[^}]*min-width: 760px", INDEX)
+    block = re.search(r"\.contract-paper \.identity-table \{\s*min-width: 0;\s*\}", INDEX)
+    assert block
+    cells = re.search(r"\.contract-paper \.identity-table th,\s*\.contract-paper \.identity-table td \{[^}]*position: static;", INDEX)
+    assert cells

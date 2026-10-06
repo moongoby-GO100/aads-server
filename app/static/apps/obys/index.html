@@ -1919,6 +1919,20 @@
       width: 18%;
     }
 
+    /* 2026-10-06: 화면 공통 table{min-width:760px}·th{position:sticky;font-size:12px} 가 계약서 표에 적용돼
+       A4 용지 여백 밖으로 표가 튀어나가고(760px > 본문 688px) 서명 화면 스크롤 시 제목 칸이 따라다녔다. */
+    .contract-paper .identity-table {
+      min-width: 0;
+    }
+
+    .contract-paper .identity-table th,
+    .contract-paper .identity-table td {
+      position: static;
+      z-index: auto;
+      font-size: 11.5px;
+      text-align: left;
+    }
+
     .contract-paper .signature-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
