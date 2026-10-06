@@ -324,7 +324,8 @@ EOS
 read -r -d '' R_APACHE_UPSTREAM <<'EOS' || true
 set -u
 site=$1
-ups=$(grep -oE 'http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' "$site" | sort -u)
+# 주석 줄은 읽지 않는다 — 설치본 vhost 9행 주석에 'http://<ip>:8111' 예시가 남아 있어 두 포트로 오판했다(2026-10-06 run 5590).
+ups=$(grep -vE '^[[:space:]]*#' "$site" | grep -oE 'http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' | sort -u)
 [[ -n $ups && $(wc -l <<<"$ups") == 1 ]] || { echo "ambiguous or missing upstream in $site: $ups" >&2; exit 1; }
 sed -E 's#http://([0-9.]+):([0-9]+)#\1 \2#' <<<"$ups"
 EOS
@@ -343,7 +344,7 @@ restore() {
   cat "$bk" > "$SITE"
   "$CTL" configtest 2>&1 && "$CTL" graceful
 }
-ups=$(grep -oE 'http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' "$SITE" | sort -u)
+ups=$(grep -vE '^[[:space:]]*#' "$SITE" | grep -oE 'http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' | sort -u)
 [[ $(wc -l <<<"$ups") == 1 && $ups == *":$FROM" ]] || { echo "FAIL upstream is '$ups', expected port $FROM; nothing changed"; exit 1; }
 n_from=$(grep -cE "://[0-9.]+:$FROM/" "$SITE")
 [[ $n_from -ge 1 ]] || { echo "FAIL no upstream lines with port $FROM"; exit 1; }
