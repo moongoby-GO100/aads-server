@@ -91,6 +91,61 @@ def test_non_forbidding_expressions_pass_no_false_positive(gate_fn, text):
     assert _decide(gate_fn, text) == "ALLOW"
 
 
+# ── 한국어 부정형 (AADS-RUNNER-DEPLOY-FORBID-KO-NEGATION) ───────────────
+# GO100 runner-890f5c73: "하지 않는다" 부정형을 못 잡아 금지 지시서가 배포됐다.
+
+RUNNER_890F5C73_FORBID_CLAUSE = (
+    "## 금지\n"
+    "배포·빌드·재기동·env 설정(GO100_BACKFILL_V4_SHARD_SIZE / GO100_BACKFILL_EXCLUDE_INTRADAY "
+    "활성화 포함)·운영 DB 쓰기·크론 변경을 하지 않는다."
+)
+
+
+def test_runner_890f5c73_forbid_clause_is_detected(gate_fn):
+    assert _decide(gate_fn, RUNNER_890F5C73_FORBID_CLAUSE) == "FORBID"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "배포·빌드·재기동을 하지 않는다.",
+        "배포하지 않는다",
+        "배포는 하지 않습니다",
+        "배포는 안 한다",
+        "배포는 안 합니다",
+        "재기동은 하지 말 것",
+    ],
+)
+def test_korean_negation_forms_are_detected(gate_fn, text):
+    assert _decide(gate_fn, text) == "FORBID"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "## 금지\n서비스 재시작과 크론 변경",
+        "작업 내용\n금지:\n- 빌드\n- 다른 파일 수정\n## 완료 보고\n보고만 한다",
+        "## 금지 사항\nDeploy to production",
+        "금지: 운영 restart",
+    ],
+)
+def test_forbid_header_block_is_detected(gate_fn, text):
+    assert _decide(gate_fn, text) == "FORBID"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "배포 후 헬스체크를 하지 않으면 안 된다",
+        "배포가 필요하면 별도 승인을 받는다",
+        "## 금지\n다른 파일 수정\n## 완료 보고\n배포 결과를 보고한다",
+        "## 금지\n다른 함수 수정",
+    ],
+)
+def test_korean_negation_false_positive_guards(gate_fn, text):
+    assert _decide(gate_fn, text) == "ALLOW"
+
+
 # ── 정적 계약 ───────────────────────────────────────────────────────────
 
 
