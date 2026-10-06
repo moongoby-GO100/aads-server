@@ -313,6 +313,7 @@ review_hold_dirty_recovery() {
     return 10
 }
 
+# 재시도 추적 컬럼 — 멱등 생성 (review_hold_dirty_recovery 의 끝 경계: 계약 테스트가 이 문구로 함수 끝을 찾는다)
 # Existing columns need no table lock. A waiting ALTER would also block runner
 # reads/writes behind a pg_dump snapshot, even with ADD COLUMN IF NOT EXISTS.
 retry_columns=$(db_query "SELECT COUNT(*) FROM information_schema.columns
