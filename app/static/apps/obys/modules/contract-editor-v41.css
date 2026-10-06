@@ -71,3 +71,11 @@
 @media(max-width:820px){.cv41-missing .btn{min-height:40px}.cv41-docs{width:100vw}}
 .cv41-fixes{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 #cv41Blocker p{margin:4px 0}
+/* 계약서 미리보기 인적사항 표 (2026-10-06 r4): 화면 공통 .section-head{display:flex}·table{white-space:nowrap}·th/td 9~10px 가
+   rowspan 묶음 칸을 한 줄 높이로 만들고 아래 줄을 왼쪽으로 밀었다. 미리보기 표 안에서만 표 칸으로 되돌린다. */
+.cv41-paper table.identity-table{table-layout:fixed;white-space:normal}
+.cv41-paper table.identity-table th,.cv41-paper table.identity-table td{font-size:12px;line-height:1.45;overflow-wrap:anywhere}
+.cv41-paper table.identity-table th{width:17%;white-space:normal;word-break:keep-all;color:#45545b;font-weight:700}
+.cv41-paper table.identity-table th.section-head{display:table-cell;width:9%;padding:5px 4px;border-bottom:1px solid #cbd5e1;background:#e9eff2;color:#1f343d;text-align:center;vertical-align:middle}
+.cv41-paper table.identity-table tbody tr{cursor:default}
+.cv41-paper table.identity-table tbody tr:hover{background:transparent}

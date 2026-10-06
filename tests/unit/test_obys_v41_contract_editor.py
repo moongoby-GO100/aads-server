@@ -153,8 +153,19 @@ def test_every_server_missing_label_points_to_an_input(node_result):
 # ---------- 2026-10-06 r2: 직원 입사서류 등록 + 빈 필수값 표시·추천값 ----------
 
 def test_v41_bumps_contract_module_cache_version():
-    for name in ("contract-core.js", "contract-editor-v41.js", "contract-editor-v41.css"):
+    for name in ("contract-core.js", "contract-editor-v41.js"):
         assert f"modules/{name}?v=20261006-r3" in V41, name
+    assert "modules/contract-editor-v41.css?v=20261006-r4" in V41
+
+
+def test_preview_identity_table_is_not_broken_by_page_section_head():
+    """현재 관리자 화면의 .section-head{display:flex} 가 계약서 표의 rowspan 칸을 깨뜨리지 않아야 한다."""
+    assert re.search(r"\.section-head\{display:flex", V41)
+    assert 'class="section-head" rowspan=' in CORE
+    css = (ROOT / "modules" / "contract-editor-v41.css").read_text(encoding="utf-8")
+    assert re.search(r"\.cv41-paper table\.identity-table th\.section-head\{display:table-cell", css)
+    assert re.search(r"\.cv41-paper table\.identity-table\{table-layout:fixed;white-space:normal\}", css)
+    assert re.search(r"identity-table td\{font-size:12px", css)
 
 
 def test_staff_document_upload_uses_existing_admin_api():
