@@ -4633,6 +4633,86 @@ approved_sha_is_live() {
     curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
 }
 
+# ── 배포 반영 게이트 (AADS-RUNNER-DONE-REQUIRES-LIVE-IMAGE, 2026-10-06) ──
+# runner-a5761224(20a97a9c) 는 deploy_runs #5599 가 target_drain_busy 로 blocked 인데도
+# health 만 보고 status=done · '배포 완료' 를 올렸다. /api/v1/health 는 **옛 이미지**가
+# 응답해도 OK 다 — 헬스는 "서비스가 산다" 이지 "내 커밋이 올라갔다" 가 아니다.
+# 실행 중인 슬롯 이미지 태그(aads-server[-green]:<sha>)가 job 커밋을 포함할 때만 반영으로 본다.
+#
+# 기준은 "둘 중 하나라도" 다. deploy.sh 는 새 슬롯을 먼저 컷오버하고 standby 동기화는
+# 뒤따르며 active stream 때문에 보류될 수 있다(success_partial, reject_duplicate_live_release
+# 의 "한쪽만 올라가 있으면 standby 동기화가 남은 상태"). 양쪽을 요구하면 정상 부분성공을
+# 거짓 실패로 만든다. 반대로 둘 다 옛 이미지인 사고(#5599)는 이 기준으로도 잡힌다.
+# 출력(stdout 한 줄): live:<container> | queued:<run_id>:<status> | not_live:<run_id|none>:<status|none>
+aads_release_live_verdict() {
+    local sha="$1"; shift
+    local repo c img tag resolved
+    [[ "$sha" =~ ^[0-9a-f]{12,40}$ ]] || { echo "not_live:none:none"; return 1; }
+    for c in aads-server aads-server-green; do
+        img=$(docker inspect "$c" --format '{{.Config.Image}}' 2>/dev/null) || continue
+        tag="${img##*:}"
+        [[ "$tag" =~ ^[0-9a-f]{7,40}$ ]] || continue
+        if [[ "$sha" == "$tag"* ]]; then
+            echo "live:${c}"; return 0
+        fi
+        for repo in "$@"; do
+            [[ -n "$repo" ]] || continue
+            resolved=$(git -C "$repo" rev-parse --verify "${tag}^{commit}" 2>/dev/null) || continue
+            if git -C "$repo" merge-base --is-ancestor "$sha" "$resolved" 2>/dev/null; then
+                echo "live:${c}"; return 0
+            fi
+        done
+    done
+    local row="" run_id="" status=""
+    row=$(db_exec "SELECT id || '|' || status FROM deploy_runs
+        WHERE upper(trim(project))='AADS'
+        AND COALESCE(NULLIF(lower(trim(component)), ''), 'api')='api'
+        AND COALESCE(NULLIF(lower(trim(target_env)), ''), 'production')='production'
+        AND length(release_sha) >= 12 AND '${sha}' LIKE release_sha || '%'
+        ORDER BY (status IN ('queued','running','verifying','syncing_standby')) DESC, id DESC LIMIT 1;" 2>/dev/null | tail -1) || row=""
+    IFS='|' read -r run_id status <<< "$row"
+    run_id=$(printf '%s' "$run_id" | tr -cd '0-9')
+    status=$(printf '%s' "$status" | tr -cd 'A-Za-z0-9_')
+    case "$status" in
+        queued|running|verifying|syncing_standby)
+            echo "queued:${run_id:-none}:${status}"; return 2 ;;
+    esac
+    echo "not_live:${run_id:-none}:${status:-none}"
+    return 1
+}
+
+# 0: 반영 확인 — 호출자가 done 으로 진행. 1: 이 함수가 error/deploying 을 이미 기록함.
+aads_deploy_live_gate() {
+    local job_id="$1" session_id="$2" sha="$3"; shift 3
+    local verdict="" rc=0 run_id="" status=""
+    verdict=$(aads_release_live_verdict "$sha" "$@") || rc=$?
+    case "$verdict" in
+        live:*)
+            log "  LIVE_IMAGE_OK job=$job_id sha=${sha:0:12} slot=${verdict#live:}"
+            return 0 ;;
+        queued:*)
+            IFS=: read -r _ run_id status <<< "$verdict"
+            db_update "UPDATE pipeline_jobs SET status='deploying', phase='deploy_queued',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포대기] 운영 이미지에 아직 미반영 — deploy_runs #${run_id} ${status} 진행 중',
+                       updated_at=NOW() WHERE job_id='${job_id}';"
+            record_runner_event "$job_id" "deploy_queued" "deploying" "deploy_queued" "" "" "" "" "{\"deploy_run_id\":\"${run_id}\",\"deploy_status\":\"${status}\"}"
+            post_to_chat "$session_id" "🟡 [Pipeline Runner] 배포 대기 — 아직 운영에 반영되지 않았고 deploy_runs #${run_id} (${status}) 가 진행 중입니다: $job_id"
+            log "  DEPLOY_QUEUED job=$job_id deploy_run=#${run_id} status=${status}"
+            return 1 ;;
+        *)
+            IFS=: read -r _ run_id status <<< "${verdict:-not_live:none:none}"
+            local detail="deploy_not_live:${run_id:-none}:${status:-none}"
+            db_update "UPDATE pipeline_jobs SET status='error', phase='deploy_not_live',
+                       error_detail='${detail}',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[배포미반영] 실행 중인 API 슬롯 이미지가 커밋 ${sha:0:12} 를 포함하지 않음 — deploy_runs #${run_id:-none} ${status:-none}',
+                       completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+            record_runner_event "$job_id" "job_terminal" "error" "deploy_not_live" "" "" "" "" "{\"error_detail\":\"${detail}\"}"
+            post_to_chat "$session_id" "🔴 [Pipeline Runner] 배포 미반영 — deploy_runs #${run_id:-none} status=${status:-none}, 운영 이미지에 커밋 ${sha:0:12} 없음: $job_id"
+            log "  DEPLOY_NOT_LIVE job=$job_id deploy_run=#${run_id:-none} status=${status:-none}"
+            return 1 ;;
+    esac
+}
+
 # ── autoheal 인계 추적 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD-RETRY, 2026-09-30) ──
 # deploy.sh 는 target_drain_busy·dirty_worktree 로 멈추면 EXIT 트랩에서 같은
 # 릴리스의 successor run 을 띄우고 자기 행을 superseded_by_autoheal_* 로 바꾼 뒤
@@ -5115,6 +5195,7 @@ deploy_job() {
     # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
     local _build_fail=""
+    local _aads_live_gate="" _aads_live_blocked=""
     # 빌드 직전 불변식: 위 게이트가 이 잡에 대해 "허용" 으로 끝났을 때만 빌드한다.
     # 게이트를 건너뛰는 경로가 생겨도(리팩터·분기 추가) 여기서 fail-closed 로 막힌다.
     if [[ "$_deploy_directive_state" != "allowed:${job_id}" ]]; then
@@ -5141,6 +5222,7 @@ deploy_job() {
                 fi
 
                 if [[ "$_release_relevant" == "true" ]]; then
+                    _aads_live_gate="required"
                     local _aads_deploy_log="/tmp/pipeline-deploy-aads-${job_id}.log"
                     local _aads_deploy_since _aads_follow_out="" _aads_follow_reason=""
                     # deploy_runs.created_at 과 비교한다 — 시계 오차를 감안해 5초 앞당긴다.
@@ -5646,8 +5728,17 @@ deploy_job() {
         fi
     fi
 
+    # 배포 반영 게이트: AADS backend 릴리스를 시도한 잡만, 빌드 실패가 없을 때만 검사한다.
+    # (대시보드·비-AADS 경로는 건드리지 않는다.)
+    if [[ "$_aads_live_gate" == "required" && -z "$_build_fail" ]]; then
+        aads_deploy_live_gate "$job_id" "$session_id" "$current_sha" "$worktree_dir" "$main_workdir" \
+            || _aads_live_blocked="true"
+    fi
+
     # 최종 판정: 빌드 실패 플래그가 있으면 성공 처리 금지
-    if [[ -n "$_build_fail" ]]; then
+    if [[ "$_aads_live_blocked" == "true" ]]; then
+        :  # aads_deploy_live_gate 가 error(deploy_not_live) 또는 deploying(deploy_queued) 을 이미 기록했다.
+    elif [[ -n "$_build_fail" ]]; then
         db_update "UPDATE pipeline_jobs SET status='error', phase='build_fail',
                    error_detail='${_build_fail}',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포실패] backend_health=${health_ok} frontend_health=${frontend_health_ok} build_fail=${_build_fail}',
