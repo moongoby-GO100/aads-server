@@ -2245,6 +2245,85 @@ stream_count_for_port() {
     ) || echo "unknown"
 }
 
+# 최선 노력: 후보 슬롯을 쥔 채팅 세션 id(앞 8자, 최대 5건). 실패해도 배포를 막지 않는다.
+target_active_session_ids() {
+    local container
+    container="$(container_for_port "$1")"
+    [[ -n "$container" ]] || return 0
+    docker exec aads-postgres psql -U aads -d aads -Atc "
+        SELECT COALESCE(string_agg(left(session_id::text, 8), ','), '')
+        FROM (
+            SELECT session_id FROM chat_turn_executions
+            WHERE status IN ('running','retrying')
+              AND completed_at IS NULL
+              AND owner_instance = '${container}'
+            LIMIT 5
+        ) s;
+    " 2>/dev/null | tr -d '[:space:]' || true
+}
+
+# 후보 슬롯 drain 게이트. 반환: 0=진행, 1=차단(호출자가 exit 1).
+# 2026-10-06 CEO 지시: 180초 대기 후에도 스트림이 남으면 차단하지 않고 진행한다.
+# #5603~#5607 이 'active streams=1'(대부분 CEO 채팅 자신)로 41분간 막혔다.
+# AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT 대기는 그대로, 시간 초과 후 동작만
+# AADS_DEPLOY_DRAIN_TIMEOUT_ACTION=proceed(기본)|block 으로 고른다.
+# AADS_DEPLOY_ALLOW_BUSY_TARGET=true 는 기존대로 대기 없이 즉시 진행.
+# 헬스체크·이미지 검증·롤백 게이트는 이 함수 밖이며 완화되지 않는다.
+target_slot_drain_gate() {
+    local action="${AADS_DEPLOY_DRAIN_TIMEOUT_ACTION:-proceed}"
+    local sessions note
+    TARGET_DRAIN_PROCEED_NOTE=""
+    case "$action" in
+        proceed|block) ;;
+        *) action="proceed" ;;
+    esac
+    TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
+    local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180}"
+    local_target_drain_interval="${AADS_DEPLOY_TARGET_DRAIN_POLL_SECONDS:-10}"
+    local_target_elapsed=$(($(date +%s) - TARGET_DRAIN_STARTED_EPOCH))
+    if [[ ! "$local_target_drain_max" =~ ^[0-9]+$ ]]; then
+        local_target_drain_max="180"
+    fi
+    if [[ ! "$local_target_drain_interval" =~ ^[0-9]+$ ]] || [[ "$local_target_drain_interval" -lt 5 ]]; then
+        local_target_drain_interval="10"
+    fi
+    if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
+        echo "[deploy.sh] ⏳ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} 활성 스트림 ${TARGET_STREAMS}건 — build와 겹친 drain 창 확인 (${local_target_elapsed}/${local_target_drain_max}초)"
+        while [[ "$local_target_elapsed" -lt "$local_target_drain_max" ]]; do
+            sleep "$local_target_drain_interval"
+            local_target_elapsed=$((local_target_elapsed + local_target_drain_interval))
+            TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
+            if [[ "$TARGET_STREAMS" == "0" || -z "$TARGET_STREAMS" ]]; then
+                echo "[deploy.sh] ✅ target slot drain 완료 (${local_target_elapsed}초)"
+                break
+            fi
+            deploy_observe_update "running" "target_slot_drain" \
+                "active_streams=${TARGET_STREAMS:-unknown}; elapsed=${local_target_elapsed}s; max=${local_target_drain_max}s"
+            echo "[deploy.sh]   target drain 대기중... active=${TARGET_STREAMS} (${local_target_elapsed}/${local_target_drain_max}초)"
+        done
+        if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]]; then
+            sessions="$(target_active_session_ids "$NEW_PORT")"
+            if [[ "$action" == "block" ]]; then
+                echo "[deploy.sh] ❌ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT}에 활성 스트림 ${TARGET_STREAMS}건 잔존 — 정책 block 으로 배포 차단"
+                echo "[deploy.sh]    기본 정책은 proceed 입니다. AADS_DEPLOY_DRAIN_TIMEOUT_ACTION=block 이 명시된 경우에만 차단합니다."
+                notify "❌ Blue-Green 중단: target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
+                deploy_phase_end "target_slot_drain" "blocked" "target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
+                record_deploy "blocked" "$MODE" "target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
+                return 1
+            fi
+            echo "[deploy.sh] ⚠️ drain timeout — active=${TARGET_STREAMS} 잔존, 정책 proceed 로 전환 진행 (sessions=${sessions:-unknown}, waited=${local_target_elapsed}s)"
+            note="target_drain proceeded_busy: active=${TARGET_STREAMS} sessions=${sessions:-unknown} waited=${local_target_elapsed}s policy=proceed"
+            TARGET_DRAIN_PROCEED_NOTE="$note"
+            audit_control "target-drain" "${NEW_CONTAINER}:${NEW_PORT}" "proceeded_busy" \
+                "active=${TARGET_STREAMS}; sessions=${sessions:-unknown}; waited=${local_target_elapsed}s; policy=proceed"
+            notify "⚠️ target slot ${NEW_CONTAINER}:${NEW_PORT} 활성 스트림 ${TARGET_STREAMS}건 잔존 — drain timeout 후 배포 진행"
+        fi
+    elif [[ "$TARGET_STREAMS" != "0" ]]; then
+        echo "[deploy.sh] ⚠️ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} active-streams 확인값=${TARGET_STREAMS} — 미기동/미응답 슬롯으로 판단하고 재빌드를 진행합니다."
+    fi
+    return 0
+}
+
 set_deploy_stream_phase_metadata() {
     local owner_instance="$1"
     local port="$2"
@@ -2527,6 +2606,10 @@ resolve_final_deploy_status() {
             && ! standby_same_digest_verified "${NEW_CONTAINER:-}" "${OLD_CONTAINER:-}"; then
         FINAL_DEPLOY_STATUS="success_partial"
         FINAL_DEPLOY_ERROR="standby sync deferred: active/standby image digest mismatch at final certification"
+    fi
+    # 성공으로 끝나도 drain timeout 후 busy 슬롯으로 진행했다는 사실은 원장에 남긴다.
+    if [[ -n "${TARGET_DRAIN_PROCEED_NOTE:-}" ]]; then
+        FINAL_DEPLOY_ERROR="${FINAL_DEPLOY_ERROR:+${FINAL_DEPLOY_ERROR}; }${TARGET_DRAIN_PROCEED_NOTE}"
     fi
 }
 
@@ -2964,47 +3047,11 @@ case "$MODE" in
 
         deploy_phase_start "target_slot_drain" "running"
         reconcile_inactive_target_recovery_executions "$NEW_CONTAINER"
-        TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
-        local_target_drain_max="${AADS_DEPLOY_TARGET_DRAIN_MAX_WAIT:-180}"
-        local_target_drain_interval="${AADS_DEPLOY_TARGET_DRAIN_POLL_SECONDS:-10}"
-        local_target_elapsed=$(($(date +%s) - TARGET_DRAIN_STARTED_EPOCH))
-        if [[ ! "$local_target_drain_max" =~ ^[0-9]+$ ]]; then
-            local_target_drain_max="180"
-        fi
-        if [[ ! "$local_target_drain_interval" =~ ^[0-9]+$ ]] || [[ "$local_target_drain_interval" -lt 5 ]]; then
-            local_target_drain_interval="10"
-        fi
-        if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]] && [[ "${AADS_DEPLOY_ALLOW_BUSY_TARGET:-false}" != "true" ]]; then
-            # A busy inactive slot must not be restarted, because that would cut
-            # the response it still owns. Bound the wait, however: after three
-            # minutes fail closed and let the queued release retry later instead
-            # of occupying the deployment lane for up to thirty minutes.
-            echo "[deploy.sh] ⏳ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} 활성 스트림 ${TARGET_STREAMS}건 — build와 겹친 drain 창 확인 (${local_target_elapsed}/${local_target_drain_max}초)"
-            while [[ "$local_target_elapsed" -lt "$local_target_drain_max" ]]; do
-                sleep "$local_target_drain_interval"
-                local_target_elapsed=$((local_target_elapsed + local_target_drain_interval))
-                TARGET_STREAMS="$(stream_count_for_port "$NEW_PORT")"
-                if [[ "$TARGET_STREAMS" == "0" || -z "$TARGET_STREAMS" ]]; then
-                    echo "[deploy.sh] ✅ target slot drain 완료 (${local_target_elapsed}초)"
-                    break
-                fi
-                deploy_observe_update "running" "target_slot_drain" \
-                    "active_streams=${TARGET_STREAMS:-unknown}; elapsed=${local_target_elapsed}s; max=${local_target_drain_max}s"
-                echo "[deploy.sh]   target drain 대기중... active=${TARGET_STREAMS} (${local_target_elapsed}/${local_target_drain_max}초)"
-            done
-            if [[ "$TARGET_STREAMS" =~ ^[0-9]+$ ]] && [[ "$TARGET_STREAMS" -gt 0 ]]; then
-                echo "[deploy.sh] ❌ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT}에 활성 스트림 ${TARGET_STREAMS}건 잔존 — 100% 무중단 원칙상 배포 차단"
-                echo "[deploy.sh]    긴급 강제 배포가 필요할 때만 AADS_DEPLOY_ALLOW_BUSY_TARGET=true를 명시하세요."
-                notify "❌ Blue-Green 중단: target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
-                deploy_phase_end "target_slot_drain" "blocked" "target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
-                record_deploy "blocked" "$MODE" "target slot ${NEW_CONTAINER}:${NEW_PORT} active streams=${TARGET_STREAMS}"
-                exit 1
-            fi
-        elif [[ "$TARGET_STREAMS" != "0" ]]; then
-            echo "[deploy.sh] ⚠️ 전환 대상 ${NEW_CONTAINER}:${NEW_PORT} active-streams 확인값=${TARGET_STREAMS} — 미기동/미응답 슬롯으로 판단하고 재빌드를 진행합니다."
+        if ! target_slot_drain_gate; then
+            exit 1
         fi
         set_deploy_stream_phase_metadata "$NEW_CONTAINER" "$NEW_PORT" "${TARGET_STREAMS:-unknown}" "${local_target_elapsed:-0}" "${local_target_drain_max:-0}"
-        deploy_phase_end "target_slot_drain" "success" "active_streams=${TARGET_STREAMS}"
+        deploy_phase_end "target_slot_drain" "success" "active_streams=${TARGET_STREAMS}${TARGET_DRAIN_PROCEED_NOTE:+; ${TARGET_DRAIN_PROCEED_NOTE}}"
 
         # ①-2a 릴리스의 migrations/ 를 ledger 기준으로 전량 적용 — 새 슬롯 기동 전.
         # 실패하면 여기서 끝나고 기존 슬롯이 계속 트래픽을 받는다(additive 전제).
