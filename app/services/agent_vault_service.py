@@ -150,6 +150,30 @@ async def get_agent_credential_for_url(
     return _row_to_credential(row, include_secret=True)
 
 
+async def find_agent_credential_by_username(
+    *, tenant_id: str, origin: str, username: str,
+) -> dict[str, Any] | None:
+    """Server-side lookup of an active credential by (tenant, origin, username).
+
+    Returns the decrypted secret; callers must compare it and never log or echo it.
+    """
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT *
+              FROM agent_vault_credentials
+             WHERE tenant_id = $1 AND origin = $2 AND is_active = TRUE
+             ORDER BY label
+            """,
+            _tenant_uuid(tenant_id),
+            normalize_origin(origin),
+        )
+    for row in rows:
+        if decrypt_value(row["username_enc"]) == username:
+            return _row_to_credential(row, include_secret=True)
+    return None
+
+
 async def mark_agent_credential_used(
     *,
     tenant_id: str,

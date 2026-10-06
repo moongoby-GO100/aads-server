@@ -968,6 +968,12 @@ async def approvals_pending(
              # 모르게 늘어나지 않는다는 원칙이 그대로 무너진다(2026-09-17).
              "choices": (
                  [
+                     {"key": "single", "label": "Vault 에 저장",
+                      "params": {"decision": "approved", "scope": "single", "hours": 2}},
+                     {"key": "reject", "label": "저장 안 함",
+                      "params": {"decision": "rejected"}},
+                 ] if r["gate_source"] == "browser_login_save" else (
+                 [
                      {"key": "single", "label": "세션 생성 승인",
                       "params": {"decision": "approved", "scope": "single", "hours": 2}},
                      {"key": "reject", "label": "거절",
@@ -1002,7 +1008,7 @@ async def approvals_pending(
                          {"key": "reject", "label": "거부",
                           "params": {"decision": "rejected"}},
                      ]
-                 ))
+                 )))
              )}
             for r in rows
         ],
@@ -1223,6 +1229,31 @@ _SESSION_UUID_RE = re.compile(
 # 승인은 되는데 세션은 안 생기는, 제일 알아채기 어려운 실패가 된다.
 _OWNER_SESSION_ACTION = "create_owner_session"
 
+# 브라우저 로그인 계정 저장 카드. browser_login_autosave.ACTION_TYPE 와 같은 값.
+_BROWSER_LOGIN_SAVE_ACTION = "save_browser_credential"
+
+
+def _browser_login_save_note(
+    *, head: str, approved: bool, summary: str, result: Optional[Dict[str, Any]]
+) -> str:
+    """로그인 계정 저장 결정을 대화에 적는다. 비밀번호는 어디에도 쓰지 않는다."""
+    r = result or {}
+    who = f"{r.get('host') or ''} · {r.get('username_masked') or ''}".strip(" ·")
+    if not approved:
+        return f"**{head}** — 로그인 계정 저장\n\n- 대상: {who}\n\nVault 에 저장하지 않고 임시 값을 폐기했습니다."
+    status = str(r.get("status") or "")
+    if status in ("saved", "updated"):
+        verb = "업데이트" if status == "updated" else "저장"
+        return f"**{head}** — 로그인 계정 {verb}\n\n- 대상: {who}\n\nAgent Vault 에 {verb}했습니다."
+    if status == "already_saved":
+        return f"**{head}** — 로그인 계정 저장\n\n- 대상: {who}\n\n이미 같은 계정이 Vault 에 있어 저장하지 않았습니다."
+    if status == "expired":
+        return (
+            f"**{head}** — 로그인 계정 저장\n\n- 대상: {who}\n\n임시 값이 만료돼 저장하지 못했습니다. "
+            "다시 로그인하면 저장 카드가 새로 올라옵니다."
+        )
+    return f"**{head}** — 로그인 계정 저장\n\n- 대상: {who}\n\n저장에 실패했습니다 ({str(r.get('error') or status)[:80]})."
+
 
 def _owner_session_note(
     *, head: str, approved: bool, summary: str, result: Optional[Dict[str, Any]]
@@ -1308,6 +1339,7 @@ async def _notify_chat_of_approval_decision(
     hours: int,
     owner_scope: Optional[Dict[str, Any]] = None,
     owner_result: Optional[Dict[str, Any]] = None,
+    vault_result: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """결정을 그 대화에 남기고, 남은 대기 건이 없으면 막힌 작업을 이어서 돌린다.
 
@@ -1333,7 +1365,9 @@ async def _notify_chat_of_approval_decision(
     label = {
         "next_step": "다음 단계",
         _OWNER_SESSION_ACTION: "담당 세션 생성",
+        _BROWSER_LOGIN_SAVE_ACTION: "로그인 계정 저장",
     }.get(tool or "", f"`{tool}`")
+    is_login_save = (tool or "") == _BROWSER_LOGIN_SAVE_ACTION
 
     if is_owner_session:
         # 거절도 결론이다. 남기지 않으면 그 마일스톤은 "승인 요청함" 에
@@ -1352,6 +1386,10 @@ async def _notify_chat_of_approval_decision(
                 )
         note = _owner_session_note(
             head=head, approved=approved, summary=summary, result=owner_result,
+        )
+    elif is_login_save:
+        note = _browser_login_save_note(
+            head=head, approved=approved, summary=summary, result=vault_result,
         )
     elif approved:
         scope_label = {
@@ -1431,6 +1469,10 @@ async def _notify_chat_of_approval_decision(
             "approval_decision_note_failed request=%s error=%s", request_id[:8], str(exc)
         )
         return {"status": "enqueue_failed", "error": "decision_note_failed"}
+
+    if is_login_save:
+        # 막혀서 멈춘 작업이 없다 — 서버가 이미 끝냈으므로 에이전트를 깨우지 않는다.
+        return {"status": "note_only"}
 
     if remaining:
         return {"status": "waiting_for_decisions"}
@@ -1609,6 +1651,22 @@ async def approvals_decide(
                                          COALESCE(a.approval_scope->'has_prompt',
                                                   'false'::jsonb))
                                      ELSE '{}'::jsonb END
+                             -- 브라우저 로그인 저장 카드는 슬롯 참조 id 만 든다
+                             -- (비밀번호 원문은 DB 어디에도 없다). 지워지면 승인
+                             -- 시점에 어느 슬롯인지 알 수 없다.
+                             || CASE WHEN a.action_type = 'save_browser_credential'
+                                     THEN jsonb_build_object(
+                                         'slot_id',
+                                         COALESCE(a.approval_scope->>'slot_id', ''),
+                                         'origin',
+                                         COALESCE(a.approval_scope->>'origin', ''),
+                                         'host',
+                                         COALESCE(a.approval_scope->>'host', ''),
+                                         'username_masked',
+                                         COALESCE(a.approval_scope->>'username_masked', ''),
+                                         'mode',
+                                         COALESCE(a.approval_scope->>'mode', 'new'))
+                                     ELSE '{}'::jsonb END
                         ELSE a.approval_scope END,
                    expires_at = CASE WHEN $2 = 'approved'
                                      THEN now() + make_interval(hours => $7)
@@ -1617,7 +1675,7 @@ async def approvals_decide(
              WHERE a.id = eff.id
             RETURNING a.id::text, a.action_type, a.decision, a.max_executions,
                       a.approval_scope->>'scope' AS scope,
-                      a.requested_by, a.action_summary,
+                      a.requested_by, a.action_summary, a.tenant_id::text AS tenant_id,
                       a.approval_scope::text AS scope_json
             """,
             request_id, decision, reason, decided_by,
@@ -1668,6 +1726,41 @@ async def approvals_decide(
                 )
                 owner_result = {"error": str(exc)[:200]}
 
+    # 브라우저 로그인 계정 저장은 승인 즉시 서버가 Vault 에 저장하고, 거절이면
+    # 슬롯을 버린다. 비밀번호는 서버 메모리 슬롯에만 있으므로 여기서가 아니면
+    # 저장할 방법이 없다. 어느 쪽이든 슬롯은 이 호출로 폐기된다.
+    vault_result: Optional[Dict[str, Any]] = None
+    if row["action_type"] == _BROWSER_LOGIN_SAVE_ACTION:
+        try:
+            vault_scope = json.loads(row["scope_json"] or "{}")
+        except Exception:  # noqa: BLE001
+            vault_scope = {}
+        try:
+            from app.services.browser_login_autosave import apply_decision
+
+            if str(row["tenant_id"] or "") != _tenant_id(context):
+                vault_result = {"status": "error", "error": "tenant_mismatch"}
+            else:
+                vault_result = await apply_decision(
+                    slot_id=str(vault_scope.get("slot_id") or ""),
+                    approved=decision == "approved",
+                    tenant_id=str(row["tenant_id"] or ""),
+                    decided_by=str(
+                        (context.get("membership") or {}).get("user_id") or decided_by
+                    ),
+                    request_id=request_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "browser_login_save_apply_failed request=%s error=%s",
+                request_id[:8], type(exc).__name__,
+            )
+            vault_result = {"status": "error", "error": type(exc).__name__}
+        vault_result = {
+            **{k: vault_scope.get(k, "") for k in ("host", "username_masked", "mode")},
+            **vault_result,
+        }
+
     # 결정은 대화로 돌아간다 — 누른 결과가 화면에 보이고, 막힌 작업이 이어진다.
     reaction_dispatch = await _notify_chat_of_approval_decision(
         session_id=row["requested_by"],
@@ -1680,6 +1773,7 @@ async def approvals_decide(
         hours=hours,
         owner_scope=owner_scope,
         owner_result=owner_result,
+        vault_result=vault_result,
     )
     # 승인에는 반드시 시간 상한이 붙는다. 승인해 둔 것이 며칠 뒤 다른
     # 맥락에서 쓰이면 CEO 가 승인한 그 변경이 아니다.
@@ -1693,6 +1787,8 @@ async def approvals_decide(
     }
     if owner_result is not None:
         resp["owner_session"] = owner_result
+    if vault_result is not None:
+        resp["vault_save"] = vault_result
     return resp
 
 

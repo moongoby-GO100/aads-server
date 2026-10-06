@@ -5927,6 +5927,7 @@ class ToolExecutor:
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
             browser_lane=str(inp.get("browser_lane") or ""),
+            tenant_id=str(inp.get("tenant_id") or ""),
         )
 
     async def _browser_fill(self, inp: Dict[str, Any]) -> Any:
@@ -5944,6 +5945,7 @@ class ToolExecutor:
             browser_session_id=browser_session_id,
             browser_work_key=browser_work_key,
             browser_lane=str(inp.get("browser_lane") or ""),
+            tenant_id=str(inp.get("tenant_id") or ""),
         )
 
     async def _browser_press_key(self, inp: Dict[str, Any]) -> Any:
@@ -5958,6 +5960,7 @@ class ToolExecutor:
             browser_session_id=inp.get("browser_session_id", ""),
             browser_work_key=inp.get("browser_work_key", ""),
             browser_lane=str(inp.get("browser_lane") or ""),
+            tenant_id=str(inp.get("tenant_id") or ""),
         )
 
     async def _browser_select_option(self, inp: Dict[str, Any]) -> Any:

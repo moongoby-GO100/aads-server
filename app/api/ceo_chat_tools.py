@@ -4405,6 +4405,7 @@ async def tool_browser_click(
     browser_session_id: str = "",
     browser_work_key: str = "",
     browser_lane: str = "",
+    tenant_id: str = "",
 ) -> str:
     """CSS selector로 요소 클릭."""
     ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
@@ -4412,8 +4413,15 @@ async def tool_browser_click(
         return err
     try:
         page = await _current_page(ctx)
+        from app.services import browser_login_autosave as _autosave
+
+        origin_before = _autosave.page_origin(page)
         await page.click(selector, timeout=30_000)
-        return f"[클릭 완료] selector={selector}"
+        note = await _autosave.on_submit(
+            page, origin_before, tenant_id=tenant_id,
+            fallback_session=browser_session_id or browser_work_key,
+        )
+        return f"[클릭 완료] selector={selector}{note}"
     except Exception as e:
         return f"[ERROR] 클릭 실패 ({selector}): {e}"
 
@@ -4425,6 +4433,7 @@ async def tool_browser_fill(
     browser_session_id: str = "",
     browser_work_key: str = "",
     browser_lane: str = "",
+    tenant_id: str = "",
 ) -> str:
     """입력 필드에 텍스트 채우기."""
     ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
@@ -4433,6 +4442,12 @@ async def tool_browser_fill(
     try:
         page = await _current_page(ctx)
         await page.fill(selector, value, timeout=30_000)
+        from app.services import browser_login_autosave as _autosave
+
+        await _autosave.on_fill(
+            page, selector, value, tenant_id=tenant_id,
+            fallback_session=browser_session_id or browser_work_key,
+        )
         return f"[입력 완료] selector={selector}"
     except Exception as e:
         return f"[ERROR] 입력 실패 ({selector}): {e}"
@@ -4445,6 +4460,7 @@ async def tool_browser_press_key(
     browser_session_id: str = "",
     browser_work_key: str = "",
     browser_lane: str = "",
+    tenant_id: str = "",
 ) -> str:
     """키 입력."""
     if not key:
@@ -4454,6 +4470,9 @@ async def tool_browser_press_key(
         return err
     try:
         page = await _current_page(ctx)
+        from app.services import browser_login_autosave as _autosave
+
+        origin_before = _autosave.page_origin(page)
         local_press = getattr(page, "press_key", None)
         if callable(local_press):
             await local_press(key, selector=selector)
@@ -4462,7 +4481,13 @@ async def tool_browser_press_key(
         else:
             await page.keyboard.press(key)
         target = f" selector={selector}" if selector else ""
-        return f"[키 입력 완료]{target} key={key}"
+        note = ""
+        if _autosave.is_submit_key(key):
+            note = await _autosave.on_submit(
+                page, origin_before, tenant_id=tenant_id,
+                fallback_session=browser_session_id or browser_work_key,
+            )
+        return f"[키 입력 완료]{target} key={key}{note}"
     except Exception as e:
         return f"[ERROR] 키 입력 실패 ({key}): {e}"
 
@@ -5862,6 +5887,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
             browser_lane=str(params.get("browser_lane") or ""),
+            tenant_id=str(params.get("tenant_id") or ""),
         )
     elif name == "browser_fill":
         return await tool_browser_fill(
@@ -5870,6 +5896,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
             browser_lane=str(params.get("browser_lane") or ""),
+            tenant_id=str(params.get("tenant_id") or ""),
         )
     elif name == "browser_press_key":
         return await tool_browser_press_key(
@@ -5878,6 +5905,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
             browser_lane=str(params.get("browser_lane") or ""),
+            tenant_id=str(params.get("tenant_id") or ""),
         )
     elif name == "browser_select_option":
         return await tool_browser_select_option(
