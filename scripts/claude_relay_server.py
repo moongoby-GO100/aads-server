@@ -1620,13 +1620,39 @@ def _build_stream_json_stdin(content_blocks, system_prompt="", is_resume=False):
     return json.dumps(envelope) + "\n"
 
 
+def _cli_error_body(event, limit=400):
+    """CLI 이벤트가 실패를 말하면 그 본문을, 아니면 None.
+
+    result 이벤트의 실패는 `is_error` + `errors` 배열로 오고 `result` 가 비어
+    있을 수 있다(Agent SDK ResultMessage.errors).
+    """
+    evt_type = event.get("type", "")
+    if not (evt_type == "error" or event.get("error")
+            or (evt_type == "result" and event.get("is_error"))):
+        return None
+    return redact_secret_text(json.dumps(event, ensure_ascii=False))[:limit]
+
+
+def _result_error_text(event):
+    result = event.get("result")
+    if result:
+        return str(result)
+    errors = event.get("errors") or []
+    if errors:
+        return "; ".join(str(e) for e in errors)
+    return "CLI error"
+
+
 def _cli_failure_detail(stderr_text, error_bodies, limit=1000):
+    # stderr 가 길어도 오류 이벤트 본문이 밀려나지 않도록 예산을 나눈다.
+    half = limit // 2
     parts = []
     if stderr_text:
-        parts.append("stderr=" + str(stderr_text).strip())
+        parts.append("stderr=" + redact_secret_text(str(stderr_text).strip())[:half])
     if error_bodies:
-        parts.append("error_events=" + " | ".join(error_bodies))
-    return redact_secret_text(" ".join(parts))[:limit]
+        budget = limit - half if stderr_text else limit
+        parts.append("error_events=" + redact_secret_text(" | ".join(error_bodies))[:budget])
+    return " ".join(parts)
 
 
 async def handle_stream(request):
@@ -1882,14 +1908,14 @@ async def handle_stream(request):
                     evidence = observation.observe(event)
                     event["aads_model_contract"] = evidence
                     line_to_write = json.dumps(event).encode("utf-8")
-                    if (evt_type == "error" or event.get("error")) and len(cli_error_bodies) < 5:
-                        cli_error_bodies.append(
-                            redact_secret_text(json.dumps(event, ensure_ascii=False))[:400]
-                        )
+                    if len(cli_error_bodies) < 5:
+                        _err_body = _cli_error_body(event)
+                        if _err_body:
+                            cli_error_bodies.append(_err_body)
                     if evt_type == "result":
                         saw_result = True
                         if event.get("is_error"):
-                            last_result_error = redact_secret_text(event.get("result", "CLI error"))
+                            last_result_error = redact_secret_text(_result_error_text(event))
                             event["result"] = last_result_error
                             if (
                                 auth_source == "slot_credentials"

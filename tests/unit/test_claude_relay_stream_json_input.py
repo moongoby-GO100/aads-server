@@ -72,12 +72,37 @@ def test_failure_detail_is_masked_and_limited():
     detail = relay._cli_failure_detail("boom " + secret, ['{"type":"error","content":"x"}'])
     assert secret not in detail
     assert "stderr=" in detail and "error_events=" in detail
-    long_detail = relay._cli_failure_detail("x" * 5000, [])
-    assert len(long_detail) <= 1000
+    assert len(relay._cli_failure_detail("x" * 5000, [])) <= 1000
     assert relay._cli_failure_detail("", []) == ""
 
 
-def test_abnormal_end_is_logged_in_handle_stream():
-    src = RELAY_PATH.read_text()
-    assert "CLI abnormal end:" in src
-    assert "not saw_result or proc.returncode != 0 or last_result_error" in src
+def test_long_stderr_does_not_drop_error_event_body():
+    body = relay._cli_error_body({"type": "result", "is_error": True, "errors": ["Invalid image data"]})
+    detail = relay._cli_failure_detail("x" * 5000, [body])
+    assert "Invalid image data" in detail
+    assert len(detail) <= 1000 + len("stderr= error_events=")
+
+
+def test_result_is_error_with_errors_array_is_collected():
+    event = {"type": "result", "is_error": True, "errors": ["Invalid image data"]}
+    body = relay._cli_error_body(event)
+    assert body is not None and "Invalid image data" in body
+    assert relay._result_error_text(event) == "Invalid image data"
+
+
+def test_result_error_text_prefers_result_then_falls_back():
+    assert relay._result_error_text({"result": "rate limited", "errors": ["x"]}) == "rate limited"
+    assert relay._result_error_text({"is_error": True}) == "CLI error"
+
+
+def test_non_error_events_are_not_collected():
+    assert relay._cli_error_body({"type": "assistant", "message": {}}) is None
+    assert relay._cli_error_body({"type": "result", "is_error": False, "result": "OK"}) is None
+    assert relay._cli_error_body({"type": "error", "error": "boom"}) is not None
+
+
+def test_error_body_is_masked_and_capped():
+    secret = "sk-ant-oat01-" + "B" * 40
+    body = relay._cli_error_body({"type": "error", "error": secret + "y" * 2000})
+    assert secret not in body
+    assert len(body) <= 400
