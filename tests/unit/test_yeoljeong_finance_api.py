@@ -23,6 +23,9 @@ def test_join_request_accepts_contract_autofill_profile():
     assert payload.birth_date == "1990-01-01"
 
 
+LEGACY_OBYS_TENANT = "15055cac-71b0-45ec-b714-7093dde189ff"  # 레거시 게이트 허용 테넌트 — 은행 라우트는 tenant_id 로만 판정한다
+
+
 def _disable_finance_db(coroutine):
     close = getattr(coroutine, "close", None)
     if close:
@@ -601,7 +604,7 @@ def test_bank_account_and_ledger_http_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(api.svc, "UPLOAD_DIR", tmp_path / "uploads" / "onboarding")
     monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
     monkeypatch.setattr(api.svc, "_db_available", lambda: False)
-    admin = {"email": "owner@example.com", "is_admin": True}
+    admin = {"email": "owner@example.com", "is_admin": True, "tenant_id": LEGACY_OBYS_TENANT}
 
     app = FastAPI()
     app.include_router(api.router)
@@ -680,7 +683,7 @@ def test_bank_transaction_multipart_upload_http_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
     monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
     monkeypatch.setattr(api.svc, "_db_available", lambda: False)
-    admin = {"email": "owner@example.com", "is_admin": True}
+    admin = {"email": "owner@example.com", "is_admin": True, "tenant_id": LEGACY_OBYS_TENANT}
     app = FastAPI()
     app.include_router(api.router)
     app.dependency_overrides[api.get_current_user] = lambda: admin
@@ -743,7 +746,7 @@ def test_bank_transaction_multipart_upload_rejects_auth_extension_and_size(tmp_p
     monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
     monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
     monkeypatch.setattr(api.svc, "_db_available", lambda: False)
-    current_user = {"email": "owner@example.com", "is_admin": True}
+    current_user = {"email": "owner@example.com", "is_admin": True, "tenant_id": LEGACY_OBYS_TENANT}
     app = FastAPI()
     app.include_router(api.router)
     app.dependency_overrides[api.get_current_user] = lambda: current_user
@@ -797,7 +800,7 @@ def test_bank_file_upload_ui_uses_multipart_without_reading_excel_as_text():
 def test_bank_account_rejects_extra_sensitive_field(tmp_path, monkeypatch):
     monkeypatch.setattr(api.svc, "DATA_DIR", tmp_path)
     monkeypatch.setattr(api.svc, "_run_db", _disable_finance_db)
-    admin = {"email": "owner@example.com", "is_admin": True}
+    admin = {"email": "owner@example.com", "is_admin": True, "tenant_id": LEGACY_OBYS_TENANT}
 
     app = FastAPI()
     app.include_router(api.router)

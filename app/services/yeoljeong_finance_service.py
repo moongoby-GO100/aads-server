@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import shutil
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -71,6 +72,11 @@ BAEMIN_SECURITY_BLOCK_COOLDOWN_MINUTES = max(
 )
 BAEMIN_SECURITY_BLOCK_CODES = {"BAEMIN_SECURITY_BLOCKED", "PORTAL_BLOCKED", "SECURITY_BLOCKED"}
 CONTRACT_SIGNATURE_CONSENT_VERSION = "yeoljeong-contract-sign-v1"
+try:
+    CONTRACT_SIGN_LINK_TTL_DAYS = max(1, int(os.getenv("OBYS_CONTRACT_SIGN_LINK_TTL_DAYS", "14")))
+except ValueError:
+    CONTRACT_SIGN_LINK_TTL_DAYS = 14
+_CONTRACT_SIGN_LOCK = threading.Lock()
 
 DOCUMENT_TYPES: list[dict[str, str]] = [
     {
@@ -4800,21 +4806,56 @@ def _signing_contract_for_token(rows: list[dict[str, Any]], token: str) -> dict[
 
     토큰이 없거나 다른 테넌트 것이면 존재 여부를 드러내지 않고 똑같이 403.
     """
-    contract = next((row for row in rows if token and row.get("sign_token") == token), None)
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest() if token else ""
+    # 서명 뒤에는 sign_token 이 지워지고 해시만 남는다 — 같은 링크 재제출을 "찾을 수 없음"(403)이 아니라 "이미 서명"(409)으로 알리려고 해시로도 찾는다.
+    contract = next(
+        (row for row in rows if token and (row.get("sign_token") == token or (digest and row.get("sign_token_hash") == digest))),
+        None,
+    )
     if not contract:
         raise HTTPException(status_code=403, detail="서명 요청 계약서를 찾을 수 없거나 접근 권한이 없습니다")
     return contract
 
 
+def _require_sign_link_alive(contract: dict[str, Any]) -> None:
+    requested_at = _pg_ts(contract.get("requested_at"))
+    if requested_at is None:
+        return
+    if datetime.now(KST) - requested_at > timedelta(days=CONTRACT_SIGN_LINK_TTL_DAYS):
+        raise HTTPException(
+            status_code=410,
+            detail=f"서명 링크가 만료되었습니다({CONTRACT_SIGN_LINK_TTL_DAYS}일). 관리자에게 서명 요청을 다시 받으십시오",
+        )
+
+
+def _require_employee_still_approved(contract: dict[str, Any], user: dict[str, Any] | None) -> None:
+    request_id = str(contract.get("employee_request_id") or "").strip()
+    if not request_id:
+        return
+    join = _find(_read_hr("employee_join_requests", user), request_id)
+    if not join or str(join.get("status") or "").strip().lower() != "approved":
+        raise HTTPException(status_code=403, detail="직원 가입 승인이 확인되지 않아 계약서에 서명할 수 없습니다")
+
+
 def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
     contract = _signing_contract_for_token(_read_hr("contracts", user), token)
     _contract_signer_email(contract, user)
+    if str(contract.get("status") or "") == "signed":
+        raise HTTPException(status_code=409, detail="이미 서명 완료된 계약서입니다")
     if str(contract.get("status") or "") != "requested":
         raise HTTPException(status_code=409, detail="서명 요청된 계약서가 아닙니다")
+    _require_employee_still_approved(contract, user)
+    _require_sign_link_alive(contract)
     return contract
 
 
 def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
+    # 더블클릭·두 탭 동시 제출이 둘 다 "requested" 를 읽고 서명본을 두 번 쓰지 못하게 프로세스 안에서 직렬화한다.
+    with _CONTRACT_SIGN_LOCK:
+        return _sign_contract_locked(payload, user)
+
+
+def _sign_contract_locked(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
     token = str(payload.get("token") or "")
     contract = _signing_contract_for_token(_read_hr("contracts", user), token)
     signer_email = _contract_signer_email(contract, user)
@@ -4822,6 +4863,8 @@ def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -
         raise HTTPException(status_code=409, detail="이미 서명 완료된 계약서입니다")
     if str(contract.get("status") or "") != "requested":
         raise HTTPException(status_code=409, detail="서명 요청된 계약서만 서명할 수 있습니다")
+    _require_employee_still_approved(contract, user)
+    _require_sign_link_alive(contract)
     if payload.get("consent") is not True:
         raise HTTPException(status_code=400, detail="계약 내용 확인 및 전자서명 동의가 필요합니다")
     consent_version = str(payload.get("consent_version") or "").strip()

@@ -1218,7 +1218,8 @@ def test_gate_whitelist_is_exact_not_prefix():
 
 def test_signing_lookups_are_bound_to_jwt_tenant():
     """prefix 추가의 전제: 토큰 조회는 _read_hr(테넌트 SQL 스코프) 로만, 레코드는 다시 대조."""
-    for fn in (svc.get_contract_by_token, svc.sign_contract):
+    assert "_sign_contract_locked(payload, user)" in inspect.getsource(svc.sign_contract)
+    for fn in (svc.get_contract_by_token, svc._sign_contract_locked):
         source = inspect.getsource(fn)
         assert '_read_hr("contracts", user)' in source
         assert "_contract_signer_email(contract, user)" in source

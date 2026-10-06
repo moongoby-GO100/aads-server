@@ -2664,8 +2664,11 @@
               <input name="email" type="email" autocomplete="email" required>
             </label>
             <input name="accountType" type="hidden" value="employee">
-            <label>희망 지점
-              <select name="branch"></select>
+            <label>회사(사업자)
+              <select name="businessId" required></select>
+            </label>
+            <label>근무 점포
+              <select name="branch" required></select>
             </label>
             <label>연락처
               <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000">
@@ -2688,8 +2691,8 @@
             <label>초대 토큰
               <input name="token" placeholder="초대 링크의 token 값" required>
             </label>
-            <label>직원 이름
-              <input name="name" autocomplete="name" required>
+            <label>직원 이름(실명)
+              <input name="name" type="text" autocomplete="name" placeholder="주민등록상 실명" required>
             </label>
             <label>비밀번호
               <input name="password" type="password" autocomplete="new-password" minlength="8" required>
@@ -3325,6 +3328,9 @@
                 </label>
                 <label>이메일
                   <input name="email" type="email" placeholder="회원가입 이메일">
+                </label>
+                <label>회사(사업자)
+                  <select name="businessId" required></select>
                 </label>
                 <label>희망 지점
                   <select name="branch" required></select>
@@ -4766,8 +4772,11 @@
             <input name="email" type="email" autocomplete="username" placeholder="user@fb.newtalk.kr" required>
           </label>
           <input name="accountType" type="hidden" value="employee">
-          <label>희망 지점
-            <select name="branch"></select>
+          <label>회사(사업자)
+            <select name="businessId" required></select>
+          </label>
+          <label>근무 점포
+            <select name="branch" required></select>
           </label>
           <label>연락처
             <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000">
@@ -7502,13 +7511,13 @@
         const link = contractSignUrl(item);
         const actions = managerMode ? `
               <button data-preview-contract="${escapeHtml(item.id)}">미리보기</button>
-              ${item.status === "signed" ? `<span class="muted">서명본 수정·삭제 잠금</span>` : `
+              ${item.status === "signed" ? `<button data-download-contract-pdf="${escapeHtml(item.id)}" class="primary">서명본 PDF</button><span class="muted">서명본 수정·삭제 잠금</span>` : `
                 <button data-edit-contract="${escapeHtml(item.id)}">수정</button>
                 <button data-request-contract="${escapeHtml(item.id)}">서명요청</button>
                 ${item.status === "requested" ? `<button data-copy-contract="${escapeHtml(link)}">링크복사</button>` : ""}
                 <button class="icon danger" data-delete-contract="${escapeHtml(item.id)}" title="삭제">-</button>
               `}
-            ` : (employeeMode && item.status === "requested" ? `<button data-sign-contract="${escapeHtml(item.id)}" class="primary">내용 확인·서명</button>` : `<button data-preview-contract="${escapeHtml(item.id)}">미리보기</button>`);
+            ` : (employeeMode && item.status === "requested" ? `<button data-sign-contract="${escapeHtml(item.id)}" class="primary">내용 확인·서명</button>` : `<button data-preview-contract="${escapeHtml(item.id)}">미리보기</button>${item.status === "signed" ? `<button data-download-contract-pdf="${escapeHtml(item.id)}" class="primary">서명본 PDF</button>` : ""}`);
         return `
           <tr>
             <td>${escapeHtml(String(createdAt).slice(0, 10) || "-")}</td>
@@ -8255,11 +8264,55 @@
         closeContractSignModal();
         renderContracts();
         openContractPreviewModal(signed, "전자서명 완료본");
-        showToast("본인 전자서명이 완료됐습니다. 계약서는 수정·삭제할 수 없습니다.");
+        showToast(payload.signed_pdf?.status === "stored"
+          ? "본인 전자서명이 완료됐습니다. 계약 목록의 '서명본 PDF'로 내려받을 수 있습니다."
+          : "본인 전자서명은 완료됐지만 서명본 PDF 준비가 지연됩니다. 잠시 뒤 계약 목록에서 다시 내려받으십시오.");
       } catch (error) {
-        showToast(`계약서 서명 실패: ${error.message}`);
+        if (Number(error?.status) === 401) {
+          // 세션이 만료됐다 — 링크(yf_contract_token)가 주소에 남아 있어 재로그인하면 같은 계약서가 다시 열린다.
+          closeContractSignModal();
+          handleExpiredServerSession();
+          showToast("로그인 세션이 만료되었습니다. 다시 로그인하면 같은 서명 링크가 열립니다. 서명은 아직 제출되지 않았습니다.");
+        } else {
+          showToast(`계약서 서명 실패: ${error.message}`);
+        }
       } finally {
         els.submitContractSignatureBtn.disabled = false;
+      }
+    }
+
+    function handleExpiredServerSession() {
+      clearServerAuthToken();
+      saveAuthSession(null);
+      renderAll();
+      setAuthMode("login");
+    }
+
+    async function downloadSignedContractPdf(contractId, button) {
+      if (button) button.disabled = true;
+      try {
+        const response = await fetch(`/api/v1/yeoljeong-finance/contracts/${encodeURIComponent(contractId)}/signed-pdf`, { headers: apiAuthOnlyHeaders() });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          if (response.status === 401) {
+            handleExpiredServerSession();
+            throw new Error("로그인 세션이 만료되었습니다. 다시 로그인한 뒤 내려받으십시오.");
+          }
+          throw new Error(payload.detail || payload.message || `다운로드 ${response.status}`);
+        }
+        const blob = await response.blob();
+        const disposition = response.headers.get("content-disposition") || "";
+        const filename = decodeURIComponent(disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1] || "계약서_서명본.pdf");
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+        showToast("서명본 PDF를 내려받았습니다.");
+      } finally {
+        if (button) button.disabled = false;
       }
     }
 
@@ -8401,7 +8454,22 @@
       const token = params.get("yf_contract_token") || "";
       if (token) {
         pendingContractSignToken = token;
-        const payload = await financeApi(`/contracts/signing/${encodeURIComponent(token)}`);
+        if (!hasServerAuth()) {
+          setAuthMode("login");
+          showToast("계약서 서명은 직원 본인 로그인이 필요합니다. 로그인하면 이 계약서가 열립니다.");
+          return;
+        }
+        let payload;
+        try {
+          payload = await financeApi(`/contracts/signing/${encodeURIComponent(token)}`);
+        } catch (error) {
+          if (Number(error?.status) === 401) {
+            handleExpiredServerSession();
+            showToast("로그인 세션이 만료되었습니다. 다시 로그인하면 이 계약서가 열립니다.");
+            return;
+          }
+          throw error;
+        }
         const contract = payload.contract;
         state.contracts = [contract, ...(state.contracts || []).filter(item => item.id !== contract.id)];
         saveState();
@@ -10681,6 +10749,19 @@
       applyAccessPolicy();
     }
 
+    // 가입 폼의 점포 목록은 선택한 회사(사업자)의 점포만 보여준다. 점포가 없는 사업자는 사업자명이 곧 매장이다.
+    function syncSignupBranchSelects() {
+      [els.gateSignupForm, els.signupForm, els.employeeJoinRequestForm].forEach(form => {
+        if (!form?.businessId || !form?.branch) return;
+        const businessId = form.businessId.value;
+        const names = activeBranches().filter(item => !businessId || item.businessId === businessId).map(item => item.name);
+        const options = names.length ? names : (businessId ? [businessName(businessId)] : []);
+        const current = form.branch.value;
+        form.branch.innerHTML = options.map(item => `<option>${escapeHtml(item)}</option>`).join("");
+        if (options.includes(current)) form.branch.value = current;
+      });
+    }
+
     function initSelects() {
       const selected = els.branchFilter.value || "전체";
       const branchNames = activeBranches().map(item => item.name);
@@ -10703,6 +10784,7 @@
         if (settings().businesses.some(item => item.id === current)) select.value = current;
         else if (settings().businesses.some(item => item.id === selectedBusiness)) select.value = selectedBusiness;
       });
+      syncSignupBranchSelects();
       document.querySelectorAll('select[name="documentType"]').forEach(select => {
         const current = select.value;
         select.innerHTML = onboardingDocumentTypes.map(item => `<option value="${escapeHtml(item.type)}">${escapeHtml(item.label)} · ${escapeHtml(item.requirement)}</option>`).join("");
@@ -11019,7 +11101,11 @@
         headers: { ...apiHeaders(), ...(options.headers || {}) }
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.detail || payload.message || `AUTH ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(payload.detail || payload.message || `AUTH ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
       return payload;
     }
 
@@ -11553,6 +11639,16 @@
         if (els.gateSignupForm?.name && !els.gateSignupForm.name.value) els.gateSignupForm.name.value = pendingPhoneInvite.name;
         if (els.signupForm?.name && !els.signupForm.name.value) els.signupForm.name.value = pendingPhoneInvite.name;
       }
+      [els.gateSignupForm, els.signupForm].forEach(form => {
+        if (!form?.businessId) return;
+        const inviteBusinessId = pendingPhoneInvite?.business_id || "";
+        if (inviteBusinessId && [...form.businessId.options].some(option => option.value === inviteBusinessId)) form.businessId.value = inviteBusinessId;
+      });
+      syncSignupBranchSelects();
+      [els.gateSignupForm, els.signupForm].forEach(form => {
+        const inviteBranch = pendingPhoneInvite?.targets?.[0]?.branch || pendingPhoneInvite?.branch || "";
+        if (form?.branch && inviteBranch && [...form.branch.options].some(option => option.value === inviteBranch)) form.branch.value = inviteBranch;
+      });
       if (els.employeeJoinRequestForm) {
         if (pendingPhoneInvite?.name) els.employeeJoinRequestForm.name.value = pendingPhoneInvite.name;
         if (pendingPhoneInvite?.phone) els.employeeJoinRequestForm.phone.value = pendingPhoneInvite.phone;
@@ -11632,6 +11728,10 @@
         showToast("초대 토큰과 비밀번호를 입력하십시오.");
         return;
       }
+      if (!form.name.value.trim()) {
+        showToast("직원 이름(실명)을 입력하십시오.");
+        return;
+      }
       const payload = await authApi("/invites/accept", {
         method: "POST",
         body: JSON.stringify({
@@ -11656,6 +11756,7 @@
       const body = {
         name: form.name.value.trim(),
         email: form.email.value.trim() || user.email || "",
+        business_id: form.businessId?.value || "",
         branch: form.branch.value,
         phone: form.phone.value.trim(),
         address: form.address.value.trim(),
@@ -11985,6 +12086,7 @@
       const password = String(formData.password || "");
       const passwordConfirm = String(formData.passwordConfirm || "");
       const accountType = String(formData.accountType || "employee").trim();
+      const businessId = String(formData.businessId || "").trim();
       const branch = String(formData.branch || "").trim();
       const phone = String(formData.phone || "").trim();
       const address = String(formData.address || "").trim();
@@ -11993,25 +12095,65 @@
       if (password !== passwordConfirm) {
         throw new Error("비밀번호 확인이 일치하지 않습니다.");
       }
-	      const payload = await authApi("/register", {
-	        method: "POST",
-	        body: JSON.stringify({
-	          email,
-	          password,
-	          name,
-	          organization_name: organizationName || "열정국밥 운영관리"
-	        })
-	      });
+      // 초대 링크로 들어온 가입은 회사·점포를 초대가 정한다. 그 밖의 직원 가입은 회사와 점포를 직접 고르게 한다.
+      if (accountType === "employee" && !pendingPhoneInviteToken) {
+        if (!businessId) throw new Error("회사(사업자)를 선택해 주십시오.");
+        if (!branch) throw new Error("근무 점포를 선택해 주십시오.");
+      }
+      const selectedBusinessName = businessId ? businessName(businessId) : "";
+      let payload;
+      try {
+        payload = await authApi("/register", {
+          method: "POST",
+          body: JSON.stringify({
+            email,
+            password,
+            name,
+            organization_name: (accountType === "employee" && selectedBusinessName && selectedBusinessName !== "미지정" ? selectedBusinessName : organizationName) || "열정국밥 운영관리"
+          })
+        });
+      } catch (err) {
+        if (Number(err?.status) === 409) {
+          setAuthMode("login");
+          els.gateLoginForm?.querySelector("input[name='email']")?.focus();
+          if (els.gateLoginForm?.email) els.gateLoginForm.email.value = email;
+          throw new Error("이미 가입된 이메일입니다. 로그인해서 가입요청 상태를 확인하십시오.");
+        }
+        throw err;
+      }
 	      persistServerAuthToken(payload.token);
 	      saveAuthSession(sessionFromAuthPayload(payload));
 	      if (accountType === "employee") {
-	        markEmployeeSelfSignup(email, { name, branch, phone, address, birthDate, nationality });
+	        markEmployeeSelfSignup(email, { name, businessId, branch, phone, address, birthDate, nationality });
 	        let joinRequest = null;
-	        if (pendingPhoneInviteToken) {
-	          const accepted = await acceptPendingPhoneInvite(name);
-	          joinRequest = accepted?.request || null;
-	        } else {
-	          joinRequest = await submitEmployeeSignupJoinRequest({ name, email, branch, phone, address, birthDate, nationality });
+	        try {
+	          if (pendingPhoneInviteToken) {
+	            const accepted = await acceptPendingPhoneInvite(name);
+	            joinRequest = accepted?.request || null;
+	          } else {
+	            joinRequest = await submitEmployeeSignupJoinRequest({ name, email, businessId, branch, phone, address, birthDate, nationality });
+	          }
+	        } catch (joinError) {
+	          // 계정은 이미 만들어졌다 — 같은 폼을 다시 제출하면 "이미 등록된 이메일"로 막히므로, 로그인 상태로 가입요청 화면에 남겨 거기서 다시 보내게 한다.
+	          await refreshFinanceSession().catch(() => {});
+	          forceEmployeePendingSession(email, { status: "pending", name, branch, phone });
+	          renderAuthState();
+	          els.signupModal.classList.add("hidden");
+	          els.signupForm.reset();
+	          els.gateSignupForm.reset();
+	          initSelects();
+	          setView("employees");
+	          prefillEmployeeJoinForm();
+	          const joinForm = els.employeeJoinRequestForm;
+	          if (joinForm) {
+	            joinForm.name.value = name;
+	            if (joinForm.businessId && businessId) joinForm.businessId.value = businessId;
+	            syncSignupBranchSelects();
+	            if (branch) joinForm.branch.value = branch;
+	            if (phone) joinForm.phone.value = phone;
+	          }
+	          showToast(`계정은 만들어졌지만 가입요청 전송에 실패했습니다(${joinError.message}). 직원 가입요청 화면에서 다시 보내십시오.`);
+	          return;
 	        }
 	        await refreshFinanceSession();
 	        forceEmployeePendingSession(email, joinRequest || { status: "pending", name, branch, phone, address, birth_date: birthDate, nationality });
@@ -12034,6 +12176,7 @@
       els.gateSignupForm.reset();
       els.gateSignupForm.organizationName.value = "열정국밥 운영관리";
       if (els.gateSignupForm.nationality) els.gateSignupForm.nationality.value = "대한민국";
+      syncSignupBranchSelects();
 	      loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
 	      loadTenantList().catch(() => {});
 	      if (canManageAutomation()) refreshServerAccounts().catch(() => {});
@@ -12047,13 +12190,14 @@
       loadDeliveryLedgers({ silent: true }).catch(() => {});
     }
 
-    async function submitEmployeeSignupJoinRequest({ name, email, branch, phone, address, birthDate, nationality }) {
+    async function submitEmployeeSignupJoinRequest({ name, email, businessId, branch, phone, address, birthDate, nationality }) {
       if (!hasServerAuth()) return null;
       const payload = await financeApi("/employees/join-requests", {
         method: "POST",
         body: JSON.stringify({
           name,
           email,
+          business_id: businessId || "",
           branch,
           phone,
           address,
@@ -13352,6 +13496,9 @@
         loginToServer(String(data.email || "").trim(), String(data.password || ""))
           .catch(err => showToast(`로그인 실패: ${err.message}`));
       });
+      [els.gateSignupForm, els.signupForm, els.employeeJoinRequestForm].forEach(form => {
+        form?.businessId?.addEventListener("change", syncSignupBranchSelects);
+      });
       els.gateSignupForm.addEventListener("submit", event => {
         event.preventDefault();
         const data = Object.fromEntries(new FormData(els.gateSignupForm).entries());
@@ -14056,6 +14203,7 @@
         const onboardingReviewStatus = event.target.dataset.reviewStatus;
         const editContractId = event.target.dataset.editContract;
         const previewContractId = event.target.dataset.previewContract;
+        const downloadContractPdfId = event.target.dataset.downloadContractPdf;
         const requestContractId = event.target.dataset.requestContract;
         const copyContract = event.target.dataset.copyContract;
         const signContractId = event.target.dataset.signContract;
@@ -14140,6 +14288,9 @@
         if (editContractId) {
           const contract = (state.contracts || []).find(item => item.id === editContractId);
           if (contract) fillContractForm(contract);
+        }
+        if (downloadContractPdfId) {
+          downloadSignedContractPdf(downloadContractPdfId, event.target).catch(err => showToast(`서명본 PDF 실패: ${err.message}`));
         }
         if (previewContractId) {
           const contract = (state.contracts || []).find(item => item.id === previewContractId);
