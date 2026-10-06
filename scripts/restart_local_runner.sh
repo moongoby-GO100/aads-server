@@ -81,6 +81,12 @@ if should_defer_for_processes "$process_state"; then
     exit 3
 fi
 
+maintenance_state=$(runner_maintenance_metadata preflight /run/aads-runner-maintenance "$SERVICE") || maintenance_state=UNKNOWN
+if [[ "$maintenance_state" != AWARE ]]; then
+    log "재시작 보류 — BOOTSTRAP_REQUIRED: legacy/unknown actor cannot honor maintenance leases"
+    exit 3
+fi
+
 host_name=$(local_runner_host_name)
 busy_count=$(db_active_job_count "$host_name")
 service_state=$(systemctl is-active "$SERVICE" 2>/dev/null || true)
@@ -98,6 +104,13 @@ if [[ "$DRY_RUN" == "1" ]]; then
     exit 0
 fi
 
-systemctl restart "$SERVICE"
+restart_under_maintenance() {
+    local restart_plan
+    restart_plan=$(runner_maintenance_metadata restart-plan /run/aads-runner-maintenance "$SERVICE") || return 1
+    systemctl restart "$SERVICE" || return 1
+    systemctl is-active "$SERVICE" || return 1
+    [[ "$(runner_maintenance_metadata restart-verify /run/aads-runner-maintenance "$SERVICE" "$restart_plan")" == AWARE ]]
+}
+runner_maintenance_transaction "$SERVICE" 30 /run/aads-runner-maintenance restart_under_maintenance || exit "$?"
 sleep 3
 log "재시작 완료 — state=$(systemctl is-active "$SERVICE" 2>/dev/null || true) pid=$(systemctl show -p MainPID --value "$SERVICE" 2>/dev/null || true)"

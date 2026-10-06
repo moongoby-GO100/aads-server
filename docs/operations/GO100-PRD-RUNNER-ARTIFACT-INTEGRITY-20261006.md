@@ -37,3 +37,98 @@ API와 실제 host Runner는 서로 다른 적용 대상이다. 정확한 releas
 추가 guard는 공용 `runner_busy_lib.sh`의 stdlib probe를 SSH stdin으로 전달한다. `/proc`의 실제 cwd(삭제 표기 포함), MainPID 자손, 서비스 cgroup을 함께 조회하고 작업자가 있거나 조회가 불완전하면 설치·재시작을 미룬다. DB terminal, inactive 상태, `--ignore-busy`도 이 프로세스 확인을 우회하지 못한다. 로컬 재시작 래퍼에도 같은 계약을 적용한다. 명확한 작업자 부재만 기존 DB 판정에 넘기며, 유휴 polling 자식까지 보수적으로 defer할 수 있다.
 
 이 관측은 claim과 restart 사이의 atomic lease가 아니다. 기존 capacity flock은 일부 queued claim에만 적용되며 동기화·승인·반려 복구와 공유하지 않는다. 관측 직후 새 claim이 발생하는 경합은 남아 있다. 전체 유지보수/claim 직렬화와 실제 작업자 drain이 검증될 때까지 이 추가 commit도 main 게시·자동 runtime 적용 완료로 보고하지 않는다. 테스트는 실제 임시 PID와 삭제 cwd, cgroup/권한 오류 fixture, 실제 Bash 설치·재시작 gate를 검증하며 운영 프로세스를 중단하지 않는다.
+
+## Host maintenance protocol v1 — source candidate, runtime held
+
+The earlier `6fa7b22a` process/DB observation guard remains a conservative prefilter.
+An idle observation is insufficient: a claim can begin immediately afterwards.
+The new mandatory host protocol closes that gap for enrolled protocol-aware
+Runner actors. It does not automatically bootstrap an existing legacy daemon.
+
+Both general and LiteLLM engines use stable, root-owned files under
+`/run/aads-runner-maintenance`. Lock files must never be unlinked while actors
+are alive. Admission and lifetime locks are always acquired in that order.
+
+1. Before credentials or startup DB recovery, the daemon acquires admission SH,
+   then lifetime SH on FD 200, and closes admission. Every background worker and
+   normal CLI descendant inherits lifetime ownership. This covers queued,
+   approved, rejected and review-hold recovery claims, startup/periodic recovery,
+   watchdog operations and shutdown handling for the daemon's entire lifetime.
+2. A controller verifies actual PID, boot ID, start ticks, Bash source FD 255,
+   lifetime FD/inode/READ lock, service startup path, and capability. It takes
+   admission EX; this lock itself is the drain signal. The current daemon
+   iteration may still claim before its next checkpoint; lifetime SH continues
+   protecting those workers. The actual no-worker install boundary is lifetime
+   EX, not the instant admission EX is acquired. No persisted drain flag,
+   wall-clock expiry or stale-owner override can release a live actor's lease.
+3. At its next checkpoint the daemon stops new claims and waits for tracked
+   workers to finish. It records QUIESCENT, closes only its own FD 200 and waits
+   for admission again. It stays alive: exiting under `KillMode=control-group`
+   could kill orphan workers. It never calls shutdown requeue or sends signals
+   as part of cooperative drain. Descendants retaining FD 200 still block EX.
+4. The controller must acquire lifetime EX and then check actual proc/cgroup
+   membership again. Only a verified quiescent MainPID and its exact admission
+   `flock -s 201` control waiter are exempt; a process name alone is insufficient.
+   A worker that dropped its inherited FD, an orphan/deleted cwd, an unknown
+   member or incomplete observation still defers. A timeout releases admission
+   and lets the daemon resume; it cannot force worker termination.
+5. Remote sync stages one checksum-pinned bundle. One remote Bash transaction
+   owns both EX locks through validation, atomic file replacement, optional
+   daemon-reload and service restart. Before restart it pins the previous PID
+   and installed source/helper hashes. While both EX locks remain held, success
+   requires a different MainPID in WAIT_ADMISSION with exact boot/start identity,
+   source FD 255 hash, helper hash and admission FD 201. systemctl is-active alone
+   cannot certify startup. Verification failure returns failure without any
+   forced kill or DB requeue. Per-file SCP followed by independent SSH
+   install/restart is removed. Runner backups are retained by bundle hash;
+   interrupted file application restores completed replacements while the
+   lease is still held. An apply child inherits the controller's EX descriptors,
+   so losing the controlling shell cannot expose an in-progress install.
+6. Local restart and `safe_runner_restart_once.sh` use the same transaction.
+   Self-reload is disabled while protocol v1 is active; updates use the verified
+   controller path. Source fingerprints describe the running script inode,
+   not a newly replaced pathname. `--no-restart` remains a source-only install;
+   it is not evidence that the running daemon uses the new source.
+
+The existing prefilter may defer on a live polling child or any active DB job.
+This patch does not change that conservative admission policy: the lease handles
+claims/workers that begin after those observations. It does not promise immediate
+maintenance admission or proactively interrupt work to obtain a drain window.
+
+### Bootstrap and acceptance boundary
+
+Repository investigation found no enabled/drain/accepting-jobs control in
+`pipeline_runner_hosts` or its status API. `owner_pause` gates goal dispatch,
+not host claim SQL. Environment files are loaded at daemon start. FD 9 is a
+legacy lifetime singleton, not a pause handshake; the optional FD 8 capacity
+lock covers only queued claim SQL. The actual old claim function still reaches
+its DB boundary while both proposed maintenance locks are exclusively held.
+
+Active legacy actors without a valid capability return BOOTSTRAP_REQUIRED.
+Inactive/failed legacy services also defer unless a prior protocol actor enrolled
+that exact service and the installed source/helper hashes and ExecStart still
+match. Inactive observation alone cannot prevent a concurrent legacy startup.
+The enrollment and capability directory is host-root trusted metadata, not a
+cryptographic authentication boundary against a malicious root administrator.
+
+No automatic override is supplied. The initial transition requires a separately
+authorized operational mechanism that prevents all legacy claims before stopping
+or replacing the daemon. This source change does not establish that mechanism,
+stop timers, signal production processes, change job status, push main or apply
+runtime. These remain explicit release blockers. All normal automated restart
+entrypoints in this repository are enrolled; arbitrary direct administrative
+`systemctl` calls must not bypass the protocol.
+
+API-owned SSH-detached work (`runner_host IS NULL`) and distributed attempt/SHA
+CAS remain separate ownership work. The CLI auto-updater already calls the local
+restart wrapper, but its preceding service drop-in write is a separate
+configuration-install boundary, not covered by this Runner bundle transaction.
+
+Tests use actual local Bash, flock locks, temporary PID descendants and real
+script/fd identities. Synthetic systemctl/proc membership substitutes only the
+host service boundary. The export fixture runs actual checksum/atomic-install
+code and asserts both EX locks are held during its single apply SSH. Historical
+359-test integration and 100-test observation-guard hook runs overlap; they must
+not be added to the new run as unique acceptance cases. Runtime/full PRD
+acceptance remains incomplete until the independently reviewed source, initial
+bootstrap and deployed actor ownership evidence are all verified.

@@ -45,28 +45,53 @@ GIT_ENV = {
 }
 
 # 원격 호스트 흉내 — $FAKE_REMOTE 디렉터리가 호스트 파일시스템이다(basename 으로 키).
-_FAKE_SSH = r"""#!/usr/bin/env bash
-host="${@: -2:1}"; cmd="${@: -1}"
-echo "SSH $cmd" >> "$FAKE_LOG"
-case "$cmd" in
-    # This source-export fixture has no live workers; process observation has
-    # separate real-PID regression coverage.
-    "bash -s -- "*) cat >/dev/null; echo IDLE ;;
-    *"hostname -s"*) echo "$host" ;;
-    *"systemctl is-active"*) echo active ;;
-    sha256sum*)
-        path=$(sed -n "s/^sha256sum '\([^']*\)'.*/\1/p" <<<"$cmd")
-        f="$FAKE_REMOTE/$(basename "$path")"
-        [[ -f "$f" ]] && sha256sum "$f" | awk '{print $1}'
-        ;;
-    install\ *)
-        if [[ "$cmd" =~ install\ -m\ \'?[0-9]+\'?\ \'([^\']+)\'\ \'([^\']+)\' ]]; then
-            cp "$FAKE_REMOTE/staged/$(basename "${BASH_REMATCH[1]}")" "$FAKE_REMOTE/$(basename "${BASH_REMATCH[2]}")"
-            echo "INSTALL $(basename "${BASH_REMATCH[2]}")" >> "$FAKE_LOG"
-        fi
-        ;;
-esac
-exit 0
+_FAKE_SSH = r"""#!/usr/bin/env python3
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+host, command = sys.argv[-2:]
+remote=Path(os.environ['FAKE_REMOTE'])
+with open(os.environ['FAKE_LOG'],'a') as log: log.write('SSH '+command+'\n')
+parts=shlex.split(command)
+if parts[:3]==['bash','-s','--']:
+    payload=sys.stdin.read()
+    if 'runner_apply_bundle ()' not in payload and 'runner_apply_bundle()' not in payload:
+        print('AWARE' if 'runner_maintenance_metadata preflight' in payload else 'IDLE')
+        sys.exit(0)
+    # Export/provenance fixture: service membership is synthetic. Execute the
+    # actual Bash transaction, real flock locks, checksum checks and installs.
+    # Full PID/capability behavior has separate real-process protocol regressions.
+    arguments=parts[3:]
+    arguments[1]=str(remote/'staged'/Path(arguments[1]).name)
+    state=remote/'.maintenance'
+    payload=payload.replace('/run/aads-runner-maintenance',str(state))
+    definitions, invocation=payload.rstrip('\n').rsplit('\n',1)
+    boundary='''
+runner_maintenance_metadata init "$FIXTURE_STATE" || exit 1
+runner_maintenance_metadata() { printf AWARE; }
+eval "$(declare -f runner_apply_bundle | sed '1s/runner_apply_bundle/actual_apply_bundle/')"
+runner_apply_bundle() {
+    if flock -n -x "$FIXTURE_STATE/admission.lock" true; then return 96; fi
+    if flock -n -x "$FIXTURE_STATE/lifetime.lock" true; then return 97; fi
+    printf 'LEASE_HELD admission+lifetime\\n' >> "$FAKE_LOG"
+    actual_apply_bundle "$@"
+}
+systemctl() { printf 'SYSTEMCTL %s\\n' "$*" >> "$FAKE_LOG"; printf active; }
+'''
+    result=subprocess.run(['bash','-s','--',*arguments],input=definitions+'\n'+boundary+'\n'+invocation,
+                          text=True,env={**os.environ,'FIXTURE_STATE':str(state)})
+    sys.exit(result.returncode)
+if 'hostname -s' in command:
+    print(host)
+elif 'systemctl is-active' in command:
+    print('active')
+elif parts and parts[0]=='sha256sum':
+    path=remote/Path(parts[1]).name
+    if path.is_file():
+        import hashlib
+        print(hashlib.sha256(path.read_bytes()).hexdigest())
 """
 
 _FAKE_SCP = r"""#!/usr/bin/env bash
@@ -150,6 +175,7 @@ class Fixture:
     def preload_remote_with_origin_main(self) -> None:
         names = {
             "pipeline-runner.sh": self.runner_v2,
+            "runner_busy_lib.sh": (ROOT / "scripts/runner_busy_lib.sh").read_bytes(),
             "claude_model_contract.py": (ROOT / "scripts/claude_model_contract.py").read_bytes(),
             "aag-brief.py": (ROOT / "tools/aag/brief.py").read_bytes(),
             "runner_cli_usage.py": (ROOT / "scripts/runner_cli_usage.py").read_bytes(),
@@ -175,7 +201,7 @@ class Fixture:
             "AADS_RUNNER_SYNC_EXPORT_BASE": str(self.export_base),
             "AADS_RUNNER_SYNC_LOCK": str(self.tmp / "sync.lock"),
             "AADS_RUNNER_SYNC_FAIL_STATE": str(self.tmp / "fail-count"),
-            "AADS_RUNNER_SYNC_TARGETS": "hostA|hostA|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service|/nonexistent.service",
+            "AADS_RUNNER_SYNC_TARGETS": f"hostA|hostA|{self.remote}/pipeline-runner.sh|aads-pipeline-runner.service|/nonexistent.service",
             **(extra_env or {}),
         }
         return subprocess.run(["bash", str(script), *args], capture_output=True, text=True, env=env, timeout=120)
@@ -205,10 +231,15 @@ def test_installs_origin_main_not_the_dirty_stale_shared_checkout(tmp_path):
     assert f"source={fx.origin_sha}" in proc.stdout
     # 러너와 같은 디렉터리에 회수 스크립트도 함께 설치된다 (contabo14 에 없어 회수가 멈췄던 결함)
     assert (fx.remote / "reclaim_runner_worktrees.sh").read_bytes() == (ROOT / "scripts/reclaim_runner_worktrees.sh").read_bytes()
-    # scp 로 올린 원본은 export 경로(공유 체크아웃 밖)에서 왔다
+    # One checksum-pinned bundle replaces per-file SCP; installed bytes above
+    # prove they came from origin/main, while the shared checkout stays untouched.
     scp_sources = [ln.split(" ", 1)[1] for ln in fx.log_lines() if ln.startswith("SCP ")]
     assert scp_sources
-    assert all(str(fx.export_base) in src and str(fx.shared) not in src for src in scp_sources)
+    assert len(scp_sources) == 1
+    assert fx.log_lines().count("LEASE_HELD admission+lifetime") == 1
+    applies = [line for line in fx.log_lines() if line.startswith("SSH bash -s --") and ".tar'" in line]
+    assert len(applies) == 1  # Both real EX leases span every install in one SSH.
+    assert all("aads-runner-bundle." in src and str(fx.shared) not in src for src in scp_sources)
     # 임시 export 는 끝나면 사라진다
     assert list(fx.export_base.iterdir()) == []
     # 공유 체크아웃의 작업본·HEAD·index·stash·worktree 는 그대로다

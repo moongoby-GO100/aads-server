@@ -187,165 +187,249 @@ is_skip_target() {
     return 1
 }
 
-install_remote_file() {
-    local name="$1" host="$2" src="$3" dest="$4" mode="$5"
-    local tmp="/tmp/$(basename "$dest").aads-sync.$$"
-
-    if [[ "$DRY_RUN" == "1" ]]; then
-        log "DRY_RUN ${name}: would copy ${src} -> ${host}:${dest}"
-        return 0
-    fi
-
-    scp_put "$src" "$host" "$tmp"
-    ssh_run "$host" "install -m '$mode' '$tmp' '$dest' && rm -f '$tmp'"
+remote_runner_maintenance_state() {
+    local host="$1" service="$2" payload state=""
+    [[ "$service" =~ ^[A-Za-z0-9_.@:-]+$ ]] || { printf UNKNOWN; return 0; }
+    payload="$(declare -f runner_maintenance_metadata)"$'\n''runner_maintenance_metadata preflight /run/aads-runner-maintenance "$1"'
+    state=$(ssh "${SSH_OPTS[@]}" "$host" "bash -s -- '$service'" <<< "$payload" 2>/dev/null) || state="UNKNOWN"
+    [[ "$state" == AWARE ]] && printf AWARE || printf BOOTSTRAP_REQUIRED
 }
 
-sync_remote_file_if_changed() {
-    local name="$1" host="$2" src="$3" dest="$4" mode="$5"
-    local local_sha remote_current_sha remote_installed_sha
-    local_sha=$(sha256_file "$src")
-    remote_current_sha=$(remote_sha "$host" "$dest" | tr -d '[:space:]')
-    if [[ "$remote_current_sha" == "$local_sha" ]]; then
-        log "${name}: already synced ${dest}"
-        return 1
-    fi
+# Executed on the target host, with both maintenance EX leases inherited.
+# Only regular, checksum-pinned bundle members are accepted. All active paths
+# change in this one process; there is no SCP/install/restart lease gap.
+runner_apply_bundle() {
+    local service="$1" archive="$2" expected="$3" remote_runner="$4" restart="$5"
+    local changed restart_required restart_plan
+    read -r changed restart_required < <(python3 - "$archive" "$expected" "$remote_runner" "$service" <<'PY_RUNNER_BUNDLE'
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
 
-    install_remote_file "$name" "$host" "$src" "$dest" "$mode"
-    remote_installed_sha=$(remote_sha "$host" "$dest" | tr -d '[:space:]')
-    if [[ "$DRY_RUN" != "1" && "$remote_installed_sha" != "$local_sha" ]]; then
-        echo "ERROR: ${name} installed hash mismatch for ${dest}: ${remote_installed_sha:-missing} != ${local_sha}" >&2
-        return 2
+archive, expected, runner, service = sys.argv[1:]
+runner = Path(runner)
+if not runner.is_absolute() or '..' in runner.parts:
+    raise SystemExit('invalid runner destination')
+if hashlib.sha256(Path(archive).read_bytes()).hexdigest() != expected:
+    raise SystemExit('bundle hash mismatch')
+allowed = {str(runner), *(str(runner.parent / name) for name in (
+    'runner_busy_lib.sh', 'claude_model_contract.py', 'runner_cli_usage.py',
+    'reclaim_runner_worktrees.sh', 'aag-brief.py')), '/etc/systemd/system/' + service}
+with tempfile.TemporaryDirectory(prefix='aads-runner-apply-') as directory:
+    staging = Path(directory)
+    with tarfile.open(archive, 'r') as bundle:
+        members = bundle.getmembers()
+        if any(not member.isfile() or '/' in member.name or member.name in ('.', '..') for member in members):
+            raise SystemExit('unsafe bundle member')
+        if len({member.name for member in members}) != len(members):
+            raise SystemExit('duplicate bundle member')
+        manifest = json.load(bundle.extractfile('manifest.json'))
+        if set(manifest) != {'files'} or not isinstance(manifest['files'], list):
+            raise SystemExit('invalid bundle manifest')
+        entries = manifest['files']
+        if {member.name for member in members} != {'manifest.json', *(row['member'] for row in entries)}:
+            raise SystemExit('unexpected bundle member')
+        if len({row['destination'] for row in entries}) != len(entries):
+            raise SystemExit('duplicate destination')
+        prepared = []
+        for index, row in enumerate(entries):
+            if set(row) != {'member', 'destination', 'sha256', 'mode', 'restart'}:
+                raise SystemExit('invalid bundle row')
+            if row['destination'] not in allowed or row['mode'] not in (0o644, 0o755):
+                raise SystemExit('unapproved bundle destination/mode')
+            data = bundle.extractfile(row['member']).read()
+            if hashlib.sha256(data).hexdigest() != row['sha256']:
+                raise SystemExit('member hash mismatch')
+            staged = staging / str(index)
+            staged.write_bytes(data)
+            if row['destination'].endswith('.sh'):
+                subprocess.run(['bash', '-n', str(staged)], check=True)
+            target = Path(row['destination'])
+            if target.is_symlink():
+                raise SystemExit('symlink destination')
+            if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() == row['sha256']:
+                continue
+            prepared.append((row, staged, target))
+    applied = []
+    try:
+        for index, (row, staged, target) in enumerate(prepared):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            backup = staging / ('backup-' + str(index))
+            existed = target.exists()
+            if existed:
+                shutil.copy2(target, backup)
+                if target == runner:
+                    retained = target.with_name(target.name + '.bak.maintenance.' + expected[:12])
+                    if retained.is_symlink():
+                        raise RuntimeError('symlink backup')
+                    if not retained.exists():
+                        shutil.copy2(target, retained)
+            fd, temporary = tempfile.mkstemp(prefix='.' + target.name + '.maintenance-', dir=target.parent)
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(staged.read_bytes())
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.chmod(temporary, row['mode'])
+                os.replace(temporary, target)  # Existing Bash inode remains intact.
+                applied.append((target, backup, existed))
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+            if hashlib.sha256(target.read_bytes()).hexdigest() != row['sha256']:
+                raise RuntimeError('installed hash mismatch')
+    except BaseException:
+        for target, backup, existed in reversed(applied):
+            if existed:
+                fd, restore = tempfile.mkstemp(prefix='.' + target.name + '.restore-', dir=target.parent)
+                os.close(fd)
+                try:
+                    shutil.copy2(backup, restore)
+                    os.replace(restore, target)
+                finally:
+                    Path(restore).unlink(missing_ok=True)
+            else:
+                target.unlink(missing_ok=True)
+        raise
+    print(int(bool(prepared)), int(any(row['restart'] for row, _, _ in prepared)))
+PY_RUNNER_BUNDLE
+    ) || return 1
+    [[ "$changed" =~ ^[01]$ && "$restart_required" =~ ^[01]$ ]] || return 1
+    if [[ "$restart" == 1 && "$restart_required" == 1 ]]; then
+        systemctl daemon-reload || return 1
+        restart_plan=$(runner_maintenance_metadata restart-plan /run/aads-runner-maintenance "$service") || return 1
+        systemctl restart "$service" || return 1
+        systemctl is-active "$service" || return 1
+        [[ "$(runner_maintenance_metadata restart-verify /run/aads-runner-maintenance "$service" "$restart_plan")" == AWARE ]] || return 1
     fi
-    return 0
+    printf 'MAINTENANCE_APPLIED changed=%s restart=%s\n' "$changed" "$restart_required"
+}
+
+make_runner_bundle() {
+    local archive="$1" remote_runner="$2" service="$3" service_unit="$4"
+    python3 - "$archive" "$remote_runner" "$service" "$service_unit" "$CANONICAL_RUNNER" "$SCRIPT_DIR" "$REPO_ROOT" "$SYNC_REMOTE_UNITS" <<'PY_RUNNER_BUNDLE_CREATE'
+import hashlib
+import io
+import json
+from pathlib import Path
+import sys
+import tarfile
+archive, runner, service, unit, canonical, script_dir, repo, units = sys.argv[1:]
+script_dir, directory = Path(script_dir), Path(runner).parent
+rows = [(script_dir / 'runner_busy_lib.sh', directory / 'runner_busy_lib.sh', 0o644, True),
+        (script_dir / 'claude_model_contract.py', directory / 'claude_model_contract.py', 0o644, True),
+        (Path(repo) / 'tools/aag/brief.py', directory / 'aag-brief.py', 0o644, False),
+        (script_dir / 'runner_cli_usage.py', directory / 'runner_cli_usage.py', 0o644, False)]
+reclaim = script_dir / 'reclaim_runner_worktrees.sh'
+if reclaim.is_file():
+    rows.append((reclaim, directory / reclaim.name, 0o755, False))
+rows.append((Path(canonical), Path(runner), 0o755, True))
+if units == '1':
+    rows.append((Path(unit), Path('/etc/systemd/system') / service, 0o644, True))
+manifest = []
+with tarfile.open(archive, 'w') as bundle:
+    for index, (source, destination, mode, restart) in enumerate(rows):
+        data = source.read_bytes()
+        member = 'file-' + str(index)
+        info = tarfile.TarInfo(member); info.size = len(data); info.mode = 0o600
+        bundle.addfile(info, io.BytesIO(data))
+        manifest.append(dict(member=member, destination=str(destination), mode=mode, restart=restart,
+                             sha256=hashlib.sha256(data).hexdigest()))
+    data = json.dumps(dict(files=manifest), sort_keys=True).encode()
+    info = tarfile.TarInfo('manifest.json'); info.size = len(data); info.mode = 0o600
+    bundle.addfile(info, io.BytesIO(data))
+PY_RUNNER_BUNDLE_CREATE
+}
+
+runner_bundle_matches_remote() {
+    local archive="$1" host="$2" rows destination expected actual
+    rows=$(python3 - "$archive" <<'PY_RUNNER_BUNDLE_COMPARE'
+import json
+import sys
+import tarfile
+with tarfile.open(sys.argv[1]) as bundle:
+    for row in json.load(bundle.extractfile('manifest.json'))['files']:
+        print(row['destination'] + '\t' + row['sha256'])
+PY_RUNNER_BUNDLE_COMPARE
+    ) || return 1
+    [[ -n "$rows" ]] || return 1
+    while IFS=$'\t' read -r destination expected; do
+        actual=$(remote_sha "$host" "$destination") || return 1
+        [[ "$actual" == "$expected" ]] || return 1
+    done <<< "$rows"
 }
 
 sync_one_target() {
     local record="$1"
     local name host remote_runner service service_unit
     IFS='|' read -r name host remote_runner service service_unit <<< "$record"
-    [[ -n "$name" && -n "$host" && -n "$remote_runner" && -n "$service" ]] || {
-        echo "ERROR: invalid target record: $record" >&2
+    [[ "$name" =~ ^[A-Za-z0-9._-]+$ && -n "$host" && "$remote_runner" =~ ^/[A-Za-z0-9_./-]+$ && "$service" =~ ^[A-Za-z0-9_.@:-]+$ ]] || {
+        echo "ERROR: invalid target record" >&2
         return 2
     }
-    if [[ -n "$ONLY_TARGET" && "$ONLY_TARGET" != "$name" ]]; then
-        return 0
-    fi
-    if [[ "$SYNC_REMOTE_UNITS" == "1" && ! -f "$service_unit" ]]; then
-        echo "ERROR: service unit missing for ${name}: ${service_unit}" >&2
+    [[ -z "$ONLY_TARGET" || "$ONLY_TARGET" == "$name" ]] || return 0
+    if [[ "$SYNC_REMOTE_UNITS" == 1 && ! -f "$service_unit" ]]; then
+        echo "ERROR: service unit missing for ${name}" >&2
         return 2
     fi
-
-    # 실행 중인 러너는 건드리지 않는다 — 파일 교체도, 재시작도 미룬다.
-    local runner_host_name busy_count service_state process_state
+    # Preserve the conservative observation prefilter. Passing it is NEVER an
+    # authorization: only the later two-lock transaction can install/restart.
+    local process_state maintenance_state runner_host_name busy_count service_state
     process_state=$(remote_runner_process_state "$host" "$service")
     if should_defer_for_processes "$process_state"; then
         log "${name}: sync deferred — live process state=${process_state}; DB/ignore-busy cannot override"
-        [[ -n "$TARGET_STATE_FILE" ]] && printf 'deferred' > "$TARGET_STATE_FILE"
+        [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
+        return 0
+    fi
+    maintenance_state=$(remote_runner_maintenance_state "$host" "$service")
+    if [[ "$maintenance_state" != AWARE ]]; then
+        log "${name}: sync deferred — BOOTSTRAP_REQUIRED; legacy actors cannot honor maintenance locks"
+        [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
         return 0
     fi
     runner_host_name=$(remote_runner_host_name "$host" "$service")
     busy_count=$(db_active_job_count "$runner_host_name")
     service_state=$(remote_service_active "$host" "$service")
     if should_defer_for_busy "$busy_count" "$IGNORE_BUSY" "$service_state"; then
-        log "${name}: sync deferred — runner host=${runner_host_name:-unknown} active_jobs=${busy_count:-unknown} service=${service_state:-unknown}"
-        [[ -n "$TARGET_STATE_FILE" ]] && printf 'deferred' > "$TARGET_STATE_FILE"
+        log "${name}: sync deferred — host=${runner_host_name:-unknown} jobs=${busy_count:-unknown} service=${service_state:-unknown}"
+        [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
         return 0
     fi
-
-    local local_sha current_sha installed_sha unit_dest changed=0 unit_changed=0
-    local_sha=$(sha256_file "$CANONICAL_RUNNER")
-    current_sha=$(remote_sha "$host" "$remote_runner" | tr -d '[:space:]')
-    unit_dest="/etc/systemd/system/${service}"
-
-    log "${name}: current=${current_sha:-missing} desired=${local_sha}"
-    ssh_run "$host" "mkdir -p '$(dirname "$remote_runner")'"
-
-    # Install the shared resolver before any runner referencing it can start.
-    local contract_status=0
-    sync_remote_file_if_changed "$name" "$host" "${SCRIPT_DIR}/claude_model_contract.py" "$(dirname "$remote_runner")/claude_model_contract.py" "0644" || contract_status=$?
-    if [[ "$contract_status" == "0" ]]; then
-        changed=1
-    elif [[ "$contract_status" != "1" ]]; then
-        return "$contract_status"
+    if [[ "$DRY_RUN" == 1 ]]; then
+        log "DRY_RUN ${name}: would acquire maintenance leases, verify bundle, and apply in one remote transaction"
+        return 0
     fi
-
-    # AAG 브리프 리더(호스트 공용, AADS-AAG-BRIEF-003) — subprocess 로 매 job 마다 fresh 실행되므로
-    # 갱신에 재시작이 필요 없다(changed 에 반영하지 않는다). brief.py 는 프로젝트 저장소마다 복제하지 않는다.
-    local aag_brief_status=0
-    sync_remote_file_if_changed "$name" "$host" "${REPO_ROOT}/tools/aag/brief.py" "$(dirname "$remote_runner")/aag-brief.py" "0644" || aag_brief_status=$?
-    [[ "$aag_brief_status" == "0" || "$aag_brief_status" == "1" ]] || return "$aag_brief_status"
-
-    # Claude CLI json 영수증 파서(37203be4). 러너가 job 마다 subprocess 로 부르므로 재시작이
-    # 필요 없다(changed 에 반영하지 않는다). 이 파일이 없으면 runner_cli_usage_ready 가 거짓이라
-    # 원격 러너의 actual_model 이 영영 unverified 로 남는다 — 2026-10-02 contabo14 실측.
-    local cli_usage_status=0
-    sync_remote_file_if_changed "$name" "$host" "${SCRIPT_DIR}/runner_cli_usage.py" "$(dirname "$remote_runner")/runner_cli_usage.py" "0644" || cli_usage_status=$?
-    [[ "$cli_usage_status" == "0" || "$cli_usage_status" == "1" ]] || return "$cli_usage_status"
-
-    # worktree 회수 스크립트. 러너가 자기 디렉터리에서 이 이름으로 찾는다(_reclaimer_script_path).
-    # 없으면 5분 정리와 즉시 회수가 모두 멈춘다 — 2026-10-05 contabo14 실측(/tmp/aads-wt-runner-* 52개 11.5GB).
-    # 러너가 job 마다 bash 로 새로 실행하므로 갱신에 재시작이 필요 없다(changed 에 반영하지 않는다).
-    # 옛 런처가 export 하지 않은 경우(원본 없음)는 실패시키지 않고 경고만 남긴다 — 런처 재설치가 필요하다.
-    local reclaim_src="${SCRIPT_DIR}/reclaim_runner_worktrees.sh"
-    if [[ -s "$reclaim_src" ]]; then
-        bash -n "$reclaim_src"
-        local reclaim_status=0
-        sync_remote_file_if_changed "$name" "$host" "$reclaim_src" "$(dirname "$remote_runner")/reclaim_runner_worktrees.sh" "0755" || reclaim_status=$?
-        [[ "$reclaim_status" == "0" || "$reclaim_status" == "1" ]] || return "$reclaim_status"
-    else
-        log "WARN ${name}: reclaim_runner_worktrees.sh 원본 없음(${reclaim_src}) — 설치된 런처(/usr/local/sbin/aads-runner-sync-launcher)가 옛 버전이면 재설치하라. 원격 worktree 회수가 동작하지 않는다"
-    fi
-
-    if [[ "$current_sha" != "$local_sha" ]]; then
-        changed=1
-        if [[ "$DRY_RUN" == "1" ]]; then
-            log "DRY_RUN ${name}: would install runner script and keep backup"
-        else
-            local tmp="/tmp/pipeline-runner.sh.${local_sha}.$$"
-            scp_put "$CANONICAL_RUNNER" "$host" "$tmp"
-            ssh_run "$host" "bash -n '$tmp'"
-            ssh_run "$host" "if [ -f '$remote_runner' ]; then cp -p '$remote_runner' '${remote_runner}.bak.aads-sync.$(TZ=Asia/Seoul date '+%Y%m%d%H%M%S')'; fi"
-            ssh_run "$host" "install -m 0755 '$tmp' '$remote_runner' && rm -f '$tmp'"
-        fi
-    fi
-
-    if [[ "$SYNC_REMOTE_UNITS" == "1" ]]; then
-        if sync_remote_file_if_changed "$name" "$host" "$service_unit" "$unit_dest" "0644"; then
-            unit_changed=1
-        fi
-    fi
-    installed_sha=$(remote_sha "$host" "$remote_runner" | tr -d '[:space:]')
-    if [[ "$installed_sha" != "$local_sha" ]]; then
-        if [[ "$DRY_RUN" == "1" ]]; then
-            log "DRY_RUN ${name}: would verify runner hash after install"
-        else
-            echo "ERROR: ${name} installed hash mismatch: ${installed_sha:-missing} != ${local_sha}" >&2
-            return 1
-        fi
-    fi
-
-    if [[ "$RESTART_SERVICES" == "1" && ( "$changed" == "1" || "$unit_changed" == "1" ) ]]; then
-        if [[ "$DRY_RUN" == "1" ]]; then
-            log "DRY_RUN ${name}: would daemon-reload and restart ${service}"
-        else
-            ssh_run "$host" "systemctl daemon-reload"
-            ssh_run "$host" "systemctl restart '$service'"
-            ssh_run "$host" "systemctl is-active '$service'"
-        fi
-    elif [[ "$RESTART_SERVICES" == "1" ]]; then
-        if [[ "$DRY_RUN" == "1" ]]; then
-            log "DRY_RUN ${name}: would skip restart because hashes are already current"
-        else
-            ssh_run "$host" "systemctl is-active '$service'"
-        fi
-    fi
-
-    if [[ "$changed" == "1" ]]; then
-        log "${name}: synced ${remote_runner} to ${local_sha}"
-    else
+    local archive expected remote_archive payload rc=0
+    archive=$(mktemp /tmp/aads-runner-bundle.XXXXXXXX.tar) || return 1
+    make_runner_bundle "$archive" "$remote_runner" "$service" "$service_unit" || { rm -f "$archive"; return 1; }
+    if runner_bundle_matches_remote "$archive" "$host"; then
+        rm -f "$archive"
         log "${name}: already synced"
+        return 0
     fi
-    return 0
+    expected=$(sha256_file "$archive")
+    remote_archive="/tmp/$(basename "$archive")"
+    scp_put "$archive" "$host" "$remote_archive" || { rm -f "$archive"; return 1; }
+    rm -f "$archive"
+    payload="$(declare -f runner_maintenance_metadata runner_maintenance_transaction runner_apply_bundle)"
+    payload+=$'\n''trap '\''rm -f "$2"'\'' EXIT'
+    payload+=$'\n''runner_maintenance_transaction "$1" 30 /run/aads-runner-maintenance runner_apply_bundle "$@"'
+    # A single SSH process owns admission EX, lifetime EX, installation and
+    # restart. Losing this connection cannot release leases held by apply children.
+    ssh "${SSH_OPTS[@]}" "$host" "bash -s -- '$service' '$remote_archive' '$expected' '$remote_runner' '$RESTART_SERVICES'" <<< "$payload" || rc=$?
+    if [[ "$rc" == 3 ]]; then
+        log "${name}: sync deferred — maintenance lease/capability could not be verified"
+        [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
+        return 0
+    fi
+    [[ "$rc" == 0 ]] || return "$rc"
+    log "${name}: synced checksum-pinned bundle under exclusive maintenance lease"
 }
 
 main() {

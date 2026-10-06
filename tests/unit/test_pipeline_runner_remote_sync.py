@@ -14,16 +14,17 @@ def test_remote_runner_sync_script_has_fail_closed_install_flow():
 
     assert "set -euo pipefail" in script
     assert "bash -n \"$CANONICAL_RUNNER\"" in script
-    assert "bash -n '$tmp'" in script
-    assert "installed hash mismatch" in script
+    assert "subprocess.run(['bash', '-n', str(staged)], check=True)" in script
+    assert "installed hash mismatch" in script and "bundle hash mismatch" in script
     assert "flock -n 9" in script
     assert 'ssh -n "${SSH_OPTS[@]}" "$host" "$@"' in script
-    assert "cp -p '$remote_runner'" in script
-    assert "systemctl restart '$service'" in script
-    assert "systemctl is-active '$service'" in script
-    assert ' "$changed" == "1" || "$unit_changed" == "1" ' in script
+    assert "'.bak.maintenance.'" in script
+    assert 'systemctl restart "$service"' in script
+    assert 'systemctl is-active "$service"' in script
+    assert 'os.replace(temporary, target)' in script
+    assert 'runner_maintenance_transaction "$1" 30 /run/aads-runner-maintenance runner_apply_bundle "$@"' in script
     assert 'read -r target || [[ -n "$target" ]]' in script
-    assert "return 0\n}" in script
+
 
 
 def test_remote_runner_sync_targets_cover_all_remote_runner_hosts():
@@ -118,12 +119,15 @@ def test_busy_gate_blocks_install_not_only_restart():
     """실행 중 스크립트 파일 교체도 위험하다(bash 지연 읽기). 게이트는 설치 앞에 와야 한다."""
     script = _sync_script()
 
-    gate = script.index("if should_defer_for_busy")
-    local_sha = script.index('local_sha=$(sha256_file "$CANONICAL_RUNNER")')
-    install = script.index('install -m 0755')
-    restart = script.index("systemctl restart '$service'")
+    function = _extract_function(script, "sync_one_target")
+    gate = function.index("if should_defer_for_busy")
+    prepare = function.index('make_runner_bundle "$archive"')
+    stage = function.index('scp_put "$archive"')
+    transaction = function.index('runner_maintenance_transaction "$1"')
+    assert gate < prepare < stage < transaction
+    assert 'install -m ' not in function  # No independent remote install path.
+    assert 'systemctl restart ' not in function  # Restart lives inside callback.
 
-    assert gate < local_sha < install < restart
 
 
 def test_runner_host_name_is_resolved_at_runtime_not_hardcoded():
@@ -256,17 +260,21 @@ host="${@: -2:1}"; cmd="${@: -1}"
 case "$cmd" in
     # Transport fixture represents a verified empty process set. Real /proc
     # and deleted-cwd behavior is covered by test_runner_sync_live_process_guard.
-    "bash -s -- "*) cat >/dev/null; echo IDLE ;;
+    "bash -s -- "*)
+        payload=$(cat)
+        if [[ "$payload" == *'runner_maintenance_metadata preflight'* ]]; then echo AWARE; else echo IDLE; fi ;;
+
     *"hostname -s"*) echo "$host" ;;
     *"systemctl is-active"*) echo active ;;
     sha256sum*)
-        if [[ " ${FAKE_FAIL_HOSTS:-} " == *" $host "* ]]; then echo stale; exit 0; fi
+        if [[ " ${FAKE_FAIL_HOSTS:-} ${FAKE_DENY_HOSTS:-} " == *" $host "* ]]; then echo stale; exit 0; fi
         path=$(sed -n "s/^sha256sum '\([^']*\)'.*/\1/p" <<<"$cmd")
         case "$(basename "$path")" in
             pipeline-runner.sh) f="$CANONICAL_RUNNER" ;;
             claude_model_contract.py) f="$FAKE_REPO/scripts/claude_model_contract.py" ;;
             aag-brief.py) f="$FAKE_REPO/tools/aag/brief.py" ;;
             runner_cli_usage.py) f="$FAKE_REPO/scripts/runner_cli_usage.py" ;;
+            runner_busy_lib.sh) f="$FAKE_REPO/scripts/runner_busy_lib.sh" ;;
             reclaim_runner_worktrees.sh) f="$FAKE_REPO/scripts/reclaim_runner_worktrees.sh" ;;
             *) exit 0 ;;
         esac
@@ -280,10 +288,16 @@ esac
 exit 0
 """
 
-_FAKE_SCP = """#!/usr/bin/env bash
-echo "scp: /tmp/upload: No space left on device" >&2
+_FAKE_SCP = r"""#!/usr/bin/env bash
+dest="${@: -1}"; host="${dest%%:*}"
+if [[ " ${FAKE_DENY_HOSTS:-} " == *" $host "* ]]; then
+    echo 'scp: 업로드 허가 거부' >&2
+else
+    echo 'scp: /tmp/upload: No space left on device' >&2
+fi
 exit 1
 """
+
 
 _FAKE_DOCKER = """#!/usr/bin/env bash
 echo "${FAKE_BUSY_COUNT:-0}"
@@ -386,5 +400,5 @@ def test_sync_ships_runner_cli_usage_helper():
     """원격 러너에 영수증 파서가 없으면 actual_model 이 unverified 로 고정된다 (2026-10-02 contabo14)."""
     script = (ROOT / "scripts" / "sync_pipeline_runner_remote.sh").read_text(encoding="utf-8")
 
-    assert '"${SCRIPT_DIR}/runner_cli_usage.py" "$(dirname "$remote_runner")/runner_cli_usage.py"' in script
+    assert "(script_dir / 'runner_cli_usage.py', directory / 'runner_cli_usage.py', 0o644, False)" in script
     assert "scripts/runner_cli_usage.py" in _launcher()

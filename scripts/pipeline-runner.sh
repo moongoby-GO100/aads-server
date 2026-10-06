@@ -25,6 +25,14 @@ if ! flock -n 9; then
     exit 0
 fi
 
+# RUNNER_MAINTENANCE_PROTOCOL=1 — mandatory host-shared lifetime admission.
+# Acquire before credentials, startup recovery or any job/DB operation. Legacy
+# hosts are enrolled only by an explicitly authorized bootstrap, never by sync.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_busy_lib.sh"
+runner_maintenance_enter /run/aads-runner-maintenance \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")" || exit 3
+readonly RUNNER_MAINTENANCE_ROOT RUNNER_MAINTENANCE_SOURCE RUNNER_MAINTENANCE_ACTIVE
+
 # ── 설정 ──────────────────────────────────────────────────────────────
 PGHOST="${PGHOST:-localhost}"
 PGPORT="${PGPORT:-5433}"
@@ -6073,6 +6081,9 @@ _runner_self_fingerprint() {
 }
 
 maybe_reexec_on_self_change() {
+    # Protocol v1 applies immutable files only in a controller transaction.
+    # Self-exec must not release/reacquire the lifetime lease under admission EX.
+    [[ "${RUNNER_MAINTENANCE_ACTIVE:-0}" == 1 ]] && return 0
     [[ "${RUNNER_SELF_RELOAD:-1}" == "1" ]] || return 0
     [[ -n "$RUNNER_SELF_FINGERPRINT" ]] || return 0
     (( ${#_bg_jobs[@]} == 0 )) || return 0
@@ -6144,6 +6155,9 @@ main() {
     [[ "$_stuck_check_cycles" -lt 1 ]] && _stuck_check_cycles=1
     log "STUCK_CHECK_INTERVAL=${STUCK_CHECK_INTERVAL}s → 매 ${_stuck_check_cycles} cycle마다 감지"
     while true; do
+        # Poll admission before throttle, claims, recovery, or self reload. A
+        # maintenance controller keeps us alive in QUIESCENT; no SIGTERM/requeue.
+        runner_maintenance_checkpoint_or_hold
         # Legacy hosts retain the global limit. Hosts with an explicit server
         # budget enforce it atomically at claim time and keep servicing reviews.
         if [[ -z "${MAX_CONCURRENT_SERVER:-}" ]]; then

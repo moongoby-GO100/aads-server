@@ -28,8 +28,15 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   logger -t aads-runner-safe-restart "active=${ACTIVE} stable=${STABLE} src=docker:${PG_CONTAINER}"
   if [ "$STABLE" -ge 3 ]; then
     logger -t aads-runner-safe-restart "AADS active jobs=0 stable — restarting aads-pipeline-runner.service (stale-code recycle)"
-    systemctl restart aads-pipeline-runner.service
-    exit 0
+    # Stable DB observations do not serialize new claims. Reuse the exact
+    # capability/drain/lease transaction used by every normal restart path.
+    if bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/restart_local_runner.sh"; then
+      exit 0
+    else
+      rc=$?
+      [[ "$rc" == 3 ]] || exit "$rc"
+      STABLE=0
+    fi
   fi
   sleep 20
 done
