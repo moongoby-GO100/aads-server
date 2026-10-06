@@ -174,6 +174,7 @@ class InviteTarget(BaseModel):
 class InviteCreate(BaseModel):
     phone: str = ""
     name: str = ""
+    email: str = ""
     branch: str = ""
     targets: list[InviteTarget] = []
     role: str = "member"
@@ -530,7 +531,7 @@ async def resolve_employee_invite(token: str, current_user: dict = Depends(get_c
 @router.post("/employees/invites/accept")
 async def accept_employee_invite(payload: InviteAccept, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     result = await run_in_threadpool(svc.accept_invite, payload.model_dump(), current_user)
-    return {"request": result["request"], "requests": result["requests"]}
+    return {"request": result["request"], "requests": result["requests"], "payroll_link": result.get("payroll_link")}
 
 
 @router.get("/employees/join-requests")
