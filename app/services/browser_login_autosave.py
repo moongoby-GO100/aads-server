@@ -37,8 +37,16 @@ ACTION_TYPE = "save_browser_credential"
 GATE_SOURCE = "browser_login_save"
 VAULT_WORK_KEY = "aads-ceo-browser"
 
-_SETTLE_ATTEMPTS = 3
-_SETTLE_DELAY_SECONDS = 1.0
+def _env_float(name: str, default: float, lo: float, hi: float) -> float:
+    try:
+        return min(max(float(os.getenv(name, "") or default), lo), hi)
+    except ValueError:
+        return default
+
+
+# 서버 Playwright 는 SPA 로그인 후 리다이렉트가 2초를 넘는 사이트가 있어 상한 시간까지 폴링한다.
+_SETTLE_TIMEOUT_SECONDS = _env_float("AADS_VAULT_LOGIN_SETTLE_TIMEOUT_SECONDS", 9.0, 1.0, 30.0)
+_SETTLE_DELAY_SECONDS = _env_float("AADS_VAULT_LOGIN_SETTLE_POLL_SECONDS", 0.4, 0.1, 2.0)
 _PROBE_TIMEOUT_SECONDS = 2.0
 _SUBMIT_KEYS = {"enter", "return"}
 
@@ -53,6 +61,8 @@ _SECRET_KEY_RE = re.compile(r"password|passwd|secret|(?<![a-z])token(?![a-z])", 
 _USER_HINT = re.compile(r"user|e-?mail|login|account|identifier|signin", re.I)
 
 _clock = time.monotonic
+_settle_clock = time.monotonic
+_settle_sleep = asyncio.sleep
 
 
 @dataclass
@@ -365,14 +375,16 @@ def is_submit_key(key: str) -> bool:
 async def _wait_login_completed(page: Any, login_url: str) -> bool:
     from app.core.credential_vault import login_session_completed
 
-    is_pc_page = callable(getattr(page, "_run_browser_command", None))
-    for attempt in range(_SETTLE_ATTEMPTS):
+    if callable(getattr(page, "_run_browser_command", None)):
+        return bool(await login_session_completed(page, login_url))
+    deadline = _settle_clock() + _SETTLE_TIMEOUT_SECONDS
+    while True:
         if await login_session_completed(page, login_url):
             return True
-        if is_pc_page or attempt == _SETTLE_ATTEMPTS - 1:
-            break
-        await asyncio.sleep(_SETTLE_DELAY_SECONDS)
-    return False
+        remaining = deadline - _settle_clock()
+        if remaining <= 0:
+            return False
+        await _settle_sleep(min(_SETTLE_DELAY_SECONDS, remaining))
 
 
 async def on_submit(
