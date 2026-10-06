@@ -61,6 +61,27 @@ class TestViewUrl:
         assert sd._view_url("/srv/biseo/회계비서/작업/결과/index.html") is None
         assert sd._view_url("작업/결과/index.html") is None
 
+    def test_remote_project_doc_gets_link(self):
+        # 2026-10-06: NTV2 114 서버에 저장한 PRD 가 "뷰어가 열 수 없는 경로" 로 떴다.
+        url = sd._view_url("/srv/newtalk-v2/docs/NTV2-LAYOUT-002_V1_자체메일발송_postfix_PRD.md")
+        assert url is not None
+        assert "project=NTV2" in url
+        assert "base_path=%2Fsrv%2Fnewtalk-v2%2Fdocs" in url
+        assert "file_path=NTV2-LAYOUT-002" in url
+
+    def test_remote_longest_base_wins(self):
+        url = sd._view_url("/root/kis-autotrade-v4/docs/go100/plan.md")
+        assert url is not None
+        assert "base_path=%2Froot%2Fkis-autotrade-v4%2Fdocs%2Fgo100" in url
+        assert "project=GO100" in url
+
+    def test_remote_traversal_has_no_link(self):
+        assert sd._view_url("/srv/newtalk-v2/docs/../.env.md") is None
+
+    def test_aads_paths_still_use_aads_project(self):
+        url = sd._view_url("/root/aads/aads-server/docs/x.md")
+        assert url is not None and "project=AADS" in url
+
 
 class TestCollector:
     def _at(self, iso: str):

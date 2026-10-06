@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from pathlib import PurePosixPath
@@ -166,7 +167,39 @@ def _view_url(abs_path: str) -> Optional[str]:
             return "/docs?" + urlencode(
                 {"project": "AADS", "base_path": base, "file_path": rel}
             )
+    # 원격 서버 문서(예: NTV2 114 의 /srv/newtalk-v2/docs). 2026-10-06 대표님 지적
+    # "오른쪽 아티팩트에서 문서가 안 열린다" — 뷰어는 SSH 로 열 수 있는데
+    # 위 표가 AADS 경로뿐이라 링크가 비어 있었다.
+    for base, project in _remote_view_bases():
+        if p.startswith(base + "/"):
+            rel = p[len(base) + 1:]
+            if not rel or ".." in rel.split("/"):
+                return None
+            return "/docs?" + urlencode(
+                {"project": project, "base_path": base, "file_path": rel}
+            )
     return None
+
+
+@functools.lru_cache(maxsize=1)
+def _remote_view_bases() -> tuple:
+    """원격 문서 루트 → 뷰어 project. 정본은 `project_docs.SERVER_CONFIG` 다.
+
+    여기에 따로 적으면 두 벌이 되어 한쪽이 낡는다. 뷰어 모듈을 못 읽으면
+    링크를 만들지 않는다 — 열리지 않는 링크보다 없는 링크가 낫다.
+    """
+    try:
+        from app.api.project_docs import SERVER_CONFIG
+    except Exception as exc:
+        logger.warning("session_documents remote view bases unavailable: %s", exc)
+        return ()
+    pairs: List[tuple[str, str]] = []
+    for project, cfg in SERVER_CONFIG.items():
+        if not cfg.get("host"):
+            continue
+        for path_cfg in cfg.get("paths", []):
+            pairs.append((str(PurePosixPath(path_cfg["base"])), project))
+    return tuple(sorted(pairs, key=lambda x: len(x[0]), reverse=True))
 
 
 class _Collector:
