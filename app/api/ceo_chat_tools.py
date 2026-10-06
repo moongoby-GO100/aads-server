@@ -4635,14 +4635,20 @@ async def tool_vault_request_credential_input(
         from app.services.agent_vault_service import list_agent_credentials
 
         origin = _autosave.origin_of(str(url or ""))
-        if origin and await list_agent_credentials(tenant_id=scoped_tenant, origin=origin):
-            return (
-                f"vault_credential_exists origin={origin} — 이미 Vault 에 계정이 있습니다. "
-                '{{vault:username}}/{{vault:password}} 로 fill 하십시오'
-            )
+        existing = await list_agent_credentials(tenant_id=scoped_tenant, origin=origin) if origin else []
+        replace_target_id = ""
+        if existing:
+            target = _vsi.pick_replace_target(existing)
+            if target is None:
+                return (
+                    f"vault_credential_exists origin={origin} — 이미 Vault 에 계정이 있습니다. "
+                    '{{vault:username}}/{{vault:password}} 로 fill 하십시오'
+                )
+            replace_target_id = str(target["id"])
         result = await _vsi.request_credential_input(
             tenant_id=scoped_tenant, session_id=session_id, url=str(url or ""),
             browser_work_key=browser_work_key, reason=reason,
+            target_credential_id=replace_target_id,
         )
     except _vsi.SecureInputError as exc:
         return f"[ERROR] vault_credential_input_{exc.code}"

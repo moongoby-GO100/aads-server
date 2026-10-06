@@ -108,6 +108,21 @@
     return [key, ...(C.CONTRACT_STATUS[key] || [key, "info"])];
   }
   function employeeKey(employee) { return String(employee?.id || ""); }
+  // 화면 위 '조회 사업자'(#businessSelect)와 같은 사업자의 직원·계약만 보인다. 사업자가 하나여도 이 칸은 값이 채워진다.
+  function currentBusinessId() {
+    const select = document.getElementById("businessSelect");
+    return String((select && select.value) || "");
+  }
+  function inCurrentBusiness(businessId) {
+    const current = currentBusinessId();
+    return !current || String(businessId || "") === current;
+  }
+  function visibleEmployees() { return S.employees.filter(item => inCurrentBusiness(item.business_id)); }
+  function visibleContracts() { return S.contracts.filter(item => inCurrentBusiness(pick(item, "businessId"))); }
+  function scopeNote() {
+    const current = currentBusinessId();
+    return current ? `<p class="cv41-scope">현재 사업자 <b>${esc(businessName(current))}</b>의 직원·계약만 표시합니다. 다른 사업자는 화면 위 사업자 선택에서 바꾸십시오.</p>` : "";
+  }
   function contractsOf(employee) {
     const id = employeeKey(employee);
     const email = String(employee?.email || "").toLowerCase();
@@ -254,6 +269,15 @@
     const anchor = page.querySelector("#empOnboardV41") || page.querySelector(".hero");
     if (anchor) anchor.after(box); else page.prepend(box);
     renderSection(route, box);
+    const businessSelect = document.getElementById("businessSelect");
+    if (businessSelect && !businessSelect.dataset.cv41Bound) {
+      businessSelect.dataset.cv41Bound = "1";
+      businessSelect.addEventListener("change", () => {
+        const current = document.getElementById("contractV41");
+        const currentRoute = S.ctx?.route?.() || "";
+        if (current && ROUTES.has(currentRoute)) renderSection(currentRoute, current);
+      });
+    }
     // 화면에 들어올 때마다 서버에서 다시 읽는다 — 다른 관리자·직원 서명으로 상태가 바뀌었을 수 있다.
     load(true).then(() => { renderSection(route, box); restoreFromUrl(); }).catch(() => renderSection(route, box));
   }
@@ -273,7 +297,7 @@
     } else if (!S.loadedAt) {
       box.innerHTML = `${head}<div class="empty">계약 현황을 불러오는 중입니다.</div>`;
     } else {
-      box.innerHTML = head + (route === "employees" ? employeeTable() : contractTable());
+      box.innerHTML = head + scopeNote() + (route === "employees" ? employeeTable() : contractTable());
     }
     box.querySelector("[data-cv41-reload]")?.addEventListener("click", () => refresh());
     box.querySelector("[data-cv41-new]")?.addEventListener("click", () => openEditor({}));
@@ -309,8 +333,9 @@
   }
   function badge([, text, tone]) { return `<span class="badge ${esc(tone)}">${esc(text)}</span>`; }
   function employeeTable() {
-    if (!S.employees.length) return '<div class="empty">승인된 직원이 없습니다. 위 가입요청을 승인하면 여기에 표시됩니다.</div>';
-    const rows = S.employees.map(employee => {
+    const employees = visibleEmployees();
+    if (!employees.length) return '<div class="empty">이 사업자에 승인된 직원이 없습니다. 위 가입요청을 승인하면 여기에 표시됩니다.</div>';
+    const rows = employees.map(employee => {
       const latest = contractsOf(employee)[0];
       const [key] = latest ? statusOf(latest) : ["none"];
       const action = !latest ? "계약 작성" : key === "draft" ? "이어서 작성" : key === "requested" ? "서명 현황" : "계약 보기";
@@ -323,16 +348,17 @@
         <td data-label="처리"><button class="btn ${latest ? "" : "primary"}" type="button" data-cv41-employee="${esc(employeeKey(employee))}">${action}</button> <button class="btn" type="button" data-cv41-docs="${esc(employeeKey(employee))}">서류 등록</button></td>
       </tr>`;
     }).join("");
-    const held = S.employees.map(employee => rowMissingCount(employee, contractsOf(employee)[0])).filter(Boolean).length;
+    const held = employees.map(employee => rowMissingCount(employee, contractsOf(employee)[0])).filter(Boolean).length;
     const heldNote = held ? `<p class="cv41-alert warn">계약 보류 ${held}건 — 빈 필수값이 있습니다. [계약 작성]·[이어서 작성]을 누르면 빈 칸이 빨갛게 표시되고 추천값을 넣을 수 있습니다.</p>` : "";
     return `${heldNote}<div class="table-wrap"><table class="cv41-table"><thead><tr><th>직원</th><th>사업자·지점</th><th>입사서류</th><th>계약</th><th>처리</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   function contractTable() {
     const counts = { all: 0, draft: 0, requested: 0, signed: 0 };
-    S.contracts.forEach(item => { counts.all += 1; const key = statusOf(item)[0]; if (key in counts) counts[key] += 1; });
+    const contracts = visibleContracts();
+    contracts.forEach(item => { counts.all += 1; const key = statusOf(item)[0]; if (key in counts) counts[key] += 1; });
     const filters = [["all", "전체"], ["draft", "작성중"], ["requested", "서명요청"], ["signed", "서명완료"]]
       .map(([key, label]) => `<button class="btn ${S.filter === key ? "primary" : ""}" type="button" data-cv41-filter="${key}" aria-pressed="${S.filter === key}">${label} ${counts[key]}</button>`).join("");
-    const list = S.contracts.filter(item => S.filter === "all" || statusOf(item)[0] === S.filter);
+    const list = contracts.filter(item => S.filter === "all" || statusOf(item)[0] === S.filter);
     const rows = list.map(contract => {
       const [key] = statusOf(contract);
       const when = key === "signed" ? `서명 ${fmtTime(contract.signed_at)}` : key === "requested" ? `요청 ${fmtTime(contract.requested_at)}` : `저장 ${fmtTime(contract.updated_at)}`;
@@ -432,7 +458,7 @@
     wire();
   }
   function stepTarget() {
-    const options = S.employees.map(employee => {
+    const options = visibleEmployees().map(employee => {
       const latest = contractsOf(employee)[0];
       return `<option value="${esc(employeeKey(employee))}">${esc(employee.name || "이름 없음")} · ${esc(businessName(employee.business_id))} · ${esc(employee.branch || "지점 미정")}${latest ? ` (계약 ${esc(statusOf(latest)[1])})` : ""}</option>`;
     }).join("");
@@ -442,7 +468,7 @@
     return `
       <p class="notice">승인된 입사요청만 계약 대상이 됩니다. 한 직원이 여러 점포에서 일하면 점포(사업자)마다 따로 계약합니다.</p>
       <div class="form-field"><label for="cv41Employee">계약할 승인 직원</label><select id="cv41Employee" class="field"><option value="">직원을 고르십시오</option>${options}</select></div>
-      ${S.employees.length ? "" : '<div class="empty">승인된 직원이 없습니다. 직원 현황에서 가입요청을 먼저 승인하십시오.</div>'}
+      ${visibleEmployees().length ? "" : '<div class="empty">이 사업자에 승인된 직원이 없습니다. 직원 현황에서 가입요청을 먼저 승인하거나 화면 위 사업자 선택을 바꾸십시오.</div>'}
       ${employee ? `<div class="detail-grid cv41-target">
         <div class="detail-cell"><small>직원</small><b>${esc(employee.name || "-")}</b><small>${esc(employee.email_masked || "")}</small></div>
         <div class="detail-cell"><small>사업자(사용자)</small><b>${esc(businessName(employee.business_id))}</b></div>
@@ -628,9 +654,31 @@
     } catch (error) { return { labels: [], blocker: String(error?.message || error) }; }
   }
   function liveMissing() { return liveCheck().labels; }
+  const FIXED_WORK_RE = /(출퇴근|근무표|주\s*\d+\s*시간|월\/화|화\/수|수\/목|목\/금|금\/토|토\/일|상시|교대)/;
+  /** 3.3% 용역계약의 유형 충돌을 한꺼번에 찾는다(검사는 첫 번째 충돌만 알려 주므로 하나 고치면 다음 것이 또 막았다). */
+  function freelancerConflicts() {
+    const v = E?.values || {};
+    if (String(v.contractType || "") !== "freelancer") return [];
+    const out = [];
+    if (v.employmentTaxType !== "freelancer_33" || v.wageType !== "case_fee") out.push("wage");
+    if (FIXED_WORK_RE.test([v.workTime, v.weeklyHours, v.workDays].join(" "))) out.push("schedule");
+    return out;
+  }
+  function freelancerBlockerHtml(conflicts) {
+    const reasons = [];
+    if (conflicts.includes("wage")) reasons.push(`임금 방식이 '${esc(C.wageTypeLabels[E.values.wageType] || E.values.wageType || "미지정")}'입니다. 3.3% 용역계약은 건별/용역비만 쓸 수 있습니다. 바꾸면 기존 금액은 1회 용역비가 아니므로 [확정 용역비]를 비웁니다.`);
+    if (conflicts.includes("schedule")) reasons.push("근무일·근무시간·주 소정근로시간에 고정 요일·시간 표현이 있습니다. 정해진 요일·시간에 일하면 근로자로 판정될 수 있습니다.");
+    const fixes = conflicts.length > 1
+      ? [["freelancer_all", "3.3% 조건으로 모두 고치기"]]
+      : conflicts.includes("wage") ? [["case_fee", "임금 방식을 건별/용역비로 바꾸기"]] : [["clear_schedule", "근무일·근무시간·주 소정근로시간 문구 지우기"]];
+    fixes.push(["to_part_time", "단시간 근로계약으로 바꾸기"]);
+    return `<div class="cv41-alert bad" role="alert" id="cv41Blocker"><b>미리보기·저장이 막힌 이유 ${conflicts.length}가지</b><ul>${reasons.map(text => `<li>${text}</li>`).join("")}</ul><div class="cv41-fixes">${fixes.map(([key, label]) => `<button class="btn primary" type="button" data-cv41-fix="${key}">${esc(label)}</button>`).join(" ")}</div></div>`;
+  }
   /** 빈 칸이 아닌 이유로 막힐 때의 안내와 한 번에 고치는 버튼. */
   function blockerHtml(message) {
     if (!message) return "";
+    const conflicts = freelancerConflicts();
+    if (conflicts.length && (message.includes("건별/용역비") || message.includes("고정 근무표"))) return freelancerBlockerHtml(conflicts);
     const fixes = [];
     if (message.includes("건별/용역비")) {
       fixes.push(['case_fee', "임금 방식을 건별/용역비로 바꾸기"]);
@@ -648,8 +696,12 @@
     return `<div class="cv41-alert bad" role="alert" id="cv41Blocker"><b>미리보기·저장이 막힌 이유</b><p>${esc(message)}</p>${hint ? `<small>${esc(hint)}</small>` : ""}${fixes.length ? `<div class="cv41-fixes">${fixes.map(([key, label]) => `<button class="btn primary" type="button" data-cv41-fix="${key}">${esc(label)}</button>`).join(" ")}</div>` : ""}</div>`;
   }
   function applyFix(key) {
-    if (key === "case_fee") Object.assign(E.values, { wageType: "case_fee", employmentTaxType: "freelancer_33" });
-    if (key === "clear_schedule") ["workDays", "workTime", "weeklyHours"].forEach(name => { E.values[name] = ""; });
+    if (key === "case_fee" || key === "freelancer_all") {
+      // 월급·시급 금액을 1회 용역비로 넘기지 않는다 — 비워서 직접 입력하게 한다.
+      if (E.values.wageType !== "case_fee") ["wage", "baseSalary", "nonTaxMealAllowance", "taxableAllowance"].forEach(name => { E.values[name] = ""; });
+      Object.assign(E.values, { wageType: "case_fee", employmentTaxType: "freelancer_33" });
+    }
+    if (key === "clear_schedule" || key === "freelancer_all") ["workDays", "workTime", "weeklyHours"].forEach(name => { E.values[name] = ""; });
     if (key === "to_part_time") switchContractType("part_time", E.values.contractType || "freelancer", E.values.employmentTaxType || "freelancer_33");
     if (key === "four_insurance") E.values.employmentTaxType = "four_insurance";
     E.error = ""; E.missing = []; E.dirty = true; E.previewed = false;

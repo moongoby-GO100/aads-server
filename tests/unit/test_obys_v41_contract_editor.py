@@ -153,9 +153,9 @@ def test_every_server_missing_label_points_to_an_input(node_result):
 # ---------- 2026-10-06 r2: 직원 입사서류 등록 + 빈 필수값 표시·추천값 ----------
 
 def test_v41_bumps_contract_module_cache_version():
-    for name in ("contract-core.js", "contract-editor-v41.js"):
-        assert f"modules/{name}?v=20261006-r3" in V41, name
-    assert "modules/contract-editor-v41.css?v=20261006-r4" in V41
+    assert "modules/contract-core.js?v=20261006-r3" in V41
+    assert "modules/contract-editor-v41.js?v=20261006-r5" in V41
+    assert "modules/contract-editor-v41.css?v=20261006-r5" in V41
 
 
 def test_preview_identity_table_is_not_broken_by_page_section_head():
@@ -212,3 +212,34 @@ def test_contract_type_switch_replaces_previous_type_defaults():
     block = _block(EDITOR, "function switchContractType(", "function applyDefaults(")
     assert "C.defaultsFor(prevType, prevTax)" in block
     assert "String(E.values[key] ?? \"\").trim() === String(value ?? \"\").trim()" in block
+
+
+def test_legacy_sign_screen_contract_table_fits_a4_and_is_not_sticky():
+    """직원 서명 화면(index.html)의 공통 table{min-width:760px}·th{position:sticky} 가 계약서 표에 새지 않아야 한다."""
+    assert re.search(r"table \{[^}]*min-width: 760px", INDEX)
+    block = re.search(r"\.contract-paper \.identity-table \{\s*min-width: 0;\s*\}", INDEX)
+    assert block
+    cells = re.search(r"\.contract-paper \.identity-table th,\s*\.contract-paper \.identity-table td \{[^}]*position: static;", INDEX)
+    assert cells
+
+
+def test_contract_lists_follow_selected_business():
+    """계약·인사증빙/직원 현황은 화면 위에서 고른 사업자의 직원·계약만 보여야 한다."""
+    assert 'id="businessSelect"' in V41 and 'localStorage.setItem("obys_v41_business_id"' in V41
+    assert 'document.getElementById("businessSelect")' in EDITOR
+    for fn in ("employeeTable", "contractTable", "stepTarget"):
+        body = _block(EDITOR, f"function {fn}(", "\n  function ")
+        assert "S.employees.map" not in body and "S.contracts.filter" not in body and "S.contracts.forEach" not in body, fn
+    assert "visibleEmployees()" in _block(EDITOR, "function employeeTable(", "\n  function ")
+    assert "visibleContracts()" in _block(EDITOR, "function contractTable(", "\n  function ")
+
+
+def test_freelancer_conflicts_are_shown_together_and_wage_is_not_carried_over():
+    """3.3% 유형 충돌(임금 방식·고정 근무표)을 한 번에 보여 주고, 월급·시급 금액을 1회 용역비로 넘기지 않는다."""
+    assert "function freelancerConflicts()" in EDITOR
+    assert '"freelancer_all", "3.3% 조건으로 모두 고치기"' in EDITOR
+    fix = _block(EDITOR, "function applyFix(", "\n  function ")
+    assert 'key === "freelancer_all"' in fix
+    assert '["wage", "baseSalary", "nonTaxMealAllowance", "taxableAllowance"]' in fix
+    core_re = re.search(r"/\(출퇴근\|근무표[^/]*/", CORE).group(0)
+    assert core_re.replace("\\", "") in EDITOR.replace("\\\\", "\\").replace("\\", "") or "FIXED_WORK_RE" in EDITOR
