@@ -6,6 +6,10 @@
 3. Operate(실행): 작업지시서. 산출물: {PROJECT}-{SEQ}_{제목}.md. parent 필드 필수.
 4. Wrap up(마무리): 검증, 회고, 교훈. 산출물: {PROJECT}-WRAP-{SEQ}_{제목}.md
 
+## 새 문서 파일명 (R-DOC 우선)
+- 신규 문서의 파일명은 L1 규칙 R-DOC(`l1-doc-storage-rule`)를 따른다: `YYYYMMDD_{PROJECT}_{한글 제목}.md`, 화면 제목·첫 제목 한글, 영문 kebab-case document_key.
+- 위 산출물 접두 형식은 기존 문서의 호환 표기다. 기존 파일명·document_key 는 바꾸지 않는다(일괄 개명 금지).
+
 ## Wrap up 의무 수준
 - P0/P1: WRAP 파일 필수. 체크리스트 전항목. 미완료 시 다음 작업 차단.
 - P2(15분 초과): 5분 모니터링 + HTTP 200 확인 필수.

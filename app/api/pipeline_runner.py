@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator, model_serializer
 
 from app.auth import TenantRole, get_current_user, tenant_role_allows
 from app.core.project_config import PROJECT_MAP
+from app.services.document_refs import with_rdoc_block
 from app.services.goal_binding import parse_goal_binding
 
 router = APIRouter()
@@ -2251,7 +2252,7 @@ async def submit_job(
                             )) END,
                             NOW(), NOW(), $14::uuid)
                     """,
-                    job_id, req.project, req.instruction, instruction_hash,
+                    job_id, req.project, with_rdoc_block(req.instruction), instruction_hash,
                     session_id, req.max_cycles, model, size,
                     worker_model or None, worker_model_reason or None,
                     req.parallel_group or None, effective_depends_on,
@@ -3018,6 +3019,12 @@ async def get_job(
     if health_probe:
         result["health_probe"] = health_probe
     result["runner_events"] = runner_events
+    if row["status"] in ("done", "completed"):
+        from app.services.document_refs import job_rdoc_compliance
+
+        rdoc = await job_rdoc_compliance(pool, job_id)
+        if rdoc and rdoc.get("status") != "not_applicable":
+            result["rdoc_compliance"] = rdoc
     return result
 
 
@@ -3075,7 +3082,7 @@ def _terminal_followup_dedupe_key(job_id: str, status: str, commit_sha: str | No
     return f"{_TERMINAL_FOLLOWUP_KEY_PREFIX}{job_id}:{status}:{sha}"
 
 
-def _terminal_followup_message(row, *, kind: str, commit_sha: str | None) -> str:
+def _terminal_followup_message(row, *, kind: str, commit_sha: str | None, rdoc: dict | None = None) -> str:
     # 문구에 "AI 검수 대기" 를 넣지 않는다 — chat_service 의 stale 승인 가드가 그 표식으로
     # 종결 잡 대상 트리거를 폐기하므로, 종결 결과 검토는 그 가드와 분리돼야 한다.
     job_id = row["job_id"]
@@ -3089,8 +3096,12 @@ def _terminal_followup_message(row, *, kind: str, commit_sha: str | None) -> str
         "\n진행 중인 CEO 응답이나 추가 지시는 중단하지 말고, 이 검토는 job/상태/SHA 당 한 번만 전달됩니다."
     )
     if kind == "completed":
+        from app.services.document_refs import format_rdoc_lines
+
+        rdoc_lines = "".join(f"{line}\n" for line in format_rdoc_lines(rdoc or {}))
         return (
             "[시스템] Pipeline Runner 작업 종결 결과 검토 (완료)\n\n" + head
+            + (f"{rdoc_lines}\n" if rdoc_lines else "")
             + f"**결과**:\n{output}\n\n"
             "산출물이 실제로 반영됐는지(커밋·변경 파일·테스트·배포 상태)를 도구로 직접 확인하고, "
             "남은 후속 단계가 있으면 이어서 수행한 뒤 확인한 사실만 CEO에게 보고하세요. "
@@ -3137,10 +3148,15 @@ async def _enqueue_terminal_followup(pool, row, *, job_id: str, session_id: str 
     dedupe_key = _terminal_followup_dedupe_key(job_id, status, commit_sha)
     from app.services.chat_service import enqueue_next_step_reaction
 
+    rdoc = None
+    if kind == "completed":
+        from app.services.document_refs import job_rdoc_compliance
+
+        rdoc = await job_rdoc_compliance(pool, job_id)
     try:
         queued = await enqueue_next_step_reaction(
             session_id,
-            _terminal_followup_message(row, kind=kind, commit_sha=commit_sha),
+            _terminal_followup_message(row, kind=kind, commit_sha=commit_sha, rdoc=rdoc),
             dedupe_key=dedupe_key,
         )
     except Exception as exc:
@@ -4203,7 +4219,7 @@ async def submit_batch(
                                 )) END,
                                 NOW(), NOW(), $14::uuid)
                         """,
-                        job_id, req.project, item.instruction, instruction_hash,
+                        job_id, req.project, with_rdoc_block(item.instruction), instruction_hash,
                         req.session_id, req.max_cycles, model, size,
                         worker_model or None, worker_model_reason or None, pg, depends_on,
                         auto_dependency_reason,

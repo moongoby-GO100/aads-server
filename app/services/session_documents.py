@@ -69,6 +69,9 @@ _VIEW_BASES: List[tuple[str, str]] = [
     ("/root/aads/aads-server/docs", "/app/docs"),
     ("/root/aads/aads-server/reports", "/app/reports"),
     ("/root/aads/aads-server/app", "/app/app"),
+    # 운영 컨테이너에서 도구가 보는 최신 문서 마운트. 뷰어(project_docs)가 이 경로를 먼저 읽는다.
+    ("/host/aads-server/docs", "/app/docs"),
+    ("/host/aads-server/reports", "/app/reports"),
     ("/app/app/static/docs", "/app/app/static/docs"),
     ("/app/app/static/reports", "/app/app/static/reports"),
     ("/app/app/static/preview", "/app/app/static/preview"),
@@ -440,11 +443,72 @@ async def collect_session_documents(session_id: Any, limit: int = 80) -> Dict[st
         logger.warning("session_documents runner_message source failed: %s", exc)
 
     docs = col.result(limit)
+
+    # ⑥ 정본 등록 현황 — 이 세션이 등록했거나(source_session_id / chat:<sid8>),
+    #    같은 테넌트에서 이 세션 문서와 같은 source_path 로 이미 등록된 리비전.
+    #    조회는 세션 테넌트로 고정한다(다른 테넌트 행은 절대 섞이지 않는다).
+    canonical_docs: List[Dict[str, Any]] = []
+    doc_rel_paths = sorted({_repo_relative(d["path"]) for d in docs if _repo_relative(d["path"])})
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT h.project_key, h.document_key, r.revision, r.title, r.source_path,
+                   r.created_at AS at, (r.id = h.approved_revision_id) AS approved
+            FROM project_document_revisions r
+            JOIN project_document_heads h ON h.id = r.head_id
+            WHERE r.tenant_id = (SELECT s.tenant_id FROM chat_sessions s WHERE s.id = $1)
+              AND (r.source_session_id = $1
+                   OR r.author_id = 'chat:' || left($1::text, 8)
+                   OR r.source_path = ANY($2::text[]))
+            ORDER BY r.created_at DESC
+            LIMIT 100
+            """,
+            session_id,
+            doc_rel_paths,
+        )
+        if rows:
+            used.append("canonical")
+        from app.services.document_refs import canonical_view_ref
+
+        for r in rows:
+            ref = canonical_view_ref(
+                r["project_key"], r["document_key"], title=r["title"], revision=r["revision"],
+                status="approved" if r["approved"] else "draft", authoritative=bool(r["approved"]),
+            )
+            canonical_docs.append({
+                "project": r["project_key"],
+                "document_key": r["document_key"],
+                "revision": r["revision"],
+                "title": r["title"],
+                "source_path": r["source_path"],
+                "approved": bool(r["approved"]),
+                "at": r["at"].isoformat() if hasattr(r["at"], "isoformat") else r["at"],
+                "view": ref,
+            })
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("session_documents canonical source failed: %s", exc)
+
+    from app.services.document_refs import evaluate_rdoc_compliance
+
+    rdoc = evaluate_rdoc_compliance(
+        [d["path"] for d in docs],
+        [c["source_path"] for c in canonical_docs if c.get("source_path")],
+    )
     return {
         "documents": docs,
         "other_files": col.others,
         "sources_used": used,
+        "canonical_documents": canonical_docs,
+        "rdoc": rdoc,
     }
+
+
+def _repo_relative(abs_path: str) -> str:
+    """절대 경로 → 저장소 기준 상대 경로(docs/…, reports/…). 아니면 빈 문자열."""
+    from app.services.document_refs import _norm, is_new_document_path
+
+    rel = _norm(abs_path)
+    return rel if is_new_document_path(rel) else ""
 
 
 def _iter_changed_files(value: Any) -> List[str]:

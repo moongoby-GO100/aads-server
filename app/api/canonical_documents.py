@@ -15,6 +15,10 @@ from app.core.db_pool import get_pool
 
 router = APIRouter(prefix="/projects/{project_key}/documents", tags=["canonical-documents"])
 ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_ROOT = ROOT
+# 운영 컨테이너의 /app/docs 는 낡은 이미지 사본이고 /app/reports 는 없다. 최신 파일은 읽기 전용
+# 마운트 /host/aads-server 에만 있으므로, 기본 ROOT 일 때만 이 마운트를 먼저 본다(경계 검사는 동일).
+HOST_SOURCE_ROOT = Path("/host/aads-server")
 MAX_DOCUMENT_BYTES = 262144
 KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 PROJECT = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
@@ -60,6 +64,24 @@ async def _authorize(conn: Any, context: dict, project: str, access: str) -> tup
     return tenant, actor
 
 
+def _source_roots() -> list[Path]:
+    roots = [ROOT]
+    if ROOT == _DEFAULT_ROOT and HOST_SOURCE_ROOT.is_dir():
+        roots.insert(0, HOST_SOURCE_ROOT)
+    return roots
+
+
+def _locate_source(candidate: Path) -> Path:
+    for root in _source_roots():
+        try:
+            resolved = (root / candidate).resolve(strict=True)
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file() and resolved.is_relative_to(root.resolve()):
+            return resolved
+    raise HTTPException(422, "invalid_source_path")
+
+
 def _safe_source(path: str | None) -> str | None:
     if path is None:
         return None
@@ -69,18 +91,13 @@ def _safe_source(path: str | None) -> str | None:
     if (candidate.is_absolute() or not candidate.parts or candidate.parts[0] not in ("docs", "reports")
             or any(part in (".", "..") or part.startswith(".") for part in candidate.parts)):
         raise HTTPException(422, "invalid_source_path")
-    try:
-        resolved = (ROOT / candidate).resolve(strict=True)
-    except (OSError, ValueError) as exc:
-        raise HTTPException(422, "invalid_source_path") from exc
-    if not resolved.is_file() or not resolved.is_relative_to(ROOT.resolve()):
-        raise HTTPException(422, "invalid_source_path")
+    _locate_source(candidate)
     return candidate.as_posix()
 
 
 def _read_source(source: str) -> bytes:
     """Read at most one byte past the limit, including if the file grows after stat."""
-    path = ROOT / source
+    path = _locate_source(Path(source))
     try:
         if path.stat().st_size > MAX_DOCUMENT_BYTES:
             raise HTTPException(413, "document_too_large")
@@ -274,6 +291,65 @@ async def get_document(project_key: str, document_key: str, approved_only: bool 
         return {"document": dict(head), "revision": dict(row) if row else None,
                 "status": status or ("draft" if row else "missing"),
                 "authoritative": bool(row and revision_id == head["approved_revision_id"])}
+
+
+@router.get("/{document_key}/content")
+async def get_document_content(project_key: str, document_key: str,
+                               revision: int | None = Query(None, ge=1),
+                               approved_only: bool = False, context: dict = VIEW):
+    """정본 본문을 DB 에서만 읽는다(파일 경로 불사용). 뷰어의 /project-docs/content 응답 모양과 호환."""
+    from app.services.document_refs import canonical_view_ref
+
+    project = _project(project_key)
+    async with get_pool().acquire() as conn:
+        tenant, _ = await _authorize(conn, context, project, "read")
+        head = await _head(conn, tenant, project, document_key)
+        if not head:
+            raise HTTPException(404, "document_not_found")
+        if revision is not None:
+            row = await conn.fetchrow(
+                "SELECT * FROM project_document_revisions WHERE head_id=$1 AND tenant_id=$2::uuid "
+                "AND project_key=$3 AND revision=$4", head["id"], tenant, project, revision,
+            )
+        else:
+            revision_id = head["approved_revision_id"] if approved_only else head["latest_revision_id"]
+            row = await conn.fetchrow(
+                "SELECT * FROM project_document_revisions WHERE head_id=$1 AND id=$2",
+                head["id"], revision_id,
+            ) if revision_id else None
+        if not row:
+            raise HTTPException(404, "revision_not_found")
+        status = await conn.fetchval(
+            "SELECT action FROM project_document_events WHERE revision_id=$1 "
+            "AND action IN ('review','approved','archived') ORDER BY id DESC LIMIT 1", row["id"],
+        ) or "draft"
+    authoritative = row["id"] == head["approved_revision_id"]
+    content = row["content"] or ""
+    ref = canonical_view_ref(project, document_key, title=row["title"], revision=row["revision"],
+                             status=status, authoritative=authoritative)
+    return {
+        "project": project,
+        "document_key": document_key,
+        "file_path": f"{document_key}.md",
+        "content": content,
+        "size": len(content.encode("utf-8")),
+        "encoding": "text",
+        "mime_type": "text/markdown",
+        "is_binary": False,
+        "format": "markdown",
+        "canonical": {
+            "document_key": document_key,
+            "revision": row["revision"],
+            "revision_id": str(row["id"]),
+            "version": row["version"],
+            "status": status,
+            "authoritative": authoritative,
+            "title": row["title"],
+            "content_hash": row["content_hash"],
+            "source_path": row["source_path"],
+        },
+        "view": ref,
+    }
 
 
 @router.get("/{document_key}/history")
