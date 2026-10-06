@@ -4,9 +4,14 @@ browser_fill 로 넣은 아이디·비밀번호를 서버 메모리 슬롯에만
 제출 뒤 로그인 성공이 판정되면 "저장할까요?" 승인 카드를 올린다. CEO 가 승인하면
 그때 슬롯의 비밀번호로 Vault 에 저장한다.
 
-비밀번호 원문은 이 모듈의 슬롯(프로세스 메모리) 밖으로 나가지 않는다 — DB·로그·
-카드 payload·tool 결과 어디에도 없다. 카드에는 슬롯 참조 id 만 들어간다.
-uvicorn 은 --workers 1 이라 슬롯과 승인 처리기가 같은 프로세스에 있다.
+채운 값은 제출 전까지 프로세스 메모리 슬롯에만 있고, 승인 카드를 올리는 순간 같은
+값이 browser_login_save_slots 행(credential_vault 로 암호화)으로 옮겨 적힌다. 승인·거절은
+그 행을 DELETE ... RETURNING 으로 한 번만 꺼내 판정하므로, 카드가 떠 있는 동안 프로세스가
+바뀌어도(blue/green 전환·재기동) 승인이 같은 값을 찾는다. 메모리 dict 는 제안 전 슬롯과
+읽기 캐시일 뿐 판정 근거가 아니다.
+
+비밀번호·아이디 원문은 DB·로그·카드 payload·tool 결과·예외 메시지 어디에도 없다.
+카드에는 슬롯 참조 id 만 들어간다.
 """
 from __future__ import annotations
 
@@ -15,12 +20,13 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +66,7 @@ class _Slot:
     username: str = field(default="", repr=False)
     password: str = field(default="", repr=False)
     request_id: str = ""
+    persisted: bool = False
 
 
 _slots: dict[tuple[str, str, str], _Slot] = {}
@@ -251,8 +258,29 @@ def discard_origin(tenant_id: str, session_id: str, origin: str) -> None:
     _slots.pop(_slot_key(tenant_id, session_id, origin), None)
 
 
+_bg_tasks: set[asyncio.Task] = set()
+
+
+async def _clear_slot_table() -> None:
+    try:
+        from app.core.db_pool import get_pool
+
+        await get_pool().execute("DELETE FROM browser_login_save_slots")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("browser_autosave_clear_table_failed: %s", type(exc).__name__)
+
+
 def clear_all() -> None:
+    """테스트용. 메모리 캐시를 비우고, 테스트 환경이면 슬롯 테이블도 비운다(운영에서는 테이블을 건드리지 않는다)."""
     _slots.clear()
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    try:
+        task = asyncio.get_running_loop().create_task(_clear_slot_table())
+    except RuntimeError:
+        return
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
 
 # ── 브라우저 도구 연동 ───────────────────────────────────────────────
@@ -310,6 +338,7 @@ async def on_fill(
             return
         if from_vault:
             discard_origin(tenant_id, session_id, page_origin(page))
+            await _delete_origin_rows(tenant_id, session_id, page_origin(page))
             if vault_credential_id:
                 from app.services import vault_secure_input
 
@@ -385,6 +414,101 @@ async def _verify_vault_login(page: Any, origin: str, tenant_id: str, session_id
         return ""
 
 
+# ── 슬롯 DB 영속화 ───────────────────────────────────────────────────
+
+def _strip_url(url: str) -> str:
+    """DB 에는 query·fragment 를 뺀 URL 만 둔다 — 토큰이 섞여 있을 수 있다."""
+    parsed = urlparse((url or "").strip())
+    return urlunparse(parsed._replace(params="", query="", fragment=""))
+
+
+async def _persist_slot(conn: Any, slot: _Slot, remaining: float) -> None:
+    from app.core.credential_vault import encrypt_value
+
+    await conn.execute(
+        """
+        INSERT INTO browser_login_save_slots
+            (id, tenant_id, session_id, origin, login_url, username_enc, password_enc,
+             request_id, expires_at)
+        VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, NULL, now() + make_interval(secs => $8))
+        ON CONFLICT (tenant_id, session_id, origin) DO UPDATE
+           SET id = EXCLUDED.id, login_url = EXCLUDED.login_url,
+               username_enc = EXCLUDED.username_enc, password_enc = EXCLUDED.password_enc,
+               request_id = NULL, expires_at = EXCLUDED.expires_at, created_at = now()
+        """,
+        slot.id, slot.tenant_id, slot.session_id, slot.origin, _strip_url(slot.login_url),
+        encrypt_value(slot.username), encrypt_value(slot.password), remaining,
+    )
+
+
+async def _bind_slot_to_card(conn: Any, slot_id: str, request_id: str) -> None:
+    """슬롯 만료를 카드 만료와 같게 맞추고 카드 id 를 적는다."""
+    await conn.execute(
+        "UPDATE browser_login_save_slots s "
+        "   SET expires_at = a.expires_at, request_id = a.id::text "
+        "  FROM agent_permission_requests a "
+        " WHERE a.id = $1::uuid AND s.id = $2",
+        request_id, slot_id,
+    )
+
+
+async def _delete_origin_rows(tenant_id: str, session_id: str, origin: str) -> None:
+    try:
+        from app.core.db_pool import get_pool
+
+        await get_pool().execute(
+            "DELETE FROM browser_login_save_slots "
+            " WHERE tenant_id::text = $1 AND session_id = $2 AND origin = $3",
+            tenant_id, session_id, origin,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("browser_autosave_delete_rows_failed: %s", type(exc).__name__)
+
+
+async def _take_slot(slot_id: str, tenant_id: str) -> tuple[str, Optional[_Slot]]:
+    """슬롯을 한 번만 꺼낸다. ('ok', 슬롯) | ('gone', None) | ('expired', None) | ('mismatch', None).
+
+    판정 근거는 DB 행이다. 아직 카드가 없어 DB 에 쓰인 적 없는 슬롯(persisted=False)만
+    메모리에서 직접 꺼낸다 — 카드가 가리키는 슬롯은 항상 행이 있다.
+    """
+    cached = next((s for s in _slots.values() if s.id == slot_id), None)
+    if cached is not None and not cached.persisted:
+        if cached.tenant_id != tenant_id:
+            return "mismatch", None
+        discard(slot_id)
+        return ("expired", None) if cached.expires_at <= _clock() else ("ok", cached)
+
+    from app.core.credential_vault import decrypt_value
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "DELETE FROM browser_login_save_slots "
+        " WHERE id = $1 AND tenant_id::text = $2 "
+        "RETURNING origin, session_id, login_url, username_enc, password_enc, "
+        "          (expires_at > now()) AS live",
+        slot_id, tenant_id,
+    )
+    if row is None:
+        owner = await pool.fetchval(
+            "SELECT tenant_id::text FROM browser_login_save_slots WHERE id = $1", slot_id,
+        )
+        if owner:
+            return "mismatch", None
+        discard(slot_id)
+        return "gone", None
+    discard(slot_id)
+    if not row["live"]:
+        return "expired", None
+    slot = _Slot(
+        id=slot_id, tenant_id=tenant_id, session_id=str(row["session_id"] or ""),
+        origin=str(row["origin"]), login_url=str(row["login_url"] or ""), expires_at=0.0,
+        username=decrypt_value(row["username_enc"]), password=decrypt_value(row["password_enc"]),
+        persisted=True,
+    )
+    return "ok", slot
+
+
 # ── 제안 카드 ────────────────────────────────────────────────────────
 
 def _scope_key(origin: str, username: str) -> str:
@@ -432,6 +556,9 @@ async def propose_save(tenant_id: str, session_id: str, origin: str) -> dict[str
     remaining = max(1, int(slot.expires_at - _clock()))
     pool = get_pool()
     async with pool.acquire() as conn:
+        # 카드보다 슬롯 행을 먼저 쓴다 — 카드가 보이면 그 슬롯 행은 이미 있다.
+        await _persist_slot(conn, slot, float(remaining))
+        slot.persisted = True
         request_id = await conn.fetchval(
             "SELECT id::text FROM agent_permission_requests "
             " WHERE tenant_id = $1::uuid AND work_key = $2 AND decision = 'pending' "
@@ -460,6 +587,10 @@ async def propose_save(tenant_id: str, session_id: str, origin: str) -> dict[str
                 tenant_id, work_key, origin, ACTION_TYPE, summary, session_id,
                 json.dumps(scope, ensure_ascii=False), float(remaining), GATE_SOURCE,
             )
+        try:
+            await _bind_slot_to_card(conn, slot.id, str(request_id))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("browser_autosave_bind_failed: %s", type(exc).__name__)
     slot.request_id = str(request_id)
     logger.info(
         "browser_autosave_proposed request=%s host=%s mode=%s", str(request_id)[:8], host, mode,
@@ -488,14 +619,19 @@ async def apply_decision(
     request_id: str = "",
 ) -> dict[str, Any]:
     """CEO 결정을 슬롯에 적용한다. 어떤 경우에도 슬롯은 이 호출로 폐기된다."""
-    slot = _find_by_id(slot_id) if slot_id else None
+    if not slot_id:
+        return {"status": "expired" if approved else "discarded"}
+    try:
+        state, slot = await _take_slot(slot_id, tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("browser_autosave_take_failed: %s", type(exc).__name__)
+        return {"status": "error", "error": type(exc).__name__}
+    if state == "mismatch":
+        return {"status": "error", "error": "tenant_mismatch"}
     if slot is None:
         return {"status": "expired" if approved else "discarded"}
-    if slot.tenant_id != tenant_id:
-        return {"status": "error", "error": "tenant_mismatch"}
     origin, username, password = slot.origin, slot.username, slot.password
     host, masked = host_of(origin), mask_username(username)
-    discard(slot.id)
     base = {"origin": origin, "host": host, "username_masked": masked}
     if not approved:
         return {"status": "discarded", **base}
