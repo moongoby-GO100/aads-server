@@ -513,7 +513,7 @@ write_dockerfile() { # write_dockerfile <ctx dir>
         [[ " $keys " == *" $k "* ]] || keys+="$k "
     done
     {
-        echo "FROM $PREV_IMAGE_ID"
+        echo "FROM $BASE_REF"
         printf 'LABEL'
         for k in $keys; do printf ' %s="%s"' "$k" "$SHA8"; done
         printf ' acct.release.sha="%s" acct.release.run="%s" acct.release.base="%s"\n' "$RELEASE_SHA" "$RUN_ID" "$PREV_IMAGE_ID"
@@ -536,6 +536,11 @@ build_image() {
         || die 6 "git archive of the release failed"
     kb="$(du -sk "$BUILD_CTX" | cut -f1)"
     (( kb <= CONTEXT_MAX_MB * 1024 )) || die 6 "build context ${kb}KB exceeds ${CONTEXT_MAX_MB}MB (AGENTS.md rule 11) - investigate before releasing"
+    # BuildKit resolves a bare "sha256:<id>" FROM as a registry name (docker.io/library/sha256) and fails;
+    # pin the running image id under a local tag and build FROM that tag instead.
+    BASE_REF="acct-candidate-base:${PREV_IMAGE_ID#sha256:}"
+    BASE_REF="${BASE_REF:0:33}"
+    rdocker tag "$PREV_IMAGE_ID" "$BASE_REF" >/dev/null || die 6 "cannot tag base image $PREV_IMAGE_ID as $BASE_REF"
     write_dockerfile "$BUILD_CTX"
     say "building $IMAGE_TAG on $CAFE24_SSH once (context ${kb}KB, timeout ${bt}s, base ${PREV_IMAGE_ID:0:19})"
     # shellcheck disable=SC2016

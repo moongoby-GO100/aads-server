@@ -100,6 +100,7 @@ fake_cmd() {
     "docker logs "*) echo "fake log" ;;
     "docker rm "*) name="${c##* }"; grep -v "^$name|" "$D/cands" > "$D/cands.new" || true; mv "$D/cands.new" "$D/cands" ;;
     "docker start "*) : ;;
+    "docker tag "*) echo "TAG ${c#docker tag }" >> "$D/ssh.log" ;;
     "docker exec -i "*)
       sql="$(cat)"
       if [[ $sql == */\*identity\*/* ]]; then echo t
@@ -325,7 +326,10 @@ def test_previous_and_unrelated_containers_are_never_mutated(box):
 def test_build_is_an_overlay_of_the_running_image_with_revision_label_and_no_secrets(box):
     assert box.run().returncode == 0
     dockerfile = (box.fake / "Dockerfile.built").read_text()
-    assert dockerfile.startswith(f"FROM {R8_IMAGE}\n")
+    base_ref = ("acct-candidate-base:" + R8_IMAGE.removeprefix("sha256:"))[:33]
+    # BuildKit treats a bare "FROM sha256:<id>" as a registry name; the base is pinned under a local tag.
+    assert dockerfile.startswith(f"FROM {base_ref}\n")
+    assert any(line.startswith(f"TAG {R8_IMAGE} {base_ref}") for line in (box.fake / "ssh.log").read_text().splitlines())
     assert f'org.opencontainers.image.revision="{box.sha[:8]}"' in dockerfile
     assert f'acct.release.sha="{box.sha}"' in dockerfile
     assert re.findall(r"^COPY .*", dockerfile, re.M) == ["COPY app ./app", "COPY migrations ./migrations", "COPY deploy ./deploy"]
