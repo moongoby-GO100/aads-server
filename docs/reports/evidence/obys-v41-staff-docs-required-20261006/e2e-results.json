@@ -1,0 +1,252 @@
+[
+  {
+    "name": "desktop: 직원 현황에 승인 직원 계약 섹션·계약 작성 버튼",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 기존 화면 이동 없이 같은 페이지에서 편집기 열림",
+    "ok": true,
+    "detail": "https://fb.test/static/apps/obys/mockup-v4-1.html?cv41_request=req-yang#employees"
+  },
+  {
+    "name": "desktop: 직원·회사·점포 문맥 고정 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 금액·입사일 비어 있으면 미리보기 차단",
+    "ok": true,
+    "detail": "저장 전에 빈 칸을 채우십시오.근로자 주소입사일확정 임금"
+  },
+  {
+    "name": "desktop: 근로자 주소 누락을 칸으로 안내",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 미리보기에 입력 조건 반영",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 서버 400 시 입력 보존·해당 칸 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 저장 후 서버 계약 번호·상태 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 저장 본문이 기존 API 형식(snake_case)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 서명요청 연속 클릭 시 1회만 호출",
+    "ok": true,
+    "detail": "requests=1"
+  },
+  {
+    "name": "desktop: 알림 실패를 전송 완료로 표시하지 않음",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 재알림 429 안내",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 새로고침 후 같은 계약 다시 열림",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 서명본 PDF 실제 파일 수신",
+    "ok": true,
+    "detail": "contract-test.pdf"
+  },
+  {
+    "name": "desktop: 직원 목록에 빈 필수값 개수·보류 건수 표시",
+    "ok": true,
+    "detail": "승인 직원 계약가입을 승인한 직원은 여기서 바로 계약서를 작성하고 서명을 요청합니다.계약 보류 1건 — 빈 필수값이 있습니다. [계약 작성]·[이어서 작성]을 누르면 빈 칸이 빨갛게 표시되고 추천값을 넣을 수 있습니다.직원사업자·지점입사서류계약처리 양시험y***@example.com 열"
+  },
+  {
+    "name": "desktop: 서류 창에 미제출 필수서류 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 보건증 만료일 비면 업로드 전에 차단",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 관리자 대리 업로드가 직원 이메일·종류로 저장",
+    "ok": true,
+    "detail": "{\"id\":\"doc-1\",\"employee_email\":\"kim@example.com\",\"business_id\":\"biz-mia\",\"document_type\":\"health_certificate\",\"document_label\":\"보건증\",\"original_filename\":\"test.p"
+  },
+  {
+    "name": "desktop: 입력 단계에서 빈 필수값 즉시 표시",
+    "ok": true,
+    "detail": "비어 있는 필수값 4개 추천값 2개 모두 넣기근로자 생년월일 직접 입력 입사서류(신분증·주민등록등본)나 직원에게 확인해 입력하십시오. 입사서류 확인근로자 주소 직접 입력 입사서류(주민등록등본)나 직원에게 확인해 입력하십시오. 입사서류 확인입사일 추천값 넣기 계약 작성일: 2026-10-"
+  },
+  {
+    "name": "desktop: 빈 칸이 미리보기 전부터 빨갛게 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 추천값 모두 넣기 — 입사일·최저시급 채움",
+    "ok": true,
+    "detail": "start=2026-10-06 wage=10320"
+  },
+  {
+    "name": "desktop: 추정 금지 항목(주소·생년월일)은 직접 입력·서류 확인으로 남김",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 칸을 채우고 나가면 표시 즉시 해제",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 가로 넘침 없음",
+    "ok": true,
+    "detail": "overflow=0px"
+  },
+  {
+    "name": "desktop: 페이지 스크립트 오류 없음",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 직원 현황에 승인 직원 계약 섹션·계약 작성 버튼",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 기존 화면 이동 없이 같은 페이지에서 편집기 열림",
+    "ok": true,
+    "detail": "https://fb.test/static/apps/obys/mockup-v4-1.html?cv41_request=req-yang#employees"
+  },
+  {
+    "name": "mobile: 직원·회사·점포 문맥 고정 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 금액·입사일 비어 있으면 미리보기 차단",
+    "ok": true,
+    "detail": "저장 전에 빈 칸을 채우십시오.근로자 주소입사일확정 임금"
+  },
+  {
+    "name": "mobile: 근로자 주소 누락을 칸으로 안내",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 미리보기에 입력 조건 반영",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 서버 400 시 입력 보존·해당 칸 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 저장 후 서버 계약 번호·상태 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 저장 본문이 기존 API 형식(snake_case)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 서명요청 연속 클릭 시 1회만 호출",
+    "ok": true,
+    "detail": "requests=1"
+  },
+  {
+    "name": "mobile: 알림 실패를 전송 완료로 표시하지 않음",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 재알림 429 안내",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 새로고침 후 같은 계약 다시 열림",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 서명본 PDF 실제 파일 수신",
+    "ok": true,
+    "detail": "contract-test.pdf"
+  },
+  {
+    "name": "mobile: 직원 목록에 빈 필수값 개수·보류 건수 표시",
+    "ok": true,
+    "detail": "승인 직원 계약가입을 승인한 직원은 여기서 바로 계약서를 작성하고 서명을 요청합니다.계약 보류 1건 — 빈 필수값이 있습니다. [계약 작성]·[이어서 작성]을 누르면 빈 칸이 빨갛게 표시되고 추천값을 넣을 수 있습니다.직원사업자·지점입사서류계약처리 양시험y***@example.com 열"
+  },
+  {
+    "name": "mobile: 서류 창에 미제출 필수서류 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 보건증 만료일 비면 업로드 전에 차단",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 관리자 대리 업로드가 직원 이메일·종류로 저장",
+    "ok": true,
+    "detail": "{\"id\":\"doc-1\",\"employee_email\":\"kim@example.com\",\"business_id\":\"biz-mia\",\"document_type\":\"health_certificate\",\"document_label\":\"보건증\",\"original_filename\":\"test.p"
+  },
+  {
+    "name": "mobile: 입력 단계에서 빈 필수값 즉시 표시",
+    "ok": true,
+    "detail": "비어 있는 필수값 4개 추천값 2개 모두 넣기근로자 생년월일 직접 입력 입사서류(신분증·주민등록등본)나 직원에게 확인해 입력하십시오. 입사서류 확인근로자 주소 직접 입력 입사서류(주민등록등본)나 직원에게 확인해 입력하십시오. 입사서류 확인입사일 추천값 넣기 계약 작성일: 2026-10-"
+  },
+  {
+    "name": "mobile: 빈 칸이 미리보기 전부터 빨갛게 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 추천값 모두 넣기 — 입사일·최저시급 채움",
+    "ok": true,
+    "detail": "start=2026-10-06 wage=10320"
+  },
+  {
+    "name": "mobile: 추정 금지 항목(주소·생년월일)은 직접 입력·서류 확인으로 남김",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 칸을 채우고 나가면 표시 즉시 해제",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 가로 넘침 없음",
+    "ok": true,
+    "detail": "overflow=0px"
+  },
+  {
+    "name": "mobile: 페이지 스크립트 오류 없음",
+    "ok": true,
+    "detail": ""
+  }
+]

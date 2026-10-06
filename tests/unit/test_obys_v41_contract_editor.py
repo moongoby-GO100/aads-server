@@ -148,3 +148,38 @@ def test_every_server_missing_label_points_to_an_input(node_result):
     mapped = set(node_result["fieldByLabel"])
     unmapped = {label for label in _server_missing_labels() if label not in mapped and label not in target_level}
     assert not unmapped, f"화면에서 찾을 수 없는 서버 누락 항목: {sorted(unmapped)}"
+
+
+# ---------- 2026-10-06 r2: 직원 입사서류 등록 + 빈 필수값 표시·추천값 ----------
+
+def test_v41_bumps_contract_module_cache_version():
+    for name in ("contract-core.js", "contract-editor-v41.js", "contract-editor-v41.css"):
+        assert f"modules/{name}?v=20261006-r2" in V41, name
+
+
+def test_staff_document_upload_uses_existing_admin_api():
+    # 새 API 없이 기존 입사서류 API 를 쓴다(관리자는 직원 이메일로 대리 등록).
+    for snippet in (
+        'api("/onboarding/document-types")',
+        "api(`/onboarding/documents${",
+        'api("/onboarding/documents", { method: "POST", body: form })',
+        'form.append("employee_email", D.employee.email || "")',
+        "/onboarding/documents/${encodeURIComponent(documentId)}/download`",
+    ):
+        assert snippet in EDITOR, snippet
+    assert "data-cv41-docs=" in EDITOR and "data-cv41-docs-open" in EDITOR
+    # 만료일 필수 서류 목록이 서버와 같다.
+    server = set(re.findall(r'"([a-z_]+)"', _block(SERVICE, "ONBOARDING_EXPIRY_REQUIRED_TYPES = frozenset(", ")\n")))
+    client = set(re.findall(r'"([a-z_]+)"', _block(EDITOR, "const EXPIRY_REQUIRED = new Set([", "]);")))
+    assert server == client
+
+
+def test_required_missing_is_shown_live_with_click_only_suggestions():
+    assert 'id="cv41Missing"' in EDITOR
+    assert "data-cv41-suggest-all" in EDITOR and "data-cv41-suggest=" in EDITOR
+    # 추천값은 클릭(applySuggestion)으로만 들어가고, 생년월일·주소는 추정하지 않는다.
+    suggest = _block(EDITOR, "function suggestionFor(name) {", "function liveMissing()")
+    assert 'case "employeeBirthDate": return from(employee.birth_date' in suggest
+    assert 'case "employeeAddress": return from(employee.address' in suggest
+    assert "MINIMUM_HOURLY_WAGE_2026" in suggest and '=== "hourly"' in suggest
+    assert "if (NO_DEFAULT.has(name)) return null;" in suggest

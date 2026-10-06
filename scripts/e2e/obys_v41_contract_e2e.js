@@ -12,8 +12,10 @@ const check = (name, ok, detail = "") => { results.push({ name, ok: !!ok, detail
 
 function makeServer() {
   const db = {
-    employees: [{ id: "req-yang", name: "양시험", email: "yang@example.com", email_masked: "y***@example.com", phone: "010-1111-2222", birth_date: "1995-03-04", address: "", business_id: "biz-mia", branch: "미아점", onboarding_document_count: 2, status: "approved" }],
+    employees: [{ id: "req-yang", name: "양시험", email: "yang@example.com", email_masked: "y***@example.com", phone: "010-1111-2222", birth_date: "1995-03-04", address: "", business_id: "biz-mia", branch: "미아점", onboarding_document_count: 2, status: "approved" },
+      { id: "req-kim", name: "김시험", email: "kim@example.com", email_masked: "k***@example.com", phone: "010-3333-4444", birth_date: "", address: "", business_id: "biz-mia", branch: "미아점", onboarding_document_count: 0, status: "approved" }],
     contracts: [],
+    docs: [], docPosts: [],
     posts: 0, requests: 0, pdfCalls: 0
   };
   return db;
@@ -64,6 +66,19 @@ async function run(viewport, label) {
     if (m) return json({ detail: "서명 요청 알림은 5분에 한 번만 보낼 수 있습니다. 280초 후 다시 시도하십시오" }, 429);
     m = p.match(/^\/contracts\/([^/]+)\/signed-pdf$/);
     if (m) { db.pdfCalls += 1; return route.fulfill({ status: 200, contentType: "application/pdf", headers: { "content-disposition": 'attachment; filename="contract-test.pdf"' }, body: Buffer.from("%PDF-1.4\n%test\n") }); }
+    if (p === "/onboarding/document-types") return json({ document_types: [
+      { type: "resident_register", label: "주민등록등본", requirement: "필수", notice: "마스킹본" },
+      { type: "health_certificate", label: "보건증", requirement: "필수", notice: "" },
+      { type: "bank_account", label: "통장사본", requirement: "선택", notice: "" }] });
+    if (p === "/onboarding/documents" && method === "GET") return json({ documents: db.docs });
+    if (p === "/onboarding/documents" && method === "POST") {
+      const raw = route.request().postDataBuffer()?.toString("latin1") || "";
+      const field = name => (raw.match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)`)) || [])[1] || "";
+      const doc = { id: `doc-${db.docs.length + 1}`, employee_email: field("employee_email"), business_id: "biz-mia", document_type: field("document_type"), document_label: field("document_type") === "health_certificate" ? "보건증" : "주민등록등본", original_filename: "test.pdf", status: "uploaded", status_label: "검토 대기", issue_date: field("issue_date"), expires_at: field("expires_at") };
+      db.docPosts.push(doc);
+      db.docs.push(doc);
+      return json({ document: doc });
+    }
     if (url.pathname.startsWith("/api/")) return json({});
     return route.fulfill({ status: 404, body: "" });
   });
@@ -143,6 +158,49 @@ async function run(viewport, label) {
   const pdfPath = path.join(outDir, `${label}-signed.pdf`);
   await download.saveAs(pdfPath);
   check(`${label}: 서명본 PDF 실제 파일 수신`, fs.readFileSync(pdfPath).slice(0, 5).toString() === "%PDF-", download.suggestedFilename());
+  // 직원 입사서류 등록(관리자)
+  await page.evaluate(() => document.querySelector('[data-route="employees"]').click());
+  await page.waitForSelector('#contractV41 [data-cv41-docs="req-kim"]', { timeout: 15000 });
+  const listText = await page.textContent("#contractV41");
+  check(`${label}: 직원 목록에 빈 필수값 개수·보류 건수 표시`, listText.includes("빈 필수값") && listText.includes("계약 보류"), listText.replace(/\s+/g, " ").slice(0, 160));
+  await page.click('#contractV41 [data-cv41-docs="req-kim"]');
+  await page.waitForSelector("#staffDocsV41[open] #cv41DocType");
+  const docsText = await page.textContent("#staffDocsV41");
+  check(`${label}: 서류 창에 미제출 필수서류 표시`, docsText.includes("미제출 필수서류 2개") && docsText.includes("보건증"));
+  await page.click('#staffDocsV41 [data-cv41-doc-pick="health_certificate"]');
+  await page.setInputFiles("#cv41DocFile", { name: "health.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n%doc\n") });
+  await page.click("#staffDocsV41 [data-cv41-doc-upload]");
+  await page.waitForSelector("#staffDocsV41 .cv41-alert.bad");
+  check(`${label}: 보건증 만료일 비면 업로드 전에 차단`, (await page.textContent("#staffDocsV41 .cv41-alert.bad")).includes("만료일") && db.docPosts.length === 0);
+  await page.selectOption("#cv41DocType", "health_certificate");
+  await page.fill("#cv41DocExpire", "2027-10-06");
+  await page.setInputFiles("#cv41DocFile", { name: "health.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n%doc\n") });
+  await page.click("#staffDocsV41 [data-cv41-doc-upload]");
+  await page.waitForFunction(() => (document.querySelector("#staffDocsV41")?.textContent || "").includes("등록된 서류 1건"), null, { timeout: 10000 });
+  check(`${label}: 관리자 대리 업로드가 직원 이메일·종류로 저장`, db.docPosts.length === 1 && db.docPosts[0].employee_email === "kim@example.com" && db.docPosts[0].document_type === "health_certificate", JSON.stringify(db.docPosts[0] || {}).slice(0, 160));
+  await page.screenshot({ path: path.join(outDir, `${label}-06-staff-docs.png`) });
+  await page.click("#staffDocsV41 .cv41-foot [data-cv41-docs-close]");
+
+  // 빈 필수값 표시·추천값
+  await page.click('#contractV41 [data-cv41-employee="req-kim"]');
+  await page.waitForSelector("#contractEditorV41[open] #cv41Missing");
+  const panel = await page.textContent("#cv41Missing");
+  check(`${label}: 입력 단계에서 빈 필수값 즉시 표시`, panel.includes("비어 있는 필수값") && panel.includes("입사일") && panel.includes("근로자 주소"), panel.replace(/\s+/g, " ").slice(0, 160));
+  check(`${label}: 빈 칸이 미리보기 전부터 빨갛게 표시`, (await page.getAttribute("#cv41_startDate", "aria-invalid")) === "true");
+  await page.screenshot({ path: path.join(outDir, `${label}-07-required-missing.png`) });
+  await page.click("[data-cv41-suggest-all]");
+  const start = await page.inputValue("#cv41_startDate");
+  const wage = await page.inputValue("#cv41_wage");
+  check(`${label}: 추천값 모두 넣기 — 입사일·최저시급 채움`, /^\d{4}-\d{2}-\d{2}$/.test(start) && wage === "10320", `start=${start} wage=${wage}`);
+  const after = await page.textContent("#cv41Missing");
+  check(`${label}: 추정 금지 항목(주소·생년월일)은 직접 입력·서류 확인으로 남김`, after.includes("근로자 주소") && after.includes("근로자 생년월일") && !after.includes("입사일") && (await page.$("#cv41Missing [data-cv41-docs-open]")) !== null);
+  await page.fill("#cv41_employeeAddress", "서울시 강북구 시험로 2");
+  await page.locator("#cv41_employeeAddress").blur();
+  check(`${label}: 칸을 채우고 나가면 표시 즉시 해제`, (await page.getAttribute("#cv41_employeeAddress", "aria-invalid")) === null && !(await page.textContent("#cv41Missing")).includes("근로자 주소"));
+  await page.screenshot({ path: path.join(outDir, `${label}-08-suggested.png`) });
+  page.once("dialog", d => d.accept());
+  await page.click("#contractEditorV41 .cv41-foot [data-cv41-close]");
+
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check(`${label}: 가로 넘침 없음`, overflow <= 1, `overflow=${overflow}px`);
   check(`${label}: 페이지 스크립트 오류 없음`, errors.length === 0, errors.join(" | ").slice(0, 300));

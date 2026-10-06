@@ -90,6 +90,12 @@
   // 서버 기본값이 실제 금액을 정하면 안 된다(PRD: 실제 금액 기본값 추정 금지).
   const NO_DEFAULT = new Set(["wage", "baseSalary"]);
   const PASS_THROUGH = ["bankName", "bankAccountHolder", "bankAccountMasked", "healthCertificateValidUntil", "onboardingDocumentSummary"];
+  // 추천값이 없는 필수값의 안내. 생년월일·주소·임금은 추정하지 않는다(시급제 최저시급만 버튼으로 제안).
+  const NO_SUGGEST_HINT = {
+    employeeBirthDate: "입사서류(신분증·주민등록등본)나 직원에게 확인해 입력하십시오.",
+    employeeAddress: "입사서류(주민등록등본)나 직원에게 확인해 입력하십시오.",
+    wage: "실제 임금을 직접 입력하십시오."
+  };
 
   // ---------- 값 변환 ----------
   const snake = key => key.replace(/[A-Z]/g, ch => "_" + ch.toLowerCase());
@@ -282,6 +288,24 @@
       if (contract) openEditor({ contract });
     }));
     box.querySelectorAll("[data-cv41-pdf]").forEach(button => button.addEventListener("click", () => downloadPdf(button.dataset.cv41Pdf, button)));
+    box.querySelectorAll("[data-cv41-docs]").forEach(button => button.addEventListener("click", () => {
+      const employee = S.employees.find(item => employeeKey(item) === button.dataset.cv41Docs);
+      if (employee) openDocs(employee);
+    }));
+  }
+  function gapBadge(count) { return count ? ` <span class="badge warn">빈 필수값 ${count}</span>` : ""; }
+  /** 작성 전·작성중 계약의 빈 필수값 수. 서명요청 이후 계약은 0(이미 서버 검증 통과). */
+  function rowMissingCount(employee, contract) {
+    if (contract && statusOf(contract)[0] !== "draft") return 0;
+    if (!contract && !employee) return 0;
+    const values = contract ? valuesFromContract(contract) : valuesFromEmployee(employee);
+    const target = contract
+      ? { employee_request_id: pick(contract, "employeeRequestId"), business_id: pick(contract, "businessId"), branch: pick(contract, "branch") }
+      : { employee_request_id: employee.id, business_id: employee.business_id, branch: employee.branch };
+    try {
+      const result = checkLocally(draftFromValues(values, target));
+      return result.ok ? 0 : (result.missing.length || 1);
+    } catch (_error) { return 1; }
   }
   function badge([, text, tone]) { return `<span class="badge ${esc(tone)}">${esc(text)}</span>`; }
   function employeeTable() {
@@ -295,11 +319,13 @@
         <td data-label="직원"><b>${esc(employee.name || "이름 없음")}</b><small>${esc(employee.email_masked || "")}</small></td>
         <td data-label="사업자·지점">${esc(businessName(employee.business_id))}<small>${esc(employee.branch || "지점 미정")}</small></td>
         <td data-label="입사서류">${docs ? `${docs}건` : '<span class="badge warn">미제출</span>'}</td>
-        <td data-label="계약">${latest ? `${badge(statusOf(latest))}<small>${esc(fmtTime(latest.updated_at))}</small>` : '<span class="badge bad">작성 필요</span>'}</td>
-        <td data-label="처리"><button class="btn ${latest ? "" : "primary"}" type="button" data-cv41-employee="${esc(employeeKey(employee))}">${action}</button></td>
+        <td data-label="계약">${latest ? `${badge(statusOf(latest))}<small>${esc(fmtTime(latest.updated_at))}</small>` : '<span class="badge bad">작성 필요</span>'}${gapBadge(rowMissingCount(employee, latest))}</td>
+        <td data-label="처리"><button class="btn ${latest ? "" : "primary"}" type="button" data-cv41-employee="${esc(employeeKey(employee))}">${action}</button> <button class="btn" type="button" data-cv41-docs="${esc(employeeKey(employee))}">서류 등록</button></td>
       </tr>`;
     }).join("");
-    return `<div class="table-wrap"><table class="cv41-table"><thead><tr><th>직원</th><th>사업자·지점</th><th>입사서류</th><th>계약</th><th>처리</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    const held = S.employees.map(employee => rowMissingCount(employee, contractsOf(employee)[0])).filter(Boolean).length;
+    const heldNote = held ? `<p class="cv41-alert warn">계약 보류 ${held}건 — 빈 필수값이 있습니다. [계약 작성]·[이어서 작성]을 누르면 빈 칸이 빨갛게 표시되고 추천값을 넣을 수 있습니다.</p>` : "";
+    return `${heldNote}<div class="table-wrap"><table class="cv41-table"><thead><tr><th>직원</th><th>사업자·지점</th><th>입사서류</th><th>계약</th><th>처리</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   function contractTable() {
     const counts = { all: 0, draft: 0, requested: 0, signed: 0 };
@@ -314,7 +340,7 @@
         <td data-label="직원"><b>${esc(pick(contract, "employeeName") || "-")}</b><small>${esc(contract.employee_email_masked || "")}</small></td>
         <td data-label="사업자·지점">${esc(businessName(pick(contract, "businessId")))}<small>${esc(pick(contract, "branch") || "-")}</small></td>
         <td data-label="계약 유형">${esc(C.contractTypeLabels[pick(contract, "contractType")] || pick(contract, "contractType") || "-")}</td>
-        <td data-label="상태">${badge(statusOf(contract))}<small>${esc(when)}</small></td>
+        <td data-label="상태">${badge(statusOf(contract))}<small>${esc(when)}</small>${gapBadge(rowMissingCount(null, contract))}</td>
         <td data-label="처리"><button class="btn" type="button" data-cv41-contract="${esc(contract.id)}">${key === "draft" ? "이어서 작성" : "열기"}</button>${key === "signed" ? ` <button class="btn" type="button" data-cv41-pdf="${esc(contract.id)}">서명본 PDF</button>` : ""}</td>
       </tr>`;
     }).join("");
@@ -421,13 +447,14 @@
         <div class="detail-cell"><small>직원</small><b>${esc(employee.name || "-")}</b><small>${esc(employee.email_masked || "")}</small></div>
         <div class="detail-cell"><small>사업자(사용자)</small><b>${esc(businessName(employee.business_id))}</b></div>
         <div class="detail-cell"><small>근무 지점</small><b>${esc(employee.branch || "지점 미정")}</b></div>
-        <div class="detail-cell"><small>입사서류</small><b>${Number(employee.onboarding_document_count || 0)}건</b><small>${gaps.length ? `비어 있는 정보: ${esc(gaps.join(", "))} — 계약조건 단계에서 입력합니다.` : "인적사항 확인됨"}</small></div>
+        <div class="detail-cell"><small>입사서류</small><b>${Number(employee.onboarding_document_count || 0)}건</b><small>${gaps.length ? `비어 있는 정보: ${esc(gaps.join(", "))} — 계약조건 단계에서 입력합니다.` : "인적사항 확인됨"}</small><button class="btn" type="button" data-cv41-docs-open>서류 등록·확인</button></div>
       </div>${latest ? `<p class="cv41-alert warn">이 직원에게 이미 ${esc(statusOf(latest)[1])} 계약서가 있습니다. <button class="btn" type="button" data-cv41-contract-open="${esc(latest.id)}">기존 계약 열기</button> 새로 작성하면 별도 계약서가 됩니다.</p>` : ""}` : ""}`;
   }
   function fieldControl(field) {
     const value = E.values[field.name] ?? "";
     const disabled = readOnly() || field.readonly ? "readonly" : "";
-    const invalid = E.missing.some(label => FIELD_BY_LABEL.get(label) === field.name);
+    const invalid = E.missing.some(label => FIELD_BY_LABEL.get(label) === field.name) || Boolean(E.live?.has(field.name));
+    const suggestion = invalid && !readOnly() ? suggestionFor(field.name) : null;
     const id = `cv41_${field.name}`;
     const common = `id="${id}" name="${field.name}" data-cv41-field ${invalid ? 'aria-invalid="true"' : ""} ${field.hint ? `aria-describedby="${id}_hint"` : ""}`;
     let control;
@@ -439,14 +466,17 @@
       const type = field.type === "number" ? 'type="number" inputmode="numeric" min="0" step="1"' : `type="${field.type}"`;
       control = `<input class="field" ${type} ${common} value="${esc(value)}" ${disabled}>`;
     }
-    return `<div class="form-field ${invalid ? "invalid" : ""} ${field.type === "textarea" ? "wide" : ""}"><label for="${id}">${esc(field.label)}</label>${control}${field.hint ? `<small id="${id}_hint">${esc(field.hint)}</small>` : ""}</div>`;
+    const suggestHtml = suggestion ? `<button class="btn cv41-suggest" type="button" data-cv41-suggest="${esc(field.name)}">추천값 넣기: ${esc(shortText(suggestion.value))}</button>` : "";
+    return `<div class="form-field ${invalid ? "invalid" : ""} ${field.type === "textarea" ? "wide" : ""}"><label for="${id}">${esc(field.label)}${invalid ? ' <span class="cv41-req">필수·비어 있음</span>' : ""}</label>${control}${suggestHtml}${field.hint ? `<small id="${id}_hint">${esc(field.hint)}</small>` : ""}</div>`;
   }
   function stepConditions() {
     const type = E.values.contractType || "part_time";
     const visible = field => !field.only || field.only === type;
+    const liveLabels = liveMissing();
+    E.live = missingNames(liveLabels);
     const groupHtml = GROUPS.map(([key, title]) => {
       const fields = FIELDS.filter(field => field.g === key && visible(field));
-      const hasMissing = fields.some(field => E.missing.some(label => FIELD_BY_LABEL.get(label) === field.name));
+      const hasMissing = fields.some(field => E.missing.some(label => FIELD_BY_LABEL.get(label) === field.name) || E.live.has(field.name));
       const collapsible = key === "employee" || key === "employer";
       const inner = `<div class="form-grid">${fields.map(fieldControl).join("")}</div>`;
       return collapsible
@@ -455,7 +485,7 @@
     }).join("");
     const lockNote = E.contract && statusOf(E.contract)[0] === "requested"
       ? '<p class="cv41-alert warn">서명요청을 보낸 계약서입니다. 조건을 바꿔 저장하면 보낸 서명 링크가 무효가 되고 서명요청을 다시 보내야 합니다.</p>' : "";
-    return `${lockNote}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 금액은 자동으로 넣지 않습니다. <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${groupHtml}`;
+    return `${lockNote}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 금액은 자동으로 넣지 않습니다. <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels)}</div>`}${groupHtml}`;
   }
   function currentDraft() { return draftFromValues(E.values, E.target || {}); }
   function stepPreview() {
@@ -541,7 +571,10 @@
         }
       };
       input.addEventListener(input.tagName === "SELECT" ? "change" : "input", handler);
+      if (input.name !== "contractType") input.addEventListener("change", refreshMissing);
     });
+    wireMissing(dialog);
+    dialog.querySelectorAll("[data-cv41-docs-open]").forEach(button => button.addEventListener("click", () => { if (E.employee) openDocs(E.employee); }));
     dialog.querySelector("[data-cv41-defaults]")?.addEventListener("click", () => { applyDefaults(false); E.dirty = true; render(); });
     dialog.querySelectorAll("[data-cv41-go]").forEach(button => button.addEventListener("click", () => { E.step = Number(button.dataset.cv41Go); E.error = ""; render(); }));
     dialog.querySelector("[data-cv41-preview]")?.addEventListener("click", previewStep);
@@ -551,8 +584,102 @@
     dialog.querySelector("[data-cv41-copy]")?.addEventListener("click", copyLink);
     dialog.querySelector("[data-cv41-regen]")?.addEventListener("click", regeneratePdf);
     dialog.querySelector("[data-cv41-pdf-now]")?.addEventListener("click", event => downloadPdf(E.contract.id, event.target));
-    const firstInvalid = dialog.querySelector('[aria-invalid="true"]');
+    const firstInvalid = E.missing.length ? dialog.querySelector('[aria-invalid="true"]') : null;
     if (firstInvalid) firstInvalid.focus();
+  }
+
+  // ---------- 빈 필수값 표시·추천값 ----------
+  function shortText(value) { const text = String(value ?? ""); return text.length > 30 ? `${text.slice(0, 30)}…` : text; }
+  /** 비어 있는 필수값에 넣을 추천값. 누를 때만 들어간다(자동 입력 아님). */
+  function suggestionFor(name) {
+    if (!E) return null;
+    const employee = E.employee || {};
+    const business = businessRecord(E.target?.business_id);
+    const from = (value, note) => (String(value ?? "").trim() ? { value: String(value), note } : null);
+    switch (name) {
+      case "contractDate": return from(C.today(), "오늘");
+      case "startDate": return from(E.values.contractDate || C.today(), "계약 작성일");
+      case "workplace": return E.target?.branch ? from(`${businessName(E.target.business_id)} ${E.target.branch}`, "근무 지점") : null;
+      case "employeeName": return from(employee.name, "가입 정보");
+      case "employeePhone": return from(employee.phone, "가입 정보");
+      case "employeeBirthDate": return from(employee.birth_date, "입사서류");
+      case "employeeAddress": return from(employee.address, "입사서류");
+      case "employeeNationality": return from("대한민국", "기본값");
+      case "employerName": return from(business.name, "사업자 등록정보");
+      case "employerRegistrationNo": return from(business.registration_no, "사업자 등록정보");
+      case "employerRepresentative": return from(business.representative, "사업자 등록정보");
+      case "employerPhone": return from(business.phone, "사업자 등록정보");
+      case "employerAddress": return from(business.address, "사업자 등록정보");
+      case "wage": return (E.values.wageType || "hourly") === "hourly" ? from(C.MINIMUM_HOURLY_WAGE_2026, "2026년 최저시급 — 실제 시급인지 확인") : null;
+      default: break;
+    }
+    if (NO_DEFAULT.has(name)) return null;
+    const defaults = C.defaultsFor(E.values.contractType || "part_time", E.values.employmentTaxType || "four_insurance");
+    return from(defaults[name], "표준 조항");
+  }
+  function liveMissing() {
+    if (!E || readOnly()) return [];
+    try {
+      const result = checkLocally(currentDraft());
+      return result.ok ? [] : result.missing;
+    } catch (_error) { return []; }
+  }
+  function missingNames(labels) { return new Set(labels.map(label => FIELD_BY_LABEL.get(label)).filter(Boolean)); }
+  function missingPanelHtml(labels) {
+    if (!labels.length) return '<div class="cv41-alert good" role="status">필수값이 모두 채워졌습니다. 내용을 확인하고 미리보기를 누르십시오.</div>';
+    let suggestable = 0;
+    const items = labels.map(label => {
+      const name = FIELD_BY_LABEL.get(label);
+      const suggestion = name ? suggestionFor(name) : null;
+      if (suggestion) suggestable += 1;
+      const action = suggestion
+        ? `<button class="btn" type="button" data-cv41-suggest="${esc(name)}">추천값 넣기</button> <small>${esc(suggestion.note)}: ${esc(shortText(suggestion.value))}</small>`
+        : name
+          ? `<button class="btn" type="button" data-cv41-focus="${esc(name)}">직접 입력</button> <small>${esc(NO_SUGGEST_HINT[name] || "추천값이 없습니다. 직접 입력하십시오.")}</small>${(name === "employeeBirthDate" || name === "employeeAddress") && E?.employee ? ' <button class="btn" type="button" data-cv41-docs-open>입사서류 확인</button>' : ""}`
+          : "";
+      return `<li><b>${esc(label)}</b> ${action}</li>`;
+    }).join("");
+    return `<div class="cv41-alert warn" role="status"><b>비어 있는 필수값 ${labels.length}개</b>${suggestable ? ` <button class="btn primary" type="button" data-cv41-suggest-all>추천값 ${suggestable}개 모두 넣기</button>` : ""}<ul class="cv41-missing">${items}</ul><small>추천값은 누를 때만 들어갑니다. 넣은 뒤 실제 조건과 맞는지 확인하십시오.</small></div>`;
+  }
+  function applySuggestion(name) {
+    const suggestion = suggestionFor(name);
+    if (!suggestion) return false;
+    E.values[name] = suggestion.value;
+    E.missing = E.missing.filter(label => FIELD_BY_LABEL.get(label) !== name);
+    if (!E.missing.length) E.error = "";
+    E.dirty = true;
+    E.previewed = false;
+    return true;
+  }
+  function wireMissing(root) {
+    if (!root) return;
+    root.querySelectorAll("[data-cv41-suggest]").forEach(button => button.addEventListener("click", () => { applySuggestion(button.dataset.cv41Suggest); render(); }));
+    root.querySelector("[data-cv41-suggest-all]")?.addEventListener("click", () => {
+      liveMissing().forEach(label => { const name = FIELD_BY_LABEL.get(label); if (name) applySuggestion(name); });
+      render();
+    });
+    root.querySelectorAll("[data-cv41-focus]").forEach(button => button.addEventListener("click", () => {
+      const input = dialog.querySelector(`#cv41_${button.dataset.cv41Focus}`);
+      input?.closest("details")?.setAttribute("open", "");
+      input?.focus();
+    }));
+    if (root !== dialog) root.querySelectorAll("[data-cv41-docs-open]").forEach(button => button.addEventListener("click", () => { if (E?.employee) openDocs(E.employee); }));
+  }
+  /** 입력칸을 벗어날 때 요약·빨간 표시만 다시 그린다(입력 중 포커스를 빼앗지 않는다). */
+  function refreshMissing() {
+    const box = dialog?.querySelector("#cv41Missing");
+    if (!box || !E || E.step !== 1) return;
+    const labels = liveMissing();
+    E.live = missingNames(labels);
+    box.innerHTML = missingPanelHtml(labels);
+    wireMissing(box);
+    dialog.querySelectorAll("[data-cv41-field]").forEach(input => {
+      const bad = E.live.has(input.name) || E.missing.some(label => FIELD_BY_LABEL.get(label) === input.name);
+      const wrap = input.closest(".form-field");
+      wrap?.classList.toggle("invalid", bad);
+      if (bad) input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid");
+      if (!bad) { wrap?.querySelector(".cv41-req")?.remove(); wrap?.querySelector(".cv41-suggest")?.remove(); }
+    });
   }
   function applyDefaults(overwrite) {
     const defaults = C.defaultsFor(E.values.contractType || "part_time", E.values.employmentTaxType || "four_insurance");
@@ -718,9 +845,154 @@
     if (box && ROUTES.has(route)) renderSection(route, box);
   }
 
+  // ---------- 직원 입사서류 등록(관리자) ----------
+  // 서버 API 는 기존 것을 쓴다: GET /onboarding/document-types, GET /onboarding/documents,
+  // POST /onboarding/documents(관리자는 직원 이메일로 대리 등록 가능), GET .../{id}/download.
+  const DOC_MAX_BYTES = 10 * 1024 * 1024;
+  const DOC_ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,.heic,.tif,.tiff,.hwp,.doc,.docx";
+  const EXPIRY_REQUIRED = new Set(["health_certificate", "foreign_registration", "visa_status_certificate", "work_permission_confirmation"]);
+  let docsDialog = null;
+  const D = { employee: null, types: [], docs: [], busy: false, error: "", loading: false };
+  function ensureDocsDialog() {
+    if (docsDialog) return docsDialog;
+    docsDialog = document.createElement("dialog");
+    docsDialog.id = "staffDocsV41";
+    docsDialog.className = "cv41-dialog cv41-docs";
+    docsDialog.setAttribute("aria-labelledby", "cv41DocsTitle");
+    docsDialog.addEventListener("cancel", event => { event.preventDefault(); docsDialog.close(); });
+    document.body.append(docsDialog);
+    return docsDialog;
+  }
+  function docsOfEmployee(list, employee) {
+    const email = String(employee.email || "").toLowerCase();
+    const requestId = String(employee.id || "");
+    return (list || []).filter(item => String(item.status || "") !== "superseded" && String(item.status || "") !== "deleted")
+      .filter(item => (email && String(item.employee_email || "").toLowerCase() === email) || (requestId && String(item.employee_request_id || "") === requestId))
+      .filter(item => !item.business_id || !employee.business_id || String(item.business_id) === String(employee.business_id))
+      .sort((a, b) => String(b.uploaded_at || b.created_at || "").localeCompare(String(a.uploaded_at || a.created_at || "")));
+  }
+  async function openDocs(employee) {
+    D.employee = employee; D.error = ""; D.busy = false; D.loading = true; D.docs = [];
+    ensureDocsDialog();
+    renderDocs();
+    if (!docsDialog.open) docsDialog.showModal();
+    try {
+      const [types, docs] = await Promise.all([
+        D.types.length ? Promise.resolve({ document_types: D.types }) : api("/onboarding/document-types"),
+        api(`/onboarding/documents${employee.business_id ? `?business_id=${encodeURIComponent(employee.business_id)}` : ""}`)
+      ]);
+      D.types = types.document_types || [];
+      D.docs = docsOfEmployee(docs.documents, employee);
+    } catch (error) {
+      D.error = errorText(error, "입사서류 조회");
+    } finally {
+      D.loading = false; renderDocs();
+    }
+  }
+  function missingRequiredDocs() {
+    const have = new Set(D.docs.map(item => String(item.document_type || "")));
+    return D.types.filter(item => String(item.requirement || "") === "필수" && !have.has(String(item.type)));
+  }
+  function renderDocs() {
+    if (!docsDialog || !D.employee) return;
+    const employee = D.employee;
+    const missing = missingRequiredDocs();
+    const options = D.types.map(item => `<option value="${esc(item.type)}">${esc(item.label)} (${esc(item.requirement || "")})${missing.some(m => m.type === item.type) ? " — 미제출" : ""}</option>`).join("");
+    const rows = D.docs.map(item => `<tr>
+        <td data-label="서류"><b>${esc(item.document_label || item.document_type || "-")}</b><small>${esc(item.original_filename || "")}</small></td>
+        <td data-label="상태">${esc(item.status_label || item.status || "-")}${item.expiry_label ? ` <span class="badge warn">${esc(item.expiry_label)}</span>` : ""}</td>
+        <td data-label="발급·만료">${esc(String(item.issue_date || "").slice(0, 10) || "-")}${item.expires_at ? ` ~ ${esc(String(item.expires_at).slice(0, 10))}` : ""}</td>
+        <td data-label="처리"><button class="btn" type="button" data-cv41-doc-dl="${esc(item.id)}">내려받기</button></td>
+      </tr>`).join("");
+    docsDialog.innerHTML = `
+      <div class="modal-head cv41-head"><div><h2 id="cv41DocsTitle">직원 입사서류 등록</h2><p>${esc(employee.name || "이름 없음")} · ${esc(businessName(employee.business_id))} · ${esc(employee.branch || "지점 미정")}</p></div><button class="close" type="button" data-cv41-docs-close aria-label="닫기">×</button></div>
+      ${D.error ? `<div class="cv41-alert bad" role="alert">${esc(D.error)}</div>` : ""}
+      <div class="cv41-body">
+        ${D.loading ? '<div class="empty">서류 목록을 불러오는 중입니다.</div>' : `
+        ${missing.length ? `<div class="cv41-alert warn" role="status"><b>미제출 필수서류 ${missing.length}개</b><ul class="cv41-missing">${missing.map(item => `<li><b>${esc(item.label)}</b> <button class="btn" type="button" data-cv41-doc-pick="${esc(item.type)}">이 서류 올리기</button>${item.notice ? ` <small>${esc(item.notice)}</small>` : ""}</li>`).join("")}</ul></div>` : (D.types.length ? '<div class="cv41-alert good" role="status">필수 입사서류가 모두 등록돼 있습니다.</div>' : "")}
+        <fieldset class="cv41-group"><legend>서류 올리기 (관리자가 직원 대신 등록)</legend>
+          <div class="form-grid">
+            <div class="form-field"><label for="cv41DocType">서류 종류</label><select id="cv41DocType" class="field">${options}</select></div>
+            <div class="form-field"><label for="cv41DocIssue">발급일</label><input id="cv41DocIssue" class="field" type="date"></div>
+            <div class="form-field"><label for="cv41DocExpire">만료일 <span id="cv41DocExpireReq" class="cv41-req" hidden>필수</span></label><input id="cv41DocExpire" class="field" type="date"><small>보건증·외국인등록증·체류자격·취업허가는 만료일이 필수입니다.</small></div>
+            <div class="form-field wide"><label for="cv41DocFile">파일 (PDF·이미지·한글·워드, 10MB 이하)</label><input id="cv41DocFile" class="field" type="file" accept="${DOC_ACCEPT}"></div>
+            <div class="form-field wide"><label for="cv41DocMemo">메모</label><input id="cv41DocMemo" class="field" type="text" maxlength="500" placeholder="예: 원본 확인함, 주민번호 뒷자리 마스킹본"></div>
+          </div>
+        </fieldset>
+        <h3 class="cv41-subhead">등록된 서류 ${D.docs.length}건</h3>
+        ${D.docs.length ? `<div class="table-wrap contract-v41"><table class="cv41-table"><thead><tr><th>서류</th><th>상태</th><th>발급·만료</th><th>처리</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">등록된 입사서류가 없습니다.</div>'}`}
+      </div>
+      <div class="cv41-foot"><button class="btn primary" type="button" data-cv41-doc-upload ${D.busy || D.loading ? "disabled" : ""}>${D.busy ? "올리는 중…" : "서류 올리기"}</button><button class="btn" type="button" data-cv41-docs-close>닫기</button></div>`;
+    docsDialog.querySelectorAll("[data-cv41-docs-close]").forEach(button => button.addEventListener("click", () => docsDialog.close()));
+    const typeSelect = docsDialog.querySelector("#cv41DocType");
+    const syncExpiry = () => { const req = docsDialog.querySelector("#cv41DocExpireReq"); if (req && typeSelect) req.hidden = !EXPIRY_REQUIRED.has(typeSelect.value); };
+    if (typeSelect && missing.length) typeSelect.value = missing[0].type;
+    typeSelect?.addEventListener("change", syncExpiry);
+    syncExpiry();
+    docsDialog.querySelectorAll("[data-cv41-doc-pick]").forEach(button => button.addEventListener("click", () => { typeSelect.value = button.dataset.cv41DocPick; syncExpiry(); docsDialog.querySelector("#cv41DocFile")?.focus(); }));
+    docsDialog.querySelector("[data-cv41-doc-upload]")?.addEventListener("click", uploadDoc);
+    docsDialog.querySelectorAll("[data-cv41-doc-dl]").forEach(button => button.addEventListener("click", () => downloadDoc(button.dataset.cv41DocDl, button)));
+  }
+  async function uploadDoc() {
+    if (D.busy || !D.employee) return;
+    const type = docsDialog.querySelector("#cv41DocType")?.value || "";
+    const file = docsDialog.querySelector("#cv41DocFile")?.files?.[0];
+    const issue = docsDialog.querySelector("#cv41DocIssue")?.value || "";
+    const expires = docsDialog.querySelector("#cv41DocExpire")?.value || "";
+    const memo = docsDialog.querySelector("#cv41DocMemo")?.value || "";
+    const problems = [];
+    if (!type) problems.push("서류 종류");
+    if (!file) problems.push("파일");
+    if (EXPIRY_REQUIRED.has(type) && !expires) problems.push("만료일");
+    if (!String(D.employee.email || "").trim()) problems.push("직원 이메일(가입 정보에 없음)");
+    if (problems.length) { D.error = `필수값을 채우십시오: ${problems.join(", ")}`; renderDocs(); return; }
+    if (file.size > DOC_MAX_BYTES) { D.error = "파일은 10MB 이하여야 합니다."; renderDocs(); return; }
+    const form = new FormData();
+    form.append("employee_name", D.employee.name || "");
+    form.append("employee_email", D.employee.email || "");
+    form.append("branch", D.employee.branch || "");
+    form.append("document_type", type);
+    form.append("issue_date", issue);
+    form.append("expires_at", expires);
+    form.append("memo", memo);
+    form.append("file", file);
+    D.busy = true; D.error = ""; renderDocs();
+    try {
+      await api("/onboarding/documents", { method: "POST", body: form });
+      S.ctx?.toast?.("입사서류를 등록했습니다.");
+      const employee = D.employee;
+      D.busy = false;
+      await openDocs(employee);
+      refresh();
+    } catch (error) {
+      D.busy = false;
+      D.error = errorText(error, "입사서류 등록");
+      renderDocs();
+    }
+  }
+  async function downloadDoc(documentId, button) {
+    if (button) button.disabled = true;
+    try {
+      const response = await fetch(`/api/v1/yeoljeong-finance/onboarding/documents/${encodeURIComponent(documentId)}/download`, { credentials: "same-origin", headers: { ...(S.ctx?.headers?.() || {}) } });
+      if (!response.ok) { const error = new Error(`서류를 받을 수 없습니다 (HTTP ${response.status})`); error.status = response.status; throw error; }
+      const blob = await response.blob();
+      const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(response.headers.get("content-disposition") || "");
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = match ? decodeURIComponent(match[1]) : `document-${documentId}`;
+      document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (error) {
+      D.error = errorText(error, "서류 내려받기"); renderDocs();
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   window.obysContractV41 = {
-    mount, refresh, open: openEditor,
+    mount, refresh, open: openEditor, openDocs,
     // 단위 검증용(브라우저 밖 node 테스트)
-    _test: { draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL }
+    _test: { draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee }
   };
 })();
