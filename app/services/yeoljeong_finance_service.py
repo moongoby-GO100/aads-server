@@ -846,6 +846,7 @@ def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
             "id": str(payload.get("id") or item.get("id") or ""),
             "employee_email": email,
             "employee_email_masked": payload.get("employee_email_masked") or item.get("employee_email_masked") or _mask_email(email),
+            "email_pending": not email,
             "employee_name": payload.get("employee_name") or item.get("employee_name") or "",
             "tenant_id": str(item.get("tenant_id") or ""),
             "business_id": item.get("business_id") or "",
@@ -1153,7 +1154,7 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                 WHERE yeoljeong_payroll_statements.tenant_id = EXCLUDED.tenant_id
                 """,
                 record_id,
-                str(record.get("employee_email") or "").strip().lower(),
+                str(record.get("employee_email") or "").strip().lower() or None,
                 str(record.get("employee_email_masked") or ""),
                 str(record.get("employee_name") or ""),
                 str(record.get("business_id") or ""),
@@ -2245,6 +2246,9 @@ def _filter_user(rows: list[dict[str, Any]], user: dict[str, Any], *email_keys: 
     if _is_admin(user):
         return rows
     email = _email(user)
+    if not email:
+        # 빈 이메일 == 빈 이메일 매칭 금지 — 이메일 없는 행(NULL/'')이 이메일 없는 계정에 보이면 안 된다.
+        return []
     return [row for row in rows if any(str(row.get(key) or "").strip().lower() == email for key in email_keys)]
 
 
@@ -2643,6 +2647,7 @@ def _link_payroll_by_invite(invite: dict[str, Any], targets: list[dict[str, str]
                 **row,
                 "employee_email": email,
                 "employee_email_masked": _mask_email(email),
+                "email_pending": False,
                 "linked_by_invite": {"invite_id": invite.get("id"), "statement_id": row.get("id"), "linked_at": linked_at},
                 "updated_at": linked_at,
             }
@@ -3392,20 +3397,23 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
         employee["onboarding_document_count"] = sum(
             1
             for item in docs
-            if str(item.get("employee_email") or "").strip().lower() == email
+            if email
+            and str(item.get("employee_email") or "").strip().lower() == email
             and str(item.get("status") or "").strip().lower() != "superseded"
             and _row_in_business(item, employee_business_id)
         )
         employee["contract_count"] = sum(
             1
             for item in contracts
-            if str(item.get("employee_email") or "").strip().lower() == email
+            if email
+            and str(item.get("employee_email") or "").strip().lower() == email
             and _row_in_business(item, employee_business_id)
         )
         employee["payroll_statement_count"] = sum(
             1
             for item in payroll
-            if str(item.get("employee_email") or "").strip().lower() == email
+            if email
+            and str(item.get("employee_email") or "").strip().lower() == email
             and _row_in_business(item, employee_business_id)
         )
         employee["needs_onboarding_documents"] = employee["onboarding_document_count"] == 0
@@ -5915,6 +5923,12 @@ def _apply_payroll_contract_defaults(
     return result, applied, deviation
 
 
+def ensure_payroll_deliverable(statement: dict[str, Any]) -> None:
+    """급여명세서 교부·알림·PDF 발송 진입점의 공통 관문. 확정(confirmed)은 막지 않고 교부만 막는다."""
+    if not str((statement or {}).get("employee_email") or "").strip():
+        raise HTTPException(status_code=409, detail="직원 계정 연결 전에는 교부할 수 없습니다")
+
+
 def list_payroll(user: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(_filter_user(_read_hr("payroll_statements", user), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
 
@@ -5924,11 +5938,14 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="급여내역서 작성 권한이 없습니다")
     rows = _read_hr("payroll_statements", user)
-    employee = _find_employee_record(
-        user,
-        employee_email=str(payload.get("employee_email") or ""),
-        employee_request_id=str(payload.get("employee_request_id") or ""),
-    )
+    email = str(payload.get("employee_email") or "").strip().lower()
+    request_id = str(payload.get("employee_request_id") or "").strip()
+    # 이메일도 직원 요청 ID 도 없으면 직원 계정과 연결할 수 없다 — 조회·계약 기본값을 건너뛰고 이름으로만 저장한다.
+    employee = _find_employee_record(user, employee_email=email, employee_request_id=request_id) if (email or request_id) else None
+    if not email and employee:
+        email = str(employee.get("email") or "").strip().lower()
+    if not email and not _name_key(payload.get("employee_name")):
+        raise HTTPException(status_code=400, detail="이메일이 없으면 직원 이름이 필요합니다")
     derived = (
         _derive_current_employment(
             _read_hr("contracts", user),
@@ -5957,12 +5974,12 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
     deductions = tax_withholding + insurance_deduction + other_deduction
     now = _now()
     statement_id = str(payload.get("id") or uuid4())
-    email = str(payload.get("employee_email") or "").strip().lower()
     statement = {
         **payload,
         "id": statement_id,
         "employee_email": email,
         "employee_email_masked": _mask_email(email),
+        "email_pending": not email,
         "gross_pay": gross,
         "taxable_pay": taxable_pay,
         "non_tax_meal_allowance": non_tax_meal,
