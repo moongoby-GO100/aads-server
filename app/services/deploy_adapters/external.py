@@ -197,6 +197,17 @@ class AcctFbCutoverAdapter(ProjectRunnerAdapter):
     supports_rollback = False
 
 
+class AcctAppAdapter(ProjectRunnerAdapter):
+    project = "ACCT"
+    component = "app"
+    deploy_type = "container_replace"
+    remote_host = "contabo116 (local host) -> cafe24_114 (114.207.244.86)"
+    remote_command = "bash /root/aads/aads-server/scripts/deploy_acct_app_cafe24.sh <release_sha> <run_id>"
+    health_url = "https://fb.newtalk.kr/health/live"
+    route_url = "https://fb.newtalk.kr"
+    supports_rollback = True
+
+
 class AadsDatabaseAdapter(ProjectRunnerAdapter):
     project = "AADS"
     component = "db"

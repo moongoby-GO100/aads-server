@@ -99,7 +99,7 @@ def test_registry_covers_aads_and_project_owned_targets():
     assert {
         "FOOD/store-assistant", "NTV2/frontend", "NTV2/app",
         "SF/worker", "SF/dashboard", "SF/saas", "NAS/backup",
-        "AADS/db", "AADS/config", "AADS/prompt", "ACCT/fb-cutover",
+        "AADS/db", "AADS/config", "AADS/prompt", "ACCT/fb-cutover", "ACCT/app",
     }.issubset(targets)
     assert coverage["central_worker"] >= 16
     assert coverage["project_runner"] == 0
@@ -243,7 +243,7 @@ def test_drain_script_dispatches_api_and_dashboard():
     assert "start_aads_dashboard_deploy_worker.sh" in drain
     assert "start_unified_component_deploy_worker.sh" in drain
     assert "queued_for_deploy" in drain
-    for target in ("FOOD/store-assistant", "ACCT/fb-cutover", "NTV2/frontend", "SF/worker", "NAS/backup", "AADS/prompt"):
+    for target in ("FOOD/store-assistant", "ACCT/fb-cutover", "ACCT/app", "NTV2/frontend", "SF/worker", "NAS/backup", "AADS/prompt"):
         assert target in drain
 
 

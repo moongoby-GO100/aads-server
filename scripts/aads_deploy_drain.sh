@@ -102,7 +102,7 @@ while IFS='|' read -r run_id project component release_sha; do
             " >/dev/null
             dispatched=$((dispatched + 1))
             ;;
-        FOOD/store-assistant|ACCT/fb-cutover|NTV2/frontend|NTV2/app|SF/worker|SF/dashboard|SF/saas|NAS/backup|AADS/db|AADS/config|AADS/prompt|GO100/backend|GO100/frontend|KIS/backend)
+        FOOD/store-assistant|ACCT/fb-cutover|ACCT/app|NTV2/frontend|NTV2/app|SF/worker|SF/dashboard|SF/saas|NAS/backup|AADS/db|AADS/config|AADS/prompt|GO100/backend|GO100/frontend|KIS/backend)
             echo "[drain] ${project}/${component} run=${run_id} sha=${release_sha}"
             bash "$UNIFIED_WORKER" "$run_id" "drain_${TRIGGER}" || echo "[drain] unified worker exit=$?"
             dispatched=$((dispatched + 1))

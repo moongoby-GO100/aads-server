@@ -25,6 +25,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE="${TEMPLATE:-$REPO_ROOT/config/apache/fb-cafe24.conf}"
 CAFE24_SSH="${CAFE24_SSH:-server-114}"
 CAFE24_IP="${CAFE24_IP:-114.207.244.86}"
+# APP_CONTAINER/APP_PORT/EXPECTED_DIGEST default to the r8 app. After scripts/deploy_acct_app_cafe24.sh
+# switches the app, override all three (the new container, its port, its image id) for this script.
 APP_CONTAINER="${APP_CONTAINER:-acct-app-candidate-r8}"
 NS_CONTAINER="${NS_CONTAINER:-acct-pg}"
 APP_PORT="${APP_PORT:-8111}"
