@@ -198,6 +198,25 @@ async function run(viewport, label) {
   await page.locator("#cv41_employeeAddress").blur();
   check(`${label}: 칸을 채우고 나가면 표시 즉시 해제`, (await page.getAttribute("#cv41_employeeAddress", "aria-invalid")) === null && !(await page.textContent("#cv41Missing")).includes("근로자 주소"));
   await page.screenshot({ path: path.join(outDir, `${label}-08-suggested.png`) });
+
+  // 3.3% 용역계약 전환: 이전 유형 표준 문구 교체, 막힌 이유 표시·한 번에 고치기
+  await page.selectOption("#cv41_contractType", "freelancer");
+  await page.waitForSelector("#cv41Missing");
+  const fwDays = await page.inputValue("#cv41_workDays");
+  check(`${label}: 3.3%로 바꾸면 근로계약 근무일 문구가 용역 문구로 교체`, !fwDays.includes("월/화") && (await page.$("#cv41Blocker")) === null, `workDays=${fwDays}`);
+  await page.selectOption("#cv41_wageType", "hourly");
+  await page.waitForSelector("#cv41Blocker");
+  const blk = await page.textContent("#cv41Missing");
+  check(`${label}: 3.3%+시급이면 '모두 채워졌습니다' 대신 막힌 이유 표시`, blk.includes("건별/용역비") && !blk.includes("모두 채워졌습니다"), blk.replace(/\s+/g, " ").slice(0, 140));
+  await page.screenshot({ path: path.join(outDir, `${label}-09-blocked-reason.png`) });
+  await page.click('[data-cv41-fix="case_fee"]');
+  check(`${label}: [건별/용역비로 바꾸기] 한 번에 해소`, (await page.inputValue("#cv41_wageType")) === "case_fee" && (await page.$("#cv41Blocker")) === null);
+  await page.fill("#cv41_workDays", "월/화");
+  await page.locator("#cv41_workDays").blur();
+  await page.waitForSelector('#cv41Blocker [data-cv41-fix="to_part_time"]');
+  check(`${label}: 3.3%에 고정 근무요일이면 근로계약 전환 버튼 제시`, (await page.textContent("#cv41Blocker")).includes("고정 근무표"));
+  await page.click('[data-cv41-fix="to_part_time"]');
+  check(`${label}: [단시간 근로계약으로 바꾸기] 후 차단 해소`, (await page.inputValue("#cv41_contractType")) === "part_time" && (await page.$("#cv41Blocker")) === null);
   page.once("dialog", d => d.accept());
   await page.click("#contractEditorV41 .cv41-foot [data-cv41-close]");
 

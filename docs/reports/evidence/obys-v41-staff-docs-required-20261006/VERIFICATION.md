@@ -13,3 +13,9 @@
 - `scripts/e2e/obys_v41_contract_e2e.js` (모의 API, 데스크톱·모바일): **50/50 PASS** — `e2e-results.json`
 - `tests/unit/test_obys_v41_contract_editor.py`: 컨테이너 8 passed / 3 skipped(node 없음), 호스트 node 로직 2 passed / 1 skipped(fastapi 없음)
 - 운영 데이터 기준 화면 검증은 배포 후 별도.
+
+## r3 (2026-10-06) 유형 충돌 안내
+- 3.3%+시급, 3.3%+고정 근무요일 등 빈 칸이 아닌 차단 사유를 패널에 빨간 안내로 표시(이전: "모두 채워졌습니다"로 숨김)
+- [건별/용역비로 바꾸기]·[근무표 문구 지우기]·[단시간 근로계약으로 바꾸기]·[4대보험 근로자로 바꾸기]
+- 계약 유형 변경 시 이전 유형 표준 문구를 그대로 둔 칸만 새 유형 문구로 교체
+- E2E 60/60 PASS, 단위 10 passed/3 skipped

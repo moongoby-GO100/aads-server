@@ -69,3 +69,5 @@
 .cv41-docs{width:min(860px,calc(100vw - 20px))}
 .contract-v41 td[data-label="처리"] .btn{margin:2px 0}
 @media(max-width:820px){.cv41-missing .btn{min-height:40px}.cv41-docs{width:100vw}}
+.cv41-fixes{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+#cv41Blocker p{margin:4px 0}

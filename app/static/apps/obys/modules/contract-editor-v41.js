@@ -472,7 +472,8 @@
   function stepConditions() {
     const type = E.values.contractType || "part_time";
     const visible = field => !field.only || field.only === type;
-    const liveLabels = liveMissing();
+    const live = liveCheck();
+    const liveLabels = live.labels;
     E.live = missingNames(liveLabels);
     const groupHtml = GROUPS.map(([key, title]) => {
       const fields = FIELDS.filter(field => field.g === key && visible(field));
@@ -485,7 +486,7 @@
     }).join("");
     const lockNote = E.contract && statusOf(E.contract)[0] === "requested"
       ? '<p class="cv41-alert warn">서명요청을 보낸 계약서입니다. 조건을 바꿔 저장하면 보낸 서명 링크가 무효가 되고 서명요청을 다시 보내야 합니다.</p>' : "";
-    return `${lockNote}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 금액은 자동으로 넣지 않습니다. <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels)}</div>`}${groupHtml}`;
+    return `${lockNote}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 금액은 자동으로 넣지 않습니다. <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels, live.blocker)}</div>`}${groupHtml}`;
   }
   function currentDraft() { return draftFromValues(E.values, E.target || {}); }
   function stepPreview() {
@@ -561,12 +562,13 @@
     });
     dialog.querySelectorAll("[data-cv41-field]").forEach(input => {
       const handler = () => {
+        const prevType = E.values.contractType || "part_time";
+        const prevTax = E.values.employmentTaxType || "four_insurance";
         E.values[input.name] = input.value;
         E.dirty = true;
         E.previewed = false;
         if (input.name === "contractType") {
-          Object.assign(E.values, C.classificationFor(input.value));
-          applyDefaults(false);
+          switchContractType(input.value, prevType, prevTax);
           render();
         }
       };
@@ -617,15 +619,44 @@
     const defaults = C.defaultsFor(E.values.contractType || "part_time", E.values.employmentTaxType || "four_insurance");
     return from(defaults[name], "표준 조항");
   }
-  function liveMissing() {
-    if (!E || readOnly()) return [];
+  function liveCheck() {
+    if (!E || readOnly()) return { labels: [], blocker: "" };
     try {
       const result = checkLocally(currentDraft());
-      return result.ok ? [] : result.missing;
-    } catch (_error) { return []; }
+      if (result.ok) return { labels: [], blocker: "" };
+      return { labels: result.missing, blocker: result.missing.length ? "" : (result.message || "계약 조건을 확인하십시오.") };
+    } catch (error) { return { labels: [], blocker: String(error?.message || error) }; }
+  }
+  function liveMissing() { return liveCheck().labels; }
+  /** 빈 칸이 아닌 이유로 막힐 때의 안내와 한 번에 고치는 버튼. */
+  function blockerHtml(message) {
+    if (!message) return "";
+    const fixes = [];
+    if (message.includes("건별/용역비")) {
+      fixes.push(['case_fee', "임금 방식을 건별/용역비로 바꾸기"]);
+    }
+    if (message.includes("고정 근무표")) {
+      fixes.push(['clear_schedule', "근무일·근무시간·주 소정근로시간 문구 지우기"]);
+      fixes.push(['to_part_time', "단시간 근로계약으로 바꾸기"]);
+    }
+    if (message.includes("4대보험 가입 근로자")) fixes.push(['four_insurance', "신고 구분을 4대보험 근로자로 바꾸기"]);
+    const hint = message.includes("건별/용역비")
+      ? "3.3% 용역계약은 시급을 쓸 수 없습니다. 바꾼 뒤 [확정 용역비]에 1회 금액(예: 시급 × 근무시간)을 넣으십시오."
+      : message.includes("고정 근무표")
+        ? "정해진 요일·시간에 매장에서 일하면 계약 이름과 관계없이 근로자로 판정될 수 있습니다. 실제 운영이 그렇다면 근로계약이 맞습니다."
+        : "";
+    return `<div class="cv41-alert bad" role="alert" id="cv41Blocker"><b>미리보기·저장이 막힌 이유</b><p>${esc(message)}</p>${hint ? `<small>${esc(hint)}</small>` : ""}${fixes.length ? `<div class="cv41-fixes">${fixes.map(([key, label]) => `<button class="btn primary" type="button" data-cv41-fix="${key}">${esc(label)}</button>`).join(" ")}</div>` : ""}</div>`;
+  }
+  function applyFix(key) {
+    if (key === "case_fee") Object.assign(E.values, { wageType: "case_fee", employmentTaxType: "freelancer_33" });
+    if (key === "clear_schedule") ["workDays", "workTime", "weeklyHours"].forEach(name => { E.values[name] = ""; });
+    if (key === "to_part_time") switchContractType("part_time", E.values.contractType || "freelancer", E.values.employmentTaxType || "freelancer_33");
+    if (key === "four_insurance") E.values.employmentTaxType = "four_insurance";
+    E.error = ""; E.missing = []; E.dirty = true; E.previewed = false;
   }
   function missingNames(labels) { return new Set(labels.map(label => FIELD_BY_LABEL.get(label)).filter(Boolean)); }
-  function missingPanelHtml(labels) {
+  function missingPanelHtml(labels, blocker = "") {
+    if (blocker) return blockerHtml(blocker) + (labels.length ? missingPanelHtml(labels) : "");
     if (!labels.length) return '<div class="cv41-alert good" role="status">필수값이 모두 채워졌습니다. 내용을 확인하고 미리보기를 누르십시오.</div>';
     let suggestable = 0;
     const items = labels.map(label => {
@@ -658,6 +689,7 @@
       liveMissing().forEach(label => { const name = FIELD_BY_LABEL.get(label); if (name) applySuggestion(name); });
       render();
     });
+    root.querySelectorAll("[data-cv41-fix]").forEach(button => button.addEventListener("click", () => { applyFix(button.dataset.cv41Fix); render(); }));
     root.querySelectorAll("[data-cv41-focus]").forEach(button => button.addEventListener("click", () => {
       const input = dialog.querySelector(`#cv41_${button.dataset.cv41Focus}`);
       input?.closest("details")?.setAttribute("open", "");
@@ -669,9 +701,9 @@
   function refreshMissing() {
     const box = dialog?.querySelector("#cv41Missing");
     if (!box || !E || E.step !== 1) return;
-    const labels = liveMissing();
+    const { labels, blocker } = liveCheck();
     E.live = missingNames(labels);
-    box.innerHTML = missingPanelHtml(labels);
+    box.innerHTML = missingPanelHtml(labels, blocker);
     wireMissing(box);
     dialog.querySelectorAll("[data-cv41-field]").forEach(input => {
       const bad = E.live.has(input.name) || E.missing.some(label => FIELD_BY_LABEL.get(label) === input.name);
@@ -680,6 +712,19 @@
       if (bad) input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid");
       if (!bad) { wrap?.querySelector(".cv41-req")?.remove(); wrap?.querySelector(".cv41-suggest")?.remove(); }
     });
+  }
+  /** 계약 유형 변경 — 이전 유형의 표준 문구를 그대로 둔 칸만 새 유형 문구로 바꾼다(직접 고친 칸은 유지).
+   *  예: 단시간 근로계약 근무일 기본값 "월/화/…" 이 3.3% 용역계약에 남아 고정 근무표 검사에 걸리던 문제. */
+  function switchContractType(newType, prevType, prevTax) {
+    const cls = C.classificationFor(newType);
+    const before = C.defaultsFor(prevType, prevTax);
+    const after = C.defaultsFor(newType, cls.employmentTaxType || prevTax);
+    Object.entries(before).forEach(([key, value]) => {
+      if (NO_DEFAULT.has(key)) return;
+      if (String(E.values[key] ?? "").trim() === String(value ?? "").trim()) E.values[key] = after[key] !== undefined ? String(after[key]) : "";
+    });
+    Object.assign(E.values, cls, { contractType: newType });
+    applyDefaults(false);
   }
   function applyDefaults(overwrite) {
     const defaults = C.defaultsFor(E.values.contractType || "part_time", E.values.employmentTaxType || "four_insurance");

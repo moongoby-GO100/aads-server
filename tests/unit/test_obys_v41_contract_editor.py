@@ -154,7 +154,7 @@ def test_every_server_missing_label_points_to_an_input(node_result):
 
 def test_v41_bumps_contract_module_cache_version():
     for name in ("contract-core.js", "contract-editor-v41.js", "contract-editor-v41.css"):
-        assert f"modules/{name}?v=20261006-r2" in V41, name
+        assert f"modules/{name}?v=20261006-r3" in V41, name
 
 
 def test_staff_document_upload_uses_existing_admin_api():
@@ -183,3 +183,21 @@ def test_required_missing_is_shown_live_with_click_only_suggestions():
     assert 'case "employeeAddress": return from(employee.address' in suggest
     assert "MINIMUM_HOURLY_WAGE_2026" in suggest and '=== "hourly"' in suggest
     assert "if (NO_DEFAULT.has(name)) return null;" in suggest
+
+
+# ---------- 2026-10-06 r3: 유형 충돌 안내·수정 버튼, 유형 변경 시 표준 문구 교체 ----------
+
+def test_blocking_validation_error_is_shown_not_hidden_as_all_filled():
+    # 빈 칸이 아닌 검증 오류(3.3% 시급·고정 근무표)를 "모두 채워졌습니다"로 숨기지 않는다.
+    assert "function liveCheck()" in EDITOR and "blockerHtml(blocker)" in EDITOR
+    for key in ("case_fee", "clear_schedule", "to_part_time", "four_insurance"):
+        assert f"['{key}'" in EDITOR, key
+    # 화면의 안내 키워드가 실제 검증 메시지 문구와 맞아야 버튼이 뜬다.
+    for phrase in ("건별/용역비", "고정 근무표", "4대보험 가입 근로자"):
+        assert phrase in CORE, phrase
+
+
+def test_contract_type_switch_replaces_previous_type_defaults():
+    block = _block(EDITOR, "function switchContractType(", "function applyDefaults(")
+    assert "C.defaultsFor(prevType, prevTax)" in block
+    assert "String(E.values[key] ?? \"\").trim() === String(value ?? \"\").trim()" in block
