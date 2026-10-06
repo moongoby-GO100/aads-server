@@ -79,3 +79,5 @@
 .cv41-paper table.identity-table th.section-head{display:table-cell;width:9%;padding:5px 4px;border-bottom:1px solid #cbd5e1;background:#e9eff2;color:#1f343d;text-align:center;vertical-align:middle}
 .cv41-paper table.identity-table tbody tr{cursor:default}
 .cv41-paper table.identity-table tbody tr:hover{background:transparent}
+.contract-v41 .cv41-scope{margin:0;padding:8px 16px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line);background:#fbfcfe}
+#cv41Blocker ul{margin:6px 0 0;padding-left:18px}
