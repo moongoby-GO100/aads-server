@@ -105,7 +105,9 @@ const draft = T.draftFromValues(values, target);
 const full = T.checkLocally(draft);
 const payload = T.payloadFromDraft(draft, "");
 const fieldByLabel = Object.fromEntries(T.FIELD_BY_LABEL);
-console.log(JSON.stringify({ empty, full, payload, fieldByLabel }));
+const endDates = Object.fromEntries(["2026-10-06", "2028-02-29", "2026-12-31", "", "2026-13-40"].map(d => [d, C.defaultEndDate(d)]));
+const endByType = Object.fromEntries(["part_time", "manager", "regular", "freelancer"].map(k => [k, C.defaultEndDateFor(k, "2026-10-06")]));
+console.log(JSON.stringify({ empty, full, payload, fieldByLabel, endDates, endByType }));
 """
 
 
@@ -153,8 +155,8 @@ def test_every_server_missing_label_points_to_an_input(node_result):
 # ---------- 2026-10-06 r2: 직원 입사서류 등록 + 빈 필수값 표시·추천값 ----------
 
 def test_v41_bumps_contract_module_cache_version():
-    assert "modules/contract-core.js?v=20261006-r3" in V41
-    assert "modules/contract-editor-v41.js?v=20261006-r5" in V41
+    assert "modules/contract-core.js?v=20261006-r4" in V41
+    assert "modules/contract-editor-v41.js?v=20261006-r6" in V41
     assert "modules/contract-editor-v41.css?v=20261006-r5" in V41
 
 
@@ -243,3 +245,29 @@ def test_freelancer_conflicts_are_shown_together_and_wage_is_not_carried_over():
     assert '["wage", "baseSalary", "nonTaxMealAllowance", "taxableAllowance"]' in fix
     core_re = re.search(r"/\(출퇴근\|근무표[^/]*/", CORE).group(0)
     assert core_re.replace("\\", "") in EDITOR.replace("\\\\", "\\").replace("\\", "") or "FIXED_WORK_RE" in EDITOR
+
+
+def test_default_end_date_is_one_year_from_contract_date_minus_one_day(node_result):
+    assert node_result["endDates"] == {
+        "2026-10-06": "2027-10-05",
+        "2028-02-29": "2029-02-27",  # 2029-02-28(말일 보정) - 1일
+        "2026-12-31": "2027-12-30",
+        "": "",
+        "2026-13-40": "",
+    }
+
+
+def test_default_end_date_only_for_fixed_term_employment(node_result):
+    # 정규직은 기간의 정함 없음, 3.3% 용역은 종료일 별도 합의가 정상이라 근로계약(단시간·매니저)에만 채운다.
+    assert node_result["endByType"] == {"part_time": "2027-10-05", "manager": "2027-10-05", "regular": "", "freelancer": ""}
+
+
+def test_end_date_autofill_wiring_does_not_overwrite_user_or_saved_values():
+    assert "계약 작성일 기준 1년으로 채워집니다. 기간의 정함이 없으면 비워 두십시오." in EDITOR
+    assert "endDate: C.defaultEndDateFor(contractType, C.today())" in EDITOR
+    block = _block(EDITOR, "function syncAutoEndDate() {", "function switchContractType(")
+    assert "if (E.endTouched || E.contract) return false;" in block
+    assert 'if (input.name === "endDate") E.endTouched = true;' in EDITOR
+    assert "E.endTouched = false;" in EDITOR  # 직원을 바꿔 새로 작성하면 다시 자동
+    # 저장된 계약을 불러오는 경로는 저장값 그대로(기본값 호출 없음)
+    assert "defaultEndDate" not in _block(EDITOR, "function valuesFromContract(", "function draftFromValues(")

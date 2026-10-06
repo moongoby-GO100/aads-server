@@ -31,7 +31,7 @@
     { g: "basic", name: "contractType", label: "계약 유형", type: "select", options: () => Object.entries(C.contractTypeLabels).filter(([k]) => k !== "confidentiality") },
     { g: "basic", name: "contractDate", label: "계약 작성일", type: "date" },
     { g: "basic", name: "startDate", label: "입사일", type: "date", altLabels: ["용역 시작일"] },
-    { g: "basic", name: "endDate", label: "계약 종료일", type: "date", hint: "기간의 정함이 없으면 비워 둡니다." },
+    { g: "basic", name: "endDate", label: "계약 종료일", type: "date", hint: "계약 작성일 기준 1년으로 채워집니다. 기간의 정함이 없으면 비워 두십시오." },
     { g: "basic", name: "workplace", label: "근무장소", type: "text", altLabels: ["용역 수행장소/방식"] },
     { g: "basic", name: "workplaceSizeCategory", label: "상시근로자 수", type: "select", options: () => [["under_5", "5인 미만"], ["over_5", "5인 이상"]] },
     { g: "basic", name: "jobDescription", label: "업무내용", type: "textarea", altLabels: ["용역 업무내용"] },
@@ -148,7 +148,7 @@
     Object.assign(values, {
       contractDate: C.today(),
       startDate: "",
-      endDate: "",
+      endDate: C.defaultEndDateFor(contractType, C.today()),
       workplace: employee.branch ? `${businessName(employee.business_id)} ${employee.branch}` : values.workplace,
       employeeName: employee.name || "",
       employeeEmail: employee.email || "",
@@ -577,6 +577,7 @@
       E.target = employee ? { employee_request_id: employee.id, business_id: employee.business_id, branch: employee.branch } : null;
       E.values = employee ? valuesFromEmployee(employee) : {};
       E.contract = null;
+      E.endTouched = false;
       setUrl(employee ? { cv41_request: employee.id } : {});
       render();
       dialog.querySelector("#cv41Employee").value = employee ? employeeKey(employee) : "";
@@ -591,11 +592,16 @@
         const prevType = E.values.contractType || "part_time";
         const prevTax = E.values.employmentTaxType || "four_insurance";
         E.values[input.name] = input.value;
+        if (input.name === "endDate") E.endTouched = true;
         E.dirty = true;
         E.previewed = false;
         if (input.name === "contractType") {
           switchContractType(input.value, prevType, prevTax);
+          syncAutoEndDate();
           render();
+        } else if (input.name === "contractDate" && syncAutoEndDate()) {
+          const endInput = dialog.querySelector('[data-cv41-field][name="endDate"]');
+          if (endInput) endInput.value = E.values.endDate;
         }
       };
       input.addEventListener(input.tagName === "SELECT" ? "change" : "input", handler);
@@ -767,6 +773,12 @@
   }
   /** 계약 유형 변경 — 이전 유형의 표준 문구를 그대로 둔 칸만 새 유형 문구로 바꾼다(직접 고친 칸은 유지).
    *  예: 단시간 근로계약 근무일 기본값 "월/화/…" 이 3.3% 용역계약에 남아 고정 근무표 검사에 걸리던 문제. */
+  /** 사용자가 종료일을 직접 고치지 않았고 저장된 계약이 아닐 때만 작성일 기준 기본값으로 다시 계산한다. */
+  function syncAutoEndDate() {
+    if (E.endTouched || E.contract) return false;
+    E.values.endDate = C.defaultEndDateFor(E.values.contractType || "part_time", E.values.contractDate);
+    return true;
+  }
   function switchContractType(newType, prevType, prevTax) {
     const cls = C.classificationFor(newType);
     const before = C.defaultsFor(prevType, prevTax);
@@ -1090,6 +1102,6 @@
   window.obysContractV41 = {
     mount, refresh, open: openEditor, openDocs,
     // 단위 검증용(브라우저 밖 node 테스트)
-    _test: { draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee }
+    _test: { syncAutoEndDate, draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee }
   };
 })();

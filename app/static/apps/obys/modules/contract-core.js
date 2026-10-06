@@ -20,6 +20,26 @@
     function today() {
       return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
     }
+    // 계약 종료일 기본값 = 계약 작성일 + 1년 − 1일 (2026-10-06 → 2027-10-05).
+    // 작성일이 2/29 처럼 다음 해에 없는 날이면 다음 해 해당 월 말일로 보정한 뒤 하루를 뺀다.
+    function defaultEndDate(contractDate) {
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(contractDate || ""));
+      if (!match) return "";
+      const month = Number(match[2]);
+      const probe = new Date(Date.UTC(Number(match[1]), month - 1, Number(match[3])));
+      if (probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== Number(match[3])) return ""; // 2026-13-40 같은 값
+      const year = Number(match[1]) + 1;
+      const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      const day = Math.min(Number(match[3]), lastDay);
+      const end = new Date(Date.UTC(year, month - 1, day) - 86400000);
+      return Number.isNaN(end.getTime()) ? "" : end.toISOString().slice(0, 10);
+    }
+    // 기간제 근로계약에만 기본 종료일을 채운다. 정규직은 기간의 정함이 없고(contract-core 문구),
+    // 3.3% 용역은 "종료일 별도 합의" 가 정상이라 1년을 임의로 넣으면 계약 내용이 달라진다.
+    const END_DATE_DEFAULT_TYPES = new Set(["part_time", "manager"]);
+    function defaultEndDateFor(contractType, contractDate) {
+      return END_DATE_DEFAULT_TYPES.has(contractType) ? defaultEndDate(contractDate) : "";
+    }
     function contractValue(contract, camelKey, snakeKey = "") {
       return contract?.[camelKey] ?? (snakeKey ? contract?.[snakeKey] : undefined) ?? "";
     }
@@ -446,7 +466,7 @@
       contractTypeLabels, employmentTaxTypeLabels, wageTypeLabels, standardContractDefaults,
       MINIMUM_HOURLY_WAGE_2026, CONTRACT_STATUS, EMPLOYMENT_TYPES,
       defaultsFor, classificationFor, validateContractDraft, checkDraft, contractPreviewHtml,
-      escapeHtml, formatMoney, today
+      escapeHtml, formatMoney, today, defaultEndDate, defaultEndDateFor
     };
     root.ObysContractCore = api;
     if (typeof module !== "undefined" && module.exports) module.exports = api;
