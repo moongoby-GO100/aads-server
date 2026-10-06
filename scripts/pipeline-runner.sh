@@ -1255,6 +1255,11 @@ inherit_approval_decision() {
 #      건너뛴다. 이 필터가 없는 1차 정규식에는 기존 금지어에 "하지 말" 만 더한다.
 #   2) "## 금지" / "금지:" / "금지 사항" 헤더 블록(다음 # 헤더 전까지)에 배포/빌드/재기동류
 #      단어가 있으면 서술어와의 거리와 상관없이 금지로 본다.
+#
+# 2026-10-06 (AADS-RUNNER-DEPLOY-FORBID-BLOCK-OVERMATCH): 위 블록 판정이 7일 400건 재판정에서
+# 허용→금지로 44건 뒤집혔다. 블록이 "완료 기준:"·"롤백:" 같은 다른 라벨 절까지 이어지고,
+# "다른 서비스 재시작" 같은 한정된 금지를 배포 전체 금지로 봤기 때문이다. 블록 끝 조건과
+# 한정어 제외를 더했다 — 정당한 금지(runner-890f5c73 등)는 계속 막는다.
 instruction_forbids_deploy() {
     local text="$1" lowered="" scrubbed="" line="" clause="" rest="" gap="" trigger="" sep="" nl=$'\n'
     local re_sep='[_[:space:]-]?' re_bullet='^[[:space:]>*#-]*' re_word='([^[:alnum:]_]|$)'
@@ -1269,7 +1274,11 @@ instruction_forbids_deploy() {
     local re_block_head='^[[:space:]>*-]*#*[[:space:]]*[*]*(금지|금지[[:space:]]*사항)[*]*[[:space:]]*([:：]|$)'
     local re_block_end='^[[:space:]]*#'
     local re_block_word='(배포|빌드|재기동|재시작|deploy|restart)'
-    local in_block=0
+    local re_block_hard='(배포|빌드|재기동|deploy)'
+    local re_block_label='^[^[:space:][:digit:][:punct:]]([^[:space:][:punct:][:digit:]]|[ ()/]|·){0,19}(:|：)'
+    local re_qual_pre='(^|[[:space:][:punct:]])(다른|무관한?|추가|기타|타)([[:space:]]+[^[:space:],;·、]+){0,2}[[:space:]]*$'
+    local re_qual_post='^(은|는|이|가)?[[:space:]]*[0-9n]+[[:space:]]*회[[:space:]]*이상'
+    local in_block=0 blank_run=0 is_head=0 chk="" bpre="" bpost="" bm=""
     local re_seq='(후|뒤|이후|다음|하되|하고|하며|하면|전에|먼저|then|after|before)'
     [[ -n "$text" ]] || return 1
     lowered=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
@@ -1298,24 +1307,53 @@ instruction_forbids_deploy() {
         fi
     done <<< "$scrubbed"
 
-    # 금지 헤더 블록: "## 금지", "금지:", "금지 사항" 다음 줄부터 다음 # 헤더 전까지.
+    # 금지 헤더 블록: "## 금지", "금지:", "금지 사항" 다음 줄부터 블록 끝까지.
     # 헤더와 같은 줄에 적힌 내용("금지: 배포 …")도 블록에 포함한다.
+    # 블록 끝: # 헤더 / 빈 줄 2개 / 들여쓰기·불릿 없는 다른 라벨 줄("완료 기준:", "롤백:" …).
+    # 한정어가 붙은 단어("다른 서비스 재시작", "재시작 2회 이상")는 배포 전체 금지로 보지 않고,
+    # 본문 줄의 restart 단독 언급은 배포·빌드·재기동·deploy 가 같은 줄에 있을 때만 센다.
     while IFS= read -r line || [[ -n "$line" ]]; do
+        is_head=0
         if [[ "$line" =~ $re_block_head ]]; then
             in_block=1
-            rest="${line:${#BASH_REMATCH[0]}}"
-            if [[ "$rest" =~ $re_block_word ]]; then
-                return 0
-            fi
-            continue
-        fi
-        if (( in_block )); then
+            blank_run=0
+            is_head=1
+            chk="${line:${#BASH_REMATCH[0]}}"
+        elif (( in_block )); then
             if [[ "$line" =~ $re_block_end ]]; then
                 in_block=0
-            elif [[ "$line" =~ $re_block_word ]]; then
-                return 0
+                continue
             fi
+            if [[ -z "${line//[[:space:]]/}" ]]; then
+                blank_run=$((blank_run + 1))
+                if (( blank_run >= 2 )); then
+                    in_block=0
+                fi
+                continue
+            fi
+            blank_run=0
+            if [[ "$line" =~ $re_block_label ]]; then
+                in_block=0
+                continue
+            fi
+            chk="$line"
+        else
+            continue
         fi
+        rest="$chk"
+        while [[ "$rest" =~ $re_block_word ]]; do
+            bm="${BASH_REMATCH[0]}"
+            bpre="${rest%%"$bm"*}"
+            bpost="${rest#*"$bm"}"
+            rest="$bpost"
+            if [[ "$bpre" =~ $re_qual_pre ]] || [[ "$bpost" =~ $re_qual_post ]]; then
+                continue
+            fi
+            if [[ "$bm" == "restart" ]] && (( ! is_head )) && ! [[ "$chk" =~ $re_block_hard ]]; then
+                continue
+            fi
+            return 0
+        done
     done <<< "$lowered"
 
     # 긴 한글 문구: 같은 절 안에서 트리거와 금지어 사이를 40자까지 허용한다.
