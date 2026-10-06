@@ -4185,9 +4185,135 @@ async def tool_browser_connect(
         return f"[ERROR] Browser Bridge 처리 실패: {e}"
 
 
+_PASSWORD_NAME_RE = re.compile(
+    r"password|passwd|비밀번호|패스워드|암호|(?<![a-z])pw(?:d)?(?![a-z])", re.IGNORECASE
+)
+_ARIA_TEXTBOX_RE = re.compile(r'^(?P<indent>\s*-\s+)textbox(?P<rest>.*)$')
+_ARIA_NAME_RE = re.compile(r'^\s+"(?P<name>(?:[^"\\]|\\.)*)"')
+_ARIA_ATTRS_RE = re.compile(r'^(?:\s+\[[^\]]*\])*')
+
+_PASSWORD_FIELDS_JS = """() => {
+    const norm = (t) => (t || '').replace(/\\s+/g, ' ').trim();
+    const nameOf = (el) => {
+        let n = norm(el.getAttribute('aria-label'));
+        if (n) return n;
+        const lb = el.getAttribute('aria-labelledby');
+        if (lb) {
+            n = norm(lb.split(/\\s+/).map((id) => {
+                const r = document.getElementById(id);
+                return r ? r.textContent : '';
+            }).join(' '));
+            if (n) return n;
+        }
+        if (el.labels && el.labels.length) {
+            n = norm(Array.from(el.labels).map((l) => l.textContent).join(' '));
+            if (n) return n;
+        }
+        return norm(el.getAttribute('title')) || norm(el.getAttribute('placeholder'));
+    };
+    const sel = 'input[type="password"], input[autocomplete="current-password"], input[autocomplete="new-password"]';
+    return Array.from(document.querySelectorAll(sel)).map((el) => ({
+        name: nameOf(el),
+        filled: (el.value || '').length > 0,
+    }));
+}"""
+
+_DOM_FALLBACK_JS = """() => {
+    const items = [];
+    const els = document.querySelectorAll(
+        'button, a, input, select, textarea, h1, h2, h3, h4, [role], label, nav, header, footer, main, aside'
+    );
+    for (const el of els) {
+        const tag = el.tagName.toLowerCase();
+        const role = el.getAttribute('role') || '';
+        const type = (el.getAttribute('type') || '').toLowerCase();
+        const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+        const secret = type === 'password' || ac === 'current-password' || ac === 'new-password';
+        const text = secret ? '' : (el.textContent || '').trim().substring(0, 100);
+        const placeholder = el.getAttribute('placeholder') || '';
+        const href = el.getAttribute('href') || '';
+        if (text || placeholder) {
+            items.push({tag, role, text, placeholder, type, href, secret});
+        }
+        if (items.length >= 200) break;
+    }
+    return items;
+}"""
+
+
+def _norm_aria_name(name: str) -> str:
+    return " ".join(name.replace('\\"', '"').replace("\\\\", "\\").split()).casefold()
+
+
+def _mask_password_fields_in_aria(snapshot_text: str, password_field_names=()) -> str:
+    """aria snapshot 의 비밀번호 textbox 값을 [filled]/[empty] 로 치환한다.
+
+    password_field_names: 비밀번호 칸의 accessible name 목록, 또는 {name: filled} 매핑.
+    이름 패턴(password/비밀번호/...)에 걸리는 textbox 도 fail-closed 로 가린다.
+    """
+    if not snapshot_text:
+        return snapshot_text
+    if isinstance(password_field_names, dict):
+        known = {_norm_aria_name(str(k)): bool(v) for k, v in password_field_names.items()}
+    else:
+        known = {_norm_aria_name(str(n)): False for n in (password_field_names or ())}
+
+    out: List[str] = []
+    for line in snapshot_text.split("\n"):
+        m = _ARIA_TEXTBOX_RE.match(line)
+        if not m:
+            out.append(line)
+            continue
+        rest = m.group("rest")
+        nm = _ARIA_NAME_RE.match(rest)
+        raw_name = nm.group("name") if nm else ""
+        after_name = rest[nm.end():] if nm else rest
+        am = _ARIA_ATTRS_RE.match(after_name)
+        attrs = am.group(0)
+        tail = after_name[am.end():]
+
+        norm_name = _norm_aria_name(raw_name)
+        is_password = norm_name in known or bool(_PASSWORD_NAME_RE.search(raw_name))
+        if not is_password:
+            out.append(line)
+            continue
+
+        if tail.startswith(":"):
+            has_value = bool(tail[1:].strip())
+        elif tail.strip():
+            # 구조를 해석하지 못한 줄: 값이 있다고 보고 가린다.
+            has_value = True
+        else:
+            has_value = False
+        filled = has_value or known.get(norm_name, False)
+        name_part = f' "{raw_name}"' if nm else ""
+        out.append(f"{m.group('indent')}textbox{name_part}{attrs}: {'[filled]' if filled else '[empty]'}")
+    return "\n".join(out)
+
+
+def _format_dom_fallback(elements: List[Dict[str, Any]], url: str, title: str) -> str:
+    """aria snapshot 실패 시 DOM 추출 결과 포맷. 비밀번호 칸의 text/value 는 절대 넣지 않는다."""
+    lines = [f"[UI 요소 추출 — {url}]", f"제목: {title}", ""]
+    for el in elements:
+        secret = bool(el.get("secret")) or str(el.get("type", "")).lower() == "password"
+        parts = [f"<{el['tag']}>"]
+        if el.get("role"):
+            parts.append(f"role={el['role']}")
+        if el.get("type"):
+            parts.append(f"type={el['type']}")
+        if el.get("text") and not secret:
+            parts.append(f"'{el['text'][:80]}'")
+        if el.get("placeholder"):
+            parts.append(f"placeholder='{el['placeholder']}'")
+        if el.get("href"):
+            parts.append(f"href={el['href'][:80]}")
+        lines.append("  " + " ".join(parts))
+    return "\n".join(lines)
+
+
 @_pc_agent_deadline
 async def tool_browser_snapshot(browser_session_id: str = "", browser_work_key: str = "", browser_lane: str = "") -> str:
-    """현재 페이지의 UI 구조를 텍스트로 추출 (LLM 최적)."""
+    """현재 페이지의 UI 구조를 텍스트로 추출 (LLM 최적). 비밀번호 칸 값은 [filled]/[empty] 로 치환."""
     ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
@@ -4196,50 +4322,28 @@ async def tool_browser_snapshot(browser_session_id: str = "", browser_work_key: 
         url = page.url
         title = await page.title()
 
+        # 비밀번호 칸은 이름과 채움 여부(boolean)만 읽는다. 값 자체는 파이썬으로 가져오지 않는다.
+        password_fields: Dict[str, bool] = {}
+        try:
+            for item in await page.evaluate(_PASSWORD_FIELDS_JS):
+                key = str(item.get("name") or "")
+                password_fields[key] = password_fields.get(key, False) or bool(item.get("filled"))
+        except Exception:
+            logger.warning("browser_snapshot: 비밀번호 칸 식별 실패 — 이름 패턴으로만 마스킹")
+
         # Playwright 1.47+ : page.accessibility 제거됨
         # aria snapshot 사용 (1.49+), 실패 시 DOM 텍스트 추출 폴백
         snap_text = ""
         try:
-            snap_text = await page.locator("body").aria_snapshot()
+            snap_text = _mask_password_fields_in_aria(
+                await page.locator("body").aria_snapshot(), password_fields
+            )
         except Exception:
             pass
 
         if not snap_text:
-            # 폴백: 주요 UI 요소 텍스트 추출
-            elements = await page.evaluate("""() => {
-                const items = [];
-                const els = document.querySelectorAll(
-                    'button, a, input, select, textarea, h1, h2, h3, h4, [role], label, nav, header, footer, main, aside'
-                );
-                for (const el of els) {
-                    const tag = el.tagName.toLowerCase();
-                    const role = el.getAttribute('role') || '';
-                    const text = (el.textContent || '').trim().substring(0, 100);
-                    const placeholder = el.getAttribute('placeholder') || '';
-                    const type = el.getAttribute('type') || '';
-                    const href = el.getAttribute('href') || '';
-                    if (text || placeholder) {
-                        items.push({tag, role, text, placeholder, type, href});
-                    }
-                    if (items.length >= 200) break;
-                }
-                return items;
-            }""")
-            lines = [f"[UI 요소 추출 — {url}]", f"제목: {title}", ""]
-            for el in elements:
-                parts = [f"<{el['tag']}>"]
-                if el.get('role'):
-                    parts.append(f"role={el['role']}")
-                if el.get('type'):
-                    parts.append(f"type={el['type']}")
-                if el.get('text'):
-                    parts.append(f"'{el['text'][:80]}'")
-                if el.get('placeholder'):
-                    parts.append(f"placeholder='{el['placeholder']}'")
-                if el.get('href'):
-                    parts.append(f"href={el['href'][:80]}")
-                lines.append("  " + " ".join(parts))
-            snap_text = "\n".join(lines)
+            elements = await page.evaluate(_DOM_FALLBACK_JS)
+            snap_text = _format_dom_fallback(elements, url, title)
 
         if len(snap_text) > 20_000:
             snap_text = snap_text[:20_000] + "\n...(20KB 초과, 잘림)"
