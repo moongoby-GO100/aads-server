@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.test_pipeline_runner_live_slot_safety import helper_source, install_case
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = (ROOT / "scripts" / "pipeline-runner.sh").read_text(encoding="utf-8")
 
@@ -67,6 +69,7 @@ def env(tmp_path_factory):
     fn = base / "fn.sh"
     fn.write_text(
         HARNESS
+        + helper_source()
         + _function("aads_release_live_verdict")
         + _function("aads_deploy_live_gate")
     )
@@ -79,6 +82,7 @@ def _run(env, tmp_path, call, *, blue="", green="", row=""):
     work.mkdir()
     for f in ("db.log", "event.log", "chat.log", "sql.log"):
         (work / f).write_text("")
+    probe_env = install_case(work, blue=blue, green=green)
     proc = subprocess.run(
         ["bash", "-c", f'source "{fn}"; {call.format(repo=repo, sha=shas[1])}; echo "RC=$?"'],
         capture_output=True, text=True,
@@ -88,6 +92,7 @@ def _run(env, tmp_path, call, *, blue="", green="", row=""):
             "IMG_BLUE": blue,
             "IMG_GREEN": green,
             "FAKE_RUN_ROW": row,
+            **probe_env,
         },
     )
     rc = int(proc.stdout.strip().splitlines()[-1].split("=")[1])
@@ -96,7 +101,7 @@ def _run(env, tmp_path, call, *, blue="", green="", row=""):
 
 def test_a_image_containing_commit_passes_gate(env, tmp_path):
     _, _, shas = env
-    # blue 는 옛 이미지, green 이 job 커밋의 후손 → 하나만 포함해도 반영
+    # blue standby는 옛 이미지, routed green이 job 커밋의 후손이면 반영
     proc, rc, out = _run(
         env, tmp_path,
         'aads_deploy_live_gate job-1 sess {sha} "{repo}"',

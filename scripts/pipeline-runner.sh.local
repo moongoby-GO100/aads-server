@@ -4703,12 +4703,99 @@ review_rebased_aads_sha() {
     return 0
 }
 
+# AADS-only read probes. Unknown/missing data is never evidence of a live release.
+# These compare configured route/markers and container identity before/after health;
+# they do not prove nginx's loaded config atomically or certify standby synchronization.
+aads_live_route_snapshot() {
+    local state_dir="$1" conf="${AADS_UPSTREAM_CONF:-/etc/nginx/conf.d/aads-upstream.conf}"
+    [[ -n "$state_dir" ]] || return 1
+    timeout 5 python3 - "$conf" "$state_dir" <<'PY_ROUTE'
+import hashlib
+import os
+import pathlib
+import re
+import stat
+import sys
+
+def read_regular(path, limit):
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError("unsupported route file")
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            data = source.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError("oversized route file")
+        return data
+    finally:
+        os.close(fd)
+
+try:
+    conf = read_regular(sys.argv[1], 1048576)
+    state = pathlib.Path(sys.argv[2])
+    port_bytes = read_regular(state / ".active_port", 128)
+    container_bytes = read_regular(state / ".active_container", 128)
+    text = re.sub(r"#[^\n]*", "", conf.decode("utf-8"))
+    blocks = re.findall(r"\bupstream\s+aads_api\s*\{([^{}]*)\}", text, re.S)
+    if len(blocks) != 1:
+        raise ValueError("ambiguous upstream")
+    servers = re.findall(r"\bserver\s+([^;]+);", blocks[0])
+    active = [row.split()[0] for row in servers if not re.search(r"\b(backup|down)\b", row)]
+    if len(active) != 1 or active[0] not in ("127.0.0.1:8100", "127.0.0.1:8102"):
+        raise ValueError("unsupported route")
+    port = port_bytes.decode("ascii").strip()
+    container = container_bytes.decode("ascii").strip()
+    if active[0] != "127.0.0.1:" + port or {"8100": "aads-server", "8102": "aads-server-green"}.get(port) != container:
+        raise ValueError("route marker mismatch")
+    digest = hashlib.sha256(conf + b"\0" + port_bytes + b"\0" + container_bytes).hexdigest()
+    print(f"{digest}|{port}|{container}")
+except (OSError, UnicodeError, ValueError, IndexError):
+    sys.exit(1)
+PY_ROUTE
+}
+
+aads_live_container_snapshot() {
+    local container="$1" row="" cid="" running="" status="" paused="" restarting=""
+    local health="" digest="" img="" started="" restarts="" pid="" extra="" tag_digest=""
+    case "$container" in aads-server|aads-server-green) ;; *) return 1 ;; esac
+    row=$(timeout 5 docker inspect "$container" --format '{{.Id}}|{{.State.Running}}|{{.State.Status}}|{{.State.Paused}}|{{.State.Restarting}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}|{{.Image}}|{{.Config.Image}}|{{.State.StartedAt}}|{{.RestartCount}}|{{.State.Pid}}' 2>/dev/null) || return 1
+    IFS='|' read -r cid running status paused restarting health digest img started restarts pid extra <<< "$row"
+    [[ "$cid" =~ ^[0-9a-f]{64}$ && "$running:$status:$paused:$restarting:$health" == "true:running:false:false:healthy" ]] || return 1
+    [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ && "$img" =~ ^aads-server(-green)?:[0-9a-f]{7,40}$ ]] || return 1
+    [[ "$started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T && "$restarts" =~ ^[0-9]+$ && "$pid" =~ ^[1-9][0-9]*$ && -z "$extra" && "$row" != *$'\n'* ]] || return 1
+    tag_digest=$(timeout 5 docker image inspect "$img" --format '{{.Id}}' 2>/dev/null) || return 1
+    [[ "$tag_digest" == "$digest" ]] || return 1
+    printf '%s\n' "$row"
+}
+
+aads_live_slot_snapshot() {
+    local state_dir="$1" route_before="" route_after="" before="" after=""
+    local fingerprint="" port="" container="" url="" body="" cid="" running="" status=""
+    local paused="" restarting="" health="" digest="" img="" rest=""
+    route_before=$(aads_live_route_snapshot "$state_dir") || { echo 'AADS_LIVE_UNKNOWN:route' >&2; return 1; }
+    IFS='|' read -r fingerprint port container <<< "$route_before"
+    before=$(aads_live_container_snapshot "$container") || { echo 'AADS_LIVE_UNKNOWN:container' >&2; return 1; }
+    [[ -n "${AADS_API_URL:-}" ]] || { echo 'AADS_LIVE_UNKNOWN:routed_url' >&2; return 1; }
+    for url in "http://127.0.0.1:${port}/api/v1/health" "${AADS_API_URL%/}/api/v1/health"; do
+        body=$(curl -fsS --connect-timeout 2 --max-time 4 "$url" 2>/dev/null) || { echo 'AADS_LIVE_UNKNOWN:health_transport' >&2; return 1; }
+        if ! printf '%s' "$body" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d,dict) and d.get("status")=="ok" and d.get("graph_ready") is True else 1)' 2>/dev/null; then
+            echo 'AADS_LIVE_UNKNOWN:not_ready' >&2; return 1
+        fi
+    done
+    route_after=$(aads_live_route_snapshot "$state_dir") || { echo 'AADS_LIVE_UNKNOWN:route_readback' >&2; return 1; }
+    after=$(aads_live_container_snapshot "$container") || { echo 'AADS_LIVE_UNKNOWN:container_readback' >&2; return 1; }
+    [[ "$route_after" == "$route_before" && "$after" == "$before" ]] || { echo 'AADS_LIVE_UNKNOWN:changed_during_probe' >&2; return 1; }
+    IFS='|' read -r cid running status paused restarting health digest img rest <<< "$before"
+    printf '%s|%s|%s|%s|%s\n' "$container" "$port" "$cid" "$digest" "$img"
+}
+
 # A remote ancestor is complete only if the routed API is serving a certified
 # release that contains it.  A successful push alone says nothing about deploy.
 approved_sha_is_live() {
     local repo="$1" approved_sha="$2" state_dir="$3"
     local release_row="" release_sha="" release_digest="" release_port=""
-    local resolved_sha="" active_port="" active_container="" active_digest=""
+    local resolved_sha="" active_port="" active_container="" active_digest="" live_slot="" active_id="" active_img=""
     release_row=$(db_exec "SELECT release_sha || '|' || image_digest || '|' || current_slot
         FROM deploy_runs WHERE project='AADS' AND component='api'
         AND target_env='production' AND status='success' AND phase='completed'
@@ -4719,16 +4806,9 @@ approved_sha_is_live() {
     [[ "$release_sha" =~ ^[0-9a-f]{12,40}$ && "$release_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
     resolved_sha=$(git -C "$repo" rev-parse --verify "${release_sha}^{commit}" 2>/dev/null) || return 1
     git -C "$repo" merge-base --is-ancestor "$approved_sha" "$resolved_sha" 2>/dev/null || return 1
-    active_port=$(tr -d '[:space:]' < "${state_dir}/.active_port" 2>/dev/null) || return 1
-    active_container=$(tr -d '[:space:]' < "${state_dir}/.active_container" 2>/dev/null) || return 1
-    [[ "$active_port" == "$release_port" ]] || return 1
-    case "$active_port:$active_container" in
-        8100:aads-server|8102:aads-server-green) ;;
-        *) return 1 ;;
-    esac
-    active_digest=$(docker inspect "$active_container" --format '{{.Image}}' 2>/dev/null) || return 1
-    [[ "$active_digest" == "$release_digest" ]] || return 1
-    curl -fsS --connect-timeout 3 --max-time 5 "${AADS_API_URL}/api/v1/health" >/dev/null 2>&1
+    live_slot=$(aads_live_slot_snapshot "$state_dir") || return 1
+    IFS='|' read -r active_container active_port active_id active_digest active_img <<< "$live_slot"
+    [[ "$active_port" == "$release_port" && "$active_digest" == "$release_digest" ]]
 }
 
 # ── 배포 반영 게이트 (AADS-RUNNER-DONE-REQUIRES-LIVE-IMAGE, 2026-10-06) ──
@@ -4737,19 +4817,20 @@ approved_sha_is_live() {
 # 응답해도 OK 다 — 헬스는 "서비스가 산다" 이지 "내 커밋이 올라갔다" 가 아니다.
 # 실행 중인 슬롯 이미지 태그(aads-server[-green]:<sha>)가 job 커밋을 포함할 때만 반영으로 본다.
 #
-# 기준은 "둘 중 하나라도" 다. deploy.sh 는 새 슬롯을 먼저 컷오버하고 standby 동기화는
-# 뒤따르며 active stream 때문에 보류될 수 있다(success_partial, reject_duplicate_live_release
-# 의 "한쪽만 올라가 있으면 standby 동기화가 남은 상태"). 양쪽을 요구하면 정상 부분성공을
-# 거짓 실패로 만든다. 반대로 둘 다 옛 이미지인 사고(#5599)는 이 기준으로도 잡힌다.
+# 활성 라우팅 슬롯만 판정한다. standby 동기화 대기는 반영 여부와 분리한다.
+# Config.Image 태그만 같은 정지/불건강/미라우팅 후보는 live가 아니다.
 # 출력(stdout 한 줄): live:<container> | queued:<run_id>:<status> | not_live:<run_id|none>:<status|none>
 aads_release_live_verdict() {
     local sha="$1"; shift
-    local repo c img tag resolved
+    local repo c img tag resolved live_slot="" state_dir="${AADS_DEPLOY_STATE_DIR:-}"
+    local port="" cid="" digest=""
     [[ "$sha" =~ ^[0-9a-f]{12,40}$ ]] || { echo "not_live:none:none"; return 1; }
-    for c in aads-server aads-server-green; do
-        img=$(docker inspect "$c" --format '{{.Config.Image}}' 2>/dev/null) || continue
+    if [[ -z "$state_dir" ]] && declare -p PROJECT_WORKDIR >/dev/null 2>&1; then
+        state_dir="${PROJECT_WORKDIR[AADS]:-}"
+    fi
+    if live_slot=$(aads_live_slot_snapshot "$state_dir"); then
+        IFS='|' read -r c port cid digest img <<< "$live_slot"
         tag="${img##*:}"
-        [[ "$tag" =~ ^[0-9a-f]{7,40}$ ]] || continue
         if [[ "$sha" == "$tag"* ]]; then
             echo "live:${c}"; return 0
         fi
@@ -4760,7 +4841,7 @@ aads_release_live_verdict() {
                 echo "live:${c}"; return 0
             fi
         done
-    done
+    fi
     local row="" run_id="" status=""
     row=$(db_exec "SELECT id || '|' || status FROM deploy_runs
         WHERE upper(trim(project))='AADS'

@@ -17,6 +17,8 @@ from tests.unit.test_pipeline_runner_deploy_preflight_ffonly_scoped import (
 pytest_plugins = ["tests.unit.test_pipeline_runner_deploy_preflight_ffonly_scoped"]
 
 
+from tests.unit.test_pipeline_runner_live_slot_safety import helper_source, install_case
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = (ROOT / "scripts/pipeline-runner.sh").read_text(encoding="utf-8")
 
@@ -241,13 +243,12 @@ def test_live_release_check_requires_api_certificate_matching_active_digest(isol
     digest = "sha256:" + "a" * 64
     body = r'''
 db_exec() { echo "$RELEASE_ROW"; }
-docker() { [[ "$1" == inspect ]] && echo "$ACTIVE_DIGEST"; }
-curl() { [[ "$HEALTH_OK" == 1 ]]; }
-''' + _function("approved_sha_is_live")
+''' + helper_source() + _function("approved_sha_is_live")
     path = tmp_path / "live_check.sh"
     path.write_text(body, encoding="utf-8")
     import os
-    env = {**os.environ, "RELEASE_ROW": f"{release[:12]}|{digest}|8100", "ACTIVE_DIGEST": digest,
+    probe_env = install_case(tmp_path, blue=f"aads-server:{release[:12]}", digest=digest)
+    env = {**os.environ, **probe_env, "RELEASE_ROW": f"{release[:12]}|{digest}|8100", "ACTIVE_DIGEST": digest,
            "HEALTH_OK": "1", "AADS_API_URL": "http://invalid"}
     cmd = ["bash", "-c", f'source "{path}"; approved_sha_is_live "{worktree}" "{sha}" "{state}"']
     assert subprocess.run(cmd, env=env, check=False).returncode == 0

@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.test_pipeline_runner_live_slot_safety import helper_source, install_case
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = (ROOT / "scripts" / "pipeline-runner.sh").read_text(encoding="utf-8")
 
@@ -97,6 +99,7 @@ def env(tmp_path_factory):
     fn.write_text(
         HARNESS
         + _max_sec_line() + "\n"
+        + helper_source()
         + _function("aads_release_live_verdict")
         + _function("aads_finalize_deploy_queued_jobs")
     )
@@ -110,6 +113,7 @@ def _run(env, tmp_path, *, age, blue="", green="", run_row="", runs=1, projects=
     for f in ("db.log", "event.log", "chat.log", "sql.log", "update.log", "notify.log"):
         (work / f).write_text("")
     rows = f"{JOB}{RS}{shas[1]}{RS}{SESSION}{RS}{age}"
+    probe_env = install_case(work, blue=blue, green=green)
     e = {
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "WORK": str(work),
@@ -118,6 +122,7 @@ def _run(env, tmp_path, *, age, blue="", green="", run_row="", runs=1, projects=
         "IMG_GREEN": green,
         "FAKE_RUN_ROW": run_row,
         "FAKE_ROWS": rows,
+        **probe_env,
     }
     if projects is not None:
         e["RUNNER_PROJECTS"] = projects
