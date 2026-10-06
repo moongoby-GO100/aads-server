@@ -115,6 +115,8 @@ GROUPS: tuple[Group, ...] = (
     Group(
         name="runner",
         tests=(
+            "tests/unit/test_pipeline_startup_remote_ownership.py",
+            "tests/unit/test_runner_worktree_integrity_regressions.py",
             "tests/unit/test_pipeline_runner_deploy_lock_requeue.py",
             "tests/unit/test_pipeline_runner_shell_deploy_lock_requeue.py",
             "tests/unit/test_pipeline_runner_script_guards.py",

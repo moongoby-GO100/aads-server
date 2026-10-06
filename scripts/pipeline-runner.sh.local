@@ -1480,22 +1480,23 @@ job_was_requeued() {
     [[ "$flag" == "1" ]]
 }
 
-# 재큐잉 job 의 워크트리에서 "지시서가 언급하지 않은 기존 추적 파일의 수정/삭제" 를 찾는다.
-# 2026-10-02 GO100 4건은 재큐잉 뒤 지시서와 무관한 card119/키움 수집기 파일 11개가
-# actual_changed_files 에 섞여 들어왔다. 새 파일(A)은 워커가 정당하게 만들므로 보지 않고,
-# docs/HANDOVER.md 는 R-001 로 모든 job 이 고치므로 제외한다. 파일을 되돌리거나 지우지 않는다.
+# 재큐잉 job 의 워크트리에서 지시서 밖 변경(추가/미추적 파일 포함)을 찾는다.
+# 2026-10-06 이전 실행이 재생성된 경로의 다른 main 커밋을 자기 산출물로 읽었고,
+# 신규 파일(A)을 제외한 검사는 관계없는 DR02 파일 4개를 통과시켰다.
+# docs/HANDOVER.md 는 R-001 예외다. 위반 파일은 되돌리거나 지우지 않고 보존한다.
 # stdout: 위반 경로(한 줄에 하나). 반환: 0=위반 없음/적용 대상 아님, 1=위반 있음.
 # 끄는 법: RUNNER_REQUEUE_SCOPE_GUARD=0
 requeue_scope_violations() {
     local job_id="$1" worktree_dir="$2" instruction="$3" pre_exec_sha="${4:-}"
     [[ "${RUNNER_REQUEUE_SCOPE_GUARD:-1}" == "1" ]] || return 0
     job_was_requeued "$job_id" || return 0
-    local changed="" committed="" head_sha="" path base dir violations=""
-    changed=$(git -C "$worktree_dir" diff --name-only --diff-filter=MDTR HEAD 2>/dev/null) || changed=""
+    local changed="" committed="" untracked="" head_sha="" path base dir violations=""
+    changed=$(git -C "$worktree_dir" diff --name-only --diff-filter=ADMRT HEAD 2>/dev/null) || changed=""
     head_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null) || head_sha=""
     if [[ "$pre_exec_sha" =~ ^[0-9a-f]{40}$ && -n "$head_sha" && "$pre_exec_sha" != "$head_sha" ]]; then
-        committed=$(git -C "$worktree_dir" diff --name-only --diff-filter=MDTR "${pre_exec_sha}..${head_sha}" 2>/dev/null) || committed=""
+        committed=$(git -C "$worktree_dir" diff --name-only --diff-filter=ADMRT "${pre_exec_sha}..${head_sha}" 2>/dev/null) || committed=""
     fi
+    untracked=$(git -C "$worktree_dir" ls-files --others --exclude-standard 2>/dev/null) || return 1
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
         case "$path" in
@@ -1506,10 +1507,30 @@ requeue_scope_violations() {
         [[ "$instruction" == *"$path"* || "$instruction" == *"$base"* ]] && continue
         [[ "$path" == */* && "$instruction" == *"$dir"* ]] && continue
         violations+="${path}"$'\n'
-    done < <(printf '%s\n%s\n' "$changed" "$committed" | sed '/^[[:space:]]*$/d' | sort -u)
+    done < <(printf '%s\n%s\n%s\n' "$changed" "$committed" "$untracked" | sed '/^[[:space:]]*$/d' | sort -u)
     [[ -z "$violations" ]] && return 0
     printf '%s' "$violations"
     return 1
+}
+
+# HEAD 변경만으로 워커 산출물임을 증명하지 못한다. 재큐잉이 경로를 새 main으로
+# 재생성하면 이전 실행의 base와 다른 clean HEAD가 생긴다. 공용 main에 이미 포함된
+# HEAD나 base와 무관한 HEAD를 채택하지 않는다. 전체 attempt fencing의 대체는 아니다.
+verify_worker_commit_provenance() {
+    local repo="$1" base_sha="$2" head_sha="$3" ref ref_sha ancestor_rc have_main=0
+    [[ "$base_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+    git -C "$repo" cat-file -e "${base_sha}^{commit}" 2>/dev/null || return 1
+    [[ "$base_sha" != "$head_sha" ]] || return 0
+    git -C "$repo" merge-base --is-ancestor "$base_sha" "$head_sha" 2>/dev/null || return 1
+    for ref in refs/remotes/origin/main refs/heads/main; do
+        ref_sha=$(git -C "$repo" rev-parse --verify "${ref}^{commit}" 2>/dev/null) || continue
+        have_main=1
+        ancestor_rc=0
+        git -C "$repo" merge-base --is-ancestor "$head_sha" "$ref_sha" 2>/dev/null || ancestor_rc=$?
+        # 0: 공용 main에 이미 포함됨. 1 이외 오류도 provenance 확인 불가다.
+        [[ "$ancestor_rc" -eq 1 ]] || return 1
+    done
+    [[ "$have_main" -eq 1 ]]
 }
 
 # 계약: stdout 은 40자 hex commit SHA 단 하나만 낸다 — 호출부가
@@ -1524,9 +1545,16 @@ commit_job_worktree_for_approval() {
         _fail_job "$job_id" "$session_id" "approval_worktree_not_isolated" "BLOCK: awaiting_approval 거부 — runner isolated worktree 검증 실패 (${worktree_dir})"
         return 1
     fi
+    local provenance_head
+    provenance_head=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null) || provenance_head=""
+    if ! verify_worker_commit_provenance "$worktree_dir" "$pre_exec_sha" "$provenance_head"; then
+        _fail_job "$job_id" "$session_id" "approval_commit_provenance_mismatch" \
+            "awaiting_approval 거부 — 작업 시작 base와 현재 HEAD의 산출물 소유권 확인 불가(워크트리/파일 보존): base=${pre_exec_sha} head=${provenance_head}"
+        return 1
+    fi
     # .runner_full_diff.patch 는 사람이 보라고 워크트리에 남기는 파일이다. .gitignore 와
     # 무관하게(과거 커밋을 체크아웃해 추적 상태로 돌아온 경우 포함) 커밋에 넣지 않는다.
-    # 재큐잉을 거친 job 이면 지시서가 언급하지 않은 기존 파일의 변경을 스테이징 전에 막는다.
+    # 재큐잉을 거친 job 이면 지시서가 언급하지 않은 파일의 변경을 스테이징 전에 막는다.
     # 파일을 되돌리거나 지우지 않는다 — 차단하고 보고할 뿐이며 워크트리는 그대로 남는다.
     local scope_violations=""
     if scope_violations=$(requeue_scope_violations "$job_id" "$worktree_dir" "$instruction" "$pre_exec_sha"); then
@@ -1638,13 +1666,16 @@ job_target_files() {
     printf '%s\n' "$files" | sed '/^[[:space:]]*$/d' | sort -u
 }
 
-# cwd 가 해당 디렉터리 안인 프로세스 PID 목록(공백 구분). 없으면 빈 문자열.
+# cwd 가 해당 경로 또는 하위인 PID 목록. 삭제된 cwd도 이전 작성자가 살아 있는 증거다.
 worktree_busy_pids() {
     local dir="$1" p cwd out=""
-    [[ -n "$dir" && -d "$dir" ]] || return 0
+    [[ -n "$dir" ]] || return 0
     for p in /proc/[0-9]*; do
         [[ "${p#/proc/}" == "$$" || "${p#/proc/}" == "${BASHPID:-$$}" ]] && continue
         cwd=$(readlink "$p/cwd" 2>/dev/null) || continue
+        # /proc 는 unlinked cwd에 이 literal suffix를 붙인다. 경로가 없어도
+        # 이전 프로세스가 같은 이름을 다시 열 수 있으므로 재생성을 차단한다.
+        cwd="${cwd%" (deleted)"}"
         [[ "$cwd" == "$dir" || "$cwd" == "$dir"/* ]] && out+="${p#/proc/} "
     done
     printf '%s' "${out% }"
@@ -1663,6 +1694,15 @@ prepare_clean_job_worktree() {
         return 1
     fi
 
+    # 경로가 이미 삭제됐어도 그 cwd를 보유한 이전 시도가 남을 수 있다.
+    local _busy_pids
+    _busy_pids=$(worktree_busy_pids "$worktree_dir")
+    if [[ -n "$_busy_pids" ]]; then
+        _fail_job "$job_id" "$session_id" "worktree_path_busy" \
+            "worktree 재사용 거부 — 기존 프로세스와 산출물 보존: path=${worktree_dir} pids=${_busy_pids}"
+        return 1
+    fi
+
     git -C "$main_workdir" fetch --prune origin >/dev/null 2>&1 || {
         _fail_job "$job_id" "$session_id" "git_fetch_failed" "origin/main 최신화 실패: ${project}"
         return 1
@@ -1672,12 +1712,14 @@ prepare_clean_job_worktree() {
         return 1
     }
 
+    # fetch 동안 새 소유자가 들어오거나 경로가 삭제된 경우도 보존한다.
+    _busy_pids=$(worktree_busy_pids "$worktree_dir")
+    if [[ -n "$_busy_pids" ]]; then
+        _fail_job "$job_id" "$session_id" "worktree_path_busy" \
+            "worktree 재사용 거부 — 기존 프로세스와 산출물 보존: path=${worktree_dir} pids=${_busy_pids}"
+        return 1
+    fi
     if [[ -e "$worktree_dir" ]]; then
-        # 재큐잉이면 이전 실행의 워커 프로세스가 같은 경로에서 아직 돌 수 있다. 지우기 전에 증거만 남긴다
-        # (종료시키지 않는다 — 프로세스 정리는 이 함수의 일이 아니다).
-        local _busy_pids
-        _busy_pids=$(worktree_busy_pids "$worktree_dir")
-        [[ -n "$_busy_pids" ]] && log "  WORKTREE_REUSE_PATH_BUSY job=$job_id path=$worktree_dir pids=${_busy_pids} — 이전 실행 프로세스가 같은 경로를 쓰는 중, 기존 워크트리를 재생성함" >&2
         git -C "$main_workdir" worktree remove "$worktree_dir" --force >/dev/null 2>&1 || rm -rf "$worktree_dir" 2>/dev/null || true
     fi
     git -C "$main_workdir" worktree add --detach "$worktree_dir" origin/main >/dev/null 2>&1 || {
@@ -3089,7 +3131,7 @@ run_job() {
         fi
         prepare_clean_job_worktree "$job_id" "$project" "$session_id" "$workdir" "$worktree_dir" || {
             _release_work_lock "$project" "$job_id" "$parallel_group"
-            _cleanup_artifacts "$job_id"
+            # 이전 시도가 아직 .out/.err를 쓰고 있을 수 있어 산출물은 보존한다.
             promote_next_queued "$project"
             _current_job_id=""
             _current_session_id=""
@@ -4023,7 +4065,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     local approval_commit_sha=""
     approval_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction" "$pre_exec_sha") || {
         _release_work_lock "$project" "$job_id" "$parallel_group"
-        _cleanup_artifacts "$job_id"
+        # provenance/scope 실패의 원본 .out/.err와 worktree는 후속 검수를 위해 보존한다.
         promote_next_queued "$project"
         _current_job_id=""
         _current_session_id=""

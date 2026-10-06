@@ -89,6 +89,8 @@ def commit_approval_fn(tmp_path_factory):
         + "\n"
         + _extract_function(_read_script(), "is_deploy_only_instruction")
         + "\n"
+        + _extract_function(_read_script(), "verify_worker_commit_provenance")
+        + "\n"
         + _extract_function(_read_script(), "commit_job_worktree_for_approval")
     )
     fn_file.write_text(body, encoding="utf-8")
@@ -96,7 +98,7 @@ def commit_approval_fn(tmp_path_factory):
 
 
 def _init_repo(repo_dir: Path) -> str:
-    subprocess.run(["git", "init", "-q", str(repo_dir)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo_dir)], check=True)
     subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "t@example.com"], check=True)
     subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "Test"], check=True)
     (repo_dir / "seed.txt").write_text("seed\n", encoding="utf-8")
@@ -108,6 +110,12 @@ def _init_repo(repo_dir: Path) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+    # Public main stays at the captured base; worker commits belong to a detached
+    # execution. Exercise the real provenance helper, never stub it to pass.
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "update-ref", "refs/remotes/origin/main", sha], check=True
+    )
+    subprocess.run(["git", "-C", str(repo_dir), "checkout", "--detach", "-q", sha], check=True)
     return sha
 
 
