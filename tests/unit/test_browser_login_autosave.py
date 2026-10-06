@@ -705,3 +705,80 @@ async def test_vault_autofill_drops_persisted_row_for_origin(monkeypatch, db, va
     await als.on_fill(_Page(), "#p", SECRET, tenant_id=TENANT, fallback_session=SESSION,
                       from_vault=True)
     assert db.slots == {} and als._slots == {}
+
+
+# ── 서버 Playwright 정착 대기 (AADS-VAULT-VERIFY-FALSE-FAIL-20261006) ─────
+
+class _FakeTime:
+    def __init__(self):
+        self.t = 0.0
+
+    def clock(self):
+        return self.t
+
+    async def sleep(self, seconds):
+        self.t += seconds
+
+
+class _Visible:
+    def __init__(self, visible):
+        self._visible = visible
+
+    @property
+    def first(self):
+        return self
+
+    async def is_visible(self, timeout=None):
+        return self._visible
+
+
+class _SlowRedirectPage:
+    """redirect_after 초 뒤에 /login → /go100/command-center 로 바뀌는 서버 Playwright 페이지 흉내."""
+
+    def __init__(self, ft, redirect_after):
+        self._ft = ft
+        self._after = redirect_after
+
+    def _done(self):
+        return self._after is not None and self._ft.t >= self._after
+
+    @property
+    def url(self):
+        return f"{ORIGIN}/go100/command-center" if self._done() else LOGIN_URL
+
+    def locator(self, selector):
+        on_login_form = not self._done()
+        return _Visible(on_login_form and ("password" in selector or "submit" in selector))
+
+
+@pytest.fixture
+def fake_time(monkeypatch):
+    ft = _FakeTime()
+    monkeypatch.setattr(als, "_settle_clock", ft.clock)
+    monkeypatch.setattr(als, "_settle_sleep", ft.sleep)
+    monkeypatch.setattr(als, "_SETTLE_DELAY_SECONDS", 0.4)
+    monkeypatch.setattr(als, "_SETTLE_TIMEOUT_SECONDS", 9.0)
+    return ft
+
+
+@pytest.mark.parametrize("delay", [0.0, 3.0, 6.0, 8.5])
+async def test_wait_login_completed_accepts_delayed_redirect(fake_time, delay):
+    page = _SlowRedirectPage(fake_time, delay)
+    assert await als._wait_login_completed(page, LOGIN_URL) is True
+
+
+async def test_wait_login_completed_old_two_second_window_would_have_failed(fake_time, monkeypatch):
+    monkeypatch.setattr(als, "_SETTLE_TIMEOUT_SECONDS", 2.0)
+    page = _SlowRedirectPage(fake_time, 4.0)
+    assert await als._wait_login_completed(page, LOGIN_URL) is False
+
+
+async def test_wait_login_completed_fails_only_after_deadline(fake_time):
+    page = _SlowRedirectPage(fake_time, None)
+    assert await als._wait_login_completed(page, LOGIN_URL) is False
+    assert fake_time.t == pytest.approx(9.0)
+
+
+async def test_wait_login_completed_redirect_after_deadline_is_failure(fake_time):
+    page = _SlowRedirectPage(fake_time, 12.0)
+    assert await als._wait_login_completed(page, LOGIN_URL) is False
