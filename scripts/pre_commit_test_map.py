@@ -120,6 +120,7 @@ GROUPS: tuple[Group, ...] = (
             "tests/unit/test_pipeline_runner_script_guards.py",
             "tests/unit/test_pipeline_runner_model_cycle_executable_guard.py",
             "tests/unit/test_pipeline_runner_worktree_policy.py",
+            "tests/unit/test_pipeline_startup_remote_ownership.py",
             "tests/unit/test_pipeline_runner_autodep_release.py",
             "tests/unit/test_pipeline_runner_deploy_gate_stale_chain.py",
             "tests/unit/test_pipeline_runner_push_stale_base.py",
