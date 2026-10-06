@@ -1245,6 +1245,16 @@ inherit_approval_decision() {
 #   2) "배포" 와 "금지" 사이 간격이 12자로 묶여, "·운영 migration " (14자) 에서 빗나갔다.
 # 아래 규칙은 기존 규칙에 **더하기만** 한다 — 이전에 막던 표현은 계속 막는다.
 # 정규식은 줄/절 단위로 쪼갠 뒤 짧은 입력에만 적용한다(중첩 반복 금지, R-BG).
+#
+# 2026-10-06 (AADS-RUNNER-DEPLOY-FORBID-KO-NEGATION): GO100 runner-890f5c73 지시서의
+# "## 금지\n배포·빌드·재기동·env 설정(…)·크론 변경을 하지 않는다." 가 통과해 go100.service 가
+# 약 2.5분 중단됐다. 금지어가 (금지|하지 마|말라) 뿐이라 "하지 않는다/않습니다/안 한다" 부정형이
+# 빠져 있었고, 트리거와 서술어 사이가 40자를 넘는 나열문은 어떤 정규식으로도 닿지 않았다.
+#   1) 부정형(하지 않/하지 말/않는다/않습니다/안 한다/안 합니다)을 금지어에 더한다.
+#      "배포 후 … 하지 않으면 안 된다" 같은 순서 문장은 오탐이므로 re_seq 연결어가 낀 간격을
+#      건너뛴다. 이 필터가 없는 1차 정규식에는 기존 금지어에 "하지 말" 만 더한다.
+#   2) "## 금지" / "금지:" / "금지 사항" 헤더 블록(다음 # 헤더 전까지)에 배포/빌드/재기동류
+#      단어가 있으면 서술어와의 거리와 상관없이 금지로 본다.
 instruction_forbids_deploy() {
     local text="$1" lowered="" scrubbed="" line="" clause="" rest="" gap="" trigger="" sep="" nl=$'\n'
     local re_sep='[_[:space:]-]?' re_bullet='^[[:space:]>*#-]*' re_word='([^[:alnum:]_]|$)'
@@ -1254,11 +1264,16 @@ instruction_forbids_deploy() {
     local re_policy_val="(push${re_sep}only|commit${re_sep}only|no${re_sep}deploy|forbid(den)?|deny|denied|none|block(ed)?)${re_word}"
     local re_policy="${re_bullet}(deploy(ment)?|release)${re_sep}policy[[:space:]]*[:=][[:space:]]*${re_policy_val}"
     local re_deploy_off="${re_bullet}deploy(ment)?[[:space:]]*[:=][[:space:]]*(false|no|off|0|forbid(den)?|deny|denied|none)${re_word}"
-    local re_wide="(배포|재기동|deploy)([^${nl}]{0,40})(금지|하지[[:space:]]*마|말라)"
+    local re_neg='(금지|하지[[:space:]]*(마|말|않)|않는다|않습니다|안[[:space:]]*(한다|합니다)|말라)'
+    local re_wide="(배포|재기동|deploy)([^${nl}]{0,40})${re_neg}"
+    local re_block_head='^[[:space:]>*-]*#*[[:space:]]*[*]*(금지|금지[[:space:]]*사항)[*]*[[:space:]]*([:：]|$)'
+    local re_block_end='^[[:space:]]*#'
+    local re_block_word='(배포|빌드|재기동|재시작|deploy|restart)'
+    local in_block=0
     local re_seq='(후|뒤|이후|다음|하되|하고|하며|하면|전에|먼저|then|after|before)'
     [[ -n "$text" ]] || return 1
     lowered=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
-    if [[ "$lowered" =~ (배포|재기동|빌드.{0,4}배포|deploy).{0,12}(금지|하지[[:space:]]*마|말라) ]]; then
+    if [[ "$lowered" =~ (배포|재기동|빌드.{0,4}배포|deploy).{0,12}(금지|하지[[:space:]]*(마|말)|말라) ]]; then
         return 0
     fi
     if [[ "$lowered" =~ (커밋|push)[[:space:]]*까지만 ]]; then
@@ -1282,6 +1297,26 @@ instruction_forbids_deploy() {
             return 0
         fi
     done <<< "$scrubbed"
+
+    # 금지 헤더 블록: "## 금지", "금지:", "금지 사항" 다음 줄부터 다음 # 헤더 전까지.
+    # 헤더와 같은 줄에 적힌 내용("금지: 배포 …")도 블록에 포함한다.
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ $re_block_head ]]; then
+            in_block=1
+            rest="${line:${#BASH_REMATCH[0]}}"
+            if [[ "$rest" =~ $re_block_word ]]; then
+                return 0
+            fi
+            continue
+        fi
+        if (( in_block )); then
+            if [[ "$line" =~ $re_block_end ]]; then
+                in_block=0
+            elif [[ "$line" =~ $re_block_word ]]; then
+                return 0
+            fi
+        fi
+    done <<< "$lowered"
 
     # 긴 한글 문구: 같은 절 안에서 트리거와 금지어 사이를 40자까지 허용한다.
     # "배포 후 … 하지 마" 처럼 순서/연결어가 낀 간격은 별개 문장으로 보고 건너뛴다.
