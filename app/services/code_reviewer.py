@@ -540,9 +540,11 @@ def _review_measurement(
     attempt_limit: int = 0,
     diff_chars: int = 0,
     diff_truncated: bool = False,
+    diff_original_chars: Optional[int] = None,
+    diff_truncation_source: Optional[str] = None,
 ) -> dict:
     """Build bounded, durable review timing labels for logs and DB evidence."""
-    return {
+    measurement = {
         "schema": _REVIEW_MEASUREMENT_SCHEMA,
         "measurement_label": label,
         "path": path,
@@ -555,6 +557,11 @@ def _review_measurement(
         "diff_chars": max(0, int(diff_chars)),
         "diff_truncated": bool(diff_truncated),
     }
+    if diff_original_chars is not None:
+        measurement["diff_original_chars"] = max(0, int(diff_original_chars))
+    if diff_truncation_source:
+        measurement["diff_truncation_source"] = str(diff_truncation_source)
+    return measurement
 
 
 def _attach_review_measurement(verdict: ReviewVerdict, measurement: dict) -> ReviewVerdict:
@@ -757,6 +764,92 @@ def _truncate_diff_for_review(diff: str) -> tuple[str, bool]:
         f"{head_len + tail_len}자 표시. 생략 구간은 '확인 불가'이지 '결함'이 아니다] ...\n"
     )
     return f"{stat_summary}\n\n{head}{marker}{tail}", True
+
+
+# 러너(scripts/pipeline-runner.sh)는 DB 저장 상한(45000B+5000B / 50000B)에서 diff 를 자르고
+# 앞머리에 아래 고지를 붙여 보낸다. 보존·범위 게이트가 이 잘린 diff 로 판정하면 뒤쪽에서
+# 다시 추가된 같은 이름의 정의(`+def main`)를 못 보고 `-def main` 을 삭제로 오판한다
+# (runner-36797f75: 전체 128,134B 중 `-def main` 은 42,736B, `+def main` 은 63,191B).
+_UPSTREAM_TRUNCATION_RE = re.compile(r"\[DIFF TRUNCATED\] 전체 (\d+)B 중 앞 (\d+)B")
+_UPSTREAM_DIFF_START_MARKER = "=== DIFF (원문 시작) ==="
+_DIFFSTAT_LINE_RE = re.compile(r"^ (\S[^|]*?)\s+\|\s+(?:\d+|Bin\b)")
+_DIFF_SECTION_RE = re.compile(r"(?=^diff --git )", re.MULTILINE)
+
+
+def _parse_upstream_truncation(diff: str) -> Optional[int]:
+    """러너가 붙인 절단 고지가 있으면 원래 diff 바이트 수, 없으면 None."""
+    match = _UPSTREAM_TRUNCATION_RE.match((diff or "").lstrip())
+    return int(match.group(1)) if match else None
+
+
+def _extract_upstream_diffstat_files(diff: str) -> list[str]:
+    """절단 고지 앞머리의 DIFFSTAT 에서 전체 변경 파일 경로를 읽는다(경로가 줄어든 줄은 버린다)."""
+    text = diff or ""
+    if _parse_upstream_truncation(text) is None:
+        return []
+    head, marker, _ = text.partition(_UPSTREAM_DIFF_START_MARKER)
+    if not marker:
+        return []
+    files: list[str] = []
+    for line in head.splitlines():
+        match = _DIFFSTAT_LINE_RE.match(line)
+        if not match:
+            continue
+        path = match.group(1).strip()
+        if not path or path.startswith("...") or "=>" in path or "{" in path:
+            continue
+        if path not in files:
+            files.append(path)
+    return files
+
+
+def _section_is_complete(section: str) -> bool:
+    """hunk 헤더가 선언한 줄 수만큼 본문이 다 있으면 True. 줄이 모자란 hunk 가 있으면 잘린 구간이다."""
+    old_left = new_left = 0
+    in_hunk = False
+    lines = section.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    for line in lines:
+        hunk = _HUNK_HEADER_RE.match(line)
+        if hunk:
+            if in_hunk and (old_left > 0 or new_left > 0):
+                return False
+            old_left = int(hunk.group(2)) if hunk.group(2) is not None else 1
+            new_left = int(hunk.group(4)) if hunk.group(4) is not None else 1
+            in_hunk = True
+        elif not in_hunk or line.startswith("\\"):
+            continue
+        elif (old_left > 0 or new_left > 0) and line.startswith("-"):
+            old_left -= 1
+        elif (old_left > 0 or new_left > 0) and line.startswith("+"):
+            new_left -= 1
+        elif (old_left > 0 or new_left > 0) and (line.startswith(" ") or line == ""):
+            old_left -= 1
+            new_left -= 1
+    return not (in_hunk and (old_left > 0 or new_left > 0))
+
+
+def _split_diff_by_completeness(diff: str, *, truncated: bool) -> tuple[str, str]:
+    """(끝까지 보이는 파일 구간, 잘렸을 수 있는 파일 구간).
+
+    잘린 diff 에서는 물리적으로 마지막 구간을 항상 불완전으로 본다(정확히 hunk 경계에서
+    잘리면 줄 수 검사로는 알 수 없다). 그 앞 구간도 hunk 줄 수가 모자라면 불완전이다.
+    잘리지 않았으면 전부 완전 구간이다.
+    """
+    if not truncated:
+        return diff or "", ""
+    sections = [piece for piece in _DIFF_SECTION_RE.split(diff or "") if piece]
+    complete: list[str] = []
+    incomplete: list[str] = []
+    for index, section in enumerate(sections):
+        if not section.startswith("diff --git "):
+            complete.append(section)
+        elif index == len(sections) - 1 or not _section_is_complete(section):
+            incomplete.append(section)
+        else:
+            complete.append(section)
+    return "".join(complete), "".join(incomplete)
 
 
 @dataclass(frozen=True)
@@ -1306,7 +1399,14 @@ def _precheck_preservation_gate(
     files_changed: Optional[list],
     exemption_out: Optional[dict] = None,
     project: Optional[str] = None,
+    *,
+    diff_truncated: bool = False,
+    extra_changed_files: Optional[list] = None,
 ) -> Optional[ReviewVerdict]:
+    # diff_truncated: 넘어온 diff 가 상류에서 잘렸다. 끝까지 보이는 파일 구간의 삭제만
+    # "삭제 확정" 으로 하드 FLAG 하고, 잘렸을 수 있는 구간의 삭제 심볼은 판정 불가로 분리해
+    # exemption_out 에 남긴다(LLM/사람 검수 대상). 잘리지 않았으면 종전과 동일하다.
+    # extra_changed_files: 절단으로 diff 본문에 안 보이는 변경 파일(전체 diff·DIFFSTAT 기준).
     # 아래 비율·심볼 판정은 패치 파일 구간을 뺀 diff 로 한다. 범위 게이트는 원본 diff 기준이다.
     # 변경이 패치 파일뿐이면 additions/deletions 가 0 이라 두 게이트 모두 이슈를 내지 않는다.
     preservation_diff, ignored_patch_paths, ignored_patch_lines = _strip_patch_file_sections(diff)
@@ -1347,12 +1447,24 @@ def _precheck_preservation_gate(
         issues.append(f"추가 없이 삭제 라인({deletions})만 존재합니다. 삭제 사유가 필요합니다.")
 
     exemption_notes: dict[str, object] = {}
+    confirmed_diff, truncated_tail_diff = _split_diff_by_completeness(
+        preservation_diff, truncated=diff_truncated
+    )
     symbol_matches, exempted_symbols = _split_exempt_private_symbols(
-        preservation_diff,
-        _removed_preservation_symbols(preservation_diff, project, exemption_notes),
+        confirmed_diff,
+        _removed_preservation_symbols(confirmed_diff, project, exemption_notes),
         project,
         exemption_notes,
     )
+    if truncated_tail_diff:
+        unverified_symbols, _ = _split_exempt_private_symbols(
+            truncated_tail_diff,
+            _removed_preservation_symbols(truncated_tail_diff, project),
+            project,
+        )
+        if unverified_symbols:
+            exemption_notes["preservation_unverified_symbols"] = unverified_symbols[:20]
+            exemption_notes["preservation_unverified_reason"] = "diff_truncated"
     if exempted_symbols:
         exemption_notes["preservation_exempted_private_symbols"] = exempted_symbols
     if exemption_notes:
@@ -1368,6 +1480,9 @@ def _precheck_preservation_gate(
 
     allowed_paths = _extract_explicit_scope_paths(instruction)
     changed_paths = [str(path) for path in (files_changed or _extract_changed_files(diff))]
+    for extra_path in extra_changed_files or []:
+        if str(extra_path) not in changed_paths:
+            changed_paths.append(str(extra_path))
     if allowed_paths and changed_paths:
         out_of_scope = [
             path for path in changed_paths
@@ -1468,17 +1583,62 @@ async def review_code_diff(
     instruction: str,
     files_changed: Optional[list] = None,
     deadline_sec: Optional[int] = None,
+    full_diff: Optional[str] = None,
+    diff_truncated: bool = False,
+    original_diff_chars: Optional[int] = None,
 ) -> ReviewVerdict:
     """코드 diff를 독립 AI로 리뷰. Claude Haiku 사용.
 
     deadline_sec 을 주면 전체 검수 마감을 그 값으로 바꾼다. 프록시에 묶이지 않는
     비동기 요청 경로가 더 긴 마감을 쓰기 위한 것이다(_REVIEW_ASYNC_DEADLINE_SEC).
+
+    full_diff 를 주면 보존·범위 게이트는 그 전체 diff 로 판정하고 LLM 프롬프트에는
+    `_truncate_diff_for_review` 로 다듬은 diff 만 들어간다. diff_truncated 는 full_diff 마저
+    상한에서 잘렸음을, original_diff_chars 는 잘리기 전 길이를 뜻한다. full_diff 가 없고
+    diff 가 러너의 절단 고지 앞머리를 달고 있으면 그것을 상류 절단으로 인식한다.
     """
     start = time.time()
     measurement_started_at = time.monotonic()
     total_deadline = int(deadline_sec or _REVIEW_TOTAL_DEADLINE_SEC)
     review_path = "async" if deadline_sec is not None else "sync"
     _PRESERVATION_EXEMPTIONS.set(None)
+
+    # 게이트 입력과 절단 사실을 먼저 정한다. 측정값(diff_truncated)은 실제 절단 여부를 그대로 적는다.
+    upstream_bytes = None if full_diff else _parse_upstream_truncation(diff)
+    gate_diff = full_diff or diff
+    gate_truncated = bool(diff_truncated) if full_diff else (
+        upstream_bytes is not None or bool(diff_truncated)
+    )
+    truncation_source = (
+        ("full_diff_cap" if gate_truncated else None) if full_diff
+        else "upstream_prefix" if upstream_bytes is not None
+        else "upstream_flag" if gate_truncated
+        else None
+    )
+    original_chars = (
+        original_diff_chars if original_diff_chars is not None
+        else upstream_bytes if upstream_bytes is not None
+        else None
+    )
+    llm_source = full_diff or diff
+    extra_scope_files: list[str] = []
+    if full_diff:
+        extra_scope_files = _extract_changed_files(full_diff)
+    elif upstream_bytes is not None:
+        extra_scope_files = _extract_upstream_diffstat_files(diff)
+
+    def _diff_measure(review_input_truncated: bool = False) -> dict:
+        truncated_any = gate_truncated or review_input_truncated
+        source = truncation_source or ("review_input" if review_input_truncated else None)
+        return {
+            "diff_chars": len(llm_source or ""),
+            "diff_truncated": truncated_any,
+            "diff_original_chars": (
+                original_chars if original_chars is not None
+                else len(gate_diff or "") if review_input_truncated else None
+            ),
+            "diff_truncation_source": source,
+        }
 
     precheck = _precheck_review_input(diff)
     if precheck is not None:
@@ -1507,7 +1667,14 @@ async def review_code_diff(
 
     preservation_exemption: dict[str, object] = {}
     preservation_precheck = await asyncio.to_thread(
-        _precheck_preservation_gate, diff, instruction, files_changed, preservation_exemption, project
+        _precheck_preservation_gate,
+        gate_diff,
+        instruction,
+        files_changed,
+        preservation_exemption,
+        project,
+        diff_truncated=gate_truncated,
+        extra_changed_files=extra_scope_files,
     )
     _PRESERVATION_EXEMPTIONS.set((job_id, preservation_exemption) if preservation_exemption else None)
     if preservation_precheck is not None:
@@ -1520,7 +1687,7 @@ async def review_code_diff(
                 outcome=preservation_precheck.verdict.lower(),
                 started_at=measurement_started_at,
                 deadline_sec=total_deadline,
-                diff_chars=len(diff or ""),
+                **_diff_measure(),
             ),
         )
         await _save_review_result(
@@ -1535,7 +1702,10 @@ async def review_code_diff(
 
     # diff 크기 제한 — _truncate_diff_for_review() 가 REVIEW_DIFF_MAX_CHARS 기준으로
     # stat 요약 + 앞 60% + 뒤 40% 패턴으로 다듬는다.
-    truncated_diff, was_truncated = _truncate_diff_for_review(diff)
+    truncated_diff, review_input_truncated = _truncate_diff_for_review(llm_source)
+    was_truncated = gate_truncated or review_input_truncated
+    diff_measure = _diff_measure(review_input_truncated)
+    unverified_symbols = list(preservation_exemption.get("preservation_unverified_symbols") or [])
     truncation_notice = (
         "\n[절단 고지] 위 diff 는 길이 제한으로 일부가 생략됐다.\n"
         "- 생략 구간을 근거로 REQUEST_CHANGES 나 PRESERVATION_HARD_GATE 를 내지 마라.\n"
@@ -1543,6 +1713,11 @@ async def review_code_diff(
         "- 생략 구간 확인이 꼭 필요하면 verdict=FLAG, needs_retry=true 로 내고"
         " issues 에 확인이 필요한 파일/함수명을 구체적으로 적어라.\n"
     ) if was_truncated else ""
+    if unverified_symbols:
+        truncation_notice += (
+            "- 다음 심볼은 `-` 줄만 보이고 같은 이름의 `+` 줄은 생략 구간에 있을 수 있어 삭제 여부를"
+            f" 확정할 수 없다(판정 불가): {', '.join(unverified_symbols[:10])}. 삭제로 단정하지 마라.\n"
+        )
 
     prompt = f"""다음 코드 변경사항을 리뷰하세요.
 
@@ -1778,8 +1953,7 @@ async def review_code_diff(
                     deadline_sec=total_deadline,
                     attempts_used=len(attempt_evidence),
                     attempt_limit=attempt_limit,
-                    diff_chars=len(diff or ""),
-                    diff_truncated=was_truncated,
+                    **diff_measure,
                 ),
             )
             await _save_review_result(
@@ -1829,8 +2003,7 @@ async def review_code_diff(
                     deadline_sec=total_deadline,
                     attempts_used=len(attempt_evidence),
                     attempt_limit=attempt_limit,
-                    diff_chars=len(diff or ""),
-                    diff_truncated=was_truncated,
+                    **diff_measure,
                 ),
             )
             await _save_review_result(
@@ -1884,6 +2057,18 @@ async def review_code_diff(
             needs_retry=needs_retry,
             model_used=used_model,
         )
+        if unverified_symbols:
+            unverified_issue = (
+                "[판정 불가(truncated)] diff 절단으로 삭제 여부를 확정할 수 없는 심볼: "
+                + ", ".join(unverified_symbols[:10])
+                + " — 전체 diff 로 사람/재검수 확인 필요"
+            )
+            verdict_obj.issues.append(unverified_issue)
+            if isinstance(verdict_obj.feedback.get("issues"), list):
+                verdict_obj.feedback["issues"].append(unverified_issue)
+            else:
+                verdict_obj.feedback["issues"] = list(verdict_obj.issues)
+            verdict_obj.feedback["preservation_unverified_symbols"] = unverified_symbols[:20]
         measurement = _review_measurement(
             label=f"review.complete.{verdict.lower()}",
             path=review_path,
@@ -1893,8 +2078,7 @@ async def review_code_diff(
             deadline_sec=total_deadline,
             attempts_used=len(attempt_evidence),
             attempt_limit=attempt_limit,
-            diff_chars=len(diff or ""),
-            diff_truncated=was_truncated,
+            **diff_measure,
         )
         _attach_review_measurement(verdict_obj, measurement)
         await _save_review_result(
@@ -1967,7 +2151,7 @@ async def review_code_diff(
                 outcome="error",
                 started_at=measurement_started_at,
                 deadline_sec=total_deadline,
-                diff_chars=len(diff or ""),
+                **_diff_measure(),
             ),
         )
         await _save_review_result(

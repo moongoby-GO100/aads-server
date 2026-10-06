@@ -56,7 +56,10 @@ def _get_timeout_for_job(job: "PipelineCJob") -> int:
     size = getattr(job, "size", "M") or "M"
     return _TIMEOUT_BY_SIZE.get(size.upper(), _CLAUDE_MAX_WAIT)
 _MAX_OUTPUT_CHARS = 6000    # 결과 최대 문자수
-_MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3)
+_MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3) — 사용자 알림·DB 저장용
+# 보존·범위 게이트용 전체 diff 상한. 메모리 보호용이라 _MAX_DIFF_CHARS 보다 훨씬 크게 둔다.
+# 이걸 넘으면 review_diff_truncated=True 로 명시한다(표시 없는 절단 금지).
+_MAX_REVIEW_DIFF_CHARS = 2_000_000
 _REVIEW_MODEL = "claude-sonnet-5-5"
 _MAX_REVIEW_PARSE_RETRIES = 3  # AI 검수 인프라 실패(DELEGATED) 재시도 횟수 — 소진 후 세션 AI 직접 검수 전환
 
@@ -654,6 +657,10 @@ class PipelineCJob:
         self.logs: list = []
         self.result_output = ""
         self.git_diff = ""
+        # 보존·범위 게이트용 전체 diff. git_diff(알림·DB 저장용, 절단됨)와 별개로 둔다.
+        self.review_diff = ""
+        self.review_diff_truncated = False
+        self.review_diff_original_chars = 0
         self.review_feedback = ""
         # 완료 저장이 여러 번 호출되어도 converge 기록은 작업당 한 번만 남긴다.
         self._converge_checked = False
@@ -966,6 +973,7 @@ class PipelineCJob:
 
                 # git diff 가져오기 (작업 시작 시점 대비 — 실행 중 커밋된 변경 포함)
                 self.git_diff = await self._collect_change_diff(pre_exec_sha)
+                await self._refresh_review_diff(pre_exec_sha)
 
                 if _is_read_only_done(self.instruction, self.git_diff, self.result_output):
                     try:
@@ -1106,6 +1114,7 @@ class PipelineCJob:
 
             # Phase 4: 승인 대기 (작업 시작 시점 대비 — 실행 중 커밋된 변경 포함)
             self.git_diff = await self._collect_change_diff(pre_exec_sha)
+            await self._refresh_review_diff(pre_exec_sha)
             self._log("awaiting_approval", "세션 AI 자동 검수 진행. 검토 후 승인/거부합니다.")
             self.status = "awaiting_approval"
             await self._save_to_db()
@@ -2148,8 +2157,9 @@ class PipelineCJob:
                 _extract_instruction_paths,
             )
 
-            additions, deletions = _diff_line_counts(self.git_diff)
-            changed_files = _extract_changed_files(self.git_diff)
+            audit_diff = self.review_diff or self.git_diff
+            additions, deletions = _diff_line_counts(audit_diff)
+            changed_files = _extract_changed_files(audit_diff)
             allowed_paths = _extract_instruction_paths(self.instruction)
             out_of_scope = [
                 path for path in changed_files
@@ -2175,6 +2185,8 @@ class PipelineCJob:
                     "changed_files": changed_files[:40],
                     "allowed_paths": sorted(allowed_paths)[:40],
                     "out_of_scope_files": out_of_scope[:20],
+                    "diff_truncated": self.review_diff_truncated,
+                    "diff_original_chars": self.review_diff_original_chars or len(audit_diff),
                 },
                 started_at=started_at,
             )
@@ -2344,7 +2356,47 @@ class PipelineCJob:
         parts = [p for p in (tracked, untracked) if p and p.strip()]
         return "\n".join(parts)[:_MAX_DIFF_CHARS]
 
-    async def _ssh_command(self, command: str, timeout: int = 30, retries: int = 0) -> str:
+    async def _collect_full_review_diff(self, pre_exec_sha: str = "") -> tuple[str, bool]:
+        """게이트 판정용 전체 diff. (diff, 상한 초과로 잘렸는지).
+
+        _ssh_command 의 기본 출력 상한(_MAX_OUTPUT_CHARS)을 올리고, 상한 초과분은 원격에서
+        head -c 로 자른 뒤 잘렸음을 반환한다.
+        """
+        base = shlex.quote(pre_exec_sha or "HEAD")
+        cap = _MAX_REVIEW_DIFF_CHARS + 1
+        tracked = await self._ssh_command(
+            f"git diff {base} | head -c {cap}", timeout=60, max_output_chars=cap
+        )
+        untracked = await self._ssh_command(
+            "git ls-files --others --exclude-standard -z | head -z -n 200 "
+            f"| xargs -0 -r -n1 git diff --no-index -- /dev/null | head -c {cap} || true",
+            timeout=60,
+            max_output_chars=cap,
+        )
+        full = "\n".join(p for p in (tracked, untracked) if p and p.strip())
+        # head -c 는 바이트 단위라 멀티바이트 문자가 섞이면 문자 수만으로는 상한 도달을 못 알아챈다.
+        return full[:_MAX_REVIEW_DIFF_CHARS], len(full.encode("utf-8")) > _MAX_REVIEW_DIFF_CHARS
+
+    async def _refresh_review_diff(self, pre_exec_sha: str = "") -> None:
+        """git_diff 와 같은 시점의 전체 diff 를 review_diff 에 보존한다. 실패해도 러너를 막지 않는다."""
+        try:
+            full, truncated = await self._collect_full_review_diff(pre_exec_sha)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("review_diff_collect_failed job=%s: %s", self.job_id, str(exc)[:200])
+            full, truncated = "", False
+        if "diff --git" not in full:
+            # 수집 실패는 잘린 git_diff 로 대체하되, 잘렸는지는 git_diff 길이로 정직하게 남긴다.
+            self.review_diff = ""
+            self.review_diff_truncated = len(self.git_diff or "") >= _MAX_DIFF_CHARS
+            self.review_diff_original_chars = len(self.git_diff or "")
+            return
+        self.review_diff = full
+        self.review_diff_truncated = truncated
+        self.review_diff_original_chars = len(full)
+
+    async def _ssh_command(
+        self, command: str, timeout: int = 30, retries: int = 0, max_output_chars: int = _MAX_OUTPUT_CHARS
+    ) -> str:
         """원격 서버 명령 실행 (내부용, 보안 화이트리스트 없음 — 오케스트레이터 전용).
         M1: SSH 실패 시 지수 백오프 재시도 (retries=0이면 _SSH_MAX_RETRIES 사용)."""
         max_retries = retries or _SSH_MAX_RETRIES
@@ -2366,8 +2418,8 @@ class PipelineCJob:
 
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
                 out = stdout.decode("utf-8", errors="replace")
-                if len(out) > _MAX_OUTPUT_CHARS:
-                    out = out[-_MAX_OUTPUT_CHARS:]
+                if len(out) > max_output_chars:
+                    out = out[-max_output_chars:]
                 return out
             except asyncio.TimeoutError:
                 if proc and proc.returncode is None:
