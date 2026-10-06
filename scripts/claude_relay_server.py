@@ -1610,6 +1610,25 @@ async def _write_effort_ack(response, effort):
         logger.debug("effort_ack write failed: %s", str(exc)[:120])
 
 
+# claude CLI 의 `--input-format stream-json` 은 줄 단위 user 메시지 envelope 만 읽는다.
+# content 배열을 그대로 쓰면 CLI 가 오류도 출력도 없이 rc=0 으로 끝난다(2026-10-06 실측).
+def _build_stream_json_stdin(content_blocks, system_prompt="", is_resume=False):
+    blocks = list(content_blocks)
+    if system_prompt and not is_resume:
+        blocks.insert(0, {"type": "text", "text": "[SYSTEM PROMPT]\n" + system_prompt + "\n\n[CONVERSATION]\n"})
+    envelope = {"type": "user", "message": {"role": "user", "content": blocks}}
+    return json.dumps(envelope) + "\n"
+
+
+def _cli_failure_detail(stderr_text, error_bodies, limit=1000):
+    parts = []
+    if stderr_text:
+        parts.append("stderr=" + str(stderr_text).strip())
+    if error_bodies:
+        parts.append("error_events=" + " | ".join(error_bodies))
+    return redact_secret_text(" ".join(parts))[:limit]
+
+
 async def handle_stream(request):
     try:
         body = await request.json()
@@ -1754,13 +1773,7 @@ async def handle_stream(request):
                 return response
 
             if use_stream_json_input:
-                if is_resume:
-                    stdin_payload = json.dumps(content_blocks)
-                else:
-                    blocks = list(content_blocks)
-                    if system_prompt:
-                        blocks.insert(0, {"type": "text", "text": "[SYSTEM PROMPT]\n" + system_prompt + "\n\n[CONVERSATION]\n"})
-                    stdin_payload = json.dumps(blocks)
+                stdin_payload = _build_stream_json_stdin(content_blocks, system_prompt, is_resume)
                 prompt = None
             else:
                 stdin_payload = None
@@ -1842,6 +1855,7 @@ async def handle_stream(request):
             captured_cli_session_id = None
             saw_result = False
             last_result_error = ""
+            cli_error_bodies = []
             stderr_text = ""
             # 실패를 설명할 최소한의 사실. stderr 가 비어 있을 때 이것마저
             # 없으면 앱이 받는 것은 "CLI exited with code 255" 한 줄뿐이고,
@@ -1868,6 +1882,10 @@ async def handle_stream(request):
                     evidence = observation.observe(event)
                     event["aads_model_contract"] = evidence
                     line_to_write = json.dumps(event).encode("utf-8")
+                    if (evt_type == "error" or event.get("error")) and len(cli_error_bodies) < 5:
+                        cli_error_bodies.append(
+                            redact_secret_text(json.dumps(event, ensure_ascii=False))[:400]
+                        )
                     if evt_type == "result":
                         saw_result = True
                         if event.get("is_error"):
@@ -2018,6 +2036,16 @@ async def handle_stream(request):
                     )
                 pending_error_event = None
 
+            if not saw_result or proc.returncode != 0 or last_result_error:
+                logger.warning(
+                    "CLI abnormal end: aads=%s slot=%s resume=%s rc=%s saw_result=%s events=%d "
+                    "elapsed=%.1fs stream_json_input=%s result_error=%s %s",
+                    aads_session_id[:8] if aads_session_id else "none", slot, is_resume,
+                    proc.returncode, saw_result, _cli_event_count,
+                    time.monotonic() - _cli_started_monotonic, use_stream_json_input,
+                    redact_secret_text(last_result_error)[:300],
+                    _cli_failure_detail(stderr_text, cli_error_bodies),
+                )
             if proc.returncode != 0:
                 logger.warning("CLI exited %s (slot=%s, resume=%s)", proc.returncode, slot, is_resume)
                 if auth_source == "slot_credentials" and classify_auth_error(stderr_text or last_result_error) != "error":
