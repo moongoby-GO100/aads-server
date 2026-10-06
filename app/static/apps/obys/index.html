@@ -11661,11 +11661,13 @@
     async function acceptPendingPhoneInvite(preferredName = "") {
       if (!pendingPhoneInviteToken || !hasServerAuth()) return false;
       const invite = pendingPhoneInvite || {};
+      const inviteName = String(preferredName || invite.name || "").trim();
+      if (!inviteName) throw new Error("직원 이름(실명)을 입력해 주십시오. 직원 가입요청 화면에서 이름을 적고 다시 보내십시오.");
       const payload = await financeApi("/employees/invites/accept", {
         method: "POST",
         body: JSON.stringify({
           token: pendingPhoneInviteToken,
-          name: preferredName || invite.name || authSession?.user?.email || "직원",
+          name: inviteName,
           phone: invite.phone || "",
           branch: invite.branch || "",
           memo: "전화번호 초대 링크로 회원가입"
@@ -12055,7 +12057,7 @@
       refreshFinanceSessionInBackground();
       showToast("로그인되었습니다.");
       if (pendingPhoneInviteToken) {
-        acceptPendingPhoneInvite(email).catch(err => showToast(`초대 처리 실패: ${err.message}`));
+        acceptPendingPhoneInvite(authSession?.user?.name || "").catch(err => showToast(`초대 처리 실패: ${err.message}`));
       }
       loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
       loadTenantList().catch(() => {});

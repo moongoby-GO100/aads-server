@@ -2522,12 +2522,29 @@ def create_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     return invite
 
 
+def _invite_expired(invite: dict[str, Any]) -> bool:
+    """expires_at 이 지난 초대인가. 값이 없거나 해석할 수 없는 예전 초대는 만료로 보지 않는다."""
+    raw = str(invite.get("expires_at") or "").strip()
+    if not raw:
+        return False
+    try:
+        expires = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=KST)
+    return expires < datetime.now(KST)
+
+
 def _find_invite(token: str) -> dict[str, Any]:
-    invite = next((row for row in _read("employee_invites") if row.get("token") == token), None)
+    token = str(token or "").strip()
+    invite = next((row for row in _read("employee_invites") if token and row.get("token") == token), None)
     if not invite:
         raise HTTPException(status_code=404, detail="초대를 찾을 수 없습니다")
     if str(invite.get("status") or "").strip().lower() == "revoked":
         raise HTTPException(status_code=404, detail="취소된 초대입니다")
+    if _invite_expired(invite):
+        raise HTTPException(status_code=410, detail="만료된 초대입니다")
     return invite
 
 
@@ -2550,6 +2567,8 @@ def _rollback_join_requests(done: list[tuple[dict[str, Any], dict[str, Any], dic
 
 def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     invite = _find_invite(str(payload.get("token") or ""))
+    if str(invite.get("status") or "").strip().lower() == "accepted" and str(invite.get("accepted_email") or "").strip().lower() != _email(user):
+        raise HTTPException(status_code=409, detail="이미 다른 계정이 수락한 초대입니다")
     # 초대 토큰이 가리키는 매장이 기준이다 — 본문 branch 로 다른 사업자에 갈아타지 못한다.
     # upsert_join_request 가 그 사업자의 고용주 테넌트(매핑)에 요청을 귀속한다.
     stored_targets = _clean_invite_targets(invite.get("targets"))
@@ -2560,7 +2579,7 @@ def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     requests_payloads = []
     for target in targets:
         item = {
-            "name": payload.get("name") or invite.get("name") or _email(user),
+            "name": payload.get("name") or invite.get("name") or "",
             "email": _email(user),
             "branch": target["branch"],
             "phone": payload.get("phone") or invite.get("phone") or "",
@@ -2621,6 +2640,8 @@ def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 JOIN_BRANCH_MISMATCH_ERROR = "직원의 사업자와 지점 연결이 일치하지 않습니다"
+JOIN_NAME_REQUIRED_ERROR = "직원 이름(실명)을 입력해 주십시오"
+JOIN_NAME_EMAIL_ERROR = "이름에 이메일 아이디를 넣지 말고 실명을 입력해 주십시오"
 
 
 def _validate_join_business_branch(business_id: str, branch: str) -> None:
@@ -2703,6 +2724,11 @@ def _prepare_join_request(
                 )
     now = _now()
     record = dict(existing) if existing else {"id": str(uuid4()), "requested_at": now}
+    real_name = str(payload.get("name") or record.get("name") or "").strip()
+    if not real_name:
+        raise HTTPException(status_code=400, detail=JOIN_NAME_REQUIRED_ERROR)
+    if "@" in real_name or real_name.lower() == email.split("@")[0]:
+        raise HTTPException(status_code=400, detail=JOIN_NAME_EMAIL_ERROR)
     branch = BRANCH_ALIASES.get(
         str(payload.get("branch") or record.get("branch") or "").strip(),
         str(payload.get("branch") or record.get("branch") or "").strip(),
@@ -2710,6 +2736,8 @@ def _prepare_join_request(
     business_id = str(
         payload.get("business_id") or record.get("business_id") or BUSINESS_BY_BRANCH.get(branch) or payload_business_id
     ).strip()
+    if not business_id:
+        raise HTTPException(status_code=400, detail="회사(사업자)와 근무 점포를 선택해 주십시오")
     _validate_join_business_branch(business_id, branch)
     if business_id and business_id != payload_business_id:
         # 기존 요청에서 이어받은 사업자 — 읽은 테넌트와 다르면 다른 테넌트에 쓰지 않는다.
@@ -2717,7 +2745,7 @@ def _prepare_join_request(
             raise HTTPException(status_code=403, detail="다른 테넌트의 데이터는 저장할 수 없습니다")
     record.update(
         {
-            "name": str(payload.get("name") or record.get("name") or "").strip(),
+            "name": real_name,
             "email": email,
             "email_masked": _mask_email(email),
             "phone": str(payload.get("phone") or record.get("phone") or "").strip(),

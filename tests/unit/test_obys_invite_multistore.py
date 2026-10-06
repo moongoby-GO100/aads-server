@@ -263,7 +263,7 @@ def test_created_invite_round_trips_through_accept(db):
 
 def test_legacy_invite_without_targets_still_accepts_single_request(db):
     svc._write_file_rows("employee_invites", [{"id": "inv-old", "token": "tok-old", "branch": "성신여대점", "status": "pending"}])
-    result = svc.accept_invite({"token": "tok-old", "branch": "미아점"}, EMPLOYEE)
+    result = svc.accept_invite({"token": "tok-old", "name": "양재혁", "branch": "미아점"}, EMPLOYEE)
     assert result["request"]["business_id"] == "biz-sungshin"
     assert len(result["requests"]) == 1
     assert result["business_id"] == "biz-sungshin"  # 단일 매장 호출부 호환

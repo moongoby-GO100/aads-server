@@ -1,3 +1,14 @@
+## 2026-10-06 — 오비서 직원 실명 가입·회사/점포 입사요청, 차단 4종 (ACCT-EMPLOYEE-JOIN-REALNAME-REQUEST-20261006) — 코드·테스트 완료, 운영 미반영, 화면 캡처 미완료
+
+**DB handover entry_key `obys-employee-join-realname-request-20261006` (AADS/verification).**
+- 운영 차이(실측, 읽기 전용): `fb.newtalk.kr` 은 이 서버가 아니라 카페24 호스트(114.207.244.86)의 컨테이너 `acct-app-candidate-r8`(이미지 `acct-candidate:b05d0a8b`, 브랜치 `fix/acct-cafe24-auth-candidate-20261003`) 로 간다(Apache `00-zz-fb.newtalk.kr.conf` → 172.28.50.2:8111). 그 컨테이너의 `index.html` 은 728,855B·md5 `7f0f178b` 로 커밋 06a6518d 본과 같고 `gateSignupForm` 의 name 이 hidden 이다. 이 서버의 `aads-server` 3종은 729,384B(0bc6884f 본, 실명칸 있음)다. 0bc6884f 가 빠진 이유: 후보 브랜치가 0bc6884f(2026-10-01 06:49 +0200) 보다 앞선 975dac03(04:25 +0200)에서 갈라져 나온 뒤 main 을 합치지 않았다. 공개 응답 730,091B 는 같은 파일에 프록시가 붙인 차이다. **배포 필요 사실만 보고, 배포·재시작 안 함.**
+- 확정한 결함 4종(수정 전 코드에서 신규 테스트 14건 실패로 재현): ① 가입요청에 실명 검증이 없었다(빈 이름·이메일 이름 통과, 초대 수락은 이메일을 이름으로 대입). ② 회사·점포 둘 다 비면 호출자 자기 테넌트에 사업자 없는 요청이 생겼다. ③ 초대 `expires_at` 을 저장만 하고 검사하지 않았다(만료 토큰 수락 가능). ④ 이미 수락된 초대를 다른 계정이 다시 쓸 수 있었다.
+- 변경: `app/services/yeoljeong_finance_service.py`(`_prepare_join_request` 실명 필수·이메일형 이름 거부·사업자 필수, `_find_invite` 만료 410, `accept_invite` 타 계정 재사용 409·이메일 이름 대입 제거, `_invite_expired` 신설), `app/static/apps/obys/index.html`(초대 수락의 이메일/"직원" 이름 폴백 제거, 로그인 후 수락은 세션 이름 사용), 신규 `tests/unit/test_obys_employee_join_realname_request.py` 43건, `tests/unit/test_obys_invite_multistore.py` 1건(이름 없이 수락하던 레거시 초대 테스트에 실명 인자만 추가, 단언 변경 없음). 테넌트 경계 코드와 기존 단언은 건드리지 않았다.
+- 검증: 신규 43 passed. 요구 기존 4파일(join_tenant_scope·employee_tenant_membership·join_realname_branch_map·join_branch_validation_db) 173 passed. 초대 2파일(invite_multistore·invite_revoke)까지 합친 6파일은 209 passed. 오비서·야열정 전체 묶음 1267건 중 4건 실패 — **수정 전 HEAD 에서도 같은 4건이 실패**(compose 환경변수·nginx 캐시·인쇄 정적·DB 분리 소스 검사)해서 이 변경과 무관, 이번에 고치지 않았다. ruff F821/F811 통과, compile 통과.
+- 중복 요청 정책: 같은 (이메일, 사업자) 는 새 행을 만들지 않고 기존 행을 갱신하며 승인·반려 상태를 되돌리지 않는다(테스트로 고정). **남은 위험:** 승인된 요청에 같은 사업자의 다른 점포로 다시 요청하면 branch 가 승인 상태 그대로 바뀐다(기존 동작, 이번에 막지 않음 — 겸직 멀티점포 테스트와 충돌 여부를 따로 검토해야 한다).
+- 화면 증거 **미완료.** 이 서버에 Playwright 는 있으나 브라우저 바이너리가 없고 설치는 범위 밖이라 하지 않았다. 폴백 기록: HTTP `fb.newtalk.kr/static/apps/obys/index.html` 200 730,091B → API `/api/v1/health`·`/ops/health-check` 401(인증 필요, 프로세스 응답함) → 프로세스 `acct-app-candidate-r8` Up 3 days, `acct-pg` healthy. 운영 HTML DOM 에서 gateSignupForm name=hidden 확인. 후보에 실제 가입을 만드는 API 재현은 운영 DB(acct-pg)에 쓰기가 되고 후보 코드는 이 변경이 없어서 하지 않았다 — 재현은 인메모리 DB 테스트로 했다.
+- 릴리스 영향·복구: 서비스 함수와 정적 화면만 바뀌고 스키마·인증·게이트 변경 없음. 복구는 이 커밋 revert. 만료 강제로 expires_at 이 지난 기존 pending 초대는 수락 불가가 된다(의도).
+
 ## 2026-10-06 — 오비서 직원 가입→승인→계약→서명→서명본 PDF 연쇄 (ACCT-EMPLOYEE-CONTRACT-SIGN-E2E-20261006-R1) — 코드·후보 검증 완료, 운영 E2E 미완료
 
 **DB handover entry_key 제안 `obys-employee-contract-sign-e2e-20261006`: 미기록(이 세션에서 `scripts/error_book.py` 가 `psql` 없음으로 실패, DB 핸드오버 쓰기 도구 없음 → 이 파일에만 기록. 승인된 쓰기 경로가 생기면 AADS/task 로 옮길 것). 상태: 커밋 전 — Runner 가 승인 후 commit/push. 이 세션은 commit/push/배포/재시작을 하지 않았다.**
