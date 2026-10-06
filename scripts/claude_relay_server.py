@@ -1633,25 +1633,35 @@ def _cli_error_body(event, limit=400):
     return redact_secret_text(json.dumps(event, ensure_ascii=False))[:limit]
 
 
+def _error_item_text(item):
+    if isinstance(item, dict):
+        msg = item.get("message") or item.get("error") or item.get("detail")
+        return str(msg) if msg else json.dumps(item, ensure_ascii=False)
+    return str(item)
+
+
 def _result_error_text(event):
     result = event.get("result")
     if result:
         return str(result)
-    errors = event.get("errors") or []
+    errors = event.get("errors")
     if errors:
-        return "; ".join(str(e) for e in errors)
+        if not isinstance(errors, (list, tuple)):
+            errors = [errors]
+        return "; ".join(_error_item_text(e) for e in errors)
     return "CLI error"
 
 
 def _cli_failure_detail(stderr_text, error_bodies, limit=1000):
-    # stderr 가 길어도 오류 이벤트 본문이 밀려나지 않도록 예산을 나눈다.
-    half = limit // 2
+    # 둘 다 있으면 각자 절반씩(라벨·구분 공백 포함) — 긴 stderr 가 오류 본문을 밀어내지 않게.
+    both = bool(stderr_text) and bool(error_bodies)
+    stderr_budget = limit // 2 if both else limit
+    events_budget = limit - stderr_budget - 1 if both else limit
     parts = []
     if stderr_text:
-        parts.append("stderr=" + redact_secret_text(str(stderr_text).strip())[:half])
+        parts.append(("stderr=" + redact_secret_text(str(stderr_text).strip()))[:stderr_budget])
     if error_bodies:
-        budget = limit - half if stderr_text else limit
-        parts.append("error_events=" + redact_secret_text(" | ".join(error_bodies))[:budget])
+        parts.append(("error_events=" + redact_secret_text(" | ".join(error_bodies)))[:events_budget])
     return " ".join(parts)
 
 

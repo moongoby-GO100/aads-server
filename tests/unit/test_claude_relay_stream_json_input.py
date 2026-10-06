@@ -76,11 +76,37 @@ def test_failure_detail_is_masked_and_limited():
     assert relay._cli_failure_detail("", []) == ""
 
 
-def test_long_stderr_does_not_drop_error_event_body():
-    body = relay._cli_error_body({"type": "result", "is_error": True, "errors": ["Invalid image data"]})
-    detail = relay._cli_failure_detail("x" * 5000, [body])
+def test_errors_array_alone_is_logged_without_stderr():
+    event = {"type": "result", "is_error": True, "errors": ["Invalid image data"]}
+    body = relay._cli_error_body(event)
+    detail = relay._cli_failure_detail("", [body])
+    assert "Invalid image data" in body
     assert "Invalid image data" in detail
-    assert len(detail) <= 1000 + len("stderr= error_events=")
+    assert "stderr=" not in detail
+
+
+def test_long_stderr_and_error_event_both_survive_within_limit():
+    body = relay._cli_error_body({"type": "result", "is_error": True, "errors": ["Invalid image data"]})
+    detail = relay._cli_failure_detail("x" * 3000, [body])
+    assert "stderr=" in detail
+    assert "Invalid image data" in detail
+    assert len(detail) <= 1000
+
+
+def test_failure_detail_total_never_exceeds_limit():
+    bodies = ["y" * 400] * 5
+    assert len(relay._cli_failure_detail("x" * 3000, bodies)) <= 1000
+    assert len(relay._cli_failure_detail("", bodies)) <= 1000
+
+
+def test_errors_array_accepts_strings_and_objects():
+    event = {"type": "result", "is_error": True, "result": "",
+             "errors": ["plain failure", {"message": "Invalid image data"}, {"code": 400}]}
+    text = relay._result_error_text(event)
+    assert "plain failure" in text
+    assert "Invalid image data" in text
+    assert '"code": 400' in text
+    assert relay._result_error_text({"errors": "single string"}) == "single string"
 
 
 def test_result_is_error_with_errors_array_is_collected():
