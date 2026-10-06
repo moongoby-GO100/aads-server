@@ -173,16 +173,31 @@ SENSITIVE_EXTENSIONS = {".key", ".pem"}
 AADS_APP_ROOT = "/app"
 AADS_APP_REL_PREFIXES = ("docs/", "reports/", "app/", "migrations/", "scripts/", "tests/")
 
+# 운영 컨테이너는 이미지에 구운 /app/docs(낡은 사본)만 갖고 /app/reports 는 아예 없다.
+# 호스트의 최신 문서·리포트는 읽기 전용 마운트 /host/aads-server/{docs,reports} 로만 보인다
+# (2026-10-06 실측). 그래서 뷰어가 받는 base_path 는 그대로 두고, 이 마운트를 **먼저**
+# 보도록 후보 순서를 둔다. 후보는 고정 allowlist 이며 resolve() 후 base 안쪽인지 다시 검사한다.
+HOST_DOC_MOUNT = "/host/aads-server"
+_LIVE_DOCS = [f"{HOST_DOC_MOUNT}/docs", "/app/docs", "/root/aads/aads-server/docs"]
+_LIVE_REPORTS = [f"{HOST_DOC_MOUNT}/reports", "/app/reports", "/root/aads/aads-server/reports"]
+
 LOCAL_BASE_ALIASES = {
     "/app": ["/app", "/root/aads/aads-server"],
     "/app/app": ["/app/app", "/root/aads/aads-server/app"],
-    "/app/docs": ["/app/docs", "/root/aads/aads-server/docs"],
-    "/app/reports": ["/app/reports", "/root/aads/aads-server/reports"],
+    "/app/docs": list(_LIVE_DOCS),
+    "/app/reports": list(_LIVE_REPORTS),
+    "/root/aads/aads-server/docs": list(_LIVE_DOCS),
+    "/root/aads/aads-server/reports": list(_LIVE_REPORTS),
+    f"{HOST_DOC_MOUNT}/docs": list(_LIVE_DOCS),
+    f"{HOST_DOC_MOUNT}/reports": list(_LIVE_REPORTS),
     "/app/app/static/docs": ["/app/app/static/docs", "/root/aads/aads-server/app/static/docs"],
     "/app/app/static/reports": ["/app/app/static/reports", "/root/aads/aads-server/app/static/reports"],
     "/app/app/static/preview": ["/app/app/static/preview", "/root/aads/aads-server/app/static/preview"],
     "/app/app/static/gallery": ["/app/app/static/gallery", "/root/aads/aads-server/app/static/gallery"],
 }
+
+# 호스트 마운트 경로로 들어온 base_path 도 받는다(스캔 대상은 아니다 — 중복 노출 방지).
+_AADS_ACCEPTED_ALIAS_BASES = (f"{HOST_DOC_MOUNT}/docs", f"{HOST_DOC_MOUNT}/reports")
 
 PROJECT_FILE_HINTS = [
     ("GO100", re.compile(r"^(GO100[-_]|GO100\b|#?\d+.*GO100|.*상한가|.*백억)", re.IGNORECASE)),
@@ -216,6 +231,7 @@ def _configured_base_paths(project: str) -> set[str]:
     paths = {str(Path(path_cfg["base"])) for path_cfg in config.get("paths", [])}
     if project == "AADS":
         paths.add(AADS_APP_ROOT)
+        paths.update(_AADS_ACCEPTED_ALIAS_BASES)
     return paths
 
 
@@ -333,7 +349,10 @@ def _resolve_local_file(project: str, base_path: str, file_path: str) -> Path:
 
     rel = Path(normalized_file)
     first_candidate: Path | None = None
-    for base in _candidate_local_bases(normalized_base):
+    bases = _candidate_local_bases(normalized_base)
+    if project == "AADS" and normalized_base == AADS_APP_ROOT and normalized_file.startswith(("docs/", "reports/")):
+        bases = [Path(HOST_DOC_MOUNT), *bases]
+    for base in bases:
         base_resolved = base.resolve()
         candidate = (base_resolved / rel).resolve()
         try:
@@ -623,11 +642,19 @@ async def _run_cmd(cmd: list[str], timeout: float = 10) -> str:
         return ""
 
 
+def _scan_root_for_base(base: str) -> Path | None:
+    """스캔할 실제 디렉터리. alias 후보 중 처음 존재하는 곳(없으면 None)."""
+    for candidate in _candidate_local_bases(base):
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
 async def _scan_local(base: str, exclude: list[str] | None = None, include: list[str] | None = None) -> list[dict]:
     """로컬 파일시스템 스캔."""
     results = []
-    base_path = Path(base)
-    if not base_path.exists():
+    base_path = _scan_root_for_base(base)
+    if base_path is None:
         return results
     for p in sorted(base_path.rglob("*")):
         if not p.is_file():
@@ -756,12 +783,20 @@ async def _scan_project(project: str, config: dict, previous: Optional[dict] = N
     """프로젝트 1개 스캔."""
     host = config["host"]
     all_docs = []
+    scanned_roots: set[tuple[str, str]] = set()
     for path_cfg in config["paths"]:
         base = path_cfg["base"]
         exclude = path_cfg.get("exclude")
         include = path_cfg.get("include")
         label = path_cfg["label"]
         if host is None:
+            # alias 로 같은 실디렉터리를 가리키는 base 가 둘이면 한 번만 스캔한다.
+            root = _scan_root_for_base(base)
+            if root is not None:
+                root_key = (str(root.resolve()), repr((exclude, include)))
+                if root_key in scanned_roots:
+                    continue
+                scanned_roots.add(root_key)
             docs = await _scan_local(base, exclude, include)
         else:
             docs = await _scan_remote(host, base, exclude, include)

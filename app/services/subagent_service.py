@@ -19,6 +19,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from app.core.anthropic_client import call_llm_messages_with_fallback
+from app.services.document_refs import RDOC_PROMPT_BLOCK
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,8 @@ async def spawn_subagent(
     sys_prompt = system_prompt or (
         "당신은 AADS 서브에이전트입니다. 메인 에이전트가 위임한 작업을 독립적으로 수행합니다.\n"
         "읽기/쓰기/실행/Git/검색 등 모든 도구를 활용하여 작업을 완수하세요.\n"
-        "핵심만 간결하게 답변하고, 작업 완료 시 결과를 구조화된 형태로 반환하세요."
+        "핵심만 간결하게 답변하고, 작업 완료 시 결과를 구조화된 형태로 반환하세요.\n"
+        + RDOC_PROMPT_BLOCK
     )
 
     # 메시지 구성

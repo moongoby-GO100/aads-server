@@ -64,6 +64,20 @@ class _Conn:
     def __init__(self):
         self.pending: dict[str, dict] = {}
         self.calls: list[tuple] = []
+        self.slots: dict[tuple, dict] = {}  # browser_login_save_slots 흉내 — key=(tenant, session, origin)
+
+    def _slot_rows(self):
+        return {r["id"]: r for r in self.slots.values()}
+
+    async def fetchrow(self, query, *args):
+        self.calls.append((query, args))
+        if "DELETE FROM browser_login_save_slots" in query:
+            row = self._slot_rows().get(args[0])
+            if row is None or row["tenant_id"] != args[1]:
+                return None
+            self.slots.pop((row["tenant_id"], row["session_id"], row["origin"]))
+            return {**row, "live": row["expires"] > als._test_now["t"]}
+        return None
 
     async def fetchval(self, query, *args):
         self.calls.append((query, args))
@@ -74,10 +88,32 @@ class _Conn:
         if "SELECT id::text FROM agent_permission_requests" in query:
             card = self.pending.get(args[1])
             return card["id"] if card else None
+        if "SELECT tenant_id::text FROM browser_login_save_slots" in query:
+            row = self._slot_rows().get(args[0])
+            return row["tenant_id"] if row else None
         return None
 
     async def execute(self, query, *args):
         self.calls.append((query, args))
+        self._slot_sql(query, args)
+
+    def _slot_sql(self, query, args):
+        if "INSERT INTO browser_login_save_slots" in query:
+            sid, tenant, session, origin, url, user_enc, pw_enc, remaining = args
+            self.slots[(tenant, session, origin)] = {
+                "id": sid, "tenant_id": tenant, "session_id": session, "origin": origin,
+                "login_url": url, "username_enc": user_enc, "password_enc": pw_enc,
+                "request_id": None, "expires": als._test_now["t"] + remaining,
+            }
+        elif "UPDATE browser_login_save_slots" in query:
+            for row in self.slots.values():
+                if row["id"] == args[1]:
+                    row["request_id"] = args[0]
+        elif query.startswith("DELETE FROM browser_login_save_slots"):
+            if "WHERE" not in query:
+                self.slots.clear()
+            else:
+                self.slots.pop((args[0], args[1], args[2]), None)
 
 
 class _Pool:
@@ -89,6 +125,30 @@ class _Pool:
 
     async def execute(self, query, *args):
         self.conn.calls.append((query, args))
+        self.conn._slot_sql(query, args)
+
+    async def fetchrow(self, query, *args):
+        return await self.conn.fetchrow(query, *args)
+
+    async def fetchval(self, query, *args):
+        return await self.conn.fetchval(query, *args)
+
+
+@pytest.fixture(autouse=True)
+def _default_db(monkeypatch):
+    conn = _Conn()
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: _Pool(conn))
+    return conn
+
+
+@pytest.fixture(autouse=True)
+def _vault_key(monkeypatch):
+    from cryptography.fernet import Fernet
+
+    import app.core.credential_vault as cv
+
+    monkeypatch.setattr(cv, "_VAULT_KEY", Fernet.generate_key())
+    monkeypatch.setattr(cv, "_VAULT_PREVIOUS_KEYS", ())
 
 
 @pytest.fixture
@@ -480,3 +540,168 @@ def test_chat_note_has_no_password_and_covers_every_outcome():
         )
         assert "shop.example.com" in note and USER not in note
         _assert_no_secret(note)
+
+
+# ── 슬롯 DB 영속화 (프로세스가 바뀌어도 승인이 같은 값을 찾는다) ─────────────
+
+async def _propose(monkeypatch):
+    _fill_login()
+    _login_result(monkeypatch, True)
+    note = await als.on_submit(_Page(), ORIGIN, tenant_id=TENANT, fallback_session=SESSION)
+    assert "승인 카드" in note
+    return _slot_id()
+
+
+_copy_seq = iter(range(1_000_000))
+
+
+def _fresh_module_copy():
+    import importlib.util
+    import sys
+
+    name = f"als_other_process_{next(_copy_seq)}"
+    spec = importlib.util.spec_from_file_location(name, als.__file__)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod  # dataclass 가 모듈을 이름으로 찾는다
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.modules.pop(name, None)
+    assert mod._slots == {}
+    return mod
+
+
+async def test_slot_row_is_written_with_the_card_and_bound_to_it(monkeypatch, db, vault):
+    await _propose(monkeypatch)
+    (row,) = db.slots.values()
+    assert row["tenant_id"] == TENANT and row["session_id"] == SESSION and row["origin"] == ORIGIN
+    assert row["request_id"] == "card-1"
+    names = [c[0] for c in db.calls]
+    slot_insert = next(i for i, q in enumerate(names) if "INSERT INTO browser_login_save_slots" in q)
+    card_insert = next(i for i, q in enumerate(names) if "INSERT INTO agent_permission_requests" in q)
+    bind = next(i for i, q in enumerate(names) if "UPDATE browser_login_save_slots" in q)
+    assert slot_insert < card_insert < bind
+    assert "expires_at = a.expires_at" in names[bind]
+
+
+async def test_approve_succeeds_after_memory_is_gone_and_in_other_module_copy(monkeypatch, db, vault):
+    sid = await _propose(monkeypatch)
+    als._slots.clear()
+    other = _fresh_module_copy()
+    result = await other.apply_decision(
+        slot_id=sid, approved=True, tenant_id=TENANT, decided_by="user-1", request_id="card-1",
+    )
+    assert result["status"] == "saved"
+    assert len(vault["upserts"]) == 1
+    assert vault["upserts"][0]["password"] == SECRET and vault["upserts"][0]["username"] == USER
+    assert db.slots == {}
+    _assert_no_secret(result)
+
+
+async def test_reject_after_memory_is_gone_discards_row_without_saving(monkeypatch, db, vault):
+    sid = await _propose(monkeypatch)
+    als._slots.clear()
+    result = await als.apply_decision(
+        slot_id=sid, approved=False, tenant_id=TENANT, decided_by="user-1",
+    )
+    assert result["status"] == "discarded" and result["host"] == "shop.example.com"
+    assert vault["upserts"] == [] and db.slots == {}
+
+
+async def test_expired_row_is_expired_for_approve_and_discarded_for_reject(monkeypatch, db, vault):
+    sid = await _propose(monkeypatch)
+    als._slots.clear()
+    als._test_now["t"] += als.SLOT_TTL_SECONDS + 1
+    result = await als.apply_decision(
+        slot_id=sid, approved=True, tenant_id=TENANT, decided_by="user-1",
+    )
+    assert result == {"status": "expired"}
+    assert vault["upserts"] == [] and db.slots == {}
+
+    sid = await _propose(monkeypatch)
+    als._slots.clear()
+    als._test_now["t"] += als.SLOT_TTL_SECONDS + 1
+    result = await als.apply_decision(
+        slot_id=sid, approved=False, tenant_id=TENANT, decided_by="user-1",
+    )
+    assert result == {"status": "discarded"}
+    assert db.slots == {}
+
+
+async def test_concurrent_approvals_save_exactly_once(monkeypatch, db, vault):
+    import asyncio
+
+    sid = await _propose(monkeypatch)
+    als._slots.clear()
+    modules = [als, _fresh_module_copy(), _fresh_module_copy()]
+    results = await asyncio.gather(*[
+        m.apply_decision(slot_id=sid, approved=True, tenant_id=TENANT, decided_by="u", request_id="card-1")
+        for m in modules
+    ])
+    assert sorted(r["status"] for r in results) == ["expired", "expired", "saved"]
+    assert len(vault["upserts"]) == 1
+
+
+async def test_other_tenant_cannot_take_a_persisted_slot(monkeypatch, db, vault):
+    sid = await _propose(monkeypatch)
+    als._slots.clear()
+    result = await als.apply_decision(
+        slot_id=sid, approved=True, tenant_id="other-tenant", decided_by="u",
+    )
+    assert result == {"status": "error", "error": "tenant_mismatch"}
+    assert vault["upserts"] == [] and len(db.slots) == 1
+
+
+async def test_new_password_replaces_persisted_row_and_old_card_expires(monkeypatch, db, vault):
+    old = await _propose(monkeypatch)
+    _fill_login(password=SECRET2)
+    await als.on_submit(_Page(), ORIGIN, tenant_id=TENANT, fallback_session=SESSION)
+    (row,) = db.slots.values()
+    assert row["id"] != old
+    result = await als.apply_decision(
+        slot_id=old, approved=True, tenant_id=TENANT, decided_by="u",
+    )
+    assert result["status"] == "expired" and vault["upserts"] == []
+
+
+async def test_persisted_row_has_no_plaintext_and_log_stays_clean(monkeypatch, db, vault, caplog):
+    from app.core.credential_vault import decrypt_value
+
+    caplog.set_level(logging.DEBUG)
+    await _propose(monkeypatch)
+    (row,) = db.slots.values()
+    assert decrypt_value(row["password_enc"]) == SECRET and decrypt_value(row["username_enc"]) == USER
+    for call in db.calls:
+        text = json.dumps(call, default=str, ensure_ascii=False)
+        _assert_no_secret(text)
+        assert USER not in text.replace("mo***@example.com", "")
+    assert USER not in caplog.text
+    _assert_no_secret(caplog.text)
+
+
+async def test_persisted_login_url_drops_query_and_fragment(monkeypatch, db, vault):
+    als.record_fill(tenant_id=TENANT, session_id=SESSION, page_url=f"{LOGIN_URL}?token=abc#x",
+                    selector="input[name=email]", value=USER, attrs={"type": "email"})
+    als.record_fill(tenant_id=TENANT, session_id=SESSION, page_url=f"{LOGIN_URL}?token=abc#x",
+                    selector="input[name=pw]", value=SECRET, attrs={"type": "password"})
+    _login_result(monkeypatch, True)
+    await als.on_submit(_Page(), ORIGIN, tenant_id=TENANT, fallback_session=SESSION)
+    (row,) = db.slots.values()
+    assert row["login_url"] == LOGIN_URL
+
+
+async def test_clear_all_empties_memory_and_slot_table_under_test(monkeypatch, db, vault):
+    await _propose(monkeypatch)
+    assert db.slots and als._slots
+    als.clear_all()
+    assert als._slots == {}
+    for task in list(als._bg_tasks):
+        await task
+    assert db.slots == {}
+
+
+async def test_vault_autofill_drops_persisted_row_for_origin(monkeypatch, db, vault):
+    await _propose(monkeypatch)
+    await als.on_fill(_Page(), "#p", SECRET, tenant_id=TENANT, fallback_session=SESSION,
+                      from_vault=True)
+    assert db.slots == {} and als._slots == {}
