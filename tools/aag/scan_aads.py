@@ -1523,6 +1523,51 @@ def iter_files(root: Path, rel_roots: Sequence[str], suffixes: Sequence[str],
     return sorted(set(out))
 
 
+def resolve_frontend_roots(root: Path, rel_roots: Sequence[str]) -> list[str]:
+    """저장소 밖(`..` 시작) 프런트 루트가 --root 기준으로 없으면 대체 경로를 찾는다.
+
+    러너는 /tmp/aads-wt-runner-<id> 워크트리에서 커밋하므로 `../aads-dashboard/src`
+    가 /tmp/aads-dashboard/src 로 풀려 0파일 → rc=2 로 커밋이 막혔다(2026-10-06).
+    순서: --root 기준(있으면 그대로) → AADS_DASHBOARD_WORKDIR → git common-dir 의
+    주 저장소 기준. 전부 없으면 원래 항목을 그대로 돌려줘 zero_target_guard 가
+    rc=2 로 막는다(fail-closed). 결과 키는 resolve() 된 실경로라 심링크/워크트리
+    여부와 무관하게 같은 파일이면 같은 키다.
+    """
+    out: list[str] = []
+    main_repo: Path | None = None
+    main_repo_done = False
+    for rel in rel_roots:
+        if not rel.startswith(".."):
+            out.append(rel)
+            continue
+        original = (root / rel).resolve()
+        if original.exists():
+            out.append(rel)
+            continue
+        candidates: list[Path] = []
+        workdir = os.environ.get("AADS_DASHBOARD_WORKDIR", "").strip()
+        parts = Path(rel).parts
+        if workdir and len(parts) >= 2 and parts[0] == ".." and parts[1] == "aads-dashboard":
+            candidates.append((Path(workdir).joinpath(*parts[2:])).resolve())
+        if not main_repo_done:
+            main_repo_done = True
+            common = _git_value(root, "rev-parse", "--git-common-dir")
+            if common:
+                common_path = (root / common).resolve()
+                if common_path.name == ".git":
+                    main_repo = common_path.parent
+        if main_repo is not None and main_repo != root:
+            candidates.append((main_repo / rel).resolve())
+        for cand in candidates:
+            if cand.exists():
+                print(f"[AAG] frontend root 대체 해석: {original} → {cand}", file=sys.stderr)
+                out.append(cand.as_posix())
+                break
+        else:
+            out.append(rel)
+    return out
+
+
 def read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -1660,7 +1705,8 @@ class Scan:
         아직 읽지 않은 파일을 가리킬 때 순서에 따라 결과가 달라진다."""
         fe = self.rules["frontend"]
         self.fe_files = iter_files(
-            self.root, fe["roots"], fe["extensions"], self.rules["scan"]["exclude_dir_names"]
+            self.root, resolve_frontend_roots(self.root, fe["roots"]), fe["extensions"],
+            self.rules["scan"]["exclude_dir_names"],
         )
         helpers: dict[str, str] = dict(fe.get("path_helpers") or {})
         aliases: dict[str, str] = dict(fe.get("path_aliases") or {})
