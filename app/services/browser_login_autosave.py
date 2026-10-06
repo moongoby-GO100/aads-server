@@ -297,7 +297,7 @@ async def _probe_attrs(page: Any, selector: str) -> dict[str, Any]:
 
 async def on_fill(
     page: Any, selector: str, value: str, *, tenant_id: str = "", fallback_session: str = "",
-    from_vault: bool = False,
+    from_vault: bool = False, vault_credential_id: str = "", vault_field: str = "",
 ) -> None:
     """browser_fill 성공 직후 호출. 어떤 실패도 도구 결과에 영향을 주지 않는다.
 
@@ -310,6 +310,14 @@ async def on_fill(
             return
         if from_vault:
             discard_origin(tenant_id, session_id, page_origin(page))
+            if vault_credential_id:
+                from app.services import vault_secure_input
+
+                vault_secure_input.note_vault_fill(
+                    tenant_id=tenant_id, session_id=session_id, origin=page_origin(page),
+                    credential_id=vault_credential_id, field=vault_field,
+                    login_url=str(getattr(page, "url", "") or ""),
+                )
             return
         attrs = await _probe_attrs(page, selector)
         record_fill(
@@ -346,17 +354,35 @@ async def on_submit(
         tenant_id, session_id = _bound_context(tenant_id, fallback_session)
         if not tenant_id or not origin_before:
             return ""
+        verify_note = await _verify_vault_login(page, origin_before, tenant_id, session_id)
         if not has_pending_slot(tenant_id, session_id, origin_before):
-            return ""
+            return verify_note
         slot = _slots[_slot_key(tenant_id, session_id, origin_before)]
         if not await _wait_login_completed(page, slot.login_url):
-            return ""
+            return verify_note
         result = await propose_save(tenant_id, session_id, origin_before)
         if result.get("status") == "proposed":
-            return " (로그인 계정을 Agent Vault 에 저장할지 승인 카드를 올렸습니다)"
+            return verify_note + " (로그인 계정을 Agent Vault 에 저장할지 승인 카드를 올렸습니다)"
+        return verify_note
     except Exception as exc:  # noqa: BLE001
         logger.warning("browser_autosave_submit_failed: %s", type(exc).__name__)
     return ""
+
+
+async def _verify_vault_login(page: Any, origin: str, tenant_id: str, session_id: str) -> str:
+    """보안 입력으로 저장된 계정으로 로그인했다면 성공·실패를 credential 상태에 반영한다."""
+    try:
+        from app.services import vault_secure_input
+
+        if not vault_secure_input.has_awaiting(tenant_id, session_id, origin):
+            return ""
+        return await vault_secure_input.on_submit_verify(
+            page=page, origin=origin, tenant_id=tenant_id, session_id=session_id,
+            wait_login_completed=_wait_login_completed,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("browser_vault_verify_failed: %s", type(exc).__name__)
+        return ""
 
 
 # ── 제안 카드 ────────────────────────────────────────────────────────

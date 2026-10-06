@@ -161,6 +161,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "credential_list": True,          # 온디맨드
     "credential_register": True,      # 온디맨드
     "credential_delete": True,        # 온디맨드
+    "vault_request_credential_input": True,  # 온디맨드
     "credential_test_login": True,    # 온디맨드
     "get_e2e_login_url": True,        # 온디맨드
     "google_sheets_register": True,   # 온디맨드
@@ -3078,6 +3079,22 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "login_steps": {"type": "array", "description": "자동 로그인 스텝 (선택)", "items": {"type": "object"}},
             },
             "required": ["service", "username", "password"],
+        },
+    },
+    "vault_request_credential_input": {
+        "name": "vault_request_credential_input",
+        "description": (
+            "Vault 에 계정이 없는 사이트의 로그인 정보를 대표님이 채팅 보안 입력 카드에 직접 입력하도록 요청. "
+            "비밀번호를 대화로 묻지 말고 이 도구를 쓴다. 입력 완료 알림 후 같은 selector 에 "
+            "{{vault:username}}/{{vault:password}} 로 browser_fill 한다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "로그인할 사이트 URL (origin 기준)"},
+                "reason": {"type": "string", "description": "요청 사유 (선택, 200자 이내, 비밀값 금지)"},
+            },
+            "required": ["url"],
         },
     },
     "credential_delete": {

@@ -347,6 +347,36 @@ async def update_agent_credential(
     return _row_to_credential(row)
 
 
+async def set_credential_verification(
+    *,
+    tenant_id: str,
+    credential_id: str,
+    status: str,
+    from_statuses: tuple[str, ...] = ("unverified", "failed"),
+) -> bool:
+    """Flip metadata.verification_status when it currently is one of from_statuses.
+
+    A missing marker counts as 'unverified'. Secrets are never touched.
+    """
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE agent_vault_credentials
+               SET metadata = COALESCE(metadata, '{}'::jsonb)
+                              || jsonb_build_object('verification_status', $3::text),
+                   updated_at = NOW()
+             WHERE id = $1 AND tenant_id = $2 AND is_active = TRUE
+               AND COALESCE(metadata->>'verification_status', 'unverified') = ANY($4::text[])
+            RETURNING id
+            """,
+            uuid.UUID(str(credential_id)),
+            _tenant_uuid(tenant_id),
+            status,
+            list(from_statuses),
+        )
+    return bool(row)
+
+
 async def disable_agent_credential(*, tenant_id: str, credential_id: str, user_id: str, hard_delete: bool = False) -> bool:
     async with get_pool().acquire() as conn:
         if hard_delete:

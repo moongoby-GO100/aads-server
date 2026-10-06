@@ -1841,6 +1841,22 @@ TOOL_DEFINITIONS: List[Dict] = [
         },
     },
     {
+        "name": "vault_request_credential_input",
+        "description": (
+            "Vault 에 계정이 없는 사이트의 로그인 정보를 대표님이 채팅 보안 입력 카드에 직접 입력하도록 요청. "
+            "비밀번호를 대화로 묻지 말고 이 도구를 쓴다. 입력 완료 알림 후 같은 selector 에 "
+            "{{vault:username}}/{{vault:password}} 로 browser_fill 한다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "로그인할 사이트 URL (origin 기준)"},
+                "reason": {"type": "string", "description": "요청 사유 (선택, 200자 이내, 비밀값 금지)"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
         "name": "credential_delete",
         "description": "자격증명 소프트 삭제 (is_active=false).",
         "input_schema": {
@@ -4580,6 +4596,62 @@ async def _resolve_vault_fill_credential(
     return cred, ""
 
 
+async def _request_credential_input_for_fill(
+    *, origin: str, tenant_id: str, fallback_session: str, browser_work_key: str,
+) -> str:
+    """Vault 에 계정이 없는 사이트 — 보안 입력 카드를 올리고 도구 결과 문구를 돌려준다. 빈 문자열이면 기존 오류 유지."""
+    try:
+        from app.services import browser_login_autosave as _autosave
+        from app.services import vault_secure_input as _vsi
+
+        if not _vsi.is_enabled() or not origin or not tenant_id:
+            return ""
+        _, session_id = _autosave._bound_context(tenant_id, fallback_session)
+        result = await _vsi.request_credential_input(
+            tenant_id=tenant_id, session_id=session_id, url=origin,
+            browser_work_key=browser_work_key, reason="browser_fill_vault_ref",
+        )
+        return _vsi.tool_result_text(result)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("vault_credential_input_request_failed: %s", type(exc).__name__)
+        return ""
+
+
+async def tool_vault_request_credential_input(
+    url: str, reason: str = "", tenant_id: str = "", browser_session_id: str = "",
+    browser_work_key: str = "",
+) -> str:
+    """Vault 에 없는 사이트 계정을 대표님이 채팅 카드에 직접 입력하도록 요청한다. 비밀번호는 묻지 않는다."""
+    from app.services import browser_login_autosave as _autosave
+    from app.services import vault_secure_input as _vsi
+
+    if not _vsi.is_enabled():
+        return "[ERROR] vault_secure_input_disabled"
+    fallback_session = browser_session_id or browser_work_key
+    scoped_tenant, session_id = _autosave._bound_context(tenant_id, fallback_session)
+    if not scoped_tenant:
+        return "[ERROR] vault_tenant_required"
+    try:
+        from app.services.agent_vault_service import list_agent_credentials
+
+        origin = _autosave.origin_of(str(url or ""))
+        if origin and await list_agent_credentials(tenant_id=scoped_tenant, origin=origin):
+            return (
+                f"vault_credential_exists origin={origin} — 이미 Vault 에 계정이 있습니다. "
+                '{{vault:username}}/{{vault:password}} 로 fill 하십시오'
+            )
+        result = await _vsi.request_credential_input(
+            tenant_id=scoped_tenant, session_id=session_id, url=str(url or ""),
+            browser_work_key=browser_work_key, reason=reason,
+        )
+    except _vsi.SecureInputError as exc:
+        return f"[ERROR] vault_credential_input_{exc.code}"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("vault_credential_input_tool_failed: %s", type(exc).__name__)
+        return "[ERROR] vault_credential_input_unavailable"
+    return _vsi.tool_result_text(result)
+
+
 @_pc_agent_deadline
 async def tool_browser_fill(
     selector: str,
@@ -4610,6 +4682,16 @@ async def tool_browser_fill(
                 browser_work_key=browser_work_key, credential_id=str(credential_id or "").strip(),
             )
             if verr or cred is None:
+                if (
+                    verr.startswith("[ERROR] vault_credential_not_found")
+                    and not str(credential_id or "").strip()
+                ):
+                    requested = await _request_credential_input_for_fill(
+                        origin=origin, tenant_id=scoped_tenant, fallback_session=fallback_session,
+                        browser_work_key=browser_work_key,
+                    )
+                    if requested:
+                        return requested
                 return verr
             secret = str(cred.get(ref_kind) or "")
             await page.fill(selector, secret, timeout=30_000)
@@ -4627,6 +4709,11 @@ async def tool_browser_fill(
             await _autosave.on_fill(
                 page, selector, str(value).strip(), tenant_id=scoped_tenant,
                 fallback_session=fallback_session, from_vault=True,
+                **(
+                    {"vault_credential_id": cred_id, "vault_field": ref_kind}
+                    if (cred.get("metadata") or {}).get("verification_status") in ("unverified", "failed")
+                    else {}
+                ),
             )
             return f"[입력 완료] selector={selector} source=vault credential_id={cred_id}"
 
@@ -5973,6 +6060,14 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             login_url=params.get("login_url", ""),
             login_steps=params.get("login_steps"),
             tenant_id=params.get("tenant_id", ""),
+        )
+    elif name == "vault_request_credential_input":
+        return await tool_vault_request_credential_input(
+            url=params.get("url", ""),
+            reason=params.get("reason", ""),
+            tenant_id=params.get("tenant_id", ""),
+            browser_session_id=params.get("browser_session_id", ""),
+            browser_work_key=params.get("browser_work_key", ""),
         )
     elif name == "credential_delete":
         return await tool_credential_delete(params.get("credential_id", ""), tenant_id=params.get("tenant_id", ""))
