@@ -105,7 +105,7 @@ const draft = T.draftFromValues(values, target);
 const full = T.checkLocally(draft);
 const payload = T.payloadFromDraft(draft, "");
 const fieldByLabel = Object.fromEntries(T.FIELD_BY_LABEL);
-const endDates = Object.fromEntries(["2026-10-06", "2028-02-29", "2026-12-31", "", "2026-13-40"].map(d => [d, C.defaultEndDate(d)]));
+const endDates = Object.fromEntries(["2026-10-06", "2028-02-29", "2026-12-31", "2027-03-01", "", "2026-13-40"].map(d => [d, C.defaultEndDate(d)]));
 const endByType = Object.fromEntries(["part_time", "manager", "regular", "freelancer"].map(k => [k, C.defaultEndDateFor(k, "2026-10-06")]));
 console.log(JSON.stringify({ empty, full, payload, fieldByLabel, endDates, endByType }));
 """
@@ -250,7 +250,8 @@ def test_freelancer_conflicts_are_shown_together_and_wage_is_not_carried_over():
 def test_default_end_date_is_one_year_from_contract_date_minus_one_day(node_result):
     assert node_result["endDates"] == {
         "2026-10-06": "2027-10-05",
-        "2028-02-29": "2029-02-27",  # 2029-02-28(말일 보정) - 1일
+        "2028-02-29": "2029-02-28",  # 만 1년 - 1일
+        "2027-03-01": "2028-02-29",  # 윤년
         "2026-12-31": "2027-12-30",
         "": "",
         "2026-13-40": "",

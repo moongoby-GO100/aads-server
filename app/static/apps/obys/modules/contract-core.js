@@ -21,7 +21,7 @@
       return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
     }
     // 계약 종료일 기본값 = 계약 작성일 + 1년 − 1일 (2026-10-06 → 2027-10-05).
-    // 작성일이 2/29 처럼 다음 해에 없는 날이면 다음 해 해당 월 말일로 보정한 뒤 하루를 뺀다.
+    // 2/29 계약은 다음 해 2/28 로 끝난다.
     function defaultEndDate(contractDate) {
       const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(contractDate || ""));
       if (!match) return "";
@@ -29,9 +29,8 @@
       const probe = new Date(Date.UTC(Number(match[1]), month - 1, Number(match[3])));
       if (probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== Number(match[3])) return ""; // 2026-13-40 같은 값
       const year = Number(match[1]) + 1;
-      const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-      const day = Math.min(Number(match[3]), lastDay);
-      const end = new Date(Date.UTC(year, month - 1, day) - 86400000);
+      // 다음 해에 없는 날(2/29)은 Date.UTC 가 3/1 로 넘기므로 하루를 빼면 2/28 이 된다(만 1년 - 1일).
+      const end = new Date(Date.UTC(year, month - 1, Number(match[3])) - 86400000);
       return Number.isNaN(end.getTime()) ? "" : end.toISOString().slice(0, 10);
     }
     // 기간제 근로계약에만 기본 종료일을 채운다. 정규직은 기간의 정함이 없고(contract-core 문구),
