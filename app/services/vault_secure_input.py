@@ -26,6 +26,8 @@ ACTION_TYPE = "vault_credential_input"
 GATE_SOURCE = "vault_credential_input"
 VAULT_WORK_KEY = "aads-ceo-browser"
 SOURCE = "chat_secure_input"
+MODE_CREATE = "create"
+MODE_REPLACE = "replace"
 REQUEST_TTL_MINUTES = 30
 RATE_ACTION = "credential_input_submit_attempt"
 DEFAULT_RATE_PER_MINUTE = 10
@@ -91,6 +93,19 @@ def _request_uuid(request_id: str) -> Optional[uuid.UUID]:
         return None
 
 
+def credential_is_verified(cred: dict[str, Any]) -> bool:
+    """metadata.verification_status 가 verified 인 계정만 검증됨. 표식이 없으면 미검증(Vault 서비스와 같은 규칙)."""
+    metadata = cred.get("metadata") if isinstance(cred.get("metadata"), dict) else {}
+    return str(metadata.get("verification_status") or "unverified").strip().lower() == "verified"
+
+
+def pick_replace_target(creds: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """origin 의 계정이 하나 이상이고 전부 미검증일 때만 재입력 대상(가장 최근 갱신분)을 돌려준다."""
+    if not creds or any(credential_is_verified(c) for c in creds):
+        return None
+    return max(creds, key=lambda c: (str(c.get("updated_at") or ""), str(c.get("id") or "")))
+
+
 # ── 요청 생성 ────────────────────────────────────────────────────────
 
 _EXPIRE_SQL = """
@@ -101,7 +116,7 @@ UPDATE agent_vault_credential_requests
 """
 
 _FIND_PENDING_SQL = """
-SELECT id::text AS id, permission_request_id::text AS permission_request_id
+SELECT id::text AS id, permission_request_id::text AS permission_request_id, mode
   FROM agent_vault_credential_requests
  WHERE tenant_id = $1 AND session_id = $2 AND origin = $3
    AND status = 'pending' AND expires_at > now()
@@ -121,13 +136,15 @@ RETURNING id::text
 _INSERT_REQUEST_SQL = """
 INSERT INTO agent_vault_credential_requests
     (id, tenant_id, session_id, origin, login_url, browser_work_key, status,
-     permission_request_id, reason, expires_at, created_at, updated_at)
+     permission_request_id, reason, expires_at, created_at, updated_at, mode, target_credential_id)
 VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7::uuid, $8,
-        now() + make_interval(mins => $9), now(), now())
+        now() + make_interval(mins => $9), now(), now(), $10, $11::uuid)
 """
 
 
-def _summary(host: str, login_url: str) -> str:
+def _summary(host: str, login_url: str, mode: str = MODE_CREATE) -> str:
+    if mode == MODE_REPLACE:
+        return f"Vault 미검증 계정 재입력 요청 · {host} · {login_url or host}"
     return f"Vault 에 없는 사이트 계정 입력 요청 · {host} · {login_url or host}"
 
 
@@ -138,8 +155,12 @@ async def request_credential_input(
     url: str,
     browser_work_key: str = "",
     reason: str = "",
+    target_credential_id: str = "",
 ) -> dict[str, Any]:
-    """입력 요청과 채팅 카드를 만든다. 같은 tenant·session·origin 의 pending 요청이 있으면 재사용."""
+    """입력 요청과 채팅 카드를 만든다. 같은 tenant·session·origin 의 pending 요청이 있으면 재사용.
+
+    target_credential_id 가 있으면 mode=replace — submit 이 그 미검증 계정을 갱신한다.
+    """
     from app.core.db_pool import get_pool
     from app.services.browser_login_autosave import host_of, origin_of
 
@@ -152,6 +173,13 @@ async def request_credential_input(
     login_url = safe_login_url(url) or origin
     note = _clean_reason(reason)
     work_key = str(browser_work_key or "").strip()[:200]
+    target_id: Optional[uuid.UUID] = None
+    if str(target_credential_id or "").strip():
+        try:
+            target_id = uuid.UUID(str(target_credential_id).strip())
+        except ValueError as exc:
+            raise SecureInputError(400, "invalid_target") from exc
+    mode = MODE_REPLACE if target_id else MODE_CREATE
 
     async def _reuse(conn: Any) -> Optional[dict[str, Any]]:
         row = await conn.fetchrow(_FIND_PENDING_SQL, tenant, session, origin)
@@ -160,6 +188,7 @@ async def request_credential_input(
         return {
             "request_id": row["id"], "permission_request_id": row["permission_request_id"],
             "origin": origin, "host": host, "login_url": login_url, "reused": True,
+            "mode": row["mode"] or MODE_CREATE,
         }
 
     pool = get_pool()
@@ -174,32 +203,42 @@ async def request_credential_input(
                 scope = {
                     "scope": "single_call", "credential_request_id": str(request_id),
                     "origin": origin, "host": host, "login_url": login_url, "reason": note,
+                    "mode": mode, "target_credential_id": str(target_id) if target_id else "",
                 }
                 card_id = await conn.fetchval(
                     _INSERT_CARD_SQL,
                     tenant, f"{GATE_SOURCE}:{request_id}", origin, ACTION_TYPE,
-                    _summary(host, login_url), f"vault_credential_request_id={request_id}",
+                    _summary(host, login_url, mode), f"vault_credential_request_id={request_id}",
                     session, json.dumps(scope, ensure_ascii=False), REQUEST_TTL_MINUTES, GATE_SOURCE,
                 )
                 await conn.execute(
                     _INSERT_REQUEST_SQL,
                     request_id, tenant, session, origin, login_url, work_key,
-                    str(card_id), note, REQUEST_TTL_MINUTES,
+                    str(card_id), note, REQUEST_TTL_MINUTES, mode, str(target_id) if target_id else None,
                 )
         except asyncpg.UniqueViolationError:
             reused = await _reuse(conn)
             if reused:
                 return reused
             raise
-    logger.info("vault_credential_input_requested request=%s host=%s", str(request_id)[:8], host)
+    logger.info("vault_credential_input_requested request=%s host=%s mode=%s", str(request_id)[:8], host, mode)
     return {
         "request_id": str(request_id), "permission_request_id": str(card_id),
-        "origin": origin, "host": host, "login_url": login_url, "reused": False,
+        "origin": origin, "host": host, "login_url": login_url, "reused": False, "mode": mode,
     }
 
 
 def tool_result_text(result: dict[str, Any]) -> str:
     """에이전트에게 돌려줄 도구 결과. 비밀값은 없다."""
+    if result.get("mode") == MODE_REPLACE:
+        return (
+            f"credential_input_requested request_id={result['request_id']} mode=replace — 대표님 입력 대기\n"
+            f"{result.get('host', '')} 의 Vault 계정은 아직 로그인 검증된 적이 없어, 같은 계정을 다시 입력받는 "
+            f"보안 입력 카드를 채팅에 올렸습니다{' (이미 올라간 카드를 재사용)' if result.get('reused') else ''}. "
+            "대표님이 카드에 아이디·비밀번호를 입력하면 시스템 알림이 옵니다. "
+            "입력 완료 후 같은 selector 에 {{vault:username}}/{{vault:password}} 로 다시 fill 하십시오. "
+            "비밀번호를 채팅에 묻거나 value 에 직접 쓰지 마십시오."
+        )
     return (
         f"credential_input_requested request_id={result['request_id']} — 대표님 입력 대기\n"
         f"{result.get('host', '')} 에 Vault 계정이 없어 채팅에 보안 입력 카드를 올렸습니다"
@@ -216,6 +255,7 @@ _SELECT_REQUEST_SQL = """
 SELECT id::text AS id, tenant_id::text AS tenant_id, session_id, origin, login_url,
        browser_work_key, status, credential_id::text AS credential_id,
        permission_request_id::text AS permission_request_id, reason,
+       mode, target_credential_id::text AS target_credential_id,
        expires_at, created_at, updated_at, (expires_at <= now()) AS is_expired
   FROM agent_vault_credential_requests
  WHERE id = $1
@@ -242,10 +282,10 @@ def _public_view(row: dict[str, Any]) -> dict[str, Any]:
     from app.services.browser_login_autosave import host_of
 
     status = str(row["status"])
-    if status == "pending" and row.get("is_expired"):
+    if status in ("pending", "failed") and row.get("is_expired"):
         status = "expired"
     return {
-        "id": row["id"], "status": status, "origin": row["origin"],
+        "id": row["id"], "status": status, "origin": row["origin"], "mode": row.get("mode") or MODE_CREATE,
         "host": host_of(row["origin"]), "login_url": row["login_url"],
         "session_id": row["session_id"], "credential_id": row.get("credential_id"),
         "permission_request_id": row.get("permission_request_id"),
@@ -264,6 +304,8 @@ async def get_credential_request(*, tenant_id: str, request_id: str) -> dict[str
 
 # ── 제출 ─────────────────────────────────────────────────────────────
 
+_RESUBMITTABLE = ("pending", "failed")
+
 _RATE_COUNT_SQL = """
 SELECT count(*) FROM agent_vault_access_logs
  WHERE tenant_id = $1 AND action = $2 AND created_at > now() - interval '60 seconds'
@@ -272,14 +314,14 @@ SELECT count(*) FROM agent_vault_access_logs
 _CLAIM_SQL = """
 UPDATE agent_vault_credential_requests
    SET status = 'submitted', updated_at = now()
- WHERE id = $1 AND tenant_id = $2 AND status = 'pending' AND expires_at > now()
+ WHERE id = $1 AND tenant_id = $2 AND status IN ('pending', 'failed') AND expires_at > now()
 RETURNING id::text AS id
 """
 
 _REVERT_SQL = """
 UPDATE agent_vault_credential_requests
-   SET status = 'pending', updated_at = now()
- WHERE id = $1 AND status = 'submitted' AND credential_id IS NULL
+   SET status = $2, updated_at = now()
+ WHERE id = $1 AND status = 'submitted' AND (credential_id IS NULL OR $2 = 'failed')
 """
 
 _RECORD_CREDENTIAL_SQL = """
@@ -325,11 +367,41 @@ async def _free_label(vault: Any, *, tenant_id: str, origin: str, label: str, us
     return f"{base[:MAX_LABEL_LEN - 8]} #{secrets.token_hex(3)}"
 
 
+async def _update_target_credential(
+    vault: Any, *, tenant_id: str, user_id: str, origin: str, username: str, password: str, target_id: str,
+) -> Optional[tuple[str, str]]:
+    """재입력 대상 계정을 같은 행에서 갱신한다. 대상이 없거나 다른 origin 이면 None(새로 저장하도록)."""
+    target = await vault.get_agent_credential_by_id(tenant_id=tenant_id, credential_id=target_id)
+    if not target or vault.normalize_origin(str(target.get("origin") or "")) != vault.normalize_origin(origin):
+        return None
+    if credential_is_verified(target):
+        raise SecureInputError(409, "credential_already_verified")
+    metadata = {**(target.get("metadata") or {}), "source": SOURCE, "verification_status": "unverified"}
+    metadata.setdefault("policy", "ask")
+    saved = await vault.update_agent_credential(
+        tenant_id=tenant_id, user_id=user_id, credential_id=str(target["id"]),
+        work_key=target["work_key"], origin=origin, label=target["label"],
+        username=username, password=password, metadata=metadata,
+    )
+    if not saved or not saved.get("id"):
+        raise RuntimeError("credential_not_saved")
+    return str(saved["id"]), "updated"
+
+
 async def _save_credential(
     *, tenant_id: str, user_id: str, origin: str, username: str, password: str, label: str,
+    target_id: str = "",
 ) -> tuple[str, str]:
     """암호화 저장. (credential_id, 'saved'|'updated')."""
     from app.services import agent_vault_service as vault
+
+    if target_id:
+        replaced = await _update_target_credential(
+            vault, tenant_id=tenant_id, user_id=user_id, origin=origin,
+            username=username, password=password, target_id=target_id,
+        )
+        if replaced:
+            return replaced
 
     existing = await vault.find_agent_credential_by_username(
         tenant_id=tenant_id, origin=origin, username=username,
@@ -392,31 +464,39 @@ async def submit_credential(
 
     async with get_pool().acquire() as conn:
         row = await _load_request(conn, tenant_id, request_id)
-        if row["status"] == "expired" or (row["status"] == "pending" and row.get("is_expired")):
+        if row["status"] == "expired" or (row["status"] in _RESUBMITTABLE and row.get("is_expired")):
             raise SecureInputError(410, "request_expired")
-        if row["status"] != "pending":
+        if row["status"] not in _RESUBMITTABLE:
             raise SecureInputError(409, "request_not_pending", status=row["status"])
         claimed = await conn.fetchrow(_CLAIM_SQL, _request_uuid(request_id), tenant)
         if not claimed:
             latest = await _load_request(conn, tenant_id, request_id)
-            if latest["status"] == "pending" and latest.get("is_expired"):
+            if latest["status"] in _RESUBMITTABLE and latest.get("is_expired"):
                 raise SecureInputError(410, "request_expired")
             raise SecureInputError(409, "request_not_pending", status=latest["status"])
+    previous_status = str(row["status"])
+    target_id = ""
+    if row.get("mode") == MODE_REPLACE and row.get("target_credential_id"):
+        target_id = str(row["target_credential_id"])
+    elif previous_status == "failed" and row.get("credential_id"):
+        target_id = str(row["credential_id"])
 
     origin = str(row["origin"])
     host = host_of(origin)
     try:
         credential_id, mode = await _save_credential(
             tenant_id=tenant_id, user_id=user_id, origin=origin,
-            username=username, password=password, label=str(label or ""),
+            username=username, password=password, label=str(label or ""), target_id=target_id,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("vault_credential_input_save_failed: %s", type(exc).__name__)
         try:
             async with get_pool().acquire() as conn:
-                await conn.execute(_REVERT_SQL, _request_uuid(request_id))
+                await conn.execute(_REVERT_SQL, _request_uuid(request_id), previous_status)
         except Exception as revert_exc:  # noqa: BLE001
             logger.warning("vault_credential_input_revert_failed: %s", type(revert_exc).__name__)
+        if isinstance(exc, SecureInputError):
+            raise SecureInputError(exc.status_code, exc.code, **exc.extra) from None
         raise SecureInputError(503, "credential_save_failed") from None
 
     try:
@@ -439,7 +519,8 @@ async def submit_credential(
     logger.info("vault_credential_input_submitted request=%s host=%s mode=%s", request_id[:8], host, mode)
     return {
         "status": "submitted", "request_id": str(request_id), "credential_id": credential_id,
-        "mode": mode, "origin": origin, "host": host, "verification_status": "unverified",
+        "mode": mode, "request_mode": row.get("mode") or MODE_CREATE, "origin": origin, "host": host,
+        "verification_status": "unverified",
         "chat_notified": chat,
     }
 

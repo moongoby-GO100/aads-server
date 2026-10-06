@@ -79,11 +79,12 @@ class FakeDB:
                 "login_url": args[4], "browser_work_key": args[5], "status": "pending",
                 "credential_id": None, "permission_request_id": args[6], "reason": args[7],
                 "expires_at": None, "created_at": None, "updated_at": None, "is_expired": False,
+                "mode": args[9], "target_credential_id": args[10],
             }
-        elif "SET status = 'pending'" in query:
+        elif "SET status = $2" in query:
             r = self.requests[str(args[0])]
-            if r["status"] == "submitted" and not r["credential_id"]:
-                r["status"] = "pending"
+            if r["status"] == "submitted" and (not r["credential_id"] or args[1] == "failed"):
+                r["status"] = args[1]
         elif "SET credential_id" in query:
             self.requests[str(args[0])]["credential_id"] = args[1]
         elif "UPDATE agent_permission_requests" in query:
@@ -119,7 +120,8 @@ class FakeDB:
             return dict(r) if r else None
         if "SET status = 'submitted'" in query:
             r = self.requests.get(str(args[0]))
-            if r and r["tenant_id"] == str(args[1]) and r["status"] == "pending" and not r["is_expired"]:
+            if r and r["tenant_id"] == str(args[1]) and r["status"] in ("pending", "failed") \
+                    and not r["is_expired"]:
                 r["status"] = "submitted"
                 return {"id": r["id"]}
             return None
@@ -160,7 +162,7 @@ def env(monkeypatch):
     db = FakeDB()
     state = {
         "db": db, "notices": [], "saved": [], "updated": [], "labels": [], "existing": None,
-        "verify": [], "creds": [], "save_error": None,
+        "verify": [], "creds": [], "save_error": None, "targets": {},
     }
     monkeypatch.setattr("app.core.db_pool.get_pool", lambda: db)
     monkeypatch.delenv("VAULT_SECURE_INPUT_ENABLED", raising=False)
@@ -183,6 +185,9 @@ def env(monkeypatch):
         state["updated"].append(kw)
         return {"id": kw["credential_id"]}
 
+    async def by_id(**kw):
+        return state["targets"].get(kw["credential_id"])
+
     async def list_active(**kw):
         return state["labels"]
 
@@ -198,6 +203,7 @@ def env(monkeypatch):
     monkeypatch.setattr(svc, "find_agent_credential_by_username", find)
     monkeypatch.setattr(svc, "upsert_agent_credential", upsert)
     monkeypatch.setattr(svc, "update_agent_credential", update)
+    monkeypatch.setattr(svc, "get_agent_credential_by_id", by_id)
     monkeypatch.setattr(svc, "list_agent_credentials", list_active)
     monkeypatch.setattr(svc, "write_access_log", write_log)
     monkeypatch.setattr(svc, "set_credential_verification", set_verification)
@@ -354,7 +360,7 @@ async def test_chat_tool_requests_input_and_skips_when_vault_has_account(fill_en
         url=f"{ORIGIN}/login", reason="로그인", tenant_id=TENANT, browser_work_key=SESSION,
     )
     assert out.startswith("credential_input_requested request_id=")
-    fill_env["labels"] = [{"label": "x"}]
+    fill_env["labels"] = [{"label": "x", "metadata": {"verification_status": "verified"}}]
     exists = await tools.tool_vault_request_credential_input(
         url=f"{ORIGIN}/login", tenant_id=TENANT, browser_work_key=SESSION,
     )
@@ -717,3 +723,164 @@ def test_migration_is_additive_and_has_no_secret_columns():
 def test_safe_login_url_strips_query_userinfo_and_fragment():
     assert vsi.safe_login_url("https://u:p@Site.example.com/login?token=abc#frag") == "https://site.example.com/login"
     assert vsi.safe_login_url("javascript:alert(1)") == ""
+
+
+# ── g. 미검증 계정 재입력(replace) · 실패 카드 재제출 ─────────────────────
+
+def _target(**over):
+    cred = {
+        "id": CRED_ID, "work_key": "wk", "label": "go100", "origin": ORIGIN, "updated_at": "2026-08-20T00:00:00",
+        "metadata": {"source": "google_csv", "note": "keep"}, "password": "old-pw",
+    }
+    cred.update(over)
+    return cred
+
+
+async def test_chat_tool_unverified_account_gets_replace_card(fill_env):
+    tools = fill_env["fill"]["tools"]
+    fill_env["labels"] = [_target(), _target(id="22222222-2222-4333-8444-555555555555",
+                                              updated_at="2026-09-01T00:00:00",
+                                              metadata={"verification_status": "failed"})]
+    out = await tools.tool_vault_request_credential_input(
+        url=f"{ORIGIN}/login", tenant_id=TENANT, browser_work_key=SESSION,
+    )
+    assert out.startswith("credential_input_requested request_id=") and "mode=replace" in out
+    req = next(iter(fill_env["db"].requests.values()))
+    assert req["mode"] == "replace" and req["target_credential_id"] == "22222222-2222-4333-8444-555555555555"
+    card = next(iter(fill_env["db"].cards.values()))
+    assert card["scope"]["mode"] == "replace" and "재입력" in card["summary"]
+    assert SECRET not in json.dumps([out, req, card], default=str)
+
+
+async def test_chat_tool_any_verified_account_keeps_rejecting(fill_env):
+    tools = fill_env["fill"]["tools"]
+    fill_env["labels"] = [_target(), _target(id="22222222-2222-4333-8444-555555555555",
+                                              metadata={"verification_status": "verified"})]
+    out = await tools.tool_vault_request_credential_input(
+        url=f"{ORIGIN}/login", tenant_id=TENANT, browser_work_key=SESSION,
+    )
+    assert out.startswith("vault_credential_exists")
+    assert fill_env["db"].requests == {}
+
+
+def test_pick_replace_target_rules():
+    assert vsi.pick_replace_target([]) is None
+    assert vsi.pick_replace_target([{"id": "a", "metadata": {"verification_status": "Verified"}}]) is None
+    assert vsi.pick_replace_target([{"id": "a"}])["id"] == "a"
+    assert vsi.pick_replace_target([{"id": "a", "metadata": None}, {"id": "b", "metadata": {}, "updated_at": "z"}])["id"] == "b"
+
+
+async def test_replace_submit_updates_existing_row_without_new_one(env, caplog):
+    caplog.set_level(logging.DEBUG)
+    env["targets"][CRED_ID] = _target()
+    req = await _request(target_credential_id=CRED_ID)
+    assert req["mode"] == "replace"
+    result = await _submit(req["request_id"])
+    assert env["saved"] == [] and len(env["updated"]) == 1
+    upd = env["updated"][0]
+    assert upd["credential_id"] == CRED_ID and upd["label"] == "go100" and upd["work_key"] == "wk"
+    assert upd["username"] == USER and upd["password"] == SECRET
+    assert upd["metadata"] == {
+        "source": "chat_secure_input", "note": "keep", "verification_status": "unverified", "policy": "ask",
+    }
+    assert result["mode"] == "updated" and result["request_mode"] == "replace" and result["credential_id"] == CRED_ID
+    row = env["db"].requests[req["request_id"]]
+    assert row["status"] == "submitted" and row["credential_id"] == CRED_ID
+    assert SECRET not in json.dumps([result, row, env["db"].cards], default=str) + caplog.text
+
+
+async def test_replace_submit_refuses_when_target_got_verified(env):
+    env["targets"][CRED_ID] = _target(metadata={"verification_status": "verified"})
+    req = await _request(target_credential_id=CRED_ID)
+    with pytest.raises(vsi.SecureInputError) as err:
+        await _submit(req["request_id"])
+    assert err.value.status_code == 409 and err.value.code == "credential_already_verified"
+    assert env["updated"] == [] and env["saved"] == []
+    assert env["db"].requests[req["request_id"]]["status"] == "pending"
+
+
+async def test_replace_submit_falls_back_to_create_when_target_gone(env):
+    req = await _request(target_credential_id=CRED_ID)
+    result = await _submit(req["request_id"])
+    assert result["mode"] == "saved" and len(env["saved"]) == 1
+
+
+async def test_invalid_target_id_is_rejected(env):
+    with pytest.raises(vsi.SecureInputError) as err:
+        await _request(target_credential_id="not-a-uuid")
+    assert err.value.code == "invalid_target"
+
+
+async def test_failed_request_can_be_resubmitted_before_expiry(env, caplog):
+    caplog.set_level(logging.DEBUG)
+    env["targets"][CRED_ID] = _target(metadata={"verification_status": "failed", "source": "chat_secure_input"})
+    req = await _request()
+    await _submit(req["request_id"])
+    row = env["db"].requests[req["request_id"]]
+    row["status"] = "failed"
+    again = await _submit(req["request_id"], password=SECRET + "-2")
+    assert again["status"] == "submitted" and again["credential_id"] == CRED_ID
+    assert row["status"] == "submitted"
+    assert len(env["saved"]) == 1 and env["updated"][-1]["credential_id"] == CRED_ID
+    assert env["updated"][-1]["metadata"]["verification_status"] == "unverified"
+    assert SECRET not in caplog.text
+
+
+async def test_failed_resubmit_save_error_restores_failed_status(env, monkeypatch):
+    req = await _request()
+    await _submit(req["request_id"])
+    row = env["db"].requests[req["request_id"]]
+    row["status"] = "failed"
+    env["targets"][CRED_ID] = _target()
+
+    async def boom(**kw):
+        raise RuntimeError(f"db down {SECRET}")
+
+    monkeypatch.setattr(svc, "update_agent_credential", boom)
+    with pytest.raises(vsi.SecureInputError) as err:
+        await _submit(req["request_id"])
+    assert err.value.status_code == 503 and SECRET not in str(err.value)
+    assert row["status"] == "failed"
+
+
+async def test_failed_request_after_expiry_is_410(env):
+    req = await _request()
+    await _submit(req["request_id"])
+    row = env["db"].requests[req["request_id"]]
+    row["status"], row["is_expired"] = "failed", True
+    with pytest.raises(vsi.SecureInputError) as err:
+        await _submit(req["request_id"])
+    assert err.value.status_code == 410
+    assert vsi._public_view(row)["status"] == "expired"
+
+
+@pytest.mark.parametrize("status,code", [("verified", 409), ("cancelled", 409), ("submitted", 409), ("expired", 410)])
+async def test_terminal_requests_stay_rejected(env, status, code):
+    req = await _request()
+    env["db"].requests[req["request_id"]]["status"] = status
+    with pytest.raises(vsi.SecureInputError) as err:
+        await _submit(req["request_id"])
+    assert err.value.status_code == code
+    assert env["saved"] == [] and env["updated"] == []
+
+
+async def test_router_failed_resubmit_returns_200_and_never_echoes_password(env):
+    from app.routers import agent_vault as router
+
+    req = await _request()
+    await _submit(req["request_id"])
+    env["db"].requests[req["request_id"]]["status"] = "failed"
+    out = await router.api_submit_credential_request(
+        req["request_id"], router.SecureInputSubmitIn(username=USER, password=SECRET), context=CTX,
+    )
+    assert out["status"] == "submitted" and SECRET not in json.dumps(out, default=str)
+
+
+def test_replace_mode_migration_is_additive():
+    import pathlib
+
+    sql = pathlib.Path("migrations/20261006_agent_vault_credential_requests_replace_mode.sql").read_text()
+    low = "\n".join(line for line in sql.lower().splitlines() if not line.strip().startswith("--"))
+    assert "add column if not exists mode" in low and "add column if not exists target_credential_id" in low
+    for forbidden in ("password", "secret", "drop ", "delete ", "truncate"):
+        assert forbidden not in low
