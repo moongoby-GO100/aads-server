@@ -148,12 +148,14 @@ GROUPS: tuple[Group, ...] = (
     Group(
         name="runner_sync",
         tests=(
+            "tests/unit/test_runner_live_update_hold.py",
             "tests/unit/test_runner_maintenance_protocol.py",
             "tests/unit/test_runner_sync_live_process_guard.py",
             "tests/unit/test_pipeline_runner_remote_sync.py",
             "tests/unit/test_runner_sync_launcher.py",
         ),
         globs=(
+            "scripts/runner_live_update.sh",
             "scripts/runner_busy_lib.sh",
             "scripts/sync_pipeline_runner_remote.sh",
             "scripts/restart_local_runner.sh",

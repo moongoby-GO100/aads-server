@@ -208,16 +208,77 @@ def test_orphan_inherited_descriptor_blocks_even_after_daemon_closes_own_fd(host
 
 def test_controller_termination_releases_admission_without_requeue_or_actor_exit(host):
     actor = host.actor(orphan=True)
+    worker = int((host.path / 'worker.pid').read_text())
     controller = host.controller(timeout='5')
     wait_for(lambda: json.loads((host.state/'actors'/f'{actor.pid}.json').read_text())['phase'] == 'QUIESCENT')
-    # Terminate only this fixture process, including its blocking flock child.
-    children = Path(f'/proc/{controller.pid}/task/{controller.pid}/children').read_text().split()
+
+    def identity(pid):
+        fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        return fields[19], os.readlink(f'/proc/{pid}/cwd')
+
+    controller_identity = identity(controller.pid)
+    actor_identity, worker_identity = identity(actor.pid), identity(worker)
+
+    def blocking_controller_tree():
+        found = []
+
+        def visit(pid, ancestors):
+            try:
+                children = Path(f'/proc/{pid}/task/{pid}/children').read_text().split()
+            except FileNotFoundError:
+                return
+            for child in children:
+                child = int(child)
+                assert child not in (actor.pid, worker), 'fixture actor is not a controller descendant'
+                try:
+                    token = identity(child)
+                    command = Path(f'/proc/{child}/cmdline').read_bytes().split(b'\0')[:-1]
+                except FileNotFoundError:
+                    continue
+                found.append((child, token, ancestors + (pid,), command))
+                visit(child, ancestors + (pid,))
+
+        visit(controller.pid, ())
+        for pid, token, ancestors, command in found:
+            if command and Path(os.fsdecode(command[0])).name == 'flock' and command[-2:] == [b'-x', b'202']:
+                assert ancestors[0] == controller.pid
+                assert Path(f'/proc/{pid}/fd/202').stat().st_ino == (host.state/'lifetime.lock').stat().st_ino
+                return found
+        return None
+
+    # Wait for the actual blocking flock, which is a grandchild of the Popen
+    # Bash. Killing only the direct Bash left this lease holder alive until its
+    # five-second timeout, racing the unchanged five-second observation bound.
+    descendants = wait_for(blocking_controller_tree)
+    assert identity(controller.pid) == controller_identity
     controller.terminate()
-    for child in children:
-        os.kill(int(child), 15)
+    for child, token, ancestors, _ in reversed(descendants):
+        assert ancestors[0] == controller.pid
+        assert child not in (actor.pid, worker)
+        assert token[1] == controller_identity[1]
+        try:
+            assert identity(child) == token, 'do not signal a reused fixture PID or changed cwd'
+            os.kill(child, 15)
+        except FileNotFoundError:
+            pass
+        except ProcessLookupError:
+            pass
     controller.wait(timeout=3)
+
+    def admission_released():
+        with (host.state/'admission.lock').open('a') as stream:
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            fcntl.flock(stream, fcntl.LOCK_UN)
+            return True
+
+    wait_for(admission_released)
     wait_for(lambda: json.loads((host.state/'actors'/f'{actor.pid}.json').read_text())['phase'] == 'RUNNING')
     assert actor.poll() is None
+    assert identity(actor.pid) == actor_identity
+    assert identity(worker) == worker_identity
     assert not (host.path/'applied').exists()
 
 
