@@ -1,0 +1,162 @@
+[
+  {
+    "name": "desktop: 직원 현황에 승인 직원 계약 섹션·계약 작성 버튼",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 기존 화면 이동 없이 같은 페이지에서 편집기 열림",
+    "ok": true,
+    "detail": "https://fb.test/static/apps/obys/mockup-v4-1.html?cv41_request=req-yang#employees"
+  },
+  {
+    "name": "desktop: 직원·회사·점포 문맥 고정 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 금액·입사일 비어 있으면 미리보기 차단",
+    "ok": true,
+    "detail": "저장 전에 빈 칸을 채우십시오.근로자 주소입사일확정 임금"
+  },
+  {
+    "name": "desktop: 근로자 주소 누락을 칸으로 안내",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 미리보기에 입력 조건 반영",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 서버 400 시 입력 보존·해당 칸 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 저장 후 서버 계약 번호·상태 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 저장 본문이 기존 API 형식(snake_case)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 서명요청 연속 클릭 시 1회만 호출",
+    "ok": true,
+    "detail": "requests=1"
+  },
+  {
+    "name": "desktop: 알림 실패를 전송 완료로 표시하지 않음",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 재알림 429 안내",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 새로고침 후 같은 계약 다시 열림",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "desktop: 서명본 PDF 실제 파일 수신",
+    "ok": true,
+    "detail": "contract-test.pdf"
+  },
+  {
+    "name": "desktop: 가로 넘침 없음",
+    "ok": true,
+    "detail": "overflow=0px"
+  },
+  {
+    "name": "desktop: 페이지 스크립트 오류 없음",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 직원 현황에 승인 직원 계약 섹션·계약 작성 버튼",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 기존 화면 이동 없이 같은 페이지에서 편집기 열림",
+    "ok": true,
+    "detail": "https://fb.test/static/apps/obys/mockup-v4-1.html?cv41_request=req-yang#employees"
+  },
+  {
+    "name": "mobile: 직원·회사·점포 문맥 고정 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 금액·입사일 비어 있으면 미리보기 차단",
+    "ok": true,
+    "detail": "저장 전에 빈 칸을 채우십시오.근로자 주소입사일확정 임금"
+  },
+  {
+    "name": "mobile: 근로자 주소 누락을 칸으로 안내",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 미리보기에 입력 조건 반영",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 서버 400 시 입력 보존·해당 칸 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 저장 후 서버 계약 번호·상태 표시",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 저장 본문이 기존 API 형식(snake_case)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 서명요청 연속 클릭 시 1회만 호출",
+    "ok": true,
+    "detail": "requests=1"
+  },
+  {
+    "name": "mobile: 알림 실패를 전송 완료로 표시하지 않음",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 재알림 429 안내",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 새로고침 후 같은 계약 다시 열림",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "mobile: 서명본 PDF 실제 파일 수신",
+    "ok": true,
+    "detail": "contract-test.pdf"
+  },
+  {
+    "name": "mobile: 가로 넘침 없음",
+    "ok": true,
+    "detail": "overflow=0px"
+  },
+  {
+    "name": "mobile: 페이지 스크립트 오류 없음",
+    "ok": true,
+    "detail": ""
+  }
+]
