@@ -146,6 +146,64 @@ def test_korean_negation_false_positive_guards(gate_fn, text):
     assert _decide(gate_fn, text) == "ALLOW"
 
 
+# ── 금지 블록 과잉매칭 축소 (AADS-RUNNER-DEPLOY-FORBID-BLOCK-OVERMATCH) ──
+# 5ec9fa8e 의 블록 판정이 7일 400건 재판정에서 허용→금지로 44건 뒤집혔다.
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 유형 1: 금지 블록이 뒤따르는 다른 라벨 절까지 이어짐 (runner-2e653cc4 / a5761224 형태)
+        "금지:\n- 기존 DB 데이터 수정·삭제, 마이그레이션.\n- 무관 파일 수정, --no-verify.\n\n"
+        "테스트: 단위 테스트 추가.\n완료 기준: 테스트 PASS. 배포는 Python 변경만이므로 승인 후 reload-api.sh.",
+        "금지: --no-verify, 마이그레이션 파일 삭제.\n검증 기준: 다음 AADS 배포의 schema_migrations 단계 통과.",
+        # 유형 1: 롤백/참고 라벨 (runner-48267964 / 0e065c47 형태)
+        "금지: 작업트리 main 변경, 임계값 변경.\n롤백: conf 를 되돌리고 daemon-reload + 서비스 재시작.",
+        "금지: 임계값 변경.\n참고(이번 작업 범위 밖): 실행본 배포 동기화는 별도 결정 사항이다.",
+        # 유형 1: 빈 줄 2개로 블록 종료
+        "## 금지\n- 파일 삭제\n\n\n보고 문단 — 배포 결과를 정리한다.",
+        # 유형 2: 한정어가 붙은 금지 (runner-b0b8eb91 / 4564ecc1 / 3c804b69 형태)
+        "## 금지\n- 60봉 게이트 완화, 전략 파라미터 변경.\n- 다른 서비스 재시작, 실주문, DROP/TRUNCATE.\n\n## 완료 보고\n변경 파일.",
+        "## 금지\n주문·DB 쓰기, card310 경로 변경, 재시작 2회 이상, --no-verify.",
+        "## 금지\n- 무관한 서비스 재시작, 추가 서비스 재시작, 기타 유닛 재시작",
+        "## 금지\n- 재시작 n회 이상, 타 서비스 재시작",
+        # 유형 2: restart 단어만 있는 본문 줄 (runner-704313e7 형태)
+        "## 금지\n- --no-verify, force push, 서비스/타이머 restart, systemd 유닛 설치.",
+    ],
+)
+def test_block_overmatch_cases_are_allowed(gate_fn, text):
+    assert _decide(gate_fn, text) == "ALLOW"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "## 금지\n- 배포, 재기동",
+        "금지: 서비스 재시작",
+        "## 금지\n서비스 재시작과 크론 변경",
+        "금지: 운영 restart",
+        # 한정된 금지와 무조건 금지가 한 줄에 섞이면 막는다
+        "## 금지\n- 다른 서비스 재시작, 배포",
+        # 라벨 절이 이어져도 라벨 앞 금지는 유지
+        "금지: 배포\n완료 기준: 테스트 PASS",
+        "## 금지\n- 파일 수정\n- 배포 불가\n롤백: 되돌린다",
+        # 빈 줄 하나로는 블록이 끝나지 않는다
+        "## 금지\n- 파일 수정\n\n- 빌드",
+        # restart 가 배포·재기동과 같은 줄이면 막는다
+        "## 금지\n- 서비스 restart 및 재기동",
+        # runner-0e065c47·92a23deb: 같은 줄에 "실제 배포 실행" 금지가 명시되면 라벨 절 안이라도 막는다
+        "금지: health 기준 완화, 실제 배포 실행, deploy.sh 변경.\n참고: 범위 밖.",
+        "금지: drain 대기, 무중단 원칙을 완화하는 변경. docker compose up 실행. 실제 배포 실행.\n완료 기준: 테스트 통과.",
+    ],
+)
+def test_block_legitimate_forbids_remain(gate_fn, text):
+    assert _decide(gate_fn, text) == "FORBID"
+
+
+def test_runner_890f5c73_still_forbids_after_block_narrowing(gate_fn):
+    text = RUNNER_890F5C73_FORBID_CLAUSE + " 3개 파일 밖은 stage 하지 않는다.\n\n완료 기준: 테스트 PASS."
+    assert _decide(gate_fn, text) == "FORBID"
+
+
 # ── 정적 계약 ───────────────────────────────────────────────────────────
 
 
