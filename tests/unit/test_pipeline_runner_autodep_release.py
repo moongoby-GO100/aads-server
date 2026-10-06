@@ -141,3 +141,56 @@ def test_p0_instruction_is_promoted_ahead_of_implicit_file_lock_queue():
         claim = script[claim_start:claim_end]
         assert "PRIORITY:[[:space:]]*P0" in claim
         assert claim.index("PRIORITY:[[:space:]]*P0") < claim.index("COALESCE(p.priority, 0) DESC")
+
+
+# ── 2026-10-06: blocked_dependency 로 취소된 부모는 실패의 전파다 ─────────────────
+# 체인 runner-1d168a6d(error) → runner-f3378426 → runner-1fc518dc. 1d168a6d 가 실패해
+# f3378426 이 blocked_dependency 로 취소되자 cancelled 면제가 1fc518dc 의 의존성을 풀어
+# 선행 결과 없이 실행됐다.
+
+_BLOCKED = "COALESCE(dep.phase,'') <> 'blocked_dependency'"
+
+
+def _flat(sql: str) -> str:
+    return re.sub(r"\s+", " ", sql)
+
+
+def test_cancelled_exemption_excludes_blocked_dependency_parent():
+    """(a) 부모 cancelled+phase=queued → 해제 / (b) cancelled+blocked_dependency → 해제 안 함."""
+    for name in SCRIPTS:
+        released = _flat(_sql_blocks(_cleanup_fn(_read(name)))["released"])
+        # WHERE 의 cancelled 분기: 자동 의존성 마커 OR (cancelled AND phase<>blocked_dependency)
+        assert f"OR (dep.status = 'cancelled' AND {_BLOCKED})" in released, name
+        # 면제 문구(CASE)도 같은 조건에만 붙는다
+        assert f"CASE WHEN dep.status='cancelled' AND {_BLOCKED} THEN" in released, name
+        # 이전의 무조건 cancelled 분기가 남아 있으면 안 된다
+        assert "OR dep.status = 'cancelled')" not in released, name
+
+
+def test_blocked_dependency_parent_cascades_to_explicit_child():
+    """(b) 부모 cancelled+blocked_dependency → 자식도 blocked_dependency 로 연쇄 차단."""
+    for name in SCRIPTS:
+        sql = _flat(_sql_blocks(_cleanup_fn(_read(name)))["blocked_existing"])
+        assert "dep.status IN ('error','rejected','rejected_done')" in sql, f"{name}: (c) error 차단 유지"
+        assert "(dep.status='cancelled' AND dep.phase='blocked_dependency')" in sql, name
+        assert "phase='blocked_dependency'" in sql
+        assert "status='cancelled'" in sql
+        # 원 상류 추적: 부모가 blocked_dependency 면 부모 error_detail 의 root/parent 를 승계
+        assert "dep.phase='blocked_dependency'" in sql and "' (root '" in sql, name
+        assert "substring(dep.error_detail from 'root ([A-Za-z0-9_-]+)')" in sql, name
+        # 자동(파일충돌) 의존성·릴리스 잡 제외는 그대로
+        assert AUTO_MARKER in sql
+        assert "AND NOT (${DEPLOY_ONLY_HEADER_SQL})" in sql, name
+
+
+def test_plain_cancelled_parent_is_not_cascaded():
+    """(a) 일반 cancelled 부모는 연쇄 차단 대상이 아니다(plain cancelled 는 released 경로)."""
+    sql = _flat(_sql_blocks(_cleanup_fn(_read("pipeline-runner.sh")))["blocked_existing"])
+    assert "dep.status IN ('error','rejected','rejected_done','cancelled')" not in sql
+    assert re.search(r"dep\.status\s*=\s*'cancelled'\s+AND\s+dep\.phase='blocked_dependency'", sql)
+
+
+def test_2026_10_06_case_documented_in_comment():
+    fn = _cleanup_fn(_read("pipeline-runner.sh"))
+    for job in ("runner-1d168a6d", "runner-f3378426", "runner-1fc518dc"):
+        assert job in fn
