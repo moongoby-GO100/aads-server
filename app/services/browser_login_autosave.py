@@ -569,8 +569,15 @@ async def propose_save(tenant_id: str, session_id: str, origin: str) -> dict[str
     pool = get_pool()
     async with pool.acquire() as conn:
         # 카드보다 슬롯 행을 먼저 쓴다 — 카드가 보이면 그 슬롯 행은 이미 있다.
-        await _persist_slot(conn, slot, float(remaining))
-        slot.persisted = True
+        # 슬롯 행 저장이 실패해도 카드는 만든다 — 승인은 메모리 슬롯(persisted=False)으로 처리된다.
+        # conn.transaction() 은 트랜잭션 밖이면 자체 BEGIN, 안이면 SAVEPOINT 라 실패가 이후 쿼리를 막지 않는다.
+        try:
+            async with conn.transaction():
+                await _persist_slot(conn, slot, float(remaining))
+            slot.persisted = True
+        except Exception as exc:  # noqa: BLE001
+            slot.persisted = False
+            logger.warning("browser_autosave_persist_failed: %s", type(exc).__name__)
         request_id = await conn.fetchval(
             "SELECT id::text FROM agent_permission_requests "
             " WHERE tenant_id = $1::uuid AND work_key = $2 AND decision = 'pending' "

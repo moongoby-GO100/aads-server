@@ -60,11 +60,23 @@ class _Acquire:
         return False
 
 
+class _Tx:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
 class _Conn:
     def __init__(self):
         self.pending: dict[str, dict] = {}
         self.calls: list[tuple] = []
         self.slots: dict[tuple, dict] = {}  # browser_login_save_slots 흉내 — key=(tenant, session, origin)
+        self.fail_slot_insert: Exception | None = None
+
+    def transaction(self):
+        return _Tx()
 
     def _slot_rows(self):
         return {r["id"]: r for r in self.slots.values()}
@@ -99,6 +111,8 @@ class _Conn:
 
     def _slot_sql(self, query, args):
         if "INSERT INTO browser_login_save_slots" in query:
+            if self.fail_slot_insert is not None:
+                raise self.fail_slot_insert
             sid, tenant, session, origin, url, user_enc, pw_enc, remaining = args
             self.slots[(tenant, session, origin)] = {
                 "id": sid, "tenant_id": tenant, "session_id": session, "origin": origin,
@@ -677,6 +691,21 @@ async def test_persisted_row_has_no_plaintext_and_log_stays_clean(monkeypatch, d
         assert USER not in text.replace("mo***@example.com", "")
     assert USER not in caplog.text
     _assert_no_secret(caplog.text)
+
+
+async def test_slot_insert_failure_still_creates_card_and_memory_approve_saves(monkeypatch, db, vault, caplog):
+    db.fail_slot_insert = RuntimeError(f"relation missing for {SECRET}")
+    caplog.set_level(logging.DEBUG)
+    sid = await _propose(monkeypatch)
+    assert db.slots == {} and "card-1" in {c["id"] for c in db.pending.values()}
+    assert als._slots[als._slot_key(TENANT, SESSION, ORIGIN)].persisted is False
+    assert "browser_autosave_persist_failed: RuntimeError" in caplog.text
+    _assert_no_secret(caplog.text)
+    result = await als.apply_decision(
+        slot_id=sid, approved=True, tenant_id=TENANT, decided_by="u", request_id="card-1",
+    )
+    assert result["status"] == "saved"
+    assert len(vault["upserts"]) == 1 and vault["upserts"][0]["password"] == SECRET
 
 
 async def test_persisted_login_url_drops_query_and_fragment(monkeypatch, db, vault):
