@@ -89,6 +89,7 @@ GUARD_FUNCS = "".join(
         "resolve_release_commit",
         "reject_ancestor_release",
         "enforce_ancestor_release_guard",
+        "supersede_queued_ancestor_releases",
         "claim_latest_queued_deploy_request",
         "include_queued_ancestors_in_direct_release",
     )
