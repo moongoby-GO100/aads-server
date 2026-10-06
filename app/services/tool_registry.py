@@ -2065,7 +2065,11 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "browser_fill": {
         "name": "browser_fill",
-        "description": "현재 페이지의 입력 필드에 텍스트를 채운다.",
+        "description": (
+            "현재 페이지의 입력 필드에 텍스트를 채운다. Vault 에 저장된 계정은 value 에 "
+            "'{{vault:username}}' / '{{vault:password}}' 를 쓰면 서버가 현재 사이트의 계정 값으로 채운다. "
+            "비밀번호를 value 에 직접 쓰지 말 것 — Vault 에 계정이 있는 사이트의 비밀번호 칸 평문 입력은 거부된다."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -2075,7 +2079,11 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
                 "value": {
                     "type": "string",
-                    "description": "입력할 텍스트",
+                    "description": "입력할 텍스트. Vault 계정이면 '{{vault:username}}' 또는 '{{vault:password}}'. 비밀번호 평문 금지",
+                },
+                "credential_id": {
+                    "type": "string",
+                    "description": "Vault 참조 사용 시 특정 항목으로 한정 (선택, 같은 tenant·현재 사이트의 항목만 허용)",
                 },
                 **browser_session_props(),
             },

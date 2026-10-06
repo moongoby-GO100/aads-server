@@ -1806,13 +1806,24 @@ def _tool_result_event_snapshot(event: Dict[str, Any], content_limit: int = 500)
     return payload
 
 
+def _mask_tool_input_for_storage(tool_name: str, tool_input: Any) -> Any:
+    """비밀번호·토큰 등 비밀값을 가린 tool_input. 실패하면 비밀값이 새지 않게 빈 dict 를 쓴다."""
+    try:
+        from app.services.browser_login_autosave import mask_tool_input
+
+        return mask_tool_input(tool_name, tool_input)
+    except Exception:  # noqa: BLE001
+        logger.warning("tool_input_mask_failed tool=%s", tool_name)
+        return {}
+
+
 def _tool_use_event_snapshot(event: Dict[str, Any]) -> Dict[str, Any]:
     """tool_use 이벤트를 저장/전달용으로 정규화. at 은 호출 시각(epoch)이다."""
     return {
         "type": "tool_use",
         "tool_name": event.get("tool_name", ""),
         "tool_use_id": event.get("tool_use_id", ""),
-        "tool_input": event.get("tool_input", {}),
+        "tool_input": _mask_tool_input_for_storage(event.get("tool_name", ""), event.get("tool_input", {})),
         "at": _bg_time.time(),
     }
 
@@ -1904,7 +1915,10 @@ def normalize_tool_events(tools_called: Any) -> List[Dict[str, Any]]:
                 "type": "tool_use",
                 "tool_name": tool_name,
                 "tool_use_id": str(item.get("tool_use_id") or ""),
-                "tool_input": item.get("tool_input") if isinstance(item.get("tool_input"), dict) else {},
+                "tool_input": (
+                    _mask_tool_input_for_storage(tool_name, item.get("tool_input"))
+                    if isinstance(item.get("tool_input"), dict) else {}
+                ),
             }
             # at 은 호출 시각(epoch)이다. 여기서 떨어뜨리면 tool_result 의 at 과
             # 짝지어 계산하는 llmops_tool_calls.latency_ms 가 NULL 로 남는다.
@@ -2501,9 +2515,9 @@ async def _apply_deferred_interrupts_to_state(
                         "type": "tool_use",
                         "tool_name": event["tool_name"],
                         "tool_use_id": event.get("tool_use_id", ""),
-                        "tool_input": event.get("tool_input", {}),
+                        "tool_input": _mask_tool_input_for_storage(event["tool_name"], event.get("tool_input", {})),
                     })
-                    yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
+                    yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': _mask_tool_input_for_storage(event['tool_name'], event.get('tool_input', {}))})}\n\n"
                 elif etype == "tool_result":
                     tool_result_payload = _tool_result_event_snapshot(event)
                     state.setdefault("tools_called", []).append(tool_result_payload)

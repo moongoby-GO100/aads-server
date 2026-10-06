@@ -5946,6 +5946,7 @@ class ToolExecutor:
             browser_work_key=browser_work_key,
             browser_lane=str(inp.get("browser_lane") or ""),
             tenant_id=str(inp.get("tenant_id") or ""),
+            credential_id=str(inp.get("credential_id") or ""),
         )
 
     async def _browser_press_key(self, inp: Dict[str, Any]) -> Any:

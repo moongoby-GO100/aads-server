@@ -325,7 +325,11 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_fill",
-        "description": "브라우저 입력 필드에 텍스트 입력.\n예: browser_fill(selector='input[name=username]', value='admin')",
+        "description": (
+            "브라우저 입력 필드에 텍스트 입력.\n예: browser_fill(selector='input[name=username]', value='admin')\n"
+            "Vault 에 저장된 계정은 value 에 '{{vault:username}}' / '{{vault:password}}' 를 쓰면 서버가 현재 사이트의 "
+            "계정 값으로 채운다. 비밀번호를 value 에 직접 쓰지 말 것 — Vault 에 계정이 있는 사이트의 비밀번호 칸 평문 입력은 거부된다."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -335,7 +339,11 @@ TOOL_DEFINITIONS: List[Dict] = [
                 },
                 "value": {
                     "type": "string",
-                    "description": "입력할 텍스트",
+                    "description": "입력할 텍스트. Vault 계정이면 '{{vault:username}}' 또는 '{{vault:password}}'. 비밀번호 평문 금지",
+                },
+                "credential_id": {
+                    "type": "string",
+                    "description": "Vault 참조 사용 시 특정 항목으로 한정 (선택, 같은 tenant·현재 사이트의 항목만 허용)",
                 },
                 **browser_session_props(),
             },
@@ -4530,6 +4538,48 @@ async def tool_browser_click(
         return f"[ERROR] 클릭 실패 ({selector}): {e}"
 
 
+def _scrub_secret(text: str, *secrets_: str) -> str:
+    for secret in secrets_:
+        if len(secret) >= 3:
+            text = text.replace(secret, "***")
+    return text
+
+
+async def _resolve_vault_fill_credential(
+    *, ref_kind: str, page_origin: str, tenant_id: str, browser_work_key: str, credential_id: str,
+) -> tuple[Optional[dict[str, Any]], str]:
+    """Vault 참조({{vault:...}})를 현재 origin·tenant 로 해석한다. (credential, 오류문자열)."""
+    from app.services.agent_vault_service import (
+        get_agent_credential_by_id,
+        get_agent_credential_for_url,
+        normalize_origin,
+    )
+
+    not_found = f"[ERROR] vault_credential_not_found origin={page_origin or '(none)'}"
+    if not tenant_id:
+        return None, "[ERROR] vault_tenant_required"
+    if not page_origin:
+        return None, not_found
+    try:
+        if credential_id:
+            uuid.UUID(credential_id)
+            cred = await get_agent_credential_by_id(tenant_id=tenant_id, credential_id=credential_id)
+            if cred and normalize_origin(str(cred.get("origin") or "")) != normalize_origin(page_origin):
+                return None, f"[ERROR] vault_credential_origin_mismatch origin={page_origin}"
+        else:
+            cred = await get_agent_credential_for_url(
+                tenant_id=tenant_id, url=page_origin, work_key=browser_work_key or None,
+            )
+    except ValueError:
+        return None, "[ERROR] vault_invalid_credential_id" if credential_id else not_found
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("browser_fill_vault_lookup_failed: %s", type(exc).__name__)
+        return None, "[ERROR] vault_lookup_failed"
+    if not cred or not str(cred.get(ref_kind) or "").strip():
+        return None, not_found
+    return cred, ""
+
+
 @_pc_agent_deadline
 async def tool_browser_fill(
     selector: str,
@@ -4538,23 +4588,72 @@ async def tool_browser_fill(
     browser_work_key: str = "",
     browser_lane: str = "",
     tenant_id: str = "",
+    credential_id: str = "",
 ) -> str:
-    """입력 필드에 텍스트 채우기."""
+    """입력 필드에 텍스트 채우기. value 가 {{vault:password}}/{{vault:username}} 이면 Vault 값으로 채운다."""
     ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
+    secret = ""
     try:
         page = await _current_page(ctx)
-        await page.fill(selector, value, timeout=30_000)
         from app.services import browser_login_autosave as _autosave
 
+        fallback_session = browser_session_id or browser_work_key
+        origin = _autosave.page_origin(page)
+        ref_kind = _autosave.parse_vault_ref(value)
+        scoped_tenant, _ = _autosave._bound_context(tenant_id, fallback_session)
+
+        if ref_kind:
+            cred, verr = await _resolve_vault_fill_credential(
+                ref_kind=ref_kind, page_origin=origin, tenant_id=scoped_tenant,
+                browser_work_key=browser_work_key, credential_id=str(credential_id or "").strip(),
+            )
+            if verr or cred is None:
+                return verr
+            secret = str(cred.get(ref_kind) or "")
+            await page.fill(selector, secret, timeout=30_000)
+            cred_id = str(cred.get("id") or "")
+            try:
+                from app.services.agent_vault_service import mark_agent_credential_used
+
+                await mark_agent_credential_used(
+                    tenant_id=scoped_tenant, credential_id=cred_id,
+                    work_key=str(browser_work_key or cred.get("work_key") or ""),
+                    origin=origin, details={"method": "browser_fill_vault_ref", "field": ref_kind},
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("browser_fill_vault_usage_mark_failed: %s", type(exc).__name__)
+            await _autosave.on_fill(
+                page, selector, str(value).strip(), tenant_id=scoped_tenant,
+                fallback_session=fallback_session, from_vault=True,
+            )
+            return f"[입력 완료] selector={selector} source=vault credential_id={cred_id}"
+
+        if scoped_tenant and origin:
+            attrs = await _autosave._probe_attrs(page, selector)
+            if _autosave.is_password_field(selector, attrs):
+                from app.services.agent_vault_service import list_agent_credentials
+
+                try:
+                    existing = await list_agent_credentials(tenant_id=scoped_tenant, origin=origin)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("browser_fill_vault_probe_failed: %s", type(exc).__name__)
+                    return "[ERROR] vault_lookup_failed — 잠시 후 다시 시도하십시오"
+                if existing:
+                    return (
+                        "[ERROR] plaintext_password_blocked — Vault 에 이 사이트 계정이 있습니다. "
+                        'value="{{vault:password}}" 로 다시 호출하십시오'
+                    )
+
+        await page.fill(selector, value, timeout=30_000)
         await _autosave.on_fill(
             page, selector, value, tenant_id=tenant_id,
-            fallback_session=browser_session_id or browser_work_key,
+            fallback_session=fallback_session,
         )
         return f"[입력 완료] selector={selector}"
     except Exception as e:
-        return f"[ERROR] 입력 실패 ({selector}): {e}"
+        return f"[ERROR] 입력 실패 ({selector}): {_scrub_secret(str(e), secret, value if isinstance(value, str) else '')}"
 
 
 @_pc_agent_deadline
@@ -6001,6 +6100,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             browser_work_key=params.get("browser_work_key", ""),
             browser_lane=str(params.get("browser_lane") or ""),
             tenant_id=str(params.get("tenant_id") or ""),
+            credential_id=str(params.get("credential_id") or ""),
         )
     elif name == "browser_press_key":
         return await tool_browser_press_key(

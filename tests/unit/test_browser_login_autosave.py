@@ -102,6 +102,9 @@ def db(monkeypatch):
 def vault(monkeypatch):
     state = {"existing": None, "upserts": [], "updates": []}
 
+    async def list_active(**kw):
+        return []
+
     async def find(**kw):
         return state["existing"]
 
@@ -115,6 +118,7 @@ def vault(monkeypatch):
 
     import app.services.agent_vault_service as svc
 
+    monkeypatch.setattr(svc, "list_agent_credentials", list_active)
     monkeypatch.setattr(svc, "find_agent_credential_by_username", find)
     monkeypatch.setattr(svc, "upsert_agent_credential", upsert)
     monkeypatch.setattr(svc, "update_agent_credential", update)

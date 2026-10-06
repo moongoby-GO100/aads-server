@@ -36,7 +36,14 @@ _SETTLE_DELAY_SECONDS = 1.0
 _PROBE_TIMEOUT_SECONDS = 2.0
 _SUBMIT_KEYS = {"enter", "return"}
 
-_PW_HINT = re.compile(r"passw|pwd|current-password|new-password", re.I)
+_PW_HINT = re.compile(
+    r"passw|pwd|current-password|new-password|비밀번호|(?<![a-z])pw(?![a-z])", re.I,
+)
+_PW_CAMEL_HINT = re.compile(r"[a-z]Pw(?![a-z])")
+_PW_SELECTOR_TYPE = re.compile(r"type\s*=\s*['\"]?password", re.I)
+VAULT_REF_RE = re.compile(r"^\s*\{\{\s*vault\s*:\s*(password|username)\s*\}\}\s*$", re.I)
+MASKED = "***MASKED***"
+_SECRET_KEY_RE = re.compile(r"password|passwd|secret|(?<![a-z])token(?![a-z])", re.I)
 _USER_HINT = re.compile(r"user|e-?mail|login|account|identifier|signin", re.I)
 
 _clock = time.monotonic
@@ -92,6 +99,25 @@ def mask_username(username: str) -> str:
     return f"{local[:keep]}***{sep}{domain}"
 
 
+def parse_vault_ref(value: Any) -> str:
+    """'{{vault:password}}' / '{{vault:username}}' 이면 'password' / 'username', 아니면 ''."""
+    match = VAULT_REF_RE.match(value) if isinstance(value, str) else None
+    return match.group(1).lower() if match else ""
+
+
+def is_password_field(selector: str, attrs: Optional[dict[str, Any]] = None) -> bool:
+    attrs = attrs or {}
+    hay = " ".join(
+        str(attrs.get(k) or "") for k in ("name", "id", "autocomplete", "placeholder")
+    ) + " " + (selector or "")
+    return bool(
+        str(attrs.get("type") or "").lower() == "password"
+        or _PW_HINT.search(hay)
+        or _PW_CAMEL_HINT.search(hay)
+        or _PW_SELECTOR_TYPE.search(selector or "")
+    )
+
+
 def classify_field(selector: str, attrs: Optional[dict[str, Any]] = None) -> str:
     """'password' | 'username' | '' — 입력한 필드가 무엇인지."""
     attrs = attrs or {}
@@ -99,18 +125,65 @@ def classify_field(selector: str, attrs: Optional[dict[str, Any]] = None) -> str
     hay = " ".join(
         str(attrs.get(k) or "") for k in ("name", "id", "autocomplete", "placeholder")
     ) + " " + (selector or "")
-    sel = (selector or "").lower()
-    if (
-        ftype == "password"
-        or _PW_HINT.search(hay)
-        or re.search(r"type\s*=\s*['\"]?password", sel)
-    ):
+    if is_password_field(selector, attrs):
         return "password"
     if ftype in ("hidden", "checkbox", "radio", "file", "number", "search"):
         return ""
     if ftype == "email" or _USER_HINT.search(hay):
         return "username"
     return ""
+
+
+def _mask_step_values(steps: Any) -> Any:
+    """login_steps 처럼 {selector, value} 를 담은 목록에서 비밀번호 칸 value 를 가린다."""
+    if not isinstance(steps, list):
+        return steps
+    out = []
+    for step in steps:
+        if isinstance(step, dict) and "value" in step and not parse_vault_ref(step.get("value")):
+            if is_password_field(str(step.get("selector") or "")):
+                step = {**step, "value": MASKED}
+        out.append(mask_secret_values(step))
+    return out
+
+
+def mask_secret_values(value: Any) -> Any:
+    """password/passwd/secret/token 키의 값을 재귀적으로 가린다. Vault 참조 문자열은 유지."""
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if _SECRET_KEY_RE.search(str(key)) and item not in (None, "") and not parse_vault_ref(item):
+                out[key] = MASKED
+            else:
+                out[key] = mask_secret_values(item)
+        return out
+    if isinstance(value, list):
+        return [mask_secret_values(item) for item in value]
+    return value
+
+
+def mask_tool_input(tool_name: str, tool_input: Any) -> Any:
+    """chat_messages.tools_called 에 저장하기 직전 tool_input 에서 비밀값을 가린다."""
+    if not isinstance(tool_input, dict) or not tool_input:
+        return tool_input
+    name = str(tool_name or "")
+    masked = mask_secret_values(tool_input)
+    if name == "browser_fill":
+        value = tool_input.get("value")
+        if (
+            isinstance(value, str) and value and not parse_vault_ref(value)
+            and is_password_field(str(tool_input.get("selector") or ""))
+        ):
+            masked["value"] = MASKED
+    if name.startswith("credential") or name.startswith("agent_vault"):
+        extra = tool_input.get("extra_fields")
+        if isinstance(extra, dict):
+            masked["extra_fields"] = {k: (MASKED if v not in (None, "") else v) for k, v in extra.items()}
+        elif extra:
+            masked["extra_fields"] = MASKED
+        if "login_steps" in tool_input:
+            masked["login_steps"] = _mask_step_values(masked.get("login_steps"))
+    return masked
 
 
 def _slot_key(tenant_id: str, session_id: str, origin: str) -> tuple[str, str, str]:
@@ -224,11 +297,19 @@ async def _probe_attrs(page: Any, selector: str) -> dict[str, Any]:
 
 async def on_fill(
     page: Any, selector: str, value: str, *, tenant_id: str = "", fallback_session: str = "",
+    from_vault: bool = False,
 ) -> None:
-    """browser_fill 성공 직후 호출. 어떤 실패도 도구 결과에 영향을 주지 않는다."""
+    """browser_fill 성공 직후 호출. 어떤 실패도 도구 결과에 영향을 주지 않는다.
+
+    from_vault=True 는 "vault 자동입력" — 이미 Vault 에 있는 계정이므로 슬롯을 만들지
+    않고, 이 origin 에 남은 슬롯이 있으면 버려 저장 제안 카드가 생기지 않게 한다.
+    """
     try:
         tenant_id, session_id = _bound_context(tenant_id, fallback_session)
         if not tenant_id or not value:
+            return
+        if from_vault:
+            discard_origin(tenant_id, session_id, page_origin(page))
             return
         attrs = await _probe_attrs(page, selector)
         record_fill(
