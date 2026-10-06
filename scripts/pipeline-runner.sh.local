@@ -4713,6 +4713,75 @@ aads_deploy_live_gate() {
     esac
 }
 
+# ── deploy_queued 마무리 (AADS-RUNNER-DEPLOY-QUEUED-FINALIZER, 2026-10-06) ──
+# aads_deploy_live_gate 는 미반영 + deploy_runs 진행 중이면 status='deploying',
+# phase='deploy_queued' 로 두고 끝난다. 그 뒤 이 잡을 done/error 로 닫는 주체가 없어
+# done 을 조건으로 건 예약 작업이 WAITING 에 머물렀다. 주기 훅(_recover_stuck_jobs)이
+# 같은 판정(aads_release_live_verdict)을 다시 호출해 닫는다.
+#   live:*       → done            queued:* → 그대로(쓰기 없음)
+#   not_live:*   → error deploy_not_live    queued 가 상한 초과 → error deploy_queued_timeout
+# 갱신은 WHERE status='deploying' AND phase='deploy_queued' RETURNING 으로 원자화하고,
+# 행이 실제로 바뀐 경우에만 이벤트·채팅·알림을 보낸다(두 러너/두 주기가 겹쳐도 1회).
+# 상한은 updated_at 기준이다 — 게이트가 deploy_queued 기록 때 갱신하고 이후 아무도 건드리지 않는다.
+AADS_DEPLOY_QUEUED_MAX_SEC="${AADS_DEPLOY_QUEUED_MAX_SEC:-7200}"
+
+aads_finalize_deploy_queued_jobs() {
+    [[ -z "${RUNNER_PROJECTS:-}" || ",${RUNNER_PROJECTS}," == *",AADS,"* ]] || return 0
+    local rows="" job_id="" sha="" session_id="" age="" verdict="" run_id="" status="" slot=""
+    local repo="${PROJECT_WORKDIR[AADS]:-}" claimed="" detail="" phase=""
+    rows=$(db_exec "SELECT job_id, COALESCE(commit_hash,''), COALESCE(chat_session_id::text,''),
+                           GREATEST(EXTRACT(EPOCH FROM (NOW() - updated_at)),0)::bigint
+                    FROM pipeline_jobs
+                    WHERE project='AADS' AND status='deploying' AND phase='deploy_queued'
+                    ORDER BY updated_at;" 2>/dev/null) || return 0
+    [[ -n "$rows" ]] || return 0
+    while IFS=$'\x1e' read -r job_id sha session_id age; do
+        job_id="${job_id// /}"; sha="${sha// /}"; session_id="${session_id// /}"; age="${age// /}"
+        [[ "$job_id" =~ ^(runner-[0-9a-f]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] || continue
+        [[ "$age" =~ ^[0-9]+$ ]] || age=0
+        verdict=$(aads_release_live_verdict "$sha" "$repo") || true
+        claimed=""
+        case "$verdict" in
+            live:*)
+                slot="${verdict#live:}"
+                claimed=$(db_exec "UPDATE pipeline_jobs SET status='done', phase='done',
+                    review_feedback=COALESCE(review_feedback,'') || E'\n[배포반영확인] deploy_queued → 운영 슬롯 ${slot} 이 커밋 ${sha:0:12} 를 포함',
+                    deployed_at=NOW(), completed_at=NOW(), updated_at=NOW()
+                    WHERE job_id='${job_id}' AND status='deploying' AND phase='deploy_queued'
+                    RETURNING job_id;" 2>/dev/null) || claimed=""
+                if [[ "${claimed// /}" == "$job_id" ]]; then
+                    record_runner_event "$job_id" "job_terminal" "done" "done" "" "" "" "" "{\"deploy_queued_finalized\":\"live\",\"slot\":\"${slot}\"}"
+                    post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 반영 확인 — 운영 슬롯 ${slot} 에 커밋 ${sha:0:12} 반영됨: $job_id"
+                    log "  DEPLOY_QUEUED_FINALIZED job=$job_id -> done slot=${slot}"
+                    _notify_ai "$job_id"
+                fi
+                continue ;;
+            queued:*)
+                IFS=: read -r _ run_id status <<< "$verdict"
+                (( age > AADS_DEPLOY_QUEUED_MAX_SEC )) || continue
+                phase="deploy_queued_timeout"
+                detail="deploy_queued_timeout:${run_id:-none}:${status:-none}" ;;
+            *)
+                IFS=: read -r _ run_id status <<< "${verdict:-not_live:none:none}"
+                phase="deploy_not_live"
+                detail="deploy_not_live:${run_id:-none}:${status:-none}" ;;
+        esac
+        claimed=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='${phase}',
+            error_detail='${detail}',
+            review_feedback=COALESCE(review_feedback,'') || E'\n[배포미반영] deploy_queued 재확인: ${detail} — 운영 이미지에 커밋 ${sha:0:12} 없음',
+            completed_at=NOW(), updated_at=NOW()
+            WHERE job_id='${job_id}' AND status='deploying' AND phase='deploy_queued'
+            RETURNING job_id;" 2>/dev/null) || claimed=""
+        if [[ "${claimed// /}" == "$job_id" ]]; then
+            record_runner_event "$job_id" "job_terminal" "error" "$phase" "" "" "" "" "{\"error_detail\":\"${detail}\"}"
+            post_to_chat "$session_id" "🔴 [Pipeline Runner] 배포 미반영 — ${detail}, 운영 이미지에 커밋 ${sha:0:12} 없음: $job_id"
+            log "  DEPLOY_QUEUED_FINALIZED job=$job_id -> error ${detail}"
+            _notify_ai "$job_id"
+        fi
+    done <<< "$rows"
+    return 0
+}
+
 # ── autoheal 인계 추적 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD-RETRY, 2026-09-30) ──
 # deploy.sh 는 target_drain_busy·dirty_worktree 로 멈추면 EXIT 트랩에서 같은
 # 릴리스의 successor run 을 띄우고 자기 행을 superseded_by_autoheal_* 로 바꾼 뒤
@@ -5821,6 +5890,9 @@ reject_job() {
 _recover_stuck_jobs() {
     local filter="$1"
 
+    # deploy_queued 잡은 아래 BUG-7(deploying 20분) 보다 먼저 같은 판정으로 마무리한다.
+    aads_finalize_deploy_queued_jobs || true
+
     # BUG-7: 좀비 작업 강제 kill — running 상태 + MAX_RUNTIME(7200초) 초과 + runner_pid 존재
     local zombie_rows
     zombie_rows=$(db_exec "SELECT job_id, runner_pid, chat_session_id, project
@@ -5871,6 +5943,7 @@ _recover_stuck_jobs() {
                                 review_feedback=COALESCE(review_feedback,'') || E'\n[Deploy Timeout] deploying 상태 20분 초과',
                                 completed_at=NOW(), updated_at=NOW()
                                 WHERE status='deploying'
+                                  AND phase IS DISTINCT FROM 'deploy_queued'
                                   AND updated_at < NOW() - INTERVAL '20 minutes'
                                   $filter
                                 RETURNING job_id;" 2>/dev/null) || true
