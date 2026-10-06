@@ -1011,10 +1011,76 @@ wait_for_active_deploy_lock() {
     done
 }
 
+# queued 후보 중 다른 후보의 git 조상인 릴리스는 더 새로운 후보에 흡수된 것으로 닫는다.
+# 2026-10-06: #5599(20a97a9c)가 target_drain_busy 로 막힌 뒤 autoheal 재시도 #5601 을
+# 넣었지만 created_at 이 가장 이른 #5600(6a3de230, 20a97a9c 의 조상)이 ready head 로
+# 먼저 배포됐고, 최신 수정이 약 20분 늦게 올라갔다. 분기된 릴리스끼리는 건드리지 않고
+# created_at 순서를 유지한다. 판정 불가(객체 없음 등)는 경고만 남기고 그 후보는 건너뛴다
+# — 즉 지금 동작(created_at ASC)으로 되돌아간다. 대체된 행은 failed 가 아니라 superseded 다.
+supersede_queued_ancestor_releases() {
+    local rows ids=() shas=() fulls=() id sha n i j rc
+    rows="$(
+        deploy_db_exec "
+            SELECT id::text || '|' || release_sha
+              FROM deploy_runs
+             WHERE project='AADS'
+               AND component='api'
+               AND target_env='production'
+               AND status='queued'
+               AND phase='queued_for_deploy'
+             ORDER BY created_at ASC, id ASC;
+        "
+    )"
+    while IFS='|' read -r id sha; do
+        id="$(echo "${id:-}" | tr -d '[:space:]')"
+        sha="$(echo "${sha:-}" | tr -d '[:space:]')"
+        [[ "$id" =~ ^[0-9]+$ ]] || continue
+        ids+=("$id")
+        shas+=("$sha")
+        fulls+=("$(git -C "${COMPOSE_DIR:-.}" rev-parse --verify --quiet "${sha}^{commit}" 2>/dev/null || true)")
+        if [[ -z "${fulls[${#fulls[@]}-1]}" ]]; then
+            echo "[deploy.sh] ⚠️ queue ancestry check: commit unresolved for run=${id} sha=${sha:-empty} — keeping created_at order for this candidate"
+        fi
+    done <<< "$rows"
+
+    n=${#ids[@]}
+    (( n > 1 )) || return 0
+    for ((i = 0; i < n; i++)); do
+        [[ -n "${fulls[i]}" ]] || continue
+        for ((j = 0; j < n; j++)); do
+            [[ $i -ne $j && -n "${fulls[j]}" && "${fulls[i]}" != "${fulls[j]}" ]] || continue
+            if git -C "${COMPOSE_DIR:-.}" merge-base --is-ancestor "${fulls[i]}" "${fulls[j]}" 2>/dev/null; then
+                rc=0
+            else
+                rc=$?
+            fi
+            if [[ "$rc" -eq 0 ]]; then
+                deploy_db_exec "
+                    UPDATE deploy_runs
+                       SET status='superseded',
+                           phase='superseded_by_newer_release',
+                           phase_completed_at=NOW(),
+                           updated_at=NOW(),
+                           error_summary=CONCAT_WS('; ', NULLIF(error_summary,''),
+                               'superseded_by_newer_release: release=$(sql_escape "${shas[j]}") run=${ids[j]}')
+                     WHERE id=${ids[i]}
+                       AND status='queued'
+                       AND phase='queued_for_deploy';
+                " >/dev/null
+                echo "[deploy.sh] queued ancestor superseded: run=${ids[i]} sha=${shas[i]} -> newer run=${ids[j]} sha=${shas[j]}"
+                break
+            elif [[ "$rc" -ne 1 ]]; then
+                echo "[deploy.sh] ⚠️ queue ancestry check failed (rc=${rc}): ${shas[i]} vs ${shas[j]} — keeping created_at order"
+            fi
+        done
+    done
+}
+
 claim_latest_queued_deploy_request() {
     if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" != "true" ]] || ! deploy_db_available; then
         return 0
     fi
+    supersede_queued_ancestor_releases
     # ready head 는 반드시 component='api' AND target_env='production' 안에서 고른다.
     # 2026-09-23: 필터가 없어 큐 맨 앞이 dashboard 행이면 api 워커가 자기 SHA 와
     # 다르다고 판단해 영구 stand down 했다(#5131~#5133 이 이렇게 흡수됐다).

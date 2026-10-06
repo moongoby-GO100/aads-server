@@ -17,6 +17,7 @@ from app.services.agent_vault_service import (
     update_agent_credential,
     upsert_agent_credential,
 )
+from app.services import vault_secure_input
 from app.services.browser_permission_policy import classify_browser_action
 
 router = APIRouter(prefix="/agent-vault", tags=["agent-vault"])
@@ -190,3 +191,77 @@ async def api_check_action(
     context: TenantContext = Depends(require_viewer),
 ) -> dict[str, Any]:
     return classify_browser_action(body.action_type, body.summary, body.payload).to_dict()
+
+
+# ── 보안 입력 요청 (Vault 미등록 사이트 · 채팅 카드) ───────────────────────
+
+class SecureInputSubmitIn(BaseModel):
+    """느슨한 모델 — 검증 실패(422)가 입력값(비밀번호)을 응답에 되돌려 주지 않게 직접 검증한다."""
+
+    username: Any = None
+    password: Any = None
+    label: Any = None
+
+
+def _secure_input_http(exc: vault_secure_input.SecureInputError) -> HTTPException:
+    headers = {"Retry-After": str(exc.extra["retry_after"])} if "retry_after" in exc.extra else None
+    detail = {"error": exc.code, **{k: v for k, v in exc.extra.items() if k != "retry_after"}}
+    return HTTPException(status_code=exc.status_code, detail=detail, headers=headers)
+
+
+def _require_secure_input_enabled() -> None:
+    if not vault_secure_input.is_enabled():
+        raise HTTPException(status_code=404, detail={"error": "secure_input_disabled"})
+
+
+@router.get("/credential-requests/{request_id}")
+async def api_get_credential_request(
+    request_id: str,
+    context: TenantContext = Depends(require_viewer),
+) -> dict[str, Any]:
+    _require_secure_input_enabled()
+    try:
+        request = await vault_secure_input.get_credential_request(
+            tenant_id=_tenant_id(context), request_id=request_id,
+        )
+    except vault_secure_input.SecureInputError as exc:
+        raise _secure_input_http(exc) from None
+    return {"request": request}
+
+
+@router.post("/credential-requests/{request_id}/submit")
+async def api_submit_credential_request(
+    request_id: str,
+    body: SecureInputSubmitIn,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    _require_secure_input_enabled()
+    if not isinstance(body.username, str) or not isinstance(body.password, str) or (
+        body.label is not None and not isinstance(body.label, str)
+    ):
+        raise HTTPException(status_code=422, detail={"error": "invalid_input"})
+    try:
+        return await vault_secure_input.submit_credential(
+            tenant_id=_tenant_id(context),
+            user_id=_user_id(context),
+            request_id=request_id,
+            username=body.username,
+            password=body.password,
+            label=body.label or "",
+        )
+    except vault_secure_input.SecureInputError as exc:
+        raise _secure_input_http(exc) from None
+
+
+@router.post("/credential-requests/{request_id}/cancel")
+async def api_cancel_credential_request(
+    request_id: str,
+    context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    _require_secure_input_enabled()
+    try:
+        return await vault_secure_input.cancel_credential_request(
+            tenant_id=_tenant_id(context), user_id=_user_id(context), request_id=request_id,
+        )
+    except vault_secure_input.SecureInputError as exc:
+        raise _secure_input_http(exc) from None

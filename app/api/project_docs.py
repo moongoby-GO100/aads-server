@@ -911,6 +911,9 @@ async def approvals_pending(
             """
             SELECT r.id::text, r.action_type, r.action_summary, r.risk_level,
                    r.gate_source, r.tier, r.requested_by, r.work_key,
+                   r.origin, r.approval_scope->>'credential_request_id' AS credential_request_id,
+                   r.approval_scope->>'host' AS credential_host,
+                   r.approval_scope->>'login_url' AS credential_login_url,
                    -- 붙을 버블이 화면에 없으면 **없다고 답한다.** 그래야 화면이
                    -- 이 카드를 팝업·하단 카드로 되돌린다.
                    --
@@ -966,7 +969,24 @@ async def approvals_pending(
              # 이므로 "이 대화 동안 최대 50회" 같은 반복 권한이 붙을 자리가
              # 없다. 붙으면 승인 한 번에 채팅창이 계속 늘어난다 — 대표님이
              # 모르게 늘어나지 않는다는 원칙이 그대로 무너진다(2026-09-17).
+             # 보안 입력 카드(vault_credential_input) — 계정 입력 요청이다. 승인 버튼이
+             # 없다: 입력은 POST /agent-vault/credential-requests/{id}/submit 으로만
+             # 끝나고, 카드의 '거절' 은 입력 요청 취소다.
+             "credential_request": (
+                 {"id": r.get("credential_request_id"), "origin": r.get("origin") or "",
+                  "host": r.get("credential_host") or "",
+                  "login_url": r.get("credential_login_url") or "",
+                  "submit_path": f"/api/v1/agent-vault/credential-requests/"
+                                 f"{r.get('credential_request_id')}/submit",
+                  "cancel_path": f"/api/v1/agent-vault/credential-requests/"
+                                 f"{r.get('credential_request_id')}/cancel"}
+                 if r["gate_source"] == "vault_credential_input" else None
+             ),
              "choices": (
+                 [
+                     {"key": "reject", "label": "입력 취소",
+                      "params": {"decision": "rejected"}},
+                 ] if r["gate_source"] == "vault_credential_input" else (
                  [
                      {"key": "single", "label": "Vault 에 저장",
                       "params": {"decision": "approved", "scope": "single", "hours": 2}},
@@ -1008,7 +1028,7 @@ async def approvals_pending(
                          {"key": "reject", "label": "거부",
                           "params": {"decision": "rejected"}},
                      ]
-                 )))
+                 ))))
              )}
             for r in rows
         ],
@@ -1587,6 +1607,9 @@ async def approvals_decide(
                 SELECT id, risk_level
                   FROM agent_permission_requests
                  WHERE id = $1::uuid AND decision = 'pending' AND expires_at > now()
+                   -- 보안 입력 카드는 계정이 제출돼야 닫힌다. 승인 버튼으로는
+                   -- 열 수 없고(거절=입력 취소만 허용), 제출 API 만 승인으로 바꾼다.
+                   AND NOT ($2 = 'approved' AND action_type = 'vault_credential_input')
             ),
             -- 주문·자금(critical)은 대화·프로젝트 범위로 열지 않는다.
             --
@@ -1760,6 +1783,18 @@ async def approvals_decide(
             **{k: vault_scope.get(k, "") for k in ("host", "username_masked", "mode")},
             **vault_result,
         }
+
+    # 보안 입력 카드의 거절은 짝이 되는 입력 요청(agent_vault_credential_requests)도 취소한다.
+    if row["action_type"] == "vault_credential_input" and decision == "rejected":
+        try:
+            from app.services.vault_secure_input import cancel_by_card
+
+            await cancel_by_card(tenant_id=str(row["tenant_id"] or ""), permission_request_id=request_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "vault_credential_input_cancel_failed request=%s error=%s",
+                request_id[:8], type(exc).__name__,
+            )
 
     # 결정은 대화로 돌아간다 — 누른 결과가 화면에 보이고, 막힌 작업이 이어진다.
     reaction_dispatch = await _notify_chat_of_approval_decision(

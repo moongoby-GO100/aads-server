@@ -423,17 +423,18 @@ def test_v41_screen_uses_db_businesses_and_multi_select_targets():
     assert 'type="checkbox" name="invite_target"' in html
     assert "매장을 한 곳 이상 고르십시오" in html
     assert "targets" in html and 'financeApiV41("/employees/invites")' in html
-    assert "<th>직원</th><th>매장</th><th>권한</th><th>만료</th><th>상태</th>" in html
+    assert "<th>직원</th><th>이메일</th><th>매장</th><th>권한</th><th>만료</th><th>상태</th>" in html
     assert "승인 대기 가입요청" in html and "data-join-approve" in html
 
 
-def test_index_invite_table_has_store_column_and_colspan_six():
+def test_index_invite_table_has_store_and_email_columns_and_colspan_seven():
     html = Path("app/static/apps/obys/index.html").read_text(encoding="utf-8")
     head = html[html.index("<thead>", html.index('id="employeeInviteRows"') - 600):html.index('id="employeeInviteRows"')]
     assert "<th>매장</th>" in head
-    assert head.count("<th>") == 6
+    assert "<th>이메일</th>" in head
+    assert head.count("<th>") == 7
     start = html.index("if (!els.employeeInviteRows) return;")
     block = html[start:html.index("renderEmployeeJoinRows();", start)]
     assert 'colspan="5"' not in block.replace('els.employeeJoinRows.innerHTML = `<tr><td colspan="5">', "")
-    assert block.count('colspan="6"') == 3
+    assert block.count('colspan="7"') == 3
     assert "branch_labels" in block

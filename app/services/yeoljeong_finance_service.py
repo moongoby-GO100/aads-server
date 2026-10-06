@@ -846,6 +846,7 @@ def _db_row_to_record(name: str, row: Any) -> dict[str, Any]:
             "id": str(payload.get("id") or item.get("id") or ""),
             "employee_email": email,
             "employee_email_masked": payload.get("employee_email_masked") or item.get("employee_email_masked") or _mask_email(email),
+            "email_pending": not email,
             "employee_name": payload.get("employee_name") or item.get("employee_name") or "",
             "tenant_id": str(item.get("tenant_id") or ""),
             "business_id": item.get("business_id") or "",
@@ -1153,7 +1154,7 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                 WHERE yeoljeong_payroll_statements.tenant_id = EXCLUDED.tenant_id
                 """,
                 record_id,
-                str(record.get("employee_email") or "").strip().lower(),
+                str(record.get("employee_email") or "").strip().lower() or None,
                 str(record.get("employee_email_masked") or ""),
                 str(record.get("employee_name") or ""),
                 str(record.get("business_id") or ""),
@@ -2245,6 +2246,9 @@ def _filter_user(rows: list[dict[str, Any]], user: dict[str, Any], *email_keys: 
     if _is_admin(user):
         return rows
     email = _email(user)
+    if not email:
+        # 빈 이메일 == 빈 이메일 매칭 금지 — 이메일 없는 행(NULL/'')이 이메일 없는 계정에 보이면 안 된다.
+        return []
     return [row for row in rows if any(str(row.get(key) or "").strip().lower() == email for key in email_keys)]
 
 
@@ -2407,6 +2411,9 @@ def _validated_invite_targets(payload: dict[str, Any], user: dict[str, Any]) -> 
 def _invite_view(invite: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
     """저장된 초대에 사업자 상호·매장 표시 문자열을 붙인다. 예전 초대(targets 없음)는 지점명에서 유추한다."""
     view = dict(invite)
+    # 초대 이메일 원문은 응답에 내보내지 않는다 — 마스킹본만.
+    invite_email = str(view.pop("email", "") or "").strip().lower()
+    view["email_masked"] = _mask_email(invite_email) if invite_email else ""
     targets = _clean_invite_targets(invite.get("targets"))
     if not targets:
         branch = str(invite.get("branch") or "").strip()
@@ -2494,9 +2501,23 @@ def revoke_invite(invite_id: str, user: dict[str, Any]) -> dict[str, Any]:
     return _invite_view(invite, {})
 
 
+INVITE_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+$")
+
+
+def _normalize_invite_email(raw: Any) -> str:
+    """초대 이메일 검증·소문자 정규화. 비어 있으면 ''(이메일 없는 예전 방식 초대)."""
+    email = str(raw or "").strip().lower()
+    if not email:
+        return ""
+    if len(email) > 254 or not INVITE_EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="초대 이메일 형식이 올바르지 않습니다")
+    return email
+
+
 def create_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="직원 초대 권한이 없습니다")
+    invite_email = _normalize_invite_email(payload.get("email"))
     targets = _validated_invite_targets(payload, user)
     rows = _read("employee_invites")
     now = _now()
@@ -2508,6 +2529,8 @@ def create_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
         "phone": str(payload.get("phone") or "").strip(),
         "phone_masked": _mask_phone(str(payload.get("phone") or "")),
         "name": str(payload.get("name") or "").strip(),
+        "email": invite_email,
+        "email_masked": _mask_email(invite_email) if invite_email else "",
         "branch": branch,
         "role": str(payload.get("role") or "member"),
         "status": "pending",
@@ -2519,7 +2542,8 @@ def create_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     invite.update(_invite_view({**invite, "targets": targets}, {}))
     rows.insert(0, invite)
     _write("employee_invites", rows)
-    return invite
+    # 저장본에는 이메일 원문이 있고, 응답에는 마스킹본만 나간다.
+    return _invite_view(invite, {})
 
 
 def _invite_expired(invite: dict[str, Any]) -> bool:
@@ -2565,8 +2589,82 @@ def _rollback_join_requests(done: list[tuple[dict[str, Any], dict[str, Any], dic
             logger.exception("초대 수락 롤백 실패: %s", saved.get("id"))
 
 
+def _name_key(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _link_payroll_by_invite(invite: dict[str, Any], targets: list[dict[str, str]], user: dict[str, Any]) -> dict[str, Any]:
+    """수락 성공 뒤, 이름만 있던 급여내역서(employee_email 없음)를 초대 이메일 계정에 연결한다.
+
+    초대 이메일이 있을 때만 한다 — 이메일 없는 초대는 아무 계정이나 수락할 수 있어 이름만으로 남의 급여를 가져가게 된다.
+    이름이 정확히 같은 행만 대상이고(괄호 별칭·부분일치 제외), confirmed 행은 건드리지 않는다.
+    같은 이름이 두 사람 이상으로 보이면 한 건도 연결하지 않는다. 멱등: 이미 연결된 행은 다음 호출에서 후보가 아니다.
+    """
+    email = _email(user)
+    name = _name_key(invite.get("name"))
+    result: dict[str, Any] = {"linked": 0, "linked_ids": [], "reason": ""}
+    if not str(invite.get("email") or "").strip():
+        result["reason"] = "invite_without_email"
+        return result
+    if not name:
+        result["reason"] = "invite_without_name"
+        return result
+    linked_at = _now()
+    for target in targets:
+        business_id = target.get("business_id") or ""
+        if not business_id:
+            continue
+        try:
+            scope_user = _join_request_scope(business_id, email, user)
+            rows = _read_hr("payroll_statements", scope_user)
+        except HTTPException:
+            result["reason"] = result["reason"] or "business_scope_unavailable"
+            continue
+        candidates = [
+            row
+            for row in rows
+            if str(row.get("business_id") or "").strip() == business_id
+            and not str(row.get("employee_email") or "").strip()
+            and str(row.get("status") or "").strip().lower() != "confirmed"
+            and not row.get("payroll_validation_errors")
+            and _name_key(row.get("employee_name")) == name
+        ]
+        if not candidates:
+            result["reason"] = result["reason"] or "no_matching_statement"
+            continue
+        identities = {
+            str(row.get("employee_request_id") or row.get("employee_id") or row.get("employee_no") or "").strip()
+            for row in candidates
+        } - {""}
+        month_branch = [(str(row.get("payroll_month") or ""), str(row.get("branch") or "")) for row in candidates]
+        # 같은 달·같은 지점에 같은 이름의 내역서가 둘 이상이면 한 사람의 겸직이 아니라 동명이인이 의심된다.
+        if len(identities) > 1 or len(set(month_branch)) != len(month_branch):
+            logger.warning("초대 급여 연결 보류(동명이인 의심): business=%s name=%s", business_id, name)
+            result["reason"] = "ambiguous_name"
+            continue
+        for row in candidates:
+            updated = {
+                **row,
+                "employee_email": email,
+                "employee_email_masked": _mask_email(email),
+                "email_pending": False,
+                "linked_by_invite": {"invite_id": invite.get("id"), "statement_id": row.get("id"), "linked_at": linked_at},
+                "updated_at": linked_at,
+            }
+            _write_hr_record("payroll_statements", updated, scope_user)
+            result["linked"] += 1
+            result["linked_ids"].append(str(row.get("id") or ""))
+    if result["linked"]:
+        result["reason"] = ""
+    return result
+
+
 def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     invite = _find_invite(str(payload.get("token") or ""))
+    invite_email = str(invite.get("email") or "").strip().lower()
+    if invite_email and invite_email != _email(user):
+        # 어느 회사·점포의 초대인지 알려 주지 않는다.
+        raise HTTPException(status_code=403, detail="초대받은 이메일로 로그인/가입해 주십시오")
     if str(invite.get("status") or "").strip().lower() == "accepted" and str(invite.get("accepted_email") or "").strip().lower() != _email(user):
         raise HTTPException(status_code=409, detail="이미 다른 계정이 수락한 초대입니다")
     # 초대 토큰이 가리키는 매장이 기준이다 — 본문 branch 로 다른 사업자에 갈아타지 못한다.
@@ -2621,8 +2719,14 @@ def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
         target["accepted_at"] = _now()
         target["accepted_email"] = _email(user)
         _write("employee_invites", rows)
+    # 급여 연결 실패가 수락 자체를 되돌리지는 않는다 — 가입요청은 이미 만들어졌다.
+    try:
+        payroll_link = _link_payroll_by_invite(invite, stored_targets, user)
+    except Exception:
+        logger.exception("초대 수락 후 급여내역서 연결 실패: invite=%s", invite.get("id"))
+        payroll_link = {"linked": 0, "linked_ids": [], "reason": "link_failed"}
     # 단일 매장 호출부 호환: 첫 가입요청의 필드를 최상위에도 펼친다.
-    return {**created[0], "requests": created, "request": created[0]}
+    return {**created[0], "requests": created, "request": created[0], "payroll_link": payroll_link}
 
 
 def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3293,20 +3397,23 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
         employee["onboarding_document_count"] = sum(
             1
             for item in docs
-            if str(item.get("employee_email") or "").strip().lower() == email
+            if email
+            and str(item.get("employee_email") or "").strip().lower() == email
             and str(item.get("status") or "").strip().lower() != "superseded"
             and _row_in_business(item, employee_business_id)
         )
         employee["contract_count"] = sum(
             1
             for item in contracts
-            if str(item.get("employee_email") or "").strip().lower() == email
+            if email
+            and str(item.get("employee_email") or "").strip().lower() == email
             and _row_in_business(item, employee_business_id)
         )
         employee["payroll_statement_count"] = sum(
             1
             for item in payroll
-            if str(item.get("employee_email") or "").strip().lower() == email
+            if email
+            and str(item.get("employee_email") or "").strip().lower() == email
             and _row_in_business(item, employee_business_id)
         )
         employee["needs_onboarding_documents"] = employee["onboarding_document_count"] == 0
@@ -5816,6 +5923,12 @@ def _apply_payroll_contract_defaults(
     return result, applied, deviation
 
 
+def ensure_payroll_deliverable(statement: dict[str, Any]) -> None:
+    """급여명세서 교부·알림·PDF 발송 진입점의 공통 관문. 확정(confirmed)은 막지 않고 교부만 막는다."""
+    if not str((statement or {}).get("employee_email") or "").strip():
+        raise HTTPException(status_code=409, detail="직원 계정 연결 전에는 교부할 수 없습니다")
+
+
 def list_payroll(user: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(_filter_user(_read_hr("payroll_statements", user), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
 
@@ -5825,11 +5938,14 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="급여내역서 작성 권한이 없습니다")
     rows = _read_hr("payroll_statements", user)
-    employee = _find_employee_record(
-        user,
-        employee_email=str(payload.get("employee_email") or ""),
-        employee_request_id=str(payload.get("employee_request_id") or ""),
-    )
+    email = str(payload.get("employee_email") or "").strip().lower()
+    request_id = str(payload.get("employee_request_id") or "").strip()
+    # 이메일도 직원 요청 ID 도 없으면 직원 계정과 연결할 수 없다 — 조회·계약 기본값을 건너뛰고 이름으로만 저장한다.
+    employee = _find_employee_record(user, employee_email=email, employee_request_id=request_id) if (email or request_id) else None
+    if not email and employee:
+        email = str(employee.get("email") or "").strip().lower()
+    if not email and not _name_key(payload.get("employee_name")):
+        raise HTTPException(status_code=400, detail="이메일이 없으면 직원 이름이 필요합니다")
     derived = (
         _derive_current_employment(
             _read_hr("contracts", user),
@@ -5858,12 +5974,12 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
     deductions = tax_withholding + insurance_deduction + other_deduction
     now = _now()
     statement_id = str(payload.get("id") or uuid4())
-    email = str(payload.get("employee_email") or "").strip().lower()
     statement = {
         **payload,
         "id": statement_id,
         "employee_email": email,
         "employee_email_masked": _mask_email(email),
+        "email_pending": not email,
         "gross_pay": gross,
         "taxable_pay": taxable_pay,
         "non_tax_meal_allowance": non_tax_meal,

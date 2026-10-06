@@ -3433,6 +3433,10 @@
                 <label>직원 이름
                   <input name="name" placeholder="입사자 이름">
                 </label>
+                <label>직원 이메일
+                  <input name="email" type="email" inputmode="email" autocomplete="off" placeholder="name@example.com" required>
+                  <small class="auth-help">이 이메일로 가입한 계정만 초대를 수락할 수 있습니다. 급여내역서도 이 이메일로 연결됩니다.</small>
+                </label>
                 <label>근무 지점
                   <select name="branch"></select>
                 </label>
@@ -3459,6 +3463,7 @@
                     <tr>
                       <th>전화번호</th>
                       <th>직원</th>
+                      <th>이메일</th>
                       <th>매장</th>
                       <th>권한</th>
                       <th>만료</th>
@@ -5738,6 +5743,7 @@
     let inventoryBalances = [];
     let pendingPhoneInviteToken = "";
     let pendingPhoneInvite = null;
+    let pendingPhoneInviteEmail = "";
     let pendingContractSignToken = "";
     let pendingContractToSign = null;
     let contractSignatureHasInk = false;
@@ -7369,24 +7375,25 @@
       });
       if (!els.employeeInviteRows) return;
       if (!hasServerAuth()) {
-        els.employeeInviteRows.innerHTML = `<tr><td colspan="6"><div class="empty">로그인 후 직원 초대와 가입요청을 관리할 수 있습니다.</div></td></tr>`;
+        els.employeeInviteRows.innerHTML = `<tr><td colspan="7"><div class="empty">로그인 후 직원 초대와 가입요청을 관리할 수 있습니다.</div></td></tr>`;
         if (els.employeeJoinRows) els.employeeJoinRows.innerHTML = `<tr><td colspan="5"><div class="empty">회원가입 또는 로그인 후 가입요청을 보낼 수 있습니다.</div></td></tr>`;
         renderEmployeeDocumentReviewRows();
         return;
       }
       if (!canManage) {
-        els.employeeInviteRows.innerHTML = `<tr><td colspan="6"><div class="empty">직원 초대와 전체 서류 검수는 관리자 권한이 필요합니다. 직원은 입사서류 탭에서 본인 서류만 업로드할 수 있습니다.</div></td></tr>`;
+        els.employeeInviteRows.innerHTML = `<tr><td colspan="7"><div class="empty">직원 초대와 전체 서류 검수는 관리자 권한이 필요합니다. 직원은 입사서류 탭에서 본인 서류만 업로드할 수 있습니다.</div></td></tr>`;
       } else {
         els.employeeInviteRows.innerHTML = employeeInvites.length ? employeeInvites.map(invite => `
           <tr>
             <td>${escapeHtml(invite.phone_masked || invite.phone || "-")}</td>
             <td>${escapeHtml(invite.name || "-")}</td>
+            <td>${escapeHtml(invite.email_masked || "-")}</td>
             <td>${(Array.isArray(invite.branch_labels) && invite.branch_labels.length ? invite.branch_labels : [invite.branch || ""]).map(label => escapeHtml(label || "-")).join("<br>")}</td>
             <td>${escapeHtml(roleLabel(invite.role || "member"))}</td>
             <td>${escapeHtml(String(invite.expires_at || invite.expiresAt || "-").slice(0, 16))}</td>
             <td><span class="badge ${invite.status === "accepted" ? "good" : (invite.status === "expired" ? "bad" : "warn")}">${escapeHtml(invite.status || "pending")}</span></td>
           </tr>
-        `).join("") : `<tr><td colspan="6"><div class="empty">대기 중인 초대가 없습니다. 직원 전화번호로 새 초대 링크를 생성하십시오.</div></td></tr>`;
+        `).join("") : `<tr><td colspan="7"><div class="empty">대기 중인 초대가 없습니다. 직원 전화번호로 새 초대 링크를 생성하십시오.</div></td></tr>`;
       }
       renderEmployeeJoinRows();
       renderEmployeeDocumentReviewRows();
@@ -11550,10 +11557,12 @@
       renderPayroll();
     }
 
-    function inviteAcceptUrl(token, param = "yf_invite_token") {
+    function inviteAcceptUrl(token, param = "yf_invite_token", email = "") {
       const url = new URL(window.location.href);
       url.hash = "";
       url.searchParams.set(param, token);
+      // 가입 폼의 이메일 칸을 미리 채우는 용도다. 서버가 수락 시 초대 이메일과 다시 대조한다.
+      if (email) url.searchParams.set("yf_invite_email", email);
       return url.toString();
     }
 
@@ -11654,7 +11663,9 @@
         if (pendingPhoneInvite?.phone) els.employeeJoinRequestForm.phone.value = pendingPhoneInvite.phone;
         if (pendingPhoneInvite?.branch) els.employeeJoinRequestForm.branch.value = pendingPhoneInvite.branch;
       }
-      showToast("직원 초대 링크를 확인했습니다. 회원가입 후 서류등록으로 이동합니다.");
+      showToast(pendingPhoneInvite?.email_masked
+        ? `직원 초대 링크를 확인했습니다. ${pendingPhoneInvite.email_masked} 이메일로 가입/로그인해 주십시오.`
+        : "직원 초대 링크를 확인했습니다. 회원가입 후 서류등록으로 이동합니다.");
       return pendingPhoneInvite;
     }
 
@@ -11675,6 +11686,7 @@
       });
       pendingPhoneInviteToken = "";
       pendingPhoneInvite = null;
+      releaseInviteEmailLock();
       const acceptedRequests = (Array.isArray(payload.requests) && payload.requests.length ? payload.requests : [payload.request]).filter(Boolean);
       const acceptedIds = new Set(acceptedRequests.map(item => item.id));
       employeeJoinRequests = [...acceptedRequests, ...employeeJoinRequests.filter(item => !acceptedIds.has(item.id))];
@@ -11690,9 +11702,19 @@
         showToast("직원 초대는 총괄 운영관리자 또는 운영관리자 권한이 필요합니다.");
         return;
       }
+      const inviteEmail = String(form.email?.value || "").trim().toLowerCase();
+      if (!inviteEmail) {
+        showToast("직원 이메일을 입력해 주십시오. 초대는 이 이메일로 가입한 계정만 수락할 수 있습니다.");
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(inviteEmail)) {
+        showToast("이메일 형식이 올바르지 않습니다.");
+        return;
+      }
       const body = {
         phone: form.phone.value.trim(),
         name: form.name.value.trim(),
+        email: inviteEmail,
         branch: form.branch.value || "",
         role: form.role.value || "member",
         expires_in_hours: Number(form.expiresInHours.value || 72),
@@ -11704,7 +11726,7 @@
       });
       const invite = payload.invite || {};
       const token = invite.token || "";
-      const link = token ? inviteAcceptUrl(token) : "";
+      const link = token ? inviteAcceptUrl(token, "yf_invite_token", inviteEmail) : "";
       const resultTarget = form.id === "memberPermissionInviteForm" ? els.memberPermissionInviteResult : els.employeeInviteResult;
       if (resultTarget) {
         resultTarget.innerHTML = link
@@ -11815,11 +11837,33 @@
       showToast(`${updated.name || updated.employee_name || "직원"} 권한을 ${roleLabel(updated.role || role)}로 변경했습니다.`);
     }
 
+    function applyInviteEmailLock(email) {
+      pendingPhoneInviteEmail = String(email || "").trim().toLowerCase();
+      if (!pendingPhoneInviteEmail) return;
+      [els.gateSignupForm, els.signupForm].forEach(form => {
+        const input = form?.email;
+        if (!input) return;
+        input.value = pendingPhoneInviteEmail;
+        input.readOnly = true;
+        input.title = "초대받은 이메일로만 가입할 수 있습니다";
+      });
+    }
+
+    function releaseInviteEmailLock() {
+      pendingPhoneInviteEmail = "";
+      [els.gateSignupForm, els.signupForm].forEach(form => {
+        if (!form?.email) return;
+        form.email.readOnly = false;
+        form.email.title = "";
+      });
+    }
+
     function readInviteTokenFromUrl() {
       const params = new URLSearchParams(window.location.search);
       const phoneToken = params.get("yf_invite_token") || "";
       if (phoneToken) {
         pendingPhoneInviteToken = phoneToken;
+        applyInviteEmailLock(params.get("yf_invite_email") || "");
         setAuthMode(hasServerAuth() ? "login" : "signup");
         resolvePhoneInviteToken(phoneToken).catch(err => showToast(`초대 확인 실패: ${err.message}`));
         return;
@@ -12083,6 +12127,9 @@
       }
       if (name.toLowerCase() === String(email.split("@")[0] || "").trim().toLowerCase()) {
         throw new Error("이름에 이메일 아이디를 넣지 말고 실명을 입력해 주십시오.");
+      }
+      if (pendingPhoneInviteToken && pendingPhoneInviteEmail && email.toLowerCase() !== pendingPhoneInviteEmail) {
+        throw new Error("초대받은 이메일로 가입해 주십시오.");
       }
       const organizationName = String(formData.organizationName || "").trim();
       const password = String(formData.password || "");

@@ -1,0 +1,125 @@
+[
+ {
+  "item": "1",
+  "step": "join name blank",
+  "expected": "400",
+  "actual": 400,
+  "detail": "직원 이름(실명)을 입력해 주십시오",
+  "match": true
+ },
+ {
+  "item": "1",
+  "step": "join name = email local",
+  "expected": "400",
+  "actual": 400,
+  "detail": "이름에 이메일 아이디를 넣지 말고 실명을 입력해 주십시오",
+  "match": true
+ },
+ {
+  "item": "1",
+  "step": "join business missing",
+  "expected": "400",
+  "actual": 400,
+  "detail": "회사(사업자)와 근무 점포를 선택해 주십시오",
+  "match": true
+ },
+ {
+  "item": "2",
+  "step": "join #1 to A",
+  "expected": "200",
+  "actual": 200,
+  "detail": {
+   "id": "deaa9e5a-1fd2-4aab-9231-53e859a0cba2",
+   "status": "pending",
+   "business_id": "biz-e2e-m1-a"
+  },
+  "match": true
+ },
+ {
+  "item": "2",
+  "step": "join #2 to A (dup)",
+  "expected": "200",
+  "actual": 200,
+  "detail": {
+   "id": "deaa9e5a-1fd2-4aab-9231-53e859a0cba2",
+   "status": "pending",
+   "business_id": "biz-e2e-m1-a"
+  },
+  "match": true
+ },
+ {
+  "item": "2",
+  "step": "same request id on both",
+  "match": true,
+  "ids": [
+   "deaa9e5a-1fd2-4aab-9231-53e859a0cba2",
+   "deaa9e5a-1fd2-4aab-9231-53e859a0cba2"
+  ]
+ },
+ {
+  "item": "2",
+  "step": "list rows for staff2@A",
+  "count": 1,
+  "match": true
+ },
+ {
+  "item": "3a",
+  "step": "resolve bad token",
+  "expected": "404",
+  "actual": 404,
+  "detail": "초대를 찾을 수 없습니다",
+  "match": true
+ },
+ {
+  "item": "3a",
+  "step": "accept bad token",
+  "expected": "404",
+  "actual": 404,
+  "detail": "초대를 찾을 수 없습니다",
+  "match": true
+ },
+ {
+  "item": "3b/3c",
+  "step": "owner A creates invite (needed for expired/accepted cases)",
+  "expected": "200",
+  "actual": 403,
+  "detail": "이 계정에는 오비서 레거시 데이터 접근 권한이 없습니다. 멀티테넌트 격리 작업이 진행 중입니다.",
+  "match": false
+ },
+ {
+  "item": "4",
+  "step": "staff2 own-email request to company B (literal task scenario)",
+  "expected": "403",
+  "actual": 200,
+  "detail": {
+   "id": "fd567e75-e7f6-4d81-9cbd-8693b64cf7f7",
+   "status": "pending",
+   "business_id": "biz-e2e-m1-b"
+  },
+  "match": false
+ },
+ {
+  "item": "4",
+  "step": "staff2 sends request for ANOTHER email to company A",
+  "expected": "403",
+  "actual": 403,
+  "detail": "다른 사업자에는 본인 가입요청만 등록할 수 있습니다",
+  "match": true
+ },
+ {
+  "item": "4",
+  "step": "staff2 sends request for ANOTHER email to company B",
+  "expected": "403",
+  "actual": 403,
+  "detail": "다른 사업자에는 본인 가입요청만 등록할 수 있습니다",
+  "match": true
+ },
+ {
+  "item": "4",
+  "step": "owner A reviews a request of company B tenant (none exist for B tenant owner; staff2->B above)",
+  "expected": "403",
+  "actual": 404,
+  "detail": "가입요청을 찾을 수 없습니다",
+  "match": false
+ }
+]

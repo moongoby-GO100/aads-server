@@ -1092,6 +1092,7 @@ class ToolExecutor:
             "credential_list": self._credential_list,
             "credential_register": self._credential_register,
             "credential_test_login": self._credential_test_login,
+            "vault_request_credential_input": self._vault_request_credential_input,
             "get_e2e_login_url": self._get_e2e_login_url,
             "google_sheets_register": self._google_sheets_register,
             "google_sheets_read": self._google_sheets_read,
@@ -6530,6 +6531,11 @@ class ToolExecutor:
         """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
         from app.api.ceo_chat_tools import execute_tool
         return await execute_tool("credential_register", inp, "", "")
+
+    async def _vault_request_credential_input(self, inp: Dict[str, Any]) -> Any:
+        """Vault 미등록 사이트의 보안 입력 요청 — ceo_chat_tools.execute_tool로 위임."""
+        from app.api.ceo_chat_tools import execute_tool
+        return await execute_tool("vault_request_credential_input", inp, "", "")
 
     async def _credential_test_login(self, inp: Dict[str, Any]) -> Any:
         """자동 생성 stub — ceo_chat_tools.execute_tool로 위임."""
