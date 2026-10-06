@@ -114,6 +114,7 @@ is_deploy_only_instruction() {{ return 1; }}
 record_git_diagnostics() {{ echo "DIAG rc=$4 stderr=$6" >> "$DIAG_FILE"; echo diag; }}
 _fail_job() {{ printf '%s\\n' "$3|$4" >> "$FAIL_FILE"; return 1; }}
 {_fn(script, "mask_git_diagnostics")}
+{_fn(script, "verify_worker_commit_provenance")}
 {_fn(script, "commit_job_worktree_for_approval")}
 """
     f = tmp_path / "commit_fn.sh"
@@ -243,15 +244,28 @@ def test_in_scope_by_path_basename_or_directory_passes(tmp_path, worktree):
     assert by_path.returncode == by_base.returncode == by_dir.returncode == 0
 
 
-def test_handover_new_files_and_dot_patch_are_not_violations(tmp_path, worktree):
+def test_handover_and_dot_patch_are_not_violations(tmp_path, worktree):
     wt, sha = worktree
     (wt / "docs/HANDOVER.md").write_text("h2\n", encoding="utf-8")
-    (wt / "tests").mkdir()
-    (wt / "tests/test_new.py").write_text("x\n", encoding="utf-8")
-    _git(wt, "add", "-N", "tests/test_new.py")
     (wt / ".runner_full_diff.patch").write_text("p\n", encoding="utf-8")
 
     assert _violations(tmp_path, wt, "무관한 지시", sha).returncode == 0
+
+
+def test_new_file_is_violation_only_when_instruction_does_not_mention_it(tmp_path, worktree):
+    """c30388e6: 신규 파일(A)도 범위 검사 대상 — 지시서가 언급하지 않은 신규 파일은 위반, 언급하면 통과."""
+    wt, sha = worktree
+    (wt / "tests").mkdir()
+    (wt / "tests/test_new.py").write_text("x\n", encoding="utf-8")
+    _git(wt, "add", "-N", "tests/test_new.py")
+    (wt / "untracked_new.py").write_text("y\n", encoding="utf-8")
+
+    unrelated = _violations(tmp_path, wt, "무관한 지시", sha)
+    assert unrelated.returncode == 1
+    assert sorted(unrelated.stdout.split()) == ["tests/test_new.py", "untracked_new.py"]
+
+    mentioned = _violations(tmp_path, wt, "tests/test_new.py 와 untracked_new.py 를 추가하라", sha)
+    assert mentioned.returncode == 0, mentioned.stdout
 
 
 def test_committed_unrelated_change_since_pre_exec_sha_is_caught(tmp_path, worktree):
