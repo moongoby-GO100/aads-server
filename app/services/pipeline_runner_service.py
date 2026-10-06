@@ -3104,6 +3104,11 @@ _ORPHAN_REQUEUE_COUNT_SQL = (
     f"/ {len(_ORPHAN_REQUEUE_MARK)})"
 )
 
+# API startup owns only API-local executions. A missing/stale runner heartbeat
+# is UNKNOWN liveness, not permission to replace an external worker's lease.
+# The host runner/watchdog must reconcile its processes and artifacts first.
+_API_STARTUP_OWNERSHIP_SQL = "runner_host IS NULL"
+
 
 def _orphan_requeue_max() -> int:
     """재큐잉 상한. 0 이면 기능 꺼짐."""
@@ -3128,11 +3133,12 @@ async def recover_interrupted_jobs():
         async with pool.acquire() as conn:
             # ── Phase 0: 고아 pipeline_jobs 정리 (running/queued → error) + 채팅방 알림 ──
             # claude_code_detached는 원격 프로세스가 완료됐을 수 있으므로 Phase 0.5에서 별도 처리
-            # 재큐잉 판별: 커밋(commit_hash)에 도달하지 않은 claude_code_work 단계는 워크트리에만
-            # 흔적이 있고 러너가 재기동 시 워크트리를 지우고 다시 만든다 → 되살려도 이중 커밋이 없다.
-            # ai_review·승인 대기·배포 단계는 commit_hash 가 이미 찍혀 있어 여기서 제외된다.
-            # runner_host IS NULL 은 서버 프로세스 안에서 도는 파이프라인이라 큐를 소비할 러너가
-            # 없으므로 예전 경로(error → Phase 0a 자동 재실행)를 유지한다.
+            # 외부 runner는 API와 생사를 같이하지 않는다. heartbeat가 오래되거나
+            # 없더라도 살아 있는 worker/미커밋 산출물이 있을 수 있으므로, 아래 세
+            # 쿼리는 동일한 API-local ownership 조건을 적용한다. 외부 실행의 재큐잉은
+            # 해당 host의 watchdog이 PID/attempt/산출물 보존을 검증한 뒤 책임진다.
+            # 기존 requeue 쿼리/설정은 호환 목적으로 남기지만 외부 host에는 적용하지
+            # 않는다. API-local 실행은 기존 error→Phase 0a 복구 경로를 유지한다.
             _requeue_max = _orphan_requeue_max()
             requeued_rows = []
             if _requeue_max > 0:
@@ -3146,6 +3152,7 @@ async def recover_interrupted_jobs():
                             || ({_ORPHAN_REQUEUE_COUNT_SQL} + 1)::text || '/' || $1::int::text,
                         updated_at = now()
                     WHERE {_ORPHAN_REQUEUE_ELIGIBLE_SQL}
+                      AND {_API_STARTUP_OWNERSHIP_SQL}
                       AND {_ORPHAN_REQUEUE_COUNT_SQL} < $1::int
                       AND NOT EXISTS (
                           SELECT 1 FROM pipeline_runner_hosts h
@@ -3187,6 +3194,7 @@ async def recover_interrupted_jobs():
                         AND {_ORPHAN_REQUEUE_COUNT_SQL} >= $1::int) as requeue_exhausted
                 FROM pipeline_jobs
                 WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error', 'claude_code_detached')
+                  AND {_API_STARTUP_OWNERSHIP_SQL}
                   -- 살아 있는 원격 러너의 작업은 건드리지 않는다.
                   -- 원격 러너(contabo14/rfree-0009/jinah244)는 이 서버와 생사를 같이하지
                   -- 않는다. 2026-09-14 aads-server 재배포 때 jinah244 에서 10분째 정상
@@ -3217,6 +3225,7 @@ async def recover_interrupted_jobs():
                     review_feedback = COALESCE(review_feedback, '') || ' | 서버 재시작으로 중단됨',
                     updated_at = now()
                 WHERE status = 'running' AND phase NOT IN ('restarting', 'done', 'error', 'claude_code_detached')
+                  AND {_API_STARTUP_OWNERSHIP_SQL}
                   -- 위 SELECT 와 동일한 생존 러너 제외 조건. 둘이 어긋나면 알림만 가고
                   -- 상태는 안 바뀌거나 그 반대가 된다.
                   AND NOT EXISTS (
@@ -3306,6 +3315,7 @@ async def recover_interrupted_jobs():
                 SELECT job_id, chat_session_id, project, substring(instruction from 1 for 200) as instr
                 FROM pipeline_jobs
                 WHERE status = 'running' AND phase = 'claude_code_detached'
+                  AND runner_host IS NULL
                 """
             )
             for drow in detached_rows:
@@ -3484,6 +3494,7 @@ async def recover_interrupted_jobs():
                             ORDER BY created_at DESC LIMIT 1) as model_used
                     FROM pipeline_jobs pj
                     WHERE pj.status = 'error'
+                      AND pj.runner_host IS NULL
                       AND pj.review_feedback LIKE '%서버 재시작으로 중단%'
                       AND pj.review_feedback NOT LIKE '%자동 재실행됨%'
                       -- 재큐잉 상한을 다 쓴 작업을 새 job 으로 되살리면 상한이 무의미해진다.
@@ -3597,6 +3608,7 @@ async def recover_interrupted_jobs():
                 SELECT job_id, chat_session_id, project, instruction, phase, status
                 FROM pipeline_jobs
                 WHERE status = 'running' AND phase IN ('restarting', 'deploying', 'push_done', 'verifying', 'rolling_back')
+                  AND runner_host IS NULL
                 ORDER BY updated_at DESC LIMIT 5
                 """
             )
