@@ -65,8 +65,8 @@ Targets:
   cafe24_114 /root/scripts/pipeline-runner.sh  aads-pipeline-litellm-runner.service
 
 Options:
-  --ignore-busy                 sync even if the remote runner has in-flight jobs
-                                (this requeues them — use only when the runner is stuck)
+  --ignore-busy                 override the DB busy count only after the live
+                                process probe has verified an empty worker set
 
 Environment:
   CANONICAL_RUNNER              local canonical runner script
@@ -159,6 +159,16 @@ remote_service_active() {
 # shellcheck source=scripts/runner_busy_lib.sh
 source "${SCRIPT_DIR}/runner_busy_lib.sh"
 
+remote_runner_process_state() {
+    local host="$1" service="$2" payload state=""
+    [[ "$service" =~ ^[A-Za-z0-9_.@:-]+$ ]] || { printf UNKNOWN; return 0; }
+    payload="$(declare -f runner_live_process_probe)"$'\n''runner_live_process_probe "$1"'
+    # No remote files are installed for the probe. The existing launcher
+    # already exports runner_busy_lib.sh from the same source SHA.
+    state=$(ssh "${SSH_OPTS[@]}" "$host" "bash -s -- '$service'" <<< "$payload" 2>/dev/null) || state="UNKNOWN"
+    case "$state" in IDLE|BUSY|UNKNOWN) printf '%s' "$state" ;; *) printf UNKNOWN ;; esac
+}
+
 default_targets() {
     cat <<EOF
 contabo14|contabo14|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service|${SCRIPT_DIR}/aads-pipeline-litellm-runner.211.service
@@ -226,7 +236,13 @@ sync_one_target() {
     fi
 
     # 실행 중인 러너는 건드리지 않는다 — 파일 교체도, 재시작도 미룬다.
-    local runner_host_name busy_count service_state
+    local runner_host_name busy_count service_state process_state
+    process_state=$(remote_runner_process_state "$host" "$service")
+    if should_defer_for_processes "$process_state"; then
+        log "${name}: sync deferred — live process state=${process_state}; DB/ignore-busy cannot override"
+        [[ -n "$TARGET_STATE_FILE" ]] && printf 'deferred' > "$TARGET_STATE_FILE"
+        return 0
+    fi
     runner_host_name=$(remote_runner_host_name "$host" "$service")
     busy_count=$(db_active_job_count "$runner_host_name")
     service_state=$(remote_service_active "$host" "$service")

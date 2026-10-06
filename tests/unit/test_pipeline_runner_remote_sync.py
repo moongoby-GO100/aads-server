@@ -254,6 +254,9 @@ def test_local_restart_wrapper_checks_before_restarting():
 _FAKE_SSH = r"""#!/usr/bin/env bash
 host="${@: -2:1}"; cmd="${@: -1}"
 case "$cmd" in
+    # Transport fixture represents a verified empty process set. Real /proc
+    # and deleted-cwd behavior is covered by test_runner_sync_live_process_guard.
+    "bash -s -- "*) cat >/dev/null; echo IDLE ;;
     *"hostname -s"*) echo "$host" ;;
     *"systemctl is-active"*) echo active ;;
     sha256sum*)

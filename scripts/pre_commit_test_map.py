@@ -146,6 +146,20 @@ GROUPS: tuple[Group, ...] = (
         ),
     ),
     Group(
+        name="runner_sync",
+        tests=(
+            "tests/unit/test_runner_sync_live_process_guard.py",
+            "tests/unit/test_pipeline_runner_remote_sync.py",
+            "tests/unit/test_runner_sync_launcher.py",
+        ),
+        globs=(
+            "scripts/runner_busy_lib.sh",
+            "scripts/sync_pipeline_runner_remote.sh",
+            "scripts/restart_local_runner.sh",
+            "scripts/runner_sync_launcher.sh",
+        ),
+    ),
+    Group(
         name="codex_auth_revoked",
         tests=("tests/unit/test_codex_token_revoked_detect.py",),
         globs=(

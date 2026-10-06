@@ -29,3 +29,11 @@ Shell의 실제 함수와 임시 Git 저장소·살아 있는 cwd 프로세스�
 현재 두 번의 cwd 확인은 전체 작업 생명주기의 atomic lease가 아니다. 모든 host-side 재큐잉·write·승인 전이에는 attempt/runner PID를 결합한 CAS와 단일 작성자 잠금, 원본 산출물 보존 계약을 추가 검수해야 한다. 이 변경을 전체 attempt fencing 완료로 보고하지 않는다.
 
 API와 실제 host Runner는 서로 다른 적용 대상이다. 정확한 release SHA와 source hash를 각각 확인하고, drain·불변 릴리스·정상 hook·건강검사 및 운영 검증을 통과한 뒤 적용해야 한다. main push나 branch push가 실제 API/Runner 적재를 의미하지 않는다. GO100의 38개 태스크·32개 요구사항·36개 인수 시나리오 및 3거래일 SLO는 별도 완료 원장으로 추적한다.
+
+## main 통합 전 자동 동기화 보호
+
+후속 main 통합에서 5분 주기 동기화 타이머가 origin/main을 export하고 원격 스크립트를 설치·재시작하는 경로를 확인했다. 기존 DB guard는 terminal job의 살아 있는 CLI를 보지 못하고, inactive 서비스면 고아 자식도 없다고 가정했다. 실제 GO100 Runner는 `KillMode=control-group`이며 삭제된 작업 cwd의 CLI가 같은 cgroup에 남아 있었다. main 게시를 보류하고 통합 커밋은 검토 브랜치에 보존했다.
+
+추가 guard는 공용 `runner_busy_lib.sh`의 stdlib probe를 SSH stdin으로 전달한다. `/proc`의 실제 cwd(삭제 표기 포함), MainPID 자손, 서비스 cgroup을 함께 조회하고 작업자가 있거나 조회가 불완전하면 설치·재시작을 미룬다. DB terminal, inactive 상태, `--ignore-busy`도 이 프로세스 확인을 우회하지 못한다. 로컬 재시작 래퍼에도 같은 계약을 적용한다. 명확한 작업자 부재만 기존 DB 판정에 넘기며, 유휴 polling 자식까지 보수적으로 defer할 수 있다.
+
+이 관측은 claim과 restart 사이의 atomic lease가 아니다. 기존 capacity flock은 일부 queued claim에만 적용되며 동기화·승인·반려 복구와 공유하지 않는다. 관측 직후 새 claim이 발생하는 경합은 남아 있다. 전체 유지보수/claim 직렬화와 실제 작업자 drain이 검증될 때까지 이 추가 commit도 main 게시·자동 runtime 적용 완료로 보고하지 않는다. 테스트는 실제 임시 PID와 삭제 cwd, cgroup/권한 오류 fixture, 실제 Bash 설치·재시작 gate를 검증하며 운영 프로세스를 중단하지 않는다.

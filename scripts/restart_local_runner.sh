@@ -23,8 +23,8 @@ usage() {
 Usage: restart_local_runner.sh [--service NAME] [--ignore-busy] [--dry-run]
 
 실행 중인 작업이 있으면 재시작하지 않고 종료코드 3 으로 끝낸다.
---ignore-busy 는 러너가 멈춰 작업이 영원히 running 으로 남은 경우에만 쓴다
-(사용하면 그 작업은 requeue 되어 처음부터 다시 돈다).
+--ignore-busy 는 실제 작업자 부재가 확인된 뒤 DB busy count만 우회한다.
+살아 있는 프로세스 또는 조회 불명은 이 옵션으로 우회할 수 없다.
 EOF
 }
 
@@ -74,6 +74,12 @@ local_runner_host_name() {
     fi
     printf '%s' "$name"
 }
+
+process_state=$(runner_live_process_probe "$SERVICE") || process_state="UNKNOWN"
+if should_defer_for_processes "$process_state"; then
+    log "재시작 보류 — live process state=${process_state}; DB/ignore-busy cannot override"
+    exit 3
+fi
 
 host_name=$(local_runner_host_name)
 busy_count=$(db_active_job_count "$host_name")

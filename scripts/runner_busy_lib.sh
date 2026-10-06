@@ -16,6 +16,112 @@ PG_CONTAINER="${PG_CONTAINER:-aads-postgres}"
 PGUSER="${PGUSER:-aads}"
 PGDATABASE="${PGDATABASE:-aads}"
 
+# DB terminal 상태도 살아 있는 CLI를 증명하지 못한다. 이 함수는 원격에 설치하지
+# 않고 SSH stdin으로 전달할 수 있게 stdlib만 사용한다. 불완전한 조회는 UNKNOWN.
+# 이것은 관측 guard이며 claim/restart를 직렬화하는 maintenance lease는 아니다.
+runner_live_process_probe() {
+    python3 - "$1" <<'PY_RUNNER_LIVE_PROCESS'
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+
+def _probe(service, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgroup'), show=None):
+    if not re.fullmatch(r'[A-Za-z0-9_.@:-]+', service):
+        return 'UNKNOWN'
+    if show is None:
+        result = subprocess.run(
+            ['systemctl', 'show', service, '-p', 'LoadState', '-p', 'ActiveState',
+             '-p', 'MainPID', '-p', 'ControlGroup'], capture_output=True, text=True, timeout=10)
+        if result.returncode:
+            return 'UNKNOWN'
+        show = result.stdout
+    props = dict(line.split('=', 1) for line in show.splitlines() if '=' in line)
+    if props.get('LoadState') != 'loaded' or props.get('ActiveState') not in ('active', 'inactive', 'failed'):
+        return 'UNKNOWN'
+    if not props.get('MainPID', '').isdigit() or 'ControlGroup' not in props:
+        return 'UNKNOWN'
+    main_pid = int(props['MainPID'])
+    if props['ActiveState'] == 'active' and not main_pid:
+        return 'UNKNOWN'
+    processes = {}
+    for directory in proc_root.iterdir():
+        if not directory.name.isdigit():
+            continue
+        try:
+            stat = (directory / 'stat').read_text()
+        except FileNotFoundError:
+            continue  # A process exited during the read.
+        fields = stat[stat.rfind(')') + 2:].split()
+        pid = int(directory.name)
+        state, ppid, flags = fields[0], int(fields[1]), int(fields[6])
+        if state in ('Z', 'X') or flags & 0x00200000:  # exited process or kernel thread
+            continue
+        try:
+            cwd = os.readlink(directory / 'cwd')
+        except FileNotFoundError:
+            if not (directory / 'stat').exists():
+                continue
+            return 'UNKNOWN'
+        if cwd.endswith(' (deleted)'):
+            cwd = cwd[:-len(' (deleted)')]
+        if cwd.startswith('/tmp/aads-wt-'):
+            return 'BUSY'  # Includes detached/orphaned workers outside the current cgroup.
+        processes[pid] = ppid
+    group = props['ControlGroup']
+    members = set()
+    if group:
+        relative = Path(group.lstrip('/'))
+        if '..' in relative.parts or not group.startswith('/'):
+            return 'UNKNOWN'
+        directory = cgroup_root / relative
+        if not directory.is_dir():
+            return 'UNKNOWN'
+        def read_group(path):
+            # Explicit recursion propagates permission errors; rglob can hide them.
+            members.update(int(pid) for pid in (path / 'cgroup.procs').read_text().split())
+            for child in path.iterdir():
+                if child.is_dir():
+                    read_group(child)
+        read_group(directory)
+    elif main_pid or props['ActiveState'] == 'active':
+        return 'UNKNOWN'
+    if main_pid and (main_pid not in processes or main_pid not in members):
+        return 'UNKNOWN'
+    descendants = {main_pid} if main_pid else set()
+    while True:
+        new = descendants | {pid for pid, parent in processes.items() if parent in descendants}
+        if new == descendants:
+            break
+        descendants = new
+    # Conservative: even an idle polling child can defer automatic sync. Only
+    # a verified empty worker set permits the existing DB guard to decide.
+    if (members | descendants) - {main_pid}:
+        return 'BUSY'
+    return 'IDLE'
+
+
+def probe(*args, **kwargs):
+    try:
+        return _probe(*args, **kwargs)
+    except Exception:
+        return 'UNKNOWN'
+
+
+if __name__ == '__main__':
+    try:
+        print(probe(sys.argv[1]))
+    except Exception:
+        print('UNKNOWN')
+PY_RUNNER_LIVE_PROCESS
+}
+
+should_defer_for_processes() {
+    [[ "${1:-UNKNOWN}" != "IDLE" ]]
+}
+
 # 해당 러너 호스트가 붙잡고 있는 작업 수. 조회 실패/이름 미상이면 빈 문자열.
 db_active_job_count() {
     local host_name="$1" out=""
@@ -30,6 +136,8 @@ db_active_job_count() {
 }
 
 # 0 = 미루기, 1 = 진행.
+# 호출자는 먼저 should_defer_for_processes로 실제 작업자 부재를 확인해야 한다.
+# 아래 inactive/ignore_busy 단축은 DB 상태만의 판정이며 프로세스 guard를 대체하지 않는다.
 #
 # 인자: <busy_count> [ignore_busy] [service_state]
 #

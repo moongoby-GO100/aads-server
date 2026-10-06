@@ -49,6 +49,9 @@ _FAKE_SSH = r"""#!/usr/bin/env bash
 host="${@: -2:1}"; cmd="${@: -1}"
 echo "SSH $cmd" >> "$FAKE_LOG"
 case "$cmd" in
+    # This source-export fixture has no live workers; process observation has
+    # separate real-PID regression coverage.
+    "bash -s -- "*) cat >/dev/null; echo IDLE ;;
     *"hostname -s"*) echo "$host" ;;
     *"systemctl is-active"*) echo active ;;
     sha256sum*)
