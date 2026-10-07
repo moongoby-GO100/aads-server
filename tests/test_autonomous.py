@@ -111,8 +111,12 @@ class TestAutonomousExecutorLoop:
         exec_ = AutonomousExecutor(max_iterations=3)
 
         # 항상 도구를 사용하는 mock
+        _calls = [0]
+
         async def _always_tool_stream(intent_result, system_prompt, messages, tools=None, model_override=None, session_id=None):
-            yield {"type": "tool_use", "tool_name": "health_check", "tool_use_id": "tu_1", "tool_input": {}}
+            # 호출마다 새 tool_use_id — 같은 id 의 재실행은 장부가 막는다(chat.relay_tool_double_exec).
+            _calls[0] += 1
+            yield {"type": "tool_use", "tool_name": "health_check", "tool_use_id": f"tu_iter_{_calls[0]}", "tool_input": {}}
             yield {"type": "done", "input_tokens": 50, "output_tokens": 30, "stop_reason": "tool_use"}
 
         _tools = [{"name": "health_check", "description": "헬스체크"}]

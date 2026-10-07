@@ -3602,7 +3602,7 @@ async def _stream_litellm_anthropic(
                 from app.api.ceo_chat_tools import execute_tool as _exec_tool
                 for tu in _tool_uses:
                     tool_input = _bind_tool_session_input(tu["name"], tu["input"], session_id)
-                    yield {"type": "tool_use", "tool_name": tu["name"], "tool_use_id": tu["id"], "tool_input": tool_input}
+                    yield {"type": "tool_use", "tool_name": tu["name"], "tool_use_id": tu["id"], "tool_input": tool_input, "provider_executed": True}
                     try:
                         result = await _exec_tool(tu["name"], tool_input, "", session_id or "")
                         yield {"type": "tool_result", "tool_name": tu["name"], "content": str(result)[:3000]}
@@ -3956,7 +3956,7 @@ async def _stream_litellm_openai(
             except Exception:
                 _args = {}
             _args = _bind_tool_session_input(tc["name"], _args, session_id)
-            yield {"type": "tool_use", "tool_name": tc["name"], "tool_use_id": tc["id"], "tool_input": _args}
+            yield {"type": "tool_use", "tool_name": tc["name"], "tool_use_id": tc["id"], "tool_input": _args, "provider_executed": True}
 
         _exec_results = await asyncio.gather(*[_run_one(tc) for tc in _sorted_tcs])
         _tool_calls_made += len(_exec_results)
@@ -4751,6 +4751,48 @@ def _is_cli_retryable_error(error_content: str) -> bool:
     return _is_relay_retryable_error(error_content)
 
 
+def _is_tool_result_only_user_turn(messages: List[Dict[str, Any]]) -> bool:
+    """마지막 메시지가 tool_result 블록만 담은 user 메시지인가.
+
+    relay 는 도구를 자기 쪽에서 실행하므로, 이런 메시지는 사용자의 새 입력이 아니라
+    바깥 루프가 되먹인 결과다. 이것을 "[CEO] [도구결과] ..." 로 평탄화해 보내면 relay 가
+    새 턴을 시작해 같은 도구를 다시 호출한다.
+    """
+    if not messages:
+        return False
+    last = messages[-1]
+    if not isinstance(last, dict) or last.get("role") != "user":
+        return False
+    content = last.get("content")
+    if not isinstance(content, list) or not content:
+        return False
+    return all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+
+
+def _tool_result_only_turn_done(model: str) -> Dict[str, Any]:
+    return {
+        "type": "done",
+        "model": model,
+        "actual_model": "unverified",
+        "cost": "0",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "skipped": "tool_result_only_turn",
+    }
+
+
+def _is_tool_result_only_turn_guard_hit(
+    messages: List[Dict[str, Any]], session_id: Optional[str], relay_name: str
+) -> bool:
+    if not _is_tool_result_only_user_turn(messages):
+        return False
+    logger.warning(
+        "relay_tool_result_only_turn_skipped relay=%s session=%s — 새 사용자 입력 없이 도구 결과만 있어 새 턴을 시작하지 않음",
+        relay_name, (session_id or "default")[:8],
+    )
+    return True
+
+
 def _build_cli_retry_messages(messages: List[Dict[str, Any]], partial_content: str) -> List[Dict[str, Any]]:
     retry_messages = [dict(message) for message in messages]
     partial = (partial_content or "").strip()
@@ -4783,6 +4825,10 @@ async def _stream_cli_relay(
     session_id: Optional[str] = None,
     oauth_slot: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    if _is_tool_result_only_turn_guard_hit(messages, session_id, "claude_relay"):
+        yield _tool_result_only_turn_done(model)
+        return
+
     # 릴레이 슬롯은 회사 공용 Claude 계정(slot1/slot2)이다. 가입 사용자는 오면 안 된다.
     # 본인 Anthropic 키가 있으면 막는 대신 그 키로 직결되는 경로로 돌린다 —
     # 막기만 하면 키를 등록한 사용자까지 라우팅 우연에 따라 대화가 끊긴다.
@@ -5081,6 +5127,7 @@ async def _stream_codex_relay_once(
                             "tool_name": tool_name,
                             "tool_use_id": event.get("tool_use_id", ""),
                             "tool_input": event.get("tool_input", {}),
+                            "provider_executed": True,
                         }
                     elif evt_type == "tool_result":
                         tool_name = event.get("tool_name", "")
@@ -5211,6 +5258,10 @@ async def _stream_codex_relay(
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    if _is_tool_result_only_turn_guard_hit(messages, session_id, "codex_relay"):
+        yield _tool_result_only_turn_done(model)
+        return
+
     # Codex 릴레이도 회사 공용 ChatGPT 구독 계정이다. 본인 계정으로 바꿔 줄 방법이
     # 없다 — ChatGPT 구독 OAuth 는 BYOK(API 키) 로 대체되지 않는다. 그래서 안내만 한다.
     _codex_ctx = await _byok_owner_context(session_id)
@@ -5545,6 +5596,7 @@ async def _run_agent_sdk_with_key(
                             "tool_name": tool_name,
                             "tool_use_id": tool_id,
                             "tool_input": tool_input,
+                            "provider_executed": True,
                         }
                     elif block_type == "ThinkingBlock":
                         thinking = getattr(block, "thinking", "")
@@ -5947,6 +5999,7 @@ def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[Li
                         "tool_name": tool_name,
                         "tool_use_id": block.get("id", ""),
                         "tool_input": block.get("input", {}),
+                        "provider_executed": True,
                     })
         # usage 정보 (부분)
         usage = msg.get("usage", {})
@@ -6517,6 +6570,7 @@ async def _stream_anthropic(
                 "tool_name": tu.name,
                 "tool_input": tool_input,
                 "tool_use_id": tu.id,
+                "provider_executed": True,
             }
             if tu.name == "search_crawl_match" and not tool_input.get("synthesis_model"):
                 selected_model = str(model_id or "").strip()

@@ -524,6 +524,31 @@ def _sideeffect_duplicate(tool_name: str, tool_input: Dict[str, Any]) -> Optiona
     return None
 
 
+# ── tool_use_id 실행 장부 (2026-10-07, chat.relay_tool_double_exec) ──────────
+#
+# relay/SDK/Codex 는 도구를 자기 쪽(MCP)에서 이미 실행하고 tool_use 이벤트를 관찰용으로
+# 흘려보낸다. 바깥 루프가 그것을 "실행할 도구"로 오해해 다시 실행하면 쓰기 도구가 두 번
+# 돈다. 위 지문 방식은 5개 도구만 막으므로, 호출 단위 식별자(tool_use_id)로 막는다.
+_EXECUTED_TOOL_USE_IDS: "OrderedDict[str, float]" = OrderedDict()
+_EXECUTED_TOOL_USE_MAX = 5000
+
+
+def mark_tool_use_executed(tool_use_id: str) -> None:
+    """이 tool_use_id 는 이미 실행(또는 실행 소유자가 확정)됐다고 기록한다."""
+    tid = str(tool_use_id or "").strip()
+    if not tid:
+        return
+    _EXECUTED_TOOL_USE_IDS[tid] = _time.time()
+    _EXECUTED_TOOL_USE_IDS.move_to_end(tid)
+    while len(_EXECUTED_TOOL_USE_IDS) > _EXECUTED_TOOL_USE_MAX:
+        _EXECUTED_TOOL_USE_IDS.popitem(last=False)
+
+
+def is_tool_use_executed(tool_use_id: str) -> bool:
+    tid = str(tool_use_id or "").strip()
+    return bool(tid) and tid in _EXECUTED_TOOL_USE_IDS
+
+
 _DEPLOY_SAFE_ALLOWED_MODES = frozenset({"reload", "bluegreen", "restart-single"})
 _DEPLOY_SAFE_RELOAD_CMD = ["bash", "/root/aads/aads-server/scripts/reload-api.sh"]
 _DEPLOY_SAFE_CONTAINER_RELOAD_CMD = ["bash", "/app/scripts/reload-api.sh"]

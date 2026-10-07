@@ -18,12 +18,22 @@ logger = logging.getLogger(__name__)
 # 모듈 레벨 임포트 (mock 가능하도록)
 try:
     from app.services.model_selector import call_stream
-    from app.services.tool_executor import ToolExecutor
+    from app.services.tool_executor import (
+        ToolExecutor,
+        is_tool_use_executed,
+        mark_tool_use_executed,
+    )
     from app.services.intent_router import IntentResult
 except ImportError:
     call_stream = None  # type: ignore[assignment]
     ToolExecutor = None  # type: ignore[assignment]
     IntentResult = None  # type: ignore[assignment]
+
+    def is_tool_use_executed(tool_use_id: str) -> bool:  # type: ignore[misc]
+        return False
+
+    def mark_tool_use_executed(tool_use_id: str) -> None:  # type: ignore[misc]
+        return None
 
 
 # ─── 상수 ─────────────────────────────────────────────────────────────────────
@@ -177,6 +187,7 @@ class AutonomousExecutor:
             iteration += 1
             iter_response = ""
             iter_tool_calls: List[Dict[str, Any]] = []
+            provider_executed_ids: set = set()
             stop_reason = "end_turn"
             iter_input_tokens = 0
             iter_output_tokens = 0
@@ -208,6 +219,11 @@ class AutonomousExecutor:
                             }
                             iter_tool_calls.append(tool_call)
                             stop_reason = "tool_use"
+                            # relay/SDK/Codex 는 도구를 자기 쪽에서 이미 실행했다. 이 이벤트는
+                            # 관찰용이므로 아래 바깥 실행 루프가 다시 실행하면 안 된다.
+                            if event.get("provider_executed") and tool_call["id"]:
+                                provider_executed_ids.add(tool_call["id"])
+                                mark_tool_use_executed(tool_call["id"])
                             yield _sse("tool_use", {
                                 "tool_name": event["tool_name"],
                                 "tool_use_id": event.get("tool_use_id", ""),
@@ -217,8 +233,13 @@ class AutonomousExecutor:
                             # 도구 실행 중 heartbeat 전달 — SSE 연결 유지 (AADS 채팅 품질 고도화)
                             yield _sse("heartbeat", {})
                         elif etype == "tool_result":
+                            _res_id = event.get("tool_use_id", "")
+                            if _res_id:
+                                provider_executed_ids.add(_res_id)
+                                mark_tool_use_executed(_res_id)
                             yield _sse("tool_result", {
                                 "tool_name": event.get("tool_name", ""),
+                                "tool_use_id": _res_id,
                                 "content": str(event.get("content", ""))[:300],
                                 "iteration": iteration,
                             })
@@ -239,6 +260,7 @@ class AutonomousExecutor:
                         # 재시도 시 iter_response/tool_calls 초기화
                         iter_response = ""
                         iter_tool_calls = []
+                        provider_executed_ids = set()
                         full_response = full_response[:_fr_checkpoint]  # C9: full_response 롤백
                         continue
                     logger.error(f"autonomous_executor LLM error iter={iteration} after {_LLM_MAX_RETRIES} retries: {e}")
@@ -277,6 +299,21 @@ class AutonomousExecutor:
                             return
                 except Exception as _qe:
                     logger.debug(f"autonomous_executor quality check skipped: {_qe}")
+
+            # provider 가 이미 실행한 tool_use 는 바깥에서 다시 실행하지 않는다.
+            # done 이벤트에 stop_reason 이 없어 stop_reason 이 "tool_use" 로 남기 때문에,
+            # 이 걸러냄이 없으면 relay 가 끝낸 도구를 전부 한 번 더 실행하고 그 결과를
+            # user 메시지로 relay 에 되먹여 새 턴을 시작시킨다.
+            _skipped_provider = [
+                tc for tc in iter_tool_calls
+                if tc["id"] and (tc["id"] in provider_executed_ids or is_tool_use_executed(tc["id"]))
+            ]
+            if _skipped_provider:
+                logger.info(
+                    "autonomous_executor skip provider-executed tool_use iter=%s skipped=%d/%d",
+                    iteration, len(_skipped_provider), len(iter_tool_calls),
+                )
+            iter_tool_calls = [tc for tc in iter_tool_calls if tc not in _skipped_provider]
 
             # 도구 사용 없으면 종료
             if stop_reason == "end_turn" or not iter_tool_calls:
@@ -335,6 +372,17 @@ class AutonomousExecutor:
                         await emit_task_log(task_id, "command", f"🔍 {tool_name} 실행 중...", f"iteration_{iteration}")
                     except Exception:
                         pass
+
+                # 같은 tool_use_id 는 한 번만 실행한다(재개·재시도·중복 이벤트 방어).
+                if tool_id and is_tool_use_executed(tool_id):
+                    logger.warning("autonomous_executor duplicate tool_use_id blocked: %s id=%s", tool_name, tool_id[:14])
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": json.dumps({"skipped": "duplicate_tool_use_id", "tool": tool_name}),
+                    })
+                    continue
+                mark_tool_use_executed(tool_id)
 
                 # 위험 도구 확인
                 if tool_name in _DANGEROUS_TOOLS:
