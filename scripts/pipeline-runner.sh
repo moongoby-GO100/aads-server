@@ -507,10 +507,39 @@ record_runner_event() {
                WHERE job_id='${job_id}';" 2>/dev/null || true
 }
 
+runner_job_touch() {
+    local _jid="$1"
+    [[ "$_jid" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
+    db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${_jid}' AND status='running';" || true
+}
+
+# CLI 가 도는 동안 updated_at 이 멈추면 stuck 복구(60분)가 살아 있는 작업을 회수한다
+# (runner.stale_recovered_kills_live_worker, 2026-10-07). CLI 와 이 함수의 소유 셸
+# 어느 쪽이든 죽으면 스스로 끝난다 — 고아 루프를 남기지 않는다(R-BG).
+# RUNNER_CLI_HEARTBEAT_SEC: 갱신 간격(초, 기본 300). 0 이면 끈다.
+_cli_heartbeat_loop() {
+    local _jid="$1" _cli_pid="$2" _owner_pid="$3" _interval="${RUNNER_CLI_HEARTBEAT_SEC:-300}" _waited=0
+    [[ "$_interval" =~ ^[1-9][0-9]*$ ]] || _interval=300
+    while kill -0 "$_cli_pid" 2>/dev/null && kill -0 "$_owner_pid" 2>/dev/null; do
+        sleep 1
+        _waited=$((_waited + 1))
+        if (( _waited >= _interval )); then
+            _waited=0
+            runner_job_touch "$_jid"
+        fi
+    done
+}
+
 wait_runner_cli_process() {
     local job_id="$1" pid="$2" output_file="$3" err_file="$4" model="$5" actual_model="$6" size="$7"
     local attempt_no="$8" total_attempts="$9" cycle_num="${10}" runner_kind="${11}" started_ms="${12}" retry_no="${13:-0}"
-    local first_stdout_ms="" first_stderr_ms="" now_ms elapsed_ms proc_stat
+    local first_stdout_ms="" first_stderr_ms="" now_ms elapsed_ms proc_stat hb_pid="" owner_pid="$BASHPID"
+
+    if [[ "${RUNNER_CLI_HEARTBEAT_SEC:-300}" != "0" ]]; then
+        # BASHPID 를 인자로 직접 넘기면 & 가 만든 자식 안에서 전개되어 자기 PID 가 된다.
+        _cli_heartbeat_loop "$job_id" "$pid" "$owner_pid" &
+        hb_pid=$!
+    fi
 
     while true; do
         proc_stat=$(ps -p "$pid" -o stat= 2>/dev/null || true)
@@ -529,6 +558,11 @@ wait_runner_cli_process() {
         fi
         sleep 1
     done
+
+    if [[ -n "$hb_pid" ]]; then
+        kill "$hb_pid" 2>/dev/null || true
+        wait "$hb_pid" 2>/dev/null || true
+    fi
 
     if [[ -z "$first_stdout_ms" && -s "$output_file" ]]; then
         now_ms=$(date +%s%3N 2>/dev/null || date +%s000)
@@ -6103,6 +6137,32 @@ reject_job() {
     promote_next_queued "$project"
 }
 
+# stuck 후보 한 건의 처분: recover | skip_alive | skip_peer (stdout).
+#  - 이 호스트가 집은 작업(runner_host 일치 또는 미기록)의 runner_pid 가 살아 있으면 skip_alive.
+#  - 다른 호스트가 집은 작업은 그 호스트 러너가 살아 있는 동안 판정하지 않는다(skip_peer).
+#    pid 는 호스트 간에 의미가 없다. 그 호스트 러너 하트비트가 RUNNER_PEER_DEAD_SEC(기본 1800) 넘게
+#    끊겼거나 기록이 없으면 recover — 죽은 서버의 작업이 영원히 슬롯을 쥐지 않게 한다.
+#    조회 실패는 skip_peer(확인 못 한 작업은 죽이지 않는다).
+_stale_job_verdict() {
+    local _pid="${1// /}" _host="${2// /}" _age
+    if [[ -n "$_host" && "$_host" != "$RUNNER_HOST_NAME" ]]; then
+        _age=$(db_exec "SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - last_seen_at))::bigint, -1)
+                        FROM pipeline_runner_hosts WHERE host=$(sql_escape "$_host");" 2>/dev/null) || { echo skip_peer; return 0; }
+        _age="${_age//[[:space:]]/}"
+        if [[ "$_age" =~ ^[0-9]+$ ]] && (( _age < ${RUNNER_PEER_DEAD_SEC:-1800} )); then
+            echo skip_peer
+        else
+            echo recover
+        fi
+        return 0
+    fi
+    if [[ "$_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$_pid" 2>/dev/null; then
+        echo skip_alive
+    else
+        echo recover
+    fi
+}
+
 # C3: 크래시 복구 — 시작 시 stuck 작업 정리
 _recover_stuck_jobs() {
     local filter="$1"
@@ -6182,16 +6242,43 @@ _recover_stuck_jobs() {
         done <<< "$deploy_timed_out"
     fi
 
-    # running/claimed 상태가 5분 이상 된 작업 → error로 전환 (BUG-7: 30분→5분 단축)
-    local stuck
-    stuck=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
-                     error_detail='stale_recovered',
-                     review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 크래시 복구] ${RUNNER_HOSTNAME}',
-                     completed_at=NOW(), updated_at=NOW()
-                     WHERE status IN ('running','claimed')
-                       AND updated_at < NOW() - INTERVAL '60 minutes'
-                       $filter
-                     RETURNING job_id;" 2>/dev/null) || true
+    # running/claimed 상태에서 updated_at 이 60분 멈춘 작업 → error로 전환.
+    # 멈춘 시각만으로 회수하지 않는다: 이 호스트가 집은 작업의 runner_pid 가 살아 있으면
+    # 회수 대신 updated_at 만 갱신한다 (runner.stale_recovered_kills_live_worker, 2026-10-07).
+    # 살아 있는 작업의 상한은 _watchdog_check 의 timeout_max_runtime 이 맡는다.
+    local stuck="" _st_rows _st_id _st_pid _st_host _st_verdict _st_hit
+    _st_rows=$(db_exec "SELECT job_id, COALESCE(runner_pid::text, ''), COALESCE(runner_host, '')
+                        FROM pipeline_jobs
+                        WHERE status IN ('running','claimed')
+                          AND updated_at < NOW() - INTERVAL '60 minutes'
+                          $filter;" 2>/dev/null) || true
+    while IFS=$'\x1e' read -r _st_id _st_pid _st_host; do
+        _st_id="${_st_id// /}"
+        [[ "$_st_id" =~ ^(runner-[0-9a-f]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] || continue
+        _st_verdict=$(_stale_job_verdict "$_st_pid" "$_st_host")
+        case "$_st_verdict" in
+            skip_alive)
+                log "  STALE_SKIP_ALIVE job=${_st_id} pid=${_st_pid// /} host=${RUNNER_HOST_NAME}"
+                db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${_st_id}' AND status IN ('running','claimed');" || true
+                ;;
+            skip_peer)
+                log "  STALE_SKIP_PEER job=${_st_id} host=${_st_host// /} — 다른 호스트가 집은 작업, 판정하지 않음"
+                ;;
+            *)
+                _st_hit=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
+                         error_detail='stale_recovered',
+                         review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 크래시 복구] ${RUNNER_HOSTNAME}',
+                         completed_at=NOW(), updated_at=NOW()
+                         WHERE job_id='${_st_id}'
+                           AND status IN ('running','claimed')
+                           AND updated_at < NOW() - INTERVAL '60 minutes'
+                         RETURNING job_id;" 2>/dev/null) || true
+                if [[ -n "$_st_hit" ]]; then
+                    stuck+="${stuck:+$'\n'}${_st_hit}"
+                fi
+                ;;
+        esac
+    done <<< "$_st_rows"
     if [[ -n "$stuck" ]]; then
         log "  RECOVERED stuck jobs: $stuck"
         # 복구된 작업의 프로젝트별로 다음 queued 승격 + 채팅 알림
