@@ -71,7 +71,9 @@ _REVIEW_MEASUREMENT_SCHEMA = "review_pipeline.v1"
 # 코드 결함이 아니라 "diff 가 잘려 확인 불가"였다 (AADS-REVIEWER-DIFF-TRUNCATION-P0).
 REVIEW_DIFF_MAX_CHARS = int(os.environ.get("REVIEW_DIFF_MAX_CHARS", "200000"))
 
-_DIFF_HEADER_RE = re.compile(r"^diff --git a\/.+ b\/.+$", re.MULTILINE)
+# git 은 core.quotePath 기본값에서 비ASCII 경로를 "a/..\353.." 처럼 따옴표+8진수로 출력한다.
+_DIFF_HEADER_RE = re.compile(r'^diff --git (?:"a/.+"|a/.+) (?:"b/.+"|b/.+)$', re.MULTILINE)
+_DIFF_QUOTED_HEADER_RE = re.compile(r'^diff --git "a/.+?" "b/(.+)"$')
 _DIFF_HUNK_RE = re.compile(r"^@@ .+ @@$", re.MULTILINE)
 _PATH_TOKEN_RE = re.compile(
     r"(?:^|[\s`'\"(])"
@@ -737,7 +739,11 @@ def _diff_stat_summary(diff: str) -> str:
         section_end = headers[idx + 1].start() if idx + 1 < len(headers) else len(diff)
         additions, deletions = _diff_line_counts(diff[section_start:section_end])
         header_match = re.match(r"^diff --git a/(.+?) b/(.+)$", match.group(0))
-        path = header_match.group(2).strip() if header_match else "?"
+        quoted_match = _DIFF_QUOTED_HEADER_RE.match(match.group(0))
+        if quoted_match:
+            path = quoted_match.group(1).strip()
+        else:
+            path = header_match.group(2).strip() if header_match else "?"
         lines.append(f"  {path} | +{additions} -{deletions}")
     return "\n".join(lines)
 
