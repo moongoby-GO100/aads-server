@@ -71,7 +71,9 @@ def test_full_diff_is_persisted_when_db_diff_is_truncated():
 
     assert '${#full_diff} -gt ${#stored_diff}' in fn
     assert 'local log_dir="/root/aads/aads-server/logs/runner-diff"' in fn
-    assert 'local worktree_patch="${worktree_dir}/.runner_full_diff.patch"' in fn
+    # 패치는 워크트리 밖에만 쓴다 — 워크트리에 쓰면 대상 저장소 커밋에 끼어든다(2026-10-08 NTV2).
+    assert "worktree_patch" not in fn
+    assert '> "$worktree_dir' not in fn
     assert 'local log_patch="${log_dir}/${job_id}.patch"' in fn
     assert "FULL_DIFF_TRUNCATED" in fn
 

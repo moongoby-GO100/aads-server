@@ -1,3 +1,13 @@
+## 2026-10-08 — 러너가 .runner_full_diff.patch 를 대상 저장소 커밋에 넣는 경로 차단 (AADS-RUNNER-PATCH-ARTIFACT-COMMIT-FIX-20261008) — 코드·테스트 완료, 원격 러너 반영 대기(CEO 승인)
+
+- 원인 후보(확정 아님): `_persist_full_diff_if_truncated` 가 패치를 워크트리 안에도 써서, `.gitignore` 에 항목이 없는 저장소(NTV2·dashboard)에서는 미추적 파일로 남아 워커/러너 커밋에 쓸려 들어갔다. 한 번 추적되면 지워도 다음 커밋이 변경으로 되돌린다(NTV2 b370fa33 → 8935cc89 +1063/-1040). cafe24_114 실제 러너(md5 f57ca7a0…)는 저장소본과 달라 어느 줄이 문제였는지 원격 파일로는 대조하지 못했다.
+- 변경: `scripts/pipeline-runner.sh`(+`.local` 동일 사본) — ① 패치를 워크트리 밖(`/root/aads/aads-server/logs/runner-diff/<job>.patch`, 쓰기 불가 시 `$ARTIFACT_DIR/runner-diff`)에만 쓴다. ② `commit_job_worktree_for_approval` 커밋 직전 가드: 스테이징에 패치가 남았으면 HEAD 상태로 되돌리고(`RUNNER_PATCH_ARTIFACT_STAGED_GUARD` 경고), 못 되돌리면 커밋하지 않고 실패. ③ 워커가 직접 커밋한 이력에 패치 변경이 있으면 base 상태로 복원하는 커밋을 얹어 base..HEAD 순변경을 0 으로 만든다(`RUNNER_PATCH_ARTIFACT_IN_HISTORY_GUARD`).
+- 결정: 추적 중인 파일은 "삭제로 스테이징"하지 않고 변경 0건으로 둔다. 삭제 커밋은 대상 저장소(NTV2)의 별도 정리 작업이다(요구 2·3 충돌 시 3 채택).
+- 테스트: 신규 `tests/unit/test_pipeline_runner_patch_artifact_commit_guard.py` 8건(미추적·추적-수정·추적-삭제·reset 무력화·워커 커밋 혼입) PASS, `test_pipeline_runner_rejected_artifact_preserve.py` 기대값 갱신. 러너·리뷰홀드·dup_guard 묶음 1001 passed, 1 failed(`test_runner_wt_reclaim_on_finish.py::test_sync_installs_reclaimer_next_to_runner_with_exec_mode` — 동기화 스크립트 문자열 검사, 이번 변경 파일 밖).
+- 원격 반영: 직접 배포하지 않았다. 정본은 origin/main 의 `scripts/pipeline-runner.sh`, 경로는 `scripts/sync_pipeline_runner_remote.sh`(타이머 5분, 러너 작업 중이면 defer). 수동은 `bash scripts/sync_pipeline_runner_remote.sh --dry-run --target cafe24_114` 확인 후 CEO 승인으로 실행.
+
+- 재작업: stale_base 로 origin/main 위 재적용(R3)
+
 ## 2026-10-08 — 서명본 계약서 PDF '기타 기재사항' 내부 키 숨김·한글화 (ACCT-CONTRACT-PDF-EXTRA-ROWS-20261008) — 코드·테스트 완료, 배포 대기
 
 **DB handover entry_key `acct-contract-pdf-extra-rows-20261008` (ACCT/task).** 이 세션에서는 DB 인증 수단이 없어 DB 기록은 하지 못했고 이 파일에만 남긴다.

@@ -1695,6 +1695,22 @@ commit_job_worktree_for_approval() {
         return 1
     fi
     rm -f "$stage_err"
+    # 커밋 직전 가드 (2026-10-08 NTV2 b370fa33·8935cc89: 한 번 추적되면 영구히 커밋에 끼어든다).
+    # 러너 산출물 .runner_full_diff.patch 가 스테이징에 남아 있으면 HEAD 상태로 되돌린다 —
+    # 추적 중이면 변경 0건, 미추적이면 목록에서 제외. 추적 해제(삭제 커밋)는 대상 저장소의
+    # 별도 작업이라 여기서 하지 않는다. 되돌리지 못하면 커밋하지 않는다.
+    if ! git -C "$worktree_dir" diff --cached --quiet -- .runner_full_diff.patch 2>/dev/null; then
+        log "  RUNNER_PATCH_ARTIFACT_STAGED_GUARD job=$job_id — .runner_full_diff.patch 가 스테이징되어 있어 제외" >&2
+        if git -C "$worktree_dir" cat-file -e "HEAD:.runner_full_diff.patch" 2>/dev/null; then
+            git -C "$worktree_dir" reset -q HEAD -- .runner_full_diff.patch >/dev/null 2>&1 || true
+        else
+            git -C "$worktree_dir" rm --cached -q --ignore-unmatch -- .runner_full_diff.patch >/dev/null 2>&1 || true
+        fi
+        if ! git -C "$worktree_dir" diff --cached --quiet -- .runner_full_diff.patch 2>/dev/null; then
+            _fail_job "$job_id" "$session_id" "approval_commit_stage_failed" "awaiting_approval 거부 — .runner_full_diff.patch 를 스테이징에서 제외하지 못함(워크트리 보존)"
+            return 1
+        fi
+    fi
     # 워커가 격리 워크트리 안에서 자기 변경을 이미 커밋해 두는 경우가 있다.
     # 그러면 스테이징에 남는 것이 없어 git commit 이 1 을 반환하고, 그것을
     # 실패로 처리하면 멀쩡한 산출물이 통째로 버려진다 — 2026-09-17 13:08 KST
@@ -1735,6 +1751,28 @@ commit_job_worktree_for_approval() {
             return 1
         fi
         rm -f "$commit_out" "$commit_err"
+    fi
+    # 워커가 워크트리 안에서 직접 커밋한 이력에 이 파일 변경이 섞였으면 base 상태로 되돌리는
+    # 커밋을 한 개 얹어 base..HEAD 순변경을 0 으로 만든다(워커 커밋은 재작성하지 않는다).
+    local _patch_diff_rc=0
+    if [[ "$pre_exec_sha" =~ ^[0-9a-f]{40}$ ]]; then
+        git -C "$worktree_dir" diff --quiet "$pre_exec_sha" HEAD -- .runner_full_diff.patch >/dev/null 2>&1 || _patch_diff_rc=$?
+    fi
+    if [[ "$_patch_diff_rc" -ne 0 ]]; then
+        log "  RUNNER_PATCH_ARTIFACT_IN_HISTORY_GUARD job=$job_id base=${pre_exec_sha:0:8} — 커밋에 섞인 .runner_full_diff.patch 변경을 base 상태로 복원" >&2
+        local _patch_restore_ok=1
+        if git -C "$worktree_dir" cat-file -e "${pre_exec_sha}:.runner_full_diff.patch" 2>/dev/null; then
+            git -C "$worktree_dir" checkout -q "$pre_exec_sha" -- .runner_full_diff.patch >/dev/null 2>&1 || _patch_restore_ok=0
+        else
+            git -C "$worktree_dir" rm -q -f --ignore-unmatch -- .runner_full_diff.patch >/dev/null 2>&1 || _patch_restore_ok=0
+        fi
+        if [[ "$_patch_restore_ok" -eq 1 ]]; then
+            ALLOW_AUTH_COMMIT=1 git -C "$worktree_dir" commit -q -m "Pipeline-Runner: ${job_id} — .runner_full_diff.patch 를 base 상태로 복원(러너 산출물 제외)" >/dev/null 2>&1 || _patch_restore_ok=0
+        fi
+        if [[ "$_patch_restore_ok" -ne 1 ]] || ! git -C "$worktree_dir" diff --quiet "$pre_exec_sha" HEAD -- .runner_full_diff.patch >/dev/null 2>&1; then
+            _fail_job "$job_id" "$session_id" "approval_commit_failed" "awaiting_approval 거부 — 커밋 이력의 .runner_full_diff.patch 변경을 복원하지 못함(워크트리 보존)"
+            return 1
+        fi
     fi
     local commit_sha head_sha
     commit_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
@@ -4607,11 +4645,12 @@ ${_uncommitted}"
     # 저장된(잘렸을 수 있는) 값보다 전량이 길지 않으면 잘리지 않은 것이다.
     [[ ${#full_diff} -gt ${#stored_diff} ]] || return 0
 
+    # 워크트리 밖에만 쓴다 — 워크트리에 두면 대상 저장소(.gitignore 없는 NTV2·dashboard)에서
+    # 미추적 파일로 보이다가 결국 커밋에 들어간다. 사람이 보는 경로는 아래 FULL_DIFF_TRUNCATED 로그.
     local log_dir="/root/aads/aads-server/logs/runner-diff"
     mkdir -p "$log_dir" 2>/dev/null || true
-    local worktree_patch="${worktree_dir}/.runner_full_diff.patch"
+    [[ -w "$log_dir" ]] || { log_dir="${ARTIFACT_DIR}/runner-diff"; mkdir -p "$log_dir" 2>/dev/null || true; }
     local log_patch="${log_dir}/${job_id}.patch"
-    printf '%s' "$full_diff" > "$worktree_patch" 2>/dev/null || true
     printf '%s' "$full_diff" > "$log_patch" 2>/dev/null || true
     log "  FULL_DIFF_TRUNCATED job=$job_id db_bytes=${#stored_diff} full_bytes=${#full_diff} patch=${log_patch}"
 }
