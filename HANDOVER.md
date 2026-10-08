@@ -7,6 +7,16 @@
 - 승인 후 순서: 릴리스 SHA 배포(Runner) → GRANT 읽기 확인 → `/root/acct-app-extra.env` 에 카페24 전용 `OBYS_VAULT_KEY` 생성·주입 후 후보 재생성 → CEO OAuth 재연결(`/api/v1/integrations/clobe/reauth`) → 언니냉면 1개월 `mode:"shadow"` 수집 → 결과 검토. 상세·롤백(r17 복귀, GRANT REVOKE): `docs/reports/20261008_ACCT_클로브_카페24_수집구성.md`. 정본 미등록(미완료).
 - 하지 않은 것: 배포, 운영 DB 변경, GRANT 적용, 키 생성·주입, OAuth, 수집 실행, contabo116 토큰·키 이동.
 
+## 2026-10-08 — 3.3% 용역계약서 PDF·미리보기 칸 이름 용역계약 용어화, 내부 코드값 한글 표시 (ACCT-FREELANCER-CONTRACT-LABELS-20261008) — 코드·테스트 완료, 운영 미반영
+
+**항목 ID `acct-freelancer-contract-labels-20261008` (project=ACCT, entry_type=task). DB handover 기록 도구가 이 세션에 없어 이 파일에만 기록 — 승인된 쓰기 경로가 생기면 옮길 것. 상태: 커밋 전 — Runner 가 승인 후 commit/push. 카페24 배포·서명요청·계약 DB 수정 없음.**
+- 원인: `app/services/yeoljeong_contract_pdf.py` 의 `TERM_FIELDS` 가 계약 유형과 무관하게 근로계약 칸 이름을 썼고, `wage_type` 원문(`case_fee`)을 그대로 찍었다. 미리보기(`index.html`)는 용역 조항 본문이 이미 따로 있어 칸 이름 문제는 없었고, 메타 줄의 "근무지점" 과 `case_fee: "건별/용역비"` 만 남아 있었다.
+- 변경(표시만, `signed_snapshot`·`snapshot_sha256`·서명 구조 불변): PDF — `FREELANCER_TERM_LABELS`(수행 장소·수행 시간·휴식·수행 회차 기준·수행 일정·회차별 수행 일시·휴일 규정·용역비 산정 방식·용역비·용역비 구성/원천징수·용역비 지급일·추가 수행·휴가 규정·세무 처리), 0원 기본급·비과세 식대·기타 과세수당 생략, 수습 행 생략, 용역계약 한정 머리글(위탁자/수급인)·하단 문구(근로기준법 제17조 문구 제외), 기타 기재사항의 원문 키 대신 한글 이름(세무 처리 구분·추가 특약 등)과 근로 전용 값(상시 인원 구분·식사 제공) 생략. 코드값 → 한글(`CODE_VALUE_LABELS`: 건별 용역비·시급·월급·일급, 세무 구분, 사업장 규모, 식사 제공)은 근로계약에도 적용(값만, 칸 이름 불변). 미리보기 — `case_fee` → "건별 용역비", 용역계약 메타 "수행 지점". `sw.js` CACHE_VERSION → `obys-clock-shell-20261008-r1`(`test_obys_clobe_ui_static.py` 의 고정 문자열 1줄 동반 수정).
+- 미리보기와 PDF 는 JS/파이썬이라 매핑 코드를 공유하지 못한다. 대신 같은 문구를 테스트(`test_preview_html_uses_service_terms_for_case_fee`)로 묶었다.
+- 검증: `scripts/run_unit_tests.sh` — 신규 `test_obys_freelancer_contract_labels.py` + `test_obys_contract_notify_pdf.py` + `test_obys_clobe_ui_static.py` + `test_obys_attendance_pwa_gps.py` 67 passed(용역 라벨, case_fee 한글화, 근로계약 라벨 불변, 렌더 전후 스냅샷·해시 불변, 같은 입력 같은 바이트). ruff F821/F811·compile 통과.
+- 한계: 기존에 보관된 서명본 PDF 파일은 다시 만들지 않는 한 옛 칸 이름 그대로다(재생성 시에만 새 표기). 칸 이름은 PDF 본문 표시일 뿐 계약 효력은 봉인 스냅샷이 결정한다.
+- 릴리스 영향·복구: 서비스 렌더러·정적 화면만 바뀌고 스키마·인증 변경 없음. 복구는 이 커밋 revert.
+
 ## 2026-10-06 — 오비서 직원 실명 가입·회사/점포 입사요청, 차단 4종 (ACCT-EMPLOYEE-JOIN-REALNAME-REQUEST-20261006) — 코드·테스트 완료, 운영 미반영, 화면 캡처 미완료
 
 **DB handover entry_key `obys-employee-join-realname-request-20261006` (AADS/verification).**

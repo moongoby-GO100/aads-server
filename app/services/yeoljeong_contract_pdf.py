@@ -85,6 +85,47 @@ TERM_FIELDS = (
     ("freelancer_settlement_terms", "용역비 정산/해지"),
     ("special_terms", "특약사항"),
 )
+# 3.3% 용역계약(freelancer) 전용 칸 이름. 키는 TERM_FIELDS 와 같고 표시 이름만 바꾼다.
+# 근로계약 서식은 TERM_FIELDS 를 그대로 쓰므로 영향이 없다. 봉인 스냅샷에는 손대지 않는다.
+FREELANCER_TERM_LABELS = {
+    "start_date": "용역 개시일",
+    "workplace": "수행 장소",
+    "work_time": "수행 시간",
+    "rest_time": "휴식",
+    "weekly_hours": "수행 회차 기준",
+    "work_days": "수행 일정",
+    "daily_work_schedule": "회차별 수행 일시",
+    "holidays": "휴일 규정",
+    "wage_type": "용역비 산정 방식",
+    "wage": "용역비",
+    "wage_composition": "용역비 구성/원천징수",
+    "pay_date": "용역비 지급일",
+    "overtime_terms": "추가 수행",
+    "leave_terms": "휴가 규정",
+    "insurance_terms": "세무 처리",
+}
+# 용역계약에서는 의미가 없어 인쇄하지 않는 키(수습 = 해당 없음).
+FREELANCER_SKIPPED_KEYS = {"probation_terms", "probation_period", "workplace_size_category", "meal_provision"}
+# 값이 0 이면 인쇄하지 않는 금액 키(용역계약 한정).
+FREELANCER_ZERO_HIDDEN_KEYS = {"base_salary", "non_tax_meal_allowance", "taxable_allowance"}
+# 기타 기재사항에서 원문 키 대신 보여줄 이름(용역계약 한정).
+FREELANCER_EXTRA_LABELS = {
+    "employment_tax_type": "세무 처리 구분",
+    "terms": "추가 특약",
+    "termination_terms": "계약 해지 및 기성 정산",
+    "confidentiality_terms": "비밀유지 및 자료보호",
+}
+# 내부 코드값 → 한글. 오비서 화면(index.html wageTypeLabels 등)과 같은 문구를 쓴다.
+CODE_VALUE_LABELS = {
+    "wage_type": {"hourly": "시급", "monthly": "월급", "daily": "일급", "case_fee": "건별 용역비"},
+    "employment_tax_type": {
+        "four_insurance": "4대보험 가입 근로자",
+        "freelancer_33": "3.3% 프리랜서 원천징수",
+    },
+    "workplace_size_category": {"under_5": "상시 5인 미만", "five_plus": "상시 5인 이상"},
+    "meal_provision": {"employer_meal": "사용자 식사 제공", "cash_no_meal": "식사 미제공 · 현금 식대"},
+}
+FREELANCER_DOCUMENT_KIND = "freelancer_service_contract"
 # PDF 에 싣지 않는 키: 내부 식별자·감사 원문·서명 증적(별도 섹션에 표시)
 HIDDEN_FIELDS = {
     "id",
@@ -196,6 +237,65 @@ def _mask_email(email: str) -> str:
     return f"{local[:2]}{'*' * max(1, len(local) - 2)}@{domain}"
 
 
+def is_freelancer_snapshot(snapshot: dict[str, Any]) -> bool:
+    return (
+        str(snapshot.get("contract_type") or "") == "freelancer"
+        or str(snapshot.get("document_kind") or "") == FREELANCER_DOCUMENT_KIND
+    )
+
+
+def display_value(key: str, value: Any) -> Any:
+    """내부 코드값(case_fee 등)을 한글로 바꾼다. 모르는 값은 원문 그대로 둔다."""
+    mapping = CODE_VALUE_LABELS.get(key)
+    if mapping and isinstance(value, str):
+        return mapping.get(value.strip(), value)
+    return value
+
+
+def _is_zero_amount(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return value == 0
+    if isinstance(value, str):
+        try:
+            return float(value.replace(",", "").strip()) == 0
+        except ValueError:
+            return False
+    return False
+
+
+def term_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
+    """'계약 조건' 표 행. 용역계약은 용역계약 용어와 생략 규칙을 적용한다."""
+    freelancer = is_freelancer_snapshot(snapshot)
+    rows: list[tuple[str, Any]] = []
+    for key, name in TERM_FIELDS:
+        value = snapshot.get(key)
+        if not _text(value):
+            continue
+        if freelancer:
+            if key in FREELANCER_SKIPPED_KEYS or (key in FREELANCER_ZERO_HIDDEN_KEYS and _is_zero_amount(value)):
+                continue
+            name = FREELANCER_TERM_LABELS.get(key, name)
+        rows.append((name, display_value(key, value)))
+    return rows
+
+
+def extra_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
+    """'기타 기재사항' 표 행. 용역계약만 알려진 키에 한글 이름을 붙인다."""
+    freelancer = is_freelancer_snapshot(snapshot)
+    known = {key for key, _ in PARTY_FIELDS + EMPLOYEE_FIELDS + TERM_FIELDS} | HIDDEN_FIELDS
+    rows: list[tuple[str, Any]] = []
+    for key in sorted(snapshot):
+        if key in known or not _text(snapshot[key]):
+            continue
+        if freelancer and key in FREELANCER_SKIPPED_KEYS:
+            continue
+        name = FREELANCER_EXTRA_LABELS.get(key, key) if freelancer else key
+        rows.append((name, display_value(key, snapshot[key])))
+    return rows
+
+
 def render_signed_contract_pdf(contract: dict[str, Any]) -> bytes:
     """봉인 스냅샷으로 서명본 PDF 바이트를 만든다. 같은 입력이면 같은 바이트가 나온다."""
     snapshot = contract.get("signed_snapshot")
@@ -245,6 +345,7 @@ def render_signed_contract_pdf(contract: dict[str, Any]) -> bytes:
         return [(name, snapshot.get(key)) for key, name in fields if _text(snapshot.get(key))]
 
     contract_type = str(snapshot.get("contract_type") or "")
+    freelancer = is_freelancer_snapshot(snapshot)
     consent = snapshot.get("signature_consent") if isinstance(snapshot.get("signature_consent"), dict) else {}
     audit = snapshot.get("signature_audit") if isinstance(snapshot.get("signature_audit"), dict) else {}
     story: list[Any] = [
@@ -263,16 +364,15 @@ def render_signed_contract_pdf(contract: dict[str, Any]) -> bytes:
                 ("계약일", snapshot.get("contract_date")),
             ]
         ),
-        para("사용자(사업주)", heading),
+        para("위탁자(사업주)" if freelancer else "사용자(사업주)", heading),
         table(rows_for(PARTY_FIELDS) or [("상호", "")]),
-        para("근로자(계약 상대방)", heading),
+        para("수급인(계약 상대방)" if freelancer else "근로자(계약 상대방)", heading),
         table(rows_for(EMPLOYEE_FIELDS) + [("계정", snapshot.get("employee_email_masked") or _mask_email(snapshot.get("employee_email") or ""))]),
     ]
-    terms = rows_for(TERM_FIELDS)
+    terms = term_rows(snapshot)
     if terms:
         story += [para("계약 조건", heading), table(terms)]
-    known = {key for key, _ in PARTY_FIELDS + EMPLOYEE_FIELDS + TERM_FIELDS} | HIDDEN_FIELDS
-    extra = [(key, snapshot[key]) for key in sorted(snapshot) if key not in known and _text(snapshot[key])]
+    extra = extra_rows(snapshot)
     if extra:
         story += [para("기타 기재사항", heading), table(extra)]
 
@@ -307,7 +407,11 @@ def render_signed_contract_pdf(contract: dict[str, Any]) -> bytes:
         para(f"자필서명 SHA-256: {snapshot.get('signature_sha256') or ''}", small),
         para(
             "이 문서는 전자서명 시점에 봉인된 계약 내용(signed_snapshot)으로 생성되었습니다. "
-            "근로기준법 제17조에 따른 근로조건 서면 명시·교부 증빙으로 보관됩니다.",
+            + (
+                "용역계약 체결·교부 및 검수·정산 증빙으로 보관됩니다."
+                if freelancer
+                else "근로기준법 제17조에 따른 근로조건 서면 명시·교부 증빙으로 보관됩니다."
+            ),
             small,
         ),
     ]

@@ -10,7 +10,7 @@
  * 배포 시 셸을 바꾸면 CACHE_VERSION 을 올린다. 셸은 네트워크 우선이라 버전을
  * 깜빡해도 온라인 상태에서는 새 파일을 받는다. 캐시는 오프라인 안내용 사본이다.
  */
-const CACHE_VERSION = "obys-clock-shell-20261003-r5";
+const CACHE_VERSION = "obys-clock-shell-20261008-r1";
 const CACHE_PREFIX = "obys-clock-shell-";
 const APP_SHELL = [
   "/static/apps/obys/clock.html",

@@ -5307,7 +5307,7 @@
       hourly: "시급",
       monthly: "월급",
       daily: "일급",
-      case_fee: "건별/용역비"
+      case_fee: "건별 용역비"
     };
     const contractStatusLabels = {
       draft: ["작성중", "info"],
@@ -8102,7 +8102,7 @@
         : "";
       return `
         <h3>${previewText(title, "계약서")}</h3>
-        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · 근무지점 ${previewText(contractValue(contract, "branch"))} · A4 210mm x 297mm · 최신양식 v2026.07.23 · ${isFreelancerContract ? "고용노동부 노무제공자 공통 표준계약서 기준 참고" : isConfidentialityContract ? "부속 서약서" : "고용노동부 표준근로계약서 기준 참고"}</p>
+        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · ${isFreelancerContract ? "수행 지점" : "근무지점"} ${previewText(contractValue(contract, "branch"))} · A4 210mm x 297mm · 최신양식 v2026.07.23 · ${isFreelancerContract ? "고용노동부 노무제공자 공통 표준계약서 기준 참고" : isConfidentialityContract ? "부속 서약서" : "고용노동부 표준근로계약서 기준 참고"}</p>
         <div class="legal-basis">${escapeHtml(legalBasisText)}</div>
         ${commonMeta}
         ${legalChecklistHtml}
