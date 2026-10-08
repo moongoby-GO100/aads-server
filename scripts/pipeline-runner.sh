@@ -507,6 +507,57 @@ record_runner_event() {
                WHERE job_id='${job_id}';" 2>/dev/null || true
 }
 
+# R-001 (2026-10-08 개정): 작업 결과를 핸드오버 DB 에 upsert 하고 같은 entry_key 를 다시 읽어 확인한다.
+# 쓰기는 app.services.handover_store(scripts/runner_handover_write.py)를 그대로 쓴다 — 새 쓰기 경로 없음.
+# 실패해도 작업을 실패시키지 않는다(보수적 단계): runner_event(handover_db_write_failed)와
+# review_feedback 의 "핸드오버 DB 미기록" 표시만 남긴다. 끄는 법: RUNNER_HANDOVER_DB_WRITE=0
+runner_handover_record() {
+    local job_id="$1" stage="${2:-awaiting_approval}"
+    [[ "${RUNNER_HANDOVER_DB_WRITE:-1}" == "1" ]] || return 0
+    [[ "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ ]] || return 0
+    local helper repo_root payload="" out="" rc=0 last="" reason=""
+    helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_handover_write.py"
+    repo_root="$(dirname "$(dirname "$helper")")"
+    payload=$(db_exec "SELECT json_build_object('tenant_id', tenant_id, 'project', project, 'job_id', job_id,
+                              'stage', $(sql_escape "$stage")::text,
+                              'job', json_build_object('instruction', left(COALESCE(instruction,''), 4000),
+                                  'commit_hash', commit_hash, 'status', status,
+                                  'review_verdict', review_verdict, 'review_score', review_score,
+                                  'result_output', left(COALESCE(result_output,''), 6000),
+                                  'changed_files', COALESCE(actual_changed_files, '[]'::jsonb)))::text
+                       FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null) || payload=""
+    if [[ -z "${payload//[[:space:]]/}" ]]; then
+        reason="job_row_unavailable"
+    elif [[ ! -f "$helper" ]]; then
+        reason="helper_missing"
+    elif [[ "$DB_MODE" == "docker" ]]; then
+        local container=""
+        container=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^aads-server(-blue|-green)?$' | head -1) || container=""
+        if [[ -z "$container" ]]; then
+            reason="aads_server_container_not_found"
+        else
+            out=$(printf '%s' "$payload" | timeout 60 docker exec -i -w /app "$container" python3 -c "$(cat "$helper")" 2>&1) || rc=$?
+        fi
+    else
+        out=$(cd "$repo_root" && printf '%s' "$payload" | PGHOST="$PGHOST" PGPORT="${PGPORT:-5432}" PGUSER="$PGUSER" PGPASSWORD="$PGPASSWORD" PGDATABASE="$PGDATABASE" timeout 60 python3 "$helper" 2>&1) || rc=$?
+    fi
+    if [[ -z "$reason" ]]; then
+        last=$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -n1)
+        if [[ "$rc" -eq 0 && "$last" == *'"ok": true'* ]]; then
+            local revision=""
+            revision=$(printf '%s' "$last" | sed -n 's/.*"revision": \([0-9][0-9]*\).*/\1/p')
+            log "  HANDOVER_DB_WRITTEN job=$job_id stage=$stage entry_key=runner:${job_id} revision=${revision:-?}"
+            record_runner_event "$job_id" "handover_db_written" "info" "" "" "" "" "" "{\"stage\":\"${stage}\",\"entry_key\":\"runner:${job_id}\",\"revision\":${revision:-0}}" >/dev/null 2>&1 || true
+            return 0
+        fi
+        reason=$(printf '%s' "${last:-rc=${rc}}" | tr -d '"\\\n\r' | head -c 200)
+    fi
+    log "  HANDOVER_DB_WRITE_FAILED job=$job_id stage=$stage reason=${reason} — 작업은 계속"
+    record_runner_event "$job_id" "handover_db_write_failed" "info" "" "" "" "" "" "{\"stage\":\"${stage}\",\"entry_key\":\"runner:${job_id}\",\"reason\":\"$(printf '%s' "$reason" | tr -d '"\\' | head -c 200)\"}" >/dev/null 2>&1 || true
+    db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || $(sql_escape "[Runner] 핸드오버 DB 미기록 (stage=${stage}): ${reason}"), updated_at=NOW() WHERE job_id='${job_id}';" >/dev/null 2>&1 || true
+    return 0
+}
+
 runner_job_touch() {
     local _jid="$1"
     [[ "$_jid" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
@@ -1672,7 +1723,9 @@ job_was_requeued() {
 # 재큐잉 job 의 워크트리에서 지시서 밖 변경(추가/미추적 파일 포함)을 찾는다.
 # 2026-10-06 이전 실행이 재생성된 경로의 다른 main 커밋을 자기 산출물로 읽었고,
 # 신규 파일(A)을 제외한 검사는 관계없는 DR02 파일 4개를 통과시켰다.
-# docs/HANDOVER.md 는 R-001 예외다. 위반 파일은 되돌리거나 지우지 않고 보존한다.
+# HANDOVER.md 는 지시서 밖 변경으로 세지 않는다 — R-001(2026-10-08 개정)상 커밋에서
+# 자동 제외되고(commit_job_worktree_for_approval), RUNNER_ALLOW_HANDOVER_MD=1 일 때만
+# 커밋되는데 그 경우는 예전과 같이 허용한다. 위반 파일은 되돌리거나 지우지 않고 보존한다.
 # stdout: 위반 경로(한 줄에 하나). 반환: 0=위반 없음/적용 대상 아님, 1=위반 있음.
 # 끄는 법: RUNNER_REQUEUE_SCOPE_GUARD=0
 requeue_scope_violations() {
@@ -1783,6 +1836,39 @@ commit_job_worktree_for_approval() {
         if ! git -C "$worktree_dir" diff --cached --quiet -- .runner_full_diff.patch 2>/dev/null; then
             _fail_job "$job_id" "$session_id" "approval_commit_stage_failed" "awaiting_approval 거부 — .runner_full_diff.patch 를 스테이징에서 제외하지 못함(워크트리 보존)"
             return 1
+        fi
+    fi
+    # R-001 (2026-10-08 개정): 핸드오버는 DB 에만 기록한다. 2026-10-08 origin/main 커밋 10건 중
+    # 6건이 HANDOVER.md 를 건드려 병행 러너 stale_base 가 반복됐다(runner-da20bef8, runner-8abceeea).
+    # HANDOVER.md 변경은 스테이징에서만 뺀다 — 워크트리 파일은 그대로 둔다.
+    # RUNNER_ALLOW_HANDOVER_MD=1 이면 예전처럼 커밋한다.
+    if [[ "${RUNNER_ALLOW_HANDOVER_MD:-0}" != "1" ]]; then
+        local _ho_path _ho_lines _ho_files="" _ho_total=0 _ho_still=0
+        while IFS= read -r _ho_path; do
+            case "$_ho_path" in
+                HANDOVER.md|*/HANDOVER.md) ;;
+                *) continue ;;
+            esac
+            _ho_lines=$(git -C "$worktree_dir" diff --cached --numstat -- "$_ho_path" 2>/dev/null | awk '{ if ($1 ~ /^[0-9]+$/) a += $1; if ($2 ~ /^[0-9]+$/) d += $2 } END { print a + d + 0 }')
+            if git -C "$worktree_dir" cat-file -e "HEAD:${_ho_path}" 2>/dev/null; then
+                git -C "$worktree_dir" reset -q HEAD -- "$_ho_path" >/dev/null 2>&1 || true
+            else
+                git -C "$worktree_dir" rm --cached -q --ignore-unmatch -- "$_ho_path" >/dev/null 2>&1 || true
+            fi
+            if ! git -C "$worktree_dir" diff --cached --quiet -- "$_ho_path" 2>/dev/null; then
+                _ho_still=1
+                continue
+            fi
+            _ho_total=$((_ho_total + ${_ho_lines:-0}))
+            _ho_files+="${_ho_files:+,}\"$(printf '%s' "$_ho_path" | tr -d '"\\')\":${_ho_lines:-0}"
+            log "  HANDOVER_MD_EXCLUDED job=$job_id file=$_ho_path lines=${_ho_lines:-0} — 스테이징에서 제외(워크트리 보존, 핸드오버는 DB)" >&2
+        done < <(git -C "$worktree_dir" -c core.quotePath=false diff --cached --name-only 2>/dev/null)
+        if [[ "$_ho_still" -eq 1 ]]; then
+            _fail_job "$job_id" "$session_id" "approval_commit_stage_failed" "awaiting_approval 거부 — HANDOVER.md 를 스테이징에서 제외하지 못함(워크트리 보존)"
+            return 1
+        fi
+        if [[ -n "$_ho_files" ]]; then
+            record_runner_event "$job_id" "handover_md_excluded" "info" "" "" "" "" "" "{\"files\":{${_ho_files}},\"lines\":${_ho_total}}" >/dev/null 2>&1 || true
         fi
     fi
     # 워커가 격리 워크트리 안에서 자기 변경을 이미 커밋해 두는 경우가 있다.
@@ -3276,6 +3362,7 @@ recover_review_hold_job() {
 
     log "  REVIEW_HOLD_RECOVERED job=$job_id sha=$commit_sha — 승인 대기로 이동"
     record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "" "" "" "" "{\"commit_hash\":\"${commit_sha}\",\"source\":\"review_hold_recovery\"}"
+    runner_handover_record "$job_id" "awaiting_approval"
     post_to_chat "$session_id" "🔁 [Pipeline Runner] review_hold 산출물 복구 완료: $job_id — 재검수를 통과한 diff 그대로 커밋(${commit_sha:0:8})하고 승인 대기로 옮겼습니다. 푸시·배포는 기존 승인 경로에서 진행됩니다."
     _notify_ai "$job_id"
     return 0
@@ -3653,6 +3740,12 @@ run_job() {
         fi
 
         approved_document_brief=$(approved_document_runner_brief "$job_id" "$project")
+        # R-001 (2026-10-08 개정): 핸드오버는 DB 에만 기록한다. RUNNER_ALLOW_HANDOVER_MD=1 이면 이 줄을 넣지 않는다.
+        local handover_md_rule=""
+        if [[ "${RUNNER_ALLOW_HANDOVER_MD:-0}" != "1" ]]; then
+            handover_md_rule="8. [R-001] HANDOVER.md 수정 금지 — 핸드오버는 DB(handover_write 또는 POST /api/v1/handovers)에만 기록합니다. HANDOVER.md 변경은 러너 커밋에서 자동 제외됩니다.
+"
+        fi
 
         # H7: 빌드/배포 가드 v2.1 — Claude Code가 직접 배포하지 않도록 방지
         safe_instruction="[필수 규칙 — 반드시 준수]
@@ -3675,7 +3768,7 @@ run_job() {
    - 2계정 스위치: AUTH_TOKEN(1순위) → API_KEY_FALLBACK(2순위) → Gemini LiteLLM(3순위)
    - 외부 LLM(Gemini/DeepSeek): 반드시 LiteLLM 프록시 경유, 직접 REST API 호출 금지
    - 중앙 클라이언트: anthropic_client.py의 call_llm_with_fallback() 사용
-
+${handover_md_rule}
 위 규칙을 위반하면 작업이 거부됩니다.
 ${aag_brief}
 [프로젝트 문서 조회 결과]
@@ -4201,6 +4294,7 @@ ${_untracked_files}"
                        completed_at=NOW(), updated_at=NOW()
                        WHERE job_id='${job_id}';"
             record_runner_event "$job_id" "job_terminal" "done" "done" "$job_model" "" "$job_size" "" "{\"read_only\":true,\"changed_files\":0}"
+            runner_handover_record "$job_id" "done"
             post_to_chat "$session_id" "✅ [Pipeline Runner] read-only 작업 완료: $job_id — 변경사항 없이 실행 결과를 저장했습니다.
 
 \`\`\`
@@ -4577,6 +4671,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
         return 1
     fi
     record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "$job_model" "" "$job_size" "" "{\"commit_hash\":\"${approval_commit_sha}\",\"review_verdict\":\"${review_verdict}\"}"
+    runner_handover_record "$job_id" "awaiting_approval"
 
     local diff_summary="${git_diff:0:3000}"
     local approval_diff_stat=""
@@ -4882,6 +4977,7 @@ review_rebased_aads_sha() {
         return 1
     fi
     record_runner_event "$job_id" "approval_requested" "awaiting_approval" "awaiting_approval" "" "" "" "" "{\"commit_hash\":\"${sha}\",\"review_verdict\":\"APPROVE\"}"
+    runner_handover_record "$job_id" "awaiting_approval"
     post_to_chat "$session_id" "🔔 [Pipeline Runner] origin/main 위 새 SHA AI 재검수 통과. 새 SHA 승인 필요: $job_id (${sha})"
     _notify_ai "$job_id"
     promote_next_queued "AADS"
@@ -5115,6 +5211,7 @@ aads_finalize_deploy_queued_jobs() {
                     RETURNING job_id;" 2>/dev/null) || claimed=""
                 if [[ "${claimed// /}" == "$job_id" ]]; then
                     record_runner_event "$job_id" "job_terminal" "done" "done" "" "" "" "" "{\"deploy_queued_finalized\":\"live\",\"slot\":\"${slot}\"}"
+                    runner_handover_record "$job_id" "done"
                     post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 반영 확인 — 운영 슬롯 ${slot} 에 커밋 ${sha:0:12} 반영됨: $job_id"
                     log "  DEPLOY_QUEUED_FINALIZED job=$job_id -> done slot=${slot}"
                     _notify_ai "$job_id"
@@ -5583,6 +5680,7 @@ deploy_job() {
             return 1
         fi
         record_runner_event "$job_id" "job_terminal" "done" "deploy_already_present" "" "" "" "" "{\"sha\":\"${current_sha}\"}"
+        runner_handover_record "$job_id" "done"
         _release_deploy_lock "$project" "$job_id"
         _notify_ai "$job_id"
         promote_next_queued "$project"
@@ -5617,6 +5715,7 @@ deploy_job() {
                    review_feedback=COALESCE(review_feedback,'') || E'\n[게이트] 지시서의 배포 금지 제약에 따라 push 까지만 수행하고 빌드·배포를 건너뜀',
                    deployed_at=NULL, completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
         record_runner_event "$job_id" "job_terminal" "done" "push_only_by_directive" "" "" "" "" "{\"reason\":\"deploy_forbidden_by_instruction\"}"
+        runner_handover_record "$job_id" "done"
         post_to_chat "$session_id" "✅ [Pipeline Runner] 지시서 제약에 따라 push 까지만 수행했습니다 (빌드·배포 건너뜀): $job_id — 릴리스가 필요하면 별도 승인 후 진행하십시오."
         _release_deploy_lock "$project" "$job_id"
         _notify_ai "$job_id"
@@ -6184,6 +6283,7 @@ deploy_job() {
                    review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] backend_health=${health_ok} frontend_health=${frontend_health_ok} by=${RUNNER_HOSTNAME}',
                    deployed_at=NOW(), completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
         record_runner_event "$job_id" "job_terminal" "done" "done" "" "" "" "" "{\"backend_health\":\"${health_ok}\",\"frontend_health\":\"${frontend_health_ok}\"}"
+        runner_handover_record "$job_id" "done"
         _generate_wrap "$job_id" "$project" "${priority:-P2}" "${title:-$job_id}"
         post_to_chat "$session_id" "✅ [Pipeline Runner] 배포 완료 (backend=${health_ok} frontend=${frontend_health_ok})"
         log "  DEPLOYED job=$job_id backend_health=$health_ok frontend_health=$frontend_health_ok"

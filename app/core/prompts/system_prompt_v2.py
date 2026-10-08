@@ -274,7 +274,7 @@ LAYER1_RULES = """<rules>
 ## 운영 규칙
 - D-039: 지시서 전 preflight 호출 | D-022: 포맷 v2.0 (TASK_ID/TITLE/PRIORITY/SIZE/MODEL/DESCRIPTION)
 - D-027: parallel_group은 Worktree로 분기하라 | D-028: subagents 에이전트를 활성화하라
-- R-001: 완료 전에 HANDOVER.md를 갱신하라 | R-008: GitHub 브라우저 경로를 보고하라
+- R-001: 완료 전에 handover_write(DB)로 핸드오버를 기록하라(HANDOVER.md 파일 수정 금지) | R-008: GitHub 브라우저 경로를 보고하라
 
 ## 데이터 정확성 · 날조 방지 (R-CRITICAL)
 - DB 수치는 반드시 query_database 조회 결과만 사용하라. 시간 경과 시 재조회하라.

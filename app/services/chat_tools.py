@@ -550,7 +550,7 @@ DESCRIPTION: |
   {title}
 SUCCESS_CRITERIA: |
   작업이 정상적으로 완료되고 검증됨
-HANDOVER.md 업데이트 포함
+핸드오버를 handover_write(DB)로 기록 (HANDOVER.md 파일 수정 금지)
 >>>DIRECTIVE_END"""
 
     return {"directive_text": directive_text, "task_id": f"{project_prefix}-{next_num}"}

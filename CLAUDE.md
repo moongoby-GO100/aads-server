@@ -24,7 +24,9 @@ FastAPI 0.115, PostgreSQL 15, LangGraph 1.0.10, Docker Compose, Python 3.11, Nex
 ## CEO 절대 규칙
 - CEO-DIRECTIVES: https://raw.githubusercontent.com/moongoby-GO100/aads-docs/main/CEO-DIRECTIVES.md
 - 핵심: Supavisor 금지, langgraph-supervisor 금지, LLM 15회/task, 비용 효율 최우선
-- HANDOVER 업데이트 없이 완료 선언 금지 (R-001)
+- 핸드오버는 DB(`handover_write` 또는 `POST /api/v1/handovers`)에만 기록한다. `HANDOVER.md` 파일 수정 금지 — 러너 커밋에서 자동 제외된다 (R-001, 2026-10-08 개정)
+  - 개정 이유: 2026-10-08 origin/main 커밋 10건 중 6건이 HANDOVER.md 를 수정해 병행 러너가 stale_base 를 반복했다(runner-da20bef8, runner-8abceeea). runner-1869c109 는 HANDOVER.md 에 코드 250줄을 붙여넣어 반려됐다.
+  - 조항 원문은 `AGENTS.md` 의 "핸드오버 기록" 이다(R-RELEASE: 규칙 두 벌 금지). 여기에 다시 적지 않는다.
 - GitHub 브라우저 경로로 보고 (R-008)
 
 ## API 키 보안 절대 규칙 (R-KEY)

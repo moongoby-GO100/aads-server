@@ -214,6 +214,7 @@ get_job_status() { echo awaiting_approval; }
 get_job_instruction() { echo test; }
 looks_like_git_diff() { return 0; }
 record_runner_event() { :; }
+runner_handover_record() { :; }
 post_to_chat() { :; }
 _notify_ai() { :; }
 promote_next_queued() { :; }
@@ -274,6 +275,7 @@ get_job_status() { echo running; }
 get_job_instruction() { echo test; }
 looks_like_git_diff() { return 0; }
 record_runner_event() { :; }
+runner_handover_record() { :; }
 post_to_chat() { :; }
 _notify_ai() { :; }
 promote_next_queued() { :; }
@@ -316,6 +318,7 @@ record_git_diagnostics() { :; }
 approved_sha_is_live() { :; }
 get_job_status() { echo done; }
 record_runner_event() { :; }
+runner_handover_record() { :; }
 _release_deploy_lock() { :; }
 _notify_ai() { :; }
 promote_next_queued() { :; }

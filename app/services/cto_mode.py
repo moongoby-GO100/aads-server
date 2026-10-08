@@ -390,7 +390,7 @@ ACCEPTANCE_CRITERIA:
 COMPLETION:
   - 모든 ACCEPTANCE_CRITERIA 충족
   - 테스트 통과
-  - HANDOVER.md 업데이트
+  - 핸드오버를 handover_write(DB)로 기록 (HANDOVER.md 파일 수정 금지)
   - Git 커밋
 >>>DIRECTIVE_END
 """
