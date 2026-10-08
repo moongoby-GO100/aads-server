@@ -1,0 +1,831 @@
+<!doctype html>
+<!--
+  언니냉면 조리법 — fb.newtalk.kr/unni-naengmyeon/recipes (카페24 ACCT 앱이 로그인 확인 후 응답).
+  원본: aads-dashboard src/app/unni-naengmyeon/recipes/page.tsx · page.module.css (d4f62c6, 2026-10-06).
+  카페24 이전(ACCT-CAFE24-MOVE-YEOLJEONG-UNNI-20261008)으로 fb 경로의 정본은 이 파일이다.
+  조리 기준을 바꿀 때는 이 파일을 고친다.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f45d48">
+<meta name="robots" content="noindex, nofollow">
+<title>언니냉면 조리법 | 레시피 가이드</title>
+<meta name="description" content="언니냉면 성신여대점의 면 삶기, 냉면, 묵사발, 사이드 메뉴 조리 기준입니다.">
+<link rel="canonical" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">
+<style>
+body { margin: 0; }
+.page {
+  --cream: #fff8ea;
+  --paper: #fffcf5;
+  --coral: #f45d48;
+  --coral-dark: #d94232;
+  --green: #173e35;
+  --green-soft: #28584c;
+  --ink: #18322c;
+  --muted: #6c746f;
+  min-height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  line-height: 1.6;
+}
+
+.page * { box-sizing: border-box; }
+.page a { color: inherit; text-decoration: none; }
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  min-height: 84px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 10px max(24px, calc((100% - 1160px) / 2));
+  border-bottom: 1px solid rgba(23, 62, 53, .12);
+  background: rgba(255, 248, 234, .94);
+  backdrop-filter: blur(16px);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 26px;
+  font-weight: 950;
+  letter-spacing: -.06em;
+}
+
+.brand img {
+  width: 58px;
+  height: 58px;
+  border-radius: 14px;
+  object-fit: cover;
+  mix-blend-mode: multiply;
+}
+
+.header nav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  color: var(--green);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.header nav a {
+  padding: 9px 0;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, .7fr);
+  gap: 48px;
+  align-items: end;
+  padding: 96px max(24px, calc((100% - 1160px) / 2)) 76px;
+  background: var(--cream);
+}
+
+.heroCopy > span,
+.sectionHeading > span {
+  display: block;
+  color: var(--coral);
+  font-size: 12px;
+  font-weight: 950;
+  letter-spacing: .18em;
+}
+
+.hero h1 {
+  margin: 16px 0 20px;
+  font-size: clamp(52px, 6vw, 86px);
+  font-weight: 950;
+  letter-spacing: -.07em;
+  line-height: 1.04;
+}
+
+.hero p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.heroPanel {
+  display: grid;
+  gap: 8px;
+  padding: 32px;
+  border-radius: 24px;
+  background: var(--green);
+  color: white;
+  box-shadow: 0 20px 55px rgba(23, 62, 53, .14);
+}
+
+.heroPanel b {
+  color: #f7b8aa;
+  font-size: 13px;
+  letter-spacing: .08em;
+}
+
+.heroPanel p {
+  color: white;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: -.04em;
+  line-height: 1.35;
+}
+
+.heroPanel small {
+  color: rgba(255, 255, 255, .68);
+  font-size: 12px;
+}
+
+.printActions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.printActions button {
+  min-width: 110px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--coral);
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 900;
+  padding: 12px 18px;
+}
+
+.printActions button:last-child {
+  background: var(--green);
+}
+
+.noodleSection,
+.recipeSection {
+  padding: 86px max(24px, calc((100% - 1160px) / 2));
+}
+
+.recipeSection {
+  padding-top: 60px;
+}
+
+.sectionHeading {
+  margin-bottom: 30px;
+}
+
+.sectionHeading h2 {
+  margin: 8px 0 0;
+  font-size: clamp(34px, 4vw, 54px);
+  font-weight: 950;
+  letter-spacing: -.06em;
+  line-height: 1.15;
+}
+
+.noodleSteps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: noodle;
+}
+
+.noodleSteps li {
+  min-height: 190px;
+  padding: 28px 22px;
+  border: 1px solid rgba(23, 62, 53, .12);
+  border-radius: 22px;
+  background: white;
+  color: var(--green);
+  font-size: 16px;
+  font-weight: 780;
+  box-shadow: 0 14px 36px rgba(23, 62, 53, .06);
+  counter-increment: noodle;
+}
+
+.noodleSteps li::before {
+  content: counter(noodle, decimal-leading-zero);
+  display: block;
+  margin-bottom: 24px;
+  color: var(--coral);
+  font-size: 13px;
+  font-weight: 950;
+  letter-spacing: .12em;
+}
+
+.recipeGrid,
+.sideGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.recipeCard {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(23, 62, 53, .12);
+  border-radius: 24px;
+  background: white;
+  box-shadow: 0 15px 42px rgba(23, 62, 53, .06);
+}
+
+.recipeImage {
+  position: relative;
+  height: 230px;
+  overflow: hidden;
+  background: #e8e3d8;
+}
+
+.recipeImage img {
+  object-fit: cover;
+  transform: scale(1.45);
+  transform-origin: 50% 47%;
+}
+
+.recipeBody {
+  padding: 26px 28px 30px;
+}
+
+.recipeIndex {
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--coral);
+  color: white;
+  font-size: 11px;
+  font-weight: 950;
+  letter-spacing: .08em;
+}
+
+.recipeTitleRow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed rgba(23, 62, 53, .18);
+}
+
+.recipeTitleRow h3 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 950;
+  letter-spacing: -.05em;
+}
+
+.recipeTitleRow small {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: #fee7dc;
+  color: var(--coral-dark);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.recipeCard ol {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0 0;
+  padding-left: 22px;
+  color: var(--green-soft);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.recipeCard li::marker {
+  color: var(--coral);
+  font-weight: 950;
+}
+
+.sideGrid .recipeCard {
+  display: flex;
+}
+
+.sideGrid .recipeBody {
+  width: 100%;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 44px max(24px, calc((100% - 1160px) / 2));
+  background: #102f29;
+  color: rgba(255, 255, 255, .7);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.footer a {
+  color: white;
+}
+
+@media (max-width: 900px) {
+  .header {
+    min-height: auto;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 18px;
+  }
+
+  .brand {
+    font-size: 22px;
+  }
+
+  .brand img {
+    width: 46px;
+    height: 46px;
+  }
+
+  .header nav {
+    width: 100%;
+    gap: 18px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 28px;
+    padding: 70px 20px 52px;
+  }
+
+  .hero h1 {
+    font-size: 52px;
+  }
+
+  .hero p {
+    font-size: 16px;
+  }
+
+  .noodleSection,
+  .recipeSection {
+    padding: 64px 18px;
+  }
+
+  .noodleSteps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .recipeGrid,
+  .sideGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .hero h1 {
+    font-size: 44px;
+  }
+
+  .heroPanel {
+    padding: 24px;
+  }
+
+  .heroPanel p {
+    font-size: 20px;
+  }
+
+  .noodleSteps {
+    grid-template-columns: 1fr;
+  }
+
+  .noodleSteps li {
+    min-height: 0;
+  }
+
+  .recipeImage {
+    height: 190px;
+  }
+
+  .recipeBody {
+    padding: 22px 20px 24px;
+  }
+
+  .recipeTitleRow {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@page {
+  size: A4;
+  margin: 10mm;
+}
+
+@media print {
+  .page {
+    --paper: #fff;
+    --cream: #fff;
+    min-height: auto;
+    background: #fff;
+    color: #111;
+    font-size: 10.5pt;
+    line-height: 1.38;
+  }
+
+  .header,
+  .printActions,
+  .footer {
+    display: none !important;
+  }
+
+  .hero,
+  .noodleSection,
+  .recipeSection {
+    padding: 0;
+  }
+
+  .hero {
+    display: grid;
+    grid-template-columns: 1fr 82mm;
+    gap: 8mm;
+    align-items: start;
+    margin-bottom: 8mm;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 6mm;
+  }
+
+  .heroCopy > span,
+  .sectionHeading > span {
+    color: #c63d30;
+    font-size: 8pt;
+    letter-spacing: .08em;
+  }
+
+  .hero h1 {
+    margin: 3mm 0 2mm;
+    font-size: 28pt;
+    letter-spacing: 0;
+    line-height: 1.05;
+  }
+
+  .hero p {
+    max-width: none;
+    color: #333;
+    font-size: 10pt;
+  }
+
+  .heroPanel {
+    gap: 2mm;
+    padding: 5mm;
+    border: 1px solid #173e35;
+    border-radius: 0;
+    background: #fff;
+    color: #111;
+    box-shadow: none;
+  }
+
+  .heroPanel b,
+  .heroPanel p,
+  .heroPanel small {
+    color: #111;
+  }
+
+  .heroPanel p {
+    font-size: 12pt;
+    letter-spacing: 0;
+  }
+
+  .sectionHeading {
+    margin-bottom: 3mm;
+    break-after: avoid;
+  }
+
+  .sectionHeading h2 {
+    margin-top: 1mm;
+    font-size: 18pt;
+    letter-spacing: 0;
+  }
+
+  .noodleSection {
+    margin-bottom: 7mm;
+  }
+
+  .noodleSteps {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 3mm;
+  }
+
+  .noodleSteps li {
+    min-height: 0;
+    padding: 4mm;
+    border-color: #ccc;
+    border-radius: 0;
+    box-shadow: none;
+    color: #111;
+    font-size: 10pt;
+    break-inside: avoid;
+  }
+
+  .noodleSteps li::before {
+    margin-bottom: 2mm;
+    color: #c63d30;
+    font-size: 8pt;
+  }
+
+  .recipeSection {
+    margin-top: 0;
+    padding-top: 0;
+  }
+
+  .recipeGrid,
+  .sideGrid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 3mm;
+  }
+
+  .recipeCard {
+    border-color: #ccc;
+    border-radius: 0;
+    box-shadow: none;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .recipeImage {
+    height: 32mm;
+  }
+
+  .recipeImage img {
+    transform: scale(1.18);
+  }
+
+  .recipeBody {
+    padding: 4mm;
+  }
+
+  .recipeIndex {
+    width: 8mm;
+    height: 8mm;
+    background: #c63d30;
+    color: #fff;
+    font-size: 7pt;
+  }
+
+  .recipeTitleRow {
+    gap: 2mm;
+    margin-top: 2mm;
+    padding-bottom: 2mm;
+  }
+
+  .recipeTitleRow h3 {
+    font-size: 13pt;
+    letter-spacing: 0;
+  }
+
+  .recipeTitleRow small {
+    border-radius: 0;
+    font-size: 7pt;
+  }
+
+  .recipeCard ol {
+    gap: 1.5mm;
+    margin-top: 2.5mm;
+    padding-left: 5mm;
+    color: #222;
+    font-size: 9pt;
+  }
+}
+
+/* next/image fill 대체 */
+.recipeImage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+</style>
+</head>
+<body>
+<main class="page">
+  <header class="header">
+    <a class="brand" href="/unni-naengmyeon" aria-label="언니냉면 홈">
+      <img src="/brands/unni-naengmyeon/bowlcut-logo-concepts-20260722/concept-h-wordmark-noodles.png" alt="언니냉면 로고" width="1254" height="1254">
+      <span>언니냉면</span>
+    </a>
+    <nav aria-label="언니냉면 조리법 메뉴">
+      <a href="https://unni.newtalk.kr">홈</a>
+      <a href="#noodle">면삶기</a>
+      <a href="#main-recipes">주메뉴</a>
+      <a href="#side-recipes">사이드</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <div class="heroCopy">
+      <span>RECIPE STANDARD</span>
+      <h1>언니냉면<br>조리법 가이드</h1>
+      <p>면 삶기부터 냉면, 묵사발, 사이드 메뉴까지 매장 조리 기준을 한 화면에서 확인할 수 있게 정리했습니다.</p>
+    </div>
+    <div class="heroPanel">
+      <b>기본 토핑 순서</b>
+      <p>다대기 → 달걀 반쪽 → 무김치 → 오이 → 깨가루 → 땅콩가루</p>
+      <small>토핑은 순서대로 예쁘게 올립니다.</small>
+    </div>
+    <div class="printActions" aria-label="레시피 출력 도구">
+      <button type="button" onclick="window.print()">A4 출력</button>
+      <button type="button" onclick="window.print()">PDF 저장</button>
+    </div>
+  </section>
+
+  <section class="noodleSection" id="noodle">
+    <div class="sectionHeading">
+      <span>COMMON PROCESS</span>
+      <h2>면삶기</h2>
+    </div>
+    <ol class="noodleSteps">
+      <li>찬물에 면을 한번 씻어서 삶는다.</li>
+      <li>해면기에 1분 30초 삶는다. 삶을 때 채망을 중간중간 몇 번 흔들어준다.</li>
+      <li>찬물 흐르는 물에 30초~1분 정도 충분히 빨아준다.</li>
+      <li>물기를 꽉 짜서 육수에 한번 버무린 후 다시 꽉 짜서 용기에 담는다.</li>
+    </ol>
+  </section>
+
+  <section class="recipeSection" id="main-recipes">
+    <div class="sectionHeading">
+      <span>MAIN MENU</span>
+      <h2>주메뉴 레시피</h2>
+    </div>
+    <div class="recipeGrid">
+      <article class="recipeCard">
+        <div class="recipeImage"><img src="/brands/unni-naengmyeon/menu/nas-water-naengmyeon.jpg" alt="물냉면 조리 참고 이미지" loading="lazy" decoding="async"></div>
+        <div class="recipeBody">
+          <span class="recipeIndex">01</span>
+          <div class="recipeTitleRow"><h3>물냉면</h3></div>
+          <ol>
+            <li>면에 육수를 묻혀서 국물을 짜고 용기에 펼쳐 담는다.</li>
+            <li>다대기 30g(큰스푼 기준 반스푼)을 올린다.</li>
+            <li>토핑은 달걀 반쪽, 무김치, 오이, 깨가루, 땅콩가루 순서로 예쁘게 올린다.</li>
+            <li>육수 500cc를 붓는다.</li>
+          </ol>
+        </div>
+      </article>
+      <article class="recipeCard">
+        <div class="recipeImage"><img src="/brands/unni-naengmyeon/menu/nas-bibim-bul-naengmyeon.jpg" alt="비빔냉면 조리 참고 이미지" loading="lazy" decoding="async"></div>
+        <div class="recipeBody">
+          <span class="recipeIndex">02</span>
+          <div class="recipeTitleRow"><h3>비빔냉면</h3></div>
+          <ol>
+            <li>면에 육수 1스푼을 충분히 묻힌 뒤 국물을 짜서 용기에 담는다.</li>
+            <li>참기름을 4바퀴 정도 뿌리고 비벼준다.</li>
+            <li>다대기 150g(큰스푼 기준 3스푼)을 넣는다.</li>
+            <li>토핑은 달걀 반쪽, 무김치, 오이, 깨가루, 땅콩가루 순서로 예쁘게 올린다.</li>
+            <li>육수 1통 500cc를 함께 제공한다.</li>
+          </ol>
+        </div>
+      </article>
+      <article class="recipeCard">
+        <div class="recipeImage"><img src="/brands/unni-naengmyeon/menu/nas-water-naengmyeon.jpg" alt="언니냉면 조리 참고 이미지" loading="lazy" decoding="async"></div>
+        <div class="recipeBody">
+          <span class="recipeIndex">03</span>
+          <div class="recipeTitleRow"><h3>언니냉면</h3></div>
+          <ol>
+            <li>면에 육수를 충분히 묻혀 국물을 짜서 용기에 담는다.</li>
+            <li>면에 참기름을 조금 넣는다.</li>
+            <li>다대기 50g(큰스푼 기준 1스푼)을 올린다.</li>
+            <li>토핑은 달걀 반쪽, 무김치, 오이, 깨가루, 땅콩가루 순서로 예쁘게 올린다.</li>
+            <li>육수 500cc를 함께 제공한다.</li>
+          </ol>
+        </div>
+      </article>
+      <article class="recipeCard">
+        <div class="recipeImage"><img src="/brands/unni-naengmyeon/menu/nas-bibim-bul-naengmyeon.jpg" alt="불냉면 조리 참고 이미지" loading="lazy" decoding="async"></div>
+        <div class="recipeBody">
+          <span class="recipeIndex">04</span>
+          <div class="recipeTitleRow"><h3>불냉면</h3><small>비빔냉면 레시피 기준</small></div>
+          <ol>
+            <li>비빔냉면 레시피를 동일하게 준비한다.</li>
+            <li>단, 매운다대기 100g(2스푼)과 다대기 50g(1스푼)을 추가한다.</li>
+            <li>매운다대기 레시피: 육수 300cc, 베트남 고춧가루 100g, 냉면다대기 400g을 섞어 준비한다.</li>
+          </ol>
+        </div>
+      </article>
+      <article class="recipeCard">
+        <div class="recipeImage"><img src="/brands/unni-naengmyeon/menu/nas-pollack-naengmyeon.jpg" alt="명태회냉면 조리 참고 이미지" loading="lazy" decoding="async"></div>
+        <div class="recipeBody">
+          <span class="recipeIndex">05</span>
+          <div class="recipeTitleRow"><h3>명태회냉면</h3></div>
+          <ol>
+            <li>면에 육수를 충분히 묻혀 국물을 짜서 용기에 담는다.</li>
+            <li>면에 참기름을 조금 넣는다.</li>
+            <li>다대기 50g(큰스푼 기준 1스푼)을 올린다.</li>
+            <li>명태회 130g, 달걀 반쪽, 무김치, 오이, 깨가루, 땅콩가루 순서로 예쁘게 토핑한다.</li>
+            <li>육수 500cc를 함께 제공한다.</li>
+          </ol>
+        </div>
+      </article>
+      <article class="recipeCard">
+        <div class="recipeImage"><img src="/brands/unni-naengmyeon/menu/nas-muksabal.jpg" alt="묵사발 조리 참고 이미지" loading="lazy" decoding="async"></div>
+        <div class="recipeBody">
+          <span class="recipeIndex">06</span>
+          <div class="recipeTitleRow"><h3>묵사발</h3></div>
+          <ol>
+            <li>묵 250g을 찬물에 2번 정도 흐르는 물로 씻고 물기를 빼서 냉면그릇에 담는다.</li>
+            <li>묵 위에 자른 김치, 오이, 김가루 듬뿍, 깨가루, 참기름 조금을 올린다.</li>
+            <li>육수 500cc는 육수그릇에 담는다.</li>
+            <li>※ 묵은 실온에 보관한다. 냉장보관 시 묵이 끊어진다.</li>
+          </ol>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="recipeSection" id="side-recipes">
+    <div class="sectionHeading">
+      <span>SIDE MENU</span>
+      <h2>사이드 메뉴 조리법</h2>
+    </div>
+    <div class="sideGrid">
+      <article class="recipeCard">
+        <div class="recipeBody">
+          <span class="recipeIndex">01</span>
+          <div class="recipeTitleRow"><h3>등심 돈까스</h3></div>
+          <ol>
+            <li>160도에서 5분 튀긴다.</li>
+            <li>원형그릇에 담는다.</li>
+          </ol>
+        </div>
+      </article>
+      <article class="recipeCard">
+        <div class="recipeBody">
+          <span class="recipeIndex">02</span>
+          <div class="recipeTitleRow"><h3>전 종류</h3></div>
+          <ol>
+            <li>160도에서 3분 튀긴다.</li>
+            <li>4각 그릇에 담는다.</li>
+          </ol>
+        </div>
+      </article>
+      <article class="recipeCard">
+        <div class="recipeBody">
+          <span class="recipeIndex">03</span>
+          <div class="recipeTitleRow"><h3>함박스테이크</h3></div>
+          <ol>
+            <li>160도에서 2분 30초 튀긴다.</li>
+            <li>2개는 4각그릇, 4개는 원형그릇에 담는다.</li>
+          </ol>
+        </div>
+      </article>
+      <article class="recipeCard">
+        <div class="recipeBody">
+          <span class="recipeIndex">04</span>
+          <div class="recipeTitleRow"><h3>군만두</h3></div>
+          <ol>
+            <li>160도에서 3분 튀긴다.</li>
+            <li>4각 그릇에 담는다.</li>
+          </ol>
+        </div>
+      </article>
+      <article class="recipeCard">
+        <div class="recipeBody">
+          <span class="recipeIndex">05</span>
+          <div class="recipeTitleRow"><h3>찐만두</h3></div>
+          <ol>
+            <li>전자렌지에 4분 조리한다.</li>
+            <li>4각그릇에 담는다.</li>
+          </ol>
+        </div>
+      </article>
+      <article class="recipeCard">
+        <div class="recipeBody">
+          <span class="recipeIndex">06</span>
+          <div class="recipeTitleRow"><h3>새우</h3></div>
+          <ol>
+            <li>160도에서 3분 튀긴다.</li>
+            <li>4각 그릇에 담는다.</li>
+          </ol>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <a href="https://unni.newtalk.kr">언니냉면 홈페이지로 돌아가기</a>
+    <span>서울특별시 성북구 동소문로 90 1층</span>
+  </footer>
+</main>
+</body>
+</html>

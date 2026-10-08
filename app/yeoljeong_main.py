@@ -15,7 +15,15 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.auth as auth_module
-from app.api import acct_purchase, auth, obys_collections, obys_finance, obys_inventory, obys_workspaces
+from app.api import (
+    acct_purchase,
+    auth,
+    obys_collections,
+    obys_finance,
+    obys_inventory,
+    obys_workspaces,
+    unni_naengmyeon,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -77,11 +85,28 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/auth/login",
     "/api/v1/auth/register",
     "/api/v1/auth/me",
+    # 언니냉면 공개 문의 폼(비로그인 고객). 라우터가 IP 당 빈도 제한·허니팟을 건다.
+    "/api/v1/unni-naengmyeon/inquiries",
+    # 조리법 화면은 미인증이면 401 JSON 이 아니라 로그인 화면으로 보내야 하므로
+    # 미들웨어를 통과시키고 라우트가 직접 판정한다(unni_recipes).
+    "/unni-naengmyeon",
     "/static",
     "/docs",
     "/openapi.json",
     "/redoc",
 )
+
+
+def _request_token_payload(request: Request) -> dict | None:
+    """Bearer 헤더, 없으면 aads_token 쿠키(오비서 로그인 시 함께 심는다)의 JWT 를 검증한다."""
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        cookie_token = auth_module.extract_aads_cookie_token(request)
+        if cookie_token:
+            auth_header = f"Bearer {cookie_token}"
+    if auth_header.startswith("Bearer "):
+        return auth_module.verify_token(auth_header[7:]) or None
+    return None
 
 
 @app.middleware("http")
@@ -94,16 +119,10 @@ async def jwt_auth_middleware(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    auth_header = request.headers.get("authorization", "")
-    if not auth_header.startswith("Bearer "):
-        cookie_token = auth_module.extract_aads_cookie_token(request)
-        if cookie_token:
-            auth_header = f"Bearer {cookie_token}"
-    if auth_header.startswith("Bearer "):
-        payload = auth_module.verify_token(auth_header[7:])
-        if payload:
-            request.state.user = payload
-            return await call_next(request)
+    payload = _request_token_payload(request)
+    if payload:
+        request.state.user = payload
+        return await call_next(request)
 
     return JSONResponse(status_code=401, content={"detail": "인증이 필요합니다. Bearer 토큰을 제공하세요."})
 
@@ -129,6 +148,25 @@ app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"
 app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])
 app.include_router(obys_workspaces.router, prefix="/api/v1", tags=["obys-workspaces"])
 app.include_router(obys_collections.router, prefix="/api/v1", tags=["obys-collections"])
+app.include_router(unni_naengmyeon.router, prefix="/api/v1", tags=["unni-naengmyeon"])
+
+# 언니냉면 조리법(직원용). fb.newtalk.kr 이 카페24로 옮겨 오면서 contabo116 대시보드(Next)의
+# 서버 렌더링 대신 이 앱이 오비서 로그인 여부만 확인해 정적 HTML 을 돌려준다. 공개 화면
+# (/unni-naengmyeon/, brand/*) 과 이미지는 카페24 apache 가 정적 스냅샷에서 직접 낸다
+# (scripts/deploy_unni_naengmyeon_cafe24.sh, config/apache/fb-cafe24.conf BEGIN-UNNI).
+_UNNI_RECIPES_HTML = pathlib.Path(__file__).resolve().parent / "sites" / "unni_naengmyeon" / "recipes.html"
+_UNNI_RECIPES_LOGIN = "/static/apps/obys/index.html?redirect=/unni-naengmyeon/recipes"
+
+
+@app.api_route("/unni-naengmyeon/recipes", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/unni-naengmyeon/recipes/", methods=["GET", "HEAD"], include_in_schema=False)
+async def unni_recipes(request: Request):
+    no_store = {"Cache-Control": "private, no-store"}
+    if not _request_token_payload(request):
+        return RedirectResponse(_UNNI_RECIPES_LOGIN, status_code=302, headers=no_store)
+    if not _UNNI_RECIPES_HTML.is_file():
+        return JSONResponse(status_code=404, content={"detail": "Not Found"}, headers=no_store)
+    return FileResponse(_UNNI_RECIPES_HTML, media_type="text/html", headers=no_store)
 
 _static_dir = pathlib.Path(__file__).resolve().parent / "static"
 _obys_index = _static_dir / "apps" / "obys" / "index.html"
