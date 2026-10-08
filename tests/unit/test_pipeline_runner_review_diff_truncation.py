@@ -25,6 +25,8 @@ FUNCS = (
     "review_diff_stat_section",
     "review_diff_truncation_notice",
     "build_review_diff_prefix",
+    "job_diff_changed_files",
+    "looks_like_git_diff",
 )
 
 
@@ -49,14 +51,27 @@ def test_runner_has_truncation_notice_and_stat_attachment():
     assert "head -c 6000" in _func(script, "review_diff_stat_section")
 
 
-def test_prefix_caps_match_shared_capture_caps():
-    """절단 판정 상한이 capture_job_diff_text 의 head -c 값과 갈라지면 고지가 거짓이 된다."""
+def test_caps_live_only_in_shared_capture_and_prefix_follows_truncated_marker():
+    """상한 숫자는 capture_job_diff_text 한 곳뿐이고, 앞머리는 거기서 만든 `# [TRUNCATED]` 줄로 잘림을 판정한다.
+
+    상한을 두 군데 두면(예전: head -c 와 cap_* 변수) 갈라지는 순간 고지가 거짓이 된다.
+    """
     script = _runner()
     shared = script[script.index(SHARED_BLOCK_BEGIN):script.index(SHARED_BLOCK_END)]
-    capture_caps = set(re.findall(r"head -c (\d+)", _func(shared, "capture_job_diff_text")))
+    capture_caps = set(re.findall(r"_job_diff_render \"\$repo\" (\d+)", _func(shared, "capture_job_diff_text")))
+    assert capture_caps == {"45000", "5000", "50000"}
+    assert "head -c 45000" not in shared
     prefix = _func(script, "build_review_diff_prefix")
-    prefix_caps = set(re.findall(r"cap_\w+=(\d+)", prefix))
-    assert capture_caps == prefix_caps == {"45000", "5000", "50000"}
+    assert not re.search(r"cap_\w+=\d+", prefix)
+    assert "# \\[TRUNCATED\\] " in prefix
+
+
+def test_exclude_specs_defined_once_in_shared_block_and_used_by_all_diff_readers():
+    script = _runner()
+    shared = script[script.index(SHARED_BLOCK_BEGIN):script.index(SHARED_BLOCK_END)]
+    assert shared.count("JOB_DIFF_EXCLUDE_SPECS=(") == 1
+    assert f":(exclude){PATCH_NAME}" in shared
+    assert "JOB_DIFF_EXCLUDE_SPECS[@]" in _func(script, "review_diff_stat_section")
 
 
 def test_review_request_uses_prefixed_diff_but_stores_raw_git_diff():
@@ -135,9 +150,15 @@ def repo(tmp_path):
 
 def _prefix(repo: Path, base: str) -> str:
     script = _runner()
-    body = "\n".join(_func(script, n) for n in FUNCS)
+    return _bash(repo, 'build_review_diff_prefix "$1" "$2"', base)
+
+
+def _bash(repo: Path, call: str, *args: str) -> str:
+    script = _runner()
+    shared = script[script.index(SHARED_BLOCK_BEGIN):script.index(SHARED_BLOCK_END)]
+    body = shared + "\n" + "\n".join(_func(script, n) for n in FUNCS)
     res = subprocess.run(
-        ["bash", "-c", f'set -eo pipefail\n{body}\nbuild_review_diff_prefix "$1" "$2"', "bash", str(repo), base],
+        ["bash", "-c", f'set -eo pipefail\n{body}\n{call}', "bash", str(repo), *args],
         capture_output=True, text=True,
     )
     assert res.returncode == 0, res.stderr
@@ -164,7 +185,8 @@ def test_truncated_diff_gets_notice_and_full_diffstat(repo):
 
     out = _prefix(repo, base)
 
-    assert out.startswith(f"[DIFF TRUNCATED] 전체 {full}B 중 앞 45000B 만 아래에 포함됨.")
+    assert out.startswith(f"[DIFF TRUNCATED] 전체 {full}B 중 앞 ")
+    assert 'diff 가 잘렸다. 생략 파일 목록을 근거로 "구현 없음" 판정을 하지 말 것.' in out
     assert "DIFFSTAT (전체 변경 파일 — 절단 없음)" in out
     # 45KB 뒤에 밀려 잘려 나가는 파일도 목록에는 있어야 한다.
     assert "tests/unit/test_late.py" in out
@@ -209,7 +231,7 @@ def test_no_base_branch_uses_single_cap(repo):
 
     out = _prefix(repo, "")
 
-    assert re.match(r"\[DIFF TRUNCATED\] 전체 \d+B 중 앞 50000B 만", out)
+    assert re.match(r"\[DIFF TRUNCATED\] 전체 \d+B 중 앞 \d+B 만", out)
     assert "app/big.py" in out
 
 
@@ -224,3 +246,159 @@ def test_git_add_all_does_not_use_exclude_pathspec_for_ignored_patch():
     for ln in lines:
         assert ":(exclude)" not in ln, ln
         assert f"reset -q -- {PATCH_NAME}" in ln, ln
+
+
+# ── 산출물 제외 · 코드 우선 · 순삭제 stat-only · 잘림 명시 ───────────────────
+
+
+def _capture(repo: Path, base: str) -> str:
+    return _bash(repo, 'capture_job_diff_text "$1" "$2"', base)
+
+
+def _artifact_repo(repo: Path) -> str:
+    """base 에 1,040줄 .runner_full_diff.patch 가 추적돼 있고, 변경에서 이를 삭제 + 코드 3개 추가."""
+    _write(repo, PATCH_NAME, "".join(f"-artifact line {i}\n" for i in range(1040)))
+    _git(repo, "add", "-A", "-f")
+    _git(repo, "commit", "-q", "-m", "tracked artifact")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "rm", "-q", PATCH_NAME)
+    _write(repo, ".gitignore", f"{PATCH_NAME}\n")
+    _write(repo, "app/controller.py", "".join(f"controller_{i} = {i}\n" for i in range(40)))
+    _write(repo, "app/job.py", "".join(f"job_{i} = {i}\n" for i in range(40)))
+    _write(repo, "tests/unit/test_controller.py", "def test_lock():\n    assert True\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "impl")
+    return base
+
+
+def test_artifact_deletion_is_excluded_and_all_code_bodies_are_included(repo):
+    base = _artifact_repo(repo)
+    raw = subprocess.run(["git", "-C", str(repo), "diff", f"{base}..HEAD"], capture_output=True, text=True).stdout
+    assert PATCH_NAME in raw and len(raw) > 10000  # 산출물이 원문 diff 를 부풀리는 상황 재현
+
+    out = _capture(repo, base)
+
+    assert f"a/{PATCH_NAME}" not in out  # .gitignore 본문에 이름이 한 줄 들어가는 것은 정상
+    assert "artifact line" not in out
+    for needle in ("controller_39 = 39", "job_39 = 39", "def test_lock():"):
+        assert needle in out
+    assert "[TRUNCATED]" not in out
+    # 코드 → 설정 순
+    assert out.index("diff --git a/app/controller.py") < out.index("diff --git a/.gitignore")
+
+
+def test_code_files_come_before_docs_and_config(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    _write(repo, "AAA_notes.md", "doc\n")
+    _write(repo, "config.yaml", "k: v\n")
+    _write(repo, "zzz/impl.py", "x = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "mixed")
+
+    out = _capture(repo, base)
+
+    heads = re.findall(r"^diff --git a/(\S+) ", out, flags=re.M)
+    assert heads == ["zzz/impl.py", "AAA_notes.md", "config.yaml"]
+
+
+def test_large_pure_deletion_becomes_stat_only_line(repo):
+    _write(repo, "old/legacy.py", "".join(f"legacy_{i} = {i}\n" for i in range(300)))
+    _write(repo, "old/small.py", "".join(f"small_{i} = {i}\n" for i in range(50)))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "legacy")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "rm", "-q", "old/legacy.py", "old/small.py")
+    _write(repo, "app/new.py", "new = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "drop")
+
+    out = _capture(repo, base)
+
+    assert "# [stat-only] old/legacy.py | -300 (pure deletion, body omitted)" in out
+    assert "legacy_299" not in out
+    # 200줄 미만 순삭제는 본문을 그대로 보인다.
+    assert "diff --git a/old/small.py b/old/small.py" in out
+    assert "-small_49 = 49" in out
+    assert "new = 1" in out
+
+
+def test_stat_only_deletion_alone_is_still_a_valid_review_diff(repo):
+    _write(repo, "old/legacy.py", "".join(f"legacy_{i} = {i}\n" for i in range(300)))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "legacy")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "rm", "-q", "old/legacy.py")
+    _git(repo, "commit", "-q", "-m", "drop")
+
+    out = _capture(repo, base)
+
+    assert out.startswith("# [stat-only] old/legacy.py")
+    res = subprocess.run(
+        ["bash", "-c", "set -eo pipefail\n" + _func(_runner(), "looks_like_git_diff") + '\nlooks_like_git_diff "$1"', "bash", out],
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert _bash(repo, 'job_diff_changed_files "$2"', out).strip() == "old/legacy.py"
+
+
+def test_over_cap_gets_truncated_footer_with_omitted_files(repo):
+    base = _commit_big_change(repo)
+
+    out = _capture(repo, base)
+
+    lines = out.split("\n")
+    assert lines[-1].startswith("# [TRUNCATED] 상한 45000바이트 — 생략된 파일: ")
+    assert "tests/unit/test_late.py" in lines[-1]
+    assert "app/big.py(일부만 포함)" in lines[-1]
+    body = "\n".join(lines[:-1])
+    assert len(body.encode("utf-8")) <= 45000
+    assert "diff --git a/app/big.py" in body
+    assert "test_late" not in body
+    assert _bash(repo, 'job_diff_changed_files "$2"', out).strip() == "app/big.py,tests/unit/test_late.py"
+
+
+def test_truncated_footer_lists_files_never_included_without_extra_git_calls(repo):
+    base = _commit_big_change(repo, extra_files=60)
+
+    out = _capture(repo, base)
+
+    footer = out.split("\n")[-1]
+    assert footer.startswith("# [TRUNCATED] 상한 45000바이트 — 생략된 파일: ")
+    assert "(외 " in footer and "개 생략)" in footer
+
+
+def test_multibyte_text_cut_at_cap_stays_valid_utf8(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    _write(repo, "app/ko.py", "".join(f"# 한글 주석 {i}\n" for i in range(8000)))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "ko")
+    script = _runner()
+    shared = script[script.index(SHARED_BLOCK_BEGIN):script.index(SHARED_BLOCK_END)]
+    res = subprocess.run(
+        ["bash", "-c", f'set -eo pipefail\n{shared}\ncapture_job_diff_text "$1" "$2"', "bash", str(repo), base],
+        capture_output=True,
+    )
+    assert res.returncode == 0
+    res.stdout.decode("utf-8")  # 깨진 바이트가 남으면 UnicodeDecodeError
+    assert b"# [TRUNCATED]" in res.stdout
+
+
+def test_review_prefix_for_truncated_diff_ignores_artifact_in_stat(repo):
+    base = _artifact_repo(repo)
+    _write(repo, "app/big.py", "".join(f"value_{i} = {i}\n" for i in range(6000)))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "big")
+
+    out = _prefix(repo, base)
+
+    assert out.startswith("[DIFF TRUNCATED]")
+    assert "app/controller.py" in out
+    assert PATCH_NAME not in out
+
+
+def test_prefix_accepts_already_captured_diff_as_third_arg(repo):
+    base = _commit_big_change(repo)
+    captured = _capture(repo, base)
+
+    assert _bash(repo, 'build_review_diff_prefix "$1" "$2" "$3"', base, captured) == _prefix(repo, base)
+    assert _bash(repo, 'build_review_diff_prefix "$1" "$2" "$3"', base, "diff --git a/x b/x") == ""

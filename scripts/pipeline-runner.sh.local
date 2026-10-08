@@ -1038,6 +1038,11 @@ looks_like_git_diff() {
         return 0
     fi
 
+    # 대용량 순삭제만 있는 변경은 본문 없이 이 한 줄로만 표현된다(capture_job_diff_text).
+    if grep -q '^# \[stat-only\] ' <<< "$content"; then
+        return 0
+    fi
+
     return 1
 }
 
@@ -1591,13 +1596,21 @@ ensure_approved_job_worktree() {
 # 그래서 복제하되 갈라지지 못하게 막는다: 두 사본이 한 바이트라도 달라지면
 # tests/unit/test_review_hold_commit_gap.py 가 즉시 실패한다.
 #
+# JOB_DIFF_EXCLUDE_SPECS
+#   리뷰·저장용 diff 에서 뺄 러너 산출물 pathspec — 이 배열이 유일한 정의다.
+#   .runner_full_diff.patch 는 러너가 사람 보라고 워크트리에 남기는 파일이라, 추적돼
+#   있던 시절 삭제분 1,040줄이 45000B 상한을 혼자 다 써서 실제 코드가 리뷰어에게
+#   안 보였다(2026-10-08 NTV2 runner-66f6cd82/023e89ff/2236f40d).
+#   git add 에는 ':(exclude)' 를 쓰지 않는다(.gitignore 파일이면 rc=1) — git diff 는 안전하다.
 # capture_job_diff_text
 #   러너가 pipeline_jobs.git_diff 에 저장하는 값을 그대로 만든다
 #   (base..HEAD 45000B + 미커밋 5000B, base 가 없거나 HEAD 와 같으면 50000B).
 #   스위퍼는 이 함수로 워크트리를 다시 읽어 "검수받은 diff 와 같은가" 를 본다.
-#   `|| true` 는 게으름이 아니다 — head 가 상한에서 읽기를 닫으면 git 은
-#   SIGPIPE(141)로 죽고 pipefail 이 그것을 그대로 돌려준다. 여기서 값을 비우면
-#   45KB 를 넘는 diff 가 통째로 사라진다. 잘린 앞부분은 이미 캡처돼 있다.
+#   파일별로 이어 붙인다: 코드 파일 → 대용량 순삭제(본문 대신 `# [stat-only]` 한 줄)
+#   → 문서·설정·lock 순. 상한에 걸리면 끝에 `# [TRUNCATED] 상한 N바이트 — 생략된 파일: …`
+#   을 붙인다(이 줄은 상한 바이트에 포함하지 않는다).
+#   파일 단위 git 호출은 상한에 닿기 전까지만 한다 — 이후 파일은 numstat 목록만으로 생략 처리.
+#   `|| true` 는 게으름이 아니다 — 개별 git 호출이 실패해도 이미 모은 앞부분을 버리면 안 된다.
 # normalize_job_diff
 #   두 diff 가 같은 변경인지 비교하기 위한 정규화. blob 해시(index 줄)와
 #   CR·줄끝 공백·빈 줄만 지운다. 내용 줄은 건드리지 않는다 — 여기서 과하게
@@ -1609,19 +1622,106 @@ ensure_approved_job_worktree() {
 #   러너의 pre_exec_sha(워크트리 생성 시점 HEAD)는 DB 에 남지 않는다.
 #   워크트리는 origin/main 에서 detach 로 만들어지므로 분기점(merge-base)이
 #   그 값과 같다.
+JOB_DIFF_EXCLUDE_SPECS=(':(exclude).runner_full_diff.patch' ':(exclude)RESULT-*.md')
+
+# 0=문서·설정·lock(뒤로 보낸다), 1=코드
+_job_diff_is_code() {
+    case "${1##*/}" in
+        *.md|*.rst|*.txt|*.adoc|*.json|*.yml|*.yaml|*.toml|*.ini|*.cfg|*.conf|*.lock|*.sum|*.snap|*.csv|.gitignore|.gitattributes|LICENSE*) return 1 ;;
+    esac
+    return 0
+}
+
+# stdout: 파일별로 이은 diff (최대 $2 바이트 + 끝의 TRUNCATED 줄). 나머지 인자는 git diff 범위 인자.
+_job_diff_render() {
+    local repo="$1" cap="$2"
+    shift 2
+    local LC_ALL=C
+    local add="" del="" path="" piece="" entry="" kind="" body="" line=""
+    local out="" remaining="$cap" truncated=0 sep=0 take=0 n_omitted=0 listed=""
+    local -a code=() docs=() stat_only=() queue=() omitted=()
+    while IFS=$'\t' read -r -d '' add del path; do
+        [[ -n "$path" ]] || continue
+        if [[ "$add" == "0" && "$del" =~ ^[0-9]+$ && "$del" -ge 200 ]]; then
+            stat_only+=("S${del} ${path}")
+        elif _job_diff_is_code "$path"; then
+            code+=("P${path}")
+        else
+            docs+=("P${path}")
+        fi
+    done < <(git -C "$repo" diff --numstat -z --no-renames "$@" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null)
+    queue=(${code[@]+"${code[@]}"} ${stat_only[@]+"${stat_only[@]}"} ${docs[@]+"${docs[@]}"})
+
+    local i
+    for (( i = 0; i < ${#queue[@]}; i++ )); do
+        entry="${queue[i]}"
+        kind="${entry:0:1}"
+        body="${entry:1}"
+        if [[ "$kind" == "S" ]]; then
+            path="${body#* }"
+            piece="# [stat-only] ${path} | -${body%% *} (pure deletion, body omitted)"
+        else
+            path="$body"
+            if (( truncated )); then
+                omitted+=("$path")
+                continue
+            fi
+            piece=$(git --literal-pathspecs -C "$repo" diff --no-renames "$@" -- "$path" 2>/dev/null) || piece=""
+            [[ -n "$piece" ]] || continue
+        fi
+        sep=0
+        [[ -n "$out" ]] && sep=1
+        if (( ${#piece} + sep <= remaining )); then
+            out+="${out:+$'\n'}${piece}"
+            remaining=$(( remaining - ${#piece} - sep ))
+            continue
+        fi
+        truncated=1
+        take=$(( remaining - sep ))
+        if [[ "$kind" == "P" ]] && (( take >= 2000 )); then
+            # 잘린 마지막 UTF-8 문자는 DB 경계(sql_escape)가 아니라 여기서 버린다.
+            line=$(printf '%s' "${piece:0:take}" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || line="${piece:0:take}"
+            out+="${out:+$'\n'}${line}"
+            omitted+=("${path}(일부만 포함)")
+        else
+            omitted+=("$path")
+        fi
+        remaining=0
+    done
+
+    if (( ${#omitted[@]} > 0 )); then
+        n_omitted=${#omitted[@]}
+        for (( i = 0; i < n_omitted && i < 50; i++ )); do
+            listed+="${listed:+, }${omitted[i]}"
+        done
+        (( n_omitted > 50 )) && listed+=" (외 $(( n_omitted - 50 ))개 생략)"
+        out+="${out:+$'\n'}# [TRUNCATED] 상한 ${cap}바이트 — 생략된 파일: ${listed}"
+    fi
+    printf '%s' "$out"
+    return 0
+}
+
+# stdout: 산출물 제외 후 전체 diff 바이트 수 (절단 고지용)
+_job_diff_full_bytes() {
+    local repo="$1"
+    shift
+    git -C "$repo" diff --no-renames "$@" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null | wc -c | tr -d '[:space:]'
+    return 0
+}
+
 capture_job_diff_text() {
     local repo="$1" base_sha="${2:-}"
     local head_sha="" diff_text="" uncommitted=""
     head_sha=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head_sha=""
     if [[ -n "$base_sha" && -n "$head_sha" && "$base_sha" != "$head_sha" ]]; then
-        diff_text=$(git -C "$repo" diff "${base_sha}..${head_sha}" 2>/dev/null | head -c 45000) || true
-        uncommitted=$(git -C "$repo" diff HEAD 2>/dev/null | head -c 5000) || true
+        diff_text=$(_job_diff_render "$repo" 45000 "${base_sha}..${head_sha}") || true
+        uncommitted=$(_job_diff_render "$repo" 5000 HEAD) || true
         if [[ -n "${uncommitted//[[:space:]]/}" ]]; then
             diff_text="${diff_text}
 ${uncommitted}"
         fi
     else
-        diff_text=$(git -C "$repo" diff HEAD 2>/dev/null | head -c 50000) || true
+        diff_text=$(_job_diff_render "$repo" 50000 HEAD) || true
     fi
     printf '%s' "$diff_text"
     return 0
@@ -1653,12 +1753,12 @@ resolve_job_base_sha() {
 # 반려했다(runner-0e9ce12d/0f81541a/67757d58). 잘렸다는 사실과 전체 변경 파일 목록을
 # 리뷰 요청 본문에만 앞머리로 붙인다. 공유 블록의 출력은 DB git_diff 와 스위퍼의
 # drift 비교 기준이라 건드리지 않는다 — 여기서 만든 앞머리는 저장하지 않는다.
-# 아래 상한은 capture_job_diff_text 의 head -c 값과 같아야 한다(단위 테스트가 대조).
+# 상한은 공유 블록(capture_job_diff_text)에만 둔다 — 여기서는 `# [TRUNCATED]` 줄로 잘림을 판정한다(단위 테스트가 대조).
 review_diff_stat_section() {
     local repo="$1" title="$2"
     shift 2
     local stat="" shown="" file_count=""
-    stat=$(git -C "$repo" diff --stat=200 "$@" 2>/dev/null) || stat=""
+    stat=$(git -C "$repo" diff --stat=200 --no-renames "$@" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null) || stat=""
     [[ -n "$stat" ]] || return 0
     if [[ $(printf '%s' "$stat" | wc -c) -le 6000 ]]; then
         printf 'DIFFSTAT (%s — 절단 없음)\n%s\n' "$title" "$stat"
@@ -1666,7 +1766,7 @@ review_diff_stat_section() {
     fi
     # 잘린 마지막 줄(반쪽 경로·깨진 UTF-8)은 버린다. 파일 수는 잘리지 않은 출력에서 센다.
     shown=$(head -c 6000 <<< "$stat" | sed '$d')
-    file_count=$(git -C "$repo" diff --name-only "$@" 2>/dev/null | wc -l | tr -d '[:space:]')
+    file_count=$(git -C "$repo" diff --name-only --no-renames "$@" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null | wc -l | tr -d '[:space:]')
     printf 'DIFFSTAT (%s — 앞부분만)\n%s\n[DIFFSTAT TRUNCATED — 파일 %s개]\n' "$title" "$shown" "${file_count:-0}"
     return 0
 }
@@ -1679,34 +1779,52 @@ review_diff_truncation_notice() {
 }
 
 # stdout: 잘렸으면 앞머리(고지 + diffstat + 구분선), 잘리지 않았으면 빈 출력.
+# 잘림 판정은 캡처 결과의 `# [TRUNCATED]` 줄이 기준이다 — 상한 숫자는 capture_job_diff_text
+# 한 곳에만 둔다. 세 번째 인자로 이미 캡처한 git_diff 를 받으면 다시 만들지 않는다.
 build_review_diff_prefix() {
     local repo="$1" base_sha="${2:-}"
-    local cap_committed=45000 cap_uncommitted=5000 cap_single=50000
+    local captured=""
+    if [[ $# -ge 3 ]]; then
+        captured="$3"
+    else
+        captured=$(capture_job_diff_text "$repo" "$base_sha") || captured=""
+    fi
+    grep -q '^# \[TRUNCATED\] ' <<< "$captured" || return 0
+
     local head_sha="" full_bytes=0 included_bytes=0 c_full=0 u_full=0
     head_sha=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head_sha=""
+    included_bytes=$(grep -v '^# \[\(TRUNCATED\|stat-only\)\] ' <<< "$captured" | wc -c | tr -d '[:space:]') || included_bytes=0
     local stat_text=""
     if [[ -n "$base_sha" && -n "$head_sha" && "$base_sha" != "$head_sha" ]]; then
-        c_full=$(git -C "$repo" diff "${base_sha}..${head_sha}" 2>/dev/null | wc -c | tr -d '[:space:]') || c_full=0
-        u_full=$(git -C "$repo" diff HEAD 2>/dev/null | wc -c | tr -d '[:space:]') || u_full=0
+        c_full=$(_job_diff_full_bytes "$repo" "${base_sha}..${head_sha}") || c_full=0
+        u_full=$(_job_diff_full_bytes "$repo" HEAD) || u_full=0
         full_bytes=$(( c_full + u_full ))
-        included_bytes=$(( (c_full > cap_committed ? cap_committed : c_full) + (u_full > cap_uncommitted ? cap_uncommitted : u_full) ))
-        if (( c_full <= cap_committed && u_full <= cap_uncommitted )); then
-            return 0
-        fi
         stat_text=$(review_diff_stat_section "$repo" "전체 변경 파일" "${base_sha}..${head_sha}")
         if (( u_full > 0 )); then
             stat_text="${stat_text}
 $(review_diff_stat_section "$repo" "미커밋 변경 — git diff HEAD --stat" HEAD)"
         fi
     else
-        full_bytes=$(git -C "$repo" diff HEAD 2>/dev/null | wc -c | tr -d '[:space:]') || full_bytes=0
-        (( full_bytes > cap_single )) || return 0
-        included_bytes=$cap_single
+        full_bytes=$(_job_diff_full_bytes "$repo" HEAD) || full_bytes=0
         stat_text=$(review_diff_stat_section "$repo" "전체 변경 파일" HEAD)
     fi
-    printf '%s\n%s\n=== DIFF (원문 시작) ===\n' \
-        "$(review_diff_truncation_notice "$full_bytes" "$included_bytes")" "$stat_text"
+    printf '%s\n%s\n%s\n=== DIFF (원문 시작) ===\n' \
+        "$(review_diff_truncation_notice "$full_bytes" "$included_bytes")" \
+        'diff 가 잘렸다. 생략 파일 목록을 근거로 "구현 없음" 판정을 하지 말 것.' \
+        "$stat_text"
     return 0
+}
+
+# git_diff 텍스트에서 변경 파일 목록(쉼표 구분)을 뽑는다. diff 헤더 외에
+# 본문이 생략된 파일(# [stat-only])과 상한으로 잘린 파일(# [TRUNCATED] 목록)도 넣는다.
+job_diff_changed_files() {
+    local text="$1"
+    {
+        grep '^diff --git' <<< "$text" | sed -e 's/^diff --git a\///' -e 's/ b\/.*//' || true
+        grep '^# \[stat-only\] ' <<< "$text" | sed -e 's/^# \[stat-only\] //' -e 's/ | -[0-9]* (pure deletion.*$//' || true
+        grep '^# \[TRUNCATED\] ' <<< "$text" | sed -e 's/^.*생략된 파일: //' | tr ',' '\n' \
+            | sed -e 's/^ *//' -e 's/ *(외 [0-9]*개 생략)$//' -e 's/(일부만 포함)$//' || true
+    } | sed '/^$/d' | awk '!seen[$0]++' | tr '\n' ',' | sed 's/,$//'
 }
 
 # 서버 재시작/러너 종료로 재큐잉된 적이 있는 job 인가 (review_feedback 의 재큐잉 표지).
@@ -4387,7 +4505,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     # 리뷰어에게 "잘렸다"는 사실을 알리는 앞머리 — 캡처와 같은 워크트리 상태에서(검수 전
     # 커밋·.runner_full_diff.patch 생성 이전) 계산한다. DB git_diff 에는 섞지 않는다.
     local review_diff_prefix=""
-    review_diff_prefix=$(build_review_diff_prefix "$workdir" "$pre_exec_sha") || review_diff_prefix=""
+    review_diff_prefix=$(build_review_diff_prefix "$workdir" "$pre_exec_sha" "$git_diff") || review_diff_prefix=""
     if [[ -n "$review_diff_prefix" ]]; then
         log "  REVIEW_DIFF_TRUNCATED_NOTICE job=$job_id — 리뷰 입력에 절단 고지 + DIFFSTAT 동봉"
     fi
@@ -4435,7 +4553,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             local review_response=""
             # diff에서 변경 파일 목록 추출
             local changed_files=""
-            changed_files=$(echo "$git_diff" | grep '^diff --git' | sed 's/diff --git a\///' | sed 's/ b\/.*//' | tr '\n' ',' | sed 's/,$//')
+            changed_files=$(job_diff_changed_files "$git_diff")
 
             # 리뷰 입력 = (잘렸을 때만) 절단 고지 앞머리 + git_diff. git_diff 자체는 그대로 저장된다.
             local review_diff="$git_diff"

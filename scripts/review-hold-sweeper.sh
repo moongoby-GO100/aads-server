@@ -96,13 +96,21 @@ sql_escape() {
 # 그래서 복제하되 갈라지지 못하게 막는다: 두 사본이 한 바이트라도 달라지면
 # tests/unit/test_review_hold_commit_gap.py 가 즉시 실패한다.
 #
+# JOB_DIFF_EXCLUDE_SPECS
+#   리뷰·저장용 diff 에서 뺄 러너 산출물 pathspec — 이 배열이 유일한 정의다.
+#   .runner_full_diff.patch 는 러너가 사람 보라고 워크트리에 남기는 파일이라, 추적돼
+#   있던 시절 삭제분 1,040줄이 45000B 상한을 혼자 다 써서 실제 코드가 리뷰어에게
+#   안 보였다(2026-10-08 NTV2 runner-66f6cd82/023e89ff/2236f40d).
+#   git add 에는 ':(exclude)' 를 쓰지 않는다(.gitignore 파일이면 rc=1) — git diff 는 안전하다.
 # capture_job_diff_text
 #   러너가 pipeline_jobs.git_diff 에 저장하는 값을 그대로 만든다
 #   (base..HEAD 45000B + 미커밋 5000B, base 가 없거나 HEAD 와 같으면 50000B).
 #   스위퍼는 이 함수로 워크트리를 다시 읽어 "검수받은 diff 와 같은가" 를 본다.
-#   `|| true` 는 게으름이 아니다 — head 가 상한에서 읽기를 닫으면 git 은
-#   SIGPIPE(141)로 죽고 pipefail 이 그것을 그대로 돌려준다. 여기서 값을 비우면
-#   45KB 를 넘는 diff 가 통째로 사라진다. 잘린 앞부분은 이미 캡처돼 있다.
+#   파일별로 이어 붙인다: 코드 파일 → 대용량 순삭제(본문 대신 `# [stat-only]` 한 줄)
+#   → 문서·설정·lock 순. 상한에 걸리면 끝에 `# [TRUNCATED] 상한 N바이트 — 생략된 파일: …`
+#   을 붙인다(이 줄은 상한 바이트에 포함하지 않는다).
+#   파일 단위 git 호출은 상한에 닿기 전까지만 한다 — 이후 파일은 numstat 목록만으로 생략 처리.
+#   `|| true` 는 게으름이 아니다 — 개별 git 호출이 실패해도 이미 모은 앞부분을 버리면 안 된다.
 # normalize_job_diff
 #   두 diff 가 같은 변경인지 비교하기 위한 정규화. blob 해시(index 줄)와
 #   CR·줄끝 공백·빈 줄만 지운다. 내용 줄은 건드리지 않는다 — 여기서 과하게
@@ -114,19 +122,106 @@ sql_escape() {
 #   러너의 pre_exec_sha(워크트리 생성 시점 HEAD)는 DB 에 남지 않는다.
 #   워크트리는 origin/main 에서 detach 로 만들어지므로 분기점(merge-base)이
 #   그 값과 같다.
+JOB_DIFF_EXCLUDE_SPECS=(':(exclude).runner_full_diff.patch' ':(exclude)RESULT-*.md')
+
+# 0=문서·설정·lock(뒤로 보낸다), 1=코드
+_job_diff_is_code() {
+    case "${1##*/}" in
+        *.md|*.rst|*.txt|*.adoc|*.json|*.yml|*.yaml|*.toml|*.ini|*.cfg|*.conf|*.lock|*.sum|*.snap|*.csv|.gitignore|.gitattributes|LICENSE*) return 1 ;;
+    esac
+    return 0
+}
+
+# stdout: 파일별로 이은 diff (최대 $2 바이트 + 끝의 TRUNCATED 줄). 나머지 인자는 git diff 범위 인자.
+_job_diff_render() {
+    local repo="$1" cap="$2"
+    shift 2
+    local LC_ALL=C
+    local add="" del="" path="" piece="" entry="" kind="" body="" line=""
+    local out="" remaining="$cap" truncated=0 sep=0 take=0 n_omitted=0 listed=""
+    local -a code=() docs=() stat_only=() queue=() omitted=()
+    while IFS=$'\t' read -r -d '' add del path; do
+        [[ -n "$path" ]] || continue
+        if [[ "$add" == "0" && "$del" =~ ^[0-9]+$ && "$del" -ge 200 ]]; then
+            stat_only+=("S${del} ${path}")
+        elif _job_diff_is_code "$path"; then
+            code+=("P${path}")
+        else
+            docs+=("P${path}")
+        fi
+    done < <(git -C "$repo" diff --numstat -z --no-renames "$@" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null)
+    queue=(${code[@]+"${code[@]}"} ${stat_only[@]+"${stat_only[@]}"} ${docs[@]+"${docs[@]}"})
+
+    local i
+    for (( i = 0; i < ${#queue[@]}; i++ )); do
+        entry="${queue[i]}"
+        kind="${entry:0:1}"
+        body="${entry:1}"
+        if [[ "$kind" == "S" ]]; then
+            path="${body#* }"
+            piece="# [stat-only] ${path} | -${body%% *} (pure deletion, body omitted)"
+        else
+            path="$body"
+            if (( truncated )); then
+                omitted+=("$path")
+                continue
+            fi
+            piece=$(git --literal-pathspecs -C "$repo" diff --no-renames "$@" -- "$path" 2>/dev/null) || piece=""
+            [[ -n "$piece" ]] || continue
+        fi
+        sep=0
+        [[ -n "$out" ]] && sep=1
+        if (( ${#piece} + sep <= remaining )); then
+            out+="${out:+$'\n'}${piece}"
+            remaining=$(( remaining - ${#piece} - sep ))
+            continue
+        fi
+        truncated=1
+        take=$(( remaining - sep ))
+        if [[ "$kind" == "P" ]] && (( take >= 2000 )); then
+            # 잘린 마지막 UTF-8 문자는 DB 경계(sql_escape)가 아니라 여기서 버린다.
+            line=$(printf '%s' "${piece:0:take}" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || line="${piece:0:take}"
+            out+="${out:+$'\n'}${line}"
+            omitted+=("${path}(일부만 포함)")
+        else
+            omitted+=("$path")
+        fi
+        remaining=0
+    done
+
+    if (( ${#omitted[@]} > 0 )); then
+        n_omitted=${#omitted[@]}
+        for (( i = 0; i < n_omitted && i < 50; i++ )); do
+            listed+="${listed:+, }${omitted[i]}"
+        done
+        (( n_omitted > 50 )) && listed+=" (외 $(( n_omitted - 50 ))개 생략)"
+        out+="${out:+$'\n'}# [TRUNCATED] 상한 ${cap}바이트 — 생략된 파일: ${listed}"
+    fi
+    printf '%s' "$out"
+    return 0
+}
+
+# stdout: 산출물 제외 후 전체 diff 바이트 수 (절단 고지용)
+_job_diff_full_bytes() {
+    local repo="$1"
+    shift
+    git -C "$repo" diff --no-renames "$@" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null | wc -c | tr -d '[:space:]'
+    return 0
+}
+
 capture_job_diff_text() {
     local repo="$1" base_sha="${2:-}"
     local head_sha="" diff_text="" uncommitted=""
     head_sha=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head_sha=""
     if [[ -n "$base_sha" && -n "$head_sha" && "$base_sha" != "$head_sha" ]]; then
-        diff_text=$(git -C "$repo" diff "${base_sha}..${head_sha}" 2>/dev/null | head -c 45000) || true
-        uncommitted=$(git -C "$repo" diff HEAD 2>/dev/null | head -c 5000) || true
+        diff_text=$(_job_diff_render "$repo" 45000 "${base_sha}..${head_sha}") || true
+        uncommitted=$(_job_diff_render "$repo" 5000 HEAD) || true
         if [[ -n "${uncommitted//[[:space:]]/}" ]]; then
             diff_text="${diff_text}
 ${uncommitted}"
         fi
     else
-        diff_text=$(git -C "$repo" diff HEAD 2>/dev/null | head -c 50000) || true
+        diff_text=$(_job_diff_render "$repo" 50000 HEAD) || true
     fi
     printf '%s' "$diff_text"
     return 0
