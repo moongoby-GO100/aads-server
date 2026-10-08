@@ -1168,3 +1168,202 @@ def _coro(value):
     async def _inner():
         return value
     return _inner()
+
+
+# ── edit_image: image_data / image_url / quality ──────────────────────────────
+
+import httpx  # noqa: E402
+
+import app.services.media_generation_service as mgs  # noqa: E402
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+def _png_b64(body: bytes = _PNG) -> str:
+    return base64.b64encode(body).decode()
+
+
+class _FakeOpenAI:
+    calls: list[dict] = []
+
+    def __init__(self, *a, **k):
+        self.images = SimpleNamespace(edit=self._edit)
+
+    async def _edit(self, **kwargs):
+        image = kwargs["image"]
+        entry = dict(kwargs)
+        entry["image_name"] = image.name
+        entry["image_bytes"] = image.read()
+        mask = kwargs.get("mask")
+        if mask is not None:
+            entry["mask_bytes"] = mask.read()
+        type(self).calls.append(entry)
+        return SimpleNamespace(data=[SimpleNamespace(b64_json=None, url="https://cdn.example/out.png")])
+
+
+@pytest.fixture
+def edit_env(monkeypatch):
+    import openai
+
+    _FakeOpenAI.calls = []
+    monkeypatch.setattr(openai, "AsyncOpenAI", _FakeOpenAI)
+    conn = _Conn()
+    svc = MediaGenerationService(settings_obj=_settings("sk-test"), pool_provider=lambda: _Pool(conn))
+    route = mgs.MediaRoute(
+        kind="edit_image", provider="openai", model_id="gpt-image-2.5-sunburst",
+        configured=True, supported=True,
+    )
+
+    async def _route(*a, **k):
+        return route
+
+    monkeypatch.setattr(svc, "resolve_route", _route)
+    return svc, conn
+
+
+@pytest.mark.asyncio
+async def test_edit_image_accepts_raw_base64(edit_env):
+    svc, conn = edit_env
+    result = await svc.edit_image("sunburst", input_refs={"image_data": _png_b64()})
+
+    assert result["status"] == "succeeded"
+    call = _FakeOpenAI.calls[0]
+    assert call["image_bytes"] == _PNG
+    assert call["image_name"].endswith(".png")
+    assert "quality" not in call
+    assert not Path(call["image_name"]).exists()  # 임시 파일 삭제됨
+    stored = conn.rows[result["job_id"]]["input_refs"]
+    assert "image_data" in stored and _png_b64() not in stored["image_data"]
+
+
+@pytest.mark.asyncio
+async def test_edit_image_accepts_data_url_and_mask(edit_env):
+    svc, _ = edit_env
+    result = await svc.edit_image(
+        "x",
+        input_refs={
+            "image_data": f"data:image/png;base64,{_png_b64()}",
+            "mask_data": f"data:image/png;base64,{_png_b64()}",
+        },
+    )
+
+    assert result["status"] == "succeeded"
+    call = _FakeOpenAI.calls[0]
+    assert call["image_bytes"] == _PNG
+    assert call["mask_bytes"] == _PNG
+
+
+@pytest.mark.asyncio
+async def test_edit_image_rejects_non_image_inputs(edit_env):
+    svc, _ = edit_env
+    for bad in (
+        "data:text/html;base64," + base64.b64encode(b"<html>").decode(),
+        base64.b64encode(b"just text, not an image").decode(),
+        "!!!not-base64!!!",
+    ):
+        result = await svc.edit_image("x", input_refs={"image_data": bad})
+        assert result["error"] == "INVALID_INPUT", bad
+    assert _FakeOpenAI.calls == []
+
+
+@pytest.mark.asyncio
+async def test_edit_image_rejects_oversize(edit_env, monkeypatch):
+    svc, _ = edit_env
+    monkeypatch.setattr(mgs, "MAX_EDIT_INPUT_BYTES", 64)
+    result = await svc.edit_image("x", input_refs={"image_data": _png_b64(_PNG + b"\x00" * 200)})
+
+    assert result["error"] == "INVALID_INPUT"
+    assert "exceeds" in result["message"]
+    assert _FakeOpenAI.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["http://127.0.0.1/a.png", "http://10.1.2.3/a.png", "http://169.254.169.254/x", "file:///etc/passwd"])
+async def test_edit_image_blocks_private_urls(edit_env, url):
+    svc, _ = edit_env
+    result = await svc.edit_image("x", input_refs={"image_url": url})
+
+    assert result["error"] == "INVALID_INPUT"
+    assert _FakeOpenAI.calls == []
+
+
+def _patch_http(monkeypatch, handler):
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        mgs.httpx, "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(handler), **kw),
+    )
+    monkeypatch.setattr(mgs, "_is_public_http_url", lambda u: "internal" not in u)
+
+
+@pytest.mark.asyncio
+async def test_edit_image_fetches_public_url(edit_env, monkeypatch):
+    svc, _ = edit_env
+    _patch_http(monkeypatch, lambda req: httpx.Response(200, content=_PNG))
+    result = await svc.edit_image("x", input_refs={"image_url": "https://img.example/a.png"})
+
+    assert result["status"] == "succeeded"
+    assert _FakeOpenAI.calls[0]["image_bytes"] == _PNG
+
+
+@pytest.mark.asyncio
+async def test_edit_image_url_redirect_to_private_is_blocked(edit_env, monkeypatch):
+    svc, _ = edit_env
+
+    def handler(req):
+        return httpx.Response(302, headers={"location": "http://internal.host/secret.png"})
+
+    _patch_http(monkeypatch, handler)
+    result = await svc.edit_image("x", input_refs={"image_url": "https://img.example/a.png"})
+
+    assert result["error"] == "INVALID_INPUT"
+    assert _FakeOpenAI.calls == []
+
+
+@pytest.mark.asyncio
+async def test_edit_image_url_redirect_limit(edit_env, monkeypatch):
+    svc, _ = edit_env
+    _patch_http(monkeypatch, lambda req: httpx.Response(302, headers={"location": "https://img.example/next"}))
+    result = await svc.edit_image("x", input_refs={"image_url": "https://img.example/a.png"})
+
+    assert result["error"] == "INVALID_INPUT"
+    assert "redirect" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_edit_image_source_priority_path_over_data(edit_env, tmp_path):
+    svc, _ = edit_env
+    local = tmp_path / "local.png"
+    local.write_bytes(b"LOCAL")
+    await svc.edit_image("x", input_refs={"image_path": str(local), "image_data": _png_b64()})
+
+    assert _FakeOpenAI.calls[0]["image_bytes"] == b"LOCAL"
+
+
+@pytest.mark.asyncio
+async def test_edit_image_quality_forwarded_and_validated(edit_env):
+    svc, _ = edit_env
+    ok = await svc.edit_image("x", input_refs={"image_data": _png_b64()}, quality="HIGH")
+    assert ok["status"] == "succeeded"
+    assert _FakeOpenAI.calls[0]["quality"] == "high"
+
+    bad = await svc.edit_image("x", input_refs={"image_data": _png_b64()}, quality="ultra")
+    assert bad["error"] == "INVALID_INPUT"
+    assert len(_FakeOpenAI.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_edit_image_requires_some_source(edit_env):
+    svc, _ = edit_env
+    result = await svc.edit_image("x", input_refs={})
+
+    assert result["error"] == "INVALID_INPUT"
+
+
+def test_edit_request_schema_backward_compatible():
+    from app.api.image import EditImageRequest
+
+    old = EditImageRequest(prompt="p", image_path="/tmp/a.png")
+    assert old.image_path == "/tmp/a.png" and old.quality is None
+    new = EditImageRequest(prompt="p", image_data="AAAA", mask_url="https://x/m.png", quality="low")
+    assert new.mask_url and new.quality == "low"

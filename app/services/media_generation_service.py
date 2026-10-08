@@ -17,7 +17,9 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import socket
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -213,6 +215,107 @@ def _is_public_http_url(url: str) -> bool:
         return all(ipaddress.ip_address(addr).is_global for addr in resolved)
     except ValueError:
         return False
+
+
+MAX_EDIT_INPUT_BYTES = 20 * 1024 * 1024
+EDIT_URL_TIMEOUT_SECONDS = 20.0
+EDIT_URL_MAX_REDIRECTS = 3
+EDIT_QUALITIES = ("low", "medium", "high", "auto")
+_INLINE_DATA_KEYS = ("image_data", "mask_data")
+
+
+class InvalidEditInput(ValueError):
+    """edit_image 입력이 잘못됨 (INVALID_INPUT 으로 보고)."""
+
+
+def _sniff_image_ext(body: bytes) -> str | None:
+    if body.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if body.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
+def _decode_inline_image(data: str, *, label: str) -> tuple[bytes, str]:
+    text = str(data or "").strip()
+    if text.startswith("data:"):
+        header, sep, payload = text.partition(",")
+        if not sep:
+            raise InvalidEditInput(f"{label}: malformed data URL")
+        meta = header[5:].split(";")
+        mime = meta[0].strip().lower()
+        if not mime.startswith("image/"):
+            raise InvalidEditInput(f"{label}: data URL MIME must be image/*")
+        if "base64" not in [m.strip().lower() for m in meta[1:]]:
+            raise InvalidEditInput(f"{label}: data URL must be base64")
+        text = payload
+    text = re.sub(r"\s+", "", text)
+    if not text:
+        raise InvalidEditInput(f"{label}: empty image data")
+    if len(text) * 3 // 4 > MAX_EDIT_INPUT_BYTES + 3:
+        raise InvalidEditInput(f"{label}: exceeds {MAX_EDIT_INPUT_BYTES} bytes")
+    try:
+        body = base64.b64decode(text, validate=True)
+    except Exception as exc:
+        raise InvalidEditInput(f"{label}: invalid base64") from exc
+    if len(body) > MAX_EDIT_INPUT_BYTES:
+        raise InvalidEditInput(f"{label}: exceeds {MAX_EDIT_INPUT_BYTES} bytes")
+    ext = _sniff_image_ext(body)
+    if not ext:
+        raise InvalidEditInput(f"{label}: not a PNG/JPEG/WEBP image")
+    return body, ext
+
+
+async def _fetch_image_url(url: str, *, label: str) -> tuple[bytes, str]:
+    current = str(url or "").strip()
+    async with httpx.AsyncClient(timeout=EDIT_URL_TIMEOUT_SECONDS, follow_redirects=False) as client:
+        for _hop in range(EDIT_URL_MAX_REDIRECTS + 1):
+            if not await asyncio.to_thread(_is_public_http_url, current):
+                raise InvalidEditInput(f"{label}: URL is not a public http(s) address")
+            async with client.stream("GET", current) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise InvalidEditInput(f"{label}: redirect without location")
+                    current = str(httpx.URL(current).join(location))
+                    continue
+                if response.status_code != 200:
+                    raise InvalidEditInput(f"{label}: fetch failed with HTTP {response.status_code}")
+                declared = response.headers.get("content-length")
+                if declared and declared.isdigit() and int(declared) > MAX_EDIT_INPUT_BYTES:
+                    raise InvalidEditInput(f"{label}: exceeds {MAX_EDIT_INPUT_BYTES} bytes")
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > MAX_EDIT_INPUT_BYTES:
+                        raise InvalidEditInput(f"{label}: exceeds {MAX_EDIT_INPUT_BYTES} bytes")
+                    chunks.append(chunk)
+                body = b"".join(chunks)
+                ext = _sniff_image_ext(body)
+                if not ext:
+                    raise InvalidEditInput(f"{label}: not a PNG/JPEG/WEBP image")
+                return body, ext
+    raise InvalidEditInput(f"{label}: too many redirects")
+
+
+def _redact_inline_refs(refs: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(refs)
+    for key in _INLINE_DATA_KEYS:
+        if out.get(key):
+            out[key] = f"<inline {len(str(out[key]))} chars>"
+    return out
+
+
+def _normalize_quality(quality: Any) -> str | None:
+    value = str(quality or "").strip().lower()
+    if not value:
+        return None
+    if value not in EDIT_QUALITIES:
+        raise InvalidEditInput(f"quality must be one of {', '.join(EDIT_QUALITIES)}")
+    return value
 
 
 def _secret_value(settings_obj: Any, name: str) -> str:
@@ -2697,17 +2800,22 @@ class MediaGenerationService:
         provider: str | None = None,
         requested_by: str | None = None,
         session_id: str | None = None,
+        quality: str | None = None,
     ) -> dict[str, Any]:
         if not str(prompt or "").strip():
             raise ValueError("프롬프트를 입력하세요")
         refs = dict(input_refs or {})
+        raw_quality = quality if quality else refs.get("quality")
         route = await self.resolve_route("edit_image", model_id=model_id, provider=provider)
+        stored_refs = {**_redact_inline_refs(refs), "size": size}
+        if raw_quality:
+            stored_refs["quality"] = raw_quality
         job = await self._insert_job(
             kind="edit_image",
             provider=route.provider,
             model_id=route.model_id,
             prompt=prompt,
-            input_refs={**refs, "size": size},
+            input_refs=stored_refs,
             status="queued" if route.provider in {"pc_local", "genspark_ui"} else "running",
             requested_by=requested_by,
             session_id=session_id,
@@ -2749,52 +2857,89 @@ class MediaGenerationService:
                 input_refs={**refs, "size": size},
                 route=route,
             )
-        image_path = refs.get("image_path") or refs.get("input_image_path")
-        if not image_path:
-            return await self._mark_failed(
-                job,
-                code="INVALID_INPUT",
-                message="edit_image requires image_path or input_image_path",
-                route=route,
-            )
         try:
-            result = await self._edit_openai_image(
-                prompt=prompt,
-                image_path=str(image_path),
-                mask_path=str(refs.get("mask_path") or "") or None,
-                size=size,
-                model_id=route.model_id,
+            normalized_quality = _normalize_quality(raw_quality)
+        except InvalidEditInput as exc:
+            return await self._mark_failed(job, code="INVALID_INPUT", message=str(exc), route=route)
+        workdir = tempfile.mkdtemp(prefix="aads-edit-")
+        try:
+            try:
+                image_path, mask_path = await self._materialize_edit_inputs(refs, workdir)
+            except InvalidEditInput as exc:
+                return await self._mark_failed(job, code="INVALID_INPUT", message=str(exc), route=route)
+            try:
+                result = await self._edit_openai_image(
+                    prompt=prompt,
+                    image_path=image_path,
+                    mask_path=mask_path,
+                    size=size,
+                    model_id=route.model_id,
+                    quality=normalized_quality,
+                )
+                metadata = {"provider": route.provider, "model_id": route.model_id, "size": size}
+                if normalized_quality:
+                    metadata["quality"] = normalized_quality
+                result, metadata, result_path = self._externalize_media_result(
+                    job_id=str(job.get("job_id") or ""),
+                    kind="edit_image",
+                    result=result,
+                    metadata=metadata,
+                )
+                await self.update_job_status(
+                    str(job.get("job_id") or ""),
+                    "succeeded",
+                    result_uri=result.get("url"),
+                    result_path=result_path,
+                    result_metadata=metadata,
+                )
+                result.update(
+                    {
+                        "job_id": job.get("job_id"),
+                        "kind": "edit_image",
+                        "status": "succeeded",
+                        "model_id": route.model_id,
+                    }
+                )
+                return result
+            except Exception as exc:
+                return await self._mark_failed(
+                    job,
+                    code="PROVIDER_UNAVAILABLE",
+                    message=str(exc),
+                    route=route,
+                )
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+    async def _materialize_edit_inputs(
+        self, refs: Mapping[str, Any], workdir: str
+    ) -> tuple[str, str | None]:
+        """image_path > image_data > image_url 순으로 이미지를 임시 파일로 확보한다."""
+
+        async def _resolve(prefix: str, path_keys: tuple[str, ...], label: str) -> str | None:
+            path = next((refs.get(k) for k in path_keys if refs.get(k)), None)
+            if path:
+                return str(path)
+            data = refs.get(f"{prefix}_data")
+            url = refs.get(f"{prefix}_url")
+            if data:
+                body, ext = _decode_inline_image(str(data), label=f"{prefix}_data")
+            elif url:
+                body, ext = await _fetch_image_url(str(url), label=f"{prefix}_url")
+            else:
+                return None
+            target = os.path.join(workdir, f"{prefix}{ext}")
+            with open(target, "wb") as fh:
+                fh.write(body)
+            return target
+
+        image_path = await _resolve("image", ("image_path", "input_image_path"), "image")
+        if not image_path:
+            raise InvalidEditInput(
+                "edit_image requires one of image_path, input_image_path, image_data, image_url"
             )
-            metadata = {"provider": route.provider, "model_id": route.model_id, "size": size}
-            result, metadata, result_path = self._externalize_media_result(
-                job_id=str(job.get("job_id") or ""),
-                kind="edit_image",
-                result=result,
-                metadata=metadata,
-            )
-            await self.update_job_status(
-                str(job.get("job_id") or ""),
-                "succeeded",
-                result_uri=result.get("url"),
-                result_path=result_path,
-                result_metadata=metadata,
-            )
-            result.update(
-                {
-                    "job_id": job.get("job_id"),
-                    "kind": "edit_image",
-                    "status": "succeeded",
-                    "model_id": route.model_id,
-                }
-            )
-            return result
-        except Exception as exc:
-            return await self._mark_failed(
-                job,
-                code="PROVIDER_UNAVAILABLE",
-                message=str(exc),
-                route=route,
-            )
+        mask_path = await _resolve("mask", ("mask_path",), "mask")
+        return image_path, mask_path
 
     async def _edit_openai_image(
         self,
@@ -2804,6 +2949,7 @@ class MediaGenerationService:
         mask_path: str | None,
         size: str,
         model_id: str,
+        quality: str | None = None,
     ) -> dict[str, Any]:
         from openai import AsyncOpenAI
 
@@ -2817,6 +2963,8 @@ class MediaGenerationService:
                 "size": size,
                 "n": 1,
             }
+            if quality:
+                kwargs["quality"] = quality
             if mask_path:
                 with open(mask_path, "rb") as mask_file:
                     kwargs["mask"] = mask_file

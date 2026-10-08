@@ -40,6 +40,9 @@ class EditImageRequest(BaseModel):
     image_url: str | None = None
     image_data: str | None = None
     mask_path: str | None = None
+    mask_data: str | None = None
+    mask_url: str | None = None
+    quality: str | None = None
     size: str = "1024x1024"
     model_id: str | None = None
     provider: str | None = None
@@ -119,6 +122,8 @@ async def edit_image(req: EditImageRequest):
             "image_url": req.image_url,
             "image_data": req.image_data,
             "mask_path": req.mask_path,
+            "mask_data": req.mask_data,
+            "mask_url": req.mask_url,
         }.items()
         if value
     }
@@ -131,6 +136,7 @@ async def edit_image(req: EditImageRequest):
             provider=req.provider,
             requested_by=req.requested_by,
             session_id=req.session_id,
+            quality=req.quality,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
