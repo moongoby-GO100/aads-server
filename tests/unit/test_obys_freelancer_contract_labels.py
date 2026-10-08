@@ -124,7 +124,9 @@ def test_labor_contract_labels_unchanged():
     assert dict(rows)["임금 산정 방식"] == "시급"
     assert not set(names) & (set(pdf.FREELANCER_TERM_LABELS.values()) - set(LABOR_LABELS))
     extras = dict(pdf.extra_rows(_labor_snapshot()))
-    assert "workplace_size_category" in extras and "meal_provision" in extras
+    assert extras["사업장 상시근로자 규모"] == "상시 5인 미만"
+    assert extras["식사 제공 방식"] == "사용자 식사 제공"
+    assert "workplace_size_category" not in extras and "meal_provision" not in extras
 
 
 def test_labor_term_fields_definition_is_untouched():
@@ -206,3 +208,73 @@ def test_preview_html_uses_service_terms_for_case_fee():
     assert 'case_fee: "건별/용역비"' not in INDEX
     for code, label in (("hourly", "시급"), ("monthly", "월급"), ("daily", "일급")):
         assert f'{code}: "{label}"' in INDEX
+
+
+INTERNAL_EXTRAS = dict(
+    foreign_worker="not_applicable",
+    meal_uniform_terms="식사 제공, 복장 지급",
+    memo="내부 메모",
+    minor_guardian_consent="not_applicable",
+    onboarding_document_summary={"submitted": 3},
+    updated_at="2026-10-08T10:00:00+09:00",
+    deleted_at="2026-10-09T10:00:00+09:00",
+    health_certificate_valid_until="2027-01-31",
+)
+
+
+@pytest.mark.parametrize("make", [_base_snapshot, _labor_snapshot])
+def test_extra_rows_hide_internal_keys_and_use_korean_names(make):
+    snapshot = make()
+    snapshot.update(INTERNAL_EXTRAS)
+    rows = pdf.extra_rows(snapshot)
+    extras = dict(rows)
+    assert extras["외국인 근로 여부"] == "해당 없음"
+    assert extras["미성년자 보호자 동의"] == "해당 없음"
+    assert extras["식사·복장"] == "식사 제공, 복장 지급"
+    assert extras["보건증 유효기간"] == "2027-01-31"
+    text = str(rows)
+    for forbidden in ("memo", "updated_at", "deleted_at", "onboarding_document_summary", "내부 메모",
+                      "foreign_worker", "minor_guardian_consent", "meal_uniform_terms",
+                      "health_certificate_valid_until", "not_applicable"):
+        assert forbidden not in text
+    assert not any(pdf._INTERNAL_KEY_RE.match(name) for name, _ in rows)
+
+
+def test_display_value_codes_and_booleans():
+    assert pdf.display_value("foreign_worker", "not_applicable") == "해당 없음"
+    assert pdf.display_value("foreign_worker", True) == "예"
+    assert pdf.display_value("foreign_worker", False) == "아니오"
+    assert pdf.display_value("foreign_worker", "mystery_code") == "mystery_code"
+    assert pdf.display_value("wage", 0) == 0
+
+
+def test_unmapped_snake_key_not_printed_but_logged(caplog):
+    snapshot = _base_snapshot(brand_new_internal_key="secret-value", 특기사항="자유 입력")
+    with caplog.at_level("WARNING", logger=pdf.logger.name):
+        rows = pdf.extra_rows(snapshot)
+    text = str(rows)
+    assert "brand_new_internal_key" not in text and "secret-value" not in text
+    assert ("특기사항", "자유 입력") in rows
+    warned = [r.getMessage() for r in caplog.records]
+    assert any("brand_new_internal_key" in m for m in warned)
+    assert not any("secret-value" in m for m in warned)
+
+
+def test_pdf_extra_rows_do_not_print_internal_keys(monkeypatch):
+    pytest.importorskip("reportlab")
+    captured = _capture_paragraphs(monkeypatch)
+    contract = _contract_for(_base_snapshot(**INTERNAL_EXTRAS))
+    before_sha = contract["signed_snapshot_sha256"]
+    data = pdf.render_signed_contract_pdf(contract)
+    joined = "\n".join(captured)
+    for forbidden in ("memo", "updated_at", "not_applicable", "foreign_worker", "onboarding_document_summary"):
+        assert forbidden not in joined
+    assert "외국인 근로 여부" in joined and "해당 없음" in joined
+    assert pdf.snapshot_sha256(contract["signed_snapshot"]) == before_sha
+    assert pdf.render_signed_contract_pdf(contract) == data
+
+
+def test_labor_term_labels_unchanged_with_internal_extras():
+    base = [name for name, _ in pdf.term_rows(_labor_snapshot())]
+    with_extras = [name for name, _ in pdf.term_rows({**_labor_snapshot(), **INTERNAL_EXTRAS})]
+    assert base == with_extras

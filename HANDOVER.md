@@ -1,3 +1,12 @@
+## 2026-10-08 — 서명본 계약서 PDF '기타 기재사항' 내부 키 숨김·한글화 (ACCT-CONTRACT-PDF-EXTRA-ROWS-20261008) — 코드·테스트 완료, 배포 대기
+
+**DB handover entry_key `acct-contract-pdf-extra-rows-20261008` (ACCT/task).** 이 세션에서는 DB 인증 수단이 없어 DB 기록은 하지 못했고 이 파일에만 남긴다.
+- 변경: `app/services/yeoljeong_contract_pdf.py` — HIDDEN_FIELDS 에 memo·updated_at·deleted_at·onboarding_document_summary 추가, `EXTRA_LABELS`(용역·근로 공통) 로 영문 키 한글화, `display_value` 가 not_applicable→해당 없음·불리언→예/아니오, 매핑 없는 영문 스네이크 키는 인쇄하지 않고 키 이름만 logger.warning. 봉인 스냅샷·해시·서명 구조 불변.
+- 테스트: `tests/unit/test_obys_freelancer_contract_labels.py` 15 passed(신규 5·근로 라벨 테스트 1 수정), `test_obys_contract_notify_pdf.py` 14 passed.
+- 주의: 매핑 없는 신규 내부 키는 PDF 에서 빠진다(경고 로그). 보여야 하면 EXTRA_LABELS 추가. 보고서: `docs/reports/20261008_ACCT_계약서PDF_기타기재사항_정리.md`. 정본 미등록(미완료).
+
+---
+
 ## 2026-10-08 — 카페24 오비서 클로브 수집 구성: 토큰 저장소 OBYS DB·앱 역할 권한·전용 금고 키 (ACCT-CLOBE-CAFE24-COLLECT-20261008) — 코드·마이그레이션·테스트 완료, 운영 미적용(CEO 승인 대기)
 
 **DB handover entry_key `acct-clobe-cafe24-collect-20261008` (ACCT/task).** 이 세션에서는 DB 인증 수단이 없어 DB 기록은 하지 못했고 이 파일에만 남긴다.

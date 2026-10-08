@@ -15,10 +15,14 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
+
+logger = logging.getLogger(__name__)
 
 FONT_ENV = "OBYS_CONTRACT_PDF_FONT_PATH"
 FONT_NAME = "ObysContractKR"
@@ -39,7 +43,7 @@ CONTRACT_TYPE_LABELS = {
     "confidentiality": "보안 및 개인정보 보호 서약",
 }
 
-# (키, 라벨) — 계약서 본문에 표시할 순서. 목록에 없는 키는 "기타 기재사항"에 원문 키로 표시한다.
+# (키, 라벨) — 계약서 본문에 표시할 순서. 목록에 없는 키는 "기타 기재사항"에 EXTRA_LABELS 이름으로 표시하고, 매핑 없는 영문 스네이크 키는 인쇄하지 않는다.
 PARTY_FIELDS = (
     ("employer_name", "상호"),
     ("employer_representative", "대표자"),
@@ -108,13 +112,22 @@ FREELANCER_TERM_LABELS = {
 FREELANCER_SKIPPED_KEYS = {"probation_terms", "probation_period", "workplace_size_category", "meal_provision"}
 # 값이 0 이면 인쇄하지 않는 금액 키(용역계약 한정).
 FREELANCER_ZERO_HIDDEN_KEYS = {"base_salary", "non_tax_meal_allowance", "taxable_allowance"}
-# 기타 기재사항에서 원문 키 대신 보여줄 이름(용역계약 한정).
-FREELANCER_EXTRA_LABELS = {
+# 기타 기재사항에서 원문 키 대신 보여줄 이름(용역·근로 공통, 칸 이름만 바꾸고 값은 건드리지 않는다).
+EXTRA_LABELS = {
     "employment_tax_type": "세무 처리 구분",
     "terms": "추가 특약",
     "termination_terms": "계약 해지 및 기성 정산",
     "confidentiality_terms": "비밀유지 및 자료보호",
+    "foreign_worker": "외국인 근로 여부",
+    "minor_guardian_consent": "미성년자 보호자 동의",
+    "meal_uniform_terms": "식사·복장",
+    "health_certificate_valid_until": "보건증 유효기간",
+    "workplace_size_category": "사업장 상시근로자 규모",
+    "meal_provision": "식사 제공 방식",
+    "probation_period": "수습 기간",
 }
+# 영문 소문자_스네이크 내부 키. EXTRA_LABELS 에 없으면 PDF 에 찍지 않는다.
+_INTERNAL_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # 내부 코드값 → 한글. 오비서 화면(index.html wageTypeLabels 등)과 같은 문구를 쓴다.
 CODE_VALUE_LABELS = {
     "wage_type": {"hourly": "시급", "monthly": "월급", "daily": "일급", "case_fee": "건별 용역비"},
@@ -152,6 +165,10 @@ HIDDEN_FIELDS = {
     "employee_email_masked",
     "branch",
     "contract_date",
+    "memo",
+    "updated_at",
+    "deleted_at",
+    "onboarding_document_summary",
 }
 
 
@@ -246,9 +263,14 @@ def is_freelancer_snapshot(snapshot: dict[str, Any]) -> bool:
 
 def display_value(key: str, value: Any) -> Any:
     """내부 코드값(case_fee 등)을 한글로 바꾼다. 모르는 값은 원문 그대로 둔다."""
-    mapping = CODE_VALUE_LABELS.get(key)
-    if mapping and isinstance(value, str):
-        return mapping.get(value.strip(), value)
+    if isinstance(value, bool):
+        return "예" if value else "아니오"
+    if isinstance(value, str):
+        mapping = CODE_VALUE_LABELS.get(key)
+        if mapping and value.strip() in mapping:
+            return mapping[value.strip()]
+        if value.strip() == "not_applicable":
+            return "해당 없음"
     return value
 
 
@@ -282,7 +304,7 @@ def term_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
 
 
 def extra_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
-    """'기타 기재사항' 표 행. 용역계약만 알려진 키에 한글 이름을 붙인다."""
+    """'기타 기재사항' 표 행. 한글 이름이 없는 영문 내부 키는 인쇄하지 않고 키 이름만 경고로 남긴다."""
     freelancer = is_freelancer_snapshot(snapshot)
     known = {key for key, _ in PARTY_FIELDS + EMPLOYEE_FIELDS + TERM_FIELDS} | HIDDEN_FIELDS
     rows: list[tuple[str, Any]] = []
@@ -291,7 +313,12 @@ def extra_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
             continue
         if freelancer and key in FREELANCER_SKIPPED_KEYS:
             continue
-        name = FREELANCER_EXTRA_LABELS.get(key, key) if freelancer else key
+        name = EXTRA_LABELS.get(key)
+        if name is None:
+            if _INTERNAL_KEY_RE.match(str(key)):
+                logger.warning("계약서 PDF 기타 기재사항: 한글 이름이 없는 내부 키를 인쇄하지 않음: %s", key)
+                continue
+            name = key
         rows.append((name, display_value(key, snapshot[key])))
     return rows
 
