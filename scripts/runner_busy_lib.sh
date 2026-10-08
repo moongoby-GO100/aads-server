@@ -76,8 +76,15 @@ def _probe(service, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgroup'),
         relative = Path(group.lstrip('/'))
         if '..' in relative.parts or not group.startswith('/'):
             return 'UNKNOWN'
-        directory = cgroup_root / relative
-        if not directory.is_dir():
+        # cgroup v2 mounts the tree at the root; v1/hybrid hosts expose the same
+        # relative path under unified/ (v2 view) or systemd/ (v1 named hierarchy).
+        directory = None
+        for candidate in (cgroup_root / relative, cgroup_root / 'unified' / relative,
+                          cgroup_root / 'systemd' / relative):
+            if candidate.is_dir():
+                directory = candidate
+                break
+        if directory is None:
             return 'UNKNOWN'
         def read_group(path):
             # Explicit recursion propagates permission errors; rglob can hide them.

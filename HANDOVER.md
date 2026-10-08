@@ -1,3 +1,11 @@
+## 2026-10-08 — 원격 러너 동기화 영구 deferred 해소: cgroup v1(hybrid) 경로 탐색 (AADS-RUNNER-SYNC-CGROUP-V1-PROBE-20261008) — 코드·테스트 완료, 반영 대기
+
+- 원인: cafe24_114(cgroup v1 hybrid)는 `/sys/fs/cgroup/<ControlGroup>` 가 없어 `runner_live_process_probe` 가 UNKNOWN → 매 5분 "sync deferred", 10-06 이후 러너 수정 미반영.
+- 변경: `scripts/runner_busy_lib.sh` `_probe` 가 cgroup 디렉터리를 root → `unified/` → `systemd/` 순으로 찾아 처음 존재하는 것을 쓴다. 셋 다 없으면 UNKNOWN, 빈 워커 집합만 IDLE 인 보수 판정과 v2(contabo14) 경로는 불변. Python 3.8 호환, stdlib 만.
+- 테스트: `tests/unit/test_runner_sync_live_process_guard.py` 에 v1 레이아웃 IDLE/BUSY·탐색 우선순위·v2 불변·세 경로 부재 UNKNOWN 추가, 35 passed.
+- 부수 변경: `runner_live_update.sh`·`test_runner_live_update_hold.py` 의 companion SHA-256 핀을 새 라이브러리 해시로 갱신(핀 불일치 시 HOLD 테스트 9건 실패). 관련 4개 테스트 파일 98 passed.
+- 원격 수동 동기화·재시작 안 함(PUSH_ONLY). 검증은 다음 5분 타이머에서 cafe24_114 가 synced 또는 BUSY 사유 deferred 로 바뀌는지 확인.
+
 ## 2026-10-08 — 러너가 .runner_full_diff.patch 를 대상 저장소 커밋에 넣는 경로 차단 (AADS-RUNNER-PATCH-ARTIFACT-COMMIT-FIX-20261008) — 코드·테스트 완료, 원격 러너 반영 대기(CEO 승인)
 
 - 원인 후보(확정 아님): `_persist_full_diff_if_truncated` 가 패치를 워크트리 안에도 써서, `.gitignore` 에 항목이 없는 저장소(NTV2·dashboard)에서는 미추적 파일로 남아 워커/러너 커밋에 쓸려 들어갔다. 한 번 추적되면 지워도 다음 커밋이 변경으로 되돌린다(NTV2 b370fa33 → 8935cc89 +1063/-1040). cafe24_114 실제 러너(md5 f57ca7a0…)는 저장소본과 달라 어느 줄이 문제였는지 원격 파일로는 대조하지 못했다.

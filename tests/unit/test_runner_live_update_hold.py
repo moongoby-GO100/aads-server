@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(os.environ.get('AADS_RUNNER_LIVE_CONTROLLER_UNDER_TEST',
                             str(ROOT / 'scripts/runner_live_update.sh')))
 LIBRARY = ROOT / 'scripts/runner_busy_lib.sh'
-PINNED = '845f029bcfab4421b7c9189214a3ff15882cccb517608f91e14ee9e160c73282'
+PINNED = 'ff637e3f7f66b968338c4b439cd1e144d57326cafffa4f5ccf96d76e51be5026'
 spec = importlib.util.spec_from_file_location(
     'live_hold_real_protocol_fixture', ROOT / 'tests/unit/test_runner_maintenance_protocol.py')
 protocol = importlib.util.module_from_spec(spec)

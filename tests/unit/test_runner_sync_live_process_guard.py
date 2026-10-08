@@ -108,6 +108,69 @@ def test_incomplete_process_observation_is_unknown(probe, tmp_path, failure):
     assert probe(service, proc, cg, show) == "UNKNOWN"
 
 
+def v1_group(cg, layout, members):
+    group = cg / layout / "system.slice" / "runner.service"
+    group.mkdir(parents=True)
+    (group / "cgroup.procs").write_text("\n".join(map(str, members)))
+    return group
+
+
+@pytest.mark.parametrize("layout", ["unified", "systemd"])
+def test_cgroup_v1_hybrid_main_process_alone_is_idle(probe, tmp_path, layout):
+    pid = os.getpid()
+    proc, cg = roots(tmp_path, [pid])
+    v1_group(cg, layout, [pid])
+    show = properties("active", pid, "/system.slice/runner.service")
+    assert probe("runner.service", proc, cg, show) == "IDLE"
+
+
+@pytest.mark.parametrize("layout", ["unified", "systemd"])
+def test_cgroup_v1_hybrid_child_is_busy(probe, tmp_path, layout):
+    child = subprocess.Popen(["sleep", "60"], cwd=tmp_path)
+    try:
+        main = os.getpid()
+        proc, cg = roots(tmp_path, [main, child.pid])
+        v1_group(cg, layout, [main, child.pid])
+        show = properties("active", main, "/system.slice/runner.service")
+        assert probe("runner.service", proc, cg, show) == "BUSY"
+    finally:
+        child.terminate()
+        child.wait(timeout=3)
+
+
+def test_cgroup_v1_hybrid_prefers_root_then_unified_then_systemd(probe, tmp_path):
+    child = subprocess.Popen(["sleep", "60"], cwd=tmp_path)
+    try:
+        main = os.getpid()
+        proc, cg = roots(tmp_path, [main])
+        v1_group(cg, "unified", [main])
+        v1_group(cg, "systemd", [main, child.pid])
+        show = properties("active", main, "/system.slice/runner.service")
+        assert probe("runner.service", proc, cg, show) == "IDLE"
+    finally:
+        child.terminate()
+        child.wait(timeout=3)
+
+
+def test_cgroup_v2_root_layout_unchanged_when_v1_dirs_absent(probe, tmp_path):
+    pid = os.getpid()
+    proc, cg = roots(tmp_path, [pid])
+    group = cg / "system.slice" / "runner.service"
+    group.mkdir(parents=True)
+    (group / "cgroup.procs").write_text(str(pid))
+    show = properties("active", pid, "/system.slice/runner.service")
+    assert probe("runner.service", proc, cg, show) == "IDLE"
+
+
+def test_cgroup_missing_in_all_three_layouts_is_unknown(probe, tmp_path):
+    pid = os.getpid()
+    proc, cg = roots(tmp_path, [pid])
+    (cg / "unified").mkdir()
+    (cg / "systemd").mkdir()
+    show = properties("active", pid, "/system.slice/runner.service")
+    assert probe("runner.service", proc, cg, show) == "UNKNOWN"
+
+
 def test_proc_permission_error_is_unknown(probe, tmp_path, monkeypatch):
     proc, cg = roots(tmp_path)
     original = Path.iterdir
