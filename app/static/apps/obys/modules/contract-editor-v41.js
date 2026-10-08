@@ -89,7 +89,7 @@
   const EMPLOYER_FIELDS = ["employerName", "employerRegistrationNo", "employerRepresentative", "employerAddress"];
   // 서버 기본값이 실제 금액을 정하면 안 된다(PRD: 실제 금액 기본값 추정 금지).
   const NO_DEFAULT = new Set(["wage", "baseSalary"]);
-  const PASS_THROUGH = ["bankName", "bankAccountHolder", "bankAccountMasked", "healthCertificateValidUntil", "onboardingDocumentSummary"];
+  const PASS_THROUGH = ["bankName", "bankAccountHolder", "bankAccountMasked", "healthCertificateValidUntil", "onboardingDocumentSummary", "amendsContractId"];
   // 추천값이 없는 필수값의 안내. 생년월일·주소·임금은 추정하지 않는다(시급제 최저시급만 버튼으로 제안).
   const NO_SUGGEST_HINT = {
     employeeBirthDate: "입사서류(신분증·주민등록등본)나 직원에게 확인해 입력하십시오.",
@@ -312,10 +312,27 @@
       if (contract) openEditor({ contract });
     }));
     box.querySelectorAll("[data-cv41-pdf]").forEach(button => button.addEventListener("click", () => downloadPdf(button.dataset.cv41Pdf, button)));
+    box.querySelectorAll("[data-cv41-amend-row]").forEach(button => button.addEventListener("click", () => {
+      const contract = contractById(button.dataset.cv41AmendRow);
+      if (contract) { openEditor({ contract }); startAmendment(); }
+    }));
     box.querySelectorAll("[data-cv41-docs]").forEach(button => button.addEventListener("click", () => {
       const employee = S.employees.find(item => employeeKey(item) === button.dataset.cv41Docs);
       if (employee) openDocs(employee);
     }));
+  }
+  function contractById(id) { return S.contracts.find(item => String(item.id) === String(id)) || null; }
+  /** 원계약이면 "이전 계약", 변경 계약이면 "변경 계약(원계약 날짜)". superseded_by 는 서버가 계산해 내려준다. */
+  function amendmentBadges(contract) {
+    const parts = [];
+    if (contract?.superseded_by) parts.push(`<span class="badge info">${esc(contract.superseded_label || "이전 계약")}</span>`);
+    const originalId = pick(contract, "amendsContractId");
+    if (originalId) {
+      const original = contractById(originalId);
+      const day = original ? (pick(original, "contractDate") || pick(original, "startDate")) : "";
+      parts.push(`<span class="badge info">변경 계약(원계약 ${esc(day || String(originalId).slice(0, 8))})</span>`);
+    }
+    return parts.length ? ` ${parts.join(" ")}` : "";
   }
   function gapBadge(count) { return count ? ` <span class="badge warn">빈 필수값 ${count}</span>` : ""; }
   /** 작성 전·작성중 계약의 빈 필수값 수. 서명요청 이후 계약은 0(이미 서버 검증 통과). */
@@ -366,8 +383,8 @@
         <td data-label="직원"><b>${esc(pick(contract, "employeeName") || "-")}</b><small>${esc(contract.employee_email_masked || "")}</small></td>
         <td data-label="사업자·지점">${esc(businessName(pick(contract, "businessId")))}<small>${esc(pick(contract, "branch") || "-")}</small></td>
         <td data-label="계약 유형">${esc(C.contractTypeLabels[pick(contract, "contractType")] || pick(contract, "contractType") || "-")}</td>
-        <td data-label="상태">${badge(statusOf(contract))}<small>${esc(when)}</small>${gapBadge(rowMissingCount(null, contract))}</td>
-        <td data-label="처리"><button class="btn" type="button" data-cv41-contract="${esc(contract.id)}">${key === "draft" ? "이어서 작성" : "열기"}</button>${key === "signed" ? ` <button class="btn" type="button" data-cv41-pdf="${esc(contract.id)}">서명본 PDF</button>` : ""}</td>
+        <td data-label="상태">${badge(statusOf(contract))}${amendmentBadges(contract)}<small>${esc(when)}</small>${gapBadge(rowMissingCount(null, contract))}</td>
+        <td data-label="처리"><button class="btn" type="button" data-cv41-contract="${esc(contract.id)}">${key === "draft" ? "이어서 작성" : "열기"}</button>${key === "signed" ? ` <button class="btn" type="button" data-cv41-pdf="${esc(contract.id)}">서명본 PDF</button> <button class="btn" type="button" data-cv41-amend-row="${esc(contract.id)}">변경 계약 작성</button>` : ""}</td>
       </tr>`;
     }).join("");
     return `<div class="toolbar">${filters}</div>${list.length ? `<div class="table-wrap"><table class="cv41-table"><thead><tr><th>직원</th><th>사업자·지점</th><th>계약 유형</th><th>상태</th><th>처리</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">조건에 맞는 계약서가 없습니다. 새 계약 작성으로 시작하십시오.</div>'}`;
@@ -512,7 +529,36 @@
     }).join("");
     const lockNote = E.contract && statusOf(E.contract)[0] === "requested"
       ? '<p class="cv41-alert warn">서명요청을 보낸 계약서입니다. 조건을 바꿔 저장하면 보낸 서명 링크가 무효가 되고 서명요청을 다시 보내야 합니다.</p>' : "";
-    return `${lockNote}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 금액은 자동으로 넣지 않습니다. <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels, live.blocker)}</div>`}${groupHtml}`;
+    return `${lockNote}${amendNoteHtml()}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 금액은 자동으로 넣지 않습니다. <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels, live.blocker)}</div>`}${groupHtml}`;
+  }
+  function amendNoteHtml() {
+    const originalId = E.values.amendsContractId;
+    if (!originalId) return "";
+    const original = contractById(originalId);
+    const day = original ? (pick(original, "contractDate") || pick(original, "startDate")) : "";
+    return `<p class="cv41-alert warn" role="status"><b>변경 계약입니다.</b> 원계약(${esc(day || String(originalId).slice(0, 8))})의 서명본은 바뀌지 않고 ‘이전 계약’으로 표시됩니다. 변경 계약의 입사일(시작일)과 계약 작성일을 입력하십시오. 현재 조건은 서명 순서가 아니라 시작일로 정해집니다.</p>`;
+  }
+  /** 서명 완료 계약을 복사해 새 draft 로 연다. 시작일·종료일·계약 작성일은 비워 직접 입력하게 한다. */
+  function startAmendment() {
+    const original = E?.contract;
+    if (!original || statusOf(original)[0] !== "signed" || E.busy) return;
+    const employee = S.employees.find(item => employeeKey(item) === String(pick(original, "employeeRequestId"))) || null;
+    E = {
+      employee,
+      target: { employee_request_id: pick(original, "employeeRequestId"), business_id: pick(original, "businessId"), branch: pick(original, "branch") },
+      contract: null,
+      values: { ...valuesFromContract(original), amendsContractId: String(original.id), contractDate: "", startDate: "", endDate: "" },
+      step: 1,
+      dirty: true,
+      previewed: false,
+      busy: "",
+      error: "",
+      missing: [],
+      notify: null,
+      sessionLost: false
+    };
+    setUrl(employee ? { cv41_request: employee.id } : {});
+    render();
   }
   function currentDraft() { return draftFromValues(E.values, E.target || {}); }
   function stepPreview() {
@@ -562,6 +608,7 @@
         parts.push(`<button class="btn primary" type="button" data-cv41-resend ${dis(false)}>${busy === "resend" ? "보내는 중…" : "알림 다시 보내기"}</button>`);
       }
       if (statusKey === "signed") {
+        parts.push(`<button class="btn" type="button" data-cv41-amend ${dis(false)}>변경 계약 작성</button>`);
         parts.push(`<button class="btn" type="button" data-cv41-regen ${dis(false)}>${busy === "regen" ? "만드는 중…" : "PDF 다시 만들기"}</button>`);
         parts.push(`<button class="btn primary" type="button" data-cv41-pdf-now ${dis(false)}>${busy === "pdf" ? "내려받는 중…" : "서명본 PDF 내려받기"}</button>`);
       }
@@ -610,6 +657,7 @@
     dialog.querySelector("[data-cv41-request]")?.addEventListener("click", requestSignature);
     dialog.querySelector("[data-cv41-resend]")?.addEventListener("click", resendNotice);
     dialog.querySelector("[data-cv41-copy]")?.addEventListener("click", copyLink);
+    dialog.querySelector("[data-cv41-amend]")?.addEventListener("click", startAmendment);
     dialog.querySelector("[data-cv41-regen]")?.addEventListener("click", regeneratePdf);
     dialog.querySelector("[data-cv41-pdf-now]")?.addEventListener("click", event => downloadPdf(E.contract.id, event.target));
     const firstInvalid = E.missing.length ? dialog.querySelector('[aria-invalid="true"]') : null;

@@ -4860,8 +4860,84 @@ def _contract_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     return contract
 
 
+CONTRACT_SUPERSEDED_LABEL = "이전 계약"
+# 서버가 계산해 내려주는 값이다 — 저장 본문으로 들어와도 버린다(원계약 레코드에 기록하지 않는다).
+CONTRACT_COMPUTED_AMENDMENT_FIELDS = ("superseded_by", "supersededBy", "superseded_label", "supersededLabel")
+
+
+def _superseded_by_map(contracts: list[dict[str, Any]]) -> dict[str, str]:
+    """원계약 id -> 그 원계약을 변경한 '서명 완료' 계약 id. 여럿이면 시작일·서명이 늦은 쪽."""
+    by_id = {str(row.get("id") or ""): row for row in contracts}
+    best: dict[str, dict[str, Any]] = {}
+    for row in contracts:
+        original_id = str(row.get("amends_contract_id") or "").strip()
+        original = by_id.get(original_id)
+        if not original_id or original is None or not _contract_is_live_signed(row):
+            continue
+        if not _contract_belongs_to(
+            row,
+            employee_email=str(original.get("employee_email") or ""),
+            employee_request_id=str(_contract_payload_value(original, "employee_request_id", "employeeRequestId") or ""),
+        ):
+            continue
+        current = best.get(original_id)
+        if current is None or _effective_contract_sort_key(row) > _effective_contract_sort_key(current):
+            best[original_id] = row
+    return {original_id: str(row.get("id") or "") for original_id, row in best.items()}
+
+
+def _with_amendment_marks(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """응답용 사본에만 superseded_by·표시 라벨을 붙인다. 저장된 원계약(서명본·스냅샷)은 건드리지 않는다."""
+    superseded = _superseded_by_map(contracts)
+    marked: list[dict[str, Any]] = []
+    for row in contracts:
+        replacement = superseded.get(str(row.get("id") or ""))
+        if replacement:
+            row = {**row, "superseded_by": replacement, "superseded_label": CONTRACT_SUPERSEDED_LABEL}
+        marked.append(row)
+    return marked
+
+
+def _normalize_contract_amendment(
+    contract: dict[str, Any], rows: list[dict[str, Any]], own_id: str
+) -> dict[str, Any]:
+    """amends_contract_id 를 snake 키 하나로 정리하고 검증한다. 같은 직원·같은 사업자·삭제 안 된 계약만 가리킬 수 있다."""
+    result = {key: value for key, value in contract.items() if key not in CONTRACT_COMPUTED_AMENDMENT_FIELDS}
+    camel = result.pop("amendsContractId", None)
+    amends = str(result.get("amends_contract_id") or camel or "").strip()
+    if not amends:
+        result.pop("amends_contract_id", None)
+        return result
+    if own_id and amends == own_id:
+        raise HTTPException(status_code=400, detail="계약서가 자기 자신을 변경 대상 원계약으로 가리킬 수 없습니다")
+    original = _find(rows, amends)
+    if not original or original.get("deleted_at"):
+        raise HTTPException(status_code=400, detail="변경 대상 원계약을 찾을 수 없거나 삭제된 계약입니다")
+    if not _contract_belongs_to(
+        original,
+        employee_email=str(result.get("employee_email") or ""),
+        employee_request_id=str(_contract_payload_value(result, "employee_request_id", "employeeRequestId") or ""),
+    ):
+        raise HTTPException(status_code=400, detail="변경 대상 원계약은 같은 직원의 계약이어야 합니다")
+    original_business = _record_business_id(original)
+    contract_business = _record_business_id(result)
+    if not original_business or original_business != contract_business:
+        raise HTTPException(status_code=400, detail="변경 대상 원계약은 같은 사업자의 계약이어야 합니다")
+    by_id = {str(row.get("id") or ""): row for row in rows}
+    seen = {amends}
+    cursor = str(original.get("amends_contract_id") or "").strip()
+    while cursor and cursor not in seen:
+        if own_id and cursor == own_id:
+            raise HTTPException(status_code=400, detail="변경 계약이 서로를 원계약으로 가리키는 순환 연결은 만들 수 없습니다")
+        seen.add(cursor)
+        cursor = str((by_id.get(cursor) or {}).get("amends_contract_id") or "").strip()
+    result["amends_contract_id"] = amends
+    return result
+
+
 def list_contracts(user: dict[str, Any]) -> list[dict[str, Any]]:
-    return sorted(_filter_user(_read_hr("contracts", user), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
+    rows = _with_amendment_marks(_read_hr("contracts", user))
+    return sorted(_filter_user(rows, user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
 
 
 def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -4874,6 +4950,7 @@ def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     if existing and str(existing.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="서명 완료 계약서는 수정할 수 없습니다. 정정 계약서를 새로 작성하십시오")
     contract = _owned_hr_record(_contract_defaults(_validate_contract_payload(_fill_contract_reference_data(payload, user))), user)
+    contract = _normalize_contract_amendment(contract, rows, str(contract["id"]))
     existing = _find(rows, contract["id"])
     if existing:
         if str(existing.get("status") or "") == "requested":
@@ -4881,6 +4958,8 @@ def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             contract.pop("sign_token", None)
             contract.pop("requested_at", None)
         existing.update(contract)
+        if "amends_contract_id" not in contract:
+            existing.pop("amends_contract_id", None)
         if existing.get("status") == "draft":
             existing.pop("sign_token", None)
             existing.pop("requested_at", None)
@@ -5478,12 +5557,45 @@ def _employment_terms_from_contract(contract: dict[str, Any]) -> dict[str, Any]:
     return terms
 
 
-def _derive_current_employment(
-    contracts: list[dict[str, Any]], *, employee_email: str, employee_request_id: str, business_id: str = ""
-) -> dict[str, Any] | None:
-    """최신 서명 근로·용역 계약 1건에서 고용조건을 만든다. 비밀유지 서약은 원본이 아니다.
+def _contract_start_day(contract: dict[str, Any]) -> date:
+    """계약 시작일. 비어 있거나 읽을 수 없으면 서명일(KST), 그것도 없으면 가장 이른 날로 본다."""
+    source = contract.get("signed_snapshot") if isinstance(contract.get("signed_snapshot"), dict) else contract
+    raw = str(_contract_payload_value(source, "start_date", "startDate") or "").strip()[:10]
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        stamp = _pg_ts(contract.get("signed_at"))
+        return stamp.astimezone(KST).date() if stamp else date.min
 
-    business_id 가 있으면 그 사업자의 서명계약 중 최신 1건(겸직 직원의 매장별 고용조건), 없으면 전체 최신 1건.
+
+def _contract_end_day(contract: dict[str, Any]) -> date | None:
+    source = contract.get("signed_snapshot") if isinstance(contract.get("signed_snapshot"), dict) else contract
+    raw = str(_contract_payload_value(source, "end_date", "endDate") or "").strip()[:10]
+    try:
+        return date.fromisoformat(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def _effective_contract_sort_key(contract: dict[str, Any]) -> tuple[date, datetime, str]:
+    stamp, contract_id = _signed_contract_sort_key(contract)
+    return _contract_start_day(contract), stamp, contract_id
+
+
+def _derive_current_employment(
+    contracts: list[dict[str, Any]],
+    *,
+    employee_email: str,
+    employee_request_id: str,
+    business_id: str = "",
+    today: date | None = None,
+) -> dict[str, Any] | None:
+    """오늘(KST) 효력이 있는 서명 근로·용역 계약 1건에서 고용조건을 만든다. 비밀유지 서약은 원본이 아니다.
+
+    시작일 <= 오늘 이고 종료일이 없거나 >= 오늘 인 계약 중 시작일이 가장 늦은 것(같으면 서명이 늦은 것).
+    해당 계약이 없으면 시작일이 가장 늦은 서명 계약으로 폴백한다. 서명 순서는 판정에 쓰지 않는다 —
+    변경 계약을 원계약보다 먼저 서명해도 시작일이 늦은 쪽이 현재 조건이다.
+    business_id 가 있으면 그 사업자의 서명계약만(겸직 직원의 매장별 고용조건), 없으면 전체.
     """
     sources = [
         row
@@ -5497,7 +5609,13 @@ def _derive_current_employment(
     ]
     if not sources:
         return None
-    latest = sources[-1]
+    day = today or datetime.now(KST).date()
+    active = [
+        row
+        for row in sources
+        if _contract_start_day(row) <= day and (_contract_end_day(row) is None or _contract_end_day(row) >= day)
+    ]
+    latest = max(active or sources, key=_effective_contract_sort_key)
     employment = _employment_terms_from_contract(latest)
     return {
         "contract_id": str(latest.get("id") or ""),
@@ -5747,15 +5865,23 @@ def employee_employment_history(request_id: str, user: dict[str, Any]) -> dict[s
     if not _is_admin(user) and (not _email(user) or _email(user) != email):
         raise denied
     contracts = []
-    for row in _employee_signed_contracts(
-        _read_hr("contracts", user),
-        employee_email=email,
-        employee_request_id=request_id,
-        business_id=_record_business_id(employee),
-    ):
+    all_contracts = _read_hr("contracts", user)
+    superseded_map = _superseded_by_map(all_contracts)
+    signed_chain = sorted(
+        _employee_signed_contracts(
+            all_contracts,
+            employee_email=email,
+            employee_request_id=request_id,
+            business_id=_record_business_id(employee),
+        ),
+        key=_effective_contract_sort_key,
+    )
+    for row in signed_chain:
         terms = _employment_terms_from_contract(row)
         contracts.append(
             {
+                "amends_contract_id": str(row.get("amends_contract_id") or ""),
+                "superseded_by": superseded_map.get(str(row.get("id") or ""), ""),
                 "contract_id": str(row.get("id") or ""),
                 "contract_type": str(row.get("contract_type") or ""),
                 "print_title": str(row.get("print_title") or ""),
