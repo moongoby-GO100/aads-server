@@ -230,13 +230,35 @@ class InvalidEditInput(ValueError):
 
 _REQUEST_ID_RE = re.compile(r"\breq_[A-Za-z0-9]+")
 _SAFETY_VIOLATIONS_RE = re.compile(r"safety_violations=\[([^\]]*)\]")
+_GEMINI_SAFETY_TOKENS = ("SAFETY", "PROHIBITED", "BLOCKLIST", "SPII")
+
+
+class GeminiSafetyBlocked(ValueError):
+    """Gemini 가 안전 사유(finish_reason/block_reason)로 이미지를 내지 않음."""
+
+    def __init__(self, message: str, *, reason: str = ""):
+        super().__init__(message)
+        self.reason = reason
+
+
+def _gemini_safety_reason(value: Any) -> str:
+    """finish_reason/block_reason 값이 안전 차단이면 그 이름을, 아니면 빈 문자열."""
+    if value is None:
+        return ""
+    name = str(getattr(value, "name", None) or value).rsplit(".", 1)[-1].upper()
+    return name if any(token in name for token in _GEMINI_SAFETY_TOKENS) else ""
 
 
 def _classify_provider_exception(exc: BaseException) -> tuple[str, dict[str, Any]]:
-    """OpenAI 안전필터 거부는 MODERATION_BLOCKED, 그 외는 PROVIDER_UNAVAILABLE.
+    """안전필터 거부(OpenAI/Gemini)는 MODERATION_BLOCKED, 그 외는 PROVIDER_UNAVAILABLE.
 
     프롬프트·이미지 원문은 metadata 에 넣지 않는다(카테고리/단계/요청 ID 만).
     """
+    if isinstance(exc, GeminiSafetyBlocked):
+        extra_gemini: dict[str, Any] = {"provider_error_code": "gemini_safety_blocked"}
+        if exc.reason:
+            extra_gemini["moderation_categories"] = [exc.reason[:40]]
+        return "MODERATION_BLOCKED", extra_gemini
     body = getattr(exc, "body", None)
     err: Mapping[str, Any] = {}
     if isinstance(body, Mapping):
@@ -893,6 +915,12 @@ class MediaGenerationService:
                 return True
             if provider == "genspark_ui":
                 return model_id == "genspark-image-ui"
+            if provider == "gemini":
+                return model_id in {
+                    "gemini-3.1-flash-image-preview",
+                    "gemini-3-pro-image-preview",
+                    "gemini-2.5-flash-image",
+                }
             return provider == "openai" and model_id in OPENAI_IMAGE_EDIT_MODELS
         if kind == "video":
             if provider == "pc_local":
@@ -2353,15 +2381,25 @@ class MediaGenerationService:
 
     async def _load_reference_bytes(self, reference_images: list[str]) -> list[tuple[str, bytes]]:
         """레퍼런스 이미지를 바이트로 적재한다. https URL 과 data: URI 모두 받는다."""
-        loaded: list[tuple[str, bytes]] = []
+        return [(name, data) for name, data, _mime in await self._load_reference_entries(reference_images)]
+
+    async def _load_reference_entries(self, reference_images: list[str]) -> list[tuple[str, bytes, str]]:
+        """(이름, 바이트, mime). data: URI 는 헤더에서 mime 을 꺼내고 없으면 image/jpeg."""
+        loaded: list[tuple[str, bytes, str]] = []
         for index, raw in enumerate(reference_images):
             ref = str(raw or "").strip()
             if not ref:
                 continue
             try:
                 if ref.startswith("data:"):
-                    _, _, encoded = ref.partition(",")
-                    loaded.append((f"ref{index}.png", base64.b64decode(encoded)))
+                    header, _, encoded = ref.partition(",")
+                    mime = header[len("data:"):].split(";", 1)[0].strip().lower()
+                    if not mime.startswith("image/"):
+                        mime = "image/jpeg"
+                    body = base64.b64decode(encoded)
+                    if not body:
+                        raise ValueError("empty data URI")
+                    loaded.append((f"ref{index}.png", body, mime))
                     continue
                 headers: dict[str, str] = {}
                 if "aads.newtalk.kr" in ref:
@@ -2371,10 +2409,13 @@ class MediaGenerationService:
                 async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as http_client:
                     resp = await http_client.get(ref, headers=headers)
                     resp.raise_for_status()
-                loaded.append((f"ref{index}.png", resp.content))
-                logger.info("openai_ref_image_loaded url=%s bytes=%d", ref, len(resp.content))
+                mime = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip().lower()
+                if not mime.startswith("image/"):
+                    mime = "image/jpeg"
+                loaded.append((f"ref{index}.png", resp.content, mime))
+                logger.info("reference_image_loaded url=%s bytes=%d", ref[:200], len(resp.content))
             except Exception as exc:
-                logger.error("openai_ref_image_failed url=%s error=%s", ref, exc)
+                logger.error("reference_image_failed ref=%s error=%s", ref[:80], exc)
         return loaded
 
     async def _generate_openai_image(
@@ -2474,6 +2515,8 @@ class MediaGenerationService:
         aspect_ratio: str | None = None,
         image_size: str | None = None,
         reference_images: list[str] | None = None,
+        reference_entries: list[tuple[str, bytes, str]] | None = None,
+        forbid_openai_fallback: bool = False,
     ) -> dict[str, Any]:
         model_id = _canonical_media_model_id(model_id)
         from google import genai
@@ -2488,27 +2531,24 @@ class MediaGenerationService:
         if img_cfg:
             gen_config["image_config"] = types.ImageConfig(**img_cfg)
 
+        # 참조이미지·편집 요청은 원본 없는 OpenAI 텍스트 생성으로 폴백하면 가짜 결과가 된다.
+        reference_required = bool(reference_images) or bool(reference_entries) or forbid_openai_fallback
+
         contents: list = [sanitized]
-        if reference_images:
-            logger.info("gemini_native_ref_images_received count=%d urls=%s", len(reference_images), reference_images)
-            for img_url in reference_images[:3]:
-                try:
-                    ref_headers: dict[str, str] = {}
-                    if "aads.newtalk.kr" in str(img_url):
-                        mk = os.getenv("AADS_MONITOR_KEY", "")
-                        if mk:
-                            ref_headers["X-Monitor-Key"] = mk
-                    async with httpx.AsyncClient(timeout=15.0) as http_client:
-                        img_resp = await http_client.get(str(img_url), headers=ref_headers)
-                        img_resp.raise_for_status()
-                    mime = img_resp.headers.get("content-type", "image/jpeg").split(";")[0]
-                    contents.append(types.Part.from_bytes(data=img_resp.content, mime_type=mime))
-                    logger.info("gemini_native_ref_image_loaded url=%s bytes=%d mime=%s", img_url, len(img_resp.content), mime)
-                except Exception as e:
-                    logger.error("gemini_native_ref_image_failed url=%s error=%s", img_url, e)
+        if reference_images and not reference_entries:
+            logger.info("gemini_native_ref_images_received count=%d", len(reference_images))
+            reference_entries = await self._load_reference_entries(list(reference_images)[:3])
+        if reference_entries:
+            for _name, data, mime in reference_entries[:3]:
+                contents.append(types.Part.from_bytes(data=data, mime_type=mime))
+                logger.info("gemini_native_ref_image_attached bytes=%d mime=%s", len(data), mime)
+        elif reference_required:
+            raise ValueError("Gemini 참조이미지를 1장도 적재하지 못했습니다 (원본 없이 생성하지 않음)")
 
         primary_key = _secret_value(self.settings, "GOOGLE_API_KEY")
         if not primary_key:
+            if reference_required:
+                raise RuntimeError("Gemini unavailable: GOOGLE_API_KEY is not configured")
             logger.warning("gemini_image_generation_no_key; falling back to OpenAI image route")
             return await self._generate_openai_image(
                 sanitized, original, image_size or "", "gpt-image-1",
@@ -2528,10 +2568,22 @@ class MediaGenerationService:
                 ),
             )
             if not response.candidates:
+                block = _gemini_safety_reason(
+                    getattr(getattr(response, "prompt_feedback", None), "block_reason", None)
+                )
+                if block:
+                    raise GeminiSafetyBlocked(
+                        f"Gemini {model_id} blocked the request (block_reason={block})", reason=block
+                    )
                 raise ValueError(f"No candidates returned from Gemini {model_id}")
             candidate = response.candidates[0]
+            finish_reason = getattr(candidate, "finish_reason", None)
             if not candidate.content or not candidate.content.parts:
-                finish_reason = getattr(candidate, "finish_reason", None)
+                block = _gemini_safety_reason(finish_reason)
+                if block:
+                    raise GeminiSafetyBlocked(
+                        f"Gemini {model_id} blocked the image (finish_reason={block})", reason=block
+                    )
                 raise ValueError(
                     f"Gemini {model_id} returned candidate without image content"
                     f" (finish_reason={finish_reason})"
@@ -2541,9 +2593,17 @@ class MediaGenerationService:
                     b64 = base64.b64encode(part.inline_data.data).decode()
                     mime = part.inline_data.mime_type
                     return {"url": f"data:{mime};base64,{b64}", "provider": model_id, "prompt": original}
+            block = _gemini_safety_reason(finish_reason)
+            if block:
+                raise GeminiSafetyBlocked(
+                    f"Gemini {model_id} blocked the image (finish_reason={block})", reason=block
+                )
             raise ValueError(f"No image part found in Gemini {model_id} response")
         except Exception as exc:
-            # Gemini는 폴백 대상에서 제외 — 즉시 OpenAI 비-Google 경로로 전환한다(CEO 지시, 2026-09-23).
+            if reference_required:
+                logger.warning("gemini_image_generation_failed_no_fallback=%s", exc)
+                raise
+            # 참조이미지 없는 순수 텍스트 생성만 OpenAI 로 전환한다(CEO 지시, 2026-09-23).
             logger.warning("gemini_image_generation_failed=%s; falling back to OpenAI image route", exc)
             return await self._generate_openai_image(
                 sanitized, original, image_size or "", "gpt-image-1",
@@ -2924,16 +2984,25 @@ class MediaGenerationService:
             except InvalidEditInput as exc:
                 return await self._mark_failed(job, code="INVALID_INPUT", message=str(exc), route=route)
             try:
-                result = await self._edit_openai_image(
-                    prompt=prompt,
-                    image_path=image_path,
-                    mask_path=mask_path,
-                    size=size,
-                    model_id=route.model_id,
-                    quality=normalized_quality,
-                )
                 metadata = {"provider": route.provider, "model_id": route.model_id, "size": size}
-                if normalized_quality:
+                if route.provider == "gemini":
+                    result = await self._edit_gemini_image(
+                        prompt=prompt,
+                        image_path=image_path,
+                        model_id=route.model_id,
+                    )
+                    if mask_path:
+                        metadata["mask_ignored"] = True
+                else:
+                    result = await self._edit_openai_image(
+                        prompt=prompt,
+                        image_path=image_path,
+                        mask_path=mask_path,
+                        size=size,
+                        model_id=route.model_id,
+                        quality=normalized_quality,
+                    )
+                if normalized_quality and route.provider != "gemini":
                     metadata["quality"] = normalized_quality
                 result, metadata, result_path = self._externalize_media_result(
                     job_id=str(job.get("job_id") or ""),
@@ -2998,6 +3067,26 @@ class MediaGenerationService:
             )
         mask_path = await _resolve("mask", ("mask_path",), "mask")
         return image_path, mask_path
+
+    async def _edit_gemini_image(
+        self,
+        *,
+        prompt: str,
+        image_path: str,
+        model_id: str,
+    ) -> dict[str, Any]:
+        """원본 바이트를 Gemini 참조이미지로 넘겨 편집한다. mask 는 지원하지 않는다."""
+        with open(image_path, "rb") as image_file:
+            body = image_file.read()
+        ext = _sniff_image_ext(body)
+        mime = {".png": "image/png", ".webp": "image/webp"}.get(ext or "", "image/jpeg")
+        return await self._generate_gemini_native_image(
+            _sanitize_prompt(prompt),
+            prompt,
+            model_id,
+            reference_entries=[("image0", body, mime)],
+            forbid_openai_fallback=True,
+        )
 
     async def _edit_openai_image(
         self,
