@@ -12,6 +12,14 @@
 #     prune"이 맞다 — 백업 대상이 아님을 주석으로 명시한다.
 #  5. worktree 제거를 rm -rf 대신 git worktree remove 로 바꿔 git 내부 등록 정보가
 #     남지 않게 한다.
+#
+# 2026-10-08 수정(AADS-DISK-OFFLOAD-FIX-20261008):
+#  6. worktree 제거는 그 worktree 를 만든 저장소(git-common-dir)에서 실행한다.
+#     /root/aads/.worktrees 에는 aads-dashboard 소속 worktree 가 섞여 있어, 고정된
+#     aads-server 저장소에서 지우면 "is not a working tree" 로 매일 4건씩 실패했다.
+#  7. git 이 dirty/locked 로 거부하면 ERROR 가 아니라 SKIP(보호 대상)으로 분류한다.
+#  8. 덤프 rsync 는 --partial --inplace + ssh keepalive + 재시도(재개)로 보낸다.
+#  9. 종료 시 errors>0 이면 텔레그램으로 쿨다운을 두고 1회 알린다.
 set -uo pipefail
 
 DRY_RUN=0
@@ -47,12 +55,20 @@ esac
 
 LOG="${AADS_OFFLOAD_LOG:-/root/aads/logs/disk_offload_cafe24.log}"
 WORKTREES="/root/aads/.worktrees"
-MAIN_REPO="/root/aads/aads-server"
 DUMPS="/root/aads/backups/disk_offload"
 REMOTE="root@114.207.244.86"
 REMOTE_ROOT="/home/danharoo/www/data/files/goods/goodscode/_aads-backup"
 DAY="$(date +%Y%m%d)"
-RSYNC_SSH='ssh -p 7916 -o BatchMode=yes -o ConnectTimeout=15'
+SSH_OPTS='-p 7916 -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=20 -o ServerAliveCountMax=6'
+RSYNC_SSH="ssh $SSH_OPTS"
+# 덤프 rsync 재시도(재개) 설정. 7.9G 덤프가 약 1분마다 끊기는 회선에서도
+# --partial --inplace 로 이어 보낸다.
+RSYNC_RETRIES="${AADS_OFFLOAD_RSYNC_RETRIES:-8}"
+RSYNC_RETRY_SLEEP="${AADS_OFFLOAD_RSYNC_RETRY_SLEEP:-15}"
+RSYNC_ATTEMPT_TIMEOUT="${AADS_OFFLOAD_RSYNC_ATTEMPT_TIMEOUT:-1800}"
+# 실패 알림 쿨다운(초). cron 이 하루 한 번 돌지만 수동 재실행이 겹쳐도 폭주하지 않게 한다.
+ALERT_COOLDOWN_SEC="${AADS_OFFLOAD_ALERT_COOLDOWN_SEC:-21600}"
+ALERT_STAMP="${AADS_OFFLOAD_ALERT_STAMP:-/tmp/aads-disk-offload-alert.stamp}"
 # 방금 만든 worktree가 pipeline_jobs 에 등록되기 전에 삭제되지 않도록 최소 경과
 # 시간을 둔다. auto_trigger.sh 는 worktree 생성 직후 바로 작업을 시작하므로
 # 2시간이면 등록/첫 커밋 어느 쪽으로든 상태가 갈린다(R1 리뷰 지적 1).
@@ -66,8 +82,61 @@ mkdir -p "$(dirname "$LOG")" || exit 1
 exec >>"$LOG" 2>&1
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >&2; }
 fail() { log "ERROR $*"; ERRORS=$((ERRORS + 1)); }
+# 텔레그램 자격증명은 .env 를 통째로 source 하지 않고 필요한 두 줄만 뽑는다
+# (codex_auth_sync.sh 와 같은 방식 — .env 에 source 하면 죽는 값이 있다).
+load_telegram_creds() {
+    local f line val
+    for f in /root/aads/aads-server/.env /root/aads/.env; do
+        [[ -f "$f" ]] || continue
+        while IFS= read -r line; do
+            case "$line" in
+                TELEGRAM_BOT_TOKEN=*) val="${line#TELEGRAM_BOT_TOKEN=}" ;;
+                TELEGRAM_CHAT_ID=*)   val="${line#TELEGRAM_CHAT_ID=}" ;;
+                *) continue ;;
+            esac
+            val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
+            case "$line" in
+                TELEGRAM_BOT_TOKEN=*) if [[ -n "$val" ]]; then TELEGRAM_BOT_TOKEN="$val"; fi ;;
+                TELEGRAM_CHAT_ID=*)   if [[ -n "$val" ]]; then TELEGRAM_CHAT_ID="$val"; fi ;;
+            esac
+        done < "$f"
+    done
+}
+
+notify_errors() {
+    local bot chat now last=0 text
+    (( ERRORS > 0 )) || return 0
+    if (( DRY_RUN )); then
+        log "DRY-RUN telegram alert skipped (errors=$ERRORS)"
+        return 0
+    fi
+    TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+    TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
+    load_telegram_creds
+    bot="$TELEGRAM_BOT_TOKEN"; chat="$TELEGRAM_CHAT_ID"
+    if [[ -z "$bot" || -z "$chat" ]]; then
+        log 'WARN telegram credentials missing; alert not sent'
+        return 0
+    fi
+    now="$(date +%s)"
+    [[ -f "$ALERT_STAMP" ]] && last="$(cat "$ALERT_STAMP" 2>/dev/null)"
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    if (( now - last < ALERT_COOLDOWN_SEC )); then
+        log "SKIP telegram alert: cooldown ${ALERT_COOLDOWN_SEC}s"
+        return 0
+    fi
+    text="[AADS disk offload] errors=${ERRORS} ($(hostname)). 로그: ${LOG}"
+    if timeout 20 curl -sf -X POST "https://api.telegram.org/bot${bot}/sendMessage" \
+        -d chat_id="$chat" --data-urlencode text="$text" >/dev/null 2>&1; then
+        printf '%s\n' "$now" >"$ALERT_STAMP"
+        log 'telegram alert sent'
+    else
+        log 'WARN telegram alert failed'
+    fi
+}
 finish() {
     log "FINISH errors=$ERRORS dry_run=$DRY_RUN"
+    notify_errors
     # The final log line is always the requested root filesystem measurement.
     df -h / | tail -1
 }
@@ -132,8 +201,48 @@ eligible() {
     return 0
 }
 
+# 끊겨도 --partial --inplace 로 이어 받는다. 마지막 시도까지 실패하면 1 을 반환한다.
+rsync_resume() {
+    local src="$1" dst="$2" attempt rc=1
+    for (( attempt = 1; attempt <= RSYNC_RETRIES; attempt++ )); do
+        timeout "$RSYNC_ATTEMPT_TIMEOUT" rsync -a --partial --inplace \
+            -e "$RSYNC_SSH" "$src" "$dst"
+        rc=$?
+        (( rc == 0 )) && return 0
+        log "WARN rsync attempt ${attempt}/${RSYNC_RETRIES} rc=${rc} src=$src"
+        (( attempt < RSYNC_RETRIES )) && sleep "$RSYNC_RETRY_SLEEP"
+    done
+    return "$rc"
+}
+
+# 그 worktree 를 만든 저장소의 작업 디렉터리를 돌려준다.
+worktree_owner_repo() {
+    local wt="$1" common
+    common="$(git -C "$wt" rev-parse --git-common-dir 2>/dev/null)" || return 1
+    [[ "$common" == /* ]] || common="$wt/$common"
+    common="$(realpath -- "$common" 2>/dev/null)" || return 1
+    [[ "${common##*/}" == .git && -d "$common" ]] || return 1
+    dirname -- "$common"
+}
+
+remove_worktree() {
+    local wt="$1" owner out
+    owner="$(worktree_owner_repo "$wt")" || { fail "cannot resolve owner repo of $wt"; return 1; }
+    if out="$(git -C "$owner" worktree remove -- "$wt" 2>&1)"; then
+        return 0
+    fi
+    log "git worktree remove output ($owner): $out"
+    case "$out" in
+        *'modified or untracked files'*|*'is locked'*|*'contains submodules'*|*'use --force'*)
+            log "SKIP protected worktree (dirty/locked, not removed) $wt"
+            return 2 ;;
+    esac
+    fail "git worktree remove failed $wt"
+    return 1
+}
+
 remote_mkdir() {
-    timeout 30 ssh -p 7916 -o BatchMode=yes -o ConnectTimeout=15 "$REMOTE" \
+    timeout 30 ssh $SSH_OPTS "$REMOTE" \
         "mkdir -p -- '$1' && chmod 700 -- '$1'"
 }
 
@@ -177,10 +286,9 @@ if [[ -d "$WORKTREES" ]]; then
         fi
         # git worktree remove 는 dirty 상태면 스스로 거부하므로 rm -rf 보다 안전하고,
         # .git/worktrees 등록 정보도 함께 정리한다(R1 리뷰 지적 5).
-        if ! git -C "$MAIN_REPO" worktree remove -- "$wt" 2>>"$LOG"; then
-            fail "git worktree remove failed $wt"
-            continue
-        fi
+        remove_worktree "$wt"
+        rm_rc=$?
+        (( rm_rc == 0 )) || continue
         log "OFFLOADED worktree $wt -> $dst"
     done
 fi
@@ -205,7 +313,7 @@ else
             mv -f -- "$tmp" "$dump"
             chmod 600 "$dump" || fail "cannot chmod $dump"
             if remote_mkdir "$REMOTE_ROOT/$DAY/postgres" && \
-                timeout 1800 rsync -a --checksum -e "$RSYNC_SSH" "$dump" "$REMOTE:$dump_dst" && \
+                rsync_resume "$dump" "$REMOTE:$dump_dst" && \
                 timeout 30 ssh -p 7916 -o BatchMode=yes -o ConnectTimeout=15 "$REMOTE" "chmod 600 -- '$dump_dst'"; then
                 local_sum="$(sha256sum "$dump" | awk '{print $1}')"
                 remote_sum="$(timeout 1800 ssh -p 7916 -o BatchMode=yes -o ConnectTimeout=15 "$REMOTE" \
