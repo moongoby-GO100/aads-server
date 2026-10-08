@@ -228,6 +228,53 @@ class InvalidEditInput(ValueError):
     """edit_image 입력이 잘못됨 (INVALID_INPUT 으로 보고)."""
 
 
+_REQUEST_ID_RE = re.compile(r"\breq_[A-Za-z0-9]+")
+_SAFETY_VIOLATIONS_RE = re.compile(r"safety_violations=\[([^\]]*)\]")
+
+
+def _classify_provider_exception(exc: BaseException) -> tuple[str, dict[str, Any]]:
+    """OpenAI 안전필터 거부는 MODERATION_BLOCKED, 그 외는 PROVIDER_UNAVAILABLE.
+
+    프롬프트·이미지 원문은 metadata 에 넣지 않는다(카테고리/단계/요청 ID 만).
+    """
+    body = getattr(exc, "body", None)
+    err: Mapping[str, Any] = {}
+    if isinstance(body, Mapping):
+        inner = body.get("error")
+        err = inner if isinstance(inner, Mapping) else body
+    message = str(exc)
+    code = str(getattr(exc, "code", None) or err.get("code") or "")
+    if not (
+        code == "moderation_blocked"
+        or "moderation_blocked" in message
+        or "safety system" in message.lower()
+    ):
+        return "PROVIDER_UNAVAILABLE", {}
+
+    extra: dict[str, Any] = {"provider_error_code": "moderation_blocked"}
+    details = err.get("moderation_details")
+    details = details if isinstance(details, Mapping) else {}
+    stage = err.get("moderation_stage") or details.get("moderation_stage") or details.get("stage")
+    if stage:
+        extra["moderation_stage"] = str(stage)[:40]
+    raw_categories = details.get("categories") or err.get("safety_violations")
+    if isinstance(raw_categories, str):
+        raw_categories = [raw_categories]
+    if not raw_categories:
+        found = _SAFETY_VIOLATIONS_RE.search(message)
+        raw_categories = [c.strip() for c in found.group(1).split(",")] if found else []
+    categories = [str(c)[:40] for c in raw_categories if isinstance(c, (str, int)) and str(c)]
+    if categories:
+        extra["moderation_categories"] = categories[:10]
+    request_id = getattr(exc, "request_id", None)
+    if not request_id:
+        found_id = _REQUEST_ID_RE.search(message)
+        request_id = found_id.group(0) if found_id else None
+    if request_id:
+        extra["provider_request_id"] = str(request_id)[:80]
+    return "MODERATION_BLOCKED", extra
+
+
 def _sniff_image_ext(body: bytes) -> str | None:
     if body.startswith(b"\x89PNG\r\n\x1a\n"):
         return ".png"
@@ -1973,6 +2020,7 @@ class MediaGenerationService:
     ) -> dict[str, Any]:
         return {
             "error": code,
+            "error_code": code,
             "message": message,
             "job_id": job.get("job_id"),
             "kind": job.get("kind"),
@@ -1990,8 +2038,11 @@ class MediaGenerationService:
         code: str,
         message: str,
         route: MediaRoute | None = None,
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        metadata = {"error_code": code}
+        metadata: dict[str, Any] = {"error_code": code}
+        if extra_metadata:
+            metadata.update(extra_metadata)
         if route:
             metadata.update(
                 {
@@ -2007,7 +2058,10 @@ class MediaGenerationService:
             result_metadata=metadata,
             error_message=message,
         )
-        return self._job_error(code=code, message=message, job=job, route=route)
+        error = self._job_error(code=code, message=message, job=job, route=route)
+        if extra_metadata:
+            error.update(extra_metadata)
+        return error
 
     async def _prepare_local_media_job(
         self,
@@ -2239,11 +2293,13 @@ class MediaGenerationService:
             )
             return result
         except Exception as exc:
+            code, extra = _classify_provider_exception(exc)
             return await self._mark_failed(
                 job,
-                code="PROVIDER_UNAVAILABLE",
+                code=code,
                 message=str(exc),
                 route=route,
+                extra_metadata=extra,
             )
 
     async def _generate_image_with_route(
@@ -2902,11 +2958,13 @@ class MediaGenerationService:
                 )
                 return result
             except Exception as exc:
+                code, extra = _classify_provider_exception(exc)
                 return await self._mark_failed(
                     job,
-                    code="PROVIDER_UNAVAILABLE",
+                    code=code,
                     message=str(exc),
                     route=route,
+                    extra_metadata=extra,
                 )
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
