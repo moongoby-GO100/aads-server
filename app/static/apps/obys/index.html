@@ -3519,6 +3519,9 @@
                 <label>발급/검진일
                   <input name="issueDate" type="date">
                 </label>
+                <label>만료일 <span id="onboardingExpiryHint" class="muted"></span>
+                  <input name="expiresAt" type="date">
+                </label>
                 <label>파일
                   <input name="file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,application/pdf,image/*" required>
                 </label>
@@ -11930,6 +11933,26 @@
       return false;
     }
 
+    const ONBOARDING_EXPIRY_REQUIRED_TYPES = new Set(["health_certificate", "foreign_registration", "visa_status_certificate", "work_permission_confirmation"]);
+
+    // 보건증(건강진단결과서)은 검진일부터 1년간 유효하므로 만료일이 비어 있으면 검진일+1년-1일을 추천값으로 채운다.
+    // 추천값일 뿐이며 서류에 적힌 날짜가 다르면 사용자가 고친다.
+    function suggestOnboardingExpiry(form) {
+      if (!form?.expiresAt) return;
+      const type = form.documentType.value;
+      const required = ONBOARDING_EXPIRY_REQUIRED_TYPES.has(type);
+      form.expiresAt.required = required;
+      const hint = document.getElementById("onboardingExpiryHint");
+      if (hint) hint.textContent = required ? "(필수)" : "(선택)";
+      if (type !== "health_certificate" || form.expiresAt.value || !form.issueDate.value) return;
+      const issued = new Date(`${form.issueDate.value}T00:00:00`);
+      if (Number.isNaN(issued.getTime())) return;
+      issued.setFullYear(issued.getFullYear() + 1);
+      issued.setDate(issued.getDate() - 1);
+      const pad = n => String(n).padStart(2, "0");
+      form.expiresAt.value = `${issued.getFullYear()}-${pad(issued.getMonth() + 1)}-${pad(issued.getDate())}`;
+    }
+
     async function uploadOnboardingDocument(form) {
       if (!hasServerAuth()) {
         showToast("회원가입 또는 로그인 후 입사서류를 업로드할 수 있습니다.");
@@ -11949,6 +11972,14 @@
       formData.append("branch", form.branch.value);
       formData.append("document_type", form.documentType.value);
       formData.append("issue_date", form.issueDate.value || "");
+      // 서버는 보건증·체류 서류에 만료일이 없으면 400 으로 거절한다(ONBOARDING_EXPIRY_REQUIRED_TYPES).
+      // 이 화면에 만료일 칸이 없어 보건증 업로드가 항상 실패했다(2026-10-08).
+      suggestOnboardingExpiry(form);
+      if (ONBOARDING_EXPIRY_REQUIRED_TYPES.has(form.documentType.value) && !form.expiresAt.value) {
+        form.expiresAt.focus();
+        throw new Error("이 서류는 만료일을 입력해야 합니다. 서류에 적힌 유효기간 끝 날짜를 넣어 주십시오.");
+      }
+      formData.append("expires_at", form.expiresAt.value || "");
       formData.append("memo", form.memo.value.trim());
       formData.append("file", file);
       const response = await fetch("/api/v1/yeoljeong-finance/onboarding/documents", {
@@ -13594,6 +13625,10 @@
       els.gateInviteAcceptForm?.addEventListener("submit", event => {
         event.preventDefault();
         acceptEmployeeInvite(els.gateInviteAcceptForm).catch(err => showToast(`초대 수락 실패: ${err.message}`));
+      });
+      ["change", "input"].forEach(kind => {
+        els.onboardingUploadForm.documentType.addEventListener(kind, () => suggestOnboardingExpiry(els.onboardingUploadForm));
+        els.onboardingUploadForm.issueDate.addEventListener(kind, () => suggestOnboardingExpiry(els.onboardingUploadForm));
       });
       els.onboardingUploadForm.addEventListener("submit", event => {
         event.preventDefault();
