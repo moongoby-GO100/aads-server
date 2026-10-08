@@ -1111,12 +1111,22 @@ classify_push_state() {
 # 시도한다. 텍스트로 안 겹쳐도 같은 파일이면 의미가 충돌할 수 있고, 그 판단은
 # 사람 몫이기 때문이다. 확인이 있어도 실제 충돌·비FF 는 여전히 막는다.
 #
+# 예외 하나 더 — **추가 전용 허용 목록**(기본 HANDOVER.md, AUTO_REBASE_APPEND_ONLY_FILES
+# 로 공백 구분 확장). 겹친 파일이 전부 허용 목록에 속하고, 이 잡의 그 파일 변경
+# (base..sha)이 삭제 줄 0 이면 사람 확인 없이 시도한다. 2026-10-08 병행 러너 8건 중
+# 6건이 HANDOVER.md 를 건드려 거의 항상 겹쳤고, 텍스트 충돌은 0 이었다.
+# 시도한 뒤에는 허용 목록 밖 경로의 내용이 승인 SHA 와 같은지 다시 검증하고,
+# 다르면 원래 SHA 로 되돌린다. 실제 텍스트 충돌은 여전히 AUTO_REBASE_FAIL 이다.
+#
 # 성공하면 새 SHA 를 stdout 으로 돌려주고 0, 그 외에는 1 을 돌려준다.
 # 내부 로그는 전부 stderr 로 보낸다 — stdout 은 SHA 전용이다.
 # 실패해도 워크트리는 원래 SHA 로 되돌린다.
 attempt_stale_base_rebase() {
     local repo="$1" sha="$2" job_id="$3" remote_branch="${4:-main}"
     local remote_sha="" base="" job_files="" inc_files="" overlap="" new_sha="" n_commits="" attested=""
+    local overlap_all="" append_list="" other_overlap="" append_overlap="" append_note="" append_mode="false"
+    local append_f="" numstat="" n_add="" n_del="" want_hash="" got_hash=""
+    local -a append_extra=() append_excl=()
 
     [[ "${AUTO_REBASE_STALE_BASE:-1}" == "0" ]] && return 1
 
@@ -1139,15 +1149,42 @@ attempt_stale_base_rebase() {
     job_files=$(git -C "$repo" diff --name-only "$base" "$sha" 2>/dev/null | sort -u)
     inc_files=$(git -C "$repo" diff --name-only "$base" "$remote_sha" 2>/dev/null | sort -u)
     [[ -n "$job_files" ]] || return 1
-    overlap=$(comm -12 <(printf '%s\n' "$job_files") <(printf '%s\n' "$inc_files") | head -5)
+    overlap_all=$(comm -12 <(printf '%s\n' "$job_files") <(printf '%s\n' "$inc_files"))
+    overlap=$(printf '%s\n' "$overlap_all" | head -5 | grep . || true)
     if [[ -n "$overlap" ]]; then
+        # 추가 전용 허용 목록 — 형식이 이상한 항목은 버린다(경로 지정자·JSON 에 들어간다).
+        read -r -a append_extra <<< "${AUTO_REBASE_APPEND_ONLY_FILES:-}" || true
+        for append_f in HANDOVER.md ${append_extra[@]+"${append_extra[@]}"}; do
+            [[ "$append_f" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ && "$append_f" != *..* ]] || continue
+            append_list+="${append_f}"$'\n'
+        done
+        append_list=$(printf '%s' "$append_list" | sort -u)
+        other_overlap=$(comm -23 <(printf '%s\n' "$overlap_all") <(printf '%s\n' "$append_list"))
+        append_overlap=$(comm -12 <(printf '%s\n' "$overlap_all") <(printf '%s\n' "$append_list"))
+        if [[ -z "$other_overlap" && -n "$append_overlap" ]]; then
+            append_mode="true"
+            while IFS= read -r append_f; do
+                [[ -n "$append_f" ]] || continue
+                numstat=$(git -C "$repo" diff --no-renames --numstat "$base" "$sha" -- ":(literal)${append_f}" 2>/dev/null | head -1)
+                read -r n_add n_del _ <<< "$numstat" || true
+                if [[ ! "$n_add" =~ ^[0-9]+$ || "$n_del" != "0" ]]; then
+                    append_mode="false"
+                    append_note=" (추가 전용 아님: ${append_f} add=${n_add:-?} del=${n_del:-?})"
+                    break
+                fi
+            done <<< "$append_overlap"
+        fi
+    fi
+    if [[ "$append_mode" == "true" ]]; then
+        log "  AUTO_REBASE_APPEND_ONLY job=$job_id append_only_overlap=$(printf '%s' "$append_overlap" | tr '\n' ',' | sed 's/,$//')" >&2
+    elif [[ -n "$overlap" ]]; then
         # 조회 실패·빈 결과·job_id 형식 이상은 모두 "표식 없음" (fail-closed)
         attested=""
         if [[ "$job_id" =~ ^[a-zA-Z0-9_-]+$ ]]; then
             attested=$(db_exec "SELECT position('[REBASE-ATTESTED]' in COALESCE(review_feedback,'')) > 0 FROM pipeline_jobs WHERE job_id='${job_id}' LIMIT 1;" 2>/dev/null | tr -d '[:space:]') || attested=""
         fi
         if [[ "$attested" != "t" ]]; then
-            log "  AUTO_REBASE_SKIP job=$job_id — 같은 파일을 양쪽이 건드림: $(printf '%s' "$overlap" | tr '\n' ' ')" >&2
+            log "  AUTO_REBASE_SKIP job=$job_id — 같은 파일을 양쪽이 건드림: $(printf '%s' "$overlap" | tr '\n' ' ')${append_note}" >&2
             return 1
         fi
         log "  AUTO_REBASE_ATTESTED job=$job_id overlap=$(printf '%s' "$overlap" | tr '\n' ' ')" >&2
@@ -1171,7 +1208,23 @@ attempt_stale_base_rebase() {
         return 1
     fi
 
-    log "  AUTO_REBASE_OK job=$job_id ${sha:0:8} -> ${new_sha:0:8} (겹친 파일 $(printf '%s' "$overlap" | grep -c .), 커밋 ${n_commits}개)" >&2
+    if [[ "$append_mode" == "true" ]]; then
+        # 허용 목록 밖 경로는 승인 SHA 와 한 바이트도 달라지면 안 된다.
+        while IFS= read -r append_f; do
+            [[ -n "$append_f" ]] && append_excl+=(":(exclude,literal)${append_f}")
+        done <<< "$append_overlap"
+        want_hash=$(git -C "$repo" diff --no-renames --no-ext-diff "$base" "$sha" -- . "${append_excl[@]}" 2>/dev/null | git -C "$repo" hash-object --stdin 2>/dev/null) || want_hash=""
+        got_hash=$(git -C "$repo" diff --no-renames --no-ext-diff "$remote_sha" "$new_sha" -- . "${append_excl[@]}" 2>/dev/null | git -C "$repo" hash-object --stdin 2>/dev/null) || got_hash=""
+        if [[ ! "$want_hash" =~ ^[0-9a-f]{40}$ || "$want_hash" != "$got_hash" ]]; then
+            git -C "$repo" checkout --detach "$sha" >/dev/null 2>&1 || true
+            log "  AUTO_REBASE_REVERT job=$job_id — 허용 목록 밖 경로 내용이 승인 SHA 와 다름(append_only_overlap=$(printf '%s' "$append_overlap" | tr '\n' ',' | sed 's/,$//'))" >&2
+            return 1
+        fi
+        record_runner_event "$job_id" "auto_rebase_append_only_overlap" "info" "auto_rebase" "" "" "" "" "{\"append_only_overlap\":\"$(printf '%s' "$append_overlap" | tr '\n' ',' | sed 's/,$//')\",\"from\":\"${sha}\",\"to\":\"${new_sha}\"}" >/dev/null 2>&1 || true
+        append_note=", append_only_overlap=$(printf '%s' "$append_overlap" | tr '\n' ',' | sed 's/,$//')"
+    fi
+
+    log "  AUTO_REBASE_OK job=$job_id ${sha:0:8} -> ${new_sha:0:8} (겹친 파일 $(printf '%s' "$overlap" | grep -c .), 커밋 ${n_commits}개${append_note})" >&2
     printf '%s' "$new_sha"
     return 0
 }
@@ -1181,13 +1234,34 @@ attempt_stale_base_rebase() {
 # 부모가 정확히 하나인 커밋만 계산한다 — 루트 커밋(<sha>^ 없음)·머지 커밋은
 # "내용이 같다"를 증명할 수 없으므로 빈 문자열을 낸다. 실패는 항상 빈 문자열이고
 # 반환값은 0 이다. 호출 측은 빈 값을 "재승인 필요" 로 읽어야 한다.
+#
+# 추가 전용 허용 목록(기본 HANDOVER.md + AUTO_REBASE_APPEND_ONLY_FILES) 파일은
+# 문맥 줄이 rebase 로 바뀌어도 patch-id 가 흔들리면 안 된다. 그래서 이 파일들은
+# 본 diff 에서 빼고, 대신 문맥 없이(-U0) 추가·삭제된 줄만 따로 patch-id 를 구해
+# 합친다 — 문맥만 달라진 것은 같고, 줄 내용이 달라지면 다르다(보수적).
+# 허용 목록 파일을 건드리지 않은 커밋은 종전과 완전히 같은 값이 나온다.
 commit_patch_id() {
-    local repo="$1" sha="$2" parents="" pid=""
+    local repo="$1" sha="$2" parents="" pid="" main_pid="" app_pid="" w=""
+    local -a extra=() excl=() incl=()
     [[ -n "$repo" && "$sha" =~ ^[0-9a-f]{40}$ ]] || return 0
     git -C "$repo" cat-file -e "${sha}^{commit}" 2>/dev/null || return 0
     parents=$(git -C "$repo" rev-list --parents -n 1 "$sha" 2>/dev/null | awk '{print NF-1}') || parents=""
     [[ "$parents" == "1" ]] || return 0
-    pid=$(git -C "$repo" diff "${sha}^" "$sha" 2>/dev/null | git -C "$repo" patch-id --stable 2>/dev/null | awk 'NR==1{print $1}') || pid=""
+    read -r -a extra <<< "${AUTO_REBASE_APPEND_ONLY_FILES:-}" || true
+    for w in HANDOVER.md ${extra[@]+"${extra[@]}"}; do
+        [[ "$w" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ && "$w" != *..* ]] || continue
+        excl+=(":(exclude,literal)${w}")
+        incl+=(":(literal)${w}")
+    done
+    main_pid=$(git -C "$repo" diff "${sha}^" "$sha" -- . "${excl[@]}" 2>/dev/null | git -C "$repo" patch-id --stable 2>/dev/null | awk 'NR==1{print $1}') || main_pid=""
+    app_pid=$(git -C "$repo" diff -U0 "${sha}^" "$sha" -- "${incl[@]}" 2>/dev/null | git -C "$repo" patch-id --stable 2>/dev/null | awk 'NR==1{print $1}') || app_pid=""
+    [[ -z "$main_pid" || "$main_pid" =~ ^[0-9a-f]{40}$ ]] || return 0
+    [[ -z "$app_pid" || "$app_pid" =~ ^[0-9a-f]{40}$ ]] || return 0
+    if [[ -z "$app_pid" ]]; then
+        pid="$main_pid"
+    elif [[ -n "$main_pid" || -n "$app_pid" ]]; then
+        pid=$(printf 'main=%s app=%s' "$main_pid" "$app_pid" | git -C "$repo" hash-object --stdin 2>/dev/null) || pid=""
+    fi
     [[ "$pid" =~ ^[0-9a-f]{40}$ ]] || return 0
     printf '%s' "$pid"
     return 0
