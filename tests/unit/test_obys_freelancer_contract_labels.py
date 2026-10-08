@@ -278,3 +278,21 @@ def test_labor_term_labels_unchanged_with_internal_extras():
     base = [name for name, _ in pdf.term_rows(_labor_snapshot())]
     with_extras = [name for name, _ in pdf.term_rows({**_labor_snapshot(), **INTERNAL_EXTRAS})]
     assert base == with_extras
+
+
+def _share_message_body():
+    start = INDEX.index("function contractShareMessage(")
+    end = INDEX.index("function contractValue(", start)
+    return INDEX[start:end]
+
+
+def test_share_message_branches_by_contract_type_and_employer():
+    body = _share_message_body()
+    assert '"용역계약서"' in body
+    assert '"서약서"' in body
+    assert '"근로계약서"' in body
+    assert "employer_name" in body
+    assert "contract.branch" in body
+    assert "세무 처리 구분" in body
+    assert "급여/신고 구분" in body
+    assert "열정국밥 근로계약서" not in body

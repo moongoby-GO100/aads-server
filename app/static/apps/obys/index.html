@@ -7671,7 +7671,10 @@
       const employeeName = contract.employeeName || contract.employee_name || "직원";
       const contractType = contract.contractType || contract.contract_type || "";
       const employmentTaxType = contract.employmentTaxType || contract.employment_tax_type || "";
-      return `${employeeName}님 열정국밥 근로계약서 서명 요청입니다.\n계약 유형: ${contractTypeLabels[contractType] || contract.contract_label || contractType}\n급여/신고 구분: ${employmentTaxTypeLabels[employmentTaxType] || contract.employment_tax_label || "-"}\n아래 링크에서 확인 후 서명 완료 처리해주세요.\n${contractSignUrl(contract)}`;
+      const documentName = contractType === "freelancer" ? "용역계약서" : contractType === "confidentiality" ? "서약서" : "근로계약서";
+      const employerName = contractValue(contract, "employerName", "employer_name") || contract.branch || "열정국밥";
+      const taxLabelName = contractType === "freelancer" ? "세무 처리 구분" : "급여/신고 구분";
+      return `${employeeName}님 ${employerName} ${documentName} 서명 요청입니다.\n계약 유형: ${contractTypeLabels[contractType] || contract.contract_label || contractType}\n${taxLabelName}: ${employmentTaxTypeLabels[employmentTaxType] || contract.employment_tax_label || "-"}\n아래 링크에서 확인 후 서명 완료 처리해주세요.\n${contractSignUrl(contract)}`;
     }
 
     function contractValue(contract, camelKey, snakeKey = "") {

@@ -14964,3 +14964,10 @@ WHERE superseded_by IS NOT NULL ORDER BY superseded_at DESC;
 - 검증(실행한 것만): `test_chat_session_effort.py` 42 passed; stale_base 재작업: 산출물을 최신 main(6877fa2d, 인터럽트 수명주기 반영) 위로 다시 적용해 재검증. chat/model_selector 관련 묶음 376 passed/3 failed 인데 3건(`test_chat_lightweight_frontend_static`, `test_chat_lightweight_regression`, `test_chat_service::test_collect_queued_interrupts_recovers_db_saved_interrupt_without_memory_queue`)은 변경 없는 origin/main 에서도 동일하게 실패(git archive 사본으로 실측) — 이번 변경과 무관(미수정). 전체 `tests/unit` 41 failed/7623 passed/4 errors — 실패는 yeoljeong·sandbox·ohvis·review_hold·governance 등 이번 변경과 무관한 파일(채팅 관련은 위 2건뿐; memory-context 라우트 등 건드리지 않은 코드의 기존 실패 포함, 변경 파일을 지목한 실패 0). ruff F821/F811 통과, compileall·dup_guard 통과.
 - 미실행: 운영 반영·재시작·실제 호스트 릴레이 갱신(릴레이 갱신 전까지 CLI 경로는 `unsupported` 표시). 대시보드 UI 는 후속 러너.
 - DB handover entry_key `chat-session-effort-20261003`: 미기록(handover_write 도구가 이 세션에 없어 HANDOVER.md 에만 기록). commit/push 는 Runner 가 수행.
+
+## 2026-10-08 — 서명요청 공유 문구 계약 유형·상호 반영 (ACCT-CONTRACT-SHARE-MESSAGE-20261008)
+
+- DB handover entry_key `acct-contract-share-message-20261008` (project=ACCT, entry_type=task): 이 세션에 handover_write 도구가 없어 HANDOVER.md 에만 기록. 정본 문서는 새로 만들지 않음(정본 미등록 — 신규 문서 없음).
+- `app/static/apps/obys/index.html` `contractShareMessage`: 문서명 freelancer→용역계약서 / confidentiality→서약서 / 그 외 근로계약서, 상호 employerName/employer_name → branch → "열정국밥", 둘째 줄 라벨 freelancer 는 "세무 처리 구분"(그 외 "급여/신고 구분" 유지). 계약 유형·링크 줄과 `contractSignUrl` 불변. 예: "양재혁님 열정국밥 성신여대점 용역계약서 서명 요청입니다."
+- `sw.js` CACHE_VERSION `obys-clock-shell-20261008-r2`, `tests/unit/test_obys_clobe_ui_static.py` 고정 문자열 1줄 동기화. 정적 테스트 `test_share_message_branches_by_contract_type_and_employer` 추가(`test_obys_freelancer_contract_labels.py`).
+- 서명요청 발송·계약 DB 수정·카페24 배포 없음. `yeoljeong_contract_pdf.py` 미수정. commit/push 는 Runner 수행.
