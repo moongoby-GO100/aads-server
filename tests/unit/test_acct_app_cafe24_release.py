@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import tarfile
 from pathlib import Path
@@ -79,6 +80,7 @@ EOT
       echo "BACKUP_BYTES=1234"
       ;;
     start_candidate)
+      printf '%s\n' "$@" > "$D/start_candidate.args"
       if [[ -n ${FAKE_START_FAIL:-} ]]; then echo "run failed" >&2; return 1; fi
       echo "$1|true|$5|sha256:newimg|$7" >> "$D/cands"
       if [[ -n ${FAKE_MUTATE_OTHER:-} ]]; then echo "/shortflow-x idz true t9" >> "$D/unrelated"; fi
@@ -413,6 +415,112 @@ def test_start_candidate_extra_env_file_refuses_unknown_names_empty_values_and_l
     proc, env = _run_extra_env(box, tmp_path, content, mode)
     assert proc.returncode == 93
     assert "DATABASE_URL=postgres" not in proc.stdout + proc.stderr
+
+
+# ---- egress proxy (opt-in) ---------------------------------------------------------------------
+PROXY_URL = "http://acct-egress-proxy:8888"
+
+
+def _start_candidate_args(box):
+    return (box.fake / "start_candidate.args").read_text().replace("\\", "").splitlines()
+
+
+def _run_proxy_snippet(box, tmp_path, proxy, noproxy, running="true", envf_text="KEEP=1\nHTTPS_PROXY=http://old:1\nno_proxy=old\n"):
+    body = (box.fake / "stdin.start_candidate").read_text()
+    start = body.index("egress_proxy=${9:-}")
+    end = body.index("# 클로브 수집용")
+    envf = tmp_path / "envf"
+    envf.write_text(envf_text)
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    docker = bindir / "docker"
+    docker.write_text(f"#!/bin/bash\necho {running}\n")
+    docker.chmod(0o755)
+    script = f'set -euo pipefail\nenvf={envf}\nset -- a b c d e f g h {shlex.quote(proxy)} {shlex.quote(noproxy)}\n' if proxy else f'set -euo pipefail\nenvf={envf}\nset -- a b c d e f g h\n'
+    proc = subprocess.run(
+        ["bash", "-c", script + body[start:end]],
+        capture_output=True, text=True, env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"},
+    )
+    return proc, envf.read_text()
+
+
+def test_proxy_disabled_by_default_keeps_candidate_arguments_unchanged(box):
+    proc = box.run()
+    assert proc.returncode == 0 and "egress proxy" not in proc.stdout
+    assert len(_start_candidate_args(box)) == 8
+
+
+def test_proxy_enabled_passes_url_and_default_no_proxy_after_the_eight_original_arguments(box, tmp_path):
+    other_dir = tmp_path / "plain"
+    other_dir.mkdir()
+    plain_box = Box(other_dir)
+    assert plain_box.run().returncode == 0
+    plain = _start_candidate_args(plain_box)
+    proc = box.run(env={"ACCT_APP_EGRESS_PROXY_URL": PROXY_URL})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    args = _start_candidate_args(box)
+    assert len(plain) == 8 and len(args) == 10
+    assert args[:3] == plain[:3] and args[4:6] == plain[4:6]
+    assert args[8] == PROXY_URL
+    assert args[9] == "localhost,127.0.0.1,acct-pg"
+    assert "egress proxy enabled" in proc.stdout
+
+
+def test_proxy_no_proxy_is_overridable(box):
+    proc = box.run(env={"ACCT_APP_EGRESS_PROXY_URL": PROXY_URL, "ACCT_APP_NO_PROXY": "localhost,127.0.0.1,acct-pg,10.0.0.5"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _start_candidate_args(box)[9] == "localhost,127.0.0.1,acct-pg,10.0.0.5"
+
+
+def test_proxy_snippet_is_a_noop_when_disabled(box, tmp_path):
+    assert box.run().returncode == 0
+    proc, env = _run_proxy_snippet(box, tmp_path, None, None)
+    assert proc.returncode == 0, proc.stderr
+    assert env == "KEEP=1\nHTTPS_PROXY=http://old:1\nno_proxy=old\n"
+
+
+def test_proxy_snippet_replaces_proxy_env_and_keeps_the_rest(box, tmp_path):
+    assert box.run().returncode == 0
+    proc, env = _run_proxy_snippet(box, tmp_path, PROXY_URL, "localhost,127.0.0.1,acct-pg")
+    assert proc.returncode == 0, proc.stderr
+    lines = env.splitlines()
+    assert "KEEP=1" in lines
+    for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        assert lines.count(f"{k}={PROXY_URL}") == 1
+    for k in ("NO_PROXY", "no_proxy"):
+        assert lines.count(f"{k}=localhost,127.0.0.1,acct-pg") == 1
+    assert "HTTPS_PROXY=http://old:1" not in lines and "no_proxy=old" not in lines
+
+
+@pytest.mark.parametrize(
+    "proxy,noproxy,running",
+    [
+        ("https://acct-egress-proxy:8888", "localhost", "true"),
+        ("http://acct-egress-proxy", "localhost", "true"),
+        ("http://user:pw@acct-egress-proxy:8888", "localhost", "true"),
+        (PROXY_URL, "local host;rm", "true"),
+        (PROXY_URL, "localhost", "false"),
+    ],
+)
+def test_proxy_snippet_refuses_bad_url_bad_no_proxy_and_a_stopped_proxy(box, tmp_path, proxy, noproxy, running):
+    assert box.run().returncode == 0
+    proc, env = _run_proxy_snippet(box, tmp_path, proxy, noproxy, running)
+    assert proc.returncode == 94
+    assert env == "KEEP=1\nHTTPS_PROXY=http://old:1\nno_proxy=old\n"
+
+
+def test_network_mode_checks_are_untouched_by_the_proxy_option(box):
+    proc = box.run(env={"ACCT_APP_EGRESS_PROXY_URL": PROXY_URL})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = (box.fake / "stdin.start_candidate").read_text()
+    assert '--network "container:$NS"' in body
+    text = SCRIPT.read_text()
+    assert '${INFO[PREV_NETMODE]:-} == "container:${INFO[NS_ID]}"' in text
+
+
+def test_clobe_client_follows_environment_proxies():
+    src = (ROOT / "app/services/clobe_mcp_client.py").read_text()
+    assert "trust_env=False" not in src and "proxies=" not in src and "proxy=" not in src
 
 
 # ---- image once per SHA -------------------------------------------------------------------------

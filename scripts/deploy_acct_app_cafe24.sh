@@ -71,6 +71,12 @@ BUILD_TIMEOUT="${ACCT_BUILD_TIMEOUT:-600}"
 HEALTH_WAIT_SECONDS="${ACCT_HEALTH_WAIT_SECONDS:-90}"
 CONTEXT_MAX_MB="${ACCT_CONTEXT_MAX_MB:-100}"
 SSH_DEFAULT_TIMEOUT="${ACCT_SSH_TIMEOUT:-120}"
+# 출구 프록시(deploy/acct-egress). 비어 있으면(기본) 비활성 — 후보 컨테이너 인자는 기존과 같다.
+# 예: ACCT_APP_EGRESS_PROXY_URL=http://acct-egress-proxy:8888 (호스트 부분 = 프록시 컨테이너 이름)
+EGRESS_PROXY_URL="${ACCT_APP_EGRESS_PROXY_URL:-}"
+EGRESS_NO_PROXY_DEFAULT="localhost,127.0.0.1,${NS_CONTAINER}"
+[[ $PG_CONTAINER == "$NS_CONTAINER" ]] || EGRESS_NO_PROXY_DEFAULT+=",${PG_CONTAINER}"
+EGRESS_NO_PROXY="${ACCT_APP_NO_PROXY:-$EGRESS_NO_PROXY_DEFAULT}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 
 # Fixed on purpose: nothing from the environment or the command line can add to it.
@@ -310,6 +316,19 @@ envf=$(mktemp /dev/shm/acct-app-env.XXXXXX 2>/dev/null || mktemp)
 trap 'rm -f "$envf"' EXIT
 docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$PREV" | grep -v -e '^APP_PORT=' -e '^$' > "$envf" || true
 echo "APP_PORT=$PORT" >> "$envf"
+# 출구 프록시(선택). $9=프록시 URL, $10=NO_PROXY. 비어 있으면 PREV 의 환경을 그대로 둔다.
+egress_proxy=${9:-}; egress_noproxy=${10:-}
+if [[ -n $egress_proxy ]]; then
+  [[ $egress_proxy =~ ^http://([a-z0-9][a-z0-9._-]*):[0-9]{2,5}$ ]] || { echo "refusing egress proxy '$egress_proxy'"; exit 94; }
+  proxy_host=${BASH_REMATCH[1]}
+  [[ $egress_noproxy =~ ^[A-Za-z0-9._:,-]+$ ]] || { echo "refusing NO_PROXY '$egress_noproxy'"; exit 94; }
+  [[ $(docker inspect -f '{{.State.Running}}' "$proxy_host" 2>/dev/null) == true ]] \
+    || { echo "egress proxy container $proxy_host is not running"; exit 94; }
+  grep -v -e '^HTTPS_PROXY=' -e '^HTTP_PROXY=' -e '^NO_PROXY=' -e '^https_proxy=' -e '^http_proxy=' -e '^no_proxy=' "$envf" > "$envf.new" || true
+  mv "$envf.new" "$envf"
+  printf '%s\n' "HTTPS_PROXY=$egress_proxy" "HTTP_PROXY=$egress_proxy" "NO_PROXY=$egress_noproxy" \
+    "https_proxy=$egress_proxy" "http_proxy=$egress_proxy" "no_proxy=$egress_noproxy" >> "$envf"
+fi
 # 클로브 수집용 추가 설정(예: OBYS_VAULT_KEY). 값은 저장소·스크립트·로그 어디에도 없고 카페24 root 전용 파일에만 있다.
 # 경로는 고정, 파일은 root:600 이어야 하며, 아래 이름만 받는다(PREV 의 같은 이름 값을 덮어쓴다).
 extra=/root/acct-app-extra.env
@@ -718,7 +737,12 @@ start_candidate() {
     need_budget $((MONITOR_SECONDS + RECOVERY_RESERVE + HEALTH_WAIT_SECONDS + 60)) "candidate start"
     CANDIDATE_CREATED=1
     say "starting $NEW_CONTAINER on port $NEW_PORT (same env/netns/mounts as $PREV_CONTAINER)"
-    rscript start_candidate R_START_CANDIDATE "$NEW_CONTAINER" "$PREV_CONTAINER" "$NS_CONTAINER" "$IMAGE_TAG" "$NEW_PORT" "$OLD_PORT" "$RELEASE_SHA" "$RUN_ID" \
+    local proxy_args=()
+    if [[ -n $EGRESS_PROXY_URL ]]; then
+        proxy_args=("$EGRESS_PROXY_URL" "$EGRESS_NO_PROXY")
+        say "egress proxy enabled for $NEW_CONTAINER: $EGRESS_PROXY_URL (NO_PROXY=$EGRESS_NO_PROXY)"
+    fi
+    rscript start_candidate R_START_CANDIDATE "$NEW_CONTAINER" "$PREV_CONTAINER" "$NS_CONTAINER" "$IMAGE_TAG" "$NEW_PORT" "$OLD_PORT" "$RELEASE_SHA" "$RUN_ID" ${proxy_args[@]+"${proxy_args[@]}"} \
         >/dev/null || die 8 "candidate container did not start"
     while (( waited <= HEALTH_WAIT_SECONDS )); do
         if candidate_ok "http://$UP_IP:$NEW_PORT" "$MARKER"; then
