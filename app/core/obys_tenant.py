@@ -62,10 +62,16 @@ _TENANT_SCOPED_PREFIXES = (
 # 허용목록)을 그대로 탄다 — 게이트가 새로 403 을 만들지도, 새로 열지도 않는다.
 # 기존 prefix 들의 startswith 판정은 그대로 둔다(동작 변경 없음).
 _SIGNING_PATH = "/api/v1/yeoljeong-finance/contracts/signing"
+_CONTRACTS_PATH = "/api/v1/yeoljeong-finance/contracts"
+_CONTRACT_ID_PATTERN = r"[A-Za-z0-9_-]{8,64}"
 _SIGN_TOKEN_PATTERN = r"[A-Za-z0-9_-]{32}"
 _CONTRACT_SIGNING_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GET", re.compile(re.escape(_SIGNING_PATH) + "/" + _SIGN_TOKEN_PATTERN)),
     ("POST", re.compile(re.escape(_SIGNING_PATH))),
+    # 로그인 직후 '서명할 계약서' 안내용 세 경로 — 모두 _read_hr(JWT 테넌트 SQL 스코프)와 본인 이메일 대조만 쓴다.
+    ("GET", re.compile(re.escape(_CONTRACTS_PATH) + "/pending-signature")),
+    ("POST", re.compile(re.escape(_CONTRACTS_PATH) + "/signing-renewal")),
+    ("GET", re.compile(re.escape(_CONTRACTS_PATH) + "/" + _CONTRACT_ID_PATTERN + "/signing-view")),
 )
 
 

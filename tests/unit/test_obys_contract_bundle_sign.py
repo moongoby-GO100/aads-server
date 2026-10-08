@@ -392,4 +392,4 @@ def test_signing_screen_static_strings_and_sw_cache_bump():
     assert "data-bundle-preview" in html and "data-bundle-contract" in html and "checked ${current ? \"disabled\"" in html
     assert html.count('id="contractSignatureCanvas"') == 1
     assert "payload.bundle_notice?.message" in html
-    assert 'CACHE_VERSION = "obys-clock-shell-20261008-r4"' in (root / "sw.js").read_text(encoding="utf-8")
+    assert 'CACHE_VERSION = "obys-clock-shell-20261009-r1"' in (root / "sw.js").read_text(encoding="utf-8")

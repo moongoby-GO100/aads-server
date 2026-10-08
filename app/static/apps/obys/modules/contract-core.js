@@ -45,7 +45,7 @@
       hourly: "시급",
       monthly: "월급",
       daily: "일급",
-      case_fee: "건별/용역비"
+      case_fee: "건별 용역비"
     };
     const contractStatusLabels = {
       draft: ["작성중", "info"],
@@ -65,7 +65,7 @@
         weeklyHours: "주 소정근로시간은 실제 근무표 기준으로 확정하고 법정 한도 내에서 운영",
         workDays: "주 5일 또는 매장 근무표에 따른 협의 근무",
         holidays: "주휴일은 근무표에 따라 지정하고 주휴수당은 법정 요건 충족 시 지급",
-        payDate: "매월 10일",
+        payDate: "매월 5일",
         payMethod: "직원 본인 명의 계좌이체",
         probationPeriod: "수습기간 해당 없음. 필요 시 입사 후 3개월 이내로 별도 명시",
         wageComposition: "기본급, 주휴수당, 연장·야간·휴일근로수당, 식대 또는 기타 수당, 법정 공제항목을 급여내역서에 구분 기재",
@@ -393,7 +393,7 @@
         : "";
       return `
         <h3>${previewText(title, "계약서")}</h3>
-        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · 근무지점 ${previewText(contractValue(contract, "branch"))} · A4 210mm x 297mm · 최신양식 v2026.07.23 · ${isFreelancerContract ? "고용노동부 노무제공자 공통 표준계약서 기준 참고" : isConfidentialityContract ? "부속 서약서" : "고용노동부 표준근로계약서 기준 참고"}</p>
+        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · ${isFreelancerContract ? "수행 지점" : "근무지점"} ${previewText(contractValue(contract, "branch"))} · A4 210mm x 297mm · 최신양식 v2026.07.23 · ${isFreelancerContract ? "고용노동부 노무제공자 공통 표준계약서 기준 참고" : isConfidentialityContract ? "부속 서약서" : "고용노동부 표준근로계약서 기준 참고"}</p>
         <div class="legal-basis">${escapeHtml(legalBasisText)}</div>
         ${commonMeta}
         ${legalChecklistHtml}

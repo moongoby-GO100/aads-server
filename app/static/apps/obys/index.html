@@ -2206,6 +2206,59 @@
 
     .contract-sign-bundle.hidden { display: none; }
 
+    .sign-pending-strip {
+      width: 100%;
+      min-height: 44px;
+      margin-bottom: 12px;
+      justify-content: space-between;
+      border-color: var(--accent);
+      background: #fff7e6;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .sign-prompt-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(9, 22, 27, .48);
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      z-index: 40;
+    }
+
+    .sign-prompt-sheet {
+      width: min(560px, 100%);
+      max-height: 80vh;
+      overflow-y: auto;
+      display: grid;
+      gap: 12px;
+      padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+      background: var(--panel);
+      border-radius: 16px 16px 0 0;
+      box-shadow: 0 -8px 24px rgba(9, 22, 27, .22);
+    }
+
+    .sign-prompt-sheet h2 { margin: 0; font-size: 18px; }
+    .sign-prompt-sheet p { margin: 0; font-size: 14px; line-height: 1.5; }
+    .sign-prompt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+
+    .sign-prompt-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    .sign-prompt-item span { min-width: 0; line-height: 1.35; }
+    .sign-prompt-item .due { flex: none; font-weight: 700; color: var(--accent-strong); }
+    .sign-prompt-sheet button { min-height: 44px; }
+    .sign-prompt-sheet button.big { min-height: 52px; font-size: 17px; font-weight: 700; }
+
     .contract-sign-bundle-title { margin: 0; font-size: 14px; font-weight: 700; }
 
     .contract-sign-bundle-item {
@@ -3537,6 +3590,7 @@
       </section>
 
       <section id="onboardingView" class="hidden">
+        <button type="button" id="signPendingStrip" class="sign-pending-strip hidden"><span id="signPendingStripText"></span></button>
         <div class="settings-note" style="margin-bottom:14px">
           신규 직원은 회원가입 후 본인 서류를 직접 업로드할 수 있습니다. 주민등록등본, 신분증 등 민감서류는 필요한 경우에만 받고 주민등록번호 뒷자리와 가족정보는 마스킹본을 원칙으로 합니다.
         </div>
@@ -3766,7 +3820,7 @@
                   <input name="holidays" placeholder="예: 매주 수요일, 주휴수당 법정 기준 적용">
                 </label>
                 <label>급여지급일
-                  <input name="payDate" placeholder="예: 매월 10일">
+                  <input name="payDate" placeholder="예: 매월 5일">
                 </label>
                 <label>지급방법
                   <input name="payMethod" placeholder="예: 직원 명의 계좌이체">
@@ -4901,6 +4955,35 @@
     </section>
   </div>
 
+  <div id="signPromptBackdrop" class="sign-prompt-backdrop hidden">
+    <section id="signPromptSheet" class="sign-prompt-sheet" role="dialog" aria-modal="true" aria-labelledby="signPromptTitle">
+      <h2 id="signPromptTitle"></h2>
+      <p id="signPromptHint" class="muted"></p>
+      <ul id="signPromptList" class="sign-prompt-list"></ul>
+      <button type="button" id="signPromptNowBtn" class="primary big">지금 서명</button>
+      <button type="button" id="signPromptLaterBtn">나중에</button>
+    </section>
+  </div>
+
+  <div id="signLinkNoticeBackdrop" class="sign-prompt-backdrop hidden">
+    <section class="sign-prompt-sheet" role="alertdialog" aria-modal="true" aria-labelledby="signLinkNoticeTitle">
+      <h2 id="signLinkNoticeTitle">계약서를 열 수 없습니다</h2>
+      <p id="signLinkNoticeText"></p>
+      <button type="button" id="signLinkRenewBtn" class="primary big hidden">다시 요청하기</button>
+      <button type="button" id="signLinkNoticeCloseBtn">닫기</button>
+    </section>
+  </div>
+
+  <div id="contractBankWarnModal" class="sign-prompt-backdrop hidden">
+    <section class="sign-prompt-sheet" role="alertdialog" aria-modal="true" aria-labelledby="contractBankWarnTitle">
+      <h2 id="contractBankWarnTitle">급여 계좌가 비어 있습니다</h2>
+      <p>이 직원의 통장사본 파일은 등록돼 있지만 급여 은행·계좌번호가 비어 있습니다. 이대로 저장하면 계약서에 계좌가 빠집니다. 통장사본을 보고 직접 입력하십시오. 계약서에는 가려진 계좌번호만 남습니다.</p>
+      <button type="button" id="contractBankWarnViewBtn">통장사본 보기</button>
+      <button type="button" id="contractBankWarnInputBtn" class="primary big">직접 입력</button>
+      <button type="button" id="contractBankWarnSaveBtn">계좌 없이 저장</button>
+    </section>
+  </div>
+
   <div id="contractSignModal" class="modal-backdrop hidden">
     <section class="modal contract-sign-modal" role="dialog" aria-modal="true" aria-labelledby="contractSignTitle">
       <div class="panel-head">
@@ -5372,7 +5455,7 @@
         weeklyHours: "주 소정근로시간은 실제 근무표 기준으로 확정하고 법정 한도 내에서 운영",
         workDays: "주 5일 또는 매장 근무표에 따른 협의 근무",
         holidays: "주휴일은 근무표에 따라 지정하고 주휴수당은 법정 요건 충족 시 지급",
-        payDate: "매월 10일",
+        payDate: "매월 5일",
         payMethod: "직원 본인 명의 계좌이체",
         probationPeriod: "수습기간 해당 없음. 필요 시 입사 후 3개월 이내로 별도 명시",
         wageComposition: "기본급, 주휴수당, 연장·야간·휴일근로수당, 식대 또는 기타 수당, 법정 공제항목을 급여내역서에 구분 기재",
@@ -7825,6 +7908,18 @@
       updateContractPreview(null, overwrite ? "표준 기본값 반영" : "입력값 기준");
     }
 
+    function maskContractAccountInput(value) {
+      const text = String(value || "").trim();
+      const digits = text.replace(/\D/g, "");
+      if (!text || text.includes("*") || digits.length < 8) return text;
+      let seen = 0;
+      return Array.from(text).map(ch => {
+        if (!/\d/.test(ch)) return ch;
+        seen += 1;
+        return seen > digits.length - 4 ? ch : "*";
+      }).join("");
+    }
+
     function contractDraftFromForm() {
       const data = Object.fromEntries(new FormData(els.contractForm).entries());
       const business = businessForBranchName(data.branch);
@@ -7840,7 +7935,7 @@
         employeeNationality: String(data.employeeNationality || "").trim(),
         bankName: String(data.bankName || "").trim(),
         bankAccountHolder: String(data.bankAccountHolder || "").trim(),
-        bankAccountMasked: String(data.bankAccountMasked || "").trim(),
+        bankAccountMasked: maskContractAccountInput(String(data.bankAccountMasked || "").trim()),
         healthCertificateValidUntil: String(data.healthCertificateValidUntil || "").trim(),
         onboardingDocumentSummary: String(data.onboardingDocumentSummary || "").trim(),
         branch: data.branch,
@@ -8396,6 +8491,8 @@
         closeContractSignModal();
         renderContracts();
         if (bundleResults.length > 1) loadEmployeeContracts().catch(() => {});
+        signSheetShown = true;
+        refreshSignPrompt().catch(() => {});
         openContractPreviewModal(signed, "전자서명 완료본");
         const pdfStored = bundleResults.length > 1
           ? bundleResults.every(item => item.signed_pdf?.status === "stored")
@@ -8586,6 +8683,150 @@
       form.insuranceDeduction.value = form.insuranceDeduction.value || "0";
     }
 
+    const SIGN_PROMPT_DISMISSED_KEY = "obys.signPrompt.dismissed";
+    let pendingSignContracts = [];
+    let pendingSignGroups = [];
+    let signSheetShown = false;
+    let signRenewToken = "";
+
+    function signPromptDismissed() {
+      try { return sessionStorage.getItem(SIGN_PROMPT_DISMISSED_KEY) === "1"; } catch (error) { return false; }
+    }
+
+    function markSignPromptDismissed() {
+      try { sessionStorage.setItem(SIGN_PROMPT_DISMISSED_KEY, "1"); } catch (error) { /* 저장소를 못 써도 이번 화면에서는 다시 띄우지 않는다 */ }
+    }
+
+    function signDueLabel(daysLeft) {
+      if (daysLeft === null || daysLeft === undefined) return "";
+      if (daysLeft < 0) return "기한 지남";
+      return daysLeft === 0 ? "D-day" : `D-${daysLeft}`;
+    }
+
+    function renderSignPendingStrip() {
+      const count = pendingSignContracts.length;
+      els.signPendingStrip.classList.toggle("hidden", !count);
+      els.signPendingStripText.textContent = `서명 대기 ${count}건 · 지금 서명`;
+    }
+
+    function closeSignPromptSheet() {
+      els.signPromptBackdrop.classList.add("hidden");
+    }
+
+    function openSignPromptSheet() {
+      const count = pendingSignContracts.length;
+      if (!count) return;
+      signSheetShown = true;
+      els.signPromptTitle.textContent = `서명할 계약서 ${count}건`;
+      els.signPromptHint.textContent = pendingSignGroups.length > 1
+        ? "기한이 가장 짧은 사업장부터 서명합니다. 나머지는 홈 위쪽 띠에서 이어서 서명할 수 있습니다."
+        : "";
+      els.signPromptList.innerHTML = pendingSignContracts.map(item => `<li class="sign-prompt-item">
+        <span><b>${escapeHtml(item.business_name || "사업장")}</b> · ${escapeHtml(item.title || "계약서")}</span>
+        <span class="due">${escapeHtml(signDueLabel(item.days_left))}</span>
+      </li>`).join("");
+      els.signPromptBackdrop.classList.remove("hidden");
+    }
+
+    async function refreshSignPrompt() {
+      if (!hasServerAuth() || canManageOnboarding()) {
+        pendingSignContracts = [];
+        pendingSignGroups = [];
+        renderSignPendingStrip();
+        return;
+      }
+      let payload;
+      try {
+        payload = await financeApi("/contracts/pending-signature");
+      } catch (error) {
+        if (Number(error?.status) === 401) handleExpiredServerSession();
+        return;
+      }
+      pendingSignContracts = Array.isArray(payload.pending) ? payload.pending : [];
+      pendingSignGroups = Array.isArray(payload.groups) ? payload.groups : [];
+      renderSignPendingStrip();
+      const linkOpening = new URLSearchParams(window.location.search).has("yf_contract_token")
+        || !els.contractSignModal.classList.contains("hidden");
+      if (pendingSignContracts.length && !signSheetShown && !signPromptDismissed() && !linkOpening) openSignPromptSheet();
+    }
+
+    async function startPendingSigning() {
+      closeSignPromptSheet();
+      markSignPromptDismissed();
+      const group = pendingSignGroups[0];
+      const contractId = group?.contract_ids?.[0] || pendingSignContracts[0]?.id;
+      if (!contractId) {
+        showToast("서명할 계약서가 없습니다.");
+        return;
+      }
+      try {
+        const payload = await financeApi(`/contracts/${encodeURIComponent(contractId)}/signing-view`);
+        const contract = payload.contract;
+        state.contracts = [contract, ...(state.contracts || []).filter(item => item.id !== contract.id)];
+        saveState();
+        setView("contracts");
+        openContractSignModal(contract, payload.bundle || []);
+      } catch (error) {
+        if (Number(error?.status) === 401) {
+          handleExpiredServerSession();
+          return;
+        }
+        showToast(`계약서를 열 수 없습니다: ${error.message}`);
+        refreshSignPrompt().catch(() => {});
+      }
+    }
+
+    function laterSignPrompt() {
+      closeSignPromptSheet();
+      markSignPromptDismissed();
+    }
+
+    function showSignLinkNotice(message, renewToken = "") {
+      signRenewToken = renewToken;
+      els.signLinkNoticeText.textContent = message;
+      els.signLinkRenewBtn.classList.toggle("hidden", !renewToken);
+      els.signLinkNoticeBackdrop.classList.remove("hidden");
+    }
+
+    async function requestSignRenewal() {
+      const token = signRenewToken;
+      if (!token) return;
+      els.signLinkRenewBtn.disabled = true;
+      try {
+        const result = await financeApi("/contracts/signing-renewal", { method: "POST", body: JSON.stringify({ token }) });
+        els.signLinkNoticeBackdrop.classList.add("hidden");
+        showToast(result.notified
+          ? "관리자에게 다시 요청했습니다. 새 서명 요청이 올 때까지 기다려 주십시오."
+          : "관리자에게 알림을 보내지 못했습니다. 직접 연락해 주십시오.");
+      } catch (error) {
+        showToast(`다시 요청 실패: ${error.message}`);
+      } finally {
+        els.signLinkRenewBtn.disabled = false;
+      }
+    }
+
+    let contractBankWarnSkip = false;
+    let contractBankWarnDocumentId = "";
+
+    async function bankbookWithoutAccount(draft) {
+      if (String(draft.bankName || "").trim() && String(draft.bankAccountMasked || "").trim()) return null;
+      if (!onboardingDocuments.length) await loadOnboardingDocuments().catch(() => {});
+      const requestId = String(draft.employeeRequestId || "");
+      const email = String(draft.employeeEmail || "").trim().toLowerCase();
+      return onboardingDocuments.find(item =>
+        item.document_type === "bankbook_copy"
+        && item.id
+        && !["missing", "superseded"].includes(String(item.status || "").toLowerCase())
+        && ((requestId && String(item.employee_request_id || "") === requestId)
+          || (email && String(item.employee_email || "").toLowerCase() === email))
+      ) || null;
+    }
+
+    function openContractBankWarn(bankbook) {
+      contractBankWarnDocumentId = bankbook.id;
+      els.contractBankWarnModal.classList.remove("hidden");
+    }
+
     async function handleContractLinkFromUrl() {
       const params = new URLSearchParams(window.location.search);
       const token = params.get("yf_contract_token") || "";
@@ -8603,6 +8844,14 @@
           if (Number(error?.status) === 401) {
             handleExpiredServerSession();
             showToast("로그인 세션이 만료되었습니다. 다시 로그인하면 이 계약서가 열립니다.");
+            return;
+          }
+          if (Number(error?.status) === 410) {
+            showSignLinkNotice(`${error.message}. 아래 버튼을 누르면 관리자에게 다시 요청이 전달됩니다.`, token);
+            return;
+          }
+          if (Number(error?.status) === 403) {
+            showSignLinkNotice(error.message);
             return;
           }
           throw error;
@@ -11659,6 +11908,7 @@
       state.contracts = payload.contracts || [];
       saveState();
       renderContracts();
+      refreshSignPrompt().catch(() => {});
     }
 
     async function loadApprovedEmployees() {
@@ -13649,6 +13899,25 @@
         if (event.target === els.filePreviewModal) closeFilePreviewModal();
       });
       els.closeContractSignBtn?.addEventListener("click", closeContractSignModal);
+      els.signPromptNowBtn.addEventListener("click", () => { startPendingSigning(); });
+      els.signPromptLaterBtn.addEventListener("click", laterSignPrompt);
+      els.signPendingStrip.addEventListener("click", () => { startPendingSigning(); });
+      els.signLinkRenewBtn.addEventListener("click", () => { requestSignRenewal(); });
+      els.signLinkNoticeCloseBtn.addEventListener("click", () => els.signLinkNoticeBackdrop.classList.add("hidden"));
+      els.contractBankWarnViewBtn.addEventListener("click", () => {
+        els.contractBankWarnModal.classList.add("hidden");
+        downloadOnboardingDocument(contractBankWarnDocumentId).catch(err => showToast(`통장사본 열기 실패: ${err.message}`));
+      });
+      els.contractBankWarnInputBtn.addEventListener("click", () => {
+        els.contractBankWarnModal.classList.add("hidden");
+        els.contractForm.bankAccountMasked.scrollIntoView({ block: "center" });
+        els.contractForm.bankAccountMasked.focus();
+      });
+      els.contractBankWarnSaveBtn.addEventListener("click", () => {
+        els.contractBankWarnModal.classList.add("hidden");
+        contractBankWarnSkip = true;
+        els.contractForm.requestSubmit();
+      });
       els.contractSignModal?.addEventListener("click", event => {
         if (event.target === els.contractSignModal) closeContractSignModal();
       });
@@ -13910,6 +14179,15 @@
         } catch (error) {
           showToast(error?.message || "계약서 필수 입력값을 확인하십시오.");
           return;
+        }
+        if (canManageOnboarding()) {
+          const skipBankWarn = contractBankWarnSkip;
+          contractBankWarnSkip = false;
+          const bankbook = skipBankWarn ? null : await bankbookWithoutAccount(draft);
+          if (bankbook) {
+            openContractBankWarn(bankbook);
+            return;
+          }
         }
         const editId = els.contractForm.dataset.editId || "";
         const target = editId ? (state.contracts || []).find(item => item.id === editId) : null;

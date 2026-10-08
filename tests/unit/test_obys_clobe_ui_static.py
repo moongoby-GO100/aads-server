@@ -43,7 +43,7 @@ def test_employee_experience_does_not_get_clobe_views():
 
 
 def test_service_worker_version_bumped_and_api_not_cached():
-    assert 'CACHE_VERSION = "obys-clock-shell-20261008-r4"' in SW
+    assert 'CACHE_VERSION = "obys-clock-shell-20261009-r1"' in SW
     assert "obys-collections" not in SW
     assert "/api/" not in SW.split("APP_SHELL", 1)[1].split("]", 1)[0]
 

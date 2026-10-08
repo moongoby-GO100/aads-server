@@ -4838,6 +4838,24 @@ def _signed_contract_snapshot(contract: dict[str, Any]) -> tuple[dict[str, Any],
     return snapshot, hashlib.sha256(encoded).hexdigest()
 
 
+def _mask_contract_account(value: Any) -> str:
+    """계약서에는 계좌 원문을 남기지 않는다 — 이미 가려진 값('*' 포함)은 그대로, 숫자 8자리 이상 원문은 끝 4자리만 남긴다."""
+    text = str(value or "").strip()
+    digits = re.sub(r"\D", "", text)
+    if not text or "*" in text or len(digits) < 8:
+        return text
+    keep_from = len(digits) - 4
+    seen = 0
+    out: list[str] = []
+    for ch in text:
+        if ch.isdigit():
+            out.append(ch if seen >= keep_from else "*")
+            seen += 1
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _contract_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     now = _now()
     contract_id = str(payload.get("id") or uuid4())
@@ -4858,6 +4876,9 @@ def _contract_defaults(payload: dict[str, Any]) -> dict[str, Any]:
         "created_at": payload.get("created_at") or now,
         "updated_at": now,
     }
+    for account_key in ("bank_account_masked", "bankAccountMasked"):
+        if account_key in contract:
+            contract[account_key] = _mask_contract_account(contract[account_key])
     return contract
 
 
@@ -5052,8 +5073,19 @@ def _require_employee_still_approved(contract: dict[str, Any], user: dict[str, A
         raise HTTPException(status_code=403, detail="직원 가입 승인이 확인되지 않아 계약서에 서명할 수 없습니다")
 
 
-def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
-    contract = _signing_contract_for_token(_read_hr("contracts", user), token)
+def _require_signing_account(contract: dict[str, Any], user: dict[str, Any] | None) -> None:
+    """다른 직원 계정으로 열었으면 어느 계정으로 보냈는지 가린 이메일로 알린다(원문 이메일은 노출 금지)."""
+    if user and _email(user) and not _is_admin(user):
+        employee_email = str(contract.get("employee_email") or "").strip().lower()
+        if employee_email and _email(user) != employee_email:
+            raise HTTPException(
+                status_code=403,
+                detail=f"이 계약서는 {_mask_email(employee_email)} 계정으로 보냈습니다. 해당 계정으로 로그인해 주십시오",
+            )
+
+
+def _checked_signing_contract(contract: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
+    _require_signing_account(contract, user)
     _contract_signer_email(contract, user)
     if str(contract.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="이미 서명 완료된 계약서입니다")
@@ -5062,6 +5094,10 @@ def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dic
     _require_employee_still_approved(contract, user)
     _require_sign_link_alive(contract)
     return contract
+
+
+def get_contract_by_token(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
+    return _checked_signing_contract(_signing_contract_for_token(_read_hr("contracts", user), token), user)
 
 
 def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -5232,13 +5268,167 @@ def _bundle_item(contract: dict[str, Any], current_id: str) -> dict[str, Any]:
     }
 
 
-def get_contract_signing_view(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
-    """서명 화면용: 토큰 계약 + 같은 직원·사업자의 서명요청 계약(자기 포함, start_date 오름차순)."""
-    contract = get_contract_by_token(token, user)
+def _signing_view(contract: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
     members = [contract, *_requested_siblings(contract, _read_hr("contracts", user), only_alive=True)]
     members.sort(key=_contract_bundle_sort_key)
     current_id = str(contract.get("id") or "")
     return {"contract": contract, "bundle": [_bundle_item(member, current_id) for member in members]}
+
+
+def get_contract_signing_view(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
+    """서명 화면용: 토큰 계약 + 같은 직원·사업자의 서명요청 계약(자기 포함, start_date 오름차순)."""
+    return _signing_view(get_contract_by_token(token, user), user)
+
+
+def get_contract_signing_view_by_id(contract_id: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
+    """로그인 직후 안내 시트용: 링크 없이 본인 계약 id 로 같은 서명 화면 데이터를 받는다. 검사는 토큰 경로와 같다."""
+    contract = _find(_read_hr("contracts", user), str(contract_id or ""))
+    if not contract or contract.get("deleted_at"):
+        raise HTTPException(status_code=403, detail="서명 요청 계약서를 찾을 수 없거나 접근 권한이 없습니다")
+    return _signing_view(_checked_signing_contract(contract, user), user)
+
+
+def _sign_link_expires_at(contract: dict[str, Any]) -> datetime | None:
+    requested_at = _pg_ts(contract.get("requested_at"))
+    return requested_at + timedelta(days=CONTRACT_SIGN_LINK_TTL_DAYS) if requested_at else None
+
+
+def list_pending_signature_contracts(user: dict[str, Any]) -> dict[str, Any]:
+    """로그인한 직원 본인의 '서명할 계약서'. sign_token 은 응답에 넣지 않는다. 관리자·사장 계정은 항상 빈 목록."""
+    _tenant_id(user)
+    empty: dict[str, Any] = {"pending": [], "groups": [], "count": 0}
+    email = _email(user)
+    if not email or _is_admin(user):
+        return empty
+    now = datetime.now(KST)
+    approved_requests = {
+        str(row.get("id") or "")
+        for row in _read_hr("employee_join_requests", user)
+        if str(row.get("status") or "").strip().lower() == "approved"
+    }
+    items: list[dict[str, Any]] = []
+    for row in _read_hr("contracts", user):
+        if row.get("deleted_at") or str(row.get("status") or "") != "requested":
+            continue
+        if str(row.get("employee_email") or "").strip().lower() != email:
+            continue
+        request_id = str(row.get("employee_request_id") or "").strip()
+        if request_id and request_id not in approved_requests:
+            continue
+        expires_at = _sign_link_expires_at(row)
+        if expires_at is not None and now > expires_at:
+            continue
+        meta = CONTRACT_TEMPLATE_META.get(str(row.get("contract_type") or ""), CONTRACT_TEMPLATE_META["default"])
+        items.append(
+            {
+                "id": str(row.get("id") or ""),
+                "business_id": str(_contract_payload_value(row, "business_id", "businessId") or ""),
+                "business_name": str(row.get("branch") or row.get("employer_name") or ""),
+                "title": str(row.get("print_title") or meta["print_title"]),
+                "contract_type": str(row.get("contract_type") or ""),
+                "requested_at": str(row.get("requested_at") or ""),
+                "expires_at": expires_at.isoformat() if expires_at else "",
+                "days_left": (expires_at.astimezone(KST).date() - now.date()).days if expires_at else None,
+                "_sort": _contract_bundle_sort_key(row),
+            }
+        )
+
+    def due_key(item: dict[str, Any]) -> tuple[str, str]:
+        return item["expires_at"] or "9999-12-31T00:00:00", item["business_id"]
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in sorted(items, key=due_key):
+        groups.setdefault(item["business_id"], []).append(item)
+    ordered_groups = sorted(groups.values(), key=lambda members: min(due_key(member) for member in members))
+    pending: list[dict[str, Any]] = []
+    group_rows: list[dict[str, Any]] = []
+    for members in ordered_groups:
+        members.sort(key=lambda item: item["_sort"])
+        pending.extend(members)
+        group_rows.append(
+            {
+                "business_id": members[0]["business_id"],
+                "business_name": members[0]["business_name"],
+                "count": len(members),
+                "days_left": min((m["days_left"] for m in members if m["days_left"] is not None), default=None),
+                "contract_ids": [m["id"] for m in members],
+            }
+        )
+    for item in pending:
+        item.pop("_sort", None)
+    return {"pending": pending, "groups": group_rows, "count": len(pending)}
+
+
+CONTRACT_RENEWAL_COOLDOWN_SECONDS = 3600
+
+
+def request_contract_signature_renewal(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """기한이 지난 서명 링크를 직원이 다시 요청한다. 관리자 알림만 만들고 서명요청을 자동 재발송하지 않는다."""
+    tenant_id = _tenant_id(user)
+    rows = _read_hr("contracts", user)
+    token = str(payload.get("token") or "").strip()
+    contract_id = str(payload.get("contract_id") or "").strip()
+    contract = _signing_contract_for_token(rows, token) if token else _find(rows, contract_id)
+    if not contract or contract.get("deleted_at"):
+        raise HTTPException(status_code=403, detail="서명 요청 계약서를 찾을 수 없거나 접근 권한이 없습니다")
+    _require_signing_account(contract, user)
+    _contract_signer_email(contract, user)
+    if str(contract.get("status") or "") != "requested":
+        raise HTTPException(status_code=409, detail="서명 요청 상태의 계약서만 다시 요청할 수 있습니다")
+    try:
+        _require_sign_link_alive(contract)
+    except HTTPException:
+        pass
+    else:
+        raise HTTPException(status_code=409, detail="서명 링크가 아직 유효합니다. 바로 서명하십시오")
+    event = "signature_renewal_requested"
+    history = _contract_notification_history(tenant_id, str(contract.get("id") or ""))
+    if history is None:
+        raise HTTPException(status_code=503, detail="요청 이력을 확인할 수 없어 지금은 다시 요청할 수 없습니다")
+    stamps = [stamp for stamp in (_pg_ts(row.get("created_at")) for row in history if row.get("event") == event) if stamp]
+    if stamps and (datetime.now(KST) - max(stamps)).total_seconds() < CONTRACT_RENEWAL_COOLDOWN_SECONDS:
+        raise HTTPException(status_code=429, detail="이미 관리자에게 다시 요청했습니다. 잠시 후 확인해 주십시오")
+    admin_emails = sorted(
+        {
+            str(row.get("email") or "").strip().lower()
+            for row in _read_hr("employee_join_requests", user)
+            if str(row.get("status") or "").strip().lower() == "approved"
+            and _employee_access_role(row.get("role")) == "admin"
+            and str(row.get("email") or "").strip()
+        }
+    )
+    title = str(contract.get("print_title") or "계약서")
+    name = str(contract.get("employee_name") or "").strip() or "직원"
+    results: list[dict[str, Any]] = []
+    for admin_email in admin_emails:
+        try:
+            from app.services import yeoljeong_ops_service
+
+            _run_coroutine(
+                yeoljeong_ops_service.create_notification(
+                    business_id=str(contract.get("business_id") or ""),
+                    target_user=admin_email,
+                    notification_type="contract_signature_renewal_requested",
+                    title=f"{title} 서명 다시 요청",
+                    body=f"{name}님이 기한이 지난 {title} 서명 링크의 재요청을 보냈습니다. 계약서 메뉴에서 서명 요청을 다시 보내 주십시오.",
+                    reference_type="contract",
+                    reference_id=str(contract.get("id") or ""),
+                )
+            )
+            results.append({"channel": "inapp", "status": "sent", "target_masked": _mask_email(admin_email), "error_detail": ""})
+        except Exception as exc:  # noqa: BLE001 — 알림 실패는 기록만 한다
+            logger.warning("contract renewal notify failed: contract=%s err=%s", contract.get("id"), type(exc).__name__)
+            results.append(
+                {"channel": "inapp", "status": "failed", "target_masked": _mask_email(admin_email), "error_detail": f"{type(exc).__name__}: {exc}"[:500]}
+            )
+    if not results:
+        results.append({"channel": "inapp", "status": "skipped", "target_masked": "", "error_detail": "no_admin_recipient"})
+    try:
+        _append_contract_notification_logs(contract, event, results)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("contract renewal log failed: contract=%s err=%s", contract.get("id"), exc)
+    sent = sum(1 for item in results if item["status"] == "sent")
+    return {"contract_id": str(contract.get("id") or ""), "notified": sent, "status": "sent" if sent else "not_delivered"}
 
 
 def _monotonic_signed_at(previous: str | None) -> str:

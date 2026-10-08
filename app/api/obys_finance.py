@@ -744,6 +744,21 @@ async def regenerate_signed_contract_pdf(contract_id: str, current_user: dict = 
     return await run_in_threadpool(svc.regenerate_signed_contract_pdf, contract_id, current_user)
 
 
+@router.get("/contracts/pending-signature")
+async def list_pending_signature_contracts(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.list_pending_signature_contracts, current_user)
+
+
+@router.post("/contracts/signing-renewal")
+async def request_contract_signature_renewal(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.request_contract_signature_renewal, payload.model_dump(), current_user)
+
+
+@router.get("/contracts/{contract_id}/signing-view")
+async def get_contract_signing_view_by_id(contract_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.get_contract_signing_view_by_id, contract_id, current_user)
+
+
 @router.get("/contracts/signing/{token}")
 async def get_contract_signing(token: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return await run_in_threadpool(svc.get_contract_signing_view, token, current_user)
