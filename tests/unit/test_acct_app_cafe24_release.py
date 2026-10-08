@@ -46,7 +46,8 @@ REV_LABELS=org.opencontainers.image.revision=$(cat "$D/base_rev");
 NS_ID=nsid123
 NS_RUNNING=true
 NS_IP=172.18.0.5
-NS_PUBLISHED=0
+${FAKE_NS_PUBLISHED_LINE-NS_PUBLISHED=0}
+${FAKE_NS_LOOPBACK_LINE-NS_LOOPBACK=0}
 PG_USER=obys
 EOT
       ;;
@@ -507,6 +508,76 @@ def test_proxy_snippet_refuses_bad_url_bad_no_proxy_and_a_stopped_proxy(box, tmp
     proc, env = _run_proxy_snippet(box, tmp_path, proxy, noproxy, running)
     assert proc.returncode == 94
     assert env == "KEEP=1\nHTTPS_PROXY=http://old:1\nno_proxy=old\n"
+
+
+# ---- acct-pg published-port gate: loopback-only is allowed, anything else is not -----------------
+def _collector_output(tmp_path, port_lines, port_rc=0):
+    text = SCRIPT.read_text()
+    start = text.index("read -r -d '' R_PREV_INFO <<'EOS'")
+    body = text[text.index("\n", start) + 1 : text.index("\nEOS\n", start)]
+    bindir = tmp_path / "bin_ports"
+    bindir.mkdir(exist_ok=True)
+    docker = bindir / "docker"
+    docker.write_text(
+        '#!/bin/bash\ncase $1 in\n  port) printf %s "$FAKE_PORTS"; exit ${FAKE_PORT_RC:-0} ;;\n  *) echo x ;;\nesac\n'
+    )
+    docker.chmod(0o755)
+    proc = subprocess.run(
+        ["bash", "-s", "--", "prev", "acct-pg"], input=body, capture_output=True, text=True,
+        env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "FAKE_PORTS": port_lines, "FAKE_PORT_RC": str(port_rc)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    return dict(ln.split("=", 1) for ln in proc.stdout.splitlines() if ln.startswith(("NS_PUBLISHED=", "NS_LOOPBACK=")))
+
+
+@pytest.mark.parametrize(
+    "ports,published,loopback",
+    [
+        ("", "0", "0"),
+        ("5432/tcp -> 127.0.0.1:19433\n", "0", "1"),
+        ("5432/tcp -> 127.0.0.1:19433\n5432/tcp -> [::1]:19433\n", "0", "2"),
+        ("5432/tcp -> ::1:19433\n", "0", "1"),
+        ("5432/tcp -> 0.0.0.0:5432\n", "1", "0"),
+        ("5432/tcp -> [::]:5432\n", "1", "0"),
+        ("5432/tcp -> :::5432\n", "1", "0"),
+        ("5432/tcp -> 10.0.0.5:5432\n", "1", "0"),
+        ("5432/tcp -> 127.0.0.1:19433\n5432/tcp -> 0.0.0.0:19433\n", "1", "1"),
+        ("garbage\n", "1", "0"),
+        ("5432/tcp -> 127.0.0.1\n", "1", "0"),
+    ],
+)
+def test_collector_splits_published_ports_into_public_and_loopback(tmp_path, ports, published, loopback):
+    got = _collector_output(tmp_path, ports)
+    assert got == {"NS_PUBLISHED": published, "NS_LOOPBACK": loopback}
+
+
+def test_loopback_only_acct_pg_passes_the_gate_with_a_warning(box):
+    proc = box.run(env={"FAKE_NS_PUBLISHED_LINE": "NS_PUBLISHED=0", "FAKE_NS_LOOPBACK_LINE": "NS_LOOPBACK=1"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "warn: acct-pg loopback-only port(s) 1" in proc.stdout
+
+
+def test_no_published_ports_passes_without_a_warning(box):
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "loopback-only" not in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "published_line,loopback_line",
+    [
+        ("NS_PUBLISHED=1", "NS_LOOPBACK=0"),
+        ("NS_PUBLISHED=2", "NS_LOOPBACK=1"),
+        ("NS_PUBLISHED=", "NS_LOOPBACK=0"),
+        ("NS_PUBLISHED=abc", "NS_LOOPBACK=0"),
+        ("", "NS_LOOPBACK=0"),
+    ],
+)
+def test_public_or_unparseable_published_ports_still_block_with_exit_12(box, published_line, loopback_line):
+    proc = box.run(env={"FAKE_NS_PUBLISHED_LINE": published_line, "FAKE_NS_LOOPBACK_LINE": loopback_line})
+    assert proc.returncode == 12, proc.stdout + proc.stderr
+    assert "publishes host ports" in proc.stderr
+    assert box.mutations() == [] and box.builds() == 0
 
 
 def test_network_mode_checks_are_untouched_by_the_proxy_option(box):

@@ -272,7 +272,19 @@ echo "REV_LABELS=$(docker image inspect -f '{{range $k,$v := .Config.Labels}}{{$
 echo "NS_ID=$(docker inspect -f '{{.Id}}' "$NS" 2>/dev/null || true)"
 echo "NS_RUNNING=$(docker inspect -f '{{.State.Running}}' "$NS" 2>/dev/null || echo missing)"
 echo "NS_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$NS" 2>/dev/null | awk '{print $1}')"
-echo "NS_PUBLISHED=$(docker port "$NS" 2>/dev/null | wc -l)"
+pub=0; lo=0
+while IFS= read -r pl; do
+  [[ -n ${pl//[[:space:]]/} ]] || continue
+  addr="${pl##*-> }"
+  [[ $pl == *"-> "* && $addr == *:* ]] || { pub=$((pub + 1)); continue; }
+  host="${addr%:*}"; host="${host#[}"; host="${host%]}"
+  case $host in
+    127.0.0.1 | ::1) lo=$((lo + 1)) ;;
+    *) pub=$((pub + 1)) ;;
+  esac
+done < <(docker port "$NS" 2>/dev/null || true)
+echo "NS_PUBLISHED=$pub"
+echo "NS_LOOPBACK=$lo"
 echo "PG_USER=$(docker exec "$NS" printenv POSTGRES_USER 2>/dev/null || true)"
 EOS
 
@@ -505,7 +517,10 @@ discover_state() {
     [[ ${INFO[NS_RUNNING]:-} == true ]] || die 12 "$NS_CONTAINER is not running"
     [[ ${INFO[NS_ID]:-} != "" && ${INFO[PREV_NETMODE]:-} == "container:${INFO[NS_ID]}" ]] \
         || die 12 "$PREV_CONTAINER network mode '${INFO[PREV_NETMODE]:-}' is not container:$NS_CONTAINER"
-    [[ ${INFO[NS_PUBLISHED]:-1} == 0 ]] || die 12 "$NS_CONTAINER publishes host ports"
+    [[ ${INFO[NS_PUBLISHED]:-1} == 0 ]] || die 12 "$NS_CONTAINER publishes host ports on a non-loopback address"
+    if [[ ${INFO[NS_LOOPBACK]:-0} =~ ^[1-9][0-9]*$ ]]; then
+        say "warn: $NS_CONTAINER loopback-only port(s) ${INFO[NS_LOOPBACK]}"
+    fi
     cur_ip="${INFO[NS_IP]:-}"
     [[ $cur_ip == "$UP_IP" ]] || die 12 "apache upstream ip $UP_IP != $NS_CONTAINER ip '$cur_ip'"
     cand_port="$(cand_field "$PREV_CONTAINER" 3 || true)"
