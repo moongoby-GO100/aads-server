@@ -70,6 +70,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o Ser
 ACCT_MIGRATION_ALLOWLIST=(
     20261001_obys_hrdoc_expiry_integrity_superseded.sql
     20261003_obys_clobe_collection.sql
+    20261008_obys_clobe_mcp_store.sql
 )
 BUILD_PATHS=(app migrations deploy)
 CANDIDATE_RE='^acct-app-candidate-r[0-9]+$'
@@ -292,6 +293,24 @@ envf=$(mktemp /dev/shm/acct-app-env.XXXXXX 2>/dev/null || mktemp)
 trap 'rm -f "$envf"' EXIT
 docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$PREV" | grep -v -e '^APP_PORT=' -e '^$' > "$envf" || true
 echo "APP_PORT=$PORT" >> "$envf"
+# 클로브 수집용 추가 설정(예: OBYS_VAULT_KEY). 값은 저장소·스크립트·로그 어디에도 없고 카페24 root 전용 파일에만 있다.
+# 경로는 고정, 파일은 root:600 이어야 하며, 아래 이름만 받는다(PREV 의 같은 이름 값을 덮어쓴다).
+extra=/root/acct-app-extra.env
+if [[ -f $extra ]]; then
+  [[ $(stat -c '%a %U' "$extra") == "600 root" ]] || { echo "refusing $extra: must be mode 600 owned by root"; exit 93; }
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ -z $line || $line == \#* ]] && continue
+    k=${line%%=*}
+    case $k in
+      OBYS_VAULT_KEY|OBYS_PUBLIC_BASE_URL|CLOBE_OAUTH_REDIRECT_URI|CLOBE_STORE_DATABASE_URL) ;;
+      *) echo "refusing $extra: key '$k' is not allowed"; exit 93 ;;
+    esac
+    [[ $line == "$k="?* ]] || { echo "refusing $extra: '$k' has no value"; exit 93; }
+    grep -v "^$k=" "$envf" > "$envf.new" || true
+    mv "$envf.new" "$envf"
+    printf '%s\n' "$line" >> "$envf"
+  done < "$extra"
+fi
 args=(run -d --name "$NEW" --network "container:$NS" --env-file "$envf"
       --label "acct.release.sha=$SHA" --label "acct.release.run=$RUN" --label "acct.release.prev=$PREV")
 rp=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$PREV")
@@ -576,6 +595,10 @@ migration_probe_sql() { # prints SQL returning t when the migration is already a
             ;;
         20261003_obys_clobe_collection.sql)
             echo "/*probe*/ SELECT (SELECT count(*) FROM unnest(ARRAY['obys_clobe_company_link','obys_clobe_collection_lease','obys_clobe_collection_run','obys_clobe_item','obys_clobe_ledger_entry','obys_clobe_collection_state']) t WHERE to_regclass('public.'||t) IS NOT NULL) = 6 AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='obys_clobe_company_link' AND column_name='missing_streak');"
+            ;;
+        20261008_obys_clobe_mcp_store.sql)
+            # 4개 테이블 + (역할이 있으면) 그 역할의 클로브 테이블 권한. 역할이 없는 DB 는 GRANT 를 건너뛰므로 테이블만 본다.
+            echo "/*probe*/ SELECT (SELECT count(*) FROM unnest(ARRAY['clobe_mcp_oauth_client','clobe_mcp_oauth_state','clobe_mcp_connection','clobe_mcp_tools']) t WHERE to_regclass('public.'||t) IS NOT NULL) = 4 AND (NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='acct_business_runtime_r5') OR (has_table_privilege('acct_business_runtime_r5','public.clobe_mcp_connection','SELECT,INSERT,UPDATE') AND has_table_privilege('acct_business_runtime_r5','public.obys_clobe_company_link','SELECT,INSERT,UPDATE')));"
             ;;
         *) return 1 ;;
     esac

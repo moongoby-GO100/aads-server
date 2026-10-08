@@ -1,3 +1,12 @@
+## 2026-10-08 — 카페24 오비서 클로브 수집 구성: 토큰 저장소 OBYS DB·앱 역할 권한·전용 금고 키 (ACCT-CLOBE-CAFE24-COLLECT-20261008) — 코드·마이그레이션·테스트 완료, 운영 미적용(CEO 승인 대기)
+
+**DB handover entry_key `acct-clobe-cafe24-collect-20261008` (ACCT/task).** 이 세션에서는 DB 인증 수단이 없어 DB 기록은 하지 못했고 이 파일에만 남긴다.
+- 원인 3겹(실측): ① 앱 역할 `acct_business_runtime_r5` 에 `obys_clobe_*` 6개 테이블 권한 없음. ② 독립 실행이 `DATABASE_URL` 을 인증 DB 로 덮어써서 `clobe_mcp_client` 의 `get_pool()` 이 업무 DB 가 아닌 인증 DB 를 본다. ③ 독립 실행 금고는 `OBYS_VAULT_KEY` 만 읽는다(`VAULT_ENCRYPTION_KEY` 무시) — 지시서의 "카페24 전용 VAULT_ENCRYPTION_KEY" 는 카페24 에서 `OBYS_VAULT_KEY` 이름으로 주입.
+- 변경: `app/services/clobe_mcp_client.py`(`store_mode()` aads/obys 선택, obys 는 전용 asyncpg 풀(`CLOBE_STORE_DATABASE_URL` 또는 `OBYS_DATABASE_URL`, AADS 풀 폴백 없음), obys 는 DDL 대신 테이블 존재 확인, 리디렉트 기본 `https://fb.newtalk.kr`, 금고 키 없으면 `vault_disabled`), `app/yeoljeong_main.py`(클로브 라우터 등록·콜백 정확 경로 하나만 JWT 면제·종료 시 풀 닫기), 신규 `migrations/20261008_obys_clobe_mcp_store.sql`(테이블 4개 + 최소 GRANT, DROP/DELETE 없음, 역할 없으면 건너뜀)와 `rollback/…down.sql`(REVOKE 만), `scripts/deploy_acct_app_cafe24.sh`(허용목록·probe 추가, 후보 컨테이너 추가 환경 파일 `/root/acct-app-extra.env` 훅 — 600 root·허용 이름 4개만), 테스트 `test_clobe_cafe24_store.py` 신규·`test_acct_app_cafe24_release.py` 수정. contabo116 AADS 본체 모드는 기존 동작 그대로.
+- 검증: 관련 15개 파일 420 passed / 3 skipped / 1 failed — 실패 1건은 `test_yeoljeong_finance_isolation::test_yeoljeong_compose_uses_dedicated_runtime_boundaries`(`PC_AGENT_DEFAULT_AGENT_ID`), 이번 변경과 무관한 기존 실패로 고치지 않음. ruff F821/F811 통과. **SQL 은 실제 Postgres 에서 돌려 보지 못했다**(호스트에 DB 없음). fb.newtalk.kr → 카페24 apache → 앱 콜백 경로 통과도 미확인.
+- 승인 후 순서: 릴리스 SHA 배포(Runner) → GRANT 읽기 확인 → `/root/acct-app-extra.env` 에 카페24 전용 `OBYS_VAULT_KEY` 생성·주입 후 후보 재생성 → CEO OAuth 재연결(`/api/v1/integrations/clobe/reauth`) → 언니냉면 1개월 `mode:"shadow"` 수집 → 결과 검토. 상세·롤백(r17 복귀, GRANT REVOKE): `docs/reports/20261008_ACCT_클로브_카페24_수집구성.md`. 정본 미등록(미완료).
+- 하지 않은 것: 배포, 운영 DB 변경, GRANT 적용, 키 생성·주입, OAuth, 수집 실행, contabo116 토큰·키 이동.
+
 ## 2026-10-06 — 오비서 직원 실명 가입·회사/점포 입사요청, 차단 4종 (ACCT-EMPLOYEE-JOIN-REALNAME-REQUEST-20261006) — 코드·테스트 완료, 운영 미반영, 화면 캡처 미완료
 
 **DB handover entry_key `obys-employee-join-realname-request-20261006` (AADS/verification).**

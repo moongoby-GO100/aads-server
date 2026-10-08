@@ -18,6 +18,7 @@ import app.auth as auth_module
 from app.api import (
     acct_purchase,
     auth,
+    clobe_integration,
     obys_collections,
     obys_finance,
     obys_inventory,
@@ -52,6 +53,12 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        try:
+            from app.services.clobe_mcp_client import close_store_pool
+
+            await close_store_pool()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("yeoljeong_main: clobe store pool close failed | %s", exc)
         try:
             from app.core.db_pool import close_pool
 
@@ -97,6 +104,11 @@ _AUTH_EXEMPT_PREFIXES = (
 )
 
 
+# 클로브AI 가 사용자 브라우저를 돌려보내는 콜백은 우리 JWT 가 없다. state(단회·10분·해시 저장)가 인증을 대신한다.
+# 접두 일치가 아니라 정확 경로 하나만 면제한다. 같은 라우터의 나머지(start/status/verify/...)는 require_internal_admin.
+_AUTH_EXEMPT_EXACT_PATHS = frozenset({"/api/v1/integrations/clobe/oauth/callback"})
+
+
 def _request_token_payload(request: Request) -> dict | None:
     """Bearer 헤더, 없으면 aads_token 쿠키(오비서 로그인 시 함께 심는다)의 JWT 를 검증한다."""
     auth_header = request.headers.get("authorization", "")
@@ -114,7 +126,7 @@ async def jwt_auth_middleware(request: Request, call_next):
     path = request.url.path
     if path == "/":
         return await call_next(request)
-    if any(path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES):
+    if path in _AUTH_EXEMPT_EXACT_PATHS or any(path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES):
         return await call_next(request)
     if request.method == "OPTIONS":
         return await call_next(request)
@@ -148,6 +160,7 @@ app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"
 app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])
 app.include_router(obys_workspaces.router, prefix="/api/v1", tags=["obys-workspaces"])
 app.include_router(obys_collections.router, prefix="/api/v1", tags=["obys-collections"])
+app.include_router(clobe_integration.router, prefix="/api/v1", tags=["clobe-integration"])
 app.include_router(unni_naengmyeon.router, prefix="/api/v1", tags=["unni-naengmyeon"])
 
 # 언니냉면 조리법(직원용). fb.newtalk.kr 이 카페24로 옮겨 오면서 contabo116 대시보드(Next)의

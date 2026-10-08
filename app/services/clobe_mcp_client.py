@@ -23,6 +23,7 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 
+from app.core import credential_vault
 from app.core.credential_vault import decrypt_value, encrypt_value
 from app.core.db_pool import get_pool
 
@@ -110,14 +111,87 @@ CREATE TABLE IF NOT EXISTS clobe_mcp_tools (
 
 _schema_ready = False
 
+STORE_AADS = "aads"
+STORE_OBYS = "obys"
+STORE_TABLES = ("clobe_mcp_oauth_client", "clobe_mcp_oauth_state", "clobe_mcp_connection", "clobe_mcp_tools")
+_STORE_POOL_MIN = 1
+_STORE_POOL_MAX = 5  # refresh_access_token 은 락 전용 커넥션을 쥔 채 같은 풀에서 하나를 더 쓴다.
+_store_pool: Any = None
+_store_pool_lock = asyncio.Lock()
+
+
+def store_mode() -> str:
+    """토큰 저장소 선택. CLOBE_STORE_DATABASE_URL 이 있거나 오비서 독립 실행이면 obys, 아니면 AADS 본체(DATABASE_URL).
+
+    오비서 독립 실행(app.obys_standalone)은 DATABASE_URL 을 *인증 DB* 로 덮어쓰므로 get_pool() 은 업무 DB 가 아니다.
+    clobe_mcp_* 는 업무 DB(OBYS_DATABASE_URL)에 두고, obys 모드에서는 어떤 경우에도 AADS 풀로 폴백하지 않는다.
+    """
+    if (os.getenv("CLOBE_STORE_DATABASE_URL") or "").strip():
+        return STORE_OBYS
+    return STORE_OBYS if credential_vault.is_standalone_vault() else STORE_AADS
+
+
+def store_database_url() -> str:
+    explicit = (os.getenv("CLOBE_STORE_DATABASE_URL") or "").strip()
+    if explicit:
+        return explicit
+    from app.core.obys_db import ObysDatabaseUrlMissing, obys_db_url
+
+    try:
+        return obys_db_url()
+    except ObysDatabaseUrlMissing:
+        raise ClobeError("store_database_url_missing") from None
+
+
+async def _pool() -> Any:
+    """저장소 풀. AADS 모드는 공유 풀 그대로, obys 모드는 이 모듈 전용 작은 풀(첫 사용 때 연결)."""
+    global _store_pool
+    if store_mode() == STORE_AADS:
+        return get_pool()
+    if _store_pool is None:
+        async with _store_pool_lock:
+            if _store_pool is None:
+                import asyncpg
+
+                _store_pool = await asyncpg.create_pool(
+                    store_database_url(), min_size=_STORE_POOL_MIN, max_size=_STORE_POOL_MAX,
+                    timeout=10, command_timeout=30,
+                )
+    return _store_pool
+
+
+async def close_store_pool() -> None:
+    global _store_pool, _schema_ready
+    pool, _store_pool = _store_pool, None
+    _schema_ready = False
+    if pool is not None:
+        await pool.close()
+
 
 async def ensure_schema() -> None:
     global _schema_ready
     if _schema_ready:
         return
-    async with get_pool().acquire() as conn:
-        await conn.execute(SCHEMA_DDL)
+    if store_mode() == STORE_OBYS:
+        # 앱 역할은 CREATE 권한이 없다(CREATE TABLE IF NOT EXISTS 도 스키마 권한을 먼저 본다).
+        # 테이블은 migrations/20261008_obys_clobe_mcp_store.sql 이 만든다 — 여기서는 있는지만 본다.
+        missing = [
+            t for t in STORE_TABLES
+            if not await (await _pool()).fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{t}")
+        ]
+        if missing:
+            logger.error("clobe_store_tables_missing tables=%s", ",".join(missing))
+            raise ClobeError("store_schema_missing")
+    else:
+        async with (await _pool()).acquire() as conn:
+            await conn.execute(SCHEMA_DDL)
     _schema_ready = True
+
+
+def _require_vault() -> None:
+    """오비서에 전용 키(OBYS_VAULT_KEY)가 없으면 토큰을 암호화·복호화할 수 없다. 원인을 분류 코드로 올린다."""
+    if not credential_vault.vault_enabled():
+        raise ClobeError("vault_disabled")
 
 
 # ── 토큰 마스킹 ─────────────────────────────────────────
@@ -167,7 +241,11 @@ def redirect_uri() -> str:
     explicit = os.getenv("CLOBE_OAUTH_REDIRECT_URI", "").strip()
     if explicit:
         return explicit
-    base = os.getenv("AADS_PUBLIC_BASE_URL", "https://aads.newtalk.kr").rstrip("/")
+    if store_mode() == STORE_OBYS:
+        # AADS_PUBLIC_BASE_URL 은 contabo116 쪽 값(aads.newtalk.kr)일 수 있어 오비서에서는 읽지 않는다.
+        base = (os.getenv("OBYS_PUBLIC_BASE_URL") or "https://fb.newtalk.kr").strip().rstrip("/")
+    else:
+        base = os.getenv("AADS_PUBLIC_BASE_URL", "https://aads.newtalk.kr").rstrip("/")
     return f"{base}/api/v1/integrations/clobe/oauth/callback"
 
 
@@ -226,7 +304,7 @@ def classify_tool(name: str, annotations: dict[str, Any] | None = None) -> tuple
 
 
 async def _allowed_tool_names() -> set[str]:
-    rows = await get_pool().fetch("SELECT name FROM clobe_mcp_tools WHERE allowed IS TRUE")
+    rows = await (await _pool()).fetch("SELECT name FROM clobe_mcp_tools WHERE allowed IS TRUE")
     return {r["name"] for r in rows}
 
 
@@ -244,7 +322,7 @@ async def assert_tool_callable(name: str) -> None:
 
 async def get_or_register_client(redirect: str) -> str:
     await ensure_schema()
-    pool = get_pool()
+    pool = await _pool()
     row = await pool.fetchrow(
         "SELECT client_id FROM clobe_mcp_oauth_client WHERE redirect_uri = $1", redirect
     )
@@ -280,13 +358,14 @@ async def get_or_register_client(redirect: str) -> str:
 # ── 연결 시작 / 콜백 ─────────────────────────────────────
 
 async def start_authorization(created_by: str | None = None) -> dict[str, Any]:
+    _require_vault()
     await ensure_schema()
     redirect = redirect_uri()
     client_id = await get_or_register_client(redirect)
     verifier = new_code_verifier()
     state = new_state()
     expires_at = datetime.now(timezone.utc) + STATE_TTL
-    await get_pool().execute(
+    await (await _pool()).execute(
         "INSERT INTO clobe_mcp_oauth_state "
         "(state_hash, code_verifier_enc, redirect_uri, created_by, expires_at) "
         "VALUES ($1, $2, $3, $4, $5)",
@@ -301,7 +380,7 @@ async def start_authorization(created_by: str | None = None) -> dict[str, Any]:
 
 async def _consume_state(state: str) -> dict[str, Any] | None:
     """단회·만료 검증을 UPDATE 한 번으로 원자 처리한다. 위조·재사용·만료는 None."""
-    row = await get_pool().fetchrow(
+    row = await (await _pool()).fetchrow(
         "UPDATE clobe_mcp_oauth_state SET consumed_at = now() "
         "WHERE state_hash = $1 AND consumed_at IS NULL AND expires_at > now() "
         "RETURNING code_verifier_enc, redirect_uri",
@@ -325,7 +404,7 @@ async def _store_tokens(payload: dict[str, Any], *, client_id: str, previous_ref
     refresh = str(payload.get("refresh_token") or "")
     refresh_enc = encrypt_value(refresh) if refresh else previous_refresh_enc
     now = datetime.now(timezone.utc)
-    await get_pool().execute(
+    await (await _pool()).execute(
         "INSERT INTO clobe_mcp_connection "
         "(id, status, client_id, access_token_enc, refresh_token_enc, token_expires_at, "
         " scope, connected_at, last_success_at, last_error, updated_at) "
@@ -342,6 +421,7 @@ async def _store_tokens(payload: dict[str, Any], *, client_id: str, previous_ref
 
 async def handle_callback(*, code: str | None, state: str | None, error: str | None = None) -> dict[str, Any]:
     """콜백 처리. 반환값에는 토큰이 없다. 실패는 ClobeError(분류 코드)."""
+    _require_vault()
     await ensure_schema()
     if not state:
         raise ClobeError("state_missing")
@@ -375,7 +455,7 @@ async def handle_callback(*, code: str | None, state: str | None, error: str | N
 # ── 토큰 갱신 / 철회 ─────────────────────────────────────
 
 async def _mark(status: str, error: str | None) -> None:
-    await get_pool().execute(
+    await (await _pool()).execute(
         "UPDATE clobe_mcp_connection SET status = $2, last_error = $3, updated_at = now() WHERE id = $1",
         CONNECTION_ID, status, error,
     )
@@ -383,7 +463,7 @@ async def _mark(status: str, error: str | None) -> None:
 
 async def _load_connection() -> dict[str, Any] | None:
     await ensure_schema()
-    row = await get_pool().fetchrow("SELECT * FROM clobe_mcp_connection WHERE id = $1", CONNECTION_ID)
+    row = await (await _pool()).fetchrow("SELECT * FROM clobe_mcp_connection WHERE id = $1", CONNECTION_ID)
     return dict(row) if row else None
 
 
@@ -394,7 +474,7 @@ def _needs_refresh(conn: dict[str, Any]) -> bool:
 
 async def refresh_access_token(*, force: bool = False) -> None:
     """프로세스 간 중복 갱신(refresh 토큰 회전 경합)은 advisory lock 으로 직렬화한다."""
-    pool = get_pool()
+    pool = await _pool()
     async with pool.acquire() as lock_conn:
         await lock_conn.execute("SELECT pg_advisory_lock($1)", _REFRESH_LOCK_KEY)
         try:
@@ -435,6 +515,7 @@ async def refresh_access_token(*, force: bool = False) -> None:
 
 
 async def _valid_access_token() -> str:
+    _require_vault()
     conn = await _load_connection()
     if not conn or conn["status"] != STATUS_CONNECTED or not conn.get("access_token_enc"):
         raise ClobeReauthRequired("not_connected")
@@ -468,7 +549,7 @@ async def revoke_connection() -> dict[str, Any]:
                 remote_ok = False
             if remote_ok:
                 break
-    await get_pool().execute(
+    await (await _pool()).execute(
         "UPDATE clobe_mcp_connection SET status = $2, access_token_enc = NULL, "
         "refresh_token_enc = NULL, token_expires_at = NULL, updated_at = now() WHERE id = $1",
         CONNECTION_ID, STATUS_REVOKED,
@@ -579,7 +660,7 @@ async def _with_session(fn):
                     raise
                 await refresh_access_token(force=True)
                 continue
-        await get_pool().execute(
+        await (await _pool()).execute(
             "UPDATE clobe_mcp_connection SET last_success_at = now(), last_error = NULL WHERE id = $1",
             CONNECTION_ID,
         )
@@ -588,7 +669,7 @@ async def _with_session(fn):
 
 
 async def _record_tools(tools: list[dict[str, Any]]) -> dict[str, int]:
-    pool = get_pool()
+    pool = await _pool()
     allowed = 0
     for tool in tools:
         name = str(tool.get("name") or "")
@@ -646,7 +727,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[
 
 async def get_status() -> dict[str, Any]:
     conn = await _load_connection()
-    pool = get_pool()
+    pool = await _pool()
     allowed = await pool.fetchval("SELECT count(*) FROM clobe_mcp_tools WHERE allowed IS TRUE")
     observed = await pool.fetchval("SELECT count(*) FROM clobe_mcp_tools")
     if not conn:
@@ -696,7 +777,7 @@ async def verify_connection() -> dict[str, Any]:
     get_my_context(필수 입력 없음)를 우선 쓰고, 허용목록에 없을 때만 이름 규칙으로 폴백한다.
     """
     listing = await list_tools()
-    rows = await get_pool().fetch(
+    rows = await (await _pool()).fetch(
         "SELECT name, input_schema FROM clobe_mcp_tools WHERE allowed IS TRUE ORDER BY name"
     )
     no_input: list[str] = []
@@ -800,7 +881,7 @@ class ReadSession:
         # 예외로 끝난 세션은 일부 호출이 성공했어도 성공으로 기록하지 않는다(last_error 도 지우지 않는다).
         if succeeded and exc_type is None:
             try:
-                await get_pool().execute(
+                await (await _pool()).execute(
                     "UPDATE clobe_mcp_connection SET last_success_at = now(), last_error = NULL WHERE id = $1",
                     CONNECTION_ID,
                 )

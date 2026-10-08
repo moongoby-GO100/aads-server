@@ -22,6 +22,7 @@ MARKER = "downloadSignedContractPdf"
 R8_IMAGE = "sha256:71e5e811c220efbe9bc527f36836e0cdc9638794ec01a6b1bbd5256ea5e8150e"
 MIG_HRDOC = "20261001_obys_hrdoc_expiry_integrity_superseded.sql"
 MIG_CLOBE = "20261003_obys_clobe_collection.sql"
+MIG_CLOBE_STORE = "20261008_obys_clobe_mcp_store.sql"
 
 HARNESS = r'''#!/bin/bash
 set -euo pipefail
@@ -105,10 +106,10 @@ fake_cmd() {
       sql="$(cat)"
       if [[ $sql == */\*identity\*/* ]]; then echo t
       elif [[ $sql == */\*probe\*/* ]]; then
-        if [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
         if [[ -f "$D/applied.$key" ]]; then echo t; else echo f; fi
       else
-        if [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
         echo "MIGAPPLY $key" >> "$D/ssh.log"
         if [[ ${FAKE_MIG_FAIL:-} == "$key" ]]; then return 1; fi
         touch "$D/applied.$key"
@@ -210,6 +211,7 @@ class Box:
             "app/static/apps/obys/index.html": "<html>old</html>\n",
             f"migrations/{MIG_HRDOC}": MIG_BODY.format(t="hrdoc_t"),
             f"migrations/{MIG_CLOBE}": MIG_BODY.format(t="obys_clobe_t"),
+            f"migrations/{MIG_CLOBE_STORE}": MIG_BODY.format(t="clobe_mcp_t"),
             "migrations/20260901_unrelated_aads.sql": "DROP TABLE aads_thing;\n",
             "deploy/obys/requirements.obys.lock": "fastapi==0.115\n",
         }.items():
@@ -301,7 +303,7 @@ def test_happy_path_builds_once_migrates_with_backup_first_and_switches_port(box
     assert res["new"]["image_reused"] is False
     assert res["backups"]["pg_dump"] == "/root/acct-release-backups/obys_pre_x.dump"
     assert res["backups"]["apache_vhost"].startswith("/root/fb-cutover-backups/")
-    assert res["migrations"]["applied"] == [MIG_HRDOC, MIG_CLOBE]
+    assert res["migrations"]["applied"] == [MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE]
     assert res["cutover_kst"].endswith("KST")
     assert res["rollback_command"].endswith("rollback acct-app-candidate-r8 77")
     assert "/root/acct-release-backups/obys_pre_x.dump" in proc.stdout
@@ -309,7 +311,8 @@ def test_happy_path_builds_once_migrates_with_backup_first_and_switches_port(box
 
     log = box.log()
     assert log.index("OP pg_backup") < log.index("MIGAPPLY hrdoc") < log.index("MIGAPPLY clobe")
-    assert log.index("MIGAPPLY clobe") < log.index("OP start_candidate") < log.index("OP apache_switch")
+    assert log.index("MIGAPPLY clobe") < log.index("MIGAPPLY clobe_store")
+    assert log.index("MIGAPPLY clobe_store") < log.index("OP start_candidate") < log.index("OP apache_switch")
     assert res["unrelated_containers_changed"] == []
     assert (box.tmp / "results" / "acct-app-77.json").exists()
 
@@ -348,6 +351,59 @@ def test_start_candidate_script_copies_env_via_tmpfs_envfile_and_shares_netns(bo
     assert "grep -v -e '^APP_PORT='" in body
     assert "-p " not in body and "--publish" not in body
     assert "docker stop" not in body and "docker rm" not in body
+
+
+def _extra_env_snippet(box):
+    body = (box.fake / "stdin.start_candidate").read_text()
+    start = body.index("extra=/root/acct-app-extra.env")
+    end = body.index("args=(run -d")
+    return body[start:end]
+
+
+def _run_extra_env(box, tmp_path, extra_lines, mode=0o600):
+    snippet = _extra_env_snippet(box)
+    extra = tmp_path / "extra.env"
+    envf = tmp_path / "envf"
+    envf.write_text("OBYS_PUBLIC_BASE_URL=https://old.example\nKEEP=1\n")
+    if extra_lines is not None:
+        extra.write_text(extra_lines)
+        extra.chmod(mode)
+    snippet = snippet.replace("extra=/root/acct-app-extra.env", f"extra={extra}")
+    snippet = snippet.replace('"600 root"', '"600 $(id -un)"')
+    proc = subprocess.run(
+        ["bash", "-c", f'set -euo pipefail\nenvf={envf}\n{snippet}'],
+        capture_output=True, text=True,
+    )
+    return proc, envf.read_text()
+
+
+def test_start_candidate_extra_env_file_is_optional_and_overrides_only_allowed_names(box, tmp_path):
+    assert box.run().returncode == 0
+    proc, env = _run_extra_env(box, tmp_path, None)
+    assert proc.returncode == 0 and env == "OBYS_PUBLIC_BASE_URL=https://old.example\nKEEP=1\n"
+    # fixture key 는 형식만 흉내 낸 가짜 값이다.
+    proc, env = _run_extra_env(box, tmp_path, "# comment\n\nOBYS_VAULT_KEY=fake-fixture-value\nOBYS_PUBLIC_BASE_URL=https://fb.newtalk.kr\n")
+    assert proc.returncode == 0, proc.stderr
+    lines = env.splitlines()
+    assert "OBYS_VAULT_KEY=fake-fixture-value" in lines and "KEEP=1" in lines
+    assert lines.count("OBYS_PUBLIC_BASE_URL=https://fb.newtalk.kr") == 1
+    assert "OBYS_PUBLIC_BASE_URL=https://old.example" not in lines
+    assert "fake-fixture-value" not in proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize(
+    "content,mode",
+    [
+        ("DATABASE_URL=postgres://x\n", 0o600),
+        ("OBYS_VAULT_KEY=\n", 0o600),
+        ("OBYS_VAULT_KEY=v\n", 0o644),
+    ],
+)
+def test_start_candidate_extra_env_file_refuses_unknown_names_empty_values_and_loose_modes(box, tmp_path, content, mode):
+    assert box.run().returncode == 0
+    proc, env = _run_extra_env(box, tmp_path, content, mode)
+    assert proc.returncode == 93
+    assert "DATABASE_URL=postgres" not in proc.stdout + proc.stderr
 
 
 # ---- image once per SHA -------------------------------------------------------------------------
@@ -394,10 +450,11 @@ def test_time_budget_exhaustion_exits_124_before_any_change(box):
 def test_already_applied_migrations_are_skipped_without_backup(box):
     (box.fake / "applied.hrdoc").touch()
     (box.fake / "applied.clobe").touch()
+    (box.fake / "applied.clobe_store").touch()
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     res = box.result(proc)
-    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_HRDOC, MIG_CLOBE]
+    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE]
     assert "OP pg_backup" not in box.log() and "MIGAPPLY hrdoc" not in box.log()
     assert res["backups"]["pg_dump"] == ""
 
