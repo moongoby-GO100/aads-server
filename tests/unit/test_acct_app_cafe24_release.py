@@ -64,6 +64,15 @@ EOT
       echo "APPLIED upstream port $from -> $to"
       ;;
     apache_restore) echo 8111 > "$D/port" ;;
+    cf_purge)
+      printf '%s\n' "$@" > "$D/purge.args"
+      case ${FAKE_PURGE:-ok} in
+        ok) echo 'PURGE_RESULT {"purged": 16, "status": "ok", "urls": 16}' ;;
+        skipped) echo 'PURGE_RESULT {"reason": "credentials_missing", "status": "skipped", "urls": 16}' ;;
+        failed) echo 'PURGE_RESULT {"reason": "api_error", "status": "failed", "urls": 16}' ;;
+        noresult) echo "python3: command not found" >&2; return 127 ;;
+      esac
+      ;;
     pg_backup)
       if [[ -n ${FAKE_BACKUP_FAIL:-} ]]; then echo "pg_dump failed" >&2; return 1; fi
       echo "BACKUP_PATH=/root/acct-release-backups/obys_pre_x.dump"
@@ -590,6 +599,115 @@ def test_monitor_runs_the_configured_number_of_ticks(box):
         if x.startswith("CMD docker inspect -f") and "RestartCount" not in x and x.endswith("acct-app-candidate-r9")
     ]
     assert len(running_checks) == 20
+
+
+SHELL_HTML = (
+    f"<html>{MARKER}\n"
+    '<link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">\n'
+    '<link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20260921-r3">\n'
+    '<script src="/static/apps/obys/modules/app-config.js"></script>\n'
+    '<script src="https://cdn.example.com/static/apps/obys/modules/x.js"></script>\n'
+    '<script>fetch("/api/v1/obys/x?v=1")</script></html>\n'
+)
+SW_JS = 'const CACHE_VERSION = "obys-clock-shell-20261008-r2";\nconst CACHE_PREFIX = "obys-clock-shell-";\n'
+
+
+def _built_file(box, name):
+    with tarfile.open(box.fake / "build.tar") as tf:
+        return tf.extractfile(name).read().decode()
+
+
+def test_build_stamps_release_sha_into_shell_html_and_sw_but_not_the_checkout(box):
+    box.commit_release({
+        "app/static/apps/obys/index.html": SHELL_HTML,
+        "app/static/apps/obys/sw.js": SW_JS,
+    })
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    sha8 = box.sha[:8]
+    html = _built_file(box, "./app/static/apps/obys/index.html")
+    assert f"modules/store-assistant-v2.css?v={sha8}" in html
+    assert f"modules/ledger-details.css?v={sha8}" in html and "20260921-r3" not in html
+    assert f"modules/app-config.js?v={sha8}" in html
+    assert 'cdn.example.com/static/apps/obys/modules/x.js"' in html and "/api/v1/obys/x?v=1" in html
+    assert f'const CACHE_VERSION = "obys-clock-shell-{sha8}";' in _built_file(box, "./app/static/apps/obys/sw.js")
+    assert 'obys-clock-shell-20261008-r2' not in _built_file(box, "./app/static/apps/obys/sw.js")
+    assert (box.repo / "app/static/apps/obys/index.html").read_text() == SHELL_HTML
+    res = box.result(proc)
+    assert res["assets"] == {"version": sha8, "stamp": "stamped"}
+
+
+def test_same_release_sha_gives_byte_identical_build_context_files(box):
+    box.commit_release({"app/static/apps/obys/index.html": SHELL_HTML, "app/static/apps/obys/sw.js": SW_JS})
+    assert box.run().returncode == 0
+    first = _built_file(box, "./app/static/apps/obys/index.html"), _built_file(box, "./app/static/apps/obys/sw.js")
+    (box.fake / "images").rename(box.fake / "images.old")
+    (box.fake / "images").mkdir()
+    (box.fake / "cands").write_text(f"acct-app-candidate-r8|true|8111|{R8_IMAGE}|\n")
+    (box.fake / "port").write_text("8111\n")
+    assert box.run().returncode == 0
+    assert (_built_file(box, "./app/static/apps/obys/index.html"), _built_file(box, "./app/static/apps/obys/sw.js")) == first
+
+
+def test_sw_without_cache_version_line_fails_the_build_closed(box):
+    box.commit_release({"app/static/apps/obys/index.html": SHELL_HTML, "app/static/apps/obys/sw.js": "self.x = 1;\n"})
+    proc = box.run()
+    assert proc.returncode == 6, proc.stdout + proc.stderr
+    assert box.mutations() == [] and box.port() == "8111"
+
+
+def test_edge_purge_runs_right_after_cutover_with_files_only_and_result_records_it(box):
+    box.commit_release({"app/static/apps/obys/index.html": SHELL_HTML, "app/static/apps/obys/sw.js": SW_JS})
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    res = box.result(proc)
+    assert res["status"] == "switched" and res["edge_purge"]["status"] == "ok"
+    log = box.log()
+    assert log.index("OP apache_switch") < log.index("OP cf_purge")
+    args = (box.fake / "purge.args").read_text().split()
+    assert args[0] == "/root/.cloudflare_env"
+    urls = [u.replace("\\", "") for u in args[1:]]  # the harness sees the shell-quoted form
+    base = "https://fb.newtalk.kr/static/apps/obys"
+    assert f"{base}/index.html" in urls and f"{base}/sw.js" in urls
+    assert f"{base}/modules/store-assistant-v2.js" not in urls
+    for ref in ("store-assistant-v2.css", "ledger-details.css", "app-config.js"):
+        assert f"{base}/modules/{ref}" in urls and f"{base}/modules/{ref}?v={box.sha[:8]}" in urls
+    assert all(u.startswith("https://fb.newtalk.kr/") for u in urls)
+    script = (box.fake / "stdin.cf_purge").read_text()
+    assert "purge_everything" not in script
+    assert "purge --env-file" in script and not re.search(r"CF_API_KEY\s*=\s*\S", script)
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+
+
+@pytest.mark.parametrize("mode,expected", [("skipped", "skipped"), ("failed", "failed"), ("noresult", "failed")])
+def test_purge_problems_are_warnings_and_the_release_still_succeeds(box, mode, expected):
+    box.commit_release({"app/static/apps/obys/index.html": SHELL_HTML, "app/static/apps/obys/sw.js": SW_JS})
+    proc = box.run(env={"FAKE_PURGE": mode})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    res = box.result(proc)
+    assert res["status"] == "switched" and box.port() == "8112"
+    assert res["edge_purge"]["status"] == expected
+    assert "WARNING: edge purge" in proc.stdout
+
+
+def test_no_purge_when_the_switch_fails(box):
+    proc = box.run(env={"FAKE_APACHE_FAIL": "1"})
+    assert proc.returncode == 9
+    assert "OP cf_purge" not in box.log()
+
+
+def test_failed_watch_restores_the_port_and_purges_the_edge_again(box):
+    proc = box.run(env={"FAKE_PUB_FAIL_AFTER": "3", "MONITOR_SECONDS": "60"})
+    assert proc.returncode == 10, proc.stdout + proc.stderr
+    assert box.port() == "8111"
+    assert box.log().count("OP cf_purge") == 2
+
+
+def test_reused_image_is_reported_as_not_stamped_by_this_run(box):
+    (box.fake / "images" / f"acct-candidate_{box.sha[:8]}").write_text(f"sha256:builtimg|{box.sha}|{box.sha[:8]}\n")
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert box.result(proc)["assets"]["stamp"] == "image_reused"
 
 
 def test_release_already_active_is_a_noop(box):

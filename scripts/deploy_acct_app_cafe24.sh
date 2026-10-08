@@ -20,6 +20,13 @@
 #     check; failure -> candidate removed, exit (production unaffected)
 #   6 cutover: apache upstream port swap (configtest -> graceful -> local + public verify), failure -> previous port
 #   7 5 min public watch (/health/live, /api/v1/health, index marker); failure -> previous port restored
+#
+# Static assets (scripts/obys_release_assets.py): when the image is built, the build-context COPY of the obys
+# shell HTML gets ?v=<sha8> on every modules/*.js|css ref and sw.js CACHE_VERSION gets <sha8> (repository files
+# are never edited). Right after the cutover is verified, the Cloudflare copies of index.html, sw.js and the
+# module URLs are removed with purge_cache(files) using /root/.cloudflare_env on cafe24, read at run time. A
+# purge problem is a WARNING plus edge_purge in the result JSON, never a failed release; purge_everything is
+# never used (same zone as the newtalk.kr shop).
 # The previous container is NEVER stopped or removed. Docker mutations are only allowed on acct-app-candidate-r<N>
 # names (docker_mut); a before/after snapshot proves every other container is unchanged.
 #
@@ -73,6 +80,10 @@ ACCT_MIGRATION_ALLOWLIST=(
     20261008_obys_clobe_mcp_store.sql
 )
 BUILD_PATHS=(app migrations deploy)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ASSET_TOOL="${ACCT_ASSET_TOOL:-$SCRIPT_DIR/obys_release_assets.py}"
+CF_ENV_FILE="${ACCT_CF_ENV_FILE:-/root/.cloudflare_env}"
+OBYS_STATIC_REL="app/static/apps/obys"
 CANDIDATE_RE='^acct-app-candidate-r[0-9]+$'
 
 RUN_ID="0"
@@ -98,6 +109,12 @@ RECOVERED=0
 COMPLETED=0
 MIGRATIONS_APPLIED=()
 MIGRATIONS_SKIPPED=()
+ASSET_VERSION=""
+ASSET_STAMP="not_run"
+PURGE_STATUS="not_run"
+PURGE_JSON=""
+PURGE_RUNS=0
+PURGE_URLS=()
 UNRELATED_CHANGED=""
 SNAPSHOT_BEFORE=""
 release_wt=""
@@ -541,6 +558,16 @@ write_dockerfile() { # write_dockerfile <ctx dir>
     } >"$ctx/Dockerfile"
 }
 
+stamp_assets() { # stamp the obys shell in the build context (never the repository checkout)
+    local out
+    ASSET_VERSION="$SHA8"
+    [[ -d $BUILD_CTX/$OBYS_STATIC_REL ]] || { ASSET_STAMP="no_obys_dir"; say "asset stamp: no $OBYS_STATIC_REL in the release; skipped"; return 0; }
+    out="$(python3 "$ASSET_TOOL" stamp "$BUILD_CTX/$OBYS_STATIC_REL" "$ASSET_VERSION")" \
+        || die 6 "obys asset version stamping failed for $ASSET_VERSION"
+    ASSET_STAMP="stamped"
+    say "asset stamp: ${out#OBYS_ASSET_STAMP }"
+}
+
 build_image() {
     local bt kb p
     bt=$(( $(left) - MONITOR_SECONDS - RECOVERY_RESERVE - 180 ))
@@ -554,6 +581,7 @@ build_image() {
     [[ ${#BUILD_PATHS_PRESENT[@]} -gt 0 ]] || die 6 "no build paths exist at the release"
     git -C "$REPO" archive --format=tar HEAD "${BUILD_PATHS_PRESENT[@]}" ':(exclude)app/static/gallery' | tar -x -C "$BUILD_CTX" \
         || die 6 "git archive of the release failed"
+    stamp_assets
     kb="$(du -sk "$BUILD_CTX" | cut -f1)"
     (( kb <= CONTEXT_MAX_MB * 1024 )) || die 6 "build context ${kb}KB exceeds ${CONTEXT_MAX_MB}MB (AGENTS.md rule 11) - investigate before releasing"
     # BuildKit resolves a bare "sha256:<id>" FROM as a registry name (docker.io/library/sha256) and fails;
@@ -576,6 +604,7 @@ ensure_image() {
         [[ $lbl_rev == "$SHA8" ]] || die 6 "$IMAGE_TAG exists with revision label '$lbl_rev' != $SHA8; refusing to reuse or rebuild"
         [[ -z $lbl_sha || $lbl_sha == "$RELEASE_SHA" ]] || die 6 "$IMAGE_TAG exists for a different release $lbl_sha"
         IMAGE_REUSED=true
+        ASSET_STAMP="image_reused"
         say "image $IMAGE_TAG already exists (${IMAGE_ID:0:19}); reusing, no rebuild"
         return 0
     fi
@@ -728,7 +757,15 @@ verify_public() { # verify_public <marker|-> : the same checks the 5-minute watc
     fi
 }
 
-recover_apache() { # idempotent: put the apache upstream back on the previous port
+recover_apache() { # idempotent; after a successful recovery the edge copies fetched from the new app are purged again
+    recover_apache_port
+    if [[ $RECOVERED == 1 && $PURGE_RUNS == 1 ]]; then
+        purge_edge
+    fi
+    return 0
+}
+
+recover_apache_port() { # idempotent: put the apache upstream back on the previous port
     [[ $CUTOVER_ATTEMPTED == 1 ]] || return 0
     local cur up attempt
     for attempt in 1 2; do
@@ -757,6 +794,40 @@ recover_apache() { # idempotent: put the apache upstream back on the previous po
     fi
 }
 
+purge_edge() { # Cloudflare stored copies of the obys shell; every problem is a warning only
+    local out line rc=0 st
+    PURGE_RUNS=$((PURGE_RUNS + 1))
+    PURGE_STATUS="failed"
+    PURGE_JSON='{"status": "failed", "reason": "url_list_unavailable"}'
+    if (( ${#PURGE_URLS[@]} == 0 )) && [[ -n $REPO && -d $REPO/$OBYS_STATIC_REL ]]; then
+        mapfile -t PURGE_URLS < <(python3 "$ASSET_TOOL" urls "$REPO/$OBYS_STATIC_REL" "${ASSET_VERSION:-$SHA8}" "https://$FB_HOST" 2>/dev/null) || PURGE_URLS=()
+    fi
+    if (( ${#PURGE_URLS[@]} == 0 )); then
+        say "WARNING: edge purge not attempted - cannot build the URL list"
+        return 0
+    fi
+    R_CF_PURGE="$(
+        printf '%s\n' 'set -u' "read -r -d '' PYSRC <<'__OBYS_PY__' || true"
+        cat "$ASSET_TOOL"
+        printf '%s\n' '__OBYS_PY__' 'exec python3 -c "$PYSRC" purge --env-file "$1" "${@:2}"'
+    )"
+    out="$(SSH_CALL_TIMEOUT=60 rscript cf_purge R_CF_PURGE "$CF_ENV_FILE" "${PURGE_URLS[@]}" 2>&1)" || rc=$?
+    line="$(sed -n 's/^PURGE_RESULT //p' <<<"$out" | tail -1)"
+    if [[ -z $line ]]; then
+        PURGE_JSON="{\"status\": \"failed\", \"reason\": \"no_result_rc_$rc\"}"
+        say "WARNING: edge purge gave no result (rc=$rc); release is unaffected"
+        return 0
+    fi
+    PURGE_JSON="$line"
+    st="$(sed -n 's/.*"status": "\([a-z]*\)".*/\1/p' <<<"$line" | head -1)"
+    PURGE_STATUS="${st:-failed}"
+    case $PURGE_STATUS in
+        ok) say "edge purge: ${#PURGE_URLS[@]} urls removed from Cloudflare (purge_cache files)" ;;
+        *) say "WARNING: edge purge $PURGE_STATUS ($line); release is unaffected" ;;
+    esac
+    return 0
+}
+
 cutover() {
     need_budget $((MONITOR_SECONDS + RECOVERY_RESERVE + 30)) "cutover (watch + recovery must still fit)"
     CUTOVER_ATTEMPTED=1
@@ -771,6 +842,7 @@ cutover() {
         die 9 "public verification failed after the switch; previous port restored=$RECOVERED"
     fi
     say "cutover verified publicly at $CUTOVER_KST"
+    purge_edge
 }
 
 monitor() {
@@ -800,9 +872,15 @@ emit_result() { # emit_result <status>
             R_IMAGE_TAG="$IMAGE_TAG" R_IMAGE_ID="$IMAGE_ID" R_REUSED="$IMAGE_REUSED" R_PGBK="$PG_BACKUP_PATH" \
             R_APBK="$APACHE_BACKUP" R_KST="$CUTOVER_KST" R_RECOVERED="$RECOVERED" R_UNRELATED="$UNRELATED_CHANGED" \
             R_APPLIED="${MIGRATIONS_APPLIED[*]:-}" R_SKIPPED="${MIGRATIONS_SKIPPED[*]:-}" R_MARKER="$MARKER" \
+            R_ASSET_VERSION="$ASSET_VERSION" R_ASSET_STAMP="$ASSET_STAMP" R_PURGE_STATUS="$PURGE_STATUS" R_PURGE_JSON="$PURGE_JSON" \
             python3 - <<'PY'
 import json, os
 e = os.environ.get
+try:
+    purge_detail = json.loads(e("R_PURGE_JSON") or "null") or {}
+except ValueError:
+    purge_detail = {}
+purge_detail["status"] = e("R_PURGE_STATUS") or "not_run"
 doc = {
     "status": e("R_STATUS"),
     "mode": e("R_MODE"),
@@ -814,6 +892,8 @@ doc = {
     "backups": {"pg_dump": e("R_PGBK"), "apache_vhost": e("R_APBK")},
     "migrations": {"applied": (e("R_APPLIED") or "").split(), "already_applied": (e("R_SKIPPED") or "").split()},
     "marker": e("R_MARKER"),
+    "assets": {"version": e("R_ASSET_VERSION"), "stamp": e("R_ASSET_STAMP")},
+    "edge_purge": purge_detail,
     "cutover_kst": e("R_KST"),
     "recovered_previous_port": e("R_RECOVERED") == "1",
     "unrelated_containers_changed": (e("R_UNRELATED") or "").splitlines(),
