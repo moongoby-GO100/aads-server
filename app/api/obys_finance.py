@@ -6,7 +6,7 @@ import logging
 import threading
 from decimal import Decimal
 from functools import partial
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import (
@@ -224,6 +224,7 @@ class ContractSignPayload(BaseModel):
     consent: bool
     consent_version: str = Field(default="yeoljeong-contract-sign-v1", max_length=80)
     signature_data_uri: str = Field(min_length=100, max_length=350_000)
+    bundle_contract_ids: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(default_factory=list, max_length=20)
 
 
 class AccountUpsertPayload(BaseModel):
@@ -745,7 +746,7 @@ async def regenerate_signed_contract_pdf(contract_id: str, current_user: dict = 
 
 @router.get("/contracts/signing/{token}")
 async def get_contract_signing(token: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"contract": await run_in_threadpool(svc.get_contract_by_token, token, current_user)}
+    return await run_in_threadpool(svc.get_contract_signing_view, token, current_user)
 
 
 @router.post("/contracts/signing")

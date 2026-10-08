@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import copy
 import csv
 import fcntl
 import hashlib
@@ -5069,16 +5070,8 @@ def sign_contract(payload: dict[str, Any], user: dict[str, Any] | None = None) -
         return _sign_contract_locked(payload, user)
 
 
-def _sign_contract_locked(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
-    token = str(payload.get("token") or "")
-    contract = _signing_contract_for_token(_read_hr("contracts", user), token)
-    signer_email = _contract_signer_email(contract, user)
-    if str(contract.get("status") or "") == "signed":
-        raise HTTPException(status_code=409, detail="이미 서명 완료된 계약서입니다")
-    if str(contract.get("status") or "") != "requested":
-        raise HTTPException(status_code=409, detail="서명 요청된 계약서만 서명할 수 있습니다")
-    _require_employee_still_approved(contract, user)
-    _require_sign_link_alive(contract)
+def _check_signature_payload(payload: dict[str, Any], contract: dict[str, Any]) -> tuple[str, str, str, str]:
+    """동의·이름·서명 이미지 검사. (signer_name, consent_version, data_uri, image_sha256)."""
     if payload.get("consent") is not True:
         raise HTTPException(status_code=400, detail="계약 내용 확인 및 전자서명 동의가 필요합니다")
     consent_version = str(payload.get("consent_version") or "").strip()
@@ -5089,9 +5082,24 @@ def _sign_contract_locked(payload: dict[str, Any], user: dict[str, Any] | None =
     if not signer_name or re.sub(r"\s+", "", signer_name) != re.sub(r"\s+", "", employee_name):
         raise HTTPException(status_code=400, detail="계약 대상 직원 이름을 정확히 입력하십시오")
     signature_data_uri, signature_sha256 = _validated_signature_image(payload.get("signature_data_uri"))
-    _validate_contract_payload(contract)
+    return signer_name, consent_version, signature_data_uri, signature_sha256
+
+
+def _apply_contract_signature(
+    contract: dict[str, Any],
+    *,
+    payload: dict[str, Any],
+    signed_at: str,
+    signer_name: str,
+    signer_email: str,
+    consent_version: str,
+    signature_data_uri: str,
+    signature_sha256: str,
+    token_hash: str,
+    audit_extra: dict[str, Any] | None = None,
+) -> None:
     contract["status"] = "signed"
-    contract["signed_at"] = _now()
+    contract["signed_at"] = signed_at
     contract["signer_name"] = signer_name
     contract["signer_email"] = signer_email
     contract["signature_data_uri"] = signature_data_uri
@@ -5099,22 +5107,255 @@ def _sign_contract_locked(payload: dict[str, Any], user: dict[str, Any] | None =
     contract["signature_consent"] = {
         "accepted": True,
         "version": consent_version,
-        "accepted_at": contract["signed_at"],
+        "accepted_at": signed_at,
     }
     contract["signature_audit"] = {
         "authenticated_email": signer_email,
         "client_ip": str(payload.get("audit_ip") or "")[:64],
         "user_agent": str(payload.get("audit_user_agent") or "")[:512],
-        "signed_at": contract["signed_at"],
+        "signed_at": signed_at,
+        **(audit_extra or {}),
     }
-    contract["sign_token_hash"] = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    contract["sign_token_hash"] = token_hash
     contract.pop("sign_token", None)
-    contract["updated_at"] = contract["signed_at"]
+    contract["updated_at"] = signed_at
     snapshot, snapshot_sha256 = _signed_contract_snapshot(contract)
     contract["signed_snapshot"] = snapshot
     contract["signed_snapshot_sha256"] = snapshot_sha256
+
+
+def _sign_contract_locked(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
+    if _bundle_contract_ids(payload):
+        raise HTTPException(status_code=400, detail="묶음 서명은 sign_contract_bundle 로만 처리합니다")
+    token = str(payload.get("token") or "")
+    contract = _signing_contract_for_token(_read_hr("contracts", user), token)
+    signer_email = _contract_signer_email(contract, user)
+    if str(contract.get("status") or "") == "signed":
+        raise HTTPException(status_code=409, detail="이미 서명 완료된 계약서입니다")
+    if str(contract.get("status") or "") != "requested":
+        raise HTTPException(status_code=409, detail="서명 요청된 계약서만 서명할 수 있습니다")
+    _require_employee_still_approved(contract, user)
+    _require_sign_link_alive(contract)
+    signer_name, consent_version, signature_data_uri, signature_sha256 = _check_signature_payload(payload, contract)
+    _validate_contract_payload(contract)
+    _apply_contract_signature(
+        contract,
+        payload=payload,
+        signed_at=_now(),
+        signer_name=signer_name,
+        signer_email=signer_email,
+        consent_version=consent_version,
+        signature_data_uri=signature_data_uri,
+        signature_sha256=signature_sha256,
+        token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+    )
     _write_hr_record("contracts", contract, user)
     return contract
+
+
+# ---------------------------------------------------------------------------
+# 묶음 서명 — 같은 직원의 서명요청 계약 여러 건을 서명 1회로 각각 서명 처리한다.
+# 계약서는 건별로 유지된다: 계약마다 자기 signed_at·snapshot·서명본 PDF 를 따로 가진다.
+# ---------------------------------------------------------------------------
+CONTRACT_BUNDLE_MAX = 20
+CONTRACT_BUNDLE_HIDDEN_FIELDS = ("sign_token", "sign_token_hash", "signature_data_uri", "signed_snapshot")
+
+
+def _bundle_contract_ids(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("bundle_contract_ids")
+    if raw is None or raw == "" or raw == []:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise HTTPException(status_code=400, detail="bundle_contract_ids 는 계약서 id 목록이어야 합니다")
+    ids: list[str] = []
+    for item in raw:
+        value = str(item or "").strip()
+        if not value:
+            raise HTTPException(status_code=400, detail="bundle_contract_ids 에 빈 값이 있습니다")
+        if value not in ids:
+            ids.append(value)
+    if len(ids) > CONTRACT_BUNDLE_MAX:
+        raise HTTPException(status_code=400, detail=f"한 번에 서명할 수 있는 계약서는 최대 {CONTRACT_BUNDLE_MAX}건입니다")
+    return ids
+
+
+def _contract_bundle_sort_key(contract: dict[str, Any]) -> tuple[str, str, str, str]:
+    start = str(_contract_payload_value(contract, "start_date", "startDate") or "").strip() or "9999-12-31"
+    contract_date = str(_contract_payload_value(contract, "contract_date", "contractDate") or "").strip()
+    return start, contract_date, str(contract.get("created_at") or ""), str(contract.get("id") or "")
+
+
+def _same_signing_party(base: dict[str, Any], other: dict[str, Any]) -> bool:
+    """같은 테넌트·같은 사업자·같은 직원(이메일 일치, 가입요청 id 가 있으면 그것도 일치)."""
+    tenant = str(base.get("tenant_id") or "").strip()
+    if not tenant or str(other.get("tenant_id") or "").strip() != tenant:
+        return False
+    email = str(base.get("employee_email") or "").strip().lower()
+    if not email or str(other.get("employee_email") or "").strip().lower() != email:
+        return False
+    business = str(_contract_payload_value(base, "business_id", "businessId") or "").strip()
+    if not business or str(_contract_payload_value(other, "business_id", "businessId") or "").strip() != business:
+        return False
+    request_id = str(_contract_payload_value(base, "employee_request_id", "employeeRequestId") or "").strip()
+    other_request_id = str(_contract_payload_value(other, "employee_request_id", "employeeRequestId") or "").strip()
+    return not (request_id and other_request_id and request_id != other_request_id)
+
+
+def _requested_siblings(contract: dict[str, Any], rows: list[dict[str, Any]], *, only_alive: bool) -> list[dict[str, Any]]:
+    siblings: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("id") or "") == str(contract.get("id") or "") or row.get("deleted_at"):
+            continue
+        if str(row.get("status") or "") != "requested" or not _same_signing_party(contract, row):
+            continue
+        if only_alive:
+            try:
+                _require_sign_link_alive(row)
+            except HTTPException:
+                continue
+        siblings.append(row)
+    return siblings
+
+
+def _bundle_item(contract: dict[str, Any], current_id: str) -> dict[str, Any]:
+    meta = CONTRACT_TEMPLATE_META.get(str(contract.get("contract_type") or ""), CONTRACT_TEMPLATE_META["default"])
+    return {
+        "id": str(contract.get("id") or ""),
+        "title": str(contract.get("print_title") or meta["print_title"]),
+        "contract_type": str(contract.get("contract_type") or ""),
+        "start_date": str(_contract_payload_value(contract, "start_date", "startDate") or ""),
+        "end_date": str(_contract_payload_value(contract, "end_date", "endDate") or ""),
+        "contract_date": str(_contract_payload_value(contract, "contract_date", "contractDate") or ""),
+        "amends_contract_id": str(contract.get("amends_contract_id") or ""),
+        "is_current": str(contract.get("id") or "") == current_id,
+        "contract": {key: value for key, value in contract.items() if key not in CONTRACT_BUNDLE_HIDDEN_FIELDS},
+    }
+
+
+def get_contract_signing_view(token: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
+    """서명 화면용: 토큰 계약 + 같은 직원·사업자의 서명요청 계약(자기 포함, start_date 오름차순)."""
+    contract = get_contract_by_token(token, user)
+    members = [contract, *_requested_siblings(contract, _read_hr("contracts", user), only_alive=True)]
+    members.sort(key=_contract_bundle_sort_key)
+    current_id = str(contract.get("id") or "")
+    return {"contract": contract, "bundle": [_bundle_item(member, current_id) for member in members]}
+
+
+def _monotonic_signed_at(previous: str | None) -> str:
+    current = _now()
+    previous_dt, current_dt = _pg_ts(previous), _pg_ts(current)
+    if previous_dt is not None and current_dt is not None and current_dt <= previous_dt:
+        return (previous_dt + timedelta(microseconds=1)).isoformat(timespec="microseconds")
+    return current
+
+
+def _bundle_member_for_signing(
+    member: dict[str, Any], primary: dict[str, Any], payload: dict[str, Any], user: dict[str, Any] | None
+) -> str:
+    """묶음 대상 한 건에 단건 서명의 검사를 그대로 적용한다. 어느 하나라도 걸리면 409."""
+    label = str(member.get("id") or "")[:8]
+    try:
+        if not _same_signing_party(primary, member):
+            raise HTTPException(status_code=409, detail="같은 직원·사업자의 계약서가 아닙니다")
+        signer_email = _contract_signer_email(member, user)
+        if str(member.get("status") or "") != "requested":
+            raise HTTPException(status_code=409, detail="서명 요청 상태가 아닙니다")
+        _require_employee_still_approved(member, user)
+        _require_sign_link_alive(member)
+        _check_signature_payload(payload, member)
+        _validate_contract_payload(member)
+        return signer_email
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"함께 서명할 계약서({label}) 확인 실패 — 한 건도 서명되지 않았습니다: {exc.detail}",
+        ) from None
+
+
+def _restore_contracts(originals: list[dict[str, Any]], user: dict[str, Any] | None) -> None:
+    for original in originals:
+        try:
+            _write_hr_record("contracts", original, user)
+        except Exception:  # noqa: BLE001 — 나머지도 계속 되돌린다
+            logger.exception("contract bundle rollback failed: contract=%s", original.get("id"))
+
+
+def sign_contract_bundle(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
+    with _CONTRACT_SIGN_LOCK:
+        return _sign_contract_bundle_locked(payload, user)
+
+
+def _sign_contract_bundle_locked(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
+    """전부 아니면 전무: 모든 건을 먼저 검사하고, 쓰기 도중 실패하면 이미 쓴 건을 원상복구한다."""
+    token = str(payload.get("token") or "")
+    rows = _read_hr("contracts", user)
+    primary = _signing_contract_for_token(rows, token)
+    extra_ids = [item for item in _bundle_contract_ids(payload) if item != str(primary.get("id") or "")]
+    if not extra_ids:
+        single = _sign_contract_locked({**payload, "bundle_contract_ids": []}, user)
+        return {"bundle_id": "", "contract_ids": [single["id"]], "contracts": [single], "primary_id": single["id"]}
+
+    signer_email = _contract_signer_email(primary, user)
+    if str(primary.get("status") or "") == "signed":
+        raise HTTPException(status_code=409, detail="이미 서명 완료된 계약서입니다")
+    if str(primary.get("status") or "") != "requested":
+        raise HTTPException(status_code=409, detail="서명 요청된 계약서만 서명할 수 있습니다")
+    _require_employee_still_approved(primary, user)
+    _require_sign_link_alive(primary)
+    signer_name, consent_version, signature_data_uri, signature_sha256 = _check_signature_payload(payload, primary)
+    _validate_contract_payload(primary)
+
+    by_id = {str(row.get("id") or ""): row for row in rows}
+    members: list[dict[str, Any]] = []
+    for member_id in extra_ids:
+        member = by_id.get(member_id)
+        if member is None or member.get("deleted_at"):
+            raise HTTPException(status_code=409, detail="함께 서명할 계약서를 찾을 수 없습니다 — 한 건도 서명되지 않았습니다")
+        _bundle_member_for_signing(member, primary, payload, user)
+        members.append(member)
+
+    ordered = sorted([primary, *members], key=_contract_bundle_sort_key)
+    bundle_id = str(uuid4())
+    contract_ids = [str(item.get("id") or "") for item in ordered]
+    originals = [copy.deepcopy(item) for item in ordered]
+    attempted: list[dict[str, Any]] = []
+    previous: str | None = None
+    try:
+        for item, original in zip(ordered, originals):
+            signed_at = _monotonic_signed_at(previous)
+            previous = signed_at
+            own_token = str(item.get("sign_token") or "")
+            token_hash = (
+                hashlib.sha256(token.encode("utf-8")).hexdigest()
+                if item is primary
+                else (hashlib.sha256(own_token.encode("utf-8")).hexdigest() if own_token else str(item.get("sign_token_hash") or ""))
+            )
+            attempted.append(original)
+            _apply_contract_signature(
+                item,
+                payload=payload,
+                signed_at=signed_at,
+                signer_name=signer_name,
+                signer_email=signer_email,
+                consent_version=consent_version,
+                signature_data_uri=signature_data_uri,
+                signature_sha256=signature_sha256,
+                token_hash=token_hash,
+                audit_extra={"bundle_id": bundle_id, "bundle_contract_ids": contract_ids},
+            )
+            _write_hr_record("contracts", item, user)
+    except Exception as exc:  # noqa: BLE001 — 일부만 서명된 상태를 남기지 않는다
+        logger.error("contract bundle sign failed, rolling back: bundle=%s err=%s", bundle_id, exc)
+        _restore_contracts(attempted, user)
+        raise HTTPException(
+            status_code=409, detail="묶음 서명 저장 중 오류가 발생해 한 건도 서명되지 않았습니다. 다시 시도하십시오"
+        ) from None
+    return {
+        "bundle_id": bundle_id,
+        "contract_ids": contract_ids,
+        "contracts": ordered,
+        "primary_id": str(primary.get("id") or ""),
+    }
 
 
 def delete_contract(contract_id: str, user: dict[str, Any]) -> None:
@@ -5303,7 +5544,23 @@ def _notify_contract_event(contract: dict[str, Any], event: str) -> dict[str, An
 
 def request_contract_signature_with_notice(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
     contract = request_contract_signature(contract_id, user)
-    return {"contract": contract, "notify": _notify_contract_event(contract, "signature_requested")}
+    return {
+        "contract": contract,
+        "notify": _notify_contract_event(contract, "signature_requested"),
+        "bundle_notice": _signature_bundle_notice(contract, user),
+    }
+
+
+def _signature_bundle_notice(contract: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """같은 직원·사업자의 서명요청 계약이 이미 있으면 직원이 한 번에 서명한다는 안내. 실패해도 발송은 영향받지 않는다."""
+    try:
+        siblings = _requested_siblings(contract, _read_hr("contracts", user), only_alive=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("contract bundle notice failed: contract=%s err=%s", contract.get("id"), exc)
+        return {"count": 1, "contract_ids": [str(contract.get("id") or "")], "message": ""}
+    ids = [str(contract.get("id") or ""), *[str(row.get("id") or "") for row in siblings]]
+    message = f"직원은 {len(ids)}건을 한 번에 서명합니다" if len(ids) > 1 else ""
+    return {"count": len(ids), "contract_ids": ids, "message": message}
 
 
 def resend_contract_signature_notice(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
@@ -5396,8 +5653,7 @@ def _store_signed_contract_pdf(contract: dict[str, Any], user: dict[str, Any] | 
     return result
 
 
-def sign_contract_and_deliver(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
-    contract = sign_contract(payload, user)
+def _deliver_signed_contract(contract: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
     signed_pdf = _store_signed_contract_pdf(contract, user)
     employment = _sync_employment_after_signature(contract, user)
     return {
@@ -5406,6 +5662,33 @@ def sign_contract_and_deliver(payload: dict[str, Any], user: dict[str, Any] | No
         "employment": employment,
         "notify": _notify_contract_event(contract, "signed"),
     }
+
+
+def sign_contract_and_deliver(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
+    if _bundle_contract_ids(payload):
+        signed = sign_contract_bundle(payload, user)
+        results = [_deliver_signed_contract(contract, user) for contract in signed["contracts"]]
+        primary = next(item for item in results if item["contract"].get("id") == signed["primary_id"])
+        if len(results) == 1:
+            return primary
+        return {
+            **primary,
+            "bundle": {
+                "bundle_id": signed["bundle_id"],
+                "contract_ids": signed["contract_ids"],
+                "results": [
+                    {
+                        "contract_id": item["contract"].get("id"),
+                        "signed_at": item["contract"].get("signed_at"),
+                        "signed_pdf": item["signed_pdf"],
+                        "employment": item["employment"],
+                        "notify": item["notify"],
+                    }
+                    for item in results
+                ],
+            },
+        }
+    return _deliver_signed_contract(sign_contract(payload, user), user)
 
 
 def regenerate_signed_contract_pdf(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
