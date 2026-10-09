@@ -212,6 +212,16 @@ class EmployeeRoleUpdate(BaseModel):
     memo: str = ""
 
 
+class EmployeeAssignmentUpdate(BaseModel):
+    business_id: str = ""
+    branch: str | None = None
+    memo: str = ""
+
+
+class EmployeeJoinPolicyUpdate(BaseModel):
+    employee_join_auto_approve: bool
+
+
 class DocumentReviewPayload(BaseModel):
     status: str = "approved"
     memo: str = ""
@@ -531,8 +541,13 @@ async def resolve_employee_invite(token: str, current_user: dict = Depends(get_c
 
 @router.post("/employees/invites/accept")
 async def accept_employee_invite(payload: InviteAccept, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    result = await run_in_threadpool(svc.accept_invite, payload.model_dump(), current_user)
-    return {"request": result["request"], "requests": result["requests"], "payroll_link": result.get("payroll_link")}
+    result = await svc.accept_invite_with_auto_approval(payload.model_dump(), current_user)
+    return {
+        "request": result["request"],
+        "requests": result["requests"],
+        "payroll_link": result.get("payroll_link"),
+        "auto_approve": result.get("auto_approve"),
+    }
 
 
 @router.get("/employees/join-requests")
@@ -542,7 +557,8 @@ async def list_employee_join_requests(current_user: dict = Depends(get_current_u
 
 @router.post("/employees/join-requests")
 async def create_employee_join_request(payload: JoinRequestCreate, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"request": await run_in_threadpool(svc.upsert_join_request, payload.model_dump(), current_user)}
+    # 저장 직후 자동승인(스위치 on · 본인 계정 요청 · 직원 역할). 자동승인 실패는 가입 응답을 실패시키지 않는다.
+    return await svc.create_join_request_with_auto_approval(payload.model_dump(), current_user)
 
 
 @router.patch("/employees/join-requests/{request_id}")
@@ -566,14 +582,38 @@ async def update_approved_employee_role(
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
     return {
-        "employee": await run_in_threadpool(
-            svc.update_approved_employee_role,
+        "employee": await svc.update_approved_employee_role_serialized(
             request_id,
             payload.role,
             payload.memo,
             current_user,
         )
     }
+
+
+@router.patch("/employees/approved/{request_id}/assignment")
+async def update_approved_employee_assignment(
+    request_id: str,
+    payload: EmployeeAssignmentUpdate,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    # 승인된 직원의 사업자·지점 변경(관리자만). 다른 고용주 테넌트로 이동하면 양쪽 관리자 권한이 필요하다.
+    return await svc.reassign_approved_employee(request_id, payload.model_dump(), current_user)
+
+
+@router.get("/employees/assignment-targets")
+async def list_employee_assignment_targets(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"targets": await svc.list_assignment_targets(current_user)}
+
+
+@router.get("/employees/join-policy")
+async def get_employee_join_policy(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.get_employee_join_policy, current_user)
+
+
+@router.put("/employees/join-policy")
+async def set_employee_join_policy(payload: EmployeeJoinPolicyUpdate, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.set_employee_join_policy, payload.model_dump(), current_user)
 
 
 @router.post("/employees/approved/{request_id}/resync-employment")

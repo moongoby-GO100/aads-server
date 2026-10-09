@@ -2888,18 +2888,33 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
     return record
 
 
-def review_join_request(request_id: str, action: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:
+def review_join_request(
+    request_id: str, action: str, memo: str, user: dict[str, Any], *, auto: bool = False
+) -> dict[str, Any]:
     _require_review_tenant(request_id, user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="가입요청 승인 권한이 없습니다")
     record = _require_hr_record(_find(_read_hr("employee_join_requests", user), request_id), user, detail="가입요청을 찾을 수 없습니다")
     if action not in {"approved", "rejected"}:
         raise HTTPException(status_code=400, detail="action은 approved 또는 rejected여야 합니다")
+    _reject_if_transfer_in_progress(record)
     record["status"] = action
     record["review_memo"] = memo
     record["reviewed_by"] = _email(user)
     record["reviewed_at"] = _now()
     record["updated_at"] = record["reviewed_at"]
+    if auto:
+        record["auto_approved"] = True
+        record["auto_approved_at"] = record["reviewed_at"]
+        # 승인 저장 ~ 멤버십 연결 사이에 프로세스가 죽으면 이 표시가 남는다 — 목록에서 '연결 확인 필요' 로 보인다.
+        record["auto_approve_link_pending"] = True
+        record.pop("auto_approve_error", None)
+    else:
+        # 관리자가 직접 처리하면 자동승인 표시를 걷는다 — 반려된 자동승인 건이 계속 '자동승인됨' 으로 보이지 않게.
+        record.pop("auto_approved", None)
+        record.pop("auto_approved_at", None)
+        record.pop("auto_approve_link_pending", None)
+        record.pop("auto_approve_error", None)
     _write_hr_record("employee_join_requests", record, user)
     return record
 
@@ -3214,11 +3229,14 @@ def _precheck_join_review(request_id: str, action: str, user: dict[str, Any]) ->
 
 
 def _review_join_request_with_previous(
-    request_id: str, action: str, memo: str, user: dict[str, Any]
+    request_id: str, action: str, memo: str, user: dict[str, Any], auto: bool = False
 ) -> tuple[dict[str, Any], str]:
     previous = _find(_read_hr("employee_join_requests", user), request_id) or {}
     previous_status = str(previous.get("status") or "")
-    return review_join_request(request_id, action, memo, user), previous_status
+    if auto and previous_status.strip().lower() != "pending":
+        # 락 안에서 다시 본다 — 그 사이 관리자가 반려·승인했으면 자동승인이 덮어쓰지 않는다.
+        raise HTTPException(status_code=409, detail="대기 중인 가입요청만 자동승인할 수 있습니다")
+    return review_join_request(request_id, action, memo, user, auto=auto), previous_status
 
 
 async def review_join_request_with_membership(
@@ -3226,6 +3244,8 @@ async def review_join_request_with_membership(
     action: str,
     memo: str,
     user: dict[str, Any],
+    *,
+    auto: bool = False,
 ) -> dict[str, Any]:
     """가입요청 승인·반려 + 고용주 테넌트 멤버십 연결·회수.
 
@@ -3240,24 +3260,381 @@ async def review_join_request_with_membership(
     건다(파일 flock 은 컨테이너마다 파일시스템이 달라 서로를 못 본다).
     인증 DB 에 닿지 못하면 락 없이 진행한다 — 그때 멤버십 변경도 같은 DB 라 실패하고
     error 로 감사에 남으며, 승인 자체는 되돌리지 않는다.
+
+    ``auto=True`` 는 자동승인 경로다(호출자는 시스템 actor). 같은 본체를 쓰되 ① 직전 상태가
+    pending 일 때만 ② 감사 source 가 auto_approve_join_request ③ 멤버십 연결이 실패하면
+    승인을 되돌려 요청을 pending 으로 남기고 오류를 기록한다.
     """
     from app import auth as auth_module
 
     tenant_id = _tenant_id(user)
     employee_email = await asyncio.to_thread(_precheck_join_review, request_id, action, user)
-    async with AsyncExitStack() as stack:
-        conn = None
+    try:
+        async with AsyncExitStack() as stack:
+            conn = None
+            try:
+                conn = await stack.enter_async_context(auth_module.employee_membership_lock(tenant_id, employee_email))
+            except Exception as exc:  # noqa: BLE001
+                logger.error("employee membership lock unavailable: request=%s err=%s", request_id, exc)
+            record, previous_status = await asyncio.to_thread(
+                _review_join_request_with_previous, request_id, action, memo, user, auto
+            )
+            try:
+                membership = await sync_employee_tenant_membership(
+                    record,
+                    action,
+                    user,
+                    previous_status=previous_status,
+                    source=AUTO_APPROVE_SOURCE if auto else "review_join_request",
+                    conn=conn,
+                )
+            except Exception:
+                if auto:
+                    # 연결 단계가 예외로 끝나면 승인만 남지 않게 되돌리고 예외를 올린다(락 블록 롤백).
+                    await asyncio.to_thread(
+                        _revert_auto_approval, request_id, previous_status, {"status": "error", "reason": "sync_exception"}, user
+                    )
+                raise
+            if auto and membership.get("status") not in AUTO_APPROVE_OK_LINK_STATUSES:
+                record = await asyncio.to_thread(_revert_auto_approval, request_id, previous_status, membership, user)
+                # 예외로 락 블록을 나가 인증 DB 트랜잭션을 롤백한다 — 멤버십 연결이 일부만 남았어도 함께 사라진다.
+                raise _AutoApprovalNotLinked(record, membership)
+            if auto:
+                try:
+                    record = await asyncio.to_thread(_clear_auto_link_pending, request_id, user) or record
+                except Exception:  # noqa: BLE001
+                    # 연결은 끝났다 — 표시를 못 걷었다고 락 블록을 예외로 나가 멤버십을 롤백하면 안 된다(표시가 남아 보인다).
+                    logger.exception("auto approve: link-pending flag not cleared: request=%s", request_id)
+    except _AutoApprovalNotLinked as failed:
+        return {"request": failed.record, "membership": failed.membership, "auto_approved": False}
+    return {"request": record, "membership": membership, **({"auto_approved": True} if auto else {})}
+
+
+class _AutoApprovalNotLinked(Exception):
+    def __init__(self, record: dict[str, Any], membership: dict[str, Any]):
+        super().__init__("auto approval reverted: membership not linked")
+        self.record = record
+        self.membership = membership
+
+
+# ---------------------------------------------------------------------------
+# 직원 가입요청 자동승인 (ACCT-OBYS-JOIN-AUTO-APPROVE-REASSIGN-20261009)
+#
+# 승인 본체는 review_join_request_with_membership 하나다 — 자동승인은 그것을 시스템 actor 로
+# 부를 뿐이다(일반 PATCH 의 관리자 검사는 그대로).  본인 계정에 묶인 요청(requester_user_id)의
+# 직원 역할 요청만 대상이다: 관리자 대리 등록·이메일만 있는 요청은 사람이 본다.
+# 멤버십은 언제나 member 로만 연결된다(auth.link_employee_tenant_membership) — 관리자 권한은
+# 자동으로 생기지 않는다.
+# ---------------------------------------------------------------------------
+AUTO_APPROVE_SOURCE = "auto_approve_join_request"
+AUTO_APPROVE_ACTOR_ID = "system:auto-approve"
+AUTO_APPROVE_ACTOR_EMAIL = "auto-approve@obys.system"
+AUTO_APPROVE_OK_LINK_STATUSES = frozenset({"linked", "unchanged"})
+EMPLOYEE_JOIN_POLICY_KEY = "employee_join_auto_approve"
+# 기본값 true 는 CEO 지시(2026-10-09 "가입요청 승인은 자동승인으로 바꿔놔")다. 스위치를 끈 적 없는 테넌트도
+# 본인 계정으로 낸 직원 역할 요청은 즉시 승인된다. 끄려면 PUT /employees/join-policy 로 false 를 저장한다.
+EMPLOYEE_JOIN_AUTO_APPROVE_DEFAULT = True
+EMPLOYEE_JOIN_POLICY_FILE_KEY = "employee_join_policy"
+
+
+def _join_policy_scope(tenant_id: str) -> str:
+    return f"employee_join:{tenant_id}"
+
+
+async def _db_get_join_policy(tenant_id: str) -> dict[str, Any]:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        if not await conn.fetchval("SELECT to_regclass('public.yeoljeong_settings') IS NOT NULL"):
+            return {}
+        value = await conn.fetchval("SELECT data FROM yeoljeong_settings WHERE scope = $1", _join_policy_scope(tenant_id))
+        return _jsonb_object(value) if value is not None else {}
+    finally:
+        await conn.close()
+
+
+async def _db_set_join_policy(tenant_id: str, enabled: bool, updated_by: str) -> bool:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO yeoljeong_settings (scope, data, updated_by)
+            VALUES ($1, $2::jsonb, $3)
+            ON CONFLICT (scope) DO UPDATE
+               SET data = EXCLUDED.data, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+            """,
+            _join_policy_scope(tenant_id),
+            json.dumps({EMPLOYEE_JOIN_POLICY_KEY: bool(enabled)}),
+            updated_by,
+        )
+        return True
+    finally:
+        await conn.close()
+
+
+def _join_policy_enabled(data: Any) -> bool:
+    if isinstance(data, dict) and EMPLOYEE_JOIN_POLICY_KEY in data:
+        return bool(data[EMPLOYEE_JOIN_POLICY_KEY])
+    return EMPLOYEE_JOIN_AUTO_APPROVE_DEFAULT
+
+
+def _file_join_policy(tenant_id: str) -> Any:
+    policy = _read_json_object("settings").get(EMPLOYEE_JOIN_POLICY_FILE_KEY)
+    return policy.get(tenant_id) if isinstance(policy, dict) else None
+
+
+def employee_join_auto_approve_enabled(tenant_id: str) -> bool:
+    """테넌트의 자동승인 스위치(동기 — 워커 스레드·threadpool 전용).
+
+    설정이 없으면 EMPLOYEE_JOIN_AUTO_APPROVE_DEFAULT(true). DB 모드에서 읽기에 실패하면 false(사람이 승인한다).
+    이벤트 루프 안에서 부르면 _run_db 가 조용히 None 을 돌려 '끔' 으로 오판하므로 RuntimeError 로 막는다 —
+    루프 안에서는 employee_join_auto_approve_enabled_async 를 쓴다.
+    """
+    if _db_available():
         try:
-            conn = await stack.enter_async_context(auth_module.employee_membership_lock(tenant_id, employee_email))
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("employee_join_auto_approve_enabled 는 동기 전용입니다 — 비동기 코드는 *_async 를 쓰십시오")
+        data = _run_db(_db_get_join_policy(tenant_id))
+        return _join_policy_enabled(data) if isinstance(data, dict) else False
+    return _join_policy_enabled(_file_join_policy(tenant_id))
+
+
+async def employee_join_auto_approve_enabled_async(tenant_id: str) -> bool:
+    """이벤트 루프 안에서 쓰는 스위치 조회. DB 읽기 실패는 false(사람이 승인한다)."""
+    if _db_available():
+        try:
+            data = await _db_get_join_policy(tenant_id)
         except Exception as exc:  # noqa: BLE001
-            logger.error("employee membership lock unavailable: request=%s err=%s", request_id, exc)
-        record, previous_status = await asyncio.to_thread(
-            _review_join_request_with_previous, request_id, action, memo, user
-        )
-        membership = await sync_employee_tenant_membership(
-            record, action, user, previous_status=previous_status, conn=conn
-        )
-    return {"request": record, "membership": membership}
+            logger.error("join policy read failed: tenant=%s err=%s", tenant_id, type(exc).__name__)
+            return False
+        return _join_policy_enabled(data) if isinstance(data, dict) else False
+    return _join_policy_enabled(await asyncio.to_thread(_file_join_policy, tenant_id))
+
+
+def get_employee_join_policy(user: dict[str, Any]) -> dict[str, Any]:
+    tenant_id = _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="가입 정책 조회 권한이 없습니다")
+    return {EMPLOYEE_JOIN_POLICY_KEY: employee_join_auto_approve_enabled(tenant_id)}
+
+
+def set_employee_join_policy(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    tenant_id = _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="가입 정책 변경 권한이 없습니다")
+    if not isinstance(payload.get(EMPLOYEE_JOIN_POLICY_KEY), bool):
+        raise HTTPException(status_code=400, detail=f"{EMPLOYEE_JOIN_POLICY_KEY} 는 true/false 여야 합니다")
+    enabled = bool(payload[EMPLOYEE_JOIN_POLICY_KEY])
+    if _db_available():
+        if not _run_db(_db_set_join_policy(tenant_id, enabled, _email(user))):
+            raise HTTPException(status_code=503, detail="가입 정책을 저장하지 못했습니다")
+    else:
+        data = _read_json_object("settings")
+        policy = data.get(EMPLOYEE_JOIN_POLICY_FILE_KEY)
+        policy = dict(policy) if isinstance(policy, dict) else {}
+        policy[tenant_id] = {EMPLOYEE_JOIN_POLICY_KEY: enabled, "updated_by": _email(user), "updated_at": _now()}
+        data[EMPLOYEE_JOIN_POLICY_FILE_KEY] = policy
+        _write_json_object("settings", data)
+    return {EMPLOYEE_JOIN_POLICY_KEY: enabled}
+
+
+def _auto_approve_actor(tenant_id: str) -> dict[str, Any]:
+    """자동승인 전용 시스템 actor — 가입요청이 귀속된 고용주 테넌트 컨텍스트로만 만든다."""
+    return {
+        "user_id": AUTO_APPROVE_ACTOR_ID,
+        "email": AUTO_APPROVE_ACTOR_EMAIL,
+        "is_admin": False,
+        "tenant_id": tenant_id,
+        "tenant_role": "system",
+        "user_role": "system",
+        "current_membership": {"tenant_id": tenant_id, "status": "active", "role": "system"},
+    }
+
+
+def _auto_approve_skip_reason(record: dict[str, Any]) -> str:
+    """정책 스위치를 제외한 자동승인 대상 조건. 대상이 아니면 사유, 대상이면 빈 문자열."""
+    if str(record.get("status") or "").strip().lower() != "pending":
+        return "not_pending"
+    if str(record.get("role") or "employee").strip().lower() != "employee":
+        return "role_not_employee"
+    if not _join_request_account_id(record):
+        return "identity_not_bound"
+    return ""
+
+
+def _revert_auto_approval(
+    request_id: str, previous_status: str, membership: dict[str, Any], user: dict[str, Any]
+) -> dict[str, Any]:
+    """멤버십 연결이 안 된 자동승인을 되돌린다 — 요청은 대기로 남고 오류가 기록된다."""
+    record = _find(_read_hr("employee_join_requests", user), request_id)
+    if not record:
+        return {}
+    for key in ("auto_approved", "auto_approved_at", "auto_approve_link_pending", "reviewed_by", "reviewed_at", "review_memo"):
+        record.pop(key, None)
+    now = _now()
+    record["status"] = previous_status or "pending"
+    record["auto_approve_error"] = {
+        "at": now,
+        "membership_status": str(membership.get("status") or ""),
+        "reason": str(membership.get("reason") or membership.get("status") or "membership_not_linked"),
+    }
+    record["updated_at"] = now
+    _write_hr_record("employee_join_requests", record, user)
+    return record
+
+
+def _clear_auto_link_pending(request_id: str, user: dict[str, Any]) -> dict[str, Any] | None:
+    """멤버십 연결까지 끝났으면 '연결 대기' 표시를 걷는다. 멤버십 마커가 저장된 최신 레코드를 읽어 쓴다."""
+    record = _find(_read_hr("employee_join_requests", user), request_id)
+    if not record or "auto_approve_link_pending" not in record:
+        return record
+    record.pop("auto_approve_link_pending", None)
+    _write_hr_record("employee_join_requests", record, user)
+    return record
+
+
+def _record_auto_approve_error(request_id: str, user: dict[str, Any], reason: str) -> dict[str, Any] | None:
+    record = _find(_read_hr("employee_join_requests", user), request_id)
+    if not record:
+        return None
+    now = _now()
+    record["auto_approve_error"] = {"at": now, "membership_status": "", "reason": reason}
+    record["updated_at"] = now
+    _write_hr_record("employee_join_requests", record, user)
+    return record
+
+
+def _auto_approve_admin_emails(actor: dict[str, Any]) -> list[str]:
+    """알림 수신자 — 가입요청이 귀속된 테넌트의 승인된 관리자 직원만. 행의 테넌트를 한 번 더 확인한다."""
+    tenant_id = _tenant_id(actor)
+    return sorted(
+        {
+            str(row.get("email") or "").strip().lower()
+            for row in _read_hr("employee_join_requests", actor)
+            if str(row.get("tenant_id") or "").strip() == tenant_id
+            and str(row.get("status") or "").strip().lower() == "approved"
+            and _employee_access_role(row.get("role")) == "admin"
+            and str(row.get("email") or "").strip()
+        }
+    )
+
+
+async def _notify_admins_auto_approved(record: dict[str, Any], actor: dict[str, Any]) -> int:
+    """관리자에게 '자동승인됨' 인앱 알림. 실패는 기록만 한다 — 승인 결과와 무관하다."""
+    sent = 0
+    try:
+        admin_emails = await asyncio.to_thread(_auto_approve_admin_emails, actor)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("auto approve notify: admin lookup failed: request=%s err=%s", record.get("id"), type(exc).__name__)
+        return 0
+    name = str(record.get("name") or "").strip() or "직원"
+    where = str(record.get("branch") or "").strip()
+    for admin_email in admin_emails:
+        try:
+            from app.services import yeoljeong_ops_service
+
+            await yeoljeong_ops_service.create_notification(
+                business_id=str(record.get("business_id") or ""),
+                target_user=admin_email,
+                notification_type="employee_join_auto_approved",
+                title=f"{name}님 가입 자동승인",
+                body=(
+                    f"{name}님{f'({where})' if where else ''}의 가입요청이 자동승인되었습니다. "
+                    "잘못 가입했다면 가입요청에서 반려하거나 직원 목록에서 사업자·지점을 변경해 주십시오."
+                ),
+                reference_type="employee_join_request",
+                reference_id=str(record.get("id") or ""),
+            )
+            sent += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("auto approve notify failed: request=%s err=%s", record.get("id"), type(exc).__name__)
+    return sent
+
+
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+async def _run_shielded(coro: Any) -> Any:
+    """클라이언트 연결이 끊겨 요청이 취소돼도 다단계 쓰기는 끝까지 간다 — 중간에 끊겨 반쪽 상태가 남지 않게."""
+    task = asyncio.ensure_future(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return await asyncio.shield(task)
+
+
+async def auto_approve_join_request(record: dict[str, Any]) -> dict[str, Any]:
+    """방금 저장된 가입요청을 자동승인한다. 어떤 실패도 가입 자체를 실패시키지 않는다.
+
+    반환: {"approved": bool, "reason": str, "request": 최신 레코드, "notified": 알림 건수}
+    """
+    request_id = str(record.get("id") or "")
+    tenant_id = str(record.get("tenant_id") or "").strip()
+    outcome: dict[str, Any] = {"approved": False, "reason": "", "request": record, "notified": 0}
+    actor: dict[str, Any] | None = None
+    try:
+        actor = _auto_approve_actor(tenant_id)
+        reason = _auto_approve_skip_reason(record)
+        if not reason and not await employee_join_auto_approve_enabled_async(tenant_id):
+            reason = "auto_approve_disabled"
+        if reason:
+            return {**outcome, "reason": reason}
+        result = await _run_shielded(review_join_request_with_membership(request_id, "approved", "자동승인", actor, auto=True))
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            return {**outcome, "reason": "not_pending"}
+        logger.error("join request auto approve rejected: request=%s status=%s", request_id, exc.status_code)
+        return await _auto_approve_failed(outcome, request_id, actor, f"http_{exc.status_code}")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("join request auto approve failed: request=%s", request_id)
+        return await _auto_approve_failed(outcome, request_id, actor, type(exc).__name__)
+    outcome["request"] = result.get("request") or record
+    if not result.get("auto_approved"):
+        outcome["reason"] = str((result.get("membership") or {}).get("reason") or (result.get("membership") or {}).get("status") or "membership_not_linked")
+        return outcome
+    outcome["approved"] = True
+    outcome["notified"] = await _notify_admins_auto_approved(outcome["request"], actor)
+    return outcome
+
+
+async def _auto_approve_failed(
+    outcome: dict[str, Any], request_id: str, actor: dict[str, Any] | None, reason: str
+) -> dict[str, Any]:
+    outcome["reason"] = reason
+    if actor is not None:
+        try:
+            saved = await asyncio.to_thread(_record_auto_approve_error, request_id, actor, reason)
+            if saved:
+                outcome["request"] = saved
+        except Exception:  # noqa: BLE001
+            logger.exception("auto approve error not recorded: request=%s", request_id)
+    return outcome
+
+
+def _auto_approve_summary(outcome: dict[str, Any]) -> dict[str, Any]:
+    return {"approved": bool(outcome.get("approved")), "reason": str(outcome.get("reason") or "")}
+
+
+async def create_join_request_with_auto_approval(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    record = await asyncio.to_thread(upsert_join_request, payload, user)
+    outcome = await auto_approve_join_request(record)
+    return {"request": outcome["request"], "auto_approve": _auto_approve_summary(outcome)}
+
+
+async def accept_invite_with_auto_approval(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    result = await asyncio.to_thread(accept_invite, payload, user)
+    requests: list[dict[str, Any]] = []
+    summaries: list[dict[str, Any]] = []
+    for created in result["requests"]:
+        outcome = await auto_approve_join_request(created)
+        requests.append(outcome["request"])
+        summaries.append(_auto_approve_summary(outcome))
+    return {**result, "request": requests[0], "requests": requests, "auto_approve": summaries}
 
 
 def update_approved_employee_role(request_id: str, role: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:
@@ -3270,6 +3647,7 @@ def update_approved_employee_role(request_id: str, role: str, memo: str, user: d
     record = _require_hr_record(_find(_read_hr("employee_join_requests", user), request_id), user, detail="직원을 찾을 수 없습니다")
     if str(record.get("status") or "").strip().lower() != "approved":
         raise HTTPException(status_code=400, detail="승인 완료 직원만 권한을 변경할 수 있습니다")
+    _reject_if_transfer_in_progress(record)
     now = _now()
     record["role"] = access_role
     record["access_role_label"] = EMPLOYEE_ACCESS_ROLES[access_role]["label"]
@@ -3279,6 +3657,606 @@ def update_approved_employee_role(request_id: str, role: str, memo: str, user: d
     record["updated_at"] = now
     _write_hr_record("employee_join_requests", record, user)
     return record
+
+
+def _employee_lock_email(request_id: str, user: dict[str, Any]) -> str:
+    record = _find(_read_hr("employee_join_requests", user), request_id)
+    return str((record or {}).get("email") or "").strip().lower()
+
+
+async def update_approved_employee_role_serialized(
+    request_id: str, role: str, memo: str, user: dict[str, Any]
+) -> dict[str, Any]:
+    """역할 변경을 사업자·지점 변경·승인·반려와 같은 (테넌트, 이메일) 락으로 직렬화한다 — 서로의 변경을 덮어쓰지 않게."""
+    tenant_id = ""
+    email = ""
+    try:
+        tenant_id = _tenant_id(user)
+        email = await asyncio.to_thread(_employee_lock_email, request_id, user)
+    except HTTPException:
+        pass  # 테넌트·대상을 못 정하면 락 없이 본 함수에 맡긴다 — 거기서 같은 오류가 올바른 상태코드로 나간다
+    async with AsyncExitStack() as stack:
+        if email:
+            await _open_membership_locks(stack, [(tenant_id, email)], strict=False)
+        return await asyncio.to_thread(update_approved_employee_role, request_id, role, memo, user)
+
+
+# ---------------------------------------------------------------------------
+# 승인된 직원의 사업자·지점 변경 (ACCT-OBYS-JOIN-AUTO-APPROVE-REASSIGN-20261009)
+#
+# 같은 고용주 테넌트 안이면 가입요청의 business_id/branch 만 바꾼다.  다른 고용주 테넌트로의
+# 이동은 ① 새 테넌트에 approved 요청 + member 연결 ② 기존 요청 transferred ③ 기존 멤버십 회수
+# 순서이고, 어느 단계에서 실패해도 앞 단계를 되돌린다.  이미 발송·서명된 계약서는 건드리지 않고,
+# 서명 대기 계약서만 경고로 돌려준다.  감사 분류는 기존 CHECK 값(membership_*)을 그대로 쓴다.
+# ---------------------------------------------------------------------------
+ASSIGNMENT_AUDIT_SOURCE = "reassign_employee"
+ASSIGNMENT_ADMIN_TENANT_ROLES = frozenset({"owner", "admin"})
+
+
+def _is_platform_principal(user: dict[str, Any]) -> bool:
+    user_role = str(user.get("user_role") or "").strip().lower()
+    return bool(user.get("is_admin") or user.get("is_internal_admin")) or user_role in {"ceo", "admin", "system"}
+
+
+def _employee_pending_contract_warnings(record: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    email = str(record.get("email") or "").strip().lower()
+    request_id = str(record.get("id") or "")
+    warnings: list[dict[str, Any]] = []
+    for row in _read_hr("contracts", user):
+        if row.get("deleted_at") or str(row.get("status") or "") != "requested":
+            continue
+        same_person = str(row.get("employee_request_id") or "").strip() == request_id or (
+            email and str(row.get("employee_email") or "").strip().lower() == email
+        )
+        if not same_person:
+            continue
+        meta = CONTRACT_TEMPLATE_META.get(str(row.get("contract_type") or ""), CONTRACT_TEMPLATE_META["default"])
+        warnings.append(
+            {
+                "contract_id": str(row.get("id") or ""),
+                "title": str(row.get("print_title") or meta["print_title"]),
+                "branch": str(row.get("branch") or ""),
+                "business_id": str(_contract_payload_value(row, "business_id", "businessId") or ""),
+                "message": "서명 대기 중인 계약서가 이전 사업자·지점 기준으로 남아 있습니다. 필요하면 다시 발송해 주십시오.",
+            }
+        )
+    return warnings
+
+
+def _assignment_fingerprint(record: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(str(record.get(key) or "") for key in ("status", "role", "business_id", "branch", "updated_at"))
+
+
+def _reject_if_transfer_in_progress(record: dict[str, Any]) -> None:
+    if record.get("transfer_intent"):
+        raise HTTPException(
+            status_code=409,
+            detail="다른 사업자로의 이동이 끝나지 않은 직원입니다. 사업자·지점 변경을 같은 대상으로 다시 실행해 이동을 마무리해 주십시오",
+        )
+
+
+def _plan_employee_assignment(request_id: str, payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """검증·권한 확인용 계획. 락 밖에서 만든 스냅샷이므로 쓰기 직전에 _load_fresh_for_assignment 로 다시 읽는다."""
+    tenant_id = _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="직원 사업자·지점 변경 권한이 없습니다")
+    record = _require_hr_record(
+        _find(_read_hr("employee_join_requests", user), request_id), user, detail="직원을 찾을 수 없습니다"
+    )
+    if str(record.get("status") or "").strip().lower() != "approved":
+        raise HTTPException(status_code=400, detail="승인 완료 직원만 사업자·지점을 변경할 수 있습니다")
+    current_business = _record_business_id(record) or str(record.get("business_id") or "").strip()
+    current_branch = BRANCH_ALIASES.get(str(record.get("branch") or "").strip(), str(record.get("branch") or "").strip())
+    target_business = str(payload.get("business_id") or "").strip() or current_business
+    business_changed = target_business != current_business
+    raw_branch = payload.get("branch")
+    target_branch = (
+        BRANCH_ALIASES.get(str(raw_branch).strip(), str(raw_branch).strip()) if raw_branch is not None else ("" if business_changed else current_branch)
+    )
+    if target_business == current_business and target_branch == current_branch:
+        raise HTTPException(status_code=400, detail="변경할 사업자 또는 지점을 선택해 주십시오")
+    if not target_business:
+        raise HTTPException(status_code=400, detail="사업자를 선택해 주십시오")
+    _validate_join_business_branch(target_business, target_branch)
+    info = _business_invite_info(target_business) or {}
+    if not target_branch and info.get("branches"):
+        raise HTTPException(status_code=400, detail="이동할 지점을 선택해 주십시오")
+    target_tenant = tenant_id
+    if _db_available():
+        mapped = _run_db(_db_business_tenant_id(target_business))
+        if not mapped:
+            raise HTTPException(status_code=400, detail="등록되지 않은 사업자입니다")
+        target_tenant = str(mapped).strip()
+    return {
+        "request_id": str(record.get("id") or request_id),
+        "email": str(record.get("email") or "").strip().lower(),
+        "tenant_id": tenant_id,
+        "fingerprint": _assignment_fingerprint(record),
+        "current": {"business_id": current_business, "branch": current_branch},
+        "target": {"business_id": target_business, "branch": target_branch, "business_name": str(info.get("name") or "")},
+        "target_tenant": target_tenant,
+        "same_tenant": target_tenant == tenant_id,
+        "memo": str(payload.get("memo") or ""),
+        "pending_contracts": _employee_pending_contract_warnings(record, user),
+    }
+
+
+def _load_fresh_for_assignment(plan: dict[str, Any], user: dict[str, Any], *, resume_transfer: bool) -> dict[str, Any]:
+    """락을 잡은 뒤 가입요청을 다시 읽는다 — 계획 이후 다른 관리자가 바꿨으면 덮어쓰지 않고 409.
+
+    resume_transfer=True 는 끝나지 않은 같은 대상으로의 이동을 이어서 마무리하는 호출이다.
+    """
+    record = _require_hr_record(
+        _find(_read_hr("employee_join_requests", user), plan["request_id"]), user, detail="직원을 찾을 수 없습니다"
+    )
+    intent = record.get("transfer_intent")
+    if intent:
+        same_target = (
+            resume_transfer
+            and isinstance(intent, dict)
+            and str(intent.get("business_id") or "") == plan["target"]["business_id"]
+            and str(intent.get("branch") or "") == plan["target"]["branch"]
+        )
+        if not same_target:
+            _reject_if_transfer_in_progress(record)
+    if _assignment_fingerprint(record) != plan["fingerprint"]:
+        raise HTTPException(
+            status_code=409,
+            detail="다른 관리자가 먼저 이 직원을 변경했습니다. 목록을 새로고침한 뒤 다시 시도해 주십시오",
+        )
+    return record
+
+
+def _assignment_audit_link(
+    tenant_id: str, record: dict[str, Any], before: dict[str, Any], after: dict[str, Any], status: str = "unchanged"
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "tenant_id": tenant_id,
+        "employee_email": str(record.get("email") or "").strip().lower(),
+        "user_id": str((record.get("membership_link") or {}).get("user_id") or "") or None,
+        "before": before,
+        "after": after,
+    }
+
+
+def _apply_same_tenant_assignment(plan: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    record = dict(_load_fresh_for_assignment(plan, user, resume_transfer=False))
+    now = _now()
+    history = list(record.get("assignment_history") or [])
+    history.append(
+        {"at": now, "by": _email(user), "before": plan["current"], "after": {k: plan["target"][k] for k in ("business_id", "branch")}, "memo": plan["memo"]}
+    )
+    record.update(
+        {
+            "business_id": plan["target"]["business_id"],
+            "branch": plan["target"]["branch"],
+            "assignment_history": history[-20:],
+            "assignment_updated_by": _email(user),
+            "assignment_updated_at": now,
+            "updated_at": now,
+        }
+    )
+    record = _owned_hr_record(record, user)
+    _write_hr_record("employee_join_requests", record, user)
+    return record
+
+
+def _employee_assignment_response(
+    plan: dict[str, Any], employee: dict[str, Any], *, moved_tenant: bool, membership: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    return {
+        "employee": employee,
+        "moved_tenant": moved_tenant,
+        "previous": plan["current"],
+        "current": {"business_id": plan["target"]["business_id"], "branch": plan["target"]["branch"]},
+        "membership": membership or {},
+        "warnings": {"pending_contracts": plan["pending_contracts"]},
+    }
+
+
+async def _require_admin_of_tenant(user: dict[str, Any], target_tenant: str, business_name: str) -> None:
+    if _is_platform_principal(user):
+        return
+    from app import auth as auth_module
+
+    user_id = str(user.get("user_id") or user.get("id") or "").strip()
+    try:
+        tenants = await auth_module.list_user_tenants(user_id) if user_id else []
+    except Exception as exc:  # noqa: BLE001
+        logger.error("assignment target admin lookup failed: user=%s err=%s", user_id, type(exc).__name__)
+        raise HTTPException(status_code=503, detail="이동할 사업자의 관리자 권한을 확인하지 못했습니다. 잠시 후 다시 시도해 주십시오") from exc
+    role = next(
+        (str(t.get("role") or "").strip().lower() for t in tenants if str(t.get("tenant_id") or "").strip() == target_tenant),
+        "",
+    )
+    if role not in ASSIGNMENT_ADMIN_TENANT_ROLES:
+        where = f"'{business_name}'" if business_name else "선택한 사업자"
+        raise HTTPException(
+            status_code=403,
+            detail=f"{where}의 관리자 권한이 없어 직원을 이동할 수 없습니다. 이동하려면 양쪽 사업자의 관리자이거나 플랫폼 관리자여야 합니다",
+        )
+
+
+class _TransferStepError(Exception):
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+async def _open_membership_locks(stack: AsyncExitStack, pairs: list[tuple[str, str]], *, strict: bool) -> Any:
+    """(테넌트, 이메일) 락을 한 연결·한 트랜잭션에 건다. strict 면 못 잡을 때 503, 아니면 락 없이 진행(연결=None)."""
+    from app import auth as auth_module
+
+    try:
+        return await stack.enter_async_context(auth_module.employee_membership_locks(pairs))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("employee membership locks unavailable: err=%s", type(exc).__name__)
+        if strict:
+            raise HTTPException(
+                status_code=503, detail="직원 계정 연결을 직렬화하지 못해 변경하지 않았습니다(인증 DB). 잠시 후 다시 시도해 주십시오"
+            ) from exc
+        return None
+
+
+def _write_transfer_intent(fresh: dict[str, Any], plan: dict[str, Any], user: dict[str, Any]) -> None:
+    """이동 시작 표시를 기존 요청에 남긴다 — 프로세스가 중간에 죽어도 '끝나지 않은 이동' 이 보이고 재실행으로 이어진다."""
+    record = dict(fresh)
+    record["transfer_intent"] = {
+        "started_at": _now(),
+        "started_by": _email(user),
+        "tenant_id": plan["target_tenant"],
+        "business_id": plan["target"]["business_id"],
+        "branch": plan["target"]["branch"],
+    }
+    _write_hr_record("employee_join_requests", record, user)
+
+
+def _create_transfer_target(
+    plan: dict[str, Any], old: dict[str, Any], scoped: dict[str, Any], user: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """이동 대상 테넌트에 가입요청을 만든다(또는 같은 (이메일, 사업자)의 기존 행을 되살린다).
+
+    (이메일, 사업자) 단위 락 안에서만 호출된다 — 같은 직원에 대한 동시 이동·승인과 겹치지 않는다.
+    새 행은 멤버십 연결이 끝나기 전까지 transfer_pending 이라 승인 직원 목록에 보이지 않는다.
+    기존 행을 되살리면 (롤백이 원래 모습으로 복구하도록) 덮어쓰기 전 모습을 돌려준다.
+    """
+    email = str(old.get("email") or "").strip().lower()
+    target_business = plan["target"]["business_id"]
+    existing = next(
+        (
+            row
+            for row in _read_hr("employee_join_requests", scoped)
+            if str(row.get("email") or "").strip().lower() == email
+            and str(row.get("business_id") or "").strip() == target_business
+        ),
+        None,
+    )
+    resumed = bool(existing) and str((existing.get("transferred_from") or {}).get("request_id") or "") == str(old.get("id") or "")
+    if existing and str(existing.get("status") or "").strip().lower() == "approved" and not resumed:
+        raise HTTPException(status_code=409, detail="이미 이동할 사업자에 승인된 같은 직원이 있습니다")
+    now = _now()
+    carried = {
+        key: old.get(key)
+        for key in (
+            "name", "email", "email_masked", "phone", "phone_masked", "address", "birth_date", "nationality",
+            "requester_user_id", "requester_email", "requested_by", "registered_by", "invite_id",
+        )
+        if old.get(key) not in (None, "")
+    }
+    role = _employee_access_role(old.get("role"))
+    record = {
+        **(existing or {}),
+        **carried,
+        "id": (existing or {}).get("id") or str(uuid4()),
+        "requested_at": (existing or {}).get("requested_at") or old.get("requested_at") or now,
+        "business_id": target_business,
+        "branch": plan["target"]["branch"],
+        "status": "transfer_pending",
+        # 관리자 권한은 이동으로 따라가지 않는다 — 새 사업자에서 다시 부여한다.
+        "role": "employee" if role == "admin" else role,
+        "reviewed_by": _email(user),
+        "reviewed_at": now,
+        "review_memo": plan["memo"] or "사업자 이동",
+        "transferred_from": {
+            "request_id": str(old.get("id") or ""),
+            "tenant_id": plan["tenant_id"],
+            "business_id": plan["current"]["business_id"],
+            "branch": plan["current"]["branch"],
+        },
+        "updated_at": now,
+    }
+    if not resumed:
+        # 이어서 하는 경우에는 앞선 시도가 남긴 멤버십 표시를 지키지 않으면 롤백이 회수 근거를 잃는다.
+        record.pop("membership_link", None)
+    record.pop("auto_approved", None)
+    record.pop("auto_approve_link_pending", None)
+    record = _owned_hr_record(record, scoped)
+    _write_hr_record("employee_join_requests", record, scoped)
+    return record, existing
+
+
+def _revoke_basis(fresh: dict[str, Any]) -> dict[str, Any]:
+    """회수 근거 레코드. 앞선 시도가 인증 DB 롤백 전에 revoked_at 만 남겼을 수 있어 그 표시는 믿지 않는다."""
+    basis = dict(fresh)
+    marker = basis.get("membership_link")
+    if isinstance(marker, dict) and "revoked_at" in marker:
+        basis["membership_link"] = {k: v for k, v in marker.items() if k != "revoked_at"}
+    return basis
+
+
+def _finalize_transfer(
+    plan: dict[str, Any], new_id: str, scoped: dict[str, Any], user: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """멤버십 이동이 커밋된 뒤 요청 상태를 확정한다: 새 요청 approved, 기존 요청 transferred(+이동 표시 제거)."""
+    now = _now()
+    new_record = _require_hr_record(
+        _find(_read_hr("employee_join_requests", scoped), new_id), scoped, detail="이동한 가입요청을 찾을 수 없습니다"
+    )
+    new_record["status"] = "approved"
+    new_record["updated_at"] = now
+    _write_hr_record("employee_join_requests", new_record, scoped)
+    old = _require_hr_record(
+        _find(_read_hr("employee_join_requests", user), plan["request_id"]), user, detail="직원을 찾을 수 없습니다"
+    )
+    old.update(
+        {
+            "status": "transferred",
+            "transferred_to": {
+                "request_id": new_id,
+                "tenant_id": plan["target_tenant"],
+                "business_id": plan["target"]["business_id"],
+                "branch": plan["target"]["branch"],
+            },
+            "transferred_at": now,
+            "transferred_by": _email(user),
+            "updated_at": now,
+        }
+    )
+    old.pop("transfer_intent", None)
+    _write_hr_record("employee_join_requests", old, user)
+    return old, new_record
+
+
+def _restore_hr_request(record: dict[str, Any], scoped: dict[str, Any]) -> None:
+    _write_hr_record("employee_join_requests", record, scoped)
+
+
+def _discard_hr_request(request_id: str, scoped: dict[str, Any]) -> None:
+    _delete_hr_record("employee_join_requests", request_id, scoped)
+
+
+async def _compensate_transfer(
+    *,
+    fresh: dict[str, Any],
+    new_record: dict[str, Any] | None,
+    previous_row: dict[str, Any] | None,
+    scoped: dict[str, Any],
+    user: dict[str, Any],
+    conn: Any,
+) -> list[str]:
+    """실패한 이동을 되돌린다: 새 멤버십 회수 → 새 요청 복구/삭제 → 기존 요청 원상복구.
+
+    각 단계의 실패는 삼키지 않고 목록으로 돌려준다(호출자가 500·감사로 드러낸다).  인증 DB 쪽은
+    호출자가 락 블록을 예외로 나가며 트랜잭션도 롤백한다.
+    """
+    errors: list[str] = []
+    if new_record is not None:
+        try:
+            result = await sync_employee_tenant_membership(
+                new_record, "transfer_rollback", scoped, previous_status="approved", source=ASSIGNMENT_AUDIT_SOURCE, conn=conn
+            )
+            if result.get("status") == "error":
+                errors.append(f"새 사업자 멤버십 회수 실패({result.get('reason') or 'error'})")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("transfer rollback: membership revoke failed: request=%s", new_record.get("id"))
+            errors.append(f"새 사업자 멤버십 회수 실패({type(exc).__name__})")
+        try:
+            if previous_row:
+                await asyncio.to_thread(_restore_hr_request, previous_row, scoped)
+            else:
+                await asyncio.to_thread(_discard_hr_request, str(new_record.get("id") or ""), scoped)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("transfer rollback: target request restore failed: request=%s", new_record.get("id"))
+            errors.append(f"새 사업자 가입요청 복구 실패({type(exc).__name__})")
+    try:
+        await asyncio.to_thread(_restore_hr_request, fresh, user)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("transfer rollback: old request restore failed: request=%s", fresh.get("id"))
+        errors.append(f"기존 가입요청 복구 실패({type(exc).__name__})")
+    return errors
+
+
+def _transfer_failure(exc: Exception, errors: list[str]) -> HTTPException:
+    if errors:
+        return HTTPException(
+            status_code=500,
+            detail=f"사업자 이동에 실패했고 복구도 일부 실패했습니다({'; '.join(errors)}). 관리자 확인이 필요합니다",
+        )
+    if isinstance(exc, HTTPException):
+        return exc
+    if isinstance(exc, _TransferStepError):
+        return HTTPException(status_code=exc.status_code, detail=exc.detail)
+    return HTTPException(status_code=500, detail="사업자 이동 중 오류가 나 변경하지 않았습니다")
+
+
+async def _transfer_across_tenants(plan: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """다른 고용주 테넌트로 이동.
+
+    (기존 테넌트, 이메일)·(새 테넌트, 이메일) 락을 한 인증 DB 트랜잭션에 걸고, 그 안에서
+    ① 이동 시작 표시(기존 요청) ② 새 요청(transfer_pending) ③ 새 멤버십 연결 ④ 기존 멤버십 회수를 한다.
+    어느 단계든 실패하면 오비서 DB 쪽을 되돌리고 예외로 블록을 나가 인증 DB 변경을 롤백한다.
+    커밋 뒤 ⑤ 요청 상태를 확정한다(새 요청 approved, 기존 요청 transferred).  ⑤ 전에 프로세스가
+    죽으면 기존 요청에 이동 시작 표시가 남고, 같은 대상으로 다시 실행하면 처음부터가 아니라
+    이어서 마무리한다(연결·회수는 멱등).
+    """
+    scoped = _employer_scope_user(user, plan["target_tenant"])
+    new_record: dict[str, Any] | None = None
+    previous_row: dict[str, Any] | None = None
+    async with AsyncExitStack() as stack:
+        conn = await _open_membership_locks(
+            stack, [(plan["tenant_id"], plan["email"]), (plan["target_tenant"], plan["email"])], strict=True
+        )
+        fresh = await asyncio.to_thread(_load_fresh_for_assignment, plan, user, resume_transfer=True)
+        try:
+            await asyncio.to_thread(_write_transfer_intent, fresh, plan, user)
+            new_record, previous_row = await asyncio.to_thread(_create_transfer_target, plan, fresh, scoped, user)
+            link = await sync_employee_tenant_membership(
+                new_record, "approved", scoped, source=ASSIGNMENT_AUDIT_SOURCE, conn=conn
+            )
+            if link.get("status") not in AUTO_APPROVE_OK_LINK_STATUSES:
+                raise _TransferStepError(
+                    409, f"이동할 사업자에 직원 계정을 연결하지 못해 변경하지 않았습니다({link.get('reason') or link.get('status')})"
+                )
+            revoked = await sync_employee_tenant_membership(
+                _revoke_basis(fresh), "transferred", user, previous_status="approved", source=ASSIGNMENT_AUDIT_SOURCE, conn=conn
+            )
+            if revoked.get("status") == "error":
+                raise _TransferStepError(
+                    502, f"기존 사업자의 직원 권한을 회수하지 못해 변경하지 않았습니다({revoked.get('reason') or 'error'})"
+                )
+        except Exception as exc:  # noqa: BLE001
+            if not isinstance(exc, (HTTPException, _TransferStepError)):
+                logger.exception("transfer failed: request=%s", plan["request_id"])
+            errors = await _compensate_transfer(
+                fresh=fresh, new_record=new_record, previous_row=previous_row, scoped=scoped, user=user, conn=conn
+            )
+            if errors:
+                logger.error("transfer rollback incomplete: request=%s errors=%s", plan["request_id"], errors)
+                await record_membership_audit(
+                    _membership_audit_row(
+                        {
+                            "status": "error",
+                            "reason": "rollback_incomplete",
+                            "tenant_id": plan["tenant_id"],
+                            "employee_email": plan["email"],
+                            "before": {"errors": errors},
+                            "after": None,
+                        },
+                        action="transfer_rollback",
+                        source=ASSIGNMENT_AUDIT_SOURCE,
+                        record=fresh,
+                        actor_user_id=str(user.get("user_id") or user.get("id") or ""),
+                        actor_email=_email(user),
+                    )
+                )
+            raise _transfer_failure(exc, errors) from exc
+    try:
+        transferred, final_record = await asyncio.to_thread(_finalize_transfer, plan, str(new_record["id"]), scoped, user)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("transfer: memberships moved but requests not finalized: request=%s", plan["request_id"])
+        raise HTTPException(
+            status_code=500,
+            detail="멤버십은 새 사업자로 이동했으나 가입요청 상태를 확정하지 못했습니다. 같은 변경을 다시 실행하면 이어서 마무리합니다",
+        ) from exc
+    return _employee_assignment_response(
+        plan, final_record, moved_tenant=True, membership={"linked": link, "revoked": revoked}
+    )
+
+
+async def _reassign_same_tenant(plan: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    async with AsyncExitStack() as stack:
+        await _open_membership_locks(stack, [(plan["tenant_id"], plan["email"])], strict=False)
+        updated = await asyncio.to_thread(_apply_same_tenant_assignment, plan, user)
+    audit = _membership_audit_row(
+        _assignment_audit_link(
+            plan["tenant_id"],
+            updated,
+            plan["current"],
+            {"business_id": plan["target"]["business_id"], "branch": plan["target"]["branch"]},
+        ),
+        action="assignment_changed",
+        source=ASSIGNMENT_AUDIT_SOURCE,
+        record=updated,
+        actor_user_id=str(user.get("user_id") or user.get("id") or ""),
+        actor_email=_email(user),
+    )
+    recorded = await record_membership_audit(audit)
+    return _employee_assignment_response(plan, updated, moved_tenant=False, membership={"audit_recorded": recorded})
+
+
+async def reassign_approved_employee(request_id: str, payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    plan = await asyncio.to_thread(_plan_employee_assignment, request_id, payload, user)
+    if plan["same_tenant"]:
+        return await _reassign_same_tenant(plan, user)
+    # 다른 고용주 테넌트로 이동 — 양쪽 관리자(또는 플랫폼 관리자)만. 아무것도 쓰기 전에 막는다.
+    await _require_admin_of_tenant(user, plan["target_tenant"], plan["target"]["business_name"])
+    return await _run_shielded(_transfer_across_tenants(plan, user))
+
+
+async def _db_assignment_targets(tenant_ids: list[str] | None) -> list[dict[str, Any]]:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT m.business_id, m.tenant_id::text AS tenant_id, biz.name
+              FROM yeoljeong_business_tenant_mapping m
+              JOIN yeoljeong_businesses biz ON biz.id = m.business_id AND biz.deleted_at IS NULL
+             WHERE ($1::uuid[] IS NULL OR m.tenant_id = ANY($1::uuid[]))
+             ORDER BY biz.sort_order, biz.id
+            """,
+            [UUID(item) for item in tenant_ids] if tenant_ids is not None else None,
+        )
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            branches = await conn.fetch(
+                "SELECT name FROM yeoljeong_branches WHERE business_id = $1 AND deleted_at IS NULL ORDER BY sort_order, id",
+                row["business_id"],
+            )
+            result.append(
+                {
+                    "business_id": row["business_id"],
+                    "business_name": str(row["name"]),
+                    "tenant_id": row["tenant_id"],
+                    "branches": [str(b["name"]) for b in branches],
+                }
+            )
+        return result
+    finally:
+        await conn.close()
+
+
+async def list_assignment_targets(user: dict[str, Any]) -> list[dict[str, Any]]:
+    """사업자·지점 변경 시트의 선택지. 내 테넌트와 내가 관리자인 테넌트의 사업자만(플랫폼 관리자는 전체)."""
+    tenant_id = _tenant_id(user)
+    if not await asyncio.to_thread(_is_admin, user):
+        raise HTTPException(status_code=403, detail="직원 사업자·지점 변경 권한이 없습니다")
+    if not _db_available():
+        # 파일 모드에는 사업자↔테넌트 매핑이 없다 — _plan_employee_assignment 도 모든 사업자를 같은 테넌트로
+        # 보므로 선택지도 same_tenant 로 맞춘다(권한 구분 없이 같은 목록, 이동은 항상 지점·사업자 변경 경로).
+        return [
+            {
+                "business_id": item["id"],
+                "business_name": item["name"],
+                "tenant_id": tenant_id,
+                "same_tenant": True,
+                "branches": [b["name"] for b in CANONICAL_BRANCHES if b["businessId"] == item["id"]],
+            }
+            for item in CANONICAL_BUSINESSES
+        ]
+    allowed: list[str] | None
+    if _is_platform_principal(user):
+        allowed = None
+    else:
+        from app import auth as auth_module
+
+        user_id = str(user.get("user_id") or user.get("id") or "").strip()
+        tenants = await auth_module.list_user_tenants(user_id) if user_id else []
+        allowed = sorted(
+            {tenant_id}
+            | {
+                str(t.get("tenant_id") or "").strip()
+                for t in tenants
+                if str(t.get("role") or "").strip().lower() in ASSIGNMENT_ADMIN_TENANT_ROLES
+            }
+        )
+    targets = await _db_assignment_targets(allowed)
+    for item in targets:
+        item["same_tenant"] = item["tenant_id"] == tenant_id
+    return targets
 
 
 def _record_business_id(record: dict[str, Any]) -> str:

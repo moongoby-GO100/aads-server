@@ -4937,6 +4937,44 @@
     </section>
   </div>
 
+  <div id="employeeAssignModal" class="modal-backdrop hidden">
+    <section class="modal auth-modal" role="dialog" aria-modal="true" aria-labelledby="employeeAssignTitle">
+      <div class="panel-head">
+        <h2 id="employeeAssignTitle" class="panel-title">사업자·지점 변경</h2>
+        <button class="icon" id="closeEmployeeAssignBtn" title="닫기">x</button>
+      </div>
+      <div class="panel-body grid">
+        <div id="employeeAssignCurrent" class="settings-note"></div>
+        <form id="employeeAssignForm" class="grid">
+          <div id="employeeAssignPickStep" class="grid">
+            <label>변경할 사업자
+              <select name="business_id" id="employeeAssignBusiness" required></select>
+            </label>
+            <label>변경할 지점
+              <select name="branch" id="employeeAssignBranch"></select>
+            </label>
+            <label>메모(선택)
+              <input name="memo" type="text" maxlength="200" placeholder="예: 잘못 가입하여 정정">
+            </label>
+            <button class="primary" type="button" id="employeeAssignNextBtn">다음</button>
+          </div>
+          <div id="employeeAssignConfirmStep" class="grid hidden">
+            <div id="employeeAssignSummary" class="settings-note"></div>
+            <div style="display:flex; gap:6px; justify-content:flex-end">
+              <button type="button" id="employeeAssignBackBtn">뒤로</button>
+              <button class="primary" type="submit" id="employeeAssignSubmitBtn">변경 확정</button>
+            </div>
+          </div>
+          <div id="employeeAssignError" class="settings-note hidden" role="alert" style="color:#b42318"></div>
+          <div id="employeeAssignWarning" class="settings-note hidden"></div>
+        </form>
+        <div class="settings-note">
+          이미 보낸 계약서와 서명 완료 계약서는 바뀌지 않습니다. 사업자가 바뀌면 이전 사업자의 직원 권한은 회수되고 새 사업자에서 다시 승인된 상태가 됩니다.
+        </div>
+      </div>
+    </section>
+  </div>
+
   <div id="contractPreviewModal" class="modal-backdrop hidden">
     <section class="modal contract-preview-modal" role="dialog" aria-modal="true" aria-labelledby="contractPreviewModalTitle">
       <div class="panel-head">
@@ -7395,9 +7433,10 @@
                   <td>${escapeHtml(String(request.requested_at || request.updated_at || "-").slice(0, 10))}</td>
                   <td>${escapeHtml(request.name || request.employee_name || "-")}<br><span class="muted">${escapeHtml(request.email_masked || request.employee_email_masked || request.email || request.employee_email || "")}</span></td>
                   <td>${escapeHtml(request.branch || "-")}</td>
-                  <td>${badgeHtml(status, statusClass)}</td>
+                  <td>${badgeHtml(status, statusClass)}${request.auto_approved ? ` ${badgeHtml("자동승인", "info")}` : ""}${status === "pending" && request.auto_approve_error ? `<br><span class="muted">자동승인 실패: 관리자 확인 필요</span>` : ""}${request.auto_approve_link_pending ? `<br><span class="muted">자동승인 멤버십 연결 확인 필요: 반려 후 다시 가입하게 해 주십시오</span>` : ""}${request.transfer_intent ? `<br><span class="muted">사업자 이동이 끝나지 않았습니다: 사업자·지점 변경을 다시 실행해 마무리해 주십시오</span>` : ""}</td>
                   <td class="num" style="display:flex; gap:6px; justify-content:flex-end">
                     ${canReview ? `<button data-review-join="${escapeHtml(request.id)}" data-review-action="approved">승인</button><button class="danger" data-review-join="${escapeHtml(request.id)}" data-review-action="rejected">반려</button>` : `<span class="muted">${escapeHtml(request.review_memo || request.memo || "")}</span>`}
+                    ${!canReview && canManage && status === "approved" && request.auto_approved ? `<button class="danger" data-review-join="${escapeHtml(request.id)}" data-review-action="rejected">반려</button>` : ""}
                   </td>
                 </tr>`;
             }).join("");
@@ -7426,6 +7465,7 @@
                       <option value="admin" ${role === "admin" ? "selected" : ""}>운영관리자</option>
                     </select>
                     <button type="button" class="primary" data-save-employee-role="${escapeHtml(requestId)}" ${disabled}>저장</button>
+                    <button type="button" data-assign-employee="${escapeHtml(requestId)}" ${disabled}>사업자·지점 변경</button>
                   </div>
                 </td>
                 <td>${escapeHtml(item.access_updated_at ? `변경 ${String(item.access_updated_at).slice(0, 10)}` : "승인 완료")}</td>
@@ -12178,7 +12218,9 @@
       employeeJoinRequests = [payload.request, ...employeeJoinRequests.filter(item => item.id !== payload.request.id)];
       await refreshFinanceSession();
       renderEmployees();
-      showToast("가입요청을 보냈습니다. 관리자가 직원관리 화면에서 승인합니다.");
+      showToast(payload.request?.status === "approved"
+        ? "가입이 자동 승인되었습니다. 사업자·지점이 잘못되었다면 관리자에게 변경을 요청하십시오."
+        : "가입요청을 보냈습니다. 관리자가 직원관리 화면에서 승인합니다.");
     }
 
     async function reviewEmployeeJoinRequest(requestId, action) {
@@ -12186,6 +12228,9 @@
         showToast("가입요청 승인은 총괄 운영관리자 또는 운영관리자 권한이 필요합니다.");
         return;
       }
+      const target = employeeJoinRequests.find(item => String(item.id || "") === String(requestId));
+      if (action === "rejected" && String(target?.status || "").toLowerCase() === "approved"
+          && !window.confirm(`${target?.name || "직원"}님은 이미 승인(자동승인 포함)된 직원입니다. 반려하면 사업자 접근 권한이 회수됩니다. 계속할까요?`)) return;
       const memo = action === "approved" ? "입사 요청 승인" : "입사 요청 반려";
       await financeApi(`/employees/join-requests/${encodeURIComponent(requestId)}`, {
         method: "PATCH",
@@ -12215,6 +12260,113 @@
       renderEmployees();
       renderOperationalPages();
       showToast(`${updated.name || updated.employee_name || "직원"} 권한을 ${roleLabel(updated.role || role)}로 변경했습니다.`);
+    }
+
+    let employeeAssignTargets = [];
+    let employeeAssignState = null;
+
+    function employeeAssignBusinessName(businessId) {
+      return employeeAssignTargets.find(item => item.business_id === businessId)?.business_name || businessId || "-";
+    }
+
+    function setEmployeeAssignMessage(kind, message) {
+      const box = kind === "error" ? els.employeeAssignError : els.employeeAssignWarning;
+      if (!box) return;
+      box.textContent = message || "";
+      box.classList.toggle("hidden", !message);
+    }
+
+    function showEmployeeAssignStep(step) {
+      els.employeeAssignPickStep?.classList.toggle("hidden", step !== "pick");
+      els.employeeAssignConfirmStep?.classList.toggle("hidden", step !== "confirm");
+    }
+
+    function renderEmployeeAssignBranches() {
+      const target = employeeAssignTargets.find(item => item.business_id === els.employeeAssignBusiness.value);
+      const branches = target?.branches || [];
+      els.employeeAssignBranch.innerHTML = [`<option value="">지점 없음(사업자만 변경)</option>`, ...branches.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)].join("");
+      if (employeeAssignState && els.employeeAssignBusiness.value === employeeAssignState.businessId && branches.includes(employeeAssignState.branch)) {
+        els.employeeAssignBranch.value = employeeAssignState.branch;
+      }
+    }
+
+    async function openEmployeeAssignSheet(requestId) {
+      if (!canManageOnboarding()) {
+        showToast("직원 사업자·지점 변경은 총괄 운영관리자 또는 운영관리자 권한이 필요합니다.");
+        return;
+      }
+      const employee = approvedEmployees.find(item => String(item.id || item.employee_request_id || "") === requestId);
+      if (!employee) {
+        showToast("변경할 직원을 찾을 수 없습니다.");
+        return;
+      }
+      const payload = await financeApi("/employees/assignment-targets");
+      employeeAssignTargets = payload.targets || [];
+      const businessId = recordBusinessId(employee);
+      employeeAssignState = { requestId, name: employee.name || employee.employee_name || "직원", businessId, branch: employee.branch || "" };
+      els.employeeAssignCurrent.textContent = `${employeeAssignState.name} · 현재 ${employeeAssignBusinessName(businessId)} / ${employee.branch || "지점 미지정"}`;
+      els.employeeAssignBusiness.innerHTML = employeeAssignTargets.map(item => `<option value="${escapeHtml(item.business_id)}">${escapeHtml(item.business_name)}${item.same_tenant === false ? " (다른 사업자 계정)" : ""}</option>`).join("");
+      if (employeeAssignTargets.some(item => item.business_id === businessId)) els.employeeAssignBusiness.value = businessId;
+      renderEmployeeAssignBranches();
+      els.employeeAssignForm.memo.value = "";
+      setEmployeeAssignMessage("error", "");
+      setEmployeeAssignMessage("warning", "");
+      els.employeeAssignSubmitBtn.disabled = false;
+      els.employeeAssignSubmitBtn.textContent = "변경 확정";
+      showEmployeeAssignStep("pick");
+      els.employeeAssignModal.classList.remove("hidden");
+    }
+
+    function closeEmployeeAssignSheet() {
+      els.employeeAssignModal?.classList.add("hidden");
+      employeeAssignState = null;
+    }
+
+    function confirmEmployeeAssign() {
+      const businessId = els.employeeAssignBusiness.value;
+      const branch = els.employeeAssignBranch.value;
+      if (!businessId) {
+        setEmployeeAssignMessage("error", "변경할 사업자를 선택하십시오.");
+        return;
+      }
+      if (businessId === employeeAssignState.businessId && branch === employeeAssignState.branch) {
+        setEmployeeAssignMessage("error", "현재와 같은 사업자·지점입니다.");
+        return;
+      }
+      setEmployeeAssignMessage("error", "");
+      const crossTenant = employeeAssignTargets.find(item => item.business_id === businessId)?.same_tenant === false;
+      els.employeeAssignSummary.textContent = `${employeeAssignState.name}님을 ${employeeAssignBusinessName(businessId)} / ${branch || "지점 없음"}(으)로 변경합니다.`
+        + (crossTenant ? " 다른 사업자 계정으로 이동하므로 현재 사업자의 직원 권한이 회수됩니다." : "");
+      showEmployeeAssignStep("confirm");
+    }
+
+    async function submitEmployeeAssign() {
+      const state = employeeAssignState;
+      if (!state) return;
+      els.employeeAssignSubmitBtn.disabled = true;
+      setEmployeeAssignMessage("error", "");
+      try {
+        const payload = await financeApi(`/employees/approved/${encodeURIComponent(state.requestId)}/assignment`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            business_id: els.employeeAssignBusiness.value,
+            branch: els.employeeAssignBranch.value,
+            memo: els.employeeAssignForm.memo.value.trim()
+          })
+        });
+        const pending = payload.warnings?.pending_contracts || [];
+        await loadApprovedEmployees();
+        await loadEmployeeJoinRequests();
+        renderEmployees();
+        renderOperationalPages();
+        closeEmployeeAssignSheet();
+        showToast(`${state.name}님의 사업자·지점을 변경했습니다.`
+          + (pending.length ? ` 서명 대기 계약서 ${pending.length}건은 이전 사업자 기준 그대로 남아 있습니다.` : ""));
+      } catch (err) {
+        els.employeeAssignSubmitBtn.disabled = false;
+        els.employeeAssignSubmitBtn.textContent = "다시 시도";
+        setEmployeeAssignMessage("error", `변경하지 못했습니다: ${err.message}`);
+      }
     }
 
     function applyInviteEmailLock(email) {
@@ -13834,6 +13986,17 @@
         els.tenantAddModal?.classList.remove("hidden");
       });
       els.closeTenantAddBtn?.addEventListener("click", () => els.tenantAddModal.classList.add("hidden"));
+      els.closeEmployeeAssignBtn?.addEventListener("click", closeEmployeeAssignSheet);
+      els.employeeAssignModal?.addEventListener("click", event => {
+        if (event.target === els.employeeAssignModal) closeEmployeeAssignSheet();
+      });
+      els.employeeAssignBusiness?.addEventListener("change", renderEmployeeAssignBranches);
+      els.employeeAssignNextBtn?.addEventListener("click", confirmEmployeeAssign);
+      els.employeeAssignBackBtn?.addEventListener("click", () => showEmployeeAssignStep("pick"));
+      els.employeeAssignForm?.addEventListener("submit", event => {
+        event.preventDefault();
+        submitEmployeeAssign();
+      });
       els.tenantAddModal?.addEventListener("click", event => {
         if (event.target === els.tenantAddModal) els.tenantAddModal.classList.add("hidden");
       });
@@ -13960,6 +14123,7 @@
         if (event.key === "Escape" && !els.integrationDetailModal?.classList.contains("hidden")) closeIntegrationDetailModal();
         if (event.key === "Escape" && els.tenantSwitcher?.classList.contains("open")) closeTenantSwitcherMenu();
         if (event.key === "Escape" && !els.tenantAddModal?.classList.contains("hidden")) els.tenantAddModal.classList.add("hidden");
+        if (event.key === "Escape" && !els.employeeAssignModal?.classList.contains("hidden")) closeEmployeeAssignSheet();
       });
       els.logoutBtn.addEventListener("click", () => logoutFromServer());
       els.loginForm.addEventListener("submit", event => {
@@ -14956,6 +15120,10 @@
         }
         if (joinReviewId && joinReviewAction) {
           reviewEmployeeJoinRequest(joinReviewId, joinReviewAction).catch(err => showToast(`가입요청 처리 실패: ${err.message}`));
+        }
+        const assignEmployeeId = event.target.closest("[data-assign-employee]")?.dataset.assignEmployee;
+        if (assignEmployeeId) {
+          openEmployeeAssignSheet(assignEmployeeId).catch(err => showToast(`사업자·지점 변경 준비 실패: ${err.message}`));
         }
         const roleSaveId = event.target.closest("[data-save-employee-role]")?.dataset.saveEmployeeRole;
         if (roleSaveId) {

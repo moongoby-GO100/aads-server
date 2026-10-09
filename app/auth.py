@@ -797,6 +797,23 @@ async def employee_membership_lock(tenant_id: str, employee_email: str):
 
 
 @asynccontextmanager
+async def employee_membership_locks(pairs):
+    """여러 (테넌트, 이메일) 락을 한 연결·한 트랜잭션에 건다 — 테넌트 간 직원 이동용.
+
+    키를 정렬해 걸므로 서로 반대 방향의 이동이 교착하지 않는다.  블록에서 예외가 나가면
+    그 연결의 멤버십 변경(연결·회수)이 한꺼번에 롤백된다.
+    """
+    keys = sorted({employee_membership_lock_key(tenant_id, email) for tenant_id, email in pairs})
+    await require_saas_schema_ready()
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for key in keys:
+                await conn.execute("SELECT pg_advisory_xact_lock($1::bigint)", key)
+            yield conn
+
+
+@asynccontextmanager
 async def _membership_transaction(conn=None):
     """conn 이 오면 그 연결의 (중첩)트랜잭션, 없으면 풀에서 새로 연다."""
     if conn is not None:
