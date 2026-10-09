@@ -1,0 +1,11 @@
+-- pipeline_runner_events(created_at) 인덱스가 없다(2026-10-09 pg_indexes 실측: job_observed / model_observed / project_type_observed 3종뿐).
+-- /api/v1/inbox 의 러너 조회가 created_at 7일 범위로 읽는다. 적용 전 확인:
+--   SELECT indexname FROM pg_indexes WHERE tablename='pipeline_runner_events' AND indexdef ILIKE '%(created_at%';
+-- CREATE INDEX CONCURRENTLY 는 트랜잭션 안에서 못 돈다. scripts/apply_migration.sh 는 파일을 BEGIN/COMMIT 으로 감싸므로
+-- 자동 적용 경로(migrations/*.sql)에 두면 실패해 뒤따르는 마이그레이션까지 막는다 — 그래서 drafts 에 두고,
+-- 승인된 점검 창구에서 psql 로 최상위 문장으로 직접 실행한다(migrations/175 와 같은 방식).
+SET lock_timeout = '5s';
+SET statement_timeout = '30min';
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pipeline_runner_events_created_at
+    ON pipeline_runner_events (created_at DESC);
