@@ -48,6 +48,8 @@ LOCK="${ACCT_APP_LOCK_FILE:-/tmp/aads-acct-app-cafe24.lock}"
 CAFE24_SSH="${CAFE24_SSH:-server-114}"
 FB_HOST="fb.newtalk.kr"
 NS_CONTAINER="${NS_CONTAINER:-acct-pg}"
+NS_NET="${ACCT_NS_NETWORK:-acct_net}"
+[[ $NS_NET =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo "bad ACCT_NS_NETWORK '$NS_NET'" >&2; exit 2; }
 PG_CONTAINER="${ACCT_PG_CONTAINER:-acct-pg}"
 PG_DB="${ACCT_PG_DB:-obys}"
 PG_USER="${ACCT_PG_USER:-}"
@@ -262,7 +264,7 @@ validate_release() {
 # ---- cafe24 remote scripts (`bash -s`) ----------------------------------------------------------
 read -r -d '' R_PREV_INFO <<'EOS' || true
 set -u
-PREV=$1; NS=$2
+PREV=$1; NS=$2; NS_NET=${3:-acct_net}
 echo "PREV_RUNNING=$(docker inspect -f '{{.State.Running}}' "$PREV" 2>/dev/null || echo missing)"
 img=$(docker inspect -f '{{.Image}}' "$PREV" 2>/dev/null || true)
 echo "PREV_IMAGE_ID=$img"
@@ -271,7 +273,9 @@ echo "WORKDIR=$(docker inspect -f '{{.Config.WorkingDir}}' "$PREV" 2>/dev/null |
 echo "REV_LABELS=$(docker image inspect -f '{{range $k,$v := .Config.Labels}}{{$k}}={{$v}}{{println}}{{end}}' "$img" 2>/dev/null | grep -E '^[^=]*revision=' | tr '\n' ';')"
 echo "NS_ID=$(docker inspect -f '{{.Id}}' "$NS" 2>/dev/null || true)"
 echo "NS_RUNNING=$(docker inspect -f '{{.State.Running}}' "$NS" 2>/dev/null || echo missing)"
-echo "NS_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$NS" 2>/dev/null | awk '{print $1}')"
+echo "NS_IP=$(docker inspect -f "{{with index .NetworkSettings.Networks \"$NS_NET\"}}{{.IPAddress}}{{end}}" "$NS" 2>/dev/null | awk '{print $1}')"
+echo "NS_IPS=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$NS" 2>/dev/null | xargs)"
+echo "NS_NETWORKS=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}={{$v.IPAddress}} {{end}}' "$NS" 2>/dev/null | xargs)"
 pub=0; lo=0
 while IFS= read -r pl; do
   [[ -n ${pl//[[:space:]]/} ]] || continue
@@ -459,7 +463,7 @@ EOS
 declare -A INFO=()
 load_prev_info() {
     local out k v
-    out="$(rscript prev_info R_PREV_INFO "$PREV_CONTAINER" "$NS_CONTAINER")" || die 12 "cannot read $PREV_CONTAINER state on $CAFE24_SSH"
+    out="$(rscript prev_info R_PREV_INFO "$PREV_CONTAINER" "$NS_CONTAINER" "$NS_NET")" || die 12 "cannot read $PREV_CONTAINER state on $CAFE24_SSH"
     INFO=()
     while IFS='=' read -r k v; do
         [[ -n $k ]] && INFO[$k]="$v"
@@ -508,7 +512,7 @@ cand_field() { # cand_field <name> <1-based field>   (name|running|port|image|re
 }
 
 discover_state() {
-    local up cur_ip cand_port nm
+    local up cur_ip cand_port nm extra_nets item
     up="$(apache_upstream)" || die 12 "cannot read the fb vhost upstream from $APACHE_SITE"
     read -r UP_IP OLD_PORT <<<"$up"
     load_prev_info
@@ -522,7 +526,13 @@ discover_state() {
         say "warn: $NS_CONTAINER loopback-only port(s) ${INFO[NS_LOOPBACK]}"
     fi
     cur_ip="${INFO[NS_IP]:-}"
-    [[ $cur_ip == "$UP_IP" ]] || die 12 "apache upstream ip $UP_IP != $NS_CONTAINER ip '$cur_ip'"
+    [[ -n $cur_ip ]] || die 12 "$NS_CONTAINER is not attached to network $NS_NET"
+    extra_nets=""
+    for item in ${INFO[NS_NETWORKS]:-}; do
+        [[ ${item%%=*} == "$NS_NET" ]] || extra_nets+="${extra_nets:+ }$item"
+    done
+    [[ -z $extra_nets ]] || say "warn: $NS_CONTAINER extra network(s): $extra_nets"
+    [[ $cur_ip == "$UP_IP" ]] || die 12 "apache upstream ip $UP_IP != $NS_CONTAINER ip '$cur_ip' on network $NS_NET (networks: ${INFO[NS_NETWORKS]:-})"
     cand_port="$(cand_field "$PREV_CONTAINER" 3 || true)"
     [[ $cand_port == "$OLD_PORT" ]] || die 12 "apache upstream port $OLD_PORT is not the port ($cand_port) of $PREV_CONTAINER"
     PREV_IMAGE_ID="${INFO[PREV_IMAGE_ID]:-}"

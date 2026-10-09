@@ -45,7 +45,9 @@ WORKDIR=/app
 REV_LABELS=org.opencontainers.image.revision=$(cat "$D/base_rev");
 NS_ID=nsid123
 NS_RUNNING=true
-NS_IP=172.18.0.5
+${FAKE_NS_IP_LINE-NS_IP=172.18.0.5}
+${FAKE_NS_IPS_LINE-NS_IPS=172.18.0.5}
+${FAKE_NS_NETWORKS_LINE-NS_NETWORKS=acct_net=172.18.0.5}
 ${FAKE_NS_PUBLISHED_LINE-NS_PUBLISHED=0}
 ${FAKE_NS_LOOPBACK_LINE-NS_LOOPBACK=0}
 PG_USER=obys
@@ -577,6 +579,99 @@ def test_public_or_unparseable_published_ports_still_block_with_exit_12(box, pub
     proc = box.run(env={"FAKE_NS_PUBLISHED_LINE": published_line, "FAKE_NS_LOOPBACK_LINE": loopback_line})
     assert proc.returncode == 12, proc.stdout + proc.stderr
     assert "publishes host ports" in proc.stderr
+    assert box.mutations() == [] and box.builds() == 0
+
+
+# ---- acct-pg on several networks: the apache upstream network (acct_net) decides the IP ----------
+def _network_collector(tmp_path, nets, extra_env=None, ns_net=None):
+    text = SCRIPT.read_text()
+    start = text.index("read -r -d '' R_PREV_INFO <<'EOS'")
+    body = text[text.index("\n", start) + 1 : text.index("\nEOS\n", start)]
+    bindir = tmp_path / "bin_nets"
+    bindir.mkdir(exist_ok=True)
+    docker = bindir / "docker"
+    docker.write_text(
+        r"""#!/bin/bash
+if [[ $1 == inspect && $2 == -f ]]; then
+  fmt=$3
+  if [[ $fmt == *'with index .NetworkSettings.Networks "'* ]]; then
+    want=${fmt#*Networks \"}; want=${want%%\"*}
+    for kv in $FAKE_NETS; do [[ ${kv%%=*} == "$want" ]] && echo "${kv#*=}"; done
+  elif [[ $fmt == *'$k'* ]]; then
+    for kv in $FAKE_NETS; do printf '%s ' "$kv"; done; echo
+  elif [[ $fmt == *'.NetworkSettings.Networks'* ]]; then
+    for kv in $FAKE_NETS; do printf '%s ' "${kv#*=}"; done; echo
+  else echo x; fi
+  exit 0
+fi
+[[ $1 == port ]] && exit 0
+echo x
+"""
+    )
+    docker.chmod(0o755)
+    args = ["bash", "-s", "--", "prev", "acct-pg"] + ([ns_net] if ns_net else [])
+    proc = subprocess.run(
+        args, input=body, capture_output=True, text=True,
+        env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "FAKE_NETS": nets, **(extra_env or {})},
+    )
+    assert proc.returncode == 0, proc.stderr
+    return dict(ln.split("=", 1) for ln in proc.stdout.splitlines() if ln.startswith(("NS_IP=", "NS_IPS=", "NS_NETWORKS=")))
+
+
+def test_collector_single_network_reports_that_ip(tmp_path):
+    got = _network_collector(tmp_path, "acct_net=172.28.50.2")
+    assert got == {"NS_IP": "172.28.50.2", "NS_IPS": "172.28.50.2", "NS_NETWORKS": "acct_net=172.28.50.2"}
+
+
+def test_collector_picks_acct_net_even_when_acct_egress_sorts_first(tmp_path):
+    got = _network_collector(tmp_path, "acct_egress=172.21.0.2 acct_net=172.28.50.2")
+    assert got["NS_IP"] == "172.28.50.2"
+    assert got["NS_IPS"] == "172.21.0.2 172.28.50.2"
+    assert got["NS_NETWORKS"] == "acct_egress=172.21.0.2 acct_net=172.28.50.2"
+
+
+def test_collector_network_name_is_injected_and_missing_network_gives_empty_ip(tmp_path):
+    got = _network_collector(tmp_path, "acct_egress=172.21.0.2 other=10.9.0.2", ns_net="other")
+    assert got["NS_IP"] == "10.9.0.2"
+    got = _network_collector(tmp_path, "acct_egress=172.21.0.2")
+    assert got["NS_IP"] == "" and got["NS_NETWORKS"] == "acct_egress=172.21.0.2"
+
+
+def test_two_networks_pass_on_the_acct_net_ip_with_an_extra_network_warning(box):
+    proc = box.run(env={
+        "FAKE_NS_IP_LINE": "NS_IP=172.18.0.5",
+        "FAKE_NS_IPS_LINE": "NS_IPS=172.21.0.2 172.18.0.5",
+        "FAKE_NS_NETWORKS_LINE": "NS_NETWORKS=acct_egress=172.21.0.2 acct_net=172.18.0.5",
+    })
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "warn: acct-pg extra network(s): acct_egress=172.21.0.2" in proc.stdout
+
+
+def test_single_network_has_no_extra_network_warning(box):
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "extra network" not in proc.stdout
+
+
+def test_acct_pg_not_attached_to_the_upstream_network_exits_12(box):
+    proc = box.run(env={
+        "FAKE_NS_IP_LINE": "NS_IP=",
+        "FAKE_NS_IPS_LINE": "NS_IPS=172.21.0.2",
+        "FAKE_NS_NETWORKS_LINE": "NS_NETWORKS=acct_egress=172.21.0.2",
+    })
+    assert proc.returncode == 12, proc.stdout + proc.stderr
+    assert "acct-pg is not attached to network acct_net" in proc.stderr
+    assert box.mutations() == [] and box.builds() == 0
+
+
+def test_upstream_ip_mismatch_exits_12_and_names_the_networks(box):
+    proc = box.run(env={
+        "FAKE_NS_IP_LINE": "NS_IP=172.28.50.2",
+        "FAKE_NS_NETWORKS_LINE": "NS_NETWORKS=acct_egress=172.21.0.2 acct_net=172.28.50.2",
+    })
+    assert proc.returncode == 12, proc.stdout + proc.stderr
+    assert "apache upstream ip 172.18.0.5 != acct-pg ip '172.28.50.2'" in proc.stderr
+    assert "acct_egress=172.21.0.2 acct_net=172.28.50.2" in proc.stderr
     assert box.mutations() == [] and box.builds() == 0
 
 
