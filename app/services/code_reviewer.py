@@ -643,13 +643,45 @@ async def _call_review_model(
     )
 
 
+_GIT_OCTAL_ESCAPE_RE = re.compile(r"(?:\\[0-7]{3})+")
+
+
+def _unquote_git_path(quoted: str) -> str:
+    """git core.quotePath 가 만든 `\\353\\211..` 8진수 이스케이프를 원래 UTF-8 경로로 복원한다."""
+    def _decode(match: re.Match[str]) -> str:
+        raw = bytes(int(part, 8) for part in match.group(0).split("\\")[1:])
+        return raw.decode("utf-8", errors="replace")
+
+    text = _GIT_OCTAL_ESCAPE_RE.sub(_decode, quoted)
+    return text.replace('\\"', '"').replace("\\\\", "\\")
+
+
 def _extract_changed_files(diff: str) -> list[str]:
     files: list[str] = []
-    for match in re.finditer(r"^diff --git a/(.+?) b/(.+)$", diff or "", re.MULTILINE):
-        candidate = match.group(2).strip()
+    for line in (diff or "").splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        quoted = _DIFF_QUOTED_HEADER_RE.match(line)
+        if quoted:
+            candidate = _unquote_git_path(quoted.group(1)).strip()
+        else:
+            plain = re.match(r"^diff --git a/(.+?) b/(.+)$", line)
+            candidate = plain.group(2).strip() if plain else ""
         if candidate and candidate not in files:
             files.append(candidate)
     return files
+
+
+def _normalize_files_changed(files_changed: Optional[list]) -> list[str]:
+    """러너가 넘긴 files_changed 에서 따옴표 diff 헤더 줄 원문이 섞인 항목을 경로로 되돌린다."""
+    normalized: list[str] = []
+    for item in files_changed or []:
+        text = str(item).strip()
+        if text.startswith("diff --git "):
+            text = next(iter(_extract_changed_files(text)), "")
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
 
 
 def _extract_instruction_paths(instruction: str) -> set[str]:
@@ -1485,7 +1517,7 @@ def _precheck_preservation_gate(
         )
 
     allowed_paths = _extract_explicit_scope_paths(instruction)
-    changed_paths = [str(path) for path in (files_changed or _extract_changed_files(diff))]
+    changed_paths = _normalize_files_changed(files_changed) or _extract_changed_files(diff)
     for extra_path in extra_changed_files or []:
         if str(extra_path) not in changed_paths:
             changed_paths.append(str(extra_path))
