@@ -762,9 +762,9 @@ class PipelineCJob:
             logger.warning(f"pipeline_c_push_notify_error job={self.job_id}: {exc}")
 
     async def _require_screen_evidence(self) -> None:
-        """Fail closed before any screen-sensitive done/approve transition."""
+        """Approval-time screen gate: requires a post-deploy E2E plan, never evidence (that comes after deploy)."""
         from app.core.db_pool import get_pool
-        from app.services.e2e_verify import assert_screen_evidence_gate
+        from app.services.e2e_verify import apply_screen_approval_gate
 
         async with get_pool().acquire() as gate_conn:
             gate_files = await gate_conn.fetchval(
@@ -776,11 +776,12 @@ class PipelineCJob:
                     gate_files = json.loads(gate_files)
                 except json.JSONDecodeError:
                     gate_files = []
-            await assert_screen_evidence_gate(
+            await apply_screen_approval_gate(
                 gate_conn,
                 job_id=self.job_id,
                 instruction=self.instruction,
                 changed_files=list(gate_files or []),
+                project=getattr(self, "project", "") or "",
             )
 
     async def _trigger_ai_reaction(self, message: str) -> None:
@@ -976,14 +977,7 @@ class PipelineCJob:
                 await self._refresh_review_diff(pre_exec_sha)
 
                 if _is_read_only_done(self.instruction, self.git_diff, self.result_output):
-                    try:
-                        await self._require_screen_evidence()
-                    except ValueError as exc:
-                        self.status = "awaiting_approval"
-                        self.review_feedback = f"BLOCKED: {exc}"
-                        self._log("awaiting_approval", "화면 검증 evidence 누락 — 완료 전환 차단")
-                        await self._save_to_db()
-                        return
+                    # 변경 0건이라 배포·화면 검증 대상이 없다 — 화면 계획 게이트는 승인 경로에만 둔다.
                     self._log("read_only_done", "read-only 작업 완료 — 변경사항 0건이 정상 조건")
                     self.status = "done"
                     self.review_feedback = "PASS: read-only 작업 완료, 변경사항 없음"
@@ -3860,7 +3854,7 @@ async def _watchdog_loop(interval: int):
             await asyncio.sleep(interval)
             await _check_stalled_jobs()
             await _collect_orphan_results()
-            await _check_deferred_screen_evidence()
+            await _run_post_deploy_screen_verify()
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -3949,44 +3943,63 @@ async def _check_stalled_jobs():
                     logger.error(f"pipeline_c_watchdog_kill_err job={job.job_id}: {_ke}")
 
 
-async def _notify_deferred_screen_evidence_overdue(
-    *, job_id: str, session_id: Any, project: str, deadline_at: str, reason: str
+_screen_verify_inflight: set[str] = set()
+
+
+async def _notify_post_deploy_screen_result(
+    *, job_id: str, session_id: Any, project: str, state: str, reason: str, plan: Any, summary: Any
 ) -> None:
+    """failed/unverifiable 만 채팅 경보. 자동 롤백은 하지 않고 롤백 승인 카드 안내만 한다."""
     if not session_id:
-        logger.warning("screen_evidence_overdue_no_session job=%s", job_id)
+        logger.warning("post_deploy_screen_alert_no_session job=%s state=%s", job_id, state)
         return
     from app.services.session_reporter import post_session_report
 
+    plan_url = (plan or {}).get("url") if isinstance(plan, dict) else None
+    if state == "failed":
+        headline = f"❌ **배포 후 화면 검증 실패** `{job_id}`"
+        guide = (
+            "배포된 화면이 검증 계획대로 동작하지 않습니다. 작업 상태는 done 으로 유지됩니다. "
+            "롤백이 필요하면 롤백 승인 카드로 요청하세요. (자동 롤백은 하지 않습니다.)"
+        )
+    else:
+        headline = f"⚠️ **배포 후 화면 검증 판단 불가** `{job_id}`"
+        guide = (
+            "1회 재시도 후에도 브라우저 검증을 끝내지 못했습니다(실패로 단정하지 않음). "
+            "아래 R-E2E API 폴백 결과를 확인하고, 필요하면 e2e_verify 를 수동 실행하세요."
+        )
     await post_session_report(
         session_id=session_id,
-        title=f"배포 후 화면 증거 미제출: {job_id}",
+        title=f"배포 후 화면 검증 {state}: {job_id}",
         body=(
-            f"⚠️ **배포 후 화면 증거 미제출 — 롤백 검토** `{job_id}`\n"
-            f"프로젝트: {project} | 기한: {deadline_at}\n"
-            f"미룬 사유: {reason}\n\n"
-            "기한까지 통과한 화면 E2E 증거(e2e_verify)가 없습니다. 공개 URL로 e2e_verify 를 실행하거나 롤백을 검토하세요. "
-            "(자동 롤백은 하지 않습니다.)"
+            f"{headline}\n프로젝트: {project} | 대상: {plan_url or '검증 계획 없음'}\n"
+            f"사유: {reason}\n\n{guide}\n\n```json\n{json.dumps(summary or {}, ensure_ascii=False, default=str)[:1500]}\n```"
         ),
         status="error",
         source="pipeline_runner",
         project=project,
-        metadata={"job_id": job_id, "event": "screen_evidence_overdue", "deadline_at": deadline_at},
+        metadata={"job_id": job_id, "event": f"screen_verify_{state}", "reason": reason},
         intent="pipeline_c",
-        idempotency_key=f"screen_evidence_overdue:{job_id}",
+        idempotency_key=f"screen_verify_{state}:{job_id}",
     )
 
 
-async def _check_deferred_screen_evidence() -> None:
-    """워치독 주기마다: 미룬 화면 증거가 기한을 넘기면 1회 경보(job 로그에 screen_evidence_overdue 표시)."""
+async def _run_post_deploy_screen_verify() -> None:
+    """워치독 주기마다: 배포 완료된 화면 작업에 e2e_verify 를 돌린다(동시 최대 2건, 백그라운드)."""
     try:
         from app.core.db_pool import get_pool
-        from app.services.e2e_verify import check_overdue_deferred_evidence
+        from app.services.e2e_verify import run_post_deploy_cycle, verify_screen_job
 
-        async with get_pool().acquire() as conn:
-            await check_overdue_deferred_evidence(conn, notify=_notify_deferred_screen_evidence_overdue)
+        pool = get_pool()
+
+        async def _verify(job: dict) -> None:
+            await verify_screen_job(job, pool=pool, notify=_notify_post_deploy_screen_result)
+
+        async with pool.acquire() as conn:
+            await run_post_deploy_cycle(conn, inflight=_screen_verify_inflight, verify_job=_verify)
     except Exception as e:
         if "DB pool" not in str(e):
-            logger.warning(f"deferred_screen_evidence_check_error: {e}")
+            logger.warning(f"post_deploy_screen_verify_error: {e}")
 
 
 _ORPHAN_RESULT_COLLECTED_MARKER = "[watchdog_result_collected]"

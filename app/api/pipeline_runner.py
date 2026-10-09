@@ -1075,9 +1075,9 @@ class JobApproveRequest(BaseModel):
     action: str = Field(..., description="approve 또는 reject")
     feedback: str = Field("", max_length=2000, description="피드백")
     defer_screen_evidence: bool = Field(
-        False, description="CEO 명시 승인 시에만: 화면 증거를 배포 후 검증으로 미룬다(기본 fail-closed)"
+        False, description="호환용(no-op). 화면 증거는 승인 시 요구하지 않고 배포 후 워치독이 검증한다"
     )
-    defer_reason: str = Field("", max_length=2000, description="defer 사유(10자 이상)")
+    defer_reason: str = Field("", max_length=2000, description="호환용(no-op)")
 
     @field_validator('action')
     @classmethod
@@ -3474,7 +3474,7 @@ async def approve_or_reject(
 
             latest_review = None
             if req.action == "approve":
-                from app.services.e2e_verify import assert_screen_evidence_gate
+                from app.services.e2e_verify import apply_screen_approval_gate
                 gate_files = row["actual_changed_files"] or []
                 if isinstance(gate_files, str):
                     try:
@@ -3482,11 +3482,12 @@ async def approve_or_reject(
                     except json.JSONDecodeError:
                         gate_files = []
                 try:
-                    await assert_screen_evidence_gate(
+                    await apply_screen_approval_gate(
                         conn,
                         job_id=job_id,
                         instruction=row["instruction"] or "",
                         changed_files=list(gate_files),
+                        project=row["project"] or "",
                         defer_screen_evidence=req.defer_screen_evidence,
                         defer_reason=req.defer_reason,
                         approver=str(context.get("user", {}).get("user_id") or tenant_id),  # type: ignore[union-attr]

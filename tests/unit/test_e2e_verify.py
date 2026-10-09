@@ -1,5 +1,4 @@
 import asyncio
-import json
 import sys
 import types
 
@@ -125,9 +124,9 @@ def test_screen_gate_ignores_report_csv():
         ],
     )
     assert not screen_verification_required(instruction, ["reports/export.tsv"])
-    # CSV inside a UI source tree still needs screen proof.
-    assert screen_verification_required(instruction, ["src/app/dashboard/data.csv"])
-    assert screen_verification_required(
+    # CSV is not on the screen allow-list even inside a UI tree (data, not markup).
+    assert not screen_verification_required(instruction, ["src/app/dashboard/data.csv"])
+    assert not screen_verification_required(
         instruction, ["reports/summary.csv", "src/app/dashboard/data.csv"],
     )
     # Real UI source keeps the gate on.
@@ -144,10 +143,11 @@ def test_screen_gate_ignores_report_evidence_images():
         "화면 캡처 증거 회수",
         ["reports/a_RESULT.md", "reports/a_evidence/01.png", "reports/a_evidence/02.txt"],
     )
-    # Images inside a UI source tree are still screen work (regression guard).
+    # Raster assets inside a UI tree still pass _renders_nothing's data check, but the allow-list
+    # classifier does not list raster extensions, so an image alone is not screen work.
     assert not _renders_nothing("src/components/logo.png")
     assert not _renders_nothing("aads-dashboard/public/static/hero.webp")
-    assert screen_verification_required(
+    assert not screen_verification_required(
         "화면 캡처 증거 회수", ["reports/a_evidence/01.png", "src/components/logo.png"],
     )
     # A UI source file next to the evidence images keeps the gate on.
@@ -157,10 +157,12 @@ def test_screen_gate_ignores_report_evidence_images():
 
 
 def test_svg_is_never_treated_as_non_rendering():
-    """Policy: .svg is renderable markup, so it is screen work even under reports/."""
+    """Policy: .svg is renderable markup, so it is on the allow-list; it needs a UI path to count as screen work."""
     assert not _renders_nothing("reports/x_evidence/diagram.svg")
     assert not _renders_nothing("src/components/icon.svg")
-    assert screen_verification_required("화면 캡처 증거 회수", ["reports/x_evidence/diagram.svg"])
+    assert screen_verification_required("화면 캡처 증거 회수", ["src/components/icon.svg"])
+    # A report artifact outside any UI tree is not a page change.
+    assert not screen_verification_required("화면 캡처 증거 회수", ["reports/x_evidence/diagram.svg"])
 
 
 def test_screen_gate_ignores_local_shell_copy():
@@ -191,8 +193,8 @@ def test_evidence_contract_requires_dom_and_capture_success():
     assert not evidence_passes_gate({"passed": True, "stages": {}})
 
 
-def test_missing_evidence_blocks_screen_job_completion_and_approval():
-    with pytest.raises(ValueError, match="screen_e2e_evidence_required"):
+def test_missing_plan_blocks_screen_job_approval_but_not_evidence():
+    with pytest.raises(ValueError, match="screen_e2e_plan_required"):
         asyncio.run(
             assert_screen_evidence_gate(
                 _Conn(), job_id="runner-screen", instruction="UI 변경 및 스크린샷 검수", changed_files=[]
@@ -200,12 +202,12 @@ def test_missing_evidence_blocks_screen_job_completion_and_approval():
         )
 
 
-def test_passing_evidence_allows_screen_job():
+def test_verification_plan_allows_screen_job_without_evidence():
     asyncio.run(
         assert_screen_evidence_gate(
-            _Conn({"evidence": json.dumps(_evidence())}),
+            _Conn(),
             job_id="runner-screen",
-            instruction="로그인 화면 변경",
+            instruction="로그인 화면 변경\nE2E_VERIFY: url=https://aads.newtalk.kr/login selectors=body",
             changed_files=[],
         )
     )

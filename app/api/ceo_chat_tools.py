@@ -1052,15 +1052,15 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "pipeline_runner_approve",
-        "description": "Pipeline Runner 작업 승인 또는 거부. awaiting_approval 상태에서만 가능. 화면 증거 게이트로 막힌 신규 페이지는 CEO 명시 승인이 있을 때만 defer_screen_evidence=true 로 배포 후 검증으로 미룰 수 있다(60분 내 증거 없으면 경보).",
+        "description": "Pipeline Runner 작업 승인 또는 거부. awaiting_approval 상태에서만 가능. 화면 작업은 승인 시 증거가 아니라 검증 계획(지시서 E2E_VERIFY 또는 대시보드 경로)만 확인하며, 증거는 배포 후 워치독이 자동 e2e 검증한다. defer_screen_evidence/defer_reason 은 호환용 no-op.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "job_id": {"type": "string", "description": "작업 ID"},
                 "action": {"type": "string", "enum": ["approve", "reject"], "description": "승인/거부"},
                 "feedback": {"type": "string", "description": "피드백 (거부 시 사유)"},
-                "defer_screen_evidence": {"type": "boolean", "description": "CEO 명시 승인이 있을 때만 true. 화면 E2E 증거를 배포 후 검증으로 미룬다. 기본 false(증거 없으면 409)."},
-                "defer_reason": {"type": "string", "description": "defer 사유(10자 이상, defer_screen_evidence=true 일 때 필수)"},
+                "defer_screen_evidence": {"type": "boolean", "description": "호환용(no-op). 화면 증거는 승인 시 요구하지 않고 배포 후 자동 검증한다."},
+                "defer_reason": {"type": "string", "description": "호환용(no-op)"},
             },
             "required": ["job_id", "action"],
         },
