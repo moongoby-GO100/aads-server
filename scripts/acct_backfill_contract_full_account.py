@@ -140,7 +140,8 @@ async def process(
             updated["status"] = "draft"
             service._revoke_contract_signature_request(updated)
         updated["updated_at"] = service._now()
-        write(updated)
+        # 서비스 DB 헬퍼(_run_db)는 실행 중인 이벤트 루프 안에서는 조용히 None 을 돌려준다 — 루프 밖 스레드에서 쓴다.
+        await asyncio.to_thread(write, updated)
     return rows
 
 
@@ -178,8 +179,9 @@ async def run(args: argparse.Namespace) -> int:
     from app.services import yeoljeong_finance_service as service
 
     user = system_user(args.tenant)
-    contracts = service._read_hr("contracts", user)
-    docs = service._read_hr("onboarding_documents", user)
+    # _read_hr 를 루프 안에서 직접 부르면 _run_db 가 None 을 돌려 0건으로 보인다(2026-10-10 dry-run 실측).
+    contracts = await asyncio.to_thread(service._read_hr, "contracts", user)
+    docs = await asyncio.to_thread(service._read_hr, "onboarding_documents", user)
     if args.contract_id:
         wanted = set(args.contract_id)
         contracts = [c for c in contracts if str(c.get("id") or "") in wanted or str(c.get("id") or "")[:8] in wanted]
