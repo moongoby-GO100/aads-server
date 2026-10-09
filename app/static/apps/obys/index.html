@@ -3703,8 +3703,9 @@
                 <label>예금주
                   <input name="bankAccountHolder" placeholder="직원 본인 명의">
                 </label>
-                <label>급여 계좌번호(마스킹)
-                  <input name="bankAccountMasked" placeholder="예: 우리은행 1002-***-**3886">
+                <label>급여 계좌번호
+                  <input name="bankAccountNumber" inputmode="numeric" autocomplete="off" placeholder="전체 계좌번호 (비우면 통장사본 판독값 자동 반영)">
+                  <input type="hidden" name="bankAccountMasked">
                 </label>
                 <label>보건증 유효기한
                   <input name="healthCertificateValidUntil" type="date">
@@ -7781,6 +7782,7 @@
         employeeNationality: employee.nationality || "대한민국",
         bankName: employee.bank_name || employee.bankName || "",
         bankAccountHolder: employee.bank_account_holder || employee.bankAccountHolder || employee.name || "",
+        bankAccountNumber: employee.bank_account_number || employee.bankAccountNumber || "",
         bankAccountMasked: employee.bank_account_masked || employee.bankAccountMasked || "",
         healthCertificateValidUntil: employee.health_certificate_valid_until || employee.healthCertificateValidUntil || "",
         onboardingDocumentSummary: employee.onboarding_document_summary || employee.onboardingDocumentSummary || "",
@@ -7975,6 +7977,7 @@
         employeeNationality: String(data.employeeNationality || "").trim(),
         bankName: String(data.bankName || "").trim(),
         bankAccountHolder: String(data.bankAccountHolder || "").trim(),
+        bankAccountNumber: String(data.bankAccountNumber || "").trim(),
         bankAccountMasked: maskContractAccountInput(String(data.bankAccountMasked || "").trim()),
         healthCertificateValidUntil: String(data.healthCertificateValidUntil || "").trim(),
         onboardingDocumentSummary: String(data.onboardingDocumentSummary || "").trim(),
@@ -8163,7 +8166,7 @@
       const employeeNationality = contractValue(contract, "employeeNationality", "employee_nationality") || "대한민국";
       const bankName = contractValue(contract, "bankName", "bank_name");
       const bankAccountHolder = contractValue(contract, "bankAccountHolder", "bank_account_holder");
-      const bankAccountMasked = contractValue(contract, "bankAccountMasked", "bank_account_masked");
+      const bankAccountDisplay = contractValue(contract, "bankAccountNumber", "bank_account_number") || contractValue(contract, "bankAccountMasked", "bank_account_masked");
       const healthCertificateValidUntil = contractValue(contract, "healthCertificateValidUntil", "health_certificate_valid_until");
       const onboardingDocumentSummary = contractValue(contract, "onboardingDocumentSummary", "onboarding_document_summary");
       const commonMeta = `
@@ -8194,7 +8197,7 @@
               <th>이메일</th><td>${previewText(contractValue(contract, "employeeEmail", "employee_email"))}</td>
             </tr>
             <tr>
-              <th>${isFreelancerContract ? "정산계좌" : "급여계좌"}</th><td colspan="3">${previewText([bankName, bankAccountMasked, bankAccountHolder ? `예금주 ${bankAccountHolder}` : ""].filter(Boolean).join(" / "), "미등록")}</td>
+              <th>${isFreelancerContract ? "정산계좌" : "급여계좌"}</th><td colspan="3">${previewText([bankName, bankAccountDisplay, bankAccountHolder ? `예금주 ${bankAccountHolder}` : ""].filter(Boolean).join(" / "), "미등록")}</td>
             </tr>
             <tr>
               <th class="section-head" rowspan="2">서류</th>
@@ -8335,6 +8338,7 @@
         fillBlank("employeeNationality", "employee_nationality", employee.nationality || "대한민국");
         fillBlank("bankName", "bank_name", employee.bank_name || employee.bankName || "");
         fillBlank("bankAccountHolder", "bank_account_holder", employee.bank_account_holder || employee.bankAccountHolder || employee.name || "");
+        fillBlank("bankAccountNumber", "bank_account_number", employee.bank_account_number || employee.bankAccountNumber || "");
         fillBlank("bankAccountMasked", "bank_account_masked", employee.bank_account_masked || employee.bankAccountMasked || "");
         fillBlank("healthCertificateValidUntil", "health_certificate_valid_until", employee.health_certificate_valid_until || employee.healthCertificateValidUntil || "");
         fillBlank("onboardingDocumentSummary", "onboarding_document_summary", employee.onboarding_document_summary || employee.onboardingDocumentSummary || "");
@@ -8616,6 +8620,7 @@
       els.contractForm.employeeNationality.value = contract.employeeNationality || contract.employee_nationality || "대한민국";
       els.contractForm.bankName.value = contract.bankName || contract.bank_name || "";
       els.contractForm.bankAccountHolder.value = contract.bankAccountHolder || contract.bank_account_holder || "";
+      els.contractForm.bankAccountNumber.value = contract.bankAccountNumber || contract.bank_account_number || "";
       els.contractForm.bankAccountMasked.value = contract.bankAccountMasked || contract.bank_account_masked || "";
       els.contractForm.healthCertificateValidUntil.value = contract.healthCertificateValidUntil || contract.health_certificate_valid_until || "";
       els.contractForm.onboardingDocumentSummary.value = contract.onboardingDocumentSummary || contract.onboarding_document_summary || "";
@@ -8849,7 +8854,7 @@
     let contractBankWarnDocumentId = "";
 
     async function bankbookWithoutAccount(draft) {
-      if (String(draft.bankName || "").trim() && String(draft.bankAccountMasked || "").trim()) return null;
+      if (String(draft.bankName || "").trim() && (String(draft.bankAccountNumber || "").trim() || String(draft.bankAccountMasked || "").trim())) return null;
       if (!onboardingDocuments.length) await loadOnboardingDocuments().catch(() => {});
       const requestId = String(draft.employeeRequestId || "");
       const email = String(draft.employeeEmail || "").trim().toLowerCase();
@@ -14073,8 +14078,8 @@
       });
       els.contractBankWarnInputBtn.addEventListener("click", () => {
         els.contractBankWarnModal.classList.add("hidden");
-        els.contractForm.bankAccountMasked.scrollIntoView({ block: "center" });
-        els.contractForm.bankAccountMasked.focus();
+        els.contractForm.bankAccountNumber.scrollIntoView({ block: "center" });
+        els.contractForm.bankAccountNumber.focus();
       });
       els.contractBankWarnSaveBtn.addEventListener("click", () => {
         els.contractBankWarnModal.classList.add("hidden");
@@ -14379,6 +14384,7 @@
               employee_nationality: next.employeeNationality,
               bank_name: next.bankName,
               bank_account_holder: next.bankAccountHolder,
+              bank_account_number: next.bankAccountNumber,
               bank_account_masked: next.bankAccountMasked,
               health_certificate_valid_until: next.healthCertificateValidUntil,
               onboarding_document_summary: next.onboardingDocumentSummary,

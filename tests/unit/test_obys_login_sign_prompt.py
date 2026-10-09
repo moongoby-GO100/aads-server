@@ -253,7 +253,7 @@ def test_renewal_api_route_exists_for_employee():
     assert response.status_code == 200 and response.json()["notified"] == 1
 
 
-# --- 4. 계약서 계좌: 원문은 남기지 않는다 ---------------------------------------------------------------
+# --- 4. 계약서 계좌: bank_account_masked 칸에 원문이 들어오면 여전히 마스킹한다(전체 번호는 bank_account_number) ----------
 @pytest.mark.parametrize(
     "raw, expected",
     [

@@ -89,7 +89,7 @@
   const EMPLOYER_FIELDS = ["employerName", "employerRegistrationNo", "employerRepresentative", "employerAddress"];
   // 서버 기본값이 실제 금액을 정하면 안 된다(PRD: 실제 금액 기본값 추정 금지).
   const NO_DEFAULT = new Set(["wage", "baseSalary"]);
-  const PASS_THROUGH = ["bankName", "bankAccountHolder", "bankAccountMasked", "healthCertificateValidUntil", "onboardingDocumentSummary", "amendsContractId"];
+  const PASS_THROUGH = ["bankName", "bankAccountHolder", "bankAccountNumber", "bankAccountMasked", "healthCertificateValidUntil", "onboardingDocumentSummary", "amendsContractId"];
   // 추천값이 없는 필수값의 안내. 생년월일·주소·임금은 추정하지 않는다(시급제 최저시급만 버튼으로 제안).
   const NO_SUGGEST_HINT = {
     employeeBirthDate: "입사서류(신분증·주민등록등본)나 직원에게 확인해 입력하십시오.",
@@ -165,6 +165,7 @@
       employerAddress: business.address || "",
       bankName: employee.bank_name || "",
       bankAccountHolder: employee.bank_account_holder || "",
+      bankAccountNumber: "",
       bankAccountMasked: employee.bank_account_masked || "",
       healthCertificateValidUntil: employee.health_certificate_valid_until || "",
       onboardingDocumentSummary: employee.onboarding_document_summary || ""

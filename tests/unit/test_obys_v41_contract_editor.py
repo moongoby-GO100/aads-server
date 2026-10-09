@@ -153,8 +153,8 @@ def test_every_server_missing_label_points_to_an_input(node_result):
 # ---------- 2026-10-06 r2: 직원 입사서류 등록 + 빈 필수값 표시·추천값 ----------
 
 def test_v41_bumps_contract_module_cache_version():
-    assert "modules/contract-core.js?v=20261009-r1" in V41
-    assert "modules/contract-editor-v41.js?v=20261008-r1" in V41
+    assert "modules/contract-core.js?v=20261010-r1" in V41
+    assert "modules/contract-editor-v41.js?v=20261010-r1" in V41
     assert "modules/contract-editor-v41.css?v=20261006-r5" in V41
 
 

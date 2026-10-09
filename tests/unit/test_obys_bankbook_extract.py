@@ -187,11 +187,15 @@ def test_exif_orientation_is_applied_before_ocr():
 
 
 @pytest.mark.asyncio
-async def test_result_and_logs_never_contain_raw_account_digits(caplog):
+async def test_full_number_is_only_in_the_number_field_and_never_in_logs_or_failed_results(caplog):
     caplog.set_level(logging.DEBUG)
     ok = await bb.extract_bankbook(_png(), ocr=_scripted_ocr({"text": WOORI_TEXT, "confidence": 0.9}))
     bad = await bb.extract_bankbook(_png(), ocr=_scripted_ocr({"text": f"계좌번호 {RAW_IBK} 흐림", "confidence": 0.3}))
-    dumped = json.dumps([ok, bad], ensure_ascii=False) + caplog.text
+    assert ok["bank_account_number"] == RAW_WOORI and ok["bank_account_masked"] == "1002-***-**6846"
+    assert bad["bank_account_number"] == "" and bad["extract_status"] == "needs_review"
+    # 전체 번호는 bank_account_number 한 곳에만 있고, 실패한 판독 결과와 로그에는 없다.
+    ok_without_number = {key: value for key, value in ok.items() if key != "bank_account_number"}
+    dumped = json.dumps([ok_without_number, bad], ensure_ascii=False) + caplog.text
     for raw in RAW_DIGITS:
         assert raw not in dumped
     assert "456846" not in dumped.replace("**6846", "")
@@ -238,12 +242,20 @@ async def test_bankbook_upload_stores_masked_fields_and_contract_profile_reads_t
     document = await _upload()
     assert document["extract_status"] == "extracted"
     assert document["extracted_fields"]["bank_account_masked"] == "1002-***-**6846"
-    stored = json.dumps(service._read_file_rows("onboarding_documents"), ensure_ascii=False)
-    assert RAW_WOORI not in stored and "1002123456846" not in stored and "456846" not in stored.replace("**6846", "")
+    # 응답(목록·업로드)에는 마스킹 값만, 저장 레코드에는 계약서용 전체 번호가 들어 있다.
+    assert "bank_account_number" not in document["extracted_fields"]
+    assert RAW_WOORI not in json.dumps(document, ensure_ascii=False)
+    stored_rows = service._read_file_rows("onboarding_documents")
+    assert stored_rows[0]["extracted_fields"]["bank_account_number"] == RAW_WOORI
+    listed = service.list_onboarding_documents(OWNER)
+    assert RAW_WOORI not in json.dumps(listed, ensure_ascii=False)
     profile = service._employee_onboarding_profile(
         service._read_hr("onboarding_documents", OWNER), employee_email=EMP, employee_request_id="join-emp-mia")
     assert (profile["bank_name"], profile["bank_account_holder"], profile["bank_account_masked"]) == (
         "우리은행", "김민우", "1002-***-**6846")
+    assert profile["bank_account_number"] == RAW_WOORI
+    employees = service.list_approved_employees(OWNER)
+    assert "bank_account_number" not in employees[0] and RAW_WOORI not in json.dumps(employees, ensure_ascii=False)
     assert "extract_status" not in profile
 
 
@@ -287,7 +299,8 @@ async def test_reextract_is_admin_only_idempotent_and_bankbook_only(hr, monkeypa
     assert first["extracted_fields"]["bank_account_masked"] == "348-******-*1-018"
     rows = service._read_file_rows("onboarding_documents")
     assert len(rows) == 1 and not rows[0].get("review_memo")
-    assert RAW_IBK not in json.dumps(rows, ensure_ascii=False)
+    assert rows[0]["extracted_fields"]["bank_account_number"] == RAW_IBK
+    assert RAW_IBK not in json.dumps([first, second], ensure_ascii=False)
 
 
 @pytest.mark.asyncio

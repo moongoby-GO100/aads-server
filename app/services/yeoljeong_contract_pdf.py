@@ -80,6 +80,7 @@ TERM_FIELDS = (
     ("pay_method", "지급방법"),
     ("bank_name", "지급 은행"),
     ("bank_account_holder", "예금주"),
+    ("bank_account_number", "계좌번호"),
     ("bank_account_masked", "계좌번호"),
     ("overtime_terms", "연장·야간·휴일근로"),
     ("leave_terms", "연차/휴가/결근"),
@@ -295,6 +296,8 @@ def term_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
         value = snapshot.get(key)
         if not _text(value):
             continue
+        if key == "bank_account_masked" and _text(snapshot.get("bank_account_number")):
+            continue  # 전체 번호가 있으면 계좌번호 칸은 한 번만, 전체 번호로 찍는다
         if freelancer:
             if key in FREELANCER_SKIPPED_KEYS or (key in FREELANCER_ZERO_HIDDEN_KEYS and _is_zero_amount(value)):
                 continue

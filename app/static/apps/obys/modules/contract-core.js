@@ -270,7 +270,7 @@
       const employeeNationality = contractValue(contract, "employeeNationality", "employee_nationality") || "대한민국";
       const bankName = contractValue(contract, "bankName", "bank_name");
       const bankAccountHolder = contractValue(contract, "bankAccountHolder", "bank_account_holder");
-      const bankAccountMasked = contractValue(contract, "bankAccountMasked", "bank_account_masked");
+      const bankAccountDisplay = contractValue(contract, "bankAccountNumber", "bank_account_number") || contractValue(contract, "bankAccountMasked", "bank_account_masked");
       const healthCertificateValidUntil = contractValue(contract, "healthCertificateValidUntil", "health_certificate_valid_until");
       const onboardingDocumentSummary = contractValue(contract, "onboardingDocumentSummary", "onboarding_document_summary");
       const commonMeta = `
@@ -301,7 +301,7 @@
               <th>이메일</th><td>${previewText(contractValue(contract, "employeeEmail", "employee_email"))}</td>
             </tr>
             <tr>
-              <th>${isFreelancerContract ? "정산계좌" : "급여계좌"}</th><td colspan="3">${previewText([bankName, bankAccountMasked, bankAccountHolder ? `예금주 ${bankAccountHolder}` : ""].filter(Boolean).join(" / "), "미등록")}</td>
+              <th>${isFreelancerContract ? "정산계좌" : "급여계좌"}</th><td colspan="3">${previewText([bankName, bankAccountDisplay, bankAccountHolder ? `예금주 ${bankAccountHolder}` : ""].filter(Boolean).join(" / "), "미등록")}</td>
             </tr>
             <tr>
               <th class="section-head" rowspan="2">서류</th>

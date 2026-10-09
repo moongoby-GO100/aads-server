@@ -4287,6 +4287,8 @@ ONBOARDING_PROFILE_FIELDS = (
     "health_certificate_issue_date",
     "health_certificate_valid_until",
 )
+# 계약서 작성 시 서버가 직접 채우는 값이다. 직원 목록 등 계약서 밖 응답에는 복사하지 않는다.
+ONBOARDING_PROFILE_PRIVATE_FIELDS = ("bank_account_number",)
 
 
 def _employee_onboarding_profile(
@@ -4313,7 +4315,7 @@ def _employee_onboarding_profile(
         extracted = row.get("extracted_fields")
         if not isinstance(extracted, dict):
             extracted = {}
-        for field in ONBOARDING_PROFILE_FIELDS:
+        for field in (*ONBOARDING_PROFILE_FIELDS, *ONBOARDING_PROFILE_PRIVATE_FIELDS):
             value = extracted.get(field)
             if value and not profile.get(field):
                 profile[field] = value
@@ -4484,6 +4486,11 @@ BANKBOOK_DOCUMENT_TYPE = "bankbook"
 def _onboarding_document_view(record: dict[str, Any], today: date | None = None) -> dict[str, Any]:
     row = dict(record)
     row.pop("stored_path", None)
+    if isinstance(row.get("extracted_fields"), dict):
+        # 전체 계좌번호는 계약서 작성에만 쓴다 — 서류 목록·업로드·재판독 응답에는 마스킹 값만 내보낸다.
+        row["extracted_fields"] = {
+            key: value for key, value in row["extracted_fields"].items() if key not in ONBOARDING_PROFILE_PRIVATE_FIELDS
+        }
     if (
         str(row.get("document_type") or "") == BANKBOOK_DOCUMENT_TYPE
         and row.get("extract_status") == bankbook_extract.STATUS_NEEDS_REVIEW
@@ -5565,6 +5572,12 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
         for key, value in employee_defaults.items():
             if not str(result.get(key) or "").strip() and value:
                 result[key] = value
+        profile_number = str(document_profile.get("bank_account_number") or "").strip()
+        if profile_number and not _contract_account_number(result):
+            current_masked = str(_contract_payload_value(result, "bank_account_masked", "bankAccountMasked") or "").strip()
+            # 이미 다른 계좌의 마스킹 값이 적혀 있으면(관리자가 직접 입력) 서류의 번호로 덮지 않는다.
+            if not current_masked or bankbook_extract.account_matches_masked(profile_number, current_masked):
+                result["bank_account_number"] = profile_number
 
     settings = get_settings(user).get("settings") or {}
     businesses = settings.get("businesses") if isinstance(settings.get("businesses"), list) else []
@@ -5870,6 +5883,17 @@ def _mask_contract_account(value: Any) -> str:
     return "".join(out)
 
 
+def _contract_account_number(payload: dict[str, Any]) -> str:
+    """계약 payload 의 전체 계좌번호(하이픈 포함 원형). 숫자·하이픈·공백 외 문자나 8~20자리를 벗어난 값은 400."""
+    text = str(_contract_payload_value(payload, "bank_account_number", "bankAccountNumber") or "").strip()
+    if not text:
+        return ""
+    digits = re.sub(r"\D", "", text)
+    if not re.fullmatch(r"[0-9][0-9\- ]*", text) or not 8 <= len(digits) <= 20:
+        raise HTTPException(status_code=400, detail="계좌번호는 숫자와 하이픈만 8~20자리로 입력하십시오")
+    return text
+
+
 def _contract_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     now = _now()
     contract_id = str(payload.get("id") or uuid4())
@@ -5893,6 +5917,15 @@ def _contract_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     for account_key in ("bank_account_masked", "bankAccountMasked"):
         if account_key in contract:
             contract[account_key] = _mask_contract_account(contract[account_key])
+    account_number = _contract_account_number(contract)
+    contract.pop("bankAccountNumber", None)
+    if account_number:
+        # 근로계약서에는 전체 번호를 찍는다. 목록·알림용 마스킹 값은 전체 번호에서 파생해 둘이 어긋나지 않게 한다.
+        contract["bank_account_number"] = account_number
+        contract["bank_account_masked"] = bankbook_extract.mask_account_number(account_number)
+        contract.pop("bankAccountMasked", None)
+    else:
+        contract.pop("bank_account_number", None)
     return contract
 
 
@@ -5976,6 +6009,12 @@ def list_contracts(user: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(_filter_user(rows, user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
 
 
+def _revoke_contract_signature_request(contract: dict[str, Any]) -> None:
+    """내용이 바뀐 미서명 계약의 기존 서명 링크를 죽인다. 다시 보내려면 request_contract_signature 로 새 토큰을 받는다."""
+    for key in ("sign_token", "sign_token_hash", "requested_at"):
+        contract.pop(key, None)
+
+
 def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     _tenant_id(user)
     if not _is_admin(user):
@@ -5991,14 +6030,14 @@ def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     if existing:
         if str(existing.get("status") or "") == "requested":
             contract["status"] = "draft"
-            contract.pop("sign_token", None)
-            contract.pop("requested_at", None)
+            _revoke_contract_signature_request(contract)
         existing.update(contract)
         if "amends_contract_id" not in contract:
             existing.pop("amends_contract_id", None)
+        if "bank_account_number" not in contract:
+            existing.pop("bank_account_number", None)
         if existing.get("status") == "draft":
-            existing.pop("sign_token", None)
-            existing.pop("requested_at", None)
+            _revoke_contract_signature_request(existing)
         saved = existing
     else:
         contract["status"] = "draft"

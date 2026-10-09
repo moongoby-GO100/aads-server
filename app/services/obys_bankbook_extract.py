@@ -1,10 +1,12 @@
 """통장사본 판독 (ACCT-OBYS-BANKBOOK-AUTO-EXTRACT-20261009).
 
-직원이 올린 통장사본에서 은행명·예금주·계좌번호(마스킹)를 읽어 계약서에 싣는다.
+직원이 올린 통장사본에서 은행명·예금주·계좌번호를 읽어 계약서에 싣는다.
 
 - OCR 은 app.core.local_ocr_bridge.ocr_extract 를 그대로 쓴다(새 의존성 없음).
-- 계좌번호 원문은 이 모듈의 지역 변수 밖으로 나가지 않는다. 반환값·로그·저장 어디에도 없다.
-  OCR 원문 텍스트도 남기지 않는다.
+- 근로계약서에는 전체 계좌번호가 찍혀야 한다(CEO 2026-10-10 승인, ACCT-CONTRACT-FULL-ACCOUNT-NO-20261010).
+  그래서 판독 결과에 bank_account_number(전체)와 bank_account_masked(파생)를 함께 담는다.
+  전체 번호는 서류 레코드의 extracted_fields 로만 저장하고, 목록 응답에서는 서비스가 걷어낸다.
+- 전체 번호는 로그에 남기지 않는다. OCR 원문 텍스트도 남기지 않는다.
 - 읽지 못했거나 신뢰할 수 없으면 값을 비우고 extract_status=needs_review 와 사유 코드만 돌려준다.
 """
 from __future__ import annotations
@@ -148,6 +150,31 @@ def mask_account(groups: list[str]) -> str:
     return "-".join(out)
 
 
+def mask_account_number(number: str) -> str:
+    """전체 계좌번호에서 마스킹 표기를 파생한다. 구분자가 있으면 mask_account 와 같은 모양이다."""
+    groups = [g for g in re.split(r"\D+", str(number or "")) if g]
+    if not groups:
+        return ""
+    if len(groups) == 1:
+        digits = groups[0]
+        if len(digits) < 8:
+            return digits
+        groups = [digits[:3], digits[3:-4], digits[-4:]]
+    return mask_account(groups)
+
+
+def account_matches_masked(number: str, masked: str) -> bool:
+    """전체 번호가 기존 마스킹 값과 같은 계좌인가. 자릿수가 같고, 보이는 숫자가 같은 자리에서 일치하며,
+    끝 4자리는 마스킹 쪽에도 보여야 한다(전부 별표인 값은 어떤 번호와도 맞는다고 보지 않는다)."""
+    digits = re.sub(r"\D", "", str(number or ""))
+    pattern = [ch for ch in str(masked or "") if ch.isdigit() or ch == "*"]
+    if len(digits) < 8 or len(pattern) != len(digits):
+        return False
+    if not all(ch.isdigit() for ch in pattern[-4:]):
+        return False
+    return all(ch == "*" or ch == digits[i] for i, ch in enumerate(pattern))
+
+
 def _regroup(bank: str | None, digits: str) -> list[str]:
     pattern = GROUPING.get((bank or "", len(digits)))
     if pattern:
@@ -281,10 +308,10 @@ def find_holder(text: str) -> str:
 
 
 def parse_bankbook_text(text: str) -> dict[str, Any]:
-    """OCR 텍스트에서 은행명·예금주·마스킹 계좌를 뽑는다. 계좌 원문은 반환하지 않는다."""
+    """OCR 텍스트에서 은행명·예금주·계좌번호(전체·마스킹)를 뽑는다."""
     printed = detect_banks(text)
     holder = find_holder(text)
-    bank, source, masked = "", "", ""
+    bank, source, masked, number = "", "", "", ""
     for groups in account_candidates(text):
         digits = "".join(groups)
         match = next((b for b in printed if account_format_ok(b, digits)), None)
@@ -302,6 +329,7 @@ def parse_bankbook_text(text: str) -> dict[str, Any]:
             continue
         shown = groups if len(groups) > 1 else _regroup(bank or None, digits)
         masked = mask_account(shown)
+        number = "-".join(shown)
         break
     reasons: list[str] = []
     if not masked:
@@ -315,6 +343,7 @@ def parse_bankbook_text(text: str) -> dict[str, Any]:
         "bank_name_source": source,
         "bank_account_holder": holder,
         "bank_account_masked": masked,
+        "bank_account_number": number,
         "reasons": reasons,
         "score": sum(1 for v in (bank, holder, masked) if v),
     }
@@ -362,11 +391,11 @@ async def _attempt(image: bytes, rotation: int, ocr: OcrFunc) -> dict[str, Any]:
         logger.info("통장사본 OCR 실패 rotation=%s: %s", rotation, type(exc).__name__)
         return {"rotation": rotation, "ocr_ok": False, "confidence": 0.0, "score": 0,
                 "reasons": ["ocr_failed"], "bank_name": "", "bank_name_source": "",
-                "bank_account_holder": "", "bank_account_masked": ""}
+                "bank_account_holder": "", "bank_account_masked": "", "bank_account_number": ""}
     text = str((result or {}).get("text") or "")
     parsed = parse_bankbook_text(text) if text.strip() else {
         "bank_name": "", "bank_name_source": "", "bank_account_holder": "", "bank_account_masked": "",
-        "reasons": ["ocr_empty"], "score": 0,
+        "bank_account_number": "", "reasons": ["ocr_empty"], "score": 0,
     }
     return {**parsed, "rotation": rotation, "ocr_ok": True, "confidence": _confidence((result or {}).get("confidence"))}
 
@@ -392,13 +421,17 @@ def _finalize(attempt: dict[str, Any], attempts: int, threshold: float, now: dat
         "extracted_at": stamp,
     }
     if not complete:
-        return {**base, "bank_name": "", "bank_name_source": "", "bank_account_holder": "", "bank_account_masked": ""}
+        return {
+            **base, "bank_name": "", "bank_name_source": "", "bank_account_holder": "",
+            "bank_account_masked": "", "bank_account_number": "",
+        }
     return {
         **base,
         "bank_name": attempt["bank_name"],
         "bank_name_source": attempt["bank_name_source"],
         "bank_account_holder": attempt["bank_account_holder"],
         "bank_account_masked": attempt["bank_account_masked"],
+        "bank_account_number": attempt["bank_account_number"],
     }
 
 
@@ -464,6 +497,7 @@ def apply_to_record(record: dict[str, Any], result: dict[str, Any]) -> dict[str,
             "bank_name": result["bank_name"],
             "bank_account_holder": result["bank_account_holder"],
             "bank_account_masked": result["bank_account_masked"],
+            "bank_account_number": result.get("bank_account_number", ""),
             "bank_name_source": result["bank_name_source"],
         }
     else:
