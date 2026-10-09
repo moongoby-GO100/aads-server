@@ -209,7 +209,11 @@ def test_every_other_clobe_route_still_requires_authentication(obys_client, meth
 def test_only_the_exact_callback_path_is_exempt():
     from app import yeoljeong_main
 
-    assert yeoljeong_main._AUTH_EXEMPT_EXACT_PATHS == {CALLBACK}
+    # 면제는 정확 경로 둘뿐이다: 클로브 콜백, 직원 가입 화면의 사업자·근무지 목록(읽기 전용).
+    assert yeoljeong_main._AUTH_EXEMPT_EXACT_PATHS == {
+        CALLBACK,
+        "/api/v1/yeoljeong-finance/public/join-workplaces",
+    }
     assert not any(p.startswith("/api/v1/integrations") for p in yeoljeong_main._AUTH_EXEMPT_PREFIXES)
 
 

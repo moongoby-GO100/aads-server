@@ -39,6 +39,14 @@ router = APIRouter(
 )
 logger = logging.getLogger(__name__)
 
+# 로그인 전 가입 화면용 읽기 전용 목록. 사업자명·근무지명만 내보내므로 인증 의존성을 걸지 않는다.
+public_router = APIRouter(prefix="/yeoljeong-finance/public", tags=["yeoljeong-finance-public"])
+
+
+@public_router.get("/join-workplaces")
+async def public_join_workplaces() -> dict[str, Any]:
+    return await svc.list_join_workplaces()
+
 
 class GenericPayload(BaseModel):
     model_config = {"extra": "allow"}

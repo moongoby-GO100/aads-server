@@ -106,7 +106,13 @@ _AUTH_EXEMPT_PREFIXES = (
 
 # 클로브AI 가 사용자 브라우저를 돌려보내는 콜백은 우리 JWT 가 없다. state(단회·10분·해시 저장)가 인증을 대신한다.
 # 접두 일치가 아니라 정확 경로 하나만 면제한다. 같은 라우터의 나머지(start/status/verify/...)는 require_internal_admin.
-_AUTH_EXEMPT_EXACT_PATHS = frozenset({"/api/v1/integrations/clobe/oauth/callback"})
+_AUTH_EXEMPT_EXACT_PATHS = frozenset(
+    {
+        "/api/v1/integrations/clobe/oauth/callback",
+        # 직원 가입 화면(로그인 전)의 사업자·근무지 목록. 이름만 내보내는 읽기 전용 경로 하나만 면제한다.
+        "/api/v1/yeoljeong-finance/public/join-workplaces",
+    }
+)
 
 
 def _request_token_payload(request: Request) -> dict | None:
@@ -156,6 +162,7 @@ async def api_live_health_check():
 
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(obys_finance.router, prefix="/api/v1", tags=["yeoljeong-finance"])
+app.include_router(obys_finance.public_router, prefix="/api/v1", tags=["yeoljeong-finance-public"])
 app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"])
 app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])
 app.include_router(obys_workspaces.router, prefix="/api/v1", tags=["obys-workspaces"])

@@ -842,7 +842,7 @@ def test_review7_file_mode_assignment_targets_have_same_shape(world, monkeypatch
     monkeypatch.setattr(svc, "_db_available", lambda: False)
     targets = asyncio.run(svc.list_assignment_targets(ADMIN))
     assert targets and all(t["same_tenant"] is True and t["tenant_id"] == EMPLOYER for t in targets)
-    assert set(targets[0]) == {"business_id", "business_name", "tenant_id", "same_tenant", "branches"}
+    assert set(targets[0]) == {"business_id", "business_name", "tenant_id", "same_tenant", "branches", "workplace_mode"}
 
 
 # 지적 8 — 알림 수신자는 같은 테넌트의 승인된 관리자 직원만

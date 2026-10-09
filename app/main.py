@@ -3808,6 +3808,8 @@ _SERVICE_AUTH_EXACT_PATHS = {
 # fails if a parallel branch merges one in.
 _PUBLIC_READONLY_EXACT_PATHS = {
     "/api/v1/project-docs/public-education-index",
+    # 오비서 직원 가입 화면(로그인 전)의 사업자·근무지 목록. 이름만 내보낸다.
+    "/api/v1/yeoljeong-finance/public/join-workplaces",
 }
 
 
@@ -3933,6 +3935,7 @@ app.include_router(admin_router, prefix="/api/v1", tags=["admin"])
 app.include_router(admin_users_router, prefix="/api/v1", tags=["admin-users"])
 app.include_router(design_modifications.router, prefix="/api/v1", tags=["design-modifications"])
 app.include_router(obys_finance.router, prefix="/api/v1", tags=["yeoljeong-finance"])
+app.include_router(obys_finance.public_router, prefix="/api/v1", tags=["yeoljeong-finance-public"])
 app.include_router(unni_naengmyeon.router, prefix="/api/v1", tags=["unni-naengmyeon"])
 app.include_router(obys_dashboard.router, prefix="/api/v1", tags=["yeoljeong-dashboard"])
 app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])

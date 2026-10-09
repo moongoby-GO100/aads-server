@@ -486,7 +486,8 @@ def test_gate_forms_show_a_required_real_name_input(form_id):
 def test_signup_gate_asks_for_company_and_store_when_not_invited():
     form = _form_html("gateSignupForm")
     assert re.search(r"<select[^>]*name=\"businessId\"[^>]*required", form)
-    assert re.search(r"<select[^>]*name=\"branch\"[^>]*required", form)
+    assert re.search(r"<select[^>]*name=\"branch\"", form)
+    assert "form.branch.required = names.length > 0" in INDEX_HTML.read_text(encoding="utf-8")
 
 
 def test_client_never_sends_the_email_as_the_invite_name():

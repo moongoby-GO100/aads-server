@@ -161,17 +161,17 @@ def test_branch_of_another_business_is_400(db):
     assert db == []
 
 
-# 4. 지점이 없는 사업자 + 빈 branch
+# 4. 지점이 없는 사업자는 사무실형 — 빈 branch 도 예전 방식(사업자명)도 '사무실' 로 저장된다
 def test_business_without_branches_and_blank_branch_succeeds(db):
     saved = _join(NO_BRANCH_BIZ)
     assert saved["business_id"] == NO_BRANCH_BIZ
-    assert saved["branch"] == ""
+    assert saved["branch"] == "사무실"
     assert saved["tenant_id"] == EMPLOYER
 
 
-def test_business_without_branches_accepts_its_own_name_as_branch(db):
+def test_business_without_branches_maps_its_own_name_to_office(db):
     saved = _join(NO_BRANCH_BIZ, NO_BRANCH_NAME)
-    assert saved["branch"] == NO_BRANCH_NAME
+    assert saved["branch"] == "사무실"
 
 
 # 5. 지점이 없는 사업자 + 사업자명과 다른 branch

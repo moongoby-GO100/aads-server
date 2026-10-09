@@ -729,6 +729,9 @@
       font-weight: 900;
     }
 
+    .join-workplace-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:#52606d}
+    .join-workplace-status[hidden],.join-workplace-status [hidden]{display:none}
+    .join-workplace-status.error{color:#b42318}
     .auth-help {
       margin: 0;
       color: var(--muted);
@@ -2775,8 +2778,12 @@
             <label>회사(사업자)
               <select name="businessId" required></select>
             </label>
-            <label>근무 점포
-              <select name="branch" required></select>
+            <div class="join-workplace-status" data-join-workplace-status hidden>
+              <span data-join-workplace-message></span>
+              <button type="button" data-join-workplace-retry hidden>다시 불러오기</button>
+            </div>
+            <label data-join-branch-label>근무 점포
+              <select name="branch"></select>
             </label>
             <label>연락처
               <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000">
@@ -3440,9 +3447,13 @@
                 <label>회사(사업자)
                   <select name="businessId" required></select>
                 </label>
-                <label>희망 지점
-                  <select name="branch" required></select>
+                <label data-join-branch-label>희망 지점
+                  <select name="branch"></select>
                 </label>
+                <div class="join-workplace-status span-2" data-join-workplace-status hidden>
+                  <span data-join-workplace-message></span>
+                  <button type="button" data-join-workplace-retry hidden>다시 불러오기</button>
+                </div>
                 <label>연락처
                   <input name="phone" placeholder="010-0000-0000">
                 </label>
@@ -4405,6 +4416,14 @@
                   <label class="span-2">사업장 주소
                     <input name="address" placeholder="사업자등록증 기준 주소">
                   </label>
+                  <label class="span-2">직원 근무 형태
+                    <select name="workplaceMode">
+                      <option value="">자동 (등록된 지점이 있으면 매장형, 없으면 사무실형)</option>
+                      <option value="branches">매장형 — 직원 가입 때 지점을 고릅니다</option>
+                      <option value="office">사무실형 — 근무지를 '사무실'로 자동 지정합니다</option>
+                    </select>
+                    <span class="field-note">이커머스 등 지점이 없는 사업자는 사무실형입니다. 지점을 새로 등록하면 직원 가입 화면 목록에 바로 나타납니다. 사무실형에서 매장형으로 바꾸면 기존 '사무실' 직원은 직원관리의 사업자·지점 변경으로 지점을 지정하십시오.</span>
+                  </label>
                   <label class="span-2">사업자등록증 파일
                     <input name="registrationDocument" type="file" accept=".pdf,.jpg,.jpeg,.png">
                     <span class="field-note">파일을 고르면 원본을 서버에 보관(버전 이력·sha256)하고 OCR 제안을 보여줍니다. [적용]을 누른 항목만 폼에 채워지며, 저장은 [사업자 저장]으로 합니다. 업로드·OCR 이 실패해도 손입력으로 계속할 수 있습니다. 발급일·만료일을 관리하거나 영업신고증·통장사본 등 다른 서류를 보관하려면 아래 <a href="#businessDocumentsPanel">[사업자 서류]</a>에서 등록하십시오.</span>
@@ -4893,8 +4912,12 @@
           <label>회사(사업자)
             <select name="businessId" required></select>
           </label>
-          <label>근무 점포
-            <select name="branch" required></select>
+          <div class="join-workplace-status" data-join-workplace-status hidden>
+            <span data-join-workplace-message></span>
+            <button type="button" data-join-workplace-retry hidden>다시 불러오기</button>
+          </div>
+          <label data-join-branch-label>근무 점포
+            <select name="branch"></select>
           </label>
           <label>연락처
             <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000">
@@ -7755,7 +7778,7 @@
 
     function approvedEmployeesForForm(form) {
       const branchName = form?.branch?.value || "";
-      const businessId = businessIdForBranchName(branchName) || selectedSettingsBusinessId();
+      const businessId = (branchName === OFFICE_WORKPLACE ? officeBusinessForContract().id : businessIdForBranchName(branchName)) || selectedSettingsBusinessId();
       if (!businessId) return approvedEmployees;
       return approvedEmployees.filter(item => recordBusinessId(item) === businessId);
     }
@@ -7857,7 +7880,24 @@
       return escapeHtml(text || fallback).replace(/\n/g, "<br>");
     }
 
+    // '사무실' 은 모든 사무실형 사업자가 같이 쓰는 근무지 이름이라 지점 이름만으로 사업자를 알 수 없다.
+    // 선택한 직원의 사업자 → 설정에서 선택한 사업자 → 첫 사무실형 사업자 순으로 정한다.
+    function officeBusinessForContract() {
+      const offices = settings().businesses.filter(item => effectiveWorkplaceMode(item) === "office");
+      const employeeId = els.contractForm?.employeeRequestId?.value || "";
+      const employee = employeeId ? approvedEmployees.find(item => item.id === employeeId) : null;
+      const employeeBusinessId = employee ? recordBusinessId(employee) : "";
+      return offices.find(item => item.id === employeeBusinessId)
+        || offices.find(item => item.id === selectedSettingsBusinessId())
+        || offices[0]
+        || {};
+    }
+
     function businessForBranchName(branchName) {
+      if (branchName === OFFICE_WORKPLACE) {
+        const office = officeBusinessForContract();
+        if (office.id) return office;
+      }
       const branch = settings().branches.find(item => item.name === branchName);
       return settings().businesses.find(item => item.id === branch?.businessId) || settings().businesses[0] || {};
     }
@@ -7889,7 +7929,8 @@
       });
       const workplace = els.contractForm.workplace;
       if (workplace && (overwrite || isBlankOrPlaceholder(workplace.value))) {
-        workplace.value = els.contractForm.branch?.value || standardContractDefaults.common.workplace;
+        const branchValue = els.contractForm.branch?.value || "";
+        workplace.value = (branchValue === OFFICE_WORKPLACE ? business.address : branchValue) || branchValue || standardContractDefaults.common.workplace;
       }
     }
 
@@ -9260,6 +9301,7 @@
       els.businessPageForm.taxType.value = item.taxType || "일반과세";
       els.businessPageForm.openedAt.value = item.openedAt || "";
       els.businessPageForm.address.value = item.address || "";
+      if (els.businessPageForm.workplaceMode) els.businessPageForm.workplaceMode.value = item.workplaceMode || "";
       els.businessPageForm.memo.value = item.memo || "";
       resetBusinessRegistrationOcr(els.businessPageForm);
       loadBusinessRegistrationCurrent(els.businessPageForm, item.id).catch(() => {});
@@ -9433,6 +9475,8 @@
         address: String(data.address || "").trim(),
         memo
       };
+      if ("workplaceMode" in data) next.workplaceMode = String(data.workplaceMode || "");
+      const modeBefore = target ? effectiveWorkplaceMode(target) : "";
       // 등록증은 서버 문서 레코드로 참조한다. 새로 올린 문서가 없으면 기존 참조를 유지한다.
       const registrationDocument = businessRegistrationDocumentRef(form);
       if (registrationDocument) next.registrationDocument = registrationDocument;
@@ -9448,7 +9492,16 @@
       form.reset();
       initSelects();
       renderAll();
-      showToast(target ? "사업자 정보를 수정했습니다." : "신규 사업자를 등록했습니다.");
+      const strandedOffice = modeBefore === "office" && effectiveWorkplaceMode(next) === "branches"
+        && employeeJoinRequests.some(row => row.business_id === next.id && row.branch === OFFICE_WORKPLACE);
+      showToast(strandedOffice
+        ? "매장형으로 바꿨습니다. '사무실'로 배정된 직원은 직원관리의 사업자·지점 변경에서 지점을 지정하십시오."
+        : (target ? "사업자 정보를 수정했습니다." : "신규 사업자를 등록했습니다."));
+    }
+
+    function effectiveWorkplaceMode(business) {
+      if (business?.workplaceMode === "branches" || business?.workplaceMode === "office") return business.workplaceMode;
+      return activeBranches().some(branch => branch.businessId === business?.id) ? "branches" : "office";
     }
 
     function saveBranchFromPage(form) {
@@ -9535,7 +9588,7 @@
               <td><strong>${escapeHtml(item.name || "상호 미입력")}</strong><br><span class="muted">${escapeHtml(entityTypeLabels[item.entityType] || item.entityType || "사업자")}</span></td>
               <td>${businessRegistrationNoHtml(item)}${businessNeedsRegistrationInfo(item) && !isBlankOrPlaceholder(item.registrationNo) ? `<br>${badgeHtml("기초등록 필요", "warn")}` : ""}</td>
               <td>${escapeHtml(item.representative || "미등록")}<br><span class="muted">${escapeHtml(item.taxType || "미등록")}</span></td>
-              <td>${branches.length ? branches.map(branch => escapeHtml(branch.name)).join("<br>") : "미등록"}</td>
+              <td>${branches.length ? branches.map(branch => escapeHtml(branch.name)).join("<br>") : "미등록"}<br><span class="muted">${effectiveWorkplaceMode(item) === "office" ? `근무지: ${OFFICE_WORKPLACE}(자동)` : "근무지: 지점 선택"}${item.workplaceMode ? "" : " · 자동"}</span></td>
               <td>${integrations.length}개</td>
               <td>${badgeHtml(complete === 100 ? "완료" : `보완 ${complete}%`, statusClass)}${businessDocumentBadgesHtml(item) ? `<br>${businessDocumentBadgesHtml(item)}` : ""}</td>
               <td><div style="display:flex; gap:6px; flex-wrap:wrap"><button type="button" data-edit-business-page="${escapeHtml(item.id)}">수정</button><button type="button" data-new-branch-for-business="${escapeHtml(item.id)}">지점추가</button><button type="button" class="danger" data-delete-business="${escapeHtml(item.id)}">삭제</button></div></td>
@@ -11180,16 +11233,116 @@
       applyAccessPolicy();
     }
 
-    // 가입 폼의 점포 목록은 선택한 회사(사업자)의 점포만 보여준다. 점포가 없는 사업자는 사업자명이 곧 매장이다.
+    // 가입 폼의 회사·근무지 목록은 서버(/yeoljeong-finance/public/join-workplaces)가 정한다.
+    // 지점형 사업자는 지점을 고르고, 사무실형은 지점 칸을 숨기고 '사무실'로 자동 지정한다.
+    const OFFICE_WORKPLACE = "사무실";
+    const joinWorkplaces = { state: "idle", businesses: [], error: "" };
+
+    function joinWorkplaceForms() {
+      return [els.gateSignupForm, els.signupForm, els.employeeJoinRequestForm].filter(form => form?.businessId && form?.branch);
+    }
+
+    function joinBusinessView(businessId) {
+      return joinWorkplaces.businesses.find(item => item.business_id === businessId) || null;
+    }
+
+    function joinBusinessName(businessId) {
+      return joinBusinessView(businessId)?.business_name || "";
+    }
+
+    function joinBranchFor(businessId, branch) {
+      return joinBusinessView(businessId)?.mode === "office" ? OFFICE_WORKPLACE : String(branch || "").trim();
+    }
+
+    async function loadJoinWorkplaces() {
+      if (joinWorkplaces.state === "loading") return;
+      joinWorkplaces.state = "loading";
+      joinWorkplaces.error = "";
+      syncSignupBranchSelects();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      try {
+        const response = await fetch("/api/v1/yeoljeong-finance/public/join-workplaces", {
+          headers: { Accept: "application/json" },
+          signal: controller.signal
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !Array.isArray(payload.businesses)) throw new Error(payload.detail || `API ${response.status}`);
+        joinWorkplaces.businesses = payload.businesses;
+        joinWorkplaces.state = "ok";
+      } catch (err) {
+        joinWorkplaces.businesses = [];
+        joinWorkplaces.state = "error";
+        joinWorkplaces.error = err?.name === "AbortError" ? "응답이 지연되고 있습니다." : (err?.message || "알 수 없는 오류");
+      } finally {
+        clearTimeout(timeoutId);
+      }
+      syncSignupBranchSelects();
+      applyPendingInviteToSignupForms();
+    }
+
+    function renderJoinWorkplaceStatus(form, text, kind, retry) {
+      const box = form.querySelector("[data-join-workplace-status]");
+      if (!box) return;
+      box.hidden = !text;
+      box.classList.toggle("error", kind === "error");
+      const message = box.querySelector("[data-join-workplace-message]");
+      if (message) message.textContent = text || "";
+      const retryButton = box.querySelector("[data-join-workplace-retry]");
+      if (retryButton) retryButton.hidden = !retry;
+    }
+
     function syncSignupBranchSelects() {
-      [els.gateSignupForm, els.signupForm, els.employeeJoinRequestForm].forEach(form => {
-        if (!form?.businessId || !form?.branch) return;
-        const businessId = form.businessId.value;
-        const names = activeBranches().filter(item => !businessId || item.businessId === businessId).map(item => item.name);
-        const options = names.length ? names : (businessId ? [businessName(businessId)] : []);
-        const current = form.branch.value;
-        form.branch.innerHTML = options.map(item => `<option>${escapeHtml(item)}</option>`).join("");
-        if (options.includes(current)) form.branch.value = current;
+      joinWorkplaceForms().forEach(form => {
+        const branchLabel = form.branch.closest("label");
+        const ready = joinWorkplaces.state === "ok";
+        if (!ready) {
+          form.businessId.innerHTML = `<option value="">${joinWorkplaces.state === "error" ? "목록을 불러오지 못했습니다" : "불러오는 중..."}</option>`;
+          form.branch.innerHTML = "";
+          form.branch.required = false;
+          if (branchLabel) branchLabel.hidden = true;
+          if (joinWorkplaces.state === "error") {
+            renderJoinWorkplaceStatus(form, `회사·근무지 목록을 불러오지 못했습니다(${joinWorkplaces.error}).`, "error", true);
+          } else {
+            renderJoinWorkplaceStatus(form, "회사·근무지 목록을 불러오는 중입니다.", "info", false);
+          }
+          return;
+        }
+        const currentBusiness = form.businessId.value;
+        form.businessId.innerHTML = joinWorkplaces.businesses.length
+          ? joinWorkplaces.businesses.map(item => `<option value="${escapeHtml(item.business_id)}">${escapeHtml(item.business_name)}</option>`).join("")
+          : `<option value="">가입 가능한 회사가 없습니다</option>`;
+        if (joinBusinessView(currentBusiness)) form.businessId.value = currentBusiness;
+        const view = joinBusinessView(form.businessId.value);
+        const currentBranch = form.branch.value;
+        if (view?.mode === "office") {
+          form.branch.innerHTML = `<option value="${OFFICE_WORKPLACE}">${OFFICE_WORKPLACE}</option>`;
+          form.branch.value = OFFICE_WORKPLACE;
+          form.branch.required = false;
+          if (branchLabel) branchLabel.hidden = true;
+          renderJoinWorkplaceStatus(form, `근무지는 '${OFFICE_WORKPLACE}'로 자동 지정됩니다.`, "info", false);
+        } else {
+          const names = (view?.workplaces || []).map(item => item.branch);
+          form.branch.innerHTML = names.map(item => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join("");
+          if (names.includes(currentBranch)) form.branch.value = currentBranch;
+          form.branch.required = names.length > 0;
+          if (branchLabel) branchLabel.hidden = false;
+          renderJoinWorkplaceStatus(form, "", "info", false);
+        }
+      });
+    }
+
+    function applyPendingInviteToSignupForms() {
+      if (!pendingPhoneInvite) return;
+      const inviteBusinessId = pendingPhoneInvite.business_id || pendingPhoneInvite.targets?.[0]?.business_id || "";
+      const inviteBranch = pendingPhoneInvite.targets?.[0]?.branch || pendingPhoneInvite.branch || "";
+      [els.gateSignupForm, els.signupForm].forEach(form => {
+        if (!form?.businessId) return;
+        if (inviteBusinessId && [...form.businessId.options].some(option => option.value === inviteBusinessId)) form.businessId.value = inviteBusinessId;
+      });
+      syncSignupBranchSelects();
+      [els.gateSignupForm, els.signupForm].forEach(form => {
+        if (form?.branch && inviteBranch && [...form.branch.options].some(option => option.value === inviteBranch)) form.branch.value = inviteBranch;
       });
     }
 
@@ -11204,12 +11357,17 @@
         els.settingsBusinessSelect.innerHTML = settings().businesses.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("");
         els.settingsBusinessSelect.value = settings().businesses.some(item => item.id === currentBusiness) ? currentBusiness : selectedBusiness;
       }
+      const joinForms = joinWorkplaceForms();
       document.querySelectorAll('select[name="branch"]').forEach(select => {
+        if (joinForms.includes(select.form)) return;
         const current = select.value;
-        select.innerHTML = branchNames.map(item => `<option>${escapeHtml(item)}</option>`).join("");
-        if (branchNames.includes(current)) select.value = current;
+        const hasOfficeBusiness = select.form === els.contractForm && settings().businesses.some(item => effectiveWorkplaceMode(item) === "office");
+        const options = hasOfficeBusiness ? [...branchNames, OFFICE_WORKPLACE] : branchNames;
+        select.innerHTML = options.map(item => `<option>${escapeHtml(item)}</option>`).join("");
+        if (options.includes(current)) select.value = current;
       });
       document.querySelectorAll('select[name="businessId"]').forEach(select => {
+        if (joinForms.includes(select.form)) return;
         const current = select.value;
         select.innerHTML = settings().businesses.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("");
         if (settings().businesses.some(item => item.id === current)) select.value = current;
@@ -12073,20 +12231,13 @@
         if (els.gateSignupForm?.name && !els.gateSignupForm.name.value) els.gateSignupForm.name.value = pendingPhoneInvite.name;
         if (els.signupForm?.name && !els.signupForm.name.value) els.signupForm.name.value = pendingPhoneInvite.name;
       }
-      [els.gateSignupForm, els.signupForm].forEach(form => {
-        if (!form?.businessId) return;
-        const inviteBusinessId = pendingPhoneInvite?.business_id || "";
-        if (inviteBusinessId && [...form.businessId.options].some(option => option.value === inviteBusinessId)) form.businessId.value = inviteBusinessId;
-      });
-      syncSignupBranchSelects();
-      [els.gateSignupForm, els.signupForm].forEach(form => {
-        const inviteBranch = pendingPhoneInvite?.targets?.[0]?.branch || pendingPhoneInvite?.branch || "";
-        if (form?.branch && inviteBranch && [...form.branch.options].some(option => option.value === inviteBranch)) form.branch.value = inviteBranch;
-      });
+      applyPendingInviteToSignupForms();
       if (els.employeeJoinRequestForm) {
         if (pendingPhoneInvite?.name) els.employeeJoinRequestForm.name.value = pendingPhoneInvite.name;
         if (pendingPhoneInvite?.phone) els.employeeJoinRequestForm.phone.value = pendingPhoneInvite.phone;
-        if (pendingPhoneInvite?.branch) els.employeeJoinRequestForm.branch.value = pendingPhoneInvite.branch;
+        if (pendingPhoneInvite?.branch && [...els.employeeJoinRequestForm.branch.options].some(option => option.value === pendingPhoneInvite.branch)) {
+          els.employeeJoinRequestForm.branch.value = pendingPhoneInvite.branch;
+        }
       }
       showToast(pendingPhoneInvite?.email_masked
         ? `직원 초대 링크를 확인했습니다. ${pendingPhoneInvite.email_masked} 이메일로 가입/로그인해 주십시오.`
@@ -12206,7 +12357,7 @@
         name: form.name.value.trim(),
         email: form.email.value.trim() || user.email || "",
         business_id: form.businessId?.value || "",
-        branch: form.branch.value,
+        branch: joinBranchFor(form.businessId?.value || "", form.branch.value),
         phone: form.phone.value.trim(),
         address: form.address.value.trim(),
         birth_date: form.birthDate.value,
@@ -12701,7 +12852,7 @@
       const passwordConfirm = String(formData.passwordConfirm || "");
       const accountType = String(formData.accountType || "employee").trim();
       const businessId = String(formData.businessId || "").trim();
-      const branch = String(formData.branch || "").trim();
+      const branch = joinBranchFor(businessId, formData.branch);
       const phone = String(formData.phone || "").trim();
       const address = String(formData.address || "").trim();
       const birthDate = String(formData.birthDate || "").trim();
@@ -12714,7 +12865,7 @@
         if (!businessId) throw new Error("회사(사업자)를 선택해 주십시오.");
         if (!branch) throw new Error("근무 점포를 선택해 주십시오.");
       }
-      const selectedBusinessName = businessId ? businessName(businessId) : "";
+      const selectedBusinessName = businessId ? (joinBusinessName(businessId) || businessName(businessId)) : "";
       let payload;
       try {
         payload = await authApi("/register", {
@@ -14150,6 +14301,10 @@
       });
       [els.gateSignupForm, els.signupForm, els.employeeJoinRequestForm].forEach(form => {
         form?.businessId?.addEventListener("change", syncSignupBranchSelects);
+        form?.addEventListener("reset", () => setTimeout(syncSignupBranchSelects, 0));
+        form?.addEventListener("click", event => {
+          if (event.target.closest?.("[data-join-workplace-retry]")) loadJoinWorkplaces();
+        });
       });
       els.gateSignupForm.addEventListener("submit", event => {
         event.preventDefault();
@@ -15225,6 +15380,7 @@
       setDefaults();
       setAuthMode("login");
       bindEvents();
+      loadJoinWorkplaces();
       updateContractPreview(null, "입력값 기준");
       renderAll();
       const rememberedRecipeRedirect = rememberPostLoginRedirectFromUrl();

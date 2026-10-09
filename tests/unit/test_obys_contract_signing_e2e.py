@@ -279,7 +279,8 @@ def test_employee_signup_forms_show_real_name_company_and_store(form_id):
     assert re.search(r'<input name="name" type="text"[^>]*required', block), "실명 입력칸이 보여야 한다"
     assert 'name="name" type="hidden"' not in block
     assert re.search(r'<select name="businessId" required>', block), "회사 선택이 있어야 한다"
-    assert re.search(r'<select name="branch" required>', block), "점포 선택이 있어야 한다"
+    assert re.search(r'<select name="branch"[^>]*>', block), "점포 선택이 있어야 한다"
+    assert "form.branch.required = names.length > 0" in _html(), "매장형 사업자는 점포 선택이 필수로 켜져야 한다"
 
 
 def test_invite_accept_form_requires_real_name():

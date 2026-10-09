@@ -483,6 +483,11 @@ BUSINESS_BY_BRANCH = {
     "성신여대역점": "biz-eonni-naengmyeon",
 }
 
+# 사업자 근무 형태. branches=매장형(등록된 활성 지점 중 선택), office=사무실·이커머스형(근무지는 '사무실' 하나).
+# 명시값이 없으면 활성 지점이 하나라도 있을 때 branches, 하나도 없으면 office 로 판정한다.
+OFFICE_WORKPLACE = "사무실"
+WORKPLACE_MODES = ("branches", "office")
+
 
 def _now() -> str:
     return datetime.now(KST).isoformat(timespec="seconds")
@@ -1304,17 +1309,74 @@ async def _db_business_invite_info(business_id: str) -> dict[str, Any] | None:
 
     conn = await asyncpg.connect(_db_url(), timeout=5)
     try:
-        name = await conn.fetchval(
-            "SELECT name FROM yeoljeong_businesses WHERE id = $1 AND deleted_at IS NULL",
+        row = await conn.fetchrow(
+            "SELECT name, address FROM yeoljeong_businesses WHERE id = $1 AND deleted_at IS NULL",
             business_id,
         )
-        if name is None:
+        if row is None:
             return None
         rows = await conn.fetch(
-            "SELECT name FROM yeoljeong_branches WHERE business_id = $1 AND deleted_at IS NULL ORDER BY sort_order, id",
+            "SELECT name FROM yeoljeong_branches WHERE business_id = $1 AND deleted_at IS NULL "
+            "AND LOWER(COALESCE(NULLIF(TRIM(status), ''), 'active')) = 'active' ORDER BY sort_order, id",
             business_id,
         )
-        return {"name": str(name), "branches": [str(row["name"]) for row in rows]}
+        modes = await _db_workplace_modes(conn)
+        return {
+            "name": str(row["name"]),
+            "address": str(row["address"] or ""),
+            "branches": [str(item["name"]) for item in rows],
+            "workplace_mode": modes.get(business_id, ""),
+        }
+    finally:
+        await conn.close()
+
+
+async def _db_workplace_modes(conn: Any) -> dict[str, str]:
+    """yeoljeong_settings(scope='ui') 에 저장된 사업자별 명시 근무 형태 {business_id: mode}."""
+    data = await conn.fetchval("SELECT data FROM yeoljeong_settings WHERE scope = 'ui'")
+    modes = _jsonb_object(data).get("workplace_modes")
+    if not isinstance(modes, dict):
+        return {}
+    return {str(key): str(value) for key, value in modes.items() if str(value) in WORKPLACE_MODES}
+
+
+async def _db_join_workplace_businesses() -> list[dict[str, Any]]:
+    """가입 화면 공개 목록의 원자료: 테넌트에 연결된 사업자와 그 활성 지점. 민감 컬럼은 읽지 않는다."""
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        businesses = await conn.fetch(
+            """
+            SELECT biz.id, biz.name
+              FROM yeoljeong_businesses biz
+              JOIN yeoljeong_business_tenant_mapping m ON m.business_id = biz.id
+             WHERE biz.deleted_at IS NULL
+             ORDER BY biz.sort_order, biz.id
+            """
+        )
+        branches = await conn.fetch(
+            """
+            SELECT business_id, name
+              FROM yeoljeong_branches
+             WHERE deleted_at IS NULL
+               AND LOWER(COALESCE(NULLIF(TRIM(status), ''), 'active')) = 'active'
+             ORDER BY sort_order, id
+            """
+        )
+        modes = await _db_workplace_modes(conn)
+        by_business: dict[str, list[str]] = {}
+        for row in branches:
+            by_business.setdefault(row["business_id"], []).append(str(row["name"]))
+        return [
+            {
+                "id": row["id"],
+                "name": str(row["name"]),
+                "branches": by_business.get(row["id"], []),
+                "workplace_mode": modes.get(row["id"], ""),
+            }
+            for row in businesses
+        ]
     finally:
         await conn.close()
 
@@ -1546,6 +1608,7 @@ def _canonicalize_ui_settings(settings: dict[str, Any]) -> dict[str, Any]:
         # 저장된 상호가 이긴다. canonical 상호는 저장값이 비었을 때만 쓴다(id 는 그대로).
         item["name"] = str(item.get("name") or "").strip() or canonical_names.get(item["id"], "")
         item["status"] = item.get("status") or "active"
+        item["workplaceMode"] = _clean_workplace_mode(item.get("workplaceMode"))
         missing = registration_info_gaps(item, BUSINESS_REGISTRATION_FIELDS)
         item["needs_registration_info"] = bool(missing)
         item["missing_registration_fields"] = missing
@@ -2347,7 +2410,7 @@ INVITE_BUSINESS_ERROR = "초대할 수 없는 사업자입니다"
 
 
 def _business_invite_info(business_id: str) -> dict[str, Any] | None:
-    """사업자 상호와 지점명 목록. DB 모드는 DB 가 기준, 파일 모드는 기본 사업자·지점 목록이 기준이다."""
+    """사업자 상호·사업장 주소·활성 지점명 목록·명시 근무 형태. DB 모드는 DB 가 기준, 파일 모드는 기본 사업자·지점 목록이 기준이다."""
     if _db_available():
         info = _run_db(_db_business_invite_info(business_id))
         return info if isinstance(info, dict) else None
@@ -2356,7 +2419,81 @@ def _business_invite_info(business_id: str) -> dict[str, Any] | None:
         return None
     branches = [item["name"] for item in CANONICAL_BRANCHES if item["businessId"] == business_id]
     branches += [name for name, owner in BUSINESS_BY_BRANCH.items() if owner == business_id and name not in branches]
-    return {"name": business["name"], "branches": branches}
+    ui_businesses = _read_json_object("settings").get("ui_settings", {}).get("businesses")
+    saved = next((item for item in ui_businesses or [] if isinstance(item, dict) and item.get("id") == business_id), {})
+    return {
+        "name": business["name"],
+        "address": str(saved.get("address") or business.get("address") or ""),
+        "branches": branches,
+        "workplace_mode": _clean_workplace_mode(saved.get("workplaceMode")),
+    }
+
+
+def _clean_workplace_mode(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in WORKPLACE_MODES else ""
+
+
+def _effective_workplace_mode(explicit: Any, active_branch_count: int) -> str:
+    return _clean_workplace_mode(explicit) or ("branches" if active_branch_count > 0 else "office")
+
+
+def _workplace_choices(name: str, branches: list[str], explicit_mode: Any) -> dict[str, Any]:
+    mode = _effective_workplace_mode(explicit_mode, len(branches))
+    return {"mode": mode, "workplaces": [OFFICE_WORKPLACE] if mode == "office" else list(branches)}
+
+
+def _business_workplaces(business_id: str) -> dict[str, Any] | None:
+    """가입요청이 받을 수 있는 근무지. office 사업자는 '사무실' 하나, 매장형은 활성 지점 전부."""
+    info = _business_invite_info(business_id)
+    if info is None:
+        return None
+    branches = [str(item) for item in info.get("branches") or []]
+    return {
+        "name": str(info.get("name") or ""),
+        "address": str(info.get("address") or ""),
+        **_workplace_choices(str(info.get("name") or ""), branches, info.get("workplace_mode")),
+    }
+
+
+def _normalize_office_workplace(business_id: str, branch: str) -> str:
+    """office 사업자의 근무지는 '사무실' 하나다. 빈 값과 예전 방식(사업자명을 지점 칸에 적음)을 '사무실' 로 맞춘다."""
+    if not (business_id and _db_available()):
+        return branch
+    view = _business_workplaces(business_id)
+    if view and view["mode"] == "office" and branch in ("", view["name"]):
+        return OFFICE_WORKPLACE
+    return branch
+
+
+async def list_join_workplaces() -> dict[str, Any]:
+    """로그인 전 가입 화면용 사업자·근무지 목록. 사업자명·근무지명만 내보낸다(사업자번호·주소 제외).
+
+    DB 모드는 고용주 테넌트에 연결된 사업자만, 파일 모드는 기본 사업자 목록을 쓴다.
+    """
+    items: list[dict[str, Any]] = []
+    if _db_available():
+        for row in await _db_join_workplace_businesses():
+            branches = [str(item) for item in row.get("branches") or []]
+            items.append(
+                {"business_id": str(row["id"]), "business_name": str(row["name"]), **_workplace_choices(str(row["name"]), branches, row.get("workplace_mode"))}
+            )
+    else:
+        for business in CANONICAL_BUSINESSES:
+            view = _business_workplaces(business["id"])
+            if view:
+                items.append({"business_id": business["id"], "business_name": view["name"], "mode": view["mode"], "workplaces": view["workplaces"]})
+    return {
+        "businesses": [
+            {
+                "business_id": item["business_id"],
+                "business_name": item["business_name"],
+                "mode": item["mode"],
+                "workplaces": [{"branch": name, "label": name} for name in item["workplaces"]],
+            }
+            for item in items
+        ]
+    }
 
 
 def _invite_target_label(business_name: str, branch: str) -> str:
@@ -2405,7 +2542,7 @@ def _validated_invite_targets(payload: dict[str, Any], user: dict[str, Any]) -> 
         info = _business_invite_info(business_id)
         if info is None:
             raise HTTPException(status_code=400, detail=INVITE_BUSINESS_ERROR)
-        if branch and not legacy and branch not in info["branches"]:
+        if branch and not legacy and branch not in _business_workplaces(business_id)["workplaces"]:
             raise HTTPException(status_code=400, detail=f"{info['name']}의 지점이 아닙니다: {branch}")
     return targets
 
@@ -2750,10 +2887,11 @@ JOIN_NAME_REQUIRED_ERROR = "직원 이름(실명)을 입력해 주십시오"
 JOIN_NAME_EMAIL_ERROR = "이름에 이메일 아이디를 넣지 말고 실명을 입력해 주십시오"
 
 
-def _validate_join_business_branch(business_id: str, branch: str) -> None:
-    """가입요청의 사업자·지점이 유효한지 판정한다. accept_invite 도 _prepare_join_request 로 여기를 거친다.
+def _validate_join_business_branch(business_id: str, branch: str, *, require_branch: bool = False) -> None:
+    """가입요청의 (사업자, 근무지) 조합이 가입 화면 목록에 있는지 판정한다. accept_invite 도 _prepare_join_request 로 여기를 거친다.
 
     DB 모드는 yeoljeong_businesses/branches 가 기준이라 새로 만든 사업자·지점도 통과한다.
+    office 사업자의 근무지는 '사무실' 하나뿐이다(_normalize_office_workplace 가 먼저 맞춘다).
     파일 모드(DB 없음)는 종전 코드 상수 판정을 그대로 쓴다. 테넌트 격리 판정은 여기가 아니라
     _join_request_scope·_owned_hr_record 가 맡는다.
     """
@@ -2761,16 +2899,14 @@ def _validate_join_business_branch(business_id: str, branch: str) -> None:
         if branch and (business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id):
             raise HTTPException(status_code=400, detail=JOIN_BRANCH_MISMATCH_ERROR)
         return
-    info = _business_invite_info(business_id)
-    if info is None:
+    view = _business_workplaces(business_id)
+    if view is None:
         raise HTTPException(status_code=400, detail="등록되지 않은 사업자입니다")
     if not branch:
+        if require_branch:
+            raise HTTPException(status_code=400, detail="근무 점포를 선택해 주십시오")
         return
-    branches = list(info.get("branches") or [])
-    if branch in branches:
-        return
-    # 지점이 하나도 없는 사업자는 사업자 자체가 매장이다 — 지점 칸에 사업자명을 적은 경우만 같은 매장으로 본다.
-    if not branches and branch == str(info.get("name") or ""):
+    if branch in view["workplaces"]:
         return
     raise HTTPException(status_code=400, detail=JOIN_BRANCH_MISMATCH_ERROR)
 
@@ -2844,7 +2980,11 @@ def _prepare_join_request(
     ).strip()
     if not business_id:
         raise HTTPException(status_code=400, detail="회사(사업자)와 근무 점포를 선택해 주십시오")
-    _validate_join_business_branch(business_id, branch)
+    branch = _normalize_office_workplace(business_id, branch)
+    # 초대 수락은 사업자만 정한 매장 단위 초대를 허용한다. 그 밖의 가입요청은 근무지까지 목록에서 골라야 한다.
+    _validate_join_business_branch(
+        business_id, branch, require_branch=not (payload.get("invite_id") or record.get("invite_id"))
+    )
     if business_id and business_id != payload_business_id:
         # 기존 요청에서 이어받은 사업자 — 읽은 테넌트와 다르면 다른 테넌트에 쓰지 않는다.
         if _tenant_id(_join_request_scope(business_id, email, user)) != _tenant_id(scope_user):
@@ -3753,13 +3893,14 @@ def _plan_employee_assignment(request_id: str, payload: dict[str, Any], user: di
     target_branch = (
         BRANCH_ALIASES.get(str(raw_branch).strip(), str(raw_branch).strip()) if raw_branch is not None else ("" if business_changed else current_branch)
     )
-    if target_business == current_business and target_branch == current_branch:
-        raise HTTPException(status_code=400, detail="변경할 사업자 또는 지점을 선택해 주십시오")
     if not target_business:
         raise HTTPException(status_code=400, detail="사업자를 선택해 주십시오")
+    target_branch = _normalize_office_workplace(target_business, target_branch)
+    if target_business == current_business and target_branch == current_branch:
+        raise HTTPException(status_code=400, detail="변경할 사업자 또는 지점을 선택해 주십시오")
     _validate_join_business_branch(target_business, target_branch)
     info = _business_invite_info(target_business) or {}
-    if not target_branch and info.get("branches"):
+    if not target_branch and info.get("branches") and _business_workplaces(target_business)["mode"] == "branches":
         raise HTTPException(status_code=400, detail="이동할 지점을 선택해 주십시오")
     target_tenant = tenant_id
     if _db_available():
@@ -4201,17 +4342,22 @@ async def _db_assignment_targets(tenant_ids: list[str] | None) -> list[dict[str,
             [UUID(item) for item in tenant_ids] if tenant_ids is not None else None,
         )
         result: list[dict[str, Any]] = []
+        modes = await _db_workplace_modes(conn)
         for row in rows:
             branches = await conn.fetch(
                 "SELECT name FROM yeoljeong_branches WHERE business_id = $1 AND deleted_at IS NULL ORDER BY sort_order, id",
                 row["business_id"],
+            )
+            choices = _workplace_choices(
+                str(row["name"]), [str(b["name"]) for b in branches], modes.get(str(row["business_id"]))
             )
             result.append(
                 {
                     "business_id": row["business_id"],
                     "business_name": str(row["name"]),
                     "tenant_id": row["tenant_id"],
-                    "branches": [str(b["name"]) for b in branches],
+                    "workplace_mode": choices["mode"],
+                    "branches": choices["workplaces"],
                 }
             )
         return result
@@ -4227,16 +4373,20 @@ async def list_assignment_targets(user: dict[str, Any]) -> list[dict[str, Any]]:
     if not _db_available():
         # 파일 모드에는 사업자↔테넌트 매핑이 없다 — _plan_employee_assignment 도 모든 사업자를 같은 테넌트로
         # 보므로 선택지도 same_tenant 로 맞춘다(권한 구분 없이 같은 목록, 이동은 항상 지점·사업자 변경 경로).
-        return [
-            {
-                "business_id": item["id"],
-                "business_name": item["name"],
-                "tenant_id": tenant_id,
-                "same_tenant": True,
-                "branches": [b["name"] for b in CANONICAL_BRANCHES if b["businessId"] == item["id"]],
-            }
-            for item in CANONICAL_BUSINESSES
-        ]
+        file_targets = []
+        for item in CANONICAL_BUSINESSES:
+            view = _business_workplaces(item["id"]) or {"mode": "office", "workplaces": []}
+            file_targets.append(
+                {
+                    "business_id": item["id"],
+                    "business_name": item["name"],
+                    "tenant_id": tenant_id,
+                    "same_tenant": True,
+                    "workplace_mode": view["mode"],
+                    "branches": view["workplaces"],
+                }
+            )
+        return file_targets
     allowed: list[str] | None
     if _is_platform_principal(user):
         allowed = None
@@ -4262,6 +4412,9 @@ async def list_assignment_targets(user: dict[str, Any]) -> list[dict[str, Any]]:
 def _record_business_id(record: dict[str, Any]) -> str:
     branch = BRANCH_ALIASES.get(str(record.get("branch") or "").strip(), str(record.get("branch") or "").strip())
     explicit = str(record.get("business_id") or record.get("businessId") or "").strip()
+    if explicit and branch == OFFICE_WORKPLACE:
+        # 사무실 근무자는 지점 이름으로 사업자를 유추할 수 없다(근무지 이름이 모든 office 사업자에 같다).
+        return explicit
     return explicit if explicit in CANONICAL_BUSINESS_IDS else str(BUSINESS_BY_BRANCH.get(branch) or "")
 
 
@@ -5529,7 +5682,11 @@ def _contract_business(payload: dict[str, Any], employee: dict[str, Any] | None)
         str(payload.get("branch") or employee_branch or "").strip(),
     )
     business_id = str(payload.get("business_id") or payload.get("businessId") or BUSINESS_BY_BRANCH.get(branch) or employee_business_id).strip()
-    if branch and (business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id):
+    if branch == OFFICE_WORKPLACE:
+        office_view = _business_workplaces(business_id) if business_id else None
+        if not office_view or OFFICE_WORKPLACE not in office_view["workplaces"]:
+            raise HTTPException(status_code=400, detail="계약서의 사업자와 지점 연결이 일치하지 않습니다")
+    elif branch and (business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id):
         raise HTTPException(status_code=400, detail="계약서의 사업자와 지점 연결이 일치하지 않습니다")
     if employee and employee_business_id != business_id:
         raise HTTPException(status_code=400, detail="선택 직원은 해당 사업자 소속이 아닙니다")
@@ -5590,7 +5747,8 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
         "employer_representative": business.get("representative") or "",
         "employer_address": business.get("address") or "",
         "employer_phone": business.get("phone") or "",
-        "workplace": branch,
+        # 사무실형 사업자는 별도 근무지가 없으므로 근무장소 기본값을 사업장 주소로 둔다(없으면 '사무실').
+        "workplace": (business.get("address") or branch) if branch == OFFICE_WORKPLACE else branch,
     }
     for key, value in business_defaults.items():
         if not str(result.get(key) or "").strip() and value:
@@ -7973,9 +8131,11 @@ async def get_settings_persisted(user: dict[str, Any]) -> dict[str, Any]:
                 "SELECT data, updated_at, updated_by FROM yeoljeong_settings WHERE scope = 'ui'"
             )
         extra = _jsonb_object(extra_row["data"]) if extra_row else {}
+        stored_modes = extra.get("workplace_modes") if isinstance(extra.get("workplace_modes"), dict) else {}
         settings = {
             "businesses": [
                 {
+                    "workplaceMode": _clean_workplace_mode(stored_modes.get(row["id"])),
                     "id": row["id"],
                     "entityType": row["entity_type"],
                     "name": row["name"],
@@ -8021,6 +8181,13 @@ async def save_settings_persisted(payload: dict[str, Any], user: dict[str, Any])
     if pool is None:
         return file_result
     settings = file_result["settings"]
+    raw_settings = payload.get("settings") if isinstance(payload, dict) else payload
+    raw_businesses = raw_settings.get("businesses") if isinstance(raw_settings, dict) else None
+    payload_businesses = [
+        {"id": str(item.get("id") or ""), **({"workplaceMode": item["workplaceMode"]} if "workplaceMode" in item else {})}
+        for item in (raw_businesses if isinstance(raw_businesses, list) else [])
+        if isinstance(item, dict)
+    ]
     now = _now()
     updated_by = _email(user)
     try:
@@ -8096,10 +8263,24 @@ async def save_settings_persisted(payload: dict[str, Any], user: dict[str, Any])
                     business_ids,
                     updated_by,
                 )
+                # 근무 형태는 사업자 테이블에 컬럼이 없어 ui 설정 JSON 에 둔다(마이그레이션 없음).
+                # 구버전 화면이 workplaceMode 키 없이 저장해도 이미 정한 값은 지우지 않는다.
+                previous_modes = await _db_workplace_modes(conn)
+                sent_keys = {str(item["id"]): "workplaceMode" in item for item in payload_businesses}
+                workplace_modes = {}
+                for item in settings["businesses"]:
+                    business_key = str(item["id"])
+                    mode = _clean_workplace_mode(item.get("workplaceMode"))
+                    if not mode and not sent_keys.get(business_key):
+                        mode = previous_modes.get(business_key, "")
+                    item["workplaceMode"] = mode
+                    if mode:
+                        workplace_modes[business_key] = mode
                 extra = {
                     "accounts": settings["accounts"],
                     "staff": settings["staff"],
                     "integrations": settings["integrations"],
+                    "workplace_modes": workplace_modes,
                 }
                 await conn.execute(
                     """
