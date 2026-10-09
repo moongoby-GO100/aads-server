@@ -37,6 +37,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, UploadFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
+from app.services import obys_bankbook_extract as bankbook_extract
 from app.services.auth_challenge_orchestrator import approved_operator_input, classify_portal_state, make_resume_token
 from app.services.browser_collection_audit import SITE_STAGE_LOG_SCHEMA, append_site_stage_log
 
@@ -3499,9 +3500,21 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+BANKBOOK_DOCUMENT_TYPE = "bankbook"
+
+
 def _onboarding_document_view(record: dict[str, Any], today: date | None = None) -> dict[str, Any]:
     row = dict(record)
     row.pop("stored_path", None)
+    if (
+        str(row.get("document_type") or "") == BANKBOOK_DOCUMENT_TYPE
+        and row.get("extract_status") == bankbook_extract.STATUS_NEEDS_REVIEW
+        and str(row.get("status") or "").strip().lower() != "superseded"
+    ):
+        # 화면은 review_memo 를 상태 배지 아래에 이미 표시한다 — 응답에서만 채우고 저장하지 않는다.
+        row["extract_status_label"] = bankbook_extract.NEEDS_REVIEW_LABEL
+        if not row.get("review_memo"):
+            row["review_memo"] = bankbook_extract.NEEDS_REVIEW_LABEL
     row["expires_at"] = str(row.get("expires_at") or "")[:10]
     row.update(_document_expiry_fields(row["expires_at"], ONBOARDING_DOCUMENT_EXPIRY_WARNING_DAYS, today))
     if str(row.get("status") or "").strip().lower() == "superseded":
@@ -3706,6 +3719,12 @@ async def save_onboarding_document(
         "updated_at": now,
         "tenant_id": tenant_id,
     }
+    if str(document_type or "").strip() == BANKBOOK_DOCUMENT_TYPE:
+        # 판독 실패가 업로드를 막지 않는다 — needs_review 로 남기고 관리자가 확인한다.
+        bankbook_extract.apply_to_record(
+            record,
+            await bankbook_extract.extract_bankbook_bounded(await asyncio.to_thread(destination.read_bytes)),
+        )
     try:
         if _db_available():
             if not await _db_upsert_ledger("onboarding_documents", record):
@@ -3954,6 +3973,23 @@ def get_onboarding_document(document_id: str, user: dict[str, Any]) -> tuple[dic
         logger.error("onboarding document hash mismatch: document=%s", record.get("id"))
         raise HTTPException(status_code=409, detail="입사서류 원본이 등록 당시와 다릅니다")
     return record, path
+
+
+async def reextract_bankbook_document(document_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    """이미 올라온 통장사본을 다시 판독한다. 직원별 현재본(대체되지 않은 1건)만 대상이며 같은 입력이면 같은 결과로 덮어쓴다."""
+    _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="통장사본 재판독 권한이 없습니다")
+    record, path = await asyncio.to_thread(get_onboarding_document, document_id, user)
+    if str(record.get("document_type") or "") != BANKBOOK_DOCUMENT_TYPE:
+        raise HTTPException(status_code=400, detail="통장사본만 재판독할 수 있습니다")
+    if str(record.get("status") or "").strip().lower() == "superseded":
+        raise HTTPException(status_code=409, detail="재제출로 대체된 이전본은 재판독할 수 없습니다")
+    result = await bankbook_extract.extract_bankbook_bounded(await asyncio.to_thread(path.read_bytes))
+    bankbook_extract.apply_to_record(record, result)
+    record["updated_at"] = _now()
+    await asyncio.to_thread(_write_hr_record, "onboarding_documents", record, user)
+    return _onboarding_document_view(record)
 
 
 def review_onboarding_document(document_id: str, status: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:

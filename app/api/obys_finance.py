@@ -627,6 +627,11 @@ async def download_onboarding_document(document_id: str, current_user: dict = De
     return FileResponse(path, media_type=document.get("content_type") or "application/octet-stream", filename=document.get("original_filename") or path.name)
 
 
+@router.post("/onboarding/documents/{document_id}/bankbook-extract")
+async def reextract_bankbook_document(document_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"document": await svc.reextract_bankbook_document(document_id, current_user)}
+
+
 @router.patch("/onboarding/documents/{document_id}/review")
 async def review_onboarding_document(document_id: str, payload: DocumentReviewPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"document": await run_in_threadpool(svc.review_onboarding_document, document_id, payload.status, payload.memo, current_user)}
