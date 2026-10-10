@@ -60,3 +60,28 @@ def test_sw_app_shell_does_not_cache_index():
     shell = SW.split("const APP_SHELL = [", 1)[1].split("];", 1)[0]
     assert "index.html" not in shell
     assert "clock.html" in shell
+
+
+def test_install_button_always_shown_unless_standalone_with_fallback_hints():
+    script = HTML.rsplit("<script>", 1)[1]
+    assert "bar.hidden = false;" in script and "installBtn.hidden = false;" in script
+    assert script.index("if (!standalone)") < script.index("bar.hidden = false;")
+    bar_show = script.index("bar.hidden = false;")
+    assert bar_show < script.index('addEventListener("beforeinstallprompt"')
+    assert "if (!deferredPrompt) {" in script and "fallbackHint()" in script
+    assert 'addEventListener("appinstalled"' in script
+    assert "min-height: 40px" in HTML.split(".pwa-install-bar button {", 1)[1].split("}", 1)[0]
+
+
+def test_install_fallback_hints_per_browser():
+    for token in ("KAKAOTALK", "NAVER", "Instagram", "FBAN", "FBAV", "Line", "DaumApps"):
+        assert token in HTML
+    for text in (
+        "다른 브라우저로 열기",
+        "홈 화면에 추가",
+        "현재 페이지 추가",
+        "오비서 설치",
+        "scheme=https;package=com.android.chrome;end",
+    ):
+        assert text in HTML
+    assert "SamsungBrowser" in HTML
