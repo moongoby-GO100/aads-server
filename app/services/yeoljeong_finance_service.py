@@ -4881,6 +4881,8 @@ async def save_onboarding_document(
         # 메타를 못 남긴 원본은 고아가 된다 — 지우고 실패를 그대로 올린다.
         destination.unlink(missing_ok=True)
         raise
+    if str(document_type or "").strip() == BANKBOOK_DOCUMENT_TYPE:
+        await _autofill_contracts_from_bankbook(record, tenant_id, source="bankbook_upload")
     return _onboarding_document_view(record)
 
 
@@ -5127,6 +5129,7 @@ async def reextract_bankbook_document(document_id: str, user: dict[str, Any]) ->
     bankbook_extract.apply_to_record(record, result)
     record["updated_at"] = _now()
     await asyncio.to_thread(_write_hr_record, "onboarding_documents", record, user)
+    await _autofill_contracts_from_bankbook(record, _tenant_id(user), source="bankbook_reextract")
     return _onboarding_document_view(record)
 
 
@@ -6962,6 +6965,195 @@ def _signature_bundle_notice(contract: dict[str, Any], user: dict[str, Any]) -> 
     ids = [str(contract.get("id") or ""), *[str(row.get("id") or "") for row in siblings]]
     message = f"직원은 {len(ids)}건을 한 번에 서명합니다" if len(ids) > 1 else ""
     return {"count": len(ids), "contract_ids": ids, "message": message}
+
+
+# ---------------------------------------------------------------------------
+# 통장사본 판독 번호 → 미서명 계약서 자동 반영 (ACCT-OBYS-BANKBOOK-OCR-AUTO-APPLY-20261010)
+#
+# 통장사본 업로드·재판독·백필 스크립트가 모두 이 함수들을 쓴다. 전체 번호는 로그·감사·반환 행에
+# 남기지 않는다(끝 4자리만). 서명 완료 계약은 읽기 대상도 아니다. 동기 함수이므로 이벤트 루프 안에서는
+# asyncio.to_thread 로 부른다(_run_db 는 실행 중인 루프 안에서는 조용히 None 을 돌려준다).
+# ---------------------------------------------------------------------------
+BANKBOOK_AUTOFILL_ACTOR = "acct-bankbook-autofill@system.local"
+BANKBOOK_AUTOFILL_STATUSES = frozenset({"draft", "requested"})
+CONTRACT_AUDIT_RESOURCE = "contract"
+BANKBOOK_AUTOFILL_ACTION = "contract.bank_account_autofilled"
+
+
+def account_last4(number: Any) -> str:
+    digits = re.sub(r"\D", "", str(number or ""))
+    return f"…{digits[-4:]}" if len(digits) >= 4 else "…"
+
+
+def bankbook_autofill_actor(tenant_id: str) -> dict[str, Any]:
+    """자동 반영을 수행하는 시스템 주체. 지정한 테넌트의 계약만 읽고 쓴다."""
+    return {
+        "email": BANKBOOK_AUTOFILL_ACTOR,
+        "user_role": "system",
+        "is_admin": True,
+        "tenant_id": tenant_id,
+        "current_membership": {"tenant_id": tenant_id, "status": "active", "role": "admin"},
+    }
+
+
+def contract_account_autofill_skip_reason(contract: dict[str, Any], number: str | None, *, tenant_id: str) -> str:
+    """자동 반영 대상이 아니면 사유 코드, 대상이면 빈 문자열. 서명 완료 등 draft/requested 밖은 항상 제외.
+
+    number 가 None 이면 번호와 무관한 대상 여부만 본다(번호를 읽기 전에 판독 비용을 아끼는 용도)."""
+    if contract.get("deleted_at"):
+        return "deleted"
+    if str(contract.get("tenant_id") or "").strip() != tenant_id:
+        return "tenant_mismatch"
+    status = str(contract.get("status") or "").strip().lower()
+    if status not in BANKBOOK_AUTOFILL_STATUSES:
+        return f"status_{status or 'unknown'}"
+    if str(contract.get("bank_account_number") or "").strip():
+        return "already_has_number"
+    masked = str(contract.get("bank_account_masked") or "").strip()
+    if not masked:
+        return "no_masked"
+    if number is None:
+        return ""
+    if not str(number).strip():
+        return "unreadable"
+    if not bankbook_extract.account_matches_masked(number, masked):
+        return "mismatch"
+    return ""
+
+
+def autofill_contract_bank_account(
+    contract: dict[str, Any],
+    number: str,
+    user: dict[str, Any],
+    *,
+    source: str,
+    apply: bool = True,
+    reissue: bool = True,
+) -> dict[str, Any]:
+    """계약 한 건에 판독된 전체 계좌번호를 채운다. 입력 contract 는 바꾸지 않는다.
+
+    requested 계약은 내용이 바뀌므로 draft 로 되돌리고 기존 서명 토큰을 죽인 뒤 같은 서명요청 경로로
+    새 요청을 자동 재발행한다. 재발행이 실패해도 번호 반영은 유지되고 행에 reissue_error 가 남는다.
+    """
+    tenant_id = _tenant_id(user)
+    previous_status = str(contract.get("status") or "").strip().lower()
+    row: dict[str, Any] = {
+        "contract_id": str(contract.get("id") or ""),
+        "employee": str(contract.get("employee_name") or ""),
+        "status": str(contract.get("status") or ""),
+        "action": "skip",
+        "reason": "",
+        "last4": "",
+        "revoked_request": False,
+        "reissued": False,
+        "reissue_error": "",
+    }
+    reason = contract_account_autofill_skip_reason(contract, number, tenant_id=tenant_id)
+    if not reason:
+        try:
+            normalized = _contract_account_number({"bank_account_number": number})
+        except HTTPException:
+            reason = "invalid_number"
+    if reason:
+        row["reason"] = reason
+        return row
+    row["last4"] = account_last4(normalized)
+    row["revoked_request"] = previous_status == "requested"
+    if not apply:
+        row["action"] = "would_fill"
+        return row
+    updated = dict(contract)
+    updated["bank_account_number"] = normalized
+    if row["revoked_request"]:
+        updated["status"] = "draft"
+        _revoke_contract_signature_request(updated)
+    updated["updated_at"] = _now()
+    _write_hr_record("contracts", updated, user)
+    row["action"] = "fill"
+    if row["revoked_request"] and reissue:
+        try:
+            request_contract_signature_with_notice(row["contract_id"], user)
+            row["reissued"] = True
+        except Exception as exc:  # noqa: BLE001 — 재발행 실패가 이미 반영된 번호를 되돌리지 않는다
+            row["reissue_error"] = type(exc).__name__
+            logger.warning("bankbook autofill reissue failed: contract=%s err=%s", row["contract_id"], type(exc).__name__)
+    _append_employment_audit(
+        tenant_id=tenant_id,
+        business_id=str(updated.get("business_id") or ""),
+        actor=_email(user),
+        action=BANKBOOK_AUTOFILL_ACTION,
+        resource_type=CONTRACT_AUDIT_RESOURCE,
+        resource_id=row["contract_id"],
+        details={
+            "source": source,
+            "bank_account_last4": row["last4"],
+            "previous_status": previous_status,
+            "signature_request_revoked": row["revoked_request"],
+            "signature_reissued": row["reissued"],
+            "signature_reissue_error": row["reissue_error"],
+        },
+    )
+    logger.info(
+        "bankbook autofill: contract=%s last4=%s reissued=%s source=%s",
+        row["contract_id"], row["last4"], row["reissued"], source,
+    )
+    return row
+
+
+def autofill_employee_contract_accounts(
+    number: str,
+    *,
+    employee_request_id: str,
+    employee_email: str,
+    user: dict[str, Any],
+    source: str,
+    contracts: list[dict[str, Any]] | None = None,
+    apply: bool = True,
+) -> list[dict[str, Any]]:
+    """같은 직원(가입요청 id 또는 이메일)의 draft/requested 계약에 번호를 채운다. 대상 계약마다 한 행."""
+    _tenant_id(user)
+    rows = contracts if contracts is not None else _read_hr("contracts", user)
+    return [
+        autofill_contract_bank_account(contract, number, user, source=source, apply=apply)
+        for contract in rows
+        if _contract_belongs_to(contract, employee_email=employee_email, employee_request_id=employee_request_id)
+    ]
+
+
+def _bankbook_autofill_timeout_sec() -> float:
+    try:
+        return max(1.0, float(os.getenv("OBYS_BANKBOOK_AUTOFILL_TIMEOUT_SEC") or 20.0))
+    except ValueError:
+        return 20.0
+
+
+async def _autofill_contracts_from_bankbook(record: dict[str, Any], tenant_id: str, *, source: str) -> list[dict[str, Any]]:
+    """판독이 끝난 통장사본 레코드로 계약을 채운다. 업로드 응답을 붙잡지 않도록 시간 상한을 걸고 어떤 실패도 올리지 않는다."""
+    fields = record.get("extracted_fields") if isinstance(record.get("extracted_fields"), dict) else {}
+    number = str(fields.get("bank_account_number") or "").strip()
+    if (
+        record.get("extract_status") != bankbook_extract.STATUS_EXTRACTED
+        or not number
+        or str(record.get("status") or "").strip().lower() == "superseded"
+    ):
+        return []
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                autofill_employee_contract_accounts,
+                number,
+                employee_request_id=str(record.get("employee_request_id") or ""),
+                employee_email=str(record.get("employee_email") or ""),
+                user=bankbook_autofill_actor(tenant_id),
+                source=source,
+            ),
+            timeout=_bankbook_autofill_timeout_sec(),
+        )
+    except asyncio.TimeoutError:
+        logger.warning("bankbook autofill timed out: document=%s", record.get("id"))
+    except Exception as exc:  # noqa: BLE001 — 자동 반영 실패가 업로드·재판독을 막지 않는다
+        logger.warning("bankbook autofill failed: document=%s err=%s", record.get("id"), type(exc).__name__)
+    return []
 
 
 def resend_contract_signature_notice(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:

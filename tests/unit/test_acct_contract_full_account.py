@@ -3,11 +3,14 @@
 파일 모드로만 돈다(운영 DB·알리고 미접촉). 계좌번호는 전부 합성값이다(실제 직원 번호 없음).
 """
 import importlib.util
+import io
+import json
 import os
+import time
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
 os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-that-is-at-least-32-bytes-long")
 
@@ -238,12 +241,12 @@ def test_account_matches_masked(number, masked, expected):
     assert bb.account_matches_masked(number, masked) is expected
 
 
-# --- 7. 백필 스크립트 ----------------------------------------------------------------------------
-def _contract(contract_id, status, masked=MASKED, **extra):
-    return {
-        "id": contract_id, "employee_request_id": "join-mia", "employee_email": EMPLOYEE["email"],
-        "employee_name": "가입 직원", "status": status, "bank_account_masked": masked, "tenant_id": TENANT, **extra,
-    }
+# --- 7. 백필 스크립트(공용 함수 위임) ---------------------------------------------------------------
+OTHER_TENANT = "99999999-aaaa-bbbb-cccc-000000000001"
+OTHER_ADMIN = {
+    "email": "other-owner@example.com", "is_admin": True, "tenant_id": OTHER_TENANT,
+    "current_membership": {"tenant_id": OTHER_TENANT, "status": "active"},
+}
 
 
 def _doc(doc_id="doc-bank", status="approved", uploaded_at="2026-10-01", **extra):
@@ -253,100 +256,119 @@ def _doc(doc_id="doc-bank", status="approved", uploaded_at="2026-10-01", **extra
     }
 
 
-async def _run(script, contracts, docs, number, *, apply, reads=None):
-    written = []
+def _save(masked=MASKED, **extra):
+    return svc.save_contract(_payload(bank_account_masked=masked, **extra), ADMIN)
 
+
+def _signed(masked=MASKED):
+    row = {**_stored(_save(masked)["id"]), "status": "signed"}
+    svc._write_hr_record("contracts", row, ADMIN)
+    return row
+
+
+def _all_contracts():
+    return svc._read_hr("contracts", ADMIN)
+
+
+async def _run(script, contracts, docs, number, *, apply, reads=None):
     async def read_number(doc):
         if reads is not None:
             reads.append(doc["id"])
         return number
 
-    rows = await script.process(contracts, docs, read_number=read_number, apply=apply, write=written.append)
-    return rows, written
+    return await script.process(
+        contracts, docs, read_number=read_number, apply=apply, user=svc.bankbook_autofill_actor(TENANT),
+    )
 
 
 @pytest.mark.asyncio
 async def test_backfill_dry_run_writes_nothing_and_reports_would_fill():
-    script = _script()
-    rows, written = await _run(script, [_contract("c1", "draft")], [_doc()], FULL, apply=False)
-    assert written == [] and rows[0]["action"] == "would_fill" and rows[0]["last4"] == "…0111"
+    draft = _save()
+    rows = await _run(_script(), _all_contracts(), [_doc()], FULL, apply=False)
+    assert rows[0]["action"] == "would_fill" and rows[0]["last4"] == "…0111"
+    assert not _stored(draft["id"]).get("bank_account_number")
 
 
 @pytest.mark.asyncio
 async def test_backfill_apply_fills_draft_and_leaves_masked_untouched():
-    script = _script()
-    rows, written = await _run(script, [_contract("c1", "draft")], [_doc()], FULL, apply=True)
+    draft = _save()
+    rows = await _run(_script(), _all_contracts(), [_doc()], FULL, apply=True)
     assert rows[0]["action"] == "fill" and not rows[0]["revoked_request"]
-    assert written[0]["bank_account_number"] == FULL and written[0]["bank_account_masked"] == MASKED
-    assert written[0]["status"] == "draft"
+    after = _stored(draft["id"])
+    assert after["bank_account_number"] == FULL and after["bank_account_masked"] == MASKED and after["status"] == "draft"
 
 
 @pytest.mark.asyncio
 async def test_backfill_never_touches_signed_or_other_statuses():
-    script = _script()
+    signed = _signed()
+    cancelled = {**_stored(_save()["id"]), "status": "cancelled"}
+    svc._write_hr_record("contracts", cancelled, ADMIN)
     reads: list[str] = []
-    contracts = [_contract("s1", "signed"), _contract("x1", "cancelled"), _contract("d1", "draft", deleted_at="2026-10-02")]
-    rows, written = await _run(script, contracts, [_doc()], FULL, apply=True, reads=reads)
-    assert written == [] and reads == []
-    assert [row["action"] for row in rows] == ["skip", "skip", "skip"]
-    assert rows[0]["reason"] == "status_signed"
+    rows = await _run(_script(), _all_contracts(), [_doc()], FULL, apply=True, reads=reads)
+    assert reads == [] and {row["action"] for row in rows} == {"skip"}
+    assert {row["reason"] for row in rows} == {"status_signed", "status_cancelled"}
+    assert not _stored(signed["id"]).get("bank_account_number") and _stored(signed["id"])["status"] == "signed"
 
 
 @pytest.mark.asyncio
-async def test_backfill_skips_when_last_four_digits_differ():
-    script = _script()
-    rows, written = await _run(script, [_contract("c1", "draft", masked="1002-***-**9999")], [_doc()], FULL, apply=True)
-    assert written == [] and rows[0]["reason"] == "mismatch"
+async def test_backfill_skips_when_masked_and_number_mismatch():
+    for masked in ("1002-***-**9999", "1002-***-*0111"):
+        draft = _save(masked)
+        rows = await _run(_script(), [_stored(draft["id"])], [_doc()], FULL, apply=True)
+        assert rows[0]["reason"] == "mismatch"
+        assert not _stored(draft["id"]).get("bank_account_number")
 
 
 @pytest.mark.asyncio
-async def test_backfill_skips_when_digit_count_differs_unreadable_or_no_bankbook():
-    script = _script()
-    rows, written = await _run(script, [_contract("c1", "draft", masked="1002-***-*0111")], [_doc()], FULL, apply=True)
-    assert written == [] and rows[0]["reason"] == "mismatch"
-    rows, written = await _run(script, [_contract("c1", "draft")], [_doc()], "", apply=True)
-    assert written == [] and rows[0]["reason"] == "unreadable"
-    rows, written = await _run(script, [_contract("c1", "draft")], [_doc(status="superseded")], FULL, apply=True)
-    assert written == [] and rows[0]["reason"] == "no_bankbook"
+async def test_backfill_skips_unreadable_or_no_bankbook():
+    draft = _save()
+    contract = _stored(draft["id"])
+    rows = await _run(_script(), [contract], [_doc()], "", apply=True)
+    assert rows[0]["reason"] == "unreadable"
+    rows = await _run(_script(), [contract], [_doc(status="superseded")], FULL, apply=True)
+    assert rows[0]["reason"] == "no_bankbook"
+    assert not _stored(draft["id"]).get("bank_account_number")
 
 
 @pytest.mark.asyncio
-async def test_backfill_requested_contract_returns_to_draft_with_token_revoked():
-    script = _script()
-    contract = _contract("r1", "requested", sign_token="tok", sign_token_hash="hash", requested_at="2026-10-09T10:00:00+09:00")
-    rows, written = await _run(script, [contract], [_doc()], FULL, apply=True)
-    assert rows[0]["revoked_request"] is True
-    saved = written[0]
-    assert saved["status"] == "draft" and saved["bank_account_number"] == FULL
-    assert not any(key in saved for key in ("sign_token", "sign_token_hash", "requested_at"))
-    assert contract["status"] == "requested" and contract["sign_token"] == "tok"  # 입력 레코드는 건드리지 않는다
+async def test_backfill_requested_contract_is_reissued_with_a_new_token():
+    requested = svc.request_contract_signature(_save()["id"], ADMIN)
+    old_token = requested["sign_token"]
+    rows = await _run(_script(), [_stored(requested["id"])], [_doc()], FULL, apply=True)
+    assert rows[0]["revoked_request"] is True and rows[0]["reissued"] is True
+    after = _stored(requested["id"])
+    assert after["bank_account_number"] == FULL and after["status"] == "requested"
+    assert after["sign_token"] and after["sign_token"] != old_token
 
 
 @pytest.mark.asyncio
 async def test_backfill_reads_each_bankbook_once_and_picks_latest_current_document():
-    script = _script()
+    _save()
+    _save()
     reads: list[str] = []
     docs = [_doc("old", uploaded_at="2026-09-01"), _doc("new", uploaded_at="2026-10-05")]
-    contracts = [_contract("c1", "draft"), _contract("c2", "draft")]
-    rows, written = await _run(script, contracts, docs, FULL, apply=True, reads=reads)
-    assert reads == ["new"] and len(written) == 2
+    rows = await _run(_script(), _all_contracts(), docs, FULL, apply=True, reads=reads)
+    assert reads == ["new"] and [row["action"] for row in rows] == ["fill", "fill"]
 
 
 @pytest.mark.asyncio
 async def test_backfill_skips_contracts_that_already_have_a_number_or_no_masked():
-    script = _script()
-    rows, written = await _run(
-        script, [_contract("c1", "draft", bank_account_number=OTHER_FULL), _contract("c2", "draft", masked="")],
-        [_doc()], FULL, apply=True,
-    )
-    assert written == [] and [row["reason"] for row in rows] == ["already_has_number", "no_masked"]
+    has_number = _save(bank_account_number=OTHER_FULL)
+    no_masked = svc.save_contract(_payload(bank_name="", bank_account_holder=""), ADMIN)
+    rows = await _run(_script(), [_stored(has_number["id"]), _stored(no_masked["id"])], [_doc()], FULL, apply=True)
+    assert [row["reason"] for row in rows] == ["already_has_number", "no_masked"]
+
+
+def test_backfill_has_no_duplicated_apply_logic():
+    source = (ROOT / "scripts" / "acct_backfill_contract_full_account.py").read_text(encoding="utf-8")
+    assert "autofill_contract_bank_account" in source and "contract_account_autofill_skip_reason" in source
+    assert "account_matches_masked" not in source and "_write_hr_record" not in source and "_revoke_contract_signature_request" not in source
 
 
 def test_backfill_report_prints_last_four_only(capsys):
-    script = _script()
     rows = [{"contract_id": "abcdef012345", "employee": "가입 직원", "status": "draft", "action": "would_fill",
-             "reason": "", "last4": script.last4(FULL), "revoked_request": False}]
-    script._print_report(rows, apply=False)
+             "reason": "", "last4": svc.account_last4(FULL), "revoked_request": False, "reissued": False}]
+    _script()._print_report(rows, apply=False)
     out = capsys.readouterr().out
     assert "…0111" in out and FULL not in out and "999-000" not in out
 
@@ -354,11 +376,10 @@ def test_backfill_report_prints_last_four_only(capsys):
 def test_backfill_end_to_end_in_file_mode_changes_only_unsigned_matching_contracts(capsys):
     script = _script()
     _bankbook_doc()  # 이 변경 이전의 구 서류: masked 만 있고 전체 번호가 없다
-    draft = svc.save_contract(_payload(bank_account_masked=MASKED), ADMIN)
-    mismatch = svc.save_contract(_payload(bank_account_masked="1002-***-**9999"), ADMIN)
-    requested = svc.request_contract_signature(svc.save_contract(_payload(bank_account_masked=MASKED), ADMIN)["id"], ADMIN)
-    signed_row = {**_stored(svc.save_contract(_payload(bank_account_masked=MASKED), ADMIN)["id"]), "status": "signed"}
-    svc._write_hr_record("contracts", signed_row, ADMIN)
+    draft = _save()
+    mismatch = _save("1002-***-**9999")
+    requested = svc.request_contract_signature(_save()["id"], ADMIN)
+    signed_row = _signed()
     _bankbook_doc(bank_account_number=FULL)  # 서류에 전체 번호가 저장된 뒤
 
     assert script.main(["--tenant", TENANT]) == 0  # dry-run
@@ -369,5 +390,218 @@ def test_backfill_end_to_end_in_file_mode_changes_only_unsigned_matching_contrac
     assert not _stored(mismatch["id"]).get("bank_account_number")
     assert not _stored(signed_row["id"]).get("bank_account_number") and _stored(signed_row["id"])["status"] == "signed"
     after = _stored(requested["id"])
-    assert after["bank_account_number"] == FULL and after["status"] == "draft" and not after.get("sign_token")
+    assert after["bank_account_number"] == FULL and after["status"] == "requested"
+    assert after["sign_token"] and after["sign_token"] != requested["sign_token"]
     assert FULL not in capsys.readouterr().out
+
+
+# --- 8. 업로드·재판독 시 자동 반영 ---------------------------------------------------------------------
+def _autofill(number=FULL, **kwargs):
+    return svc.autofill_employee_contract_accounts(
+        number, employee_request_id="join-mia", employee_email=EMPLOYEE["email"],
+        user=svc.bankbook_autofill_actor(TENANT), source="test", **kwargs,
+    )
+
+
+def _audit_rows():
+    return [row for row in svc._read_file_rows("employment_audit_logs") if row.get("action") == svc.BANKBOOK_AUTOFILL_ACTION]
+
+
+def test_autofill_fills_draft_when_masked_matches_and_writes_a_last4_only_audit():
+    draft = _save()
+    rows = _autofill()
+    assert [row["action"] for row in rows] == ["fill"]
+    assert _stored(draft["id"])["bank_account_number"] == FULL
+    audit = _audit_rows()
+    assert len(audit) == 1 and audit[0]["actor"] == svc.BANKBOOK_AUTOFILL_ACTOR and audit[0]["resource_id"] == draft["id"]
+    dumped = json.dumps(audit, ensure_ascii=False)
+    assert "…0111" in dumped and FULL not in dumped and "999-000" not in dumped and "1002999000111" not in dumped
+
+
+def test_autofill_does_not_apply_on_mismatch_and_leaves_the_contract_alone():
+    draft = _save("1002-***-**9999")
+    rows = _autofill()
+    assert [(row["action"], row["reason"]) for row in rows] == [("skip", "mismatch")]
+    assert not _stored(draft["id"]).get("bank_account_number") and _audit_rows() == []
+
+
+def test_autofill_never_touches_signed_contracts():
+    signed = _signed()
+    before = _stored(signed["id"])
+    rows = _autofill()
+    assert [(row["action"], row["reason"]) for row in rows] == [("skip", "status_signed")]
+    assert _stored(signed["id"]) == before and _audit_rows() == []
+
+
+def test_autofill_reissues_requested_contract_with_a_new_token_without_admin_click():
+    requested = svc.request_contract_signature(_save()["id"], ADMIN)
+    old_token = requested["sign_token"]
+    rows = _autofill()
+    assert rows[0]["action"] == "fill" and rows[0]["revoked_request"] and rows[0]["reissued"]
+    after = _stored(requested["id"])
+    assert after["status"] == "requested" and after["bank_account_number"] == FULL
+    assert after["sign_token"] and after["sign_token"] != old_token
+    with pytest.raises(HTTPException) as old_link:
+        svc.get_contract_signing_view(old_token, EMPLOYEE)
+    assert old_link.value.status_code == 403
+    assert svc.get_contract_signing_view(after["sign_token"], EMPLOYEE)
+    assert _audit_rows()[0]["details"]["signature_reissued"] is True
+
+
+def test_autofill_keeps_the_number_when_reissue_fails(monkeypatch):
+    requested = svc.request_contract_signature(_save()["id"], ADMIN)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("notify down")
+
+    monkeypatch.setattr(svc, "request_contract_signature_with_notice", boom)
+    rows = _autofill()
+    assert rows[0]["action"] == "fill" and rows[0]["reissued"] is False and rows[0]["reissue_error"] == "RuntimeError"
+    after = _stored(requested["id"])
+    assert after["bank_account_number"] == FULL and after["status"] == "draft" and not after.get("sign_token")
+
+
+def test_autofill_skips_other_employees_contracts():
+    mine = _save()
+    svc._write("employee_join_requests", [
+        *svc._read_file_rows("employee_join_requests"),
+        {"id": "join-other", "name": "다른 직원", "email": "other@example.com", "tenant_id": TENANT,
+         "business_id": "biz-mia", "branch": "열정국밥_미아점", "status": "approved", "address": "서울", "phone": "010-0000-0000",
+         "birth_date": "1991-01-01"},
+    ])
+    other = svc.save_contract(_payload(employee_request_id="join-other", bank_account_masked=MASKED), ADMIN)
+    _autofill()
+    assert _stored(mine["id"])["bank_account_number"] == FULL
+    assert not _stored(other["id"]).get("bank_account_number")
+
+
+def test_autofill_is_tenant_isolated():
+    draft = _save()
+    contract = _stored(draft["id"])
+    # 다른 테넌트 주체는 이 계약을 읽지도 쓰지도 못한다.
+    assert svc.autofill_employee_contract_accounts(
+        FULL, employee_request_id="join-mia", employee_email=EMPLOYEE["email"],
+        user=svc.bankbook_autofill_actor(OTHER_TENANT), source="test",
+    ) == []
+    # 계약 레코드를 직접 넘겨도 테넌트가 다르면 건너뛰고 쓰지 않는다.
+    rows = svc.autofill_employee_contract_accounts(
+        FULL, employee_request_id="join-mia", employee_email=EMPLOYEE["email"],
+        user=svc.bankbook_autofill_actor(OTHER_TENANT), source="test", contracts=[contract],
+    )
+    assert [(row["action"], row["reason"]) for row in rows] == [("skip", "tenant_mismatch")]
+    assert not _stored(draft["id"]).get("bank_account_number") and _audit_rows() == []
+    with pytest.raises(HTTPException):
+        svc.autofill_contract_bank_account(contract, FULL, {"email": "x@y.z", "tenant_id": "", "is_admin": True}, source="test")
+
+
+def test_autofill_is_idempotent():
+    _save()
+    assert [row["action"] for row in _autofill()] == ["fill"]
+    assert [row["reason"] for row in _autofill()] == ["already_has_number"]
+    assert len(_audit_rows()) == 1
+
+
+def _scripted_ocr(reply):
+    async def ocr(image):
+        return reply
+
+    return ocr
+
+
+def _png_bytes():
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (40, 20), (255, 255, 255)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _upload_bankbook(user=ADMIN):
+    return svc.save_onboarding_document(
+        employee_name="가입 직원", employee_email=EMPLOYEE["email"], branch="", document_type="bankbook", issue_date="",
+        memo="", user=user, upload=UploadFile(filename="통장.png", file=io.BytesIO(_png_bytes())),
+    )
+
+
+@pytest.mark.asyncio
+async def test_bankbook_upload_auto_fills_matching_draft_and_requested_contracts(monkeypatch, caplog):
+    monkeypatch.setattr(svc, "_db_available", lambda: False)
+    monkeypatch.setattr(bb, "_default_ocr", _scripted_ocr({"text": f"우리은행\n예금주 : 가입 직원\n계좌번호 {FULL}\n", "confidence": 0.9}))
+    draft = _save()
+    requested = svc.request_contract_signature(_save()["id"], ADMIN)
+    signed = _signed()
+    mismatch = _save("1002-***-**9999")
+    caplog.set_level("DEBUG")
+    document = await _upload_bankbook()
+    assert document["extract_status"] == "extracted"
+    assert _stored(draft["id"])["bank_account_number"] == FULL
+    assert _stored(requested["id"])["sign_token"] != requested["sign_token"]
+    assert _stored(requested["id"])["bank_account_number"] == FULL and _stored(requested["id"])["status"] == "requested"
+    assert not _stored(signed["id"]).get("bank_account_number")
+    assert not _stored(mismatch["id"]).get("bank_account_number")
+    assert FULL not in caplog.text and FULL not in json.dumps(document, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_bankbook_upload_with_unreadable_scan_changes_no_contract(monkeypatch):
+    monkeypatch.setattr(svc, "_db_available", lambda: False)
+    monkeypatch.setattr(bb, "_default_ocr", _scripted_ocr({"text": "", "confidence": 0}))
+    draft = _save()
+    document = await _upload_bankbook()
+    assert document["extract_status"] != "extracted"
+    assert not _stored(draft["id"]).get("bank_account_number")
+
+
+@pytest.mark.asyncio
+async def test_autofill_failure_never_breaks_the_upload(monkeypatch):
+    monkeypatch.setattr(svc, "_db_available", lambda: False)
+    monkeypatch.setattr(bb, "_default_ocr", _scripted_ocr({"text": f"우리은행\n예금주 : 가입 직원\n계좌번호 {FULL}\n", "confidence": 0.9}))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(svc, "autofill_employee_contract_accounts", boom)
+    _save()
+    document = await _upload_bankbook()
+    assert document["extract_status"] == "extracted"
+
+
+@pytest.mark.asyncio
+async def test_autofill_has_a_bounded_timeout(monkeypatch):
+    monkeypatch.setenv("OBYS_BANKBOOK_AUTOFILL_TIMEOUT_SEC", "1")
+
+    def slow(*args, **kwargs):
+        time.sleep(3)
+        return []
+
+    monkeypatch.setattr(svc, "autofill_employee_contract_accounts", slow)
+    record = {"id": "d1", "extract_status": bb.STATUS_EXTRACTED, "employee_request_id": "join-mia",
+              "employee_email": EMPLOYEE["email"], "extracted_fields": {"bank_account_number": FULL}}
+    started = time.monotonic()
+    assert await svc._autofill_contracts_from_bankbook(record, TENANT, source="test") == []
+    assert time.monotonic() - started < 2.5
+
+
+@pytest.mark.asyncio
+async def test_autofill_ignores_non_extracted_or_superseded_documents(monkeypatch):
+    calls = []
+    monkeypatch.setattr(svc, "autofill_employee_contract_accounts", lambda *a, **k: calls.append(1) or [])
+    base = {"id": "d1", "employee_request_id": "join-mia", "employee_email": EMPLOYEE["email"],
+            "extracted_fields": {"bank_account_number": FULL}}
+    for record in (
+        {**base, "extract_status": bb.STATUS_NEEDS_REVIEW},
+        {**base, "extract_status": bb.STATUS_EXTRACTED, "status": "superseded"},
+        {**base, "extract_status": bb.STATUS_EXTRACTED, "extracted_fields": {}},
+    ):
+        assert await svc._autofill_contracts_from_bankbook(record, TENANT, source="test") == []
+    assert calls == []
+
+
+# --- 9. 화면: 가려진 번호와 읽은 번호가 다르면 자동 반영 없이 경고만 ------------------------------------------
+def test_contract_ui_warns_account_check_needed_on_mismatch_and_reuses_the_bank_warning_modal():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert "계좌 확인 필요" in html and "bankbookAccountMismatch" in html and "maskedAccountsAgree" in html
+    assert 'id="contractBankWarnText"' in html
+    assert html.count('id="contractBankWarnModal"') == 1  # 새 모달을 만들지 않고 기존 경고를 재사용
+    assert '["bankbook", "bankbook_copy"].includes(item.document_type)' in html
+    assert 'bank_account_masked' in html and "openContractBankWarn(mismatched, true)" in html

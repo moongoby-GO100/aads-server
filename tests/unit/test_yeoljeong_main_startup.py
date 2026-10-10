@@ -13,6 +13,53 @@ import pytest
 from app import yeoljeong_main
 
 
+@pytest.fixture(autouse=True)
+def _restore_ocr_backend(monkeypatch):
+    # lifespan 이 OCR_BACKEND 기본값을 프로세스 환경에 심으므로 다른 테스트로 새지 않게 되돌린다.
+    monkeypatch.setenv("OCR_BACKEND", "sentinel")
+    monkeypatch.delenv("OCR_BACKEND")
+
+
+def _stub_pool(monkeypatch):
+    async def noop():
+        return object()
+
+    monkeypatch.setattr("app.core.db_pool.init_pool", noop)
+    monkeypatch.setattr("app.core.db_pool.close_pool", noop)
+
+
+@pytest.mark.asyncio
+async def test_lifespan_defaults_ocr_backend_to_local_for_cafe24(monkeypatch):
+    _stub_pool(monkeypatch)
+    async with yeoljeong_main.lifespan(yeoljeong_main.app):
+        import os
+
+        assert os.environ.get("OCR_BACKEND") == "local"
+        from app.core import local_ocr_bridge
+
+        assert local_ocr_bridge.backend() == "local"
+
+
+@pytest.mark.asyncio
+async def test_lifespan_keeps_an_explicit_ocr_backend(monkeypatch):
+    _stub_pool(monkeypatch)
+    monkeypatch.setenv("OCR_BACKEND", "pc_agent")
+    async with yeoljeong_main.lifespan(yeoljeong_main.app):
+        import os
+
+        assert os.environ["OCR_BACKEND"] == "pc_agent"
+
+
+def test_aads_main_app_does_not_set_the_ocr_backend_default():
+    import pathlib
+
+    main_src = (pathlib.Path(__file__).resolve().parents[2] / "app" / "main.py").read_text(encoding="utf-8")
+    assert "OCR_BACKEND" not in main_src
+    from app.core import local_ocr_bridge
+
+    assert local_ocr_bridge.backend() == "auto"
+
+
 def test_app_has_lifespan_registered():
     assert yeoljeong_main.app.router.lifespan_context is not None
 

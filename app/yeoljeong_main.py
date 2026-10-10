@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import pathlib
 
 from fastapi import FastAPI, Request
@@ -29,6 +30,14 @@ from app.api import (
 
 logger = logging.getLogger(__name__)
 
+# 카페24 컨테이너에는 PC Agent 가 없다. 통장사본 판독이 없는 에이전트를 기다리지 않게 서버 tesseract 를 기본으로 한다.
+# 운영자가 OCR_BACKEND 를 명시하면 그 값이 우선하며, AADS 본 앱(app/main.py)의 기본값은 바꾸지 않는다.
+OCR_BACKEND_DEFAULT = "local"
+
+
+def apply_ocr_backend_default() -> str:
+    return os.environ.setdefault("OCR_BACKEND", OCR_BACKEND_DEFAULT)
+
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -43,6 +52,7 @@ async def lifespan(app: FastAPI):
     대부분의 업무 API 는 자체 커넥션으로 동작하므로 초기화 실패가 기동을
     막지는 않게 하고 원인만 남긴다.
     """
+    apply_ocr_backend_default()
     try:
         from app.core.db_pool import init_pool
 

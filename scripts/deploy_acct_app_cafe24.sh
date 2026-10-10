@@ -588,13 +588,29 @@ image_info() { # prints "<id>|<acct.release.sha>|<revision>" or fails when the i
     rdocker image inspect -f '{{.Id}}|{{index .Config.Labels "acct.release.sha"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null
 }
 
+# 통장사본 OCR(tesseract) 설치 목록은 고정이다. env·인자로 늘릴 수 없다(공급망 표면 고정).
+readonly OCR_APT_PACKAGES=(tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng)
+
+ocr_install_run() { # the single RUN line: skip when tesseract + kor + eng already exist, else fixed-allowlist apt install
+    local pk="${OCR_APT_PACKAGES[*]}"
+    printf '%s' "RUN if command -v tesseract >/dev/null 2>&1 && tesseract --list-langs 2>&1 | grep -qx kor && tesseract --list-langs 2>&1 | grep -qx eng; then echo 'tesseract already present; skip'; "
+    printf '%s' "else DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $pk && rm -rf /var/lib/apt/lists/*; fi && tesseract --list-langs 2>&1 | grep -qx kor"
+    printf '\n'
+}
+
 write_dockerfile() { # write_dockerfile <ctx dir>
-    local ctx=$1 keys="" k p
+    local ctx=$1 keys="" k p base_user=""
     for k in "${BASE_REV_KEYS[@]}" org.opencontainers.image.revision; do
         [[ " $keys " == *" $k "* ]] || keys+="$k "
     done
+    # apt 설치는 root 로 해야 하므로, 설치 뒤 기반 이미지의 원래 USER 로 되돌린다.
+    base_user="$(rdocker image inspect -f '{{.Config.User}}' "$BASE_REF" 2>/dev/null || true)"
+    [[ $base_user =~ ^[A-Za-z0-9_.:-]*$ ]] || die 6 "base image USER '$base_user' has unexpected characters"
     {
         echo "FROM $BASE_REF"
+        echo "USER root"
+        ocr_install_run
+        [[ -z $base_user || $base_user == root ]] || echo "USER $base_user"
         printf 'LABEL'
         for k in $keys; do printf ' %s="%s"' "$k" "$SHA8"; done
         printf ' acct.release.sha="%s" acct.release.run="%s" acct.release.base="%s"\n' "$RELEASE_SHA" "$RUN_ID" "$PREV_IMAGE_ID"
@@ -756,6 +772,12 @@ candidate_ok() { # candidate_ok <base-url> <marker|->
     fi
 }
 
+candidate_ocr_ok() { # candidate_ocr_ok <container>: tesseract has the kor and eng language data
+    local langs
+    langs="$(rdocker exec "$1" tesseract --list-langs 2>&1)" || return 1
+    grep -qx kor <<<"$langs" && grep -qx eng <<<"$langs"
+}
+
 start_candidate() {
     local waited=0 st
     pick_port || die 8 "no free candidate port in 8112..8199"
@@ -773,7 +795,8 @@ start_candidate() {
         if candidate_ok "http://$UP_IP:$NEW_PORT" "$MARKER"; then
             st="$(rdocker inspect -f '{{.State.Running}} {{.RestartCount}}' "$NEW_CONTAINER" 2>/dev/null || true)"
             [[ $st == "true 0" ]] || die 8 "candidate healthy but state is '$st'"
-            say "candidate $NEW_CONTAINER healthy on $UP_IP:$NEW_PORT (health, api auth layer, marker '$MARKER')"
+            candidate_ocr_ok "$NEW_CONTAINER" || die 8 "candidate $NEW_CONTAINER has no tesseract kor/eng language data (bankbook OCR would fail); removing it (production untouched)"
+            say "candidate $NEW_CONTAINER healthy on $UP_IP:$NEW_PORT (health, api auth layer, marker '$MARKER', tesseract kor)"
             return 0
         fi
         sleep 3

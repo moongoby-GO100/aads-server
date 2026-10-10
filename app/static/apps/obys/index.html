@@ -5039,7 +5039,7 @@
   <div id="contractBankWarnModal" class="sign-prompt-backdrop hidden">
     <section class="sign-prompt-sheet" role="alertdialog" aria-modal="true" aria-labelledby="contractBankWarnTitle">
       <h2 id="contractBankWarnTitle">급여 계좌가 비어 있습니다</h2>
-      <p>이 직원의 통장사본 파일은 등록돼 있지만 급여 은행·계좌번호가 비어 있습니다. 이대로 저장하면 계약서에 계좌가 빠집니다. 통장사본을 보고 직접 입력하십시오. 계약서에는 가려진 계좌번호만 남습니다.</p>
+      <p id="contractBankWarnText">이 직원의 통장사본 파일은 등록돼 있지만 급여 은행·계좌번호가 비어 있습니다. 이대로 저장하면 계약서에 계좌가 빠집니다. 통장사본을 보고 직접 입력하십시오. 계약서에는 가려진 계좌번호만 남습니다.</p>
       <button type="button" id="contractBankWarnViewBtn">통장사본 보기</button>
       <button type="button" id="contractBankWarnInputBtn" class="primary big">직접 입력</button>
       <button type="button" id="contractBankWarnSaveBtn">계좌 없이 저장</button>
@@ -8894,13 +8894,11 @@
     let contractBankWarnSkip = false;
     let contractBankWarnDocumentId = "";
 
-    async function bankbookWithoutAccount(draft) {
-      if (String(draft.bankName || "").trim() && (String(draft.bankAccountNumber || "").trim() || String(draft.bankAccountMasked || "").trim())) return null;
-      if (!onboardingDocuments.length) await loadOnboardingDocuments().catch(() => {});
+    function currentBankbookFor(draft) {
       const requestId = String(draft.employeeRequestId || "");
       const email = String(draft.employeeEmail || "").trim().toLowerCase();
       return onboardingDocuments.find(item =>
-        item.document_type === "bankbook_copy"
+        ["bankbook", "bankbook_copy"].includes(item.document_type)
         && item.id
         && !["missing", "superseded"].includes(String(item.status || "").toLowerCase())
         && ((requestId && String(item.employee_request_id || "") === requestId)
@@ -8908,8 +8906,38 @@
       ) || null;
     }
 
-    function openContractBankWarn(bankbook) {
+    // 서버 bankbook_extract.account_matches_masked 와 같은 규칙: 자릿수 동일, 보이는 숫자 일치, 끝 4자리는 보여야 한다.
+    function maskedAccountsAgree(left, right) {
+      const a = [...String(left || "")].filter(ch => /[0-9*]/.test(ch));
+      const b = [...String(right || "")].filter(ch => /[0-9*]/.test(ch));
+      if (a.length < 8 || a.length !== b.length) return false;
+      if (!/^[0-9]{4}$/.test(a.slice(-4).join("")) || !/^[0-9]{4}$/.test(b.slice(-4).join(""))) return false;
+      return a.every((ch, i) => ch === "*" || b[i] === "*" || ch === b[i]);
+    }
+
+    async function bankbookWithoutAccount(draft) {
+      if (String(draft.bankName || "").trim() && (String(draft.bankAccountNumber || "").trim() || String(draft.bankAccountMasked || "").trim())) return null;
+      if (!onboardingDocuments.length) await loadOnboardingDocuments().catch(() => {});
+      return currentBankbookFor(draft);
+    }
+
+    // 계약서에 적힌 가려진 번호와 통장사본에서 읽은 번호가 다르면 서버가 자동 반영하지 않는다 — 관리자에게 확인만 요청한다.
+    async function bankbookAccountMismatch(draft) {
+      const masked = String(draft.bankAccountMasked || "").trim();
+      if (String(draft.bankAccountNumber || "").trim() || !masked) return null;
+      if (!onboardingDocuments.length) await loadOnboardingDocuments().catch(() => {});
+      const bankbook = currentBankbookFor(draft);
+      const read = String(bankbook?.extracted_fields?.bank_account_masked || "").trim();
+      if (!bankbook || bankbook.extract_status !== "extracted" || !read) return null;
+      return maskedAccountsAgree(masked, read) ? null : bankbook;
+    }
+
+    function openContractBankWarn(bankbook, mismatch = false) {
       contractBankWarnDocumentId = bankbook.id;
+      els.contractBankWarnTitle.textContent = mismatch ? "계좌 확인 필요" : "급여 계좌가 비어 있습니다";
+      els.contractBankWarnText.textContent = mismatch
+        ? "계약서에 적힌 계좌번호와 통장사본에서 읽은 계좌번호가 다릅니다. 자동으로 바꾸지 않았습니다. 통장사본을 보고 맞는 번호를 직접 입력하십시오."
+        : "이 직원의 통장사본 파일은 등록돼 있지만 급여 은행·계좌번호가 비어 있습니다. 이대로 저장하면 계약서에 계좌가 빠집니다. 통장사본을 보고 직접 입력하십시오. 계약서에는 가려진 계좌번호만 남습니다.";
       els.contractBankWarnModal.classList.remove("hidden");
     }
 
@@ -14507,6 +14535,11 @@
         if (canManageOnboarding()) {
           const skipBankWarn = contractBankWarnSkip;
           contractBankWarnSkip = false;
+          const mismatched = skipBankWarn ? null : await bankbookAccountMismatch(draft);
+          if (mismatched) {
+            openContractBankWarn(mismatched, true);
+            return;
+          }
           const bankbook = skipBankWarn ? null : await bankbookWithoutAccount(draft);
           if (bankbook) {
             openContractBankWarn(bankbook);

@@ -96,6 +96,9 @@ EOT
 fake_cmd() {
   local c="${1% }" sql key tag port
   case $c in
+    "docker image inspect -f "*Config.User*) printf '%s\n' "${FAKE_BASE_USER-appuser}" ;;
+    "docker exec "*"tesseract --list-langs")
+      printf 'List of available languages (3):\neng\n%s\nosd\n' "$([[ -n ${FAKE_NO_KOR:-} ]] && echo fra || echo kor)" ;;
     "docker image inspect "*)
       tag="${c##* }"
       if [[ -f "$D/images/${tag//:/_}" ]]; then cat "$D/images/${tag//:/_}"; else return 1; fi ;;
@@ -350,7 +353,11 @@ def test_build_is_an_overlay_of_the_running_image_with_revision_label_and_no_sec
     assert f'org.opencontainers.image.revision="{box.sha[:8]}"' in dockerfile
     assert f'acct.release.sha="{box.sha}"' in dockerfile
     assert re.findall(r"^COPY .*", dockerfile, re.M) == ["COPY app ./app", "COPY migrations ./migrations", "COPY deploy ./deploy"]
-    assert not re.search(r"^(ENV|ARG|RUN|ADD) ", dockerfile, re.M)
+    assert not re.search(r"^(ENV|ARG|ADD) ", dockerfile, re.M)
+    runs = re.findall(r"^RUN .*", dockerfile, re.M)
+    assert len(runs) == 1, runs
+    assert "apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng " in runs[0]
+    assert "$" not in runs[0].replace("DEBIAN_FRONTEND", "")
     with tarfile.open(box.fake / "build.tar") as tf:
         names = tf.getnames()
     assert "./Dockerfile" in names and "./app/feature.py" in names
@@ -810,6 +817,35 @@ def test_candidate_without_marker_is_rejected_and_removed(box):
     proc = box.run(env={"FAKE_CAND_NO_MARKER": "1"})
     assert proc.returncode == 8
     assert "OP apache_switch" not in box.log() and box.cands() == ["acct-app-candidate-r8"]
+
+
+def test_candidate_without_tesseract_kor_is_rejected_and_removed(box):
+    proc = box.run(env={"FAKE_NO_KOR": "1"})
+    assert proc.returncode == 8, proc.stdout + proc.stderr
+    assert "tesseract" in proc.stderr
+    assert "OP apache_switch" not in box.log() and box.cands() == ["acct-app-candidate-r8"]
+    assert box.port() == "8111"
+
+
+def test_candidate_with_tesseract_kor_passes_the_ocr_check(box):
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CMD docker exec acct-app-candidate-r9 tesseract --list-langs" in box.log()
+
+
+def test_dockerfile_skips_the_tesseract_install_when_already_present_and_restores_the_base_user(box):
+    assert box.run().returncode == 0
+    dockerfile = (box.fake / "Dockerfile.built").read_text().splitlines()
+    run = next(line for line in dockerfile if line.startswith("RUN "))
+    assert run.startswith("RUN if command -v tesseract ")
+    assert "then echo 'tesseract already present; skip'; else " in run
+    assert dockerfile.index("USER root") < dockerfile.index(run) < dockerfile.index("USER appuser")
+
+
+def test_dockerfile_keeps_root_when_the_base_image_runs_as_root(box):
+    assert box.run(env={"FAKE_BASE_USER": ""}).returncode == 0
+    dockerfile = (box.fake / "Dockerfile.built").read_text().splitlines()
+    assert "USER root" in dockerfile and not [line for line in dockerfile if line.startswith("USER ") and line != "USER root"]
 
 
 def test_candidate_start_failure_exits_8_without_touching_the_previous_container(box):
