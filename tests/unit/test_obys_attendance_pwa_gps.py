@@ -288,6 +288,16 @@ def test_branch_without_coordinates_is_unknown_with_reason(client, db):
     assert db.audit[-1]["action"] == "attendance.check_in" and "지점 좌표 미등록" in db.audit[-1]["details"]
 
 
+def test_business_without_any_branch_still_checks_in_as_unknown(client, db):
+    db.branches.clear()
+    _consent(client)
+    response = _punch(client, "check-in", meters=0)
+    assert response.status_code == 201
+    record = response.json()["record"]
+    assert (record["status"], record["geofence_result"], record["branch"]) == ("pending", "unknown", "")
+    assert "지점 좌표 미등록" in record["memo"]
+
+
 def test_without_consent_location_is_not_stored_and_pending(client, db):
     # 서버 동의 없음 + 요청은 동의했다고 보내도 위치를 저장하지 않는다.
     response = _punch(client, "check-in", meters=10, consent=True)

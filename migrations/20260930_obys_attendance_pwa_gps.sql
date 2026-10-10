@@ -95,4 +95,17 @@ CREATE INDEX IF NOT EXISTS idx_yeoljeong_attendance_pwa_open
     ON yeoljeong_attendance_records (business_id, employee_email, work_date)
     WHERE source = 'pwa' AND check_out_at IS NULL AND deleted_at IS NULL;
 
+-- 5) 런타임 롤(카페24 acct-pg)이 새 컬럼을 읽고 쓰게 한다. 롤이 없는 DB(진아서버 등)는 건너뛴다.
+--   이미 테이블 단위 권한이 있으면 변화 없다(GRANT 는 멱등).
+DO $grant$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'acct_business_runtime_r5') THEN
+        GRANT SELECT, INSERT, UPDATE ON public.yeoljeong_attendance_records TO acct_business_runtime_r5;
+        GRANT SELECT, UPDATE ON public.yeoljeong_branches TO acct_business_runtime_r5;
+    ELSE
+        RAISE NOTICE 'role acct_business_runtime_r5 not found; grants skipped';
+    END IF;
+END
+$grant$;
+
 COMMIT;

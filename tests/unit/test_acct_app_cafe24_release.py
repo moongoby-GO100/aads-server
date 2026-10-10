@@ -21,6 +21,7 @@ ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts/deploy_acct_app_cafe24.sh"
 MARKER = "downloadSignedContractPdf"
 R8_IMAGE = "sha256:71e5e811c220efbe9bc527f36836e0cdc9638794ec01a6b1bbd5256ea5e8150e"
+MIG_GPS = "20260930_obys_attendance_pwa_gps.sql"
 MIG_HRDOC = "20261001_obys_hrdoc_expiry_integrity_superseded.sql"
 MIG_CLOBE = "20261003_obys_clobe_collection.sql"
 MIG_CLOBE_STORE = "20261008_obys_clobe_mcp_store.sql"
@@ -123,10 +124,10 @@ fake_cmd() {
       sql="$(cat)"
       if [[ $sql == */\*identity\*/* ]]; then echo t
       elif [[ $sql == */\*probe\*/* ]]; then
-        if [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *idx_yeoljeong_attendance_pwa_open* ]]; then key=gps; elif [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
         if [[ -f "$D/applied.$key" ]]; then echo t; else echo f; fi
       else
-        if [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *attendance_t* ]]; then key=gps; elif [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
         echo "MIGAPPLY $key" >> "$D/ssh.log"
         if [[ ${FAKE_MIG_FAIL:-} == "$key" ]]; then return 1; fi
         touch "$D/applied.$key"
@@ -226,6 +227,7 @@ class Box:
         for rel, text in {
             "app/main.py": "print('base')\n",
             "app/static/apps/obys/index.html": "<html>old</html>\n",
+            f"migrations/{MIG_GPS}": MIG_BODY.format(t="attendance_t"),
             f"migrations/{MIG_HRDOC}": MIG_BODY.format(t="hrdoc_t"),
             f"migrations/{MIG_CLOBE}": MIG_BODY.format(t="obys_clobe_t"),
             f"migrations/{MIG_CLOBE_STORE}": MIG_BODY.format(t="clobe_mcp_t"),
@@ -320,14 +322,14 @@ def test_happy_path_builds_once_migrates_with_backup_first_and_switches_port(box
     assert res["new"]["image_reused"] is False
     assert res["backups"]["pg_dump"] == "/root/acct-release-backups/obys_pre_x.dump"
     assert res["backups"]["apache_vhost"].startswith("/root/fb-cutover-backups/")
-    assert res["migrations"]["applied"] == [MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE]
+    assert res["migrations"]["applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE]
     assert res["cutover_kst"].endswith("KST")
     assert res["rollback_command"].endswith("rollback acct-app-candidate-r8 77")
     assert "/root/acct-release-backups/obys_pre_x.dump" in proc.stdout
     assert box.builds() == 1
 
     log = box.log()
-    assert log.index("OP pg_backup") < log.index("MIGAPPLY hrdoc") < log.index("MIGAPPLY clobe")
+    assert log.index("OP pg_backup") < log.index("MIGAPPLY gps") < log.index("MIGAPPLY hrdoc") < log.index("MIGAPPLY clobe")
     assert log.index("MIGAPPLY clobe") < log.index("MIGAPPLY clobe_store")
     assert log.index("MIGAPPLY clobe_store") < log.index("OP start_candidate") < log.index("OP apache_switch")
     assert res["unrelated_containers_changed"] == []
@@ -736,15 +738,22 @@ def test_time_budget_exhaustion_exits_124_before_any_change(box):
     assert box.builds() == 0 and box.port() == "8111" and box.mutations() == []
 
 
+def self_write(box, body):
+    path = box.tmp / "scan_case.sql"
+    path.write_text(body, encoding="utf-8")
+    return str(path)
+
+
 # ---- migrations ---------------------------------------------------------------------------------
 def test_already_applied_migrations_are_skipped_without_backup(box):
+    (box.fake / "applied.gps").touch()
     (box.fake / "applied.hrdoc").touch()
     (box.fake / "applied.clobe").touch()
     (box.fake / "applied.clobe_store").touch()
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     res = box.result(proc)
-    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE]
+    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE]
     assert "OP pg_backup" not in box.log() and "MIGAPPLY hrdoc" not in box.log()
     assert res["backups"]["pg_dump"] == ""
 
@@ -754,6 +763,47 @@ def test_only_the_pending_migration_is_applied(box):
     proc = box.run()
     assert proc.returncode == 0
     assert "MIGAPPLY hrdoc" not in box.log() and "MIGAPPLY clobe" in box.log()
+
+
+def test_gps_migration_is_in_the_allowlist_and_applied_alone_when_it_is_the_only_pending_one(box):
+    assert box.run("--call", "migration_allowed", MIG_GPS).returncode == 0
+    for key in ("hrdoc", "clobe", "clobe_store"):
+        (box.fake / f"applied.{key}").touch()
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    res = box.result(proc)
+    assert res["migrations"]["applied"] == [MIG_GPS]
+    assert res["migrations"]["already_applied"] == [MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE]
+    log = box.log()
+    assert log.index("OP pg_backup") < log.index("MIGAPPLY gps") < log.index("OP start_candidate")
+
+
+def test_gps_migration_probe_checks_every_added_column_and_the_runtime_role():
+    sql = subprocess.run(
+        ["bash", "-c", f'source <(sed -n "/^migration_probe_sql()/,/^}}/p" "{SCRIPT}"); migration_probe_sql {MIG_GPS}'],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert sql.startswith("/*probe*/")
+    migration = (ROOT / "migrations" / MIG_GPS).read_text(encoding="utf-8")
+    added = re.findall(r"ADD COLUMN IF NOT EXISTS (\w+) ", migration)
+    assert len(added) == 16 and "= 16" in sql
+    for column in added:
+        assert f"'{column}'" in sql, column
+    assert "geofence_result_check" in sql and "idx_yeoljeong_attendance_pwa_open" in sql
+    assert "acct_business_runtime_r5" in sql
+    assert "ALTER TABLE" not in sql and "INSERT INTO" not in sql
+
+
+def test_real_gps_migration_passes_the_safety_scan_and_is_idempotent_and_role_guarded(box):
+    path = ROOT / "migrations" / MIG_GPS
+    assert box.run("--call", "migration_scan", str(path)).returncode == 0
+    sql = path.read_text(encoding="utf-8")
+    code = re.sub(r"--[^\n]*", "", sql)
+    assert code.count("ADD COLUMN") == code.count("ADD COLUMN IF NOT EXISTS") == 16
+    assert "CREATE INDEX IF NOT EXISTS" in code
+    assert not re.search(r"\b(UPDATE|DELETE)\s+(FROM\s+)?yeoljeong_|NOT NULL|DEFAULT", code.replace("ON CONFLICT", ""))
+    assert "pg_roles WHERE rolname = 'acct_business_runtime_r5'" in code
+    assert re.search(r"GRANT SELECT, INSERT, UPDATE ON public\.yeoljeong_attendance_records TO acct_business_runtime_r5", code)
 
 
 def test_backup_failure_exits_7_and_applies_nothing(box):
@@ -776,6 +826,8 @@ def test_migration_failure_exits_7_without_candidate_or_cutover(box):
     "body",
     [
         "BEGIN;\nDROP TABLE x;\nCOMMIT;\n",
+        "BEGIN;\nALTER TABLE x DROP COLUMN y;\nCOMMIT;\n",
+        "BEGIN;\nDROP INDEX IF EXISTS i;\nCOMMIT;\n",
         "BEGIN;\nTRUNCATE x;\nCOMMIT;\n",
         "BEGIN;\nDELETE FROM x;\nCOMMIT;\n",
         "CREATE TABLE x (id int);\n",
@@ -793,6 +845,13 @@ def test_drop_inside_comment_is_not_a_false_positive(box):
     box.commit_release({f"migrations/{MIG_CLOBE}": "-- never DROP anything\nBEGIN;\nCREATE TABLE IF NOT EXISTS obys_clobe_t (id int); /* TRUNCATE no */\nCOMMIT;\n"})
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_drop_constraint_alone_is_allowed_but_other_drops_in_the_same_file_are_not(box):
+    ok = "BEGIN;\nDO $$ BEGIN EXECUTE 'ALTER TABLE x DROP CONSTRAINT c'; END $$;\nCOMMIT;\n"
+    assert box.run("--call", "migration_scan", self_write(box, ok)).returncode == 0
+    bad = "BEGIN;\nALTER TABLE x DROP CONSTRAINT c;\nDROP TABLE x;\nCOMMIT;\n"
+    assert box.run("--call", "migration_scan", self_write(box, bad)).returncode != 0
 
 
 def test_migration_outside_the_allowlist_is_refused(box):

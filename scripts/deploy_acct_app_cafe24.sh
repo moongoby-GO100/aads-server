@@ -83,6 +83,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o Ser
 
 # Fixed on purpose: nothing from the environment or the command line can add to it.
 ACCT_MIGRATION_ALLOWLIST=(
+    20260930_obys_attendance_pwa_gps.sql
     20261001_obys_hrdoc_expiry_integrity_superseded.sql
     20261003_obys_clobe_collection.sql
     20261008_obys_clobe_mcp_store.sql
@@ -219,12 +220,13 @@ migration_allowed() { # exact name from the fixed allowlist only
     return 1
 }
 
-migration_scan() { # fail-closed: transaction wrapper required, no DROP/TRUNCATE/DELETE (comments stripped)
+migration_scan() { # fail-closed: transaction wrapper required, no DROP/TRUNCATE/DELETE (comments stripped; DROP CONSTRAINT is data-neutral and allowed)
     python3 - "$1" <<'PY'
 import re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
 text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
 text = re.sub(r"--[^\n]*", " ", text)
+text = re.sub(r"\bDROP\s+CONSTRAINT\b", " ", text, flags=re.I)
 bad = []
 if re.search(r"\bDROP\b", text, re.I):
     bad.append("DROP")
@@ -679,6 +681,10 @@ ensure_image() {
 # ---- migrations ---------------------------------------------------------------------------------
 migration_probe_sql() { # prints SQL returning t when the migration is already applied
     case $1 in
+        20260930_obys_attendance_pwa_gps.sql)
+            # 지점 3 + 근태 13 컬럼, geofence_result CHECK, 열린 출근 인덱스, (역할이 있으면) 새 컬럼 권한.
+            echo "/*probe*/ SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND ((table_name='yeoljeong_branches' AND column_name IN ('latitude','longitude','geofence_radius_m')) OR (table_name='yeoljeong_attendance_records' AND column_name IN ('check_in_at','check_out_at','check_in_lat','check_in_lng','check_in_accuracy_m','check_out_lat','check_out_lng','check_out_accuracy_m','check_in_distance_m','check_out_distance_m','geofence_result','device_info','location_consent_at')))) = 16 AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.yeoljeong_attendance_records'::regclass AND conname='yeoljeong_attendance_records_geofence_result_check') AND to_regclass('public.idx_yeoljeong_attendance_pwa_open') IS NOT NULL AND (NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='acct_business_runtime_r5') OR (has_column_privilege('acct_business_runtime_r5','public.yeoljeong_attendance_records','check_in_at','SELECT') AND has_column_privilege('acct_business_runtime_r5','public.yeoljeong_attendance_records','check_in_at','INSERT') AND has_column_privilege('acct_business_runtime_r5','public.yeoljeong_attendance_records','geofence_result','UPDATE') AND has_column_privilege('acct_business_runtime_r5','public.yeoljeong_branches','latitude','SELECT') AND has_column_privilege('acct_business_runtime_r5','public.yeoljeong_branches','latitude','UPDATE')));"
+            ;;
         20261001_obys_hrdoc_expiry_integrity_superseded.sql)
             echo "/*probe*/ SELECT count(*) = 4 FROM information_schema.columns WHERE table_schema='public' AND table_name='yeoljeong_onboarding_documents' AND column_name IN ('expires_at','sha256','stored_path','superseded_by');"
             ;;
