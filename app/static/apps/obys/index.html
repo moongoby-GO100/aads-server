@@ -3,6 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#2f6fed">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="오비서">
+  <link rel="manifest" href="/static/apps/obys/manifest-app.webmanifest">
+  <link rel="apple-touch-icon" href="/static/apps/obys/icons/obys-clock-192.png">
   <title>오비서</title>
   <style>
     :root {
@@ -492,6 +497,23 @@
 
     body.signed-out .topbar-inner {
       max-width: 1180px;
+    }
+    .pwa-install-bar {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 0 18px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted, #5b6475);
+    }
+    .pwa-install-bar[hidden] { display: none; }
+    .pwa-install-bar button {
+      min-height: 32px;
+      padding: 0 10px;
+      font-size: 12px;
     }
 
     .auth-gate {
@@ -2737,6 +2759,11 @@
             </div>
           </div>
         </div>
+      </div>
+      <div id="pwaInstallBar" class="pwa-install-bar" hidden>
+        <span id="pwaInstallHint" hidden></span>
+        <button id="pwaInstallBtn" type="button" hidden>앱 설치</button>
+        <button id="pwaIosInstallBtn" type="button" hidden>앱 설치</button>
       </div>
     </header>
 
@@ -15456,5 +15483,44 @@
   <script src="/static/apps/obys/modules/ledger-details.js?v=20260921-r3"></script>
   <script src="/static/apps/obys/modules/clobe-collection.js?v=20261003-r5"></script>
   <script src="/static/apps/obys/modules/store-assistant-v2.js"></script>
+  <script>
+  (() => {
+    const bar = document.getElementById("pwaInstallBar");
+    const installBtn = document.getElementById("pwaInstallBtn");
+    const iosBtn = document.getElementById("pwaIosInstallBtn");
+    const hint = document.getElementById("pwaInstallHint");
+    if (!bar || !installBtn || !iosBtn || !hint) return;
+    const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    let deferredPrompt = null;
+    if (!standalone) {
+      if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
+        bar.hidden = false;
+        iosBtn.hidden = false;
+        iosBtn.addEventListener("click", () => {
+          hint.textContent = "Safari 아래쪽 공유 버튼 → '홈 화면에 추가'를 누르면 앱처럼 설치됩니다.";
+          hint.hidden = false;
+        });
+      }
+      window.addEventListener("beforeinstallprompt", event => {
+        event.preventDefault();
+        deferredPrompt = event;
+        bar.hidden = false;
+        installBtn.hidden = false;
+      });
+      installBtn.addEventListener("click", async () => {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice.catch(() => null);
+        deferredPrompt = null;
+        installBtn.hidden = true;
+        bar.hidden = true;
+      });
+      window.addEventListener("appinstalled", () => { bar.hidden = true; });
+    }
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/static/apps/obys/sw.js", { scope: "/static/apps/obys/" }).catch(() => {});
+    }
+  })();
+  </script>
 </body>
 </html>
