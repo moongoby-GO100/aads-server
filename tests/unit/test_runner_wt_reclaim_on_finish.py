@@ -447,8 +447,14 @@ def test_launcher_exports_and_requires_the_reclaimer():
 
 
 def test_sync_installs_reclaimer_next_to_runner_with_exec_mode():
+    # 39927ed6: 개별 install 대신 단일 번들(manifest)로 적용한다.
     text = SYNC.read_text(encoding="utf-8")
-    assert '"$(dirname "$remote_runner")/reclaim_runner_worktrees.sh" "0755"' in text
-    assert 'bash -n "$reclaim_src"' in text
-    # 원본이 없으면(옛 런처) 실패가 아니라 경고
-    assert "WARN ${name}: reclaim_runner_worktrees.sh 원본 없음" in text
+    assert "reclaim = script_dir / 'reclaim_runner_worktrees.sh'" in text
+    # 러너와 같은 디렉터리, 실행 권한 0755, 재시작 불필요(False)
+    assert "rows.append((reclaim, directory / reclaim.name, 0o755, False))" in text
+    # 원본이 없으면(옛 런처) 번들에서 빠질 뿐 실패하지 않는다
+    assert "if reclaim.is_file():" in text
+    # 원격 적용 측 허용 목록과 .sh 구문 검사
+    assert "'reclaim_runner_worktrees.sh', 'aag-brief.py'" in text
+    assert "row['destination'].endswith('.sh')" in text
+    assert "['bash', '-n', str(staged)]" in text
