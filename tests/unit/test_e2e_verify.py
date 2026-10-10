@@ -4,6 +4,7 @@ import types
 
 import pytest
 
+from app.services.document_refs import with_rdoc_block
 from app.services.e2e_verify import (
     _renders_nothing,
     assert_screen_evidence_gate,
@@ -185,6 +186,46 @@ def test_screen_gate_ignores_local_shell_copy():
         instruction,
         ["scripts/pipeline-runner.sh.local", "aads-dashboard/src/components/i18n/ko.json"],
     )
+
+
+_RUNNER_22EA_FILES = [
+    "scripts/go100_orderbook_archive.py",
+    "scripts/go100_orderbook_archive_daily.py",
+    "tests/unit/test_go100_orderbook_archive.py",
+    "scripts/cron/go100_orderbook_archive_daily.cron.example",
+]
+
+
+def test_example_templates_render_nothing():
+    assert _renders_nothing("scripts/cron/x.cron.example") is True
+    assert _renders_nothing("dashboard/src/components/a.tsx.example") is True
+    assert _renders_nothing("aads-dashboard/static/x.html.example") is True
+    assert _renders_nothing(".env.example") is True
+    assert not _renders_nothing("dashboard/src/components/a.tsx")
+
+
+def test_rdoc_tail_alone_does_not_make_screen_work():
+    body = "호가 이관기 포트 분리. 백엔드 스크립트만 수정한다."
+    instruction = with_rdoc_block(body)
+    assert "화면 제목" in instruction
+    assert screen_verification_required(instruction, _RUNNER_22EA_FILES) is False
+    # No file list: the tail must not be what trips the marker scan.
+    assert screen_verification_required(instruction, []) is False
+    assert screen_verification_required(instruction, None) is False
+
+
+def test_rdoc_tail_does_not_hide_body_screen_markers():
+    instruction = with_rdoc_block("로그인 화면 변경 작업")
+    assert screen_verification_required(instruction, ["frontend/components/Login.tsx"]) is True
+    assert screen_verification_required(instruction, None) is True
+    # Body text after a blank-line-delimited tail is still scanned.
+    tail_first = with_rdoc_block("백엔드 수정") + "\n\n\n화면 변경 요청"
+    assert screen_verification_required(tail_first, None) is True
+
+
+def test_rdoc_tail_with_ui_file_still_requires_screen_evidence():
+    instruction = with_rdoc_block("컴포넌트 수정")
+    assert screen_verification_required(instruction, ["frontend/components/x.tsx"]) is True
 
 
 def test_evidence_contract_requires_dom_and_capture_success():

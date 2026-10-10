@@ -12,6 +12,8 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 
+from app.services.document_refs import RDOC_BLOCK_MARKER
+
 logger = logging.getLogger(__name__)
 
 _SCREEN_MARKERS = (
@@ -29,7 +31,8 @@ _SCREEN_ALLOW_SUFFIXES = _SCREEN_SUFFIXES + (".svg",)
 _STATIC_SCRIPT_SUFFIXES = (".js", ".mjs")
 _I18N_PATH_MARKERS = ("/locales/", "/locale/", "/i18n/", "/messages/", "/lang/", "/translations/")
 _NON_RENDERING_SUFFIXES = (
-    ".py", ".sql", ".md", ".txt", ".yml", ".yaml", ".toml", ".cfg", ".ini", ".sh", ".env.example", ".local",
+    ".py", ".sql", ".md", ".txt", ".yml", ".yaml", ".toml", ".cfg", ".ini", ".sh", ".example", ".local",
+    # *.example templates (.env.example, x.cron.example, a.tsx.example) are never served to a browser.
     # Drafts/backups/patches are never served to a browser, even when the stem is a UI file (a.tsx.bak).
     ".sql_draft", ".md_draft", ".draft", ".bak", ".orig", ".patch", ".diff",
     # systemd units and daemon config are host configuration, not pages.
@@ -83,11 +86,21 @@ def _is_screen_file(raw_path: Any) -> bool:
     return False
 
 
+def _strip_rdoc_block(instruction: str) -> str:
+    """Drop the auto-appended R-DOC tail ('화면 제목' wording) so it cannot trip the screen markers."""
+    start = instruction.find(RDOC_BLOCK_MARKER)
+    if start < 0:
+        return instruction
+    end = instruction.find("\n\n\n", start)
+    tail = "" if end < 0 else instruction[end:]
+    return instruction[:start] + tail
+
+
 def screen_verification_required(instruction: str, changed_files: list[str] | None = None) -> bool:
     """Screen work = at least one changed file is a UI file; instruction keywords apply only without a file list."""
     if changed_files:
         return any(_is_screen_file(path) for path in changed_files)
-    text = f" {(instruction or '').lower()} "
+    text = f" {_strip_rdoc_block(instruction or '').lower()} "
     return any(marker in text for marker in _SCREEN_MARKERS)
 
 
