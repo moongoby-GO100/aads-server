@@ -4220,3 +4220,179 @@ async def ops_ai_response_errors(
         "filters": {"since": since.isoformat(), "kind": kind},
         "generated_at": datetime.now(KST).isoformat(),
     }
+
+
+# ── 서버(러너 호스트)별 실행 정책: 동시 실행·무거운 명령 슬롯 (AADS-DASH-RUNNER-HOST-POLICY-UI-20261010) ──
+# 테이블·감사 트리거는 migrations/20261010_runner_host_policy.sql. revision 은 트리거가 올린다.
+# 러너가 사이클마다 읽어 반영한다(scripts/pipeline-runner.sh runner_host_policy_refresh).
+_RUNNER_POLICY_LIMITS = {
+    "max_concurrent": {"min": 1, "max": 200},
+    "heavy_slots": {"min": 0, "max": 64},
+    "urgent_reserved_slots": {"min": 0, "max": 64},
+    "low_priority_nice": {"min": 0, "max": 19},
+}
+
+
+class RunnerHostPolicyUpdate(BaseModel):
+    host: str = Field(..., min_length=1, max_length=80)
+    max_concurrent: Optional[int] = Field(None, ge=1, le=200)
+    heavy_slots: int = Field(0, ge=0, le=64)
+    urgent_reserved_slots: int = Field(0, ge=0, le=64)
+    expected_revision: Optional[int] = Field(
+        None, ge=1, description="읽은 시점의 revision. 정책 행이 아직 없는 호스트면 null"
+    )
+
+
+def _runner_policy_row(row: Any) -> Optional[Dict[str, Any]]:
+    if row is None or row["revision"] is None:
+        return None
+    return {
+        "max_concurrent": row["max_concurrent"],
+        "heavy_slots": row["heavy_slots"],
+        "urgent_reserved_slots": row["urgent_reserved_slots"],
+        "low_priority_nice": row["low_priority_nice"],
+        "revision": int(row["revision"]),
+        "updated_by": row["updated_by"],
+        "updated_at": _iso_or_none(row["updated_at"]),
+    }
+
+
+@router.get(
+    "/ops/runner-host-policy",
+    dependencies=[Depends(require_internal_admin)],
+)
+async def get_runner_host_policy():
+    """서버별 러너 정책 + 현재 실행·대기 수. 정책 행이 없는 호스트는 policy=null(러너 env 값 그대로)."""
+    from app.core.db_pool import get_pool
+
+    pool = get_pool()
+    try:
+        async with pool.acquire() as conn:
+            hosts = await conn.fetch(
+                """
+                SELECT COALESCE(h.host, p.host) AS host, h.projects, h.engine_mode,
+                       h.max_concurrent AS env_max_concurrent,
+                       EXTRACT(EPOCH FROM (NOW() - h.last_seen_at))::int AS seen_ago,
+                       p.max_concurrent, p.heavy_slots, p.urgent_reserved_slots,
+                       p.low_priority_nice, p.revision, p.updated_by, p.updated_at
+                FROM pipeline_runner_hosts h
+                FULL OUTER JOIN runner_host_policy p ON p.host = h.host
+                ORDER BY 1
+                """
+            )
+            running = await conn.fetch(
+                """
+                SELECT runner_host, COUNT(*)::int AS cnt
+                FROM pipeline_jobs
+                WHERE status IN ('running', 'claimed') AND COALESCE(runner_host, '') <> ''
+                GROUP BY runner_host
+                """
+            )
+            queued = await conn.fetch(
+                "SELECT project, COUNT(*)::int AS cnt FROM pipeline_jobs WHERE status = 'queued' GROUP BY project"
+            )
+    except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
+        raise HTTPException(status_code=503, detail="runner_host_policy migration not applied")
+    except Exception as e:
+        logger.error("ops_runner_host_policy_get_error", error=str(e))
+        raise HTTPException(status_code=500, detail="runner host policy query failed")
+
+    running_by_host = {r["runner_host"]: int(r["cnt"]) for r in running}
+    queued_by_project = {r["project"]: int(r["cnt"]) for r in queued}
+    items = []
+    for r in hosts:
+        projects = sorted({p.strip() for p in str(r["projects"] or "").split(",") if p.strip()})
+        seen = r["seen_ago"]
+        items.append({
+            "host": r["host"],
+            "projects": projects,
+            "engine_mode": r["engine_mode"] or "",
+            "env_max_concurrent": r["env_max_concurrent"],
+            "alive": None if seen is None else int(seen) < 600,
+            "running": running_by_host.get(r["host"], 0),
+            # 대기 작업은 claim 전이라 runner_host 가 비어 있다 — 호스트 담당 프로젝트 기준 합계다.
+            "queued": sum(queued_by_project.get(p, 0) for p in projects),
+            "policy": _runner_policy_row(r),
+        })
+    return {
+        "hosts": items,
+        "limits": _RUNNER_POLICY_LIMITS,
+        "apply_hint_sec": 10,
+        "generated_at": datetime.now(KST).isoformat(),
+    }
+
+
+@router.put("/ops/runner-host-policy")
+async def put_runner_host_policy(
+    body: RunnerHostPolicyUpdate,
+    current_user: dict = Depends(require_internal_admin),
+):
+    """낙관적 잠금 갱신. expected_revision 이 현재 revision 과 다르면 409. low_priority_nice 는 건드리지 않는다."""
+    from app.core.db_pool import get_pool
+
+    if body.urgent_reserved_slots > body.heavy_slots:
+        raise HTTPException(
+            status_code=422,
+            detail="urgent_reserved_slots must be <= heavy_slots",
+        )
+    updated_by = str(current_user.get("email") or current_user.get("user_id") or "unknown")[:120]
+    pool = get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                known = await conn.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM pipeline_runner_hosts WHERE host = $1) "
+                    "OR EXISTS (SELECT 1 FROM runner_host_policy WHERE host = $1)",
+                    body.host,
+                )
+                if not known:
+                    raise HTTPException(status_code=404, detail="unknown runner host")
+                if body.expected_revision is None:
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO runner_host_policy
+                            (host, max_concurrent, heavy_slots, urgent_reserved_slots, updated_by)
+                        VALUES ($1, $2, $3, $4, $5)
+                        ON CONFLICT (host) DO NOTHING
+                        RETURNING *
+                        """,
+                        body.host, body.max_concurrent, body.heavy_slots,
+                        body.urgent_reserved_slots, updated_by,
+                    )
+                else:
+                    row = await conn.fetchrow(
+                        """
+                        UPDATE runner_host_policy
+                           SET max_concurrent = $2, heavy_slots = $3,
+                               urgent_reserved_slots = $4, updated_by = $5
+                         WHERE host = $1 AND revision = $6
+                        RETURNING *
+                        """,
+                        body.host, body.max_concurrent, body.heavy_slots,
+                        body.urgent_reserved_slots, updated_by, body.expected_revision,
+                    )
+                if row is None:
+                    current = await conn.fetchval(
+                        "SELECT revision FROM runner_host_policy WHERE host = $1", body.host
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "revision_conflict",
+                            "message": "정책이 다른 곳에서 바뀌었습니다. 새로고침 후 다시 시도하세요.",
+                            "current_revision": current,
+                        },
+                    )
+    except HTTPException:
+        raise
+    except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
+        raise HTTPException(status_code=503, detail="runner_host_policy migration not applied")
+    except Exception as e:
+        logger.error("ops_runner_host_policy_put_error", error=str(e))
+        raise HTTPException(status_code=500, detail="runner host policy update failed")
+
+    logger.info(
+        "ops_runner_host_policy_updated",
+        host=body.host, revision=int(row["revision"]), updated_by=updated_by,
+    )
+    return {"ok": True, "host": body.host, "policy": _runner_policy_row(row), "apply_hint_sec": 10}
