@@ -2474,6 +2474,8 @@ async def list_join_workplaces() -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     if _db_available():
         for row in await _db_join_workplace_businesses():
+            if _is_e2e_test_business(row.get("id"), row.get("name")):
+                continue
             branches = [str(item) for item in row.get("branches") or []]
             items.append(
                 {"business_id": str(row["id"]), "business_name": str(row["name"]), **_workplace_choices(str(row["name"]), branches, row.get("workplace_mode"))}
@@ -2887,6 +2889,16 @@ JOIN_NAME_REQUIRED_ERROR = "직원 이름(실명)을 입력해 주십시오"
 JOIN_NAME_EMAIL_ERROR = "이름에 이메일 아이디를 넣지 말고 실명을 입력해 주십시오"
 
 
+E2E_BUSINESS_ID_PREFIX = "biz-e2e-"
+E2E_BUSINESS_NAME_PREFIX = "E2E-"
+UNKNOWN_JOIN_BUSINESS_ERROR = "등록되지 않은 사업자입니다"
+
+
+def _is_e2e_test_business(business_id: Any, name: Any = "") -> bool:
+    """E2E 시험 사업자(id 접두 'biz-e2e-' 또는 상호 'E2E-' 시작). 가입 화면 공개 목록과 가입 검증이 같은 기준을 쓴다."""
+    return str(business_id or "").strip().startswith(E2E_BUSINESS_ID_PREFIX) or str(name or "").strip().startswith(E2E_BUSINESS_NAME_PREFIX)
+
+
 def _validate_join_business_branch(business_id: str, branch: str, *, require_branch: bool = False) -> None:
     """가입요청의 (사업자, 근무지) 조합이 가입 화면 목록에 있는지 판정한다. accept_invite 도 _prepare_join_request 로 여기를 거친다.
 
@@ -2895,13 +2907,15 @@ def _validate_join_business_branch(business_id: str, branch: str, *, require_bra
     파일 모드(DB 없음)는 종전 코드 상수 판정을 그대로 쓴다. 테넌트 격리 판정은 여기가 아니라
     _join_request_scope·_owned_hr_record 가 맡는다.
     """
+    if _is_e2e_test_business(business_id):
+        raise HTTPException(status_code=400, detail=UNKNOWN_JOIN_BUSINESS_ERROR)
     if not (business_id and _db_available()):
         if branch and (business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id):
             raise HTTPException(status_code=400, detail=JOIN_BRANCH_MISMATCH_ERROR)
         return
     view = _business_workplaces(business_id)
-    if view is None:
-        raise HTTPException(status_code=400, detail="등록되지 않은 사업자입니다")
+    if view is None or _is_e2e_test_business(business_id, view["name"]):
+        raise HTTPException(status_code=400, detail=UNKNOWN_JOIN_BUSINESS_ERROR)
     if not branch:
         if require_branch:
             raise HTTPException(status_code=400, detail="근무 점포를 선택해 주십시오")

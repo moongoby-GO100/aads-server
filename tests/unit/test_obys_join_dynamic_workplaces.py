@@ -29,6 +29,11 @@ OFFICE_BIZ = "biz-office-danharu"
 UNLINKED_BIZ = "biz-unlinked-chic"
 EXPLICIT_OFFICE_BIZ = "biz-explicit-office"
 EXPLICIT_BRANCH_BIZ = "biz-explicit-branches"
+CHICBLACK_BIZ = "biz-chicblack"
+OBYWAI_BIZ = "biz-obywai"
+E2E_ID_BIZ = "biz-e2e-m1-a"
+E2E_NAME_BIZ = "biz-renamed-test"
+E2E_PREFIX_ONLY_BIZ = "biz-e2e-m1-b"
 
 BUSINESSES = {
     "biz-junghwa": ("열정국밥 중화점", ["중화점"], ""),
@@ -37,6 +42,11 @@ BUSINESSES = {
     OFFICE_BIZ: ("단하루", [], ""),
     EXPLICIT_OFFICE_BIZ: ("명시사무실", ["본점"], "office"),
     EXPLICIT_BRANCH_BIZ: ("명시매장", [], "branches"),
+    CHICBLACK_BIZ: ("주식회사 시크블랙", [], ""),
+    OBYWAI_BIZ: ("주식회사 오비와이", [], ""),
+    E2E_ID_BIZ: ("E2E-오비서시험A", ["시험점A"], ""),
+    E2E_NAME_BIZ: ("E2E-이름만시험", [], ""),
+    E2E_PREFIX_ONLY_BIZ: ("시험용 이름", [], ""),
 }
 ADDRESSES = {OFFICE_BIZ: "서울특별시 어딘가 1층"}
 MAPPING = {key: EMPLOYER for key in BUSINESSES}
@@ -159,6 +169,50 @@ def test_explicit_mode_overrides_the_branch_count(db):
     assert _workplace_names(listing[EXPLICIT_OFFICE_BIZ]) == ["사무실"]
     assert listing[EXPLICIT_BRANCH_BIZ]["mode"] == "branches"
     assert listing[EXPLICIT_BRANCH_BIZ]["workplaces"] == []
+
+
+# 2-1. E2E 시험 사업자는 공개 목록에서 빠진다 (id 접두 'biz-e2e-' 또는 상호 'E2E-' 시작)
+def test_e2e_test_businesses_are_hidden_from_the_public_listing(db):
+    listing = _listing()
+    for hidden in (E2E_ID_BIZ, E2E_NAME_BIZ, E2E_PREFIX_ONLY_BIZ):
+        assert hidden not in listing
+    assert {"biz-junghwa", "biz-sungshin", "biz-mia", OFFICE_BIZ} <= set(listing)
+
+
+@pytest.mark.parametrize("business_id", [E2E_ID_BIZ, E2E_NAME_BIZ, E2E_PREFIX_ONLY_BIZ])
+@pytest.mark.parametrize("branch", ["", "사무실", "시험점A"])
+def test_join_to_an_e2e_test_business_is_rejected(db, business_id, branch):
+    with pytest.raises(HTTPException) as excinfo:
+        _join(business_id, branch)
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "등록되지 않은 사업자입니다"
+    assert db == []
+
+
+def test_e2e_test_business_name_check_is_exact_prefix():
+    assert svc._is_e2e_test_business("biz-e2e-x")
+    assert svc._is_e2e_test_business("biz-x", "E2E-시험")
+    assert not svc._is_e2e_test_business("biz-junghwa", "열정국밥 중화점")
+    assert not svc._is_e2e_test_business("biz-chicblack", "주식회사 시크블랙")
+    assert not svc._is_e2e_test_business("biz-x", "my E2E-시험")
+
+
+# 2-2. 지점 없는 시크블랙·오비와이는 목록에 남고 근무지는 '사무실' 로 자동 지정된다
+@pytest.mark.parametrize(("business_id", "name"), [(CHICBLACK_BIZ, "주식회사 시크블랙"), (OBYWAI_BIZ, "주식회사 오비와이")])
+def test_zero_branch_company_is_listed_as_office(db, business_id, name):
+    item = _listing()[business_id]
+    assert item["business_name"] == name
+    assert item["mode"] == "office"
+    assert item["workplaces"] == [{"branch": "사무실", "label": "사무실"}]
+
+
+@pytest.mark.parametrize("business_id", [CHICBLACK_BIZ, OBYWAI_BIZ])
+@pytest.mark.parametrize("sent", ["", "사무실"])
+def test_zero_branch_company_join_is_saved_as_office(db, business_id, sent):
+    saved = _join(business_id, sent)
+    assert saved["business_id"] == business_id
+    assert saved["branch"] == "사무실"
+    assert saved["tenant_id"] == EMPLOYER
 
 
 # 3. 테넌트 미연결 사업자는 노출하지 않는다 — 실제 SQL 이 매핑 테이블과 JOIN 하는지까지 확인
