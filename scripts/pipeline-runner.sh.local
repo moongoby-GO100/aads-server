@@ -607,6 +607,390 @@ runner_job_receipt_fields() {
     return 0
 }
 
+# ── 서버별 정책(runner_host_policy) · 무거운 명령 lane (AADS-RUNNER-LR04-HEAVY-LANE-20261010) ──
+# 행이 없거나 조회가 실패하면 지금까지의 env 동작 그대로다. 작업 동시 수 상한을 줄이는 코드가 아니다:
+# CPU 큰 명령(pytest/npm/npx/tsc/next/build 형 node/run_unit_tests.sh)만 서버별 flock 슬롯으로 직렬화한다.
+# 실행 중인 작업은 종료하지 않는다. 모든 헬퍼는 실패해도 0 으로 끝난다(set -e 환경).
+RUNNER_HEAVY_DIR="${RUNNER_HEAVY_DIR:-/run/aads-runner-heavy}"
+RUNNER_POLICY_REFRESH_SEC="${RUNNER_POLICY_REFRESH_SEC:-15}"
+RUNNER_POLICY_BASE_SET=0
+RUNNER_POLICY_LAST_EPOCH=0
+RUNNER_POLICY_ENV_MAX_SERVER=""
+RUNNER_POLICY_ENV_MAX_GLOBAL=""
+RUNNER_POLICY_ENV_NICE=""
+RUNNER_POLICY_APPLIED_SIG="|||||"
+RUNNER_POLICY_WARNED=""
+RUNNER_POLICY_FAIL_LOGGED=0
+
+# $1=값 $2=최소 $3=최대 — 정수이고 범위 안이면 0
+runner_policy_int_in_range() {
+    [[ "${1:-}" =~ ^[0-9]{1,6}$ ]] || return 1
+    (( 10#$1 >= $2 && 10#$1 <= $3 )) || return 1
+    return 0
+}
+
+# 범위 밖 값은 무시하고 revision 당 한 번만 로그를 남긴다.
+runner_policy_warn_once() {
+    local key="${1}:${2}"
+    [[ ",${RUNNER_POLICY_WARNED}," == *",${key},"* ]] && return 0
+    RUNNER_POLICY_WARNED+="${RUNNER_POLICY_WARNED:+,}${key}"
+    log "  HOST_POLICY_IGNORED host=${RUNNER_HOST_NAME} revision=${1} field=${2} value='${3}' reason=${4}"
+    return 0
+}
+
+# 정책 값을 현재 셸에 적용한다. 인자: revision max_concurrent heavy_slots urgent_reserved nice
+# revision 이 비면 "행 없음" — baseline(env)으로 되돌린다.
+runner_host_policy_apply() {
+    local rev="${1:-}" maxc="${2:-}" heavy="${3:-}" urgent="${4:-}" nice_v="${5:-}"
+    local sig="${rev}|${maxc}|${heavy}|${urgent}|${nice_v}" first=0
+    if (( RUNNER_POLICY_BASE_SET == 0 )); then
+        first=1
+        RUNNER_POLICY_ENV_MAX_SERVER="${MAX_CONCURRENT_SERVER:-}"
+        RUNNER_POLICY_ENV_MAX_GLOBAL="${MAX_CONCURRENT_GLOBAL:-}"
+        RUNNER_POLICY_ENV_NICE="${RUNNER_LOW_PRIORITY_NICE:-}"
+        RUNNER_POLICY_BASE_SET=1
+    fi
+    # 첫 호출은 같은 값이어도 끝까지 간다 — 재기동 사이에 정책 행이 사라졌다면 남은 policy 파일을 지워야 한다.
+    [[ "$sig" == "$RUNNER_POLICY_APPLIED_SIG" && $first -eq 0 ]] && return 0
+
+    local use_maxc="" use_heavy=0 use_urgent=0 use_nice=""
+    if [[ -n "$rev" ]]; then
+        if [[ -n "$maxc" ]]; then
+            if runner_policy_int_in_range "$maxc" 1 200; then use_maxc=$((10#$maxc))
+            else runner_policy_warn_once "$rev" max_concurrent "$maxc" "out_of_range_1_200"; fi
+        fi
+        if [[ -n "$heavy" ]]; then
+            if runner_policy_int_in_range "$heavy" 0 64; then use_heavy=$((10#$heavy))
+            else runner_policy_warn_once "$rev" heavy_slots "$heavy" "out_of_range_0_64"; fi
+        fi
+        if [[ -n "$urgent" ]]; then
+            if runner_policy_int_in_range "$urgent" 0 64; then use_urgent=$((10#$urgent))
+            else runner_policy_warn_once "$rev" urgent_reserved_slots "$urgent" "out_of_range_0_64"; fi
+        fi
+        if [[ -n "$nice_v" ]]; then
+            if runner_policy_int_in_range "$nice_v" 0 19; then use_nice=$((10#$nice_v))
+            else runner_policy_warn_once "$rev" low_priority_nice "$nice_v" "out_of_range_0_19"; fi
+        fi
+    fi
+
+    # 작업 동시 수. MAX_CONCURRENT_SERVER 를 쓰는 호스트는 그 값을, 레거시(GLOBAL) 호스트는 GLOBAL 을 대체한다.
+    # 모드를 바꾸지 않는다 — 레거시 호스트에 SERVER 모드를 켜면 claim 필터 요구사항이 달라진다.
+    MAX_CONCURRENT_SERVER="$RUNNER_POLICY_ENV_MAX_SERVER"
+    MAX_CONCURRENT_GLOBAL="$RUNNER_POLICY_ENV_MAX_GLOBAL"
+    if [[ -n "$use_maxc" ]]; then
+        if [[ -n "$RUNNER_POLICY_ENV_MAX_SERVER" ]]; then MAX_CONCURRENT_SERVER="$use_maxc"
+        else MAX_CONCURRENT_GLOBAL="$use_maxc"; fi
+    fi
+    if [[ -n "$use_nice" ]]; then RUNNER_LOW_PRIORITY_NICE="$use_nice"; else RUNNER_LOW_PRIORITY_NICE="$RUNNER_POLICY_ENV_NICE"; fi
+    [[ -n "$RUNNER_LOW_PRIORITY_NICE" ]] || unset RUNNER_LOW_PRIORITY_NICE
+    [[ -n "$MAX_CONCURRENT_GLOBAL" ]] || unset MAX_CONCURRENT_GLOBAL
+
+    (( use_urgent > use_heavy )) && use_urgent=$use_heavy
+    if (( use_heavy > 0 && use_urgent >= use_heavy )); then
+        log "  HOST_POLICY_WARN host=${RUNNER_HOST_NAME} revision=${rev} urgent_reserved_slots=${use_urgent} >= heavy_slots=${use_heavy} — 일반 작업은 슬롯을 못 잡고 대기 상한 후 실행된다"
+    fi
+    runner_heavy_publish_policy "$use_heavy" "$use_urgent" "${rev:-0}" || true
+
+    local prev_sig="$RUNNER_POLICY_APPLIED_SIG"
+    RUNNER_POLICY_APPLIED_SIG="$sig"
+    if [[ "$sig" == "$prev_sig" ]]; then
+        :
+    elif [[ -n "$rev" ]]; then
+        log "  HOST_POLICY_APPLIED host=${RUNNER_HOST_NAME} revision=${rev} max_concurrent=${use_maxc:-env} heavy_slots=${use_heavy} urgent_reserved=${use_urgent} nice=${use_nice:-env}"
+    else
+        log "  HOST_POLICY_CLEARED host=${RUNNER_HOST_NAME} — 정책 행 없음, env 설정으로 복귀"
+    fi
+    return 0
+}
+
+# 사이클마다 호출한다(RUNNER_POLICY_REFRESH_SEC 로 간격 제한). 조회 실패는 마지막 값을 유지한다.
+runner_host_policy_refresh() {
+    local now="${EPOCHSECONDS:-$(date +%s)}"
+    (( now - RUNNER_POLICY_LAST_EPOCH >= RUNNER_POLICY_REFRESH_SEC )) || return 0
+    RUNNER_POLICY_LAST_EPOCH=$now
+    local ready="" row="" rev="" maxc="" heavy="" urgent="" nice_v=""
+    if ! ready=$(db_exec "SELECT to_regclass('public.runner_host_policy') IS NOT NULL;" 2>/dev/null); then
+        if (( RUNNER_POLICY_FAIL_LOGGED == 0 )); then
+            log "  HOST_POLICY_READ_FAILED host=${RUNNER_HOST_NAME} — 마지막 값 유지(없으면 env)"
+            RUNNER_POLICY_FAIL_LOGGED=1
+        fi
+        return 0
+    fi
+    ready="${ready//[[:space:]]/}"
+    if [[ "$ready" == "t" ]]; then
+        if ! row=$(db_exec "SELECT revision, COALESCE(max_concurrent::text,''), COALESCE(heavy_slots::text,''),
+                                   COALESCE(urgent_reserved_slots::text,''), COALESCE(low_priority_nice::text,'')
+                            FROM runner_host_policy WHERE host=$(sql_escape "$RUNNER_HOST_NAME");" 2>/dev/null); then
+            if (( RUNNER_POLICY_FAIL_LOGGED == 0 )); then
+                log "  HOST_POLICY_READ_FAILED host=${RUNNER_HOST_NAME} — 마지막 값 유지(없으면 env)"
+                RUNNER_POLICY_FAIL_LOGGED=1
+            fi
+            return 0
+        fi
+        row="${row//$'\n'/}"
+        IFS=$'\x1e' read -r rev maxc heavy urgent nice_v <<< "$row" || true
+        [[ "$rev" =~ ^[0-9]+$ ]] || rev=""
+    fi
+    RUNNER_POLICY_FAIL_LOGGED=0
+    runner_host_policy_apply "$rev" "$maxc" "$heavy" "$urgent" "$nice_v"
+    return 0
+}
+
+# shim 이 읽는 policy 파일을 쓰거나(슬롯>0) 지운다(슬롯 비었음/0 → shim 은 그대로 통과). 인자: heavy urgent revision
+runner_heavy_publish_policy() {
+    local heavy="${1:-0}" urgent="${2:-0}" rev="${3:-0}" f="$RUNNER_HEAVY_DIR/policy" tmp=""
+    if (( heavy <= 0 )); then
+        rm -f "$f" 2>/dev/null || true
+        return 0
+    fi
+    if ! runner_heavy_install_shims; then
+        log "  HEAVY_LANE_DISABLED dir=${RUNNER_HEAVY_DIR} — shim 설치 실패, 제한 없이 실행"
+        rm -f "$f" 2>/dev/null || true
+        return 0
+    fi
+    tmp="${f}.tmp.$$"
+    printf 'slots=%s\nurgent=%s\nrevision=%s\n' "$heavy" "$urgent" "$rev" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || {
+        rm -f "$tmp" 2>/dev/null || true
+        log "  HEAVY_LANE_DISABLED dir=${RUNNER_HEAVY_DIR} — policy 파일 기록 실패"
+    }
+    return 0
+}
+
+# PATH 앞에 둘 shim 디렉터리를 만든다. 스크립트 한 벌만 동기화되는 호스트에서도 동작하도록 본문을 여기에 내장한다.
+# 본문은 4칸 들여써 두었다 — 설치할 때 벗긴다(함수 끝 '}' 를 줄 첫 칸에 두지 않기 위함).
+runner_heavy_install_shims() {
+    local bin="$RUNNER_HEAVY_DIR/bin" core tmp n
+    core="$bin/.aads-heavy-shim"
+    mkdir -p "$bin" "$RUNNER_HEAVY_DIR/events" 2>/dev/null || return 1
+    tmp="$core.tmp.$$"
+    { printf '#!/bin/bash\n'; sed 's/^    //' <<'EOF_AADS_HEAVY_SHIM'
+    # AADS runner heavy-lane shim (AADS-RUNNER-LR04-HEAVY-LANE-20261010)
+    self_raw=$(dirname -- "$0")
+    self_real=$(cd -- "$self_raw" 2>/dev/null && pwd -P)
+    name=$(basename -- "$0")
+    lane=${AADS_HEAVY_LANE_DIR:-/run/aads-runner-heavy}
+
+    find_real() {
+        local d IFS=:
+        for d in $PATH; do
+            [ -n "$d" ] || continue
+            [ "$d" = "$self_raw" ] && continue
+            [ "$d" = "$self_real" ] && continue
+            if [ -x "$d/$1" ] && [ ! -d "$d/$1" ]; then printf '%s' "$d/$1"; return 0; fi
+        done
+        return 1
+    }
+
+    is_heavy() {
+        case "$name" in
+            pytest|tsc|next|npx) return 0 ;;
+            npm)
+                local a skip=0
+                for a in "$@"; do
+                    if [ "$skip" = 1 ]; then skip=0; continue; fi
+                    case "$a" in
+                        --prefix|--workspace|-w|--cwd|--userconfig|--cache) skip=1 ;;
+                        -*) ;;
+                        run|run-script|rum|urun|test|tst|t|ci|install|i|add|exec|x|rebuild|build) return 0 ;;
+                        *) return 1 ;;
+                    esac
+                done
+                return 1 ;;
+            node)
+                local a n=0 tool=0 build=0
+                for a in "$@"; do
+                    n=$((n + 1)); [ "$n" -le 8 ] || break
+                    case "$a" in
+                        */next/dist/bin/next|*/.bin/next|*/bin/next|next) tool=1 ;;
+                        */typescript/bin/tsc|*/typescript/lib/tsc.js|*/.bin/tsc|*/bin/tsc|tsc) tool=2 ;;
+                        build) build=1 ;;
+                    esac
+                done
+                [ "$tool" = 2 ] && return 0
+                [ "$tool" = 1 ] && [ "$build" = 1 ] && return 0
+                return 1 ;;
+            bash)
+                case "${1:-}" in */run_unit_tests.sh|run_unit_tests.sh) return 0 ;; esac
+                case "${2:-}" in */run_unit_tests.sh|run_unit_tests.sh) return 0 ;; esac
+                return 1 ;;
+        esac
+        return 1
+    }
+
+    real=$(find_real "$name") || { echo "$name: command not found" >&2; exit 127; }
+
+    # 이미 슬롯을 쥔 명령의 자식(npm test -> pytest 등)은 다시 기다리지 않는다.
+    [ -z "${AADS_HEAVY_HELD:-}" ] || exec "$real" "$@"
+    is_heavy "$@" || exec "$real" "$@"
+    [ -r "$lane/policy" ] || exec "$real" "$@"
+    command -v flock >/dev/null 2>&1 || exec "$real" "$@"
+
+    slots=""; urgent_n=0; rev=""
+    while IFS='=' read -r k v; do
+        case "$k" in slots) slots=$v ;; urgent) urgent_n=$v ;; revision) rev=$v ;; esac
+    done < "$lane/policy"
+    case "$slots" in ''|*[!0-9]*) exec "$real" "$@" ;; esac
+    [ "$slots" -gt 0 ] || exec "$real" "$@"
+    case "$urgent_n" in ''|*[!0-9]*) urgent_n=0 ;; esac
+    case "$rev" in ''|*[!0-9]*) rev=0 ;; esac
+    [ "$urgent_n" -le "$slots" ] || urgent_n=$slots
+    [ -d "$lane" ] && [ -w "$lane" ] || exec "$real" "$@"
+
+    general=$((slots - urgent_n))
+    order=""
+    if [ "${AADS_HEAVY_URGENT:-0}" = 1 ]; then
+        i=$slots
+        while [ "$i" -gt 0 ]; do i=$((i - 1)); order="$order $i"; done
+    else
+        i=0
+        while [ "$i" -lt "$general" ]; do order="$order $i"; i=$((i + 1)); done
+    fi
+
+    max=${AADS_HEAVY_MAX_WAIT_SEC:-1200}; case "$max" in ''|*[!0-9]*) max=1200 ;; esac
+    poll=${AADS_HEAVY_POLL_SEC:-2}
+    evt=${AADS_HEAVY_EVENT_INTERVAL_SEC:-60}; case "$evt" in ''|*[!0-9]*) evt=60 ;; esac
+    poll_int=${poll%%.*}; case "$poll_int" in ''|*[!0-9]*) poll_int=1 ;; esac
+    [ "$poll_int" -ge 1 ] || poll_int=1
+    urgent_flag=0; [ "${AADS_HEAVY_URGENT:-0}" = 1 ] && urgent_flag=1
+
+    emit() {
+        local jid=${AADS_HEAVY_JOB_ID:-nojob} nxt
+        case "$jid" in ''|*[!A-Za-z0-9_-]*) jid=nojob ;; esac
+        nxt=$(date -u -d "@$(( $(date +%s) + poll_int ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || nxt=""
+        mkdir -p "$lane/events" 2>/dev/null || return 0
+        printf '%s\t{"event":"%s","wait_reason":"heavy_slot_busy","command":"%s","urgent":%s,"waited_s":%s,"max_wait_s":%s,"next_check_at":"%s","heavy_slots":%s,"urgent_reserved":%s,"policy_revision":%s,"shim_pid":%s,"ts":"%s"}\n' \
+            "$1" "$1" "$name" "$urgent_flag" "$2" "$max" "$nxt" "$slots" "$urgent_n" "$rev" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            >> "$lane/events/$jid.jsonl" 2>/dev/null || true
+    }
+
+    try_acquire() {
+        local i
+        for i in $order; do
+            if { exec 200>>"$lane/slot-$i"; } 2>/dev/null; then
+                if flock -n 200; then held="slot-$i"; return 0; fi
+                exec 200>&-
+            fi
+        done
+        return 1
+    }
+
+    held=""; start=$(date +%s); last_evt=-1; waited=0
+    while :; do
+        if try_acquire; then break; fi
+        now=$(date +%s); waited=$((now - start))
+        if [ "$waited" -ge "$max" ]; then
+            emit heavy_lane_wait_timeout "$waited"
+            echo "[aads-heavy] $name: ${waited}s 대기 후에도 heavy 슬롯을 못 잡아 슬롯 없이 실행합니다(대기 상한 ${max}s)" >&2
+            held=bypass
+            break
+        fi
+        if [ "$last_evt" -lt 0 ] || [ $((now - last_evt)) -ge "$evt" ]; then
+            emit heavy_lane_wait "$waited"
+            last_evt=$now
+        fi
+        sleep "$poll"
+    done
+    if [ "$held" != bypass ] && [ "$last_evt" -ge 0 ]; then
+        emit heavy_lane_acquired "$(( $(date +%s) - start ))"
+    fi
+    export AADS_HEAVY_HELD="$held"
+    exec "$real" "$@"
+EOF_AADS_HEAVY_SHIM
+    } > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+    if ! cmp -s "$tmp" "$core" 2>/dev/null; then
+        chmod 755 "$tmp" 2>/dev/null && mv -f "$tmp" "$core" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+    else
+        rm -f "$tmp" 2>/dev/null || true
+    fi
+    for n in pytest npm npx node tsc next bash; do
+        [[ "$(readlink "$bin/$n" 2>/dev/null)" == ".aads-heavy-shim" ]] || ln -sfn .aads-heavy-shim "$bin/$n" 2>/dev/null || return 1
+    done
+    return 0
+}
+
+# 작업(run_job 서브셸)이 시작될 때 호출한다. 정책에 heavy 슬롯이 있을 때만 PATH 앞에 shim 을 둔다 —
+# 정책이 없으면 PATH·환경이 한 글자도 바뀌지 않는다. 인자: instruction job_id
+runner_heavy_job_env() {
+    local instruction="${1:-}" job_id="${2:-}"
+    [[ -r "$RUNNER_HEAVY_DIR/policy" && -x "$RUNNER_HEAVY_DIR/bin/.aads-heavy-shim" ]] || return 0
+    export AADS_HEAVY_LANE_DIR="$RUNNER_HEAVY_DIR"
+    export AADS_HEAVY_JOB_ID="$job_id"
+    if [[ "$instruction" =~ (^|[[:space:]])PRIORITY:[[:space:]]*P[01]([^0-9]|$) ]]; then
+        export AADS_HEAVY_URGENT=1
+    else
+        export AADS_HEAVY_URGENT=0
+    fi
+    unset AADS_HEAVY_HELD
+    [[ ":$PATH:" == ":$RUNNER_HEAVY_DIR/bin:"* ]] || export PATH="$RUNNER_HEAVY_DIR/bin:$PATH"
+    return 0
+}
+
+# 대기 중 CPU 맥락: aads-cpu snapshot 의 신선도·cpu.valid 와 러너 cgroup cpu.pressure.
+# invalid/unavailable 은 여유로 간주하지도, 차단 근거로 쓰지도 않는다 — 기록만 한다.
+runner_cpu_context_json() {
+    timeout 20 python3 - "${AADS_CPU_BIN:-aads-cpu}" 2>/dev/null <<'PY_CPU_CONTEXT' || printf '{"snapshot_status":"unavailable","cpu_valid":null,"source":"aads-cpu"}'
+import json, subprocess, sys
+out = {"snapshot_status": "unavailable", "snapshot_age_s": None, "cpu_valid": None, "source": "aads-cpu"}
+try:
+    p = subprocess.run([sys.argv[1], "snapshot"], capture_output=True, text=True, timeout=10)
+    d = json.loads(p.stdout)
+    s = d.get("sample") or {}
+    out["snapshot_status"] = d.get("status", "unknown")
+    out["snapshot_age_s"] = d.get("sample_age_s")
+    out["cpu_valid"] = (s.get("cpu") or {}).get("valid")
+    out["host_psi_cpu_some_avg10"] = ((s.get("psi") or {}).get("cpu") or {}).get("some", {}).get("avg10")
+except Exception as e:
+    out["error"] = type(e).__name__
+try:
+    cg = ""
+    for line in open("/proc/self/cgroup"):
+        if line.startswith("0::"):
+            cg = line[3:].strip()
+    vals = {}
+    for line in open("/sys/fs/cgroup" + cg + "/cpu.pressure"):
+        parts = line.split()
+        for kv in parts[1:]:
+            k, v = kv.split("=")
+            if k in ("avg10", "avg60"):
+                vals[parts[0] + "_" + k] = float(v)
+    out["runner_cgroup"] = cg
+    out["runner_cpu_pressure"] = vals
+except Exception:
+    out["runner_cpu_pressure"] = None
+print(json.dumps(out))
+PY_CPU_CONTEXT
+    return 0
+}
+
+# shim 이 남긴 대기 이벤트(events/<job_id>.jsonl, 줄 형식: 이벤트명<TAB>JSON)를 runner event 로 옮긴다.
+# 매 사이클 호출 — 파일이 없으면 디렉터리 존재 확인 한 번으로 끝난다.
+runner_heavy_flush_events() {
+    local dir="$RUNNER_HEAVY_DIR/events" f jid tmp line ev meta body cpu=""
+    [[ -d "$dir" ]] || return 0
+    for f in "$dir"/*.jsonl; do
+        [[ -f "$f" ]] || continue
+        jid="${f##*/}"; jid="${jid%.jsonl}"
+        tmp="${f}.flush.$$"
+        mv -f "$f" "$tmp" 2>/dev/null || continue
+        [[ -n "$cpu" ]] || cpu=$(runner_cpu_context_json)
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            ev="${line%%$'\t'*}"; meta="${line#*$'\t'}"
+            [[ "$ev" =~ ^heavy_lane_[a-z_]+$ && "$meta" == \{*\} ]] || continue
+            body="${meta%\}}"
+            meta="${body},\"runner_host\":\"$(_receipt_json_str "${RUNNER_HOST_NAME:-}" 80)\",\"cpu_context\":${cpu}"
+            meta+="}"
+            if [[ "$ev" == "heavy_lane_wait_timeout" ]]; then
+                log "  HEAVY_LANE_WAIT_TIMEOUT job=${jid} — 대기 상한 후 슬롯 없이 실행"
+            else
+                log "  HEAVY_LANE job=${jid} event=${ev}"
+            fi
+            record_runner_event "$jid" "$ev" "" "" "" "" "" "" "$meta"
+        done < "$tmp"
+        rm -f "$tmp" 2>/dev/null || true
+    done
+    return 0
+}
+
 # R-001 (2026-10-08 개정): 작업 결과를 핸드오버 DB 에 upsert 하고 같은 entry_key 를 다시 읽어 확인한다.
 # 쓰기는 app.services.handover_store(scripts/runner_handover_write.py)를 그대로 쓴다 — 새 쓰기 경로 없음.
 # 실패해도 작업을 실패시키지 않는다(보수적 단계): runner_event(handover_db_write_failed)와
@@ -3713,6 +4097,7 @@ run_job() {
     _queue_wait_s=$(db_exec "SELECT floor(EXTRACT(EPOCH FROM (started_at - created_at)))::bigint FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | head -n1 | tr -d '[:space:]') || _queue_wait_s=""
     _worker_nice=$(runner_worker_nice_value "$instruction")
     (( _worker_nice > 0 )) && _worker_nice_cmd=(nice -n "$_worker_nice")
+    runner_heavy_job_env "$instruction" "$job_id" || true
     record_runner_event "$job_id" "job_started" "running" "claude_code_work" "$job_model" "" "$job_size" "" "{\"runner_host\":\"${RUNNER_HOSTNAME}\",\"parallel_group\":\"${parallel_group:-}\",$(runner_job_receipt_fields "$_job_runner_pid" "$pre_exec_sha" "$_worker_nice" "$_queue_wait_s")}"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
@@ -7030,6 +7415,9 @@ main() {
         # Poll admission before throttle, claims, recovery, or self reload. A
         # maintenance controller keeps us alive in QUIESCENT; no SIGTERM/requeue.
         runner_maintenance_checkpoint_or_hold
+        # LR04: 서버별 정책(max_concurrent·heavy 슬롯)을 재기동 없이 반영하고 shim 대기 이벤트를 옮긴다.
+        runner_host_policy_refresh || true
+        runner_heavy_flush_events || true
         # Legacy hosts retain the global limit. Hosts with an explicit server
         # budget enforce it atomically at claim time and keep servicing reviews.
         if [[ -z "${MAX_CONCURRENT_SERVER:-}" ]]; then
