@@ -867,6 +867,10 @@
       white-space: nowrap;
     }
 
+    body.employee-view .tab[data-clock-link] {
+      order: -1;
+    }
+
     body.employee-view .tab[data-view="onboarding"] {
       order: 2;
     }
@@ -2853,6 +2857,7 @@
           <button class="tab" data-view="alerts">알림센터</button>
           <button class="tab" data-view="onboarding">입사서류</button>
           <button class="tab" data-view="contracts">계약서</button>
+          <a class="tab" data-clock-link href="/static/apps/obys/clock.html">출퇴근 하기</a>
           <button class="tab" data-view="attendance">근태</button>
           <button class="tab" data-view="payroll">급여내역서</button>
           <div class="side-label">설정</div>
@@ -2876,6 +2881,7 @@
               <select id="branchFilter"></select>
             </label>
             <nav class="tabs" aria-label="상단 빠른 화면">
+              <a class="tab" data-clock-link href="/static/apps/obys/clock.html">출퇴근 하기</a>
               <button class="tab active" data-view="dashboard">통합 홈</button>
               <button class="tab" data-view="tasks">할일</button>
               <button class="tab" data-view="sales">매출</button>
@@ -6320,7 +6326,7 @@
       document.body.classList.toggle("employee-view", isAuthed && employeeMode);
       const permitted = allowedViews();
       document.querySelectorAll(".tab").forEach(button => {
-        if (button.dataset.externalTab) {
+        if (button.dataset.externalTab || button.hasAttribute("data-clock-link")) {
           button.classList.toggle("hidden", !isAuthed);
           if ("disabled" in button) button.disabled = false;
           return;
