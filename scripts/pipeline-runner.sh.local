@@ -507,6 +507,106 @@ record_runner_event() {
                WHERE job_id='${job_id}';" 2>/dev/null || true
 }
 
+# ── 실행 위치 receipt · 작업별 CPU-seconds · 우선순위 nice (AADS-RUNNER-LR01-RECEIPT-20261010) ──
+# 새 테이블 없이 pipeline_runner_events.metadata 를 재사용한다. 모든 헬퍼는 계측 실패가
+# 작업을 막지 않도록 항상 0 으로 끝난다(set -e 환경). 환경변수·SQL·토큰은 담지 않는다.
+
+# JSON 문자열 값으로 안전하게 넣을 수 있도록 따옴표·역슬래시·제어문자를 제거한다.
+_receipt_json_str() {
+    printf '%s' "${1:-}" | tr -d '"\\' | tr -d '\000-\037' | head -c "${2:-200}" || true
+}
+
+# /proc/<pid>/stat 22번째 필드(starttime, clock ticks). comm 에 공백이 있어도 마지막 ') ' 뒤에서 센다.
+runner_proc_start_ticks() {
+    local _s _f=()
+    _s=$(cat "/proc/${1:-0}/stat" 2>/dev/null) || return 0
+    _s="${_s##*) }"
+    read -r -a _f <<< "$_s" || true
+    [[ "${_f[19]:-}" =~ ^[0-9]+$ ]] && printf '%s' "${_f[19]}"
+    return 0
+}
+
+runner_cgroup_path() {
+    local _l=""
+    _l=$(grep -m1 '^0::' /proc/self/cgroup 2>/dev/null) || _l=$(head -n1 /proc/self/cgroup 2>/dev/null) || _l=""
+    _receipt_json_str "${_l#*:*:}" 200
+    return 0
+}
+
+runner_db_target() {
+    if [[ "${DB_MODE:-}" == "docker" ]]; then
+        printf 'docker-exec:%s' "$(_receipt_json_str "${PG_CONTAINER:-}" 80)"
+    else
+        printf '%s:%s' "$(_receipt_json_str "${PGHOST:-}" 120)" "$(_receipt_json_str "${PGPORT:-}" 10)"
+    fi
+    return 0
+}
+
+# 현재 셸이 wait 로 거둔 자식들의 누적 CPU(utime+stime, RUSAGE_CHILDREN 과 같은 값)를 ms 로
+# RUNNER_CPU_MS 에 둔다. 측정 실패 시 빈 값. 반드시 run_job 서브셸에서 직접 호출해야 한다 —
+# $(...) 안에서 부르면 새로 fork 된 서브셸이라 자식 시간이 0 이다.
+runner_children_cpu_ms() {
+    RUNNER_CPU_MS=""
+    local _f="${ARTIFACT_DIR:-/tmp}/.cpu_times.${BASHPID}" _own="" _kids=""
+    times >"$_f" 2>/dev/null || { rm -f "$_f" 2>/dev/null || true; return 0; }
+    { read -r _own || true; read -r _kids || true; } < "$_f"
+    rm -f "$_f" 2>/dev/null || true
+    [[ "$_kids" =~ ^([0-9]+)m([0-9]+)\.([0-9]{3})s[[:space:]]+([0-9]+)m([0-9]+)\.([0-9]{3})s$ ]] || return 0
+    RUNNER_CPU_MS=$(( (10#${BASH_REMATCH[1]} * 60 + 10#${BASH_REMATCH[2]}) * 1000 + 10#${BASH_REMATCH[3]} \
+                    + (10#${BASH_REMATCH[4]} * 60 + 10#${BASH_REMATCH[5]}) * 1000 + 10#${BASH_REMATCH[6]} ))
+    return 0
+}
+
+# $1=시작 ms, $2=종료 ms → JSON 숫자 "12.345" 또는 null
+runner_cpu_seconds_json() {
+    local _a="${1:-}" _b="${2:-}" _d
+    if [[ "$_a" =~ ^[0-9]+$ && "$_b" =~ ^[0-9]+$ ]] && (( _b >= _a )); then
+        _d=$((_b - _a))
+        printf '%d.%03d' $((_d / 1000)) $((_d % 1000))
+    else
+        printf 'null'
+    fi
+    return 0
+}
+
+runner_json_int_or_null() {
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then printf '%s' "$1"; else printf 'null'; fi
+    return 0
+}
+
+# 지시서 PRIORITY: P0/P1 → 0, 그 외 → RUNNER_LOW_PRIORITY_NICE(기본 10, 0 이면 비활성, 최대 19).
+# claim 순서가 쓰는 PRIORITY 표기와 같은 형식이다. cgroup quota/CPUWeight 는 건드리지 않는다.
+runner_worker_nice_value() {
+    local _n="${RUNNER_LOW_PRIORITY_NICE:-10}"
+    [[ "$_n" =~ ^[0-9]+$ ]] || _n=10
+    (( _n > 19 )) && _n=19
+    if (( _n == 0 )) || ! command -v nice >/dev/null 2>&1; then
+        printf '0'
+    elif [[ "${1:-}" =~ (^|[[:space:]])PRIORITY:[[:space:]]*P[01]([^0-9]|$) ]]; then
+        printf '0'
+    else
+        printf '%s' "$_n"
+    fi
+    return 0
+}
+
+# job_started 이벤트용 receipt 조각(중괄호 제외). 인자: 러너 서브셸 PID, 소스 SHA, nice, queue_wait_s
+runner_job_receipt_fields() {
+    local _pid="${1:-0}" _sha="${2:-}" _nice="${3:-0}" _qw="${4:-}"
+    printf '"control_host":"%s","executor_host":"%s","runner_pid":%s,"runner_start_ticks":%s,"cgroup":"%s","source_sha":"%s","runner_script_sha256":"%s","db_target":"%s","queue_wait_s":%s,"nice":%s' \
+        "$(_receipt_json_str "${RUNNER_HOST_NAME:-}" 80)" \
+        "$(_receipt_json_str "${RUNNER_HOSTNAME:-}" 80)" \
+        "$(runner_json_int_or_null "$_pid")" \
+        "$(runner_json_int_or_null "$(runner_proc_start_ticks "$_pid")")" \
+        "$(runner_cgroup_path)" \
+        "$(_receipt_json_str "$_sha" 64)" \
+        "$(_receipt_json_str "${RUNNER_SELF_FINGERPRINT:-}" 64)" \
+        "$(runner_db_target)" \
+        "$(runner_json_int_or_null "$_qw")" \
+        "$(runner_json_int_or_null "$_nice")"
+    return 0
+}
+
 # R-001 (2026-10-08 개정): 작업 결과를 핸드오버 DB 에 upsert 하고 같은 entry_key 를 다시 읽어 확인한다.
 # 쓰기는 app.services.handover_store(scripts/runner_handover_write.py)를 그대로 쓴다 — 새 쓰기 경로 없음.
 # 실패해도 작업을 실패시키지 않는다(보수적 단계): runner_event(handover_db_write_failed)와
@@ -3607,7 +3707,13 @@ run_job() {
     db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
                runner_pid=${BASHPID}, started_at=NOW(), updated_at=NOW()
                WHERE job_id='${job_id}';"
-    record_runner_event "$job_id" "job_started" "running" "claude_code_work" "$job_model" "" "$job_size" "" "{\"runner_host\":\"${RUNNER_HOSTNAME}\",\"parallel_group\":\"${parallel_group:-}\"}"
+    # LR01/LR03: 실행 위치 receipt + 워커 우선순위. 계측 실패는 null 로 남기고 작업은 계속한다.
+    local _job_runner_pid="$BASHPID" _queue_wait_s="" _worker_nice=0 _worker_nice_applied=false
+    local _worker_nice_cmd=() _job_cpu_ms_total=0 _job_cpu_measured=false _job_started_epoch="${EPOCHSECONDS:-$(date +%s)}"
+    _queue_wait_s=$(db_exec "SELECT floor(EXTRACT(EPOCH FROM (started_at - created_at)))::bigint FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | head -n1 | tr -d '[:space:]') || _queue_wait_s=""
+    _worker_nice=$(runner_worker_nice_value "$instruction")
+    (( _worker_nice > 0 )) && _worker_nice_cmd=(nice -n "$_worker_nice")
+    record_runner_event "$job_id" "job_started" "running" "claude_code_work" "$job_model" "" "$job_size" "" "{\"runner_host\":\"${RUNNER_HOSTNAME}\",\"parallel_group\":\"${parallel_group:-}\",$(runner_job_receipt_fields "$_job_runner_pid" "$pre_exec_sha" "$_worker_nice" "$_queue_wait_s")}"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
     # H5: 모델+계정 폴백 (같은 모델 2계정 시도 후 다음 모델)
@@ -3910,6 +4016,10 @@ ${safe_instruction}"
         record_runner_event "$job_id" "model_attempt_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\"}"
         local runner_kind="claude_cli"
         local claude_json_output="text"
+        _worker_nice_applied=false
+        (( _worker_nice > 0 )) && _worker_nice_applied=true
+        local _cpu_start_ms="" _cpu_end_ms=""
+        runner_children_cpu_ms; _cpu_start_ms="$RUNNER_CPU_MS"
         if [[ "$current_model" == codex:* ]]; then
             # AADS-RUNNER-CODEX-ACCOUNT (2026-09-19)
             # 쿨다운 마커는 계정이 아니라 codex 전체를 막는다. 한도가 남은 계정이
@@ -3950,7 +4060,7 @@ ${safe_instruction}"
             local codex_args=(exec --sandbox workspace-write --ephemeral -C "$workdir")
             # codex:default -> 모델 미지정(Codex CLI 기본값), 그 외 -> -m 지정
             [[ "$codex_model_name" != "default" ]] && codex_args+=(-m "$codex_model_name")
-            timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
+            ${_worker_nice_cmd[@]+"${_worker_nice_cmd[@]}"} timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
                 < /dev/null > "$output_file" 2> "$err_file" &
             local claude_pid=$!
         # LiteLLM Runner 분기 (litellm: 접두사)
@@ -3970,6 +4080,7 @@ ${safe_instruction}"
                 instr_file="/root/aads/aads-server/app/data/.litellm_instr_${job_id}.txt"
                 printf '%s' "$safe_instruction" > "$instr_file"
                 local container_instr="/app/app/data/.litellm_instr_${job_id}.txt"
+                _worker_nice_applied=false  # 컨테이너 안 프로세스에는 호스트 nice 가 닿지 않는다
                 timeout "$MAX_RUNTIME" docker exec aads-server python3 /app/scripts/litellm_runner.py \
                     --model "$llm_model_name" \
                     --instruction-file "$container_instr" \
@@ -3981,7 +4092,7 @@ ${safe_instruction}"
                 export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-litellm}"
                 local litellm_python="/root/aads-litellm-runner-venv/bin/python"
                 [[ -x "$litellm_python" ]] || litellm_python="python3"
-                timeout "$MAX_RUNTIME" "$litellm_python" /root/scripts/litellm_runner.py \
+                ${_worker_nice_cmd[@]+"${_worker_nice_cmd[@]}"} timeout "$MAX_RUNTIME" "$litellm_python" /root/scripts/litellm_runner.py \
                     --model "$llm_model_name" \
                     --instruction-file "$instr_file" \
                     --workdir "$workdir" \
@@ -4037,6 +4148,7 @@ ${safe_instruction}"
                 # 셸 자체를 unset 하지 않는 이유는 뒤따르는 레거시 폴백 시도를 망가뜨리지 않기 위함이다.
                 CLAUDE_OAUTH_SLOT="$token_slot" \
                 CLAUDE_SLOT_CREDENTIALS_FILE="$slot_cred_file" \
+                ${_worker_nice_cmd[@]+"${_worker_nice_cmd[@]}"} \
                 env -u CLAUDE_CODE_OAUTH_TOKEN \
                     -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_AUTH_TOKEN_2 \
                     -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL \
@@ -4046,6 +4158,7 @@ ${safe_instruction}"
                     < /dev/null > "$output_file" 2> "$err_file" &
             else
                 ${claude_root_env[@]+"${claude_root_env[@]}"} \
+                    ${_worker_nice_cmd[@]+"${_worker_nice_cmd[@]}"} \
                     timeout "$MAX_RUNTIME" "$RUNNER_CLAUDE_CLI_BIN" "${claude_args[@]}" "$safe_instruction" \
                     < /dev/null > "$output_file" 2> "$err_file" &
             fi
@@ -4054,11 +4167,12 @@ ${safe_instruction}"
 
         local cli_started_ms
         cli_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
-        record_runner_event "$job_id" "cli_process_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "0" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\",\"runner_kind\":\"${runner_kind}\",\"pid\":${claude_pid},\"workdir\":\"${workdir}\"}"
+        record_runner_event "$job_id" "cli_process_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "0" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"token_slot\":\"${token_slot}\",\"runner_kind\":\"${runner_kind}\",\"pid\":${claude_pid},\"worker_pid\":${claude_pid},\"worker_start_ticks\":$(runner_json_int_or_null "$(runner_proc_start_ticks "$claude_pid")"),\"nice_requested\":${_worker_nice},\"nice_applied\":${_worker_nice_applied},\"executor_host\":\"${RUNNER_HOSTNAME}\",\"workdir\":\"${workdir}\"}"
         # The CLI child PID is recorded in runner_events for diagnostics. Keep
         # pipeline_jobs.runner_pid on BASHPID so watchdog tracks the whole job.
 
         wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "$runner_kind" "$cli_started_ms" "0" || exit_code=$?
+        runner_children_cpu_ms; _cpu_end_ms="$RUNNER_CPU_MS"
         # json 원문을 하류 판정이 읽기 전에 text 로 되돌린다. 되돌리지 못하면 이 시도는
         # 실패다 — JSON 을 결과 텍스트로 넘기면 성공 판정·결과 추출·리뷰 입력이 전부 틀린다.
         if [[ "$runner_kind" == "claude_cli" && "$claude_json_output" == "json" ]]; then
@@ -4113,13 +4227,14 @@ ${safe_instruction}"
                 log "  CODEX_CONN_RETRY job=$job_id retry=$_codex_retry/12 wait=5s"
                 sleep 5
                 exit_code=0
-                timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
+                ${_worker_nice_cmd[@]+"${_worker_nice_cmd[@]}"} timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
                     < /dev/null > "$output_file" 2> "$err_file" &
                 claude_pid=$!
                 local retry_started_ms
                 retry_started_ms=$(date +%s%3N 2>/dev/null || date +%s000)
-                record_runner_event "$job_id" "cli_process_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "0" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"runner_kind\":\"codex_cli\",\"pid\":${claude_pid},\"retry\":${_codex_retry},\"workdir\":\"${workdir}\"}"
+                record_runner_event "$job_id" "cli_process_started" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "0" "{\"attempt\":$((attempt+1)),\"total_attempts\":${total_attempts},\"cycle\":${cycle_num},\"runner_kind\":\"codex_cli\",\"pid\":${claude_pid},\"worker_pid\":${claude_pid},\"worker_start_ticks\":$(runner_json_int_or_null "$(runner_proc_start_ticks "$claude_pid")"),\"nice_requested\":${_worker_nice},\"nice_applied\":${_worker_nice_applied},\"executor_host\":\"${RUNNER_HOSTNAME}\",\"retry\":${_codex_retry},\"workdir\":\"${workdir}\"}"
                 wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "codex_cli" "$retry_started_ms" "$_codex_retry" || exit_code=$?
+                runner_children_cpu_ms; _cpu_end_ms="$RUNNER_CPU_MS"
             done
             if [[ $_codex_retry -ge 12 && $exit_code -ne 0 ]]; then
                 log "  CODEX_CONN_EXHAUSTED job=$job_id retries=12(60s) → next model"
@@ -4168,7 +4283,15 @@ ${safe_instruction}"
                 log "  MODEL_RECEIPT_MISSING job=$job_id requested=$current_model → actual_model=unverified 유지"
             fi
         fi
-        record_runner_event "$job_id" "model_attempt_completed" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "$attempt_duration_ms" "{\"attempt\":$((attempt+1)),\"exit_code\":${exit_code},\"success\":$([[ $exit_code -eq 0 ]] && echo true || echo false)}"
+        local _attempt_cpu_json _total_cpu_json
+        _attempt_cpu_json=$(runner_cpu_seconds_json "$_cpu_start_ms" "$_cpu_end_ms")
+        if [[ "$_attempt_cpu_json" != "null" ]]; then
+            _job_cpu_ms_total=$((_job_cpu_ms_total + _cpu_end_ms - _cpu_start_ms))
+            _job_cpu_measured=true
+        fi
+        _total_cpu_json=null
+        [[ "$_job_cpu_measured" == "true" ]] && _total_cpu_json=$(runner_cpu_seconds_json 0 "$_job_cpu_ms_total")
+        record_runner_event "$job_id" "model_attempt_completed" "running" "claude_code_work" "$current_model" "$effective_model" "$job_size" "$attempt_duration_ms" "{\"attempt\":$((attempt+1)),\"exit_code\":${exit_code},\"success\":$([[ $exit_code -eq 0 ]] && echo true || echo false),\"cpu_seconds\":${_attempt_cpu_json},\"cpu_seconds_total\":${_total_cpu_json},\"run_s\":$((${EPOCHSECONDS:-$(date +%s)} - _job_started_epoch)),\"executor_host\":\"${RUNNER_HOSTNAME}\",\"control_host\":\"${RUNNER_HOST_NAME}\",\"nice_requested\":${_worker_nice},\"nice_applied\":${_worker_nice_applied}}"
 
         if [[ $exit_code -eq 0 ]]; then
             # actual_model 기록 — CEO가 어떤 모델이 실행했는지 추적 (2026-04-14)
