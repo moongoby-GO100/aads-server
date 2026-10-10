@@ -740,13 +740,20 @@ runner_host_policy_refresh() {
 runner_heavy_publish_policy() {
     local heavy="${1:-0}" urgent="${2:-0}" rev="${3:-0}" f="$RUNNER_HEAVY_DIR/policy" tmp=""
     if (( heavy <= 0 )); then
-        rm -f "$f" 2>/dev/null || true
+        rm -f "$f" "$RUNNER_HEAVY_DIR/reuse" 2>/dev/null || true
         return 0
     fi
     if ! runner_heavy_install_shims; then
         log "  HEAVY_LANE_DISABLED dir=${RUNNER_HEAVY_DIR} — shim 설치 실패, 제한 없이 실행"
-        rm -f "$f" 2>/dev/null || true
+        rm -f "$f" "$RUNNER_HEAVY_DIR/reuse" 2>/dev/null || true
         return 0
+    fi
+    # LR02: 결과 재사용·single-flight 는 heavy lane 이 켜진 호스트에서만, RUNNER_RESULT_REUSE=0 이면 전체 비활성.
+    if [[ "${RUNNER_RESULT_REUSE:-1}" != "0" ]]; then
+        mkdir -p "${AADS_RESULT_DIR:-/var/cache/aads-runner/results}" 2>/dev/null || true
+        : > "$RUNNER_HEAVY_DIR/reuse" 2>/dev/null || true
+    else
+        rm -f "$RUNNER_HEAVY_DIR/reuse" 2>/dev/null || true
     fi
     tmp="${f}.tmp.$$"
     printf 'slots=%s\nurgent=%s\nrevision=%s\n' "$heavy" "$urgent" "$rev" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || {
@@ -874,6 +881,391 @@ runner_heavy_install_shims() {
         return 1
     }
 
+    # ── LR02: single-flight 합류 + 동일 입력 결과 재사용 (AADS-RUNNER-LR02-SINGLEFLIGHT-REUSE-20261010) ──
+    # 검증 명령(pytest·run_unit_tests.sh·tsc --noEmit·npm test/lint)에만 적용한다. 설치·빌드는 산출물이 작업트리에
+    # 남아야 하므로 합류도 재사용도 하지 않는다. lane 에 reuse 표식이 있고 RUNNER_RESULT_REUSE!=0 일 때만 동작한다.
+    rr_dir=${AADS_RESULT_DIR:-/var/cache/aads-runner/results}
+    rr_ttl=${AADS_RESULT_TTL_SEC:-21600}; case "$rr_ttl" in ''|*[!0-9]*) rr_ttl=21600 ;; esac
+    rr_max=${AADS_RESULT_MAX_BYTES:-268435456}; case "$rr_max" in ''|*[!0-9]*) rr_max=268435456 ;; esac
+    rr_join_max=${AADS_RESULT_JOIN_MAX_SEC:-3600}; case "$rr_join_max" in ''|*[!0-9]*) rr_join_max=3600 ;; esac
+    rr_tail=65536
+    rr_owner=0; rr_miss=""; rr_key=""; rr_top=""; rr_tree=""; rr_age=0; rr_join_note=""
+    rr_my_ticks=0; rr_interrupted=0; rr_child=0; lp=""; lt=""
+
+    emit_raw() {
+        local jid=${AADS_HEAVY_JOB_ID:-nojob}
+        case "$jid" in ''|*[!A-Za-z0-9_-]*) jid=nojob ;; esac
+        mkdir -p "$lane/events" 2>/dev/null || return 0
+        printf '%s\t{"event":"%s","command":"%s","shim_pid":%s,"ts":"%s"%s}\n' \
+            "$1" "$1" "$name" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${2:+,$2}" \
+            >> "$lane/events/$jid.jsonl" 2>/dev/null || true
+    }
+
+    reusable() {
+        local a sub="" script="" first="" skip=0 noemit=0 build=0 tool=0
+        for a in "$@"; do
+            case "$a" in
+                --noEmit|--noemit) noemit=1 ;;
+                -b|--build) build=1 ;;
+                --junitxml*|--junit-xml*|--cov*|--html*|--report-log*|--resultlog*|--result-log*|--basetemp*|--watch|--watchAll|--updateSnapshot|--update-snapshots|--fix|--write) return 1 ;;
+            esac
+        done
+        case "$name" in
+            pytest) return 0 ;;
+            tsc) [ "$noemit" = 1 ] && [ "$build" = 0 ] ;;
+            npx)
+                for a in "$@"; do case "$a" in -*) ;; *) first=$a; break ;; esac; done
+                case "$first" in
+                    tsc) [ "$noemit" = 1 ] && [ "$build" = 0 ] ;;
+                    jest|vitest|eslint|pytest) return 0 ;;
+                    *) return 1 ;;
+                esac ;;
+            npm)
+                for a in "$@"; do
+                    if [ "$skip" = 1 ]; then skip=0; continue; fi
+                    case "$a" in
+                        --prefix|--workspace|-w|--cwd|--userconfig|--cache) skip=1; continue ;;
+                        -*) continue ;;
+                    esac
+                    if [ -z "$sub" ]; then sub=$a; else script=$a; break; fi
+                done
+                case "$sub" in
+                    test|tst|t) return 0 ;;
+                    run|run-script|rum|urun)
+                        case "$script" in
+                            test|test:*|lint|lint:*|typecheck|typecheck:*|type-check|check|tsc) return 0 ;;
+                        esac
+                        return 1 ;;
+                esac
+                return 1 ;;
+            node)
+                for a in "$@"; do
+                    case "$a" in */typescript/bin/tsc|*/typescript/lib/tsc.js|*/.bin/tsc|*/bin/tsc|tsc) tool=1 ;; esac
+                done
+                [ "$tool" = 1 ] && [ "$noemit" = 1 ] && [ "$build" = 0 ] ;;
+            bash)
+                case "${1:-}" in */run_unit_tests.sh|run_unit_tests.sh) return 0 ;; esac
+                case "${2:-}" in */run_unit_tests.sh|run_unit_tests.sh) return 0 ;; esac
+                return 1 ;;
+        esac
+        return 1
+    }
+
+    proc_ticks() {
+        local s r
+        s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+        r=${s##*) }
+        set -- $r
+        printf '%s' "${20}"
+    }
+
+    rr_alive() {
+        local cur
+        cur=$(proc_ticks "$1") || return 1
+        [ "$cur" = "$2" ]
+    }
+
+    rr_read_lease() {
+        local p="" t=""
+        read -r p t < "$rr_dir/S-$rr_key" 2>/dev/null || return 1
+        case "$p" in ''|*[!0-9]*) return 1 ;; esac
+        case "$t" in ''|*[!0-9]*) return 1 ;; esac
+        lp=$p; lt=$t
+        return 0
+    }
+
+    rr_emit_miss() {
+        local mode=direct
+        [ "$rr_owner" = 1 ] && mode=owner
+        emit_raw heavy_lane_result_miss "\"miss_reason\":\"${rr_miss:-unknown}\",\"mode\":\"$mode\",\"key\":\"${rr_key:0:16}\""
+    }
+
+    # 임시 index + 임시 object 디렉터리로 미커밋 변경까지 포함한 작업트리 tree 해시를 만든다. 실제 index/object 는 건드리지 않는다.
+    rr_tree_hash() {
+        local d objs n
+        d=$(mktemp -d "${TMPDIR:-/tmp}/aads-rr-tree.XXXXXX" 2>/dev/null) || { rr_miss=tmp_unavailable; return 1; }
+        objs=$(cd -- "$rr_top" 2>/dev/null && cd -- "$(git rev-parse --git-path objects 2>/dev/null)" 2>/dev/null && pwd -P)
+        [ -n "$objs" ] || { rm -rf "${d:?}"; rr_miss=objects_dir_unknown; return 1; }
+        mkdir -p "$d/obj" 2>/dev/null
+        git -C "$rr_top" ls-files -z -m -o -d --exclude-standard > "$d/list" 2>/dev/null || { rm -rf "${d:?}"; rr_miss=tree_hash_failed; return 1; }
+        n=$(tr -cd '\0' < "$d/list" | wc -c)
+        [ "$n" -le 5000 ] || { rm -rf "${d:?}"; rr_miss=tree_too_large; return 1; }
+        rr_tree=$(
+            { export GIT_INDEX_FILE="$d/index" GIT_OBJECT_DIRECTORY="$d/obj" GIT_ALTERNATE_OBJECT_DIRECTORIES="$objs"
+              cd -- "$rr_top" &&
+              git read-tree HEAD &&
+              { [ "$n" -eq 0 ] || git update-index --add --remove -z --stdin < "$d/list"; } &&
+              git write-tree; } 2>/dev/null
+        ) || rr_tree=""
+        rm -rf "${d:?}" 2>/dev/null
+        [ "${#rr_tree}" -ge 40 ] || { rr_miss=tree_hash_failed; return 1; }
+        return 0
+    }
+
+    rr_compute_key() {
+        local project common prefix argh rt f n
+        command -v git >/dev/null 2>&1 || { rr_miss=no_git; return 1; }
+        command -v sha256sum >/dev/null 2>&1 || { rr_miss=no_sha256sum; return 1; }
+        rr_top=$(git rev-parse --show-toplevel 2>/dev/null) || { rr_miss=not_git_worktree; return 1; }
+        prefix=$(git rev-parse --show-prefix 2>/dev/null)
+        git -C "$rr_top" rev-parse --verify -q HEAD >/dev/null 2>&1 || { rr_miss=no_head; return 1; }
+        project=${AADS_HEAVY_PROJECT:-}
+        if [ -z "$project" ]; then
+            common=$(cd -- "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)
+            project=$(basename -- "$(dirname -- "$common")")
+        fi
+        project=${project//[!A-Za-z0-9._-]/_}
+        rr_tree_hash || return 1
+        argh=$(printf '%s\0' "$name" "$@" | sha256sum | cut -c1-64)
+        rt=$( {
+            python3 --version 2>&1
+            n=$(find_real node) && "$n" --version 2>&1
+            for f in "$rr_top"/requirements*.txt "$rr_top/package-lock.json" "$rr_top/poetry.lock" \
+                     "$PWD"/requirements*.txt "$PWD/package-lock.json" "$PWD/poetry.lock"; do
+                [ -f "$f" ] && printf '%s=%s\n' "${f##*/}" "$(sha256sum < "$f" | cut -c1-64)"
+            done
+            true
+        } 2>/dev/null )
+        rr_key=$(printf '%s\0%s\0%s\0%s\0%s' "$project" "$rr_tree" "$prefix" "$argh" "$rt" | sha256sum | cut -c1-64)
+        [ "${#rr_key}" -eq 64 ] || { rr_key=""; rr_miss=key_failed; return 1; }
+        return 0
+    }
+
+    rr_prune() {
+        local now v
+        now=$(date +%s)
+        find "$rr_dir" -maxdepth 1 -type f -name 'R-*' ! -newermt "@$((now - rr_ttl))" -delete 2>/dev/null
+        find "$rr_dir" -maxdepth 1 -type f \( -name 'F-*' -o -name '*.tmp.*' \) ! -newermt "@$((now - 600))" -delete 2>/dev/null
+        find "$rr_dir" -maxdepth 1 -type d -name 'tmp.*' ! -newermt "@$((now - 21600))" -exec rm -rf {} + 2>/dev/null
+        find "$lane/events" -maxdepth 1 -type f -name '.plan-*' ! -newermt "@$((now - 86400))" -delete 2>/dev/null
+        for v in $(find "$rr_dir" -maxdepth 1 -type f -name 'L-*' ! -newermt "@$((now - 2 * rr_ttl))" 2>/dev/null); do
+            ( flock -n 9 && rm -f -- "${v:?}" ) 9< "$v" 2>/dev/null
+        done
+        find "$rr_dir" -maxdepth 1 -type f \( -name 'R-*' -o -name 'F-*' \) -printf '%T@ %s %f\n' 2>/dev/null \
+            | LC_ALL=C sort -n \
+            | awk -v max="$rr_max" '
+                { n[NR] = $3; sz[$3] = $2; tot += $2 }
+                END {
+                    for (i = 1; i <= NR && tot > max; i++) {
+                        f = n[i]; if (f in gone) continue
+                        print f; gone[f] = 1; tot -= sz[f]
+                        s = f
+                        if (s ~ /^R-.*\.meta$/) sub(/\.meta$/, ".out", s)
+                        else if (s ~ /^R-.*\.out$/) sub(/\.out$/, ".meta", s)
+                        else s = ""
+                        if (s != "" && (s in sz) && !(s in gone)) { print s; gone[s] = 1; tot -= sz[s] }
+                    }
+                }' \
+            | while IFS= read -r v; do [ -n "$v" ] && rm -f -- "${rr_dir:?}/${v:?}"; done
+        return 0
+    }
+
+    rr_hit() {
+        local m="$rr_dir/R-$rr_key.meta" o="$rr_dir/R-$rr_key.out" k v rc="" ts=""
+        [ -f "$m" ] || { rr_miss=no_entry; return 1; }
+        while IFS='=' read -r k v; do
+            case "$k" in rc) rc=$v ;; ts) ts=$v ;; esac
+        done < "$m"
+        case "$ts" in ''|*[!0-9]*) rr_miss=entry_invalid; return 1 ;; esac
+        if [ "$rc" != 0 ] || [ ! -f "$o" ]; then rm -f "$m" "$o" 2>/dev/null; rr_miss=entry_invalid; return 1; fi
+        rr_age=$(( $(date +%s) - ts ))
+        if [ "$rr_age" -ge "$rr_ttl" ]; then rm -f "$m" "$o" 2>/dev/null; rr_miss=expired; return 1; fi
+        return 0
+    }
+
+    rr_serve_hit() {
+        emit_raw heavy_lane_result_hit "\"key\":\"${rr_key:0:16}\",\"age_s\":$rr_age,\"ttl_s\":$rr_ttl"
+        echo "[aads-result] 동일 입력 결과 재사용: $name (${rr_age}s 전 종료코드 0 — 출력은 마지막 ${rr_tail}B)" >&2
+        cat -- "$rr_dir/R-$rr_key.out" 2>/dev/null
+        exit 0
+    }
+
+    rr_serve_flight() {
+        local rc=""
+        read -r rc < "$1.rc" 2>/dev/null
+        case "$rc" in ''|*[!0-9]*) rc=1 ;; esac
+        emit_raw heavy_lane_result_join "\"key\":\"${rr_key:0:16}\",\"outcome\":\"shared\",\"rc\":$rc,\"waited_s\":$2"
+        echo "[aads-result] 같은 입력 실행에 합류: $name (대기 ${2}s, 종료코드 $rc)" >&2
+        cat -- "$1.out" 2>/dev/null
+        exit "$rc"
+    }
+
+    rr_become_owner() {
+        local tk tmp="$rr_dir/S-$rr_key.tmp.$$"
+        rm -f "$rr_dir/S-$rr_key" 2>/dev/null
+        tk=$(proc_ticks "$$") || tk=0
+        if printf '%s %s\n' "$$" "$tk" > "$tmp" 2>/dev/null && mv -f "$tmp" "$rr_dir/S-$rr_key" 2>/dev/null; then
+            rr_my_ticks=$tk
+            rr_owner=1
+            [ -z "$rr_join_note" ] || rr_miss=$rr_join_note
+        else
+            rm -f "$tmp" 2>/dev/null
+            exec 201>&-
+            rr_miss=lease_write_failed
+        fi
+        rr_emit_miss
+        return 0
+    }
+
+    rr_flow() {
+        local fb start now nolease=0 w
+        { mkdir -p "$rr_dir" && [ -w "$rr_dir" ]; } 2>/dev/null || { rr_miss=cache_dir_unwritable; rr_emit_miss; return 0; }
+        rr_prune
+        start=$(date +%s)
+        while :; do
+            if rr_hit; then rr_serve_hit; fi
+            { exec 201>>"$rr_dir/L-$rr_key"; } 2>/dev/null || { rr_miss=lock_open_failed; rr_emit_miss; return 0; }
+            if flock -n 201; then
+                if rr_hit; then rr_serve_hit; fi
+                rr_become_owner
+                return 0
+            fi
+            if ! rr_read_lease; then
+                nolease=$((nolease + 1))
+                if [ "$nolease" -ge 25 ]; then rr_miss=lease_missing; rr_emit_miss; return 0; fi
+                sleep 0.2
+                continue
+            fi
+            fb="$rr_dir/F-$rr_key-$lp-$lt"
+            while :; do
+                if [ -f "$fb.rc" ]; then now=$(date +%s); rr_serve_flight "$fb" $((now - start)); fi
+                if flock -n 201; then break; fi
+                if ! rr_alive "$lp" "$lt"; then
+                    sleep 0.3
+                    if [ -f "$fb.rc" ]; then now=$(date +%s); rr_serve_flight "$fb" $((now - start)); fi
+                    if flock -n 201; then break; fi
+                    w="$lp-$lt"
+                    if rr_read_lease && [ "$lp-$lt" != "$w" ]; then
+                        fb="$rr_dir/F-$rr_key-$lp-$lt"
+                        continue
+                    fi
+                    rm -f "$rr_dir/S-$rr_key" 2>/dev/null
+                    rr_miss=lease_owner_dead; rr_emit_miss; return 0
+                fi
+                now=$(date +%s)
+                if [ $((now - start)) -ge "$rr_join_max" ]; then rr_miss=join_timeout; rr_emit_miss; return 0; fi
+                sleep "$poll"
+            done
+            if [ -f "$fb.rc" ]; then now=$(date +%s); rr_serve_flight "$fb" $((now - start)); fi
+            if rr_hit; then rr_serve_hit; fi
+            rr_join_note=join_owner_gone
+            rr_become_owner
+            return 0
+        done
+    }
+
+    # 변경 파일 → 테스트 목록은 기존 scripts/pre_commit_test_map.py 를 그대로 쓴다(새 매핑 없음). 기록만 하고 실행 범위는 줄이지 않는다.
+    rr_test_plan() {
+        local jid=${AADS_HEAVY_JOB_ID:-nojob} changed mapped t a covered sig mark nc=0 nm=0 ni=0 nd=0 inj="" dfj="" haspath=0
+        [ -f "$rr_top/scripts/pre_commit_test_map.py" ] && command -v python3 >/dev/null 2>&1 || return 0
+        case "$jid" in ''|*[!A-Za-z0-9_-]*) jid=nojob ;; esac
+        changed=$( { git -C "$rr_top" -c core.quotepath=off diff --name-only HEAD; git -C "$rr_top" -c core.quotepath=off ls-files -o --exclude-standard; } 2>/dev/null | LC_ALL=C sort -u | head -2000 )
+        [ -n "$changed" ] && nc=$(printf '%s\n' "$changed" | wc -l)
+        mapped=$(printf '%s\n' "$changed" | { cd -- "$rr_top" && timeout 20 python3 scripts/pre_commit_test_map.py; } 2>/dev/null | cut -f2 | LC_ALL=C sort -u)
+        for a in "$@"; do case "$a" in */*|*.py) haspath=1 ;; esac; done
+        for t in $mapped; do
+            case "$t" in ''|*[!A-Za-z0-9_./-]*) continue ;; esac
+            nm=$((nm + 1))
+            covered=0
+            if [ "$haspath" = 0 ]; then covered=1; else
+                for a in "$@"; do
+                    a=${a%%::*}
+                    if [ "$a" = "$t" ]; then covered=1; break; fi
+                    case "$a" in */|tests|tests/*) case "$t" in "${a%/}"/*) covered=1; break ;; esac ;; esac
+                done
+            fi
+            if [ "$covered" = 1 ]; then
+                ni=$((ni + 1)); [ "$ni" -gt 40 ] || inj="${inj:+$inj,}\"$t\""
+            else
+                nd=$((nd + 1)); [ "$nd" -gt 40 ] || dfj="${dfj:+$dfj,}\"$t\""
+            fi
+        done
+        sig=$(printf '%s\n%s\n' "$changed" "$*" | sha256sum | cut -c1-16)
+        mark="$lane/events/.plan-$jid"
+        mkdir -p "$lane/events" 2>/dev/null || return 0
+        [ "$(cat "$mark" 2>/dev/null)" = "$sig" ] && return 0
+        printf '%s' "$sig" > "$mark" 2>/dev/null
+        emit_raw heavy_lane_test_plan "\"changed_files\":$nc,\"mapped_tests\":$nm,\"in_command_count\":$ni,\"deferred_count\":$nd,\"in_command\":[$inj],\"deferred\":[$dfj],\"full_validation_at_release\":\"kept\""
+        return 0
+    }
+
+    rr_unlease() {
+        rm -f "$rr_dir/S-$rr_key" 2>/dev/null
+        return 0
+    }
+
+    # 소유자: 명령을 자식으로 돌리며 출력 꼬리(최대 64KB)를 잡는다. 종료코드 0 이고 트리가 그대로일 때만 저장한다.
+    rr_run_owner() {
+        local t="" child tp p1 p2 rc fb ts tree0 sz
+        t=$(mktemp -d "$rr_dir/tmp.XXXXXX" 2>/dev/null) || t=""
+        if [ -z "$t" ] || ! mkfifo "$t/o" "$t/e" "$t/t" 2>/dev/null || ! { exec 9<>"$t/t"; } 2>/dev/null; then
+            [ -z "$t" ] || rm -rf "${t:?}" 2>/dev/null
+            rr_unlease; exec 201>&-
+            rr_miss=capture_unavailable; rr_owner=0; rr_emit_miss
+            exec "$real" "$@"
+        fi
+        # fd 9 는 꼬리 FIFO 의 자리표시 writer 다. 두 tee 가 모두 열기 전에 한쪽이 먼저 끝나 tail 이 EOF 를 보는 경쟁을 막는다.
+        tail -c "$rr_tail" < "$t/t" > "$t/tail" 9>&- 200>&- 201>&- &
+        tp=$!
+        tee "$t/t" < "$t/o" 9>&- 200>&- 201>&- &
+        p1=$!
+        tee "$t/t" < "$t/e" >&2 9>&- 200>&- 201>&- &
+        p2=$!
+        "$real" "$@" <&0 > "$t/o" 2> "$t/e" 9>&- 201>&- &
+        child=$!
+        rr_child=$child
+        trap 'rr_interrupted=1; kill -TERM "$rr_child" 2>/dev/null' TERM INT HUP
+        wait "$child"; rc=$?
+        while [ "$rr_interrupted" = 1 ] && kill -0 "$child" 2>/dev/null; do wait "$child"; rc=$?; done
+        wait "$p1" "$p2" 2>/dev/null
+        exec 9>&-
+        wait "$tp" 2>/dev/null
+        trap - TERM INT HUP
+        if [ "$rr_interrupted" = 1 ]; then
+            rm -rf "${t:?}" 2>/dev/null; rr_unlease
+            emit_raw heavy_lane_result_not_stored "\"key\":\"${rr_key:0:16}\",\"reason\":\"interrupted\",\"rc\":$rc"
+            exit "$rc"
+        fi
+        fb="$rr_dir/F-$rr_key-$$-$rr_my_ticks"
+        sz=$(wc -c < "$t/tail" 2>/dev/null); case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
+        if [ "$rc" = 0 ]; then
+            tree0=$rr_tree
+            if rr_tree_hash && [ "$rr_tree" = "$tree0" ]; then
+                ts=$(date +%s)
+                if cp -- "$t/tail" "$rr_dir/R-$rr_key.out.tmp.$$" 2>/dev/null \
+                   && mv -f "$rr_dir/R-$rr_key.out.tmp.$$" "$rr_dir/R-$rr_key.out" 2>/dev/null \
+                   && printf 'rc=0\nts=%s\ncmd=%s\nbytes=%s\ntree=%s\n' "$ts" "$name" "$sz" "$tree0" > "$rr_dir/R-$rr_key.meta.tmp.$$" 2>/dev/null \
+                   && mv -f "$rr_dir/R-$rr_key.meta.tmp.$$" "$rr_dir/R-$rr_key.meta" 2>/dev/null; then
+                    emit_raw heavy_lane_result_stored "\"key\":\"${rr_key:0:16}\",\"bytes\":$sz,\"ttl_s\":$rr_ttl"
+                else
+                    rm -f "$rr_dir/R-$rr_key.out.tmp.$$" "$rr_dir/R-$rr_key.meta.tmp.$$" "$rr_dir/R-$rr_key.out" "$rr_dir/R-$rr_key.meta" 2>/dev/null
+                    emit_raw heavy_lane_result_not_stored "\"key\":\"${rr_key:0:16}\",\"reason\":\"store_failed\",\"rc\":0"
+                fi
+            else
+                emit_raw heavy_lane_result_not_stored "\"key\":\"${rr_key:0:16}\",\"reason\":\"tree_changed_during_run\",\"rc\":0"
+            fi
+        else
+            emit_raw heavy_lane_result_not_stored "\"key\":\"${rr_key:0:16}\",\"reason\":\"nonzero_exit\",\"rc\":$rc"
+        fi
+        if cp -- "$t/tail" "$fb.out.tmp.$$" 2>/dev/null && mv -f "$fb.out.tmp.$$" "$fb.out" 2>/dev/null \
+           && printf '%s\n' "$rc" > "$fb.rc.tmp.$$" 2>/dev/null && mv -f "$fb.rc.tmp.$$" "$fb.rc" 2>/dev/null; then :; else
+            rm -f "$fb.out.tmp.$$" "$fb.rc.tmp.$$" "$fb.out" "$fb.rc" 2>/dev/null
+        fi
+        rm -rf "${t:?}" 2>/dev/null
+        rr_unlease
+        rr_prune
+        exit "$rc"
+    }
+
+    if [ -e "$lane/reuse" ] && [ "${RUNNER_RESULT_REUSE:-1}" != 0 ] && reusable "$@"; then
+        if rr_compute_key "$@"; then
+            rr_test_plan "$@"
+            rr_flow
+        else
+            rr_emit_miss
+        fi
+    fi
+
     held=""; start=$(date +%s); last_evt=-1; waited=0
     while :; do
         if try_acquire; then break; fi
@@ -894,6 +1286,7 @@ runner_heavy_install_shims() {
         emit heavy_lane_acquired "$(( $(date +%s) - start ))"
     fi
     export AADS_HEAVY_HELD="$held"
+    if [ "$rr_owner" = 1 ]; then rr_run_owner "$@"; fi
     exec "$real" "$@"
 EOF_AADS_HEAVY_SHIM
     } > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
@@ -909,12 +1302,13 @@ EOF_AADS_HEAVY_SHIM
 }
 
 # 작업(run_job 서브셸)이 시작될 때 호출한다. 정책에 heavy 슬롯이 있을 때만 PATH 앞에 shim 을 둔다 —
-# 정책이 없으면 PATH·환경이 한 글자도 바뀌지 않는다. 인자: instruction job_id
+# 정책이 없으면 PATH·환경이 한 글자도 바뀌지 않는다. 인자: instruction job_id [project]
 runner_heavy_job_env() {
-    local instruction="${1:-}" job_id="${2:-}"
+    local instruction="${1:-}" job_id="${2:-}" project_name="${3:-}"
     [[ -r "$RUNNER_HEAVY_DIR/policy" && -x "$RUNNER_HEAVY_DIR/bin/.aads-heavy-shim" ]] || return 0
     export AADS_HEAVY_LANE_DIR="$RUNNER_HEAVY_DIR"
     export AADS_HEAVY_JOB_ID="$job_id"
+    if [[ "$project_name" =~ ^[A-Za-z0-9._-]+$ ]]; then export AADS_HEAVY_PROJECT="$project_name"; else unset AADS_HEAVY_PROJECT; fi
     if [[ "$instruction" =~ (^|[[:space:]])PRIORITY:[[:space:]]*P[01]([^0-9]|$) ]]; then
         export AADS_HEAVY_URGENT=1
     else
@@ -4097,7 +4491,7 @@ run_job() {
     _queue_wait_s=$(db_exec "SELECT floor(EXTRACT(EPOCH FROM (started_at - created_at)))::bigint FROM pipeline_jobs WHERE job_id='${job_id}';" 2>/dev/null | head -n1 | tr -d '[:space:]') || _queue_wait_s=""
     _worker_nice=$(runner_worker_nice_value "$instruction")
     (( _worker_nice > 0 )) && _worker_nice_cmd=(nice -n "$_worker_nice")
-    runner_heavy_job_env "$instruction" "$job_id" || true
+    runner_heavy_job_env "$instruction" "$job_id" "${project:-}" || true
     record_runner_event "$job_id" "job_started" "running" "claude_code_work" "$job_model" "" "$job_size" "" "{\"runner_host\":\"${RUNNER_HOSTNAME}\",\"parallel_group\":\"${parallel_group:-}\",$(runner_job_receipt_fields "$_job_runner_pid" "$pre_exec_sha" "$_worker_nice" "$_queue_wait_s")}"
     post_to_chat "$session_id" "🔧 [Pipeline Runner] 작업 시작: ${instruction:0:200}"
 
