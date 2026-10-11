@@ -845,7 +845,7 @@
       align-items: end;
     }
 
-    .tabs {
+    .sub-tabs {
       display: flex;
       gap: 4px;
       align-items: center;
@@ -855,7 +855,17 @@
       scrollbar-width: none;
     }
 
-    .tabs::-webkit-scrollbar {
+    .sub-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* L3: 상단에는 현재 묶음(data-active-group)의 하위 화면만 보인다. 직원 화면은 권한 필터만 적용. */
+    body:not(.employee-view) .sub-tabs[data-active-group="today"] > .tab:not([data-group="today"]),
+    body:not(.employee-view) .sub-tabs[data-active-group="money"] > .tab:not([data-group="money"]),
+    body:not(.employee-view) .sub-tabs[data-active-group="review"] > .tab:not([data-group="review"]),
+    body:not(.employee-view) .sub-tabs[data-active-group="people"] > .tab:not([data-group="people"]),
+    body:not(.employee-view) .sub-tabs[data-active-group="vault"] > .tab:not([data-group="vault"]),
+    body:not(.employee-view) .sub-tabs[data-active-group="settings"] > .tab:not([data-group="settings"]) {
       display: none;
     }
 
@@ -864,7 +874,7 @@
       align-items: stretch;
     }
 
-    body.employee-view .tabs {
+    body.employee-view .sub-tabs {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       width: min(760px, 100%);
@@ -2184,6 +2194,23 @@
     .dot.warn { background: var(--warn); }
     .dot.err { background: var(--neg); }
 
+    /* L3 오늘 홈: 1366×768 에서 머리줄+5지표+처리할 일 3행이 첫 화면에 들어가도록 간격을 좁힌다. */
+    .home-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 12px; }
+    .home-head h2 { margin: 0 6px 0 0; font-size: 20px; }
+    .home-head .home-biz { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+    .home-head select { min-height: 34px; }
+    .home-today, .home-collect { font-size: 13px; color: var(--muted); white-space: nowrap; }
+    .home-head #homeRefreshBtn { margin-left: auto; }
+    .home-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+    .home-kpis .kpi-card { cursor: pointer; }
+    .home-kpis [data-kpi-state] > div { margin-top: 6px; padding: 8px; font-size: 12px; }
+    .home-todo { margin-top: 12px; }
+    .home-todo .panel-body { padding-top: 4px; padding-bottom: 4px; }
+    .home-todo .todo-row button { white-space: nowrap; }
+    #kpiGrid.kpis { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+    .home-band-title { margin: 18px 0 8px; font-size: 14px; color: var(--muted); }
+    .side-label-settings { margin-top: 10px; border-top: 1px solid rgba(255,255,255,.08); }
+
     .filter-bar {
       display: flex;
       flex-wrap: wrap;
@@ -2760,6 +2787,7 @@
       }
 
       .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .home-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .ops-status-grid, .approval-grid { grid-template-columns: 1fr; }
       .dashboard-hero { display: grid; align-items: start; }
       .hero-actions { justify-content: stretch; }
@@ -2948,40 +2976,43 @@
           <small>중화점 · 성신여대점 · 미아점</small>
         </div>
         <nav class="side-nav" aria-label="좌측 주요 화면">
-          <div class="side-label">경영</div>
-          <button class="tab active" data-view="dashboard">통합 홈</button>
-          <button class="tab" data-view="tasks">할 일·알림</button>
-          <button class="tab" data-view="reports">경영 리포트</button>
-          <button class="tab" data-view="documents">경영자료·보관</button>
-          <button class="tab" data-view="sales">매출·정산</button>
-          <button class="tab" data-view="accounts">입금·계좌</button>
-          <button class="tab" data-view="salesLedger">매출 상세</button>
-          <button class="tab" data-view="purchaseLedger">매입 상세</button>
-          <button class="tab" data-view="bankLedger">은행 거래내역</button>
-          <button class="tab" data-view="cardLedger">카드 사용내역</button>
-          <div class="side-label">자료·검토</div>
-          <button class="tab" data-view="clobeOverview">자료현황</button>
-          <button class="tab" data-view="clobeReview">거래 검토함</button>
-          <button class="tab" data-view="clobeSummary">경영요약</button>
-          <div class="side-label">운영</div>
-          <button class="tab" data-view="employees">직원관리</button>
-          <button class="tab" data-view="payroll">급여관리</button>
-          <button class="tab" data-view="inventory">매입·재고</button>
-          <button class="tab" data-view="tax">세무·회계</button>
-          <button class="tab" data-view="approvals">통합 승인함</button>
-          <button class="tab" data-view="alerts">알림센터</button>
-          <button class="tab" data-view="onboarding">입사서류</button>
-          <button class="tab" data-view="contracts">계약서</button>
-          <a class="tab" data-clock-link href="/static/apps/obys/clock.html">출퇴근 하기</a>
-          <button class="tab" data-view="attendance">근태</button>
-          <button class="tab" data-view="payroll">급여내역서</button>
-          <div class="side-label">설정</div>
-          <button class="tab" data-view="business">사업자·지점</button>
-          <button class="tab" data-view="integrations">연동 관리</button>
-          <button class="tab" data-view="clobeSettings">자료 연결 설정</button>
-          <button class="tab" data-view="margins">원가·마진</button>
-          <button class="tab" data-view="audit">회원·권한관리</button>
+          <div class="side-label" data-nav-group="today">오늘</div>
+          <button class="tab active" data-view="dashboard" data-group="today">오늘 홈</button>
+          <button class="tab" data-view="tasks" data-group="today">할 일</button>
+          <button class="tab" data-view="alerts" data-group="today">알림</button>
+          <div class="side-label" data-nav-group="money">돈 흐름</div>
+          <button class="tab" data-view="sales" data-group="money">매출·정산</button>
+          <button class="tab" data-view="salesLedger" data-group="money">매출 상세</button>
+          <button class="tab" data-view="accounts" data-group="money">입금·계좌</button>
+          <button class="tab" data-view="bankLedger" data-group="money">통장 거래내역</button>
+          <button class="tab" data-view="cardLedger" data-group="money">카드 사용내역</button>
+          <button class="tab" data-view="purchaseLedger" data-group="money">매입 상세</button>
+          <button class="tab" data-view="inventory" data-group="money">매입·재고</button>
+          <div class="side-label" data-nav-group="review">검토·마감</div>
+          <button class="tab" data-view="clobeReview" data-group="review">검토할 거래</button>
+          <button class="tab" data-view="clobeOverview" data-group="review">자료 현황</button>
+          <button class="tab" data-view="clobeSummary" data-group="review">경영 요약</button>
+          <button class="tab" data-view="reports" data-group="review">경영 리포트</button>
+          <button class="tab" data-view="closing" data-group="review">월마감</button>
+          <button class="tab" data-view="tax" data-group="review">세무·회계</button>
+          <button class="tab" data-view="margins" data-group="review">원가·마진</button>
+          <div class="side-label" data-nav-group="people">사람</div>
+          <button class="tab" data-view="employees" data-group="people">직원</button>
+          <a class="tab" data-clock-link data-group="people" href="/static/apps/obys/clock.html">출퇴근 하기</a>
+          <button class="tab" data-view="attendance" data-group="people">근태</button>
+          <button class="tab" data-view="payroll" data-group="people">급여</button>
+          <button class="tab" data-view="onboarding" data-group="people">입사서류</button>
+          <button class="tab" data-view="contracts" data-group="people">계약서</button>
+          <button class="tab" data-view="approvals" data-group="people">승인함</button>
+          <div class="side-label" data-nav-group="vault">자료함</div>
+          <button class="tab" data-view="documents" data-group="vault">경영자료·보관</button>
           <a class="tab" data-external-tab="recipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">레시피</a>
+          <div class="side-label side-label-settings" data-nav-group="settings">설정</div>
+          <button class="tab" data-view="business" data-group="settings">사업자·지점</button>
+          <button class="tab" data-view="integrations" data-group="settings">연동 관리</button>
+          <button class="tab" data-view="clobeSettings" data-group="settings">자료 연결</button>
+          <button class="tab" data-view="audit" data-group="settings">회원·권한</button>
+          <button class="tab" data-view="settings" data-group="settings">기초 설정</button>
         </nav>
         <div class="app-sidebar-foot">권한, 자동수집, 문서 보관은 로그인 세션 기준으로 제한됩니다.</div>
       </aside>
@@ -2995,21 +3026,37 @@
             <label>지점
               <select id="branchFilter"></select>
             </label>
-            <nav class="tabs" aria-label="상단 빠른 화면">
-              <a class="tab" data-clock-link href="/static/apps/obys/clock.html">출퇴근 하기</a>
-              <button class="tab active" data-view="dashboard">통합 홈</button>
-              <button class="tab" data-view="tasks">할일</button>
-              <button class="tab" data-view="sales">매출</button>
-              <button class="tab" data-view="clobeOverview">자료현황</button>
-              <button class="tab" data-view="clobeReview">검토함</button>
-              <button class="tab" data-view="clobeSummary">경영요약</button>
-              <button class="tab" data-view="approvals">승인함</button>
-              <button class="tab" data-view="contracts">계약서</button>
-              <button class="tab" data-view="onboarding">입사서류</button>
-              <button class="tab" data-view="payroll">급여관리</button>
-              <button class="tab" data-view="integrations">연동관리</button>
-              <button class="tab" data-view="clobeSettings">자료설정</button>
-              <button class="tab" data-view="audit">회원권한</button>
+            <nav class="sub-tabs" id="subTabs" data-active-group="today" aria-label="현재 묶음의 하위 화면">
+              <a class="tab" data-clock-link data-group="people" href="/static/apps/obys/clock.html">출퇴근 하기</a>
+              <button class="tab active" data-view="dashboard" data-group="today">오늘 홈</button>
+              <button class="tab" data-view="tasks" data-group="today">할 일</button>
+              <button class="tab" data-view="alerts" data-group="today">알림</button>
+              <button class="tab" data-view="sales" data-group="money">매출·정산</button>
+              <button class="tab" data-view="salesLedger" data-group="money">매출 상세</button>
+              <button class="tab" data-view="accounts" data-group="money">입금·계좌</button>
+              <button class="tab" data-view="bankLedger" data-group="money">통장</button>
+              <button class="tab" data-view="cardLedger" data-group="money">카드</button>
+              <button class="tab" data-view="purchaseLedger" data-group="money">매입</button>
+              <button class="tab" data-view="inventory" data-group="money">재고</button>
+              <button class="tab" data-view="clobeReview" data-group="review">검토할 거래</button>
+              <button class="tab" data-view="clobeOverview" data-group="review">자료 현황</button>
+              <button class="tab" data-view="clobeSummary" data-group="review">경영 요약</button>
+              <button class="tab" data-view="reports" data-group="review">리포트</button>
+              <button class="tab" data-view="closing" data-group="review">월마감</button>
+              <button class="tab" data-view="tax" data-group="review">세무</button>
+              <button class="tab" data-view="margins" data-group="review">원가·마진</button>
+              <button class="tab" data-view="employees" data-group="people">직원</button>
+              <button class="tab" data-view="attendance" data-group="people">근태</button>
+              <button class="tab" data-view="payroll" data-group="people">급여</button>
+              <button class="tab" data-view="onboarding" data-group="people">입사서류</button>
+              <button class="tab" data-view="contracts" data-group="people">계약서</button>
+              <button class="tab" data-view="approvals" data-group="people">승인함</button>
+              <button class="tab" data-view="documents" data-group="vault">경영자료·보관</button>
+              <button class="tab" data-view="business" data-group="settings">사업자·지점</button>
+              <button class="tab" data-view="integrations" data-group="settings">연동 관리</button>
+              <button class="tab" data-view="clobeSettings" data-group="settings">자료 연결</button>
+              <button class="tab" data-view="audit" data-group="settings">회원·권한</button>
+              <button class="tab" data-view="settings" data-group="settings">기초 설정</button>
             </nav>
             <button id="csvBtn" class="primary">CSV 추가</button>
           </div>
@@ -3017,42 +3064,47 @@
 
     <main id="appMain" class="app-only hidden">
       <section id="dashboardView">
-        <div class="dashboard-hero">
-          <div>
-            <h2>통합 경영 대시보드</h2>
-            <p>매출, 입금, 직원, 계약, 입사서류, 연동 상태를 사업자와 지점 기준으로 봅니다.</p>
+        <div class="home-head" aria-label="오늘 홈 머리줄">
+          <h2>오늘 홈</h2>
+          <label class="home-biz">사업자
+            <select id="homeBusinessSelect" aria-label="사업자 선택"><option value="">전체 사업자</option></select>
+          </label>
+          <span id="homeToday" class="home-today"></span>
+          <span id="homeCollectStatus" class="home-collect" aria-live="polite"><span class="dot"></span>수집 상태 확인 중</span>
+          <button type="button" id="homeRefreshBtn">새로고침</button>
+        </div>
+        <div class="home-kpis" id="homeKpiGrid" aria-label="오늘 지표">
+          <div class="kpi-card" role="button" tabindex="0" data-home-kpi="sales" aria-label="오늘 매출 화면 열기">
+            <small>오늘 매출</small><b data-kpi-value>—</b><span data-kpi-hint>불러오는 중</span>
+            <div data-kpi-state></div>
           </div>
-          <div class="hero-actions">
-            <button type="button" class="primary" data-view="integrations">연동 설정</button>
-            <button type="button" data-view="approvals">승인함</button>
-            <button type="button" data-view="reports">월마감</button>
+          <div class="kpi-card" role="button" tabindex="0" data-home-kpi="bank" aria-label="통장 입출금 화면 열기">
+            <small>통장 입출금</small><b data-kpi-value>—</b><span data-kpi-hint>불러오는 중</span>
+            <div data-kpi-state></div>
+          </div>
+          <div class="kpi-card" role="button" tabindex="0" data-home-kpi="review" aria-label="검토 대기 화면 열기">
+            <small>검토 대기</small><b data-kpi-value>—</b><span data-kpi-hint>불러오는 중</span>
+            <div data-kpi-state></div>
+          </div>
+          <div class="kpi-card" role="button" tabindex="0" data-home-kpi="payroll" aria-label="급여일 화면 열기">
+            <small>급여일</small><b data-kpi-value>—</b><span data-kpi-hint>불러오는 중</span>
+            <div data-kpi-state></div>
+          </div>
+          <div class="kpi-card" role="button" tabindex="0" data-home-kpi="approval" aria-label="승인 대기 화면 열기">
+            <small>승인 대기</small><b data-kpi-value>—</b><span data-kpi-hint>불러오는 중</span>
+            <div data-kpi-state></div>
           </div>
         </div>
-        <div class="ops-status-grid" aria-label="운영 요약">
-          <div class="ops-card"><small>입사·계약</small><strong>직원 승인 → 서류 → 계약</strong><span>가입 직원의 누락 항목과 서명 대기 계약을 한 흐름으로 확인합니다.</span></div>
-          <div class="ops-card"><small>은행·카드</small><strong>신한·IBK·카드 연동</strong><span>설정에 등록된 계정 기준으로 수집 상태와 파일 업로드 폴백을 같이 봅니다.</span></div>
-          <div class="ops-card"><small>매출·정산</small><strong>배달 4사 대사</strong><span>배민, 쿠팡이츠, 요기요, 땡겨요 정산과 입금 차이를 월별로 점검합니다.</span></div>
-          <div class="ops-card"><small>문서</small><strong>계약·입사서류 보관</strong><span>PDF 미리보기, A4 계약서, 전자서명 상태를 직원별로 추적합니다.</span></div>
-        </div>
-        <div class="approval-grid" aria-label="통합 승인함 요약">
-          <button type="button" class="approval-card" data-view="approvals"><b>가입요청·직원 승인</b><span>직원 회원가입 후 관리자가 승인해야 하는 항목</span></button>
-          <button type="button" class="approval-card" data-view="onboarding"><b>입사서류 검수</b><span>직원이 등록한 파일 확인, 반려, 승인 처리</span></button>
-          <button type="button" class="approval-card" data-view="contracts"><b>계약서 작성·서명요청</b><span>승인 직원 자동채움과 A4 미리보기 확인</span></button>
-        </div>
+        <section class="panel home-todo" aria-label="처리할 일">
+          <div class="panel-head">
+            <h2 class="panel-title">처리할 일</h2>
+            <span id="homeTodoBadge" class="badge info">0건</span>
+          </div>
+          <div class="panel-body" id="homeTodoRows"></div>
+        </section>
+        <h3 class="home-band-title">이번 달 매장 지표</h3>
         <div class="grid kpis" id="kpiGrid"></div>
         <div class="grid content-grid">
-          <div class="unni-shortcuts" aria-label="언니냉면 바로가기">
-            <a class="unni-shortcut" href="https://unni.newtalk.kr/" target="_blank" rel="noopener noreferrer">
-              <b>UNNI HOME</b>
-              <strong>언니냉면 홈페이지</strong>
-              <span>배민 주문 링크, 메뉴, 매장 위치, 문의 게시판을 확인합니다.</span>
-            </a>
-            <a class="unni-shortcut" data-external-tab="recipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">
-              <b>STAFF RECIPE</b>
-              <strong>직원용 레시피 페이지</strong>
-              <span>FB 로그인 권한으로 조리법과 A4 출력용 레시피를 엽니다.</span>
-            </a>
-          </div>
           <section class="panel">
             <div class="panel-head">
               <h2 class="panel-title">월마감 상태</h2>
@@ -3155,6 +3207,18 @@
               </div>
             </div>
           </section>
+          <div class="unni-shortcuts" aria-label="언니냉면 바로가기">
+            <a class="unni-shortcut" href="https://unni.newtalk.kr/" target="_blank" rel="noopener noreferrer">
+              <b>UNNI HOME</b>
+              <strong>언니냉면 홈페이지</strong>
+              <span>배민 주문 링크, 메뉴, 매장 위치, 문의 게시판을 확인합니다.</span>
+            </a>
+            <a class="unni-shortcut" data-external-tab="recipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">
+              <b>STAFF RECIPE</b>
+              <strong>직원용 레시피 페이지</strong>
+              <span>FB 로그인 권한으로 조리법과 A4 출력용 레시피를 엽니다.</span>
+            </a>
+          </div>
         </div>
       </section>
 
@@ -6794,13 +6858,12 @@
       const m = metrics();
       const laborRate = m.sales ? (m.labor / m.sales) * 100 : 0;
       const foodRate = m.sales ? (m.marketbom / m.sales) * 100 : 0;
+      // L3: 홈 아래 "이번 달 매장 지표" 띠 — 배달 정산 차이·식재료율·인건비율·추정 손익
       const items = [
-        ["총매출", formatMoney(m.sales), `${selectedMonth()} ${selectedBranch()}`],
-        ["입금합계", formatMoney(m.bank), `매출 대비 ${formatMoney(m.depositGap)}`],
-        ["마켓봄 매입", formatMoney(m.marketbom), `식재료율 ${foodRate.toFixed(1)}%`],
-        ["인건비", formatMoney(m.labor), `인건비율 ${laborRate.toFixed(1)}%`],
-        ["운영비", formatMoney(m.expense), "일반 비용"],
-        ["추정 손익", formatMoney(m.gross), m.gross >= 0 ? "흑자 구간" : "적자 구간"]
+        ["배달 정산 차이", formatMoney(m.depositGap), `매출 ${formatMoney(m.sales)} · 입금 ${formatMoney(m.bank)}`],
+        ["식재료율", `${foodRate.toFixed(1)}%`, `마켓봄 매입 ${formatMoney(m.marketbom)}`],
+        ["인건비율", `${laborRate.toFixed(1)}%`, `인건비 ${formatMoney(m.labor)}`],
+        ["추정 손익", formatMoney(m.gross), `${selectedMonth()} ${selectedBranch()} · ${m.gross >= 0 ? "흑자 구간" : "적자 구간"}`]
       ];
       els.kpiGrid.innerHTML = items.map(([label, value, hint]) => `
         <article class="panel metric">
@@ -11351,6 +11414,278 @@
       renderBusinessPage();
     }
 
+    // ── L3 오늘 홈: 기존 financeApi 경로만 병렬 호출해 카드별로 독립 집계한다(서버 변경 없음). ──
+    const HOME_RELOAD_MS = 60000;
+    const HOME_TODO_LIMIT = 7;
+    const HOME_STALLED_STATUSES = new Set(["failed", "action_required", "connector_not_ready", "needs_reauth"]);
+    const HOME_PENDING_DOC_STATUSES = new Set(["uploaded", "submitted", "pending", "reviewing"]);
+    const HOME_REPLIED = new Set(["답변완료", "replied", "done", "answered"]);
+    let homeLoadedAt = 0;
+    let homeLoading = null;
+
+    function kstDate(offsetDays = 0) {
+      const now = new Date(Date.now() + offsetDays * 86400000);
+      return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+    }
+
+    function homeBusinessId() {
+      return els.homeBusinessSelect?.value || "";
+    }
+
+    function homeQuery(extra = {}) {
+      const params = new URLSearchParams();
+      const business = homeBusinessId();
+      if (business) params.set("business_id", business);
+      Object.entries(extra).forEach(([key, value]) => { if (value) params.set(key, value); });
+      const text = params.toString();
+      return text ? `?${text}` : "";
+    }
+
+    function syncHomeBusinessSelect() {
+      const select = els.homeBusinessSelect;
+      if (!select) return;
+      const current = select.value;
+      const businesses = settings().businesses || [];
+      select.innerHTML = `<option value="">전체 사업자</option>${businesses.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")}`;
+      select.value = businesses.some(item => item.id === current) ? current : "";
+    }
+
+    function homeCard(key) {
+      return els.homeKpiGrid?.querySelector(`[data-home-kpi="${key}"]`) || null;
+    }
+
+    function setHomeCard(key, value, hint) {
+      const card = homeCard(key);
+      if (!card) return;
+      card.querySelector("[data-kpi-value]").textContent = value;
+      card.querySelector("[data-kpi-hint]").textContent = hint;
+      const slot = card.querySelector("[data-kpi-state]");
+      clearTimeout(slot._stateTimer);
+      slot._stateToken = (slot._stateToken || 0) + 1;
+      slot.innerHTML = "";
+    }
+
+    function failHomeCard(key, reason) {
+      const card = homeCard(key);
+      if (!card) return;
+      card.querySelector("[data-kpi-value]").textContent = "—";
+      card.querySelector("[data-kpi-hint]").textContent = "";
+      renderState(card.querySelector("[data-kpi-state]"), { kind: "error", title: "불러오지 못했습니다", reason });
+    }
+
+    function homeErrorReason(result) {
+      const error = result?.reason;
+      if (Number(error?.status) === 403) return "이 계정에는 조회 권한이 없습니다.";
+      return error?.message || "잠시 후 다시 시도해 주세요.";
+    }
+
+    function sumRecords(rows, kind, date) {
+      return rows.filter(row => deliveryRecordDate(row) === date).reduce((sum, row) => sum + deliveryRecordAmount(row, kind), 0);
+    }
+
+    function nextPayday(statements, today) {
+      const dates = statements
+        .map(row => String(row.pay_date || row.payDate || row.statement_payload?.pay_date || "").slice(0, 10))
+        .filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= today)
+        .sort();
+      return dates[0] || "";
+    }
+
+    function dayDiff(from, to) {
+      return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
+    }
+
+    function latestCollectionRows(statuses) {
+      const latest = new Map();
+      statuses
+        .slice()
+        .sort((a, b) => String(b.updated_at || b.finished_at || "").localeCompare(String(a.updated_at || a.finished_at || "")))
+        .forEach(row => {
+          const key = [row.service, row.business_id, row.branch].map(value => String(value || "")).join("|");
+          if (!latest.has(key)) latest.set(key, row);
+        });
+      return [...latest.values()];
+    }
+
+    function renderHomeCollect(result) {
+      const el = els.homeCollectStatus;
+      if (!el) return [];
+      if (result.status !== "fulfilled") {
+        el.innerHTML = `<span class="dot err"></span>수집 상태를 불러오지 못했습니다`;
+        return [];
+      }
+      const rows = latestCollectionRows(result.value.statuses || []);
+      const stalled = rows.filter(row => HOME_STALLED_STATUSES.has(String(row.status || "")));
+      const lastAt = rows.map(row => String(row.finished_at || row.updated_at || "")).filter(Boolean).sort().pop() || "";
+      const ageHours = lastAt ? (Date.now() - Date.parse(lastAt)) / 3600000 : Infinity;
+      const dot = stalled.length ? "err" : (ageHours > 24 ? "warn" : "ok");
+      const label = lastAt ? `마지막 수집 ${formatDateTime(lastAt)}` : "수집 기록 없음";
+      el.innerHTML = `<span class="dot ${dot}"></span>${escapeHtml(label)}${stalled.length ? ` · 멈춤 ${stalled.length}곳` : ""}`;
+      return stalled.map(row => {
+        const name = integrationLabels[row.service] || row.service || "채널";
+        const since = row.finished_at || row.updated_at;
+        const hours = since ? Math.max(1, Math.round((Date.now() - Date.parse(since)) / 3600000)) : 0;
+        return { level: "p0", tag: "긴급", title: `${name} 수집 멈춤${hours ? ` ${hours}시간` : ""} — 다시 연결`, sub: row.message || row.branch || "", view: "integrations", action: "연결 점검" };
+      });
+    }
+
+    function renderHomeTodos(todos) {
+      const el = els.homeTodoRows;
+      if (!el) return;
+      const order = { p0: 0, p1: 1, p2: 2 };
+      const rows = todos.filter(Boolean).sort((a, b) => order[a.level] - order[b.level]).slice(0, HOME_TODO_LIMIT);
+      if (els.homeTodoBadge) els.homeTodoBadge.textContent = `${rows.length}건`;
+      if (!rows.length) {
+        renderState(el, { kind: "empty", title: "오늘 처리할 일이 없습니다" });
+        return;
+      }
+      clearTimeout(el._stateTimer);
+      el._stateToken = (el._stateToken || 0) + 1;
+      el.innerHTML = rows.map((row, index) => `
+        <div class="todo-row">
+          <span class="tag ${row.level}">${escapeHtml(row.tag)}</span>
+          <p>${escapeHtml(row.title)}${row.sub ? `<small>${escapeHtml(row.sub)}</small>` : ""}</p>
+          <button type="button" data-home-todo="${index}">${escapeHtml(row.action || "바로 처리")}</button>
+        </div>`).join("");
+      el.querySelectorAll("[data-home-todo]").forEach(btn => {
+        btn.addEventListener("click", () => openHomeTarget(rows[Number(btn.dataset.homeTodo)].view));
+      });
+    }
+
+    function openHomeTarget(view) {
+      const today = kstDate();
+      if (view === "sales") {
+        if (els.salesDateFrom) els.salesDateFrom.value = today;
+        if (els.salesDateTo) els.salesDateTo.value = today;
+      }
+      setView(view);
+    }
+
+    async function loadTodayHome({ force = false } = {}) {
+      if (!hasServerAuth() || isEmployeeExperience()) return;
+      if (homeLoading) return homeLoading;
+      if (!force && Date.now() - homeLoadedAt < HOME_RELOAD_MS) return;
+      const today = kstDate();
+      const yesterday = kstDate(-1);
+      const lastWeek = kstDate(-7);
+      const weekAgo = kstDate(-6);
+      if (els.homeToday) els.homeToday.textContent = `오늘 ${today} (KST)`;
+      syncHomeBusinessSelect();
+      ["sales", "bank", "review", "payroll", "approval"].forEach(key => {
+        const card = homeCard(key);
+        if (card) renderState(card.querySelector("[data-kpi-state]"), { kind: "loading" });
+      });
+      renderState(els.homeTodoRows, { kind: "loading" });
+      const q = homeQuery();
+      homeLoading = Promise.allSettled([
+        financeApi(`/sales${q}`),
+        financeApi(`/settlements${q}`),
+        financeApi(`/bank-summary${homeQuery({ date_from: today, date_to: today })}`),
+        financeApi("/accounts"),
+        financeApi(`/reviews${q}`),
+        financeApi("/payroll"),
+        financeApi("/employees/join-requests"),
+        financeApi(`/onboarding/documents${q}`),
+        financeApi("/contracts/pending-signature"),
+        financeApi(`/collection-status${q}`)
+      ]).then(([sales, settlements, bank, accounts, reviews, payroll, joins, docs, signs, collection]) => {
+        const todos = [];
+
+        if (sales.status === "fulfilled") {
+          const rows = sales.value.sales || [];
+          const todaySum = sumRecords(rows, "sales", today);
+          const base = sumRecords(rows, "sales", lastWeek);
+          const diff = base ? `전주 같은 요일 대비 ${todaySum >= base ? "+" : ""}${(((todaySum - base) / base) * 100).toFixed(1)}%` : "전주 같은 요일 자료 없음";
+          const settleToday = settlements.status === "fulfilled" ? sumRecords(settlements.value.settlements || [], "settlements", today) : 0;
+          setHomeCard("sales", formatMoney(todaySum), `어제 ${formatMoney(sumRecords(rows, "sales", yesterday))} · ${diff}${settleToday ? ` · 정산 ${formatMoney(settleToday)}` : ""}`);
+        } else {
+          failHomeCard("sales", homeErrorReason(sales));
+        }
+
+        if (bank.status === "fulfilled") {
+          const totals = bank.value.totals || {};
+          const accountCount = accounts.status === "fulfilled" ? (accounts.value.accounts || []).length : Number(totals.account_count || 0);
+          setHomeCard("bank", formatMoney(totals.net), `입금 ${formatMoney(totals.total_in)} · 출금 ${formatMoney(totals.total_out)} · 계좌 ${accountCount}개`);
+        } else {
+          failHomeCard("bank", homeErrorReason(bank));
+        }
+
+        if (reviews.status === "fulfilled") {
+          const pending = (reviews.value.reviews || []).filter(row => !row.reviewed_at && !HOME_REPLIED.has(String(row.reply_status || "").trim()));
+          const recent = pending.filter(row => deliveryRecordDate(row) >= weekAgo).length;
+          setHomeCard("review", `최근 7일 ${recent.toLocaleString("ko-KR")}건`, `전체 ${pending.length.toLocaleString("ko-KR")}건`);
+          if (recent) todos.push({ level: "p1", tag: "오늘", title: `검토 대기 ${recent}건 확인`, sub: `전체 ${pending.length}건`, view: "clobeReview", action: "검토하기" });
+        } else {
+          failHomeCard("review", homeErrorReason(reviews));
+        }
+
+        if (payroll.status === "fulfilled") {
+          const statements = payroll.value.statements || [];
+          const payday = nextPayday(statements, today);
+          const month = statements.map(row => String(row.payroll_month || "")).filter(Boolean).sort().pop() || "";
+          const targets = payday
+            ? statements.filter(row => String(row.pay_date || row.payDate || row.statement_payload?.pay_date || "").slice(0, 10) === payday)
+            : statements.filter(row => String(row.payroll_month || "") === month);
+          const amount = targets.reduce((sum, row) => sum + (Number(row.net_pay) || 0), 0);
+          if (payday) {
+            const days = dayDiff(today, payday);
+            setHomeCard("payroll", days === 0 ? "오늘" : `D-${days}`, `${payday} · 예상 지급 ${formatMoney(amount)}`);
+            if (days <= 3) todos.push({ level: days === 0 ? "p0" : "p1", tag: days === 0 ? "긴급" : "오늘", title: `급여 지급 ${days === 0 ? "오늘" : `D-${days}`} — 지급액 확인`, sub: formatMoney(amount), view: "payroll", action: "급여 보기" });
+          } else {
+            setHomeCard("payroll", "미정", statements.length ? `${month || "최근"} 급여내역서 ${statements.length}건 · 지급일 미입력` : "급여내역서 없음");
+          }
+        } else {
+          failHomeCard("payroll", homeErrorReason(payroll));
+        }
+
+        const approvalParts = [joins, docs, signs];
+        if (approvalParts.some(item => item.status === "fulfilled")) {
+          const joinCount = joins.status === "fulfilled" ? (joins.value.requests || []).filter(row => String(row.status || "") === "pending").length : 0;
+          const docCount = docs.status === "fulfilled" ? (docs.value.documents || []).filter(row => HOME_PENDING_DOC_STATUSES.has(String(row.status || "uploaded"))).length : 0;
+          const signCount = signs.status === "fulfilled" ? Number(signs.value.count ?? (signs.value.pending || []).length) || 0 : 0;
+          const failed = approvalParts.filter(item => item.status !== "fulfilled").length;
+          setHomeCard("approval", `${(joinCount + docCount + signCount).toLocaleString("ko-KR")}건`, `가입 ${joinCount} · 서류 ${docCount} · 서명 ${signCount}${failed ? ` · ${failed}개 항목 조회 실패` : ""}`);
+          if (joinCount) todos.push({ level: "p1", tag: "오늘", title: `가입 요청 ${joinCount}명 승인`, view: "approvals", action: "승인하기" });
+          if (docCount) todos.push({ level: "p2", tag: "이번 주", title: `입사서류 ${docCount}건 검수`, view: "onboarding", action: "검수하기" });
+          if (signCount) todos.push({ level: "p1", tag: "오늘", title: `서명 대기 계약서 ${signCount}건`, view: "contracts", action: "서명하기" });
+        } else {
+          failHomeCard("approval", homeErrorReason(joins));
+        }
+
+        todos.push(...renderHomeCollect(collection));
+        renderHomeTodos(todos);
+        homeLoadedAt = Date.now();
+      }).finally(() => {
+        homeLoading = null;
+      });
+      return homeLoading;
+    }
+
+    function bindTodayHome() {
+      els.homeKpiGrid?.querySelectorAll("[data-home-kpi]").forEach(card => {
+        const target = { sales: "sales", bank: "bankLedger", review: "clobeReview", payroll: "payroll", approval: "approvals" }[card.dataset.homeKpi];
+        card.addEventListener("click", event => {
+          if (event.target.closest(".state-actions")) return;
+          openHomeTarget(target);
+        });
+        card.addEventListener("keydown", event => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openHomeTarget(target);
+          }
+        });
+      });
+      els.homeBusinessSelect?.addEventListener("change", () => loadTodayHome({ force: true }));
+      els.homeRefreshBtn?.addEventListener("click", () => loadTodayHome({ force: true }));
+    }
+
+    function syncSubTabs() {
+      const nav = els.subTabs;
+      if (!nav) return;
+      const group = document.querySelector(`.side-nav [data-view="${currentView}"]`)?.dataset.group;
+      if (group) nav.dataset.activeGroup = group;
+    }
+
     function setView(view) {
       const permitted = allowedViews();
       currentView = permitted.includes(view) ? view : defaultView();
@@ -11358,6 +11693,8 @@
         document.getElementById(`${name}View`).classList.toggle("hidden", name !== currentView);
       });
       document.querySelectorAll(".tab").forEach(btn => btn.classList.toggle("active", btn.dataset.view === currentView));
+      syncSubTabs();
+      if (currentView === "dashboard") loadTodayHome().catch(err => showToast(`오늘 홈 집계 실패: ${err.message}`));
       if (currentView === "employees" && canManageOnboarding()) loadEmployeeInvites().catch(err => showToast(`초대 조회 실패: ${err.message}`));
       if (currentView === "employees" && hasServerAuth()) loadEmployeeJoinRequests().catch(err => showToast(`가입요청 조회 실패: ${err.message}`));
       if (currentView === "employees" && hasServerAuth()) loadOnboardingDocuments().catch(err => showToast(`서류 조회 실패: ${err.message}`));
@@ -14357,6 +14694,7 @@
           .catch(err => showToast(`사업자 추가 실패: ${err.message}`));
       });
       document.querySelectorAll(".tab[data-view]").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.view)));
+      bindTodayHome();
       document.querySelectorAll('[data-external-tab="recipes"]').forEach(link => {
         link.addEventListener("click", event => {
           if (!hasServerAuth()) {
