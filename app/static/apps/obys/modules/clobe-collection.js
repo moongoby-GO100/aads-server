@@ -616,7 +616,7 @@
     if (state.itemsError) return failureHtml(state.itemsError, "reload-items");
     const rows = visibleItems();
     if (!state.items.length) {
-      return `<div class="clobe-state" data-clobe-failure="nodata"><strong>${esc(STAGES[state.ui.stage])} 단계의 거래가 없습니다</strong><span>${state.ui.stage === "review_box" ? "새로 수집된 자료가 없거나 모두 처리되었습니다. 자료현황에서 수집 상태를 확인하십시오." : "다른 처리 단계를 선택해 보십시오."}</span><div class="clobe-state-actions"><button type="button" data-clobe-action="go" data-view="clobeOverview">자료현황 보기</button></div></div>`;
+      return `<div class="clobe-state" data-clobe-failure="nodata" data-clobe-empty-slot><strong>${esc(STAGES[state.ui.stage])} 단계의 거래가 없습니다</strong><span>${state.ui.stage === "review_box" ? "새로 수집된 자료가 없거나 모두 처리되었습니다. 자료현황에서 수집 상태를 확인하십시오." : "다른 처리 단계를 선택해 보십시오."}</span><div class="clobe-state-actions"><button type="button" data-clobe-action="go" data-view="clobeOverview">자료현황 보기</button></div></div>`;
     }
     if (!rows.length) return `<div class="clobe-state" data-clobe-failure="nomatch"><strong>조건에 맞는 거래가 없습니다</strong><span>기간·기관·검색 조건을 바꿔 보십시오.</span><div class="clobe-state-actions"><button type="button" data-clobe-action="reset-filters">조건 초기화</button></div></div>`;
     const partial = state.itemsTotal > state.items.length;
@@ -624,6 +624,19 @@
       ${actionBar(rows)}
       <div class="clobe-list-head"><label class="clobe-check"><input type="checkbox" data-clobe-select-all${rows.length && rows.every(r => state.selected.has(r.item_id)) ? " checked" : ""} aria-label="표시된 항목 모두 선택"></label><b>${rows.length.toLocaleString("ko-KR")}건 표시</b><span class="clobe-muted">행을 누르면 상세와 대사를 볼 수 있습니다.</span></div>
       <div class="clobe-list" role="table" aria-label="거래 목록">${rows.map(itemRow).join("")}</div>`;
+  }
+
+  // 0건 안내는 공통 renderState 로 그린다. 없으면 위 슬롯의 기본 문구를 그대로 둔다.
+  function applyEmptyState(root) {
+    const slot = root?.querySelector("[data-clobe-empty-slot]");
+    if (!slot || typeof window.renderState !== "function") return;
+    window.renderState(slot, {
+      kind: "empty",
+      title: `${STAGES[state.ui.stage]} 단계의 거래가 없습니다`,
+      reason: state.ui.stage === "review_box" ? "새로 수집된 자료가 없거나 모두 처리되었습니다. 자료현황에서 수집 상태를 확인하십시오." : "다른 처리 단계를 선택해 보십시오.",
+      actions: [{ label: "자료현황 보기", view: "clobeOverview" }]
+    });
+    slot.classList.remove("clobe-state");
   }
 
   function renderReview() {
@@ -638,6 +651,7 @@
     const body = root?.querySelector("[data-clobe-review-body]");
     if (!body) { renderCurrent(); return; }
     body.innerHTML = reviewListHtml();
+    applyEmptyState(body);
     const drawer = root.querySelector("[data-clobe-drawer]");
     if (drawer) { drawer.innerHTML = drawerHtml(); drawer.classList.toggle("open", Boolean(state.detailId)); }
     const filters = root.querySelector("[data-clobe-filters]");
@@ -921,6 +935,7 @@
     const active = document.activeElement;
     const keep = active?.matches?.("[data-clobe-filter='q']") ? { selector: "[data-clobe-filter='q']", start: active.selectionStart } : null;
     root.innerHTML = RENDER[state.view]();
+    applyEmptyState(root);
     if (keep) {
       const field = root.querySelector(keep.selector);
       if (field) { field.focus(); try { field.setSelectionRange(keep.start, keep.start); } catch (_) { /* 선택 범위 복원 불가 */ } }

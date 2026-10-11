@@ -12,7 +12,7 @@
   <style>
     :root {
       color-scheme: light;
-      --bg: #f4f5f7;
+      --bg: #f6f7f9;
       --panel: #ffffff;
       --panel-strong: #f7f8fa;
       --ink: #171a21;
@@ -26,7 +26,12 @@
       --red: #dc4c4c;
       --amber: #b7791f;
       --green: #15936b;
-      --shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06);
+      --pos: #15936b;
+      --neg: #dc4c4c;
+      --warn: #b7791f;
+      --radius: 14px;
+      --radius-btn: 10px;
+      --shadow: 0 1px 2px rgba(17,24,39,.06), 0 4px 16px rgba(17,24,39,.04);
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
@@ -2129,6 +2134,90 @@
       border-radius: 8px;
       background: #fbfcfd;
     }
+
+    /* 공통 디자인 컴포넌트 (L2): 지표 카드·할 일 행·상태 점·필터 바·상태 블록·스켈레톤 */
+    .kpi-card {
+      display: block;
+      width: 100%;
+      min-height: 118px;
+      padding: 16px;
+      border: 0;
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      text-align: left;
+      white-space: normal;
+    }
+    .kpi-card:hover { outline: 2px solid var(--accent); }
+    .kpi-card:focus-visible { outline: 3px solid rgba(55,120,212,.55); outline-offset: 2px; }
+    .kpi-card small { display: block; color: var(--muted); font-size: 13px; font-weight: 600; }
+    .kpi-card b {
+      display: block;
+      margin: 6px 0 2px;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -.5px;
+      font-variant-numeric: tabular-nums;
+    }
+    .kpi-card span { font-size: 12px; color: var(--muted); }
+    .kpi-card .up { color: var(--pos); }
+    .kpi-card .down { color: var(--neg); }
+
+    .todo-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 52px;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+    }
+    .todo-row:first-child { border-top: 0; }
+    .todo-row p { flex: 1; margin: 0; min-width: 0; }
+    .todo-row p small { display: block; color: var(--muted); }
+    .todo-row .tag { font-size: 11px; font-weight: 700; border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
+    .tag.p0 { background: #fde8e8; color: var(--neg); }
+    .tag.p1 { background: #fdf1dc; color: var(--warn); }
+    .tag.p2 { background: #eef2f7; color: #475569; }
+
+    .dot { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; background: var(--muted); }
+    .dot.ok { background: var(--pos); }
+    .dot.warn { background: var(--warn); }
+    .dot.err { background: var(--neg); }
+
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .filter-bar select,
+    .filter-bar input { min-height: 38px; border: 1px solid var(--line); border-radius: var(--radius-btn); background: var(--panel); padding: 0 10px; }
+
+    .state {
+      margin-top: 12px;
+      padding: 20px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      color: var(--muted);
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
+    .state .state-icon { display: block; margin-bottom: 6px; font-size: 22px; line-height: 1; }
+    .state strong { display: block; margin-bottom: 4px; color: var(--ink); font-size: 15px; }
+    .state .state-reason { display: block; font-size: 14px; line-height: 1.55; word-break: keep-all; }
+    .state .state-code { display: block; margin-top: 6px; font-size: 11px; }
+    .state .state-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 12px; }
+    .state .state-actions button { min-height: 44px; border-radius: var(--radius-btn); }
+    .state.error { border: 1px solid var(--warn); background: #fff8eb; }
+    .state.forbidden,
+    .state.expired { border-style: solid; background: var(--panel-strong); }
+
+    .skeleton { display: block; height: 14px; margin: 10px 0; border-radius: 7px; background: linear-gradient(90deg, #eceef2 25%, #f6f7f9 50%, #eceef2 75%); background-size: 200% 100%; animation: skeleton-shimmer 1.2s linear infinite; }
+    .skeleton:nth-child(2) { width: 82%; }
+    .skeleton:nth-child(3) { width: 64%; }
+    @keyframes skeleton-shimmer { to { background-position: -200% 0; } }
+    @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
 
     .hidden { display: none !important; }
 
@@ -11481,6 +11570,47 @@
       showToast.timer = setTimeout(() => els.toast.classList.remove("show"), 2200);
     }
 
+    // 공통 상태 블록. kind: loading | empty | error | forbidden | expired
+    // actions: [{ label, view?, onClick?, primary? }] — view 는 setView 로 화면 전환
+    const STATE_DEFAULTS = {
+      empty: { icon: "○", title: "자료가 없습니다", role: "status" },
+      error: { icon: "!", title: "불러오지 못했습니다", role: "alert" },
+      forbidden: { icon: "×", title: "볼 수 있는 권한이 없습니다", role: "status" },
+      expired: { icon: "…", title: "로그인이 만료되었습니다", role: "alert" }
+    };
+    const STATE_LOADING_DELAY_MS = 300;
+
+    function renderState(el, { kind = "empty", title = "", reason = "", actions = [], code = "" } = {}) {
+      if (!el) return;
+      clearTimeout(el._stateTimer);
+      const token = (el._stateToken || 0) + 1;
+      el._stateToken = token;
+      if (kind === "loading") {
+        el._stateTimer = setTimeout(() => {
+          if (el._stateToken !== token) return;
+          el.innerHTML = `<div class="state loading" role="status" aria-live="polite" aria-label="${escapeHtml(title || "불러오는 중입니다")}"><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div>`;
+        }, STATE_LOADING_DELAY_MS);
+        return;
+      }
+      const base = STATE_DEFAULTS[kind] || STATE_DEFAULTS.empty;
+      const list = Array.isArray(actions) ? actions : [];
+      el.innerHTML = `<div class="state ${escapeHtml(STATE_DEFAULTS[kind] ? kind : "empty")}" role="${base.role}">`
+        + `<span class="state-icon" aria-hidden="true">${base.icon}</span>`
+        + `<strong>${escapeHtml(title || base.title)}</strong>`
+        + (reason ? `<span class="state-reason">${escapeHtml(reason)}</span>` : "")
+        + (code ? `<small class="state-code">오류 번호 ${escapeHtml(code)}</small>` : "")
+        + (list.length ? `<div class="state-actions">${list.map(a => `<button type="button"${a.primary ? ' class="primary"' : ""}>${escapeHtml(a.label)}</button>`).join("")}</div>` : "")
+        + `</div>`;
+      el.querySelectorAll(".state-actions button").forEach((btn, i) => {
+        const action = list[i];
+        btn.addEventListener("click", event => {
+          if (typeof action.onClick === "function") action.onClick(event);
+          if (action.view) setView(action.view);
+        });
+      });
+    }
+    window.renderState = renderState;
+
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, char => ({
         "&": "&amp;",
@@ -15480,7 +15610,7 @@
     init();
   </script>
   <script src="/static/apps/obys/modules/ledger-details.js?v=20260921-r3"></script>
-  <script src="/static/apps/obys/modules/clobe-collection.js?v=20261003-r5"></script>
+  <script src="/static/apps/obys/modules/clobe-collection.js?v=20261011-r1"></script>
   <script src="/static/apps/obys/modules/store-assistant-v2.js"></script>
   <script>
   (() => {
