@@ -128,6 +128,38 @@ def test_purge_urls_cover_index_sw_and_every_referenced_module_once(tmp_path):
     assert not [u for u in urls if "cdn.example.com" in u or "/api/" in u]
 
 
+def test_purge_urls_include_every_top_level_html_and_webmanifest_as_bare_urls(tmp_path):
+    d = _obys_tree(tmp_path)
+    (d / "mockup-v4-1.html").write_text("<html>mockup</html>", encoding="utf-8")
+    (d / "manifest-app.webmanifest").write_text("{}", encoding="utf-8")
+    (d / "modules").mkdir()
+    (d / "modules" / "inner.html").write_text("x", encoding="utf-8")
+    urls = tool.purge_urls(d, SHA, "https://fb.newtalk.kr/")
+    base = "https://fb.newtalk.kr/static/apps/obys"
+    for name in ("mockup-v4-1.html", "clock.html", "signup.html", "manifest-app.webmanifest"):
+        assert f"{base}/{name}" in urls
+        assert f"{base}/{name}?v={SHA}" not in urls
+    assert urls[:2] == [f"{base}/index.html", f"{base}/sw.js"]
+    assert f"{base}/modules/store-assistant-v2.css" in urls and f"{base}/modules/store-assistant-v2.css?v={SHA}" in urls
+    assert f"{base}/modules/app-config.js" in urls and f"{base}/modules/app-config.js?v={SHA}" in urls
+    assert len(urls) == len(set(urls))
+    assert f"{base}/inner.html" not in urls and f"{base}/modules/inner.html" not in urls
+
+
+def test_purge_splits_a_large_top_level_url_list_into_chunks_of_at_most_30(tmp_path):
+    d = _obys_tree(tmp_path)
+    for i in range(40):
+        (d / f"page{i}.html").write_text("<html></html>", encoding="utf-8")
+    urls = tool.purge_urls(d, SHA, "https://fb.newtalk.kr")
+    assert len(urls) > 30
+    sent = []
+    res = tool.purge(urls, {"CF_API_EMAIL": "e@x", "CF_API_KEY": "k", "CF_ZONE_ID": "z1"},
+                     post=lambda url, headers, b: sent.append(b) or {"success": True})
+    assert res == {"status": "ok", "urls": len(urls), "purged": len(urls)}
+    assert len(sent) > 1 and all(len(b["files"]) <= 30 for b in sent)
+    assert sum((b["files"] for b in sent), []) == urls
+
+
 def test_purge_body_is_a_files_list_never_purge_everything(tmp_path):
     body = tool.build_purge_body(["https://fb.newtalk.kr/static/apps/obys/sw.js"])
     assert body == {"files": ["https://fb.newtalk.kr/static/apps/obys/sw.js"]}
