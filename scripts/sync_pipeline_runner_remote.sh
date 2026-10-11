@@ -169,6 +169,23 @@ remote_runner_process_state() {
     case "$state" in IDLE|BUSY|UNKNOWN) printf '%s' "$state" ;; *) printf UNKNOWN ;; esac
 }
 
+# 같은 호스트에 러너 서비스가 둘 이상일 수 있다(cafe24_114: litellm + aads-pipeline-runner).
+# 동기화는 대상 서비스 하나만 재시작하므로 다른 서비스는 옛 스크립트를 메모리에 든 채 계속
+# 작업을 잡는다 — 2026-10-11 NTV2 신규 파일 diff 누락의 원인. 읽기 전용으로 찾아 경고만 한다.
+warn_stale_runner_processes() {
+    local name="$1" host="$2" out=""
+    out=$(ssh "${SSH_OPTS[@]}" "$host" 'for p in $(pgrep -f "[p]ipeline-runner.sh" 2>/dev/null); do
+        l=$(readlink "/proc/$p/fd/255" 2>/dev/null) || continue
+        case "$l" in *pipeline-runner.sh*"(deleted)"*) u=$(awk -F/ "/name=systemd|:\/system.slice\//{print \$NF; exit}" "/proc/$p/cgroup" 2>/dev/null); echo "pid=$p unit=${u:-unknown}";; esac
+    done' 2>/dev/null) || out=""
+    if [[ -n "${out//[[:space:]]/}" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && log "${name}: STALE_RUNNER_PROCESS ${line} — 스크립트 파일이 교체된 뒤에도 옛 코드로 작업을 잡는 중. 재시작은 busy 확인 후 승인된 절차로만"
+        done <<< "$out"
+    fi
+    return 0
+}
+
 default_targets() {
     cat <<EOF
 contabo14|contabo14|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service|${SCRIPT_DIR}/aads-pipeline-litellm-runner.211.service
@@ -463,6 +480,8 @@ main() {
             summary+=" ${name}=skipped(config)"
             continue
         fi
+        IFS='|' read -r _stale_name _stale_host _ <<< "$target"
+        [[ "$_stale_host" =~ ^[A-Za-z0-9._@-]+$ ]] && warn_stale_runner_processes "$_stale_name" "$_stale_host"
         # 호스트 하나의 실패가 다른 호스트 동기화나 전체 종료코드를 끌고 가지 않게
         # 서브셸로 격리한다. 서브셸 안에서는 set -e 가 그대로 fail-closed 로 동작한다.
         : > "$TARGET_STATE_FILE"

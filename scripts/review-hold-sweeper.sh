@@ -209,19 +209,60 @@ _job_diff_full_bytes() {
     return 0
 }
 
+# i-t-a(`git add -N`)가 실패해도 신규 파일이 리뷰 입력에서 빠지지 않게 하는 안전망.
+# 2026-10-11 NTV2 runner-e4b91c0b/f3b14f84/eba41d50: 옛 코드(quotePath 수정 전)가 도는
+# 프로세스에서 한글 파일명 하나 때문에 add -N 배치가 통째로 실패해 신규 5개가 diff 에서
+# 사라졌다. 추적되지 않은 파일(--others)은 i-t-a 가 성공했다면 존재할 수 없으므로,
+# 남아 있다는 것 자체가 누락 신호다. 내용을 `git diff --no-index` 로 직접 붙인다.
+# stdout: 붙일 텍스트(없으면 빈 값). $2=이 구간 상한 바이트, $3=이미 만든 텍스트.
+_job_diff_untracked_fallback() {
+    local repo="$1" cap="$2" have="${3:-}"
+    local LC_ALL=C
+    local path="" piece="" out="" remaining=0 take=0
+    remaining=$(( cap - ${#have} ))
+    (( remaining > 0 )) || return 0
+    while IFS= read -r -d '' path; do
+        [[ -n "$path" && -f "$repo/$path" && ! -L "$repo/$path" ]] || continue
+        piece=$(cd "$repo" && git -c core.quotePath=false diff --no-index --no-color -- /dev/null "$path" 2>/dev/null) || piece="${piece:-}"
+        [[ -n "$piece" ]] || continue
+        piece="# [untracked-fallback] ${path}"$'\n'"${piece}"
+        if (( ${#piece} + 1 > remaining )); then
+            take=$(( remaining - 1 ))
+            (( take >= 200 )) || break
+            piece=$(printf '%s' "${piece:0:take}" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || piece="${piece:0:take}"
+            out+="${out:+$'\n'}${piece}"
+            break
+        fi
+        out+="${out:+$'\n'}${piece}"
+        remaining=$(( remaining - ${#piece} - 1 ))
+    done < <(git -C "$repo" -c core.quotePath=false ls-files -z --others --exclude-standard -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null)
+    printf '%s' "$out"
+    return 0
+}
+
 capture_job_diff_text() {
     local repo="$1" base_sha="${2:-}"
-    local head_sha="" diff_text="" uncommitted=""
+    local head_sha="" diff_text="" uncommitted="" fallback=""
     head_sha=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head_sha=""
     if [[ -n "$base_sha" && -n "$head_sha" && "$base_sha" != "$head_sha" ]]; then
         diff_text=$(_job_diff_render "$repo" 45000 "${base_sha}..${head_sha}") || true
         uncommitted=$(_job_diff_render "$repo" 5000 HEAD) || true
+        fallback=$(_job_diff_untracked_fallback "$repo" 5000 "$uncommitted") || true
+        if [[ -n "$fallback" ]]; then
+            uncommitted="${uncommitted}${uncommitted:+
+}${fallback}"
+        fi
         if [[ -n "${uncommitted//[[:space:]]/}" ]]; then
             diff_text="${diff_text}
 ${uncommitted}"
         fi
     else
         diff_text=$(_job_diff_render "$repo" 50000 HEAD) || true
+        fallback=$(_job_diff_untracked_fallback "$repo" 50000 "$diff_text") || true
+        if [[ -n "$fallback" ]]; then
+            diff_text="${diff_text}${diff_text:+
+}${fallback}"
+        fi
     fi
     printf '%s' "$diff_text"
     return 0
