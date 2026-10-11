@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>오비서 — 오늘 홈 목업 (acct-obys-uiux-redesign)</title>
+<!-- 정적 목업. 숫자는 예시값이며 실데이터가 아니다. -->
+<style>
+  :root{
+    --bg:#f6f7f9;--panel:#fff;--ink:#111827;--muted:#6b7280;--line:#e5e7eb;
+    --accent:#f26a2e;--accent-strong:#d95016;--nav:#111827;
+    --pos:#15936b;--neg:#dc4c4c;--warn:#b7791f;
+    --radius:14px;--radius-btn:10px;
+    --shadow:0 1px 2px rgba(17,24,39,.06),0 4px 16px rgba(17,24,39,.04);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 Pretendard,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif}
+  .num{font-variant-numeric:tabular-nums}
+  .shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+  aside{background:var(--nav);color:#d1d5db;padding:20px 12px}
+  .brand{display:flex;gap:8px;align-items:center;color:#fff;font-weight:700;font-size:16px;margin:0 8px 24px}
+  .brand i{background:var(--accent);border-radius:8px;width:28px;height:28px;display:grid;place-items:center;font-style:normal;font-size:12px}
+  aside button{display:flex;justify-content:space-between;width:100%;background:none;border:0;color:inherit;font:inherit;text-align:left;padding:11px 12px;border-radius:var(--radius-btn);cursor:pointer;min-height:44px}
+  aside button.on{background:#1f2937;color:#fff;font-weight:600}
+  aside button em{font-style:normal;background:var(--accent);color:#fff;border-radius:999px;padding:0 8px;font-size:12px}
+  aside .gear{margin-top:24px;border-top:1px solid #1f2937;padding-top:12px}
+  main{padding:20px 28px 96px;max-width:1240px}
+  .head{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
+  .head h1{font-size:20px;margin:0}
+  .head .meta{color:var(--muted);font-size:13px;display:flex;gap:12px;align-items:center}
+  select{font:inherit;padding:8px 12px;border:1px solid var(--line);border-radius:var(--radius-btn);background:#fff;min-height:40px}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+  .dot.ok{background:var(--pos)}.dot.warn{background:var(--warn)}.dot.err{background:var(--neg)}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}
+  .kpi-card{background:var(--panel);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;border:0;text-align:left;font:inherit;cursor:pointer;min-height:118px}
+  .kpi-card:hover{outline:2px solid var(--accent)}
+  .kpi-card small{display:block;color:var(--muted);font-size:13px;font-weight:600}
+  .kpi-card b{display:block;font-size:28px;font-weight:700;margin:6px 0 2px;letter-spacing:-.5px}
+  .kpi-card span{font-size:12px;color:var(--muted)}
+  .up{color:var(--pos)}.down{color:var(--neg)}
+  .kpi-card.alert{box-shadow:inset 0 0 0 2px #fde2d3,var(--shadow)}
+  .grid2{display:grid;grid-template-columns:1.4fr 1fr;gap:12px}
+  .panel{background:var(--panel);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}
+  .panel h2{font-size:15px;margin:0 0 8px;display:flex;justify-content:space-between}
+  .panel h2 a{font-size:13px;color:var(--muted);text-decoration:none;font-weight:500}
+  .todo-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line);min-height:52px}
+  .todo-row:first-of-type{border-top:0}
+  .todo-row .tag{font-size:11px;font-weight:700;border-radius:6px;padding:2px 6px;white-space:nowrap}
+  .tag.p0{background:#fde8e8;color:var(--neg)}.tag.p1{background:#fdf1dc;color:var(--warn)}.tag.p2{background:#eef2f7;color:#475569}
+  .todo-row p{margin:0;flex:1}
+  .todo-row p small{display:block;color:var(--muted)}
+  .btn{border:0;border-radius:var(--radius-btn);padding:8px 14px;font:inherit;font-weight:600;cursor:pointer;min-height:40px;background:#f3f4f6}
+  .btn.primary{background:var(--accent);color:#fff}
+  .strip{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .strip div{background:#f9fafb;border-radius:10px;padding:10px}
+  .strip small{color:var(--muted);font-size:12px;display:block}
+  .strip b{font-size:17px}
+  .coll li{display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line);list-style:none}
+  .coll{margin:0;padding:0}
+  .state{border:1px dashed var(--line);border-radius:var(--radius);padding:20px;text-align:center;color:var(--muted);margin-top:12px}
+  .state strong{display:block;color:var(--ink);font-size:15px;margin-bottom:4px}
+  .state .btn{margin-top:10px}
+  .bottom-tabs{display:none}
+  @media (max-width:1120px){.shell{grid-template-columns:72px 1fr}aside button span,.brand span{display:none}.kpis{grid-template-columns:repeat(3,1fr)}}
+  @media (max-width:760px){
+    .shell{grid-template-columns:1fr}aside{display:none}
+    main{padding:14px 14px 96px}
+    .kpis{grid-template-columns:1fr 1fr}.kpis .kpi-card:first-child{grid-column:1/-1}
+    .grid2{grid-template-columns:1fr}.strip{grid-template-columns:1fr 1fr}
+    .bottom-tabs{display:grid;grid-template-columns:repeat(5,1fr);position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+    .bottom-tabs button{border:0;background:none;font:inherit;font-size:12px;height:56px;color:var(--muted)}
+    .bottom-tabs button.on{color:var(--accent);font-weight:700}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside aria-label="주요 메뉴">
+    <div class="brand"><i>FB</i><span>오비서</span></div>
+    <button class="on"><span>오늘</span><em>9</em></button>
+    <button><span>돈 흐름</span></button>
+    <button><span>검토·마감</span><em>312</em></button>
+    <button><span>사람</span><em>4</em></button>
+    <button><span>자료함</span></button>
+    <div class="gear"><button><span>설정</span></button></div>
+  </aside>
+
+  <main>
+    <div class="head">
+      <h1>오늘 · 10월 11일 (일)</h1>
+      <div class="meta">
+        <select aria-label="사업자 선택"><option>전체 사업자 (4)</option><option>언니냉면 본점</option></select>
+        <span><i class="dot ok"></i>수집 정상 · 08:40 갱신</span>
+      </div>
+    </div>
+
+    <section class="kpis" aria-label="오늘 지표">
+      <button class="kpi-card"><small>오늘 매출</small><b class="num">1,284,500원</b><span>어제 2,031,000원 · <span class="up">지난주 일요일 대비 +6.2%</span></span></button>
+      <button class="kpi-card"><small>통장 입출금</small><b class="num">+842,000원</b><span>입금 1,210,000 · 출금 368,000 · 잔액 18,420,300</span></button>
+      <button class="kpi-card alert"><small>검토 대기</small><b class="num">312건</b><span>최근 7일 312 / 전체 18,258 → 눌러서 검토</span></button>
+      <button class="kpi-card"><small>급여일</small><b class="num">D-4</b><span>10월 15일 · 예상 9,870,000원</span></button>
+      <button class="kpi-card"><small>승인 대기</small><b class="num">4건</b><span>가입 2 · 서류 1 · 서명 1</span></button>
+    </section>
+
+    <div class="grid2">
+      <section class="panel" aria-label="처리할 일">
+        <h2>처리할 일 <a href="#">전체 보기 ›</a></h2>
+        <div class="todo-row"><span class="tag p0">긴급</span><p>신한은행 수집이 14시간째 멈춤<small>마지막 성공 10/10 18:42 · 인증서 만료 가능성</small></p><button class="btn primary">다시 연결</button></div>
+        <div class="todo-row"><span class="tag p1">오늘</span><p>직원 가입 요청 2명<small>김OO(홀) · 이OO(주방)</small></p><button class="btn primary">승인</button></div>
+        <div class="todo-row"><span class="tag p1">오늘</span><p>배민 정산 차이 38,000원<small>10/09 정산 vs 10/10 입금</small></p><button class="btn">확인</button></div>
+        <div class="todo-row"><span class="tag p2">이번 주</span><p>계약서 서명 대기 1건<small>박OO · 요청 후 3일</small></p><button class="btn">다시 요청</button></div>
+        <div class="todo-row"><span class="tag p2">이번 주</span><p>거래 312건 분류 확인<small>자동 분류 신뢰도 낮음 41건 우선</small></p><button class="btn">검토 시작</button></div>
+      </section>
+
+      <div style="display:grid;gap:12px">
+        <section class="panel" aria-label="외식 지표">
+          <h2>이번 달 매장 지표 <a href="#">경영 요약 ›</a></h2>
+          <div class="strip">
+            <div><small>배달 정산 차이</small><b class="num down">-38,000</b></div>
+            <div><small>식재료율</small><b class="num">31.4%</b></div>
+            <div><small>인건비율</small><b class="num">27.9%</b></div>
+            <div><small>추정 손익</small><b class="num up">+4.2M</b></div>
+          </div>
+        </section>
+        <section class="panel" aria-label="수집 상태">
+          <h2>자료 수집 상태 <a href="#">연결 관리 ›</a></h2>
+          <ul class="coll">
+            <li><span><i class="dot ok"></i>배민·쿠팡이츠·요기요·땡겨요</span><span class="num">08:40</span></li>
+            <li><span><i class="dot ok"></i>IBK기업 · 카드</span><span class="num">08:35</span></li>
+            <li><span><i class="dot err"></i>신한은행</span><span class="num">10/10 18:42</span></li>
+          </ul>
+        </section>
+      </div>
+    </div>
+
+    <!-- 빈 상태 예시: 왜 비었는지 + 다음 행동 -->
+    <div class="state" role="status">
+      <strong>확정된 매입 거래가 아직 없습니다</strong>
+      수집된 거래 18,258건이 검토를 기다리고 있어 이 화면에 표시되지 않습니다.
+      <div><button class="btn primary">검토함 열기</button> <button class="btn">파일로 올리기</button></div>
+    </div>
+  </main>
+</div>
+
+<nav class="bottom-tabs" aria-label="하단 탭">
+  <button class="on">오늘</button><button>돈 흐름</button><button>검토</button><button>사람</button><button>더보기</button>
+</nav>
+</body>
+</html>
