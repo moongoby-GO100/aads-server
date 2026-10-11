@@ -62,6 +62,7 @@
     source: "all",
     loading: false,
     error: "",
+    errorObj: null,
     uploadFile: null,
     uploadPreview: null,
     uploadBusy: false,
@@ -233,11 +234,11 @@
   }
 
   function contentHtml(kind) {
-    if (!state.businesses.length) return `<div class="ledger-state error"><strong>등록된 사업자가 없습니다.</strong><span>사업자·지점 메뉴에서 사업자 기초정보를 먼저 등록하십시오.</span></div>`;
+    if (!state.businesses.length) return `<div class="ledger-state error" data-ledger-state-slot><strong>등록된 사업자가 없습니다.</strong><span>사업자·지점 메뉴에서 사업자 기초정보를 먼저 등록하십시오.</span></div>`;
     if (state.loading) return `<div class="ledger-state loading"><strong>원장을 불러오는 중입니다.</strong><span>사업자 권한과 서버 원장을 확인하고 있습니다.</span></div>`;
-    if (state.error) return `<div class="ledger-state error"><strong>원장을 불러오지 못했습니다.</strong><span>${escapeHtml(state.error)}</span><button type="button" data-ledger-refresh>다시 시도</button></div>`;
+    if (state.error) return `<div class="ledger-state error" data-ledger-state-slot><strong>원장을 불러오지 못했습니다.</strong><span>${escapeHtml(state.error)}</span><button type="button" data-ledger-refresh>다시 시도</button></div>`;
     const rows = filteredRows();
-    if (!rows.length) return `<div class="ledger-state"><strong>조건에 맞는 거래가 없습니다.</strong><span>기간·검색 조건을 바꾸거나 아래 엑셀 등록 화면에서 원장을 추가하십시오.</span><button type="button" class="primary" data-ledger-upload-focus>엑셀 파일 등록</button></div>`;
+    if (!rows.length) return `<div class="ledger-state" data-ledger-state-slot><strong>조건에 맞는 거래가 없습니다.</strong><span>기간·검색 조건을 바꾸거나 아래 엑셀 등록 화면에서 원장을 추가하십시오.</span><button type="button" class="primary" data-ledger-upload-focus>엑셀 파일 등록</button></div>`;
     return `<div class="ledger-list-card">
       <div class="ledger-card-head"><div><h2>거래 목록</h2><span>행을 누르면 원본 출처와 상세 금액을 확인할 수 있습니다.</span></div><b>${rows.length.toLocaleString("ko-KR")}건</b></div>
       <div class="ledger-table-wrap"><table class="ledger-table"><thead><tr>${headers(kind).map(label => `<th>${escapeHtml(label)}</th>`).join("")}<th>작업</th></tr></thead>
@@ -329,6 +330,50 @@
         ${uploadHtml(meta)}
       </div>`;
     bindRoot(root);
+    applyViewState(root);
+  }
+
+  function recentDate(offsetDays) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" })
+      .format(new Date(Date.now() + offsetDays * 86400000));
+  }
+
+  // 0건·오류 안내는 본 화면 공통 판정(window.obysViewState → renderState)으로 그린다.
+  // 판정 순서·문구는 index.html viewStateConfig 한 곳에 있다. 없으면 위 슬롯의 기본 문구를 그대로 둔다.
+  function applyViewState(root) {
+    const slot = root?.querySelector("[data-ledger-state-slot]");
+    if (!slot || typeof window.obysViewState !== "function") return;
+    const focusUpload = () => root.querySelector("[data-ledger-upload-focus]")?.click();
+    let ctx;
+    if (!state.businesses.length) {
+      ctx = {
+        emptyTitle: "등록된 사업자가 없습니다.",
+        emptyReason: "사업자·지점 메뉴에서 사업자 기초정보를 먼저 등록하면 원장을 볼 수 있습니다.",
+        emptyActions: [{ label: "사업자 등록", primary: true, view: "business" }]
+      };
+    } else {
+      const hasRows = state.rows.length > 0;
+      const pendingReview = state.uploads.filter(item => item.status === "pending_review").length;
+      ctx = {
+        error: state.errorObj || (state.error ? Object.assign(new Error(state.error), { status: 0 }) : null),
+        onRetry: load,
+        pendingReview: hasRows ? 0 : pendingReview,
+        onReview: () => root.querySelector(".ledger-upload-history")?.scrollIntoView({ behavior: "smooth", block: "center" }),
+        connected: hasRows || state.uploads.length ? true : undefined,
+        hasRows,
+        periodFiltered: hasRows || Boolean(state.dateFrom || state.dateTo),
+        onRecent: () => {
+          state.dateFrom = recentDate(-29);
+          state.dateTo = recentDate(0);
+          state.query = "";
+          state.source = "all";
+          load();
+        },
+        onUpload: focusUpload
+      };
+    }
+    slot.classList.remove("ledger-state", "error");
+    window.obysViewState(slot, state.view, ctx);
   }
 
   function bindRoot(root) {
@@ -444,6 +489,7 @@
   async function load() {
     state.loading = true;
     state.error = "";
+    state.errorObj = null;
     render();
     try {
       await ensureBusinesses();
@@ -486,6 +532,7 @@
       state.rows.sort((a, b) => rowDate(b).localeCompare(rowDate(a)));
     } catch (error) {
       state.error = recovery(error);
+      state.errorObj = error;
       state.rows = [];
       state.uploads = [];
     } finally {
@@ -757,6 +804,7 @@
     const changedView = state.view !== view;
     state.view = view;
     state.error = "";
+    state.errorObj = null;
     state.rows = [];
     state.uploads = [];
     if (changedView) {
@@ -769,6 +817,7 @@
       await ensureBusinesses(true);
     } catch (error) {
       state.error = recovery(error);
+      state.errorObj = error;
     }
     await load();
   }

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from pathlib import Path
 from uuid import UUID
 
@@ -434,7 +435,8 @@ def test_index_invite_table_has_store_and_email_columns_and_colspan_seven():
     assert "<th>이메일</th>" in head
     assert head.count("<th>") == 7
     start = html.index("if (!els.employeeInviteRows) return;")
-    block = html[start:html.index("renderEmployeeJoinRows();", start)]
-    assert 'colspan="5"' not in block.replace('els.employeeJoinRows.innerHTML = `<tr><td colspan="5">', "")
-    assert block.count('colspan="7"') == 3
+    block = html[start:html.index("function renderEmployeeJoinRows()", start)]
+    # L4: 빈/권한/로그인 상태 줄은 fillViewState(tbody, colspan, ...) 로 그린다 — 초대 표는 7열.
+    assert re.findall(r"fillViewState\(els\.employeeInviteRows, (\d+),", block) == ["7", "7", "7"]
+    assert 'colspan="5"' not in block
     assert "branch_labels" in block

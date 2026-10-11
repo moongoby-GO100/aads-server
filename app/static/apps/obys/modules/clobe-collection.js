@@ -191,6 +191,15 @@
     return `<div class="clobe-state error" role="alert" data-clobe-failure="${esc(info.kind)}"><strong>${esc(info.title)}</strong><span>${esc(info.body)}</span>${buttons ? `<div class="clobe-state-actions">${buttons}</div>` : ""}</div>`;
   }
 
+  // 권한(403)·세션(401)·일반 오류는 본 화면 공통 판정으로 다시 그릴 수 있게 슬롯 표시를 단다.
+  // 재승인·기간·미연결처럼 자료 수집에만 있는 원인은 위 failureHtml 안내를 그대로 쓴다.
+  const SHARED_FAILURE_KINDS = new Set(["session", "role", "network", "error"]);
+  function failureSlotHtml(error, retryAction, key) {
+    const html = failureHtml(error, retryAction);
+    if (!SHARED_FAILURE_KINDS.has(explain(error).kind)) return html;
+    return html.replace('<div class="clobe-state error"', `<div class="clobe-state error" data-clobe-view-slot="error" data-clobe-error-key="${esc(key)}" data-clobe-retry="${esc(retryAction || "refresh")}"`);
+  }
+
   // ── 형식 ────────────────────────────────────────────────
   function fmtDateTime(value) {
     if (!value) return "";
@@ -370,9 +379,9 @@
   function gateHtml(retryAction) {
     if (!token()) return `<div class="clobe-state error" role="alert" data-clobe-failure="session"><strong>로그인이 필요합니다</strong><span>로그인하면 회사별 자료 현황을 볼 수 있습니다.</span><div class="clobe-state-actions"><button type="button" class="primary" data-clobe-action="login">로그인</button></div></div>`;
     if (state.statusLoading && !state.status) return `<div class="clobe-state loading"><strong>자료 현황을 불러오는 중입니다</strong><span>회사 연결과 권한을 확인하고 있습니다.</span></div>`;
-    if (state.statusError) return failureHtml(state.statusError, retryAction);
+    if (state.statusError) return failureSlotHtml(state.statusError, retryAction, "status");
     if (!companies().length) {
-      return `<div class="clobe-state" data-clobe-failure="none"><strong>연결된 회사가 없습니다</strong><span>승인된 회사 연결이 있어야 자료를 볼 수 있습니다. ${state.internalAdmin ? "자료 연결 설정에서 회사 연결을 승인하십시오." : "관리자에게 회사 연결 승인을 요청하십시오."}</span>${state.internalAdmin ? `<div class="clobe-state-actions"><button type="button" class="primary" data-clobe-action="go" data-view="clobeSettings">연결 설정으로 이동</button></div>` : ""}</div>`;
+      return `<div class="clobe-state" data-clobe-failure="none" data-clobe-view-slot="unlinked"><strong>연결된 회사가 없습니다</strong><span>승인된 회사 연결이 있어야 자료를 볼 수 있습니다. ${state.internalAdmin ? "자료 연결 설정에서 회사 연결을 승인하십시오." : "관리자에게 회사 연결 승인을 요청하십시오."}</span>${state.internalAdmin ? `<div class="clobe-state-actions"><button type="button" class="primary" data-clobe-action="go" data-view="clobeSettings">연결 설정으로 이동</button></div>` : ""}</div>`;
     }
     return "";
   }
@@ -525,7 +534,7 @@
       </section>
       <div class="clobe-kind-grid">${fresh.kinds.map(k => kindCard(k, can("manage"))).join("")}</div>
       <section class="clobe-panel"><h2>처리 단계별 건수</h2>
-        ${noStatus && !counts.review_box && !counts.reviewed && !counts.confirmed ? `<p class="clobe-muted">받은 자료가 아직 없습니다.</p>` : `<div class="clobe-stage-row">
+        ${noStatus && !counts.review_box && !counts.reviewed && !counts.confirmed ? `<div class="clobe-muted" data-clobe-view-slot="never-run">받은 자료가 아직 없습니다. 자료현황에서 수집을 실행하십시오.</div>` : `<div class="clobe-stage-row">
           ${["review_box", "reviewed", "confirmed", "rejected"].map(stage => `<button type="button" class="clobe-stage-chip" data-clobe-action="open-review" data-stage="${stage}"><small>${esc(STAGES[stage])}</small><strong>${Number(counts[stage]).toLocaleString("ko-KR")}건</strong></button>`).join("")}
         </div>`}
       </section>
@@ -613,7 +622,7 @@
 
   function reviewListHtml() {
     if (state.itemsLoading) return `<div class="clobe-state loading"><strong>거래를 불러오는 중입니다</strong><span>선택한 회사의 자료를 확인하고 있습니다.</span></div>`;
-    if (state.itemsError) return failureHtml(state.itemsError, "reload-items");
+    if (state.itemsError) return failureSlotHtml(state.itemsError, "reload-items", "items");
     const rows = visibleItems();
     if (!state.items.length) {
       return `<div class="clobe-state" data-clobe-failure="nodata" data-clobe-empty-slot><strong>${esc(STAGES[state.ui.stage])} 단계의 거래가 없습니다</strong><span>${state.ui.stage === "review_box" ? "새로 수집된 자료가 없거나 모두 처리되었습니다. 자료현황에서 수집 상태를 확인하십시오." : "다른 처리 단계를 선택해 보십시오."}</span><div class="clobe-state-actions"><button type="button" data-clobe-action="go" data-view="clobeOverview">자료현황 보기</button></div></div>`;
@@ -626,17 +635,59 @@
       <div class="clobe-list" role="table" aria-label="거래 목록">${rows.map(itemRow).join("")}</div>`;
   }
 
+  const act = (action, data = {}) => () => handleAction({ dataset: { clobeAction: action, ...data } });
+
+  // 회사 미연결·미수집 안내는 본 화면 공통 판정(window.obysViewState)으로 그린다.
+  function applyViewSlots(root) {
+    if (typeof window.obysViewState !== "function") return;
+    root?.querySelectorAll("[data-clobe-view-slot]").forEach(slot => {
+      const view = slot.closest("[data-clobe-view]")?.dataset.clobeView || state.view;
+      slot.classList.remove("clobe-state", "clobe-muted");
+      if (slot.dataset.clobeViewSlot === "error") {
+        const error = slot.dataset.clobeErrorKey === "items" ? state.itemsError : state.statusError;
+        const info = explain(error);
+        window.obysViewState(slot, view, {
+          error: { status: Number(error?.status || 0), message: info.title },
+          errorReason: info.body,
+          forbiddenReason: info.body,
+          onRetry: act(slot.dataset.clobeRetry || "refresh")
+        });
+      } else if (slot.dataset.clobeViewSlot === "unlinked") {
+        window.obysViewState(slot, view, {
+          connected: false,
+          source: "자료 수집 회사",
+          connectView: state.internalAdmin ? "clobeSettings" : "integrations",
+          onUpload: () => goView("documents")
+        });
+      } else {
+        window.obysViewState(slot, view, {
+          emptyTitle: "아직 받은 자료가 없습니다.",
+          emptyReason: can("manage") ? "위에서 수집을 실행하면 처리 단계별 건수가 여기에 표시됩니다." : "관리자가 수집을 실행하면 처리 단계별 건수가 여기에 표시됩니다.",
+          emptyActions: [{ label: "새로고침", onClick: act("refresh") }]
+        });
+      }
+    });
+  }
+
   // 0건 안내는 공통 renderState 로 그린다. 없으면 위 슬롯의 기본 문구를 그대로 둔다.
   function applyEmptyState(root) {
+    applyViewSlots(root);
     const slot = root?.querySelector("[data-clobe-empty-slot]");
     if (!slot || typeof window.renderState !== "function") return;
+    const company = selectedCompany();
+    const waiting = company && state.ui.stage !== "review_box" ? stageCounts(company).review_box : 0;
+    slot.classList.remove("clobe-state");
+    // (a) 이 단계가 비었지만 검토함에 수집분이 있으면 "검토를 기다리는 N건"으로 안내한다.
+    if (waiting > 0 && typeof window.obysViewState === "function") {
+      window.obysViewState(slot, "clobeReview", { pendingReview: waiting, onReview: act("open-review", { stage: "review_box" }) });
+      return;
+    }
     window.renderState(slot, {
       kind: "empty",
       title: `${STAGES[state.ui.stage]} 단계의 거래가 없습니다`,
       reason: state.ui.stage === "review_box" ? "새로 수집된 자료가 없거나 모두 처리되었습니다. 자료현황에서 수집 상태를 확인하십시오." : "다른 처리 단계를 선택해 보십시오.",
       actions: [{ label: "자료현황 보기", view: "clobeOverview" }]
     });
-    slot.classList.remove("clobe-state");
   }
 
   function renderReview() {
