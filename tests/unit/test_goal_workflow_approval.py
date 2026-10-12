@@ -62,6 +62,23 @@ def test_t16_t18_mandatory_human_cannot_be_granted():
     assert action_requires_mandatory_human("execute", "production", [])
 
 
+def test_a3_grant_cannot_be_issued_at_request_boundary():
+    from datetime import datetime, timezone
+
+    from pydantic import ValidationError
+
+    from app.routers.work_items import GrantRequest
+
+    base = {
+        "principal_session_id": OTHER, "assignment_id": CHANGE, "approval_request_id": CHANGE,
+        "actions": ["execute"], "valid_from": datetime(2026, 10, 12, tzinfo=timezone.utc),
+        "expires_at": datetime(2026, 10, 13, tzinfo=timezone.utc),
+    }
+    assert GrantRequest(**base, max_risk_tier="A2").max_risk_tier == "A2"
+    with pytest.raises(ValidationError):
+        GrantRequest(**base, max_risk_tier="A3")
+
+
 def test_t19_self_grant_is_denied_at_preview():
     result = preview_grant({"principal_session_id": SESSION, "actions": ["execute"], "environments": ["dev"]},
                            actor_session_id=SESSION)
