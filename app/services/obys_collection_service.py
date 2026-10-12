@@ -807,6 +807,39 @@ async def review_items(tenant_id: Any, business_id: str, item_ids: list[str], de
         await conn.close()
 
 
+async def _post_reviewed_rows(conn: Any, tenant: UUID, business_id: str, rows: list[Any], actor: str) -> int:
+    """잠긴 reviewed 항목을 확정 원장에 올린다(멱등·supersede 규칙의 단일 구현). 호출자가 트랜잭션과 행 잠금을 쥐고 있어야 한다."""
+    confirmed = 0
+    for r in rows:
+        # 같은 원장 키를 동시에 확정하는 두 트랜잭션이 둘 다 "항목 없음"을 보지 못하게 키 단위로 직렬화한다.
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            f"{tenant}|{business_id}|{r['data_kind']}|{r['source_key']}")
+        entry = await conn.fetchrow(
+            "SELECT entry_id, item_id, item_hash FROM obys_clobe_ledger_entry "
+            "WHERE tenant_id=$1 AND business_id=$2 AND data_kind=$3 AND source_key=$4 FOR UPDATE",
+            tenant, business_id, r["data_kind"], r["source_key"])
+        if entry is None:
+            await conn.execute(
+                "INSERT INTO obys_clobe_ledger_entry (entry_id, tenant_id, business_id, data_kind, source_key, item_id, "
+                " item_hash, occurred_on, amount, direction, confirmed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) "
+                "ON CONFLICT (tenant_id, business_id, data_kind, source_key) DO NOTHING",
+                uuid.uuid4(), tenant, business_id, r["data_kind"], r["source_key"], r["item_id"], r["item_hash"],
+                r["occurred_on"], r["amount"], r["direction"], actor)
+        elif entry["item_hash"] != r["item_hash"]:
+            await conn.execute(
+                "UPDATE obys_clobe_item SET stage='superseded' WHERE item_id=$1 AND stage='confirmed'", entry["item_id"])
+            await conn.execute(
+                "UPDATE obys_clobe_ledger_entry SET item_id=$2, item_hash=$3, occurred_on=$4, amount=$5, direction=$6, "
+                " revision=revision+1, confirmed_by=$7, confirmed_at=now() WHERE entry_id=$1",
+                entry["entry_id"], r["item_id"], r["item_hash"], r["occurred_on"], r["amount"], r["direction"], actor)
+        await conn.execute(
+            "UPDATE obys_clobe_item SET stage='confirmed', confirmed_by=$2, confirmed_at=now() WHERE item_id=$1",
+            r["item_id"], actor)
+        confirmed += 1
+    return confirmed
+
+
 async def confirm_items(tenant_id: Any, business_id: str, item_ids: list[str], *, actor: str) -> dict[str, Any]:
     """회계 검토를 마친(reviewed) 항목만 확정 원장에 올린다. 같은 항목을 다시 확정해도 행이 늘지 않는다."""
     tenant = _scope(tenant_id)
@@ -814,45 +847,102 @@ async def confirm_items(tenant_id: Any, business_id: str, item_ids: list[str], *
     conn = await _connect()
     try:
         await _require_business(conn, tenant, business_id)
-        confirmed = skipped = 0
         async with conn.transaction():
             rows = await conn.fetch(
                 "SELECT * FROM obys_clobe_item WHERE tenant_id=$1 AND business_id=$2 AND item_id = ANY($3::uuid[]) FOR UPDATE",
                 tenant, business_id, ids)
-            for r in rows:
-                if r["stage"] != "reviewed":
-                    skipped += 1
-                    continue
-                # 같은 원장 키를 동시에 확정하는 두 트랜잭션이 둘 다 "항목 없음"을 보지 못하게 키 단위로 직렬화한다.
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                    f"{tenant}|{business_id}|{r['data_kind']}|{r['source_key']}")
-                entry = await conn.fetchrow(
-                    "SELECT entry_id, item_id, item_hash FROM obys_clobe_ledger_entry "
-                    "WHERE tenant_id=$1 AND business_id=$2 AND data_kind=$3 AND source_key=$4 FOR UPDATE",
-                    tenant, business_id, r["data_kind"], r["source_key"])
-                if entry is None:
-                    await conn.execute(
-                        "INSERT INTO obys_clobe_ledger_entry (entry_id, tenant_id, business_id, data_kind, source_key, item_id, "
-                        " item_hash, occurred_on, amount, direction, confirmed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) "
-                        "ON CONFLICT (tenant_id, business_id, data_kind, source_key) DO NOTHING",
-                        uuid.uuid4(), tenant, business_id, r["data_kind"], r["source_key"], r["item_id"], r["item_hash"],
-                        r["occurred_on"], r["amount"], r["direction"], actor)
-                elif entry["item_hash"] != r["item_hash"]:
-                    await conn.execute(
-                        "UPDATE obys_clobe_item SET stage='superseded' WHERE item_id=$1 AND stage='confirmed'", entry["item_id"])
-                    await conn.execute(
-                        "UPDATE obys_clobe_ledger_entry SET item_id=$2, item_hash=$3, occurred_on=$4, amount=$5, direction=$6, "
-                        " revision=revision+1, confirmed_by=$7, confirmed_at=now() WHERE entry_id=$1",
-                        entry["entry_id"], r["item_id"], r["item_hash"], r["occurred_on"], r["amount"], r["direction"], actor)
-                await conn.execute(
-                    "UPDATE obys_clobe_item SET stage='confirmed', confirmed_by=$2, confirmed_at=now() WHERE item_id=$1",
-                    r["item_id"], actor)
-                confirmed += 1
-            skipped += len(ids) - len(rows)
+            reviewed = [r for r in rows if r["stage"] == "reviewed"]
+            confirmed = await _post_reviewed_rows(conn, tenant, business_id, reviewed, actor)
+            skipped = len(ids) - confirmed
         return {"confirmed": confirmed, "skipped": skipped}
     finally:
         await conn.close()
+
+
+BULK_DEFAULT_LIMIT = 2000
+BULK_MAX_LIMIT = 5000
+
+
+def _bulk_date(value: Any, field: str) -> date | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        raise CollectionError(f"invalid_{field}", 400) from None
+
+
+def _bulk_filter(kinds: list[str], date_from: date | None, date_to: date | None) -> tuple[str, list[Any]]:
+    """review_box 항목만 고르는 공통 조건. $1 tenant, $2 business 다음 번호부터 쓴다."""
+    clause = "tenant_id=$1 AND business_id=$2 AND stage='review_box' AND data_kind = ANY($3::text[])"
+    args: list[Any] = [kinds]
+    if date_from is not None:
+        args.append(date_from)
+        clause += f" AND occurred_on >= ${len(args) + 2}"
+    if date_to is not None:
+        args.append(date_to)
+        clause += f" AND occurred_on <= ${len(args) + 2}"
+    return clause, args
+
+
+async def bulk_review_confirm(tenant_id: Any, business_id: str, *, kinds: list[str], date_from: Any = None,
+                              date_to: Any = None, actor: str, dry_run: bool = False,
+                              limit: int = BULK_DEFAULT_LIMIT) -> dict[str, Any]:
+    """매장·기간·종류 조건의 검토 대기(review_box) 거래를 한 트랜잭션에서 검토 완료 → 원장 확정까지 올린다.
+
+    reviewed/rejected/confirmed/superseded 항목은 건드리지 않는다. dry_run 은 쓰지 않고 종류별 건수·금액만 돌려준다.
+    한 번에 limit 건까지만 처리하고 나머지는 remaining 으로 알린다(호출자가 이어서 부른다).
+    """
+    tenant = _scope(tenant_id)
+    kinds = list(dict.fromkeys(kinds or []))
+    if not kinds or any(k not in core.DATA_KINDS for k in kinds):
+        raise CollectionError("invalid_kinds", 400)
+    start, end = _bulk_date(date_from, "date_from"), _bulk_date(date_to, "date_to")
+    if start and end and start > end:
+        raise CollectionError("invalid_period", 400)
+    limit = max(1, min(int(limit), BULK_MAX_LIMIT))
+    clause, args = _bulk_filter(kinds, start, end)
+    conn = await _connect()
+    try:
+        await _require_business(conn, tenant, business_id)
+        if dry_run:
+            groups = await conn.fetch(
+                f"SELECT data_kind, direction, count(*) AS n, COALESCE(sum(amount), 0) AS total FROM obys_clobe_item "
+                f"WHERE {clause} GROUP BY data_kind, direction ORDER BY data_kind, direction", tenant, business_id, *args)
+            return _bulk_preview(groups, limit)
+        async with conn.transaction():
+            locked = await conn.fetch(
+                f"SELECT item_id FROM obys_clobe_item WHERE {clause} ORDER BY data_kind, source_key, item_id "
+                f"LIMIT {limit} FOR UPDATE SKIP LOCKED", tenant, business_id, *args)
+            rows = await conn.fetch(
+                "UPDATE obys_clobe_item SET stage='reviewed', reviewed_by=$3, reviewed_at=now() "
+                "WHERE tenant_id=$1 AND item_id = ANY($2::uuid[]) AND stage='review_box' RETURNING *",
+                tenant, [r["item_id"] for r in locked], actor)
+            rows = sorted(rows, key=lambda r: (r["data_kind"], r["source_key"], str(r["item_id"])))
+            confirmed = await _post_reviewed_rows(conn, tenant, business_id, rows, actor)
+            remaining = await conn.fetchval(f"SELECT count(*) FROM obys_clobe_item WHERE {clause}", tenant, business_id, *args)
+        by_kind: dict[str, int] = {}
+        for r in rows:
+            by_kind[r["data_kind"]] = by_kind.get(r["data_kind"], 0) + 1
+        return {"dry_run": False, "processed": len(rows), "confirmed": confirmed, "by_kind": by_kind,
+                "remaining": int(remaining or 0)}
+    finally:
+        await conn.close()
+
+
+def _bulk_preview(groups: list[Any], limit: int) -> dict[str, Any]:
+    kinds: dict[str, dict[str, Any]] = {}
+    for g in groups:
+        k = kinds.setdefault(g["data_kind"], {"count": 0, "amount_total": Decimal(0), "by_direction": {}})
+        k["count"] += int(g["n"])
+        k["amount_total"] += Decimal(g["total"])
+        k["by_direction"][g["direction"]] = {"count": int(g["n"]), "amount_total": str(Decimal(g["total"]))}
+    for k in kinds.values():
+        k["amount_total"] = str(k["amount_total"])
+    total = sum(k["count"] for k in kinds.values())
+    return {"dry_run": True, "total": total, "kinds": kinds, "batch_limit": limit, "remaining": max(0, total - limit)}
 
 
 # ── 상태 계약(UI) ────────────────────────────────────────

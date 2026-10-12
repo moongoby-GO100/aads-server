@@ -576,6 +576,25 @@ async def test_review_then_confirm_is_staged_and_idempotent(db):
     assert out["runs"][0]["counts"]["inserted"] == 0 and await n(db, "obys_clobe_ledger_entry") == 2
 
 
+async def test_bulk_review_confirm_filters_limits_and_is_idempotent(db):
+    fake = fake_for(C_DANHARU, counts={core.KIND_TAX: 4, core.KIND_BANK: 3, core.KIND_CASH: 0, core.KIND_CARD: 0})
+    await svc.discover_companies(session_factory=fake)
+    await svc.run_collection(C_DANHARU, kinds=[core.KIND_TAX, core.KIND_BANK], session_factory=fake, **PERIOD)
+    tax_ids = await _ids(db, core.KIND_TAX)
+    await svc.review_items(TENANT, "biz-danharu", tax_ids[:1], "reject", actor="a")
+    kw = dict(date_from="2026-09-01", date_to="2026-09-30", actor="owner@x")
+    preview = await svc.bulk_review_confirm(TENANT, "biz-danharu", kinds=[core.KIND_TAX], dry_run=True, **kw)
+    assert preview["total"] == 3 and await n(db, "obys_clobe_ledger_entry") == 0
+    first = await svc.bulk_review_confirm(TENANT, "biz-danharu", kinds=[core.KIND_TAX], limit=2, **kw)
+    assert (first["processed"], first["confirmed"], first["remaining"]) == (2, 2, 1)
+    rest = await svc.bulk_review_confirm(TENANT, "biz-danharu", kinds=[core.KIND_TAX], limit=2, **kw)
+    assert (rest["processed"], rest["remaining"]) == (1, 0) and await n(db, "obys_clobe_ledger_entry") == 3
+    again = await svc.bulk_review_confirm(TENANT, "biz-danharu", kinds=[core.KIND_TAX], **kw)
+    assert again["processed"] == 0 and await n(db, "obys_clobe_ledger_entry") == 3
+    assert await db.fetchval("SELECT stage FROM obys_clobe_item WHERE item_id=$1", uuid.UUID(tax_ids[0])) == "rejected"
+    assert await n(db, "obys_clobe_item", "WHERE data_kind='bank_transaction' AND stage='review_box'") == 3
+
+
 async def test_revision_of_confirmed_item_requires_new_review_and_bumps_revision(db):
     fake = fake_for(C_DANHARU, counts={core.KIND_TAX: 1, core.KIND_BANK: 0, core.KIND_CASH: 0, core.KIND_CARD: 0})
     await svc.discover_companies(session_factory=fake)

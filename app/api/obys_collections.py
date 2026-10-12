@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -66,6 +67,13 @@ class ItemsRequest(BaseModel):
 
 class ReviewRequest(ItemsRequest):
     decision: Literal["approve", "reject"]
+
+
+class BulkConfirmRequest(BaseModel):
+    kinds: list[Literal["bank_transaction", "tax_invoice", "cash_receipt", "card_approval"]] = Field(min_length=1, max_length=4)
+    date_from: date | None = None
+    date_to: date | None = None
+    dry_run: bool = False
 
 
 @router.get("/status")
@@ -186,5 +194,17 @@ async def confirm(business_id: str, body: ItemsRequest, user: dict[str, Any] = D
     _role_ok(user, _MANAGE_ROLES)
     try:
         return await svc.confirm_items(user.get("tenant_id"), business_id, body.item_ids, actor=_actor(user))
+    except svc.CollectionError as exc:
+        raise _raise(exc) from None
+
+
+@router.post("/businesses/{business_id}/items/bulk-confirm")
+async def bulk_confirm(business_id: str, body: BulkConfirmRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """매장·기간·종류 단위로 검토 대기 거래를 한 번에 검토+확정. dry_run=true 면 건수·금액 미리보기만 한다."""
+    _role_ok(user, _MANAGE_ROLES)
+    try:
+        return await svc.bulk_review_confirm(
+            user.get("tenant_id"), business_id, kinds=list(body.kinds), date_from=body.date_from, date_to=body.date_to,
+            actor=_actor(user), dry_run=body.dry_run)
     except svc.CollectionError as exc:
         raise _raise(exc) from None

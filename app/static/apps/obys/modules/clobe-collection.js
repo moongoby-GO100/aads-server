@@ -8,6 +8,7 @@
   const ITEM_PAGE = 500;
   const ITEM_CAP = 5000;
   const STALE_HOURS = 48;
+  const BULK_MAX_ROUNDS = 100;
 
   const VIEWS = {
     clobeOverview: { eyebrow: "DATA STATUS", title: "자료현황", description: "은행·세금계산서·현금영수증·카드 자료의 수집 상태와 처리할 일을 한곳에서 확인합니다." },
@@ -64,6 +65,7 @@
     admin: { status: null, error: null, busy: "", message: "", loaded: false },
     internalAdmin: false,
     navigated: false,
+    bulk: { kinds: Object.keys(KINDS), from: "", to: "", preview: null, asking: false, busy: "", progress: null, error: "" },
     ui: loadUi()
   };
 
@@ -577,6 +579,148 @@
     </form>`;
   }
 
+  // ── 한 번에 확정 (매장·기간·종류 단위) ──────────────────
+  function bulkParams() {
+    const b = state.bulk;
+    return { kinds: [...b.kinds], date_from: b.from || null, date_to: b.to || null };
+  }
+
+  function bulkPeriodText(params) {
+    return params.date_from || params.date_to ? `${params.date_from || "처음"} ~ ${params.date_to || "오늘"}` : "전체 기간";
+  }
+
+  function bulkLinesHtml(preview) {
+    const out = preview.out;
+    return Object.entries(out.kinds || {}).map(([kind, info]) => {
+      const dirs = Object.entries(info.by_direction || {}).filter(([d]) => d).map(([d, v]) => `${DIRECTIONS[d] || d} ${Number(v.count).toLocaleString("ko-KR")}건 ${amountText(v.amount_total)}`).join(" · ");
+      return `<li><strong>${esc(KINDS[kind] || kind)} ${Number(info.count).toLocaleString("ko-KR")}건 / 합계 ${esc(amountText(info.amount_total))} 확정 예정</strong>${dirs ? `<small>${esc(dirs)}</small>` : ""}</li>`;
+    }).join("");
+  }
+
+  function bulkResultHtml() {
+    const b = state.bulk;
+    const company = selectedCompany();
+    if (b.busy === "preview") return `<div class="clobe-state loading" role="status"><strong>확정할 거래를 확인하는 중입니다</strong><span>아직 아무것도 확정되지 않았습니다.</span></div>`;
+    if (b.busy === "run" && b.progress) {
+      const total = Math.max(1, b.progress.total);
+      const pct = Math.min(100, Math.round(b.progress.done / total * 100));
+      return `<div class="clobe-state loading clobe-bulk-progress" role="status" aria-live="polite"><strong>${b.progress.done.toLocaleString("ko-KR")} / ${b.progress.total.toLocaleString("ko-KR")}건 확정 중입니다 (${pct}%)</strong><progress value="${b.progress.done}" max="${total}" aria-label="확정 진행률"></progress><span>화면을 닫지 말고 기다려 주십시오. 중간에 멈춰도 이미 확정된 거래는 그대로 유지됩니다.</span></div>`;
+    }
+    const error = b.error ? `<div class="clobe-notice error" role="alert">${esc(b.error)}</div>` : "";
+    const pv = b.preview;
+    if (!pv || !company || pv.businessId !== company.business_id) return error;
+    if (!pv.out.total) return `${error}<div class="clobe-state" data-clobe-failure="nomatch"><strong>조건에 맞는 검토 대기 거래가 없습니다</strong><span>${esc(bulkPeriodText(pv.params))} 기간에 확정할 거래가 없습니다. 기간이나 종류를 바꿔 다시 미리보기 하십시오.</span></div>`;
+    const batch = Number(pv.out.batch_limit || 0);
+    const split = pv.out.remaining > 0 ? `<p class="clobe-muted">한 번에 최대 ${batch.toLocaleString("ko-KR")}건씩 나누어 자동으로 이어서 처리합니다.</p>` : "";
+    const lines = `<ul class="clobe-bulk-lines">${bulkLinesHtml(pv)}</ul>`;
+    if (b.asking) {
+      return `${error}<div class="clobe-actionbar confirm" role="alertdialog" aria-label="한 번에 확정 확인"><div><strong>${esc(company.company_name)} · ${esc(bulkPeriodText(pv.params))} 거래 ${pv.out.total.toLocaleString("ko-KR")}건을 확정할까요?</strong><span>확정하면 원장에 올라가며 되돌릴 수 없습니다. 이후 수정은 새로 수집된 수정본으로만 반영됩니다. 반려한 거래와 이미 확정한 거래는 건드리지 않습니다.</span></div>
+        <div class="clobe-state-actions"><button type="button" class="primary" data-clobe-action="bulk-go">확정 진행</button><button type="button" data-clobe-action="bulk-cancel">취소</button></div></div>`;
+    }
+    return `${error}<div class="clobe-bulk-preview">${lines}${split}<div class="clobe-bulk-actions"><button type="button" class="primary" data-clobe-action="bulk-ask">한 번에 확정</button></div></div>`;
+  }
+
+  function bulkHtml() {
+    const company = selectedCompany();
+    if (!company || !can("review")) return "";
+    if (!can("manage")) return `<section class="clobe-panel clobe-bulk"><h2>한 번에 확정</h2><p class="clobe-muted">매장·기간 단위 일괄 확정은 대표·관리자만 할 수 있습니다.</p></section>`;
+    const b = state.bulk;
+    const busy = Boolean(b.busy);
+    const waiting = stageCounts(company).review_box;
+    return `<section class="clobe-panel clobe-bulk" aria-label="한 번에 확정">
+      <div class="clobe-panel-head"><h2>한 번에 확정</h2><span class="clobe-muted">${esc(company.company_name)} · 검토 대기 ${waiting.toLocaleString("ko-KR")}건</span></div>
+      <p class="clobe-muted">매장과 기간, 종류를 고르고 미리보기로 건수와 금액을 확인한 뒤 검토와 확정을 한 번에 진행합니다. 기간을 비우면 전체 기간입니다.</p>
+      <div class="clobe-bulk-form">
+        <label>시작일<input type="date" data-clobe-bulk-field="from" value="${esc(b.from)}"${busy ? " disabled" : ""}></label>
+        <label>종료일<input type="date" data-clobe-bulk-field="to" value="${esc(b.to)}"${busy ? " disabled" : ""}></label>
+        <fieldset class="clobe-bulk-kinds"${busy ? " disabled" : ""}><legend>종류</legend>${Object.entries(KINDS).map(([kind, label]) => `<label><input type="checkbox" data-clobe-bulk-kind="${esc(kind)}"${b.kinds.includes(kind) ? " checked" : ""}>${esc(label)}</label>`).join("")}</fieldset>
+        <div class="clobe-bulk-actions"><button type="button" data-clobe-action="bulk-preview"${busy ? " disabled" : ""}>미리보기</button></div>
+      </div>
+      <div data-clobe-bulk-result>${bulkResultHtml()}</div>
+    </section>`;
+  }
+
+  function renderBulk(resultOnly) {
+    if (state.view !== "clobeReview") return;
+    const root = rootFor("clobeReview");
+    if (resultOnly) {
+      const slot = root?.querySelector("[data-clobe-bulk-result]");
+      if (slot) slot.innerHTML = bulkResultHtml();
+      return;
+    }
+    const slot = root?.querySelector("[data-clobe-bulk-slot]");
+    if (slot) slot.innerHTML = bulkHtml();
+  }
+
+  function bulkReset() {
+    Object.assign(state.bulk, { preview: null, asking: false, error: "" });
+  }
+
+  async function bulkPreview() {
+    const company = selectedCompany();
+    const b = state.bulk;
+    if (!company || b.busy) return;
+    bulkReset();
+    if (!b.kinds.length) { b.error = "확인할 종류를 하나 이상 선택하십시오."; renderBulk(true); return; }
+    if (b.from && b.to && b.from > b.to) { b.error = "시작일이 종료일보다 늦습니다. 기간을 다시 선택하십시오."; renderBulk(true); return; }
+    const params = bulkParams();
+    b.busy = "preview";
+    renderBulk(false);
+    try {
+      const out = await request(`/businesses/${encodeURIComponent(company.business_id)}/items/bulk-confirm`, { method: "POST", body: { ...params, dry_run: true }, timeout: 60000 });
+      b.preview = { params, out, businessId: company.business_id };
+    } catch (error) {
+      b.error = `${explain(error).title}. ${explain(error).body}`;
+    }
+    b.busy = "";
+    renderBulk(false);
+  }
+
+  async function bulkRun() {
+    const b = state.bulk;
+    const pv = b.preview;
+    if (!pv || b.busy) return;
+    const business = encodeURIComponent(pv.businessId);
+    b.busy = "run";
+    b.asking = false;
+    b.error = "";
+    b.progress = { done: 0, total: pv.out.total };
+    renderBulk(false);
+    let confirmed = 0;
+    let remaining = pv.out.total;
+    let failure = null;
+    let stalled = false;
+    for (let round = 0; round < BULK_MAX_ROUNDS && remaining > 0; round += 1) {
+      try {
+        const out = await request(`/businesses/${business}/items/bulk-confirm`, { method: "POST", body: { ...pv.params, dry_run: false }, timeout: 120000 });
+        confirmed += Number(out.confirmed || 0);
+        remaining = Number(out.remaining || 0);
+        b.progress = { done: confirmed, total: Math.max(pv.out.total, confirmed + remaining) };
+        renderBulk(true);
+        if (remaining > 0 && !Number(out.processed || 0)) { stalled = true; break; }
+      } catch (error) {
+        failure = error;
+        break;
+      }
+    }
+    b.busy = "";
+    b.progress = null;
+    bulkReset();
+    if (failure) {
+      state.notice = { tone: "error", text: `${confirmed.toLocaleString("ko-KR")}건까지 확정했고 이후 처리에 실패했습니다. ${explain(failure).title}. 남은 거래는 다시 미리보기 한 뒤 이어서 확정할 수 있습니다.` };
+    } else if (stalled || remaining > 0) {
+      state.notice = { tone: "warn", text: `${confirmed.toLocaleString("ko-KR")}건을 확정했습니다. 남은 ${remaining.toLocaleString("ko-KR")}건은 다른 곳에서 처리 중이거나 한 번에 끝내지 못했습니다. 잠시 후 다시 미리보기 해 주십시오.` };
+    } else {
+      state.notice = { tone: confirmed ? "ok" : "warn", text: confirmed ? `${confirmed.toLocaleString("ko-KR")}건을 원장에 확정했습니다. 장부 화면에서 확정된 거래를 확인할 수 있습니다.` : "확정할 거래가 없었습니다. 다른 곳에서 이미 처리되었을 수 있습니다." };
+    }
+    state.detailId = "";
+    state.selected = new Set();
+    state.ackMismatch = false;
+    state.summaryKey = "";
+    await Promise.all([loadItems(true), refreshStatusQuiet()]);
+    renderCurrent();
+  }
+
   function pendingHtml() {
     const pending = state.pending;
     const label = { approve: "검토 승인", reject: "반려", confirm: "원장 확정" }[pending.kind];
@@ -693,7 +837,7 @@
   function renderReview() {
     const gate = gateHtml("refresh");
     if (gate) return frame("clobeReview", gate);
-    return frame("clobeReview", `${companyBar()}${authBanner()}${reviewFilters()}<div data-clobe-review-body>${reviewListHtml()}</div><aside class="clobe-drawer${state.detailId ? " open" : ""}" data-clobe-drawer aria-label="거래 상세">${drawerHtml()}</aside>`);
+    return frame("clobeReview", `${companyBar()}${authBanner()}<div data-clobe-bulk-slot>${bulkHtml()}</div>${reviewFilters()}<div data-clobe-review-body>${reviewListHtml()}</div><aside class="clobe-drawer${state.detailId ? " open" : ""}" data-clobe-drawer aria-label="거래 상세">${drawerHtml()}</aside>`);
   }
 
   function renderReviewBody() {
@@ -1082,6 +1226,10 @@
       case "close-detail": state.detailId = ""; renderReviewBody(); break;
       case "one": state.pending = { scope: "one", kind: target.dataset.kind, ids: [state.detailId] }; renderReviewBody(); break;
       case "bulk": state.detailId = ""; state.pending = { scope: "bulk", kind: target.dataset.kind, ids: [...state.selected] }; renderReviewBody(); break;
+      case "bulk-preview": bulkPreview(); break;
+      case "bulk-ask": if (state.bulk.preview?.out.total) { state.bulk.asking = true; renderBulk(true); } break;
+      case "bulk-cancel": state.bulk.asking = false; renderBulk(true); break;
+      case "bulk-go": bulkRun(); break;
       case "pending-cancel": state.pending = null; renderReviewBody(); break;
       case "pending-go": if (state.pending) applyAction(state.pending.kind, state.pending.ids); break;
       case "reauth": {
@@ -1135,7 +1283,17 @@
         state.summaryKey = "";
         state.detailId = "";
         state.selected = new Set();
+        bulkReset();
         open(state.view);
+      } else if (el.matches("[data-clobe-bulk-field]")) {
+        state.bulk[el.dataset.clobeBulkField] = el.value;
+        bulkReset();
+        renderBulk(true);
+      } else if (el.matches("[data-clobe-bulk-kind]")) {
+        const kind = el.dataset.clobeBulkKind;
+        state.bulk.kinds = Object.keys(KINDS).filter(k => (k === kind ? el.checked : state.bulk.kinds.includes(k)));
+        bulkReset();
+        renderBulk(true);
       } else if (el.matches("[data-clobe-filter]")) {
         const key = el.dataset.clobeFilter;
         state.ui[key] = el.value;

@@ -38,6 +38,7 @@ def test_route_inventory_is_the_ui_contract():
         ("GET", "/obys-collections/businesses/{business_id}/items"),
         ("POST", "/obys-collections/businesses/{business_id}/items/review"),
         ("POST", "/obys-collections/businesses/{business_id}/items/confirm"),
+        ("POST", "/obys-collections/businesses/{business_id}/items/bulk-confirm"),
     }
 
 
