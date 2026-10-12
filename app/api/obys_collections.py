@@ -180,6 +180,23 @@ async def items(
         raise _raise(exc) from None
 
 
+@router.get("/businesses/{business_id}/ledger-entries")
+async def ledger_entries(
+    business_id: str,
+    date_from: date | None = None, date_to: date | None = None,
+    kinds: list[Literal["bank_transaction", "tax_invoice", "cash_receipt", "card_approval"]] | None = Query(None),
+    limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """클로브에서 확정된 거래(최신본)를 읽기 전용으로 조회. 기간·종류 합계는 페이지와 무관하게 전체 기준."""
+    _role_ok(user, _READ_ROLES)
+    try:
+        return await svc.list_ledger_entries(
+            user.get("tenant_id"), business_id, date_from=date_from, date_to=date_to, kinds=kinds, limit=limit, offset=offset)
+    except svc.CollectionError as exc:
+        raise _raise(exc) from None
+
+
 @router.post("/businesses/{business_id}/items/review")
 async def review(business_id: str, body: ReviewRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     _role_ok(user, _REVIEW_ROLES)

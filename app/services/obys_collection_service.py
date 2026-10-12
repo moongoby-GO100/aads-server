@@ -859,6 +859,71 @@ async def confirm_items(tenant_id: Any, business_id: str, item_ids: list[str], *
         await conn.close()
 
 
+LEDGER_VIEW_MAX_LIMIT = 500
+
+# 확정 원장 최신본: (종류, source_key) 당 revision 이 가장 큰 한 행. 기간 조건은 최신본을 고른 뒤에 건다 —
+# 예전 revision 의 날짜로 걸러져 새 revision 이 통째로 사라지는 일을 막는다.
+_LEDGER_LATEST_CTE = (
+    "WITH latest AS (SELECT DISTINCT ON (data_kind, source_key) entry_id, data_kind, source_key, item_id, "
+    " occurred_on, amount, direction, revision, confirmed_by, confirmed_at FROM obys_clobe_ledger_entry "
+    " WHERE tenant_id=$1 AND business_id=$2 AND data_kind = ANY($3::text[]) "
+    " ORDER BY data_kind, source_key, revision DESC, confirmed_at DESC)")
+
+
+async def list_ledger_entries(tenant_id: Any, business_id: str, *, date_from: Any = None, date_to: Any = None,
+                              kinds: list[str] | None = None, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+    """확정 원장(obys_clobe_ledger_entry) 읽기 전용 조회. 쓰기·재집계 없음. 합계는 기간·종류 전체 기준(페이지 무관)."""
+    tenant = _scope(tenant_id)
+    kinds = list(dict.fromkeys(kinds)) if kinds else list(core.DATA_KINDS)
+    if any(k not in core.DATA_KINDS for k in kinds):
+        raise CollectionError("invalid_kinds", 400)
+    start, end = _bulk_date(date_from, "date_from"), _bulk_date(date_to, "date_to")
+    if start and end and start > end:
+        raise CollectionError("invalid_period", 400)
+    limit = max(1, min(int(limit), LEDGER_VIEW_MAX_LIMIT))
+    offset = max(0, int(offset))
+    where, args = "TRUE", [kinds]
+    if start is not None:
+        args.append(start)
+        where += f" AND occurred_on >= ${len(args) + 2}"
+    if end is not None:
+        args.append(end)
+        where += f" AND occurred_on <= ${len(args) + 2}"
+    conn = await _connect()
+    try:
+        # Both SELECTs must observe one snapshot even during concurrent confirmation.
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            await _require_business(conn, tenant, business_id)
+            groups = await conn.fetch(
+                f"{_LEDGER_LATEST_CTE} SELECT data_kind, direction, count(*) AS n, COALESCE(sum(amount), 0) AS total "
+                f"FROM latest WHERE {where} GROUP BY data_kind, direction ORDER BY data_kind, direction",
+                tenant, business_id, *args)
+            rows = await conn.fetch(
+                f"{_LEDGER_LATEST_CTE} SELECT l.data_kind, l.source_key, l.occurred_on, l.amount, l.direction, l.revision, "
+                f" l.confirmed_by, l.confirmed_at, COALESCE(i.counterparty, '') AS counterparty "
+                f"FROM latest l LEFT JOIN obys_clobe_item i ON i.item_id = l.item_id AND i.tenant_id=$1 "
+                f"WHERE {where.replace('occurred_on', 'l.occurred_on')} "
+                f"ORDER BY l.occurred_on DESC NULLS LAST, l.data_kind, l.source_key LIMIT {limit} OFFSET {offset}",
+                tenant, business_id, *args)
+    finally:
+        await conn.close()
+    total_amount = sum((Decimal(g["total"]) for g in groups), Decimal(0))
+    return {
+        "entries": [{
+            "occurred_on": _iso(r["occurred_on"]), "data_kind": r["data_kind"], "direction": r["direction"],
+            "amount": str(r["amount"]) if r["amount"] is not None else None, "counterparty": r["counterparty"],
+            "source_key": r["source_key"], "revision": int(r["revision"]), "confirmed_by": r["confirmed_by"],
+            "confirmed_at": _iso(r["confirmed_at"]),
+        } for r in rows],
+        "total": sum(int(g["n"]) for g in groups), "limit": limit, "offset": offset,
+        "summary": {
+            "count": sum(int(g["n"]) for g in groups), "amount_total": str(total_amount),
+            "groups": [{"data_kind": g["data_kind"], "direction": g["direction"], "count": int(g["n"]),
+                        "amount_total": str(Decimal(g["total"]))} for g in groups],
+        },
+    }
+
+
 BULK_DEFAULT_LIMIT = 2000
 BULK_MAX_LIMIT = 5000
 

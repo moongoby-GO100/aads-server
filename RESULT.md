@@ -1,3 +1,57 @@
+# 클로브 확정 거래 장부 조회 재작업 — clobe-ledger-view-rework
+
+TASK_ID: ACCT-OBYS-CLOBE-LEDGER-VIEW-20261012 / AUTO_REWORK_ROUND: 1/2
+
+## 출발점 및 범위
+
+깨끗한 현재 작업 트리에서 반려 커밋 `1902e7d9a41f`의 7개 파일 diff를 `git apply --check` 후 `git apply`로 반영했다. Git 스테이징·커밋·푸시·worktree 명령은 실행하지 않았다. 기존 구현을 통째로 대체하지 않고 반려 변경을 보완했다. `/root/aads/AGENTS.md`를 먼저 읽었다. 운영 DB 접근·쓰기, 빌드·배포·재시작, HANDOVER.md 변경은 하지 않았다.
+
+## STEP 0 기존 구현 분류 및 변경 사유
+
+| 대상 함수/클래스/접점 | 분류 | 처리 |
+|---|---|---|
+| API의 LinkRequest/RunRequest/ItemsRequest/ReviewRequest/BulkConfirmRequest, _role_ok/_actor/_raise/_auth_view | 유지 | 인증·역할·오류 계약 재사용 |
+| API status/discover/permission_check/link_company/block_company/start_run/list_runs/items/review/confirm/bulk_confirm | 유지 | 기존 수집·검토·확정 엔드포인트 변경 없음 |
+| API ledger_entries | 신규(이전 산출물 복원) | GET /api/v1/obys-collections/businesses/{business_id}/ledger-entries, get_current_user 및 활성 멤버십 검사 |
+| 서비스 CollectionError/LeaseLost/RunCtx, _connect/_scope/_require_business/_bulk_date/_iso | 유지 | 테넌트 스코프 및 사업장 소유권 검사를 재사용 |
+| 서비스 discover_companies/check_company_permission/approve_link/block_company, lease/fence, 수집·페이지·체크포인트·상태 helper, run_collection/list_items/review_items/confirm_items/bulk_review_confirm/_post_reviewed_rows/company_status/list_runs | 유지 | 수집·원장 확정·전표 쓰기 로직에 변경 없음 |
+| 서비스 list_ledger_entries 및 최신 revision CTE | 신규·수정 | 이전 조회 구현 복원 후 READ ONLY REPEATABLE READ 트랜잭션으로 합계·목록 스냅샷 일치 |
+| ledger-details.js 기존 장부·업로드·전표 조회 및 편집 | 유지 | 기존 조회/쓰기 흐름 보존 |
+| ledger-details.js load/render/bindRoot 및 clobe 조회·표시·바인딩 | 수정·신규 | 사업장·기간 필터 재사용, 오래된 응답 차단, 재렌더 이벤트 등록, offset 페이지 이동 |
+| ledger-details.css | 신규 스타일 복원 | 지시서 밖 파일 사유: 기존 장부 스타일 파일에 모바일 줄바꿈·44px 터치 영역을 추가해야 함 |
+| tests/unit/test_obys_ledger_entries_view.py | 신규·수정 | 테넌트 격리·최신 revision·합계·페이지 및 실제 JS 실행 회귀 검증. API는 async ASGI transport 사용 |
+| tests/unit/test_obys_collection_api.py | 수정 | 새 GET 라우트를 기존 라우트 목록 테스트에 추가 |
+| tests/integration/test_obys_collection_postgres.py | 수정 | 격리 PostgreSQL 조회·revision·테넌트 검증 및 조회 사이 별도 연결의 revision 갱신 동시성 테스트 |
+| RESULT.md | 수정 | 사용자 요구 STEP 0·번호별 교정·실제 검증 결과 기록; 기존 내용 보존 |
+| app/yeoljeong_main.py 라우터 마운트·기존 스케줄러·기존 회계 테이블 | 유지 | collections 라우터가 이미 /api/v1에 마운트됨. 중복 마운트·스케줄러·테이블 신설 없음 |
+| 삭제 | 없음 | 호출처 제거·데이터 삭제 없음 |
+
+DB 읽기 접점: yeoljeong_businesses(소유권), obys_clobe_ledger_entry(확정 원장), obys_clobe_item(counterparty 조인). 기존 회계·업로드 원장에는 쓰지 않는다. 기존 확정 함수는 (tenant_id,business_id,data_kind,source_key) 유일 키의 행을 UPDATE하며 item_id 교체와 revision 증가를 함께 처리한다. 따라서 원장 최신본 CTE는 기존 키 규칙을 유지한다(기간 필터는 최신본 선택 이후 적용).
+
+## 리뷰 지적별 교정
+
+1. **P1 사업자 간 거래 노출**: load() 첫 줄에서 resetClobe()로 seq를 증가시키고 거래·합계·오류·offset을 비운다. 기존 장부 요청을 기다리기 전에 loadClobe()를 시작한다. 늦게 도착한 이전 사업장 응답은 seq 검사로 무시한다. 실제 JS 테스트에서 B를 선택한 직후 비어 있는 상태 및 A의 지연 응답 차단을 확인했다.
+2. **P2 재렌더 시 이벤트 유실**: bindClobe(section)를 분리하고 renderClobe()와 전체 render()의 bindRoot() 양쪽에서 새 DOM에 등록한다. 등록 방식 변경·파일 선택 후 탭 핸들러가 1개 유지되며 탭·재시도 클릭이 요청을 만드는 것을 실행 검증했다.
+3. **P2 100건 이후 접근 불가**: clobe.offset과 이전/다음 버튼을 추가했다. 요청에 offset을 전달하고 사업자·기간·종류 변경 시 0으로 초기화한다. 101건 테스트에서 offset=100의 마지막 거래와 offset=0 복귀, 마지막 페이지 다음 버튼 비활성화를 검증했다. 기간을 좁히라는 기존 안내를 전체 기간 합계/페이지 범위 안내로 교체했다.
+4. **P2 합계·목록 스냅샷 불일치**: 사업장 검사와 두 SELECT를 conn.transaction(isolation="repeatable_read", readonly=True)로 묶었다. 단위 테스트는 두 조회가 해당 트랜잭션 안에서 실행됨을 검사한다. 실제 PostgreSQL에서 합계 조회 직후 다른 연결이 revision을 커밋해도 기존 합계·목록이 유지되는 통합 테스트를 추가했다. 해당 통합 테스트는 격리 DB 미설정으로 실행되지 않았다.
+
+## 실제 검증 결과
+
+- `bash scripts/run_unit_tests.sh tests/unit/test_obys_ledger_entries_view.py tests/unit/test_obys_collection_api.py tests/integration/test_obys_collection_postgres.py`: **실행 불가, exit 2**. 기준 aads-server 컨테이너/이미지를 찾지 못함. PASS로 보고하지 않음.
+- 기존 `/root/aads/aads-server/.venv/bin/python`과 테스트 전용 JWT_SECRET_KEY로 pytest 실행: 신규 ledger view + 기존 collection core/scheduler/UI static + PostgreSQL suite → **126 passed, 38 skipped**. 통합 38건은 OBYS_COLLECTION_TEST_DB_URL 미설정으로 skipped(운영 DB를 대체 사용하지 않음).
+- 기존 API route inventory/main mount/obys app mount 선택 실행 → **3 passed, 39 deselected**. 기존 TestClient 기반 전체 API 실행은 첫 멤버 권한 테스트에서 멈췄고 별도 60초 제한 실행은 exit 124. 신규 API 테스트는 같은 스레드의 async ASGI transport로 실제 라우팅·인증 의존성·서비스 호출을 검증해 위 126 passed에 포함된다.
+- JavaScript 실제 모듈 Node VM 실행 → 사업자 응답 경합, 전체 render 후 탭·재시도 핸들러, 101건 페이지 이동 **PASS**.
+- `ruff check --select F821,F811` 대상 API/서비스/조회 테스트/통합 테스트 → **PASS**.
+- `python3 -m compileall -q` 동일 Python 파일 → **PASS**.
+- `node --check app/static/apps/obys/modules/ledger-details.js` 및 `git diff --check` → **PASS**.
+- 최초 시스템 Python pytest는 fastapi 미설치로 수집 실패했고, 기존 venv 첫 실행은 JWT_SECRET_KEY 미설정으로 수집 실패했다. 이후 테스트 전용 환경변수로 해결했다. 다른 기존 venv는 cryptography 미설치로 수집 실패했다.
+
+완료기준의 필수 bash 테스트 PASS 및 실제 PostgreSQL 검증은 환경 제약으로 **미충족**이다. 운영 오비와이 2건 표시·-660,000원은 운영 검증을 하지 않았으며, 동일 금액의 테스트 fixture로만 검증했다.
+
+정본 미등록(미완료), 열람 링크 미제공. 운영 DB 쓰기 금지에 따라 문서 등록·DB 핸드오버를 수행하지 않았으며 **핸드오버 DB 미기록**이다. Runner의 DB 핸드오버 upsert/재읽기 대상이다.
+
+---
+
 # ACCT-CAFE24-DATA-FILE-COLLECTION-CLOSEOUT-20261003-R10
 
 공개 전환 **불가**, M1/M3 BLOCK 유지(M3 완료 신고 안 함). 이 절은 맨 위에 추가한 것이며 아래 기존 RESULT.md 내용은 한 줄도 지우지 않았다. 전문: 서버 114 `/srv/acct/evidence/data-file-collection-r10/RESULT.md` (sha256 551f239f…a74e1).
@@ -739,3 +793,11 @@ Anthropic 400 이 날 수 있다 — 다음 라운드에서 `build_vision_blocks
 ## 남은 릴리스 항목
 
 - clean release SHA fast-forward push, `deploy.sh bluegreen`, 동일 digest standby, 외부 health 200, 5분 P0/P1 감시, 배포 후 화면 캡처와 DB handover 기록.
+
+## 재작업 (ACCT-OBYS-CLOBE-LEDGER-VIEW-20261012, 반려본 runner-b0bef1bb 이식)
+- 커밋 61f55b44 의 8개 파일 변경을 `git show | git apply` 로 그대로 이식(API/서비스/JS/CSS 무변경).
+- 변경 1건: `tests/unit/test_obys_ledger_entries_view.py` 에 `import shutil` 및 `test_ui_business_race_rebinding_and_pagination_execute_in_node` 에 `@pytest.mark.skipif(shutil.which("node") is None, reason="node 미설치 런타임")` 추가. 테스트 본문 삭제·약화 없음, node 가 있으면 그대로 실행.
+- STEP 0 분류: 이식 파일 전부 [유지], 위 테스트 1건만 [수정], 삭제 없음.
+- 검증: `bash scripts/run_unit_tests.sh tests/unit/test_obys_ledger_entries_view.py tests/unit/test_obys_collection_api.py` → 72 passed, 1 skipped, exit 0.
+- 검증: `ruff check --select F821,F811` (변경 py 4개) → All checks passed.
+- 운영 DB 쓰기·빌드·배포 없음. 배포 후 검증(오비와이 2건·합계 -660,000원)은 별도 승인 대상.

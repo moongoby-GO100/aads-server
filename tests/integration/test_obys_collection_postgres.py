@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from decimal import Decimal
 from pathlib import Path
 
 import asyncpg
@@ -702,3 +703,59 @@ async def test_cash_cancellations_net_out_in_sum_reconciliation(db, mode):
     run = out["runs"][0]
     assert run["status"] == "succeeded", run
     assert all(c["status"] == "ok" for r in run["reconcile"] for c in r["sum_checks"])
+
+
+async def test_list_ledger_entries_reads_latest_revision_only_and_isolates_tenants(db):
+    fake = fake_for(C_DANHARU, counts={core.KIND_TAX: 3, core.KIND_BANK: 0, core.KIND_CASH: 0, core.KIND_CARD: 0})
+    await svc.discover_companies(session_factory=fake)
+    await svc.run_collection(C_DANHARU, kinds=[core.KIND_TAX], session_factory=fake, **PERIOD)
+    kw = dict(date_from="2026-09-01", date_to="2026-09-30", actor="owner@x")
+    empty = await svc.list_ledger_entries(TENANT, "biz-danharu")
+    assert empty["entries"] == [] and empty["summary"] == {"count": 0, "amount_total": "0", "groups": []}
+    await svc.bulk_review_confirm(TENANT, "biz-danharu", kinds=[core.KIND_TAX], **kw)
+    before = await n(db, "obys_clobe_ledger_entry")
+    out = await svc.list_ledger_entries(TENANT, "biz-danharu", kinds=[core.KIND_TAX], limit=2)
+    assert out["total"] == 3 and len(out["entries"]) == 2 and out["summary"]["count"] == 3
+    assert out["summary"]["amount_total"] == str(sum(Decimal(r["amount"]) for r in await db.fetch("SELECT amount FROM obys_clobe_ledger_entry")))
+    assert all(e["counterparty"].startswith("고객") for e in out["entries"])
+    assert await n(db, "obys_clobe_ledger_entry") == before          # 조회는 쓰지 않는다
+    # revision 이 오른 행도 키당 한 건으로 센다(원장 키는 DB 가 유일하게 묶는다).
+    row = await db.fetchrow("SELECT * FROM obys_clobe_ledger_entry LIMIT 1")
+    await db.execute("UPDATE obys_clobe_ledger_entry SET revision=2, amount=amount+1 WHERE entry_id=$1", row["entry_id"])
+    again = await svc.list_ledger_entries(TENANT, "biz-danharu")
+    assert again["total"] == 3 and {e["revision"] for e in again["entries"]} == {1, 2}
+    with pytest.raises(svc.CollectionError) as exc:                   # 다른 테넌트 소유 사업장은 404
+        await svc.list_ledger_entries(TENANT, "biz-other")
+    assert exc.value.status == 404
+
+
+async def test_ledger_list_and_summary_keep_snapshot_during_concurrent_confirm(db, monkeypatch):
+    fake = fake_for(C_DANHARU, counts={core.KIND_TAX: 1})
+    await svc.discover_companies(session_factory=fake)
+    await svc.run_collection(C_DANHARU, kinds=[core.KIND_TAX], session_factory=fake, **PERIOD)
+    await svc.bulk_review_confirm(TENANT, "biz-danharu", kinds=[core.KIND_TAX],
+                                  date_from="2026-09-01", date_to="2026-09-30", actor="owner@x")
+    before = await svc.list_ledger_entries(TENANT, "biz-danharu")
+
+    class ConcurrentWriter:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+        async def fetch(self, sql, *args):
+            rows = await self.connection.fetch(sql, *args)
+            if "GROUP BY data_kind, direction" in sql:
+                # Separate connection commits a new revision between the reader's SELECTs.
+                await db.execute("UPDATE obys_clobe_ledger_entry SET amount=amount+100, revision=revision+1")
+            return rows
+
+    async def connect():
+        return ConcurrentWriter(await asyncpg.connect(_url()))
+
+    monkeypatch.setattr(svc, "_connect", connect)
+    during = await svc.list_ledger_entries(TENANT, "biz-danharu")
+    assert during == before
+    assert Decimal(await db.fetchval("SELECT amount FROM obys_clobe_ledger_entry")) == (
+        Decimal(before["summary"]["amount_total"]) + 100)

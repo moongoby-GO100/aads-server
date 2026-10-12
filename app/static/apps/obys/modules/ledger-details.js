@@ -2,6 +2,13 @@
   "use strict";
 
   const API = "/api/v1/yeoljeong-finance";
+  const CLOBE_API = "/api/v1/obys-collections";
+  const CLOBE_PAGE = 100;
+  const CLOBE_KINDS = [
+    ["", "전체"], ["bank_transaction", "은행거래"], ["tax_invoice", "세금계산서"],
+    ["cash_receipt", "현금영수증"], ["card_approval", "카드승인"]
+  ];
+  const CLOBE_DIRECTIONS = { IN: "입금", OUT: "출금", SALES: "매출", PURCHASE: "매입" };
   const MAX_FILE_BYTES = 10 * 1024 * 1024;
   const views = {
     salesLedger: {
@@ -67,7 +74,8 @@
     uploadPreview: null,
     uploadBusy: false,
     uploadMessage: "",
-    journals: []
+    journals: [],
+    clobe: { kind: "", entries: [], summary: null, total: 0, loading: false, error: null, seq: 0, offset: 0 }
   };
 
   function escapeHtml(value) {
@@ -168,6 +176,128 @@
       return "현재 계정에서 이 사업자 원장을 사용할 수 없습니다. 사업자 권한을 확인하십시오.";
     }
     return error?.message || "데이터를 불러오지 못했습니다.";
+  }
+
+  function clobeKindLabel(kind) {
+    return CLOBE_KINDS.find(item => item[0] === kind)?.[1] || "기타 자료";
+  }
+
+  function clobeDirectionLabel(direction) {
+    return CLOBE_DIRECTIONS[String(direction || "").toUpperCase()] || "구분 없음";
+  }
+
+  async function clobeRequest(path) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(`${CLOBE_API}${path}`, {
+        headers: token() ? { Authorization: `Bearer ${token()}` } : {},
+        signal: controller.signal
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(typeof payload.detail === "string" ? payload.detail : `API ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      return payload;
+    } catch (error) {
+      if (error.name === "AbortError") throw new Error("서버 응답이 지연되고 있습니다. 다시 시도하십시오.");
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function clobeErrorText(error) {
+    const status = Number(error?.status);
+    if (status === 401) return "로그인 세션이 만료되었습니다. 다시 로그인한 뒤 재시도하십시오.";
+    if (status === 403 || status === 404) return "이 사업자의 클로브 확정 거래는 현재 계정으로 조회할 수 없습니다. 사업자 권한과 자료 연결을 확인하십시오.";
+    return error?.message || "확정 거래를 불러오지 못했습니다.";
+  }
+
+  function resetClobe() {
+    const c = state.clobe;
+    ++c.seq; // Invalidate requests before the selected business or period is rendered.
+    Object.assign(c, { entries: [], summary: null, total: 0, loading: false, error: null, offset: 0 });
+  }
+
+  async function loadClobe() {
+    const c = state.clobe;
+    const seq = ++c.seq;
+    if (!state.businessId) {
+      Object.assign(c, { entries: [], summary: null, total: 0, loading: false, error: null });
+      renderClobe();
+      return;
+    }
+    c.loading = true;
+    c.entries = [];
+    c.summary = null;
+    c.error = null;
+    renderClobe();
+    const params = new URLSearchParams({ limit: String(CLOBE_PAGE), offset: String(c.offset) });
+    if (c.kind) params.append("kinds", c.kind);
+    if (state.dateFrom) params.set("date_from", state.dateFrom);
+    if (state.dateTo) params.set("date_to", state.dateTo);
+    try {
+      const payload = await clobeRequest(`/businesses/${encodeURIComponent(state.businessId)}/ledger-entries?${params}`);
+      if (seq !== c.seq) return;
+      Object.assign(c, { entries: payload.entries || [], summary: payload.summary || null, total: Number(payload.total || 0), error: null });
+    } catch (error) {
+      if (seq !== c.seq) return;
+      Object.assign(c, { entries: [], summary: null, total: 0, error });
+    } finally {
+      if (seq === c.seq) {
+        c.loading = false;
+        renderClobe();
+      }
+    }
+  }
+
+  function clobeSectionHtml() {
+    const c = state.clobe;
+    const head = `<div class="ledger-history-head"><div><h2>클로브 확정 거래</h2><p>클로브에서 수집해 확정한 거래입니다. 이 화면에서는 조회만 할 수 있습니다.</p></div><span>${Number(c.summary?.count ?? 0).toLocaleString("ko-KR")}건</span></div>`;
+    const tabs = `<div class="clobe-ledger-tabs" role="tablist" aria-label="확정 거래 종류">${CLOBE_KINDS.map(([kind, label]) => `<button type="button" role="tab" aria-selected="${kind === c.kind}" class="${kind === c.kind ? "active" : ""}" data-clobe-kind="${escapeHtml(kind)}">${escapeHtml(label)}</button>`).join("")}</div>`;
+    let body;
+    if (!state.businessId) {
+      body = `<div class="ledger-upload-empty">사업자를 먼저 선택하십시오.</div>`;
+    } else if (c.loading) {
+      body = `<div class="ledger-upload-empty" aria-live="polite">확정 거래를 불러오는 중입니다.</div>`;
+    } else if (c.error) {
+      body = `<div class="ledger-upload-empty clobe-ledger-error" role="alert">${escapeHtml(clobeErrorText(c.error))}<button type="button" data-clobe-retry>다시 시도</button></div>`;
+    } else if (!c.entries.length) {
+      body = `<div class="ledger-upload-empty clobe-ledger-empty">확정된 거래가 없습니다 — 검토할 거래에서 한 번에 확정을 누르면 여기에 나타납니다<a class="clobe-ledger-link" href="#" data-view="clobeReview">검토할 거래로 이동</a></div>`;
+    } else {
+      const groups = c.summary?.groups || [];
+      body = `<div class="clobe-ledger-summary" aria-label="기간 합계">
+          <article class="clobe-ledger-total"><small>기간 합계</small><strong>${money(c.summary?.amount_total)}</strong><span>${Number(c.summary?.count ?? 0).toLocaleString("ko-KR")}건</span></article>
+          ${groups.map(g => `<article><small>${escapeHtml(clobeKindLabel(g.data_kind))} · ${escapeHtml(clobeDirectionLabel(g.direction))}</small><strong>${money(g.amount_total)}</strong><span>${Number(g.count || 0).toLocaleString("ko-KR")}건</span></article>`).join("")}
+        </div>
+        <div class="ledger-table-wrap"><table class="ledger-table clobe-ledger-table"><thead><tr><th>거래일</th><th>종류</th><th>구분</th><th>거래처</th><th>금액</th><th>확정</th></tr></thead>
+        <tbody>${c.entries.map(row => `<tr><td>${escapeHtml(row.occurred_on || "-")}</td><td>${escapeHtml(clobeKindLabel(row.data_kind))}</td><td>${escapeHtml(clobeDirectionLabel(row.direction))}</td><td class="clobe-ledger-party">${escapeHtml(row.counterparty || "-")}</td><td class="clobe-ledger-amount">${money(row.amount)}</td><td>${escapeHtml(row.confirmed_by || "-")}<small>${escapeHtml(dateText(row.confirmed_at))}</small></td></tr>`).join("")}</tbody></table></div>
+        ${c.total > CLOBE_PAGE ? `<nav class="clobe-ledger-tabs" aria-label="확정 거래 페이지"><button type="button" data-clobe-page="${Math.max(0, c.offset - CLOBE_PAGE)}" ${c.offset === 0 ? "disabled" : ""}>이전</button><span>${c.offset + 1}–${c.offset + c.entries.length} / ${c.total.toLocaleString("ko-KR")}건 · 합계는 전체 기간 기준</span><button type="button" data-clobe-page="${c.offset + CLOBE_PAGE}" ${c.offset + c.entries.length >= c.total ? "disabled" : ""}>다음</button></nav>` : ""}`;
+    }
+    return `${head}${tabs}${body}`;
+  }
+
+  function renderClobe() {
+    const section = viewRoot()?.querySelector("[data-clobe-section]");
+    if (!section) return;
+    section.innerHTML = clobeSectionHtml();
+    bindClobe(section);
+  }
+
+  function bindClobe(section) {
+    section.querySelectorAll("[data-clobe-kind]").forEach(button => button.addEventListener("click", () => {
+      resetClobe();
+      state.clobe.kind = button.dataset.clobeKind;
+      loadClobe();
+    }));
+    section.querySelectorAll("[data-clobe-page]").forEach(button => button.addEventListener("click", () => {
+      state.clobe.offset = Number(button.dataset.clobePage);
+      loadClobe();
+    }));
+    section.querySelector("[data-clobe-retry]")?.addEventListener("click", loadClobe);
   }
 
   function viewRoot() {
@@ -325,6 +455,7 @@
         </div>
         <div data-ledger-kpis>${kpiHtml(meta)}</div>
         <div data-ledger-content>${contentHtml(meta.kind)}</div>
+        <section class="ledger-journal-panel clobe-ledger-panel" data-clobe-section aria-labelledby="clobeLedgerTitle">${clobeSectionHtml().replace("<h2>", '<h2 id="clobeLedgerTitle">')}</section>
         <section class="ledger-journal-panel"><div class="ledger-history-head"><div><h2>ACCT 전표 조회</h2><p>전표는 회계원장(ACCT)에서 생성됩니다. <a href="/api/v1/acct-purchase/ui" target="_blank" rel="noopener">회계원장 조회 화면 열기</a></p></div><span>${state.journals.length}건</span></div>
           <div class="ledger-upload-history">${state.journals.length ? state.journals.map((item, index) => `<article class="ledger-upload-item"><div class="ledger-file-icon">전표</div><div class="ledger-upload-copy"><b>${escapeHtml(item.entry_no || item.voucher_no || item.id)}</b><span>${escapeHtml(item.entry_date || item.transaction_date)} · ${escapeHtml(item.description || "적요 없음")}</span><small>ACCT 회계원장 정본 · 조회 전용</small></div><span class="ledger-upload-status ${escapeHtml(item.status)}">${escapeHtml({draft:"초안",needs_review:"검토 필요",approved:"승인",posted:"확정",reversed:"역분개 완료"}[item.status] || item.status || "확정")}</span><div class="ledger-upload-actions"><button type="button" data-journal-review="${index}">전표 상세</button></div></article>`).join("") : `<div class="ledger-upload-empty">ACCT에 확정된 전표가 없습니다. 전표는 회계원장(ACCT)에서 생성됩니다.</div>`}</div></section>
         ${uploadHtml(meta)}
@@ -377,6 +508,8 @@
   }
 
   function bindRoot(root) {
+    const clobeSection = root.querySelector("[data-clobe-section]");
+    if (clobeSection) bindClobe(clobeSection);
     root.querySelector("[data-ledger-business]")?.addEventListener("change", event => {
       state.businessId = event.target.value;
       state.uploadFile = null;
@@ -388,6 +521,8 @@
       state.dateTo = root.querySelector("[data-ledger-to]")?.value || "";
       state.query = root.querySelector("[data-ledger-search]")?.value || "";
       state.source = root.querySelector("[data-ledger-source]")?.value || "all";
+      resetClobe();
+      loadClobe();
       render();
     });
     root.querySelector("[data-ledger-search]")?.addEventListener("keydown", event => {
@@ -487,12 +622,14 @@
   }
 
   async function load() {
+    resetClobe();
     state.loading = true;
     state.error = "";
     state.errorObj = null;
     render();
     try {
       await ensureBusinesses();
+      loadClobe();
       if (!state.businessId) {
         state.rows = [];
         state.uploads = [];
