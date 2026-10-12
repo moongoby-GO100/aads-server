@@ -131,3 +131,85 @@ def test_private_function_exemption_still_holds():
     )
 
     assert cr._removed_preservation_symbols(diff) == []
+
+
+def _two_file_diff(first: tuple[str, str], second: tuple[str, str]) -> str:
+    return _file_diff(*first) + _file_diff(*second)
+
+
+def test_sync_to_async_signature_change_is_not_a_removal():
+    """runner-16569606 회귀: `-def f(` → `+async def f(` 는 삭제가 아니다."""
+    diff = _file_diff(
+        _SERVICE,
+        "-def _iter_agent_sdk_fallback(messages: list):\n"
+        "+async def _iter_agent_sdk_fallback(messages: list):\n",
+    )
+    public = _file_diff(
+        _SERVICE,
+        "-def get_item(item_id: str) -> dict:\n"
+        "+async def get_item(item_id: str) -> dict:\n",
+    )
+
+    assert cr._removed_preservation_symbols(diff) == []
+    assert cr._removed_preservation_symbols(public) == []
+
+
+def test_async_to_sync_signature_change_is_not_a_removal():
+    """반대 방향(`-async def f(` → `+def f(`)도 같다."""
+    diff = _file_diff(
+        _SERVICE,
+        "-async def get_item(item_id: str) -> dict:\n"
+        "+def get_item(item_id: str) -> dict:\n",
+    )
+
+    assert cr._removed_preservation_symbols(diff) == []
+
+
+def test_sync_removal_without_addition_is_still_gated():
+    """+ 쪽 짝이 없으면 sync 선언 삭제는 계속 차단한다."""
+    diff = _file_diff(
+        _SERVICE,
+        "-def get_item(item_id: str) -> dict:\n"
+        "-    return {}\n",
+    )
+
+    assert "def get_item" in cr._removed_preservation_symbols(diff)
+
+
+def test_async_addition_in_other_file_does_not_cancel_removal():
+    """다른 파일의 `+async def f(` 는 원 파일의 삭제를 상쇄하지 못한다."""
+    diff = _two_file_diff(
+        (_SERVICE, "-def get_item(item_id: str) -> dict:\n"),
+        (_API, "+async def get_item(item_id: str) -> dict:\n"),
+    )
+
+    assert "def get_item" in cr._removed_preservation_symbols(diff)
+
+
+def test_sync_async_rename_and_duplicates_are_still_gated():
+    """이름이 바뀌거나 정규화 후 개수가 맞지 않으면 계속 차단한다."""
+    renamed = _file_diff(
+        _SERVICE,
+        "-def create_order(data: dict) -> dict:\n"
+        "+async def create_purchase_order(data: dict) -> dict:\n",
+    )
+    duplicated = _file_diff(
+        _SERVICE,
+        "-def get_item(item_id: str) -> dict:\n"
+        "-async def get_item(item_id: int) -> dict:\n"
+        "+async def get_item(company_id: str, item_id: str) -> dict:\n",
+    )
+
+    assert "def create_order" in cr._removed_preservation_symbols(renamed)
+    assert len(cr._removed_preservation_symbols(duplicated)) == 2
+
+
+def test_class_is_not_normalized_with_def():
+    """`class f` 와 `def f` 는 같은 심볼이 아니다."""
+    diff = _file_diff(
+        _SERVICE,
+        "-class Thing:\n"
+        "+def Thing():\n",
+    )
+
+    assert "class Thing" in cr._removed_preservation_symbols(diff)

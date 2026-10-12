@@ -417,11 +417,12 @@ def test_private_callback_edit_is_not_symbol_removal(old, new):
 # runner-2872d735 가 LLM 리뷰를 받아보지도 못하고 FLAG 0.3 으로 통째로 폐기됐다.
 # 인자 추가는 계약 변경이지만 "구현 삭제" 가 아니므로 하드 게이트가 아니라 리뷰가 볼 몫이다.
 # 면제 범위는 tests/unit/test_code_reviewer_public_signature_preservation.py 가 고정한다.
-# 리네임(+ 쪽 이름 다름) · @router 경로 변경 · async 여부 변경은 여기 그대로 남긴다.
+# 리네임(+ 쪽 이름 다름) · @router 경로 변경은 여기 그대로 남긴다.
+# async 여부 변경(def <-> async def, 같은 이름 1:1)은 2026-10-13 부터 시그니처 재작성으로 본다
+# (runner-16569606 오탐). 면제 범위는 test_code_reviewer_public_signature_preservation.py 가 고정한다.
 @pytest.mark.parametrize("old,new", [
     ("def _removed():", "def _different():"),
     ('@router.get("/old")', '@router.get("/new")'),
-    ("async def _worker():", "def _worker():"),
 ])
 def test_real_or_public_contract_changes_remain_gated(old, new):
     reviewer = _load_reviewer()

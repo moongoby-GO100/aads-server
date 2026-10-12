@@ -123,6 +123,7 @@ _DELETED_SYMBOL_RE = re.compile(
 _TEST_FILE_PATH_RE = re.compile(r"(?:^|/)(?:tests?/|test_[^/]*\.py$|[^/]*_test\.py$)")
 _TEST_FUNCTION_RE = re.compile(r"(?:async[ \t]+def|def)[ \t]+test_[A-Za-z0-9_]*")
 _DIFF_HEADER_PATH_RE = re.compile(r"^diff --git a/(\S+) b/(\S+)")
+_ASYNC_DEF_RE = re.compile(r"^async[ \t]+def[ \t]+")
 
 
 def _parse_review_json(raw: str) -> Optional[dict]:
@@ -928,6 +929,11 @@ def _removed_preservation_symbols(
     )
 
 
+def _signature_key(symbol: str) -> str:
+    """`async def f` 와 `def f` 는 같은 선언(동기/비동기 전환)으로 센다. class·route 는 그대로."""
+    return _ASYNC_DEF_RE.sub("def ", symbol)
+
+
 def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
     """Keep hard gates for removals, without calling private edits deletions.
 
@@ -948,7 +954,8 @@ def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
                 if line.startswith("+") and not line.startswith("+++")
             )
         )
-        deleted_counts, added_counts = Counter(deletions), Counter(additions)
+        deleted_counts = Counter(_signature_key(s) for s in deletions)
+        added_counts = Counter(_signature_key(s) for s in additions)
         header = _DIFF_HEADER_PATH_RE.match(file_diff)
         in_test_file = bool(header and _TEST_FILE_PATH_RE.search(header.group(2)))
         # 같은 파일 diff 에서 새로 생긴 테스트 함수 = 리네임 짝 후보.
@@ -958,7 +965,8 @@ def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
                 surplus = count - deleted_counts[symbol]
                 if surplus > 0 and _TEST_FUNCTION_RE.fullmatch(symbol):
                     rename_pool[symbol] = surplus
-        for symbol, old_line in deleted_lines:
+        for raw_symbol, old_line in deleted_lines:
+            symbol = _signature_key(raw_symbol)
             # 같은 파일 diff 에서 같은 선언이 정확히 한 번 사라지고 한 번 다시
             # 생겼으면 그것은 삭제가 아니라 시그니처 재작성·들여쓰기 이동이다.
             # 종전에는 이 면제를 private 함수(_foo)로만 한정했고, 그래서 공개
@@ -987,7 +995,7 @@ def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
                     preserved = True
             if not preserved:
                 removed.append(
-                    _RemovedSymbol(symbol, header.group(2) if header else None, old_line)
+                    _RemovedSymbol(raw_symbol, header.group(2) if header else None, old_line)
                 )
     return removed
 
