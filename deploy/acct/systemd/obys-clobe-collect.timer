@@ -1,0 +1,11 @@
+[Unit]
+Description=OBYS 클로브 수집 1시간 타이머
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+Unit=obys-clobe-collect.service
+
+[Install]
+WantedBy=timers.target

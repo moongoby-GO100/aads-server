@@ -1,0 +1,10 @@
+[Unit]
+Description=OBYS 클로브 수집 1시간 자동 실행 (검토함 적재까지, 원장 확정 없음)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/srv/acct/bin/obys_clobe_collect_tick.sh
+TimeoutStartSec=960
+Nice=10
