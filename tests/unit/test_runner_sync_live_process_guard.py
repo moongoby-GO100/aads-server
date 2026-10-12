@@ -27,6 +27,14 @@ def probe():
     return module.probe
 
 
+def spawn_worker(tmp_path, seconds="60"):
+    # A real process whose argv[0] is a worker CLI name; sleep itself is idle polling now.
+    fake = tmp_path / "claude"
+    if not fake.exists():
+        fake.symlink_to(subprocess.run(["which", "sleep"], capture_output=True, text=True).stdout.strip())
+    return subprocess.Popen([str(fake), seconds], cwd=tmp_path)
+
+
 def properties(state="inactive", main=0, group=""):
     return f"LoadState=loaded\nActiveState={state}\nMainPID={main}\nControlGroup={group}\n"
 
@@ -63,7 +71,7 @@ def test_deleted_cwd_live_worker_outside_cgroup_is_busy(probe, tmp_path, state):
 
 @pytest.mark.parametrize("state", ["active", "inactive", "failed"])
 def test_real_service_child_blocks_even_outside_job_directory(probe, tmp_path, state):
-    child = subprocess.Popen(["sleep", "60"], cwd=tmp_path)
+    child = spawn_worker(tmp_path)
     try:
         main = os.getpid() if state == "active" else 0
         pids = [child.pid] + ([main] if main else [])
@@ -126,7 +134,7 @@ def test_cgroup_v1_hybrid_main_process_alone_is_idle(probe, tmp_path, layout):
 
 @pytest.mark.parametrize("layout", ["unified", "systemd"])
 def test_cgroup_v1_hybrid_child_is_busy(probe, tmp_path, layout):
-    child = subprocess.Popen(["sleep", "60"], cwd=tmp_path)
+    child = spawn_worker(tmp_path)
     try:
         main = os.getpid()
         proc, cg = roots(tmp_path, [main, child.pid])
@@ -209,7 +217,7 @@ def test_child_seen_in_cgroup_after_proc_snapshot_still_blocks(probe, tmp_path):
 
 
 def test_descendant_outside_recorded_cgroup_still_blocks(probe, tmp_path):
-    child = subprocess.Popen(["sleep", "60"], cwd=tmp_path)
+    child = spawn_worker(tmp_path)
     try:
         main = os.getpid()
         proc, cg = roots(tmp_path, [main, child.pid], [main])

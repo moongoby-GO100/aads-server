@@ -28,7 +28,57 @@ import subprocess
 import sys
 
 
-def _probe(service, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgroup'), show=None):
+# Idle polling (AADS-RUNNER-BUSY-PROBE-IDLE-POLL, 2026-10-12): a child of the
+# service is evidence of work only for explicit signals. An idle runner always
+# has `sleep`, `psql` and short bash subshells; counting them deferred sync forever.
+STALE_SECONDS = 600
+RUNNER_SCRIPTS = ('pipeline-runner.sh', 'pipeline-runner.sh.local')
+WORKER_NAMES = ('claude', 'codex', 'litellm_runner.py', 'claude-slot-credentials-wrapper.sh')
+WORKER_DIRS = ('/claude-cli/', '/claude-code/')
+IDLE_POLL_PROGRAMS = ('sleep', 'psql')
+# wrapper -> options that consume the following argument
+WRAPPERS = {'timeout': ('-k', '-s'), 'env': ('-u', '-C', '-S'), 'nice': ('-n',),
+            'ionice': ('-c', '-n', '-p'), 'setsid': (), 'nohup': (), 'stdbuf': ('-i', '-o', '-e')}
+
+
+def _program_index(argv):
+    i = 0
+    while i < len(argv):
+        name = os.path.basename(argv[i])
+        if name not in WRAPPERS:
+            return i
+        takes = WRAPPERS[name]
+        i += 1
+        while i < len(argv) and (argv[i].startswith('-') or (name == 'env' and '=' in argv[i])):
+            i += 2 if argv[i] in takes else 1
+        if name == 'timeout':
+            i += 1  # DURATION
+    return len(argv)
+
+
+def _classify(argv):
+    """worker | runner | idle_poll | other"""
+    for arg in argv:
+        if len(arg) <= 300 and not any(ch.isspace() for ch in arg) and (
+                os.path.basename(arg) in WORKER_NAMES or any(d in arg for d in WORKER_DIRS)):
+            return 'worker'
+    index = _program_index(argv)
+    if index >= len(argv):
+        return 'other'
+    program = os.path.basename(argv[index])
+    if program in IDLE_POLL_PROGRAMS:
+        return 'idle_poll'
+    if program in ('bash', 'sh'):
+        script = next((a for a in argv[index + 1:] if not a.startswith('-')), '')
+        if os.path.basename(script) in RUNNER_SCRIPTS:
+            return 'runner'
+    return 'other'
+
+
+def _probe(service, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgroup'), show=None,
+           reasons=None, stale_seconds=STALE_SECONDS):
+    if reasons is None:
+        reasons = []
     if not re.fullmatch(r'[A-Za-z0-9_.@:-]+', service):
         return 'UNKNOWN'
     if show is None:
@@ -68,6 +118,7 @@ def _probe(service, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgroup'),
         if cwd.endswith(' (deleted)'):
             cwd = cwd[:-len(' (deleted)')]
         if cwd.startswith('/tmp/aads-wt-'):
+            reasons.append(f'pid={pid} cwd={cwd}')
             return 'BUSY'  # Includes detached/orphaned workers outside the current cgroup.
         processes[pid] = ppid
     group = props['ControlGroup']
@@ -103,9 +154,40 @@ def _probe(service, proc_root=Path('/proc'), cgroup_root=Path('/sys/fs/cgroup'),
         if new == descendants:
             break
         descendants = new
-    # Conservative: even an idle polling child can defer automatic sync. Only
-    # a verified empty worker set permits the existing DB guard to decide.
-    if (members | descendants) - {main_pid}:
+    # Only explicit work signals are BUSY (cwd under /tmp/aads-wt- was handled
+    # above): a worker CLI, a runner/other child older than stale_seconds, or a
+    # member that cannot be observed. Idle polling members are ignored. The DB
+    # job-count guard still decides afterwards.
+    candidates = (members | descendants) - {main_pid}
+    uptime_file = proc_root / 'uptime'
+    if not uptime_file.exists():
+        uptime_file = Path('/proc/uptime')
+    uptime = float(uptime_file.read_text().split()[0]) if candidates else 0.0
+    ticks = os.sysconf('SC_CLK_TCK')
+    busy = []
+    for pid in sorted(candidates):
+        try:
+            stat = (proc_root / str(pid) / 'stat').read_text()
+            raw = (proc_root / str(pid) / 'cmdline').read_bytes()
+        except FileNotFoundError:
+            busy.append(f'pid={pid} unobservable cgroup member')
+            continue
+        fields = stat[stat.rfind(')') + 2:].split()
+        if fields[0] in ('Z', 'X'):
+            continue
+        argv = [os.fsdecode(a) for a in raw.split(b'\0') if a]
+        age = int(uptime - int(fields[19]) / ticks)
+        shown = ' '.join(argv)[:120]
+        kind = _classify(argv)
+        if kind == 'worker':
+            busy.append(f'pid={pid} worker cmd={shown}')
+        elif kind == 'idle_poll':
+            continue
+        elif age >= stale_seconds:
+            label = 'stale runner subshell' if kind == 'runner' else 'long-running child'
+            busy.append(f'pid={pid} {label} age={age}s cmd={shown}')
+    if busy:
+        reasons.extend(busy[:3])
         return 'BUSY'
     return 'IDLE'
 
@@ -114,12 +196,17 @@ def probe(*args, **kwargs):
     try:
         return _probe(*args, **kwargs)
     except Exception:
+        if kwargs.get('reasons') is not None:
+            kwargs['reasons'].clear()
         return 'UNKNOWN'
 
 
 if __name__ == '__main__':
     try:
-        print(probe(sys.argv[1]))
+        reasons = []
+        print(probe(sys.argv[1], reasons=reasons))
+        if reasons:
+            print('BUSY_REASON ' + '; '.join(reasons))
     except Exception:
         print('UNKNOWN')
 PY_RUNNER_LIVE_PROCESS

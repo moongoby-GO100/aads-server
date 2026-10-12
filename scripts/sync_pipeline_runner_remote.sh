@@ -160,12 +160,17 @@ remote_service_active() {
 source "${SCRIPT_DIR}/runner_busy_lib.sh"
 
 remote_runner_process_state() {
-    local host="$1" service="$2" payload state=""
+    local host="$1" service="$2" payload state="" out=""
     [[ "$service" =~ ^[A-Za-z0-9_.@:-]+$ ]] || { printf UNKNOWN; return 0; }
     payload="$(declare -f runner_live_process_probe)"$'\n''runner_live_process_probe "$1"'
     # No remote files are installed for the probe. The existing launcher
     # already exports runner_busy_lib.sh from the same source SHA.
-    state=$(ssh "${SSH_OPTS[@]}" "$host" "bash -s -- '$service'" <<< "$payload" 2>/dev/null) || state="UNKNOWN"
+    out=$(ssh "${SSH_OPTS[@]}" "$host" "bash -s -- '$service'" <<< "$payload" 2>/dev/null) || out="UNKNOWN"
+    # Line 1 is the state; an optional "BUSY_REASON ..." line names the pid/cmd behind BUSY.
+    state="${out%%$'\n'*}"
+    if [[ "$out" == *$'\n'BUSY_REASON\ * ]]; then
+        log "${host}: BUSY_REASON ${out#*$'\n'BUSY_REASON }" >&2
+    fi
     case "$state" in IDLE|BUSY|UNKNOWN) printf '%s' "$state" ;; *) printf UNKNOWN ;; esac
 }
 

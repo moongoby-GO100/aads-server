@@ -75,7 +75,11 @@ local_runner_host_name() {
     printf '%s' "$name"
 }
 
-process_state=$(runner_live_process_probe "$SERVICE") || process_state="UNKNOWN"
+probe_out=$(runner_live_process_probe "$SERVICE") || probe_out="UNKNOWN"
+process_state="${probe_out%%$'\n'*}"
+if [[ "$probe_out" == *$'\n'BUSY_REASON\ * ]]; then
+    log "BUSY_REASON ${probe_out#*$'\n'BUSY_REASON }"
+fi
 if should_defer_for_processes "$process_state"; then
     log "재시작 보류 — live process state=${process_state}; DB/ignore-busy cannot override"
     exit 3

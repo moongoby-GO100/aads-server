@@ -28,7 +28,7 @@ from pathlib import Path
 import stat
 import sys
 
-expected = 'ff637e3f7f66b968338c4b439cd1e144d57326cafffa4f5ccf96d76e51be5026'
+expected = '78e55d7ad9dc00395ae3689f9ba374a21d7060cd7e6453bd7e8e1be62c3108ee'
 try:
     path = Path(sys.argv[1])
     if not path.is_absolute() or '..' in path.parts:
