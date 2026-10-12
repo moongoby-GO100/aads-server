@@ -1113,6 +1113,64 @@ async def list_project_databases() -> Dict[str, Any]:
 
 # ─── ACCT 전용 신규 도구 (acct_app 커넥션, FORCE RLS 테이블 조회) ─────────────
 
+def _dsn_host_port(dsn: str) -> str:
+    """DSN 에서 '호스트:포트' 만 뽑는다. 사용자·비밀번호·DB명은 노출하지 않는다."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(dsn)
+        host = parts.hostname or "?"
+        port = parts.port or 5432
+    except ValueError:
+        return "<unparsable-dsn>"
+    return f"{host}:{port}"
+
+
+def _resolve_acct_connection() -> Dict[str, Optional[str]]:
+    """query_acct_database 의 접속 경로를 고른다 (우선순위 순).
+
+    1. ACCT_APP_DATABASE_URL — 운영 ACCT(cafe24_114 acct-pg) 직결 DSN
+    2. ACCT_DATABASE_URL     — 하위 호환 DSN
+    3. ACCT_DB_APP_USER/PASSWORD + SSH 터널(_SSH_TUNNEL_PROJECTS["ACCT"],
+       기본 목적지는 사용 중단된 jinah244; ACCT_SSH_HOST/ACCT_SSH_PORT 로 변경)
+
+    반환 target 은 로그용 '호스트:포트' 이며 자격증명을 포함하지 않는다.
+    """
+    app_user = os.getenv("ACCT_DB_APP_USER") or None
+    app_password = os.getenv("ACCT_DB_APP_PASSWORD") or None
+
+    for name in ("ACCT_APP_DATABASE_URL", "ACCT_DATABASE_URL"):
+        dsn = (os.getenv(name) or "").strip()
+        if dsn:
+            return {
+                "mode": name,
+                "dsn": dsn,
+                "app_user": app_user,
+                "app_password": app_password,
+                "target": _dsn_host_port(dsn),
+            }
+
+    if app_user and app_password:
+        tunnel = _SSH_TUNNEL_PROJECTS["ACCT"]
+        return {
+            "mode": "ssh_tunnel",
+            "dsn": None,
+            "app_user": app_user,
+            "app_password": app_password,
+            "target": (
+                f"ssh {tunnel['ssh_host']}:{tunnel['ssh_port']} -> "
+                f"{tunnel['remote_host']}:{tunnel['remote_port']}"
+            ),
+        }
+
+    return {
+        "mode": "unconfigured",
+        "dsn": None,
+        "app_user": None,
+        "app_password": None,
+        "target": "-",
+    }
+
 async def query_acct_database(
     sql: str, acct_tenant_id: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -1123,7 +1181,8 @@ async def query_acct_database(
     query_project_database 가 쓰는 acct_ro 풀로는 정책을 통과하지 못한다.
     이 도구는 acct_app 자격증명으로 기존 ACCT SSH 터널을 재사용해 연결하고,
     acct.tenant_id GUC를 세팅한 뒤 SELECT만 실행한다.
-    ACCT_DATABASE_URL이 있으면 하위 호환을 위해 우선 사용한다.
+    접속 경로는 _resolve_acct_connection() 이 고른다
+    (ACCT_APP_DATABASE_URL > ACCT_DATABASE_URL > SSH 터널).
 
     Args:
         sql: SELECT/WITH/EXPLAIN 쿼리
@@ -1144,14 +1203,15 @@ async def query_acct_database(
         if tenant_value and not _TENANT_ID_RE.match(tenant_value):
             return {"error": "acct_tenant_id 는 숫자만 허용합니다"}
 
-    dsn = os.getenv("ACCT_DATABASE_URL")
-    app_user = os.getenv("ACCT_DB_APP_USER")
-    app_password = os.getenv("ACCT_DB_APP_PASSWORD")
-    if not dsn and (not app_user or not app_password):
+    route = _resolve_acct_connection()
+    dsn = route["dsn"]
+    app_user = route["app_user"]
+    app_password = route["app_password"]
+    if route["mode"] == "unconfigured":
         return {
             "error": (
-                "ACCT_DB_APP_USER / ACCT_DB_APP_PASSWORD 환경변수가 "
-                "설정되지 않았습니다"
+                "ACCT_APP_DATABASE_URL (또는 ACCT_DB_APP_USER / "
+                "ACCT_DB_APP_PASSWORD) 환경변수가 설정되지 않았습니다"
             )
         }
 
@@ -1174,7 +1234,11 @@ async def query_acct_database(
                 timeout=_PG_POOL_CONNECT_TIMEOUT_SECONDS,
             )
     except Exception:
-        logger.exception("query_acct_database: 연결 실패")
+        logger.exception(
+            "query_acct_database: 연결 실패 | mode=%s target=%s",
+            route["mode"],
+            route["target"],
+        )
         return {"error": "ACCT DB 연결 실패 (상세 내용은 서버 로그 참조)"}
 
     try:
