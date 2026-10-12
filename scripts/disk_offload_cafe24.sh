@@ -19,7 +19,7 @@
 #     aads-server 저장소에서 지우면 "is not a working tree" 로 매일 4건씩 실패했다.
 #  7. git 이 dirty/locked 로 거부하면 ERROR 가 아니라 SKIP(보호 대상)으로 분류한다.
 #  8. 덤프 rsync 는 --partial --append + ssh keepalive + 재시도(재개)로 보낸다.
-#  9. 종료 시 errors>0 이면 텔레그램으로 쿨다운을 두고 1회 알린다.
+#  9. 종료 시 errors>0 이면 CEO 오비스 알림함에 6시간 중복방지로 기록한다.
 # 10. 전날 전송에 실패한 덤프도 매일 먼저 백필하고, 원격 SHA-256이 일치하는
 #     오래된 로컬 덤프만 지운다. 새 덤프 전에는 최근 덤프 크기+여유공간을 요구한다.
 set -uo pipefail
@@ -69,9 +69,6 @@ RSYNC_SSH="ssh $SSH_OPTS"
 RSYNC_RETRIES="${AADS_OFFLOAD_RSYNC_RETRIES:-30}"
 RSYNC_RETRY_SLEEP="${AADS_OFFLOAD_RSYNC_RETRY_SLEEP:-15}"
 RSYNC_ATTEMPT_TIMEOUT="${AADS_OFFLOAD_RSYNC_ATTEMPT_TIMEOUT:-1800}"
-# 실패 알림 쿨다운(초). cron 이 하루 한 번 돌지만 수동 재실행이 겹쳐도 폭주하지 않게 한다.
-ALERT_COOLDOWN_SEC="${AADS_OFFLOAD_ALERT_COOLDOWN_SEC:-21600}"
-ALERT_STAMP="${AADS_OFFLOAD_ALERT_STAMP:-/tmp/aads-disk-offload-alert.stamp}"
 # 방금 만든 worktree가 pipeline_jobs 에 등록되기 전에 삭제되지 않도록 최소 경과
 # 시간을 둔다. auto_trigger.sh 는 worktree 생성 직후 바로 작업을 시작하므로
 # 2시간이면 등록/첫 커밋 어느 쪽으로든 상태가 갈린다(R1 리뷰 지적 1).
@@ -86,56 +83,36 @@ mkdir -p "$(dirname "$LOG")" || exit 1
 exec >>"$LOG" 2>&1
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >&2; }
 fail() { log "ERROR $*"; ERRORS=$((ERRORS + 1)); }
-# 텔레그램 자격증명은 .env 를 통째로 source 하지 않고 필요한 두 줄만 뽑는다
-# (codex_auth_sync.sh 와 같은 방식 — .env 에 source 하면 죽는 값이 있다).
-load_telegram_creds() {
-    local f line val
-    for f in /root/aads/aads-server/.env /root/aads/.env; do
-        [[ -f "$f" ]] || continue
-        while IFS= read -r line; do
-            case "$line" in
-                TELEGRAM_BOT_TOKEN=*) val="${line#TELEGRAM_BOT_TOKEN=}" ;;
-                TELEGRAM_CHAT_ID=*)   val="${line#TELEGRAM_CHAT_ID=}" ;;
-                *) continue ;;
-            esac
-            val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
-            case "$line" in
-                TELEGRAM_BOT_TOKEN=*) if [[ -n "$val" ]]; then TELEGRAM_BOT_TOKEN="$val"; fi ;;
-                TELEGRAM_CHAT_ID=*)   if [[ -n "$val" ]]; then TELEGRAM_CHAT_ID="$val"; fi ;;
-            esac
-        done < "$f"
-    done
-}
-
 notify_errors() {
-    local bot chat now last=0 text
+    local result
     (( ERRORS > 0 )) || return 0
     if (( DRY_RUN )); then
-        log "DRY-RUN telegram alert skipped (errors=$ERRORS)"
+        log "DRY-RUN OHVIS alert skipped (errors=$ERRORS)"
         return 0
     fi
-    TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
-    TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
-    load_telegram_creds
-    bot="$TELEGRAM_BOT_TOKEN"; chat="$TELEGRAM_CHAT_ID"
-    if [[ -z "$bot" || -z "$chat" ]]; then
-        log 'WARN telegram credentials missing; alert not sent'
+    result="$(timeout 30 docker exec aads-postgres psql -X -v ON_ERROR_STOP=1 \
+        -U aads -d aads -qAtc \
+        "INSERT INTO alert_history (severity, category, title, message, server, project, acknowledged)
+         SELECT 'critical', 'backup', 'AADS 디스크 오프로드 실패',
+                'errors=${ERRORS}; server=contabo116; log=/root/aads/logs/disk_offload_cafe24.log',
+                'contabo116', 'AADS', false
+         WHERE NOT EXISTS (
+             SELECT 1 FROM alert_history
+             WHERE title = 'AADS 디스크 오프로드 실패'
+               AND created_at > NOW() - INTERVAL '6 hours'
+         )
+         RETURNING id" 2>&1)" && {
+        if [[ "$result" =~ ^[0-9]+$ ]]; then
+            log "OHVIS alert recorded id=$result"
+        else
+            log 'SKIP OHVIS alert: duplicate within 6 hours'
+        fi
         return 0
-    fi
-    now="$(date +%s)"
-    [[ -f "$ALERT_STAMP" ]] && last="$(cat "$ALERT_STAMP" 2>/dev/null)"
-    [[ "$last" =~ ^[0-9]+$ ]] || last=0
-    if (( now - last < ALERT_COOLDOWN_SEC )); then
-        log "SKIP telegram alert: cooldown ${ALERT_COOLDOWN_SEC}s"
-        return 0
-    fi
-    text="[AADS disk offload] errors=${ERRORS} ($(hostname)). 로그: ${LOG}"
-    if timeout 20 curl -sf -X POST "https://api.telegram.org/bot${bot}/sendMessage" \
-        -d chat_id="$chat" --data-urlencode text="$text" >/dev/null 2>&1; then
-        printf '%s\n' "$now" >"$ALERT_STAMP"
-        log 'telegram alert sent'
+    }
+    if [[ -n "$result" ]]; then
+        log "WARN OHVIS alert failed: ${result:0:240}"
     else
-        log 'WARN telegram alert failed'
+        log 'WARN OHVIS alert failed'
     fi
 }
 finish() {

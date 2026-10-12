@@ -41,3 +41,10 @@ def test_pg_dump_requires_latest_dump_size_plus_reserve() -> None:
     script = _script()
     assert "expected_dump_kb=$(((latest_dump_bytes + 1023) / 1024))" in script
     assert "required_free_kb=$((expected_dump_kb + MIN_FREE_GB * 1024 * 1024))" in script
+
+
+def test_failures_use_deduplicated_ohvis_alert_instead_of_telegram() -> None:
+    script = _script()
+    assert "INSERT INTO alert_history" in script
+    assert "INTERVAL '6 hours'" in script
+    assert "api.telegram.org" not in script
