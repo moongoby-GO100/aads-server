@@ -26,8 +26,9 @@ def run_async(func):
     return wrapped
 
 
-@pytest.fixture(autouse=True)
-def reset(monkeypatch):
+def _reset_module_state():
+    reclaim._PENDING.clear()
+    reclaim._DISCARDED.clear()
     cdp.CDPSessionManager._sessions.clear()
     cdp._OWNED_TAB_LOCKS.clear()
     reclaim._OWNED.clear()
@@ -38,20 +39,17 @@ def reset(monkeypatch):
     reclaim._SWEEP_COUNT = 0
     reclaim._CREATE_ATTEMPTS = 0
     browser_tab._SESSIONS.clear()
+
+
+@pytest.fixture(autouse=True)
+def reset(monkeypatch, tmp_path):
+    monkeypatch.setenv("AADS_OWNED_TABS_REGISTRY", str(tmp_path / "owned_tabs.json"))
+    _reset_module_state()
     monkeypatch.setattr(cdp, "_is_managed_profile_dir", lambda _path: True)
     monkeypatch.setattr(reclaim, "_process_proof", lambda pid, port: 1234.5 if pid == 42 and port == 9222 else None)
     monkeypatch.setenv("AADS_SAFE_TAB_RECLAIM_ENABLED", "1")
     yield
-    cdp.CDPSessionManager._sessions.clear()
-    cdp._OWNED_TAB_LOCKS.clear()
-    reclaim._OWNED.clear()
-    reclaim._USED.clear()
-    reclaim._QUARANTINED.clear()
-    reclaim._SWEEP_CURSOR = 0
-    reclaim._SWEEP_WINDOW = 0
-    reclaim._SWEEP_COUNT = 0
-    reclaim._CREATE_ATTEMPTS = 0
-    browser_tab._SESSIONS.clear()
+    _reset_module_state()
 
 
 @run_async
@@ -97,7 +95,7 @@ async def test_chrome_json_without_attached_field_registers_and_reclaims(monkeyp
     token = created["data"]["owner_token"]
     reclaim._OWNED[token] = replace(reclaim._OWNED[token], lease_until=0)
     session.last_heartbeat_at = 0
-    outcome = await reclaim.reclaim({"owner_token": token, "dry_run": False})
+    outcome = await reclaim.reclaim({"owner_token": token, "work_key": "job-1", "dry_run": False})
     assert outcome["data"]["results"][0]["result"] == "closed"
     assert token not in reclaim._OWNED
     assert calls.count("Target.getTargetInfo") == 2
@@ -144,7 +142,7 @@ async def test_user_active_tab_is_never_closed(monkeypatch):
     token = created["data"]["owner_token"]
     session.last_heartbeat_at = 0
     reclaim._OWNED[token] = replace(reclaim._OWNED[token], lease_until=0)
-    outcome = await reclaim.reclaim({"owner_token": token, "dry_run": False})
+    outcome = await reclaim.reclaim({"owner_token": token, "work_key": "job-1", "dry_run": False})
     assert outcome["data"]["results"][0]["result"] == "user_active_or_unknown"
     assert token in reclaim._OWNED
     assert "Target.closeTarget" not in calls
@@ -173,7 +171,7 @@ async def test_close_must_confirm_success_and_pass_is_capped(monkeypatch):
         assert (await close(None, "Target.closeTarget", {}))["success"] is False
         return "close_not_confirmed"
     monkeypatch.setattr(reclaim, "_guarded_close", unconfirmed)
-    result = await reclaim.reclaim({"dry_run": False})
+    result = await reclaim.reclaim({"work_key": "job-1", "dry_run": False})
     assert result["data"]["processed"] == 2
     assert [entry["result"] for entry in result["data"]["results"]] == ["close_not_confirmed"] * 2
     assert len(reclaim._OWNED) == 3
@@ -196,13 +194,13 @@ async def test_default_gates_and_observed_tab(monkeypatch):
     monkeypatch.setattr(reclaim, "_reclaim_reason", eligible)
     monkeypatch.setattr(cdp, "_send_cdp", should_not_close)
     monkeypatch.delenv("AADS_SAFE_TAB_RECLAIM_ENABLED")
-    assert (await reclaim.reclaim({"dry_run": False}))["data"]["results"][0]["result"] == "disabled"
+    assert (await reclaim.reclaim({"work_key": "job-1", "dry_run": False}))["data"]["results"][0]["result"] == "disabled"
     monkeypatch.setenv("AADS_SAFE_TAB_RECLAIM_ENABLED", "1")
-    assert (await reclaim.reclaim({}))["data"]["results"][0]["result"] == "dry_run"
+    assert (await reclaim.reclaim({"work_key": "job-1"}))["data"]["results"][0]["result"] == "dry_run"
     reclaim.mark_observed("tab-1")
     monkeypatch.setattr(reclaim, "_reclaim_reason", actual_reason)
     reclaim._SWEEP_WINDOW = 0  # next sweep window
-    assert (await reclaim.reclaim({"dry_run": False}))["data"]["results"][0]["result"] == "user_observed"
+    assert (await reclaim.reclaim({"work_key": "job-1", "dry_run": False}))["data"]["results"][0]["result"] == "user_observed"
 
 
 @run_async
@@ -290,7 +288,7 @@ async def test_tab_open_waits_for_reclaim_final_check(monkeypatch):
     monkeypatch.setattr(reclaim, "_reclaim_reason", check)
     monkeypatch.setattr(cdp, "_list_cdp_targets", pages)
     monkeypatch.setattr(cdp, "_connect_cdp_ws", connect)
-    sweep = asyncio.create_task(reclaim.reclaim({}))
+    sweep = asyncio.create_task(reclaim.reclaim({"work_key": "chat-pc-one"}))
     await entered.wait()
     opening = asyncio.create_task(browser_tab._open({"port": 9222, "work_key": "chat-pc-one"}))
     await asyncio.sleep(0)
@@ -331,7 +329,7 @@ async def test_missing_session_activity_fields_fail_closed_per_record(monkeypatc
         "ws://127.0.0.1:9222/devtools/page/tab-1", 0, 0,
     )
     monkeypatch.setattr(cdp.CDPSessionManager, "get_session", lambda _key: OldSession())
-    result = await reclaim.reclaim({"dry_run": False})
+    result = await reclaim.reclaim({"work_key": "job-1", "dry_run": False})
     assert result["data"]["results"][0]["result"] == "session_or_command_active"
     assert token in reclaim._OWNED
 
@@ -361,7 +359,7 @@ async def test_command_marks_owned_target_before_releasing_port_lock(monkeypatch
     monkeypatch.setattr(cdp, "_send_cdp", close)
     running = asyncio.create_task(cdp._send_cdp_command(9222, "Runtime.evaluate", timeout_seconds=1))
     await entered.wait()
-    sweeping = asyncio.create_task(reclaim.reclaim({"owner_token": record.token, "dry_run": False}))
+    sweeping = asyncio.create_task(reclaim.reclaim({"owner_token": record.token, "work_key": record.work_key, "dry_run": False}))
     await asyncio.sleep(0)
     assert not sweeping.done()
     release.set()
@@ -390,7 +388,7 @@ async def test_prior_used_tab_stays_protected_after_last_target_changes(monkeypa
     await cdp._send_cdp_command(9222, "Page.captureScreenshot", timeout_seconds=1, target_id="tab-2")
     assert session.last_target_id == "tab-2"
     session.last_heartbeat_at = 0
-    result = await reclaim.reclaim({"owner_token": record.token, "dry_run": False})
+    result = await reclaim.reclaim({"owner_token": record.token, "work_key": record.work_key, "dry_run": False})
     assert result["data"]["results"][0]["result"] == "user_observed"
     assert record.token in reclaim._OWNED
 
