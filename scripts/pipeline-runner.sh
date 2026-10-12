@@ -7675,7 +7675,25 @@ _cleanup_old_artifacts() {
     local _reclaim_script
     _reclaim_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/reclaim_runner_worktrees.sh"
     if [[ -x "$_reclaim_script" ]]; then
-        timeout 90 bash "$_reclaim_script" || true
+        # 회수 스크립트는 자식 프로세스라 러너의 셸 변수(PGHOST 등)를 상속하지 못한다.
+        # 2026-10-12 contabo14: 접속값이 없어 psql 이 로컬 소켓의 다른 DB 로 붙었고, 모든 job 이
+        # unknown → 168h 보존이었다. 이 호출에만 접속값을 넘긴다(전역 export 금지).
+        # 값은 명령 인자가 아닌 환경변수로만 전달해 ps 에 노출하지 않는다.
+        local _sweep_ctr="" _sweep_out _sweep_line _sweep_db_down=0
+        if [[ "$DB_MODE" == "docker" ]]; then _sweep_ctr="$PG_CONTAINER"; fi
+        _sweep_out=$(PGHOST="$PGHOST" PGPORT="$PGPORT" PGUSER="$PGUSER" PGDATABASE="$PGDATABASE" \
+            PGPASSWORD="$PGPASSWORD" PG_CONTAINER="$_sweep_ctr" \
+            timeout 90 bash "$_reclaim_script" 2>&1) || true
+        while IFS= read -r _sweep_line; do
+            [[ -n "$_sweep_line" ]] || continue
+            log "  WORKTREE_SWEEP ${_sweep_line}"
+            if [[ "$_sweep_line" == *"DB unavailable"* ]]; then _sweep_db_down=1; fi
+        done <<< "$_sweep_out"
+        if (( _sweep_db_down )); then
+            _warn_reclaimer_db_unavailable "$_reclaim_script"
+        elif [[ -z "$_sweep_out" ]]; then
+            log "  WORKTREE_SWEEP no output (timeout 또는 비정상 종료)"
+        fi
     else
         _warn_reclaimer_unavailable "$_reclaim_script"
     fi
@@ -7711,6 +7729,33 @@ _warn_reclaimer_unavailable() {
     err_file=$(mktemp /tmp/reclaimer-missing.XXXXXX 2>/dev/null) || return 0
     printf '%s (host=%s)\n' "$msg" "${RUNNER_HOST_NAME:-unknown}" > "$err_file"
     lookup_error_book "$err_file" "reclaimer-missing"
+    rm -f "$err_file"
+}
+
+# 회수 스크립트가 DB 를 못 읽을 때의 경고. 이 상태에서는 모든 job 이 unknown 이라 RUNNER_WT_UNKNOWN_RETENTION_HOURS(168h)
+# 동안 폴더가 쌓인다. 결함은 지속되므로 RECLAIMER_WARN_INTERVAL_MIN(기본 24h)에 한 번만 알린다.
+_warn_reclaimer_db_unavailable() {
+    local script="$1"
+    local flag="${RECLAIMER_DB_FLAG:-/tmp/aads-runner-reclaimer-db.flag}"
+    local interval="${RECLAIMER_WARN_INTERVAL_MIN:-1440}"
+    [[ "$interval" =~ ^[0-9]+$ ]] || interval=1440
+    if [[ -f "$flag" && -z "$(find "$flag" -mmin +"$interval" 2>/dev/null)" ]]; then
+        return 0
+    fi
+    : > "$flag" 2>/dev/null || true
+    local msg="STALE_WORKTREE_CLEANUP: reclaimer DB unavailable: ${script} (DB_MODE=${DB_MODE:-?} host=${PGHOST:-?}:${PGPORT:-?})"
+    log "  WARN ${msg} — 모든 worktree 가 unknown 상태로 ${RUNNER_WT_UNKNOWN_RETENTION_HOURS:-168}h 보존된다 (이 경고는 ${interval}분에 한 번)"
+    if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+        curl -s -m 10 -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "text=⚠️ [Runner] ${RUNNER_HOST_NAME:-$(hostname -s)}: ${msg} — 주기 회수가 DB 를 읽지 못해 worktree 가 쌓인다" \
+            -d "parse_mode=HTML" >/dev/null 2>&1 || true
+    fi
+    local err_file
+    err_file=$(mktemp /tmp/reclaimer-db.XXXXXX 2>/dev/null) || return 0
+    printf '%s (host=%s)\n' "$msg" "${RUNNER_HOST_NAME:-unknown}" > "$err_file"
+    lookup_error_book "$err_file" "reclaimer-db"
     rm -f "$err_file"
 }
 

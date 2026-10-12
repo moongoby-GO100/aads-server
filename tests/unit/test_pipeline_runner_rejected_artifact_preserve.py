@@ -55,7 +55,7 @@ def test_existing_stale_worktree_reaper_recovers_preserved_worktrees():
     assert "_cleanup_old_artifacts()" in script
     cleanup_fn = script[script.index("_cleanup_old_artifacts()"):]
     cleanup_fn = cleanup_fn[: cleanup_fn.index("\n}\n") + 3]
-    assert 'timeout 90 bash "$_reclaim_script" || true' in cleanup_fn
+    assert 'timeout 90 bash "$_reclaim_script" 2>&1) || true' in cleanup_fn
     assert "reclaim_runner_worktrees.sh" in cleanup_fn
     assert "git worktree remove" not in cleanup_fn
     assert "rm -rf" not in cleanup_fn

@@ -91,11 +91,24 @@ SELECT a.job_id || '|' || (a.row_data->>'status') FROM pipeline_jobs_archive a
 WHERE a.job_id LIKE 'runner-%'
 AND NOT EXISTS (SELECT 1 FROM pipeline_jobs p WHERE p.job_id = a.job_id)"
 # 즉시 회수 모드는 호출자(러너)가 종료 상태를 넘기므로 DB 를 조회하지 않는다.
+# 접속 정보는 러너(_cleanup_old_artifacts)가 PG* / PG_CONTAINER 환경변수로 넘긴다.
+# 원격 러너(contabo14)에는 aads-postgres 컨테이너가 없고 로컬 소켓의 DB 는 다른 DB 라서,
+# PGHOST 가 주어지면 -h/-p/-U/-d 를 명시해야 한다. 비밀번호는 PGPASSWORD 환경변수로만 받는다(인자 금지).
+# PG_CONTAINER 가 미설정이면 기본 aads-postgres(contabo116 기존 동작), 빈 문자열로 명시되면
+# DB_MODE=psql 러너가 "컨테이너 없음"을 뜻하므로 docker 조회를 건너뛰고 PG* 로 지정한 DB 만 본다.
+pg_container="${PG_CONTAINER-aads-postgres}"
+psql_args=()
+if [[ -n "${PGHOST:-}" ]]; then
+    psql_args+=(-h "$PGHOST")
+    [[ -n "${PGPORT:-}" ]] && psql_args+=(-p "$PGPORT")
+    [[ -n "${PGUSER:-}" ]] && psql_args+=(-U "$PGUSER")
+    [[ -n "${PGDATABASE:-}" ]] && psql_args+=(-d "$PGDATABASE")
+fi
 if [[ -n "$only_job" ]]; then
     :
-elif command -v docker >/dev/null 2>&1 && db_rows="$(timeout 10 docker exec aads-postgres psql -U aads -d aads -X -qAtc "$sql" 2>/dev/null)"; then
+elif [[ -n "$pg_container" ]] && command -v docker >/dev/null 2>&1 && db_rows="$(timeout 10 docker exec "$pg_container" psql -U "${PGUSER:-aads}" -d "${PGDATABASE:-aads}" -X -qAtc "$sql" 2>/dev/null)"; then
     db_ready=1
-elif command -v psql >/dev/null 2>&1 && db_rows="$(timeout 10 psql -X -qAtc "$sql" 2>/dev/null)"; then
+elif command -v psql >/dev/null 2>&1 && db_rows="$(timeout 10 psql ${psql_args[@]+"${psql_args[@]}"} -X -qAtc "$sql" 2>/dev/null)"; then
     db_ready=1
 fi
 if (( db_ready )); then
@@ -103,7 +116,7 @@ if (( db_ready )); then
         [[ "$id" =~ ^runner-[0-9a-zA-Z_-]+$ && -n "$status" ]] && job_status["$id"]="$status"
     done <<< "$db_rows"
 elif [[ -z "$only_job" ]]; then
-    echo "[reclaim-wt] DB unavailable; preserving unknown jobs by default" >&2
+    echo "[reclaim-wt] DB unavailable; preserving unknown jobs by default (tried: docker=${pg_container:-none}, psql=${PGHOST:-local-socket}${PGPORT:+:$PGPORT})" >&2
 fi
 
 _path_busy() {
