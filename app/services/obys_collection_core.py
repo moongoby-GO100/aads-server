@@ -9,7 +9,7 @@ import json
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 # 수집 종류 → 클로브 조회 도구. 도구 이름의 정본은 clobe_mcp_client.COLLECTION_DATA_TOOLS.
@@ -167,7 +167,7 @@ def _dec(value: Any) -> Decimal | None:
     if value is None or value == "":
         return None
     try:
-        return Decimal(str(value)).quantize(Decimal("0.01"))
+        return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)  # SQL round(numeric, 2) 와 같은 규칙
     except (InvalidOperation, ValueError):
         return None
 
@@ -185,6 +185,39 @@ def _first(raw: dict[str, Any], *keys: str) -> Any:
         if raw.get(key) not in (None, ""):
             return raw[key]
     return None
+
+
+_CARD_VAT_KEYS = ("vat", "vatAmount")
+
+
+def is_card_cancelled(raw: dict[str, Any]) -> bool:
+    """클로브 카드승인의 cancelType 이 NONE(또는 비어 있음)이 아니면 취소 건이다."""
+    return str(raw.get("cancelType") or "NONE").strip().upper() not in ("", "NONE")
+
+
+def _card_is_foreign(raw: dict[str, Any]) -> bool:
+    return str(raw.get("homeForeignType") or "DOMESTIC").strip().upper() not in ("", "DOMESTIC")
+
+
+def _card_signed(value: Decimal | None, raw: dict[str, Any]) -> Decimal | None:
+    """취소 건은 -abs(값). 원본 부호가 양수든 음수든 같은 결과라 이중 반전이 없다."""
+    return -abs(value) if value is not None and is_card_cancelled(raw) else value
+
+
+def card_amount(raw: dict[str, Any]) -> Decimal | None:
+    """카드승인 금액(원화). 실측 키는 usedAmountKrw(2026-10-12 운영 154건).
+
+    해외(homeForeignType 이 DOMESTIC 이 아님)는 usedAmount 가 외화일 수 있어 usedAmountKrw 만 쓴다.
+    취소 건은 -abs(금액): 현금영수증 취소와 같은 '취소는 음수' 관례이고 tax_invoice 의 음수 금액과도 맞는다.
+    취소 건의 원본 부호는 운영 표본이 없어 abs 로 정규화한다(원본이 이미 음수여도 이중 반전하지 않는다).
+    합계 대사(row_sum_value / row_sum_sql)도 이 선택·부호 규칙을 그대로 쓴다.
+    """
+    keys = ("usedAmountKrw",) if _card_is_foreign(raw) else ("usedAmountKrw", "usedAmount", "amount")
+    return _card_signed(_dec(_first(raw, *keys)), raw)
+
+
+def card_vat(raw: dict[str, Any]) -> Decimal | None:
+    return _card_signed(_dec(_first(raw, *_CARD_VAT_KEYS)), raw)
 
 
 def normalize_item(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
@@ -225,9 +258,9 @@ def normalize_item(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
             "source_key": str(_first(raw, "id", "approvalId", "approvalNo")) if _first(raw, "id", "approvalId", "approvalNo") else None,
             "institution": str(_first(raw, "cardCompanyName", "cardName", "issuerName") or "card"),
             "occurred_on": _date(_first(raw, "usedAt", "approvedAt")),
-            "amount": _dec(_first(raw, "usedAmount", "amount")),
+            "amount": card_amount(raw),
             "direction": "OUT",
-            "counterparty": str(_first(raw, "merchantName", "storeName") or ""),
+            "counterparty": str(_first(raw, "memberStoreName", "merchantName", "storeName") or ""),
         }
     raise ValueError("unknown_kind")
 
@@ -251,7 +284,10 @@ def assign_source_keys(kind: str, rows: list[dict[str, Any]]) -> None:
 _SUM_FIELDS = {
     KIND_TAX: (("supplyValueSum", "supplyValue"), ("taxAmountSum", "taxAmount"), ("totalAmountSum", "totalAmount")),
     KIND_CASH: (("totalAmountSum", "totalAmount"), ("supplyAmountSum", "supplyAmount"), ("vatAmountSum", "vatAmount")),
-    KIND_CARD: (("totalUsedAmountSum", "usedAmount"), ("totalVatAmountSum", "vatAmount")),
+    # 카드: 총계 하나에 대사 키 하나. 행 값은 row_sum_value/row_sum_sql 이 고른다
+    # (used: usedAmountKrw → usedAmount → amount, 해외는 usedAmountKrw 만 / vat: vat → vatAmount).
+    # 같은 총계를 키 두 개로 동시에 대사하면 해외 거래(usedAmount=외화)가 오탐 mismatch 가 된다.
+    KIND_CARD: (("totalUsedAmountSum", "usedAmountKrw"), ("totalVatAmountSum", "vat")),
 }
 
 
@@ -287,7 +323,10 @@ def reconcile(kind: str, collected: int, sums: dict[str, Decimal | None], first_
 
 
 def is_cancellation(kind: str, raw: dict[str, Any]) -> bool:
-    """현금영수증 취소거래. 클로브 합계 필드는 취소분을 뺀 순액이다(2026-10-03 실측: 승인 3,875,829 − 취소 55,000)."""
+    """현금영수증 취소거래. 클로브 합계 필드는 취소분을 뺀 순액이다(2026-10-03 실측: 승인 3,875,829 − 취소 55,000).
+
+    카드는 여기서 다루지 않는다: 카드 행 값은 card_amount/card_vat 가 -abs 로 정규화하므로 -1 곱셈 규칙이 맞지 않는다.
+    """
     if kind != KIND_CASH:
         return False
     text = str(raw.get("transactionType") or "")
@@ -299,6 +338,41 @@ CANCEL_SIGN_SQL = {
     KIND_CASH: "CASE WHEN payload->>'transactionType' LIKE '%취소%' OR lower(payload->>'transactionType') LIKE '%cancel%' "
                "THEN -1 ELSE 1 END",
 }
+
+_CARD_CANCELLED_SQL = "upper(btrim(COALESCE(NULLIF(payload->>'cancelType', ''), 'NONE'))) NOT IN ('', 'NONE')"
+_CARD_FOREIGN_SQL = "upper(btrim(COALESCE(NULLIF(payload->>'homeForeignType', ''), 'DOMESTIC'))) NOT IN ('', 'DOMESTIC')"
+
+
+def _sql_first(keys: tuple[str, ...]) -> str:
+    return "COALESCE(" + ", ".join(f"NULLIF(payload->>'{k}', '')" for k in keys) + ")"
+
+
+def row_sum_value(kind: str, item_key: str, raw: dict[str, Any]) -> Decimal | None:
+    """대사 합계에 들어가는 행 값(부호 포함). None 이면 원본에 그 값이 없어 대사할 수 없다."""
+    if kind == KIND_CARD and item_key == "usedAmountKrw":
+        return card_amount(raw)
+    if kind == KIND_CARD and item_key == "vat":
+        return card_vat(raw)
+    value = _dec(raw.get(item_key))
+    if value is None:
+        return None
+    return -value if is_cancellation(kind, raw) else value
+
+
+def row_sum_sql(kind: str, item_key: str) -> str:
+    """row_sum_value 의 SQL 표현(payload 컬럼 기준 numeric 식). 두 곳의 규칙이 어긋나지 않게 이 모듈에 함께 둔다.
+
+    Python 은 _dec 에서 행마다 소수 둘째 자리로 반올림한 뒤 합산하므로 SQL 도 합산 전에 행마다 round(.., 2) 한다.
+    """
+    if kind == KIND_CARD and item_key in ("usedAmountKrw", "vat"):
+        if item_key == "usedAmountKrw":
+            picked = (f"CASE WHEN {_CARD_FOREIGN_SQL} THEN NULLIF(payload->>'usedAmountKrw', '') "
+                      f"ELSE {_sql_first(('usedAmountKrw', 'usedAmount', 'amount'))} END")
+        else:
+            picked = _sql_first(_CARD_VAT_KEYS)
+        rounded = f"round(({picked})::numeric, 2)"
+        return f"(CASE WHEN {_CARD_CANCELLED_SQL} THEN -abs({rounded}) ELSE {rounded} END)"
+    return f"(round(NULLIF(payload->>'{item_key}', '')::numeric, 2) * {CANCEL_SIGN_SQL.get(kind, '1')})"
 
 
 def sum_item_keys(kind: str) -> tuple[str, ...]:

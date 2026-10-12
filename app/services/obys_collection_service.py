@@ -458,10 +458,8 @@ async def _stream_totals(
         rows = [r for r in shadow.values() if not direction or r["direction"] == direction]
         sums: dict[str, Decimal | None] = {}
         for k in keys:
-            vals = [r["raw"].get(k) for r in rows]
-            sign = [-1 if core.is_cancellation(ctx.kind, r["raw"]) else 1 for r in rows]
-            sums[k] = None if any(v is None for v in vals) else sum(
-                (sg * (core._dec(v) or Decimal("0")) for sg, v in zip(sign, vals)), Decimal("0"))
+            vals = [core.row_sum_value(ctx.kind, k, r["raw"]) for r in rows]
+            sums[k] = None if any(v is None for v in vals) else sum(vals, Decimal("0"))
         return len(rows), sums
     where = ("tenant_id=$1 AND business_id=$2 AND data_kind=$3 AND stage <> 'superseded' "
              "AND last_run_id IN (SELECT run_id FROM obys_clobe_collection_run WHERE chain_id=$4)")
@@ -470,12 +468,11 @@ async def _stream_totals(
         where += " AND direction=$5"
         args.append(direction)
     count = await conn.fetchval(f"SELECT count(DISTINCT source_key) FROM obys_clobe_item WHERE {where}", *args)
-    sign_sql = core.CANCEL_SIGN_SQL.get(ctx.kind, "1")
     sums = {}
     for k in keys:
         row = await conn.fetchrow(
-            f"SELECT count(*) AS n, count(*) FILTER (WHERE payload ? '{k}' AND payload->>'{k}' IS NOT NULL) AS have, "
-            f"sum((payload->>'{k}')::numeric * {sign_sql}) AS total FROM (SELECT DISTINCT ON (source_key) payload FROM obys_clobe_item "
+            f"SELECT count(*) AS n, count(v) AS have, sum(v) AS total FROM (SELECT DISTINCT ON (source_key) "
+            f"{core.row_sum_sql(ctx.kind, k)} AS v FROM obys_clobe_item "
             f"WHERE {where} ORDER BY source_key, last_seen_at DESC) t",
             *args,
         )
