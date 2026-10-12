@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from app.core import db_pool
+from app.core import obys_runtime
 from app.services import clobe_mcp_client as clobe
 from app.services import obys_collection_core as core
 from app.services import obys_collection_scheduler as sched
@@ -248,6 +250,92 @@ def test_slow_company_is_cut_by_budget(world, monkeypatch):
     monkeypatch.setattr(svc, "run_collection", slow)
     out = run(sched.run_due(NOW, budget_seconds=0.05))
     assert out["companies"][0]["status"] == "error" and out["companies"][0]["detail"] == "timeout"
+
+
+@pytest.fixture(autouse=True)
+def runtime_apply(monkeypatch):
+    """CLI 가 부르는 RuntimeSettings.from_env().apply() 를 기록만 하는 가짜로 바꾼다(실 환경변수·볼트 변경 방지)."""
+    events: list[str] = []
+
+    class _Settings:
+        def apply(self):
+            events.append("apply")
+
+    def from_env(env=None):
+        events.append("from_env")
+        return _Settings()
+
+    monkeypatch.setattr(obys_runtime.RuntimeSettings, "from_env", staticmethod(from_env))
+    return events
+
+
+# (a) CLI 는 run_due 전에 오비서 독립 실행 설정을 적용한다
+def test_cli_applies_runtime_settings_before_run_due(world, monkeypatch, runtime_apply):
+    order = []
+
+    async def due():
+        order.append(tuple(runtime_apply))
+        return {"ok": True, "companies": []}
+
+    async def close():
+        return None
+
+    monkeypatch.setattr(sched, "run_due", due)
+    monkeypatch.setattr(clobe, "close_store_pool", close)
+    assert sched.main(["--once"]) == 0
+    assert order == [("from_env", "apply")]
+
+
+# (b) 설정 적용 실패 → JSON 한 줄 + exit 1, 수집 미시작
+@pytest.mark.parametrize("stage", ["from_env", "apply"])
+def test_cli_runtime_config_failure_is_json_exit_1_without_run_due(world, monkeypatch, capsys, stage):
+    called = []
+
+    class _Bad:
+        def apply(self):
+            raise obys_runtime.RuntimeConfigurationError("postgres://u:secret@h/db")
+
+    def from_env(env=None):
+        if stage == "from_env":
+            raise obys_runtime.RuntimeConfigurationError("postgres://u:secret@h/db")
+        return _Bad()
+
+    async def due():
+        called.append("run_due")
+        return {"ok": True}
+
+    monkeypatch.setattr(obys_runtime.RuntimeSettings, "from_env", staticmethod(from_env))
+    monkeypatch.setattr(sched, "run_due", due)
+    assert sched.main(["--once"]) == 1
+    out = capsys.readouterr().out
+    assert len(out.strip().splitlines()) == 1
+    body = json.loads(out)
+    assert body["ok"] is False and body["error"] == "runtime_config"
+    assert "secret" not in out
+    assert called == []
+
+
+# (c) AADS 공유 풀은 쓰지 않는다
+def test_cli_never_touches_aads_shared_pool(world, monkeypatch):
+    world.links = ["c1"]
+    touched = []
+
+    async def init_pool(*a, **k):
+        touched.append("init_pool")
+
+    async def close_pool(*a, **k):
+        touched.append("close_pool")
+
+    async def close():
+        return None
+
+    monkeypatch.setattr(db_pool, "init_pool", init_pool)
+    monkeypatch.setattr(db_pool, "close_pool", close_pool)
+    monkeypatch.setattr(clobe, "close_store_pool", close)
+    assert sched.main(["--once"]) == 0
+    assert touched == []
+    src = (ROOT / "app/services/obys_collection_scheduler.py").read_text(encoding="utf-8")
+    assert "init_pool" not in src and "close_pool" not in src.replace("close_store_pool", "")
 
 
 def test_cli_exit_code_and_single_json_line(world, monkeypatch, capsys):

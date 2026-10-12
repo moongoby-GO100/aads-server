@@ -198,7 +198,25 @@ async def run_due(now: datetime | None = None, *, budget_seconds: float = BUDGET
     }
 
 
+def _apply_runtime() -> dict[str, Any] | None:
+    """오비서 독립 실행 설정을 적용한다. 앱의 create_app 이 하는 단계이며, 빠지면 clobe store_mode()=aads 로 AADS 풀을 찾는다.
+
+    성공이면 None, 실패하면 출력할 오류 JSON. 예외 메시지는 담지 않는다(경로·DSN 노출 방지).
+    """
+    try:
+        from app.core.obys_runtime import RuntimeSettings
+
+        RuntimeSettings.from_env().apply()
+    except Exception as exc:  # noqa: BLE001 - 설정이 없으면 수집을 시작하지 않는다
+        return {"ok": False, "error": "runtime_config", "detail": type(exc).__name__, "companies": []}
+    return None
+
+
 async def _main_async() -> int:
+    failure = _apply_runtime()
+    if failure is not None:
+        print(json.dumps(failure, ensure_ascii=False, separators=(",", ":")))
+        return 1
     try:
         result = await run_due()
     except Exception as exc:  # noqa: BLE001 - 대상 조회 자체가 실패한 경우도 JSON 한 줄로 남긴다
