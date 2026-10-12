@@ -18,8 +18,10 @@
 #     /root/aads/.worktrees 에는 aads-dashboard 소속 worktree 가 섞여 있어, 고정된
 #     aads-server 저장소에서 지우면 "is not a working tree" 로 매일 4건씩 실패했다.
 #  7. git 이 dirty/locked 로 거부하면 ERROR 가 아니라 SKIP(보호 대상)으로 분류한다.
-#  8. 덤프 rsync 는 --partial --inplace + ssh keepalive + 재시도(재개)로 보낸다.
+#  8. 덤프 rsync 는 --partial --append + ssh keepalive + 재시도(재개)로 보낸다.
 #  9. 종료 시 errors>0 이면 텔레그램으로 쿨다운을 두고 1회 알린다.
+# 10. 전날 전송에 실패한 덤프도 매일 먼저 백필하고, 원격 SHA-256이 일치하는
+#     오래된 로컬 덤프만 지운다. 새 덤프 전에는 최근 덤프 크기+여유공간을 요구한다.
 set -uo pipefail
 
 DRY_RUN=0
@@ -62,8 +64,9 @@ DAY="$(date +%Y%m%d)"
 SSH_OPTS='-p 7916 -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=20 -o ServerAliveCountMax=6'
 RSYNC_SSH="ssh $SSH_OPTS"
 # 덤프 rsync 재시도(재개) 설정. 7.9G 덤프가 약 1분마다 끊기는 회선에서도
-# --partial --inplace 로 이어 보낸다.
-RSYNC_RETRIES="${AADS_OFFLOAD_RSYNC_RETRIES:-8}"
+# --partial --append 로 이어 보낸다. 완성 후 SHA-256으로 검증하고, 불일치하면
+# 원격 불완전본을 격리한 다음 처음부터 한 번 더 전송한다.
+RSYNC_RETRIES="${AADS_OFFLOAD_RSYNC_RETRIES:-30}"
 RSYNC_RETRY_SLEEP="${AADS_OFFLOAD_RSYNC_RETRY_SLEEP:-15}"
 RSYNC_ATTEMPT_TIMEOUT="${AADS_OFFLOAD_RSYNC_ATTEMPT_TIMEOUT:-1800}"
 # 실패 알림 쿨다운(초). cron 이 하루 한 번 돌지만 수동 재실행이 겹쳐도 폭주하지 않게 한다.
@@ -76,6 +79,7 @@ WORKTREE_MIN_AGE_SEC="${AADS_OFFLOAD_MIN_AGE_SEC:-7200}"
 # pg_dump 전 최소 여유 공간(R1 리뷰 지적 3). 03:00 정기 백업과 겹쳐도 안전하도록
 # 넉넉히 잡는다.
 MIN_FREE_GB="${AADS_OFFLOAD_MIN_FREE_GB:-5}"
+EXPECTED_DUMP_GB="${AADS_OFFLOAD_EXPECTED_DUMP_GB:-8}"
 ERRORS=0
 
 mkdir -p "$(dirname "$LOG")" || exit 1
@@ -205,7 +209,7 @@ eligible() {
 rsync_resume() {
     local src="$1" dst="$2" attempt rc=1
     for (( attempt = 1; attempt <= RSYNC_RETRIES; attempt++ )); do
-        timeout "$RSYNC_ATTEMPT_TIMEOUT" rsync -a --partial --inplace \
+        timeout "$RSYNC_ATTEMPT_TIMEOUT" rsync -a --partial --append \
             -e "$RSYNC_SSH" "$src" "$dst"
         rc=$?
         (( rc == 0 )) && return 0
@@ -244,6 +248,71 @@ remove_worktree() {
 remote_mkdir() {
     timeout 30 ssh $SSH_OPTS "$REMOTE" \
         "mkdir -p -- '$1' && chmod 700 -- '$1'"
+}
+
+dump_remote_path() {
+    local local_dump="$1" name day
+    name="${local_dump##*/}"
+    [[ "$name" =~ ^aads_([0-9]{8})\.dump$ ]] || return 1
+    day="${BASH_REMATCH[1]}"
+    printf '%s/%s/postgres/%s\n' "$REMOTE_ROOT" "$day" "$name"
+}
+
+offload_dump_file() {
+    local local_dump="$1" remote_dump local_sum remote_sum quarantine
+    remote_dump="$(dump_remote_path "$local_dump")" || return 1
+    remote_mkdir "$(dirname "$remote_dump")" || return 1
+    rsync_resume "$local_dump" "$REMOTE:$remote_dump" || return 1
+    timeout 30 ssh $SSH_OPTS "$REMOTE" "chmod 600 -- '$remote_dump'" || return 1
+    local_sum="$(sha256sum "$local_dump" | awk '{print $1}')"
+    remote_sum="$(timeout 1800 ssh $SSH_OPTS "$REMOTE" \
+        "sha256sum '$remote_dump'" 2>/dev/null | awk '{print $1}')" || remote_sum=''
+    if [[ -z "$local_sum" || "$local_sum" != "$remote_sum" ]]; then
+        quarantine="${remote_dump}.checksum-mismatch.$(date +%s)"
+        log "WARN dump checksum mismatch; quarantining remote file $remote_dump"
+        timeout 30 ssh $SSH_OPTS "$REMOTE" "mv -- '$remote_dump' '$quarantine'" || return 1
+        rsync_resume "$local_dump" "$REMOTE:$remote_dump" || return 1
+        timeout 30 ssh $SSH_OPTS "$REMOTE" "chmod 600 -- '$remote_dump'" || return 1
+        remote_sum="$(timeout 1800 ssh $SSH_OPTS "$REMOTE" \
+            "sha256sum '$remote_dump'" 2>/dev/null | awk '{print $1}')" || remote_sum=''
+        [[ -n "$local_sum" && "$local_sum" == "$remote_sum" ]] || return 1
+        timeout 30 ssh $SSH_OPTS "$REMOTE" "rm -f -- '$quarantine'" || \
+            log "WARN verified dump but could not remove quarantined remote file $quarantine"
+    fi
+    log "OFFLOADED dump $local_dump checksum=$local_sum files=1"
+}
+
+prune_verified_old_dumps() {
+    local old old_remote old_local_sum old_remote_sum
+    local -a old_dumps=()
+    mapfile -t old_dumps < <(
+        find "$DUMPS" -maxdepth 1 -type f -name 'aads_????????.dump' | sort -r | tail -n +3
+    )
+    for old in "${old_dumps[@]}"; do
+        old_remote="$(dump_remote_path "$old")" || continue
+        old_local_sum="$(sha256sum "$old" | awk '{print $1}')"
+        old_remote_sum="$(timeout 1800 ssh $SSH_OPTS "$REMOTE" \
+            "sha256sum '$old_remote'" 2>/dev/null | awk '{print $1}')" || old_remote_sum=''
+        if [[ -n "$old_local_sum" && "$old_local_sum" == "$old_remote_sum" ]]; then
+            rm -f -- "$old" && log "REMOVED verified old local dump $old"
+        else
+            fail "old dump unverified; retained $old"
+        fi
+    done
+}
+
+backfill_retained_dumps() {
+    local retained
+    local -a retained_dumps=()
+    mapfile -t retained_dumps < <(
+        find "$DUMPS" -maxdepth 1 -type f -name 'aads_????????.dump' | sort
+    )
+    for retained in "${retained_dumps[@]}"; do
+        if ! offload_dump_file "$retained"; then
+            fail "retained dump offload failed; retained $retained"
+        fi
+    done
+    prune_verified_old_dumps
 }
 
 verify_tree() {
@@ -294,17 +363,24 @@ if [[ -d "$WORKTREES" ]]; then
 fi
 
 dump="$DUMPS/aads_$DAY.dump"
-dump_dst="$REMOTE_ROOT/$DAY/postgres/aads_$DAY.dump"
+dump_dst="$(dump_remote_path "$dump")"
 if (( DRY_RUN )); then
-    log "DRY-RUN free space check >= ${MIN_FREE_GB}GB on $(dirname "$DUMPS")"
+    log "DRY-RUN retained dump append backfill; source preserved until SHA-256 match"
+    log "DRY-RUN free space check >= latest dump size + ${MIN_FREE_GB}GB on $(dirname "$DUMPS")"
     log "DRY-RUN timeout 1800 docker exec aads-postgres pg_dump -U aads -d aads -Fc > $dump"
     log "DRY-RUN dump rsync/checksum -> $dump_dst; local retention unchanged"
 else
     mkdir -p "$DUMPS" || { fail "cannot create $DUMPS"; exit 1; }
     chmod 700 "$DUMPS" || fail "cannot chmod $DUMPS"
+    backfill_retained_dumps
     free_kb="$(df -Pk "$DUMPS" | awk 'NR==2 {print $4}')"
-    if [[ ! "$free_kb" =~ ^[0-9]+$ ]] || (( free_kb < MIN_FREE_GB * 1024 * 1024 )); then
-        fail "insufficient free space before pg_dump: ${free_kb:-unknown}KB < ${MIN_FREE_GB}GB"
+    latest_dump_bytes="$(find "$DUMPS" -maxdepth 1 -type f -name 'aads_????????.dump' \
+        -printf '%s\n' | sort -nr | head -n 1)"
+    [[ "$latest_dump_bytes" =~ ^[0-9]+$ ]] || latest_dump_bytes=$((EXPECTED_DUMP_GB * 1024 * 1024 * 1024))
+    expected_dump_kb=$(((latest_dump_bytes + 1023) / 1024))
+    required_free_kb=$((expected_dump_kb + MIN_FREE_GB * 1024 * 1024))
+    if [[ ! "$free_kb" =~ ^[0-9]+$ ]] || (( free_kb < required_free_kb )); then
+        fail "insufficient free space before pg_dump: ${free_kb:-unknown}KB < ${required_free_kb}KB (latest dump + ${MIN_FREE_GB}GB reserve)"
     else
         # umask 077: 덤프 파일이 rsync 로 /www 하위 경로에 나가므로 소유자 외
         # 읽기 권한을 주지 않는다(R1 리뷰 지적 2 — DB 덤프 웹 노출 위험).
@@ -312,34 +388,8 @@ else
         if (umask 077; timeout 1800 docker exec aads-postgres pg_dump -U aads -d aads -Fc >"$tmp") && [[ -s "$tmp" ]]; then
             mv -f -- "$tmp" "$dump"
             chmod 600 "$dump" || fail "cannot chmod $dump"
-            if remote_mkdir "$REMOTE_ROOT/$DAY/postgres" && \
-                rsync_resume "$dump" "$REMOTE:$dump_dst" && \
-                timeout 30 ssh -p 7916 -o BatchMode=yes -o ConnectTimeout=15 "$REMOTE" "chmod 600 -- '$dump_dst'"; then
-                local_sum="$(sha256sum "$dump" | awk '{print $1}')"
-                remote_sum="$(timeout 1800 ssh -p 7916 -o BatchMode=yes -o ConnectTimeout=15 "$REMOTE" \
-                    "sha256sum '$dump_dst'" | awk '{print $1}')" || remote_sum=''
-                if [[ -n "$local_sum" && "$local_sum" == "$remote_sum" ]]; then
-                    log "OFFLOADED dump $dump checksum=$local_sum files=1"
-                    # Keep two newest local dumps. Older dumps require their own matching
-                    # remote copy before removal; preserve them if verification fails.
-                    mapfile -t old_dumps < <(find "$DUMPS" -maxdepth 1 -type f -name 'aads_????????.dump' | sort -r | tail -n +3)
-                    for old in "${old_dumps[@]}"; do
-                        old_name="${old##*/}"
-                        old_day="${old_name#aads_}"; old_day="${old_day%.dump}"
-                        [[ "$old_day" =~ ^[0-9]{8}$ ]] || continue
-                        old_dst="$REMOTE_ROOT/$old_day/postgres/$old_name"
-                        old_local_sum="$(sha256sum "$old" | awk '{print $1}')"
-                        old_remote_sum="$(timeout 1800 ssh -p 7916 -o BatchMode=yes -o ConnectTimeout=15 "$REMOTE" \
-                            "sha256sum '$old_dst'" 2>/dev/null | awk '{print $1}')" || old_remote_sum=''
-                        if [[ -n "$old_local_sum" && "$old_local_sum" == "$old_remote_sum" ]]; then
-                            rm -f -- "$old" && log "REMOVED verified old local dump $old"
-                        else
-                            fail "old dump unverified; retained $old"
-                        fi
-                    done
-                else
-                    fail "dump checksum mismatch; retained $dump"
-                fi
+            if offload_dump_file "$dump"; then
+                prune_verified_old_dumps
             else
                 fail "dump rsync failed; retained $dump"
             fi
