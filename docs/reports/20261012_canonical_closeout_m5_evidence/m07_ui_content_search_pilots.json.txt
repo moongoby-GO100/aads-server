@@ -1,0 +1,9 @@
+{
+ "method": "host Playwright, desktop 1440x1000, https://aads.newtalk.kr/docs, tab '프로젝트 파일' -> '내용(뜻으로)', query = pilot title typed into the search box, results read from the DOM (hit title span). Real /auth/login token via cookie+localStorage; token not stored.",
+ "74":  {"api_status": 200, "results": 20, "canonical_hits": [[1, "[승인 v1.0.0] W-14F 평가기·실행기 인터페이스 계약 v1"]]},
+ "92":  {"api_status": 200, "results": 15, "canonical_hits": [[1, "[승인 v1.3.0] AADS Blue/Green 병목 최적화 PRD v1.3.0"], [7, "[초안 v1.0.0] AADS 현재 정본·운영 근거 제공 PRD v1.0.0"]]},
+ "109": {"api_status": 200, "results": 16, "canonical_hits": [[4, "[승인 v1.0.0] OHVIS 문서 정본관리 게이트 — 운영 기획서"], [8, "[초안 v1.2.0] OHVIS 문서 정본관리 게이트 — 운영 기획서"], [13, "[승인 v1.0.0] OHVIS 문서 정본관리 게이트 — 운영 PRD"], [16, "[초안 v1.2.0] OHVIS 문서 정본관리 게이트 — 운영 PRD"]]},
+ "110": {"api_status": 200, "results": 13, "canonical_hits": [[5, "[승인 v1.0.0] OHVIS 문서 정본관리 게이트 — 운영 PRD"], [6, "[초안 v1.2.0] OHVIS 문서 정본관리 게이트 — 운영 PRD"]]},
+ "119 (run 1: title query)": {"api_status": 200, "results": 20, "canonical_hits": [[5, "[승인 v1.0.0] obys-v4/approve — spec"]]},
+ "119 (run 2: title + words from body)": {"api_status": 200, "results": 20, "canonical_hits": [[2, "[승인 v1.0.0] obys-v4/approve — spec"]]}
+}

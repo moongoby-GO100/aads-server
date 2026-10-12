@@ -1,0 +1,26 @@
+........................................................................ [ 48%]
+........................................................................ [ 97%]
+...                                                                      [100%]
+=============================== warnings summary ===============================
+../usr/local/lib/python3.12/site-packages/starlette/testclient.py:53
+  /usr/local/lib/python3.12/site-packages/starlette/testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+tests/unit/test_canonical_gate_entrypoints.py: 14 warnings
+  /app/app/api/pipeline_runner.py:2034: RuntimeWarning: coroutine 'runner_env.<locals>.noop' was never awaited
+    _enforce_owner_resolved_gate(req.instruction, req.project)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/unit/test_canonical_gate_entrypoints.py::test_submit_batch_attaches_warning_per_linked_job
+tests/unit/test_canonical_gate_entrypoints.py::test_submit_batch_survives_gate_faults_with_identical_shape[judge_exc]
+tests/unit/test_canonical_gate_entrypoints.py::test_submit_batch_survives_gate_faults_with_identical_shape[record_exc]
+tests/unit/test_canonical_gate_entrypoints.py::test_submit_batch_hung_gate_adds_at_most_one_budget_not_one_per_job
+tests/unit/test_canonical_gate_entrypoints.py::test_submit_batch_mode_off_issues_zero_gate_queries
+  /app/app/api/pipeline_runner.py:3995: RuntimeWarning: coroutine 'runner_env.<locals>.noop' was never awaited
+    _enforce_owner_resolved_gate(item.instruction, req.project)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+147 passed, 20 warnings in 13.37s

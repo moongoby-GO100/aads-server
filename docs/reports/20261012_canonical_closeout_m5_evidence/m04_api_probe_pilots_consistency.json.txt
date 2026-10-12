@@ -1,0 +1,271 @@
+{
+ "pilots": [
+  {
+   "goal_doc": 74,
+   "project": "AADS",
+   "document_key": "contract:b4ad294d9869",
+   "history_status": 200,
+   "history_keys": [
+    "author_id",
+    "change_summary",
+    "content_hash",
+    "created_at",
+    "id",
+    "revision",
+    "source_path",
+    "status",
+    "title",
+    "version"
+   ],
+   "title_query_hits": [
+    {
+     "search_title": "[승인 v1.0.0] W-14F 평가기·실행기 인터페이스 계약 v1",
+     "is_approved_ptr": true,
+     "is_latest_ptr": true,
+     "label_matches_pointer": true,
+     "content_status": 200,
+     "content_authoritative": true,
+     "content_status_label": "approved",
+     "content_version": "1.0.0",
+     "title_has_version": true,
+     "content_hash_ok": true,
+     "snippet_in_body": true,
+     "view_ref_present": true,
+     "similarity": 0.8153,
+     "rank": 1
+    }
+   ],
+   "body_queries": [
+    {
+     "len": 83,
+     "status": 200,
+     "rank_with_project_filter": [],
+     "rank_no_filter": [],
+     "n_results": 10
+    },
+    {
+     "len": 100,
+     "status": 200,
+     "rank_with_project_filter": [],
+     "rank_no_filter": [],
+     "n_results": 10
+    }
+   ]
+  },
+  {
+   "goal_doc": 92,
+   "project": "AADS",
+   "document_key": "prd:e677db2cb301",
+   "history_status": 200,
+   "history_keys": [
+    "author_id",
+    "change_summary",
+    "content_hash",
+    "created_at",
+    "id",
+    "revision",
+    "source_path",
+    "status",
+    "title",
+    "version"
+   ],
+   "title_query_hits": [
+    {
+     "search_title": "[승인 v1.3.0] AADS Blue/Green 병목 최적화 PRD v1.3.0",
+     "is_approved_ptr": true,
+     "is_latest_ptr": true,
+     "label_matches_pointer": true,
+     "content_status": 200,
+     "content_authoritative": true,
+     "content_status_label": "approved",
+     "content_version": "1.3.0",
+     "title_has_version": true,
+     "content_hash_ok": true,
+     "snippet_in_body": true,
+     "view_ref_present": true,
+     "similarity": 0.903,
+     "rank": 1
+    }
+   ],
+   "body_queries": [
+    {
+     "len": 98,
+     "status": 200,
+     "rank_with_project_filter": [],
+     "rank_no_filter": [],
+     "n_results": 7
+    }
+   ]
+  },
+  {
+   "goal_doc": 109,
+   "project": "AADS",
+   "document_key": "plan:7d9f483b5dba",
+   "history_status": 200,
+   "history_keys": [
+    "author_id",
+    "change_summary",
+    "content_hash",
+    "created_at",
+    "id",
+    "revision",
+    "source_path",
+    "status",
+    "title",
+    "version"
+   ],
+   "title_query_hits": [
+    {
+     "search_title": "[승인 v1.0.0] OHVIS 문서 정본관리 게이트 — 운영 기획서",
+     "is_approved_ptr": true,
+     "is_latest_ptr": false,
+     "label_matches_pointer": true,
+     "content_status": 200,
+     "content_authoritative": true,
+     "content_status_label": "approved",
+     "content_version": "1.0.0",
+     "title_has_version": true,
+     "content_hash_ok": true,
+     "snippet_in_body": true,
+     "view_ref_present": true,
+     "similarity": 0.833,
+     "rank": 4
+    },
+    {
+     "search_title": "[초안 v1.2.0] OHVIS 문서 정본관리 게이트 — 운영 기획서",
+     "is_approved_ptr": false,
+     "is_latest_ptr": true,
+     "label_matches_pointer": true,
+     "content_status": 200,
+     "content_authoritative": false,
+     "content_status_label": "draft",
+     "content_version": "1.2.0",
+     "title_has_version": true,
+     "content_hash_ok": true,
+     "snippet_in_body": true,
+     "view_ref_present": true,
+     "similarity": 0.8265,
+     "rank": 8
+    }
+   ],
+   "body_queries": [
+    {
+     "len": 140,
+     "status": 200,
+     "rank_with_project_filter": [],
+     "rank_no_filter": [],
+     "n_results": 10
+    },
+    {
+     "len": 140,
+     "status": 200,
+     "rank_with_project_filter": [],
+     "rank_no_filter": [],
+     "n_results": 10
+    }
+   ]
+  },
+  {
+   "goal_doc": 110,
+   "project": "AADS",
+   "document_key": "prd:848c81d57565",
+   "history_status": 200,
+   "history_keys": [
+    "author_id",
+    "change_summary",
+    "content_hash",
+    "created_at",
+    "id",
+    "revision",
+    "source_path",
+    "status",
+    "title",
+    "version"
+   ],
+   "title_query_hits": [
+    {
+     "search_title": "[승인 v1.0.0] OHVIS 문서 정본관리 게이트 — 운영 PRD",
+     "is_approved_ptr": true,
+     "is_latest_ptr": false,
+     "label_matches_pointer": true,
+     "content_status": 200,
+     "content_authoritative": true,
+     "content_status_label": "approved",
+     "content_version": "1.0.0",
+     "title_has_version": true,
+     "content_hash_ok": true,
+     "snippet_in_body": true,
+     "view_ref_present": true,
+     "similarity": 0.8554,
+     "rank": 5
+    },
+    {
+     "search_title": "[초안 v1.2.0] OHVIS 문서 정본관리 게이트 — 운영 PRD",
+     "is_approved_ptr": false,
+     "is_latest_ptr": true,
+     "label_matches_pointer": true,
+     "content_status": 200,
+     "content_authoritative": false,
+     "content_status_label": "draft",
+     "content_version": "1.2.0",
+     "title_has_version": true,
+     "content_hash_ok": true,
+     "snippet_in_body": true,
+     "view_ref_present": true,
+     "similarity": 0.8527,
+     "rank": 6
+    }
+   ],
+   "body_queries": []
+  },
+  {
+   "goal_doc": 119,
+   "project": "ACCT",
+   "document_key": "spec:304b66102a6f",
+   "history_status": 200,
+   "history_keys": [
+    "author_id",
+    "change_summary",
+    "content_hash",
+    "created_at",
+    "id",
+    "revision",
+    "source_path",
+    "status",
+    "title",
+    "version"
+   ],
+   "title_query_hits": [
+    {
+     "search_title": "[승인 v1.0.0] obys-v4/approve — spec",
+     "is_approved_ptr": true,
+     "is_latest_ptr": true,
+     "label_matches_pointer": true,
+     "content_status": 200,
+     "content_authoritative": true,
+     "content_status_label": "approved",
+     "content_version": "1.0.0",
+     "title_has_version": true,
+     "content_hash_ok": true,
+     "snippet_in_body": true,
+     "view_ref_present": true,
+     "similarity": 0.824,
+     "rank": 1
+    }
+   ],
+   "body_queries": [
+    {
+     "len": 93,
+     "status": 200,
+     "rank_with_project_filter": [
+      1
+     ],
+     "rank_no_filter": [
+      6
+     ],
+     "n_results": 6
+    }
+   ]
+  }
+ ]
+}

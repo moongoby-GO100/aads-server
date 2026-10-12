@@ -1,0 +1,753 @@
+{
+ "started_kst": "2026-10-12 17:35:15",
+ "unauth_search": 401,
+ "unauth_documents": 401,
+ "login_status": 200,
+ "login_is_admin": false,
+ "tenants_total": 69,
+ "admin_requests_other_tenant_search": {
+  "status": 403,
+  "detail": "Tenant access denied"
+ },
+ "admin_requests_other_tenant_documents": {
+  "status": 403,
+  "detail": "Tenant access denied"
+ },
+ "same_tenant_header_documents": {
+  "status": 200,
+  "count": 28
+ },
+ "list_status": {
+  "AADS": [
+   200,
+   28
+  ],
+  "ACCT": [
+   200,
+   7
+  ]
+ },
+ "pilot_search": [
+  {
+   "goal_doc": 74,
+   "project": "AADS",
+   "query": "W-14F 평가기·실행기 인터페이스 계약 v1",
+   "status": 200,
+   "count": 7,
+   "canonical_hits": [
+    {
+     "path": "canonical://AADS/contract:b4ad294d9869@ebda53f5-91b9-4517-a3c3-40c76540fb30",
+     "title": "[승인 v1.0.0] W-14F 평가기·실행기 인터페이스 계약 v1",
+     "heading": "13. B-04 승인 기록(문서 기재값, DB 증거 확인 전)",
+     "similarity": 0.8153,
+     "chunks": 8
+    },
+    {
+     "path": "canonical://AADS/dockey-alias-A@d0f7ef99-1fff-4b30-9f5b-4fb199830cc0",
+     "title": "[초안 v1.0.0] 오비서 수집 A안 우선 및 B안 병행 기획 설계 PRD",
+     "heading": "14 AI 실행 지시서",
+     "similarity": 0.6348,
+     "chunks": 18
+    }
+   ],
+   "keys": [
+    "chunks",
+    "heading",
+    "name",
+    "path",
+    "project",
+    "server",
+    "similarity",
+    "snippet",
+    "title"
+   ],
+   "index": {
+    "docs": 3721,
+    "chunks": 30412,
+    "searchable": 30412,
+    "coverage_pct": 100.0
+   }
+  },
+  {
+   "goal_doc": 92,
+   "project": "AADS",
+   "query": "AADS Blue/Green 병목 최적화 PRD v1.3.0",
+   "status": 200,
+   "count": 10,
+   "canonical_hits": [
+    {
+     "path": "canonical://AADS/prd:e677db2cb301@79944e05-9c4a-4bd8-9e31-a81a8d017299",
+     "title": "[승인 v1.3.0] AADS Blue/Green 병목 최적화 PRD v1.3.0",
+     "heading": "비목표",
+     "similarity": 0.903,
+     "chunks": 2
+    },
+    {
+     "path": "canonical://AADS/aads-current-authority-context@1aed18f5-6541-47e5-8d4b-c0d427863769",
+     "title": "[초안 v1.0.0] AADS 현재 정본·운영 근거 제공 PRD v1.0.0",
+     "heading": "12. 현 단계에서 보고할 수 없는 것",
+     "similarity": 0.7648,
+     "chunks": 7
+    }
+   ],
+   "keys": [
+    "chunks",
+    "heading",
+    "name",
+    "path",
+    "project",
+    "server",
+    "similarity",
+    "snippet",
+    "title"
+   ],
+   "index": {
+    "docs": 3721,
+    "chunks": 30412,
+    "searchable": 30412,
+    "coverage_pct": 100.0
+   }
+  },
+  {
+   "goal_doc": 109,
+   "project": "AADS",
+   "query": "OHVIS 문서 정본관리 게이트 — 운영 기획서",
+   "status": 200,
+   "count": 10,
+   "canonical_hits": [
+    {
+     "path": "canonical://AADS/plan:7d9f483b5dba@6dfc2221-6219-4f75-bc11-47e505dd2b4c",
+     "title": "[승인 v1.0.0] OHVIS 문서 정본관리 게이트 — 운영 기획서",
+     "heading": "범위",
+     "similarity": 0.833,
+     "chunks": 2
+    },
+    {
+     "path": "canonical://AADS/plan:7d9f483b5dba@7cdeae42-09b3-4760-831b-1594e6464753",
+     "title": "[초안 v1.2.0] OHVIS 문서 정본관리 게이트 — 운영 기획서",
+     "heading": "범위·비범위",
+     "similarity": 0.8265,
+     "chunks": 11
+    }
+   ],
+   "keys": [
+    "chunks",
+    "heading",
+    "name",
+    "path",
+    "project",
+    "server",
+    "similarity",
+    "snippet",
+    "title"
+   ],
+   "index": {
+    "docs": 3721,
+    "chunks": 30412,
+    "searchable": 30412,
+    "coverage_pct": 100.0
+   }
+  },
+  {
+   "goal_doc": 110,
+   "project": "AADS",
+   "query": "OHVIS 문서 정본관리 게이트 — 운영 PRD",
+   "status": 200,
+   "count": 9,
+   "canonical_hits": [
+    {
+     "path": "canonical://AADS/prd:848c81d57565@686c817c-c69e-41d3-a89a-0cba301e447b",
+     "title": "[승인 v1.0.0] OHVIS 문서 정본관리 게이트 — 운영 PRD",
+     "heading": "요구사항",
+     "similarity": 0.8554,
+     "chunks": 2
+    },
+    {
+     "path": "canonical://AADS/prd:848c81d57565@594b891d-7202-4932-bed6-1315552eee32",
+     "title": "[초안 v1.2.0] OHVIS 문서 정본관리 게이트 — 운영 PRD",
+     "heading": "요구사항",
+     "similarity": 0.8527,
+     "chunks": 11
+    }
+   ],
+   "keys": [
+    "chunks",
+    "heading",
+    "name",
+    "path",
+    "project",
+    "server",
+    "similarity",
+    "snippet",
+    "title"
+   ],
+   "index": {
+    "docs": 3721,
+    "chunks": 30412,
+    "searchable": 30412,
+    "coverage_pct": 100.0
+   }
+  },
+  {
+   "goal_doc": 119,
+   "project": "ACCT",
+   "query": "obys-v4/approve — spec",
+   "status": 200,
+   "count": 6,
+   "canonical_hits": [
+    {
+     "path": "canonical://ACCT/spec:304b66102a6f@c1082af2-a3ee-4222-a0c6-666502dc60ef",
+     "title": "[승인 v1.0.0] obys-v4/approve — spec",
+     "heading": "완료 기준",
+     "similarity": 0.824,
+     "chunks": 1
+    },
+    {
+     "path": "canonical://ACCT/dockey-alias-B@f515feb1-4d89-4be6-bc8f-7e0567b6b4e6",
+     "title": "[초안 v1.0.0] 열정 재무·언니냉면 카페24 이전 보고서",
+     "heading": "3. obys DB 대조 (읽기 전용, 2026-10-08 13:2x KST)",
+     "similarity": 0.6458,
+     "chunks": 10
+    },
+    {
+     "path": "canonical://ACCT/acct-obys-uiux-redesign@df94e961-818d-4a52-974a-509e5bd13e5b",
+     "title": "[초안 v1.0.0] 오비서 전체 화면 UI/UX 개편 기획·설계·디자인 PRD",
+     "heading": "2. 대상 사용자와 핵심 경로 (L1 사용자 중심 원칙)",
+     "similarity": 0.5297,
+     "chunks": 10
+    },
+    {
+     "path": "canonical://ACCT/OBYS-CAFE24-CONSOLIDATION-TASKS-20261002@35313800-ca27-49d1-a28f-f58d04bdafd6",
+     "title": "[초안 v1.2.0] 오비서 비라일론 통합·카페24 업무계층",
+     "heading": "단일 실행 소유·적재 검증",
+     "similarity": 0.5194,
+     "chunks": 19
+    },
+    {
+     "path": "canonical://ACCT/dockey-alias-D@71c1d695-c859-44a8-b805-e5903311119c",
+     "title": "[초안 v1.2.0] 오비서 비라일론 회계업무 통합·카페24 독립 운영 PRD",
+     "heading": "확보 자료에 대한 이전 조사 근거",
+     "similarity": 0.5186,
+     "chunks": 15
+    },
+    {
+     "path": "canonical://ACCT/dockey-alias-C@e19e3744-8685-4bb2-adc7-251961f1d396",
+     "title": "[초안 v1.2.0] 오비서 비라일론 통합·카페24 보완계획",
+     "heading": "담당·의존성 등록과 실행 구분",
+     "similarity": 0.5179,
+     "chunks": 7
+    }
+   ],
+   "keys": [
+    "chunks",
+    "heading",
+    "name",
+    "path",
+    "project",
+    "server",
+    "similarity",
+    "snippet",
+    "title"
+   ],
+   "index": {
+    "docs": 3721,
+    "chunks": 30412,
+    "searchable": 30412,
+    "coverage_pct": 100.0
+   }
+  }
+ ],
+ "semantic_search": [
+  {
+   "query": "문서 정본 승인 게이트 운영 방식",
+   "status": 200,
+   "count": 10,
+   "canonical": 0,
+   "top": [
+    [
+     "/root/aads/_remote_docs/contabo14/kis-autotrade-v4/report/GO100-MOBILE-ACCOUNT-API-RESEARC",
+     "모바일·증권사 앱 환경 계좌/API 등록 연구 보고서",
+     0.7996
+    ],
+    [
+     "/root/aads/_remote_docs/contabo14/kis-autotrade-v4/docs/kis-api-portal/excel-full/converte",
+     "해외주식 기간별시세",
+     0.7958
+    ],
+    [
+     "/root/aads/go100/backend/docs/BUY_PROCESS_STEP_TABLE_20260206.md",
+     "매수 체결 과정 — 시스템 단계별 순차 표 (2026-02-06)",
+     0.7926
+    ],
+    [
+     "/root/aads/go100/docs/APP_DISTRIBUTION_STRATEGY.md",
+     "📱 앱 출시 전략: 마켓 미등록 배포 방법 검토 보고서",
+     0.7915
+    ],
+    [
+     "/root/aads/aads-server/docs/plans/20260914_MILESTONE_PROPOSAL_기획서.md",
+     "마일스톤 수립 위임 — 주도가 세우고, 대표님이 한 번에 승인한다",
+     0.78
+    ]
+   ]
+  },
+  {
+   "query": "배포 병목 최적화 계획",
+   "status": 200,
+   "count": 10,
+   "canonical": 4,
+   "top": [
+    [
+     "canonical://ACCT/dockey-alias-C@e19e3744-8685-4bb2-adc7-251961f1d",
+     "[초안 v1.2.0] 오비서 비라일론 통합·카페24 보완계획",
+     0.7829
+    ],
+    [
+     "canonical://ACCT/OBYS-CAFE24-CONSOLIDATION-TASKS-20261002@35313800-ca27-49d1-a28f-f58d04bd",
+     "[초안 v1.2.0] 오비서 비라일론 통합·카페24 업무계층",
+     0.7787
+    ],
+    [
+     "/root/aads/aads-server/docs/AADS-LAYOUT-003_LLM-FALLBACK-CHAIN-OPS-PAGE.md",
+     "배경",
+     0.7696
+    ],
+    [
+     "/root/aads/_remote_docs/contabo14/kis-autotrade-v4/report/LOGIN-GREETING-AND-BRIEFING-IMPL",
+     "로그인 인사·브리핑 반영 완료 보고",
+     0.7695
+    ],
+    [
+     "canonical://ACCT/dockey-alias-D@71c1d695-c859-44a8-b805-e590331111",
+     "[초안 v1.2.0] 오비서 비라일론 회계업무 통합·카페24 독립 운영 PRD",
+     0.7659
+    ]
+   ]
+  },
+  {
+   "query": "정책 평가기와 실행기 사이 인터페이스",
+   "status": 200,
+   "count": 10,
+   "canonical": 4,
+   "top": [
+    [
+     "canonical://GO100/go100-wave-realtime-flags-rollout@83eb4ae6-5e56-4a53-999b-513b7af1d789",
+     "[초안 v1.0.1] 실시간 파동 플래그 순차 적용 — 게이트 결과·단계별 실행/롤백 절차",
+     0.7887
+    ],
+    [
+     "canonical://NTV2/ntv2-detailstudio-photo-select-correction-prd@11f3a781-5380-45fe-9c71-237",
+     "[초안 v1.1.0] 상세페이지 제작 ①사진 평가·선별 ②몸매·얼굴 AI 보정 PRD",
+     0.7749
+    ],
+    [
+     "/root/aads/_remote_docs/contabo14/kis-autotrade-v4/reports/2026-02-12/20260212_0530_goods_",
+     "상품명 구조 분석 — 카테고리별 자동 삽입 텍스트 조사",
+     0.7735
+    ],
+    [
+     "/root/aads/_remote_docs/contabo14/kis-autotrade-v4/reports/2026-02-11/20260211_2005_do_res",
+     "114 디지털오션 재전송(2차 전송) 실패 원인 조사",
+     0.7677
+    ],
+    [
+     "/root/aads/aads-server/docs/prd/20260916_CHAT_INTERRUPT_QUEUE_PRD.md",
+     "채팅 추가지시(인터럽트) 큐 — PRD·설계",
+     0.764
+    ]
+   ]
+  }
+ ],
+ "_lists": {
+  "AADS": [
+   {
+    "id": "4948b2af-03c9-4c5c-beee-cdef29303449",
+    "document_key": "aads-chat-scroll-automove-recur-fix-20261012",
+    "kind": "report",
+    "title": "오비스 채팅창 스크롤 자동 이동 재발 수정 보고서",
+    "generation": 1,
+    "latest_revision_id": "a257ac92-de17-4837-bcaf-76528b061197",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-12T04:06:34.324635+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "a4e878a9-383d-4d23-9d68-af319a410968",
+    "document_key": "aads-acct-db-tool-cafe24-connection",
+    "kind": "reference",
+    "title": "ACCT DB 도구 운영 연결 설정",
+    "generation": 1,
+    "latest_revision_id": "58d7c4d4-c2dc-45d5-8c44-a62aff90f301",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-12T01:19:17.145137+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "925df5e8-3c95-44f3-a0d0-611915066c79",
+    "document_key": "aads-chat-scroll-automove-fix",
+    "kind": "report",
+    "title": "오비스 채팅창 스크롤 자동 이동 수정 보고서",
+    "generation": 1,
+    "latest_revision_id": "2f1aade0-fc96-4bca-ad3e-7f1958f73fdf",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-09T23:48:55.538323+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "ecdf20a4-8f6c-4f1e-954c-7cd89ba5a6fe",
+    "document_key": "ohvis-notification-inbox-prd",
+    "kind": "prd",
+    "title": "오비스 알림 모아보기 기획·설계 PRD",
+    "generation": 1,
+    "latest_revision_id": "4126521e-c52d-4568-aa35-7a91926c079e",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-09T01:21:24.556589+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "422717d9-4f85-407f-8e22-4cd2308b89f7",
+    "document_key": "acct-cafe24-egress-proxy-runbook",
+    "kind": "report",
+    "title": "오비서 카페24 앱 외부 통신 출구 프록시 적용 절차",
+    "generation": 1,
+    "latest_revision_id": "f406308b-c718-438a-a01c-4694578a4fed",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-08T12:06:05.198641+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "04b08d7f-a135-4e38-8763-d7f56c595403",
+    "document_key": "image-edit-inline-data-release",
+    "kind": "report",
+    "title": "이미지 편집 API 사진 데이터 입력 지원 릴리스 보고",
+    "generation": 1,
+    "latest_revision_id": "29e01a39-3bd1-447e-b18b-6d6d4a32d4e8",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-08T05:51:46.904262+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "ba569687-732a-41c7-b48a-f5062541e803",
+    "document_key": "aads-chat-nonadmin-deploy-401-logout-fix",
+    "kind": "report",
+    "title": "비관리자 채팅 진입 시 배포상태 401 강제 로그아웃 수정 보고서",
+    "generation": 1,
+    "latest_revision_id": "0aff8646-ec07-4eb0-9c16-3a269044af8a",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-07T03:02:26.081260+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "34fca416-2449-45de-9ca8-da9e8ae47b38",
+    "document_key": "rdoc-artifact-click-recovery-report",
+    "kind": "report",
+    "title": "채팅 저장 문서 클릭 → 아티팩트 패널 열람 복구 보고서",
+    "generation": 1,
+    "latest_revision_id": "0710d674-8ce0-4b02-81b2-5680e1582eb3",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-07T00:58:10.699688+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "0d5b22fa-ccd7-41eb-9936-32f6043d3988",
+    "document_key": "rdoc-unified-storage-recovery-result",
+    "kind": "report",
+    "title": "문서 저장·열람 통합 복구 결과",
+    "generation": 2,
+    "latest_revision_id": "82c257ad-14dd-4c5b-9b21-c2afb580c2db",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-06T10:54:15.749606+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "0caaf4b6-fda6-4028-8ecf-65c143c1f867",
+    "document_key": "obys-admin-contract-document-access-report",
+    "kind": "report",
+    "title": "[AADS/오비서] 관리자 직원 계약 문서 명명·중복·열람 정정 검증 v1.0.0",
+    "generation": 1,
+    "latest_revision_id": "956f3351-b542-4a90-8a32-5fea387833d8",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-06T04:42:41.713971+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "eb558033-10dd-4664-b93d-3bb783684be1",
+    "document_key": "obys-admin-contract-mockup",
+    "kind": "design",
+    "title": "[AADS/오비서] 현재 관리자 직원 계약 통합 — 인터랙티브 목업 v1.0.1 (검토 초안)",
+    "generation": 2,
+    "latest_revision_id": "77b53d0e-4445-48d6-a256-f29328a1b293",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-06T04:40:40.430104+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "1add7746-8a8e-48a2-9544-2624cc37ed4a",
+    "document_key": "obys-admin-contract-prd",
+    "kind": "prd",
+    "title": "[AADS/오비서] 현재 관리자 직원 계약 통합 — PRD v1.0.1 (검토 초안)",
+    "generation": 2,
+    "latest_revision_id": "91383f7e-185b-47e4-86e3-0474e8cef4f9",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-06T04:40:39.286355+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "f844fb4d-cdf3-494d-b560-3d47d485cfa1",
+    "document_key": "obys-admin-contract-design",
+    "kind": "spec",
+    "title": "[AADS/오비서] 현재 관리자 직원 계약 통합 — 화면·API 설계 v1.0.1 (검토 초안)",
+    "generation": 2,
+    "latest_revision_id": "bbc6fab3-08c5-4379-8e91-70c3193c82bd",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-06T04:40:38.561482+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "d3f878b9-ebc1-4d49-a076-5168b65f05e8",
+    "document_key": "obys-admin-contract-plan",
+    "kind": "plan",
+    "title": "[AADS/오비서] 현재 관리자 직원 계약 통합 — 기획 v1.0.1 (검토 초안)",
+    "generation": 2,
+    "latest_revision_id": "b7711134-e27f-4fb3-8399-f12424033fca",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-06T04:40:37.764057+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "72f02677-c69f-46c8-a3d2-a134a4dbd2e1",
+    "document_key": "ohvis-main-chat-prd",
+    "kind": "prd",
+    "title": "오비스 메인 채팅 능동 운영 PRD",
+    "generation": 1,
+    "latest_revision_id": "842a973c-8b66-4970-911e-7717e76f7b35",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-03T07:48:01.670835+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "a77e6693-23c4-4b02-8598-4368339f0e6b",
+    "document_key": "ohvis-main-chat-spec",
+    "kind": "spec",
+    "title": "오비스 메인 채팅 능동 검토·실행 설계서",
+    "generation": 1,
+    "latest_revision_id": "fc820fe2-ce7a-430e-8acd-1bafb3544be3",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-03T07:48:01.572664+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "7abd68b3-a0e5-497d-9c3a-94e39ae3cad9",
+    "document_key": "ohvis-main-chat-plan",
+    "kind": "plan",
+    "title": "오비스 메인 채팅 능동 업무 운영 기획서",
+    "generation": 1,
+    "latest_revision_id": "2ccff0af-e5c6-420f-b254-c1dbab904ca3",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-03T07:48:01.453767+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "44c5214c-3f6c-4464-881e-4ddeee1965d7",
+    "document_key": "rdoc-mockup-review-change-report",
+    "kind": "report",
+    "title": "[수정 보고] R-DOC 목업 검토 v1→v2 채팅 중심 전환 (초안·미승인)",
+    "generation": 1,
+    "latest_revision_id": "6ee7895f-bdd3-4cce-900a-b10509f059c7",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-03T05:40:46.851545+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "47566ba9-e27e-46ef-a109-8dd3ebf0bdd2",
+    "document_key": "rdoc-mockup-review-plan",
+    "kind": "plan",
+    "title": "R-DOC 목업 필수 제출·승인 — 기획",
+    "generation": 3,
+    "latest_revision_id": "bd8aa614-019f-46c9-adf0-e960572083e4",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-03T03:54:06.082078+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "bc2bbc3c-b88f-4725-9c79-9eb2f85696b8",
+    "document_key": "rdoc-mockup-review-prd",
+    "kind": "prd",
+    "title": "R-DOC 목업 필수 제출·승인 — PRD",
+    "generation": 2,
+    "latest_revision_id": "d98a04e0-bb89-439d-82e8-505030c00698",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-03T03:54:06.082078+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "ea8a0fbd-0306-4ffb-8ed9-ada171460625",
+    "document_key": "rdoc-mockup-review-spec",
+    "kind": "spec",
+    "title": "R-DOC 목업 필수 제출·승인 — 설계 명세",
+    "generation": 2,
+    "latest_revision_id": "230fa6b9-2f26-485d-bcef-a4da74557892",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-03T03:54:06.082078+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "9d5777ef-1e09-4f94-a150-97b6d5d2d57c",
+    "document_key": "rdoc-storage-rule-spec",
+    "kind": "spec",
+    "title": "R-DOC 문서 저장 규칙 — 명세 (spec)",
+    "generation": 1,
+    "latest_revision_id": "700fa4f0-24be-45a4-84f4-27928fcb6357",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-03T00:39:55.070315+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "2c4e95fb-e221-426a-93be-9fef83a9235e",
+    "document_key": "prd:848c81d57565",
+    "kind": "prd",
+    "title": "OHVIS 문서 정본관리 게이트 — 운영 PRD",
+    "generation": 3,
+    "latest_revision_id": "594b891d-7202-4932-bed6-1315552eee32",
+    "approved_revision_id": "686c817c-c69e-41d3-a89a-0cba301e447b",
+    "updated_at": "2026-10-03T00:39:55.010704+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "679ce7d2-b686-4669-a96e-618f230500a6",
+    "document_key": "plan:7d9f483b5dba",
+    "kind": "plan",
+    "title": "OHVIS 문서 정본관리 게이트 — 운영 기획서",
+    "generation": 3,
+    "latest_revision_id": "7cdeae42-09b3-4760-831b-1594e6464753",
+    "approved_revision_id": "6dfc2221-6219-4f75-bc11-47e505dd2b4c",
+    "updated_at": "2026-10-03T00:39:54.907436+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "4ee1c5a2-f2db-4d0e-b568-f6c97ee4d6b2",
+    "document_key": "dockey-alias-A",
+    "kind": "prd",
+    "title": "오비서 수집 A안 우선 및 B안 병행 기획 설계 PRD",
+    "generation": 1,
+    "latest_revision_id": "d0f7ef99-1fff-4b30-9f5b-4fb199830cc0",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-02T22:37:41.640732+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "bb9e8e7e-06c3-409a-8c63-80dd38a4f621",
+    "document_key": "contract:b4ad294d9869",
+    "kind": "contract",
+    "title": "W-14F 평가기·실행기 인터페이스 계약 v1",
+    "generation": 2,
+    "latest_revision_id": "ebda53f5-91b9-4517-a3c3-40c76540fb30",
+    "approved_revision_id": "ebda53f5-91b9-4517-a3c3-40c76540fb30",
+    "updated_at": "2026-10-02T10:18:24.476296+00:00",
+    "status": "approved"
+   },
+   {
+    "id": "39974168-c7cc-4195-8439-1b991fdbe8ea",
+    "document_key": "prd:e677db2cb301",
+    "kind": "prd",
+    "title": "AADS Blue/Green 병목 최적화 PRD v1.3.0",
+    "generation": 2,
+    "latest_revision_id": "79944e05-9c4a-4bd8-9e31-a81a8d017299",
+    "approved_revision_id": "79944e05-9c4a-4bd8-9e31-a81a8d017299",
+    "updated_at": "2026-10-02T10:17:53.893154+00:00",
+    "status": "approved"
+   },
+   {
+    "id": "1e4290e6-2207-457f-858f-f3e028bae631",
+    "document_key": "aads-current-authority-context",
+    "kind": "prd",
+    "title": "AADS 현재 정본·운영 근거 제공 PRD v1.0.0",
+    "generation": 1,
+    "latest_revision_id": "1aed18f5-6541-47e5-8d4b-c0d427863769",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-01T05:39:13.538203+00:00",
+    "status": "draft"
+   }
+  ],
+  "ACCT": [
+   {
+    "id": "01c071fa-2117-4d19-99ae-6310a1f9031e",
+    "document_key": "acct-obys-uiux-redesign",
+    "kind": "design",
+    "title": "오비서 전체 화면 UI/UX 개편 기획·설계·디자인 PRD",
+    "generation": 1,
+    "latest_revision_id": "df94e961-818d-4a52-974a-509e5bd13e5b",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-11T00:05:58.332056+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "b8e33998-6215-4787-9f49-148225418075",
+    "document_key": "acct-contract-pdf-extra-rows",
+    "kind": "report",
+    "title": "계약서 PDF 기타 기재사항 정리",
+    "generation": 1,
+    "latest_revision_id": "3026d084-274b-428e-9d67-760b3612f1c7",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-08T06:19:02.199965+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "f9a7980a-eb18-4d87-b4f2-ae6d3bfcc34a",
+    "document_key": "dockey-alias-B",
+    "kind": "report",
+    "title": "열정 재무·언니냉면 카페24 이전 보고서",
+    "generation": 1,
+    "latest_revision_id": "f515feb1-4d89-4be6-bc8f-7e0567b6b4e6",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-08T05:01:20.134978+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "7992513d-2358-402d-b1da-636896ae4dcd",
+    "document_key": "spec:304b66102a6f",
+    "kind": "spec",
+    "title": "obys-v4/approve — spec",
+    "generation": 2,
+    "latest_revision_id": "c1082af2-a3ee-4222-a0c6-666502dc60ef",
+    "approved_revision_id": "c1082af2-a3ee-4222-a0c6-666502dc60ef",
+    "updated_at": "2026-10-02T10:18:28.181181+00:00",
+    "status": "approved"
+   },
+   {
+    "id": "763b6823-b8de-450e-bb4d-b9003f323f15",
+    "document_key": "OBYS-CAFE24-CONSOLIDATION-TASKS-20261002",
+    "kind": "tasks",
+    "title": "오비서 비라일론 통합·카페24 업무계층",
+    "generation": 3,
+    "latest_revision_id": "35313800-ca27-49d1-a28f-f58d04bdafd6",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-02T05:32:07.199747+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "24f6334c-c7ce-4987-b886-a0232cd6ede8",
+    "document_key": "dockey-alias-C",
+    "kind": "plan",
+    "title": "오비서 비라일론 통합·카페24 보완계획",
+    "generation": 3,
+    "latest_revision_id": "e19e3744-8685-4bb2-adc7-251961f1d396",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-02T05:32:07.149136+00:00",
+    "status": "draft"
+   },
+   {
+    "id": "c3bc80f0-ec01-45aa-82d5-20775124743d",
+    "document_key": "dockey-alias-D",
+    "kind": "prd",
+    "title": "오비서 비라일론 회계업무 통합·카페24 독립 운영 PRD",
+    "generation": 3,
+    "latest_revision_id": "71c1d695-c859-44a8-b805-e5903311119c",
+    "approved_revision_id": null,
+    "updated_at": "2026-10-02T05:32:07.082804+00:00",
+    "status": "draft"
+   }
+  ]
+ },
+ "finished_kst": "2026-10-12 17:36:42"
+}
