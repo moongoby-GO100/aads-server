@@ -4405,6 +4405,51 @@ recover_review_hold_job() {
     return 0
 }
 
+# ── 종료 상태 부활 방지 (AADS-RUNNER-TERMINATE-CLAIMED-RESURRECT-20261012) ──
+# claim(status='claimed') 뒤 워크트리 준비에 40초~2분이 걸린다. 이 구간에 terminate_task 가
+# status='error' 를 쓰면, 상태 조건 없는 START UPDATE 가 그것을 'running' 으로 덮어 작업이
+# 되살아났다(runner-90cd9729, runner-3cac1d43). 시작 전이는 claimed/queued 에서만 허용한다.
+# 외부가 정한 종료 상태는 러너가 이기지 않는다 — 후처리(POST_PROCESS_ABORTED_TERMINAL)와
+# AI 리뷰 진입(AND status='running')이 이미 같은 원칙이고 START 만 빠져 있었다.
+_abort_job_terminal_before_work() {
+    local job_id="$1" project="$2" parallel_group="$3" tag="$4" event="$5" cur_status="$6"
+    log "  ${tag} job=$job_id status=${cur_status:-unknown}"
+    record_runner_event "$job_id" "$event" "${cur_status:-unknown}" "start" "" "" "" "" "{\"observed_status\":\"${cur_status:-unknown}\",\"runner_host\":\"${RUNNER_HOSTNAME:-}\"}" || true
+    _release_work_lock "$project" "$job_id" "$parallel_group"
+    # 종료 상태(error 등)면 기존 즉시 회수 경로가 워크트리를 정리한다. 비종료 상태는 내부에서 보존된다.
+    _reclaim_finished_worktree "$job_id" || true
+    _current_job_id=""
+    _current_session_id=""
+    [[ "$(cat /tmp/.pipeline_current_job 2>/dev/null)" == "$job_id" ]] && rm -f /tmp/.pipeline_current_job
+    return 0
+}
+
+# 워크트리 준비 직전 확인. claimed 가 아니면(terminate/cancel 이 이미 상태를 바꿨다) 워크트리를 만들지 않는다.
+# 상태를 읽지 못한 경우(빈 값)는 판단 불가이므로 통과시키고, 아래 START 가드가 최종 판정한다.
+guard_claimed_before_worktree() {
+    local job_id="$1" project="$2" parallel_group="${3:-}" cur_status
+    cur_status=$(get_job_status "$job_id")
+    if [[ -n "$cur_status" && "$cur_status" != "claimed" ]]; then
+        _abort_job_terminal_before_work "$job_id" "$project" "$parallel_group" "CLAIM_LOST_BEFORE_WORKTREE" "claim_lost_before_worktree" "$cur_status"
+        return 1
+    fi
+    return 0
+}
+
+# START 전이. 'claimed'/'queued' 에서만 running 으로 바꾸고, 결과가 running 이 아니면 CLI 를 띄우지 않는다.
+mark_job_started_or_abort() {
+    local job_id="$1" project="$2" parallel_group="${3:-}" cur_status
+    db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
+               runner_pid=${BASHPID}, started_at=NOW(), updated_at=NOW()
+               WHERE job_id='${job_id}' AND status IN ('claimed','queued');"
+    cur_status=$(get_job_status "$job_id")
+    if [[ "$cur_status" != "running" ]]; then
+        _abort_job_terminal_before_work "$job_id" "$project" "$parallel_group" "START_ABORTED_TERMINAL" "start_aborted_terminal" "$cur_status"
+        return 1
+    fi
+    return 0
+}
+
 # ── 작업 실행 ─────────────────────────────────────────────────────────
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}" parallel_group="${8:-}"
@@ -4480,6 +4525,7 @@ run_job() {
     # 로컬 Git 프로젝트는 항상 origin/main 기반 clean worktree에서만 실행한다.
     # main workdir fallback은 세션 간 변경 혼입과 최신 main 이탈을 만들기 때문에 금지한다.
     if is_git_workdir "$workdir"; then
+        guard_claimed_before_worktree "$job_id" "$project" "$parallel_group" || return 1
         worktree_dir="/tmp/aads-wt-${job_id}"
         local avail_gb
         avail_gb=$(df --output=avail -BG /tmp 2>/dev/null | tail -1 | tr -d ' G') || avail_gb=999
@@ -4523,9 +4569,7 @@ run_job() {
     # model CLI child. During model fallback the child exits normally before
     # the next attempt starts; publishing that PID lets the watchdog race the
     # fallback loop and misclassify a live job as process_died.
-    db_update "UPDATE pipeline_jobs SET status='running', phase='claude_code_work',
-               runner_pid=${BASHPID}, started_at=NOW(), updated_at=NOW()
-               WHERE job_id='${job_id}';"
+    mark_job_started_or_abort "$job_id" "$project" "$parallel_group" || return 1
     # LR01/LR03: 실행 위치 receipt + 워커 우선순위. 계측 실패는 null 로 남기고 작업은 계속한다.
     local _job_runner_pid="$BASHPID" _queue_wait_s="" _worker_nice=0 _worker_nice_applied=false
     local _worker_nice_cmd=() _job_cpu_ms_total=0 _job_cpu_measured=false _job_started_epoch="${EPOCHSECONDS:-$(date +%s)}"
@@ -6631,6 +6675,7 @@ deploy_job() {
                 fi
                 # 승인된 SHA 와 내용이 다르거나 증명할 수 없으므로 새 diff 를 AI 재검수하고 CEO 재승인을 받는다.
                 # 재큐잉은 새 실행이다. started_at 을 두면 승인 대기 시간까지 MAX_RUNTIME 에 합산돼 좀비로 오진된다(2026-09-30 runner-e3b882c2, 7710s).
+                # 상태 조건 AND status='deploying' 이 이미 있어 terminate 가 쓴 error 를 덮지 못한다(START 와 같은 원칙).
                 db_update "UPDATE pipeline_jobs SET status='running', phase='ai_review',
                            started_at=NOW(), commit_hash='${rebased_sha}', review_verdict=NULL,
                            review_request_id=NULL, runner_pid=${BASHPID}, completed_at=NULL,
