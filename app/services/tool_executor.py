@@ -4105,7 +4105,7 @@ class ToolExecutor:
         )
 
     async def _terminate_task(self, inp: Dict[str, Any]) -> Any:
-        """스톨된 작업을 강제 종료. Pipeline Runner는 원격 PID kill, Pipeline B는 DB 상태 변경."""
+        """스톨된 작업을 강제 종료. AADS 로컬 러너는 PID 트리 종료, 원격 러너는 DB 표시 후 러너 자기 종료, Pipeline B는 DB 상태 변경."""
         task_id = inp.get("task_id", "")
         reason = inp.get("reason", "AI 판단에 의한 강제 종료")
         if not task_id:
@@ -4134,9 +4134,13 @@ class ToolExecutor:
                         if pid_cleanup is not None:
                             result["process_cleanup"] = pid_cleanup
                         return result
+                    # 원격 러너는 이 서버가 PID 를 죽일 수 없다. runner_pid 는 감사·추적용으로 보존하고,
+                    # 러너가 get_job_status 폴링(≤15초)에서 status != running 을 보고 스스로 종료한다.
+                    is_remote_runner = row["project"] != "AADS"
                     await conn.execute(
-                        "UPDATE pipeline_jobs SET status='error', phase='error', runner_pid=NULL, "
-                        "review_feedback=COALESCE(review_feedback,'')||$2, updated_at=now() WHERE job_id=$1",
+                        "UPDATE pipeline_jobs SET status='error', phase='error', "
+                        + ("" if is_remote_runner else "runner_pid=NULL, ")
+                        + "review_feedback=COALESCE(review_feedback,'')||$2, updated_at=now() WHERE job_id=$1",
                         task_id, f" | 강제종료: {reason}",
                     )
                     # 강제 종료도 durable 종료 write 다 — 목표 링크를 함께 재조정한다.
@@ -4146,10 +4150,20 @@ class ToolExecutor:
                         await _reconcile_job_goal_links(task_id)
                     except Exception as _gerr:  # noqa: BLE001 — 종료 자체를 막지 않는다
                         logger.warning("terminate_goal_reconcile_failed task=%s: %s", task_id, _gerr)
-                    # Note: 원격 프로세스는 Watchdog이 다음 사이클에서 정리
                     from app.services.task_logger import emit_task_log, emit_task_completed
                     asyncio.create_task(emit_task_log(task_id, "error", f"강제 종료: {reason}", phase="terminated"))
                     asyncio.create_task(emit_task_completed(task_id, "error"))
+                    if is_remote_runner:
+                        result = {
+                            "task_id": task_id,
+                            "result": "db_marked_error",
+                            "pipeline": "C",
+                            "project": row["project"],
+                            "runner_pid": runner_pid,
+                            "remote_process_killed": False,
+                            "message": "DB 종료 표시 완료, 원격 러너는 다음 상태 확인(≤15초)에서 자기 종료 (DB 조회가 멈추면 조회 한도 10초만큼 늦어질 수 있음)",
+                        }
+                        return result
                     result = {"task_id": task_id, "result": "terminated", "pipeline": "C", "project": row["project"]}
                     if pid_cleanup is not None:
                         result["process_cleanup"] = pid_cleanup

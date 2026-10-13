@@ -1470,6 +1470,14 @@ wait_runner_cli_process() {
         hb_pid=$!
     fi
 
+    local cw_pid="" cw_marker="${output_file}.cancel_fired"
+    RUNNER_CANCEL_LATCH=""
+    rm -f "$cw_marker" 2>/dev/null || true
+    if [[ "${RUNNER_CANCEL_POLL_SEC:-15}" != "0" ]]; then
+        _cli_cancel_watch_loop "$job_id" "$pid" "$owner_pid" "$cw_marker" &
+        cw_pid=$!
+    fi
+
     while true; do
         proc_stat=$(ps -p "$pid" -o stat= 2>/dev/null || true)
         [[ -z "$proc_stat" || "$proc_stat" == *Z* ]] && break
@@ -1491,6 +1499,20 @@ wait_runner_cli_process() {
     if [[ -n "$hb_pid" ]]; then
         kill "$hb_pid" 2>/dev/null || true
         wait "$hb_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$cw_pid" ]]; then
+        if [[ ! -e "$cw_marker" ]]; then
+            kill "$cw_pid" 2>/dev/null || true
+        fi
+        # 발화했다면 SIGKILL 단계(grace 한도)까지 끝내고 나온다.
+        wait "$cw_pid" 2>/dev/null || true
+        # 감시자가 취소를 확인해 모델을 죽였다면 그 사실을 래치로 남긴다. 호출부의 다음 DB 조회가
+        # 실패해도(빈 값) 취소가 풀리지 않는다 — 종료 코드만으로는 취소와 일반 실패를 구분할 수 없다.
+        if [[ -e "$cw_marker" ]]; then
+            RUNNER_CANCEL_LATCH=$(head -n1 "$cw_marker" 2>/dev/null | tr -d '[:space:]')
+            RUNNER_CANCEL_LATCH="${RUNNER_CANCEL_LATCH:-cancelled}"
+        fi
+        rm -f "$cw_marker" 2>/dev/null || true
     fi
 
     if [[ -z "$first_stdout_ms" && -s "$output_file" ]]; then
@@ -1514,6 +1536,119 @@ get_job_status() {
     _status=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id='${_job_id}' LIMIT 1;" 2>/dev/null | head -n1 | tr -d '[:space:]') || _status=""
     echo "$_status"
 }
+
+# ── 원격 종료 자기 감시 BEGIN (AADS-RUNNER-REMOTE-TERMINATE-CANCEL-POLL-20261013) ──
+# 원격 러너(contabo14 등)는 terminate_task 가 PID 를 죽일 수 없다. DB 를 error 로 바꿔도
+# 래퍼가 살아남아 claude 가 죽자 codex 로 폴백해 작업을 다시 시작했다(runner-9b415884).
+# 그래서 러너가 스스로 상태를 보고 끝난다. SSH kill 에 의존하지 않는다.
+# 판정 규칙: 상태를 읽었고(빈 값 아님) running 이 아닐 때만 취소다.
+# DB 조회 실패(빈 문자열)는 취소가 아니다 — 일시적 DB 장애로 정상 작업을 죽이지 않는다.
+# 조회는 시간 제한을 둔다(_get_job_status_bounded) — 멈춘 DB 연결이 감시와 MAX_RUNTIME 상한 확인을 같이 멈추게 하면 안 된다.
+job_cancelled_status() {
+    local _st
+    _st=$(_get_job_status_bounded "$1")
+    [[ -n "$_st" && "$_st" != "running" ]] || return 1
+    printf '%s' "$_st"
+}
+
+_get_job_status_bounded() {
+    local _jid="$1" _limit="${RUNNER_CANCEL_QUERY_TIMEOUT_SEC:-10}" _tmp _qpid _deadline _out=""
+    [[ "$_limit" =~ ^[1-9][0-9]*$ ]] || _limit=10
+    _tmp=$(mktemp "${TMPDIR:-/tmp}/runner_jobstatus.XXXXXX" 2>/dev/null) || { echo ""; return 0; }
+    ( get_job_status "$_jid" ) > "$_tmp" 2>/dev/null &
+    _qpid=$!
+    _deadline=$((SECONDS + _limit))
+    while kill -0 "$_qpid" 2>/dev/null; do
+        if (( SECONDS >= _deadline )); then
+            _runner_kill_tree "$_qpid" 1
+            wait "$_qpid" 2>/dev/null || true
+            rm -f "$_tmp" 2>/dev/null || true
+            echo ""
+            return 0
+        fi
+        sleep 0.2
+    done
+    wait "$_qpid" 2>/dev/null || true
+    _out=$(head -n1 "$_tmp" 2>/dev/null | tr -d '[:space:]')
+    rm -f "$_tmp" 2>/dev/null || true
+    echo "$_out"
+}
+
+_runner_pid_running() {
+    local _s
+    _s=$(ps -p "$1" -o stat= 2>/dev/null) || return 1
+    [[ -n "$_s" && "$_s" != *Z* ]]
+}
+
+# 루트 PID 와 모든 후손 PID (timeout → claude/codex → 하위 pytest 까지). setsid 로 갈라진 자식도 PPID 로 잡는다.
+_runner_process_tree() {
+    ps -eo pid=,ppid= 2>/dev/null | awk -v root="$1" '
+        { kids[$2] = kids[$2] " " $1 }
+        END {
+            n = 1; q[1] = root; seen[root] = 1
+            for (i = 1; i <= n; i++) {
+                print q[i]
+                c = split(kids[q[i]], a, " ")
+                for (j = 1; j <= c; j++) if (!(a[j] in seen)) { seen[a[j]] = 1; q[++n] = a[j] }
+            }
+        }'
+}
+
+# SIGTERM → grace 초 대기 → 남은 것에 SIGKILL. 루트가 먼저 죽어 고아가 된 후손도 처음 잡은 목록으로 끝까지 쫓는다.
+_runner_kill_tree() {
+    local root="$1" grace="${2:-10}" pids p alive waited=0
+    [[ "$root" =~ ^[0-9]+$ ]] && (( root > 1 )) || return 0
+    pids=$(_runner_process_tree "$root")
+    for p in $pids; do kill -TERM "$p" 2>/dev/null || true; done
+    while (( waited < grace )); do
+        alive=0
+        for p in $pids; do _runner_pid_running "$p" && { alive=1; break; }; done
+        (( alive == 0 )) && return 0
+        sleep 1
+        waited=$((waited + 1))
+    done
+    pids="$pids $(_runner_process_tree "$root")"
+    for p in $pids; do
+        _runner_pid_running "$p" && kill -KILL "$p" 2>/dev/null || true
+    done
+    return 0
+}
+
+# 모델 프로세스가 도는 동안 상태를 본다. 모델이 끝나거나 소유 셸이 죽거나 상한(MAX_RUNTIME+120s)을 넘으면 스스로 끝난다(R-BG).
+# 발화하면 marker 파일을 먼저 만든다 — 소유 쪽이 SIGKILL 단계가 끝날 때까지 기다리게 하기 위함이다.
+_cli_cancel_watch_loop() {
+    local _jid="$1" _cli_pid="$2" _owner_pid="$3" _marker="$4"
+    local _interval="${RUNNER_CANCEL_POLL_SEC:-15}" _grace="${RUNNER_CANCEL_KILL_GRACE_SEC:-10}"
+    local _limit=$(( ${MAX_RUNTIME:-7200} + 120 )) _waited=0 _started=$SECONDS _st
+    [[ "$_interval" =~ ^[1-9][0-9]*$ ]] || _interval=15
+    [[ "$_grace" =~ ^[0-9]+$ ]] || _grace=10
+    while kill -0 "$_cli_pid" 2>/dev/null && kill -0 "$_owner_pid" 2>/dev/null; do
+        sleep 1
+        _waited=$((_waited + 1))
+        (( SECONDS - _started >= _limit )) && return 0
+        (( _waited >= _interval )) || continue
+        _waited=0
+        if _st=$(job_cancelled_status "$_jid"); then
+            printf '%s' "$_st" > "$_marker" 2>/dev/null || true
+            log "  CANCEL_WATCH_FIRED job=$_jid status=$_st pid=$_cli_pid — SIGTERM → ${_grace}s → SIGKILL"
+            _runner_kill_tree "$_cli_pid" "$_grace"
+            return 0
+        fi
+    done
+}
+
+# 모델 시도 사이의 취소 확인. 취소면 0 을 돌려주고(호출부가 return 1), 작업 폴더는 시작 전 거부 경로와 같은 규칙으로 회수한다.
+_cancel_abort_if_terminal() {
+    local job_id="$1" project="$2" parallel_group="${3:-}" _cur="${RUNNER_CANCEL_LATCH:-}"
+    [[ -n "$_cur" ]] || _cur=$(job_cancelled_status "$job_id") || return 1
+    RUNNER_CANCEL_LATCH=""
+    _abort_job_terminal_before_work "$job_id" "$project" "$parallel_group" "CANCELLED_BY_STATUS" "cancelled_by_status" "$_cur"
+    rm -f "${ARTIFACT_DIR:-/nonexistent}/.litellm_instr_${job_id}.txt" \
+          "/root/aads/aads-server/app/data/.litellm_instr_${job_id}.txt" \
+          "/root/aads/aads-server/scripts/.litellm_instr_${job_id}.txt" 2>/dev/null || true
+    return 0
+}
+# ── 원격 종료 자기 감시 END ──
 
 # DB에서 size별 모델 우선순위 조회 (CEO 대시보드 runner_model_config 연동)
 get_db_model_cycle() {
@@ -4703,6 +4838,10 @@ run_job() {
     local attempt=0 exit_code=0
     while [[ $attempt -lt $total_attempts ]]; do
         exit_code=0
+        # 시도 시작 직전 취소 확인 — terminate_task 가 status 를 바꿨다면 다음 모델(폴백)을 띄우지 않는다.
+        if _cancel_abort_if_terminal "$job_id" "$project" "$parallel_group"; then
+            return 1
+        fi
         cd "$workdir"
         local current_model="${MODEL_CYCLE[$attempt]}"
         # 2026-09-12: 접두사 없는 Codex 모델명(gpt-*)이 Claude CLI 경로로 잘못 라우팅되어
@@ -5037,6 +5176,10 @@ ${safe_instruction}"
 
         wait_runner_cli_process "$job_id" "$claude_pid" "$output_file" "$err_file" "$current_model" "$effective_model" "$job_size" "$((attempt+1))" "$total_attempts" "$cycle_num" "$runner_kind" "$cli_started_ms" "0" || exit_code=$?
         runner_children_cpu_ms; _cpu_end_ms="$RUNNER_CPU_MS"
+        # 모델 종료 직후 취소 확인 — 감시 루프가 죽인 경우도 여기서 후처리·폴백 없이 끝난다.
+        if _cancel_abort_if_terminal "$job_id" "$project" "$parallel_group"; then
+            return 1
+        fi
         # json 원문을 하류 판정이 읽기 전에 text 로 되돌린다. 되돌리지 못하면 이 시도는
         # 실패다 — JSON 을 결과 텍스트로 넘기면 성공 판정·결과 추출·리뷰 입력이 전부 틀린다.
         if [[ "$runner_kind" == "claude_cli" && "$claude_json_output" == "json" ]]; then
@@ -5061,6 +5204,10 @@ ${safe_instruction}"
         if [[ $exit_code -ne 0 && "$current_model" == codex:* ]]; then
             local _codex_retry=0
             while [[ $exit_code -ne 0 && $_codex_retry -lt 12 ]]; do
+                # 연결 재시도 루프도 취소를 본다 — 종료된 작업에 codex 를 다시 띄우지 않는다.
+                if _cancel_abort_if_terminal "$job_id" "$project" "$parallel_group"; then
+                    return 1
+                fi
                 # 에러/리밋 메시지 → 즉시 다음 모델로 폴백 (재시도 안함)
                 if grep -qiE "rate.?limit|quota|exceeded|billing|limit.reached|You've hit your limit|too many|capacity" "$err_file" 2>/dev/null; then
                     local _limit_msg
@@ -5090,6 +5237,10 @@ ${safe_instruction}"
                 _codex_retry=$((_codex_retry + 1))
                 log "  CODEX_CONN_RETRY job=$job_id retry=$_codex_retry/12 wait=5s"
                 sleep 5
+                # 대기 중 terminate_task 가 status 를 바꿨을 수 있다 — 띄우기 직전에 다시 본다.
+                if _cancel_abort_if_terminal "$job_id" "$project" "$parallel_group"; then
+                    return 1
+                fi
                 exit_code=0
                 ${_worker_nice_cmd[@]+"${_worker_nice_cmd[@]}"} timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
                     < /dev/null > "$output_file" 2> "$err_file" &
