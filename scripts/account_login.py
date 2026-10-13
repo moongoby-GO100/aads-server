@@ -43,6 +43,8 @@ from pathlib import Path
 
 CODEX_ACCOUNTS_ROOT = Path(os.getenv("CODEX_ACCOUNTS_ROOT", "/root/.codex-accounts"))
 CLAUDE_SLOT_ROOT = Path(os.getenv("CLAUDE_RELAY_SLOT_HOME_ROOT", "/root/.claude-relay-slots"))
+ANTIGRAVITY_HOME_ROOT = Path(os.getenv("ANTIGRAVITY_HOME_ROOT", "/root/.gemini"))
+ANTIGRAVITY_BIN = Path(os.getenv("ANTIGRAVITY_BIN", "/usr/local/bin/agy"))
 CODEX_BIN = os.getenv("CODEX_BIN", "codex")
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
 
@@ -401,6 +403,29 @@ async def cancel(login_id: str) -> dict:
     return public(sess)
 
 
+def _antigravity_binding() -> dict:
+    """Google(Antigravity) 구독 로그인 여부. agy 바이너리와 토큰 파일의 존재만 본다 (R-KEY).
+
+    토큰 파일은 열지 않는다. 표시용 이메일만 google_accounts.json 의 active 에서 읽는다.
+    """
+    token = ANTIGRAVITY_HOME_ROOT / "antigravity-cli" / "antigravity-oauth-token"
+    try:
+        bound = ANTIGRAVITY_BIN.exists() and token.is_file()
+    except OSError:
+        bound = False
+    account = None
+    try:
+        active = json.loads((ANTIGRAVITY_HOME_ROOT / "google_accounts.json").read_text()).get("active")
+        if isinstance(active, str) and active.strip():
+            account = active.strip()
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {
+        "target": "antigravity:host", "kind": "antigravity", "account": account,
+        "bound": bound, "needs_login": not bound,
+    }
+
+
 def bindings() -> list[dict]:
     """구독 계정이 실제로 런타임에 닿아 있는지. 화면의 '로그인 필요' 판정에 쓴다.
 
@@ -450,6 +475,8 @@ def bindings() -> list[dict]:
             "bound": ok, "needs_login": not ok, "subscription": sub,
             "actual_account": actual_account,
         })
+
+    out.append(_antigravity_binding())
 
     for row in out:
         active = find_active(row["target"])

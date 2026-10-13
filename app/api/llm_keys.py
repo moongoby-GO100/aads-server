@@ -281,7 +281,9 @@ class AccountLoginCode(BaseModel):
 
 # 구독 OAuth 로 붙는 provider. 이쪽은 키를 붙여넣어 등록할 수 없다 — access 토큰만
 # 넣으면 약 8시간 뒤 401 로 죽는다(2026-09-15 ANTHROPIC_AUTH_TOKEN_3 사고).
-SUBSCRIPTION_PROVIDERS = ("anthropic", "codex")
+# antigravity(Google 구독)는 DB 행 없이 호스트 agy 로그인만 있어 overview 가 합성한다.
+SUBSCRIPTION_PROVIDERS = ("anthropic", "codex", "antigravity")
+ANTIGRAVITY_BINDING_KEY = "antigravity:host"
 
 # 드롭다운에 정식 이름으로만 노출할 provider. 별칭(claude/google/dashscope…)은 감춘다.
 CANONICAL_PROVIDERS = (
@@ -378,6 +380,42 @@ def _anthropic_slot_map(records: list[dict[str, Any]]) -> dict[str, str]:
     }
 
 
+def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str, Any]:
+    """Google(Antigravity) 구독 계정 1건을 합성한다.
+
+    llm_api_keys 에 행이 없고(키 붙여넣기로 등록할 수 없는 구독) 호스트 agy 로그인만
+    있으므로 릴레이 바인딩으로만 상태를 정한다. DB 행이 아니라서 켜기/끄기 대상이 아니다.
+    """
+    binding = bindings.get(ANTIGRAVITY_BINDING_KEY) if bindings is not None else None
+    if binding is None:
+        state = "unknown"
+    elif binding.get("needs_login"):
+        state = "needs_login"
+    else:
+        state = "ok"
+    email = (binding or {}).get("account")
+    label = "Google 구독 (Antigravity)" + (f" · {email}" if email else "")
+    return {
+        "subscription_status": None, "subscription_checked_at": None, "subscription_hold": False,
+        "key_name": "ANTIGRAVITY_HOST", "provider": "antigravity", "label": label,
+        "priority": None, "is_active": True, "manual_disabled": False, "manual_disabled_at": None,
+        "toggleable": False,
+        "kind": "subscription", "masked_value": "", "slot": None,
+        "state": state,
+        "bound": bool(binding and binding.get("bound")),
+        "needs_login": bool(binding and binding.get("needs_login")),
+        "binding_mismatch": False,
+        "actual_account": email,
+        "login_in_progress": False,
+        "login_target": None,
+        "subscription": None,
+        "rate_limited_until": None,
+        "windows": [],
+        "used_percent": None, "resets_at": None, "snapshot_age_hours": None,
+        "ok_72h": 0, "limit_72h": 0, "notes": None,
+    }
+
+
 @router.get("/overview")
 async def llm_overview() -> dict[str, Any]:
     """설정 화면 '통합 계정 카드' 의 단일 데이터원.
@@ -414,7 +452,12 @@ async def llm_overview() -> dict[str, Any]:
         for b in payload.get("bindings", []):
             target = str(b.get("target", ""))
             kind, _, name = target.partition(":")
-            key = name if kind == "codex" else f"slot{name}"
+            if kind == "codex":
+                key = name
+            elif kind == "antigravity":
+                key = ANTIGRAVITY_BINDING_KEY
+            else:
+                key = f"slot{name}"
             bindings[key] = b
     except HTTPException:
         bindings = None
@@ -470,7 +513,11 @@ async def llm_overview() -> dict[str, Any]:
             quarantined_slot4 = (
                 slot == "slot4" and not row["is_active"] and not row["manual_disabled"]
             )
-            bkey = slot if provider == "anthropic" else row["key_name"]
+            bkey = (
+                slot if provider == "anthropic"
+                else ANTIGRAVITY_BINDING_KEY if provider == "antigravity"
+                else row["key_name"]
+            )
             binding = bindings.get(bkey) if bindings is not None else None
             binding_mismatch = provider == "anthropic" and _binding_account_mismatch(
                 row["label"], binding
@@ -534,6 +581,9 @@ async def llm_overview() -> dict[str, Any]:
                 "is_active": row["is_active"], "state": state, "notes": row["notes"],
             })
 
+    if not any(a["provider"] == "antigravity" for a in accounts):
+        accounts.append(_antigravity_account(bindings))
+
     def usable(kind: str) -> dict[str, int]:
         sel = [a for a in accounts if a["provider"] == kind]
         return {"usable": sum(1 for a in sel if a["state"] == "ok"), "total": len(sel)}
@@ -544,6 +594,7 @@ async def llm_overview() -> dict[str, Any]:
             "action_required": sum(1 for a in accounts if a["state"] in ("needs_login", "rate_limited")),
             "codex": usable("codex"),
             "anthropic": usable("anthropic"),
+            "antigravity": usable("antigravity"),
             "subscription_total": len(accounts),
             "apikey_total": sum(p["key_count"] for p in providers.values()),
             "total": len(rows),

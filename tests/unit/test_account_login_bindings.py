@@ -26,7 +26,7 @@ def test_claude_binding_exposes_identity_without_oauth_secrets(tmp_path, monkeyp
     monkeypatch.setattr(account_login, "CLAUDE_SLOT_ROOT", root)
     monkeypatch.setattr(account_login, "CODEX_ACCOUNTS_ROOT", tmp_path / "codex")
 
-    result = account_login.bindings()
+    result = [b for b in account_login.bindings() if b["kind"] != "antigravity"]
 
     assert result == [{
         "target": "claude:2",
