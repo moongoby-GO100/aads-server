@@ -3224,9 +3224,9 @@ async def call_stream(
         if _had_error:
             fallback_model = await _get_codex_cli_fallback_model_from_db()
             yield {"type": "delta", "content": f"\n\n[{model} (Antigravity) 오류 → Codex CLI {fallback_model} 전환]\n\n"}
-            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
-                if event.get("type") in ("done", "model_info"):
-                    event = {**event, "model": model}
+            async for event in _stream_codex_as_fallback(
+                model, fallback_model, system_prompt, messages, tools=tools, session_id=session_id,
+            ):
                 yield event
         return
 
@@ -3273,9 +3273,9 @@ async def call_stream(
         if _had_error:
             fallback_model = await _get_codex_cli_fallback_model_from_db()
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI {fallback_model} 전환]\n\n"}
-            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
-                if event.get("type") in ("done", "model_info"):
-                    event = {**event, "model": model}
+            async for event in _stream_codex_as_fallback(
+                model, fallback_model, system_prompt, messages, tools=tools, session_id=session_id,
+            ):
                 yield event
         return
 
@@ -3294,9 +3294,9 @@ async def call_stream(
         if _had_error:
             fallback_model = await _get_codex_cli_fallback_model_from_db()
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI {fallback_model} 전환]\n\n"}
-            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
-                if event.get("type") in ("done", "model_info"):
-                    event = {**event, "model": model}
+            async for event in _stream_codex_as_fallback(
+                model, fallback_model, system_prompt, messages, tools=tools, session_id=session_id,
+            ):
                 yield event
         return
 
@@ -3314,9 +3314,9 @@ async def call_stream(
         if _had_error:
             fallback_model = await _get_codex_cli_fallback_model_from_db()
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI {fallback_model} 전환]\n\n"}
-            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
-                if event.get("type") in ("done", "model_info"):
-                    event = {**event, "model": model}
+            async for event in _stream_codex_as_fallback(
+                model, fallback_model, system_prompt, messages, tools=tools, session_id=session_id,
+            ):
                 yield event
         return
 
@@ -3335,9 +3335,9 @@ async def call_stream(
         if _had_error:
             fallback_model = await _get_codex_cli_fallback_model_from_db()
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI {fallback_model} 전환]\n\n"}
-            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
-                if event.get("type") in ("done", "model_info"):
-                    event = {**event, "model": model}
+            async for event in _stream_codex_as_fallback(
+                model, fallback_model, system_prompt, messages, tools=tools, session_id=session_id,
+            ):
                 yield event
         return
 
@@ -3387,9 +3387,9 @@ async def call_stream(
         if _had_error:
             fallback_model = await _get_codex_cli_fallback_model_from_db()
             yield {"type": "delta", "content": f"\n\n[{model} 오류 → Codex CLI {fallback_model} 전환]\n\n"}
-            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
-                if event.get("type") in ("done", "model_info"):
-                    event = {**event, "model": model}
+            async for event in _stream_codex_as_fallback(
+                model, fallback_model, system_prompt, messages, tools=tools, session_id=session_id,
+            ):
                 yield event
         return
 
@@ -5300,6 +5300,31 @@ async def _stream_codex_relay_once(
     except Exception as e:
         logger.error(f"codex_relay_error: {e}")
         yield {"type": "error", "content": str(e)}
+
+
+async def _stream_codex_as_fallback(
+    from_model: str,
+    fallback_model: str,
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """1차 모델 실패 후 Codex 폴백. 실제로 답한 모델(fallback_model)을 이벤트에 기록한다."""
+    yield {
+        "type": "model_fallback",
+        "stage": "fallback_attempt",
+        "stage_label": "대체 시도",
+        "content": f"⚠️ {from_model} → {fallback_model}: 대체 시도",
+        "from_model": from_model,
+        "to_model": fallback_model,
+    }
+    async for event in _stream_codex_relay(
+        fallback_model, system_prompt, messages, tools=tools, session_id=session_id,
+    ):
+        if event.get("type") in ("done", "model_info"):
+            event = {**event, "model": fallback_model, "actual_model": fallback_model}
+        yield event
 
 
 async def _stream_codex_relay(

@@ -674,7 +674,7 @@ async def test_antigravity_failure_falls_back_to_codex_chain(monkeypatch):
     events = await _run(model_id)
     assert calls == [("antigravity", model_id), ("codex", "gpt-5.5")]
     assert any("Codex CLI gpt-5.5" in str(e.get("content", "")) for e in events)
-    assert events[-1]["type"] == "done" and events[-1]["model"] == model_id
+    assert events[-1]["type"] == "done" and events[-1]["model"] == "gpt-5.5"
 
 
 # ── relay: /health ─────────────────────────────────────────────────────────

@@ -15281,6 +15281,8 @@ async def send_message_stream(
                         yield f"data: {json.dumps({'type': 'retry_progress', 'attempt': event.get('attempt', 0), 'max_attempts': event.get('max_attempts', 0), 'content': event.get('content', '')})}\n\n"
                     elif etype == "yellow_limit":
                         yield f"data: {json.dumps({'type': 'yellow_limit', 'content': event.get('content', ''), 'tool_name': event.get('tool_name', ''), 'consecutive_count': event.get('consecutive_count', 0)})}\n\n"
+                    elif etype == "model_fallback":
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     elif etype == "done":
                         _stream_done_seen = True
                         _done_display_model = event.get("model", intent_result.model)
