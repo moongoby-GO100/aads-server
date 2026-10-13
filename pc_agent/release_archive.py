@@ -18,7 +18,11 @@ MANIFEST_NAME = "RELEASE_ZIP_SHA256.json"
 
 
 def _source_files(agent_dir: Path) -> list[str]:
-    return [path.relative_to(agent_dir).as_posix() for path in sorted(agent_dir.rglob("*"))
+    # 정렬 키를 문자열 parts 로 고정한다. Path 자체를 정렬하면 Windows 는 대소문자를
+    # 무시해 순서가 달라지고(CHANGELOG ↔ __init__.py), 그러면 Linux 에서 만든
+    # manifest 를 Windows 빌드가 "source files differ" 로 거부한다(EXE 미발행).
+    return [path.relative_to(agent_dir).as_posix()
+            for path in sorted(agent_dir.rglob("*"), key=lambda p: p.relative_to(agent_dir).parts)
             if path.is_file() and not any(part in ZIP_EXCLUDE_DIRS for part in path.relative_to(agent_dir).parts)
             and path.suffix not in ZIP_EXCLUDE_EXTS
             and not any(path.name.endswith(s) for s in ZIP_EXCLUDE_SUFFIXES)

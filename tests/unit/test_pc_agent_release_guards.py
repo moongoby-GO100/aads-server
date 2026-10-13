@@ -118,6 +118,28 @@ def test_release_manifest_matches_checkout_and_rejects_source_drift(tmp_path):
         release_sha256(tmp_path)
 
 
+def test_release_source_order_does_not_depend_on_platform_path_ordering(tmp_path):
+    from pc_agent.release_archive import _source_files
+
+    for name in ("agent.py", "CHANGELOG", "VERSION", "sub/x.py"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(name, encoding="utf-8")
+
+    class CaseFoldPath(type(tmp_path)):
+        """Windows 처럼 대소문자를 무시해 비교하는 경로."""
+
+        def __lt__(self, other):
+            return str(self).lower() < str(other).lower()
+
+        def __gt__(self, other):
+            return str(self).lower() > str(other).lower()
+
+    expected = ["CHANGELOG", "VERSION", "agent.py", "sub/x.py"]
+    assert _source_files(tmp_path) == expected
+    # Windows 빌드 러너에서도 Linux 에서 쓴 manifest 와 같은 순서여야 한다.
+    assert _source_files(CaseFoldPath(tmp_path)) == expected
+
+
 def test_release_archive_ignores_unregistered_runtime_files_and_caches(tmp_path):
     from pc_agent.release_archive import cached_agent_zip, ticketed_agent_zip
 
