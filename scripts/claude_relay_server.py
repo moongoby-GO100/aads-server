@@ -2329,7 +2329,8 @@ _ANTIGRAVITY_MODEL_MAP = {
 _ANTIGRAVITY_MAX_CONCURRENT = max(1, int(os.getenv("AGY_RELAY_MAX_CONCURRENT", "2")))
 _ANTIGRAVITY_PRINT_TIMEOUT = os.getenv("AGY_RELAY_PRINT_TIMEOUT", "4m")
 _ANTIGRAVITY_HARD_TIMEOUT_SEC = float(os.getenv("AGY_RELAY_HARD_TIMEOUT_SEC", "270"))
-_ANTIGRAVITY_MAX_PROMPT_BYTES = 120_000  # Linux 단일 argv 항목 한도(128KiB) 아래
+# 프롬프트는 stdin(stream-json)으로 넘기므로 argv 한도(128KiB)와 무관하다. 이 값은 폭주 방지용 안전 상한이다.
+_ANTIGRAVITY_MAX_PROMPT_BYTES = int(os.getenv("ANTIGRAVITY_MAX_PROMPT_BYTES", "2000000"))
 _ANTIGRAVITY_AUTH_MARKERS = ("Authentication required. Please visit", "authentication failed or timed out")
 # stderr 는 모델 출력이 아니라 CLI 진단이므로 느슨하게(대소문자 무시) 분류해도 오탐 위험이 없다.
 _ANTIGRAVITY_STDERR_AUTH_MARKERS = (
@@ -2806,14 +2807,66 @@ def _resolve_antigravity_model(model):
     return _ANTIGRAVITY_MODEL_MAP.get(str(model or "").strip())
 
 
-def _build_antigravity_command(agy_bin, agy_model, prompt):
+def _build_antigravity_command(agy_bin, agy_model):
+    """프롬프트는 argv 에 싣지 않는다(stdin 으로 전달).
+
+    `-p` 는 값을 받는 플래그라 뒤에 다른 플래그를 두면 그것을 프롬프트로 먹는다.
+    그래서 `-p=""` 를 반드시 맨 끝에 둔다.
+    """
     return [
         agy_bin,
-        "-p", prompt,
+        "--input-format", "stream-json",
+        "--output-format", "stream-json",
         "--model", agy_model,
         "--print-timeout", _ANTIGRAVITY_PRINT_TIMEOUT,
         "--sandbox",
+        '-p=',
     ]
+
+
+def _build_antigravity_stdin_payload(prompt):
+    """agy stream-json 입력: user 이벤트 NDJSON 한 줄."""
+    line = json.dumps({"event": "user", "message": {"content": prompt}}, ensure_ascii=False)
+    return line.encode("utf-8", errors="replace") + b"\n"
+
+
+async def _antigravity_write_stdin(proc, payload):
+    """payload 를 쓰고 drain 한 뒤 stdin 을 닫는다(EOF). 실패는 OSError 계열로 올린다."""
+    try:
+        proc.stdin.write(payload)
+        await proc.stdin.drain()
+    finally:
+        try:
+            proc.stdin.close()
+            await proc.stdin.wait_closed()
+        except OSError:
+            pass
+
+
+def _antigravity_interpret_line(line_text):
+    """stream-json 한 줄을 ("text", str) / ("result", dict) / ("meta", None) 로 분류한다.
+
+    채팅 본문이 되는 것은 agent_response 단계의 text_delta 뿐이다.
+    init(tools 목록)·user_input·tool·JSON 이 아닌 줄은 meta 로 버린다.
+    """
+    try:
+        event = json.loads(line_text)
+    except ValueError:
+        return "meta", None
+    if not isinstance(event, dict):
+        return "meta", None
+    kind = event.get("event")
+    if kind == "step_update":
+        step = event.get("step_update")
+        if isinstance(step, dict) and step.get("step_type") == "agent_response":
+            delta = step.get("text_delta")
+            if isinstance(delta, str) and delta:
+                return "text", delta
+        return "meta", None
+    if kind == "result":
+        result = event.get("result")
+        return "result", result if isinstance(result, dict) else {}
+    return "meta", None
 
 
 def _antigravity_mask_sensitive(text):
@@ -2870,7 +2923,7 @@ async def handle_antigravity_stream(request):
     if prompt_bytes > _ANTIGRAVITY_MAX_PROMPT_BYTES:
         return web.json_response({
             "error": "antigravity_prompt_too_large",
-            "detail": "prompt %d bytes (%d chars) exceeds %d bytes (argv limit)" % (
+            "detail": "prompt %d bytes (%d chars) exceeds %d bytes (safety limit)" % (
                 prompt_bytes, len(prompt), _ANTIGRAVITY_MAX_PROMPT_BYTES),
             "prompt_bytes": prompt_bytes,
             "limit_bytes": _ANTIGRAVITY_MAX_PROMPT_BYTES,
@@ -2922,15 +2975,19 @@ async def handle_antigravity_stream(request):
             stderr_text = ""
             failed = False
             error_message = ""
+            stdin_task = None
+            stdin_error = None
+            result_seen = False
             try:
-                cmd = _build_antigravity_command(agy_bin, agy_model, prompt)
+                cmd = _build_antigravity_command(agy_bin, agy_model)
+                stdin_payload = _build_antigravity_stdin_payload(prompt)
                 logger.info(
                     "Antigravity: model=%s agy_model=%s prompt_len=%d session=%s",
                     model, agy_model, len(prompt), sid,
                 )
                 proc = await asyncio.create_subprocess_exec(
                     *cmd, cwd=workdir, env=_antigravity_clean_env(),
-                    stdin=asyncio.subprocess.DEVNULL,
+                    stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     start_new_session=True)
@@ -2938,8 +2995,25 @@ async def handle_antigravity_stream(request):
                 # stderr 를 비우지 않으면 파이프가 차서 agy 가 멈춘다.
                 stderr_task = asyncio.ensure_future(proc.stderr.read())
 
+                # 대용량 프롬프트는 stdin 파이프가 찰 때까지 write 가 막히므로 stdout 읽기와 병행한다.
+                async def _feed_stdin():
+                    nonlocal stdin_error
+                    try:
+                        await _antigravity_write_stdin(proc, stdin_payload)
+                    except OSError as exc:
+                        stdin_error = exc
+
+                stdin_task = asyncio.ensure_future(_feed_stdin())
+
+                async def _emit_text(text):
+                    for i in range(0, len(text), 40):
+                        await _stream_write(response, json.dumps({
+                            "type": "assistant", "subtype": "text",
+                            "text": text[i:i + 40]}).encode() + b"\n")
+                        await asyncio.sleep(0.015)
+
                 async def _pump():
-                    nonlocal full_text
+                    nonlocal full_text, result_seen
                     async for raw_line in _iter_ndjson_lines(
                             proc.stdout, timeout_sec=_ANTIGRAVITY_HARD_TIMEOUT_SEC):
                         line_text = raw_line.decode("utf-8", errors="replace").rstrip("\n")
@@ -2947,12 +3021,20 @@ async def handle_antigravity_stream(request):
                             continue
                         if any(marker in line_text for marker in _ANTIGRAVITY_AUTH_MARKERS):
                             raise PermissionError(_ANTIGRAVITY_AUTH_ERROR)
-                        for i in range(0, len(line_text), 40):
-                            await _stream_write(response, json.dumps({
-                                "type": "assistant", "subtype": "text",
-                                "text": line_text[i:i + 40]}).encode() + b"\n")
-                            await asyncio.sleep(0.015)
-                        full_text += line_text + "\n"
+                        kind, value = _antigravity_interpret_line(line_text)
+                        if kind == "text":
+                            await _emit_text(value)
+                            full_text += value
+                        elif kind == "result":
+                            result_seen = True
+                            if str(value.get("status") or "").upper() == "ERROR":
+                                detail = _antigravity_mask_sensitive(value.get("error") or "").strip()
+                                raise RuntimeError(
+                                    "Antigravity CLI error%s" % ((": " + detail[:160]) if detail else ""))
+                            response_text = value.get("response")
+                            if not full_text.strip() and isinstance(response_text, str) and response_text.strip():
+                                await _emit_text(response_text)
+                                full_text += response_text
                     await proc.wait()
 
                 try:
@@ -2981,6 +3063,12 @@ async def handle_antigravity_stream(request):
                         await asyncio.wait_for(proc.wait(), timeout=5)
                     except (asyncio.TimeoutError, ProcessLookupError):
                         pass
+                    if not stdin_task.done():
+                        stdin_task.cancel()
+                    try:
+                        await stdin_task
+                    except asyncio.CancelledError:
+                        pass
                     try:
                         stderr_text = (await asyncio.wait_for(
                             stderr_task, timeout=_STDERR_READ_TIMEOUT_SEC)).decode("utf-8", errors="replace")
@@ -3002,6 +3090,11 @@ async def handle_antigravity_stream(request):
                         tail = detail[-1][:200] if detail else ""
                         error_message = "Antigravity CLI exited with code %s%s" % (
                             proc.returncode, (": " + tail) if tail else "")
+                elif stdin_error is not None and not result_seen:
+                    failed = True
+                    logger.error("Antigravity stdin write failed: %s", type(stdin_error).__name__)
+                    error_message = _ANTIGRAVITY_AUTH_ERROR if stderr_auth else (
+                        "Antigravity CLI stdin write failed: %s" % type(stdin_error).__name__)
                 elif not full_text.strip():
                     failed = True
                     error_message = _ANTIGRAVITY_AUTH_ERROR if stderr_auth else "Antigravity CLI returned empty response"

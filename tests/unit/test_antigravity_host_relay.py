@@ -2,6 +2,7 @@
 
 2026-10-12: relay 가 존재하지 않는 antigravity-test 컨테이너로 docker exec 하고 있었고,
 모델 매핑은 낡은 gemini-3.5 계열이었다. 호스트 agy 직접 실행 + 최신 11종 id 로 수리했다.
+2026-10-13: 프롬프트를 argv(-p) 대신 stdin(stream-json NDJSON)으로 넘겨 120KB 413 한도를 없앴다.
 """
 from __future__ import annotations
 
@@ -58,14 +59,33 @@ def test_map_has_exactly_native_plus_aliases(relay):
 
 # ── relay: 명령 구성 ───────────────────────────────────────────────────────
 def test_command_is_host_direct_sandboxed_with_model_and_timeout(relay):
-    cmd = relay._build_antigravity_command("/usr/local/bin/agy", "gemini-3.8-flash-high", "hi")
+    cmd = relay._build_antigravity_command("/usr/local/bin/agy", "gemini-3.8-flash-high")
     assert cmd[0] == "/usr/local/bin/agy"
     assert "docker" not in cmd and "exec" not in cmd
     assert "--dangerously-skip-permissions" not in cmd
     assert "--sandbox" in cmd
     assert cmd[cmd.index("--model") + 1] == "gemini-3.8-flash-high"
-    assert cmd[cmd.index("-p") + 1] == "hi"
     assert "--print-timeout" in cmd
+    assert cmd[cmd.index("--input-format") + 1] == "stream-json"
+    assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+
+
+def test_command_has_no_prompt_and_empty_p_flag_is_last(relay):
+    cmd = relay._build_antigravity_command("agy", "gemini-3.8-flash-high")
+    assert cmd[-1] == "-p="  # 셸 표기 -p="" 와 동일. -p 뒤에 다른 플래그가 오면 그것을 프롬프트로 먹는다.
+    assert "-p" not in cmd and "--print" not in cmd and "--prompt" not in cmd
+    assert cmd == [
+        "agy", "--input-format", "stream-json", "--output-format", "stream-json",
+        "--model", "gemini-3.8-flash-high", "--print-timeout", relay._ANTIGRAVITY_PRINT_TIMEOUT,
+        "--sandbox", "-p=",
+    ]
+
+
+def test_stdin_payload_is_single_user_event_line(relay):
+    prompt = '한글 "따옴표"\n둘째 줄\t탭 \\ 역슬래시'
+    payload = relay._build_antigravity_stdin_payload(prompt)
+    assert payload.endswith(b"\n") and payload.count(b"\n") == 1
+    assert json.loads(payload) == {"event": "user", "message": {"content": prompt}}
 
 
 def test_handler_source_has_no_docker_or_skip_permissions(relay):
@@ -107,6 +127,40 @@ def _fake_agy(tmp_path: Path, body: str) -> Path:
     return path
 
 
+INIT_EVENT = {
+    "event": "init", "conversation_id": "c1",
+    "init": {"model": "m", "cwd": "/w", "tools": ["browser_click_element", "run_command"], "permission_mode": "default"},
+}
+
+
+def _step(step_type, state, **extra):
+    return {"event": "step_update", "step_update": {
+        "conversation_id": "c1", "step_index": 1, "state": state, "step_type": step_type, **extra}}
+
+
+def _result(status="SUCCESS", response="", error=None):
+    body = {"conversation_id": "c1", "status": status, "response": response}
+    if error is not None:
+        body["error"] = error
+    return {"event": "result", "result": body}
+
+
+def _emit(*events):
+    """가짜 agy 가 stream-json 이벤트를 한 줄씩 stdout 으로 내보내게 하는 bash 조각."""
+    return "".join("echo '%s'\n" % json.dumps(e, ensure_ascii=False) for e in events)
+
+
+def _ok_script(text, record=None):
+    """stdin 을 끝까지 읽어(record 에 저장) 정상 stream-json 응답을 내는 가짜 agy."""
+    sink = str(record) if record else "/dev/null"
+    return f"cat > {sink}\n" + _emit(
+        INIT_EVENT, _step("user_input", "DONE"),
+        _step("agent_response", "ACTIVE", text_delta=text),
+        _step("agent_response", "DONE", text_delta="\n"),
+        _result(response=text + "\n"),
+    )
+
+
 async def _call(relay, monkeypatch, tmp_path, script_body, payload=None, hard_timeout=None):
     aiohttp_mod = pytest.importorskip("aiohttp")
     import asyncio
@@ -132,27 +186,47 @@ async def _call(relay, monkeypatch, tmp_path, script_body, payload=None, hard_ti
 @pytest.mark.asyncio
 async def test_success_streams_ndjson_contract_and_cleans_workdir(relay, monkeypatch, tmp_path):
     record = tmp_path / "record.txt"
+    stdin_record = tmp_path / "stdin.txt"
     script = (
         f'echo "$@" > {record}\n'
         f'pwd >> {record}\n'
         f'env >> {record}\n'
-        'echo "hello from agy"\n'
-    )
+    ) + _ok_script("hello from agy", stdin_record)
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-oat01-secret")
     status, events, _ = await _call(relay, monkeypatch, tmp_path, script)
     assert status == 200
     kinds = [e["type"] for e in events]
     assert kinds[-1] == "result" and "error" not in kinds
     text = "".join(e["text"] for e in events if e["type"] == "assistant")
-    assert text == "hello from agy"
+    assert text == "hello from agy\n"
     assert events[-1]["result"] == "hello from agy"
     lines = record.read_text().splitlines()
     assert "--model gemini-3.8-flash-high" in lines[0]
     assert "--sandbox" in lines[0] and "--dangerously-skip-permissions" not in lines[0]
+    assert lines[0].endswith("-p=")
     workdir = lines[1]
     assert Path(workdir).name.startswith("agy-relay-")
     assert not Path(workdir).exists()
     assert "sk-ant-oat01-secret" not in record.read_text()
+    assert json.loads(stdin_record.read_text()) == {"event": "user", "message": {"content": "ping"}}
+
+
+@pytest.mark.asyncio
+async def test_prompt_goes_to_stdin_not_argv_or_logs(relay, monkeypatch, tmp_path, caplog):
+    record = tmp_path / "argv.txt"
+    stdin_record = tmp_path / "stdin.txt"
+    sentinel = "prompt-sentinel-marker-zz"
+    payload = {"model": "gemini-3.8-flash-high", "system_prompt": "sys " + sentinel, "messages_text": "한글 질문\n둘째 줄 " + sentinel}
+    script = f'printf "%s\\n" "$@" > {record}\n' + _ok_script("ok", stdin_record)
+    with caplog.at_level("DEBUG"):
+        status, events, _ = await _call(relay, monkeypatch, tmp_path, script, payload=payload)
+    assert status == 200 and events[-1]["type"] == "result"
+    assert sentinel not in record.read_text()
+    assert sentinel not in caplog.text
+    expected_prompt = "[SYSTEM]\n" + payload["system_prompt"] + "\n\n[USER]\n" + payload["messages_text"]
+    raw = stdin_record.read_bytes()
+    assert raw.endswith(b"\n") and raw.count(b"\n") == 1
+    assert json.loads(raw) == {"event": "user", "message": {"content": expected_prompt}}
 
 
 @pytest.mark.asyncio
@@ -249,7 +323,10 @@ async def test_orphan_child_holding_pipes_is_killed_after_parent_exits(relay, mo
 @pytest.mark.asyncio
 async def test_detached_child_is_killed_even_on_successful_run(relay, monkeypatch, tmp_path):
     pidfile = tmp_path / "child.pid"
-    script = f'sleep 60 >/dev/null 2>&1 </dev/null &\necho $! > {pidfile}\necho "done"\n'
+    script = (
+        f'sleep 60 >/dev/null 2>&1 </dev/null &\necho $! > {pidfile}\n'
+        + _ok_script("done")
+    )
     status, events, _ = await _call(relay, monkeypatch, tmp_path, script)
     assert events[-1]["type"] == "result" and events[-1]["result"] == "done"
     assert await _wait_dead(int(pidfile.read_text()))
@@ -315,7 +392,73 @@ def test_model_text_mentioning_authentication_is_not_blocked(relay):
     assert not any(m in "OAuth 설명: authentication required 는 401 입니다" for m in relay._ANTIGRAVITY_AUTH_MARKERS)
 
 
-# ── relay: 프롬프트 크기 (argv 한도) ───────────────────────────────────────
+# ── relay: stream-json 출력 해석 ───────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_meta_events_do_not_leak_into_chat_body(relay, monkeypatch, tmp_path):
+    script = "cat >/dev/null\n" + _emit(
+        INIT_EVENT,
+        _step("user_input", "DONE"),
+        _step("thinking", "ACTIVE", text_delta="SECRET-THINKING"),
+        _step("tool", "ACTIVE", tool_name="run_command", tool_info={"name": "run_command"}),
+        _step("tool", "DONE", tool_name="run_command"),
+        _step("agent_response", "ACTIVE", text_delta="답변 "),
+        _step("agent_response", "DONE", text_delta="본문\n"),
+        _result(response="답변 본문\n"),
+    ) + "echo 'not json at all'\n"
+    status, events, text = await _call(relay, monkeypatch, tmp_path, script)
+    assert status == 200
+    body = "".join(e["text"] for e in events if e["type"] == "assistant")
+    assert body == "답변 본문\n"
+    assert events[-1] == {**events[-1], "type": "result", "result": "답변 본문"}
+    for leaked in ("browser_click_element", "run_command", "tools", "permission_mode", "SECRET-THINKING",
+                   "step_update", "not json at all", "conversation_id"):
+        assert leaked not in text, leaked
+
+
+@pytest.mark.asyncio
+async def test_result_response_is_used_when_no_text_delta(relay, monkeypatch, tmp_path):
+    script = "cat >/dev/null\n" + _emit(INIT_EVENT, _result(response="only in result\n"))
+    status, events, _ = await _call(relay, monkeypatch, tmp_path, script)
+    assert "".join(e["text"] for e in events if e["type"] == "assistant") == "only in result\n"
+    assert events[-1]["type"] == "result" and events[-1]["result"] == "only in result"
+
+
+@pytest.mark.asyncio
+async def test_result_response_is_not_duplicated_after_deltas(relay, monkeypatch, tmp_path):
+    status, events, _ = await _call(relay, monkeypatch, tmp_path, _ok_script("once"))
+    assert "".join(e["text"] for e in events if e["type"] == "assistant") == "once\n"
+    assert events[-1]["result"] == "once"
+
+
+@pytest.mark.asyncio
+async def test_result_error_takes_failure_path_and_masks_detail(relay, monkeypatch, tmp_path):
+    script = "cat >/dev/null\n" + _emit(
+        INIT_EVENT,
+        _step("agent_response", "ACTIVE", text_delta="partial"),
+        _result(status="ERROR", error="model failed see https://example.com/x?token=abc123secret"),
+    )
+    status, events, text = await _call(relay, monkeypatch, tmp_path, script)
+    assert status == 200
+    assert events[-1]["type"] == "error" and "Antigravity CLI error" in events[-1]["content"]
+    assert not any(e["type"] == "result" for e in events)
+    assert "example.com" not in text and "abc123secret" not in text
+
+
+@pytest.mark.asyncio
+async def test_result_error_with_auth_marker_is_normalized(relay, monkeypatch, tmp_path):
+    script = "cat >/dev/null\n" + _emit(_result(status="ERROR", error="authentication failed or timed out"))
+    status, events, _ = await _call(relay, monkeypatch, tmp_path, script)
+    assert events[-1] == {"type": "error", "content": "Antigravity CLI authentication required"}
+
+
+@pytest.mark.asyncio
+async def test_success_without_any_text_is_empty_response_error(relay, monkeypatch, tmp_path):
+    script = "cat >/dev/null\n" + _emit(INIT_EVENT, _step("tool", "DONE", tool_name="run_command"), _result(response=""))
+    status, events, _ = await _call(relay, monkeypatch, tmp_path, script)
+    assert events[-1] == {"type": "error", "content": "Antigravity CLI returned empty response"}
+
+
+# ── relay: 프롬프트 크기 (stdin 전달, argv 한도 없음) ───────────────────────
 def _chat_payload(system_chars: int, turns: int, hangul_ratio: float = 1.0):
     hangul = int(system_chars * hangul_ratio)
     system = "가" * hangul + "a" * (system_chars - hangul)
@@ -323,53 +466,87 @@ def _chat_payload(system_chars: int, turns: int, hangul_ratio: float = 1.0):
     return {"model": "gemini-3.8-flash-high", "system_prompt": system, "messages_text": history, "session_id": "size"}
 
 
-ARGV_RECORD = 'printf %s "$2" | wc -c > {record}\necho ok\n'
+def _expected_prompt(payload):
+    return "[SYSTEM]\n" + payload["system_prompt"] + "\n\n[USER]\n" + payload["messages_text"]
 
 
 @pytest.mark.asyncio
-async def test_median_mixed_prompt_passes_through_real_exec(relay, monkeypatch, tmp_path):
-    record = tmp_path / "bytes.txt"
-    payload = _chat_payload(44_651, 20, hangul_ratio=0.5)
-    expected = len(("[SYSTEM]\n" + payload["system_prompt"] + "\n\n[USER]\n" + payload["messages_text"]).encode())
-    assert expected < relay._ANTIGRAVITY_MAX_PROMPT_BYTES
-    status, events, _ = await _call(relay, monkeypatch, tmp_path, ARGV_RECORD.format(record=record), payload=payload)
-    assert status == 200 and events[-1]["type"] == "result"
-    assert int(record.read_text()) == expected
+async def test_200kb_prompt_passes_without_413_and_arrives_intact(relay, monkeypatch, tmp_path):
+    stdin_record = tmp_path / "stdin.bin"
+    payload = {"model": "gemini-3.8-flash-high", "system_prompt": "a" * 100_000,
+               "messages_text": "한" * 33_400, "session_id": "big"}
+    expected = _expected_prompt(payload)
+    assert len(expected.encode()) > 200_000
+    status, events, _ = await _call(
+        relay, monkeypatch, tmp_path, _ok_script("big-ok", stdin_record), payload=payload)
+    assert status == 200 and events[-1]["type"] == "result" and events[-1]["result"] == "big-ok"
+    raw = stdin_record.read_bytes()
+    assert raw.count(b"\n") == 1
+    assert json.loads(raw)["message"]["content"] == expected
 
 
 @pytest.mark.asyncio
-async def test_largest_accepted_prompt_survives_exec(relay, monkeypatch, tmp_path):
-    record = tmp_path / "bytes.txt"
-    limit = relay._ANTIGRAVITY_MAX_PROMPT_BYTES
-    body = "가" * ((limit - len("[SYSTEM]\n\n\n[USER]\nq".encode())) // 3)
-    payload = {"model": "antigravity", "system_prompt": body, "messages_text": "q"}
-    expected = len(("[SYSTEM]\n" + body + "\n\n[USER]\nq").encode())
-    assert limit - 3 <= expected <= limit
-    status, events, _ = await _call(relay, monkeypatch, tmp_path, ARGV_RECORD.format(record=record), payload=payload)
-    assert status == 200 and events[-1]["type"] == "result"
-    assert int(record.read_text()) == expected
-
-
-@pytest.mark.asyncio
-async def test_prod_max_korean_system_prompt_is_413_with_measurements(relay, monkeypatch, tmp_path):
-    """측정된 한계: 한글 50,000자 시스템 프롬프트(150,000B)는 argv 단일 인자 한도(131,071B)를 넘는다.
-
-    agy 에는 파일 입력 옵션이 없고, GEMINI.md/AGENTS.md 는 파일당 24,000B 에서 잘리며,
-    stdin 은 -p 프롬프트에 합쳐지지 않는다(2026-10-12 실측). 그래서 413 으로 거부하고 Codex 폴백에 맡긴다.
-    """
-    marker = tmp_path / "spawned"
+async def test_prod_max_korean_system_prompt_is_accepted_now(relay, monkeypatch, tmp_path):
+    """한글 50,000자 시스템 프롬프트(150,000B)는 예전 argv 한도에서 413 이었다. 이제 stdin 으로 통과한다."""
+    stdin_record = tmp_path / "stdin.bin"
     payload = _chat_payload(50_000, 20)
+    assert len(_expected_prompt(payload).encode()) > 150_000
+    status, events, _ = await _call(
+        relay, monkeypatch, tmp_path, _ok_script("fine", stdin_record), payload=payload)
+    assert status == 200 and events[-1]["type"] == "result"
+    assert json.loads(stdin_record.read_bytes())["message"]["content"] == _expected_prompt(payload)
+
+
+@pytest.mark.asyncio
+async def test_prompt_over_safety_limit_is_413_before_spawn(relay, monkeypatch, tmp_path):
+    marker = tmp_path / "spawned"
+    monkeypatch.setattr(relay, "_ANTIGRAVITY_MAX_PROMPT_BYTES", 5_000)
+    payload = {"model": "gemini-3.8-flash-high", "messages_text": "가" * 2_000, "session_id": "over"}
     status, events, text = await _call(
-        relay, monkeypatch, tmp_path, f"touch {marker}\necho hi\n", payload=payload)
+        relay, monkeypatch, tmp_path, f"touch {marker}\n" + _ok_script("x"), payload=payload)
     assert status == 413
     body = json.loads(text)
     assert body["error"] == "antigravity_prompt_too_large"
-    assert body["prompt_bytes"] > 150_000 and body["limit_bytes"] == relay._ANTIGRAVITY_MAX_PROMPT_BYTES
+    assert body["prompt_bytes"] > 5_000 and body["limit_bytes"] == 5_000
+    assert "argv" not in body["detail"]
     assert not marker.exists()
 
 
-def test_argv_limit_is_below_kernel_single_arg_limit(relay):
-    assert relay._ANTIGRAVITY_MAX_PROMPT_BYTES < 131_072
+@pytest.mark.asyncio
+async def test_prompt_exactly_at_safety_limit_is_accepted(relay, monkeypatch, tmp_path):
+    payload = {"model": "gemini-3.8-flash-high", "messages_text": "q" * 1_000, "session_id": "edge"}
+    monkeypatch.setattr(relay, "_ANTIGRAVITY_MAX_PROMPT_BYTES", 1_000)
+    status, events, _ = await _call(relay, monkeypatch, tmp_path, _ok_script("edge-ok"), payload=payload)
+    assert status == 200 and events[-1]["type"] == "result"
+
+
+def test_prompt_limit_default_is_safety_cap_not_argv_limit(relay):
+    if "ANTIGRAVITY_MAX_PROMPT_BYTES" not in os.environ:
+        assert relay._ANTIGRAVITY_MAX_PROMPT_BYTES == 2_000_000
+    assert relay._ANTIGRAVITY_MAX_PROMPT_BYTES == int(os.getenv("ANTIGRAVITY_MAX_PROMPT_BYTES", "2000000"))
+
+
+@pytest.mark.asyncio
+async def test_stdin_broken_pipe_without_result_is_failure(relay, monkeypatch, tmp_path):
+    """agy 가 stdin 을 읽지 않고 끝나면(BrokenPipe) 결과 이벤트가 없는 한 실패로 처리한다."""
+    payload = {"model": "gemini-3.8-flash-high", "messages_text": "x" * 900_000, "session_id": "pipe"}
+    status, events, _ = await _call(relay, monkeypatch, tmp_path, "exit 0\n", payload=payload)
+    assert status == 200
+    assert events[-1]["type"] == "error"
+    assert not any(e["type"] == "result" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_large_prompt_with_slow_reader_does_not_deadlock(relay, monkeypatch, tmp_path):
+    """stdout 을 먼저 쓰기 시작하는 agy 에도 stdin 쓰기와 stdout 읽기가 병행되어 교착이 없다."""
+    stdin_record = tmp_path / "stdin.bin"
+    payload = {"model": "gemini-3.8-flash-high", "messages_text": "y" * 600_000, "session_id": "dl"}
+    chatter = "".join(
+        _emit(_step("agent_response", "ACTIVE", text_delta="z" * 80)) for _ in range(3))
+    script = chatter + f"cat > {stdin_record}\n" + _emit(_result(response="done\n"))
+    status, events, _ = await _call(relay, monkeypatch, tmp_path, script, payload=payload, hard_timeout=20)
+    assert status == 200 and events[-1]["type"] == "result"
+    assert len(stdin_record.read_bytes()) > 600_000
 
 
 # ── model_selector: 집합·표시명 ────────────────────────────────────────────
