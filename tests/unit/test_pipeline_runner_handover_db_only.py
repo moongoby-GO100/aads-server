@@ -9,6 +9,7 @@
 
 import asyncio
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -229,6 +230,140 @@ def test_db_write_failure_is_reported_not_raised(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO("{}"))
     assert mod.main() == 1
     assert '"ok": false' in capsys.readouterr().out
+
+
+def _no_app(monkeypatch):
+    """app.services.handover_store 를 import 할 수 없는 원격 러너 호스트를 흉내낸다."""
+    import sys
+
+    for name in [n for n in sys.modules if n == "app" or n.startswith("app.")]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setitem(sys.modules, "app", None)
+
+
+class _Resp:
+    def __init__(self, status, data):
+        self.status, self._data = status, data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return json.dumps(self._data).encode("utf-8")
+
+    def getcode(self):
+        return self.status
+
+
+def test_import_failure_falls_back_to_http_post(monkeypatch):
+    _no_app(monkeypatch)
+    monkeypatch.setenv("AADS_API_URL", "http://api.example:8100/")
+    monkeypatch.setenv("AADS_MONITOR_KEY", "k-test")
+    seen = {}
+
+    def opener(req, timeout):
+        seen.update(url=req.full_url, method=req.get_method(), body=json.loads(req.data), headers=dict(req.header_items()), timeout=timeout)
+        return _Resp(201, {"entry": {"id": "id-9", "revision": 4}, "changed": True})
+
+    mod = _helper()
+    called = []
+    real = mod.http_fallback_write
+    monkeypatch.setattr(mod, "http_fallback_write", lambda payload: called.append(1) or real(payload, opener=opener))
+    result = asyncio.run(mod.write_and_verify(PAYLOAD))
+
+    assert called == [1]
+    assert result == {"ok": True, "entry_key": "runner:runner-abc12345", "revision": 4, "changed": True, "id": "id-9", "via": "http_fallback"}
+    assert seen["url"] == "http://api.example:8100/api/v1/handovers" and seen["method"] == "POST"
+    assert seen["headers"]["X-monitor-key"] == "k-test" and seen["headers"]["Content-type"] == "application/json"
+    body = seen["body"]
+    assert body["project_key"] == "aads" and body["entry_key"] == "runner:runner-abc12345"
+    assert body["entry_type"] == "verification" and body["priority"] == "P2" and body["status"] == "active"
+    assert body["source_task_id"] == "runner-abc12345" and body["change_summary"] == "runner awaiting_approval"
+    assert len(body["title"]) == 200
+    for needle in ("a" * 40, "app/a.py", "12 passed", "변경 요약"):
+        assert needle in body["body"]
+    assert body["metadata"]["stage"] == "awaiting_approval" and body["metadata"]["source_kind"] == "runner"
+    assert set(body) <= {"project_key", "entry_key", "entry_type", "title", "body", "status", "priority",
+                         "source_task_id", "metadata", "change_summary"}
+    # 저장소 직접 경로와 같은 본문·제목·메타데이터를 만든다
+    store = _FakeStore()
+    asyncio.run(_helper().write_and_verify(PAYLOAD, store=store))
+    direct = next(iter(store.rows.values()))["kw"]
+    assert direct["title"] == body["title"] and direct["body"] == body["body"]
+
+
+@pytest.mark.parametrize("env", [{}, {"AADS_API_URL": "http://x"}, {"AADS_MONITOR_KEY": "k"}])
+def test_http_fallback_unconfigured_reports_reason(monkeypatch, env):
+    _no_app(monkeypatch)
+    monkeypatch.delenv("AADS_API_URL", raising=False)
+    monkeypatch.delenv("AADS_MONITOR_KEY", raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    mod = _helper()
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda *a, **k: pytest.fail("미설정이면 네트워크를 쓰면 안 된다"))
+    result = asyncio.run(mod.write_and_verify(PAYLOAD))
+    assert result["ok"] is False and result["error"].startswith("http_fallback_unconfigured")
+
+
+def test_http_fallback_errors_do_not_raise(monkeypatch, capsys):
+    import io
+    import urllib.error
+
+    _no_app(monkeypatch)
+    monkeypatch.setenv("AADS_API_URL", "http://api.example")
+    monkeypatch.setenv("AADS_MONITOR_KEY", "k-test")
+    mod = _helper()
+    cases = [
+        urllib.error.HTTPError("http://x", 401, "no", {}, io.BytesIO(b"")),
+        urllib.error.URLError("refused"),
+        TimeoutError("timed out"),
+    ]
+    for exc in cases:
+        def boom(req, timeout, _e=exc):
+            raise _e
+        result = mod.http_fallback_write(PAYLOAD, opener=boom)
+        assert result["ok"] is False and result["error"].startswith("http_fallback_failed")
+    assert "401" in mod.http_fallback_write(PAYLOAD, opener=lambda r, timeout: (_ for _ in ()).throw(cases[0]))["error"]
+    bad = mod.http_fallback_write(PAYLOAD, opener=lambda r, timeout: _Resp(200, {"entry": {}}))
+    assert bad["ok"] is False and bad["error"].startswith("http_fallback_failed")
+    # main() 도 종료코드 1 + JSON 한 줄로 끝난다
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("net down")))
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(PAYLOAD)))
+    assert mod.main() == 1
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["ok"] is False and "http_fallback_failed" in out["error"]
+
+
+def test_import_success_does_not_touch_http(monkeypatch):
+    import sys
+    import types
+
+    store = _FakeStore()
+    pkg = types.ModuleType("app")
+    pkg.__path__ = []
+    services = types.ModuleType("app.services")
+    services.handover_store = store
+    monkeypatch.setitem(sys.modules, "app", pkg)
+    monkeypatch.setitem(sys.modules, "app.services", services)
+    monkeypatch.setitem(sys.modules, "app.services.handover_store", store)
+    monkeypatch.setenv("AADS_API_URL", "http://api.example")
+    monkeypatch.setenv("AADS_MONITOR_KEY", "k-test")
+    mod = _helper()
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda *a, **k: pytest.fail("import 성공 시 HTTP 를 쓰면 안 된다"))
+    result = asyncio.run(mod.write_and_verify(PAYLOAD))
+    assert result["ok"] and result["revision"] == 1 and "via" not in result
+    assert store.calls == 1
+
+
+def test_runner_passes_api_url_to_helper_and_documents_fallback():
+    script = _read("scripts/pipeline-runner.sh")
+    body = _fn(script, "runner_handover_record")
+    assert 'AADS_API_URL="$AADS_API_URL"' in body
+    assert "AADS_MONITOR_KEY" in script and "http_fallback_unconfigured" in script
+    assert "requests" not in _read("scripts/runner_handover_write.py").replace("urllib.request", "")
 
 
 def _record_harness(tmp_path: Path, helper_src: str, project_root_helper: bool = True) -> tuple[Path, Path, Path]:

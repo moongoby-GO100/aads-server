@@ -100,6 +100,7 @@ def test_launcher_exports_every_file_the_sync_installs_or_sources():
         "scripts/sync_pipeline_runner_remote.sh",
         "scripts/runner_busy_lib.sh",
         "scripts/runner_cli_usage.py",
+        "scripts/runner_handover_write.py",
         "tools/aag/brief.py",
     ):
         assert needed in required
@@ -274,6 +275,7 @@ case "$cmd" in
             claude_model_contract.py) f="$FAKE_REPO/scripts/claude_model_contract.py" ;;
             aag-brief.py) f="$FAKE_REPO/tools/aag/brief.py" ;;
             runner_cli_usage.py) f="$FAKE_REPO/scripts/runner_cli_usage.py" ;;
+            runner_handover_write.py) f="$FAKE_REPO/scripts/runner_handover_write.py" ;;
             runner_busy_lib.sh) f="$FAKE_REPO/scripts/runner_busy_lib.sh" ;;
             reclaim_runner_worktrees.sh) f="$FAKE_REPO/scripts/reclaim_runner_worktrees.sh" ;;
             *) exit 0 ;;
@@ -402,3 +404,12 @@ def test_sync_ships_runner_cli_usage_helper():
 
     assert "(script_dir / 'runner_cli_usage.py', directory / 'runner_cli_usage.py', 0o644, False)" in script
     assert "scripts/runner_cli_usage.py" in _launcher()
+
+
+def test_sync_ships_runner_handover_helper():
+    """원격 러너에 핸드오버 헬퍼가 없으면 helper_missing 으로 핸드오버가 기록되지 않는다 (2026-10-12 contabo14)."""
+    script = (ROOT / "scripts" / "sync_pipeline_runner_remote.sh").read_text(encoding="utf-8")
+
+    assert "(script_dir / 'runner_handover_write.py', directory / 'runner_handover_write.py', 0o644, False)" in script
+    assert "'runner_handover_write.py'" in script[script.index("allowed = {"):script.index("/etc/systemd/system/' + service}")]
+    assert "scripts/runner_handover_write.py" in _launcher()

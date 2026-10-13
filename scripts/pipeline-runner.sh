@@ -1387,6 +1387,8 @@ runner_heavy_flush_events() {
 
 # R-001 (2026-10-08 개정): 작업 결과를 핸드오버 DB 에 upsert 하고 같은 entry_key 를 다시 읽어 확인한다.
 # 쓰기는 app.services.handover_store(scripts/runner_handover_write.py)를 그대로 쓴다 — 새 쓰기 경로 없음.
+# app/ 이 없는 원격 러너(contabo14 등)는 헬퍼가 POST $AADS_API_URL/api/v1/handovers 로 폴백한다 —
+# 인증은 러너 EnvironmentFile 의 AADS_MONITOR_KEY(x-monitor-key). 미설정이면 reason=http_fallback_unconfigured.
 # 실패해도 작업을 실패시키지 않는다(보수적 단계): runner_event(handover_db_write_failed)와
 # review_feedback 의 "핸드오버 DB 미기록" 표시만 남긴다. 끄는 법: RUNNER_HANDOVER_DB_WRITE=0
 runner_handover_record() {
@@ -1417,7 +1419,7 @@ runner_handover_record() {
             out=$(printf '%s' "$payload" | timeout 60 docker exec -i -w /app "$container" python3 -c "$(cat "$helper")" 2>&1) || rc=$?
         fi
     else
-        out=$(cd "$repo_root" && printf '%s' "$payload" | PGHOST="$PGHOST" PGPORT="${PGPORT:-5432}" PGUSER="$PGUSER" PGPASSWORD="$PGPASSWORD" PGDATABASE="$PGDATABASE" timeout 60 python3 "$helper" 2>&1) || rc=$?
+        out=$(cd "$repo_root" && printf '%s' "$payload" | AADS_API_URL="$AADS_API_URL" PGHOST="$PGHOST" PGPORT="${PGPORT:-5432}" PGUSER="$PGUSER" PGPASSWORD="$PGPASSWORD" PGDATABASE="$PGDATABASE" timeout 60 python3 "$helper" 2>&1) || rc=$?
     fi
     if [[ -z "$reason" ]]; then
         last=$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -n1)

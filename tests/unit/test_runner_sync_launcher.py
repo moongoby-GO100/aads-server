@@ -27,6 +27,7 @@ SUPPORT_FILES = [
     "scripts/runner_busy_lib.sh",
     "scripts/claude_model_contract.py",
     "scripts/runner_cli_usage.py",
+    "scripts/runner_handover_write.py",
     "scripts/reclaim_runner_worktrees.sh",
     "scripts/aads-pipeline-litellm-runner.114.service",
     "scripts/aads-pipeline-litellm-runner.211.service",
@@ -179,6 +180,7 @@ class Fixture:
             "claude_model_contract.py": (ROOT / "scripts/claude_model_contract.py").read_bytes(),
             "aag-brief.py": (ROOT / "tools/aag/brief.py").read_bytes(),
             "runner_cli_usage.py": (ROOT / "scripts/runner_cli_usage.py").read_bytes(),
+            "runner_handover_write.py": (ROOT / "scripts/runner_handover_write.py").read_bytes(),
             "reclaim_runner_worktrees.sh": (ROOT / "scripts/reclaim_runner_worktrees.sh").read_bytes(),
         }
         for name, data in names.items():
