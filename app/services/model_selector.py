@@ -1464,11 +1464,26 @@ _CODEX_MODEL_ALIASES = {
 }
 
 # Antigravity CLI 모델 (Google Pro OAuth, relay /antigravity-stream 경유)
-_ANTIGRAVITY_MODELS = {"antigravity", "antigravity-pro", "antigravity-flash"}
+_ANTIGRAVITY_CLI_MODEL_LABELS = {
+    "gemini-3.8-flash-high": "Gemini 3.8 Flash High",
+    "gemini-3.8-flash-medium": "Gemini 3.8 Flash Medium",
+    "gemini-3.8-flash-low": "Gemini 3.8 Flash Low",
+    "gemini-3.7-flash-high": "Gemini 3.7 Flash High",
+    "gemini-3.7-flash-medium": "Gemini 3.7 Flash Medium",
+    "gemini-3.7-flash-low": "Gemini 3.7 Flash Low",
+    "gemini-3.6-flash-high": "Gemini 3.6 Flash High",
+    "gemini-3.6-flash-medium": "Gemini 3.6 Flash Medium",
+    "gemini-3.6-flash-low": "Gemini 3.6 Flash Low",
+    "gemini-3.1-pro-high": "Gemini 3.1 Pro High",
+    "gemini-3.1-pro-low": "Gemini 3.1 Pro Low",
+}
+# 정확 일치로만 판정한다. LiteLLM 용 _GEMINI_MODELS("gemini-3.8-flash" 등 접미사 없는 id)와 겹치면 안 된다.
+_ANTIGRAVITY_MODELS = {"antigravity", "antigravity-pro", "antigravity-flash"} | set(_ANTIGRAVITY_CLI_MODEL_LABELS)
 _ANTIGRAVITY_MODEL_DISPLAY = {
-    "antigravity": "Antigravity (Gemini 3.5 Flash)",
-    "antigravity-pro": "Antigravity Pro (Gemini 3.1 Pro)",
-    "antigravity-flash": "Antigravity Flash (Gemini 3.5 Flash)",
+    "antigravity": "Antigravity (Gemini 3.8 Flash Medium)",
+    "antigravity-pro": "Antigravity Pro (Gemini 3.1 Pro High)",
+    "antigravity-flash": "Antigravity Flash (Gemini 3.8 Flash Medium)",
+    **{model_id: f"{label} (Antigravity CLI)" for model_id, label in _ANTIGRAVITY_CLI_MODEL_LABELS.items()},
 }
 
 
@@ -2617,7 +2632,10 @@ async def call_stream(
     )
     system_prompt += _build_active_project_context(await _resolve_codex_project(session_id))
 
-    if route_metadata:
+    _antigravity_cli_route = model in _ANTIGRAVITY_MODELS and (
+        not _provider_pinned or _qualified_provider == "antigravity"
+    )
+    if route_metadata and not _antigravity_cli_route:
         provider = str((registered_row or {}).get("provider") or "")
         backend = str(route_metadata.get("execution_backend") or "").strip()
         if provider == "deepseek":
@@ -3193,6 +3211,25 @@ async def call_stream(
             }
         return
 
+    # Antigravity CLI 모델 → Relay /antigravity-stream 경유 (Google Pro OAuth, 실패 시 Codex CLI 폴백)
+    # Gemini/LiteLLM 분기보다 먼저, model 정확 일치로만 판정한다.
+    if model in _ANTIGRAVITY_MODELS:
+        _had_error = False
+        async for event in _stream_antigravity_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
+            if event.get("type") == "error":
+                _had_error = True
+                logger.warning(f"antigravity_fallback: {model} failed, falling back to configured Codex model")
+                break
+            yield event
+        if _had_error:
+            fallback_model = await _get_codex_cli_fallback_model_from_db()
+            yield {"type": "delta", "content": f"\n\n[{model} (Antigravity) 오류 → Codex CLI {fallback_model} 전환]\n\n"}
+            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
+                if event.get("type") in ("done", "model_info"):
+                    event = {**event, "model": model}
+                yield event
+        return
+
     # Gemini 모델 → LiteLLM 경유 (실패 시 동급 Claude 우선 폴백)
     if model in _GEMINI_MODELS:
         _had_error = False
@@ -3333,24 +3370,6 @@ async def call_stream(
                 tool_group=intent_result.tool_group,
             )
             async for event in _stream_anthropic(_fallback_intent, "claude-fable-5-1", system_prompt, messages, tools, session_id=session_id):
-                yield event
-        return
-
-    # Antigravity CLI 모델 → Relay /antigravity-stream 경유 (Google Pro OAuth, 실패 시 Codex CLI 폴백)
-    if model in _ANTIGRAVITY_MODELS:
-        _had_error = False
-        async for event in _stream_antigravity_relay(model, system_prompt, messages, tools=tools, session_id=session_id):
-            if event.get("type") == "error":
-                _had_error = True
-                logger.warning(f"antigravity_fallback: {model} failed, falling back to configured Codex model")
-                break
-            yield event
-        if _had_error:
-            fallback_model = await _get_codex_cli_fallback_model_from_db()
-            yield {"type": "delta", "content": f"\n\n[{model} (Antigravity) 오류 → Codex CLI {fallback_model} 전환]\n\n"}
-            async for event in _stream_codex_relay(fallback_model, system_prompt, messages, tools=tools, session_id=session_id):
-                if event.get("type") in ("done", "model_info"):
-                    event = {**event, "model": model}
                 yield event
         return
 

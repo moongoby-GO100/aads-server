@@ -2313,11 +2313,38 @@ _CODEX_MODEL_MAP = {
     "gpt-5.3-codex": "gpt-5.3-codex",
 }
 
+# `agy models` 실측(2026-10-12) 11종은 id 를 그대로 --model 로 넘긴다.
+_ANTIGRAVITY_NATIVE_MODELS = (
+    "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+    "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
+    "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
+    "gemini-3.1-pro-high", "gemini-3.1-pro-low",
+)
 _ANTIGRAVITY_MODEL_MAP = {
-    "antigravity": "gemini-3.5-flash",
-    "antigravity-pro": "gemini-3.1-pro-preview",
-    "antigravity-flash": "gemini-3.5-flash",
+    **{model_id: model_id for model_id in _ANTIGRAVITY_NATIVE_MODELS},
+    "antigravity": "gemini-3.8-flash-medium",
+    "antigravity-flash": "gemini-3.8-flash-medium",
+    "antigravity-pro": "gemini-3.1-pro-high",
 }
+_ANTIGRAVITY_MAX_CONCURRENT = max(1, int(os.getenv("AGY_RELAY_MAX_CONCURRENT", "2")))
+_ANTIGRAVITY_PRINT_TIMEOUT = os.getenv("AGY_RELAY_PRINT_TIMEOUT", "4m")
+_ANTIGRAVITY_HARD_TIMEOUT_SEC = float(os.getenv("AGY_RELAY_HARD_TIMEOUT_SEC", "270"))
+_ANTIGRAVITY_MAX_PROMPT_BYTES = 120_000  # Linux 단일 argv 항목 한도(128KiB) 아래
+_ANTIGRAVITY_AUTH_MARKERS = ("Authentication required. Please visit", "authentication failed or timed out")
+# stderr 는 모델 출력이 아니라 CLI 진단이므로 느슨하게(대소문자 무시) 분류해도 오탐 위험이 없다.
+_ANTIGRAVITY_STDERR_AUTH_MARKERS = (
+    "authentication required", "authentication failed", "authentication expired",
+    "not logged in", "not logged into", "log back in", "to log in", "please visit",
+    "accounts.google.com",
+)
+_ANTIGRAVITY_AUTH_ERROR = "Antigravity CLI authentication required"
+_ANTIGRAVITY_URL_RE = re.compile(r"""[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s'"<>)\]]+""")
+_ANTIGRAVITY_SECRET_RE = re.compile(
+    r"(?i)\b(code|state|token|access_token|refresh_token|id_token|client_secret|api_key|key)=[^\s&'\"]+"
+    r"|\bbearer\s+[A-Za-z0-9._~+/=-]+"
+    r"|\bya29\.[A-Za-z0-9._-]+|\bAIza[A-Za-z0-9_-]{20,}|\bsk-[A-Za-z0-9_-]{16,}"
+)
+_antigravity_semaphore = None
 
 _CODEX_PROJECT_HINTS = {
     "AADS": "local_workdir=/root/aads/aads-server; dashboard=/root/aads/aads-dashboard; deploy=bash /root/aads/aads-server/deploy.sh or dashboard deploy.sh as requested",
@@ -2754,8 +2781,72 @@ async def handle_codex_stream(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+def _antigravity_clean_env():
+    """agy 자식 프로세스에는 relay 의 시크릿(OAuth 토큰·API 키)을 넘기지 않는다."""
+    env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")}
+    for key in ("HOME", "LANG", "LC_ALL", "TZ", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
+        if os.environ.get(key):
+            env[key] = os.environ[key]
+    env.setdefault("HOME", str(Path.home()))
+    return env
+
+
+def _resolve_antigravity_binary():
+    configured = os.getenv("AGY_BIN", "").strip()
+    if configured:
+        return str(Path(configured).expanduser())
+    for candidate in (shutil.which("agy"), "/usr/local/bin/agy", "/root/.local/bin/agy"):
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return ""
+
+
+def _resolve_antigravity_model(model):
+    """요청 모델 → agy --model 값. 모르는 모델은 None (조용히 기본값으로 바꾸지 않는다)."""
+    return _ANTIGRAVITY_MODEL_MAP.get(str(model or "").strip())
+
+
+def _build_antigravity_command(agy_bin, agy_model, prompt):
+    return [
+        agy_bin,
+        "-p", prompt,
+        "--model", agy_model,
+        "--print-timeout", _ANTIGRAVITY_PRINT_TIMEOUT,
+        "--sandbox",
+    ]
+
+
+def _antigravity_mask_sensitive(text):
+    """agy 진단 문구에서 URL(쿼리 포함)과 토큰·코드 형태를 지운다."""
+    masked = _ANTIGRAVITY_URL_RE.sub("[url]", str(text or ""))
+    return _ANTIGRAVITY_SECRET_RE.sub("[redacted]", masked)
+
+
+def _antigravity_stderr_is_auth_failure(stderr_text):
+    lowered = str(stderr_text or "").lower()
+    return any(marker in lowered for marker in _ANTIGRAVITY_STDERR_AUTH_MARKERS)
+
+
+def _get_antigravity_semaphore():
+    global _antigravity_semaphore
+    if _antigravity_semaphore is None:
+        _antigravity_semaphore = asyncio.Semaphore(_ANTIGRAVITY_MAX_CONCURRENT)
+    return _antigravity_semaphore
+
+
+def _antigravity_kill_group(proc):
+    """agy 프로세스 그룹 전체를 SIGKILL. 이미 비었으면(ProcessLookupError) 조용히 넘어간다."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+
 async def handle_antigravity_stream(request):
-    """Antigravity CLI (docker exec antigravity-test) -> NDJSON pseudo-streaming."""
+    """호스트 agy CLI 직접 실행 -> NDJSON pseudo-streaming."""
     try:
         body = await request.json()
     except Exception:
@@ -2766,11 +2857,30 @@ async def handle_antigravity_stream(request):
     session_id = body.get("session_id", "")
     if not messages_text:
         return web.json_response({"error": "messages_text required"}, status=400)
-    agy_model = _ANTIGRAVITY_MODEL_MAP.get(model, "gemini-3.5-flash")
+    agy_model = _resolve_antigravity_model(model)
+    if not agy_model:
+        return web.json_response({
+            "error": "unknown_antigravity_model",
+            "detail": "unsupported antigravity model: %s" % str(model)[:80],
+        }, status=400)
     prompt = messages_text
     if system_prompt:
         prompt = "[SYSTEM]\n" + system_prompt + "\n\n[USER]\n" + messages_text
+    prompt_bytes = len(prompt.encode("utf-8"))
+    if prompt_bytes > _ANTIGRAVITY_MAX_PROMPT_BYTES:
+        return web.json_response({
+            "error": "antigravity_prompt_too_large",
+            "detail": "prompt %d bytes (%d chars) exceeds %d bytes (argv limit)" % (
+                prompt_bytes, len(prompt), _ANTIGRAVITY_MAX_PROMPT_BYTES),
+            "prompt_bytes": prompt_bytes,
+            "limit_bytes": _ANTIGRAVITY_MAX_PROMPT_BYTES,
+        }, status=413)
+    sid = (session_id or "default")[:8]
+    agy_sem = _get_antigravity_semaphore()
+    agy_sem_held = False
     try:
+        await asyncio.wait_for(agy_sem.acquire(), timeout=_SEMAPHORE_ACQUIRE_TIMEOUT_SEC)
+        agy_sem_held = True
         async with _SemaphoreLease(
             _semaphore,
             _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
@@ -2783,113 +2893,140 @@ async def handle_antigravity_stream(request):
             try:
                 await _stream_prepare(response, request)
             except ConnectionResetError:
-                logger.info(
-                    "Antigravity response prepare skipped: client already closed session=%s",
-                    (session_id or "default")[:8],
-                )
+                logger.info("Antigravity response prepare skipped: client already closed session=%s", sid)
                 return response
-            cmd = [
-                "docker", "exec", "antigravity-test",
-                "/root/.local/bin/agy",
-                "--print", prompt,
-                "--print-timeout", "5m",
-            ]
-            logger.info(
-                "Antigravity: model=%s agy_model=%s prompt_len=%d session=%s",
-                model, agy_model, len(prompt), (session_id or "default")[:8],
-            )
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE)
-            _lease.attach_proc(proc.pid, agy_model or "")
-            proc.stdin.close()
+
+            async def _emit_error(message):
+                try:
+                    await _stream_write(response, json.dumps(
+                        {"type": "error", "content": message}).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("Antigravity error write skipped: session=%s", sid)
+
+            async def _finish():
+                try:
+                    await _stream_write_eof(response)
+                except ConnectionResetError:
+                    logger.info("Antigravity write_eof skipped: session=%s", sid)
+                return response
+
+            agy_bin = _resolve_antigravity_binary()
+            if not agy_bin:
+                logger.error("Antigravity: agy binary not found")
+                await _emit_error("Antigravity CLI(agy) not installed on relay host")
+                return await _finish()
+
+            workdir = tempfile.mkdtemp(prefix="agy-relay-")
+            proc = None
             full_text = ""
+            stderr_text = ""
+            failed = False
+            error_message = ""
             try:
-                async for raw_line in _iter_ndjson_lines(proc.stdout, timeout_sec=360):
-                    line_text = raw_line.decode("utf-8", errors="replace").rstrip("\n")
-                    if not line_text:
-                        continue
-                    for i in range(0, len(line_text), 40):
-                        chunk = line_text[i:i + 40]
-                        await _stream_write(
-                            response,
-                            json.dumps({"type": "assistant", "subtype": "text",
-                                        "text": chunk}).encode() + b"\n",
-                        )
-                        await asyncio.sleep(0.015)
-                    full_text += line_text + "\n"
-            except ConnectionResetError:
-                logger.info("Antigravity relay client disconnected: session=%s",
-                            (session_id or "default")[:8])
-            except asyncio.TimeoutError:
-                logger.error("Antigravity timeout (360s): model=%s", agy_model)
+                cmd = _build_antigravity_command(agy_bin, agy_model, prompt)
+                logger.info(
+                    "Antigravity: model=%s agy_model=%s prompt_len=%d session=%s",
+                    model, agy_model, len(prompt), sid,
+                )
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, cwd=workdir, env=_antigravity_clean_env(),
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True)
+                _lease.attach_proc(proc.pid, agy_model)
+                # stderr 를 비우지 않으면 파이프가 차서 agy 가 멈춘다.
+                stderr_task = asyncio.ensure_future(proc.stderr.read())
+
+                async def _pump():
+                    nonlocal full_text
+                    async for raw_line in _iter_ndjson_lines(
+                            proc.stdout, timeout_sec=_ANTIGRAVITY_HARD_TIMEOUT_SEC):
+                        line_text = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                        if not line_text:
+                            continue
+                        if any(marker in line_text for marker in _ANTIGRAVITY_AUTH_MARKERS):
+                            raise PermissionError(_ANTIGRAVITY_AUTH_ERROR)
+                        for i in range(0, len(line_text), 40):
+                            await _stream_write(response, json.dumps({
+                                "type": "assistant", "subtype": "text",
+                                "text": line_text[i:i + 40]}).encode() + b"\n")
+                            await asyncio.sleep(0.015)
+                        full_text += line_text + "\n"
+                    await proc.wait()
+
                 try:
-                    await _stream_write(response,
-                        json.dumps({"type": "error",
-                                    "content": "Antigravity CLI timeout"}).encode() + b"\n")
+                    await asyncio.wait_for(_pump(), timeout=_ANTIGRAVITY_HARD_TIMEOUT_SEC)
                 except ConnectionResetError:
-                    logger.info("Antigravity timeout write skipped: session=%s",
-                                (session_id or "default")[:8])
-                proc.kill()
-            except Exception as exc:
-                logger.error("Antigravity stream error: %s", exc)
-                try:
-                    await _stream_write(response,
-                        json.dumps({"type": "error",
-                                    "content": str(exc)}).encode() + b"\n")
-                except ConnectionResetError:
-                    logger.info("Antigravity stream error write skipped: session=%s",
-                                (session_id or "default")[:8])
-            finally:
-                if proc.returncode is None:
+                    logger.info("Antigravity relay client disconnected: session=%s", sid)
+                    failed = True
+                except asyncio.TimeoutError:
+                    logger.error("Antigravity timeout (%.0fs): agy_model=%s",
+                                 _ANTIGRAVITY_HARD_TIMEOUT_SEC, agy_model)
+                    failed = True
+                    error_message = "Antigravity CLI timeout"
+                except PermissionError as exc:
+                    logger.error("Antigravity auth failure: agy_model=%s", agy_model)
+                    failed = True
+                    error_message = str(exc)
+                except Exception as exc:
+                    logger.error("Antigravity stream error: %s", _antigravity_mask_sensitive(exc))
+                    failed = True
+                    error_message = _antigravity_mask_sensitive(exc)[:200]
+                finally:
+                    # 부모가 먼저 끝나도 손주가 stdout/stderr 파이프를 쥐고 살아남을 수 있다.
+                    # returncode 와 무관하게 프로세스 그룹을 정리해야 stderr 읽기도 끝난다.
+                    _antigravity_kill_group(proc)
                     try:
-                        proc.terminate()
                         await asyncio.wait_for(proc.wait(), timeout=5)
                     except (asyncio.TimeoutError, ProcessLookupError):
-                        try:
-                            proc.kill()
-                        except ProcessLookupError:
-                            pass
-                if proc.stderr:
+                        pass
                     try:
-                        stderr_bytes = await asyncio.wait_for(
-                            proc.stderr.read(), timeout=_STDERR_READ_TIMEOUT_SEC)
-                    except asyncio.TimeoutError:
-                        stderr_bytes = b""
-                        logger.warning(
-                            "Antigravity stderr_read_timeout: session=%s — forcing pipe close",
-                            (session_id or "default")[:8])
-                        try:
-                            proc.kill()
-                        except (ProcessLookupError, Exception):
-                            pass
-                    if stderr_bytes:
-                        logger.info("Antigravity stderr: %s",
-                                    stderr_bytes.decode("utf-8", errors="replace")[:500])
+                        stderr_text = (await asyncio.wait_for(
+                            stderr_task, timeout=_STDERR_READ_TIMEOUT_SEC)).decode("utf-8", errors="replace")
+                    except Exception:
+                        stderr_task.cancel()
+                    if stderr_text:
+                        logger.info("Antigravity stderr: %s", _antigravity_mask_sensitive(stderr_text)[:500])
+                stderr_auth = _antigravity_stderr_is_auth_failure(stderr_text)
+                if failed:
+                    if stderr_auth and error_message == "Antigravity CLI timeout":
+                        error_message = _ANTIGRAVITY_AUTH_ERROR
+                elif proc.returncode not in (0, None):
+                    failed = True
+                    logger.error("Antigravity exit code %s: agy_model=%s", proc.returncode, agy_model)
+                    if stderr_auth:
+                        error_message = _ANTIGRAVITY_AUTH_ERROR
+                    else:
+                        detail = _antigravity_mask_sensitive(stderr_text or full_text).strip().splitlines()
+                        tail = detail[-1][:200] if detail else ""
+                        error_message = "Antigravity CLI exited with code %s%s" % (
+                            proc.returncode, (": " + tail) if tail else "")
+                elif not full_text.strip():
+                    failed = True
+                    error_message = _ANTIGRAVITY_AUTH_ERROR if stderr_auth else "Antigravity CLI returned empty response"
+                if error_message:
+                    await _emit_error(error_message)
+            except (FileNotFoundError, PermissionError, OSError) as exc:
+                failed = True
+                logger.error("Antigravity spawn failed: %s", _antigravity_mask_sensitive(exc))
+                await _emit_error("Antigravity CLI spawn failed: %s" % _antigravity_mask_sensitive(exc)[:200])
+            finally:
+                if proc is not None:
+                    _antigravity_kill_group(proc)
+                shutil.rmtree(workdir, ignore_errors=True)
+            if not failed:
+                full_text = full_text.rstrip("\n")
                 try:
-                    transport = getattr(proc, "_transport", None)
-                    if transport is not None:
-                        transport.close()
-                except Exception:
-                    pass
-            full_text = full_text.rstrip("\n")
-            try:
-                await _stream_write(response, json.dumps({
-                    "type": "result", "result": full_text,
-                    "input_tokens": 0,
-                    "output_tokens": len(full_text) // 4,
-                    "model": model,
-                }).encode() + b"\n")
-            except ConnectionResetError:
-                logger.info("Antigravity result write skipped: session=%s",
-                            (session_id or "default")[:8])
-            try:
-                await _stream_write_eof(response)
-            except ConnectionResetError:
-                logger.info("Antigravity write_eof skipped: session=%s",
-                            (session_id or "default")[:8])
-            return response
+                    await _stream_write(response, json.dumps({
+                        "type": "result", "result": full_text,
+                        "input_tokens": 0,
+                        "output_tokens": len(full_text) // 4,
+                        "model": model,
+                    }).encode() + b"\n")
+                except ConnectionResetError:
+                    logger.info("Antigravity result write skipped: session=%s", sid)
+            return await _finish()
     except asyncio.TimeoutError:
         return web.json_response({
             "error": "antigravity_relay_busy",
@@ -2899,11 +3036,13 @@ async def handle_antigravity_stream(request):
         }, status=503)
     except Exception as e:
         if _is_client_disconnect_error(e):
-            logger.info("Antigravity handler client disconnected: session=%s",
-                        (session_id or "default")[:8])
+            logger.info("Antigravity handler client disconnected: session=%s", sid)
             return web.Response(status=499)
         logger.error("Antigravity handler error: %s", e)
         return web.json_response({"error": str(e)}, status=500)
+    finally:
+        if agy_sem_held:
+            agy_sem.release()
 
 
 async def handle_health(request):
@@ -2928,7 +3067,7 @@ async def handle_health(request):
               "auth_mode": "direct_oauth" if _DIRECT_OAUTH_ENABLED else "litellm_proxy",
               "claude_cmd_mode": _resolve_cli_command("claude").get("mode", "unknown"),
               "codex_cmd_mode": _resolve_cli_command("codex").get("mode", "unknown"),
-              "antigravity_cmd_mode": "docker_exec",
+              "antigravity_cmd_mode": "host_direct",
               "mcp_bridge_mode": _MCP_BRIDGE_MODE,
               "max_concurrent": _MAX_CONCURRENT,
               "acquire_timeout_sec": _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
