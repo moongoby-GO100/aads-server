@@ -39,6 +39,7 @@ log "START remote=${REMOTE} target=${TARGET_ROOT}"
 ssh "${SSH_OPTS[@]}" "$REMOTE" "mkdir -p ${REMOTE_DIR}/out"
 scp "${SSH_OPTS[@]}" -q \
     "${REPO_DIR}/tools/aag/scan_aads.py" \
+    "${REPO_DIR}/tools/aag/v2_contract.py" \
     "${REPO_DIR}/tools/aag/brief.py" \
     "${REPO_DIR}/tools/aag/rules_go100.yml" \
     "${REMOTE}:${REMOTE_DIR}/"
@@ -48,14 +49,27 @@ scp "${SSH_OPTS[@]}" -q \
 # 종료코드 계약: 0=결함 없음 / 1=결함 있음 / 2=실행 불가(scan_aads.py:2070).
 # 1 을 실패로 읽으면 결함이 하나라도 있는 한 갱신이 영원히 안 돈다 — 실제로
 # 첫 실행이 그렇게 죽었다(2026-09-19). "점검 못 함"과 "위반 있음"을 구분한다.
+scan_marker="${REMOTE_DIR}/.scan-started"
+remote_sha=$(ssh "${SSH_OPTS[@]}" "$REMOTE" \
+    "git -C ${TARGET_ROOT} rev-parse HEAD")
+ssh "${SSH_OPTS[@]}" "$REMOTE" "touch ${scan_marker}"
+
 set +e
 ssh "${SSH_OPTS[@]}" "$REMOTE" \
-    "cd ${REMOTE_DIR} && timeout 900 python3 scan_aads.py --root ${TARGET_ROOT} --rules ${REMOTE_DIR}/rules_go100.yml --out-dir ${REMOTE_DIR}/out --json" \
+    "cd ${REMOTE_DIR} && AAG_PROJECT=GO100 AADS_COMMIT_SHA=${remote_sha} AAG_EXPECTED_TARGET_REF_HEAD_SHA=${remote_sha} timeout 900 python3 scan_aads.py --root ${TARGET_ROOT} --rules ${REMOTE_DIR}/rules_go100.yml --out-dir ${REMOTE_DIR}/out --json" \
     > /tmp/aag-go100-scan.json 2>/tmp/aag-go100-scan.err
 scan_rc=$?
 set -e
 if (( scan_rc >= 2 )); then
     log "SCAN_FAILED rc=${scan_rc} — $(grep -v SyntaxWarning /tmp/aag-go100-scan.err | tail -3 | tr '\n' ' ')"
+    exit 1
+fi
+
+# Python 예외도 rc=1 이므로 종료코드만으로는 "결함 있음"과 구분할 수 없다.
+# 이번 실행이 실제로 새 그래프를 썼는지 확인해 이전 산출물 재적재를 차단한다.
+if ! ssh "${SSH_OPTS[@]}" "$REMOTE" \
+    "test ${REMOTE_DIR}/out/go100-graph.json -nt ${scan_marker}"; then
+    log "SCAN_FAILED rc=${scan_rc} — fresh graph artifact was not produced"
     exit 1
 fi
 
@@ -69,6 +83,21 @@ scp "${SSH_OPTS[@]}" -q \
 for f in go100-graph.json go100-findings.md go100-arch.mmd; do
     [[ -s "${OUT_DIR}/${f}" ]] || { log "MISSING_ARTIFACT ${f}"; exit 1; }
 done
+
+if ! python3 - "${OUT_DIR}/go100-graph.json" "${remote_sha}" <<'PY'
+import json
+import sys
+
+graph = json.load(open(sys.argv[1], encoding="utf-8"))
+identity = graph.get("source_identity") or {}
+actual = identity.get("resolved_commit_sha") or graph.get("commit_sha")
+if actual != sys.argv[2]:
+    raise SystemExit("stale graph SHA: %s != %s" % (actual, sys.argv[2]))
+PY
+then
+    log "SCAN_FAILED — graph source SHA does not match the scanned repository HEAD"
+    exit 1
+fi
 
 summary=$(python3 -c "
 import json,collections,sys
