@@ -1,3 +1,4 @@
+v1.0.78: 로그온 watchdog VBS 를 UTF-16LE 로 저장 — UTF-8 BOM 때문에 WSH 가 800A0408(유효하지 않은 문자) 오류창을 띄우고 자동 재기동이 동작하지 않던 문제 수정
 v1.0.77: 브라우저 work_key 탭 소유 레지스트리를 로컬 JSON에 원자적으로 영속화하고 Agent 재시작 시 브라우저 pid·살아있는 target 일치할 때만 소유 복구(사용자 탭 adopt 금지, 타 work_key/채팅/테넌트 접근은 명시적 오류)
 v1.0.73: 자동 설치 기본값을 최신 Windows EXE로 복구하고 ZIP install.bat이 Python 탐색·자동 설치·안정 경로 설치를 수행하도록 보강
 v1.0.72: EXE 백신 오탐 차단 환경을 우회하도록 자동 설치 기본값을 ZIP으로 전환하고 install_ticket.txt 기반 자동 페어링을 지원

@@ -696,9 +696,12 @@ def register_watchdog_task() -> None:
 
         watchdog_path = INSTALL_DIR / WATCHDOG_SCRIPT_NAME
         launcher_exe = _ensure_stable_launcher_exe()
+        # WSH 는 UTF-8 을 읽지 못한다. BOM(EF BB BF)이 붙은 파일은 1행 1열에서
+        # 800A0408 "유효하지 않은 문자" 로 죽고, 로그온마다 오류창이 뜬다.
+        # UTF-16LE(BOM 포함)는 WSH 가 유니코드로 읽으므로 한글 경로도 안전하다.
         watchdog_path.write_text(
             _build_hidden_watchdog_vbs(launcher_exe),
-            encoding="utf-8-sig",
+            encoding="utf-16",
         )
         _write_startup_folder_fallback(launcher_exe)
         task_command = f'wscript.exe "{watchdog_path}"'

@@ -85,7 +85,12 @@ class PcAgentLauncherStartupTest(TestCase):
                  mock.patch.object(launcher, "INSTALL_DIR", Path(temp_dir)):
                 launcher.register_watchdog_task()
                 watchdog_script = Path(temp_dir) / launcher.WATCHDOG_SCRIPT_NAME
-                script = watchdog_script.read_text(encoding="utf-8-sig")
+                raw = watchdog_script.read_bytes()
+                # WSH 가 읽을 수 있는 인코딩이어야 한다 — UTF-8 BOM 이면 800A0408.
+                self.assertTrue(raw.startswith(b"\xff\xfe"))
+                self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+                script = raw.decode("utf-16")
+                self.assertTrue(script.startswith("Option Explicit"))
                 self.assertIn(str(Path(temp_dir) / launcher.STABLE_LAUNCHER_EXE_NAME), script)
                 self.assertNotIn("--ticket-", script)
                 self.assertTrue((Path(temp_dir) / launcher.STABLE_LAUNCHER_EXE_NAME).exists())
