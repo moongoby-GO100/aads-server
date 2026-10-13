@@ -295,10 +295,14 @@ async def api_key_status():
 async def claude_relay_oauth_state(request: Request):
     """Claude relay 전용 OAuth 상태 조회. raw token 포함 — shared secret 필수."""
     _require_relay_secret(request)
-    from app.core.auth_provider import get_oauth_key_records_async
+    from app.core.auth_provider import (
+        get_oauth_key_records_async,
+        query_disabled_anthropic_slots,
+    )
 
     records = await get_oauth_key_records_async(include_rate_limited=True)
-    return {
+    disabled_slots = await query_disabled_anthropic_slots()
+    payload = {
         "keys": [
             {
                 "label": record.get("label", ""),
@@ -311,6 +315,10 @@ async def claude_relay_oauth_state(request: Request):
             for record in records
         ]
     }
+    # 조회 실패(None)는 필드를 생략한다 — 릴레이가 "꺼진 슬롯 없음" 으로 오해해 기존 차단을 풀면 안 된다.
+    if disabled_slots is not None:
+        payload["disabled_slots"] = disabled_slots
+    return payload
 
 
 @router.get("/health/deep")

@@ -77,6 +77,17 @@ class LlmKeyUpdate(BaseModel):
         return normalized
 
 
+class LlmKeyEnabled(BaseModel):
+    enabled: bool
+    reason: str | None = Field(None, max_length=500)
+
+
+MANUAL_DISABLE_ACTOR = "ceo-settings"
+MANUAL_DISABLED_DETAIL = (
+    "Manually disabled by CEO — use POST /llm-keys/{key_id}/enabled to turn it back on"
+)
+
+
 def _mask(val: str) -> str:
     if len(val) <= 8:
         return "****"
@@ -325,7 +336,7 @@ def _usage_windows(provider: str, row: Any, slot_row: dict[str, Any] | None) -> 
 
 def _account_state(row: Any, binding: dict[str, Any] | None, now: datetime) -> str:
     """행 하나의 상태를 서버가 정한다. 화면은 색만 칠한다."""
-    if not row["is_active"]:
+    if row["manual_disabled"] or not row["is_active"]:
         return "inactive"
     if binding is None:
         return "unknown"          # 릴레이 무응답 — 등록 정보는 살리고 상태만 비운다
@@ -386,6 +397,7 @@ async def llm_overview() -> dict[str, Any]:
             """
             SELECT k.id, k.provider, k.key_name, k.encrypted_value, k.label, k.priority,
                    k.is_active, k.rate_limited_until, k.notes,
+                   k.manual_disabled, k.manual_disabled_at,
                    s.used_percent, s.resets_at, s.snapshot_at,
                    s.ok_72h, s.limit_72h, s.collected_at
             FROM llm_api_keys k
@@ -449,7 +461,9 @@ async def llm_overview() -> dict[str, Any]:
 
         if provider in SUBSCRIPTION_PROVIDERS:
             slot = slot_of.get(row["key_name"])
-            quarantined_slot4 = slot == "slot4" and not row["is_active"]
+            quarantined_slot4 = (
+                slot == "slot4" and not row["is_active"] and not row["manual_disabled"]
+            )
             bkey = slot if provider == "anthropic" else row["key_name"]
             binding = bindings.get(bkey) if bindings is not None else None
             binding_mismatch = provider == "anthropic" and _binding_account_mismatch(
@@ -463,6 +477,10 @@ async def llm_overview() -> dict[str, Any]:
             accounts.append({
                 "key_name": row["key_name"], "provider": provider, "label": row["label"],
                 "priority": row["priority"], "is_active": row["is_active"],
+                "manual_disabled": bool(row["manual_disabled"]),
+                "manual_disabled_at": (
+                    row["manual_disabled_at"].isoformat() if row["manual_disabled_at"] else None
+                ),
                 "kind": "subscription", "masked_value": masked,
                 "slot": slot,
                 "state": "needs_login" if quarantined_slot4 else _account_state(row, binding, now),
@@ -745,7 +763,7 @@ async def _reconcile_successful_account_login(
             await conn.execute(
                 """
                 UPDATE llm_api_keys
-                SET is_active = TRUE, rate_limited_until = NULL,
+                SET is_active = NOT manual_disabled, rate_limited_until = NULL,
                     last_verified_at = NOW(), updated_at = NOW()
                 WHERE key_name = $1 AND provider = 'anthropic'
                 """,
@@ -846,9 +864,10 @@ async def update_llm_key(key_id: int, body: LlmKeyUpdate) -> dict[str, Any]:
         async with conn.transaction():
             existing = await conn.fetchrow(
                 """
-                SELECT id, provider, key_name, label, priority, is_active, notes
+                SELECT id, provider, key_name, label, priority, is_active, notes, manual_disabled
                 FROM llm_api_keys
                 WHERE id = $1
+                FOR UPDATE
                 """,
                 key_id,
             )
@@ -858,6 +877,8 @@ async def update_llm_key(key_id: int, body: LlmKeyUpdate) -> dict[str, Any]:
             provider = body.provider or normalize_provider(existing["provider"])
             priority = body.priority if body.priority is not None else existing["priority"]
             is_active = body.is_active if body.is_active is not None else existing["is_active"]
+            if body.is_active is True and existing["manual_disabled"]:
+                raise HTTPException(status_code=409, detail=MANUAL_DISABLED_DETAIL)
             await _validate_priority(
                 conn,
                 provider=provider,
@@ -931,17 +952,112 @@ async def update_llm_key(key_id: int, body: LlmKeyUpdate) -> dict[str, Any]:
     return result
 
 
+@router.post("/{key_id}/enabled")
+async def set_llm_key_enabled(key_id: int, body: LlmKeyEnabled) -> dict[str, Any]:
+    """CEO 수동 켜기/끄기. 끈 계정은 자동 복구(rate_limit_recovery 등)가 다시 켜지 않는다."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            existing = await conn.fetchrow(
+                """
+                SELECT id, provider, key_name, priority, is_active, manual_disabled
+                FROM llm_api_keys
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                key_id,
+            )
+            if not existing:
+                raise HTTPException(status_code=404, detail="Key not found")
+            provider = normalize_provider(existing["provider"])
+            if body.enabled:
+                await _validate_priority(
+                    conn,
+                    provider=provider,
+                    priority=existing["priority"],
+                    is_active=True,
+                    key_id=key_id,
+                )
+                row = await conn.fetchrow(
+                    """
+                    UPDATE llm_api_keys
+                    SET is_active = TRUE,
+                        manual_disabled = FALSE,
+                        manual_disabled_at = NULL,
+                        manual_disabled_by = NULL,
+                        rate_limited_until = NULL,
+                        updated_at = NOW()
+                    WHERE id = $1
+                    RETURNING id, provider, key_name, is_active, manual_disabled,
+                              manual_disabled_at, rate_limited_until, updated_at
+                    """,
+                    key_id,
+                )
+            else:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE llm_api_keys
+                    SET is_active = FALSE,
+                        manual_disabled = TRUE,
+                        manual_disabled_at = NOW(),
+                        manual_disabled_by = $2,
+                        updated_at = NOW()
+                    WHERE id = $1
+                    RETURNING id, provider, key_name, is_active, manual_disabled,
+                              manual_disabled_at, rate_limited_until, updated_at
+                    """,
+                    key_id,
+                    MANUAL_DISABLE_ACTOR,
+                )
+            await append_key_audit_log(
+                conn,
+                key_id=key_id,
+                provider=provider,
+                key_name=existing["key_name"],
+                event_type="manual_enable" if body.enabled else "manual_disable",
+                actor=MANUAL_DISABLE_ACTOR,
+                details={
+                    "reason": body.reason,
+                    "priority": existing["priority"],
+                    "was_active": existing["is_active"],
+                    "was_manual_disabled": existing["manual_disabled"],
+                },
+            )
+
+    invalidate_key_cache(existing["key_name"])
+    if provider == "anthropic":
+        # llm_key_provider 캐시와 별개로 auth_provider 의 정렬 토큰 캐시가 있다.
+        # 여기서 다시 만들지 않으면 끈 계정이 다음 async 조회까지 sync getter 로 새어 나간다.
+        try:
+            from app.core.auth_provider import refresh_oauth_token_state
+
+            await refresh_oauth_token_state()
+        except Exception as exc:
+            logger.warning("manual_toggle token cache refresh failed: %s", exc)
+    action = "enable" if body.enabled else "disable"
+    sync_result = await _run_registry_sync(f"manual_{action}:{existing['key_name']}")
+    result = dict(row)
+    for field in ("manual_disabled_at", "rate_limited_until", "updated_at"):
+        if result.get(field) is not None:
+            result[field] = result[field].isoformat()
+    if sync_result and not sync_result.get("ok", True):
+        result["registry_sync"] = sync_result
+    return result
+
+
 @router.post("/{key_id}/activate")
 async def activate_llm_key(key_id: int) -> dict[str, Any]:
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             existing = await conn.fetchrow(
-                "SELECT id, provider, key_name, priority FROM llm_api_keys WHERE id=$1",
+                "SELECT id, provider, key_name, priority, manual_disabled FROM llm_api_keys WHERE id=$1 FOR UPDATE",
                 key_id,
             )
             if not existing:
                 raise HTTPException(status_code=404, detail="Key not found")
+            if existing["manual_disabled"]:
+                raise HTTPException(status_code=409, detail=MANUAL_DISABLED_DETAIL)
             provider = normalize_provider(existing["provider"])
             await _validate_priority(
                 conn,

@@ -156,5 +156,5 @@ async def test_slot4_verified_proof_activates_and_records_snapshot(monkeypatch):
                      "credential_fingerprint": hashlib.sha256(token.encode()).hexdigest()}
     ) is True
     assert len(conn.executed) == 2
-    assert "is_active = TRUE" in conn.executed[0][0]
+    assert "is_active = NOT manual_disabled" in conn.executed[0][0]
     assert "claude_max_usage_snapshot" in conn.executed[1][0]

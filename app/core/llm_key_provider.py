@@ -230,7 +230,7 @@ async def store_api_key(
                 encrypted_value = EXCLUDED.encrypted_value,
                 label = EXCLUDED.label,
                 priority = EXCLUDED.priority,
-                is_active = TRUE,
+                is_active = NOT llm_api_keys.manual_disabled,
                 rate_limited_until = NULL,
                 last_verified_at = NOW(),
                 updated_at = NOW()

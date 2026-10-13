@@ -516,6 +516,13 @@ class AgentSDKService:
                 "Agent SDK 사용 불가 (미설치 또는 AGENT_SDK_ENABLED=false)"
             )
 
+        from app.core.auth_provider import is_container_env_token_disabled
+
+        if await is_container_env_token_disabled():
+            raise RuntimeError(
+                "Agent SDK 사용 불가 (컨테이너 env 계정=슬롯 1 이 수동으로 꺼져 있음)"
+            )
+
         from claude_agent_sdk import query as sdk_query  # type: ignore[import]
 
         options = self._build_options(resume_session_id=session_id, system_prompt=system_prompt, model=model)

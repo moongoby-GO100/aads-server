@@ -284,6 +284,10 @@ _RELAY_SECRET_FILE = Path(os.getenv(
 ))
 _DB_OAUTH_CACHE_TTL = int(os.getenv("CLAUDE_RELAY_DB_OAUTH_CACHE_TTL", "30"))
 _DB_OAUTH_CACHE = {"rows": None, "ts": 0}
+# DB 에서 is_active=false 인 슬롯(CEO 가 설정 화면에서 끈 계정 포함). 자격증명 파일이
+# 남아 있어도 자동 선택·폴백이 이 슬롯을 고르면 안 된다. oauth-state 응답의
+# disabled_slots 로 받는다. 응답에 필드가 없으면(구버전 API·DB 조회 실패) 직전 목록을 유지한다.
+_DB_DISABLED_SLOTS = set()
 _last_429_slot = 0
 
 _session_map = {}  # type: dict
@@ -411,10 +415,13 @@ def _read_db_oauth_rows():
             with urllib_request.urlopen(req, timeout=3) as resp:
                 payload = json.loads(resp.read().decode("utf-8", errors="replace"))
             rows = payload.get("keys", []) if isinstance(payload, dict) else []
-            if isinstance(rows, list) and rows:
+            disabled = _parse_disabled_slots(payload)
+            # 활성 키가 0개여도 차단 목록이 있으면 정상 응답이다("전부 껐다").
+            if isinstance(rows, list) and (rows or disabled):
+                _apply_disabled_slots(disabled)
                 _DB_OAUTH_CACHE["rows"] = rows
                 _DB_OAUTH_CACHE["ts"] = now
-                _write_oauth_state_disk_cache(rows)
+                _write_oauth_state_disk_cache(rows, _DB_DISABLED_SLOTS)
                 return rows
         except (urllib_error.URLError, urllib_error.HTTPError, ValueError,
                 json.JSONDecodeError, OSError) as e:
@@ -425,7 +432,7 @@ def _read_db_oauth_rows():
     # 마지막으로 성공한 값을 쓴다. 토큰 회전은 드물고, 잠깐 이전 토큰을 쓰는 편이
     # 인증 자체가 사라져 모든 응답이 실패하는 것보다 낫다.
     cached = _read_oauth_state_disk_cache()
-    if cached:
+    if cached is not None:
         logger.warning(
             "DB OAuth read failed on all slots (%s) — using last known good cache", last_error)
         _DB_OAUTH_CACHE["rows"] = cached
@@ -436,11 +443,28 @@ def _read_db_oauth_rows():
     return None
 
 
-def _write_oauth_state_disk_cache(rows):
+def _parse_disabled_slots(payload):
+    """None = 응답에 정보가 없음(구버전 API·DB 조회 실패) → 기존 차단 목록을 유지한다."""
+    raw = payload.get("disabled_slots") if isinstance(payload, dict) else None
+    if not isinstance(raw, list):
+        return None
+    return {str(slot) for slot in raw if slot}
+
+
+def _apply_disabled_slots(disabled):
+    if disabled is None:
+        return
+    _DB_DISABLED_SLOTS.clear()
+    _DB_DISABLED_SLOTS.update(disabled)
+
+
+def _write_oauth_state_disk_cache(rows, disabled_slots=()):
     try:
         _OAUTH_STATE_DISK_CACHE.parent.mkdir(parents=True, exist_ok=True)
         tmp = _OAUTH_STATE_DISK_CACHE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"ts": time.time(), "keys": rows}))
+        tmp.write_text(json.dumps({
+            "ts": time.time(), "keys": rows, "disabled_slots": sorted(disabled_slots),
+        }))
         tmp.replace(_OAUTH_STATE_DISK_CACHE)
         os.chmod(str(_OAUTH_STATE_DISK_CACHE), 0o600)
     except OSError as e:
@@ -453,7 +477,11 @@ def _read_oauth_state_disk_cache():
     except (OSError, ValueError, json.JSONDecodeError):
         return None
     rows = payload.get("keys") if isinstance(payload, dict) else None
-    return rows if isinstance(rows, list) and rows else None
+    disabled = _parse_disabled_slots(payload)
+    if isinstance(rows, list) and (rows or disabled):
+        _apply_disabled_slots(disabled)
+        return rows
+    return None
 
 
 # 이어받기가 연달아 실패한 대화를 세어 둔다.
@@ -527,7 +555,7 @@ def _read_oauth_tokens():
     label2 = "slot2"
     extras = {}
     db_rows = _read_db_oauth_rows()
-    if db_rows:
+    if db_rows is not None:
         for row in db_rows:
             slot = str(row.get("slot", "") or "")
             if slot == "1":
@@ -630,6 +658,8 @@ def _pick_auth(preferred_slot=None, allow_auth_recovery=False):
         for fallback in ("1", "2"):
             if fallback != first_slot:
                 ordered_slots.append(fallback)
+    # 설정 화면에서 꺼진(DB is_active=false) 슬롯은 자격증명 파일이 있어도 고르지 않는다.
+    ordered_slots = [slot for slot in ordered_slots if slot not in _DB_DISABLED_SLOTS]
     for slot in ordered_slots:
         credential_path = _slot_credentials_path(slot)
         status = _slot_auth_status(slot, env_fallback_available=bool(tokens.get(slot)))

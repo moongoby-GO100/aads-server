@@ -241,16 +241,94 @@ async def get_oauth_key_records_async(include_rate_limited: bool = True) -> List
     except Exception as e:
         logger.warning("auth_provider: db oauth records fallback to env: %s", e)
 
-    env_records = _build_env_records()
+    # 활성 DB 키가 하나도 없는 이유가 "전부 껐다" 일 수 있다. 그때 env 토큰을 그대로
+    # 내주면 get_oauth_tokens_async 를 쓰는 직접 API 호출이 꺼진 계정을 쓴다.
+    off_slots = set(await get_disabled_anthropic_slots())
+    env_records = [r for r in _build_env_records() if r.get("slot") not in off_slots]
     _rebuild_runtime_state(env_records)
     return copy.deepcopy(env_records)
+
+
+# 마지막으로 DB 에서 성공적으로 읽은 꺼진 슬롯. DB 장애 시 "없음" 으로 착각하지 않도록
+# 이 값을 쓴다. 프로세스 재시작 직후 DB 가 죽어 있으면 알 방법이 없어 빈 값이다.
+_LAST_KNOWN_DISABLED_SLOTS: set = set()
+
+
+async def query_disabled_anthropic_slots() -> Optional[List[str]]:
+    """DB 에서 is_active=false 인 Anthropic 키의 고정 슬롯 번호.
+
+    get_oauth_key_records_async 는 활성 키만 돌려주므로, 꺼진 슬롯은 거기서 "없는 것"
+    이 된다. 릴레이는 자격증명 파일만 있으면 슬롯 1·2 를 폴백으로 고르기 때문에,
+    꺼진 슬롯을 따로 알려 줘야 화면의 끄기 토글이 실제 효과를 낸다.
+    조회 실패는 None — "꺼진 슬롯 없음"([]) 과 구분해야 호출자가 기존 차단 상태를
+    지우지 않는다.
+    """
+    global _LAST_KNOWN_DISABLED_SLOTS
+    try:
+        from app.core.db_pool import get_pool
+
+        async with get_pool().acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT key_name, is_active FROM llm_api_keys WHERE provider = 'anthropic'"
+            )
+    except Exception as e:
+        logger.warning("auth_provider: disabled slot lookup failed: %s", e)
+        return None
+    off: set = set()
+    on: set = set()
+    for r in rows:
+        slot = _KEY_NAME_SLOTS.get(str(r["key_name"]), "")
+        if slot:
+            (on if r["is_active"] else off).add(slot)
+    # 같은 슬롯을 가리키는 활성 행이 하나라도 있으면 그 슬롯은 막지 않는다.
+    _LAST_KNOWN_DISABLED_SLOTS = off - on
+    return sorted(_LAST_KNOWN_DISABLED_SLOTS)
+
+
+async def get_disabled_anthropic_slots() -> List[str]:
+    """query_disabled_anthropic_slots 의 목록형. 조회 실패 시 마지막으로 안 값을 쓴다."""
+    result = await query_disabled_anthropic_slots()
+    if result is None:
+        return sorted(_LAST_KNOWN_DISABLED_SLOTS)
+    return result
+
+
+async def is_container_env_token_disabled() -> bool:
+    """컨테이너 env ANTHROPIC_AUTH_TOKEN(= 슬롯 1)의 계정이 꺼져 있는가.
+
+    claude-oauth-wrapper.sh 를 토큰 지정 없이 실행하는 경로(Agent SDK)는 이 env 토큰을
+    그대로 쓴다. 슬롯 1 이 꺼져 있으면 그 경로를 열어 두면 안 된다.
+    """
+    return "1" in set(await get_disabled_anthropic_slots())
+
+
+async def refresh_oauth_token_state() -> None:
+    """켜기/끄기 직후 정렬된 토큰 캐시(_ordered_tokens)를 DB 기준으로 다시 만든다.
+
+    이 호출 없이는 sync getter(get_oauth_tokens 등)가 다음 async 조회 때까지
+    꺼진 계정 토큰을 계속 내준다.
+    """
+    await query_disabled_anthropic_slots()
+    await get_oauth_key_records_async(include_rate_limited=True)
+
+
+def _enabled_ordered_tokens() -> List[str]:
+    """_ordered_tokens 에서 꺼진 슬롯의 토큰을 뺀다. 매 호출 시 적용되는 2차 방어선."""
+    if not _LAST_KNOWN_DISABLED_SLOTS:
+        return list(_ordered_tokens)
+    off_values = {
+        r.get("value", "")
+        for r in _runtime_key_records
+        if r.get("slot") in _LAST_KNOWN_DISABLED_SLOTS
+    }
+    return [t for t in _ordered_tokens if t not in off_values]
 
 
 # ── 공개 API ────────────────────────────────────────────────────────
 
 def get_oauth_tokens() -> List[str]:
     """[Primary, Fallback] 순서로 유효한 토큰 반환. 빈 토큰 제외."""
-    return list(_ordered_tokens)
+    return _enabled_ordered_tokens()
 
 
 async def get_oauth_tokens_async() -> List[str]:
@@ -261,12 +339,14 @@ async def get_oauth_tokens_async() -> List[str]:
 
 def get_primary_token() -> str:
     """1순위 토큰 반환. 없으면 빈 문자열."""
-    return _ordered_tokens[0] if _ordered_tokens else ""
+    tokens = _enabled_ordered_tokens()
+    return tokens[0] if tokens else ""
 
 
 def get_fallback_token() -> str:
     """2순위 토큰 반환. 없으면 빈 문자열."""
-    return _ordered_tokens[1] if len(_ordered_tokens) > 1 else ""
+    tokens = _enabled_ordered_tokens()
+    return tokens[1] if len(tokens) > 1 else ""
 
 
 def get_base_url() -> str:
@@ -439,8 +519,9 @@ def is_token_rate_limited(token):
     return True
 
 def get_available_tokens():
-    available = [t for t in _ordered_tokens if not is_token_rate_limited(t)]
-    return available if available else list(_ordered_tokens)
+    enabled = _enabled_ordered_tokens()
+    available = [t for t in enabled if not is_token_rate_limited(t)]
+    return available if available else enabled
 
 
 
@@ -455,7 +536,7 @@ def create_anthropic_client(token: Optional[str] = None) -> AsyncAnthropic:
 
 def has_valid_token() -> bool:
     """유효한 OAuth 토큰이 하나 이상 있는지."""
-    return bool(_ordered_tokens)
+    return bool(_enabled_ordered_tokens())
 
 
 _rebuild_runtime_state(_build_env_records())

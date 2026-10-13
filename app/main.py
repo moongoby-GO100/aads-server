@@ -789,6 +789,7 @@ async def lifespan(app: FastAPI):
                         UPDATE llm_api_keys
                         SET is_active = TRUE, updated_at = NOW()
                         WHERE is_active = FALSE
+                          AND manual_disabled = FALSE
                           AND (rate_limited_until IS NULL OR rate_limited_until <= NOW())
                           AND encrypted_value IS NOT NULL
                           AND key_name NOT IN ('OPENAI_API_KEY')

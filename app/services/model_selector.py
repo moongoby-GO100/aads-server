@@ -271,6 +271,8 @@ def _is_slot_available(slot: str) -> bool:
 # Agent SDK OAuth 토큰 — auth_provider 경유 (R-AUTH)
 from app.core.auth_provider import (  # noqa: E402
     LAST_RESORT_SLOTS as _AP_LAST_RESORT_SLOTS,
+    get_disabled_anthropic_slots as _ap_get_disabled_slots,
+    is_container_env_token_disabled as _ap_env_token_disabled,
     get_oauth_tokens as _ap_get_tokens,
     get_oauth_key_records_async as _ap_get_key_records_async,
     get_token_labels as _ap_get_labels,
@@ -394,6 +396,9 @@ async def _get_claude_slot_records(project: str = "") -> Dict[str, Dict[str, Any
         records = []
     slot_records: Dict[str, Dict[str, Any]] = {}
     dropped: List[str] = []
+    # DB 에서 꺼진(is_active=false, CEO 수동 끄기 포함) 슬롯. 키 조회가 실패해 env
+    # 폴백 레코드가 돌아온 경우에도 꺼진 계정이 후보로 되살아나지 않게 한다.
+    disabled_slots = set(await _ap_get_disabled_slots())
     # 대표님이 꺼 둔 슬롯은 "사고" 가 아니다. 충돌 경고에 섞으면 진짜 충돌이
     # 묻힌다 — 오늘 하루 고친 것의 절반이 그런 거짓 경보였다.
     gated_off: List[str] = []
@@ -401,6 +406,8 @@ async def _get_claude_slot_records(project: str = "") -> Dict[str, Dict[str, Any
         slot = str(record.get("slot", "") or "")
         if slot not in _KNOWN_SLOTS:
             dropped.append("%s(slot=%r)" % (record.get("label") or record.get("key_name"), slot))
+            continue
+        if slot in disabled_slots:
             continue
         if (
             slot in _LAST_RESORT_SLOTS
@@ -2808,7 +2815,11 @@ async def call_stream(
     except Exception as _sp_err:
         logger.warning("slot_project_order_failed: %s", str(_sp_err)[:120])
     if not _ACCOUNT_SLOTS:
-        _ACCOUNT_SLOTS = ["2", "1"] if _CLAUDE_RELAY_NAVER_FIRST else ["1", "2"]
+        _off_slots = set(await _ap_get_disabled_slots())
+        _ACCOUNT_SLOTS = [
+            s for s in (["2", "1"] if _CLAUDE_RELAY_NAVER_FIRST else ["1", "2"])
+            if s not in _off_slots
+        ]
     _MODEL_DOWNGRADE = {
         "claude-fable-5-1": ["claude-fable-5-1", "claude-fable-5", "claude-opus", "claude-sonnet"],
         "claude-fable-5": ["claude-fable-5", "claude-opus", "claude-sonnet"],
@@ -4668,18 +4679,29 @@ def _sdk_first_event_timeout_sec() -> Optional[float]:
     return min(value, general_first) if general_first > 0 else value
 
 
-def _iter_agent_sdk_fallback(
+async def _iter_agent_sdk_fallback(
     model: str,
     system_prompt: str,
     messages: List[Dict[str, Any]],
     session_id: Optional[str],
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    return iter_with_stall_timeout(
+    # SDK 는 계정을 지정받지 않고 컨테이너 env 토큰(슬롯 1)을 쓴다. 슬롯 1 이 꺼져
+    # 있으면 슬롯 2 가 선택된 상태에서도 꺼진 계정으로 나가므로 error 로 건너뛴다.
+    # 빈 스트림을 돌려주면 호출부가 성공으로 오인해 return 한다.
+    if await _ap_env_token_disabled():
+        logger.warning("sdk_fallback_skipped: slot1(container env token) disabled model=%s", model)
+        yield {
+            "type": "error",
+            "content": "sdk_fallback_skipped: container env account (slot 1) is manually disabled",
+        }
+        return
+    async for event in iter_with_stall_timeout(
         _stream_agent_sdk(model, system_prompt, messages, session_id=session_id),
         label=f"agent_sdk:{model}",
         first_output_sec=_sdk_first_event_timeout_sec(),
         as_error_event=True,
-    )
+    ):
+        yield event
 
 
 _NO_SLOT_ALERT_AT: Dict[str, float] = {}

@@ -137,7 +137,7 @@ async def test_update_llm_key_triggers_registry_sync(monkeypatch):
 async def test_activate_llm_key_triggers_registry_sync(monkeypatch):
     conn = FakeConn(
         fetchrows=[
-            {"id": 7, "provider": "anthropic", "key_name": "ANTHROPIC_AUTH_TOKEN", "priority": 1},
+            {"id": 7, "provider": "anthropic", "key_name": "ANTHROPIC_AUTH_TOKEN", "priority": 1, "manual_disabled": False},
             {"id": 7, "provider": "anthropic", "key_name": "ANTHROPIC_AUTH_TOKEN", "is_active": True, "updated_at": None},
         ]
     )

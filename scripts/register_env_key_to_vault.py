@@ -97,7 +97,7 @@ async def register(
                     encrypted_value = EXCLUDED.encrypted_value,
                     label = EXCLUDED.label,
                     notes = EXCLUDED.notes,
-                    is_active = TRUE,
+                    is_active = NOT llm_api_keys.manual_disabled,
                     last_verified_at = NOW(),
                     updated_at = NOW()
                 RETURNING id
