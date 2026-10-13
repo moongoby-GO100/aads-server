@@ -4311,6 +4311,13 @@ async def _stream_cli_relay_once(
                     if event.get("type") == "result" and event.get("is_error"):
                         error_text = _redact_secret_text(event.get("result", "CLI error"))
                         logger.warning("cli_relay_result_error: %s", error_text[:100])
+                        if _classify_claude_auth_error(error_text) == "subscription_inactive":
+                            # 차단 문장을 그대로 올리지 않는다. 슬롯 폴백이 이 표식으로
+                            # 다음 계정에 넘기고, 모두 실패했을 때만 짧은 안내가 나간다.
+                            error_text = (
+                                "subscription_inactive: Claude 구독이 비활성인 계정이라 "
+                                "건너뜁니다 (slot=%s)" % (oauth_slot or "auto")
+                            )
                         yield {"type": "error", "content": error_text}
                         return
 
@@ -4913,7 +4920,10 @@ async def _stream_cli_relay(
         # allow exactly one immediate same-slot retry before account fallback.
         if (
             _is_cli_auth_error(last_error) and not auth_retry_used
-            and not any(marker in last_error for marker in ("oauth_slot_unavailable", "oauth_slot_busy"))
+            and not any(
+                marker in last_error
+                for marker in ("oauth_slot_unavailable", "oauth_slot_busy", "subscription_inactive")
+            )
         ):
             auth_retry_used = True
             logger.warning(
@@ -5958,6 +5968,8 @@ _PROVIDER_FAILURE_TEXTS = (
     "oauth access token has expired",
     "failed to authenticate",
     "your session has ended. please log in again",
+    "disabled claude subscription access",
+    "organization has disabled",
 )
 
 

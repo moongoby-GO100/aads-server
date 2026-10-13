@@ -80,6 +80,50 @@ def _earliest_reset(*pairs) -> Optional[datetime]:
     return min(candidates) if candidates else None
 
 
+def subscription_inactive(sub: Optional[Dict[str, Any]]) -> bool:
+    """릴레이가 지금 구독 보류로 건너뛰고 있는 계정인가.
+
+    판단은 릴레이의 hold 한 곳만 따른다. status(canceled/free)는 마지막 확인
+    결과일 뿐 신선도를 담지 않아서, 보류가 만료된 뒤에도 영구 비활성으로
+    읽으면 릴레이는 쓰는데 정렬은 뒤로 보내는 불일치가 생긴다.
+    """
+    return bool(sub and sub.get("hold"))
+
+
+async def relay_slot_subscriptions() -> Dict[str, Dict[str, Any]]:
+    """슬롯 번호 -> {status, checked_at, hold}. 릴레이 헬스에서 읽는다.
+
+    자격증명과 검증 사이드카는 호스트에만 있어 컨테이너가 직접 볼 수 없다.
+    릴레이에 닿지 못하면 빈 값을 돌려준다 — 모르는 것을 '해지'로 단정하지 않는다.
+    """
+    try:
+        import httpx
+
+        from app.api.ops import _CLAUDE_RELAY_URL, _load_relay_secret
+
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(
+                "%s/health" % _CLAUDE_RELAY_URL,
+                headers={"X-Claude-Relay-Secret": _load_relay_secret()},
+            )
+        response.raise_for_status()
+        slot_auth = response.json().get("slot_auth") or {}
+    except Exception as exc:
+        logger.warning("relay_slot_subscriptions_failed", error=str(exc)[:160])
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for slot, status in slot_auth.items():
+        if not isinstance(status, dict):
+            continue
+        sub = status.get("subscription") or {}
+        out[str(slot)] = {
+            "status": sub.get("status"),
+            "checked_at": sub.get("checked_at"),
+            "hold": bool(status.get("subscription_hold")),
+        }
+    return out
+
+
 async def usage_view(provider: str) -> List[Dict[str, Any]]:
     """계정별 (key_name, 한도남음, 가장 이른 갱신시각). 정렬 판단의 원재료다."""
     from app.core.db_pool import get_pool
@@ -98,6 +142,7 @@ async def usage_view(provider: str) -> List[Dict[str, Any]]:
     )
 
     snaps: Dict[str, Dict[str, Any]] = {}
+    subs_by_key: Dict[str, Dict[str, Any]] = {}
     if provider == "codex":
         for r in await pool.fetch(
             "SELECT key_name, used_percent, resets_at, window_minutes FROM codex_usage_snapshots"
@@ -118,6 +163,10 @@ async def usage_view(provider: str) -> List[Dict[str, Any]]:
         # 클로드는 5시간 창과 주간 창을 따로 쓴다. 둘 중 여유가 있는 창의
         # 이른 리셋을 본다 — 이미 다 쓴 창의 리셋은 태울 한도가 없다.
         slot_of = await _anthropic_slot_map()
+        relay_subs = await relay_slot_subscriptions()
+        for slot_no, key_name in slot_of.items():
+            if slot_no in relay_subs:
+                subs_by_key[key_name] = relay_subs[slot_no]
         for r in await pool.fetch(
             """
             SELECT DISTINCT ON (account_slot) account_slot,
@@ -143,7 +192,12 @@ async def usage_view(provider: str) -> List[Dict[str, Any]]:
         snap = snaps.get(row["key_name"], {})
         limited_until = row["rate_limited_until"]
         headroom = snap.get("headroom")
-        has_quota = bool(row["is_active"]) and not (limited_until and limited_until > now)
+        sub = subs_by_key.get(row["key_name"])
+        sub_inactive = subscription_inactive(sub)
+        has_quota = (
+            bool(row["is_active"]) and not (limited_until and limited_until > now)
+            and not sub_inactive
+        )
         if has_quota and headroom is not None and headroom <= _MIN_HEADROOM_PCT:
             has_quota = False
         out.append({
@@ -155,6 +209,8 @@ async def usage_view(provider: str) -> List[Dict[str, Any]]:
             "headroom_pct": headroom,
             "resets_at": snap.get("reset"),
             "has_quota": has_quota,
+            "subscription_inactive": sub_inactive,
+            "subscription_status": (sub or {}).get("status"),
         })
     return out
 
@@ -177,7 +233,7 @@ async def _anthropic_slot_map() -> Dict[str, str]:
 def auto_order(accounts: List[Dict[str, Any]]) -> List[str]:
     """곧 리셋될 한도부터 태운다.
 
-      1) 한도 남은 계정 먼저
+      1) 한도 남은 계정 먼저 (구독이 해지돼 보류 중인 계정은 한도 없음으로 본다)
       2) 그중 갱신 시각이 이른 것 먼저 (갱신 정보가 없으면 뒤로)
       3) 동률이면 잔량 많은 것, 그래도 동률이면 기존 우선순위
     """
@@ -185,7 +241,7 @@ def auto_order(accounts: List[Dict[str, Any]]) -> List[str]:
 
     def key(a: Dict[str, Any]):
         return (
-            0 if a["has_quota"] else 1,
+            0 if a["has_quota"] and not a.get("subscription_inactive") else 1,
             a["resets_at"] or far_future,
             -(a["headroom_pct"] if a["headroom_pct"] is not None else -1),
             a["priority"],

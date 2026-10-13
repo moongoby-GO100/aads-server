@@ -448,6 +448,12 @@ async def llm_overview() -> dict[str, Any]:
     if any(row["key_name"] == "ANTHROPIC_AUTH_TOKEN_4" for row in rows):
         slot_of["ANTHROPIC_AUTH_TOKEN_4"] = "slot4"
 
+    # 슬롯별 구독 상태(active/canceled/free)와 마지막 확인 시각. 릴레이만 안다.
+    # 못 읽으면 필드만 비운다 — 화면 전체를 죽이지 않는다.
+    from app.services.account_primary import relay_slot_subscriptions
+
+    slot_subscriptions = await relay_slot_subscriptions()
+
     now = datetime.now(timezone.utc)
     accounts: list[dict[str, Any]] = []
     providers: dict[str, dict[str, Any]] = {}
@@ -474,7 +480,14 @@ async def llm_overview() -> dict[str, Any]:
                 # "bound" while showing that account's quota under another email is
                 # more dangerous than asking for login again.
                 binding = {**binding, "needs_login": True}
+            sub = (
+                slot_subscriptions.get(slot[4:] if slot and slot.startswith("slot") else "")
+                if provider == "anthropic" else None
+            ) or {}
             accounts.append({
+                "subscription_status": sub.get("status"),
+                "subscription_checked_at": sub.get("checked_at"),
+                "subscription_hold": bool(sub.get("hold")),
                 "key_name": row["key_name"], "provider": provider, "label": row["label"],
                 "priority": row["priority"], "is_active": row["is_active"],
                 "manual_disabled": bool(row["manual_disabled"]),

@@ -51,8 +51,13 @@ from scripts.claude_model_contract import (  # noqa: E402
     CONTRACT_VERSION, EXACT_MODEL_IDS, ModelObservation, resolve_model, session_key,
 )
 from app.core.claude_oauth_credentials import (  # noqa: E402
+    SUBSCRIPTION_INACTIVE,
+    SUBSCRIPTION_RECHECK_SEC,
     classify_auth_error,
+    is_subscription_inactive_text,
+    read_access_token,
     read_slot_auth_status,
+    record_subscription_profile,
     record_slot_validation,
     redact_secret_text,
 )
@@ -663,6 +668,11 @@ def _pick_auth(preferred_slot=None, allow_auth_recovery=False):
     for slot in ordered_slots:
         credential_path = _slot_credentials_path(slot)
         status = _slot_auth_status(slot, env_fallback_available=bool(tokens.get(slot)))
+        # 구독이 해지된 슬롯은 켜 둔 채로 건너뛴다(보류). 복구 요청
+        # (allow_auth_recovery)으로도 풀지 않는다 — 토큰 문제가 아니다.
+        if status.get("status") == SUBSCRIPTION_INACTIVE:
+            logger.info("slot=%s skipped: subscription inactive (hold)", slot)
+            continue
         terminal_auth_failure = status.get("status") in {
             "revoked", "authentication_failed",
         }
@@ -693,6 +703,81 @@ def _pick_auth(preferred_slot=None, allow_auth_recovery=False):
         "source": "none",
         "status": {},
     }
+
+
+def _is_subscription_banner_event(event):
+    """assistant 메시지가 구독 접근 차단 안내문 하나뿐인가."""
+    blocks = (event.get("message") or {}).get("content") or []
+    if not isinstance(blocks, list) or not blocks:
+        return False
+    return all(
+        isinstance(block, dict)
+        and block.get("type") == "text"
+        and is_subscription_inactive_text(block.get("text"))
+        for block in blocks
+    )
+
+
+_SUBSCRIPTION_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
+_SUBSCRIPTION_RECHECK_INTERVAL_SEC = int(os.getenv(
+    "CLAUDE_SUBSCRIPTION_RECHECK_SEC", str(SUBSCRIPTION_RECHECK_SEC)))
+
+
+def _fetch_oauth_profile(access_token):
+    """읽기 전용 프로필 조회. CLI 를 실행하지 않고 한도도 쓰지 않는다."""
+    req = urllib_request.Request(_SUBSCRIPTION_PROFILE_URL, headers={
+        "Authorization": "Bearer " + access_token,
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": "aads-claude-relay/subscription-check",
+    })
+    with urllib_request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _recheck_slot_subscription(slot, fetch_profile=_fetch_oauth_profile):
+    """슬롯 한 개의 구독 상태를 갱신한다. 실패하면 상태를 바꾸지 않는다."""
+    path = _slot_credentials_path(slot)
+    access_token = read_access_token(path)
+    if not access_token:
+        return ""
+    observed_at = time.time()
+    try:
+        profile = fetch_profile(access_token)
+    except Exception as exc:  # 토큰 값이 오류 문구에 섞이지 않게 걸러서 남긴다
+        logger.warning("subscription recheck failed slot=%s: %s", slot, redact_secret_text(exc)[:160])
+        return ""
+    try:
+        return record_subscription_profile(path, profile, observed_at=observed_at)
+    except OSError as exc:
+        logger.warning("subscription state write failed slot=%s: %s", slot, exc)
+        return ""
+
+
+async def _subscription_recheck_loop():
+    """30분마다 구독 상태를 다시 본다 — 해지된 슬롯이 돌아오면 자동으로 쓴다."""
+    await asyncio.sleep(10)
+    loop = asyncio.get_event_loop()
+    while True:
+        try:
+            _read_oauth_tokens()
+            slots = {"1", "2"} | set(_EXTRA_SLOT_AUTH)
+            for slot in sorted(slots):
+                if slot in _DB_DISABLED_SLOTS or not _slot_credentials_path(slot).is_file():
+                    continue
+                before = _slot_auth_status(slot).get("status")
+                state = await loop.run_in_executor(None, _recheck_slot_subscription, slot)
+                if state:
+                    after = _slot_auth_status(slot).get("status")
+                    if before != after:
+                        logger.warning(
+                            "slot=%s subscription=%s auth_status %s -> %s",
+                            slot, state, before, after,
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("subscription recheck loop error: %s", redact_secret_text(exc))
+        await asyncio.sleep(max(60, _SUBSCRIPTION_RECHECK_INTERVAL_SEC))
 
 
 def _pick_token(preferred_slot=None):
@@ -2013,6 +2098,11 @@ async def handle_stream(request):
                     elif evt_type == "user":
                         event = _annotate_claude_event(event, aads_session_id)
                         line_to_write = json.dumps(event).encode("utf-8")
+                    if evt_type == "assistant" and _is_subscription_banner_event(event):
+                        # 구독 차단 안내문이 답변 본문으로 새지 않게 한다.
+                        # 실패 사실은 뒤따르는 result(is_error) 이벤트가 전한다.
+                        logger.warning("subscription banner suppressed: slot=%s", slot)
+                        continue
                     if evt_type == "result" and event.get("is_error"):
                         # 종료 후 stderr 와 합쳐서 내보낸다(아래 flush 지점).
                         pending_error_event = event
@@ -3279,6 +3369,7 @@ async def _on_startup(app):
     logger.info("Semaphore created: max_concurrent=%d", _MAX_CONCURRENT)
     # AADS-191B: lease watchdog 시작
     app["_lease_watchdog_task"] = asyncio.create_task(_lease_watchdog())
+    app["_subscription_recheck_task"] = asyncio.create_task(_subscription_recheck_loop())
     logger.info(
         "Lease watchdog started: max_lease_sec=%.0f os_timeout=%s stderr_read_timeout=%.1f",
         _MAX_LEASE_SEC, _OS_TIMEOUT_ENABLED, _STDERR_READ_TIMEOUT_SEC,
