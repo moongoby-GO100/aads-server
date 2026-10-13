@@ -140,6 +140,19 @@ def test_release_source_order_does_not_depend_on_platform_path_ordering(tmp_path
     assert _source_files(CaseFoldPath(tmp_path)) == expected
 
 
+def test_release_zip_bytes_do_not_depend_on_build_platform(tmp_path, monkeypatch):
+    import sys
+
+    from pc_agent.release_archive import build_agent_zip
+
+    (tmp_path / "VERSION").write_text("1.0.2", encoding="utf-8")
+    (tmp_path / "agent.py").write_text("release", encoding="utf-8")
+    linux = build_agent_zip(tmp_path)
+    # zipfile 은 ZipInfo 를 만들 때 sys.platform 으로 create_system 을 정한다.
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert build_agent_zip(tmp_path) == linux
+
+
 def test_release_archive_ignores_unregistered_runtime_files_and_caches(tmp_path):
     from pc_agent.release_archive import cached_agent_zip, ticketed_agent_zip
 

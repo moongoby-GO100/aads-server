@@ -39,6 +39,18 @@ def _release_files(agent_dir: Path) -> list[str]:
     return files
 
 
+def _zip_entry(name: str) -> zipfile.ZipInfo:
+    """플랫폼과 무관하게 같은 바이트가 나오는 ZIP 항목.
+
+    zipfile 은 실행 플랫폼에 따라 create_system 을 바꾼다(Windows 0, 그 외 3).
+    이 값이 central directory 에 들어가므로 Windows 빌드 러너의 digest 가 Linux
+    에서 쓴 manifest 와 달라져 EXE 발행이 막혔다. 3(Unix)으로 고정한다.
+    """
+    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    info.create_system = 3
+    return info
+
+
 def build_agent_zip(agent_dir: Path, install_ticket: str | None = None) -> bytes:
     buf = io.BytesIO()
     # STORED entries do not vary with zlib or CPython compression versions.
@@ -47,11 +59,11 @@ def build_agent_zip(agent_dir: Path, install_ticket: str | None = None) -> bytes
             path = agent_dir / name
             if not path.resolve().is_relative_to(agent_dir.resolve()):
                 raise ValueError("Invalid PC ZIP manifest path")
-            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info = _zip_entry(name)
             info.external_attr = 0o644 << 16
             zf.writestr(info, path.read_bytes())
         if install_ticket:
-            info = zipfile.ZipInfo("install_ticket.txt", date_time=(1980, 1, 1, 0, 0, 0))
+            info = _zip_entry("install_ticket.txt")
             zf.writestr(info, install_ticket)
     return buf.getvalue()
 
@@ -69,7 +81,7 @@ def ticketed_agent_zip(agent_dir: Path, ticket: str | None = None) -> bytes:
         return data
     buf = io.BytesIO(data)
     with zipfile.ZipFile(buf, "a", zipfile.ZIP_STORED) as zf:
-        info = zipfile.ZipInfo("install_ticket.txt", date_time=(1980, 1, 1, 0, 0, 0))
+        info = _zip_entry("install_ticket.txt")
         zf.writestr(info, ticket)
     return buf.getvalue()
 
