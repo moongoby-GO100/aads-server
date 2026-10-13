@@ -2807,21 +2807,46 @@ def _resolve_antigravity_model(model):
     return _ANTIGRAVITY_MODEL_MAP.get(str(model or "").strip())
 
 
-def _build_antigravity_command(agy_bin, agy_model):
+# 채팅 답변은 텍스트만 만든다. agy 기본 에이전트는 셸(command) 도구를 쓰려다 headless 에서
+# 권한 프롬프트를 못 띄워 자동 거부되고, 그 턴은 무출력으로 끝난다(실측 2026-10-14).
+# permissions.allow 를 넓히는 대신 도구 목록이 빈 커스텀 에이전트로 도구 자체를 없앤다.
+_ANTIGRAVITY_TEXT_AGENT = "aads-chat-text"
+_ANTIGRAVITY_TEXT_AGENT_MD = """---
+name: aads-chat-text
+description: Text-only chat responder without any tools
+mainAgent: true
+tools: []
+---
+# System
+You answer in plain text only. You have no tools and cannot run commands or read files.
+Answer directly from the conversation provided.
+"""
+
+
+def _write_antigravity_text_agent(workdir):
+    """workdir/.agents/agents/ 에 도구 없는 채팅 에이전트 정의를 쓴다."""
+    agents_dir = Path(workdir) / ".agents" / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / (_ANTIGRAVITY_TEXT_AGENT + ".md")).write_text(
+        _ANTIGRAVITY_TEXT_AGENT_MD, encoding="utf-8")
+
+
+def _build_antigravity_command(agy_bin, agy_model, agent=None):
     """프롬프트는 argv 에 싣지 않는다(stdin 으로 전달).
 
     `-p` 는 값을 받는 플래그라 뒤에 다른 플래그를 두면 그것을 프롬프트로 먹는다.
     그래서 `-p=""` 를 반드시 맨 끝에 둔다.
     """
-    return [
+    cmd = [
         agy_bin,
         "--input-format", "stream-json",
         "--output-format", "stream-json",
         "--model", agy_model,
         "--print-timeout", _ANTIGRAVITY_PRINT_TIMEOUT,
-        "--sandbox",
-        '-p=',
     ]
+    if agent:
+        cmd += ["--agent", agent]
+    return cmd + ["--sandbox", "-p="]
 
 
 def _build_antigravity_stdin_payload(prompt):
@@ -2979,7 +3004,8 @@ async def handle_antigravity_stream(request):
             stdin_error = None
             result_seen = False
             try:
-                cmd = _build_antigravity_command(agy_bin, agy_model)
+                _write_antigravity_text_agent(workdir)
+                cmd = _build_antigravity_command(agy_bin, agy_model, agent=_ANTIGRAVITY_TEXT_AGENT)
                 stdin_payload = _build_antigravity_stdin_payload(prompt)
                 logger.info(
                     "Antigravity: model=%s agy_model=%s prompt_len=%d session=%s",

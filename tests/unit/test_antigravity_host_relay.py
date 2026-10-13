@@ -81,6 +81,22 @@ def test_command_has_no_prompt_and_empty_p_flag_is_last(relay):
     ]
 
 
+def test_text_agent_is_toolless_and_never_widens_permissions(relay):
+    md = relay._ANTIGRAVITY_TEXT_AGENT_MD
+    front = md.split("---")[1]
+    assert "name: %s" % relay._ANTIGRAVITY_TEXT_AGENT in front
+    assert "mainAgent: true" in front
+    assert "tools: []" in front
+    assert "allow" not in md.lower() and "skip-permissions" not in md
+
+
+def test_command_with_agent_disables_tools_and_keeps_p_flag_last(relay):
+    cmd = relay._build_antigravity_command("agy", "gemini-3.8-flash-high", agent="aads-chat-text")
+    assert cmd[cmd.index("--agent") + 1] == "aads-chat-text"
+    assert "--dangerously-skip-permissions" not in cmd
+    assert "--sandbox" in cmd and cmd[-1] == "-p="
+
+
 def test_stdin_payload_is_single_user_event_line(relay):
     prompt = '한글 "따옴표"\n둘째 줄\t탭 \\ 역슬래시'
     payload = relay._build_antigravity_stdin_payload(prompt)
@@ -209,6 +225,33 @@ async def test_success_streams_ndjson_contract_and_cleans_workdir(relay, monkeyp
     assert not Path(workdir).exists()
     assert "sk-ant-oat01-secret" not in record.read_text()
     assert json.loads(stdin_record.read_text()) == {"event": "user", "message": {"content": "ping"}}
+
+
+@pytest.mark.asyncio
+async def test_handler_runs_agy_with_toolless_agent_defined_in_workdir(relay, monkeypatch, tmp_path):
+    record = tmp_path / "record.txt"
+    agent_copy = tmp_path / "agent_copy.md"
+    script = (
+        f'echo "$@" > {record}\n'
+        f'cp .agents/agents/aads-chat-text.md {agent_copy}\n'
+    ) + _ok_script("서울")
+    status, events, _ = await _call(relay, monkeypatch, tmp_path, script)
+    assert status == 200 and events[-1]["type"] == "result"
+    argv = record.read_text()
+    assert "--agent aads-chat-text" in argv
+    assert "--dangerously-skip-permissions" not in argv
+    copied = agent_copy.read_text()
+    assert "tools: []" in copied and copied == relay._ANTIGRAVITY_TEXT_AGENT_MD
+
+
+@pytest.mark.asyncio
+async def test_command_permission_denial_without_output_is_still_an_error_event(relay, monkeypatch, tmp_path):
+    result = _result(response="")
+    result["result"]["denied_actions"] = [{"action": "command", "display_name": "RunCommand"}]
+    denied = _emit(INIT_EVENT, result)
+    status, events, _ = await _call(relay, monkeypatch, tmp_path, "cat >/dev/null\n" + denied)
+    assert status == 200
+    assert events[-1]["type"] == "error" and "empty response" in events[-1]["content"]
 
 
 @pytest.mark.asyncio
