@@ -1,0 +1,160 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>[AADS/오비서] 관리자 직원 계약 통합 검토 문서 v1.0.1</title><style>body{margin:0;background:#f4f6fa;color:#182237;font:16px/1.7 system-ui,sans-serif}main{max-width:1100px;margin:auto;padding:24px}nav{display:flex;flex-wrap:wrap;gap:12px;position:sticky;top:0;background:white;padding:16px;border-bottom:1px solid #ddd}nav a,.button{padding:9px 14px;background:#e8efff;color:#164bb4;border-radius:8px;text-decoration:none;min-height:26px}article,.note{background:white;padding:24px;margin:20px 0;border:1px solid #dfe5ef;border-radius:12px;scroll-margin-top:110px}h1{font-size:25px}h2{font-size:21px;margin-top:28px}.table{overflow:auto}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:10px;border:1px solid #dfe5ef;text-align:left;vertical-align:top}th{background:#edf2fb}pre{background:#edf2fb;padding:16px;overflow:auto}code{overflow-wrap:anywhere}p{overflow-wrap:anywhere}@media(max-width:600px){main{padding:12px}article,.note{padding:16px}h1{font-size:21px}nav{position:static}}</style></head><body><nav><a href="#plan">기획</a><a href="#design">화면·API 설계</a><a href="#prd">PRD</a><a href="AADS-LAYOUT-026_obys-admin-contract-mockup.html">클릭 목업 열기</a><a href="sources-v1.0.1.zip" download>원본 4종·검증자료 다운로드</a></nav><main><h1>오비서 관리자 직원 계약 통합 · 검토 문서</h1><p>v1.0.1 · 초안 · 가상 데이터 목업 / 기존 정본 키 유지</p><section class="note"><b>저장·갱신 기준</b><p>실행 프로젝트 AADS / 업무 대상 오비서(ACCT). 기획·설계·PRD·목업은 검토 초안입니다. 운영 구현·승인을 뜻하지 않습니다.</p><p>파일은 FLOW 문서 ID와 업무명으로 구분합니다. 제목은 프로젝트·제품·업무·종류·버전·초안 상태를 포함합니다. 다음 수정은 같은 document_key와 파일 경로를 유지하고 DB에 새 버전을 추가합니다. 같은 버전·다른 본문 및 오래된 generation은 409로 거부되며, 같은 판본 재요청은 멱등 처리됩니다.</p><p>R-DOC 프롬프트는 현재 enabled=false인 초안입니다. 이번 정리는 기존 FLOW 파일명 규칙을 적용하며 전역 규칙을 활성화하지 않습니다.</p></section><article id="plan"><h1>[AADS/오비서] 현재 관리자 직원 계약 통합 — 기획 v1.0.1 (검토 초안)</h1>
+<p>버전: 1.0.1 / 상태: 검토용 초안, 승인본 아님</p>
+<p>근거 조회: 2026-10-06 13:25:36 KST (DB NOW 실측)</p>
+<p>실행 프로젝트: AADS / 업무 대상: 카페24 오비서(ACCT)</p>
+<h2>문제와 현재 판정</h2>
+<p>현재 관리자 화면에서 직원 가입을 승인해도 계약조건을 입력하는 경로가 이어지지 않는다. 기존 화면으로 이동하라는 안내는 사용자가 정상 업무를 완료할 수 있다는 증거가 아니다. 이번 산출물은 기획·설계·PRD·목업이며 운영 구현 또는 배포 완료를 의미하지 않는다.</p>
+<div class="table"><table><thead><tr><th>확인한 사실</th><th>근거</th><th>영향</th></tr></thead><tbody>
+<tr><td>현재 화면의 직원·급여 메뉴에 직원 현황과 계약·인사증빙이 존재</td><td><code>app/static/apps/obys/mockup-v4-1.html:51</code></td><td>메뉴 구조를 유지하며 업무를 연결할 수 있음</td></tr>
+<tr><td>계약·인사증빙은 계약 목록 API와 원본·서명 이력 중심이고 legacy gate 사용</td><td>같은 파일 <code>hr-docs</code> 설정</td><td>관리자 작성·저장·요청 동선이 끊어짐</td></tr>
+<tr><td>기존 화면에 contractForm, 미리보기, 저장, 서명요청 동작 존재</td><td><code>app/static/apps/obys/index.html</code></td><td>검증된 서비스 계약과 필드 재사용 가능</td></tr>
+<tr><td>계약 저장·서명요청·재알림·서명본 PDF API 존재</td><td><code>app/api/obys_finance.py:708</code> 이후</td><td>신규 API를 무조건 만드는 대신 기존 API와 연결</td></tr>
+<tr><td>즉시 구현 작업 실행 중이었음</td><td>Runner API <code>runner-6ed52003</code></td><td>기획 보고 선행을 위해 terminate_task 실행, terminated 반환 확인</td></tr>
+</tbody></table></div>
+<p>운영 로그인 후 현재 화면에 양재혁 직원의 승인 상태가 표시되는지, 실제 계약 작성이 가능한지는 이번 기획 작업에서 다시 검증하지 않았다. 과거 메시지의 가입·승인 정보는 현재 운영 실측과 구분한다.</p>
+<h2>대상 사용자와 권장안</h2>
+<p>대표·승인 권한이 있는 인사 담당은 승인 직후 계약을 작성한다. 점포 담당은 자신에게 허용된 회사·점포만 처리한다. 직원은 자신의 계약을 확인하고 서명하며 서명본을 내려받는다.</p>
+<p>권장: 현재 V4.1 관리자 화면의 기존 직원·급여 메뉴를 유지하고, 직원 행/상세에 <strong>계약 작성</strong> 버튼을 추가한다. 같은 직원·회사·점포 문맥에서 작성 패널을 열고 계약·인사증빙에도 같은 편집기를 제공한다. 두 진입점은 하나의 계약 편집기와 API를 사용한다.</p>
+<div class="table"><table><thead><tr><th>안</th><th>내용</th><th>판단</th></tr></thead><tbody>
+<tr><td>A</td><td>현재 화면에 계약 작성·서명요청·상태 확인 통합</td><td>권장. 승인 다음 행동이 같은 업무 문맥에서 이어짐</td></tr>
+<tr><td>B</td><td>기존 관리화면 이동 버튼만 제공</td><td>비권장. 사용자 왕복과 회사·점포 재선택 문제가 남음</td></tr>
+<tr><td>C</td><td>별도 관리자 앱 재구축</td><td>이번 범위에서 비권장. 이미 있는 API와 사용자 메뉴를 중복함</td></tr>
+</tbody></table></div>
+<h2>첫 실행·반복 사용·실패 복구</h2>
+<p>첫 실행: 직원·급여 → 직원 현황 → 승인 직원 행 → 계약 작성 → 조건 입력 → 미리보기 → 저장 → 서명요청.</p>
+<p>반복 사용: 직원 상세 또는 계약·인사증빙 → 현재 상태 확인 → 저장 전/미요청 계약 수정, 요청 중 계약 알림 재전송, 서명 완료 계약 PDF 확인. 서명 완료 원본을 덮어쓰지 않는다.</p>
+<p>실패 복구: 누락 필드는 해당 입력으로 이동, 저장 실패는 입력 보존·재시도, 세션 만료는 재로그인 후 대상 권한 재확인·사용자 확인 후 복구, 알림 실패는 계약의 요청 상태와 분리하여 재알림. 다른 회사로 문맥 변경 시 미저장 경고와 권한 재조회.</p>
+<h2>권한·다점포 원칙</h2>
+<p>같은 직원이 여러 점포에서 근무하더라도 가입 승인 연결과 계약 당사자는 구분한다. 직원+사업자+점포별 승인 연결을 화면에서 명시하며, 서로 다른 사업자의 계약을 자동 합치거나 동일 조건으로 복제하지 않는다. 다점포 근무 정보는 입력 보조로 제시하되 계약조건 확정은 관리자가 한다. 실제 직원의 시급·요일·기간을 추정해 채우지 않는다.</p>
+<p>계약 유형은 현재 서비스의 지원 유형과 일치시킨다. 고용 형태를 임의로 프리랜서로 바꾸거나 공제율을 자동 결정하지 않는다. 실제 계약 조항·법적 적정성은 기존 템플릿의 검토 상태를 확인하고 별도 확정한다.</p>
+<h2>구현 순서와 검토 게이트</h2>
+<p>1. 이 기획·설계·PRD·목업을 CEO에게 보고한다. 승인본으로 자동 승격하지 않는다.</p>
+<p>2. 기획 확인 후 격리 worktree의 하나의 구현 작업으로 직원 진입점·계약 편집기·상태 표시를 연결한다. 중단된 작업 산출물은 원복하지 말고 diff를 확인하여 재사용 여부를 판단한다.</p>
+<p>3. 권한·회사 격리·API 실패·중복 요청 회귀와 현재 관리자 화면의 Playwright 증거를 확보한다.</p>
+<p>4. 검수한 SHA로 카페24 origin 앱 릴리스 경로를 사용한다. AADS API 배포를 오비서 배포로 대체하지 않는다. 후보 health, immutable image, 라우팅 실패 롤백, 같은 digest 동기화와 최소 5분 P0/P1 감시를 충족한다.</p>
+<p>5. 지정된 시험 회사·직원 정보를 담당의 기존 지시에서 확보하고 가입 승인→작성→직원 서명→PDF를 검증한다. 양재혁 직원의 계약을 임의 생성하거나 대신 서명하지 않는다.</p>
+<h2>완료 판정</h2>
+<p>문서 완료: 3개 문서와 실행 가능한 목업, 화면 캡처, 검증기록, DB 초안 정본·핸드오버 확인.</p>
+<p>구현 완료: PRD의 기능·권한·복구 테스트 통과.</p>
+<p>운영 완료: 현재 관리자 화면에서 승인 직원 계약 작성과 서명요청, 본인 직원 서명 및 권한 있는 PDF 다운로드, 배포 SHA·감시 증거 확인. 세 판정은 별도로 보고한다.</p>
+<p>관련 파일: 설계 <code>AADS-LAYOUT-024_obys-admin-contract-design.md</code>, PRD <code>AADS-LAYOUT-025_obys-admin-contract-prd.md</code>, 목업 <code>AADS-LAYOUT-026_obys-admin-contract-mockup.html</code>, 검증기록 <code>VERIFICATION.md</code>.</p></article><article id="design"><h1>[AADS/오비서] 현재 관리자 직원 계약 통합 — 화면·API 설계 v1.0.1 (검토 초안)</h1>
+<p>버전: 1.0.1 / 검토용 초안 / AADS-LAYOUT-023_obys-admin-contract-plan.md와 AADS-LAYOUT-025_obys-admin-contract-prd.md 기준</p>
+<h2>정보 구조와 화면</h2>
+<p>현재 관리자 진입 파일 <code>app/static/apps/obys/mockup-v4-1.html</code>을 유지한다. 사용자에게 표시할 이름은 직원·급여 → 직원 현황, 계약·인사증빙이다. 아래 URL 파라미터는 <strong>구현 제안</strong>이며 현재 동작을 보장하지 않는다.</p>
+<div class="table"><table><thead><tr><th>화면</th><th>제안 진입/상태</th><th>구성과 행동</th></tr></thead><tbody>
+<tr><td>직원 현황</td><td>기존 <code>employees</code> 화면</td><td>승인 여부·회사·점포·계약 상태, 승인 직원에 계약 작성</td></tr>
+<tr><td>계약 작성 패널</td><td><code>?route=hr-docs&amp;employee_request_id=...</code></td><td>직원/사업자/점포 고정 문맥, 조건 입력→미리보기→저장</td></tr>
+<tr><td>계약 상세</td><td><code>?route=hr-docs&amp;contract_id=...</code></td><td>저장 조건, 상태·최근 오류, 서명요청·재알림·PDF</td></tr>
+<tr><td>직원 서명</td><td>기존 signing token 경로</td><td>로그인 복구 후 본인 계약 확인·동의·자필서명</td></tr>
+</tbody></table></div>
+<p>URL에 이름·전화·급여·서명 토큰을 추가로 기록하지 않는다. <code>route</code> 파라미터 지원 여부는 구현 작업에서 기존 라우터와 맞춰 확정한다. 화면 이동보다 단일 패널을 우선하되 새로고침·뒤로가기 복구를 지원한다.</p>
+<pre><code>flowchart LR
+    A[직원 가입·입사요청] --&gt; B[관리자 서류 확인·승인]
+    B --&gt; C[현재 직원 화면 · 계약 작성]
+    D[계약·인사증빙 · 새 계약] --&gt; C
+    C --&gt; E[승인 직원·회사·점포 확인]
+    E --&gt; F[계약조건 입력]
+    F --&gt; G[동일 입력의 미리보기]
+    G --&gt; H[서버 저장 확인]
+    H --&gt; I[서명요청 · 알림 결과 분리]
+    I --&gt; J[직원 본인 로그인·계약 확인·서명]
+    J --&gt; K[서명 완료·PDF 준비 상태]
+    K --&gt; L[현재 계약 상세 · PDF 다운로드]</code></pre>
+<h2>계약 편집기</h2>
+<p>단계 1 대상 확인: 승인 직원 연결을 서버에서 조회하고 회사·점포를 명시한다. 미승인 대상, 접근 불가 대상에는 작성 버튼을 비활성화하고 필요한 다음 행동을 표시한다.</p>
+<p>단계 2 조건 입력: 가입/사업자 마스터의 기존 데이터로 본인·사용자 기본정보를 채우고 누락 항목을 표시한다. 관리자는 계약 유형, 계약 작성일, 입사일·계약기간, 직무·근무 장소, 임금 산정 방식·금액·지급일, 요일별 근무/휴게·주간시간, 수당·보험·수습·기타 조항을 검토한다. 유형별 필수 필드는 서비스 validator를 따른다. 일정이 점포마다 다르면 별도 행으로 명확히 입력하며 서로 다른 사용자 사업자의 조건은 하나로 합치지 않는다.</p>
+<p>단계 3 미리보기: 입력 스냅샷과 원본 템플릿 버전을 연결한다. 미리보기에서 돌아와 수정하면 이전 미리보기는 무효화된다. 서버 저장 성공 전에는 서명요청을 허용하지 않는다.</p>
+<p>단계 4 요청·관리: 저장 결과의 계약 ID를 기준으로 요청한다. 요청됨·알림 실패·PDF 생성 실패를 같은 성공 표시로 묶지 않는다. 링크 복사는 실제 요청 응답 링크가 있을 때만 제공하며 이메일/SMS 전달 완료와 구분한다.</p>
+<h2>기존 API 연결</h2>
+<p>base는 <code>app/api/obys_finance.py</code>의 router prefix와 운영 proxy를 구현 시 확인한다. 아래는 확인된 router 상대경로다.</p>
+<div class="table"><table><thead><tr><th>행위</th><th>확인된 API</th><th>UI 처리</th></tr></thead><tbody>
+<tr><td>계약 목록</td><td>GET <code>/contracts</code></td><td>권한 있는 회사·점포 필터 후 실제 상태 표시</td></tr>
+<tr><td>생성·수정</td><td>POST <code>/contracts</code></td><td>기존 GenericPayload 및 service.save_contract 계약 재사용; 수정 ID 필드는 기존 폼과 대조</td></tr>
+<tr><td>서명 요청</td><td>POST <code>/contracts/{id}/request-signature</code></td><td>계약 결과와 <code>notify.status</code> 각각 표시</td></tr>
+<tr><td>알림 재전송</td><td>POST <code>/contracts/{id}/resend-signature-notice</code></td><td>계약을 새로 만들지 않고 요청 안내만 재시도</td></tr>
+<tr><td>직원 열람·서명</td><td>GET <code>/contracts/signing/{token}</code>, POST <code>/contracts/signing</code></td><td>본인 확인·동의·서명 이미지, 서버 결과 확정</td></tr>
+<tr><td>서명본</td><td>GET <code>/contracts/{id}/signed-pdf</code></td><td>권한·생성 상태 확인 후 파일 응답 다운로드</td></tr>
+<tr><td>PDF 복구</td><td>POST <code>/contracts/{id}/signed-pdf/regenerate</code></td><td>기존 권한 정책에 따라 허용된 사용자만 실행</td></tr>
+</tbody></table></div>
+<p>기존 <code>index.html</code>의 승인 직원 조회·payload 변환·템플릿 생성 로직을 조사하여 공용 어댑터로 재사용한다. 작성 UI가 읽기 API만 성공했다고 완료로 판단하지 않는다. 새로운 bulk 계약 생성·SMS 구매·DB 마이그레이션은 이번 필수 범위가 아니다.</p>
+<h2>상태 모델</h2>
+<p>편집중은 UI 상태이고 저장 여부와 별개다. 실제 서버 계약 상태 문자열은 service 반환값을 기준으로 매핑한다. 아래는 사용자 표시 상태다.</p>
+<p><code>작성 필요 → 입력 중 → 저장 완료 → 서명 요청됨 → 서명 완료 → PDF 준비/보관</code></p>
+<p>알림: <code>미실행/전송 성공/전송 실패</code> 별도 축. PDF: <code>미생성/생성중/준비/실패</code> 별도 축. 만료·취소가 서버에서 지원되는지 확인하지 않은 상태에서 실제 취소 버튼을 만들지 않는다. 서명본 수정은 원본 덮어쓰기 없이 새 계약/버전 정책을 먼저 확정한다.</p>
+<h2>실패·권한·보안</h2>
+<div class="table"><table><thead><tr><th>상황</th><th>화면 복구</th><th>서버 요구</th></tr></thead><tbody>
+<tr><td>필수값 누락/400</td><td>오류 요약+필드 표시, 입력 보존</td><td>validator 최종 판정</td></tr>
+<tr><td>저장 실패/5xx</td><td>실패 표시, 동일 초안 재시도</td><td>성공 여부 불명인 timeout은 목록 재조회로 대조</td></tr>
+<tr><td>401</td><td>재로그인→권한 재검증→복구 확인</td><td>다른 사용자로 로그인하면 이전 민감 초안 제거</td></tr>
+<tr><td>403</td><td>접근 불가 이유·담당 관리자 안내</td><td>tenant/사업자/점포/직원 소속 검증</td></tr>
+<tr><td>요청 중 재클릭/409</td><td>버튼 잠금·최신 상태 재조회</td><td>동일 계약 중복 처리 차단; 다중 worker 보호 확인</td></tr>
+<tr><td>알림 실패</td><td>요청됨 유지, 실패 안내·재알림</td><td>notify.status 저장·감사 추적</td></tr>
+<tr><td>PDF 실패</td><td>서명 완료 유지, 준비/복구 안내</td><td>서명 snapshot으로 재생성, 원본 보존</td></tr>
+</tbody></table></div>
+<p>프로덕션 민감정보를 일반 localStorage에 장기 저장하지 않는다. 세션 복구용 초안은 짧은 수명·사용자/tenant 연결·최소 필드로 설계하고 서버 초안 저장 지원 여부를 먼저 확인한다. 목업의 브라우저 저장은 가상 데이터에 한정한다. 서명 토큰·개인정보는 로그·캡처에 노출하지 않는다.</p>
+<h2>모바일·접근성</h2>
+<p>좁은 화면은 직원 행을 카드로 바꾸고 편집 패널은 한 열로 표시한다. 핵심 버튼은 최소 44px 높이, label/오류를 연결하고 키보드 이동·focus 복원을 제공한다. 저장·요청 고정 하단 영역이 내용을 가리지 않도록 여백을 둔다. 뒤로가기나 앱 재실행 시 사용자·회사 문맥 재검증 후 복구한다.</p>
+<h2>변경 후보와 경계</h2>
+<p>구현 후보는 현재 관리자 파일, 필요한 <code>modules/*</code>, 기존 계약 service/API의 필수 연결, 관련 회귀 테스트이다. 실제 변경 목록은 구현 diff로 확정한다. 이번 기획은 해당 운영 파일을 수정하지 않는다. 무관한 dirty 파일, 실제 직원·조직 데이터, 진아서버, 라일론 자료는 변경 대상이 아니다.</p></article><article id="prd"><h1>[AADS/오비서] 현재 관리자 직원 계약 통합 — PRD v1.0.1 (검토 초안)</h1>
+<p>버전: 1.0.1 / 검토용 초안 / 승인·구현·운영 검증 미완료</p>
+<h2>제품 목표</h2>
+<p>가입 승인 다음에 관리자가 현재 화면을 떠나지 않고 계약을 작성하며, 요청 결과와 직원 서명·PDF 상태를 같은 직원 문맥에서 확인한다. 메뉴를 찾기 위해 기존/현재 관리화면을 왕복하는 흐름을 없앤다.</p>
+<p>대상: 대표·권한 있는 인사/점포 담당, 본인 계약에 접근하는 직원.</p>
+<p>범위: 직원 계약 진입점·조건 입력·미리보기·저장·서명요청·재알림·서명본 상태/다운로드·실패 복구.</p>
+<p>제외: 전체 관리자 화면 재설계, 자동 법률 판정, 실제 직원 조건 임의 확정, 계약 일괄 생성, 공제·급여 전면 개편, 외부 유료 발송 구매.</p>
+<h2>사용자 시나리오</h2>
+<p>대표: 가입 승인을 완료했다 → 승인 직원 행에 계약 작성이 보인다 → 회사·점포가 고정된 입력 패널에서 조건을 확정한다 → 미리보기 후 저장한다 → 서명을 요청하고 발송 결과를 확인한다.</p>
+<p>인사 담당: 계약 목록에서 요청 대기와 알림 실패를 구분한다 → 실패한 알림을 재전송하거나 실제 링크를 공유한다 → 직원 서명 완료 후 서명본 PDF를 확인한다.</p>
+<p>직원: 자신에게 발급된 링크로 로그인한다 → 자기 계약과 조건을 확인한다 → 동의 및 자필서명을 제출한다 → 완료 상태와 서명본을 확인한다. 링크 만료나 권한 문제면 요청 관리자와 복구 행동을 안내한다.</p>
+<h2>요구사항 및 수용 기준</h2>
+<div class="table"><table><thead><tr><th>ID</th><th>우선순위</th><th>요구사항</th><th>수용 기준</th></tr></thead><tbody>
+<tr><td>F01</td><td>P0</td><td>승인 직원 행/상세의 계약 작성</td><td>현재 관리자 employees에서 작성 패널이 열리고 legacy 이동 없음</td></tr>
+<tr><td>F02</td><td>P0</td><td>계약·인사증빙의 새 계약·기존 계약 상세</td><td>두 진입점이 같은 editor 사용, URL 복귀 후 문맥 유지</td></tr>
+<tr><td>F03</td><td>P0</td><td>승인 직원·회사·점포 선택</td><td>실제 승인 연결만 허용; 다른 tenant/사업자 변조 403/400</td></tr>
+<tr><td>F04</td><td>P0</td><td>조건 입력·유형별 필수값</td><td>기존 validator 필드 누락 시 저장 차단 및 해당 필드 안내</td></tr>
+<tr><td>F05</td><td>P0</td><td>동일 조건의 미리보기</td><td>입력한 직원·근무지·임금·시간·기간이 표시되고 수정 후 갱신</td></tr>
+<tr><td>F06</td><td>P0</td><td>실제 저장 확인</td><td>API 반환 ID·상태 표시, 새로고침 후 서버에서 같은 계약 재조회</td></tr>
+<tr><td>F07</td><td>P0</td><td>서명 요청</td><td>저장 후에만 허용; 연속 클릭·timeout 재시도 시 중복 요청 없음</td></tr>
+<tr><td>F08</td><td>P0</td><td>알림 결과 분리</td><td>요청 200+notify 실패에서 전송 완료 표시 금지, 재알림 가능</td></tr>
+<tr><td>F09</td><td>P0</td><td>직원 본인 서명</td><td>타인 서명 403; 본인 동의·자필서명 후 서버 상태 확인</td></tr>
+<tr><td>F10</td><td>P0</td><td>서명본 PDF</td><td>준비 여부·권한 검증, 실제 application/pdf 파일 내용 확인</td></tr>
+<tr><td>F11</td><td>P0</td><td>저장 실패·세션 만료 복구</td><td>값 보존·재로그인·권한 재확인; 다른 계정 초안 노출 없음</td></tr>
+<tr><td>F12</td><td>P0</td><td>계약 상태 보호</td><td>요청/서명 상태의 원본 임의 수정 금지, 충돌 재조회 안내</td></tr>
+<tr><td>F13</td><td>P1</td><td>모바일·키보드·새로고침</td><td>390px 폭 핵심 흐름 수행, 가로 넘침 없음, focus/문맥 복구</td></tr>
+<tr><td>F14</td><td>P1</td><td>감사·오류 근거</td><td>작성자·요청자·시각·오류 종류 기록, 비밀/개인정보 로그 제외</td></tr>
+</tbody></table></div>
+<h2>입력 항목과 데이터 출처</h2>
+<div class="table"><table><thead><tr><th>그룹</th><th>항목</th><th>출처·판정</th></tr></thead><tbody>
+<tr><td>계약 대상</td><td>employee_request_id, 직원명/이메일/생년월일/연락처/주소, business_id, branch</td><td>승인된 입사요청·권한 있는 마스터, 누락은 보완 안내</td></tr>
+<tr><td>사용자</td><td>상호·사업자번호·대표자·주소·연락처</td><td>사업자 마스터 대조, 다른 회사 자료 혼합 금지</td></tr>
+<tr><td>계약 기본</td><td>유형·작성일·입사일·종료일·직무·장소</td><td>관리자 입력, 현재 지원 유형 사용</td></tr>
+<tr><td>임금</td><td>시급/월급/용역비·금액·지급일·산식·수당</td><td>관리자 확정; 실제 금액 기본값 추정 금지</td></tr>
+<tr><td>근무</td><td>요일별 근무지·시작/종료/휴게·주간시간</td><td>직원/점포 문맥; 익일 종료 가능 여부는 서비스 지원 확인</td></tr>
+<tr><td>추가</td><td>수습·보험 구분·식사·휴일·특약·동의·외국인/미성년 관련 조건</td><td>현재 validator의 유형별 필수항목에 맞춰 노출</td></tr>
+</tbody></table></div>
+<p>계약조건 및 법적 요건의 신규 판단은 이 PRD에서 확정하지 않는다. 화면의 필수 필드와 현 서버 validator가 일치하는지 개발·노무 검수에서 확인한다. 목업은 주요 동선 시연용이며 전체 유형별 조건을 구현했다고 볼 수 없다.</p>
+<h2>검증 계획</h2>
+<div class="table"><table><thead><tr><th>검증</th><th>대상·방법</th><th>완료 기준</th></tr></thead><tbody>
+<tr><td>단위/통합</td><td>기존 계약·membership·signing 테스트와 변경 영향 테스트</td><td>필수/권한/알림 실패/동시 요청/서명 snapshot 통과</td></tr>
+<tr><td>관리자 E2E</td><td>승인된 시험 직원, 현재 V4.1 직원 화면</td><td>목록→조건→미리보기→저장→요청 화면 캡처와 API 대조</td></tr>
+<tr><td>직원 E2E</td><td>동일 계약 본인 계정</td><td>열람→동의→자필서명→PDF 실파일 확인</td></tr>
+<tr><td>실패 회귀</td><td>400/401/403/409/5xx·알림 실패·PDF 실패</td><td>허위 성공 없음, 재시도·문맥 복구 성공</td></tr>
+<tr><td>다점포/다회사</td><td>같은 직원의 서로 다른 승인 연결</td><td>계약 당사자·권한·점포 혼합 없음</td></tr>
+<tr><td>모바일</td><td>390×844 및 1440×1000, 키보드</td><td>주요 입력·CTA·상태가 보이고 겹침/가로 넘침 없음</td></tr>
+<tr><td>배포</td><td>카페24 origin release SHA·digest·health·롤백·5분 감시</td><td>현재 관리자에서 실제 배포본 실행, P0/P1 신규 오류 없음</td></tr>
+</tbody></table></div>
+<p>브라우저 불가 시 HTTP→API health→프로세스 순으로 폴백하고 운영 화면 검증과 별도 보고한다. 현재 기획 목업 검증은 운영 E2E를 대체하지 않는다.</p>
+<h2>작업과 게이트</h2>
+<p>G0: 기획·설계·PRD·목업 저장 및 보고(이번 요청).</p>
+<p>G1: CEO 기획 확인 후 구현 작업 범위/충돌 프리플라이트.</p>
+<p>G2: 구현·회귀·현재 화면 증거·검수.</p>
+<p>G3: 기존 승인 범위와 변경 SHA를 대조하여 카페24 릴리스.</p>
+<p>G4: 시험 계정으로 운영 관리자·직원 E2E 및 5분 감시.</p>
+<p>G0를 G2/G4 완료로 표시하지 않는다. 기획 검토 전에 중단된 <code>runner-6ed52003</code>은 자동 승인·재실행하지 않는다. 산출물 잔존 여부는 별도 diff로 확인하여 보존한다.</p>
+<h2>미확정과 담당 확인</h2>
+<ul>
+<li>Developer: 공용 editor의 기존 폼 재사용 경계, 실제 router/query 파라미터, 수정 payload, 다중 worker 요청 보호, 세션 초안 복구 방식.</li>
+<li>HRPayrollLead: 기존에 전달받은 시험 직원·회사, 다점포 근무와 계약 당사자, 실제 조건/템플릿 검토. CEO에게 같은 정보를 재요청하지 않는다.</li>
+<li>Ops: 카페24 앱 릴리스 경로의 준비·승인·현재 배포 상태와 롤백 가능한 digest.</li>
+</ul>
+<p>성공률·처리시간 목표는 운영 데이터가 없어 수치로 추정하지 않는다. 최초 검증 후 측정한 값을 근거로 개선한다.</p></article></main></body></html>

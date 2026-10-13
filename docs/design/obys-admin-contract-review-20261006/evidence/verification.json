@@ -1,0 +1,42 @@
+{
+  "measured_kst": "2026-10-06T13:32:14.323436+09:00",
+  "scope": "로컬 검토 목업만 검증; 운영 로그인·API 쓰기·실제 서명·PDF 검증 아님",
+  "tool": "Playwright Chromium",
+  "url": "file:///root/aads/aads-server/docs/design/obys-admin-contract-review-20261006/mockup.html",
+  "login": false,
+  "passed": 13,
+  "failed": 0,
+  "checks": [
+    "직원 문맥 확인 전 진입 차단",
+    "필수 계약조건 누락 차단",
+    "입력 임금과 미리보기 일치",
+    "저장 실패 시 허위 성공 차단",
+    "가상 초안 새로고침 복구",
+    "세션 만료 복구 시연",
+    "요청됨과 알림 실패 분리",
+    "동일 계약 알림 재시도 시연",
+    "미동의·미입력 서명 차단",
+    "시안 서명·문서 표시",
+    "권한 차단·계약 메뉴 공통 진입",
+    "390px 모바일 넘침·버튼 겹침 없음, CTA 44px 이상",
+    "브라우저 JavaScript 오류 없음"
+  ],
+  "viewports": [
+    [
+      1440,
+      1000
+    ],
+    [
+      390,
+      844
+    ]
+  ],
+  "screenshots": [
+    "evidence/01-employees-desktop.png",
+    "evidence/02-conditions-desktop.png",
+    "evidence/03-preview-desktop.png",
+    "evidence/04-notice-failure-desktop.png",
+    "evidence/05-signed-demo-desktop.png",
+    "evidence/06-conditions-mobile.png"
+  ]
+}

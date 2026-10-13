@@ -1,0 +1,73 @@
+{
+  "measured_kst": "2026-10-06T13:41:39.579427+09:00",
+  "tool": "requests + Playwright Chromium",
+  "url": "https://aads.newtalk.kr/education/obys-admin-contract-review-v1-0-1-20261006/index.html",
+  "login": false,
+  "checks": [
+    {
+      "check": "obys-admin-contract-plan duplicate retry",
+      "result": "same revision, no new copy",
+      "generation": 2
+    },
+    {
+      "check": "same version conflicting body / stale generation",
+      "result": "409 revision_conflict / 409 generation_conflict; draft unchanged"
+    },
+    {
+      "check": "docs/plans/AADS-LAYOUT-023_obys-admin-contract-plan.md",
+      "result": "authenticated file meta 200",
+      "bytes": 6456
+    },
+    {
+      "check": "obys-admin-contract-design duplicate retry",
+      "result": "same revision, no new copy",
+      "generation": 2
+    },
+    {
+      "check": "docs/design/AADS-LAYOUT-024_obys-admin-contract-design.md",
+      "result": "authenticated file meta 200",
+      "bytes": 7792
+    },
+    {
+      "check": "obys-admin-contract-prd duplicate retry",
+      "result": "same revision, no new copy",
+      "generation": 2
+    },
+    {
+      "check": "docs/prd/AADS-LAYOUT-025_obys-admin-contract-prd.md",
+      "result": "authenticated file meta 200",
+      "bytes": 7484
+    },
+    {
+      "check": "obys-admin-contract-mockup duplicate retry",
+      "result": "same revision, no new copy",
+      "generation": 2
+    },
+    {
+      "check": "docs/design/AADS-LAYOUT-026_obys-admin-contract-mockup.html",
+      "result": "authenticated file meta 200",
+      "bytes": 23199
+    },
+    {
+      "check": "original ZIP download",
+      "result": "200; checksum matches server file"
+    },
+    {
+      "check": "public review + mockup; no login",
+      "result": "200; 3 documents visible; PRD navigation; employee → conditions succeeds"
+    },
+    {
+      "check": "mobile public review",
+      "result": "390×844; no horizontal page overflow"
+    },
+    {
+      "check": "previous absolute host path",
+      "final_url": "https://aads.newtalk.kr/login?redirect=%2Froot%2Faads%2Faads-server%2Fdocs%2Fdesign%2Fobys-admin-contract-review-20261006%2Fmockup.html",
+      "title": "OHVIS",
+      "result": "not the mockup; server path interpreted as web navigation"
+    }
+  ],
+  "passed": 13,
+  "failed": 0,
+  "js_errors": []
+}

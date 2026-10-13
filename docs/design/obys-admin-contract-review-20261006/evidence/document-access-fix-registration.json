@@ -1,0 +1,54 @@
+{
+  "measured_kst": "2026-10-06T13:40:36.528707+09:00",
+  "records": [
+    {
+      "key": "obys-admin-contract-plan",
+      "kind": "plan",
+      "title": "[AADS/오비서] 현재 관리자 직원 계약 통합 — 기획 v1.0.1 (검토 초안)",
+      "path": "docs/plans/AADS-LAYOUT-023_obys-admin-contract-plan.md",
+      "version": "1.0.1",
+      "document_id": "d3f878b9-ebc1-4d49-a076-5168b65f05e8",
+      "revision_id": "b7711134-e27f-4fb3-8399-f12424033fca",
+      "generation": 2,
+      "idempotent": false,
+      "status": "draft"
+    },
+    {
+      "key": "obys-admin-contract-design",
+      "kind": "spec",
+      "title": "[AADS/오비서] 현재 관리자 직원 계약 통합 — 화면·API 설계 v1.0.1 (검토 초안)",
+      "path": "docs/design/AADS-LAYOUT-024_obys-admin-contract-design.md",
+      "version": "1.0.1",
+      "document_id": "f844fb4d-cdf3-494d-b560-3d47d485cfa1",
+      "revision_id": "bbc6fab3-08c5-4379-8e91-70c3193c82bd",
+      "generation": 2,
+      "idempotent": false,
+      "status": "draft"
+    },
+    {
+      "key": "obys-admin-contract-prd",
+      "kind": "prd",
+      "title": "[AADS/오비서] 현재 관리자 직원 계약 통합 — PRD v1.0.1 (검토 초안)",
+      "path": "docs/prd/AADS-LAYOUT-025_obys-admin-contract-prd.md",
+      "version": "1.0.1",
+      "document_id": "1add7746-8a8e-48a2-9544-2624cc37ed4a",
+      "revision_id": "91383f7e-185b-47e4-86e3-0474e8cef4f9",
+      "generation": 2,
+      "idempotent": false,
+      "status": "draft"
+    },
+    {
+      "key": "obys-admin-contract-mockup",
+      "kind": "design",
+      "title": "[AADS/오비서] 현재 관리자 직원 계약 통합 — 인터랙티브 목업 v1.0.1 (검토 초안)",
+      "path": "docs/design/AADS-LAYOUT-026_obys-admin-contract-mockup.html",
+      "version": "1.0.1",
+      "document_id": "eb558033-10dd-4664-b93d-3bb783684be1",
+      "revision_id": "77b53d0e-4445-48d6-a256-f29328a1b293",
+      "generation": 2,
+      "idempotent": false,
+      "status": "draft"
+    }
+  ],
+  "review_url": "https://aads.newtalk.kr/education/obys-admin-contract-review-v1-0-1-20261006/index.html"
+}
