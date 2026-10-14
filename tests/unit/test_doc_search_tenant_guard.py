@@ -248,9 +248,10 @@ def test_search_endpoint_passes_scope_and_ignores_query_tenant(monkeypatch):
         seen["status_scope"] = scope
         return {"docs": 1, "chunks": 1, "embedded": 1, "coverage": 100.0}
 
-    async def fake_search(vec, *, top_k=5, project=None, query_text=None, scope=None):
+    async def fake_search(vec, *, top_k=5, project=None, query_text=None, scope=None,
+                          canonical_only=False):
         seen["scope"] = scope
-        return [_row("/docs/a.md")]
+        return [] if canonical_only else [_row("/docs/a.md")]
 
     async def fake_counts(paths, scope):
         seen["counts_scope"] = scope

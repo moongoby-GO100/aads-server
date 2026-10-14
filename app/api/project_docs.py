@@ -2114,6 +2114,10 @@ async def changes_digest(
     }
 
 
+# 내용 검색 결과에 항상 포함·우선하는 정본 문서 수(운영 실측 M5 F1: 레거시 청크가 정본을 밀어냄).
+CANONICAL_TOP_K = 3
+
+
 @router.get("/project-docs/search")
 async def search_docs_semantic(
     q: str = Query(..., min_length=2, max_length=300, description="찾는 내용 (뜻으로 찾는다)"),
@@ -2178,23 +2182,40 @@ async def search_docs_semantic(
         query_vector, top_k=limit * 3, project=project, query_text=q, scope=scope,
     )
 
-    # 같은 문서의 여러 조각이 잡히면 가장 잘 맞는 것 하나만 남긴다.
-    # 안 그러면 긴 문서 하나가 결과를 독점한다.
-    best: dict = {}
-    for r in rows:
-        path = r.get("doc_path", "")
-        prev = best.get(path)
-        if prev is None or (
-            r.get("fusion_rank", float("inf")), -r.get("similarity", 0)
-        ) < (
-            prev.get("fusion_rank", float("inf")), -prev.get("similarity", 0)
-        ):
-            best[path] = r
+    # 파일 청크 상위 N 이 정본을 밀어내도 정본 상위 k 는 남긴다. 같은 scope 로 다시 묻고
+    # SQL 가시성 조건(tenant·grant)은 그대로라 권한 밖 정본은 여기서도 0건이다.
+    canonical_rows: list = []
+    try:
+        canonical_rows = [
+            r for r in await search_docs(
+                query_vector, top_k=CANONICAL_TOP_K * 3, project=project, query_text=q,
+                scope=scope, canonical_only=True,
+            )
+            if str(r.get("doc_path", "")).startswith("canonical://")
+        ]
+    except Exception as exc:
+        logger.warning("doc_search_canonical_pass_failed", error=str(exc))
+    if not canonical_rows:
+        canonical_rows = [r for r in rows if str(r.get("doc_path", "")).startswith("canonical://")]
 
-    results = sorted(
-        best.values(),
-        key=lambda r: (r.get("fusion_rank", float("inf")), -r.get("similarity", 0)),
-    )[:limit]
+    def _rank_key(r: dict):
+        return (r.get("fusion_rank", float("inf")), -r.get("similarity", 0))
+
+    def _best_per_path(items: list) -> list:
+        # 같은 문서의 여러 조각이 잡히면 가장 잘 맞는 것 하나만 남긴다.
+        # 안 그러면 긴 문서 하나가 결과를 독점한다.
+        best: dict = {}
+        for r in items:
+            path = r.get("doc_path", "")
+            prev = best.get(path)
+            if prev is None or _rank_key(r) < _rank_key(prev):
+                best[path] = r
+        return sorted(best.values(), key=_rank_key)
+
+    guaranteed = _best_per_path(canonical_rows)[:min(CANONICAL_TOP_K, limit)]
+    guaranteed_paths = {r.get("doc_path", "") for r in guaranteed}
+    rest = [r for r in _best_per_path(rows) if r.get("doc_path", "") not in guaranteed_paths]
+    results = (guaranteed + rest)[:limit]
 
     try:
         totals = await visible_chunk_counts([r["doc_path"] for r in results], scope)

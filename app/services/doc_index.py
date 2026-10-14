@@ -148,6 +148,10 @@ def _visible_sql(tenant: int, user: int, elevated: int) -> str:
     )
 
 
+# _visible_sql 뒤에 AND 로만 붙는다 — 가시성 결과를 정본으로 좁힐 뿐 넓히지 않는다.
+_CANONICAL_ONLY_SQL = "AND d.doc_path LIKE 'canonical://%'"
+
+
 def shadow_metrics() -> Dict[str, int]:
     """Return shadow-only scheduler counters for health/structured-log consumers."""
     return dict(_shadow_metrics)
@@ -251,7 +255,7 @@ async def embed_qwen_query(query: str) -> List[float]:
 
 async def search_docs_qwen3(
     query_embedding: List[float], *, top_k: int = 5, project: Optional[str] = None,
-    scope: Optional[DocSearchScope] = None,
+    scope: Optional[DocSearchScope] = None, canonical_only: bool = False,
 ) -> List[Dict[str, Any]]:
     if len(query_embedding) != QWEN_DIMENSION:
         return []
@@ -273,6 +277,7 @@ async def search_docs_qwen3(
               AND q.model_id = $4 AND q.instruction_version = $5
               AND ($3::text IS NULL OR d.project = $3::text)
               AND {_visible_sql(6, 7, 8)}
+              {_CANONICAL_ONLY_SQL if canonical_only else ''}
             ORDER BY q.embedding <=> $1::vector LIMIT $2
             """,
             str(query_embedding), min(max(1, top_k), _QWEN_TOP_N), project,
@@ -389,6 +394,7 @@ async def search_docs_legacy(
     top_k: int = 5,
     project: Optional[str] = None,
     scope: Optional[DocSearchScope] = None,
+    canonical_only: bool = False,
 ) -> List[Dict[str, Any]]:
     """문서 청크에서 시맨틱 검색.
 
@@ -411,6 +417,7 @@ async def search_docs_legacy(
             WHERE d.embedding IS NOT NULL
               AND ($3::text IS NULL OR d.project = $3::text)
               AND {_visible_sql(4, 5, 6)}
+              {_CANONICAL_ONLY_SQL if canonical_only else ''}
             ORDER BY d.embedding <=> $1::vector
             LIMIT $2
             """,
@@ -448,12 +455,13 @@ async def search_docs_legacy(
 async def search_docs(
     query_embedding: List[float], *, top_k: int = 5,
     project: Optional[str] = None, query_text: Optional[str] = None,
-    scope: Optional[DocSearchScope] = None,
+    scope: Optional[DocSearchScope] = None, canonical_only: bool = False,
 ) -> List[Dict[str, Any]]:
     """Route modes without adding work from a mode the caller did not select.
 
     `scope` 가 없으면 어느 모드에서도 검색하지 않는다 — 두 임베딩 경로와 RRF 가
-    모두 같은 범위 안에서만 후보를 만든다.
+    모두 같은 범위 안에서만 후보를 만든다. `canonical_only` 는 그 가시성 결과를
+    정본 청크로 **더 좁히기만** 한다.
     """
     if scope is None:
         logger.warning("doc_search_denied", reason="no_scope")
@@ -462,13 +470,17 @@ async def search_docs(
     mode = _QWEN_MODE if _QWEN_MODE in {"legacy", "shadow", "qwen3", "hybrid"} else "shadow"
 
     async def legacy() -> List[Dict[str, Any]]:
-        return await search_docs_legacy(query_embedding, top_k=limit, project=project, scope=scope)
+        return await search_docs_legacy(
+            query_embedding, top_k=limit, project=project, scope=scope, canonical_only=canonical_only,
+        )
 
     async def qwen() -> List[Dict[str, Any]]:
         if not query_text:
             return []
         vector = await embed_qwen_query(query_text)
-        return await search_docs_qwen3(vector, top_k=limit, project=project, scope=scope)
+        return await search_docs_qwen3(
+            vector, top_k=limit, project=project, scope=scope, canonical_only=canonical_only,
+        )
 
     async def observe_shadow() -> None:
         rows = await asyncio.wait_for(qwen(), timeout=_QWEN_SHADOW_TIMEOUT)
