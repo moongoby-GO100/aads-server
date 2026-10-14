@@ -1,0 +1,40 @@
+{
+  "task_id": "AADS-CANONICAL-MILESTONE-HIERARCHY-20261014",
+  "goal_id": "ac431290-66be-4d00-8bbb-9bf162917240",
+  "status": "blocked_no_credential",
+  "registered": false,
+  "measured_at_kst": "2026-10-14 11:46",
+  "before": {
+    "work_items_by_type_status": [],
+    "work_items_total": 0,
+    "goal": {"status": "completed", "progress": 1.0},
+    "milestones": {"count": 9, "all_completed": true},
+    "active_role_assignments": ["GoalSystemAdmin"]
+  },
+  "after": {
+    "work_items_total": 0,
+    "goal": {"status": "completed", "progress": 1.0},
+    "note": "등록을 실행하지 않았으므로 전후 동일. SELECT 는 aads-server 컨테이너의 읽기 전용 조회."
+  },
+  "planned": {"epic": 9, "story": 27, "task": 54, "total": 90, "unique_idempotency_keys": 90, "bad_parent_links": 0},
+  "created_ids": {},
+  "idempotent_replay": "not_run",
+  "block": {
+    "reason": "work-items 라우트는 require_tenant_member(사용자 Bearer JWT)와 X-Chat-Session-ID 를 요구한다. 이 러너 세션에는 사용자 JWT 가 주어지지 않았고, 인증 없는 호출은 HTTP 401 이다.",
+    "not_done_on_purpose": [
+      "컨테이너 환경에서 AADS_MONITOR_KEY 를 꺼내 system 주체로 호출 (미부여 서비스 자격)",
+      "internal_admin=True 를 자체 주장해 서비스 함수 직접 호출",
+      "work_items 에 raw INSERT"
+    ],
+    "unblock": "AADS_BEARER_TOKEN 을 가진 승인된 주체가 docs/specs/canonical-goal-hierarchy/register_work_hierarchy.py --apply 를 실행"
+  },
+  "design_report_hash_check": {
+    "document_key": "aads-canonical-milestone-hierarchy-audit",
+    "revision": 2,
+    "db_content_hash": "229c722ee977639ccec4f63d52c7eb6e11b20296b4009a71967369a0d4b1e363",
+    "local_file_sha256": "229c722ee977639ccec4f63d52c7eb6e11b20296b4009a71967369a0d4b1e363",
+    "match": true,
+    "approved_revision_id": null
+  },
+  "rollback": "이번에 생성한 ID 가 없으므로 되돌릴 대상 없음. 이후 등록 시 결과 JSON 의 created_ids 만 공식 취소 API/승인 경로로 취소(물리 DELETE 금지)."
+}

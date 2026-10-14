@@ -1,0 +1,1220 @@
+{
+  "goal_id": "ac431290-66be-4d00-8bbb-9bf162917240",
+  "items": [
+    {
+      "ref": "m1",
+      "type": "epic",
+      "parent_ref": null,
+      "milestone_id": "866aa027-b162-44e3-b1e1-3241daa21276",
+      "title": "M1 문서 정본 저장·개정·승인 API",
+      "priority": "P1",
+      "idempotency_key": "canonical-doc-goal-ac431290-m1",
+      "description": "[초안 명세·Epic] M1 문서 정본 저장·개정·승인 API 의 구현·검증·운영 근거 추적\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: Story 3개 + Task 6개의 상세 명세와 각 수용기준 충족 판정 기록\n범위(전/후): 완료된 M1 를 되돌리지 않고 후속 검증 명세만 추가; 마일스톤 status/progress/completion_criteria/evidence/dispatch_note 불변\n기존 evidence ref: milestones.evidence(M1) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Story 는 서로 병렬 가능; 이 Epic 이 부모 등록의 선행\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "M1 완료 판정과 기존 evidence 원본 보존",
+        "하위 Story 3개·Task 6개가 draft 명세로 존재",
+        "신규 Task 를 증거 없이 completed 로 표시하지 않음"
+      ]
+    },
+    {
+      "ref": "m1-s1",
+      "type": "story",
+      "parent_ref": "m1",
+      "milestone_id": "866aa027-b162-44e3-b1e1-3241daa21276",
+      "title": "저장·정체성 보장",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m1-s1",
+      "description": "[초안 명세·Story] 저장·정체성 보장\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 저장·정체성 보장 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M1 안의 '저장·정체성 보장' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence(M1) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "동일 tenant/project/key head 중복 0; 기존 승인 포인터 보존",
+        "동일 요청 replay 성공, 다른 내용의 같은 버전 409; 이전 개정 hash 불변"
+      ]
+    },
+    {
+      "ref": "m1-s1-t1",
+      "type": "task",
+      "parent_ref": "m1-s1",
+      "milestone_id": "866aa027-b162-44e3-b1e1-3241daa21276",
+      "title": "문서 키·프로젝트·해시 계약 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m1-s1-t1",
+      "description": "[초안 명세·Task] 문서 키·프로젝트·해시 계약 확인\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 동일 tenant/project/key head 중복 0; 기존 승인 포인터 보존\n범위(전/후): M1/저장·정체성 보장 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M1) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "동일 tenant/project/key head 중복 0; 기존 승인 포인터 보존"
+      ]
+    },
+    {
+      "ref": "m1-s1-t2",
+      "type": "task",
+      "parent_ref": "m1-s1",
+      "milestone_id": "866aa027-b162-44e3-b1e1-3241daa21276",
+      "title": "불변 개정·멱등·버전충돌 검증",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m1-s1-t2",
+      "description": "[초안 명세·Task] 불변 개정·멱등·버전충돌 검증\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 동일 요청 replay 성공, 다른 내용의 같은 버전 409; 이전 개정 hash 불변\n범위(전/후): M1/저장·정체성 보장 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M1) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "동일 요청 replay 성공, 다른 내용의 같은 버전 409; 이전 개정 hash 불변"
+      ]
+    },
+    {
+      "ref": "m1-s2",
+      "type": "story",
+      "parent_ref": "m1",
+      "milestone_id": "866aa027-b162-44e3-b1e1-3241daa21276",
+      "title": "승인 생명주기",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m1-s2",
+      "description": "[초안 명세·Story] 승인 생명주기\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 승인 생명주기 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M1 안의 '승인 생명주기' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence(M1) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "승인 경로 외 포인터 변경 없음; 충돌 409 근거 연결",
+        "actor·revision·generation 이력 및 archive 복구 참조 존재"
+      ]
+    },
+    {
+      "ref": "m1-s2-t1",
+      "type": "task",
+      "parent_ref": "m1-s2",
+      "milestone_id": "866aa027-b162-44e3-b1e1-3241daa21276",
+      "title": "draft→review→approved 전이 대조",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m1-s2-t1",
+      "description": "[초안 명세·Task] draft→review→approved 전이 대조\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 승인 경로 외 포인터 변경 없음; 충돌 409 근거 연결\n범위(전/후): M1/승인 생명주기 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M1) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "승인 경로 외 포인터 변경 없음; 충돌 409 근거 연결"
+      ]
+    },
+    {
+      "ref": "m1-s2-t2",
+      "type": "task",
+      "parent_ref": "m1-s2",
+      "milestone_id": "866aa027-b162-44e3-b1e1-3241daa21276",
+      "title": "감사 이벤트·보관·복구 근거 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m1-s2-t2",
+      "description": "[초안 명세·Task] 감사 이벤트·보관·복구 근거 연결\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: actor·revision·generation 이력 및 archive 복구 참조 존재\n범위(전/후): M1/승인 생명주기 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M1) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "actor·revision·generation 이력 및 archive 복구 참조 존재"
+      ]
+    },
+    {
+      "ref": "m1-s3",
+      "type": "story",
+      "parent_ref": "m1",
+      "milestone_id": "866aa027-b162-44e3-b1e1-3241daa21276",
+      "title": "권한·DB 계약 검수",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m1-s3",
+      "description": "[초안 명세·Story] 권한·DB 계약 검수\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 권한·DB 계약 검수 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M1 안의 '권한·DB 계약 검수' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence(M1) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "미인증 401, 타 tenant 차단, grant별 허용/거부를 격리 DB 근거로 구분",
+        "기존 단위·격리 migration·정상 commit hook·독립 review 증거 SHA 연결"
+      ]
+    },
+    {
+      "ref": "m1-s3-t1",
+      "type": "task",
+      "parent_ref": "m1-s3",
+      "milestone_id": "866aa027-b162-44e3-b1e1-3241daa21276",
+      "title": "tenant·프로젝트·접근권한 경계 검증",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m1-s3-t1",
+      "description": "[초안 명세·Task] tenant·프로젝트·접근권한 경계 검증\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 미인증 401, 타 tenant 차단, grant별 허용/거부를 격리 DB 근거로 구분\n범위(전/후): M1/권한·DB 계약 검수 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M1) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "미인증 401, 타 tenant 차단, grant별 허용/거부를 격리 DB 근거로 구분"
+      ]
+    },
+    {
+      "ref": "m1-s3-t2",
+      "type": "task",
+      "parent_ref": "m1-s3",
+      "milestone_id": "866aa027-b162-44e3-b1e1-3241daa21276",
+      "title": "migration 왕복·훅·독립검수 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m1-s3-t2",
+      "description": "[초안 명세·Task] migration 왕복·훅·독립검수 연결\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 기존 단위·격리 migration·정상 commit hook·독립 review 증거 SHA 연결\n범위(전/후): M1/권한·DB 계약 검수 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M1) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "기존 단위·격리 migration·정상 commit hook·독립 review 증거 SHA 연결"
+      ]
+    },
+    {
+      "ref": "m2",
+      "type": "epic",
+      "parent_ref": null,
+      "milestone_id": "f653c393-a3d2-4d1b-bf3d-5fe6e13b08b6",
+      "title": "M2 세션·러너 승인 문서 브리프 연결",
+      "priority": "P1",
+      "idempotency_key": "canonical-doc-goal-ac431290-m2",
+      "description": "[초안 명세·Epic] M2 세션·러너 승인 문서 브리프 연결 의 구현·검증·운영 근거 추적\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: Story 3개 + Task 6개의 상세 명세와 각 수용기준 충족 판정 기록\n범위(전/후): 완료된 M2 를 되돌리지 않고 후속 검증 명세만 추가; 마일스톤 status/progress/completion_criteria/evidence/dispatch_note 불변\n기존 evidence ref: milestones.evidence(M2) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Story 는 서로 병렬 가능; 이 Epic 이 부모 등록의 선행\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "M2 완료 판정과 기존 evidence 원본 보존",
+        "하위 Story 3개·Task 6개가 draft 명세로 존재",
+        "신규 Task 를 증거 없이 completed 로 표시하지 않음"
+      ]
+    },
+    {
+      "ref": "m2-s1",
+      "type": "story",
+      "parent_ref": "m2",
+      "milestone_id": "f653c393-a3d2-4d1b-bf3d-5fe6e13b08b6",
+      "title": "승인본 선택 규칙",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m2-s1",
+      "description": "[초안 명세·Story] 승인본 선택 규칙\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 승인본 선택 규칙 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M2 안의 '승인본 선택 규칙' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence(M2) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "초안이 더 최신이어도 승인 브리프에는 승인 revision만 포함",
+        "권한 없는 사용자에 본문 미노출; scope 정보 일치"
+      ]
+    },
+    {
+      "ref": "m2-s1-t1",
+      "type": "task",
+      "parent_ref": "m2-s1",
+      "milestone_id": "f653c393-a3d2-4d1b-bf3d-5fe6e13b08b6",
+      "title": "승인 포인터와 최신 초안 선택 분리",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m2-s1-t1",
+      "description": "[초안 명세·Task] 승인 포인터와 최신 초안 선택 분리\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 초안이 더 최신이어도 승인 브리프에는 승인 revision만 포함\n범위(전/후): M2/승인본 선택 규칙 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M2) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "초안이 더 최신이어도 승인 브리프에는 승인 revision만 포함"
+      ]
+    },
+    {
+      "ref": "m2-s1-t2",
+      "type": "task",
+      "parent_ref": "m2-s1",
+      "milestone_id": "f653c393-a3d2-4d1b-bf3d-5fe6e13b08b6",
+      "title": "tenant·project·사용자별 브리프 접근 검증",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m2-s1-t2",
+      "description": "[초안 명세·Task] tenant·project·사용자별 브리프 접근 검증\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 권한 없는 사용자에 본문 미노출; scope 정보 일치\n범위(전/후): M2/승인본 선택 규칙 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M2) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "권한 없는 사용자에 본문 미노출; scope 정보 일치"
+      ]
+    },
+    {
+      "ref": "m2-s2",
+      "type": "story",
+      "parent_ref": "m2",
+      "milestone_id": "f653c393-a3d2-4d1b-bf3d-5fe6e13b08b6",
+      "title": "세션·러너 착수 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m2-s2",
+      "description": "[초안 명세·Story] 세션·러너 착수 연결\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 세션·러너 착수 연결 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M2 안의 '세션·러너 착수 연결' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence(M2) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "실제 컨텍스트 provenance·revision·hash 확인; 미관측은 미검증",
+        "착수 입력에 승인 revision ref 존재; 중복 본문·다른 project 혼입 없음"
+      ]
+    },
+    {
+      "ref": "m2-s2-t1",
+      "type": "task",
+      "parent_ref": "m2-s2",
+      "milestone_id": "f653c393-a3d2-4d1b-bf3d-5fe6e13b08b6",
+      "title": "채팅 세션에 승인 브리프 연결 근거 수집",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m2-s2-t1",
+      "description": "[초안 명세·Task] 채팅 세션에 승인 브리프 연결 근거 수집\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 실제 컨텍스트 provenance·revision·hash 확인; 미관측은 미검증\n범위(전/후): M2/세션·러너 착수 연결 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M2) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "실제 컨텍스트 provenance·revision·hash 확인; 미관측은 미검증"
+      ]
+    },
+    {
+      "ref": "m2-s2-t2",
+      "type": "task",
+      "parent_ref": "m2-s2",
+      "milestone_id": "f653c393-a3d2-4d1b-bf3d-5fe6e13b08b6",
+      "title": "러너 지시서의 승인 브리프 연결 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m2-s2-t2",
+      "description": "[초안 명세·Task] 러너 지시서의 승인 브리프 연결 확인\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 착수 입력에 승인 revision ref 존재; 중복 본문·다른 project 혼입 없음\n범위(전/후): M2/세션·러너 착수 연결 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M2) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "착수 입력에 승인 revision ref 존재; 중복 본문·다른 project 혼입 없음"
+      ]
+    },
+    {
+      "ref": "m2-s3",
+      "type": "story",
+      "parent_ref": "m2",
+      "milestone_id": "f653c393-a3d2-4d1b-bf3d-5fe6e13b08b6",
+      "title": "크기·누락·회귀",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m2-s3",
+      "description": "[초안 명세·Story] 크기·누락·회귀\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 크기·누락·회귀 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M2 안의 '크기·누락·회귀' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence(M2) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "승인본 없음은 비정본 안내; 오류 때 내부본문 유출 없음",
+        "기존 테스트 결과를 SHA/환경과 연결; 후보와 운영을 구분"
+      ]
+    },
+    {
+      "ref": "m2-s3-t1",
+      "type": "task",
+      "parent_ref": "m2-s3",
+      "milestone_id": "f653c393-a3d2-4d1b-bf3d-5fe6e13b08b6",
+      "title": "승인 없음·DB 오류·과대본문 복구 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m2-s3-t1",
+      "description": "[초안 명세·Task] 승인 없음·DB 오류·과대본문 복구 확인\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 승인본 없음은 비정본 안내; 오류 때 내부본문 유출 없음\n범위(전/후): M2/크기·누락·회귀 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M2) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "승인본 없음은 비정본 안내; 오류 때 내부본문 유출 없음"
+      ]
+    },
+    {
+      "ref": "m2-s3-t2",
+      "type": "task",
+      "parent_ref": "m2-s3",
+      "milestone_id": "f653c393-a3d2-4d1b-bf3d-5fe6e13b08b6",
+      "title": "관련 테스트·릴리스 SHA 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m2-s3-t2",
+      "description": "[초안 명세·Task] 관련 테스트·릴리스 SHA 연결\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 기존 테스트 결과를 SHA/환경과 연결; 후보와 운영을 구분\n범위(전/후): M2/크기·누락·회귀 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence(M2) 원본, 설계 보고서 aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "기존 테스트 결과를 SHA/환경과 연결; 후보와 운영을 구분"
+      ]
+    },
+    {
+      "ref": "m3",
+      "type": "epic",
+      "parent_ref": null,
+      "milestone_id": "2e7625d6-99fd-42e1-8214-99da0e3f1d33",
+      "title": "M3 기존 문서 대조·운영 검증",
+      "priority": "P1",
+      "idempotency_key": "canonical-doc-goal-ac431290-m3",
+      "description": "[초안 명세·Epic] M3 기존 문서 대조·운영 검증 의 구현·검증·운영 근거 추적\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: Story 3개 + Task 6개의 상세 명세와 각 수용기준 충족 판정 기록\n범위(전/후): 완료된 M3 를 되돌리지 않고 후속 검증 명세만 추가; 마일스톤 status/progress/completion_criteria/evidence/dispatch_note 불변\n기존 evidence ref: 파일럿 74·92·109·110·119, 20261012 인증 화면 캡처/로그(M9 재사용), CEO 완료 판정 2026-10-14 11:29:27 KST; M3 evidence 일부 문구는 과거 미완료 상태로 남아 있으며 덮어쓰지 않는다\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Story 는 서로 병렬 가능; 이 Epic 이 부모 등록의 선행\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "M3 완료 판정과 기존 evidence 원본 보존",
+        "하위 Story 3개·Task 6개가 draft 명세로 존재",
+        "신규 Task 를 증거 없이 completed 로 표시하지 않음"
+      ]
+    },
+    {
+      "ref": "m3-s1",
+      "type": "story",
+      "parent_ref": "m3",
+      "milestone_id": "2e7625d6-99fd-42e1-8214-99da0e3f1d33",
+      "title": "기존 문서 무손실 인벤토리",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m3-s1",
+      "description": "[초안 명세·Story] 기존 문서 무손실 인벤토리\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 기존 문서 무손실 인벤토리 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M3 안의 '기존 문서 무손실 인벤토리' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: 파일럿 74·92·109·110·119, 20261012 인증 화면 캡처/로그(M9 재사용), CEO 완료 판정 2026-10-14 11:29:27 KST; M3 evidence 일부 문구는 과거 미완료 상태로 남아 있으며 덮어쓰지 않는다\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "원본 식별자·파일존재·hash·legacy link를 대조표에 기록",
+        "missing/invalid/unmatched 분리; 원본 삭제·자동등록 없음"
+      ]
+    },
+    {
+      "ref": "m3-s1-t1",
+      "type": "task",
+      "parent_ref": "m3-s1",
+      "milestone_id": "2e7625d6-99fd-42e1-8214-99da0e3f1d33",
+      "title": "goal_documents·chat_artifacts·파일 대조",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m3-s1-t1",
+      "description": "[초안 명세·Task] goal_documents·chat_artifacts·파일 대조\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 원본 식별자·파일존재·hash·legacy link를 대조표에 기록\n범위(전/후): M3/기존 문서 무손실 인벤토리 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 파일럿 74·92·109·110·119, 20261012 인증 화면 캡처/로그(M9 재사용), CEO 완료 판정 2026-10-14 11:29:27 KST; M3 evidence 일부 문구는 과거 미완료 상태로 남아 있으며 덮어쓰지 않는다\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "원본 식별자·파일존재·hash·legacy link를 대조표에 기록"
+      ]
+    },
+    {
+      "ref": "m3-s1-t2",
+      "type": "task",
+      "parent_ref": "m3-s1",
+      "milestone_id": "2e7625d6-99fd-42e1-8214-99da0e3f1d33",
+      "title": "누락·사본·잘못된 경로 분류",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m3-s1-t2",
+      "description": "[초안 명세·Task] 누락·사본·잘못된 경로 분류\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: missing/invalid/unmatched 분리; 원본 삭제·자동등록 없음\n범위(전/후): M3/기존 문서 무손실 인벤토리 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 파일럿 74·92·109·110·119, 20261012 인증 화면 캡처/로그(M9 재사용), CEO 완료 판정 2026-10-14 11:29:27 KST; M3 evidence 일부 문구는 과거 미완료 상태로 남아 있으며 덮어쓰지 않는다\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "missing/invalid/unmatched 분리; 원본 삭제·자동등록 없음"
+      ]
+    },
+    {
+      "ref": "m3-s2",
+      "type": "story",
+      "parent_ref": "m3",
+      "milestone_id": "2e7625d6-99fd-42e1-8214-99da0e3f1d33",
+      "title": "파일럿 연결 정합",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m3-s2",
+      "description": "[초안 명세·Story] 파일럿 연결 정합\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 파일럿 연결 정합 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M3 안의 '파일럿 연결 정합' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: 파일럿 74·92·109·110·119, 20261012 인증 화면 캡처/로그(M9 재사용), CEO 완료 판정 2026-10-14 11:29:27 KST; M3 evidence 일부 문구는 과거 미완료 상태로 남아 있으며 덮어쓰지 않는다\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "legacy link와 승인 revision hash·project 일치 증거",
+        "잘못된 연결 대상만 롤백 가능; duplicate head 검증 근거"
+      ]
+    },
+    {
+      "ref": "m3-s2-t1",
+      "type": "task",
+      "parent_ref": "m3-s2",
+      "milestone_id": "2e7625d6-99fd-42e1-8214-99da0e3f1d33",
+      "title": "파일럿 74·92·109·110·119 연결 추적",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m3-s2-t1",
+      "description": "[초안 명세·Task] 파일럿 74·92·109·110·119 연결 추적\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: legacy link와 승인 revision hash·project 일치 증거\n범위(전/후): M3/파일럿 연결 정합 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 파일럿 74·92·109·110·119, 20261012 인증 화면 캡처/로그(M9 재사용), CEO 완료 판정 2026-10-14 11:29:27 KST; M3 evidence 일부 문구는 과거 미완료 상태로 남아 있으며 덮어쓰지 않는다\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "legacy link와 승인 revision hash·project 일치 증거"
+      ]
+    },
+    {
+      "ref": "m3-s2-t2",
+      "type": "task",
+      "parent_ref": "m3-s2",
+      "milestone_id": "2e7625d6-99fd-42e1-8214-99da0e3f1d33",
+      "title": "연결 해제·중복 정본 방지 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m3-s2-t2",
+      "description": "[초안 명세·Task] 연결 해제·중복 정본 방지 확인\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 잘못된 연결 대상만 롤백 가능; duplicate head 검증 근거\n범위(전/후): M3/파일럿 연결 정합 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 파일럿 74·92·109·110·119, 20261012 인증 화면 캡처/로그(M9 재사용), CEO 완료 판정 2026-10-14 11:29:27 KST; M3 evidence 일부 문구는 과거 미완료 상태로 남아 있으며 덮어쓰지 않는다\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "잘못된 연결 대상만 롤백 가능; duplicate head 검증 근거"
+      ]
+    },
+    {
+      "ref": "m3-s3",
+      "type": "story",
+      "parent_ref": "m3",
+      "milestone_id": "2e7625d6-99fd-42e1-8214-99da0e3f1d33",
+      "title": "운영 인수인계 근거",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m3-s3",
+      "description": "[초안 명세·Story] 운영 인수인계 근거\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 운영 인수인계 근거 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M3 안의 '운영 인수인계 근거' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: 파일럿 74·92·109·110·119, 20261012 인증 화면 캡처/로그(M9 재사용), CEO 완료 판정 2026-10-14 11:29:27 KST; M3 evidence 일부 문구는 과거 미완료 상태로 남아 있으며 덮어쓰지 않는다\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "20261012 캡처/로그를 연결; 로그인 게이트를 기능 성공으로 세지 않음",
+        "20261014 M3 판정과 실제 release/handover refs 연결"
+      ]
+    },
+    {
+      "ref": "m3-s3-t1",
+      "type": "task",
+      "parent_ref": "m3-s3",
+      "milestone_id": "2e7625d6-99fd-42e1-8214-99da0e3f1d33",
+      "title": "M9의 인증 화면·API 증거 재사용",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m3-s3-t1",
+      "description": "[초안 명세·Task] M9의 인증 화면·API 증거 재사용\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 20261012 캡처/로그를 연결; 로그인 게이트를 기능 성공으로 세지 않음\n범위(전/후): M3/운영 인수인계 근거 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 파일럿 74·92·109·110·119, 20261012 인증 화면 캡처/로그(M9 재사용), CEO 완료 판정 2026-10-14 11:29:27 KST; M3 evidence 일부 문구는 과거 미완료 상태로 남아 있으며 덮어쓰지 않는다\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음; M9 의 20261012 증거를 재사용(재실행 아님)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "20261012 캡처/로그를 연결; 로그인 게이트를 기능 성공으로 세지 않음"
+      ]
+    },
+    {
+      "ref": "m3-s3-t2",
+      "type": "task",
+      "parent_ref": "m3-s3",
+      "milestone_id": "2e7625d6-99fd-42e1-8214-99da0e3f1d33",
+      "title": "CEO 완료 판정·배포·핸드오버 대조",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m3-s3-t2",
+      "description": "[초안 명세·Task] CEO 완료 판정·배포·핸드오버 대조\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 20261014 M3 판정과 실제 release/handover refs 연결\n범위(전/후): M3/운영 인수인계 근거 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 파일럿 74·92·109·110·119, 20261012 인증 화면 캡처/로그(M9 재사용), CEO 완료 판정 2026-10-14 11:29:27 KST; M3 evidence 일부 문구는 과거 미완료 상태로 남아 있으며 덮어쓰지 않는다\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "20261014 M3 판정과 실제 release/handover refs 연결"
+      ]
+    },
+    {
+      "ref": "m4",
+      "type": "epic",
+      "parent_ref": null,
+      "milestone_id": "2e18a186-cf99-4ac7-9db6-10e4f82ae33f",
+      "title": "M4 서버 문서 인벤토리·프로젝트별 연결",
+      "priority": "P1",
+      "idempotency_key": "canonical-doc-goal-ac431290-m4",
+      "description": "[초안 명세·Epic] M4 서버 문서 인벤토리·프로젝트별 연결 의 구현·검증·운영 근거 추적\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: Story 3개 + Task 6개의 상세 명세와 각 수용기준 충족 판정 기록\n범위(전/후): 완료된 M4 를 되돌리지 않고 후속 검증 명세만 추가; 마일스톤 status/progress/completion_criteria/evidence/dispatch_note 불변\n기존 evidence ref: milestones.evidence 가 NULL(증거 연결 부족이며 기능 실패의 증거 아님); 현재 ACCT=cafe24_114, jinah244(구244)는 역사 자료\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Story 는 서로 병렬 가능; 이 Epic 이 부모 등록의 선행\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "M4 완료 판정과 기존 evidence 원본 보존",
+        "하위 Story 3개·Task 6개가 draft 명세로 존재",
+        "신규 Task 를 증거 없이 completed 로 표시하지 않음"
+      ]
+    },
+    {
+      "ref": "m4-s1",
+      "type": "story",
+      "parent_ref": "m4",
+      "milestone_id": "2e18a186-cf99-4ac7-9db6-10e4f82ae33f",
+      "title": "현재 운영 서버 기준 인벤토리",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m4-s1",
+      "description": "[초안 명세·Story] 현재 운영 서버 기준 인벤토리\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 현재 운영 서버 기준 인벤토리 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M4 안의 '현재 운영 서버 기준 인벤토리' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL(증거 연결 부족이며 기능 실패의 증거 아님); 현재 ACCT=cafe24_114, jinah244(구244)는 역사 자료\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "AADS=116,GO100/KIS=14,SF/NTV2/NAS/ACCT=114; 구244는 이관/역사 자료",
+        "운영 누락·구서버 archive·접속불가 구분; 구244를 운영 장애로 판단하지 않음"
+      ]
+    },
+    {
+      "ref": "m4-s1-t1",
+      "type": "task",
+      "parent_ref": "m4-s1",
+      "milestone_id": "2e18a186-cf99-4ac7-9db6-10e4f82ae33f",
+      "title": "서버 원장·프로젝트·실제 경로 대조",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m4-s1-t1",
+      "description": "[초안 명세·Task] 서버 원장·프로젝트·실제 경로 대조\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: AADS=116,GO100/KIS=14,SF/NTV2/NAS/ACCT=114; 구244는 이관/역사 자료\n범위(전/후): M4/현재 운영 서버 기준 인벤토리 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL(증거 연결 부족이며 기능 실패의 증거 아님); 현재 ACCT=cafe24_114, jinah244(구244)는 역사 자료\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "AADS=116,GO100/KIS=14,SF/NTV2/NAS/ACCT=114; 구244는 이관/역사 자료"
+      ]
+    },
+    {
+      "ref": "m4-s1-t2",
+      "type": "task",
+      "parent_ref": "m4-s1",
+      "milestone_id": "2e18a186-cf99-4ac7-9db6-10e4f82ae33f",
+      "title": "운영 문서와 구서버 자료 분리",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m4-s1-t2",
+      "description": "[초안 명세·Task] 운영 문서와 구서버 자료 분리\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 운영 누락·구서버 archive·접속불가 구분; 구244를 운영 장애로 판단하지 않음\n범위(전/후): M4/현재 운영 서버 기준 인벤토리 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL(증거 연결 부족이며 기능 실패의 증거 아님); 현재 ACCT=cafe24_114, jinah244(구244)는 역사 자료\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "운영 누락·구서버 archive·접속불가 구분; 구244를 운영 장애로 판단하지 않음"
+      ]
+    },
+    {
+      "ref": "m4-s2",
+      "type": "story",
+      "parent_ref": "m4",
+      "milestone_id": "2e18a186-cf99-4ac7-9db6-10e4f82ae33f",
+      "title": "고유 문서·사본 분류",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m4-s2",
+      "description": "[초안 명세·Story] 고유 문서·사본 분류\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 고유 문서·사본 분류 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M4 안의 '고유 문서·사본 분류' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL(증거 연결 부족이며 기능 실패의 증거 아님); 현재 ACCT=cafe24_114, jinah244(구244)는 역사 자료\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "같은 내용 사본과 서로 다른 개정 분리; 기존 key/path 보존",
+        "읽기 전용 조회로 건별 대상·영향·승인 여부·rollback 기록"
+      ]
+    },
+    {
+      "ref": "m4-s2-t1",
+      "type": "task",
+      "parent_ref": "m4-s2",
+      "milestone_id": "2e18a186-cf99-4ac7-9db6-10e4f82ae33f",
+      "title": "내용 hash·경로·document_key 대응표 작성",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m4-s2-t1",
+      "description": "[초안 명세·Task] 내용 hash·경로·document_key 대응표 작성\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 같은 내용 사본과 서로 다른 개정 분리; 기존 key/path 보존\n범위(전/후): M4/고유 문서·사본 분류 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL(증거 연결 부족이며 기능 실패의 증거 아님); 현재 ACCT=cafe24_114, jinah244(구244)는 역사 자료\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "같은 내용 사본과 서로 다른 개정 분리; 기존 key/path 보존"
+      ]
+    },
+    {
+      "ref": "m4-s2-t2",
+      "type": "task",
+      "parent_ref": "m4-s2",
+      "milestone_id": "2e18a186-cf99-4ac7-9db6-10e4f82ae33f",
+      "title": "프로젝트별 미등록·중복 배치 후보 작성",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m4-s2-t2",
+      "description": "[초안 명세·Task] 프로젝트별 미등록·중복 배치 후보 작성\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 읽기 전용 조회로 건별 대상·영향·승인 여부·rollback 기록\n범위(전/후): M4/고유 문서·사본 분류 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL(증거 연결 부족이며 기능 실패의 증거 아님); 현재 ACCT=cafe24_114, jinah244(구244)는 역사 자료\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "읽기 전용 조회로 건별 대상·영향·승인 여부·rollback 기록"
+      ]
+    },
+    {
+      "ref": "m4-s3",
+      "type": "story",
+      "parent_ref": "m4",
+      "milestone_id": "2e18a186-cf99-4ac7-9db6-10e4f82ae33f",
+      "title": "승인된 배치 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m4-s3",
+      "description": "[초안 명세·Story] 승인된 배치 연결\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 승인된 배치 연결 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M4 안의 '승인된 배치 연결' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL(증거 연결 부족이며 기능 실패의 증거 아님); 현재 ACCT=cafe24_114, jinah244(구244)는 역사 자료\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "승인된 범위에만 연결; service actor 추적; 미승인 일괄연결 금지",
+        "잘못된 연결 0; 동일 key 개정 불변; 기존 파일럿 재실행 금지"
+      ]
+    },
+    {
+      "ref": "m4-s3-t1",
+      "type": "task",
+      "parent_ref": "m4-s3",
+      "milestone_id": "2e18a186-cf99-4ac7-9db6-10e4f82ae33f",
+      "title": "CEO 승인된 배치와 actor 증거 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m4-s3-t1",
+      "description": "[초안 명세·Task] CEO 승인된 배치와 actor 증거 연결\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 승인된 범위에만 연결; service actor 추적; 미승인 일괄연결 금지\n범위(전/후): M4/승인된 배치 연결 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL(증거 연결 부족이며 기능 실패의 증거 아님); 현재 ACCT=cafe24_114, jinah244(구244)는 역사 자료\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "승인된 범위에만 연결; service actor 추적; 미승인 일괄연결 금지"
+      ]
+    },
+    {
+      "ref": "m4-s3-t2",
+      "type": "task",
+      "parent_ref": "m4-s3",
+      "milestone_id": "2e18a186-cf99-4ac7-9db6-10e4f82ae33f",
+      "title": "연결 전후 hash·해제 API 검증",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m4-s3-t2",
+      "description": "[초안 명세·Task] 연결 전후 hash·해제 API 검증\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 잘못된 연결 0; 동일 key 개정 불변; 기존 파일럿 재실행 금지\n범위(전/후): M4/승인된 배치 연결 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL(증거 연결 부족이며 기능 실패의 증거 아님); 현재 ACCT=cafe24_114, jinah244(구244)는 역사 자료\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "잘못된 연결 0; 동일 key 개정 불변; 기존 파일럿 재실행 금지"
+      ]
+    },
+    {
+      "ref": "m5",
+      "type": "epic",
+      "parent_ref": null,
+      "milestone_id": "942df3f2-5512-4c19-ab67-4b9a7f706d60",
+      "title": "M5 정본 본문 검색",
+      "priority": "P1",
+      "idempotency_key": "canonical-doc-goal-ac431290-m5",
+      "description": "[초안 명세·Epic] M5 정본 본문 검색 의 구현·검증·운영 근거 추적\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: Story 3개 + Task 6개의 상세 명세와 각 수용기준 충족 판정 기록\n범위(전/후): 완료된 M5 를 되돌리지 않고 후속 검증 명세만 추가; 마일스톤 status/progress/completion_criteria/evidence/dispatch_note 불변\n기존 evidence ref: F1 runner-1467686b, F2/F3 runner-a91f88a0, CEO 완료 판정 2026-10-14 11:29:33 KST\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Story 는 서로 병렬 가능; 이 Epic 이 부모 등록의 선행\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "M5 완료 판정과 기존 evidence 원본 보존",
+        "하위 Story 3개·Task 6개가 draft 명세로 존재",
+        "신규 Task 를 증거 없이 completed 로 표시하지 않음"
+      ]
+    },
+    {
+      "ref": "m5-s1",
+      "type": "story",
+      "parent_ref": "m5",
+      "milestone_id": "942df3f2-5512-4c19-ab67-4b9a7f706d60",
+      "title": "정본 색인 생명주기",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m5-s1",
+      "description": "[초안 명세·Story] 정본 색인 생명주기\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 정본 색인 생명주기 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M5 안의 '정본 색인 생명주기' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: F1 runner-1467686b, F2/F3 runner-a91f88a0, CEO 완료 판정 2026-10-14 11:29:33 KST\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "canonical URI·revision·승인/초안 표시가 포인터와 일치",
+        "기존 색인 삭제·재색인 금지; 최신 데이터는 SELECT로만 확인"
+      ]
+    },
+    {
+      "ref": "m5-s1-t1",
+      "type": "task",
+      "parent_ref": "m5-s1",
+      "milestone_id": "942df3f2-5512-4c19-ab67-4b9a7f706d60",
+      "title": "승인본·최신본 청크와 본문 hash 대조",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m5-s1-t1",
+      "description": "[초안 명세·Task] 승인본·최신본 청크와 본문 hash 대조\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: canonical URI·revision·승인/초안 표시가 포인터와 일치\n범위(전/후): M5/정본 색인 생명주기 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: F1 runner-1467686b, F2/F3 runner-a91f88a0, CEO 완료 판정 2026-10-14 11:29:33 KST\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "canonical URI·revision·승인/초안 표시가 포인터와 일치"
+      ]
+    },
+    {
+      "ref": "m5-s1-t2",
+      "type": "task",
+      "parent_ref": "m5-s1",
+      "milestone_id": "942df3f2-5512-4c19-ab67-4b9a7f706d60",
+      "title": "색인 보존·승인갱신·보관 처리 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m5-s1-t2",
+      "description": "[초안 명세·Task] 색인 보존·승인갱신·보관 처리 확인\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 기존 색인 삭제·재색인 금지; 최신 데이터는 SELECT로만 확인\n범위(전/후): M5/정본 색인 생명주기 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: F1 runner-1467686b, F2/F3 runner-a91f88a0, CEO 완료 판정 2026-10-14 11:29:33 KST\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "기존 색인 삭제·재색인 금지; 최신 데이터는 SELECT로만 확인"
+      ]
+    },
+    {
+      "ref": "m5-s2",
+      "type": "story",
+      "parent_ref": "m5",
+      "milestone_id": "942df3f2-5512-4c19-ab67-4b9a7f706d60",
+      "title": "검색 품질",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m5-s2",
+      "description": "[초안 명세·Story] 검색 품질\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검색 품질 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M5 안의 '검색 품질' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: F1 runner-1467686b, F2/F3 runner-a91f88a0, CEO 완료 판정 2026-10-14 11:29:33 KST\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "기존 runner-1467686b 재사용; 새 중복 제출 금지; 본문 질의로 정본 상위 k 노출",
+        "필터 적용 전후 타 tenant 미노출·grant 회수 즉시 차단; 운영/격리 구분"
+      ]
+    },
+    {
+      "ref": "m5-s2-t1",
+      "type": "task",
+      "parent_ref": "m5-s2",
+      "milestone_id": "942df3f2-5512-4c19-ab67-4b9a7f706d60",
+      "title": "F1 정본 상위 결과 보장 작업 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m5-s2-t1",
+      "description": "[초안 명세·Task] F1 정본 상위 결과 보장 작업 연결\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 기존 runner-1467686b 재사용; 새 중복 제출 금지; 본문 질의로 정본 상위 k 노출\n범위(전/후): M5/검색 품질 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: F1 runner-1467686b, F2/F3 runner-a91f88a0, CEO 완료 판정 2026-10-14 11:29:33 KST\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "기존 runner-1467686b 재사용; 새 중복 제출 금지; 본문 질의로 정본 상위 k 노출"
+      ]
+    },
+    {
+      "ref": "m5-s2-t2",
+      "type": "task",
+      "parent_ref": "m5-s2",
+      "milestone_id": "942df3f2-5512-4c19-ab67-4b9a7f706d60",
+      "title": "프로젝트·tenant 필터·회수 검증",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m5-s2-t2",
+      "description": "[초안 명세·Task] 프로젝트·tenant 필터·회수 검증\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 필터 적용 전후 타 tenant 미노출·grant 회수 즉시 차단; 운영/격리 구분\n범위(전/후): M5/검색 품질 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: F1 runner-1467686b, F2/F3 runner-a91f88a0, CEO 완료 판정 2026-10-14 11:29:33 KST\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "필터 적용 전후 타 tenant 미노출·grant 회수 즉시 차단; 운영/격리 구분"
+      ]
+    },
+    {
+      "ref": "m5-s3",
+      "type": "story",
+      "parent_ref": "m5",
+      "milestone_id": "942df3f2-5512-4c19-ab67-4b9a7f706d60",
+      "title": "검색 결과에서 문서 열기",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m5-s3",
+      "description": "[초안 명세·Story] 검색 결과에서 문서 열기\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검색 결과에서 문서 열기 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M5 안의 '검색 결과에서 문서 열기' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: F1 runner-1467686b, F2/F3 runner-a91f88a0, CEO 완료 판정 2026-10-14 11:29:33 KST\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "runner-a91f88a0 재사용; 검색→정확 project/key/revision 상세 열기",
+        "runner-a91f88a0 재사용; 첫 진입 force=false, 명시 새로고침만 force=true; 측정값만 보고"
+      ]
+    },
+    {
+      "ref": "m5-s3-t1",
+      "type": "task",
+      "parent_ref": "m5-s3",
+      "milestone_id": "942df3f2-5512-4c19-ab67-4b9a7f706d60",
+      "title": "F2 canonical URI에서 개정 상세 이동 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m5-s3-t1",
+      "description": "[초안 명세·Task] F2 canonical URI에서 개정 상세 이동 연결\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: runner-a91f88a0 재사용; 검색→정확 project/key/revision 상세 열기\n범위(전/후): M5/검색 결과에서 문서 열기 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: F1 runner-1467686b, F2/F3 runner-a91f88a0, CEO 완료 판정 2026-10-14 11:29:33 KST\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "runner-a91f88a0 재사용; 검색→정확 project/key/revision 상세 열기"
+      ]
+    },
+    {
+      "ref": "m5-s3-t2",
+      "type": "task",
+      "parent_ref": "m5-s3",
+      "milestone_id": "942df3f2-5512-4c19-ab67-4b9a7f706d60",
+      "title": "F3 최초 진입 캐시와 수동 재스캔 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m5-s3-t2",
+      "description": "[초안 명세·Task] F3 최초 진입 캐시와 수동 재스캔 연결\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: runner-a91f88a0 재사용; 첫 진입 force=false, 명시 새로고침만 force=true; 측정값만 보고\n범위(전/후): M5/검색 결과에서 문서 열기 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: F1 runner-1467686b, F2/F3 runner-a91f88a0, CEO 완료 판정 2026-10-14 11:29:33 KST\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: m5-s3-t1 과 병렬 가능(둘 다 runner-a91f88a0 결과를 재사용); 새 코드 작업 제출 금지\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "runner-a91f88a0 재사용; 첫 진입 force=false, 명시 새로고침만 force=true; 측정값만 보고"
+      ]
+    },
+    {
+      "ref": "m6",
+      "type": "epic",
+      "parent_ref": null,
+      "milestone_id": "318c4707-5a92-42bc-b503-ec7040cd4d38",
+      "title": "M6 세션 정본 게이트",
+      "priority": "P1",
+      "idempotency_key": "canonical-doc-goal-ac431290-m6",
+      "description": "[초안 명세·Epic] M6 세션 정본 게이트 의 구현·검증·운영 근거 추적\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: Story 3개 + Task 6개의 상세 명세와 각 수용기준 충족 판정 기록\n범위(전/후): 완료된 M6 를 되돌리지 않고 후속 검증 명세만 추가; 마일스톤 status/progress/completion_criteria/evidence/dispatch_note 불변\n기존 evidence ref: milestones.evidence 가 NULL; 별도 게이트 목표 0361c451… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Story 는 서로 병렬 가능; 이 Epic 이 부모 등록의 선행\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "M6 완료 판정과 기존 evidence 원본 보존",
+        "하위 Story 3개·Task 6개가 draft 명세로 존재",
+        "신규 Task 를 증거 없이 completed 로 표시하지 않음"
+      ]
+    },
+    {
+      "ref": "m6-s1",
+      "type": "story",
+      "parent_ref": "m6",
+      "milestone_id": "318c4707-5a92-42bc-b503-ec7040cd4d38",
+      "title": "세 진입점 게이트 계약",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m6-s1",
+      "description": "[초안 명세·Story] 세 진입점 게이트 계약\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 세 진입점 게이트 계약 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M6 안의 '세 진입점 게이트 계약' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 게이트 목표 0361c451… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "세 진입점의 off/shadow/enforce 동작·호출 SHA를 분리",
+        "기존 완료기준 off 쿼리 0·300ms 상한·fail-open 근거 연결; 실측 부재는 미검증"
+      ]
+    },
+    {
+      "ref": "m6-s1-t1",
+      "type": "task",
+      "parent_ref": "m6-s1",
+      "milestone_id": "318c4707-5a92-42bc-b503-ec7040cd4d38",
+      "title": "goals 문서 등록·러너 제출·pre-commit 연결 대조",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m6-s1-t1",
+      "description": "[초안 명세·Task] goals 문서 등록·러너 제출·pre-commit 연결 대조\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 세 진입점의 off/shadow/enforce 동작·호출 SHA를 분리\n범위(전/후): M6/세 진입점 게이트 계약 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 게이트 목표 0361c451… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "세 진입점의 off/shadow/enforce 동작·호출 SHA를 분리"
+      ]
+    },
+    {
+      "ref": "m6-s1-t2",
+      "type": "task",
+      "parent_ref": "m6-s1",
+      "milestone_id": "318c4707-5a92-42bc-b503-ec7040cd4d38",
+      "title": "오류·시간상한·off 검증",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m6-s1-t2",
+      "description": "[초안 명세·Task] 오류·시간상한·off 검증\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 기존 완료기준 off 쿼리 0·300ms 상한·fail-open 근거 연결; 실측 부재는 미검증\n범위(전/후): M6/세 진입점 게이트 계약 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 게이트 목표 0361c451… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "기존 완료기준 off 쿼리 0·300ms 상한·fail-open 근거 연결; 실측 부재는 미검증"
+      ]
+    },
+    {
+      "ref": "m6-s2",
+      "type": "story",
+      "parent_ref": "m6",
+      "milestone_id": "318c4707-5a92-42bc-b503-ec7040cd4d38",
+      "title": "그림자 운영 계측",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m6-s2",
+      "description": "[초안 명세·Story] 그림자 운영 계측\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 그림자 운영 계측 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M6 안의 '그림자 운영 계측' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 게이트 목표 0361c451… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "7일 구간·경고 건수·오탐 분모·누락 사유 기록; 추정률 금지",
+        "문서 미등록·도구장애·권한·구버전 경로를 구별; 관련 목표 결과 참조"
+      ]
+    },
+    {
+      "ref": "m6-s2-t1",
+      "type": "task",
+      "parent_ref": "m6-s2",
+      "milestone_id": "318c4707-5a92-42bc-b503-ec7040cd4d38",
+      "title": "경고·오탐 표본과 분모 수집",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m6-s2-t1",
+      "description": "[초안 명세·Task] 경고·오탐 표본과 분모 수집\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 7일 구간·경고 건수·오탐 분모·누락 사유 기록; 추정률 금지\n범위(전/후): M6/그림자 운영 계측 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 게이트 목표 0361c451… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "7일 구간·경고 건수·오탐 분모·누락 사유 기록; 추정률 금지"
+      ]
+    },
+    {
+      "ref": "m6-s2-t2",
+      "type": "task",
+      "parent_ref": "m6-s2",
+      "milestone_id": "318c4707-5a92-42bc-b503-ec7040cd4d38",
+      "title": "중복 경고·실패 원인 분류",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m6-s2-t2",
+      "description": "[초안 명세·Task] 중복 경고·실패 원인 분류\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 문서 미등록·도구장애·권한·구버전 경로를 구별; 관련 목표 결과 참조\n범위(전/후): M6/그림자 운영 계측 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 게이트 목표 0361c451… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "문서 미등록·도구장애·권한·구버전 경로를 구별; 관련 목표 결과 참조"
+      ]
+    },
+    {
+      "ref": "m6-s3",
+      "type": "story",
+      "parent_ref": "m6",
+      "milestone_id": "318c4707-5a92-42bc-b503-ec7040cd4d38",
+      "title": "강제 전환 결정",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m6-s3",
+      "description": "[초안 명세·Story] 강제 전환 결정\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 강제 전환 결정 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M6 안의 '강제 전환 결정' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 게이트 목표 0361c451… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "그림자 결과·사용자 영향·복구 경로가 포함된 승인안",
+        "CEO 승인 없이 enabled/enforce 변경 금지; M7 provenance와 연결"
+      ]
+    },
+    {
+      "ref": "m6-s3-t1",
+      "type": "task",
+      "parent_ref": "m6-s3",
+      "milestone_id": "318c4707-5a92-42bc-b503-ec7040cd4d38",
+      "title": "실측에 따른 강제 전환 권장안 작성",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m6-s3-t1",
+      "description": "[초안 명세·Task] 실측에 따른 강제 전환 권장안 작성\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 그림자 결과·사용자 영향·복구 경로가 포함된 승인안\n범위(전/후): M6/강제 전환 결정 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 게이트 목표 0361c451… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행: m6-s2-t1, m6-s2-t2 의 실측 결과\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "그림자 결과·사용자 영향·복구 경로가 포함된 승인안"
+      ]
+    },
+    {
+      "ref": "m6-s3-t2",
+      "type": "task",
+      "parent_ref": "m6-s3",
+      "milestone_id": "318c4707-5a92-42bc-b503-ec7040cd4d38",
+      "title": "정책 승인·적용·원복 근거 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m6-s3-t2",
+      "description": "[초안 명세·Task] 정책 승인·적용·원복 근거 연결\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: CEO 승인 없이 enabled/enforce 변경 금지; M7 provenance와 연결\n범위(전/후): M6/강제 전환 결정 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 게이트 목표 0361c451… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행: m6-s3-t1 승인안과 CEO 승인; M7 provenance(m7-s3-t1) 참조\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "CEO 승인 없이 enabled/enforce 변경 금지; M7 provenance와 연결"
+      ]
+    },
+    {
+      "ref": "m7",
+      "type": "epic",
+      "parent_ref": null,
+      "milestone_id": "29dd7c05-cc40-4209-b8ff-cc1765b40b7e",
+      "title": "M7 문서 저장 규칙·정본 등록 도구",
+      "priority": "P1",
+      "idempotency_key": "canonical-doc-goal-ac431290-m7",
+      "description": "[초안 명세·Epic] M7 문서 저장 규칙·정본 등록 도구 의 구현·검증·운영 근거 추적\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: Story 3개 + Task 6개의 상세 명세와 각 수용기준 충족 판정 기록\n범위(전/후): 완료된 M7 를 되돌리지 않고 후속 검증 명세만 추가; 마일스톤 status/progress/completion_criteria/evidence/dispatch_note 불변\n기존 evidence ref: milestones.evidence 가 NULL; 별도 R-DOC 목표 a6cc6511… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Story 는 서로 병렬 가능; 이 Epic 이 부모 등록의 선행\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "M7 완료 판정과 기존 evidence 원본 보존",
+        "하위 Story 3개·Task 6개가 draft 명세로 존재",
+        "신규 Task 를 증거 없이 completed 로 표시하지 않음"
+      ]
+    },
+    {
+      "ref": "m7-s1",
+      "type": "story",
+      "parent_ref": "m7",
+      "milestone_id": "29dd7c05-cc40-4209-b8ff-cc1765b40b7e",
+      "title": "문서 저장·명명 규칙",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m7-s1",
+      "description": "[초안 명세·Story] 문서 저장·명명 규칙\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 문서 저장·명명 규칙 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M7 안의 '문서 저장·명명 규칙' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 R-DOC 목표 a6cc6511… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "plan/prd/design/report/spec 경로와 YYYYMMDD_PROJECT_한글제목·H1 일치",
+        "kebab key 유지; 날짜 사본·중복 정본·기존 경로 변경 금지"
+      ]
+    },
+    {
+      "ref": "m7-s1-t1",
+      "type": "task",
+      "parent_ref": "m7-s1",
+      "milestone_id": "29dd7c05-cc40-4209-b8ff-cc1765b40b7e",
+      "title": "kind별 저장 경로·한글 제목 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m7-s1-t1",
+      "description": "[초안 명세·Task] kind별 저장 경로·한글 제목 확인\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: plan/prd/design/report/spec 경로와 YYYYMMDD_PROJECT_한글제목·H1 일치\n범위(전/후): M7/문서 저장·명명 규칙 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 R-DOC 목표 a6cc6511… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "plan/prd/design/report/spec 경로와 YYYYMMDD_PROJECT_한글제목·H1 일치"
+      ]
+    },
+    {
+      "ref": "m7-s1-t2",
+      "type": "task",
+      "parent_ref": "m7-s1",
+      "milestone_id": "29dd7c05-cc40-4209-b8ff-cc1765b40b7e",
+      "title": "document_key·동일 키 새판본 규칙 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m7-s1-t2",
+      "description": "[초안 명세·Task] document_key·동일 키 새판본 규칙 확인\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: kebab key 유지; 날짜 사본·중복 정본·기존 경로 변경 금지\n범위(전/후): M7/문서 저장·명명 규칙 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 R-DOC 목표 a6cc6511… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "kebab key 유지; 날짜 사본·중복 정본·기존 경로 변경 금지"
+      ]
+    },
+    {
+      "ref": "m7-s2",
+      "type": "story",
+      "parent_ref": "m7",
+      "milestone_id": "29dd7c05-cc40-4209-b8ff-cc1765b40b7e",
+      "title": "초안 등록 도구",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m7-s2",
+      "description": "[초안 명세·Story] 초안 등록 도구\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 초안 등록 도구 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M7 안의 '초안 등록 도구' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 R-DOC 목표 a6cc6511… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "동일 내용 replay·generation conflict·출처경로 한계 검증",
+        "도구는 초안까지만; 승인 포인터 불변; 반환 view/report_line 그대로 사용"
+      ]
+    },
+    {
+      "ref": "m7-s2-t1",
+      "type": "task",
+      "parent_ref": "m7-s2",
+      "milestone_id": "29dd7c05-cc40-4209-b8ff-cc1765b40b7e",
+      "title": "content/file_path·멱등·충돌 계약 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m7-s2-t1",
+      "description": "[초안 명세·Task] content/file_path·멱등·충돌 계약 확인\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 동일 내용 replay·generation conflict·출처경로 한계 검증\n범위(전/후): M7/초안 등록 도구 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 R-DOC 목표 a6cc6511… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "동일 내용 replay·generation conflict·출처경로 한계 검증"
+      ]
+    },
+    {
+      "ref": "m7-s2-t2",
+      "type": "task",
+      "parent_ref": "m7-s2",
+      "milestone_id": "29dd7c05-cc40-4209-b8ff-cc1765b40b7e",
+      "title": "등록·승인 권한과 열람 참조 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m7-s2-t2",
+      "description": "[초안 명세·Task] 등록·승인 권한과 열람 참조 확인\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 도구는 초안까지만; 승인 포인터 불변; 반환 view/report_line 그대로 사용\n범위(전/후): M7/초안 등록 도구 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 R-DOC 목표 a6cc6511… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "도구는 초안까지만; 승인 포인터 불변; 반환 view/report_line 그대로 사용"
+      ]
+    },
+    {
+      "ref": "m7-s3",
+      "type": "story",
+      "parent_ref": "m7",
+      "milestone_id": "29dd7c05-cc40-4209-b8ff-cc1765b40b7e",
+      "title": "전체 세션 적용 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m7-s3",
+      "description": "[초안 명세·Story] 전체 세션 적용 확인\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 전체 세션 적용 확인 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M7 안의 '전체 세션 적용 확인' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 R-DOC 목표 a6cc6511… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "에셋 존재와 실제 applied_assets 적용을 분리; 관련 R-DOC 목표 결과 재사용",
+        "기간·분모·등록/미등록 원인·담당 기록; 같은 문서 재등록 금지"
+      ]
+    },
+    {
+      "ref": "m7-s3-t1",
+      "type": "task",
+      "parent_ref": "m7-s3",
+      "milestone_id": "29dd7c05-cc40-4209-b8ff-cc1765b40b7e",
+      "title": "L1 scope·enabled·compiled provenance 대조",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m7-s3-t1",
+      "description": "[초안 명세·Task] L1 scope·enabled·compiled provenance 대조\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 에셋 존재와 실제 applied_assets 적용을 분리; 관련 R-DOC 목표 결과 재사용\n범위(전/후): M7/전체 세션 적용 확인 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 R-DOC 목표 a6cc6511… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "에셋 존재와 실제 applied_assets 적용을 분리; 관련 R-DOC 목표 결과 재사용"
+      ]
+    },
+    {
+      "ref": "m7-s3-t2",
+      "type": "task",
+      "parent_ref": "m7-s3",
+      "milestone_id": "29dd7c05-cc40-4209-b8ff-cc1765b40b7e",
+      "title": "기간별 문서 등록률·미등록 큐 산출",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m7-s3-t2",
+      "description": "[초안 명세·Task] 기간별 문서 등록률·미등록 큐 산출\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 기간·분모·등록/미등록 원인·담당 기록; 같은 문서 재등록 금지\n범위(전/후): M7/전체 세션 적용 확인 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: milestones.evidence 가 NULL; 별도 R-DOC 목표 a6cc6511… 결과 참조(같은 정책 재구현 금지)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "기간·분모·등록/미등록 원인·담당 기록; 같은 문서 재등록 금지"
+      ]
+    },
+    {
+      "ref": "m8",
+      "type": "epic",
+      "parent_ref": null,
+      "milestone_id": "c7f8f638-bb5b-4bc4-af02-60f6f260a04b",
+      "title": "M8 승인 정본·코드·AAG 대조",
+      "priority": "P1",
+      "idempotency_key": "canonical-doc-goal-ac431290-m8",
+      "description": "[초안 명세·Epic] M8 승인 정본·코드·AAG 대조 의 구현·검증·운영 근거 추적\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: Story 3개 + Task 6개의 상세 명세와 각 수용기준 충족 판정 기록\n범위(전/후): 완료된 M8 를 되돌리지 않고 후속 검증 명세만 추가; 마일스톤 status/progress/completion_criteria/evidence/dispatch_note 불변\n기존 evidence ref: runner-a4df37a8 AI review, CEO 완료 판정 2026-10-14 11:29:35 KST, 99행 대응표는 20261012 역사값\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Story 는 서로 병렬 가능; 이 Epic 이 부모 등록의 선행\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "M8 완료 판정과 기존 evidence 원본 보존",
+        "하위 Story 3개·Task 6개가 draft 명세로 존재",
+        "신규 Task 를 증거 없이 completed 로 표시하지 않음"
+      ]
+    },
+    {
+      "ref": "m8-s1",
+      "type": "story",
+      "parent_ref": "m8",
+      "milestone_id": "c7f8f638-bb5b-4bc4-af02-60f6f260a04b",
+      "title": "요구사항 대응표",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m8-s1",
+      "description": "[초안 명세·Story] 요구사항 대응표\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 요구사항 대응표 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M8 안의 '요구사항 대응표' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: runner-a4df37a8 AI review, CEO 완료 판정 2026-10-14 11:29:35 KST, 99행 대응표는 20261012 역사값\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "approved FK와 content hash·baseline SHA를 함께 기록",
+        "99행은 20261012 역사값; 최신 검증 없이 현재 MATCH/MISMATCH 수로 보고 금지"
+      ]
+    },
+    {
+      "ref": "m8-s1-t1",
+      "type": "task",
+      "parent_ref": "m8-s1",
+      "milestone_id": "c7f8f638-bb5b-4bc4-af02-60f6f260a04b",
+      "title": "승인 4문서의 revision·hash 기준 고정",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m8-s1-t1",
+      "description": "[초안 명세·Task] 승인 4문서의 revision·hash 기준 고정\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: approved FK와 content hash·baseline SHA를 함께 기록\n범위(전/후): M8/요구사항 대응표 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: runner-a4df37a8 AI review, CEO 완료 판정 2026-10-14 11:29:35 KST, 99행 대응표는 20261012 역사값\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "approved FK와 content hash·baseline SHA를 함께 기록"
+      ]
+    },
+    {
+      "ref": "m8-s1-t2",
+      "type": "task",
+      "parent_ref": "m8-s1",
+      "milestone_id": "c7f8f638-bb5b-4bc4-af02-60f6f260a04b",
+      "title": "요구사항→코드→테스트 대응표 대조",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m8-s1-t2",
+      "description": "[초안 명세·Task] 요구사항→코드→테스트 대응표 대조\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 99행은 20261012 역사값; 최신 검증 없이 현재 MATCH/MISMATCH 수로 보고 금지\n범위(전/후): M8/요구사항 대응표 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: runner-a4df37a8 AI review, CEO 완료 판정 2026-10-14 11:29:35 KST, 99행 대응표는 20261012 역사값\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "99행은 20261012 역사값; 최신 검증 없이 현재 MATCH/MISMATCH 수로 보고 금지"
+      ]
+    },
+    {
+      "ref": "m8-s2",
+      "type": "story",
+      "parent_ref": "m8",
+      "milestone_id": "c7f8f638-bb5b-4bc4-af02-60f6f260a04b",
+      "title": "AAG 최신성·운영 대조",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m8-s2",
+      "description": "[초안 명세·Story] AAG 최신성·운영 대조\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: AAG 최신성·운영 대조 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M8 안의 'AAG 최신성·운영 대조' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: runner-a4df37a8 AI review, CEO 완료 판정 2026-10-14 11:29:35 KST, 99행 대응표는 20261012 역사값\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "N-02 재조회; stale graph를 현재 구현 증거로 사용 금지; 공유 dirty 보존",
+        "후보 rescan과 운영 authoritative를 분리; unresolved/finding 원인 기록"
+      ]
+    },
+    {
+      "ref": "m8-s2-t1",
+      "type": "task",
+      "parent_ref": "m8-s2",
+      "milestone_id": "c7f8f638-bb5b-4bc4-af02-60f6f260a04b",
+      "title": "운영 AAG 포인터·origin·권한성 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m8-s2-t1",
+      "description": "[초안 명세·Task] 운영 AAG 포인터·origin·권한성 확인\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: N-02 재조회; stale graph를 현재 구현 증거로 사용 금지; 공유 dirty 보존\n범위(전/후): M8/AAG 최신성·운영 대조 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: runner-a4df37a8 AI review, CEO 완료 판정 2026-10-14 11:29:35 KST, 99행 대응표는 20261012 역사값\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "N-02 재조회; stale graph를 현재 구현 증거로 사용 금지; 공유 dirty 보존"
+      ]
+    },
+    {
+      "ref": "m8-s2-t2",
+      "type": "task",
+      "parent_ref": "m8-s2",
+      "milestone_id": "c7f8f638-bb5b-4bc4-af02-60f6f260a04b",
+      "title": "격리 rescan·누락 edge·검증환경 분리",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m8-s2-t2",
+      "description": "[초안 명세·Task] 격리 rescan·누락 edge·검증환경 분리\n책임 역할: 미배정 (권장 역할: Developer; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 후보 rescan과 운영 authoritative를 분리; unresolved/finding 원인 기록\n범위(전/후): M8/AAG 최신성·운영 대조 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: runner-a4df37a8 AI review, CEO 완료 판정 2026-10-14 11:29:35 KST, 99행 대응표는 20261012 역사값\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "후보 rescan과 운영 authoritative를 분리; unresolved/finding 원인 기록"
+      ]
+    },
+    {
+      "ref": "m8-s3",
+      "type": "story",
+      "parent_ref": "m8",
+      "milestone_id": "c7f8f638-bb5b-4bc4-af02-60f6f260a04b",
+      "title": "잔여 결함 판정·인계",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m8-s3",
+      "description": "[초안 명세·Story] 잔여 결함 판정·인계\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 잔여 결함 판정·인계 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M8 안의 '잔여 결함 판정·인계' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: runner-a4df37a8 AI review, CEO 완료 판정 2026-10-14 11:29:35 KST, 99행 대응표는 20261012 역사값\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "정본정책 불일치/코드결함/미검증/CEO결정 각각 담당·선행 기록",
+        "runner-a4df37a8 AI review와 20261014 M8 판정 연결; 결함 수정 완료로 확대 해석 금지"
+      ]
+    },
+    {
+      "ref": "m8-s3-t1",
+      "type": "task",
+      "parent_ref": "m8-s3",
+      "milestone_id": "c7f8f638-bb5b-4bc4-af02-60f6f260a04b",
+      "title": "N-01·N-03·C-S6-06 등 후속 책임 분리",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m8-s3-t1",
+      "description": "[초안 명세·Task] N-01·N-03·C-S6-06 등 후속 책임 분리\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 정본정책 불일치/코드결함/미검증/CEO결정 각각 담당·선행 기록\n범위(전/후): M8/잔여 결함 판정·인계 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: runner-a4df37a8 AI review, CEO 완료 판정 2026-10-14 11:29:35 KST, 99행 대응표는 20261012 역사값\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "정본정책 불일치/코드결함/미검증/CEO결정 각각 담당·선행 기록"
+      ]
+    },
+    {
+      "ref": "m8-s3-t2",
+      "type": "task",
+      "parent_ref": "m8-s3",
+      "milestone_id": "c7f8f638-bb5b-4bc4-af02-60f6f260a04b",
+      "title": "독립 review·CEO 완료 판정 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m8-s3-t2",
+      "description": "[초안 명세·Task] 독립 review·CEO 완료 판정 연결\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: runner-a4df37a8 AI review와 20261014 M8 판정 연결; 결함 수정 완료로 확대 해석 금지\n범위(전/후): M8/잔여 결함 판정·인계 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: runner-a4df37a8 AI review, CEO 완료 판정 2026-10-14 11:29:35 KST, 99행 대응표는 20261012 역사값\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "runner-a4df37a8 AI review와 20261014 M8 판정 연결; 결함 수정 완료로 확대 해석 금지"
+      ]
+    },
+    {
+      "ref": "m9",
+      "type": "epic",
+      "parent_ref": null,
+      "milestone_id": "a55743c9-e533-41a5-bab3-7a17a8f8fa89",
+      "title": "M9 문서 화면·권한·실패 복구",
+      "priority": "P1",
+      "idempotency_key": "canonical-doc-goal-ac431290-m9",
+      "description": "[초안 명세·Epic] M9 문서 화면·권한·실패 복구 의 구현·검증·운영 근거 추적\n책임 역할: 미배정 (권장 역할: PM; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: Story 3개 + Task 6개의 상세 명세와 각 수용기준 충족 판정 기록\n범위(전/후): 완료된 M9 를 되돌리지 않고 후속 검증 명세만 추가; 마일스톤 status/progress/completion_criteria/evidence/dispatch_note 불변\n기존 evidence ref: 정본 가시성 runner-a64c6592, 후속 runner-9d30d5ad, 20261012 인증 화면 캡처/로그; 재작업 후보 기록(card e1b4db1d-ae3a-4a52-8357-4a032879fe74, 참조 runner-d51bf08f cancelled)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Story 는 서로 병렬 가능; 이 Epic 이 부모 등록의 선행\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "M9 완료 판정과 기존 evidence 원본 보존",
+        "하위 Story 3개·Task 6개가 draft 명세로 존재",
+        "신규 Task 를 증거 없이 completed 로 표시하지 않음"
+      ]
+    },
+    {
+      "ref": "m9-s1",
+      "type": "story",
+      "parent_ref": "m9",
+      "milestone_id": "a55743c9-e533-41a5-bab3-7a17a8f8fa89",
+      "title": "사용자 핵심 화면",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m9-s1",
+      "description": "[초안 명세·Story] 사용자 핵심 화면\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 사용자 핵심 화면 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M9 안의 '사용자 핵심 화면' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: 정본 가시성 runner-a64c6592, 후속 runner-9d30d5ad, 20261012 인증 화면 캡처/로그; 재작업 후보 기록(card e1b4db1d-ae3a-4a52-8357-4a032879fe74, 참조 runner-d51bf08f cancelled)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "desktop/mobile 실캡처; 승인·초안·승인본 선택·ACCT 전환 확인",
+        "관련 runner-a64c6592 결과 참조; 가로넘침·터치영역·복귀 검증"
+      ]
+    },
+    {
+      "ref": "m9-s1-t1",
+      "type": "task",
+      "parent_ref": "m9-s1",
+      "milestone_id": "a55743c9-e533-41a5-bab3-7a17a8f8fa89",
+      "title": "목록→검색→정확 개정 상세·이력 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m9-s1-t1",
+      "description": "[초안 명세·Task] 목록→검색→정확 개정 상세·이력 확인\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: desktop/mobile 실캡처; 승인·초안·승인본 선택·ACCT 전환 확인\n범위(전/후): M9/사용자 핵심 화면 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 정본 가시성 runner-a64c6592, 후속 runner-9d30d5ad, 20261012 인증 화면 캡처/로그; 재작업 후보 기록(card e1b4db1d-ae3a-4a52-8357-4a032879fe74, 참조 runner-d51bf08f cancelled)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "desktop/mobile 실캡처; 승인·초안·승인본 선택·ACCT 전환 확인"
+      ]
+    },
+    {
+      "ref": "m9-s1-t2",
+      "type": "task",
+      "parent_ref": "m9-s1",
+      "milestone_id": "a55743c9-e533-41a5-bab3-7a17a8f8fa89",
+      "title": "폰 레이아웃·새로고침·세션 보존 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m9-s1-t2",
+      "description": "[초안 명세·Task] 폰 레이아웃·새로고침·세션 보존 확인\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 관련 runner-a64c6592 결과 참조; 가로넘침·터치영역·복귀 검증\n범위(전/후): M9/사용자 핵심 화면 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 정본 가시성 runner-a64c6592, 후속 runner-9d30d5ad, 20261012 인증 화면 캡처/로그; 재작업 후보 기록(card e1b4db1d-ae3a-4a52-8357-4a032879fe74, 참조 runner-d51bf08f cancelled)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "관련 runner-a64c6592 결과 참조; 가로넘침·터치영역·복귀 검증"
+      ]
+    },
+    {
+      "ref": "m9-s2",
+      "type": "story",
+      "parent_ref": "m9",
+      "milestone_id": "a55743c9-e533-41a5-bab3-7a17a8f8fa89",
+      "title": "운영 권한 검증",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m9-s2",
+      "description": "[초안 명세·Story] 운영 권한 검증\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 운영 권한 검증 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M9 안의 '운영 권한 검증' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: 정본 가시성 runner-a64c6592, 후속 runner-9d30d5ad, 20261012 인증 화면 캡처/로그; 재작업 후보 기록(card e1b4db1d-ae3a-4a52-8357-4a032879fe74, 참조 runner-d51bf08f cancelled)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "유효한 비내부 tenant 신원 사용; X-Tenant-ID 403과 구분; 확보 전 blocked",
+        "운영 신원·한정 승인 grant 필요; 승인 전 쓰기 금지; 검증 뒤 원복 SELECT"
+      ]
+    },
+    {
+      "ref": "m9-s2-t1",
+      "type": "task",
+      "parent_ref": "m9-s2",
+      "milestone_id": "a55743c9-e533-41a5-bab3-7a17a8f8fa89",
+      "title": "다른 tenant 실제 로그인 비노출 검증",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m9-s2-t1",
+      "description": "[초안 명세·Task] 다른 tenant 실제 로그인 비노출 검증\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 유효한 비내부 tenant 신원 사용; X-Tenant-ID 403과 구분; 확보 전 blocked\n범위(전/후): M9/운영 권한 검증 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 정본 가시성 runner-a64c6592, 후속 runner-9d30d5ad, 20261012 인증 화면 캡처/로그; 재작업 후보 기록(card e1b4db1d-ae3a-4a52-8357-4a032879fe74, 참조 runner-d51bf08f cancelled)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "유효한 비내부 tenant 신원 사용; X-Tenant-ID 403과 구분; 확보 전 blocked"
+      ]
+    },
+    {
+      "ref": "m9-s2-t2",
+      "type": "task",
+      "parent_ref": "m9-s2",
+      "milestone_id": "a55743c9-e533-41a5-bab3-7a17a8f8fa89",
+      "title": "비관리자 grant 전·허용·회수 검증",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m9-s2-t2",
+      "description": "[초안 명세·Task] 비관리자 grant 전·허용·회수 검증\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 운영 신원·한정 승인 grant 필요; 승인 전 쓰기 금지; 검증 뒤 원복 SELECT\n범위(전/후): M9/운영 권한 검증 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 정본 가시성 runner-a64c6592, 후속 runner-9d30d5ad, 20261012 인증 화면 캡처/로그; 재작업 후보 기록(card e1b4db1d-ae3a-4a52-8357-4a032879fe74, 참조 runner-d51bf08f cancelled)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행: m9-s2-t1 의 비내부 tenant 신원 확보 여부; 한정 승인 grant 없이는 쓰기 금지\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "운영 신원·한정 승인 grant 필요; 승인 전 쓰기 금지; 검증 뒤 원복 SELECT"
+      ]
+    },
+    {
+      "ref": "m9-s3",
+      "type": "story",
+      "parent_ref": "m9",
+      "milestone_id": "a55743c9-e533-41a5-bab3-7a17a8f8fa89",
+      "title": "실패 복구·릴리스 인수",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m9-s3",
+      "description": "[초안 명세·Story] 실패 복구·릴리스 인수\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 실패 복구·릴리스 인수 범위의 Task 2개 결과 및 수용기준 판정 요약\n범위(전/후): M9 안의 '실패 복구·릴리스 인수' 한정; 다른 Story·다른 project 변경 없음\n기존 evidence ref: 정본 가시성 runner-a64c6592, 후속 runner-9d30d5ad, 20261012 인증 화면 캡처/로그; 재작업 후보 기록(card e1b4db1d-ae3a-4a52-8357-4a032879fe74, 참조 runner-d51bf08f cancelled)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 하위 Task 는 번호 순서로 진행(t1→t2), 다른 Story 와는 병렬 가능\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "사용자 다음 행동·재시도 UI를 실제 화면으로 확인; 실패시 HTTP→health→process",
+        "새 릴리스 필요시 별도 승인+bluegreen·same-digest·rollback·5분 P0/P1; DB handover 확인"
+      ]
+    },
+    {
+      "ref": "m9-s3-t1",
+      "type": "task",
+      "parent_ref": "m9-s3",
+      "milestone_id": "a55743c9-e533-41a5-bab3-7a17a8f8fa89",
+      "title": "401·403·네트워크·스캔실패 복구 확인",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m9-s3-t1",
+      "description": "[초안 명세·Task] 401·403·네트워크·스캔실패 복구 확인\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 사용자 다음 행동·재시도 UI를 실제 화면으로 확인; 실패시 HTTP→health→process\n범위(전/후): M9/실패 복구·릴리스 인수 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 정본 가시성 runner-a64c6592, 후속 runner-9d30d5ad, 20261012 인증 화면 캡처/로그; 재작업 후보 기록(card e1b4db1d-ae3a-4a52-8357-4a032879fe74, 참조 runner-d51bf08f cancelled)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 선행 없음(Story 시작 가능)\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "사용자 다음 행동·재시도 UI를 실제 화면으로 확인; 실패시 HTTP→health→process"
+      ]
+    },
+    {
+      "ref": "m9-s3-t2",
+      "type": "task",
+      "parent_ref": "m9-s3",
+      "milestone_id": "a55743c9-e533-41a5-bab3-7a17a8f8fa89",
+      "title": "릴리스·핸드오버·최종 완료 근거 연결",
+      "priority": "P2",
+      "idempotency_key": "canonical-doc-goal-ac431290-m9-s3-t2",
+      "description": "[초안 명세·Task] 릴리스·핸드오버·최종 완료 근거 연결\n책임 역할: 미배정 (권장 역할: QA; 실제 assignment_id 없음 — 역할명만으로 배정하지 않음)\n산출물: 검증 기록(SELECT/로그/SHA 연결)과 수용기준 판정: 새 릴리스 필요시 별도 승인+bluegreen·same-digest·rollback·5분 P0/P1; DB handover 확인\n범위(전/후): M9/실패 복구·릴리스 인수 한정, 읽기 전용 확인 우선; 원본 삭제·재실행·정책 변경 없음\n기존 evidence ref: 정본 가시성 runner-a64c6592, 후속 runner-9d30d5ad, 20261012 인증 화면 캡처/로그; 재작업 후보 기록(card e1b4db1d-ae3a-4a52-8357-4a032879fe74, 참조 runner-d51bf08f cancelled)\n역사적 완료 근거 / 새 후속 검증: 역사적 완료 근거 = 해당 마일스톤의 CEO 완료 판정(2026-10-14)과 기존 evidence 원본이며 변경하지 않는다. 이 항목의 달성은 새 구현 완료가 아니라 후속 검증 명세이고, 증거 없이 completed 로 만들지 않는다.\n선행·병렬 조건: 같은 Story 의 이전 Task 완료 후\n등록은 실행 승인·자동 grant·목표 재개와 무관하며 status 는 API 가 부여하는 기본값 그대로 둔다.",
+      "acceptance_criteria": [
+        "새 릴리스 필요시 별도 승인+bluegreen·same-digest·rollback·5분 P0/P1; DB handover 확인"
+      ]
+    }
+  ]
+}
