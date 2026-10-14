@@ -2225,6 +2225,13 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
                 "browser_session_id": {"type": "string"},
                 "browser_work_key": {"type": "string"},
+                "confirmed_draft_id": {
+                    "type": "string",
+                    "description": (
+                        "run 이 status=confirmation_required 카드를 돌려줬고 사용자가 [실행]을 눌렀을 때만, "
+                        "그 결과의 draft_id 를 같은 directive 와 함께 넘긴다. 사용자 확인 없이 채우지 않는다"
+                    ),
+                },
             },
             "required": ["action"],
         },

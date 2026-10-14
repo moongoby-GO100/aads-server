@@ -5,6 +5,7 @@ import hmac
 import logging
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.services.channel_router import ActionIntent, ChannelRouter
@@ -57,24 +58,25 @@ def _draft_phrase_matches(text: str, tokens: list[str], phrase: str) -> bool:
     return squashed in _squash(text) or bool(tokens and all(token in squashed for token in tokens))
 
 
-async def _draft_recipe_names(directive_text: str, tenant_id: Any) -> set[str]:
-    """active 자동화 초안의 title·aliases 와 지시가 맞으면 그 초안의 레시피 이름을 돌려준다."""
+async def _draft_matches(directive_text: str, tenant_id: Any) -> list[tuple[Mapping[str, Any], str]]:
+    """active 자동화 초안 중 title·aliases 가 지시와 맞는 것과, 맞은 문구."""
     from app.services import automation_draft_service as drafts
 
     if not drafts.drafts_enabled():
-        return set()
+        return []
     try:
         active = await drafts.list_active_drafts(tenant_id=str(tenant_id))
     except Exception:
         logger.warning("automation_draft_lookup_failed", exc_info=True)
-        return set()
+        return []
     tokens = _content_tokens(directive_text)
-    names: set[str] = set()
+    hits: list[tuple[Mapping[str, Any], str]] = []
     for draft in active:
         phrases = [str(draft.get("title") or ""), *(str(a) for a in draft.get("aliases") or [])]
-        if any(_draft_phrase_matches(directive_text, tokens, phrase) for phrase in phrases):
-            names.update(str(n) for n in draft.get("recipe_names") or [])
-    return names
+        phrase = next((p for p in phrases if _draft_phrase_matches(directive_text, tokens, p)), None)
+        if phrase is not None:
+            hits.append((draft, phrase))
+    return hits
 
 
 def _row_recipe(row: Mapping[str, Any]) -> WorkRecipe | None:
@@ -84,11 +86,30 @@ def _row_recipe(row: Mapping[str, Any]) -> WorkRecipe | None:
     return recipe
 
 
-async def resolve_recipe_candidates(directive_text: str, tenant_id: Any) -> list[WorkRecipe]:
-    """지시에 맞는 레시피 후보 전체. 도메인·이름 매칭이 우선이고, 없을 때만 자동화 제목·별칭을 본다."""
+@dataclass(frozen=True)
+class RecipeMatch:
+    """말로 찾은 레시피 한 건과 그 매칭의 강도.
+
+    needs_confirmation 은 초안 제목·별칭으로만 잡혔고 날짜어·요청어미를 뺀 핵심어가
+    하나뿐인 경우다 — "매출 알려줘" 처럼 다른 뜻의 말도 같은 자동화로 잡힐 수 있어
+    사용자가 확인하기 전에는 실행하지 않는다.
+    """
+
+    recipe: WorkRecipe | None = None
+    needs_confirmation: bool = False
+    draft_id: str = ""
+    draft_title: str = ""
+    matched_phrase: str = ""
+    matched_draft_ids: frozenset[str] = field(default_factory=frozenset)
+
+
+async def _resolve_all(
+    directive_text: str, tenant_id: Any
+) -> tuple[list[WorkRecipe], list[tuple[Mapping[str, Any], str]]]:
+    """(후보 레시피, 초안 매칭). 초안 매칭은 이름·도메인 매칭이 없을 때만 채워진다."""
     text = str(directive_text or "").strip().casefold()
     if not text:
-        return []
+        return [], []
     hosts = {normalize_domain(match) for match in _URL_HOST.findall(text)}
     rows = await list_recipes(tenant_id=tenant_id)
     name_matches: list[WorkRecipe] = []
@@ -109,27 +130,87 @@ async def resolve_recipe_candidates(directive_text: str, tenant_id: Any) -> list
     # 사용자가 이름을 명시한 단일 후보는 같은 도메인의 다른 레시피보다 강하다.
     # 이름 후보가 있으면 도메인 후보는 쓰지 않는다.
     if name_matches:
-        return name_matches
+        return name_matches, []
     if domain_matches:
-        return domain_matches
+        return domain_matches, []
     if not rows:
-        return []
-    names = await _draft_recipe_names(directive_text, tenant_id)
+        return [], []
+    hits = await _draft_matches(directive_text, tenant_id)
+    names = {str(n) for draft, _ in hits for n in draft.get("recipe_names") or []}
     if not names:
-        return []
+        return [], []
     found: list[WorkRecipe] = []
     for row in rows:
         if str(row.get("name") or "") in names:
             recipe = _row_recipe(row)
             if recipe is not None:
                 found.append(recipe)
-    return found
+    return found, hits
+
+
+async def resolve_recipe_candidates(directive_text: str, tenant_id: Any) -> list[WorkRecipe]:
+    """지시에 맞는 레시피 후보 전체. 도메인·이름 매칭이 우선이고, 없을 때만 자동화 제목·별칭을 본다."""
+    return (await _resolve_all(directive_text, tenant_id))[0]
+
+
+async def resolve_recipe_match(directive_text: str, tenant_id: Any) -> RecipeMatch:
+    """후보가 정확히 하나일 때만 선택하고, 그 매칭이 확인 없이 실행해도 되는 강도인지 함께 돌려준다."""
+    candidates, hits = await _resolve_all(directive_text, tenant_id)
+    if len(candidates) != 1:
+        return RecipeMatch()
+    recipe = candidates[0]
+    if not hits:
+        return RecipeMatch(recipe=recipe)
+    own = [(d, p) for d, p in hits if recipe.name in {str(n) for n in d.get("recipe_names") or []}]
+    if not own:
+        return RecipeMatch(recipe=recipe)
+    draft, phrase = own[0]
+    return RecipeMatch(
+        recipe=recipe,
+        needs_confirmation=len(_content_tokens(directive_text)) <= 1,
+        draft_id=str(draft.get("id") or ""),
+        draft_title=str(draft.get("title") or ""),
+        matched_phrase=phrase,
+        matched_draft_ids=frozenset(str(d.get("id") or "") for d, _ in own),
+    )
 
 
 async def resolve_recipe(directive_text: str, tenant_id: Any) -> WorkRecipe | None:
-    """후보가 정확히 하나일 때만 선택한다. 둘 이상이면 추측하지 않고 None."""
-    candidates = await resolve_recipe_candidates(directive_text, tenant_id)
-    return candidates[0] if len(candidates) == 1 else None
+    """후보가 정확히 하나일 때만 선택한다. 둘 이상이거나 확인이 필요한 매칭이면 추측하지 않고 None."""
+    match = await resolve_recipe_match(directive_text, tenant_id)
+    return None if match.needs_confirmation else match.recipe
+
+
+@dataclass(frozen=True)
+class RecipeConfirmation:
+    """확인 필요 매칭 — 실행하지 않고 사용자에게 되묻는 결과. RunResult 대신 돌려준다."""
+
+    match: RecipeMatch
+
+    status = "confirmation_required"
+
+    @property
+    def card(self) -> dict[str, Any]:
+        from app.services import automation_draft_service as drafts
+
+        title = self.match.draft_title
+        card = drafts.build_card("active", title=title)
+        card["headline"] = "실행할까요?"
+        card["body"] = f"{title}를 실행할까요?"
+        card["buttons"] = [
+            {"id": "confirm_run", "label": "실행", "primary": True},
+            {"id": "decline_run", "label": "아니요", "primary": False},
+        ]
+        return card
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "draft_id": self.match.draft_id,
+            "draft_title": self.match.draft_title,
+            "matched_phrase": self.match.matched_phrase,
+            "card": self.card,
+        }
 
 
 async def run_directive(
@@ -142,8 +223,12 @@ async def run_directive(
     triggered_by: str = "",
     task_id: str | None = None,
     action_intent: ActionIntent | None = None,
-) -> RunResult | None:
-    """Run only a routed command; raw page text has no execution path here."""
+) -> RunResult | RecipeConfirmation | None:
+    """Run only a routed command; raw page text has no execution path here.
+
+    핵심어 하나로만 잡힌 초안 매칭은 실행하지 않고 RecipeConfirmation 을 돌려준다.
+    payload.confirmed_draft_id 가 매칭된 초안과 같을 때만 실행한다.
+    """
     if action_intent is None:
         # The executor boundary must never manufacture authority for raw text.
         # An authenticated ingress must route every command first.
@@ -165,7 +250,14 @@ async def run_directive(
     )
     recipe = await resolve_recipe(directive_text, tenant_id)
     if recipe is None:
-        return None
+        # resolve_recipe 는 확인 필요 매칭도 None 으로 돌려준다 — 그 경우만 따로 가려낸다.
+        match = await _confirmation_match(directive_text, tenant_id)
+        if match is None:
+            return None
+        confirmed = str(action_intent.payload.get("confirmed_draft_id") or "")
+        if not confirmed or confirmed not in match.matched_draft_ids:
+            return RecipeConfirmation(match)
+        recipe = match.recipe
     coupang = recipe.name in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}
     if coupang:
         validate_coupangeats_recipe(recipe)
@@ -217,6 +309,15 @@ async def run_directive(
             },
         },
     )
+
+
+async def _confirmation_match(directive_text: str, tenant_id: Any) -> RecipeMatch | None:
+    from app.services import automation_draft_service as drafts
+
+    if not drafts.drafts_enabled():
+        return None
+    match = await resolve_recipe_match(directive_text, tenant_id)
+    return match if match.needs_confirmation and match.recipe is not None else None
 
 
 def validate_coupangeats_recipe(recipe: WorkRecipe) -> None:

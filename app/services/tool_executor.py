@@ -5840,9 +5840,11 @@ class ToolExecutor:
                 directive_from_authenticated_context,
             )
             from app.services.work_recipe.approval import ApprovalRequired
-            from app.services.work_recipe.orchestrator import run_directive
+            from app.services.work_recipe.orchestrator import RecipeConfirmation, run_directive
 
             payload = {"directive": directive, "inputs": inp.get("inputs") or {}}
+            if inp.get("confirmed_draft_id"):
+                payload["confirmed_draft_id"] = str(inp["confirmed_draft_id"])
             envelope = directive_from_authenticated_context(
                 {
                     "tenant": {"id": tenant_id},
@@ -5873,6 +5875,8 @@ class ToolExecutor:
                 }
             if result is None:
                 return {"error": "matching_recipe_not_found", "session_id": session_id}
+            if isinstance(result, RecipeConfirmation):
+                return {"status": "confirmation_required", "session_id": session_id, **result.to_dict()}
             return {"status": "executed", "session_id": session_id, "result": result.to_dict()}
 
         if action == "register_e2e":

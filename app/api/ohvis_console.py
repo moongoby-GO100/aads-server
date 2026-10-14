@@ -59,7 +59,7 @@ from app.services.work_recipe.approval import (
 )
 from app.services.work_recipe.audit import mask_secrets
 from app.services.work_recipe.guard import requires_confirmation
-from app.services.work_recipe.orchestrator import run_directive
+from app.services.work_recipe.orchestrator import RecipeConfirmation, run_directive
 
 router = APIRouter(prefix="/ohvis/console", tags=["ohvis-console"])
 logger = structlog.get_logger()
@@ -117,6 +117,8 @@ class ConsoleCommandIn(BaseModel):
     # (`_resolve_session_id`) — 남의 테넌트 세션 id 를 실어 보내도 내 테넌트
     # 세션으로 떨어진다.
     session_id: UUID | None = None
+    # [실행] 카드를 누르면 같은 지시에 확인한 초안 id 를 실어 다시 보낸다.
+    confirmed_draft_id: str | None = Field(default=None, max_length=200)
 
 
 class ApprovalDecisionIn(BaseModel):
@@ -130,6 +132,7 @@ class RecipeRunIn(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     browser_session_id: str | None = Field(default=None, max_length=200)
     browser_work_key: str | None = Field(default=None, max_length=120)
+    confirmed_draft_id: str | None = Field(default=None, max_length=200)
 
 
 # ───────────────────────────────────────────────────────────── 값 다듬기
@@ -707,7 +710,9 @@ async def run_console_command(
         # create_task 는 예외를 삼키고 None 을 준다 — 그 None 이 여기서 끝이다.
         raise HTTPException(status_code=502, detail="ohvis_task_create_failed")
 
-    command_payload = {"directive": title}
+    command_payload: dict[str, Any] = {"directive": title}
+    if body.confirmed_draft_id:
+        command_payload["confirmed_draft_id"] = body.confirmed_draft_id
     action_intent = ChannelRouter().route_directive(
         directive_from_authenticated_context(
             context,
@@ -778,6 +783,23 @@ async def run_console_command(
         raise HTTPException(
             status_code=502, detail=f"recipe_dispatch_failed: {reason}"
         ) from exc
+
+    if isinstance(recipe_result, RecipeConfirmation):
+        confirm_payload = recipe_result.to_dict()
+        await complete_ohvis_task(
+            task_id,
+            status="done",
+            result=confirm_payload,
+            ohvis_judgement="실행 확인 대기",
+        )
+        return {
+            "task_id": task_id,
+            "session_id": str(session_uuid),
+            "status": "confirmation_required",
+            "execution": "work_recipe",
+            "draft_id": confirm_payload["draft_id"],
+            "card": confirm_payload["card"],
+        }
 
     if recipe_result is not None:
         result_payload = recipe_result.to_dict()
@@ -866,7 +888,9 @@ async def run_console_recipe(
 ) -> dict[str, Any]:
     """저장된 레시피와 정확히 연결되는 지시만 실제 브라우저에서 실행한다."""
     try:
-        recipe_payload = {"directive": body.directive, "inputs": body.inputs}
+        recipe_payload: dict[str, Any] = {"directive": body.directive, "inputs": body.inputs}
+        if body.confirmed_draft_id:
+            recipe_payload["confirmed_draft_id"] = body.confirmed_draft_id
         action_intent = ChannelRouter().route_directive(
             directive_from_authenticated_context(
                 context,
@@ -902,4 +926,6 @@ async def run_console_recipe(
         raise HTTPException(status_code=422, detail=_text(exc, 300)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="matching_recipe_not_found")
+    if isinstance(result, RecipeConfirmation):
+        return {**result.to_dict(), "execution": "work_recipe"}
     return result.to_dict()

@@ -1123,3 +1123,51 @@ def test_trigger_reply_collection_accepts_a_real_new_answer(monkeypatch):
 
     assert completed["status"] == "done"
     assert completed["result"] == {"ai_reaction": "서버 헬스체크 결과: 정상입니다."}
+
+
+def test_command_returns_confirmation_card_without_dispatching_to_llm(monkeypatch):
+    """핵심어 하나로만 잡힌 자동화는 실행도 LLM 전달도 하지 않고 확인 카드를 돌려준다."""
+    from app.services.work_recipe.orchestrator import RecipeConfirmation, RecipeMatch
+
+    _command_pool(monkeypatch, [SESSION_MINE, SESSION_MINE])
+    seen: dict = {}
+
+    async def fake_create(*, session_id, title, task_type):
+        return "task-confirm"
+
+    async def fake_run(directive, tenant_id, **kwargs):
+        seen["payload"] = dict(kwargs["action_intent"].payload)
+        return RecipeConfirmation(RecipeMatch(draft_id="d-1", draft_title="쿠팡이츠 매출 받기"))
+
+    async def fake_complete(task_id, *, status=None, result=None, ohvis_judgement=None):
+        seen.update(status=status, result=result)
+        return True
+
+    async def should_not_dispatch(*args, **kwargs):
+        raise AssertionError("확인 대기 지시를 채팅 LLM으로 보내면 안 된다")
+
+    monkeypatch.setattr(console, "create_ohvis_task", fake_create)
+    monkeypatch.setattr(console, "run_directive", fake_run)
+    monkeypatch.setattr(console, "complete_ohvis_task", fake_complete)
+    monkeypatch.setattr(console, "_dispatch_ai_reaction", should_not_dispatch)
+
+    result = asyncio.run(console.run_console_command(console.ConsoleCommandIn(title="어제 매출 받아줘"), context=ctx()))
+    assert result["status"] == "confirmation_required" and result["draft_id"] == "d-1"
+    assert result["card"]["body"] == "쿠팡이츠 매출 받기를 실행할까요?"
+    assert seen["status"] == "done" and "confirmed_draft_id" not in seen["payload"]
+
+    asyncio.run(console.run_console_command(
+        console.ConsoleCommandIn(title="어제 매출 받아줘", confirmed_draft_id="d-1"), context=ctx()))
+    assert seen["payload"]["confirmed_draft_id"] == "d-1"
+
+
+def test_recipe_run_api_returns_confirmation_card(monkeypatch):
+    from app.services.work_recipe.orchestrator import RecipeConfirmation, RecipeMatch
+
+    async def fake_run(*args, **kwargs):
+        return RecipeConfirmation(RecipeMatch(draft_id="d-1", draft_title="쿠팡이츠 매출 받기"))
+
+    monkeypatch.setattr(console, "run_directive", fake_run)
+    result = asyncio.run(console.run_console_recipe(console.RecipeRunIn(directive="매출 알려줘"), context=ctx()))
+    assert result["status"] == "confirmation_required"
+    assert [b["label"] for b in result["card"]["buttons"]] == ["실행", "아니요"]

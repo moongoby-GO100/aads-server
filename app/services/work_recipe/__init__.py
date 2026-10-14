@@ -56,7 +56,8 @@ from app.services.work_recipe.credential_scope import (
 from app.services.work_recipe.executor import BrowserRecipeExecutor, execute_step
 from app.services.work_recipe.recorder import WorkRecipeRecorder, finish_recording, start_recording
 from app.services.work_recipe.orchestrator import (
-    resolve_recipe, resolve_recipe_candidates, run_directive,
+    RecipeConfirmation, RecipeMatch, resolve_recipe, resolve_recipe_candidates,
+    resolve_recipe_match, run_directive,
 )
 
 __all__ = [
@@ -99,5 +100,8 @@ __all__ = [
     "finish_recording",
     "resolve_recipe",
     "resolve_recipe_candidates",
+    "resolve_recipe_match",
+    "RecipeMatch",
+    "RecipeConfirmation",
     "run_directive",
 ]
