@@ -20,7 +20,11 @@ from app.services.goal_binding import (
     normalize_job_state_for_project,
     release_gate_withheld,
 )
-from app.services.goal_failure_retry import ensure_retry_candidate, mark_explicit_retry_supersession
+from app.services.goal_failure_retry import (
+    archive_exhaustion_note,
+    ensure_retry_candidate,
+    mark_explicit_retry_supersession,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -847,6 +851,11 @@ class GoalStateMachine:
                     """,
                     milestone_id,
                 )
+                try:
+                    await archive_exhaustion_note(conn, milestone_id)
+                except Exception as exc:  # noqa: BLE001 — 이력 이동 실패가 완료 판정을 막지 않는다
+                    logger.warning("goal_retry_note_archive_failed milestone=%s error=%s",
+                                   milestone_id, str(exc)[:200])
                 ms = await conn.fetchrow(
                     "SELECT goal_id FROM milestones WHERE id = $1::uuid",
                     milestone_id,

@@ -17,11 +17,25 @@ logger = logging.getLogger(__name__)
 _JOB_ID_RE = re.compile(r"runner-[0-9a-f]{6,}")
 _TERMINAL = {"done", "error", "rejected_done", "cancelled"}
 _KST = ZoneInfo("Asia/Seoul")
+_RETRY_PURPOSE_RE = re.compile(r"^REMEDIATION_PURPOSE: failed_link_retry[ \t\r]*$", re.MULTILINE)
+_RETRY_TARGET_RE = re.compile(r"^RETRY_OF_LINK: (runner-[0-9a-f]{6,})[ \t\r]*$", re.MULTILINE)
 
 
 def extract_job_ids(message: str) -> list[str]:
     """본문의 runner job id 를 중복 없이 등장 순서대로 돌려준다."""
     return list(dict.fromkeys(_JOB_ID_RE.findall(message or "")))
+
+
+def retry_target_ids(message: str) -> set[str]:
+    """재작업 본문이 "고칠 대상"으로만 가리키는 실패 job id.
+
+    재작업 지시문은 이미 종결된 실패 job 을 일부러 가리킨다. 이 id 를 stale 판정에 쓰면
+    재작업 자신이 stale_jobs 로 건너뛰어진다. 두 줄 표식이 모두 줄 단위로 있을 때만 면제한다.
+    """
+    text = message or ""
+    if not _RETRY_PURPOSE_RE.search(text):
+        return set()
+    return set(_RETRY_TARGET_RE.findall(text))
 
 
 def _format_kst(value: Optional[datetime]) -> str:
@@ -40,7 +54,8 @@ async def annotate_or_skip(conn, message: str) -> tuple[str, Optional[str]]:
     - 그 외: (상태 갱신 블록을 덧붙인 본문, None)
     """
     try:
-        job_ids = extract_job_ids(message)
+        exempt = retry_target_ids(message)
+        job_ids = [jid for jid in extract_job_ids(message) if jid not in exempt]
         if not job_ids:
             return message, None
 

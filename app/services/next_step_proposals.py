@@ -442,6 +442,7 @@ async def propose(
                 item["queue_id"] = queued["queue_id"]
                 item["queue_status"] = queued["queue_status"]
                 item["queued"] = True
+                item["queue_reused"] = not queued["created"]
                 if queued["created"]:
                     auto_fired += 1
             except Exception as exc:  # noqa: BLE001

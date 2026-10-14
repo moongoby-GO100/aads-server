@@ -38,6 +38,9 @@ class FakeConn:
         self.lock_owner = None
         self.lock_depth = 0
         self.audit = []
+        self.successors = []
+        self.job_instructions = {}
+        self.executions = {}
 
     def is_in_transaction(self):
         return self.outer_transaction
@@ -61,6 +64,8 @@ class FakeConn:
         return Transaction()
 
     async def fetch(self, query, *args):
+        if "position($3 in p.instruction)" in query:
+            return list(self.successors)
         if "FROM goal_task_links l JOIN pipeline_jobs p" in query:
             return [self.rework] if self.rework else []
         if "SELECT DISTINCT milestone_id, goal_id" in query:
@@ -79,6 +84,9 @@ class FakeConn:
         raise AssertionError(query)
 
     async def fetchrow(self, query, *args):
+        if "SELECT instruction FROM pipeline_jobs" in query:
+            text = self.job_instructions.get(args[0])
+            return {"instruction": text} if text is not None else None
         if "FROM chat_deferred_reactions q" in query:
             return self.queues.get(args[0])
         if "FROM agent_permission_requests" in query:
@@ -105,6 +113,8 @@ class FakeConn:
         raise AssertionError(query)
 
     async def fetchval(self, query, *args):
+        if "FROM goal_retry_executions" in query:
+            return self.executions.get(args[2], 0)
         if "FROM chat_sessions WHERE role_key" in query:
             assert "tenant_id = $2::uuid" in query
             return self.role_session
@@ -231,8 +241,10 @@ def test_same_failed_task_is_idempotent(harness, monkeypatch):
     assert len(proposed) == 1
 
 
-def test_third_distinct_failure_exhausts_retry_and_blocks_goal(harness, monkeypatch):
+def test_lineage_with_two_actual_executions_is_exhausted_and_blocks_goal(harness, monkeypatch):
+    # 옛 기준(마일스톤 전체 후보 2개)을 계보별 실제 실행 2회로 바꿨다. 후보 개수는 더 이상 소진 사유가 아니다.
     conn, machine = harness
+    conn.executions = {"job-3": 2}
     async def propose(**_kwargs):
         return {"cards": [{"id": "card-1"}]}
     monkeypatch.setattr(next_step_proposals, "propose", propose)
@@ -244,7 +256,7 @@ def test_third_distinct_failure_exhausts_retry_and_blocks_goal(harness, monkeypa
     assert result["milestones_checked"][0]["retry_candidate"]["why"] == "retry_exhausted"
     assert conn.goal_status == "blocked"
     assert len(conn.evidence["retry_candidates"]) == 2
-    assert conn.dispatch_note == "재작업 후보 2회 소진 — 사람이 확인해야 한다"
+    assert conn.dispatch_note == "재작업 실제 실행 2/2 소진 — 사람이 확인해야 한다"
 
 
 def test_missing_owner_preserves_goal_block(harness):
@@ -345,7 +357,7 @@ def test_blocked_goal_recovers_only_when_all_blocks_have_live_candidates(
     assert conn.goal_status == expected
 
 
-def test_concurrent_reservations_stop_at_two(harness, monkeypatch):
+def test_concurrent_reservations_are_independent_per_lineage(harness, monkeypatch):
     conn, _ = harness
     async def propose(**kwargs):
         task_id = kwargs["steps"][0]["detail"].splitlines()[0].split(": ", 1)[1]
@@ -366,8 +378,9 @@ def test_concurrent_reservations_stop_at_two(harness, monkeypatch):
 
     results = asyncio.run(run())
 
-    assert sum(item["created"] for item in results) == 2
-    assert len(conn.evidence["retry_candidates"]) == 2
+    # 제안은 실행 한도를 쓰지 않는다 — 서로 다른 계보 셋은 모두 후보를 얻고 동시 예약도 유실되지 않는다.
+    assert sum(item["created"] for item in results) == 3
+    assert len(conn.evidence["retry_candidates"]) == 3
     assert all(item["card_id"] for item in conn.evidence["retry_candidates"])
 
 
@@ -586,7 +599,8 @@ def test_failure_without_live_candidate_blocks_goal(harness, monkeypatch, why):
     assert conn.goal_status == "blocked"
 
 
-def test_dead_card_still_consumes_cumulative_limit(harness, monkeypatch):
+def test_dead_cards_do_not_consume_execution_limit(harness, monkeypatch):
+    # 옛 기준은 죽은 카드도 누적 한도에 넣었다. 실행되지 않은 카드는 이제 한도를 쓰지 않는다.
     conn, _ = harness
     conn.evidence = {"retry_candidates": [
         {"failed_task_id": f"job-{i}", "card_id": f"card-{i}",
@@ -595,15 +609,35 @@ def test_dead_card_still_consumes_cumulative_limit(harness, monkeypatch):
     ]}
     for i in (1, 2):
         conn.cards[f"card-{i}"] = {"decision": "rejected", "expires_at": None}
-    async def never(**_kwargs):
-        raise AssertionError("retry budget should stop proposal")
-    monkeypatch.setattr(next_step_proposals, "propose", never)
+    async def propose(**_kwargs):
+        return {"cards": [{"id": "card-3"}]}
+    monkeypatch.setattr(next_step_proposals, "propose", propose)
 
     result = asyncio.run(ensure_retry_candidate(
         conn, milestone_id=MILESTONE_ID, goal_id=GOAL_ID,
         failed_task_id="job-3", reason="linked_task_failed",
     ))
-    assert result["why"] == "retry_exhausted"
+    assert result["created"] is True
+    assert [i.get("terminal_reason") for i in conn.evidence["retry_candidates"][:2]] == ["rejected", "rejected"]
+
+
+def test_exhaustion_counts_only_the_same_lineage(harness, monkeypatch):
+    conn, _ = harness
+    conn.executions = {"job-1": 2}
+    async def propose(**_kwargs):
+        return {"cards": [{"id": "card-x"}]}
+    monkeypatch.setattr(next_step_proposals, "propose", propose)
+
+    exhausted = asyncio.run(ensure_retry_candidate(
+        conn, milestone_id=MILESTONE_ID, goal_id=GOAL_ID,
+        failed_task_id="job-1", reason="linked_task_failed",
+    ))
+    independent = asyncio.run(ensure_retry_candidate(
+        conn, milestone_id=MILESTONE_ID, goal_id=GOAL_ID,
+        failed_task_id="job-2", reason="linked_task_failed",
+    ))
+    assert exhausted["why"] == "retry_exhausted"
+    assert independent["created"] is True
 
 
 def test_rejected_candidate_blocks_previously_active_goal(harness, monkeypatch):

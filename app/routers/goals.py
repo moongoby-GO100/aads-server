@@ -666,6 +666,14 @@ async def goal_board(
         )
 
     from app.services.direction_guard import is_halted
+    from app.services.goal_failure_retry import attach_retry_accounting
+
+    milestones = [dict(m) for m in ms]
+    try:
+        async with pool.acquire() as conn:
+            await attach_retry_accounting(conn, tenant_id, milestones)
+    except Exception as exc:  # noqa: BLE001 — 부가 정보 실패가 목록을 막지 않는다
+        logger.warning("goal_retry_accounting_attach_failed goal=%s error=%s", goal_id, str(exc)[:160])
 
     docs = await goal_documents(goal_id, context)
     return {
@@ -674,7 +682,7 @@ async def goal_board(
         "goal_paused_reason": goal.get("paused_reason") if goal.get("paused_at") else None,
         "halted": await is_halted(),
         "owners": owners,
-        "milestones": [dict(m) for m in ms],
+        "milestones": milestones,
         "has_lead": any(o["is_lead"] for o in owners),
         "documents": docs["documents"],
         "document_history": docs["document_history"],

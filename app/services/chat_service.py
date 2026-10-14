@@ -12443,6 +12443,8 @@ async def enqueue_next_step_reaction(
 
     Approval batches use an unlimited window; auto proposals reuse a delivery
     made in the last 15 minutes.  The DB lock closes the SELECT/INSERT race.
+    A windowed reuse never returns a terminal (dead) queue: it cannot run again,
+    so handing it back would count a candidate that will never execute.
     """
     safe_message = _safe_reaction_message(session_id, system_message)
     async with get_pool().acquire() as conn:
@@ -12456,8 +12458,9 @@ async def enqueue_next_step_reaction(
                 SELECT id::text AS id, status
                 FROM chat_deferred_reactions
                 WHERE session_id = $1::uuid AND dedupe_key = $2
-                  AND ($3::integer = 0 OR
-                       created_at > NOW() - make_interval(secs => $3::integer))
+                  AND ($3::integer = 0 OR (
+                       created_at > NOW() - make_interval(secs => $3::integer)
+                       AND status NOT IN ('skipped_stale', 'failed', 'cancelled')))
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,

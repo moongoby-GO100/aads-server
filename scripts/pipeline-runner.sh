@@ -4587,6 +4587,37 @@ mark_job_started_or_abort() {
     return 0
 }
 
+# ── 재작업 실제 실행 차감 (AADS-GOAL-RETRY-EXECUTION-ACCOUNTING-IMPLEMENT-20261014) ──
+# started_at 은 관찰값일 뿐이다(AGENTS.md 규칙 5: 실제 모델 호출 직전에만 증가). 대기·claim·릴레이 슬롯·
+# 의존성 대기·승인만·제출 거절·시작 전 취소는 여기까지 오지 않으므로 차감되지 않는다.
+# RETRY_OF_LINK 줄이 있는 재작업만 DB 장부(charge_goal_retry_execution)를 부른다. 함수는 job_id 로 멱등이고
+# (tenant, milestone, 계보) 당 2행 UNIQUE 로 상한을 강제한다. 장부를 읽을 수 없으면 모델을 띄우지 않는다(fail closed).
+# 한 job 안의 여러 모델 시도·폴백은 같은 job_id 라 다시 차감되지 않는다.
+retry_execution_charge_or_abort() {
+    local job_id="$1" session_id="$2" project="$3" parallel_group="${4:-}" instruction="$5" model="${6:-}"
+    printf '%s\n' "$instruction" | grep -qE '^RETRY_OF_LINK: [^[:space:]]+[[:space:]]*$' || return 0
+    local row="" outcome="" used="" lineage=""
+    row=$(db_exec "SELECT r->>'outcome', COALESCE(r->>'used',''), COALESCE(r->>'lineage','')
+                   FROM (SELECT charge_goal_retry_execution('${job_id}', 2) AS r) t;" 2>/dev/null | head -n1) || row=""
+    IFS=$'\x1e' read -r outcome used lineage <<< "$row"
+    case "$outcome" in
+        charged)
+            log "  RETRY_EXECUTION_CHARGED job=$job_id lineage=${lineage}"
+            record_runner_event "$job_id" "retry_execution_charged" "running" "claude_code_work" "$model" "" "" "" "{\"lineage\":\"${lineage}\"}" || true
+            return 0 ;;
+        already_charged|not_retry) return 0 ;;
+    esac
+    local reason="${outcome:-ledger_unavailable}"
+    log "  RETRY_EXECUTION_BLOCKED job=$job_id outcome=$reason used=${used:-?} lineage=${lineage:-?}"
+    db_update "UPDATE pipeline_jobs SET status='error', phase='retry_execution_blocked',
+               error_detail='retry_execution_${reason}',
+               result_output='재작업 실제 실행 한도(계보당 2회) 또는 장부 확인 실패로 모델을 시작하지 않았다: ${reason}',
+               completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}' AND status='running';" 2>/dev/null || true
+    post_to_chat "$session_id" "🛑 [재작업 한도] 모델을 시작하지 않았습니다 (${reason}, 계보 사용 ${used:-?}/2) — job=$job_id"
+    _abort_job_terminal_before_work "$job_id" "$project" "$parallel_group" "RETRY_EXECUTION_BLOCKED" "retry_execution_blocked" "error"
+    return 1
+}
+
 # ── 작업 실행 ─────────────────────────────────────────────────────────
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}" parallel_group="${8:-}"
@@ -5065,6 +5096,7 @@ ${safe_instruction}"
             local codex_args=(exec --sandbox workspace-write --ephemeral -C "$workdir")
             # codex:default -> 모델 미지정(Codex CLI 기본값), 그 외 -> -m 지정
             [[ "$codex_model_name" != "default" ]] && codex_args+=(-m "$codex_model_name")
+            retry_execution_charge_or_abort "$job_id" "$session_id" "$project" "$parallel_group" "$instruction" "$current_model" || return 1
             ${_worker_nice_cmd[@]+"${_worker_nice_cmd[@]}"} timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
                 < /dev/null > "$output_file" 2> "$err_file" &
             local claude_pid=$!
@@ -5073,6 +5105,7 @@ ${safe_instruction}"
             local llm_model_name="${current_model#litellm:}"
             runner_kind="litellm_runner"
             log "  LITELLM_RUNNER job=$job_id model=$llm_model_name"
+            retry_execution_charge_or_abort "$job_id" "$session_id" "$project" "$parallel_group" "$instruction" "$current_model" || return 1
             # instruction을 temp file로 전달 (arg에 멀티라인/대용량 문자열 깨짐 방지)
             local instr_file="${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
             if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'aads-server'; then
@@ -5140,6 +5173,7 @@ ${safe_instruction}"
             if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
                 claude_root_env=(env IS_SANDBOX=1)
             fi
+            retry_execution_charge_or_abort "$job_id" "$session_id" "$project" "$parallel_group" "$instruction" "$current_model" || return 1
             if [[ -n "$slot_cred_file" ]]; then
                 # timeout 을 래퍼 안쪽에 두어야 한다. 바깥에 두면 래퍼만 죽고
                 # 실제 claude 자식이 고아로 남아 MAX_RUNTIME 이 무의미해진다.

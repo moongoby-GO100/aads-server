@@ -9,12 +9,23 @@ import uuid
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
-from app.services.goal_binding import DONE_JOB_STATUSES, normalize_job_state_for_project
+from app.services.goal_binding import (
+    DONE_JOB_STATUSES,
+    normalize_job_state_for_project,
+    release_gate_withheld,
+)
 from app.services.release_evidence import is_certified_deploy_row
 
 logger = logging.getLogger(__name__)
+# 계보당 "실제 실행" 상한. 제안(후보) 개수는 이 한도를 쓰지 않는다. 환경변수로 2 를 넘길 수 없다.
 _MAX_RETRY = min(2, max(0, int(os.getenv("GOAL_FAILED_LINK_RETRY_MAX", "2"))))
 _RETRY_MARKER = re.compile(r"^RETRY_OF_LINK: (\S+)$", re.MULTILINE)
+# 장부 함수(charge_goal_retry_execution)와 같은 줄 단위 규칙이다. 본문 중간의 언급은 잡지 않는다.
+_RETRY_LINK_LINE = re.compile(r"^RETRY_OF_LINK: (\S+)[ \t\r]*$", re.MULTILINE)
+_MILESTONE_LINE = re.compile(r"^MILESTONE_ID: ([0-9a-fA-F-]{36})[ \t\r]*$", re.MULTILINE)
+_EXHAUSTION_NOTE = re.compile(r"재작업 후보 \d+회 소진|재작업 실제 실행 \d+/\d+ 소진")
+_TERMINAL_JOB_STATUSES = {"done", "error", "failed", "rejected", "rejected_done", "cancelled"}
+_LINEAGE_MAX_HOPS = 5
 # 운영 지시서의 승계 헤더. 줄 시작에서만 인식해 본문 중간의 언급은 잡지 않는다.
 _HEADER_MARKER = re.compile(r"^[ \t]*(AUTO_REWORK_OF|SUPERSEDES)[ \t]*:[ \t]*(.*)$", re.MULTILINE)
 _HEADER_PAREN = re.compile(r"\([^()]*\)")
@@ -65,6 +76,7 @@ async def _refresh_candidates(conn, candidates: list, tenant_id: str, now: datet
                 )
                 if queue and queue["status"] in {"pending", "claimed", "completed"}:
                     continue
+                item["terminal_reason"] = str(queue["status"]) if queue else "queue_missing"
             else:
                 card = await conn.fetchrow(
                     "SELECT decision, expires_at FROM agent_permission_requests "
@@ -75,6 +87,10 @@ async def _refresh_candidates(conn, candidates: list, tenant_id: str, now: datet
                     card["expires_at"] is None or _aware(card["expires_at"]) > now
                 ):
                     continue
+                item["terminal_reason"] = (
+                    str(card["decision"]) if card and card["decision"] not in {"pending", "approved"}
+                    else "card_expired" if card else "card_missing"
+                )
         else:
             try:
                 reserved_at = datetime.fromisoformat(item["at"])
@@ -84,8 +100,200 @@ async def _refresh_candidates(conn, candidates: list, tenant_id: str, now: datet
                 continue
         item["failed"] = True
         item["failed_at"] = item.get("at") if not card_id else now.isoformat()
+        if card_id:
+            item["terminal_at"] = now.isoformat()
         changed = True
     return changed
+
+
+def parse_retry_link(instruction: str | None) -> str | None:
+    """줄 단위 RETRY_OF_LINK 표식. 본문 중간의 언급은 재작업으로 보지 않는다."""
+    match = _RETRY_LINK_LINE.search(instruction or "")
+    return match.group(1) if match else None
+
+
+async def lineage_root(conn, tenant_id: str, failed_task_id: str) -> str:
+    """재작업 사슬의 뿌리 job id. 재작업이 다시 실패해도 같은 계보이므로 새 예산이 생기지 않는다.
+
+    장부 함수 charge_goal_retry_execution 의 계보 해석과 같아야 한다(최대 5단계, 같은 tenant 안에서만).
+    """
+    root = failed_task_id
+    for _ in range(_LINEAGE_MAX_HOPS):
+        row = await conn.fetchrow(
+            "SELECT instruction FROM pipeline_jobs WHERE job_id = $1 AND tenant_id = $2::uuid",
+            root, tenant_id,
+        )
+        parent = parse_retry_link(row["instruction"]) if row else None
+        if not parent or parent == root:
+            break
+        root = parent
+    return root
+
+
+async def count_lineage_executions(conn, tenant_id: str, milestone_id: str, lineage: str) -> int:
+    """장부에 기록된 실제 실행 수. 장부가 없으면(마이그레이션 전) 0 으로 본다 — 제안 경로일 뿐이고
+    실제 실행은 러너의 차감 단계가 fail closed 로 막는다."""
+    try:
+        async with conn.transaction():
+            return int(await conn.fetchval(
+                "SELECT count(*) FROM goal_retry_executions "
+                "WHERE tenant_id = $1::uuid AND milestone_id = $2::uuid AND lineage = $3",
+                tenant_id, milestone_id, lineage,
+            ) or 0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("goal_retry_ledger_unavailable milestone=%s error=%s",
+                       milestone_id, str(exc)[:160])
+        return 0
+
+
+async def find_valid_successor(conn, tenant_id: str, milestone_id: str, failed_task_id: str) -> dict | None:
+    """같은 마일스톤에서 failed_task_id 를 RETRY_OF_LINK 로 가리키는 활성·완료 후속 job.
+
+    활성이 완료보다 먼저다(이미 돌고 있는 것을 또 제출하지 않는다). 실패한 후속은 유효하지 않다.
+    """
+    rows = await conn.fetch(
+        """SELECT p.job_id, p.status, p.phase, p.project, p.instruction
+           FROM goal_task_links l
+           JOIN pipeline_jobs p ON p.job_id = l.task_id AND p.tenant_id = l.tenant_id
+           WHERE l.milestone_id = $1::uuid AND l.tenant_id = $2::uuid
+             AND l.task_type = 'pipeline_job' AND p.job_id <> $3
+             AND position($3 in p.instruction) > 0
+           ORDER BY p.created_at DESC LIMIT 20""",
+        milestone_id, tenant_id, failed_task_id,
+    )
+    completed = None
+    for row in rows:
+        if parse_retry_link(row["instruction"]) != failed_task_id:
+            continue
+        status = str(row["status"] or "").lower()
+        state = normalize_job_state_for_project(row["status"], row["phase"], row["project"])
+        if state == "completed":
+            completed = completed or {"job_id": row["job_id"], "kind": "completed"}
+        elif status not in _TERMINAL_JOB_STATUSES or release_gate_withheld(
+            row["status"], row["phase"], row["project"],
+        ):
+            # 릴리스 인증 전 done 은 아직 승계가 끝난 게 아니라 진행 중이다 — 같은 일을 또 제출하지 않는다.
+            return {"job_id": row["job_id"], "kind": "active"}
+    return completed
+
+
+def summarize_retry_accounting(evidence: dict | None, executions: dict[str, int] | None = None,
+                               *, cap: int = _MAX_RETRY) -> dict:
+    """제안·후보·실제 실행을 따로 센다. 소진 판정은 실제 실행 수 하나뿐이다.
+
+    unique_candidates 는 고유 queue/card id 수다(같은 id 가 후보로 두 번 기록돼도 1).
+    executions 는 {lineage: 장부 행 수}. 계보별로 독립이며, 화면의 M/cap 은 가장 많이 쓴 계보 기준이다.
+    """
+    items = _evidence(evidence).get("retry_candidates", [])
+    ids = [str(i["card_id"]) for i in items if i.get("card_id")]
+    live_ids = {str(i["card_id"]) for i in items if i.get("card_id") and not i.get("failed")}
+    used_by_lineage = {k: int(v) for k, v in (executions or {}).items()}
+    used = max(used_by_lineage.values(), default=0)
+    remaining = max(0, cap - used)
+    if used >= cap:
+        action = "사람 확인 필요 — 실제 실행 한도 소진"
+    elif live_ids:
+        action = "후보 승인 또는 러너 실행 대기"
+    elif not ids:
+        action = "재작업 후보 제안 대기"
+    else:
+        action = "새 후보 제안 가능"
+    return {
+        "unique_candidates": len(set(ids)), "live_candidates": len(live_ids),
+        "proposal_attempts": len(items), "executions": used, "cap": cap,
+        "remaining": remaining, "exhausted": used >= cap, "next_action": action,
+        "lineages": {k: {"used": v, "remaining": max(0, cap - v)} for k, v in used_by_lineage.items()},
+    }
+
+
+def format_retry_accounting(summary: dict) -> str:
+    """사용자 문구. 실행이 0이면 "실행 없음" 을 반드시 적는다."""
+    used, cap = summary["executions"], summary["cap"]
+    executed = f"{used}/{cap}" if used else f"실행 없음 0/{cap}"
+    return (f"고유 후보 {summary['unique_candidates']} · 실제 실행 {executed} · "
+            f"남은 한도 {summary['remaining']} · 다음 행동 {summary['next_action']}")
+
+
+def classify_pre_start_failure(*, charged: bool, started: bool, error_text: str | None) -> str:
+    """실패 job 을 "재작업 실패" 와 "시작 전 거절" 로 가른다. 한도는 charged 만 쓴다."""
+    if charged:
+        return "execution_failed"
+    if "범위" in (error_text or "") or "scope" in (error_text or "").lower():
+        return "submit_rejected"
+    return "not_started" if not started else "observed_start_uncharged"
+
+
+def is_exhaustion_note(note: str | None) -> bool:
+    return bool(note and _EXHAUSTION_NOTE.search(note))
+
+
+def split_dispatch_note(milestone_status: str | None, note: str | None) -> tuple[str | None, str | None]:
+    """(현재 차단 문구, 이력 문구). 완료된 마일스톤의 소진 문구는 이력으로만 남는다."""
+    if str(milestone_status or "") == "completed" and is_exhaustion_note(note):
+        return None, note
+    return note, None
+
+
+async def attach_retry_accounting(conn, tenant_id: str, milestones: list[dict]) -> list[dict]:
+    """읽기 모델: 마일스톤 dict 에 retry_accounting 을 붙이고 완료된 마일스톤의 소진 문구를 이력으로 분리한다.
+
+    DB 를 바꾸지 않는다(이미 완료된 과거 행도 런타임에서만 중립화한다). 장부가 없으면 실행 0 으로 본다.
+    """
+    ids = [m["id"] for m in milestones if m.get("id")]
+    ledger: dict[str, dict[str, int]] = {}
+    if ids:
+        try:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    "SELECT milestone_id::text AS milestone_id, lineage, count(*) AS used "
+                    "FROM goal_retry_executions WHERE tenant_id = $1::uuid "
+                    "AND milestone_id = ANY($2::uuid[]) GROUP BY milestone_id, lineage",
+                    tenant_id, ids,
+                )
+            for r in rows:
+                ledger.setdefault(r["milestone_id"], {})[r["lineage"]] = int(r["used"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("goal_retry_ledger_read_failed error=%s", str(exc)[:160])
+    for m in milestones:
+        current, history = split_dispatch_note(m.get("status"), m.get("dispatch_note"))
+        if history is not None:
+            m["dispatch_note"] = current
+            m["dispatch_note_history"] = history
+        evidence = _evidence(m.get("evidence"))
+        used = ledger.get(m.get("id"), {})
+        if evidence.get("retry_candidates") or used:
+            summary = summarize_retry_accounting(evidence, used)
+            if m.get("status") == "completed":
+                summary["next_action"] = "완료됨 — 조치 없음"
+                summary["exhausted"] = False
+            summary["text"] = format_retry_accounting(summary)
+            m["retry_accounting"] = summary
+    return milestones
+
+
+async def archive_exhaustion_note(conn, milestone_id: str) -> bool:
+    """완료된 마일스톤의 소진 문구를 evidence.retry_history 로 옮기고 현재 blocker 칸을 비운다.
+
+    문구는 지우지 않고 이력에 보존한다. 완료 상태·후보·실패 증거는 건드리지 않는다.
+    """
+    row = await conn.fetchrow(
+        "SELECT tenant_id::text AS tenant_id, dispatch_note, evidence FROM milestones "
+        "WHERE id = $1::uuid AND status = 'completed' FOR UPDATE",
+        milestone_id,
+    )
+    if not row or not is_exhaustion_note(row["dispatch_note"]):
+        return False
+    evidence = _evidence(row["evidence"])
+    evidence.setdefault("retry_history", []).append({
+        "note": row["dispatch_note"], "archived_at": datetime.now(UTC).isoformat(),
+        "reason": "milestone_completed",
+    })
+    await conn.execute(
+        "UPDATE milestones SET dispatch_note = NULL, evidence = $2::jsonb, updated_at = NOW() "
+        "WHERE id = $1::uuid AND tenant_id = $3::uuid AND status = 'completed'",
+        milestone_id, json.dumps(evidence), row["tenant_id"],
+    )
+    return True
 
 
 async def ensure_retry_candidate(
@@ -105,6 +313,7 @@ async def ensure_retry_candidate(
             row = await conn.fetchrow(
                 """SELECT m.title, m.evidence, m.owner_session_id::text AS milestone_owner,
                           g.owner_session_id::text AS goal_owner, m.owner_role_key,
+                          m.status AS milestone_status,
                           g.tenant_id::text AS tenant_id
                    FROM milestones m JOIN goals g ON g.id = m.goal_id
                    WHERE m.id = $1::uuid AND g.id = $2::uuid
@@ -123,6 +332,12 @@ async def ensure_retry_candidate(
                     "WHERE id = $1::uuid AND tenant_id = $3::uuid",
                     milestone_id, json.dumps(evidence), tenant_id,
                 )
+            # 이미 돌고 있거나 끝난 승계가 있으면 새 후보를 만들지 않는다. 실패 링크가 아직
+            # 승계 처리 전이어도 같은 일을 또 제출하면 실행 한도만 낭비한다.
+            successor = await find_valid_successor(conn, tenant_id, milestone_id, failed_task_id)
+            if successor:
+                return {"created": False, "why": f"successor_{successor['kind']}",
+                        "successor": successor["job_id"]}
             matching = [item for item in candidates
                         if str(item.get("failed_task_id")) == failed_task_id]
             if any(item.get("card_id") and not item.get("failed") for item in matching):
@@ -131,25 +346,26 @@ async def ensure_retry_candidate(
             if any(not item.get("failed") for item in matching):
                 return {"created": False, "why": "already_proposed",
                         "candidate_alive": False}
+            lineage = await lineage_root(conn, tenant_id, failed_task_id)
+            used = await count_lineage_executions(conn, tenant_id, milestone_id, lineage)
+            if used >= _MAX_RETRY:
+                if row.get("milestone_status") != "completed":
+                    await conn.execute(
+                        "UPDATE milestones SET dispatch_note = $2, updated_at = NOW() "
+                        "WHERE id = $1::uuid AND tenant_id = $3::uuid "
+                        "AND dispatch_note IS DISTINCT FROM $2",
+                        milestone_id,
+                        f"재작업 실제 실행 {used}/{_MAX_RETRY} 소진 — 사람이 확인해야 한다",
+                        tenant_id,
+                    )
+                return {"created": False, "why": "retry_exhausted",
+                        "executions": used, "lineage": lineage}
             failed = [item for item in matching if item.get("failed")]
             last_failed = max((datetime.fromisoformat(item["failed_at"])
                                for item in failed if item.get("failed_at")),
                               default=None)
             if len(failed) >= 3 or (last_failed and now - _aware(last_failed) < timedelta(minutes=10)):
                 return {"created": False, "why": "propose_backoff"}
-            # A created card consumes the bounded retry allowance permanently.
-            # Failed proposal attempts without a card do not consume it.
-            if sum(bool(item.get("card_id")) or not item.get("failed")
-                   for item in candidates) >= _MAX_RETRY:
-                await conn.execute(
-                    "UPDATE milestones SET dispatch_note = $2, updated_at = NOW() "
-                    "WHERE id = $1::uuid AND tenant_id = $3::uuid "
-                    "AND dispatch_note IS DISTINCT FROM $2",
-                    milestone_id, f"재작업 후보 {_MAX_RETRY}회 소진 — 사람이 확인해야 한다",
-                    tenant_id,
-                )
-                return {"created": False, "why": "retry_exhausted"}
-
             session_id = row["milestone_owner"] or row["goal_owner"]
             if not session_id and row["owner_role_key"]:
                 session_id = await conn.fetchval(
@@ -168,7 +384,7 @@ async def ensure_retry_candidate(
             candidates.append({
                 "reservation_id": reservation_id, "at": datetime.now(UTC).isoformat(),
                 "failed_task_id": failed_task_id, "retry_of_link": failed_task_id,
-                "reason": reason, "card_id": None,
+                "reason": reason, "card_id": None, "lineage": lineage,
             })
             evidence["retry_candidates"] = candidates
             await conn.execute(
@@ -198,6 +414,7 @@ async def ensure_retry_candidate(
         auto = [item for item in proposal.get("auto") or [] if item.get("queued")]
         card_id = cards[0]["id"] if cards else auto[0].get("queue_id") if auto else None
         card_kind = "approval" if cards else "auto_queue" if auto else None
+        queue_reused = bool(not cards and auto and auto[0].get("queue_reused"))
     except Exception as exc:  # noqa: BLE001 — blocked transition must continue
         logger.warning("goal_retry_candidate_failed milestone=%s error=%s",
                        milestone_id, str(exc)[:200])
@@ -205,6 +422,7 @@ async def ensure_retry_candidate(
             return {"created": False, "why": "proposal_failed"}
         card_id = None
         card_kind = None
+        queue_reused = False
 
     try:
         async with conn.transaction():
@@ -221,6 +439,10 @@ async def ensure_retry_candidate(
                     item["card_id"] = card_id
                     if card_id:
                         item["card_kind"] = card_kind
+                        item["queue_reused"] = queue_reused
+                        if any(other is not item and other.get("card_id") == card_id
+                               for other in evidence.get("retry_candidates", [])):
+                            item["duplicate_card"] = True
                     if not card_id:
                         item["failed"] = True
                         item["failed_at"] = datetime.now(UTC).isoformat()
