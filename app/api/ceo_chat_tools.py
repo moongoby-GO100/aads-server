@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from app.services import mockup_gate_rules as _mockup_rules
 from app.services.tool_registry import browser_session_props
 
 logger = logging.getLogger(__name__)
@@ -1330,6 +1331,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "boolean",
                     "description": "쓰기 전 .bak_aads 백업 생성 여부 (기본 true)",
                 },
+                **_mockup_rules.BUNDLE_TOOL_PROPERTIES,
             },
             "required": ["project", "file_path", "content"],
         },
@@ -1362,6 +1364,7 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "string",
                     "description": "새로 교체할 문자열 (old_string과 달라야 함)",
                 },
+                **_mockup_rules.BUNDLE_TOOL_PROPERTIES,
             },
             "required": ["project", "file_path", "old_string", "new_string"],
         },
@@ -2720,7 +2723,79 @@ async def tool_read_remote_file(project: str, file_path: str, offset: int = 1, l
 # ─── SSH 원격 쓰기 도구 함수 (AADS-190: write_remote_file, patch_remote_file, run_remote_command) ───
 
 
-async def tool_write_remote_file(project: str, file_path: str, content: str, backup: bool = True) -> str:
+# ─── 목업 승인 게이트: 채팅 직접 쓰기 경로 (R-DOC M8a, phase=chat_write) ───
+
+_MOCKUP_DECLARATION_KEYS = (
+    ("mockup_review_id", "MOCKUP_REVIEW_ID"),
+    ("mockup_revision_id", "MOCKUP_REVISION_ID"),
+    ("mockup_manifest_hash", "MOCKUP_MANIFEST_HASH"),
+)
+
+
+def mockup_declaration_from_params(params: Dict[str, Any]) -> str:
+    """MOCKUP_* 선언 줄. 도구 호출이 승인된 bundle 을 함께 넘길 때만 만들어진다 (없으면 빈 문자열)."""
+    return "\n".join(f"{key}: {params[name]}" for name, key in _MOCKUP_DECLARATION_KEYS if params.get(name))
+
+
+async def _mockup_chat_gate(project: str, paths: list, *, message: str = "", declaration: str = "") -> tuple:
+    """원격 쓰기·커밋 도구가 UI 파일을 바꿀 때 실행 게이트(mockup_gate_rules·gate_check)를 phase=chat_write 로 호출한다.
+
+    (차단 메시지 | None, 경고 문구) 를 돌려준다. shadow 는 기록과 경고뿐, enforce 일 때만 차단한다.
+    UI 파일도 아니고 bundle 선언도 없으면 DB 를 건드리지 않는다.
+    """
+    rules = _mockup_rules
+    info = rules.classify_paths([str(p) for p in paths], "\n".join(x for x in (declaration, message) if x))
+    if not info["applicable"]:
+        return None, ""
+    project = (project or "").upper()
+    session_id = ""
+    try:
+        from app.services import mockup_review_service as mockup
+        from app.services.tool_executor import current_chat_session_id, resolve_bound_tenant_id
+        from app.core.db_pool import get_pool
+
+        session_id = str(current_chat_session_id.get("") or "").strip()
+        tenant = await resolve_bound_tenant_id("", session_id)
+        task_id = f"chat:{session_id or 'unbound'}"
+        actor = f"chat:{session_id[:8] or 'unbound'}"
+        if not tenant:
+            raise RuntimeError("tenant not resolvable for this chat session")
+        async with get_pool().acquire() as conn, conn.transaction():
+            result = await mockup.gate_check(
+                conn, phase="chat_write", tenant=tenant, project=project, task_id=task_id,
+                instruction=message, goal_id=rules.declared_goal_id(declaration or message), actor=actor, info=info)
+    except Exception as exc:  # noqa: BLE001 - 게이트 장애는 판정 불능이다: 선언 bundle·enforce 는 닫힌다
+        logger.warning("mockup chat gate unavailable: %s: %s", type(exc).__name__, str(exc)[:160])
+        result = {"applicable": True, "mode": info["mode"], "phase": "chat_write", "ui_reasons": info["ui_reasons"],
+                  **rules.unavailable_decision(info)}
+        result["blocking"] = (not result["allowed"]) and rules.stops_action("chat_write", info["mode"])
+    reasons = ", ".join(str(r) for r in result.get("reasons", []))
+    ui_files = ", ".join(info["ui_reasons"][:3])
+    if result.get("blocking"):
+        return (
+            f"[ERROR] 목업 승인 게이트 차단 (MOCKUP_GATE_MODE={result['mode']}): UI 파일 수정에는 승인된 목업 bundle 이 "
+            f"필요합니다 — {reasons}. 대상: {ui_files}. mockup_review_id / mockup_revision_id / mockup_manifest_hash "
+            f"를 함께 넘기세요."
+        ), ""
+    if not result["allowed"] or result.get("shadow"):
+        return None, (
+            f"\n⚠️ [목업 승인 게이트 shadow] 승인된 목업 없이 UI 파일을 수정했습니다 ({reasons}) — 기록만 하고 "
+            f"진행했습니다. 대상: {ui_files}"
+        )
+    return None, ""
+
+
+async def tool_write_remote_file(project: str, file_path: str, content: str, backup: bool = True,
+                                 mockup_declaration: str = "") -> str:
+    """원격 서버 파일 쓰기 (SSH, 자동 백업 포함). Yellow 등급. UI 파일이면 목업 승인 게이트(chat_write)를 거친다."""
+    blocked, warning = await _mockup_chat_gate(project, [file_path], declaration=mockup_declaration)
+    if blocked:
+        return blocked
+    result = await _write_remote_file_impl(project, file_path, content, backup)
+    return result + warning if warning and not result.startswith("[ERROR]") else result
+
+
+async def _write_remote_file_impl(project: str, file_path: str, content: str, backup: bool = True) -> str:
     """원격 서버 파일 쓰기 (SSH, 자동 백업 포함). Yellow 등급."""
     project = project.upper()
 
@@ -2944,7 +3019,8 @@ async def _read_raw_file(project: str, file_path: str) -> str:
         return f"[ERROR] {e}"
 
 
-async def tool_patch_remote_file(project: str, file_path: str, old_string: str, new_string: str) -> str:
+async def tool_patch_remote_file(project: str, file_path: str, old_string: str, new_string: str,
+                                 mockup_declaration: str = "") -> str:
     """원격 서버 파일 부분 수정 (diff 기반 패치). Yellow 등급.
     old_string을 찾아 new_string으로 교체. 정확히 1개만 매치되어야 함."""
     project = project.upper()
@@ -2960,6 +3036,10 @@ async def tool_patch_remote_file(project: str, file_path: str, old_string: str, 
         return "[ERROR] old_string 필수"
     if old_string == new_string:
         return "[ERROR] old_string과 new_string이 동일"
+
+    blocked, gate_warning = await _mockup_chat_gate(project, [file_path], declaration=mockup_declaration)
+    if blocked:
+        return blocked
 
     # 1단계: 현재 파일 읽기 (줄 번호 없는 raw content — 패치 매칭용)
     file_content = await _read_raw_file(project, file_path)
@@ -2990,7 +3070,7 @@ async def tool_patch_remote_file(project: str, file_path: str, old_string: str, 
 
     # 3단계: 교체 후 쓰기
     patched_content = file_content.replace(old_string, new_string, 1)
-    result = await tool_write_remote_file(project, file_path, patched_content, backup=True)
+    result = await _write_remote_file_impl(project, file_path, patched_content, backup=True)
 
     if result.startswith("[ERROR]"):
         return result
@@ -2998,7 +3078,7 @@ async def tool_patch_remote_file(project: str, file_path: str, old_string: str, 
     # 변경 요약
     old_lines = old_string.count("\n") + 1
     new_lines = new_string.count("\n") + 1
-    return f"[{project} 파일 패치 완료 — {file_path}] {old_lines}줄 → {new_lines}줄 교체\n{result}"
+    return f"[{project} 파일 패치 완료 — {file_path}] {old_lines}줄 → {new_lines}줄 교체\n{result}{gate_warning}"
 
 
 async def tool_run_remote_command(project: str, command: str) -> str:
@@ -3200,9 +3280,17 @@ async def tool_git_remote_add(project: str, files: str = ".") -> str:
 
 
 async def tool_git_remote_commit(project: str, message: str) -> str:
-    """원격 서버 git commit (커밋 전 자동 검수 포함)."""
+    """원격 서버 git commit (커밋 전 자동 검수 포함). staged 파일이 UI 면 목업 승인 게이트(chat_write)를 거친다."""
     if not message or not message.strip():
         return "[ERROR] commit message 필수"
+
+    _gate_warning = ""
+    if _mockup_rules.gate_mode() != "off":
+        _staged = await tool_run_remote_command(project, "git diff --cached --name-only")
+        _staged_paths = [f.strip() for f in _staged.split("\n") if f.strip() and not f.startswith("[")]
+        _blocked, _gate_warning = await _mockup_chat_gate(project, _staged_paths, message=message)
+        if _blocked:
+            return _blocked
 
     # ── 커밋 전 자동 검수: staged .py 파일 구문 + import 검증 ──
     if project == "AADS":
@@ -3276,7 +3364,7 @@ async def tool_git_remote_commit(project: str, message: str) -> str:
     # shlex.quote()로 안전한 메시지 이스케이프
     safe_msg = shlex.quote(message[:200])
     result = await tool_run_remote_command(project, f"git commit -m {safe_msg}")
-    return _review_warning + result if _review_warning else result
+    return (_review_warning + result if _review_warning else result) + _gate_warning
 
 
 async def tool_git_remote_push(project: str, branch: str = "") -> str:
@@ -6586,6 +6674,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("file_path") or params.get("path", ""),
             params.get("content", ""),
             params.get("backup", True),
+            mockup_declaration=mockup_declaration_from_params(params),
         )
     elif name == "patch_remote_file":
         return await tool_patch_remote_file(
@@ -6593,6 +6682,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("file_path") or params.get("path", ""),
             params.get("old_string", ""),
             params.get("new_string", ""),
+            mockup_declaration=mockup_declaration_from_params(params),
         )
     elif name == "run_remote_command":
         return await tool_run_remote_command(

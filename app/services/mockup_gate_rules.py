@@ -11,7 +11,11 @@ from typing import Any
 
 MODES = ("off", "shadow", "enforce")
 DEFAULT_MODE = "shadow"
-PHASES = ("submit", "pre_execution", "checkpoint")
+PHASES = ("submit", "pre_execution", "checkpoint", "chat_write", "pre_push")
+# A denial at these phases always stops the work (unchanged since the runner gate). chat_write and pre_push guard
+# paths that never went through the runner, so a denial there stops the action only under MOCKUP_GATE_MODE=enforce.
+ALWAYS_BLOCKING_PHASES = ("submit", "pre_execution", "checkpoint")
+DECLARATION_SCOPE_PHASES = ("chat_write", "pre_push")
 
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -24,6 +28,14 @@ _BUNDLE_KEYS = {
 _UI_SUFFIXES = (".tsx", ".jsx", ".vue", ".svelte", ".css", ".scss", ".sass", ".less", ".html")
 _UI_REPOS = ("aads-dashboard",)
 _NON_UI_PREFIXES = ("docs/", "tests/", "test/", "scripts/", "reports/", "migrations/")
+
+
+# Optional tool parameters through which a chat write declares the approved bundle it implements.
+BUNDLE_TOOL_PROPERTIES = {
+    "mockup_review_id": {"type": "string", "description": "UI 파일 수정 시 승인된 목업 review id (선택)"},
+    "mockup_revision_id": {"type": "string", "description": "승인된 목업 revision id (선택)"},
+    "mockup_manifest_hash": {"type": "string", "description": "승인된 목업 manifest sha256 (선택)"},
+}
 
 
 def gate_mode(environ: dict[str, str] | None = None) -> str:
@@ -110,6 +122,41 @@ def ui_task_reasons(instruction: str) -> list[str]:
         elif key == "TARGET_FILES":
             reasons.extend(f"ui_file:{p}" for p in _split_paths(value) if is_ui_path(p))
     return reasons[:10]
+
+
+def ui_file_reason(path: str) -> str | None:
+    """Why this changed file counts as UI work, or None. Same predicate for chat writes and pushed commits."""
+    lowered = path.strip().replace("\\", "/").lower()
+    if not lowered:
+        return None
+    if is_ui_path(lowered):
+        return f"ui_file:{path.strip()}"
+    marker = "aads-dashboard/"
+    at = lowered.find(marker)
+    if at >= 0:
+        inner = lowered[at + len(marker):]
+        if inner and not inner.startswith(_NON_UI_PREFIXES) and not inner.endswith((".md", ".json", ".py", ".sh")):
+            return f"dashboard_file:{path.strip()}"
+    return None
+
+
+def classify_paths(paths: list[str], message: str = "", environ: dict[str, str] | None = None) -> dict[str, Any]:
+    """classify() for work that is described by changed files (chat write, pushed commit) instead of an instruction.
+
+    `message` is the commit message / chat-supplied declaration; it carries the MOCKUP_* bundle lines.
+    """
+    mode = gate_mode(environ)
+    bundle = parse_bundle(message)
+    reasons = [r for r in (ui_file_reason(p) for p in paths) if r][:10]
+    ui = bool(reasons)
+    applicable = mode != "off" and (bundle["declared"] or ui)
+    return {"mode": mode, "declared": bundle["declared"], "bundle": bundle, "ui_task": ui, "ui_reasons": reasons,
+            "applicable": applicable}
+
+
+def stops_action(phase: str, mode: str) -> bool:
+    """Whether a denial at this phase actually stops the work (see ALWAYS_BLOCKING_PHASES)."""
+    return phase in ALWAYS_BLOCKING_PHASES or mode == "enforce"
 
 
 def classify(instruction: str, environ: dict[str, str] | None = None) -> dict[str, Any]:

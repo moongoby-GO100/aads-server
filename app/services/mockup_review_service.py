@@ -822,8 +822,9 @@ async def verify_bundle(conn: Any, tenant: str, project: str, review_id: UUID, a
                         declared_goal_id: str | None = None) -> dict:
     """Execution-time gate. Returns {"allowed": bool, ...}; a denial is audited and the caller answers 409.
 
-    declared_goal_id only matters at phase=submit, when the task has no goal_task_links row yet: the goal named in
-    the submission counts as scope if it is a goal of this tenant/project (and of this review, when it has one).
+    declared_goal_id only matters at phase=submit (and chat_write / pre_push, which never get a task link): the goal
+    named in the submission counts as scope if it is a goal of this tenant/project (and of this review, when it has
+    one). For chat_write / pre_push the review's own goal is used when nothing is declared.
     """
     head = await _lock(conn, tenant, project, review_id)
     reasons: list[str] = []
@@ -833,7 +834,9 @@ async def verify_bundle(conn: Any, tenant: str, project: str, review_id: UUID, a
         "JOIN goals g ON g.id=COALESCE(l.goal_id,m.goal_id) WHERE l.task_id=$1 AND l.tenant_id=$2::uuid AND l.link_state='active' "
         "AND g.tenant_id=$2::uuid AND g.project=$3 AND ($4::uuid IS NULL OR g.id=$4::uuid) LIMIT 1",
         body.task_id, tenant, project, head["goal_id"])
-    if not in_scope and body.phase == "submit" and declared_goal_id:
+    if body.phase in rules.DECLARATION_SCOPE_PHASES and not declared_goal_id and head["goal_id"]:
+        declared_goal_id = str(head["goal_id"])  # direct edits have no task link: the review's own goal is the scope
+    if not in_scope and (body.phase == "submit" or body.phase in rules.DECLARATION_SCOPE_PHASES) and declared_goal_id:
         in_scope = await conn.fetchval(
             "SELECT 1 FROM goals WHERE id=$1::uuid AND tenant_id=$2::uuid AND project=$3 "
             "AND ($4::uuid IS NULL OR id=$4::uuid)", declared_goal_id, tenant, project, head["goal_id"])
@@ -1041,26 +1044,76 @@ async def mark_notification_read(conn: Any, tenant: str, user: str, notification
 # ------------------------------------------------------------- execution gate
 
 def _gate_result(info: dict, phase: str, decision: dict, **extra: Any) -> dict:
+    blocking = info["applicable"] and not decision["allowed"] and rules.stops_action(phase, info["mode"])
     return {"applicable": info["applicable"], "mode": info["mode"], "phase": phase, "ui_task": info["ui_task"],
-            "declared": info["declared"], **decision, **extra}
+            "declared": info["declared"], "ui_reasons": info["ui_reasons"], "blocking": blocking,
+            **decision, **extra}
+
+
+_RECORD_SQL = (
+    "INSERT INTO mockup_gate_decisions(phase,mode,allowed,blocking,shadow,reasons,ui_reasons,bundle_declared,"
+    "task_id,job_id,project_key,tenant_id,review_id,revision_id,audit_event_id,actor) "
+    "VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12::uuid,$13::uuid,$14::uuid,$15,$16)")
+
+
+async def record_gate_decision(conn: Any, *, result: dict, tenant: str | None, project: str, task_id: str,
+                               actor: str) -> bool:
+    """Persist one gate verdict (shadow evidence for the enforce switch). True when the row was written.
+
+    A failed insert (table not migrated yet, DB trouble) is logged and swallowed: recording can never change the
+    verdict. The insert runs in a savepoint so it cannot abort the caller's transaction.
+    """
+    try:
+        async with conn.transaction():
+            await conn.execute(
+                _RECORD_SQL, result["phase"], result["mode"], bool(result["allowed"]), bool(result.get("blocking")),
+                bool(result.get("shadow")), json.dumps(result.get("reasons") or []),
+                json.dumps(result.get("ui_reasons") or []), bool(result.get("declared")), task_id[:200],
+                task_id if task_id.startswith("runner-") else None, project, tenant, result.get("review_id"),
+                result.get("revision_id"), result.get("audit_event_id"), actor[:200])
+        return True
+    except Exception as exc:  # noqa: BLE001 - evidence is best effort; the verdict stands
+        logger.warning("mockup gate decision not recorded (phase=%s task=%s): %s: %s", result.get("phase"), task_id,
+                       type(exc).__name__, str(exc)[:160])
+        return False
 
 
 async def gate_check(conn: Any, *, phase: str, tenant: str, project: str, task_id: str, instruction: str,
                      goal_id: str | None, actor: str, authorize: Any = None,
-                     environ: dict[str, str] | None = None) -> dict:
-    """Decide whether this instruction may be submitted / started. Never raises: every failure is a denial.
+                     environ: dict[str, str] | None = None, info: dict | None = None, record: bool = True) -> dict:
+    """Decide whether this instruction (or, with `info`, these changed files) may be submitted / started / written.
+
+    Never raises: every failure is a denial. `info` is a rules.classify / rules.classify_paths result; without it the
+    instruction is classified.
 
     Tasks that neither declare a bundle nor look like UI work return applicable=False and are left alone. A declared
     bundle is always verified (so a half-written declaration cannot slip through). A UI task without a bundle is
     denied under MOCKUP_GATE_MODE=enforce and only recorded under shadow. A database failure on an applicable task
     denies (fail closed) except when the mode is shadow and no bundle was declared.
+
+    Every applicable verdict is written to mockup_gate_decisions (`recorded` in the answer says whether that
+    worked); `blocking` says whether the caller must stop the work (denials at chat_write / pre_push only stop it
+    under enforce).
     """
-    info = rules.classify(instruction, environ)
+    if info is None:
+        info = rules.classify(instruction, environ)
+    result = await _decide(conn, info, phase=phase, tenant=tenant, project=project, task_id=task_id, goal_id=goal_id,
+                           actor=actor, authorize=authorize)
+    if record and result["applicable"]:
+        unavailable = "gate_unavailable" in result["reasons"] and not result["allowed"]
+        # After a database error the surrounding transaction may be aborted; the caller records on a fresh connection.
+        result["recorded"] = False if unavailable else await record_gate_decision(
+            conn, result=result, tenant=tenant, project=project, task_id=task_id, actor=actor)
+    return result
+
+
+async def _decide(conn: Any, info: dict, *, phase: str, tenant: str, project: str, task_id: str,
+                  goal_id: str | None, actor: str, authorize: Any) -> dict:
     if not info["applicable"]:
         return _gate_result(info, phase, {"allowed": True, "reasons": []})
     bundle = info["bundle"]
     if not bundle["declared"]:
-        return _gate_result(info, phase, rules.no_bundle_decision(info["mode"]), ui_reasons=info["ui_reasons"])
+        return _gate_result(info, phase, rules.no_bundle_decision(info["mode"]))
     if bundle["errors"]:
         return _gate_result(info, phase, {"allowed": False, "reasons": [f"bundle_{e}" for e in bundle["errors"]]})
     try:

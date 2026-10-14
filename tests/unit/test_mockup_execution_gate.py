@@ -568,9 +568,18 @@ def cli(instruction, ask=None, env=None):
 
 def test_cli_exit_codes():
     assert cli(BACKEND_TASK)[0] == 0
-    assert cli(UI_TASK, env={"MOCKUP_GATE_MODE": "enforce"})[0] == 10
-    assert cli(UI_TASK)[0] == 0  # shadow
-    assert cli(f"MOCKUP_REVIEW_ID: {REVIEW}\n")[0] == 10
+    # a verdict the CLI already knows (no bundle / half-written bundle) still asks the API, but only so the API can
+    # record it: the answer is ignored and never changes the exit code
+    recorded = []
+
+    def record(*a, **k):
+        recorded.append(a)
+        return {"allowed": True}
+
+    assert cli(UI_TASK, env={"MOCKUP_GATE_MODE": "enforce"}, ask=record)[0] == 10
+    assert cli(UI_TASK, ask=record)[0] == 0  # shadow
+    assert cli(f"MOCKUP_REVIEW_ID: {REVIEW}\n", ask=record)[0] == 10
+    assert len(recorded) == 3
     assert cli(BUNDLE, ask=lambda *a: {"allowed": True})[0] == 0
     assert cli(BUNDLE, ask=lambda *a: {"allowed": False, "reasons": ["approval_revoked"]})[0] == 10
 

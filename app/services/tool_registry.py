@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.core.project_config import SEARCH_PROJECT_ENUM, SSH_PROJECT_ENUM
+from app.services import mockup_gate_rules as _mockup_rules
 
 # ─── AADS-186D: defer_loading 분류 ───────────────────────────────────────────
 # false (상시 로드): AI가 매 요청마다 반드시 알아야 하는 핵심 도구
@@ -992,6 +993,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "description": "기존 파일 백업 여부 (기본 true)",
                     "default": True,
                 },
+                **_mockup_rules.BUNDLE_TOOL_PROPERTIES,
             },
             "required": ["project", "file_path", "content"],
         },
@@ -1026,6 +1028,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "string",
                     "description": "새 문자열",
                 },
+                **_mockup_rules.BUNDLE_TOOL_PROPERTIES,
             },
             "required": ["project", "file_path", "old_string", "new_string"],
         },

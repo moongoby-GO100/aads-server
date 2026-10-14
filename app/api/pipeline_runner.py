@@ -1956,8 +1956,12 @@ def _enforce_owner_resolved_gate(instruction: str, project: str) -> None:
 
 async def _run_mockup_gate(
     context: TenantContext, *, phase: str, project: str, task_id: str, instruction: str, goal_id: str | None,
+    paths: list[str] | None = None,
 ) -> dict:
     """Verify the approved mockup bundle named in the instruction. Unrelated tasks return without touching the DB.
+
+    With `paths` (pre_push) the changed files are classified instead of an instruction's TARGET lines; `instruction`
+    is then the commit message that carries the MOCKUP_* declaration.
 
     The gate runs in its own short transaction so a denial's audit row is committed even though the caller then
     answers 409. It only reads and records; it never stops or restarts any running job.
@@ -1967,10 +1971,13 @@ async def _run_mockup_gate(
     from app.services import mockup_gate_rules as rules
     from app.services import mockup_review_service as mockup
 
-    info = rules.classify(instruction)
+    info = rules.classify_paths(paths, instruction) if paths is not None else rules.classify(instruction)
     if not info["applicable"]:
-        return {"applicable": False, "allowed": True, "mode": info["mode"], "phase": phase, "reasons": []}
+        return {"applicable": False, "allowed": True, "mode": info["mode"], "phase": phase, "reasons": [],
+                "blocking": False}
     project_key = project.upper()
+    actor = "system:pipeline-runner"
+    result = None
     try:
         actor = _scope(context)[1]
         async with get_pool().acquire() as conn, conn.transaction():
@@ -1979,16 +1986,34 @@ async def _run_mockup_gate(
 
             result = await mockup.gate_check(
                 conn, phase=phase, tenant=_tenant_id(context), project=project_key, task_id=task_id,
-                instruction=instruction, goal_id=goal_id, actor=actor, authorize=authorize)
+                instruction=instruction, goal_id=goal_id, actor=actor, authorize=authorize, info=info)
     except HTTPException:
         raise
     except Exception:  # noqa: BLE001 - pool exhausted / DB down
         logger.warning("mockup_gate_unavailable", phase=phase, task_id=task_id, exc_info=True)
-        return {"applicable": True, "mode": info["mode"], "phase": phase, "ui_task": info["ui_task"],
-                "declared": info["declared"], **rules.unavailable_decision(info)}
+        result = {"applicable": True, "mode": info["mode"], "phase": phase, "ui_task": info["ui_task"],
+                  "declared": info["declared"], "ui_reasons": info["ui_reasons"], "recorded": False,
+                  **rules.unavailable_decision(info)}
+        result["blocking"] = (not result["allowed"]) and rules.stops_action(phase, info["mode"])
+    if result.get("recorded") is False and "gate_unavailable" in result["reasons"]:
+        await _record_gate_decision_fresh(result, context, project_key, task_id, actor)
     if result["allowed"] and result.get("shadow"):
         logger.warning("mockup_gate_shadow", phase=phase, task_id=task_id, reasons=result["reasons"])
     return result
+
+
+async def _record_gate_decision_fresh(result: dict, context: TenantContext, project: str, task_id: str,
+                                      actor: str) -> None:
+    """Second chance to write the verdict after the gate's own transaction failed (best effort, never raises)."""
+    try:
+        from app.core.db_pool import get_pool
+        from app.services import mockup_review_service as mockup
+
+        async with get_pool().acquire() as conn:
+            await mockup.record_gate_decision(conn, result=result, tenant=_tenant_id(context), project=project,
+                                              task_id=task_id, actor=actor)
+    except Exception:  # noqa: BLE001
+        logger.warning("mockup_gate_record_failed", phase=result.get("phase"), task_id=task_id, exc_info=True)
 
 
 def _mockup_denial(result: dict) -> HTTPException:
@@ -2023,6 +2048,29 @@ async def mockup_gate_for_job(
     return await _run_mockup_gate(
         context, phase=(body.phase if body else "pre_execution"), project=job["project"], task_id=job_id,
         instruction=job["instruction"] or "", goal_id=rules.declared_goal_id(job["instruction"] or ""))
+
+
+class MockupPushGateRequest(BaseModel):
+    phase: Literal["pre_push"] = "pre_push"
+    project: str = Field("AADS", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    task_id: str = Field(min_length=1, max_length=200)
+    paths: list[str] = Field(default_factory=list, max_length=2000)
+    message: str = Field("", max_length=20000)
+
+
+@router.post("/pipeline/mockup-gate/push", tags=["pipeline-runner"])
+async def mockup_gate_for_push(
+    body: MockupPushGateRequest,
+    context: TenantContext = Depends(require_tenant_member),
+):
+    """pre-push hook gate: do the commit's changed files touch UI, and does its message declare an approved bundle?
+
+    Answers 200 with the verdict; `blocking` tells the hook whether to stop the push (only under enforce).
+    """
+    from app.services import mockup_gate_rules as rules
+    return await _run_mockup_gate(
+        context, phase=body.phase, project=body.project, task_id=body.task_id, instruction=body.message,
+        goal_id=rules.declared_goal_id(body.message), paths=body.paths)
 
 
 @router.post("/pipeline/jobs", response_model=JobSubmitResponse, tags=["pipeline-runner"])

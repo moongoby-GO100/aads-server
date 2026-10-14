@@ -229,7 +229,7 @@ class VerifyBundle(BaseModel):
     task_id: str = Field(min_length=1, max_length=200)
     revision_id: UUID
     manifest_hash: str
-    phase: Literal["submit", "pre_execution", "checkpoint"] = "pre_execution"
+    phase: Literal["submit", "pre_execution", "checkpoint", "chat_write", "pre_push"] = "pre_execution"
 
     @field_validator("manifest_hash")
     @classmethod
