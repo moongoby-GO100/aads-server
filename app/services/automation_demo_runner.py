@@ -40,6 +40,9 @@ PROGRESS_EVENT = "automation_draft.progress"
 RUNNER_ACTOR = "system:demo_runner"
 PREVIEW_ROWS = 5
 _CELL_LIMIT = 200
+# SPA 는 제출 직후 몇 초 뒤에 이동한다. 로그인 제출 판정은 이 시간까지만 성공 신호를 기다린다.
+LOGIN_SETTLE_SECONDS = 10.0
+LOGIN_POLL_SECONDS = 0.5
 
 # 계획에만 쓰는 키. 실행기·녹화기에는 넘기지 않는다.
 _PLAN_KEYS = frozenset({"label", "purpose", "credential_field", "login_submit", "role", "approved_fragment"})
@@ -47,7 +50,7 @@ _SECRET_TEMPLATE = re.compile(r"^\{\{\s*secret\.(username|password)\s*\}\}$")
 _ANY_TEMPLATE = re.compile(r"\{\{[^{}]+\}\}")
 _LOGIN_URL = re.compile(r"login|signin|sign-in|sign_in|/auth|로그인", re.IGNORECASE)
 _AUTH_FAILED_TEXT = (
-    "비밀번호가 일치하지", "비밀번호를 잘못", "아이디 또는 비밀번호", "아이디나 비밀번호", "로그인 정보가 올바르지",
+    "비밀번호가 일치하지", "비밀번호를 잘못", "아이디 또는 비밀번호", "아이디나 비밀번호", "이메일 또는 비밀번호", "로그인 정보가 올바르지",
     "incorrect password", "invalid password", "wrong password", "invalid username or password",
     "incorrect username or password",
 )
@@ -56,6 +59,7 @@ _AUTH_FAILED_TEXT = (
 _CAPTCHA_TEXT = ("captcha", "캡차", "보안문자", "자동입력방지", "i'm not a robot", "로봇이 아닙니다")
 _LOGIN_CHALLENGE_TEXT = ("인증번호", "일회용 비밀번호", "2차 인증", "추가 인증", "본인인증", "휴대폰 본인확인",
                          "verification code", "two-factor", "2-step verification")
+_PASSWORD_BOX = re.compile(r"textbox[^\n]*(비밀번호|password|passwd)", re.IGNORECASE)
 _OTP_WORD = re.compile(r"\botp\b", re.IGNORECASE)
 _BLOCKED_TEXT = ("403", "forbidden", "access denied", "permission denied")
 _LAYOUT_TEXT = ("waiting for locator", "waiting for selector", "locator(", "no node found",
@@ -240,6 +244,24 @@ def is_challenge(text: str, *, login_step: bool) -> bool:
     return login_step and (any(term in lowered for term in _LOGIN_CHALLENGE_TEXT) or bool(_OTP_WORD.search(lowered)))
 
 
+def _aria_text(result: Mapping[str, Any]) -> str:
+    evidence = result.get("evidence") if isinstance(result.get("evidence"), Mapping) else {}
+    aria = evidence.get("aria") if isinstance(evidence.get("aria"), Mapping) else {}
+    return str(aria.get("text") or "")
+
+
+def login_form_gone(result: Mapping[str, Any]) -> bool:
+    """접근성 스냅샷이 있고 비밀번호 입력칸이 없을 때만 '로그인 폼 소멸'. 스냅샷이 없으면 단정하지 않는다."""
+    aria = _aria_text(result)
+    return bool(aria) and not _PASSWORD_BOX.search(aria)
+
+
+def has_auth_failed_text(result: Mapping[str, Any]) -> bool:
+    _, text = _evidence_text(result)
+    lowered = text.lower()
+    return any(marker in lowered for marker in _AUTH_FAILED_TEXT)
+
+
 def inspect_success(step: Mapping[str, Any], result: Mapping[str, Any], *, pre_url: str) -> str | None:
     """성공으로 돌아왔어도 화면이 실패를 말하는 경우(로그인 되돌아옴·인증 요구·차단 화면)."""
     url, text = _evidence_text(result)
@@ -253,7 +275,7 @@ def inspect_success(step: Mapping[str, Any], result: Mapping[str, Any], *, pre_u
         if any(marker in lowered for marker in _AUTH_FAILED_TEXT):
             return "auth_failed"
         path = url.split("?", 1)[0]
-        if _LOGIN_URL.search(path) and (not pre_url or path == pre_url.split("?", 1)[0]):
+        if _LOGIN_URL.search(path) and (not pre_url or path == pre_url.split("?", 1)[0]) and not login_form_gone(result):
             return "auth_failed"
     return None
 
@@ -435,6 +457,22 @@ class _Run:
         if self.approved.pop(seq, None) is not None:
             self.allowed.discard(seq)
 
+    async def settle_login(self, executor: Any, step: Mapping[str, Any], seq: int,
+                           result: Mapping[str, Any]) -> tuple[Mapping[str, Any], str | None]:
+        """제출 직후엔 아직 로그인 화면일 수 있다(SPA 지연 이동). 실패 문구가 없으면 성공 신호를 제한 시간 동안 다시 본다."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + LOGIN_SETTLE_SECONDS
+        code: str | None = "auth_failed"
+        while code == "auth_failed" and not has_auth_failed_text(result) and loop.time() < deadline:
+            await asyncio.sleep(LOGIN_POLL_SECONDS)
+            probe = await executor({"action": "snapshot", "purpose": "login", "seq": seq,
+                                    "description": "로그인 결과 확인", "context": {"domain": self.domain}})
+            if not isinstance(probe, Mapping) or not probe.get("ok"):
+                continue
+            result = probe
+            code = inspect_success(step, probe, pre_url=self.last_url)
+        return result, code
+
     async def execute(self, executor: Any, step: dict[str, Any], secrets: Mapping[str, str]) -> Outcome | None:
         level = step_risk(step, self.domain)
         seq = int(step["seq"])
@@ -453,6 +491,8 @@ class _Run:
             result = result if isinstance(result, Mapping) else {"ok": False, "error": "invalid_result"}
             if result.get("ok"):
                 code = inspect_success(step, result, pre_url=self.last_url)
+                if code == "auth_failed" and step.get("login_submit") and not has_auth_failed_text(result):
+                    result, code = await self.settle_login(executor, step, seq, result)
                 await self.frame(result, sentence)
                 if code:
                     return Outcome("failed", failure_code=code, reason="screen_check", seq=seq)

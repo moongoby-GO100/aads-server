@@ -476,6 +476,78 @@ def test_inspect_success_detects_login_bounce_challenge_and_block_page():
     assert runner.inspect_success({"action": "click"}, {"ok": True, "server_access": {"blocked": True}}, pre_url="") == "blocked"
 
 
+LOGIN_URL = f"https://{DOMAIN}/login"
+PROBE = "로그인 결과 확인"
+
+
+def _bounce(text="로그인", aria=""):
+    ev = {"url": LOGIN_URL, "dom": {"text": text}}
+    if aria:
+        ev["aria"] = {"text": aria}
+    return {"ok": True, "evidence": ev}
+
+
+@pytest.fixture
+def fast_settle(monkeypatch):
+    monkeypatch.setattr(runner, "LOGIN_SETTLE_SECONDS", 0.3)
+    monkeypatch.setattr(runner, "LOGIN_POLL_SECONDS", 0.01)
+
+
+def test_inspect_success_accepts_login_form_gone_and_new_email_failure_text():
+    submit = {"action": "press", "login_submit": True}
+    form = _bounce(aria='- textbox "이메일"\n- textbox "비밀번호"')
+    gone = _bounce(aria='- heading "대시보드"')
+    assert runner.inspect_success(submit, form, pre_url=LOGIN_URL) == "auth_failed"
+    assert runner.inspect_success(submit, gone, pre_url=LOGIN_URL) is None
+    wrong = {"ok": True, "evidence": {"url": f"https://{DOMAIN}/x", "dom": {"text": "이메일 또는 비밀번호가 올바르지 않습니다"}}}
+    assert runner.inspect_success(submit, wrong, pre_url=LOGIN_URL) == "auth_failed"
+
+
+def test_spa_delayed_redirect_url_change_is_success_after_polling(world, fast_settle):
+    world.executor.script = {
+        "로그인": [_bounce()],
+        PROBE: [_bounce(), _bounce(), {"ok": True, "evidence": {"url": f"https://{DOMAIN}/home", "dom": {"text": "매출"}}}],
+    }
+    did = new_draft(world, plan=plan(LOGIN, QUERY))
+    assert demo(world, did).status == "done"
+    descriptions = [c["description"] for c in world.executor.calls]
+    assert descriptions.count("로그인") == 1 and descriptions.count(PROBE) == 3
+
+
+def test_spa_delayed_login_form_disappearance_is_success(world, fast_settle):
+    form = '- textbox "아이디"\n- textbox "비밀번호"'
+    world.executor.script = {
+        "로그인": [_bounce(aria=form)],
+        PROBE: [_bounce(aria=form), _bounce(aria='- heading "매출 현황"')],
+    }
+    did = new_draft(world, plan=plan(LOGIN, QUERY))
+    assert demo(world, did).status == "done"
+
+
+def test_login_bounce_without_signal_fails_after_bounded_polling(world, fast_settle):
+    world.executor.script = {"로그인": [_bounce()], PROBE: [_bounce() for _ in range(200)]}
+    did = new_draft(world, plan=plan(LOGIN, QUERY))
+    outcome = demo(world, did)
+    assert outcome.status == "failed" and outcome.failure_code == "auth_failed"
+    probes = [c for c in world.executor.calls if c["description"] == PROBE]
+    assert 1 <= len(probes) < 200
+    assert "매출 관리" not in [c["description"] for c in world.executor.calls]
+
+
+def test_email_or_password_failure_text_fails_immediately_without_polling(world, fast_settle):
+    world.executor.script = {"로그인": [_bounce("이메일 또는 비밀번호가 올바르지 않습니다")]}
+    did = new_draft(world, plan=plan(LOGIN, QUERY))
+    outcome = demo(world, did)
+    assert outcome.failure_code == "auth_failed"
+    assert PROBE not in [c["description"] for c in world.executor.calls]
+
+
+def test_challenge_during_login_polling_stops_with_challenge(world, fast_settle):
+    world.executor.script = {"로그인": [_bounce()], PROBE: [_bounce("인증번호를 입력해 주세요")]}
+    did = new_draft(world, plan=plan(LOGIN, QUERY))
+    assert demo(world, did).failure_code == "challenge"
+
+
 def test_transient_is_retried_once_automatically(world):
     world.executor.script = {"매출 관리": [{"ok": False, "error": "net::ERR_TIMED_OUT"}]}
     did = new_draft(world, plan=plan(NAV, QUERY), credential=False)
