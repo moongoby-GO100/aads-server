@@ -153,6 +153,7 @@ GROUPS: tuple[Group, ...] = (
         tests=(
             "tests/unit/test_runner_live_update_hold.py",
             "tests/unit/test_runner_live_release_apply.py",
+            "tests/unit/test_install_runner_live_controller.py",
             "tests/unit/test_runner_maintenance_protocol.py",
             "tests/unit/test_runner_busy_probe_idle_poll.py",
             "tests/unit/test_runner_sync_live_process_guard.py",
@@ -162,6 +163,7 @@ GROUPS: tuple[Group, ...] = (
         globs=(
             "scripts/runner_live_update.sh",
             "scripts/runner_live_release_prepare.sh",
+            "scripts/install_runner_live_controller.sh",
             "scripts/runner_busy_lib.sh",
             "scripts/sync_pipeline_runner_remote.sh",
             "scripts/restart_local_runner.sh",
