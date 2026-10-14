@@ -45,7 +45,7 @@ CEO 지시("기획 설계 PRD 작성을 안 하지?")로 드러난 공백을 메
 ## R-DOC 문서 저장 규칙
 
 > 개정 근거: 대상 head `plan:7d9f483b5dba` 는 "OHVIS 문서 정본관리 게이트 — 운영 기획서"(AADS)이고, 짝이 되는 PRD head `prd:848c81d57565` 의 담당 범위에 `goal_documents` 대장·문서 표류 게이트가 있다. R-DOC 는 그 직접 연장이므로 새 head 를 만들지 않고 같은 head 의 새 revision 으로 등록한다 [DB 조회: project_document_heads 679ce7d2…·2c4e95fb…, 2026-10-03].
-> version 1.2.0 (직전 승인본 1.0.0 = revision 1. 1.1.0 = 저장 규칙 절, 1.2.0 = 아래 화면 개발 절 추가이며 둘 다 승인 전 초안 내용). 위쪽 승인본 원문은 글자 그대로이며 sha256 `b0a54223627600eb18b549dd18cbf9627e4e8f31fca098f6fb4c7785bef750df` 이다 [DB 조회: project_document_revisions 6dfc2221… 의 content_hash].
+> version 1.3.0 · 갱신 2026-10-14 KST (직전 승인본 1.0.0 = revision 1. 1.1.0 = 저장 규칙 절, 1.2.0 = 아래 화면 개발 절 추가, 1.3.0 = 현재 상태 실측 교체와 마일스톤 매핑 추가이며 셋 다 승인 전 초안 내용). 위쪽 승인본 원문은 글자 그대로이며 sha256 `b0a54223627600eb18b549dd18cbf9627e4e8f31fca098f6fb4c7785bef750df` 이다 [DB 조회: project_document_revisions 6dfc2221… 의 content_hash].
 
 ### 문제
 
@@ -83,21 +83,62 @@ CEO 지시("기획 설계 PRD 작성을 안 하지?")로 드러난 공백을 메
 
 ### 로드맵
 
-| 단계 | 내용 | 현재 상태 | 출처 |
+| 단계 | 내용 | 현재 상태 (2026-10-14 실측) | 출처 |
 |---|---|---|---|
-| 1. 정본 등록 | 이 기획서(1.2.0)·PRD(1.2.0)·spec(1.2.0)을 커밋한 뒤 CEO 세션이 정본 API 로 등록한다. 기획서·PRD 는 위 head 의 새 revision | 이 작업은 파일까지. 등록은 미수행 | [지시서 인용] |
-| 2. 채팅 등록 도구 | 채팅에서 초안 등록까지만 하는 도구. 승인은 기존 `approve` 경로 | runner-0d1b55b7 실행 중(선행 runner-a19f820e 는 error). origin/main 미반영 | [DB 조회: pipeline_jobs, 2026-10-03] |
-| 3. shadow 실측 | 진입점 3곳이 경고·기록만 한다. 기간·합격선을 정한다 | 3곳 구현은 origin/main 커밋 6fd5b531 에 반영. 표본 1행이라 판단 근거로는 부족 | [코드 확인] [DB 조회] |
-| 4. L1 R-DOC 활성화 | 프롬프트 자산 초안(`enabled=false`)을 활성화하고 `flow-rules.md` 파일명 절을 정리한다 | 초안만 있음(origin/main 68f92907). 활성화는 CEO 결정이고 spec 의 파일명 결정이 선행 | [코드 확인] |
+| 1. 정본 등록 | 이 기획서·PRD·spec 을 정본 API 로 등록한다. 승인은 CEO | 기획서·PRD 는 2026-10-03 에 기존 head 의 revision 2(1.2.0, 초안)로 등록돼 있고 파일과 해시가 같다. spec 은 `rdoc-storage-rule-spec` revision 1. 승인 0건. 마일스톤이 요구하는 `rdoc-storage-rule-plan`·`-prd` key 의 등록은 미수행 — 아래 "현재 상태" 참조 | [DB 조회] |
+| 2. 채팅 등록 도구 | 채팅에서 초안 등록까지만 하는 도구. 승인은 기존 `approve` 경로 | `canonical_document_register` 가 origin/main 에 반영됨(9c2214d2). 마일스톤 M3 는 review 상태 | [코드 확인] [DB 조회] |
+| 3. shadow 실측 | 진입점이 경고·기록만 한다. 기간·합격선을 정한다 | 최근 7일 `canonical_gate_events` 153건. 기간·합격선은 아직 [미측정] — CEO 결정 | [DB 조회] |
+| 4. L1 R-DOC 활성화 | 프롬프트 자산을 활성화하고 `flow-rules.md` 파일명 절을 정리한다 | 활성화 완료: `prompt_assets.slug='l1-doc-storage-rule'` enabled=true(2026-10-06 20:05 KST). 마일스톤 M2 completed | [DB 조회] |
 | 5. 화면 개발 절차 | 화면 절차·디자인 조사 계약(RDOC-UI-1~11)을 문서로 고정한다. 아래 "화면 개발 절차" 절 | 이 작업은 문서 초안까지. 승인·시범 적용·필드 구현은 미수행 | [지시서 인용] |
 
 enforce 는 로드맵 단계가 아니다: 미구현 · shadow 실측 뒤 CEO 별도 승인으로만 다룬다.
+
+### 현재 상태 (2026-10-14 실측)
+
+> 아래는 2026-10-14 11:44~12:00 KST 에 DB·저장소를 다시 조회한 값이다. 출처 표기 없는 추정은 [미검증] 이다.
+
+| 항목 | 실측 | 출처 |
+|---|---|---|
+| 정본 head (R-DOC 저장 규칙) | `rdoc-storage-rule-spec`(kind=spec, revision 1, 1.2.0, 초안, 승인 0건). `rdoc-storage-rule-plan`·`rdoc-storage-rule-prd` key 는 없다 | [DB 조회: project_document_heads] |
+| 이 기획서·PRD 의 기존 등록 | head `plan:7d9f483b5dba`·`prd:848c81d57565` 의 revision 2(1.2.0, 초안, 2026-10-03 09:39 KST). 두 revision 의 `content_hash` 가 파일 내용 sha256 과 일치한다. 같은 head 의 승인본(`approved_revision_id`)은 revision 1(OHVIS 운영 기획서·PRD) 그대로다 | [DB 조회] [코드 확인] |
+| 이중 정본 위험 | 같은 `source_path` 를 새 key 로 또 등록하면 PRD AC-2(같은 `source_path` 에 서로 다른 key head 없음)를 어긴다. 처리 방안은 CEO 결정 대기 | [코드 확인: PRD AC-2] |
+| L1 R-DOC 프롬프트 자산 | 적용됨. `prompt_assets.slug='l1-doc-storage-rule'` enabled=true, 갱신 2026-10-06 20:05 KST. M2 completed | [DB 조회] |
+| 채팅 등록 도구 | `canonical_document_register`·`canonical_document_lookup` 구현이 origin/main 에 있다(`app/services/canonical_document_tools.py`, 9c2214d2). 초안 등록까지만 한다 | [코드 확인] |
+| 커밋 훅 정본 경고 | `scripts/hooks/pre-commit` 590행 블록이 `scripts/canonical_gate_commit.py` 를 부른다. 경고만 하고 커밋을 막지 않는다(fail-open). 이 블록은 6fd5b531 에서 들어왔다(`git blame`). 이전 문서가 9c2214d2 로 적은 것은 채팅 도구 커밋과의 혼동이었다 | [코드 확인: git blame] |
+| 커밋 훅 설치본 | `/root/aads/aads-server/.git/hooks/pre-commit` 은 2026-09-29 18:19 판이고 정본 경고 블록이 없다. 저장소본과 diff 가 정확히 그 8줄이다. 그래서 실제 커밋에서 경고가 동작하지 않는다. 동기화는 `cp scripts/hooks/pre-commit .git/hooks/` 이며 이 작업 범위 밖이다 | [코드 확인: diff] |
+| shadow 기록 (최근 7일) | `canonical_gate_events` 153건: 등록 확인(`ok`) 136건 88.9%, 미등록(`missing_canonical`) 17건 11.1%. 누적 206건. 진입점은 `chat_tool` 128건·`runner_submit` 25건, 모두 mode=shadow. 이 값은 게이트 이벤트 수이며 문서 수가 아니다 | [DB 조회, 2026-10-14] |
+| 미등록 17건의 내역 | 전부 `runner_submit`: NTV2 8건·GO100 9건, 첫 발생 2026-10-10 09:35 KST. AADS 는 7일간 19건 모두 `ok` | [DB 조회] |
+| 목업 승인 게이트 | shadow 모드(기본값 `shadow`, `MOCKUP_GATE_MODE` 미설정). `mockup_review_*` 5개 테이블 모두 0행. 차단은 하지 않는다 | [코드 확인: app/services/mockup_gate_rules.py] [DB 조회] |
+| enforce | 미구현. 구현·활성화는 shadow 실측 뒤 CEO 별도 승인 | [코드 확인] |
+
+위 88.9% 는 이전 집계(145건 중 128건, 88.3%)와 같은 정의로 다시 계산한 최신값이다. 집계 창이 하루 지나 분모가 늘었다. 문서 단위의 등록률(PRD AC-1)은 여전히 [미측정] 이다.
+
+### 마일스톤 M1~M10 과 요구사항 ID 매핑
+
+> 마일스톤 제목·상태·완료기준은 `milestones`(goal 0361c451-cc03-4bd1-a423-76051b0546b2) 조회값이다 [DB 조회, 2026-10-14]. 요구사항 ID 열은 마일스톤 문구에서 PM 이 도출한 매핑이며 [미검증] 이다(CEO·아키텍트 대조 전).
+
+| 마일스톤 | 상태 | 대응 요구사항 (PRD) | 비고 |
+|---|---|---|---|
+| M1 기획·설계·PRD 정본 등록과 CEO 승인 | in_progress | RDOC-9, AC-1 | 설계는 spec 이 맡는다(아래). 승인은 이 문서의 범위 밖 |
+| M2 L1 프롬프트 자산 적용 | completed | RDOC-1, RDOC-2 | 활성화 확인됨 |
+| M3 채팅 등록 도구 + 커밋 경고 | review | RDOC-3, RDOC-4, RDOC-6, AC-4 | 훅 설치본 미동기화로 경고 실동작은 미확인 |
+| M4 기존 미등록 문서 소급 정리 | pending | RDOC-5, AC-1, AC-2 | 이중 정본 0건이 완료기준 |
+| M5 준수율 계측과 경고→차단 승격 판정 | pending | RDOC-7, RDOC-8, AC-1, AC-3, AC-5 | 차단 승격은 CEO 승인이며 enforce 는 미구현 |
+| M6 목업 검토·수정 요청·버전별 승인 저장 | blocked | RDOC-UI-4, RDOC-UI-7, RDOC-UI-9 | `mockup_review_*` 0행 |
+| M7 채팅 아티팩트 목업 확인·수정·재승인 | pending | RDOC-UI-7, RDOC-UI-8 | M6 선행 |
+| M8 목업 누락·미승인 구현의 서버 실행 차단 | in_progress | RDOC-UI-8, RDOC-UI-9 | 현재 shadow 이며 차단은 하지 않는다 |
+| M9 목업 승인 기능 운영 배포·실사용 검증 | pending | RDOC-UI-8, RDOC-UI-9 | `completed_at`(2026-10-04) 이 있는데 상태는 pending 인 불일치가 있다 [DB 조회] |
+| M10 전 프로젝트 러너·세션 정본 연결과 목록 화면 가시성 | pending | RDOC-3, RDOC-6, AC-1 | 기준선: 미등록 17건(NTV2 8·GO100 9) |
+
+M1 의 "plan·design·prd" 중 design 은 별도 문서를 만들지 않고 spec(`rdoc-storage-rule-spec`)이 맡는 것으로 본다. 근거: spec 이 저장 위치·파일명·등록 절차·게이트·화면 절차 계약(설계 내용)을 담고 있고, 같은 마일스톤의 체크리스트 1.1 이 "plan·spec·prd 3건" 으로 적고 있다 [DB 조회]. 같은 key 에 다른 kind 를 보낼 수 없어(409 `document_kind_conflict`) 기존 spec head 를 design 으로 바꿀 수도 없다. 이 판단은 [미검증] 이며 CEO 확인이 필요하다.
 
 ### CEO 결정이 필요한 것
 
 - 파일명 규칙 최종안(spec 의 비교표 참조).
 - L1 R-DOC 활성화 시점(4단계). 활성화하지 않으면 세션에 주입되지 않는다.
 - shadow 실측 기간과 합격선 [미측정].
+- 기획서·PRD 를 마일스톤 key(`rdoc-storage-rule-plan`·`-prd`)로 새로 등록할지, 기존 head 의 새 revision 으로 이어 갈지. 새 key 로 가면 기존 revision 2 와 같은 `source_path` 가 두 head 에 걸리므로 이중 정본 처리 방안이 같이 필요하다.
+- M1 의 design 을 spec 이 맡는 것으로 볼지.
 
 ### 화면 개발 절차와 디자인 조사 (RDOC-UI)
 

@@ -29,8 +29,8 @@
 ## R-DOC 문서 저장 규칙 — 요구사항·수용 기준
 
 > 개정 근거: 대상 head `prd:848c81d57565` 는 "OHVIS 문서 정본관리 게이트 — 운영 PRD"(AADS)이고, 위 담당 범위 표에 `goal_documents` 대장·문서 표류 게이트가 있다. R-DOC 는 그 직접 연장이므로 같은 head 의 새 revision 으로 등록한다 [DB 조회: project_document_heads 2c4e95fb…, 2026-10-03].
-> version 1.2.0 (직전 승인본 1.0.0 = revision 1. 1.1.0 = 저장 규칙 절, 1.2.0 = 아래 화면 개발 절 추가이며 둘 다 승인 전 초안 내용). 위쪽 승인본 원문은 글자 그대로이며 sha256 `8cacc274a62a1108001211109139c32c13dbd1b57e4d09f594d344b011ab1d7f` 이다 [DB 조회: project_document_revisions 686c817c… 의 content_hash].
-> 배경과 로드맵: `docs/plans/20261003_AADS_RDOC_STORAGE_RULE_PLAN.md`(1.2.0). 저장 위치·파일명·등록 절차·게이트 현황: `docs/specs/rdoc-storage-rule/spec.md`(1.2.0 의 1~5항). RDOC-3 의 `document_key` 규칙 확정과 기존 키 보존(grandfather)은 같은 spec 의 15항. 화면 개발 절차의 상세 계약: 같은 spec 의 6~14항.
+> version 1.3.0 · 갱신 2026-10-14 KST (직전 승인본 1.0.0 = revision 1. 1.1.0 = 저장 규칙 절, 1.2.0 = 아래 화면 개발 절 추가, 1.3.0 = 현재 상태 실측 교체와 마일스톤 매핑 추가이며 셋 다 승인 전 초안 내용). 위쪽 승인본 원문은 글자 그대로이며 sha256 `8cacc274a62a1108001211109139c32c13dbd1b57e4d09f594d344b011ab1d7f` 이다 [DB 조회: project_document_revisions 686c817c… 의 content_hash].
+> 배경과 로드맵: `docs/plans/20261003_AADS_RDOC_STORAGE_RULE_PLAN.md`(1.3.0). 저장 위치·파일명·등록 절차·게이트 현황: `docs/specs/rdoc-storage-rule/spec.md`(1.3.0 의 1~5항). RDOC-3 의 `document_key` 규칙 확정과 기존 키 보존(grandfather)은 같은 spec 의 15항. 화면 개발 절차의 상세 계약: 같은 spec 의 6~14항.
 
 ### 요구사항
 
@@ -45,6 +45,43 @@
 | RDOC-7 | 정본 게이트는 off 와 shadow 두 단계만 있다. off 는 DB 쿼리 0건, shadow 는 경고·기록만 하며 300ms 상한이고 모든 오류에서 fail-open 이다 [코드 확인: app/services/canonical_gate.py] |
 | RDOC-8 | enforce 는 미구현이다. 구현·활성화는 shadow 실측 뒤 CEO 별도 승인이며 기존 OPS-5 와 같은 승인 경로를 쓴다 |
 | RDOC-9 | 이 기획서·PRD·spec 자신도 정본으로 등록한다(OPS-4 정합). 등록은 커밋 뒤 CEO 세션이 한다 |
+
+### 현재 상태 (2026-10-14 실측)
+
+> 2026-10-14 11:44~12:00 KST 에 DB·저장소를 다시 조회한 값이다. 출처 없는 추정은 [미검증] 이다. 기획서의 같은 이름 절과 내용이 같다. 위 RDOC-4 의 "도구는 미구현" 은 2026-10-03 시점 서술이며 본문은 보존한다. 현재는 아래 표가 맞다.
+
+| 항목 | 실측 | 출처 |
+|---|---|---|
+| 정본 head (R-DOC 저장 규칙) | `rdoc-storage-rule-spec`(spec, revision 1, 1.2.0, 초안, 승인 0건). `rdoc-storage-rule-plan`·`-prd` key 는 없다 | [DB 조회] |
+| 기획서·PRD 의 기존 등록 | head `plan:7d9f483b5dba`·`prd:848c81d57565` 의 revision 2(1.2.0, 초안, 2026-10-03). `content_hash` 가 파일 sha256 과 일치한다. 해당 head 의 승인본은 revision 1(OHVIS 운영 기획서·PRD) | [DB 조회] [코드 확인] |
+| 이중 정본 위험 | 같은 `source_path` 를 새 key 로 또 등록하면 AC-2 를 어긴다. 처리 방안은 CEO 결정 대기 | [코드 확인] |
+| L1 R-DOC 프롬프트 자산 | 적용됨(`l1-doc-storage-rule` enabled=true, 2026-10-06 20:05 KST). M2 completed | [DB 조회] |
+| 채팅 등록 도구 | 구현·반영됨(9c2214d2). 초안 등록까지만 한다 | [코드 확인] |
+| 커밋 훅 정본 경고 | 저장소본 `scripts/hooks/pre-commit` 590행(6fd5b531). 경고만 하고 막지 않는다. 설치본 `/root/aads/aads-server/.git/hooks/pre-commit` 은 2026-09-29 판이라 그 블록이 없어 실제 커밋에서는 경고가 동작하지 않는다 | [코드 확인] |
+| shadow 기록 (최근 7일) | `canonical_gate_events` 153건: 등록 확인 136건(88.9%)·미등록 17건(11.1%). 누적 206건. 미등록 17건은 모두 `runner_submit`(NTV2 8·GO100 9). 이벤트 수이며 문서 수가 아니다 | [DB 조회] |
+| 목업 승인 게이트 | shadow 모드. `mockup_review_*` 5개 테이블 0행 | [코드 확인] [DB 조회] |
+| enforce | 미구현 | [코드 확인] |
+
+AC-1 baseline 은 이 이벤트 비율로 대체되지 않는다. 문서 단위 등록률은 여전히 [미측정] 이다.
+
+### 마일스톤 M1~M10 과 요구사항 ID 매핑
+
+> 마일스톤 상태는 `milestones` 조회값 [DB 조회, 2026-10-14]. 요구사항 ID 대응은 PM 이 마일스톤 문구에서 도출한 것이며 [미검증] 이다.
+
+| 마일스톤 | 상태 | 요구사항 | 수용 기준 |
+|---|---|---|---|
+| M1 기획·설계·PRD 정본 등록과 CEO 승인 | in_progress | RDOC-9 | AC-1, AC-2 |
+| M2 L1 프롬프트 자산 R-DOC 적용 | completed | RDOC-1, RDOC-2 | AC-3 |
+| M3 채팅 등록 도구 + 커밋 경고 | review | RDOC-3, RDOC-4, RDOC-6 | AC-1, AC-4 |
+| M4 기존 미등록 문서 소급 정리 | pending | RDOC-5 | AC-1, AC-2 |
+| M5 준수율 계측과 경고→차단 승격 판정 | pending | RDOC-7, RDOC-8 | AC-1, AC-3, AC-5 (enforce 는 미구현) |
+| M6 목업 검토·수정 요청·버전별 승인 저장 | blocked | RDOC-UI-4, RDOC-UI-7, RDOC-UI-9 | AC-UI-4, AC-UI-7, AC-UI-9 |
+| M7 채팅 아티팩트 목업 확인·수정·재승인 | pending | RDOC-UI-7, RDOC-UI-8 | AC-UI-7, AC-UI-8 |
+| M8 목업 누락·미승인 구현의 서버 실행 차단 | in_progress | RDOC-UI-8, RDOC-UI-9 | AC-UI-8, AC-UI-9 (현재 shadow, 차단하지 않음) |
+| M9 목업 승인 기능 운영 배포·실사용 검증 | pending | RDOC-UI-8, RDOC-UI-9 | AC-UI-8, AC-UI-9 (`completed_at` 이 있는데 pending 인 불일치) |
+| M10 전 프로젝트 러너·세션 정본 연결과 목록 화면 가시성 | pending | RDOC-3, RDOC-6 | AC-1 (기준선: 미등록 17건) |
+
+M1 의 design 은 별도 문서 없이 spec(`rdoc-storage-rule-spec`)이 맡는 것으로 본다 [미검증, CEO 확인 필요]. 근거와 이중 정본 결정 사항은 기획서의 "현재 상태"·"마일스톤 매핑" 절에 있다.
 
 ### 수용 기준
 
@@ -108,7 +145,7 @@
 | AC-UI-9 | RDOC-UI-9 | 승인 4종이 별개로 적혀 있고, 사후 검증 예외가 이 문서로 승인되지 않는다고 적혀 있다 | spec 12항 대조 |
 | AC-UI-10 | RDOC-UI-10 | 기반과 미구현이 구분돼 있고, AAG 후속 조건과 회신 미수신 서술이 있다. 코드 diff 에 앱 코드·AAG 스캐너 변경이 없다 | spec 13항 대조 + `git diff --stat` |
 | AC-UI-11 | RDOC-UI-11 | 외부 근거 3종에 원 URL 과 확인일이 있고, 성과 수치 인용·웹 필수 강제가 없다 | spec 14항 대조 |
-| AC-UI-12 | RDOC-UI-1~11 전체 | 승인 prefix sha256 이 보존되고 RDOC-1~9, AC-1~5 의 본문이 변하지 않았다. 문서 3종의 버전(1.2.0 / 1.2.0 / 1.1.0)과 상호 참조가 일치한다 | `bash scripts/run_unit_tests.sh tests/unit/test_rdoc_docs.py`, `git diff` |
+| AC-UI-12 | RDOC-UI-1~11 전체 | 승인 prefix sha256 이 보존되고 RDOC-1~9, AC-1~5 의 본문이 변하지 않았다. 문서 3종의 버전(1.3.0 / 1.3.0 / 1.3.0)과 상호 참조가 일치한다 | `bash scripts/run_unit_tests.sh tests/unit/test_rdoc_docs.py`, `git diff` |
 
 ### 검증 방법 (RDOC-UI)
 

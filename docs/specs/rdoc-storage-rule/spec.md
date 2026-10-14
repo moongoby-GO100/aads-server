@@ -1,8 +1,8 @@
 # R-DOC 문서 저장 규칙 — 명세 (spec)
 
-- version 1.2.0 · 작성 2026-10-03 KST · 프로젝트 AADS (1.1.0 = 6~14항 화면 개발 절차 추가, 1.2.0 = 15항 document_key 규칙·기존 키 보존 추가. 1~14항 의미 불변)
-- 짝 문서: 기획서 `docs/plans/20261003_AADS_RDOC_STORAGE_RULE_PLAN.md`(1.2.0), PRD `docs/prd/20261003_AADS_RDOC_STORAGE_RULE_PRD.md`(1.2.0)
-- 상태: 초안. 정본 등록 전이며, 파일명 규칙의 최종 결정은 CEO 가 한다.
+- version 1.3.0 · 작성 2026-10-03 KST · 갱신 2026-10-14 KST · 프로젝트 AADS (1.1.0 = 6~14항 화면 개발 절차 추가, 1.2.0 = 15항 document_key 규칙·기존 키 보존 추가, 1.3.0 = 4항 게이트 현황을 2026-10-14 실측으로 교체. 1~3항·5~15항 의미 불변)
+- 짝 문서: 기획서 `docs/plans/20261003_AADS_RDOC_STORAGE_RULE_PLAN.md`(1.3.0), PRD `docs/prd/20261003_AADS_RDOC_STORAGE_RULE_PRD.md`(1.3.0)
+- 상태: 초안. `rdoc-storage-rule-spec` revision 1 로 등록돼 있고 승인 0건이다 [DB 조회, 2026-10-14]. 파일명 규칙의 최종 결정은 CEO 가 한다. M1 의 design 은 이 spec 이 맡는 것으로 본다 [미검증, CEO 확인 필요].
 - 출처 표기: [DB 조회] [코드 확인] [지시서 인용] [미측정]
 
 ## 1. 저장 위치
@@ -51,13 +51,14 @@ ASCII 권장 근거(한 줄): 2026-10-03 셸 러너가 한글 파일명 때문�
 
 ## 4. 게이트 현황
 
-작업 시점(2026-10-03)에 `git ls-tree origin/main app/services/canonical_gate.py` 로 재확인했다: 파일이 origin/main 에 있다(blob fa65c05c…, origin/main eced41c2) [코드 확인].
+2026-10-14 에 코드·DB 를 다시 조회해 아래로 교체했다. 2026-10-03 서술(진입점 3곳 구현, 채팅 도구 예정, 표본 1행)은 더 이상 현재가 아니다.
 
 - 단계: **off** — DB 쿼리 0건. **shadow** — 경고·기록만 하며 판정+기록 합산 300ms 상한이고, 모든 오류에서 fail-open 이다. 환경변수 `CANONICAL_GATE_MODE` 를 비워 두면 shadow 다 [코드 확인: get_mode]. 값 `enforce` 는 파싱만 되고 shadow 와 똑같이 통과시킨다: enforce 는 미구현이며 기록에 `enforce_not_implemented` 표시만 남는다 [코드 확인]. 구현·활성화는 shadow 실측 뒤 CEO 별도 승인이다.
-- 진입점 3곳은 구현돼 origin/main 에 반영돼 있다: 목표 문서 API(`app/routers/goals.py`), 커밋 훅(`scripts/hooks/pre-commit` → `scripts/canonical_gate_commit.py`, `|| true`), 러너 제출(`app/api/pipeline_runner.py`). 커밋은 6fd5b531(runner-1816e2c0, 작업 상태 done) [코드 확인] [DB 조회]. 지시서의 97ac03c1 은 같은 러너 커밋의 rebase 전 SHA 이고 origin/main 의 조상이 아니다 [코드 확인: `git merge-base --is-ancestor`]. 지시서의 "origin/main 미반영" 서술은 작업 시점 실측과 달라 SHA 를 6fd5b531 로 갱신했다.
-- 4번째 진입점(채팅 정본 등록 도구)은 예정이다. runner-a19f820e 는 error 로 끝났고 runner-0d1b55b7 로 재제출돼 실행 중이다. origin/main 에는 아직 없다 [DB 조회: pipeline_jobs, 2026-10-03].
+- 진입점은 4곳이다. 목표 문서 API(`app/routers/goals.py`), 커밋 훅(`scripts/hooks/pre-commit` → `scripts/canonical_gate_commit.py`, `|| true`), 러너 제출(`app/api/pipeline_runner.py`)은 6fd5b531 에서 들어왔고, 채팅 도구 `canonical_document_register`·`canonical_document_lookup`(`app/services/canonical_document_tools.py`)은 9c2214d2 에서 들어왔다. 채팅 도구는 초안 등록까지만 하고 approve 를 부르지 않는다 [코드 확인].
+- 커밋 훅의 정본 경고 블록은 저장소본 `scripts/hooks/pre-commit` 590행에 있다(`git blame`: 6fd5b531). 설치본 `/root/aads/aads-server/.git/hooks/pre-commit` 은 2026-09-29 18:19 판이라 이 블록이 없어서, 실제 커밋에서는 경고가 동작하지 않는다. 저장소본을 설치본으로 복사하는 동기화는 별도 조치다 [코드 확인: diff].
 - 커밋 훅 후보 경로는 `^docs/(prd|plans|design|contracts)/` 이다 [코드 확인]. 따라서 `docs/specs/` 와 `docs/reports/` 는 후보 경로가 아니라서 훅이 경고하지 않는다. 이 범위를 넓힐지는 별도 작업·승인 사항이다.
-- shadow 실측 표본: `canonical_gate_events` 1행 [DB 조회, 2026-10-03]. 합격선·기간은 [미측정].
+- shadow 실측: 최근 7일 `canonical_gate_events` 153건 중 등록 확인(`ok`) 136건(88.9%), 미등록(`missing_canonical`) 17건(11.1%). 누적 206건, 모두 mode=shadow. 미등록 17건은 전부 `runner_submit` 이고 NTV2 8건·GO100 9건이다 [DB 조회, 2026-10-14]. 이벤트 수이며 문서 수가 아니므로 합격선·기간은 여전히 [미측정] 이다.
+- 목업 승인 게이트(`app/services/mockup_gate_rules.py`)도 기본값이 shadow 이고 `MOCKUP_GATE_MODE` 는 설정돼 있지 않다. `mockup_review_*` 5개 테이블은 0행이다 [코드 확인] [DB 조회].
 - 이 게이트는 지금 아무것도 막지 않는다. 문서나 훅이 "막는다"고 읽히면 그것은 현재 동작이 아니다.
 
 ## 5. 이 문서의 한계
