@@ -4618,6 +4618,37 @@ retry_execution_charge_or_abort() {
     return 1
 }
 
+# ── 목업 게이트 스크립트 자체가 실패했을 때(rc 가 0/10/20 이 아님: 예외·timeout 124·python 부재 127) ──
+# 적용 대상 판정은 서버 규칙(mockup_gate_rules.classify)만 쓴다 — 지시서 문구 grep 으로 판정하지 않는다.
+#   $1=rc $2=게이트 스크립트 경로 $3=job_id, 지시서는 stdin.
+#   return 0 = 계속 진행, 1 = 워커를 시작하지 않는다.
+# 모드: off → 진행. classify 가 "적용 안 됨" → 진행. 적용 또는 판정 불가 → enforce 면 차단(fail-closed),
+#       shadow 면 진행하되 MOCKUP_GATE_SHADOW 위반 로그를 남긴다. 모드 값이 깨져 있으면 enforce 로 본다(규칙과 동일).
+# 실행 중인 다른 작업은 건드리지 않는다.
+_mockup_gate_on_script_error() {
+    local rc="$1" gate_script="$2" job_id="$3" instruction mode cls_rc=0 applicable
+    instruction=$(cat)
+    mode=$(printf '%s' "${MOCKUP_GATE_MODE:-shadow}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    case "$mode" in off|shadow|enforce) ;; *) mode="enforce" ;; esac
+    if [ "$mode" = "off" ]; then
+        log "  MOCKUP_GATE job=$job_id script_error rc=$rc mode=off (continuing)"
+        return 0
+    fi
+    printf '%s' "$instruction" | timeout 10 python3 "$gate_script" --classify-only --instruction-file - >/dev/null 2>&1 || cls_rc=$?
+    case "$cls_rc" in
+        0)  log "  MOCKUP_GATE job=$job_id script_error rc=$rc classify=not_applicable (continuing)"
+            return 0 ;;
+        11) applicable="applicable" ;;
+        *)  applicable="unknown(classify_rc=$cls_rc)" ;;
+    esac
+    if [ "$mode" = "enforce" ]; then
+        log "  MOCKUP_GATE job=$job_id script_error rc=$rc classify=$applicable mode=enforce (fail-closed)"
+        return 1
+    fi
+    log "  MOCKUP_GATE_SHADOW job=$job_id violation=gate_script_error rc=$rc classify=$applicable mode=shadow (continuing)"
+    return 0
+}
+
 # ── 작업 실행 ─────────────────────────────────────────────────────────
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}" parallel_group="${8:-}"
@@ -4668,14 +4699,18 @@ run_job() {
     # ── 목업 승인 bundle 실행 직전 재검증 (submit 때와 같은 bundle, 같은 규칙) ──
     # 0=통과/해당없음, 10=승인 상태가 맞지 않음, 20=게이트 판정 불가. 10·20 은 워커를 시작하지 않는다.
     # 실행 중인 다른 작업은 건드리지 않는다.
-    local _mockup_out _mockup_rc=0
-    _mockup_out=$(printf '%s' "$instruction" | timeout 30 python3 "$(dirname "${BASH_SOURCE[0]}")/verify_mockup_approval.py" \
+    local _mockup_out _mockup_rc=0 _mockup_script
+    _mockup_script="$(dirname "${BASH_SOURCE[0]}")/verify_mockup_approval.py"
+    _mockup_out=$(printf '%s' "$instruction" | timeout 30 python3 "$_mockup_script" \
         --job-id "$job_id" --phase pre_execution --instruction-file - 2>&1) || _mockup_rc=$?
-    # 게이트 스크립트 자체의 오류(rc 가 10/20 이 아님)는 목업·대시보드 작업일 때만 차단한다 — 무관한 작업이 인프라 오류로 멈추지 않게.
-    if [ "$_mockup_rc" -ne 0 ] && [ "$_mockup_rc" -ne 10 ] && [ "$_mockup_rc" -ne 20 ] \
-        && ! printf '%s' "$instruction" | grep -qE 'MOCKUP_REVIEW_ID|aads-dashboard|UI_TASK'; then
-        log "  MOCKUP_GATE job=$job_id script_error rc=$_mockup_rc (non-UI task, continuing)"
-        _mockup_rc=0
+    # 게이트 스크립트 자체의 오류(rc 가 0/10/20 이 아님)는 서버 규칙으로 적용 여부를 다시 판정한다.
+    # 지시서 문구가 없다는 이유로 통과시키지 않는다 — enforce 에서 판정 불가는 차단(fail-closed).
+    if [ "$_mockup_rc" -ne 0 ] && [ "$_mockup_rc" -ne 10 ] && [ "$_mockup_rc" -ne 20 ]; then
+        if printf '%s' "$instruction" | _mockup_gate_on_script_error "$_mockup_rc" "$_mockup_script" "$job_id"; then
+            _mockup_rc=0
+        fi
+    elif [ "$_mockup_rc" -eq 0 ] && printf '%s' "$_mockup_out" | grep -q '"shadow": true'; then
+        log "  MOCKUP_GATE_SHADOW job=$job_id ${_mockup_out:0:300}"
     fi
     if [ "$_mockup_rc" -ne 0 ]; then
         log "  MOCKUP_GATE job=$job_id rc=$_mockup_rc ${_mockup_out:0:300}"

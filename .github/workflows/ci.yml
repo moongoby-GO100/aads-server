@@ -77,3 +77,39 @@ jobs:
       - name: Ruff full (advisory)
         run: ruff check app/ tests/ --ignore E501,F401
         continue-on-error: true
+
+  mockup-gate:
+    # 오프라인 목업 선언 검사(서버 규칙 classify 만 실행). CI 는 서버에 접속하지 않으므로 승인 여부는 판정하지 않는다.
+    # 기본은 경고(shadow). enforce 로 올리는 절차: docs/plans/20261014_AADS_목업_실행게이트_enforce_전환_절차.md
+    name: Mockup declaration check (offline, advisory)
+    runs-on: ubuntu-latest
+    env:
+      MOCKUP_GATE_MODE: shadow
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Classify changed files and commit messages
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            range="origin/${{ github.base_ref }}...HEAD"
+          elif [ -n "${{ github.event.before }}" ] && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            range="${{ github.event.before }}..${{ github.sha }}"
+          else
+            range="HEAD~1..HEAD"
+          fi
+          git diff --name-only "$range" > "$RUNNER_TEMP/changed_files.txt"
+          git log --format=%B "$range" > "$RUNNER_TEMP/messages.txt"
+          rc=0
+          out=$(python3 scripts/verify_mockup_approval.py --offline \
+            --changed-files "$RUNNER_TEMP/changed_files.txt" \
+            --instruction-file "$RUNNER_TEMP/messages.txt") || rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ] || echo "$out" | grep -q 'mockup_bundle_required'; then
+            echo "::warning title=mockup gate (offline)::UI 변경인데 승인 번들 선언이 없거나 형식이 틀립니다. 승인 여부는 서버 게이트만 판정합니다. $out"
+          fi
+          exit $rc
+        continue-on-error: true

@@ -5383,6 +5383,33 @@ class ToolExecutor:
 
     _INTERNAL_HEADERS = {"x-monitor-key": "internal-pipeline-call"}
 
+    @staticmethod
+    def _mockup_fallback_denial(instructions: Dict[str, str], reason: str) -> Optional[Dict[str, Any]]:
+        """The DB fallback cannot reach the mockup approval gate, so a gated job is treated as gate_unavailable:
+        denied under MOCKUP_GATE_MODE=enforce (whole batch, no partial enqueue); under shadow only an undeclared UI
+        job is logged and let through -- a declared bundle cannot be verified here, so it is denied in every mode."""
+        from app.services import mockup_gate_rules as rules
+
+        rejected = []
+        for key, instruction in instructions.items():
+            info = rules.classify(instruction)
+            if not info["applicable"]:
+                continue
+            if info["bundle"]["errors"]:
+                decision = {"allowed": False, "reasons": [f"bundle_{e}" for e in info["bundle"]["errors"]]}
+            else:
+                decision = rules.unavailable_decision(info)
+            if decision["allowed"]:
+                logger.warning("mockup_gate_shadow phase=submit path=db_fallback key=%s reasons=%s",
+                               key, decision["reasons"])
+            else:
+                rejected.append({"key": key, "reasons": decision["reasons"]})
+        if not rejected:
+            return None
+        return {"error": "mockup_approval_required", "code": "mockup_approval_required", "allowed": False,
+                "phase": "submit", "path": "db_fallback", "rejected": rejected, "jobs_submitted": 0,
+                "fallback_reason": reason}
+
     async def _pipeline_runner_submit_db_fallback(self, payload: Dict[str, Any], reason: str) -> Any:
         """Fallback when the internal Pipeline Runner HTTP API is unavailable."""
         import hashlib
@@ -5395,6 +5422,10 @@ class ToolExecutor:
         session_id = payload.get("session_id", "")
         if not instruction or not session_id:
             return {"error": "DB fallback requires instruction and session_id", "fallback_reason": reason}
+        if not payload.get("_mockup_gate_checked"):
+            denial = self._mockup_fallback_denial({"": instruction}, reason)
+            if denial:
+                return denial
 
         job_id = f"runner-{uuid.uuid4().hex[:8]}"
         instruction_hash = hashlib.sha256(f"{project}:{instruction}".encode()).hexdigest()[:16]
@@ -5483,6 +5514,11 @@ class ToolExecutor:
         max_cycles = int(payload.get("max_cycles", 3))
         key_to_job_id: Dict[str, str] = {}
         results = []
+        denial = self._mockup_fallback_denial(
+            {str(item.get("key", i)): item.get("instruction", "") for i, item in enumerate(payload.get("jobs", []) or [])},
+            reason)
+        if denial:
+            return denial
 
         for item in payload.get("jobs", []) or []:
             depends_on = key_to_job_id.get(item.get("depends_on_key", ""))
@@ -5497,6 +5533,7 @@ class ToolExecutor:
                     "worker_model_reason": item.get("worker_model_reason", ""),
                     "parallel_group": parallel_group,
                     "depends_on": depends_on,
+                    "_mockup_gate_checked": True,
                 },
                 reason,
             )

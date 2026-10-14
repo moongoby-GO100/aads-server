@@ -2020,6 +2020,27 @@ def _mockup_denial(result: dict) -> HTTPException:
     return HTTPException(status_code=409, detail={"code": "mockup_approval_required", **result})
 
 
+async def _run_batch_mockup_gate(context: TenantContext, *, project: str, jobs: list, key_to_job_id: dict) -> None:
+    """Submit-phase gate for every job of a batch; one denial rejects the whole batch with every denied key."""
+    from app.services import mockup_gate_rules as rules
+
+    checked = []
+    for item in jobs:
+        result = await _run_mockup_gate(
+            context, phase="submit", project=project, task_id=key_to_job_id[item.key], instruction=item.instruction,
+            goal_id=rules.declared_goal_id(item.instruction))
+        checked.append({"key": item.key, "job_id": key_to_job_id[item.key], **result})
+    rejected = [
+        {"key": r["key"], "job_id": r["job_id"], "reasons": r.get("reasons", [])} for r in checked if not r["allowed"]
+    ]
+    if rejected:
+        raise _mockup_denial({
+            "allowed": False, "phase": "submit", "mode": checked[0].get("mode"),
+            "reasons": sorted({reason for r in rejected for reason in r["reasons"]}),
+            "rejected": rejected, "batch_rejected": True, "jobs_submitted": 0,
+        })
+
+
 class MockupGateRequest(BaseModel):
     phase: str = Field("pre_execution", pattern="^(pre_execution|checkpoint)$")
 
@@ -4049,6 +4070,10 @@ async def submit_batch(
     key_to_job_id: dict[str, str] = {}
     for item in req.jobs:
         key_to_job_id[item.key] = f"runner-{uuid.uuid4().hex[:8]}"
+
+    # 목업 승인 게이트: submit_job 과 같은 submit 단계 검증을 job 마다 태운다. 하나라도 거절되면
+    # 배치 전체를 거절한다(부분 제출 금지) — 아래 INSERT 트랜잭션에 들어가기 전이라 job 행은 생기지 않는다.
+    await _run_batch_mockup_gate(context, project=req.project, jobs=req.jobs, key_to_job_id=key_to_job_id)
 
     results = []
     gate_targets: list[tuple[str, str]] = []
