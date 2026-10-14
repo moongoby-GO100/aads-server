@@ -93,6 +93,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "browser_download": True,
     "browser_tab_list": True,
     "smart_browser": False,       # 채팅에서 승인 레시피 실행/E2E 레시피 등록
+    "automation_draft": True,     # 대화로 업무 자동화 등록(초안 상태기계) — 온디맨드
     # ── 기타 ─────────────────────────────────────────────────────────────
     "code_execution": True,
     "observe": True,
@@ -305,7 +306,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
     "url_read":           ["jina_read"],
     # Tier 6: 브라우저 — 명시적 요청 시만
     "browser":            [
-        "smart_browser", "browser_connect", "browser_navigate", "browser_snapshot",
+        "smart_browser", "automation_draft", "browser_connect", "browser_navigate", "browser_snapshot",
         "browser_screenshot", "browser_click", "browser_fill",
         "browser_press_key", "browser_select_option", "browser_check",
         "browser_upload_file", "browser_download", "browser_tab_list",
@@ -2228,6 +2229,30 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["action"],
         },
     },
+    "automation_draft": {
+        "name": "automation_draft",
+        "description": (
+            "대화로 업무 자동화를 만든다. 사용자가 '매일 아침 ~해줘' 처럼 반복 업무를 말하면 action=start 로 초안을 만들고, "
+            "카드(card)의 문장을 그대로 사용자에게 보여 준다. 사용자가 맞다고 하면 confirm, 로그인 계정을 고르면 credential, "
+            "시연을 원하면 demo, 결과가 맞는지 답하면 review, 진행 확인은 status. "
+            "비밀번호·토큰은 절대 받지 않는다(로그인은 보안 입력 카드로만). 현재 채팅 사용자 기준으로 동작한다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["start", "confirm", "credential", "demo", "review", "status"]},
+                "text": {"type": "string", "description": "start: 사용자가 말한 업무 문장"},
+                "draft_id": {"type": "string", "description": "start 외 모든 action 에 필요한 초안 id"},
+                "expected_state": {"type": "string", "description": "confirm/demo: 직전 카드의 상태(동시 클릭 방지)"},
+                "domain_confirmed": {"type": "boolean", "description": "confirm: 사이트 주소를 사용자가 확인했을 때"},
+                "credential_id": {"type": "string", "description": "credential: 고른 계정 id"},
+                "request_new": {"type": "boolean", "description": "credential: 새 계정 입력 요청"},
+                "ok": {"type": "boolean", "description": "review: 결과가 맞으면 true"},
+                "reason_code": {"type": "string", "description": "review ok=false 일 때 사유 코드(영문 소문자)"},
+            },
+            "required": ["action"],
+        },
+    },
     # ── AADS-188C Phase 2: 메타 도구 (Orchestrator) ────────────────────────
     "check_task_status": {
         "name": "check_task_status",
@@ -3611,7 +3636,7 @@ _GROUPS: Dict[str, List[str]] = {
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
-    "browser": ["read_remote_file", "list_remote_dir", "smart_browser", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
+    "browser": ["read_remote_file", "list_remote_dir", "smart_browser", "automation_draft", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # 운영/관측 도구 그룹

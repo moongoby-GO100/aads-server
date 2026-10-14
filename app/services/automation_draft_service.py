@@ -421,3 +421,104 @@ async def list_events(draft_id: str, *, tenant_id: str) -> list[dict[str, Any]]:
             str(draft_id), str(tenant_id),
         )
     return [dict(r) for r in rows]
+
+
+# ── 비상태 필드 갱신·목록 (T2) ──────────────────────────────────────────────
+
+# 컬럼 → SQL 캐스트. 상태(state)와 failure_code 는 여기에 없다 — 그것은 transition() 만 바꾼다.
+_UPDATABLE_COLUMNS: dict[str, str] = {
+    "title": "text",
+    "intent": "jsonb",
+    "aliases": "text[]",
+    "credential_id": "uuid",
+    "credential_request_id": "uuid",
+    "recording_ref": "jsonb",
+    "evidence": "jsonb",
+    "schedule_job_id": "text",
+}
+_JSON_COLUMNS = frozenset({"intent", "recording_ref", "evidence"})
+
+
+def _bind(column: str, value: Any) -> Any:
+    if value is None:
+        return None
+    if column in _JSON_COLUMNS:
+        return _dumps(value)
+    return str(value) if _UPDATABLE_COLUMNS[column] == "uuid" else value
+
+
+async def update_fields(
+    draft_id: str,
+    *,
+    tenant_id: str,
+    expected_state: str | None,
+    fields: Mapping[str, Any],
+    actor: str,
+    event_type: str,
+    detail: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """상태를 바꾸지 않는 필드 갱신. expected_state 가 현재와 다르면 TransitionConflict.
+
+    허용 컬럼만 받고(`_UPDATABLE_COLUMNS`), 값은 저장 전에 비밀값 검사를 통과해야 한다.
+    갱신과 이벤트 기록은 한 트랜잭션이다.
+    """
+    unknown = set(fields) - set(_UPDATABLE_COLUMNS)
+    if unknown or not fields:
+        raise DraftError(f"field_not_updatable:{sorted(unknown)}")
+    if expected_state is not None and expected_state not in ALL_STATES:
+        raise InvalidTransition(f"unknown_state:{expected_state}")
+    assert_no_secret(dict(fields), "fields")
+    assert_no_secret(dict(detail or {}), "detail")
+
+    args: list[Any] = [str(draft_id), str(tenant_id)]
+    sets: list[str] = []
+    for column, value in fields.items():
+        args.append(_bind(column, value))
+        sets.append(f"{column}=${len(args)}::{_UPDATABLE_COLUMNS[column]}")
+    state_clause = ""
+    if expected_state is not None:
+        args.append(expected_state)
+        state_clause = f" AND state=${len(args)}"
+    sql = (
+        f"UPDATE automation_drafts SET {', '.join(sets)}, updated_at=NOW() "
+        f"WHERE id=$1::uuid AND tenant_id=$2::uuid{state_clause} RETURNING *"
+    )
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            updated = await conn.fetchrow(sql, *args)
+            if updated is None:
+                current = await conn.fetchrow(
+                    "SELECT state FROM automation_drafts WHERE id=$1::uuid AND tenant_id=$2::uuid",
+                    str(draft_id), str(tenant_id),
+                )
+                if current is None:
+                    raise DraftNotFound(str(draft_id))
+                raise TransitionConflict(expected_state or "", current["state"])
+            await conn.execute(
+                """
+                INSERT INTO automation_draft_events (draft_id, event_type, from_state, to_state, actor, detail)
+                VALUES ($1::uuid, $2, $3, $3, $4, $5::jsonb)
+                """,
+                str(draft_id), event_type, updated["state"], actor,
+                _dumps({"fields": sorted(fields), **dict(detail or {})}),
+            )
+    return dict(updated)
+
+
+async def list_drafts(
+    *, tenant_id: str, owner_user: str | None = None, limit: int = 200,
+) -> list[dict[str, Any]]:
+    """테넌트의 초안 목록(최근 갱신순). owner_user 를 주면 그 사람의 것만."""
+    args: list[Any] = [str(tenant_id)]
+    owner_clause = ""
+    if owner_user is not None:
+        args.append(owner_user)
+        owner_clause = " AND owner_user=$2"
+    args.append(max(1, min(int(limit), 500)))
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT * FROM automation_drafts WHERE tenant_id=$1::uuid{owner_clause} "
+            f"ORDER BY updated_at DESC LIMIT ${len(args)}",
+            *args,
+        )
+    return [dict(r) for r in rows]

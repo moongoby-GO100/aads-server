@@ -376,6 +376,7 @@ async def _route_pc_command_via_api(payload: dict[str, Any]) -> dict[str, Any] |
 
 
 _LONG_TOOLS = frozenset({
+    "automation_draft",
     "spawn_subagent", "spawn_parallel_subagents", "run_agent_team", "run_debate",
     "deep_research", "delegate_to_agent", "delegate_to_research",
     "run_remote_command", "write_remote_file", "patch_remote_file",
@@ -1080,6 +1081,7 @@ class ToolExecutor:
             "browser_download":       self._browser_download,
             "browser_tab_list":       self._browser_tab_list,
             "smart_browser":          self._smart_browser,
+            "automation_draft":       self._automation_draft,
             # AADS-190 Phase2-A: 서브에이전트
             "spawn_subagent":         self._spawn_subagent,
             "spawn_parallel_subagents": self._spawn_parallel_subagents,
@@ -5706,6 +5708,49 @@ class ToolExecutor:
             work_key=inp.get("work_key", ""),
             tenant_id=str(inp.get("tenant_id") or ""),
         )
+
+    async def _automation_draft(self, inp: Dict[str, Any]) -> Any:
+        """대화로 업무 자동화 초안을 만들고 이어 간다. 채팅 세션에 묶인 사람(user_id) 기준으로만 동작한다."""
+        from app.core.db_pool import get_pool
+        from app.services import automation_draft_flow as flow
+
+        session_id = str(current_chat_session_id.get("") or "").strip()
+        tenant_id = await resolve_bound_tenant_id(explicit_session_id=session_id)
+        if not session_id or not tenant_id:
+            return _missing_tenant_id_result("automation_draft")
+        async with get_pool().acquire() as conn:
+            user_id = await conn.fetchval(
+                "SELECT user_id::text FROM chat_sessions WHERE id=$1::uuid AND tenant_id=$2::uuid",
+                session_id, tenant_id,
+            )
+        if not user_id:
+            return {"error": "user_required", "message": "automation_draft requires a user-bound chat session"}
+        actor = flow.Actor(tenant_id=tenant_id, user=str(user_id), is_admin=False)
+        action = str(inp.get("action") or "").strip().lower()
+        draft_id = str(inp.get("draft_id") or "").strip()
+        expected = str(inp.get("expected_state") or "")
+        try:
+            if action == "start":
+                return await flow.start(actor, str(inp.get("text") or ""), session_id)
+            if not draft_id:
+                return {"error": "draft_id_required"}
+            if action == "status":
+                return await flow.get(actor, draft_id)
+            if action == "confirm":
+                return await flow.confirm_intent(actor, draft_id, expected, bool(inp.get("domain_confirmed")))
+            if action == "credential":
+                return await flow.choose_credential(
+                    actor, draft_id, str(inp.get("credential_id") or "") or None, bool(inp.get("request_new")),
+                )
+            if action == "demo":
+                return await flow.start_demo(actor, draft_id, expected)
+            if action == "review":
+                if not isinstance(inp.get("ok"), bool):
+                    return {"error": "ok_required"}
+                return await flow.review(actor, draft_id, inp["ok"], inp.get("reason_code"))
+        except flow.FlowError as exc:
+            return {"error": exc.code, "status_code": exc.status_code, **exc.extra}
+        return {"error": "unknown_action", "valid_actions": ["start", "confirm", "credential", "demo", "review", "status"]}
 
     async def _smart_browser(self, inp: Dict[str, Any]) -> Any:
         """Session-bound entry point for approved recipes and E2E registration."""

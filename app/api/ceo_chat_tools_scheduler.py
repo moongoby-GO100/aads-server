@@ -199,6 +199,10 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
                 r = await client.get(url)
                 result = f"URL {url} → {r.status_code} ({len(r.content)} bytes)"
 
+        elif action_type == "automation_run":
+            from app.services.automation_draft_flow import run_scheduled
+            result = await run_scheduled(action_config)
+
         if report_enabled and report_session_id:
             try:
                 from app.services.session_reporter import post_session_report
@@ -328,7 +332,7 @@ async def schedule_task_on(
         return {"error": "name은 필수입니다"}
 
     # 유효성 검사
-    valid_actions = ("remote_command", "health_check", "db_query", "url_check")
+    valid_actions = ("remote_command", "health_check", "db_query", "url_check", "automation_run")
     if action_type not in valid_actions:
         return {"error": f"action_type은 {valid_actions} 중 하나여야 합니다"}
 

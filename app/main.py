@@ -88,6 +88,7 @@ from app.api.live_facts import router as live_facts_router
 from app.api.learned_artifacts import router as learned_artifacts_router
 from app.api.browser_recipes import router as browser_recipes_router
 from app.api.automations import router as automations_router
+from app.api.automation_drafts import router as automation_drafts_router
 from app.api.authenticated_site_collector import router as authenticated_site_collector_router
 from app.api.site_knowledge import router as site_knowledge_router
 from app.routers.chat import router as chat_v2_router
@@ -3988,6 +3989,7 @@ app.include_router(live_facts_router, prefix="/api/v1", tags=["live-facts"])
 app.include_router(learned_artifacts_router, prefix="/api/v1", tags=["browser-learning"])
 app.include_router(browser_recipes_router, prefix="/api/v1", tags=["browser-recipes"])
 app.include_router(automations_router, prefix="/api/v1", tags=["automations"])
+app.include_router(automation_drafts_router, prefix="/api/v1")
 app.include_router(authenticated_site_collector_router, prefix="/api/v1", tags=["authenticated-site-collector"])
 app.include_router(site_knowledge_router, prefix="/api/v1", tags=["site-knowledge"])
 app.include_router(agent_vault_router, prefix="/api/v1", tags=["agent-vault"])
