@@ -367,20 +367,40 @@ async def _guarded_close(record: OwnedTab) -> str:
     ws = await cdp._connect_cdp_ws(websockets, record.browser_ws, open_timeout=5)
     session_id = ""
     changed = False
+    closing = False
+
+    def teardown_scope(message: dict[str, Any]) -> str:
+        """Attribute a teardown event to this target/session: mine, other, or unknown."""
+        params = message.get("params") or {}
+        event_target = params.get("targetId")
+        event_session = params.get("sessionId") or message.get("sessionId")
+        if event_target:
+            return "mine" if event_target == record.target_id else "other"
+        if event_session:
+            return "mine" if session_id and event_session == session_id else "other"
+        return "unknown"
 
     async def request(method: str, params: dict[str, Any] | None = None, *, target_session: bool = False) -> dict[str, Any]:
-        nonlocal changed
+        nonlocal changed, closing
         msg_id = cdp._next_id()
         payload: dict[str, Any] = {"id": msg_id, "method": method, "params": params or {}}
         if target_session:
             payload["sessionId"] = session_id
+        if method == "Target.closeTarget":
+            closing = True
         await ws.send(json.dumps(payload))
         while True:
             message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
             event = message.get("method", "")
-            if event in {"Page.frameStartedNavigating", "Page.frameNavigated", "Page.navigatedWithinDocument",
-                         "Runtime.executionContextsCleared", "Target.detachedFromTarget", "Target.targetDestroyed"}:
+            if event in {"Page.frameStartedNavigating", "Page.frameNavigated", "Page.navigatedWithinDocument"}:
                 changed = True
+            elif event in {"Runtime.executionContextsCleared", "Target.detachedFromTarget", "Target.targetDestroyed"}:
+                scope = teardown_scope(message)
+                # Our own closeTarget tears down our own target and session, so those
+                # events are expected once it is sent. Anything earlier, or anything
+                # that cannot be attributed, still vetoes the close.
+                if scope == "unknown" or (scope == "mine" and not closing):
+                    changed = True
             if event == "Target.targetInfoChanged":
                 info = (message.get("params") or {}).get("targetInfo") or {}
                 if info.get("targetId") == record.target_id and info.get("url") != "about:blank":
@@ -635,9 +655,16 @@ async def create(params: dict[str, Any]) -> dict[str, Any]:
             reason = "creation_proof_failed" if isinstance(exc, ValueError) else "creation_failed"
             cleanup = "not_created"
             if target_id:
+                # The tab may exist: keep the attempt counted until the quarantine
+                # entry is confirmed gone by _prune_closed_or_changed.
                 cleanup = "quarantined"
                 _QUARANTINED[(port, target_id)] = reason
                 logger.warning("owned tab quarantined after failed creation proof: target=%s reason=%s", target_id, reason)
+            else:
+                # No target id means nothing is left to track; return the attempt so
+                # transient CDP failures cannot exhaust the creation budget.
+                with _OWNED_LOCK:
+                    _CREATE_ATTEMPTS = max(0, _CREATE_ATTEMPTS - 1)
             return {"status": "error", "data": {"reason": reason, "target_id": target_id, "cleanup": cleanup}}
 
 
@@ -667,15 +694,21 @@ async def reclaim(params: dict[str, Any]) -> dict[str, Any]:
     window = int(time.monotonic() // 60)
     if window != _SWEEP_WINDOW:
         _SWEEP_WINDOW, _SWEEP_COUNT = window, 0
-    entries = candidates[:max(0, _MAX_PER_PASS - _SWEEP_COUNT)]
-    _SWEEP_COUNT += len(entries)
+    real = enabled and not dry_run
+    # Dry-run and disabled passes only report, so they never spend the close budget;
+    # the per-call report size stays capped at _MAX_PER_PASS.
+    entries = [] if real and _SWEEP_COUNT >= _MAX_PER_PASS else candidates[:_MAX_PER_PASS]
     for record in entries:
         async with cdp._owned_tab_lock(record.port):
             try:
                 reason = await _reclaim_reason(record)
             except Exception:  # noqa: BLE001 - one uncertain record must not abort the pass
                 reason = "ownership_unknown"
-            if reason == "eligible" and enabled and not dry_run:
+            if reason == "eligible" and real:
+                # The per-minute budget is spent only by an actual close attempt.
+                if _SWEEP_COUNT >= _MAX_PER_PASS:
+                    break
+                _SWEEP_COUNT += 1
                 # All checks, including the last CDP lookup and close, run under this port lock.
                 try:
                     close_reason = await _guarded_close(record)

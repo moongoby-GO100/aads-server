@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 import types
 from dataclasses import replace
 from functools import wraps
@@ -441,20 +442,24 @@ async def test_closed_records_pruned_and_uncertain_inventory_hits_cap(monkeypatc
 
 
 class GuardedSocket:
-    def __init__(self, *, change_at="", before_close=None):
+    def __init__(self, *, change_at="", before_close=None, close_events=(), change_event="Page.frameStartedNavigating"):
         self.pending = []
         self.methods = []
         self.change_at = change_at
         self.before_close = before_close
+        self.close_events = list(close_events)
+        self.change_event = change_event
 
     async def send(self, raw):
         message = json.loads(raw)
         method = message["method"]
         self.methods.append(method)
         if method == self.change_at:
-            self.pending.append(json.dumps({"method": "Page.frameStartedNavigating", "sessionId": "s1"}))
+            self.pending.append(json.dumps({"method": self.change_event, "sessionId": "s1"}))
         if method == "Target.closeTarget" and self.before_close:
             self.before_close()
+        if method == "Target.closeTarget":
+            self.pending.extend(json.dumps(event) for event in self.close_events)
         result = {
             "Target.attachToTarget": {"sessionId": "s1"},
             "Runtime.evaluate": {"result": {"type": "object", "value": {
@@ -586,3 +591,225 @@ async def test_session_generation_changes_before_close_aborts(monkeypatch):
     assert await reclaim._guarded_close(record) == "ownership_or_session_changed"
     assert "Target.closeTarget" not in socket.methods
     assert record.token in reclaim._OWNED
+
+
+def _create_env(monkeypatch, *, send, pages=None):
+    browser_ws = "ws://127.0.0.1:9222/devtools/browser/one"
+    target_ws = "ws://127.0.0.1:9222/devtools/page/new-1"
+    cdp.CDPSessionManager.register("job-1", 9222, "/managed/profile", pid=42)
+
+    async def version(_port):
+        return {"webSocketDebuggerUrl": browser_ws}
+
+    async def list_pages(_port):
+        return [] if pages is None else [{"id": "new-1", "type": "page", "url": "about:blank",
+                                          "webSocketDebuggerUrl": target_ws}]
+
+    monkeypatch.setattr(cdp, "_probe_cdp_version", version)
+    monkeypatch.setattr(cdp, "_list_cdp_targets", list_pages)
+    monkeypatch.setattr(cdp, "_send_cdp", send)
+
+
+@run_async
+async def test_create_timeout_returns_attempt_budget(monkeypatch):
+    async def send(_ws, method, _params, **_kwargs):
+        assert method == "Target.createTarget"
+        raise asyncio.TimeoutError("cdp slow")
+    _create_env(monkeypatch, send=send)
+    reclaim._CREATE_ATTEMPTS = 5
+    result = await reclaim.create({"work_key": "job-1"})
+    assert result["data"]["reason"] == "creation_failed"
+    assert result["data"]["cleanup"] == "not_created"
+    assert reclaim._CREATE_ATTEMPTS == 5
+
+
+@run_async
+async def test_repeated_not_created_failures_never_exhaust_creation_budget(monkeypatch):
+    fail = {"on": True}
+
+    async def send(_ws, method, _params, **_kwargs):
+        if method == "Target.createTarget":
+            if fail["on"]:
+                raise asyncio.TimeoutError("cdp slow")
+            return {"targetId": "new-1"}
+        if method == "Target.getTargets":
+            return {"targetInfos": []}
+        if method == "Target.getTargetInfo":
+            return {"targetInfo": {"targetId": "new-1", "type": "page", "attached": False}}
+        raise AssertionError(method)
+    _create_env(monkeypatch, send=send, pages=True)
+    for _ in range(reclaim._MAX_OWNED + 1):
+        result = await reclaim.create({"work_key": "job-1"})
+        assert result["data"]["cleanup"] == "not_created"
+    assert reclaim._CREATE_ATTEMPTS == 0
+    fail["on"] = False
+    created = await reclaim.create({"work_key": "job-1"})
+    assert created["status"] == "success"
+
+
+@run_async
+async def test_missing_target_id_returns_attempt_budget(monkeypatch):
+    async def send(_ws, method, _params, **_kwargs):
+        assert method == "Target.createTarget"
+        return {}
+    _create_env(monkeypatch, send=send)
+    result = await reclaim.create({"work_key": "job-1"})
+    assert result["data"]["reason"] == "creation_proof_failed"
+    assert result["data"]["cleanup"] == "not_created"
+    assert reclaim._CREATE_ATTEMPTS == 0
+
+
+@run_async
+async def test_created_but_unproven_target_keeps_attempt_budget(monkeypatch):
+    async def send(_ws, method, _params, **_kwargs):
+        assert method == "Target.createTarget"
+        return {"targetId": "new-1"}
+    _create_env(monkeypatch, send=send)
+    result = await reclaim.create({"work_key": "job-1"})
+    assert result["data"]["cleanup"] == "quarantined"
+    assert reclaim._QUARANTINED[(9222, "new-1")] == "creation_proof_failed"
+    assert reclaim._CREATE_ATTEMPTS == 1
+
+
+def _patch_close_socket(monkeypatch, socket):
+    monkeypatch.setitem(sys.modules, "websockets", types.ModuleType("websockets"))
+
+    async def connect(*_args, **_kwargs):
+        return socket
+    monkeypatch.setattr(cdp, "_connect_cdp_ws", connect)
+
+
+@run_async
+async def test_own_target_destroyed_before_close_response_is_success(monkeypatch):
+    record = guarded_record()
+    socket = GuardedSocket(close_events=[
+        {"method": "Target.targetDestroyed", "params": {"targetId": "tab-1"}},
+        {"method": "Target.detachedFromTarget", "params": {"sessionId": "s1", "targetId": "tab-1"}},
+        {"method": "Runtime.executionContextsCleared", "sessionId": "s1"},
+    ])
+    _patch_close_socket(monkeypatch, socket)
+
+    async def eligible(_record):
+        return "eligible"
+    monkeypatch.setattr(reclaim, "_reclaim_reason", eligible)
+    outcome = await reclaim.reclaim({"owner_token": record.token, "work_key": "job-1", "dry_run": False})
+    assert outcome["data"]["results"][0]["result"] == "closed"
+    assert record.token not in reclaim._OWNED
+
+
+@run_async
+async def test_other_target_events_during_close_are_ignored(monkeypatch):
+    record = guarded_record()
+    socket = GuardedSocket(close_events=[
+        {"method": "Target.targetDestroyed", "params": {"targetId": "someone-elses-tab"}},
+        {"method": "Target.detachedFromTarget", "params": {"sessionId": "s9", "targetId": "someone-elses-tab"}},
+        {"method": "Runtime.executionContextsCleared", "sessionId": "s9"},
+    ])
+    _patch_close_socket(monkeypatch, socket)
+    assert await reclaim._guarded_close(record) == "closed"
+
+
+@run_async
+async def test_unattributable_teardown_event_during_close_still_vetoes(monkeypatch):
+    record = guarded_record()
+    socket = GuardedSocket(close_events=[{"method": "Target.targetDestroyed", "params": {}}])
+    _patch_close_socket(monkeypatch, socket)
+    assert await reclaim._guarded_close(record) == "changed_during_close"
+    assert record.token in reclaim._OWNED
+
+
+@run_async
+async def test_frame_navigated_right_before_close_response_is_changed(monkeypatch):
+    record = guarded_record()
+    socket = GuardedSocket(change_at="Target.closeTarget", change_event="Page.frameNavigated")
+    _patch_close_socket(monkeypatch, socket)
+    assert await reclaim._guarded_close(record) == "changed_during_close"
+    assert record.token in reclaim._OWNED
+
+
+@run_async
+async def test_own_target_destroyed_before_close_is_sent_still_vetoes(monkeypatch):
+    record = guarded_record()
+    socket = GuardedSocket(change_at="Target.getTargetInfo", change_event="Target.targetDestroyed")
+    original_send = socket.send
+
+    async def send(raw):
+        await original_send(raw)
+        if json.loads(raw)["method"] == "Target.getTargetInfo":
+            socket.pending[0] = json.dumps({"method": "Target.targetDestroyed", "params": {"targetId": "tab-1"}})
+    socket.send = send
+    _patch_close_socket(monkeypatch, socket)
+    assert await reclaim._guarded_close(record) == "target_changed"
+    assert "Target.closeTarget" not in socket.methods
+    assert record.token in reclaim._OWNED
+
+
+def _three_owned():
+    for index in range(3):
+        token = f"owner-{index}"
+        reclaim._OWNED[token] = reclaim.OwnedTab(
+            token, f"epoch-{index}", "job-1", 9222, 42, 1234.5,
+            "ws://127.0.0.1:9222/devtools/browser/one", f"tab-{index}",
+            f"ws://127.0.0.1:9222/devtools/page/tab-{index}", 0, 0,
+        )
+
+
+@run_async
+async def test_dry_run_calls_do_not_spend_close_budget(monkeypatch):
+    monkeypatch.setattr(reclaim, "time", types.SimpleNamespace(monotonic=lambda: 6000.0, time=time.time))
+    _three_owned()
+    closes = []
+
+    async def eligible(_record):
+        return "eligible"
+
+    async def close(record):
+        closes.append(record.token)
+        return "closed"
+    monkeypatch.setattr(reclaim, "_reclaim_reason", eligible)
+    monkeypatch.setattr(reclaim, "_guarded_close", close)
+    for _ in range(5):
+        dry = await reclaim.reclaim({"work_key": "job-1"})
+        assert dry["data"]["processed"] == reclaim._MAX_PER_PASS
+        assert {r["result"] for r in dry["data"]["results"]} == {"dry_run"}
+    assert closes == [] and reclaim._SWEEP_COUNT == 0
+    real = await reclaim.reclaim({"work_key": "job-1", "dry_run": False})
+    assert real["data"]["processed"] == reclaim._MAX_PER_PASS
+    assert len(closes) == reclaim._MAX_PER_PASS
+
+
+@run_async
+async def test_real_reclaim_still_respects_per_minute_cap(monkeypatch):
+    monkeypatch.setattr(reclaim, "time", types.SimpleNamespace(monotonic=lambda: 6000.0, time=time.time))
+    _three_owned()
+    closes = []
+
+    async def eligible(_record):
+        return "eligible"
+
+    async def close(record):
+        closes.append(record.token)
+        return "close_not_confirmed"
+    monkeypatch.setattr(reclaim, "_reclaim_reason", eligible)
+    monkeypatch.setattr(reclaim, "_guarded_close", close)
+    first = await reclaim.reclaim({"work_key": "job-1", "dry_run": False})
+    assert first["data"]["processed"] == reclaim._MAX_PER_PASS
+    second = await reclaim.reclaim({"work_key": "job-1", "dry_run": False})
+    assert second["data"]["processed"] == 0
+    assert len(closes) == reclaim._MAX_PER_PASS
+    monkeypatch.setattr(reclaim, "time", types.SimpleNamespace(monotonic=lambda: 6060.0, time=time.time))
+    third = await reclaim.reclaim({"work_key": "job-1", "dry_run": False})
+    assert third["data"]["processed"] == reclaim._MAX_PER_PASS
+    assert len(closes) == 2 * reclaim._MAX_PER_PASS
+
+
+@run_async
+async def test_ineligible_records_do_not_spend_close_budget(monkeypatch):
+    monkeypatch.setattr(reclaim, "time", types.SimpleNamespace(monotonic=lambda: 6000.0, time=time.time))
+    _three_owned()
+
+    async def busy(_record):
+        return "user_active_or_unknown"
+    monkeypatch.setattr(reclaim, "_reclaim_reason", busy)
+    await reclaim.reclaim({"work_key": "job-1", "dry_run": False})
+    assert reclaim._SWEEP_COUNT == 0
