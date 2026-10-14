@@ -1350,6 +1350,21 @@ async def list_collection_status(business_id: str | None = None, current_user: d
     return {"statuses": await run_in_threadpool(svc.list_collection_status, current_user, business_id)}
 
 
+@router.get("/delivery-collection/gate")
+async def delivery_collection_gate_view(
+    business_id: str | None = None,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    """자동수집이 멈춘 이유와 사용자 조치 필요 목록. 읽기 전용."""
+    from app.services import delivery_collection_gate as gate
+
+    statuses = await run_in_threadpool(svc.list_collection_status, current_user, business_id)
+    return {
+        "user_actions": gate.user_actions_from_statuses(statuses),
+        "gate_states": await gate.read_gate_states(),
+    }
+
+
 @router.get("/completion-matrix")
 async def completion_matrix(business_id: str | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"matrix": await run_in_threadpool(svc.delivery_completion_matrix, current_user, business_id)}

@@ -1757,6 +1757,7 @@ async def lifespan(app: FastAPI):
                 import subprocess
                 import sys
                 from pathlib import Path
+                from app.services import delivery_collection_gate as gate_mod
 
                 # 배포 없이 끌 수 있는 정지 스위치. 수집이 잘못 돌고 있다는 걸
                 # 알았을 때 20분짜리 배포를 기다리면 그 사이 쓰레기가 쌓인다.
@@ -1824,6 +1825,30 @@ async def lifespan(app: FastAPI):
                                 "status": "deferred",
                                 "diagnostics": {"operator_action_cooldown": ",".join(sorted(cooldown_services))},
                             }
+                    user_action_decisions = {
+                        service: gate_mod.evaluate_service(service, statuses, agent_online=True)
+                        for service in selected_services
+                    }
+                    user_action_services = {
+                        service
+                        for service, decision in user_action_decisions.items()
+                        if decision.get("state") == gate_mod.GATE_STATE_USER_ACTION
+                    }
+                    if user_action_services:
+                        for service in sorted(user_action_services):
+                            await gate_mod.record_gate_state(service, user_action_decisions[service])
+                        logger.info(
+                            "delivery_auto_collect_skip: user_action_required reason=%s mode=%s services=%s",
+                            reason,
+                            mode,
+                            sorted(user_action_services),
+                        )
+                        selected_services = [s for s in selected_services if s not in user_action_services]
+                        if not selected_services:
+                            return {
+                                "status": "deferred",
+                                "diagnostics": {"user_action_required": ",".join(sorted(user_action_services))},
+                            }
                 if "baemin" in selected_services:
                     if statuses is None:
                         statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
@@ -1874,6 +1899,48 @@ async def lifespan(app: FastAPI):
 
                 use_global_queue = _env_bool("YEOLJEONG_PC_AGENT_GLOBAL_QUEUE_ENABLED", True)
                 if use_global_queue:
+                    # 큐 적재는 에이전트를 기다리지 않지만, 접속 에이전트가 하나도 없으면 시도하지 않고
+                    # 상태 1행만 남긴다 (오프라인 동안 실패 행이 수천 개 쌓이던 경로).
+                    gate_agent_online = any(
+                        str(agent.get("status") or "") == "online"
+                        and str(agent.get("agent_id") or "").strip()
+                        and str(agent.get("agent_id") or "").strip() not in excluded_agent_ids
+                        and (not preferred_agent_id or str(agent.get("agent_id") or "").strip() == preferred_agent_id)
+                        for agent in pc_agent_manager.list_agent_statuses()
+                    )
+                    if not gate_agent_online and not preferred_agent_id:
+                        gate_agent_online = (await _delivery_auto_collect_peer_agent(excluded_agent_ids)).get("status") == "online"
+                    if statuses is None and selected_services:
+                        statuses = await asyncio.to_thread(yjf_svc.list_collection_status, system_user, None)
+                    gate_runnable: list[str] = []
+                    for gate_service in selected_services:
+                        gate_decision = gate_mod.evaluate_service(
+                            gate_service,
+                            statuses or [],
+                            agent_online=gate_agent_online,
+                            failure_cooldown_minutes=_env_int(
+                                "YEOLJEONG_DELIVERY_FAILURE_COOLDOWN_MINUTES",
+                                gate_mod.DEFAULT_FAILURE_COOLDOWN_MINUTES,
+                            ),
+                        )
+                        if gate_decision["run"]:
+                            gate_runnable.append(gate_service)
+                        else:
+                            await gate_mod.record_gate_state(gate_service, gate_decision)
+                    if len(gate_runnable) != len(selected_services):
+                        logger.info(
+                            "delivery_auto_collect_skip: collection_gate reason=%s mode=%s agent_online=%s skipped=%s",
+                            reason,
+                            mode,
+                            gate_agent_online,
+                            sorted(set(selected_services) - set(gate_runnable)),
+                        )
+                    selected_services = gate_runnable
+                    if not selected_services:
+                        return {
+                            "status": "deferred",
+                            "diagnostics": {"collection_gate": "agent_offline" if not gate_agent_online else "blocked"},
+                        }
                     wait_result = {
                         "status": "online",
                         "agent_id": preferred_agent_id,

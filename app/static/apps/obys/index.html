@@ -4904,6 +4904,7 @@
               </div>
             </div>
             <div class="panel-body">
+              <div id="deliveryUserActionBanner" class="integration-status-note hidden" role="alert"></div>
               <div id="deliveryLedgerKpiRows" class="delivery-ledger-kpis"></div>
               <div class="table-wrap" style="margin-top:12px">
                 <table>
@@ -7264,15 +7265,35 @@
       return ["수집대기", "warn"];
     }
 
+    const deliveryUserActionByCode = {
+      PC_AGENT_LOGIN_REQUIRED: "로그인 필요: PC Agent 연결 후 해당 앱에 1회 수동 로그인하세요. 자동 재시도하지 않습니다.",
+      PC_AGENT_SESSION_REQUIRED: "로그인 필요: PC Agent 연결 후 해당 앱에 1회 수동 로그인하세요. 자동 재시도하지 않습니다.",
+      MISSING_CREDENTIALS: "로그인 필요: 연동 계정(Vault)을 먼저 등록하세요. 자동 재시도하지 않습니다.",
+      DDANGYO_NUMERIC_CAPTCHA_REQUIRED: "캡차 필요: 화면에서 직접 인증한 뒤 수집을 실행하세요. 자동 재시도하지 않습니다.",
+      PORTAL_AUTH_CHALLENGE: "추가 인증 필요: 화면에서 직접 인증한 뒤 수집을 실행하세요. 자동 재시도하지 않습니다.",
+      PORTAL_BLOCKED: "포털 접근 차단: 자동 재시도를 멈췄습니다. 정산 CSV를 업로드해 대체하세요.",
+      BAEMIN_SECURITY_BLOCKED: "포털 접근 차단: 자동 재시도를 멈췄습니다. 정산 CSV를 업로드해 대체하세요.",
+      COUPANGEATS_SECURITY_BLOCKED: "포털 접근 차단: 자동 재시도를 멈췄습니다. 정산 CSV를 업로드해 대체하세요.",
+      CSV_UPLOAD_REQUIRED: "정산 CSV 업로드 필요: 포털에서 내려받은 정산 CSV를 올려주세요."
+    };
+
+    function deliveryUserActionMessage(group) {
+      const code = String(group.statusRow?.error_code || "").split(",")[0].trim().toUpperCase();
+      return deliveryUserActionByCode[code] || "";
+    }
+
     function deliveryLedgerAction(group) {
       const status = String(group.statusRow?.status || group.statusRow?.raw_status || "").toLowerCase();
+      const csvButton = group.service === "coupangeats" || deliveryUserActionMessage(group)
+        ? `<button type="button" data-open-import="${escapeHtml(group.service)}">정산 CSV 업로드</button>`
+        : "";
       if (["action_required", "credential_required", "portal_action_required", "blocked", "failed"].includes(status)) {
-        return `<button type="button" data-integration-detail="sales-channel-connect" data-default-service="${escapeHtml(group.service)}">인증 확인</button>`;
+        return `<button type="button" data-integration-detail="sales-channel-connect" data-default-service="${escapeHtml(group.service)}">인증 확인</button>${csvButton}`;
       }
       if (!group.salesCount && !group.settlementCount && !group.reviewCount) {
-        return `<button type="button" data-sync-integration="${escapeHtml(group.service)}">수집 실행</button>`;
+        return `<button type="button" data-sync-integration="${escapeHtml(group.service)}">수집 실행</button>${csvButton}`;
       }
-      return `<button type="button" data-open-import="${escapeHtml(group.service)}">파일 보완</button>`;
+      return `<button type="button" data-open-import="${escapeHtml(group.service)}">${group.service === "coupangeats" ? "정산 CSV 업로드" : "파일 보완"}</button>`;
     }
 
     function renderDeliveryLedgerSummary() {
@@ -7286,6 +7307,13 @@
       const settlementAmount = settlementRows.reduce((sum, row) => sum + deliveryAmount(row, ["settlement_amount", "settlementAmount", "deposit_amount", "depositAmount", "amount"]), 0);
       const lastStatusAt = statusRows.map(deliveryRecordTimestamp).filter(Boolean).sort().at(-1) || "";
       const blockedGroups = groups.filter(group => ["action_required", "credential_required", "portal_action_required", "blocked", "failed"].includes(String(group.statusRow?.status || group.statusRow?.raw_status || "").toLowerCase())).length;
+      if (els.deliveryUserActionBanner) {
+        const needAction = groups.map(group => ({ group, message: deliveryUserActionMessage(group) })).filter(item => item.message);
+        els.deliveryUserActionBanner.classList.toggle("hidden", !needAction.length);
+        els.deliveryUserActionBanner.innerHTML = needAction.length
+          ? "<strong>사용자 조치 필요 (자동수집 일시 중단)</strong><br>" + needAction.map(item => escapeHtml(`${integrationLabels[item.group.service] || item.group.service} · ${businessName(item.group.businessId)} ${item.group.branch || ""}: ${item.message}`)).join("<br>")
+          : "";
+      }
       if (els.deliveryLedgerSummaryBadge) {
         const totalRows = salesRows.length + settlementRows.length + reviewRows.length;
         els.deliveryLedgerSummaryBadge.textContent = totalRows ? `DB ${totalRows.toLocaleString("ko-KR")}건` : "DB 0건";
@@ -7310,7 +7338,7 @@
       els.deliveryLedgerRows.innerHTML = groups.length ? groups.map(group => {
         const status = deliveryLedgerStatus(group);
         const avgRating = group.ratingCount ? (group.ratingTotal / group.ratingCount).toFixed(1) : "-";
-        const statusMessage = group.statusRow?.message || group.statusRow?.error_code || "";
+        const statusMessage = deliveryUserActionMessage(group) || group.statusRow?.message || group.statusRow?.error_code || "";
         return `<tr>
           <td><strong>${escapeHtml(integrationLabels[group.service] || group.service || "-")}</strong></td>
           <td>${escapeHtml(`${businessName(group.businessId)} · ${group.branch || "공통"}`)}</td>

@@ -43,6 +43,7 @@ from app.services.yeoljeong_finance_service import (  # noqa: E402
     sync_delivery,
     sync_financial_transactions,
 )
+from app.services import delivery_collection_gate as collection_gate  # noqa: E402
 from app.services.pc_agent_collection_queue import (  # noqa: E402
     claim_next_collection_item,
     complete_collection_item,
@@ -1251,6 +1252,26 @@ def _enqueue_global_collection_queue(payload: dict[str, Any], user: dict[str, An
     }
 
 
+def _delivery_claim_gate(item: dict[str, Any], user: dict[str, Any]) -> dict[str, Any] | None:
+    """배달 큐 항목을 브라우저에 올리기 전 판정한다. 막혀야 하면 판정 dict, 진행이면 None."""
+    if str(item.get("queue_type") or "") != "delivery":
+        return None
+    try:
+        statuses = list_collection_status(user, None)
+    except Exception:
+        return None
+    decision = collection_gate.scope_gate(
+        statuses,
+        str(item.get("service") or ""),
+        str(item.get("business_id") or ""),
+        str(item.get("branch") or ""),
+        failure_cooldown_minutes=_env_int(
+            "YEOLJEONG_DELIVERY_FAILURE_COOLDOWN_MINUTES", collection_gate.DEFAULT_FAILURE_COOLDOWN_MINUTES
+        ),
+    )
+    return None if decision.get("run") else decision
+
+
 def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "") -> dict[str, Any]:
     item = claim_next_collection_item(agent_id=agent_id)
     if not item:
@@ -1356,6 +1377,45 @@ def _run_global_collection_queue_once(user: dict[str, Any], *, agent_id: str = "
                 "message": "PC 보안프로그램 실행 확인 실패로 은행 브라우저 접속 전 재시도 대기합니다.",
                 "security_program_preflight": security_preflight,
             }
+    gate_decision = _delivery_claim_gate(item, user)
+    if gate_decision is not None:
+        gate_state = str(gate_decision.get("state") or "")
+        gate_reason = str(gate_decision.get("reason") or "")
+        if gate_state == collection_gate.GATE_STATE_USER_ACTION:
+            complete_collection_item(
+                str(item["id"]),
+                status="action_required",
+                result={"browser_attempted": False, "collection_gate": gate_decision},
+                error_code=gate_reason,
+                message=str((gate_decision.get("user_action") or {}).get("message") or "사용자 조치 필요")[:300],
+                **claim_fence,
+            )
+        else:
+            next_run_at = str(gate_decision.get("cooldown_until") or "") or (
+                datetime.now(KST) + timedelta(minutes=5)
+            ).isoformat(timespec="seconds")
+            complete_collection_item(
+                str(item["id"]),
+                status="queued",
+                result={"browser_attempted": False, "collection_gate": gate_decision},
+                error_code=gate_reason,
+                message=f"수집 게이트 대기: {gate_state}",
+                next_run_at=next_run_at,
+                **claim_fence,
+            )
+        return {
+            "global_queue": True,
+            "claimed": True,
+            "item": {
+                "id": item.get("id"),
+                "service": item.get("service"),
+                "business_id": item.get("business_id"),
+                "branch": item.get("branch"),
+            },
+            "status": "action_required" if gate_state == collection_gate.GATE_STATE_USER_ACTION else "deferred",
+            "error_code": gate_reason,
+            "collection_gate": gate_decision,
+        }
     try:
         result = _run_collectors(payload, user, queue_only=False)
         state = _completion_state(result)
