@@ -22,9 +22,11 @@ from app.api.ohvis_console import TenantContext, require_console_admin
 from app.services.work_recipe import recorder as recorder_module
 from app.services.work_recipe.registration import (
     RegistrationError,
-    decide_registration,
+    decide_registration_as_human,
     get_registration,
     list_registrations,
+    registration_error_status,
+    registration_summary,
 )
 
 router = APIRouter(prefix="/ohvis/recipes", tags=["ohvis-recipes"])
@@ -72,6 +74,10 @@ class RegistrationDecisionIn(BaseModel):
     status: str = Field(default="", max_length=20, description="approved | rejected")
     decision: str = Field(default="", max_length=20, description="approve | reject (legacy)")
     reason: str = Field(default="", max_length=1000)
+    # 승인자는 인증된 사용자로만 정해진다 — 본문에 decided_by 를 실어도 읽지 않는다.
+    confirm_high_risk: bool = Field(
+        default=False, description="max_risk 가 WRITE_EXTERNAL 이상인 approve 에 필수"
+    )
 
 
 @router.post("/recording")
@@ -159,7 +165,8 @@ async def list_registration_requests(
     rows = await list_registrations(
         tenant_id=_tenant_id(context), status=normalized_status
     )
-    return {"registrations": rows}
+    # 대시보드용 필드는 추가만 한다 — 기존 행 필드가 항상 우선한다.
+    return {"registrations": [{**registration_summary(row), **row} for row in rows]}
 
 
 @router.get("/registrations/{registration_id}")
@@ -182,14 +189,16 @@ async def decide_registration_request(
     decision = (body.status or body.decision).strip().lower()
     decision = {"approved": "approve", "rejected": "reject"}.get(decision, decision)
     try:
-        result = await decide_registration(
+        result = await decide_registration_as_human(
             registration_id,
             tenant_id=_tenant_id(context),
             decision=decision,
-            decided_by=_decided_by(context),
+            principal=context,
             reason=body.reason,
+            confirm_high_risk=body.confirm_high_risk,
         )
     except RegistrationError as exc:
-        status = 404 if str(exc) == "registration_not_found" else 409
-        raise HTTPException(status_code=status, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=registration_error_status(exc), detail=str(exc)
+        ) from exc
     return {"status": result["status"], "registration": result}

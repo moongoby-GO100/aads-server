@@ -5943,8 +5943,11 @@ class ToolExecutor:
                 from app.services.work_recipe.approval_notifier import notify_pending_created
 
                 await notify_pending_created(registration)
+                from app.services.work_recipe.approval_card import propose_card
+
+                card = await propose_card(registration, chat_session_id=session_id)
                 return {"status": "approval_required", "session_id": session_id,
-                        "registration": registration}
+                        "registration": registration, "approval_card": card.get("status")}
 
             if not isinstance(evidence, dict) or evidence.get("screen_verified") is not True:
                 return {"error": "screen_e2e_evidence_required"}
@@ -5997,10 +6000,14 @@ class ToolExecutor:
             registration = await recorder_module.finish_recording(
                 recording, created_by=f"chat:{session_id}"
             )
+            from app.services.work_recipe.approval_card import propose_card
+
+            card = await propose_card(registration, chat_session_id=session_id)
             return {
                 "status": "approval_required",
                 "session_id": session_id,
                 "registration": registration,
+                "approval_card": card.get("status"),
             }
 
         return {"error": "unsupported_action", "allowed": ["list", "run", "register_e2e"]}

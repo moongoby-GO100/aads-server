@@ -119,8 +119,12 @@ async def test_secret_input_requires_scoped_credential_reference():
 def _admin_ctx(*, admin: bool = True) -> dict:
     return {
         "tenant": {"id": "2d701a8c-9596-4757-8588-faa4f7837112"},
-        "membership": {"user_id": "u-1", "role": "owner"},
-        "user": {"email": "moong76@gmail.com", "is_internal_admin": admin},
+        "membership": {"user_id": "7fb5f50a-1111-4222-8333-444455556666", "role": "owner"},
+        "user": {
+            "user_id": "7fb5f50a-1111-4222-8333-444455556666",
+            "email": "moong76@gmail.com",
+            "is_internal_admin": admin,
+        },
     }
 
 
@@ -185,13 +189,14 @@ async def test_ohvis_recipes_full_recording_cycle(monkeypatch):
         assert registration_id == "registration-1"
         assert kwargs["tenant_id"] == _admin_ctx()["tenant"]["id"]
         assert kwargs["decision"] == "approve"
+        assert kwargs["principal"]["user"]["email"] == "moong76@gmail.com"
         return {
             "id": registration_id,
             "status": "approved",
             "recipe": {"id": "recipe-1", "version": 1},
         }
 
-    monkeypatch.setattr(ohvis_recipes, "decide_registration", decide_registration)
+    monkeypatch.setattr(ohvis_recipes, "decide_registration_as_human", decide_registration)
 
     app = FastAPI()
     app.include_router(ohvis_recipes.router)
@@ -278,7 +283,7 @@ async def test_ohvis_recipes_accepts_status_decision_contract(monkeypatch):
         assert kwargs["reason"] == "검토 완료"
         return {"id": registration_id, "status": "approved"}
 
-    monkeypatch.setattr(ohvis_recipes, "decide_registration", decide_registration)
+    monkeypatch.setattr(ohvis_recipes, "decide_registration_as_human", decide_registration)
     app = FastAPI()
     app.include_router(ohvis_recipes.router)
     app.dependency_overrides[ohvis_console.require_viewer] = lambda: _admin_ctx()

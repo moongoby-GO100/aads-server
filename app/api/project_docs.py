@@ -1293,6 +1293,9 @@ _OWNER_SESSION_ACTION = "create_owner_session"
 # 브라우저 로그인 계정 저장 카드. browser_login_autosave.ACTION_TYPE 와 같은 값.
 _BROWSER_LOGIN_SAVE_ACTION = "save_browser_credential"
 
+# 레시피 등록 승인 카드. work_recipe.approval_card.ACTION_TYPE 와 같은 값.
+_RECIPE_REGISTRATION_ACTION = "approve_work_recipe_registration"
+
 
 def _browser_login_save_note(
     *, head: str, approved: bool, summary: str, result: Optional[Dict[str, Any]]
@@ -1401,6 +1404,7 @@ async def _notify_chat_of_approval_decision(
     owner_scope: Optional[Dict[str, Any]] = None,
     owner_result: Optional[Dict[str, Any]] = None,
     vault_result: Optional[Dict[str, Any]] = None,
+    recipe_result: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """결정을 그 대화에 남기고, 남은 대기 건이 없으면 막힌 작업을 이어서 돌린다.
 
@@ -1427,8 +1431,10 @@ async def _notify_chat_of_approval_decision(
         "next_step": "다음 단계",
         _OWNER_SESSION_ACTION: "담당 세션 생성",
         _BROWSER_LOGIN_SAVE_ACTION: "로그인 계정 저장",
+        _RECIPE_REGISTRATION_ACTION: "레시피 등록",
     }.get(tool or "", f"`{tool}`")
     is_login_save = (tool or "") == _BROWSER_LOGIN_SAVE_ACTION
+    is_recipe_card = (tool or "") == _RECIPE_REGISTRATION_ACTION
 
     if is_owner_session:
         # 거절도 결론이다. 남기지 않으면 그 마일스톤은 "승인 요청함" 에
@@ -1447,6 +1453,13 @@ async def _notify_chat_of_approval_decision(
                 )
         note = _owner_session_note(
             head=head, approved=approved, summary=summary, result=owner_result,
+        )
+    elif is_recipe_card:
+        r = recipe_result or {}
+        what = f"{r.get('domain') or ''} · {r.get('name') or ''} v{r.get('version') or ''}".strip(" ·")
+        note = (
+            f"**{head}** — 레시피 등록\n\n- 대상: {what}\n\n"
+            + ("승인된 레시피로 등록했습니다." if approved else "등록하지 않고 반려했습니다.")
         )
     elif is_login_save:
         note = _browser_login_save_note(
@@ -1531,7 +1544,7 @@ async def _notify_chat_of_approval_decision(
         )
         return {"status": "enqueue_failed", "error": "decision_note_failed"}
 
-    if is_login_save:
+    if is_login_save or is_recipe_card:
         # 막혀서 멈춘 작업이 없다 — 서버가 이미 끝냈으므로 에이전트를 깨우지 않는다.
         return {"status": "note_only"}
 
@@ -1613,6 +1626,89 @@ async def _notify_chat_of_approval_decision(
         return {"status": "enqueue_failed", "error": str(exc)[:160]}
 
 
+async def _decide_recipe_registration_card(
+    card: Any, *, decision: str, reason: str, confirm_high_risk: bool, context: TenantContext,
+) -> Dict[str, Any]:
+    """레시피 등록 카드의 승인·반려 — 등록 결정과 카드 닫기를 한 경로로 처리한다."""
+    from app.core.db_pool import get_pool
+    from app.services.work_recipe.registration import (
+        RegistrationError,
+        decide_registration_as_human,
+        registration_error_status,
+    )
+
+    if str(card["tenant_id"] or "") != _tenant_id(context):
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
+    try:
+        card_scope = json.loads(card["scope_json"] or "{}")
+    except Exception:  # noqa: BLE001
+        card_scope = {}
+    registration_id = str(card_scope.get("registration_id") or "")
+    request_id = str(card["id"])
+    try:
+        result = await decide_registration_as_human(
+            registration_id,
+            tenant_id=_tenant_id(context),
+            decision="approve" if decision == "approved" else "reject",
+            principal=context,
+            reason=reason,
+            confirm_high_risk=confirm_high_risk,
+        )
+    except RegistrationError as exc:
+        if str(exc).startswith("registration_already_decided"):
+            await get_pool().execute(
+                "UPDATE agent_permission_requests SET expires_at = now(), updated_at = now() "
+                " WHERE id = $1::uuid AND decision = 'pending'",
+                request_id,
+            )
+        raise HTTPException(
+            status_code=registration_error_status(exc), detail=str(exc)
+        ) from exc
+
+    decided_by = str(result.get("decided_by") or "")
+    await get_pool().execute(
+        """
+        UPDATE agent_permission_requests
+           SET decision = $2, decided_by = $3, decided_at = now(), updated_at = now(),
+               reason = CASE WHEN $4 <> '' THEN $4 ELSE reason END,
+               approval_scope = COALESCE(approval_scope, '{}'::jsonb) || '{"used": 1}'::jsonb,
+               expires_at = now()
+         WHERE id = $1::uuid AND decision = 'pending'
+        """,
+        request_id, decision, decided_by, reason,
+    )
+    recipe = result.get("recipe") or {}
+    recipe_result = {
+        "name": card_scope.get("name") or "",
+        "domain": card_scope.get("domain") or "",
+        "version": recipe.get("version") or card_scope.get("version"),
+    }
+    dispatch = await _notify_chat_of_approval_decision(
+        session_id=str(card["requested_by"] or ""),
+        request_id=request_id,
+        tool=_RECIPE_REGISTRATION_ACTION,
+        summary=card["action_summary"],
+        decision=decision,
+        scope="single",
+        grant_executions=1,
+        hours=0,
+        recipe_result=recipe_result,
+    )
+    return {
+        "id": request_id,
+        "decision": decision,
+        "scope": "single",
+        "valid_hours": 0,
+        "max_executions": 0,
+        "reaction_dispatch": dispatch,
+        "registration": {
+            "id": result.get("id"),
+            "status": result.get("status"),
+            "decided_by": decided_by,
+        },
+    }
+
+
 @router.post("/approvals/{request_id}/decide")
 async def approvals_decide(
     request_id: str,
@@ -1624,6 +1720,7 @@ async def approvals_decide(
     hours: int = Query(2, ge=1, le=24, description="승인 유효 시간"),
     max_executions: int = Query(1, ge=1, le=500,
                                 description="single 이 아닐 때 허용 횟수"),
+    confirm_high_risk: bool = Query(False, description="레시피 등록 카드: WRITE_EXTERNAL 이상 승인 재확인"),
     context: TenantContext = Depends(require_tenant_member),
 ):
     """승인 또는 거절.
@@ -1641,6 +1738,28 @@ async def approvals_decide(
     decided_by = str(_tenant_id(context) or "CEO")
     # 이번 건만이면 1회, 그 밖의 범위는 요청한 횟수 상한을 준다.
     grant_executions = max_executions if scope != "single" else 1
+
+    # 레시피 등록 카드는 일반 UPDATE 로 닫지 않는다 — 사람 JWT 만 통과하는
+    # decide_registration_as_human 이 유일한 결정 경로다(서비스 키·에이전트 차단).
+    try:
+        recipe_card = await get_pool().fetchrow(
+            """
+            SELECT id::text, tenant_id::text AS tenant_id, requested_by,
+                   action_summary, approval_scope::text AS scope_json
+              FROM agent_permission_requests
+             WHERE id = $1::uuid AND action_type = $2
+               AND decision = 'pending' AND expires_at > now()
+            """,
+            request_id, _RECIPE_REGISTRATION_ACTION,
+        )
+    except Exception:  # noqa: BLE001 — 잘못된 id 는 아래 일반 경로가 같은 방식으로 거절한다
+        recipe_card = None
+    if recipe_card is not None:
+        return await _decide_recipe_registration_card(
+            recipe_card, decision=decision, reason=reason,
+            confirm_high_risk=confirm_high_risk, context=context,
+        )
+
     try:
         row = await get_pool().fetchrow(
             """
@@ -1906,7 +2025,7 @@ async def approvals_decide_bulk(
             await approvals_decide(
                 request_id=str(rid), decision=decision, reason=reason,
                 scope=scope, hours=hours, max_executions=max_executions,
-                context=context,
+                confirm_high_risk=False, context=context,
             )
             ok.append(str(rid))
         except HTTPException as exc:

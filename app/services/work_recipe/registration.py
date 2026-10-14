@@ -11,11 +11,102 @@ from typing import Any
 from app.core.db_pool import get_pool
 from app.services.work_recipe import store
 from app.services.work_recipe import shinhan_corporate_manual as shinhan_manual
-from app.services.work_recipe.schema import WorkRecipe, parse_recipe
+from app.services.work_recipe.schema import RISK_LEVELS, WorkRecipe, parse_recipe, risk_rank
 
 
 class RegistrationError(RuntimeError):
     """The registration request is missing or cannot transition."""
+
+
+class HumanDeciderRequired(RegistrationError):
+    """The caller is a service key, internal system user or agent session, not a signed-in person."""
+
+
+class SelfApprovalBlocked(RegistrationError):
+    """The requester tried to approve their own registration."""
+
+
+class HighRiskConfirmationRequired(RegistrationError):
+    """WRITE_EXTERNAL or higher needs an explicit confirm_high_risk=true on approve."""
+
+
+HIGH_RISK_CONFIRM_FROM = "WRITE_EXTERNAL"
+
+_SERVICE_EMAIL_SUFFIX = "@aads.internal"
+_SERVICE_MEMBERSHIP_IDS = frozenset({"internal-pipeline-call", "service-monitor-key"})
+_NON_HUMAN_ID_PREFIXES = ("system", "chat:", "session:", "agent", "runner", "service", "pipeline")
+
+
+def _principal_ids(principal: Mapping[str, Any]) -> tuple[str, str, str]:
+    user = principal.get("user") or {}
+    membership = principal.get("membership") or {}
+    user_id = str(user.get("user_id") or user.get("id") or membership.get("user_id") or "").strip()
+    email = str(user.get("email") or "").strip()
+    return user_id, email, str(membership.get("id") or "").strip()
+
+
+def is_human_principal(principal: Mapping[str, Any]) -> bool:
+    """True only for a signed-in person (SaaS user JWT, or the env admin login whose sub is 'admin').
+
+    app.auth.get_current_user builds service principals with user_id 'system:*', email
+    system@aads.internal and membership ids 'internal-pipeline-call' / 'service-monitor-key';
+    both service paths also carry user_role='system', as does the env admin JWT, so the role
+    alone cannot separate them — the user id does.
+    """
+    user = principal.get("user") or {}
+    user_id, email, membership_id = _principal_ids(principal)
+    if not user_id and not email:
+        return False
+    if membership_id in _SERVICE_MEMBERSHIP_IDS:
+        return False
+    lowered_id, lowered_email = user_id.lower(), email.lower()
+    if lowered_email.endswith(_SERVICE_EMAIL_SUFFIX):
+        return False
+    if lowered_id.startswith(_NON_HUMAN_ID_PREFIXES) or "agent" in lowered_id:
+        return False
+    if str(user.get("user_role") or "").lower() == "system" and lowered_id != "admin":
+        return False
+    return True
+
+
+def decider_identity(principal: Mapping[str, Any]) -> str:
+    """Authenticated email, else user id — the only value ever stored as decided_by."""
+    user_id, email, _ = _principal_ids(principal)
+    return email or user_id
+
+
+def _same_identity(left: Any, right: Any) -> bool:
+    a, b = str(left or "").strip().lower(), str(right or "").strip().lower()
+    return bool(a) and a == b
+
+
+def _spec_max_risk(spec: Mapping[str, Any]) -> str:
+    """Highest risk over steps+verify of a stored spec; an unknown value counts as the highest."""
+    highest = 0
+    for key in ("steps", "verify"):
+        items = spec.get(key)
+        for item in items if isinstance(items, list) else []:
+            raw = item.get("risk") if isinstance(item, Mapping) else None
+            try:
+                highest = max(highest, risk_rank(raw))
+            except ValueError:
+                highest = len(RISK_LEVELS) - 1
+    return RISK_LEVELS[highest]
+
+
+def requires_high_risk_confirmation(max_risk: str) -> bool:
+    try:
+        return risk_rank(max_risk) >= risk_rank(HIGH_RISK_CONFIRM_FROM)
+    except ValueError:
+        return True
+
+
+def registration_error_status(exc: RegistrationError) -> int:
+    if isinstance(exc, (HumanDeciderRequired, SelfApprovalBlocked)):
+        return 403
+    if str(exc) == "registration_not_found":
+        return 404
+    return 409
 
 
 def _tenant_uuid(value: Any) -> uuid.UUID:
@@ -207,6 +298,103 @@ async def list_registrations(
     return [_row(row) for row in rows]
 
 
+def _object_or_empty(value: Any) -> dict[str, Any]:
+    try:
+        return _json_object(value)
+    except (RegistrationError, ValueError):
+        return {}
+
+
+def registration_summary(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Secret-free approval-screen fields derived from a registration row (additive only).
+
+    Step values, fill inputs and descriptions are never copied — only action, URL host,
+    selector and risk.
+    """
+    from urllib.parse import urlsplit
+
+    from app.services.work_recipe.audit import mask_secrets, mask_url
+
+    spec = _object_or_empty(row.get("spec"))
+    dry_run = _object_or_empty(row.get("dry_run"))
+    metadata = spec.get("metadata") if isinstance(spec.get("metadata"), Mapping) else {}
+    evidence = metadata.get("screen_e2e") if isinstance(metadata.get("screen_e2e"), Mapping) else {}
+    steps = [s for s in spec.get("steps") or [] if isinstance(s, Mapping)]
+    verify = [s for s in spec.get("verify") or [] if isinstance(s, Mapping)]
+
+    def describe(step: Mapping[str, Any], seq: int, phase: str) -> dict[str, Any]:
+        try:
+            host = urlsplit(str(step.get("url") or "")).hostname or ""
+        except ValueError:
+            host = ""
+        return {
+            "seq": step.get("seq") or seq,
+            "phase": phase,
+            "action": str(step.get("action") or ""),
+            "risk": str(step.get("risk") or "READ").upper(),
+            "url_host": host,
+            "selector": mask_secrets(step.get("selector") or "")[:200],
+        }
+
+    evidence_url = next(
+        (str(evidence[k]) for k in ("screenshot_url", "snapshot_ref", "url") if evidence.get(k)), ""
+    )
+    return {
+        "domain": str(row.get("domain") or ""),
+        "name": str(row.get("name") or ""),
+        "version": dry_run.get("proposed_version") or spec.get("version"),
+        "max_risk": _spec_max_risk(spec) if spec else str(dry_run.get("max_risk") or "READ"),
+        "step_count": len(steps),
+        "verify_count": len(verify),
+        "requested_by": row.get("requested_by"),
+        "requested_at": row.get("requested_at"),
+        "screen_evidence_url": mask_url(evidence_url)[:1000],
+        "step_summaries": [describe(st, i, "step") for i, st in enumerate(steps, start=1)]
+        + [describe(st, len(steps) + i, "verify") for i, st in enumerate(verify, start=1)],
+    }
+
+
+async def decide_registration_as_human(
+    registration_id: Any,
+    *,
+    tenant_id: Any,
+    decision: str,
+    principal: Mapping[str, Any],
+    reason: str = "",
+    confirm_high_risk: bool = False,
+) -> dict[str, Any]:
+    """The only entry for person-initiated decisions (dashboard and chat card).
+
+    decided_by is taken from the authenticated principal, never from a request body.
+    """
+    if not is_human_principal(principal):
+        raise HumanDeciderRequired("human_decider_required")
+    decider = decider_identity(principal)
+    verdict = str(decision or "").strip().lower()
+    if verdict == "approve":
+        row = await get_registration(registration_id, tenant_id=tenant_id)
+        if row is None:
+            raise RegistrationError("registration_not_found")
+        user_id, email, _ = _principal_ids(principal)
+        if _same_identity(row.get("requested_by"), email) or _same_identity(
+            row.get("requested_by"), user_id
+        ):
+            raise SelfApprovalBlocked("self_approval_blocked")
+        spec = _object_or_empty(row.get("spec"))
+        max_risk = _spec_max_risk(spec) if spec else str(
+            _object_or_empty(row.get("dry_run")).get("max_risk") or "IRREVERSIBLE"
+        )
+        if requires_high_risk_confirmation(max_risk) and confirm_high_risk is not True:
+            raise HighRiskConfirmationRequired("high_risk_confirmation_required")
+    return await decide_registration(
+        registration_id,
+        tenant_id=tenant_id,
+        decision=decision,
+        decided_by=decider,
+        reason=reason,
+    )
+
+
 async def decide_registration(
     registration_id: Any,
     *,
@@ -251,6 +439,9 @@ async def decide_registration(
                 str(reason or ""),
             )
             return _row(updated)
+
+        if _same_identity(row["requested_by"], decided_by):
+            raise SelfApprovalBlocked("self_approval_blocked")
 
         spec = _json_object(row["spec"])
         recipe = parse_recipe(spec)
