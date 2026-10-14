@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -19,14 +20,75 @@ from app.services.browser_recipe_registry import (
     matches_coupangeats_vault_identity,
 )
 
+logger = logging.getLogger(__name__)
+
 _URL_HOST = re.compile(r"https?://([^/\s]+)", re.IGNORECASE)
 
 
-async def resolve_recipe(directive_text: str, tenant_id: Any) -> WorkRecipe | None:
-    """도메인 또는 정확한 레시피 이름이 지시에 드러난 후보만 선택한다."""
+_DATE_WORDS = re.compile(
+    r"그저께|그제|어제|오늘|내일|이번\s*주|지난\s*주|저번\s*주|이번\s*달|지난\s*달|저번\s*달|금주|전주|금일|전일|당일"
+)
+_REQUEST_ENDING = re.compile(
+    r"^(.*?)(해줘|해주세요|해줄래|받아줘|받아주세요|알려줘|알려주세요|보여줘|보여주세요|가져와|가져와줘|뽑아줘|줘|주세요)$"
+)
+_NON_WORD = re.compile(r"[^\w]+", re.UNICODE)
+
+
+def _squash(value: str) -> str:
+    return _NON_WORD.sub("", _DATE_WORDS.sub(" ", value.casefold()))
+
+
+def _content_tokens(text: str) -> list[str]:
+    tokens: list[str] = []
+    for raw in _DATE_WORDS.sub(" ", text.casefold()).split():
+        token = _NON_WORD.sub("", raw)
+        ending = _REQUEST_ENDING.match(token)
+        if ending:
+            token = ending.group(1)
+        if len(token) >= 2:
+            tokens.append(token)
+    return tokens
+
+
+def _draft_phrase_matches(text: str, tokens: list[str], phrase: str) -> bool:
+    squashed = _squash(phrase)
+    if len(squashed) < 2:
+        return False
+    return squashed in _squash(text) or bool(tokens and all(token in squashed for token in tokens))
+
+
+async def _draft_recipe_names(directive_text: str, tenant_id: Any) -> set[str]:
+    """active 자동화 초안의 title·aliases 와 지시가 맞으면 그 초안의 레시피 이름을 돌려준다."""
+    from app.services import automation_draft_service as drafts
+
+    if not drafts.drafts_enabled():
+        return set()
+    try:
+        active = await drafts.list_active_drafts(tenant_id=str(tenant_id))
+    except Exception:
+        logger.warning("automation_draft_lookup_failed", exc_info=True)
+        return set()
+    tokens = _content_tokens(directive_text)
+    names: set[str] = set()
+    for draft in active:
+        phrases = [str(draft.get("title") or ""), *(str(a) for a in draft.get("aliases") or [])]
+        if any(_draft_phrase_matches(directive_text, tokens, phrase) for phrase in phrases):
+            names.update(str(n) for n in draft.get("recipe_names") or [])
+    return names
+
+
+def _row_recipe(row: Mapping[str, Any]) -> WorkRecipe | None:
+    recipe = row_to_recipe(row)
+    if recipe is None and isinstance(row.get("spec"), Mapping):
+        recipe = parse_recipe(row["spec"])
+    return recipe
+
+
+async def resolve_recipe_candidates(directive_text: str, tenant_id: Any) -> list[WorkRecipe]:
+    """지시에 맞는 레시피 후보 전체. 도메인·이름 매칭이 우선이고, 없을 때만 자동화 제목·별칭을 본다."""
     text = str(directive_text or "").strip().casefold()
     if not text:
-        return None
+        return []
     hosts = {normalize_domain(match) for match in _URL_HOST.findall(text)}
     rows = await list_recipes(tenant_id=tenant_id)
     name_matches: list[WorkRecipe] = []
@@ -38,21 +100,36 @@ async def resolve_recipe(directive_text: str, tenant_id: Any) -> WorkRecipe | No
         domain_match = bool(domain and (domain in text or domain in hosts))
         if not (name_match or domain_match):
             continue
-        recipe = row_to_recipe(row)
-        if recipe is None and isinstance(row.get("spec"), Mapping):
-            recipe = parse_recipe(row["spec"])
+        recipe = _row_recipe(row)
         if recipe is not None:
             if name_match:
                 name_matches.append(recipe)
             elif domain_match:
                 domain_matches.append(recipe)
     # 사용자가 이름을 명시한 단일 후보는 같은 도메인의 다른 레시피보다 강하다.
-    # 이름 후보끼리도 둘 이상이면 추측하지 않고, 이름이 없을 때만 도메인을 쓴다.
-    if len(name_matches) == 1:
-        return name_matches[0]
+    # 이름 후보가 있으면 도메인 후보는 쓰지 않는다.
     if name_matches:
-        return None
-    return domain_matches[0] if len(domain_matches) == 1 else None
+        return name_matches
+    if domain_matches:
+        return domain_matches
+    if not rows:
+        return []
+    names = await _draft_recipe_names(directive_text, tenant_id)
+    if not names:
+        return []
+    found: list[WorkRecipe] = []
+    for row in rows:
+        if str(row.get("name") or "") in names:
+            recipe = _row_recipe(row)
+            if recipe is not None:
+                found.append(recipe)
+    return found
+
+
+async def resolve_recipe(directive_text: str, tenant_id: Any) -> WorkRecipe | None:
+    """후보가 정확히 하나일 때만 선택한다. 둘 이상이면 추측하지 않고 None."""
+    candidates = await resolve_recipe_candidates(directive_text, tenant_id)
+    return candidates[0] if len(candidates) == 1 else None
 
 
 async def run_directive(

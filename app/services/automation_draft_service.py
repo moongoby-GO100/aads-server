@@ -339,6 +339,17 @@ async def get_draft(draft_id: str, *, tenant_id: str) -> dict[str, Any] | None:
     return _row(record)
 
 
+async def list_active_drafts(*, tenant_id: str) -> list[dict[str, Any]]:
+    """반복 실행 매칭용: active 상태 초안의 title·aliases·recipe_names 만 읽는다."""
+    async with get_pool().acquire() as conn:
+        records = await conn.fetch(
+            "SELECT id, title, aliases, recipe_names FROM automation_drafts "
+            "WHERE tenant_id=$1::uuid AND state='active'",
+            str(tenant_id),
+        )
+    return [dict(record) for record in records]
+
+
 async def transition(
     draft_id: str,
     from_state: str,
