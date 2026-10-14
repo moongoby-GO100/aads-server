@@ -145,9 +145,10 @@ def test_milestone_from_other_goal_is_dropped_not_guessed():
 class _FakeConn:
     """goals/milestones 조회만 답하는 최소 가짜 커넥션."""
 
-    def __init__(self, goal_row=None, milestone_owned=True):
+    def __init__(self, goal_row=None, milestone_owned=True, milestone_status="in_progress"):
         self._goal_row = goal_row
         self._milestone_owned = milestone_owned
+        self._milestone_status = milestone_status
         self.executed = []
 
     def transaction(self):
@@ -167,7 +168,7 @@ class _FakeConn:
 
     async def fetchval(self, query, *args):
         if "FROM milestones" in query:
-            return "in_progress" if self._milestone_owned else None
+            return self._milestone_status if self._milestone_owned else None
         if "FROM pipeline_jobs" in query:
             return "00000000-0000-0000-0000-000000000001"
         return None
@@ -203,7 +204,11 @@ def _run_auto_link(monkeypatch, goal_row, **kwargs):
     linked: dict = {}
     if goal_row is not None and "tenant_id" not in goal_row:
         goal_row = {**goal_row, "tenant_id": "00000000-0000-0000-0000-000000000001"}
-    conn = _FakeConn(goal_row, milestone_owned=kwargs.pop("milestone_owned", True))
+    conn = _FakeConn(
+        goal_row,
+        milestone_owned=kwargs.pop("milestone_owned", True),
+        milestone_status=kwargs.pop("milestone_status", "in_progress"),
+    )
 
     class _FakeMachine:
         async def _pool(self):
@@ -233,26 +238,102 @@ def test_explicit_valid_binding_creates_link(monkeypatch):
     assert linked["bind_source"] == BIND_SOURCE_EXPLICIT_API
 
 
-def test_blocked_goal_accepts_only_explicit_remediation(monkeypatch):
-    goal_row = {
-        "id": GOAL_A,
-        "tenant_id": "00000000-0000-0000-0000-000000000001",
-        "project": "AADS",
-        "status": "blocked",
-    }
-    instruction = (
-        f"GOAL_ID: {GOAL_A}\nMILESTONE_ID: {MILESTONE_A}\n"
-        "REMEDIATION_PURPOSE: restore-goal-control-loop\n"
-    )
+_BLOCKED_GOAL = {
+    "id": GOAL_A,
+    "tenant_id": "00000000-0000-0000-0000-000000000001",
+    "project": "AADS",
+    "status": "blocked",
+}
+_BLOCKED_DIRECTIVE = f"GOAL_ID: {GOAL_A}\nMILESTONE_ID: {MILESTONE_A}\n"
+
+
+def test_blocked_goal_remediation_still_links(monkeypatch):
     result, linked = _run_auto_link(
-        monkeypatch, goal_row, instruction=instruction,
+        monkeypatch, _BLOCKED_GOAL,
+        instruction=_BLOCKED_DIRECTIVE + "REMEDIATION_PURPOSE: restore-goal-control-loop\n",
     )
     assert result.goal_id == GOAL_A
     assert linked["milestone_id"] == MILESTONE_A
 
+
+@pytest.mark.parametrize("status", ["pending", "in_progress", "blocked"])
+def test_blocked_goal_open_milestone_links_without_remediation(monkeypatch, status, caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO):
+        result, linked = _run_auto_link(
+            monkeypatch, _BLOCKED_GOAL, instruction=_BLOCKED_DIRECTIVE, milestone_status=status,
+        )
+    assert result == (GOAL_A, MILESTONE_A)
+    assert linked["goal_id"] == GOAL_A
+    assert linked["milestone_id"] == MILESTONE_A
+    assert "goal_linked_blocked_explicit_milestone" in caplog.text
+
+
+def test_blocked_goal_link_updates_job_but_never_goal_or_milestone_state(monkeypatch):
+    from app.services import pipeline_runner_service as prs
+    import app.services.goal_manager as gm
+
+    conn = _FakeConn(_BLOCKED_GOAL)
+
+    class _Machine:
+        async def _pool(self):
+            return _FakePool(conn)
+
+    monkeypatch.setattr(gm, "goal_state_machine", _Machine())
+    asyncio.run(prs._link_job_to_goal_explicit(
+        "runner-test", "AADS", instruction=_BLOCKED_DIRECTIVE,
+    ))
+    writes = [q for q, _ in conn.executed]
+    assert any("UPDATE pipeline_jobs" in q for q in writes)
+    assert any("INSERT INTO goal_task_links" in q for q in writes)
+    assert not any("UPDATE goals" in q or "UPDATE milestones" in q for q in writes)
+
+
+@pytest.mark.parametrize("status", ["completed", "cancelled", "archived", "superseded"])
+def test_blocked_goal_closed_milestone_is_not_linked(monkeypatch, status):
+    result, linked = _run_auto_link(
+        monkeypatch, _BLOCKED_GOAL, instruction=_BLOCKED_DIRECTIVE, milestone_status=status,
+    )
+    assert result is None
+    assert linked == {}
+
+
+def test_blocked_goal_closed_milestone_is_not_linked_even_with_remediation(monkeypatch):
+    result, linked = _run_auto_link(
+        monkeypatch, _BLOCKED_GOAL,
+        instruction=_BLOCKED_DIRECTIVE + "REMEDIATION_PURPOSE: x\n", milestone_status="completed",
+    )
+    assert result is None
+    assert linked == {}
+
+
+def test_blocked_goal_with_other_goals_milestone_is_not_linked(monkeypatch):
+    result, linked = _run_auto_link(
+        monkeypatch, _BLOCKED_GOAL, instruction=_BLOCKED_DIRECTIVE, milestone_owned=False,
+    )
+    assert result is None
+    assert linked == {}
+
+
+def test_blocked_goal_without_milestone_is_not_linked(monkeypatch, caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        result, linked = _run_auto_link(
+            monkeypatch, _BLOCKED_GOAL, instruction=f"GOAL_ID: {GOAL_A}\n",
+        )
+    assert result is None
+    assert linked == {}
+    assert "goal_link_rejected_milestone_required" in caplog.text
+
+
+@pytest.mark.parametrize("status", ["completed", "cancelled", "archived", "paused"])
+def test_other_inactive_goals_are_not_linked_even_with_open_milestone(monkeypatch, status):
+    goal_row = {**_BLOCKED_GOAL, "status": status}
     result, linked = _run_auto_link(
         monkeypatch, goal_row,
-        instruction=f"GOAL_ID: {GOAL_A}\nMILESTONE_ID: {MILESTONE_A}\n",
+        instruction=_BLOCKED_DIRECTIVE + "REMEDIATION_PURPOSE: x\n",
     )
     assert result is None
     assert linked == {}

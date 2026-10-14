@@ -239,6 +239,8 @@ async def _link_job_to_goal_explicit(
     지시서 메타까지 반영해 검증을 통과한 값이며, 호출부는 이 값을 그대로 저장해야 한다
     (요청 필드를 다시 넘기면 방금 쓴 milestone_id 를 NULL 로 덮는다). 지정된 목표는 작업과 같은
     프로젝트여야 하고 draft/active 상태여야 한다 — 아니면 거부하고 연결하지 않는다.
+    blocked 목표는 같은 goal·tenant·project 의 열린(pending/in_progress/blocked) 마일스톤이
+    명시된 경우에만 연결한다(REMEDIATION_PURPOSE 유무 무관). 연결만 하고 상태는 바꾸지 않는다.
     """
     binding = parse_goal_binding(instruction, goal_id=goal_id, milestone_id=milestone_id)
     if not binding.is_explicit:
@@ -269,11 +271,12 @@ async def _link_job_to_goal_explicit(
                     job_id, binding.goal_id, goal["project"], project,
                 )
                 return None
+            goal_blocked = goal["status"] == "blocked"
             blocked_remediation = (
-                goal["status"] == "blocked" and bool(binding.milestone_id)
+                goal_blocked and bool(binding.milestone_id)
                 and bool(remediation_purpose(instruction or ""))
             )
-            if goal["status"] not in ("draft", "active") and not blocked_remediation:
+            if goal["status"] not in ("draft", "active", "blocked"):
                 logger.warning(
                     "goal_link_rejected_inactive job=%s goal=%s status=%s",
                     job_id, binding.goal_id, goal["status"],
@@ -292,18 +295,20 @@ async def _link_job_to_goal_explicit(
                         "goal_link_milestone_mismatch job=%s goal=%s milestone=%s",
                         job_id, binding.goal_id, resolved_milestone,
                     )
-                    if blocked_remediation:
+                    if goal_blocked:
                         return None
                     resolved_milestone = None
-                elif blocked_remediation and milestone_status not in (
+                elif goal_blocked and milestone_status not in (
                     "pending", "in_progress", "blocked"
                 ):
                     logger.warning(
-                        "goal_link_rejected_closed_remediation_milestone job=%s milestone=%s status=%s",
+                        "%s job=%s milestone=%s status=%s",
+                        "goal_link_rejected_closed_remediation_milestone" if blocked_remediation
+                        else "goal_link_rejected_closed_milestone",
                         job_id, resolved_milestone, milestone_status,
                     )
                     return None
-            elif goal["status"] == "blocked":
+            elif goal_blocked:
                 logger.warning(
                     "goal_link_rejected_milestone_required job=%s goal=%s",
                     job_id, binding.goal_id,
@@ -329,10 +334,16 @@ async def _link_job_to_goal_explicit(
                 job_tenant, binding.goal_id, resolved_milestone, job_id, binding.source,
                 f"pipeline_job:{job_id}",
             )
-        logger.info(
-            "goal_linked_explicit: job=%s goal=%s milestone=%s source=%s project=%s",
-            job_id, binding.goal_id, resolved_milestone, binding.source, project,
-        )
+        if goal_blocked and not blocked_remediation:
+            logger.info(
+                "goal_linked_blocked_explicit_milestone: job=%s goal=%s milestone=%s source=%s project=%s",
+                job_id, binding.goal_id, resolved_milestone, binding.source, project,
+            )
+        else:
+            logger.info(
+                "goal_linked_explicit: job=%s goal=%s milestone=%s source=%s project=%s",
+                job_id, binding.goal_id, resolved_milestone, binding.source, project,
+            )
         return GoalLink(binding.goal_id, resolved_milestone)
     except Exception as exc:
         logger.warning("goal_link_failed job=%s: %s", job_id, exc)
