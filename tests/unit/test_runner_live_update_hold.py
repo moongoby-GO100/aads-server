@@ -1,7 +1,9 @@
 """HOLD controller regressions with real Git, Bash, flock and fixture processes.
 
-There is intentionally no positive apply test: this release has no apply path.
-Only fixture subprocesses are stopped; production services are never mutated.
+These cover every fail-closed path (no/invalid manifest, legacy actor, untrusted
+companion, fixed entrypoint paths). The positive apply path and its rollback are
+in test_runner_live_release_apply.py. Only fixture subprocesses are stopped;
+production services are never mutated.
 """
 import hashlib
 import importlib.util
@@ -136,12 +138,12 @@ def test_aware_without_release_config_still_defers_and_keeps_worker(host):
     assert not (host.path / 'applied').exists()
 
 
-@pytest.mark.parametrize('manifest_kind', ['complete', 'invalid_json', 'shell_payload', 'symlink'])
-def test_even_complete_manifest_cannot_enable_auto_apply(host, manifest_kind):
+@pytest.mark.parametrize('manifest_kind', ['legacy_schema', 'invalid_json', 'shell_payload', 'symlink'])
+def test_malformed_manifest_defers_invalid_without_any_effect(host, manifest_kind):
     actor = aware_actor(host, orphan=True)
     manifest = host.path / 'release.json'
     marker = host.path / 'manifest-executed'
-    if manifest_kind == 'complete':
+    if manifest_kind == 'legacy_schema':
         manifest.write_text(json.dumps({'commit': '0' * 40, 'runtime_protocol': 1,
                                         'runner_sha256': hashlib.sha256((host.path / 'actor.sh').read_bytes()).hexdigest(),
                                         'helper_sha256': PINNED, 'approved': True}))
@@ -153,7 +155,7 @@ def test_even_complete_manifest_cannot_enable_auto_apply(host, manifest_kind):
         manifest.symlink_to(host.path / 'actor.sh')
     protocol.wait_for(lambda: (host.path / 'claims').exists())
     before = (host.path / 'claims').read_bytes()
-    assert_deferred(gate(host), 'RELEASE_MANIFEST_NOT_ACCEPTED_AUTO_APPLY_DISABLED')
+    assert_deferred(gate(host), 'RELEASE_MANIFEST_INVALID')
     assert actor.poll() is None
     protocol.wait_for(lambda: (host.path / 'claims').read_bytes() != before)
     assert not marker.exists()
@@ -229,7 +231,7 @@ def test_entrypoint_cannot_checkout_advanced_origin_even_with_apply_argument(tmp
                 'DEFER runner-live-update reason=' + reason for reason in (
                     'COMPANION_MISSING_OR_UNTRUSTED', 'BOOTSTRAP_REQUIRED', 'PREFLIGHT_UNKNOWN',
                     'RELEASE_MANIFEST_MISSING_AUTO_APPLY_DISABLED',
-                    'RELEASE_MANIFEST_NOT_ACCEPTED_AUTO_APPLY_DISABLED')}
+                    'RELEASE_MANIFEST_INVALID')}
         assert Path(f'/proc/{actor.pid}/fd/255').stat().st_ino == before[-1]
         assert actor.poll() is None
         assert (live / 'worker-output.txt').read_text() == 'untracked worker evidence'
@@ -264,14 +266,20 @@ runner_live_update_main
     assert not (host.path / 'systemctl-mutations').exists()
 
 
-def test_entrypoint_paths_are_fixed_and_positive_apply_is_absent():
+def test_entrypoint_paths_are_fixed_and_apply_is_gated():
     text = SCRIPT.read_text()
     main = text.split('runner_live_update_main() {', 1)[1].split('\n}', 1)[0]
     assert '/usr/local/lib/aads-runner/runner_busy_lib.sh' in main
     assert '/etc/aads/runner-live-release.json' in main
     assert '/run/aads-runner-maintenance' in main
+    assert '/root/aads/runner-live' in main
     assert 'AADS_RUNNER_LIVE_DIR' not in main
-    assert 'runner_maintenance_transaction' not in text
-    assert 'systemctl restart' not in text
-    assert 'git checkout' not in text
-    assert 'git fetch' not in text
+    assert '$AADS' not in main and '${AADS' not in main
+    # The only checkout that moves forward is the leased callback; restart is
+    # delegated to restart_local_runner.sh, never a direct systemctl action.
+    assert text.count('checkout --quiet --detach "$release_sha"') == 1
+    assert 'restart_local_runner.sh' in text
+    for forbidden in ('systemctl restart', 'systemctl stop', 'systemctl start', 'systemctl kill',
+                      'git reset', 'git pull', 'git clean', 'git stash', 'pkill', 'kill -'):
+        assert forbidden not in text, forbidden
+    assert 'source "$release_manifest"' not in text and 'eval "$fields"' not in text

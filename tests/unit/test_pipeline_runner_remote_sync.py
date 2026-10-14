@@ -247,8 +247,22 @@ def test_local_restart_wrapper_checks_before_restarting():
     local = (ROOT / "scripts" / "restart_local_runner.sh").read_text(encoding="utf-8")
 
     gate = local.index("if should_defer_for_busy")
-    restart = local.index('systemctl restart "$SERVICE"')
+    # restart_under_maintenance() is only defined above the gate; the call that runs it is below.
+    restart = local.index('runner_maintenance_transaction "$SERVICE" 30')
     assert gate < restart
+
+
+def test_local_restart_lease_held_option_never_opens_its_own_transaction():
+    local = (ROOT / "scripts" / "restart_local_runner.sh").read_text(encoding="utf-8")
+
+    assert "--lease-held)" in local
+    branch = local.split('if [[ "$LEASE_HELD" == "1" ]]; then', 1)[1].split("\nfi\n", 1)[0]
+    assert "restart_under_maintenance" in branch
+    assert "runner_maintenance_transaction" not in branch
+    assert "db_active_job_count" not in branch
+    # the process probe and AWARE preflight still run before the branch
+    assert local.index("runner_live_process_probe") < local.index('if [[ "$LEASE_HELD" == "1" ]]')
+    assert local.index("preflight /run/aads-runner-maintenance") < local.index('if [[ "$LEASE_HELD" == "1" ]]')
 
 
 # ── 호스트별 결과 분리 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD, 2026-09-29) ──

@@ -10,6 +10,12 @@
 #
 # 이 래퍼는 원격 동기화와 **같은 규칙**(runner_busy_lib.sh)으로 판정한다.
 #
+# --lease-held: 호출자(runner_live_update.sh)가 이미 admission+lifetime EX 를 쥔
+# 트랜잭션 안에서 부른다. 같은 lock 을 다른 fd 로 다시 EX 요청하면 교착하므로
+# 자체 트랜잭션을 열지 않고 restart_under_maintenance 만 실행한다. lifetime EX 를
+# 쥐고 있다는 것이 곧 작업 0건의 보증이라 DB busy 판정은 생략한다(프로세스 probe 와
+# AWARE preflight 는 그대로 수행한다).
+#
 # 종료코드: 0=재시작함 / 3=실행중 작업 때문에 미룸 / 2=사용법 오류
 set -euo pipefail
 
@@ -17,14 +23,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE="${AADS_LOCAL_RUNNER_SERVICE:-aads-pipeline-runner.service}"
 IGNORE_BUSY="${AADS_RUNNER_SYNC_IGNORE_BUSY:-0}"
 DRY_RUN=0
+LEASE_HELD=0
 
 usage() {
     cat <<'EOF'
-Usage: restart_local_runner.sh [--service NAME] [--ignore-busy] [--dry-run]
+Usage: restart_local_runner.sh [--service NAME] [--ignore-busy] [--dry-run] [--lease-held]
 
 실행 중인 작업이 있으면 재시작하지 않고 종료코드 3 으로 끝낸다.
 --ignore-busy 는 실제 작업자 부재가 확인된 뒤 DB busy count만 우회한다.
 살아 있는 프로세스 또는 조회 불명은 이 옵션으로 우회할 수 없다.
+--lease-held 는 호출자가 두 maintenance lease 를 이미 쥐고 있을 때만 쓴다(교착 방지).
 EOF
 }
 
@@ -41,6 +49,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --dry-run)
             DRY_RUN=1
+            shift
+            ;;
+        --lease-held)
+            LEASE_HELD=1
             shift
             ;;
         -h|--help)
@@ -91,6 +103,24 @@ if [[ "$maintenance_state" != AWARE ]]; then
     exit 3
 fi
 
+restart_under_maintenance() {
+    local restart_plan
+    restart_plan=$(runner_maintenance_metadata restart-plan /run/aads-runner-maintenance "$SERVICE") || return 1
+    systemctl restart "$SERVICE" || return 1
+    systemctl is-active "$SERVICE" || return 1
+    [[ "$(runner_maintenance_metadata restart-verify /run/aads-runner-maintenance "$SERVICE" "$restart_plan")" == AWARE ]]
+}
+
+if [[ "$LEASE_HELD" == "1" ]]; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+        log "DRY_RUN: would systemctl restart ${SERVICE} (lease-held)"
+        exit 0
+    fi
+    restart_under_maintenance || exit "$?"
+    log "재시작 완료(lease-held) — state=$(systemctl is-active "$SERVICE" 2>/dev/null || true) pid=$(systemctl show -p MainPID --value "$SERVICE" 2>/dev/null || true)"
+    exit 0
+fi
+
 host_name=$(local_runner_host_name)
 busy_count=$(db_active_job_count "$host_name")
 service_state=$(systemctl is-active "$SERVICE" 2>/dev/null || true)
@@ -108,13 +138,6 @@ if [[ "$DRY_RUN" == "1" ]]; then
     exit 0
 fi
 
-restart_under_maintenance() {
-    local restart_plan
-    restart_plan=$(runner_maintenance_metadata restart-plan /run/aads-runner-maintenance "$SERVICE") || return 1
-    systemctl restart "$SERVICE" || return 1
-    systemctl is-active "$SERVICE" || return 1
-    [[ "$(runner_maintenance_metadata restart-verify /run/aads-runner-maintenance "$SERVICE" "$restart_plan")" == AWARE ]]
-}
 runner_maintenance_transaction "$SERVICE" 30 /run/aads-runner-maintenance restart_under_maintenance || exit "$?"
 sleep 3
 log "재시작 완료 — state=$(systemctl is-active "$SERVICE" 2>/dev/null || true) pid=$(systemctl show -p MainPID --value "$SERVICE" 2>/dev/null || true)"
