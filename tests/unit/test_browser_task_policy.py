@@ -755,3 +755,56 @@ def test_browser_recipe_resource_claim_matches_budget_fields():
         "runtime_seconds": 1800,
         "artifact_budget_mb": 512,
     }
+
+
+LOGIN_PAGE_WITH_RECAPTCHA_SOURCE = (
+    '<html><head><script src="https://www.google.com/recaptcha/api.js" async defer></script>'
+    '<script>var c = grecaptcha; /* I am not a robot widget loads here */</script></head>'
+    '<body><h1>로그인</h1><label>아이디</label><input name="id"><label>비밀번호</label>'
+    '<input type="password"><button>로그인</button>'
+    '<p>This site is protected by reCAPTCHA and the Google Privacy Policy and Terms of Service apply.</p></body></html>'
+)
+
+
+def test_block_cause_normal_login_page_with_recaptcha_script_is_not_captcha():
+    for body in (
+        LOGIN_PAGE_WITH_RECAPTCHA_SOURCE,
+        "로그인 아이디 비밀번호 This site is protected by reCAPTCHA and the Google Privacy Policy and Terms of Service apply.",
+        "Hotpot and footprint menu, sign in with your password",
+    ):
+        diagnosis = classify_playwright_access(status="captured", http_status=200, page_title="Login", body_text=body)
+        assert diagnosis["block_cause"] == "normal", body
+        assert diagnosis["category"] == "auth_required", body
+        assert diagnosis["block_evidence"] == []
+
+
+def test_block_cause_normal_page_does_not_claim_login_success():
+    diagnosis = classify_playwright_access(status="reachable", http_status=200, body_text="Dashboard")
+    assert diagnosis["block_cause"] == "normal"
+    assert diagnosis["login_verified"] is False
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        ({"http_status": 403, "body_text": "Access Denied. You don't have permission to access this server."}, "access_denied"),
+        ({"http_status": 403, "body_text": ""}, "access_denied"),
+        ({"http_status": 200, "page_title": "Access Denied", "body_text": "Reference #18.abc errors.edgesuite.net"}, "access_denied"),
+        ({"http_status": 200, "body_text": "I'm not a robot. Solve the CAPTCHA to continue"}, "captcha"),
+        ({"http_status": 403, "page_title": "Just a moment...", "body_text": "Checking your browser"}, "captcha"),
+        ({"http_status": 200, "body_text": "보안문자 숫자를 입력하십시오"}, "captcha"),
+        ({"http_status": 200, "body_text": "아이디 또는 비밀번호가 일치하지 않습니다."}, "login_error"),
+        ({"http_status": 200, "body_text": "Login failed: invalid credentials"}, "login_error"),
+        ({"http_status": 200, "body_text": "Enter the OTP sent to your phone"}, "otp_required"),
+    ],
+)
+def test_block_cause_classifies_visible_signals(kwargs, expected):
+    diagnosis = classify_playwright_access(status="captured", **kwargs)
+    assert diagnosis["block_cause"] == expected
+    assert diagnosis["block_evidence"]
+
+
+def test_block_cause_403_keeps_existing_unknown_category_and_does_not_guess_region():
+    diagnosis = classify_playwright_access(status="reachable", http_status=403, body_text="Access Denied")
+    assert diagnosis["category"] == "access_restricted_unknown"
+    assert diagnosis["block_cause"] == "access_denied"

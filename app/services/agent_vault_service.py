@@ -150,6 +150,108 @@ async def get_agent_credential_for_url(
     return _row_to_credential(row, include_secret=True)
 
 
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def strict_origin(url: str) -> str:
+    """scheme://host[:port] of an absolute http(s) URL, or "" when not exact.
+
+    Unlike normalize_origin this never falls back to the raw text: schemeless
+    input, userinfo (https://a.com@evil.com) and other schemes yield "" so the
+    caller fails closed.
+    """
+    try:
+        parsed = urlparse((url or "").strip())
+        port = parsed.port
+    except ValueError:
+        return ""
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    if scheme not in _DEFAULT_PORTS or not host or parsed.username is not None or parsed.password is not None:
+        return ""
+    netloc = host if port in (None, _DEFAULT_PORTS[scheme]) else f"{host}:{port}"
+    return f"{scheme}://{netloc}"
+
+
+def verify_injection_origin(*, credential_origin: str, final_url: str, login_url: str = "") -> dict[str, Any]:
+    """Gate for token/cookie injection: call it with the page URL *after* navigation.
+
+    A redirect to another site must not receive the credential's token.
+    """
+    expected = {o for o in (strict_origin(credential_origin), strict_origin(login_url)) if o}
+    actual = strict_origin(final_url)
+    if not expected:
+        return {"ok": False, "reason": "credential_origin_invalid", "final_origin": actual}
+    if not actual:
+        return {"ok": False, "reason": "final_origin_unknown", "final_origin": ""}
+    if actual not in expected:
+        return {"ok": False, "reason": "final_origin_mismatch", "final_origin": actual}
+    return {"ok": True, "reason": "origin_confirmed", "final_origin": actual}
+
+
+def credential_matches_exactly(row: Any, *, url_origin: str, account: str) -> bool:
+    """True only when origin (credential origin or metadata.login_url) and username are exact."""
+    item = dict(row)
+    allowed = {strict_origin(str(item.get("origin") or ""))}
+    allowed.add(strict_origin(str(_json_dict(item.get("metadata")).get("login_url") or "")))
+    allowed.discard("")
+    if not url_origin or url_origin not in allowed:
+        return False
+    try:
+        return decrypt_value(item["username_enc"]) == account
+    except Exception:  # noqa: BLE001 - undecryptable row never matches
+        return False
+
+
+async def match_credential_exact(
+    *,
+    tenant_id: str,
+    url: str,
+    account: str,
+    work_key: str | None = None,
+    user_id: str = "browser-e2e",
+) -> dict[str, Any] | None:
+    """Active credential whose tenant, origin and account all match exactly, else None.
+
+    Sibling/lookalike hosts (store.coupangeats.com.evil, coupang.com vs
+    coupangeats.com), other tenants and other accounts never match. Same
+    return shape as get_agent_credential_for_url (server-side, with secret).
+    """
+    url_origin = strict_origin(url)
+    if not url_origin or not (account or "").strip():
+        return None
+    tenant_uuid = _tenant_uuid(tenant_id)
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT *
+              FROM agent_vault_credentials
+             WHERE tenant_id = $1
+               AND is_active = TRUE
+             ORDER BY label
+            """,
+            tenant_uuid,
+        )
+        matches = [r for r in rows if credential_matches_exactly(r, url_origin=url_origin, account=account)]
+        if work_key:
+            matches.sort(key=lambda r: 0 if r["work_key"] == work_key else 1)
+        if not matches:
+            return None
+        row = matches[0]
+        await write_access_log(
+            conn=conn,
+            tenant_id=tenant_id,
+            credential_id=str(row["id"]),
+            work_key=str(row["work_key"] or work_key or ""),
+            origin=url_origin,
+            action="credential_exact_resolve",
+            status="success",
+            user_id=user_id,
+            details={"source": "browser_tool", "url_origin": url_origin},
+        )
+    return _row_to_credential(row, include_secret=True)
+
+
 async def get_agent_credential_by_id(*, tenant_id: str, credential_id: str) -> dict[str, Any] | None:
     """Server-side lookup of one active credential, scoped to the tenant.
 

@@ -5,8 +5,10 @@ import asyncio
 from contextlib import asynccontextmanager
 import base64
 import json
+import ipaddress
 import logging
 import hashlib
+import re
 import secrets
 import uuid
 from typing import Any
@@ -26,18 +28,24 @@ SELF_HOSTED_LIVE_CAPTURE_TIMEOUT_MS = 12_000
 SELF_HOSTED_LIVE_VIEWPORT = {"width": 1366, "height": 768}
 _SELF_HOSTED_CAPTURE_LOCKS: dict[str, asyncio.Lock] = {}
 ACCESS_TEXT_LIMIT = 20_000
+EGRESS_IP_ECHO_URL = "https://api.ipify.org?format=json"
+EGRESS_IP_TIMEOUT_MS = 5_000
 
 
 ACCESS_MARKERS = {
     "challenge_required": (
-        "captcha",
-        "recaptcha",
-        "hcaptcha",
-        "turnstile",
-        "otp",
+        "enter the captcha",
+        "captcha code",
+        "solve the captcha",
+        "complete the captcha",
+        "captcha verification",
+        "i'm not a robot",
+        "i am not a robot",
         "one-time",
         "security code",
         "verification code",
+        "로봇이 아닙니다",
+        "자동입력 방지",
         "보안문자",
         "인증번호",
         "본인인증",
@@ -655,6 +663,79 @@ async def _open_self_hosted_page(playwright: Any, profile: dict[str, Any], egres
             await context.close()
 
 
+_OTP_WORD = re.compile(r"\botp\b")
+_CAPTCHA_BADGE = re.compile(r"protected by (?:re)?captcha[^.\n]{0,200}")
+BLOCK_CAUSE_MARKERS = {
+    "captcha": (
+        "enter the captcha", "captcha code", "solve the captcha", "complete the captcha",
+        "captcha verification", "i'm not a robot", "i am not a robot", "verify you are human",
+        "checking your browser", "complete the security check", "just a moment",
+        "로봇이 아닙니다", "자동입력 방지", "보안문자",
+    ),
+    "otp_required": (
+        "one-time", "security code", "verification code", "인증번호", "본인인증",
+    ),
+    "access_denied": (
+        "access denied", "request blocked", "you have been blocked", "you don't have permission to access",
+        "errors.edgesuite.net", "error 1020", "unusual traffic", "automated traffic",
+        "접근이 거부", "접근이 제한", "접근 권한이 없",
+    ),
+    "login_error": (
+        "incorrect password", "wrong password", "invalid password", "invalid credentials",
+        "invalid username", "login failed", "authentication failed", "account is locked", "account locked",
+        "비밀번호가 일치하지", "비밀번호가 올바르지", "아이디 또는 비밀번호", "로그인에 실패", "계정이 잠", "존재하지 않는 아이디",
+    ),
+}
+
+
+def _visible_text(*parts: str) -> str:
+    """Lower-cased visible text: markup/script bodies and reCAPTCHA badge boilerplate removed."""
+    text = " ".join(str(part or "") for part in parts)[:ACCESS_TEXT_LIMIT]
+    if "<" in text:
+        low = text.lower()
+        out, pos = [], 0
+        while True:
+            start = low.find("<script", pos)
+            if start < 0:
+                out.append(text[pos:])
+                break
+            out.append(text[pos:start])
+            end = low.find("</script>", start)
+            if end < 0:
+                break
+            pos = end + len("</script>")
+        text = re.sub(r"<[^>]{0,2000}>", " ", " ".join(out))
+    return _CAPTCHA_BADGE.sub(" ", text.lower())
+
+
+def classify_block_cause(
+    *, http_status: int | None = None, page_title: str = "", body_text: str = "",
+) -> dict[str, Any]:
+    """Access denied / CAPTCHA / login error / normal (+ otp_required), from what a user could see.
+
+    A reCAPTCHA script tag or the 'protected by reCAPTCHA' badge is not a
+    CAPTCHA. Reaching the page (egress ok) is not a successful login, so
+    login_verified is always False here.
+    """
+    visible = _visible_text(page_title, body_text)
+    evidence: list[str] = []
+    cause = "unknown"
+    for name in ("captcha", "otp_required", "access_denied", "login_error"):
+        hits = [m for m in BLOCK_CAUSE_MARKERS[name] if m in visible]
+        if name == "otp_required" and _OTP_WORD.search(visible):
+            hits.append("otp")
+        if hits:
+            cause, evidence = name, hits[:3]
+            break
+    if cause == "unknown" and http_status in {401, 403, 407, 429}:
+        cause, evidence = "access_denied", [f"http_{http_status}"]
+    if cause == "unknown" and (http_status is None or 200 <= http_status < 400):
+        cause = "normal"
+    elif cause == "unknown" and http_status:
+        evidence = [f"http_{http_status}"]
+    return {"block_cause": cause, "block_evidence": evidence, "login_verified": False}
+
+
 def classify_playwright_access(
     *,
     status: str = "",
@@ -665,10 +746,9 @@ def classify_playwright_access(
     page_title: str = "",
     body_text: str = "",
 ) -> dict[str, Any]:
-    haystack = " ".join(
-        str(value or "")
-        for value in (reason, message, current_url, page_title, body_text[:ACCESS_TEXT_LIMIT])
-    ).lower()
+    haystack = _visible_text(reason, message, current_url, page_title, body_text)
+    if _OTP_WORD.search(haystack):
+        haystack += " one-time"
     category = "reachable"
     severity = "info"
     approval_required = False
@@ -745,6 +825,7 @@ def classify_playwright_access(
         "http_status": http_status,
         "self_hosted_usable": self_hosted_usable,
         "approval_required": approval_required,
+        **classify_block_cause(http_status=http_status, page_title=page_title, body_text=body_text),
     }
 
 
@@ -799,6 +880,82 @@ def build_access_remediation_plan(diagnosis: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _lane_next_steps(lane_requested: str, lane_effective: str, diagnosis: dict[str, Any]) -> list[str]:
+    cause = str(diagnosis.get("block_cause") or "")
+    if lane_effective == "unavailable":
+        return [
+            "Cafe24 egress 설정(CAFE24_EGRESS_PROXY_URL/VAULT_REF)과 server-114 SSH 터널 상태를 확인한 뒤 같은 레인으로 재시도",
+            "direct 레인으로 자동 전환하지 않음 — 바꾸려면 egress_policy 를 명시적으로 변경",
+        ]
+    if lane_effective == "cafe24":
+        return [
+            "server-114 SSH 터널 상태를 확인한 뒤 같은 레인(cafe24)으로 재시도",
+            "다른 레인이 필요하면 승인 후 egress_policy 를 명시적으로 변경",
+        ]
+    if cause == "access_denied":
+        return ["접근 거부 — 원인(IP/지역/봇 차단)은 확정되지 않음. 레인 변경은 승인 후 egress_policy 를 명시"]
+    if cause == "captcha":
+        return ["CAPTCHA 표시 — 승인된 범위 안에서만 처리하고 우회하지 않음"]
+    if cause == "login_error":
+        return ["로그인 오류 문구 — Vault 계정(tenant·origin·account) 정합을 확인. egress 문제가 아님"]
+    return ["페이지 도달만 확인됨(로그인 성공 아님) — 로그인 여부는 별도로 확인"]
+
+
+def build_lane_report(
+    result: dict[str, Any],
+    *,
+    task: dict[str, Any] | None = None,
+    egress_ip: str | None = None,
+    egress_ip_status: str = "not_probed",
+) -> dict[str, Any]:
+    """Which lane (direct/auto/cafe24) was asked for and used, the observed IP and why it failed.
+
+    Additive only: callers keep reading egress_* and remediation.next_action as before.
+    """
+    task = task or {}
+    requested = str(result.get("egress_requested") or task.get("egress_policy") or "direct")
+    effective = str(result.get("egress_effective") or "direct")
+    ok = result.get("status") in {"captured", "reachable"} and effective != "unavailable"
+    diagnosis = result.get("access_diagnosis") or {}
+    failure = ""
+    if not ok:
+        failure = str(
+            (result.get("egress_reason") if effective in {"unavailable", "cafe24"} else "")
+            or result.get("reason") or result.get("message") or "unknown_error"
+        )
+    return {
+        "lane_requested": requested,
+        "lane_effective": effective,
+        "egress_ip": egress_ip,
+        "egress_ip_status": egress_ip_status,
+        "lane_ok": ok,
+        "lane_failure_reason": failure,
+        "login_verified": False,
+        "block_cause": diagnosis.get("block_cause"),
+        "lane_next_steps": [] if ok and diagnosis.get("block_cause") == "normal" else _lane_next_steps(requested, effective, diagnosis),
+    }
+
+
+async def _observe_egress_ip(page: Any) -> tuple[str | None, str]:
+    """Ask an IP echo endpoint through the same browser context (same proxy) what IP it sees."""
+    probe = None
+    try:
+        probe = await page.context.new_page()
+        await probe.goto(EGRESS_IP_ECHO_URL, wait_until="domcontentloaded", timeout=EGRESS_IP_TIMEOUT_MS)
+        body = await probe.locator("body").inner_text(timeout=1_500)
+        ip = str(json.loads(body.strip()).get("ip") or "")
+        ipaddress.ip_address(ip)
+        return ip, "observed"
+    except Exception:
+        return None, "lookup_failed"
+    finally:
+        if probe is not None:
+            try:
+                await probe.close()
+            except Exception:
+                pass
+
+
 async def check_browser_target_access(
     *, work_key: str, target_url: str, egress_policy: str = "direct"
 ) -> dict[str, Any]:
@@ -824,6 +981,10 @@ async def check_browser_target_access(
         "remediation": build_access_remediation_plan(diagnosis),
         "runtime": "self_hosted_playwright",
         **{key: value for key, value in egress_for_target(task["egress_policy"], target_url).items() if key != "proxy"},
+        "lane": build_lane_report(
+            {**egress_for_target(task["egress_policy"], target_url), **{k: v for k, v in result.items() if k != "proxy"}, "access_diagnosis": diagnosis},
+            task=task, egress_ip=result.get("egress_ip"), egress_ip_status=str(result.get("egress_ip_status") or "not_probed"),
+        ),
     }
 
 
@@ -865,12 +1026,15 @@ async def _probe_self_hosted_playwright_access(task: dict[str, Any]) -> dict[str
                         page_title=title,
                         body_text=body_text,
                     )
+                    egress_ip, egress_ip_status = await _observe_egress_ip(page)
                     return {
                         "status": "reachable",
                         "http_status": http_status,
                         "current_url": current_url,
                         "page_title": title,
                         "access_diagnosis": diagnosis,
+                        "egress_ip": egress_ip,
+                        "egress_ip_status": egress_ip_status,
                         **{key: value for key, value in egress.items() if key != "proxy"},
                     }
             except Exception as exc:
@@ -1084,6 +1248,7 @@ async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> di
             guide="추가로 필요한 조작이 있으면 말씀해 주세요.",
             route="self_hosted_playwright",
         )
+        self_hosted["lane"] = build_lane_report(self_hosted, task=task)
         return self_hosted
 
     if self_hosted.get("egress_effective") in {"unavailable", "cafe24"}:
@@ -1097,6 +1262,7 @@ async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> di
             route="cafe24_egress",
             extra={"egress_requested": self_hosted.get("egress_requested"), "egress_reason": fail_reason},
         )
+        self_hosted["lane"] = build_lane_report(self_hosted, task=task)
         return self_hosted
 
     fail_reason = str(self_hosted.get("reason") or self_hosted.get("message") or "unknown_error")
@@ -1122,6 +1288,10 @@ async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> di
     pc_agent = await _capture_pc_agent_frame(tenant_id=tenant_id, task=task)
     if pc_agent.get("status") == "captured":
         pc_agent["fallback_from"] = self_hosted
+        pc_agent["lane"] = {
+            **build_lane_report(self_hosted, task=task),
+            "lane_fallback": {"to": "pc_agent", "reason": fail_reason},
+        }
         await record_browser_task_step(
             tenant_id=tenant_id,
             task_id=task_id,
@@ -1161,6 +1331,7 @@ async def capture_browser_task_live_frame(*, tenant_id: str, task_id: str) -> di
         "pc_agent": pc_agent,
         "access_diagnosis": diagnosis,
         "remediation": build_access_remediation_plan(diagnosis),
+        "lane": build_lane_report({**self_hosted, "access_diagnosis": diagnosis}, task=task),
     }
 
 
