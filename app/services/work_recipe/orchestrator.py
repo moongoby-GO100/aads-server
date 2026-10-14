@@ -279,6 +279,10 @@ async def run_directive(
             triggered_by=triggered_by, task_id=task_id,
         )
     shinhan_manual.assert_unregistered_runtime_host(recipe, intent_inputs)
+    pc_lane = not coupang and _recipe_requires_pc_lane(recipe)
+    if pc_lane:
+        # Vault 해석과 단계 실행보다 먼저 막는다.
+        await _assert_pc_lane_ready(recipe, browser_session_id, browser_work_key)
     resolved_inputs = await _scoped_inputs(recipe, intent_inputs)
     recorder = GuardedRunRecorder(
         domain=recipe.domain,
@@ -313,11 +317,50 @@ async def run_directive(
                 "requires_local_security_programs": bool(recipe.metadata.get("requires_local_security_programs")),
                 # 봇/WAF 가 데이터센터 IP 를 막는 사이트는 처음부터 PC 레인으로 간다.
                 # native_auth_required 를 대신 켜서 우회하지 않는다.
-                "server_access_blocked": coupang or bool(recipe.metadata.get("server_access_blocked")),
+                "server_access_blocked": coupang or pc_lane or bool(recipe.metadata.get("server_access_blocked")),
                 "requires_residential_ip": bool(recipe.metadata.get("requires_residential_ip")),
             },
         },
     )
+
+
+_PC_LANES = frozenset({"pc", "pc_agent"})
+
+
+def _recipe_requires_pc_lane(recipe: WorkRecipe) -> bool:
+    return str(recipe.metadata.get("lane") or "").strip().lower() in _PC_LANES
+
+
+async def _assert_pc_lane_ready(
+    recipe: WorkRecipe, browser_session_id: str | None, browser_work_key: str | None
+) -> None:
+    """metadata.lane 이 pc 인 레시피는 PC Agent 세션 없이는 한 단계도 실행하지 않는다."""
+    from app.browser_bridge.service import get_browser_bridge_service
+
+    service = get_browser_bridge_service()
+    session = service.sessions.get(browser_session_id) if browser_session_id else None
+    if session is None or str(session.endpoint.kind.value) != "local_agent":
+        raise ValueError("pc_lane_session_required")
+    recipe_work_key = str(recipe.metadata.get("work_key") or "")
+    if recipe_work_key and (browser_work_key != recipe_work_key or session.work_key != recipe_work_key):
+        raise ValueError("pc_lane_session_required")
+    if recipe.steps and recipe.steps[0].action != "navigate":
+        # 조각 레시피: 앞 레시피가 만든 화면 위에서 시작하므로 현재 위치를 먼저 확인한다.
+        if not _host_within(await _session_current_url(service, browser_session_id), recipe.domain):
+            raise ValueError(f"recipe_precondition_not_met:{recipe.domain}")
+
+
+async def _session_current_url(service: Any, browser_session_id: str) -> str:
+    """세션 브라우저의 실제 현재 URL. 확인하지 못하면 빈 문자열."""
+    try:
+        context, _ = await service.acquire_playwright_context(session_id=browser_session_id)
+        pages = list(getattr(context, "pages", []) or [])
+        if not pages:
+            return ""
+        return str(await pages[0].evaluate("window.location.href") or "")
+    except Exception:
+        logger.warning("recipe_precondition_url_unavailable session=%s", browser_session_id)
+        return ""
 
 
 async def _confirmation_match(directive_text: str, tenant_id: Any) -> RecipeMatch | None:
