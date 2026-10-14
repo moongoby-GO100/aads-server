@@ -28,6 +28,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 # 승인 결정은 **사람만** 부른다 — 테넌트 멤버 인증을 요구한다.
 from typing import Any as _Any
 from app.auth import TenantRole, require_tenant_role
+from app.services.server_registry import get_server_config
 
 TenantContext = dict[str, _Any]
 require_tenant_member = require_tenant_role(TenantRole.MEMBER)
@@ -367,10 +368,15 @@ def _resolve_local_file(project: str, base_path: str, file_path: str) -> Path:
     return first_candidate or (Path(normalized_base) / rel)
 
 
+def _ssh_target(host: str) -> str:
+    """정규 서버 ID(cafe24_114 등)를 ssh 가 해석하는 별칭(server-114 등)으로 바꾼다."""
+    return str(get_server_config(host).get("ssh_alias") or host)
+
+
 async def _remote_file_exists(host: str, full_path: str) -> bool:
     quoted_path = shlex.quote(full_path)
     output = await _run_cmd(
-        ["ssh", "-o", "ConnectTimeout=5", host, f"test -f {quoted_path} && printf exists"],
+        ["ssh", "-o", "ConnectTimeout=5", _ssh_target(host), f"test -f {quoted_path} && printf exists"],
         timeout=8,
     )
     return output.strip() == "exists"
@@ -680,7 +686,7 @@ async def _scan_remote(host: str, base: str, exclude: list[str] | None = None, i
     """SSH로 원격 서버 스캔."""
     ext_pattern = " -o ".join(f'-name "*.{ext.lstrip(".")}"' for ext in EXTENSIONS)
     find_cmd = f'find {base} -type f \\( {ext_pattern} \\) -printf "%P\\t%s\\t%T@\\n" 2>/dev/null'
-    output = await _run_cmd(["ssh", "-o", "ConnectTimeout=5", host, find_cmd], timeout=15)
+    output = await _run_cmd(["ssh", "-o", "ConnectTimeout=5", _ssh_target(host), find_cmd], timeout=15)
     if not output.strip():
         return []
     results = []
@@ -2339,7 +2345,7 @@ async def get_doc_content(
         if ext in EXCEL_EXTENSIONS:
             quoted_full_path = shlex.quote(full_path)
             b64_output = await _run_cmd(
-                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 {quoted_full_path} 2>/dev/null"],
+                ["ssh", "-o", "ConnectTimeout=5", _ssh_target(host), f"base64 -w0 {quoted_full_path} 2>/dev/null"],
                 timeout=15,
             )
             if not b64_output:
@@ -2366,7 +2372,7 @@ async def get_doc_content(
         if ext in DOCX_EXTENSIONS:
             quoted_full_path = shlex.quote(full_path)
             b64_output = await _run_cmd(
-                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 {quoted_full_path} 2>/dev/null"],
+                ["ssh", "-o", "ConnectTimeout=5", _ssh_target(host), f"base64 -w0 {quoted_full_path} 2>/dev/null"],
                 timeout=15,
             )
             if not b64_output:
@@ -2388,7 +2394,7 @@ async def get_doc_content(
         if ext in (XML_OFFICE_EXTENSIONS - EXCEL_EXTENSIONS - DOCX_EXTENSIONS):
             quoted_full_path = shlex.quote(full_path)
             b64_output = await _run_cmd(
-                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 {quoted_full_path} 2>/dev/null"],
+                ["ssh", "-o", "ConnectTimeout=5", _ssh_target(host), f"base64 -w0 {quoted_full_path} 2>/dev/null"],
                 timeout=15,
             )
             if not b64_output:
@@ -2410,7 +2416,7 @@ async def get_doc_content(
         if ext in LEGACY_OFFICE_EXTENSIONS:
             quoted_full_path = shlex.quote(full_path)
             b64_output = await _run_cmd(
-                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 {quoted_full_path} 2>/dev/null"],
+                ["ssh", "-o", "ConnectTimeout=5", _ssh_target(host), f"base64 -w0 {quoted_full_path} 2>/dev/null"],
                 timeout=15,
             )
             if not b64_output:
@@ -2433,7 +2439,7 @@ async def get_doc_content(
             # SSH base64 인코딩으로 바이너리 안전 전송
             quoted_full_path = shlex.quote(full_path)
             b64_output = await _run_cmd(
-                ["ssh", "-o", "ConnectTimeout=5", host, f"base64 -w0 {quoted_full_path} 2>/dev/null"],
+                ["ssh", "-o", "ConnectTimeout=5", _ssh_target(host), f"base64 -w0 {quoted_full_path} 2>/dev/null"],
                 timeout=15,
             )
             if not b64_output:
@@ -2442,7 +2448,7 @@ async def get_doc_content(
         else:
             quoted_full_path = shlex.quote(full_path)
             content = await _run_cmd(
-                ["ssh", "-o", "ConnectTimeout=5", host, f"cat {quoted_full_path}"],
+                ["ssh", "-o", "ConnectTimeout=5", _ssh_target(host), f"cat {quoted_full_path}"],
                 timeout=10,
             )
             if not content:
