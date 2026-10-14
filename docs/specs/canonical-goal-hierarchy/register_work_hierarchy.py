@@ -3,7 +3,12 @@
 
 - 기본은 --dry-run: 명세 90건을 만들고 자체 검증만 한다(네트워크 없음).
 - --apply: 공식 API(POST /goals/{id}/work-items, GET /goals/{id}/tree)만 사용한다.
-  인증은 환경변수 AADS_BEARER_TOKEN(사용자 JWT)으로만 받는다. 서비스 키·raw SQL 은 쓰지 않는다.
+  인증은 AADS_BEARER_TOKEN(사용자 JWT) + 명시적 AADS_ACTOR_SESSION_ID 뿐이다. 세션 기본값은 없다(CEO session 사칭 방지);
+  session 소유권은 서버가 검증한다.
+- 서비스 principal(AADS_MONITOR_KEY/X-Monitor-Key) 쓰기는 무조건 차단한다. 환경변수·로컬 문자열(APPROVAL_REF 등)은
+  승인 증거가 아니다. 2026-10-14 CEO 추인은 기존 90개 ID 의 등록 결과 보존 결정이며 새 쓰기 권한이 아니다.
+  서버가 scope/actor 를 검증하는 별도 쓰기승인 경로가 생기기 전에는 이 차단을 풀지 않는다.
+- 이미 항목이 있는 목표에는 쓰지 않는다(트리 선조회가 비어 있지 않으면 POST 0 으로 중단).
 - 부모가 성공한 뒤에만 하위를 만들고, 409(idempotency_conflict)는 덮어쓰지 않고 기록 후 해당 가지를 중단한다.
 """
 from __future__ import annotations
@@ -14,10 +19,10 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 GOAL_ID = "ac431290-66be-4d00-8bbb-9bf162917240"
 GOAL_SHORT = GOAL_ID[:8]
-DEFAULT_ACTOR_SESSION = "b749ff17-43d3-4b87-b67f-482b1748b82b"
 DESIGN_DOC = "aads-canonical-milestone-hierarchy-audit (document_id c20d5e6a-cd46-4eab-97c8-9d6f4bc76b80, rev2 content_hash 229c722e…1e363)"
 
 # (number, milestone_id, title, [(story_key, title, role, [(task_key, title, criterion)])])
@@ -238,12 +243,13 @@ def self_check(items: list[dict]) -> dict:
     return {"counts": counts, "total": len(items), "unique_keys": len(set(keys)), "bad_parent_links": bad}
 
 
-def _call(base: str, token: str, session: str, method: str, path: str, body: dict | None = None):
+def _call(base: str, bearer: str, session: str, method: str, path: str, body: dict | None = None):
+    headers = {"Authorization": f"Bearer {bearer}", "X-Chat-Session-ID": session,
+               "Content-Type": "application/json"}
     req = urllib.request.Request(
         base + path, method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Authorization": f"Bearer {token}", "X-Chat-Session-ID": session,
-                 "Content-Type": "application/json"})
+        headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
@@ -262,19 +268,51 @@ def _flatten(nodes: list[dict]) -> list[dict]:
     return out
 
 
+SERVICE_PRINCIPAL_ENV = ("AADS_USE_SERVICE_PRINCIPAL", "AADS_MONITOR_KEY", "AADS_SERVICE_PRINCIPAL_APPROVAL_REF")
+ALLOWED_BASES = ("https://aads.newtalk.kr",)
+
+
+def _is_allowed_base(base: str) -> bool:
+    parsed = urlparse(base)
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if parsed.scheme == "http":
+        return parsed.hostname in ("127.0.0.1", "localhost", "::1")
+    return parsed.scheme == "https" and f"https://{parsed.hostname}" in ALLOWED_BASES and parsed.port in (None, 443)
+
+
+def resolve_apply_auth(env: dict[str, str]) -> tuple[tuple[str, str] | None, str | None]:
+    """(bearer, session) 또는 차단 사유를 돌려준다. 네트워크·파일 접근 없음."""
+    if any(env.get(k, "").strip() for k in SERVICE_PRINCIPAL_ENV):
+        return None, ("서비스 principal 쓰기는 차단됨: 서버가 scope/actor 를 검증하는 별도 쓰기승인 경로가 없다. "
+                      "환경변수/승인 문자열은 승인 증거가 아니며 CEO 추인은 기존 90개 ID 보존 결정이다.")
+    bearer = env.get("AADS_BEARER_TOKEN", "").strip()
+    if not bearer:
+        return None, "AADS_BEARER_TOKEN 이 없어 등록하지 않습니다(차단)."
+    session = env.get("AADS_ACTOR_SESSION_ID", "").strip()
+    if not session:
+        return None, "AADS_ACTOR_SESSION_ID 를 명시해야 한다(기본 CEO session 사용 금지, 소유권은 서버가 검증)."
+    if not _is_allowed_base(env.get("AADS_API_BASE", "https://aads.newtalk.kr/api/v1").rstrip("/")):
+        return None, "AADS_API_BASE 는 https://aads.newtalk.kr 또는 로컬 루프백만 허용한다(토큰 외부 전송 금지)."
+    return (bearer, session), None
+
+
 def apply(items: list[dict], out_path: str) -> int:
-    token = os.environ.get("AADS_BEARER_TOKEN", "").strip()
-    if not token:
-        print("AADS_BEARER_TOKEN 이 없어 등록하지 않습니다(차단).", file=sys.stderr)
-        return 2
     base = os.environ.get("AADS_API_BASE", "https://aads.newtalk.kr/api/v1").rstrip("/")
-    session = os.environ.get("AADS_ACTOR_SESSION_ID", DEFAULT_ACTOR_SESSION)
+    resolved, reason = resolve_apply_auth(dict(os.environ))
+    if resolved is None:
+        print(reason, file=sys.stderr)
+        return 2
+    bearer, session = resolved
     tree_path = f"/goals/{GOAL_ID}/tree?include_history=true"
-    st, before = _call(base, token, session, "GET", tree_path)
+    st, before = _call(base, bearer, session, "GET", tree_path)
     if st != 200:
         print(f"tree 조회 실패 HTTP {st}: {before}", file=sys.stderr)
         return 2
     before_n = len(_flatten(before.get("items", [])))
+    if before_n != 0:
+        print(f"목표에 이미 업무항목 {before_n}건이 있다. 재등록/재실행은 승인되지 않아 POST 없이 중단한다.", file=sys.stderr)
+        return 2
     created: dict[str, dict] = {}
     log: list[dict] = []
     blocked: set[str] = set()
@@ -286,7 +324,7 @@ def apply(items: list[dict], out_path: str) -> int:
         body = {k: it[k] for k in ("type", "milestone_id", "title", "description",
                                    "acceptance_criteria", "priority", "idempotency_key")}
         body["parent_id"] = created[it["parent_ref"]]["id"] if it["parent_ref"] else None
-        st, res = _call(base, token, session, "POST", f"/goals/{GOAL_ID}/work-items", body)
+        st, res = _call(base, bearer, session, "POST", f"/goals/{GOAL_ID}/work-items", body)
         if st in (200, 201):
             created[it["ref"]] = res["work_item"]
             log.append({"ref": it["ref"], "http": st, "id": res["work_item"]["id"],
@@ -301,10 +339,10 @@ def apply(items: list[dict], out_path: str) -> int:
         body = {k: it[k] for k in ("type", "milestone_id", "title", "description",
                                    "acceptance_criteria", "priority", "idempotency_key")}
         body["parent_id"] = created[it["parent_ref"]]["id"] if it["parent_ref"] else None
-        st, res = _call(base, token, session, "POST", f"/goals/{GOAL_ID}/work-items", body)
+        st, res = _call(base, bearer, session, "POST", f"/goals/{GOAL_ID}/work-items", body)
         if not (st in (200, 201) and res.get("idempotent_replay") is True):
             replay_new += 1
-    st, after = _call(base, token, session, "GET", tree_path)
+    st, after = _call(base, bearer, session, "GET", tree_path)
     after_n = len(_flatten(after.get("items", []))) if st == 200 else None
     result = {"goal_id": GOAL_ID, "before_count": before_n, "after_count": after_n,
               "created_ids": {k: v["id"] for k, v in created.items()}, "log": log,

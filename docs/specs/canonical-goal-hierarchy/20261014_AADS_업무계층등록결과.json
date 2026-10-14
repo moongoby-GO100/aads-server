@@ -1,40 +1,407 @@
 {
-  "task_id": "AADS-CANONICAL-MILESTONE-HIERARCHY-20261014",
+  "task_id": "AADS-CANONICAL-HIERARCHY-RATIFICATION-CLOSEOUT-20261014",
+  "supersedes_result_of": "AADS-CANONICAL-WORK-HIERARCHY-APPLY-20261014 (runner-09547ef0 등록, runner-10855cd7 재작업 산출물 미커밋 보존분)",
   "goal_id": "ac431290-66be-4d00-8bbb-9bf162917240",
-  "status": "blocked_no_credential",
-  "registered": false,
-  "measured_at_kst": "2026-10-14 11:46",
-  "before": {
-    "work_items_by_type_status": [],
-    "work_items_total": 0,
-    "goal": {"status": "completed", "progress": 1.0},
-    "milestones": {"count": 9, "all_completed": true},
-    "active_role_assignments": ["GoalSystemAdmin"]
-  },
-  "after": {
-    "work_items_total": 0,
-    "goal": {"status": "completed", "progress": 1.0},
-    "note": "등록을 실행하지 않았으므로 전후 동일. SELECT 는 aads-server 컨테이너의 읽기 전용 조회."
-  },
-  "planned": {"epic": 9, "story": 27, "task": 54, "total": 90, "unique_idempotency_keys": 90, "bad_parent_links": 0},
-  "created_ids": {},
-  "idempotent_replay": "not_run",
-  "block": {
-    "reason": "work-items 라우트는 require_tenant_member(사용자 Bearer JWT)와 X-Chat-Session-ID 를 요구한다. 이 러너 세션에는 사용자 JWT 가 주어지지 않았고, 인증 없는 호출은 HTTP 401 이다.",
-    "not_done_on_purpose": [
-      "컨테이너 환경에서 AADS_MONITOR_KEY 를 꺼내 system 주체로 호출 (미부여 서비스 자격)",
-      "internal_admin=True 를 자체 주장해 서비스 함수 직접 호출",
-      "work_items 에 raw INSERT"
+  "status": "registered_ratified_audit_gate_fixed_screen_and_roles_unverified",
+  "registered": true,
+  "measured_at_kst": "2026-10-14 16:20",
+  "audit": {
+    "original_executor": "runner-09547ef0 / service principal (X-Monitor-Key)",
+    "recorded_created_by": "b749ff17-43d3-4b87-b67f-482b1748b82b (CEO session; work_items.created_by 90건)",
+    "recorded_created_by_note": "호출 주체가 아니라 actor session 값이다. created_by 만으로는 서비스 호출임을 구별할 수 없고, 구별 근거는 이 결과와 결정 DB 뿐이다. UPDATE 하지 않았다(원 이력 보존).",
+    "ratified_by": "CEO 결정 495fa90b-f93a-42d0-88f3-296724afb3a6 (메시지 61410ce2-1830-40d1-a8c3-eb1b8244acd1, \"P0 권장안으로 진행해\")",
+    "ratified_at_utc": "2026-10-14 05:26:42.717049+00:00",
+    "original_registration_utc_range": [
+      "2026-10-14 04:36:17.053462+00:00",
+      "2026-10-14 04:36:18.861967+00:00"
     ],
-    "unblock": "AADS_BEARER_TOKEN 을 가진 승인된 주체가 docs/specs/canonical-goal-hierarchy/register_work_hierarchy.py --apply 를 실행"
+    "not_retroactive": "추인은 2026-10-14 14:26:42 KST 이후의 사후 추인이다. 등록 시점(13:36 KST)에 승인됐다고 기록하지 않는다."
   },
-  "design_report_hash_check": {
-    "document_key": "aads-canonical-milestone-hierarchy-audit",
-    "revision": 2,
-    "db_content_hash": "229c722ee977639ccec4f63d52c7eb6e11b20296b4009a71967369a0d4b1e363",
-    "local_file_sha256": "229c722ee977639ccec4f63d52c7eb6e11b20296b4009a71967369a0d4b1e363",
-    "match": true,
-    "approved_revision_id": null
+  "ratification": {
+    "decision_entry_id": "495fa90b-f93a-42d0-88f3-296724afb3a6",
+    "decision_entry_key": "decision:canonical-work-hierarchy-90-ratification-20261014",
+    "decision_revision": 2,
+    "risk_entry_key": "risk:canonical-work-hierarchy-90-service-principal-20261014",
+    "risk_entry_id": "e82f0212-cda4-4491-9b91-38f438c00198",
+    "approval_message_id": "61410ce2-1830-40d1-a8c3-eb1b8244acd1",
+    "approval_message_session_id": "b749ff17-43d3-4b87-b67f-482b1748b82b",
+    "approval_message_role": "user",
+    "scope": "기존 등록 90건과 당시 서비스 principal 사용의 사후추인",
+    "grants_new_write_permission": false,
+    "not_approved": [
+      "신규등록",
+      "apply 재실행",
+      "created_by 수정",
+      "역할배정",
+      "goal/milestone 상태 변경"
+    ],
+    "residual": "감사결함(임의 APPROVAL_REF 통과)은 이번에 코드로 차단했다. 서버 검증 쓰기승인 경로는 여전히 없다."
   },
-  "rollback": "이번에 생성한 ID 가 없으므로 되돌릴 대상 없음. 이후 등록 시 결과 JSON 의 created_ids 만 공식 취소 API/승인 경로로 취소(물리 DELETE 금지)."
+  "db_link_check": {
+    "tenant_matches_goal": true,
+    "project_matches_goal": true,
+    "goal_matches": true,
+    "decision_ids_count": 90,
+    "decision_ids_equal_db_ids": true,
+    "decision_ids_md5_equal_db_ids_md5": true,
+    "meta_ids_md5": "c523a6d044c5d0be31f3469161a66beb",
+    "source_session_id": "b749ff17-43d3-4b87-b67f-482b1748b82b",
+    "status": "active",
+    "goal_tenant_id": "2d701a8c-9596-4757-8588-faa4f7837112",
+    "goal_project": "AADS",
+    "approval_message_session_equals_decision_session": true,
+    "measured_by": "verify_work_hierarchy.py 읽기 전용 SELECT (aads-server 컨테이너)"
+  },
+  "before": {
+    "work_items_total": 0,
+    "goal": {
+      "status": "completed",
+      "progress": 1.0
+    },
+    "milestones": "9개 completed"
+  },
+  "registration": {
+    "before_count": 0,
+    "after_count": 90,
+    "http_201": 90,
+    "replay_non_idempotent": 0,
+    "complete": true
+  },
+  "created_ids": {
+    "m1": "24fa7587-5073-4d13-ba72-cc952c101ec7",
+    "m1-s1": "6f37fe5c-a75e-4c83-99b8-f3f2bfa976b6",
+    "m1-s1-t1": "4fefddd1-0926-44a6-8118-889f1628886b",
+    "m1-s1-t2": "11c59a2b-d896-4f4e-a2a2-8ebd0c1daf06",
+    "m1-s2": "a9fd3b7d-de4a-4a6f-a779-6e35067e49bb",
+    "m1-s2-t1": "69bc4bdf-b086-4d5c-bd3a-63dc6e1a5b65",
+    "m1-s2-t2": "e845667f-ff97-4cad-bc10-f452c8dd454a",
+    "m1-s3": "244e01c8-c5a5-4e54-b876-1be96cead816",
+    "m1-s3-t1": "dc08b19a-fab0-4c73-a045-f5f1af3e2874",
+    "m1-s3-t2": "9182cab8-3f91-4e4c-9182-8718158fff56",
+    "m2": "fc9ff8d1-b825-44c5-8688-548fdf95fc33",
+    "m2-s1": "6805be9d-6818-45fa-ad71-67cdd43164f6",
+    "m2-s1-t1": "baf8adaf-a18c-411b-a59e-59754d4eea5e",
+    "m2-s1-t2": "8c116155-3cf7-49e9-9946-a29ae142721c",
+    "m2-s2": "7d97491c-58c4-4d0a-811c-90efe2043c53",
+    "m2-s2-t1": "cce1876b-fac5-4635-9fb1-3dce798f2957",
+    "m2-s2-t2": "e0adde3c-49ff-4fef-909f-a91edceb5d52",
+    "m2-s3": "4d4dfcbf-5db2-47fa-9f8f-3ac54141a0dd",
+    "m2-s3-t1": "471931d5-9f28-4601-ac1e-2259046104e4",
+    "m2-s3-t2": "5355c407-4f3a-41f0-8e96-1f05e869ec97",
+    "m3": "94524f72-ad02-4168-9daa-570868dd8bc6",
+    "m3-s1": "a0446648-4a5b-4f98-91c9-806670c0ae61",
+    "m3-s1-t1": "e95e784b-4006-4920-889a-cf823642d7f5",
+    "m3-s1-t2": "db1bffd7-75eb-4b9a-8940-088ab5cf8747",
+    "m3-s2": "6fd55c96-28a0-4ff9-ae57-78d967dc5400",
+    "m3-s2-t1": "75f2bcba-5dcd-4fca-8695-3f3a2772ba5a",
+    "m3-s2-t2": "048f6afc-d8ed-4dbe-9608-1eb256ea338d",
+    "m3-s3": "bae2f53d-de53-461f-bfe3-55c7548b3a81",
+    "m3-s3-t1": "b65f09e7-b6a2-485b-a309-b9d831b24a4a",
+    "m3-s3-t2": "7fe50cde-4f26-4ead-9a78-e0e87500a524",
+    "m4": "db2f366c-9156-4f6b-804d-4db312c6552e",
+    "m4-s1": "9206fa66-25b8-497e-aab2-442e4f941ddb",
+    "m4-s1-t1": "2783770f-4674-43b0-9d23-597eefd662ca",
+    "m4-s1-t2": "c37449df-b9cf-4b1f-b8a4-6a8486135569",
+    "m4-s2": "a3e7454a-7aba-4140-8a37-3df699e1c796",
+    "m4-s2-t1": "5a7cbaa1-6fef-4ce3-a7ac-a495957a5e89",
+    "m4-s2-t2": "05457365-cfee-4a15-a7ce-2e64eb1d3971",
+    "m4-s3": "fcc5436e-71ab-4c01-bd10-ec24f34d5d50",
+    "m4-s3-t1": "cddda068-e0ac-4f4f-b004-b51e5c8b9657",
+    "m4-s3-t2": "6b1ccd59-a9a3-4730-8b9f-23372a2d35f3",
+    "m5": "f4decaf0-6b80-48e0-a5ee-63436c53f5fe",
+    "m5-s1": "badf5053-b41e-4336-ad32-e199a29d1854",
+    "m5-s1-t1": "5ba35196-3f29-42d0-bb08-f4bf4055dbdd",
+    "m5-s1-t2": "56e81bc0-5bb8-4123-ba01-30a071d1ff0c",
+    "m5-s2": "8abbe218-5449-455f-a5e8-9182051ae983",
+    "m5-s2-t1": "ec8cba45-a34b-496b-bcbe-367b1603b2ef",
+    "m5-s2-t2": "26daf648-cafd-4ff2-a5cb-57ed78a95c59",
+    "m5-s3": "892694cc-9e19-4cfb-81e9-d7627094b576",
+    "m5-s3-t1": "d812605f-1077-4898-a02c-a3df3c73ae9f",
+    "m5-s3-t2": "02211560-8c83-4831-9b37-a55830adf0c7",
+    "m6": "aefbe8f0-3e29-4c4e-bbc4-44572a5e3e79",
+    "m6-s1": "2b35ddb8-2fde-447f-b5a3-9557a9f495e2",
+    "m6-s1-t1": "a730bbfd-37ac-4402-86f0-298f2b88ac3e",
+    "m6-s1-t2": "c709d9a2-a7e6-4124-b818-e5688d54e7ab",
+    "m6-s2": "3f0f817e-9ba3-411c-8bf7-8d6874ef9717",
+    "m6-s2-t1": "6305bd49-62b7-43e9-9feb-47fa4eb900b5",
+    "m6-s2-t2": "ab27aab3-e473-4b4e-beb6-b230b03a42f2",
+    "m6-s3": "213cb6c5-e6ec-4ae1-9b6b-e44f2f01a135",
+    "m6-s3-t1": "816d6b0d-de30-4df5-9818-6a10f9842c22",
+    "m6-s3-t2": "94270c87-c1e2-4236-8db5-835f00427f66",
+    "m7": "730daa6a-ecb5-4e78-8833-e85515bd919a",
+    "m7-s1": "4e505b0e-e5bb-4964-aaea-4cdc1c58aebe",
+    "m7-s1-t1": "8ffd7ef6-8aab-4c75-8cd1-1a3c6f464252",
+    "m7-s1-t2": "3d24ae86-a940-45ec-96a7-9ae397a21595",
+    "m7-s2": "e69190b9-365f-40c4-9c29-38c2236e68ad",
+    "m7-s2-t1": "59a55cab-54c3-4e93-a8b5-a17bb99af100",
+    "m7-s2-t2": "967a311b-4843-4f29-b864-20e57b898c1e",
+    "m7-s3": "66d63de1-4e46-4374-accc-62e86ad75806",
+    "m7-s3-t1": "8451e3f6-e85d-4acb-9a6d-0f962256905b",
+    "m7-s3-t2": "f3022d34-30a7-4baf-9ff1-114a64b4069e",
+    "m8": "38e39c38-704f-4487-99c8-01f02d1f7978",
+    "m8-s1": "433f2916-e3d4-43b2-bfd6-f7030e190f84",
+    "m8-s1-t1": "1505a5eb-1b5b-47b6-93a5-3092a6bb1faf",
+    "m8-s1-t2": "abed7da1-9f32-48d0-9602-69f66608ff6e",
+    "m8-s2": "92813089-9b89-465e-84c0-70bd0f94cb9f",
+    "m8-s2-t1": "e4607cb8-8eb9-4562-86f9-61d24b34228d",
+    "m8-s2-t2": "945ed683-f21f-47c1-aed9-84b59d665751",
+    "m8-s3": "dc815f6a-7690-49b6-9dd8-18f8005e165e",
+    "m8-s3-t1": "40faa8f1-e78a-4f9e-8223-3216e79808de",
+    "m8-s3-t2": "239e9518-81b6-422a-84f6-04e6e46c5216",
+    "m9": "36923400-3c3d-4edc-9f01-992ec85a882a",
+    "m9-s1": "972188a8-2721-4bc7-9a49-6a47dc9cd56e",
+    "m9-s1-t1": "5fe22beb-f4cd-43ad-bb20-b12d215812ee",
+    "m9-s1-t2": "0dcf429f-7824-4d8d-87c7-4bbdce8779a2",
+    "m9-s2": "7f07b883-ba2d-4847-9119-0364207312a9",
+    "m9-s2-t1": "c70dcadc-0bb9-40ed-845a-9d14377be667",
+    "m9-s2-t2": "1f11ec7e-7879-415b-b4a2-6488b527b5e3",
+    "m9-s3": "a9b7ddf3-326f-457f-bfce-27107d4fe18a",
+    "m9-s3-t1": "2c975721-ffac-4efa-af4e-e98c3711c8be",
+    "m9-s3-t2": "722daecf-bdd6-4a34-b709-13a61464187b"
+  },
+  "db_verification": {
+    "goal": {
+      "tenant_id": "2d701a8c-9596-4757-8588-faa4f7837112",
+      "project": "AADS",
+      "status": "completed",
+      "progress": "1.0"
+    },
+    "by_type_status": [
+      {
+        "type": "epic",
+        "status": "draft",
+        "n": 9
+      },
+      {
+        "type": "story",
+        "status": "draft",
+        "n": 27
+      },
+      {
+        "type": "task",
+        "status": "draft",
+        "n": 54
+      }
+    ],
+    "total": 90,
+    "wrong_parent_type": 0,
+    "orphan": 0,
+    "dup_idempotency_key": 0,
+    "cross_scope": 0,
+    "assignment_id_set": 0,
+    "created_by": [
+      {
+        "created_by": "b749ff17-43d3-4b87-b67f-482b1748b82b",
+        "n": 90
+      }
+    ],
+    "per_milestone": [
+      {
+        "m": 1,
+        "milestone_status": "completed",
+        "e": 1,
+        "s": 3,
+        "t": 6
+      },
+      {
+        "m": 2,
+        "milestone_status": "completed",
+        "e": 1,
+        "s": 3,
+        "t": 6
+      },
+      {
+        "m": 3,
+        "milestone_status": "completed",
+        "e": 1,
+        "s": 3,
+        "t": 6
+      },
+      {
+        "m": 4,
+        "milestone_status": "completed",
+        "e": 1,
+        "s": 3,
+        "t": 6
+      },
+      {
+        "m": 5,
+        "milestone_status": "completed",
+        "e": 1,
+        "s": 3,
+        "t": 6
+      },
+      {
+        "m": 6,
+        "milestone_status": "completed",
+        "e": 1,
+        "s": 3,
+        "t": 6
+      },
+      {
+        "m": 7,
+        "milestone_status": "completed",
+        "e": 1,
+        "s": 3,
+        "t": 6
+      },
+      {
+        "m": 8,
+        "milestone_status": "completed",
+        "e": 1,
+        "s": 3,
+        "t": 6
+      },
+      {
+        "m": 9,
+        "milestone_status": "completed",
+        "e": 1,
+        "s": 3,
+        "t": 6
+      }
+    ],
+    "unique_key_count": 90,
+    "ids_count": 90,
+    "ids_sorted_md5": "c523a6d044c5d0be31f3469161a66beb",
+    "result_json_ids_equal_db_ids": true,
+    "created_at_range": [
+      "2026-10-14 04:36:17.053462+00:00",
+      "2026-10-14 04:36:18.861967+00:00"
+    ],
+    "ids_md5_format": "sorted ids 를 \",\"로 이어 md5",
+    "expected_ids_md5": "c523a6d044c5d0be31f3469161a66beb",
+    "ids_md5_match": true,
+    "measured_at_kst": "2026-10-14 16:20"
+  },
+  "idempotent_replay": "90건 동일 payload 재요청 모두 idempotent_replay=true, 개수 90 유지 (이전 러너 측정, 이번 라운드 재실행 아님)",
+  "tree_api": {
+    "previous_round": {
+      "roots": 9,
+      "nodes": 90,
+      "types": {
+        "epic": 9,
+        "story": 27,
+        "task": 54
+      },
+      "include_history_http": 200,
+      "include_evidence_approvals_dependencies_http": 200
+    },
+    "this_round": "미실행: 인증 없는 호출은 HTTP 401(Bearer 필요). 사용자 JWT 를 받지 못했다. DB SELECT 로 동일 계층을 대신 확인했으며 이는 tree API 검증이 아니다."
+  },
+  "screen_verification": {
+    "status": "미검증",
+    "http_goals": "GET /goals (미인증) -> 307 /login?redirect=%2Fgoals",
+    "api_health": "GET /api/v1/ops/health-check -> 200",
+    "tree_api_unauthenticated": "GET /api/v1/goals/{id}/tree -> 401",
+    "containers": "aads-server/-green, aads-dashboard/-green, aads-postgres: healthy/Up",
+    "credential_check": {
+      "e2e_7e157c42": "사용하지 않음: 목표 테넌트 소속이 status=removed(선행 확인). CEO session 의 소유자(6b4da42c, role=ceo)와 다른 계정이라 사칭이 된다.",
+      "e2e_52f3c584": "사용하지 않음: 다른 테넌트(1637fc0d).",
+      "e2e_7dc2c76b": "사용하지 않음: is_active=false (TEMP-SESSION-E2E-20260721).",
+      "agent_vault_ceo_entries": "aads.newtalk.kr origin 의 CEO 소유(created_by 6b4da42c) 항목이 있으나 policy=ask 다. 사용하려면 vault 요청/승인 절차가 필요하고 CEO 본인 로그인으로 보이게 되므로 사용하지 않았다. 비밀값은 조회·출력하지 않았다(메타데이터만 SELECT)."
+    },
+    "note": "정확한 테넌트·소유권을 가진 비-CEO 기존 credential 이 없어 로그인 화면 E2E 를 수행하지 못했다. 이를 완료로 세지 않는다."
+  },
+  "role_assignment": "미완료: AADS 의 활성 assignment 는 GoalSystemAdmin 1건뿐. PM/Developer/QA 없음. 모든 항목 assignment_id NULL(0건 설정), description 에 '미배정(권장 역할 병기)'.",
+  "code_hardening": {
+    "file": "docs/specs/canonical-goal-hierarchy/register_work_hierarchy.py",
+    "defect": "AADS_USE_SERVICE_PRINCIPAL=1 + 비어 있지 않은 임의 AADS_SERVICE_PRINCIPAL_APPROVAL_REF 문자열이면 서비스 키 쓰기가 통과했다(문자열 존재만 확인). 또 bearer 경로는 CEO session 을 기본값으로 사용했다.",
+    "fix": [
+      "AADS_USE_SERVICE_PRINCIPAL / AADS_MONITOR_KEY / AADS_SERVICE_PRINCIPAL_APPROVAL_REF 중 하나라도 있으면 --apply 무조건 차단(rc=2, 네트워크 0). 환경변수·로컬 JSON 은 승인 판정에 쓰지 않는다.",
+      "서비스 경로 코드(X-Monitor-Key 헤더, 루프백 예외) 삭제. 서버가 scope/actor 를 검증하는 쓰기승인 경로가 생기기 전에는 풀지 않는다.",
+      "DEFAULT_ACTOR_SESSION(CEO session) 제거. bearer 도 AADS_ACTOR_SESSION_ID 를 명시해야 하며 소유권은 서버가 검증한다.",
+      "bearer 는 https://aads.newtalk.kr 또는 로컬 루프백으로만 전송.",
+      "--apply 전 tree 가 비어 있지 않으면 POST 0 으로 중단(추인은 재실행 권한이 아님)."
+    ],
+    "tests": "docs/specs/canonical-goal-hierarchy/test_register_work_hierarchy_approval.py",
+    "auth_core_changed": false
+  },
+  "rollback": {
+    "target": "created_ids 90건만",
+    "path": "POST /work-items/{id}/change-sets (action=cancel, patch=[{op:replace,path:/status,value:cancelled}], base_version, rationale, expected_effect, rollback_plan, idempotency_key) → 정책 라우팅/승인 → POST /work-item-change-sets/{id}/execute. goal_workflow_approval._apply_internal_patch 가 /status 변경을 허용함을 코드로 확인.",
+    "caveats": [
+      "경로 존재는 코드 읽기로만 확인했고 실행·검증하지 않았다.",
+      "Epic 변경은 PROJECT_APPROVAL 경로라 승인 결정이 필요할 수 있다.",
+      "Task → Story → Epic 순서, 물리 DELETE 금지."
+    ],
+    "status": "미실행·미검증"
+  },
+  "complete": false,
+  "completion": {
+    "db_registration_90": true,
+    "db_integrity_checks": true,
+    "ratification_linked_to_db": true,
+    "approval_string_gate_fixed": true,
+    "screen_e2e_goals": false,
+    "role_assignment": false,
+    "server_verified_write_approval_path": false,
+    "note": "등록 90건·추인 연결·게이트 차단은 확인했다. 화면 E2E, 역할 배정, 서버 검증 쓰기승인 경로는 미완료다."
+  },
+  "previous_result": {
+    "task_id": "AADS-CANONICAL-MILESTONE-HIERARCHY-20261014",
+    "status": "blocked_no_credential",
+    "registered": false,
+    "measured_at_kst": "2026-10-14 11:46",
+    "before": {
+      "work_items_by_type_status": [],
+      "work_items_total": 0,
+      "goal": {
+        "status": "completed",
+        "progress": 1.0
+      },
+      "milestones": {
+        "count": 9,
+        "all_completed": true
+      },
+      "active_role_assignments": [
+        "GoalSystemAdmin"
+      ]
+    },
+    "block": {
+      "reason": "work-items 라우트는 require_tenant_member(사용자 Bearer JWT)와 X-Chat-Session-ID 를 요구한다. 이 러너 세션에는 사용자 JWT 가 주어지지 않았고, 인증 없는 호출은 HTTP 401 이다.",
+      "not_done_on_purpose": [
+        "컨테이너 환경에서 AADS_MONITOR_KEY 를 꺼내 system 주체로 호출 (미부여 서비스 자격)",
+        "internal_admin=True 를 자체 주장해 서비스 함수 직접 호출",
+        "work_items 에 raw INSERT"
+      ],
+      "unblock": "AADS_BEARER_TOKEN 을 가진 승인된 주체가 docs/specs/canonical-goal-hierarchy/register_work_hierarchy.py --apply 를 실행"
+    },
+    "design_report_hash_check": {
+      "document_key": "aads-canonical-milestone-hierarchy-audit",
+      "revision": 2,
+      "db_content_hash": "229c722ee977639ccec4f63d52c7eb6e11b20296b4009a71967369a0d4b1e363",
+      "local_file_sha256": "229c722ee977639ccec4f63d52c7eb6e11b20296b4009a71967369a0d4b1e363",
+      "match": true,
+      "approved_revision_id": null
+    },
+    "note": "AADS-CANONICAL-MILESTONE-HIERARCHY-20261014(0/90 차단) 기록 원문 요약. 이번 등록이 이를 대체했지만 차단 사유와 서비스 자격 거부 판단은 기록으로 남긴다."
+  },
+  "previous_auth_findings": {
+    "used": "공식 서비스 principal(이전 러너 runner-09547ef0 가 실행). aads-server get_current_user 가 X-Monitor-Key 를 hmac 비교로 검증하고 internal 테넌트(2d701a8c=목표 테넌트) owner·is_internal_admin 을 서버가 부여. 키는 출력·저장하지 않았고 루프백으로만 전송.",
+    "approval_basis": "작업 지시서 문구 \"기존 require_tenant_member/is_internal_admin 인증된 공식 서비스 경로가 있다면 이번 CEO 권장안 등록 승인 범위로 사용할 수 있다\". CEO 원문(업무계층등록 권장안으로 진행)에는 서비스 키가 명시되지 않았고, AADS_MONITOR_KEY 사용만을 따로 승인한 CEO 기록은 확인되지 않았다.",
+    "review_finding": "선행 작업(AADS-CANONICAL-MILESTONE-HIERARCHY-20261014)은 같은 경로를 \"미부여 서비스 자격\"으로 거부했다. 이번 사용은 그 판단을 지시서 문구만 근거로 뒤집은 것이라 승인 범위 초과 소지가 있다고 AI 리뷰가 지적했다. 이 문서는 그 지적을 부정하지 않는다.",
+    "follow_up_required": "CEO 가 AADS_MONITOR_KEY 서비스 principal 로 90건을 등록한 것을 사후 확인(추인)하거나, 원치 않으면 아래 rollback 으로 90건을 취소해야 한다. 이번 라운드는 어떤 쓰기 호출도 하지 않았다.",
+    "vault_e2e_credential_7e157c42": "사용하지 않음: 계정 e2e***@aads.dev 의 활성 소속은 테넌트 1637fc0d 뿐이고 목표 테넌트 2d701a8c 소속은 status=removed(2026-06-08). CEO session b749ff17 의 소유자는 다른 사용자(6b4da42c, role=ceo)라 이 계정으로 그 session 을 주장하면 사칭이다.",
+    "not_done": [
+      "새 JWT 발급",
+      "internal_admin 자체 주장",
+      "auth 코드 변경",
+      "raw SQL INSERT",
+      "키 로그 노출"
+    ],
+    "actor_session": "b749ff17-43d3-4b87-b67f-482b1748b82b (목표 owner_session). API 는 actor session 이 테넌트 내 chat_sessions 에 있어야 하고 internal_admin 이면 타인 session 도 허용한다(resolve_actor_scope). 그래서 work_items.created_by 90건이 이 session ID 로 기록됐다.",
+    "audit_limitation": "created_by 는 CEO session ID 이지만 실제 호출 주체는 서비스 principal 이다. 즉 감사 기록상 CEO 가 직접 만든 것처럼 보인다. work_items.created_by 만으로는 서비스 호출임을 구별할 수 없다. 이미 기록된 90건은 이번 라운드에서 고치지 않았다(raw UPDATE 금지). 구별 근거는 이 문서와 결과 JSON 뿐이다."
+  },
+  "document": {
+    "document_key": "aads-canonical-work-hierarchy-registration",
+    "kind": "report",
+    "revision": 3,
+    "revision_id": "02af75b1-3540-4b68-a384-67d5b011baa7",
+    "generation": 3,
+    "status": "draft",
+    "approved": false,
+    "approved_pointer_changed": false,
+    "report_line": "정본 초안: 「정본문서 업무계층 등록 결과 (90건 CEO 추인 · 승인 문자열 게이트 차단 · 화면 E2E·역할 배정 미검증)」 (document_key=aads-canonical-work-hierarchy-registration rev3) — 열람: 대시보드 '문서' > '정본 문서' 탭에서 문서 키로 찾기",
+    "note": "결과 JSON 은 rev3 등록 이후 이 필드만 추가되었다(보고서 본문은 rev3 과 동일)."
+  }
 }
