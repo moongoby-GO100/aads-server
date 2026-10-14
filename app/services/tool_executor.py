@@ -5854,6 +5854,9 @@ class ToolExecutor:
                 registration = await request_registration(
                     recipe, tenant_id=tenant_id, requested_by=f"chat:{session_id}"
                 )
+                from app.services.work_recipe.approval_notifier import notify_pending_created
+
+                await notify_pending_created(registration)
                 return {"status": "approval_required", "session_id": session_id,
                         "registration": registration}
 

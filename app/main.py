@@ -87,6 +87,7 @@ from app.api.browser_tasks import router as browser_tasks_router
 from app.api.live_facts import router as live_facts_router
 from app.api.learned_artifacts import router as learned_artifacts_router
 from app.api.browser_recipes import router as browser_recipes_router
+from app.api.automations import router as automations_router
 from app.api.authenticated_site_collector import router as authenticated_site_collector_router
 from app.api.site_knowledge import router as site_knowledge_router
 from app.routers.chat import router as chat_v2_router
@@ -1413,6 +1414,16 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"project_change_promoter_job_error: {e}")
         scheduler.add_job(_run_project_change_promoter, 'interval', minutes=30, id="project_change_promoter")
+        # FR-18: 자동화 승인 대기 — 48시간 재알림 1회, 14일 만료 표시 (매시)
+        async def _run_automation_approval_sweep():
+            try:
+                from app.services.work_recipe.approval_notifier import run_sweep
+                result = await run_sweep()
+                if result.get("reminded") or result.get("expired") or result.get("notified"):
+                    logger.info("automation_approval_sweep_done", **result)
+            except Exception as e:
+                logger.warning(f"automation_approval_sweep_job_error: {e}")
+        scheduler.add_job(_run_automation_approval_sweep, 'interval', hours=1, id="automation_approval_sweep", max_instances=1, coalesce=True)
         # P2: eval_pipeline — 주간 품질 리포트 (매주 월요일 07:00 UTC)
         async def _run_weekly_quality_report():
             try:
@@ -3976,6 +3987,7 @@ app.include_router(browser_tasks_router, prefix="/api/v1", tags=["browser-tasks"
 app.include_router(live_facts_router, prefix="/api/v1", tags=["live-facts"])
 app.include_router(learned_artifacts_router, prefix="/api/v1", tags=["browser-learning"])
 app.include_router(browser_recipes_router, prefix="/api/v1", tags=["browser-recipes"])
+app.include_router(automations_router, prefix="/api/v1", tags=["automations"])
 app.include_router(authenticated_site_collector_router, prefix="/api/v1", tags=["authenticated-site-collector"])
 app.include_router(site_knowledge_router, prefix="/api/v1", tags=["site-knowledge"])
 app.include_router(agent_vault_router, prefix="/api/v1", tags=["agent-vault"])

@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from app.services.work_recipe import registration, store
+from app.services.work_recipe import approval_notifier, registration, store
 from app.services.work_recipe.guard import INTERNAL_DOMAINS
 from app.services.work_recipe.schema import RecipeInput, RecipeStep, WorkRecipe
 
@@ -110,9 +110,11 @@ class WorkRecipeRecorder:
         )
         # FR-17: 성공했다고 즉시 실행 가능 레시피로 올리지 않는다. 단계·권한·
         # 위험·증거·변수 dry-run을 저장하고 B-scope 승인을 받은 뒤에만 등록한다.
-        return await registration.request_registration(
+        pending = await registration.request_registration(
             recipe, tenant_id=self.tenant_id, requested_by=created_by
         )
+        await approval_notifier.notify_pending_created(pending)
+        return pending
 
     def _is_credential_step(self, raw: Mapping[str, Any]) -> bool:
         if raw.get("credential") or raw.get("credential_ref") or raw.get("secret"):
