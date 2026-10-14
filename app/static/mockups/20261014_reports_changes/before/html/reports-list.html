@@ -1,0 +1,89 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>보고서 열람 — 현재 소스 재현</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f172a;--side:#16213a;--card:#1e293b;--hover:#334155;--border:#334155;--text:#e2e8f0;--sub:#94a3b8;--accent:#3b82f6;--danger:#f87171;--warn:#fbbf24;--ok:#34d399}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,"Noto Sans KR","Noto Sans CJK KR","Malgun Gothic","WenQuanYi Zen Hei",Arial,sans-serif;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.app{display:flex;height:100vh}
+.side{width:240px;flex:none;background:var(--side);border-right:1px solid #0d1527;padding:16px 12px;display:none}
+.side b{display:block;color:#60a5fa;font-size:16px}.side small{color:var(--sub);font-size:11px}
+.side .grp{margin-top:18px;font-weight:700;font-size:14px;display:flex;justify-content:space-between}
+.side .item{margin:6px 0 0 6px;padding:7px 10px;border-radius:8px;color:var(--sub);font-size:13px}.side .on{background:var(--accent);color:#fff}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;height:100vh}
+.hdr{flex:none;background:#fff;color:#111827;height:57px;padding:0 12px;display:flex;align-items:center;gap:10px;font-weight:700;overflow:hidden}
+.hdr .bt{background:#6d5df6;color:#fff;border-radius:8px;padding:8px 12px;font-size:13px;white-space:nowrap}.hdr .bt.k{background:#111827}
+.hdr .st{font-weight:400;font-size:12px;color:#6b7280;white-space:nowrap}
+@media (min-width:1024px){.side{display:block}}
+@media (max-width:599px){.hdr{height:186px;flex-wrap:wrap;align-content:flex-start;padding:10px 12px}}
+
+.content{flex:1;min-height:0;display:flex}
+.pane{width:432px;flex:none;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+.chrome{flex:none;padding:8px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--border)}
+.row2{display:flex;gap:6px;align-items:center}
+.inp{flex:1;min-width:0;height:36px;border-radius:8px;border:1px solid var(--border);background:var(--card);padding:0 10px;color:var(--sub);font-size:13px;display:flex;align-items:center}
+.inp b{color:var(--text);font-weight:400}
+.seg{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;flex:1}
+.seg span{flex:1;height:30px;padding:0 6px;font-size:12px;display:flex;align-items:center;justify-content:center;color:var(--sub);background:var(--card);white-space:nowrap}.seg .on{background:var(--accent);color:#fff;font-weight:600}
+.seg.fixed{flex:none}.seg.fixed span{flex:none;padding:0 12px}
+.fsum{flex:1;min-width:0;height:28px;border-radius:8px;border:1px solid var(--border);padding:0 10px;font-size:12px;color:var(--sub);display:flex;align-items:center;justify-content:space-between;white-space:nowrap;overflow:hidden}
+.cnt{flex:none;font-size:11px;color:var(--sub)}
+.ibtn{flex:none;width:30px;height:30px;border-radius:8px;background:var(--hover);color:var(--sub);display:inline-flex;align-items:center;justify-content:center;font-size:14px}
+.list{flex:1;min-height:0;overflow:hidden}
+.r{height:44px;padding:3px 10px;border-bottom:1px solid #1d2a45;border-left:3px solid transparent;display:flex;flex-direction:column;justify-content:center}
+.r.on{background:var(--hover);border-left-color:var(--accent)}
+.r .t{display:flex;align-items:baseline;gap:6px;font-size:13px;line-height:20px;font-weight:600;white-space:nowrap;overflow:hidden}
+.r .t span{overflow:hidden;text-overflow:ellipsis}.r .t i{flex:none;font-style:normal;font-weight:400;font-size:11px;color:var(--sub)}
+.m{display:flex;gap:6px;align-items:center;font-size:11px;line-height:16px;color:var(--sub);white-space:nowrap;overflow:hidden}
+.r.on .m{color:var(--text)}
+.m .d{margin-left:auto;flex:none}.m .lb{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tag{flex:none;padding:0 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;line-height:16px;color:var(--sub)}
+.tag.draft{color:var(--text);background:var(--hover)}.tag.review{border-color:var(--accent);color:var(--text)}
+.tag.approved{border-color:var(--accent);color:var(--text);background:rgba(59,130,246,.3);font-weight:600}
+.tag.ok{border-color:#047857;color:#a7f3d0;background:rgba(16,185,129,.18)}.tag.warn{border-color:#b45309;color:#fde68a;background:rgba(245,158,11,.18)}
+.tag.bad{border-color:#b91c1c;color:#fecaca;background:rgba(239,68,68,.2);font-weight:600}.tag.mute{color:var(--sub);text-decoration:line-through}
+.tag.kind{color:var(--sub)}
+.viewer{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.vh{flex:none;padding:12px 18px;border-bottom:1px solid var(--border)}
+.vh .a{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.vh h2{font-size:16px;margin-top:6px;line-height:1.35}
+.vh .meta{margin-top:6px;font-size:12px;color:var(--sub);display:flex;gap:14px;flex-wrap:wrap}.vh .meta b{color:var(--text);font-weight:500}
+.vb{flex:1;min-height:0;overflow:hidden;padding:16px 18px}
+.callout{padding:10px 14px;border-radius:8px;background:rgba(59,130,246,.1);color:#93c5fd;font-size:13px;margin-bottom:14px}
+.callout b{color:#bfdbfe}
+.fold{display:flex;justify-content:space-between;align-items:center;height:32px;padding:0 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--sub);margin-bottom:8px}
+.pre{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;font:11px/1.55 ui-monospace,Menlo,monospace;color:#cbd5e1;white-space:pre-wrap;overflow:hidden}
+.back{display:none;flex:none;height:32px;padding:0 12px;border-radius:8px;background:var(--hover);font-size:12px;align-items:center}
+.sk{height:44px;padding:6px 10px;border-bottom:1px solid #1d2a45;display:flex;flex-direction:column;gap:6px;justify-content:center}
+.sk i{display:block;height:11px;border-radius:4px;background:linear-gradient(90deg,#1b2842,#26385a,#1b2842)}.sk i:nth-child(2){height:9px;width:46%}
+.msg{padding:34px 18px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px}
+.msg h3{font-size:15px}.msg p{font-size:12px;color:var(--sub);max-width:340px}.msg .big{font-size:30px}
+.msg .btn{height:36px;padding:0 16px;border-radius:8px;background:var(--accent);color:#fff;font-size:13px;display:inline-flex;align-items:center}.msg .btn.g{background:var(--hover);color:var(--text)}
+.msg.err h3{color:var(--danger)}
+.empty-view{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--sub);font-size:13px}.empty-view big{font-size:38px}
+.lab{height:24px;padding:0 12px;display:flex;align-items:center;font-size:11px;font-weight:700;color:var(--sub);background:#131d33;border-bottom:1px solid #1d2a45}
+.ban{min-height:28px;padding:4px 12px;line-height:1.35;display:flex;align-items:center;font-size:12px;color:#fde68a;background:rgba(245,158,11,.12);border-bottom:1px solid #1d2a45}
+.dayh{border-left:3px solid transparent}.dayh .chev{margin-left:auto;flex:none;color:var(--sub);font-size:12px}
+.dayh.open{background:var(--hover);border-left-color:var(--accent)}
+.wide{display:inline}
+.cmain{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;align-items:center}
+.cwrap{width:100%;max-width:880px;flex:1;min-height:0;display:flex;flex-direction:column}
+.tb{flex:none;padding:10px 12px 8px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--border)}
+.tb h1{font-size:16px;font-weight:800}
+.tb .sub{font-size:12px;color:var(--sub);line-height:1.5}
+@media (min-width:600px) and (max-width:1023px){.hdr{height:90px}.pane{width:100%;border-right:0}.viewer.pc{display:none}}
+@media (max-width:599px){.pane{width:100%;border-right:0}.viewer.pc{display:none}
+ .r{height:56px;padding:5px 12px}.r .t{font-size:14px}.m{font-size:12px}.sk{height:56px}.wide{display:none}.inp{height:40px}.seg span{height:36px}.fsum{height:36px}.ibtn{height:36px;width:36px}
+ .sub.hid{display:none}.tb{padding:8px 12px}}
+@media (min-width:1024px){.viewer.mob{display:none}}
+
+.sec{border-bottom:1px solid var(--border)}
+.bi{padding:12px 16px;border-bottom:1px solid var(--border);border-left:3px solid transparent;cursor:pointer}
+.bi.on{background:rgba(99,102,241,.08);border-left-color:#6366f1}
+.bi .a{font-size:13px;font-weight:500;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bi.on .a{font-weight:600}
+.bi .b{font-size:11px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bi .c{font-size:10px;color:var(--sub);opacity:.7;margin-top:4px}
+.btab{flex:1;padding:10px 4px;font-size:11px;font-weight:600;border:none;background:none;color:var(--sub);border-bottom:2px solid transparent;text-align:center}
+.btab.on{color:#6366f1;border-bottom-color:#6366f1}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px}
+.chip{padding:5px 12px;border-radius:8px;font-size:12px;border:1px solid var(--border);background:var(--card);color:var(--sub)}.chip.on{background:#2563eb;color:#fff}
+.bcode{background:var(--card);padding:2px 6px;border-radius:4px}
+</style></head><body><div class="app"><aside class="side"><b>OHVIS</b><small>Autonomous AI Dev System</small><div class="grp">대화·결정<span style="font-weight:400;color:var(--sub);font-size:11px">8</span></div><div class="grp">문서·기록</div><div class="item">📄 문서 통합</div><div class="item on">📊 Reports</div><div class="item">📘 교육자료 포털</div><div class="item">📝 변경 이력</div><div class="grp">일·프로젝트</div><div class="grp">운영·서버</div><div class="grp">자동화</div><div class="grp">사람·고객</div><div class="grp">관리자</div></aside><div class="main"><header class="hdr"><span>보고서 열람</span><span class="bt">💬 AI Chat</span><span class="bt k">📱 Android 설치</span><span class="st">● HEALTHY</span><span class="st">API OK</span></header><div style="flex:1;display:flex;overflow:hidden"><div style="width:35%;min-width:280px;max-width:420px;border-right:1px solid var(--border);display:flex;flex-direction:column;flex:none"><div style="padding:12px;border-bottom:1px solid var(--border)"><div class="inp" style="width:100%;height:auto;padding:8px 12px;font-size:13px">검색...</div></div><div style="display:flex;border-bottom:1px solid var(--border)"><div class="btab on">📊 시장조사 (30)</div><div class="btab">📄 기획서 (14)</div><div class="btab">📦 산출물 (40)</div></div><div class="list" id="list"><div class="bi item on"><div class="a">배달앱 자체 수집 사업성 검토</div><div class="b">1단계는 카페24 연동만 먼저 공개</div><div class="c">2026년 10월 14일 오전 18:07</div></div><div class="bi item"><div class="a">카페24 연동 공개 전환 방향</div><div class="b">현행 유지, 다음 분기 재검토</div><div class="c">2026년 10월 14일 오전 14:20</div></div><div class="bi item"><div class="a">오비서 홈 화면 사용자 조사</div><div class="b">목록 우선 화면으로 통일</div><div class="c">2026년 10월 14일 오전 12:33</div></div><div class="bi item"><div class="a">정본 문서 검색 품질 개선 방향</div><div class="b">필터 기본 접힘 + 선택 요약</div><div class="c">2026년 10월 14일 오전 08:46</div></div><div class="bi item"><div class="a">전자계약 문서 보관 규칙 정리</div><div class="b">승인 이력은 정본에서만 관리</div><div class="c">2026년 10월 13일 오전 18:59</div></div><div class="bi item"><div class="a">모바일 접힘 화면 사용성 점검</div><div class="b">접힘 화면 6줄 이상 보장</div><div class="c">2026년 10월 13일 오전 14:12</div></div><div class="bi item"><div class="a">러너 병행 실행 충돌 줄이기</div><div class="b">병행 3개까지 허용</div><div class="c">2026년 10월 13일 오전 12:25</div></div><div class="bi item"><div class="a">채팅 목업 검토 흐름 설계</div><div class="b">채팅 안에서 승인까지 연결</div><div class="c">2026년 10월 13일 오전 08:38</div></div><div class="bi item"><div class="a">월간 운영 비용 절감 시나리오</div><div class="b">비용 상한 단계별 적용</div><div class="c">2026년 10월 12일 오전 18:51</div></div><div class="bi item"><div class="a">KIS 자동매매 알림 정책 재검토</div><div class="b">1단계는 카페24 연동만 먼저 공개</div><div class="c">2026년 10월 12일 오전 14:04</div></div><div class="bi item"><div class="a">GO100 상담 문의 분류 기준</div><div class="b">현행 유지, 다음 분기 재검토</div><div class="c">2026년 10월 12일 오전 12:17</div></div><div class="bi item"><div class="a">SF 주문 수집 지연 원인 분석</div><div class="b">목록 우선 화면으로 통일</div><div class="c">2026년 10월 12일 오전 08:30</div></div><div class="bi item"><div class="a">대시보드 목록 화면 공통 규칙</div><div class="b">필터 기본 접힘 + 선택 요약</div><div class="c">2026년 10월 11일 오전 18:43</div></div><div class="bi item"><div class="a">변경 이력 화면 읽기 쉬움 개선</div><div class="b">승인 이력은 정본에서만 관리</div><div class="c">2026년 10월 11일 오전 14:56</div></div><div class="bi item"><div class="a">교육자료 포털 개편 방향</div><div class="b">접힘 화면 6줄 이상 보장</div><div class="c">2026년 10월 11일 오전 12:09</div></div><div class="bi item"><div class="a">에이전트 비용 상한 운영안</div><div class="b">병행 3개까지 허용</div><div class="c">2026년 10월 11일 오전 08:22</div></div><div class="bi item"><div class="a">문서 승인 절차 단순화</div><div class="b">채팅 안에서 승인까지 연결</div><div class="c">2026년 10월 10일 오전 18:35</div></div><div class="bi item"><div class="a">배포 실패 알림 문구 정리</div><div class="b">비용 상한 단계별 적용</div><div class="c">2026년 10월 10일 오전 14:48</div></div><div class="bi item"><div class="a">배달앱 자체 수집 사업성 검토 (2차)</div><div class="b">1단계는 카페24 연동만 먼저 공개</div><div class="c">2026년 10월 10일 오전 12:01</div></div><div class="bi item"><div class="a">카페24 연동 공개 전환 방향 (2차)</div><div class="b">현행 유지, 다음 분기 재검토</div><div class="c">2026년 10월 10일 오전 08:14</div></div><div class="bi item"><div class="a">오비서 홈 화면 사용자 조사 (2차)</div><div class="b">목록 우선 화면으로 통일</div><div class="c">2026년 10월 9일 오전 18:27</div></div><div class="bi item"><div class="a">정본 문서 검색 품질 개선 방향 (2차)</div><div class="b">필터 기본 접힘 + 선택 요약</div><div class="c">2026년 10월 9일 오전 14:40</div></div><div class="bi item"><div class="a">전자계약 문서 보관 규칙 정리 (2차)</div><div class="b">승인 이력은 정본에서만 관리</div><div class="c">2026년 10월 9일 오전 12:53</div></div><div class="bi item"><div class="a">모바일 접힘 화면 사용성 점검 (2차)</div><div class="b">접힘 화면 6줄 이상 보장</div><div class="c">2026년 10월 9일 오전 08:06</div></div><div class="bi item"><div class="a">러너 병행 실행 충돌 줄이기 (2차)</div><div class="b">병행 3개까지 허용</div><div class="c">2026년 10월 8일 오전 18:19</div></div><div class="bi item"><div class="a">채팅 목업 검토 흐름 설계 (2차)</div><div class="b">채팅 안에서 승인까지 연결</div><div class="c">2026년 10월 8일 오전 14:32</div></div><div class="bi item"><div class="a">월간 운영 비용 절감 시나리오 (2차)</div><div class="b">비용 상한 단계별 적용</div><div class="c">2026년 10월 8일 오전 12:45</div></div><div class="bi item"><div class="a">KIS 자동매매 알림 정책 재검토 (2차)</div><div class="b">1단계는 카페24 연동만 먼저 공개</div><div class="c">2026년 10월 8일 오전 08:58</div></div><div class="bi item"><div class="a">GO100 상담 문의 분류 기준 (2차)</div><div class="b">현행 유지, 다음 분기 재검토</div><div class="c">2026년 10월 7일 오전 18:11</div></div><div class="bi item"><div class="a">SF 주문 수집 지연 원인 분석 (2차)</div><div class="b">목록 우선 화면으로 통일</div><div class="c">2026년 10월 7일 오전 14:24</div></div><div class="bi item"><div class="a">배달앱 자체 수집 사업성 검토</div><div class="b">1단계는 카페24 연동만 먼저 공개</div><div class="c">2026년 10월 14일 오전 18:07</div></div><div class="bi item"><div class="a">카페24 연동 공개 전환 방향</div><div class="b">현행 유지, 다음 분기 재검토</div><div class="c">2026년 10월 14일 오전 14:20</div></div><div class="bi item"><div class="a">오비서 홈 화면 사용자 조사</div><div class="b">목록 우선 화면으로 통일</div><div class="c">2026년 10월 14일 오전 12:33</div></div><div class="bi item"><div class="a">정본 문서 검색 품질 개선 방향</div><div class="b">필터 기본 접힘 + 선택 요약</div><div class="c">2026년 10월 14일 오전 08:46</div></div><div class="bi item"><div class="a">전자계약 문서 보관 규칙 정리</div><div class="b">승인 이력은 정본에서만 관리</div><div class="c">2026년 10월 13일 오전 18:59</div></div><div class="bi item"><div class="a">모바일 접힘 화면 사용성 점검</div><div class="b">접힘 화면 6줄 이상 보장</div><div class="c">2026년 10월 13일 오전 14:12</div></div><div class="bi item"><div class="a">러너 병행 실행 충돌 줄이기</div><div class="b">병행 3개까지 허용</div><div class="c">2026년 10월 13일 오전 12:25</div></div><div class="bi item"><div class="a">채팅 목업 검토 흐름 설계</div><div class="b">채팅 안에서 승인까지 연결</div><div class="c">2026년 10월 13일 오전 08:38</div></div><div class="bi item"><div class="a">월간 운영 비용 절감 시나리오</div><div class="b">비용 상한 단계별 적용</div><div class="c">2026년 10월 12일 오전 18:51</div></div><div class="bi item"><div class="a">KIS 자동매매 알림 정책 재검토</div><div class="b">1단계는 카페24 연동만 먼저 공개</div><div class="c">2026년 10월 12일 오전 14:04</div></div></div><div style="padding:8px 12px;border-top:1px solid var(--border);font-size:10px;color:var(--sub);text-align:center">↑↓ 키보드 · 클릭 선택 · 30건</div></div><div style="flex:1;overflow:hidden;min-width:0"><div style="padding:24px"><h2 style="font-size:18px;font-weight:700;margin-bottom:16px">배달앱 자체 수집 사업성 검토</h2><div style="padding:12px 16px;border-radius:8px;background:rgba(59,130,246,.08);color:#3b82f6;margin-bottom:16px;font-size:14px">💡 추천: 1단계는 카페24 연동만 먼저 공개</div><div style="display:flex;gap:16px;font-size:13px;color:var(--sub)"><span>💰 $0.0040</span><span>📅 2026년 10월 14일 오후 6:07</span><span>🔗 #ab12cd34</span></div></div></div></div></div></div></body></html>

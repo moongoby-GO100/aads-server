@@ -1,0 +1,77 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>변경 이력 — default</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f172a;--side:#16213a;--card:#1e293b;--hover:#334155;--border:#334155;--text:#e2e8f0;--sub:#94a3b8;--accent:#3b82f6;--danger:#f87171;--warn:#fbbf24;--ok:#34d399}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,"Noto Sans KR","Noto Sans CJK KR","Malgun Gothic","WenQuanYi Zen Hei",Arial,sans-serif;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.app{display:flex;height:100vh}
+.side{width:240px;flex:none;background:var(--side);border-right:1px solid #0d1527;padding:16px 12px;display:none}
+.side b{display:block;color:#60a5fa;font-size:16px}.side small{color:var(--sub);font-size:11px}
+.side .grp{margin-top:18px;font-weight:700;font-size:14px;display:flex;justify-content:space-between}
+.side .item{margin:6px 0 0 6px;padding:7px 10px;border-radius:8px;color:var(--sub);font-size:13px}.side .on{background:var(--accent);color:#fff}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;height:100vh}
+.hdr{flex:none;background:#fff;color:#111827;height:57px;padding:0 12px;display:flex;align-items:center;gap:10px;font-weight:700;overflow:hidden}
+.hdr .bt{background:#6d5df6;color:#fff;border-radius:8px;padding:8px 12px;font-size:13px;white-space:nowrap}.hdr .bt.k{background:#111827}
+.hdr .st{font-weight:400;font-size:12px;color:#6b7280;white-space:nowrap}
+@media (min-width:1024px){.side{display:block}}
+@media (max-width:599px){.hdr{height:186px;flex-wrap:wrap;align-content:flex-start;padding:10px 12px}}
+
+.content{flex:1;min-height:0;display:flex}
+.pane{width:432px;flex:none;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+.chrome{flex:none;padding:8px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--border)}
+.row2{display:flex;gap:6px;align-items:center}
+.inp{flex:1;min-width:0;height:36px;border-radius:8px;border:1px solid var(--border);background:var(--card);padding:0 10px;color:var(--sub);font-size:13px;display:flex;align-items:center}
+.inp b{color:var(--text);font-weight:400}
+.seg{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;flex:1}
+.seg span{flex:1;height:30px;padding:0 6px;font-size:12px;display:flex;align-items:center;justify-content:center;color:var(--sub);background:var(--card);white-space:nowrap}.seg .on{background:var(--accent);color:#fff;font-weight:600}
+.seg.fixed{flex:none}.seg.fixed span{flex:none;padding:0 12px}
+.fsum{flex:1;min-width:0;height:28px;border-radius:8px;border:1px solid var(--border);padding:0 10px;font-size:12px;color:var(--sub);display:flex;align-items:center;justify-content:space-between;white-space:nowrap;overflow:hidden}
+.cnt{flex:none;font-size:11px;color:var(--sub)}
+.ibtn{flex:none;width:30px;height:30px;border-radius:8px;background:var(--hover);color:var(--sub);display:inline-flex;align-items:center;justify-content:center;font-size:14px}
+.list{flex:1;min-height:0;overflow:hidden}
+.r{height:44px;padding:3px 10px;border-bottom:1px solid #1d2a45;border-left:3px solid transparent;display:flex;flex-direction:column;justify-content:center}
+.r.on{background:var(--hover);border-left-color:var(--accent)}
+.r .t{display:flex;align-items:baseline;gap:6px;font-size:13px;line-height:20px;font-weight:600;white-space:nowrap;overflow:hidden}
+.r .t span{overflow:hidden;text-overflow:ellipsis}.r .t i{flex:none;font-style:normal;font-weight:400;font-size:11px;color:var(--sub)}
+.m{display:flex;gap:6px;align-items:center;font-size:11px;line-height:16px;color:var(--sub);white-space:nowrap;overflow:hidden}
+.r.on .m{color:var(--text)}
+.m .d{margin-left:auto;flex:none}.m .lb{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tag{flex:none;padding:0 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;line-height:16px;color:var(--sub)}
+.tag.draft{color:var(--text);background:var(--hover)}.tag.review{border-color:var(--accent);color:var(--text)}
+.tag.approved{border-color:var(--accent);color:var(--text);background:rgba(59,130,246,.3);font-weight:600}
+.tag.ok{border-color:#047857;color:#a7f3d0;background:rgba(16,185,129,.18)}.tag.warn{border-color:#b45309;color:#fde68a;background:rgba(245,158,11,.18)}
+.tag.bad{border-color:#b91c1c;color:#fecaca;background:rgba(239,68,68,.2);font-weight:600}.tag.mute{color:var(--sub);text-decoration:line-through}
+.tag.kind{color:var(--sub)}
+.viewer{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.vh{flex:none;padding:12px 18px;border-bottom:1px solid var(--border)}
+.vh .a{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.vh h2{font-size:16px;margin-top:6px;line-height:1.35}
+.vh .meta{margin-top:6px;font-size:12px;color:var(--sub);display:flex;gap:14px;flex-wrap:wrap}.vh .meta b{color:var(--text);font-weight:500}
+.vb{flex:1;min-height:0;overflow:hidden;padding:16px 18px}
+.callout{padding:10px 14px;border-radius:8px;background:rgba(59,130,246,.1);color:#93c5fd;font-size:13px;margin-bottom:14px}
+.callout b{color:#bfdbfe}
+.fold{display:flex;justify-content:space-between;align-items:center;height:32px;padding:0 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--sub);margin-bottom:8px}
+.pre{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;font:11px/1.55 ui-monospace,Menlo,monospace;color:#cbd5e1;white-space:pre-wrap;overflow:hidden}
+.back{display:none;flex:none;height:32px;padding:0 12px;border-radius:8px;background:var(--hover);font-size:12px;align-items:center}
+.sk{height:44px;padding:6px 10px;border-bottom:1px solid #1d2a45;display:flex;flex-direction:column;gap:6px;justify-content:center}
+.sk i{display:block;height:11px;border-radius:4px;background:linear-gradient(90deg,#1b2842,#26385a,#1b2842)}.sk i:nth-child(2){height:9px;width:46%}
+.msg{padding:34px 18px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px}
+.msg h3{font-size:15px}.msg p{font-size:12px;color:var(--sub);max-width:340px}.msg .big{font-size:30px}
+.msg .btn{height:36px;padding:0 16px;border-radius:8px;background:var(--accent);color:#fff;font-size:13px;display:inline-flex;align-items:center}.msg .btn.g{background:var(--hover);color:var(--text)}
+.msg.err h3{color:var(--danger)}
+.empty-view{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--sub);font-size:13px}.empty-view big{font-size:38px}
+.lab{height:24px;padding:0 12px;display:flex;align-items:center;font-size:11px;font-weight:700;color:var(--sub);background:#131d33;border-bottom:1px solid #1d2a45}
+.ban{min-height:28px;padding:4px 12px;line-height:1.35;display:flex;align-items:center;font-size:12px;color:#fde68a;background:rgba(245,158,11,.12);border-bottom:1px solid #1d2a45}
+.dayh{border-left:3px solid transparent}.dayh .chev{margin-left:auto;flex:none;color:var(--sub);font-size:12px}
+.dayh.open{background:var(--hover);border-left-color:var(--accent)}
+.wide{display:inline}
+.cmain{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;align-items:center}
+.cwrap{width:100%;max-width:880px;flex:1;min-height:0;display:flex;flex-direction:column}
+.tb{flex:none;padding:10px 12px 8px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--border)}
+.tb h1{font-size:16px;font-weight:800}
+.tb .sub{font-size:12px;color:var(--sub);line-height:1.5}
+@media (min-width:600px) and (max-width:1023px){.hdr{height:90px}.pane{width:100%;border-right:0}.viewer.pc{display:none}}
+@media (max-width:599px){.pane{width:100%;border-right:0}.viewer.pc{display:none}
+ .r{height:56px;padding:5px 12px}.r .t{font-size:14px}.m{font-size:12px}.sk{height:56px}.wide{display:none}.inp{height:40px}.seg span{height:36px}.fsum{height:36px}.ibtn{height:36px;width:36px}
+ .sub.hid{display:none}.tb{padding:8px 12px}}
+@media (min-width:1024px){.viewer.mob{display:none}}
+</style></head><body><div class="app"><aside class="side"><b>OHVIS</b><small>Autonomous AI Dev System</small><div class="grp">대화·결정<span style="font-weight:400;color:var(--sub);font-size:11px">8</span></div><div class="grp">문서·기록</div><div class="item">📄 문서 통합</div><div class="item">📊 Reports</div><div class="item">📘 교육자료 포털</div><div class="item on">📝 변경 이력</div><div class="grp">일·프로젝트</div><div class="grp">운영·서버</div><div class="grp">자동화</div><div class="grp">사람·고객</div><div class="grp">관리자</div></aside><div class="main"><header class="hdr"><span>📝 변경 이력</span><span class="bt">💬 AI Chat</span><span class="bt k">📱 Android 설치</span><span class="st">● HEALTHY</span><span class="st">API OK</span></header><div class="cmain"><div class="cwrap"><div class="tb"><div class="row2"><h1 style="flex:1">무엇이 언제 바뀌었나</h1><span class="ibtn" title="새로고침">🔄</span></div><div class="row2"><div class="seg fixed"><span class="">3일</span><span class="on">7일</span><span class="">14일</span><span class="">30일</span></div><span style="flex:1"></span></div><div class="sub hid">작업하면서 자동으로 쌓인 기록입니다 · 최근 7일 · 파일 1,409개 수정 · 운영 반영 28번</div></div><div class="list"><div class="r dayh open"><div class="t"><span>10-14 (수) · 파일 312개 수정</span><i class="chev">접기</i></div><div class="m"><span class="tag ok">운영 4번 반영</span><span class="tag bad">배포 실패 1건</span><span class="tag warn">기록 안 됨 14</span><span class="lb wide">AADS 212 · KIS 60 · GO100 40</span></div></div><div class="ban">고쳐놓고 기록되지 않은 변경 14건 — 이대로면 운영에 반영되지 않습니다</div><div class="r deprow"><div class="t"><span>운영 반영 4건 · 성공 3 · 실패 1</span></div><div class="m"><span class="tag bad">실패 #429</span><span class="tag kind">펼쳐 보기</span><span class="lb wide">이미지 빌드 중 의존성 설치 실패 (exit 1)</span><span class="d">12:41</span></div></div><div class="lab">고친 것 312건 (최근 300건까지 보관)</div><div class="r chgrow"><div class="t"><span>mockup_reviews.py</span><i>app/api</i></div><div class="m"><span class="tag ok">운영 반영됨</span><span class="lb wide">목업 검토 API 경로 정리</span><span class="d">16:50</span></div></div><div class="r chgrow"><div class="t"><span>DocListRow.tsx</span><i>src/app/docs</i></div><div class="m"><span class="tag ok">운영 반영됨</span><span class="lb wide">문서 목록 행 높이 통일</span><span class="d">16:43</span></div></div><div class="r chgrow"><div class="t"><span>문서 페이지 화면 목업.md</span><i>docs/design</i></div><div class="m"><span class="tag info">올림 (배포 대기)</span><span class="lb wide">설계 문서 초안 올림</span><span class="d">15:36</span></div></div><div class="r chgrow"><div class="t"><span>api.ts</span><i>src/lib</i></div><div class="m"><span class="tag info">기록됨 (아직 안 올림)</span><span class="lb wide">목록 호출 헬퍼 추가</span><span class="d">15:29</span></div></div><div class="r chgrow"><div class="t"><span>canonical_gate.py</span><i>app/services</i></div><div class="m"><span class="tag ok">운영 반영됨</span><span class="lb wide">정본 게이트 판정 기록</span><span class="d">14:22</span></div></div><div class="r chgrow"><div class="t"><span>error_book.py</span><i>scripts</i></div><div class="m"><span class="tag warn">고쳤는데 기록 안 됨</span><span class="lb wide">오류 사전 조회 옵션 추가</span><span class="d">14:15</span></div></div><div class="r chgrow"><div class="t"><span>manifest.json</span><i>app/static/mockups/20261014_docs</i></div><div class="m"><span class="tag info">올림 (배포 대기)</span><span class="lb wide">목업 manifest 갱신</span><span class="d">13:08</span></div></div><div class="r chgrow"><div class="t"><span>page.tsx</span><i>src/app/reports</i></div><div class="m"><span class="tag warn">고쳤는데 기록 안 됨</span><span class="lb wide">검색 입력 안내 문구</span><span class="d">13:01</span></div></div><div class="r chgrow"><div class="t"><span>test_mockup_reviews.py</span><i>tests/unit</i></div><div class="m"><span class="tag ok">운영 반영됨</span><span class="lb wide">검토 요청 단위 테스트</span><span class="d">12:54</span></div></div><div class="r chgrow"><div class="t"><span>spec.md</span><i>docs/specs/rdoc-mockup-review</i></div><div class="m"><span class="tag info">기록됨 (아직 안 올림)</span><span class="lb wide">문서 의무 항목 보강</span><span class="d">12:47</span></div></div><div class="r chgrow"><div class="t"><span>db_pool.py</span><i>app/core</i></div><div class="m"><span class="tag mute">취소됨</span><span class="lb wide">풀 크기 변경 취소</span><span class="d">11:40</span></div></div><div class="r chgrow"><div class="t"><span>DocBadge.tsx</span><i>src/components/docs</i></div><div class="m"><span class="tag ok">운영 반영됨</span><span class="lb wide">배지 색 토큰 정리</span><span class="d">11:33</span></div></div><div class="r chgrow"><div class="t"><span>canonical_documents.py</span><i>app/api</i></div><div class="m"><span class="tag mute">다른 작업이 덮음</span><span class="lb wide">다른 작업이 덮음</span><span class="d">10:26</span></div></div><div class="r chgrow"><div class="t"><span>page.tsx</span><i>src/app/changes</i></div><div class="m"><span class="tag warn">고쳤는데 기록 안 됨</span><span class="lb wide">날짜 머리글 문구</span><span class="d">10:19</span></div></div><div class="r chgrow"><div class="t"><span>20261014_AADS_목업승인게이트_M8a_검증보고.md</span><i>docs/reports</i></div><div class="m"><span class="tag info">올림 (배포 대기)</span><span class="lb wide">검증 보고 올림</span><span class="d">09:12</span></div></div><div class="r chgrow"><div class="t"><span>mockup_review.py</span><i>app/models</i></div><div class="m"><span class="tag ok">운영 반영됨</span><span class="lb wide">검토 요청 모델 필드</span><span class="d">09:05</span></div></div><div class="r dayh"><div class="t"><span>10-13 (화) · 파일 268개 수정</span><i class="chev">펼치기</i></div><div class="m"><span class="tag ok">운영 6번 반영</span><span class="lb wide">AADS 190 · SF 78</span></div></div><div class="r dayh"><div class="t"><span>10-12 (월) · 파일 141개 수정</span><i class="chev">펼치기</i></div><div class="m"><span class="tag ok">운영 2번 반영</span><span class="tag warn">기록 안 됨 3</span><span class="lb wide">AADS 141</span></div></div><div class="r dayh"><div class="t"><span>10-11 (일) · 파일 57개 수정</span><i class="chev">펼치기</i></div><div class="m"><span class="tag ok">운영 1번 반영</span><span class="lb wide">오비서 57</span></div></div><div class="r dayh"><div class="t"><span>10-10 (토) · 파일 203개 수정</span><i class="chev">펼치기</i></div><div class="m"><span class="tag ok">운영 5번 반영</span><span class="tag bad">배포 실패 2건</span><span class="lb wide">AADS 150 · KIS 53</span></div></div><div class="r dayh"><div class="t"><span>10-09 (금) · 파일 330개 수정</span><i class="chev">펼치기</i></div><div class="m"><span class="tag ok">운영 7번 반영</span><span class="tag warn">기록 안 됨 6</span><span class="lb wide">AADS 260 · GO100 70</span></div></div><div class="r dayh"><div class="t"><span>10-08 (목) · 파일 98개 수정</span><i class="chev">펼치기</i></div><div class="m"><span class="tag ok">운영 3번 반영</span><span class="lb wide">AADS 98</span></div></div></div></div></div></div></div></body></html>

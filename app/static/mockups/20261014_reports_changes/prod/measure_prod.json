@@ -1,0 +1,46 @@
+{
+ "reports_1440x820": {
+  "load_s": [
+   2.45,
+   1.55,
+   2.29
+  ],
+  "median": 2.29,
+  "final_url": "https://aads.newtalk.kr/reports/",
+  "title": "AADS 문서 포털 — 교육자료 · 기획 · 보고서",
+  "text": "AADS 문서 포털 |  | 교육자료 · 기획/설계 · 기업분석 · 보고서 — 한곳에서 모두 열람 |  | 65 | 전체 문서 | 30 | 교육자료 | 10 | 기획/설계 | 6 | 분석/보고 | 전체 | 교육자료 | 기획/설계 | UI 목업 | 분석/보고 | 사업 | 오비서 | 📘"
+ },
+ "reports_360x780": {
+  "load_s": [
+   2.52,
+   4.64,
+   1.51
+  ],
+  "median": 2.52,
+  "final_url": "https://aads.newtalk.kr/reports/",
+  "title": "AADS 문서 포털 — 교육자료 · 기획 · 보고서",
+  "text": "AADS 문서 포털 |  | 교육자료 · 기획/설계 · 기업분석 · 보고서 — 한곳에서 모두 열람 |  | 65 | 전체 문서 | 30 | 교육자료 | 10 | 기획/설계 | 6 | 분석/보고 | 전체 | 교육자료 | 기획/설계 | UI 목업 | 분석/보고 | 사업 | 오비서 | 📘"
+ },
+ "changes_1440x820": {
+  "load_s": [
+   4.78,
+   2.21,
+   2.2
+  ],
+  "median": 2.21,
+  "final_url": "https://aads.newtalk.kr/login?redirect=%2Fchanges",
+  "title": "OHVIS",
+  "text": "OHVIS |  | 오비스 AI Assistant |  | 이메일 | 비밀번호 | 로그인 |  | 계정이 없으신가요? 회원가입"
+ },
+ "changes_360x780": {
+  "load_s": [
+   3.51,
+   2.11,
+   2.09
+  ],
+  "median": 2.11,
+  "final_url": "https://aads.newtalk.kr/login?redirect=%2Fchanges",
+  "title": "OHVIS",
+  "text": "OHVIS |  | 오비스 AI Assistant |  | 이메일 | 비밀번호 | 로그인 |  | 계정이 없으신가요? 회원가입"
+ }
+}
