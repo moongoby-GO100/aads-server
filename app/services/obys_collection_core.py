@@ -220,6 +220,19 @@ def card_vat(raw: dict[str, Any]) -> Decimal | None:
     return _card_signed(_dec(_first(raw, *_CARD_VAT_KEYS)), raw)
 
 
+_BANK_COUNTERPARTY_KEYS = ("businessEntityName", "transactionDescription", "transactionName")
+
+
+def bank_counterparty(raw: dict[str, Any]) -> str:
+    """은행거래 거래처. 2026-10-14 운영 실측: transactionName 은 항상 ''이고 businessEntityName(있을 때만) /
+    transactionDescription(항상 값 있음)에 실제 값이 있다. 빈 문자열·공백만 있는 값은 건너뛴다."""
+    for key in _BANK_COUNTERPARTY_KEYS:
+        value = raw.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
 def normalize_item(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
     """종류별 필드 → 공통 열. source_key 가 None 이면 호출부가 fingerprint+ordinal 로 채운다."""
     if kind == KIND_BANK:
@@ -231,7 +244,7 @@ def normalize_item(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
             "occurred_on": _date(raw.get("transactionAt")),
             "amount": in_amt if direction == "IN" else out_amt,
             "direction": direction,
-            "counterparty": str(raw.get("transactionName") or ""),
+            "counterparty": bank_counterparty(raw),
         }
     if kind == KIND_TAX:
         direction = str(raw.get("type") or "").upper()
