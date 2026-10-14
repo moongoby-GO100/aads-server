@@ -52,6 +52,7 @@ NS_NET="${ACCT_NS_NETWORK:-acct_net}"
 [[ $NS_NET =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo "bad ACCT_NS_NETWORK '$NS_NET'" >&2; exit 2; }
 PG_CONTAINER="${ACCT_PG_CONTAINER:-acct-pg}"
 PG_DB="${ACCT_PG_DB:-obys}"
+AUTH_PG_DB="${ACCT_AUTH_PG_DB:-obys_auth}" # 인증 DB(saas_users). 업무 DB(PG_DB)와 반드시 다른 DB 여야 한다.
 PG_USER="${ACCT_PG_USER:-}"
 PG_BACKUP_DIR="${ACCT_PG_BACKUP_DIR:-/root/acct-release-backups}"
 APACHE_SITE="${ACCT_APACHE_SITE:-/etc/apache2/sites-available/00-zz-fb.newtalk.kr.conf}"
@@ -87,6 +88,10 @@ ACCT_MIGRATION_ALLOWLIST=(
     20261001_obys_hrdoc_expiry_integrity_superseded.sql
     20261003_obys_clobe_collection.sql
     20261008_obys_clobe_mcp_store.sql
+)
+# 인증 DB(AUTH_PG_DB)에만 적용하는 마이그레이션. 업무 DB 목록과 섞지 않는다 — 대상 DB 가 다르기 때문이다.
+ACCT_AUTH_MIGRATION_ALLOWLIST=(
+    20261014_obys_auth_password_recovery.sql
 )
 BUILD_PATHS=(app migrations deploy)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -214,10 +219,18 @@ make_release_worktree() { # sets REPO: isolated detached worktree at exactly the
 # ---- release tree checks ------------------------------------------------------------------------
 migration_allowed() { # exact name from the fixed allowlist only
     local n=$1 m
-    for m in "${ACCT_MIGRATION_ALLOWLIST[@]}"; do
+    for m in "${ACCT_MIGRATION_ALLOWLIST[@]}" "${ACCT_AUTH_MIGRATION_ALLOWLIST[@]}"; do
         [[ $m == "$n" ]] && return 0
     done
     return 1
+}
+
+migration_db() { # migration_db <name>: 마이그레이션이 적용되는 DB 이름
+    local n=$1 m
+    for m in "${ACCT_AUTH_MIGRATION_ALLOWLIST[@]}"; do
+        [[ $m == "$n" ]] && { printf '%s' "$AUTH_PG_DB"; return 0; }
+    done
+    printf '%s' "$PG_DB"
 }
 
 migration_scan() { # fail-closed: transaction wrapper required, no DROP/TRUNCATE/DELETE (comments stripped; DROP CONSTRAINT is data-neutral and allowed)
@@ -249,7 +262,7 @@ validate_release() {
     head="$(git -C "$REPO" rev-parse HEAD)"
     [[ $head == "$RELEASE_SHA" ]] || die 4 "release worktree HEAD ${head:0:12} != release ${RELEASE_SHA:0:12}"
     [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]] || die 4 "release worktree has uncommitted tracked changes"
-    for m in "${ACCT_MIGRATION_ALLOWLIST[@]}"; do
+    for m in "${ACCT_MIGRATION_ALLOWLIST[@]}" "${ACCT_AUTH_MIGRATION_ALLOWLIST[@]}"; do
         path="migrations/$m"
         git -C "$REPO" ls-files --error-unmatch "$path" >/dev/null 2>&1 || die 5 "allowlisted migration $path is not tracked at ${RELEASE_SHA:0:12}"
         migration_scan "$REPO/$path" || die 5 "migration $m failed the safety scan"
@@ -565,7 +578,7 @@ check_deps_unchanged() {
     [[ -z $changed ]] || die 6 "files outside the overlay changed since $base ($(tr '\n' ' ' <<<"$changed")); this script cannot install dependencies or root modules - needs a full image build"
     local n
     n="$(git -C "$REPO" diff --name-only "$base" "$RELEASE_SHA" -- migrations ':(exclude)migrations/rollback' ':(exclude)migrations/drafts' | wc -l)"
-    say "migrations changed in $base..${RELEASE_SHA:0:8}: $n file(s); only the ${#ACCT_MIGRATION_ALLOWLIST[@]} allowlisted OBYS migrations are ever applied"
+    say "migrations changed in $base..${RELEASE_SHA:0:8}: $n file(s); only the $(( ${#ACCT_MIGRATION_ALLOWLIST[@]} + ${#ACCT_AUTH_MIGRATION_ALLOWLIST[@]} )) allowlisted OBYS migrations are ever applied"
 }
 
 snapshot_unrelated() { # all containers except the one this run creates
@@ -695,52 +708,73 @@ migration_probe_sql() { # prints SQL returning t when the migration is already a
             # 4개 테이블 + (역할이 있으면) 그 역할의 클로브 테이블 권한. 역할이 없는 DB 는 GRANT 를 건너뛰므로 테이블만 본다.
             echo "/*probe*/ SELECT (SELECT count(*) FROM unnest(ARRAY['clobe_mcp_oauth_client','clobe_mcp_oauth_state','clobe_mcp_connection','clobe_mcp_tools']) t WHERE to_regclass('public.'||t) IS NOT NULL) = 4 AND (NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='acct_business_runtime_r5') OR (has_table_privilege('acct_business_runtime_r5','public.clobe_mcp_connection','SELECT,INSERT,UPDATE') AND has_table_privilege('acct_business_runtime_r5','public.obys_clobe_company_link','SELECT,INSERT,UPDATE')));"
             ;;
+        20261014_obys_auth_password_recovery.sql)
+            # 인증 DB: saas_users 3컬럼 + 재설정 요청·감사 테이블 + 열린 요청 유일 인덱스.
+            echo "/*probe*/ SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='saas_users' AND column_name IN ('must_change_password','session_version','password_changed_at')) = 3 AND to_regclass('public.obys_password_reset_requests') IS NOT NULL AND to_regclass('public.obys_password_reset_audit') IS NOT NULL AND to_regclass('public.uq_obys_pwreset_open_per_user_tenant_method') IS NOT NULL;"
+            ;;
         *) return 1 ;;
     esac
 }
 
-pg_query() { # pg_query <sql>  (stdin carries the SQL; prints psql -At output)
-    rdocker exec -i "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -X -Atq -v ON_ERROR_STOP=1 -f - <<<"$1"
+pg_query_db() { # pg_query_db <db> <sql>  (prints psql -At output)
+    rdocker exec -i "$PG_CONTAINER" psql -U "$PG_USER" -d "$1" -X -Atq -v ON_ERROR_STOP=1 -f - <<<"$2"
+}
+
+pg_query() { # pg_query <sql>  (업무 DB)
+    pg_query_db "$PG_DB" "$1"
 }
 
 apply_migration() { # apply_migration <name>: allowlist only
-    local m=$1 file out
+    local m=$1 file out db
     migration_allowed "$m" || { say "migration '$m' is not in the allowlist; refusing"; return 7; }
     file="$REPO/migrations/$m"
     [[ -f $file ]] || { say "migration file $file missing"; return 7; }
     migration_scan "$file" >/dev/null || { say "migration $m failed the safety scan; refusing"; return 7; }
-    say "applying $m to $PG_CONTAINER/$PG_DB (single transaction, ON_ERROR_STOP)"
-    if ! SSH_CALL_TIMEOUT=180 rdocker exec -i "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -X -q -v ON_ERROR_STOP=1 -f - <"$file"; then
+    db="$(migration_db "$m")"
+    say "applying $m to $PG_CONTAINER/$db (single transaction, ON_ERROR_STOP)"
+    if ! SSH_CALL_TIMEOUT=180 rdocker exec -i "$PG_CONTAINER" psql -U "$PG_USER" -d "$db" -X -q -v ON_ERROR_STOP=1 -f - <"$file"; then
         say "migration $m failed (transaction rolled back by ON_ERROR_STOP)"
         return 7
     fi
-    out="$(pg_query "$(migration_probe_sql "$m")")" || return 7
+    out="$(pg_query_db "$db" "$(migration_probe_sql "$m")")" || return 7
     [[ $out == t ]] || { say "migration $m applied but its probe says '$out'"; return 7; }
 }
 
 run_migrations() {
-    local m state pending=() out
+    local m state db out
+    local pending=() pending_dbs=()
     if [[ -z $PG_USER ]]; then PG_USER="${INFO[PG_USER]:-}"; fi
     [[ -n $PG_USER ]] || PG_USER=postgres
+    [[ $AUTH_PG_DB != "$PG_DB" ]] || die 7 "auth DB '$AUTH_PG_DB' must differ from the business DB '$PG_DB'"
     out="$(pg_query "/*identity*/ SELECT to_regclass('public.yeoljeong_onboarding_documents') IS NOT NULL;")" \
         || die 7 "cannot query $PG_CONTAINER/$PG_DB"
     [[ $out == t ]] || die 7 "$PG_DB on $PG_CONTAINER is not the OBYS business DB (yeoljeong_onboarding_documents missing)"
-    for m in "${ACCT_MIGRATION_ALLOWLIST[@]}"; do
-        state="$(pg_query "$(migration_probe_sql "$m")")" || die 7 "probe failed for $m"
+    if [[ ${#ACCT_AUTH_MIGRATION_ALLOWLIST[@]} -gt 0 ]]; then
+        out="$(pg_query_db "$AUTH_PG_DB" "/*identity*/ SELECT to_regclass('public.saas_users') IS NOT NULL AND to_regclass('public.tenant_memberships') IS NOT NULL AND to_regclass('public.yeoljeong_onboarding_documents') IS NULL;")" \
+            || die 7 "cannot query $PG_CONTAINER/$AUTH_PG_DB"
+        [[ $out == t ]] || die 7 "$AUTH_PG_DB on $PG_CONTAINER is not the OBYS auth DB (saas_users/tenant_memberships missing, or it is the business DB)"
+    fi
+    for m in "${ACCT_MIGRATION_ALLOWLIST[@]}" "${ACCT_AUTH_MIGRATION_ALLOWLIST[@]}"; do
+        db="$(migration_db "$m")"
+        state="$(pg_query_db "$db" "$(migration_probe_sql "$m")")" || die 7 "probe failed for $m"
         if [[ $state == t ]]; then
             MIGRATIONS_SKIPPED+=("$m")
             say "migration $m already applied; skipping"
         else
             pending+=("$m")
+            [[ " ${pending_dbs[*]:-} " == *" $db "* ]] || pending_dbs+=("$db")
         fi
     done
     [[ ${#pending[@]} -gt 0 ]] || return 0
     need_budget $((MONITOR_SECONDS + RECOVERY_RESERVE + 120)) "migrations"
-    out="$(SSH_CALL_TIMEOUT=300 rscript pg_backup R_PG_BACKUP "$PG_CONTAINER" "$PG_USER" "$PG_DB" "$PG_BACKUP_DIR" "pre_${SHA8}")" \
-        || die 7 "pg_dump backup failed; no migration applied"
-    PG_BACKUP_PATH="$(sed -n 's/^BACKUP_PATH=//p' <<<"$out" | head -1)"
-    [[ -n $PG_BACKUP_PATH ]] || die 7 "pg_dump backup path missing from output; no migration applied"
-    say "pg_dump backup on $CAFE24_SSH: $PG_BACKUP_PATH"
+    for db in "${pending_dbs[@]}"; do
+        out="$(SSH_CALL_TIMEOUT=300 rscript pg_backup R_PG_BACKUP "$PG_CONTAINER" "$PG_USER" "$db" "$PG_BACKUP_DIR" "pre_${SHA8}")" \
+            || die 7 "pg_dump backup of $db failed; no migration applied"
+        out="$(sed -n 's/^BACKUP_PATH=//p' <<<"$out" | head -1)"
+        [[ -n $out ]] || die 7 "pg_dump backup path of $db missing from output; no migration applied"
+        say "pg_dump backup of $db on $CAFE24_SSH: $out"
+        PG_BACKUP_PATH="${PG_BACKUP_PATH:+$PG_BACKUP_PATH,}$out"
+    done
     for m in "${pending[@]}"; do
         apply_migration "$m" || die 7 "migration $m failed; backup $PG_BACKUP_PATH; no cutover performed (running app untouched)"
         MIGRATIONS_APPLIED+=("$m")

@@ -101,6 +101,8 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/health/live",
     "/api/v1/auth/login",
     "/api/v1/auth/register",
+    # 로그인 전 아이디 찾기·비밀번호 재설정 요청(라우터가 IP+대상 기준 빈도 제한을 건다).
+    "/api/v1/auth/recovery",
     "/api/v1/auth/me",
     # 언니냉면 공개 문의 폼(비로그인 고객). 라우터가 IP 당 빈도 제한·허니팟을 건다.
     "/api/v1/unni-naengmyeon/inquiries",

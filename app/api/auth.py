@@ -6,6 +6,7 @@ from typing import Optional
 import logging
 
 import app.auth as auth_module
+from app.services import obys_account_recovery as recovery
 from app.auth import TenantRole, get_current_user, require_tenant_role
 from app.services.tenant_usage_limits import get_tenant_usage_summary
 
@@ -74,6 +75,7 @@ class AuthResponse(BaseModel):
     onboarding_required: bool = False
     tenant: Optional[dict] = None
     invites: list[dict] = Field(default_factory=list)
+    must_change_password: bool = False
 
 
 class TenantCreateRequest(BaseModel):
@@ -200,7 +202,9 @@ async def register(req: RegisterRequest, request: Request):
             invited_by=uid,
         )
         invites.append(created_invite)
-    token = auth_module.create_token(uid, user["email"], tenant_id=tenant_id)
+    token = auth_module.create_token(
+        uid, user["email"], tenant_id=tenant_id, session_version=await auth_module.session_version_for(uid)
+    )
     logger.info("SaaS 회원가입 완료: %s", req.email)
     return AuthResponse(
         token=token,
@@ -217,17 +221,27 @@ async def register(req: RegisterRequest, request: Request):
 
 @router.post("/auth/login", response_model=AuthResponse)
 async def login(req: LoginRequest):
-    """1순위: SaaS DB 인증, 2순위: CEO 관리자 환경변수"""
+    """1순위: SaaS DB 인증, 2순위: 관리자가 발급한 임시 비밀번호, 3순위: CEO 관리자 환경변수"""
     if not auth_module.JWT_AVAILABLE:
         raise HTTPException(status_code=503, detail="JWT 인증 모듈 미설치 (pip install PyJWT)")
 
     await auth_module.require_saas_schema_ready()
     saas_user = await auth_module.authenticate_saas_user(req.email, req.password)
+    must_change = False
+    if not saas_user:
+        saas_user = await _try_temp_password_login(req.email, req.password)
+        must_change = bool(saas_user)
     if saas_user:
         uid = str(saas_user["id"])  # DB returns int, JWT/response need str
         tenant_id = await auth_module.resolve_login_tenant_for_user(saas_user)
         await auth_module.update_saas_user_last_login(uid)
-        token = auth_module.create_token(uid, saas_user["email"], tenant_id=tenant_id)
+        token = auth_module.create_token(
+            uid,
+            saas_user["email"],
+            tenant_id=tenant_id,
+            session_version=await auth_module.session_version_for(uid),
+            expires_in_seconds=_FORCED_CHANGE_TOKEN_SECONDS if must_change else None,
+        )
         return AuthResponse(
             token=token,
             user_id=uid,
@@ -235,6 +249,7 @@ async def login(req: LoginRequest):
             name=saas_user.get("name"),
             is_admin=False,
             tenant_id=tenant_id,
+            must_change_password=must_change,
         )
 
     if auth_module.ADMIN_PASSWORD and auth_module.check_admin_credentials(req.email, req.password):
@@ -249,6 +264,161 @@ async def login(req: LoginRequest):
         )
 
     raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다")
+
+
+_FORCED_CHANGE_TOKEN_SECONDS = 3600
+
+
+async def _try_temp_password_login(email: str, password: str) -> Optional[dict]:
+    """복구 테이블이 없는 DB(AADS 본 앱 등)·조회 오류는 '임시 비밀번호 아님'으로 취급해 일반 로그인 실패 경로를 유지한다."""
+    try:
+        store = recovery.get_store()
+        if not await store.schema_ready():
+            return None
+        return await recovery.try_temp_password_login(store, email, password)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("temp password login check failed: %s", type(exc).__name__)
+        return None
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    return forwarded or (request.client.host if request.client else "")
+
+
+async def _recovery_store() -> "recovery.RecoveryStore":
+    store = recovery.get_store()
+    if not await store.schema_ready():
+        raise HTTPException(status_code=503, detail="계정 복구 기능을 아직 사용할 수 없습니다. 관리자에게 문의해 주십시오.")
+    return store
+
+
+def _recovery_http(exc: "recovery.RecoveryError") -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
+class FindIdRequest(BaseModel):
+    name: str = Field(max_length=100)
+    phone: str = Field(max_length=40)
+
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(max_length=200)
+    name: str = Field(max_length=100)
+    phone: str = Field(max_length=40)
+
+
+class SmsConfirmRequest(BaseModel):
+    email: str = Field(max_length=200)
+    code: str = Field(max_length=12)
+    new_password: str = Field(max_length=200)
+
+
+class PasswordChangeRequest(BaseModel):
+    new_password: str = Field(max_length=200)
+    current_password: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.get("/auth/recovery/options")
+async def recovery_options():
+    return recovery.options()
+
+
+@router.post("/auth/recovery/find-id")
+async def recovery_find_id(req: FindIdRequest, request: Request):
+    store = await _recovery_store()
+    try:
+        return await recovery.find_id(store, req.name, req.phone, _client_ip(request))
+    except recovery.RecoveryError as exc:
+        raise _recovery_http(exc)
+
+
+@router.post("/auth/recovery/password-reset-request")
+async def recovery_password_reset_request(req: PasswordResetRequest, request: Request):
+    store = await _recovery_store()
+    try:
+        return await recovery.request_password_reset(store, req.email, req.name, req.phone, _client_ip(request))
+    except recovery.RecoveryError as exc:
+        raise _recovery_http(exc)
+
+
+@router.post("/auth/recovery/sms/request")
+async def recovery_sms_request(req: PasswordResetRequest, request: Request):
+    store = await _recovery_store()
+    try:
+        return await recovery.request_sms_code(store, req.email, req.name, req.phone, _client_ip(request))
+    except recovery.RecoveryError as exc:
+        raise _recovery_http(exc)
+
+
+@router.post("/auth/recovery/sms/confirm")
+async def recovery_sms_confirm(req: SmsConfirmRequest, request: Request):
+    store = await _recovery_store()
+    try:
+        result = await recovery.confirm_sms_reset(store, req.email, req.code, req.new_password, _client_ip(request))
+    except recovery.RecoveryError as exc:
+        raise _recovery_http(exc)
+    result.pop("session_version", None)
+    return result
+
+
+@router.post("/auth/password/change")
+async def change_my_password(req: PasswordChangeRequest, current_user: dict = Depends(get_current_user)):
+    """본인 비밀번호 변경. 임시 비밀번호로 로그인한 세션(must_change_password)은 현재 비밀번호 없이 변경한다."""
+    if current_user.get("is_admin") or str(current_user.get("user_id")) == "admin":
+        raise HTTPException(status_code=403, detail="환경변수 관리자 계정은 이 경로로 변경할 수 없습니다.")
+    store = await _recovery_store()
+    uid = str(current_user["user_id"])
+    try:
+        result = await recovery.change_password(
+            store,
+            user_id=uid,
+            new_password=req.new_password,
+            current_password=req.current_password,
+            must_change=bool(current_user.get("must_change_password")),
+        )
+    except recovery.RecoveryError as exc:
+        raise _recovery_http(exc)
+    token = auth_module.create_token(
+        uid,
+        str(current_user.get("email") or ""),
+        tenant_id=current_user.get("tenant_id"),
+        session_version=int(result.get("session_version") or 0),
+    )
+    return {"changed": True, "token": token, "message": "비밀번호를 변경했습니다."}
+
+
+@router.get("/auth/password-reset-requests")
+async def list_password_reset_requests(context: dict = Depends(require_tenant_role(TenantRole.ADMIN))):
+    store = await _recovery_store()
+    return {"requests": await recovery.list_reset_requests(store, _tenant_id(context))}
+
+
+@router.post("/auth/password-reset-requests/{request_id}/issue")
+async def issue_password_reset(request_id: str, context: dict = Depends(require_tenant_role(TenantRole.ADMIN))):
+    store = await _recovery_store()
+    try:
+        return await recovery.issue_temp_password(
+            store,
+            request_id=request_id,
+            actor_id=_user_id(context),
+            actor_role=str(context["membership"]["role"]),
+            actor_tenant_id=_tenant_id(context),
+            actor_is_internal_admin=bool(context["user"].get("is_internal_admin")),
+        )
+    except recovery.RecoveryError as exc:
+        raise _recovery_http(exc)
+
+
+@router.post("/auth/password-reset-requests/{request_id}/cancel")
+async def cancel_password_reset(request_id: str, context: dict = Depends(require_tenant_role(TenantRole.ADMIN))):
+    store = await _recovery_store()
+    try:
+        return await recovery.cancel_reset_request(
+            store, request_id=request_id, actor_id=_user_id(context), actor_tenant_id=_tenant_id(context)
+        )
+    except recovery.RecoveryError as exc:
+        raise _recovery_http(exc)
 
 
 @router.post("/auth/admin/impersonate/{user_id}")
@@ -275,7 +445,12 @@ async def admin_impersonate(
         logger.info("impersonate: step2 target_keys=%s", {k: type(v).__name__ for k, v in target.items()})
         tenant_id = await auth_module.resolve_login_tenant_for_user(target)
         logger.info("impersonate: step3 tenant_id=%s", tenant_id)
-        token = auth_module.create_token(str(target["id"]), target["email"], tenant_id=str(tenant_id) if tenant_id else None)
+        token = auth_module.create_token(
+            str(target["id"]),
+            target["email"],
+            tenant_id=str(tenant_id) if tenant_id else None,
+            session_version=await auth_module.session_version_for(str(target["id"])),
+        )
         return {
             "token": token,
             "user_id": str(target["id"]),
@@ -313,7 +488,10 @@ async def create_tenant(
         plan_key=req.plan_key,
     )
     user = context["user"]
-    token = auth_module.create_token(str(user["user_id"]), str(user.get("email") or ""), tenant_id=tenant["tenant_id"])
+    token = auth_module.create_token(
+        str(user["user_id"]), str(user.get("email") or ""), tenant_id=tenant["tenant_id"],
+        session_version=int(user.get("session_version") or 0),
+    )
     return {
         "tenant": tenant,
         "token": token,
@@ -343,7 +521,10 @@ async def complete_onboarding(
             )
         )
     user = context["user"]
-    token = auth_module.create_token(str(user["user_id"]), str(user.get("email") or ""), tenant_id=tenant_id)
+    token = auth_module.create_token(
+        str(user["user_id"]), str(user.get("email") or ""), tenant_id=tenant_id,
+        session_version=int(user.get("session_version") or 0),
+    )
     return {
         "tenant": tenant,
         "invites": invites,
@@ -359,7 +540,10 @@ async def switch_tenant(
     """소속 조직으로 현재 세션 tenant를 전환하는 JWT를 재발급한다."""
     switched = await auth_module.switch_user_tenant(_user_id(context), tenant_id)
     user = switched["user"]
-    token = auth_module.create_token(str(user["id"]), str(user["email"]), tenant_id=tenant_id)
+    token = auth_module.create_token(
+        str(user["id"]), str(user["email"]), tenant_id=tenant_id,
+        session_version=await auth_module.session_version_for(str(user["id"])),
+    )
     return {
         "token": token,
         "tenant": switched["context"]["tenant"],
@@ -420,7 +604,10 @@ async def accept_tenant_invite(req: TenantInviteAcceptRequest):
     )
     user = accepted["user"]
     tenant_id = accepted["tenant_id"]
-    token = auth_module.create_token(str(user["id"]), str(user["email"]), tenant_id=tenant_id)
+    token = auth_module.create_token(
+        str(user["id"]), str(user["email"]), tenant_id=tenant_id,
+        session_version=await auth_module.session_version_for(str(user["id"])),
+    )
     return AuthResponse(
         token=token,
         user_id=str(user["id"]),
@@ -488,6 +675,7 @@ async def e2e_inject(
             uid,
             saas_user["email"],
             tenant_id=await auth_module.resolve_login_tenant_for_user(saas_user),
+            session_version=await auth_module.session_version_for(uid),
         )
     elif auth_module.ADMIN_PASSWORD and auth_module.check_admin_credentials(email, password):
         token = auth_module.create_token(
@@ -531,4 +719,5 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "user_role": current_user.get("user_role"),
         "tenant": current_user.get("current_tenant"),
         "membership": current_user.get("current_membership"),
+        "must_change_password": bool(current_user.get("must_change_password", False)),
     }

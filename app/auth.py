@@ -80,17 +80,27 @@ if not ADMIN_PASSWORD:
     log.warning('admin_password_not_set', detail='Auth endpoints will return 503 until AADS_ADMIN_PASSWORD is set')
 
 
-def create_token(user_id: str, email: str, *, is_admin: bool = False, tenant_id: Optional[str] = None) -> str:
+def create_token(
+    user_id: str,
+    email: str,
+    *,
+    is_admin: bool = False,
+    tenant_id: Optional[str] = None,
+    session_version: int = 0,
+    expires_in_seconds: Optional[int] = None,
+) -> str:
     if not JWT_AVAILABLE:
         raise RuntimeError('PyJWT not installed')
     # PyJWT requires sub to be a string (not int from DB)
+    lifetime = int(expires_in_seconds) if expires_in_seconds else TOKEN_EXPIRE_HOURS * 3600
     payload = {
         'sub': str(user_id),
         'email': email,
         'is_admin': is_admin,
         'tenant_id': tenant_id,
+        'sv': int(session_version or 0),
         'iat': int(time.time()),
-        'exp': int(time.time()) + TOKEN_EXPIRE_HOURS * 3600,
+        'exp': int(time.time()) + lifetime,
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -446,6 +456,53 @@ async def authenticate_saas_user(email: str, password: str) -> Optional[dict]:
     except Exception as e:
         log.error('authenticate_saas_user_failed', error=str(e))
         return None
+
+
+_SESSION_STATE_RETRY_SECONDS = 300.0
+_session_state_available: Optional[bool] = None
+_session_state_checked_at = 0.0
+# 비밀번호 변경이 강제된 세션이 호출할 수 있는 경로 끝부분(마운트 prefix 와 무관하게 비교).
+PASSWORD_CHANGE_ALLOWED_SUFFIXES = ('/auth/password/change', '/auth/me')
+
+
+async def load_session_state(user_id: str) -> Optional[dict]:
+    """세션 무효화 번호·비밀번호 변경 강제 여부. 재설정 마이그레이션이 없는 DB 는 None(가드 비활성)."""
+    global _session_state_available, _session_state_checked_at
+    if (
+        _session_state_available is False
+        and time.monotonic() - _session_state_checked_at < _SESSION_STATE_RETRY_SECONDS
+    ):
+        return None
+    pool = await _ensure_pool()
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT must_change_password, session_version FROM saas_users WHERE id = $1",
+                str(user_id),
+            )
+    except Exception as exc:
+        if type(exc).__name__ in ('UndefinedColumnError', 'UndefinedTableError'):
+            _session_state_available = False
+            _session_state_checked_at = time.monotonic()
+            return None
+        raise
+    _session_state_available = True
+    if not row:
+        return None
+    return {
+        'must_change_password': bool(row['must_change_password']),
+        'session_version': int(row['session_version'] or 0),
+    }
+
+
+async def session_version_for(user_id: str) -> int:
+    """새 JWT 에 넣을 세션 번호. 조회 실패는 0(= 이후 요청에서 거절되는 쪽)으로 닫는다."""
+    try:
+        state = await load_session_state(user_id)
+    except Exception as exc:
+        log.warning('session_version_lookup_failed', error=type(exc).__name__)
+        return 0
+    return int(state['session_version']) if state else 0
 
 
 async def get_saas_user_by_email(email: str) -> Optional[dict]:
@@ -1784,7 +1841,18 @@ async def get_current_user(
         'email': email,
         'is_admin': is_admin_principal,
         'tenant_id': payload.get('tenant_id'),
+        'session_version': int(payload.get('sv') or 0),
     }
+    if not is_admin_principal:
+        state = await load_session_state(str(payload.get('sub') or ''))
+        if state is not None:
+            if current_user['session_version'] != state['session_version']:
+                raise HTTPException(status_code=401, detail='세션이 만료되었습니다. 다시 로그인하세요.')
+            if state['must_change_password'] and not (request.url.path or '').rstrip('/').endswith(
+                PASSWORD_CHANGE_ALLOWED_SUFFIXES
+            ):
+                raise HTTPException(status_code=403, detail='비밀번호를 먼저 변경해야 합니다. (password_change_required)')
+            current_user['must_change_password'] = state['must_change_password']
     context = await _load_tenant_context(current_user, requested_tenant_id=x_tenant_id)
     current_user['current_tenant'] = context['tenant']
     current_user['current_membership'] = context['membership']

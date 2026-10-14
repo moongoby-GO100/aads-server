@@ -51,7 +51,11 @@ def client(monkeypatch):
     monkeypatch.setattr(auth_module, "authenticate_saas_user", _authenticate)
     monkeypatch.setattr(auth_module, "resolve_login_tenant_for_user", _resolve_tenant)
     monkeypatch.setattr(auth_module, "update_saas_user_last_login", _touch)
+    async def _session_state(user_id):
+        return {"must_change_password": False, "session_version": 0}
+
     monkeypatch.setattr(auth_module, "_load_tenant_context", _load_context)
+    monkeypatch.setattr(auth_module, "load_session_state", _session_state)
     return TestClient(yeoljeong_main.app, follow_redirects=False)
 
 

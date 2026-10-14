@@ -3027,6 +3027,10 @@
               <input name="password" type="password" autocomplete="current-password" required>
             </label>
             <button class="primary" type="submit">로그인</button>
+            <div id="gateRecoveryLinks" style="display:flex;gap:8px;margin-top:8px">
+              <button id="openFindIdFromGateBtn" type="button" data-ar-open="find-id" style="flex:1 1 0;min-height:44px;min-width:44px">아이디 찾기</button>
+              <button id="openResetFromGateBtn" type="button" data-ar-open="reset" style="flex:1 1 0;min-height:44px;min-width:44px">비밀번호 찾기</button>
+            </div>
             <button id="openSignupFromGateBtn" type="button">직원 회원가입</button>
             <a id="ownerSignupFromGateBtn" href="/static/apps/obys/signup.html" style="display:flex;align-items:center;justify-content:center;min-height:44px;margin-top:8px;border-radius:8px;text-decoration:none;font-weight:700;color:#fff;background:#2f6fed;border:1px solid #2f6fed">사업자 회원가입 (대표님 · 신규 사업자)</a>
           </form>
@@ -13988,6 +13992,11 @@
         method: "POST",
         body: JSON.stringify({ email, password })
       });
+      if (payload.must_change_password) {
+        if (!window.ObysAccountRecovery) throw new Error("임시 비밀번호로 로그인했습니다. 페이지를 새로고침한 뒤 다시 로그인해 새 비밀번호를 설정해 주십시오.");
+        payload.token = await window.ObysAccountRecovery.forcePasswordChange(payload.token);
+        payload.must_change_password = false;
+      }
       persistServerAuthToken(payload.token);
       saveAuthSession(sessionFromAuthPayload(payload));
       els.loginModal.classList.add("hidden");
@@ -16611,6 +16620,7 @@
   <script src="/static/apps/obys/modules/ledger-details.js?v=20261014-r1"></script>
   <script src="/static/apps/obys/modules/clobe-collection.js?v=20261014-r1"></script>
   <script src="/static/apps/obys/modules/data-overview.js?v=20261014-r1"></script>
+  <script src="/static/apps/obys/modules/account-recovery.js?v=20261014-r2"></script>
   <script src="/static/apps/obys/modules/store-assistant-v2.js"></script>
   <script>
   (() => {

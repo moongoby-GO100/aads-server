@@ -25,6 +25,7 @@ MIG_GPS = "20260930_obys_attendance_pwa_gps.sql"
 MIG_HRDOC = "20261001_obys_hrdoc_expiry_integrity_superseded.sql"
 MIG_CLOBE = "20261003_obys_clobe_collection.sql"
 MIG_CLOBE_STORE = "20261008_obys_clobe_mcp_store.sql"
+MIG_AUTH = "20261014_obys_auth_password_recovery.sql"
 
 HARNESS = r'''#!/bin/bash
 set -euo pipefail
@@ -80,7 +81,7 @@ EOT
       ;;
     pg_backup)
       if [[ -n ${FAKE_BACKUP_FAIL:-} ]]; then echo "pg_dump failed" >&2; return 1; fi
-      echo "BACKUP_PATH=/root/acct-release-backups/obys_pre_x.dump"
+      echo "BACKUP_PATH=/root/acct-release-backups/${3}_pre_x.dump"
       echo "BACKUP_BYTES=1234"
       ;;
     start_candidate)
@@ -124,10 +125,10 @@ fake_cmd() {
       sql="$(cat)"
       if [[ $sql == */\*identity\*/* ]]; then echo t
       elif [[ $sql == */\*probe\*/* ]]; then
-        if [[ $sql == *idx_yeoljeong_attendance_pwa_open* ]]; then key=gps; elif [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *idx_yeoljeong_attendance_pwa_open* ]]; then key=gps; elif [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
         if [[ -f "$D/applied.$key" ]]; then echo t; else echo f; fi
       else
-        if [[ $sql == *attendance_t* ]]; then key=gps; elif [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *attendance_t* ]]; then key=gps; elif [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
         echo "MIGAPPLY $key" >> "$D/ssh.log"
         if [[ ${FAKE_MIG_FAIL:-} == "$key" ]]; then return 1; fi
         touch "$D/applied.$key"
@@ -231,6 +232,7 @@ class Box:
             f"migrations/{MIG_HRDOC}": MIG_BODY.format(t="hrdoc_t"),
             f"migrations/{MIG_CLOBE}": MIG_BODY.format(t="obys_clobe_t"),
             f"migrations/{MIG_CLOBE_STORE}": MIG_BODY.format(t="clobe_mcp_t"),
+            f"migrations/{MIG_AUTH}": MIG_BODY.format(t="obys_password_reset_requests"),
             "migrations/20260901_unrelated_aads.sql": "DROP TABLE aads_thing;\n",
             "deploy/obys/requirements.obys.lock": "fastapi==0.115\n",
         }.items():
@@ -320,18 +322,18 @@ def test_happy_path_builds_once_migrates_with_backup_first_and_switches_port(box
     assert res["new"]["port"] == "8112" and box.port() == "8112"
     assert res["new"]["image"] == f"acct-candidate:{box.sha[:8]}"
     assert res["new"]["image_reused"] is False
-    assert res["backups"]["pg_dump"] == "/root/acct-release-backups/obys_pre_x.dump"
+    assert res["backups"]["pg_dump"] == "/root/acct-release-backups/obys_pre_x.dump,/root/acct-release-backups/obys_auth_pre_x.dump"
     assert res["backups"]["apache_vhost"].startswith("/root/fb-cutover-backups/")
-    assert res["migrations"]["applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE]
+    assert res["migrations"]["applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_AUTH]
     assert res["cutover_kst"].endswith("KST")
     assert res["rollback_command"].endswith("rollback acct-app-candidate-r8 77")
-    assert "/root/acct-release-backups/obys_pre_x.dump" in proc.stdout
+    assert "/root/acct-release-backups/obys_pre_x.dump" in proc.stdout and "/root/acct-release-backups/obys_auth_pre_x.dump" in proc.stdout
     assert box.builds() == 1
 
     log = box.log()
     assert log.index("OP pg_backup") < log.index("MIGAPPLY gps") < log.index("MIGAPPLY hrdoc") < log.index("MIGAPPLY clobe")
     assert log.index("MIGAPPLY clobe") < log.index("MIGAPPLY clobe_store")
-    assert log.index("MIGAPPLY clobe_store") < log.index("OP start_candidate") < log.index("OP apache_switch")
+    assert log.index("MIGAPPLY clobe_store") < log.index("MIGAPPLY auth") < log.index("OP start_candidate") < log.index("OP apache_switch")
     assert res["unrelated_containers_changed"] == []
     assert (box.tmp / "results" / "acct-app-77.json").exists()
 
@@ -750,10 +752,11 @@ def test_already_applied_migrations_are_skipped_without_backup(box):
     (box.fake / "applied.hrdoc").touch()
     (box.fake / "applied.clobe").touch()
     (box.fake / "applied.clobe_store").touch()
+    (box.fake / "applied.auth").touch()
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     res = box.result(proc)
-    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE]
+    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_AUTH]
     assert "OP pg_backup" not in box.log() and "MIGAPPLY hrdoc" not in box.log()
     assert res["backups"]["pg_dump"] == ""
 
@@ -767,13 +770,13 @@ def test_only_the_pending_migration_is_applied(box):
 
 def test_gps_migration_is_in_the_allowlist_and_applied_alone_when_it_is_the_only_pending_one(box):
     assert box.run("--call", "migration_allowed", MIG_GPS).returncode == 0
-    for key in ("hrdoc", "clobe", "clobe_store"):
+    for key in ("hrdoc", "clobe", "clobe_store", "auth"):
         (box.fake / f"applied.{key}").touch()
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     res = box.result(proc)
     assert res["migrations"]["applied"] == [MIG_GPS]
-    assert res["migrations"]["already_applied"] == [MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE]
+    assert res["migrations"]["already_applied"] == [MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_AUTH]
     log = box.log()
     assert log.index("OP pg_backup") < log.index("MIGAPPLY gps") < log.index("OP start_candidate")
 
@@ -1203,6 +1206,50 @@ def test_release_runs_in_an_isolated_worktree_that_is_removed_afterwards(box):
     assert list(wt_root.iterdir()) == []
     assert "worktree" not in git(box.repo, "worktree", "list").split("\n")[-1] or len(git(box.repo, "worktree", "list").splitlines()) == 1
     assert (box.repo / "app/dirty.py").read_text() == "dirty = 1\n"
+
+
+# ---- 인증 DB 마이그레이션 -----------------------------------------------------------------------
+def test_auth_migration_is_allowlisted_and_targets_only_the_auth_db(box):
+    assert box.run("--call", "migration_allowed", MIG_AUTH).returncode == 0
+    assert box.run("--call", "migration_db", MIG_AUTH).stdout.strip() == "obys_auth"
+    assert box.run("--call", "migration_db", MIG_GPS).stdout.strip() == "obys"
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    applying = [x for x in box.log() if "psql" in x and "-d obys_auth" in x]
+    assert applying, box.log()
+    assert not [x for x in box.log() if "psql" in x and "-d obys " in x and "MIGAPPLY" in x]
+
+
+def test_auth_migration_probe_checks_columns_tables_and_the_open_request_index():
+    sql = subprocess.run(
+        ["bash", "-c", f'source <(sed -n "/^migration_probe_sql()/,/^}}/p" "{SCRIPT}"); migration_probe_sql {MIG_AUTH}'],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert sql.startswith("/*probe*/")
+    migration = (ROOT / "migrations" / MIG_AUTH).read_text(encoding="utf-8")
+    columns = re.findall(r"ALTER TABLE public\.saas_users ADD COLUMN IF NOT EXISTS (\w+) ", migration)
+    assert len(columns) == 3 and "= 3" in sql
+    for column in columns:
+        assert f"'{column}'" in sql, column
+    assert "obys_password_reset_requests" in sql and "obys_password_reset_audit" in sql
+    assert "uq_obys_pwreset_open_per_user_tenant_method" in sql
+    assert "ALTER TABLE" not in sql and "INSERT INTO" not in sql
+
+
+def test_real_auth_migration_passes_the_safety_scan_and_has_a_rollback(box):
+    path = ROOT / "migrations" / MIG_AUTH
+    assert box.run("--call", "migration_scan", str(path)).returncode == 0
+    sql = path.read_text(encoding="utf-8")
+    assert sql.count("IF NOT EXISTS") >= 8 and "DROP TABLE" not in sql and "DELETE FROM" not in sql
+    down = (ROOT / "migrations" / "rollback" / MIG_AUTH.replace(".sql", ".down.sql")).read_text(encoding="utf-8")
+    assert down.count("BEGIN;") == 1 and down.count("COMMIT;") == 1
+
+
+def test_auth_db_equal_to_the_business_db_is_refused_before_any_migration(box):
+    proc = box.run(env={"ACCT_AUTH_PG_DB": "obys"})
+    assert proc.returncode == 7, proc.stdout + proc.stderr
+    assert "must differ" in proc.stderr
+    assert "MIGAPPLY" not in "\n".join(box.log()) and box.port() == "8111"
 
 
 # ---- registry -----------------------------------------------------------------------------------
