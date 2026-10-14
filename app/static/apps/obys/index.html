@@ -2247,6 +2247,28 @@
     @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
 
     .hidden { display: none !important; }
+    .employee-preview-banner {
+      position: sticky;
+      top: 0;
+      z-index: 60;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 0 12px;
+      background: #7c2d12;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .employee-preview-banner .employee-preview-exit { min-height: 30px; padding: 0 12px; }
+    body.employee-preview .topbar { top: 44px; }
+    body.employee-preview .filters { top: 111px; }
+    body.employee-preview .app-sidebar { top: 111px; height: calc(100vh - 111px); }
+    body.employee-preview [data-clock-link],
+    body.employee-preview .tenant-switcher { display: none !important; }
+    body.employee-preview [data-preview-locked] { opacity: .5; cursor: not-allowed; }
 
     .toast {
       position: fixed;
@@ -2944,6 +2966,10 @@
   </style>
 </head>
 <body class="signed-out">
+  <div id="employeePreviewBanner" class="employee-preview-banner hidden" role="status" aria-live="polite">
+    <span id="employeePreviewBannerText"></span>
+    <button type="button" id="employeePreviewExitBtn" class="employee-preview-exit">관리자 화면으로 돌아가기</button>
+  </div>
   <div class="shell">
     <header class="topbar">
       <div class="topbar-inner">
@@ -6533,19 +6559,194 @@
       });
     }
 
-    function canManageAutomation() {
-      return hasServerAuth() && Boolean(authPermissions().can_manage_automation);
-    }
+    // ADMIN-EMPLOYEE-PREVIEW:BEGIN
+    // 관리자가 직원 화면을 읽기 전용으로 미리보는 클라이언트 전용 모드. 토큰을 새로 받지 않고,
+    // sessionStorage/localStorage 에도 쓰지 않으므로 새로고침하면 꺼진다.
+    let employeePreview = null;
+    let employeePreviewReturnView = "";
+    let employeePreviewObserver = null;
+    let employeePreviewSweepQueued = false;
+    const EMPLOYEE_PREVIEW_MESSAGE = "읽기 전용 미리보기 중에는 저장·서명·제출·업로드·삭제를 할 수 없습니다.";
+    const EMPLOYEE_PREVIEW_SAFE_SELECTOR = ".tab, [data-view], [data-bottom-tab], [data-sheet-view], #employeePreviewBanner, #logoutBtn, [data-preview-allow]";
+    const EMPLOYEE_PREVIEW_CONTROL_SELECTOR = "button, input[type=file], input[type=submit], [role=button]";
+    const EMPLOYEE_PREVIEW_WRITE_ATTR_RE = /^data-(sign|delete|edit|request|review|save|assign|upload|create|submit|approve|reject|revoke|apply|sync|connect|send|resend|cancel|remove|add|import|copy-invite|kakao-invite|native-share)/;
+    const EMPLOYEE_PREVIEW_SAFE_TEXT_RE = /PDF|열기|미리보기|다운로드|새로고침|닫기|돌아가기|로그아웃/;
+    const EMPLOYEE_PREVIEW_WRITE_TEXT_RE = /저장|서명|제출|업로드|삭제|등록|승인|반려|보완|발송|발행|수정|추가|요청|출퇴근|출근|퇴근|초기화|가져오기|연동|동기화|올리기|보내기|변경|확정|작성|초대/;
 
-    function canManageOnboarding() {
+    function canManageOnboardingReal() {
       return hasServerAuth() && Boolean(authPermissions().can_manage_onboarding);
     }
 
+    function employeePreviewButtonHtml(email, name) {
+      if (!canManageOnboarding()) return "";
+      const cleanEmail = String(email || "").trim().toLowerCase();
+      const safeEmail = cleanEmail.includes("*") ? "" : cleanEmail;
+      const cleanName = String(name || "").trim();
+      if (!safeEmail && !cleanName) return "";
+      return `<button type="button" data-preview-employee data-preview-email="${escapeHtml(safeEmail)}" data-preview-name="${escapeHtml(cleanName)}">직원 화면으로 보기</button>`;
+    }
+
+    function assertEmployeePreviewReadOnly(method) {
+      const verb = String(method || "GET").toUpperCase();
+      if (employeePreview && !["GET", "HEAD", "OPTIONS"].includes(verb)) {
+        const error = new Error(EMPLOYEE_PREVIEW_MESSAGE);
+        error.code = "EMPLOYEE_PREVIEW_READ_ONLY";
+        throw error;
+      }
+    }
+
+    function isEmployeePreviewWriteControl(el) {
+      if (!el || el.closest(EMPLOYEE_PREVIEW_SAFE_SELECTOR)) return false;
+      for (const attr of Array.from(el.attributes || [])) {
+        if (EMPLOYEE_PREVIEW_WRITE_ATTR_RE.test(attr.name)) return true;
+      }
+      const type = String(el.getAttribute("type") || "").toLowerCase();
+      if (type === "file" || type === "submit") return true;
+      const text = String(el.textContent || el.value || "").trim();
+      if (EMPLOYEE_PREVIEW_SAFE_TEXT_RE.test(text)) return false;
+      return EMPLOYEE_PREVIEW_WRITE_TEXT_RE.test(text);
+    }
+
+    function renderEmployeePreviewBanner() {
+      const banner = document.getElementById("employeePreviewBanner");
+      if (!banner) return;
+      banner.classList.toggle("hidden", !employeePreview);
+      const text = document.getElementById("employeePreviewBannerText");
+      if (text) text.textContent = employeePreview ? `${employeePreview.name} 님 화면을 보는 중입니다 (읽기 전용)` : "";
+    }
+
+    function sweepEmployeePreviewControls() {
+      employeePreviewSweepQueued = false;
+      document.querySelectorAll(EMPLOYEE_PREVIEW_CONTROL_SELECTOR).forEach(el => {
+        if (employeePreview && isEmployeePreviewWriteControl(el)) {
+          if (el.dataset.previewLocked) return;
+          el.dataset.previewLocked = "1";
+          el.dataset.previewWasDisabled = el.disabled ? "1" : "";
+          el.dataset.previewTitle = el.title || "";
+          el.disabled = true;
+          el.title = EMPLOYEE_PREVIEW_MESSAGE;
+        } else if (el.dataset.previewLocked) {
+          el.disabled = Boolean(el.dataset.previewWasDisabled);
+          el.title = el.dataset.previewTitle || "";
+          delete el.dataset.previewLocked;
+          delete el.dataset.previewWasDisabled;
+          delete el.dataset.previewTitle;
+        }
+      });
+    }
+
+    function queueEmployeePreviewSweep() {
+      if (employeePreviewSweepQueued) return;
+      employeePreviewSweepQueued = true;
+      requestAnimationFrame(sweepEmployeePreviewControls);
+    }
+
+    function startEmployeePreview(target) {
+      if (employeePreview) return false;
+      if (!canManageOnboardingReal()) {
+        showToast("회사 관리자만 직원 화면을 미리볼 수 있습니다.");
+        return false;
+      }
+      const email = String(target?.email || "").trim().toLowerCase();
+      const name = String(target?.name || "").trim();
+      if (!email && !name) {
+        showToast("미리볼 직원 정보를 찾을 수 없습니다.");
+        return false;
+      }
+      employeePreviewReturnView = currentView;
+      employeePreview = { email, name: name || email };
+      document.body.classList.add("employee-preview");
+      if (typeof MutationObserver !== "undefined") {
+        employeePreviewObserver = new MutationObserver(queueEmployeePreviewSweep);
+        employeePreviewObserver.observe(document.body, { childList: true, subtree: true });
+      }
+      renderEmployeePreviewBanner();
+      renderAll();
+      setView(employeeViewNames.includes(currentView) ? currentView : "onboarding");
+      sweepEmployeePreviewControls();
+      return true;
+    }
+
+    function stopEmployeePreview() {
+      if (!employeePreview) return false;
+      employeePreview = null;
+      if (employeePreviewObserver) employeePreviewObserver.disconnect();
+      employeePreviewObserver = null;
+      document.body.classList.remove("employee-preview");
+      sweepEmployeePreviewControls();
+      renderEmployeePreviewBanner();
+      renderAll();
+      const back = employeePreviewReturnView;
+      employeePreviewReturnView = "";
+      setView(appViewNames.includes(back) ? back : defaultView());
+      return true;
+    }
+
+    function syncEmployeePreviewSession() {
+      if (employeePreview && !canManageOnboardingReal()) stopEmployeePreview();
+    }
+
+    function employeePreviewClickGuard(event) {
+      const trigger = event.target?.closest?.("[data-preview-employee]");
+      if (trigger) {
+        event.preventDefault();
+        event.stopPropagation();
+        startEmployeePreview({ email: trigger.dataset.previewEmail, name: trigger.dataset.previewName });
+        return;
+      }
+      if (!employeePreview) return;
+      if (event.target?.closest?.("#employeePreviewExitBtn")) {
+        event.preventDefault();
+        event.stopPropagation();
+        stopEmployeePreview();
+        return;
+      }
+      const control = event.target?.closest?.(EMPLOYEE_PREVIEW_CONTROL_SELECTOR);
+      if (control && isEmployeePreviewWriteControl(control)) {
+        event.preventDefault();
+        event.stopPropagation();
+        showToast(EMPLOYEE_PREVIEW_MESSAGE);
+      }
+    }
+
+    function employeePreviewSubmitGuard(event) {
+      if (!employeePreview) return;
+      event.preventDefault();
+      event.stopPropagation();
+      showToast(EMPLOYEE_PREVIEW_MESSAGE);
+    }
+
+    if (typeof document !== "undefined" && document.addEventListener) {
+      document.addEventListener("click", employeePreviewClickGuard, true);
+      document.addEventListener("submit", employeePreviewSubmitGuard, true);
+    }
+    if (typeof window !== "undefined" && typeof window.fetch === "function") {
+      const employeePreviewNativeFetch = window.fetch.bind(window);
+      window.fetch = function employeePreviewFetch(input, init) {
+        try {
+          assertEmployeePreviewReadOnly(init?.method || input?.method || "GET");
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        return employeePreviewNativeFetch(input, init);
+      };
+    }
+    // ADMIN-EMPLOYEE-PREVIEW:END
+
+    function canManageAutomation() {
+      return !employeePreview && hasServerAuth() && Boolean(authPermissions().can_manage_automation);
+    }
+
+    function canManageOnboarding() {
+      return !employeePreview && canManageOnboardingReal();
+    }
+
     function canManageSettings() {
-      return hasServerAuth() && Boolean(authPermissions().can_manage_settings || authPermissions().can_manage_automation);
+      return !employeePreview && hasServerAuth() && Boolean(authPermissions().can_manage_settings || authPermissions().can_manage_automation);
     }
 
     function isEmployeeExperience() {
+      if (employeePreview) return true;
       const permissions = authPermissions();
       const role = String(permissions.role || "").trim().toLowerCase();
       return ["employee", "employee_pending", "employee_rejected"].includes(role) || Boolean(permissions.employee_request_status);
@@ -6560,10 +6761,12 @@
     }
 
     function currentEmployeeEmail() {
+      if (employeePreview) return employeePreview.email;
       return String(authSession?.user?.email || "").trim().toLowerCase();
     }
 
     function currentEmployeeName() {
+      if (employeePreview) return employeePreview.name;
       const user = authSession?.user || {};
       const email = currentEmployeeEmail();
       const selfSignup = loadEmployeeSelfSignupMap()[email] || {};
@@ -6648,6 +6851,7 @@
     }
 
     function applyAccessPolicy() {
+      syncEmployeePreviewSession();
       const isAuthed = hasServerAuth();
       const employeeMode = isEmployeeExperience();
       document.body.classList.toggle("employee-view", isAuthed && employeeMode);
@@ -7897,6 +8101,7 @@
                     </select>
                     <button type="button" class="primary" data-save-employee-role="${escapeHtml(requestId)}" ${disabled}>저장</button>
                     <button type="button" data-assign-employee="${escapeHtml(requestId)}" ${disabled}>사업자·지점 변경</button>
+                    ${employeePreviewButtonHtml(item.email || item.employee_email, item.name || item.employee_name)}
                   </div>
                 </td>
                 <td>${escapeHtml(item.access_updated_at ? `변경 ${String(item.access_updated_at).slice(0, 10)}` : "승인 완료")}</td>
@@ -8067,6 +8272,7 @@
             <td><span class="badge ${statusClass}">${escapeHtml(status)}</span></td>
             <td class="num" style="display:flex; gap:6px; justify-content:flex-end">
               ${canReview ? `<button data-review-join="${escapeHtml(request.id)}" data-review-action="approved">승인</button><button class="danger" data-review-join="${escapeHtml(request.id)}" data-review-action="rejected">반려</button>` : `<span class="muted">${escapeHtml(request.review_memo || request.memo || "")}</span>`}
+              ${status === "approved" ? employeePreviewButtonHtml(request.email || request.employee_email, request.name || request.employee_name) : ""}
             </td>
           </tr>`;
       }).join("");
@@ -8198,6 +8404,7 @@
                 ${item.status === "requested" ? `<button data-copy-contract="${escapeHtml(link)}">링크복사</button>` : ""}
                 <button class="icon danger" data-delete-contract="${escapeHtml(item.id)}" title="삭제">-</button>
               `}
+              ${employeePreviewButtonHtml(employeeEmail, employeeName)}
             ` : (employeeMode && item.status === "requested" ? `<button data-sign-contract="${escapeHtml(item.id)}" class="primary">내용 확인·서명</button>` : `<button data-preview-contract="${escapeHtml(item.id)}">미리보기</button>${item.status === "signed" ? `<button data-download-contract-pdf="${escapeHtml(item.id)}" class="primary">서명본 PDF</button>` : ""}`);
         return `
           <tr>
@@ -9295,6 +9502,7 @@
     }
 
     async function refreshSignPrompt() {
+      if (employeePreview) return;
       if (!hasServerAuth() || canManageOnboarding()) {
         pendingSignContracts = [];
         pendingSignGroups = [];
@@ -12907,6 +13115,7 @@
     }
 
     async function authApi(path, options = {}) {
+      assertEmployeePreviewReadOnly(options.method);
       const response = await fetch(`/api/v1/auth${path}`, {
         ...options,
         headers: { ...apiHeaders(), ...(options.headers || {}) }
@@ -12919,6 +13128,7 @@
     }
 
     async function financeApi(path, options = {}) {
+      assertEmployeePreviewReadOnly(options.method);
       const controller = new AbortController();
       const timeoutMs = Number(options.timeoutMs || 15000);
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -12938,6 +13148,7 @@
     }
 
     async function workspaceApi(path, options = {}) {
+      assertEmployeePreviewReadOnly(options.method);
       const controller = new AbortController();
       const timeoutMs = Number(options.timeoutMs || 15000);
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -13049,6 +13260,7 @@
     }
 
     async function inventoryApi(path, options = {}) {
+      assertEmployeePreviewReadOnly(options.method);
       const response = await fetch(`/api/v1/yeoljeong-inventory${path}`, {
         ...options,
         headers: { ...apiHeaders(), ...(options.headers || {}) }
@@ -14207,6 +14419,7 @@
     }
 
     async function logoutFromServer() {
+      stopEmployeePreview();
       try {
         if (hasServerAuth()) await authApi("/logout", { method: "POST" });
       } catch (err) {
