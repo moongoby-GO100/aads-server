@@ -176,13 +176,15 @@ def _scope(tenant: str, user: str, elevated: bool = False):
     return doc_index.DocSearchScope(tenant_id=tenant, user_id=user, elevated=elevated)
 
 
-async def _paths(scope, *, path: str, top_k=10, project=None) -> set[str]:
+async def _paths(scope, *, path: str, top_k=10, project=None, canonical_only=False) -> set[str]:
     from app.services import doc_index
 
     if path == "legacy":
-        rows = await doc_index.search_docs_legacy(_query(768), top_k=top_k, project=project, scope=scope)
+        rows = await doc_index.search_docs_legacy(
+            _query(768), top_k=top_k, project=project, scope=scope, canonical_only=canonical_only)
     else:
-        rows = await doc_index.search_docs_qwen3(_query(1024), top_k=top_k, project=project, scope=scope)
+        rows = await doc_index.search_docs_qwen3(
+            _query(1024), top_k=top_k, project=project, scope=scope, canonical_only=canonical_only)
     return {r["doc_path"] for r in rows}
 
 
@@ -580,3 +582,82 @@ async def test_auto_rag_uses_persisted_session_scope(db, monkeypatch):
     assert await run("b") == {_p(w["b_doc"], 1), "/root/aads/docs/file.md"}
     assert await auto_rag._search_documents(_query(768), "AADS", "질문", str(uuid4())) == []
     assert await auto_rag._search_documents(_query(768), "AADS", "질문", "") == []
+
+
+# ── 10. canonical_only (F1 2ab686ff) — 가시성은 그대로, 결과만 정본으로 좁힌다 ──
+
+@pytest.mark.parametrize("path", PATHS)
+async def test_canonical_only_returns_nothing_for_other_tenant_or_ungranted_user(db, monkeypatch, path):
+    await _world(db)
+    # 대조: canonical_only 없이는 권한 없는 사용자도 파일 문서 1건은 본다 — 0건은 정본 좁힘의 결과다.
+    assert await _paths(_scope(INTERNAL, "nobody"), path=path) == {"/root/aads/docs/file.md"}
+    cases = (
+        _scope(INTERNAL, "nobody"),        # 같은 tenant, grant 없음
+        _scope(TENANT_B, "nobody-b"),      # 다른 tenant, grant 없음
+        _scope(INTERNAL, "b-user"),        # grant 는 다른 tenant 에만 있음
+        _scope(INTERNAL, "", elevated=True),  # 사용자 식별 없는 elevated 는 elevated 가 아니다
+    )
+    for scope in cases:
+        got = await _paths(scope, path=path, canonical_only=True)
+        assert got == set(), (scope, got)
+    # grant 는 프로젝트별 — KIS 만 가진 사용자가 AADS 정본을 묻는다
+    assert await _paths(_scope(INTERNAL, "kis-user"), path=path, project="AADS", canonical_only=True) == set()
+
+
+@pytest.mark.parametrize("path", PATHS)
+async def test_canonical_only_returns_only_canonical_rows_for_allowed_user(db, monkeypatch, path):
+    w = await _world(db)
+    got = await _paths(_scope(INTERNAL, "granted-user"), path=path, canonical_only=True)
+    assert got == {_p(w["a_ok"], 1), _p(w["a_draft"], 1), _p(w["a_both"], 1), _p(w["a_both"], 2)}
+    assert all(p.startswith("canonical://") for p in got)
+    assert _p(w["b_doc"], 1) not in got and _p(w["a_kis"], 1) not in got and _p(w["a_arch"], 1) not in got
+    # 좁히기만 한다: 일반 검색 결과에서 정본 아닌 것만 뺀 집합과 같다
+    plain = await _paths(_scope(INTERNAL, "granted-user"), path=path)
+    assert got == {p for p in plain if p.startswith("canonical://")}
+    assert await _paths(_scope(TENANT_B, "b-user"), path=path, canonical_only=True) == {_p(w["b_doc"], 1)}
+    boss = await _paths(_scope(INTERNAL, "boss", elevated=True), path=path, canonical_only=True)
+    assert _p(w["a_kis"], 1) in boss and boss.issuperset(got)
+    assert all(p.startswith("canonical://") for p in boss)
+    assert _p(w["b_doc"], 1) not in boss and _p(w["a_arch"], 1) not in boss
+
+
+@pytest.mark.parametrize("path", PATHS)
+async def test_canonical_only_top_k_not_crowded_out_by_files_or_hidden_chunks(db, monkeypatch, path):
+    w = await _world(db)
+    for i in range(10):  # 질문과 완전히 같은 방향인 파일 문서 — 일반 검색이라면 top 3 을 채운다
+        await _chunk(db, f"/root/aads/docs/flood-{i}.md", label="서버 문서(contabo116)", sim=1.0)
+    hidden = await _head(db, TENANT_B, "AADS", "b-flood2", approved=1, latest=1)
+    for i in range(10):  # 다른 tenant 정본 — top_k 앞에서 걸러져야 한다
+        await _chunk(db, f"canonical://AADS/b-flood2@{hidden['revs'][1]}#{i}", label="정본", tenant=TENANT_B,
+                     head=hidden["head_id"], revision=hidden["revs"][1], sim=1.0, idx=i)
+    scope = _scope(INTERNAL, "granted-user")
+    assert any(p.startswith("/root/aads/docs/flood-") for p in await _paths(scope, path=path, top_k=3))
+    got = await _paths(scope, path=path, top_k=3, canonical_only=True)
+    visible = {_p(w["a_ok"], 1), _p(w["a_draft"], 1), _p(w["a_both"], 1), _p(w["a_both"], 2)}
+    assert len(got) == 3 and got <= visible, got
+    assert await _paths(_scope(INTERNAL, "nobody"), path=path, top_k=3, canonical_only=True) == set()
+
+
+@pytest.mark.parametrize("mode", ["legacy", "shadow", "qwen3", "hybrid"])
+async def test_search_docs_canonical_only_respects_scope_in_every_mode(db, monkeypatch, mode):
+    from app.services import doc_index
+
+    w = await _world(db)
+
+    async def embed(_q):
+        return _query(1024)
+
+    monkeypatch.setattr(doc_index, "embed_qwen_query", embed)
+    monkeypatch.setattr(doc_index, "_QWEN_MODE", mode)
+
+    async def run(scope):
+        rows = await doc_index.search_docs(
+            _query(768), top_k=20, query_text="질문", scope=scope, canonical_only=True)
+        return {r["doc_path"] for r in rows}
+
+    assert await run(_scope(INTERNAL, "nobody")) == set()
+    assert await run(_scope(TENANT_B, "nobody-b")) == set()
+    assert await run(_scope(TENANT_B, "b-user")) == {_p(w["b_doc"], 1)}
+    got = await run(_scope(INTERNAL, "granted-user"))
+    assert got == {_p(w["a_ok"], 1), _p(w["a_draft"], 1), _p(w["a_both"], 1), _p(w["a_both"], 2)}
+    await asyncio.gather(*tuple(doc_index._shadow_tasks))
