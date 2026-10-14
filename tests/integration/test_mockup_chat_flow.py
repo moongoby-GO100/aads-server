@@ -186,8 +186,10 @@ async def test_replay_does_not_notify_twice_and_inboxes_are_private(flow):
 
     owner_items = (await env.inbox("owner"))["items"]
     assert owner_items and all(i["project"] == env.project for i in owner_items)
-    for stranger in ("foreign", "nogrant", "reader", "approver"):
+    for stranger in ("foreign", "reader", "approver"):
         assert (await env.inbox(stranger))["items"] == []
+    no_access = await env.client.get(f"{BASE}/{env.project}/mockup-reviews/notifications", headers=env.headers["nogrant"])
+    assert no_access.status_code == 403 and no_access.json()["detail"] == "project_access_denied"
     some = owner_items[0]["id"]
     for stranger in ("foreign", "reader", "writer"):
         denied = await env.post(f"/notifications/{some}/read", who=stranger)

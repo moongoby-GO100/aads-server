@@ -673,14 +673,14 @@ async def submit_review(conn: Any, tenant: str, project: str, review_id: UUID, a
 
 
 async def request_changes(conn: Any, tenant: str, project: str, review_id: UUID, actor: str, elevated: bool,
-                          body: ChangeCreate) -> dict:
+                          body: ChangeCreate, *, rhash: str | None = None) -> dict:
     comment = body.comment
     if not comment.strip():
         fail(422, "empty_comment")
     if SECRET.search(comment):
         fail(422, "credential_content_rejected")
     head = await _lock(conn, tenant, project, review_id)
-    rhash = request_hash("changes", body.model_dump(mode="json"))
+    rhash = rhash or request_hash("changes", body.model_dump(mode="json"))
     replayed = await _replay(conn, head, body.idempotency_key, "changes", rhash)
     if replayed:
         return replayed
@@ -1160,12 +1160,19 @@ async def intake_change(conn: Any, tenant: str, project: str, actor: str, elevat
     if not head["latest_revision_id"]:
         fail(409, "invalid_state", status=head["status"], required="submitted revision")
     expected = body.expected_generation if body.expected_generation is not None else head["generation"]
+    # Hash only what the client sent: the server-filled generation/base revision move after the first call,
+    # so hashing them would turn an honest retry of the same message into idempotency_key_conflict.
+    client_hash = request_hash("changes", body.model_dump(
+        mode="json", include={"idempotency_key", "expected_generation", "change_request_id", "source_message_id",
+                              "comment", "screen_id"}))
     result = await request_changes(
         conn, tenant, project, head["id"], actor, elevated,
         ChangeCreate(idempotency_key=body.idempotency_key, expected_generation=expected,
                      change_request_id=body.change_request_id, base_revision_id=head["latest_revision_id"],
-                     source_message_id=body.source_message_id, comment=body.comment, screen_id=body.screen_id))
-    return {**result, "target": {"review_id": str(head["id"]), "revision_id": str(head["latest_revision_id"]),
+                     source_message_id=body.source_message_id, comment=body.comment, screen_id=body.screen_id),
+        rhash=client_hash)
+    return {**result, "target": {"review_id": str(head["id"]),
+                                 "revision_id": result.get("base_revision_id") or str(head["latest_revision_id"]),
                                  "resolved_by": "server"},
             "next": "revise_then_resubmit", "approved": False, "implementation_command": False}
 

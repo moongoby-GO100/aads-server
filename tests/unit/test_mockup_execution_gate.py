@@ -493,8 +493,8 @@ def test_intake_files_a_change_request_on_the_server_chosen_revision_and_never_a
     head = head_row(status="review_ready")
     captured = {}
 
-    async def fake_changes(conn, tenant, project, review_id, actor, elevated, body):
-        captured.update(review=review_id, body=body)
+    async def fake_changes(conn, tenant, project, review_id, actor, elevated, body, *, rhash=None):
+        captured.update(review=review_id, body=body, rhash=rhash)
         return {"review_id": str(review_id), "status": "changes_requested", "approved": False}
 
     monkeypatch.setattr(svc, "request_changes", fake_changes)
@@ -511,6 +511,28 @@ def test_intake_files_a_change_request_on_the_server_chosen_revision_and_never_a
     assert out["approved"] is False and out["implementation_command"] is False
     assert out["target"] == {"review_id": REVIEW, "revision_id": REVISION, "resolved_by": "server"}
     assert out["next"] == "revise_then_resubmit"
+
+
+def test_intake_idempotency_hash_ignores_server_filled_generation(monkeypatch):
+    hashes = []
+
+    async def fake_changes(conn, tenant, project, review_id, actor, elevated, body, *, rhash=None):
+        hashes.append((body.expected_generation, rhash))
+        return {"review_id": str(review_id), "status": "changes_requested"}
+
+    monkeypatch.setattr(svc, "request_changes", fake_changes)
+    body = intake_body()
+    for generation in (3, 4):  # the first call bumps the head generation before the client retries
+        head = head_row(status="review_ready", generation=generation)
+        conn = FakeConn([
+            ("FROM chat_sessions", lambda *a: {"id": SESSION, "user_id": "u1"}),
+            ("SELECT session_id FROM chat_messages", lambda *a: SESSION),
+            ("FROM mockup_review_heads WHERE tenant_id", lambda *a: [{"id": head["id"]}]),
+            ("FOR UPDATE", lambda *a: head),
+        ])
+        run(svc.intake_change(conn, TENANT, "AADS", "u1", False, body))
+    assert [g for g, _ in hashes] == [3, 4]
+    assert hashes[0][1] and hashes[0][1] == hashes[1][1]
 
 
 def test_intake_rejects_a_source_message_from_another_session():
