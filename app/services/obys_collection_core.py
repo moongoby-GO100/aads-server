@@ -18,6 +18,13 @@ KIND_TAX = "tax_invoice"
 KIND_CASH = "cash_receipt"
 KIND_CARD = "card_approval"
 DATA_KINDS = (KIND_BANK, KIND_TAX, KIND_CASH, KIND_CARD)
+# 판매채널 매출(배달앱·카드·PG·오픈마켓)은 매출 분석용이다. 장부 확정·전표 대상이 아니므로 DATA_KINDS(확정 가능 종류)에
+# 넣지 않고, 수집 대상 목록(COLLECTION_KINDS)에만 둔다. 확정 경로는 DATA_KINDS 만 허용한다.
+KIND_CHANNEL = "channel_revenue"
+COLLECTION_KINDS = DATA_KINDS + (KIND_CHANNEL,)
+CHANNEL_TOOL = "get_monthly_revenue"
+#: 채널을 클로브에 연결하지 않아 빈 응답을 받았다는 표시(collection_state.last_error_code·status 로 쓰이며 화면에서 연결 안내가 된다).
+CHANNEL_NOT_CONNECTED = "channel_not_connected"
 SCRAPE_CATEGORY = {
     KIND_BANK: "BANK",
     KIND_TAX: "TAX_INVOICE",
@@ -151,6 +158,7 @@ _VOLATILE = {
     KIND_TAX: {"settlementStatus", "mappedAmount", "unmappedAmount", "matchedCount", "matchedTransactions", "memo"},
     KIND_CASH: {"memo"},
     KIND_CARD: {"memo"},
+    KIND_CHANNEL: {"source"},
 }
 
 
@@ -274,6 +282,16 @@ def normalize_item(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
             "amount": card_amount(raw),
             "direction": "OUT",
             "counterparty": str(_first(raw, "memberStoreName", "merchantName", "storeName") or ""),
+        }
+    if kind == KIND_CHANNEL:
+        # raw 는 normalize_channel_payload 가 만든 정규화 레코드다. 채널 코드는 direction 열, 기관명은 institution 열에 둔다.
+        return {
+            "source_key": raw.get("source_key"),
+            "institution": str(raw.get("institution") or ""),
+            "occurred_on": _date(raw.get("date")),
+            "amount": _dec(raw.get("gross")),
+            "direction": str(raw.get("channel") or ""),
+            "counterparty": "",
         }
     raise ValueError("unknown_kind")
 
@@ -420,8 +438,8 @@ def parse_source_time(value: Any) -> datetime | None:
 
 def scrape_summary(status_payload: dict[str, Any], kind: str) -> dict[str, Any]:
     """get_scraping_status 응답에서 해당 종류의 최신성·오류 자산 수를 뽑는다."""
-    category = SCRAPE_CATEGORY[kind]
-    assets = [a for a in (status_payload.get("assets") or []) if isinstance(a, dict) and a.get("category") == category]
+    category = SCRAPE_CATEGORY.get(kind)
+    assets = [a for a in (status_payload.get("assets") or []) if category and isinstance(a, dict) and a.get("category") == category]
     times = [t for t in (parse_source_time(a.get("scrapedAt")) for a in assets) if t]
     errors = [a for a in assets if str(a.get("status") or "").upper() == "ERROR"]
     return {
@@ -445,3 +463,242 @@ def resolve_period(start: Any, end: Any, today: date | None = None) -> tuple[dat
 
 def retry_delay_seconds(consecutive_failures: int) -> int:
     return min(3600, 60 * (2 ** max(0, min(consecutive_failures, 6) - 1)))
+
+
+# ── 판매채널 매출(get_monthly_revenue) ───────────────────
+# 입력 스키마·응답 필드는 클로브 tools/list 가 정본이고 아직 운영에서 실측하지 못했다. 그래서 입력은 DB 에 저장된
+# input_schema 를 읽어 맞추고(build_channel_calls), 응답은 필드명 별칭 표로 읽는다(parse_channel_payload).
+# 알 수 없는 형태는 '미연결(빈 응답)'로 오인하지 않고 channel_unexpected_shape 로 올린다.
+
+CHANNEL_CODES = ("DELIVERY", "CARD", "PG", "MKP")
+_CHANNEL_ALIASES = {
+    "DELIVERY": "DELIVERY", "DELIVERY_APP": "DELIVERY", "DELIVERYAPP": "DELIVERY", "배달": "DELIVERY", "배달앱": "DELIVERY",
+    "CARD": "CARD", "CREDIT_CARD": "CARD", "카드": "CARD",
+    "PG": "PG",
+    "MKP": "MKP", "MARKETPLACE": "MKP", "MARKET_PLACE": "MKP", "OPEN_MARKET": "MKP", "OPENMARKET": "MKP",
+    "오픈마켓": "MKP", "마켓플레이스": "MKP",
+}
+_GROSS_KEYS = ("grossAmount", "gross", "grossSales", "totalAmount", "salesAmount", "totalSales", "sales", "amount")
+_NET_KEYS = ("netAmount", "net", "netSales", "settlementAmount", "settleAmount", "payoutAmount")
+_FEE_KEYS = ("feeAmount", "fee", "totalFee", "feeTotal", "commission", "commissionAmount")
+_COUNT_KEYS = ("count", "salesCount", "transactionCount", "orderCount", "txCount", "totalCount", "cnt")
+_METRIC_KEYS = frozenset(_GROSS_KEYS + _NET_KEYS + _FEE_KEYS + _COUNT_KEYS)
+_CHANNEL_KEYS = ("channel", "channelType", "channelCode", "channelCategory", "type", "category")
+_INSTITUTION_KEYS = ("institutionName", "institution", "orgName", "organizationName", "agencyName", "platformName",
+                     "issuerName", "cardCompanyName", "merchantName", "mallName", "channelName", "name")
+_DATE_KEYS = ("date", "day", "salesDate", "settlementDate", "settleDate", "baseDate", "targetDate", "aggregateDate",
+              "yearMonth", "month", "period")
+_BASIS_KEYS = ("dateBasis", "date_basis")
+_META_NUMERIC = frozenset({"page", "size", "number", "totalElements", "totalPages", "year", "month", "numberOfElements"})
+_SUMMARY_KEYS = frozenset({"summary", "total", "totals", "overall", "aggregate", "grandTotal"})
+_DATE_KEY_RE = re.compile(r"^\d{4}-\d{2}(-\d{2})?$")
+
+
+def channel_code(value: Any) -> str:
+    text = re.sub(r"\s+", "", str(value or "")).upper()
+    if not text:
+        return "UNKNOWN"
+    return _CHANNEL_ALIASES.get(text) or _CHANNEL_ALIASES.get(str(value).strip()) or text
+
+
+def _num(value: Any) -> Decimal | None:
+    if isinstance(value, bool):
+        return None
+    return _dec(str(value).replace(",", "")) if value not in (None, "") else None
+
+
+def _parse_channel_date(value: Any) -> tuple[date, str] | None:
+    """(날짜, 'DAY'|'MONTH'). 'YYYY-MM' 이나 'YYYYMM' 은 월 단위로 그 달 1일을 쓴다."""
+    text = str(value or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", text) or re.fullmatch(r"\d{8}", text):
+        d = _date(text) if "-" in text else _date(f"{text[:4]}-{text[4:6]}-{text[6:8]}")
+        return (d, "DAY") if d else None
+    m = re.fullmatch(r"(\d{4})-?(\d{2})", text)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), 1), "MONTH"
+        except ValueError:
+            return None
+    return None
+
+
+def _first_present(ctx: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if ctx.get(key) not in (None, ""):
+            return ctx[key]
+    return None
+
+
+def _walk_channel(node: Any, ctx: dict[str, Any], out: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _walk_channel(item, ctx, out, stats)
+        return
+    if not isinstance(node, dict):
+        return
+    scalars = {k: v for k, v in node.items() if not isinstance(v, (dict, list)) and v not in (None, "")}
+    here = {**ctx, **scalars}
+    children = [(k, v) for k, v in node.items() if isinstance(v, (dict, list)) and k not in _SUMMARY_KEYS]
+    if not children:
+        has_metric = any(k in node for k in _METRIC_KEYS)
+        if has_metric:
+            out.append(here)
+        elif any(isinstance(v, (int, float)) and not isinstance(v, bool) and k not in _META_NUMERIC
+                 for k, v in node.items()):
+            stats["unknown_numeric_leaf"] += 1
+        return
+    child_out: list[dict[str, Any]] = []
+    for key, value in children:
+        sub = dict(here)
+        if _DATE_KEY_RE.match(str(key)):
+            sub["date"] = key
+        elif channel_code(key) in CHANNEL_CODES and not _first_present(here, _CHANNEL_KEYS):
+            sub["channel"] = key
+        _walk_channel(value, sub, child_out, stats)
+    if child_out:
+        out.extend(child_out)
+    elif any(k in node for k in _METRIC_KEYS):
+        out.append(here)
+
+
+def parse_channel_payload(
+    payload: Any, *, company_id: str, date_basis: str | None = None, default_month: date | None = None,
+) -> dict[str, Any]:
+    """get_monthly_revenue 응답 → 정규화 레코드. 반환: records(비어 있을 수 있음), connected(False 면 명시적 미연결), skipped.
+
+    레코드가 하나도 없고 숫자 값을 가진 알 수 없는 잎 객체가 있거나, 지표는 있는데 날짜를 못 읽으면 ValueError
+    ('channel_unexpected_shape') — 형식 변경을 '미연결'로 덮지 않는다.
+    """
+    connected: bool | None = None
+    if isinstance(payload, dict):
+        for key in ("connected", "isConnected", "hasChannels"):
+            if isinstance(payload.get(key), bool):
+                connected = payload[key]
+    found: list[dict[str, Any]] = []
+    stats = {"unknown_numeric_leaf": 0}
+    _walk_channel(payload, {}, found, stats)
+    records: list[dict[str, Any]] = []
+    skipped = 0
+    for ctx in found:
+        raw_date = _first_present(ctx, _DATE_KEYS)
+        parsed = _parse_channel_date(raw_date) if raw_date is not None else None
+        if parsed is None and default_month is not None and (raw_date is None or not _DATE_KEY_RE.match(str(raw_date))):
+            parsed = (default_month, "MONTH")
+        if parsed is None:
+            skipped += 1
+            continue
+        day, grain = parsed
+        institution = re.sub(r"\s+", " ", str(_first_present(ctx, _INSTITUTION_KEYS) or "")).strip()
+        channel = channel_code(_first_present(ctx, _CHANNEL_KEYS))
+        basis = str(_first_present(ctx, _BASIS_KEYS) or date_basis or "DEFAULT").strip().upper()
+        gross, net = _num(_first_present(ctx, _GROSS_KEYS)), _num(_first_present(ctx, _NET_KEYS))
+        fee, count = _num(_first_present(ctx, _FEE_KEYS)), _num(_first_present(ctx, _COUNT_KEYS))
+        date_text = day.isoformat() if grain == "DAY" else day.strftime("%Y-%m")
+        records.append({
+            "source_key": f"ch|{company_id}|{channel}|{institution}|{date_text}|{basis}",
+            "channel": channel, "institution": institution, "date": day.isoformat(), "grain": grain,
+            "date_basis": basis, "gross": gross, "net": net, "fee": fee,
+            "count": int(count) if count is not None else None,
+            "source": {k: v for k, v in ctx.items() if not isinstance(v, (dict, list))},
+        })
+    if not records and (skipped or stats["unknown_numeric_leaf"]):
+        raise ValueError("channel_unexpected_shape")
+    return {"records": merge_channel_records(records), "connected": connected, "skipped": skipped}
+
+
+def merge_channel_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """같은 source_key(회사·채널·기관·날짜·기준)는 한 행으로 합산한다 — 하위 차원(매장·카드사)이 응답에 섞여 있어도 키가 유일하다."""
+    merged: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        cur = merged.get(rec["source_key"])
+        if cur is None:
+            merged[rec["source_key"]] = {**rec, "source": dict(rec["source"])}
+            continue
+        for field in ("gross", "net", "fee", "count"):
+            a, b = cur.get(field), rec.get(field)
+            cur[field] = b if a is None else (a if b is None else a + b)
+    return list(merged.values())
+
+
+_RANGE_PAIRS = (("startDate", "endDate"), ("fromDate", "toDate"), ("from", "to"), ("start", "end"),
+                ("startMonth", "endMonth"), ("fromMonth", "toMonth"), ("startYearMonth", "endYearMonth"))
+_MONTH_KEYS = ("yearMonth", "targetMonth", "baseMonth", "ym", "month", "period")
+_GRANULARITY_KEYS = ("granularity", "unit", "groupBy", "interval", "aggregation", "aggregateBy", "periodType",
+                     "timeUnit", "resolution")
+
+
+def schema_input_props(schema: Any) -> dict[str, Any]:
+    """저장된 input_schema 의 속성 맵. 도구 인자가 {"input": {...}} 로 감싸져 있으면 안쪽을 본다."""
+    props = (schema or {}).get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict):
+        return {}
+    inner = props.get("input")
+    if len(props) == 1 and isinstance(inner, dict) and isinstance(inner.get("properties"), dict):
+        return inner["properties"]
+    return props
+
+
+def _months_between(start: date, end: date) -> list[date]:
+    out, cur = [], date(start.year, start.month, 1)
+    while cur <= end:
+        out.append(cur)
+        cur = date(cur.year + (cur.month == 12), cur.month % 12 + 1, 1)
+    return out
+
+
+def pick_date_basis(props: dict[str, Any], preferred: str | None = None) -> tuple[str | None, str | None]:
+    """(인자 이름, 값). enum 이 있으면 환경변수 선호 → SETTL* → 스키마 기본값 순. 값을 알 수 없으면 서버 기본값에 맡긴다."""
+    key = next((k for k in _BASIS_KEYS if k in props), None)
+    if key is None:
+        return None, None
+    prop = props[key] if isinstance(props[key], dict) else {}
+    enum = [str(v) for v in prop.get("enum") or []]
+    pref = (preferred or os.getenv("OBYS_CLOBE_CHANNEL_DATE_BASIS") or "").strip().upper()
+    if enum:
+        by_upper = {v.upper(): v for v in enum}
+        if pref in by_upper:
+            return key, by_upper[pref]
+        settle = next((v for v in enum if v.upper().startswith("SETTL")), None)
+        if settle:
+            return key, settle
+    if pref:
+        return key, pref
+    if prop.get("default") is not None:
+        return key, str(prop["default"])
+    return None, None
+
+
+def build_channel_calls(
+    schema: Any, company_id: str, start: date, end: date, *, preferred_basis: str | None = None,
+) -> list[dict[str, Any]]:
+    """저장된 input_schema 에 맞춘 호출 목록. 각 항목: args, month(월 단위 호출이면 그 달 1일), basis, page_key.
+
+    범위 인자(startDate/endDate 등)가 있으면 한 번, 월 인자만 있으면 기간이 걸친 달마다 한 번 부른다.
+    스키마에 없는 인자는 보내지 않는다. 일 단위 집계를 고를 수 있으면(DAY/DAILY enum) 일 단위로 부른다.
+    """
+    props = schema_input_props(schema)
+    base: dict[str, Any] = {next((k for k in ("companyId", "company_id") if k in props), "companyId"): company_id}
+    basis_key, basis_val = pick_date_basis(props, preferred_basis)
+    if basis_key and basis_val is not None:
+        base[basis_key] = basis_val
+    for key in _GRANULARITY_KEYS:
+        prop = props.get(key)
+        if isinstance(prop, dict) and prop.get("enum"):
+            day = next((str(v) for v in prop["enum"] if str(v).upper() in ("DAY", "DAILY", "DATE")), None)
+            if day:
+                base[key] = day
+                break
+    page_key = "page" if "page" in props else None
+    common = {"basis": basis_val, "page_key": page_key}
+    pair = next(((a, b) for a, b in _RANGE_PAIRS if a in props and b in props), None)
+    if pair is not None:
+        monthly = "month" in pair[0].lower()
+        fmt = (lambda d: d.strftime("%Y-%m")) if monthly else (lambda d: d.isoformat())
+        return [{"args": {**base, pair[0]: fmt(start), pair[1]: fmt(end)}, "month": None, **common}]
+    months = _months_between(start, end)
+    if "year" in props and "month" in props:
+        return [{"args": {**base, "year": m.year, "month": m.month}, "month": m, **common} for m in months]
+    month_key = next((k for k in _MONTH_KEYS if k in props), None)
+    if month_key:
+        return [{"args": {**base, month_key: m.strftime("%Y-%m")}, "month": m, **common} for m in months]
+    return [{"args": {**base, "startDate": start.isoformat(), "endDate": end.isoformat()}, "month": None, **common}]

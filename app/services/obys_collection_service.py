@@ -552,6 +552,65 @@ async def _collect_kind(
     return {"reconcile": reconcile_out, "state": state}
 
 
+CHANNEL_WRITE_CHUNK = 200
+
+
+async def _channel_input_schema() -> dict[str, Any]:
+    try:
+        return await clobe.get_tool_input_schema(core.CHANNEL_TOOL)
+    except Exception as exc:  # noqa: BLE001 - 스키마를 못 읽어도 기본 인자(companyId·기간)로 시도한다
+        logger.warning("clobe_channel_schema_unavailable type=%s", type(exc).__name__)
+        return {}
+
+
+async def _collect_channel(
+    conn: Any, session: Any, ctx: RunCtx, start: date, end: date, scrape: dict[str, Any], resume_state: dict[str, Any],
+    counts: dict[str, int],
+) -> dict[str, Any]:
+    """판매채널 매출(배달앱·카드·PG·오픈마켓)을 읽어 검토함 테이블에 적재한다. 장부 확정 대상이 아니라 매출 분석용이다.
+
+    대사(reconcile)할 총계가 없어 건수 대사는 하지 않는다. 적재는 source_key(회사·채널·기관·날짜·기준) 멱등이라
+    중단 후 처음부터 다시 읽어도 행이 늘지 않는다. 기간 전체가 빈 응답이고 이 사업자에 적재된 적도 없으면 '미연결'이다.
+    """
+    schema = await _channel_input_schema()
+    records: list[dict[str, Any]] = []
+    explicit_disconnected = False
+    for call in core.build_channel_calls(schema, ctx.company_id, start, end):
+        page, pages = 0, 0
+        while True:
+            if pages >= core.MAX_PAGES:
+                raise CollectionError("page_limit", 409)
+            args = dict(call["args"])
+            if call["page_key"]:
+                args[call["page_key"]] = page
+            result = await session.call(core.CHANNEL_TOOL, args)
+            try:
+                parsed = core.parse_channel_payload(
+                    result, company_id=ctx.company_id, date_basis=call["basis"], default_month=call["month"])
+            except ValueError:
+                raise CollectionError("channel_unexpected_shape", 409) from None
+            explicit_disconnected = explicit_disconnected or parsed["connected"] is False
+            records.extend(parsed["records"])
+            counts["pages"] += 1
+            counts["received"] += len(parsed["records"])
+            pages += 1
+            page += 1
+            if not (call["page_key"] and isinstance(result, dict) and result.get("hasNext")):
+                break
+    merged = core.merge_channel_records(records)
+    if not merged:
+        had_before = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM obys_clobe_item WHERE tenant_id=$1 AND business_id=$2 AND data_kind=$3)",
+            ctx.tenant_id, ctx.business_id, ctx.kind)
+        if explicit_disconnected or not had_before:
+            return {"reconcile": [], "state": {"done": True, "not_connected": True}, "not_connected": True}
+    rows = _prepare_rows(ctx.kind, merged, scrape.get("source_as_of"))
+    seen: set[tuple[str, str]] = set()
+    for i in range(0, len(rows), CHANNEL_WRITE_CHUNK):
+        await _write_page(conn, ctx, rows[i:i + CHANNEL_WRITE_CHUNK], {"done": False}, counts, seen)
+    return {"reconcile": [], "state": {"done": True}, "not_connected": False}
+
+
 async def _checkpoint(conn: Any, ctx: RunCtx, state: dict[str, Any]) -> None:
     async with conn.transaction():
         await _fence(conn, ctx)
@@ -561,6 +620,7 @@ async def _checkpoint(conn: Any, ctx: RunCtx, state: dict[str, Any]) -> None:
 async def _finish_run(
     conn: Any, ctx: RunCtx, status: str, *, error_code: str | None, counts: dict[str, Any],
     source_as_of: datetime | None, start: date, end: date, resume_state: dict[str, Any] | None,
+    state_status: str = "succeeded",
 ) -> None:
     """종료 기록. 임대를 잃었으면 상태 갱신은 하지 않고 실행 행만 lease_lost 로 닫는다."""
     try:
@@ -573,7 +633,7 @@ async def _finish_run(
                 None if resume_state is None else _json(resume_state),
             )
             if ctx.mode == "live":
-                await _update_state(conn, ctx, status, error_code, source_as_of, start, end)
+                await _update_state(conn, ctx, status, error_code, source_as_of, start, end, state_status=state_status)
     except LeaseLost:
         await conn.execute(
             "UPDATE obys_clobe_collection_run SET status='lease_lost', error_code='lease_lost', finished_at=now() "
@@ -582,20 +642,22 @@ async def _finish_run(
 
 
 async def _update_state(conn: Any, ctx: RunCtx, status: str, error_code: str | None, source_as_of: datetime | None,
-                        start: date, end: date) -> None:
+                        start: date, end: date, *, state_status: str = "succeeded") -> None:
     prev = await conn.fetchrow(
         "SELECT consecutive_failures FROM obys_clobe_collection_state WHERE clobe_company_id=$1 AND data_kind=$2",
         ctx.company_id, ctx.kind)
     failures = int(prev["consecutive_failures"]) if prev else 0
     if status == "succeeded":
+        # 채널매출 '미연결'은 오류가 아니라 정상 종료한 조회의 결과다: 상태만 not_connected 로 두고 실패 카운터는 올리지 않는다.
+        note = core.CHANNEL_NOT_CONNECTED if state_status == "not_connected" else None
         await conn.execute(
             "INSERT INTO obys_clobe_collection_state (clobe_company_id, data_kind, status, last_run_id, last_success_at, "
             " last_success_run_id, consecutive_failures, covered_from, covered_to, source_as_of, last_error_code) "
-            "VALUES ($1,$2,'succeeded',$3,now(),$3,0,$4,$5,$6,NULL) "
-            "ON CONFLICT (clobe_company_id, data_kind) DO UPDATE SET status='succeeded', last_run_id=$3, last_success_at=now(), "
+            "VALUES ($1,$2,$7,$3,now(),$3,0,$4,$5,$6,$8) "
+            "ON CONFLICT (clobe_company_id, data_kind) DO UPDATE SET status=$7, last_run_id=$3, last_success_at=now(), "
             " last_success_run_id=$3, consecutive_failures=0, next_retry_at=NULL, covered_from=$4, covered_to=$5, "
-            " source_as_of=$6, last_error_code=NULL, updated_at=now()",
-            ctx.company_id, ctx.kind, ctx.run_id, start, end, source_as_of,
+            " source_as_of=$6, last_error_code=$8, updated_at=now()",
+            ctx.company_id, ctx.kind, ctx.run_id, start, end, source_as_of, state_status, note,
         )
         return
     failures += 1
@@ -617,8 +679,8 @@ async def run_collection(
 ) -> dict[str, Any]:
     if mode not in ("live", "shadow"):
         raise CollectionError("invalid_mode", 400)
-    wanted = list(kinds or core.DATA_KINDS)
-    if any(k not in core.DATA_KINDS for k in wanted):
+    wanted = list(kinds or core.COLLECTION_KINDS)
+    if any(k not in core.COLLECTION_KINDS for k in wanted):
         raise CollectionError("invalid_kind", 400)
     try:
         start, end = core.resolve_period(period_start, period_end)
@@ -698,9 +760,12 @@ async def _run_kind(conn: Any, session: Any, base: RunCtx, kind: str, start: dat
     counts: dict[str, Any] = {"pages": 0, "received": 0, "inserted": 0, "unchanged": 0, "revised": 0,
                               "dup_in_run": 0, "would_insert": 0}
     status, error_code, final_state, reconcile_out = "succeeded", None, None, []
+    not_connected = False
     try:
-        out = await _collect_kind(conn, session, ctx, start, end, scrape, resume_state, counts)
+        collect = _collect_channel if kind == core.KIND_CHANNEL else _collect_kind
+        out = await collect(conn, session, ctx, start, end, scrape, resume_state, counts)
         final_state, reconcile_out = out["state"], out["reconcile"]
+        not_connected = bool(out.get("not_connected"))
         bad = [m for r in reconcile_out for m in r["mismatches"]]
         if bad:
             # 누락·합계 불일치는 성공이 아니다. 다음 시도는 처음부터 다시 읽는다(적재는 멱등).
@@ -722,13 +787,17 @@ async def _run_kind(conn: Any, session: Any, base: RunCtx, kind: str, start: dat
     except clobe.ClobeError as exc:
         status, error_code = "failed", f"clobe:{str(exc)[:40]}"
     counts["reconcile"] = reconcile_out
+    if not_connected:
+        counts["not_connected"] = True
     counts["scrape"] = {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in scrape.items()}
     await _finish_run(conn, ctx, status, error_code=error_code, counts=counts, source_as_of=scrape["source_as_of"],
-                      start=start, end=end, resume_state=final_state)
+                      start=start, end=end, resume_state=final_state,
+                      state_status="not_connected" if not_connected else "succeeded")
     if error_code == "reauth_required":
         raise clobe.ClobeReauthRequired("reauth_required")
     return {"run_id": str(ctx.run_id), "data_kind": kind, "status": status, "error_code": error_code,
-            "attempt": attempt, "resumed": resumed, "counts": {k: v for k, v in counts.items() if k not in ("reconcile", "scrape")},
+            "attempt": attempt, "resumed": resumed, "not_connected": not_connected,
+            "counts": {k: v for k, v in counts.items() if k not in ("reconcile", "scrape")},
             "reconcile": reconcile_out, "source_as_of": scrape["source_as_of"].isoformat() if scrape["source_as_of"] else None}
 
 
@@ -759,11 +828,13 @@ async def list_items(tenant_id: Any, business_id: str, *, stage: str | None = No
             "SELECT item_id, data_kind, source_key, institution, occurred_on, amount, direction, counterparty, stage, "
             " source_as_of, first_seen_at, supersedes_item_id FROM obys_clobe_item "
             "WHERE tenant_id=$1 AND business_id=$2 AND ($3::text IS NULL OR stage=$3) AND ($4::text IS NULL OR data_kind=$4) "
+            " AND data_kind = ANY($7::text[]) "
             "ORDER BY occurred_on DESC NULLS LAST, item_id LIMIT $5 OFFSET $6",
-            tenant, business_id, stage, kind, limit, max(0, int(offset)))
+            tenant, business_id, stage, kind, limit, max(0, int(offset)), list(core.DATA_KINDS))
         total = await conn.fetchval(
             "SELECT count(*) FROM obys_clobe_item WHERE tenant_id=$1 AND business_id=$2 "
-            "AND ($3::text IS NULL OR stage=$3) AND ($4::text IS NULL OR data_kind=$4)", tenant, business_id, stage, kind)
+            "AND ($3::text IS NULL OR stage=$3) AND ($4::text IS NULL OR data_kind=$4) AND data_kind = ANY($5::text[])",
+            tenant, business_id, stage, kind, list(core.DATA_KINDS))
         items = [{
             "item_id": str(r["item_id"]), "data_kind": r["data_kind"], "source_key": r["source_key"],
             "institution": r["institution"], "occurred_on": r["occurred_on"].isoformat() if r["occurred_on"] else None,
@@ -797,8 +868,9 @@ async def review_items(tenant_id: Any, business_id: str, item_ids: list[str], de
         await _require_business(conn, tenant, business_id)
         done = await conn.fetch(
             "UPDATE obys_clobe_item SET stage=$5, reviewed_by=$6, reviewed_at=now() "
-            "WHERE tenant_id=$1 AND business_id=$2 AND item_id = ANY($3::uuid[]) AND stage = ANY($4::text[]) RETURNING item_id",
-            tenant, business_id, ids, list(allowed_from), target, actor)
+            "WHERE tenant_id=$1 AND business_id=$2 AND item_id = ANY($3::uuid[]) AND stage = ANY($4::text[]) "
+            " AND data_kind = ANY($7::text[]) RETURNING item_id",
+            tenant, business_id, ids, list(allowed_from), target, actor, list(core.DATA_KINDS))
         return {"updated": len(done), "skipped": len(ids) - len(done), "stage": target}
     finally:
         await conn.close()
@@ -808,6 +880,8 @@ async def _post_reviewed_rows(conn: Any, tenant: UUID, business_id: str, rows: l
     """잠긴 reviewed 항목을 확정 원장에 올린다(멱등·supersede 규칙의 단일 구현). 호출자가 트랜잭션과 행 잠금을 쥐고 있어야 한다."""
     confirmed = 0
     for r in rows:
+        if r["data_kind"] not in core.DATA_KINDS:
+            continue  # 판매채널 매출 등 장부 확정 대상이 아닌 종류는 어떤 경로로 들어와도 원장에 올리지 않는다
         # 같은 원장 키를 동시에 확정하는 두 트랜잭션이 둘 다 "항목 없음"을 보지 못하게 키 단위로 직렬화한다.
         await conn.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
@@ -848,7 +922,7 @@ async def confirm_items(tenant_id: Any, business_id: str, item_ids: list[str], *
             rows = await conn.fetch(
                 "SELECT * FROM obys_clobe_item WHERE tenant_id=$1 AND business_id=$2 AND item_id = ANY($3::uuid[]) FOR UPDATE",
                 tenant, business_id, ids)
-            reviewed = [r for r in rows if r["stage"] == "reviewed"]
+            reviewed = [r for r in rows if r["stage"] == "reviewed" and r["data_kind"] in core.DATA_KINDS]
             confirmed = await _post_reviewed_rows(conn, tenant, business_id, reviewed, actor)
             skipped = len(ids) - confirmed
         return {"confirmed": confirmed, "skipped": skipped}
@@ -918,6 +992,108 @@ async def list_ledger_entries(tenant_id: Any, business_id: str, *, date_from: An
             "groups": [{"data_kind": g["data_kind"], "direction": g["direction"], "count": int(g["n"]),
                         "amount_total": str(Decimal(g["total"]))} for g in groups],
         },
+    }
+
+
+CHANNEL_VIEW_MAX_LIMIT = 500
+
+# 채널매출 최신본: source_key 당 가장 최근 버전 한 행(재수집으로 값이 바뀌어도 이중 집계되지 않는다).
+# 기간·채널 조건은 최신본을 고른 뒤에 건다.
+_CHANNEL_LATEST_CTE = (
+    "WITH latest AS (SELECT DISTINCT ON (source_key) clobe_company_id, source_key, occurred_on, institution, "
+    " direction AS channel, amount AS gross, round(NULLIF(payload->>'net', '')::numeric, 2) AS net, "
+    " round(NULLIF(payload->>'fee', '')::numeric, 2) AS fee, NULLIF(payload->>'count', '')::bigint AS cnt, "
+    " payload->>'date_basis' AS date_basis, payload->>'grain' AS grain, source_as_of FROM obys_clobe_item "
+    " WHERE tenant_id=$1 AND business_id=$2 AND data_kind=$3 AND stage <> 'superseded' "
+    " AND ($4::text IS NULL OR clobe_company_id=$4) ORDER BY source_key, first_seen_at DESC)")
+
+
+async def list_channel_revenue(
+    tenant_id: Any, business_id: str, *, date_from: Any = None, date_to: Any = None, company_id: str | None = None,
+    channel: str | None = None, date_basis: str | None = None, limit: int = 100, offset: int = 0,
+) -> dict[str, Any]:
+    """판매채널 매출(수집 data_kind=channel_revenue) 읽기 전용 조회. 매출 분석용이며 장부·전표와 무관하다.
+
+    합계(summary)는 기간·회사·채널 필터 전체 기준으로 페이지와 무관하다. connection 은 회사별 수집 상태로,
+    connect_required=true 면 클로브에 판매채널이 연결되지 않은 것이다('클로브에서 배달앱 연결 필요').
+    """
+    tenant = _scope(tenant_id)
+    start, end = _bulk_date(date_from, "date_from"), _bulk_date(date_to, "date_to")
+    if start and end and start > end:
+        raise CollectionError("invalid_period", 400)
+    channel_filter = core.channel_code(channel) if channel else None
+    basis_filter = str(date_basis).strip().upper() if date_basis else None
+    limit = max(1, min(int(limit), CHANNEL_VIEW_MAX_LIMIT))
+    offset = max(0, int(offset))
+    args: list[Any] = [tenant, business_id, core.KIND_CHANNEL, company_id or None]
+    where = "TRUE"
+    for clause, value in (("occurred_on >= ", start), ("occurred_on <= ", end), ("channel = ", channel_filter),
+                          ("upper(date_basis) = ", basis_filter)):
+        if value is not None:
+            args.append(value)
+            where += f" AND {clause}${len(args)}"
+    conn = await _connect()
+    try:
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            await _require_business(conn, tenant, business_id)
+            groups = await conn.fetch(
+                f"{_CHANNEL_LATEST_CTE} SELECT channel, date_basis, count(*) AS n, COALESCE(sum(gross), 0) AS gross, "
+                f" COALESCE(sum(net), 0) AS net, COALESCE(sum(fee), 0) AS fee, COALESCE(sum(cnt), 0) AS cnt "
+                f"FROM latest WHERE {where} GROUP BY channel, date_basis ORDER BY channel, date_basis", *args)
+            institutions = await conn.fetch(
+                f"{_CHANNEL_LATEST_CTE} SELECT channel, institution, date_basis, COALESCE(sum(gross), 0) AS gross, "
+                f" COALESCE(sum(net), 0) AS net, COALESCE(sum(fee), 0) AS fee, COALESCE(sum(cnt), 0) AS cnt "
+                f"FROM latest WHERE {where} GROUP BY channel, institution, date_basis "
+                f"ORDER BY channel, institution, date_basis", *args)
+            rows = await conn.fetch(
+                f"{_CHANNEL_LATEST_CTE} SELECT * FROM latest WHERE {where} "
+                f"ORDER BY occurred_on DESC NULLS LAST, channel, institution, source_key LIMIT {limit} OFFSET {offset}", *args)
+            states = await conn.fetch(
+                "SELECT s.clobe_company_id, s.status, s.last_error_code, s.last_success_at, s.covered_from, s.covered_to "
+                "FROM obys_clobe_collection_state s JOIN obys_clobe_company_link l "
+                " ON l.clobe_company_id = s.clobe_company_id AND l.link_status='linked' "
+                "WHERE l.tenant_id=$1 AND l.business_id=$2 AND s.data_kind=$3 AND ($4::text IS NULL OR s.clobe_company_id=$4) "
+                "ORDER BY s.clobe_company_id", tenant, business_id, core.KIND_CHANNEL, company_id or None)
+    finally:
+        await conn.close()
+
+    def _money(value: Any) -> str:
+        return str(Decimal(value))
+
+    def _totals(items: list[Any]) -> dict[str, Any]:
+        return {"gross": _money(sum((Decimal(g["gross"]) for g in items), Decimal(0))),
+                "net": _money(sum((Decimal(g["net"]) for g in items), Decimal(0))),
+                "fee": _money(sum((Decimal(g["fee"]) for g in items), Decimal(0))),
+                "count": int(sum(int(g["cnt"]) for g in items))}
+
+    connection = [{
+        "company_id": st["clobe_company_id"], "status": st["status"],
+        "connect_required": st["status"] == "not_connected",
+        "hint": "clobe_channel_connect_required" if st["status"] == "not_connected" else None,
+        "last_success_at": _iso(st["last_success_at"]),
+        "covered_from": _iso(st["covered_from"]), "covered_to": _iso(st["covered_to"]),
+    } for st in states]
+    return {
+        "rows": [{
+            "occurred_on": _iso(r["occurred_on"]), "channel": r["channel"], "institution": r["institution"],
+            "date_basis": r["date_basis"], "grain": r["grain"], "company_id": r["clobe_company_id"],
+            "gross": _money(r["gross"]) if r["gross"] is not None else None,
+            "net": _money(r["net"]) if r["net"] is not None else None,
+            "fee": _money(r["fee"]) if r["fee"] is not None else None,
+            "count": int(r["cnt"]) if r["cnt"] is not None else None,
+            "source_key": r["source_key"],
+        } for r in rows],
+        "total": sum(int(g["n"]) for g in groups), "limit": limit, "offset": offset,
+        "summary": {
+            **_totals(list(groups)), "row_count": sum(int(g["n"]) for g in groups),
+            "by_channel": [{"channel": g["channel"], "date_basis": g["date_basis"], "row_count": int(g["n"]),
+                            **_totals([g])} for g in groups],
+            "by_institution": [{"channel": g["channel"], "institution": g["institution"],
+                                "date_basis": g["date_basis"], **_totals([g])} for g in institutions],
+        },
+        "connection": connection,
+        "connect_required": bool(connection) and all(c["connect_required"] for c in connection),
+        "confirmable": False,
     }
 
 
@@ -1032,11 +1208,12 @@ async def company_status(tenant_id: Any, *, internal_admin: bool = False) -> dic
             stage_counts: dict[str, int] = {}
             if link["link_status"] == "linked":
                 for r in await conn.fetch(
-                    "SELECT stage, count(*) AS n FROM obys_clobe_item WHERE tenant_id=$1 AND business_id=$2 GROUP BY stage",
-                    link["tenant_id"], link["business_id"]):
+                    "SELECT stage, count(*) AS n FROM obys_clobe_item WHERE tenant_id=$1 AND business_id=$2 "
+                    "AND data_kind = ANY($3::text[]) GROUP BY stage",
+                    link["tenant_id"], link["business_id"], list(core.DATA_KINDS)):
                     stage_counts[r["stage"]] = int(r["n"])
             kinds = {}
-            for kind in core.DATA_KINDS:
+            for kind in core.COLLECTION_KINDS:
                 s = by_kind.get(kind)
                 kinds[kind] = {
                     "status": s["status"] if s else "never_run",
@@ -1049,6 +1226,8 @@ async def company_status(tenant_id: Any, *, internal_admin: bool = False) -> dic
                     "covered_to": _iso(s["covered_to"]) if s else None,
                     "source_as_of": _iso(s["source_as_of"]) if s else None,
                 }
+                if kind == core.KIND_CHANNEL:
+                    kinds[kind]["connect_required"] = bool(s and s["status"] == "not_connected")
             companies.append({**_link_view(link), "kinds": kinds, "item_stage_counts": stage_counts})
         return {"companies": companies, "unsupported_sources": list(core.UNSUPPORTED_SOURCES)}
     finally:

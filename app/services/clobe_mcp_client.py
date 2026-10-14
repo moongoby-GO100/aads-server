@@ -819,13 +819,27 @@ COLLECTION_TOOLS: dict[str, str] = {
     "get_tax_invoices": "tax_invoice",
     "get_cash_receipts": "cash_receipt",
     "get_card_approvals": "card_approval",
+    "get_monthly_revenue": "channel_revenue",
 }
 COLLECTION_DATA_TOOLS: dict[str, str] = {
     "bank_transaction": "get_labeled_transactions",
     "tax_invoice": "get_tax_invoices",
     "cash_receipt": "get_cash_receipts",
     "card_approval": "get_card_approvals",
+    "channel_revenue": "get_monthly_revenue",
 }
+
+
+async def get_tool_input_schema(name: str) -> dict[str, Any]:
+    """tools/list 실측으로 저장된 입력 스키마(읽기 전용). 없거나 읽을 수 없으면 빈 dict."""
+    row = await (await _pool()).fetchrow("SELECT input_schema FROM clobe_mcp_tools WHERE name = $1", name)
+    schema = row["input_schema"] if row else None
+    if isinstance(schema, str):
+        try:
+            schema = json.loads(schema)
+        except ValueError:
+            return {}
+    return schema if isinstance(schema, dict) else {}
 
 
 def parse_tool_json(result: dict[str, Any]) -> dict[str, Any]:

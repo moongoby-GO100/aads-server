@@ -55,7 +55,7 @@ class LinkRequest(BaseModel):
 
 
 class RunRequest(BaseModel):
-    kinds: list[Literal["bank_transaction", "tax_invoice", "cash_receipt", "card_approval"]] | None = None
+    kinds: list[Literal["bank_transaction", "tax_invoice", "cash_receipt", "card_approval", "channel_revenue"]] | None = None
     period_start: str | None = Field(None, max_length=10)
     period_end: str | None = Field(None, max_length=10)
     mode: Literal["live", "shadow"] = "live"
@@ -193,6 +193,26 @@ async def ledger_entries(
     try:
         return await svc.list_ledger_entries(
             user.get("tenant_id"), business_id, date_from=date_from, date_to=date_to, kinds=kinds, limit=limit, offset=offset)
+    except svc.CollectionError as exc:
+        raise _raise(exc) from None
+
+
+@router.get("/businesses/{business_id}/channel-revenue")
+async def channel_revenue(
+    business_id: str,
+    date_from: date | None = None, date_to: date | None = None,
+    company_id: str | None = Query(None, max_length=128),
+    channel: Literal["DELIVERY", "CARD", "PG", "MKP"] | None = None,
+    date_basis: str | None = Query(None, max_length=32),
+    limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """판매채널(배달앱·카드·PG·오픈마켓) 매출을 읽기 전용으로 조회. 매출 분석용이라 확정·전표 대상이 아니다."""
+    _role_ok(user, _READ_ROLES)
+    try:
+        return await svc.list_channel_revenue(
+            user.get("tenant_id"), business_id, date_from=date_from, date_to=date_to, company_id=company_id,
+            channel=channel, date_basis=date_basis, limit=limit, offset=offset)
     except svc.CollectionError as exc:
         raise _raise(exc) from None
 

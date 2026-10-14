@@ -81,7 +81,7 @@ def _plan_groups(kind_states: dict[str, dict[str, Any]], now: datetime, today: d
     """실행할 (기간, 종류들) 묶음과 백오프로 빠진 종류. 같은 기간인 종류는 한 번의 run_collection 으로 묶는다."""
     groups: dict[tuple[date, date], dict[str, Any]] = {}
     deferred: list[str] = []
-    for kind in core.DATA_KINDS:
+    for kind in core.COLLECTION_KINDS:
         st = kind_states.get(kind) or {}
         retry = st.get("next_retry_at")
         if retry is not None and retry > now:

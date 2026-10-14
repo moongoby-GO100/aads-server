@@ -29,7 +29,7 @@ BUSINESSES = [
 # ── 읽기 전용 허용목록 ───────────────────────────────────
 
 def test_collection_allowlist_is_read_only_and_exact():
-    assert set(clobe.COLLECTION_DATA_TOOLS) == set(core.DATA_KINDS)
+    assert set(clobe.COLLECTION_DATA_TOOLS) == set(core.COLLECTION_KINDS)
     assert set(clobe.COLLECTION_DATA_TOOLS.values()) <= set(clobe.COLLECTION_TOOLS)
     for name in clobe.COLLECTION_TOOLS:
         ok, reason = clobe.classify_tool(name)

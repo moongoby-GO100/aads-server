@@ -103,14 +103,14 @@ def test_future_next_retry_kind_skipped_others_run(world):
     run(sched.run_due(NOW))
     kinds = [k for c in world.calls for k in c["kinds"]]
     assert core.KIND_TAX not in kinds
-    assert sorted(kinds) == sorted(set(core.DATA_KINDS) - {core.KIND_TAX})
+    assert sorted(kinds) == sorted(set(core.COLLECTION_KINDS) - {core.KIND_TAX})
 
 
 def test_past_next_retry_runs_and_all_deferred_skips_company(world):
     world.links = ["c1", "c2"]
     past = {"status": "partial", "next_retry_at": NOW - timedelta(seconds=1), "last_success_at": None, "covered_to": None}
     future = {**past, "next_retry_at": NOW + timedelta(hours=1)}
-    world.states = {"c1": {k: past for k in core.DATA_KINDS}, "c2": {k: future for k in core.DATA_KINDS}}
+    world.states = {"c1": {k: past for k in core.COLLECTION_KINDS}, "c2": {k: future for k in core.COLLECTION_KINDS}}
     out = run(sched.run_due(NOW))
     assert {c["company_id"] for c in world.calls} == {"c1"}
     assert {c["company_id"]: c["status"] for c in out["companies"]}["c2"] == "skipped_backoff"
@@ -204,7 +204,7 @@ def test_kinds_grouped_by_period_per_kind_history(world):
     got = {(c["period_start"], tuple(c["kinds"])) for c in world.calls}
     assert (date(2026, 10, 8), (core.KIND_BANK, core.KIND_TAX)) in got
     assert (date(2026, 10, 2), (core.KIND_CASH,)) in got
-    assert (date(2026, 7, 14), (core.KIND_CARD,)) in got  # 이력 없음 → 기본 90일
+    assert (date(2026, 7, 14), (core.KIND_CARD, core.KIND_CHANNEL)) in got  # 이력 없음 → 기본 90일(채널매출 포함)
 
 
 def test_covered_to_ignored_without_a_success(world):
