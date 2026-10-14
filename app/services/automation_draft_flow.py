@@ -4,7 +4,8 @@
 - 모든 응답은 `{draft, card, ...}` — 화면 문장은 `build_card()` 사전에서만 나온다.
 - 권한: 일반 사용자는 자기 초안만, 관리자(owner/admin)는 테넌트의 모든 초안을 다룬다. 다른 테넌트 초안은 '없음'이다.
 - `owner_user` 는 사람(이메일/사용자 id)이다. 채팅 세션 id 를 넣지 않는다.
-- 데모 실행(T3)과 등록(T4)은 이 모듈 밖이다. 여기서는 그 앞뒤 상태 이동까지만 한다.
+- 시연 실행은 `automation_demo_runner`, 조각 분할·등록은 `automation_fragment_splitter` 가 한다(T3).
+  여기서는 상태를 옮기고 실행기를 띄우며, 결과 확인 뒤 등록을 부른다.
 """
 
 from __future__ import annotations
@@ -18,8 +19,10 @@ from typing import Any
 
 from app.core.db_pool import get_pool
 from app.services import automation_credential_linker as linker
+from app.services import automation_demo_runner as demo_runner
 from app.services import automation_draft_service as svc
 from app.services import automation_intent_parser as parser
+from app.services import automation_fragment_splitter as splitter
 from app.services import automation_schedule as schedule
 from app.services import vault_secure_input
 from app.services.work_recipe.store import list_recipes
@@ -27,7 +30,12 @@ from app.services.work_recipe.store import list_recipes
 MAX_INTENT_TEXT = 2000
 MAX_NOTE = 500
 CREDENTIAL_WAIT_MINUTES = vault_secure_input.REQUEST_TTL_MINUTES
-PROGRESS_EVENT = "automation_draft.progress"
+PROGRESS_EVENT = demo_runner.PROGRESS_EVENT
+# 로그인 정보를 바꾸지 않고는 다시 시연하지 않는 실패(로그인 반복 제출 금지, FR-25).
+LOGIN_RETRY_BLOCKED = frozenset({"auth_failed", "challenge"})
+# [아니에요] 이유 → 다시 해 보기 방식(FR-14, AC-04).
+REDEMO_REASONS = frozenset({"wrong_date", "wrong_menu", "other"})
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _REASON_CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _JSON_FIELDS = ("intent", "recording_ref", "evidence")
 _SCHEDULABLE = frozenset({
@@ -135,7 +143,14 @@ def _card(draft: dict[str, Any]) -> dict[str, Any]:
     if row["state"] == "intent_draft":
         card["fields"] = _intent_fields(row["intent"])
         card["needs_domain_confirm"] = bool(row["intent"].get("needs_domain_confirm"))
+    elif row["state"] == "paused_risk" and row["recording_ref"].get("paused_label"):
+        card["paused_step"] = str(row["recording_ref"]["paused_label"])
     return card
+
+
+def _launch_demo(draft_id: str, *, tenant_id: str) -> Any:
+    """시연을 요청과 분리해 띄운다. 테스트는 이 함수를 바꿔 끼운다."""
+    return demo_runner.launch(draft_id, tenant_id=tenant_id)
 
 
 def view(draft: dict[str, Any], **extra: Any) -> dict[str, Any]:
@@ -340,7 +355,10 @@ async def choose_credential(
         _need_state(draft, "intent_confirmed")
         waiting, requested = await _issue_request(actor, draft)
         return view(waiting, credential={"status": "requested", **requested})
-    _need_state(draft, "intent_confirmed", "credential_waiting")
+    # 로그인 실패(auth_failed) 뒤에는 다시 연결만 허용한다 — 비밀번호를 고친 같은 계정 또는 다른 계정.
+    relink = draft["state"] == "failed" and draft.get("failure_code") == "auth_failed"
+    if not relink:
+        _need_state(draft, "intent_confirmed", "credential_waiting")
     chosen = await linker.get_credential_for_domain(
         tenant_id=actor.tenant_id, credential_id=str(credential_id), domain=draft["intent"].get("domain") or "",
     )
@@ -399,13 +417,37 @@ async def get(actor: Actor, draft_id: str) -> dict[str, Any]:
 
 # ── 3. 시연·위험 판단·결과 확인 ────────────────────────────────────────────
 
+async def _begin_demo(actor: Actor, draft: dict[str, Any], reason: str, **ref_changes: Any) -> dict[str, Any]:
+    """시연 1회를 센 뒤 demonstrating 으로 옮기고 실행기를 띄운다. 초안당 3회까지.
+
+    [진행] 승인은 그 시연의 그 단계에만 유효하다 — 새 시연은 이전 승인을 하나도 가져가지 않는다.
+    """
+    draft_id, state = str(draft["id"]), draft["state"]
+    attempts = int(draft.get("demo_attempts") or 0)
+    if attempts >= demo_runner.MAX_DEMOS:
+        raise FlowError(409, "demo_limit_reached", limit=demo_runner.MAX_DEMOS)
+    ref = {k: v for k, v in draft["recording_ref"].items() if k != "approved_risk_seqs"}
+    fields: dict[str, Any] = {
+        "demo_attempts": attempts + 1,
+        "recording_ref": {**ref, **ref_changes, "approved_risk": {}},
+    }
+    await _apply(_set(actor, draft_id, state, fields, "demo_attempt_counted", attempt=attempts + 1))
+    moved = await _apply(_move(actor, draft_id, state, "demonstrating", reason))
+    _launch_demo(draft_id, tenant_id=actor.tenant_id)
+    return view(moved, progress_event=PROGRESS_EVENT)
+
+
 async def start_demo(actor: Actor, draft_id: str, expected_state: str) -> dict[str, Any]:
-    """credential_ready(처음) 또는 failed(다시) → demonstrating. 실제 실행은 시연 실행기(T3)가 이어받는다."""
+    """credential_ready(처음) 또는 failed(다시) → demonstrating 후 시연 실행기를 띄운다.
+
+    로그인 실패·사람 확인 요구로 멈춘 초안은 로그인을 다시 연결하기 전에는 다시 하지 않는다.
+    """
     _require_enabled()
     draft = await _load(actor, draft_id)
     _need_state(draft, "credential_ready", "failed", expected=expected_state)
-    moved = await _apply(_move(actor, draft_id, draft["state"], "demonstrating", "demo_requested"))
-    return view(moved, progress_event=PROGRESS_EVENT)
+    if draft["state"] == "failed" and draft.get("failure_code") in LOGIN_RETRY_BLOCKED:
+        raise FlowError(409, "login_retry_blocked", failure_code=draft["failure_code"])
+    return await _begin_demo(actor, draft, "demo_requested")
 
 
 _RISK_TARGET = {"proceed": "demonstrating", "stop_here": "result_review", "cancel": "cancelled"}
@@ -418,8 +460,22 @@ async def risk_decision(actor: Actor, draft_id: str, decision: str) -> dict[str,
         raise FlowError(422, "decision_invalid")
     draft = await _load(actor, draft_id)
     _need_state(draft, "paused_risk")
+    ref = draft["recording_ref"]
+    paused = ref.get("paused_seq")
+    step = next((s for s in ref.get("plan") or [] if paused is not None and int(s.get("seq") or 0) == int(paused)), None)
+    if decision == "proceed" and step is not None:
+        # [진행]은 멈춘 그 단계 하나에만, 이 시연 안에서만, 지금 내용 그대로일 때만 유효하다.
+        approvals = ref.get("approved_risk") if isinstance(ref.get("approved_risk"), dict) else {}
+        approved = {**approvals, str(int(paused)): demo_runner.step_fingerprint(step)}
+        await _apply(_set(
+            actor, draft_id, "paused_risk", {"recording_ref": {**ref, "approved_risk": approved}},
+            "risk_step_approved", seq=int(paused),
+        ))
     moved = await _apply(_move(actor, draft_id, "paused_risk", target, f"risk_{decision}"))
-    return view(moved, **({"progress_event": PROGRESS_EVENT} if target == "demonstrating" else {}))
+    if target != "demonstrating":
+        return view(moved)
+    _launch_demo(draft_id, tenant_id=actor.tenant_id)
+    return view(moved, progress_event=PROGRESS_EVENT)
 
 
 async def review(
@@ -430,15 +486,97 @@ async def review(
         raise FlowError(422, "reason_code_invalid")
     clean_note = " ".join(str(note or "").split())[:MAX_NOTE]
     draft = await _load(actor, draft_id)
+    if ok and draft["state"] == "registering" and draft["evidence"].get("screen_verified"):
+        return await _register(actor, draft)  # 등록이 중간에 실패했을 때 다시 부르는 입구
     _need_state(draft, "result_review")
     detail = {k: v for k, v in (("reason_code", reason_code), ("note", clean_note)) if v}
     if ok:
         evidence = {**draft["evidence"], "screen_verified": True}
         await _apply(_set(actor, draft_id, "result_review", {"evidence": evidence}, "result_verified"))
         moved = await _apply(_move(actor, draft_id, "result_review", "registering", "result_confirmed", detail=detail))
-    else:
-        moved = await _apply(_move(actor, draft_id, "result_review", "revising", "result_rejected", detail=detail))
+        return await _register(actor, moved)
+    moved = await _apply(_move(actor, draft_id, "result_review", "revising", "result_rejected", detail=detail))
     return view(moved)
+
+
+async def _register(actor: Actor, draft: dict[str, Any]) -> dict[str, Any]:
+    """[맞아요] 뒤에만 부른다(FR-15). 조각을 나눠 등록하고 승인 대기 또는 사용 가능으로 옮긴다.
+
+    시연 기록이 없는 초안(직접 보여주기 경로 등)은 registering 에 둔다 — 등록은 그 경로가 맡는다.
+    """
+    recorded_map = draft["recording_ref"].get("recorded") or {}
+    if not recorded_map or not draft["evidence"].get("screen_verified"):
+        return view(draft)
+    recorded = [recorded_map[key] for key in sorted(recorded_map, key=int)]
+    draft_id = str(draft["id"])
+    try:
+        result = await splitter.register_fragments(
+            tenant_id=actor.tenant_id, owner_user=str(draft["owner_user"]), draft_id=draft_id,
+            domain=draft["intent"].get("domain") or "", title=str(draft.get("title") or ""),
+            credential_id=str(draft["credential_id"]) if draft.get("credential_id") else None,
+            recorded=recorded, evidence=draft["evidence"], session_id=draft.get("session_id"),
+        )
+    except Exception as exc:  # noqa: BLE001 — 등록 실패는 registering 에 남기고 다시 부를 수 있게 한다
+        raise FlowError(502, "registration_failed", detail=type(exc).__name__) from None
+    await _apply(_set(
+        actor, draft_id, "registering",
+        {"recipe_names": result["recipe_names"], "registration_ids": result["registration_ids"],
+         "max_risk": result["max_risk"]},
+        "fragments_registered", reused=len(result["reused"]),
+    ))
+    moved = await _apply(_move(actor, draft_id, "registering", "pending_approval", "registered"))
+    if result["all_approved"]:
+        return await activate_on_approval(actor, draft_id)
+    return view(moved)
+
+
+def revise_plan(
+    plan: list[dict[str, Any]], reason_code: str, hint: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """이유에 맞는 단계만 고친다. 돌려주는 값: (새 계획, 바뀐 단계 번호)."""
+    revised = [dict(step) for step in plan]
+    if reason_code == "wrong_date":
+        date = str(hint.get("date") or "")
+        if not _DATE.match(date):
+            raise FlowError(422, "date_required")
+        targets = [step for step in revised if step.get("role") == "date"]
+        if not targets:
+            raise FlowError(409, "no_date_step")
+        for step in targets:
+            step["value"] = date
+    elif reason_code == "wrong_menu":
+        menu = " ".join(str(hint.get("menu") or "").split())[:40]
+        if not menu or svc.find_secret(menu):
+            raise FlowError(422, "menu_required")
+        targets = [step for step in revised if step.get("role") == "menu"]
+        if not targets:
+            raise FlowError(409, "no_menu_step")
+        for step in targets:
+            step.update(selector=f"text={json.dumps(menu, ensure_ascii=False)}", label=menu)
+    else:
+        targets = []
+    return revised, [int(step["seq"]) for step in targets]
+
+
+async def redemo(actor: Actor, draft_id: str, reason_code: str, hint: dict[str, Any] | None = None) -> dict[str, Any]:
+    """[아니에요] 뒤 이유에 맞춰 단계를 고치고 한 번 더 해 본다(revising → demonstrating)."""
+    _require_enabled()
+    if reason_code not in REDEMO_REASONS:
+        raise FlowError(422, "reason_code_invalid")
+    draft = await _load(actor, draft_id)
+    _need_state(draft, "revising")
+    ref = draft["recording_ref"]
+    plan = list(ref.get("plan") or [])
+    if not plan:
+        raise FlowError(409, "nothing_to_redo")
+    revised, changed = revise_plan(plan, reason_code, dict(hint or {}))
+    first = min(changed) if changed else 1
+    completed = [int(s) for s in ref.get("completed") or [] if int(s) < first]
+    recorded = {k: v for k, v in (ref.get("recorded") or {}).items() if int(k) < first}
+    return await _begin_demo(
+        actor, draft, f"redemo_{reason_code}", plan=revised, completed=completed, recorded=recorded,
+        revised_seqs=changed,
+    )
 
 
 async def manual_record(actor: Actor, context: dict[str, Any], draft_id: str) -> dict[str, Any]:

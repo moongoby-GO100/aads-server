@@ -111,6 +111,7 @@ class World:
         self.credentials: list[dict[str, Any]] = []
         self.request_status = {"status": "pending", "credential_id": None}
         self.secure_input_ok = True
+        self.launched: list[str] = []
 
 
 @pytest.fixture
@@ -163,6 +164,8 @@ def world(monkeypatch):
     monkeypatch.setattr(linker, "request_new_input", fake_request)
     monkeypatch.setattr(linker, "request_progress", fake_progress)
     monkeypatch.setattr(schedule, "register", fake_register)
+    # T3: 시연 실행기는 별도 테스트(test_automation_demo_runner)가 본다. 여기서는 띄운 기록만 남긴다.
+    monkeypatch.setattr(flow, "_launch_demo", lambda draft_id, tenant_id: w.launched.append(draft_id))
     monkeypatch.setattr(schedule, "remove", lambda job_id: w.jobs.pop(job_id, None))
     monkeypatch.setattr(schedule, "pause", lambda job_id: w.jobs[job_id].update(active=False))
     monkeypatch.setattr(schedule, "resume", lambda job_id: w.jobs[job_id].update(active=True))
@@ -1061,6 +1064,8 @@ def test_update_fields_and_list_drafts_sql_are_tenant_scoped():
     assert set(svc._UPDATABLE_COLUMNS) == {
         "title", "intent", "aliases", "credential_id", "credential_request_id", "recording_ref", "evidence",
         "schedule_job_id",
+        # T3: 시연 실행기·조각 등록이 채우는 열
+        "max_risk", "demo_attempts", "registration_ids", "recipe_names",
     }
     for forbidden in ("state", "tenant_id", "owner_user", "id", "lane"):
         assert forbidden not in svc._UPDATABLE_COLUMNS

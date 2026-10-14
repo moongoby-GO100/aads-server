@@ -70,6 +70,12 @@ class ReviewIn(_Body):
     note: str | None = Field(default=None, max_length=flow.MAX_NOTE)
 
 
+class RedemoIn(_Body):
+    reason_code: Literal["wrong_date", "wrong_menu", "other"]
+    date: str | None = Field(default=None, max_length=10)
+    menu: str | None = Field(default=None, max_length=40)
+
+
 class ScheduleIn(_Body):
     kind: Literal["once", "daily", "weekdays", "weekly"]
     hour: int = Field(ge=0, le=23)
@@ -156,6 +162,15 @@ async def review(
 ) -> dict[str, Any]:
     """결과 확인(카드 5) — 맞아요(ok=true) 또는 아니에요(ok=false)."""
     return await _run(flow.review(_actor(context), draft_id, body.ok, body.reason_code, body.note))
+
+
+@router.post("/{draft_id}/redemo", status_code=202)
+async def redemo(
+    draft_id: str, body: RedemoIn, context: TenantContext = Depends(require_member),
+) -> dict[str, Any]:
+    """[아니에요] 뒤 이유에 맞춰 그 단계만 고쳐 한 번 더 해 본다(카드 5 → 시연)."""
+    hint = body.model_dump(exclude_none=True, exclude={"reason_code"})
+    return await _run(flow.redemo(_actor(context), draft_id, body.reason_code, hint))
 
 
 @router.post("/{draft_id}/manual-record")

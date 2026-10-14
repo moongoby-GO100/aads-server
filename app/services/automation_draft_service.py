@@ -227,6 +227,9 @@ _FAILED_BUTTONS: dict[str, tuple[tuple[str, str, bool], ...]] = {
 _FAILED_DEFAULT_BUTTONS = (
     ("retry_demo", "다시 해 보기", True), ("relink_login", "로그인 다시 연결", False), ("cancel", "그만두기", False),
 )
+# D2: PC 쪽 실행은 서버가 막혔거나 사람 확인을 요구할 때 '제안'만 한다. 자동으로 넘어가지 않는다.
+_PC_SUGGESTION = ("continue_on_pc", "내 PC에서 계속하기")
+_PC_SUGGESTED_FAILURES = frozenset({"blocked", "challenge"})
 
 
 def build_card(state: str, *, title: str = "", failure_code: str | None = None) -> dict[str, Any]:
@@ -239,13 +242,16 @@ def build_card(state: str, *, title: str = "", failure_code: str | None = None) 
     else:
         body = STATE_BODIES[state]
         buttons = _BUTTONS.get(state, ())
-    return {
+    card = {
         "state": state,
         "headline": STATE_HEADLINES[state],
         "title": title,
         "body": body,
         "buttons": [{"id": bid, "label": label, "primary": primary} for bid, label, primary in buttons],
     }
+    if state == "failed" and failure_code in _PC_SUGGESTED_FAILURES:
+        card["suggestions"] = [{"id": _PC_SUGGESTION[0], "label": _PC_SUGGESTION[1]}]
+    return card
 
 
 def human_sentences() -> list[str]:
@@ -253,6 +259,7 @@ def human_sentences() -> list[str]:
     texts = [*STATE_HEADLINES.values(), *STATE_BODIES.values(), *FAILURE_BODIES.values(), GENERIC_FAILURE_BODY]
     groups = [*_BUTTONS.values(), *_FAILED_BUTTONS.values(), _FAILED_DEFAULT_BUTTONS]
     texts.extend(label for group in groups for _, label, _ in group)
+    texts.append(_PC_SUGGESTION[1])
     return texts
 
 
@@ -435,6 +442,11 @@ _UPDATABLE_COLUMNS: dict[str, str] = {
     "recording_ref": "jsonb",
     "evidence": "jsonb",
     "schedule_job_id": "text",
+    # T3: 시연 실행기·조각 등록이 채운다.
+    "max_risk": "text",
+    "demo_attempts": "int",
+    "registration_ids": "uuid[]",
+    "recipe_names": "text[]",
 }
 _JSON_COLUMNS = frozenset({"intent", "recording_ref", "evidence"})
 
@@ -444,7 +456,12 @@ def _bind(column: str, value: Any) -> Any:
         return None
     if column in _JSON_COLUMNS:
         return _dumps(value)
-    return str(value) if _UPDATABLE_COLUMNS[column] == "uuid" else value
+    kind = _UPDATABLE_COLUMNS[column]
+    if kind == "uuid":
+        return str(value)
+    if kind.endswith("[]"):
+        return [str(item) for item in value]
+    return value
 
 
 async def update_fields(
