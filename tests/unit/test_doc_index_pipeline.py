@@ -738,13 +738,16 @@ def test_sdk_injection_does_not_kill_the_turn():
     """
     import inspect
 
+    from app.services import chat_interrupt_lifecycle
     from app.services.agent_sdk_service import AgentSDKService
 
     inject = inspect.getsource(AgentSDKService._inject_interrupts)
     assert "client.interrupt" not in inject, "턴을 끊으면 진행 중 작업이 사라진다"
     assert "client.query" in inject, "이어서 넣어야 한다"
     assert "대표님 지시를 우선" in inject, "충돌 시 우선순위를 적어야 한다"
-    assert "interrupt_applied" in inject, "넣었는지 화면에 알려야 한다"
+    assert "apply_interrupts" in inject, "반영 이벤트는 apply_interrupts 가 만든다"
+    applied = inspect.getsource(chat_interrupt_lifecycle.apply_interrupts)
+    assert "interrupt_applied" in applied, "넣었는지 화면에 알려야 한다"
 
     bidi = inspect.getsource(AgentSDKService._execute_stream_bidirectional)
     # 연결이 안 되면 대화가 멈추면 안 된다.
