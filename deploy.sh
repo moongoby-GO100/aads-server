@@ -2074,6 +2074,183 @@ notify() {
     fi
 }
 
+# ── P0/P1 모니터 판정 (Phase 7) ──
+# Phase 7 은 트래픽 전환 뒤에 돈다. 그래서 감시가 걸려도 이전 슬롯으로 자동
+# 롤백하지 않는다(정책 B): 전환 직후 standby 동기화(⑤)가 이전 슬롯을 같은 신규
+# 릴리스로 다시 만들어 버려, 되돌릴 이전 이미지가 슬롯에 남지 않는다. 대신
+# (1) 구 슬롯 기준선으로 "기존 소음"을 걸러 오탐을 줄이고, (2) 실패하면 실제
+# 운영 슬롯·SHA 를 error_summary 첫머리에 'ACTIVE=<slot>/<sha>' 로 남긴다.
+# 오류 사전: deploy.p0p1_monitor_fail_but_switched.
+#
+# Match the log record severity, not arbitrary payload text. Pipeline/tool
+# messages legitimately embed strings such as "PRIORITY: P0-CRITICAL" inside a
+# warning record; the old bare ``CRITICAL`` branch treated those as release
+# failures. It also missed structlog's JSON form ("level": "error").
+MONITOR_PATTERN="${AADS_DEPLOY_MONITOR_PATTERN:-\"level\"[[:space:]]*:[[:space:]]*\"(error|critical)\"|level=(error|critical)([[:space:]]|$)|Traceback [(]most recent call last[)]:|^CRITICAL([[:space:]:]|$)}"
+# 채팅 세션이 사용자 입력 SQL 오타(없는 테이블/컬럼 등)로 남기는 기록은
+# 서버 앱 결함이 아니므로 릴리스 실패 사유에서 뺀다. 앱은 해당 기록에
+# 리터럴 토큰 USER_SQL_ERROR 를 넣는다(ceo_chat_tools_db._is_user_sql_error).
+# logger 이름 전체를 제외하면 그 모듈의 진짜 버그도 묻히므로 토큰 한 가지만 쓴다.
+MONITOR_EXCLUDE_PATTERN="${AADS_DEPLOY_MONITOR_EXCLUDE_PATTERN:-USER_SQL_ERROR}"
+
+# 기준선 창: 2026-10-14 실측에서 구 슬롯이 기동 후 15분간 같은 이벤트(llm_first_response_timeout)를
+# 30건 냈다. 그 구간을 덮는 값. 의도적으로 환경변수로 풀지 않는다 — 감시를 느슨하게 하는
+# 우회로가 되기 때문이다.
+P0P1_BASELINE_WINDOW_SECONDS=900
+# 구 슬롯 분당 비율 × 3 + 3 건까지는 소음. 3배는 같은 분포의 5분 표본이 흔들리는 폭(포아송
+# 3σ 근처)을 덮고, +3 은 비율이 0.1건/분 미만일 때 1~2건이 곧바로 실패가 되는 것을 막는다.
+# 이보다 큰 증가나 구 슬롯에 없던 이벤트 키는 신규 코드 기인으로 보고 실패시킨다.
+P0P1_BASELINE_FACTOR=3
+P0P1_BASELINE_SLACK=3
+P0P1_BASELINE_ROWS=""
+P0P1_NOISE_NOTE=""
+
+# stdin: docker logs 전체. stdout: "<이벤트키> <건수>" 줄들.
+# 키 = 구조화 로그의 event 첫 토큰(없으면 숫자를 N 으로 지운 본문). 한 줄짜리
+# Traceback 은 직전 줄의 키로 묶고, 직전 줄이 이미 센 오류 기록이면 같은 사건이므로
+# 다시 세지 않는다.
+p0p1_event_counts() {
+    local pattern="$1" exclude="$2"
+    { grep -nE -B1 -- "$pattern" || true; } | { grep -Ev -- "$exclude" || true; } | awk '
+        function key_of(t,   s) {
+            if (match(t, /"event"[ \t]*:[ \t]*"[^" \t:|=,\\]+/)) {
+                s = substr(t, RSTART, RLENGTH)
+                sub(/^"event"[ \t]*:[ \t]*"/, "", s)
+                return s
+            }
+            if (match(t, /event=[^ \t]+/)) return substr(t, RSTART + 6, RLENGTH - 6)
+            return ""
+        }
+        function fallback_key(t,   s) {
+            s = t
+            gsub(/[0-9]+/, "N", s)
+            gsub(/[ \t]+/, "_", s)
+            return "text:" substr(s, 1, 80)
+        }
+        $0 == "--" { last_key = ""; last_counted = 0; next }
+        {
+            if (!match($0, /^[0-9]+[:-]/)) next
+            sep = substr($0, RLENGTH, 1)
+            text = substr($0, RLENGTH + 1)
+            is_tb = (text ~ /^[ \t]*Traceback \(most recent call last\):/)
+            k = is_tb ? "" : key_of(text)
+            if (sep == "-") {
+                last_key = k; last_counted = 0
+                next
+            }
+            if (is_tb) {
+                if (last_key == "") { c["traceback"]++ }
+                else if (!last_counted) { c[last_key]++ }
+                last_counted = 1
+                next
+            }
+            if (k == "") k = fallback_key(text)
+            c[k]++
+            last_key = k; last_counted = 1
+        }
+        END { for (k in c) printf "%s %d\n", k, c[k] }
+    ' | sort
+}
+
+# $1 = 기준선 행("B <키> <건수> <창초>" 줄들), $2 = 관측 행("<키> <건수>" 줄들),
+# $3 = 관측 경과 초. stdout: FAIL_NEW / FAIL_INCREASE / NOISE 줄. FAIL 이 있으면 rc=1.
+p0p1_classify_hits() {
+    local baseline_rows="$1" observed_rows="$2" elapsed="$3" verdict
+    verdict="$({
+        printf '%s\n' "$baseline_rows"
+        printf '%s\n' "$observed_rows" | awk 'NF >= 2 { print "O", $1, $2 }'
+    } | awk -v elapsed="$elapsed" -v factor="$P0P1_BASELINE_FACTOR" -v slack="$P0P1_BASELINE_SLACK" '
+        $1 == "B" && $4 > 0 {
+            rate = $3 / $4 * 60
+            if (!($2 in base) || rate > base[$2]) base[$2] = rate
+            next
+        }
+        $1 == "O" { obs[$2] = $3 }
+        END {
+            em = elapsed / 60
+            for (k in obs) {
+                if (!(k in base)) {
+                    printf "FAIL_NEW %s obs=%d baseline=none\n", k, obs[k]
+                    continue
+                }
+                allowed = base[k] * em * factor + slack
+                if (obs[k] > allowed)
+                    printf "FAIL_INCREASE %s obs=%d allowed=%.1f baseline_per_min=%.2f\n", k, obs[k], allowed, base[k]
+                else
+                    printf "NOISE %s obs=%d allowed=%.1f baseline_per_min=%.2f\n", k, obs[k], allowed, base[k]
+            }
+        }
+    ' | sort)"
+    printf '%s\n' "$verdict"
+    if grep -q '^FAIL_' <<<"$verdict"; then
+        return 1
+    fi
+    return 0
+}
+
+# 컷오버 직전 구 슬롯(아직 트래픽을 받던 컨테이너)의 이벤트 비율을 모은다. ⑤ standby
+# 동기화가 이 컨테이너를 신규 릴리스로 다시 만들면 로그가 사라지므로 그 전에 불러야 한다.
+# 두 창의 최댓값을 쓴다: 컷오버 직전 창(정상 상태) + 기동 직후 창(재개 세션 소음).
+# $1 = 컨테이너, $2 = 컷오버 epoch.
+p0p1_capture_baseline() {
+    local container="$1" cutover_epoch="$2"
+    local window="$P0P1_BASELINE_WINDOW_SECONDS" started started_epoch win2 counts rows=""
+    P0P1_BASELINE_ROWS=""
+    docker inspect "$container" >/dev/null 2>&1 || return 0
+    counts="$(docker logs "$container" --since "$((cutover_epoch - window))" --until "$cutover_epoch" 2>&1 \
+        | p0p1_event_counts "$MONITOR_PATTERN" "$MONITOR_EXCLUDE_PATTERN" || true)"
+    rows="$(awk -v w="$window" 'NF >= 2 { print "B", $1, $2, w }' <<<"$counts")"
+    started="$(docker inspect "$container" --format '{{.State.StartedAt}}' 2>/dev/null || true)"
+    started_epoch="$(date -d "$started" +%s 2>/dev/null || echo 0)"
+    if (( started_epoch > 0 && cutover_epoch > started_epoch )); then
+        win2=$((cutover_epoch - started_epoch))
+        (( win2 > window )) && win2=$window
+        if (( win2 >= 60 )); then
+            counts="$(docker logs "$container" --since "$started_epoch" --until "$((started_epoch + win2))" 2>&1 \
+                | p0p1_event_counts "$MONITOR_PATTERN" "$MONITOR_EXCLUDE_PATTERN" || true)"
+            rows+=$'\n'"$(awk -v w="$win2" 'NF >= 2 { print "B", $1, $2, w }' <<<"$counts")"
+        fi
+    fi
+    P0P1_BASELINE_ROWS="$(grep '^B ' <<<"$rows" || true)"
+    echo "[deploy.sh] P0/P1 기준선 수집: ${container} rows=$(grep -c '^B ' <<<"$P0P1_BASELINE_ROWS" || true) (window=${window}s)"
+}
+
+# nginx upstream 주석(deploy.sh 가 전환마다 갱신)과 해당 컨테이너 이미지 태그로
+# 실제 운영 슬롯을 읽는다. 변수(NEW_CONTAINER 등)가 아니라 실제 상태를 읽는 이유는,
+# 이 값이 "무엇이 운영 중인가" 를 기록하는 용도이기 때문이다. stdout: <slot>/<sha>.
+p0p1_active_descriptor() {
+    local line slot port container image sha
+    line="$(grep -m1 '^# Active API slot:' "$UPSTREAM_CONF" 2>/dev/null || true)"
+    slot="$(sed -E 's/^# Active API slot: ([a-z]+) \(([0-9]+)\).*/\1/' <<<"$line")"
+    port="$(sed -E 's/^# Active API slot: ([a-z]+) \(([0-9]+)\).*/\2/' <<<"$line")"
+    if [[ -z "$line" || "$slot" == "$line" ]]; then
+        echo "unknown/unknown"
+        return 0
+    fi
+    case "$port" in
+        8102) container="aads-server-green" ;;
+        *)    container="aads-server" ;;
+    esac
+    image="$(docker inspect "$container" --format '{{.Config.Image}}' 2>/dev/null || true)"
+    sha="${image##*:}"
+    echo "${slot}/${sha:-unknown}"
+}
+
+# Phase 7 실패 확정. 롤백하지 않으므로 deploy_runs 가 "실패 = 운영에서 내려갔다" 로
+# 읽히지 않게 실제 운영 슬롯을 첫머리에 못 박는다. status 열거값(deploy_runs_status_check)
+# 에 switched_but_monitor_failed 를 추가하면 마이그레이션이 필요해 status=failed 를 유지한다.
+# $1 = 사유 종류, $2 = 상세.
+p0p1_monitor_fail() {
+    local kind="$1" detail="$2" active summary
+    active="$(p0p1_active_descriptor)"
+    summary="ACTIVE=${active}; release=${AADS_RELEASE_SHA:-unknown}; switched_but_monitor_failed (롤백 안 함); ${kind}: ${detail:0:380}"
+    echo "[deploy.sh] ❌ Phase 7 실패 확정 — 운영 중 ${active} (롤백하지 않음)"
+    notify "❌ 배포 후 P0/P1 모니터링 실패 — 운영 중 ${active} (롤백하지 않음): ${detail:0:200}"
+    deploy_phase_end "p0p1_monitoring" "failed" "$summary"
+    record_deploy "failed" "$MODE" "$summary"
+    exit 1
+}
+
 # Bind-mounted sidecars are not recreated by the API blue/green compose start.
 # Reload them while holding the nginx cutover lock so a concurrent deploy cannot
 # race the mounted process or certify a route against stale sidecar code.
@@ -2610,6 +2787,9 @@ resolve_final_deploy_status() {
     # 성공으로 끝나도 drain timeout 후 busy 슬롯으로 진행했다는 사실은 원장에 남긴다.
     if [[ -n "${TARGET_DRAIN_PROCEED_NOTE:-}" ]]; then
         FINAL_DEPLOY_ERROR="${FINAL_DEPLOY_ERROR:+${FINAL_DEPLOY_ERROR}; }${TARGET_DRAIN_PROCEED_NOTE}"
+    fi
+    if [[ -n "${P0P1_NOISE_NOTE:-}" ]]; then
+        FINAL_DEPLOY_ERROR="${FINAL_DEPLOY_ERROR:+${FINAL_DEPLOY_ERROR}; }${P0P1_NOISE_NOTE}"
     fi
 }
 
@@ -3201,6 +3381,7 @@ case "$MODE" in
             && curl -sf "http://127.0.0.1:${NEW_PORT}/api/v1/health" >/dev/null 2>&1 \
             && curl -sf -H "Host: ${DOWNTIME_PROBE_HOST}" "http://127.0.0.1/api/v1/health" >/dev/null 2>&1; then
             echo "[deploy.sh] ④ ✅ 전환 검증 성공"
+            P0P1_CUTOVER_EPOCH="$(date +%s)"
             DEPLOY_UPSTREAM_SWITCHED=true  # RC1: from here, TERM/INT = success (new container is live)
             audit_control "nginx-switch" "${OLD_CONTAINER}:${OLD_PORT}->${NEW_CONTAINER}:${NEW_PORT}" "success" "direct and nginx-routed health verified"
             deploy_phase_end "nginx_cutover" "success" "direct and nginx-routed health verified"
@@ -3228,6 +3409,10 @@ case "$MODE" in
             record_deploy "failed" "$MODE" "mounted sidecar reload failed after nginx cutover"
             exit 1
         fi
+
+        # Phase 7 기준선: ⑤ 가 이 컨테이너를 다시 만들면 로그가 사라지므로 그 전에 수집한다.
+        p0p1_capture_baseline "$OLD_CONTAINER" "${P0P1_CUTOVER_EPOCH:-$(date +%s)}" \
+            || echo "[deploy.sh] ⚠️ P0/P1 기준선 수집 실패 — 기준선 없이 감시 (모든 이벤트 신규로 판정)"
 
         # ⑤ 이전 컨테이너를 drain 후 같은 release로 재빌드해 warm standby로 동기화
         deploy_phase_start "standby_same_digest_sync" "syncing_standby"
@@ -3424,24 +3609,22 @@ fi
 if (( MONITOR_MIN_SECONDS > MONITOR_SECONDS )); then
     MONITOR_SECONDS="$MONITOR_MIN_SECONDS"
 fi
-# Match the log record severity, not arbitrary payload text. Pipeline/tool
-# messages legitimately embed strings such as "PRIORITY: P0-CRITICAL" inside a
-# warning record; the old bare ``CRITICAL`` branch treated those as release
-# failures. It also missed structlog's JSON form ("level": "error").
-MONITOR_PATTERN="${AADS_DEPLOY_MONITOR_PATTERN:-\"level\"[[:space:]]*:[[:space:]]*\"(error|critical)\"|level=(error|critical)([[:space:]]|$)|Traceback [(]most recent call last[)]:|^CRITICAL([[:space:]:]|$)}"
-# 채팅 세션이 사용자 입력 SQL 오타(없는 테이블/컬럼 등)로 남기는 기록은
-# 서버 앱 결함이 아니므로 릴리스 실패 사유에서 뺀다. 앱은 해당 기록에
-# 리터럴 토큰 USER_SQL_ERROR 를 넣는다(ceo_chat_tools_db._is_user_sql_error).
-# logger 이름 전체를 제외하면 그 모듈의 진짜 버그도 묻히므로 토큰 한 가지만 쓴다.
-MONITOR_EXCLUDE_PATTERN="${AADS_DEPLOY_MONITOR_EXCLUDE_PATTERN:-USER_SQL_ERROR}"
+# bluegreen 에서 ACTIVE_CONTAINER 는 컷오버 전 값(= 이전 슬롯)으로 남는다. 감시 대상은
+# 트래픽을 받는 신규 슬롯이어야 하고, 이전 슬롯은 ⑤ 에서 standby 로 다시 만들어진다.
+MONITOR_CONTAINER="$ACTIVE_CONTAINER"
+if [[ "$MODE" == "bluegreen" && -n "${NEW_CONTAINER:-}" ]]; then
+    MONITOR_CONTAINER="$NEW_CONTAINER"
+fi
 MONITOR_SINCE="$(date --iso-8601=seconds)"
+MONITOR_SINCE_EPOCH="$(date +%s)"
 MONITOR_ELAPSED=0
 echo "[deploy.sh] Phase 7: P0/P1 모니터링 (${MONITOR_SECONDS}초, since=${MONITOR_SINCE})..."
 while [[ "$MONITOR_ELAPSED" -lt "$MONITOR_SECONDS" ]]; do
     sleep "$MONITOR_INTERVAL"
     MONITOR_ELAPSED=$((MONITOR_ELAPSED + MONITOR_INTERVAL))
     # 제외는 tail 보다 먼저 적용한다 — 제외 대상 20줄이 진짜 오류를 밀어내면 안 된다.
-    MONITOR_RAW="$(docker logs "$ACTIVE_CONTAINER" --since "$MONITOR_SINCE" 2>&1 | grep -E "$MONITOR_PATTERN" || true)"
+    MONITOR_LOGS="$(docker logs "$MONITOR_CONTAINER" --since "$MONITOR_SINCE" 2>&1 || true)"
+    MONITOR_RAW="$(printf '%s\n' "$MONITOR_LOGS" | grep -E "$MONITOR_PATTERN" || true)"
     MONITOR_SUPPRESSED=0
     if [[ -n "$MONITOR_RAW" ]]; then
         MONITOR_SUPPRESSED="$(printf '%s\n' "$MONITOR_RAW" | grep -Ec "$MONITOR_EXCLUDE_PATTERN" || true)"
@@ -3453,27 +3636,38 @@ while [[ "$MONITOR_ELAPSED" -lt "$MONITOR_SECONDS" ]]; do
     deploy_observe_update "verifying" "p0p1_monitoring" \
         "elapsed=${MONITOR_ELAPSED}s; max=${MONITOR_SECONDS}s; suppressed_user_sql=${MONITOR_SUPPRESSED}"
     if [[ -n "$MONITOR_HITS" ]]; then
-        echo "[deploy.sh] ❌ Phase 7: P0/P1 의심 로그 감지"
+        echo "[deploy.sh] Phase 7: P0/P1 의심 로그 감지 — 구 슬롯 기준선과 비교"
         echo "$MONITOR_HITS"
-        notify "❌ 배포 후 P0/P1 모니터링 실패: ${MONITOR_HITS:0:300}"
-        deploy_phase_end "p0p1_monitoring" "failed" "P0/P1 monitor hit: ${MONITOR_HITS:0:500}"
-        record_deploy "failed" "$MODE" "Phase 7 P0/P1 monitor hit: ${MONITOR_HITS:0:500}"
-        exit 1
+        MONITOR_OBSERVED="$(printf '%s\n' "$MONITOR_LOGS" | p0p1_event_counts "$MONITOR_PATTERN" "$MONITOR_EXCLUDE_PATTERN" || true)"
+        if [[ -z "$MONITOR_OBSERVED" ]]; then
+            # 로그에는 오류가 있는데 키를 못 뽑았다 — 분류 불능은 소음이 아니라 실패다.
+            MONITOR_VERDICT="FAIL_UNPARSED hits=unclassifiable"
+        else
+            MONITOR_VERDICT="$(p0p1_classify_hits "$P0P1_BASELINE_ROWS" "$MONITOR_OBSERVED" "$(( $(date +%s) - MONITOR_SINCE_EPOCH ))" || true)"
+        fi
+        echo "$MONITOR_VERDICT" | sed 's/^/[deploy.sh] Phase 7: 판정 /'
+        MONITOR_FAIL_LINES="$(grep '^FAIL_' <<<"$MONITOR_VERDICT" || true)"
+        if [[ -n "$MONITOR_FAIL_LINES" ]]; then
+            p0p1_monitor_fail "P0/P1 monitor regression" "${MONITOR_FAIL_LINES//$'\n'/ | } || ${MONITOR_HITS}"
+        fi
+        P0P1_NOISE_NOTE="p0p1 baseline noise (not a failure): $(grep '^NOISE ' <<<"$MONITOR_VERDICT" | sed 's/^NOISE //' | tr '\n' ',' | head -c 300)"
+        echo "[deploy.sh] ⚠️ Phase 7: 구 슬롯에도 있던 기존 소음만 감지 — 실패로 보지 않음"
+        if [[ "${P0P1_NOISE_NOTIFIED:-false}" != "true" ]]; then
+            P0P1_NOISE_NOTIFIED=true
+            notify "⚠️ 배포 후 P0/P1 감시: 기존 소음만 감지(구 슬롯 기준선 이내) — 통과"
+        fi
     fi
     # 로그만 보면 "조용한 실패"(프로세스는 살아 있는데 응답을 못 하는 상태)를
     # 놓친다. 헬스까지 같이 확인해 검증을 넓히고, 그 대신 전 구간이 깨끗하면
     # 최소 관측 시간만 채우고 끝낸다. 300초 고정 대기는 배포 시간의 25%였다.
     if ! curl -sf --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
         echo "[deploy.sh] ❌ Phase 7: health check 실패 (${MONITOR_ELAPSED}s)"
-        notify "❌ 배포 후 모니터링 중 health 실패"
-        deploy_phase_end "p0p1_monitoring" "failed" "health failed at ${MONITOR_ELAPSED}s"
-        record_deploy "failed" "$MODE" "Phase 7 health failed at ${MONITOR_ELAPSED}s"
-        exit 1
+        p0p1_monitor_fail "Phase 7 health failed" "at ${MONITOR_ELAPSED}s ${HEALTH_URL}"
     fi
     echo "[deploy.sh] Phase 7: monitoring ${MONITOR_ELAPSED}/${MONITOR_SECONDS}초 이상 없음"
     if [[ "$MONITOR_ELAPSED" -ge "$MONITOR_MIN_SECONDS" ]]; then
         echo "[deploy.sh] Phase 7: ✅ ${MONITOR_ELAPSED}초 연속 이상 없음 — 조기 종료"
-        audit_control "p0p1-monitor" "$ACTIVE_CONTAINER" "success" \
+        audit_control "p0p1-monitor" "$MONITOR_CONTAINER" "success" \
             "early_exit_after=${MONITOR_ELAPSED}s; max=${MONITOR_SECONDS}s"
         break
     fi

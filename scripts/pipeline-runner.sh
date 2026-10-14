@@ -6586,6 +6586,57 @@ _deploy_holder_follow_tag() {
     return 0
 }
 
+# ── deploy.sh 실패 후 "지금 무엇이 운영 중인가" ──────────────────────────
+# deploy.sh Phase 7(P0/P1 모니터링)은 트래픽 전환 뒤에 돌고 롤백하지 않는다. 그런데
+# 이 러너는 deploy.sh 가 실패하면 무조건 "기존 서비스 유지" 라고 보고했다(2026-10-14
+# deploy_runs #5740: 새 릴리스가 운영 중인데 "기존 서비스 유지"). 알림은 deploy.sh 의
+# 종료코드가 아니라 nginx 가 실제로 가리키는 슬롯과 그 컨테이너의 이미지 SHA 로 쓴다.
+# 출력: "<slot> <sha>" (읽지 못하면 rc=1).
+aads_active_slot_state() {
+    local conf="${AADS_UPSTREAM_CONF:-/etc/nginx/conf.d/aads-upstream.conf}"
+    local line slot port container image
+    line=$(grep -m1 '^# Active API slot:' "$conf" 2>/dev/null) || return 1
+    slot=$(sed -E 's/^# Active API slot: ([a-z]+) \(([0-9]+)\).*/\1/' <<<"$line")
+    port=$(sed -E 's/^# Active API slot: ([a-z]+) \(([0-9]+)\).*/\2/' <<<"$line")
+    [[ "$slot" != "$line" && -n "$slot" ]] || return 1
+    case "$port" in
+        8102) container="aads-server-green" ;;
+        *)    container="aads-server" ;;
+    esac
+    image=$(docker inspect "$container" --format '{{.Config.Image}}' 2>/dev/null) || return 1
+    [[ -n "${image##*:}" ]] || return 1
+    printf '%s %s\n' "$slot" "${image##*:}"
+}
+
+# 두 SHA 가 같은 커밋인가 (한쪽이 12자 약식이어도 접두 비교). 7자 미만은 불일치로 본다.
+_aads_sha_match() {
+    local a="$1" b="$2" n
+    [[ ${#a} -ge 7 && ${#b} -ge 7 ]] || return 1
+    n=${#a}
+    (( ${#b} < n )) && n=${#b}
+    [[ "${a:0:n}" == "${b:0:n}" ]]
+}
+
+# 채팅 알림 문구를 정한다. 인자: 릴리스SHA 운영슬롯 운영SHA 배포전운영SHA 컷오버여부(true/false) 로그꼬리
+#   운영 SHA = 이번 릴리스 → "새 버전 운영 중" (롤백 안 됨; '기존 서비스 유지' 금지)
+#   컷오버가 있었고 운영 SHA = 배포 전 SHA → "이전 버전으로 되돌림"
+#   컷오버가 없었고 운영 SHA = 배포 전 SHA → "기존 서비스 유지"
+aads_deploy_failure_message() {
+    local release="$1" slot="$2" active_sha="$3" pre_sha="$4" cutover="$5" tail_text="$6"
+    local running="운영 중 = ${slot}(${active_sha})"
+    if [[ -z "$slot" || -z "$active_sha" ]]; then
+        printf '🔴 [Runner] AADS bluegreen 배포 실패 — 운영 슬롯 확인 불가, 수동 확인 필요: %s' "$tail_text"
+    elif _aads_sha_match "$release" "$active_sha"; then
+        printf '🔴 [Runner] AADS bluegreen 배포 후 감시 실패 — 새 버전 운영 중, 롤백 안 됨 (%s): %s' "$running" "$tail_text"
+    elif [[ "$cutover" == "true" ]] && _aads_sha_match "$pre_sha" "$active_sha"; then
+        printf '🔴 [Runner] AADS bluegreen 배포 실패 — 이전 버전으로 되돌림 (%s): %s' "$running" "$tail_text"
+    elif [[ "$cutover" == "true" ]]; then
+        printf '🔴 [Runner] AADS bluegreen 배포 실패 — 전환 후 중단, 운영 버전이 이번 릴리스도 배포 전 버전도 아님 (%s), 수동 확인 필요: %s' "$running" "$tail_text"
+    else
+        printf '🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지 (%s): %s' "$running" "$tail_text"
+    fi
+}
+
 follow_autoheal_successor() {
     local job_id="$1" sha="$2" since_epoch="$3" repo="$4" state_dir="$5" project="${6:-AADS}"
     local max_wait="$AADS_AUTOHEAL_FOLLOW_MAX_SEC" poll="$AADS_AUTOHEAL_FOLLOW_POLL_SEC"
@@ -7055,6 +7106,9 @@ deploy_job() {
                     local _aads_deploy_since _aads_follow_out="" _aads_follow_reason=""
                     # deploy_runs.created_at 과 비교한다 — 시계 오차를 감안해 5초 앞당긴다.
                     _aads_deploy_since=$(( $(date +%s) - 5 ))
+                    local _aads_pre_state="" _aads_pre_sha=""
+                    _aads_pre_state=$(aads_active_slot_state 2>/dev/null) || _aads_pre_state=""
+                    _aads_pre_sha="${_aads_pre_state#* }"
                     log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
                     if AADS_DEPLOY_FOREGROUND=1 \
                        AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
@@ -7080,10 +7134,20 @@ deploy_job() {
                         esac
                         local _aads_deploy_tail
                         _aads_deploy_tail=$(tail -20 "$_aads_deploy_log" 2>/dev/null | head -c 1500)
-                        log "  ERROR: isolated bluegreen 실패 — 기존 라우팅 유지/내부 롤백: ${_aads_deploy_tail//$'\n'/ }"
-                        post_to_chat "$session_id" "🔴 [Runner] AADS bluegreen 배포 실패 — 기존 서비스 유지: ${_aads_deploy_tail:0:500}"
+                        local _aads_now_state="" _aads_now_slot="" _aads_now_sha="" _aads_cutover="false"
+                        _aads_now_state=$(aads_active_slot_state 2>/dev/null) || _aads_now_state=""
+                        if [[ -n "$_aads_now_state" ]]; then
+                            _aads_now_slot="${_aads_now_state%% *}"
+                            _aads_now_sha="${_aads_now_state#* }"
+                        fi
+                        grep -q 'nginx upstream 전환 완료' "$_aads_deploy_log" 2>/dev/null && _aads_cutover="true"
+                        local _aads_fail_msg
+                        _aads_fail_msg=$(aads_deploy_failure_message "$current_sha" "$_aads_now_slot" "$_aads_now_sha" \
+                            "$_aads_pre_sha" "$_aads_cutover" "${_aads_deploy_tail:0:500}")
+                        log "  ERROR: isolated bluegreen 실패 — 운영 중=${_aads_now_slot:-?}(${_aads_now_sha:-?}) cutover=${_aads_cutover}: ${_aads_deploy_tail//$'\n'/ }"
+                        post_to_chat "$session_id" "$_aads_fail_msg"
                         _build_fail="${_build_fail:+${_build_fail};}aads-server:bluegreen_failed"
-                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "[${_aads_follow_out:-autoheal_follow: none}] ${_aads_deploy_tail}") WHERE job_id='${job_id}';"
+                        db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-server-bluegreen] ' || $(sql_escape "[운영중=${_aads_now_slot:-?}(${_aads_now_sha:-?}) cutover=${_aads_cutover}] [${_aads_follow_out:-autoheal_follow: none}] ${_aads_deploy_tail}") WHERE job_id='${job_id}';"
                     fi
                     rm -f "$_aads_deploy_log" 2>/dev/null || true
                 else

@@ -540,7 +540,7 @@ def test_deploy_script_keeps_five_minute_monitoring_default():
     assert "if (( MONITOR_SECONDS < 300 )); then" in script
     assert "if (( MONITOR_MIN_SECONDS < 300 )); then" in script
     assert 'MONITOR_SECONDS="$MONITOR_MIN_SECONDS"' in script
-    assert "docker logs \"$ACTIVE_CONTAINER\" --since \"$MONITOR_SINCE\"" in script
+    assert "docker logs \"$MONITOR_CONTAINER\" --since \"$MONITOR_SINCE\"" in script
     assert 'record_deploy "$FINAL_DEPLOY_STATUS"' in script
     # 최종 성공/부분성공 판정은 5분 모니터링 뒤에만 기록한다.
     assert script.index("deploy_phase_start \"p0p1_monitoring\"") < script.rindex(
