@@ -29,6 +29,7 @@ import subprocess
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from app.services.server_registry import get_server_host, get_server_ssh_port
 
@@ -242,6 +243,22 @@ class ProjectDbTimeoutError(TimeoutError):
 
 # ─── 환경변수에서 DB 설정 조회 ────────────────────────────────────────────────
 
+def _database_url_endpoint(env_name: str = "DATABASE_URL") -> Optional[Tuple[str, str]]:
+    """DATABASE_URL 의 (host, port). 파싱 불가·host 없음이면 None. DSN 은 로그에 남기지 않는다."""
+    raw = os.getenv(env_name, "")
+    if not raw:
+        return None
+    try:
+        parsed = urlparse(raw)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    return host, str(port or 5432)
+
+
 def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
     """환경변수에서 프로젝트 DB 접속 정보 조회. 별칭 자동 해석."""
     resolved = _PROJECT_ALIAS.get(project, project)
@@ -256,6 +273,19 @@ def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
     user = _env_value(tuple(f"{p}_DB_USER" for p in prefixes), "")
     password = _env_value(tuple(f"{p}_DB_PASSWORD" for p in prefixes), "")
     host = _env_value(tuple(f"{p}_DB_HOST" for p in prefixes), "")
+    port = _env_value(tuple(f"{p}_DB_PORT" for p in prefixes), default_port)
+    if resolved == "AADS":
+        # AADS_DB_HOST 가 compose 서비스명(postgres)이면 컨테이너에서 해석되지 않는다.
+        # 실제로 앱이 쓰는 DATABASE_URL 의 접속 지점을 우선한다.
+        endpoint = _database_url_endpoint()
+        if endpoint:
+            if host and (host, port) != endpoint:
+                logger.info(
+                    "query_project_database: AADS host from DATABASE_URL | env_host=%s -> %s",
+                    host,
+                    endpoint[0],
+                )
+            host, port = endpoint
     if not host and (database or user or password):
         host = default_host
     if not host:
@@ -271,7 +301,7 @@ def _get_project_db_config(project: str) -> Optional[Dict[str, str]]:
         host = normalized_host
     return {
         "host": host,
-        "port": _env_value(tuple(f"{p}_DB_PORT" for p in prefixes), default_port),
+        "port": port,
         "database": database,
         "user": user,
         "password": password,
