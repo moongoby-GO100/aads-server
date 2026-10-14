@@ -24,6 +24,7 @@ from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 
 from app.api.canonical_documents import SECRET
+from app.core.project_config import ORCHESTRATOR_PROJECTS
 from app.models.mockup_review import (
     STATES, ApproveReview, ChangeCreate, ChangeIntake, ReviewCreate, RevisingStart, RevisionCreate, RevokeReview,
     SubmitReview, VerifyBundle,
@@ -454,13 +455,27 @@ async def _hold_bindings(conn: Any, head_id: Any) -> int:
     return int(result.rsplit(" ", 1)[-1])
 
 
+CEO_INTEGRATED_NAME = "[CEO] 통합지시"
+
+
+def _workspace_in_scope(workspace_project: str, names: tuple[str, ...], project: str) -> bool:
+    ws_project = (workspace_project or "").strip().upper()
+    if ws_project == project:
+        return True
+    return (ws_project == "CEO" and CEO_INTEGRATED_NAME in {n.strip() for n in names if n}
+            and project in ORCHESTRATOR_PROJECTS)
+
+
 async def _session_scope(conn: Any, tenant: str, project: str, session_id: UUID, actor: str, elevated: bool) -> Any:
     row = await conn.fetchrow(
-        "SELECT s.id,s.user_id FROM chat_sessions s JOIN chat_workspaces w ON w.id=s.workspace_id "
-        "WHERE s.id=$1 AND s.tenant_id=$2::uuid AND w.tenant_id=$2::uuid AND upper(w.project_key)=$3",
-        session_id, tenant, project,
+        "SELECT s.id,s.user_id,w.project_key,w.name AS workspace_name,w.display_name AS workspace_display_name "
+        "FROM chat_sessions s JOIN chat_workspaces w ON w.id=s.workspace_id "
+        "WHERE s.id=$1 AND s.tenant_id=$2::uuid AND w.tenant_id=$2::uuid",
+        session_id, tenant,
     )
-    if not row:
+    if not row or not _workspace_in_scope(
+        row["project_key"], (row["workspace_name"], row["workspace_display_name"]), project,
+    ):
         fail(404, "session_not_found")
     if row["user_id"] and row["user_id"] != actor and not elevated:
         fail(403, "session_access_denied")

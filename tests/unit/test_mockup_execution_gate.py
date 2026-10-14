@@ -402,6 +402,10 @@ def test_no_external_channel_is_wired_into_the_notification_code():
 
 # ------------------------------------------------------------------ chat intake
 
+def session_row(user_id):
+    return {"id": SESSION, "user_id": user_id, "project_key": "AADS", "workspace_name": "AADS", "workspace_display_name": ""}
+
+
 def intake_body(**over):
     base = {"idempotency_key": "intake-key-0001", "change_request_id": uuid4(), "session_id": SESSION,
             "source_message_id": uuid4(), "comment": "버튼 색을 바꿔 주세요"}
@@ -410,7 +414,7 @@ def intake_body(**over):
 
 def target_conn(*, heads=(), artifact=None, replied=None, session_ok=True, review=None):
     def session(*a):
-        return {"id": SESSION, "user_id": "u1"} if session_ok else None
+        return session_row("u1") if session_ok else None
 
     return FakeConn([
         ("FROM chat_sessions", session),
@@ -500,7 +504,7 @@ def test_intake_files_a_change_request_on_the_server_chosen_revision_and_never_a
     monkeypatch.setattr(svc, "request_changes", fake_changes)
     body = intake_body()
     conn = FakeConn([
-        ("FROM chat_sessions", lambda *a: {"id": SESSION, "user_id": "u1"}),
+        ("FROM chat_sessions", lambda *a: session_row("u1")),
         ("SELECT session_id FROM chat_messages", lambda *a: SESSION),
         ("FROM mockup_review_heads WHERE tenant_id", lambda *a: [{"id": head["id"]}]),
         ("FOR UPDATE", lambda *a: head),
@@ -525,7 +529,7 @@ def test_intake_idempotency_hash_ignores_server_filled_generation(monkeypatch):
     for generation in (3, 4):  # the first call bumps the head generation before the client retries
         head = head_row(status="review_ready", generation=generation)
         conn = FakeConn([
-            ("FROM chat_sessions", lambda *a: {"id": SESSION, "user_id": "u1"}),
+            ("FROM chat_sessions", lambda *a: session_row("u1")),
             ("SELECT session_id FROM chat_messages", lambda *a: SESSION),
             ("FROM mockup_review_heads WHERE tenant_id", lambda *a: [{"id": head["id"]}]),
             ("FOR UPDATE", lambda *a: head),
@@ -536,7 +540,7 @@ def test_intake_idempotency_hash_ignores_server_filled_generation(monkeypatch):
 
 
 def test_intake_rejects_a_source_message_from_another_session():
-    conn = FakeConn([("FROM chat_sessions", lambda *a: {"id": SESSION, "user_id": "u1"}),
+    conn = FakeConn([("FROM chat_sessions", lambda *a: session_row("u1")),
                      ("SELECT session_id FROM chat_messages", lambda *a: uuid4())])
     with pytest.raises(HTTPException) as exc:
         run(svc.intake_change(conn, TENANT, "AADS", "u1", False, intake_body()))
@@ -544,7 +548,7 @@ def test_intake_rejects_a_source_message_from_another_session():
 
 
 def test_intake_cannot_use_another_users_private_session():
-    conn = FakeConn([("FROM chat_sessions", lambda *a: {"id": SESSION, "user_id": "someone-else"})])
+    conn = FakeConn([("FROM chat_sessions", lambda *a: session_row("someone-else"))])
     with pytest.raises(HTTPException) as exc:
         run(svc.intake_change(conn, TENANT, "AADS", "u1", False, intake_body()))
     assert exc.value.status_code == 403 and code_of(exc) == "session_access_denied"

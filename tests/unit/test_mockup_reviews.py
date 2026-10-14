@@ -362,3 +362,80 @@ def test_router_exposes_the_eight_contract_routes():
 def test_main_mounts_the_router():
     source = open(os.path.join(os.path.dirname(__file__), "..", "..", "app", "main.py"), encoding="utf-8").read()
     assert "app.include_router(mockup_reviews_router" in source
+
+
+# ------------------------------------------------------- _session_scope (workspace scope)
+
+TENANT_A = str(uuid4())
+TENANT_B = str(uuid4())
+SESSION = uuid4()
+OWNER = "user-owner"
+
+
+class _ScopeConn:
+    """Emulates the tenant filter of the _session_scope query over one session row."""
+
+    def __init__(self, workspace_project, *, name="", display_name="", tenant=TENANT_A, user_id=OWNER):
+        self.row = {"id": SESSION, "user_id": user_id, "project_key": workspace_project,
+                    "workspace_name": name, "workspace_display_name": display_name}
+        self.tenant = tenant
+
+    async def fetchrow(self, sql, session_id, tenant):
+        assert "w.tenant_id=$2::uuid" in sql and "s.tenant_id=$2::uuid" in sql
+        return self.row if session_id == SESSION and tenant == self.tenant else None
+
+
+def scope(conn, project="AADS", *, tenant=TENANT_A, actor=OWNER, elevated=False):
+    return asyncio.run(svc._session_scope(conn, tenant, project, SESSION, actor, elevated))
+
+
+def scope_status(conn, *args, **kwargs):
+    with pytest.raises(HTTPException) as exc:
+        scope(conn, *args, **kwargs)
+    return exc.value.status_code
+
+
+def test_session_scope_allows_same_project_workspace():
+    assert scope(_ScopeConn("aads"))["id"] == SESSION
+
+
+def test_session_scope_allows_ceo_integrated_workspace_for_in_scope_project():
+    assert scope(_ScopeConn("CEO", name="[CEO] 통합지시"), "AADS")["id"] == SESSION
+    assert scope(_ScopeConn("CEO", display_name="[CEO] 통합지시"), "GO100")["id"] == SESSION
+
+
+def test_session_scope_rejects_other_tenant():
+    assert scope_status(_ScopeConn("CEO", name="[CEO] 통합지시", tenant=TENANT_B), "AADS") == 404
+    assert scope_status(_ScopeConn("AADS", tenant=TENANT_B)) == 404
+
+
+def test_session_scope_rejects_non_owner_actor_unless_elevated():
+    conn = _ScopeConn("CEO", name="[CEO] 통합지시")
+    assert scope_status(conn, actor="someone-else") == 403
+    assert scope(conn, actor="someone-else", elevated=True)["id"] == SESSION
+    assert scope_status(_ScopeConn("AADS"), actor="someone-else") == 403
+
+
+def test_session_scope_rejects_cross_project_ordinary_workspace():
+    assert scope_status(_ScopeConn("KIS", name="KIS 개발"), "AADS") == 404
+    assert scope_status(_ScopeConn("GO100"), "AADS") == 404
+
+
+def test_session_scope_rejects_ceo_workspace_that_is_not_integrated():
+    assert scope_status(_ScopeConn("CEO", name="CEO 개인 메모"), "AADS") == 404
+    assert scope_status(_ScopeConn("CEO"), "AADS") == 404
+
+
+def test_session_scope_rejects_project_outside_orchestrator_scope(monkeypatch):
+    monkeypatch.setattr(svc, "ORCHESTRATOR_PROJECTS", ["KIS", "CEO"])
+    conn = _ScopeConn("CEO", name="[CEO] 통합지시")
+    assert scope_status(conn, "AADS") == 404
+    assert scope(conn, "KIS")["id"] == SESSION
+    assert scope_status(conn, "UNKNOWN") == 404
+
+
+def test_session_scope_missing_session_is_404():
+    conn = _ScopeConn("AADS")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(svc._session_scope(conn, TENANT_A, "AADS", uuid4(), OWNER, False))
+    assert exc.value.status_code == 404
