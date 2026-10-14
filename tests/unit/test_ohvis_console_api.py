@@ -208,7 +208,9 @@ def test_live_frame_returns_metadata_only_and_is_tenant_scoped():
     assert frame["has_image"] is True
     # 2.5MB base64 를 3초 폴링에 얹지 않는다
     assert "frame_base64" not in frame
-    assert "frame_base64" not in query.split("FROM")[0].replace("(frame_base64 <> '')", "")
+    # SELECT 목록에는 이미지 본문이 아니라 존재 여부 불리언(`lf.frame_base64 <> ''`)만 허용
+    select_list = query.split("FROM")[0].replace("lf.frame_base64 <> ''", "")
+    assert "frame_base64" not in select_list
 
 
 def test_timeline_hides_server_screenshot_paths():
@@ -988,15 +990,29 @@ def test_progress_and_interrupt_placeholders_are_never_adopted_as_the_reply():
 
 
 class _FakeChatConn:
-    """`trigger_ai_reaction` 내부 DB 왕복을 대본대로 돌려주는 커넥션."""
+    """`trigger_ai_reaction` 내부 DB 왕복을 대본대로 돌려주는 커넥션.
+
+    fetchval 은 사전 검사(중단-재개 대기 여부), fetchrow 는 정확한 execution 의
+    완료 행(`_load_auto_reaction_completion`) 하나를 돌려준다.
+    """
 
     def __init__(self, values: list):
         self._values = list(values)
+        self._completion: dict | None = None
+        self.execution_id: str | None = _TRIGGER_EXECUTION_ID
         self.queries: list[tuple[str, tuple]] = []
 
     async def fetchval(self, query, *args):
         self.queries.append((query, args))
         return self._values.pop(0) if self._values else None
+
+    async def fetchrow(self, query, *args):
+        self.queries.append((query, args))
+        return self._completion
+
+    async def fetch(self, query, *args):
+        self.queries.append((query, args))
+        return []
 
     async def execute(self, query, *args):
         self.queries.append((query, args))
@@ -1026,16 +1042,64 @@ async def _empty_stream(**kwargs):
     yield  # pragma: no cover
 
 
+_TRIGGER_EXECUTION_ID = "11111111-2222-3333-4444-555555555555"
+_TRIGGER_MESSAGE = "[오비스 창 지시] 서버 헬스체크 확인"
+
+
+def _conn_with_completion(values: list, completion: dict | None) -> "_FakeChatConn":
+    conn = _FakeChatConn(values)
+    conn._completion = completion
+    return conn
+
+
+def _completion_row(content: str | None, **overrides) -> dict:
+    """`_load_auto_reaction_completion` 이 돌려주는 정상 완료 행 — 필요한 필드만 덮어쓴다."""
+    row = {
+        "execution_id": _TRIGGER_EXECUTION_ID,
+        "status": "completed",
+        "assistant_message_id": "99999999-8888-7777-6666-555555555555",
+        "content": content,
+        "current_user_included": True,
+        "current_user_is_last": True,
+        "current_user_in_llm": True,
+        "current_user_is_last_llm": True,
+    }
+    row.update(overrides)
+    return row
+
+
 def _patch_trigger_ai_reaction_plumbing(monkeypatch, chat_service, conn: _FakeChatConn):
-    """게이트(활성 슬롯·라이브 실행 여부)를 통과시키고 DB 왕복을 대본 커넥션으로 돌린다."""
+    """게이트(활성 슬롯·라이브 실행 여부)를 통과시키고 DB 왕복을 대본 커넥션으로 돌린다.
+
+    내부 스트림 소비(`_consume_internal_reaction_stream`)는 실제 LLM 턴을 돌리지 않고
+    `conn.execution_id` 만 돌려주게 대체한다. 그 래퍼 자체는 test_chat_auto_reaction_integrity 가 본다.
+    """
     monkeypatch.setattr(chat_service, "get_pool", lambda: _FakeChatPool(conn))
     monkeypatch.setattr(chat_service, "_is_local_active_api_slot", lambda: True)
 
     async def _no_live_execution(_sid):
         return False
 
+    async def _consume(_sid, _content):
+        return conn.execution_id
+
     monkeypatch.setattr(chat_service, "_session_has_live_execution", _no_live_execution)
     monkeypatch.setattr(chat_service, "send_message_stream", _empty_stream)
+    monkeypatch.setattr(chat_service, "_consume_internal_reaction_stream", _consume)
+
+
+def _drive_trigger(
+    monkeypatch, conn: _FakeChatConn, task_id: str, complete, execution_id: str | None = _TRIGGER_EXECUTION_ID,
+) -> None:
+    import uuid as _uuid
+
+    from app.services import chat_service
+
+    conn.execution_id = execution_id
+    _patch_trigger_ai_reaction_plumbing(monkeypatch, chat_service, conn)
+    monkeypatch.setattr("app.services.ohvis_task_manager.complete_task", complete)
+
+    _run_trigger_and_wait(chat_service, str(_uuid.uuid4()), _TRIGGER_MESSAGE, task_id)
 
 
 def _run_trigger_and_wait(chat_service, session_id: str, message: str, task_id: str) -> None:
@@ -1049,80 +1113,99 @@ def _run_trigger_and_wait(chat_service, session_id: str, message: str, task_id: 
 
 def test_trigger_reply_collection_rejects_a_stray_placeholder_and_closes_as_error(monkeypatch):
     """(c) 세션이 바쁠 때 끼어든 진행/중단 안내문을 답으로 채택하지 않는다."""
-    import uuid as _uuid
+    # 순서: 중단-재개 검사(없음) → 정확한 execution 의 완료 행(내용은 중단 안내문)
+    conn = _conn_with_completion(
+        [None],
+        _completion_row("⚠️ 응답이 중단되었습니다. 다시 시도해 주세요."),
+    )
 
-    from app.services import chat_service
-
-    session_id = str(_uuid.uuid4())
-    # 순서: 중단-재개 검사(없음) → 트리거 시작 시각 → 마지막 assistant 메시지
-    conn = _FakeChatConn([
-        None,
-        datetime(2026, 9, 19, 7, 0, tzinfo=timezone.utc),
-        "⚠️ 응답이 중단되었습니다. 다시 시도해 주세요.",
-    ])
     completed: dict = {}
 
     async def fake_complete(task_id, status="done", result=None, ohvis_judgement=None):
         completed.update(task_id=task_id, status=status, result=result)
         return True
 
-    _patch_trigger_ai_reaction_plumbing(monkeypatch, chat_service, conn)
-    monkeypatch.setattr("app.services.ohvis_task_manager.complete_task", fake_complete)
-
-    _run_trigger_and_wait(chat_service, session_id, "[오비스 창 지시] 안녕", "task-c1")
+    _drive_trigger(monkeypatch, conn, "task-c1", fake_complete)
 
     assert completed["status"] == "error"
-    assert completed["result"] is None
+    assert "ai_reaction" not in completed["result"]
+    assert completed["result"]["validation"]["valid"] is False
+    assert completed["result"]["validation"]["reason"] == "semantic_completion_gate_failed"
+    assert completed["result"]["validation"]["meaningful"] is False
 
 
 def test_trigger_reply_collection_closes_as_error_when_nothing_new_was_found(monkeypatch):
-    """(d) 이번 트리거로 만든 답이 없으면 done 대신 error 로 닫는다."""
-    import uuid as _uuid
+    """(d) 이번 트리거로 만든 execution 의 완료 행이 없으면 done 대신 error 로 닫는다."""
+    conn = _conn_with_completion([None], None)
 
-    from app.services import chat_service
-
-    session_id = str(_uuid.uuid4())
-    conn = _FakeChatConn([None, datetime(2026, 9, 19, 7, 0, tzinfo=timezone.utc), None])
     completed: dict = {}
 
     async def fake_complete(task_id, status="done", result=None, ohvis_judgement=None):
         completed.update(task_id=task_id, status=status, result=result)
         return True
 
-    _patch_trigger_ai_reaction_plumbing(monkeypatch, chat_service, conn)
-    monkeypatch.setattr("app.services.ohvis_task_manager.complete_task", fake_complete)
-
-    _run_trigger_and_wait(chat_service, session_id, "[오비스 창 지시] 안녕", "task-d1")
+    _drive_trigger(monkeypatch, conn, "task-d1", fake_complete)
 
     assert completed["status"] == "error"
-    assert completed["result"] is None
+    assert "ai_reaction" not in completed["result"]
+    assert completed["result"]["validation"] == {
+        "valid": False,
+        "reason": "exact_execution_completion_not_found",
+        "execution_id": _TRIGGER_EXECUTION_ID,
+    }
+
+
+def test_trigger_reply_collection_closes_as_error_when_no_execution_was_started(monkeypatch):
+    """(d') 내부 스트림이 execution 을 만들지 못했으면 마지막 assistant 메시지로 대체하지 않는다."""
+    conn = _conn_with_completion([None], _completion_row("서버 헬스체크 결과: 정상입니다."))
+
+    completed: dict = {}
+
+    async def fake_complete(task_id, status="done", result=None, ohvis_judgement=None):
+        completed.update(task_id=task_id, status=status, result=result)
+        return True
+
+    _drive_trigger(monkeypatch, conn, "task-d2", fake_complete, execution_id=None)
+
+    assert completed["status"] == "error"
+    assert completed["result"]["validation"]["valid"] is False
+    assert completed["result"]["validation"]["reason"] == "exact_execution_completion_not_found"
 
 
 def test_trigger_reply_collection_accepts_a_real_new_answer(monkeypatch):
-    """회귀 방지 — 진짜 새 답은 여전히 done 으로 채택된다."""
-    import uuid as _uuid
+    """회귀 방지 — 현재 지시에 맞는 진짜 새 답은 여전히 done 으로 채택된다."""
+    conn = _conn_with_completion([None], _completion_row("서버 헬스체크 결과: 정상입니다."))
 
-    from app.services import chat_service
-
-    session_id = str(_uuid.uuid4())
-    conn = _FakeChatConn([
-        None,
-        datetime(2026, 9, 19, 7, 0, tzinfo=timezone.utc),
-        "서버 헬스체크 결과: 정상입니다.",
-    ])
     completed: dict = {}
 
     async def fake_complete(task_id, status="done", result=None, ohvis_judgement=None):
         completed.update(task_id=task_id, status=status, result=result)
         return True
 
-    _patch_trigger_ai_reaction_plumbing(monkeypatch, chat_service, conn)
-    monkeypatch.setattr("app.services.ohvis_task_manager.complete_task", fake_complete)
-
-    _run_trigger_and_wait(chat_service, session_id, "[오비스 창 지시] 안녕", "task-e1")
+    _drive_trigger(monkeypatch, conn, "task-e1", fake_complete)
 
     assert completed["status"] == "done"
-    assert completed["result"] == {"ai_reaction": "서버 헬스체크 결과: 정상입니다."}
+    assert completed["result"]["ai_reaction"] == "서버 헬스체크 결과: 정상입니다."
+    assert completed["result"]["validation"]["valid"] is True
+    assert completed["result"]["validation"]["reason"] == "validated"
+    assert completed["result"]["validation"]["execution_id"] == _TRIGGER_EXECUTION_ID
+
+
+def test_trigger_reply_collection_rejects_an_answer_to_a_different_directive(monkeypatch):
+    """23a0636f 의 핵심 — 정상 문장이어도 현재 지시와 무관한 이전 답이면 error 로 닫는다."""
+    conn = _conn_with_completion([None], _completion_row("브라우저 테스트에서 새 탭이 반복 생성된 원인을 수정했습니다."))
+
+    completed: dict = {}
+
+    async def fake_complete(task_id, status="done", result=None, ohvis_judgement=None):
+        completed.update(task_id=task_id, status=status, result=result)
+        return True
+
+    _drive_trigger(monkeypatch, conn, "task-f1", fake_complete)
+
+    assert completed["status"] == "error"
+    assert completed["result"]["validation"]["aligned"] is False
+    assert completed["result"]["validation"]["reason"] == "semantic_completion_gate_failed"
 
 
 def test_command_returns_confirmation_card_without_dispatching_to_llm(monkeypatch):
