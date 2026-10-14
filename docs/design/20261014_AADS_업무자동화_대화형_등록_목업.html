@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>업무 자동화 대화형 등록 — 화면 목업 (S1~S8)</title>
+<!-- document_key: aads-conversational-automation-mockup · 2026-10-14 · 짝 문서: PRD aads-conversational-automation-prd -->
+<style>
+  :root{--bg:#f3f4f6;--card:#fff;--text:#111827;--sub:#6b7280;--line:#e5e7eb;--brand:#2563eb;--brand2:#dbeafe;--ok:#16a34a;--okbg:#dcfce7;--warn:#b45309;--warnbg:#fef3c7;--bad:#b91c1c;--badbg:#fee2e2;--me:#2563eb}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif;background:#e5e7eb;color:var(--text)}
+  header.top{padding:24px 32px 8px}
+  header.top h1{margin:0 0 6px;font-size:24px}
+  header.top p{margin:0;color:var(--sub);font-size:14px;line-height:1.6}
+  .flow{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 0}
+  .flow span{background:#fff;border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;color:#374151}
+  .grid{display:grid;grid-template-columns:repeat(4,390px);gap:28px;padding:20px 32px 40px;justify-content:start}
+  .frame{display:flex;flex-direction:column;gap:8px}
+  .label{font-size:13px;font-weight:700;color:#1f2937}
+  .label small{display:block;font-weight:400;color:var(--sub);margin-top:2px;line-height:1.5}
+  .phone{width:390px;height:780px;background:var(--bg);border-radius:28px;border:8px solid #111827;overflow:hidden;display:flex;flex-direction:column;position:relative}
+  .bar{height:52px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 16px;gap:10px;font-weight:700;font-size:15px}
+  .bar .dot{width:28px;height:28px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px}
+  .bar .right{margin-left:auto;font-size:12px;font-weight:600;color:var(--sub)}
+  .body{flex:1;overflow:hidden;padding:14px 12px;display:flex;flex-direction:column;gap:10px}
+  .me{align-self:flex-end;max-width:82%;background:var(--me);color:#fff;border-radius:16px 16px 4px 16px;padding:10px 13px;font-size:15px;line-height:1.5}
+  .ai{align-self:flex-start;max-width:90%;font-size:14px;line-height:1.55;color:#374151}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .card h3{margin:0 0 4px;font-size:16px}
+  .card .hint{margin:0 0 10px;font-size:13px;color:var(--sub)}
+  .step{display:inline-block;font-size:11px;font-weight:700;color:var(--brand);background:var(--brand2);border-radius:6px;padding:2px 7px;margin-bottom:8px}
+  .row{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--line)}
+  .row:first-of-type{border-top:0}
+  .row .k{width:64px;flex:none;font-size:12px;color:var(--sub);padding-top:2px}
+  .row .v{flex:1;font-size:14.5px;font-weight:600}
+  .row .v small{display:block;font-weight:400;color:var(--sub);font-size:12px}
+  .row .edit{font-size:12px;color:var(--brand);font-weight:600}
+  .btns{display:flex;gap:8px;margin-top:12px}
+  .btn{flex:1;min-height:48px;border-radius:11px;border:1px solid var(--line);background:#fff;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;color:#111827}
+  .btn.p{background:var(--brand);border-color:var(--brand);color:#fff}
+  .btn.ok{background:var(--ok);border-color:var(--ok);color:#fff}
+  .btn.ghost{border-style:dashed;color:#374151;font-weight:600}
+  .chips{display:flex;flex-direction:column;gap:8px}
+  .chip{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;font-size:14px;min-height:48px;display:flex;align-items:center;gap:8px}
+  .chip b{color:var(--brand)}
+  .input{margin-top:auto;background:#fff;border-top:1px solid var(--line);padding:10px 12px;display:flex;gap:8px;align-items:center}
+  .input .box{flex:1;min-height:44px;border:1px solid var(--line);border-radius:22px;padding:11px 14px;font-size:15px;color:#9ca3af}
+  .input .send{width:44px;height:44px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .field{margin-top:8px}
+  .field label{display:block;font-size:12px;font-weight:600;color:var(--sub);margin-bottom:4px}
+  .field .in{min-height:48px;border:1px solid var(--line);border-radius:9px;padding:13px 12px;font-size:16px;color:#9ca3af;background:#fafafa}
+  .lock{font-size:12px;color:var(--ok);background:var(--okbg);border-radius:8px;padding:8px 10px;margin-top:10px;line-height:1.5}
+  .acct{display:flex;align-items:center;gap:10px;border:2px solid var(--brand);border-radius:12px;padding:12px;background:#f8fbff}
+  .acct .ic{width:36px;height:36px;border-radius:9px;background:#ffedd5;display:flex;align-items:center;justify-content:center;font-weight:800;color:#c2410c}
+  .acct .t{font-size:15px;font-weight:700}
+  .acct .s{font-size:12px;color:var(--sub)}
+  .or{text-align:center;font-size:12px;color:var(--sub);margin:10px 0 4px}
+  .live{height:190px;border-radius:10px;background:linear-gradient(180deg,#fff 0,#fff 30px,#f9fafb 30px);border:1px solid var(--line);position:relative;overflow:hidden}
+  .live .nav{height:30px;background:#ff6b00;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;padding:0 10px}
+  .live .menu{position:absolute;left:10px;top:42px;width:90px;display:flex;flex-direction:column;gap:6px}
+  .live .menu i{display:block;height:12px;border-radius:3px;background:#e5e7eb}
+  .live .menu i.on{background:#fdba74}
+  .live .main{position:absolute;left:112px;right:10px;top:42px;bottom:10px;display:flex;flex-direction:column;gap:6px}
+  .live .main i{display:block;height:14px;border-radius:3px;background:#eef2f7}
+  .live .cursor{position:absolute;left:58px;top:61px;width:18px;height:18px;border:3px solid var(--brand);border-radius:50%;box-shadow:0 0 0 6px rgba(37,99,235,.18)}
+  .live .tag{position:absolute;right:8px;bottom:8px;font-size:11px;background:rgba(17,24,39,.75);color:#fff;border-radius:6px;padding:3px 7px}
+  .checks{list-style:none;padding:0;margin:12px 0 0;display:flex;flex-direction:column;gap:9px}
+  .checks li{display:flex;gap:9px;align-items:center;font-size:14px}
+  .checks .s{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex:none}
+  .checks .done .s{background:var(--okbg);color:var(--ok)}
+  .checks .now .s{background:var(--brand2);color:var(--brand)}
+  .checks .now{font-weight:700}
+  .checks .wait{color:#9ca3af}
+  .checks .wait .s{background:#f3f4f6;color:#9ca3af}
+  .progress{height:6px;background:#e5e7eb;border-radius:4px;overflow:hidden;margin-top:12px}
+  .progress i{display:block;height:100%;width:58%;background:var(--brand)}
+  .shot{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .shot .cap{font-size:11px;color:var(--sub);padding:6px 8px;background:#f9fafb;border-bottom:1px solid var(--line)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--sub);font-weight:600;background:#fafafa}
+  td.n{text-align:right;font-variant-numeric:tabular-nums}
+  .badge{display:inline-block;font-size:11.5px;font-weight:700;border-radius:999px;padding:3px 9px}
+  .b-ok{background:var(--okbg);color:var(--ok)}
+  .b-wait{background:var(--warnbg);color:var(--warn)}
+  .b-bad{background:var(--badbg);color:var(--bad)}
+  .b-info{background:var(--brand2);color:var(--brand)}
+  .big{font-size:40px;text-align:center;margin:6px 0}
+  .kv{display:flex;justify-content:space-between;font-size:14px;padding:8px 0;border-top:1px solid var(--line)}
+  .kv span:first-child{color:var(--sub)}
+  .seg{display:flex;gap:6px;margin-top:6px}
+  .seg span{flex:1;text-align:center;min-height:40px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:9px;font-size:13px;font-weight:600;background:#fff}
+  .seg span.on{border-color:var(--brand);background:var(--brand2);color:var(--brand)}
+  .list{display:flex;flex-direction:column;gap:10px}
+  .item{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px}
+  .item .t{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .item .t b{font-size:15px}
+  .item .m{font-size:12.5px;color:var(--sub);margin-top:5px;line-height:1.5}
+  .item .a{display:flex;gap:6px;margin-top:9px}
+  .item .a span{flex:1;min-height:40px;border:1px solid var(--line);border-radius:9px;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .item .a span.p{background:var(--brand);color:#fff;border-color:var(--brand)}
+  .item .a span.fix{background:var(--badbg);color:var(--bad);border-color:#fecaca}
+  .tabs{display:flex;gap:6px}
+  .tabs span{font-size:12.5px;font-weight:700;padding:6px 11px;border-radius:999px;background:#fff;border:1px solid var(--line)}
+  .tabs span.on{background:#111827;color:#fff;border-color:#111827}
+  .warnbox{background:var(--badbg);border:1px solid #fecaca;border-radius:12px;padding:12px;font-size:14px;line-height:1.55;color:#7f1d1d}
+  .note{font-size:12px;color:var(--sub);line-height:1.55}
+  .fab{position:absolute;right:16px;bottom:84px;background:var(--brand);color:#fff;border-radius:999px;padding:12px 16px;font-weight:800;font-size:14px;box-shadow:0 6px 16px rgba(37,99,235,.35)}
+  footer{padding:0 32px 32px;color:var(--sub);font-size:12.5px;line-height:1.6}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>업무 자동화 대화형 등록 — 화면 목업</h1>
+  <p>말하기 → 지켜보기 → 확인하기. 처음 쓰는 사람이 확인 카드 3장만 눌러 자동화를 만드는 흐름입니다. 모바일 390px 기준이며, 데스크톱에서는 채팅 본문 안에 같은 카드가 들어갑니다.<br>
+  내부 용어(work_key·레인·credential_scope·레시피 조각)는 화면에 나오지 않습니다. 짝 문서: PRD <code>aads-conversational-automation-prd</code>, 설계서 <code>aads-conversational-automation-design</code>.</p>
+  <div class="flow"><span>S1 시작</span><span>S2 카드1 이렇게 이해했어요</span><span>S3 카드2 로그인 연결</span><span>S4 대신 해 보는 중</span><span>S5 카드3 결과 확인</span><span>S6 완료·예약</span><span>S7 내 자동화</span><span>S8 실패 복구</span></div>
+</header>
+
+<main class="grid">
+
+<!-- S1 -->
+<section class="frame">
+  <div class="label">S1 · 시작 <small>홈 [자동화 만들기] 또는 채팅에서 반복 업무를 말하면 시작. 예시 문장으로 첫 입력 부담을 없앱니다. (FR-01, FR-04)</small></div>
+  <div class="phone">
+    <div class="bar"><div class="dot">오</div>오비스<span class="right">자동화 만들기</span></div>
+    <div class="body">
+      <div class="ai">매일 반복하는 일을 한 문장으로 말해 주세요.<br>제가 사이트에 들어가서 한 번 해 보고, 맞는지 보여 드릴게요.</div>
+      <div class="chips">
+        <div class="chip"><b>예시</b> 쿠팡이츠에서 어제 매출 받아줘, 매일 아침</div>
+        <div class="chip"><b>예시</b> 스마트스토어 새 주문 있으면 알려줘</div>
+        <div class="chip"><b>예시</b> 홈택스 세금계산서 목록 내려받기, 매주 월요일</div>
+      </div>
+      <div class="me" style="margin-top:8px">쿠팡이츠에서 어제 매출 받아줘, 매일 아침에</div>
+      <div class="ai">좋아요. 이렇게 이해했는지 먼저 확인해 주세요 ↓</div>
+    </div>
+    <div class="input"><div class="box">하고 싶은 일을 말해 주세요</div><div class="send">↑</div></div>
+  </div>
+</section>
+
+<!-- S2 -->
+<section class="frame">
+  <div class="label">S2 · 카드 1 「이렇게 이해했어요」 <small>사이트/할 일/결과/주기 4칸. 각 칸을 눌러 고칠 수 있고, 사이트를 모르면 이름으로 후보를 고릅니다. (FR-02, FR-03)</small></div>
+  <div class="phone">
+    <div class="bar"><div class="dot">오</div>오비스<span class="right">1 / 3</span></div>
+    <div class="body">
+      <div class="me">쿠팡이츠에서 어제 매출 받아줘, 매일 아침에</div>
+      <div class="card">
+        <span class="step">확인 1 / 3</span>
+        <h3>이렇게 이해했어요</h3>
+        <p class="hint">다르면 해당 칸을 눌러 고쳐 주세요.</p>
+        <div class="row"><div class="k">사이트</div><div class="v">쿠팡이츠 사장님<small>store.coupangeats.com</small></div><div class="edit">고치기</div></div>
+        <div class="row"><div class="k">할 일</div><div class="v">어제 하루 매출 보기</div><div class="edit">고치기</div></div>
+        <div class="row"><div class="k">받을 결과</div><div class="v">매출 표 (주문 수·금액)<small>채팅으로 받고 파일로도 저장</small></div><div class="edit">고치기</div></div>
+        <div class="row"><div class="k">주기</div><div class="v">매일 오전 9:00</div><div class="edit">고치기</div></div>
+        <div class="btns"><div class="btn">고칠게요</div><div class="btn p">맞아요</div></div>
+      </div>
+      <div class="note">사이트 주소를 몰라도 괜찮아요. 이름만 말하면 후보를 보여 드려요.</div>
+    </div>
+    <div class="input"><div class="box">고칠 내용을 말해도 돼요</div><div class="send">↑</div></div>
+  </div>
+</section>
+
+<!-- S3 -->
+<section class="frame">
+  <div class="label">S3 · 카드 2 「로그인 연결」 <small>저장된 로그인이 있으면 버튼 하나. 없으면 채팅 안 안전 입력칸(기존 Vault 카드). 비밀번호는 채팅·기록에 남지 않습니다. (FR-05~07)</small></div>
+  <div class="phone">
+    <div class="bar"><div class="dot">오</div>오비스<span class="right">2 / 3</span></div>
+    <div class="body">
+      <div class="card">
+        <span class="step">확인 2 / 3</span>
+        <h3>로그인 연결</h3>
+        <p class="hint">쿠팡이츠에 저장된 로그인이 있어요.</p>
+        <div class="acct"><div class="ic">C</div><div><div class="t">강남점 사장님 계정</div><div class="s">마지막 사용 9월 30일 · 정상</div></div></div>
+        <div class="btns"><div class="btn p">이 계정으로 진행</div></div>
+        <div class="or">— 또는 다른 계정 —</div>
+        <div class="field"><label>아이디</label><div class="in">아이디 입력</div></div>
+        <div class="field"><label>비밀번호</label><div class="in">••••••••</div></div>
+        <div class="lock">🔒 안전 입력칸이에요. 입력한 값은 암호화 보관함에만 저장되고, 대화·자동화 기록·화면 캡처에는 남지 않아요.</div>
+      </div>
+    </div>
+    <div class="input"><div class="box">여기에는 비밀번호를 쓰지 마세요</div><div class="send">↑</div></div>
+  </div>
+</section>
+
+<!-- S4 -->
+<section class="frame">
+  <div class="label">S4 · 대신 해 보는 중 <small>라이브 화면 + 사람 말로 된 단계. 사이트에 저장·주문·발송하는 동작이 나오면 멈추고 묻습니다. 1회 5분 상한. (FR-08~11)</small></div>
+  <div class="phone">
+    <div class="bar"><div class="dot">오</div>오비스<span class="right">진행 중</span></div>
+    <div class="body">
+      <div class="card">
+        <h3>쿠팡이츠에서 해 보는 중이에요</h3>
+        <p class="hint">화면을 보면서 기다려 주세요. 보통 1~2분 걸려요.</p>
+        <div class="live">
+          <div class="nav">쿠팡이츠 사장님</div>
+          <div class="menu"><i></i><i class="on"></i><i></i><i></i><i></i></div>
+          <div class="main"><i style="width:70%"></i><i></i><i style="width:85%"></i><i></i><i style="width:60%"></i><i></i></div>
+          <div class="cursor"></div>
+          <div class="tag">실시간 · 2초마다 갱신</div>
+        </div>
+        <ul class="checks">
+          <li class="done"><span class="s">✓</span>쿠팡이츠 사장님 사이트 열기</li>
+          <li class="done"><span class="s">✓</span>로그인하기 (강남점 계정)</li>
+          <li class="now"><span class="s">3</span>'매출 관리' 메뉴로 가는 중</li>
+          <li class="wait"><span class="s">4</span>어제 날짜 고르기</li>
+          <li class="wait"><span class="s">5</span>매출 표 읽기</li>
+        </ul>
+        <div class="progress"><i></i></div>
+        <div class="btns"><div class="btn">멈추기</div><div class="btn ghost">제가 직접 보여줄게요</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- S5 -->
+<section class="frame">
+  <div class="label">S5 · 카드 3 「이 결과가 맞나요?」 <small>마지막 화면 캡처 + 결과 미리보기 5줄. [맞아요]여야만 저장됩니다. [아니에요]는 이유를 골라 1회 다시 해 봅니다. (FR-13~15)</small></div>
+  <div class="phone">
+    <div class="bar"><div class="dot">오</div>오비스<span class="right">3 / 3</span></div>
+    <div class="body">
+      <div class="card">
+        <span class="step">확인 3 / 3</span>
+        <h3>이 결과가 맞나요?</h3>
+        <p class="hint">10월 13일(어제) 강남점 매출이에요.</p>
+        <div class="shot">
+          <div class="cap">마지막 화면 · 14:02 캡처</div>
+          <table>
+            <tr><th>시간대</th><th class="n">주문</th><th class="n">매출(원)</th></tr>
+            <tr><td>11~13시</td><td class="n">38</td><td class="n">612,000</td></tr>
+            <tr><td>13~17시</td><td class="n">21</td><td class="n">318,500</td></tr>
+            <tr><td>17~20시</td><td class="n">44</td><td class="n">735,000</td></tr>
+            <tr><td>20~24시</td><td class="n">19</td><td class="n">286,000</td></tr>
+            <tr><td><b>합계</b></td><td class="n"><b>122</b></td><td class="n"><b>1,951,500</b></td></tr>
+          </table>
+        </div>
+        <div class="note" style="margin-top:6px">※ 목업용 예시 숫자입니다.</div>
+        <div class="btns"><div class="btn">아니에요</div><div class="btn ok">맞아요</div></div>
+        <div class="seg" style="margin-top:10px"><span>날짜가 달라요</span><span>다른 메뉴예요</span><span>다른 매장이에요</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- S6 -->
+<section class="frame">
+  <div class="label">S6 · 완료·예약 <small>주기 확정, 승인 필요 여부를 사람 말로 안내. 읽기 전용이고 같은 사이트 승인 이력이 있으면 바로 사용 가능(정책 D1). (FR-17, 18, 20)</small></div>
+  <div class="phone">
+    <div class="bar"><div class="dot">오</div>오비스<span class="right">완료</span></div>
+    <div class="body">
+      <div class="card">
+        <div class="big">✅</div>
+        <h3 style="text-align:center">자동화를 만들었어요</h3>
+        <p class="hint" style="text-align:center">쿠팡이츠 어제 매출 받기</p>
+        <div class="kv"><span>하는 일</span><span>보기만 해요 <span class="badge b-info">안전</span></span></div>
+        <div class="kv"><span>상태</span><span><span class="badge b-wait">확인 기다리는 중</span></span></div>
+        <div class="kv"><span>확인하는 사람</span><span>대표님 (알림 보냄)</span></div>
+        <div class="kv"><span>실행</span><span>확인되면 매일 오전 9:00</span></div>
+        <div class="seg"><span>한 번만</span><span class="on">매일</span><span>평일</span><span>매주</span></div>
+        <div class="btns"><div class="btn">지금 한 번 더</div><div class="btn p">내 자동화 보기</div></div>
+      </div>
+      <div class="note">대표님이 확인하면 바로 알려 드릴게요. 이틀 동안 확인이 없으면 한 번 더 알려 드려요.</div>
+    </div>
+  </div>
+</section>
+
+<!-- S7 -->
+<section class="frame">
+  <div class="label">S7 · 내 자동화 <small>저장소가 달라도 한 목록. 상태·마지막 결과·다음 실행. 고장 난 것은 빨간 [고치기]. 관리자는 [자세히]에서 내부 정보 확인. (FR-22, 23, 28)</small></div>
+  <div class="phone">
+    <div class="bar">내 자동화<span class="right">4개</span></div>
+    <div class="body">
+      <div class="tabs"><span class="on">전체</span><span>사용 가능</span><span>확인 대기</span><span>고장</span></div>
+      <div class="list">
+        <div class="item"><div class="t"><b>쿠팡이츠 어제 매출 받기</b><span class="badge b-wait">확인 대기</span></div><div class="m">만든 날 10월 14일 · 확인되면 매일 09:00</div><div class="a"><span>자세히</span><span>멈추기</span></div></div>
+        <div class="item"><div class="t"><b>쿠팡 상품 검색 결과 보기</b><span class="badge b-ok">사용 가능</span></div><div class="m">마지막 실행 9월 30일 성공 · 다음 실행 없음(필요할 때)</div><div class="a"><span class="p">지금 실행</span><span>자세히</span></div></div>
+        <div class="item"><div class="t"><b>깃허브 문서 변경 내역 보기</b><span class="badge b-ok">사용 가능</span></div><div class="m">마지막 실행 9월 22일 성공</div><div class="a"><span class="p">지금 실행</span><span>자세히</span></div></div>
+        <div class="item"><div class="t"><b>스마트스토어 새 주문 확인</b><span class="badge b-bad">고장</span></div><div class="m">어제 09:00 실패 · 로그인이 안 됐어요</div><div class="a"><span class="fix">고치기</span><span>자세히</span></div></div>
+      </div>
+      <div class="note">※ 목록 항목은 예시입니다.</div>
+    </div>
+    <div class="fab">＋ 자동화 만들기</div>
+  </div>
+</section>
+
+<!-- S8 -->
+<section class="frame">
+  <div class="label">S8 · 실패 복구 <small>원인을 사람 말로, 다음 행동을 버튼으로. 비밀번호 틀림·사람 확인·차단은 자동 재시도하지 않습니다(로그인 반복 금지). (FR-24~26)</small></div>
+  <div class="phone">
+    <div class="bar"><div class="dot">오</div>오비스<span class="right">도움 필요</span></div>
+    <div class="body">
+      <div class="card">
+        <h3>스마트스토어 새 주문 확인 — 실패했어요</h3>
+        <p class="hint">오늘 09:00 예약 실행</p>
+        <div class="warnbox"><b>로그인이 안 됐어요.</b><br>비밀번호가 바뀌었을 수 있어요. 같은 비밀번호로 다시 시도하지 않았어요 (계정 잠김 방지).</div>
+        <div class="btns"><div class="btn p">비밀번호 다시 입력</div></div>
+        <div class="btns" style="margin-top:8px"><div class="btn">나중에</div><div class="btn">담당자에게 요청</div></div>
+      </div>
+      <div class="card">
+        <h3 style="font-size:14px">다른 실패일 때 보이는 문장</h3>
+        <div class="kv"><span>사람 확인 요구</span><span>[내 PC에서 계속하기]</span></div>
+        <div class="kv"><span>서버 접속 차단</span><span>[내 PC에서 계속하기]</span></div>
+        <div class="kv"><span>화면이 바뀜</span><span>[다시 보여주기]</span></div>
+        <div class="kv"><span>결과가 비어 있음</span><span>[조건 고치기]</span></div>
+        <div class="kv"><span>잠깐 끊김</span><span>2분 뒤 자동 1회</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+<footer>
+  목업 범위: 화면 구성과 문장만 확정합니다. 색·간격은 실제 구현 시 대시보드 디자인 토큰(<code>--ct-*</code>)을 따릅니다. 표의 숫자와 목록 항목은 예시이며 측정값이 아닙니다.
+</footer>
+</body>
+</html>
