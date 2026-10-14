@@ -24,6 +24,10 @@ from app.services.work_recipe.guard import (
     requires_approval,
 )
 from app.services.work_recipe.schema import ALLOWED_ACTIONS
+from app.services.work_recipe.shinhan_corporate_manual import (
+    FinancialManualBlocked,
+    assert_unregistered_navigation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +149,12 @@ class BrowserRecipeExecutor:
         action = str(payload.get("action") or "")
         if action not in ALLOWED_ACTIONS:
             return {"ok": False, "error": f"지원하지 않는 브라우저 action: {action}"}
+        try:
+            # 치환이 끝난 최종 URL 을 단계 실행 직전에 검사한다(금융 미등록 레시피의 신한 접근 차단).
+            assert_unregistered_navigation(payload)
+        except FinancialManualBlocked as exc:
+            return {"ok": False, "status": "blocked", "route": "browser_agent", "llm_calls": 0,
+                    "error": f"financial_manual_blocked:{exc.code}"}
 
         result = await self._attempt(action, payload)
         # 봇 차단은 예외로만 오지 않는다. 쿠팡처럼 "Access Denied" 한 장을

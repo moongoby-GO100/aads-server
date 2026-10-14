@@ -10,6 +10,7 @@ from typing import Any
 
 from app.core.db_pool import get_pool
 from app.services.work_recipe import store
+from app.services.work_recipe import shinhan_corporate_manual as shinhan_manual
 from app.services.work_recipe.schema import WorkRecipe, parse_recipe
 
 
@@ -254,6 +255,10 @@ async def decide_registration(
         spec = _json_object(row["spec"])
         recipe = parse_recipe(spec)
         await _validate_coupangeats_registration(recipe, tenant)
+        try:
+            shinhan_manual.validate_manifest(recipe)
+        except shinhan_manual.FinancialManualBlocked as exc:
+            raise RegistrationError(f"financial_manifest_invalid:{exc.code}") from exc
         lock_key = f"{tenant}:{row['domain']}:{row['name']}"
         await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
         version = int(

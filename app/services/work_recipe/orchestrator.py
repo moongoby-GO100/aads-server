@@ -15,6 +15,7 @@ from app.services.work_recipe.executor import BrowserRecipeExecutor
 from app.services.work_recipe.guard import is_internal_host
 from app.services.work_recipe.player import RunResult, play_recipe
 from app.services.work_recipe.schema import WorkRecipe, parse_recipe
+from app.services.work_recipe import shinhan_corporate_manual as shinhan_manual
 from app.services.work_recipe.store import list_recipes, normalize_domain, row_to_recipe
 from app.services.browser_recipe_registry import (
     COUPANGEATS_LOGIN_FRAGMENTS, COUPANGEATS_LOGIN_URL,
@@ -270,6 +271,14 @@ async def run_directive(
         if (session is None or session.work_key != browser_work_key
                 or str(session.endpoint.kind.value) != "local_agent"):
             raise ValueError("coupangeats_pc_lane_required")
+    if shinhan_manual.is_shinhan_recipe(recipe):
+        # 금융 레시피는 락 → 서버측 승인 → Vault 해석 순서가 따로 있다. 신한 로직은 전부 그 모듈에 있다.
+        return await shinhan_manual.run_financial_recipe(
+            recipe, action_intent=action_intent, tenant_id=tenant_id, intent_inputs=intent_inputs,
+            browser_session_id=browser_session_id, browser_work_key=browser_work_key,
+            triggered_by=triggered_by, task_id=task_id,
+        )
+    shinhan_manual.assert_unregistered_runtime_host(recipe, intent_inputs)
     resolved_inputs = await _scoped_inputs(recipe, intent_inputs)
     recorder = GuardedRunRecorder(
         domain=recipe.domain,
