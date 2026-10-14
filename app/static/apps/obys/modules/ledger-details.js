@@ -135,10 +135,25 @@
     return payload;
   }
 
+  // 클로브 확정 거래의 전표 초안은 OBYS DB 에 있다(source_type='clobe'). ACCT 목록에 날짜순으로 합쳐 보여 준다.
+  async function loadClobeDrafts(scope) {
+    try {
+      const legacy = await request(`/journals?${scope}`);
+      return (legacy.journals || []).filter(item => item.source_type === "clobe");
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function journalDate(item) {
+    return String(item.entry_date || item.transaction_date || "").slice(0, 10);
+  }
+
   async function loadJournals(scope) {
     try {
-      const acct = await acctJournalRequest(`/journals?${scope}`);
-      return { journals: acct.journals || [], source: "acct" };
+      const [acct, drafts] = await Promise.all([acctJournalRequest(`/journals?${scope}`), loadClobeDrafts(scope)]);
+      const merged = [...(acct.journals || []), ...drafts].sort((a, b) => journalDate(b).localeCompare(journalDate(a)));
+      return { journals: merged, source: "acct" };
     } catch (_) {
       const legacy = await request(`/journals?${scope}`);
       return { journals: legacy.journals || [], source: "legacy" };
@@ -457,7 +472,7 @@
         <div data-ledger-content>${contentHtml(meta.kind)}</div>
         <section class="ledger-journal-panel clobe-ledger-panel" data-clobe-section aria-labelledby="clobeLedgerTitle">${clobeSectionHtml().replace("<h2>", '<h2 id="clobeLedgerTitle">')}</section>
         <section class="ledger-journal-panel"><div class="ledger-history-head"><div><h2>ACCT 전표 조회</h2><p>전표는 회계원장(ACCT)에서 생성됩니다. <a href="/api/v1/acct-purchase/ui" target="_blank" rel="noopener">회계원장 조회 화면 열기</a></p></div><span>${state.journals.length}건</span></div>
-          <div class="ledger-upload-history">${state.journals.length ? state.journals.map((item, index) => `<article class="ledger-upload-item"><div class="ledger-file-icon">전표</div><div class="ledger-upload-copy"><b>${escapeHtml(item.entry_no || item.voucher_no || item.id)}</b><span>${escapeHtml(item.entry_date || item.transaction_date)} · ${escapeHtml(item.description || "적요 없음")}</span><small>ACCT 회계원장 정본 · 조회 전용</small></div><span class="ledger-upload-status ${escapeHtml(item.status)}">${escapeHtml({draft:"초안",needs_review:"검토 필요",approved:"승인",posted:"확정",reversed:"역분개 완료"}[item.status] || item.status || "확정")}</span><div class="ledger-upload-actions"><button type="button" data-journal-review="${index}">전표 상세</button></div></article>`).join("") : `<div class="ledger-upload-empty">ACCT에 확정된 전표가 없습니다. 전표는 회계원장(ACCT)에서 생성됩니다.</div>`}</div></section>
+          <div class="ledger-upload-history">${state.journals.length ? state.journals.map((item, index) => `<article class="ledger-upload-item"><div class="ledger-file-icon">전표</div><div class="ledger-upload-copy"><b>${escapeHtml(item.entry_no || item.voucher_no || item.id)}</b><span>${escapeHtml(item.entry_date || item.transaction_date)} · ${escapeHtml(item.description || "적요 없음")}</span><small>${item.source_type === "clobe" ? "클로브 확정 거래 · 전표 초안(승인 전)" : "ACCT 회계원장 정본 · 조회 전용"}</small></div>${item.source_type === "clobe" ? '<span class="ledger-source-badge">클로브</span>' : ""}<span class="ledger-upload-status ${escapeHtml(item.status)}">${escapeHtml({draft:"초안",needs_review:"검토 필요",approved:"승인",posted:"확정",reversed:"역분개 완료"}[item.status] || item.status || "확정")}</span><div class="ledger-upload-actions"><button type="button" data-journal-review="${index}">전표 상세</button></div></article>`).join("") : `<div class="ledger-upload-empty">ACCT에 확정된 전표가 없습니다. 전표는 회계원장(ACCT)에서 생성됩니다.</div>`}</div></section>
         ${uploadHtml(meta)}
       </div>`;
     bindRoot(root);
@@ -872,6 +887,7 @@
     if (!item) return;
     let journal = item;
     try {
+      if (item.source_type === "clobe") throw new Error("clobe-draft-is-local");
       const detail = await acctJournalRequest(`/journal-entries/${encodeURIComponent(item.id)}?business_id=${encodeURIComponent(state.businessId)}`);
       if (detail.journal) journal = { ...detail.journal, lines: detail.lines || [] };
     } catch (_) {
@@ -879,7 +895,7 @@
     }
     const lines = journalLines(journal);
     const panel = drawer(`<div class="ledger-drawer-head"><div><span class="ledger-eyebrow">JOURNAL VOUCHER</span><h3>${escapeHtml(journal.entry_no || journal.voucher_no || journal.id)}</h3></div><button type="button" data-drawer-close>닫기</button></div>
-      <p class="ledger-source">상태: ${escapeHtml(journal.status)} · ACCT 회계원장 정본 · 조회 전용</p>
+      <p class="ledger-source">상태: ${escapeHtml(journal.status)} · ${journal.source_type === "clobe" ? "출처: 클로브 확정 거래 · 전표 초안(승인 전, 계정 검토 필요)" : "ACCT 회계원장 정본 · 조회 전용"}</p>
       <form class="ledger-form"><label class="wide">적요<input value="${escapeHtml(journal.description || "")}" disabled></label>
       ${lines.map((line, index) => `<fieldset class="wide ledger-journal-line"><legend>${index + 1}번 ${line.side === "debit" ? "차변" : "대변"}</legend><label>계정코드<input value="${escapeHtml(line.account_code || "")}" disabled></label><label>계정과목<input value="${escapeHtml(line.account_name || "")}" disabled></label><label>금액<input value="${escapeHtml(line.amount || line.debit_amount || line.credit_amount || "")}" disabled></label><label>부가세 코드<input value="${escapeHtml(line.tax_code || "")}" disabled></label></fieldset>`).join("")}
       <div class="ledger-form-actions"><button type="button" data-drawer-close>닫기</button></div></form>`);

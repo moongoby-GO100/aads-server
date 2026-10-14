@@ -973,7 +973,7 @@ def test_monitor_runs_the_configured_number_of_ticks(box):
 SHELL_HTML = (
     f"<html>{MARKER}\n"
     '<link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">\n'
-    '<link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20260921-r3">\n'
+    '<link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20261014-r1">\n'
     '<script src="/static/apps/obys/modules/app-config.js"></script>\n'
     '<script src="https://cdn.example.com/static/apps/obys/modules/x.js"></script>\n'
     '<script>fetch("/api/v1/obys/x?v=1")</script></html>\n'
@@ -996,7 +996,7 @@ def test_build_stamps_release_sha_into_shell_html_and_sw_but_not_the_checkout(bo
     sha8 = box.sha[:8]
     html = _built_file(box, "./app/static/apps/obys/index.html")
     assert f"modules/store-assistant-v2.css?v={sha8}" in html
-    assert f"modules/ledger-details.css?v={sha8}" in html and "20260921-r3" not in html
+    assert f"modules/ledger-details.css?v={sha8}" in html and "20261014-r1" not in html
     assert f"modules/app-config.js?v={sha8}" in html
     assert 'cdn.example.com/static/apps/obys/modules/x.js"' in html and "/api/v1/obys/x?v=1" in html
     assert f'const CACHE_VERSION = "obys-clock-shell-{sha8}";' in _built_file(box, "./app/static/apps/obys/sw.js")

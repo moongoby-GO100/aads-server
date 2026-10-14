@@ -118,7 +118,7 @@ def test_module_views_use_shared_state():
     assert 'failureSlotHtml(state.statusError, retryAction, "status")' in CLOBE_JS
     assert 'failureSlotHtml(state.itemsError, "reload-items", "items")' in CLOBE_JS
     # 모듈 수정분이 캐시에 묶이지 않게 버전을 올렸다
-    assert 'modules/ledger-details.js?v=20261011-r1"' in HTML
+    assert 'modules/ledger-details.js?v=20261014-r1"' in HTML
     assert 'modules/clobe-collection.js?v=20261012-r1"' in HTML
 
 

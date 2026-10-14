@@ -16,7 +16,7 @@ spec.loader.exec_module(tool)
 SHA = "1a2b3c4d"
 HTML = """<html>
 <link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">
-<link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20260921-r3">
+<link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20261014-r1">
 <link rel="stylesheet" href='/static/apps/obys/modules/clobe-collection.css?v=20261003-r5'>
 <script src="/static/apps/obys/modules/app-config.js"></script>
 <script src="/static/apps/obys/modules/store-assistant-v2.js"></script>

@@ -17,6 +17,7 @@ from uuid import UUID
 
 from app.core.obys_db import obys_db_url
 from app.services import clobe_mcp_client as clobe
+from app.services import obys_clobe_voucher as voucher
 from app.services import obys_collection_core as core
 
 logger = logging.getLogger(__name__)
@@ -890,12 +891,13 @@ async def _post_reviewed_rows(conn: Any, tenant: UUID, business_id: str, rows: l
             "SELECT entry_id, item_id, item_hash FROM obys_clobe_ledger_entry "
             "WHERE tenant_id=$1 AND business_id=$2 AND data_kind=$3 AND source_key=$4 FOR UPDATE",
             tenant, business_id, r["data_kind"], r["source_key"])
+        entry_id = entry["entry_id"] if entry is not None else uuid.uuid4()
         if entry is None:
             await conn.execute(
                 "INSERT INTO obys_clobe_ledger_entry (entry_id, tenant_id, business_id, data_kind, source_key, item_id, "
                 " item_hash, occurred_on, amount, direction, confirmed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) "
                 "ON CONFLICT (tenant_id, business_id, data_kind, source_key) DO NOTHING",
-                uuid.uuid4(), tenant, business_id, r["data_kind"], r["source_key"], r["item_id"], r["item_hash"],
+                entry_id, tenant, business_id, r["data_kind"], r["source_key"], r["item_id"], r["item_hash"],
                 r["occurred_on"], r["amount"], r["direction"], actor)
         elif entry["item_hash"] != r["item_hash"]:
             await conn.execute(
@@ -907,8 +909,24 @@ async def _post_reviewed_rows(conn: Any, tenant: UUID, business_id: str, rows: l
         await conn.execute(
             "UPDATE obys_clobe_item SET stage='confirmed', confirmed_by=$2, confirmed_at=now() WHERE item_id=$1",
             r["item_id"], actor)
+        await _draft_voucher(conn, tenant, business_id, entry_id, r, actor)
         confirmed += 1
     return confirmed
+
+
+async def _draft_voucher(conn: Any, tenant: UUID, business_id: str, entry_id: UUID, item: Any, actor: str) -> None:
+    """확정과 같은 트랜잭션에서 전표 초안을 만든다. 파일럿 사업장만. 전표 실패가 확정을 되돌리지 않도록 세이브포인트로 격리한다."""
+    if not voucher.voucher_enabled(tenant, business_id):
+        return
+    try:
+        async with conn.transaction():
+            outcome = await voucher.create_draft_for_entry(
+                conn, tenant_id=tenant, business_id=business_id, entry_id=entry_id, item=item, actor=actor)
+    except Exception:
+        logger.exception("clobe voucher draft failed entry=%s business=%s", entry_id, business_id)
+        return
+    if outcome.startswith("skipped"):
+        logger.warning("clobe voucher draft %s entry=%s business=%s", outcome, entry_id, business_id)
 
 
 async def confirm_items(tenant_id: Any, business_id: str, item_ids: list[str], *, actor: str) -> dict[str, Any]:

@@ -759,3 +759,115 @@ async def test_ledger_list_and_summary_keep_snapshot_during_concurrent_confirm(d
     assert during == before
     assert Decimal(await db.fetchval("SELECT amount FROM obys_clobe_ledger_entry")) == (
         Decimal(before["summary"]["amount_total"]) + 100)
+
+
+# ── 클로브 확정 → 전표 초안 (파일럿) ─────────────────────────
+
+VOUCHER_MIG = Path("migrations/20260921_obys_journal_vouchers_r3.sql")
+VOUCHER_SOURCE_MIG = Path("migrations/20261014_obys_journal_source_clobe.sql")
+VOUCHER_DOWN = Path("migrations/rollback/20261014_obys_journal_source_clobe.down.sql")
+
+
+@pytest.fixture
+async def voucher_db(db, monkeypatch):
+    """db 위에 전표 테이블(r3 마이그레이션의 전표 부분)과 clobe source 확장 마이그레이션을 얹는다."""
+    text = VOUCHER_MIG.read_text(encoding="utf-8")
+    await db.execute("DROP TABLE IF EXISTS yeoljeong_journal_lines, yeoljeong_journal_vouchers CASCADE")
+    await db.execute("BEGIN;" + text[text.index("CREATE TABLE IF NOT EXISTS yeoljeong_journal_vouchers"):])
+    await db.execute(VOUCHER_SOURCE_MIG.read_text(encoding="utf-8"))
+    monkeypatch.setenv("OBYS_CLOBE_VOUCHER_BUSINESSES", "biz-danharu")
+    yield db
+    await db.execute("DROP TABLE IF EXISTS yeoljeong_journal_lines, yeoljeong_journal_vouchers CASCADE")
+
+
+async def _confirm_all(kind, fake):
+    await svc.discover_companies(session_factory=fake)
+    await svc.run_collection(C_DANHARU, kinds=[kind], session_factory=fake, **PERIOD)
+    ids = await _ids_of(kind)
+    await svc.review_items(TENANT, "biz-danharu", ids, "approve", actor="a")
+    return ids, await svc.confirm_items(TENANT, "biz-danharu", ids, actor="a")
+
+
+async def _ids_of(kind):
+    conn = await asyncpg.connect(_url())
+    try:
+        return [str(r["item_id"]) for r in await conn.fetch(
+            "SELECT item_id FROM obys_clobe_item WHERE data_kind=$1 ORDER BY source_key", kind)]
+    finally:
+        await conn.close()
+
+
+async def test_confirm_creates_one_balanced_draft_voucher_per_entry_and_is_idempotent(voucher_db):
+    db = voucher_db
+    counts = {core.KIND_BANK: 0, core.KIND_TAX: 3, core.KIND_CASH: 0, core.KIND_CARD: 0}
+    fake = fake_for(C_DANHARU, counts=counts)
+    ids, result = await _confirm_all(core.KIND_TAX, fake)
+    assert result["confirmed"] == 3
+    entries = {r["entry_id"] for r in await db.fetch("SELECT entry_id FROM obys_clobe_ledger_entry")}
+    vouchers = await db.fetch("SELECT * FROM yeoljeong_journal_vouchers")
+    assert len(vouchers) == 3 and {v["source_id"] for v in vouchers} == entries
+    assert {v["source_type"] for v in vouchers} == {"clobe"} and {v["status"] for v in vouchers} <= {"draft", "needs_review"}
+    for v in vouchers:
+        sides = await db.fetch("SELECT side, sum(amount) AS total, count(*) AS n FROM yeoljeong_journal_lines "
+                               "WHERE voucher_id=$1 GROUP BY side", v["id"])
+        by = {s["side"]: s for s in sides}
+        assert by["debit"]["total"] == by["credit"]["total"] == v["total_amount"] == v["supply_amount"] + v["tax_amount"]
+        assert sum(s["n"] for s in sides) >= 2
+    # 같은 항목을 다시 확정해도(원장·전표 모두) 늘지 않는다.
+    assert (await svc.confirm_items(TENANT, "biz-danharu", ids, actor="a"))["confirmed"] == 0
+    assert await n(db, "yeoljeong_journal_vouchers") == 3
+
+
+async def test_non_pilot_business_gets_no_voucher_and_confirm_still_succeeds(voucher_db, monkeypatch):
+    monkeypatch.setenv("OBYS_CLOBE_VOUCHER_BUSINESSES", "biz-chicblack")
+    fake = fake_for(C_DANHARU, counts={core.KIND_BANK: 0, core.KIND_TAX: 2, core.KIND_CASH: 0, core.KIND_CARD: 0})
+    _, result = await _confirm_all(core.KIND_TAX, fake)
+    assert result["confirmed"] == 2 and await n(voucher_db, "obys_clobe_ledger_entry") == 2
+    assert await n(voucher_db, "yeoljeong_journal_vouchers") == 0
+
+
+async def test_voucher_failure_does_not_roll_back_the_confirm(voucher_db):
+    await voucher_db.execute("DROP TABLE yeoljeong_journal_lines, yeoljeong_journal_vouchers CASCADE")   # 마이그레이션 누락 상황
+    fake = fake_for(C_DANHARU, counts={core.KIND_BANK: 0, core.KIND_TAX: 2, core.KIND_CASH: 0, core.KIND_CARD: 0})
+    _, result = await _confirm_all(core.KIND_TAX, fake)
+    assert result["confirmed"] == 2 and await n(voucher_db, "obys_clobe_ledger_entry") == 2
+    assert await n(voucher_db, "obys_clobe_item", "WHERE stage='confirmed'") == 2
+
+
+async def test_backfill_creates_missing_vouchers_once(voucher_db, monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("backfill_clobe_vouchers_it", "scripts/backfill_obys_clobe_vouchers.py")
+    bf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bf)
+    monkeypatch.setenv("OBYS_CLOBE_VOUCHER_BUSINESSES", "biz-chicblack")      # 확정 시점에는 파일럿이 아니라 전표가 없다
+    fake = fake_for(C_DANHARU, counts={core.KIND_BANK: 3, core.KIND_TAX: 0, core.KIND_CASH: 0, core.KIND_CARD: 0})
+    await _confirm_all(core.KIND_BANK, fake)
+    assert await n(voucher_db, "obys_clobe_ledger_entry") == 3 and await n(voucher_db, "yeoljeong_journal_vouchers") == 0
+    monkeypatch.setenv("OBYS_CLOBE_VOUCHER_BUSINESSES", "biz-danharu")
+    dry = await bf.backfill(voucher_db, apply=False, business_id="biz-danharu")
+    assert dry["pending_entries"] == 3 and dry["would_create"] == 3
+    assert await n(voucher_db, "yeoljeong_journal_vouchers") == 0
+    first = await bf.backfill(voucher_db, apply=True, business_id="biz-danharu")
+    second = await bf.backfill(voucher_db, apply=True, business_id="biz-danharu")
+    assert (first["created"], second["pending_entries"]) == (3, 0)
+    assert await n(voucher_db, "yeoljeong_journal_vouchers") == 3
+    assert await voucher_db.fetchval("SELECT count(DISTINCT status) FROM yeoljeong_journal_vouchers WHERE status IN ('approved','posted')") == 0
+    with pytest.raises(bf.BackfillRefused):
+        await bf.backfill(voucher_db, apply=True, business_id="biz-lylon-e2e")
+
+
+async def test_source_type_migration_is_idempotent_and_rollback_is_guarded(voucher_db):
+    db = voucher_db
+    await db.execute(VOUCHER_SOURCE_MIG.read_text(encoding="utf-8"))
+    fake = fake_for(C_DANHARU, counts={core.KIND_BANK: 0, core.KIND_TAX: 1, core.KIND_CASH: 0, core.KIND_CARD: 0})
+    await _confirm_all(core.KIND_TAX, fake)
+    assert await n(db, "yeoljeong_journal_vouchers") == 1
+    with pytest.raises(asyncpg.RaiseError):                      # clobe 전표가 있으면 롤백은 멈춘다
+        await db.execute(VOUCHER_DOWN.read_text(encoding="utf-8"))
+    await db.execute("DELETE FROM yeoljeong_journal_vouchers")   # 격리 테스트 DB 정리용
+    await db.execute(VOUCHER_DOWN.read_text(encoding="utf-8"))
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.execute(
+            "INSERT INTO yeoljeong_journal_vouchers (id,tenant_id,business_id,voucher_no,transaction_date,status,source_type,"
+            "source_id,total_amount,created_by) VALUES ($1,$2,'biz-danharu','X','2026-09-01','draft','clobe',$3,0,'t')",
+            uuid.uuid4(), uuid.UUID(TENANT), uuid.uuid4())

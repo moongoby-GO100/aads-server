@@ -586,6 +586,16 @@
   background: #fffaeb;
 }
 
+.ledger-source-badge {
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #175cd3;
+  background: #eff8ff;
+  font-size: .72rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
 .ledger-upload-actions {
   justify-content: flex-end;
 }

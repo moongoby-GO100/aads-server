@@ -1,3 +1,93 @@
+# 클로브 확정 거래 → 오비서 전표 초안 (재작업 2차) — clobe-confirm-to-voucher-rework
+
+TASK_ID: ACCT-OBYS-CLOBE-CONFIRM-TO-VOUCHER-20261014 / AUTO_REWORK_OF: runner-f767d7f0 (round 1/2) / REWORK_OF: runner-264c11cd
+
+## AI 리뷰 지적 처리
+
+**지적 1 — "삭제 462줄/순삭제 449줄, 기존 구현 조사표와 삭제 사유 필요": 원인 확인 후 교정.**
+- 실측(`git diff --numstat 39f603a8 9e83196b`): 삭제 796줄 중 **`RESULT.md` 가 796줄**이었다. 반려 커밋이 이전 작업(ACCT-OBYS-CLOBE-LEDGER-VIEW)의 RESULT.md 를 통째로 덮어써 그 내용이 삭제로 집계된 것이다. 코드 파일의 실제 삭제는 모두 합쳐 13줄이다.
+- 교정: 이번 산출물은 RESULT.md 를 덮어쓰지 않고 **맨 위에 이 절을 추가만 한다**(아래 구분선 이후는 이전 RESULT.md 원문 그대로). RESULT.md 의 삭제는 0줄이다.
+- 코드 파일의 삭제 13줄은 전부 같은 줄의 제자리 수정이며, 기능 삭제는 없다:
+
+| 파일 | 삭제 | 사유 / 대체 |
+|---|---|---|
+| `app/services/obys_collection_service.py` | 1 | `uuid.uuid4()` → `entry_id`(기존 행이 있으면 그 id, 없으면 새 uuid). 전표 `source_id` 에 원장 entry_id 가 필요해서 |
+| `app/static/apps/obys/index.html` | 2 | `ledger-details.css`/`.js` 의 `?v=` 캐시 버스터 갱신 |
+| `app/static/apps/obys/modules/ledger-details.js` | 4 | `loadJournals` 의 ACCT 단독 반환 → ACCT + clobe 초안 병합 반환(ACCT 경로 유지, 실패 시 legacy 폴백 유지), 전표 목록 상태 라벨 1줄, 전표 상세 출처 문구 1줄 |
+| `tests/unit/test_acct_app_cafe24_release.py` | 2 | 자산 해시/버전 기대값 갱신 |
+| `tests/unit/test_obys_ledger_details.py` | 2 | 〃 |
+| `tests/unit/test_obys_release_assets.py` | 1 | 〃 |
+| `tests/unit/test_obys_uiux_states_mobile.py` | 1 | 〃 |
+
+- 롤백: 코드는 이 커밋 revert(삭제된 13줄은 revert 로 그대로 복원). DB 는 `migrations/rollback/20261014_obys_journal_source_clobe.down.sql`.
+
+## 기존 구현 조사(STEP 0) — 유지/수정/신규/삭제
+
+| 대상 | 분류 | 비고 |
+|---|---|---|
+| `obys_collection_service.py` 의 수집·검토·확정 함수 전체(`discover_companies`, `run_collection`, `review_items`, `confirm_items`, `bulk_review_confirm`, `company_status` 등) | 유지 | 변경 없음 |
+| `obys_collection_service._post_reviewed_rows` | 수정 | 원장 entry_id 확보 + 확정 직후 `_draft_voucher` 호출 |
+| `obys_collection_service._draft_voucher` | 신규 | 파일럿 사업장만, 세이브포인트 격리(전표 실패가 확정을 되돌리지 않음) |
+| `app/services/obys_clobe_voucher.py` | 신규 | 계정 매핑, 초안 생성, 멱등(source_type='clobe', source_id=entry_id) |
+| `obys_collection_core.py` 은행 counterparty 정규화 | 유지 | 지시상 수정 금지, 미변경 |
+| `ledger-details.js` 장부·업로드·ACCT 전표 조회·편집 | 유지 | 기존 흐름 보존 |
+| `ledger-details.js` `loadJournals`, 전표 상세 출처 문구 | 수정 | clobe 초안 병합·출처 표시 |
+| `ledger-details.js` `loadClobeDrafts`, `journalDate` / `ledger-details.css` 상태 배지 | 신규 | |
+| `migrations/20261014_obys_journal_source_clobe.sql` + rollback | 신규 | additive: source_type CHECK 에 'clobe' 추가만 |
+| `scripts/backfill_obys_clobe_vouchers.py` | 신규 | 기본 dry-run, `--apply` 시에만 쓰기 |
+| 테스트 | 신규/수정 | `test_obys_clobe_voucher.py` 신규, 통합 테스트 추가, 자산 해시 4개 갱신 |
+| **삭제** | 없음 | 파일·함수·엔드포인트·테이블·컬럼 삭제 없음 |
+
+## 이전 반려(approval_commit_failed) 대응 — R-AUTH 오탐
+- `tests/unit/test_obys_clobe_voucher.py` 에서 `ANTHROPIC_API_KEY` 부재 검사를 제거했다(전표 모듈은 LLM 무관). 테스트 이름은 `test_module_never_writes_approved_or_posted_status`. approved/posted 미사용 검사는 유지.
+- 변경·신규 파일 전체 `grep ANTHROPIC_API_KEY` → 0건.
+- 훅 우회(`--no-verify`, ALLOW_* 변수, `# R-AUTH` 면제 주석) 사용 없음.
+
+## 검증 (실제 실행)
+- `bash scripts/run_unit_tests.sh tests/unit/test_obys_clobe_voucher.py tests/unit/test_obys_ledger_details.py tests/unit/test_obys_release_assets.py tests/unit/test_obys_uiux_states_mobile.py tests/unit/test_acct_app_cafe24_release.py` → **219 passed**, exit 0.
+- `ruff check --select F821,F811` (신규·변경 py 5개) → All checks passed.
+- `python3 -m compileall -q` (py 3개) → OK. `scripts/dup_guard.py --paths <py 4개>` → exit 0.
+- `tests/integration/test_obys_collection_postgres.py` 는 운영/테스트 DB 가 필요해 실행하지 않았다(미검증).
+- **pre-commit 직접 실행은 하지 못했다.** 이 세션은 `git add` 가 금지라 스테이징을 만들 수 없고 훅은 스테이징된 파일만 본다. 위 개별 점검으로 대체했으며 훅 exit 0 은 Runner 커밋 단계에서 확인된다. 통과로 적지 않는다.
+- 세션 중 `git add -N .`(intent-to-add, 내용 스테이징 아님)를 한 번 실수로 실행했다. 커밋·푸시는 없고 인덱스에 새 파일 경로만 등록돼 있다.
+
+## 계정코드 체계 출처와 매핑표
+출처: `yeoljeong_journal_lines.account_code` 는 자유 text 이고 ACCT 에 계정과목 마스터가 없다(docs/prd/ACCT-LAYOUT-001 §5.3).
+83100 = docs/prd/ACCT-LAYOUT-002 §2.2 의 DB 조회값, 10300 = tests/unit/test_obys_workspaces.py 픽스처,
+9998/9999 = `obys_upload_service.create_journal` 의 기존 가계정. **나머지는 더존 표준코드 기준 제안이라 회계 확인 필요.**
+
+| 키 | 코드 | 계정명 |
+|---|---|---|
+| cash | 10100 | 현금 |
+| bank | 10300 | 보통예금 |
+| receivable | 10800 | 외상매출금 |
+| vat_paid | 13500 | 부가세대급금 |
+| payable | 25100 | 외상매입금 |
+| unpaid | 25300 | 미지급금 |
+| vat_received | 25500 | 부가세예수금 |
+| sales | 40100 | 상품매출 |
+| interest_income | 90100 | 이자수익 |
+| other_opex | 83100 | (판)지급수수료 |
+| unclassified_debit / credit | 9998 / 9999 | 미분류(가계정) |
+
+클로브 category → 계정: `매출`→sales(입금), `이자수익`→interest_income(입금), `기타영업비용`→other_opex(출금).
+그 외 category, isUnclassified, 계정 없는 출금은 모두 미분류 가계정 + `needs_review`.
+전표는 `draft`/`needs_review` 로만 생성하며 approved/posted 는 쓰지 않는다. 파일럿은 `OBYS_CLOBE_VOUCHER_BUSINESSES`(기본 biz-chicblack), 차단 범위(라일론 등)는 항상 제외.
+
+## 마이그레이션 배포 allowlist — 미반영 (결정 필요)
+`scripts/deploy_acct_app_cafe24.sh` 의 `ACCT_MIGRATION_ALLOWLIST` 에 `20261014_obys_journal_source_clobe.sql` 을 **추가하지 않았다.**
+배포 게이트는 고정 목록 외 마이그레이션을 거부(`test_migration_outside_the_allowlist_is_refused`)하며, 이 파일은 지시서가 허용한 변경 범위 밖이라 임의로 건드리지 않았다.
+영향: allowlist 에 넣기 전에는 OBYS DB 의 `source_type` CHECK 에 'clobe' 가 들어가지 않아, 배포 후 clobe 전표 INSERT 가 CHECK 위반으로 실패한다(확정 자체는 세이브포인트 격리로 유지됨).
+조치: 목록에 한 줄 + `migration_probe_sql` case 추가 + `tests/unit/test_acct_app_cafe24_release.py` 기대값 보강이 후속 작업으로 필요하다. 마이그레이션은 additive(CHECK 교체만, DROP TABLE/COLUMN·TRUNCATE·DELETE·UPDATE 없음, 멱등).
+
+## 롤백
+- 코드: 이 변경 커밋 revert.
+- DB: `migrations/rollback/20261014_obys_journal_source_clobe.down.sql` (clobe 행이 없을 때만 CHECK 원복).
+
+---
+
+# (이전 작업 RESULT.md 원문 — 삭제하지 않고 보존)
+
 # 클로브 확정 거래 장부 조회 재작업 — clobe-ledger-view-rework
 
 TASK_ID: ACCT-OBYS-CLOBE-LEDGER-VIEW-20261012 / AUTO_REWORK_ROUND: 1/2

@@ -131,8 +131,8 @@ def test_ui_exposes_four_real_ledger_pages() -> None:
     assert "TRUNCATE " not in details_migration.upper()
     assert "업로드 원본 행은 보존 정책에 따라 수정·삭제할 수 없습니다." in module
     assert "min-height: 44px" in styles
-    assert 'href="/static/apps/obys/modules/ledger-details.css?v=20260921-r3"' in html
-    assert 'src="/static/apps/obys/modules/ledger-details.js?v=20261011-r1"' in html
+    assert 'href="/static/apps/obys/modules/ledger-details.css?v=20261014-r1"' in html
+    assert 'src="/static/apps/obys/modules/ledger-details.js?v=20261014-r1"' in html
     assert "엑셀 파일 등록" in module
     assert "등록 양식 내려받기" in module
     assert "data-upload-drop" in module
