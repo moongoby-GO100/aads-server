@@ -275,7 +275,7 @@ host="${@: -2:1}"; cmd="${@: -1}"
 case "$cmd" in
     # Transport fixture represents a verified empty process set. Real /proc
     # and deleted-cwd behavior is covered by test_runner_sync_live_process_guard.
-    "bash -s -- "*)
+    "bash -s")
         payload=$(cat)
         if [[ "$payload" == *'runner_maintenance_metadata preflight'* ]]; then echo AWARE; else echo IDLE; fi ;;
 

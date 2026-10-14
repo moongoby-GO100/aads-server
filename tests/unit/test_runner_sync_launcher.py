@@ -56,15 +56,21 @@ host, command = sys.argv[-2:]
 remote=Path(os.environ['FAKE_REMOTE'])
 with open(os.environ['FAKE_LOG'],'a') as log: log.write('SSH '+command+'\n')
 parts=shlex.split(command)
-if parts[:3]==['bash','-s','--']:
+if parts==['bash','-s']:
     payload=sys.stdin.read()
+    first, _, rest = payload.partition('\n')
+    if first.startswith('set -- '):
+        with open(os.environ['FAKE_LOG'],'a') as log: log.write('SSH_ARGS '+first+'\n')
+        arguments=shlex.split(first[len('set -- '):])
+        payload=rest
+    else:
+        arguments=[]
     if 'runner_apply_bundle ()' not in payload and 'runner_apply_bundle()' not in payload:
         print('AWARE' if 'runner_maintenance_metadata preflight' in payload else 'IDLE')
         sys.exit(0)
     # Export/provenance fixture: service membership is synthetic. Execute the
     # actual Bash transaction, real flock locks, checksum checks and installs.
     # Full PID/capability behavior has separate real-process protocol regressions.
-    arguments=parts[3:]
     arguments[1]=str(remote/'staged'/Path(arguments[1]).name)
     state=remote/'.maintenance'
     payload=payload.replace('/run/aads-runner-maintenance',str(state))
@@ -239,8 +245,14 @@ def test_installs_origin_main_not_the_dirty_stale_shared_checkout(tmp_path):
     assert scp_sources
     assert len(scp_sources) == 1
     assert fx.log_lines().count("LEASE_HELD admission+lifetime") == 1
-    applies = [line for line in fx.log_lines() if line.startswith("SSH bash -s --") and ".tar'" in line]
+    applies = [line for line in fx.log_lines() if line.startswith("SSH_ARGS set --") and ".tar" in line]
     assert len(applies) == 1  # Both real EX leases span every install in one SSH.
+    # 러너 경로는 stdin 페이로드(set -- ...)로만 가고 ssh argv 에는 없다 — 원격 `bash -s` 가
+    # 자기 자신을 unmanaged runner 로 오판하지 않게 (runner.sync_self_detected_unmanaged).
+    runner_path = str(fx.remote / "pipeline-runner.sh")
+    ssh_argv = [line for line in fx.log_lines() if line.startswith("SSH bash -s")]
+    assert len(ssh_argv) >= 3 and all(line == "SSH bash -s" for line in ssh_argv)
+    assert runner_path in applies[0]
     assert all("aads-runner-bundle." in src and str(fx.shared) not in src for src in scp_sources)
     # 임시 export 는 끝나면 사라진다
     assert list(fx.export_base.iterdir()) == []
@@ -343,3 +355,107 @@ def test_launcher_never_mutates_shared_checkout_commands():
     assert "git -C \"$SYNC_REPO\" -c gc.auto=0 fetch" in code
     assert "git -C \"$SYNC_REPO\" archive" in code
     assert "trap cleanup EXIT" in code
+
+
+def test_remote_transaction_never_puts_runner_path_in_any_argv():
+    text = (ROOT / "scripts/sync_pipeline_runner_remote.sh").read_text(encoding="utf-8")
+    ssh_lines = [ln for ln in text.splitlines() if ln.lstrip().startswith(("ssh ", "out=$(ssh", "state=$(ssh")) or 'ssh "${SSH_OPTS[@]}"' in ln]
+    transaction = [ln for ln in ssh_lines if "bash -s" in ln]
+    assert len(transaction) == 3 and all('"bash -s"' in ln and "remote_runner" not in ln for ln in transaction)
+    apply_call = next(ln for ln in text.splitlines() if "python3 -" in ln and "PY_RUNNER_BUNDLE'" in ln)
+    assert "$remote_runner" in apply_call.split("python3", 1)[0]  # env prefix, not argv
+    assert "$remote_runner" not in apply_call.split("python3", 1)[1]
+
+
+_SYNC_TEXT = SYNC.read_text(encoding="utf-8")
+
+
+def _sync_function(name):
+    lines, out, inside = _SYNC_TEXT.splitlines(), [], False
+    for line in lines:
+        if line.startswith(name + "() {"):
+            inside = True
+        if inside:
+            out.append(line)
+            if line == "}":
+                return "\n".join(out)
+    raise AssertionError(name + " not found")
+
+
+def _bash(script, **env):
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                          env={**os.environ, **env})
+
+
+def test_remote_set_args_restores_awkward_values_exactly(tmp_path):
+    values = ["svc.service", "/tmp/a b/it's \"q\".tar", "$(touch PWNED) `id` $HOME", "x;y&z|w", "", "line1\nline2", "1"]
+    script = (_sync_function("remote_set_args") + '\nline=$(remote_set_args "$@")\n'
+              'first=${line%%$\'\\n\'*}\n[[ "$first" == "set -- "* ]] || exit 9\n'
+              '[[ $(printf %s "$line" | wc -l) -le 1 ]] || exit 8\n'
+              'eval "$line"\nprintf "%s\\0" "$@"\n')
+    proc = subprocess.run(["bash", "-c", script, "x", *values], capture_output=True, text=True, timeout=30, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.split("\0")[:-1] == values
+    assert not (tmp_path / "PWNED").exists()
+
+
+def test_remote_probe_ssh_commands_carry_no_runner_path_only_bash_s(tmp_path):
+    log = tmp_path / "ssh.log"
+    script = f"""
+set -euo pipefail
+SCRIPT_DIR={ROOT / "scripts"}
+SSH_OPTS=(-o BatchMode=yes)
+log() {{ :; }}
+source "$SCRIPT_DIR/runner_busy_lib.sh"
+{_sync_function("remote_set_args")}
+{_sync_function("remote_runner_process_state")}
+{_sync_function("remote_runner_maintenance_state")}
+ssh() {{
+    printf 'ARGV %s\\n' "$*" >> {log}
+    local payload; payload=$(cat)
+    printf 'FIRST %s\\n' "${{payload%%$'\\n'*}}" >> {log}
+    if [[ "$payload" == *'runner_maintenance_metadata preflight'* ]]; then echo AWARE; else echo IDLE; fi
+}}
+remote_runner_process_state host-a aads-pipeline-runner.service
+remote_runner_maintenance_state host-a aads-pipeline-runner.service
+"""
+    proc = _bash(script)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "IDLEAWARE"
+    lines = log.read_text().splitlines()
+    argv = [ln for ln in lines if ln.startswith("ARGV ")]
+    assert len(argv) == 2 and all(ln.endswith(" host-a bash -s") for ln in argv)
+    assert all("pipeline-runner.sh" not in ln for ln in argv)
+    assert [ln for ln in lines if ln.startswith("FIRST ")] == ["FIRST set -- aads-pipeline-runner.service"] * 2
+
+
+def test_sync_one_target_transaction_has_bash_s_only_and_args_first_in_payload():
+    body = _sync_function("sync_one_target")
+    ssh_calls = [ln.strip() for ln in body.splitlines() if ln.strip().startswith("ssh ")]
+    assert len(ssh_calls) == 1 and ssh_calls[0].startswith('ssh "${SSH_OPTS[@]}" "$host" "bash -s" <<<')
+    assert "remote_runner" not in ssh_calls[0]
+    payload_first = next(ln for ln in body.splitlines() if ln.strip().startswith("payload=\"$(remote_set_args"))
+    assert '"$remote_runner"' in payload_first
+
+
+def _apply_python():
+    start = _SYNC_TEXT.index("<<'PY_RUNNER_BUNDLE'\n") + len("<<'PY_RUNNER_BUNDLE'\n")
+    return _SYNC_TEXT[start:_SYNC_TEXT.index("\nPY_RUNNER_BUNDLE\n", start)]
+
+
+@pytest.mark.parametrize("runner", ["pipeline-runner.sh", "relative/dir/pipeline-runner.sh",
+                                    "/root/scripts/../etc/pipeline-runner.sh"])
+def test_runner_apply_bundle_rejects_relative_or_dotdot_runner_from_env(tmp_path, runner):
+    proc = subprocess.run(["python3", "-c", _apply_python(), str(tmp_path / "no.tar"), "0" * 64, "svc.service"],
+                          capture_output=True, text=True, timeout=30, env={**os.environ, "AADS_APPLY_RUNNER": runner})
+    assert proc.returncode != 0
+    assert "invalid runner destination" in proc.stderr
+
+
+def test_runner_apply_bundle_accepts_absolute_runner_then_checks_bundle_hash(tmp_path):
+    archive = tmp_path / "b.tar"
+    archive.write_bytes(b"x")
+    proc = subprocess.run(["python3", "-c", _apply_python(), str(archive), "0" * 64, "svc.service"],
+                          capture_output=True, text=True, timeout=30,
+                          env={**os.environ, "AADS_APPLY_RUNNER": "/root/scripts/pipeline-runner.sh"})
+    assert proc.returncode != 0 and "bundle hash mismatch" in proc.stderr

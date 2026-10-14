@@ -159,13 +159,25 @@ remote_service_active() {
 # shellcheck source=scripts/runner_busy_lib.sh
 source "${SCRIPT_DIR}/runner_busy_lib.sh"
 
+# 원격으로 넘길 인자는 ssh argv 가 아니라 stdin 페이로드의 `set -- ...` 로 싣는다.
+# ssh argv 에 러너 경로가 있으면 원격 `bash -s` 가 "unmanaged runner" 로 자기 자신에게 걸린다
+# (오류 사전 runner.sync_self_detected_unmanaged).
+remote_set_args() {
+    local out="set --" arg
+    for arg in "$@"; do
+        printf -v arg '%q' "$arg"
+        out+=" $arg"
+    done
+    printf '%s\n' "$out"
+}
+
 remote_runner_process_state() {
     local host="$1" service="$2" payload state="" out=""
     [[ "$service" =~ ^[A-Za-z0-9_.@:-]+$ ]] || { printf UNKNOWN; return 0; }
-    payload="$(declare -f runner_live_process_probe)"$'\n''runner_live_process_probe "$1"'
+    payload="$(remote_set_args "$service")"$'\n'"$(declare -f runner_live_process_probe)"$'\n''runner_live_process_probe "$1"'
     # No remote files are installed for the probe. The existing launcher
     # already exports runner_busy_lib.sh from the same source SHA.
-    out=$(ssh "${SSH_OPTS[@]}" "$host" "bash -s -- '$service'" <<< "$payload" 2>/dev/null) || out="UNKNOWN"
+    out=$(ssh "${SSH_OPTS[@]}" "$host" "bash -s" <<< "$payload" 2>/dev/null) || out="UNKNOWN"
     # Line 1 is the state; an optional "BUSY_REASON ..." line names the pid/cmd behind BUSY.
     state="${out%%$'\n'*}"
     if [[ "$out" == *$'\n'BUSY_REASON\ * ]]; then
@@ -212,8 +224,8 @@ is_skip_target() {
 remote_runner_maintenance_state() {
     local host="$1" service="$2" payload state=""
     [[ "$service" =~ ^[A-Za-z0-9_.@:-]+$ ]] || { printf UNKNOWN; return 0; }
-    payload="$(declare -f runner_maintenance_metadata)"$'\n''runner_maintenance_metadata preflight /run/aads-runner-maintenance "$1"'
-    state=$(ssh "${SSH_OPTS[@]}" "$host" "bash -s -- '$service'" <<< "$payload" 2>/dev/null) || state="UNKNOWN"
+    payload="$(remote_set_args "$service")"$'\n'"$(declare -f runner_maintenance_metadata)"$'\n''runner_maintenance_metadata preflight /run/aads-runner-maintenance "$1"'
+    state=$(ssh "${SSH_OPTS[@]}" "$host" "bash -s" <<< "$payload" 2>/dev/null) || state="UNKNOWN"
     [[ "$state" == AWARE ]] && printf AWARE || printf BOOTSTRAP_REQUIRED
 }
 
@@ -223,7 +235,7 @@ remote_runner_maintenance_state() {
 runner_apply_bundle() {
     local service="$1" archive="$2" expected="$3" remote_runner="$4" restart="$5"
     local changed restart_required restart_plan
-    read -r changed restart_required < <(python3 - "$archive" "$expected" "$remote_runner" "$service" <<'PY_RUNNER_BUNDLE'
+    read -r changed restart_required < <(AADS_APPLY_RUNNER="$remote_runner" python3 - "$archive" "$expected" "$service" <<'PY_RUNNER_BUNDLE'
 import hashlib
 import json
 import os
@@ -235,8 +247,8 @@ import sys
 import tarfile
 import tempfile
 
-archive, expected, runner, service = sys.argv[1:]
-runner = Path(runner)
+archive, expected, service = sys.argv[1:]
+runner = Path(os.environ['AADS_APPLY_RUNNER'])
 if not runner.is_absolute() or '..' in runner.parts:
     raise SystemExit('invalid runner destination')
 if hashlib.sha256(Path(archive).read_bytes()).hexdigest() != expected:
@@ -440,12 +452,13 @@ sync_one_target() {
     remote_archive="/tmp/$(basename "$archive")"
     scp_put "$archive" "$host" "$remote_archive" || { rm -f "$archive"; return 1; }
     rm -f "$archive"
-    payload="$(declare -f runner_maintenance_metadata runner_maintenance_transaction runner_apply_bundle)"
+    payload="$(remote_set_args "$service" "$remote_archive" "$expected" "$remote_runner" "$RESTART_SERVICES")"$'\n'
+    payload+="$(declare -f runner_maintenance_metadata runner_maintenance_transaction runner_apply_bundle)"
     payload+=$'\n''trap '\''rm -f "$2"'\'' EXIT'
     payload+=$'\n''runner_maintenance_transaction "$1" 30 /run/aads-runner-maintenance runner_apply_bundle "$@"'
     # A single SSH process owns admission EX, lifetime EX, installation and
     # restart. Losing this connection cannot release leases held by apply children.
-    ssh "${SSH_OPTS[@]}" "$host" "bash -s -- '$service' '$remote_archive' '$expected' '$remote_runner' '$RESTART_SERVICES'" <<< "$payload" || rc=$?
+    ssh "${SSH_OPTS[@]}" "$host" "bash -s" <<< "$payload" || rc=$?
     if [[ "$rc" == 3 ]]; then
         log "${name}: sync deferred — maintenance lease/capability could not be verified"
         [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
