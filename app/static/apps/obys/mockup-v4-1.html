@@ -30,6 +30,7 @@
     @media(max-width:820px){.top-actions #pwaInstallBtn.btn:not(.primary){display:inline-block}.top-actions #pwaInstallBtn[hidden]{display:none}.pwa-hint{top:64px;right:8px;left:8px;max-width:none}}
   </style>
   <link rel="stylesheet" href="modules/contract-editor-v41.css?v=20261006-r5">
+  <link rel="stylesheet" href="modules/data-overview.css?v=20261014-r1">
 </head>
 <body>
   <div class="mobile-backdrop" id="backdrop"></div>
@@ -295,6 +296,7 @@
     document.getElementById("legacyBtn").onclick=()=>window.location.href="/static/apps/obys/index.html?legacy=1&view=legacy";document.getElementById("logoutBtn").onclick=logoutV41;
     const initial=location.hash.slice(1);state.route=configs[initial]?initial:"home";renderPageV41();loadOrganizations().then(loadBusinesses).then(loadLiveRoute).catch(handleStartupError);
   </script>
+  <script src="/static/apps/obys/modules/data-overview.js?v=20261014-r1"></script>
   <script src="/static/apps/obys/modules/pwa-install.js"></script>
 </body>
 </html>

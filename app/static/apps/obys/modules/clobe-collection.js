@@ -7,6 +7,7 @@
   const AUTH_USER_KEY = "yeoljeong-finance-auth-user";
   const ITEM_PAGE = 500;
   const ITEM_CAP = 5000;
+  const ROWS_PER_PAGE = 50;
   const STALE_HOURS = 48;
   const BULK_MAX_ROUNDS = 100;
 
@@ -50,6 +51,7 @@
     items: [],
     itemsKey: "",
     itemsTotal: 0,
+    page: 0,
     itemsLoading: false,
     itemsError: null,
     selected: new Set(),
@@ -285,19 +287,21 @@
     renderCurrent();
   }
 
-  function itemsPath(business, stage, kind, offset) {
+  function itemsPath(business, stage, kind, offset, from, to) {
     const params = new URLSearchParams({ limit: String(ITEM_PAGE), offset: String(offset) });
     if (stage) params.set("stage", stage);
     if (kind) params.set("kind", kind);
+    if (from) params.set("date_from", from);
+    if (to) params.set("date_to", to);
     return `/businesses/${encodeURIComponent(business)}/items?${params}`;
   }
 
-  async function fetchAllItems(business, stage, kind) {
+  async function fetchAllItems(business, stage, kind, from, to) {
     let offset = 0;
     let total = 0;
     const all = [];
     while (offset < ITEM_CAP) {
-      const payload = await request(itemsPath(business, stage, kind, offset));
+      const payload = await request(itemsPath(business, stage, kind, offset, from, to));
       total = Number(payload.total || 0);
       all.push(...(payload.items || []));
       offset += ITEM_PAGE;
@@ -309,14 +313,15 @@
   async function loadItems(force) {
     const company = selectedCompany();
     if (!company) return;
-    const key = `${company.business_id}|${state.ui.stage}|${state.ui.kind}`;
+    const key = `${company.business_id}|${state.ui.stage}|${state.ui.kind}|${state.ui.from}|${state.ui.to}`;
     if (!force && key === state.itemsKey && !state.itemsError) return;
     state.itemsLoading = true;
     state.itemsError = null;
     state.selected = new Set();
+    state.page = 0;
     renderReviewBody();
     try {
-      const out = await fetchAllItems(company.business_id, state.ui.stage, state.ui.kind);
+      const out = await fetchAllItems(company.business_id, state.ui.stage, state.ui.kind, state.ui.from, state.ui.to);
       state.items = out.items;
       state.itemsTotal = out.total;
       state.itemsKey = key;
@@ -558,9 +563,25 @@
       if (state.ui.to && (!day || day > state.ui.to)) return false;
       if (state.ui.institution && item.institution !== state.ui.institution) return false;
       if (state.ui.direction && item.direction !== state.ui.direction) return false;
-      if (q && ![item.counterparty, item.institution, item.amount, KINDS[item.data_kind]].some(v => String(v || "").toLowerCase().includes(q))) return false;
+      if (q && ![item.counterparty, item.memo, item.institution, item.amount, KINDS[item.data_kind]].some(v => String(v || "").toLowerCase().includes(q))) return false;
       return true;
     });
+  }
+
+  function pageCount(total) {
+    return Math.max(1, Math.ceil(total / ROWS_PER_PAGE));
+  }
+
+  function pageItems() {
+    const rows = visibleItems();
+    state.page = Math.min(Math.max(0, state.page), pageCount(rows.length) - 1);
+    return rows.slice(state.page * ROWS_PER_PAGE, (state.page + 1) * ROWS_PER_PAGE);
+  }
+
+  function pagerHtml(total) {
+    const pages = pageCount(total);
+    if (pages <= 1) return "";
+    return `<nav class="clobe-pager" aria-label="거래 목록 쪽 이동"><button type="button" data-clobe-action="page" data-dir="-1"${state.page <= 0 ? " disabled" : ""}>이전</button><span>${(state.page + 1).toLocaleString("ko-KR")} / ${pages.toLocaleString("ko-KR")}쪽</span><button type="button" data-clobe-action="page" data-dir="1"${state.page >= pages - 1 ? " disabled" : ""}>다음</button></nav>`;
   }
 
   function reviewFilters() {
@@ -740,7 +761,7 @@
     const approveOk = stage === "review_box";
     const rejectOk = stage === "review_box" || stage === "reviewed";
     const confirmOk = stage === "reviewed" && manage;
-    return `<div class="clobe-actionbar"><span>${n ? `${n}건 선택됨` : "항목을 선택하면 일괄 처리할 수 있습니다."}${selected.length < n ? " (필터에 가려진 선택 포함)" : ""}</span>
+    return `<div class="clobe-actionbar"><span>${n ? `${n}건 선택됨` : "항목을 선택하면 일괄 처리할 수 있습니다."}${selected.length < n ? " (다른 쪽·필터에 가려진 선택 포함)" : ""}</span>
       <div class="clobe-state-actions">
         ${approveOk ? `<button type="button" data-clobe-action="bulk" data-kind="approve"${n ? "" : " disabled"}>검토 승인</button>` : ""}
         ${rejectOk ? `<button type="button" data-clobe-action="bulk" data-kind="reject"${n ? "" : " disabled"}>반려</button>` : ""}
@@ -756,7 +777,7 @@
       <button type="button" class="clobe-item-main" data-clobe-action="detail" data-item="${esc(item.item_id)}">
         <span class="when">${esc(fmtDate(item.occurred_on) || "일자 없음")}</span>
         <span class="kind">${esc(KINDS[item.data_kind] || item.data_kind)}</span>
-        <span class="party">${esc(item.counterparty || "거래처 없음")}<small>${esc(item.institution || "")}</small></span>
+        <span class="party">${esc(item.counterparty || item.memo || "거래처 없음")}<small>${esc([item.institution, item.counterparty && item.memo ? item.memo : ""].filter(Boolean).join(" · "))}</small></span>
         <span class="dir">${esc(itemDirectionLabel(item))}</span>
         <span class="amt">${esc(amountText(item.amount))}</span>
         <span class="stage">${badge(item.stage, STAGES[item.stage] || item.stage)}${item.is_revision ? `<em class="clobe-rev">수정본</em>` : ""}</span>
@@ -767,16 +788,18 @@
   function reviewListHtml() {
     if (state.itemsLoading) return `<div class="clobe-state loading"><strong>거래를 불러오는 중입니다</strong><span>선택한 회사의 자료를 확인하고 있습니다.</span></div>`;
     if (state.itemsError) return failureSlotHtml(state.itemsError, "reload-items", "items");
-    const rows = visibleItems();
+    const filtered = visibleItems();
+    const rows = pageItems();
     if (!state.items.length) {
       return `<div class="clobe-state" data-clobe-failure="nodata" data-clobe-empty-slot><strong>${esc(STAGES[state.ui.stage])} 단계의 거래가 없습니다</strong><span>${state.ui.stage === "review_box" ? "새로 수집된 자료가 없거나 모두 처리되었습니다. 자료현황에서 수집 상태를 확인하십시오." : "다른 처리 단계를 선택해 보십시오."}</span><div class="clobe-state-actions"><button type="button" data-clobe-action="go" data-view="clobeOverview">자료현황 보기</button></div></div>`;
     }
-    if (!rows.length) return `<div class="clobe-state" data-clobe-failure="nomatch"><strong>조건에 맞는 거래가 없습니다</strong><span>기간·기관·검색 조건을 바꿔 보십시오.</span><div class="clobe-state-actions"><button type="button" data-clobe-action="reset-filters">조건 초기화</button></div></div>`;
+    if (!filtered.length) return `<div class="clobe-state" data-clobe-failure="nomatch"><strong>조건에 맞는 거래가 없습니다</strong><span>기간·기관·검색 조건을 바꿔 보십시오.</span><div class="clobe-state-actions"><button type="button" data-clobe-action="reset-filters">조건 초기화</button></div></div>`;
     const partial = state.itemsTotal > state.items.length;
     return `${partial ? `<div class="clobe-notice warn">전체 ${state.itemsTotal.toLocaleString("ko-KR")}건 중 ${state.items.length.toLocaleString("ko-KR")}건만 불러왔습니다. 기간·종류 조건으로 범위를 좁혀 확인하십시오.</div>` : ""}
-      ${actionBar(rows)}
-      <div class="clobe-list-head"><label class="clobe-check"><input type="checkbox" data-clobe-select-all${rows.length && rows.every(r => state.selected.has(r.item_id)) ? " checked" : ""} aria-label="표시된 항목 모두 선택"></label><b>${rows.length.toLocaleString("ko-KR")}건 표시</b><span class="clobe-muted">행을 누르면 상세와 대사를 볼 수 있습니다.</span></div>
-      <div class="clobe-list" role="table" aria-label="거래 목록">${rows.map(itemRow).join("")}</div>`;
+      ${actionBar(filtered)}
+      <div class="clobe-list-head"><label class="clobe-check"><input type="checkbox" data-clobe-select-all${rows.length && rows.every(r => state.selected.has(r.item_id)) ? " checked" : ""} aria-label="표시된 항목 모두 선택"></label><b>${filtered.length.toLocaleString("ko-KR")}건 중 ${rows.length.toLocaleString("ko-KR")}건 표시</b><span class="clobe-muted">행을 누르면 상세와 대사를 볼 수 있습니다.</span></div>
+      <div class="clobe-list" role="table" aria-label="거래 목록">${rows.map(itemRow).join("")}</div>
+      ${pagerHtml(filtered.length)}`;
   }
 
   const act = (action, data = {}) => () => handleAction({ dataset: { clobeAction: action, ...data } });
@@ -913,7 +936,8 @@
         <div><dt>자료 종류</dt><dd>${esc(KINDS[item.data_kind] || item.data_kind)}</dd></div>
         <div><dt>거래일</dt><dd>${esc(fmtDate(item.occurred_on) || "-")}</dd></div>
         <div><dt>기관</dt><dd>${esc(item.institution || "-")}</dd></div>
-        <div><dt>거래처</dt><dd>${esc(item.counterparty || "-")}</dd></div>
+        <div><dt>거래처</dt><dd>${esc(item.counterparty || item.memo || "-")}</dd></div>
+        ${item.memo ? `<div><dt>적요</dt><dd>${esc(item.memo)}</dd></div>` : ""}
         <div><dt>구분</dt><dd>${esc(itemDirectionLabel(item))}</dd></div>
         <div><dt>금액</dt><dd><b>${esc(amountText(item.amount))}</b></dd></div>
         <div><dt>처리 단계</dt><dd>${badge(item.stage, STAGES[item.stage] || item.stage)}</dd></div>
@@ -1196,6 +1220,10 @@
         open(state.view);
         break;
       case "reload-items": loadItems(true); break;
+      case "page":
+        state.page += Number(target.dataset.dir) || 0;
+        renderReviewBody();
+        break;
       case "reload-summary": loadSummary(true); break;
       case "go": goView(target.dataset.view); break;
       case "dismiss-notice": state.notice = null; renderCurrent(); break;
@@ -1208,6 +1236,7 @@
       case "run-all": runCollection(null); break;
       case "run-kind": runCollection([target.dataset.kind]); break;
       case "reset-filters":
+        state.page = 0;
         Object.assign(state.ui, { kind: "", from: "", to: "", institution: "", direction: "", q: "" });
         saveUi();
         loadItems(true);
@@ -1299,7 +1328,8 @@
         state.ui[key] = el.value;
         saveUi();
         state.detailId = "";
-        if (key === "stage" || key === "kind") loadItems(true); else renderReviewBody();
+        state.page = 0;
+        if (["stage", "kind", "from", "to"].includes(key)) loadItems(true); else renderReviewBody();
       } else if (el.matches("[data-clobe-sfilter]")) {
         state.ui[el.dataset.clobeSfilter] = el.value;
         saveUi();
@@ -1313,7 +1343,7 @@
         state.pending = null;
         renderReviewBody();
       } else if (el.matches("[data-clobe-select-all]")) {
-        visibleItems().forEach(item => { if (el.checked) state.selected.add(item.item_id); else state.selected.delete(item.item_id); });
+        pageItems().forEach(item => { if (el.checked) state.selected.add(item.item_id); else state.selected.delete(item.item_id); });
         state.pending = null;
         renderReviewBody();
       } else if (el.matches("[data-clobe-ack]")) {
@@ -1328,6 +1358,7 @@
       state.ui.q = el.value;
       saveUi();
       clearTimeout(timer);
+      state.page = 0;
       timer = setTimeout(renderReviewBody, 200);
     });
   }

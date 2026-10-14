@@ -111,7 +111,7 @@ def test_the_real_shell_has_module_refs_and_a_stampable_service_worker(tmp_path)
     for name in ("index.html", "signup.html", "clock.html", "sw.js"):
         (d / name).write_bytes((ROOT / "app/static/apps/obys" / name).read_bytes())
     report = tool.stamp_tree(d, SHA)
-    assert report["sw"] == 1 and report["html"]["index.html"] == 7
+    assert report["sw"] == 1 and report["html"]["index.html"] == 9
     text = (d / "index.html").read_text(encoding="utf-8")
     for ref in ("app-config.js", "store-assistant-v2.js", "store-assistant-v2.css"):
         assert f"/static/apps/obys/modules/{ref}?v={SHA}" in text

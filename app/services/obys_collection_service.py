@@ -818,29 +818,34 @@ async def _require_business(conn: Any, tenant: UUID, business_id: str) -> None:
         raise CollectionError("business_not_found", 404)
 
 
+_ITEM_MEMO_SQL = ("left(COALESCE(NULLIF(btrim(payload->>'memo'), ''), NULLIF(btrim(payload->>'transactionDescription'), ''), "
+                  "NULLIF(btrim(payload->>'transactionName'), '')), 200)")
+
+
 async def list_items(tenant_id: Any, business_id: str, *, stage: str | None = None, kind: str | None = None,
-                     limit: int = 100, offset: int = 0) -> dict[str, Any]:
+                     limit: int = 100, offset: int = 0, date_from: Any = None, date_to: Any = None) -> dict[str, Any]:
     tenant = _scope(tenant_id)
     limit = max(1, min(int(limit), 500))
+    start, end = _bulk_date(date_from, "date_from"), _bulk_date(date_to, "date_to")
+    if start and end and start > end:
+        raise CollectionError("invalid_period", 400)
     conn = await _connect()
     try:
         await _require_business(conn, tenant, business_id)
+        where = ("WHERE tenant_id=$1 AND business_id=$2 AND ($3::text IS NULL OR stage=$3) AND ($4::text IS NULL OR data_kind=$4) "
+                 "AND data_kind = ANY($5::text[]) AND ($6::date IS NULL OR occurred_on >= $6) AND ($7::date IS NULL OR occurred_on <= $7)")
+        args = (tenant, business_id, stage, kind, list(core.DATA_KINDS), start, end)
         rows = await conn.fetch(
             "SELECT item_id, data_kind, source_key, institution, occurred_on, amount, direction, counterparty, stage, "
-            " source_as_of, first_seen_at, supersedes_item_id FROM obys_clobe_item "
-            "WHERE tenant_id=$1 AND business_id=$2 AND ($3::text IS NULL OR stage=$3) AND ($4::text IS NULL OR data_kind=$4) "
-            " AND data_kind = ANY($7::text[]) "
-            "ORDER BY occurred_on DESC NULLS LAST, item_id LIMIT $5 OFFSET $6",
-            tenant, business_id, stage, kind, limit, max(0, int(offset)), list(core.DATA_KINDS))
-        total = await conn.fetchval(
-            "SELECT count(*) FROM obys_clobe_item WHERE tenant_id=$1 AND business_id=$2 "
-            "AND ($3::text IS NULL OR stage=$3) AND ($4::text IS NULL OR data_kind=$4) AND data_kind = ANY($5::text[])",
-            tenant, business_id, stage, kind, list(core.DATA_KINDS))
+            f" source_as_of, first_seen_at, supersedes_item_id, {_ITEM_MEMO_SQL} AS memo FROM obys_clobe_item {where} "
+            "ORDER BY occurred_on DESC NULLS LAST, item_id LIMIT $8 OFFSET $9",
+            *args, limit, max(0, int(offset)))
+        total = await conn.fetchval(f"SELECT count(*) FROM obys_clobe_item {where}", *args)
         items = [{
             "item_id": str(r["item_id"]), "data_kind": r["data_kind"], "source_key": r["source_key"],
             "institution": r["institution"], "occurred_on": r["occurred_on"].isoformat() if r["occurred_on"] else None,
             "amount": str(r["amount"]) if r["amount"] is not None else None, "direction": r["direction"],
-            "counterparty": r["counterparty"], "stage": r["stage"],
+            "counterparty": r["counterparty"], "memo": r["memo"], "stage": r["stage"],
             "source_as_of": r["source_as_of"].isoformat() if r["source_as_of"] else None,
             "is_revision": r["supersedes_item_id"] is not None,
         } for r in rows]

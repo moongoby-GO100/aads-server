@@ -2932,7 +2932,8 @@
   </style>
   <link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">
   <link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20261014-r1">
-  <link rel="stylesheet" href="/static/apps/obys/modules/clobe-collection.css?v=20261012-r1">
+  <link rel="stylesheet" href="/static/apps/obys/modules/clobe-collection.css?v=20261014-r1">
+  <link rel="stylesheet" href="/static/apps/obys/modules/data-overview.css?v=20261014-r1">
   <style>
     /* 사업자(대표) 회원가입 진입 — 로그인 전에만 보인다. 헤더의 로그인/회원가입 버튼은
        renderAuthState 가 항상 hidden 으로 두므로 별도 앵커로 노출한다. */
@@ -3188,6 +3189,7 @@
           <span id="homeCollectStatus" class="home-collect" aria-live="polite"><span class="dot"></span>수집 상태 확인 중</span>
           <button type="button" id="homeRefreshBtn">새로고침</button>
         </div>
+        <section id="obysGlance" aria-label="오늘 한눈에" aria-live="polite"></section>
         <div class="home-kpis" id="homeKpiGrid" aria-label="오늘 지표">
           <div class="kpi-card" role="button" tabindex="0" data-home-kpi="sales" aria-label="오늘 매출 화면 열기">
             <small>오늘 매출</small><b data-kpi-value>—</b><span data-kpi-hint>불러오는 중</span>
@@ -3339,6 +3341,7 @@
 
       <section id="salesView" class="hidden">
         <div class="grid content-grid">
+          <section class="panel span-2" id="obysDeliveryPanel" aria-label="배달앱 매출·정산 현황"></section>
           <section class="panel">
             <div class="panel-head"><h2 class="panel-title">매출·정산 요약</h2><button type="button" class="v2-touch" id="salesRefreshBtn">새로고침</button></div>
             <div class="panel-body v2-actions">
@@ -12107,6 +12110,8 @@
       document.querySelectorAll(".tab").forEach(btn => btn.classList.toggle("active", btn.dataset.view === currentView));
       syncSubTabs();
       if (currentView === "dashboard") loadTodayHome().catch(err => showToast(`오늘 홈 집계 실패: ${err.message}`));
+      if (currentView === "dashboard") window.obysDataOverview?.openGlance();
+      if (currentView === "sales") window.obysDataOverview?.openDelivery();
       if (currentView === "employees" && canManageOnboarding()) trackViewLoad("employees", "invites", loadEmployeeInvites(), "초대 조회 실패");
       if (currentView === "employees" && hasServerAuth()) trackViewLoad("employees", "joins", loadEmployeeJoinRequests(), "가입요청 조회 실패");
       if (currentView === "employees" && hasServerAuth()) trackViewLoad("employees", "documents", loadOnboardingDocuments(), "서류 조회 실패");
@@ -16604,7 +16609,8 @@
     init();
   </script>
   <script src="/static/apps/obys/modules/ledger-details.js?v=20261014-r1"></script>
-  <script src="/static/apps/obys/modules/clobe-collection.js?v=20261012-r1"></script>
+  <script src="/static/apps/obys/modules/clobe-collection.js?v=20261014-r1"></script>
+  <script src="/static/apps/obys/modules/data-overview.js?v=20261014-r1"></script>
   <script src="/static/apps/obys/modules/store-assistant-v2.js"></script>
   <script>
   (() => {

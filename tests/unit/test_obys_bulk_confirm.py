@@ -355,7 +355,7 @@ def test_ui_wires_preview_confirm_dialog_and_continuation():
     assert 'state.summaryKey = ""' in run and "loadItems(true)" in run and "refreshStatusQuiet()" in run
     # 375px: 줄바꿈되어도 눌리는 버튼
     assert "max-width: 480px" in css and ".clobe-bulk-actions button" in css and "flex-wrap: wrap" in css.split(".clobe-bulk-form", 1)[1]
-    assert "modules/clobe-collection.js?v=20261012-r1" in html and "modules/clobe-collection.css?v=20261012-r1" in html
+    assert "modules/clobe-collection.js?v=20261014-r1" in html and "modules/clobe-collection.css?v=20261014-r1" in html
 
 
 def test_ui_copy_uses_business_terms_not_internal_names():

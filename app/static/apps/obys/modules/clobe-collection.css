@@ -179,3 +179,13 @@
   .clobe-bulk-form label, .clobe-bulk-kinds { flex: 1 1 100%; }
   .clobe-bulk-actions button, .clobe-bulk .clobe-state-actions button { flex: 1 1 140px; }
 }
+
+.clobe-pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 6px 0; }
+.clobe-pager span { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.clobe-pager button { min-width: 88px; }
+.clobe-item-main .party { overflow-wrap: anywhere; word-break: keep-all; }
+.clobe-item-main .party small { display: block; color: var(--muted); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+@media (max-width: 820px) {
+  .clobe-pager button { flex: 1 1 0; }
+  .clobe-filters button, .clobe-actionbar button { min-height: 48px; }
+}

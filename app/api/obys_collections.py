@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.auth import get_current_user, require_internal_admin
 from app.services import clobe_mcp_client as clobe
 from app.services import obys_collection_service as svc
+from app.services import obys_data_overview_service as overview
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/obys-collections", tags=["obys-collections"])
@@ -170,12 +171,14 @@ async def items(
     business_id: str,
     stage: Literal["review_box", "reviewed", "confirmed", "rejected", "superseded"] | None = None,
     kind: Literal["bank_transaction", "tax_invoice", "cash_receipt", "card_approval"] | None = None,
+    date_from: date | None = None, date_to: date | None = None,
     limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
     user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
     _role_ok(user, _READ_ROLES)
     try:
-        return await svc.list_items(user.get("tenant_id"), business_id, stage=stage, kind=kind, limit=limit, offset=offset)
+        return await svc.list_items(user.get("tenant_id"), business_id, stage=stage, kind=kind, limit=limit, offset=offset,
+                                    date_from=date_from, date_to=date_to)
     except svc.CollectionError as exc:
         raise _raise(exc) from None
 
@@ -213,6 +216,34 @@ async def channel_revenue(
         return await svc.list_channel_revenue(
             user.get("tenant_id"), business_id, date_from=date_from, date_to=date_to, company_id=company_id,
             channel=channel, date_basis=date_basis, limit=limit, offset=offset)
+    except svc.CollectionError as exc:
+        raise _raise(exc) from None
+
+
+@router.get("/today-overview")
+async def today_overview(
+    business_id: str | None = Query(None, max_length=64),
+    date_from: date | None = None, date_to: date | None = None,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """첫 화면 '오늘 한눈에': 최근 기간 매출·정산·검토 대기 합산. 읽기 전용이며 business_id 가 없으면 테넌트 전체 사업장."""
+    _role_ok(user, _READ_ROLES)
+    try:
+        return await overview.today_overview(user.get("tenant_id"), business_id, date_from=date_from, date_to=date_to)
+    except svc.CollectionError as exc:
+        raise _raise(exc) from None
+
+
+@router.get("/businesses/{business_id}/delivery-overview")
+async def delivery_overview(
+    business_id: str,
+    date_from: date | None = None, date_to: date | None = None,
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """배달앱 자체수집 매출·정산·수수료·리뷰·광고를 앱·매장·일별로 합산하고 수집 신선도를 함께 돌려준다(읽기 전용)."""
+    _role_ok(user, _READ_ROLES)
+    try:
+        return await overview.delivery_overview(user.get("tenant_id"), business_id, date_from=date_from, date_to=date_to)
     except svc.CollectionError as exc:
         raise _raise(exc) from None
 
