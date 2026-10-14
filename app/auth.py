@@ -1318,7 +1318,12 @@ async def resolve_login_tenant_for_user(user: dict) -> Optional[str]:
         raise HTTPException(status_code=401, detail="Invalid user")
 
     default_tenant_id = str(user.get("tenant_id") or user.get("default_tenant_id") or "").strip() or None
-    memberships = await list_user_tenants(user_id)
+    # list_user_tenants 는 active membership 만 돌려주지만 조직 자체가 정지된 경우는 거르지
+    # 않는다.  정지된 조직을 기본으로 고르면 _load_tenant_context 가 그 토큰을 거부해 세션이 죽는다.
+    memberships = [
+        tenant for tenant in await list_user_tenants(user_id)
+        if str(tenant.get("status") or "active").lower() == "active"
+    ]
 
     # 사용자가 마지막으로 고른 조직을 먼저 존중한다.  내부 운영자도 예외가
     # 아니다: 2026-09-22 실측에서 role=ceo 계정이 default_tenant_id 로
@@ -1627,6 +1632,13 @@ async def update_tenant_plan(tenant_id: str, plan_key: str, updated_by: str) -> 
     return dict(row)
 
 
+AUTH_ERROR_CODE_HEADER = 'X-Auth-Error-Code'
+TENANT_MEMBERSHIP_INACTIVE_CODE = 'tenant_membership_inactive'
+TENANT_MEMBERSHIP_INACTIVE_DETAIL = (
+    f'회사 소속이 바뀌어 다시 로그인이 필요합니다. ({TENANT_MEMBERSHIP_INACTIVE_CODE})'
+)
+
+
 async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = None) -> dict:
     user_id = str(user.get('user_id') or '').strip()
     if not user_id:
@@ -1635,6 +1647,9 @@ async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = 
     await require_saas_schema_ready()
     token_tenant_id = str(user.get('tenant_id') or '').strip() or None
     tenant_id = str(requested_tenant_id or '').strip() or token_tenant_id
+    requested_override = bool(
+        str(requested_tenant_id or '').strip() and str(requested_tenant_id).strip() != token_tenant_id
+    )
 
     if user.get('is_admin'):
         internal_tenant_id = await get_internal_tenant_id()
@@ -1698,6 +1713,15 @@ async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = 
             tenant_id,
         )
     if not row:
+        # 토큰(또는 기본 조직)이 가리키는 소속이 정지/삭제/없음이면 세션 자체가 무효다 —
+        # 401 + 코드로 응답해 클라이언트가 재로그인으로 복구하게 한다.  X-Tenant-ID 로 다른
+        # 조직을 명시 요청한 경우는 세션이 유효하므로 기존대로 403 이다.
+        if not requested_override:
+            raise HTTPException(
+                status_code=401,
+                detail=TENANT_MEMBERSHIP_INACTIVE_DETAIL,
+                headers={AUTH_ERROR_CODE_HEADER: TENANT_MEMBERSHIP_INACTIVE_CODE},
+            )
         raise HTTPException(status_code=403, detail='Tenant membership required')
     if str(row['kind']).lower() == 'internal':
         if str(row['role']).lower() not in {'owner', 'admin'}:

@@ -3020,6 +3020,7 @@
             <a id="authModeOwnerSignup" href="/static/apps/obys/signup.html" role="tab" aria-selected="false" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 12px;border-radius:8px;text-decoration:none;font-weight:600;color:#1b4ec2;background:#edf4ff;border:1px solid #c7dbff">사업자 회원가입</a>
           </div>
           <form id="gateLoginForm" class="panel-body">
+            <p id="authGateNotice" class="hidden" role="alert" style="margin:0 0 8px;padding:10px 12px;border-radius:8px;background:#fff4e5;border:1px solid #ffd59a;color:#7a4300;font-weight:600"></p>
             <label>이메일
               <input name="email" type="email" autocomplete="username" required>
             </label>
@@ -9088,6 +9089,10 @@
         const response = await fetch(`/api/v1/yeoljeong-finance/contracts/${encodeURIComponent(contractId)}/signed-pdf`, { headers: apiAuthOnlyHeaders() });
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
+          if (isTenantMembershipInactive(response, payload)) {
+            handleTenantMembershipInactive();
+            throw new Error(TENANT_MEMBERSHIP_INACTIVE_MESSAGE);
+          }
           if (response.status === 401) {
             handleExpiredServerSession();
             throw new Error("로그인 세션이 만료되었습니다. 다시 로그인한 뒤 내려받으십시오.");
@@ -12756,6 +12761,8 @@
     }
 
     function persistServerAuthToken(token) {
+      tenantMembershipInactiveHandled = false;
+      els.authGateNotice?.classList.add("hidden");
       localStorage.setItem(SERVER_AUTH_TOKEN_KEY, token);
       localStorage.setItem(FB_ACCESS_TOKEN_KEY, token);
       const secure = window.location.protocol === "https:" ? "; Secure" : "";
@@ -12862,6 +12869,43 @@
       };
     }
 
+    const TENANT_MEMBERSHIP_INACTIVE_CODE = "tenant_membership_inactive";
+    const TENANT_MEMBERSHIP_INACTIVE_MESSAGE = "회사 소속이 바뀌어 다시 로그인이 필요합니다. 다시 로그인해 주십시오.";
+    let tenantMembershipInactiveHandled = false;
+
+    function isTenantMembershipInactive(response, payload) {
+      const code = response?.headers?.get("X-Auth-Error-Code") || payload?.code || "";
+      return code === TENANT_MEMBERSHIP_INACTIVE_CODE
+        || String(payload?.detail || "").includes(TENANT_MEMBERSHIP_INACTIVE_CODE);
+    }
+
+    // 소속이 정지된 JWT — 토큰·계정 캐시를 지우고 로그인 게이트를 연다. 한 번만 실행한다.
+    // yf_contract_token 쿼리는 주소에 그대로 남겨 재로그인 후 같은 서명 화면으로 이어진다.
+    function handleTenantMembershipInactive() {
+      if (tenantMembershipInactiveHandled) return;
+      tenantMembershipInactiveHandled = true;
+      clearServerAuthToken();
+      saveAuthSession(null);
+      renderAll();
+      setAuthMode("login");
+      if (els.authGateNotice) {
+        els.authGateNotice.textContent = TENANT_MEMBERSHIP_INACTIVE_MESSAGE;
+        els.authGateNotice.classList.remove("hidden");
+      }
+      showToast(TENANT_MEMBERSHIP_INACTIVE_MESSAGE);
+    }
+
+    function buildApiError(response, payload, fallback) {
+      const inactive = isTenantMembershipInactive(response, payload);
+      const error = new Error(inactive ? TENANT_MEMBERSHIP_INACTIVE_MESSAGE : (payload.detail || payload.message || fallback));
+      error.status = response.status;
+      if (inactive) {
+        error.code = TENANT_MEMBERSHIP_INACTIVE_CODE;
+        handleTenantMembershipInactive();
+      }
+      return error;
+    }
+
     async function authApi(path, options = {}) {
       const response = await fetch(`/api/v1/auth${path}`, {
         ...options,
@@ -12869,9 +12913,7 @@
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const error = new Error(payload.detail || payload.message || `AUTH ${response.status}`);
-        error.status = response.status;
-        throw error;
+        throw buildApiError(response, payload, `AUTH ${response.status}`);
       }
       return payload;
     }
@@ -12890,9 +12932,7 @@
       }).finally(() => clearTimeout(timeoutId));
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const error = new Error(payload.detail || payload.message || `API ${response.status}`);
-        error.status = response.status;
-        throw error;
+        throw buildApiError(response, payload, `API ${response.status}`);
       }
       return payload;
     }
@@ -12911,9 +12951,7 @@
       }).finally(() => clearTimeout(timeoutId));
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const error = new Error(payload.detail || payload.message || `API ${response.status}`);
-        error.status = response.status;
-        throw error;
+        throw buildApiError(response, payload, `API ${response.status}`);
       }
       return payload;
     }
