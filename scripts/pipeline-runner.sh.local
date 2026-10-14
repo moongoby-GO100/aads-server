@@ -208,6 +208,149 @@ mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
 # ── 유틸리티 ──────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_DIR/runner.log"; }
 
+# >>> temp-pg-reap (reclaim_runner_worktrees.sh 가 이 블록을 잘라 써서 같은 로직을 공유한다 — 마커를 지우지 말 것)
+# 러너 job 이 /tmp 에 띄운 임시 PostgreSQL 클러스터 회수 (AADS-RUNNER-REAP-ORPHAN-TMP-PG-20261015, R-BG).
+# 2026-10-15 contabo14: `postgres -D /tmp/...` 고아 10개가 ppid=1 로 최장 13일 남아 있었다. worktree 만 지우고
+# 그 안에서 띄운 PG 를 정지하지 않은 탓이다. 대상은 /proc/<pid>/environ 에 정확히 aads-wt-runner-<job_id> 가 있는
+# /tmp 데이터 디렉터리의 postmaster 뿐이며, 운영 클러스터(5432, /tmp 밖)와 클라이언트가 붙은 것은 건드리지 않는다.
+# 정지는 pg_ctl stop -m fast 만 쓴다(kill 금지). 시험용 주입: TEMP_PG_PROC_ROOT, TEMP_PG_PS, TEMP_PG_RUNUSER, TEMP_PG_CTL.
+_temp_pg_log() {
+    if declare -F log >/dev/null 2>&1; then log "  [temp-pg-reap] $*"; else echo "[temp-pg-reap] $*"; fi
+}
+
+# /tmp 아래의 정규화된 하위 경로만 true (/tmp 자체, '..' 포함, /tmp/ 밖은 false).
+_temp_pg_path_ok() {
+    local p="$1"
+    [[ "$p" == /tmp/?* && "$p" != *..* ]]
+}
+
+# $1=job|orphan  $2=job_id(job 모드)
+_temp_pg_scan() {
+    local mode="$1" want_job="${2:-}"
+    local proc_root="${TEMP_PG_PROC_ROOT:-/proc}"
+    local ps_bin="${TEMP_PG_PS:-ps}" runuser_bin="${TEMP_PG_RUNUSER:-runuser}"
+    local sweep_max="${TEMP_PG_SWEEP_MAX:-2}" stops=0
+    local bg_re='^(checkpointer|background writer|walwriter|autovacuum launcher|logical replication launcher|archiver|io worker|walsummarizer|logger|stats collector)( |$)'
+    local dir_re='(^|[[:space:]])-D[[:space:]]+([^[:space:]]+)'
+    local port_re='(^|[[:space:]])(-p[[:space:]]*|--port=)([0-9]+)'
+    local sock_re='(^|[[:space:]])-k[[:space:]]*(/[^[:space:]]+)'
+    local snapshot pid ppid comm args rest
+    local -A clients=()
+    local -a pm_pids=() pm_args=()
+
+    snapshot="$("$ps_bin" -eo pid=,ppid=,comm=,args= 2>/dev/null)" || return 0
+    while read -r pid ppid comm args; do
+        [[ "$pid" =~ ^[0-9]+$ && "$ppid" =~ ^[0-9]+$ && "$comm" == postgres ]] || continue
+        if [[ "$args" == "postgres:"* ]]; then
+            rest="${args#postgres:}"; rest="${rest# }"
+            [[ "$rest" =~ $bg_re ]] || clients[$ppid]=$(( ${clients[$ppid]:-0} + 1 ))
+        elif [[ "${args%% *}" == postgres || "${args%% *}" == */postgres ]] && [[ "$args" =~ $dir_re ]]; then
+            pm_pids+=("$pid"); pm_args+=("$args")
+        fi
+    done <<< "$snapshot"
+
+    local i dir port sock owner pgctl exe envtxt jid ids id alive target parent entry name foreign rc nclients
+    for i in "${!pm_pids[@]}"; do
+        pid="${pm_pids[$i]}"; args="${pm_args[$i]}"
+        [[ -r "$proc_root/$pid/environ" ]] || continue
+        envtxt="$(tr '\0' '\n' < "$proc_root/$pid/environ" 2>/dev/null)" || continue
+        if [[ "$mode" == job ]]; then
+            printf '%s\n' "$envtxt" | grep -Eq "aads-wt-${want_job}([^0-9A-Za-z_-]|\$)" || continue
+            jid="$want_job"
+        else
+            ids="$(printf '%s\n' "$envtxt" | grep -Eo 'aads-wt-runner-[0-9A-Za-z_-]+' | sort -u)"
+            [[ -n "$ids" ]] || continue
+            alive=0
+            while IFS= read -r id; do
+                [[ -e "/tmp/$id" ]] && alive=1
+            done <<< "$ids"
+            (( alive )) && continue
+            jid="${ids%%$'\n'*}"; jid="${jid#aads-wt-}"
+        fi
+
+        [[ "$args" =~ $dir_re ]]
+        dir="${BASH_REMATCH[2]}"
+        while [[ "$dir" == */ && "$dir" != "/" ]]; do dir="${dir%/}"; done
+
+        if [[ "$dir" == /tmp ]]; then _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:data_dir_is_tmp"; continue; fi
+        if ! _temp_pg_path_ok "$dir"; then _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:data_dir_outside_tmp"; continue; fi
+        if [[ -L "$dir" ]] || ! _temp_pg_path_ok "$(readlink -f -- "$dir" 2>/dev/null)"; then
+            _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:data_dir_symlink_or_missing"; continue
+        fi
+        port=""
+        if [[ "$args" =~ $port_re ]]; then port="${BASH_REMATCH[3]}"; fi
+        if [[ -z "$port" && -r "$dir/postmaster.pid" ]]; then port="$(sed -n 4p "$dir/postmaster.pid" 2>/dev/null | tr -dc '0-9')"; fi
+        if [[ -z "$port" && -r "$dir/postgresql.conf" ]]; then
+            port="$(grep -E '^[[:space:]]*port[[:space:]]*=' "$dir/postgresql.conf" 2>/dev/null | tail -1 | grep -Eo '[0-9]+' | head -1)"
+        fi
+        port="${port:-5432}"
+        if [[ "$port" == 5432 ]]; then _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:port_5432"; continue; fi
+        nclients="${clients[$pid]:-0}"
+        if (( nclients > 0 )); then _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:clients=$nclients"; continue; fi
+        if [[ "${DRY_RUN:-0}" == 1 ]]; then _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:dry_run"; continue; fi
+
+        if [[ "$mode" == orphan ]] && (( stops >= sweep_max )); then
+            _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:sweep_limit(${sweep_max}, 다음 주기)"; continue
+        fi
+        pgctl="${TEMP_PG_CTL:-}"
+        if [[ -z "$pgctl" ]]; then
+            exe="$(readlink "$proc_root/$pid/exe" 2>/dev/null || true)"
+            exe="${exe% (deleted)}"
+            [[ "$exe" == /* ]] || exe="${args%% *}"
+            [[ "$exe" == /* ]] && pgctl="${exe%/*}/pg_ctl"
+        fi
+        if [[ -z "$pgctl" || ! -x "$pgctl" ]]; then _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:no_pg_ctl"; continue; fi
+        owner="$(stat -c %U -- "$dir" 2>/dev/null)" || owner=""
+        if [[ -z "$owner" || "$owner" == UNKNOWN ]]; then _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:owner_unknown"; continue; fi
+
+        stops=$((stops + 1))
+        rc=0
+        timeout 40 "$runuser_bin" -u "$owner" -- "$pgctl" stop -D "$dir" -m fast -t 30 >/dev/null 2>&1 || rc=$?
+        if (( rc != 0 )); then _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:pg_ctl_stop_failed(rc=$rc)"; continue; fi
+        _temp_pg_log "job=$jid pid=$pid dir=$dir action=stopped"
+
+        target="$dir"
+        parent="${dir%/*}"
+        if [[ "$parent" =~ ^/tmp/[^/]+$ && ! -L "$parent" ]]; then
+            foreign=0
+            while IFS= read -r -d '' entry; do
+                name="${entry##*/}"
+                case "$name" in data|d|log|port|*.log) ;; *) foreign=1; break ;; esac
+            done < <(find "$parent" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+            (( foreign )) || target="$parent"
+        fi
+        if _temp_pg_path_ok "$target" && rm -rf -- "$target"; then
+            _temp_pg_log "job=$jid pid=$pid dir=$dir action=removed target=$target"
+        else
+            _temp_pg_log "job=$jid pid=$pid dir=$dir action=skipped:remove_failed target=$target"
+        fi
+        if [[ "$args" =~ $sock_re ]]; then
+            sock="${BASH_REMATCH[2]%/}"
+            if _temp_pg_path_ok "$sock" && [[ -d "$sock" && ! -L "$sock" ]]; then
+                rmdir -- "$sock" 2>/dev/null && _temp_pg_log "job=$jid pid=$pid dir=$dir action=removed target=$sock"
+            fi
+        fi
+    done
+    return 0
+}
+
+# job 하나의 임시 PG 회수. worktree 회수 직전에 호출한다. 러너 흐름을 막지 않는다.
+_reap_job_temp_pg() {
+    local job_id="${1:-}"
+    [[ "${RUNNER_TEMP_PG_REAP:-1}" == 1 ]] || return 0
+    [[ "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ ]] || return 0
+    ( set +eu; _temp_pg_scan job "$job_id" ) || true
+    return 0
+}
+
+# worktree 가 이미 사라진 job 의 고아 PG 스윕 (주기 회수용).
+_reap_orphan_temp_pg() {
+    [[ "${RUNNER_TEMP_PG_REAP:-1}" == 1 ]] || return 0
+    ( set +eu; _temp_pg_scan orphan ) || true
+    return 0
+}
+# <<< temp-pg-reap
+
 # WRAP 파일 자동 생성 (P0/P1 완료 시)
 _generate_wrap() {
     local job_id="$1"
@@ -2593,6 +2736,7 @@ ensure_approved_job_worktree() {
     fi
     [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
     git -C "$main_workdir" cat-file -e "${expected_sha}^{commit}" 2>/dev/null || return 1
+    _reap_job_temp_pg "$job_id" || true
     if [[ -e "$worktree_dir" ]]; then
         git -C "$main_workdir" worktree remove "$worktree_dir" --force >/dev/null 2>&1 || rm -rf "$worktree_dir" 2>/dev/null || true
     fi
@@ -3206,6 +3350,7 @@ prepare_clean_job_worktree() {
             "worktree 재사용 거부 — 기존 프로세스와 산출물 보존: path=${worktree_dir} pids=${_busy_pids}"
         return 1
     fi
+    _reap_job_temp_pg "$job_id" || true
     if [[ -e "$worktree_dir" ]]; then
         git -C "$main_workdir" worktree remove "$worktree_dir" --force >/dev/null 2>&1 || rm -rf "$worktree_dir" 2>/dev/null || true
     fi
@@ -5462,6 +5607,7 @@ $out_tail")
         _release_work_lock "$project" "$job_id" "$parallel_group"
         _cleanup_artifacts "$job_id"
         # worktree 정리
+        _reap_job_temp_pg "$job_id" || true
         if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
             _preserve_worktree_patch "$job_id" "/tmp/aads-wt-${job_id}"
             cd "${main_workdir:-/tmp}"
@@ -5632,6 +5778,7 @@ ${output:0:1500}
 \`\`\`"
             _release_work_lock "$project" "$job_id" "$parallel_group"
             _cleanup_artifacts "$job_id"
+            _reap_job_temp_pg "$job_id" || true
             if [[ -d "$worktree_dir" ]]; then
                 cd "${main_workdir:-/tmp}"
                 git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
@@ -5695,6 +5842,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             post_to_chat "$session_id" "⚠️ [Pipeline Runner] 변경사항 0건으로 작업 종결: $job_id — 실제 대상 저장소(${target_repo})에 diff가 없어 승인 대기로 보내지 않았습니다."
             _release_work_lock "$project" "$job_id" "$parallel_group"
             _cleanup_artifacts "$job_id"
+            _reap_job_temp_pg "$job_id" || true
             if [[ -d "$worktree_dir" ]]; then
                 cd "${main_workdir:-/tmp}"
                 git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
@@ -7691,6 +7839,7 @@ deploy_job() {
     _notify_ai "$job_id"
 
     # worktree 정리
+    _reap_job_temp_pg "$job_id" || true
     if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
         cd "$main_workdir"
         git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
@@ -7718,6 +7867,7 @@ reject_job() {
 
     # v2.2: 해당 Runner의 변경사항만 선택적 원복 (다른 Runner의 배포된 변경 보호)
     local worktree_dir="/tmp/aads-wt-${job_id}"
+    _reap_job_temp_pg "$job_id" || true
     if [[ -d "$worktree_dir" ]]; then
         _preserve_worktree_patch "$job_id" "$worktree_dir"
         cd "$workdir"
@@ -7735,6 +7885,7 @@ reject_job() {
     log "  REJECTED job=$job_id"
 
     # worktree 정리
+    _reap_job_temp_pg "$job_id" || true
     if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
         cd "$workdir"
         git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
@@ -8062,6 +8213,8 @@ _reclaim_finished_worktree() {
             return 0
             ;;
     esac
+    # worktree 가 깨끗하지 않아 보존되더라도 종료 job 이 띄운 임시 PG 는 회수한다.
+    _reap_job_temp_pg "$job_id" || true
     script="$(_reclaimer_script_path)"
     if [[ ! -x "$script" ]]; then
         _warn_reclaimer_unavailable "$script"

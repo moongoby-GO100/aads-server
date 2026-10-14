@@ -290,6 +290,23 @@ if [[ -n "$only_job" ]]; then
     exit 0
 fi
 
+# 고아 임시 PG 스윕 (AADS-RUNNER-REAP-ORPHAN-TMP-PG-20261015, R-BG).
+# 로직은 pipeline-runner.sh 의 temp-pg-reap 블록 한 벌이다 — 같은 디렉터리의 러너에서 잘라 쓴다(배포 단위 동일).
+# environ 에 aads-wt-runner-<id> 가 있는데 /tmp/aads-wt-runner-<id> 가 이미 없고 클라이언트가 0 인 /tmp postmaster 만 정지한다.
+if [[ "${RUNNER_TEMP_PG_REAP:-1}" == 1 ]]; then
+    temp_pg_self="${BASH_SOURCE[0]}"
+    [[ "$temp_pg_self" == */* ]] || temp_pg_self="./$temp_pg_self"
+    temp_pg_src="${RUNNER_TEMP_PG_SOURCE:-${temp_pg_self%/*}/pipeline-runner.sh}"
+    temp_pg_block=""
+    [[ -r "$temp_pg_src" ]] && temp_pg_block="$(sed -n '/^# >>> temp-pg-reap/,/^# <<< temp-pg-reap/p' "$temp_pg_src")"
+    if [[ -n "$temp_pg_block" ]]; then
+        eval "$temp_pg_block"
+        _reap_orphan_temp_pg || true
+    else
+        echo "[reclaim-wt] temp-pg-reap block unavailable: $temp_pg_src" >&2
+    fi
+fi
+
 declare -a cap_paths=()
 declare -A cap_common=() cap_mtime=()
 
