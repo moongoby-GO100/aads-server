@@ -45,6 +45,11 @@ class ActorScope:
     role_key: str
     project: str
     workspace_kind: str
+    user_id: str = ""
+    # True only when the authenticated user owns the session.  A service
+    # principal (internal_admin) borrowing someone's session stays False.
+    owner_verified: bool = False
+    internal_admin: bool = False
 
     def may_access(self, target_project: str) -> bool:
         return self.workspace_kind == "ceo_integrated" or self.project.upper() == target_project.upper()
@@ -93,6 +98,9 @@ async def resolve_actor_scope(
         role_key=str(row["role_key"] or ""),
         project=project,
         workspace_kind="ceo_integrated" if integrated else "project",
+        user_id=str(user_id or ""),
+        owner_verified=bool(user_id) and str(row["user_id"] or "") == str(user_id),
+        internal_admin=bool(internal_admin),
     )
 
 

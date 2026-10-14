@@ -65,6 +65,14 @@ async def append_event(
     aggregate_id: str, event_type: str, actor: ActorScope | None,
     payload: Mapping[str, Any], correlation_id: str, causation_id: str | None = None,
 ) -> None:
+    body = dict(payload)
+    if actor is not None and "principal" not in body:
+        # The authenticated principal is audited separately from the session it
+        # acts through: a service key can drive any session.
+        body["principal"] = {
+            "user_id": actor.user_id, "internal_admin": actor.internal_admin,
+            "owner_verified": actor.owner_verified,
+        }
     await conn.execute(
         """INSERT INTO work_item_events
            (tenant_id,project,aggregate_type,aggregate_id,event_type,
@@ -72,7 +80,7 @@ async def append_event(
            VALUES($1::uuid,$2,$3,$4::uuid,$5,$6::uuid,$7,$8::jsonb,$9::uuid,$10::uuid)""",
         tenant_id, project, aggregate_type, aggregate_id, event_type,
         actor.session_id if actor else None, actor.role_key if actor else None,
-        json.dumps(mask_decision_context(dict(payload))), correlation_id, causation_id,
+        json.dumps(mask_decision_context(body)), correlation_id, causation_id,
     )
 
 
@@ -134,11 +142,12 @@ async def create_change_set(
 
 async def route_change_set(
     conn: Any, *, tenant_id: str, change_set_id: str, actor: ActorScope,
+    routes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Create every required approval route without conflating execution."""
     row = await conn.fetchrow(
         """SELECT c.*, w.goal_id FROM work_item_change_sets c
-           JOIN work_items w ON w.id=c.target_id AND w.tenant_id=c.tenant_id
+           LEFT JOIN work_items w ON w.id=c.target_id AND w.tenant_id=c.tenant_id
            WHERE c.id=$1::uuid AND c.tenant_id=$2::uuid FOR UPDATE OF c""",
         change_set_id, tenant_id,
     )
@@ -146,7 +155,10 @@ async def route_change_set(
         raise _error(404, "change_set_not_found")
     if not actor.may_access(str(row["project"])):
         raise _error(403, "project_scope_denied")
-    routes = ["ceo", "independent_reviewer"] if row["risk_tier"] == "A3" else ["project_lead"]
+    if routes is None:
+        routes = ["ceo", "independent_reviewer"] if row["risk_tier"] == "A3" else ["project_lead"]
+    else:
+        routes = list(routes)
     approvals: list[str] = []
     for route in routes:
         approval = await conn.fetchrow(
@@ -243,6 +255,10 @@ async def decide_change_set(
     if required_role == "ceo":
         if actor.workspace_kind not in {"ceo", "ceo_integrated"} or actor.role_key.strip().lower() != "ceo":
             raise _error(403, "ceo_approval_required")
+        # A service principal (internal_admin) may operate any session, so the
+        # session role alone does not prove the CEO is the one deciding.
+        if not actor.owner_verified:
+            raise _error(403, "ceo_owner_verification_required")
     elif required_role == "project_lead":
         lead = await conn.fetchval(
             """SELECT EXISTS(SELECT 1 FROM project_role_assignments

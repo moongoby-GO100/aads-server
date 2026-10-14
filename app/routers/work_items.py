@@ -13,6 +13,13 @@ from app.core.goal_work_hierarchy_policy import (
     goal_work_hierarchy_enabled,
     workflow_approval_enabled,
 )
+from app.services.canonical_hierarchy_assignment import (
+    decide_assignment,
+    execute_assignment,
+    preview_assignment,
+    propose_assignment,
+    rollback_assignment,
+)
 from app.services.goal_work_hierarchy import resolve_actor_scope
 from app.services.goal_workflow_approval import (
     approval_preview,
@@ -53,6 +60,31 @@ class ExecuteRequest(BaseModel):
     execution_key: str = Field(min_length=1, max_length=300)
     owner_instance: str = Field(min_length=1)
     owner_epoch: int = Field(ge=1)
+
+
+class AssignmentHolders(BaseModel):
+    PM: UUID
+    Developer: UUID
+    QA: UUID
+
+
+class AssignmentProposalRequest(BaseModel):
+    # Blank values are accepted by the schema on purpose: the server rejects
+    # them with approval_ref_required instead of treating them as approval.
+    decision_ref: str
+    approval_message_id: str
+    holders: AssignmentHolders
+
+
+class AssignmentExecuteRequest(BaseModel):
+    decision_ref: str
+    approval_message_id: str
+    execution_key: str = Field(min_length=1, max_length=300)
+
+
+class AssignmentRollbackRequest(BaseModel):
+    rollback_key: str = Field(min_length=1, max_length=300)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class ReviewRequest(BaseModel):
@@ -427,4 +459,98 @@ async def post_promote_policy(policy_id: str, req: PolicyPromotionRequest,
         return await promote_policy(
             conn, tenant_id=tenant, actor=await _actor(conn, context, session_id),
             policy_id=policy_id, target_mode=req.target_mode, reason=req.reason,
+        )
+
+
+def _holders(req: AssignmentHolders) -> dict[str, str]:
+    return {role: str(getattr(req, role)) for role in ("PM", "Developer", "QA")}
+
+
+@router.post("/goals/{goal_id}/canonical-assignment/preview")
+async def post_canonical_assignment_preview(
+    goal_id: str, req: AssignmentProposalRequest, context=viewer_dependency,
+    session_id: str | None = Header(None, alias="X-Chat-Session-ID"),
+):
+    """Read-only server verification of approval evidence, ID set and holders."""
+    _require_w13()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction(isolation="repeatable_read", readonly=True):
+        await conn.execute("SELECT set_config('app.current_tenant_id',$1,true)", tenant)
+        actor = await _actor(conn, context, session_id)
+        result = await preview_assignment(
+            conn, tenant_id=tenant, actor=actor, goal_id=goal_id,
+            decision_ref=req.decision_ref, approval_message_id=req.approval_message_id,
+            holders=_holders(req.holders),
+        )
+    return {key: result[key] for key in ("goal_id", "project", "evidence", "plan", "holders")}
+
+
+@router.post("/goals/{goal_id}/canonical-assignment/proposals", status_code=201)
+async def post_canonical_assignment_proposal(
+    goal_id: str, req: AssignmentProposalRequest, context=member_dependency,
+    session_id: str | None = Header(None, alias="X-Chat-Session-ID"),
+):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        await conn.execute("SELECT set_config('app.current_tenant_id',$1,true)", tenant)
+        actor = await _actor(conn, context, session_id)
+        return await propose_assignment(
+            conn, tenant_id=tenant, actor=actor, goal_id=goal_id,
+            decision_ref=req.decision_ref, approval_message_id=req.approval_message_id,
+            holders=_holders(req.holders),
+        )
+
+
+@router.post("/work-item-change-sets/{change_set_id}/assignment/decision")
+async def post_canonical_assignment_decision(
+    change_set_id: str, req: DecisionRequest, context=member_dependency,
+    session_id: str | None = Header(None, alias="X-Chat-Session-ID"),
+):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        await conn.execute("SELECT set_config('app.current_tenant_id',$1,true)", tenant)
+        actor = await _actor(conn, context, session_id)
+        return await decide_assignment(
+            conn, tenant_id=tenant, actor=actor, change_set_id=change_set_id,
+            approve=req.approve, reason=req.reason,
+        )
+
+
+@router.post("/work-item-change-sets/{change_set_id}/assignment/execute")
+async def post_canonical_assignment_execute(
+    change_set_id: str, req: AssignmentExecuteRequest, context=member_dependency,
+    session_id: str | None = Header(None, alias="X-Chat-Session-ID"),
+):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        await conn.execute("SELECT set_config('app.current_tenant_id',$1,true)", tenant)
+        actor = await _actor(conn, context, session_id)
+        return await execute_assignment(
+            conn, tenant_id=tenant, actor=actor, change_set_id=change_set_id,
+            decision_ref=req.decision_ref, approval_message_id=req.approval_message_id,
+            execution_key=req.execution_key,
+        )
+
+
+@router.post("/work-item-change-sets/{change_set_id}/assignment/rollback")
+async def post_canonical_assignment_rollback(
+    change_set_id: str, req: AssignmentRollbackRequest, context=member_dependency,
+    session_id: str | None = Header(None, alias="X-Chat-Session-ID"),
+):
+    _require_m14()
+    from app.core.db_pool import get_pool
+    tenant, _, _ = _identity(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        await conn.execute("SELECT set_config('app.current_tenant_id',$1,true)", tenant)
+        actor = await _actor(conn, context, session_id)
+        return await rollback_assignment(
+            conn, tenant_id=tenant, actor=actor, change_set_id=change_set_id,
+            rollback_key=req.rollback_key, reason=req.reason,
         )
