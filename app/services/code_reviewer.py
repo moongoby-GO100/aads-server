@@ -1213,6 +1213,25 @@ def _strip_patch_file_sections(diff: str) -> tuple[str, list[str], int]:
     return "".join(kept), ignored_paths, ignored_lines
 
 
+# 러너가 작업마다 통째로 새로 쓰는 저장소 루트 결과 산출물. 기존 구현이 아니므로 +/- 비율에서 뺀다.
+# 정확히 루트 `RESULT.md` 한 경로만이다(하위 경로·다른 .md 는 그대로 센다).
+_RUNNER_RESULT_PATH = "RESULT.md"
+
+
+def _strip_runner_result_sections(diff: str) -> tuple[str, int]:
+    """(루트 RESULT.md 구간을 뺀 diff, 제외한 +/- 줄 수). 비율 판정 전용."""
+    kept: list[str] = []
+    ignored_lines = 0
+    for section in _DIFF_SECTION_SPLIT_RE.split(diff or ""):
+        header = _DIFF_SECTION_PATHS_RE.match(section.split("\n", 1)[0])
+        if header and all(path == _RUNNER_RESULT_PATH for path in header.groups()):
+            added, removed = _diff_line_counts(section)
+            ignored_lines += added + removed
+            continue
+        kept.append(section)
+    return "".join(kept), ignored_lines
+
+
 # 스코프 기반 면제(runner 5cfd3fed 후속, 실사례 525fce0d).
 # 삭제 심볼 판정은 이름만 보므로 (A) 같은 클래스에 동명 메서드가 둘 있던 死코드의 앞 정의,
 # (B) 파일 밖 참조가 없는 private 클래스, (C) 그 클래스 본문 멤버(`__init__` 등)가 사라진 것도
@@ -1456,7 +1475,9 @@ def _precheck_preservation_gate(
     # 아래 비율·심볼 판정은 패치 파일 구간을 뺀 diff 로 한다. 범위 게이트는 원본 diff 기준이다.
     # 변경이 패치 파일뿐이면 additions/deletions 가 0 이라 두 게이트 모두 이슈를 내지 않는다.
     preservation_diff, ignored_patch_paths, ignored_patch_lines = _strip_patch_file_sections(diff)
-    additions, deletions = _diff_line_counts(preservation_diff)
+    # 루트 RESULT.md 는 +/- 비율에서만 뺀다. 삭제 심볼·범위 판정은 종전 입력을 그대로 쓴다.
+    ratio_diff, ignored_result_md_lines = _strip_runner_result_sections(preservation_diff)
+    additions, deletions = _diff_line_counts(ratio_diff)
     issues: list[str] = []
     feedback: dict[str, object] = {
         "summary": "기존 구현 보존 하드 게이트",
@@ -1471,6 +1492,10 @@ def _precheck_preservation_gate(
         feedback.update(ignored_notes)
         if exemption_out is not None:
             exemption_out.update(ignored_notes)
+    if ignored_result_md_lines:
+        feedback["preservation_ignored_result_md_lines"] = ignored_result_md_lines
+        if exemption_out is not None:
+            exemption_out["preservation_ignored_result_md_lines"] = ignored_result_md_lines
 
     net_removal = deletions - additions
     # 아주 작은 diff 는 비율만으로 판정할 근거가 못 된다(하한 임계치).
