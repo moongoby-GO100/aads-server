@@ -703,6 +703,8 @@ async def ws_pc_agent(websocket: WebSocket, agent_id: str, token: str = Query(""
             metadata["last_observation"] = {
                 **last_observation,
                 "classification": "contact_lost",
+                "classification_reason": "not_connected",
+                "next_action": "check_sleep_network_launcher",
                 "frame_fresh": False,
             }
         return metadata

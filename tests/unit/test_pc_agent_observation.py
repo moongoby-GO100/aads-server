@@ -45,18 +45,183 @@ def test_disconnect_preserves_last_observation_and_classifies_contact_loss(monke
     assert observation["classification"] == "contact_lost"
 
 
-def test_healthy_heartbeat_distinguishes_resource_pressure_and_stale_stream():
+def _clocked_manager(monkeypatch):
     manager = PCAgentManager()
     manager.register_agent("pc", DummyWebSocket(), {})
+    clock = {"now": manager._now()}
+    monkeypatch.setattr(manager, "_now", lambda: clock["now"])
+    manager._agents["pc"].info.last_heartbeat = clock["now"]
+
+    def feed(**resources):
+        """Deliver one distinct heartbeat sample 30s after the previous one."""
+        clock["now"] += timedelta(seconds=30)
+        manager._agents["pc"].info.last_heartbeat = clock["now"]
+        manager.update_observation("pc", resources)
+        return manager.get_last_observation("pc")
+
+    return manager, clock, feed
+
+
+def test_healthy_heartbeat_distinguishes_resource_pressure_and_stale_stream(monkeypatch):
+    manager, clock, feed = _clocked_manager(monkeypatch)
+    for _ in range(3):
+        observation = feed(commit_percent=95)
+    assert observation["classification"] == "resource_pressure"
+
+    for _ in range(2):
+        feed(commit_percent=50)
     conn = manager._agents["pc"]
-    conn.info.last_heartbeat = manager._now()
-    manager.update_observation("pc", {"commit_percent": 95})
+    conn.streaming = True
+    conn.last_frame_at = clock["now"] - timedelta(seconds=15)
+    assert manager.get_last_observation("pc")["classification"] == "app_unresponsive"
+
+
+def test_normal_sample_is_healthy(monkeypatch):
+    _, _, feed = _clocked_manager(monkeypatch)
+    observation = feed(cpu_percent=10, ram_percent=40, commit_percent=45, disk_percent=60)
+    assert observation["classification"] == "healthy"
+    assert observation["classification_reason"] == "within_thresholds"
+    assert observation["next_action"] == "none"
+    assert observation["disk_low"] is False
+    assert observation["warnings"] == []
+
+
+def test_single_spike_sample_does_not_enter_resource_pressure(monkeypatch):
+    _, _, feed = _clocked_manager(monkeypatch)
+    feed(cpu_percent=20)
+    assert feed(cpu_percent=99)["classification"] == "healthy"
+    assert feed(cpu_percent=20)["classification"] == "healthy"
+    feed(cpu_percent=99)
+    assert feed(cpu_percent=99)["classification"] == "healthy"  # streak was reset: only 2 in a row
+
+
+def test_sustained_samples_enter_pressure_and_hysteresis_releases(monkeypatch):
+    _, _, feed = _clocked_manager(monkeypatch)
+    assert feed(ram_percent=92)["classification"] == "healthy"
+    assert feed(ram_percent=93)["classification"] == "healthy"
+    entered = feed(ram_percent=91)
+    assert entered["classification"] == "resource_pressure"
+    assert entered["classification_reason"] == "sustained_threshold_exceeded"
+    assert entered["next_action"] == "inspect_resource_usage"
+    # 86% is below the 90% threshold but inside the 5-point hysteresis band: stay in pressure.
+    assert feed(ram_percent=86)["classification"] == "resource_pressure"
+    assert feed(ram_percent=87)["classification"] == "resource_pressure"
+    # One sample under 85% is not enough; two consecutive release.
+    assert feed(ram_percent=80)["classification"] == "resource_pressure"
+    assert feed(ram_percent=84)["classification"] == "healthy"
+    # A band sample between two clear samples restarts the release streak.
+    for _ in range(3):
+        feed(ram_percent=95)
+    assert feed(ram_percent=80)["classification"] == "resource_pressure"
+    assert feed(ram_percent=88)["classification"] == "resource_pressure"
+    assert feed(ram_percent=80)["classification"] == "resource_pressure"
+    assert feed(ram_percent=80)["classification"] == "healthy"
+
+
+def test_repeated_cached_heartbeat_sample_counts_once(monkeypatch):
+    manager, clock, feed = _clocked_manager(monkeypatch)
+    manager.update_observation("pc", {"cpu_percent": 97, "sample_age_seconds": 0})
+    for age in (25, 50):  # same agent-side sample, re-sent by later heartbeats
+        clock["now"] += timedelta(seconds=25)
+        manager._agents["pc"].info.last_heartbeat = clock["now"]
+        manager.update_observation("pc", {"cpu_percent": 97, "sample_age_seconds": age})
+    assert len(manager._agents["pc"].pressure_samples) == 1
+    assert manager.get_last_observation("pc")["classification"] == "healthy"
+
+
+def test_disk_95_percent_is_healthy_with_disk_low_warning(monkeypatch):
+    _, _, feed = _clocked_manager(monkeypatch)
+    for _ in range(4):
+        observation = feed(cpu_percent=4.1, ram_percent=37.8, commit_percent=38.7, disk_percent=95.8)
+    assert observation["classification"] == "healthy"
+    assert observation["disk_low"] is True
+    assert observation["warnings"] == ["disk_low"]
+    assert observation["next_action"] == "free_disk"
+
+
+def test_missing_or_stale_observation_is_unknown(monkeypatch):
+    manager, clock, feed = _clocked_manager(monkeypatch)
+    observation = manager.get_last_observation("pc")
+    assert observation["classification"] == "unknown"
+    assert observation["classification_reason"] == "no_observation"
+    assert observation["next_action"] == "refresh_observation"
+    assert observation["disk_low"] is None
+    assert observation["cpu_percent"] is None
+    assert observation["unavailable_reasons"]["cpu_percent"] == "no_observation"
+
+    feed(cpu_percent=10)
+    clock["now"] += timedelta(seconds=60)
+    manager._agents["pc"].info.last_heartbeat = clock["now"]
+    assert manager.get_last_observation("pc")["classification"] == "healthy"
+    clock["now"] += timedelta(seconds=61)
+    manager._agents["pc"].info.last_heartbeat = clock["now"]
+    stale = manager.get_last_observation("pc")
+    assert stale["classification"] == "unknown"
+    assert stale["classification_reason"] == "observation_stale"
+    assert stale["disk_low"] is None
+
+
+def test_contact_lost_takes_priority_over_unknown_and_pressure(monkeypatch):
+    manager, clock, feed = _clocked_manager(monkeypatch)
+    for _ in range(3):
+        feed(cpu_percent=99)
+    assert manager.get_last_observation("pc")["classification"] == "resource_pressure"
+    clock["now"] += timedelta(seconds=91)  # heartbeat timeout (90s) while observation is stale too
+    lost = manager.get_last_observation("pc")
+    assert lost["classification"] == "contact_lost"
+    assert lost["classification_reason"] == "heartbeat_timeout"
+    assert lost["next_action"] == "check_sleep_network_launcher"
+
+
+def test_command_timeout_stays_app_unresponsive(monkeypatch):
+    manager, clock, feed = _clocked_manager(monkeypatch)
+    feed(cpu_percent=10)
+    conn = manager._agents["pc"]
+    conn.last_command_status = "timeout"
+    conn.last_command_at = clock["now"]
+    conn.info.last_heartbeat = clock["now"]
+    observation = manager.get_last_observation("pc")
+    assert observation["classification"] == "app_unresponsive"
+    assert observation["classification_reason"] == "command_timeout"
+    assert observation["next_action"] == "inspect_app"
+    # App-level evidence outranks "unknown": a timeout is still reported when the sample is stale.
+    clock["now"] += timedelta(seconds=100)
+    conn.last_command_at = clock["now"]
+    conn.info.last_heartbeat = clock["now"]
+    assert manager.get_last_observation("pc")["classification"] == "app_unresponsive"
+
+
+def test_pressure_sample_history_is_bounded_at_20(monkeypatch):
+    manager, _, feed = _clocked_manager(monkeypatch)
+    for _ in range(45):
+        feed(cpu_percent=95)
+    assert len(manager._agents["pc"].pressure_samples) == 20
     assert manager.get_last_observation("pc")["classification"] == "resource_pressure"
 
-    manager.update_observation("pc", {"commit_percent": 50})
-    conn.streaming = True
-    conn.last_frame_at = manager._now() - timedelta(seconds=15)
-    assert manager.get_last_observation("pc")["classification"] == "app_unresponsive"
+
+def test_pressure_resets_after_long_sample_gap(monkeypatch):
+    manager, clock, feed = _clocked_manager(monkeypatch)
+    for _ in range(3):
+        feed(cpu_percent=95)
+    clock["now"] += timedelta(seconds=300)
+    manager._agents["pc"].info.last_heartbeat = clock["now"]
+    assert feed(cpu_percent=95)["classification"] == "healthy"
+
+
+def test_unsupported_values_stay_none_with_reason(monkeypatch):
+    _, _, feed = _clocked_manager(monkeypatch)
+    observation = feed(cpu_percent=0, ram_percent=30, os_event_count=None,
+                       os_event_count_unavailable_reason="query_timeout", agent_rss_mb="oops")
+    assert observation["cpu_percent"] == 0  # a real zero is kept
+    assert observation["commit_percent"] is None
+    assert observation["os_event_count"] is None
+    reasons = observation["unavailable_reasons"]
+    assert reasons["commit_percent"] == "not_reported"
+    assert reasons["os_event_count"] == "query_timeout"
+    assert reasons["agent_rss_mb"] == "invalid_value"
+    assert "cpu_percent" not in reasons
+    unknown_reason = feed(ram_percent=30, os_event_count=None, os_event_count_unavailable_reason="free text")
+    assert unknown_reason["unavailable_reasons"]["os_event_count"] == "agent_reported_unavailable"
 
 
 def test_stream_with_no_first_frame_becomes_unresponsive(monkeypatch):
@@ -85,7 +250,7 @@ def test_old_resource_sample_does_not_claim_current_pressure(monkeypatch):
 
     observation = manager.get_last_observation("pc")
     assert observation["observation_age_seconds"] >= 120
-    assert observation["classification"] == "healthy"
+    assert observation["classification"] == "unknown"
 
 
 def test_offline_ages_keep_advancing_in_memory_and_db_snapshot(monkeypatch):
@@ -113,6 +278,7 @@ def test_timeout_recovers_after_new_heartbeat_and_frame():
     manager = PCAgentManager()
     manager.register_agent("pc", DummyWebSocket(), {})
     conn = manager._agents["pc"]
+    manager.update_observation("pc", {"cpu_percent": 10})
     conn.last_command_status = "timeout"
     conn.last_command_at = manager._now()
     conn.info.last_heartbeat = conn.last_command_at
@@ -165,7 +331,7 @@ def test_empty_resource_heartbeat_preserves_sample_freshness(monkeypatch):
     result = manager.get_last_observation("pc")
     assert result["cpu_percent"] == 91
     assert result["observation_age_seconds"] == 30
-    assert result["classification"] == "resource_pressure"
+    assert result["classification"] == "healthy"  # a single 91% sample is not sustained pressure
 
 
 def test_old_resource_age_is_not_clamped_to_fresh(monkeypatch):
@@ -174,7 +340,7 @@ def test_old_resource_age_is_not_clamped_to_fresh(monkeypatch):
     manager.update_observation("pc", {"cpu_percent": 99, "sample_age_seconds": 600})
     result = manager.get_last_observation("pc")
     assert result["observation_age_seconds"] >= 600
-    assert result["classification"] == "healthy"
+    assert result["classification"] == "unknown"
 
 
 def test_os_event_window_and_bounded_count_contract(monkeypatch, tmp_path):
@@ -474,3 +640,54 @@ async def test_queued_stop_does_not_target_a_replacement_connection():
     with pytest.raises(ValueError, match="connection changed"):
         await task
     assert not hasattr(replacement, "last_message")
+
+
+def test_disk_only_heartbeats_cannot_keep_resource_pressure_alive(monkeypatch):
+    manager, clock, feed = _clocked_manager(monkeypatch)
+    for _ in range(3):
+        feed(cpu_percent=95)
+    assert manager.get_last_observation("pc")["classification"] == "resource_pressure"
+    observation = None
+    for _ in range(11):  # 330s of heartbeats carrying disk_percent only
+        observation = feed(disk_percent=50)
+    assert observation["classification"] == "unknown"
+    assert observation["classification_reason"] == "no_core_metrics"
+    assert manager._agents["pc"].pressure_active is False
+
+
+@pytest.mark.parametrize("reason", [["query_failed"], {"code": "query_failed"}, 7, True])
+def test_non_string_unavailable_reason_is_normalized_without_exception(reason, monkeypatch):
+    _, _, feed = _clocked_manager(monkeypatch)
+    observation = feed(cpu_percent=None, cpu_percent_unavailable_reason=reason, ram_percent=30)
+    assert observation["cpu_percent"] is None
+    assert observation["unavailable_reasons"]["cpu_percent"] == "invalid_reason"
+    assert observation["ram_percent"] == 30
+
+
+def test_explicit_null_collection_failure_clears_previous_values(monkeypatch):
+    manager, _, feed = _clocked_manager(monkeypatch)
+    assert feed(cpu_percent=10, ram_percent=40, commit_percent=45)["classification"] == "healthy"
+    failed = feed(cpu_percent=None, cpu_percent_unavailable_reason="query_failed")
+    assert failed["cpu_percent"] is None
+    assert failed["ram_percent"] is None
+    assert failed["unavailable_reasons"]["cpu_percent"] == "query_failed"
+    assert failed["classification"] == "unknown"
+    assert failed["classification_reason"] == "no_core_metrics"
+
+
+def test_explicit_null_collection_failure_ends_resource_pressure(monkeypatch):
+    manager, _, feed = _clocked_manager(monkeypatch)
+    for _ in range(3):
+        feed(cpu_percent=95)
+    failed = feed(cpu_percent=None, cpu_percent_unavailable_reason="query_timeout")
+    assert failed["classification"] == "unknown"
+    assert manager._agents["pc"].pressure_active is False
+
+
+def test_agent_rss_alone_is_not_healthy(monkeypatch):
+    _, _, feed = _clocked_manager(monkeypatch)
+    observation = feed(agent_rss_mb=120)
+    assert observation["agent_rss_mb"] == 120
+    assert observation["classification"] == "unknown"
+    assert observation["classification_reason"] == "no_core_metrics"
+    assert observation["next_action"] == "refresh_observation"

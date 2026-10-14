@@ -161,6 +161,29 @@ class _LeaseRecord:
         }
 
 
+_PRESSURE_HISTORY_MAX = 20
+_PRESSURE_METRICS = ("cpu_percent", "ram_percent", "commit_percent")
+_OBSERVED_METRICS = ("cpu_percent", "ram_percent", "commit_percent", "disk_percent", "agent_rss_mb", "os_event_count")
+_UNAVAILABLE_REASONS = frozenset({"unsupported_platform", "query_failed", "query_timeout", "access_denied"})
+_NEXT_ACTION_BY_CLASSIFICATION = {
+    "contact_lost": "check_sleep_network_launcher",
+    "app_unresponsive": "inspect_app",
+    "resource_pressure": "inspect_resource_usage",
+    "unknown": "refresh_observation",
+    "healthy": "none",
+}
+# The agent reuses a cached telemetry sample for up to 60s, so heartbeats 25s apart carry the same sample.
+_SAMPLE_DEDUP_SECONDS = 10.0
+
+
+def _env_number(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.getenv(name, "") or default)
+    except ValueError:
+        return default
+    return min(max(value, minimum), maximum) if math.isfinite(value) else default
+
+
 class _AgentConnection:
     """에이전트 WebSocket 연결 + 메타데이터."""
 
@@ -169,6 +192,8 @@ class _AgentConnection:
         self.websocket = websocket
         self.info = info
         self.last_observation: dict[str, Any] = {}
+        self.pressure_samples: Deque[tuple[datetime, float]] = deque(maxlen=_PRESSURE_HISTORY_MAX)
+        self.pressure_active = False
         self.last_frame_at: datetime | None = None
         self.previous_frame_at: datetime | None = None
         self.last_command_at: datetime | None = None
@@ -204,6 +229,12 @@ class PCAgentManager:
         self._agent_commands: Dict[str, Set[str]] = {}
         self._streaming_subscribers: Dict[str, Set[WebSocket]] = {}  # agent_id → 대시보드 WS
         self._heartbeat_timeout_seconds = int(os.getenv("PC_AGENT_HEARTBEAT_TIMEOUT_SECONDS", "90") or "90")
+        self._pressure_threshold = _env_number("PC_AGENT_PRESSURE_THRESHOLD_PERCENT", 90.0, 1.0, 100.0)
+        self._pressure_hysteresis = _env_number("PC_AGENT_PRESSURE_HYSTERESIS_PERCENT", 5.0, 0.0, 50.0)
+        self._pressure_enter_samples = int(_env_number("PC_AGENT_PRESSURE_ENTER_SAMPLES", 3, 1, _PRESSURE_HISTORY_MAX))
+        self._pressure_exit_samples = int(_env_number("PC_AGENT_PRESSURE_EXIT_SAMPLES", 2, 1, _PRESSURE_HISTORY_MAX))
+        self._disk_low_percent = _env_number("PC_AGENT_DISK_LOW_PERCENT", 90.0, 1.0, 100.0)
+        self._observation_stale_seconds = _env_number("PC_AGENT_OBSERVATION_STALE_SECONDS", 120.0, 10.0, 86400.0)
         self._lease_default_ttl_seconds = int(os.getenv("PC_AGENT_LEASE_TTL_SECONDS", "180") or "180")
         self._lease_max_history = int(os.getenv("PC_AGENT_LEASE_HISTORY_MAX", "200") or "200")
         self._default_max_concurrency = int(os.getenv("PC_AGENT_DEFAULT_MAX_CONCURRENCY", "4") or "4")
@@ -525,21 +556,64 @@ class PCAgentManager:
         allowed = ("cpu_percent", "ram_percent", "commit_percent", "disk_percent",
                    "agent_rss_mb", "os_event_count", "os_event_window_seconds", "collection_ms")
         values: dict[str, Any] = {}
+        unavailable: dict[str, str] = {}
+        explicit_null = False
         for key in allowed:
             value = payload.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 1_000_000 and math.isfinite(value):
                 values[key] = round(float(value), 2)
+            elif key in _OBSERVED_METRICS:
+                if key not in payload:
+                    unavailable[key] = "not_reported"
+                elif value is None:
+                    explicit_null = True
+                    reason = payload.get(f"{key}_unavailable_reason")
+                    if reason is not None and not isinstance(reason, str):
+                        unavailable[key] = "invalid_reason"
+                    else:
+                        unavailable[key] = reason if reason in _UNAVAILABLE_REASONS else "agent_reported_unavailable"
+                else:
+                    unavailable[key] = "invalid_value"
         if "os_event_count" in values and isinstance(payload.get("os_event_count_is_lower_bound"), bool):
             values["os_event_count_is_lower_bound"] = payload["os_event_count_is_lower_bound"]
         sample_age = payload.get("sample_age_seconds", 0)
         if (not isinstance(sample_age, (int, float)) or isinstance(sample_age, bool)
                 or sample_age < 0 or (isinstance(sample_age, float) and not math.isfinite(sample_age))):
             return
-        measured = ("cpu_percent", "ram_percent", "commit_percent", "disk_percent",
-                    "agent_rss_mb", "os_event_count")
-        if any(key in values for key in measured):
-            values["observed_at"] = (self._now() - timedelta(seconds=min(max(sample_age, 0), 86400))).isoformat()
+        if explicit_null or any(key in values for key in _OBSERVED_METRICS):
+            observed_at = self._now() - timedelta(seconds=min(max(sample_age, 0), 86400))
+            values["observed_at"] = observed_at.isoformat()
+            if unavailable:
+                values["unavailable_reasons"] = unavailable
             conn.last_observation = values
+            if explicit_null and not any(key in values for key in _PRESSURE_METRICS):
+                conn.pressure_samples.clear()
+                conn.pressure_active = False
+            self._record_pressure_sample(conn, observed_at, values)
+
+    def _record_pressure_sample(self, conn: _AgentConnection, observed_at: datetime, values: dict[str, Any]) -> None:
+        """Advance the per-connection resource_pressure state machine by one distinct sample."""
+        peaks = [values[key] for key in _PRESSURE_METRICS if key in values]
+        samples = conn.pressure_samples
+        if samples:
+            gap = (observed_at - samples[-1][0]).total_seconds()
+            if gap > self._observation_stale_seconds:
+                samples.clear()
+                conn.pressure_active = False
+            elif peaks and gap <= _SAMPLE_DEDUP_SECONDS:
+                return
+        if not peaks:
+            return
+        samples.append((observed_at, max(peaks)))
+        if not conn.pressure_active:
+            recent = list(samples)[-self._pressure_enter_samples:]
+            if len(recent) >= self._pressure_enter_samples and all(p >= self._pressure_threshold for _, p in recent):
+                conn.pressure_active = True
+        else:
+            recent = list(samples)[-self._pressure_exit_samples:]
+            clear_below = self._pressure_threshold - self._pressure_hysteresis
+            if len(recent) >= self._pressure_exit_samples and all(p < clear_below for _, p in recent):
+                conn.pressure_active = False
 
     def record_frame(self, agent_id: str) -> None:
         conn = self._agents.get(agent_id)
@@ -588,8 +662,26 @@ class PCAgentManager:
                 result[age_field] = round(max(0.0, (now - timestamp).total_seconds()), 1)
             except (TypeError, ValueError, AttributeError):
                 result[age_field] = None
-        result.update(classification="contact_lost", frame_fresh=False, streaming=False, stream_state="disconnected")
+        result.update(classification="contact_lost", classification_reason="not_connected",
+                      next_action=_NEXT_ACTION_BY_CLASSIFICATION["contact_lost"],
+                      frame_fresh=False, streaming=False, stream_state="disconnected")
         return result
+
+    @staticmethod
+    def _unresponsive_reason(conn: _AgentConnection, frame_age: float | None, stream_age: float | None) -> str:
+        if conn.stream_state in ("start_timeout", "stop_timeout"):
+            return "stream_ack_timeout"
+        if conn.stream_state in ("failed", "stop_failed"):
+            return "stream_command_failed"
+        if (conn.last_command_status == "timeout" and conn.last_command_at
+                and conn.info.last_heartbeat <= conn.last_command_at
+                and (conn.last_frame_at is None or conn.last_frame_at <= conn.last_command_at)):
+            return "command_timeout"
+        if conn.stream_state == "starting" and stream_age is not None and stream_age > 10:
+            return "stream_start_stalled"
+        if conn.streaming and (frame_age > 10 if frame_age is not None else stream_age is not None and stream_age > 10):
+            return "frame_stale"
+        return ""
 
     def _observation(self, conn: _AgentConnection, now: datetime, *, connected: bool) -> dict[str, Any]:
         self._expire_stream_ack(conn, now)
@@ -617,21 +709,38 @@ class PCAgentManager:
             "last_command_latency_seconds": conn.last_command_latency_seconds,
             "last_command_at": conn.last_command_at.isoformat() if conn.last_command_at else None,
         })
-        if not connected or heartbeat_age > self._heartbeat_timeout_seconds:
-            cause = "contact_lost"
-        elif observation_age is not None and observation_age <= 120 and any(
-            observation.get(key, 0) >= 90 for key in ("cpu_percent", "ram_percent", "commit_percent", "disk_percent")
-        ):
-            cause = "resource_pressure"
-        elif conn.stream_state in ("start_timeout", "stop_timeout", "failed", "stop_failed") or (conn.last_command_status == "timeout" and conn.last_command_at and
-              conn.info.last_heartbeat <= conn.last_command_at and
-              (conn.last_frame_at is None or conn.last_frame_at <= conn.last_command_at)) or (
-              conn.stream_state == "starting" and stream_age is not None and stream_age > 10) or (conn.streaming and (
-            frame_age > 10 if frame_age is not None else stream_age is not None and stream_age > 10
-        )):
-            cause = "app_unresponsive"
+        observation_fresh = observation_age is not None and observation_age <= self._observation_stale_seconds
+        pressure_fresh = bool(conn.pressure_active and conn.pressure_samples and
+                              (now - conn.pressure_samples[-1][0]).total_seconds() <= self._observation_stale_seconds)
+        for key in _OBSERVED_METRICS:
+            observation.setdefault(key, None)
+        reasons = dict(observation.get("unavailable_reasons") or {})
+        if observed_at is None:
+            reasons = {key: "no_observation" for key in _OBSERVED_METRICS}
+        observation["unavailable_reasons"] = {key: reasons.get(key, "not_reported") for key in _OBSERVED_METRICS
+                                              if observation[key] is None}
+        disk_percent = observation.get("disk_percent")
+        disk_low = bool(disk_percent >= self._disk_low_percent) if disk_percent is not None and observation_fresh else None
+        observation["disk_low"] = disk_low
+        observation["warnings"] = ["disk_low"] if disk_low else []
+
+        unresponsive_reason = self._unresponsive_reason(conn, frame_age, stream_age)
+        if not connected:
+            cause, reason = "contact_lost", "not_connected"
+        elif heartbeat_age > self._heartbeat_timeout_seconds:
+            cause, reason = "contact_lost", "heartbeat_timeout"
+        elif observation_fresh and pressure_fresh:
+            cause, reason = "resource_pressure", "sustained_threshold_exceeded"
+        elif unresponsive_reason:
+            cause, reason = "app_unresponsive", unresponsive_reason
+        elif not observation_fresh:
+            cause, reason = "unknown", ("no_observation" if observed_at is None else "observation_stale")
+        elif all(observation[key] is None for key in _PRESSURE_METRICS):
+            cause, reason = "unknown", "no_core_metrics"
         else:
-            cause = "healthy"
+            cause, reason = "healthy", "within_thresholds"
+        observation["classification_reason"] = reason
+        observation["next_action"] = "free_disk" if cause == "healthy" and disk_low else _NEXT_ACTION_BY_CLASSIFICATION[cause]
         observation["classification"] = cause
         return observation
 
