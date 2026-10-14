@@ -1,0 +1,254 @@
+{
+ "canon-empty_1440x820": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 235,
+  "listH": 584,
+  "chromeH": 75
+ },
+ "canon-error_1440x820": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 235,
+  "listH": 584,
+  "chromeH": 75
+ },
+ "canon-list_1440x820": {
+  "rows": 15,
+  "full": 12,
+  "listTop": 235,
+  "listH": 584,
+  "chromeH": 75
+ },
+ "canon-loading_1440x820": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 235,
+  "listH": 584,
+  "chromeH": 75
+ },
+ "canon-permission_1440x820": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 235,
+  "listH": 584,
+  "chromeH": 75
+ },
+ "files-empty_1440x820": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 274,
+  "listH": 546,
+  "chromeH": 159
+ },
+ "files-error_1440x820": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 274,
+  "listH": 546,
+  "chromeH": 159
+ },
+ "files-file-selected_1440x820": {
+  "rows": 14,
+  "full": 12,
+  "listTop": 274,
+  "listH": 546,
+  "chromeH": 159
+ },
+ "files-list-filter-open_1440x820": {
+  "rows": 14,
+  "full": 8,
+  "listTop": 440,
+  "listH": 380,
+  "chromeH": 325
+ },
+ "files-list-filtered_1440x820": {
+  "rows": 14,
+  "full": 12,
+  "listTop": 274,
+  "listH": 546,
+  "chromeH": 159
+ },
+ "files-list_1440x820": {
+  "rows": 18,
+  "full": 12,
+  "listTop": 274,
+  "listH": 546,
+  "chromeH": 159
+ },
+ "files-loading_1440x820": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 274,
+  "listH": 546,
+  "chromeH": 159
+ },
+ "canon-empty_884x1000": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 263,
+  "listH": 736,
+  "chromeH": 75
+ },
+ "canon-error_884x1000": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 263,
+  "listH": 736,
+  "chromeH": 75
+ },
+ "canon-list_884x1000": {
+  "rows": 15,
+  "full": 15,
+  "listTop": 263,
+  "listH": 736,
+  "chromeH": 75
+ },
+ "canon-loading_884x1000": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 263,
+  "listH": 736,
+  "chromeH": 75
+ },
+ "canon-permission_884x1000": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 263,
+  "listH": 736,
+  "chromeH": 75
+ },
+ "files-empty_884x1000": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 302,
+  "listH": 698,
+  "chromeH": 159
+ },
+ "files-error_884x1000": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 302,
+  "listH": 698,
+  "chromeH": 159
+ },
+ "files-file-selected_884x1000": {
+  "rows": 14,
+  "full": 0,
+  "listTop": 0,
+  "listH": 0,
+  "chromeH": 0
+ },
+ "files-list-filter-open_884x1000": {
+  "rows": 14,
+  "full": 12,
+  "listTop": 468,
+  "listH": 532,
+  "chromeH": 325
+ },
+ "files-list-filtered_884x1000": {
+  "rows": 14,
+  "full": 14,
+  "listTop": 302,
+  "listH": 698,
+  "chromeH": 159
+ },
+ "files-list_884x1000": {
+  "rows": 18,
+  "full": 15,
+  "listTop": 302,
+  "listH": 698,
+  "chromeH": 159
+ },
+ "files-loading_884x1000": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 302,
+  "listH": 698,
+  "chromeH": 159
+ },
+ "canon-empty_360x780": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 371,
+  "listH": 408,
+  "chromeH": 79
+ },
+ "canon-error_360x780": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 371,
+  "listH": 408,
+  "chromeH": 79
+ },
+ "canon-list_360x780": {
+  "rows": 15,
+  "full": 7,
+  "listTop": 371,
+  "listH": 408,
+  "chromeH": 79
+ },
+ "canon-loading_360x780": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 371,
+  "listH": 408,
+  "chromeH": 79
+ },
+ "canon-permission_360x780": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 371,
+  "listH": 408,
+  "chromeH": 79
+ },
+ "files-empty_360x780": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 428,
+  "listH": 352,
+  "chromeH": 185
+ },
+ "files-error_360x780": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 428,
+  "listH": 352,
+  "chromeH": 185
+ },
+ "files-file-selected_360x780": {
+  "rows": 14,
+  "full": 0,
+  "listTop": 0,
+  "listH": 0,
+  "chromeH": 0
+ },
+ "files-list-filter-open_360x780": {
+  "rows": 14,
+  "full": 3,
+  "listTop": 594,
+  "listH": 186,
+  "chromeH": 351
+ },
+ "files-list-filtered_360x780": {
+  "rows": 14,
+  "full": 6,
+  "listTop": 428,
+  "listH": 352,
+  "chromeH": 185
+ },
+ "files-list_360x780": {
+  "rows": 18,
+  "full": 6,
+  "listTop": 428,
+  "listH": 352,
+  "chromeH": 185
+ },
+ "files-loading_360x780": {
+  "rows": 0,
+  "full": 0,
+  "listTop": 428,
+  "listH": 352,
+  "chromeH": 185
+ }
+}

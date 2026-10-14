@@ -1,0 +1,92 @@
+{
+ "1440x820": [
+  {
+   "rows": 6474,
+   "rowH": 44,
+   "pitch": 46,
+   "firstTop": 304,
+   "listTop": 298,
+   "visTop": 298,
+   "visBottom": 787,
+   "full": 10,
+   "partial": 11,
+   "tabBottom": 115,
+   "chromeH": 189,
+   "load_s": 3.55
+  },
+  {
+   "rows": 6474,
+   "rowH": 44,
+   "pitch": 46,
+   "firstTop": 304,
+   "listTop": 298,
+   "visTop": 298,
+   "visBottom": 787,
+   "full": 10,
+   "partial": 11,
+   "tabBottom": 115,
+   "chromeH": 189,
+   "load_s": 3.94
+  }
+ ],
+ "360x780": [
+  {
+   "rows": 6474,
+   "rowH": 44,
+   "pitch": 46,
+   "firstTop": 432,
+   "listTop": 426,
+   "visTop": 426,
+   "visBottom": 747,
+   "full": 6,
+   "partial": 7,
+   "tabBottom": 243,
+   "chromeH": 189,
+   "load_s": 6.68
+  },
+  {
+   "rows": 6474,
+   "rowH": 44,
+   "pitch": 46,
+   "firstTop": 432,
+   "listTop": 426,
+   "visTop": 426,
+   "visBottom": 747,
+   "full": 6,
+   "partial": 7,
+   "tabBottom": 243,
+   "chromeH": 189,
+   "load_s": 4.6
+  }
+ ],
+ "884x1000": [
+  {
+   "rows": 6474,
+   "rowH": 44,
+   "pitch": 46,
+   "firstTop": 300,
+   "listTop": 294,
+   "visTop": 294,
+   "visBottom": 967,
+   "full": 14,
+   "partial": 15,
+   "tabBottom": 143,
+   "chromeH": 157,
+   "load_s": 4.81
+  },
+  {
+   "rows": 6474,
+   "rowH": 44,
+   "pitch": 46,
+   "firstTop": 300,
+   "listTop": 294,
+   "visTop": 294,
+   "visBottom": 967,
+   "full": 14,
+   "partial": 15,
+   "tabBottom": 143,
+   "chromeH": 157,
+   "load_s": 3.61
+  }
+ ]
+}
