@@ -169,10 +169,18 @@ def test_forbidden_inside_write_directory_is_valid():
 
 # 6. 공통 기록 파일은 충돌 유지
 def test_common_record_file_mentioned_in_prose_stays_a_write():
+    a = _job("app/services/a.py", prose="완료 후 CHANGELOG.md 를 갱신한다.")
+    b = _job("app/services/b.py", prose="완료 후 CHANGELOG.md 를 갱신한다.")
+    assert "server:CHANGELOG.md" in _extract_target_files(a)
+    assert _conflict(a, b)["overlap"] == ["server:CHANGELOG.md"]
+
+
+def test_root_handover_mentioned_in_prose_is_not_a_write():
+    """R-001: 루트 핸드오버 문서는 어떤 러너도 수정하지 않으므로 충돌 집합에서 뺀다."""
     a = _job("app/services/a.py", prose="완료 후 HANDOVER.md 를 갱신한다.")
     b = _job("app/services/b.py", prose="완료 후 HANDOVER.md 를 갱신한다.")
-    assert "server:HANDOVER.md" in _extract_target_files(a)
-    assert _conflict(a, b)["overlap"] == ["server:HANDOVER.md"]
+    assert "server:HANDOVER.md" not in _extract_target_files(a)
+    assert _conflict(a, b) is None
 
 
 def test_common_record_file_declared_read_only_is_not_a_write():

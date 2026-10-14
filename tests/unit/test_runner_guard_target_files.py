@@ -8,6 +8,8 @@ R-QUALITY 가 강제하는 공통 검증 명령(`scripts/run_unit_tests.sh`) 하
 """
 import os
 
+import pytest
+
 os.environ.setdefault("JWT_SECRET_KEY", "unit-test-secret")
 os.environ.setdefault("E2B_API_KEY", "unit-test-e2b-key")
 
@@ -100,3 +102,145 @@ def test_todays_conflicting_instructions_have_no_intersection():
     assert work_recipe_files
     assert goal_files
     assert work_recipe_files & goal_files == set()
+
+
+# ---- 명시 머리표 줄만 제외 / 루트 핸드오버 제외 (AADS-RUNNERGUARD-HEADER-ONLY-EXCLUDE) ----
+# 문장 안의 금지 표현으로는 경로를 빼지 않는다. 오탐보다 누락이 훨씬 위험하다.
+
+P1 = "app/services/alpha_one.py"
+P2 = "app/services/beta_two.py"
+P3 = "app/services/gamma_three.py"
+S1 = f"server:{P1}"
+S2 = f"server:{P2}"
+S3 = f"server:{P3}"
+
+
+@pytest.mark.parametrize("header", ["FORBIDDEN_FILES", "READ_ONLY_FILES", "REFERENCE_FILES"])
+def test_header_line_inline_values_are_excluded(header):
+    assert _extract_target_files(f"{header}: {P1}, {P2}\n") == set()
+
+
+@pytest.mark.parametrize("prefix", ["", "  ", "- ", "* ", "  - "])
+def test_header_line_allows_leading_space_dash_star(prefix):
+    assert _extract_target_files(f"{prefix}FORBIDDEN_FILES: {P1}\n") == set()
+
+
+def test_empty_header_excludes_following_dash_list_only():
+    instruction = (
+        "READ_ONLY_FILES:\n"
+        f"- {P1}\n"
+        f"- {P2}\n"
+        "\n"
+        f"{P3} 를 수정한다.\n"
+    )
+    assert _extract_target_files(instruction) == {S3}
+
+
+def test_empty_header_list_ends_at_next_header():
+    instruction = (
+        "REFERENCE_FILES:\n"
+        f"- {P1}\n"
+        f"TARGET_FILES: {P2}\n"
+        f"{P3} 도 고친다.\n"
+    )
+    assert _extract_target_files(instruction) == {S2}
+
+
+def test_empty_header_list_ends_at_non_list_line():
+    instruction = (
+        "FORBIDDEN_FILES:\n"
+        f"- {P1}\n"
+        f"{P2} 를 고친다.\n"
+        f"- {P3}\n"
+    )
+    assert _extract_target_files(instruction) == {S2, S3}
+
+
+def test_header_with_value_does_not_swallow_following_list():
+    instruction = (
+        f"READ_ONLY_FILES: {P1}\n"
+        f"- {P2}\n"
+    )
+    assert _extract_target_files(instruction) == {S2}
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        f"{P1} 삭제 금지, 로직 수정한다",
+        f"{P1} 의 금지 목록에 항목을 추가한다",
+        f"{P1} 의 수정 금지 메시지를 변경한다",
+        f"{P1} 를 수정하라: 읽기전용 옵션을 추가",
+    ],
+)
+def test_prohibition_words_inside_sentence_never_exclude_path(sentence):
+    assert _extract_target_files(sentence + "\n") == {S1}
+
+
+def test_changelog_with_inline_prohibition_stays_a_write():
+    assert _extract_target_files("CHANGELOG.md 갱신 (삭제 금지)\n") == {"server:CHANGELOG.md"}
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"READ_ONLY {P1}",
+        f"READ_ONLY_FILES {P1}",
+        f"read_only_files: {P1}",
+        f"Forbidden_Files: {P1}",
+        f"읽기전용: {P1}",
+        f"수정 금지 파일: {P1}",
+        f"참고 {P1} 수정 금지",
+    ],
+)
+def test_non_exact_header_forms_stay_a_write(line):
+    assert _extract_target_files(line + "\n") == {S1}
+
+
+def test_malformed_declaration_disables_header_exclusion():
+    """선언 오류(경로 아님)면 기존 보수 판정 — 머리표 줄 경로도 쓰기로 본다."""
+    instruction = (
+        "TARGET_FILES: not a path!!\n"
+        f"FORBIDDEN_FILES: {P1}\n"
+    )
+    assert S1 in _extract_target_files(instruction)
+
+
+def test_target_files_line_path_is_included():
+    assert _extract_target_files(f"TARGET_FILES: {P1}\n") == {S1}
+
+
+def test_target_files_with_forbidden_header_keeps_only_target():
+    instruction = f"TARGET_FILES: {P1}\nFORBIDDEN_FILES: {P2}\n"
+    assert _extract_target_files(instruction) == {S1}
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "HANDOVER.md 는 수정 금지.\n",
+        "완료 후 HANDOVER.md 를 갱신한다.\n",
+        "/root/aads/aads-server/HANDOVER.md 수정 금지\n",
+        "/root/aads/aads-dashboard/HANDOVER.md 수정 금지\n",
+        "GO100_HANDOVER.md 는 건드리지 않는다.\n",
+    ],
+)
+def test_root_handover_doc_is_not_a_write(instruction):
+    assert _extract_target_files(instruction) == set()
+
+
+def test_dashboard_root_handover_doc_is_not_a_write():
+    assert _extract_target_files("aads-dashboard/HANDOVER.md 수정 금지\n") == set()
+
+
+def test_handover_under_subdir_stays_a_write():
+    assert _extract_target_files("docs/HANDOVER.md 수정 금지\n") == {"server:docs/HANDOVER.md"}
+
+
+def test_header_exclusion_keeps_exec_command_exclusion():
+    instruction = (
+        f"FORBIDDEN_FILES: {P1}\n"
+        "bash scripts/run_unit_tests.sh tests/unit/test_a.py\n"
+        f"{P2} 를 수정한다.\n"
+    )
+    assert _extract_target_files(instruction) == {S2}

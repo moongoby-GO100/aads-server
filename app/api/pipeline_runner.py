@@ -292,14 +292,59 @@ def _line_prefix_has_exec_command(prefix: str) -> bool:
     return any(token in cleaned for token in _EXEC_COMMAND_PREFIXES)
 
 
-def _scan_instruction_paths(text: str, skip_lines: frozenset[int] = frozenset()) -> set[str]:
-    """지시문 본문에서 경로처럼 생긴 토큰을 모은다(실행 명령 인자는 제외)."""
+_HEADER_ONLY_RE = re.compile(r"^[ \t\-*]*(?:FORBIDDEN_FILES|READ_ONLY_FILES|REFERENCE_FILES):(.*)$")
+_LIST_ITEM_RE = re.compile(r"^[ \t]*-[ \t]")
+_ROOT_HANDOVER_RE = re.compile(r"^(?:server|dashboard):[A-Za-z0-9_-]*HANDOVER\.md$", re.IGNORECASE)
+
+
+def _header_excluded_lines(text: str) -> set[int]:
+    """쓰기 대상이 아님을 머리표로 명시한 줄 번호(0-기준, `\\n` 분할).
+
+    줄 머리가 정확히 `FORBIDDEN_FILES:` / `READ_ONLY_FILES:` / `REFERENCE_FILES:`(대소문자
+    구분, 콜론 필수)인 줄만 제외한다. 값이 비어 있으면 이어지는 `- ` 목록 줄도 제외하며
+    빈 줄·다른 머리표·목록이 아닌 줄에서 끝난다. 문장 속 금지 표현으로는 판정하지 않는다.
+    """
+    lines = [ln.rstrip("\r") for ln in text.split("\n")]
+    out: set[int] = set()
+    idx = 0
+    while idx < len(lines):
+        m = _HEADER_ONLY_RE.match(lines[idx])
+        if not m:
+            idx += 1
+            continue
+        out.add(idx)
+        if not m.group(1).strip():
+            while idx + 1 < len(lines):
+                nxt = lines[idx + 1]
+                if not nxt.strip() or not _LIST_ITEM_RE.match(nxt):
+                    break
+                if _HEADER_ONLY_RE.match(nxt) or _SCOPE_MARKER_RE.match(nxt):
+                    break
+                idx += 1
+                out.add(idx)
+        idx += 1
+    return out
+
+
+def _is_root_handover_doc(path: str) -> bool:
+    """R-001: 저장소 루트 핸드오버 문서는 어떤 러너도 수정하지 않는다. 하위 경로는 해당 없음."""
+    return bool(_ROOT_HANDOVER_RE.match(path))
+
+
+def _scan_instruction_paths(
+    text: str,
+    skip_lines: frozenset[int] = frozenset(),
+    *,
+    exclude_header_lines: bool = True,
+) -> set[str]:
+    """지시문 본문에서 경로처럼 생긴 토큰을 모은다(실행 명령 인자·명시 머리표 줄·루트 핸드오버 제외)."""
     files: set[str] = set()
     lines = text.splitlines()
+    header_lines = _header_excluded_lines(text) if exclude_header_lines else set()
     matches = list(_TARGET_FILE_RE.finditer(text)) + list(_SPECIAL_TARGET_RE.finditer(text))
     for match in matches:
         line_idx = text.count("\n", 0, match.start())
-        if line_idx in skip_lines:
+        if line_idx in skip_lines or line_idx in header_lines:
             continue
         line = lines[line_idx] if 0 <= line_idx < len(lines) else ""
         if _line_is_exec_command(line):
@@ -309,7 +354,7 @@ def _scan_instruction_paths(text: str, skip_lines: frozenset[int] = frozenset())
         if _line_prefix_has_exec_command(prefix_on_line):
             continue
         normalized = _normalize_target_file_path(match.group(0))
-        if normalized:
+        if normalized and not _is_root_handover_doc(normalized):
             files.add(normalized)
     return files
 
@@ -474,7 +519,7 @@ def _parse_write_scope(instruction: str) -> _WriteScope:
                 error = f"TARGET_FILES 와 FORBIDDEN_FILES 가 모순: {w}"
                 break
 
-    legacy = _scan_instruction_paths(text)
+    legacy = _scan_instruction_paths(text, exclude_header_lines=not error)
     if error or not write:
         return _WriteScope(explicit=False, write=frozenset(legacy), error=error)
 
