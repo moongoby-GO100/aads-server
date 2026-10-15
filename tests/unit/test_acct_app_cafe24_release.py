@@ -380,7 +380,8 @@ def test_build_is_an_overlay_of_the_running_image_with_revision_label_and_no_sec
     assert re.findall(r"^COPY .*", dockerfile, re.M) == ["COPY app ./app", "COPY migrations ./migrations", "COPY deploy ./deploy"]
     assert not re.search(r"^(ENV|ARG|ADD) ", dockerfile, re.M)
     runs = re.findall(r"^RUN .*", dockerfile, re.M)
-    assert len(runs) == 1, runs
+    assert len(runs) == 2, runs
+    assert runs[1].startswith("RUN rm -f "), runs
     assert "apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng " in runs[0]
     assert "$" not in runs[0].replace("DEBIAN_FRONTEND", "")
     with tarfile.open(box.fake / "build.tar") as tf:
@@ -1050,6 +1051,50 @@ def test_candidate_with_tesseract_kor_passes_the_ocr_check(box):
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "CMD docker exec acct-app-candidate-r9 tesseract --list-langs" in box.log()
+
+
+LEGACY_MOCKUPS = [f"app/static/apps/obys/{n}" for n in ("mockup-v2.html", "mockup-v3.html", "mockup-v4.html", "mockup-final.html")]
+KEPT_OBYS_FILES = ["mockup-v4-1.html", "mockup-employee-contract-v1.html", "mockup-signup-v1.html", "index.html"]
+
+
+def _release_exclude_paths():
+    body = re.search(r"^RELEASE_EXCLUDE_PATHS=\(\n(.*?)^\)", SCRIPT.read_text(encoding="utf-8"), re.M | re.S).group(1)
+    return body.split()
+
+
+def test_release_exclude_list_is_exactly_the_four_legacy_mockups_and_keeps_live_screens():
+    paths = _release_exclude_paths()
+    assert paths == LEGACY_MOCKUPS
+    for keep in KEPT_OBYS_FILES:
+        assert f"app/static/apps/obys/{keep}" not in paths
+        assert (ROOT / "app/static/apps/obys" / keep).is_file()
+
+
+def test_legacy_mockups_are_excluded_from_the_archive_and_removed_inside_the_image(box):
+    files = {rel: "<html>old</html>\n" for rel in LEGACY_MOCKUPS}
+    files.update({f"app/static/apps/obys/{n}": "<html>keep</html>\n" for n in KEPT_OBYS_FILES})
+    files["app/static/apps/obys/index.html"] = f"<html>{MARKER}</html>\n"
+    box.commit_release(files)
+    assert box.run().returncode == 0
+    with tarfile.open(box.fake / "build.tar") as tf:
+        names = tf.getnames()
+    for rel in LEGACY_MOCKUPS:
+        assert "./" + rel not in names
+    for keep in KEPT_OBYS_FILES:
+        assert f"./app/static/apps/obys/{keep}" in names
+    dockerfile = (box.fake / "Dockerfile.built").read_text().splitlines()
+    rm = [line for line in dockerfile if line.startswith("RUN rm -f ")]
+    assert len(rm) == 1
+    assert rm[0].split()[3:] == ["./" + p for p in LEGACY_MOCKUPS]
+    assert dockerfile.index("COPY app ./app") < dockerfile.index(rm[0])
+    assert dockerfile.index("USER root") < dockerfile.index(rm[0]) < dockerfile.index("USER appuser")
+
+
+def test_yeoljeong_mockup_redirect_does_not_point_at_an_excluded_mockup():
+    text = (ROOT / "app/static/apps/yeoljeong-finance/mockup-v2.html").read_text(encoding="utf-8")
+    assert "mockup-final" not in text
+    assert text.count("/static/apps/obys/index.html") >= 3
+    assert "window.location.search+window.location.hash" in text
 
 
 def test_dockerfile_skips_the_tesseract_install_when_already_present_and_restores_the_base_user(box):

@@ -103,6 +103,15 @@ ACCT_AUTH_MIGRATION_ALLOWLIST=(
     20261014_obys_auth_password_recovery.sql
 )
 BUILD_PATHS=(app migrations deploy)
+# 운영 이미지에서 뺄 옛 시안. 저장소 파일은 그대로 두고 (1) git archive 에서 제외하고 (2) 기반 이미지에 남은 사본을 RUN rm 으로 지운다.
+# 되돌리기 = 아래 목록에서 해당 줄을 삭제한다(다음 릴리스부터 다시 배포됨).
+# 절대 넣지 말 것: mockup-v4-1.html(V4.1 운영 화면), mockup-employee-contract-v1.html, mockup-signup-v1.html, index.html.
+RELEASE_EXCLUDE_PATHS=(
+    app/static/apps/obys/mockup-v2.html
+    app/static/apps/obys/mockup-v3.html
+    app/static/apps/obys/mockup-v4.html
+    app/static/apps/obys/mockup-final.html
+)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ASSET_TOOL="${ACCT_ASSET_TOOL:-$SCRIPT_DIR/obys_release_assets.py}"
 CF_ENV_FILE="${ACCT_CF_ENV_FILE:-/root/.cloudflare_env}"
@@ -673,11 +682,16 @@ write_dockerfile() { # write_dockerfile <ctx dir>
         echo "FROM $BASE_REF"
         echo "USER root"
         ocr_install_run
-        [[ -z $base_user || $base_user == root ]] || echo "USER $base_user"
         printf 'LABEL'
         for k in $keys; do printf ' %s="%s"' "$k" "$SHA8"; done
         printf ' acct.release.sha="%s" acct.release.run="%s" acct.release.base="%s"\n' "$RELEASE_SHA" "$RUN_ID" "$PREV_IMAGE_ID"
         for p in "${BUILD_PATHS_PRESENT[@]}"; do echo "COPY $p ./$p"; done
+        # COPY 와 같은 WORKDIR 상대경로. root 구간에서 지우고 레이어는 RUN 1개만 늘린다.
+        if (( ${#RELEASE_EXCLUDE_PATHS[@]} > 0 )); then
+            for p in "${RELEASE_EXCLUDE_PATHS[@]}"; do [[ $p =~ ^[A-Za-z0-9_./-]+$ ]] || die 6 "bad release exclude path '$p'"; done
+            echo "RUN rm -f$(printf ' ./%s' "${RELEASE_EXCLUDE_PATHS[@]}")"
+        fi
+        [[ -z $base_user || $base_user == root ]] || echo "USER $base_user"
     } >"$ctx/Dockerfile"
 }
 
@@ -810,7 +824,9 @@ build_image() {
         [[ -n "$(git -C "$REPO" ls-tree --name-only HEAD -- "$p")" ]] && BUILD_PATHS_PRESENT+=("$p")
     done
     [[ ${#BUILD_PATHS_PRESENT[@]} -gt 0 ]] || die 6 "no build paths exist at the release"
-    git -C "$REPO" archive --format=tar HEAD "${BUILD_PATHS_PRESENT[@]}" ':(exclude)app/static/gallery' | tar -x -C "$BUILD_CTX" \
+    local -a excl=()
+    for p in "${RELEASE_EXCLUDE_PATHS[@]}"; do excl+=(":(exclude)$p"); done
+    git -C "$REPO" archive --format=tar HEAD "${BUILD_PATHS_PRESENT[@]}" ':(exclude)app/static/gallery' "${excl[@]}" | tar -x -C "$BUILD_CTX" \
         || die 6 "git archive of the release failed"
     stamp_assets
     kb="$(du -sk "$BUILD_CTX" | cut -f1)"
