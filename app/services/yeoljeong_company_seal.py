@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Callable
 from typing import Any
 
 SIZE = 200
@@ -15,12 +16,15 @@ CENTER = 100
 OUTER_R = 96
 INNER_R = 54
 RING_MID_R = 75
-DOT_ANGLE = -54
-DOT_R = 4.5
-RING_MAX_FS = 28
-INNER_MAX_FS = 30
-INNER_BOX = 68
-CORP_TITLE = "대표이사인"
+DOT_ANGLE = -42
+DOT_R = 5.5
+RING_MAX_FS = 34
+INNER_MAX_FS = 36
+INNER_BOX = 76
+OUTER_W = 2
+INNER_W = 2.6
+TEXT_STROKE = 0.3
+CORP_TITLE = "代表理事"
 INK_RGB = (0xC1 / 255, 0x27 / 255, 0x2D / 255)
 _CORP_PATTERN = re.compile(r"주식회사|\(주\)|㈜|유한회사|유한책임회사|합자회사|합명회사|법인")
 _CORP_TYPES = {"corporation", "corporate", "법인", "법인사업자"}
@@ -92,9 +96,13 @@ def layout(kind: str, company_name: Any, representative: Any) -> dict[str, Any] 
     }
 
 
-def draw_seal(canv: Any, plan: dict[str, Any], x: float, y: float, size: float, font: str) -> None:
-    """reportlab canvas 에 도장을 벡터로 그린다. (x, y) 는 도장 정사각형의 왼쪽 아래, size 는 한 변."""
+def draw_seal(canv: Any, plan: dict[str, Any], x: float, y: float, size: float, font: str, font_for: Callable[[str], str] | None = None) -> None:
+    """reportlab canvas 에 도장을 벡터로 그린다. (x, y) 는 도장 정사각형의 왼쪽 아래, size 는 한 변.
+
+    ``font_for(ch)`` 가 있으면 글자마다 그 글자를 가진 글꼴 이름을 고른다(없으면 모두 ``font``).
+    """
     scale = size / SIZE
+    pick = font_for or (lambda _ch: font)
 
     def px(value: float) -> float:
         return value * scale
@@ -107,20 +115,20 @@ def draw_seal(canv: Any, plan: dict[str, Any], x: float, y: float, size: float, 
         canv.translate(x, y)
         canv.setStrokeColorRGB(*INK_RGB)
         canv.setFillColorRGB(*INK_RGB)
-        canv.setLineWidth(3.2 * scale)
+        canv.setLineWidth(OUTER_W * scale)
         canv.circle(px(CENTER), flip(CENTER), px(OUTER_R), stroke=1, fill=0)
-        canv.setLineWidth(2.4 * scale)
+        canv.setLineWidth(INNER_W * scale)
         canv.circle(px(CENTER), flip(CENTER), px(INNER_R), stroke=1, fill=0)
         canv.circle(px(plan["dot"]["x"]), flip(plan["dot"]["y"]), px(DOT_R), stroke=0, fill=1)
-        canv.setLineWidth(0.6 * scale)
+        canv.setLineWidth(TEXT_STROKE * scale)
         for char in plan["ring"]:
             canv.saveState()
             canv.translate(px(CENTER), flip(CENTER))
             canv.rotate(-char["angle"])
-            _draw_char(canv, char["ch"], 0, -px(char["y"] - CENTER), px(char["fs"]), font)
+            _draw_char(canv, char["ch"], 0, -px(char["y"] - CENTER), px(char["fs"]), pick(char["ch"]))
             canv.restoreState()
         for char in plan["inner"]:
-            _draw_char(canv, char["ch"], px(char["x"]), flip(char["y"]), px(char["fs"]), font)
+            _draw_char(canv, char["ch"], px(char["x"]), flip(char["y"]), px(char["fs"]), pick(char["ch"]))
     finally:
         canv.restoreState()
 

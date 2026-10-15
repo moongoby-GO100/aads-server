@@ -5,6 +5,7 @@
 import base64
 import hashlib
 from io import BytesIO
+from pathlib import Path
 
 from app.services import yeoljeong_contract_pdf as pdf
 
@@ -85,3 +86,49 @@ def test_store_signed_pdf_passes_seal_inputs_to_renderer(monkeypatch, tmp_path):
     result = svc._store_signed_contract_pdf(contract, None)
     assert result["status"] == "stored"
     assert seen["seal"] == {"kind": "corporation", "company_name": "주식회사 열정국밥", "representative": "오윤희"}
+
+
+PDF_FONT_DIR = Path(__file__).parents[2] / "app/assets/fonts"
+
+
+def _ksx1001_hangul():
+    out = set()
+    for hi in range(0xB0, 0xC9):
+        for lo in range(0xA1, 0xFF):
+            try:
+                out.add(bytes([hi, lo]).decode("euc-kr"))
+            except UnicodeDecodeError:
+                pass
+    return {ch for ch in out if 0xAC00 <= ord(ch) <= 0xD7A3}
+
+
+def test_seal_pdf_fonts_cover_ksx1001_hangul_and_the_four_hanja():
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    hangul = TTFont("t-hangul", str(PDF_FONT_DIR / "ObysSealHangul-Gugi-subset.ttf")).face.charToGlyph
+    hanja = TTFont("t-hanja", str(PDF_FONT_DIR / "ObysSealHanja-NotoSerifKR-Black-subset.ttf")).face.charToGlyph
+    assert all(ord(ch) in hangul for ch in _ksx1001_hangul())
+    assert all(ord(ch) in hanja for ch in "代表理事印")
+    assert all(ord(ch) in hangul for ch in "ABCabc0123()&.-")
+
+
+def test_seal_font_picker_uses_gugi_for_hangul_hanja_font_for_hanja_and_body_font_otherwise():
+    pick = pdf._seal_font_picker("Body")
+    assert pick("열") == "ObysSealHangul" and pick("代") == "ObysSealHanja" and pick("事") == "ObysSealHanja"
+    assert pick("㈜") == "Body" and pick("鸞") == "Body" and pick("·") == "Body"
+
+
+def test_seal_font_picker_falls_back_to_the_body_font_when_the_files_are_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(pdf, "SEAL_FONT_FILES", (("ObysSealMissing", tmp_path / "none.ttf"),))
+    pick = pdf._seal_font_picker("Body")
+    assert pick("열") == "Body" and pick("代") == "Body"
+
+
+def test_signed_pdf_embeds_the_seal_fonts_for_corporation_and_still_works_for_individual():
+    contract = _signed_contract()
+    corp = pdf.render_signed_contract_pdf(contract, seal={"kind": "corporation", "company_name": "주식회사 열정국밥", "representative": "오윤희"})
+    plain = pdf.render_signed_contract_pdf(contract)
+    # reportlab 은 글꼴을 "/F2+0" 식 이름으로 서브셋 임베드하므로 이름이 아니라 임베드된 글꼴 파일 수로 센다(본문 + 도장 한글 + 도장 한자).
+    assert corp.startswith(b"%PDF") and corp.count(b"/FontFile2") == plain.count(b"/FontFile2") + 2
+    individual = pdf.render_signed_contract_pdf(contract, seal={"kind": "individual", "company_name": "열정국밥 미아점", "representative": "최미미"})
+    assert individual.startswith(b"%PDF") and individual.count(b"/FontFile2") == plain.count(b"/FontFile2") + 1

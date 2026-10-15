@@ -82,7 +82,7 @@ def stamp_tree(obys_dir, version):
 
 def purge_urls(obys_dir, version, host_url):
     """index.html, sw.js, every module the shells load (bare + ?v=<version>), then every other top-level
-    *.html / *.webmanifest and every file directly in icons/ as a bare URL (requested unstamped), deduplicated in order."""
+    *.html / *.webmanifest and every file directly in icons/ and every assets/fonts/*.woff2 as a bare URL (requested unstamped), deduplicated in order."""
     _check_version(version)
     base = host_url.rstrip("/")
     root = Path(obys_dir)
@@ -95,6 +95,10 @@ def purge_urls(obys_dir, version, host_url):
     icons = root / "icons"
     if icons.is_dir():
         urls += [base + "/static/apps/obys/icons/" + f.name for f in sorted(icons.iterdir()) if f.is_file()]
+    # seal fonts (.woff2) are requested by company-seal.js without ?v=, so purge them per file. License .txt files are skipped.
+    fonts = root / "assets" / "fonts"
+    if fonts.is_dir():
+        urls += [base + "/static/apps/obys/assets/fonts/" + f.name for f in sorted(fonts.glob("*.woff2")) if f.is_file()]
     return list(dict.fromkeys(urls))
 
 

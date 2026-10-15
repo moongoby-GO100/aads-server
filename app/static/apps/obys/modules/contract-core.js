@@ -225,10 +225,12 @@
     }
 
     // 도장은 이미지 파일이 아니라 company-seal.js 가 계약서 값(없으면 사업장 정보)으로 그린다.
-    function contractSealUri(contract, businessId, branchName) {
+    // <img> 안의 SVG 는 페이지 글꼴을 쓰지 못하므로 인라인 SVG 로 넣는다. 값은 모두 escapeXml 을 거친다.
+    function contractSealSvg(contract, businessId, branchName) {
       const seal = globalThis.ObysCompanySeal;
       if (!seal) return "";
-      return seal.dataUri(seal.optionsFor(contract, sealBusinessRecord(businessId, branchName)));
+      const options = seal.optionsFor(contract, sealBusinessRecord(businessId, branchName));
+      return seal.svg({ ...options, inline: true, label: `${options.companyName || "사용자"} 전자문서용 확인도장` }) || "";
     }
 
     // 관리자 작성 화면 전용 안내. 계약서 종이(.contract-paper/.cv41-paper) 바깥 패널에만 넣고, 서명·직원 포털·인쇄·PDF 에는 쓰지 않는다.
@@ -396,8 +398,7 @@
             : "사업주는 근로계약 체결 시 본 계약서를 근로자에게 교부하며, 전자서명 완료본은 전자문서로 보관한다."
       ));
       const contractBusinessId = contractValue(contract, "businessId", "business_id") || businessForBranchName(contractValue(contract, "branch")).id || "";
-      const stampUrl = contractSealUri(contract, contractBusinessId, contractValue(contract, "branch"));
-      const stampAlt = `${employerName || "사용자"} 전자문서용 확인도장`;
+      const stampSvg = contractSealSvg(contract, contractBusinessId, contractValue(contract, "branch"));
       const salaryBreakdown = contractType === "regular" && (baseSalary || nonTaxMealAllowance || taxableAllowance)
         ? `<div class="salary-breakdown"><span>과세 기본급<br><b>${formatMoney(baseSalary)}</b></span><span>비과세 식대<br><b>${formatMoney(nonTaxMealAllowance)}</b><br><small>${mealProvision === "cash_no_meal" ? "식사 미제공 조건" : "미적용"}</small></span><span>기타 과세수당<br><b>${formatMoney(taxableAllowance)}</b></span></div>`
         : "";
@@ -410,7 +411,7 @@
         <ol>${clauses.join("")}</ol>
         ${contractValue(contract, "terms", "terms") ? `<h4>추가 특약</h4><p>${previewText(contractValue(contract, "terms", "terms"))}</p>` : ""}
         <div class="signature-grid">
-          <div class="signature-box employer-signature"><b>사용자 서명</b><br>${previewText(employerName, "열정국밥")}<br>대표 ${previewText(contractValue(contract, "employerRepresentative", "employer_representative"))} (서명 또는 인)${stampUrl ? `<img class="contract-stamp" src="${escapeHtml(stampUrl)}" alt="${escapeHtml(stampAlt)}">` : ""}</div>
+          <div class="signature-box employer-signature"><b>사용자 서명</b><br>${previewText(employerName, "열정국밥")}<br>대표 ${previewText(contractValue(contract, "employerRepresentative", "employer_representative"))} (서명 또는 인)${stampSvg}</div>
           <div class="signature-box"><b>${signatureLabel}</b><br>${previewText(signerName)}<br>${signatureDataUri ? `<img class="signed-signature-image" src="${escapeHtml(signatureDataUri)}" alt="${escapeHtml(signatureLabel)} 자필서명">서명일시: ${previewText(String(signedAt).replace("T", " ").slice(0, 19))}` : "서명: __________"}</div>
         </div>
       `;

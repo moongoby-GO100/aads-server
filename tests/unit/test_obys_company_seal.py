@@ -1,10 +1,9 @@
-"""ACCT-OBYS-CONTRACT-COMPANY-SEAL-DESIGN-20261015 — 계약서 도장(법인/개인사업자) SVG 생성과 화면·PDF 연결."""
+"""ACCT-OBYS-CONTRACT-COMPANY-SEAL-DESIGN-20261015 / ACCT-OBYS-CONTRACT-SEAL-FONT-HANJA-20261015 — 계약서 도장(법인/개인사업자) SVG 생성과 화면·PDF 연결."""
 import importlib.util
 import json
 import shutil
 import subprocess
 from pathlib import Path
-from urllib.parse import unquote
 
 import pytest
 
@@ -58,7 +57,7 @@ def test_corporation_seal_has_company_name_ring_dot_and_title():
     assert markup.count("<circle") == 3  # 바깥 원, 안쪽 원, 점
     texts = _svg_texts(markup)
     assert "".join(texts[:8]) == "주식회사열정국밥"
-    assert "".join(texts) == "주식회사열정국밥" + "대표이사인"
+    assert "".join(texts) == "주식회사열정국밥" + "代表理事"  # 기대값 변경: 안쪽 문구 대표이사인 → 代表理事(CEO 지시 2026-10-15)
 
 
 def test_individual_seal_has_business_name_ring_and_representative_with_in():
@@ -67,7 +66,7 @@ def test_individual_seal_has_business_name_ring_and_representative_with_in():
     assert "".join(texts[:7]) == "열정국밥미아점"
     inner = texts[7:]
     assert sorted(inner) == sorted("최미미인") and "최" in inner and "인" in inner
-    assert "대표이사인" not in "".join(texts)
+    assert "代表理事" not in "".join(texts) and "대표이사인" not in "".join(texts)
 
 
 def test_individual_without_business_name_falls_back_to_representative_on_ring():
@@ -159,8 +158,8 @@ console.log(JSON.stringify(html));
 def _stamp_markup(html):
     import re
 
-    match = re.search(r'<img class="contract-stamp" src="(data:image/svg\+xml;charset=utf-8,[^"]+)"', html)
-    return unquote(match.group(1).split(",", 1)[1]) if match else None
+    match = re.search(r'<svg [^>]*class="contract-stamp"[^>]*>.*?</svg>', html, re.S)
+    return match.group(0) if match else None
 
 
 def test_contract_preview_embeds_the_seal_for_corporation_and_individual():
@@ -181,7 +180,7 @@ def test_contract_preview_embeds_the_seal_for_corporation_and_individual():
         },
     )
     corp, individual, from_business, none = out
-    assert "".join(_svg_texts(_stamp_markup(corp))) == "주식회사열정국밥대표이사인"
+    assert "".join(_svg_texts(_stamp_markup(corp))) == "주식회사열정국밥代表理事"
     assert "".join(_svg_texts(_stamp_markup(individual))[:7]) == "열정국밥미아점"
     assert sorted(_svg_texts(_stamp_markup(individual))[7:]) == sorted("최미미인")
     assert sorted(_svg_texts(_stamp_markup(from_business))[7:]) == sorted("최미미인")
@@ -194,7 +193,9 @@ def test_legacy_pngs_stay_in_repo_but_screens_no_longer_use_them():
     for name in ("biz-junghwa", "biz-sungshin", "biz-mia"):
         assert (OBYS / "assets/stamps" / f"{name}.png").is_file()
     assert "assets/stamps/" not in INDEX and "assets/stamps/" not in CORE
-    assert "contractSealUri(contract, contractBusinessId" in INDEX and "contractSealUri(contract, contractBusinessId" in CORE
+    # 이름 변경: contractSealUri → contractSealSvg (<img> 안 SVG 는 페이지 글꼴을 못 써서 인라인 SVG 로 바꿈)
+    assert "contractSealSvg(contract, contractBusinessId" in INDEX and "contractSealSvg(contract, contractBusinessId" in CORE
+    assert "contractSealUri" not in INDEX and "contractSealUri" not in CORE
 
 
 def test_seal_module_loads_before_the_screens_that_render_contracts():
@@ -274,7 +275,102 @@ def test_pdf_drawing_places_every_character_without_reportlab():
     canv = _RecordingCanvas()
     py_seal.draw_seal(canv, plan, 10, 20, 100, "Font")
     drawn = [args[0] for name, args in canv.calls if name == "text.textOut"]
-    assert "".join(drawn) == "주식회사열정국밥대표이사인"
+    assert "".join(drawn) == "주식회사열정국밥代表理事"
     assert [name for name, _ in canv.calls].count("circle") == 3
     assert canv.calls[0][0] == "saveState" and canv.calls[-1][0] == "restoreState"
     assert sum(1 for name, _ in canv.calls if name == "saveState") == sum(1 for name, _ in canv.calls if name == "restoreState")
+
+
+FONT_DIR = OBYS / "assets/fonts"
+PDF_FONT_DIR = ROOT / "app/assets/fonts"
+HANGUL_WOFF2 = FONT_DIR / "obys-seal-hangul-gugi.woff2"
+HANJA_WOFF2 = FONT_DIR / "obys-seal-hanja-notoserifkr-black.woff2"
+
+
+def _ksx1001_hangul():
+    out = set()
+    for hi in range(0xB0, 0xC9):
+        for lo in range(0xA1, 0xFF):
+            try:
+                out.add(bytes([hi, lo]).decode("euc-kr"))
+            except UnicodeDecodeError:
+                pass
+    return {ch for ch in out if 0xAC00 <= ord(ch) <= 0xD7A3}
+
+
+def test_corporation_inner_text_is_four_hanja_in_two_columns_right_column_first():
+    plan = _node("console.log(JSON.stringify(ObysCompanySeal.layout(input)));", CORP)
+    inner = plan["inner"]
+    assert [c["ch"] for c in inner] == list("代表理事")
+    right, left = inner[:2], inner[2:]
+    assert [c["ch"] for c in right] == ["代", "表"] and [c["ch"] for c in left] == ["理", "事"]
+    assert right[0]["x"] == right[1]["x"] > 100 > left[0]["x"] == left[1]["x"]
+    assert right[0]["y"] < right[1]["y"] and left[0]["y"] < left[1]["y"]
+    assert right[0]["y"] == left[0]["y"]
+    assert py_seal.CORP_TITLE == "代表理事"
+
+
+def test_ring_is_the_business_name_in_hangul_and_individual_inner_text_is_unchanged():
+    corp = _node("console.log(JSON.stringify(ObysCompanySeal.layout(input)));", CORP)
+    assert "".join(c["ch"] for c in corp["ring"]) == "주식회사열정국밥"
+    individual = _node("console.log(JSON.stringify(ObysCompanySeal.layout(input)));", INDIVIDUAL)
+    assert "".join(c["ch"] for c in individual["ring"]) == "열정국밥미아점"
+    assert "".join(c["ch"] for c in individual["inner"]) == "최미미인"
+
+
+def test_svg_names_the_self_hosted_font_families_with_fallback_and_no_external_url():
+    out = _node("console.log(JSON.stringify([ObysCompanySeal.svg(input), ObysCompanySeal.svg({...input, inline: true})]));", CORP)
+    for markup in out:
+        assert "font-family=\"'ObysSealHangul','ObysSealHanja','Noto Serif KR'" in markup
+        assert "http://" not in markup.replace("http://www.w3.org/2000/svg", "") and "https://" not in markup and "url(" not in markup.replace("url(#seal-ink)", "")
+    boxed, inline = out
+    assert 'width="200" height="200"' in boxed and "contract-stamp" not in boxed
+    assert 'class="contract-stamp"' in inline and 'width="200"' not in inline and 'viewBox="0 0 200 200"' in inline
+
+
+def test_seal_fonts_load_only_when_a_seal_is_drawn_and_come_from_this_origin_path():
+    out = _node(
+        "const added = [], loaded = [];"
+        "globalThis.document = {head: {appendChild: n => added.push(n)}, getElementById: () => null,"
+        " createElement: () => ({}), fonts: {load: (f, t) => { loaded.push([f, t]); return Promise.resolve([]); }}};"
+        "const before = [added.length, loaded.length];"
+        "ObysCompanySeal.layout(input);"
+        "const afterLayout = [added.length, loaded.length];"
+        "ObysCompanySeal.svg(input);"
+        "console.log(JSON.stringify({before, afterLayout, added: added.map(n => n.textContent), loaded}));",
+        CORP,
+    )
+    assert out["before"] == [0, 0] and out["afterLayout"] == [0, 0]
+    css = out["added"][0]
+    assert css.count("@font-face") == 2 and css.count("font-display:swap") == 2
+    assert "/static/apps/obys/assets/fonts/obys-seal-hangul-gugi.woff2" in css and "/static/apps/obys/assets/fonts/obys-seal-hanja-notoserifkr-black.woff2" in css
+    assert "http" not in css and "googleapis" not in css and "cdn" not in css.lower()
+    assert [f for f, _ in out["loaded"]] == ["34px 'ObysSealHangul'", "34px 'ObysSealHanja'"]
+
+
+def test_seal_font_files_and_licenses_exist_and_stay_small():
+    for name in ("OFL-Gugi.txt", "OFL-NotoSerifKR.txt"):
+        text = (FONT_DIR / name).read_text(encoding="utf-8")
+        assert "SIL OPEN FONT LICENSE Version 1.1" in text
+    for name in ("Gugi-OFL.txt", "NotoSerifKR-OFL.txt"):
+        assert "SIL OPEN FONT LICENSE Version 1.1" in (PDF_FONT_DIR / name).read_text(encoding="utf-8")
+    assert HANGUL_WOFF2.read_bytes()[:4] == b"wOF2" and HANJA_WOFF2.read_bytes()[:4] == b"wOF2"
+    assert HANGUL_WOFF2.stat().st_size < 150_000 and HANJA_WOFF2.stat().st_size < 10_000
+    assert "Copyright" in (FONT_DIR / "OFL-Gugi.txt").read_text(encoding="utf-8").splitlines()[0]
+
+
+def test_pdf_drawing_picks_a_font_per_character_when_font_for_is_given():
+    plan = py_seal.layout("corporation", "주식회사 열정국밥", "")
+    canv = _RecordingCanvas()
+    py_seal.draw_seal(canv, plan, 0, 0, 100, "Base", lambda ch: "Han" if "一" <= ch <= "鿿" else "Hangul")
+    fonts = [args[0] for name, args in canv.calls if name == "text.setFont"]
+    assert fonts == ["Hangul"] * 8 + ["Han"] * 4
+
+
+def test_release_assets_lists_both_seal_fonts_but_the_pages_do_not_preload_them():
+    urls = release_tool.purge_urls(OBYS, "1a2b3c4d", "https://example.test")
+    assert "https://example.test/static/apps/obys/assets/fonts/obys-seal-hangul-gugi.woff2" in urls
+    assert "https://example.test/static/apps/obys/assets/fonts/obys-seal-hanja-notoserifkr-black.woff2" in urls
+    for markup in (INDEX, V41):
+        assert "assets/fonts/" not in markup and "fonts.googleapis" not in markup
+    assert "assets/fonts/" not in (OBYS / "sw.js").read_text(encoding="utf-8")

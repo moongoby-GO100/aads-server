@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
@@ -29,6 +30,10 @@ logger = logging.getLogger(__name__)
 FONT_ENV = "OBYS_CONTRACT_PDF_FONT_PATH"
 FONT_NAME = "ObysContractKR"
 BUNDLED_FONT = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "NanumGothic-Regular.ttf"
+SEAL_FONT_FILES = (
+    ("ObysSealHangul", BUNDLED_FONT.with_name("ObysSealHangul-Gugi-subset.ttf")),
+    ("ObysSealHanja", BUNDLED_FONT.with_name("ObysSealHanja-NotoSerifKR-Black-subset.ttf")),
+)
 SYSTEM_FONT_CANDIDATES = (
     Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
     Path("/usr/share/fonts/nanum/NanumGothic.ttf"),
@@ -213,6 +218,31 @@ def _register_font() -> str:
     return FONT_NAME
 
 
+def _seal_font_picker(base_font: str) -> Callable[[str], str]:
+    """도장 글자마다 그 글자를 가진 첫 글꼴을 고른다: 도장 한글(Gugi) → 도장 한자 → 본문 글꼴. 파일이 없으면 본문 글꼴만 쓴다."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFError, TTFont
+
+    chain: list[tuple[str, Any]] = []
+    for name, path in SEAL_FONT_FILES:
+        try:
+            font = TTFont(name, str(path))
+            pdfmetrics.registerFont(font)
+        except (TTFError, OSError) as exc:
+            logger.warning("도장 글꼴을 쓰지 못해 본문 글꼴로 그립니다: %s: %s", path.name, exc)
+            continue
+        chain.append((name, font.face.charToGlyph))
+
+    def pick(ch: str) -> str:
+        code = ord(ch)
+        for name, glyphs in chain:
+            if glyphs.get(code):
+                return name
+        return base_font
+
+    return pick
+
+
 def _signature_png(signature_data_uri: str, expected_sha256: str) -> bytes:
     prefix = "data:image/png;base64,"
     value = str(signature_data_uri or "")
@@ -354,6 +384,7 @@ def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | 
         raise ContractPdfError("reportlab 이 설치되어 있지 않습니다") from None
 
     font = _register_font()
+    seal_font_for = _seal_font_picker(font)
     base = ParagraphStyle("body", fontName=font, fontSize=9.5, leading=13.5, wordWrap="CJK")
     small = ParagraphStyle("small", parent=base, fontSize=7.5, leading=10, textColor=colors.HexColor("#444444"))
     label = ParagraphStyle("label", parent=base, textColor=colors.HexColor("#222222"))
@@ -428,7 +459,7 @@ def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | 
             self.width = self.height = side
 
         def draw(self) -> None:
-            company_seal.draw_seal(self.canv, self.plan, 0, 0, self.width, font)
+            company_seal.draw_seal(self.canv, self.plan, 0, 0, self.width, font, seal_font_for)
 
     employer_rows: list[list[Any]] = []
     if seal_plan:
