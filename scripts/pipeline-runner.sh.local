@@ -723,7 +723,11 @@ runner_worker_nice_value() {
     local _n="${RUNNER_LOW_PRIORITY_NICE:-10}"
     [[ "$_n" =~ ^[0-9]+$ ]] || _n=10
     (( _n > 19 )) && _n=19
-    if (( _n == 0 )) || ! command -v nice >/dev/null 2>&1; then
+    # 장중 입장 제한 중이면 긴급(URGENT_HOTFIX/P0)이 아닌 작업은 P1 이어도 19 — 긴급은 아래 기존 규칙 그대로.
+    if [[ "${RUNNER_MARKET_HOURS_GATE:-0}" == "1" ]] && runner_market_hours_active_now \
+        && ! runner_market_hours_is_urgent "${1:-}" && command -v nice >/dev/null 2>&1; then
+        printf '19'
+    elif (( _n == 0 )) || ! command -v nice >/dev/null 2>&1; then
         printf '0'
     elif [[ "${1:-}" =~ (^|[[:space:]])PRIORITY:[[:space:]]*P[01]([^0-9]|$) ]]; then
         printf '0'
@@ -765,6 +769,172 @@ RUNNER_POLICY_APPLIED_SIG="|||||"
 RUNNER_POLICY_WARNED=""
 RUNNER_POLICY_FAIL_LOGGED=0
 
+# ── 장중 입장 제한 (AADS-RUNNER-MARKET-HOURS-ADMISSION-20261015) ──────────────────────────────
+# RUNNER_MARKET_HOURS_GATE=1 인 호스트만 켜진다(기본 0 = 이전 동작과 바이트 단위로 같다). 켜지면 KST 평일
+# [START,END) 에 ① 새 claim 은 긴급이 아닌 작업을 RUNNER_MARKET_HOURS_MAX_CONCURRENT(기본 1)건까지만, ②
+# heavy 명령(shim 분류 그대로)은 긴급이 아니면 창이 끝날 때까지 대기, ③ 비긴급 작업 nice 19. 실행 중인 작업은
+# 죽이지도 줄이지도 않는다. 휴장일은 RUNNER_MARKET_HOLIDAY_FILE(한 줄에 YYYYMMDD 또는 YYYY-MM-DD)로만 판정하고,
+# 파일이 없거나 올해 날짜가 하나도 없으면 "판정 실패" — 보수적으로 장중으로 본다. 헬퍼는 실패해도 0 으로 끝난다.
+
+# 현재 시각(epoch). 시험에서만 RUNNER_MARKET_HOURS_TEST_NOW_EPOCH 로 고정한다.
+runner_market_hours_now_epoch() {
+    printf '%s' "${RUNNER_MARKET_HOURS_TEST_NOW_EPOCH:-${EPOCHSECONDS:-$(date +%s)}}"
+    return 0
+}
+
+# $1=YYYYMMDD → holiday | trading | unknown
+runner_market_holiday_kind() {
+    local ymd="${1:-}" f="${RUNNER_MARKET_HOLIDAY_FILE:-}" line="" have_year=0
+    if [[ -z "$f" || ! -r "$f" || ! "$ymd" =~ ^[0-9]{8}$ ]]; then
+        printf 'unknown'
+        return 0
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line//[[:space:]]/}"
+        line="${line//-/}"
+        [[ "$line" =~ ^[0-9]{8}$ ]] || continue
+        [[ "${line:0:4}" == "${ymd:0:4}" ]] && have_year=1
+        if [[ "$line" == "$ymd" ]]; then
+            printf 'holiday'
+            return 0
+        fi
+    done < "$f"
+    if (( have_year == 1 )); then printf 'trading'; else printf 'unknown'; fi
+    return 0
+}
+
+# 장중 여부를 다시 계산해 RUNNER_MH_ACTIVE(0/1) · RUNNER_MH_UNTIL(창 종료 epoch) · RUNNER_MH_REASON 을 정한다.
+runner_market_hours_evaluate() {
+    local was_active="${RUNNER_MH_ACTIVE:-0}"
+    RUNNER_MH_ACTIVE=0
+    RUNNER_MH_UNTIL=0
+    RUNNER_MH_REASON="gate_off"
+    if [[ "${RUNNER_MARKET_HOURS_GATE:-0}" != "1" ]]; then
+        RUNNER_MH_RESUME_HHMM=""
+        return 0
+    fi
+    local start="${RUNNER_MARKET_HOURS_START:-0900}" end="${RUNNER_MARKET_HOURS_END:-1530}"
+    local re='^([01][0-9]|2[0-3])[0-5][0-9]$'
+    if [[ ! "$start" =~ $re || ! "$end" =~ $re ]] || (( 10#$start >= 10#$end )); then
+        log "  MARKET_HOURS_CONFIG_INVALID start='${start}' end='${end}' — 0900/1530 으로 대체"
+        start=0900
+        end=1530
+    fi
+    RUNNER_MH_RESUME_HHMM="${end:0:2}:${end:2:2}"
+    local now dow hhmm ymd kind="" fields=""
+    now=$(runner_market_hours_now_epoch)
+    if ! fields=$(TZ=Asia/Seoul date -d "@${now}" '+%u %H%M %Y%m%d' 2>/dev/null) || [[ -z "$fields" ]]; then
+        # 시각 판정 실패 — 보수적으로 장중. 다음 refresh 에서 다시 판정한다.
+        RUNNER_MH_ACTIVE=1
+        RUNNER_MH_UNTIL=$(( now + 600 ))
+        RUNNER_MH_REASON="clock_unknown"
+    else
+        read -r dow hhmm ymd <<< "$fields"
+        if (( 10#$dow >= 6 )); then
+            RUNNER_MH_REASON="weekend"
+        elif (( 10#$hhmm < 10#$start || 10#$hhmm >= 10#$end )); then
+            RUNNER_MH_REASON="outside_window"
+        else
+            kind=$(runner_market_holiday_kind "$ymd")
+            if [[ "$kind" == "holiday" ]]; then
+                RUNNER_MH_REASON="krx_holiday"
+            else
+                local rem_min=$(( (10#${end:0:2} * 60 + 10#${end:2:2}) - (10#${hhmm:0:2} * 60 + 10#${hhmm:2:2}) ))
+                RUNNER_MH_ACTIVE=1
+                RUNNER_MH_UNTIL=$(( now - now % 60 + rem_min * 60 ))
+                if [[ "$kind" == "trading" ]]; then RUNNER_MH_REASON="window"; else RUNNER_MH_REASON="holiday_unknown"; fi
+            fi
+        fi
+    fi
+    if [[ "$was_active" != "$RUNNER_MH_ACTIVE" ]]; then
+        if [[ "$RUNNER_MH_ACTIVE" == "1" ]]; then
+            log "  MARKET_HOURS_ENTER host=${RUNNER_HOST_NAME:-?} reason=${RUNNER_MH_REASON} until=${RUNNER_MH_RESUME_HHMM}KST max_concurrent=${RUNNER_MARKET_HOURS_MAX_CONCURRENT:-1} — 새 비긴급 claim 제한, heavy 명령 대기"
+        else
+            log "  MARKET_HOURS_EXIT host=${RUNNER_HOST_NAME:-?} reason=${RUNNER_MH_REASON} — 대기 작업 재개"
+            RUNNER_MH_DEFERRED_SEEN_KEYS=""
+        fi
+    fi
+    return 0
+}
+
+# 캐시된 판정이 지금도 유효한 장중이면 0.
+runner_market_hours_active_now() {
+    [[ "${RUNNER_MARKET_HOURS_GATE:-0}" == "1" && "${RUNNER_MH_ACTIVE:-0}" == "1" ]] || return 1
+    (( $(runner_market_hours_now_epoch) < ${RUNNER_MH_UNTIL:-0} )) || return 1
+    return 0
+}
+
+# 장중 입장 제한의 긴급 판정(지시서 본문). URGENT_HOTFIX:true · PRIORITY: P0. P1 은 RUNNER_MARKET_HOURS_URGENT_P1=1 일 때만.
+# 최근 7일 지시서의 83% 가 P0/P1 이라 P1 까지 통과시키면 제한이 거의 걸리지 않는다.
+runner_market_hours_is_urgent() {
+    local t="${1:-}"
+    t="${t,,}"
+    [[ "$t" =~ (^|[[:space:]])urgent_hotfix:[[:space:]]*true([^[:alnum:]]|$) ]] && return 0
+    [[ "$t" =~ (^|[[:space:]])priority:[[:space:]]*p0([^0-9]|$) ]] && return 0
+    if [[ "${RUNNER_MARKET_HOURS_URGENT_P1:-0}" == "1" && "$t" =~ (^|[[:space:]])priority:[[:space:]]*p1([^0-9]|$) ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# 위 판정의 SQL 판. $1=instruction 컬럼 식. 같은 정규식을 쓴다.
+runner_market_hours_urgent_sql() {
+    local col="${1:-instruction}" sql=""
+    sql="COALESCE(${col},'') ~* '(^|[[:space:]])URGENT_HOTFIX:[[:space:]]*true([^[:alnum:]]|\$)'"
+    sql+=" OR COALESCE(${col},'') ~* '(^|[[:space:]])PRIORITY:[[:space:]]*P0([^0-9]|\$)'"
+    if [[ "${RUNNER_MARKET_HOURS_URGENT_P1:-0}" == "1" ]]; then
+        sql+=" OR COALESCE(${col},'') ~* '(^|[[:space:]])PRIORITY:[[:space:]]*P1([^0-9]|\$)'"
+    fi
+    printf '(%s)' "$sql"
+    return 0
+}
+
+# 대기 중인 비긴급 queued 작업에 MARKET_HOURS_DEFERRED 를 작업당 한 번 남긴다(창마다 초기화).
+# 상태 문구는 event metadata 의 wait_reason/status_text 로 노출한다 — heavy lane 대기 이벤트와 같은 모양.
+runner_market_hours_note_deferred() {
+    local filter="${1:-}" rows="" jid="" resume="${RUNNER_MH_RESUME_HHMM:-15:30}" text=""
+    text="장중 대기, ${resume} 이후 시작"
+    rows=$(db_exec "SELECT p.job_id FROM pipeline_jobs p
+                    WHERE p.status='queued' AND p.phase IN ('queued','coding') ${filter}
+                      AND NOT $(runner_market_hours_urgent_sql p.instruction)
+                    ORDER BY p.created_at ASC LIMIT 20;" 2>/dev/null) || return 0
+    while IFS= read -r jid; do
+        jid="${jid//[[:space:]]/}"
+        [[ "$jid" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+        [[ " ${RUNNER_MH_DEFERRED_SEEN_KEYS:-} " == *" ${jid} "* ]] && continue
+        RUNNER_MH_DEFERRED_SEEN_KEYS+="${RUNNER_MH_DEFERRED_SEEN_KEYS:+ }${jid}"
+        log "  MARKET_HOURS_DEFERRED job=${jid} resume_at=${resume}KST — ${text}"
+        record_runner_event "$jid" "market_hours_deferred" "" "" "" "" "" "" \
+            "{\"reason\":\"MARKET_HOURS_DEFERRED\",\"wait_reason\":\"market_hours_deferred\",\"status_text\":\"${text}\",\"resume_at_kst\":\"${resume}\",\"max_concurrent\":${RUNNER_MARKET_HOURS_MAX_CONCURRENT:-1},\"runner_host\":\"$(_receipt_json_str "${RUNNER_HOST_NAME:-}" 80)\"}"
+    done <<< "$rows"
+    return 0
+}
+
+# claim 직전에 호출한다. 장중이고 비긴급 실행 수가 상한 이상이면 RUNNER_MH_CLAIM_EXTRA 에 "긴급만" 조건을 넣는다.
+# 인자: project_filter. 아무것도 죽이거나 되돌리지 않는다 — claim 조건만 좁힌다.
+runner_market_hours_claim_extra() {
+    local filter="${1:-}" cap="${RUNNER_MARKET_HOURS_MAX_CONCURRENT:-1}" scope="" n=""
+    RUNNER_MH_CLAIM_EXTRA=""
+    runner_market_hours_active_now || return 0
+    [[ "$cap" =~ ^[0-9]{1,3}$ ]] || cap=1
+    if [[ -n "${MAX_CONCURRENT_SERVER:-}" ]]; then
+        scope="$filter"
+    else
+        scope="AND runner_host=$(sql_escape "${RUNNER_HOST_NAME:-}")"
+    fi
+    n=$(db_exec "SELECT count(*) FROM pipeline_jobs
+                 WHERE status IN ('running','claimed') ${scope}
+                   AND NOT $(runner_market_hours_urgent_sql instruction);" 2>/dev/null) || n=""
+    n="${n//[[:space:]]/}"
+    if [[ ! "$n" =~ ^[0-9]+$ ]] || (( 10#$n >= 10#$cap )); then
+        # 세지 못했을 때도 보수적으로 긴급만 통과시킨다.
+        RUNNER_MH_CLAIM_EXTRA="AND $(runner_market_hours_urgent_sql p.instruction)"
+        runner_market_hours_note_deferred "$filter" || true
+    fi
+    return 0
+}
+
 # $1=값 $2=최소 $3=최대 — 정수이고 범위 안이면 0
 runner_policy_int_in_range() {
     [[ "${1:-}" =~ ^[0-9]{1,6}$ ]] || return 1
@@ -785,7 +955,14 @@ runner_policy_warn_once() {
 # revision 이 비면 "행 없음" — baseline(env)으로 되돌린다.
 runner_host_policy_apply() {
     local rev="${1:-}" maxc="${2:-}" heavy="${3:-}" urgent="${4:-}" nice_v="${5:-}"
-    local sig="${rev}|${maxc}|${heavy}|${urgent}|${nice_v}" first=0
+    RUNNER_POLICY_LAST_ROW="${rev}|${maxc}|${heavy}|${urgent}|${nice_v}"
+    local mh_until=0 mh_wait=1800
+    if [[ "${RUNNER_MARKET_HOURS_GATE:-0}" == "1" ]] && runner_market_hours_active_now; then
+        mh_until="$RUNNER_MH_UNTIL"
+        mh_wait="${RUNNER_MARKET_HOURS_HOLD_MAX_WAIT_SEC:-1800}"
+        [[ "$mh_wait" =~ ^[0-9]{1,6}$ ]] || mh_wait=1800
+    fi
+    local sig="${rev}|${maxc}|${heavy}|${urgent}|${nice_v}|${mh_until}" first=0
     if (( RUNNER_POLICY_BASE_SET == 0 )); then
         first=1
         RUNNER_POLICY_ENV_MAX_SERVER="${MAX_CONCURRENT_SERVER:-}"
@@ -832,7 +1009,7 @@ runner_host_policy_apply() {
     if (( use_heavy > 0 && use_urgent >= use_heavy )); then
         log "  HOST_POLICY_WARN host=${RUNNER_HOST_NAME} revision=${rev} urgent_reserved_slots=${use_urgent} >= heavy_slots=${use_heavy} — 일반 작업은 슬롯을 못 잡고 대기 상한 후 실행된다"
     fi
-    runner_heavy_publish_policy "$use_heavy" "$use_urgent" "${rev:-0}" || true
+    runner_heavy_publish_policy "$use_heavy" "$use_urgent" "${rev:-0}" "$mh_until" "$mh_wait" || true
 
     local prev_sig="$RUNNER_POLICY_APPLIED_SIG"
     RUNNER_POLICY_APPLIED_SIG="$sig"
@@ -840,9 +1017,23 @@ runner_host_policy_apply() {
         :
     elif [[ -n "$rev" ]]; then
         log "  HOST_POLICY_APPLIED host=${RUNNER_HOST_NAME} revision=${rev} max_concurrent=${use_maxc:-env} heavy_slots=${use_heavy} urgent_reserved=${use_urgent} nice=${use_nice:-env}"
-    else
+    elif (( mh_until == 0 )); then
         log "  HOST_POLICY_CLEARED host=${RUNNER_HOST_NAME} — 정책 행 없음, env 설정으로 복귀"
     fi
+    if (( mh_until > 0 )) && [[ "$sig" != "$prev_sig" ]]; then
+        log "  MARKET_HOURS_POLICY host=${RUNNER_HOST_NAME} hold_until_epoch=${mh_until} heavy_slots=${use_heavy} urgent_reserved=${use_urgent} hold_max_wait_s=${mh_wait}"
+    fi
+    return 0
+}
+
+# DB 조회가 실패한 사이클에 장중 hold 상태만 반영한다. 게이트가 꺼져 있으면 아무것도 하지 않는다(기존 동작).
+runner_market_hours_reapply_last() {
+    [[ "${RUNNER_MARKET_HOURS_GATE:-0}" == "1" ]] || return 0
+    local last="${RUNNER_POLICY_LAST_ROW:-|||| }" rev maxc heavy urgent nice_v
+    IFS='|' read -r rev maxc heavy urgent nice_v <<< "$last"
+    rev="${rev// /}"
+    nice_v="${nice_v// /}"
+    runner_host_policy_apply "$rev" "$maxc" "$heavy" "$urgent" "$nice_v"
     return 0
 }
 
@@ -852,11 +1043,14 @@ runner_host_policy_refresh() {
     (( now - RUNNER_POLICY_LAST_EPOCH >= RUNNER_POLICY_REFRESH_SEC )) || return 0
     RUNNER_POLICY_LAST_EPOCH=$now
     local ready="" row="" rev="" maxc="" heavy="" urgent="" nice_v=""
+    # 장중 입장 제한은 정책 행과 무관하다 — DB 조회가 실패해도 마지막 행 값으로 hold 만 갱신한다.
+    if [[ "${RUNNER_MARKET_HOURS_GATE:-0}" == "1" ]]; then runner_market_hours_evaluate || true; fi
     if ! ready=$(db_exec "SELECT to_regclass('public.runner_host_policy') IS NOT NULL;" 2>/dev/null); then
         if (( RUNNER_POLICY_FAIL_LOGGED == 0 )); then
             log "  HOST_POLICY_READ_FAILED host=${RUNNER_HOST_NAME} — 마지막 값 유지(없으면 env)"
             RUNNER_POLICY_FAIL_LOGGED=1
         fi
+        if [[ "${RUNNER_MARKET_HOURS_GATE:-0}" == "1" ]]; then runner_market_hours_reapply_last || true; fi
         return 0
     fi
     ready="${ready//[[:space:]]/}"
@@ -868,6 +1062,7 @@ runner_host_policy_refresh() {
                 log "  HOST_POLICY_READ_FAILED host=${RUNNER_HOST_NAME} — 마지막 값 유지(없으면 env)"
                 RUNNER_POLICY_FAIL_LOGGED=1
             fi
+            if [[ "${RUNNER_MARKET_HOURS_GATE:-0}" == "1" ]]; then runner_market_hours_reapply_last || true; fi
             return 0
         fi
         row="${row//$'\n'/}"
@@ -879,10 +1074,13 @@ runner_host_policy_refresh() {
     return 0
 }
 
-# shim 이 읽는 policy 파일을 쓰거나(슬롯>0) 지운다(슬롯 비었음/0 → shim 은 그대로 통과). 인자: heavy urgent revision
+# shim 이 읽는 policy 파일을 쓰거나(슬롯>0 또는 장중 hold) 지운다(둘 다 없음 → shim 은 그대로 통과).
+# 인자: heavy urgent revision [market_hold_until_epoch market_hold_max_wait_s]
 runner_heavy_publish_policy() {
-    local heavy="${1:-0}" urgent="${2:-0}" rev="${3:-0}" f="$RUNNER_HEAVY_DIR/policy" tmp=""
-    if (( heavy <= 0 )); then
+    local heavy="${1:-0}" urgent="${2:-0}" rev="${3:-0}" hold="${4:-0}" hold_wait="${5:-1800}" f="$RUNNER_HEAVY_DIR/policy" tmp=""
+    [[ "$hold" =~ ^[0-9]+$ ]] || hold=0
+    [[ "$hold_wait" =~ ^[0-9]+$ ]] || hold_wait=1800
+    if (( heavy <= 0 && hold <= 0 )); then
         rm -f "$f" "$RUNNER_HEAVY_DIR/reuse" 2>/dev/null || true
         return 0
     fi
@@ -892,14 +1090,19 @@ runner_heavy_publish_policy() {
         return 0
     fi
     # LR02: 결과 재사용·single-flight 는 heavy lane 이 켜진 호스트에서만, RUNNER_RESULT_REUSE=0 이면 전체 비활성.
-    if [[ "${RUNNER_RESULT_REUSE:-1}" != "0" ]]; then
+    # 장중 hold 만을 위해 만든 policy(슬롯 0)에서는 켜지 않는다 — 슬롯 0 이면 shim 은 hold 뒤 곧바로 exec 한다.
+    if (( heavy > 0 )) && [[ "${RUNNER_RESULT_REUSE:-1}" != "0" ]]; then
         mkdir -p "${AADS_RESULT_DIR:-/var/cache/aads-runner/results}" 2>/dev/null || true
         : > "$RUNNER_HEAVY_DIR/reuse" 2>/dev/null || true
     else
         rm -f "$RUNNER_HEAVY_DIR/reuse" 2>/dev/null || true
     fi
     tmp="${f}.tmp.$$"
-    printf 'slots=%s\nurgent=%s\nrevision=%s\n' "$heavy" "$urgent" "$rev" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || {
+    {
+        printf 'slots=%s\nurgent=%s\nrevision=%s\n' "$heavy" "$urgent" "$rev"
+        (( hold > 0 )) && printf 'market_hold_until=%s\nmarket_hold_max_wait=%s\n' "$hold" "$hold_wait"
+        true
+    } > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || {
         rm -f "$tmp" 2>/dev/null || true
         log "  HEAVY_LANE_DISABLED dir=${RUNNER_HEAVY_DIR} — policy 파일 기록 실패"
     }
@@ -933,7 +1136,20 @@ runner_heavy_install_shims() {
 
     is_heavy() {
         case "$name" in
-            pytest|tsc|next|npx) return 0 ;;
+            pytest|py.test|tsc|next|npx) return 0 ;;
+            python|python3|python3.*)
+                # worktree 에서 도는 비교용 검증(python3 -m pytest)도 heavy 다 — 앞쪽 몇 인자 안의 '-m pytest' 만 본다.
+                local a prev="" n=0
+                for a in "$@"; do
+                    n=$((n + 1)); [ "$n" -le 8 ] || break
+                    if [ "$prev" = "-m" ]; then
+                        case "$a" in pytest|py.test) return 0 ;; esac
+                        return 1
+                    fi
+                    case "$a" in -c|-) return 1 ;; esac
+                    prev=$a
+                done
+                return 1 ;;
             npm)
                 local a skip=0
                 for a in "$@"; do
@@ -973,6 +1189,59 @@ runner_heavy_install_shims() {
     [ -z "${AADS_HEAVY_HELD:-}" ] || exec "$real" "$@"
     is_heavy "$@" || exec "$real" "$@"
     [ -r "$lane/policy" ] || exec "$real" "$@"
+
+    # ── 장중 입장 제한 (AADS-RUNNER-MARKET-HOURS-ADMISSION-20261015) ──
+    # policy 에 market_hold_until(epoch)이 미래이고 긴급(AADS_MARKET_URGENT=1)이 아니면 창이 끝날 때까지 기다린다.
+    # 러너가 hold 를 지우거나 시각이 지나면 즉시 풀린다. 대기 상한을 넘으면 슬롯 없이 실행하지 않고 75 로 끝낸다
+    # (장중에 몰래 실행하면 제한이 무의미하고, 작업 MAX_RUNTIME 을 넘기면 좀비로 오진된다).
+    mh_until=0; mh_max=1800
+    read_policy_hold() {
+        mh_until=0; mh_max=1800
+        [ -r "$lane/policy" ] || return 0
+        local k v
+        while IFS='=' read -r k v; do
+            case "$k" in market_hold_until) mh_until=$v ;; market_hold_max_wait) mh_max=$v ;; esac
+        done < "$lane/policy"
+        case "$mh_until" in ''|*[!0-9]*) mh_until=0 ;; esac
+        case "$mh_max" in ''|*[!0-9]*) mh_max=1800 ;; esac
+    }
+    mh_emit() {
+        local jid=${AADS_HEAVY_JOB_ID:-nojob} resume="" nxt
+        case "$jid" in ''|*[!A-Za-z0-9_-]*) jid=nojob ;; esac
+        resume=$(TZ=Asia/Seoul date -d "@$mh_until" +%H:%M 2>/dev/null) || resume=""
+        nxt=$(date -u -d "@$(( $(date +%s) + mh_poll_int ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || nxt=""
+        mkdir -p "$lane/events" 2>/dev/null || return 0
+        printf '%s\t{"event":"%s","wait_reason":"market_hours_deferred","reason":"MARKET_HOURS_DEFERRED","status_text":"장중 대기, %s 이후 시작","resume_at_kst":"%s","command":"%s","urgent":0,"waited_s":%s,"max_wait_s":%s,"next_check_at":"%s","shim_pid":%s,"ts":"%s"}\n' \
+            "$1" "$1" "$resume" "$resume" "$name" "$2" "$mh_max" "$nxt" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            >> "$lane/events/$jid.jsonl" 2>/dev/null || true
+    }
+    market_hold() {
+        local t0 now waited last=-1 mh_poll=${AADS_HEAVY_POLL_SEC:-2} mh_evt=${AADS_HEAVY_EVENT_INTERVAL_SEC:-60}
+        case "$mh_evt" in ''|*[!0-9]*) mh_evt=60 ;; esac
+        mh_poll_int=${mh_poll%%.*}; case "$mh_poll_int" in ''|*[!0-9]*) mh_poll_int=1 ;; esac
+        [ "$mh_poll_int" -ge 1 ] || mh_poll_int=1
+        t0=$(date +%s)
+        while :; do
+            now=$(date +%s); waited=$((now - t0))
+            [ "$mh_until" -gt "$now" ] || return 0
+            if [ "$waited" -ge "$mh_max" ]; then
+                mh_emit heavy_lane_market_hours_refused "$waited"
+                echo "[aads-heavy] MARKET_HOURS_DEFERRED: $name 은(는) 장중 입장 제한으로 ${waited}s 대기 후에도 시작하지 못해 실행하지 않았습니다(종료코드 75). 창 종료 후 다시 실행하세요 — 이 검증은 수행되지 않았습니다." >&2
+                exit 75
+            fi
+            if [ "$last" -lt 0 ] || [ $((now - last)) -ge "$mh_evt" ]; then
+                mh_emit heavy_lane_market_hours_deferred "$waited"
+                last=$now
+            fi
+            sleep "$mh_poll"
+            read_policy_hold
+        done
+    }
+    read_policy_hold
+    if [ "$mh_until" -gt "$(date +%s)" ] && [ "${AADS_MARKET_URGENT:-0}" != 1 ]; then
+        market_hold
+    fi
+
     command -v flock >/dev/null 2>&1 || exec "$real" "$@"
 
     slots=""; urgent_n=0; rev=""
@@ -1438,7 +1707,7 @@ EOF_AADS_HEAVY_SHIM
     else
         rm -f "$tmp" 2>/dev/null || true
     fi
-    for n in pytest npm npx node tsc next bash; do
+    for n in pytest py.test python python3 python3.11 npm npx node tsc next bash; do
         [[ "$(readlink "$bin/$n" 2>/dev/null)" == ".aads-heavy-shim" ]] || ln -sfn .aads-heavy-shim "$bin/$n" 2>/dev/null || return 1
     done
     return 0
@@ -1458,6 +1727,9 @@ runner_heavy_job_env() {
         export AADS_HEAVY_URGENT=0
     fi
     unset AADS_HEAVY_HELD
+    if [[ "${RUNNER_MARKET_HOURS_GATE:-0}" == "1" ]]; then
+        if runner_market_hours_is_urgent "$instruction"; then export AADS_MARKET_URGENT=1; else export AADS_MARKET_URGENT=0; fi
+    fi
     [[ ":$PATH:" == ":$RUNNER_HEAVY_DIR/bin:"* ]] || export PATH="$RUNNER_HEAVY_DIR/bin:$PATH"
     return 0
 }
@@ -1518,6 +1790,8 @@ runner_heavy_flush_events() {
             meta+="}"
             if [[ "$ev" == "heavy_lane_wait_timeout" ]]; then
                 log "  HEAVY_LANE_WAIT_TIMEOUT job=${jid} — 대기 상한 후 슬롯 없이 실행"
+            elif [[ "$ev" == heavy_lane_market_hours_* ]]; then
+                log "  MARKET_HOURS_DEFERRED job=${jid} event=${ev} — 장중 입장 제한으로 heavy 명령 대기"
             else
                 log "  HEAVY_LANE job=${jid} event=${ev}"
             fi
@@ -4491,7 +4765,7 @@ _claim_queued_job() {
     db_exec "UPDATE pipeline_jobs SET status='claimed', runner_host='${RUNNER_HOST_NAME}', updated_at=NOW()
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
-                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter
+                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter ${RUNNER_MH_CLAIM_EXTRA:-}
                   AND (p.depends_on IS NULL OR EXISTS (
                        SELECT 1 FROM pipeline_jobs dep
                        WHERE dep.job_id = p.depends_on AND dep.status = 'done'))
@@ -8420,6 +8694,11 @@ main() {
         cleanup_blocked_dependencies
 
         # 1) queued 작업 원자적 클레임 (C4)
+        # 장중 입장 제한(RUNNER_MARKET_HOURS_GATE=1): 비긴급 실행 수가 상한이면 이번 claim 은 긴급 작업만 고른다.
+        RUNNER_MH_CLAIM_EXTRA=""
+        if [[ "${RUNNER_MARKET_HOURS_GATE:-0}" == "1" ]]; then
+            runner_market_hours_claim_extra "$project_filter" || true
+        fi
         local pending
         pending=$(claim_queued_job "$project_filter" 2>/dev/null) || true
 
