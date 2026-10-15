@@ -1367,7 +1367,7 @@ class GoalStateMachine:
             if project:
                 rows = await conn.fetch(
                     """SELECT id, project, title, priority, status, progress, created_at, completed_at,
-                              paused_at, paused_reason
+                              paused_at, paused_reason, approval_policy
                        FROM goals WHERE project = $1
                          AND ($2::uuid IS NULL OR tenant_id = $2::uuid) ORDER BY
                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
@@ -1377,14 +1377,20 @@ class GoalStateMachine:
             else:
                 rows = await conn.fetch(
                     """SELECT id, project, title, priority, status, progress, created_at, completed_at,
-                              paused_at, paused_reason
+                              paused_at, paused_reason, approval_policy
                        FROM goals WHERE ($1::uuid IS NULL OR tenant_id = $1::uuid) ORDER BY
                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
                        created_at DESC""",
                     tenant_id,
                 )
+            # 휴면·우선순위 순번·자동승인 표시(PRD goal-priority-dormancy-autoapproval-display-prd).
+            # 저장 상태는 바꾸지 않는 파생값이다. 조회가 실패해도 목록은 내려간다.
+            from app.services.goal_signals import signals_for_rows
+
+            derived = await signals_for_rows(conn, [dict(r) for r in rows])
         return [
             {
+                **derived.get(str(r["id"]), {}),
                 "goal_id": str(r["id"]),
                 "project": r["project"],
                 "title": r["title"],

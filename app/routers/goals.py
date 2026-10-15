@@ -137,6 +137,25 @@ async def create_goal(
     if any(ms.owner_session_id or ms.owner_role_key for ms in req.milestones or []):
         # 담당 세션은 목표에 연결된 세션만 가능한데 목표 생성 시점엔 연결이 없다.
         raise HTTPException(status_code=422, detail="milestone_owner_requires_existing_goal")
+    if req.activate:
+        from app.core.db_pool import get_pool
+        from app.services import goal_signals
+
+        if goal_signals.is_p0(req.priority):
+            async with get_pool().acquire() as conn:
+                others = await goal_signals.active_p0_goals(conn, tenant_id)
+            if goal_signals.p0_cap_violation(
+                current_priority=None, current_status=None,
+                new_priority=req.priority, new_status="active", others=others,
+            ):
+                raise HTTPException(status_code=409, detail={
+                    "error": "p0_cap_exceeded", "cap": goal_signals.P0_CAP,
+                    "current_p0": [
+                        {"goal_id": o["goal_id"], "title": o["title"],
+                         "project": o["project"], "priority": o["priority"]}
+                        for o in others
+                    ],
+                })
     result = await goal_state_machine.create_goal(
         project=req.project,
         title=req.title,
@@ -378,6 +397,80 @@ async def _validated_tenant_goal(
     async with get_pool().acquire() as conn:
         await _require_tenant_goal(conn, goal_id, tenant_id)
     return tenant_id
+
+
+def _is_ceo_principal(context: dict[str, Any]) -> bool:
+    """우선순위를 바꿀 수 있는 주체인가 (PR-2: 대표님만).
+
+    러너(`system:pipeline-runner`)·서비스 키(`system:service-api`)도 내부 관리자
+    권한을 갖지만 사람이 아니다. 사람 관리자 로그인만 CEO 주체로 본다.
+    """
+    user = context.get("user", {}) if isinstance(context, dict) else {}
+    user_id = str(user.get("user_id") or "")
+    return (
+        bool(user.get("is_internal_admin"))
+        and str(user.get("user_role") or "").lower() != "system"
+        and not user_id.startswith("system:")
+    )
+
+
+async def _enforce_priority_rules(
+    goal_id: str, tenant_id: str, context: dict[str, Any], *,
+    new_priority: Optional[str] = None, new_status: Optional[str] = None,
+) -> None:
+    """PR-1(active P0 테넌트 3개 상한)·PR-2(우선순위 변경은 CEO 만).
+
+    지금 이미 active P0 인 목표를 그대로 두는 변경은 막지 않는다. 상한 초과
+    상태를 정리하는 것은 첫 정리(DO-6)의 일이다. 우선순위 제안 기록 경로
+    (`priority_proposal`)는 아직 없어 비CEO 변경은 403 만 돌려준다.
+    """
+    from app.core.db_pool import get_pool
+    from app.services import goal_signals
+
+    if new_priority is None and str(new_status or "").lower() != "active":
+        return
+    async with get_pool().acquire() as conn:
+        current = await conn.fetchrow(
+            "SELECT priority, status FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
+            goal_id, tenant_id,
+        )
+        if not current:
+            raise HTTPException(status_code=404, detail="goal_not_found")
+        changing = (
+            new_priority is not None
+            and str(new_priority).strip().upper() != str(current["priority"] or "").strip().upper()
+        )
+        if changing and not _is_ceo_principal(context):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "priority_change_ceo_only",
+                    "message": "우선순위 변경은 대표님만 할 수 있습니다. 변경이 필요하면 대표님께 제안하세요.",
+                },
+            )
+        target_priority = new_priority if new_priority is not None else current["priority"]
+        target_status = new_status if new_status is not None else current["status"]
+        if not (str(target_status or "").lower() == "active" and goal_signals.is_p0(target_priority)):
+            return
+        others = await goal_signals.active_p0_goals(conn, tenant_id, exclude_goal_id=goal_id)
+    if goal_signals.p0_cap_violation(
+        current_priority=current["priority"], current_status=current["status"],
+        new_priority=target_priority, new_status=target_status, others=others,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "p0_cap_exceeded",
+                "cap": goal_signals.P0_CAP,
+                "message": "진행 중 P0 목표는 %d개까지입니다. 기존 P0 하나를 내리거나 멈춘 뒤 다시 지정하세요."
+                % goal_signals.P0_CAP,
+                "current_p0": [
+                    {"goal_id": o["goal_id"], "title": o["title"],
+                     "project": o["project"], "priority": o["priority"]}
+                    for o in others
+                ],
+            },
+        )
 
 
 async def _require_tenant_goal_row(conn: Any, goal_id: str, tenant_id: str) -> Any:
@@ -1090,6 +1183,29 @@ def _policy_dict(raw: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+async def _sync_goal_grant(pool: Any, goal_id: str) -> Optional[str]:
+    """approval_policy 를 grant 로 옮긴다. 이관 마이그레이션 전이면 아무것도 하지 않는다.
+
+    규칙은 마이그레이션의 SQL 함수 하나에만 둔다(R-RELEASE: 두 벌 금지) —
+    migrations/20261015_goal_auto_approval_grants_from_policy.sql.
+    """
+    try:
+        async with pool.acquire() as conn:
+            installed = await conn.fetchval(
+                "SELECT to_regprocedure("
+                "'aads_migrate_goal_approval_policy(uuid,text,boolean)') IS NOT NULL"
+            )
+            if not installed:
+                return None
+            return await conn.fetchval(
+                "SELECT aads_migrate_goal_approval_policy($1::uuid, 'policy_update', false)::text",
+                goal_id,
+            )
+    except Exception as exc:  # noqa: BLE001 — 설정 저장은 이미 끝났다. 동기화 실패는 경고로 남긴다
+        logger.warning("goal_grant_sync_failed goal=%s: %s", goal_id[:8], str(exc)[:200])
+        return None
+
+
 @router.get("/goals/approval-policy/lint")
 async def lint_goal_approval_policies(
     include_empty: bool = Query(False, description="미설정({}) 목표도 포함"),
@@ -1222,6 +1338,10 @@ async def set_goal_approval_policy(
     if not row:
         raise HTTPException(status_code=404, detail="goal_not_found")
 
+    # 이관 후에는 grant 가 정본이다(AA-1). 설정을 바꾸면 이전 grant 를 superseded 로
+    # 돌리고 새 grant(만료 30일)를 낸다 — 사용량은 이전 grant 에 그대로 남는다.
+    grant_id = await _sync_goal_grant(pool, goal_id)
+
     # 미리 승인해 둔 사실 자체가 기록으로 남아야 한다.
     try:
         from app.services import ohvis_alert
@@ -1240,6 +1360,8 @@ async def set_goal_approval_policy(
         pass
 
     result: dict[str, Any] = {"ok": True, "goal_id": row["id"], "title": row["title"], **payload}
+    if isinstance(grant_id, str):
+        result["grant_id"] = grant_id
     if ignored:
         result["warnings"] = {
             "ignored_keys": ignored,
@@ -1664,7 +1786,8 @@ async def activate_goal(
     context: dict[str, Any] = Depends(require_tenant_member),
 ):
     from app.services.goal_manager import goal_state_machine
-    await _validated_tenant_goal(goal_id, context, member=True)
+    tenant_id = await _validated_tenant_goal(goal_id, context, member=True)
+    await _enforce_priority_rules(goal_id, tenant_id, context, new_status="active")
     result = await goal_state_machine.activate_goal(goal_id)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
@@ -1876,6 +1999,9 @@ async def update_goal(
 ):
     from app.services.goal_manager import goal_state_machine
     tenant_id = await _validated_tenant_goal(goal_id, context, member=True)
+    await _enforce_priority_rules(
+        goal_id, tenant_id, context, new_priority=req.priority, new_status=req.status,
+    )
     # goals.status 감사기록의 주체. 채팅 세션 컨텍스트가 없을 때만 쓰이며, 모르면 None 으로 둔다.
     user_id = _tenant_identity(context)[1]
     result = await goal_state_machine.update_goal(

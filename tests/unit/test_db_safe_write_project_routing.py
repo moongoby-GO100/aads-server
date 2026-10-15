@@ -271,10 +271,16 @@ def test_approval_project_ignores_db_safe_write_project():
 class _RecPool:
     def __init__(self):
         self.fetchrow_args = None
+        self.fetch_args = None
 
     async def fetchrow(self, query, *args):
         self.fetchrow_args = args
         return None
+
+    # goal_policy_allows 는 2026-10-15 부터 후보 목표를 여러 개 읽는다(fetch).
+    async def fetch(self, query, *args):
+        self.fetch_args = args
+        return []
 
     async def execute(self, *a, **k):
         return "OK"
@@ -288,7 +294,7 @@ async def test_goal_policy_never_gets_project_for_db_safe_write():
             "sess-1", "db_safe_write", {"project": "GO100", "sql": UPDATE_SQL}, "high",
         )
     assert out is None
-    assert pool.fetchrow_args[2] == ""  # $3 = '' → `$3 <> ''` 로 자동승인 불가
+    assert pool.fetch_args[2] == ""  # $3 = '' → `$3 <> ''` 로 자동승인 불가
 
 
 @pytest.mark.asyncio
@@ -296,7 +302,7 @@ async def test_goal_policy_still_uses_project_for_other_tools():
     pool = _RecPool()
     with patch("app.core.db_pool.get_pool", return_value=pool):
         await guard.goal_policy_allows("sess-1", "patch_remote_file", {"project": "go100"}, "high")
-    assert pool.fetchrow_args[2] == "GO100"
+    assert pool.fetch_args[2] == "GO100"
 
 
 @pytest.mark.asyncio

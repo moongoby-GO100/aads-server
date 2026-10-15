@@ -690,6 +690,9 @@ async def goal_policy_allows(
     2. **횟수 상한이 있다.** 무제한이면 설정이 아니라 게이트 해제다.
     3. **쓸 때마다 남긴다.** 자동 통과도 기록이 남아야 나중에 "언제부터
        무엇이 그냥 나갔나" 를 볼 수 있다.
+    4. **멈춘 목표는 열지 않는다(2026-10-15).** 목표가 active 이고 휴면·일시정지가
+       아니며, grant 가 정지·만료·소진이 아닐 때만 통과한다. 통과·거부 모두
+       goal_policy_decisions 에 남는다 (판정 부품: goal_auto_approval).
 
     목표가 끝나거나 담당이 떨어지면 설정도 같이 끝난다 — 따로 회수하지
     않아도 된다.
@@ -712,61 +715,85 @@ async def goal_policy_allows(
     # 대상 프로젝트를 알 수 없는 호출(예: db_safe_write)은 통과시키지
     # 않는다. 무엇을 여는지 모르는 채로 여는 것이 가장 나쁘다.
     target_project = _approval_project(tool_name, tool_input)
+    # 2026-10-15 (PRD goal-priority-dormancy-autoapproval-display-prd §5).
+    # 예전 조회는 `status IN ('draft','active','blocked')` 를 인정해 보류·초안 목표
+    # 13개가 계속 자동승인을 내줬다. 이제 후보는 열린 목표 전부를 가져오되(거부도
+    # 판정 기록에 남기려고) **통과는 active·비휴면·비일시정지 목표만** 한다.
+    # 근거는 goal_auto_approval_grants(정본)이고, 게이트 grant 가 없는 목표만
+    # approval_policy 를 같은 조건으로 읽는다(이관 전 호환).
+    from app.services import goal_auto_approval as gaa
+
     try:
         pool = get_pool()
-        row = await pool.fetchrow(
+        rows = await pool.fetch(
             """
-            SELECT g.id::text AS id, g.title,
-                   COALESCE((g.approval_policy->>$2)::boolean, false) AS allowed,
-                   COALESCE((g.approval_policy->>'max_executions')::int, 0) AS max_exec,
-                   COALESCE((g.approval_policy->>'used')::int, 0) AS used
+            SELECT g.id::text AS id, g.title, g.status, g.project,
+                   g.tenant_id::text AS tenant_id, g.paused_at,
+                   COALESCE(g.approval_policy, '{}'::jsonb) AS approval_policy,
+                   COALESCE((g.approval_policy->>$2)::boolean, false) AS legacy_allowed
             FROM goal_task_links l
             JOIN goals g ON g.id = l.goal_id
             WHERE l.task_type = 'chat_session' AND l.task_id = $1
               AND COALESCE(l.link_state, 'active') = 'active'
               AND g.status IN ('draft', 'active', 'blocked')
-              AND COALESCE((g.approval_policy->>$2)::boolean, false)
               AND $3 <> ''
               AND UPPER(COALESCE(g.project, '')) = $3
-            ORDER BY g.updated_at DESC
-            LIMIT 1
+            ORDER BY (g.status = 'active') DESC, g.updated_at DESC
             """,
             session_id, field, target_project,
         )
+        candidates = [gaa.candidate_from_row(r) for r in rows or []]
+        if candidates:
+            async with pool.acquire() as conn:
+                await gaa.attach_signals(conn, candidates)
+        candidates = [c for c in candidates if gaa.has_gate_policy(c)]
     except Exception as exc:
         logger.warning("goal_policy_lookup_failed session=%s error=%s",
                        session_id[:8], str(exc)[:140])
         return None
 
-    if not row or not row["allowed"]:
-        return None
-    if int(row["used"]) >= int(row["max_exec"] or 0):
-        logger.info("goal_policy_exhausted goal=%s used=%s max=%s",
-                    row["id"][:8], row["used"], row["max_exec"])
-        return None
-
-    try:
-        await pool.execute(
-            "UPDATE goals SET approval_policy = jsonb_set(approval_policy, '{used}', "
-            "       to_jsonb(COALESCE((approval_policy->>'used')::int, 0) + 1), true), "
-            "       updated_at = NOW() WHERE id = $1::uuid",
-            row["id"],
+    chosen = None
+    for cand in candidates:
+        verdict = gaa.evaluate(cand, risk_level)
+        if verdict.allowed:
+            try:
+                async with pool.acquire() as conn:
+                    counted = await gaa.consume(conn, cand)
+            except Exception as exc:
+                logger.warning("goal_policy_count_failed goal=%s error=%s",
+                               cand.goal_id[:8], str(exc)[:140])
+                counted = None
+            if counted is None:
+                # 세지 못한 통과는 통과가 아니다 — 상한이 장식이 된다.
+                verdict.allowed = False
+                verdict.reasons.append(f"{verdict.source}_consume_failed")
+            else:
+                verdict.used, verdict.max = counted
+                chosen = (cand, verdict)
+        await gaa.record_decision(
+            pool, cand, verdict, session_id=session_id, tool_name=tool_name,
+            risk_level=risk_level or "high", target_project=target_project,
         )
-    except Exception as exc:
-        logger.warning("goal_policy_count_failed goal=%s error=%s",
-                       row["id"][:8], str(exc)[:140])
+        if chosen:
+            break
+        logger.info("goal_policy_denied goal=%s source=%s reasons=%s",
+                    cand.goal_id[:8], verdict.source, ",".join(verdict.reasons))
+
+    if not chosen:
+        return None
+    cand, verdict = chosen
 
     # 자동으로 나간 것도 화면에 남는다. 안 보이면 없는 것과 같다.
     await notify_only(
         tool_name, tool_input,
         "목표 승인 설정으로 통과 (%s, %d/%d회)"
-        % (row["title"][:40], int(row["used"]) + 1, int(row["max_exec"] or 0)),
+        % (cand.title[:40], verdict.used, verdict.max),
         session_id=session_id,
         tenant_id=str(tool_input.get("tenant_id") or ""),
         gate_source="goal_policy", risk_level=risk_level or "high",
         label="목표 승인",
     )
-    return str(row["id"])
+    return cand.goal_id
 
 
 async def is_approved(tool_name: str, tool_input: Dict[str, Any], session_id: str = "",
