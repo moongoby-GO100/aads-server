@@ -442,10 +442,35 @@
       }
     }
 
+    const NON_TAX_MEAL_LIMIT = 200000;
+
+    /** 월급제 확정 임금 → 과세 기본급·비과세 식대·기타 과세수당 (index.html applyRegularSalaryPreset 과 같은 규칙).
+     *  nonTaxMealAllowance 는 사용자가 직접 고친 값일 때만 넘기고(없으면 null) 자동 값은 넘기지 않는다. */
+    function splitMonthlyWage({ wageType, wage, mealProvision, taxableAllowance, nonTaxMealAllowance } = {}) {
+      if (wageType !== "monthly") return { applies: false };
+      const total = Math.max(0, Math.round(Number(wage) || 0));
+      const allowance = Math.max(0, Math.round(Number(taxableAllowance) || 0));
+      const cash = mealProvision === "cash_no_meal";
+      const cap = cash ? Math.min(NON_TAX_MEAL_LIMIT, total) : 0;
+      const hasManual = cash && nonTaxMealAllowance !== null && nonTaxMealAllowance !== undefined && String(nonTaxMealAllowance).trim() !== "";
+      const requested = hasManual ? Math.max(0, Math.round(Number(nonTaxMealAllowance) || 0)) : cap;
+      const meal = Math.min(requested, cap);
+      const rawBase = total - meal - allowance;
+      const error = total > 0 && rawBase < 0 ? "기타 과세수당과 비과세 식대의 합이 확정 임금보다 커서 과세 기본급이 0원보다 작아집니다. 수당을 줄이십시오." : "";
+      const base = error ? null : rawBase;
+      const mealText = cash
+        ? `비과세 식대 ${formatMoney(meal)}(사용자로부터 식사·음식물을 제공받지 않는 경우에만 적용)`
+        : "비과세 식대 0원(사용자 식사 제공)";
+      const composition = total > 0 && !error
+        ? `월 총액 ${formatMoney(total)} = 과세 기본급 ${formatMoney(base)} + ${mealText} + 기타 과세수당 ${formatMoney(allowance)}. 약정시간 초과분과 적용 대상 법정수당은 급여명세서에 별도 산정한다.`
+        : "";
+      return { applies: true, total, base, meal, allowance, mealLocked: !cash, clamped: hasManual && requested > cap, error, composition };
+    }
+
     const api = {
       contractTypeLabels, employmentTaxTypeLabels, wageTypeLabels, standardContractDefaults,
       MINIMUM_HOURLY_WAGE_2026, CONTRACT_STATUS, EMPLOYMENT_TYPES,
-      defaultsFor, classificationFor, validateContractDraft, checkDraft, contractPreviewHtml,
+      defaultsFor, classificationFor, splitMonthlyWage, NON_TAX_MEAL_LIMIT, validateContractDraft, checkDraft, contractPreviewHtml,
       escapeHtml, formatMoney, today
     };
     root.ObysContractCore = api;
