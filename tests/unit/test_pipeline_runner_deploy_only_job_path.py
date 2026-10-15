@@ -142,8 +142,11 @@ def test_deploy_only_marker_outside_first_20_lines_is_ignored(deploy_only_fn):
 def test_approve_endpoint_bypasses_diff_gates_for_deploy_only_jobs():
     api = (ROOT / "app" / "api" / "pipeline_runner.py").read_text(encoding="utf-8")
 
+    gates = (ROOT / "app" / "services" / "runner_approval_precheck.py").read_text(encoding="utf-8")
+    assert "def is_deploy_only_instruction(instruction: str) -> bool:" in gates
+    assert '"DEPLOY_ONLY: true" in "\\n".join(lines)' in gates
     assert "def _is_deploy_only_instruction(instruction: str) -> bool:" in api
-    assert '"DEPLOY_ONLY: true" in "\\n".join(lines)' in api
+    assert "return is_deploy_only_instruction(instruction)" in api
     assert "SELECT job_id, project, status, phase, git_diff, instruction," in api
 
     approve_fn_start = api.index("async def approve_or_reject(")
@@ -153,7 +156,8 @@ def test_approve_endpoint_bypasses_diff_gates_for_deploy_only_jobs():
     approve_fn = api[approve_fn_start:approve_fn_end]
 
     assert "deploy_only = _is_deploy_only_instruction(row[\"instruction\"])" in approve_fn
-    assert 'if not deploy_only and "diff --git " not in git_diff:' in approve_fn
-    assert "if not deploy_only and not re.match(r\"^[0-9a-f]{40}$\", commit_hash):" in approve_fn
-    assert "if not deploy_only and not changed_files:" in approve_fn
-    assert "if not deploy_only:" in approve_fn
+    assert "deploy_only=deploy_only," in approve_fn
+    assert "evaluate_approval_gates(" in approve_fn
+    # DEPLOY_ONLY 면 diff/commit/files/review 게이트를 모두 건너뛴다 (공유 함수 안).
+    gate_fn = gates[gates.index("def evaluate_approval_gates("):gates.index("def first_failure(")]
+    assert gate_fn.count("if deploy_only:") == 4

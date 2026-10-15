@@ -24,14 +24,18 @@ def test_admin_task_board_uses_auth_state_fallback():
 
 
 def test_pipeline_runner_approval_requires_review_and_commit_gate():
-    source = (ROOT / "app/api/pipeline_runner.py").read_text()
+    api = (ROOT / "app/api/pipeline_runner.py").read_text()
+    # 판정 로직은 사전검증과 공유하는 서비스 한 곳에 있고, 승인 API 는 그것을 호출한다.
+    gates = (ROOT / "app/services/runner_approval_precheck.py").read_text()
 
-    assert "승인 차단: 유효한 git diff가 없습니다" in source
-    assert "승인 차단: 승인용 commit_hash가 없습니다" in source
-    assert "승인 차단: 실제 변경 파일 목록이 없습니다" in source
-    assert "승인 차단: AI 리뷰 결과가 없습니다" in source
-    assert "latest_review[\"verdict\"] != \"APPROVE\"" in source
-    assert "'event', 'approval_decision'" in source
+    assert "승인 차단: 유효한 git diff가 없습니다" in gates
+    assert "승인 차단: 승인용 commit_hash가 없습니다" in gates
+    assert "승인 차단: 실제 변경 파일 목록이 없습니다" in gates
+    assert "승인 차단: AI 리뷰 결과가 없습니다" in gates
+    assert "review[\"verdict\"] != \"APPROVE\"" in gates
+    assert "evaluate_approval_gates(" in api
+    assert "승인 차단:" not in api
+    assert "'event', 'approval_decision'" in api
 
 
 def test_pipeline_runner_exposes_model_stats_and_approval_timestamps():

@@ -23,6 +23,13 @@ from app.auth import TenantRole, get_current_user, tenant_role_allows
 from app.core.project_config import PROJECT_MAP
 from app.services.document_refs import with_rdoc_block
 from app.services.goal_binding import parse_goal_binding
+from app.services.runner_approval_precheck import (
+    AWAITING_APPROVAL,
+    evaluate_approval_gates,
+    first_failure,
+    is_deploy_only_instruction,
+)
+from app.services.runner_approval_precheck import precheck as precheck_approval
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -3540,8 +3547,25 @@ async def notify_completion(job_id: str):
 
 
 def _is_deploy_only_instruction(instruction: str) -> bool:
-    lines = (instruction or "").splitlines()[:20]
-    return "DEPLOY_ONLY: true" in "\n".join(lines)
+    return is_deploy_only_instruction(instruction)
+
+
+@router.get("/pipeline/jobs/{job_id}/approval-precheck", tags=["pipeline-runner"])
+@router.get("/pipeline-runner/jobs/{job_id}/approval-precheck", tags=["pipeline-runner"])
+async def approval_precheck(
+    job_id: str,
+    context: TenantContext = Depends(require_tenant_viewer),
+):
+    """승인 전 사전검증 — 승인 게이트와 stale_base 등을 미리 보여준다 (읽기 전용)."""
+    if not _JOB_ID_RE.match(job_id) and not job_id.startswith("pc-"):
+        raise HTTPException(status_code=400, detail="유효하지 않은 job_id 형식")
+
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn:
+        result = await precheck_approval(job_id, conn=conn, tenant_id=_tenant_id(context))
+    if result is None:
+        raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
+    return result
 
 
 @router.post("/pipeline/jobs/{job_id}/approve", tags=["pipeline-runner"])
@@ -3583,7 +3607,7 @@ async def approve_or_reject(
                 job_id,
                 tenant_id,
             )
-            if not row or row["status"] != "awaiting_approval":
+            if not row or row["status"] != AWAITING_APPROVAL:
                 raise HTTPException(status_code=400, detail="승인 대기 상태가 아닙니다")
 
             latest_review = None
@@ -3609,15 +3633,6 @@ async def approve_or_reject(
                 except ValueError as exc:
                     raise HTTPException(status_code=409, detail=str(exc)) from exc
                 deploy_only = _is_deploy_only_instruction(row["instruction"])
-                git_diff = row["git_diff"] or ""
-                commit_hash = (row["commit_hash"] or "").strip()
-                changed_files = row["actual_changed_files"] or []
-                if not deploy_only and "diff --git " not in git_diff:
-                    raise HTTPException(status_code=409, detail="승인 차단: 유효한 git diff가 없습니다")
-                if not deploy_only and not re.match(r"^[0-9a-f]{40}$", commit_hash):
-                    raise HTTPException(status_code=409, detail="승인 차단: 승인용 commit_hash가 없습니다")
-                if not deploy_only and not changed_files:
-                    raise HTTPException(status_code=409, detail="승인 차단: 실제 변경 파일 목록이 없습니다")
                 latest_review = await conn.fetchrow(
                     """
                     SELECT verdict, score, flag_category, needs_retry
@@ -3628,17 +3643,15 @@ async def approve_or_reject(
                     """,
                     job_id,
                 )
-                if not deploy_only:
-                    if not latest_review:
-                        raise HTTPException(status_code=409, detail="승인 차단: AI 리뷰 결과가 없습니다")
-                    if latest_review["verdict"] != "APPROVE":
-                        detail = (
-                            f"승인 차단: AI 리뷰 미통과 "
-                            f"({latest_review['verdict']}, score={latest_review['score']})"
-                        )
-                        if latest_review["flag_category"]:
-                            detail += f", category={latest_review['flag_category']}"
-                        raise HTTPException(status_code=409, detail=detail)
+                blocked = first_failure(evaluate_approval_gates(
+                    deploy_only=deploy_only,
+                    git_diff=row["git_diff"] or "",
+                    commit_hash=(row["commit_hash"] or "").strip(),
+                    changed_files=row["actual_changed_files"] or [],
+                    review=latest_review,
+                ))
+                if blocked:
+                    raise HTTPException(status_code=409, detail=blocked["detail"])
 
             result = await conn.execute(
                 f"""
