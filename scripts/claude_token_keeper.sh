@@ -25,7 +25,7 @@ RENEW_BEFORE_MIN="${CLAUDE_TOKEN_RENEW_BEFORE_MIN:-45}"
 # 겹쳐 돌지 않게 잠근다. 임박 재시도가 들어가면서 한 번 실행이 길어졌고,
 # 크론 주기를 넘으면 두 실행이 **같은 자격증명 파일을 동시에** 건드린다.
 # 2026-09-14 사고가 그 파일이 망가진 것이었다.
-_KEEPER_LOCK="/tmp/aads-claude-token-keeper.lock"
+_KEEPER_LOCK="${CLAUDE_TOKEN_KEEPER_LOCK:-/tmp/aads-claude-token-keeper.lock}"
 exec 9>"$_KEEPER_LOCK"
 if ! flock -n 9; then
     echo "$(date '+%F %T') 이전 실행이 아직 돌고 있다 — 건너뜀" >&2
@@ -58,6 +58,60 @@ CLOSE_RETRY_SLEEP="${CLAUDE_TOKEN_CLOSE_RETRY_SLEEP:-45}"
 FAIL_BELOW_MIN="${CLAUDE_TOKEN_FAIL_BELOW_MIN:-10}"
 
 log() { echo "$(date '+%F %T') $*"; }
+
+# ── 알림 ─────────────────────────────────────────────────────────────
+# 2026-10-15: 예전에는 존재하지 않는 알림 스크립트(scripts 아래 disk 알림 sh)를 `[ -x ] && ... || true`
+# 로 불러 알림이 한 번도 나가지 않았다(슬롯1 이 10/14 18:00 부터 갱신 거부).
+# 스크립트가 없거나 실패하면 ERROR 를 남긴다 — 조용히 넘기지 않는다.
+ALERT_SCRIPT="${AADS_ALERT_SCRIPT:-/root/aads/aads-server/scripts/aads_notify.sh}"
+send_alert() {
+    local err rc
+    err="$(bash "$ALERT_SCRIPT" "$1" 2>&1 >/dev/null)"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        log "ERROR: 알림 전송 실패 rc=${rc} script=${ALERT_SCRIPT} — 미발송: $1 ${err:+($(printf '%s' "$err" | tail -1 | cut -c1-200))}"
+        return 1
+    fi
+    return 0
+}
+
+# 같은 슬롯 갱신 실패가 연속 ALERT_AFTER_FAILS 회(10분 주기 × 3 = 30분) 이어지면
+# 1회 알리고, 같은 상태가 계속되면 ALERT_REPEAT_SEC(6시간) 간격으로만 다시 알린다.
+# 회복하면 (알린 적이 있을 때만) 1회 알린다. 상태는 슬롯별 파일 두 개다.
+ALERT_STATE_DIR="${CLAUDE_TOKEN_ALERT_STATE_DIR:-/var/lib/aads-claude-token-keeper}"
+ALERT_AFTER_FAILS="${CLAUDE_TOKEN_ALERT_AFTER_FAILS:-3}"
+ALERT_REPEAT_SEC="${CLAUDE_TOKEN_ALERT_REPEAT_SEC:-21600}"
+mkdir -p "$ALERT_STATE_DIR" 2>/dev/null || true
+
+_state_read() { local v; v="$(cat "$1" 2>/dev/null)"; [[ "$v" =~ ^[0-9]+$ ]] && printf '%s' "$v" || printf '0'; }
+
+refresh_failed() {
+    local slot="$1" msg="$2" n last now
+    n=$(( $(_state_read "${ALERT_STATE_DIR}/slot${slot}.fails") + 1 ))
+    printf '%s' "$n" > "${ALERT_STATE_DIR}/slot${slot}.fails" 2>/dev/null \
+        || log "ERROR: 알림 상태 기록 실패 (${ALERT_STATE_DIR}) — 연속 실패 판정이 부정확하다"
+    if [ "$n" -lt "$ALERT_AFTER_FAILS" ]; then
+        log "  연속 갱신 실패 ${n}/${ALERT_AFTER_FAILS} — 아직 알리지 않음"
+        return 0
+    fi
+    last="$(_state_read "${ALERT_STATE_DIR}/slot${slot}.alerted")"
+    now="$(date +%s)"
+    if [ "$last" -gt 0 ] && [ $((now - last)) -lt "$ALERT_REPEAT_SEC" ]; then
+        return 0
+    fi
+    if send_alert "${msg} (연속 ${n}회 실패)"; then
+        printf '%s' "$now" > "${ALERT_STATE_DIR}/slot${slot}.alerted" 2>/dev/null || true
+    fi
+}
+
+refresh_ok() {
+    local slot="$1"
+    if [ -f "${ALERT_STATE_DIR}/slot${slot}.alerted" ]; then
+        send_alert "✅ Claude slot${slot} 토큰 갱신 회복" \
+            && rm -f "${ALERT_STATE_DIR}/slot${slot}.alerted" "${ALERT_STATE_DIR}/slot${slot}.fails"
+    else
+        rm -f "${ALERT_STATE_DIR}/slot${slot}.fails"
+    fi
+}
 
 key_for_slot() {
     case "$1" in
@@ -194,6 +248,7 @@ for slot in 1 2 3 4; do
         # 찾지 못했다. 10분마다 도는 작업이라 비용은 무시할 수 있다.
         key="$(key_for_slot "$slot")"
         resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 || true
+        refresh_ok "$slot"
         continue
     fi
 
@@ -255,13 +310,13 @@ for slot in 1 2 3 4; do
         else
             log "  ⛔ 갱신이 토큰을 지웠고 되돌릴 백업도 없다 — 재로그인 필요"
         fi
-        ALERT="/root/aads/aads-server/scripts/send_disk_alert.sh"
-        [ -x "$ALERT" ] && "$ALERT" "Claude slot${slot} 자격증명이 비었다 — 재로그인 필요" >/dev/null 2>&1 || true
+        refresh_failed "$slot" "🔴 Claude slot${slot} 자격증명이 비었다 — 재로그인 필요"
         continue
     fi
     if [[ "$after" =~ ^-?[0-9]+$ ]] && [ "$after" -gt "$left" ]; then
         log "  갱신됨: ${left}분 → ${after}분"
         renewed=$((renewed + 1))
+        refresh_ok "$slot"
     elif [[ "$after" =~ ^-?[0-9]+$ ]] && [ "$after" -ge "$FAIL_BELOW_MIN" ]; then
         # CLI 가 아직 갱신할 때가 아니라고 판단한 경우. 실패가 아니다.
         # 다만 만료 시각은 남겨야 한다. 러너가 긴 작업 전에 남은 수명을 본다.
@@ -285,6 +340,7 @@ for slot in 1 2 3 4; do
                     log "  갱신됨(임박 재시도 ${tries}회): ${after}분 → ${retry_after}분"
                     after="$retry_after"
                     renewed=$((renewed + 1))
+                    refresh_ok "$slot"
                     break
                 fi
                 log "  임박 재시도 ${tries}/${CLOSE_RETRY_TIMES} — 아직 (${retry_after}분)"
@@ -313,8 +369,7 @@ for slot in 1 2 3 4; do
             fi
         fi
         log "  ⚠️ 갱신 실패 (${left}분 → ${after}분) — 다음 주기에 다시 시도한다"
-        ALERT="/root/aads/aads-server/scripts/send_disk_alert.sh"
-        [ -x "$ALERT" ] && "$ALERT" "Claude slot${slot} 토큰 갱신 실패 — 재로그인 필요" >/dev/null 2>&1 || true
+        refresh_failed "$slot" "🔴 Claude slot${slot} 토큰 갱신 실패 — 재로그인 필요"
         continue
     fi
 

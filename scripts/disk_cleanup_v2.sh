@@ -6,7 +6,7 @@ LOG="/root/aads/logs/disk_cleanup.log"
 BACKUP_SRC="/root/aads/backups"
 BACKUP_DST="/mnt/volume_sgp1_01/aads-backups"
 GALLERY="/root/aads/aads-server/app/static/gallery"
-TELEGRAM_SCRIPT="/root/aads/aads-server/scripts/send_disk_alert.sh"
+TELEGRAM_SCRIPT="${AADS_ALERT_SCRIPT:-/root/aads/aads-server/scripts/aads_notify.sh}"
 
 # Hold the same lock as blue/green and warm-deps for the whole cleanup.
 # A one-shot lock probe has a race with the next build/export.
@@ -152,6 +152,9 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] 정리 완료. ${BEFORE}% → ${AFTER}% (${
 # 85% 이상이면 텔레그램 경고
 if [ "$AFTER" -gt 85 ]; then
     echo "[ALERT] 디스크 ${AFTER}%! 추가 정리 필요" >> "$LOG"
+    if ! _alert_err="$(bash "$TELEGRAM_SCRIPT" "디스크 ${AFTER}% — 04:00 정리 후에도 85% 초과, 추가 정리 필요" 2>&1 >/dev/null)"; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: 알림 전송 실패 script=${TELEGRAM_SCRIPT} ${_alert_err:+($(printf '%s' "$_alert_err" | tail -1 | cut -c1-200))}" >> "$LOG"
+    fi
 fi
 
 # 95% 이상이면 긴급 정리

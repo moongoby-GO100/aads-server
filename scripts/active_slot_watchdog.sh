@@ -21,6 +21,17 @@ FAILFILE="/tmp/.aads-slot-watchdog-fails"
 
 log() { echo "$(date '+%F %T') $*"; }
 
+# 알림은 공통 aads_notify.sh 로 보낸다. 스크립트가 없거나 실패하면 ERROR 를 남긴다
+# (예전에는 존재하지 않는 알림 스크립트를 조용히 건너뛰었다).
+ALERT_SCRIPT="${AADS_ALERT_SCRIPT:-/root/aads/aads-server/scripts/aads_notify.sh}"
+send_alert() {
+    local err rc
+    err="$(bash "$ALERT_SCRIPT" "$1" 2>&1 >/dev/null)"; rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    log "ERROR: 알림 전송 실패 rc=${rc} script=${ALERT_SCRIPT} — 미발송: $1 ${err:+($(printf '%s' "$err" | tail -1 | cut -c1-200))}"
+    return 1
+}
+
 port="$(cat "${STATE_DIR}/.active_port" 2>/dev/null || echo 8100)"
 container="$(cat "${STATE_DIR}/.active_container" 2>/dev/null || echo aads-server)"
 [[ "$port" =~ ^[0-9]+$ ]] || exit 0
@@ -53,8 +64,7 @@ standby="$(curl -s -o /dev/null -m 5 -w '%{http_code}' \
 standby="${standby:-000}"
 log "  대기 슬롯 :${standby_port} = ${standby}"
 
-ALERT="/root/aads/aads-server/scripts/send_disk_alert.sh"
-[ -x "$ALERT" ] && "$ALERT" "활성 API ${container}:${port} 무응답(${fails}회, mem=${mem_pct:-?}%). 대기 :${standby_port}=${standby}" >/dev/null 2>&1 || true
+send_alert "활성 API ${container}:${port} 무응답(${fails}회, mem=${mem_pct:-?}%). 대기 :${standby_port}=${standby}"
 
 if [ "$AUTO_RESTART" = "1" ] && [ "$standby" = "200" ]; then
     log "  대기 슬롯 정상 → ${container} 재시작"

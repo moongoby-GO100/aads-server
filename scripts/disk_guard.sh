@@ -16,6 +16,17 @@ STAMP="/tmp/.aads-disk-guard-last"
 # 연속 실행으로 정리가 겹치지 않도록 최소 간격을 둔다.
 MIN_INTERVAL="${AADS_DISK_GUARD_MIN_INTERVAL:-1800}"
 
+# 알림은 공통 aads_notify.sh 로 보낸다. 스크립트가 없거나 실패하면 ERROR 를 남긴다
+# (예전에는 존재하지 않는 알림 스크립트를 조용히 건너뛰었다).
+ALERT_SCRIPT="${AADS_ALERT_SCRIPT:-/root/aads/aads-server/scripts/aads_notify.sh}"
+send_alert() {
+    local err rc
+    err="$(bash "$ALERT_SCRIPT" "$1" 2>&1 >/dev/null)"; rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    echo "$(date '+%F %T') ERROR: 알림 전송 실패 rc=${rc} script=${ALERT_SCRIPT} — 미발송: $1 ${err:+($(printf '%s' "$err" | tail -1 | cut -c1-200))}"
+    return 1
+}
+
 usage_pct() { df -P / | awk 'NR==2 {gsub(/%/,"",$5); print $5}'; }
 
 USED="$(usage_pct)"
@@ -82,7 +93,6 @@ echo "$(date '+%F %T') 정리 완료: ${USED}% → ${AFTER}%"
 # 정리하고도 임계치를 못 내리면 사람이 개입해야 한다.
 if [[ "$AFTER" =~ ^[0-9]+$ ]] && [ "$AFTER" -ge "$THRESHOLD" ]; then
     echo "$(date '+%F %T') ⚠️ 정리 후에도 ${AFTER}% — 수동 확인 필요"
-    ALERT="/root/aads/aads-server/scripts/send_disk_alert.sh"
-    [ -x "$ALERT" ] && "$ALERT" "디스크 ${AFTER}% — 자동 정리로 회수 실패" >/dev/null 2>&1 || true
+    send_alert "디스크 ${AFTER}% — 자동 정리로 회수 실패"
 fi
 exit 0
