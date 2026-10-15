@@ -7,6 +7,7 @@
 """
 from pathlib import Path
 
+from app.services.code_reviewer import PRESERVATION_RATIO_RULE_TEXT
 from app.services.ohvis_harness import RISK_POLICIES
 from app.services.task_policy_compiler import (
     NO_BROAD_REPLACEMENT_RULES,
@@ -37,7 +38,8 @@ def test_no_broad_replacement_rules_match_code_reviewer_gate() -> None:
     reviewer_source = (ROOT / "app" / "services" / "code_reviewer.py").read_text(encoding="utf-8")
 
     assert "기존 함수/클래스/API 라우터 삭제가 있으면 preservation 0.2 이하, FLAG로 판정" in reviewer_source
-    assert "삭제 라인이 추가 라인의 50%를 초과하면 preservation 0.3 이하, REQUEST_CHANGES 이상으로 차단" in reviewer_source
+    assert "PRESERVATION_RATIO_RULE_TEXT" in reviewer_source
+    assert PRESERVATION_RATIO_RULE_TEXT in NO_BROAD_REPLACEMENT_RULES
     assert any("50%" in rule for rule in NO_BROAD_REPLACEMENT_RULES)
     assert any("FLAG" in rule for rule in NO_BROAD_REPLACEMENT_RULES)
 

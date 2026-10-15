@@ -448,9 +448,9 @@ def test_duplicate_private_names_are_ambiguous_and_remain_gated():
 def test_private_edits_do_not_bypass_deletion_ratio_or_scope_gates():
     reviewer = _load_reviewer()
     diff = _symbol_diff("def _worker():", "def _worker(epoch):")
-    # _symbol_diff 는 4추가/1삭제다. 비율 게이트는 순삭제가 있을 때만 걸리므로
-    # 삭제 6줄을 더해 4추가/7삭제(순삭제 3줄)로 만든다.
-    net_removal = diff + "-old = 1\n-old = 2\n-old = 3\n-old = 4\n-old = 5\n-old = 6\n"
+    # _symbol_diff 는 4추가/1삭제다. 비율 게이트는 순삭제가 허용량(max(3, 총량의 10%))을
+    # 넘을 때만 걸리므로 삭제 10줄을 더해 4추가/11삭제(순삭제 7줄)로 만든다.
+    net_removal = diff + "".join(f"-old = {i}\n" for i in range(10))
     for candidate, instruction in [
         (net_removal, ""),
         (diff, "EXACT AUTHORIZED FILES: app/other.py"),
@@ -492,13 +492,13 @@ def test_balanced_in_place_rewrite_is_not_blocked_by_deletion_ratio():
 
 
 def test_net_removal_still_triggers_deletion_ratio_gate():
-    """순삭제가 1줄이라도 있으면 종전대로 차단한다(게이트를 무력화하지 않는다)."""
+    """순삭제가 허용량(max(3, 총량의 10%))을 넘으면 종전대로 차단한다."""
     reviewer = _load_reviewer()
     diff = (
         "diff --git a/app/main.py b/app/main.py\n"
         "--- a/app/main.py\n+++ b/app/main.py\n"
-        "@@ -1,4 +1,3 @@\n"
-        "-old_a = 1\n-old_b = 2\n-old_c = 3\n-old_d = 4\n+new_a = 1\n"
+        "@@ -1,6 +1,1 @@\n"
+        "-old_a = 1\n-old_b = 2\n-old_c = 3\n-old_d = 4\n-old_e = 5\n-old_f = 6\n+new_a = 1\n"
     )
 
     verdict = reviewer._precheck_preservation_gate(diff, "", None)
@@ -665,15 +665,15 @@ def test_small_diff_below_absolute_floor_is_not_blocked_by_deletion_ratio():
     assert reviewer._precheck_preservation_gate(diff, "", None) is None
 
 
-def test_absolute_floor_does_not_cover_diffs_above_line_budget():
-    """하한 임계치는 아주 작은 diff 에만 적용된다(5추가/7삭제=12줄은 종전대로 차단)."""
+def test_net_removal_allowance_does_not_cover_removals_above_floor():
+    """순삭제 허용량은 max(3, 총량의 10%) 다(5추가/9삭제=순삭제 4줄은 차단)."""
     reviewer = _load_reviewer()
-    body = "".join(f"-old_{i} = {i}\n" for i in range(7))
+    body = "".join(f"-old_{i} = {i}\n" for i in range(9))
     body += "".join(f"+new_{i} = {i}\n" for i in range(5))
     diff = (
         "diff --git a/app/main.py b/app/main.py\n"
         "--- a/app/main.py\n+++ b/app/main.py\n"
-        "@@ -1,7 +1,5 @@\n" + body
+        "@@ -1,9 +1,5 @@\n" + body
     )
 
     verdict = reviewer._precheck_preservation_gate(diff, "", None)

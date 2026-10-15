@@ -32,7 +32,9 @@ PRESERVATION_CLASSES: tuple[str, ...] = ("유지", "수정", "신규", "삭제(�
 # ─── 통째 대체 금지 (code_reviewer 보존 하드 게이트와 동일 판정 기준) ────────
 NO_BROAD_REPLACEMENT_RULES: tuple[str, ...] = (
     "기존 함수/클래스/API 라우터 삭제가 있으면 preservation 0.2 이하, FLAG로 판정",
-    "삭제 라인이 추가 라인의 50%를 초과하면 preservation 0.3 이하, REQUEST_CHANGES 이상으로 차단",
+    "삭제 라인이 추가 라인의 50%를 초과하고 순삭제(삭제-추가)가 max(3줄, 변경 총량의 10%)를 "
+    "넘으면 preservation 0.3 이하, REQUEST_CHANGES 이상으로 차단 "
+    "(순삭제가 그 이하인 제자리 수정·줄 합치기는 비율만으로 감점·차단하지 않음)",
     "지시서에 명시된 파일 경로 밖 변경이 있으면 scope_compliance 0.3 이하로 판정",
     "기능이 동작해 보여도 기존 구현 조사·분류표와 삭제 사유가 없으면 승인 금지",
 )

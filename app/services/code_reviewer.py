@@ -96,20 +96,17 @@ _SCOPE_PATH_RE = re.compile(
 _EXCLUDED_REVIEW_MODELS_RE = re.compile(
     r"^\s*\[REVIEW_EXCLUDE_MODELS:\s*([^\]]+)\]\s*$", re.MULTILINE
 )
-# 삭제/추가 비율 게이트가 허용하는 순삭제(삭제-추가) 줄 수.
-# 2026-09-16: 1추가/1삭제짜리 외과적 핫픽스가 `1 > 0.5` 로 매번 차단돼
-# GO100 P0 러너 3건(runner-ae30c8d2 / runner-8c04cd98 / 그 외)이 연속 실패했다.
-# 제자리 수정(추가 == 삭제)은 기존 구현을 지운 것이 아니므로 비율만으로 막으면
-# 안 된다. 실제로 줄이 사라지는 diff(순삭제 > 0)만 게이트에 걸린다.
-# public 심볼 삭제는 아래 `_removed_preservation_symbols` 가 별도로 계속 차단하고,
-# 추가 0 / 삭제 N 인 순수 삭제 diff 도 아래 elif 가 그대로 차단한다.
-_PRESERVATION_NET_REMOVAL_TOLERANCE = 0
-# 순삭제 기준만으로는 1추가/2삭제처럼 줄을 합치는 외과적 수정이 아직 걸린다
-# (2026-09-16 실측: chat-direct-7fc58510 은 18추가/19삭제, 순삭제 1줄로 차단됐다).
-# 아래 두 조건을 모두 만족하는 아주 작은 diff 만 비율 게이트에서 면제한다.
-# 면제돼도 public 심볼 삭제 게이트·범위 게이트·본 LLM 리뷰는 그대로 돈다.
-_PRESERVATION_SMALL_DIFF_MAX_LINES = 10
-_PRESERVATION_SMALL_DIFF_NET_REMOVAL = 2
+# 삭제/추가 비율 게이트는 "기존 구현이 실제로 사라지는" diff 만 막는다.
+# 순삭제(삭제-추가)가 변경 총량 대비 소량이면 제자리 수정·줄 합치기이므로 비율만으로
+# 차단하지 않는다. 허용 순삭제 = max(MIN_LINES, 변경 총량 * RATIO).
+# 2026-09-16 에 1/1, 18/19 가, 2026-10-16 에 21/22 가 같은 유형으로 차단돼 임계치를
+# 두 번 덧붙였다 — 고정 줄 수 대신 변경 규모에 비례하는 하나의 원칙으로 통합했다.
+# 2026-10-09~16 PRESERVATION_HARD_GATE 비율 차단 7건: (21,22)x3 은 해소,
+# (32,405)/(15,464)/(12,445)/(48,374) 는 순삭제 326~449 줄이라 계속 차단된다.
+# public 심볼 삭제는 `_removed_preservation_symbols` 가, 추가 0 / 삭제 N 인 순수
+# 삭제 diff 는 아래 elif 가 별도로 계속 차단한다.
+_PRESERVATION_NET_REMOVAL_MIN_LINES = 3
+_PRESERVATION_NET_REMOVAL_RATIO = 0.1
 
 _DELETED_SYMBOL_RE = re.compile(
     r"^-[ \t]*((?:async[ \t]+def|def|class)[ \t]+[A-Za-z_][A-Za-z0-9_]*|@router\.[A-Za-z_]+)",
@@ -445,6 +442,15 @@ class ReviewVerdict:
     model_used: Optional[str] = None
 
 
+# LLM 프롬프트와 task_policy_compiler 의 개발자 지시 문구가 사전 게이트(_precheck_preservation_gate)와
+# 어긋나면 사전 게이트를 통과한 제자리 수정이 본 리뷰에서 같은 사유로 반려된다. 한 곳에서 만든다.
+PRESERVATION_RATIO_RULE_TEXT = (
+    "삭제 라인이 추가 라인의 50%를 초과하고 순삭제(삭제-추가)가 "
+    f"max({_PRESERVATION_NET_REMOVAL_MIN_LINES}줄, 변경 총량의 {int(_PRESERVATION_NET_REMOVAL_RATIO * 100)}%)를 "
+    "넘으면 preservation 0.3 이하, REQUEST_CHANGES 이상으로 차단 "
+    "(순삭제가 그 이하인 제자리 수정·줄 합치기는 비율만으로 감점·차단하지 않음)"
+)
+
 _REVIEW_SYSTEM_PROMPT = """당신은 AADS의 독립 Code Reviewer AI입니다.
 Developer AI(Claude Sonnet)가 작성한 코드를 검증합니다.
 Developer와 완전히 독립된 컨텍스트에서 평가합니다.
@@ -463,7 +469,7 @@ Developer와 완전히 독립된 컨텍스트에서 평가합니다.
 
 ## 보존 하드 게이트
 - 기존 함수/클래스/API 라우터 삭제가 있으면 preservation 0.2 이하, FLAG로 판정
-- 삭제 라인이 추가 라인의 50%를 초과하면 preservation 0.3 이하, REQUEST_CHANGES 이상으로 차단
+- __RATIO_RULE__
 - 지시서에 명시된 파일 경로 밖 변경이 있으면 scope_compliance 0.3 이하로 판정
 - 위 항목은 기능이 동작해 보여도 "기존 구현 조사·분류표와 삭제 사유"가 없으면 승인 금지
 
@@ -479,7 +485,7 @@ Developer와 완전히 독립된 컨텍스트에서 평가합니다.
   "issues": ["구체적 문제점"],
   "suggestions": ["개선 제안"],
   "summary": "한줄 요약"
-}"""
+}""".replace("__RATIO_RULE__", PRESERVATION_RATIO_RULE_TEXT)
 
 
 def _looks_like_git_diff(text: str) -> bool:
@@ -1498,21 +1504,19 @@ def _precheck_preservation_gate(
             exemption_out["preservation_ignored_result_md_lines"] = ignored_result_md_lines
 
     net_removal = deletions - additions
-    # 아주 작은 diff 는 비율만으로 판정할 근거가 못 된다(하한 임계치).
-    small_surgical_diff = (
-        additions + deletions <= _PRESERVATION_SMALL_DIFF_MAX_LINES
-        and net_removal <= _PRESERVATION_SMALL_DIFF_NET_REMOVAL
+    net_removal_allowance = max(
+        _PRESERVATION_NET_REMOVAL_MIN_LINES,
+        (additions + deletions) * _PRESERVATION_NET_REMOVAL_RATIO,
     )
 
     if (
         additions > 0
         and deletions > additions * 0.5
-        and net_removal > _PRESERVATION_NET_REMOVAL_TOLERANCE
-        and not small_surgical_diff
+        and net_removal > net_removal_allowance
     ):
         issues.append(
             f"삭제 라인({deletions})이 추가 라인({additions})의 50%를 초과하고 순삭제가 "
-            f"{deletions - additions}줄입니다. 기존 구현 조사표와 삭제 사유가 필요합니다."
+            f"{net_removal}줄입니다. 기존 구현 조사표와 삭제 사유가 필요합니다."
         )
     elif additions == 0 and deletions > 0:
         issues.append(f"추가 없이 삭제 라인({deletions})만 존재합니다. 삭제 사유가 필요합니다.")
