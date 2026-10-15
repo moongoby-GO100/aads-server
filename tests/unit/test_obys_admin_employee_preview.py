@@ -22,6 +22,14 @@ def _preview_block() -> str:
     return match.group(1)
 
 
+def _handoff_block() -> str:
+    match = re.search(
+        r"// ADMIN-EMPLOYEE-PREVIEW-HANDOFF:BEGIN\n(.*?)// ADMIN-EMPLOYEE-PREVIEW-HANDOFF:END", HTML, re.S
+    )
+    assert match, "ADMIN-EMPLOYEE-PREVIEW-HANDOFF 블록이 없다"
+    return match.group(1)
+
+
 def _function_source(name: str) -> str:
     found = re.search(rf"^    (?:async )?function {name}\(", HTML, re.M)
     assert found, name
@@ -78,7 +86,7 @@ class TestStaticWiring:
         assert "employeePreview.email" in _function_source("currentEmployeeEmail")
         assert "employeePreview.name" in _function_source("currentEmployeeName")
         assert "employeePreview" in _function_source("refreshSignPrompt")
-        assert "stopEmployeePreview()" in _function_source("logoutFromServer")
+        assert "stopEmployeePreview({ stay: true })" in _function_source("logoutFromServer")
         assert "syncEmployeePreviewSession()" in _function_source("applyAccessPolicy")
 
 
@@ -289,6 +297,8 @@ def test_preview_lifecycle_and_write_block_execute_in_node(tmp_path):
     sources = "\n".join(
         [
             _preview_block(),
+            _handoff_block(),
+            _function_source("v41RouteHash"),
             _function_source("canManageAutomation"),
             _function_source("canManageOnboarding"),
             _function_source("canManageSettings"),

@@ -298,7 +298,7 @@
     document.getElementById("legacyBtn").onclick=()=>window.location.href="/static/apps/obys/index.html?legacy=1&view=legacy";document.getElementById("logoutBtn").onclick=logoutV41;
     // 직원 화면 보기 — 직원 정보는 URL 이 아니라 같은 출처 sessionStorage 1회성 키로 넘긴다(받는 쪽이 5분·권한 확인 후 삭제).
     const EMPLOYEE_PREVIEW_REQUEST_KEY_V41="obys.employeePreviewRequest";
-    function openEmployeePreviewV41(request){try{sessionStorage.setItem(EMPLOYEE_PREVIEW_REQUEST_KEY_V41,JSON.stringify({...request,createdAt:Date.now()}))}catch(_error){showToast("이 브라우저에서는 직원 화면 보기를 열 수 없습니다.");return false}window.location.href="/static/apps/obys/index.html?legacy=1&view=legacy";return true}
+    function openEmployeePreviewV41(request){try{sessionStorage.setItem(EMPLOYEE_PREVIEW_REQUEST_KEY_V41,JSON.stringify({...request,returnTo:"v41",returnHash:window.location.hash||"#employees",createdAt:Date.now()}))}catch(_error){showToast("이 브라우저에서는 직원 화면 보기를 열 수 없습니다.");return false}window.location.href="/static/apps/obys/index.html?legacy=1&view=legacy";return true}
     window.obysEmployeePreviewV41={open:openEmployeePreviewV41,canManage:()=>state.canManageOnboarding===true};
     nav.addEventListener("click",e=>{if(e.target.closest("[data-employee-preview-entry]")&&state.canManageOnboarding===true)openEmployeePreviewV41({open:"picker"})});
     async function loadEmployeePreviewPermissionV41(){try{const payload=await financeApiV41("/session");state.canManageOnboarding=payload?.permissions?.can_manage_onboarding===true}catch(_error){state.canManageOnboarding=false}document.querySelectorAll("[data-employee-preview-entry]").forEach(button=>{button.hidden=state.canManageOnboarding!==true});window.obysContractV41?.rerender?.()}

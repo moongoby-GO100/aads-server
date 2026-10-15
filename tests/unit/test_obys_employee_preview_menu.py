@@ -131,6 +131,8 @@ class TestV41Entry:
         assert "email" not in re.search(r'window\.location\.href="([^"]*)"', opener).group(1)
         assert "encodeURIComponent" not in opener
         assert 'sessionStorage.setItem(EMPLOYEE_PREVIEW_REQUEST_KEY_V41' in opener
+        assert 'returnTo:"v41"' in opener
+        assert 'returnHash:window.location.hash||"#employees"' in opener
         assert 'obys.employeePreviewRequest' in V41
 
     def test_contract_editor_rows_use_masked_email_guard(self):
@@ -504,3 +506,156 @@ def test_editor_row_button_skips_masked_email_in_node(tmp_path):
     source = _function_source(EDITOR, "previewButton", indent="  ")
     out = _run_node(EDITOR_HARNESS, {"SOURCE": source}, tmp_path)
     assert "EDITOR_OK" in out
+
+
+RETURN_HARNESS = r"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const store = new Map();
+const replaced = [];
+const calls = { setView: [] };
+let permissions = { role: 'admin', can_manage_onboarding: true };
+const box = () => ({ classList: { add() {}, remove() {}, contains: () => true, toggle() {} }, value: '', innerHTML: '', focus() {} });
+const elements = { employeePreviewPicker: box(), employeePreviewList: box(), employeePreviewSearch: box(),
+  employeePreviewBanner: box(), employeePreviewBannerText: { textContent: '' } };
+const ctx = {
+  document: { body: { classList: { add() {}, remove() {} } }, addEventListener() {},
+    getElementById: id => elements[id] || null, querySelectorAll: () => [] },
+  window: { location: { hash: '', replace: url => replaced.push(url) } },
+  sessionStorage: { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) },
+  Promise, Error, Array, String, Boolean, Object, RegExp, JSON, Map, Set, Number, Date, console,
+  showToast() {}, renderAll() {}, setView: v => calls.setView.push(v),
+  hasServerAuth: () => true, authPermissions: () => permissions, authSession: { user: { email: 'a@example.com' } },
+  loadEmployeeSelfSignupMap: () => ({}), loadEmployeeJoinRequests: () => Promise.resolve(), loadEmployeeContracts: () => Promise.resolve(),
+  escapeHtml: s => String(s),
+  currentView: 'employees',
+  appViewNames: ['dashboard', 'employees', 'contracts', 'onboarding'],
+  employeeViewNames: ['onboarding', 'contracts'],
+  employeeJoinRequests: [], approvedEmployees: [], state: { contracts: [] },
+  V41_APP_PATH: '/static/apps/obys/mockup-v4-1.html',
+  store, replaced, calls, assert, setPermissions: p => { permissions = p; },
+};
+vm.createContext(ctx);
+vm.runInContext(process.env.SOURCES + '\n' + process.env.CHECKS, ctx);
+console.log('RETURN_OK');
+"""
+
+RETURN_CHECKS = r"""
+const KEY = 'obys.employeePreviewRequest';
+const RKEY = 'obys.employeePreviewReturn';
+const put = obj => store.set(KEY, JSON.stringify({ createdAt: Date.now(), ...obj }));
+const reset = () => { replaced.length = 0; calls.setView.length = 0; };
+
+// 해시 검증
+assert.equal(v41RouteHash('#employees'), '#employees');
+assert.equal(v41RouteHash('#payroll'), '#payroll');
+assert.equal(v41RouteHash('#employees?x=1'), '#home');
+assert.equal(v41RouteHash('#unknown'), '#home');
+assert.equal(v41RouteHash('javascript:alert(1)'), '#home');
+assert.equal(v41RouteHash(undefined), '#home');
+
+// V4.1 출발(직원 지정) → 종료 시 V4.1 해시로 replace, setView 안 함, 보관 키 삭제
+put({ email: 'emp@example.com', name: '홍길동', returnTo: 'v41', returnHash: '#payroll' });
+assert.equal(consumeEmployeePreviewRequest(), true);
+assert.equal(JSON.parse(store.get(RKEY)).returnHash, '#payroll');
+assert.equal(stopEmployeePreview(), true);
+assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/mockup-v4-1.html#payroll']));
+assert.equal(calls.setView.filter(v => v === 'dashboard').length, 0);
+assert.equal(store.has(RKEY), false, '복귀 후 보관 키 삭제');
+assert.equal(employeePreviewReturnTarget, null);
+
+// 새로고침으로 메모리가 사라져도 sessionStorage 로 복귀
+reset();
+put({ email: 'emp@example.com', name: '홍길동', returnTo: 'v41', returnHash: '#employees' });
+assert.equal(consumeEmployeePreviewRequest(), true);
+employeePreviewReturnTarget = null;
+stopEmployeePreview();
+assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/mockup-v4-1.html#employees']));
+
+// 허용되지 않은 해시 → #home
+reset();
+put({ email: 'emp@example.com', name: '홍길동', returnTo: 'v41', returnHash: '#evil' });
+assert.equal(consumeEmployeePreviewRequest(), true);
+assert.equal(JSON.parse(store.get(RKEY)).returnHash, '#home');
+stopEmployeePreview();
+assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/mockup-v4-1.html#home']));
+
+// 보관 키가 변조돼도 검증
+reset();
+put({ email: 'emp@example.com', name: '홍길동', returnTo: 'v41', returnHash: '#employees' });
+consumeEmployeePreviewRequest();
+employeePreviewReturnTarget = null;
+store.set(RKEY, JSON.stringify({ returnTo: 'v41', returnHash: 'https://evil.example' }));
+stopEmployeePreview();
+assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/mockup-v4-1.html#home']));
+
+// 선택창 요청 → 직원 선택 → 종료
+reset();
+put({ open: 'picker', returnTo: 'v41', returnHash: '#employees' });
+assert.equal(consumeEmployeePreviewRequest(), true);
+startEmployeePreview({ email: 'emp@example.com', name: '홍길동' });
+stopEmployeePreview();
+assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/mockup-v4-1.html#employees']));
+
+// 선택창만 열고 취소하면 보관값을 버린다
+reset();
+put({ open: 'picker', returnTo: 'v41', returnHash: '#employees' });
+consumeEmployeePreviewRequest();
+discardEmployeePreviewReturn();
+assert.equal(store.has(RKEY), false);
+
+// legacy 출발(returnTo 없음) → 기존처럼 이전 화면으로 setView
+reset();
+currentView = 'contracts';
+put({ email: 'emp@example.com', name: '홍길동' });
+assert.equal(consumeEmployeePreviewRequest(), true);
+assert.equal(store.has(RKEY), false);
+stopEmployeePreview();
+assert.equal(replaced.length, 0);
+assert.equal(calls.setView.at(-1), 'contracts');
+
+// 직접 시작(메뉴/목록 버튼)도 기존 동작
+reset();
+currentView = 'employees';
+startEmployeePreview({ email: 'emp@example.com', name: '홍길동' });
+stopEmployeePreview();
+assert.equal(replaced.length, 0);
+assert.equal(calls.setView.at(-1), 'employees');
+
+// 로그아웃·권한 상실 경로(stay)는 이동하지 않고 보관값만 버린다
+reset();
+put({ email: 'emp@example.com', name: '홍길동', returnTo: 'v41', returnHash: '#employees' });
+consumeEmployeePreviewRequest();
+stopEmployeePreview({ stay: true });
+assert.equal(replaced.length, 0);
+assert.equal(store.has(RKEY), false);
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node 미설치 런타임")
+def test_preview_exit_returns_to_v41_origin_in_node(tmp_path):
+    preview = _block("ADMIN-EMPLOYEE-PREVIEW:BEGIN", "ADMIN-EMPLOYEE-PREVIEW:END")
+    handoff = _block("ADMIN-EMPLOYEE-PREVIEW-HANDOFF:BEGIN", "ADMIN-EMPLOYEE-PREVIEW-HANDOFF:END")
+    sources = "\n".join(
+        [
+            preview,
+            handoff,
+            _function_source(INDEX, "v41RouteHash"),
+            _function_source(INDEX, "canManageAutomation"),
+            _function_source(INDEX, "canManageOnboarding"),
+            _function_source(INDEX, "canManageSettings"),
+            _function_source(INDEX, "isEmployeeAccount"),
+            _function_source(INDEX, "isEmployeeExperience"),
+            _function_source(INDEX, "allowedViews"),
+            _function_source(INDEX, "defaultView"),
+        ]
+    )
+    out = _run_node(RETURN_HARNESS, {"SOURCES": sources, "CHECKS": RETURN_CHECKS}, tmp_path)
+    assert "RETURN_OK" in out
+
+
+def test_return_wiring_keeps_v41_detection_untouched():
+    assert "returnEmployeePreviewToV41()" in _function_source(INDEX, "stopEmployeePreview")
+    assert "v41RouteHash(window.location.hash)" in _function_source(INDEX, "openV41App")
+    assert "stopEmployeePreview({ stay: true })" in _function_source(INDEX, "logoutFromServer")
+    assert "isEmployeeAccount()" in _function_source(INDEX, "shouldOpenV41App")

@@ -6834,7 +6834,7 @@
       return true;
     }
 
-    function stopEmployeePreview() {
+    function stopEmployeePreview({ stay = false } = {}) {
       if (!employeePreview) return false;
       employeePreview = null;
       if (employeePreviewObserver) employeePreviewObserver.disconnect();
@@ -6845,12 +6845,17 @@
       renderAll();
       const back = employeePreviewReturnView;
       employeePreviewReturnView = "";
+      if (stay) {
+        discardEmployeePreviewReturn();
+      } else if (returnEmployeePreviewToV41()) {
+        return true;
+      }
       setView(appViewNames.includes(back) ? back : defaultView());
       return true;
     }
 
     function syncEmployeePreviewSession() {
-      if (employeePreview && !canManageOnboardingReal()) stopEmployeePreview();
+      if (employeePreview && !canManageOnboardingReal()) stopEmployeePreview({ stay: true });
     }
 
     function employeePreviewClickGuard(event) {
@@ -6864,6 +6869,7 @@
         event.preventDefault();
         event.stopPropagation();
         closeEmployeePreviewPicker();
+        discardEmployeePreviewReturn();
         return;
       }
       const trigger = event.target?.closest?.("[data-preview-employee]");
@@ -6902,7 +6908,10 @@
         if (event.target?.id === "employeePreviewSearch") renderEmployeePreviewPicker();
       });
       document.addEventListener("keydown", event => {
-        if (event.key === "Escape") closeEmployeePreviewPicker();
+        if (event.key === "Escape") {
+          closeEmployeePreviewPicker();
+          if (!employeePreview) discardEmployeePreviewReturn();
+        }
       });
     }
     if (typeof window !== "undefined" && typeof window.fetch === "function") {
@@ -6923,6 +6932,39 @@
     // 읽는 즉시 삭제하고, 5분이 지났거나 관리자 권한이 없으면 무시한다. 미리보기 상태 자체는 저장하지 않는다.
     const EMPLOYEE_PREVIEW_REQUEST_KEY = "obys.employeePreviewRequest";
     const EMPLOYEE_PREVIEW_REQUEST_TTL_MS = 5 * 60 * 1000;
+    // V4.1 에서 넘어온 경우 출발지를 보관한다. 새로고침을 견디도록 sessionStorage 에도 둔다.
+    const EMPLOYEE_PREVIEW_RETURN_KEY = "obys.employeePreviewReturn";
+    let employeePreviewReturnTarget = null;
+
+    function rememberEmployeePreviewReturn(request) {
+      employeePreviewReturnTarget = null;
+      try { sessionStorage.removeItem(EMPLOYEE_PREVIEW_RETURN_KEY); } catch (_) { /* 저장소 차단 환경 */ }
+      if (request?.returnTo !== "v41") return;
+      employeePreviewReturnTarget = { returnTo: "v41", returnHash: v41RouteHash(request.returnHash) };
+      try { sessionStorage.setItem(EMPLOYEE_PREVIEW_RETURN_KEY, JSON.stringify(employeePreviewReturnTarget)); } catch (_) { /* 메모리 값만 쓴다 */ }
+    }
+
+    function discardEmployeePreviewReturn() {
+      employeePreviewReturnTarget = null;
+      try { sessionStorage.removeItem(EMPLOYEE_PREVIEW_RETURN_KEY); } catch (_) { /* 저장소 차단 환경 */ }
+    }
+
+    function loadEmployeePreviewReturn() {
+      if (employeePreviewReturnTarget) return employeePreviewReturnTarget;
+      let saved = null;
+      try { saved = JSON.parse(sessionStorage.getItem(EMPLOYEE_PREVIEW_RETURN_KEY) || "null"); } catch (_) { return null; }
+      if (saved?.returnTo !== "v41") return null;
+      return { returnTo: "v41", returnHash: v41RouteHash(saved.returnHash) };
+    }
+
+    // V4.1 에서 출발했으면 보관 키를 지우고 V4.1 로 돌아간다. legacy 에서 시작했으면 false.
+    function returnEmployeePreviewToV41() {
+      const target = loadEmployeePreviewReturn();
+      discardEmployeePreviewReturn();
+      if (!target) return false;
+      window.location.replace(`${V41_APP_PATH}${v41RouteHash(target.returnHash)}`);
+      return true;
+    }
 
     function dropEmployeePreviewRequest() {
       try { sessionStorage.removeItem(EMPLOYEE_PREVIEW_REQUEST_KEY); } catch (_) { /* 저장소 차단 환경 */ }
@@ -6938,8 +6980,16 @@
       const age = Date.now() - Number(request?.createdAt);
       if (!Number.isFinite(age) || age < 0 || age > EMPLOYEE_PREVIEW_REQUEST_TTL_MS) return false;
       if (employeePreview || !canManageOnboardingReal()) return false;
-      if (request.open === "picker") return openEmployeePreviewPicker();
-      if (request.email || request.name) return startEmployeePreview({ email: request.email, name: request.name });
+      if (request.open === "picker") {
+        const opened = openEmployeePreviewPicker();
+        if (opened) rememberEmployeePreviewReturn(request);
+        return opened;
+      }
+      if (request.email || request.name) {
+        const started = startEmployeePreview({ email: request.email, name: request.name });
+        if (started) rememberEmployeePreviewReturn(request);
+        return started;
+      }
       return false;
     }
     // ADMIN-EMPLOYEE-PREVIEW-HANDOFF:END
@@ -13358,12 +13408,14 @@
       return shouldOpenV41App();
     }
 
+    function v41RouteHash(hash, fallback = "#home") {
+      return /^(#(?:home|tasks|reports|documents|sales|orders|cards|settlements|accounts|receivables|unmatched|purchases|suppliers|inventory|purchase-orders|employees|attendance|payroll|hr-docs|tax-evidence|tax-gap|journals|tax-returns|approvals|audit-history|alerts|errors|businesses|branches|margins|menu-costs|integrations|sales-connect|bank-connect|tax-connect|access-log))$/.test(String(hash || ""))
+        ? String(hash)
+        : fallback;
+    }
+
     function openV41App() {
-      const hash = String(window.location.hash || "");
-      const route = /^(#(?:home|tasks|reports|documents|sales|orders|cards|settlements|accounts|receivables|unmatched|purchases|suppliers|inventory|purchase-orders|employees|attendance|payroll|hr-docs|tax-evidence|tax-gap|journals|tax-returns|approvals|audit-history|alerts|errors|businesses|branches|margins|menu-costs|integrations|sales-connect|bank-connect|tax-connect|access-log))$/.test(hash)
-        ? hash
-        : "#home";
-      window.location.replace(`${V41_APP_PATH}${route}`);
+      window.location.replace(`${V41_APP_PATH}${v41RouteHash(window.location.hash)}`);
       return true;
     }
 
@@ -14739,7 +14791,7 @@
     }
 
     async function logoutFromServer() {
-      stopEmployeePreview();
+      stopEmployeePreview({ stay: true });
       try {
         if (hasServerAuth()) await authApi("/logout", { method: "POST" });
       } catch (err) {
