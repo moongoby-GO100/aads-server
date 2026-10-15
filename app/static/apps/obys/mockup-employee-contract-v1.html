@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>오비서 직원 화면 — 계약서 확인·서명 목업 v1</title>
+<style>
+:root{--bg:#f3f5f9;--card:#fff;--ink:#0f172a;--sub:#475569;--mute:#94a3b8;--line:#e2e8f0;--blue:#2563eb;--blue-soft:#eff4ff;--green:#16a34a;--green-soft:#ecfdf3;--amber:#d97706;--amber-soft:#fff7e6;--red:#dc2626;--radius:14px}
+*{box-sizing:border-box}body{margin:0;background:#e9edf3;color:var(--ink);font:14px/1.55 "Pretendard","Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif}
+h1,h2,h3,p{margin:0}
+.doc{max-width:1360px;margin:0 auto;padding:28px 24px 80px}
+.doc-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:22px}
+.doc-head h1{font-size:22px;font-weight:800}.doc-head p{color:var(--sub);margin-top:4px}
+.tag{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;background:#0f172a;color:#fff;font-size:12px;font-weight:700}
+.flow{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 26px}
+.flow a{display:flex;align-items:center;gap:8px;padding:9px 14px;border-radius:10px;background:#fff;border:1px solid var(--line);color:var(--ink);text-decoration:none;font-weight:700;font-size:13px}
+.flow a b{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--blue);color:#fff;font-size:12px}
+.flow .arrow{align-self:center;color:var(--mute)}
+section.screen{margin-bottom:46px}
+.screen-title{display:flex;align-items:baseline;gap:12px;margin-bottom:12px}
+.screen-title h2{font-size:18px}.screen-title span{color:var(--sub)}
+.pair{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:24px;align-items:start}
+.label{font-size:12px;font-weight:700;color:var(--sub);margin-bottom:6px}
+/* PC frame */
+.pc{border-radius:14px;overflow:hidden;background:var(--bg);border:1px solid #cfd6e1;box-shadow:0 12px 32px rgba(15,23,42,.10);height:640px;display:grid;grid-template-rows:56px 1fr}
+.pc-top{display:flex;align-items:center;gap:14px;padding:0 22px;background:#fff;border-bottom:1px solid var(--line)}
+.logo{display:flex;align-items:center;gap:8px;font-weight:800}.logo i{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--blue);color:#fff;font-style:normal;font-size:13px}
+.pc-nav{display:flex;gap:4px;margin-left:18px}.pc-nav a{padding:8px 14px;border-radius:9px;color:var(--sub);font-weight:700;text-decoration:none;position:relative}
+.pc-nav a.on{background:var(--blue-soft);color:var(--blue)}
+.dot{position:absolute;top:4px;right:4px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;background:var(--red);color:#fff;font-size:10px;line-height:16px;text-align:center}
+.who{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--sub);font-size:13px}.who b{color:var(--ink)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:40px;padding:0 16px;border-radius:10px;border:1px solid var(--line);background:#fff;color:var(--ink);font:inherit;font-weight:700;cursor:pointer;text-decoration:none}
+.btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}.btn.primary:disabled{background:#cbd5e1;border-color:#cbd5e1;cursor:not-allowed}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--sub)}
+.btn.lg{min-height:52px;font-size:16px;border-radius:12px}
+.pc-body{overflow:auto;padding:24px 28px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius)}
+.hello h3{font-size:20px}.hello p{color:var(--sub);margin-top:2px}
+.todo{display:flex;align-items:center;gap:16px;padding:18px 20px;margin-top:16px;border-color:#bfd2ff;background:linear-gradient(0deg,#fff,#f5f8ff)}
+.todo .ic{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;background:var(--blue);color:#fff;font-size:20px;flex:none}
+.todo b{font-size:16px}.todo p{color:var(--sub)}.todo .btn{margin-left:auto}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:16px}
+.tile{padding:16px 18px}.tile small{color:var(--sub);font-weight:700}.tile b{display:block;font-size:18px;margin-top:4px}.tile span{color:var(--mute);font-size:12px}
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:99px;font-size:12px;font-weight:800;white-space:nowrap}
+.badge.req{background:var(--amber-soft);color:var(--amber)}.badge.ok{background:var(--green-soft);color:var(--green)}.badge.old{background:#f1f5f9;color:var(--sub)}
+.list-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.seg{display:inline-flex;padding:3px;border-radius:10px;background:#e8edf5}.seg button{border:0;background:transparent;padding:6px 12px;border-radius:8px;font:inherit;font-weight:700;color:var(--sub)}.seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.crow{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:16px 18px;border-bottom:1px solid var(--line)}.crow:last-child{border-bottom:0}
+.crow h4{margin:0 0 3px;font-size:15px}.crow p{color:var(--sub);font-size:13px}.crow .meta{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.crow.req{background:#fffdf7}
+/* contract read + sign (PC) */
+.read{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;height:100%}
+.paper{background:#fff;border:1px solid var(--line);border-radius:var(--radius);overflow:auto;padding:28px 34px;max-height:528px}
+.paper h3{text-align:center;font-size:20px;letter-spacing:.3em;margin-bottom:18px}
+.paper h5{margin:18px 0 6px;font-size:14px}.paper p,.paper li{color:#1e293b;font-size:13.5px}.paper ol{padding-left:18px;margin:0}
+.hl{background:#fff4c2;border-radius:3px;padding:0 2px}
+.side-sum{display:flex;flex-direction:column;gap:12px}
+.sum{padding:16px}.sum h4{margin:0 0 10px;font-size:14px}
+.kv{display:grid;grid-template-columns:88px 1fr;gap:6px 10px;font-size:13px}.kv dt{color:var(--sub)}.kv dd{margin:0;font-weight:700}
+.progress{height:6px;border-radius:9px;background:#e2e8f0;overflow:hidden}.progress i{display:block;height:100%;background:var(--blue);width:100%}
+.check{display:flex;gap:8px;align-items:flex-start;font-size:13px}.check input{width:18px;height:18px;margin-top:1px}
+.pad{position:relative;height:120px;border:1.5px dashed #94a3b8;border-radius:12px;background:#fafbfc;touch-action:none}.pad canvas{width:100%;height:100%;display:block}.pad span{position:absolute;inset:0;display:grid;place-items:center;color:var(--mute);pointer-events:none;font-size:13px}
+.note{font-size:12px;color:var(--sub)}
+.done{display:grid;place-items:center;text-align:center;gap:10px;padding:40px}.done .big{display:grid;place-items:center;width:64px;height:64px;border-radius:50%;background:var(--green-soft);color:var(--green);font-size:32px;font-weight:800}
+/* phone */
+.phone{width:380px;height:780px;border-radius:44px;background:#0f172a;padding:12px;box-shadow:0 18px 40px rgba(15,23,42,.25)}
+.ph{position:relative;height:100%;border-radius:34px;overflow:hidden;background:var(--bg);display:grid;grid-template-rows:44px auto 1fr auto}
+.status{display:flex;justify-content:space-between;align-items:center;padding:0 24px;font-size:12px;font-weight:700;background:#fff}
+.ph-head{display:flex;align-items:center;gap:8px;padding:10px 16px 12px;background:#fff;border-bottom:1px solid var(--line)}
+.ph-head h3{font-size:17px}.ph-head .back{font-size:20px;color:var(--sub);text-decoration:none;width:32px}
+.ph-body{overflow:auto;padding:16px}
+.tabbar{display:grid;grid-template-columns:repeat(5,1fr);background:#fff;border-top:1px solid var(--line);padding:6px 4px 18px}
+.tabbar a{position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;color:var(--mute);font-size:11px;font-weight:700;text-decoration:none}.tabbar a i{font-style:normal;font-size:19px}.tabbar a.on{color:var(--blue)}
+.tabbar .dot{top:2px;right:18px}
+.ph .todo{flex-direction:column;align-items:stretch;gap:10px;margin-top:12px}.ph .todo .btn{margin-left:0}
+.ph .grid3{grid-template-columns:1fr 1fr;gap:10px}
+.ph .crow{grid-template-columns:1fr;gap:10px}.ph .crow .btn{width:100%}
+.sticky{background:#fff;border-top:1px solid var(--line);padding:12px 16px 22px}
+.sum-chips{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}.sum-chips div{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px}.sum-chips small{display:block;color:var(--sub);font-size:11px;font-weight:700}.sum-chips b{font-size:14px}
+.ph .paper{padding:18px 16px;max-height:none}
+.read-hint{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:var(--sub)}.read-hint .progress{flex:1}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:22px 22px 0 0;box-shadow:0 -10px 30px rgba(15,23,42,.18);padding:10px 16px 24px}
+.sheet .grab{width:40px;height:5px;border-radius:9px;background:#cbd5e1;margin:0 auto 12px}
+.dim{position:absolute;inset:0;background:rgba(15,23,42,.35)}
+.spec{margin-top:14px;padding:14px 16px;border-radius:12px;background:#fff;border:1px solid var(--line);font-size:13px;color:var(--sub)}
+.spec b{color:var(--ink)}.spec ul{margin:6px 0 0;padding-left:18px}
+@media (max-width:1100px){.pair{grid-template-columns:1fr}.phone{margin:0 auto}}
+</style>
+</head>
+<body>
+<div class="doc">
+  <div class="doc-head">
+    <div>
+      <span class="tag">목업 v1 · 2026-10-15</span>
+      <h1 style="margin-top:8px">오비서 직원 화면 — 계약서 확인·서명</h1>
+      <p>직원이 로그인하면 관리자 화면이 아니라 이 화면으로 들어옵니다. 계약서 목록을 보고, 내용을 끝까지 읽은 뒤 서명합니다. 화면 값은 모두 예시입니다.</p>
+    </div>
+  </div>
+
+  <nav class="flow">
+    <a href="#s1"><b>1</b>직원 홈 — 할 일</a><span class="arrow">→</span>
+    <a href="#s2"><b>2</b>내 계약서 목록</a><span class="arrow">→</span>
+    <a href="#s3"><b>3</b>계약서 읽기</a><span class="arrow">→</span>
+    <a href="#s4"><b>4</b>동의·서명</a><span class="arrow">→</span>
+    <a href="#s5"><b>5</b>서명 완료·PDF</a>
+  </nav>
+
+  <!-- 1. HOME -->
+  <section class="screen" id="s1">
+    <div class="screen-title"><h2>1. 직원 홈</h2><span>로그인 직후 첫 화면. 서명할 계약서가 있으면 가장 위에 띄웁니다.</span></div>
+    <div class="pair">
+      <div>
+        <div class="label">PC (1280px)</div>
+        <div class="pc">
+          <div class="pc-top">
+            <div class="logo"><i>오</i>오비서</div>
+            <nav class="pc-nav"><a class="on" href="#">홈</a><a href="#">계약서<span class="dot">1</span></a><a href="#">급여명세</a><a href="#">근태</a><a href="#">입사서류</a></nav>
+            <div class="who"><span>열정국밥 ○○점</span><b>홍길동 님</b><a class="btn ghost" href="#">로그아웃</a></div>
+          </div>
+          <div class="pc-body">
+            <div class="hello"><h3>안녕하세요, 홍길동 님</h3><p>열정국밥 ○○점 · 홀 매니저 · 직원</p></div>
+            <div class="card todo"><div class="ic">✍</div><div><b>근로계약서 서명이 필요합니다</b><p>2026-10-09에 요청됨 · 표준근로계약서(기간의 정함이 없는 경우)</p></div><a class="btn primary lg" href="#s3">계약서 읽고 서명하기</a></div>
+            <div class="grid3">
+              <div class="card tile"><small>계약서</small><b>서명 대기 1건</b><span>서명 완료 0건</span></div>
+              <div class="card tile"><small>이번 달 급여명세</small><b>아직 발행 전</b><span>급여일 10일</span></div>
+              <div class="card tile"><small>입사서류</small><b>2 / 3 제출</b><span>통장사본 미제출</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="label">모바일 (390px)</div>
+        <div class="phone"><div class="ph">
+          <div class="status"><span>9:41</span><span>●●● ▮</span></div>
+          <div class="ph-head"><h3>오비서</h3><span style="margin-left:auto;color:var(--sub);font-size:13px">홍길동 님</span></div>
+          <div class="ph-body">
+            <div class="hello"><h3 style="font-size:18px">안녕하세요, 홍길동 님</h3><p>열정국밥 ○○점 · 직원</p></div>
+            <div class="card todo"><div style="display:flex;gap:12px;align-items:center"><div class="ic">✍</div><div><b>근로계약서 서명 필요</b><p>10-09 요청 · 표준근로계약서</p></div></div><a class="btn primary lg" href="#s3">계약서 읽고 서명하기</a></div>
+            <div class="grid3">
+              <div class="card tile"><small>급여명세</small><b style="font-size:15px">발행 전</b></div>
+              <div class="card tile"><small>입사서류</small><b style="font-size:15px">2 / 3</b></div>
+            </div>
+          </div>
+          <nav class="tabbar"><a class="on" href="#"><i>⌂</i>홈</a><a href="#"><i>✎</i>계약서<span class="dot">1</span></a><a href="#"><i>₩</i>급여</a><a href="#"><i>◷</i>근태</a><a href="#"><i>▤</i>서류</a></nav>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. LIST -->
+  <section class="screen" id="s2">
+    <div class="screen-title"><h2>2. 내 계약서 목록</h2><span>본인 계약서만 보입니다. 서명 대기 → 서명 완료 → 이전 계약 순서로 정렬합니다.</span></div>
+    <div class="pair">
+      <div>
+        <div class="label">PC</div>
+        <div class="pc">
+          <div class="pc-top"><div class="logo"><i>오</i>오비서</div><nav class="pc-nav"><a href="#">홈</a><a class="on" href="#">계약서<span class="dot">1</span></a><a href="#">급여명세</a><a href="#">근태</a><a href="#">입사서류</a></nav><div class="who"><b>홍길동 님</b></div></div>
+          <div class="pc-body">
+            <div class="list-head"><h3>내 계약서</h3><div class="seg"><button class="on">전체 3</button><button>서명 대기 1</button><button>서명 완료 1</button><button>이전 계약 1</button></div></div>
+            <div class="card">
+              <div class="crow req"><div><div class="meta"><span class="badge req">서명 대기</span><span class="note">10-09 요청 · 10-23까지</span></div><h4>표준근로계약서 (기간의 정함이 없는 경우)</h4><p>열정국밥 ○○점 · 2026-10-16부터 · 월 3,200,000원 · 주 5일</p></div><a class="btn primary" href="#s3">읽고 서명하기</a></div>
+              <div class="crow"><div><div class="meta"><span class="badge ok">서명 완료</span><span class="note">2026-07-01 서명</span></div><h4>개인정보 수집·이용 동의서</h4><p>열정국밥 ○○점</p></div><div style="display:flex;gap:8px"><a class="btn" href="#">내용 보기</a><a class="btn" href="#">PDF 받기</a></div></div>
+              <div class="crow"><div><div class="meta"><span class="badge old">이전 계약</span><span class="note">2026-07-01 ~ 2026-10-15 · 변경 계약으로 대체</span></div><h4>단시간근로자 표준근로계약서</h4><p>열정국밥 ○○점 · 시급 10,030원</p></div><div style="display:flex;gap:8px"><a class="btn" href="#">내용 보기</a><a class="btn" href="#">PDF 받기</a></div></div>
+            </div>
+            <p class="note" style="margin-top:12px">계약서가 안 보이면: 가입한 이메일과 관리자가 계약서에 적은 이메일이 다를 수 있습니다. <a href="#">관리자에게 확인 요청</a></p>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="label">모바일</div>
+        <div class="phone"><div class="ph">
+          <div class="status"><span>9:41</span><span>●●● ▮</span></div>
+          <div class="ph-head"><h3>내 계약서</h3></div>
+          <div class="ph-body" style="padding:12px">
+            <div class="seg" style="display:flex;margin-bottom:12px;overflow:auto"><button class="on">전체</button><button>서명 대기 1</button><button>완료</button><button>이전</button></div>
+            <div class="card">
+              <div class="crow req"><div><div class="meta"><span class="badge req">서명 대기</span><span class="note">10-23까지</span></div><h4>표준근로계약서</h4><p>10-16부터 · 월 3,200,000원</p></div><a class="btn primary lg" href="#s3">읽고 서명하기</a></div>
+              <div class="crow"><div><div class="meta"><span class="badge ok">서명 완료</span></div><h4>개인정보 수집·이용 동의서</h4><p>2026-07-01 서명</p></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><a class="btn" href="#">내용 보기</a><a class="btn" href="#">PDF</a></div></div>
+              <div class="crow"><div><div class="meta"><span class="badge old">이전 계약</span></div><h4>단시간근로자 계약서</h4><p>~ 2026-10-15</p></div><a class="btn" href="#">내용 보기</a></div>
+            </div>
+          </div>
+          <nav class="tabbar"><a href="#"><i>⌂</i>홈</a><a class="on" href="#"><i>✎</i>계약서<span class="dot">1</span></a><a href="#"><i>₩</i>급여</a><a href="#"><i>◷</i>근태</a><a href="#"><i>▤</i>서류</a></nav>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. READ -->
+  <section class="screen" id="s3">
+    <div class="screen-title"><h2>3. 계약서 읽기</h2><span>계약서 전문을 그대로 보여 주고, 옆(모바일은 위)에 핵심 조건을 요약합니다. 끝까지 읽어야 서명 버튼이 켜집니다.</span></div>
+    <div class="pair">
+      <div>
+        <div class="label">PC — 왼쪽 전문, 오른쪽 요약·서명</div>
+        <div class="pc">
+          <div class="pc-top"><div class="logo"><i>오</i>오비서</div><a class="btn ghost" href="#s2">← 내 계약서</a><div class="who"><span class="badge req">서명 대기</span><b>표준근로계약서</b></div></div>
+          <div class="pc-body" style="padding:18px 22px">
+            <div class="read">
+              <div class="paper" id="pcPaper">
+                <h3>근로계약서</h3>
+                <p><b>열정국밥 ○○점</b>(이하 "사업주")과 <b>홍길동</b>(이하 "근로자")은 다음과 같이 근로계약을 체결한다.</p>
+                <h5>1. 근로개시일</h5><p><span class="hl">2026년 10월 16일</span>부터 (기간의 정함이 없음)</p>
+                <h5>2. 근무장소</h5><p>열정국밥 ○○점 (서울시 ○○구 ○○로 12)</p>
+                <h5>3. 업무내용</h5><p>홀 서비스 및 매장 관리</p>
+                <h5>4. 소정근로시간</h5><p><span class="hl">10:00 ~ 20:00</span> (휴게시간 14:30 ~ 16:30, 2시간)</p>
+                <h5>5. 근무일 및 휴일</h5><p>매주 <span class="hl">화·수·목·금·토</span> 근무, 주휴일 <span class="hl">월요일</span>, 일요일 휴무</p>
+                <h5>6. 임금</h5>
+                <ol><li>월 임금 <span class="hl">3,200,000원</span> (과세 기본급 3,000,000원 / 비과세 식대 200,000원)</li><li>임금지급일: 매월 10일 (휴일인 경우 전일 지급)</li><li>지급방법: 근로자 명의 예금통장에 입금</li></ol>
+                <h5>7. 연차유급휴가</h5><p>근로기준법에서 정하는 바에 따라 부여함</p>
+                <h5>8. 사회보험 적용</h5><p>고용보험 · 산재보험 · 국민연금 · 건강보험</p>
+                <h5>9. 근로계약서 교부</h5><p>사업주는 근로계약을 체결함과 동시에 본 계약서를 사본하여 근로자의 교부요구와 관계없이 근로자에게 교부함 (근로기준법 제17조 이행)</p>
+                <h5>10. 기타</h5><p>이 계약에 정함이 없는 사항은 근로기준법령에 의함</p>
+                <p style="margin-top:22px;text-align:center">2026년 10월 9일</p>
+                <p style="margin-top:10px">사업주: 열정국밥 ○○점 대표 ○○○ (인)<br>근로자: 홍길동 <span style="color:var(--mute)">(서명 전)</span></p>
+              </div>
+              <div class="side-sum">
+                <div class="card sum"><h4>핵심 조건 요약</h4><dl class="kv"><dt>시작일</dt><dd>2026-10-16 (기간 없음)</dd><dt>근무지</dt><dd>열정국밥 ○○점</dd><dt>근무</dt><dd>화~토 10:00–20:00</dd><dt>휴게</dt><dd>14:30–16:30 (2시간)</dd><dt>휴일</dt><dd>주휴 월 · 일 휴무</dd><dt>월 임금</dt><dd>3,200,000원</dd><dt>지급일</dt><dd>매월 10일</dd></dl></div>
+                <div class="card sum"><div class="read-hint"><span>읽은 정도</span><div class="progress"><i style="width:100%"></i></div><b>100%</b></div><p class="note">끝까지 읽어야 서명할 수 있습니다.</p><button class="btn primary lg" style="width:100%;margin-top:10px" onclick="location.hash='s4'">동의하고 서명하기</button><p class="note" style="margin-top:8px">내용이 다르면 <a href="#">관리자에게 수정 요청</a></p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="label">모바일 — 요약 → 전문 → 하단 고정 버튼</div>
+        <div class="phone"><div class="ph" style="grid-template-rows:44px auto 1fr auto">
+          <div class="status"><span>9:41</span><span>●●● ▮</span></div>
+          <div class="ph-head"><a class="back" href="#s2">‹</a><h3>근로계약서</h3><span class="badge req" style="margin-left:auto">서명 대기</span></div>
+          <div class="ph-body" id="mPaper" style="padding:12px">
+            <div class="sum-chips"><div><small>시작일</small><b>10-16</b></div><div><small>월 임금</small><b>3,200,000원</b></div><div><small>근무</small><b>화~토 10–20시</b></div><div><small>휴일</small><b>월·일</b></div></div>
+            <div class="paper">
+              <h3 style="font-size:17px">근로계약서</h3>
+              <p><b>열정국밥 ○○점</b>과 <b>홍길동</b>은 다음과 같이 근로계약을 체결한다.</p>
+              <h5>1. 근로개시일</h5><p><span class="hl">2026-10-16</span>부터</p>
+              <h5>4. 소정근로시간</h5><p><span class="hl">10:00~20:00</span> (휴게 2시간)</p>
+              <h5>5. 근무일·휴일</h5><p>화~토 근무, 주휴 월요일</p>
+              <h5>6. 임금</h5><p>월 <span class="hl">3,200,000원</span> · 매월 10일 지급</p>
+              <h5>7~10.</h5><p>연차휴가 · 사회보험 · 계약서 교부 · 기타 (전문 계속)</p>
+              <p style="margin-top:14px;color:var(--sub);font-size:12px;text-align:center">— 계약서 끝 —</p>
+            </div>
+          </div>
+          <div class="sticky"><div class="read-hint"><span>읽은 정도</span><div class="progress"><i id="mProg" style="width:100%"></i></div><b>100%</b></div><a class="btn primary lg" style="width:100%" href="#s4">동의하고 서명하기</a></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. SIGN -->
+  <section class="screen" id="s4">
+    <div class="screen-title"><h2>4. 동의·서명</h2><span>PC는 오른쪽 칸, 모바일은 아래에서 올라오는 창에서 서명합니다. 계약서 내용은 뒤에 그대로 보입니다.</span></div>
+    <div class="pair">
+      <div>
+        <div class="label">PC</div>
+        <div class="pc">
+          <div class="pc-top"><div class="logo"><i>오</i>오비서</div><a class="btn ghost" href="#s3">← 계약서로</a><div class="who"><b>표준근로계약서 · 서명</b></div></div>
+          <div class="pc-body" style="padding:18px 22px">
+            <div class="read">
+              <div class="paper" style="opacity:.55"><h3>근로계약서</h3><p>… 계약서 전문 (읽기 화면과 같음) …</p><h5>6. 임금</h5><p>월 임금 3,200,000원</p></div>
+              <div class="side-sum">
+                <div class="card sum">
+                  <h4>서명</h4>
+                  <label class="label" for="pcName">이름</label>
+                  <input id="pcName" class="btn" style="width:100%;justify-content:flex-start;font-weight:600" value="홍길동">
+                  <div class="label" style="margin-top:12px">손글씨 서명</div>
+                  <div class="pad"><canvas data-pad></canvas><span>여기에 서명하세요</span></div>
+                  <div style="display:flex;justify-content:flex-end"><button class="btn ghost" data-clear>지우기</button></div>
+                  <label class="check" style="margin-top:6px"><input type="checkbox" checked> 계약서 내용을 모두 읽었고, 내용에 동의합니다.</label>
+                  <label class="check" style="margin-top:8px"><input type="checkbox" checked> 전자서명이 손으로 한 서명과 같은 효력이 있음을 이해합니다.</label>
+                  <button class="btn primary lg" style="width:100%;margin-top:14px" onclick="location.hash='s5'">서명 제출</button>
+                  <p class="note" style="margin-top:8px">제출하면 고칠 수 없습니다. 서명본 PDF가 바로 만들어집니다.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="label">모바일 — 아래에서 올라오는 서명 창</div>
+        <div class="phone"><div class="ph">
+          <div class="status"><span>9:41</span><span>●●● ▮</span></div>
+          <div class="ph-head"><a class="back" href="#s3">‹</a><h3>근로계약서</h3></div>
+          <div class="ph-body"><div class="paper"><h3 style="font-size:17px">근로계약서</h3><p>… 계약서 전문 …</p></div></div>
+          <div></div>
+          <div class="dim"></div>
+          <div class="sheet">
+            <div class="grab"></div>
+            <h3 style="font-size:17px;margin-bottom:10px">서명하기</h3>
+            <div class="label">이름</div>
+            <input class="btn" style="width:100%;justify-content:flex-start;font-weight:600;min-height:48px" value="홍길동">
+            <div class="label" style="margin-top:10px">손글씨 서명</div>
+            <div class="pad" style="height:150px"><canvas data-pad></canvas><span>손가락으로 서명하세요</span></div>
+            <div style="display:flex;justify-content:flex-end"><button class="btn ghost" data-clear>지우기</button></div>
+            <label class="check"><input type="checkbox" checked> 내용을 모두 읽었고 동의합니다.</label>
+            <label class="check" style="margin-top:6px"><input type="checkbox" checked> 전자서명의 효력을 이해합니다.</label>
+            <a class="btn primary lg" style="width:100%;margin-top:12px" href="#s5">서명 제출</a>
+          </div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. DONE -->
+  <section class="screen" id="s5">
+    <div class="screen-title"><h2>5. 서명 완료</h2><span>완료를 분명히 알리고, 서명본 PDF를 바로 받을 수 있게 합니다. 목록에서는 '서명 완료'로 바뀝니다.</span></div>
+    <div class="pair">
+      <div>
+        <div class="label">PC</div>
+        <div class="pc" style="height:420px">
+          <div class="pc-top"><div class="logo"><i>오</i>오비서</div><div class="who"><b>홍길동 님</b></div></div>
+          <div class="pc-body"><div class="card done"><div class="big">✓</div><h3>서명이 완료됐습니다</h3><p class="note">2026-10-15 14:20 · 표준근로계약서 · 관리자에게도 알렸습니다</p><div style="display:flex;gap:10px;margin-top:6px"><a class="btn primary" href="#">서명본 PDF 받기</a><a class="btn" href="#s2">내 계약서 목록</a><a class="btn" href="#s1">홈으로</a></div></div></div>
+        </div>
+      </div>
+      <div>
+        <div class="label">모바일</div>
+        <div class="phone" style="height:560px"><div class="ph">
+          <div class="status"><span>9:41</span><span>●●● ▮</span></div>
+          <div class="ph-head"><h3>서명 완료</h3></div>
+          <div class="ph-body"><div class="card done" style="padding:28px 16px"><div class="big">✓</div><h3>서명이 완료됐습니다</h3><p class="note">10-15 14:20 · 표준근로계약서</p><a class="btn primary lg" style="width:100%" href="#">서명본 PDF 받기</a><a class="btn lg" style="width:100%" href="#s2">내 계약서 목록</a></div></div>
+          <nav class="tabbar"><a href="#"><i>⌂</i>홈</a><a class="on" href="#"><i>✎</i>계약서</a><a href="#"><i>₩</i>급여</a><a href="#"><i>◷</i>근태</a><a href="#"><i>▤</i>서류</a></nav>
+        </div></div>
+      </div>
+    </div>
+    <div class="spec">
+      <b>문제가 생겼을 때 보여 줄 화면</b>
+      <ul>
+        <li>로그인이 만료됨 → "다시 로그인해 주십시오" 와 로그인 버튼. 로그인하면 보던 계약서로 돌아옵니다.</li>
+        <li>계약서가 없음 → "아직 받은 계약서가 없습니다. 관리자가 서명을 요청하면 알림이 옵니다." 와 새로고침 버튼.</li>
+        <li>서명 링크가 만료되었거나 이미 서명함 → 상태를 보여 주고, 서명본 보기 또는 관리자에게 다시 요청하는 버튼.</li>
+        <li>네트워크 오류로 제출 실패 → 입력한 서명은 그대로 두고 "다시 제출" 버튼.</li>
+      </ul>
+    </div>
+  </section>
+</div>
+<script>
+document.querySelectorAll("[data-pad]").forEach(function(c){var ctx=c.getContext("2d"),d=false,hint=c.nextElementSibling;function fit(){var r=c.getBoundingClientRect();c.width=r.width*2;c.height=r.height*2;ctx.scale(2,2);ctx.lineWidth=2.4;ctx.lineCap="round";ctx.strokeStyle="#0f172a"}fit();function p(e){var r=c.getBoundingClientRect(),t=e.touches?e.touches[0]:e;return[t.clientX-r.left,t.clientY-r.top]}c.addEventListener("pointerdown",function(e){d=true;var q=p(e);ctx.beginPath();ctx.moveTo(q[0],q[1]);if(hint)hint.style.display="none"});c.addEventListener("pointermove",function(e){if(!d)return;var q=p(e);ctx.lineTo(q[0],q[1]);ctx.stroke()});window.addEventListener("pointerup",function(){d=false});var clr=c.closest(".sum,.sheet").querySelector("[data-clear]");if(clr)clr.onclick=function(){ctx.clearRect(0,0,c.width,c.height);if(hint)hint.style.display=""}});
+</script>
+</body>
+</html>
