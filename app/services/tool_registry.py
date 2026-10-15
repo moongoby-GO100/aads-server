@@ -37,6 +37,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "handover_export": True,             # Markdown 호환 내보내기
     "canonical_document_register": True, # 문서 정본 초안 리비전 등록 (승인 없음)
     "canonical_document_lookup": True,   # 문서 정본 등록 여부 조회 (읽기 전용)
+    "mockup_review_submit": True,        # 목업 검토 생성·리비전·제출·조회 (승인·철회 없음)
     "list_project_databases": True,      # DB 목록 — 온디맨드
     "task_history": False,               # 작업 현황 — 빈번 조회
     "list_remote_dir": False,            # 파일 탐색 — 빈번 사용
@@ -3459,6 +3460,65 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
              "file_path": "docs/plans/PRD-OVIS-RECIPE.md", "change_summary": "최초 등록"},
         ],
     },
+    "mockup_review_submit": {
+        "name": "mockup_review_submit",
+        "description": (
+            "목업 검토(mockup review)를 만들고 리비전을 등록해 제출합니다. action: create(검토 생성), "
+            "revision(manifest 로 리비전 등록, doc_refs 는 리비전에 기록), submit(최신 리비전 제출 — doc_refs 를 주면 "
+            "기록된 것과 같은지 확인), status(조회). **승인·철회(approve/revoke)는 이 도구로 할 수 없습니다** — 기존 승인 경로로만 합니다. "
+            "채팅 세션 사용자의 테넌트 멤버십과 프로젝트 문서 grant(쓰기)가 있어야 합니다. "
+            "서버 검증 오류(422/409)는 error 코드와 detail(서버 값 포함)로 그대로 돌려줍니다. "
+            "doc_refs 는 role(plan|prd|spec)마다 document_key+revision_id+content_hash, 또는 exempt_reason(10자 이상)+exempt_policy_ref."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "MCP 브리지 등 채팅 컨텍스트가 없는 호출에서만 명시. 생략 시 현재 채팅 세션을 사용.",
+                },
+                "action": {"type": "string", "enum": ["create", "revision", "submit", "status"]},
+                "project": {"type": "string", "description": "프로젝트 키(AADS/GO100/KIS/SF/NTV2 등)"},
+                "review_id": {"type": "string", "description": "revision/submit/status 에 필요한 검토 UUID"},
+                "title": {"type": "string", "description": "create 전용 검토 제목"},
+                "change_type": {"type": "string", "enum": ["new", "modify", "none"], "description": "create 전용"},
+                "goal_id": {"type": "string", "description": "create 전용, 같은 프로젝트의 목표 UUID(선택)"},
+                "manifest_path": {
+                    "type": "string",
+                    "description": "revision 전용. 서버 docs/ 기준 상대경로(예 docs/design/mockups/20261015_goal_strip_dormancy/manifest.json). manifest 와 둘 중 하나",
+                },
+                "manifest": {"type": "object", "description": "revision 전용 manifest 본문(screens/assets/evidence). manifest_path 와 둘 중 하나"},
+                "doc_refs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "role": {"type": "string", "enum": ["plan", "prd", "spec"]},
+                            "document_key": {"type": "string"},
+                            "revision_id": {"type": "string"},
+                            "content_hash": {"type": "string"},
+                            "exempt_reason": {"type": "string", "description": "면제 사유(10자 이상)"},
+                            "exempt_policy_ref": {"type": "string"},
+                        },
+                        "required": ["role"],
+                    },
+                },
+                "revision_id": {"type": "string", "description": "submit 대상 리비전. 생략 시 최신 리비전"},
+                "parent_revision_id": {"type": "string"},
+                "manifest_hash": {"type": "string", "description": "검증용 주장값 — 서버가 다시 계산해 다르면 422"},
+                "resolves": {"type": "array", "items": {"type": "object"}, "description": "revision 에서 해소하는 변경요청"},
+                "expected_generation": {"type": "integer", "minimum": 0, "description": "생략 시 현재 generation 사용"},
+                "idempotency_key": {"type": "string", "description": "8~64자 [A-Za-z0-9._:-]. 생략 시 입력으로 결정적 생성"},
+            },
+            "required": ["action", "project"],
+        },
+        "input_examples": [
+            {"action": "create", "project": "AADS", "title": "목표 띠 칩 목업", "change_type": "modify"},
+            {"action": "revision", "project": "AADS", "review_id": "00000000-0000-0000-0000-000000000000",
+             "manifest_path": "docs/design/mockups/20261015_goal_strip_dormancy/manifest.json"},
+            {"action": "submit", "project": "AADS", "review_id": "00000000-0000-0000-0000-000000000000"},
+        ],
+    },
     "canonical_document_lookup": {
         "name": "canonical_document_lookup",
         "description": (
@@ -3639,7 +3699,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
+    "action": ["directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "mockup_review_submit", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)

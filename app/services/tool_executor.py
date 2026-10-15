@@ -275,6 +275,7 @@ _DATABASE_TOOLS = frozenset({
     "handover_export",
     "canonical_document_register",
     "canonical_document_lookup",
+    "mockup_review_submit",
 })
 
 
@@ -1005,6 +1006,7 @@ class ToolExecutor:
             "handover_export":        self._handover_export,
             "canonical_document_register": self._canonical_document_register,
             "canonical_document_lookup":   self._canonical_document_lookup,
+            "mockup_review_submit":        self._mockup_review_submit,
             "dashboard_query":        self._dashboard_query,
             "task_history":           self._task_history,
             "server_status":          self._server_status,
@@ -1499,6 +1501,16 @@ class ToolExecutor:
         if not tenant_id:
             return _missing_tenant_id_result("canonical_document_lookup")
         return await lookup_documents(tenant_id=tenant_id, inp=inp)
+
+    async def _mockup_review_submit(self, inp: Dict[str, Any]) -> Any:
+        """Create/revise/submit/status for mockup reviews (no approve/revoke)."""
+        from app.services.mockup_review_tools import run_action
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+        if not tenant_id:
+            return _missing_tenant_id_result("mockup_review_submit")
+        return await run_action(tenant_id=tenant_id, session_id=session_id, inp=inp)
 
     async def _health_check(self, inp: Dict[str, Any]) -> Any:
         try:
