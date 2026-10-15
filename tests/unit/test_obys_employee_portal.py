@@ -481,3 +481,13 @@ def test_portal_flow_executes_in_node(tmp_path):
         tmp_path,
     )
     assert "NODE_OK" in out
+
+
+def test_portal_hides_v2_bottom_nav_so_sticky_sign_bar_is_reachable():
+    hide = re.search(r"((?:body\.ep-on [^{]+,\s*)*body\.ep-on \.v2-bottom-nav[^{]*)\{([^}]*)\}", PORTAL_CSS)
+    assert hide, "body.ep-on .v2-bottom-nav 숨김 규칙 없음"
+    assert re.search(r"display:\s*none\s*!important", hide.group(2))
+    assert re.search(r"body\.ep-on\.v2-enhanced\s*\{\s*padding-bottom:\s*0\s*;?\s*\}", PORTAL_CSS)
+    assert re.search(r"\.ep-sticky\s*\{[^}]*position:\s*fixed[^}]*bottom:\s*0", PORTAL_CSS)
+    for selector in re.findall(r"([^{}]+)\{[^}]*display:\s*none\s*!important", PORTAL_CSS):
+        assert ".ep-sticky" not in selector
