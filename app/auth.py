@@ -1406,7 +1406,7 @@ async def create_tenant_invite(
             """
             INSERT INTO tenant_invites
                 (tenant_id, email, token_hash, role, status, invited_by, expires_at)
-            VALUES ($1::uuid, $2, $3, $4, 'pending', $5, now() + ($6::text || ' hours')::interval)
+            VALUES ($1::uuid, $2, $3, $4, 'pending', $5, now() + make_interval(hours => $6::int))
             ON CONFLICT (tenant_id, lower(email)) WHERE status = 'pending' AND deleted_at IS NULL
             DO UPDATE SET token_hash = EXCLUDED.token_hash,
                           role = EXCLUDED.role,
