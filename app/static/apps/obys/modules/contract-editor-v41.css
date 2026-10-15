@@ -81,3 +81,23 @@
 .cv41-paper table.identity-table tbody tr:hover{background:transparent}
 .contract-v41 .cv41-scope{margin:0;padding:8px 16px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line);background:#fbfcfe}
 #cv41Blocker ul{margin:6px 0 0;padding-left:18px}
+/* 근무 일정 입력기 (요일 칩·시각·휴게·주휴일). 터치 영역 44px 이상 */
+.cv41-sched{margin:8px 0 12px;padding:10px 12px;border:1px solid #b7c9f5;border-radius:12px;background:#f6f9ff}
+.cv41-sched-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:6px}
+.cv41-sched-head .btn{margin-left:auto;min-height:44px}
+.cv41-sched-src{font-size:12px;color:#2457d6;background:#eef4ff;padding:2px 8px;border-radius:999px}
+.cv41-sched-label{margin:8px 0 4px;font-size:12px;font-weight:700;color:var(--ink)}
+.cv41-chips{display:flex;flex-wrap:wrap;gap:6px}
+.cv41-chip{min-width:44px;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--ink);font-size:15px;font-weight:700;cursor:pointer}
+.cv41-chip[aria-pressed="true"]{background:var(--blue);border-color:var(--blue);color:#fff}
+.cv41-sched-toggle{display:flex;align-items:center;gap:8px;min-height:44px;margin-top:6px;font-size:13px;cursor:pointer}
+.cv41-sched-toggle input{width:22px;height:22px}
+.cv41-sched-times{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;margin:6px 0}
+.cv41-sched-times .cv41-time{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--muted);min-width:0}
+.cv41-sched-times .field{min-height:44px;min-width:104px;width:auto}
+.cv41-sched-day{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;font-size:15px}
+.cv41-sched-sum{display:block;margin-top:6px;font-weight:700;color:#0f5c3e}
+#cv41SchedInfo .cv41-alert{margin:8px 0 0}
+.cv41-manual{display:inline-block;margin-left:4px;padding:0 6px;border-radius:999px;background:#fff4e5;color:#7a4510;font-size:10px;font-weight:700}
+.cv41-manual[hidden]{display:none}
+@media(max-width:820px){.cv41-sched-times .field{min-width:0;width:100%}.cv41-sched-times .cv41-time{flex:1 1 40%}.cv41-chips{flex-wrap:wrap}.cv41-sched-head .btn{flex:1 1 100%;margin-left:0}}

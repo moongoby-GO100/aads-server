@@ -20,6 +20,7 @@
   const C = window.ObysContractCore;
   if (!C) return;
   const esc = C.escapeHtml;
+  const SCH = window.ObysContractSchedule || null;
 
   const ROUTES = new Set(["employees", "hr-docs"]);
   const S = { ctx: null, employees: [], contracts: [], businesses: [], loadedAt: 0, loading: null, loadError: null, filter: "all" };
@@ -176,6 +177,216 @@
       E.wageNotice = "";
       E.dirty = true; E.previewed = false;
       render();
+    });
+  }
+
+  // ---------- 근무 일정 입력기 ----------
+  // 요일·시각 선택값으로 근무일·근무시간·휴게·주 소정근로·근로일별·휴일 문구를 만든다(변환 규칙: contract-schedule.js).
+  // 사람이 문구를 직접 고친 칸은 schedManual 에 담아 이후 자동으로 덮어쓰지 않는다.
+  const placeholdersOf = values => C.defaultsFor(values.contractType || "part_time", values.employmentTaxType || "four_insurance");
+  function schedAvailable(values) { return Boolean(SCH) && (values.contractType || "part_time") !== "freelancer"; }
+  /** 입력기 초기 상태(순수 함수). new: 직전 계약서 → 유형 기본값 순으로 채움 / saved: 저장 문구를 읽어 되살림(읽지 못하면 문구 유지). */
+  function schedInitState(values, prevValuesList, mode) {
+    const out = { sched: SCH.emptySchedule(), manual: new Set(), source: "", unparsed: false, patch: {} };
+    if (!schedAvailable(values)) return out;
+    const ph = placeholdersOf(values);
+    if (mode === "saved") {
+      const parsed = SCH.parse(values, ph);
+      if (parsed.ok) {
+        out.sched = parsed.sched;
+        out.manual = SCH.reconcile(parsed.sched, values, ph);
+        out.source = "저장된 계약서 문구에서 불러옴";
+      } else if (!parsed.empty) {
+        out.unparsed = true;
+        const real = SCH.realValues(values, ph);
+        SCH.GEN_FIELDS.forEach(name => { if (real[name]) out.manual.add(name); });
+      }
+      return out;
+    }
+    for (const prev of prevValuesList || []) {
+      if (prev.contractType === "freelancer") continue;
+      const parsed = SCH.parse(prev, placeholdersOf(prev));
+      if (parsed.ok) { out.sched = parsed.sched; out.source = "직전 계약서에서 가져옴"; break; }
+    }
+    if (!out.sched.days.length) {
+      const base = SCH.defaultScheduleFor(values.contractType || "part_time");
+      if (base) { out.sched = base; out.source = `기본값(${C.contractTypeLabels[values.contractType] || values.contractType})`; }
+    }
+    if (out.sched.days.length) out.patch = SCH.patchFor(out.sched, null, ph);
+    return out;
+  }
+  /** 자동 채움으로 바뀔 칸의 새 값. manual 에 든 칸은 포함하지 않는다. */
+  function schedPatch(values, sched, manual) { return SCH.patchFor(sched, manual, placeholdersOf(values)); }
+  function initSchedule(mode) {
+    if (!SCH || !E) return;
+    const prevs = mode === "new" && E.employee ? contractsOf(E.employee).map(valuesFromContract) : [];
+    const state = schedInitState(E.values, prevs, mode);
+    E.sched = state.sched; E.schedManual = state.manual; E.schedSource = state.source; E.schedUnparsed = state.unparsed;
+    Object.assign(E.values, state.patch);
+  }
+  function schedVisible() { return Boolean(E && E.sched && !readOnly() && schedAvailable(E.values)); }
+  function applySchedule() {
+    if (!SCH || !E?.sched) return;
+    const patch = schedPatch(E.values, E.sched, E.schedManual);
+    Object.assign(E.values, patch);
+    SCH.GEN_FIELDS.forEach(name => {
+      const el = dialog?.querySelector(`#cv41_${name}`);
+      if (el && patch[name] !== undefined) el.value = patch[name];
+    });
+  }
+  function schedAfterTypeChange(newType) {
+    if (!SCH || !E?.sched) return;
+    if (newType === "freelancer") {
+      const defaults = C.defaultsFor("freelancer", "freelancer_33");
+      SCH.GEN_FIELDS.forEach(name => { if (!E.schedManual.has(name)) E.values[name] = String(defaults[name] ?? ""); });
+      return;
+    }
+    if (!E.sched.days.length) {
+      const base = SCH.defaultScheduleFor(newType);
+      if (base) { E.sched = base; E.schedSource = `기본값(${C.contractTypeLabels[newType] || newType})`; }
+    }
+    applySchedule();
+  }
+  function schedBadge(name) {
+    if (!schedVisible() || !SCH.GEN_FIELDS.includes(name)) return "";
+    return ` <span class="cv41-manual" data-cv41-manual-for="${name}" ${E.schedManual.has(name) ? "" : "hidden"}>직접 수정됨</span>`;
+  }
+  function updateManualBadges() {
+    SCH.GEN_FIELDS.forEach(name => {
+      const badge = dialog?.querySelector(`[data-cv41-manual-for="${name}"]`);
+      if (badge) badge.hidden = !E.schedManual.has(name);
+    });
+  }
+  function autoRestFor(start, end) { return SCH.minRest(SCH.spanMinutes(start, end) || 0); }
+  function timeField(label, attrs, value) {
+    return `<label class="cv41-time"><span>${esc(label)}</span><input class="field" type="time" ${attrs} value="${esc(value || "")}"></label>`;
+  }
+  function restField(attrs, value, auto) {
+    return `<label class="cv41-time"><span>휴게(분)</span><input class="field" type="number" min="0" step="5" inputmode="numeric" ${attrs} value="${esc(value ?? "")}" placeholder="자동 ${auto}"></label>`;
+  }
+  function schedInfoHtml() {
+    const result = SCH.build(E.sched);
+    const parts = [];
+    if (!result.ok) {
+      const idle = !E.sched.days.length && !E.sched.start && !E.sched.end;
+      parts.push(idle
+        ? "<small>요일과 시각을 고르면 아래 근무일·근무시간·휴게·주 소정근로·휴일 칸이 자동으로 채워집니다.</small>"
+        : `<div class="cv41-alert warn" role="status">${result.errors.map(esc).join("<br>")}</div>`);
+    } else {
+      const first = result.plans[0];
+      const uniform = E.sched.uniform !== false;
+      const detail = uniform ? `하루 실근로 ${SCH.duration(first.net)} · 휴게 ${first.rest}분(법정 최소 ${first.min}분) · ` : "";
+      const holiday = result.holiday === null ? "주휴일 없음" : `주휴일 ${SCH.DAYS[result.holiday]}요일`;
+      parts.push(`<small class="cv41-sched-sum">${esc(`${detail}${result.fields.weeklyHours} · ${holiday}`)}</small>`);
+      if (result.warnings.length) parts.push(`<div class="cv41-alert warn" role="status"><ul>${result.warnings.map(text => `<li>${esc(text)}</li>`).join("")}</ul></div>`);
+    }
+    if (E.schedUnparsed) parts.push('<small>저장된 문구를 일정으로 읽지 못해 아래 칸을 그대로 두었습니다. 입력기로 새로 만들려면 [다시 자동 채우기]를 누르십시오(기존 문구가 바뀝니다).</small>');
+    else if (E.schedManual.size) parts.push('<small>“직접 수정됨” 칸은 입력기를 바꿔도 덮어쓰지 않습니다. 되돌리려면 [다시 자동 채우기]를 누르십시오.</small>');
+    return parts.join("");
+  }
+  function schedHtml() {
+    const s = E.sched;
+    const uniform = s.uniform !== false;
+    const days = [...s.days].sort((a, b) => a - b);
+    const chips = SCH.DAYS.map((day, i) => `<button class="cv41-chip" type="button" data-cv41-sch-day="${i}" aria-pressed="${days.includes(i)}" aria-label="${day}요일">${day}</button>`).join("");
+    let times;
+    if (uniform) {
+      times = `<div class="cv41-sched-times">${timeField("시작", 'data-cv41-sch-in="start"', s.start)}${timeField("종료", 'data-cv41-sch-in="end"', s.end)}${restField('data-cv41-sch-in="rest"', s.rest, autoRestFor(s.start, s.end))}${timeField("휴게 시작(선택)", 'data-cv41-sch-in="restStart"', s.restStart)}</div>`;
+    } else {
+      times = days.length ? days.map(i => {
+        const row = s.rows[i] || {};
+        const start = row.start || s.start;
+        const end = row.end || s.end;
+        return `<div class="cv41-sched-times"><b class="cv41-sched-day">${SCH.DAYS[i]}</b>${timeField("시작", `data-cv41-sch-row="${i}:start"`, start)}${timeField("종료", `data-cv41-sch-row="${i}:end"`, end)}${restField(`data-cv41-sch-row="${i}:rest"`, row.rest, autoRestFor(start, end))}</div>`;
+      }).join("") : "<small>먼저 근무 요일을 고르십시오.</small>";
+    }
+    const holiday = SCH.effectiveHoliday(s);
+    const offDays = SCH.DAYS.map((day, i) => i).filter(i => !days.includes(i));
+    const holidayChips = offDays.length
+      ? offDays.map(i => `<button class="cv41-chip" type="button" data-cv41-sch-hol="${i}" aria-pressed="${holiday === i}" aria-label="${SCH.DAYS[i]}요일 주휴일">${SCH.DAYS[i]}</button>`).join("")
+      : "<small>쉬는 요일이 없습니다.</small>";
+    return `<section class="cv41-sched" id="cv41Sched" aria-label="근무 일정 입력기">
+      <div class="cv41-sched-head"><b>근무 일정 입력기</b>${E.schedSource ? ` <span class="cv41-sched-src">출처: ${esc(E.schedSource)}</span>` : ""}<button class="btn" type="button" data-cv41-sch-refill>다시 자동 채우기</button></div>
+      <div class="cv41-sched-label" id="cv41SchDaysLabel">근무 요일</div>
+      <div class="cv41-chips" role="group" aria-labelledby="cv41SchDaysLabel">${chips}</div>
+      <label class="cv41-sched-toggle"><input type="checkbox" data-cv41-sch-uniform ${uniform ? "" : "checked"}> 요일마다 시간이 다름</label>
+      ${times}
+      <div class="cv41-sched-label" id="cv41SchHolLabel">주휴일(쉬는 요일 중 선택)</div>
+      <div class="cv41-chips" role="group" aria-labelledby="cv41SchHolLabel">${holidayChips}</div>
+      <div id="cv41SchedInfo" aria-live="polite">${schedInfoHtml()}</div>
+    </section>`;
+  }
+  function refreshSchedInfo() {
+    const info = dialog?.querySelector("#cv41SchedInfo");
+    if (info) info.innerHTML = schedInfoHtml();
+    const s = E.sched;
+    dialog?.querySelectorAll("[data-cv41-sch-in='rest']").forEach(el => { el.placeholder = `자동 ${autoRestFor(s.start, s.end)}`; });
+    dialog?.querySelectorAll("[data-cv41-sch-row$=':rest']").forEach(el => {
+      const i = Number(el.dataset.cv41SchRow.split(":")[0]);
+      const row = s.rows[i] || {};
+      el.placeholder = `자동 ${autoRestFor(row.start || s.start, row.end || s.end)}`;
+    });
+  }
+  function wireSched() {
+    const root = dialog?.querySelector("#cv41Sched");
+    if (!root || !E?.sched) return;
+    const s = E.sched;
+    const changed = (redraw, focusSelector) => {
+      E.schedSource = "직접 선택함";
+      E.dirty = true; E.previewed = false;
+      applySchedule();
+      if (redraw) {
+        dialog.querySelector("#cv41Sched").outerHTML = schedHtml();
+        wireSched();
+        if (focusSelector) dialog.querySelector(focusSelector)?.focus();
+      } else {
+        refreshSchedInfo();
+      }
+      refreshMissing();
+    };
+    root.querySelectorAll("[data-cv41-sch-day]").forEach(button => button.addEventListener("click", () => {
+      const i = Number(button.dataset.cv41SchDay);
+      if (s.days.includes(i)) s.days = s.days.filter(day => day !== i);
+      else {
+        s.days = [...s.days, i].sort((a, b) => a - b);
+        if (s.uniform === false && !s.rows[i]) s.rows[i] = { start: s.start, end: s.end, rest: null };
+      }
+      changed(true, `[data-cv41-sch-day="${i}"]`);
+    }));
+    root.querySelectorAll("[data-cv41-sch-hol]").forEach(button => button.addEventListener("click", () => {
+      s.holiday = Number(button.dataset.cv41SchHol);
+      changed(true, `[data-cv41-sch-hol="${s.holiday}"]`);
+    }));
+    root.querySelector("[data-cv41-sch-uniform]")?.addEventListener("change", event => {
+      if (event.target.checked) {
+        s.uniform = false;
+        s.rows = {};
+        s.days.forEach(i => { s.rows[i] = { start: s.start, end: s.end, rest: s.rest }; });
+      } else {
+        const first = s.rows[[...s.days].sort((a, b) => a - b)[0]];
+        if (first) { s.start = first.start || s.start; s.end = first.end || s.end; }
+        s.uniform = true;
+        s.rest = null;
+      }
+      changed(true, "[data-cv41-sch-uniform]");
+    });
+    root.querySelectorAll("[data-cv41-sch-in]").forEach(input => input.addEventListener("input", () => {
+      const key = input.dataset.cv41SchIn;
+      s[key] = key === "rest" ? (input.value === "" ? null : input.value) : input.value;
+      changed(false);
+    }));
+    root.querySelectorAll("[data-cv41-sch-row]").forEach(input => input.addEventListener("input", () => {
+      const [idx, key] = input.dataset.cv41SchRow.split(":");
+      const row = s.rows[idx] || (s.rows[idx] = { start: s.start, end: s.end, rest: null });
+      row[key] = key === "rest" && input.value === "" ? null : input.value;
+      changed(false);
+    }));
+    root.querySelector("[data-cv41-sch-refill]")?.addEventListener("click", () => {
+      if (E.schedManual.size && !confirm("직접 수정한 근무 문구를 입력기 내용으로 덮어씁니다. 계속할까요?")) return;
+      E.schedManual.clear();
+      E.schedUnparsed = false;
+      updateManualBadges();
+      changed(true, "[data-cv41-sch-refill]");
     });
   }
 
@@ -485,17 +696,8 @@
     document.body.append(dialog);
     return dialog;
   }
-  function openEditor({ employee = null, contract = null }) {
-    const target = contract
-      ? { employee_request_id: pick(contract, "employeeRequestId"), business_id: pick(contract, "businessId"), branch: pick(contract, "branch") }
-      : employee ? { employee_request_id: employee.id, business_id: employee.business_id, branch: employee.branch } : null;
-    E = {
-      employee: employee || (contract ? S.employees.find(item => employeeKey(item) === String(pick(contract, "employeeRequestId"))) : null) || null,
-      target,
-      contract: contract || null,
-      values: contract ? valuesFromContract(contract) : employee ? valuesFromEmployee(employee) : {},
-      step: contract ? (statusOf(contract)[0] === "draft" ? 1 : 3) : employee ? 1 : 0,
-      dirty: false,
+  function freshEditorState() {
+    return {
       previewed: false,
       busy: "",
       error: "",
@@ -504,9 +706,28 @@
       sessionLost: false,
       wageManual: new Set(),
       autoComposition: "",
-      wageNotice: ""
+      wageNotice: "",
+      sched: SCH ? SCH.emptySchedule() : null,
+      schedManual: new Set(),
+      schedSource: "",
+      schedUnparsed: false
+    };
+  }
+  function openEditor({ employee = null, contract = null }) {
+    const target = contract
+      ? { employee_request_id: pick(contract, "employeeRequestId"), business_id: pick(contract, "businessId"), branch: pick(contract, "branch") }
+      : employee ? { employee_request_id: employee.id, business_id: employee.business_id, branch: employee.branch } : null;
+    E = {
+      ...freshEditorState(),
+      employee: employee || (contract ? S.employees.find(item => employeeKey(item) === String(pick(contract, "employeeRequestId"))) : null) || null,
+      target,
+      contract: contract || null,
+      values: contract ? valuesFromContract(contract) : employee ? valuesFromEmployee(employee) : {},
+      step: contract ? (statusOf(contract)[0] === "draft" ? 1 : 3) : employee ? 1 : 0,
+      dirty: false
     };
     if (contract) E.wageManual = wageManualFor(E.values);
+    if (contract) initSchedule("saved"); else if (employee) initSchedule("new");
     setUrl(contract ? { cv41_contract: contract.id } : employee ? { cv41_request: employee.id } : {});
     ensureDialog();
     render();
@@ -600,7 +821,7 @@
       control = `<input class="field" ${type} ${common} value="${esc(value)}" ${disabled}>`;
     }
     const suggestHtml = suggestion ? `<button class="btn cv41-suggest" type="button" data-cv41-suggest="${esc(field.name)}">추천값 넣기: ${esc(shortText(suggestion.value))}</button>` : "";
-    return `<div class="form-field ${invalid ? "invalid" : ""} ${field.type === "textarea" ? "wide" : ""}"><label for="${id}">${esc(field.label)}${invalid ? ' <span class="cv41-req">필수·비어 있음</span>' : ""}</label>${control}${suggestHtml}${hint ? `<small id="${id}_hint">${esc(hint)}</small>` : ""}${field.name === "baseSalary" ? `<div id="cv41WageNote" aria-live="polite">${wageNoteHtml()}</div>` : ""}</div>`;
+    return `<div class="form-field ${invalid ? "invalid" : ""} ${field.type === "textarea" ? "wide" : ""}"><label for="${id}">${esc(field.label)}${invalid ? ' <span class="cv41-req">필수·비어 있음</span>' : ""}${schedBadge(field.name)}</label>${control}${suggestHtml}${hint ? `<small id="${id}_hint">${esc(hint)}</small>` : ""}${field.name === "baseSalary" ? `<div id="cv41WageNote" aria-live="polite">${wageNoteHtml()}</div>` : ""}</div>`;
   }
   function stepConditions() {
     const type = E.values.contractType || "part_time";
@@ -613,7 +834,8 @@
       const fields = FIELDS.filter(field => field.g === key && visible(field));
       const hasMissing = fields.some(field => E.missing.some(label => FIELD_BY_LABEL.get(label) === field.name) || E.live.has(field.name));
       const collapsible = key === "employee" || key === "employer";
-      const inner = `<div class="form-grid">${fields.map(fieldControl).join("")}</div>`;
+      const picker = key === "work" && schedVisible() ? schedHtml() : "";
+      const inner = `${picker}<div class="form-grid">${fields.map(fieldControl).join("")}</div>`;
       return collapsible
         ? `<details class="cv41-group" ${hasMissing ? "open" : ""}><summary>${esc(title)}</summary>${inner}</details>`
         : `<fieldset class="cv41-group"><legend>${esc(title)}</legend>${inner}</fieldset>`;
@@ -635,23 +857,16 @@
     if (!original || statusOf(original)[0] !== "signed" || E.busy) return;
     const employee = S.employees.find(item => employeeKey(item) === String(pick(original, "employeeRequestId"))) || null;
     E = {
+      ...freshEditorState(),
       employee,
       target: { employee_request_id: pick(original, "employeeRequestId"), business_id: pick(original, "businessId"), branch: pick(original, "branch") },
       contract: null,
       values: { ...valuesFromContract(original), amendsContractId: String(original.id), contractDate: "", startDate: "", endDate: "" },
       step: 1,
-      dirty: true,
-      previewed: false,
-      busy: "",
-      error: "",
-      missing: [],
-      notify: null,
-      sessionLost: false,
-      wageManual: new Set(),
-      autoComposition: "",
-      wageNotice: ""
+      dirty: true
     };
     E.wageManual = wageManualFor(E.values);
+    initSchedule("saved");
     setUrl(employee ? { cv41_request: employee.id } : {});
     render();
   }
@@ -720,6 +935,8 @@
       E.values = employee ? valuesFromEmployee(employee) : {};
       E.wageManual = new Set(); E.autoComposition = ""; E.wageNotice = "";
       E.contract = null;
+      E.sched = SCH ? SCH.emptySchedule() : null; E.schedManual = new Set(); E.schedSource = ""; E.schedUnparsed = false;
+      if (employee) initSchedule("new");
       setUrl(employee ? { cv41_request: employee.id } : {});
       render();
       dialog.querySelector("#cv41Employee").value = employee ? employeeKey(employee) : "";
@@ -741,9 +958,14 @@
         }
         if (input.name === "mealProvision") E.wageManual.delete("nonTaxMealAllowance");
         E.wageNotice = "";
+        if (schedVisible() && SCH.GEN_FIELDS.includes(input.name)) {
+          if (String(input.value).trim() === "") E.schedManual.delete(input.name); else E.schedManual.add(input.name);
+          updateManualBadges();
+        }
         if (input.name === "contractType") {
           switchContractType(input.value, prevType, prevTax);
           syncWageAuto();
+          schedAfterTypeChange(input.value);
           render();
         } else if (WAGE_TRIGGERS.has(input.name)) {
           // 입력 중인 칸은 덮어쓰지 않는다(blur 시 change 에서 정리).
@@ -765,6 +987,7 @@
       if (input.name !== "contractType") input.addEventListener("change", refreshMissing);
     });
     wireMissing(dialog);
+    wireSched();
     wireWageFit(dialog.querySelector("#cv41WageNote"));
     dialog.querySelectorAll("[data-cv41-docs-open]").forEach(button => button.addEventListener("click", () => { if (E.employee) openDocs(E.employee); }));
     dialog.querySelector("[data-cv41-defaults]")?.addEventListener("click", () => { applyDefaults(false); E.dirty = true; render(); });
@@ -1255,6 +1478,6 @@
   window.obysContractV41 = {
     mount, refresh, open: openEditor, openDocs,
     // 단위 검증용(브라우저 밖 node 테스트)
-    _test: { wageSplitPatch, wageManualFor, draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee }
+    _test: { schedAvailable, schedInitState, schedPatch, wageSplitPatch, wageManualFor, draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee }
   };
 })();
