@@ -12,13 +12,13 @@
   "theme_color": "#2f6fed",
   "icons": [
     {
-      "src": "/static/apps/obys/icons/obys-clock-192.png",
+      "src": "/static/apps/obys/icons/obys-app-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/static/apps/obys/icons/obys-clock-512.png",
+      "src": "/static/apps/obys/icons/obys-app-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

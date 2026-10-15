@@ -309,4 +309,4 @@ def test_login_sign_prompt_static_strings_and_sw_cache_bump():
     assert ".sign-prompt-sheet button { min-height: 44px; }" in html
     assert "통장사본 보기" in html and "직접 입력" in html and "bankbook_copy" in html
     assert "maskContractAccountInput(String(data.bankAccountMasked" in html
-    assert 'CACHE_VERSION = "obys-clock-shell-20261009-r1"' in (ROOT / "sw.js").read_text(encoding="utf-8")
+    assert 'CACHE_VERSION = "obys-clock-shell-20261015-r1"' in (ROOT / "sw.js").read_text(encoding="utf-8")

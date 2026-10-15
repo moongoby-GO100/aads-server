@@ -11,13 +11,13 @@
  * 릴리스 SHA 로 바꾼다 — 손으로 올릴 필요 없다(저장소 값은 로컬 개발용). 셸은 네트워크 우선이라 버전을
  * 깜빡해도 온라인 상태에서는 새 파일을 받는다. 캐시는 오프라인 안내용 사본이다.
  */
-const CACHE_VERSION = "obys-clock-shell-20261009-r1";
+const CACHE_VERSION = "obys-clock-shell-20261015-r1";
 const CACHE_PREFIX = "obys-clock-shell-";
 const APP_SHELL = [
   "/static/apps/obys/clock.html",
   "/static/apps/obys/manifest.webmanifest",
-  "/static/apps/obys/icons/obys-clock-192.png",
-  "/static/apps/obys/icons/obys-clock-512.png"
+  "/static/apps/obys/icons/obys-app-192.png",
+  "/static/apps/obys/icons/obys-app-512.png"
 ];
 const APP_SHELL_PATHS = new Set(APP_SHELL);
 
