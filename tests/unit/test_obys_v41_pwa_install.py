@@ -1,11 +1,11 @@
-"""로그인 후 화면(mockup-v4-1.html, V4.1) 웹앱 설치: manifest 연결·'앱 설치' 버튼·서비스워커 등록."""
+"""로그인 후 화면(admin.html, V4.1) 웹앱 설치: manifest 연결·'앱 설치' 버튼·서비스워커 등록."""
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 STATIC = ROOT / "app/static/apps/obys"
-HTML = (STATIC / "mockup-v4-1.html").read_text(encoding="utf-8")
+HTML = (STATIC / "admin.html").read_text(encoding="utf-8")
 JS = (STATIC / "modules/pwa-install.js").read_text(encoding="utf-8")
 HEAD = HTML.split("</head>", 1)[0]
 
@@ -63,6 +63,6 @@ def test_module_has_install_flow_fallbacks_and_sw_registration():
 
 
 def test_module_file_listed_by_purge_urls(tmp_path):
-    (tmp_path / "mockup-v4-1.html").write_text(HTML, encoding="utf-8")
+    (tmp_path / "admin.html").write_text(HTML, encoding="utf-8")
     urls = tool.purge_urls(tmp_path, "abc1234", "https://fb.newtalk.kr")
     assert "https://fb.newtalk.kr/static/apps/obys/modules/pwa-install.js?v=abc1234" in urls

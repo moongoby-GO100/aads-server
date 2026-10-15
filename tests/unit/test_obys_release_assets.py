@@ -133,13 +133,14 @@ def test_purge_urls_cover_index_sw_and_every_referenced_module_once(tmp_path):
 
 def test_purge_urls_include_every_top_level_html_and_webmanifest_as_bare_urls(tmp_path):
     d = _obys_tree(tmp_path)
-    (d / "mockup-v4-1.html").write_text("<html>mockup</html>", encoding="utf-8")
+    (d / "admin.html").write_text("<html>admin</html>", encoding="utf-8")
+    (d / "mockup-v4-1.html").write_text("<html>redirect</html>", encoding="utf-8")
     (d / "manifest-app.webmanifest").write_text("{}", encoding="utf-8")
     (d / "modules").mkdir()
     (d / "modules" / "inner.html").write_text("x", encoding="utf-8")
     urls = tool.purge_urls(d, SHA, "https://fb.newtalk.kr/")
     base = "https://fb.newtalk.kr/static/apps/obys"
-    for name in ("mockup-v4-1.html", "clock.html", "signup.html", "manifest-app.webmanifest"):
+    for name in ("admin.html", "mockup-v4-1.html", "clock.html", "signup.html", "manifest-app.webmanifest"):
         assert f"{base}/{name}" in urls
         assert f"{base}/{name}?v={SHA}" not in urls
     assert urls[:2] == [f"{base}/index.html", f"{base}/sw.js"]
@@ -256,7 +257,7 @@ def test_relative_stamp_is_idempotent():
 
 def test_purge_urls_normalize_relative_refs_to_absolute_bare_and_versioned_urls(tmp_path):
     d = _obys_tree(tmp_path)
-    (d / "mockup-v4-1.html").write_text(REL_HTML, encoding="utf-8")
+    (d / "admin.html").write_text(REL_HTML, encoding="utf-8")
     urls = tool.purge_urls(d, SHA, "https://fb.newtalk.kr/")
     base = "https://fb.newtalk.kr/static/apps/obys"
     for name in ("contract-editor-v41.css", "data-overview.css", "contract-core.js"):
@@ -270,14 +271,14 @@ def test_module_refs_deduplicate_absolute_and_relative_forms_in_order():
     assert tool.module_refs(text) == ["/static/apps/obys/modules/a.js", "/static/apps/obys/modules/b.css"]
 
 
-def test_the_real_mockup_v41_stamps_all_five_relative_modules_and_purges_them(tmp_path):
+def test_the_real_admin_v41_stamps_all_five_relative_modules_and_purges_them(tmp_path):
     d = tmp_path / "obys"
     d.mkdir()
-    src = (ROOT / "app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
-    (d / "mockup-v4-1.html").write_text(src, encoding="utf-8")
+    src = (ROOT / "app/static/apps/obys/admin.html").read_text(encoding="utf-8")
+    (d / "admin.html").write_text(src, encoding="utf-8")
     report = tool.stamp_tree(d, SHA)
-    assert report["html"]["mockup-v4-1.html"] >= 5
-    text = (d / "mockup-v4-1.html").read_text(encoding="utf-8")
+    assert report["html"]["admin.html"] >= 5
+    text = (d / "admin.html").read_text(encoding="utf-8")
     names = ("contract-core.js", "contract-schedule.js", "contract-editor-v41.js", "contract-editor-v41.css", "data-overview.css")
     for name in names:
         assert f'"modules/{name}?v={SHA}"' in text

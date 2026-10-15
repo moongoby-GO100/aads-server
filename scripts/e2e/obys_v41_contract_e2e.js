@@ -83,7 +83,7 @@ async function run(viewport, label) {
     return route.fulfill({ status: 404, body: "" });
   });
 
-  await page.goto("https://fb.test/static/apps/obys/mockup-v4-1.html#employees");
+  await page.goto("https://fb.test/static/apps/obys/admin.html#employees");
   await page.waitForSelector("#contractV41 [data-cv41-employee]", { timeout: 15000 });
   check(`${label}: 직원 현황에 승인 직원 계약 섹션·계약 작성 버튼`, await page.isVisible("#contractV41 >> text=계약 작성"));
   await page.screenshot({ path: path.join(outDir, `${label}-01-employees.png`), fullPage: false });
@@ -92,7 +92,7 @@ async function run(viewport, label) {
 
   await page.click("#contractV41 [data-cv41-employee]");
   await page.waitForSelector("#contractEditorV41[open]");
-  check(`${label}: 기존 화면 이동 없이 같은 페이지에서 편집기 열림`, page.url().includes("mockup-v4-1.html") && page.url().includes("cv41_request=req-yang"), page.url());
+  check(`${label}: 기존 화면 이동 없이 같은 페이지에서 편집기 열림`, page.url().includes("admin.html") && page.url().includes("cv41_request=req-yang"), page.url());
   check(`${label}: 직원·회사·점포 문맥 고정 표시`, (await page.textContent("#contractEditorV41 .cv41-head")).includes("양시험") && (await page.textContent("#contractEditorV41 .cv41-head")).includes("미아점"));
 
   // 금액 미입력 상태로 미리보기 → 차단

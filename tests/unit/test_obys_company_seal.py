@@ -15,7 +15,7 @@ OBYS = ROOT / "app/static/apps/obys"
 SEAL_JS = OBYS / "modules/company-seal.js"
 CORE_JS = OBYS / "modules/contract-core.js"
 INDEX = (OBYS / "index.html").read_text(encoding="utf-8")
-V41 = (OBYS / "mockup-v4-1.html").read_text(encoding="utf-8")
+V41 = (OBYS / "admin.html").read_text(encoding="utf-8")
 CORE = CORE_JS.read_text(encoding="utf-8")
 EDITOR = (OBYS / "modules/contract-editor-v41.js").read_text(encoding="utf-8")
 

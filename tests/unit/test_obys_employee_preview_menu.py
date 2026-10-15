@@ -1,6 +1,6 @@
 """ACCT-OBYS-EMPLOYEE-PREVIEW-MENU-ENTRY-20261015 — '직원 화면 보기'를 메뉴 항목으로 노출.
 
-서버·DB 변경 없이 index.html(관리 화면)과 mockup-v4-1.html(V4.1)에 진입 메뉴를 추가한다.
+서버·DB 변경 없이 index.html(관리 화면)과 admin.html(V4.1)에 진입 메뉴를 추가한다.
 - index.html: people 그룹(좌측·상단·모바일 더보기)에 관리자 전용 항목 → 직원 선택창 → 기존 startEmployeePreview.
 - V4.1: 직원·급여 그룹 항목과 직원·계약서 행 버튼 → sessionStorage 1회성 키 → index.html 이 인증·권한·5분 확인 후 소비.
 동작 검증은 원문 함수를 뽑아 node 로 실행한다.
@@ -14,7 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys"
 INDEX = (ROOT / "index.html").read_text(encoding="utf-8")
-V41 = (ROOT / "mockup-v4-1.html").read_text(encoding="utf-8")
+V41 = (ROOT / "admin.html").read_text(encoding="utf-8")
 EDITOR = (ROOT / "modules" / "contract-editor-v41.js").read_text(encoding="utf-8")
 
 NODE = shutil.which("node")
@@ -532,7 +532,7 @@ const ctx = {
   appViewNames: ['dashboard', 'employees', 'contracts', 'onboarding'],
   employeeViewNames: ['onboarding', 'contracts'],
   employeeJoinRequests: [], approvedEmployees: [], state: { contracts: [] },
-  V41_APP_PATH: '/static/apps/obys/mockup-v4-1.html',
+  V41_APP_PATH: '/static/apps/obys/admin.html',
   store, replaced, calls, assert, setPermissions: p => { permissions = p; },
 };
 vm.createContext(ctx);
@@ -559,7 +559,7 @@ put({ email: 'emp@example.com', name: '홍길동', returnTo: 'v41', returnHash: 
 assert.equal(consumeEmployeePreviewRequest(), true);
 assert.equal(JSON.parse(store.get(RKEY)).returnHash, '#payroll');
 assert.equal(stopEmployeePreview(), true);
-assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/mockup-v4-1.html#payroll']));
+assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/admin.html#payroll']));
 assert.equal(calls.setView.filter(v => v === 'dashboard').length, 0);
 assert.equal(store.has(RKEY), false, '복귀 후 보관 키 삭제');
 assert.equal(employeePreviewReturnTarget, null);
@@ -570,7 +570,7 @@ put({ email: 'emp@example.com', name: '홍길동', returnTo: 'v41', returnHash: 
 assert.equal(consumeEmployeePreviewRequest(), true);
 employeePreviewReturnTarget = null;
 stopEmployeePreview();
-assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/mockup-v4-1.html#employees']));
+assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/admin.html#employees']));
 
 // 허용되지 않은 해시 → #home
 reset();
@@ -578,7 +578,7 @@ put({ email: 'emp@example.com', name: '홍길동', returnTo: 'v41', returnHash: 
 assert.equal(consumeEmployeePreviewRequest(), true);
 assert.equal(JSON.parse(store.get(RKEY)).returnHash, '#home');
 stopEmployeePreview();
-assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/mockup-v4-1.html#home']));
+assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/admin.html#home']));
 
 // 보관 키가 변조돼도 검증
 reset();
@@ -587,7 +587,7 @@ consumeEmployeePreviewRequest();
 employeePreviewReturnTarget = null;
 store.set(RKEY, JSON.stringify({ returnTo: 'v41', returnHash: 'https://evil.example' }));
 stopEmployeePreview();
-assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/mockup-v4-1.html#home']));
+assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/admin.html#home']));
 
 // 선택창 요청 → 직원 선택 → 종료
 reset();
@@ -595,7 +595,7 @@ put({ open: 'picker', returnTo: 'v41', returnHash: '#employees' });
 assert.equal(consumeEmployeePreviewRequest(), true);
 startEmployeePreview({ email: 'emp@example.com', name: '홍길동' });
 stopEmployeePreview();
-assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/mockup-v4-1.html#employees']));
+assert.equal(JSON.stringify(replaced), JSON.stringify(['/static/apps/obys/admin.html#employees']));
 
 // 선택창만 열고 취소하면 보관값을 버린다
 reset();

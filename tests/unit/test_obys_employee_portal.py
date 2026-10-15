@@ -105,7 +105,7 @@ class TestStaticWiring:
             assert needle in bridge, needle
 
     def test_admin_v41_and_mockups_untouched(self):
-        v41 = (OBYS / "mockup-v4-1.html").read_text(encoding="utf-8")
+        v41 = (OBYS / "admin.html").read_text(encoding="utf-8")
         assert "employee-portal" not in v41
         should_open = _function_source("shouldOpenV41App")
         assert "if (hasServerAuth() && isEmployeeAccount()) return false;" in should_open

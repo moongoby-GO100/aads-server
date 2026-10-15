@@ -14,7 +14,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 MODULES = REPO / "app" / "static" / "apps" / "obys" / "modules"
-V41 = (REPO / "app" / "static" / "apps" / "obys" / "mockup-v4-1.html").read_text(encoding="utf-8")
+V41 = (REPO / "app" / "static" / "apps" / "obys" / "admin.html").read_text(encoding="utf-8")
 EDITOR = (MODULES / "contract-editor-v41.js").read_text(encoding="utf-8")
 CSS = (MODULES / "contract-editor-v41.css").read_text(encoding="utf-8")
 

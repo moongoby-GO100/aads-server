@@ -50,6 +50,7 @@ def isolated(tmp_path, monkeypatch):
         return clock["now"].isoformat(timespec="seconds")
 
     monkeypatch.setattr(svc, "_now", fake_now)
+    monkeypatch.setattr(svc, "CONTRACT_SIGN_LINK_TTL_DAYS", 3650)  # 가짜 시계(2026-09-30)와 실제 날짜 차이로 링크가 만료 처리되는 것을 막는다
 
     async def fake_create_notification(**kwargs):
         return {"id": "ntf-test", **kwargs}
@@ -316,4 +317,4 @@ def test_admin_editor_has_amendment_button_and_labels():
     assert "변경 계약 작성" in editor
     assert 'amendsContractId: String(original.id), contractDate: "", startDate: "", endDate: ""' in editor
     assert "변경 계약(원계약" in editor and "이전 계약" in editor
-    assert "modules/contract-editor-v41.js?v=20261015-r1" in (root / "mockup-v4-1.html").read_text(encoding="utf-8")
+    assert "modules/contract-editor-v41.js?v=20261015-r1" in (root / "admin.html").read_text(encoding="utf-8")

@@ -18,7 +18,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 ROOT = REPO / "app" / "static" / "apps" / "obys"
-V41 = (ROOT / "mockup-v4-1.html").read_text(encoding="utf-8")
+V41 = (ROOT / "admin.html").read_text(encoding="utf-8")
 INDEX = (ROOT / "index.html").read_text(encoding="utf-8")
 CORE = (ROOT / "modules" / "contract-core.js").read_text(encoding="utf-8")
 EDITOR = (ROOT / "modules" / "contract-editor-v41.js").read_text(encoding="utf-8")
@@ -85,7 +85,7 @@ def _server_missing_labels() -> set[str]:
 
 NODE_SCRIPT = r"""
 globalThis.window = globalThis;
-globalThis.location = { href: "https://fb.example/static/apps/obys/mockup-v4-1.html", origin: "https://fb.example", search: "" };
+globalThis.location = { href: "https://fb.example/static/apps/obys/admin.html", origin: "https://fb.example", search: "" };
 const [coreArg, editorArg] = process.argv.slice(-2);
 require(coreArg);
 require(editorArg);

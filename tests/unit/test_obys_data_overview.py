@@ -463,7 +463,7 @@ def test_review_box_keeps_confirm_flow_untouched():
 
 # ── V4.1(로그인 후 기본 화면) 배선 ─────────────────────────
 
-V41 = (ROOT / "mockup-v4-1.html").read_text(encoding="utf-8")
+V41 = (ROOT / "admin.html").read_text(encoding="utf-8")
 
 
 def test_v41_page_loads_overview_assets_after_its_inline_app():

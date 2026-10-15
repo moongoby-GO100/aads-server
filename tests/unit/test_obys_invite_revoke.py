@@ -254,7 +254,7 @@ def test_delete_route_is_registered_without_shadowing_resolve_and_accept():
 
 
 def test_v41_screen_has_delete_and_copy_link_actions():
-    html = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+    html = Path("app/static/apps/obys/admin.html").read_text(encoding="utf-8")
     assert "<th>상태</th><th>초대 링크</th><th>관리</th>" in html
     assert 'data-invite-link="${escapeHtml(invite.token)}"' in html
     assert ">링크 복사</button>" in html

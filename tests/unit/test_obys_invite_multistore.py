@@ -418,7 +418,7 @@ def test_invites_list_stays_closed_to_tenant_scoped_gate():
 
 
 def test_v41_screen_uses_db_businesses_and_multi_select_targets():
-    html = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+    html = Path("app/static/apps/obys/admin.html").read_text(encoding="utf-8")
     assert "INVITE_BRANCHES_V41" not in html
     assert 'financeApiV41("/tenant-registry/businesses")' in html
     assert 'type="checkbox" name="invite_target"' in html

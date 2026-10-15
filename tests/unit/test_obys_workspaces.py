@@ -309,7 +309,7 @@ async def test_manual_purchase_is_written_through_existing_ledger_service(monkey
 
 
 def test_v41_static_page_uses_workspace_api_without_seeded_rows():
-    html = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+    html = Path("app/static/apps/obys/admin.html").read_text(encoding="utf-8")
     assert "const rows=()=>[]" in html
     assert "/api/v1/workspaces" in html
     assert "오비서 DB 실데이터" in html
@@ -318,10 +318,10 @@ def test_v41_static_page_uses_workspace_api_without_seeded_rows():
 
 def test_operational_obys_enters_v41_after_login_with_legacy_recovery():
     index = Path("app/static/apps/obys/index.html").read_text(encoding="utf-8")
-    v41 = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+    v41 = Path("app/static/apps/obys/admin.html").read_text(encoding="utf-8")
     prd = Path("docs/PRD-OBYS-MOCKUP-V4-1-FINAL.md").read_text(encoding="utf-8")
 
-    assert 'const V41_APP_PATH = "/static/apps/obys/mockup-v4-1.html"' in index
+    assert 'const V41_APP_PATH = "/static/apps/obys/admin.html"' in index
     assert "await shouldOpenV41AppVerified() && openV41App()" in index
     assert 'params.get("legacy") === "1"' in index
     assert 'id="businessSelect"' in v41
@@ -366,7 +366,7 @@ def test_date_filter_applies_to_uploaded_rows_and_rejects_reverse_range():
 
 def test_v41_business_detail_registers_registration_and_business_documents():
     # 로그인하면 V4.1 로 넘어가므로 사업자등록증·서류 등록이 V4.1 사업자 상세에 있어야 한다 (2026-10-01).
-    v41 = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+    v41 = Path("app/static/apps/obys/admin.html").read_text(encoding="utf-8")
 
     assert 'if(state.route==="businesses"&&row.__live?.id&&state.detailRow===row)renderBusinessDocsV41(row.__live.id)' in v41
     assert "/businesses/${id}/registration-document" in v41
@@ -378,7 +378,7 @@ def test_v41_business_detail_registers_registration_and_business_documents():
 
 def test_v41_employees_page_invites_and_reviews_join_requests():
     # 로그인하면 V4.1 로 넘어가므로 직원 초대·가입 승인이 V4.1 직원 현황에 있어야 한다 (2026-10-01).
-    v41 = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+    v41 = Path("app/static/apps/obys/admin.html").read_text(encoding="utf-8")
 
     assert 'if(state.route==="employees")renderEmployeeOnboardingV41();' in v41
     assert 'financeApiV41("/employees/invites",{method:"POST"' in v41

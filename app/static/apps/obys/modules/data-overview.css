@@ -76,7 +76,7 @@
   .od-table td small { text-align: right; }
 }
 
-/* V4.1(mockup-v4-1.html) 호스트: 이 화면은 --panel/--accent 계열 변수와 panel-* 클래스를 갖고 있지 않다. */
+/* V4.1(admin.html) 호스트: 이 화면은 --panel/--accent 계열 변수와 panel-* 클래스를 갖고 있지 않다. */
 .od-v41 { --panel: #fff; --panel-strong: #f8fafc; --accent: var(--blue, #2457d6); --shadow: none; --radius: 12px; --radius-btn: 8px; --ink: #172033; --line: #e2e8f0; --muted: #667085; }
 #obysGlance.od-v41-glance { margin: 14px 0; }
 .od-v41-delivery { margin-top: 14px; border: 1px solid var(--line); border-radius: 13px; background: #fff; overflow: hidden; }

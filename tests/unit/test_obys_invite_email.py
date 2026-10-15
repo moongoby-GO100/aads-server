@@ -348,7 +348,7 @@ def test_index_invite_form_requires_email_and_locks_signup_email():
 
 
 def test_v41_invite_form_requires_email():
-    html = Path("app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+    html = Path("app/static/apps/obys/admin.html").read_text(encoding="utf-8")
     assert 'name="email" type="email" placeholder="직원 이메일(필수)" required' in html
     assert "body={name:form.name.value.trim(),email," in html
     assert "invite.email_masked" in html

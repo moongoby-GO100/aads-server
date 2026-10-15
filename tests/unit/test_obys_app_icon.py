@@ -12,7 +12,7 @@ ICONS = OBYS / "icons"
 URL = "/static/apps/obys/icons/"
 PNG_SIZES = {"obys-app-512.png": 512, "obys-app-192.png": 192, "obys-app-180.png": 180, "obys-app-32.png": 32}
 SVG_SHA256 = "da7031ae50abe6d3d0cc94be90408ff48ff1779cc0854607ca6a2eff29442748"
-HTMLS = ("index.html", "mockup-v4-1.html", "clock.html")
+HTMLS = ("index.html", "admin.html", "clock.html")
 
 
 def _png_size(path: Path) -> tuple[int, int]:
