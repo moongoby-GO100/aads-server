@@ -765,6 +765,14 @@ async def lifespan(app: FastAPI):
                             logger.warning("goal_control_cycle_unlock_failed", error=str(unlock_error))
                     await get_pool().release(lock_conn)
 
+        async def _run_approval_expiry():
+            try:
+                from app.services.approval_expiry import expire_stale_pending_approvals
+
+                await expire_stale_pending_approvals()
+            except Exception as e:
+                logger.warning("approval_expiry_failed: %s", str(e)[:200])
+
         async def _run_rate_limit_recovery():
             """만료된 rate_limited_until 자동 클리어 + 비활성 키 재활성화 + 모델 재활성화."""
             try:
@@ -1281,6 +1289,16 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(_run_rate_limit_recovery, "interval", seconds=60, id="rate_limit_recovery")
         # 90초마다 stale execution 자동 정리 (세션 차단 방지)
         scheduler.add_job(_run_stale_execution_cleanup, "interval", seconds=90, id="stale_execution_watchdog")
+        # 기한 지난 승인 대기 카드를 expired 로 닫는다 (approval-system-hardening FR-9).
+        scheduler.add_job(
+            _run_approval_expiry,
+            "interval",
+            minutes=5,
+            id="approval_expiry",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
         # Goal Control Loop: terminal runner status reconciliation and deterministic
         # milestone advancement. max_instances/coalesce prevent overlapping sweeps.
         scheduler.add_job(
