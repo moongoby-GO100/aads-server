@@ -15,9 +15,20 @@ import os
 import signal
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
+from app.core.interrupt_attachments import attach_images, build_interrupt_attachment_payload
 from app.services.chat_interrupt_lifecycle import INTERRUPT_REPLY_INSTRUCTION, apply_interrupts
 
 logger = logging.getLogger(__name__)
+
+
+async def _single_user_message(text: str, image_blocks: List[Dict[str, Any]]) -> AsyncGenerator[Dict[str, Any], None]:
+    """client.query(AsyncIterable) 용 — 텍스트+이미지 content 배열 user 메시지 한 건."""
+    yield {
+        "type": "user",
+        "message": {"role": "user", "content": attach_images(text, image_blocks)},
+        "parent_tool_use_id": None,
+    }
+
 
 # ─── 환경 플래그 ───────────────────────────────────────────────────────────────
 
@@ -464,8 +475,14 @@ class AgentSDKService:
             "기존 작업과 충돌하면 **대표님 지시를 우선합니다.**\n\n" + text
             + INTERRUPT_REPLY_INSTRUCTION
         )
+        note, image_blocks = await build_interrupt_attachment_payload(chat_session_id, items)
+        body += note
         try:
-            await client.query(body)
+            if image_blocks:
+                # 문자열 prompt 는 content 를 str 로만 보낸다 — 이미지는 메시지 dict 로 직접 넣는다.
+                await client.query(_single_user_message(body, image_blocks))
+            else:
+                await client.query(body)
         except Exception as exc:
             logger.warning("sdk_interrupt_inject_failed error=%s", str(exc)[:160])
             return

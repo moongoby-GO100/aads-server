@@ -34,6 +34,7 @@ from app.services.model_registry import list_registered_models as _list_register
 from app.services.model_registry import normalize_provider as _normalize_registry_provider  # noqa: E402
 from app.services.intent_router import IntentResult  # noqa: E402
 from app.services import chat_interrupt_lifecycle as _interrupt_lifecycle  # noqa: E402
+from app.core.interrupt_attachments import build_interrupt_image_blocks as _build_interrupt_image_blocks  # noqa: E402
 from app.services import session_effort as _session_effort  # noqa: E402
 from app.services.model_switch_banner import build_switch_banner as _build_switch_banner  # noqa: E402
 from app.services.model_switch_banner import classify_failure_reason as _classify_failure_reason  # noqa: E402
@@ -3671,14 +3672,11 @@ async def _stream_litellm_anthropic(
                         interrupt_text = "\n".join(i["content"] for i in interrupts)
                         # 인터럽트 첨부파일 → Vision content blocks
                         _intr_content: list | str = f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
-                        _intr_images = []
-                        for _intr_item in interrupts:
-                            for att in _intr_item.get("attachments", []):
-                                if att.get("type") == "image" and att.get("base64"):
-                                    _intr_images.append({
-                                        "type": "image_url",
-                                        "image_url": {"url": f"data:{att.get('media_type', 'image/png')};base64,{att['base64']}"},
-                                    })
+                        _intr_images, _intr_notice = await asyncio.to_thread(
+                            _build_interrupt_image_blocks, interrupts, fmt="image_url",
+                        )
+                        if _intr_notice:
+                            _intr_content = f"{_intr_content}\n\n{_intr_notice}"
                         if _intr_images:
                             _intr_content = [{"type": "text", "text": _intr_content}] + _intr_images
                         current_msgs.append({"role": "user", "content": _intr_content})
@@ -6836,18 +6834,11 @@ async def _stream_anthropic(
                 interrupt_text = "\n".join(i["content"] for i in interrupts)
                 # 인터럽트 첨부파일 → Claude Vision content blocks
                 _intr_content: list | str = f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
-                _intr_images = []
-                for _intr_item in interrupts:
-                    for att in _intr_item.get("attachments", []):
-                        if att.get("type") == "image" and att.get("base64"):
-                            _intr_images.append({
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": att.get("media_type", "image/png"),
-                                    "data": att["base64"],
-                                },
-                            })
+                _intr_images, _intr_notice = await asyncio.to_thread(
+                    _build_interrupt_image_blocks, interrupts,
+                )
+                if _intr_notice:
+                    _intr_content = f"{_intr_content}\n\n{_intr_notice}"
                 if _intr_images:
                     _intr_content = [{"type": "text", "text": _intr_content}] + _intr_images
                 current_messages.append({"role": "user", "content": _intr_content})

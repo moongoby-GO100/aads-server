@@ -21,6 +21,7 @@ from app.config import Settings
 from app.core.anthropic_client import get_client
 from app.core.db_pool import get_pool
 from app.services import chat_interrupt_lifecycle as _interrupt_lifecycle
+from app.core import interrupt_attachments as _interrupt_attachments
 from app.services.model_switch_banner import (
     build_switch_banner as _build_switch_banner,
     classify_failure_reason as _classify_failure_reason,
@@ -2381,15 +2382,8 @@ async def _apply_deferred_interrupts_to_state(
         if not interrupt_text:
             continue
 
-        attachment_lines: list[str] = []
-        for intr_item in interrupts:
-            for att in intr_item.get("attachments", []) or []:
-                att_name = att.get("name") or att.get("filename") or "attachment"
-                att_type = att.get("type") or att.get("media_type") or "file"
-                attachment_lines.append(f"- {att_name} ({att_type})")
-        attachment_note = (
-            "\n\n[추가 지시 첨부파일]\n" + "\n".join(attachment_lines)
-            if attachment_lines else ""
+        attachment_note, interrupt_image_blocks = await _interrupt_attachments.build_interrupt_attachment_payload(
+            session_id, interrupts,
         )
 
         logger.info(
@@ -2407,16 +2401,20 @@ async def _apply_deferred_interrupts_to_state(
             interrupt_messages.append({"role": "assistant", "content": previous_response.strip()})
         interrupt_messages.append({
             "role": "user",
-            "content": (
-                "[CEO 추가 지시]\n"
-                "방금 스트리밍 중 CEO가 아래 추가 지시를 보냈습니다. "
-                "이미 작성한 답변을 그대로 반복하지 말고, 추가 지시를 반영해 최종 답변을 다시 작성하세요. "
-                "추가 지시가 기존 답변과 충돌하면 CEO의 추가 지시를 우선합니다.\n\n"
-                f"{interrupt_text}{attachment_note}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
+            "content": _interrupt_attachments.attach_images(
+                (
+                    "[CEO 추가 지시]\n"
+                    "방금 스트리밍 중 CEO가 아래 추가 지시를 보냈습니다. "
+                    "이미 작성한 답변을 그대로 반복하지 말고, 추가 지시를 반영해 최종 답변을 다시 작성하세요. "
+                    "추가 지시가 기존 답변과 충돌하면 CEO의 추가 지시를 우선합니다.\n\n"
+                    f"{interrupt_text}{attachment_note}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
+                ),
+                interrupt_image_blocks,
             ),
         })
 
-        if fast_revision:
+        # 빠른 재작성(call_llm_with_fallback)은 텍스트 전용이라 이미지를 못 본다 — 이미지가 있으면 스트림 경로로 간다.
+        if fast_revision and not interrupt_image_blocks:
             fast_prompt = (
                 "[기존 AI 답변]\n"
                 f"{previous_response.strip() or '(아직 최종 답변 없음)'}\n\n"
@@ -15531,15 +15529,8 @@ async def send_message_stream(
             if not _interrupt_text:
                 continue
 
-            _attachment_lines: list[str] = []
-            for _intr_item in _deferred_interrupts:
-                for _att in _intr_item.get("attachments", []) or []:
-                    _att_name = _att.get("name") or _att.get("filename") or "attachment"
-                    _att_type = _att.get("type") or _att.get("media_type") or "file"
-                    _attachment_lines.append(f"- {_att_name} ({_att_type})")
-            _attachment_note = (
-                "\n\n[추가 지시 첨부파일]\n" + "\n".join(_attachment_lines)
-                if _attachment_lines else ""
+            _attachment_note, _interrupt_image_blocks = await _interrupt_attachments.build_interrupt_attachment_payload(
+                session_id, _deferred_interrupts,
             )
             logger.info(
                 "deferred_interrupt_apply session=%s pass=%s count=%s",
@@ -15557,13 +15548,16 @@ async def send_message_stream(
             _original_q = content[:500] if content else ""
             _interrupt_messages.append({
                 "role": "user",
-                "content": (
-                    "[CEO 추가 지시]\n"
-                    f"[원래 질문: {_original_q}]\n\n"
-                    "방금 스트리밍 중 CEO가 아래 추가 지시를 보냈습니다. "
-                    "원래 질문의 맥락을 유지하면서, 추가 지시를 반영해 최종 답변을 다시 작성하세요. "
-                    "추가 지시가 기존 답변과 충돌하면 CEO의 추가 지시를 우선합니다.\n\n"
-                    f"{_interrupt_text}{_attachment_note}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
+                "content": _interrupt_attachments.attach_images(
+                    (
+                        "[CEO 추가 지시]\n"
+                        f"[원래 질문: {_original_q}]\n\n"
+                        "방금 스트리밍 중 CEO가 아래 추가 지시를 보냈습니다. "
+                        "원래 질문의 맥락을 유지하면서, 추가 지시를 반영해 최종 답변을 다시 작성하세요. "
+                        "추가 지시가 기존 답변과 충돌하면 CEO의 추가 지시를 우선합니다.\n\n"
+                        f"{_interrupt_text}{_attachment_note}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
+                    ),
+                    _interrupt_image_blocks,
                 ),
             })
 
