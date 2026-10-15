@@ -38,6 +38,7 @@ from fastapi import HTTPException, UploadFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 from app.services import obys_bankbook_extract as bankbook_extract
+from app.services import yeoljeong_company_seal
 from app.services.auth_challenge_orchestrator import approved_operator_input, classify_portal_state, make_resume_token
 from app.services.browser_collection_audit import SITE_STAGE_LOG_SCHEMA, append_site_stage_log
 
@@ -7227,13 +7228,40 @@ def _persist_contract_delivery(contract: dict[str, Any], user: dict[str, Any] | 
         _run_db(_db_update_contract_delivery_columns(contract))
 
 
+def _contract_seal_inputs(contract: dict[str, Any]) -> dict[str, Any] | None:
+    """서명본 PDF 의 사용자 도장 입력. 봉인 스냅샷 값 → 사업장 정보 순으로 찾는다. 찾지 못해도 PDF 는 만든다."""
+    try:
+        snapshot = contract.get("signed_snapshot") if isinstance(contract.get("signed_snapshot"), dict) else {}
+
+        def pick(*keys: str) -> str:
+            for source in (snapshot, contract):
+                for key in keys:
+                    value = str(source.get(key) or "").strip()
+                    if value:
+                        return value
+            return ""
+
+        business = _business_record_for_id(pick("business_id", "businessId"))
+        company_name = pick("employer_name", "employerName") or str(business.get("name") or "").strip()
+        representative = pick("employer_representative", "employerRepresentative") or str(business.get("representative") or "").strip()
+        entity_type = pick("employer_entity_type", "employerEntityType") or _business_entity_type(business)
+        return {
+            "kind": yeoljeong_company_seal.kind_for(entity_type, company_name),
+            "company_name": company_name,
+            "representative": representative,
+        }
+    except Exception as exc:  # noqa: BLE001 — 도장 정보를 못 찾아도 서명본 PDF 는 만든다
+        logger.warning("contract seal inputs unavailable: contract=%s err=%s", contract.get("id"), exc)
+        return None
+
+
 def _store_signed_contract_pdf(contract: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
     """봉인 스냅샷으로 PDF 를 만들어 보관하고 계약서에 메타를 남긴다. 예외를 올리지 않는다."""
     result: dict[str, Any]
     try:
         from app.services import yeoljeong_contract_pdf as contract_pdf
 
-        data = contract_pdf.render_signed_contract_pdf(contract)
+        data = contract_pdf.render_signed_contract_pdf(contract, seal=_contract_seal_inputs(contract))
         relative = _contract_pdf_relpath(contract)
         path = _contract_pdf_root() / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -11452,27 +11480,32 @@ def get_bank_quick_inquiry(job_id: str, user: dict[str, Any]) -> dict[str, Any]:
     return _public_bank_quick_job(item, account_id=str(payload.get("bank_account_id") or ""))
 
 
-def _business_entity_type_for_bank_scope(business_id: str) -> str:
+def _business_record_for_id(business_id: str) -> dict[str, Any]:
     business_key = str(business_id or "").strip()
     if not business_key:
-        return ""
+        return {}
     settings_data = _read_json_object("settings")
     ui_settings = settings_data.get("ui_settings") if isinstance(settings_data.get("ui_settings"), dict) else {}
     settings = _canonicalize_ui_settings(ui_settings)
     businesses = settings.get("businesses") if isinstance(settings.get("businesses"), list) else []
     for item in [*businesses, *CANONICAL_BUSINESSES]:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("id") or "").strip() != business_key:
-            continue
-        return str(
-            item.get("entityType")
-            or item.get("entity_type")
-            or item.get("business_type")
-            or item.get("businessType")
-            or ""
-        ).strip()
-    return ""
+        if isinstance(item, dict) and str(item.get("id") or "").strip() == business_key:
+            return item
+    return {}
+
+
+def _business_entity_type(item: dict[str, Any]) -> str:
+    return str(
+        item.get("entityType")
+        or item.get("entity_type")
+        or item.get("business_type")
+        or item.get("businessType")
+        or ""
+    ).strip()
+
+
+def _business_entity_type_for_bank_scope(business_id: str) -> str:
+    return _business_entity_type(_business_record_for_id(business_id))
 
 
 def _collect_bank_via_browser(

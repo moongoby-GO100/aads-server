@@ -29,6 +29,10 @@
     }
     // 도장 이미지는 저장된 business_id 로만 고른다. 지점명으로 사업자를 추정하지 않는다.
     function businessForBranchName() { return {}; }
+    // 사업장 정보(유형·대표자·상호)는 편집기가 불러온 사업자 목록으로 찾는다.
+    let businessResolver = null;
+    function setBusinessResolver(resolver) { businessResolver = typeof resolver === "function" ? resolver : null; }
+    function sealBusinessRecord(businessId) { return (businessResolver && businessResolver(businessId)) || {}; }
 
     const contractTypeLabels = {
       part_time: "단시간/아르바이트 근로계약서",
@@ -220,6 +224,13 @@
       return `<li><b>${escapeHtml(title)}</b><br>${previewText(body, "미입력")}</li>`;
     }
 
+    // 도장은 이미지 파일이 아니라 company-seal.js 가 계약서 값(없으면 사업장 정보)으로 그린다.
+    function contractSealUri(contract, businessId, branchName) {
+      const seal = globalThis.ObysCompanySeal;
+      if (!seal) return "";
+      return seal.dataUri(seal.optionsFor(contract, sealBusinessRecord(businessId, branchName)));
+    }
+
     function contractPreviewHtml(contract) {
       const contractType = contractValue(contract, "contractType", "contract_type");
       const employmentTaxType = contractValue(contract, "employmentTaxType", "employment_tax_type");
@@ -372,7 +383,7 @@
             : "사업주는 근로계약 체결 시 본 계약서를 근로자에게 교부하며, 전자서명 완료본과 급여/입사서류 기록을 직원관리 화면에 보관한다."
       ));
       const contractBusinessId = contractValue(contract, "businessId", "business_id") || businessForBranchName(contractValue(contract, "branch")).id || "";
-      const stampUrl = ["biz-junghwa", "biz-sungshin", "biz-mia"].includes(contractBusinessId) ? `assets/stamps/${contractBusinessId}.png` : "";
+      const stampUrl = contractSealUri(contract, contractBusinessId, contractValue(contract, "branch"));
       const stampAlt = `${employerName || "사용자"} 전자문서용 확인도장`;
       const legalBasisText = isFreelancerContract
         ? "고용노동부 노무제공자 공통 표준계약서 및 활용가이드(2023-12-26 게시)를 기준으로 업무범위, 산출물, 검수, 용역비, 비용 부담, 비밀유지, 해지 기준을 명확히 하는 내부 양식입니다. 3.3% 원천징수는 세무 처리 기준일 뿐 근로자성 판단을 대체하지 않습니다."
@@ -470,7 +481,7 @@
     const api = {
       contractTypeLabels, employmentTaxTypeLabels, wageTypeLabels, standardContractDefaults,
       MINIMUM_HOURLY_WAGE_2026, CONTRACT_STATUS, EMPLOYMENT_TYPES,
-      defaultsFor, classificationFor, splitMonthlyWage, NON_TAX_MEAL_LIMIT, validateContractDraft, checkDraft, contractPreviewHtml,
+      defaultsFor, classificationFor, splitMonthlyWage, NON_TAX_MEAL_LIMIT, validateContractDraft, checkDraft, contractPreviewHtml, setBusinessResolver,
       escapeHtml, formatMoney, today
     };
     root.ObysContractCore = api;

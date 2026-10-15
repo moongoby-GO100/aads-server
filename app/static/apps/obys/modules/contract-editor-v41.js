@@ -430,6 +430,7 @@
     return S.businesses.find(item => String(item.id) === String(id))?.name || id || "사업자 미지정";
   }
   function businessRecord(id) { return S.businesses.find(item => String(item.id) === String(id)) || {}; }
+  C.setBusinessResolver(businessRecord);
   function fmtTime(value) { return String(value || "").replace("T", " ").slice(0, 16) || "-"; }
 
   function valuesFromEmployee(employee) {

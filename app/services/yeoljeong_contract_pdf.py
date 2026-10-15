@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
+from app.services import yeoljeong_company_seal as company_seal
+
 logger = logging.getLogger(__name__)
 
 FONT_ENV = "OBYS_CONTRACT_PDF_FONT_PATH"
@@ -326,8 +328,11 @@ def extra_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
     return rows
 
 
-def render_signed_contract_pdf(contract: dict[str, Any]) -> bytes:
-    """봉인 스냅샷으로 서명본 PDF 바이트를 만든다. 같은 입력이면 같은 바이트가 나온다."""
+def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | None = None) -> bytes:
+    """봉인 스냅샷으로 서명본 PDF 바이트를 만든다. 같은 입력이면 같은 바이트가 나온다.
+
+    ``seal`` 은 사용자(사업주) 도장 입력(kind/company_name/representative)이다. 봉인 내용이 아니라 해시에 들어가지 않는다.
+    """
     snapshot = contract.get("signed_snapshot")
     recorded_sha = str(contract.get("signed_snapshot_sha256") or "")
     if not isinstance(snapshot, dict) or not snapshot:
@@ -343,7 +348,7 @@ def render_signed_contract_pdf(contract: dict[str, Any]) -> bytes:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle
         from reportlab.lib.units import mm
-        from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+        from reportlab.platypus import Flowable, Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
     except ImportError:
         raise ContractPdfError("reportlab 이 설치되어 있지 않습니다") from None
 
@@ -410,8 +415,28 @@ def render_signed_contract_pdf(contract: dict[str, Any]) -> bytes:
     ratio = (signature.imageHeight or 1) / (signature.imageWidth or 1)
     signature.drawWidth = 60 * mm
     signature.drawHeight = min(30 * mm, 60 * mm * ratio)
+    seal_plan = (
+        company_seal.layout(str(seal.get("kind") or ""), seal.get("company_name"), seal.get("representative"))
+        if isinstance(seal, dict)
+        else None
+    )
+
+    class SealFlowable(Flowable):
+        def __init__(self, plan: dict[str, Any], side: float) -> None:
+            super().__init__()
+            self.plan = plan
+            self.width = self.height = side
+
+        def draw(self) -> None:
+            company_seal.draw_seal(self.canv, self.plan, 0, 0, self.width, font)
+
+    employer_rows: list[list[Any]] = []
+    if seal_plan:
+        employer_text = f"{_text(snapshot.get('employer_name'))} 대표 {_text(snapshot.get('employer_representative'))} (서명 또는 인)"
+        employer_rows.append([para("사용자 날인", label), [para(employer_text), Spacer(1, 1 * mm), SealFlowable(seal_plan, 26 * mm)]])
     sign_grid = Table(
         [
+            *employer_rows,
             [para("서명자", label), para(snapshot.get("signer_name"))],
             [para("서명 일시", label), para(snapshot.get("signed_at"))],
             [para("인증 계정", label), para(_mask_email(audit.get("authenticated_email") or snapshot.get("signer_email") or ""))],
