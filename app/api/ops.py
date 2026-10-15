@@ -2840,6 +2840,8 @@ async def get_claude_accounts():
             "subscription": b.get("subscription"),
             "has_token": bool(b.get("bound")),
             "needs_login": bool(b.get("needs_login")),
+            "needs_login_reason": b.get("reason") if b.get("needs_login") else None,
+            "credential_expires_at": b.get("expires_at"),
         })
 
     current = 1

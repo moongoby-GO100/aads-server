@@ -39,6 +39,7 @@ import pty
 import re
 import secrets
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 CODEX_ACCOUNTS_ROOT = Path(os.getenv("CODEX_ACCOUNTS_ROOT", "/root/.codex-accounts"))
@@ -49,6 +50,13 @@ CODEX_BIN = os.getenv("CODEX_BIN", "codex")
 CLAUDE_BIN = os.getenv("CLAUDE_BIN", "claude")
 
 SESSION_TTL_SEC = 15 * 60  # 일회용 코드 수명과 같게 둔다
+
+# 액세스 토큰이 만료돼도 keeper(10분 주기)가 곧 갱신한다. 이 유예를 넘겨서도
+# 만료 상태면 갱신이 막힌 것으로 보고 재로그인을 요구한다.
+EXPIRY_GRACE_SEC = int(os.getenv("CLAUDE_TOKEN_EXPIRY_GRACE_SEC", "1800"))
+KEEPER_LOG = Path(os.getenv("CLAUDE_TOKEN_KEEPER_LOG", "/var/log/aads-claude-token-keeper.log"))
+_KEEPER_TAIL_BYTES = 256 * 1024
+_KEEPER_SLOT_LINE = re.compile(r"^\S+ \S+ slot(\d+):")
 _MAX_OUTPUT = 16384
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -156,6 +164,71 @@ def _credential_ok(plan: dict) -> bool:
     oauth = data.get("claudeAiOauth") or data
     # refreshToken 이 없으면 8시간 뒤 죽는다 — 성공으로 치면 안 된다.
     return bool(oauth.get("refreshToken"))
+
+
+def claude_credential_status(path: Path, now: float | None = None) -> dict:
+    """Claude 슬롯 자격 파일의 재로그인 필요 여부와 사유. 토큰 값은 반환하지 않는다 (R-KEY).
+
+    reason: None(정상) | credential_missing | refresh_missing | token_expired.
+    expiresAt 이 없으면 만료를 판단할 수 없으므로 만료로 치지 않는다.
+    """
+    now = time.time() if now is None else now
+    status = {"ok": False, "reason": "credential_missing", "expires_at": None}
+    try:
+        data = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return status
+    except (OSError, ValueError):
+        status["reason"] = "refresh_missing"
+        return status
+    oauth = (data.get("claudeAiOauth") if isinstance(data, dict) else None) or data
+    if not isinstance(oauth, dict):
+        status["reason"] = "refresh_missing"
+        return status
+
+    expires_sec = None
+    try:
+        raw = float(oauth.get("expiresAt") or 0)
+        if raw > 0:
+            expires_sec = raw / 1000 if raw > 100_000_000_000 else raw
+    except (TypeError, ValueError):
+        pass
+    if expires_sec:
+        status["expires_at"] = datetime.fromtimestamp(expires_sec, timezone.utc).isoformat()
+
+    if not oauth.get("refreshToken"):
+        status["reason"] = "refresh_missing"
+    elif expires_sec and now - expires_sec >= EXPIRY_GRACE_SEC:
+        status["reason"] = "token_expired"
+    else:
+        status.update(ok=True, reason=None)
+    return status
+
+
+def keeper_refresh_failures(slot: str, log_path: Path | None = None) -> int:
+    """keeper 로그 끝에서 그 슬롯의 연속 갱신 실패 횟수. 로그를 못 읽으면 0."""
+    path = log_path or KEEPER_LOG
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - _KEEPER_TAIL_BYTES))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return 0
+    current = None
+    streak = 0
+    for line in lines:
+        m = _KEEPER_SLOT_LINE.match(line)
+        if m:
+            current = m.group(1)
+            continue
+        if current != str(slot):
+            continue
+        if "갱신 실패" in line or "재로그인 필요" in line:
+            streak += 1
+        elif "갱신됨" in line:
+            streak = 0
+    return streak
 
 
 def _credential_signature(plan: dict) -> str | None:
@@ -451,6 +524,7 @@ def bindings() -> list[dict]:
         num = home.name.replace("slot", "")
         plan = {"kind": "claude", "credential": home / ".claude" / ".credentials.json"}
         ok = _credential_ok(plan)
+        cred = claude_credential_status(plan["credential"])
         sub = None
         if ok:
             try:
@@ -472,8 +546,10 @@ def bindings() -> list[dict]:
             pass
         out.append({
             "target": f"claude:{num}", "kind": "claude", "account": home.name,
-            "bound": ok, "needs_login": not ok, "subscription": sub,
+            "bound": ok, "needs_login": not cred["ok"], "subscription": sub,
             "actual_account": actual_account,
+            "reason": cred["reason"], "expires_at": cred["expires_at"],
+            "refresh_failures": keeper_refresh_failures(num),
         })
 
     out.append(_antigravity_binding())

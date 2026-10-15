@@ -36,6 +36,9 @@ def test_claude_binding_exposes_identity_without_oauth_secrets(tmp_path, monkeyp
         "needs_login": False,
         "subscription": "max",
         "actual_account": "wrong@example.com",
+        "reason": None,
+        "expires_at": None,
+        "refresh_failures": 0,
         "login_in_progress": False,
         "login_id": None,
     }]

@@ -350,6 +350,37 @@ def _account_state(row: Any, binding: dict[str, Any] | None, now: datetime) -> s
     return "ok"
 
 
+def _needs_login_detail(binding: dict[str, Any] | None) -> dict[str, Any]:
+    """'재로그인 필요' 사유와 만료 시각. 화면이 '(토큰 만료 MM/DD HH:MM)' 으로 그린다.
+
+    시각은 KST 로 말아 label 에 담는다 — 화면은 그대로 붙이면 된다.
+    """
+    binding = binding or {}
+    reason = binding.get("reason") if binding.get("needs_login") else None
+    expires_at = binding.get("expires_at")
+    label = None
+    if binding.get("needs_login"):
+        label = "재로그인 필요"
+        if reason == "token_expired" and expires_at:
+            try:
+                kst = datetime.fromisoformat(str(expires_at)).astimezone(timezone(timedelta(hours=9)))
+                label += f"(토큰 만료 {kst:%m/%d %H:%M})"
+            except ValueError:
+                label += "(토큰 만료)"
+        elif reason == "token_expired":
+            label += "(토큰 만료)"
+        elif reason in ("refresh_missing", "credential_missing"):
+            label += "(갱신 토큰 없음)"
+        elif reason == "account_mismatch":
+            label += "(계정 불일치)"
+    return {
+        "needs_login_reason": reason,
+        "credential_expires_at": expires_at,
+        "refresh_failures": int(binding.get("refresh_failures") or 0),
+        "needs_login_label": label,
+    }
+
+
 _ACCOUNT_EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 
 
@@ -404,6 +435,7 @@ def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str
         "state": state,
         "bound": bool(binding and binding.get("bound")),
         "needs_login": bool(binding and binding.get("needs_login")),
+        **_needs_login_detail(binding),
         "binding_mismatch": False,
         "actual_account": email,
         "login_in_progress": False,
@@ -526,7 +558,7 @@ async def llm_overview() -> dict[str, Any]:
                 # Treat a wrong-account credential as unavailable.  Keeping it
                 # "bound" while showing that account's quota under another email is
                 # more dangerous than asking for login again.
-                binding = {**binding, "needs_login": True}
+                binding = {**binding, "needs_login": True, "reason": "account_mismatch"}
             sub = (
                 slot_subscriptions.get(slot[4:] if slot and slot.startswith("slot") else "")
                 if provider == "anthropic" else None
@@ -546,6 +578,11 @@ async def llm_overview() -> dict[str, Any]:
                 "state": "needs_login" if quarantined_slot4 else _account_state(row, binding, now),
                 "bound": bool(binding and binding.get("bound")),
                 "needs_login": quarantined_slot4 or bool(binding and binding.get("needs_login")),
+                **_needs_login_detail(
+                    {**(binding or {}), "needs_login": True, "reason": "quarantined"}
+                    if quarantined_slot4 and not (binding and binding.get("needs_login"))
+                    else binding
+                ),
                 "binding_mismatch": binding_mismatch,
                 "actual_account": (binding or {}).get("actual_account"),
                 "login_in_progress": bool(binding and binding.get("login_in_progress")),

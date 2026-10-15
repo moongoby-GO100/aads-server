@@ -41,6 +41,11 @@ _CHECK_INTERVAL_SEC = int(os.getenv("SLOT_TOKEN_HEALTH_INTERVAL_SEC", "600"))
 # slot -> {"alive": bool, "checked_at": epoch, "status": int}
 _state: Dict[str, Dict[str, Any]] = {}
 
+# 자격 파일 만료 감시. slot -> 마지막 판정, 이미 알린 (slot, 사유).
+_expiry_state: Dict[str, Dict[str, Any]] = {}
+_expiry_alerted: set = set()
+_EXPIRY_ALERT_DEDUPE_MIN = 720
+
 
 def snapshot() -> Dict[str, Dict[str, Any]]:
     """화면이 쓰는 마지막 확인 결과."""
@@ -113,6 +118,84 @@ async def check_slot(slot: str) -> Dict[str, Any]:
     return result
 
 
+async def _fetch_claude_bindings() -> list:
+    """자격 파일은 호스트에만 있다 — 릴레이 /account-bindings 로 읽는다. 실패하면 예외."""
+    import httpx
+
+    from app.api.ops import _CLAUDE_RELAY_URL, _load_relay_secret
+
+    headers = {}
+    secret = _load_relay_secret()
+    if secret:
+        headers["X-Claude-Relay-Secret"] = secret
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=2.0)) as client:
+        resp = await client.get(f"{_CLAUDE_RELAY_URL}/account-bindings", headers=headers)
+    resp.raise_for_status()
+    return [b for b in (resp.json().get("bindings") or [])
+            if str(b.get("target", "")).startswith("claude:")]
+
+
+async def check_credential_expiry(bindings: list | None = None,
+                                  disabled_slots: set | None = None) -> Dict[str, Dict[str, Any]]:
+    """활성 Claude 슬롯 전체의 자격 파일을 본다. 만료+유예 경과/갱신 토큰 없음이면 1회 알린다.
+
+    판정은 account_login.claude_credential_status 와 같은 것을 쓴다(릴레이가 계산해 넘긴
+    needs_login/reason). 격리·전환은 하지 않는다 — 감시와 알림만.
+    """
+    if bindings is None:
+        bindings = await _fetch_claude_bindings()
+    if disabled_slots is None:
+        try:
+            from app.core.auth_provider import get_disabled_anthropic_slots
+
+            disabled_slots = {str(x) for x in await get_disabled_anthropic_slots()}
+        except Exception:
+            disabled_slots = set()
+
+    seen: Dict[str, Dict[str, Any]] = {}
+    for b in bindings:
+        slot = str(b.get("target", "")).split(":", 1)[-1]
+        if not slot or slot in disabled_slots:
+            continue
+        reason = b.get("reason") if b.get("needs_login") else None
+        seen[slot] = {"slot": slot, "needs_login": bool(b.get("needs_login")),
+                      "reason": reason, "expires_at": b.get("expires_at"),
+                      "refresh_failures": int(b.get("refresh_failures") or 0),
+                      "checked_at": time.time()}
+
+    _expiry_state.clear()
+    _expiry_state.update(seen)
+    # 회복된 슬롯은 다음 만료 때 다시 알릴 수 있게 기억에서 뺀다.
+    _expiry_alerted.intersection_update(
+        {(sl, v["reason"]) for sl, v in seen.items() if v["needs_login"]})
+
+    for slot, v in seen.items():
+        if not v["needs_login"] or v["reason"] not in ("token_expired", "refresh_missing"):
+            continue
+        logger.warning("slot_token_expired slot=%s reason=%s expires_at=%s refresh_failures=%s",
+                       slot, v["reason"], v["expires_at"], v["refresh_failures"])
+        key = (slot, v["reason"])
+        if key in _expiry_alerted:
+            continue
+        _expiry_alerted.add(key)
+        try:
+            from app.services import ohvis_alert
+
+            what = ("액세스 토큰이 만료되고 유예 시간이 지났습니다"
+                    if v["reason"] == "token_expired" else "갱신 토큰이 없습니다")
+            await ohvis_alert.notify(
+                "슬롯 %s 재로그인 필요 — %s" % (slot, v["reason"]),
+                "%s (만료 %s, 연속 갱신 실패 %d회). 설정 화면에서 재로그인하세요."
+                % (what, v["expires_at"] or "알 수 없음", v["refresh_failures"]),
+                severity=ohvis_alert.CRITICAL,
+                category="oauth_slot", project="AADS",
+                dedupe_minutes=_EXPIRY_ALERT_DEDUPE_MIN,
+            )
+        except Exception:
+            pass
+    return seen
+
+
 async def slot_token_health_poller(interval_sec: int = 0) -> None:
     """살아 있는지만 주기적으로 본다. 한도를 쓰지 않으므로 자주 봐도 된다."""
     import asyncio
@@ -122,10 +205,14 @@ async def slot_token_health_poller(interval_sec: int = 0) -> None:
     interval = interval_sec or _CHECK_INTERVAL_SEC
     while True:
         try:
-            # 리프레시가 되는 슬롯(1·2)은 keeper 가 지킨다. 여기서는 스스로
-            # 갱신하지 못하는 슬롯만 본다.
+            # 생사 호출은 스스로 갱신하지 못하는 슬롯만 한다. 만료 감시는
+            # 아래 check_credential_expiry 가 활성 슬롯 전체를 파일 기준으로 본다.
             for slot in sorted(LAST_RESORT_SLOTS):
                 await check_slot(slot)
         except Exception as exc:
             logger.warning("slot_token_health_poller_error error=%s", str(exc)[:160])
+        try:
+            await check_credential_expiry()
+        except Exception as exc:
+            logger.warning("slot_credential_expiry_check_failed error=%s", str(exc)[:160])
         await asyncio.sleep(interval)
