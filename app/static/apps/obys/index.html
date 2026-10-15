@@ -6940,11 +6940,16 @@
       return !employeePreview && hasServerAuth() && Boolean(authPermissions().can_manage_settings || authPermissions().can_manage_automation);
     }
 
-    function isEmployeeExperience() {
-      if (employeePreview) return true;
+    // 실제 직원 계정인가 — employeePreview(관리자 미리보기)는 포함하지 않는다.
+    function isEmployeeAccount() {
       const permissions = authPermissions();
       const role = String(permissions.role || "").trim().toLowerCase();
       return ["employee", "employee_pending", "employee_rejected"].includes(role) || Boolean(permissions.employee_request_status);
+    }
+
+    function isEmployeeExperience() {
+      if (employeePreview) return true;
+      return isEmployeeAccount();
     }
 
     function allowedViews() {
@@ -13237,7 +13242,18 @@
       if (params.has("yf_invite_token") || params.has("invite_token")) return false;
       const hash = String(window.location.hash || "").replace(/^#/, "");
       if (hash.startsWith("invite") || pendingPhoneInviteToken) return false;
+      // 직원은 관리자용 V4.1 이 아니라 이 화면의 계약서·서류(onboarding)로 들어간다. 미리보기는 관리자이므로 제외.
+      if (hasServerAuth() && isEmployeeAccount()) return false;
       return hasServerAuth();
+    }
+
+    // /auth/login 응답에는 권한이 없어 sessionFromAuthPayload 가 직원도 role "member" 로 만든다.
+    // 서버 /session 으로 확인한 적이 없으면(permissions_verified 없음) 먼저 한 번 확인한 뒤 판정한다.
+    // 확인이 실패하면 기존 동작(V4.1)을 유지해 관리자가 권한 로드 지연으로 못 들어가는 일이 없게 한다.
+    async function shouldOpenV41AppVerified() {
+      if (!shouldOpenV41App()) return false;
+      if (authSession?.permissions_verified !== true) await refreshFinanceSession();
+      return shouldOpenV41App();
     }
 
     function openV41App() {
@@ -14455,7 +14471,7 @@
       els.loginForm.reset();
       els.gateLoginForm.reset();
       if (followPostLoginRedirect()) return;
-      if (shouldOpenV41App() && openV41App()) return;
+      if (await shouldOpenV41AppVerified() && openV41App()) return;
       setView(savedUiView() || defaultView());
       renderAuthState();
       refreshFinanceSessionInBackground();
@@ -14672,6 +14688,7 @@
         } else if (selfSignup && selfSignup.status !== "approved") {
           payload.permissions = employeePendingPermissions(selfSignup.status, selfSignup.requestId);
         }
+        if (payload && typeof payload === "object") payload.permissions_verified = true;
         saveAuthSession(payload);
         return payload;
       } catch (err) {
@@ -17044,7 +17061,7 @@
       renderAll();
       const rememberedRecipeRedirect = rememberPostLoginRedirectFromUrl();
       syncServerAuthCookieFromStorage();
-      if (!rememberedRecipeRedirect && shouldOpenV41App() && openV41App()) return;
+      if (!rememberedRecipeRedirect && await shouldOpenV41AppVerified() && openV41App()) return;
       restoreUiState();
       readInviteTokenFromUrl();
       applyAuthHashDeepLink();

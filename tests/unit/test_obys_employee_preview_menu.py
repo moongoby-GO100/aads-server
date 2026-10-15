@@ -391,6 +391,7 @@ def test_picker_and_handoff_execute_in_node(tmp_path):
             _function_source(INDEX, "canManageAutomation"),
             _function_source(INDEX, "canManageOnboarding"),
             _function_source(INDEX, "canManageSettings"),
+            _function_source(INDEX, "isEmployeeAccount"),
             _function_source(INDEX, "isEmployeeExperience"),
             _function_source(INDEX, "allowedViews"),
             _function_source(INDEX, "defaultView"),

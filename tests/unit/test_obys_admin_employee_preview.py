@@ -292,6 +292,7 @@ def test_preview_lifecycle_and_write_block_execute_in_node(tmp_path):
             _function_source("canManageAutomation"),
             _function_source("canManageOnboarding"),
             _function_source("canManageSettings"),
+            _function_source("isEmployeeAccount"),
             _function_source("isEmployeeExperience"),
             _function_source("allowedViews"),
             _function_source("defaultView"),

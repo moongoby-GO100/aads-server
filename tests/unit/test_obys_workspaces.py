@@ -322,7 +322,7 @@ def test_operational_obys_enters_v41_after_login_with_legacy_recovery():
     prd = Path("docs/PRD-OBYS-MOCKUP-V4-1-FINAL.md").read_text(encoding="utf-8")
 
     assert 'const V41_APP_PATH = "/static/apps/obys/mockup-v4-1.html"' in index
-    assert "shouldOpenV41App() && openV41App()" in index
+    assert "await shouldOpenV41AppVerified() && openV41App()" in index
     assert 'params.get("legacy") === "1"' in index
     assert 'id="businessSelect"' in v41
     assert 'id="legacyBtn"' in v41
