@@ -150,6 +150,37 @@ def test_purge_urls_include_every_top_level_html_and_webmanifest_as_bare_urls(tm
     assert f"{base}/inner.html" not in urls and f"{base}/modules/inner.html" not in urls
 
 
+def test_purge_urls_include_icons_directory_files_as_bare_urls_but_not_subfolders(tmp_path):
+    d = _obys_tree(tmp_path)
+    (d / "icons" / "sub").mkdir(parents=True)
+    (d / "icons" / "b.svg").write_text("<svg/>", encoding="utf-8")
+    (d / "icons" / "a.png").write_bytes(b"\x89PNG")
+    (d / "icons" / "sub" / "c.png").write_bytes(b"\x89PNG")
+    urls = tool.purge_urls(d, SHA, "https://fb.newtalk.kr/")
+    base = "https://fb.newtalk.kr/static/apps/obys"
+    assert f"{base}/icons/a.png" in urls and f"{base}/icons/b.svg" in urls
+    assert urls.index(f"{base}/icons/a.png") < urls.index(f"{base}/icons/b.svg")
+    assert not [u for u in urls if "c.png" in u or "/icons/sub" in u]
+    assert not [u for u in urls if "/icons/" in u and "?v=" in u]
+    assert urls[:2] == [f"{base}/index.html", f"{base}/sw.js"]
+    assert len(urls) == len(set(urls))
+
+
+def test_purge_urls_without_an_icons_directory_are_unchanged(tmp_path):
+    d = _obys_tree(tmp_path)
+    before = tool.purge_urls(d, SHA, "https://fb.newtalk.kr")
+    assert not [u for u in before if "/icons/" in u]
+    (d / "icons").mkdir()
+    assert tool.purge_urls(d, SHA, "https://fb.newtalk.kr") == before
+
+
+def test_the_real_obys_tree_purges_the_new_app_icons(tmp_path):
+    urls = tool.purge_urls(ROOT / "app/static/apps/obys", SHA, "https://fb.newtalk.kr")
+    base = "https://fb.newtalk.kr/static/apps/obys/icons"
+    assert f"{base}/obys-app-192.png" in urls and f"{base}/obys-app.svg" in urls
+    assert len(urls) == len(set(urls))
+
+
 def test_purge_splits_a_large_top_level_url_list_into_chunks_of_at_most_30(tmp_path):
     d = _obys_tree(tmp_path)
     for i in range(40):

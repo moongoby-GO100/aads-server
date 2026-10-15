@@ -82,7 +82,7 @@ def stamp_tree(obys_dir, version):
 
 def purge_urls(obys_dir, version, host_url):
     """index.html, sw.js, every module the shells load (bare + ?v=<version>), then every other top-level
-    *.html / *.webmanifest as a bare URL (they are requested unstamped), deduplicated in order."""
+    *.html / *.webmanifest and every file directly in icons/ as a bare URL (requested unstamped), deduplicated in order."""
     _check_version(version)
     base = host_url.rstrip("/")
     root = Path(obys_dir)
@@ -92,6 +92,9 @@ def purge_urls(obys_dir, version, host_url):
             urls += [base + path, "%s%s?v=%s" % (base, path, version)]
     for pattern in ("*.html", "*.webmanifest"):
         urls += [base + "/static/apps/obys/" + f.name for f in sorted(root.glob(pattern)) if f.is_file()]
+    icons = root / "icons"
+    if icons.is_dir():
+        urls += [base + "/static/apps/obys/icons/" + f.name for f in sorted(icons.iterdir()) if f.is_file()]
     return list(dict.fromkeys(urls))
 
 
