@@ -2996,6 +2996,7 @@
   <link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20261014-r1">
   <link rel="stylesheet" href="/static/apps/obys/modules/clobe-collection.css?v=20261014-r1">
   <link rel="stylesheet" href="/static/apps/obys/modules/data-overview.css?v=20261014-r1">
+  <link rel="stylesheet" href="/static/apps/obys/modules/employee-portal.css?v=20261015-r1">
   <style>
     /* 사업자(대표) 회원가입 진입 — 로그인 전에만 보인다. 헤더의 로그인/회원가입 버튼은
        renderAuthState 가 항상 hidden 으로 두므로 별도 앵커로 노출한다. */
@@ -3164,6 +3165,8 @@
         </section>
       </div>
     </section>
+
+    <div id="employeePortal" class="ep-root hidden" aria-label="직원 화면"></div>
 
     <div id="appShell" class="app-shell app-only hidden">
       <aside class="app-sidebar" aria-label="오비서 주요 메뉴">
@@ -5637,6 +5640,7 @@
   </div>
 
   <script src="/static/apps/obys/modules/app-config.js"></script>
+  <script src="/static/apps/obys/modules/employee-portal.js?v=20261015-r1"></script>
   <script>
     const STORE_KEY = "yeoljeong-finance-v1";
     const AUTH_USER_KEY = "yeoljeong-finance-auth-user";
@@ -7049,6 +7053,72 @@
       const rows = scopedShifts();
       return isEmployeeExperience() ? rows.filter(isCurrentEmployeeRecord) : rows;
     }
+
+    // EMPLOYEE-PORTAL:BEGIN
+    // 직원(또는 관리자 '직원 화면 보기')은 기존 직원 탭 대신 modules/employee-portal.js 의 포털(#employeePortal)을 본다.
+    // 포털은 아래 bridge 로 이 화면이 이미 불러온 데이터와 기존 경로(contractPreviewHtml, POST /contracts/signing,
+    // downloadSignedContractPdf, setView)만 쓴다. 관리자 화면·V4.1 이동(shouldOpenV41App)은 바꾸지 않는다.
+    let employeePortalBridgeCache = null;
+    let employeePortalSyncQueued = false;
+
+    function employeePortalActive() {
+      return hasServerAuth() && isEmployeeExperience();
+    }
+
+    function employeePortalBridge() {
+      if (employeePortalBridgeCache) return employeePortalBridgeCache;
+      employeePortalBridgeCache = {
+        get root() { return document.getElementById("employeePortal"); },
+        get active() { return employeePortalActive(); },
+        get readOnly() { return Boolean(employeePreview); },
+        get employeeEmail() { return currentEmployeeEmail(); },
+        get employeeName() { return currentEmployeeName(); },
+        get currentView() { return currentView; },
+        get today() { return kstDate(); },
+        get contracts() { return visibleContracts(); },
+        get pendingSign() { return pendingSignContracts; },
+        get payroll() { return visiblePayrollStatements(); },
+        get onboardingDocs() { return visibleOnboardingDocuments(); },
+        get requiredDocTypes() { return requiredOnboardingDocumentTypes(); },
+        labels: { contractType: contractTypeLabels },
+        contractPreviewHtml,
+        financeApi,
+        setView,
+        showToast,
+        handleExpiredServerSession,
+        downloadPdf: downloadSignedContractPdf,
+        reloadContracts: () => trackViewLoad("contracts", "contracts", loadEmployeeContracts(), "계약서 조회 실패"),
+        logout: () => logoutFromServer(),
+        onSigned: employeePortalSigned
+      };
+      return employeePortalBridgeCache;
+    }
+
+    // submitContractSignature 성공 후 처리와 같다(목록 갱신·서명 안내 갱신). 화면 전환은 포털이 한다.
+    function employeePortalSigned(payload) {
+      const signed = payload?.contract;
+      if (signed?.id) state.contracts = [signed, ...(state.contracts || []).filter(item => item.id !== signed.id)];
+      pendingContractSignToken = "";
+      saveState();
+      renderContracts();
+      if ((payload?.bundle?.results || []).length > 1) loadEmployeeContracts().catch(() => {});
+      signSheetShown = true;
+      refreshSignPrompt().catch(() => {});
+    }
+
+    function syncEmployeePortal() {
+      employeePortalSyncQueued = false;
+      if (typeof window === "undefined" || !window.obysEmployeePortal) return;
+      window.obysEmployeePortal.sync(employeePortalBridge());
+    }
+
+    function queueEmployeePortalSync() {
+      if (employeePortalSyncQueued) return;
+      employeePortalSyncQueued = true;
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(syncEmployeePortal);
+      else setTimeout(syncEmployeePortal, 0);
+    }
+    // EMPLOYEE-PORTAL:END
 
     function applyAccessPolicy() {
       syncEmployeePreviewSession();
@@ -8525,6 +8595,7 @@
     }
 
     function renderOnboarding() {
+      queueEmployeePortalSync();
       const docs = visibleOnboardingDocuments().slice().sort((a, b) => String(b.uploaded_at).localeCompare(String(a.uploaded_at)));
       if (!hasServerAuth()) {
         els.onboardingSummary.textContent = "로그인 필요";
@@ -8570,6 +8641,7 @@
     }
 
     function renderContracts() {
+      queueEmployeePortalSync();
       const employeeMode = isEmployeeExperience();
       const managerMode = canManageOnboarding();
       const contracts = visibleContracts().slice().sort((a, b) => String(b.updatedAt || b.updated_at || b.createdAt || b.created_at).localeCompare(String(a.updatedAt || a.updated_at || a.createdAt || a.created_at)));
@@ -8625,6 +8697,7 @@
     }
 
     function renderPayroll() {
+      queueEmployeePortalSync();
       const employeeMode = isEmployeeExperience();
       const managerMode = canManageOnboarding();
       const rows = visiblePayrollStatements().slice().sort((a, b) => String(b.updated_at || b.updatedAt || b.period || "").localeCompare(String(a.updated_at || a.updatedAt || a.period || "")));
@@ -9403,6 +9476,12 @@
         showToast("서명 요청 상태인 계약서만 서명할 수 있습니다.");
         return;
       }
+      if (employeePortalActive() && window.obysEmployeePortal) {
+        // 직원 포털: 같은 계약을 '계약서 읽기 → 동의·서명 → 완료' 화면으로 연다(서명 링크·로그인 안내 시트 모두).
+        syncEmployeePortal();
+        window.obysEmployeePortal.openContract(contract, bundle, { token: contract.sign_token || pendingContractSignToken });
+        return;
+      }
       if (canManageOnboarding()) {
         showToast("관리자는 직원 대신 서명할 수 없습니다. 직원 본인에게 서명 링크를 전달하십시오.");
         return;
@@ -9682,6 +9761,7 @@
     }
 
     function renderSignPendingStrip() {
+      queueEmployeePortalSync();
       const count = pendingSignContracts.length;
       els.signPendingStrip.classList.toggle("hidden", !count);
       els.signPendingStripText.textContent = `서명 대기 ${count}건 · 지금 서명`;
@@ -9726,7 +9806,8 @@
       renderSignPendingStrip();
       const linkOpening = new URLSearchParams(window.location.search).has("yf_contract_token")
         || !els.contractSignModal.classList.contains("hidden");
-      if (pendingSignContracts.length && !signSheetShown && !signPromptDismissed() && !linkOpening) openSignPromptSheet();
+      // 직원 포털은 홈 맨 위 '서명이 필요합니다' 카드가 이 안내를 대신한다.
+      if (pendingSignContracts.length && !signSheetShown && !signPromptDismissed() && !linkOpening && !employeePortalActive()) openSignPromptSheet();
     }
 
     async function startPendingSigning() {
@@ -12121,6 +12202,7 @@
       renderClosing();
       renderOperationalPages();
       renderBusinessPage();
+      syncEmployeePortal();
     }
 
     // ── L3 오늘 홈: 기존 financeApi 경로만 병렬 호출해 카드별로 독립 집계한다(서버 변경 없음). ──
@@ -12559,6 +12641,7 @@
       }
       saveUiState();
       syncBottomTabs();
+      queueEmployeePortalSync();
       applyAccessPolicy();
     }
 

@@ -1,0 +1,188 @@
+/* 오비서 직원 포털 — mockup-employee-contract-v1.html 의 화면 1~5 스타일.
+   목업 CSS 를 그대로 옮기되 모든 선택자를 .ep-root / .ep- 접두로 감싸 index.html 스타일과 섞이지 않게 한다.
+   PC(목업 .pc) 와 모바일(목업 .phone, 760px 이하) 두 벌이다. */
+
+.ep-root {
+  --ep-bg: #f3f5f9; --ep-card: #fff; --ep-ink: #0f172a; --ep-sub: #475569; --ep-mute: #94a3b8; --ep-line: #e2e8f0;
+  --ep-blue: #2563eb; --ep-blue-soft: #eff4ff; --ep-green: #16a34a; --ep-green-soft: #ecfdf3;
+  --ep-amber: #d97706; --ep-amber-soft: #fff7e6; --ep-red: #dc2626; --ep-radius: 14px;
+  min-height: 100vh;
+  background: var(--ep-bg);
+  color: var(--ep-ink);
+  font: 14px/1.55 "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+}
+.ep-root.hidden { display: none; }
+.ep-root *, .ep-root *::before, .ep-root *::after { box-sizing: border-box; }
+.ep-root h1, .ep-root h2, .ep-root h3, .ep-root h4, .ep-root h5, .ep-root p { margin: 0; }
+
+/* 포털이 켜지면 관리자 머리줄·사이드·하단탭은 감추고, 급여명세·근태·입사서류는 기존 직원 보기를 포털 메뉴 아래에 그대로 쓴다. */
+body.ep-on .shell > .topbar > .topbar-inner { display: none !important; }
+body.ep-on:not(.ep-legacy) #appShell { display: none !important; }
+body.ep-on.ep-legacy #appShell { grid-template-columns: minmax(0, 1fr) !important; }
+body.ep-on #appShell .app-sidebar,
+body.ep-on #bottomTabs,
+body.ep-on #bottomMoreSheet { display: none !important; }
+body.ep-on.ep-legacy .ep-body { display: none; }
+/* 기존 직원 보기의 머리줄에서는 '출퇴근 하기' 링크만 남긴다 — 화면 이동은 포털 메뉴가 한다. */
+body.ep-on.ep-legacy #appFilters { top: 56px; }
+body.employee-preview.ep-on.ep-legacy #appFilters { top: 100px; }
+body.ep-on.ep-legacy #appFilters .sub-tabs > .tab[data-view],
+body.ep-on.ep-legacy #appFilters #csvBtn { display: none !important; }
+body.ep-on .sign-pending-strip { display: none !important; }
+body.ep-on .shell > .topbar { position: static; min-height: 0; padding: 0; border: 0; box-shadow: none; background: transparent; }
+body.employee-preview .ep-top, body.employee-preview .ep-m-head { top: 44px; }
+
+/* PC 머리줄 (목업 .pc-top) */
+.ep-top { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 14px; height: 56px; padding: 0 22px; background: #fff; border-bottom: 1px solid var(--ep-line); }
+.ep-logo { display: flex; align-items: center; gap: 8px; font-weight: 800; }
+.ep-logo i { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--ep-blue); color: #fff; font-style: normal; font-size: 13px; }
+.ep-pc-nav { display: flex; gap: 4px; margin-left: 18px; }
+.ep-pc-nav button { position: relative; padding: 8px 14px; border: 0; border-radius: 9px; background: transparent; color: var(--ep-sub); font: inherit; font-weight: 700; cursor: pointer; }
+.ep-pc-nav button.on { background: var(--ep-blue-soft); color: var(--ep-blue); }
+.ep-dot { position: absolute; top: 4px; right: 4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: var(--ep-red); color: #fff; font-size: 10px; line-height: 16px; text-align: center; }
+.ep-who { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--ep-sub); font-size: 13px; }
+.ep-who b { color: var(--ep-ink); }
+
+/* 모바일 머리줄 (목업 .ph-head) — PC 에서는 숨김 */
+.ep-m-head { display: none; align-items: center; gap: 8px; padding: 10px 16px 12px; background: #fff; border-bottom: 1px solid var(--ep-line); }
+.ep-m-head h3 { font-size: 17px; }
+.ep-m-head .ep-back { display: grid; place-items: center; width: 32px; min-height: 44px; border: 0; background: transparent; font-size: 20px; color: var(--ep-sub); cursor: pointer; padding: 0; }
+
+.ep-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--ep-line); background: #fff; color: var(--ep-ink); font: inherit; font-weight: 700; cursor: pointer; text-decoration: none; }
+.ep-btn.primary { background: var(--ep-blue); border-color: var(--ep-blue); color: #fff; }
+.ep-btn.primary:disabled { background: #cbd5e1; border-color: #cbd5e1; cursor: not-allowed; }
+.ep-btn:disabled { cursor: not-allowed; opacity: .75; }
+.ep-btn.ghost { border-color: transparent; background: transparent; color: var(--ep-sub); }
+.ep-btn.lg { min-height: 52px; font-size: 16px; border-radius: 12px; }
+.ep-btn.block { width: 100%; }
+.ep-link { border: 0; padding: 0; background: none; color: var(--ep-blue); font: inherit; text-decoration: underline; cursor: pointer; }
+.ep-link:disabled { color: var(--ep-mute); cursor: not-allowed; }
+
+.ep-body { max-width: 1280px; margin: 0 auto; padding: 24px 28px; }
+.ep-body.ep-tight { padding: 18px 22px; }
+.ep-card { background: var(--ep-card); border: 1px solid var(--ep-line); border-radius: var(--ep-radius); }
+.ep-hello h3 { font-size: 20px; }
+.ep-hello p { color: var(--ep-sub); margin-top: 2px; }
+.ep-todo { display: flex; align-items: center; gap: 16px; padding: 18px 20px; margin-top: 16px; border-color: #bfd2ff; background: linear-gradient(0deg, #fff, #f5f8ff); }
+.ep-todo .ep-ic { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: var(--ep-blue); color: #fff; font-size: 20px; flex: none; }
+.ep-todo-main { display: flex; gap: 16px; align-items: center; }
+.ep-todo b { font-size: 16px; }
+.ep-todo p { color: var(--ep-sub); }
+.ep-todo .ep-btn { margin-left: auto; }
+.ep-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 16px; }
+.ep-tile { padding: 16px 18px; }
+.ep-tile small { color: var(--ep-sub); font-weight: 700; }
+.ep-tile b { display: block; font-size: 18px; margin-top: 4px; }
+.ep-tile > span { color: var(--ep-mute); font-size: 12px; }
+.ep-badge { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 99px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.ep-badge.req { background: var(--ep-amber-soft); color: var(--ep-amber); }
+.ep-badge.ok { background: var(--ep-green-soft); color: var(--ep-green); }
+.ep-badge.old { background: #f1f5f9; color: var(--ep-sub); }
+
+/* 2. 목록 */
+.ep-list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 12px; }
+.ep-seg { display: inline-flex; padding: 3px; border-radius: 10px; background: #e8edf5; }
+.ep-seg button { border: 0; background: transparent; padding: 6px 12px; border-radius: 8px; font: inherit; font-weight: 700; color: var(--ep-sub); cursor: pointer; white-space: nowrap; }
+.ep-seg button.on { background: #fff; color: var(--ep-ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.ep-crow { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--ep-line); }
+.ep-crow:last-child { border-bottom: 0; }
+.ep-crow h4 { margin: 0 0 3px; font-size: 15px; }
+.ep-crow p { color: var(--ep-sub); font-size: 13px; }
+.ep-crow .ep-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.ep-crow.req { background: #fffdf7; }
+.ep-crow-actions { display: flex; gap: 8px; }
+.ep-empty { padding: 28px 20px; text-align: center; display: grid; gap: 12px; justify-items: center; }
+.ep-empty p { color: var(--ep-sub); }
+
+/* 3·4. 읽기 + 서명 (PC: 왼쪽 전문, 오른쪽 요약·서명) */
+.ep-read { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; }
+.ep-paper { background: #fff; border: 1px solid var(--ep-line); border-radius: var(--ep-radius); overflow: auto; padding: 28px 34px; max-height: calc(100vh - 56px - 36px); }
+.ep-paper.ep-dim { opacity: .55; }
+.ep-read > * { min-width: 0; }
+.ep-paper .contract-a4-paper { width: auto; min-height: 0; margin: 0; max-width: none; box-shadow: none; border: 0; padding: 0; }
+.ep-paper-end { margin-top: 14px; color: var(--ep-sub); font-size: 12px; text-align: center; }
+.ep-side-sum { display: flex; flex-direction: column; gap: 12px; align-self: start; position: sticky; top: 74px; }
+body.employee-preview .ep-side-sum { top: 118px; }
+.ep-sum { padding: 16px; }
+.ep-sum h4 { margin: 0 0 10px; font-size: 14px; }
+.ep-kv { display: grid; grid-template-columns: 88px 1fr; gap: 6px 10px; font-size: 13px; margin: 0; }
+.ep-kv dt { color: var(--ep-sub); }
+.ep-kv dd { margin: 0; font-weight: 700; }
+.ep-progress { height: 6px; border-radius: 9px; background: #e2e8f0; overflow: hidden; }
+.ep-progress i { display: block; height: 100%; background: var(--ep-blue); width: 0; transition: width .15s; }
+.ep-read-hint { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--ep-sub); }
+.ep-read-hint .ep-progress { flex: 1; }
+.ep-label { display: block; font-size: 12px; font-weight: 700; color: var(--ep-sub); margin-bottom: 6px; }
+.ep-input { width: 100%; min-height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--ep-line); background: #fff; color: var(--ep-ink); font: inherit; font-weight: 600; }
+.ep-check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; min-height: 44px; padding: 4px 0; cursor: pointer; }
+.ep-check input { width: 18px; height: 18px; margin-top: 1px; flex: none; }
+.ep-pad { position: relative; height: 120px; border: 1.5px dashed #94a3b8; border-radius: 12px; background: #fafbfc; touch-action: none; }
+.ep-pad canvas { width: 100%; height: 100%; display: block; }
+.ep-pad span { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ep-mute); pointer-events: none; font-size: 13px; }
+.ep-pad.has-ink span { display: none; }
+.ep-pad-tools { display: flex; justify-content: flex-end; }
+.ep-pad-tools .ep-btn { min-height: 44px; }
+.ep-note { font-size: 12px; color: var(--ep-sub); }
+.ep-error { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: #fef2f2; color: var(--ep-red); font-size: 13px; font-weight: 700; }
+.ep-done { display: grid; place-items: center; text-align: center; gap: 10px; padding: 40px; }
+.ep-done .ep-big { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 50%; background: var(--ep-green-soft); color: var(--ep-green); font-size: 32px; font-weight: 800; }
+.ep-done-actions { display: flex; gap: 10px; margin-top: 6px; }
+
+/* 모바일 전용 요소 — PC 에서는 숨김 */
+.ep-tabbar, .ep-sticky, .ep-sum-chips, .ep-dim-layer, .ep-m-only { display: none; }
+
+@media (max-width: 760px) {
+  .ep-pc-only, .ep-top { display: none !important; }
+  .ep-m-only { display: initial; }
+  .ep-m-head { display: flex; position: sticky; top: 0; z-index: 20; }
+  .ep-body, .ep-body.ep-tight { padding: 16px 16px calc(72px + env(safe-area-inset-bottom)); }
+  .ep-root.ep-no-tabbar .ep-body { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
+
+  /* 하단 탭 (목업 .tabbar) */
+  .ep-tabbar { display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: #fff; border-top: 1px solid var(--ep-line); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); }
+  .ep-tabbar button { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 44px; padding: 6px 0; border: 0; background: transparent; color: var(--ep-mute); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+  .ep-tabbar button i { font-style: normal; font-size: 19px; }
+  .ep-tabbar button.on { color: var(--ep-blue); }
+  .ep-tabbar .ep-dot { top: 2px; right: 18px; }
+  body.ep-on.ep-legacy main { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+  body.ep-on.ep-legacy #appFilters { top: 0; }
+  body.employee-preview.ep-on.ep-legacy #appFilters { top: 44px; }
+
+  .ep-hello h3 { font-size: 18px; }
+  .ep-todo { flex-direction: column; align-items: stretch; gap: 10px; margin-top: 12px; }
+  .ep-todo-main { gap: 12px; }
+  .ep-todo .ep-btn { margin-left: 0; }
+  .ep-grid3 { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .ep-grid3 .ep-tile b { font-size: 15px; }
+  .ep-list-head h3 { display: none; }
+  .ep-list-head { margin-bottom: 12px; }
+  .ep-seg { display: flex; width: 100%; overflow: auto; }
+  .ep-seg button { min-height: 40px; }
+  .ep-crow { grid-template-columns: 1fr; gap: 10px; }
+  .ep-crow .ep-btn { width: 100%; }
+  .ep-crow-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .ep-crow-actions.single { grid-template-columns: 1fr; }
+
+  /* 3. 모바일 읽기 — 위 요약 칩 4개, 아래 전문, 하단 고정 버튼 */
+  .ep-read { grid-template-columns: 1fr; }
+  .ep-side-sum { display: none; }
+  .ep-sum-chips { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+  .ep-sum-chips div { background: #fff; border: 1px solid var(--ep-line); border-radius: 12px; padding: 10px 12px; }
+  .ep-sum-chips small { display: block; color: var(--ep-sub); font-size: 11px; font-weight: 700; }
+  .ep-sum-chips b { font-size: 14px; }
+  .ep-paper { padding: 18px 16px; max-height: none; overflow-x: auto; }
+  .ep-sticky { display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: #fff; border-top: 1px solid var(--ep-line); padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }
+
+  /* 4. 모바일 서명 — 아래에서 올라오는 창 (PC 오른쪽 칸과 같은 양식을 화면 아래에 띄운다) */
+  .ep-dim-layer { display: block; position: fixed; inset: 0; z-index: 40; background: rgba(15,23,42,.35); }
+  .ep-side-sum.ep-sign-col { display: block; position: fixed; left: 0; right: 0; bottom: 0; top: auto !important; z-index: 41; }
+  .ep-sign-card { max-height: 92vh; overflow: auto; border: 0; border-radius: 22px 22px 0 0; box-shadow: 0 -10px 30px rgba(15,23,42,.18); padding: 10px 16px calc(24px + env(safe-area-inset-bottom)); }
+  .ep-sign-card .ep-grab { display: block; width: 40px; height: 5px; border-radius: 9px; background: #cbd5e1; margin: 0 auto 12px; }
+  .ep-sign-card h4 { font-size: 17px; margin-bottom: 10px; }
+  .ep-sign-card .ep-input { min-height: 48px; }
+  .ep-sign-card .ep-pad { height: 154px; }  /* 테두리 안 캔버스가 150px 이상 */
+
+  .ep-done { padding: 28px 16px; }
+  .ep-done-actions { flex-direction: column; width: 100%; }
+  .ep-done-actions .ep-btn { width: 100%; min-height: 52px; font-size: 16px; border-radius: 12px; }
+}

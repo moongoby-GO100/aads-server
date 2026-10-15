@@ -111,9 +111,11 @@ def test_the_real_shell_has_module_refs_and_a_stampable_service_worker(tmp_path)
     for name in ("index.html", "signup.html", "clock.html", "sw.js"):
         (d / name).write_bytes((ROOT / "app/static/apps/obys" / name).read_bytes())
     report = tool.stamp_tree(d, SHA)
-    assert report["sw"] == 1 and report["html"]["index.html"] == 10
+    # 12 = 기존 10 + 직원 포털(employee-portal.css·employee-portal.js, ACCT-OBYS-EMPLOYEE-PORTAL-MOCKUP-V1)
+    assert report["sw"] == 1 and report["html"]["index.html"] == 12
     text = (d / "index.html").read_text(encoding="utf-8")
-    for ref in ("app-config.js", "store-assistant-v2.js", "store-assistant-v2.css", "account-recovery.js"):
+    for ref in ("app-config.js", "store-assistant-v2.js", "store-assistant-v2.css", "account-recovery.js",
+                "employee-portal.js", "employee-portal.css"):
         assert f"/static/apps/obys/modules/{ref}?v={SHA}" in text
 
 
