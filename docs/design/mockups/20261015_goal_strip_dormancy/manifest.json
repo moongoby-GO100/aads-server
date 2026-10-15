@@ -1,0 +1,445 @@
+{
+ "_note": "토큰 확보 후 사용: review_create 를 POST /api/v1/projects/AADS/mockup-reviews 로, revision 을 POST /{id}/revisions 로(expected_generation 은 리뷰 응답값, idempotency_key 새로 생성, doc_refs 는 plan/prd/spec 정본 또는 면제 정책 참조 필요), 이후 /{id}/submit. approve/revoke 호출 금지(승인은 CEO 전용). [rev2 재작업: runner-f0e2a7a5 반려 3건(DO-2·DO-6·§6-1) 반영 — 기본 시안은 P0→P1·P2→💤 만, 🔄/⏳/미연결 은 goal-strip-icons-option 별도 시안]",
+ "review_create": {
+  "title": "채팅창 목표 띠 칩(우선순위·휴면·자동승인) + 휴면 정리 카드 목업",
+  "change_type": "modify",
+  "goal_id": "f4cfeb08-7abd-4a04-b9bc-93bbc7ced036",
+  "idempotency_key": "aads-goal-strip-dormancy-20261015-create"
+ },
+ "revision": {
+  "idempotency_key": "aads-goal-strip-dormancy-20261015-rev2",
+  "manifest": {
+   "screens": [
+    {
+     "screen_id": "goal-strip",
+     "title": "채팅창 상단 목표 띠 — 우선순위·휴면·자동승인 칩",
+     "route": "/chat",
+     "requirement_ids": [
+      "PR-3",
+      "PR-4",
+      "DO-1",
+      "AA-6"
+     ],
+     "states_not_applicable": {
+      "permission": "채팅 화면 안의 요소라 권한 오류 전용 화면이 없고 기존 채팅 오류 처리와 같다",
+      "session-expired": "로그인 만료는 공통 로그인 화면으로 이동하며 이 화면 고유 디자인이 없다",
+      "offline": "오프라인 전용 화면이 없고 기존 채팅 연결 오류 표시를 쓴다",
+      "loading": "목표 로딩은 기존 띠 처리를 유지하며 이번 변경 범위가 아니다",
+      "empty": "담당 목표가 없으면 기존처럼 띠 자체를 그리지 않는다",
+      "error": "목표 조회 실패는 기존 띠 처리를 유지한다"
+     }
+    },
+    {
+     "screen_id": "dormancy-card",
+     "title": "휴면·차단 정리 카드 — ① 진행 P0 3개 → ② 휴면 후보 → ③ 차단 해소 또는 종료",
+     "route": "/chat",
+     "requirement_ids": [
+      "DO-2",
+      "DO-3",
+      "DO-4",
+      "DO-5",
+      "DO-6",
+      "AA-3"
+     ],
+     "states_not_applicable": {
+      "permission": "채팅 화면 안의 요소라 권한 오류 전용 화면이 없고 기존 채팅 오류 처리와 같다",
+      "session-expired": "로그인 만료는 공통 로그인 화면으로 이동하며 이 화면 고유 디자인이 없다",
+      "offline": "오프라인 전용 화면이 없고 기존 채팅 연결 오류 표시를 쓴다",
+      "loading": "카드는 후보 목록이 확정된 뒤 대화에 도착하는 메시지라 별도 로딩 화면이 없다"
+     }
+    },
+    {
+     "screen_id": "goal-strip-icons-option",
+     "title": "[미결 I-1~I-4 시안] 목표 띠 — 🔄 작업중·⏳ 대표님 대기 그룹·🔗 목표 미연결 칩 포함",
+     "route": "/chat",
+     "requirement_ids": [
+      "PR-3",
+      "PR-4",
+      "DO-1",
+      "AA-6"
+     ],
+     "states_not_applicable": {
+      "permission": "채팅 화면 안의 요소라 권한 오류 전용 화면이 없고 기존 채팅 오류 처리와 같다",
+      "session-expired": "로그인 만료는 공통 로그인 화면으로 이동하며 이 화면 고유 디자인이 없다",
+      "offline": "오프라인 전용 화면이 없고 기존 채팅 연결 오류 표시를 쓴다",
+      "loading": "목표 로딩은 기존 띠 처리를 유지하며 이번 변경 범위가 아니다",
+      "empty": "담당 목표가 없으면 기존처럼 띠 자체를 그리지 않는다",
+      "error": "목표 조회 실패는 기존 띠 처리를 유지한다"
+     }
+    }
+   ],
+   "assets": [
+    {
+     "asset_id": "mock-strip-1440x820",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/png/goal-strip_default_1440x820.png",
+     "sha256": "901ad9c370d43208327ce236298cc04542132dd24da20fd22c00529bfff6234a",
+     "byte_size": 146760,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "goal-strip",
+     "phase": "mockup",
+     "viewport": "1440x820",
+     "fixture_id": "strip-default",
+     "state": "default",
+     "captured_at": "2026-10-15T06:58:32Z",
+     "capture_source": "static_html_render",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "before-strip-1440x820",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/before/goal-strip_before_1440x820.png",
+     "sha256": "6267c47aa06123d9bcfd272d3f27c9ec43bb15834fb53003581907b87c144267",
+     "byte_size": 45511,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "goal-strip",
+     "phase": "before",
+     "viewport": "1440x820",
+     "fixture_id": "strip-default",
+     "state": "default",
+     "captured_at": "2026-10-15T07:00:00Z",
+     "capture_source": "source_reconstruction",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "mock-card-default-1440x820",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/png/dormancy-card_default_1440x820.png",
+     "sha256": "a977809bd13695c9fd8ce2959f698808ef2ce301747bccc024c56265a9b1cf09",
+     "byte_size": 239471,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "dormancy-card",
+     "phase": "mockup",
+     "viewport": "1440x820",
+     "fixture_id": "card-default",
+     "state": "default",
+     "captured_at": "2026-10-15T06:58:32Z",
+     "capture_source": "static_html_render",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "mock-card-empty-1440x820",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/png/dormancy-card_empty_1440x820.png",
+     "sha256": "9807de0e00cfc18185d261a6c08c5aeedce374daec3068855f77aab22b1e6dc5",
+     "byte_size": 67064,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "dormancy-card",
+     "phase": "mockup",
+     "viewport": "1440x820",
+     "fixture_id": "card-empty",
+     "state": "empty",
+     "captured_at": "2026-10-15T06:58:32Z",
+     "capture_source": "static_html_render",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "mock-card-error-1440x820",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/png/dormancy-card_error_1440x820.png",
+     "sha256": "34cf5564180e249c21eae16d884ab4e273ac35b6bbdd1af4e0e4de4296975661",
+     "byte_size": 223314,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "dormancy-card",
+     "phase": "mockup",
+     "viewport": "1440x820",
+     "fixture_id": "card-error",
+     "state": "error",
+     "captured_at": "2026-10-15T06:58:32Z",
+     "capture_source": "static_html_render",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "before-card-1440x820",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/before/dormancy-card_before_1440x820.png",
+     "sha256": "6cf568e5e50c264ebbf818f00d4ef069b5c0b8371641c460e78bbeea75d6fb60",
+     "byte_size": 45541,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "dormancy-card",
+     "phase": "before",
+     "viewport": "1440x820",
+     "fixture_id": "card-default",
+     "state": "default",
+     "captured_at": "2026-10-15T07:00:00Z",
+     "capture_source": "source_reconstruction",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "mock-strip-390x844",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/png/goal-strip_default_390x844.png",
+     "sha256": "27af698fd5bd3a318c7db798262361195ee3604072099e52fcd3bea3d4449a5e",
+     "byte_size": 66326,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "goal-strip",
+     "phase": "mockup",
+     "viewport": "390x844",
+     "fixture_id": "strip-default",
+     "state": "default",
+     "captured_at": "2026-10-15T06:58:32Z",
+     "capture_source": "static_html_render",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "before-strip-390x844",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/before/goal-strip_before_390x844.png",
+     "sha256": "fc21cdd05f4d128c2850f0186023f6baa67e95e78bfb5ce0070ff7e6073817fd",
+     "byte_size": 24558,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "goal-strip",
+     "phase": "before",
+     "viewport": "390x844",
+     "fixture_id": "strip-default",
+     "state": "default",
+     "captured_at": "2026-10-15T07:00:00Z",
+     "capture_source": "source_reconstruction",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "mock-card-default-390x844",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/png/dormancy-card_default_390x844.png",
+     "sha256": "c4161cc8aa1f73eea0e8b5abe34e18aefbb896c1db6383b7175a1e68e2b000ec",
+     "byte_size": 212716,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "dormancy-card",
+     "phase": "mockup",
+     "viewport": "390x844",
+     "fixture_id": "card-default",
+     "state": "default",
+     "captured_at": "2026-10-15T06:58:32Z",
+     "capture_source": "static_html_render",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "mock-card-empty-390x844",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/png/dormancy-card_empty_390x844.png",
+     "sha256": "c3410437e650d3d4769eb942fa424972d040cca5913ab040bc67eae7d1732025",
+     "byte_size": 36294,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "dormancy-card",
+     "phase": "mockup",
+     "viewport": "390x844",
+     "fixture_id": "card-empty",
+     "state": "empty",
+     "captured_at": "2026-10-15T06:58:32Z",
+     "capture_source": "static_html_render",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "mock-card-error-390x844",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/png/dormancy-card_error_390x844.png",
+     "sha256": "385923325264585cfd292c5978d68fdd1c75081854e0d3f7eefde722c5a45f06",
+     "byte_size": 227109,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "dormancy-card",
+     "phase": "mockup",
+     "viewport": "390x844",
+     "fixture_id": "card-error",
+     "state": "error",
+     "captured_at": "2026-10-15T06:58:32Z",
+     "capture_source": "static_html_render",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "before-card-390x844",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/before/dormancy-card_before_390x844.png",
+     "sha256": "bf4a3998f5745f779b76580e930186ebdb8d68264c0a37def62c8ef4cd115a64",
+     "byte_size": 24595,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "dormancy-card",
+     "phase": "before",
+     "viewport": "390x844",
+     "fixture_id": "card-default",
+     "state": "default",
+     "captured_at": "2026-10-15T07:00:00Z",
+     "capture_source": "source_reconstruction",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "html-goal-strip-default",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/html/goal-strip_default.html",
+     "sha256": "7ead09ef3a71db92f719f3789798778fc98c1acdcc7acbe52bebd4ac8abeb876",
+     "byte_size": 19976,
+     "mime": "text/html",
+     "role": "child"
+    },
+    {
+     "asset_id": "html-goal-strip-default-mobile",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/html/goal-strip_default_mobile.html",
+     "sha256": "87fb94dbf5401358a13687a67ff96c05e4011ab7923c60bc2108c49a13aaffdd",
+     "byte_size": 17739,
+     "mime": "text/html",
+     "role": "child"
+    },
+    {
+     "asset_id": "html-dormancy-card-default",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/html/dormancy-card_default.html",
+     "sha256": "769e8c53caa89813bd8f406fff0eff98c0c2ac77303ca426d4a5eb62ce594e63",
+     "byte_size": 25914,
+     "mime": "text/html",
+     "role": "child"
+    },
+    {
+     "asset_id": "html-dormancy-card-default-mobile",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/html/dormancy-card_default_mobile.html",
+     "sha256": "07fde10b5cb4013d383eae1b2d145099906a6e2ca199dbf30d5abb615814133e",
+     "byte_size": 23466,
+     "mime": "text/html",
+     "role": "child"
+    },
+    {
+     "asset_id": "html-dormancy-card-empty",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/html/dormancy-card_empty.html",
+     "sha256": "0131c0335561a4b411ed895c58da4578b63cdc412d7502781275c0031ff0f9c0",
+     "byte_size": 18289,
+     "mime": "text/html",
+     "role": "child"
+    },
+    {
+     "asset_id": "html-dormancy-card-empty-mobile",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/html/dormancy-card_empty_mobile.html",
+     "sha256": "f6b81551f03f283e44731e1984d8846a7f4ad22470f41ef81579bcae59de0877",
+     "byte_size": 15776,
+     "mime": "text/html",
+     "role": "child"
+    },
+    {
+     "asset_id": "html-dormancy-card-error",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/html/dormancy-card_error.html",
+     "sha256": "f3ecdacb2422c40b49493e82a64a95ed38fdc366883303dbacc8a94ebacf7bb1",
+     "byte_size": 26440,
+     "mime": "text/html",
+     "role": "child"
+    },
+    {
+     "asset_id": "html-dormancy-card-error-mobile",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/html/dormancy-card_error_mobile.html",
+     "sha256": "c7b09857d25c2ee3db1bab938660813b60d9831f5a3783490a6fe5895b99eade",
+     "byte_size": 23858,
+     "mime": "text/html",
+     "role": "child"
+    },
+    {
+     "asset_id": "mock-strip-icons-option-1440x820",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/png/goal-strip_icons-option_1440x820.png",
+     "sha256": "da57bd6de534ebb41bc7e876e21e84121e4560507807d4bb3eb89bfdf68603eb",
+     "byte_size": 162668,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "goal-strip-icons-option",
+     "phase": "mockup",
+     "viewport": "1440x820",
+     "fixture_id": "strip-icons-option",
+     "state": "default",
+     "captured_at": "2026-10-15T06:58:32Z",
+     "capture_source": "static_html_render",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "before-strip-icons-option-1440x820",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/before/goal-strip_before_1440x820.png",
+     "sha256": "6267c47aa06123d9bcfd272d3f27c9ec43bb15834fb53003581907b87c144267",
+     "byte_size": 45511,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "goal-strip-icons-option",
+     "phase": "before",
+     "viewport": "1440x820",
+     "fixture_id": "strip-icons-option",
+     "state": "default",
+     "captured_at": "2026-10-15T07:00:00Z",
+     "capture_source": "source_reconstruction",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "mock-strip-icons-option-390x844",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/png/goal-strip_icons-option_390x844.png",
+     "sha256": "90e1cc32757d708a167ba7f425e2ce8b21f16524467a0c09857fffcb8d4ab9cc",
+     "byte_size": 77215,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "goal-strip-icons-option",
+     "phase": "mockup",
+     "viewport": "390x844",
+     "fixture_id": "strip-icons-option",
+     "state": "default",
+     "captured_at": "2026-10-15T06:58:32Z",
+     "capture_source": "static_html_render",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "before-strip-icons-option-390x844",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/before/goal-strip_before_390x844.png",
+     "sha256": "fc21cdd05f4d128c2850f0186023f6baa67e95e78bfb5ce0070ff7e6073817fd",
+     "byte_size": 24558,
+     "mime": "image/png",
+     "role": "primary",
+     "screen_id": "goal-strip-icons-option",
+     "phase": "before",
+     "viewport": "390x844",
+     "fixture_id": "strip-icons-option",
+     "state": "default",
+     "captured_at": "2026-10-15T07:00:00Z",
+     "capture_source": "source_reconstruction",
+     "redaction_status": "not_required"
+    },
+    {
+     "asset_id": "html-goal-strip-icons-option",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/html/goal-strip_icons-option.html",
+     "sha256": "f1056ffea6142feec7280e71452352e584f6046197c107ea6eca0d77c18de45b",
+     "byte_size": 20849,
+     "mime": "text/html",
+     "role": "child"
+    },
+    {
+     "asset_id": "html-goal-strip-icons-option-mobile",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/html/goal-strip_icons-option_mobile.html",
+     "sha256": "b92fe17e4d3d5adc1b516e231b41f18f5cf156319d209a8bdcb9be50dd2a27b7",
+     "byte_size": 18419,
+     "mime": "text/html",
+     "role": "child"
+    }
+   ],
+   "evidence": [
+    {
+     "evidence_id": "render-goal-strip",
+     "kind": "browser_capture",
+     "screen_id": "goal-strip",
+     "route": "/chat",
+     "success": true,
+     "login_used": false,
+     "detail": "서버 Playwright chromium 으로 정적 HTML 목업(rev2 재작업본)을 1440x820·390x844 캡처. 운영 /chat 은 로그인 필요라 변경 전은 소스 재현. 실측 숫자: 열린 49·P0 30·정리 후보 18(휴면 active 14·P0 7 포함 + blocked 4)",
+     "recorded_at": "2026-10-15T06:58:32Z"
+    },
+    {
+     "evidence_id": "render-dormancy-card",
+     "kind": "browser_capture",
+     "screen_id": "dormancy-card",
+     "route": "/chat",
+     "success": true,
+     "login_used": false,
+     "detail": "서버 Playwright chromium 으로 정적 HTML 목업(rev2 재작업본)을 1440x820·390x844 캡처. 운영 /chat 은 로그인 필요라 변경 전은 소스 재현. 실측 숫자: 열린 49·P0 30·정리 후보 18(휴면 active 14·P0 7 포함 + blocked 4) — ① P0 3개 → ② 휴면 → ③ 차단 해소 3단 구성",
+     "recorded_at": "2026-10-15T06:58:32Z"
+    },
+    {
+     "evidence_id": "render-goal-strip-icons-option",
+     "kind": "browser_capture",
+     "screen_id": "goal-strip-icons-option",
+     "route": "/chat",
+     "success": true,
+     "login_used": false,
+     "detail": "서버 Playwright chromium 으로 정적 HTML 목업(rev2 재작업본)을 1440x820·390x844 캡처. 운영 /chat 은 로그인 필요라 변경 전은 소스 재현. 실측 숫자: 열린 49·P0 30·정리 후보 18(휴면 active 14·P0 7 포함 + blocked 4) — 미결 I-1~I-4 시안(상단 배너 표시)",
+     "recorded_at": "2026-10-15T06:58:32Z"
+    }
+   ],
+   "source_sha": "f9a84de267494f7ed77ac1747bf8c06784f09297"
+  }
+ },
+ "_doc_refs_todo": "submit 에는 plan/prd/spec 3개가 필요하고 각 항목은 document_key + revision_id + content_hash 가 필요하다. prd 후보 document_key=goal-priority-dormancy-autoapproval-display-prd (rev1) — 정본 조회로 revision_id·content_hash 를 받아 채운다. plan/spec 은 정본이 없어 면제 정책 참조를 CEO 가 정해야 한다."
+}

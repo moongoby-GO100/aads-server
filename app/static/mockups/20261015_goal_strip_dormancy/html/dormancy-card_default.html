@@ -1,0 +1,185 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>B 휴면 정리 카드 — 데스크톱 default</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0F0F0F;--card:#1A1A1A;--border:#2A2A2A;--text:#E5E5E5;--sub:#888;--accent:#6C5CE7;--ok:#00B894;--warn:#FDCB6E;--err:#FF6B6B;--side:#141414;--hover:#252525;--input:#1E1E1E;--blue:#3b82f6;--amber:#d97706;--red:#dc2626;--slate:#64748b}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font:13px/1.45 -apple-system,"Noto Sans KR","Noto Sans CJK KR","Malgun Gothic","WenQuanYi Zen Hei",Arial,sans-serif}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.app{display:flex;height:100vh;overflow:hidden}
+.app.flow{height:auto;min-height:100vh;overflow:visible}
+.side{width:240px;flex:none;background:var(--side);border-right:1px solid var(--border);padding:14px 10px}
+.side b{display:block;color:#a29bfe;font-size:15px;margin-bottom:10px}
+.side .it{padding:7px 9px;border-radius:8px;color:var(--sub);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side .it.on{background:var(--hover);color:var(--text)}
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.top{flex:none;height:44px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;padding:0 14px;font-weight:700}
+.top small{font-weight:400;color:var(--sub);font-size:11px}
+.chat{flex:1;min-height:0;display:flex}
+.col{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.stream{flex:1;min-height:0;overflow:hidden;padding:0 16px 10px}
+.msg{margin:8px 0;max-width:640px;padding:8px 12px;border-radius:12px;background:var(--card);border:1px solid var(--border);color:var(--text);font-size:13px}
+.msg.me{margin-left:auto;background:#2a2550;border-color:#3d3578}
+.msg small{display:block;color:var(--sub);font-size:11px;margin-bottom:2px}
+.input{flex:none;margin:0 16px 12px;height:44px;border-radius:12px;background:var(--input);border:1px solid var(--border);color:var(--sub);display:flex;align-items:center;padding:0 14px}
+.panel{width:352px;flex:none;border-left:1px solid var(--border);background:var(--card);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.panel h3{font-size:14px;padding:12px 14px 4px}
+.panel .sec{padding:8px 14px;border-top:1px solid var(--border)}
+.panel .lab{font-size:11px;color:var(--sub);margin-bottom:5px}
+.note{margin:4px 14px;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.45}
+.note.dorm{background:rgba(100,116,139,.16);border:1px solid #475569}
+.note.stop{background:rgba(253,203,110,.10);border:1px solid #8a6d1f}
+.acts{display:flex;gap:6px;padding:6px 14px 10px;flex-wrap:wrap}
+.btn{height:30px;padding:0 11px;border-radius:8px;border:1px solid var(--border);background:var(--hover);font-size:12px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+.btn.ok{border-color:#1f7a63;color:#5eead4}
+.btn.dng{border-color:#7f2d2d;color:#fca5a5}
+.ms{display:flex;gap:8px;align-items:flex-start;padding:5px 0;font-size:12px}
+.ms i{font-style:normal;flex:none;width:18px}
+.ms span.d{margin-left:auto;color:var(--sub);font-size:11px;flex:none}
+
+/* strip */
+.strip{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--border);padding:6px 16px;display:flex;gap:6px;align-items:flex-start}
+.strip .list{flex:1;min-width:0;display:flex;gap:6px;align-items:center}
+.strip.open .list{flex-wrap:wrap;max-height:212px;overflow-y:auto;overflow-x:hidden}
+.strip.shut .list{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden}
+.pin{flex:none;display:flex;gap:5px;align-items:center}
+.grp{flex:none;font-size:10.5px;font-weight:700;color:var(--sub);padding:0 4px 0 2px;white-space:nowrap}
+.grp.sep{border-left:1px solid var(--border);padding-left:8px;margin-left:2px}
+.gc{flex:none;display:inline-flex;align-items:center;gap:5px;max-width:330px;padding:3px 4px 3px 9px;border-radius:999px;border:1px solid var(--slate);background:var(--card);font-size:11px;white-space:nowrap;position:relative}
+.gc.lead{border-width:2px;border-color:var(--amber);background:rgba(217,119,6,.08);padding:3px 4px 3px 10px}
+.gc.run{border-color:var(--blue)}
+.gc.wait{border-color:var(--amber)}
+.gc.dormant{border-style:dashed;color:#a3a3a3}
+.gc.warnp0{border-color:var(--red)}
+.gc.sel{background:rgba(37,99,235,.14)}
+.gc .n{font-weight:800;overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.gc .p{color:var(--sub)}
+.pr{flex:none;font-size:10px;font-weight:800;padding:0 5px;border-radius:4px;line-height:16px;color:#fff}
+.pr.p0{background:#b91c1c}.pr.p1{background:#b45309}.pr.p2{background:#475569}
+.pr.crit{background:#7f1d1d;outline:1px solid #ef4444}
+.st{flex:none;font-size:12px}
+.idle{color:var(--warn);font-weight:700;font-size:10.5px}
+.aa{flex:none;display:inline-flex;align-items:center;gap:3px;height:20px;padding:0 7px;border-radius:999px;font-size:10.5px;font-weight:700;border:1px solid var(--border);background:var(--hover);color:var(--text)}
+.aa.man{color:#b0b0b0}
+.aa.hi{border-color:#1f7a63;color:#5eead4;background:rgba(0,184,148,.10)}
+.aa.all{border-color:#00B894;color:#fff;background:#0f7a63;box-shadow:0 0 0 1px rgba(0,184,148,.45)}
+.aa.cap{border-color:#b45309;color:#fdba74;background:rgba(180,83,9,.16)}
+.aa.off{color:#b0b0b0;border-style:dashed}
+.aa.dlg{border-color:#4f46e5;color:#c7d2fe;background:rgba(79,70,229,.14)}
+.aa.halt{border-color:#475569;color:#cbd5e1;background:rgba(100,116,139,.18)}
+.aa.exp{border-color:#b45309;color:#fdba74;background:rgba(180,83,9,.16)}
+.aa .w{color:var(--warn)}
+.chip2{flex:none;padding:3px 9px;border-radius:999px;font-size:11px;white-space:nowrap;border:1px dashed var(--border);color:var(--sub)}
+.chip2.link{border-color:#4b5563;color:#d1d5db}
+.chip2.tidy{border-style:solid;border-color:var(--accent);color:#fff;background:rgba(108,92,231,.22);font-weight:700}
+.chip2.sum{border-style:solid;border-color:var(--border);color:var(--text);background:var(--card)}
+.chip2.sum b{color:var(--warn)}
+.tip{position:absolute;z-index:30;width:292px;background:#0b0b0b;border:1px solid #4b5563;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.6);padding:10px 12px;font-size:12px;line-height:1.5;white-space:normal;color:var(--text)}
+.tip h4{font-size:12px;margin-bottom:6px;display:flex;gap:6px;align-items:center}
+.tip dl{display:grid;grid-template-columns:54px 1fr;row-gap:2px}
+.tip dt{color:var(--sub)}
+.tip .foot{margin-top:7px;padding-top:6px;border-top:1px solid var(--border);color:var(--sub);font-size:11px}
+.bar{height:6px;border-radius:3px;background:#2d2d2d;overflow:hidden;margin-top:3px}.bar i{display:block;height:100%;background:var(--ok)}
+
+/* card */
+.card{margin:10px 0;border:1px solid #4a417f;border-radius:14px;background:var(--card);overflow:hidden;display:flex;flex-direction:column}
+.card .hd{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:flex-start}
+.card .hd h2{font-size:15px}
+.card .hd .s{color:var(--sub);font-size:12px;margin-top:2px}
+.card .hd .safe{margin-left:auto;font-size:11px;color:#5eead4;border:1px solid #1f7a63;border-radius:8px;padding:4px 8px;max-width:250px;line-height:1.35;flex:none}
+.card .bn{margin:10px 16px 0;padding:8px 10px;border-radius:8px;background:rgba(253,203,110,.10);border:1px solid #8a6d1f;font-size:12px;line-height:1.5}
+.card .bn u{text-decoration:none;color:var(--warn);cursor:pointer}
+.card .body{display:flex;gap:14px;padding:10px 16px;min-height:0;flex:1;overflow:hidden}
+.card .c1,.card .c2{overflow-y:auto;min-height:0;scrollbar-width:thin}
+.stream.fl{display:flex;flex-direction:column;overflow:hidden}
+.stream.fl .card{flex:1;min-height:0}
+.mob.flow .card .body{overflow:visible}
+.mob.flow .card .c1,.mob.flow .card .c2{overflow:visible}
+.strip.shut .list{-webkit-mask-image:linear-gradient(90deg,#000 94%,transparent);mask-image:linear-gradient(90deg,#000 94%,transparent)}
+.card .c1{width:340px;flex:none}
+.card .c2{flex:1;min-width:0}
+.card h5{font-size:12.5px;margin-bottom:6px;display:flex;gap:8px;align-items:center}
+.card h5 .cnt{margin-left:auto;font-weight:700;color:#5eead4;font-size:12px}
+.pk{display:flex;align-items:center;gap:7px;height:32px;padding:0 8px;border-radius:8px;border:1px solid var(--border);margin-bottom:4px;font-size:12px;white-space:nowrap;overflow:hidden}
+.pk.on{border-color:var(--accent);background:rgba(108,92,231,.16)}
+.pk .cb{flex:none;width:15px;height:15px;border-radius:4px;border:1.5px solid #666;display:inline-flex;align-items:center;justify-content:center;font-size:10px;line-height:1;color:#fff}
+.pk.on .cb{background:var(--accent);border-color:var(--accent)}
+.pk .n{overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.pk .m{margin-left:auto;color:var(--sub);font-size:11px;flex:none}
+.pk .tg{flex:none;font-size:10px;padding:0 5px;border-radius:4px;border:1px solid #475569;color:#cbd5e1;line-height:16px}
+.more{font-size:11px;color:var(--sub);padding:2px 4px}
+.dr{border:1px solid var(--border);border-radius:10px;padding:5px 9px;margin-bottom:4px;display:flex;gap:10px;align-items:center}
+.dr.set{border-color:#4a417f;background:rgba(108,92,231,.07)}
+.dr .l{flex:1;min-width:0}
+.dr .t{display:flex;gap:6px;align-items:center;font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden}
+.dr .t span.nm{overflow:hidden;text-overflow:ellipsis}
+.dr .m{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--sub);margin-top:2px;white-space:nowrap;overflow:hidden;flex-wrap:nowrap}
+.tag{flex:none;font-size:10px;padding:0 5px;border-radius:4px;border:1px solid #475569;color:#cbd5e1;line-height:16px}
+.tag.w{border-color:#8a6d1f;color:var(--warn)}
+.tag.dn{border-color:#8a6d1f;color:var(--warn)}
+.seg{flex:none;display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.seg span{height:28px;padding:0 9px;font-size:11.5px;display:flex;align-items:center;color:var(--sub);background:var(--input);border-left:1px solid var(--border);white-space:nowrap}
+.seg span:first-child{border-left:0}
+.seg span.on{color:#fff;font-weight:700}
+.seg span.on.r{background:#0f7a63}.seg span.on.p{background:#8a6d1f}.seg span.on.e{background:#7f2d2d}.seg span.on.m{background:#3b4a9e}
+.sel{margin-top:3px;height:24px;border:1px solid #3b4a9e;border-radius:6px;background:var(--input);padding:0 8px;font-size:11px;display:inline-flex;align-items:center;gap:6px;color:#c7d2fe}
+.card .ft{border-top:1px solid var(--border);padding:10px 16px;display:flex;gap:10px;align-items:center;background:#161616}
+.card .ft .sm{flex:1;min-width:0;font-size:12px}
+.card .ft .sm b{color:#fff}
+.err{margin:10px 16px 0;padding:10px 12px;border-radius:8px;background:rgba(255,107,107,.10);border:1px solid #7f2d2d;font-size:12px;line-height:1.5}
+.empty{padding:34px 16px;text-align:center;color:var(--sub);font-size:13px;line-height:1.7}
+.empty b{display:block;color:var(--text);font-size:15px;margin-bottom:4px}
+.fnote{flex:none;padding:5px 16px;font-size:10.5px;color:#6b7280;border-top:1px solid var(--border)}
+
+/* mobile */
+.m-top{flex:none;height:48px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;padding:0 12px;font-weight:700;font-size:14px}
+.m-strip{flex:none;border-bottom:1px solid var(--border);background:var(--bg)}
+.m-sum{display:flex;gap:6px;align-items:center;padding:7px 10px;overflow:hidden}
+.m-rows{max-height:392px;overflow:hidden;border-top:1px solid var(--border)}
+.m-row{display:flex;align-items:center;gap:6px;height:35px;padding:0 10px;border-bottom:1px solid #1d1d1d;font-size:12px;white-space:nowrap;overflow:hidden}
+.m-row .n{font-weight:700;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.m-row .p{color:var(--sub);font-size:11px;flex:none}
+.m-row .aa{margin-left:auto}
+.m-row.g{height:22px;background:#131313;color:var(--sub);font-size:10.5px;font-weight:700}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:#0b0b0b;border-top:1px solid #4b5563;border-radius:16px 16px 0 0;padding:12px 14px 16px;box-shadow:0 -8px 24px rgba(0,0,0,.6);font-size:12.5px;z-index:40}
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.22);z-index:35}
+.mob{position:relative;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+.mob.flow{height:auto;min-height:100vh;overflow:visible}
+.mcard .body{flex-direction:column}
+.mcard .c1{width:auto}
+.mcard .hd{flex-wrap:wrap}
+.mcard .hd .safe{margin-left:0;max-width:none;flex:1 1 100%}
+.mcard .dr{flex-direction:column;align-items:stretch;gap:6px}
+.mcard .seg{display:grid;grid-template-columns:repeat(4,1fr)}
+.mcard .seg span{justify-content:center;height:32px;padding:0}
+.mcard .ft{flex-direction:column;align-items:stretch;position:sticky;bottom:0}
+.mcard .ft .btns{display:flex;gap:8px}
+.mcard .ft .btns .btn{flex:1;justify-content:center;height:38px}
+
+/*REWORK rev4*/
+.card .c1{width:292px}
+.card .c3{width:392px;flex:none;overflow-y:auto;min-height:0;scrollbar-width:thin}
+.card .body{gap:16px}
+.card .hd .safe{max-width:430px}
+.card h5 small{font-weight:400;color:var(--sub);font-size:10.5px}
+.card .hint{font-size:10.5px;color:var(--sub);margin:-2px 0 6px;line-height:1.4}
+.card .c3 .hint b{color:#fdba74}
+.dr.bk{flex-direction:column;align-items:stretch;gap:3px;padding:5px 9px}
+.dr.bk .two{display:flex;gap:6px;align-items:center}
+.dr.bk .two .rs{flex:1;min-width:0}
+.dr.bk .two .hold{flex:1.25;min-width:0}
+.dr .t .tag{margin-left:auto}
+.dr.bk .rs{font-size:11px;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dr.bk .rs.none{color:var(--warn);font-weight:700}
+.hold{height:21px;border:1px solid #3b4a9e;border-radius:6px;background:var(--input);padding:0 8px;font-size:11px;display:flex;align-items:center;color:#c7d2fe;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hold.empty{border-style:dashed;border-color:#8a6d1f;color:#9a8a5a}
+.dr.bk .seg{display:grid;grid-template-columns:1.75fr 1.05fr .8fr .8fr}
+.dr.bk .seg span{justify-content:center;padding:0 4px;height:24px}
+.mcard .c3{width:auto}
+.mcard .dr.bk .seg span{height:32px}
+.optbar{flex:none;background:#3a2a00;border-bottom:2px solid var(--warn);color:#ffe9a8;font-size:12.5px;font-weight:700;padding:6px 14px;text-align:center;line-height:1.4}
+.optbar small{display:block;font-weight:400;color:#e9c978;font-size:11px}
+.app.hasbar{height:calc(100vh - 48px)}
+.app.hasbar .strip.open .list{max-height:290px}
+.mob.hasbar .m-rows{max-height:480px}
+.mob.hasbar{height:100vh}
+</style></head><body><div class="app"><div class="side"><b>AADS 채팅</b><div class="it on">통합 지휘 세션</div><div class="it">KIS 자동매매</div><div class="it">GO100 장마감</div><div class="it">ACCT 오비서</div><div class="it">NTV2 알림</div><div class="it">SF 정산</div></div><div class="main"><div class="top">통합 지휘 세션 <small>목표 49 · 연결 러너 3</small></div><div class="chat"><div class="col"><div class="strip shut" style="position:relative"><div class="list"><span class="chip2 sum" title="열린 목표 49 · 진행 P0 상한 3">열린 목표 49 · P0 <b>30</b></span><span class="grp sep">P0 5</span><span class="gc "><span class="pr p0">P0</span><span class="n">승인시스템 정비</span><span class="p">71%</span><span class="aa hi">🟢 고위험까지 9/10 <span class="w">⚠️</span></span></span><span class="gc lead"><span class="pr p0">P0</span><span class="n">직원 계약서 서명</span><span class="p">55%</span><span class="aa cap">⛔ 한도 소진 10/10</span></span><span class="gc "><span class="pr p0">P0</span><span class="n">KIS 주문 검증</span><span class="p">64%</span><span class="aa all">🟢 전체 4/20</span></span><span class="gc "><span class="pr p0">P0</span><span class="n">업무자동화 대화형</span><span class="p">80%</span><span class="aa dlg">👥 위임</span></span><span class="gc "><span class="pr p0">P0</span><span class="n">디스크 확보</span><span class="p">22%</span><span class="idle">⚠️ 8일</span><span class="aa off">🔒 해제됨</span></span><span class="grp sep">P1 · P2 4</span><span class="gc "><span class="pr p1">P1</span><span class="n">채팅 띠 개선</span><span class="p">40%</span><span class="aa man">🔒 수동</span></span><span class="gc "><span class="pr p1">P1</span><span class="n">GO100 실매매 점검</span><span class="p">30%</span><span class="aa exp">⌛ 만료</span></span><span class="gc "><span class="pr p1">P1</span><span class="n">보고서 개편</span><span class="p">90%</span><span class="aa man">🔒 수동</span></span><span class="gc "><span class="pr p2">P2</span><span class="n">문서 정리</span><span class="p">10%</span><span class="aa man">🔒 수동</span></span><span class="grp sep">💤 휴면 2</span><span class="gc dormant"><span class="st">💤</span><span class="pr p0 crit">P0 CRITICAL</span><span class="n">오비스 진화</span><span class="idle">⚠️ 16일</span><span class="aa halt">⏸ 정지</span></span><span class="gc dormant"><span class="st">💤</span><span class="pr p1">P1</span><span class="n">레거시 데이터 이관</span><span class="aa halt">⏸ 정지</span></span><span class="chip2" title="나머지 목표 보기">+38</span></div><div class="pin"><span class="chip2 tidy" title="휴면·차단 목표 정리 카드 열기">🧹 휴면·차단 정리 18건</span><span class="chip2" style="border-style:solid">펼치기 ▾</span></div></div><div class="stream fl"><div class="card"><div class="hd"><div><h2>💤 휴면·차단 목표 정리 — 첫 정리</h2><div class="s">열린 목표 49개 중 정리 후보 18개 = 휴면 active 14(P0 7 포함) + 차단 blocked 4 · 열린 P0 30개(진행 P0 상한 3)</div></div><div class="safe">자동으로 종료·삭제되지 않습니다. 고른 것만 바뀌고, 나머지는 다음 주에 다시 묻습니다.</div></div><div class="bn">⏸ <b>보류 목표 13개의 자동승인이 정지됩니다</b> (blocked · draft · 일시정지 목표 — 자동으로 승인되지 않고 승인 대기로 바뀝니다). <b>재개·차단 해소를 고른 목표만</b> 자동승인이 다시 켜집니다. <u>정지 목록 13건 보기 ▾</u></div><div class="body"><div class="c1"><h5>① 진행 P0 3개 고르기<span class="cnt">3 / 3 ✓</span></h5><div class="hint">고른 P0 는 ②·③ 에 다시 나오지 않습니다.</div><div class="pk on"><span class="cb">✓</span><span class="n">승인시스템 정비</span><span class="m">active · 오늘</span></div><div class="pk on"><span class="cb">✓</span><span class="n">KIS 주문 검증</span><span class="m">active · 2일 전</span></div><div class="pk on"><span class="cb">✓</span><span class="n">GO100 야간 배치 점검</span><span class="tg">휴면</span><span class="m">active · 19일 전</span></div><div class="pk"><span class="cb"></span><span class="n">직원 계약서 서명</span><span class="tg" style="border-color:#8a6d1f;color:#fdba74">→ P1</span><span class="m">active · 오늘</span></div><div class="pk"><span class="cb"></span><span class="n">업무자동화 대화형</span><span class="tg" style="border-color:#8a6d1f;color:#fdba74">→ P1</span><span class="m">active · 어제</span></div><div class="pk"><span class="cb"></span><span class="n">디스크 확보</span><span class="tg" style="border-color:#8a6d1f;color:#fdba74">→ P1</span><span class="m">active · 8일 전</span></div><div class="pk"><span class="cb"></span><span class="n">오비스 진화</span><span class="tg">차단</span><span class="tg" style="border-color:#8a6d1f;color:#fdba74">→ P1</span><span class="m">blocked · 16일 전</span></div><div class="more">나머지 열린 P0 보기 ▾ — 고르지 않은 P0 는 P1 로 내려갑니다</div></div><div class="c2"><h5>② 휴면 후보 13개 — 목표별 선택<span class="cnt" style="color:var(--sub)">선택 5 · 보류 8</span></h5><div class="hint">active 14개(P0 7) 중 ①에서 고른 P0 1개(GO100 야간 배치 점검)를 뺐습니다. 자동승인은 모두 ⏸ 정지 — 재개를 고른 것만 복원.</div><div class="dr set"><div class="l"><div class="t"><span class="pr p0">P0</span><span class="nm">야간 백업 검증</span><span class="tag w">P0→P1 하향</span></div><div class="m"><span class="tag">active</span><span class="tag dn">마지막 활동 21일 전</span></div><div class="m" style="margin-top:3px"><span class="aa hi">▶ 재개 시 자동승인 복원</span></div></div><div class="seg "><span class="on r">재개</span><span>일시정지</span><span>종료</span><span>병합</span></div></div><div class="dr"><div class="l"><div class="t"><span class="pr p0">P0</span><span class="nm">시세 폴백 점검</span><span class="tag w">P0→P1 하향</span></div><div class="m"><span class="tag">active</span><span class="tag dn">마지막 활동 17일 전</span></div></div><div class="seg "><span>재개</span><span>일시정지</span><span>종료</span><span>병합</span></div></div><div class="dr set"><div class="l"><div class="t"><span class="pr p1">P1</span><span class="nm">채팅 검색 개선</span></div><div class="m"><span class="tag">active</span><span class="tag dn">마지막 활동 26일 전</span></div></div><div class="seg "><span>재개</span><span class="on p">일시정지</span><span>종료</span><span>병합</span></div></div><div class="dr set"><div class="l"><div class="t"><span class="pr p1">P1</span><span class="nm">KIS 잔고 대사</span></div><div class="m"><span class="tag">active</span><span class="tag dn">마지막 활동 33일 전</span></div><div><span class="sel">병합 대상 ▸ KIS 주문 검증 ▾</span></div></div><div class="seg "><span>재개</span><span>일시정지</span><span>종료</span><span class="on m">병합</span></div></div><div class="dr set"><div class="l"><div class="t"><span class="pr p2">P2</span><span class="nm">구 대시보드 정리</span></div><div class="m"><span class="tag">active</span><span class="tag dn">마지막 활동 33일 전</span></div></div><div class="seg "><span>재개</span><span class="on p">일시정지</span><span>종료</span><span>병합</span></div></div><div class="dr set"><div class="l"><div class="t"><span class="pr p2">P2</span><span class="nm">음성 입력 실험</span></div><div class="m"><span class="tag">active</span><span class="tag dn">마지막 활동 52일 전</span></div></div><div class="seg "><span>재개</span><span>일시정지</span><span class="on e">종료</span><span>병합</span></div></div><div class="more">나머지 7개 (P0 4 · P1·P2 3) — 선택 안 함 ▾</div></div><div class="c3"><h5>③ 차단 해소 또는 종료<small>blocked 4개</small><span class="cnt" style="color:var(--sub)">선택 3 · 보류 1</span></h5><div class="hint">blocked 는 휴면으로 세지 않고 <b>따로</b> 묻습니다.</div><div class="dr bk set"><div class="t"><span class="pr p0 crit">P0 CRITICAL</span><span class="nm">오비스 진화</span><span class="tag w">P0→P1 하향</span></div><div class="m"><span class="tag">blocked</span><span class="tag dn">마지막 활동 16일 전</span><span class="aa hi" style="height:18px">▶ 자동승인 복원</span></div><div class="two"><div class="rs">사유 <b>검증 세션 연결 대기</b></div><div class="hold">해제 조건 ▸ 검증 세션 1개 연결</div></div><div class="seg "><span class="on r">차단 해소(재개)</span><span>일시정지</span><span>종료</span><span>병합</span></div></div><div class="dr bk set"><div class="t"><span class="pr p1">P1</span><span class="nm">레거시 데이터 이관</span></div><div class="m"><span class="tag">blocked</span><span class="tag dn">마지막 활동 41일 전</span></div><div class="two"><div class="rs none">⚠️ 차단 사유 없음</div><div class="hold empty">해제 조건 ▸ 입력 안 함</div></div><div class="seg "><span>차단 해소(재개)</span><span>일시정지</span><span class="on e">종료</span><span>병합</span></div></div><div class="dr bk set"><div class="t"><span class="pr p0">P0</span><span class="nm">SF 정산 리포트</span><span class="tag w">P0→P1 하향</span></div><div class="m"><span class="tag">blocked</span><span class="tag dn">마지막 활동 24일 전</span></div><div class="two"><div class="rs none">⚠️ 차단 사유 없음</div><div class="hold empty">해제 조건 ▸ 입력 안 함</div></div><div class="seg "><span>차단 해소(재개)</span><span class="on p">일시정지</span><span>종료</span><span>병합</span></div></div><div class="dr bk"><div class="t"><span class="pr p1">P1</span><span class="nm">모바일 푸시</span></div><div class="m"><span class="tag">blocked</span><span class="tag dn">마지막 활동 22일 전</span></div><div class="two"><div class="rs">사유 <b>푸시 인증서 갱신 대기</b></div><div class="hold empty">해제 조건 ▸ 입력 안 함</div></div><div class="seg "><span>차단 해소(재개)</span><span>일시정지</span><span>종료</span><span>병합</span></div></div></div></div><div class="ft"><div class="sm">① P0 <b>3</b> · ② 휴면 <b>5</b> (재개 1 · 일시정지 2 · 종료 1 · 병합 1) · ③ 차단 <b>3</b> (차단 해소 1 · 일시정지 1 · 종료 1) · 선택 안 함 <b>9</b><br><span style="color:var(--sub)">P0 3개 확정 → 정리 후 진행 P0 3개 · 고르지 않은 열린 P0 는 P1</span></div><div class="btns" style="display:flex;gap:8px"><button class="btn">나중에 결정</button><button class="btn pri">① P0 3개 · ② 5건 · ③ 3건 반영</button></div></div></div></div></div></div><div class="fnote">목업 예시 데이터 — 실측: 열린 49·P0 30·정리 후보 18(휴면 active 14·P0 7 포함 / 차단 blocked 4, 목표관리자 15:40 KST)·정지 대상 보류 13. 이름·활동일·사유·선택값은 가상.</div></div></div></body></html>
