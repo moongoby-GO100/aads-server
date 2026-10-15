@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import TenantRole, require_tenant_role
 from app.core.goal_work_hierarchy_policy import goal_work_hierarchy_enabled
+from app.services import goal_approval_policy_schema as policy_schema
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1079,6 +1080,50 @@ class GoalApprovalPolicyRequest(BaseModel):
     max_executions: int = Field(200, ge=0, le=5000, description="목표 전체 허용 횟수")
 
 
+def _policy_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+@router.get("/goals/approval-policy/lint")
+async def lint_goal_approval_policies(
+    include_empty: bool = Query(False, description="미설정({}) 목표도 포함"),
+    include_closed: bool = Query(False, description="종료된 목표도 포함"),
+    context: dict[str, Any] = Depends(require_tenant_viewer),
+):
+    """표준 형식이 아니거나 횟수를 소진한 승인 설정 목록 (읽기 전용, 변환하지 않음)."""
+    from app.core.db_pool import get_pool
+
+    rows = await get_pool().fetch(
+        "SELECT id::text AS id, title, project, status, "
+        "       COALESCE(approval_policy, '{}'::jsonb) AS p "
+        "FROM goals WHERE tenant_id = $1::uuid "
+        "  AND ($2 OR status IN ('draft', 'active', 'blocked')) "
+        "ORDER BY updated_at DESC",
+        _tenant_id(context), include_closed,
+    )
+    items = []
+    for row in rows:
+        policy = _policy_dict(row["p"])
+        if not policy_schema.needs_attention(policy, include_empty=include_empty):
+            continue
+        summary = policy_schema.effective_summary(policy)
+        items.append({
+            "goal_id": row["id"], "title": row["title"], "project": row["project"],
+            "status": row["status"],
+            "classification": policy_schema.classify_policy(policy),
+            "exhausted": bool(summary["max_executions"] > 0 and summary["exhausted"]),
+            "effective_summary": summary,
+            "ignored_keys": summary["ignored_keys"],
+        })
+    return {"count": len(items), "items": items}
+
+
 @router.get("/goals/{goal_id}/approval-policy")
 async def get_goal_approval_policy(
     goal_id: str, context: dict[str, Any] = Depends(require_tenant_viewer),
@@ -1093,7 +1138,8 @@ async def get_goal_approval_policy(
     )
     if not row:
         raise HTTPException(status_code=404, detail="goal_not_found")
-    policy = row["p"] if isinstance(row["p"], dict) else json.loads(row["p"] or "{}")
+    policy = _policy_dict(row["p"])
+    summary = policy_schema.effective_summary(policy)
     return {
         "goal_id": goal_id, "title": row["title"], "status": row["status"],
         "auto_approve_high": bool(policy.get("auto_approve_high")),
@@ -1102,6 +1148,9 @@ async def get_goal_approval_policy(
         "used": int(policy.get("used") or 0),
         "set_by": policy.get("set_by") or "",
         "set_at": policy.get("set_at") or "",
+        "classification": policy_schema.classify_policy(policy),
+        "effective_summary": summary,
+        "ignored_keys": summary["ignored_keys"],
     }
 
 
@@ -1137,7 +1186,29 @@ async def set_goal_approval_policy(
         "set_by": "CEO",
         "set_at": datetime.now(timezone.utc).isoformat(),
     }
-    row = await get_pool().fetchrow(
+    enabling = bool(req.auto_approve_high or req.auto_approve_critical)
+
+    # 저장 직전 병합 결과를 검증한다. 레거시 키는 막지 않고 경고만 한다.
+    pool = get_pool()
+    current = await pool.fetchrow(
+        "SELECT COALESCE(approval_policy, '{}'::jsonb) AS p "
+        "FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
+        goal_id, _tenant_id(context),
+    )
+    if not current:
+        raise HTTPException(status_code=404, detail="goal_not_found")
+    merged = {**_policy_dict(current["p"]), **payload}
+    if enabling:
+        merged["used"] = 0
+    _, errors = policy_schema.validate_policy(merged)
+    if errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_approval_policy", "errors": errors},
+        )
+    ignored = policy_schema.ignored_keys(merged)
+
+    row = await pool.fetchrow(
         "UPDATE goals "
         "   SET approval_policy = COALESCE(approval_policy, '{}'::jsonb) "
         "       || $2::jsonb "
@@ -1146,8 +1217,7 @@ async def set_goal_approval_policy(
         "       updated_at = NOW() "
         " WHERE id = $1::uuid AND tenant_id = $4::uuid "
         " RETURNING id::text AS id, title",
-        goal_id, json.dumps(payload),
-        bool(req.auto_approve_high or req.auto_approve_critical), _tenant_id(context),
+        goal_id, json.dumps(payload), enabling, _tenant_id(context),
     )
     if not row:
         raise HTTPException(status_code=404, detail="goal_not_found")
@@ -1169,7 +1239,13 @@ async def set_goal_approval_policy(
     except Exception:
         pass
 
-    return {"ok": True, "goal_id": row["id"], "title": row["title"], **payload}
+    result: dict[str, Any] = {"ok": True, "goal_id": row["id"], "title": row["title"], **payload}
+    if ignored:
+        result["warnings"] = {
+            "ignored_keys": ignored,
+            "message": "이 키들은 자동승인 가드가 읽지 않아 효과가 없습니다 (삭제·변환하지 않음)",
+        }
+    return result
 
 
 class GoalLeadRequest(BaseModel):
