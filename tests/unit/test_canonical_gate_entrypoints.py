@@ -152,13 +152,15 @@ def runner_env(monkeypatch):
 
 
 def _job_req(pr):
-    return pr.JobSubmitRequest(project="AADS", instruction="간단한 지시", session_id=_SESSION)
+    return pr.JobSubmitRequest(
+        project="AADS", instruction=f"간단한 지시\nGOAL_ID: {_GOAL}", session_id=_SESSION,
+    )
 
 
 def _batch_req(pr, n=3):
     return pr.BatchSubmitRequest(
         project="AADS", session_id=_SESSION,
-        jobs=[pr.BatchJobItem(key=f"K{i}", instruction=f"지시 {i}") for i in range(n)],
+        jobs=[pr.BatchJobItem(key=f"K{i}", instruction=f"지시 {i}\nGOAL_ID: {_GOAL}") for i in range(n)],
     )
 
 
@@ -308,7 +310,7 @@ def _runner_client(env):
 
 def _post_job(client):
     return client.post("/api/v1/pipeline/jobs", json={
-        "project": "AADS", "instruction": "간단한 지시", "session_id": _SESSION,
+        "project": "AADS", "instruction": f"간단한 지시\nGOAL_ID: {_GOAL}", "session_id": _SESSION,
     })
 
 

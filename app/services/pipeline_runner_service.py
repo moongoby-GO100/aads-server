@@ -224,6 +224,7 @@ async def _link_job_to_goal_explicit(
     instruction: Optional[str] = None,
     goal_id: Optional[str] = None,
     milestone_id: Optional[str] = None,
+    bind_source: Optional[str] = None,
 ) -> Optional[GoalLink]:
     """작업을 **명시적으로 지정된** 목표에만 연결한다.
 
@@ -241,8 +242,13 @@ async def _link_job_to_goal_explicit(
     프로젝트여야 하고 draft/active 상태여야 한다 — 아니면 거부하고 연결하지 않는다.
     blocked 목표는 같은 goal·tenant·project 의 열린(pending/in_progress/blocked) 마일스톤이
     명시된 경우에만 연결한다(REMEDIATION_PURPOSE 유무 무관). 연결만 하고 상태는 바꾸지 않는다.
+
+    `bind_source` 는 goal_task_links.bind_source 에 남길 출처 이름을 덮어쓴다. 세션 단일 후보
+    자동 연결(goal_autolink)이 같은 검증을 거치면서 출처만 구분하려고 쓴다.
     """
     binding = parse_goal_binding(instruction, goal_id=goal_id, milestone_id=milestone_id)
+    if bind_source:
+        binding = binding._replace(source=bind_source)
     if not binding.is_explicit:
         logger.debug("goal_link_skipped_no_explicit_context job=%s project=%s", job_id, project)
         return None

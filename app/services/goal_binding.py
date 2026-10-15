@@ -66,6 +66,8 @@ EFFECTIVE_LINK_STATES = frozenset({LINK_STATE_ACTIVE})
 # goal_task_links.bind_source
 BIND_SOURCE_EXPLICIT_API = "explicit_api"
 BIND_SOURCE_EXPLICIT_DIRECTIVE = "explicit_directive"
+# I-3(c): 제출 세션이 맡은 목표에 in_progress 마일스톤이 정확히 1개일 때만 붙는다.
+BIND_SOURCE_SESSION_SINGLE = "session_single"
 BIND_SOURCE_RECONCILER = "reconciler"
 BIND_SOURCE_LEGACY_AUTO = "legacy_auto_project"
 BIND_SOURCE_UNKNOWN = "unknown"

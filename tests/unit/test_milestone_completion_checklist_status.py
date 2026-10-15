@@ -66,13 +66,14 @@ async def _columns():
 def test_goal_status_without_checklist_keeps_previous_response_contract(monkeypatch):
     status = _status(monkeypatch, None)
     assert status == {
+        "activity": None,
         "goal_id": "goal-1", "project": "AADS", "title": "Goal", "priority": "P2",
         "status": "active", "goal_paused": False, "goal_paused_reason": None,
         "description": "Description", "success_criteria": "Description",
         "progress": 0, "milestones_total": 1, "milestones_completed": 0,
         "milestones": [{
             "id": "milestone-1", "title": "Milestone", "sequence": 1,
-            "status": "pending", "auto_advance": True,
+            "status": "pending", "current_runner": None, "auto_advance": True,
             "completion_criteria": "Existing text", "started_at": None,
             "completed_at": None, "tasks": [],
         }],

@@ -1326,7 +1326,12 @@ class GoalStateMachine:
             total = len(milestones)
             completed = sum(1 for m in milestones if m["status"] == "completed")
 
+            from app.services.goal_activity import activity_for_goals
+
+            live = (await activity_for_goals(conn, [goal_id]))[goal_id]
+
             return {
+                "activity": live["activity"],
                 "goal_id": str(goal["id"]),
                 "project": goal["project"],
                 "title": goal["title"],
@@ -1345,6 +1350,7 @@ class GoalStateMachine:
                         "title": m["title"],
                         "sequence": m["sequence_order"],
                         "status": m["status"],
+                        "current_runner": live["runners"].get(str(m["id"])),
                         "auto_advance": m["auto_advance"],
                         "completion_criteria": m["completion_criteria"],
                         **({"completion_checklist": json.loads(m["completion_checklist"])
@@ -1388,9 +1394,19 @@ class GoalStateMachine:
             from app.services.goal_signals import signals_for_rows
 
             derived = await signals_for_rows(conn, [dict(r) for r in rows])
+            # 🔄·⏳ 활동 판정과 스트립 정렬 키(M2b). 실패해도 목록은 내려간다.
+            from app.services.goal_activity import activity_for_goals, strip_rank
+
+            live = await activity_for_goals(conn, [str(r["id"]) for r in rows])
         return [
             {
                 **derived.get(str(r["id"]), {}),
+                "activity": live[str(r["id"])]["activity"],
+                "strip_rank": strip_rank(
+                    live[str(r["id"])]["activity"], r["priority"],
+                    bool(derived.get(str(r["id"]), {}).get("dormant")),
+                ),
+                "current_runner": live[str(r["id"])]["goal_runner"],
                 "goal_id": str(r["id"]),
                 "project": r["project"],
                 "title": r["title"],

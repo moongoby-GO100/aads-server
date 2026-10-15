@@ -962,6 +962,7 @@ async def goals_for_session(
         """
         SELECT DISTINCT ON (g.id)
                g.id::text AS goal_id, g.title, g.status, g.project,
+               g.priority, g.paused_at, g.paused_reason, g.approval_policy,
                COALESCE(g.progress, 0) AS progress,
                -- 이 세션이 그 목표의 주도인가. 담당과 구분해 그려야 한다 —
                -- 주도는 목표 전체를 지고, 담당은 자기 몫만 진다
@@ -986,10 +987,48 @@ async def goals_for_session(
         """,
             session_id, _tenant_id(context),
         )
+        # 스트립 판정(M2b): 🔄·⏳ 활동, 휴면, 정렬 키, 마일스톤의 현재 러너, 세션 미연결 건수.
+        from app.services.goal_activity import (
+            activity_for_goals, sort_for_strip, strip_rank, unlinked_count,
+        )
+        from app.services.goal_signals import signals_for_rows
+
+        goal_rows = [dict(r) for r in rows]
+        derived = await signals_for_rows(conn, [{**r, "id": r["goal_id"]} for r in goal_rows])
+        live = await activity_for_goals(conn, [r["goal_id"] for r in goal_rows])
+        unlinked = await unlinked_count(conn, session_id, _tenant_id(context))
+
+    goals = []
+    for row in goal_rows:
+        gid = row["goal_id"]
+        signal = derived.get(gid, {})
+        activity = live[gid]["activity"]
+        dormant = bool(signal.get("dormant"))
+        runner = (
+            live[gid]["runners"].get(row["milestone_id"]) if row.get("milestone_id") else None
+        ) or live[gid]["goal_runner"]
+        paused_at = row.pop("paused_at", None)
+        paused_reason = row.pop("paused_reason", None)
+        row.pop("approval_policy", None)
+        goals.append({
+            **row,
+            "goal_paused": paused_at is not None,
+            "goal_paused_reason": paused_reason if paused_at else None,
+            "priority_rank": signal.get("priority_rank"),
+            "dormant": dormant,
+            "dormant_reason": signal.get("dormant_reason"),
+            "activity": activity,
+            "current_runner": runner,
+            "strip_rank": strip_rank(activity, row.get("priority"), dormant),
+        })
 
     from app.services.direction_guard import is_halted
 
-    return {"halted": await is_halted(), "goals": [dict(r) for r in rows]}
+    return {
+        "halted": await is_halted(),
+        "goals": sort_for_strip(goals),
+        "unlinked_count": unlinked,
+    }
 
 
 @router.get("/goals/{goal_id}/candidates")

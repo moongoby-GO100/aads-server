@@ -2412,17 +2412,19 @@ async def submit_job(
     if req.worker_model and not req.worker_model_reason:
         msg += " 직접 모델 지정은 사유가 없어 저장하지 않았고, 어드민 러너 모델 설정값을 사용합니다."
 
-    # Goal link (best-effort): **명시적으로 지정된** 목표에만 연결한다.
-    # goal_id/milestone_id 필드 또는 지시서의 GOAL_ID/MILESTONE_ID 메타데이터가 없으면
-    # 어떤 목표에도 붙이지 않는다 (이전의 "프로젝트 첫 active 목표" 자동연결 폐기).
+    # Goal link (best-effort, I-3): (a) 제출 인자 > (b) 지시서 GOAL_ID/MILESTONE_ID >
+    # (c) 제출 세션의 단일 in_progress 마일스톤 > (d) 비움. 추정 연결은 하지 않는다.
     try:
-        from app.services.pipeline_runner_service import _link_job_to_goal_explicit
-        goal_link = await _link_job_to_goal_explicit(
+        from app.services.goal_autolink import autolink_job
+        autolink = await autolink_job(
             job_id, req.project,
             instruction=req.instruction,
             goal_id=req.goal_id or None,
             milestone_id=req.milestone_id or None,
+            session_id=session_id,
+            tenant_id=_tenant_id(context),
         )
+        goal_link = autolink if autolink.linked else None
         if goal_link:
             await _persist_job_goal_context(pool, job_id, goal_link.goal_id, goal_link.milestone_id)
             msg += f" 목표 {goal_link.goal_id} 에 연결되었습니다."
@@ -4061,6 +4063,15 @@ class BatchJobItem(BaseModel):
     worker_model: str = Field("")
     worker_model_reason: str = Field("", max_length=500)
     depends_on_key: str = Field("", description="이 배치 내 다른 작업의 key (자동으로 job_id 매핑)")
+    goal_id: str = Field("", description="연결할 목표 UUID (선택) — 미지정 시 지시서 GOAL_ID, 세션 단일 마일스톤 순으로 본다")
+    milestone_id: str = Field("", description="연결할 마일스톤 UUID (선택, goal_id 와 함께)")
+
+    @field_validator('goal_id', 'milestone_id')
+    @classmethod
+    def validate_goal_uuid(cls, v):
+        if v and not _UUID_RE.match(v):
+            raise ValueError("goal_id/milestone_id는 UUID 형식이어야 합니다")
+        return v
 
 
 class BatchSubmitRequest(BaseModel):
@@ -4135,6 +4146,7 @@ async def submit_batch(
 
     results = []
     gate_targets: list[tuple[str, str]] = []
+    pending_links: list[tuple[BatchJobItem, dict]] = []
     batch_file_owner: dict[str, str] = {}
     try:
         async with pool.acquire() as conn:
@@ -4360,17 +4372,6 @@ async def submit_batch(
                     # P2-2: LISTEN/NOTIFY
                     await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
 
-                    try:
-                        from app.services.pipeline_runner_service import _link_job_to_goal_explicit
-                        # 배치도 동일 규칙 — 지시서 GOAL_ID/MILESTONE_ID 메타데이터가
-                        # 있을 때만 연결하고, 없으면 어떤 목표에도 붙이지 않는다.
-                        batch_goal_link = await _link_job_to_goal_explicit(
-                            job_id, req.project, instruction=item.instruction,
-                        )
-                        if batch_goal_link:
-                            gate_targets.append((job_id, batch_goal_link.goal_id))
-                    except Exception as exc:
-                        logger.warning("pipeline_runner.goal_link_fail", job_id=job_id, error=str(exc))
                     for path in item_target_files:
                         batch_file_owner.setdefault(path, job_id)
 
@@ -4383,6 +4384,7 @@ async def submit_batch(
                         "target_files": sorted(item_target_files),
                         "write_scope": "explicit" if item_scope.explicit else "legacy",
                     })
+                    pending_links.append((item, results[-1]))
 
     except HTTPException:
         raise
@@ -4394,6 +4396,28 @@ async def submit_batch(
 
     logger.info("pipeline_runner.batch_submitted",
                  project=req.project, count=len(results), parallel_group=pg)
+
+    # 목표 연결(I-3)은 **커밋 뒤에** 한다. 연결 함수는 별도 DB 연결로 작업 행을 잠그므로,
+    # 열린 트랜잭션 안에서 부르면 행이 보이지 않아 조용히 미연결이 됐다(배치 제출 전부).
+    for item, result in pending_links:
+        try:
+            from app.services.goal_autolink import autolink_job
+            autolink = await autolink_job(
+                result["job_id"], req.project,
+                instruction=item.instruction,
+                goal_id=item.goal_id or None,
+                milestone_id=item.milestone_id or None,
+                session_id=req.session_id,
+                tenant_id=tenant_id,
+            )
+            result["goal_link"] = autolink.as_dict()
+            if autolink.linked:
+                await _persist_job_goal_context(
+                    pool, result["job_id"], autolink.goal_id, autolink.milestone_id,
+                )
+                gate_targets.append((result["job_id"], autolink.goal_id))
+        except Exception as exc:
+            logger.warning("pipeline_runner.goal_link_fail", job_id=result["job_id"], error=str(exc))
 
     # 정본 게이트(그림자): 커밋된 뒤 판정·기록만 한다. 실패해도 응답은 그대로다.
     if gate_targets:
