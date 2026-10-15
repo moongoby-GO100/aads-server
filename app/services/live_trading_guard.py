@@ -82,15 +82,231 @@ _MUTATING_CMD = re.compile(
     r"python[0-9.]*\s+[^|]*\b(deploy|apply|promote|activate)\b)",
     re.IGNORECASE,
 )
-_REDIRECT_WRITE = re.compile(r">\s*[^|&\s]|>>\s*[^|&\s]")
 
-# `2>/dev/null` 은 쓰기가 아니다.
+# 리다이렉트 판정 (2026-10-15 오탐 실측: 따옴표 속 `<> ` 의 `>`, `> /tmp/x.log`;
+# 2026-09-15: `2>/dev/null` 이 쓰기로 판정됨).
 #
-# 거의 모든 조회 명령에 붙는데, 리다이렉트 판정이 `>` 뒤에 글자만 있으면
-# 쓰기로 쳤다. 그래서 `grep … live_engine.py 2>/dev/null` 이 "실매매 경로에서
-# 변경 명령을 실행하려 함" 으로 막혔다(2026-09-15 실측). 버리는 리다이렉트를
-# 먼저 지우고 나서 본다.
-_NULL_REDIRECT = re.compile(r"\d?>>?\s*(/dev/null|&\d)")
+# 1) 따옴표 안 글자는 **모든 명령이 읽기 전용 목록에 있을 때만** 가린다.
+#    따옴표 문자열은 `sh -c "…"`, `… | sh`, `eval`, `ssh`, `awk`, `xargs` 같은
+#    명령에게는 실행될 코드다. 그것들을 목록으로 따라잡지 않고(우회가 반드시
+#    나온다), 반대로 **아는 읽기 명령만** 면제한다. 모르는 명령이 하나라도
+#    있으면 원문 그대로 본다(= 예전 동작).
+# 2) 안전한 대상은 `/dev/null`, `&N`(fd 복제), 그리고 `/tmp/` 아래의 평문 경로 중
+#    실매매 경로(_GUARDED_PATH)가 아닌 것뿐이다. 따옴표·`$`·백틱·`~`·`..`·글롭이
+#    하나라도 있으면 쓰기로 본다. `cd /tmp/…` 는 상대경로 대상을 구해주지 않는다.
+_REDIRECT_OP = re.compile(r">>?\|?&?")
+_REDIRECT_TOKEN_END = re.compile(r"[\s|&;<>()]")
+_SAFE_REDIRECT_TARGET = re.compile(r"^(?:/dev/null|/tmp/[A-Za-z0-9_.@%+=:,/-]+)$")
+_SEGMENT_SPLIT = re.compile(r"[;&|\n()`]")
+_ENV_ASSIGN = re.compile(r"^[A-Za-z_]\w*=\S*$")
+# 명령 앞에 둬도 코드가 되지 않는 환경변수만 면제한다(명시 목록). GIT_EXTERNAL_DIFF·
+# GIT_SSH_COMMAND·GIT_CONFIG_*·PAGER 같은 "실행 문자열" 변수는 목록에 없으므로 원문 판정이 된다.
+_SAFE_ENV_ASSIGN = re.compile(r"^(?:LC_[A-Z_]+|LANG|TZ|COLUMNS|NO_COLOR)=[A-Za-z0-9_.:+/-]*$")
+
+# 따옴표 인자를 실행하지 않는 읽기 전용 명령.
+# sed(`e`/`w`)·awk·find(-exec)·xargs·python·셸류는 일부러 뺐다.
+_READONLY_CMDS = frozenset({
+    "cd", "grep", "egrep", "fgrep", "cut", "head", "tail", "wc", "echo",
+    "printf", "date", "cat", "ls", "pwd", "tr",
+})
+_READONLY_GIT_SUBCMDS = frozenset({
+    "log", "show", "diff", "status", "ls-remote", "rev-parse", "blame", "grep",
+    "ls-files", "cat-file", "rev-list", "describe", "shortlog", "merge-base",
+})
+# 인자 문자열을 그대로 출력할 수 있는 명령. 이들의 출력이 파일로 가면 그 파일이
+# 다음 호출에서 실행될 코드일 수 있다(`printf 'echo x > P' > /tmp/e.sh`).
+_EMITTER_CMDS = frozenset({"echo", "printf", "date"})
+
+# git 옵션은 허용 목록(화이트리스트)으로만 본다. 목록 밖 옵션이 하나라도 있으면
+# 가림을 포기한다. 옵션 이름 접두 매칭은 long option 축약(`--open-files=`)·short
+# option 묶음(`-nO'…'`)에 뚫린다.
+_GIT_SAFE_LONG_OPTS = frozenset({
+    "oneline", "stat", "shortstat", "numstat", "name-only", "name-status", "short",
+    "porcelain", "count", "no-color", "color", "line-number", "files-with-matches",
+    "files-without-match", "ignore-case", "word-regexp", "fixed-strings",
+    "extended-regexp", "perl-regexp", "basic-regexp", "invert-match", "only-matching",
+    "grep", "author", "committer", "since", "until", "after", "before", "format",
+    "pretty", "graph", "decorate", "no-decorate", "all", "all-match", "abbrev-commit",
+    "abbrev", "max-count", "no-merges", "merges", "first-parent", "reverse", "date",
+    "cached", "staged", "untracked", "no-index", "heading", "break", "context",
+    "after-context", "before-context", "show-function", "function-context", "quiet",
+    "null", "full-name", "patch", "no-patch", "follow", "root", "tags", "heads",
+    "refs", "get-url", "is-ancestor", "topo-order", "date-order", "ignored",
+    "branch", "long", "contains", "match", "always", "dirty", "diff-filter",
+    "pickaxe-regex", "numbered", "summary", "left-right", "boundary", "skip",
+})
+_GIT_SHORT_NOARG = frozenset("abcEFHIilNnPpqrstuvWwz0123456789")
+_GIT_SHORT_WITHARG = frozenset("ABCeGLMmSUf")
+_QUOTED_WORD = re.compile(r"""^(?:'Q*'|"Q*")$""")
+
+
+def _git_option_is_safe(word: str) -> bool:
+    if "'" in word or '"' in word or "\\" in word or "$" in word:
+        return False
+    if word.startswith("--"):
+        return word[2:].split("=", 1)[0] in _GIT_SAFE_LONG_OPTS
+    for ch in word[1:]:
+        if ch in _GIT_SHORT_WITHARG:
+            return True
+        if ch not in _GIT_SHORT_NOARG:
+            return False
+    return True
+
+
+def _git_segment_is_readonly(words: list) -> bool:
+    if len(words) < 2 or words[1] not in _READONLY_GIT_SUBCMDS:
+        return False
+    after_dashdash = False
+    for w in words[2:]:
+        if not after_dashdash and w == "--":
+            after_dashdash = True
+        elif not after_dashdash and w.startswith("-") and len(w) > 1:
+            if not _git_option_is_safe(w):
+                return False
+        elif "'" in w or '"' in w:
+            # 따옴표는 통째로 한 단어일 때(검색어·경로)만 가린다. ls-remote 의 원격
+            # 인자는 실행 문자열이 될 수 있으므로 따옴표를 허용하지 않는다.
+            if words[1] == "ls-remote" or not _QUOTED_WORD.match(w):
+                return False
+    return True
+
+
+def _has_file_redirect(masked: str) -> bool:
+    """`/dev/null`·`&N` 이 아닌 곳으로 가는 출력 리다이렉트가 있는가."""
+    for m in _REDIRECT_OP.finditer(masked):
+        start = m.end()
+        while start < len(masked) and masked[start] in " \t":
+            start += 1
+        end_m = _REDIRECT_TOKEN_END.search(masked, start)
+        token = masked[start:end_m.start() if end_m else len(masked)]
+        if m.group(0).endswith("&") and re.fullmatch(r"\d+-?|-", token):
+            continue
+        if token != "/dev/null":
+            return True
+    return False
+
+
+def _mask_quoted(cmd: str) -> Optional[str]:
+    """따옴표 안 글자를 `Q` 로 덮는다(길이 보존). 균형이 안 맞으면 None.
+
+    명령 치환 `$(…)`·백틱 안은 실행되는 코드이므로 가리지 않고, 중첩은 스택으로
+    센다.
+    """
+    out = []
+    stack = ["cmd"]
+    i, n = 0, len(cmd)
+    while i < n:
+        c, top = cmd[i], stack[-1]
+        if top == "sq":
+            if c == "'":
+                stack.pop()
+                out.append(c)
+            else:
+                out.append("Q")
+        elif top == "dq":
+            if c == "\\" and i + 1 < n:
+                out.append("QQ")
+                i += 2
+                continue
+            if c == '"':
+                stack.pop()
+                out.append(c)
+            elif c == "$" and cmd.startswith("$(", i):
+                stack.append("sub")
+                out.append("$(")
+                i += 2
+                continue
+            elif c == "`":
+                stack.append("bt")
+                out.append(c)
+            else:
+                out.append("Q")
+        else:
+            if c == "\\" and i + 1 < n:
+                out.append("\\Q")
+                i += 2
+                continue
+            if c == "'":
+                stack.append("sq")
+            elif c == '"':
+                stack.append("dq")
+            elif c == "`":
+                if top == "bt":
+                    stack.pop()
+                else:
+                    stack.append("bt")
+            elif c == "$" and cmd.startswith("$(", i):
+                stack.append("sub")
+                out.append("$(")
+                i += 2
+                continue
+            elif c == "(":
+                stack.append("sub")
+            elif c == ")" and top == "sub":
+                stack.pop()
+            out.append(c)
+        i += 1
+    return "".join(out) if stack == ["cmd"] else None
+
+
+def _only_readonly_commands(masked: str) -> bool:
+    """가린 문자열의 모든 명령 단어가 읽기 전용 목록에 있는가.
+
+    첫 단어만 본다. 따옴표·`$`·백슬래시가 든 명령 단어(`"sh"`, `$x`, `$'…'`)는
+    목록과 일치하지 않으므로 자동으로 아니라고 답한다. here-doc 도 아니다.
+    허용 목록 밖 환경변수 대입, 목록 밖 git 옵션, 출력이 파일로 가는 echo/printf
+    류가 있어도 아니라고 답한다(= 원문 판정).
+    """
+    if "<<" in masked:
+        return False
+    text = masked.replace("&>", ">").replace(">&", ">").replace(">|", ">")
+    emits = False
+    for segment in _SEGMENT_SPLIT.split(text):
+        words = segment.split()
+        while words and _ENV_ASSIGN.match(words[0]):
+            if not _SAFE_ENV_ASSIGN.match(words.pop(0)):
+                return False
+        if not words:
+            continue
+        head = words[0]
+        if head == "git":
+            if not _git_segment_is_readonly(words):
+                return False
+            emits = emits or words[1] == "rev-parse"
+        elif head not in _READONLY_CMDS:
+            return False
+        else:
+            emits = emits or head in _EMITTER_CMDS
+    return not (emits and _has_file_redirect(masked))
+
+
+def _is_safe_redirect_target(token: str) -> bool:
+    return bool(
+        _SAFE_REDIRECT_TARGET.match(token)
+        and ".." not in token.split("/")
+        and not _GUARDED_PATH.search(token)
+    )
+
+
+def _has_write_redirect(cmd: str) -> bool:
+    """따옴표 안·버리는 리다이렉트·실매매 밖 /tmp 출력을 빼고 쓰기 리다이렉트를 찾는다."""
+    masked = _mask_quoted(cmd)
+    if masked is None or not _only_readonly_commands(masked):
+        masked = cmd
+    for m in _REDIRECT_OP.finditer(masked):
+        start = m.end()
+        while start < len(masked) and masked[start] in " \t":
+            start += 1
+        end_m = _REDIRECT_TOKEN_END.search(masked, start)
+        end = end_m.start() if end_m else len(masked)
+        token = cmd[start:end]
+        if m.group(0).endswith("&") and re.fullmatch(r"\d+-?|-", token):
+            continue
+        if _is_safe_redirect_target(token):
+            continue
+        return True
+    return False
+
 
 # 문서·보고서·시험은 실매매를 바꾸지 않는다.
 #
@@ -109,11 +325,6 @@ _CRITICAL = re.compile(
     r"dedicated[_-]account|systemctl\s+(restart|stop|start)\s+\S*go100)",
     re.IGNORECASE,
 )
-
-
-def _has_write_redirect(cmd: str) -> bool:
-    """버리는 리다이렉트를 빼고 나서 쓰기 리다이렉트를 찾는다."""
-    return bool(_REDIRECT_WRITE.search(_NULL_REDIRECT.sub("", cmd)))
 
 
 # 명령문 안의 문서·시험 경로는 지우고 나서 본다.
