@@ -282,7 +282,8 @@ async def test_unpinned_failure_switches_with_chain_banner_and_actual_model(monk
         c.fallback_chain, prev_model=model, new_model=effective, base_model=model,
         reason=chat_service._safe_fallback_reason("401 Unauthorized"),
     )
-    assert banner == chat_service._model_switch_banner(model, effective)
+    assert banner == chat_service._model_switch_banner(model, effective, "인증 오류")
+    assert "응답 실패(인증 오류)" in banner and "실행 불가" not in banner
     assert c.fallback_chain[0]["from"] == model and c.fallback_chain[0]["to"] == effective
     assert c.fallback_chain[0]["reason"] == "인증 오류"
 

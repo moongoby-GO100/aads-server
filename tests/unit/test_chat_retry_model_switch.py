@@ -56,7 +56,7 @@ def test_retry_model_switch_records_chain_and_banner():
     assert chain[0]["from"] == "openai:gpt-6.1-sol"
     assert chain[0]["to"] == "codex:gpt-6.1-sol"
     assert chain[0]["reason"] == "요청 오류"
-    assert banner.strip() == "[openai:gpt-6.1-sol 실행 불가 → codex:gpt-6.1-sol 전환]"
+    assert banner.strip() == "[openai:gpt-6.1-sol 응답 실패(요청 오류) → codex:gpt-6.1-sol로 응답]"
     assert banner.startswith("\n\n[") and banner.endswith("]\n\n")
 
 

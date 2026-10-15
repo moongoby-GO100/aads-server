@@ -140,7 +140,8 @@ async def test_unqualified_openai_error_keeps_codex_banner(monkeypatch):
     events = [event async for event in model_selector._stream_direct_openai_provider(
         "gpt-6-sol", "openai", {}, "system", [{"role": "user", "content": "hello"}],
     )]
-    assert "Codex CLI gpt-5.5 전환" in events[0]["content"]
+    assert events[0]["content"].strip() == "[gpt-6-sol 응답 실패(요청 오류) → Codex CLI gpt-5.5로 응답]"
+    assert "실행 불가" not in events[0]["content"]
     assert events[-1]["type"] == "done"
 
 

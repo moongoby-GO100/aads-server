@@ -21,6 +21,10 @@ from app.config import Settings
 from app.core.anthropic_client import get_client
 from app.core.db_pool import get_pool
 from app.services import chat_interrupt_lifecycle as _interrupt_lifecycle
+from app.services.model_switch_banner import (
+    build_switch_banner as _build_switch_banner,
+    classify_failure_reason as _classify_failure_reason,
+)
 from app.core.project_config import normalize_project_label, resolve_project, get_display_name
 
 logger = logging.getLogger(__name__)
@@ -1324,9 +1328,14 @@ def _plan_attempt_model(
     return attempt_override, effective, is_retry_override
 
 
-def _model_switch_banner(requested_model: object, actual_model: object) -> str:
-    """model_selector 의 "[<모델> 실행 불가 → ... 전환]" 배너와 같은 형식."""
-    return f"\n\n[{requested_model} 실행 불가 → {actual_model} 전환]\n\n"
+def _model_switch_banner(
+    requested_model: object,
+    actual_model: object,
+    reason: Optional[str] = None,
+    failed_path: Optional[List[object]] = None,
+) -> str:
+    """model_selector 의 직결 폴백 배너와 같은 헬퍼(model_switch_banner)로 만든다."""
+    return _build_switch_banner(requested_model, actual_model, reason, failed_path=failed_path)
 
 
 def _note_retry_model_switch(
@@ -1336,10 +1345,13 @@ def _note_retry_model_switch(
     new_model: object,
     base_model: object,
     reason: Optional[str],
+    failed_path: Optional[List[object]] = None,
+    banner_reason: Optional[str] = None,
 ) -> str:
     """재시도가 직전 시도와 다른 모델로 나가면 fallback_chain 에 남기고, 응답 앞에 붙일 배너를 돌려준다.
 
     배너는 요청 모델(base)과 실제 모델이 다를 때만 있다. 요청 모델로 되돌아온 시도는 빈 문자열.
+    reason 은 직전 시도의 실패 사유(chain 기록용), banner_reason 은 요청 모델이 실패한 사유(없으면 reason).
     """
     if _fallback_model_key(new_model) != _fallback_model_key(prev_model):
         chain.append({
@@ -1350,7 +1362,7 @@ def _note_retry_model_switch(
         })
     if _fallback_model_key(new_model) == _fallback_model_key(base_model):
         return ""
-    return _model_switch_banner(base_model, new_model)
+    return _model_switch_banner(base_model, new_model, banner_reason if banner_reason is not None else reason, failed_path)
 
 
 async def _persist_retry_model_switch(
@@ -1467,27 +1479,7 @@ _FALLBACK_STAGE_LABELS = {
 
 def _safe_fallback_reason(error: object) -> str:
     """오류를 고정 분류로만 바꾼다. 원문은 절대 돌려주지 않는다."""
-    detail = str(error or "").lower()
-    if isinstance(error, BaseException):
-        detail = f"{type(error).__name__.lower()} {detail}"
-    status = re.search(r"\b(4\d\d|5\d\d)\b", detail)
-    if "429" in detail or "quota" in detail or re.search(r"rate[\s_-]?limit|\blimit\b", detail):
-        return "한도 초과"
-    if "overloaded" in detail or "529" in detail:
-        return "과부하"
-    if "codex_auth_failed" in detail:
-        return "Codex 인증 실패(재로그인 필요)"
-    if re.search(r"\b40[13]\b", detail) or "unauthorized" in detail or "authentication" in detail:
-        return "인증 오류"
-    if "timeout" in detail or "timed out" in detail:
-        return "시간 초과"
-    if any(k in detail for k in ("connect", "network", "unreachable", "reset", "disconnected", "readerror")):
-        return "연결 오류"
-    if "empty" in detail or "missing_done" in detail or "without done" in detail:
-        return "빈 응답"
-    if status:
-        return f"HTTP {status.group(1)}"
-    return "요청 오류"
+    return _classify_failure_reason(error)
 
 
 def _fallback_model_key(model: object) -> str:
@@ -15125,6 +15117,8 @@ async def send_message_stream(
         _retry_fallback_chain: list = _turn_contract.fallback_chain
         _pending_switch_banner = ""
         _attempt_failure_reason = ""
+        _first_failure_reason = ""
+        _failed_attempt_models: list = []
         _prev_attempt_model = _base_stream_model
 
         # ── LLM 스트림 호출 + 즉시 재시도 (AADS-003: 최대 3회, 에러 유형별 백오프) ──
@@ -15135,12 +15129,18 @@ async def send_message_stream(
                 model_override, _base_stream_model, _missing_done_fallback_models, _stream_attempt,
             )
             if _stream_attempt > 0:
+                if not _failed_attempt_models:
+                    _first_failure_reason = _attempt_failure_reason
+                if not _failed_attempt_models or _fallback_model_key(_failed_attempt_models[-1]) != _fallback_model_key(_prev_attempt_model):
+                    _failed_attempt_models.append(_prev_attempt_model)
                 _switch_banner = _note_retry_model_switch(
                     _retry_fallback_chain,
                     prev_model=_prev_attempt_model,
                     new_model=_attempt_effective_model,
                     base_model=_base_stream_model,
                     reason=_attempt_failure_reason,
+                    failed_path=_failed_attempt_models,
+                    banner_reason=_first_failure_reason,
                 )
                 if _fallback_model_key(_attempt_effective_model) != _fallback_model_key(_prev_attempt_model):
                     await _persist_retry_model_switch(
@@ -15512,7 +15512,7 @@ async def send_message_stream(
             # CEO 추가 지시로 async for 를 끊은 것은 실패가 아니다. 여기서 루프를
             # 빠져나가 아래 deferred interrupt 처리로 넘긴다. 빠져나가지 않으면 다음
             # 시도가 예비 모델로 나가 "[claude-opus-5-5 실행 불가 → gpt-6-astra 전환]"
-            # 배너가 붙었다(2026-10-02 13:01 KST, 세션 9102c970·009efbfa 실측).
+            # 배너(옛 형식)가 붙었다(2026-10-02 13:01 KST, 세션 9102c970·009efbfa 실측).
             if _interrupt_stream_break:
                 break
 

@@ -35,6 +35,8 @@ from app.services.model_registry import normalize_provider as _normalize_registr
 from app.services.intent_router import IntentResult  # noqa: E402
 from app.services import chat_interrupt_lifecycle as _interrupt_lifecycle  # noqa: E402
 from app.services import session_effort as _session_effort  # noqa: E402
+from app.services.model_switch_banner import build_switch_banner as _build_switch_banner  # noqa: E402
+from app.services.model_switch_banner import classify_failure_reason as _classify_failure_reason  # noqa: E402
 from scripts.claude_model_contract import (  # noqa: E402
     AADS_MODEL_IDS, CONTRACT_VERSION, ModelObservation, resolve_model,
     runtime_alias, session_key,
@@ -1953,6 +1955,7 @@ async def _stream_direct_openai_provider(
         yield {"type": "error", "content": f"direct provider route unavailable: provider={provider} model={display_model}"}
         return
     had_error = False
+    error_reason = ""
     async for event in _stream_litellm_openai(
         request_model,
         system_prompt,
@@ -1970,6 +1973,7 @@ async def _stream_direct_openai_provider(
                 yield {**event, "content": f"provider={provider} model={display_model}: {event.get('content', '')}"}
                 return
             had_error = True
+            error_reason = _classify_failure_reason(event.get("content"))
             logger.warning(
                 "direct_provider_fallback: provider=%s model=%s error=%s",
                 provider,
@@ -1982,7 +1986,7 @@ async def _stream_direct_openai_provider(
         fallback_model = await _get_codex_cli_fallback_model_from_db()
         yield {
             "type": "delta",
-            "content": f"\n\n[{display_model} 실행 불가 → Codex CLI {fallback_model} 전환]\n\n",
+            "content": _build_switch_banner(display_model, f"Codex CLI {fallback_model}", error_reason),
         }
         async for fallback_event in _stream_codex_relay(
             fallback_model,
