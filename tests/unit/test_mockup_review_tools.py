@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import subprocess
 import sys
 import uuid
@@ -263,6 +264,20 @@ def test_create_revision_submit_flow_uses_route_service_functions_in_one_transac
     assert submitted["status"] == "review_ready" and submitted["approved"] is False
     sub = services["submit_review"].await_args.args[5]
     assert str(sub.revision_id) == REVISION and sub.expected_generation == 4
+
+
+def test_repo_manifest_passes_server_build_manifest_without_duplicate_asset_uri():
+    from app.models.mockup_review import RevisionCreate
+
+    raw = json.loads((_REPO / _MANIFEST).read_text(encoding="utf-8"))
+    uris = [a["uri"] for a in raw["revision"]["manifest"]["assets"]]
+    assert len(uris) == len(set(uris))
+    body = RevisionCreate.model_validate({
+        "idempotency_key": "regression-dup-uri-0001", "expected_generation": 0,
+        "manifest": raw["revision"]["manifest"],
+    })
+    built = asyncio.run(svc.build_manifest(body, "modify"))
+    assert len(built["assets"]) == len(uris)
 
 
 def test_revision_loads_repo_manifest_file_and_defaults_generation_and_key(services):

@@ -343,7 +343,7 @@
     },
     {
      "asset_id": "before-strip-icons-option-1440x820",
-     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/before/goal-strip_before_1440x820.png",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/before/goal-strip-icons-option_before_1440x820.png",
      "sha256": "6267c47aa06123d9bcfd272d3f27c9ec43bb15834fb53003581907b87c144267",
      "byte_size": 45511,
      "mime": "image/png",
@@ -375,7 +375,7 @@
     },
     {
      "asset_id": "before-strip-icons-option-390x844",
-     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/before/goal-strip_before_390x844.png",
+     "uri": "internal://docs/design/mockups/20261015_goal_strip_dormancy/before/goal-strip-icons-option_before_390x844.png",
      "sha256": "fc21cdd05f4d128c2850f0186023f6baa67e95e78bfb5ce0070ff7e6073817fd",
      "byte_size": 24558,
      "mime": "image/png",
