@@ -33,6 +33,7 @@ source "$SCRIPT_UNDER_TEST"
 D="$FAKE_DIR"
 
 sleep() { :; }
+DEFAULT_BASE_CONFIG='{"Env":["PATH=/usr/bin","APP_X=a$b"],"WorkingDir":"/app","User":"appuser","Entrypoint":["/entry.sh"],"Cmd":["uvicorn","app:app"],"ExposedPorts":{"8000/tcp":{}},"Labels":{"org.opencontainers.image.revision":"base"},"StopSignal":"SIGINT","Healthcheck":{"Test":["CMD-SHELL","curl -f http://localhost:8000/health/live || exit 1"],"Interval":30000000000,"Retries":3}}'
 
 fake_op() {
   local op=$1; shift
@@ -101,9 +102,25 @@ fake_cmd() {
     "docker image inspect -f "*Config.User*) printf '%s\n' "${FAKE_BASE_USER-appuser}" ;;
     "docker exec "*"tesseract --list-langs")
       printf 'List of available languages (3):\neng\n%s\nosd\n' "$([[ -n ${FAKE_NO_KOR:-} ]] && echo fra || echo kor)" ;;
+    "docker image inspect -f "*RootFS.Layers*)
+      tag="${c##* }"
+      if [[ -f "$D/layers/${tag//:/_}" ]]; then cat "$D/layers/${tag//:/_}"
+      else case $tag in
+        acct-candidate-base:*) echo "${FAKE_BASE_LAYERS:-10}" ;;
+        *) if [[ -f "$D/images/${tag//:/_}" ]]; then echo "${FAKE_IMAGE_LAYERS:-10}"; else return 1; fi ;;
+      esac; fi ;;
+    "docker image inspect -f "*json*Config*)
+      echo "${FAKE_BASE_CONFIG:-$DEFAULT_BASE_CONFIG}" ;;
     "docker image inspect "*)
       tag="${c##* }"
       if [[ -f "$D/images/${tag//:/_}" ]]; then cat "$D/images/${tag//:/_}"; else return 1; fi ;;
+    "docker build "*"acct-candidate-flatbase:"*)
+      cat > "$D/Dockerfile.flat"
+      echo x >> "$D/flat_build_count"
+      if [[ -n ${FAKE_FLAT_FAIL:-} ]]; then return 1; fi
+      tag="${c#*-t }"; tag="${tag%% *}"
+      mkdir -p "$D/layers"
+      echo "${FAKE_FLAT_LAYERS:-1}" > "$D/layers/${tag//:/_}" ;;
     "docker build "*)
       cat > "$D/build.tar"
       tar -xOf "$D/build.tar" ./Dockerfile > "$D/Dockerfile.built"
@@ -114,7 +131,11 @@ fake_cmd() {
       rev=$(sed -n 's/.*org.opencontainers.image.revision="\([^"]*\)".*/\1/p' "$D/Dockerfile.built" | head -1)
       rel=$(sed -n 's/.*acct.release.sha="\([^"]*\)".*/\1/p' "$D/Dockerfile.built" | head -1)
       mkdir -p "$D/images"
-      echo "sha256:builtimg|$rel|$rev" > "$D/images/${tag//:/_}" ;;
+      echo "sha256:builtimg|$rel|$rev" > "$D/images/${tag//:/_}"
+      from=$(sed -n 's/^FROM //p' "$D/Dockerfile.built" | head -1)
+      mkdir -p "$D/layers"
+      if [[ -f "$D/layers/${from//:/_}" ]]; then base_n=$(cat "$D/layers/${from//:/_}"); else base_n=${FAKE_BASE_LAYERS:-10}; fi
+      echo $(( base_n + ${FAKE_ADDED_LAYERS:-4} )) > "$D/layers/${tag//:/_}" ;;
     "docker inspect "*RestartCount*) echo "true 0" ;;
     "docker inspect "*) echo "true" ;;
     "docker logs "*) echo "fake log" ;;
@@ -709,6 +730,142 @@ def test_existing_image_for_the_sha_is_reused_without_rebuild(box):
     assert box.builds() == 0
     res = box.result(proc)
     assert res["new"]["image_reused"] is True and res["new"]["image_id"] == "sha256:already"
+
+
+# ---- layer depth (overlay2 limit 128) ----------------------------------------------------------
+def test_shallow_base_keeps_the_existing_dockerfile_and_never_flattens(box):
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    res = box.result(proc)
+    assert res["base_layers"] == 10 and res["flattened"] is False and res["image_layers"] == 14
+    assert not (box.fake / "Dockerfile.flat").exists() and not (box.fake / "flat_build_count").exists()
+    base_ref = ("acct-candidate-base:" + R8_IMAGE.removeprefix("sha256:"))[:33]
+    assert (box.fake / "Dockerfile.built").read_text().startswith(f"FROM {base_ref}\n")
+
+
+def test_base_at_threshold_is_flattened_with_scratch_copy_from_and_config_restored(box):
+    proc = box.run(env={"FAKE_BASE_LAYERS": "100"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    flat_tag = ("acct-candidate-flatbase:" + R8_IMAGE.removeprefix("sha256:"))[:36]
+    base_ref = ("acct-candidate-base:" + R8_IMAGE.removeprefix("sha256:"))[:33]
+    flat = (box.fake / "Dockerfile.flat").read_text().splitlines()
+    assert flat[:3] == [f"FROM {base_ref} AS src", "FROM scratch", "COPY --from=src / /"]
+    assert 'ENV PATH="/usr/bin"' in flat and 'ENV APP_X="a\\$b"' in flat
+    assert 'WORKDIR "/app"' in flat and 'USER "appuser"' in flat and 'STOPSIGNAL "SIGINT"' in flat
+    assert 'ENTRYPOINT ["/entry.sh"]' in flat and 'CMD ["uvicorn", "app:app"]' in flat and "EXPOSE 8000/tcp" in flat
+    assert 'LABEL "org.opencontainers.image.revision"="base"' in flat
+    assert any(x.startswith("HEALTHCHECK --interval=30000000000ns --retries=3 CMD curl -f http://localhost:8000/health/live") for x in flat)
+    assert not [x for x in flat if x.startswith("RUN ")]
+    built = (box.fake / "Dockerfile.built").read_text()
+    assert built.startswith(f"FROM {flat_tag}\n")
+    assert [x for x in box.log() if "docker create" in x or "docker export" in x] == []
+    res = box.result(proc)
+    assert res["base_layers"] == 100 and res["flattened"] is True and res["image_layers"] == 5
+    assert box.builds() == 1 and len((box.fake / "flat_build_count").read_text().splitlines()) == 1
+
+
+def test_base_just_below_threshold_is_not_flattened(box):
+    proc = box.run(env={"FAKE_BASE_LAYERS": "99"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not (box.fake / "Dockerfile.flat").exists()
+    assert box.result(proc)["flattened"] is False
+
+
+def test_flatten_threshold_is_adjustable_by_environment(box):
+    proc = box.run(env={"FAKE_BASE_LAYERS": "10", "ACCT_FLATTEN_LAYER_THRESHOLD": "5"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (box.fake / "Dockerfile.flat").exists() and box.result(proc)["flattened"] is True
+
+
+def test_flatten_build_failure_exits_6_before_any_change(box):
+    proc = box.run(env={"FAKE_BASE_LAYERS": "120", "FAKE_FLAT_FAIL": "1"})
+    assert proc.returncode == 6, proc.stdout + proc.stderr
+    assert "flatten build failed" in proc.stderr
+    assert box.builds() == 0 and box.port() == "8111" and "OP pg_backup" not in box.log() and box.mutations() == []
+
+
+def test_flatten_that_stays_deep_is_refused(box):
+    proc = box.run(env={"FAKE_BASE_LAYERS": "120", "FAKE_FLAT_LAYERS": "110"})
+    assert proc.returncode == 6 and "still has 110 layers" in proc.stderr
+    assert box.builds() == 0
+
+
+def test_existing_flattened_base_is_reused_without_another_flatten_build(box):
+    flat_tag = ("acct-candidate-flatbase:" + R8_IMAGE.removeprefix("sha256:"))[:36]
+    (box.fake / "layers").mkdir()
+    (box.fake / "layers" / flat_tag.replace(":", "_")).write_text("1\n")
+    proc = box.run(env={"FAKE_BASE_LAYERS": "120"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not (box.fake / "flat_build_count").exists() and box.result(proc)["flattened"] is True
+
+
+def test_deep_reusable_image_is_rebuilt_under_a_new_f_tag_and_old_tag_is_left_alone(box):
+    old = f"acct-candidate:{box.sha[:8]}"
+    (box.fake / "images" / old.replace(":", "_")).write_text(f"sha256:deep|{box.sha}|{box.sha[:8]}\n")
+    (box.fake / "layers").mkdir()
+    (box.fake / "layers" / old.replace(":", "_")).write_text("128\n")
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    res = box.result(proc)
+    assert res["new"]["image"] == f"{old}-f1" and res["new"]["image_reused"] is False
+    assert res["new"]["image_id"] == "sha256:builtimg" and box.builds() == 1
+    assert "-t " + f"{old}-f1" in " ".join(x for x in box.log() if x.startswith("CMD docker build"))
+    assert (box.fake / "images" / old.replace(":", "_")).read_text().startswith("sha256:deep")
+    assert not [x for x in box.log() if re.match(r"CMD docker (image rm|rmi)", x)]
+    assert res["image_layers"] == 14
+
+
+def test_image_just_below_max_layers_is_still_reused(box):
+    tag = f"acct-candidate:{box.sha[:8]}"
+    (box.fake / "images" / tag.replace(":", "_")).write_text(f"sha256:ok|{box.sha}|{box.sha[:8]}\n")
+    (box.fake / "layers").mkdir()
+    (box.fake / "layers" / tag.replace(":", "_")).write_text("119\n")
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    res = box.result(proc)
+    assert box.builds() == 0 and res["new"]["image_reused"] is True and res["image_layers"] == 119 and res["base_layers"] is None
+
+
+def test_existing_shallow_f_tag_is_reused_instead_of_building_again(box):
+    old = f"acct-candidate:{box.sha[:8]}"
+    f1 = old + "-f1"
+    (box.fake / "layers").mkdir()
+    for tag, n, ident in ((old, "128", "deep"), (f1, "30", "flat1")):
+        (box.fake / "images" / tag.replace(":", "_")).write_text(f"sha256:{ident}|{box.sha}|{box.sha[:8]}\n")
+        (box.fake / "layers" / tag.replace(":", "_")).write_text(n + "\n")
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    res = box.result(proc)
+    assert box.builds() == 0 and res["new"]["image"] == f1 and res["new"]["image_id"] == "sha256:flat1"
+
+
+def test_deep_f_tag_wrong_revision_label_is_refused(box):
+    old = f"acct-candidate:{box.sha[:8]}"
+    (box.fake / "layers").mkdir()
+    (box.fake / "images" / old.replace(":", "_")).write_text(f"sha256:deep|{box.sha}|{box.sha[:8]}\n")
+    (box.fake / "layers" / old.replace(":", "_")).write_text("128\n")
+    (box.fake / "images" / (old + "-f1").replace(":", "_")).write_text(f"sha256:bad|{box.sha}|deadbeef\n")
+    proc = box.run()
+    assert proc.returncode == 6 and box.builds() == 0 and "OP start_candidate" not in box.log()
+
+
+def test_final_image_at_depth_limit_stops_before_migration_with_a_clear_message(box):
+    proc = box.run(env={"FAKE_BASE_LAYERS": "90", "FAKE_ADDED_LAYERS": "35"})
+    assert proc.returncode == 6, proc.stdout + proc.stderr
+    assert "image layer depth 125 exceeds limit (125); flatten" in proc.stderr
+    assert "OP pg_backup" not in box.log() and "OP start_candidate" not in box.log()
+    assert box.port() == "8111" and box.mutations() == []
+
+
+def test_final_image_just_below_depth_limit_proceeds(box):
+    proc = box.run(env={"FAKE_BASE_LAYERS": "90", "FAKE_ADDED_LAYERS": "34"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert box.result(proc)["image_layers"] == 124
+
+
+def test_layer_limit_environment_values_must_be_positive_integers(box):
+    proc = box.run(env={"ACCT_FLATTEN_LAYER_THRESHOLD": "abc"})
+    assert proc.returncode == 2 and "bad FLATTEN_LAYER_THRESHOLD" in proc.stderr
 
 
 def test_existing_image_with_wrong_revision_label_is_refused_not_rebuilt(box):

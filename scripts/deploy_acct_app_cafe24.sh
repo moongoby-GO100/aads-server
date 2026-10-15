@@ -74,6 +74,14 @@ MONITOR_FAIL_THRESHOLD="${MONITOR_FAIL_THRESHOLD:-2}"
 BUILD_TIMEOUT="${ACCT_BUILD_TIMEOUT:-600}"
 HEALTH_WAIT_SECONDS="${ACCT_HEALTH_WAIT_SECONDS:-90}"
 CONTEXT_MAX_MB="${ACCT_CONTEXT_MAX_MB:-100}"
+# overlay2 의 레이어 상한은 128 이다. 매 릴리스가 직전 이미지 위에 레이어를 쌓으므로 기반이 이 깊이에 닿기 전에 평탄화한다.
+FLATTEN_LAYER_THRESHOLD="${ACCT_FLATTEN_LAYER_THRESHOLD:-100}"   # 기반 레이어 수가 이 값 이상이면 평탄화 기반으로 빌드
+MAX_IMAGE_LAYERS="${ACCT_MAX_IMAGE_LAYERS:-120}"                 # 같은 SHA 의 기존 이미지가 이 값 이상이면 재사용하지 않고 -f<N> 태그로 재빌드
+IMAGE_LAYER_DIE_LIMIT="${ACCT_IMAGE_LAYER_DIE_LIMIT:-125}"       # 후보 시작 전 최종 이미지가 이 값 이상이면 중단(exit 6)
+for _v in FLATTEN_LAYER_THRESHOLD MAX_IMAGE_LAYERS IMAGE_LAYER_DIE_LIMIT; do
+    [[ ${!_v} =~ ^[1-9][0-9]*$ ]] || { echo "bad $_v '${!_v}' (positive integer required)" >&2; exit 2; }
+done
+unset _v
 SSH_DEFAULT_TIMEOUT="${ACCT_SSH_TIMEOUT:-120}"
 # 출구 프록시(deploy/acct-egress). 비어 있으면(기본) 비활성 — 후보 컨테이너 인자는 기존과 같다.
 # 예: ACCT_APP_EGRESS_PROXY_URL=http://acct-egress-proxy:8888 (호스트 부분 = 프록시 컨테이너 이름)
@@ -108,6 +116,10 @@ MARKER="$DEFAULT_MARKER"
 IMAGE_TAG=""
 IMAGE_ID=""
 IMAGE_REUSED=false
+BASE_LAYERS=""
+FLATTENED=false
+IMAGE_LAYERS=""
+BT=0
 NEW_CONTAINER=""
 NEW_PORT=""
 OLD_PORT=""
@@ -679,11 +691,119 @@ stamp_assets() { # stamp the obys shell in the build context (never the reposito
     say "asset stamp: ${out#OBYS_ASSET_STAMP }"
 }
 
+image_layers() { # image_layers <ref> -> prints the RootFS layer count; fails when the image is missing or the value is not a number
+    local n
+    n="$(rdocker image inspect -f '{{len .RootFS.Layers}}' "$1" 2>/dev/null)" || return 1
+    [[ $n =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "$n"
+}
+
+compute_build_timeout() { # sets BT
+    BT=$(( $(left) - MONITOR_SECONDS - RECOVERY_RESERVE - 180 ))
+    (( BT >= 120 )) || die 124 "not enough time budget left to build (left $(left)s)"
+    (( BT > BUILD_TIMEOUT )) && BT=$BUILD_TIMEOUT
+    return 0
+}
+
+# 기반 이미지의 Config(JSON, 환경변수 R_CFG)를 그대로 복원하는 평탄화 Dockerfile 을 출력한다.
+flatten_dockerfile() { # flatten_dockerfile <src ref>
+    R_SRC="$1" python3 -c '
+import json, os, re, sys
+
+cfg = json.loads(os.environ["R_CFG"]) or {}
+
+
+def bad(msg):
+    sys.stderr.write("flatten: " + msg + "\n")
+    sys.exit(1)
+
+
+def q(v):
+    if re.search(r"[\n\r\0]", v):
+        bad("control character in a config value")
+    return "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$") + "\""
+
+
+def dur(ns):
+    return "%dns" % int(ns)
+
+
+out = ["FROM %s AS src" % os.environ["R_SRC"], "FROM scratch", "COPY --from=src / /"]
+for item in cfg.get("Env") or []:
+    k, sep, v = item.partition("=")
+    if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", k):
+        bad("unsupported Env entry")
+    out.append("ENV %s=%s" % (k, q(v)))
+labels = cfg.get("Labels") or {}
+if labels:
+    out.append("LABEL " + " ".join("%s=%s" % (q(k), q(v)) for k, v in sorted(labels.items())))
+for port in sorted(cfg.get("ExposedPorts") or {}):
+    if not re.fullmatch(r"[0-9]+(-[0-9]+)?/(tcp|udp|sctp)", port):
+        bad("unsupported ExposedPorts entry")
+    out.append("EXPOSE " + port)
+vols = sorted(cfg.get("Volumes") or {})
+if vols:
+    out.append("VOLUME " + json.dumps(vols))
+if cfg.get("WorkingDir"):
+    out.append("WORKDIR " + q(cfg["WorkingDir"]))
+if cfg.get("User"):
+    out.append("USER " + q(cfg["User"]))
+if cfg.get("Shell"):
+    out.append("SHELL " + json.dumps(cfg["Shell"]))
+if cfg.get("StopSignal"):
+    out.append("STOPSIGNAL " + q(cfg["StopSignal"]))
+hc = cfg.get("Healthcheck") or {}
+test = hc.get("Test") or []
+if test == ["NONE"]:
+    out.append("HEALTHCHECK NONE")
+elif test:
+    opts = ""
+    for flag, key in (("interval", "Interval"), ("timeout", "Timeout"), ("start-period", "StartPeriod")):
+        if hc.get(key):
+            opts += " --%s=%s" % (flag, dur(hc[key]))
+    if hc.get("Retries"):
+        opts += " --retries=%d" % int(hc["Retries"])
+    if test[0] == "CMD-SHELL" and len(test) == 2:
+        if re.search(r"[\n\r]", test[1]):
+            bad("newline in Healthcheck command")
+        out.append("HEALTHCHECK%s CMD %s" % (opts, test[1]))
+    elif test[0] == "CMD":
+        out.append("HEALTHCHECK%s CMD %s" % (opts, json.dumps(test[1:])))
+    else:
+        bad("unsupported Healthcheck.Test")
+if cfg.get("Entrypoint"):
+    out.append("ENTRYPOINT " + json.dumps(cfg["Entrypoint"]))
+if cfg.get("Cmd"):
+    out.append("CMD " + json.dumps(cfg["Cmd"]))
+print("\n".join(out))
+'
+}
+
+# 기반 이미지 레이어가 임계값 이상이면 한 층짜리 평탄화 기반을 만들어 BASE_REF 를 그 태그로 바꾼다.
+# docker create/export 없이: 다단계 빌드(FROM scratch + COPY --from)로 파일시스템만 옮기고 Config 는 inspect 값으로 복원한다.
+flatten_base() { # flatten_base <src ref>
+    local src=$1 flat n cfg df
+    flat="acct-candidate-flatbase:${PREV_IMAGE_ID#sha256:}"
+    flat="${flat:0:36}"
+    if n="$(image_layers "$flat")" && (( n < FLATTEN_LAYER_THRESHOLD )); then
+        say "flattened base $flat already exists (layers=$n); reusing"
+    else
+        cfg="$(rdocker image inspect -f '{{json .Config}}' "$src")" || die 6 "cannot read the Config of base image $src"
+        df="$(R_CFG="$cfg" flatten_dockerfile "$src")" || die 6 "cannot generate the flatten Dockerfile for $src"
+        compute_build_timeout
+        say "flattening base ${PREV_IMAGE_ID:0:19} (layers=$BASE_LAYERS >= $FLATTEN_LAYER_THRESHOLD) into $flat (timeout ${BT}s)"
+        printf '%s\n' "$df" | SSH_CALL_TIMEOUT=$BT rdocker build --pull=false -q -t "$flat" - >/dev/null \
+            || die 6 "flatten build failed or timed out"
+        n="$(image_layers "$flat")" || die 6 "flattened base $flat not found afterwards"
+        (( n < FLATTEN_LAYER_THRESHOLD )) || die 6 "flattened base $flat still has $n layers (threshold $FLATTEN_LAYER_THRESHOLD)"
+    fi
+    BASE_REF="$flat"
+    FLATTENED=true
+}
+
 build_image() {
-    local bt kb p
-    bt=$(( $(left) - MONITOR_SECONDS - RECOVERY_RESERVE - 180 ))
-    (( bt >= 120 )) || die 124 "not enough time budget left to build (left $(left)s)"
-    (( bt > BUILD_TIMEOUT )) && bt=$BUILD_TIMEOUT
+    local kb p
+    compute_build_timeout
     BUILD_CTX="$(mktemp -d)"
     BUILD_PATHS_PRESENT=()
     for p in "${BUILD_PATHS[@]}"; do
@@ -700,31 +820,76 @@ build_image() {
     BASE_REF="acct-candidate-base:${PREV_IMAGE_ID#sha256:}"
     BASE_REF="${BASE_REF:0:33}"
     rdocker tag "$PREV_IMAGE_ID" "$BASE_REF" >/dev/null || die 6 "cannot tag base image $PREV_IMAGE_ID as $BASE_REF"
+    BASE_LAYERS="$(image_layers "$BASE_REF")" || die 6 "cannot read the layer count of base image $BASE_REF"
+    if (( BASE_LAYERS >= FLATTEN_LAYER_THRESHOLD )); then
+        flatten_base "$BASE_REF"
+        compute_build_timeout
+    fi
     write_dockerfile "$BUILD_CTX"
-    say "building $IMAGE_TAG on $CAFE24_SSH once (context ${kb}KB, timeout ${bt}s, base ${PREV_IMAGE_ID:0:19})"
+    say "building $IMAGE_TAG on $CAFE24_SSH once (context ${kb}KB, timeout ${BT}s, base ${PREV_IMAGE_ID:0:19}, base_layers=$BASE_LAYERS, flattened=$FLATTENED)"
     # shellcheck disable=SC2016
-    tar -C "$BUILD_CTX" -cf - . | SSH_CALL_TIMEOUT=$bt rdocker build --pull=false -q -t "$IMAGE_TAG" - >/dev/null \
+    tar -C "$BUILD_CTX" -cf - . | SSH_CALL_TIMEOUT=$BT rdocker build --pull=false -q -t "$IMAGE_TAG" - >/dev/null \
         || die 6 "image build failed or timed out"
 }
 
-ensure_image() {
+# 기존 이미지의 라벨을 검증한다. 맞으면 IMAGE_ID 를 채우고 0, 이미지가 없으면 1.
+inspect_existing_image() { # inspect_existing_image <tag>
     local info lbl_sha lbl_rev
-    IMAGE_TAG="acct-candidate:${SHA8}"
-    if info="$(image_info "$IMAGE_TAG")" && [[ -n $info ]]; then
-        IFS='|' read -r IMAGE_ID lbl_sha lbl_rev <<<"$info"
-        [[ $lbl_rev == "$SHA8" ]] || die 6 "$IMAGE_TAG exists with revision label '$lbl_rev' != $SHA8; refusing to reuse or rebuild"
-        [[ -z $lbl_sha || $lbl_sha == "$RELEASE_SHA" ]] || die 6 "$IMAGE_TAG exists for a different release $lbl_sha"
-        IMAGE_REUSED=true
-        ASSET_STAMP="image_reused"
-        say "image $IMAGE_TAG already exists (${IMAGE_ID:0:19}); reusing, no rebuild"
+    info="$(image_info "$1")" && [[ -n $info ]] || return 1
+    IFS='|' read -r IMAGE_ID lbl_sha lbl_rev <<<"$info"
+    [[ $lbl_rev == "$SHA8" ]] || die 6 "$1 exists with revision label '$lbl_rev' != $SHA8; refusing to reuse or rebuild"
+    [[ -z $lbl_sha || $lbl_sha == "$RELEASE_SHA" ]] || die 6 "$1 exists for a different release $lbl_sha"
+    return 0
+}
+
+reuse_image() { # reuse_image -> 0 when IMAGE_TAG exists and is shallow enough to start
+    local n
+    inspect_existing_image "$IMAGE_TAG" || return 1
+    n="$(image_layers "$IMAGE_TAG")" || die 6 "cannot read the layer count of $IMAGE_TAG"
+    if (( n >= MAX_IMAGE_LAYERS )); then
+        say "image $IMAGE_TAG has $n layers (>= $MAX_IMAGE_LAYERS); not reusing"
+        return 2
+    fi
+    IMAGE_LAYERS="$n"
+    IMAGE_REUSED=true
+    ASSET_STAMP="image_reused"
+    say "image $IMAGE_TAG already exists (${IMAGE_ID:0:19}, layers=$n); reusing, no rebuild"
+    return 0
+}
+
+check_layer_depth() {
+    (( IMAGE_LAYERS < IMAGE_LAYER_DIE_LIMIT )) \
+        || die 6 "image layer depth $IMAGE_LAYERS exceeds limit ($IMAGE_LAYER_DIE_LIMIT); flatten"
+}
+
+ensure_image() {
+    local info lbl_sha lbl_rev rc=0 n=0 base_tag="acct-candidate:${SHA8}"
+    IMAGE_TAG="$base_tag"
+    reuse_image || rc=$?
+    if (( rc == 0 )); then
+        check_layer_depth
         return 0
+    fi
+    if (( rc == 2 )); then
+        # 깊은 이미지는 건드리지 않고 새 이름(-f<N>)으로 재빌드한다. 이미 있는 -f<N> 이 얕으면 그것을 쓴다.
+        while (( n < 20 )); do
+            n=$((n + 1))
+            IMAGE_TAG="${base_tag}-f${n}"
+            rc=0
+            reuse_image || rc=$?
+            (( rc == 0 )) && { check_layer_depth; return 0; }
+            (( rc == 1 )) && break
+        done
+        (( rc == 1 )) || die 6 "no usable $base_tag-f<N> tag (tried f1..f20); clean up old candidate images deliberately"
     fi
     check_deps_unchanged
     build_image
     info="$(image_info "$IMAGE_TAG")" || die 6 "built image $IMAGE_TAG not found afterwards"
     IFS='|' read -r IMAGE_ID lbl_sha lbl_rev <<<"$info"
     [[ $lbl_rev == "$SHA8" && $lbl_sha == "$RELEASE_SHA" ]] || die 6 "built image labels wrong: revision=$lbl_rev release=$lbl_sha"
-    say "built $IMAGE_TAG ${IMAGE_ID:0:19}"
+    IMAGE_LAYERS="$(image_layers "$IMAGE_TAG")" || die 6 "cannot read the layer count of built image $IMAGE_TAG"
+    say "built $IMAGE_TAG ${IMAGE_ID:0:19} (layers=$IMAGE_LAYERS)"
+    check_layer_depth
 }
 
 # ---- migrations ---------------------------------------------------------------------------------
@@ -1020,7 +1185,7 @@ emit_result() { # emit_result <status>
             R_IMAGE_TAG="$IMAGE_TAG" R_IMAGE_ID="$IMAGE_ID" R_REUSED="$IMAGE_REUSED" R_PGBK="$PG_BACKUP_PATH" \
             R_APBK="$APACHE_BACKUP" R_KST="$CUTOVER_KST" R_RECOVERED="$RECOVERED" R_UNRELATED="$UNRELATED_CHANGED" \
             R_APPLIED="${MIGRATIONS_APPLIED[*]:-}" R_SKIPPED="${MIGRATIONS_SKIPPED[*]:-}" R_MARKER="$MARKER" \
-            R_ASSET_VERSION="$ASSET_VERSION" R_ASSET_STAMP="$ASSET_STAMP" R_PURGE_STATUS="$PURGE_STATUS" R_PURGE_JSON="$PURGE_JSON" \
+            R_ASSET_VERSION="$ASSET_VERSION" R_ASSET_STAMP="$ASSET_STAMP" R_BASE_LAYERS="$BASE_LAYERS" R_FLATTENED="$FLATTENED" R_IMAGE_LAYERS="$IMAGE_LAYERS" R_PURGE_STATUS="$PURGE_STATUS" R_PURGE_JSON="$PURGE_JSON" \
             python3 - <<'PY'
 import json, os
 e = os.environ.get
@@ -1039,6 +1204,9 @@ doc = {
             "image_id": e("R_IMAGE_ID"), "image_reused": e("R_REUSED") == "true"},
     "backups": {"pg_dump": e("R_PGBK"), "apache_vhost": e("R_APBK")},
     "migrations": {"applied": (e("R_APPLIED") or "").split(), "already_applied": (e("R_SKIPPED") or "").split()},
+    "base_layers": int(e("R_BASE_LAYERS")) if (e("R_BASE_LAYERS") or "").isdigit() else None,
+    "flattened": e("R_FLATTENED") == "true",
+    "image_layers": int(e("R_IMAGE_LAYERS")) if (e("R_IMAGE_LAYERS") or "").isdigit() else None,
     "marker": e("R_MARKER"),
     "assets": {"version": e("R_ASSET_VERSION"), "stamp": e("R_ASSET_STAMP")},
     "edge_purge": purge_detail,
