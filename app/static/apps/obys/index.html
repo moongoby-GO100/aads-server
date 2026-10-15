@@ -2268,6 +2268,46 @@
     body.employee-preview .app-sidebar { top: 111px; height: calc(100vh - 111px); }
     body.employee-preview [data-clock-link],
     body.employee-preview .tenant-switcher { display: none !important; }
+    body.employee-view [data-employee-preview-menu],
+    body.employee-preview [data-employee-preview-menu] { display: none !important; }
+    [data-employee-preview-menu] { min-height: 44px; white-space: normal; word-break: keep-all; line-height: 1.25; }
+    .employee-preview-picker {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: rgba(15, 23, 42, .45);
+    }
+    .employee-preview-picker-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: min(480px, 100%);
+      max-height: min(80vh, 640px);
+      padding: 16px;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 0 16px 44px rgba(15, 23, 42, .25);
+    }
+    .employee-preview-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .employee-preview-picker-head h2 { margin: 0; font-size: 17px; }
+    .employee-preview-picker-head button, .employee-preview-search { min-height: 44px; }
+    .employee-preview-list { display: grid; gap: 6px; overflow-y: auto; }
+    .employee-preview-pick {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      min-height: 44px;
+      text-align: left;
+      white-space: normal;
+      word-break: keep-all;
+    }
+    .employee-preview-pick span { color: var(--muted); font-size: 12px; font-weight: 400; }
+    .employee-preview-empty { margin: 8px 0; color: var(--muted); }
     body.employee-preview [data-preview-locked] { opacity: .5; cursor: not-allowed; }
 
     .toast {
@@ -2970,6 +3010,17 @@
     <span id="employeePreviewBannerText"></span>
     <button type="button" id="employeePreviewExitBtn" class="employee-preview-exit">관리자 화면으로 돌아가기</button>
   </div>
+  <div id="employeePreviewPicker" class="employee-preview-picker hidden" role="dialog" aria-modal="true" aria-labelledby="employeePreviewPickerTitle">
+    <div class="employee-preview-picker-panel">
+      <div class="employee-preview-picker-head">
+        <h2 id="employeePreviewPickerTitle">직원 화면 보기</h2>
+        <button type="button" data-employee-preview-picker-close>닫기</button>
+      </div>
+      <p class="muted">직원을 고르면 그 직원이 보는 화면을 읽기 전용으로 미리 봅니다.</p>
+      <input type="search" id="employeePreviewSearch" class="employee-preview-search" placeholder="직원 이름·이메일·지점 검색" autocomplete="off" aria-label="직원 검색">
+      <div id="employeePreviewList" class="employee-preview-list"></div>
+    </div>
+  </div>
   <div class="shell">
     <header class="topbar">
       <div class="topbar-inner">
@@ -3151,6 +3202,7 @@
           <button class="tab" data-view="onboarding" data-group="people">입사서류</button>
           <button class="tab" data-view="contracts" data-group="people">계약서</button>
           <button class="tab" data-view="approvals" data-group="people">승인함</button>
+          <button type="button" class="tab hidden" data-employee-preview-menu data-group="people">직원 화면 보기</button>
           <div class="side-label" data-nav-group="vault">자료함</div>
           <button class="tab" data-view="documents" data-group="vault">경영자료·보관</button>
           <a class="tab" data-external-tab="recipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">레시피</a>
@@ -3198,6 +3250,7 @@
               <button class="tab" data-view="onboarding" data-group="people">입사서류</button>
               <button class="tab" data-view="contracts" data-group="people">계약서</button>
               <button class="tab" data-view="approvals" data-group="people">승인함</button>
+              <button type="button" class="tab hidden" data-employee-preview-menu data-group="people">직원 화면 보기</button>
               <button class="tab" data-view="documents" data-group="vault">경영자료·보관</button>
               <button class="tab" data-view="business" data-group="settings">사업자·지점</button>
               <button class="tab" data-view="integrations" data-group="settings">연동 관리</button>
@@ -5211,6 +5264,10 @@
       </nav>
       <div class="bottom-sheet hidden" id="bottomMoreSheet" role="dialog" aria-modal="true" aria-label="더보기 — 자료함·설정">
         <div class="bottom-sheet-panel">
+          <div class="bottom-sheet-group hidden" data-employee-preview-sheet-group>
+            <strong>직원</strong>
+            <button type="button" data-employee-preview-menu>직원 화면 보기</button>
+          </div>
           <div class="bottom-sheet-group">
             <strong>자료함</strong>
             <button type="button" data-sheet-view="documents">경영자료·보관</button>
@@ -6586,6 +6643,99 @@
       return `<button type="button" data-preview-employee data-preview-email="${escapeHtml(safeEmail)}" data-preview-name="${escapeHtml(cleanName)}">직원 화면으로 보기</button>`;
     }
 
+    function maskEmployeePreviewEmail(email) {
+      const [local, domain] = String(email || "").split("@");
+      if (!domain) return "";
+      return `${local.slice(0, 2)}***@${domain}`;
+    }
+
+    // 이미 불러온 승인 직원(가입요청 approved·승인 직원·계약서 대상자)을 이메일 기준으로 합친다.
+    // 마스킹된 이메일(*)뿐이고 이름도 없으면 대상을 특정할 수 없어 제외한다.
+    function employeePreviewCandidates() {
+      const found = new Map();
+      const add = (rawEmail, rawName, rawBranch) => {
+        const email = String(rawEmail || "").trim().toLowerCase();
+        const safeEmail = email.includes("*") ? "" : email;
+        const name = String(rawName || "").trim();
+        if (!safeEmail && !name) return;
+        const key = safeEmail || `name:${name}`;
+        const branch = String(rawBranch || "").trim();
+        const prev = found.get(key);
+        if (prev) {
+          if (!prev.name && name) prev.name = name;
+          if (!prev.branch && branch) prev.branch = branch;
+          return;
+        }
+        found.set(key, { email: safeEmail, name, branch });
+      };
+      (employeeJoinRequests || [])
+        .filter(item => String(item.status || "").toLowerCase() === "approved")
+        .forEach(item => add(item.email || item.employee_email, item.name || item.employee_name, item.branch));
+      (approvedEmployees || []).forEach(item => add(item.email || item.employee_email, item.name || item.employee_name, item.branch));
+      ((state && state.contracts) || []).forEach(item => add(
+        item.employeeEmail || item.employee_email,
+        item.employeeName || item.employee_name,
+        item.branch
+      ));
+      const named = new Set(Array.from(found.values()).filter(item => item.email && item.name).map(item => item.name));
+      return Array.from(found.values())
+        .filter(item => item.email || !named.has(item.name))
+        .sort((a, b) => String(a.name || a.email).localeCompare(String(b.name || b.email), "ko"));
+    }
+
+    function renderEmployeePreviewPicker() {
+      const list = document.getElementById("employeePreviewList");
+      if (!list) return;
+      const query = String(document.getElementById("employeePreviewSearch")?.value || "").trim().toLowerCase();
+      const all = employeePreviewCandidates();
+      const rows = query
+        ? all.filter(item => `${item.name} ${item.email} ${item.branch}`.toLowerCase().includes(query))
+        : all;
+      if (!all.length) {
+        list.innerHTML = '<p class="employee-preview-empty">미리 볼 수 있는 승인된 직원이 없습니다.</p>';
+        return;
+      }
+      if (!rows.length) {
+        list.innerHTML = '<p class="employee-preview-empty">검색 결과가 없습니다.</p>';
+        return;
+      }
+      list.innerHTML = rows.map(item => {
+        const sub = [item.branch, maskEmployeePreviewEmail(item.email)].filter(Boolean).join(" · ");
+        return `<button type="button" class="employee-preview-pick" data-preview-employee data-preview-email="${escapeHtml(item.email)}" data-preview-name="${escapeHtml(item.name)}"><b>${escapeHtml(item.name || maskEmployeePreviewEmail(item.email))}</b>${sub ? `<span>${escapeHtml(sub)}</span>` : ""}</button>`;
+      }).join("");
+    }
+
+    function openEmployeePreviewPicker() {
+      if (employeePreview) return false;
+      if (!canManageOnboardingReal()) {
+        showToast("회사 관리자만 직원 화면을 미리볼 수 있습니다.");
+        return false;
+      }
+      const picker = document.getElementById("employeePreviewPicker");
+      if (!picker) return false;
+      if (typeof toggleBottomSheet === "function") toggleBottomSheet(false);
+      const search = document.getElementById("employeePreviewSearch");
+      if (search) search.value = "";
+      picker.classList.remove("hidden");
+      renderEmployeePreviewPicker();
+      if (!employeePreviewCandidates().length) {
+        // 로그인 직후라 목록이 아직 오는 중일 수 있다 — 읽기 전용 조회만 다시 하고 선택창을 갱신한다.
+        const reload = [
+          typeof loadEmployeeJoinRequests === "function" ? loadEmployeeJoinRequests() : null,
+          typeof loadEmployeeContracts === "function" ? loadEmployeeContracts() : null
+        ].filter(Boolean);
+        Promise.allSettled(reload).then(() => {
+          if (!picker.classList.contains("hidden")) renderEmployeePreviewPicker();
+        });
+      }
+      search?.focus();
+      return true;
+    }
+
+    function closeEmployeePreviewPicker() {
+      document.getElementById("employeePreviewPicker")?.classList.add("hidden");
+    }
+
     function assertEmployeePreviewReadOnly(method) {
       const verb = String(method || "GET").toUpperCase();
       if (employeePreview && !["GET", "HEAD", "OPTIONS"].includes(verb)) {
@@ -6653,6 +6803,7 @@
         showToast("미리볼 직원 정보를 찾을 수 없습니다.");
         return false;
       }
+      closeEmployeePreviewPicker();
       employeePreviewReturnView = currentView;
       employeePreview = { email, name: name || email };
       document.body.classList.add("employee-preview");
@@ -6687,6 +6838,18 @@
     }
 
     function employeePreviewClickGuard(event) {
+      if (event.target?.closest?.("[data-employee-preview-menu]")) {
+        event.preventDefault();
+        event.stopPropagation();
+        openEmployeePreviewPicker();
+        return;
+      }
+      if (event.target?.closest?.("[data-employee-preview-picker-close]") || event.target?.id === "employeePreviewPicker") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeEmployeePreviewPicker();
+        return;
+      }
       const trigger = event.target?.closest?.("[data-preview-employee]");
       if (trigger) {
         event.preventDefault();
@@ -6719,6 +6882,12 @@
     if (typeof document !== "undefined" && document.addEventListener) {
       document.addEventListener("click", employeePreviewClickGuard, true);
       document.addEventListener("submit", employeePreviewSubmitGuard, true);
+      document.addEventListener("input", event => {
+        if (event.target?.id === "employeePreviewSearch") renderEmployeePreviewPicker();
+      });
+      document.addEventListener("keydown", event => {
+        if (event.key === "Escape") closeEmployeePreviewPicker();
+      });
     }
     if (typeof window !== "undefined" && typeof window.fetch === "function") {
       const employeePreviewNativeFetch = window.fetch.bind(window);
@@ -6732,6 +6901,32 @@
       };
     }
     // ADMIN-EMPLOYEE-PREVIEW:END
+
+    // ADMIN-EMPLOYEE-PREVIEW-HANDOFF:BEGIN
+    // V4.1 → 이 화면으로 넘어올 때 직원 정보를 URL 이 아니라 같은 출처 sessionStorage 1회성 키로 받는다.
+    // 읽는 즉시 삭제하고, 5분이 지났거나 관리자 권한이 없으면 무시한다. 미리보기 상태 자체는 저장하지 않는다.
+    const EMPLOYEE_PREVIEW_REQUEST_KEY = "obys.employeePreviewRequest";
+    const EMPLOYEE_PREVIEW_REQUEST_TTL_MS = 5 * 60 * 1000;
+
+    function dropEmployeePreviewRequest() {
+      try { sessionStorage.removeItem(EMPLOYEE_PREVIEW_REQUEST_KEY); } catch (_) { /* 저장소 차단 환경 */ }
+    }
+
+    function consumeEmployeePreviewRequest() {
+      let raw = null;
+      try { raw = sessionStorage.getItem(EMPLOYEE_PREVIEW_REQUEST_KEY); } catch (_) { return false; }
+      if (raw === null) return false;
+      dropEmployeePreviewRequest();
+      let request = null;
+      try { request = JSON.parse(raw); } catch (_) { return false; }
+      const age = Date.now() - Number(request?.createdAt);
+      if (!Number.isFinite(age) || age < 0 || age > EMPLOYEE_PREVIEW_REQUEST_TTL_MS) return false;
+      if (employeePreview || !canManageOnboardingReal()) return false;
+      if (request.open === "picker") return openEmployeePreviewPicker();
+      if (request.email || request.name) return startEmployeePreview({ email: request.email, name: request.name });
+      return false;
+    }
+    // ADMIN-EMPLOYEE-PREVIEW-HANDOFF:END
 
     function canManageAutomation() {
       return !employeePreview && hasServerAuth() && Boolean(authPermissions().can_manage_automation);
@@ -6856,7 +7051,12 @@
       const employeeMode = isEmployeeExperience();
       document.body.classList.toggle("employee-view", isAuthed && employeeMode);
       const permitted = allowedViews();
+      const previewMenuVisible = isAuthed && !employeeMode && canManageOnboarding();
       document.querySelectorAll(".tab").forEach(button => {
+        if (button.hasAttribute("data-employee-preview-menu")) {
+          button.classList.toggle("hidden", !previewMenuVisible);
+          return;
+        }
         if (button.dataset.externalTab || button.hasAttribute("data-clock-link")) {
           button.classList.toggle("hidden", !isAuthed);
           if ("disabled" in button) button.disabled = false;
@@ -12212,6 +12412,8 @@
         else button.removeAttribute("aria-current");
         button.hidden = !groups.some(name => groupViews(name).length);
       });
+      els.bottomMoreSheet?.querySelector("[data-employee-preview-sheet-group]")
+        ?.classList.toggle("hidden", !(hasServerAuth() && !isEmployeeExperience() && canManageOnboarding()));
       els.bottomMoreSheet?.querySelectorAll("[data-sheet-view]").forEach(button => {
         button.hidden = !allowedViews().includes(button.dataset.sheetView);
         button.classList.toggle("active", button.dataset.sheetView === currentView);
@@ -14491,11 +14693,15 @@
       refreshFinanceSession()
         .then(session => {
           renderAuthState();
+          consumeEmployeePreviewRequest();
           if (session && currentView === "integrations" && canManageAutomation()) {
             refreshServerAccounts().catch(err => showToast(`서버 계정 자동 반영 실패: ${err.message}`));
           }
         })
-        .catch(() => renderAuthState());
+        .catch(() => {
+          dropEmployeePreviewRequest();
+          renderAuthState();
+        });
     }
 
     function renderAuthState() {

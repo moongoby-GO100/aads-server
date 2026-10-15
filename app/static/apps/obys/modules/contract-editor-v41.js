@@ -610,6 +610,9 @@
       const contract = contractById(button.dataset.cv41AmendRow);
       if (contract) { openEditor({ contract }); startAmendment(); }
     }));
+    box.querySelectorAll("[data-cv41-preview]").forEach(button => button.addEventListener("click", () => {
+      window.obysEmployeePreviewV41?.open({ email: button.dataset.cv41PreviewEmail, name: button.dataset.cv41PreviewName });
+    }));
     box.querySelectorAll("[data-cv41-docs]").forEach(button => button.addEventListener("click", () => {
       const employee = S.employees.find(item => employeeKey(item) === button.dataset.cv41Docs);
       if (employee) openDocs(employee);
@@ -643,6 +646,13 @@
     } catch (_error) { return 1; }
   }
   function badge([, text, tone]) { return `<span class="badge ${esc(tone)}">${esc(text)}</span>`; }
+  /** 관리자만, 이메일이 마스킹되지 않은 행에만 '직원 화면 보기' 버튼을 만든다. 이메일은 V4.1 진입 함수에만 넘기고 이 모듈은 저장하지 않는다. */
+  function previewButton(email, name) {
+    const preview = window.obysEmployeePreviewV41;
+    const clean = String(email || "").trim().toLowerCase();
+    if (!preview || !preview.canManage() || !clean || clean.includes("*")) return "";
+    return ` <button class="btn" type="button" data-cv41-preview data-cv41-preview-email="${esc(clean)}" data-cv41-preview-name="${esc(name || "")}" style="min-height:44px">직원 화면으로 보기</button>`;
+  }
   function employeeTable() {
     const employees = visibleEmployees();
     if (!employees.length) return '<div class="empty">이 사업자에 승인된 직원이 없습니다. 위 가입요청을 승인하면 여기에 표시됩니다.</div>';
@@ -656,7 +666,7 @@
         <td data-label="사업자·지점">${esc(businessName(employee.business_id))}<small>${esc(employee.branch || "지점 미정")}</small></td>
         <td data-label="입사서류">${docs ? `${docs}건` : '<span class="badge warn">미제출</span>'}</td>
         <td data-label="계약">${latest ? `${badge(statusOf(latest))}<small>${esc(fmtTime(latest.updated_at))}</small>` : '<span class="badge bad">작성 필요</span>'}${gapBadge(rowMissingCount(employee, latest))}</td>
-        <td data-label="처리"><button class="btn ${latest ? "" : "primary"}" type="button" data-cv41-employee="${esc(employeeKey(employee))}">${action}</button> <button class="btn" type="button" data-cv41-docs="${esc(employeeKey(employee))}">서류 등록</button></td>
+        <td data-label="처리"><button class="btn ${latest ? "" : "primary"}" type="button" data-cv41-employee="${esc(employeeKey(employee))}">${action}</button> <button class="btn" type="button" data-cv41-docs="${esc(employeeKey(employee))}">서류 등록</button>${previewButton(employee.email, employee.name)}</td>
       </tr>`;
     }).join("");
     const held = employees.map(employee => rowMissingCount(employee, contractsOf(employee)[0])).filter(Boolean).length;
@@ -678,7 +688,7 @@
         <td data-label="사업자·지점">${esc(businessName(pick(contract, "businessId")))}<small>${esc(pick(contract, "branch") || "-")}</small></td>
         <td data-label="계약 유형">${esc(C.contractTypeLabels[pick(contract, "contractType")] || pick(contract, "contractType") || "-")}</td>
         <td data-label="상태">${badge(statusOf(contract))}${amendmentBadges(contract)}<small>${esc(when)}</small>${gapBadge(rowMissingCount(null, contract))}</td>
-        <td data-label="처리"><button class="btn" type="button" data-cv41-contract="${esc(contract.id)}">${key === "draft" ? "이어서 작성" : "열기"}</button>${key === "signed" ? ` <button class="btn" type="button" data-cv41-pdf="${esc(contract.id)}">서명본 PDF</button> <button class="btn" type="button" data-cv41-amend-row="${esc(contract.id)}">변경 계약 작성</button>` : ""}</td>
+        <td data-label="처리"><button class="btn" type="button" data-cv41-contract="${esc(contract.id)}">${key === "draft" ? "이어서 작성" : "열기"}</button>${key === "signed" ? ` <button class="btn" type="button" data-cv41-pdf="${esc(contract.id)}">서명본 PDF</button> <button class="btn" type="button" data-cv41-amend-row="${esc(contract.id)}">변경 계약 작성</button>` : ""}${previewButton(pick(contract, "employeeEmail"), pick(contract, "employeeName"))}</td>
       </tr>`;
     }).join("");
     return `<div class="toolbar">${filters}</div>${list.length ? `<div class="table-wrap"><table class="cv41-table"><thead><tr><th>직원</th><th>사업자·지점</th><th>계약 유형</th><th>상태</th><th>처리</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">조건에 맞는 계약서가 없습니다. 새 계약 작성으로 시작하십시오.</div>'}`;
@@ -1477,6 +1487,11 @@
 
   window.obysContractV41 = {
     mount, refresh, open: openEditor, openDocs,
+    rerender() {
+      const box = document.getElementById("contractV41");
+      const route = S.ctx?.route?.() || "";
+      if (box && ROUTES.has(route)) renderSection(route, box);
+    },
     // 단위 검증용(브라우저 밖 node 테스트)
     _test: { schedAvailable, schedInitState, schedPatch, wageSplitPatch, wageManualFor, draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee }
   };
