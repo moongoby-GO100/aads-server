@@ -1151,9 +1151,86 @@ def test_rollback_starts_a_stopped_target_through_the_guard(box):
 ])
 def test_docker_mutation_guard(box, verb, name, rc):
     args = ["--call", "docker_mut", verb] + (["-f"] if verb == "rm" else []) + [name]
-    proc = box.run(*args)
+    proc = box.run(*args, env={"ACCT_PREV_CONTAINER": "acct-app-candidate-r8"})
     assert proc.returncode == rc, proc.stdout + proc.stderr
     assert (len(box.mutations()) == 1) == (rc == 0)
+
+
+def test_docker_mutation_guard_refuses_rm_and_stop_while_the_previous_container_is_unknown(box):
+    assert box.run("--call", "docker_mut", "rm", "-f", "acct-app-candidate-r9").returncode == 11
+    assert box.run("--call", "docker_mut", "stop", "acct-app-candidate-r9").returncode == 11
+    assert box.mutations() == []
+
+
+# ---- previous container auto-detection ----------------------------------------------------------
+def _set_cands(box, *lines):
+    (box.fake / "cands").write_text("".join(x + "\n" for x in lines))
+
+
+def test_autodetect_picks_the_single_running_candidate_on_the_upstream_port(box):
+    _set_cands(box, "acct-app-candidate-r35|true|8110|sha256:old|", f"acct-app-candidate-r36|true|8111|{R8_IMAGE}|")
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "previous container auto-detected from apache upstream port 8111: acct-app-candidate-r36" in proc.stdout
+    res = box.result(proc)
+    assert res["previous"]["container"] == "acct-app-candidate-r36"
+    assert res["new"]["container"] == "acct-app-candidate-r37"
+    assert res["rollback_command"].endswith("rollback acct-app-candidate-r36 77")
+    assert box.mutations() == []
+
+
+def test_autodetect_with_no_matching_candidate_exits_12_and_lists_candidates(box):
+    _set_cands(box, f"acct-app-candidate-r8|true|8200|{R8_IMAGE}|", "acct-app-candidate-r9|false|8111|sha256:n|")
+    proc = box.run()
+    assert proc.returncode == 12, proc.stdout + proc.stderr
+    assert "apache upstream port 8111" in proc.stderr
+    assert "acct-app-candidate-r8:8200:true" in proc.stderr and "acct-app-candidate-r9:8111:false" in proc.stderr
+    assert "ACCT_PREV_CONTAINER" in proc.stderr
+    assert box.builds() == 0 and box.mutations() == [] and box.port() == "8111"
+
+
+def test_autodetect_with_two_matching_candidates_exits_12(box):
+    _set_cands(box, f"acct-app-candidate-r8|true|8111|{R8_IMAGE}|", "acct-app-candidate-r9|true|8111|sha256:n|")
+    proc = box.run()
+    assert proc.returncode == 12, proc.stdout + proc.stderr
+    assert "2 running candidate(s)" in proc.stderr and "ACCT_PREV_CONTAINER" in proc.stderr
+    assert box.builds() == 0 and box.mutations() == []
+
+
+def test_autodetect_ignores_a_stopped_candidate_on_the_upstream_port(box):
+    _set_cands(box, f"acct-app-candidate-r8|false|8111|{R8_IMAGE}|")
+    proc = box.run()
+    assert proc.returncode == 12, proc.stdout + proc.stderr
+    assert "0 running candidate(s)" in proc.stderr
+    assert box.builds() == 0 and box.mutations() == []
+
+
+def test_explicit_prev_container_skips_autodetect_and_keeps_the_old_checks(box):
+    _set_cands(box, f"acct-app-candidate-r8|true|8111|{R8_IMAGE}|", "acct-app-candidate-r9|true|8112|sha256:n|")
+    proc = box.run(env={"ACCT_PREV_CONTAINER": "acct-app-candidate-r9"})
+    assert proc.returncode == 12, proc.stdout + proc.stderr
+    assert "auto-detected" not in proc.stdout
+    assert "is not the port" in proc.stderr
+    proc = box.run(env={"ACCT_PREV_CONTAINER": "acct-app-candidate-r8"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "auto-detected" not in proc.stdout
+    assert box.result(proc)["previous"]["container"] == "acct-app-candidate-r8"
+
+
+def test_autodetected_r8_still_gets_the_pinned_r8_image_check(box):
+    other = "sha256:" + "0" * 64
+    _set_cands(box, f"acct-app-candidate-r8|true|8111|{other}|")
+    proc = box.run(env={"FAKE_PREV_IMAGE": other})
+    assert proc.returncode == 12, proc.stdout + proc.stderr
+    assert "auto-detected" in proc.stdout and "!= expected " + R8_IMAGE in proc.stderr
+    assert box.builds() == 0 and box.mutations() == []
+
+
+def test_autodetect_refuses_when_listed_image_differs_from_inspected_image(box):
+    _set_cands(box, "acct-app-candidate-r36|true|8111|sha256:listed|")
+    proc = box.run(env={"FAKE_PREV_IMAGE": "sha256:inspected"})
+    assert proc.returncode == 12, proc.stdout + proc.stderr
+    assert "(container list)" in proc.stderr and box.builds() == 0
 
 
 @pytest.mark.parametrize("args", [

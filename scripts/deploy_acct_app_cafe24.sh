@@ -36,7 +36,11 @@
 #   11 unrelated container changed / guard refused | 12 cafe24 state not as expected | 124 time budget | 129/143 HUP/TERM
 #
 # Recovery by hand (also printed in the result JSON):
-#   bash scripts/deploy_acct_app_cafe24.sh rollback acct-app-candidate-r8 <run_id>
+#   bash scripts/deploy_acct_app_cafe24.sh rollback acct-app-candidate-r<N> <run_id>
+#
+# Previous container: ACCT_PREV_CONTAINER=<name> pins it. Unset -> auto-detected from the apache upstream port
+# (the single RUNNING acct-app-candidate-r<N> publishing that port; 0 or 2+ matches -> exit 12, never a guess).
+# Every later check (netns, upstream ip/port, image id, revision label, WorkingDir) runs the same either way.
 
 set -euo pipefail
 
@@ -57,13 +61,10 @@ PG_USER="${ACCT_PG_USER:-}"
 PG_BACKUP_DIR="${ACCT_PG_BACKUP_DIR:-/root/acct-release-backups}"
 APACHE_SITE="${ACCT_APACHE_SITE:-/etc/apache2/sites-available/00-zz-fb.newtalk.kr.conf}"
 APACHE_BACKUP_DIR="${ACCT_APACHE_BACKUP_DIR:-/root/fb-cutover-backups}"
-PREV_CONTAINER="${ACCT_PREV_CONTAINER:-acct-app-candidate-r8}"
+PREV_CONTAINER="${ACCT_PREV_CONTAINER:-}"   # empty -> discover_state picks it from the apache upstream port
+PREV_AUTODETECT=false
 R8_IMAGE_ID="sha256:71e5e811c220efbe9bc527f36836e0cdc9638794ec01a6b1bbd5256ea5e8150e"
-if [[ -z ${ACCT_EXPECTED_PREV_IMAGE_ID+x} ]]; then
-    if [[ $PREV_CONTAINER == acct-app-candidate-r8 ]]; then EXPECTED_PREV_IMAGE_ID="$R8_IMAGE_ID"; else EXPECTED_PREV_IMAGE_ID=""; fi
-else
-    EXPECTED_PREV_IMAGE_ID="$ACCT_EXPECTED_PREV_IMAGE_ID"
-fi
+EXPECTED_PREV_IMAGE_ID=""   # resolved by resolve_expected_prev_image_id once PREV_CONTAINER is known
 DEFAULT_MARKER="downloadSignedContractPdf"
 BUDGET_SECONDS="${DEPLOY_BUDGET_SECONDS:-1380}"   # target timeout_seconds is 1500; leave room for recovery
 RECOVERY_RESERVE=90
@@ -173,6 +174,10 @@ docker_mut() { # docker_mut <rm|stop|start> [-f] <container>
     esac
     if ! owned_name "$name"; then
         say "docker_mut: refusing '$verb $name' (only acct-app-candidate-r<N> may be changed)"
+        return 11
+    fi
+    if [[ $verb != start && -z $PREV_CONTAINER ]]; then
+        say "docker_mut: refusing '$verb $name' before the previous container is known"
         return 11
     fi
     if [[ $verb != start && $name == "$PREV_CONTAINER" ]]; then
@@ -526,12 +531,38 @@ cand_field() { # cand_field <name> <1-based field>   (name|running|port|image|re
     return 1
 }
 
+detect_prev_container() { # needs CAND_LINES + OLD_PORT; sets PREV_CONTAINER
+    local line name run port matches=() listing=""
+    for line in "${CAND_LINES[@]}"; do
+        IFS='|' read -r name run port _ <<<"$line"
+        listing+="${listing:+, }${name}:${port}:${run}"
+        if [[ $run == true && $port == "$OLD_PORT" ]]; then matches+=("$name"); fi
+    done
+    (( ${#matches[@]} == 1 )) \
+        || die 12 "cannot auto-detect the previous container: ${#matches[@]} running candidate(s) publish apache upstream port $OLD_PORT (candidates name:port:running = ${listing:-none}); set ACCT_PREV_CONTAINER to the container to keep for rollback"
+    PREV_CONTAINER="${matches[0]}"
+    PREV_AUTODETECT=true
+    say "previous container auto-detected from apache upstream port $OLD_PORT: $PREV_CONTAINER"
+}
+
+resolve_expected_prev_image_id() {
+    if [[ -n ${ACCT_EXPECTED_PREV_IMAGE_ID+x} ]]; then
+        EXPECTED_PREV_IMAGE_ID="$ACCT_EXPECTED_PREV_IMAGE_ID"
+    elif [[ $PREV_CONTAINER == acct-app-candidate-r8 ]]; then
+        EXPECTED_PREV_IMAGE_ID="$R8_IMAGE_ID"
+    else
+        EXPECTED_PREV_IMAGE_ID=""
+    fi
+}
+
 discover_state() {
-    local up cur_ip cand_port nm extra_nets item
+    local up cur_ip cand_port cand_img nm extra_nets item
     up="$(apache_upstream)" || die 12 "cannot read the fb vhost upstream from $APACHE_SITE"
     read -r UP_IP OLD_PORT <<<"$up"
-    load_prev_info
     list_candidates
+    if [[ -z $PREV_CONTAINER ]]; then detect_prev_container; fi
+    resolve_expected_prev_image_id
+    load_prev_info
     [[ ${INFO[PREV_RUNNING]:-} == true ]] || die 12 "previous container $PREV_CONTAINER is not running"
     [[ ${INFO[NS_RUNNING]:-} == true ]] || die 12 "$NS_CONTAINER is not running"
     [[ ${INFO[NS_ID]:-} != "" && ${INFO[PREV_NETMODE]:-} == "container:${INFO[NS_ID]}" ]] \
@@ -552,6 +583,11 @@ discover_state() {
     [[ $cand_port == "$OLD_PORT" ]] || die 12 "apache upstream port $OLD_PORT is not the port ($cand_port) of $PREV_CONTAINER"
     PREV_IMAGE_ID="${INFO[PREV_IMAGE_ID]:-}"
     [[ -n $PREV_IMAGE_ID ]] || die 12 "cannot read the image id of $PREV_CONTAINER"
+    if $PREV_AUTODETECT; then
+        cand_img="$(cand_field "$PREV_CONTAINER" 4 || true)"
+        [[ $cand_img == "$PREV_IMAGE_ID" ]] \
+            || die 12 "auto-detected $PREV_CONTAINER image '$cand_img' (container list) != '$PREV_IMAGE_ID' (inspect)"
+    fi
     if [[ -n $EXPECTED_PREV_IMAGE_ID && $PREV_IMAGE_ID != "$EXPECTED_PREV_IMAGE_ID" ]]; then
         die 12 "$PREV_CONTAINER image $PREV_IMAGE_ID != expected $EXPECTED_PREV_IMAGE_ID (set ACCT_EXPECTED_PREV_IMAGE_ID after a release)"
     fi
