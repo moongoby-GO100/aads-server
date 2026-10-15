@@ -22,6 +22,10 @@
 #  9. 종료 시 errors>0 이면 CEO 오비스 알림함에 6시간 중복방지로 기록한다.
 # 10. 전날 전송에 실패한 덤프도 매일 먼저 백필하고, 원격 SHA-256이 일치하는
 #     오래된 로컬 덤프만 지운다. 새 덤프 전에는 최근 덤프 크기+여유공간을 요구한다.
+# 2026-10-15 수정(AADS-DISK-OFFLOAD-KEEP-ONE-DUMP-20261015):
+# 11. 로컬 덤프 보존 수를 2→1(LOCAL_DUMP_KEEP)로 줄였다. 덤프 2개(약 16GB) 상시 보존으로
+#     contabo116 여유가 9GB 아래로 떨어져 10-16 DB 백업(약 12.6GiB)이 위험했다.
+#     삭제 조건(원격 sha256 일치)은 그대로다.
 set -uo pipefail
 
 DRY_RUN=0
@@ -77,6 +81,8 @@ WORKTREE_MIN_AGE_SEC="${AADS_OFFLOAD_MIN_AGE_SEC:-7200}"
 # 넉넉히 잡는다.
 MIN_FREE_GB="${AADS_OFFLOAD_MIN_FREE_GB:-5}"
 EXPECTED_DUMP_GB="${AADS_OFFLOAD_EXPECTED_DUMP_GB:-8}"
+# 로컬에 남길 최신 덤프 개수. 나머지는 원격 sha256 일치 시에만 삭제한다.
+LOCAL_DUMP_KEEP=1
 ERRORS=0
 
 mkdir -p "$(dirname "$LOG")" || exit 1
@@ -263,7 +269,7 @@ prune_verified_old_dumps() {
     local old old_remote old_local_sum old_remote_sum
     local -a old_dumps=()
     mapfile -t old_dumps < <(
-        find "$DUMPS" -maxdepth 1 -type f -name 'aads_????????.dump' | sort -r | tail -n +3
+        find "$DUMPS" -maxdepth 1 -type f -name 'aads_????????.dump' | sort -r | tail -n +$((LOCAL_DUMP_KEEP + 1))
     )
     for old in "${old_dumps[@]}"; do
         old_remote="$(dump_remote_path "$old")" || continue
