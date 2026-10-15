@@ -46,8 +46,8 @@ def test_normalize_nested_response_maps_channel_institution_amounts_and_skips_su
     out = parse(NESTED)
     recs = {r["source_key"]: r for r in out["records"]}
     assert len(recs) == 4  # summary 합계 행은 레코드가 아니다
-    baemin = recs["ch|co-1|DELIVERY|배달의민족|2026-10-01|SETTLEMENT"]
-    assert (baemin["channel"], baemin["institution"], baemin["grain"]) == ("DELIVERY", "배달의민족", "DAY")
+    baemin = recs["ch|co-1|DELIVERY|배민|2026-10-01|SETTLEMENT"]  # 입력 "배달의민족" → 표준명 "배민"
+    assert (baemin["channel"], baemin["institution"], baemin["grain"]) == ("DELIVERY", "배민", "DAY")
     assert (baemin["gross"], baemin["net"], baemin["fee"], baemin["count"]) == (
         Decimal("100000.00"), Decimal("88000.00"), Decimal("12000.00"), 5)
     assert recs["ch|co-1|CARD|신한카드|2026-10-01|SETTLEMENT"]["gross"] == Decimal("200000.00")
@@ -57,7 +57,7 @@ def test_normalize_item_columns():
     rec = parse(NESTED)["records"][0]
     row = core.normalize_item(core.KIND_CHANNEL, rec)
     assert row["source_key"] == rec["source_key"]
-    assert row["institution"] == "배달의민족" and row["direction"] == "DELIVERY"
+    assert row["institution"] == "배민" and row["direction"] == "DELIVERY"
     assert row["occurred_on"] == date(2026, 10, 1) and row["amount"] == Decimal("100000.00")
 
 
@@ -381,3 +381,119 @@ async def test_list_channel_revenue_validates_period_before_touching_db(monkeypa
     with pytest.raises(svc.CollectionError) as exc:
         await svc.list_channel_revenue(TENANT, "biz-1", date_from="2026-10-31", date_to="2026-10-01")
     assert exc.value.code == "invalid_period"
+
+
+# ── 클로브 실측 형태(sourcePlatform · *Krw · total* 누계) ─────
+
+def _daily_row(platform, day, sales, fee, settle, count):
+    return {"channel": "MKP", "timeUnit": "DAILY", "date": day, "sourcePlatform": platform,
+            "salesAmountKrw": sales, "feeAmountKrw": fee, "settlementAmountKrw": settle, "salesCount": count,
+            "totalSalesAmountKrw": 9_999_999, "totalFeeAmountKrw": 8_888_888, "totalSettlementAmountKrw": 7_777_777,
+            "totalSalesCount": 777, "totalCount": 555}
+
+
+def _clobe_page(*rows):
+    return {"content": list(rows), "page": 0, "size": 20, "hasNext": False, "totalCount": 555,
+            "totalSalesAmountKrw": 9_999_999, "totalFeeAmountKrw": 8_888_888, "totalSettlementAmountKrw": 7_777_777,
+            "totalSalesCount": 777}
+
+
+CLOBE_DAY = _clobe_page(
+    _daily_row("배민", "2026-10-16", 2_000_000, 700_000, 1_300_000, 90),
+    _daily_row("쿠팡이츠", "2026-10-16", 300_000, 90_000, 210_000, 12),
+    _daily_row("요기요", "2026-10-16", 50_000, 10_000, 40_000, 3))
+
+
+def test_clobe_daily_rows_split_by_delivery_app_and_use_day_values_only():
+    out = parse(CLOBE_DAY)
+    recs = {r["institution"]: r for r in out["records"]}
+    assert set(recs) == {"배민", "쿠팡이츠", "요기요"} and len(out["records"]) == 3
+    baemin = recs["배민"]
+    assert baemin["source_key"] == "ch|co-1|MKP|배민|2026-10-16|SETTLEMENT" and baemin["channel"] == "MKP"
+    assert (baemin["gross"], baemin["fee"], baemin["net"], baemin["count"]) == (
+        Decimal("2000000.00"), Decimal("700000.00"), Decimal("1300000.00"), 90)
+    assert recs["요기요"]["gross"] == Decimal("50000.00") and recs["요기요"]["count"] == 3
+    used = {v for r in out["records"] for v in (r["gross"], r["fee"], r["net"], r["count"])}
+    assert not used & {9_999_999, 8_888_888, 7_777_777, 777, 555, Decimal("9999999.00")}
+
+
+def test_period_totals_are_never_a_daily_value_even_when_the_day_value_is_missing():
+    row = _daily_row("배민", "2026-10-16", None, None, None, None)
+    row = {k: v for k, v in row.items() if v is not None}
+    (rec,) = parse(_clobe_page(row))["records"]
+    assert (rec["gross"], rec["fee"], rec["net"], rec["count"]) == (None, None, None, None)
+
+
+def test_same_platform_same_day_is_one_record_and_institution_alias_is_normalized():
+    rows = _clobe_page(_daily_row("배달의민족", "2026-10-16", 100, 10, 90, 1), _daily_row("배민", "2026-10-16", 50, 5, 45, 2))
+    (rec,) = parse(rows)["records"]
+    assert rec["institution"] == "배민" and rec["gross"] == Decimal("150.00") and rec["count"] == 3
+    assert [core.institution_name(v) for v in ("쿠팡 이츠", "Yogiyo", "땡겨요", None)] == ["쿠팡이츠", "요기요", "땡겨요", ""]
+
+
+def test_normalize_item_puts_daily_gross_into_amount_column():
+    row = core.normalize_item(core.KIND_CHANNEL, parse(CLOBE_DAY)["records"][0])
+    assert row["amount"] == Decimal("2000000.00") and row["institution"] == "배민" and row["direction"] == "MKP"
+
+
+def test_legacy_channel_key_drops_only_the_institution_segment():
+    assert core.legacy_channel_key("ch|co-1|MKP|배민|2026-10-16|SETTLEMENT") == "ch|co-1|MKP||2026-10-16|SETTLEMENT"
+    assert core.legacy_channel_key("ch|co-1|MKP||2026-10-16|SETTLEMENT") is None
+    assert core.legacy_channel_key("fp:abc:1") is None
+
+
+def test_empty_page_with_period_totals_keeps_unexpected_shape_verdict():
+    # 판정 불변 확인: total* 를 별칭에서 뺐어도 '지표가 있는 객체' 판정은 그대로다(별도 작업 범위).
+    with pytest.raises(ValueError, match="channel_unexpected_shape"):
+        parse({"content": [], "totalCount": 0, "page": 0, "size": 20})
+
+
+# ── 옛 빈-기관명 행 supersede ─────────────────────────────
+
+class LegacyConn:
+    def __init__(self, legacy_rows):
+        self.legacy_rows = legacy_rows
+        self.updated: list = []
+        self.inserted: list = []
+
+    async def fetch(self, sql, *args):
+        if "ORDER BY first_seen_at DESC" in sql and args[3].startswith("ch|") and "||" in args[3]:
+            return self.legacy_rows
+        return []
+
+    async def execute(self, sql, *args):
+        (self.updated if sql.startswith("UPDATE obys_clobe_item SET stage='superseded'") else self.inserted).append((sql, args))
+
+
+def _upsert_ctx():
+    return svc.RunCtx(CID, uuid.UUID(TENANT), "biz-1", "inst", 1, 300, "live", kind=core.KIND_CHANNEL,
+                      run_id=uuid.uuid4(), chain_id=uuid.uuid4())
+
+
+async def _upsert_all(conn):
+    counts = {"inserted": 0, "unchanged": 0, "revised": 0}
+    for row in svc._prepare_rows(core.KIND_CHANNEL, parse(CLOBE_DAY)["records"], None):
+        await svc._upsert_item(conn, _upsert_ctx(), row, counts)
+    return counts
+
+
+async def test_new_institution_rows_supersede_the_blank_institution_row_without_deleting():
+    old_id, older_id = uuid.uuid4(), uuid.uuid4()
+    conn = LegacyConn([{"item_id": old_id, "stage": "review_box"}, {"item_id": older_id, "stage": "reviewed"}])
+    counts = await _upsert_all(conn)
+    assert counts["inserted"] == 3
+    assert [a[0] for _, a in conn.updated[:2]] == [old_id, older_id] and not any("DELETE" in s for s, _ in conn.updated + conn.inserted)
+    assert len(conn.inserted) == 3
+    assert all(a[14] == old_id for _, a in conn.inserted)  # supersedes_item_id
+
+
+async def test_confirmed_blank_institution_row_is_kept_and_counted():
+    conn = LegacyConn([{"item_id": uuid.uuid4(), "stage": "confirmed"}])
+    counts = await _upsert_all(conn)
+    assert conn.updated == [] and counts["legacy_confirmed_kept"] == 3 and counts["inserted"] == 3
+
+
+async def test_no_legacy_row_means_plain_insert():
+    conn = LegacyConn([])
+    counts = await _upsert_all(conn)
+    assert conn.updated == [] and counts["inserted"] == 3 and all(a[14] is None for _, a in conn.inserted)

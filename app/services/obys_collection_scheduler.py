@@ -198,6 +198,53 @@ async def run_due(now: datetime | None = None, *, budget_seconds: float = BUDGET
     }
 
 
+async def run_backfill(
+    kinds: list[str], start: date, end: date, *, company_ids: list[str] | None = None, dry_run: bool = False,
+    pause_seconds: float = 2.0, budget_seconds: float = 3000,
+) -> dict[str, Any]:
+    """지정 종류·기간을 연결된 회사마다 순서대로 다시 받는다(클로브 호출은 회사 하나씩, 회사 사이 pause).
+
+    run_collection 의 임대(lease)·기간 상한(MAX_WINDOW_DAYS)을 그대로 따른다. 적재는 source_key 멱등이라 다시 돌려도 안전하다.
+    dry_run 은 대상 회사와 기간만 돌려주고 클로브·DB 쓰기를 하지 않는다.
+    """
+    if any(k not in core.COLLECTION_KINDS for k in kinds):
+        raise ValueError("invalid_kind")
+    start, end = core.resolve_period(start, end)
+    links, _ = await load_state()
+    targets = [str(link["clobe_company_id"]) for link in links]
+    if company_ids:
+        targets = [c for c in targets if c in set(company_ids)]
+    plan = {"kinds": kinds, "period": [start.isoformat(), end.isoformat()], "companies": len(targets), "dry_run": dry_run}
+    if dry_run:
+        return {"ok": True, **plan, "results": []}
+    instance = instance_name()
+    deadline = time.monotonic() + budget_seconds
+    results: list[dict[str, Any]] = []
+    for i, cid in enumerate(targets):
+        if time.monotonic() >= deadline:
+            results.extend({"company_id": c, "status": "skipped_budget"} for c in targets[i:])
+            break
+        if i:
+            await asyncio.sleep(pause_seconds)
+        try:
+            res = await svc.run_collection(cid, kinds=kinds, period_start=start, period_end=end, mode="live", instance=instance)
+        except svc.CollectionError as exc:
+            results.append({"company_id": cid, "status": "skipped_busy" if exc.code == "collection_in_progress" else "error",
+                            "detail": exc.code})
+            continue
+        except Exception as exc:  # noqa: BLE001 - 한 회사의 예외가 다른 회사를 막지 않는다
+            results.append({"company_id": cid, "status": "error", "detail": type(exc).__name__})
+            continue
+        results.append({"company_id": cid, "status": str(res.get("status") or "error"), "detail": res.get("error_code"),
+                        "runs": [{"kind": r.get("data_kind"), "status": r.get("status"), "error_code": r.get("error_code"),
+                                  "counts": r.get("counts")} for r in res.get("runs") or []]})
+        if res.get("status") == "needs_reauth":
+            results.extend({"company_id": c, "status": "skipped_needs_reauth"} for c in targets[i + 1:])
+            break
+    bad = [r for r in results if r["status"] in FAILURE_STATUSES or r["status"] == "skipped_budget"]
+    return {"ok": not bad, **plan, "results": results}
+
+
 def _apply_runtime() -> dict[str, Any] | None:
     """오비서 독립 실행 설정을 적용한다. 앱의 create_app 이 하는 단계이며, 빠지면 clobe store_mode()=aads 로 AADS 풀을 찾는다.
 
@@ -212,13 +259,19 @@ def _apply_runtime() -> dict[str, Any] | None:
     return None
 
 
-async def _main_async() -> int:
+async def _main_async(args: argparse.Namespace | None = None) -> int:
     failure = _apply_runtime()
     if failure is not None:
         print(json.dumps(failure, ensure_ascii=False, separators=(",", ":")))
         return 1
     try:
-        result = await run_due()
+        if args is not None and args.backfill_from:
+            result = await run_backfill(
+                args.kinds or [core.KIND_CHANNEL], date.fromisoformat(args.backfill_from),
+                date.fromisoformat(args.backfill_to) if args.backfill_to else datetime.now(KST).date(),
+                company_ids=args.company or None, dry_run=args.dry_run, pause_seconds=args.pause_seconds)
+        else:
+            result = await run_due()
     except Exception as exc:  # noqa: BLE001 - 대상 조회 자체가 실패한 경우도 JSON 한 줄로 남긴다
         result = {"ok": False, "error": type(exc).__name__, "companies": []}
     finally:
@@ -233,9 +286,17 @@ async def _main_async() -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="클로브 수집 1시간 자동 실행")
     parser.add_argument("--once", action="store_true", required=True, help="한 번 돌고 종료")
-    parser.parse_args(argv)
+    parser.add_argument("--backfill-from", metavar="YYYY-MM-DD", help="지정하면 정기 실행 대신 이 날짜부터 다시 받는다(수동)")
+    parser.add_argument("--backfill-to", metavar="YYYY-MM-DD", help="재수집 끝 날짜(기본 오늘 KST)")
+    parser.add_argument("--kinds", nargs="+", choices=list(core.COLLECTION_KINDS), help="재수집 종류(기본 channel_revenue)")
+    parser.add_argument("--company", action="append", help="재수집할 clobe_company_id(반복 가능, 기본 연결된 전체)")
+    parser.add_argument("--dry-run", action="store_true", help="재수집 대상만 출력하고 호출하지 않는다")
+    parser.add_argument("--pause-seconds", type=float, default=2.0, help="회사 사이 대기(기본 2초)")
+    args = parser.parse_args(argv)
+    if args.backfill_to and not args.backfill_from:
+        parser.error("--backfill-to 는 --backfill-from 과 함께 쓴다")
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
-    return asyncio.run(_main_async())
+    return asyncio.run(_main_async(args))
 
 
 if __name__ == "__main__":

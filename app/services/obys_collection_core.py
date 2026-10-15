@@ -478,14 +478,17 @@ _CHANNEL_ALIASES = {
     "MKP": "MKP", "MARKETPLACE": "MKP", "MARKET_PLACE": "MKP", "OPEN_MARKET": "MKP", "OPENMARKET": "MKP",
     "오픈마켓": "MKP", "마켓플레이스": "MKP",
 }
-_GROSS_KEYS = ("grossAmount", "gross", "grossSales", "totalAmount", "salesAmount", "totalSales", "sales", "amount")
-_NET_KEYS = ("netAmount", "net", "netSales", "settlementAmount", "settleAmount", "payoutAmount")
-_FEE_KEYS = ("feeAmount", "fee", "totalFee", "feeTotal", "commission", "commissionAmount")
-_COUNT_KEYS = ("count", "salesCount", "transactionCount", "orderCount", "txCount", "totalCount", "cnt")
-_METRIC_KEYS = frozenset(_GROSS_KEYS + _NET_KEYS + _FEE_KEYS + _COUNT_KEYS)
+# 일 단위 값만 읽는다. total* 접두(기간 누계: totalSalesAmountKrw·totalCount 등)는 응답 안 모든 행에 같은 값으로 반복되므로
+# 별칭에 넣지 않는다. 다만 아래 _TOTAL_DETECT_KEYS 는 '지표가 있는 객체' 판정(형식 변경 감지)에만 계속 쓴다.
+_GROSS_KEYS = ("grossAmount", "gross", "grossSales", "salesAmountKrw", "salesAmount", "sales", "amount")
+_NET_KEYS = ("netAmount", "net", "netSales", "settlementAmountKrw", "settlementAmount", "settleAmount", "payoutAmount")
+_FEE_KEYS = ("feeAmountKrw", "feeAmount", "fee", "commission", "commissionAmount")
+_COUNT_KEYS = ("count", "salesCount", "transactionCount", "orderCount", "txCount", "cnt")
+_TOTAL_DETECT_KEYS = ("totalAmount", "totalSales", "totalFee", "feeTotal", "totalCount")
+_METRIC_KEYS = frozenset(_GROSS_KEYS + _NET_KEYS + _FEE_KEYS + _COUNT_KEYS + _TOTAL_DETECT_KEYS)
 _CHANNEL_KEYS = ("channel", "channelType", "channelCode", "channelCategory", "type", "category")
 _INSTITUTION_KEYS = ("institutionName", "institution", "orgName", "organizationName", "agencyName", "platformName",
-                     "issuerName", "cardCompanyName", "merchantName", "mallName", "channelName", "name")
+                     "sourcePlatform", "issuerName", "cardCompanyName", "merchantName", "mallName", "channelName", "name")
 _DATE_KEYS = ("date", "day", "salesDate", "settlementDate", "settleDate", "baseDate", "targetDate", "aggregateDate",
               "yearMonth", "month", "period")
 _BASIS_KEYS = ("dateBasis", "date_basis")
@@ -499,6 +502,30 @@ def channel_code(value: Any) -> str:
     if not text:
         return "UNKNOWN"
     return _CHANNEL_ALIASES.get(text) or _CHANNEL_ALIASES.get(str(value).strip()) or text
+
+
+# 배달앱 표기 표준명. 클로브 원본은 "배민"이고 예전 별칭 표에는 "배달의민족"이 있었다 — 표준은 "배민".
+_INSTITUTION_ALIASES = {
+    "배민": "배민", "배달의민족": "배민", "baemin": "배민",
+    "쿠팡이츠": "쿠팡이츠", "쿠팡잇츠": "쿠팡이츠", "coupangeats": "쿠팡이츠",
+    "요기요": "요기요", "yogiyo": "요기요",
+}
+
+
+def institution_name(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return _INSTITUTION_ALIASES.get(re.sub(r"\s+", "", text).lower(), text)
+
+
+def legacy_channel_key(source_key: str) -> str | None:
+    """기관명이 있는 채널 source_key → 기관명 자리가 빈 옛 키. 기관명이 없거나 형식이 다르면 None.
+
+    sourcePlatform 을 읽기 전의 수집분은 기관명 없이 (회사·채널·날짜·기준) 한 행으로 합쳐져 저장됐다."""
+    parts = str(source_key or "").split("|")
+    if len(parts) != 6 or parts[0] != "ch" or not parts[3]:
+        return None
+    parts[3] = ""
+    return "|".join(parts)
 
 
 def _num(value: Any) -> Decimal | None:
@@ -588,7 +615,7 @@ def parse_channel_payload(
             skipped += 1
             continue
         day, grain = parsed
-        institution = re.sub(r"\s+", " ", str(_first_present(ctx, _INSTITUTION_KEYS) or "")).strip()
+        institution = institution_name(_first_present(ctx, _INSTITUTION_KEYS))
         channel = channel_code(_first_present(ctx, _CHANNEL_KEYS))
         basis = str(_first_present(ctx, _BASIS_KEYS) or date_basis or "DEFAULT").strip().upper()
         gross, net = _num(_first_present(ctx, _GROSS_KEYS)), _num(_first_present(ctx, _NET_KEYS))

@@ -386,13 +386,14 @@ async def _upsert_item(conn: Any, ctx: RunCtx, row: dict[str, Any], counts: dict
         counts["unchanged"] += 1
         return
     latest = prior[0] if prior else None
+    legacy_id = await _supersede_legacy_channel_rows(conn, ctx, key, counts) if kind == core.KIND_CHANNEL and not prior else None
     await conn.execute(
         "INSERT INTO obys_clobe_item (item_id, tenant_id, business_id, clobe_company_id, data_kind, source_key, item_hash, "
         " institution, occurred_on, amount, direction, counterparty, source_as_of, payload, supersedes_item_id, "
         " first_run_id, last_run_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$16)",
         uuid.uuid4(), ctx.tenant_id, ctx.business_id, ctx.company_id, kind, key, digest, row["institution"],
         row["occurred_on"], row["amount"], row["direction"], row["counterparty"], row.get("source_as_of"),
-        core.canonical_json(row["raw"]), latest["item_id"] if latest else None, ctx.run_id,
+        core.canonical_json(row["raw"]), latest["item_id"] if latest else legacy_id, ctx.run_id,
     )
     if latest is not None:
         counts["revised"] += 1
@@ -400,6 +401,32 @@ async def _upsert_item(conn: Any, ctx: RunCtx, row: dict[str, Any], counts: dict
             await conn.execute("UPDATE obys_clobe_item SET stage='superseded' WHERE item_id=$1", latest["item_id"])
     else:
         counts["inserted"] += 1
+
+
+async def _supersede_legacy_channel_rows(conn: Any, ctx: RunCtx, key: str, counts: dict[str, int]) -> Any:
+    """기관명이 든 새 채널 키가 처음 들어오면, 같은 회사·채널·날짜·기준의 기관명 빈 옛 행을 superseded 로 돌린다(삭제 아님).
+
+    옛 행은 배달앱을 합산한 한 행이라 새 행과 함께 두면 이중 집계된다. 확정(confirmed) 행은 건드리지 않고 경고만 남긴다.
+    반환값은 새 행의 supersedes_item_id 로 쓸 가장 최근 옛 행 id(없으면 None).
+    """
+    legacy_key = core.legacy_channel_key(key)
+    if legacy_key is None:
+        return None
+    old = await conn.fetch(
+        "SELECT item_id, stage FROM obys_clobe_item "
+        "WHERE tenant_id=$1 AND business_id=$2 AND data_kind=$3 AND source_key=$4 ORDER BY first_seen_at DESC",
+        ctx.tenant_id, ctx.business_id, ctx.kind, legacy_key,
+    )
+    if not old:
+        return None
+    for o in old:
+        if o["stage"] in ("review_box", "reviewed"):
+            await conn.execute("UPDATE obys_clobe_item SET stage='superseded' WHERE item_id=$1", o["item_id"])
+            counts["legacy_superseded"] = counts.get("legacy_superseded", 0) + 1
+        elif o["stage"] == "confirmed":
+            counts["legacy_confirmed_kept"] = counts.get("legacy_confirmed_kept", 0) + 1
+            logger.warning("obys_channel_legacy_confirmed_kept item_id=%s", o["item_id"])
+    return old[0]["item_id"]
 
 
 async def _shadow_probe(conn: Any, ctx: RunCtx, row: dict[str, Any], counts: dict[str, int]) -> None:

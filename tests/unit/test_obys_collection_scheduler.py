@@ -373,6 +373,58 @@ def test_cli_load_failure_is_json_and_exit_1(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["error"] == "ConnectionError"
 
 
+def test_backfill_runs_each_company_in_order_with_the_requested_kind_and_period(world):
+    world.links = ["c1", "c2"]
+    out = run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), pause_seconds=0))
+    assert [(c["company_id"], c["kinds"], c["period_start"], c["period_end"], c["mode"]) for c in world.calls] == [
+        ("c1", [core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), "live"),
+        ("c2", [core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), "live")]
+    assert out["ok"] is True and out["companies"] == 2 and out["period"] == ["2026-07-16", "2026-10-16"]
+
+
+def test_backfill_dry_run_and_company_filter_make_no_calls_or_only_chosen_calls(world):
+    world.links = ["c1", "c2", "c3"]
+    dry = run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), dry_run=True))
+    assert world.calls == [] and dry["companies"] == 3 and dry["results"] == []
+    run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), company_ids=["c2"], pause_seconds=0))
+    assert [c["company_id"] for c in world.calls] == ["c2"]
+
+
+def test_backfill_isolates_failures_and_busy_lease_and_stops_on_reauth(world):
+    world.links = ["c1", "c2", "c3"]
+    world.behavior["c1"] = svc.CollectionError("collection_in_progress", 409)
+    world.behavior["c2"] = RuntimeError("secret")
+    out = run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 10, 1), date(2026, 10, 2), pause_seconds=0))
+    assert [r["status"] for r in out["results"]] == ["skipped_busy", "error", "succeeded"] and out["ok"] is False
+    assert "secret" not in json.dumps(out)
+    world.calls.clear()
+    world.behavior = {"c1": lambda kinds: {"company_id": "c1", "status": "needs_reauth", "runs": [], "error_code": "reauth_required"}}
+    out = run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 10, 1), date(2026, 10, 2), pause_seconds=0))
+    assert [c["company_id"] for c in world.calls] == ["c1"]
+    assert [r["status"] for r in out["results"]] == ["needs_reauth", "skipped_needs_reauth", "skipped_needs_reauth"]
+
+
+def test_backfill_rejects_bad_kind_and_too_long_period(world):
+    with pytest.raises(ValueError, match="invalid_kind"):
+        run(sched.run_backfill(["bogus"], date(2026, 10, 1), date(2026, 10, 2)))
+    with pytest.raises(ValueError, match="period_too_long"):
+        run(sched.run_backfill([core.KIND_CHANNEL], date(2025, 1, 1), date(2026, 10, 2)))
+
+
+def test_cli_backfill_flag_prints_one_json_line_and_default_kind_is_channel(world, monkeypatch, capsys):
+    world.links = ["c1"]
+
+    async def close():
+        return None
+
+    monkeypatch.setattr(clobe, "close_store_pool", close)
+    assert sched.main(["--once", "--backfill-from", "2026-07-16", "--backfill-to", "2026-10-16", "--pause-seconds", "0"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["kinds"] == [core.KIND_CHANNEL] and world.calls[0]["period_start"] == date(2026, 7, 16)
+    with pytest.raises(SystemExit):
+        sched.main(["--once", "--backfill-to", "2026-10-16"])
+
+
 def test_scheduler_never_confirms_ledger_or_touches_app_startup():
     src = (ROOT / "app/services/obys_collection_scheduler.py").read_text(encoding="utf-8")
     assert "confirm_items" not in src and "review_items" not in src
