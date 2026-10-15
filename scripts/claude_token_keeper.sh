@@ -220,10 +220,64 @@ print(o.get('accessToken',''), end='')
     [[ "$out" == ok:* || "$out" == skip:* ]]
 }
 
+# ── 슬롯 활성 여부(llm_api_keys.is_active) ───────────────────────────
+# CEO 가 의도적으로 끈 슬롯(2026-10-15 slot2·slot3)을 계속 갱신하면 실패가 쌓여
+# 알림 채널이 살아난 순간 소음 경보가 된다. DB 가 비활성이라 하면 갱신도 알림도 건너뛴다.
+# DB 를 못 읽으면 **기존 동작(갱신 시도)을 유지**한다(fail-open) — 조회 장애가 갱신을 멈춰
+# 토큰 만료로 이어지면 안 된다.
+declare -A SLOT_ACTIVE=()
+SLOT_ACTIVE_LOADED=0
+
+load_slot_active() {
+    local container out line k v
+    container="$(cat "${STATE_DIR}/.active_container" 2>/dev/null || echo aads-server)"
+    out="$(timeout 60 docker exec -i "$container" python3 - 2>&1 <<'PY'
+import asyncio, sys
+sys.path.insert(0, "/app")
+from app.core.db_pool import get_pool, init_pool
+async def main():
+    await init_pool()
+    rows = await get_pool().fetch(
+        "SELECT key_name, is_active FROM llm_api_keys WHERE provider='anthropic'")
+    for r in rows:
+        print("%s=%s" % (r["key_name"], "inactive" if r["is_active"] is False else "active"))
+asyncio.run(main())
+PY
+    )"
+    local rc=$?
+    if [ "$rc" -ne 0 ] || ! printf '%s' "$out" | grep -qE '^ANTHROPIC_AUTH_TOKEN[_0-9]*=(active|inactive)$'; then
+        log "⚠️ 슬롯 활성 여부 DB 조회 실패(rc=${rc}, container=${container}) — 기존 동작(갱신 시도) 유지: $(printf '%s' "$out" | tail -1 | cut -c1-160)"
+        return 1
+    fi
+    while IFS= read -r line; do
+        [[ "$line" =~ ^(ANTHROPIC_AUTH_TOKEN[_0-9]*)=(active|inactive)$ ]] || continue
+        k="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
+        # 같은 key_name 행이 둘 이상이면 하나라도 활성이면 활성이다.
+        [ "${SLOT_ACTIVE[$k]:-}" = active ] || SLOT_ACTIVE[$k]="$v"
+    done <<<"$out"
+    return 0
+}
+
+slot_inactive() {
+    local key
+    key="$(key_for_slot "$1")" || return 1
+    if [ "$SLOT_ACTIVE_LOADED" = 0 ]; then
+        SLOT_ACTIVE_LOADED=1
+        load_slot_active || true
+    fi
+    [ "${SLOT_ACTIVE[$key]:-}" = inactive ]
+}
+
 renewed=0
 for slot in 1 2 3 4; do
     requested_slot="${CLAUDE_TOKEN_KEEPER_SLOT:-}"
     [ -z "$requested_slot" ] || [ "$slot" = "$requested_slot" ] || continue
+    if slot_inactive "$slot"; then
+        log "slot${slot}: 비활성(DB) — 건너뜀"
+        # 다시 켰을 때 묵은 연속 실패 횟수로 곧바로 경보가 나지 않게 비운다.
+        rm -f "${ALERT_STATE_DIR}/slot${slot}.fails" "${ALERT_STATE_DIR}/slot${slot}.alerted"
+        continue
+    fi
     home="${SLOT_ROOT}/slot${slot}"
     cred="${home}/.claude/.credentials.json"
     # 릴레이가 같은 슬롯 자격증명을 쓸 때 쓰는 락과 같은 파일이다.
