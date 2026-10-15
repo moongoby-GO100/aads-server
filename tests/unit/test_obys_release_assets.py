@@ -211,3 +211,74 @@ def test_tool_has_no_hardcoded_credentials_or_zone_wide_purge():
     code = "\n".join(ln for ln in TOOL.read_text().splitlines() if not ln.lstrip().startswith("#"))
     assert "purge_everything" not in TOOL.read_text()
     assert "https://api.cloudflare.com/client/v4" in code
+
+
+REL_HTML = """<html>
+<link rel="stylesheet" href="modules/contract-editor-v41.css?v=20261006-r5">
+<link rel="stylesheet" href='modules/data-overview.css'>
+<script src="modules/contract-core.js?v=20261015-r1"></script>
+<script src="/static/apps/obys/modules/app-config.js?v=old"></script>
+<script src="../modules/up.js"></script>
+<script src="./modules/dot.js"></script>
+<script src="../x.js?v=1"></script>
+<script src="https://cdn.example.com/modules/ext.js"></script>
+<script src="//cdn.example.com/modules/ext2.js"></script>
+<code>modules/prose.js</code>
+</html>
+"""
+
+
+def test_stamp_html_stamps_relative_module_refs_and_keeps_them_relative():
+    out, n = tool.stamp_html(REL_HTML, SHA)
+    assert n == 4
+    for ref in ('"modules/contract-editor-v41.css?v=%s"' % SHA, "'modules/data-overview.css?v=%s'" % SHA,
+                '"modules/contract-core.js?v=%s"' % SHA):
+        assert ref in out
+    assert '"/static/apps/obys/modules/app-config.js?v=%s"' % SHA in out
+    assert "20261006-r5" not in out and "20261015-r1" not in out and "v=old" not in out
+    assert 'href="/static/apps/obys/modules/contract' not in out
+
+
+def test_stamp_html_leaves_parent_dir_external_and_prose_refs_unchanged():
+    out, _ = tool.stamp_html(REL_HTML, SHA)
+    for keep in ('"../modules/up.js"', '"./modules/dot.js"', '"../x.js?v=1"', '"https://cdn.example.com/modules/ext.js"',
+                 '"//cdn.example.com/modules/ext2.js"', "<code>modules/prose.js</code>"):
+        assert keep in out
+
+
+def test_relative_stamp_is_idempotent():
+    once, _ = tool.stamp_html(REL_HTML, SHA)
+    assert tool.stamp_html(once, SHA)[0] == once
+
+
+def test_purge_urls_normalize_relative_refs_to_absolute_bare_and_versioned_urls(tmp_path):
+    d = _obys_tree(tmp_path)
+    (d / "mockup-v4-1.html").write_text(REL_HTML, encoding="utf-8")
+    urls = tool.purge_urls(d, SHA, "https://fb.newtalk.kr/")
+    base = "https://fb.newtalk.kr/static/apps/obys"
+    for name in ("contract-editor-v41.css", "data-overview.css", "contract-core.js"):
+        assert f"{base}/modules/{name}" in urls and f"{base}/modules/{name}?v={SHA}" in urls
+    assert len(urls) == len(set(urls))
+    assert not [u for u in urls if "up.js" in u or "dot.js" in u or "x.js" in u or "cdn.example.com" in u or "prose" in u]
+
+
+def test_module_refs_deduplicate_absolute_and_relative_forms_in_order():
+    text = '<a href="modules/a.js"></a><a href="/static/apps/obys/modules/a.js"></a><a href="modules/b.css"></a>'
+    assert tool.module_refs(text) == ["/static/apps/obys/modules/a.js", "/static/apps/obys/modules/b.css"]
+
+
+def test_the_real_mockup_v41_stamps_all_five_relative_modules_and_purges_them(tmp_path):
+    d = tmp_path / "obys"
+    d.mkdir()
+    src = (ROOT / "app/static/apps/obys/mockup-v4-1.html").read_text(encoding="utf-8")
+    (d / "mockup-v4-1.html").write_text(src, encoding="utf-8")
+    report = tool.stamp_tree(d, SHA)
+    assert report["html"]["mockup-v4-1.html"] >= 5
+    text = (d / "mockup-v4-1.html").read_text(encoding="utf-8")
+    names = ("contract-core.js", "contract-schedule.js", "contract-editor-v41.js", "contract-editor-v41.css", "data-overview.css")
+    for name in names:
+        assert f'"modules/{name}?v={SHA}"' in text
+    urls = tool.purge_urls(d, SHA, "https://fb.newtalk.kr")
+    for name in names:
+        base = f"https://fb.newtalk.kr/static/apps/obys/modules/{name}"
+        assert base in urls and f"{base}?v={SHA}" in urls

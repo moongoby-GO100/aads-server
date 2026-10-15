@@ -2,7 +2,8 @@
 """OBYS static-asset release helper (called by deploy_acct_app_cafe24.sh). ASCII only on purpose:
 the source is shipped to cafe24 over ssh and run with `python3 -c`.
 
-  stamp <obys dir> <version>            ?v=<version> on every /static/apps/obys/modules/*.js|css ref in the
+  stamp <obys dir> <version>            ?v=<version> on every /static/apps/obys/modules/*.js|css or
+                                        relative modules/*.js|css ref in the
                                         top-level HTML files, and <version> into sw.js CACHE_VERSION
   urls  <obys dir> <version> <host url> file URLs to purge from Cloudflare after the switch (one per line)
   purge --env-file <path> <url...>      purge_cache(files); credentials are read from the file at run time
@@ -18,8 +19,9 @@ import urllib.request
 from pathlib import Path
 
 MODULE_REF = re.compile(
-    r"""(?P<lead>(?<=["'(]))(?P<path>/static/apps/obys/modules/[A-Za-z0-9_.-]+\.(?:js|css))(?:\?v=[^"'\s&>)#]*)?"""
+    r"""(?P<lead>(?<=["'(]))(?P<path>(?:/static/apps/obys/)?modules/[A-Za-z0-9_.-]+\.(?:js|css))(?:\?v=[^"'\s&>)#]*)?"""
 )
+ABS_PREFIX = "/static/apps/obys/"
 CACHE_VERSION_LINE = re.compile(r'(const CACHE_VERSION = "obys-clock-shell-)[^"]*(";)')
 VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,39}$")
 CF_ENV_KEYS = ("CF_API_EMAIL", "CF_API_KEY", "CF_ZONE_ID")
@@ -34,7 +36,8 @@ def _check_version(version):
 
 
 def stamp_html(text, version):
-    """Set ?v=<version> on every module ref (replacing any old ?v=). Returns (new text, count)."""
+    """Set ?v=<version> on every module ref, absolute or relative `modules/x` (path kept as written; any old ?v=
+    replaced). `../` and external refs are not matched. Returns (new text, count)."""
     _check_version(version)
     return MODULE_REF.subn(lambda m: "%s?v=%s" % (m.group("path"), version), text)
 
@@ -45,10 +48,14 @@ def stamp_sw(text, version):
 
 
 def module_refs(text):
+    """Module refs normalized to /static/apps/obys/modules/<name>, deduplicated in order."""
     seen = []
     for m in MODULE_REF.finditer(text):
-        if m.group("path") not in seen:
-            seen.append(m.group("path"))
+        path = m.group("path")
+        if not path.startswith("/"):
+            path = ABS_PREFIX + path
+        if path not in seen:
+            seen.append(path)
     return seen
 
 
