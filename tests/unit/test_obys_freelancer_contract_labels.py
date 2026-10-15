@@ -231,7 +231,7 @@ def test_extra_rows_hide_internal_keys_and_use_korean_names(make):
     assert extras["외국인 근로 여부"] == "해당 없음"
     assert extras["미성년자 보호자 동의"] == "해당 없음"
     assert extras["식사·복장"] == "식사 제공, 복장 지급"
-    assert extras["보건증 유효기간"] == "2027-01-31"
+    assert "보건증 유효기간" not in extras
     text = str(rows)
     for forbidden in ("memo", "updated_at", "deleted_at", "onboarding_document_summary", "내부 메모",
                       "foreign_worker", "minor_guardian_consent", "meal_uniform_terms",

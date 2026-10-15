@@ -33,11 +33,14 @@
 .cv41-target{margin-top:12px}
 .cv41-paper{margin-top:12px;padding:22px 26px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:13px;line-height:1.6;max-width:820px}
 .cv41-paper h3{margin:0 0 6px;text-align:center;font-size:20px}
-.cv41-paper .preview-meta,.cv41-paper .legal-basis{color:var(--muted);font-size:11px}
+.cv41-paper .preview-meta{color:var(--muted);font-size:11px}
+.cv41-guidance{margin-top:12px;max-width:820px;font-size:12px;line-height:1.55}
+.cv41-guidance .guidance-note{margin:0 0 6px;color:var(--muted)}
+.cv41-guidance .legal-basis{color:var(--muted);font-size:11px;margin:0 0 6px}
 .cv41-paper table.identity-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12px}
 .cv41-paper table.identity-table th,.cv41-paper table.identity-table td{border:1px solid #cbd5e1;padding:5px 7px;text-align:left;vertical-align:top;white-space:normal}
 .cv41-paper table.identity-table th{background:#f8fafc;width:1%;white-space:nowrap}
-.cv41-paper .legal-checklist,.cv41-paper .classification-warning,.cv41-paper .salary-breakdown{margin:8px 0;padding:8px 10px;border-radius:8px;background:#f8fafc;font-size:12px}
+.cv41-guidance .legal-checklist,.cv41-guidance .classification-warning,.cv41-paper .salary-breakdown{margin:8px 0;padding:8px 10px;border-radius:8px;background:#f8fafc;font-size:12px}
 .cv41-paper .salary-breakdown{display:flex;gap:16px}
 .cv41-paper ol li{margin-bottom:6px}
 .cv41-paper .signature-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}

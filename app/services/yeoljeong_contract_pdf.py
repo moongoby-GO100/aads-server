@@ -124,7 +124,6 @@ EXTRA_LABELS = {
     "foreign_worker": "외국인 근로 여부",
     "minor_guardian_consent": "미성년자 보호자 동의",
     "meal_uniform_terms": "식사·복장",
-    "health_certificate_valid_until": "보건증 유효기간",
     "workplace_size_category": "사업장 상시근로자 규모",
     "meal_provision": "식사 제공 방식",
     "probation_period": "수습 기간",
@@ -139,6 +138,7 @@ CODE_VALUE_LABELS = {
         "freelancer_33": "3.3% 프리랜서 원천징수",
     },
     "workplace_size_category": {"under_5": "상시 5인 미만", "five_plus": "상시 5인 이상"},
+    "minor_guardian_consent": {"confirmed": "동의 확인"},
     "meal_provision": {"employer_meal": "사용자 식사 제공", "cash_no_meal": "식사 미제공 · 현금 식대"},
 }
 FREELANCER_DOCUMENT_KIND = "freelancer_service_contract"
@@ -172,6 +172,7 @@ HIDDEN_FIELDS = {
     "updated_at",
     "deleted_at",
     "onboarding_document_summary",
+    "health_certificate_valid_until",
 }
 
 
@@ -386,7 +387,7 @@ def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | 
     story: list[Any] = [
         para(snapshot.get("print_title") or "계약서", title_style),
         para(
-            f"계약서 ID {snapshot.get('id') or ''} · 양식 {snapshot.get('template_version') or ''}",
+            f"계약서 번호 {snapshot.get('id') or ''}",
             small,
         ),
         Spacer(1, 4 * mm),
@@ -394,7 +395,6 @@ def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | 
         table(
             [
                 ("계약 유형", CONTRACT_TYPE_LABELS.get(contract_type, contract_type)),
-                ("문서 종류", snapshot.get("document_kind")),
                 ("사업장", snapshot.get("branch")),
                 ("계약일", snapshot.get("contract_date")),
             ]
@@ -461,7 +461,7 @@ def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | 
         para(f"봉인 스냅샷 SHA-256: {recorded_sha}", small),
         para(f"자필서명 SHA-256: {snapshot.get('signature_sha256') or ''}", small),
         para(
-            "이 문서는 전자서명 시점에 봉인된 계약 내용(signed_snapshot)으로 생성되었습니다. "
+            "이 문서는 전자서명 시점에 봉인된 계약 내용으로 생성되었습니다. "
             + (
                 "용역계약 체결·교부 및 검수·정산 증빙으로 보관됩니다."
                 if freelancer

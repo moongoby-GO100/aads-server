@@ -884,7 +884,7 @@
   function currentDraft() { return draftFromValues(E.values, E.target || {}); }
   function stepPreview() {
     const html = C.contractPreviewHtml(currentDraft());
-    return `<p class="notice">아래는 입력한 조건 그대로의 계약서입니다. 사용자 정보가 비어 있으면 저장할 때 사업자 등록정보로 채워지고, 저장 후 화면에 서버 기준 계약서가 다시 표시됩니다.</p><article class="cv41-paper">${html}</article>`;
+    return `<p class="notice">아래는 입력한 조건 그대로의 계약서입니다. 사용자 정보가 비어 있으면 저장할 때 사업자 등록정보로 채워지고, 저장 후 화면에 서버 기준 계약서가 다시 표시됩니다.</p><div class="cv41-guidance">${C.contractDraftGuidanceHtml(currentDraft())}</div><article class="cv41-paper">${html}</article>`;
   }
   function notifyHtml() {
     if (!E.notify) return "";
@@ -906,6 +906,7 @@
     return `${E.dirty ? '<p class="cv41-alert warn">저장 후 조건을 바꿨습니다. 다시 저장해야 서명요청을 보낼 수 있습니다.</p>' : ""}
       <div class="detail-grid">${rows.map(([k, v]) => `<div class="detail-cell"><small>${esc(k)}</small><b>${esc(v || "-")}</b></div>`).join("")}</div>
       <p class="notice"><b>${esc(next)}</b></p>${notifyHtml()}
+      ${key === "signed" ? "" : `<div class="cv41-guidance">${C.contractDraftGuidanceHtml(contract)}</div>`}
       <article class="cv41-paper">${C.contractPreviewHtml(contract)}</article>`;
   }
   function footer(statusKey) {

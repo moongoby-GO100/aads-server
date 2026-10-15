@@ -1865,7 +1865,17 @@
       page-break-inside: avoid;
     }
 
-    .contract-paper .legal-basis {
+    .contract-draft-guidance {
+      margin: 0 0 10px;
+    }
+
+    .contract-draft-guidance .guidance-note {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .contract-draft-guidance .legal-basis {
       margin: 0 0 12px;
       padding: 9px 10px;
       border: 1px solid #b7d8cf;
@@ -1876,7 +1886,7 @@
       line-height: 1.55;
     }
 
-    .contract-paper .legal-checklist {
+    .contract-draft-guidance .legal-checklist {
       margin: 10px 0 12px;
       padding: 10px 12px;
       border: 1px solid #d7e0e4;
@@ -1885,23 +1895,23 @@
       break-inside: avoid;
     }
 
-    .contract-paper .legal-checklist b {
+    .contract-draft-guidance .legal-checklist b {
       display: block;
       margin-bottom: 4px;
     }
 
-    .contract-paper .legal-checklist ul {
+    .contract-draft-guidance .legal-checklist ul {
       margin: 0 0 0 17px;
       padding: 0;
     }
 
-    .contract-paper .legal-checklist li {
+    .contract-draft-guidance .legal-checklist li {
       margin: 4px 0;
       font-size: 11px;
       line-height: 1.45;
     }
 
-    .contract-paper .classification-warning {
+    .contract-draft-guidance .classification-warning {
       margin: 10px 0 12px;
       padding: 9px 10px;
       border: 1px solid #f3c36f;
@@ -4291,6 +4301,7 @@
                   <strong>계약서 미리보기</strong>
                   <span id="contractPreviewBadge" class="badge info">입력값 기준</span>
                 </div>
+                <div id="contractPreviewGuidance"></div>
                 <div id="contractPreviewBody" class="contract-paper"></div>
               </div>
             </div>
@@ -5933,27 +5944,27 @@
       common: {
         workplace: "해당 지점 영업장 및 사용자가 지정한 관련 업무 장소",
         jobDescription: "홀 응대, 주방보조, 포장/배달 주문 확인, 매장 청소, 위생관리, 마감정산 보조 등 매장 운영에 필요한 업무",
-        workTime: "근로계약서 저장 전 실제 시작·종료시각을 확정 입력",
+        workTime: "근무표에 정한 시작·종료 시각",
         restTime: "근로시간 4시간 이상 30분, 8시간 이상 60분 이상을 근로자가 자유롭게 이용",
-        weeklyHours: "주 소정근로시간은 실제 근무표 기준으로 확정하고 법정 한도 내에서 운영",
+        weeklyHours: "주 소정근로시간은 근무표에 정한 바에 따르며 법정 한도를 초과하지 않는다",
         workDays: "주 5일 또는 매장 근무표에 따른 협의 근무",
         holidays: "주휴일은 근무표에 따라 지정하고 주휴수당은 법정 요건 충족 시 지급",
         payDate: "매월 5일",
         payMethod: "직원 본인 명의 계좌이체",
-        probationPeriod: "수습기간 해당 없음. 필요 시 입사 후 3개월 이내로 별도 명시",
-        wageComposition: "기본급, 주휴수당, 연장·야간·휴일근로수당, 식대 또는 기타 수당, 법정 공제항목을 급여내역서에 구분 기재",
+        probationPeriod: "수습기간 없음.",
+        wageComposition: "기본급, 주휴수당, 연장·야간·휴일근로수당, 식대 또는 기타 수당으로 구성하며, 법정 공제항목은 급여명세서에 구분하여 표시한다",
         overtimeTerms: "연장·야간·휴일근로는 사전 승인 및 근태기록 기준으로 운영하고, 적용 대상 법정수당을 급여마감에 반영",
         leaveTerms: "연차유급휴가, 지각, 조퇴, 결근, 병가, 무단결근은 근태기록과 법정 기준에 따라 급여내역서에 반영",
         mealUniformTerms: "식사 제공 여부, 유니폼 지급·반납, 보건증 제출·갱신, 위생교육 이수 기준을 준수",
         terminationTerms: "퇴직 시 원활한 인수인계를 위해 사전 통보하도록 노력한다. 해고·계약해지는 법령상 제한, 해고예고, 소명 기회, 서면 통지 기준을 준수하며 위약금 또는 손해배상 예정액을 미리 정하지 않는다.",
         confidentialityTerms: "고객정보, 직원정보, 매출·정산자료, 레시피, 배달앱·포스 계정정보, 위생수칙을 준수하고 무단 열람·반출·공유를 금지",
-        terms: "본 계약서에 명시되지 않은 사항은 근로기준법, 최저임금법, 개인정보보호법 등 관계 법령과 사업장 취업규칙 또는 내부 운영기준에 따른다. 임금, 소정근로시간, 휴일, 연차유급휴가, 임금 구성항목·계산방법·지급방법은 서면 또는 전자문서로 명시하고 서명 완료본을 근로자에게 교부한다. PDF와 인쇄본은 A4 세로 문서 기준으로 보관한다."
+        terms: "본 계약서에 명시되지 않은 사항은 근로기준법, 최저임금법, 개인정보보호법 등 관계 법령과 사업장 취업규칙 또는 내부 운영기준에 따른다. 임금, 소정근로시간, 휴일, 연차유급휴가, 임금 구성항목·계산방법·지급방법은 서면 또는 전자문서로 정하며, 서명 완료본은 근로자에게 교부한다."
       },
       part_time: {
-        weeklyHours: "주 소정근로시간과 근로일별 근로시간은 확정 근무표에 명시",
+        weeklyHours: "주 소정근로시간과 근로일별 근로시간은 근무표에 정한 바에 따른다",
         workDays: "월/화/수/목/금/토/일 중 협의된 요일",
-        dailyWorkSchedule: "근로일별 시작·종료·휴게시간을 확정하여 입력",
-        terms: "단시간근로자는 근로일별 시작·종료·휴게시간을 서면에 확정 기재한다. 본 계약서에 명시되지 않은 사항은 근로기준법, 최저임금법 등 관계 법령에 따른다."
+        dailyWorkSchedule: "근로일별 시작·종료·휴게시간은 근무표에 정한 바에 따른다",
+        terms: "단시간근로자의 근로일별 시작·종료·휴게시간은 서면에 정한 바에 따른다. 본 계약서에 명시되지 않은 사항은 근로기준법, 최저임금법 등 관계 법령에 따른다."
       },
       regular: {
         workplaceSizeCategory: "under_5",
@@ -5979,7 +5990,7 @@
       manager: {
         jobDescription: "매장 운영관리, 포스 마감, 현금·정산 점검, 위생·근태 관리, 직원 교육, 배달앱 운영계정 관리, 고객 클레임 대응",
         wageType: "monthly",
-        weeklyHours: "주 40시간 기준. 매장 운영상 필요한 마감·정산 업무는 관리자 승인 기준으로 처리",
+        weeklyHours: "주 40시간 기준. 매장 운영상 필요한 마감·정산 업무는 사용자의 사전 승인을 받아 수행한다",
         terms: ""
       },
       freelancer: {
@@ -5990,18 +6001,18 @@
         weeklyHours: "해당 없음",
         workDays: "해당 없음",
         holidays: "해당 없음",
-        freelancerScope: "고용노동부 노무제공자 공통 표준계약서 기준에 맞춰 계약 목적, 구체적 업무범위, 산출물 형식, 납품일, 검수 기준, 재작업 범위, 수급인의 독립 수행 방식을 개별 계약서에 명확히 기재",
-        freelancerSettlementTerms: "용역비는 산출물 검수 완료 후 합의된 지급일에 지급하며, 사업소득 원천징수 3.3% 적용 여부, 비용 부담 주체, 자료 제공 범위, 지연 지급 기준, 중도해지 시 기성 정산 기준을 명시한다.",
+        freelancerScope: "수급인은 계약 목적에 따른 업무범위 내에서 산출물을 제작하여 합의된 납품일까지 납품하고 위탁자의 검수를 받는다. 검수 기준에 미달하는 경우 합의된 범위에서 재작업하며, 업무수행 방식은 수급인이 독립적으로 정한다.",
+        freelancerSettlementTerms: "용역비는 산출물 검수 완료 후 합의된 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다. 중도 해지 시에는 검수 완료된 부분을 기성 정산한다.",
         terminationTerms: "계약 위반, 산출물 미제출, 보안 위반, 협업 불능 등 객관적 사유가 있는 경우 서면 통지 후 해지한다. 이미 검수 완료된 산출물의 정산 권리와 반환·삭제해야 할 자료 범위는 별도로 보호한다.",
         confidentialityTerms: "영업비밀, 고객정보, 계정정보, 매출·정산자료, 레시피를 용역 목적 외로 사용하거나 제3자에게 제공하지 않는다.",
-        terms: "수급인은 독립 사업자로서 근로시간·근무장소·업무수행방법에 대한 직접 지휘감독을 받지 않는다. 실제 운영이 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성에 해당하면 근로계약 전환 여부를 즉시 검토한다. 계약서와 검수·정산 기록은 A4 세로 문서 기준으로 보관한다."
+        terms: "수급인은 독립 사업자로서 근로시간·근무장소·업무수행방법에 대한 직접 지휘감독을 받지 않는다. 실제 운영이 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성에 해당하면 근로계약 전환 여부를 즉시 검토한다."
       },
       confidentiality: {
         jobDescription: "영업비밀, 개인정보, 매출·정산자료, 계정정보 보호 서약",
         terms: "보안/개인정보 서약서는 근로계약 또는 용역계약과 별도로 체결하며, 퇴사·계약 종료 후에도 비밀유지 의무를 적용한다."
       },
       four_insurance: {
-        insuranceTerms: "4대보험 취득 신고 대상 여부를 확인하고 국민연금, 건강보험, 고용보험, 산재보험 및 근로소득 원천징수를 법정 기준에 따라 처리"
+        insuranceTerms: "4대보험 취득 신고 대상인 경우 국민연금, 건강보험, 고용보험, 산재보험 및 근로소득 원천징수를 법정 기준에 따라 처리한다"
       },
       freelancer_33: {
         insuranceTerms: "사업소득 3.3% 원천징수 기준으로 신고하며, 근로자성이 인정될 수 있는 지휘감독·고정근로 운영은 하지 않는다."
@@ -9129,6 +9140,28 @@
       return seal.dataUri(seal.optionsFor(contract, sealBusinessRecord(businessId, branchName)));
     }
 
+    // 관리자 작성 화면 전용 안내. 계약서 종이(.contract-paper/.cv41-paper) 바깥 패널에만 넣고, 서명·직원 포털·인쇄·PDF 에는 쓰지 않는다.
+    function contractDraftGuidanceHtml(contract) {
+      const contractType = contractValue(contract, "contractType", "contract_type");
+      const isFreelancerContract = contractType === "freelancer";
+      const isConfidentialityContract = contractType === "confidentiality";
+      const legalBasisText = isFreelancerContract
+        ? "고용노동부 노무제공자 공통 표준계약서 및 활용가이드(2023-12-26 게시)를 기준으로 업무범위, 산출물, 검수, 용역비, 비용 부담, 비밀유지, 해지 기준을 명확히 하는 내부 양식입니다. 3.3% 원천징수는 세무 처리 기준일 뿐 근로자성 판단을 대체하지 않습니다."
+        : isConfidentialityContract
+          ? "보안/개인정보 서약서는 근로계약 또는 용역계약과 별도로 체결하는 부속 문서입니다. 개인정보보호와 영업비밀 보호 범위, 반환·삭제 의무를 분리해 관리합니다."
+          : "고용노동부 2025년 개정 표준근로계약서 기준 참고. 고용노동부 표준근로계약서(서식 모음) 필수 기재축과 2026년 적용 최저임금 고시 시간급 10,320원 기준을 반영한 내부 작성본입니다. 최종 체결 전 실제 근무표, 상시근로자 수, 적용 법령을 확인하십시오.";
+      const legalChecklist = isFreelancerContract
+        ? ["업무범위·산출물·검수 기준", "용역비·정산일·3.3% 원천징수", "비용 부담과 자료 소유·반환", "지휘·감독 및 고정근무 배제", "근로자성 발견 시 근로계약 전환", "A4 계약서와 검수·정산 기록 보관"]
+        : isConfidentialityContract
+          ? ["비밀정보와 개인정보 범위", "접근·복사·반출 금지", "계약 종료 후 반환·삭제", "위반 시 책임 범위"]
+          : ["임금과 임금 구성항목·계산방법·지급방법", "소정근로시간·근무일·휴게시간", "휴일·주휴·연차유급휴가", "근무장소와 업무내용", "계약기간 및 계약서 교부", "A4 서면·전자문서 보관"];
+      const legalChecklistHtml = `<div class="legal-checklist"><b>${isFreelancerContract ? "용역계약 필수 확인" : isConfidentialityContract ? "서약서 필수 확인" : "근로기준법 제17조 필수 확인"}</b><ul>${legalChecklist.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`;
+      const classificationWarningHtml = isFreelancerContract
+        ? `<div class="classification-warning"><b>프리랜서 오분류 방지</b><br>매장 상시업무에 투입되고 출퇴근·근무시간·업무수행 방식에 대한 직접 지휘·감독을 받으면 계약 명칭이나 3.3% 원천징수와 무관하게 근로계약으로 보아야 할 수 있습니다. 이 경우 4대보험, 최저임금, 휴게, 임금명세서, 해고예고 등 근로관계 기준을 재검토하십시오.</div>`
+        : "";
+      return `<aside class="contract-draft-guidance" aria-label="관리자 작성 안내"><p class="guidance-note"><b>관리자 작성 안내</b> · 계약서 본문, 서명 화면, 직원 포털, 인쇄, PDF에는 나타나지 않습니다.</p><div class="legal-basis">${escapeHtml(legalBasisText)}</div>${legalChecklistHtml}${classificationWarningHtml}</aside>`;
+    }
+
     function contractPreviewHtml(contract) {
       const contractType = contractValue(contract, "contractType", "contract_type");
       const employmentTaxType = contractValue(contract, "employmentTaxType", "employment_tax_type");
@@ -9180,8 +9213,6 @@
       const bankName = contractValue(contract, "bankName", "bank_name");
       const bankAccountHolder = contractValue(contract, "bankAccountHolder", "bank_account_holder");
       const bankAccountDisplay = contractValue(contract, "bankAccountNumber", "bank_account_number") || contractValue(contract, "bankAccountMasked", "bank_account_masked");
-      const healthCertificateValidUntil = contractValue(contract, "healthCertificateValidUntil", "health_certificate_valid_until");
-      const onboardingDocumentSummary = contractValue(contract, "onboardingDocumentSummary", "onboarding_document_summary");
       const commonMeta = `
         <table class="identity-table" aria-label="계약 당사자 인적사항">
           <tbody>
@@ -9212,13 +9243,6 @@
             <tr>
               <th>${isFreelancerContract ? "정산계좌" : "급여계좌"}</th><td colspan="3">${previewText([bankName, bankAccountDisplay, bankAccountHolder ? `예금주 ${bankAccountHolder}` : ""].filter(Boolean).join(" / "), "미등록")}</td>
             </tr>
-            <tr>
-              <th class="section-head" rowspan="2">서류</th>
-              <th class="wide-label">입사서류 확인</th><td colspan="3">${previewText(onboardingDocumentSummary, "등록된 입사서류 없음")}</td>
-            </tr>
-            <tr>
-              <th class="wide-label">보건증 유효기한</th><td colspan="3">${previewText(healthCertificateValidUntil, "미등록")}</td>
-            </tr>
           </tbody>
         </table>
       `;
@@ -9228,9 +9252,9 @@
         clauses = [
           contractClause("계약 목적", `${employerName || "위탁자"}는 ${employeeName || "수급인"}에게 독립 용역을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.`),
           contractClause("용역 기간 및 장소", `${startDate || "용역 시작일 미입력"}부터 ${endDate || "종료일 별도 합의"}까지 수행한다. 수행 장소·일정은 산출물 납품과 검수에 필요한 범위에서 협의하며 고정 출퇴근, 매장 상시 근무표, 교대조 편입으로 운영하지 않는다.`),
-          contractClause("업무범위, 산출물, 검수", freelancerScope || `${jobDescription || "업무 범위 미입력"} / 산출물, 납품 방식, 검수 기준, 재작업 범위를 확정한다.`),
-          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || "검수 완료 후 합의 지급일에 지급하고 3.3% 사업소득 원천징수 및 비용 부담 주체를 확인한다."}`),
-          contractClause("독립성 및 근로자성 점검", "수급인은 독립 사업자로서 업무수행방법을 스스로 정한다. 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성 징표가 생기면 계약 명칭과 무관하게 근로계약 전환을 검토한다."),
+          contractClause("업무범위, 산출물, 검수", freelancerScope || `${jobDescription || "업무 범위 미입력"}`),
+          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || "검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다."}`),
+          contractClause("독립적 업무수행", "수급인은 독립 사업자로서 업무수행방법을 스스로 정한다. 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성 징표가 생기면 계약 명칭과 무관하게 근로계약 전환을 검토한다."),
           contractClause("안전보건 및 협조", "위탁자는 용역 수행에 필요한 자료와 안전·보건상 유의사항을 안내하고, 수급인은 관련 법령과 사업장 안전·위생 기준을 준수한다."),
           contractClause("비밀유지 및 자료보호", confidentialityTerms || "매출자료, 고객정보, 레시피, 정산자료, 계정정보를 외부에 공개하지 않는다."),
           contractClause("계약 해지 및 기성 정산", terminationTerms || "중대한 계약 위반, 검수 불합격 반복, 보안 위반 시 서면 통지 후 해지할 수 있으며 검수 완료 산출물은 별도 정산한다.")
@@ -9251,22 +9275,22 @@
           ? "매니저는 포스 마감, 현금·정산, 위생·근태 점검, 직원 교육, 배달앱 운영계정 관리 책임을 포함한다."
           : "";
         clauses = [
-          contractClause("근로계약 기간", `${startDate || "입사일 미입력"}부터 ${endDate || "기간의 정함 없음"}까지로 한다. ${contractType === "regular" ? "정규직은 기간의 정함이 없는 계약으로 관리한다." : ""}`),
+          contractClause("근로계약 기간", `${startDate || "입사일 미입력"}부터 ${endDate || "기간의 정함 없음"}까지로 한다. ${contractType === "regular" ? "기간의 정함이 없는 근로계약으로 한다." : ""}`),
           contractClause("근무장소 및 업무", `${workplace || "근무장소 미입력"}에서 ${jobDescription || "업무내용 미입력"} 업무를 수행한다. ${managerNote}`),
           contractClause("소정근로시간 및 휴게", `${workTime || "근무시간 미입력"} / 휴게 ${restTime || "미입력"} / 주 소정근로시간 ${weeklyHours || "미입력"}. ${partTimeNote}`),
           contractClause("근무일, 휴일, 주휴", `근무일은 ${workDays || "미입력"}, 휴일은 ${holidays || "미입력"}로 한다.${partTimeNote}`),
           contractClause("임금, 계산방법, 지급방법", `${wageLine}. 임금 구성: ${wageComposition || "기본급, 법정수당, 공제항목 미입력"}. 최저임금 및 임금명세서 교부 기준을 준수한다.`),
-          contractClause("연장·야간·휴일근로", overtimeTerms || "연장·야간·휴일근로는 사전 승인 기준으로 운영하고 법정 가산수당을 급여마감 시 반영한다."),
+          contractClause("연장·야간·휴일근로", overtimeTerms || "연장·야간·휴일근로는 사전 승인 기준으로 운영하고 법정 가산수당을 급여 지급 시 반영한다."),
           contractClause("휴가, 결근, 근태", leaveTerms || "연차유급휴가, 지각, 조퇴, 결근, 병가 처리는 근태기록과 법정 기준에 따라 급여내역서에 반영한다."),
           contractClause("4대보험 및 세무", insuranceTerms || `${taxLabel} 기준으로 취득 신고, 원천세, 급여명세서 교부를 처리한다.`),
-          contractClause("수습 및 평가", contractValue(contract, "probationPeriod", "probation_period") || "수습기간 해당 없음. 수습이 있는 경우 기간, 평가 기준, 임금 적용 여부를 별도로 명시한다."),
+          contractClause("수습 및 평가", contractValue(contract, "probationPeriod", "probation_period") || "수습기간 없음."),
           contractClause("식대, 유니폼, 보건증", mealUniformTerms || "식사 제공, 유니폼 지급·반납, 보건증 제출·갱신, 위생교육 이수 기준을 준수한다."),
           contractClause("퇴직 및 계약 해지", terminationTerms || "퇴직 시 사전 통보, 인수인계, 무단결근·중대한 위반 시 계약 해지 기준을 적용한다."),
           contractClause("개인정보, 보안, 위생", confidentialityTerms || "고객정보, 매출자료, 레시피, 배달앱·포스 계정정보, 위생수칙을 준수하고 무단 반출·공유를 금지한다.")
         ];
       }
       if (foreignWorker) {
-        clauses.push(contractClause("외국인 채용 확인", `체류자격 ${contractValue(contract, "visaStatus", "visa_status") || "미입력"}, 외국인등록번호 ${contractValue(contract, "foreignRegistrationNoMasked", "foreign_registration_no_masked") || "마스킹본 미입력"}. 채용 전 취업활동 가능 범위, 체류기간, 고용허가/신고 필요 여부를 확인하고 입사서류 검수에 기록한다.`));
+        clauses.push(contractClause("외국인 근로자 체류자격", `체류자격 ${contractValue(contract, "visaStatus", "visa_status") || "미입력"}, 외국인등록번호 ${contractValue(contract, "foreignRegistrationNoMasked", "foreign_registration_no_masked") || "미입력"}. 근로자는 체류자격·체류기간이 바뀌면 사용자에게 즉시 알린다.`));
       }
       const minorGuardianName = contractValue(contract, "minorGuardianName", "minor_guardian_name");
       if (minorGuardianName) {
@@ -9275,38 +9299,21 @@
       clauses.push(contractClause(
         isFreelancerContract ? "계약서 제공 및 전자서명" : isConfidentialityContract ? "서약서 제공 및 전자서명" : "계약서 교부 및 전자서명",
         isFreelancerContract
-          ? "본 용역계약서는 전자서명 요청 링크로 수급인에게 제공하며, 서명 완료본과 정산·검수 기록을 문서보관함에 보관한다."
+          ? "본 용역계약서는 전자서명 요청 링크로 수급인에게 제공하며, 전자서명 완료본을 전자문서로 보관하고 당사자에게 교부한다."
           : isConfidentialityContract
-            ? "본 서약서는 전자서명 요청 링크로 서약자에게 제공하며, 서명 완료본을 문서보관함에 보관한다."
-            : "사업주는 근로계약 체결 시 본 계약서를 근로자에게 교부하며, 전자서명 완료본과 급여/입사서류 기록을 직원관리 화면에 보관한다."
+            ? "본 서약서는 전자서명 요청 링크로 서약자에게 제공하며, 전자서명 완료본을 전자문서로 보관하고 당사자에게 교부한다."
+            : "사업주는 근로계약 체결 시 본 계약서를 근로자에게 교부하며, 전자서명 완료본은 전자문서로 보관한다."
       ));
       const contractBusinessId = contractValue(contract, "businessId", "business_id") || businessForBranchName(contractValue(contract, "branch")).id || "";
       const stampUrl = contractSealUri(contract, contractBusinessId, contractValue(contract, "branch"));
       const stampAlt = `${employerName || "사용자"} 전자문서용 확인도장`;
-      const legalBasisText = isFreelancerContract
-        ? "고용노동부 노무제공자 공통 표준계약서 및 활용가이드(2023-12-26 게시)를 기준으로 업무범위, 산출물, 검수, 용역비, 비용 부담, 비밀유지, 해지 기준을 명확히 하는 내부 양식입니다. 3.3% 원천징수는 세무 처리 기준일 뿐 근로자성 판단을 대체하지 않습니다."
-        : isConfidentialityContract
-          ? "보안/개인정보 서약서는 근로계약 또는 용역계약과 별도로 체결하는 부속 문서입니다. 개인정보보호와 영업비밀 보호 범위, 반환·삭제 의무를 분리해 관리합니다."
-          : "고용노동부 2025년 개정 표준근로계약서 기준 참고. 고용노동부 표준근로계약서(서식 모음) 필수 기재축과 2026년 적용 최저임금 고시 시간급 10,320원 기준을 반영한 내부 작성본입니다. 최종 체결 전 실제 근무표, 상시근로자 수, 적용 법령을 확인하십시오.";
-      const legalChecklist = isFreelancerContract
-        ? ["업무범위·산출물·검수 기준", "용역비·정산일·3.3% 원천징수", "비용 부담과 자료 소유·반환", "지휘·감독 및 고정근무 배제", "근로자성 발견 시 근로계약 전환", "A4 계약서와 검수·정산 기록 보관"]
-        : isConfidentialityContract
-          ? ["비밀정보와 개인정보 범위", "접근·복사·반출 금지", "계약 종료 후 반환·삭제", "위반 시 책임 범위"]
-          : ["임금과 임금 구성항목·계산방법·지급방법", "소정근로시간·근무일·휴게시간", "휴일·주휴·연차유급휴가", "근무장소와 업무내용", "계약기간 및 계약서 교부", "A4 서면·전자문서 보관"];
-      const legalChecklistHtml = `<div class="legal-checklist"><b>${isFreelancerContract ? "용역계약 필수 확인" : isConfidentialityContract ? "서약서 필수 확인" : "근로기준법 제17조 필수 확인"}</b><ul>${legalChecklist.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`;
-      const classificationWarningHtml = isFreelancerContract
-        ? `<div class="classification-warning"><b>프리랜서 오분류 방지</b><br>매장 상시업무에 투입되고 출퇴근·근무시간·업무수행 방식에 대한 직접 지휘·감독을 받으면 계약 명칭이나 3.3% 원천징수와 무관하게 근로계약으로 보아야 할 수 있습니다. 이 경우 4대보험, 최저임금, 휴게, 임금명세서, 해고예고 등 근로관계 기준을 재검토하십시오.</div>`
-        : "";
       const salaryBreakdown = contractType === "regular" && (baseSalary || nonTaxMealAllowance || taxableAllowance)
         ? `<div class="salary-breakdown"><span>과세 기본급<br><b>${formatMoney(baseSalary)}</b></span><span>비과세 식대<br><b>${formatMoney(nonTaxMealAllowance)}</b><br><small>${mealProvision === "cash_no_meal" ? "식사 미제공 조건" : "미적용"}</small></span><span>기타 과세수당<br><b>${formatMoney(taxableAllowance)}</b></span></div>`
         : "";
       return `
         <h3>${previewText(title, "계약서")}</h3>
-        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · ${isFreelancerContract ? "수행 지점" : "근무지점"} ${previewText(contractValue(contract, "branch"))} · A4 210mm x 297mm · 최신양식 v2026.07.23 · ${isFreelancerContract ? "고용노동부 노무제공자 공통 표준계약서 기준 참고" : isConfidentialityContract ? "부속 서약서" : "고용노동부 표준근로계약서 기준 참고"}</p>
-        <div class="legal-basis">${escapeHtml(legalBasisText)}</div>
+        <p class="preview-meta">계약 체결일 ${previewText(contractDate, "미입력")} · ${isFreelancerContract ? "수행 지점" : "근무지점"} ${previewText(contractValue(contract, "branch"))}</p>
         ${commonMeta}
-        ${legalChecklistHtml}
-        ${classificationWarningHtml}
         ${salaryBreakdown}
         <h4>${contractDetailHeading}</h4>
         <ol>${clauses.join("")}</ol>
@@ -9374,6 +9381,7 @@
       if (!els.contractPreviewBody) return;
       const source = contract || contractDraftFromForm();
       els.contractPreviewBody.innerHTML = contractPreviewHtml(source);
+      if (els.contractPreviewGuidance) els.contractPreviewGuidance.innerHTML = contractDraftGuidanceHtml(source);
       if (els.contractPreviewBadge) els.contractPreviewBadge.textContent = badgeText;
     }
 
