@@ -94,6 +94,16 @@
   // 월급제 임금 구성(과세 기본급·비과세 식대·기타 과세수당). 월급제가 아니면 숨기고 값을 비운다.
   const WAGE_SPLIT_FIELDS = ["baseSalary", "nonTaxMealAllowance", "taxableAllowance"];
   const WAGE_TRIGGERS = new Set(["wage", "wageType", "mealProvision", "taxableAllowance", "nonTaxMealAllowance"]);
+  // 금액 칸의 표시 이름·안내는 임금 방식을 따른다. 서버 누락 항목 이름("확정 임금")은 FIELDS 의 label 로 계속 찾는다.
+  const WAGE_LABELS = {
+    hourly: ["시급", "1시간당 금액을 원 단위로 입력합니다. 기본임금·주휴수당·가산수당·월 예상 총액이 자동 계산됩니다."],
+    daily: ["일급", "1일 금액을 원 단위로 입력합니다. 근무일 수 기준 월 예상액과 주휴수당이 자동 계산됩니다."],
+    monthly: ["월 총액", "식대·수당을 포함한 월 총액을 원 단위로 입력합니다. 과세 기본급은 월 총액 − 비과세 식대 − 기타 과세수당으로 자동 계산됩니다."]
+  };
+  function wageLabelOf(field) {
+    const pair = field.name === "wage" ? WAGE_LABELS[E?.values?.wageType] : null;
+    return pair ? pair[0] : field.label;
+  }
   const EMPLOYER_MEAL_NOTE = "회사가 식사를 제공하면 현금 식대는 비과세가 안 됩니다";
   const PASS_THROUGH = ["bankName", "bankAccountHolder", "bankAccountNumber", "bankAccountMasked", "healthCertificateValidUntil", "onboardingDocumentSummary", "amendsContractId"];
   // 추천값이 없는 필수값의 안내. 생년월일·주소·임금은 추정하지 않는다(시급제 최저시급만 버튼으로 제안).
@@ -119,8 +129,8 @@
       if (String(values.taxableAllowance ?? "").trim() === "") patch.taxableAllowance = "0";
       const current = String(values.wageComposition ?? "").trim();
       const defaults = C.defaultsFor(values.contractType || "part_time", values.employmentTaxType || "four_insurance");
-      const isAuto = !current || current === autoComposition || current === String(defaults.wageComposition || "").trim() || /^월 총액 .+ = 과세 기본급 /.test(current);
-      if (isAuto && split.composition) patch.wageComposition = split.composition;
+      const isAuto = !current || current === autoComposition || current === String(defaults.wageComposition || "").trim() || (Boolean(split.composition) && current === split.composition);
+      if (isAuto && split.composition && !autoOn()) patch.wageComposition = split.composition;
     }
     if (skipName) delete patch[skipName];
     return { split, patch };
@@ -432,6 +442,14 @@
     E.auto.payMethod = AUTO.parsePayMethod(v.payMethod) || "";
     const result = AUTO.compute(autoInput());
     AUTO.manualFieldsOf(result, v).forEach(name => E.autoManual.add(name));
+    const composition = String(v.wageComposition ?? "").trim();
+    const standard = String(C.defaultsFor(v.contractType || "part_time", v.employmentTaxType || "four_insurance").wageComposition || "").trim();
+    // 예전 버전이 만든 월급 구성 문구는 지금 입력값으로 다시 만든 문구와 한 글자도 다르지 않을 때만 자동 문구로 본다(뒤에 약정을 덧붙였으면 직접 수정).
+    const legacy = C.splitMonthlyWage({
+      wageType: v.wageType, wage: v.wage, mealProvision: v.mealProvision, taxableAllowance: v.taxableAllowance,
+      nonTaxMealAllowance: E.wageManual.has("nonTaxMealAllowance") ? v.nonTaxMealAllowance : null
+    }).composition || "";
+    if (composition === standard || (legacy && composition === legacy)) E.autoManual.delete("wageComposition");
   }
   function autoRun(activeEl) {
     if (!AUTO || !E) return null;
@@ -489,19 +507,13 @@
       rows.push(["근무 일정", "요일과 시각을 고르면 근로시간·주휴·월 환산 시간이 계산됩니다"]);
     }
     const w = r.wage;
-    if (w.input > 0 && w.monthly !== null) {
-      if (w.type === "monthly") rows.push(["월 임금", money(w.monthly)]);
-      else if (w.type === "daily") {
-        rows.push([w.premium > 0 ? "월 예상 임금(주휴 별도, 가산 포함)" : "월 예상 임금(주휴 별도)", money(w.monthly)]);
-        if (w.holidayPay > 0) rows.push(["주휴수당(별도 가산, 월)", money(w.holidayPay)]);
-      } else rows.push([w.premium > 0 ? "월 예상 임금(주휴·가산 포함)" : "월 예상 임금(주휴 포함)", money(w.monthly)]);
-      if (w.premium > 0) rows.push(["연장·야간 가산수당(월)", money(w.premium)]);
-      if (w.hourly !== null && w.type !== "hourly") rows.push(["환산 시급", money(Math.floor(w.hourly))]);
-      if (w.split) rows.push(["월급 구성", `기본급 ${money(w.split.base)} + 식대 ${money(w.split.meal)} + 수당 ${money(w.split.allowance)}`]);
-    }
     if (w.min.status === "pass") rows.push(["최저임금", `충족(환산 시급 ${money(Math.floor(w.min.hourly))} ≥ ${money(w.min.min)})`]);
     else if (w.min.status === "fail") rows.push(["최저임금", `미달 — 환산 시급 ${money(Math.floor(w.min.hourly))} < ${money(w.min.min)}`]);
-    const body = `<dl class="cv41-sum-grid">${rows.map(([k, val], i) => `<div class="${k === "최저임금" && w.min.status === "fail" ? "bad" : ""}" data-sum="${i}"><dt>${esc(k)}</dt><dd>${esc(val)}</dd></div>`).join("")}</dl>`;
+    const breakdown = AUTO.wageBreakdown(r);
+    const wageTable = breakdown.length
+      ? `<table class="cv41-sum-wage"><caption>임금 구분 (${esc(C.wageTypeLabels[w.type] || w.type)}제)</caption><thead><tr><th scope="col">구분</th><th scope="col">계산</th><th scope="col">금액</th></tr></thead><tbody>${breakdown.map(row => `<tr data-wage-row="${esc(row.key)}"><th scope="row">${esc(row.label)}</th><td>${esc(row.basis)}</td><td class="num">${esc(row.amount)}</td></tr>`).join("")}</tbody></table>`
+      : "";
+    const body = `<dl class="cv41-sum-grid">${rows.map(([k, val], i) => `<div class="${k === "최저임금" && w.min.status === "fail" ? "bad" : ""}" data-sum="${i}"><dt>${esc(k)}</dt><dd>${esc(val)}</dd></div>`).join("")}</dl>${wageTable}`;
     const warn = r.warnings.length ? `<div class="cv41-alert warn" role="status"><ul>${r.warnings.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : "";
     const notes = r.notes.length ? `<ul class="cv41-sum-notes">${r.notes.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : "";
     return `${head}${body}${warn}${notes}`;
@@ -981,7 +993,8 @@
     const monthly = E.values.wageType === "monthly";
     const mealLocked = field.name === "nonTaxMealAllowance" && monthly && E.values.mealProvision !== "cash_no_meal";
     const disabled = readOnly() || field.readonly || (field.name === "baseSalary" && monthly) || autoLocked(field.name) ? "readonly" : mealLocked ? "disabled" : "";
-    const hint = mealLocked ? EMPLOYER_MEAL_NOTE : field.hint;
+    const wagePair = field.name === "wage" ? WAGE_LABELS[E.values.wageType] : null;
+    const hint = mealLocked ? EMPLOYER_MEAL_NOTE : wagePair ? wagePair[1] : field.hint;
     const invalid = E.missing.some(label => FIELD_BY_LABEL.get(label) === field.name) || Boolean(E.live?.has(field.name));
     const suggestion = invalid && !readOnly() ? suggestionFor(field.name) : null;
     const id = `cv41_${field.name}`;
@@ -996,7 +1009,7 @@
       control = `<input class="field" ${type} ${common} value="${esc(value)}" ${disabled}>`;
     }
     const suggestHtml = suggestion ? `<button class="btn cv41-suggest" type="button" data-cv41-suggest="${esc(field.name)}">추천값 넣기: ${esc(shortText(suggestion.value))}</button>` : "";
-    return `<div class="form-field ${invalid ? "invalid" : ""} ${field.type === "textarea" ? "wide" : ""}"><label for="${id}">${esc(field.label)}${invalid ? ' <span class="cv41-req">필수·비어 있음</span>' : ""}${schedBadge(field.name)}</label>${control}${autoToggleHtml(field.name)}${suggestHtml}${hint ? `<small id="${id}_hint">${esc(hint)}</small>` : ""}${field.name === "baseSalary" ? `<div id="cv41WageNote" aria-live="polite">${wageNoteHtml()}</div>` : ""}</div>`;
+    return `<div class="form-field ${invalid ? "invalid" : ""} ${field.type === "textarea" ? "wide" : ""}"><label for="${id}">${esc(wageLabelOf(field))}${invalid ? ' <span class="cv41-req">필수·비어 있음</span>' : ""}${schedBadge(field.name)}</label>${control}${autoToggleHtml(field.name)}${suggestHtml}${hint ? `<small id="${id}_hint">${esc(hint)}</small>` : ""}${field.name === "baseSalary" ? `<div id="cv41WageNote" aria-live="polite">${wageNoteHtml()}</div>` : ""}</div>`;
   }
   function stepConditions() {
     const type = E.values.contractType || "part_time";
@@ -1020,7 +1033,7 @@
     }).join("");
     const lockNote = E.contract && statusOf(E.contract)[0] === "requested"
       ? '<p class="cv41-alert warn">서명요청을 보낸 계약서입니다. 조건을 바꿔 저장하면 보낸 서명 링크가 무효가 되고 서명요청을 다시 보내야 합니다.</p>' : "";
-    return `${lockNote}${amendNoteHtml()}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 임금 금액은 자동으로 넣지 않습니다(월급제는 확정 임금을 넣으면 과세 기본급·비과세 식대·기타 과세수당만 자동 계산). <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${AUTO ? `<section class="cv41-autosum" id="cv41AutoSummary" aria-live="polite" aria-label="자동 계산 요약">${autoSummaryHtml()}</section>` : ""}${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels, live.blocker)}</div>`}${groupHtml}`;
+    return `${lockNote}${amendNoteHtml()}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 임금 금액은 자동으로 넣지 않습니다. 임금 방식과 금액을 넣으면 기본임금·주휴수당·연장/야간 가산·월 예상 총액과 임금 구성/공제 문구가 자동 계산됩니다(월급제는 과세 기본급·비과세 식대·기타 과세수당도). <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${AUTO ? `<section class="cv41-autosum" id="cv41AutoSummary" aria-live="polite" aria-label="자동 계산 요약">${autoSummaryHtml()}</section>` : ""}${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels, live.blocker)}</div>`}${groupHtml}`;
   }
   function amendNoteHtml() {
     const originalId = E.values.amendsContractId;
@@ -1675,6 +1688,6 @@
       if (box && ROUTES.has(route)) renderSection(route, box);
     },
     // 단위 검증용(브라우저 밖 node 테스트)
-    _test: { schedAvailable, schedInitState, schedPatch, wageSplitPatch, wageManualFor, draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee, autoInput, initAuto, autoBlockMessage }
+    _test: { schedAvailable, schedInitState, schedPatch, wageSplitPatch, wageManualFor, draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee, autoInput, initAuto, autoBlockMessage, autoRun, openState: next => (E = { ...freshEditorState(), ...next }) }
   };
 })();

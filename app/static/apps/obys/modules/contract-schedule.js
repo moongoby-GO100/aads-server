@@ -36,7 +36,9 @@
     if (a === b) return 0;
     return b > a ? b - a : b + 1440 - a;
   }
-  function minRest(span) { return span >= 480 ? 60 : span >= 240 ? 30 : 0; }
+  /** 근로기준법 제54조: 근로시간(휴게 제외)이 4시간이면 30분, 8시간이면 1시간 이상을 근로시간 도중에 준다. span 은 휴게를 포함한 체류 분.
+   *  휴게 r 을 주고 남은 근로시간 span-r 이 8시간 이상이면 60분, 4시간 이상이면 30분이 필요하므로 체류 240분 미만 0 / 510분 미만 30 / 그 이상 60. 12시간 근무도 법정 최소는 60분. */
+  function minRest(span) { return span >= 510 ? 60 : span >= 240 ? 30 : 0; }
   function normRest(value) {
     if (value === null || value === undefined || String(value).trim() === "") return null;
     const n = Math.round(Number(value));

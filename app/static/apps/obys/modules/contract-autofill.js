@@ -8,6 +8,7 @@
  *  - 월 환산: (주 소정 + 주휴) × 365 ÷ 7 ÷ 12. 주 40시간 이상은 209시간 관행대로 정수로 반올림하고,
  *    그보다 짧으면 소수 그대로 둔다(예: 주 12시간 = 52.14시간).
  *  - 주휴: 주 15시간 이상이면 min(8시간, 주 소정 ÷ 40 × 8). 15시간 미만은 초단시간으로 주휴·연차·퇴직금 미적용.
+ *  - 임금 구성 문구·요약표(wageBreakdown)의 숫자는 모두 compute 의 계산값이다. 문구에 금액을 직접 적지 않는다.
  *  - 야간: 22:00~06:00. 휴게 시각을 입력하지 않으면 야간에서 휴게를 빼지 않는다(근로자에게 불리하지 않은 쪽).
  *  - 수습기간 문구에는 '%' 를 쓰지 않는다 — 서버(_probation_wage_rate)가 이 칸의 'N%' 를 감액률로 읽는다.
  */
@@ -23,11 +24,12 @@
   const TERM_MONTHS = { "3m": 3, "6m": 6, "1y": 12, "2y": 24 };
   const NON_WORK_TYPES = ["freelancer", "confidentiality"];
   const SIMPLE_LABOR_RE = /(홀|서빙|주방보조|설거지|배달|포장|청소|세척|잡일|단순)/;
-  const AUTO_TEXT_FIELDS = ["probationPeriod", "payDate", "payMethod", "overtimeTerms", "leaveTerms", "insuranceTerms"];
+  const AUTO_TEXT_FIELDS = ["probationPeriod", "payDate", "payMethod", "overtimeTerms", "leaveTerms", "insuranceTerms", "wageComposition"];
 
   const won = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}원`;
   const hm = min => (SCH ? SCH.duration(Math.round(min)) : `${Math.round(min)}분`);
   const round2 = n => Math.round(n * 100) / 100;
+const hoursLabel = v => `${Number.isInteger(v) ? v : round2(v)}시간`;
 
   // ---------- 날짜 ----------
   function parseDate(text) {
@@ -217,6 +219,94 @@
     return "국민연금·건강보험·고용보험·산재보험 취득 신고 대상으로 법정 기준에 따라 처리하고, 근로소득 원천징수 기준에 따라 급여명세서를 교부한다.";
   }
 
+  // ---------- 임금 구성 문구·요약표 ----------
+  const NO_PREMIUM = "해당 없음(5인 미만)";
+  const PREMIUM_UNKNOWN = "계산 불가";
+  const PREMIUM_NEEDS_SCHEDULE = "근무 일정(요일·시각)을 입력하면 계산됩니다";
+  function premiumSentence(w, timeInfo) {
+    if (!w.premiumApplies) return "연장·야간·휴일 가산수당은 5인 미만 사업장이라 적용하지 않는다(해당 없음)";
+    if (!timeInfo) return "연장·야간·휴일근로 시 통상임금의 50%를 가산하여 별도로 지급한다(근무 일정이 정해지지 않아 금액은 산정하지 않았다)";
+    const sep = w.type === "monthly" ? "월 총액과 별도로 " : "";
+    return `${sep}연장 가산수당 ${won(w.overtimePremium)} + 야간 가산수당 ${won(w.nightPremium)}(통상임금의 50%)`;
+  }
+  /** 임금 구성/공제 문구. 숫자는 모두 compute 의 계산값이다. 계산할 수 없으면 undefined(표준 문구 유지). */
+  function compositionText(w, hours, timeInfo) {
+    if (!(w.input > 0)) return undefined;
+    const tail = " 법정 공제항목은 급여명세서에 구분하여 표시한다.";
+    if (w.type === "monthly" && w.split) {
+      const meal = w.split.mealLocked ? "비과세 식대 0원(사용자 식사 제공)" : `비과세 식대 ${won(w.split.meal)}(식사를 제공하지 않는 경우에만 적용)`;
+      const conv = hours ? ` 월 환산 ${hoursLabel(hours.paid)} 기준 환산 시급 ${won(Math.floor(w.hourly))}.` : "";
+      return `월 총액 ${won(w.split.total)} = 과세 기본급 ${won(w.split.base)} + ${meal} + 기타 과세수당 ${won(w.split.allowance)}.${conv} ${premiumSentence(w, timeInfo)}.${tail}`;
+    }
+    if (!hours || w.monthly === null) return undefined;
+    const holiday = hours.holiday > 0 ? `${won(w.holidayPay)}(주휴 ${hoursLabel(hours.holiday)})` : "해당 없음(주 15시간 미만)";
+    if (w.type === "hourly") {
+      return `시급 ${won(w.hourly)} × 월 환산 ${hoursLabel(hours.paid)} = 기본임금 ${won(w.scheduledPay)}(소정근로 ${hoursLabel(hours.scheduled)}) + 주휴수당 ${holiday}. ${premiumSentence(w, timeInfo)}. 월 예상 총액 ${won(w.total)}.${tail}`;
+    }
+    if (w.type === "daily") {
+      const dailyHoliday = w.holidayMinutes > 0
+        ? `${won(w.holidayPay)}(시간당 환산 ${won(Math.floor(w.hourly))} × 주휴 ${hoursLabel(w.holidayMinutes / 60)} × 월 ${round2(WEEKS_PER_MONTH)}주)`
+        : "해당 없음(주 15시간 미만)";
+      return `일급 ${won(w.input)} × 월 평균 근무일 ${round2(w.avgDays)}일 = 기본임금 ${won(w.scheduledPay)} + 주휴수당 ${dailyHoliday}. 시간당 환산 ${won(Math.floor(w.hourly))}. ${premiumSentence(w, timeInfo)}. 월 예상 총액 ${won(w.total)}.${tail}`;
+    }
+    return undefined;
+  }
+  /** 요약 카드용 임금 구분표: [{key, label, basis, amount}]. 계산할 수 없으면 []. */
+  function wageBreakdown(result) {
+    const w = result && result.wage;
+    const hours = result && result.hours;
+    if (!w || !(w.input > 0) || w.monthly === null || !hours) return [];
+    const timeInfo = result.time && result.time.ok ? result.time : null;
+    const rows = [];
+    const add = (key, label, basis, amount) => rows.push({ key, label, basis, amount });
+    const holidayRow = (label, basis) => hours.holiday > 0
+      ? add("holiday", label, basis, won(w.holidayPay))
+      : add("holiday", label, "주 15시간 미만 초단시간", "해당 없음");
+    const premiumRows = (note) => {
+      if (!w.premiumApplies) {
+        add("overtime", "연장 가산수당", "근로기준법 제56조", NO_PREMIUM);
+        add("night", "야간 가산수당", "근로기준법 제56조", NO_PREMIUM);
+        return;
+      }
+      if (!timeInfo) {
+        add("overtime", `연장 가산수당${note}`, PREMIUM_NEEDS_SCHEDULE, PREMIUM_UNKNOWN);
+        add("night", `야간 가산수당${note}`, PREMIUM_NEEDS_SCHEDULE, PREMIUM_UNKNOWN);
+        return;
+      }
+      const weekOt = hm(timeInfo.weeklyOvertime);
+      const weekNight = hm(timeInfo.weeklyNight);
+      add("overtime", `연장 가산수당${note}`, `통상시급 × 50% × 주 연장 ${weekOt}`, won(w.overtimePremium));
+      add("night", `야간 가산수당${note}`, `통상시급 × 50% × 주 야간 ${weekNight}`, won(w.nightPremium));
+    };
+    if (w.type === "hourly") {
+      add("input", "시급", "입력값", won(w.input));
+      add("base", "기본임금(소정근로분)", `시급 × 월 소정 ${hoursLabel(hours.scheduled)}`, won(w.scheduledPay));
+      holidayRow("주휴수당", `시급 × 월 주휴 ${hoursLabel(hours.holiday)}`);
+      premiumRows("");
+      add("weekly", "1주 예상액", w.premiumKnown ? "주 소정 + 주휴 + 가산" : "주 소정 + 주휴(가산수당 제외)", won(w.weekly));
+      add("total", "월 예상 총액", w.premiumKnown ? "기본임금 + 주휴수당 + 가산수당" : "기본임금 + 주휴수당(가산수당 제외)", won(w.total));
+    } else if (w.type === "daily") {
+      add("input", "일급", "입력값", won(w.input));
+      add("base", "기본임금(소정근로분)", `일급 × 월 평균 근무일 ${round2(w.avgDays)}일`, won(w.scheduledPay));
+      holidayRow("주휴수당", "시간당 환산 × 주휴 시간 × 월 주 수");
+      premiumRows("");
+      add("hourly", "시간당 환산", "일급 ÷ 1일 실근로", won(Math.floor(w.hourly)));
+      add("total", "월 예상 총액", "기본임금 + 주휴수당 + 가산수당", won(w.total));
+    } else {
+      add("input", "월 총액(약정)", "입력값", won(w.input));
+      if (w.split) {
+        add("base", "기본급(과세 기본급)", "월 총액 − 비과세 식대 − 기타 과세수당", won(w.split.base));
+        add("meal", "비과세 식대", w.split.mealLocked ? "사용자 식사 제공" : `식사 미제공, 상한 ${won(NON_TAX_MEAL_LIMIT)}`, won(w.split.meal));
+        add("allowance", "기타 과세수당", "입력값", won(w.split.allowance));
+      }
+      add("hourly", "환산 시급", `월 총액 ÷ 월 환산 ${hoursLabel(hours.paid)}`, won(Math.floor(w.hourly)));
+      holidayRow("주휴수당(월 총액에 포함)", "환산 시급 × 월 주휴 시간");
+      premiumRows("(별도)");
+      add("total", w.premiumApplies ? "월 예상 지급 총액(가산 별도)" : "월 예상 총액", !w.premiumApplies ? "월 총액" : w.premiumKnown ? "월 총액 + 가산수당" : "월 총액(가산수당 제외)", won(w.total));
+    }
+    return rows;
+  }
+
   // ---------- 종합 ----------
   /**
    * 입력 → 자동 계산 결과.
@@ -286,27 +376,49 @@
     out.hours = hours;
     const wage = Number(input.wage) || 0;
     const wageType = input.wageType || "hourly";
-    const w = { type: wageType, input: wage, monthly: null, base: null, premium: 0, holidayPay: null, hourly: null, baseHourly: null, min: { status: "skip", hourly: null, min: MIN_WAGE_2026, message: "" }, split: null };
-    // 5인 이상 사업장의 연장·야간 가산(통상임금의 50%). 연장과 야간이 겹치면 각각 가산하므로 분을 더한다.
-    const premiumOf = hourly => (five && timeInfo ? floorMoney(hourly * 0.5 * ((timeInfo.weeklyOvertime + timeInfo.weeklyNight) / 60) * WEEKS_PER_MONTH) : 0);
+    const w = {
+      type: wageType, input: wage, monthly: null, total: null, base: null, scheduledPay: null, holidayPay: null,
+      premium: 0, overtimePremium: 0, nightPremium: 0, premiumApplies: five, premiumKnown: !five || Boolean(timeInfo), holidayMinutes: holidayMin, weekly: null, avgDays: null,
+      hourly: null, baseHourly: null, min: { status: "skip", hourly: null, min: MIN_WAGE_2026, message: "" }, split: null
+    };
+    // 5인 이상 사업장의 연장·야간 가산(통상임금의 50%). 연장과 야간이 겹치면 각각 가산하므로 분을 더한다. 합계를 한 번에 내림해 분리값과 1원 어긋나지 않게 한다.
+    const premiumsOf = hourly => {
+      if (!five || !timeInfo) return { overtime: 0, night: 0, total: 0 };
+      const per = min => hourly * 0.5 * (min / 60) * WEEKS_PER_MONTH;
+      const total = floorMoney(per(timeInfo.weeklyOvertime + timeInfo.weeklyNight));
+      const night = Math.min(total, floorMoney(per(timeInfo.weeklyNight)));
+      return { overtime: total - night, night, total };
+    };
+    const setPremium = p => { w.premium = p.total; w.overtimePremium = p.overtime; w.nightPremium = p.night; };
     if (hours && wage > 0) {
       if (wageType === "hourly") {
         w.hourly = wage;
         w.base = floorMoney(wage * (hours.full ? hours.paid : (hours.paidMin * 365) / 5040));
-        w.premium = premiumOf(wage);
-        w.monthly = w.base + w.premium;
         w.holidayPay = floorMoney(wage * hours.holiday);
-      } else if (wageType === "monthly") {
-        w.monthly = wage;
-        w.hourly = wage / hours.paid;
-      } else if (wageType === "daily" && timeInfo && timeInfo.days.length) {
-        const avgDays = timeInfo.days.length * WEEKS_PER_MONTH;
-        w.hourly = wage / (timeInfo.weeklyNet / 60 / timeInfo.days.length);
-        w.base = floorMoney(wage * avgDays);
-        w.premium = premiumOf(w.hourly);
+        w.scheduledPay = w.base - w.holidayPay;
+        setPremium(premiumsOf(wage));
         w.monthly = w.base + w.premium;
+        w.total = w.monthly;
+        const weeklyPremium = five && timeInfo ? floorMoney(wage * 0.5 * ((timeInfo.weeklyOvertime + timeInfo.weeklyNight) / 60)) : 0;
+        w.weekly = floorMoney(wage * (hours.paidMin / 60)) + weeklyPremium;
+      } else if (wageType === "monthly") {
+        w.hourly = wage / hours.paid;
+        w.monthly = wage;
+        w.holidayPay = floorMoney(w.hourly * hours.holiday);
+        w.scheduledPay = floorMoney(wage) - w.holidayPay;
+        setPremium(premiumsOf(w.hourly));
+        w.total = w.monthly + w.premium;
+        if (w.premium > 0) notes.push("월 총액에 연장·야간 수당이 이미 포함된 포괄임금이라면 계약서에 그 사실과 시간을 명시하십시오. 이 계산은 월 총액과 별도로 가산수당을 더한 예상액입니다.");
+      } else if (wageType === "daily" && timeInfo && timeInfo.days.length) {
+        w.avgDays = timeInfo.days.length * WEEKS_PER_MONTH;
+        w.hourly = wage / (timeInfo.weeklyNet / 60 / timeInfo.days.length);
+        w.scheduledPay = floorMoney(wage * w.avgDays);
         w.holidayPay = holidayMin > 0 ? floorMoney(w.hourly * (holidayMin / 60) * WEEKS_PER_MONTH) : 0;
-        if (holidayMin > 0) notes.push("일급제는 주휴수당을 별도로 가산해야 합니다(일급에 포함한다면 계약서에 명시). 아래 월 예상 임금에는 주휴수당이 들어 있지 않습니다.");
+        w.base = w.scheduledPay + w.holidayPay;
+        setPremium(premiumsOf(w.hourly));
+        w.monthly = w.base + w.premium;
+        w.total = w.monthly;
+        if (holidayMin > 0) notes.push("일급제 월 예상액에는 일급과 별도로 주휴수당을 더했습니다. 일급에 주휴수당이 이미 포함돼 있다면 그 사실을 계약서에 명시하십시오.");
       }
       w.min = minimumWageCheck({ wageType, wage, weeklyMinutes: weeklyMin, startDate: input.startDate, contractDate: input.contractDate });
       if (wageType === "daily" && w.hourly !== null && referenceYear(input.startDate, input.contractDate) <= 2026) {
@@ -318,13 +430,16 @@
         if (wageType !== "daily") blockers.push(w.min.message);
       } else if (w.min.status === "unknown") notes.push(w.min.message);
     }
+    if (hours && wage > 0 && five && !timeInfo) {
+      notes.push("상시 5인 이상 사업장이지만 근무 일정(요일·시각)이 없어 연장·야간 가산수당을 계산하지 못했습니다. 월 예상 총액에는 가산수당이 들어 있지 않습니다.");
+    }
     // F. 월급 분해
     if (wageType === "monthly" && wage > 0 && typeof input.splitMonthlyWage === "function") {
       const split = input.splitMonthlyWage({
         wageType, wage, mealProvision: input.mealProvision, taxableAllowance: input.taxableAllowance, nonTaxMealAllowance: input.nonTaxMealAllowance ?? null
       });
       if (split && split.applies && !split.error) {
-        w.split = { total: split.total, base: split.base, meal: split.meal, allowance: split.allowance };
+        w.split = { total: split.total, base: split.base, meal: split.meal, allowance: split.allowance, mealLocked: Boolean(split.mealLocked) };
         if (hours) w.baseHourly = split.base / hours.paid;
         if (w.min.status === "pass" && w.baseHourly !== null && w.baseHourly + 1e-9 < MIN_WAGE_2026) {
           notes.push(`식대·수당을 뺀 과세 기본급 기준 환산 시급은 ${won(Math.floor(w.baseHourly))}입니다. 5인 미만 정규직 계약은 저장 시 기본급 기준으로 최저임금을 다시 검사합니다.`);
@@ -341,6 +456,7 @@
       warnings.push("당월 1일~말일 근무분은 말일에 지급해야 합니다. 말일 이전 지급일을 고르면 아직 일하지 않은 기간의 임금을 미리 주는 계약이 됩니다. 지급일을 말일로 하거나 전월 정산을 고르십시오.");
     }
     texts.payMethod = payMethodText(input.payMethod);
+    texts.wageComposition = compositionText(w, hours, timeInfo);
     if (weeklyMin > 0) {
       texts.overtimeTerms = overtimeText(five, timeInfo);
       texts.leaveTerms = leaveText(five, weeklyMin);
@@ -413,7 +529,7 @@
 
   const api = {
     MIN_WAGE_2026, NON_TAX_MEAL_LIMIT, TERM_MONTHS, AUTO_TEXT_FIELDS, NON_WORK_TYPES,
-    compute, patchFor, manualFieldsOf, periodEnd, termFromDates, ageOn, nightMinutes, monthlyHours, holidayMinutesOf, minimumWageCheck, parseWeeklyText,
+    compute, patchFor, manualFieldsOf, wageBreakdown, periodEnd, termFromDates, ageOn, nightMinutes, monthlyHours, holidayMinutesOf, minimumWageCheck, parseWeeklyText,
     payDateText, payMethodText, probationText, parsePayDate, parseProbation, parsePayMethod, won
   };
   root.ObysContractAutofill = api;

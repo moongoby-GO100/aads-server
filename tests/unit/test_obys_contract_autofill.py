@@ -132,13 +132,35 @@ const ot5 = A.compute({ ...base, workplaceSizeCategory: "five_plus", sched: ten 
 const ot4 = A.compute({ ...base, sched: ten });
 const nightFive = A.compute({ ...base, workplaceSizeCategory: "five_plus", sched: mk({ days: [0, 1, 2], start: "21:00", end: "09:00", rest: 90 }) });
 const daily = A.compute({ ...base, wageType: "daily", wage: 100000, sched: wk });
+const five_ = { ...base, workplaceSizeCategory: "five_plus" };
+const calcA = A.compute({ ...base, sched: wk });
+const calcB = A.compute({ ...five_, sched: ten });
+const calcC = A.compute({ ...base, wageType: "monthly", wage: 2500000, mealProvision: "cash_no_meal", taxableAllowance: 100000, sched: wk });
+const calcC5 = A.compute({ ...five_, wageType: "monthly", wage: 2500000, mealProvision: "cash_no_meal", taxableAllowance: 100000, sched: ten });
+const calcD = A.compute({ ...base, wageType: "daily", wage: 100000, sched: wk });
+const calcShort = A.compute({ ...base, sched: mk({ days: [0, 2, 4], start: "18:00", end: "22:30", rest: 30 }) });
+const rowsOf = r => Object.fromEntries(A.wageBreakdown(r).map(x => [x.key, x.amount]));
+const pick = w => ({ scheduledPay: w.scheduledPay, holidayPay: w.holidayPay, overtimePremium: w.overtimePremium, nightPremium: w.nightPremium, premium: w.premium, base: w.base, monthly: w.monthly, total: w.total, weekly: w.weekly });
+const rest = [239, 240, 479, 480, 509, 510, 720].map(n => S.minRest(n));
+const restPlans = [S.build(mk({ days: [0], start: "09:00", end: "17:00" })), S.build(mk({ days: [0], start: "09:00", end: "21:00" })), S.build(mk({ days: [0], start: "09:00", end: "17:00", rest: 30 }))]
+  .map(b => ({ rest: b.plans[0].rest, min: b.plans[0].min, net: b.plans[0].net, warned: b.warnings.some(t => t.includes("제54조")) }));
 const manualSaved = A.manualFieldsOf(c1, { payDate: "매월 12일 지급", probationPeriod: "3개월 수습", payMethod: "현금", overtimeTerms: c1.texts.overtimeTerms, leaveTerms: "" });
 const manualAuto = A.manualFieldsOf(c1, { payDate: c1.texts.payDate, probationPeriod: c1.texts.probationPeriod, payMethod: c1.texts.payMethod });
 console.log(JSON.stringify({
   ot5: { week: ot5.time.weeklyOvertime, base: ot5.wage.base, premium: ot5.wage.premium, monthly: ot5.wage.monthly },
   ot4: { premium: ot4.wage.premium, monthly: ot4.wage.monthly },
   nightFive: { over: nightFive.time.weeklyOvertime, night: nightFive.time.weeklyNight, premium: nightFive.wage.premium },
-  daily: { monthly: daily.wage.monthly, premium: daily.wage.premium, holidayPay: daily.wage.holidayPay, noted: daily.notes.some(n => n.includes("주휴수당이 들어 있지 않습니다")) },
+  daily: { monthly: daily.wage.monthly, premium: daily.wage.premium, holidayPay: daily.wage.holidayPay, noted: daily.notes.some(n => n.includes("별도로 주휴수당을 더했습니다")) },
+  wageA: { ...pick(calcA.wage), rows: rowsOf(calcA), text: calcA.texts.wageComposition, hours: [calcA.hours.scheduled, calcA.hours.paid, calcA.hours.holiday] },
+  wageB: { ...pick(calcB.wage), rows: rowsOf(calcB), text: calcB.texts.wageComposition },
+  wageC: { split: calcC.wage.split, hourly: calcC.wage.hourly, total: calcC.wage.total, premium: calcC.wage.premium, min: calcC.wage.min.status, rows: rowsOf(calcC), text: calcC.texts.wageComposition },
+  wageC5: { total: calcC5.wage.total, monthly: calcC5.wage.monthly, premium: calcC5.wage.premium, rows: rowsOf(calcC5), text: calcC5.texts.wageComposition, noted: calcC5.notes.some(n => n.includes("포괄임금")) },
+  wageD: { ...pick(calcD.wage), hourly: calcD.wage.hourly, avgDays: calcD.wage.avgDays, min: calcD.wage.min.status, rows: rowsOf(calcD), text: calcD.texts.wageComposition },
+  wageShort: { rows: rowsOf(calcShort), text: calcShort.texts.wageComposition, total: calcShort.wage.total },
+  noWage: { text: A.compute({ ...base, wage: 0, sched: wk }).texts.wageComposition, rows: A.wageBreakdown(A.compute({ ...base, wage: 0, sched: wk })).length },
+  autoFields: A.AUTO_TEXT_FIELDS.includes("wageComposition"), patchHasComposition: "wageComposition" in A.patchFor(calcA, new Set(), "none"),
+  patchSkipsManualComposition: !("wageComposition" in A.patchFor(calcA, new Set(["wageComposition"]), "none")),
+  rest, restPlans,
   manual: { saved: manualSaved, auto: manualAuto },
   c1: { day: c1.time.first.net, week: c1.time.weeklyNet, holiday: c1.holiday.minutes, paid: c1.hours.paid, monthly: c1.wage.monthly, min: c1.wage.min.status },
   c2: { day: c2.time.first.net, week: c2.time.weeklyNet, holiday: c2.holiday.minutes, ultra: c2.holiday.ultraShort, paid: c2.hours.paid,
@@ -190,7 +212,7 @@ def test_node_case3_night_and_overtime(node_result):
 
 
 def test_node_case4_monthly_split(node_result):
-    assert node_result["c4"]["split"] == {"total": 2_500_000, "base": 2_300_000, "meal": 200_000, "allowance": 0}
+    assert node_result["c4"]["split"] == {"total": 2_500_000, "base": 2_300_000, "meal": 200_000, "allowance": 0, "mealLocked": False}
     assert node_result["c4"]["hourly"] == pytest.approx(2_300_000 / 209)
     assert node_result["c4b"]["split"]["base"] == 2_500_000
 
@@ -243,10 +265,11 @@ def test_node_night_and_overtime_premiums_stack(node_result):
     assert r["premium"] == int(MIN_WAGE * 0.5 * (450 + 1440) / 60 * WEEKS_PER_MONTH + 1e-9)
 
 
-def test_node_daily_wage_excludes_holiday_pay_and_reports_it_separately(node_result):
+def test_node_daily_wage_adds_holiday_pay_to_monthly_estimate(node_result):
+    """CEO 지시(2026-10-16): 일급제 월 예상 = 근무일 × 일급 + 주휴수당. 일급에 주휴가 이미 포함된 경우는 안내 문구로만 알린다."""
     r = node_result["daily"]
-    assert r["monthly"] == 2_172_619 and r["premium"] == 0 and r["noted"] is True
-    assert r["holidayPay"] == int(100_000 * WEEKS_PER_MONTH)
+    assert r["holidayPay"] == int(100_000 * WEEKS_PER_MONTH) and r["premium"] == 0 and r["noted"] is True
+    assert r["monthly"] == int(100_000 * 5 * WEEKS_PER_MONTH) + r["holidayPay"] == 2_607_142
 
 
 def test_node_saved_texts_that_cannot_be_recomputed_are_protected(node_result):
@@ -257,6 +280,230 @@ def test_node_saved_texts_that_cannot_be_recomputed_are_protected(node_result):
 
 
 def test_editor_summary_labels_follow_wage_type():
-    assert "주휴 별도" in EDITOR and "주휴수당(별도 가산, 월)" in EDITOR
-    assert "연장·야간 가산수당(월)" in EDITOR
+    assert "AUTO.wageBreakdown(" in EDITOR and 'class="cv41-sum-wage"' in EDITOR
     assert "AUTO.manualFieldsOf(" in EDITOR
+    for label in ("기본임금", "주휴수당", "연장 가산수당", "야간 가산수당", "월 예상 총액", "1주 예상액", "환산 시급", "시간당 환산", "해당 없음(5인 미만)"):
+        assert label in AUTOFILL, label
+
+
+# ---------- 임금 입력란 기준 자동 계산 (CEO 지시 2026-10-16) ----------
+# 월 환산 시간: 소정 = round(주 소정h × 365/7/12), 유급 = round((주 소정h + 주휴h) × 365/7/12) (주 40h 이상은 정수 반올림, 209시간 관행)
+# (a) 시급 10,320 · 주 5일 09:00~18:00 휴게 60분 → 소정 174h, 주휴 35h, 유급 209h
+#     기본임금 10,320×174 = 1,795,680 / 주휴수당 10,320×35 = 361,200 / 월 예상 총액 = 2,156,880 (= 10,320×209)
+# (b) 5인 이상 · 09:00~20:00 휴게 60분 주 5일 → 1일 실근로 10h, 1일 연장 2h × 5일 = 주 연장 10h(600분)
+#     유급 252h → 기본(주휴 포함) 10,320×252 = 2,600,640 / 연장 가산 floor(10,320×0.5×10×365/7/12) = 224,214 / 총액 2,824,854
+# (c) 월급 2,500,000 · 식사 미제공 식대 200,000 · 기타 과세수당 100,000 → 과세 기본급 2,500,000−200,000−100,000 = 2,200,000
+#     환산 시급 2,500,000 ÷ 209h = 11,961.72 → 11,961원
+# (d) 일급 100,000 · 주 5일 1일 8h → 월 평균 근무일 5×365/7/12 = 21.7262일, 기본임금 floor(100,000×21.7262) = 2,172,619
+#     시간당 12,500 · 주휴 8h → 주휴수당 floor(12,500×8×365/7/12) = 434,523 / 월 예상 총액 2,607,142
+def test_python_reference_wage_cases():
+    h = monthly_paid_hours(2400)
+    assert (round(2400 / 60 * WEEKS_PER_MONTH), h, h - round(2400 / 60 * WEEKS_PER_MONTH)) == (174, 209, 35)
+    assert (MIN_WAGE * 174, MIN_WAGE * 35, MIN_WAGE * 209) == (1_795_680, 361_200, 2_156_880)
+    assert 2_500_000 - 200_000 - 100_000 == 2_200_000
+    assert int(2_500_000 / 209) == 11_961
+    assert int(100_000 * 5 * WEEKS_PER_MONTH) == 2_172_619
+    assert int(12_500 * 8 * WEEKS_PER_MONTH) == 434_523
+    assert 2_172_619 + 434_523 == 2_607_142
+
+
+def test_node_hourly_separates_base_holiday_and_total(node_result):
+    a = node_result["wageA"]
+    assert a["hours"] == [174, 209, 35]
+    assert (a["scheduledPay"], a["holidayPay"], a["total"]) == (1_795_680, 361_200, 2_156_880)
+    assert a["overtimePremium"] == 0 and a["nightPremium"] == 0
+    assert a["weekly"] == int(MIN_WAGE * (2400 + 480) / 60)
+    assert a["rows"]["base"] == "1,795,680원" and a["rows"]["holiday"] == "361,200원" and a["rows"]["total"] == "2,156,880원"
+    assert a["rows"]["overtime"] == "해당 없음(5인 미만)" and a["rows"]["night"] == "해당 없음(5인 미만)"
+    assert a["rows"]["weekly"] == f"{a['weekly']:,}원"
+
+
+def test_node_hourly_five_plus_overtime_is_listed_separately(node_result):
+    b = node_result["wageB"]
+    assert (b["scheduledPay"] + b["holidayPay"], b["overtimePremium"], b["nightPremium"], b["total"]) == (2_600_640, 224_214, 0, 2_824_854)
+    assert b["rows"]["overtime"] == "224,214원" and b["rows"]["night"] == "0원" and b["rows"]["total"] == "2,824,854원"
+
+
+def test_node_monthly_base_pay_is_total_minus_meal_minus_allowance(node_result):
+    c = node_result["wageC"]
+    assert c["split"] == {"total": 2_500_000, "base": 2_200_000, "meal": 200_000, "allowance": 100_000, "mealLocked": False}
+    assert c["hourly"] == pytest.approx(2_500_000 / 209)
+    assert (c["total"], c["premium"], c["min"]) == (2_500_000, 0, "pass")
+    assert c["rows"]["base"] == "2,200,000원" and c["rows"]["meal"] == "200,000원" and c["rows"]["allowance"] == "100,000원"
+    assert c["rows"]["hourly"] == "11,961원" and c["rows"]["overtime"] == "해당 없음(5인 미만)"
+
+
+def test_node_monthly_premium_is_shown_apart_from_the_fixed_total(node_result):
+    c = node_result["wageC5"]
+    hourly = 2_500_000 / 252
+    assert c["monthly"] == 2_500_000
+    assert c["premium"] == int(hourly * 0.5 * 10 * WEEKS_PER_MONTH + 1e-9)
+    assert c["total"] == 2_500_000 + c["premium"]
+    assert c["rows"]["overtime"] == f"{c['premium']:,}원" and c["noted"] is True
+    assert "별도" in c["text"]
+
+
+def test_node_daily_includes_holiday_pay_and_hourly_conversion(node_result):
+    d = node_result["wageD"]
+    assert (d["scheduledPay"], d["holidayPay"], d["total"], d["monthly"]) == (2_172_619, 434_523, 2_607_142, 2_607_142)
+    assert d["hourly"] == 12_500 and d["avgDays"] == pytest.approx(5 * WEEKS_PER_MONTH) and d["min"] == "pass"
+    assert d["rows"]["total"] == "2,607,142원" and d["rows"]["hourly"] == "12,500원" and d["rows"]["holiday"] == "434,523원"
+
+
+def test_node_wage_composition_text_uses_computed_numbers_only(node_result):
+    a = node_result["wageA"]["text"]
+    for part in ("시급 10,320원", "기본임금 1,795,680원", "소정근로 174시간", "주휴수당 361,200원", "주휴 35시간", "월 예상 총액 2,156,880원", "5인 미만", "급여명세서"):
+        assert part in a, part
+    c = node_result["wageC"]["text"]
+    for part in ("월 총액 2,500,000원", "과세 기본급 2,200,000원", "비과세 식대 200,000원", "기타 과세수당 100,000원", "환산 시급 11,961원"):
+        assert part in c, part
+    d = node_result["wageD"]["text"]
+    for part in ("일급 100,000원", "21.73일", "기본임금 2,172,619원", "주휴수당 434,523원", "주휴 8시간", "월 4.35주", "시간당 환산 12,500원", "월 예상 총액 2,607,142원"):
+        assert part in d, part
+    assert "연장 가산수당 224,214원" in node_result["wageB"]["text"]
+    short = node_result["wageShort"]
+    assert short["rows"]["holiday"] == "해당 없음" and "해당 없음(주 15시간 미만)" in short["text"]
+    assert node_result["noWage"] == {"rows": 0}  # text 는 undefined 라 JSON 에서 빠진다 = 표준 문구 유지
+
+
+def test_wage_composition_is_an_auto_field_with_manual_protection(node_result):
+    assert node_result["autoFields"] and node_result["patchHasComposition"] and node_result["patchSkipsManualComposition"]
+
+
+def test_no_hardcoded_money_in_composition_and_breakdown_code():
+    for name in ("compositionText", "wageBreakdown", "premiumSentence"):
+        body = re.search(rf"function {name}\(.*?\n  \}}\n", AUTOFILL, re.S).group(0)
+        assert not re.search(r"\d,\d{3}|\d{4,}원", body), name
+
+
+def test_wage_input_label_follows_wage_type():
+    assert re.search(r'hourly: \["시급"', EDITOR) and re.search(r'daily: \["일급"', EDITOR) and re.search(r'monthly: \["월 총액"', EDITOR)
+    assert "wageLabelOf(field)" in EDITOR
+    assert 'label: "확정 임금"' in EDITOR  # 서버 누락 항목 이름은 그대로 유지
+
+
+# ---------- 휴게 법정 최소: 근로기준법 제54조 ----------
+def test_node_min_rest_follows_labor_standards_act_54(node_result):
+    """근로시간 4시간이면 30분, 8시간이면 1시간 이상. 체류(span)가 휴게를 포함하므로 240분 미만 0 / 510분 미만 30 / 그 이상 60. 12시간 근무도 60분."""
+    assert node_result["rest"] == [0, 30, 30, 30, 30, 60, 60]
+    r8, r12, r8short = node_result["restPlans"]
+    assert (r8["rest"], r8["net"], r8["warned"]) == (30, 450, False)
+    assert (r12["rest"], r12["min"], r12["net"]) == (60, 60, 660)
+    assert r8short["warned"] is False
+
+
+# ---------- AI 리뷰 반려 교정(라운드 1): 저장 문구 보호 · 일정 없는 월급제 문구 · 계산 불가 가산 표시 ----------
+# (1) 예전 버전이 만든 월급 구성 문구는 지금 입력값으로 다시 만든 문구와 한 글자도 같을 때만 자동 문구다.
+#     뒤에 '성과급 …' 같은 약정을 덧붙인 문구는 직접 수정으로 보고 autoRun 이 지우지 않는다.
+# (2) 일정이 없어도 월급제는 월 총액 = 기본급 + 식대 + 수당 문구를 만든다. 월급을 바꾸면 문구도 따라간다.
+# (3) 5인 이상인데 시간표가 없으면 연장·야간 가산은 '계산 불가' 다(0분·0원 확정 표시 금지). 월 예상 총액에는 가산을 넣지 않는다.
+EDITOR_SCRIPT = r"""
+globalThis.window = globalThis;
+globalThis.location = { href: "https://fb.example/x", origin: "https://fb.example", search: "" };
+const [coreArg, schedArg, autoArg, editorArg] = process.argv.slice(-4);
+require(coreArg); require(schedArg); require(autoArg); require(editorArg);
+const C = window.ObysContractCore, S = window.ObysContractSchedule, A = window.ObysContractAutofill;
+const T = window.obysContractV41._test;
+const wk = { ...S.emptySchedule(), days: [0, 1, 2, 3, 4], start: "09:00", end: "18:00", rest: 60 };
+const monthly = { contractType: "part_time", employmentTaxType: "four_insurance", wageType: "monthly", wage: "2500000", mealProvision: "cash_no_meal",
+  taxableAllowance: "100000", nonTaxMealAllowance: "200000", startDate: "2026-11-01", workplaceSizeCategory: "under_5", weeklyHours: "" };
+const legacy = C.splitMonthlyWage({ wageType: "monthly", wage: monthly.wage, mealProvision: monthly.mealProvision, taxableAllowance: monthly.taxableAllowance, nonTaxMealAllowance: null }).composition;
+const addendum = " 성과급 100,000원은 별도 지급한다.";
+const reopen = (wageComposition, sched) => {
+  const E = T.openState({ values: { ...monthly, wageComposition }, sched: sched || S.emptySchedule() });
+  T.initAuto("saved");
+  const manualAfterInit = E.autoManual.has("wageComposition");
+  T.autoRun();
+  return { manual: manualAfterInit, value: E.values.wageComposition };
+};
+const noSched = A.compute({ contractType: "part_time", wageType: "monthly", wage: 2500000, mealProvision: "cash_no_meal", taxableAllowance: 100000, workplaceSizeCategory: "under_5", splitMonthlyWage: C.splitMonthlyWage });
+const edit = T.openState({ values: { ...monthly, wageComposition: "" }, sched: S.emptySchedule() });
+T.initAuto("new");
+T.autoRun();
+const first = edit.values.wageComposition;
+edit.values.wage = "3000000";
+T.autoRun();
+const second = edit.values.wageComposition;
+const withSched = T.openState({ values: { ...monthly, wageComposition: "" }, sched: wk });
+T.initAuto("new");
+T.autoRun();
+const schedText = withSched.values.wageComposition;
+withSched.sched = S.emptySchedule();
+withSched.values.wage = "2600000";
+T.autoRun();
+const removedText = withSched.values.wageComposition;
+const fb = { contractType: "part_time", wageType: "hourly", wage: 10320, workplaceSizeCategory: "five_plus", weeklyMinutesFallback: 2400, startDate: "2026-11-01", splitMonthlyWage: C.splitMonthlyWage };
+const fiveFb = A.compute(fb);
+const underFb = A.compute({ ...fb, workplaceSizeCategory: "under_5" });
+const fiveMonthlyFb = A.compute({ ...fb, wageType: "monthly", wage: 2500000, mealProvision: "cash_no_meal", taxableAllowance: 100000 });
+const fiveSched = A.compute({ ...fb, sched: { ...S.emptySchedule(), days: [0, 1, 2, 3, 4], start: "09:00", end: "20:00", rest: 60 } });
+const rows = r => Object.fromEntries(A.wageBreakdown(r).map(x => [x.key, x]));
+console.log(JSON.stringify({
+  legacy, addendum,
+  legacyOnly: reopen(legacy), legacyPlus: reopen(legacy + addendum), legacyPlusSched: reopen(legacy + addendum, wk),
+  noSchedText: noSched.texts.wageComposition, first, second, schedText, removedText,
+  fiveFb: { rows: rows(fiveFb), premium: fiveFb.wage.premium, known: fiveFb.wage.premiumKnown, total: fiveFb.wage.total, text: fiveFb.texts.wageComposition, noted: fiveFb.notes.some(n => n.includes("계산하지 못했습니다")) },
+  underFb: { rows: rows(underFb), noted: underFb.notes.some(n => n.includes("계산하지 못했습니다")) },
+  fiveMonthlyFb: { rows: rows(fiveMonthlyFb), total: fiveMonthlyFb.wage.total, noted: fiveMonthlyFb.notes.some(n => n.includes("포괄임금")) },
+  fiveSched: { rows: rows(fiveSched), known: fiveSched.wage.premiumKnown, noted: fiveSched.notes.some(n => n.includes("계산하지 못했습니다")) }
+}));
+"""
+
+
+@pytest.fixture(scope="module")
+def editor_result():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node 가 없는 실행 환경 — 정적 확인으로 대체")
+    out = subprocess.run(
+        [node, "-e", EDITOR_SCRIPT, "--", *(str(MODULES / n) for n in ("contract-core.js", "contract-schedule.js", "contract-autofill.js", "contract-editor-v41.js"))],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_node_reopened_composition_with_appended_clause_is_not_overwritten(editor_result):
+    r = editor_result
+    assert r["legacyOnly"]["manual"] is False  # 예전 자동 문구와 정확히 같으면 자동 문구로 취급
+    assert r["legacyOnly"]["value"] != r["legacy"]
+    for key in ("legacyPlus", "legacyPlusSched"):
+        assert r[key]["manual"] is True, key
+        assert r[key]["value"] == r["legacy"] + r["addendum"], key
+    assert "성과급 100,000원은 별도 지급한다" in r["legacyPlus"]["value"]
+
+
+def test_editor_has_no_prefix_regex_that_unprotects_saved_composition():
+    assert "과세 기본급 /.test(" not in EDITOR
+
+
+def test_node_monthly_composition_is_built_without_a_schedule(editor_result):
+    r = editor_result
+    assert r["noSchedText"].startswith("월 총액 2,500,000원 = 과세 기본급 2,200,000원 + 비과세 식대 200,000원")
+    assert "환산 시급" not in r["noSchedText"]  # 월 환산 시간을 모르면 환산 시급은 적지 않는다
+    assert r["first"].startswith("월 총액 2,500,000원 = 과세 기본급 2,200,000원")
+    assert r["second"].startswith("월 총액 3,000,000원 = 과세 기본급 2,700,000원 + 비과세 식대 200,000원")
+    assert "환산 시급" in r["schedText"]
+    assert r["removedText"].startswith("월 총액 2,600,000원 = 과세 기본급 2,300,000원") and "환산 시급" not in r["removedText"]
+
+
+def test_node_unknown_premium_is_not_shown_as_zero(editor_result):
+    five = editor_result["fiveFb"]
+    for key in ("overtime", "night"):
+        assert five["rows"][key]["amount"] == "계산 불가", key
+        assert "0분" not in five["rows"][key]["basis"] and "0원" not in five["rows"][key]["amount"], key
+    assert five["known"] is False and five["premium"] == 0 and five["noted"] is True
+    assert five["total"] == 2_156_880 and five["rows"]["total"]["amount"] == "2,156,880원"
+    assert "가산수당 제외" in five["rows"]["total"]["basis"] and "가산수당 제외" in five["rows"]["weekly"]["basis"]
+    assert "산정하지 않았다" in five["text"]
+    under = editor_result["underFb"]
+    assert under["rows"]["overtime"]["amount"] == "해당 없음(5인 미만)" and under["noted"] is False
+
+
+def test_node_unknown_premium_monthly_and_known_schedule(editor_result):
+    m = editor_result["fiveMonthlyFb"]
+    assert m["rows"]["overtime"]["amount"] == "계산 불가" and m["total"] == 2_500_000 and m["noted"] is False
+    assert "가산수당 제외" in m["rows"]["total"]["basis"]
+    s = editor_result["fiveSched"]
+    assert s["known"] is True and s["noted"] is False
+    assert s["rows"]["overtime"]["amount"] == "224,214원" and "주 연장 10시간" in s["rows"]["overtime"]["basis"]
