@@ -282,6 +282,7 @@ def registration_info_gaps(item: dict[str, Any], fields: tuple[str, ...]) -> lis
 
 
 REGISTRY_REQUIRED_FIELDS = ("registration_no", "representative", "opened_at", "address")
+TRADE_NAME_MAX_LENGTH = 200  # 사업자등록증 상호(법인명). 도장 띠에 들어가는 글자 수의 현실적 상한
 
 
 def _registry_business(row: Any) -> dict[str, Any]:
@@ -296,7 +297,7 @@ async def list_businesses(*, user: dict[str, Any]) -> list[dict[str, Any]]:
     tenant_id = _tenant(user)
     conn = await _connect()
     try:
-        rows = await conn.fetch("SELECT id,entity_type,name,registration_no,representative,tax_type,opened_at,address,memo,created_at,updated_at FROM yeoljeong_businesses WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id", tenant_id)
+        rows = await conn.fetch("SELECT id,entity_type,name,registration_no,representative,tax_type,opened_at,address,memo,created_at,updated_at,to_jsonb(yeoljeong_businesses)->>'trade_name' AS trade_name FROM yeoljeong_businesses WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id", tenant_id)
         items = [_registry_business(row) for row in rows]
         by_id = {item.get("id"): item for item in items}
         for item in items:
@@ -334,18 +335,30 @@ async def create_business(*, user: dict[str, Any], payload: dict[str, Any]) -> d
 
 async def update_business(*, user: dict[str, Any], business_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     tenant_id = _tenant(user)
-    allowed = {"name", "registration_no", "representative", "tax_type", "opened_at", "address", "memo", "entity_type"}
-    updates = {key: str(value) for key, value in payload.items() if key in allowed and value is not None}
+    allowed = {"name", "registration_no", "representative", "tax_type", "opened_at", "address", "memo", "entity_type", "trade_name"}
+    updates: dict[str, str | None] = {key: str(value) for key, value in payload.items() if key in allowed and value is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
+    if "trade_name" in updates:
+        trade_name = str(updates["trade_name"]).strip()
+        if len(trade_name) > TRADE_NAME_MAX_LENGTH:
+            raise HTTPException(status_code=400, detail=f"사업자등록증 상호는 {TRADE_NAME_MAX_LENGTH}자 이하여야 합니다")
+        updates["trade_name"] = trade_name or None
     columns = list(updates)
     assignments = ",".join(f"{column}=${index}" for index, column in enumerate(columns, 1))
     conn = await _connect()
     try:
-        row = await conn.fetchrow(f"UPDATE yeoljeong_businesses SET {assignments},updated_by=${len(columns)+1},updated_at=NOW() WHERE id=${len(columns)+2} AND tenant_id=${len(columns)+3} AND deleted_at IS NULL RETURNING *", *[updates[column] for column in columns], _actor(user), business_id, tenant_id)
+        try:
+            row = await conn.fetchrow(f"UPDATE yeoljeong_businesses SET {assignments},updated_by=${len(columns)+1},updated_at=NOW() WHERE id=${len(columns)+2} AND tenant_id=${len(columns)+3} AND deleted_at IS NULL RETURNING *", *[updates[column] for column in columns], _actor(user), business_id, tenant_id)
+        except Exception as exc:
+            if exc.__class__.__name__ == "UndefinedColumnError" and "trade_name" in updates:
+                raise HTTPException(status_code=503, detail="사업자등록증 상호 저장 준비가 끝나지 않았습니다. 관리자에게 문의하십시오") from exc
+            raise
         if not row:
             raise HTTPException(status_code=404, detail="사업자를 찾을 수 없습니다")
-        return dict(row)
+        result = dict(row)
+        result.setdefault("trade_name", None)
+        return result
     finally:
         await conn.close()
 

@@ -374,3 +374,131 @@ def test_release_assets_lists_both_seal_fonts_but_the_pages_do_not_preload_them(
     for markup in (INDEX, V41):
         assert "assets/fonts/" not in markup and "fonts.googleapis" not in markup
     assert "assets/fonts/" not in (OBYS / "sw.js").read_text(encoding="utf-8")
+
+
+# --- ACCT-OBYS-SEAL-REGISTERED-TRADE-NAME-20261016: 도장 상호 우선순위 = 사업장 trade_name → 계약서 employerName → 사업장 name ---
+# 같은 표가 tests/unit/test_obys_company_seal_pdf.py 에서 서버(_contract_seal_inputs)에도 적용된다. 한쪽만 고치지 마라.
+TRADE_NAME_CASES = [
+    # 법인: 등록증 법인명이 계약서에 저장된 지점명보다 우선한다
+    {"contract": {"employerName": "열정국밥 중화점", "employerRepresentative": "오윤희"},
+     "business": {"name": "열정국밥 중화점", "trade_name": "주식회사 윤희에프엔비", "entity_type": "corporation", "representative": "오윤희"},
+     "company": "주식회사 윤희에프엔비", "kind": "corporation", "inner": "代表理事"},
+    # camelCase(설정 응답)도 같다
+    {"contract": {"employer_name": "열정국밥 중화점", "employer_representative": "오윤희"},
+     "business": {"name": "열정국밥 중화점", "tradeName": "주식회사 윤희에프엔비", "entityType": "corporation", "representative": "오윤희"},
+     "company": "주식회사 윤희에프엔비", "kind": "corporation", "inner": "代表理事"},
+    # 개인: 상호 "열정국밥", 대표자 김영주 → 안쪽 "김영주인"
+    {"contract": {"employerName": "열정국밥 성신여대점", "employerRepresentative": "김영주"},
+     "business": {"name": "열정국밥 성신여대점", "trade_name": "열정국밥", "entity_type": "individual", "representative": "김영주"},
+     "company": "열정국밥", "kind": "individual", "inner": "김영주인"},
+    # trade_name 이 없으면 계약서 값
+    {"contract": {"employerName": "계약서상호", "employerRepresentative": "계약대표"},
+     "business": {"name": "사업장상호", "trade_name": None, "entity_type": "individual", "representative": "사업장대표"},
+     "company": "계약서상호", "kind": "individual", "inner": "계약대표인"},
+    # 공백뿐인 trade_name 도 없는 것이다
+    {"contract": {"employerName": "계약서상호", "employerRepresentative": "계약대표"},
+     "business": {"name": "사업장상호", "trade_name": "   ", "entity_type": "individual", "representative": "사업장대표"},
+     "company": "계약서상호", "kind": "individual", "inner": "계약대표인"},
+    # 둘 다 없으면 사업장 name
+    {"contract": {"employerRepresentative": "계약대표"},
+     "business": {"name": "사업장상호", "entity_type": "individual", "representative": "사업장대표"},
+     "company": "사업장상호", "kind": "individual", "inner": "계약대표인"},
+    # entity_type 이 없으면 trade_name 기준 CORP_PATTERN (계약서·사업장 name 에는 법인 표지가 없다)
+    {"contract": {"employerName": "열정국밥 중화점", "employerRepresentative": "오윤희"},
+     "business": {"name": "열정국밥 중화점", "trade_name": "주식회사 윤희에프엔비", "representative": "오윤희"},
+     "company": "주식회사 윤희에프엔비", "kind": "corporation", "inner": "代表理事"},
+    # '_' 는 원문 그대로다
+    {"contract": {"employerName": "열정국밥_미아점", "employerRepresentative": "최미미"},
+     "business": {"name": "열정국밥_미아점", "trade_name": "열정국밥_미아점", "entity_type": "individual", "representative": "최미미"},
+     "company": "열정국밥_미아점", "kind": "individual", "inner": "최미미인"},
+]
+
+
+@pytest.mark.parametrize("case", TRADE_NAME_CASES)
+def test_seal_company_name_priority_is_trade_name_then_contract_then_business_name(case):
+    opts = _node("console.log(JSON.stringify(ObysCompanySeal.optionsFor(input.contract, input.business)));", case)
+    assert opts["companyName"] == case["company"] and opts["kind"] == case["kind"]
+    plan = _node("console.log(JSON.stringify(ObysCompanySeal.layout(input)));", opts)
+    ring = "".join(c["ch"] for c in plan["ring"])
+    assert ring == "".join(case["company"].split())
+    inner = "".join(c["ch"] for c in plan["inner"])
+    assert sorted(inner) == sorted(case["inner"])
+    server = py_seal.layout(opts["kind"], opts["companyName"], opts["representative"])
+    assert "".join(c["ch"] for c in server["ring"]) == ring and sorted("".join(c["ch"] for c in server["inner"])) == sorted(case["inner"])
+
+
+def test_underscore_in_registered_trade_name_is_kept_as_a_ring_character():
+    opts = _node(
+        "console.log(JSON.stringify(ObysCompanySeal.optionsFor(input.contract, input.business)));",
+        {"contract": {}, "business": {"name": "x", "trade_name": "열정국밥_미아점", "representative": "최미미"}},
+    )
+    assert opts["companyName"] == "열정국밥_미아점"
+    texts = _svg_texts(_node("console.log(JSON.stringify({svg: ObysCompanySeal.svg(input)}));", opts)["svg"])
+    assert "".join(texts[:8]) == "열정국밥_미아점" and "_" in texts[:8]
+
+
+def test_contract_preview_stamp_uses_the_registered_trade_name_over_the_stored_employer_name():
+    base = {"contractType": "part_time", "employeeName": "시험직원", "branch": "열정국밥 중화점", "businessId": "biz-j"}
+    out = _node(
+        PREVIEW_SCRIPT,
+        {
+            "businesses": {
+                "biz-j": {"id": "biz-j", "name": "열정국밥 중화점", "trade_name": "주식회사 윤희에프엔비", "representative": "오윤희", "entity_type": "corporation"},
+            },
+            "contracts": [{**base, "employerName": "열정국밥 중화점", "employerRepresentative": "오윤희"}],
+        },
+    )
+    assert "".join(_svg_texts(_stamp_markup(out[0]))) == "주식회사윤희에프엔비代表理事"
+
+
+SIGNED_BASE = {"status": "signed", "employerName": "열정국밥 중화점", "employerRepresentative": "오윤희"}
+LIVE_BUSINESS = {"name": "열정국밥 중화점", "trade_name": "주식회사 새상호", "entity_type": "corporation", "representative": "오윤희"}
+
+
+def _options(contract, business=LIVE_BUSINESS):
+    return _node("console.log(JSON.stringify(ObysCompanySeal.optionsFor(input.contract, input.business)));", {"contract": contract, "business": business})
+
+
+def test_signed_contract_seal_uses_the_frozen_seal_not_the_current_trade_name():
+    frozen = {"kind": "corporation", "company_name": "주식회사 윤희에프엔비", "representative": "오윤희"}
+    opts = _options({**SIGNED_BASE, "signed_pdf_seal": frozen})
+    assert (opts["companyName"], opts["kind"], opts["representative"]) == ("주식회사 윤희에프엔비", "corporation", "오윤희")
+    # 서명 뒤 상호를 바꿔도 화면 도장은 서명본 PDF(고정값)와 같다
+    assert _options({**SIGNED_BASE, "signed_pdf_seal": {**frozen, "kind": "individual", "company_name": "열정국밥"}})["companyName"] == "열정국밥"
+    assert _options({**SIGNED_BASE, "signedPdfSeal": frozen})["companyName"] == "주식회사 윤희에프엔비"
+
+
+def test_signed_contract_without_a_frozen_seal_ignores_the_current_trade_name():
+    assert _options(SIGNED_BASE)["companyName"] == "열정국밥 중화점"
+    assert _options({**SIGNED_BASE, "signed_pdf_seal": {"company_name": "  "}})["companyName"] == "열정국밥 중화점"
+
+
+def test_unsigned_contract_ignores_a_seal_field_and_uses_the_current_trade_name():
+    forged = {"kind": "individual", "company_name": "위조상호", "representative": "위조대표"}
+    for status in ("draft", "requested"):
+        assert _options({**SIGNED_BASE, "status": status, "signed_pdf_seal": forged})["companyName"] == "주식회사 새상호"
+
+
+def test_contract_preview_of_a_signed_contract_stamps_the_frozen_seal():
+    out = _node(
+        PREVIEW_SCRIPT,
+        {
+            "businesses": {"biz-j": {"id": "biz-j", **LIVE_BUSINESS}},
+            "contracts": [{"contractType": "part_time", "employeeName": "시험직원", "branch": "열정국밥 중화점", "businessId": "biz-j", **SIGNED_BASE,
+                           "signed_pdf_seal": {"kind": "corporation", "company_name": "주식회사 윤희에프엔비", "representative": "오윤희"}}],
+        },
+    )
+    assert "".join(_svg_texts(_stamp_markup(out[0]))) == "주식회사윤희에프엔비代表理事"
+
+
+def test_new_contract_defaults_for_employer_name_prefer_the_registered_trade_name():
+    assert "business.tradeName || business.name" in INDEX
+    assert "business.trade_name || business.tradeName || business.name" in EDITOR
+
+
+def test_admin_business_info_form_has_a_trade_name_input_with_help_and_sends_it_only_when_changed():
+    assert 'name="trade_name"' in V41 and "사업자등록증 상호(법인명)" in V41
+    assert "도장과 계약서에 이 이름이 찍힙니다. 비워 두면 사업장 이름을 씁니다." in V41
+    assert "payload.trade_name=tradeName" in V41 and "dataset.initial" in V41
+    # 안내 문구는 편집 화면에만 있다 — 계약서 본문 코드에는 넣지 않는다
+    assert "비워 두면 사업장 이름을 씁니다" not in CORE and "비워 두면 사업장 이름을 씁니다" not in SEAL_JS.read_text(encoding="utf-8")

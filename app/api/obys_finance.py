@@ -172,6 +172,7 @@ class TenantBusinessUpdatePayload(BaseModel):
     opened_at: str | None = None
     address: str | None = None
     memo: str | None = None
+    trade_name: str | None = None
 
 
 class InviteTarget(BaseModel):

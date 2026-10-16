@@ -452,7 +452,7 @@
       employeeNationality: employee.nationality || "대한민국",
       foreignWorker: "false",
       minorGuardianConsent: "not_applicable",
-      employerName: business.name || "",
+      employerName: business.trade_name || business.tradeName || business.name || "",
       employerRegistrationNo: business.registration_no || "",
       employerRepresentative: business.representative || "",
       employerPhone: business.phone || "",
@@ -1033,7 +1033,7 @@
       case "employeeBirthDate": return from(employee.birth_date, "입사서류");
       case "employeeAddress": return from(employee.address, "입사서류");
       case "employeeNationality": return from("대한민국", "기본값");
-      case "employerName": return from(business.name, "사업자 등록정보");
+      case "employerName": return from(business.trade_name || business.tradeName || business.name, "사업자 등록정보");
       case "employerRegistrationNo": return from(business.registration_no, "사업자 등록정보");
       case "employerRepresentative": return from(business.representative, "사업자 등록정보");
       case "employerPhone": return from(business.phone, "사업자 등록정보");

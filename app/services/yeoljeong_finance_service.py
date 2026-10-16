@@ -367,6 +367,8 @@ CONTRACT_SNAPSHOT_EXCLUDED_FIELDS = {
     "signed_pdf_bytes",
     "signed_pdf_generated_at",
     "signed_pdf_error",
+    # 서명 시점에 서버가 정한 도장 입력. 클라이언트 값은 저장·서명 때 버려지므로 스냅샷 해시와 무관하다.
+    "signed_pdf_seal",
     "delivered_at",
     "delivery_channel",
 }
@@ -6201,12 +6203,15 @@ def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     if existing and str(existing.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="서명 완료 계약서는 수정할 수 없습니다. 정정 계약서를 새로 작성하십시오")
     contract = _owned_hr_record(_contract_defaults(_validate_contract_payload(_fill_contract_reference_data(payload, user))), user)
+    # signed_pdf_seal 은 서명 때 서버만 만든다. 작성자가 보낸 값으로 도장 상호·대표자를 고정하지 못하게 버린다.
+    contract.pop("signed_pdf_seal", None)
     contract = _normalize_contract_amendment(contract, rows, str(contract["id"]))
     existing = _find(rows, contract["id"])
     if existing:
         if str(existing.get("status") or "") == "requested":
             contract["status"] = "draft"
             _revoke_contract_signature_request(contract)
+        existing.pop("signed_pdf_seal", None)
         existing.update(contract)
         if "amends_contract_id" not in contract:
             existing.pop("amends_contract_id", None)
@@ -6384,6 +6389,11 @@ def _apply_contract_signature(
     contract["sign_token_hash"] = token_hash
     contract.pop("sign_token", None)
     contract["updated_at"] = signed_at
+    # 도장 입력은 서명 시점에 서버가 정해 고정한다. 이전 값(작성자가 보낸 것 포함)은 믿지 않고 버린다.
+    contract.pop("signed_pdf_seal", None)
+    seal = _contract_seal_inputs(contract)
+    if seal and str(seal.get("company_name") or "").strip():
+        contract["signed_pdf_seal"] = seal
     snapshot, snapshot_sha256 = _signed_contract_snapshot(contract)
     contract["signed_snapshot"] = snapshot
     contract["signed_snapshot_sha256"] = snapshot_sha256
@@ -7228,8 +7238,46 @@ def _persist_contract_delivery(contract: dict[str, Any], user: dict[str, Any] | 
         _run_db(_db_update_contract_delivery_columns(contract))
 
 
-def _contract_seal_inputs(contract: dict[str, Any]) -> dict[str, Any] | None:
-    """서명본 PDF 의 사용자 도장 입력. 봉인 스냅샷 값 → 사업장 정보 순으로 찾는다. 찾지 못해도 PDF 는 만든다."""
+async def _db_business_trade_name(business_id: str, tenant_id: UUID) -> dict[str, Any]:
+    """사업장의 사업자등록증 상호. 행이 있으면 {"trade_name": 값|None}, 없으면 {}. 컬럼이 아직 없어도 읽기는 깨지지 않는다."""
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        row = await conn.fetchrow(
+            "SELECT to_jsonb(b)->>'trade_name' AS trade_name FROM yeoljeong_businesses b "
+            "WHERE b.id = $1 AND b.tenant_id = $2 AND b.deleted_at IS NULL",
+            business_id,
+            tenant_id,
+        )
+    finally:
+        await conn.close()
+    return {} if row is None else {"trade_name": row["trade_name"]}
+
+
+def _business_trade_name(business_id: str, tenant_id: str, record: dict[str, Any]) -> str:
+    """도장 상호 1순위. DB 에서 사업장 행을 찾았으면 DB 가 정본이다(비워 둔 것도 정본 — 파일 설정의 옛 값으로 되돌아가지 않는다).
+
+    DB 를 쓸 수 없을 때만 설정 파일 사업장 레코드의 tradeName 을 본다.
+    """
+    if business_id and tenant_id:
+        try:
+            tenant_uuid = UUID(tenant_id)
+        except ValueError:
+            tenant_uuid = None
+        if tenant_uuid is not None:
+            found = _run_db(_db_business_trade_name(business_id, tenant_uuid))
+            if isinstance(found, dict) and found:
+                return str(found.get("trade_name") or "").strip()
+    return str(record.get("tradeName") or record.get("trade_name") or "").strip()
+
+
+def _contract_seal_inputs(contract: dict[str, Any], *, registered_trade_name: bool = True) -> dict[str, Any] | None:
+    """서명 시점의 사용자 도장 입력. 상호는 사업장 trade_name → 계약서 employer_name → 사업장 name 순이다.
+
+    사업자등록증 상호가 저장된 계약서 값보다 우선한다(CEO 지시 2026-10-16). 찾지 못해도 PDF 는 만든다.
+    registered_trade_name=False 는 trade_name 이 생기기 전에 서명돼 고정값이 없는 계약서의 재생성용이다.
+    """
     try:
         snapshot = contract.get("signed_snapshot") if isinstance(contract.get("signed_snapshot"), dict) else {}
 
@@ -7241,8 +7289,14 @@ def _contract_seal_inputs(contract: dict[str, Any]) -> dict[str, Any] | None:
                         return value
             return ""
 
-        business = _business_record_for_id(pick("business_id", "businessId"))
-        company_name = pick("employer_name", "employerName") or str(business.get("name") or "").strip()
+        business_id = pick("business_id", "businessId")
+        business = _business_record_for_id(business_id)
+        tenant_id = str(contract.get("tenant_id") or snapshot.get("tenant_id") or "").strip()
+        company_name = (
+            (_business_trade_name(business_id, tenant_id, business) if registered_trade_name else "")
+            or pick("employer_name", "employerName")
+            or str(business.get("name") or "").strip()
+        )
         representative = pick("employer_representative", "employerRepresentative") or str(business.get("representative") or "").strip()
         entity_type = pick("employer_entity_type", "employerEntityType") or _business_entity_type(business)
         return {
@@ -7255,13 +7309,24 @@ def _contract_seal_inputs(contract: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
 
+def _frozen_contract_seal(contract: dict[str, Any]) -> dict[str, Any] | None:
+    """서명 시점에 서버가 고정한 도장 입력(_apply_contract_signature). 저장 API 는 이 필드를 버리므로 서버 값이다."""
+    saved = contract.get("signed_pdf_seal")
+    if isinstance(saved, dict) and str(saved.get("company_name") or "").strip():
+        return {key: str(saved.get(key) or "") for key in ("kind", "company_name", "representative")}
+    return None
+
+
 def _store_signed_contract_pdf(contract: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
     """봉인 스냅샷으로 PDF 를 만들어 보관하고 계약서에 메타를 남긴다. 예외를 올리지 않는다."""
     result: dict[str, Any]
     try:
         from app.services import yeoljeong_contract_pdf as contract_pdf
 
-        data = contract_pdf.render_signed_contract_pdf(contract, seal=_contract_seal_inputs(contract))
+        # 서명 후 사업장 상호가 바뀌어도 이미 서명된 계약서의 도장은 바뀌지 않는다.
+        # 고정값이 없는 서명본은 trade_name 도입 전에 서명된 것이라 현재 trade_name 을 쓰지 않는다.
+        seal_inputs = _frozen_contract_seal(contract) or _contract_seal_inputs(contract, registered_trade_name=False)
+        data = contract_pdf.render_signed_contract_pdf(contract, seal=seal_inputs)
         relative = _contract_pdf_relpath(contract)
         path = _contract_pdf_root() / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -8347,7 +8412,8 @@ async def get_settings_persisted(user: dict[str, Any]) -> dict[str, Any]:
             business_rows = await conn.fetch(
                 """
                 SELECT id, entity_type, name, registration_no, representative, tax_type,
-                       opened_at, address, memo
+                       opened_at, address, memo,
+                       to_jsonb(yeoljeong_businesses)->>'trade_name' AS trade_name
                   FROM yeoljeong_businesses
                  WHERE deleted_at IS NULL
                  ORDER BY sort_order, id
@@ -8379,6 +8445,7 @@ async def get_settings_persisted(user: dict[str, Any]) -> dict[str, Any]:
                     "openedAt": row["opened_at"] or "",
                     "address": row["address"] or "",
                     "memo": row["memo"] or "",
+                    "tradeName": row.get("trade_name") or "",
                 }
                 for row in business_rows
             ],

@@ -130,11 +130,23 @@
     return markup ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}` : "";
   }
 
-  // 계약서 값 → 사업장 정보 순으로 유형·대표자·상호를 찾는다.
+  // 서명 전: 상호는 사업장 사업자등록증 상호(trade_name) → 계약서 값 → 사업장 name. 저장된 계약서 값보다 등록증 상호가 우선이다.
+  // 대표자·유형은 계약서 값 → 사업장 정보 순. 서버 도장(yeoljeong_finance_service._contract_seal_inputs)과 같은 순서다.
+  // 서명 완료: 서명 시점에 서버가 고정한 signed_pdf_seal 을 그대로 쓴다(서명본 PDF 와 같은 도장). 고정값이 없는 옛 서명본은
+  // trade_name 도입 전에 서명된 것이라 서버가 PDF 를 다시 만들 때처럼 현재 trade_name 을 쓰지 않는다.
   function optionsFor(contract, business) {
     const pick = (camel, snake) => String(contract?.[camel] ?? contract?.[snake] ?? "").trim();
     const biz = business || {};
-    const companyName = pick("employerName", "employer_name") || String(biz.name ?? "").trim();
+    const signed = pick("status", "status") === "signed";
+    const frozen = contract?.signed_pdf_seal ?? contract?.signedPdfSeal;
+    if (signed && frozen && typeof frozen === "object" && String(frozen.company_name ?? frozen.companyName ?? "").trim()) {
+      const companyName = String(frozen.company_name ?? frozen.companyName).trim();
+      const representative = String(frozen.representative ?? "").trim();
+      const kind = frozen.kind === "corporation" ? "corporation" : "individual";
+      return { kind, companyName, representative, label: `${companyName} 도장` };
+    }
+    const tradeName = signed ? "" : String(biz.tradeName ?? biz.trade_name ?? "").trim();
+    const companyName = tradeName || pick("employerName", "employer_name") || String(biz.name ?? "").trim();
     const representative = pick("employerRepresentative", "employer_representative") || String(biz.representative ?? "").trim();
     const entityType = pick("employerEntityType", "employer_entity_type") || String(biz.entityType ?? biz.entity_type ?? "").trim();
     return { kind: kindFor(entityType, companyName), companyName, representative, label: `${companyName || "사용자"} 도장` };

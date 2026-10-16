@@ -224,7 +224,7 @@
       return `<li><b>${escapeHtml(title)}</b><br>${previewText(body, "미입력")}</li>`;
     }
 
-    // 도장은 이미지 파일이 아니라 company-seal.js 가 계약서 값(없으면 사업장 정보)으로 그린다.
+    // 도장은 이미지 파일이 아니라 company-seal.js 가 사업장 사업자등록증 상호 → 계약서 값 → 사업장 정보 순으로 그린다.
     // <img> 안의 SVG 는 페이지 글꼴을 쓰지 못하므로 인라인 SVG 로 넣는다. 값은 모두 escapeXml 을 거친다.
     function contractSealSvg(contract, businessId, branchName) {
       const seal = globalThis.ObysCompanySeal;

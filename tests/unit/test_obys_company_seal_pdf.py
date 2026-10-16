@@ -7,6 +7,8 @@ import hashlib
 from io import BytesIO
 from pathlib import Path
 
+import pytest
+
 from app.services import yeoljeong_contract_pdf as pdf
 
 
@@ -132,3 +134,90 @@ def test_signed_pdf_embeds_the_seal_fonts_for_corporation_and_still_works_for_in
     assert corp.startswith(b"%PDF") and corp.count(b"/FontFile2") == plain.count(b"/FontFile2") + 2
     individual = pdf.render_signed_contract_pdf(contract, seal={"kind": "individual", "company_name": "열정국밥 미아점", "representative": "최미미"})
     assert individual.startswith(b"%PDF") and individual.count(b"/FontFile2") == plain.count(b"/FontFile2") + 1
+
+
+# --- ACCT-OBYS-SEAL-REGISTERED-TRADE-NAME-20261016: 서버 도장 상호 = 사업장 trade_name → 계약서 값 → 사업장 name ---
+def _browser_cases():
+    import importlib.util
+
+    path = Path(__file__).with_name("test_obys_company_seal.py")
+    spec = importlib.util.spec_from_file_location("obys_company_seal_browser_cases", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.TRADE_NAME_CASES
+
+
+@pytest.mark.parametrize("case", _browser_cases())
+def test_server_seal_inputs_match_the_browser_for_every_trade_name_case(monkeypatch, case):
+    pytest.importorskip("fastapi", reason="운영 이미지 의존 — scripts/run_unit_tests.sh 로 실행")
+    from app.services import yeoljeong_finance_service as svc
+
+    business = case["business"]
+    monkeypatch.setattr(svc, "_business_record_for_id", lambda business_id: business if business_id == "biz-x" else {})
+    contract_values = case["contract"]
+    snapshot = {
+        "business_id": "biz-x",
+        "employer_name": contract_values.get("employerName") or contract_values.get("employer_name") or "",
+        "employer_representative": contract_values.get("employerRepresentative") or contract_values.get("employer_representative") or "",
+    }
+    seal = svc._contract_seal_inputs({"signed_snapshot": snapshot})
+    assert seal["company_name"] == case["company"] and seal["kind"] == case["kind"]
+    plan = svc.yeoljeong_company_seal.layout(seal["kind"], seal["company_name"], seal["representative"])
+    assert sorted("".join(c["ch"] for c in plan["inner"])) == sorted(case["inner"])
+
+
+def test_db_trade_name_is_authoritative_and_the_settings_file_record_is_only_a_fallback(monkeypatch):
+    pytest.importorskip("fastapi", reason="운영 이미지 의존 — scripts/run_unit_tests.sh 로 실행")
+    from app.services import yeoljeong_finance_service as svc
+
+    tenant = "22222222-2222-2222-2222-222222222222"
+    monkeypatch.setattr(svc, "_business_record_for_id", lambda business_id: {"name": "사업장상호", "tradeName": "파일의옛값", "entityType": "individual"})
+    contract = {"tenant_id": tenant, "signed_snapshot": {"business_id": "biz-x", "employer_name": "계약서상호", "employer_representative": "홍길동"}}
+    answers = iter([{"trade_name": "주식회사 DB상호"}, {"trade_name": None}, {}, None])
+    seen = []
+
+    def fake_run_db(coro):
+        seen.append(coro.cr_frame.f_locals.get("business_id"))
+        coro.close()
+        return next(answers)
+
+    monkeypatch.setattr(svc, "_run_db", fake_run_db)
+    assert svc._contract_seal_inputs(contract)["company_name"] == "주식회사 DB상호"
+    assert svc._contract_seal_inputs(contract)["company_name"] == "계약서상호"  # DB 에서 비워 둠 → 파일의 옛 값으로 되돌아가지 않는다
+    assert svc._contract_seal_inputs(contract)["company_name"] == "파일의옛값"  # 사업장 행을 못 찾음 → 설정 파일 레코드
+    assert svc._contract_seal_inputs(contract)["company_name"] == "파일의옛값"  # DB 를 쓸 수 없음
+    assert seen == ["biz-x"] * 4
+    no_tenant = {"signed_snapshot": {"business_id": "biz-x", "employer_name": "계약서상호"}}
+    assert svc._contract_seal_inputs(no_tenant)["company_name"] == "파일의옛값" and len(seen) == 4  # 테넌트 없이는 DB 를 읽지 않는다
+
+
+def test_signed_contract_pdf_keeps_its_frozen_seal_when_the_business_trade_name_changes_later(monkeypatch, tmp_path):
+    pytest.importorskip("fastapi", reason="운영 이미지 의존 — scripts/run_unit_tests.sh 로 실행")
+    from app.services import yeoljeong_finance_service as svc
+
+    seen = []
+
+    def fake_render(contract, seal=None):
+        seen.append(seal)
+        return b"%PDF-fake"
+
+    monkeypatch.setattr(pdf, "render_signed_contract_pdf", fake_render)
+    monkeypatch.setattr(svc, "_persist_contract_delivery", lambda contract, user: None)
+    monkeypatch.setenv("OBYS_UPLOAD_ROOT", str(tmp_path))
+    record = {"name": "열정국밥 중화점", "entityType": "corporation", "representative": "오윤희"}
+    monkeypatch.setattr(svc, "_business_record_for_id", lambda business_id: dict(record))
+    frozen = {"kind": "corporation", "company_name": "열정국밥 중화점", "representative": "오윤희"}
+    contract = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "tenant_id": "22222222-2222-2222-2222-222222222222",
+        "signed_snapshot": {"business_id": "biz-x", "employer_name": "열정국밥 중화점", "employer_representative": "오윤희"},
+        "signed_pdf_seal": frozen,
+    }
+    record["tradeName"] = "주식회사 윤희에프엔비"  # 서명 뒤에 등록증 상호를 입력
+    assert svc._store_signed_contract_pdf(contract, None)["status"] == "stored"
+    assert svc._store_signed_contract_pdf(contract, None)["status"] == "stored"
+    assert seen == [frozen, frozen]
+    # 고정값이 없는 서명본(trade_name 도입 전 서명)도 현재 trade_name 으로 바뀌지 않는다
+    legacy = {k: v for k, v in contract.items() if k != "signed_pdf_seal"}
+    assert svc._store_signed_contract_pdf(legacy, None)["status"] == "stored"
+    assert seen[2]["company_name"] == "열정국밥 중화점" and "signed_pdf_seal" not in legacy
