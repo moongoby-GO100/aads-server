@@ -585,7 +585,37 @@ def _walk_channel(node: Any, ctx: dict[str, Any], out: list[dict[str, Any]], sta
     if child_out:
         out.extend(child_out)
     elif any(k in node for k in _METRIC_KEYS):
+        if _is_list_envelope(node, here, children):
+            # 목록 봉투가 비었다: 기간 집계가 전부 0 이면 미연결(레코드 없음), 아니면 데이터 누락(형식 이상)이다.
+            if _has_nonzero_total(node):
+                stats["unknown_numeric_leaf"] += 1
+            return
         out.append(here)
+
+
+def _is_list_envelope(node: dict[str, Any], here: dict[str, Any], children: list[tuple[str, Any]]) -> bool:
+    """행이 아니라 '빈 목록 + 기간 집계' 봉투인가: 하위가 전부 비었고, 행 식별자(날짜·채널·기관)와 일 단위 지표가 없다."""
+    if any(v for _, v in children):
+        return False
+    if any(_first_present(here, keys) is not None for keys in (_DATE_KEYS, _CHANNEL_KEYS, _INSTITUTION_KEYS)):
+        return False
+    return not any(k in node for k in _GROSS_KEYS + _NET_KEYS + _FEE_KEYS + _COUNT_KEYS)
+
+
+def _has_nonzero_total(node: dict[str, Any]) -> bool:
+    """봉투의 집계(total* 접두·*Total 접미·_TOTAL_DETECT_KEYS) 중 0 이 아닌 값이 있나. 반올림하지 않고 비교하며(0.001 도 비영) 해석 못 하는 값은 비영으로 본다."""
+    for key, value in node.items():
+        is_total = key.startswith("total") or key.endswith("Total") or key in _TOTAL_DETECT_KEYS
+        if not is_total or isinstance(value, (dict, list)) or value in (None, ""):
+            continue
+        if isinstance(value, bool):
+            return True
+        try:
+            if Decimal(str(value).replace(",", "")) != 0:
+                return True
+        except (InvalidOperation, ValueError):
+            return True
+    return False
 
 
 def parse_channel_payload(

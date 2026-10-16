@@ -442,10 +442,45 @@ def test_legacy_channel_key_drops_only_the_institution_segment():
     assert core.legacy_channel_key("fp:abc:1") is None
 
 
-def test_empty_page_with_period_totals_keeps_unexpected_shape_verdict():
-    # 판정 불변 확인: total* 를 별칭에서 뺐어도 '지표가 있는 객체' 판정은 그대로다(별도 작업 범위).
-    with pytest.raises(ValueError, match="channel_unexpected_shape"):
-        parse({"content": [], "totalCount": 0, "page": 0, "size": 20})
+# 클로브 실측(2026-10-16): 채널이 연결되지 않은 사업자의 get_monthly_revenue 빈 응답
+CLOBE_EMPTY = {"timeUnit": "DAILY", "totalCount": 0, "page": 0, "size": 100, "hasNext": False, "totalSalesCount": 0,
+               "totalSalesAmountKrw": 0.0, "totalSettlementAmountKrw": 0.0, "totalFeeAmountKrw": 0.0, "items": []}
+
+
+def test_clobe_empty_response_has_no_records_and_no_error():
+    out = parse(CLOBE_EMPTY)
+    assert out["records"] == [] and out["skipped"] == 0
+    assert parse({"content": [], "totalCount": 0, "page": 0, "size": 20})["records"] == []
+    assert parse(CLOBE_EMPTY, default_month=date(2026, 10, 1))["records"] == []
+    assert parse({**CLOBE_EMPTY, "feeTotal": 0})["records"] == []
+
+
+async def test_clobe_empty_response_is_not_connected(written):
+    out, counts = await _collect(FakeConn(had_before=False), FakeSession(CLOBE_EMPTY))
+    assert out["not_connected"] is True and written == [] and counts["received"] == 0
+
+
+def test_empty_items_with_nonzero_aggregate_keeps_unexpected_shape_verdict():
+    # 0.001 은 소수 둘째 자리 반올림(_num)으로 0 이 되지만 실제로는 비영 집계다.
+    for payload in ({**CLOBE_EMPTY, "totalCount": 5}, {**CLOBE_EMPTY, "totalSalesAmountKrw": 1000.0},
+                    {**CLOBE_EMPTY, "totalSalesAmountKrw": 0.001}, {**CLOBE_EMPTY, "totalFeeAmountKrw": "0.004"},
+                    {"content": [], "totalCount": 3, "page": 0, "size": 20},
+                    {"items": [], "totalCount": 0, "feeTotal": 100}, {"items": [], "feeTotal": "1,000"},
+                    {**CLOBE_EMPTY, "feeTotal": 0.001}):
+        with pytest.raises(ValueError, match="channel_unexpected_shape"):
+            parse(payload)
+        with pytest.raises(ValueError, match="channel_unexpected_shape"):
+            parse(payload, default_month=date(2026, 10, 1))
+
+
+def test_row_with_empty_child_object_is_still_a_record():
+    # 빈 하위 객체(metadata) 가 있어도 날짜·채널·지표가 있는 정상 행은 봉투로 보지 않는다 — 매출 0 인 행도 지우지 않는다.
+    for sales in (1000, 0):
+        out = parse({"date": "2026-10-16", "channel": "MKP", "salesAmountKrw": sales, "metadata": {}})
+        assert len(out["records"]) == 1 and out["skipped"] == 0
+        assert out["records"][0]["gross"] == sales
+    out = parse({"channel": "MKP", "salesAmountKrw": 1000, "metadata": {}}, default_month=date(2026, 10, 1))
+    assert len(out["records"]) == 1
 
 
 # ── 옛 빈-기관명 행 supersede ─────────────────────────────
