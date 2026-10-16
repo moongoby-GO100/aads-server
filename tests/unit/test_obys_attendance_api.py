@@ -20,7 +20,11 @@ from app.api import obys_workspaces as api
 from app.auth import get_current_user
 
 
-USER = {"tenant_id": "d1695f15-6b68-4929-bc8d-646827363ff9", "email": "owner@example.com"}
+USER = {
+    "tenant_id": "d1695f15-6b68-4929-bc8d-646827363ff9", "email": "owner@example.com",
+    "current_membership": {"tenant_id": "d1695f15-6b68-4929-bc8d-646827363ff9",
+                           "status": "active", "role": "owner"},
+}
 BUSINESS = {"id": "biz-lylon-e2e", "name": "주식회사 라일론"}
 OTHER_BUSINESS_ID = "biz-other-tenant"
 BASE = f"/api/v1/workspaces/{BUSINESS['id']}/attendance/records"

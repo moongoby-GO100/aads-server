@@ -101,6 +101,53 @@ GENERIC_ROUTE_SQL: dict[str, tuple[str, str]] = {
 }
 
 
+_MANAGER_ROLES = frozenset({"owner", "admin"})
+
+# 표에 없는 라우트는 기존처럼 활성 멤버(owner/admin/member/viewer) 모두 조회한다.
+# attendance 는 표 밖에서 따로 처리한다: 직원 근태 화면이 같은 목록 API 를 쓰므로
+# member 는 본인 행만 허용하고 viewer 는 막는다(_attendance_read_scope).
+ROUTE_READ_ROLES: dict[str, frozenset[str]] = {
+    "payroll": _MANAGER_ROLES,
+    "employees": _MANAGER_ROLES,
+    "hr-docs": _MANAGER_ROLES,
+    "audit-history": _MANAGER_ROLES,
+    "access-log": _MANAGER_ROLES,
+    "integrations": _MANAGER_ROLES,
+    "bank-connect": _MANAGER_ROLES,
+    "sales-connect": _MANAGER_ROLES,
+    "tax-connect": _MANAGER_ROLES,
+}
+
+_ROUTE_FORBIDDEN = "이 화면은 소유자·관리자만 조회할 수 있습니다"
+
+ATTENDANCE_OWN_SQL = (
+    "SELECT id,employee_name,branch,work_date,start_at,end_at,break_minutes,worked_minutes,"
+    "hourly_wage,status,memo,created_at,updated_at FROM yeoljeong_attendance_records "
+    "WHERE business_id=$1 AND deleted_at IS NULL AND lower(employee_email)=$2 "
+    "ORDER BY work_date DESC LIMIT 500"
+)
+
+
+def _require_route_read(user: dict[str, Any], route: str) -> str | None:
+    """라우트 열람 권한을 확인한다. 반환값은 본인 행으로 제한할 이메일(없으면 None).
+
+    attendance: owner/admin 은 전체(None), member 는 본인 이메일(비어 있으면 ""), viewer 는 403.
+    """
+    allowed = ROUTE_READ_ROLES.get(route)
+    if allowed is None and route != "attendance":
+        return None
+    role = upload_svc.tenant_session_for_user(user)["permissions"]["role"]
+    if route == "attendance":
+        if role in _MANAGER_ROLES:
+            return None
+        if role == "member":
+            return str(user.get("email") or "").strip().lower()
+        raise HTTPException(status_code=403, detail=_ROUTE_FORBIDDEN)
+    if role not in allowed:
+        raise HTTPException(status_code=403, detail=_ROUTE_FORBIDDEN)
+    return None
+
+
 def _import_category(route: str) -> str:
     if route in {"sales", "orders", "settlements"}:
         return "sales"
@@ -498,7 +545,17 @@ async def _local_source_rows(route, user, business_id, date_from, date_to):
 async def _source_rows(
     *, route: str, user: dict[str, Any], business_id: str,
     date_from: str | None, date_to: str | None,
+    own_email: str | None = None,
 ) -> tuple[list[tuple[str, dict[str, Any]]], str]:
+    if route == "attendance" and own_email is not None:
+        if not own_email:
+            return [], "yeoljeong_attendance_records"
+        connection = await upload_svc._connect()
+        try:
+            rows = await connection.fetch(ATTENDANCE_OWN_SQL, business_id, own_email)
+            return [("generic", dict(row)) for row in rows], "yeoljeong_attendance_records"
+        finally:
+            await connection.close()
     if route == "tax-gap":
         rows: list[tuple[str, dict[str, Any]]] = []
         for category in ("sales", "purchase"):
@@ -632,9 +689,10 @@ async def workspace_summary(
 ) -> dict[str, Any]:
     selected_route = _route(route)
     business = await _business(current_user, business_id)
+    own_email = _require_route_read(current_user, selected_route)
     source_rows, source = await _source_rows(
         route=selected_route, user=current_user, business_id=business_id,
-        date_from=date_from, date_to=date_to,
+        date_from=date_from, date_to=date_to, own_email=own_email,
     )
     source_rows = _filter_source_dates(source_rows, date_from, date_to)
     records = [_record(kind, row, business["name"]) for kind, row in source_rows]
@@ -898,12 +956,17 @@ async def get_attendance_record(
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
     business = await _business(current_user, business_id)
+    own_email = _require_route_read(current_user, "attendance")
+    if own_email == "":
+        raise HTTPException(status_code=404, detail="현재 사업자의 근태를 찾을 수 없습니다")
+    owner_filter = "" if own_email is None else " AND lower(employee_email)=$3"
+    args = (record_id, business_id) if own_email is None else (record_id, business_id, own_email)
     connection = await upload_svc._connect()
     try:
         row = await connection.fetchrow(
             f"""SELECT {ATTENDANCE_COLUMNS} FROM yeoljeong_attendance_records
-                 WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL""",
-            record_id, business_id,
+                 WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL{owner_filter}""",
+            *args,
         )
     finally:
         await connection.close()
@@ -1493,6 +1556,7 @@ async def workspace_records(
 ) -> dict[str, Any]:
     selected_route = _route(route)
     business = await _business(current_user, business_id)
+    own_email = _require_route_read(current_user, selected_route)
     if selected_route in ACCT_SOURCE_ROUTES:
         _filter_source_dates([], date_from, date_to)
         local_rows = await _local_source_rows(selected_route, current_user, business_id, date_from, date_to)
@@ -1522,7 +1586,7 @@ async def workspace_records(
                 "source":{"name":source+"+obys_ledger","live":True}}
     source_rows, source = await _source_rows(
         route=selected_route, user=current_user, business_id=business_id,
-        date_from=date_from, date_to=date_to,
+        date_from=date_from, date_to=date_to, own_email=own_email,
     )
     source_rows = _filter_source_dates(source_rows, date_from, date_to)
     records = _filter(
@@ -1546,6 +1610,7 @@ async def workspace_record_detail(
 ) -> dict[str, Any]:
     selected_route = _route(route)
     business = await _business(current_user, business_id)
+    own_email = _require_route_read(current_user, selected_route)
     if selected_route in ACCT_SOURCE_ROUTES and record_id.startswith("acct:"):
         source_rows, source = await acct_source_ledger.source_transactions(
             current_user, business_id, ACCT_SOURCE_ROUTES[selected_route], record_id=record_id,
@@ -1589,7 +1654,7 @@ async def workspace_record_detail(
         raise HTTPException(status_code=404, detail="현재 사업자의 내역을 찾을 수 없습니다")
     source_rows, source = await _source_rows(
         route=selected_route, user=current_user, business_id=business_id,
-        date_from=None, date_to=None,
+        date_from=None, date_to=None, own_email=own_email,
     )
     records = [_record(kind, row, business["name"]) for kind, row in source_rows]
     record = next((item for item in records if item["id"] == record_id), None)

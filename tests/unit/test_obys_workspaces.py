@@ -12,6 +12,7 @@ from app.api import obys_workspaces as api
 
 
 USER = {"tenant_id": "d1695f15-6b68-4929-bc8d-646827363ff9"}
+OWNER_USER = {**USER, "current_membership": {"tenant_id": USER["tenant_id"], "status": "active", "role": "owner"}}
 BUSINESS = {
     "id": "biz-lylon-e2e",
     "name": "주식회사 라일론",
@@ -218,7 +219,7 @@ async def test_configured_empty_route_returns_explicit_zero_not_demo_rows(monkey
     monkeypatch.setattr(api.upload_svc, "_connect", connect)
     result = await api.workspace_records(
         business_id=BUSINESS["id"], route="employees", date_from=None, date_to=None,
-        status="전체 상태", search="", limit=200, current_user=USER,
+        status="전체 상태", search="", limit=200, current_user=OWNER_USER,
     )
     assert result["records"] == []
     assert result["source"] == {"name": "yeoljeong_employee_join_requests", "live": True}

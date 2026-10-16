@@ -40,7 +40,9 @@ async def test_account_summary_does_not_present_unknown_balances_as_zero(monkeyp
     monkeypatch.setattr(api, "_business", AsyncMock(return_value={"id": "owned", "name": "사업자"}))
     monkeypatch.setattr(api, "_source_rows", AsyncMock(return_value=(
         [("bank-account", account(status="needs_auth"))], "yeoljeong_bank_accounts")))
-    result = await api.workspace_summary("owned", "bank-connect", None, None, {})
+    tenant = "d1695f15-6b68-4929-bc8d-646827363ff9"
+    owner = {"tenant_id": tenant, "current_membership": {"tenant_id": tenant, "status": "active", "role": "owner"}}
+    result = await api.workspace_summary("owned", "bank-connect", None, None, owner)
     assert result["metrics"][0] == {"label": "등록 계좌", "value": "1건"}
     assert result["metrics"][1]["value"] == "1건"
     assert not any("원" == metric["value"][-1:] for metric in result["metrics"])
