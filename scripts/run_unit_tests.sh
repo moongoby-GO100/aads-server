@@ -28,6 +28,56 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
+# ── 컨테이너 수명 관리 (R-BG, runner.unit_test_container_orphan) ──
+# `docker run --rm` 은 포그라운드 클라이언트가 SIGKILL 로 죽어도 컨테이너를 지우지 않는다(dockerd 가 소유).
+# 러너가 job 을 종결하며 프로세스 트리를 죽이면 클라이언트만 죽고 pytest 컨테이너는 남았다(실측 2026-10-16).
+# 그래서 ① 이름·라벨로 식별하고 ② 클라이언트를 백그라운드로 띄워 신호가 오면 trap 이 즉시 docker rm -f 하며
+# ③ 컨테이너 안에서도 timeout 을 건다. SIGKILL 로 이 스크립트 자체가 죽는 경우는 trap 이 못 돌므로
+# 러너(pipeline-runner.sh _reap_job_test_containers)가 라벨로 회수한다. docker run 은 아래 한 곳뿐이다.
+UT_TIMEOUT="${UNIT_TEST_TIMEOUT:-1200}"
+case "$UT_TIMEOUT" in ''|*[!0-9]*|0) UT_TIMEOUT=1200 ;; esac
+UT_CURRENT_NAME=""
+UT_CLIENT_PID=""
+
+ut_runner_job() {
+    local job="${AADS_HEAVY_JOB_ID:-}"
+    if [[ ! "$job" =~ ^runner-[0-9A-Za-z_-]+$ ]]; then
+        job=""
+        [[ "$REPO_ROOT" =~ ^/tmp/aads-wt-(runner-[0-9A-Za-z_-]+)$ ]] && job="${BASH_REMATCH[1]}"
+    fi
+    printf '%s' "$job"
+}
+
+ut_cleanup() {
+    local name="$UT_CURRENT_NAME" pid="$UT_CLIENT_PID"
+    UT_CURRENT_NAME=""
+    UT_CLIENT_PID=""
+    [ -n "$name" ] && docker rm -f "$name" >/dev/null 2>&1
+    [ -n "$pid" ] && kill "$pid" >/dev/null 2>&1
+    return 0
+}
+
+trap 'ut_cleanup' EXIT
+trap 'ut_cleanup; exit 143' TERM
+trap 'ut_cleanup; exit 130' INT
+trap 'ut_cleanup; exit 129' HUP
+
+ut_docker_run() {
+    local name="aads-ut-$$-${RANDOM}${RANDOM}" job rc job_label=()
+    job="$(ut_runner_job)"
+    [ -n "$job" ] && job_label=(--label "aads.runner_job=$job")
+    UT_CURRENT_NAME="$name"
+    docker run --rm --init --name "$name" --label aads.unit_test=1 --label "aads.worktree=$REPO_ROOT" ${job_label[@]+"${job_label[@]}"} "$@" &
+    UT_CLIENT_PID=$!
+    wait "$UT_CLIENT_PID"
+    rc=$?
+    UT_CLIENT_PID=""
+    # 클라이언트가 신호로 끝났으면(rc>=128) 컨테이너는 살아 있을 수 있다 — --rm 은 클라이언트 몫이 아니라 dockerd 몫이다.
+    [ $rc -ge 128 ] && docker rm -f "$name" >/dev/null 2>&1
+    UT_CURRENT_NAME=""
+    return $rc
+}
+
 # 운영 컨테이너는 블루그린이라 실제 이름이 aads-server-blue / aads-server-green 이다.
 # 컷오버 창에는 별칭 aads-server 가 잠깐 사라질 수 있으므로 폴백 사슬로 찾는다:
 #   $AADS_TEST_IMAGE_SOURCE → aads-server → .active_container 값 →
@@ -131,11 +181,11 @@ if [ -z "$IMAGE" ]; then
 fi
 
 mkdir -p "$TESTDEPS_DIR"
-if ! docker run --rm -v "$TESTDEPS_DIR":/testdeps "$IMAGE" \
-        python3 -c 'import sys; sys.path.insert(0, "/testdeps"); import pytest' >/dev/null 2>&1; then
+if ! ut_docker_run -v "$TESTDEPS_DIR":/testdeps "$IMAGE" \
+        timeout 60 python3 -c 'import sys; sys.path.insert(0, "/testdeps"); import pytest' >/dev/null 2>&1; then
     echo "[run_unit_tests] pytest 준비 중 (런타임 이미지 미포함 — 별도 경로에 설치)..."
-    if ! docker run --rm -v "$TESTDEPS_DIR":/testdeps "$IMAGE" \
-            pip install --no-cache-dir --target /testdeps \
+    if ! ut_docker_run -v "$TESTDEPS_DIR":/testdeps "$IMAGE" \
+            timeout 600 pip install --no-cache-dir --target /testdeps \
             pytest==9.1.1 pytest-asyncio==1.4.0 >/dev/null 2>&1; then
         echo "[run_unit_tests] pytest 설치 실패 — 단위 테스트를 실행할 수 없습니다." >&2
         exit 2
@@ -156,7 +206,7 @@ fi
 
 # 원격 파일 도구 테스트는 host.docker.internal 로 SSH 를 건다.
 # 운영 컨테이너가 가진 것과 같은 조건을 임시 컨테이너에도 준다.
-docker run --rm \
+ut_docker_run \
     --add-host host.docker.internal:host-gateway \
     -v /root/.ssh:/root/.ssh:ro \
     -v "$REPO_ROOT":/app \
@@ -167,8 +217,15 @@ docker run --rm \
     -e PYTHONDONTWRITEBYTECODE=1 \
     -e JWT_SECRET_KEY="${JWT_SECRET_KEY:-unit-test-secret-not-for-production}" \
     -e OBYS_COLLECTION_TEST_DB_URL="${OBYS_COLLECTION_TEST_DB_URL:-}" \
-    "$IMAGE" python3 -m pytest "${targets[@]}" -q --tb=line -p no:cacheprovider
+    "$IMAGE" timeout -k 10 "$UT_TIMEOUT" python3 -m pytest "${targets[@]}" -q --tb=line -p no:cacheprovider
 rc=$?
+
+# 124(timeout 의 TERM) / 137(-k 후 KILL 또는 클라이언트 SIGKILL) = 시간 상한 초과 또는 강제 종료.
+# 검증이 끝나지 않았으므로 테스트 실패(1)로 본다.
+if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then
+    echo "[run_unit_tests] 단위 테스트가 끝나지 못했습니다 (rc=$rc: ${UT_TIMEOUT}초 상한 초과 또는 강제 종료; UNIT_TEST_TIMEOUT 로 조정)." >&2
+    exit 1
+fi
 
 # pytest 5 = 수집된 테스트 없음. 게이트 입장에서는 검증이 안 된 것이므로 실행 불가로 본다.
 if [ $rc -eq 5 ]; then

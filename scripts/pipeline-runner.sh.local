@@ -351,6 +351,65 @@ _reap_orphan_temp_pg() {
 }
 # <<< temp-pg-reap
 
+# 종결한 job 의 단위테스트 컨테이너 회수 (AADS-RUNNER-TEST-CONTAINER-REAP-20261016, R-BG, R-ERRBOOK 3항).
+# `docker run --rm` 클라이언트가 SIGKILL 로 죽어도 컨테이너는 dockerd 소유라 계속 돈다. job 종결 때 CLI 프로세스 트리를
+# 죽이면(_runner_kill_tree) 클라이언트만 죽고 pytest 컨테이너가 남았다. run_unit_tests.sh 가 단 라벨로 찾아 지운다.
+# 대상 판정은 오직 ① aads.runner_job=<job> 라벨 ② aads.worktree=/tmp/aads-wt-<job> 라벨 ③ (라벨 없는 옛 컨테이너)
+# mount source 가 /tmp/aads-wt-<job> 인 것이다. 컨테이너 이름으로 고르지 않는다 — 운영 컨테이너는 이 셋에 걸리지 않는다.
+# best effort: 실패해도 job 종결을 막지 않고 로그만 남긴다. 끄기: RUNNER_TEST_CONTAINER_REAP=0
+_reap_job_test_containers() {
+    local job_id="${1:-}"
+    [[ "${RUNNER_TEST_CONTAINER_REAP:-1}" == 1 ]] || return 0
+    [[ "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ ]] || return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    (
+        set +eu -f
+        local wt="/tmp/aads-wt-${job_id}" ids all line cid tok removed=0 failed=0
+        ids="$(
+            timeout 20 docker ps -aq --no-trunc --filter "label=aads.runner_job=${job_id}" 2>/dev/null
+            timeout 20 docker ps -aq --no-trunc --filter "label=aads.worktree=${wt}" 2>/dev/null
+        )"
+        all="$(timeout 20 docker ps -aq --no-trunc 2>/dev/null)"
+        if [[ -n "$all" ]]; then
+            # shellcheck disable=SC2086
+            while IFS= read -r line; do
+                [[ -n "$line" ]] || continue
+                cid="${line%% *}"
+                for tok in ${line#"$cid"}; do
+                    if [[ "$tok" == "$wt" || "$tok" == "$wt"/* ]]; then ids+=$'\n'"$cid"; break; fi
+                done
+            done < <(timeout 30 docker inspect -f '{{.Id}}{{range .Mounts}} {{.Source}}{{end}}' $all 2>/dev/null)
+        fi
+        while IFS= read -r cid; do
+            [[ "$cid" =~ ^[0-9a-f]{12,64}$ ]] || continue
+            if timeout 30 docker rm -f "$cid" >/dev/null 2>&1; then removed=$((removed + 1)); else failed=$((failed + 1)); fi
+        done < <(printf '%s\n' "$ids" | sort -u)
+        if (( removed > 0 || failed > 0 )); then
+            log "  TEST_CONTAINER_REAP job=${job_id} removed=${removed} failed=${failed} worktree=${wt}"
+        fi
+    ) || true
+    return 0
+}
+
+# worktree 가 이미 사라진 job 의 라벨 컨테이너 스윕 (주기 회수용). 종결 경로를 못 탄 job(러너 크래시 등)의 보험이다.
+# aads.worktree 가 /tmp/aads-wt-runner-* 인데 그 디렉터리가 없는 aads.unit_test 컨테이너만 지운다.
+_reap_orphan_test_containers() {
+    [[ "${RUNNER_TEST_CONTAINER_REAP:-1}" == 1 ]] || return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    (
+        set +eu -f
+        local cid wt removed=0
+        while IFS=$'\t' read -r cid wt; do
+            [[ "$cid" =~ ^[0-9a-f]{12,64}$ ]] || continue
+            [[ "$wt" =~ ^/tmp/aads-wt-runner-[0-9a-zA-Z_-]+$ ]] || continue
+            [[ -d "$wt" ]] && continue
+            timeout 30 docker rm -f "$cid" >/dev/null 2>&1 && removed=$((removed + 1))
+        done < <(timeout 20 docker ps -a --no-trunc --filter "label=aads.unit_test=1" --format '{{.ID}}'$'\t''{{.Label "aads.worktree"}}' 2>/dev/null)
+        (( removed > 0 )) && log "  TEST_CONTAINER_SWEEP removed=${removed} (worktree 소멸)"
+    ) || true
+    return 0
+}
+
 # WRAP 파일 자동 생성 (P0/P1 완료 시)
 _generate_wrap() {
     local job_id="$1"
@@ -3011,6 +3070,7 @@ ensure_approved_job_worktree() {
     [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
     git -C "$main_workdir" cat-file -e "${expected_sha}^{commit}" 2>/dev/null || return 1
     _reap_job_temp_pg "$job_id" || true
+    _reap_job_test_containers "$job_id" || true
     if [[ -e "$worktree_dir" ]]; then
         git -C "$main_workdir" worktree remove "$worktree_dir" --force >/dev/null 2>&1 || rm -rf "$worktree_dir" 2>/dev/null || true
     fi
@@ -3625,6 +3685,7 @@ prepare_clean_job_worktree() {
         return 1
     fi
     _reap_job_temp_pg "$job_id" || true
+    _reap_job_test_containers "$job_id" || true
     if [[ -e "$worktree_dir" ]]; then
         git -C "$main_workdir" worktree remove "$worktree_dir" --force >/dev/null 2>&1 || rm -rf "$worktree_dir" 2>/dev/null || true
     fi
@@ -4320,6 +4381,7 @@ _fail_job() {
                completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
     record_runner_event "$job_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"${error_type}\"}"
     post_to_chat "$session_id" "❌ [Pipeline Runner] 사전 검증 실패 (${error_type}): ${detail:0:500}"
+    _reap_job_test_containers "$job_id" || true
     _notify_ai "$job_id"
 }
 
@@ -5882,6 +5944,7 @@ $out_tail")
         _cleanup_artifacts "$job_id"
         # worktree 정리
         _reap_job_temp_pg "$job_id" || true
+        _reap_job_test_containers "$job_id" || true
         if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
             _preserve_worktree_patch "$job_id" "/tmp/aads-wt-${job_id}"
             cd "${main_workdir:-/tmp}"
@@ -6053,6 +6116,7 @@ ${output:0:1500}
             _release_work_lock "$project" "$job_id" "$parallel_group"
             _cleanup_artifacts "$job_id"
             _reap_job_temp_pg "$job_id" || true
+            _reap_job_test_containers "$job_id" || true
             if [[ -d "$worktree_dir" ]]; then
                 cd "${main_workdir:-/tmp}"
                 git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
@@ -6117,6 +6181,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             _release_work_lock "$project" "$job_id" "$parallel_group"
             _cleanup_artifacts "$job_id"
             _reap_job_temp_pg "$job_id" || true
+            _reap_job_test_containers "$job_id" || true
             if [[ -d "$worktree_dir" ]]; then
                 cd "${main_workdir:-/tmp}"
                 git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir" 2>/dev/null || true
@@ -8114,6 +8179,7 @@ deploy_job() {
 
     # worktree 정리
     _reap_job_temp_pg "$job_id" || true
+    _reap_job_test_containers "$job_id" || true
     if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
         cd "$main_workdir"
         git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
@@ -8142,6 +8208,7 @@ reject_job() {
     # v2.2: 해당 Runner의 변경사항만 선택적 원복 (다른 Runner의 배포된 변경 보호)
     local worktree_dir="/tmp/aads-wt-${job_id}"
     _reap_job_temp_pg "$job_id" || true
+    _reap_job_test_containers "$job_id" || true
     if [[ -d "$worktree_dir" ]]; then
         _preserve_worktree_patch "$job_id" "$worktree_dir"
         cd "$workdir"
@@ -8160,6 +8227,7 @@ reject_job() {
 
     # worktree 정리
     _reap_job_temp_pg "$job_id" || true
+    _reap_job_test_containers "$job_id" || true
     if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
         cd "$workdir"
         git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
@@ -8381,6 +8449,9 @@ _recover_stuck_jobs() {
 _cleanup_old_artifacts() {
     find "$ARTIFACT_DIR" -type f -mmin +$((ARTIFACT_MAX_AGE_HOURS * 60)) -delete 2>/dev/null || true
 
+    # worktree 소멸 후에도 남은 단위테스트 컨테이너 스윕 (종결 경로를 못 탄 job 의 보험)
+    _reap_orphan_test_containers || true
+
     # STALE_WORKTREE_CLEANUP: delegate runner worktrees to the shared guard.
     # It checks job status, ignored files, unmerged commits, and active users.
     local _reclaim_script
@@ -8489,6 +8560,7 @@ _reclaim_finished_worktree() {
     esac
     # worktree 가 깨끗하지 않아 보존되더라도 종료 job 이 띄운 임시 PG 는 회수한다.
     _reap_job_temp_pg "$job_id" || true
+    _reap_job_test_containers "$job_id" || true
     script="$(_reclaimer_script_path)"
     if [[ ! -x "$script" ]]; then
         _warn_reclaimer_unavailable "$script"
@@ -8795,6 +8867,7 @@ SHUTDOWN_REQUEUE_MAX="${SHUTDOWN_REQUEUE_MAX:-2}"
 _shutdown_finalize_job() {
     local _jid="$1" _sid="${2:-}" _quiet="${3:-}"
     [[ -z "$_jid" ]] && return 0
+    _reap_job_test_containers "$_jid" || true
     # 배포 락 대기 중 종료된 작업은 코딩을 다시 돌리지 않고 승인 상태로 되돌린다 —
     # approved 클레임이 배포만 다시 시도한다 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD).
     db_update "UPDATE pipeline_jobs SET status='approved', phase='approved', updated_at=NOW()
