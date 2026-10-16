@@ -137,9 +137,23 @@ async def test_interim_save_fences_old_producer_instead_of_adopting_new_epoch():
     archive.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_internal_auto_reaction_uses_background_completion_wrapper():
-    session_id = str(uuid.uuid4())
+class _SessionModelConn:
+    """chat_sessions.current_model 조회만 흉내 낸다. 값이 예외면 던진다."""
+
+    def __init__(self, values):
+        self.values = list(values)
+        self.queries = []
+
+    async def fetchval(self, query, *args):
+        self.queries.append((query, args))
+        value = self.values.pop(0) if len(self.values) > 1 else self.values[0]
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+
+async def _run_internal_reaction(session_id, conn):
+    """내부 자동 반응을 돌려 (결과, wrapper/send 호출 기록)을 돌려준다."""
     execution_id = str(uuid.uuid4())
     calls = []
 
@@ -154,19 +168,161 @@ async def test_internal_auto_reaction_uses_background_completion_wrapper():
         chat_service._streaming_state[session_id] = {"execution_id": execution_id}
 
     with (
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
         patch("app.services.chat_service.send_message_stream", new=fake_send_message_stream),
         patch("app.services.chat_service.with_background_completion", new=fake_wrapper),
+        patch("app.services.chat_service._heartbeat_asyncio.sleep", new=AsyncMock()),
     ):
-        result = await chat_service._consume_internal_reaction_stream(
-            session_id,
-            "PRD를 작성하고 배포까지 진행해",
-        )
+        try:
+            result = await chat_service._consume_internal_reaction_stream(
+                session_id,
+                "PRD를 작성하고 배포까지 진행해",
+            )
+        finally:
+            chat_service._streaming_state.pop(session_id, None)
+    return result, execution_id, calls
+
+
+@pytest.mark.asyncio
+async def test_internal_auto_reaction_uses_background_completion_wrapper():
+    session_id = str(uuid.uuid4())
+    conn = _SessionModelConn(["codex:gpt-6.1-sol"])
+
+    result, execution_id, calls = await _run_internal_reaction(session_id, conn)
 
     assert result == execution_id
-    assert calls[0][0] == "wrapper"
+    assert calls[0] == ("wrapper", session_id)
     assert calls[1][0] == "send"
+    assert calls[1][1]["session_id"] == session_id
     assert calls[1][1]["intent_override"] == "auto_reaction"
-    chat_service._streaming_state.pop(session_id, None)
+    assert conn.queries[0][1] == (uuid.UUID(session_id),)
+
+
+@pytest.mark.asyncio
+async def test_internal_auto_reaction_forwards_session_selected_model_verbatim():
+    session_id = str(uuid.uuid4())
+
+    _, _, calls = await _run_internal_reaction(
+        session_id, _SessionModelConn(["codex:gpt-6.1-sol"]),
+    )
+
+    # provider 접두어는 send_message_stream 의 기존 정규화 규칙이 처리하므로 그대로 넘긴다.
+    assert calls[1][1]["model_override"] == "codex:gpt-6.1-sol"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [None, "", "   "])
+async def test_internal_auto_reaction_blank_selection_keeps_default_routing(stored):
+    _, _, calls = await _run_internal_reaction(
+        str(uuid.uuid4()), _SessionModelConn([stored]),
+    )
+
+    assert calls[1][1]["model_override"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", ["auto", "mixture"])
+async def test_internal_auto_reaction_keeps_explicit_auto_selection(stored):
+    _, _, calls = await _run_internal_reaction(
+        str(uuid.uuid4()), _SessionModelConn([stored]),
+    )
+
+    assert calls[1][1]["model_override"] == stored
+
+
+@pytest.mark.asyncio
+async def test_internal_auto_reaction_uses_latest_selection_after_model_change():
+    session_id = str(uuid.uuid4())
+    conn = _SessionModelConn(["claude-opus", "codex:gpt-6.1-sol"])
+
+    _, _, first = await _run_internal_reaction(session_id, conn)
+    _, _, second = await _run_internal_reaction(session_id, conn)
+
+    assert first[1][1]["model_override"] == "claude-opus"
+    assert second[1][1]["model_override"] == "codex:gpt-6.1-sol"
+
+
+@pytest.mark.asyncio
+async def test_internal_auto_reaction_retries_transient_lookup_failure():
+    conn = _SessionModelConn([OSError("pool closed"), "codex:gpt-6.1-sol"])
+
+    _, _, calls = await _run_internal_reaction(str(uuid.uuid4()), conn)
+
+    assert len(conn.queries) == 2
+    assert calls[1][1]["model_override"] == "codex:gpt-6.1-sol"
+
+
+@pytest.mark.asyncio
+async def test_internal_auto_reaction_lookup_failure_never_calls_default_model():
+    session_id = str(uuid.uuid4())
+    conn = _SessionModelConn([OSError("db down")])
+    send_calls = []
+
+    async def fake_send_message_stream(**kwargs):
+        send_calls.append(kwargs)
+        yield "data: {}\n\n"
+
+    with (
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+        patch("app.services.chat_service.send_message_stream", new=fake_send_message_stream),
+        patch("app.services.chat_service._heartbeat_asyncio.sleep", new=AsyncMock()),
+    ):
+        with pytest.raises(chat_service._AutoReactionModelLookupError):
+            await chat_service._consume_internal_reaction_stream(session_id, "보고")
+
+    assert send_calls == []
+    assert len(conn.queries) == len(chat_service._AUTO_REACTION_MODEL_LOOKUP_BACKOFF) + 1
+
+
+async def _run_trigger_with_lookup_failure(*, from_deferred_queue):
+    session_id = str(uuid.uuid4())
+    chat_service._ai_reaction_active.pop(session_id, None)
+    check_conn = AsyncMock()
+    check_conn.fetchval = AsyncMock(return_value=None)
+    enqueue = AsyncMock(return_value="deferred-id")
+    complete_task = AsyncMock()
+
+    with (
+        patch("app.services.chat_service._is_local_active_api_slot", return_value=True),
+        patch("app.services.chat_service._session_has_live_execution", new=AsyncMock(return_value=False)),
+        patch("app.services.chat_service.get_pool", return_value=_Pool(check_conn)),
+        patch(
+            "app.services.chat_service._consume_internal_reaction_stream",
+            new=AsyncMock(side_effect=chat_service._AutoReactionModelLookupError("lookup")),
+        ),
+        patch("app.services.chat_service._enqueue_deferred_reaction", new=enqueue),
+        patch("app.services.ohvis_task_manager.complete_task", new=complete_task),
+    ):
+        task = await chat_service.trigger_ai_reaction(
+            session_id,
+            "runner-aaaaaa01 완료 보고",
+            "ohvis-task-1",
+            _already_safe=True,
+            _from_deferred_queue=from_deferred_queue,
+        )
+        result = await task
+
+    assert session_id not in chat_service._ai_reaction_active
+    complete_task.assert_not_awaited()
+    return result, enqueue
+
+
+@pytest.mark.asyncio
+async def test_direct_trigger_requeues_durably_when_selected_model_lookup_fails():
+    result, enqueue = await _run_trigger_with_lookup_failure(from_deferred_queue=False)
+
+    assert result == chat_service._AUTO_REACTION_RETRY_MARKER
+    enqueue.assert_awaited_once()
+    assert enqueue.await_args.args[1] == "runner-aaaaaa01 완료 보고"
+    assert enqueue.await_args.args[2] == "ohvis-task-1"
+
+
+@pytest.mark.asyncio
+async def test_deferred_trigger_reports_retry_marker_instead_of_requeueing_itself():
+    result, enqueue = await _run_trigger_with_lookup_failure(from_deferred_queue=True)
+
+    assert result == chat_service._AUTO_REACTION_RETRY_MARKER
+    enqueue.assert_not_awaited()
 
 
 def test_ohvis_completion_alignment_rejects_unrelated_old_answer():
@@ -185,3 +341,157 @@ def test_ohvis_completion_alignment_rejects_unrelated_old_answer():
     assert wrong["aligned"] is False
     assert correct["aligned"] is True
     assert goal_id in correct["matched_identifiers"]
+
+
+class _DeferredRowStore:
+    """chat_deferred_reactions 한 행의 claim/반환/완료 전이를 SQL 의미대로 흉내 낸다."""
+
+    def __init__(self, ohvis_task_id):
+        self.id = str(uuid.uuid4())
+        self.session_id = str(uuid.uuid4())
+        self.ohvis_task_id = ohvis_task_id
+        self.status = "pending"
+        self.attempts = 0
+        self.claimed_by = None
+        self.error_message = None
+
+    def pool(self):
+        store = self
+
+        class _Tx:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+        class _Conn:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+            def transaction(self):
+                return _Tx()
+
+            async def execute(self, query, *args):
+                if "attempts >= 8" in query:
+                    if store.status == "pending" and store.attempts >= 8:
+                        store.status = "failed"
+                elif "attempts = GREATEST(attempts - 1" in query:
+                    guard = query.split("WHERE", 1)[1]
+                    if "attempts = $2" in guard:
+                        allowed = store.status == "claimed" and store.attempts == args[1]
+                    else:
+                        allowed = store.claimed_by == args[1]
+                    if allowed:
+                        store.status = "pending"
+                        store.attempts = max(store.attempts - 1, 0)
+                        store.claimed_by = None
+                        store.error_message = args[2] if len(args) > 2 else None
+                elif "SET status = 'completed'" in query:
+                    store.status = "completed"
+
+            async def fetch(self, query, *args):
+                if "candidates" not in query:
+                    return []
+                if store.status != "pending" or store.attempts >= 8:
+                    return []
+                store.status = "claimed"
+                store.attempts += 1
+                store.claimed_by = args[1]
+                return [{
+                    "id": store.id,
+                    "session_id": store.session_id,
+                    "system_message": "자동 보고 본문",
+                    "ohvis_task_id": store.ohvis_task_id,
+                    "attempts": store.attempts,
+                    "runner_job_id": None,
+                    "dedupe_key": None,
+                }]
+
+            async def fetchval(self, *_a):
+                return None
+
+        class _StorePool:
+            def acquire(self):
+                return _Conn()
+
+        return _StorePool()
+
+
+async def _drain_background_tasks():
+    import asyncio
+
+    for _ in range(3):
+        others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if not others:
+            return
+        await asyncio.gather(*others, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_deferred_row_survives_repeated_model_lookup_failures_and_completes_ohvis_later():
+    store = _DeferredRowStore(ohvis_task_id="ohvis-task-7")
+    lookup_failures = 12  # 재시도 예산(8)보다 많이 실패해도 failed 로 가면 안 된다
+    consume = AsyncMock(
+        side_effect=[chat_service._AutoReactionModelLookupError("db down")] * lookup_failures
+        + [None]
+    )
+    complete_task = AsyncMock()
+    seen_states = []
+
+    with (
+        patch("app.services.chat_service._is_local_active_api_slot", return_value=True),
+        patch("app.services.chat_service.get_pool", side_effect=lambda: store.pool()),
+        patch("app.services.chat_service._find_stale_approval_job_status", new=AsyncMock(return_value=None)),
+        patch("app.services.chat_service._session_has_live_execution", new=AsyncMock(return_value=False)),
+        patch("app.services.chat_service._consume_internal_reaction_stream", new=consume),
+        patch("app.services.ohvis_task_manager.complete_task", new=complete_task),
+    ):
+        for _ in range(lookup_failures):
+            assert await chat_service._process_deferred_reactions_once() == 1
+            await _drain_background_tasks()
+            seen_states.append((store.status, store.attempts))
+            # 모델 조회만 실패했으므로 OHVIS 태스크는 아직 끝내지 않는다.
+            complete_task.assert_not_awaited()
+
+        # 모델을 부르지 못한 시도는 재시도 예산을 쓰지 않는다.
+        assert seen_states == [("pending", 0)] * lookup_failures
+        assert store.error_message == chat_service._AUTO_REACTION_RETRY_MARKER
+
+        # 조회가 복구되면 같은 행이 다시 배달되고 그때 OHVIS 태스크를 마무리한다.
+        assert await chat_service._process_deferred_reactions_once() == 1
+        await _drain_background_tasks()
+
+    assert consume.await_count == lookup_failures + 1
+    assert store.status == "completed"
+    complete_task.assert_awaited_once()
+    assert complete_task.await_args.args[0] == "ohvis-task-7"
+
+
+@pytest.mark.asyncio
+async def test_deferred_retry_return_is_skipped_when_row_was_reclaimed_meanwhile():
+    store = _DeferredRowStore(ohvis_task_id=None)
+    consume = AsyncMock(side_effect=chat_service._AutoReactionModelLookupError("db down"))
+
+    async def reclaim_by_other_instance(*_args, **_kwargs):
+        store.claimed_by = "other-instance"
+        store.attempts += 1
+        raise chat_service._AutoReactionModelLookupError("db down")
+
+    consume.side_effect = reclaim_by_other_instance
+
+    with (
+        patch("app.services.chat_service._is_local_active_api_slot", return_value=True),
+        patch("app.services.chat_service.get_pool", side_effect=lambda: store.pool()),
+        patch("app.services.chat_service._find_stale_approval_job_status", new=AsyncMock(return_value=None)),
+        patch("app.services.chat_service._session_has_live_execution", new=AsyncMock(return_value=False)),
+        patch("app.services.chat_service._consume_internal_reaction_stream", new=consume),
+    ):
+        assert await chat_service._process_deferred_reactions_once() == 1
+        await _drain_background_tasks()
+
+    # 남의 claim 을 건드려 attempts 를 깎거나 pending 으로 되돌리지 않는다.
+    assert (store.status, store.attempts, store.claimed_by) == ("claimed", 2, "other-instance")

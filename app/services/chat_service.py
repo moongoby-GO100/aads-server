@@ -12211,11 +12211,51 @@ def _assess_auto_reaction_alignment(instruction: str, response: str) -> Dict[str
     }
 
 
+class _AutoReactionModelLookupError(RuntimeError):
+    """세션 선택 모델을 읽지 못함 — 다른 회사 기본 모델로 조용히 실행하지 않는다."""
+
+
+_AUTO_REACTION_MODEL_LOOKUP_BACKOFF = (0.2, 0.6)
+_AUTO_REACTION_RETRY_MARKER = "selected_model_lookup_failed"
+
+
+async def _resolve_auto_reaction_model_override(session_id: str) -> Optional[str]:
+    """채팅 세션의 현재 선택 모델(chat_sessions.current_model)을 읽는다.
+
+    공백/NULL 은 None(기존 기본 라우팅), auto/mixture 는 그대로 돌려줘 명시적 자동선택을
+    유지한다. 조회가 끝내 실패하면 예외를 올려 호출자가 지연 큐로 재시도하게 한다.
+    """
+    attempts = len(_AUTO_REACTION_MODEL_LOOKUP_BACKOFF) + 1
+    last_error: Optional[BaseException] = None
+    for attempt in range(attempts):
+        try:
+            async with get_pool().acquire() as conn:
+                selected = await conn.fetchval(
+                    "SELECT current_model FROM chat_sessions WHERE id = $1",
+                    uuid.UUID(str(session_id)),
+                )
+            selected = str(selected or "").strip()
+            return selected or None
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "auto_reaction_selected_model_lookup_failed session=%s attempt=%d/%d error=%s",
+                str(session_id)[:8], attempt + 1, attempts, str(exc)[:160],
+            )
+            if attempt < attempts - 1:
+                await _heartbeat_asyncio.sleep(_AUTO_REACTION_MODEL_LOOKUP_BACKOFF[attempt])
+    raise _AutoReactionModelLookupError(
+        f"selected model lookup failed session={str(session_id)[:8]}"
+    ) from last_error
+
+
 async def _consume_internal_reaction_stream(session_id: str, content: str) -> Optional[str]:
     """Consume an internal turn through the same lease/heartbeat wrapper as HTTP SSE."""
+    model_override = await _resolve_auto_reaction_model_override(session_id)
     stream = send_message_stream(
         session_id=session_id,
         content=content,
+        model_override=model_override,
         intent_override="auto_reaction",
     )
     async for _ in with_background_completion(stream, session_id):
@@ -12650,10 +12690,37 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
 
         started += 1
 
-        def _finish_deferred_reaction(_task, deferred_id=row["id"]):
+        def _finish_deferred_reaction(
+            _task, deferred_id=row["id"], claimed_attempts=row["attempts"]
+        ):
             async def _persist_finish() -> None:
                 try:
                     async with get_pool().acquire() as finish_conn:
+                        if (
+                            not _task.cancelled()
+                            and _task.exception() is None
+                            and _task.result() == _AUTO_REACTION_RETRY_MARKER
+                        ):
+                            # 모델 호출 전에 끝났으므로 claim 이 올린 attempts 를 돌려준다.
+                            # 재시도 예산은 실제 모델 호출 직전에만 소모한다. 소유자 대신
+                            # claim 시점의 attempts 로 막아, 그 사이 다른 슬롯이 다시 집은
+                            # 행(attempts 가 더 큼)은 건드리지 않는다.
+                            await finish_conn.execute(
+                                """
+                                UPDATE chat_deferred_reactions
+                                SET status = 'pending',
+                                    attempts = GREATEST(attempts - 1, 0),
+                                    lease_expires_at = NULL,
+                                    error_message = $3,
+                                    updated_at = NOW()
+                                WHERE id = $1 AND completed_at IS NULL
+                                  AND status = 'claimed' AND attempts = $2
+                                """,
+                                uuid.UUID(deferred_id),
+                                claimed_attempts,
+                                _AUTO_REACTION_RETRY_MARKER,
+                            )
+                            return
                         await finish_conn.execute(
                             """
                             UPDATE chat_deferred_reactions
@@ -12699,6 +12766,15 @@ async def _consume_next_reaction(sid: str, msg: str) -> None:
                 )
         except Exception as _mc_err:
             logger.warning(f"_consume_next_reaction: message_count update failed session={str(sid)[:8]}: {_mc_err}")
+    except _AutoReactionModelLookupError as e:
+        logger.warning(f"trigger_ai_reaction_queue model lookup failed session={str(sid)[:8]}: {e}")
+        try:
+            await _enqueue_deferred_reaction(sid, msg)
+        except Exception as enqueue_error:
+            logger.error(
+                "auto_reaction_model_lookup_requeue_failed session=%s error=%s",
+                str(sid)[:8], str(enqueue_error)[:160],
+            )
     except Exception as e:
         logger.warning(f"trigger_ai_reaction_queue error session={str(sid)[:8]}: {e}")
     finally:
@@ -12868,9 +12944,10 @@ async def trigger_ai_reaction(
     from app.services.tool_executor import current_chat_session_id
     current_chat_session_id.set(session_id)
 
-    async def _consume_stream():
+    async def _consume_stream() -> Optional[str]:
         _reaction_summary = ""
         _trigger_execution_id: Optional[str] = None
+        _retry_scheduled = False
         _reaction_validation: Dict[str, Any] = {
             "valid": False,
             "reason": "reaction_not_completed",
@@ -12931,12 +13008,26 @@ async def trigger_ai_reaction(
                         }
             except Exception as _mc_err:
                 logger.warning(f"trigger_ai_reaction: post_stream_update failed session={session_id[:8]}: {_mc_err}")
+        except _AutoReactionModelLookupError as e:
+            logger.warning(f"trigger_ai_reaction model lookup failed session={session_id}: {e}")
+            if _from_deferred_queue:
+                _retry_scheduled = True
+            else:
+                try:
+                    await _enqueue_deferred_reaction(session_id, safe_message, ohvis_task_id)
+                    _retry_scheduled = True
+                except Exception as enqueue_error:
+                    logger.error(
+                        "auto_reaction_model_lookup_requeue_failed session=%s error=%s",
+                        session_id[:8], str(enqueue_error)[:160],
+                    )
         except Exception as e:
             logger.warning(f"trigger_ai_reaction error session={session_id}: {e}")
         finally:
             _ai_reaction_active.pop(session_id, None)
             # OHVIS 3-Tier: trigger 완료 후 ohvis_tasks 갱신 + 아티팩트 카드 (AI 반응 내용 포함)
-            if ohvis_task_id:
+            # 모델 조회 실패로 재시도가 예약됐으면 재시도가 이 태스크를 마무리한다.
+            if ohvis_task_id and not _retry_scheduled:
                 try:
                     from app.services.ohvis_task_manager import complete_task as _otm_done
                     if _reaction_summary and _reaction_validation.get("valid"):
@@ -12967,6 +13058,7 @@ async def trigger_ai_reaction(
                     _ai_reaction_active[session_id] = _time.time()
                     loop = _asyncio.get_running_loop()
                     loop.create_task(_consume_next_reaction(session_id, next_msg))
+        return _AUTO_REACTION_RETRY_MARKER if _retry_scheduled else None
 
     try:
         loop = _asyncio.get_running_loop()
