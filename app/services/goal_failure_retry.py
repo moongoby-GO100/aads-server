@@ -27,7 +27,7 @@ _EXHAUSTION_NOTE = re.compile(r"재작업 후보 \d+회 소진|재작업 실제 
 _TERMINAL_JOB_STATUSES = {"done", "error", "failed", "rejected", "rejected_done", "cancelled"}
 _LINEAGE_MAX_HOPS = 5
 # 운영 지시서의 승계 헤더. 줄 시작에서만 인식해 본문 중간의 언급은 잡지 않는다.
-_HEADER_MARKER = re.compile(r"^[ \t]*(AUTO_REWORK_OF|SUPERSEDES)[ \t]*:[ \t]*(.*)$", re.MULTILINE)
+_HEADER_MARKER = re.compile(r"^[ \t]*(AUTO_REWORK_OF|REWORK_OF|SUPERSEDES)[ \t]*:[ \t]*(.*)$", re.MULTILINE)
 _HEADER_PAREN = re.compile(r"\([^()]*\)")
 _RUNNER_JOB_ID = re.compile(r"(?<![\w-])runner-[0-9a-f]{8}(?![\w-])")
 
@@ -147,7 +147,7 @@ async def count_lineage_executions(conn, tenant_id: str, milestone_id: str, line
 
 
 async def find_valid_successor(conn, tenant_id: str, milestone_id: str, failed_task_id: str) -> dict | None:
-    """같은 마일스톤에서 failed_task_id 를 RETRY_OF_LINK·AUTO_REWORK_OF·SUPERSEDES 로 가리키는 활성·완료 후속 job.
+    """같은 마일스톤에서 failed_task_id 를 RETRY_OF_LINK·AUTO_REWORK_OF·REWORK_OF·SUPERSEDES 로 가리키는 활성·완료 후속 job.
 
     승계 표식 판정은 완료 시 승계 처리(parse_supersede_markers)와 같은 파서를 쓴다.
 
@@ -584,7 +584,7 @@ def parse_supersede_markers(instruction: str) -> list[tuple[str, str]]:
     """지시서 헤더에서 (실패 job id, marker 종류) 목록을 뽑는다.
 
     RETRY_OF_LINK 가 가리키는 id 는 카드 검증 경로가 우선하므로 헤더에서 중복 제외한다.
-    SUPERSEDES 는 복수, AUTO_REWORK_OF 는 첫 토큰만. 괄호 주석 안의 id 는 버린다.
+    SUPERSEDES 는 복수, AUTO_REWORK_OF 와 REWORK_OF 는 첫 토큰만. 괄호 주석 안의 id 는 버린다.
     """
     text = instruction or ""
     found: list[tuple[str, str]] = []
@@ -598,7 +598,7 @@ def parse_supersede_markers(instruction: str) -> list[tuple[str, str]]:
                 break
             value = stripped
         ids = _RUNNER_JOB_ID.findall(value)
-        if key == "AUTO_REWORK_OF":
+        if key in {"AUTO_REWORK_OF", "REWORK_OF"}:
             ids = ids[:1]
         marker = key.lower()
         for job_id in ids:

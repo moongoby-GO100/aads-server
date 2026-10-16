@@ -1,9 +1,9 @@
-"""find_valid_successor: RETRY_OF_LINK·AUTO_REWORK_OF·SUPERSEDES 후속을 승계로 인정한다."""
+"""find_valid_successor: RETRY_OF_LINK·AUTO_REWORK_OF·REWORK_OF·SUPERSEDES 후속을 승계로 인정한다."""
 from __future__ import annotations
 
 import asyncio
 
-from app.services.goal_failure_retry import find_valid_successor
+from app.services.goal_failure_retry import find_valid_successor, parse_supersede_markers
 
 FAILED = "runner-4e3bab4f"
 TENANT = "00000000-0000-0000-0000-000000000001"
@@ -14,13 +14,13 @@ class _Conn:
     def __init__(self, rows):
         self.rows = rows
 
-    async def fetch(self, *_args):
-        return self.rows
+    async def fetch(self, _query, milestone_id, *_args):
+        return [row for row in self.rows if row.get("milestone_id", milestone_id) == milestone_id]
 
 
-def _row(job_id, instruction, status="running", phase="running"):
+def _row(job_id, instruction, status="running", phase="running", milestone_id=MILESTONE):
     return {"job_id": job_id, "status": status, "phase": phase, "project": "AADS",
-            "instruction": instruction}
+            "instruction": instruction, "milestone_id": milestone_id}
 
 
 def _find(*rows):
@@ -30,6 +30,28 @@ def _find(*rows):
 def test_auto_rework_of_running_successor_is_active():
     row = _row("runner-27e0fe43", f"AUTO_REWORK_OF: {FAILED}\nAUTO_REWORK_ROUND: 1/2\n본문")
     assert _find(row) == {"job_id": "runner-27e0fe43", "kind": "active"}
+
+
+def test_rework_of_uses_first_id_and_ignores_parenthetical_id():
+    instruction = f"REWORK_OF: {FAILED} (주석 runner-bbbbbbbb)\n본문"
+    row = _row("runner-27e0fe43", instruction)
+    assert _find(row) == {"job_id": "runner-27e0fe43", "kind": "active"}
+    assert parse_supersede_markers(instruction) == [(FAILED, "rework_of")]
+
+
+def test_auto_rework_of_is_not_double_parsed_as_rework_of():
+    instruction = f"AUTO_REWORK_OF: {FAILED}\n본문"
+    assert parse_supersede_markers(instruction) == [(FAILED, "auto_rework_of")]
+
+
+def test_rework_of_mention_in_body_is_ignored():
+    row = _row("runner-27e0fe43", f"작업 설명에서 REWORK_OF: {FAILED} 언급")
+    assert _find(row) is None
+
+
+def test_rework_of_from_different_milestone_is_not_successor():
+    row = _row("runner-27e0fe43", f"REWORK_OF: {FAILED}", milestone_id="another-milestone")
+    assert _find(row) is None
 
 
 def test_supersedes_multiple_ids_active():
