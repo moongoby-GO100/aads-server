@@ -270,6 +270,7 @@ _DATABASE_TOOLS = frozenset({
     "query_db",
     "query_project_database",
     "list_project_databases",
+    "goal_register",
     "handover_write",
     "handover_search",
     "handover_export",
@@ -1001,6 +1002,7 @@ class ToolExecutor:
             "health_check":           self._health_check,
             "todo_write":             self._todo_write,
             "propose_next_steps":     self._propose_next_steps,
+            "goal_register":          self._goal_register,
             "handover_write":         self._handover_write,
             "handover_search":        self._handover_search,
             "handover_export":        self._handover_export,
@@ -1398,6 +1400,24 @@ class ToolExecutor:
             "item": updated,
             "promoted_next": promoted,
         }
+
+    async def _goal_register(self, inp: Dict[str, Any]) -> Any:
+        from app.core.db_pool import get_pool
+        from app.services.goal_registration import register_goal, validation_errors
+        from fastapi import HTTPException
+
+        errors = validation_errors(inp)
+        if errors:
+            return {"error": "invalid_goal_hierarchy", "errors": errors}
+        session_id = _resolve_bound_chat_session_id()
+        tenant_id = await resolve_bound_tenant_id(explicit_session_id=session_id)
+        if not tenant_id or not session_id:
+            return _missing_tenant_id_result("goal_register")
+        try:
+            async with get_pool().acquire() as conn:
+                return await register_goal(conn, inp, tenant_id=tenant_id, session_id=session_id)
+        except HTTPException as exc:
+            return {"error": exc.detail}
 
     async def _handover_write(self, inp: Dict[str, Any]) -> Any:
         """Create or update a tenant/project-scoped canonical handover entry."""
@@ -4399,7 +4419,7 @@ class ToolExecutor:
           위반이면 전체 롤백 — 부분 성공 없음. dry_run 은 같은 판정 후 롤백한다.
         """
         from app.services.db_write_sql_guard import (
-            IndirectWriteBlocked, SqlGuardError, validate_single_write,
+            IndirectWriteBlocked, SqlGuardError, validate_single_write, enforce_chat_goal_registration,
         )
         from app.services.vault_cleanup_guard import (
             VaultLoginProtected, assert_target_not_view, references_login_tables,
@@ -4434,6 +4454,8 @@ class ToolExecutor:
             return _tag({"error": "INSERT/UPDATE/DELETE만 허용"})
         try:
             statement = validate_single_write(sql)
+            enforce_chat_goal_registration(statement, chat_session=bool(_resolve_bound_chat_session_id()),
+                                           project=resolved_project)
         except SqlGuardError as exc:
             return _tag({"error": f"SQL 차단: {exc}", "blocked": True, "dry_run": dry_run})
         if not isinstance(params_raw, list):

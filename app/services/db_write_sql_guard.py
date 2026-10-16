@@ -369,3 +369,10 @@ def validate_single_write(sql: str) -> SqlStatementInfo:
     return SqlStatementInfo(
         keyword=keyword, words=words, literals=literals, target=extract_write_target(tokens),
     )
+
+
+def enforce_chat_goal_registration(statement: SqlStatementInfo, *, chat_session: bool, project: str) -> None:
+    """Keep existing-goal repair writes available; register new chat goals atomically."""
+    if (chat_session and project == "AADS" and statement.keyword == "insert"
+            and statement.target is not None and statement.target.name == "goals"):
+        raise SqlGuardError("채팅 목표 등록은 goal_register 도구를 쓰세요 — 마일스톤·업무 계층 필수")

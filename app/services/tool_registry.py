@@ -32,6 +32,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "query_project_database": False,     # 프로젝트 DB 조회 — 상시 로드
     "todo_write": False,                 # 채팅 하단 TODO 명시 관리 — 상시 로드
     "propose_next_steps": False,         # 다음 단계를 승인 카드로 — 상시 로드
+    "goal_register": False,
     "handover_write": False,             # 전 프로젝트 공통 핸드오버 정본 기록
     "handover_search": False,            # 현재 상태·과거 기록 검색
     "handover_export": True,             # Markdown 호환 내보내기
@@ -344,7 +345,65 @@ def browser_session_props(*, short_session_desc: bool = False) -> Dict[str, Any]
     }
 
 
+def _goal_register_work_schema(child_key: str | None = None, child: dict | None = None) -> dict:
+    properties = {
+        "title": {"type": "string", "description": "한글 포함 제목"},
+        "acceptance_criteria": {
+            "type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1},
+        },
+    }
+    if child_key:
+        properties[child_key] = {"type": "array", "minItems": 1, "items": child}
+    return {"type": "object", "properties": properties, "required": list(properties)}
+
+
 _TOOLS: Dict[str, Dict[str, Any]] = {
+    "goal_register": {
+        "name": "goal_register",
+        "description": (
+            "채팅 목표 등록 전용. 한글 제목, 마일스톤 3개 이상, 각 epic→story→task와 "
+            "모든 완료/인수 기준을 검증해 한 트랜잭션으로 등록한다. active 생성, P0 상한 적용. "
+            "milestone_index는 0부터 시작한다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "object",
+                    "properties": {key: {"type": "string"} for key in (
+                        "project", "title", "description", "success_criteria", "priority",
+                        "parent_goal_id", "owner_role_key",
+                    )},
+                    "required": ["project", "title", "description", "success_criteria", "priority"],
+                },
+                "milestones": {
+                    "type": "array", "minItems": 3,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "description": {"type": "string"},
+                            "completion_criteria": {"type": "string"},
+                            "sequence_order": {"type": "integer"},
+                            "auto_advance": {"type": "boolean"},
+                            "epics": {"type": "array", "minItems": 1, "items":
+                                _goal_register_work_schema("stories", _goal_register_work_schema(
+                                    "tasks", _goal_register_work_schema()))},
+                        },
+                        "required": ["title", "description", "completion_criteria", "sequence_order", "auto_advance", "epics"],
+                    },
+                },
+                "linked_jobs": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {"milestone_index": {"type": "integer", "minimum": 0},
+                                   "job_id": {"type": "string"}},
+                    "required": ["milestone_index", "job_id"],
+                }},
+            },
+            "required": ["goal", "milestones"],
+        },
+    },
+
     # ── 협업 그룹 ────────────────────────────────────────────────────────────
     "my_milestones": {
         "name": "my_milestones",
@@ -3699,7 +3758,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "mockup_review_submit", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
+    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "mockup_review_submit", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
@@ -3723,6 +3782,7 @@ _GROUPS: Dict[str, List[str]] = {
 
 # Phase A: 인텐트별 도구 필터링 — 코어 도구 + 인텐트별 그룹 조합
 _CORE_TOOLS = [
+    "goal_register",
     "todo_write",
     "handover_write", "handover_search",
     "read_remote_file", "query_database", "query_project_database",
