@@ -86,6 +86,8 @@ def source_of_bind_source(bind_source: Optional[str]) -> str:
 # 세션이 주도(goals.owner_session_id)하거나 담당(마일스톤 owner)하는, 열린 목표의 in_progress 마일스톤.
 # 주도는 목표 전체를, 담당은 자기 몫만 진다 — GET /goals/for-session 과 같은 해석이다.
 # 일시정지 목표·종료 목표·차단 목표에는 새 일을 자동으로 얹지 않는다(draft/active 만).
+# Deliberately keep implicit session candidates scoped to the job project;
+# cross-project links are allowed only through explicit runner goal metadata.
 SESSION_CANDIDATES_SQL = """
 SELECT DISTINCT ON (ms.id) g.id::text AS goal_id, ms.id::text AS milestone_id
   FROM goal_task_links l

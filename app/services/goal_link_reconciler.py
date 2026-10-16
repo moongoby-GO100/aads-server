@@ -46,6 +46,10 @@ MAX_LIMIT = 2000
 # 재조정이 손대지 않는 링크 상태 — 이미 회수/격리된 행은 다시 건드리지 않는다.
 _UNTOUCHED_STATES = (LINK_STATE_DETACHED, LINK_STATE_ORPHAN)
 
+# Keep explicit AADS-hosted links to ACCT goals intact during reconciliation.
+# This is intentionally directional and matches pipeline_runner_service policy.
+GOAL_LINK_HOST_PROJECTS = {"AADS": frozenset({"ACCT"})}
+
 
 async def _has_schema(conn) -> bool:
     from app.services.goal_manager import link_optional_columns
@@ -119,7 +123,8 @@ def plan_actions(candidates: list[dict[str, Any]], *, detach_legacy: bool = Fals
         # 2) 목표 프로젝트 ≠ 작업 프로젝트 → 결정적 오연결
         goal_project = row.get("goal_project")
         job_project = row.get("job_project")
-        if goal_project and job_project and goal_project != job_project:
+        allowed_host_projects = GOAL_LINK_HOST_PROJECTS.get(job_project, ())
+        if goal_project and job_project and goal_project != job_project and goal_project not in allowed_host_projects:
             actions.append({
                 "kind": "misbound",
                 "link_id": row["link_id"],

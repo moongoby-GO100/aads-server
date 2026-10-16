@@ -145,10 +145,11 @@ def test_milestone_from_other_goal_is_dropped_not_guessed():
 class _FakeConn:
     """goals/milestones 조회만 답하는 최소 가짜 커넥션."""
 
-    def __init__(self, goal_row=None, milestone_owned=True, milestone_status="in_progress"):
+    def __init__(self, goal_row=None, milestone_owned=True, milestone_status="in_progress", job_tenant="00000000-0000-0000-0000-000000000001"):
         self._goal_row = goal_row
         self._milestone_owned = milestone_owned
         self._milestone_status = milestone_status
+        self._job_tenant = job_tenant
         self.executed = []
 
     def transaction(self):
@@ -168,9 +169,10 @@ class _FakeConn:
 
     async def fetchval(self, query, *args):
         if "FROM milestones" in query:
+            assert args[3] == self._goal_row["project"]
             return self._milestone_status if self._milestone_owned else None
         if "FROM pipeline_jobs" in query:
-            return "00000000-0000-0000-0000-000000000001"
+            return self._job_tenant
         return None
 
     async def fetch(self, query, *args):
@@ -204,10 +206,12 @@ def _run_auto_link(monkeypatch, goal_row, **kwargs):
     linked: dict = {}
     if goal_row is not None and "tenant_id" not in goal_row:
         goal_row = {**goal_row, "tenant_id": "00000000-0000-0000-0000-000000000001"}
+    job_tenant = kwargs.pop("job_tenant", "00000000-0000-0000-0000-000000000001")
     conn = _FakeConn(
         goal_row,
         milestone_owned=kwargs.pop("milestone_owned", True),
         milestone_status=kwargs.pop("milestone_status", "in_progress"),
+        job_tenant=job_tenant,
     )
 
     class _FakeMachine:
@@ -236,6 +240,48 @@ def test_explicit_valid_binding_creates_link(monkeypatch):
     assert linked["goal_id"] == GOAL_A
     assert linked["task_id"] == "runner-test"
     assert linked["bind_source"] == BIND_SOURCE_EXPLICIT_API
+
+
+def test_aads_job_explicitly_links_acct_goal_and_milestone(monkeypatch, caplog):
+    import logging
+
+    goal_row = {"id": GOAL_A, "tenant_id": "00000000-0000-0000-0000-000000000001", "project": "ACCT", "status": "active"}
+    with caplog.at_level(logging.INFO):
+        result, linked = _run_auto_link(monkeypatch, goal_row, goal_id=GOAL_A, milestone_id=MILESTONE_A)
+    assert result == (GOAL_A, MILESTONE_A)
+    assert linked["milestone_id"] == MILESTONE_A
+    assert "goal_link_host_project job=runner-test job_project=AADS goal_project=ACCT" in caplog.text
+
+
+def test_aads_job_rejects_go100_goal(monkeypatch):
+    result, linked = _run_auto_link(monkeypatch, {"id": GOAL_A, "project": "GO100", "status": "active"}, goal_id=GOAL_A)
+    assert result is None
+    assert linked == {}
+
+
+def test_acct_job_rejects_aads_goal(monkeypatch):
+    from app.services import pipeline_runner_service as prs
+    import app.services.goal_manager as gm
+
+    conn = _FakeConn({"id": GOAL_A, "tenant_id": "00000000-0000-0000-0000-000000000001", "project": "AADS", "status": "active"})
+
+    class _Machine:
+        async def _pool(self):
+            return _FakePool(conn)
+
+    monkeypatch.setattr(gm, "goal_state_machine", _Machine())
+    assert asyncio.run(prs._link_job_to_goal_explicit("runner-test", "ACCT", goal_id=GOAL_A)) is None
+    assert not any("UPDATE pipeline_jobs" in query for query, _ in conn.executed)
+
+
+def test_cross_tenant_goal_is_rejected(monkeypatch):
+    result, linked = _run_auto_link(
+        monkeypatch,
+        {"id": GOAL_A, "tenant_id": "00000000-0000-0000-0000-000000000002", "project": "ACCT", "status": "active"},
+        goal_id=GOAL_A,
+    )
+    assert result is None
+    assert linked == {}
 
 
 _BLOCKED_GOAL = {
@@ -523,6 +569,17 @@ def test_cross_project_link_is_detached_with_evidence():
     assert actions[0]["kind"] == "misbound"
     assert actions[0]["new_link_state"] == LINK_STATE_DETACHED
     assert "cross_project" in actions[0]["reason"]
+
+
+def test_aads_hosted_acct_goal_link_survives_reconciliation():
+    row = _link(job_project="AADS", goal_project="ACCT")
+    assert all(action["kind"] != "misbound" for action in plan_actions([row]))
+
+
+def test_unlisted_cross_project_link_is_still_detached():
+    row = _link(job_project="ACCT", goal_project="AADS")
+    actions = plan_actions([row])
+    assert actions[0]["kind"] == "misbound"
 
 
 def test_legacy_auto_links_are_reported_but_not_detached_by_default():

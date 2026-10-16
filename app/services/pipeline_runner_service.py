@@ -36,6 +36,10 @@ from scripts.claude_model_contract import resolve_model
 
 logger = logging.getLogger(__name__)
 
+# AADS-hosted runner jobs may explicitly bind to ACCT goals. Keep this
+# relationship directional; the reverse mapping is intentionally absent.
+GOAL_LINK_HOST_PROJECTS = {"AADS": frozenset({"ACCT"})}
+
 # ─── 설정 ─────────────────────────────────────────────────────────────────────
 _CLAUDE_TIMEOUT = 3600      # Claude Code 직접 대기 타임아웃 (60분, 폴링 모드 폴백용)
 _CLAUDE_POLL_INTERVAL = 30  # 분리 실행 폴링 주기 (초)
@@ -239,7 +243,8 @@ async def _link_job_to_goal_explicit(
     `GoalLink(goal_id, milestone_id)` 를 돌려준다 — milestone_id 는 요청 필드가 아니라
     지시서 메타까지 반영해 검증을 통과한 값이며, 호출부는 이 값을 그대로 저장해야 한다
     (요청 필드를 다시 넘기면 방금 쓴 milestone_id 를 NULL 로 덮는다). 지정된 목표는 작업과 같은
-    프로젝트여야 하고 draft/active 상태여야 한다 — 아니면 거부하고 연결하지 않는다.
+    프로젝트여야 하며, AADS 작업은 명시 연결에 한해 ACCT 목표도 허용한다.
+    그 외 조합은 거부한다. 목표는 draft/active 상태여야 한다.
     blocked 목표는 같은 goal·tenant·project 의 열린(pending/in_progress/blocked) 마일스톤이
     명시된 경우에만 연결한다(REMEDIATION_PURPOSE 유무 무관). 연결만 하고 상태는 바꾸지 않는다.
 
@@ -271,12 +276,14 @@ async def _link_job_to_goal_explicit(
             if not job_tenant or goal["tenant_id"] != job_tenant:
                 logger.warning("goal_link_rejected_cross_tenant job=%s goal=%s", job_id, binding.goal_id)
                 return None
-            if goal["project"] != project:
+            goal_project = goal["project"]
+            if goal_project != project and goal_project not in GOAL_LINK_HOST_PROJECTS.get(project, ()):
                 logger.warning(
                     "goal_link_rejected_cross_project job=%s goal=%s goal_project=%s job_project=%s",
                     job_id, binding.goal_id, goal["project"], project,
                 )
                 return None
+            host_project_link = goal_project != project
             goal_blocked = goal["status"] == "blocked"
             blocked_remediation = (
                 goal_blocked and bool(binding.milestone_id)
@@ -294,7 +301,7 @@ async def _link_job_to_goal_explicit(
                     """SELECT status FROM milestones
                        WHERE id=$1::uuid AND goal_id=$2::uuid AND tenant_id=$3::uuid
                          AND project=$4""",
-                    resolved_milestone, binding.goal_id, job_tenant, project,
+                    resolved_milestone, binding.goal_id, job_tenant, goal_project,
                 )
                 if not milestone_status:
                     logger.warning(
@@ -349,6 +356,11 @@ async def _link_job_to_goal_explicit(
             logger.info(
                 "goal_linked_explicit: job=%s goal=%s milestone=%s source=%s project=%s",
                 job_id, binding.goal_id, resolved_milestone, binding.source, project,
+            )
+        if host_project_link:
+            logger.info(
+                "goal_link_host_project job=%s job_project=%s goal_project=%s",
+                job_id, project, goal_project,
             )
         return GoalLink(binding.goal_id, resolved_milestone)
     except Exception as exc:
