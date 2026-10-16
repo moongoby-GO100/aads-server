@@ -35,6 +35,16 @@ def _round(value: float) -> float:
     return math.floor(value * 100 + 0.5) / 100
 
 
+def display_name(value: Any) -> str:
+    """도장에 찍는 상호 표기. '_'(전각 '＿' 포함)는 공백으로, 연속 공백은 하나로, 앞뒤 공백은 제거한다.
+
+    저장값은 바꾸지 않는다. layout() 은 받은 이름을 그대로 배치하므로(이미 고정된 서명본 도장 보호) 적용은 도장 입력을 만드는 쪽이 한다.
+    브라우저판은 company-seal.js 의 displayName() 이다.
+    """
+    text = re.sub(r"[_＿]", " ", str(value if value is not None else ""))
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _clean(value: Any) -> list[str]:
     return list(re.sub(r"\s+", "", str(value if value is not None else "")))
 

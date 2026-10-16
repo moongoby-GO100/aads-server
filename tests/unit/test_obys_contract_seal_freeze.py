@@ -148,3 +148,30 @@ def test_signing_without_a_trade_name_freezes_the_contract_employer_name(record)
     record.pop("tradeName")
     signed = _signed()
     assert signed["signed_pdf_seal"]["company_name"] == "열정국밥 중화점"
+
+
+def test_signing_freezes_the_underscore_free_name_but_keeps_the_stored_values(record):
+    record["tradeName"] = "열정국밥_미아점"
+    record["name"] = "열정국밥_미아점"
+    record["entityType"] = "individual"
+    record["representative"] = "최미미"
+    signed = _signed(employer_name="열정국밥_미아점", employer_representative="최미미")
+    assert signed["signed_pdf_seal"]["company_name"] == "열정국밥 미아점"  # 도장 입력만 정규화
+    assert signed["employer_name"] == "열정국밥_미아점"  # 저장값·계약서 본문 상호는 그대로
+    assert signed["signed_snapshot"]["employer_name"] == "열정국밥_미아점"
+
+
+def test_signed_contract_without_a_frozen_seal_keeps_the_underscore(record, monkeypatch, tmp_path):
+    record.pop("tradeName")
+    seen = _render_spy(monkeypatch, tmp_path)
+    legacy = {k: v for k, v in _signed(employer_name="열정국밥_미아점").items() if k != "signed_pdf_seal"}
+    assert svc._store_signed_contract_pdf(legacy, None)["status"] == "stored"
+    assert seen[0]["company_name"] == "열정국밥_미아점"  # 옛 서명본 PDF 재생성은 도장 기하를 바꾸지 않는다
+
+
+def test_frozen_underscore_seal_is_rendered_as_stored(record, monkeypatch, tmp_path):
+    seen = _render_spy(monkeypatch, tmp_path)
+    signed = _signed()
+    signed["signed_pdf_seal"] = {"kind": "individual", "company_name": "열정국밥_미아점", "representative": "최미미"}
+    assert svc._store_signed_contract_pdf(signed, None)["status"] == "stored"
+    assert seen[0]["company_name"] == "열정국밥_미아점"

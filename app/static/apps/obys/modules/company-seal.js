@@ -38,6 +38,12 @@
   function clean(value) {
     return Array.from(String(value ?? "").replace(/\s+/g, ""));
   }
+  // 도장에 찍는 상호 표기: '_'(전각 '＿' 포함)는 공백으로, 연속 공백은 하나로, 앞뒤 공백은 제거한다. 저장값은 바꾸지 않는다.
+  // 서버판은 app/services/yeoljeong_company_seal.py 의 display_name() 이다. 한쪽만 고치지 마라.
+  // layout() 은 받은 이름을 그대로 배치한다 — 이미 고정된 서명본 도장의 기하가 바뀌면 안 되기 때문이다. 적용은 optionsFor() 가 한다.
+  function displayName(value) {
+    return String(value ?? "").replace(/[_＿]/g, " ").replace(/\s+/g, " ").trim();
+  }
   function round(value) {
     return Math.round(value * 100) / 100;
   }
@@ -146,13 +152,15 @@
       return { kind, companyName, representative, label: `${companyName} 도장` };
     }
     const tradeName = signed ? "" : String(biz.tradeName ?? biz.trade_name ?? "").trim();
-    const companyName = tradeName || pick("employerName", "employer_name") || String(biz.name ?? "").trim();
+    const rawName = tradeName || pick("employerName", "employer_name") || String(biz.name ?? "").trim();
+    // 서명 전에만 밑줄을 공백으로 바꾼다. 고정값이 없는 옛 서명본은 서버가 PDF 를 다시 만들 때와 같이 원문 그대로 둔다.
+    const companyName = signed ? rawName : displayName(rawName);
     const representative = pick("employerRepresentative", "employer_representative") || String(biz.representative ?? "").trim();
     const entityType = pick("employerEntityType", "employer_entity_type") || String(biz.entityType ?? biz.entity_type ?? "").trim();
     return { kind: kindFor(entityType, companyName), companyName, representative, label: `${companyName || "사용자"} 도장` };
   }
 
-  const api = { layout, svg, dataUri, optionsFor, kindFor, ensureFonts, INK };
+  const api = { layout, svg, dataUri, optionsFor, kindFor, displayName, ensureFonts, INK };
   root.ObysCompanySeal = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

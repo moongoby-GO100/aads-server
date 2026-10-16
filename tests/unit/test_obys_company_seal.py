@@ -407,10 +407,10 @@ TRADE_NAME_CASES = [
     {"contract": {"employerName": "열정국밥 중화점", "employerRepresentative": "오윤희"},
      "business": {"name": "열정국밥 중화점", "trade_name": "주식회사 윤희에프엔비", "representative": "오윤희"},
      "company": "주식회사 윤희에프엔비", "kind": "corporation", "inner": "代表理事"},
-    # '_' 는 원문 그대로다
+    # 기대값 변경(CEO 지시 2026-10-16 "밑줄표기는 빼줘"): 이전에는 '_' 를 원문 그대로 도장 입력에 실었다. 서명 전 도장 입력은 '_' → 공백이다.
     {"contract": {"employerName": "열정국밥_미아점", "employerRepresentative": "최미미"},
      "business": {"name": "열정국밥_미아점", "trade_name": "열정국밥_미아점", "entity_type": "individual", "representative": "최미미"},
-     "company": "열정국밥_미아점", "kind": "individual", "inner": "최미미인"},
+     "company": "열정국밥 미아점", "kind": "individual", "inner": "최미미인"},
 ]
 
 
@@ -427,14 +427,82 @@ def test_seal_company_name_priority_is_trade_name_then_contract_then_business_na
     assert "".join(c["ch"] for c in server["ring"]) == ring and sorted("".join(c["ch"] for c in server["inner"])) == sorted(case["inner"])
 
 
-def test_underscore_in_registered_trade_name_is_kept_as_a_ring_character():
+# 기대값 변경(CEO 지시 2026-10-16 "밑줄표기는 빼줘"): 이전에는 등록증 상호의 '_' 를 띠 글자로 그대로 찍었다.
+def test_underscore_in_registered_trade_name_is_not_stamped_on_the_ring_before_signing():
     opts = _node(
         "console.log(JSON.stringify(ObysCompanySeal.optionsFor(input.contract, input.business)));",
         {"contract": {}, "business": {"name": "x", "trade_name": "열정국밥_미아점", "representative": "최미미"}},
     )
-    assert opts["companyName"] == "열정국밥_미아점"
-    texts = _svg_texts(_node("console.log(JSON.stringify({svg: ObysCompanySeal.svg(input)}));", opts)["svg"])
-    assert "".join(texts[:8]) == "열정국밥_미아점" and "_" in texts[:8]
+    assert opts["companyName"] == "열정국밥 미아점"
+    markup = _node("console.log(JSON.stringify({svg: ObysCompanySeal.svg(input)}));", opts)["svg"]
+    texts = _svg_texts(markup)
+    assert "".join(texts[:7]) == "열정국밥미아점" and "_" not in "".join(texts)
+    assert "열정국밥 미아점 도장" in markup
+
+
+DISPLAY_NAME_CASES = [
+    ("열정국밥_미아점", "열정국밥 미아점"),
+    ("A__B", "A B"),
+    ("열정국밥＿미아점", "열정국밥 미아점"),
+    ("_열정국밥_", "열정국밥"),
+    ("열정국밥 _ 미아점", "열정국밥 미아점"),
+    ("열정국밥 중화점", "열정국밥 중화점"),
+    ("주식회사 윤희에프엔비", "주식회사 윤희에프엔비"),
+    ("  ", ""),
+]
+
+
+@pytest.mark.parametrize(("raw", "shown"), DISPLAY_NAME_CASES)
+def test_display_name_replaces_underscores_with_single_spaces_in_js_and_python(raw, shown):
+    assert _node("console.log(JSON.stringify(ObysCompanySeal.displayName(input)));", raw) == shown
+    assert py_seal.display_name(raw) == shown
+
+
+def test_display_name_handles_missing_values():
+    assert _node("console.log(JSON.stringify([ObysCompanySeal.displayName(null), ObysCompanySeal.displayName(undefined)]));") == ["", ""]
+    assert py_seal.display_name(None) == ""
+
+
+def test_unsigned_ring_of_underscore_name_matches_between_browser_and_server():
+    for raw, ring in (("열정국밥_미아점", "열정국밥미아점"), ("A__B", "AB"), ("열정국밥", "열정국밥")):
+        opts = _node("console.log(JSON.stringify(ObysCompanySeal.optionsFor(input.contract, input.business)));",
+                     {"contract": {"employerName": raw, "employerRepresentative": "최미미"}, "business": {}})
+        js = _node("console.log(JSON.stringify(ObysCompanySeal.layout(input)));", opts)
+        py = py_seal.layout("individual", py_seal.display_name(raw), "최미미")
+        assert "".join(c["ch"] for c in js["ring"]) == ring == "".join(c["ch"] for c in py["ring"])
+        for a, b in zip(js["ring"], py["ring"]):
+            assert a["ch"] == b["ch"] and a["angle"] == pytest.approx(b["angle"], abs=0.011) and a["fs"] == pytest.approx(b["fs"], abs=0.011)
+
+
+def test_layout_itself_never_rewrites_the_name_so_a_frozen_seal_keeps_its_geometry():
+    # 고정값 '열정국밥_미아점'(8글자 링, 첫 글자 -2도)은 정규화로 7글자(첫 글자 3도)가 되면 안 된다.
+    js = _node("console.log(JSON.stringify(ObysCompanySeal.layout(input)));", {"kind": "individual", "companyName": "열정국밥_미아점", "representative": "최미미"})
+    py = py_seal.layout("individual", "열정국밥_미아점", "최미미")
+    for plan in (js, py):
+        assert "".join(c["ch"] for c in plan["ring"]) == "열정국밥_미아점"
+        assert plan["ring"][0]["angle"] == pytest.approx(-2.0, abs=0.011)
+
+
+def test_signed_contract_keeps_underscore_in_frozen_and_legacy_seals():
+    frozen = {"kind": "individual", "company_name": "열정국밥_미아점", "representative": "최미미"}
+    base = {"status": "signed", "employerName": "열정국밥_미아점", "employerRepresentative": "최미미"}
+    business = {"name": "열정국밥_미아점", "trade_name": "열정국밥_미아점", "representative": "최미미"}
+    script = "console.log(JSON.stringify(ObysCompanySeal.optionsFor(input.contract, input.business)));"
+    assert _node(script, {"contract": {**base, "signed_pdf_seal": frozen}, "business": business})["companyName"] == "열정국밥_미아점"
+    assert _node(script, {"contract": base, "business": business})["companyName"] == "열정국밥_미아점"  # 고정값 없는 옛 서명본
+    out = _node(PREVIEW_SCRIPT, {"businesses": {"biz-m": {"id": "biz-m", **business}},
+                                 "contracts": [{"contractType": "part_time", "employeeName": "시험직원", "businessId": "biz-m", **base, "signed_pdf_seal": frozen}]})
+    assert "".join(_svg_texts(_stamp_markup(out[0]))[:8]) == "열정국밥_미아점"
+
+
+def test_contract_body_employer_name_is_not_rewritten_by_the_seal_rule():
+    # 본문 상호는 서명 전후·서버 PDF 스냅샷이 같은 표기여야 한다 — 밑줄 정규화는 도장 입력에만 적용한다.
+    base = {"contractType": "part_time", "employeeName": "시험직원", "businessId": "biz-m",
+            "employerName": "열정국밥_미아점", "employerRepresentative": "최미미"}
+    business = {"id": "biz-m", "name": "열정국밥_미아점", "trade_name": "열정국밥_미아점", "representative": "최미미", "entity_type": "individual"}
+    out = _node(PREVIEW_SCRIPT, {"businesses": {"biz-m": business}, "contracts": [{**base, "status": "requested"}, {**base, "status": "signed"}]})
+    requested, signed = out
+    assert "열정국밥_미아점" in requested and "열정국밥_미아점" in signed
 
 
 def test_contract_preview_stamp_uses_the_registered_trade_name_over_the_stored_employer_name():

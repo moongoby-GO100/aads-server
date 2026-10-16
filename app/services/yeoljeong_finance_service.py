@@ -7301,7 +7301,8 @@ def _contract_seal_inputs(contract: dict[str, Any], *, registered_trade_name: bo
         entity_type = pick("employer_entity_type", "employerEntityType") or _business_entity_type(business)
         return {
             "kind": yeoljeong_company_seal.kind_for(entity_type, company_name),
-            "company_name": company_name,
+            # 밑줄→공백은 서명 시점에 고정하는 값에만 적용한다. 고정값이 없는 옛 서명본(registered_trade_name=False)은 원문 그대로다.
+            "company_name": yeoljeong_company_seal.display_name(company_name) if registered_trade_name else company_name,
             "representative": representative,
         }
     except Exception as exc:  # noqa: BLE001 — 도장 정보를 못 찾아도 서명본 PDF 는 만든다
