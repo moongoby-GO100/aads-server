@@ -201,10 +201,10 @@ def test_elevated_role_bypasses_grant_like_the_route(services):
 
 def test_invalid_session_id_is_denied(services):
     out = asyncio.run(mrt.run_action(tenant_id=TENANT, session_id="not-a-uuid",
-                                     inp={"action": "create", "project": "AADS", "title": "t", "change_type": "new"},
+                                     inp={"action": "status", "project": "AADS", "review_id": REVIEW},
                                      pool=FakePool(FakeConn())))
     assert out["error"] == "project_access_denied"
-    assert not services["create_review"].await_count
+    assert not services["get_review"].await_count
 
 
 # ── 4. 면제 doc_ref 검증 ───────────────────────────────────────────────

@@ -203,7 +203,7 @@ async def run_action(*, tenant_id: str, session_id: str, inp: dict[str, Any], po
         if action != "create" and review_id is None:
             raise _Invalid("review_id 가 필요합니다")
         if action == "create":
-            create_body = _create_body(inp)
+            create_body = _create_body(inp, session_id)
         revision_id = _uuid(inp["revision_id"], "revision_id") if inp.get("revision_id") else None
         parent_id = _uuid(inp["parent_revision_id"], "parent_revision_id") if inp.get("parent_revision_id") else None
         explicit_gen = inp.get("expected_generation")
@@ -272,17 +272,19 @@ async def run_action(*, tenant_id: str, session_id: str, inp: dict[str, Any], po
         return _http_error(exc)
 
 
-def _create_body(inp: dict[str, Any]) -> ReviewCreate:
+def _create_body(inp: dict[str, Any], session_id: Any) -> ReviewCreate:
     title = str(inp.get("title") or "").strip()
     change_type = str(inp.get("change_type") or "").strip()
     goal_id = str(inp.get("goal_id") or "").strip() or None
     if goal_id:
         _uuid(goal_id, "goal_id")
+    chat_session = _uuid(session_id, "session_id")
     try:
         return ReviewCreate(
-            title=title, change_type=change_type, goal_id=goal_id,
+            title=title, change_type=change_type, goal_id=goal_id, session_id=chat_session,
             idempotency_key=str(inp.get("idempotency_key") or "") or _auto_key("create", {
                 "title": title, "change_type": change_type, "goal_id": goal_id, "project": str(inp.get("project") or "").upper(),
+                "session_id": str(chat_session),
             }),
         )
     except ValidationError as exc:
