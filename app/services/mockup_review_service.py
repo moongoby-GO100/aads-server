@@ -1058,11 +1058,13 @@ async def _notify_submitted(conn: Any, head: Any, revision: Any, actor: str, eve
 # revision. Judging by status alone would resurrect old rows as unread the moment a new revision is submitted (head back
 # to review_ready) - the new revision emits its own request rows, so rows of a superseded revision stay read. This also
 # covers rows created before _resolve_actionable_notifications existed, without any data UPDATE.
-_NOTIF_FROM = ("FROM ohvis_notifications n LEFT JOIN mockup_review_heads h "
+NOTIF_FROM = ("FROM ohvis_notifications n LEFT JOIN mockup_review_heads h "
                "ON h.id=n.review_id AND h.tenant_id=n.tenant_id ")
-_NOTIF_IS_UNREAD = ("(n.read_at IS NULL AND NOT (n.kind=ANY(ARRAY['review_requested','approval_waiting']) "
+NOTIF_IS_UNREAD = ("(n.read_at IS NULL AND NOT (n.kind=ANY(ARRAY['review_requested','approval_waiting']) "
                     "AND h.id IS NOT NULL AND (h.status<>'review_ready' "
                     "OR (n.revision_id IS NOT NULL AND n.revision_id IS DISTINCT FROM h.latest_revision_id))))")
+_NOTIF_FROM = NOTIF_FROM
+_NOTIF_IS_UNREAD = NOTIF_IS_UNREAD
 
 
 async def list_notifications(conn: Any, tenant: str, user: str, *, unread_only: bool = False,

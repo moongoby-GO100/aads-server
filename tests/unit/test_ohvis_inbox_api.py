@@ -41,6 +41,18 @@ def event(id_, job_id, event_type, status, *, at, project="AADS", phase="x", ver
             "task_title": f"작업 {job_id}"}
 
 
+def _ohvis_is_unread(r: dict) -> bool:
+    """NOTIF_IS_UNREAD 의 파이썬 모사 — 행의 head_status/head_latest_revision_id 가 LEFT JOIN 결과 자리를 대신한다."""
+    if r["read_at"] is not None:
+        return False
+    head_status = r.get("head_status")
+    if r["kind"] in ("review_requested", "approval_waiting") and head_status is not None:
+        stale = r.get("revision_id") is not None and r["revision_id"] != r.get("head_latest_revision_id")
+        if head_status != "review_ready" or stale:
+            return False
+    return True
+
+
 class FakePool:
     def __init__(self):
         self.alerts: list[dict] = []
@@ -61,7 +73,7 @@ class FakePool:
             rows = self.approvals if "tier='approve'" in sql else self.notifies
             return [dict(r) for r in rows]
         if "FROM ohvis_notifications" in sql:
-            return [dict(r) for r in self.ohvis]
+            return [dict(r, is_unread=_ohvis_is_unread(r)) for r in self.ohvis]
         if "FROM pipeline_runner_events" in sql:
             assert "model_attempt_started" not in args[1] and "cli_process_started" not in args[1]
             return [dict(r) for r in self.events]
@@ -451,3 +463,39 @@ def test_non_admin_gets_403(pool, monkeypatch, method, path, kwargs, role):
 def test_owner_is_allowed(pool, monkeypatch):
     c = make_client(pool, monkeypatch, role="owner")
     assert c.get("/api/v1/inbox/summary").status_code == 200
+
+
+# ── 읽음 판정: 목업 알림 목록과 같은 기준 ─────────────────────────────────
+
+
+def _ohvis_row(id_, kind, *, head_status=None, rev="rev-2", latest="rev-2", read_at=None, hours=3):
+    return {"id": id_, "project_key": "AADS", "kind": kind, "title": f"알림 {id_}", "body": "", "link": "",
+            "created_at": ago(hours=hours), "read_at": read_at, "head_status": head_status,
+            "revision_id": rev if head_status else None, "head_latest_revision_id": latest}
+
+
+def test_ohvis_loader_reuses_mockup_service_sql_fragments(pool, monkeypatch):
+    from app.services import mockup_review_service as svc
+    assert inbox.NOTIF_FROM is svc.NOTIF_FROM and inbox.NOTIF_IS_UNREAD is svc.NOTIF_IS_UNREAD
+    assert svc._NOTIF_FROM is svc.NOTIF_FROM and svc._NOTIF_IS_UNREAD is svc.NOTIF_IS_UNREAD
+    pool.ohvis = []
+    asyncio.run(inbox.load_ohvis_notifications(pool, inbox.Ctx(TENANT, "u1", NOW)))
+    sql = [q for q in pool.sql if "FROM ohvis_notifications" in q][-1]
+    assert svc.NOTIF_FROM in sql and sql.count(svc.NOTIF_IS_UNREAD) == 2
+
+
+def test_ohvis_request_rows_follow_head_state(pool, monkeypatch):
+    pool.ohvis = [
+        _ohvis_row(11, "review_requested", head_status="approved"),
+        _ohvis_row(12, "approval_waiting", head_status="approved"),
+        _ohvis_row(13, "review_requested", head_status="review_ready"),
+        _ohvis_row(14, "approval_waiting", head_status="review_ready", rev="rev-1", latest="rev-2"),
+        _ohvis_row(15, "approved", head_status="approved"),
+        _ohvis_row(16, "revoked", head_status="review_ready", rev="rev-1", latest="rev-2"),
+        _ohvis_row(17, "review"),
+        _ohvis_row(18, "review", read_at=ago(hours=1)),
+    ]
+    res = asyncio.run(inbox.load_ohvis_notifications(pool, inbox.Ctx(TENANT, "u1", NOW)))
+    read = {i.source_id: i.read for i in res.items}
+    assert read == {"11": True, "12": True, "13": False, "14": True,
+                    "15": False, "16": False, "17": False, "18": True}

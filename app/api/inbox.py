@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import TenantRole, require_tenant_role
 from app.core.db_pool import get_pool
+from app.services.mockup_review_service import NOTIF_FROM, NOTIF_IS_UNREAD
 
 logger = structlog.get_logger(__name__)
 
@@ -460,12 +461,13 @@ async def load_notifies(pool: Any, ctx: Ctx) -> SourceResult:
 
 
 async def load_ohvis_notifications(pool: Any, ctx: Ctx) -> SourceResult:
+    # 읽음 판정은 목업 알림 목록과 같은 SQL 조각을 쓴다 (mockup_review_service.NOTIF_IS_UNREAD).
     rows = await pool.fetch(
-        "SELECT id, project_key, kind, title, body, link, created_at, read_at "
-        "FROM ohvis_notifications "
-        "WHERE tenant_id=$1::uuid AND recipient_user_id=$2 "
-        "  AND (read_at IS NULL OR created_at > now() - make_interval(days => $3)) "
-        "ORDER BY created_at DESC LIMIT $4",
+        "SELECT n.id, n.project_key, n.kind, n.title, n.body, n.link, n.created_at, n.read_at, "
+        f"{NOTIF_IS_UNREAD} AS is_unread " + NOTIF_FROM +
+        "WHERE n.tenant_id=$1::uuid AND n.recipient_user_id=$2 "
+        f"  AND ({NOTIF_IS_UNREAD} OR n.created_at > now() - make_interval(days => $3)) "
+        "ORDER BY n.created_at DESC LIMIT $4",
         ctx.tenant_id, ctx.user_id, OHVIS_WINDOW_DAYS, OHVIS_ROW_CAP,
     )
     return SourceResult(items=[
@@ -478,7 +480,7 @@ async def load_ohvis_notifications(pool: Any, ctx: Ctx) -> SourceResult:
             title=_first_line(r["title"]) or "시안 검토 알림",
             summary=_clip(r["body"]),
             occurred_at=_as_dt(r["created_at"]),
-            read=r["read_at"] is not None,
+            read=not r["is_unread"],
             link=str(r.get("link") or ""),
         )
         for r in rows
