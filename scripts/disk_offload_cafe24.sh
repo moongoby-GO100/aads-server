@@ -26,6 +26,11 @@
 # 11. 로컬 덤프 보존 수를 2→1(LOCAL_DUMP_KEEP)로 줄였다. 덤프 2개(약 16GB) 상시 보존으로
 #     contabo116 여유가 9GB 아래로 떨어져 10-16 DB 백업(약 12.6GiB)이 위험했다.
 #     삭제 조건(원격 sha256 일치)은 그대로다.
+# 2026-10-16 수정(AADS-DISK-OFFLOAD-DUMP-SPACE-DEADLOCK-20261016):
+# 12. 덤프 직전 여유공간이 부족하면 더 이상 덤프를 건너뛰지 않고 카페24로 직접
+#     스트리밍한다(pg_dump | tee sha256 | ssh cat > 원격.partial). 로컬 덤프 파일은
+#     남기지 않고, pg_dump/ssh 종료코드와 원격 sha256·크기를 모두 확인한 뒤에만
+#     원격 최종 이름(aads_YYYYMMDD.dump)으로 mv 한다. 로컬 경로 판정식은 그대로다.
 set -uo pipefail
 
 DRY_RUN=0
@@ -284,6 +289,66 @@ prune_verified_old_dumps() {
     done
 }
 
+# 로컬 여유공간 판정: 충분하면 local, 부족하거나 값을 알 수 없으면 stream.
+choose_dump_mode() {
+    local free_kb="$1" required_kb="$2"
+    if [[ "$free_kb" =~ ^[0-9]+$ && "$required_kb" =~ ^[0-9]+$ ]] && (( free_kb >= required_kb )); then
+        echo local
+    else
+        echo stream
+    fi
+}
+
+# pg_dump 를 로컬 파일 없이 카페24 로 바로 보낸다. 실패 사유는 STREAM_FAIL_REASON 에 남긴다.
+STREAM_FAIL_REASON=''
+stream_dump_to_remote() {
+    local local_dump="$1" remote_final remote_part sumfile local_sum remote_out remote_sum remote_size i
+    local -a rcs
+    STREAM_FAIL_REASON=''
+    remote_final="$(dump_remote_path "$local_dump")" || { STREAM_FAIL_REASON='cannot derive remote path'; return 1; }
+    remote_part="${remote_final}.partial.$$"
+    remote_mkdir "$(dirname "$remote_final")" || { STREAM_FAIL_REASON='remote mkdir failed'; return 1; }
+    sumfile="$(mktemp /tmp/aads-offload-sum.XXXXXX)" || { STREAM_FAIL_REASON='mktemp failed'; return 1; }
+
+    timeout "${AADS_OFFLOAD_STREAM_TIMEOUT:-1800}" docker exec aads-postgres pg_dump -U aads -d aads -Fc \
+        | tee >(sha256sum | awk '{print $1}' >"$sumfile") \
+        | timeout "${AADS_OFFLOAD_STREAM_TIMEOUT:-1800}" ssh $SSH_OPTS "$REMOTE" "umask 077; cat > '$remote_part'"
+    rcs=("${PIPESTATUS[@]}")
+
+    # tee 의 sha256sum 프로세스 치환은 파이프라인 종료 뒤에 끝날 수 있어 잠시 기다린다.
+    for (( i = 0; i < 100; i++ )); do
+        [[ -s "$sumfile" ]] && break
+        sleep 0.1
+    done
+    local_sum="$(tr -d '[:space:]' <"$sumfile")"
+    rm -f -- "$sumfile"
+
+    if (( rcs[0] != 0 || rcs[2] != 0 )); then
+        STREAM_FAIL_REASON="pipeline exit pg_dump=${rcs[0]} ssh=${rcs[2]}"
+    elif [[ ! "$local_sum" =~ ^[0-9a-f]{64}$ ]]; then
+        STREAM_FAIL_REASON='local stream sha256 missing'
+    else
+        remote_out="$(timeout 1800 ssh $SSH_OPTS "$REMOTE" \
+            "sha256sum '$remote_part' && stat -c %s '$remote_part'" 2>/dev/null)" || remote_out=''
+        remote_sum="$(printf '%s\n' "$remote_out" | awk 'NR==1 {print $1}')"
+        remote_size="$(printf '%s\n' "$remote_out" | awk 'NR==2 {print $1}')"
+        if [[ -z "$remote_sum" || "$remote_sum" != "$local_sum" ]]; then
+            STREAM_FAIL_REASON="remote sha256 mismatch or unreadable (local=$local_sum remote=${remote_sum:-none})"
+        elif [[ ! "$remote_size" =~ ^[0-9]+$ ]] || (( remote_size <= 0 )); then
+            STREAM_FAIL_REASON="remote dump size invalid (${remote_size:-none})"
+        elif ! timeout 30 ssh $SSH_OPTS "$REMOTE" \
+            "mv -f -- '$remote_part' '$remote_final' && chmod 600 -- '$remote_final'"; then
+            STREAM_FAIL_REASON='remote finalize (mv/chmod) failed'
+        else
+            log "OFFLOADED dump (streamed, no local file) $remote_final checksum=$local_sum bytes=$remote_size"
+            return 0
+        fi
+    fi
+    timeout 30 ssh $SSH_OPTS "$REMOTE" "rm -f -- '$remote_part'" \
+        || log "WARN could not remove remote partial $remote_part"
+    return 1
+}
+
 backfill_retained_dumps() {
     local retained
     local -a retained_dumps=()
@@ -352,6 +417,7 @@ if (( DRY_RUN )); then
     log "DRY-RUN free space check >= latest dump size + ${MIN_FREE_GB}GB on $(dirname "$DUMPS")"
     log "DRY-RUN timeout 1800 docker exec aads-postgres pg_dump -U aads -d aads -Fc > $dump"
     log "DRY-RUN dump rsync/checksum -> $dump_dst; local retention unchanged"
+    log "DRY-RUN if free space is short: streaming path pg_dump | tee sha256 | ssh cat > ${dump_dst}.partial.<pid>, verify sha256+size, mv -> $dump_dst (no local file, timeout ${AADS_OFFLOAD_STREAM_TIMEOUT:-1800}s)"
 else
     mkdir -p "$DUMPS" || { fail "cannot create $DUMPS"; exit 1; }
     chmod 700 "$DUMPS" || fail "cannot chmod $DUMPS"
@@ -362,8 +428,11 @@ else
     [[ "$latest_dump_bytes" =~ ^[0-9]+$ ]] || latest_dump_bytes=$((EXPECTED_DUMP_GB * 1024 * 1024 * 1024))
     expected_dump_kb=$(((latest_dump_bytes + 1023) / 1024))
     required_free_kb=$((expected_dump_kb + MIN_FREE_GB * 1024 * 1024))
-    if [[ ! "$free_kb" =~ ^[0-9]+$ ]] || (( free_kb < required_free_kb )); then
-        fail "insufficient free space before pg_dump: ${free_kb:-unknown}KB < ${required_free_kb}KB (latest dump + ${MIN_FREE_GB}GB reserve)"
+    if [[ "$(choose_dump_mode "$free_kb" "$required_free_kb")" == stream ]]; then
+        log "WARN insufficient free space before pg_dump: ${free_kb:-unknown}KB < ${required_free_kb}KB (latest dump + ${MIN_FREE_GB}GB reserve); streaming directly to $dump_dst"
+        if ! stream_dump_to_remote "$dump"; then
+            fail "pg_dump skipped locally (free ${free_kb:-unknown}KB < ${required_free_kb}KB) -> streaming to cafe24 failed: ${STREAM_FAIL_REASON:-unknown}"
+        fi
     else
         # umask 077: 덤프 파일이 rsync 로 /www 하위 경로에 나가므로 소유자 외
         # 읽기 권한을 주지 않는다(R1 리뷰 지적 2 — DB 덤프 웹 노출 위험).
