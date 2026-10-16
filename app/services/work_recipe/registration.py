@@ -46,12 +46,13 @@ def _principal_ids(principal: Mapping[str, Any]) -> tuple[str, str, str]:
 
 
 def is_human_principal(principal: Mapping[str, Any]) -> bool:
-    """True only for a signed-in person (SaaS user JWT, or the env admin login whose sub is 'admin').
+    """True only for a signed-in person (SaaS user JWT, CEO SaaS admin JWT, or env admin).
 
     app.auth.get_current_user builds service principals with user_id 'system:*', email
     system@aads.internal and membership ids 'internal-pipeline-call' / 'service-monitor-key';
     both service paths also carry user_role='system', as does the env admin JWT, so the role
-    alone cannot separate them — the user id does.
+    alone cannot separate them — the user id does. A CEO SaaS login has a UUID sub, is_admin
+    set from ADMIN_EMAIL, and user_role='system'; that verified UUID admin is still a person.
     """
     user = principal.get("user") or {}
     user_id, email, membership_id = _principal_ids(principal)
@@ -65,7 +66,12 @@ def is_human_principal(principal: Mapping[str, Any]) -> bool:
     if lowered_id.startswith(_NON_HUMAN_ID_PREFIXES) or "agent" in lowered_id:
         return False
     if str(user.get("user_role") or "").lower() == "system" and lowered_id != "admin":
-        return False
+        try:
+            uuid.UUID(user_id)
+        except (ValueError, AttributeError):
+            return False
+        if user.get("is_admin") is not True:
+            return False
     return True
 
 

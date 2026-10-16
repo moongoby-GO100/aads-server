@@ -79,6 +79,17 @@ def env_admin_ctx() -> dict[str, Any]:
     }
 
 
+def ceo_saas_admin_ctx() -> dict[str, Any]:
+    return {
+        "tenant": {"id": TENANT},
+        "membership": {"id": "m-ceo", "user_id": HUMAN_ID, "role": "owner"},
+        "user": {
+            "user_id": HUMAN_ID, "email": HUMAN_EMAIL, "is_admin": True,
+            "user_role": "system",
+        },
+    }
+
+
 def _spec(risk: str = "READ") -> dict[str, Any]:
     return {
         "name": "orders",
@@ -155,9 +166,22 @@ def test_non_human_principal_gets_403_human_decider_required(client, decided, mo
 def test_human_jwt_and_env_admin_are_accepted():
     assert registration.is_human_principal(human_ctx())
     assert registration.is_human_principal(env_admin_ctx())
+    assert registration.is_human_principal(ceo_saas_admin_ctx())
     assert registration.decider_identity(human_ctx()) == HUMAN_EMAIL
     for ctx in (service_key_ctx(), pipeline_ctx(), agent_session_ctx(), browser_agent_ctx(), {}):
         assert not registration.is_human_principal(ctx)
+
+
+@pytest.mark.parametrize("principal", [
+    {"user": {"user_id": HUMAN_ID, "email": HUMAN_EMAIL, "user_role": "system"}},
+    {"user": {"user_id": "system:pipeline-runner", "user_role": "system"}},
+    {"user": {"user_id": "system:service-api", "user_role": "system"}},
+    {"user": {"user_id": "service-monitor", "email": "monitor@aads.internal"}},
+    {"user": {"user_id": HUMAN_ID, "is_admin": True, "user_role": "system"},
+     "membership": {"id": "internal-pipeline-call"}},
+])
+def test_system_principals_remain_non_human(principal):
+    assert not registration.is_human_principal(principal)
 
 
 async def test_decide_as_human_refuses_service_key_before_touching_db(monkeypatch):
