@@ -13,6 +13,18 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-key-that-is-at-least-3
 from app.api import obys_finance as api
 
 
+def _line_signature_png() -> bytes:
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (320, 120), "white")
+    ImageDraw.Draw(image).line((12, 96, 300, 24), fill="black", width=5)
+    buffer = BytesIO()
+    image.save(buffer, "PNG")
+    return buffer.getvalue()
+
+
 def test_join_request_accepts_contract_autofill_profile():
     payload = api.JoinRequestCreate(
         name="가입 직원", email="employee@example.com", branch="중화점",
@@ -119,7 +131,7 @@ def test_employee_signature_http_flow_records_authenticated_audit(tmp_path, monk
     client = TestClient(app)
     viewed = client.get(f"/yeoljeong-finance/contracts/signing/{token}")
     assert viewed.status_code == 200
-    png = b"\x89PNG\r\n\x1a\n" + (b"http-signature" * 16)
+    png = _line_signature_png()
     signed = client.post(
         "/yeoljeong-finance/contracts/signing",
         headers={"x-forwarded-for": "203.0.113.22", "user-agent": "signature-e2e"},

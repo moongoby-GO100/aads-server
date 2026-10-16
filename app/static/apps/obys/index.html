@@ -6389,6 +6389,12 @@
     let pendingContractToSign = null;
     let pendingContractBundle = [];
     let contractSignatureHasInk = false;
+    // 서버 하한(SIGNATURE_MIN_INK_PIXELS 등)보다 항상 보수적으로 크게 잡는다: 클라이언트 통과 = 서버 통과.
+    const CONTRACT_SIGNATURE_MIN_STROKE_PX = 60;
+    const CONTRACT_SIGNATURE_MIN_EXTENT_PX = 24;
+    let contractSignatureStrokeLength = 0;
+    let contractSignatureLastPoint = null;
+    let contractSignatureExtent = null;
     let contractSignatureDrawing = false;
     let filePreviewObjectUrl = "";
     let filePreviewAbortController = null;
@@ -9485,6 +9491,29 @@
       context.lineJoin = "round";
       contractSignatureHasInk = false;
       contractSignatureDrawing = false;
+      contractSignatureStrokeLength = 0;
+      contractSignatureLastPoint = null;
+      contractSignatureExtent = null;
+    }
+
+    function trackContractSignatureStroke(point) {
+      const canvas = els.contractSignatureCanvas;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = rect.width > 0 ? rect.width / canvas.width : 1;
+      const scaleY = rect.height > 0 ? rect.height / canvas.height : 1;
+      const css = { x: point.x * scaleX, y: point.y * scaleY };
+      if (contractSignatureLastPoint) {
+        contractSignatureStrokeLength += Math.hypot(css.x - contractSignatureLastPoint.x, css.y - contractSignatureLastPoint.y);
+      }
+      contractSignatureLastPoint = css;
+      contractSignatureExtent = contractSignatureExtent
+        ? {
+            minX: Math.min(contractSignatureExtent.minX, css.x), maxX: Math.max(contractSignatureExtent.maxX, css.x),
+            minY: Math.min(contractSignatureExtent.minY, css.y), maxY: Math.max(contractSignatureExtent.maxY, css.y)
+          }
+        : { minX: css.x, maxX: css.x, minY: css.y, maxY: css.y };
+      const extent = Math.max(contractSignatureExtent.maxX - contractSignatureExtent.minX, contractSignatureExtent.maxY - contractSignatureExtent.minY);
+      contractSignatureHasInk = contractSignatureStrokeLength >= CONTRACT_SIGNATURE_MIN_STROKE_PX && extent >= CONTRACT_SIGNATURE_MIN_EXTENT_PX;
     }
 
     const CONTRACT_SINGLE_CONSENT_TEXT = "계약서 전체 내용을 확인했으며, 위 자필서명을 본인의 전자서명으로 사용하는 데 동의합니다.";
@@ -9592,7 +9621,7 @@
         return;
       }
       if (!contractSignatureHasInk) {
-        showToast("자필서명을 입력하십시오.");
+        showToast(contractSignatureStrokeLength > 0 ? "서명을 조금 더 길게 써 주십시오." : "자필서명을 입력하십시오.");
         return;
       }
       const bundleIds = selectedBundleContractIds();
@@ -16083,6 +16112,8 @@
         const context = els.contractSignatureCanvas.getContext("2d");
         context.beginPath();
         context.moveTo(point.x, point.y);
+        contractSignatureLastPoint = null;
+        trackContractSignatureStroke(point);
         els.contractSignatureCanvas.setPointerCapture?.(event.pointerId);
       });
       els.contractSignatureCanvas?.addEventListener("pointermove", event => {
@@ -16092,7 +16123,7 @@
         const context = els.contractSignatureCanvas.getContext("2d");
         context.lineTo(point.x, point.y);
         context.stroke();
-        contractSignatureHasInk = true;
+        trackContractSignatureStroke(point);
       });
       ["pointerup", "pointercancel", "pointerleave"].forEach(type => {
         els.contractSignatureCanvas?.addEventListener(type, () => {

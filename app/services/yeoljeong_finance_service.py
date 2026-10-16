@@ -37,6 +37,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, UploadFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
+from PIL import Image, ImageChops
 from app.services import obys_bankbook_extract as bankbook_extract
 from app.services import yeoljeong_company_seal
 from app.services.auth_challenge_orchestrator import approved_operator_input, classify_portal_state, make_resume_token
@@ -48,6 +49,15 @@ UPLOAD_DIR = DATA_DIR / "uploads" / "onboarding"
 EVIDENCE_UPLOAD_DIR = DATA_DIR / "uploads" / "evidence"
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 MAX_SIGNATURE_BYTES = 256 * 1024
+MAX_SIGNATURE_SIDE_PX = 4096
+MAX_SIGNATURE_PIXELS = 8_000_000
+# 클라이언트 최소 획 길이(60 CSS px, 선폭 2.4~3)면 잉크가 144픽셀 이상 — 그 절반 아래만 거른다.
+SIGNATURE_MIN_INK_PIXELS = 60
+SIGNATURE_MIN_INK_BBOX_PX = 20
+SIGNATURE_MIN_INK_BBOX_SHORT_PX = 2
+# 흰 배경에 합성한 뒤 가장 어두운 채널이 이 값 이하이면 잉크(흰색과 48 이상 차이).
+SIGNATURE_INK_CHANNEL_MAX = 207
+SIGNATURE_BLANK_DETAIL = "자필서명이 비어 있거나 너무 짧습니다. 서명을 다시 입력하십시오"
 DELIVERY_SYNC_STALE_AFTER = timedelta(minutes=15)
 DELIVERY_BACKFILL_STALE_AFTER = timedelta(
     minutes=max(20, int(os.getenv("YEOLJEONG_DELIVERY_BACKFILL_STALE_MINUTES", "60")))
@@ -6268,7 +6278,37 @@ def _validated_signature_image(data_uri: Any) -> tuple[str, str]:
         raise HTTPException(status_code=400, detail="자필서명 이미지가 올바르지 않습니다") from None
     if len(raw) < 100 or len(raw) > MAX_SIGNATURE_BYTES or not raw.startswith(b"\x89PNG\r\n\x1a\n"):
         raise HTTPException(status_code=400, detail="자필서명 이미지 크기 또는 형식을 확인하십시오")
+    _require_signature_ink(raw)
     return value, hashlib.sha256(raw).hexdigest()
+
+
+def _require_signature_ink(raw: bytes) -> None:
+    """PNG 를 디코딩해 서명 잉크 픽셀 수와 바운딩박스가 하한 이상인지 본다(빈 서명·점 하나 차단)."""
+    blank = HTTPException(status_code=400, detail=SIGNATURE_BLANK_DETAIL)
+    try:
+        with Image.open(io.BytesIO(raw)) as image:
+            width, height = image.size
+            if width < 1 or height < 1 or width > MAX_SIGNATURE_SIDE_PX or height > MAX_SIGNATURE_SIDE_PX:
+                raise HTTPException(status_code=400, detail="자필서명 이미지 크기 또는 형식을 확인하십시오")
+            if width * height > MAX_SIGNATURE_PIXELS:
+                raise HTTPException(status_code=400, detail="자필서명 이미지 크기 또는 형식을 확인하십시오")
+            rgba = image.convert("RGBA")
+    except HTTPException:
+        raise
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+        raise HTTPException(status_code=400, detail="자필서명 이미지가 올바르지 않습니다") from None
+    white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+    red, green, blue, _alpha = Image.alpha_composite(white, rgba).split()
+    darkest = ImageChops.darker(red, ImageChops.darker(green, blue))
+    ink = darkest.point(lambda value: 255 if value <= SIGNATURE_INK_CHANNEL_MAX else 0)
+    box = ink.getbbox()
+    if not box:
+        raise blank
+    if ink.histogram()[255] < SIGNATURE_MIN_INK_PIXELS:
+        raise blank
+    box_width, box_height = box[2] - box[0], box[3] - box[1]
+    if max(box_width, box_height) < SIGNATURE_MIN_INK_BBOX_PX or min(box_width, box_height) < SIGNATURE_MIN_INK_BBOX_SHORT_PX:
+        raise blank
 
 
 def _signing_contract_for_token(rows: list[dict[str, Any]], token: str) -> dict[str, Any]:

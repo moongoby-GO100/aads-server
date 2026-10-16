@@ -20,6 +20,18 @@ assert _SPEC and _SPEC.loader
 _SPEC.loader.exec_module(service)
 
 
+def _line_signature_png() -> bytes:
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (320, 120), "white")
+    ImageDraw.Draw(image).line((12, 96, 300, 24), fill="black", width=5)
+    buffer = BytesIO()
+    image.save(buffer, "PNG")
+    return buffer.getvalue()
+
+
 @pytest.fixture(autouse=True)
 def isolate_yeoljeong_storage(tmp_path, monkeypatch):
     """Never let unit tests read or write operational files or PostgreSQL."""
@@ -189,7 +201,7 @@ def valid_employment_contract(**overrides):
 
 
 def valid_signature_payload(token, **overrides):
-    png = b"\x89PNG\r\n\x1a\n" + (b"signature-test" * 16)
+    png = _line_signature_png()
     payload = {
         "token": token,
         "signer_name": "가입 직원",

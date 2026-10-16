@@ -25,6 +25,10 @@
   ];
   const CATEGORY_RANK = { pending: 0, signed: 1, old: 2 };
   const CONSENT_VERSION = "yeoljeong-contract-sign-v1";
+  // 서버 하한(SIGNATURE_MIN_INK_PIXELS 등)보다 항상 보수적으로 크게 잡는다: 클라이언트 통과 = 서버 통과.
+  const SIGNATURE_MIN_STROKE_PX = 60;
+  const SIGNATURE_MIN_EXTENT_PX = 24;
+  const SIGNATURE_TOO_SHORT = "서명을 조금 더 길게 써 주십시오.";
   const RESUME_KEY = "obys.employeePortal.resume";
   const RESUME_TTL_MS = 30 * 60 * 1000;
   const TODO_TITLE = "근로계약서 서명이 필요합니다";
@@ -158,6 +162,10 @@
     if (scrollHeight <= clientHeight + 4) return 100;
     const pct = Math.round(((scrollTop + clientHeight) / scrollHeight) * 100);
     return pct >= 99 ? 100 : Math.max(0, Math.min(100, pct));
+  }
+
+  function signatureLongEnough(strokeLength, extent) {
+    return Number(strokeLength) >= SIGNATURE_MIN_STROKE_PX && Number(extent) >= SIGNATURE_MIN_EXTENT_PX;
   }
 
   function canStartSigning(state) {
@@ -823,6 +831,25 @@
       if (!ctx) return;
       let drawing = false;
       let drew = false;
+      let strokeLength = 0;
+      let lastPoint = null;
+      let bounds = null;
+      const resetStroke = () => { strokeLength = 0; lastPoint = null; bounds = null; };
+      const track = (x, y) => {
+        if (lastPoint) strokeLength += Math.hypot(x - lastPoint[0], y - lastPoint[1]);
+        lastPoint = [x, y];
+        bounds = bounds
+          ? [Math.min(bounds[0], x), Math.max(bounds[1], x), Math.min(bounds[2], y), Math.max(bounds[3], y)]
+          : [x, x, y, y];
+      };
+      const showShort = message => {
+        state.sign.error = message;
+        const el = host.querySelector("[data-ep-sign-error]");
+        if (!el) return;
+        el.textContent = message;
+        el.hidden = !message;
+        el.classList.toggle("hidden", !message);
+      };
       const fit = () => {
         const rect = canvas.getBoundingClientRect();
         const ratio = Math.max(1, window.devicePixelRatio || 1);
@@ -833,6 +860,7 @@
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctx.strokeStyle = "#0f172a";
+        if (!state.sign.dataUri) resetStroke();
         if (state.sign.dataUri && typeof Image !== "undefined") {
           // 다시 그려진 화면(제출 실패·회전)에서도 입력한 서명을 그대로 보여 준다.
           const image = new Image();
@@ -853,6 +881,8 @@
         const [x, y] = point(event);
         ctx.beginPath();
         ctx.moveTo(x, y);
+        lastPoint = null;
+        track(x, y);
         event.preventDefault();
       });
       canvas.addEventListener("pointermove", event => {
@@ -860,19 +890,30 @@
         const [x, y] = point(event);
         ctx.lineTo(x, y);
         ctx.stroke();
+        track(x, y);
         drew = true;
         event.preventDefault();
       });
       const end = () => {
         if (!drawing) return;
         drawing = false;
-        if (drew) setInk(canvas.toDataURL("image/png"));
+        if (!drew) return;
+        const extent = bounds ? Math.max(bounds[1] - bounds[0], bounds[3] - bounds[2]) : 0;
+        if (signatureLongEnough(strokeLength, extent)) {
+          showShort("");
+          setInk(canvas.toDataURL("image/png"));
+        } else {
+          setInk("");
+          showShort(SIGNATURE_TOO_SHORT);
+        }
       };
       canvas.addEventListener("pointerup", end);
       canvas.addEventListener("pointercancel", end);
       canvas.addEventListener("pointerleave", end);
       wired.fitPad = fit;
       wired.clearPad = () => {
+        resetStroke();
+        showShort("");
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -935,6 +976,7 @@
   const core = {
     TABS, FILTERS, CONSENT_VERSION, TODO_TITLE, DONE_TITLE, PREVIEW_SUBMIT_BLOCKED, EDIT_REQUEST_UNAVAILABLE, EMPTY_CONTRACTS,
     contractCategory, sortContracts, filterCounts, filterContracts, contractTitle, documentKind, contractSummary, wageText,
+    SIGNATURE_MIN_STROKE_PX, SIGNATURE_MIN_EXTENT_PX, SIGNATURE_TOO_SHORT, signatureLongEnough,
     readPercent, canStartSigning, canSubmit, signPayload, payrollTile, onboardingTile, screenHtml, kstDateTime
   };
   const portal = createPortal();
