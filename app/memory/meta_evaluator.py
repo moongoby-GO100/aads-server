@@ -289,12 +289,13 @@ async def auto_tune_memory(project: Optional[str] = None) -> dict:
 
                 await conn.execute(
                     """
-                    INSERT INTO ai_meta_memory (category, key, value, confidence, updated_at)
-                    VALUES ('meta_evaluation', $1, $2, 0.8, NOW())
-                    ON CONFLICT (key) DO UPDATE
+                    INSERT INTO ai_meta_memory (project, category, key, value, confidence, updated_at)
+                    VALUES ($1, 'meta_evaluation', $2, $3, 0.8, NOW())
+                    ON CONFLICT (project, category, key) DO UPDATE
                         SET value      = EXCLUDED.value,
                             updated_at = NOW()
                     """,
+                    project or "",
                     meta_key,
                     meta_value,
                 )
