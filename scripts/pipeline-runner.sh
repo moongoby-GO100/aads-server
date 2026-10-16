@@ -6637,7 +6637,8 @@ ${_uncommitted}"
     mkdir -p "$log_dir" 2>/dev/null || true
     [[ -w "$log_dir" ]] || { log_dir="${ARTIFACT_DIR}/runner-diff"; mkdir -p "$log_dir" 2>/dev/null || true; }
     local log_patch="${log_dir}/${job_id}.patch"
-    printf '%s' "$full_diff" > "$log_patch" 2>/dev/null || true
+    # 명령 치환이 끝 개행을 지웠으므로 되붙인다 — 없으면 git apply 가 'corrupt patch' 로 거부한다.
+    printf '%s\n' "$full_diff" > "$log_patch" 2>/dev/null || true
     log "  FULL_DIFF_TRUNCATED job=$job_id db_bytes=${#stored_diff} full_bytes=${#full_diff} patch=${log_patch}"
 }
 
