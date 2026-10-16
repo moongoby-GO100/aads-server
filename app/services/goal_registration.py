@@ -145,8 +145,9 @@ async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, sessi
             ):
                 raise HTTPException(422, detail="linked_job_not_found_in_project")
         await conn.execute(
-            """INSERT INTO goals (id,tenant_id,project,title,description,success_criteria,priority,parent_goal_id,status)
-               VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8::uuid,'active')""",
+            """INSERT INTO goals (id,tenant_id,project,title,description,success_criteria,priority,parent_goal_id,status,
+                   owner_role_key,owner_session_id)
+               VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8::uuid,'active',$9,$10::uuid)""",
             goal_id,
             tenant_id,
             project,
@@ -155,6 +156,8 @@ async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, sessi
             goal["success_criteria"],
             goal["priority"],
             goal.get("parent_goal_id"),
+            goal.get("owner_role_key"),
+            session_id,
         )
         milestone_ids = []
 
@@ -189,8 +192,8 @@ async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, sessi
             milestone_ids.append(ms_id)
             await conn.execute(
                 """INSERT INTO milestones (id,goal_id,tenant_id,project,title,description,completion_criteria,
-                   sequence_order,auto_advance,status,owner_role_key)
-                   VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,'pending',$10)""",
+                   sequence_order,auto_advance,status,owner_role_key,owner_session_id)
+                   VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,'pending',$10,$11::uuid)""",
                 ms_id,
                 goal_id,
                 tenant_id,
@@ -201,6 +204,7 @@ async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, sessi
                 ms["sequence_order"],
                 ms["auto_advance"],
                 goal.get("owner_role_key"),
+                session_id,
             )
             for j, epic in enumerate(ms["epics"]):
                 await create(epic, "epic", ms_id, f"{i}.{j}")

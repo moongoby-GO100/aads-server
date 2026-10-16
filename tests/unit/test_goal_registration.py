@@ -103,10 +103,16 @@ class MemoryConnection:
                 "project": a[2],
                 "title": a[3],
                 "status": "active",
+                "owner_role_key": a[8],
+                "owner_session_id": a[9],
                 "version": 1,
             }
         elif "INSERT INTO milestones" in sql:
-            self.milestones[a[0]] = {"id": a[0]}
+            self.milestones[a[0]] = {
+                "id": a[0],
+                "owner_role_key": a[9],
+                "owner_session_id": a[10],
+            }
         elif "INSERT INTO goal_task_links" in sql:
             self.links.append(a)
 
@@ -160,6 +166,21 @@ async def test_registration_counts_and_links():
     assert conn.links[0][3:] == ("chat_session", SESSION)
     assert conn.links[1][1] == list(conn.milestones)[1]
     assert conn.links[1][3:] == ("pipeline_job", "runner-job")
+
+
+@pytest.mark.asyncio
+async def test_registration_records_owner_role_and_executor_session():
+    conn = MemoryConnection()
+    p = payload()
+    p["goal"]["owner_role_key"] = "dev"
+    p["goal"]["owner_session_id"] = str(uuid4())
+    result = await register_goal(conn, p, tenant_id=TENANT, session_id=SESSION)
+    goal = conn.goals[result["goal_id"]]
+    assert goal["owner_role_key"] == "dev"
+    assert goal["owner_session_id"] == SESSION
+    assert len(conn.milestones) == 3
+    assert all(ms["owner_role_key"] == "dev" for ms in conn.milestones.values())
+    assert all(ms["owner_session_id"] == SESSION for ms in conn.milestones.values())
 
 
 @pytest.mark.asyncio
