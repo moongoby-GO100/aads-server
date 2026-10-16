@@ -39,6 +39,15 @@ async def create_review(project_key: str, body: ReviewCreate, response: Response
     return result
 
 
+@router.get("")
+async def list_reviews(project_key: str, status: str | None = None, session_id: UUID | None = None,
+                       goal_id: UUID | None = None, limit: int = Query(50, ge=1, le=200),
+                       offset: int = Query(0, ge=0), context: dict = VIEW):
+    return await _run(project_key, context, "read",
+                      lambda c, t, p, a, e: svc.list_reviews(c, t, p, status=status, session_id=session_id,
+                                                              goal_id=goal_id, limit=limit, offset=offset))
+
+
 @router.get("/notifications")
 async def list_notifications(project_key: str, unread_only: bool = False, limit: int = Query(50, ge=1, le=200),
                              context: dict = VIEW):

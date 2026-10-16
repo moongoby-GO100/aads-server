@@ -1047,6 +1047,39 @@ async def list_notifications(conn: Any, tenant: str, user: str, *, unread_only: 
     return {"items": items, "unread": unread}
 
 
+_LIST_FILTER_SQL = (
+    "WHERE h.tenant_id=$1::uuid AND h.project_key=$2 AND ($3::text IS NULL OR h.status=$3) "
+    "AND ($4::uuid IS NULL OR h.session_id=$4) AND ($5::uuid IS NULL OR h.goal_id=$5) ")
+
+
+async def list_reviews(conn: Any, tenant: str, project: str, *, status: str | None = None,
+                       session_id: UUID | None = None, goal_id: UUID | None = None,
+                       limit: int = 50, offset: int = 0) -> dict:
+    """One page of the project's reviews, newest update first, in a single joined query (no per-row lookups)."""
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    args = (tenant, project, status, session_id, goal_id)
+    rows = await conn.fetch(
+        "SELECT h.id,h.title,h.status,h.change_type,h.goal_id,h.session_id,h.latest_revision_id,"
+        "h.approved_revision_id,h.created_at,h.updated_at,r.revision AS latest_revision,"
+        "CASE WHEN jsonb_typeof(r.manifest->'assets')='array' THEN jsonb_array_length(r.manifest->'assets') "
+        "ELSE 0 END AS asset_count "
+        "FROM mockup_review_heads h LEFT JOIN mockup_review_revisions r ON r.id=h.latest_revision_id "
+        + _LIST_FILTER_SQL + "ORDER BY h.updated_at DESC,h.id DESC LIMIT $6 OFFSET $7", *args, limit, offset)
+    total = await conn.fetchval("SELECT count(*) FROM mockup_review_heads h " + _LIST_FILTER_SQL, *args)
+    items = [{
+        "review_id": str(r["id"]), "title": r["title"], "status": r["status"], "change_type": r["change_type"],
+        "goal_id": str(r["goal_id"]) if r["goal_id"] else None,
+        "session_id": str(r["session_id"]) if r["session_id"] else None,
+        "latest_revision_id": str(r["latest_revision_id"]) if r["latest_revision_id"] else None,
+        "approved_revision_id": str(r["approved_revision_id"]) if r["approved_revision_id"] else None,
+        "latest_revision": r["latest_revision"], "asset_count": r["asset_count"],
+        "created_at": r["created_at"].isoformat(), "updated_at": r["updated_at"].isoformat(),
+        "link": notification_link(project, r["id"], r["latest_revision_id"], None),
+    } for r in rows]
+    return {"items": items, "total": total}
+
+
 async def mark_notification_read(conn: Any, tenant: str, user: str, notification_id: int) -> dict:
     updated = await conn.fetchval(
         "UPDATE ohvis_notifications SET read_at=COALESCE(read_at,now()) WHERE id=$1 AND tenant_id=$2::uuid "
