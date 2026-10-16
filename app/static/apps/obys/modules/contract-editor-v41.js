@@ -21,6 +21,7 @@
   if (!C) return;
   const esc = C.escapeHtml;
   const SCH = window.ObysContractSchedule || null;
+  const AUTO = window.ObysContractAutofill || null;
 
   const ROUTES = new Set(["employees", "hr-docs"]);
   const S = { ctx: null, employees: [], contracts: [], businesses: [], loadedAt: 0, loading: null, loadError: null, filter: "all" };
@@ -335,6 +336,7 @@
       E.schedSource = "직접 선택함";
       E.dirty = true; E.previewed = false;
       applySchedule();
+      if (AUTO) { autoRun(); autoDomSync(); }
       if (redraw) {
         dialog.querySelector("#cv41Sched").outerHTML = schedHtml();
         wireSched();
@@ -388,6 +390,164 @@
       updateManualBadges();
       changed(true, "[data-cv41-sch-refill]");
     });
+  }
+
+  // ---------- 자동 계산(기간·근무시간·주휴·월 임금·법정 문구) ----------
+  // 계산은 contract-autofill.js(순수 함수)가 한다. 여기서는 입력 선택·읽기 전용 표시·요약 카드만 맡는다.
+  // 직접 고친 칸은 autoManual 에 담아 이후 자동으로 덮어쓰지 않는다. 서명 완료 계약은 자동 채움을 하지 않는다.
+  const AUTO_SELECTS = [
+    { g: "basic", key: "term", label: "계약기간", options: [["", "선택하십시오"], ["none", "기간의 정함 없음"], ["3m", "3개월"], ["6m", "6개월"], ["1y", "1년"], ["2y", "2년"], ["custom", "종료일 직접 입력"]], hint: "입사일과 기간으로 종료일이 자동 계산됩니다." },
+    { g: "wage", key: "probation", label: "수습기간", options: [["", "선택하십시오"], ["none", "없음"], ["1", "1개월"], ["2", "2개월"], ["3", "3개월"]], owns: "probationPeriod" },
+    { g: "wage", key: "payPeriod", label: "임금 정산기간", options: [["prev", "전월 1일~말일"], ["current", "당월 1일~말일"]], owns: "payDate" },
+    { g: "wage", key: "payDay", label: "급여지급일", options: [["", "선택하십시오"], ["5", "5일"], ["10", "10일"], ["15", "15일"], ["20", "20일"], ["25", "25일"], ["last", "말일"]], owns: "payDate" },
+    { g: "wage", key: "payMethod", label: "지급방법", options: [["", "선택하십시오"], ["bank", "계좌이체"], ["cash", "현금 직접 지급"]], owns: "payMethod" }
+  ];
+  const freshAuto = () => ({ term: "none", probation: "", payPeriod: "prev", payDay: "", payMethod: "" });
+  function autoOn() { return Boolean(AUTO && E && !AUTO.NON_WORK_TYPES.includes(E.values.contractType || "part_time")); }
+  function autoInput() {
+    const v = E.values;
+    return {
+      contractType: v.contractType || "part_time", wageType: v.wageType, wage: v.wage, mealProvision: v.mealProvision, taxableAllowance: v.taxableAllowance,
+      nonTaxMealAllowance: E.wageManual.has("nonTaxMealAllowance") ? v.nonTaxMealAllowance : null,
+      workplaceSizeCategory: v.workplaceSizeCategory, startDate: v.startDate, contractDate: v.contractDate, endDate: v.endDate,
+      term: E.auto.term, probation: E.auto.probation, payPeriod: E.auto.payPeriod, payDay: E.auto.payDay, payMethod: E.auto.payMethod,
+      sched: E.sched && E.sched.days.length ? E.sched : null, weeklyMinutesFallback: AUTO.parseWeeklyText(v.weeklyHours) || 0,
+      jobDescription: v.jobDescription, birthDate: v.employeeBirthDate, healthCertificateValidUntil: v.healthCertificateValidUntil,
+      splitMonthlyWage: C.splitMonthlyWage
+    };
+  }
+  /** 열 때 선택값 복원. 저장된 계약은 문구를 읽어 선택값을 되살리고, 읽지 못하거나 자동 문구와 다른 칸은 직접 수정 상태로 둔다. */
+  function initAuto(mode) {
+    if (!AUTO || !E) return;
+    const v = E.values;
+    E.autoManual = new Set();
+    E.autoResult = null;
+    E.auto = freshAuto();
+    if (!autoOn()) return;
+    E.auto.term = AUTO.termFromDates(v.startDate, v.endDate);
+    if (mode !== "saved") return;
+    E.auto.probation = AUTO.parseProbation(v.probationPeriod) || "";
+    const pay = AUTO.parsePayDate(v.payDate);
+    if (pay) { E.auto.payPeriod = pay.period; E.auto.payDay = pay.day; }
+    E.auto.payMethod = AUTO.parsePayMethod(v.payMethod) || "";
+    const result = AUTO.compute(autoInput());
+    AUTO.manualFieldsOf(result, v).forEach(name => E.autoManual.add(name));
+  }
+  function autoRun(activeEl) {
+    if (!AUTO || !E) return null;
+    const result = AUTO.compute(autoInput());
+    E.autoResult = result;
+    if (result.applies && !readOnly()) {
+      Object.entries(AUTO.patchFor(result, E.autoManual, E.auto.term)).forEach(([name, value]) => {
+        E.values[name] = value;
+        const el = dialog?.querySelector(`#cv41_${name}`);
+        if (el && el !== activeEl) el.value = value;
+      });
+    }
+    return result;
+  }
+  function autoLocked(name) {
+    const r = E?.autoResult;
+    if (!r || !r.applies || readOnly()) return false;
+    if (name === "endDate") return E.auto.term !== "custom";
+    return AUTO.AUTO_TEXT_FIELDS.includes(name) && r.texts[name] !== undefined && !E.autoManual.has(name);
+  }
+  function autoToggleHtml(name) {
+    if (!AUTO || !AUTO.AUTO_TEXT_FIELDS.includes(name) || !autoOn() || readOnly()) return "";
+    const show = E.autoResult?.texts[name] !== undefined || E.autoManual.has(name);
+    return `<label class="cv41-auto-toggle" ${show ? "" : "hidden"}><input type="checkbox" data-cv41-auto-manual="${name}" ${E.autoManual.has(name) ? "checked" : ""}> 직접 수정</label>`;
+  }
+  function autoInputsHtml(group) {
+    if (!autoOn() || readOnly()) return "";
+    const items = AUTO_SELECTS.filter(item => item.g === group);
+    if (!items.length) return "";
+    return `<div class="cv41-auto-inputs" role="group" aria-label="자동 계산 입력">${items.map(item => `<div class="form-field"><label for="cv41_auto_${item.key}">${esc(item.label)}</label><select class="field" id="cv41_auto_${item.key}" data-cv41-auto="${item.key}">${item.options.map(([key, label]) => `<option value="${esc(key)}" ${String(E.auto[item.key]) === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>${item.hint ? `<small>${esc(item.hint)}</small>` : ""}</div>`).join("")}</div>`;
+  }
+  const dur = minutes => SCH.duration(Math.round(minutes));
+  const hoursText = value => `${Number.isInteger(value) ? value : Math.round(value * 100) / 100}시간`;
+  function autoSummaryHtml() {
+    const r = E?.autoResult;
+    if (!r) return "";
+    const head = "<h3>자동 계산 요약</h3>";
+    if (!r.applies) return `${head}<p class="cv41-sum-empty">용역·비밀유지 계약은 근로시간·주휴·최저임금을 계산하지 않습니다.</p>`;
+    const money = C.formatMoney;
+    const rows = [];
+    const v = E.values;
+    rows.push(["계약기간", !v.startDate ? "입사일을 입력하면 계산됩니다"
+      : r.period.endDate ? `${v.startDate} ~ ${r.period.endDate}` : `${v.startDate}부터 (기간의 정함 없음)`]);
+    const weekly = r.time.weeklyMinutes || 0;
+    if (weekly > 0) {
+      const first = r.time.first;
+      rows.push(["근로일·1일 근로", r.time.ok && first ? `주 ${r.time.plans.length}일 · 1일 실근로 ${dur(first.net)}(휴게 ${first.rest}분)` : `주 소정근로 ${dur(weekly)}`]);
+      rows.push(["1주 소정근로", dur(weekly)]);
+      rows.push(["주휴", r.holiday.applies ? `유급 ${dur(r.holiday.minutes)}` : r.holiday.ultraShort ? "해당 없음(주 15시간 미만 초단시간)" : "해당 없음"]);
+      if (r.time.ok && (r.time.weeklyOvertime > 0 || r.time.weeklyNight > 0)) {
+        rows.push(["연장·야간", [r.time.weeklyOvertime > 0 ? `1주 연장 ${dur(r.time.weeklyOvertime)}` : "", r.time.weeklyNight > 0 ? `1주 야간 ${dur(r.time.weeklyNight)}` : ""].filter(Boolean).join(" · ")]);
+      }
+      rows.push(["월 환산 시간", `${hoursText(r.hours.paid)}(주휴 ${hoursText(r.hours.holiday)} 포함)`]);
+    } else {
+      rows.push(["근무 일정", "요일과 시각을 고르면 근로시간·주휴·월 환산 시간이 계산됩니다"]);
+    }
+    const w = r.wage;
+    if (w.input > 0 && w.monthly !== null) {
+      if (w.type === "monthly") rows.push(["월 임금", money(w.monthly)]);
+      else if (w.type === "daily") {
+        rows.push([w.premium > 0 ? "월 예상 임금(주휴 별도, 가산 포함)" : "월 예상 임금(주휴 별도)", money(w.monthly)]);
+        if (w.holidayPay > 0) rows.push(["주휴수당(별도 가산, 월)", money(w.holidayPay)]);
+      } else rows.push([w.premium > 0 ? "월 예상 임금(주휴·가산 포함)" : "월 예상 임금(주휴 포함)", money(w.monthly)]);
+      if (w.premium > 0) rows.push(["연장·야간 가산수당(월)", money(w.premium)]);
+      if (w.hourly !== null && w.type !== "hourly") rows.push(["환산 시급", money(Math.floor(w.hourly))]);
+      if (w.split) rows.push(["월급 구성", `기본급 ${money(w.split.base)} + 식대 ${money(w.split.meal)} + 수당 ${money(w.split.allowance)}`]);
+    }
+    if (w.min.status === "pass") rows.push(["최저임금", `충족(환산 시급 ${money(Math.floor(w.min.hourly))} ≥ ${money(w.min.min)})`]);
+    else if (w.min.status === "fail") rows.push(["최저임금", `미달 — 환산 시급 ${money(Math.floor(w.min.hourly))} < ${money(w.min.min)}`]);
+    const body = `<dl class="cv41-sum-grid">${rows.map(([k, val], i) => `<div class="${k === "최저임금" && w.min.status === "fail" ? "bad" : ""}" data-sum="${i}"><dt>${esc(k)}</dt><dd>${esc(val)}</dd></div>`).join("")}</dl>`;
+    const warn = r.warnings.length ? `<div class="cv41-alert warn" role="status"><ul>${r.warnings.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : "";
+    const notes = r.notes.length ? `<ul class="cv41-sum-notes">${r.notes.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : "";
+    return `${head}${body}${warn}${notes}`;
+  }
+  /** 입력 중 포커스를 빼앗지 않고 읽기 전용 표시·직접 수정 토글·요약 카드만 다시 그린다. */
+  function autoDomSync() {
+    if (!dialog || !E || !AUTO) return;
+    const r = E.autoResult;
+    AUTO.AUTO_TEXT_FIELDS.concat("endDate").forEach(name => {
+      const el = dialog.querySelector(`#cv41_${name}`);
+      if (!el) return;
+      el.readOnly = readOnly() || autoLocked(name);
+      const box = dialog.querySelector(`[data-cv41-auto-manual="${name}"]`);
+      if (box) {
+        box.checked = E.autoManual.has(name);
+        box.closest("label").hidden = !(r?.applies && (r.texts[name] !== undefined || E.autoManual.has(name)));
+      }
+    });
+    const card = dialog.querySelector("#cv41AutoSummary");
+    if (card) card.innerHTML = autoSummaryHtml();
+  }
+  /** 저장·미리보기를 막는 자동 검사(최저임금 미달). 서명 완료 계약과 계산 대상이 아닌 유형은 제외. */
+  function autoBlockMessage() {
+    if (!AUTO || !E || !autoOn() || readOnly()) return "";
+    return AUTO.compute(autoInput()).blockers[0] || "";
+  }
+  function wireAuto() {
+    dialog.querySelectorAll("[data-cv41-auto]").forEach(select => select.addEventListener("change", () => {
+      const key = select.dataset.cv41Auto;
+      const owned = AUTO_SELECTS.find(item => item.key === key)?.owns;
+      if (owned && E.autoManual.has(owned) && String(E.values[owned] ?? "").trim()) {
+        if (!confirm("직접 수정한 문구를 선택한 값으로 바꿉니다. 계속할까요?")) { select.value = E.auto[key]; return; }
+        E.autoManual.delete(owned);
+      }
+      E.auto[key] = select.value;
+      E.dirty = true; E.previewed = false;
+      autoRun(); autoDomSync(); refreshMissing();
+      if (key === "term" && select.value === "custom") dialog.querySelector("#cv41_endDate")?.focus();
+    }));
+    dialog.querySelectorAll("[data-cv41-auto-manual]").forEach(box => box.addEventListener("change", () => {
+      const name = box.dataset.cv41AutoManual;
+      if (box.checked) E.autoManual.add(name); else E.autoManual.delete(name);
+      E.dirty = true; E.previewed = false;
+      autoRun(); autoDomSync(); refreshMissing();
+      if (box.checked) dialog.querySelector(`#cv41_${name}`)?.focus();
+    }));
   }
 
   // ---------- 값 변환 ----------
@@ -721,7 +881,10 @@
       sched: SCH ? SCH.emptySchedule() : null,
       schedManual: new Set(),
       schedSource: "",
-      schedUnparsed: false
+      schedUnparsed: false,
+      auto: freshAuto(),
+      autoManual: new Set(),
+      autoResult: null
     };
   }
   function openEditor({ employee = null, contract = null }) {
@@ -739,6 +902,7 @@
     };
     if (contract) E.wageManual = wageManualFor(E.values);
     if (contract) initSchedule("saved"); else if (employee) initSchedule("new");
+    initAuto(contract ? "saved" : "new");
     setUrl(contract ? { cv41_contract: contract.id } : employee ? { cv41_request: employee.id } : {});
     ensureDialog();
     render();
@@ -816,7 +980,7 @@
     const value = E.values[field.name] ?? "";
     const monthly = E.values.wageType === "monthly";
     const mealLocked = field.name === "nonTaxMealAllowance" && monthly && E.values.mealProvision !== "cash_no_meal";
-    const disabled = readOnly() || field.readonly || (field.name === "baseSalary" && monthly) ? "readonly" : mealLocked ? "disabled" : "";
+    const disabled = readOnly() || field.readonly || (field.name === "baseSalary" && monthly) || autoLocked(field.name) ? "readonly" : mealLocked ? "disabled" : "";
     const hint = mealLocked ? EMPLOYER_MEAL_NOTE : field.hint;
     const invalid = E.missing.some(label => FIELD_BY_LABEL.get(label) === field.name) || Boolean(E.live?.has(field.name));
     const suggestion = invalid && !readOnly() ? suggestionFor(field.name) : null;
@@ -832,12 +996,13 @@
       control = `<input class="field" ${type} ${common} value="${esc(value)}" ${disabled}>`;
     }
     const suggestHtml = suggestion ? `<button class="btn cv41-suggest" type="button" data-cv41-suggest="${esc(field.name)}">추천값 넣기: ${esc(shortText(suggestion.value))}</button>` : "";
-    return `<div class="form-field ${invalid ? "invalid" : ""} ${field.type === "textarea" ? "wide" : ""}"><label for="${id}">${esc(field.label)}${invalid ? ' <span class="cv41-req">필수·비어 있음</span>' : ""}${schedBadge(field.name)}</label>${control}${suggestHtml}${hint ? `<small id="${id}_hint">${esc(hint)}</small>` : ""}${field.name === "baseSalary" ? `<div id="cv41WageNote" aria-live="polite">${wageNoteHtml()}</div>` : ""}</div>`;
+    return `<div class="form-field ${invalid ? "invalid" : ""} ${field.type === "textarea" ? "wide" : ""}"><label for="${id}">${esc(field.label)}${invalid ? ' <span class="cv41-req">필수·비어 있음</span>' : ""}${schedBadge(field.name)}</label>${control}${autoToggleHtml(field.name)}${suggestHtml}${hint ? `<small id="${id}_hint">${esc(hint)}</small>` : ""}${field.name === "baseSalary" ? `<div id="cv41WageNote" aria-live="polite">${wageNoteHtml()}</div>` : ""}</div>`;
   }
   function stepConditions() {
     const type = E.values.contractType || "part_time";
     const monthlyWage = E.values.wageType === "monthly";
     const visible = field => (!field.only || field.only === type) && (monthlyWage || !WAGE_SPLIT_FIELDS.includes(field.name));
+    if (AUTO) autoRun();
     const live = liveCheck();
     const liveLabels = live.labels;
     E.live = missingNames(liveLabels);
@@ -846,14 +1011,16 @@
       const hasMissing = fields.some(field => E.missing.some(label => FIELD_BY_LABEL.get(label) === field.name) || E.live.has(field.name));
       const collapsible = key === "employee" || key === "employer";
       const picker = key === "work" && schedVisible() ? schedHtml() : "";
-      const inner = `${picker}<div class="form-grid">${fields.map(fieldControl).join("")}</div>`;
+      const autoIn = autoInputsHtml(key);
+      const minorOpen = key === "employee" && Boolean(E.autoResult?.age?.minor);
+      const inner = `${autoIn}${picker}<div class="form-grid">${fields.map(fieldControl).join("")}</div>`;
       return collapsible
-        ? `<details class="cv41-group" ${hasMissing ? "open" : ""}><summary>${esc(title)}</summary>${inner}</details>`
+        ? `<details class="cv41-group" ${hasMissing || minorOpen ? "open" : ""}><summary>${esc(title)}</summary>${inner}</details>`
         : `<fieldset class="cv41-group"><legend>${esc(title)}</legend>${inner}</fieldset>`;
     }).join("");
     const lockNote = E.contract && statusOf(E.contract)[0] === "requested"
       ? '<p class="cv41-alert warn">서명요청을 보낸 계약서입니다. 조건을 바꿔 저장하면 보낸 서명 링크가 무효가 되고 서명요청을 다시 보내야 합니다.</p>' : "";
-    return `${lockNote}${amendNoteHtml()}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 임금 금액은 자동으로 넣지 않습니다(월급제는 확정 임금을 넣으면 과세 기본급·비과세 식대·기타 과세수당만 자동 계산). <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels, live.blocker)}</div>`}${groupHtml}`;
+    return `${lockNote}${amendNoteHtml()}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 임금 금액은 자동으로 넣지 않습니다(월급제는 확정 임금을 넣으면 과세 기본급·비과세 식대·기타 과세수당만 자동 계산). <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${AUTO ? `<section class="cv41-autosum" id="cv41AutoSummary" aria-live="polite" aria-label="자동 계산 요약">${autoSummaryHtml()}</section>` : ""}${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels, live.blocker)}</div>`}${groupHtml}`;
   }
   function amendNoteHtml() {
     const originalId = E.values.amendsContractId;
@@ -878,6 +1045,7 @@
     };
     E.wageManual = wageManualFor(E.values);
     initSchedule("saved");
+    initAuto("saved");
     setUrl(employee ? { cv41_request: employee.id } : {});
     render();
   }
@@ -949,6 +1117,7 @@
       E.contract = null;
       E.sched = SCH ? SCH.emptySchedule() : null; E.schedManual = new Set(); E.schedSource = ""; E.schedUnparsed = false;
       if (employee) initSchedule("new");
+      initAuto("new");
       setUrl(employee ? { cv41_request: employee.id } : {});
       render();
       dialog.querySelector("#cv41Employee").value = employee ? employeeKey(employee) : "";
@@ -974,16 +1143,23 @@
           if (String(input.value).trim() === "") E.schedManual.delete(input.name); else E.schedManual.add(input.name);
           updateManualBadges();
         }
+        if (AUTO && AUTO.AUTO_TEXT_FIELDS.includes(input.name) && autoOn()) {
+          if (String(input.value).trim() === "") E.autoManual.delete(input.name); else E.autoManual.add(input.name);
+        }
         if (input.name === "contractType") {
           switchContractType(input.value, prevType, prevTax);
           syncWageAuto();
           schedAfterTypeChange(input.value);
           render();
-        } else if (WAGE_TRIGGERS.has(input.name)) {
+          return;
+        }
+        if (WAGE_TRIGGERS.has(input.name)) {
           // 입력 중인 칸은 덮어쓰지 않는다(blur 시 change 에서 정리).
           syncWageAuto(input.tagName === "SELECT" ? null : input.name);
-          if (input.tagName === "SELECT") render(); else syncWageDom(input);
+          if (input.tagName === "SELECT") { render(); return; }
+          syncWageDom(input);
         }
+        if (AUTO) { autoRun(input); autoDomSync(); }
       };
       input.addEventListener(input.tagName === "SELECT" ? "change" : "input", handler);
       if (WAGE_TRIGGERS.has(input.name) && input.tagName !== "SELECT") {
@@ -994,12 +1170,14 @@
             E.wageNotice = `비과세 식대는 월 ${C.formatMoney(C.NON_TAX_MEAL_LIMIT)}과 확정 임금 중 작은 금액까지만 넣을 수 있어 조정했습니다.`;
           }
           syncWageDom(null);
+          if (AUTO) { autoRun(); autoDomSync(); }
         });
       }
       if (input.name !== "contractType") input.addEventListener("change", refreshMissing);
     });
     wireMissing(dialog);
     wireSched();
+    wireAuto();
     wireWageFit(dialog.querySelector("#cv41WageNote"));
     dialog.querySelectorAll("[data-cv41-docs-open]").forEach(button => button.addEventListener("click", () => { if (E.employee) openDocs(E.employee); }));
     dialog.querySelector("[data-cv41-defaults]")?.addEventListener("click", () => { applyDefaults(false); E.dirty = true; render(); });
@@ -1049,7 +1227,7 @@
     if (!E || readOnly()) return { labels: [], blocker: "" };
     try {
       const result = checkLocally(currentDraft());
-      if (result.ok) return { labels: [], blocker: "" };
+      if (result.ok) return { labels: [], blocker: autoBlockMessage() };
       return { labels: result.missing, blocker: result.missing.length ? "" : (result.message || "계약 조건을 확인하십시오.") };
     } catch (error) { return { labels: [], blocker: String(error?.message || error) }; }
   }
@@ -1188,8 +1366,9 @@
   }
   function previewStep() {
     const result = checkLocally(currentDraft());
-    if (!result.ok) {
-      E.error = result.missing.length ? "저장 전에 빈 칸을 채우십시오." : result.message;
+    const gate = result.ok ? autoBlockMessage() : "";
+    if (!result.ok || gate) {
+      E.error = gate || (result.missing.length ? "저장 전에 빈 칸을 채우십시오." : result.message);
       E.missing = result.missing;
       E.step = 1;
       render();
@@ -1207,7 +1386,8 @@
     if (requested && !confirm("서명요청을 보낸 계약서입니다. 저장하면 보낸 서명 링크가 무효가 되고 서명요청을 다시 보내야 합니다. 저장할까요?")) return;
     const draft = currentDraft();
     const result = checkLocally(draft);
-    if (!result.ok) { E.error = result.message; E.missing = result.missing; E.step = 1; render(); return; }
+    const gate = result.ok ? autoBlockMessage() : "";
+    if (!result.ok || gate) { E.error = gate || result.message; E.missing = result.missing; E.step = 1; render(); return; }
     const startedAt = new Date().toISOString();
     E.busy = "save"; E.error = ""; render();
     try {
@@ -1495,6 +1675,6 @@
       if (box && ROUTES.has(route)) renderSection(route, box);
     },
     // 단위 검증용(브라우저 밖 node 테스트)
-    _test: { schedAvailable, schedInitState, schedPatch, wageSplitPatch, wageManualFor, draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee }
+    _test: { schedAvailable, schedInitState, schedPatch, wageSplitPatch, wageManualFor, draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee, autoInput, initAuto, autoBlockMessage }
   };
 })();

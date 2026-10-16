@@ -55,6 +55,8 @@ def isolated(tmp_path, monkeypatch):
         return clock["now"].isoformat(timespec="seconds")
 
     monkeypatch.setattr(svc, "_now", fake_now)
+    # 가짜 시계는 2026-09-30 에 고정이지만 서명 링크 만료 판정은 실제 현재 시각을 쓴다 — 시간이 지나면 410 으로 깨진다.
+    monkeypatch.setattr(svc, "CONTRACT_SIGN_LINK_TTL_DAYS", 36500)
 
     async def fake_create_notification(**kwargs):
         return {"id": "ntf-test", **kwargs}
