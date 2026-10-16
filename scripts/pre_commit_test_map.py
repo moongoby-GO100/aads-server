@@ -207,10 +207,12 @@ GROUPS: tuple[Group, ...] = (
         tests=(
             "tests/unit/test_dup_guard.py",
             "tests/unit/test_pre_commit_test_map.py",
+            "tests/unit/test_precommit_rauth_check.py",
         ),
         globs=(
             "scripts/hooks/*",
             "scripts/dup_guard.py",
+            "scripts/rauth_check.py",
             "scripts/pre_commit_test_map.py",
             "scripts/run_unit_tests.sh",
         ),

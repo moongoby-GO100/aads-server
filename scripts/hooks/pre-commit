@@ -328,7 +328,15 @@ RAUTH_VIOLATIONS=0
 for file in $STAGED; do
   if [[ "$file" != *.py ]]; then continue; fi
   if [[ "$file" == *.bak* ]]; then continue; fi
-  RAUTH_MATCH=$(git diff --cached -- "$file" | grep -P "^\+" | grep -v "^+++" | grep "ANTHROPIC_API_KEY" | grep -v "FALLBACK" | grep -v "AUTH_TOKEN" | grep -v "#.*R-AUTH" | grep -v "\.bak")
+  # tests/ 의 '부재 검사' 줄(assert … not in 등)만 예외다 — 판정은 scripts/rauth_check.py.
+  # 스크립트가 없거나 실행에 실패하면 예외 없이 전부 차단하는 옛 grep 으로 닫는다(fail-closed).
+  if [ -f "scripts/rauth_check.py" ]; then
+    RAUTH_MATCH=$(git diff --cached -- "$file" | python3 scripts/rauth_check.py "$file")
+    RAUTH_RC=$?
+    if [ "$RAUTH_RC" -ne 0 ] && [ -z "$RAUTH_MATCH" ]; then RAUTH_MATCH="rauth_check.py 실행 실패(rc=$RAUTH_RC)"; fi
+  else
+    RAUTH_MATCH=$(git diff --cached -- "$file" | grep -P "^\+" | grep -v "^+++" | grep "ANTHROPIC_API_KEY" | grep -v "FALLBACK" | grep -v "AUTH_TOKEN" | grep -v "#.*R-AUTH" | grep -v "\.bak")
+  fi
   if [ -n "$RAUTH_MATCH" ]; then
     echo -e "${RED}[R-AUTH 위반] ANTHROPIC_API_KEY 직접 사용 감지! 파일: $file${NC}"
     echo -e "${RED}  AADS는 Auth Token(ANTHROPIC_AUTH_TOKEN) 사용 — API Key 금지${NC}"
