@@ -20,6 +20,7 @@ import inspect
 
 import pytest
 
+from app.services import live_trading_guard
 from app.services.live_trading_guard import classify
 
 
@@ -94,6 +95,46 @@ def test_gate_can_be_switched_off_without_deploy():
 
     src = inspect.getsource(live_trading_guard)
     assert "LIVE_TRADING_GATE_ENABLED" in src
+
+
+def test_승인_게이트_경로_patch는_목표_자동승인보다_카드를_우선한다(monkeypatch):
+    import asyncio
+    import json
+
+    tool_input = {"file_path": "app/services/live_trading_guard.py", "project": "AADS", "session_id": "session-1"}
+    assert classify("patch_remote_file", tool_input)[0]
+
+    async def no_explicit_approval(*args, **kwargs):
+        return False
+
+    async def goal_policy_allows(*args, **kwargs):
+        return "goal-high-critical"
+
+    async def request_approval(*args, **kwargs):
+        return "approval-1"
+
+    monkeypatch.setattr(live_trading_guard, "is_approved", no_explicit_approval)
+    monkeypatch.setattr(live_trading_guard, "goal_policy_allows", goal_policy_allows)
+    monkeypatch.setattr(live_trading_guard, "request_approval", request_approval)
+    result = asyncio.run(live_trading_guard.check("patch_remote_file", tool_input))
+    assert json.loads(result)["error"] == "live_trading_approval_required"
+
+
+def test_일반_경로는_목표_자동승인_기존_동작을_유지한다(monkeypatch):
+    import asyncio
+
+    async def no_explicit_approval(*args, **kwargs):
+        return False
+
+    async def goal_policy_allows(*args, **kwargs):
+        return "goal-high"
+
+    monkeypatch.setattr(live_trading_guard, "is_approved", no_explicit_approval)
+    monkeypatch.setattr(live_trading_guard, "goal_policy_allows", goal_policy_allows)
+    result = asyncio.run(live_trading_guard.check(
+        "patch_remote_file", {"file_path": "app/services/reporting.py", "session_id": "s"}
+    ))
+    assert result is None
 
 
 def test_pending_uses_pending_not_null():

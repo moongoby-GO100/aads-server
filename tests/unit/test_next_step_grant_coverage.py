@@ -187,6 +187,14 @@ def test_세션을_모르면_목표_설정을_보지_않는다():
     assert asyncio.run(_goal_policy_covers(conn, "", "high", "GO100")) is None
 
 
+def test_승인_게이트_경로는_자동통과_제외목록에_포함된다():
+    from app.services.live_trading_guard import is_approval_protected_path
+
+    assert is_approval_protected_path("patch app/services/live_trading_guard.py")
+    assert is_approval_protected_path("app/routers/goals.py approval-policy")
+    assert not is_approval_protected_path("app/services/reporting.py")
+
+
 # ─── 세션 프로젝트 ────────────────────────────────────────────────────
 
 

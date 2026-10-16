@@ -72,6 +72,35 @@ _WRITE_TOOLS = {
     "write_remote_file", "patch_remote_file", "db_safe_write",
     "deploy_safe", "pipeline_runner_submit", "delegate_to_agent",
 }
+
+# 승인 게이트 자체를 바꾸는 변경은 그 게이트의 목표 사전승인으로 통과할 수
+# 없다. 경로는 repo 상대경로 기준이며, agent_permission_requests 를 직접
+# 다루는 승인 결정 모듈도 포함한다.
+APPROVAL_PROTECTED_PATHS = frozenset({
+    "app/services/live_trading_guard.py",
+    "app/services/next_step_proposals.py",
+    "app/services/approval_profiles.py",
+    "app/services/db_write_sql_guard.py",
+    "app/routers/goals.py",  # approval-policy API
+    "app/api/ceo_chat.py",
+    "app/api/inbox.py",
+    "app/api/project_docs.py",
+    "app/services/approval_expiry.py",
+    "app/services/browser_login_autosave.py",
+    "app/services/goal_workflow_approval.py",
+    "app/services/browser_task_gateway.py",
+    "app/services/authenticated_site_collector.py",
+    "app/services/goal_failure_retry.py",
+    "app/services/owner_session_provision.py",
+    "app/services/vault_secure_input.py",
+    "app/services/ohvis_harness.py",
+})
+
+
+def is_approval_protected_path(blob: str) -> bool:
+    """텍스트가 승인 게이트/승인 카드 처리 코드 경로를 대상으로 하는가."""
+    normalized = (blob or "").replace("\\", "/").lower()
+    return any(path in normalized for path in APPROVAL_PROTECTED_PATHS)
 _COMMAND_TOOLS = {"run_remote_command", "pc_execute", "execute_sandbox", "device_command"}
 
 # 명령 안에서 쓰기로 보는 것. 조회는 통과시킨다.
@@ -473,9 +502,10 @@ def classify_tier(tool_name: str, tool_input: Dict[str, Any]) -> Tuple[str, str,
         return TIER_PASS, "", ""
 
     scanned = _code_relevant_text(blob)
+    on_approval_path = is_approval_protected_path(scanned)
     is_critical = bool(_CRITICAL.search(scanned))
     on_guarded_path = bool(_GUARDED_PATH.search(scanned))
-    if not is_critical and not on_guarded_path:
+    if not is_critical and not on_guarded_path and not on_approval_path:
         return TIER_PASS, "", ""
 
     if tool_name in _COMMAND_TOOLS:
@@ -488,6 +518,8 @@ def classify_tier(tool_name: str, tool_input: Dict[str, Any]) -> Tuple[str, str,
         return TIER_APPROVE, "high", "실매매 경로에서 변경 명령을 실행하려 함"
 
     if tool_name in _WRITE_TOOLS:
+        if on_approval_path:
+            return TIER_APPROVE, "critical", f"{tool_name} 이(가) 승인 게이트 경로를 변경하려 함"
         if is_critical:
             return TIER_APPROVE, "critical", f"{tool_name} 이(가) 주문·자금 설정을 바꾸려 함"
         return TIER_APPROVE, "high", f"{tool_name} 이(가) 실매매 경로를 변경하려 함"
@@ -944,7 +976,11 @@ async def check(tool_name: str, tool_input: Dict[str, Any]) -> Optional[str]:
 
     # 목표에 걸어 둔 승인 설정. 대표님이 그 목표 동안 미리 허락해 두신 등급이면
     # 여기서 통과한다 — 매번 묻지 않기 위해 존재한다.
-    goal_pass = await goal_policy_allows(session_id, tool_name, tool_input, risk_level)
+    # 게이트/승인 카드 구현은 목표의 high/critical 사전승인 범위에서도 제외한다.
+    if is_approval_protected_path(_text_of(tool_input)):
+        goal_pass = None
+    else:
+        goal_pass = await goal_policy_allows(session_id, tool_name, tool_input, risk_level)
     if goal_pass:
         logger.info(
             "live_trading_gate_goal_policy_pass tool=%s session=%s goal=%s risk=%s",

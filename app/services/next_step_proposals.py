@@ -45,6 +45,7 @@
 from __future__ import annotations
 
 import hashlib
+from app.services import live_trading_guard
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -363,7 +364,11 @@ async def propose(
         goal_cache: Dict[str, Optional[str]] = {}
 
         for step in normalized:
-            grant_id = await _covered_by_existing_grant(
+            approval_code_change = live_trading_guard.is_approval_protected_path(
+                "\n".join((step["title"], step["detail"], step["tool"]))
+            )
+            # 승인 게이트 구현 변경은 기존 grant나 목표 설정으로 자동통과하지 않는다.
+            grant_id = None if approval_code_change else await _covered_by_existing_grant(
                 conn, session_id, step["tool"], project,
             )
             if grant_id:
@@ -371,11 +376,15 @@ async def propose(
                 continue
 
             risk = step["risk"]
-            if risk not in goal_cache:
+            if approval_code_change:
+                goal_id = None
+            elif risk not in goal_cache:
                 goal_cache[risk] = await _goal_policy_covers(
                     conn, session_id, risk, project,
                 )
-            goal_id = goal_cache[risk]
+                goal_id = goal_cache[risk]
+            else:
+                goal_id = goal_cache[risk]
             if goal_id:
                 auto.append({
                     **step,
