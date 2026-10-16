@@ -83,6 +83,7 @@ fi
 declare -A job_status=()
 db_rows=""
 db_ready=0
+status_source=none
 # Completed jobs move to pipeline_jobs_archive after a few hours; archived rows
 # keep their original status in row_data. Prefer a live row if both exist.
 sql="SELECT job_id || '|' || status FROM pipeline_jobs WHERE job_id LIKE 'runner-%'
@@ -112,10 +113,38 @@ elif command -v psql >/dev/null 2>&1 && db_rows="$(timeout 10 psql ${psql_args[@
     db_ready=1
 fi
 if (( db_ready )); then
+    status_source=db
+elif [[ -z "$only_job" && -n "${RUNNER_WT_STATUS_FILE:-}" ]]; then
+    status_max_age="${RUNNER_WT_STATUS_MAX_AGE_MIN:-120}"
+    if [[ ! "$status_max_age" =~ ^[0-9]+$ ]]; then
+        echo "[reclaim-wt] invalid RUNNER_WT_STATUS_MAX_AGE_MIN" >&2
+        exit 2
+    fi
+    # Read a single inode: an atomic exporter replacement cannot mix generations.
+    if [[ -f "$RUNNER_WT_STATUS_FILE" && -r "$RUNNER_WT_STATUS_FILE" ]] && { exec {status_fd}< "$RUNNER_WT_STATUS_FILE"; } 2>/dev/null; then
+        status_mtime="$(stat -Lc %Y "/proc/$$/fd/$status_fd" 2>/dev/null)" || status_mtime=0
+        status_now="$(date +%s)"
+        if [[ "$status_mtime" =~ ^[0-9]+$ ]] && (( status_mtime > 0 && status_now - status_mtime <= 10#$status_max_age * 60 )); then
+            invalid_rows=0
+            while IFS= read -r row || [[ -n "$row" ]]; do
+                if [[ "$row" =~ ^(runner-[0-9a-zA-Z_-]+)\|([a-z][a-z0-9_]*)$ ]]; then
+                    job_status["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
+                    db_ready=1
+                else
+                    invalid_rows=$((invalid_rows + 1))
+                fi
+            done <&$status_fd
+            (( invalid_rows == 0 )) || echo "[reclaim-wt] status file skipped invalid rows=$invalid_rows" >&2
+            if (( db_ready )); then status_source=file; fi
+        fi
+        exec {status_fd}<&-
+    fi
+fi
+if (( db_ready )) && [[ "$status_source" == db ]]; then
     while IFS='|' read -r id status; do
         [[ "$id" =~ ^runner-[0-9a-zA-Z_-]+$ && -n "$status" ]] && job_status["$id"]="$status"
     done <<< "$db_rows"
-elif [[ -z "$only_job" ]]; then
+elif (( ! db_ready )) && [[ -z "$only_job" ]]; then
     echo "[reclaim-wt] DB unavailable; preserving unknown jobs by default (tried: docker=${pg_container:-none}, psql=${PGHOST:-local-socket}${PGPORT:+:$PGPORT})" >&2
 fi
 
@@ -252,9 +281,10 @@ _validate_runner_worktree() {
     local path="$1" common_dir top_real listing
     # Limit deletion to the runner's known path shape, even if another repo's
     # worktree is registered. Never follow a symlink outside /tmp.
-    [[ "$path" =~ ^/tmp/aads-wt-runner-[0-9a-zA-Z_-]+$ ]] || return 1
+    [[ "$path" == /tmp/* && "${path##*/}" =~ ^aads-wt-runner-[0-9a-zA-Z_-]+$ ]] || return 1
     [[ ! -L "$path" ]] || return 1
     path_real="$(cd "$path" && pwd -P)" || { skipped_unknown_repo=$((skipped_unknown_repo + 1)); return 1; }
+    [[ "$path_real" == /tmp/* ]] || return 1
     [[ "$path_real" != /root/aads/aads-server && "$path_real" != /root/aads/aads-dashboard && "$path_real" != "$repo_real" && "$path_real" != "$compose_real" && "$path_real" != "$deploy_real" ]] || { skipped_active=$((skipped_active + 1)); return 1; }
     common_dir="$(timeout 5 git -C "$path" rev-parse --git-common-dir 2>/dev/null)" || { skipped_unknown_repo=$((skipped_unknown_repo + 1)); return 1; }
     if [[ "$common_dir" != /* ]]; then common_dir="$path/$common_dir"; fi
@@ -311,7 +341,10 @@ declare -a cap_paths=()
 declare -A cap_common=() cap_mtime=()
 
 now="$(date +%s)"
-for path in /tmp/aads-wt-runner-*; do
+wt_glob="${RUNNER_WT_GLOB:-/tmp/aads-wt-runner-*}"
+# Expand only the supplied glob, without shell word splitting.
+mapfile -t wt_paths < <(compgen -G "$wt_glob" || true)
+for path in "${wt_paths[@]}"; do
     [[ -d "$path" ]] || continue
     _validate_runner_worktree "$path" || continue
 
@@ -408,4 +441,4 @@ if [[ "${DRY_RUN:-0}" != 1 ]]; then
         find "$archive_dir" -maxdepth 1 -type f -name '*.bundle' -mmin +"$((archive_max_age * 1440))" -delete 2>/dev/null || echo "[reclaim-wt] archive pruning failed" >&2
     fi
 fi
-echo "[reclaim-wt] reclaimed=${reclaimed} freed=${freed}MB archived=${archived} skipped_active=${skipped_active} skipped_recent=${skipped_recent} skipped_unknown=${skipped_unknown} skipped_unknown_repo=${skipped_unknown_repo} skipped_archive_failed=${skipped_archive_failed} reclaimed_over_cap=${reclaimed_over_cap}"
+echo "[reclaim-wt] reclaimed=${reclaimed} freed=${freed}MB archived=${archived} skipped_active=${skipped_active} skipped_recent=${skipped_recent} skipped_unknown=${skipped_unknown} skipped_unknown_repo=${skipped_unknown_repo} skipped_archive_failed=${skipped_archive_failed} reclaimed_over_cap=${reclaimed_over_cap} status_source=${status_source}"
