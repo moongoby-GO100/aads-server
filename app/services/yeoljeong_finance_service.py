@@ -8079,8 +8079,15 @@ def ensure_payroll_deliverable(statement: dict[str, Any]) -> None:
         raise HTTPException(status_code=409, detail="직원 계정 연결 전에는 교부할 수 없습니다")
 
 
+# 직원에게 보여 줄 급여명세 상태(allow-list). draft·빈 값·cancelled·모르는 상태는 숨긴다.
+PAYROLL_EMPLOYEE_VISIBLE_STATUSES = frozenset({"confirmed", "paid"})
+
+
 def list_payroll(user: dict[str, Any]) -> list[dict[str, Any]]:
-    return sorted(_filter_user(_read_hr("payroll_statements", user), user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
+    rows = _filter_user(_read_hr("payroll_statements", user), user, "employee_email")
+    if not _is_admin(user):
+        rows = [row for row in rows if str(row.get("status") or "").strip().lower() in PAYROLL_EMPLOYEE_VISIBLE_STATUSES]
+    return sorted(rows, key=lambda row: row.get("updated_at", ""), reverse=True)
 
 
 def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:

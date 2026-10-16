@@ -108,7 +108,7 @@ def test_save_payroll_with_email_is_not_pending(db):
 def test_non_admin_never_sees_rows_without_email(db, stored):
     db.ledgers["payroll_statements"] += [
         _statement("s-null", "양재혁", email=""),
-        _statement("s-mine", "양재혁", email=EMP_EMAIL, month="2026-08"),
+        _statement("s-mine", "양재혁", email=EMP_EMAIL, month="2026-08", status="confirmed"),
         _statement("s-other", "김철수", email="other@example.com"),
     ]
     db.ledgers["payroll_statements"][0]["employee_email"] = stored
@@ -173,7 +173,7 @@ def test_aggregation_never_matches_none_to_none(db):
 # --- 초대 수락 후 연결 -------------------------------------------------------------------
 @pytest.mark.parametrize("stored", ["", None])
 def test_linked_row_becomes_visible_to_employee(db, stored):
-    db.ledgers["payroll_statements"].append(_statement("s-sep", "양재혁"))
+    db.ledgers["payroll_statements"].append(_statement("s-sep", "양재혁", status="paid"))
     db.ledgers["payroll_statements"][0]["employee_email"] = stored
     db.ledgers["payroll_statements"][0]["email_pending"] = True
     invite = _invite(email=EMP_EMAIL)
