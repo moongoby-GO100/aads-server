@@ -129,27 +129,48 @@ def test_조회_실패는_카드로_떨어진다():
 
 def test_목표_설정이_덮으면_목표_id_를_준다():
     conn = _Conn(row={"id": "goal-1", "title": "AAG"})
-    got = asyncio.run(_goal_policy_covers(conn, "sess-1", "high"))
+    got = asyncio.run(_goal_policy_covers(conn, "sess-1", "high", "GO100"))
     assert got == "goal-1"
+    assert conn.args == ("sess-1", "auto_approve_high", "GO100")
+
+
+def test_다른_프로젝트_목표는_덮지_않는다():
+    class _GoalProjectConn(_Conn):
+        async def fetchrow(self, sql, *args):
+            self.sql, self.args = sql, args
+            # 가짜 DB의 목표는 GO100 이므로 AADS 세션에는 매칭되지 않는다.
+            return {"id": "goal-1"} if args[2].upper() == "GO100" else None
+
+    conn = _GoalProjectConn()
+    got = asyncio.run(_goal_policy_covers(conn, "sess-1", "high", "AADS"))
+    assert got is None
+    assert "UPPER(COALESCE(g.project, '')) = UPPER($3)" in conn.sql
+    assert conn.args[2] == "AADS"
+
+
+def test_세션_프로젝트를_모르면_목표_설정을_보지_않는다():
+    conn = _Conn(row={"id": "goal-1"})
+    assert asyncio.run(_goal_policy_covers(conn, "sess-1", "high", "")) is None
+    assert conn.args == ()
 
 
 def test_위험도에_따라_보는_필드가_다르다():
     conn = _Conn(row=None)
-    asyncio.run(_goal_policy_covers(conn, "sess-1", "high"))
+    asyncio.run(_goal_policy_covers(conn, "sess-1", "high", "GO100"))
     assert conn.args[1] == "auto_approve_high"
-    asyncio.run(_goal_policy_covers(conn, "sess-1", "critical"))
+    asyncio.run(_goal_policy_covers(conn, "sess-1", "critical", "GO100"))
     assert conn.args[1] == "auto_approve_critical"
 
 
 def test_목표_설정은_횟수_상한을_본다():
     conn = _Conn(row=None)
-    asyncio.run(_goal_policy_covers(conn, "sess-1", "high"))
+    asyncio.run(_goal_policy_covers(conn, "sess-1", "high", "GO100"))
     assert "max_executions" in conn.sql and "'used'" in conn.sql
 
 
 def test_끝난_목표는_덮지_않는다():
     conn = _Conn(row=None)
-    asyncio.run(_goal_policy_covers(conn, "sess-1", "high"))
+    asyncio.run(_goal_policy_covers(conn, "sess-1", "high", "GO100"))
     assert "g.status IN ('draft', 'active', 'blocked')" in conn.sql
     assert "link_state" in conn.sql
 
@@ -157,13 +178,13 @@ def test_끝난_목표는_덮지_않는다():
 def test_목표_설정_조회는_횟수를_세지_않는다():
     """소비는 실제 실행 시점의 게이트가 센다. 여기서 세면 두 번 깎인다."""
     conn = _Conn(row={"id": "goal-1", "title": "AAG"})
-    asyncio.run(_goal_policy_covers(conn, "sess-1", "high"))
+    asyncio.run(_goal_policy_covers(conn, "sess-1", "high", "GO100"))
     assert conn.executed == []
 
 
 def test_세션을_모르면_목표_설정을_보지_않는다():
     conn = _Conn(row={"id": "goal-1", "title": "AAG"})
-    assert asyncio.run(_goal_policy_covers(conn, "", "high")) is None
+    assert asyncio.run(_goal_policy_covers(conn, "", "high", "GO100")) is None
 
 
 # ─── 세션 프로젝트 ────────────────────────────────────────────────────

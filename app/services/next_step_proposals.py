@@ -158,7 +158,9 @@ async def _covered_by_existing_grant(
     return row["id"] if row else None
 
 
-async def _goal_policy_covers(conn, session_id: str, risk: str) -> Optional[str]:
+async def _goal_policy_covers(
+    conn, session_id: str, risk: str, project: Optional[str],
+) -> Optional[str]:
     """목표에 걸어 둔 승인 설정이 이 제안을 덮는가. 덮으면 목표 id.
 
     2026-09-17 대표님 지적 — "목표 승인설정이 되면 자동승인 범위안에서는
@@ -174,8 +176,11 @@ async def _goal_policy_covers(conn, session_id: str, risk: str) -> Optional[str]
     2. **여기서 세지 않는다.** 이 함수는 "물어볼 필요가 있나" 만 보는
        읽기 전용이다. 실제 소비는 도구가 실행될 때 실행 게이트가 센다.
        여기서 같이 세면 한 번의 일에 두 번 깎인다.
+
+    실행 게이트와 같은 프로젝트 기준을 적용한다(2026-10-16 CEO 세션에서 발견).
+    프로젝트를 모르면 목표 설정으로 통과시키지 않고 카드로 묻는다.
     """
-    if not session_id:
+    if not session_id or not (project or "").strip():
         return None
     field = "auto_approve_critical" if risk == "critical" else "auto_approve_high"
     try:
@@ -190,10 +195,12 @@ async def _goal_policy_covers(conn, session_id: str, risk: str) -> Optional[str]
               AND COALESCE((g.approval_policy->>$2)::boolean, false)
               AND COALESCE((g.approval_policy->>'used')::int, 0)
                   < COALESCE((g.approval_policy->>'max_executions')::int, 0)
+              AND $3 <> ''
+              AND UPPER(COALESCE(g.project, '')) = UPPER($3)
             ORDER BY g.updated_at DESC
             LIMIT 1
             """,
-            session_id, field,
+            session_id, field, (project or "").strip(),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("next_step_goal_policy_failed error=%s", str(exc)[:160])
@@ -365,7 +372,9 @@ async def propose(
 
             risk = step["risk"]
             if risk not in goal_cache:
-                goal_cache[risk] = await _goal_policy_covers(conn, session_id, risk)
+                goal_cache[risk] = await _goal_policy_covers(
+                    conn, session_id, risk, project,
+                )
             goal_id = goal_cache[risk]
             if goal_id:
                 auto.append({
