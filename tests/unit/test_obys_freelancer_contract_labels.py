@@ -164,7 +164,8 @@ def _capture_paragraphs(monkeypatch):
 
     class Recording(original):
         def __init__(self, text, *args, **kwargs):
-            captured.append(text)
+            if text is not None:  # ReportLab은 쪽을 나눈 Paragraph를 fragments로 다시 만든다.
+                captured.append(text)
             super().__init__(text, *args, **kwargs)
 
     monkeypatch.setattr(platypus, "Paragraph", Recording)
@@ -182,13 +183,13 @@ def test_freelancer_pdf_uses_service_terms_and_keeps_seal(monkeypatch):
 
     assert data.startswith(b"%PDF-")
     joined = "\n".join(captured)
-    for expected in ("수행 장소", "용역비 산정 방식", "건별 용역비", "수급인(계약 상대방)", "위탁자(사업주)"):
+    for expected in ("용역 기간 및 장소", "용역비 및 정산", "건별 용역비", "수급인", "사용자 서명"):
         assert expected in joined
     for forbidden in ("근무장소", "임금 산정 방식", "case_fee", "근로기준법 제17조", "기본급", "비과세 식대"):
         assert forbidden not in joined
     assert contract["signed_snapshot"] == before_snapshot
     assert pdf.snapshot_sha256(contract["signed_snapshot"]) == before_sha
-    assert f"봉인 스냅샷 SHA-256: {before_sha}" in joined
+    assert before_sha not in joined  # 증적은 마지막 쪽 하단에 해시 앞 12자리만 표시한다
     assert pdf.render_signed_contract_pdf(contract) == data
 
 
@@ -197,7 +198,7 @@ def test_labor_pdf_keeps_labor_terms(monkeypatch):
     captured = _capture_paragraphs(monkeypatch)
     pdf.render_signed_contract_pdf(_contract_for(_labor_snapshot()))
     joined = "\n".join(captured)
-    for expected in ("근무장소", "임금 산정 방식", "임금(용역비)", "근로자(계약 상대방)", "사용자(사업주)", "근로기준법 제17조"):
+    for expected in ("근무장소 및 업무", "임금, 계산방법, 지급방법", "근로자", "사용자 서명", "계약서 교부 및 전자서명"):
         assert expected in joined
     assert "수행 장소" not in joined
 
@@ -269,7 +270,7 @@ def test_pdf_extra_rows_do_not_print_internal_keys(monkeypatch):
     joined = "\n".join(captured)
     for forbidden in ("memo", "updated_at", "not_applicable", "foreign_worker", "onboarding_document_summary"):
         assert forbidden not in joined
-    assert "외국인 근로 여부" in joined and "해당 없음" in joined
+    assert "외국인 근로자 체류자격" in joined  # 미리보기 조건부 조항, 내부 코드값은 출력하지 않는다
     assert pdf.snapshot_sha256(contract["signed_snapshot"]) == before_sha
     assert pdf.render_signed_contract_pdf(contract) == data
 

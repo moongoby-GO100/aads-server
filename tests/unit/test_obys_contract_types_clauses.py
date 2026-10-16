@@ -156,6 +156,8 @@ def test_preview_html_bytes_match_before_refactor():
     if not node:
         pytest.skip('호스트 node 검증 필요')
     baseline = Path(__file__).with_name('fixtures') / 'obys_contract_preview_before_r2.json.gz'
+    # R2: daily v4만 중복 문장 제거 및 빈 보험값 기본 문구 적용으로 갱신했다.
+    # 나머지 52개 미리보기는 이전 fixture 바이트를 그대로 보존한다.
     with gzip.open(baseline, 'rt', encoding='utf-8') as source:
         before = source.read()
     out = subprocess.run(

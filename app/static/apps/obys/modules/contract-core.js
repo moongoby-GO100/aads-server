@@ -300,7 +300,12 @@
       const leaveTerms = isV3
         ? contractValue(contract, "leaveTerms", "leave_terms")
         : effectiveSizeTerm(contract, "leaveTerms", "leave_terms", workplaceSizeCategory);
-      const insuranceTerms = contractValue(contract, "insuranceTerms", "insurance_terms") + (!isV3 && contractType === "daily" ? " 고용·산재보험 일용근로 신고와 근로내용 확인신고를 법정 기준에 따라 처리한다." : "");
+      const insuranceTerms = contractValue(contract, "insuranceTerms", "insurance_terms")
+        || (!isV3 && contractType === "daily" ? standardContractDefaults.daily.insuranceTerms : "");
+      const legacyProbation = contractValue(contract, "probationTerms", "probation_terms");
+      const probationPeriod = contractValue(contract, "probationPeriod", "probation_period");
+      const generatedNoProbation = ["수습기간 없음.", "수습기간 없음. 수습을 정한 경우에도 입력 임금을 동일 적용한다."];
+      const sealedProbation = [...new Set([legacyProbation && generatedNoProbation.includes(probationPeriod) ? "" : probationPeriod, legacyProbation].filter(Boolean))].join("\n");
       const mealUniformTerms = contractValue(contract, "mealUniformTerms", "meal_uniform_terms");
       const freelancerScope = contractValue(contract, "freelancerScope", "freelancer_scope");
       const freelancerSettlementTerms = contractValue(contract, "freelancerSettlementTerms", "freelancer_settlement_terms");
@@ -388,11 +393,14 @@
           contractClause("휴가, 결근, 근태", leaveTerms || "연차유급휴가, 지각, 조퇴, 결근, 병가 처리는 근태기록과 법정 기준에 따라 급여내역서에 반영한다."),
           contractClause("4대보험 및 세무", insuranceTerms || `${taxLabel} 기준으로 취득 신고, 원천세, 급여명세서 교부를 처리한다.`),
           ...(!isV3 ? [contractClause("퇴직급여", "사업장 규모와 무관하게 계속근로 1년 이상이고 4주 평균 주 15시간 이상인 근로자에게 퇴직급여보장법에 따른 퇴직급여를 지급한다. 주 15시간 미만 초단시간근로자는 주휴·연차·퇴직급여 적용 대상에서 제외되며 실제 계속근로와 소정근로시간으로 판단한다.")] : []),
-          contractClause("수습 및 평가", contractValue(contract, "probationPeriod", "probation_period") || "수습기간 없음."),
+          contractClause("수습 및 평가", sealedProbation || "수습기간 없음."),
           contractClause("식대, 유니폼, 보건증", mealUniformTerms || "식사 제공, 유니폼 지급·반납, 보건증 제출·갱신, 위생교육 이수 기준을 준수한다."),
           contractClause("퇴직 및 계약 해지", terminationTerms || "퇴직 시 사전 통보, 인수인계, 무단결근·중대한 위반 시 계약 해지 기준을 적용한다."),
           contractClause("개인정보, 보안, 위생", confidentialityTerms || "고객정보, 매출자료, 레시피, 배달앱·포스 계정정보, 위생수칙을 준수하고 무단 반출·공유를 금지한다.")
         ];
+      }
+      if ((isFreelancerContract || isConfidentialityContract) && sealedProbation && (legacyProbation || !generatedNoProbation.includes(probationPeriod))) {
+        clauses.push(contractClause("기존 수습 약정", sealedProbation));
       }
       if (foreignWorker) {
         clauses.push(contractClause("외국인 근로자 체류자격", `체류자격 ${contractValue(contract, "visaStatus", "visa_status") || "미입력"}, 외국인등록번호 ${contractValue(contract, "foreignRegistrationNoMasked", "foreign_registration_no_masked") || "미입력"}. 근로자는 체류자격·체류기간이 바뀌면 사용자에게 즉시 알린다.`));
@@ -421,7 +429,7 @@
         ${salaryBreakdown}
         <h4>${contractDetailHeading}</h4>
         <ol>${clauses.join("")}</ol>
-        ${contractValue(contract, "terms", "terms") ? `<h4>추가 특약</h4><p>${previewText(contractValue(contract, "terms", "terms"))}</p>` : ""}
+        ${[...new Set([contractValue(contract, "terms", "terms"), contractValue(contract, "specialTerms", "special_terms")].filter(Boolean))].map((text, index) => `${index === 0 ? "<h4>추가 특약</h4>" : ""}<p>${previewText(text)}</p>`).join("")}
         <div class="signature-grid">
           <div class="signature-box employer-signature"><b>사용자 서명</b><br>${previewText(employerName, "열정국밥")}<br>대표 ${previewText(contractValue(contract, "employerRepresentative", "employer_representative"))} (서명 또는 인)${stampSvg}</div>
           <div class="signature-box"><b>${signatureLabel}</b><br>${previewText(signerName)}<br>${signatureDataUri ? `<img class="signed-signature-image" src="${escapeHtml(signatureDataUri)}" alt="${escapeHtml(signatureLabel)} 자필서명">서명일시: ${previewText(String(signedAt).replace("T", " ").slice(0, 19))}` : "서명: __________"}</div>

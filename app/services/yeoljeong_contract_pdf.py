@@ -18,12 +18,14 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone, timedelta
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
 from app.services import yeoljeong_company_seal as company_seal
+from app.services.obys_contract_clauses import CONTRACT_TITLES, contract_clauses, korean_date, money
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +217,12 @@ def _register_font() -> str:
     if not all(glyphs.get(code) for code in _HANGUL_PROBE):
         raise ContractPdfError(f"폰트에 한글 글리프가 없습니다: {path.name}")
     pdfmetrics.registerFont(font)
+    bold_path = BUNDLED_FONT.with_name("NanumGothic-Bold.ttf")
+    bold_name = FONT_NAME
+    if bold_path.is_file():
+        bold_name = FONT_NAME + "Bold"
+        pdfmetrics.registerFont(TTFont(bold_name, str(bold_path)))
+    pdfmetrics.registerFontFamily(FONT_NAME, normal=FONT_NAME, bold=bold_name)
     return FONT_NAME
 
 
@@ -380,72 +388,138 @@ def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | 
         from reportlab.lib.styles import ParagraphStyle
         from reportlab.lib.units import mm
         from reportlab.platypus import Flowable, Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+        from reportlab.pdfgen.canvas import Canvas
     except ImportError:
         raise ContractPdfError("reportlab 이 설치되어 있지 않습니다") from None
 
     font = _register_font()
     seal_font_for = _seal_font_picker(font)
-    base = ParagraphStyle("body", fontName=font, fontSize=9.5, leading=13.5, wordWrap="CJK")
-    small = ParagraphStyle("small", parent=base, fontSize=7.5, leading=10, textColor=colors.HexColor("#444444"))
-    label = ParagraphStyle("label", parent=base, textColor=colors.HexColor("#222222"))
-    heading = ParagraphStyle("heading", parent=base, fontSize=11.5, leading=16, spaceBefore=8, spaceAfter=4)
-    title_style = ParagraphStyle("title", parent=base, fontSize=17, leading=24, alignment=1, spaceAfter=6)
+    from reportlab.pdfbase import pdfmetrics
+    bold_font = pdfmetrics.getFont(font).fontName
+    if BUNDLED_FONT.with_name("NanumGothic-Bold.ttf").is_file():
+        bold_font = FONT_NAME + "Bold"
+    # cv41-paper: 13px / 1.6, identity 12px / 1.45; 1 CSS px = .75pt.
+    base = ParagraphStyle("body", fontName=font, fontSize=9.75, leading=15.6, wordWrap="CJK")
+    small = ParagraphStyle("small", parent=base, fontSize=8.25, leading=12, textColor=colors.HexColor("#64748b"))
+    label = ParagraphStyle("label", parent=base, fontName=bold_font, fontSize=9, leading=13.05, textColor=colors.HexColor("#45545b"))
+    heading = ParagraphStyle("heading", parent=base, fontName=bold_font, fontSize=10.5, spaceBefore=10, spaceAfter=6, keepWithNext=True)
+    title_style = ParagraphStyle("title", parent=base, fontName=bold_font, fontSize=15, leading=24, alignment=1, spaceAfter=4.5)
+    clause_style = ParagraphStyle("clause", parent=base, leftIndent=18, firstLineIndent=-18, spaceAfter=4.5)
 
     def para(value: Any, style: ParagraphStyle = base) -> Paragraph:
         return Paragraph(escape(_text(value)).replace("\n", "<br/>"), style)
 
     def table(rows: list[tuple[str, Any]]) -> Table:
-        data = [[para(name, label), para(value)] for name, value in rows]
-        grid = Table(data, colWidths=[42 * mm, 128 * mm])
-        grid.setStyle(
-            TableStyle(
-                [
-                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#999999")),
-                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f2f2f2")),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ]
-            )
-        )
+        data = [[para(name + "\n" + _text(value)) for name, value in rows]]
+        grid = Table(data, colWidths=[170 * mm / len(rows)] * len(rows))
+        grid.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
         return grid
 
     def rows_for(fields: tuple[tuple[str, str], ...]) -> list[tuple[str, Any]]:
         return [(name, snapshot.get(key)) for key, name in fields if _text(snapshot.get(key))]
 
+    def cell(key: str, fallback: str = "-") -> Paragraph:
+        return para(snapshot.get(key) or fallback)
+
     contract_type = str(snapshot.get("contract_type") or "")
     freelancer = is_freelancer_snapshot(snapshot)
+    party = "수급인" if freelancer else "서약자" if contract_type == "confidentiality" else "근로자"
     consent = snapshot.get("signature_consent") if isinstance(snapshot.get("signature_consent"), dict) else {}
     audit = snapshot.get("signature_audit") if isinstance(snapshot.get("signature_audit"), dict) else {}
-    story: list[Any] = [
-        para(snapshot.get("print_title") or "계약서", title_style),
-        para(
-            f"계약서 번호 {snapshot.get('id') or ''}",
-            small,
-        ),
-        Spacer(1, 4 * mm),
-        para("계약 개요", heading),
-        table(
-            [
-                ("계약 유형", CONTRACT_TYPE_LABELS.get(contract_type, contract_type)),
-                ("사업장", snapshot.get("branch")),
-                ("계약일", snapshot.get("contract_date")),
-            ]
-        ),
-        para("위탁자(사업주)" if freelancer else "사용자(사업주)", heading),
-        table(rows_for(PARTY_FIELDS) or [("상호", "")]),
-        para("수급인(계약 상대방)" if freelancer else "근로자(계약 상대방)", heading),
-        table(rows_for(EMPLOYEE_FIELDS) + [("계정", snapshot.get("employee_email_masked") or _mask_email(snapshot.get("employee_email") or ""))]),
+    identity = [
+        [para("사용자", label), para("상호", label), cell("employer_name", "열정국밥"), para("대표자", label), cell("employer_representative")],
+        ["", para("사업자등록번호", label), cell("employer_registration_no"), para("연락처", label), cell("employer_phone")],
+        ["", para("주소", label), cell("employer_address"), "", ""],
+        [para(party, label), para("성명", label), cell("employee_name"), para("생년월일·국적", label), para(f"{korean_date(snapshot.get('employee_birth_date')) or '-'} / {snapshot.get('employee_nationality') or '대한민국'}")],
+        ["", para("주소", label), cell("employee_address"), "", ""],
+        ["", para("연락처", label), para("비공개"), para("이메일", label), para(snapshot.get("employee_email_masked") or _mask_email(snapshot.get("employee_email") or ""))],
+        ["", para("정산계좌" if freelancer else "급여계좌", label), para(" / ".join(str(x) for x in [snapshot.get("bank_name"), snapshot.get("bank_account_number") or snapshot.get("bank_account_masked"), "예금주 " + str(snapshot["bank_account_holder"]) if snapshot.get("bank_account_holder") else ""] if x) or "미등록"), "", ""],
     ]
-    terms = term_rows(snapshot)
-    if terms:
-        story += [para("계약 조건", heading), table(terms)]
-    extra = extra_rows(snapshot)
-    if extra:
-        story += [para("기타 기재사항", heading), table(extra)]
+    width = 170 * mm
+    grid = Table(identity, colWidths=[width * n for n in (.09, .17, .285, .17, .285)])
+    commands = [
+        ("GRID", (0, 0), (-1, -1), .75, colors.HexColor("#cbd5e1")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("SPAN", (0, 0), (0, 2)), ("SPAN", (0, 3), (0, 6)),
+        ("BACKGROUND", (0, 0), (1, -1), colors.HexColor("#f8fafc")),
+        ("BACKGROUND", (3, 0), (3, -1), colors.HexColor("#f8fafc")),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e9eff2")),
+        ("VALIGN", (0, 0), (0, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5.25), ("RIGHTPADDING", (0, 0), (-1, -1), 5.25),
+        ("TOPPADDING", (0, 0), (-1, -1), 3.75), ("BOTTOMPADDING", (0, 0), (-1, -1), 3.75),
+    ]
+    for row in (2, 4, 6):
+        commands.append(("SPAN", (2, row), (4, row)))
+    grid.setStyle(TableStyle(commands))
+    story: list[Any] = [
+        para(CONTRACT_TITLES.get(contract_type, snapshot.get("print_title") or "계약서"), title_style),
+        para(f"계약 체결일 {korean_date(snapshot.get('contract_date')) or '미입력'} · {'수행 지점' if freelancer else '근무지점'} {snapshot.get('branch') or '-'}", small),
+        Spacer(1, 7.5), grid, Spacer(1, 6),
+    ]
+    if contract_type == "regular" and any(snapshot.get(k) for k in ("base_salary", "non_tax_meal_allowance", "taxable_allowance")):
+        salary_fields = (
+            ("base_salary", "과세 기본급"), ("non_tax_meal_allowance", "비과세 식대"),
+            ("taxable_allowance", "기타 과세수당"),
+        )
+        salary_values = dict(rows_for(salary_fields))
+        salary_rows = []
+        for key, name in salary_fields:
+            description = money(salary_values.get(name))
+            if key == "non_tax_meal_allowance":
+                description += "\n" + ("식사 미제공 조건" if snapshot.get("meal_provision") == "cash_no_meal" else "미적용")
+            salary_rows.append((name, description))
+        salary = table(salary_rows)
+        story.append(salary)
+    story.append(para("용역 상세 조항" if freelancer else "서약 상세 조항" if contract_type == "confidentiality" else "계약 상세 조항", heading))
+    for number, (title, body) in enumerate(contract_clauses(snapshot), 1):
+        story.append(Paragraph(f"{number}. <b>{escape(title)}</b><br/>" + escape(body).replace("\n", "<br/>"), clause_style))
+    agreements = list(dict.fromkeys(_text(snapshot.get(k)) for k in ("terms", "special_terms") if _text(snapshot.get(k))))
+    if agreements:
+        story.extend([para("추가 특약", heading), para("\n".join(agreements))])
+    # Coverage is field-specific: a value in an unrelated field is never proof
+    # that this sealed field was printed (e.g. 40 hours vs. 400,000 won).
+    clause_bodies = dict(contract_clauses(snapshot))
+    covered_fields = {
+        "probation_terms": bool(snapshot.get("probation_terms")),
+        "special_terms": bool(snapshot.get("special_terms")),
+        "terms": bool(snapshot.get("terms")),
+        "probation_period": bool(snapshot.get("probation_period")) and any(
+            _text(snapshot.get("probation_period")) in body.split("\n")
+            for title, body in clause_bodies.items() if "수습" in title
+        ),
+    }
+    for key, title in (
+        ("overtime_terms", "연장·야간·휴일근로"),
+        ("leave_terms", "연차 및 휴가"),
+        ("insurance_terms", "4대보험 및 세무"),
+    ):
+        covered_fields[key] = _text(snapshot.get(key)) == clause_bodies.get(title)
+    # These legacy identity fields are absent from the compact identity grid.
+    residual = rows_for((("visa_status", "체류자격"),
+                         ("foreign_registration_no_masked", "외국인등록번호")))
+    if snapshot.get("probation_terms") and _text(snapshot.get("probation_period")) in (
+        "수습기간 없음.", "수습기간 없음. 수습을 정한 경우에도 입력 임금을 동일 적용한다.",
+    ):
+        covered_fields["probation_period"] = True
+    remaining_terms = {k: v for k, v in snapshot.items() if not covered_fields.get(k, False)}
+    for name, item in term_rows(remaining_terms) + extra_rows(remaining_terms):
+        if _text(item):
+            residual.append((name, item))
+    if residual:
+        story.append(para("기존 봉인 약정 및 기재사항", heading))
+        for name, item in residual:
+            story.append(para(name, label))
+            story.append(para(item))
 
     signature = Image(io.BytesIO(signature_png))
-    ratio = (signature.imageHeight or 1) / (signature.imageWidth or 1)
-    signature.drawWidth = 60 * mm
-    signature.drawHeight = min(30 * mm, 60 * mm * ratio)
+    scale = min(150 / (signature.imageWidth or 1), 60 / (signature.imageHeight or 1))
+    signature.drawWidth = signature.imageWidth * scale
+    signature.drawHeight = signature.imageHeight * scale
     seal_plan = (
         company_seal.layout(str(seal.get("kind") or ""), seal.get("company_name"), seal.get("representative"))
         if isinstance(seal, dict)
@@ -461,46 +535,60 @@ def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | 
         def draw(self) -> None:
             company_seal.draw_seal(self.canv, self.plan, 0, 0, self.width, font, seal_font_for)
 
-    employer_rows: list[list[Any]] = []
+    def signed_time(value: Any) -> str:
+        try:
+            moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=timezone.utc)
+            return moment.astimezone(timezone(timedelta(hours=9))).strftime("%Y년 %m월 %d일 %H:%M:%S KST")
+        except ValueError:
+            return _text(value)
+
+    employer_box = [para("사용자 서명", heading), cell("employer_name", "열정국밥"), para(f"대표 {snapshot.get('employer_representative') or '-'} (서명 또는 인)")]
     if seal_plan:
-        employer_text = f"{_text(snapshot.get('employer_name'))} 대표 {_text(snapshot.get('employer_representative'))} (서명 또는 인)"
-        employer_rows.append([para("사용자 날인", label), [para(employer_text), Spacer(1, 1 * mm), SealFlowable(seal_plan, 26 * mm)]])
-    sign_grid = Table(
-        [
-            *employer_rows,
-            [para("서명자", label), para(snapshot.get("signer_name"))],
-            [para("서명 일시", label), para(snapshot.get("signed_at"))],
-            [para("인증 계정", label), para(_mask_email(audit.get("authenticated_email") or snapshot.get("signer_email") or ""))],
-            [para("전자서명 동의", label), para(f"동의함 ({consent.get('version') or ''})" if consent.get("accepted") else "")],
-            [para("자필서명", label), signature],
-        ],
-        colWidths=[42 * mm, 128 * mm],
-    )
-    sign_grid.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#999999")),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f2f2f2")),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ]
-        )
-    )
-    story += [
-        para("전자서명", heading),
-        sign_grid,
-        Spacer(1, 5 * mm),
-        para(f"봉인 스냅샷 SHA-256: {recorded_sha}", small),
-        para(f"자필서명 SHA-256: {snapshot.get('signature_sha256') or ''}", small),
-        para(
-            "이 문서는 전자서명 시점에 봉인된 계약 내용으로 생성되었습니다. "
-            + (
-                "용역계약 체결·교부 및 검수·정산 증빙으로 보관됩니다."
-                if freelancer
-                else "근로기준법 제17조에 따른 근로조건 서면 명시·교부 증빙으로 보관됩니다."
-            ),
-            small,
-        ),
-    ]
+        employer_box.append(SealFlowable(seal_plan, 20 * mm))
+    employee_box = [para(party + " 서명", heading), para(snapshot.get("signer_name") or snapshot.get("employee_name")), signature, para("서명일시: " + signed_time(snapshot.get("signed_at")), small)]
+    sign_grid = Table([[employer_box, "", employee_box]], colWidths=[(width - 9) / 2, 9, (width - 9) / 2])
+    sign_grid.setStyle(TableStyle([
+        ("BOX", (0, 0), (0, 0), .75, colors.HexColor("#cbd5e1")),
+        ("BOX", (2, 0), (2, 0), .75, colors.HexColor("#cbd5e1")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7.5), ("RIGHTPADDING", (0, 0), (-1, -1), 7.5),
+        ("TOPPADDING", (0, 0), (-1, -1), 7.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 7.5),
+    ]))
+    story.extend([Spacer(1, 10.5), sign_grid])
+    evidence = "전자서명 확인 · 인증 계정 " + _mask_email(audit.get("authenticated_email") or snapshot.get("signer_email") or "")
+    evidence += f"\n전자서명 동의: {'동의함' if consent.get('accepted') else '-'} ({consent.get('version') or ''}) · 봉인 해시 {recorded_sha[:12]}"
+    evidence += "\n이 문서는 전자서명 시점에 봉인된 계약 내용으로 생성되었습니다."
+    evidence_lines = evidence.split("\n")
+    contract_number = str(snapshot.get("id") or "")[:8]
+
+    class NumberedCanvas(Canvas):
+        """페이지 상태를 보존해 전체 쪽수와 마지막 쪽 하단 증적을 그린다."""
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.pages: list[dict[str, Any]] = []
+
+        def showPage(self) -> None:
+            self.pages.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self) -> None:
+            total = len(self.pages)
+            for state in self.pages:
+                self.__dict__.update(state)
+                self.setFont(font, 7.5)
+                self.setFillColor(colors.HexColor("#64748b"))
+                self.drawCentredString(A4[0] / 2, 10 * mm, f"오비서 전자계약 · {contract_number} · {self._pageNumber} / {total} 쪽")
+                if self._pageNumber == total:
+                    self.setStrokeColor(colors.HexColor("#cbd5e1"))
+                    self.setFillColor(colors.HexColor("#f8fafc"))
+                    self.roundRect(20 * mm, 17 * mm, width, 18 * mm, 4, fill=1, stroke=1)
+                    self.setFillColor(colors.HexColor("#64748b"))
+                    for i, line in enumerate(evidence_lines):
+                        self.drawString(22 * mm, (30 - i * 4) * mm, line)
+                super().showPage()
+            super().save()
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -509,13 +597,13 @@ def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | 
         leftMargin=20 * mm,
         rightMargin=20 * mm,
         topMargin=18 * mm,
-        bottomMargin=18 * mm,
+        bottomMargin=40 * mm,
         title=str(snapshot.get("print_title") or "계약서"),
         author="오비서",
         invariant=1,
     )
     try:
-        doc.build(story)
+        doc.build(story, canvasmaker=NumberedCanvas)
     except Exception as exc:
         raise ContractPdfError(f"PDF 조판 실패: {type(exc).__name__}: {exc}") from None
     data = buffer.getvalue()
