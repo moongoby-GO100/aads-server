@@ -147,7 +147,9 @@ async def count_lineage_executions(conn, tenant_id: str, milestone_id: str, line
 
 
 async def find_valid_successor(conn, tenant_id: str, milestone_id: str, failed_task_id: str) -> dict | None:
-    """같은 마일스톤에서 failed_task_id 를 RETRY_OF_LINK 로 가리키는 활성·완료 후속 job.
+    """같은 마일스톤에서 failed_task_id 를 RETRY_OF_LINK·AUTO_REWORK_OF·SUPERSEDES 로 가리키는 활성·완료 후속 job.
+
+    승계 표식 판정은 완료 시 승계 처리(parse_supersede_markers)와 같은 파서를 쓴다.
 
     활성이 완료보다 먼저다(이미 돌고 있는 것을 또 제출하지 않는다). 실패한 후속은 유효하지 않다.
     """
@@ -163,7 +165,10 @@ async def find_valid_successor(conn, tenant_id: str, milestone_id: str, failed_t
     )
     completed = None
     for row in rows:
-        if parse_retry_link(row["instruction"]) != failed_task_id:
+        instruction = row["instruction"]
+        if parse_retry_link(instruction) != failed_task_id and all(
+            marked != failed_task_id for marked, _ in parse_supersede_markers(instruction)
+        ):
             continue
         status = str(row["status"] or "").lower()
         state = normalize_job_state_for_project(row["status"], row["phase"], row["project"])
