@@ -15,6 +15,7 @@ from app.models.mockup_review import (
     VerifyBundle,
 )
 from app.services import mockup_review_service as svc
+from app.services import mockup_approval_handoff
 
 router = APIRouter(prefix="/projects/{project_key}/mockup-reviews", tags=["mockup-reviews"])
 VIEW = Depends(require_tenant_role(TenantRole.VIEWER))
@@ -133,8 +134,12 @@ async def change_report(project_key: str, review_id: UUID, context: dict = VIEW)
 
 @router.post("/{review_id}/approve")
 async def approve_review(project_key: str, review_id: UUID, body: ApproveReview, context: dict = WRITE):
-    return await _run(project_key, context, "approve",
-                      lambda c, t, p, a, e: svc.approve_review(c, t, p, review_id, a, body))
+    result = await _run(project_key, context, "approve",
+                        lambda c, t, p, a, e: svc.approve_review(c, t, p, review_id, a, body))
+    # _run's transaction has committed before the side-effecting 안내 starts.
+    if result.get("status") == "approved" and result.get("approval_id"):
+        await mockup_approval_handoff.announce_approved_review(review_id, result["approval_id"])
+    return result
 
 
 @router.post("/{review_id}/revoke")

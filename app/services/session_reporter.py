@@ -77,6 +77,7 @@ def build_session_report_content(
     source: str = "session_report",
     project: str = "",
     metadata: Optional[Mapping[str, Any]] = None,
+    plain_body: bool = False,
 ) -> str:
     """Build a concise CEO-visible report message."""
     normalized_status = (status or "done").strip().lower()
@@ -113,7 +114,7 @@ def build_session_report_content(
         if compact_meta and compact_meta != "{}":
             meta_text = f"\n\n`metadata`: `{compact_meta[:1000]}`"
 
-    if "\n" in rendered_body or len(rendered_body) > 160:
+    if not plain_body and ("\n" in rendered_body or len(rendered_body) > 160):
         body_text = f"\n\n```text\n{rendered_body}\n```" if rendered_body else ""
     else:
         body_text = f"\n\n{rendered_body}" if rendered_body else ""
@@ -136,6 +137,7 @@ async def post_session_report(
     reaction_prompt: Optional[str] = None,
     ohvis_task_id: Optional[str] = None,
     conn: Optional[asyncpg.Connection] = None,
+    plain_body: bool = False,
 ) -> SessionReportResult:
     """Persist an assistant report message into a chat session.
 
@@ -171,6 +173,7 @@ async def post_session_report(
         source=source,
         project=project,
         metadata=metadata,
+        plain_body=plain_body,
     )
 
     async def _insert(target_conn: asyncpg.Connection) -> SessionReportResult:
