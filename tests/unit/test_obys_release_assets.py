@@ -198,7 +198,7 @@ def test_purge_urls_include_seal_font_woff2_as_bare_urls_only(tmp_path):
 def test_the_real_obys_tree_purges_the_seal_fonts():
     urls = tool.purge_urls(ROOT / "app/static/apps/obys", SHA, "https://fb.newtalk.kr")
     base = "https://fb.newtalk.kr/static/apps/obys/assets/fonts"
-    assert f"{base}/obys-seal-hangul-gugi.woff2" in urls and f"{base}/obys-seal-hanja-notoserifkr-black.woff2" in urls
+    assert f"{base}/obys-seal-hangul-cafe24ohsquareair.woff2" in urls and f"{base}/obys-seal-hanja-zenantique.woff2" in urls
 
 
 def test_purge_splits_a_large_top_level_url_list_into_chunks_of_at_most_30(tmp_path):

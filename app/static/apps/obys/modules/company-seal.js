@@ -4,7 +4,8 @@
  *   붉은 인주색 원형 도장. 바깥 원 + 안쪽 원 사이 띠에 글자가 시계 방향으로 둘러 있고(글자 윗부분이 바깥쪽),
  *   띠의 시작·끝 사이에 둥근 점(●) 하나가 있다. 안쪽 원 안에는 글자가 세로 두 줄(오른쪽 줄 먼저)로 들어간다.
  *   법인은 띠에 회사명, 안쪽에 "代表理事". 개인사업자는 띠에 상호, 안쪽에 "대표자 이름 + 인".
- * 글꼴: 띠·개인 안쪽 한글은 Gugi(OFL), 법인 안쪽 한자는 Noto Serif KR Black(OFL) 서브셋을 자체 호스팅한다.
+ * 글꼴: 띠·개인 안쪽 한글은 Cafe24 Ohsquare Air(OFL), 법인 안쪽 한자는 Zen Antique(OFL) 서브셋을 자체 호스팅한다.
+ *   Ohsquare Air 에는 ㈜·가운뎃점이 없다 — 글자 단위로 다음 글꼴(Zen Antique → Noto Serif KR 계열)로 넘어간다.
  *   <img src=data:image/svg> 안의 SVG 는 페이지 @font-face 를 쓰지 못하므로 계약서에는 인라인 SVG(inline:true)로 넣는다.
  * 같은 기하(layout)를 서버 PDF 가 app/services/yeoljeong_company_seal.py 에서 그대로 쓴다.
  * 두 구현이 어긋나지 않는지는 tests/unit/test_obys_company_seal.py 가 좌표를 비교해 검사한다.
@@ -31,8 +32,8 @@
   const FONT_BASE = "/static/apps/obys/assets/fonts/";
   const FONT_FALLBACK = "'Noto Serif KR','Nanum Myeongjo','Batang','AppleMyungjo','Noto Serif CJK KR','Noto Serif CJK',serif";
   const FONT = `'${FONT_HANGUL}','${FONT_HANJA}',${FONT_FALLBACK}`;
-  const FONT_CSS = `@font-face{font-family:'${FONT_HANGUL}';src:url('${FONT_BASE}obys-seal-hangul-gugi.woff2') format('woff2');font-display:swap}`
-    + `@font-face{font-family:'${FONT_HANJA}';src:url('${FONT_BASE}obys-seal-hanja-notoserifkr-black.woff2') format('woff2');font-display:swap}`;
+  const FONT_CSS = `@font-face{font-family:'${FONT_HANGUL}';src:url('${FONT_BASE}obys-seal-hangul-cafe24ohsquareair.woff2') format('woff2');font-display:swap}`
+    + `@font-face{font-family:'${FONT_HANJA}';src:url('${FONT_BASE}obys-seal-hanja-zenantique.woff2') format('woff2');font-display:swap}`;
   const CORP_PATTERN = /주식회사|\(주\)|㈜|유한회사|유한책임회사|합자회사|합명회사|법인/;
 
   function clean(value) {

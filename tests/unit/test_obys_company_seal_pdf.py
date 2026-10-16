@@ -107,17 +107,54 @@ def _ksx1001_hangul():
 def test_seal_pdf_fonts_cover_ksx1001_hangul_and_the_four_hanja():
     from reportlab.pdfbase.ttfonts import TTFont
 
-    hangul = TTFont("t-hangul", str(PDF_FONT_DIR / "ObysSealHangul-Gugi-subset.ttf")).face.charToGlyph
-    hanja = TTFont("t-hanja", str(PDF_FONT_DIR / "ObysSealHanja-NotoSerifKR-Black-subset.ttf")).face.charToGlyph
+    hangul = TTFont("t-hangul", str(PDF_FONT_DIR / "ObysSealHangul-Cafe24OhsquareAir-subset.ttf")).face.charToGlyph
+    hanja = TTFont("t-hanja", str(PDF_FONT_DIR / "ObysSealHanja-ZenAntique-subset.ttf")).face.charToGlyph
     assert all(ord(ch) in hangul for ch in _ksx1001_hangul())
     assert all(ord(ch) in hanja for ch in "代表理事印")
     assert all(ord(ch) in hangul for ch in "ABCabc0123()&.-")
 
 
-def test_seal_font_picker_uses_gugi_for_hangul_hanja_font_for_hanja_and_body_font_otherwise():
+def test_seal_font_picker_uses_ohsquare_air_for_hangul_zen_antique_for_hanja_and_body_font_otherwise():
     pick = pdf._seal_font_picker("Body")
     assert pick("열") == "ObysSealHangul" and pick("代") == "ObysSealHanja" and pick("事") == "ObysSealHanja"
     assert pick("㈜") == "Body" and pick("鸞") == "Body" and pick("·") == "Body"
+
+
+# --- ACCT-OBYS-SEAL-FONT-RANK1-OHSQUAREAIR-ZENANTIQUE-20261016: Ohsquare Air 는 ㈜·가운뎃점의 cmap 항목은 있으나 윤곽선이 비어 있다.
+# 서브셋에서 뺐으므로 글자 단위 폴백이 다음 글꼴로 넘어가야 하고, 빈 글리프(보이지 않는 글자)나 사각형이 찍히면 안 된다.
+SEAL_BUSINESS_NAMES = ("주식회사 윤희에프엔비", "열정국밥", "열정국밥 미아점", "언니냉면")
+
+
+def test_seal_hangul_subset_omits_the_chars_ohsquare_air_has_only_as_empty_glyphs():
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    hangul = TTFont("t-hangul-gaps", str(PDF_FONT_DIR / "ObysSealHangul-Cafe24OhsquareAir-subset.ttf")).face.charToGlyph
+    assert 0x321C not in hangul and 0xB7 not in hangul and 0x2022 not in hangul
+
+
+def test_every_character_of_the_current_business_names_is_drawn_by_the_seal_hangul_font():
+    pick = pdf._seal_font_picker("Body")
+    for name in SEAL_BUSINESS_NAMES:
+        for ch in name.replace(" ", ""):
+            assert pick(ch) == "ObysSealHangul", (name, ch)
+    assert all(pick(ch) == "ObysSealHanja" for ch in "代表理事")
+
+
+def test_middle_dot_falls_through_to_a_font_that_really_has_the_glyph_not_to_tofu():
+    from reportlab.pdfbase import pdfmetrics
+
+    pick = pdf._seal_font_picker(pdf._register_font())
+    chosen = pick("·")
+    assert chosen not in ("ObysSealHangul",)
+    assert pdfmetrics.getFont(chosen).face.charToGlyph.get(ord("·"))
+
+
+def test_seal_pdf_renders_for_every_current_business_name_without_error():
+    contract = _signed_contract()
+    for name in SEAL_BUSINESS_NAMES:
+        kind = "corporation" if name.startswith("주식회사") else "individual"
+        out = pdf.render_signed_contract_pdf(contract, seal={"kind": kind, "company_name": name, "representative": "오윤희"})
+        assert out.startswith(b"%PDF")
 
 
 def test_seal_font_picker_falls_back_to_the_body_font_when_the_files_are_missing(monkeypatch, tmp_path):

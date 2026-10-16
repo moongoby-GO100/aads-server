@@ -31,8 +31,8 @@ FONT_ENV = "OBYS_CONTRACT_PDF_FONT_PATH"
 FONT_NAME = "ObysContractKR"
 BUNDLED_FONT = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "NanumGothic-Regular.ttf"
 SEAL_FONT_FILES = (
-    ("ObysSealHangul", BUNDLED_FONT.with_name("ObysSealHangul-Gugi-subset.ttf")),
-    ("ObysSealHanja", BUNDLED_FONT.with_name("ObysSealHanja-NotoSerifKR-Black-subset.ttf")),
+    ("ObysSealHangul", BUNDLED_FONT.with_name("ObysSealHangul-Cafe24OhsquareAir-subset.ttf")),
+    ("ObysSealHanja", BUNDLED_FONT.with_name("ObysSealHanja-ZenAntique-subset.ttf")),
 )
 SYSTEM_FONT_CANDIDATES = (
     Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
@@ -219,7 +219,7 @@ def _register_font() -> str:
 
 
 def _seal_font_picker(base_font: str) -> Callable[[str], str]:
-    """도장 글자마다 그 글자를 가진 첫 글꼴을 고른다: 도장 한글(Gugi) → 도장 한자 → 본문 글꼴. 파일이 없으면 본문 글꼴만 쓴다."""
+    """도장 글자마다 그 글자를 가진 첫 글꼴을 고른다: 도장 한글(Cafe24 Ohsquare Air) → 도장 한자(Zen Antique) → 본문 글꼴. 파일이 없으면 본문 글꼴만 쓴다."""
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFError, TTFont
 

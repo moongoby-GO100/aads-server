@@ -283,8 +283,8 @@ def test_pdf_drawing_places_every_character_without_reportlab():
 
 FONT_DIR = OBYS / "assets/fonts"
 PDF_FONT_DIR = ROOT / "app/assets/fonts"
-HANGUL_WOFF2 = FONT_DIR / "obys-seal-hangul-gugi.woff2"
-HANJA_WOFF2 = FONT_DIR / "obys-seal-hanja-notoserifkr-black.woff2"
+HANGUL_WOFF2 = FONT_DIR / "obys-seal-hangul-cafe24ohsquareair.woff2"
+HANJA_WOFF2 = FONT_DIR / "obys-seal-hanja-zenantique.woff2"
 
 
 def _ksx1001_hangul():
@@ -343,20 +343,20 @@ def test_seal_fonts_load_only_when_a_seal_is_drawn_and_come_from_this_origin_pat
     assert out["before"] == [0, 0] and out["afterLayout"] == [0, 0]
     css = out["added"][0]
     assert css.count("@font-face") == 2 and css.count("font-display:swap") == 2
-    assert "/static/apps/obys/assets/fonts/obys-seal-hangul-gugi.woff2" in css and "/static/apps/obys/assets/fonts/obys-seal-hanja-notoserifkr-black.woff2" in css
+    assert "/static/apps/obys/assets/fonts/obys-seal-hangul-cafe24ohsquareair.woff2" in css and "/static/apps/obys/assets/fonts/obys-seal-hanja-zenantique.woff2" in css
     assert "http" not in css and "googleapis" not in css and "cdn" not in css.lower()
     assert [f for f, _ in out["loaded"]] == ["34px 'ObysSealHangul'", "34px 'ObysSealHanja'"]
 
 
 def test_seal_font_files_and_licenses_exist_and_stay_small():
-    for name in ("OFL-Gugi.txt", "OFL-NotoSerifKR.txt"):
+    for name in ("OFL-Cafe24OhsquareAir.txt", "OFL-ZenAntique.txt"):
         text = (FONT_DIR / name).read_text(encoding="utf-8")
         assert "SIL OPEN FONT LICENSE Version 1.1" in text
-    for name in ("Gugi-OFL.txt", "NotoSerifKR-OFL.txt"):
+    for name in ("Cafe24OhsquareAir-OFL.txt", "ZenAntique-OFL.txt"):
         assert "SIL OPEN FONT LICENSE Version 1.1" in (PDF_FONT_DIR / name).read_text(encoding="utf-8")
     assert HANGUL_WOFF2.read_bytes()[:4] == b"wOF2" and HANJA_WOFF2.read_bytes()[:4] == b"wOF2"
     assert HANGUL_WOFF2.stat().st_size < 150_000 and HANJA_WOFF2.stat().st_size < 10_000
-    assert "Copyright" in (FONT_DIR / "OFL-Gugi.txt").read_text(encoding="utf-8").splitlines()[0]
+    assert "Copyright" in (FONT_DIR / "OFL-Cafe24OhsquareAir.txt").read_text(encoding="utf-8").splitlines()[0]
 
 
 def test_pdf_drawing_picks_a_font_per_character_when_font_for_is_given():
@@ -369,8 +369,8 @@ def test_pdf_drawing_picks_a_font_per_character_when_font_for_is_given():
 
 def test_release_assets_lists_both_seal_fonts_but_the_pages_do_not_preload_them():
     urls = release_tool.purge_urls(OBYS, "1a2b3c4d", "https://example.test")
-    assert "https://example.test/static/apps/obys/assets/fonts/obys-seal-hangul-gugi.woff2" in urls
-    assert "https://example.test/static/apps/obys/assets/fonts/obys-seal-hanja-notoserifkr-black.woff2" in urls
+    assert "https://example.test/static/apps/obys/assets/fonts/obys-seal-hangul-cafe24ohsquareair.woff2" in urls
+    assert "https://example.test/static/apps/obys/assets/fonts/obys-seal-hanja-zenantique.woff2" in urls
     for markup in (INDEX, V41):
         assert "assets/fonts/" not in markup and "fonts.googleapis" not in markup
     assert "assets/fonts/" not in (OBYS / "sw.js").read_text(encoding="utf-8")
