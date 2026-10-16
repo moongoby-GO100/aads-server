@@ -79,7 +79,7 @@ def signed_fixture(snapshot):
 @pytest.mark.parametrize('version', ['v3', 'v4'])
 @pytest.mark.parametrize('kind', CONTRACT_TITLES)
 def test_pdf_sealed_deterministic_masked_numbered_and_evidence_last(kind, version):
-    fitz = pytest.importorskip('fitz')
+    import fitz
     from app.services.yeoljeong_contract_pdf import ContractPdfError, render_signed_contract_pdf
     contract = signed_fixture({'contract_type':kind,'template_version':'test-' + version,'wage':1234567,
                                'employee_name':'가상직원','employer_name':'가상상호',
@@ -150,7 +150,7 @@ console.log(JSON.stringify(result));'''
 @pytest.mark.parametrize('kind', ['regular', 'freelancer', 'confidentiality'])
 def test_legacy_sealed_agreements_preserved_in_pdf_and_preview(version, old, new, kind):
     from app.services.yeoljeong_contract_pdf import render_signed_contract_pdf, snapshot_sha256
-    fitz = pytest.importorskip('fitz')
+    import fitz
     snapshot = {'contract_type':kind, 'template_version':'test-' + version,
                 'probation_terms':old, 'probation_period':new, 'special_terms':old,
                 'employee_name':'가상직원', 'employer_name':'가상상호',
@@ -185,7 +185,7 @@ def test_legacy_sealed_agreements_preserved_in_pdf_and_preview(version, old, new
 @pytest.mark.parametrize('kind', ['regular', 'freelancer'])
 def test_legacy_identity_and_independent_numeric_fields_survive(kind, version):
     from app.services.yeoljeong_contract_pdf import render_signed_contract_pdf, snapshot_sha256
-    fitz = pytest.importorskip('fitz')
+    import fitz
     contract = signed_fixture({
         'contract_type': kind, 'template_version': 'test-' + version,
         'visa_status': 'F-2', 'foreign_registration_no_masked': '123456-*******',
@@ -202,3 +202,123 @@ def test_legacy_identity_and_independent_numeric_fields_survive(kind, version):
     assert '외국인등록번호' in text and '123456-*******' in text
     label = '수행 회차 기준' if kind == 'freelancer' else '주 소정근로시간'
     assert re.search(re.escape(label) + r'\s+40(?:\s|$)', text)
+
+
+@pytest.mark.parametrize('kind', ['regular', 'part_time', 'fixed_term', 'daily', 'freelancer'])
+@pytest.mark.parametrize('version', ['v3', 'v4'])
+def test_body_field_coverage_removes_only_actual_consumers(kind, version):
+    from app.services.yeoljeong_contract_pdf import _body_covered_fields, render_signed_contract_pdf
+    import fitz
+    case = next(c for c in preview_cases() if c['key'] == f'{kind}/{version}/standard')
+    snapshot = dict(case['contract'], wage=400000, weekly_hours=40,
+                    bank_name='가상검증은행', bank_account_holder='가상예금주',
+                    pay_method='가상지급방식', freelancer_settlement_terms='가상검수정산')
+    covered = _body_covered_fields(snapshot)
+    assert {'wage', 'pay_method', 'bank_name', 'start_date'} <= covered
+    assert ('weekly_hours' in covered) == (kind != 'freelancer')
+    contract = signed_fixture(snapshot)
+    original = json.dumps(contract, sort_keys=True)
+    data = render_signed_contract_pdf(contract)
+    with fitz.open(stream=data, filetype='pdf') as pdf:
+        text = ''.join(page.get_text() for page in pdf)
+    assert text.count('가상지급방식') == 1
+    assert text.count('가상검증은행') == 1
+    if kind == 'freelancer':
+        assert '수행 회차 기준' in text
+        assert text.count('가상검수정산') == 1
+    assert json.dumps(contract, sort_keys=True) == original
+    assert render_signed_contract_pdf(contract) == data
+
+
+@pytest.mark.parametrize('version', ['v3', 'v4'])
+def test_different_legacy_conditions_remain_in_pdf(version):
+    from app.services.yeoljeong_contract_pdf import render_signed_contract_pdf
+    import fitz
+    snapshot = dict(contract_type='regular', template_version=f'test-{version}',
+                    work_time='봉인구시간', workTime='본문신시간',
+                    wage='400000.25', overtime_terms='상시 5인 미만 별도 봉인수당',
+                    workplace_size_category='five_plus', insurance_terms='봉인별도보험')
+    with fitz.open(stream=render_signed_contract_pdf(signed_fixture(snapshot)), filetype='pdf') as pdf:
+        text = ''.join(page.get_text() for page in pdf)
+    assert '봉인구시간' in text and '본문신시간' in text
+    assert '400000.25' in text
+    assert '상시 5인 미만 별도 봉인수당' in text
+    assert text.count('봉인별도보험') == 1
+
+
+@pytest.mark.parametrize('wage', ['400000.0', '400000', 400000])
+def test_numeric_coverage_uses_complete_money_representation(wage):
+    from app.services.yeoljeong_contract_pdf import _body_covered_fields
+    assert 'wage' in _body_covered_fields({'contract_type': 'regular', 'wage': wage})
+    assert 'wage' not in _body_covered_fields({'contract_type': 'regular', 'wage': '400000.25'})
+
+
+def test_coverage_follows_actual_renderer_and_preserves_unconsumed_fields(monkeypatch):
+    from app.services import yeoljeong_contract_pdf as pdf
+    snapshot = {'contract_type': 'regular', 'work_time': '동일한 조건',
+                'rest_time': '동일한 조건', 'weekly_hours': 40}
+    original = pdf.contract_clauses
+
+    def changed_renderer(contract):
+        # A template update stops consuming schedule fields, while another field
+        # still contains exactly the same text. It must not prove coverage.
+        return [('새 조항 제목', str(contract.get('rest_time', '')))]
+
+    monkeypatch.setattr(pdf, 'contract_clauses', changed_renderer)
+    covered = pdf._body_covered_fields(snapshot)
+    assert 'work_time' not in covered
+    assert 'weekly_hours' not in covered
+    assert 'rest_time' in covered
+    monkeypatch.setattr(pdf, 'contract_clauses', original)
+
+
+@pytest.mark.parametrize('version', ['v3', 'v4'])
+def test_leave_coverage_matches_actual_preview_title(version):
+    from app.services.yeoljeong_contract_pdf import _body_covered_fields
+    snapshot = {'contract_type': 'regular', 'template_version': 'test-' + version,
+                'leave_terms': '봉인된 독립 휴가 약정'}
+    assert 'leave_terms' in _body_covered_fields(snapshot)
+    clauses = dict(contract_clauses(snapshot))
+    assert clauses['휴가, 결근, 근태'] == snapshot['leave_terms']
+
+
+def _assert_real_bold_font(data):
+    from fontTools.ttLib import TTFont
+    with TTFont(io.BytesIO(data)) as font:
+        assert font['OS/2'].usWeightClass == 700
+        assert 'Bold' in font['name'].getDebugName(6)
+
+
+def test_bold_validator_rejects_regular_font():
+    from app.services.yeoljeong_contract_pdf import BUNDLED_FONT
+    with pytest.raises(AssertionError):
+        _assert_real_bold_font(BUNDLED_FONT.read_bytes())
+
+
+@pytest.mark.parametrize('kind', ['regular', 'part_time', 'fixed_term', 'daily', 'freelancer'])
+def test_real_bold_family_and_embedded_pdf_usage(kind):
+    import fitz
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.lib.fonts import tt2ps
+    from app.services import yeoljeong_contract_pdf as renderer
+    bold = renderer.BUNDLED_FONT.with_name('NanumGothic-Bold.ttf').read_bytes()
+    assert hashlib.sha256(bold).hexdigest() == 'f96298f9fb18e364d2370f4c3ce948ac67a2b61af992d7234bc15c42b033c674'
+    _assert_real_bold_font(bold)
+    normal = renderer._register_font()
+    assert tt2ps(normal, 1, 0) == normal + 'Bold'
+    assert pdfmetrics.getFont(normal + 'Bold').face.name == b'NanumGothicBold'
+    data = renderer.render_signed_contract_pdf(signed_fixture({'contract_type': kind, 'wage': 400000}))
+    with fitz.open(stream=data, filetype='pdf') as pdf:
+        used = {span['font'] for page in pdf for block in page.get_text('dict')['blocks']
+                if 'lines' in block for line in block['lines'] for span in line['spans']
+                if 'Bold' in span['font']}
+        assert used, 'PDF contains no actual Bold text spans'
+        embedded = set()
+        for page in pdf:
+            for entry in page.get_fonts(full=True):
+                if 'Bold' in entry[3]:
+                    name, ext, _, content = pdf.extract_font(entry[0])
+                    assert ext == 'ttf' and content
+                    _assert_real_bold_font(content)
+                    embedded.add(name.split('+')[-1])
+        assert used <= embedded

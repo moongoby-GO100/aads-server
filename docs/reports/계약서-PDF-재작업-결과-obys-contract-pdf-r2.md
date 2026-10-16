@@ -1,9 +1,9 @@
 # 계약서 PDF 재작업 결과
 
 document_key: obys-contract-pdf-r2
-판본: R4 (2026-10-16), 운영 반영 전 검증
+판본: R8 (2026-10-16), 선택 복구 검증 결과
 
-아래 R3 내용은 계승한 이전 세션의 기록이다. 현재 세션 결과는 마지막 R4 RESULT가 우선한다.
+아래 R3 내용은 계승한 이전 세션의 기록이다. 현재 세션 결과는 마지막 R8 RESULT가 우선한다. 이전 판본의 결과를 현재 후보 통과 증거로 사용하지 않는다.
 
 정본 미등록(미완료), 열람 링크 미제공. 인증된 등록 API·등록 도구·DB 연결 정보가 이 세션에 없다. 핸드오버 DB 미기록. HANDOVER.md는 수정하지 않았다. 아래 미충족 항목 때문에 전체 완료로 보고하지 않는다.
 
@@ -130,3 +130,52 @@ AAG에 지정된 project_document_heads 접점은 app/api/canonical_documents.py
 등록 도구 중 AADS 정본 등록/핸드오버 도구는 없고 인증된 AADS API 자격 증명 및 DATABASE_URL도 없어 같은 document_key `obys-contract-pdf-r2`의 초안 등록을 완료하지 못했다. **정본 미등록(미완료), 열람 링크 미제공. 핸드오버 DB 미기록.** 오류 사전 `obys.pdf.legacy-sealed-fields-lost` fix-commit 보강도 접속 불가 및 최종 커밋 부재로 미수행이다.
 
 빌드 명령은 미실행이며 승인 후 Runner 빌드 검증 대상. commit/push/배포/재시작/스키마 변경 및 HANDOVER.md 수정 없음. 롤백은 승인 후 최종 변경 커밋 revert. 전체 완료 조건 중 위 미충족 항목을 남긴 상태다.
+
+
+## R8 RESULT — 기준코드 선택 복구와 Bold 회귀
+
+기준 HEAD: b25e6846d2735c6964555a8ab20ea15eb626f754. 시작 git status --short는 빈 출력이었다. 제공된 격리 workspace에서 작업했으며 무관 dirty 변경은 없었다. 새 커밋 SHA는 없다(사용자 명령 금지). 새 SHA 호스트 검증은 미완료이며 옛 SHA 결과를 이번 통과로 주장하지 않는다.
+
+### STEP 0 / 범위
+
+수정 전 기존 함수·클래스·DB 접점을 조사했다. `_register_font`, resolve_font_path, ContractPdfError, snapshot_sha256, _seal_font_picker, _signature_png, _text, _mask_email, is_freelancer_snapshot, display_value, _is_zero_amount, term_rows, extra_rows와 기존 서명/도장/쪽수 클래스는 유지한다. render_signed_contract_pdf의 covered_fields 판정은 수정한다. `_body_covered_fields`는 누락된 신규 복구 helper다. 기존 preview 패리티·봉인·legacy 테스트는 유지하며 fitz 부재를 skip 대신 실패로 처리한다. 소비판정 회귀 78줄 및 실제 Bold 검사를 추가한다. Bold 자산은 신규 복구한다. 삭제된 public helper는 없다. API·스케줄러·DB 접점 변경은 없다. project_document_heads 접점은 AAG에 명시된 app/api/canonical_documents.py를 읽기만 했으며 새 DB 경로를 만들지 않았다.
+
+지정한 네 파일만 수정한다. 보고서는 이 기존 경로와 document_key를 유지한다. 후순위 문서 및 HANDOVER.md는 수정하지 않았다.
+
+### 기준 포함 주장 정정
+
+R7의 선행 수정 포함 및 commit 완료 주장은 철회한다. f6261dab의 186 PASS는 b4de5b42 누락 소비판정/회귀를 검증하지 않는다. 현재 작업 시작 코드에도 해당 helper와 78줄 회귀가 없음을 확인했다. b4de5b42의 서비스/테스트 diff만 git apply --check 후 선택 적용했다. 전체 실패커밋 merge/cherry-pick은 하지 않았다.
+
+본문 소비는 필드 하나씩 probe로 바꾼 실제 조항이 원문 완전 표현으로 복원되는 경우만 인정한다. 소수 임금, 서로 다른 구·신 값, standalone 주당시간은 보존한다. 기존 public helper/기대값·서명HTML·snapshot/hash는 변경하지 않았다. 현재 회귀는 40/400000, 소수임금, 구·신 수습/특약, 체류자격, 은행/급여, v3/v4와 5유형을 포함한다.
+
+f6261dab의 Bold 자산만 추출했으며 SHA-256 f96298f9fb18e364d2370f4c3ce948ac67a2b61af992d7234bc15c42b033c674를 쓰기 전에 확인했다. 테스트는 OS/2 weight=700, PostScript Bold 이름, ReportLab family mapping, 실제 PDF Bold span, embedded TTF weight=700을 검사한다. Regular 대체 입력의 AssertionError negative case를 추가했다. 필수 검사 skip은 없다.
+
+### 실행 환경과 검증
+
+접두사: `PYTHONPATH=/tmp/obys-rank1-venv/lib/python3.12/site-packages:/root/aads/.testdeps`
+python: `/root/aads/aads-server/.venv/bin/python`
+
+HTTP 포함 명령: `timeout 180 /root/aads/aads-server/.venv/bin/python -m pytest -q tests/unit/test_obys_contract_pdf_preview.py tests/unit/test_obys_contract_types_clauses.py tests/unit/test_obys_v41_contract_editor.py tests/unit/test_obys_contract_amendment_chain.py tests/unit/test_obys_contract_autofill.py tests/unit/test_obys_freelancer_contract_labels.py tests/unit/test_obys_company_seal_pdf.py tests/unit/test_obys_contract_notify_pdf.py`
+로그: /tmp/obys-eb87-tests.log. 결과는 아래 최종 회수 기록에 기재한다.
+
+시각 helper는 원본 /root/aads/runner-artifacts/obys-pdf-host-20261016/visual_check.py를 /tmp/obys-visual-eb87.py에 복사하고 root=/tmp/aads-wt-runner-eb87c713, out=/tmp/obys-review-eb87c713으로 지정했다. `PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright timeout 45 /root/aads/aads-server/.venv/bin/python /tmp/obys-visual-eb87.py` 실행 exit 1: Chromium sandbox Operation not permitted/SIGTRAP. 반복 실행하지 않았다. 실제 5종 preview 캡처/비교는 미완료다.
+
+별도 가상 5종 actual PDF 생성은 exit 0. /tmp/obys-pdf-eb87의 regular/part_time/fixed_term/daily/freelancer PDF는 각 3쪽. 텍스트 블록 경계, 사용자 서명 문구, 마지막 쪽 snapshot hash 앞12자 및 실제 Bold 임베딩 검사를 모두 통과했다. 이것은 브라우저 시각검토나 운영 로그인 E2E가 아니다. 시각적 쪽잘림·도장·서명 배치 확인은 미완료이며 무리한 1쪽 강제는 하지 않았다.
+
+`python3 scripts/dup_guard.py`, 같은 명령 `--paths app/services/yeoljeong_contract_pdf.py tests/unit/test_obys_contract_pdf_preview.py`, `python3 -m compileall -q app/services/yeoljeong_contract_pdf.py tests/unit/test_obys_contract_pdf_preview.py`, `git diff --check`: 각 exit 0.
+
+### 연결 및 잔여사항
+
+DB init_pool 실제 실행은 RuntimeError: DATABASE_URL 환경변수가 설정되지 않았습니다. 따라서 활성 runner/동일파일 workspace ledger 조회는 미완료이며 충돌 없음을 보증하지 않는다. 동일파일 충돌/cap 상태를 우회하거나 초기화하지 않았다. 오류사전 조회 `PGHOST=127.0.0.1 timeout 15 python3 scripts/error_book.py match -`는 exit 2, psql 실행파일 없음. 기존 obys.pdf.candidate-base-coverage-missing 보강 미완료다.
+
+핸드오버 도구 실행은 tenant_id 미제공 KeyError로 ok=false였고, http_fallback_write 확인은 http_fallback_unconfigured: AADS_API_URL,AADS_MONITOR_KEY not set이다. tenant를 추측하지 않았다. **핸드오버 DB 미기록.** 인증된 정본 초안 등록 경로/자격정보 부재로 document_key obys-contract-pdf-r2 등록은 **정본 미등록(미완료), 열람 링크 미제공**이다.
+
+새 release/자동재작업 생성·재활성, error 작업 상태 변경, 실제 직원·서명·schema 변경은 하지 않았다. 금지된 commit/push/build/deploy/restart 명령은 실행하지 않았다. 빌드는 승인 후 Runner 빌드 검증 대상. 변경 취소는 이번 네 파일의 선택 변경만 역적용하며 public helper 삭제는 없다.
+
+
+### 최종 회수 결과
+
+- 위 HTTP 포함 8파일 명령: exit 124 (180초 제한). 성공 요약 없이 후반 대기하여 전체 PASS가 아니다. 로그 /tmp/obys-eb87-tests.log. 같은 HTTP hang을 반복하지 않았다.
+- 최종 코드 preview 회귀: `timeout 120 /root/aads/aads-server/.venv/bin/python -m pytest -q tests/unit/test_obys_contract_pdf_preview.py` (동일 PYTHONPATH), exit 0, **81 passed in 55.37s**, skip 없음. 로그 /tmp/obys-eb87-preview.log.
+- 필수 HTTP 5건, 실제 브라우저 5종 비교, 새 SHA 정상호스트 검증, 정본/핸드오버/오류사전 DB 기록은 미완료다.
+- 나머지 7파일의 완료 가능한 검사: 같은 PYTHONPATH/python에서 `timeout 60 ... -m pytest -q`에 위 8파일 중 preview를 제외한 7파일을 지정하고 `-k 'not notification_failure_does_not_fail_signature_request_api and not resend_signature_notice_rate_limit_and_guards and not pdf_is_bound_to_signed_snapshot_not_current_body and not signed_pdf_download_access_and_delivery_record and not unsigned_contract_pdf_download_is_conflict'`를 적용했다. exit 0, **123 passed, 5 deselected, 1 warning in 21.82s**. 로그 /tmp/obys-eb87-other.log. preview와 합계 204 PASS지만 HTTP 5건 제외 결과이며 합동 8파일 통과가 아니다.

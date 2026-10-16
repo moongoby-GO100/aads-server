@@ -25,7 +25,9 @@ from typing import Any
 from xml.sax.saxutils import escape
 
 from app.services import yeoljeong_company_seal as company_seal
-from app.services.obys_contract_clauses import CONTRACT_TITLES, contract_clauses, korean_date, money
+from app.services.obys_contract_clauses import (
+    CONTRACT_TITLES, contract_clauses, korean_date, money, value as clause_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -367,6 +369,78 @@ def extra_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
     return rows
 
 
+def _body_covered_fields(snapshot: dict[str, Any]) -> set[str]:
+    """Prove complete consumption by the actual clause renderer, one field at a time.
+
+    Replace only this field with a probe. Coverage requires an otherwise identical
+    clause whose complete probe representation can be replaced by this field's
+    complete representation. Unrelated numbers/text cannot establish coverage.
+    Unknown transformations or conditional changes conservatively keep the seal.
+    """
+    original = contract_clauses(snapshot)
+    keys = set()
+    candidates = {key for key, _ in TERM_FIELDS} | set(EXTRA_LABELS)
+    for key in candidates:
+        raw = snapshot.get(key)
+        if not _text(raw) or _text(raw) != _text(clause_value(snapshot, key)):
+            continue
+        if key == "weekly_hours" and not (
+            clause_value(snapshot, "work_time") and clause_value(snapshot, "rest_time")
+        ):
+            continue  # preserve standalone hours in sparse historical seals
+        marker = "OBYS_FIELD_COVERAGE_PROBE_" + key
+        while marker in repr(snapshot):
+            marker += "_"
+        rendered = str(raw)
+        if key == "wage":
+            try:
+                number = float(raw)
+                if not number.is_integer():
+                    continue  # rounded output cannot represent a fractional seal
+            except (TypeError, ValueError, OverflowError):
+                continue
+            probe = 987654321
+            while money(probe) in repr(original):
+                probe += 1
+            marker, rendered = money(probe), money(raw)
+        elif key == "wage_type":
+            probe = marker
+            rendered = CODE_VALUE_LABELS.get(key, {}).get(raw, raw)
+        elif key == "employment_tax_type":
+            probe = marker
+            rendered = CODE_VALUE_LABELS[key].get(raw, raw)
+        else:
+            probe = marker
+        changed = dict(snapshot)
+        changed[key] = probe
+        camel = re.sub(r"_([a-z])", lambda match: match[1].upper(), key)
+        if camel in changed:
+            changed[camel] = probe
+        alternatives = {str(rendered)}
+        if key in {"start_date", "end_date"}:
+            alternatives.add(korean_date(raw))
+        for title, body in contract_clauses(changed):
+            if marker in body and any(
+                (title, body.replace(marker, representation)) in original
+                for representation in alternatives
+            ):
+                keys.add(key)
+                break
+    # These fields are printed directly in the identity grid, without clauseValue.
+    keys.update({"bank_name", "bank_account_holder", "bank_account_number"})
+    if not snapshot.get("bank_account_number"):
+        keys.add("bank_account_masked")
+    salary_keys = ("base_salary", "non_tax_meal_allowance", "taxable_allowance")
+    if snapshot.get("contract_type") == "regular" and any(snapshot.get(k) for k in salary_keys):
+        for key in salary_keys:
+            try:
+                if float(snapshot.get(key)).is_integer():
+                    keys.add(key)
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return keys
+
+
 def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | None = None) -> bytes:
     """봉인 스냅샷으로 서명본 PDF 바이트를 만든다. 같은 입력이면 같은 바이트가 나온다.
 
@@ -493,12 +567,7 @@ def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | 
             for title, body in clause_bodies.items() if "수습" in title
         ),
     }
-    for key, title in (
-        ("overtime_terms", "연장·야간·휴일근로"),
-        ("leave_terms", "연차 및 휴가"),
-        ("insurance_terms", "4대보험 및 세무"),
-    ):
-        covered_fields[key] = _text(snapshot.get(key)) == clause_bodies.get(title)
+    covered_fields.update({key: True for key in _body_covered_fields(snapshot)})
     # These legacy identity fields are absent from the compact identity grid.
     residual = rows_for((("visa_status", "체류자격"),
                          ("foreign_registration_no_masked", "외국인등록번호")))
