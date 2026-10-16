@@ -38,6 +38,14 @@ LOCAL_AGENT_LEASE_BUFFER_SECONDS = 30
 WORK_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:-]{1,119}$")
 PROTECTED_WORK_KEYS = {"ntv2-sinsang-registration"}
 PROTECTED_LABEL_MARKERS = ("sinsang", "신상마켓")
+EXTAI_WORK_KEY_PREFIXES = ("extai-", "extai:")
+# extai-* 는 PC Agent 고정 프로필을 쓴다. 같은 프로필을 Chrome 두 개가 동시에 열 수 없으므로 PC Agent 쪽
+# CDP 소유권 키는 provider 와 무관한 전용 키 하나를 공유한다. "general" 은 PC Agent 가 소유자 없는 9222 를
+# 무검증 채택하는 키라서 쓰지 않는다(이전 isolated Chrome 을 고정 프로필로 오인).
+EXTAI_AGENT_WORK_KEY = "extai-fixed-profile"
+EXTAI_BLANK_TAB_URLS = ("", "about:blank", "chrome://newtab/", "chrome://new-tab-page/")
+EXTAI_PROFILE_LANE = "extai_fixed"
+ISOLATED_PROFILE_LANE = "isolated"
 DEFAULT_WORK_SESSION_LABELS = {
     "ntv2-sinsang-registration": "NTV2 Sinsang registration",
     "ntv2-china-sourcing-admin": "NTV2 China sourcing admin",
@@ -131,6 +139,45 @@ def normalize_work_key(work_key: str) -> str:
     if not WORK_KEY_PATTERN.match(value):
         raise ValueError("work_key must be 2-120 chars: lowercase letters, digits, dot, dash, underscore, colon")
     return value
+
+
+def is_extai_work_key(work_key: str) -> bool:
+    value = (work_key or "").strip().lower()
+    return value.startswith(EXTAI_WORK_KEY_PREFIXES)
+
+
+def extai_url_host(url: str) -> str:
+    return urllib.parse.urlparse(str(url or "")).netloc.lower()
+
+
+def _extai_host_matches(tab_url: str, host: str) -> bool:
+    tab_host = extai_url_host(tab_url)
+    return bool(host) and (tab_host == host or tab_host.endswith(f".{host}"))
+
+
+def pick_extai_tab(
+    tabs: list[dict[str, Any]],
+    url: str,
+    sibling_hosts: set[str],
+) -> tuple[dict[str, Any] | None, str]:
+    """Pick the tab an extai provider may use in the shared fixed-profile Chrome.
+
+    Order: tab already on the provider host -> blank tab -> tab of a sibling extai
+    provider (takeover). Any other tab belongs to the user and is never navigated.
+    """
+    host = extai_url_host(url)
+    pages = [t for t in tabs if isinstance(t, dict) and str(t.get("id") or "")]
+    for tab in pages:
+        if _extai_host_matches(str(tab.get("url") or ""), host):
+            return tab, "reuse"
+    for tab in pages:
+        if str(tab.get("url") or "").strip().lower() in EXTAI_BLANK_TAB_URLS:
+            return tab, "blank"
+    for tab in pages:
+        tab_host = extai_url_host(str(tab.get("url") or ""))
+        if tab_host and tab_host in sibling_hosts:
+            return tab, "takeover"
+    return None, ""
 
 
 def default_work_session_label(work_key: str) -> str:
@@ -699,8 +746,13 @@ class BrowserBridgeService:
         force_recreate: bool = False,
         queue_wait_timeout_seconds: float | None = None,
         command_timeout_seconds: float | None = None,
+        profile_lane: str = "",
+        agent_work_key: str = "",
     ) -> BrowserBridgeSession:
-        """Launch or reuse Chrome through PC Agent and register a local-agent bridge session."""
+        """Launch or reuse Chrome through PC Agent and register a local-agent bridge session.
+
+        agent_work_key 는 PC Agent 쪽 CDP 소유권 키다. 비우면 work_key 와 같다.
+        """
         from app.services.pc_agent_manager import pc_agent_manager
 
         normalized_work_key = normalize_work_key(work_key) if work_key else ""
@@ -722,14 +774,28 @@ class BrowserBridgeService:
         if preferred_port:
             launch_params["preferred_port"] = int(preferred_port)
         base_isolation_id = isolation_id or normalized_work_key
-        if base_isolation_id:
+        if base_isolation_id and isolated_profile:
             # Workflow sessions use one stable Chrome profile. Changing the
             # profile on recreate loses bank portal login/cookie state.
             launch_params["isolation_id"] = base_isolation_id
-        if normalized_work_key:
+        shared_agent_key = str(agent_work_key or "").strip()
+        if shared_agent_key and shared_agent_key == normalized_work_key:
+            shared_agent_key = ""
+        if shared_agent_key:
+            launch_params["work_key"] = shared_agent_key
+            # 공유 CDP 세션의 last_target_id 가 다른 provider 탭을 가리키므로 launch 는 탐색하지 않는다.
+            # provider 탭 이동은 아래 _extai_attach_tab 이 target_id 를 명시해 수행한다.
+            launch_params["url"] = "about:blank"
+        elif normalized_work_key:
             launch_params["work_key"] = normalized_work_key
 
-        if force_recreate and normalized_work_key:
+        if force_recreate and normalized_work_key and shared_agent_key:
+            logger.info(
+                "browser_bridge_force_recreate_cleanup_skipped work_key=%s agent_work_key=%s reason=shared_fixed_profile",
+                normalized_work_key,
+                shared_agent_key,
+            )
+        elif force_recreate and normalized_work_key:
             close_params = {
                 "work_key": normalized_work_key,
                 "close_browser": True,
@@ -847,6 +913,18 @@ class BrowserBridgeService:
         routed = self._coerce_pc_agent_embedded_success(routed)
         if routed.get("status") != "success":
             launch_error_code, _launch_error_message, _launch_error_detail = self._extract_pc_agent_route_error(routed)
+            if shared_agent_key and launch_error_code in {"CDP_NOT_READY", "COMMAND_TIMEOUT"}:
+                # health/tabs fallback 은 포트에 떠 있는 Chrome 의 프로필을 확인하지 못한 채 세션으로 등록한다.
+                # 고정 프로필 레인에서는 그 Chrome 이 이전 isolated 프로필일 수 있어 fail-closed 한다.
+                raise BrowserBridgeError(
+                    "extai fixed-profile Chrome did not become ready; refusing to adopt an unverified Chrome on the CDP port",
+                    error_code="EXTAI_FIXED_PROFILE_UNVERIFIED",
+                    detail={
+                        "work_key": normalized_work_key,
+                        "launch_error_code": launch_error_code,
+                        "hint": "소유자 없는 Chrome 이 이미 고정 프로필을 점유 중이면 그 Chrome 창을 닫고 다시 시도",
+                    },
+                )
             if launch_error_code in {"CDP_NOT_READY", "COMMAND_TIMEOUT"}:
                 health_timeout = max(10.0, min(30.0, float(command_timeout_seconds or 30.0)))
                 health_params: dict[str, Any] = {
@@ -1010,6 +1088,24 @@ class BrowserBridgeService:
         if not isinstance(data, dict):
             raise BrowserBridgeError("PC Agent browser_launch returned no data")
         port = int(data.get("port") or preferred_port or 9222)
+        extai_tab: dict[str, Any] = {}
+        if shared_agent_key:
+            reported_profile = str(data.get("user_data_dir") or "")
+            if "isolated-" in reported_profile:
+                raise BrowserBridgeError(
+                    "extai lane got an isolated profile from PC Agent",
+                    error_code="EXTAI_FIXED_PROFILE_UNVERIFIED",
+                    detail={"work_key": normalized_work_key, "profile_dir": reported_profile},
+                )
+            extai_tab = await self._extai_attach_tab(
+                work_key=normalized_work_key,
+                url=str(url or ""),
+                agent_id=selected_agent_id,
+                port=port,
+                agent_work_key=shared_agent_key,
+                queue_wait_timeout_seconds=queue_wait_timeout_seconds,
+                command_timeout_seconds=command_timeout_seconds,
+            )
         existing = None if force_recreate else self.sessions.find_by_metadata(
             agent_id=selected_agent_id,
             port=str(port),
@@ -1039,6 +1135,10 @@ class BrowserBridgeService:
         if normalized_work_key:
             metadata["work_key"] = normalized_work_key
             metadata["protected"] = is_protected
+        if profile_lane:
+            metadata["profile_lane"] = profile_lane
+        if extai_tab.get("target_id"):
+            metadata["extai_target_id"] = extai_tab["target_id"]
         if existing:
             existing.endpoint.metadata = metadata
             existing.label = label or existing.label
@@ -1081,15 +1181,19 @@ class BrowserBridgeService:
 
         The active Browser Bridge session is intentionally left unchanged.
         Work sessions use isolated PC Agent Chrome profiles so login storage does
-        not bleed into another workflow.
+        not bleed into another workflow. The extai-* lane is the exception: it
+        uses the fixed PC Agent profile so subscription logins persist.
         """
         normalized_work_key = normalize_work_key(work_key)
         is_protected = normalized_work_key in PROTECTED_WORK_KEYS or looks_like_protected_label(label)
         requested_agent_id = str(agent_id or "").strip()
+        extai_lane = is_extai_work_key(normalized_work_key)
         existing = None if force_recreate else self.sessions.find_by_work_key(normalized_work_key)
         existing_agent_matches = self._work_session_agent_matches(existing, requested_agent_id) if existing else True
+        lane_migration = bool(existing and extai_lane and not self._session_on_extai_fixed_lane(existing))
         if (
             existing
+            and not lane_migration
             and existing_agent_matches
             and self._session_reusable(existing)
             and self._work_session_url_usable(existing, url)
@@ -1112,6 +1216,8 @@ class BrowserBridgeService:
                 if not existing_agent_matches
                 else "force_recreate"
                 if force_recreate
+                else "profile_lane_migration"
+                if lane_migration
                 else "stale_or_expired"
             )
             logger.warning(
@@ -1132,24 +1238,224 @@ class BrowserBridgeService:
             label=label or default_work_session_label(normalized_work_key),
             url=url or "about:blank",
             preferred_port=preferred_port,
-            isolated_profile=True,
-            isolation_id=normalized_work_key,
+            isolated_profile=not extai_lane,
+            isolation_id="" if extai_lane else normalized_work_key,
             activate=False,
             work_key=normalized_work_key,
             protected=is_protected,
             force_recreate=force_recreate,
             queue_wait_timeout_seconds=queue_wait_timeout_seconds,
             command_timeout_seconds=command_timeout_seconds,
+            profile_lane=EXTAI_PROFILE_LANE if extai_lane else ISOLATED_PROFILE_LANE,
+            agent_work_key=EXTAI_AGENT_WORK_KEY if extai_lane else "",
         )
         session.mark_used()
         self.sessions.touch(session)
         logger.info(
-            "browser_bridge_work_session_ready work_key=%s session_id=%s active_unchanged=true protected=%s",
+            "browser_bridge_work_session_ready work_key=%s session_id=%s active_unchanged=true protected=%s profile_lane=%s",
             normalized_work_key,
             session.session_id,
             is_protected,
+            EXTAI_PROFILE_LANE if extai_lane else ISOLATED_PROFILE_LANE,
         )
         return session
+
+    async def _run_extai_pc_command(
+        self,
+        command_type: str,
+        params: dict[str, Any],
+        *,
+        agent_id: str,
+        queue_wait_timeout_seconds: float | None = None,
+        command_timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        """Run one PC Agent command for the extai lane and return its data dict (raises on failure)."""
+        from app.services.pc_agent_manager import pc_agent_manager
+
+        timeout = max(10.0, min(60.0, float(command_timeout_seconds or 30.0)))
+        queue_wait = max(5.0, min(30.0, float(queue_wait_timeout_seconds or 10.0)))
+        job_type = f"browser_bridge_extai_{command_type}"
+        routed: dict[str, Any] | None = None
+        if self._route_pc_agent_via_active_api_first():
+            routed = await self._execute_pc_agent_route_via_active_api(
+                command_type=command_type,
+                params=params,
+                agent_id=agent_id,
+                job_type=job_type,
+                required_capabilities=["interactive_browser"],
+                queue_wait_timeout_seconds=queue_wait,
+                lease_ttl_seconds=int(timeout + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
+                command_timeout_seconds=timeout,
+            )
+        if routed is None:
+            routed = await pc_agent_manager.execute_routed_command(
+                command_type=command_type,
+                params=params,
+                agent_id=agent_id,
+                job_type=job_type,
+                required_capabilities=["interactive_browser"],
+                queue_if_busy=True,
+                wait_for_turn=True,
+                queue_wait_timeout_seconds=queue_wait,
+                lease_ttl_seconds=int(timeout + LOCAL_AGENT_LEASE_BUFFER_SECONDS),
+                command_timeout_seconds=timeout,
+            )
+        routed = self._coerce_pc_agent_embedded_success(routed)
+        if routed.get("status") != "success":
+            code, message, detail = self._extract_pc_agent_route_error(routed)
+            raise BrowserBridgeError(message, error_code=code, detail=detail)
+        result = routed.get("result")
+        data = result.get("result") if isinstance(result, dict) else None
+        return data if isinstance(data, dict) else {}
+
+    def _extai_sibling_sessions(self, work_key: str, agent_id: str, port: int) -> dict[str, list[BrowserBridgeSession]]:
+        """Live extai sessions of other providers sharing this PC's fixed-profile Chrome, keyed by tab host."""
+        siblings: dict[str, list[BrowserBridgeSession]] = {}
+        for other in self.sessions.list_sessions():
+            metadata = dict(other.endpoint.metadata or {})
+            other_key = str(other.work_key or "")
+            if (
+                other_key == work_key
+                or not is_extai_work_key(other_key)
+                or metadata.get("stale")
+                or str(metadata.get("agent_id") or "") != agent_id
+                or str(metadata.get("port") or "") != str(port)
+            ):
+                continue
+            host = extai_url_host(str(metadata.get("last_url") or ""))
+            if host:
+                siblings.setdefault(host, []).append(other)
+        return siblings
+
+    async def _extai_attach_tab(
+        self,
+        *,
+        work_key: str,
+        url: str,
+        agent_id: str,
+        port: int,
+        agent_work_key: str,
+        queue_wait_timeout_seconds: float | None,
+        command_timeout_seconds: float | None,
+    ) -> dict[str, Any]:
+        """Point one provider at its own tab of the shared Chrome, never at another live provider's tab."""
+        requested = str(url or "").strip()
+        if not requested or requested.lower() == "about:blank":
+            return {}
+        common = {"work_key": agent_work_key, "port": port}
+        tabs_data = await self._run_extai_pc_command(
+            "browser_tabs",
+            dict(common),
+            agent_id=agent_id,
+            queue_wait_timeout_seconds=queue_wait_timeout_seconds,
+            command_timeout_seconds=command_timeout_seconds,
+        )
+        tabs = tabs_data.get("tabs")
+        siblings = self._extai_sibling_sessions(work_key, agent_id, port)
+        tab, mode = pick_extai_tab(tabs if isinstance(tabs, list) else [], requested, set(siblings))
+        if tab is None:
+            raise BrowserBridgeError(
+                "no free tab for this extai provider in the shared fixed-profile Chrome; open a new tab and retry",
+                error_code="EXTAI_TAB_UNAVAILABLE",
+                detail={"work_key": work_key, "url": requested, "tab_count": len(tabs or [])},
+            )
+        target_id = str(tab.get("id") or "")
+        if mode != "reuse":
+            await self._run_extai_pc_command(
+                "browser_navigate",
+                {**common, "url": requested, "target_id": target_id, "reuse_tab": False},
+                agent_id=agent_id,
+                queue_wait_timeout_seconds=queue_wait_timeout_seconds,
+                command_timeout_seconds=command_timeout_seconds,
+            )
+        taken_over: list[str] = []
+        if mode == "takeover":
+            for victim in siblings.get(extai_url_host(str(tab.get("url") or "")), []):
+                self.sessions.retire_session(
+                    victim.session_id,
+                    stale_reason=f"extai_tab_taken_over_by:{work_key}",
+                    clear_work_key=True,
+                    clear_active=False,
+                    clear_lease=True,
+                )
+                self._session_contexts.pop(victim.session_id, None)
+                self._session_browsers.pop(victim.session_id, None)
+                taken_over.append(str(victim.session_id))
+        logger.info(
+            "browser_bridge_extai_tab work_key=%s mode=%s target_id=%s taken_over=%s",
+            work_key,
+            mode,
+            target_id,
+            ",".join(taken_over),
+        )
+        return {"target_id": target_id, "tab_mode": mode}
+
+    async def _close_extai_work_session(
+        self,
+        session: BrowserBridgeSession,
+        work_key: str,
+        metadata: dict[str, Any],
+        *,
+        reason: str,
+        close_browser: bool,
+        close_tabs: bool,
+        command_timeout_seconds: float,
+    ) -> dict[str, Any]:
+        """Retire an extai session without touching the Chrome shared by every provider and its login."""
+        target_id = str(metadata.get("extai_target_id") or "")
+        shared_tab = any(
+            other.session_id != session.session_id
+            and str((other.endpoint.metadata or {}).get("extai_target_id") or "") == target_id
+            and str((other.endpoint.metadata or {}).get("agent_id") or "") == str(metadata.get("agent_id") or "")
+            and not (other.endpoint.metadata or {}).get("stale")
+            for other in self.sessions.list_sessions()
+        )
+        closed_tab = False
+        tab_close_error = ""
+        if close_tabs and target_id and metadata.get("port") and not shared_tab:
+            try:
+                data = await self._run_extai_pc_command(
+                    "browser_close_tab",
+                    {
+                        "work_key": EXTAI_AGENT_WORK_KEY,
+                        "port": int(metadata.get("port") or 0),
+                        "target_id": target_id,
+                        "keep_last": True,
+                    },
+                    agent_id=str(metadata.get("agent_id") or ""),
+                    command_timeout_seconds=command_timeout_seconds,
+                )
+                closed_tab = bool(data.get("closed"))
+            except Exception as exc:
+                tab_close_error = str(exc)[:200]
+                logger.warning("browser_bridge_extai_close_tab_failed work_key=%s err=%s", work_key, exc)
+        self.sessions.retire_session(
+            session.session_id,
+            stale_reason=reason,
+            clear_work_key=True,
+            clear_active=False,
+            clear_lease=True,
+        )
+        self._session_contexts.pop(session.session_id, None)
+        self._session_browsers.pop(session.session_id, None)
+        return {
+            "status": "retired",
+            "reason": "extai_shared_fixed_profile",
+            "session_id": session.session_id,
+            "work_key": work_key,
+            "close_browser": False,
+            "close_browser_skipped": bool(close_browser),
+            "close_tabs": bool(close_tabs),
+            "closed_tab": closed_tab,
+            "tab_close_error": tab_close_error,
+        }
+
+    @staticmethod
+    def _session_on_extai_fixed_lane(session: BrowserBridgeSession) -> bool:
+        metadata = dict(session.endpoint.metadata or {})
+        if metadata.get("profile_lane") != EXTAI_PROFILE_LANE:
+            return False
+        return "isolated-" not in str(metadata.get("profile_dir") or "")
 
     @staticmethod
     def _work_session_agent_matches(session: BrowserBridgeSession, requested_agent_id: str) -> bool:
@@ -1374,6 +1680,17 @@ class BrowserBridgeService:
                 "session_id": session.session_id,
                 "work_key": normalized_work_key,
             }
+
+        if is_extai_work_key(normalized_work_key) or metadata.get("profile_lane") == EXTAI_PROFILE_LANE:
+            return await self._close_extai_work_session(
+                session,
+                normalized_work_key,
+                metadata,
+                reason=reason,
+                close_browser=close_browser,
+                close_tabs=close_tabs,
+                command_timeout_seconds=command_timeout_seconds,
+            )
 
         close_params: dict[str, Any] = {
             "work_key": normalized_work_key,
