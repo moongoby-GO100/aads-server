@@ -347,22 +347,32 @@ GENERIC_DB_LEDGER_NAMES = {
 CONTRACT_TEMPLATE_META = {
     "freelancer": {
         "document_kind": "freelancer_service_contract",
-        "template_version": "majangbiseo-freelancer-2026-07-identity-table-v3",
+        "template_version": "majangbiseo-freelancer-2026-07-identity-table-v4",
         "print_title": "3.3% 프리랜서 용역계약서",
     },
     "confidentiality": {
         "document_kind": "confidentiality_agreement",
-        "template_version": "majangbiseo-confidentiality-2026-07-identity-table-v3",
+        "template_version": "majangbiseo-confidentiality-2026-07-identity-table-v4",
         "print_title": "보안 및 개인정보 보호 서약서",
+    },
+    "fixed_term": {
+        "document_kind": "standard_employment_contract",
+        "template_version": "majangbiseo-employment-2026-07-identity-table-v4",
+        "print_title": "기간제 근로계약서",
+    },
+    "daily": {
+        "document_kind": "standard_employment_contract",
+        "template_version": "majangbiseo-employment-2026-07-identity-table-v4",
+        "print_title": "일용 근로계약서",
     },
     "default": {
         "document_kind": "standard_employment_contract",
-        "template_version": "majangbiseo-employment-2026-07-identity-table-v3",
+        "template_version": "majangbiseo-employment-2026-07-identity-table-v4",
         "print_title": "표준근로계약서",
     },
 }
 
-EMPLOYMENT_CONTRACT_TYPES = {"part_time", "regular", "manager"}
+EMPLOYMENT_CONTRACT_TYPES = {"part_time", "regular", "manager", "fixed_term", "daily"}
 VALID_CONTRACT_TYPES = EMPLOYMENT_CONTRACT_TYPES | {"freelancer", "confidentiality"}
 CONTRACT_SNAPSHOT_EXCLUDED_FIELDS = {
     "sign_token",
@@ -5886,6 +5896,11 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     start_date = str(_contract_payload_value(result, "start_date", "startDate") or "").strip()
     end_date = str(_contract_payload_value(result, "end_date", "endDate") or "").strip()
+    if contract_type in {"fixed_term", "daily"} and end_date:
+        try:
+            date.fromisoformat(end_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="계약 종료일 형식이 올바르지 않습니다") from exc
     if start_date and end_date and end_date < start_date:
         raise HTTPException(status_code=400, detail="계약 종료일은 입사일보다 빠를 수 없습니다")
 
@@ -5948,6 +5963,12 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
         ):
             if _missing_contract_value(_contract_payload_value(result, key, camel)):
                 missing.append(label)
+        if contract_type in {"fixed_term", "daily"} and _missing_contract_value(
+            _contract_payload_value(result, "end_date", "endDate")
+        ):
+            missing.append("계약 종료일")
+        if contract_type == "daily" and wage_type != "daily":
+            raise HTTPException(status_code=400, detail="일용 근로계약서는 일급으로 작성해야 합니다")
         if contract_type == "part_time" and _missing_contract_value(
             _contract_payload_value(result, "daily_work_schedule", "dailyWorkSchedule")
         ):

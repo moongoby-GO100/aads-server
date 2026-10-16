@@ -65,15 +65,27 @@ def test_editor_does_not_persist_personal_data_in_browser_storage():
 
 
 def test_core_is_same_code_as_legacy_contract_screen():
-    pairs = [
-        ("const contractTypeLabels = {", "const payrollStatusLabels = {"),
-        ("function validateContractDraft(draft) {", "function contractClause(title, body) {"),
-        ("function contractPreviewHtml(contract) {", "function contractPreviewWithCurrentReferences(contract) {"),
-    ]
-    core_text = CORE.split("})(typeof window", 1)[0]
-    for start, end in pairs:
-        legacy = _block(INDEX, start, end).rstrip()
-        assert legacy in core_text, f"contract-core.js 가 index.html 의 {start} 와 달라졌습니다"
+    # 소스 복사 대신 구 화면 함수와 통합 렌더러의 v3 출력을 직접 비교한다.
+    legacy = _block(INDEX, "function contractPreviewHtml(contract) {", "function contractPreviewWithCurrentReferences(contract) {").rstrip()
+    assert _block(INDEX, "const contractTypeLabels = {", "const employmentTaxTypeLabels = {") in CORE
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("호스트 node 검증 필요")
+    source = CORE.replace("    const api = {", legacy.replace("contractPreviewHtml", "legacyPreviewHtml", 1) + "\n    const api = { legacyPreviewHtml,", 1)
+    script = r'''
+const vm = require('node:vm'), assert = require('node:assert/strict');
+vm.runInThisContext(require('node:fs').readFileSync(0, 'utf8'));
+const C = globalThis.ObysContractCore;
+for (const type of Object.keys(C.contractTypeLabels)) {
+  for (const extra of [{}, {endDate:'2026-12-31', foreignWorker:true, minorGuardianName:'가상 보호자', baseSalary:2500000}]) {
+    const draft = {...C.defaultsFor(type, 'four_insurance'), contractType:type,
+      templateVersion:'legacy-v3', startDate:'2026-11-01', employeeName:'가상직원', ...extra};
+    assert.equal(C.contractPreviewHtml(draft), C.legacyPreviewHtml(draft), type);
+  }
+}
+'''
+    result = subprocess.run([node, "-e", script], input=source, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
 
 
 def _server_missing_labels() -> set[str]:
@@ -153,8 +165,8 @@ def test_every_server_missing_label_points_to_an_input(node_result):
 # ---------- 2026-10-06 r2: 직원 입사서류 등록 + 빈 필수값 표시·추천값 ----------
 
 def test_v41_bumps_contract_module_cache_version():
-    assert "modules/contract-core.js?v=20261015-r1" in V41
-    assert "modules/contract-editor-v41.js?v=20261015-r1" in V41
+    assert "modules/contract-core.js?v=20261016-r1" in V41
+    assert "modules/contract-editor-v41.js?v=20261016-r1" in V41
     assert "modules/contract-editor-v41.css?v=20261006-r5" in V41
 
 

@@ -30,12 +30,12 @@
 
   // 화면 표시 이름 = 서버/기존 validator 의 누락 항목 이름. 오류가 오면 이 이름으로 칸을 찾는다.
   const FIELDS = [
-    { g: "basic", name: "contractType", label: "계약 유형", type: "select", options: () => Object.entries(C.contractTypeLabels).filter(([k]) => k !== "confidentiality") },
+    { g: "basic", name: "contractType", label: "계약 유형", type: "select", options: () => Object.entries(C.contractTypeLabels) },
     { g: "basic", name: "contractDate", label: "계약 작성일", type: "date" },
     { g: "basic", name: "startDate", label: "입사일", type: "date", altLabels: ["용역 시작일"] },
     { g: "basic", name: "endDate", label: "계약 종료일", type: "date", hint: "기간의 정함이 없으면 비워 둡니다." },
     { g: "basic", name: "workplace", label: "근무장소", type: "text", altLabels: ["용역 수행장소/방식"] },
-    { g: "basic", name: "workplaceSizeCategory", label: "상시근로자 수", type: "select", options: () => [["under_5", "5인 미만"], ["over_5", "5인 이상"]] },
+    { g: "basic", name: "workplaceSizeCategory", label: "상시근로자 수", type: "select", options: () => [["under_5", "5인 미만"], ["five_plus", "5인 이상"], ["over_5", "5인 이상(기존값)"]] },
     { g: "basic", name: "jobDescription", label: "업무내용", type: "textarea", altLabels: ["용역 업무내용"] },
     { g: "wage", name: "wageType", label: "임금 산정 방식", type: "select", options: () => Object.entries(C.wageTypeLabels) },
     { g: "wage", name: "wage", label: "확정 임금", type: "number", altLabels: ["확정 용역비"], hint: "시급·월급·용역비 금액을 원 단위로 입력합니다. 기본값을 넣지 않습니다." },
@@ -435,6 +435,7 @@
     E.auto = freshAuto();
     if (!autoOn()) return;
     E.auto.term = AUTO.termFromDates(v.startDate, v.endDate);
+    if (["fixed_term", "daily"].includes(v.contractType) && !v.endDate) E.auto.term = "custom";
     if (mode !== "saved") return;
     E.auto.probation = AUTO.parseProbation(v.probationPeriod) || "";
     const pay = AUTO.parsePayDate(v.payDate);
@@ -610,7 +611,7 @@
     const contractType = "part_time";
     const cls = C.classificationFor(contractType);
     const values = { contractType, ...cls };
-    Object.entries(C.defaultsFor(contractType, cls.employmentTaxType)).forEach(([key, value]) => { if (!NO_DEFAULT.has(key)) values[key] = value; });
+    Object.entries(C.defaultsFor(contractType, cls.employmentTaxType, business)).forEach(([key, value]) => { if (!NO_DEFAULT.has(key)) values[key] = value; });
     Object.assign(values, {
       contractDate: C.today(),
       startDate: "",
@@ -657,7 +658,7 @@
     draft.foreignWorker = values.foreignWorker === "true";
     draft.minorGuardianConsent = values.minorGuardianConsent || "not_applicable";
     draft.wageType = draft.wageType || "hourly";
-    draft.workplaceSizeCategory = draft.workplaceSizeCategory || "under_5";
+    draft.workplaceSizeCategory = draft.workplaceSizeCategory || businessRecord(target.business_id).workplace_size_category || businessRecord(target.business_id).workplaceSizeCategory || "under_5";
     draft.mealProvision = draft.mealProvision || "employer_meal";
     draft.employeeRequestId = String(target.employee_request_id || "");
     draft.businessId = String(target.business_id || "");
@@ -1367,6 +1368,7 @@
       if (String(E.values[key] ?? "").trim() === String(value ?? "").trim()) E.values[key] = after[key] !== undefined ? String(after[key]) : "";
     });
     Object.assign(E.values, cls, { contractType: newType });
+    if (E.auto && ["fixed_term", "daily"].includes(newType) && !E.values.endDate) E.auto.term = "custom";
     applyDefaults(false);
   }
   function applyDefaults(overwrite) {

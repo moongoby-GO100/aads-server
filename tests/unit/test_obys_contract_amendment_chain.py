@@ -317,4 +317,4 @@ def test_admin_editor_has_amendment_button_and_labels():
     assert "변경 계약 작성" in editor
     assert 'amendsContractId: String(original.id), contractDate: "", startDate: "", endDate: ""' in editor
     assert "변경 계약(원계약" in editor and "이전 계약" in editor
-    assert "modules/contract-editor-v41.js?v=20261015-r1" in (root / "admin.html").read_text(encoding="utf-8")
+    assert "modules/contract-editor-v41.js?v=20261016-r1" in (root / "admin.html").read_text(encoding="utf-8")

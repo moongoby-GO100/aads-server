@@ -1,12 +1,9 @@
 /* 오비서 계약서 공용 코어 — 표준 조항 기본값·작성 검증·미리보기 HTML.
  *
- * 아래 상수·함수 본문은 기존 관리화면(index.html)의 계약서 작성 코드에서 그대로
- * 옮겨 왔다(2026-10-06, 원본 index.html 의 contractTypeLabels~standardContractDefaults,
- * validateContractDraft, contractClause, contractPreviewHtml). 현재 관리자 화면(V4.1)이
- * 같은 양식·같은 검증으로 계약서를 만들게 하기 위함이다. 서버(_validate_contract_payload)가
- * 최종 판정이고, 이 검증은 저장 전에 빠진 칸을 먼저 알려주는 용도다.
- * 양식을 바꿀 때는 index.html 쪽도 함께 바꿔라 — 두 화면의 계약서가 달라지면 안 된다.
- * (tests/unit/test_obys_v41_contract_editor.py 가 두 사본의 일치를 검사한다.)
+ * 기존 관리화면의 v3 문장은 공용 미리보기의 버전 분기로 보존한다.
+ * 현재 편집기는 v4 표준 조항을 사용하고 명시적인 v3 계약은 원문으로 렌더링한다.
+ * 서버(_validate_contract_payload)가 최종 검증하며 클라이언트 검증은 저장 전 누락을 안내한다.
+ * 구 화면은 유형 목록만 동기화한다. 회귀 테스트는 목록 일치와 v3 원문 보존을 검사한다.
  */
 (function (root) {
     "use strict";
@@ -38,6 +35,8 @@
       part_time: "단시간/아르바이트 근로계약서",
       regular: "정규직 근로계약서",
       manager: "매니저 근로계약서",
+      fixed_term: "기간제 근로계약서",
+      daily: "일용 근로계약서",
       freelancer: "3.3% 프리랜서 용역계약서",
       confidentiality: "보안/개인정보 서약서"
     };
@@ -87,30 +86,30 @@
         terms: "단시간근로자의 근로일별 시작·종료·휴게시간은 서면에 정한 바에 따른다. 본 계약서에 명시되지 않은 사항은 근로기준법, 최저임금법 등 관계 법령에 따른다."
       },
       regular: {
-        workplaceSizeCategory: "under_5",
         wageType: "monthly",
-        wage: 3000000,
-        mealProvision: "employer_meal",
-        baseSalary: 3000000,
-        nonTaxMealAllowance: 0,
-        taxableAllowance: 0,
-        workTime: "21:00-09:00 (휴게 제외 실제 근로 10시간 30분)",
-        restTime: "01:00-02:00, 05:30-06:00 (총 1시간 30분, 근로자가 자유롭게 이용)",
-        weeklyHours: "주 52시간 30분 (1일 10시간 30분 × 주 5일)",
-        workDays: "주 5일, 구체적 근무요일은 월별 근무표로 사전 지정",
-        holidays: "1주 소정근로일 개근 및 주 15시간 이상 근무 시 주 1회 유급 주휴일. 근로자의 날은 유급휴일",
-        probationPeriod: "입사 후 3개월. 근태, 직무수행, 위생, 고객응대, 보안 준수 여부를 객관적 기록으로 평가하며 월 3,000,000원 급여는 수습 중에도 동일 적용",
-        wageComposition: "월 총액 3,000,000원. 사용자 식사 제공 시 과세 기본급 3,000,000원. 식사를 제공하지 않고 현금 식대를 지급하는 경우에만 과세 기본급 2,800,000원 + 비과세 식대 200,000원으로 구분하며 급여명세서에 표시",
-        overtimeTerms: "상시 5인 미만 상태에서는 근로기준법 제56조의 50% 가산 규정이 원칙적으로 적용되지 않으나, 약정 근로시간을 초과한 실제 근로시간의 통상임금은 별도 지급한다. 상시근로자 수가 5인 이상이 되거나 별도 합의가 있으면 법정 가산수당을 적용한다.",
-        leaveTerms: "상시 5인 미만 상태에서는 근로기준법 제60조 연차유급휴가가 원칙적으로 적용되지 않는다. 다만 경조·질병 등 사유의 휴가는 매장 운영에 지장이 없는 범위에서 내부 승인으로 부여할 수 있고, 상시 5인 이상 전환 시 법정 연차 기준을 즉시 적용한다.",
-        insuranceTerms: "정규직 근로소득으로 신고하고 국민연금·건강보험·고용보험·산재보험의 취득·보수 신고 및 근로소득 원천징수를 각 법정 기준에 따라 처리한다. 3.3% 사업소득으로 신고하지 않는다.",
-        terminationTerms: "근로자는 원활한 인수인계를 위해 퇴직 희망일 30일 전 서면 통보하도록 노력한다. 사용자는 근로기준법 제26조의 해고예고 또는 해고예고수당 기준을 준수한다. 무단결근, 위생·보안 중대 위반은 사실 확인과 소명 기회를 거쳐 조치하며 위약금·손해배상액을 미리 정하지 않는다.",
-        terms: "기간의 정함이 없는 근로계약으로 한다. 휴게시간에는 업무 지시를 하지 않으며 근로자가 자유롭게 이용한다. 근무표 변경은 사전에 통지하고, 상시근로자 수 변동으로 강행법규의 적용 범위가 달라지면 변경된 법정 기준을 적용한다."
+        workTime: "09:00-18:00",
+        restTime: "12:00-13:00",
+        weeklyHours: "주 40시간",
+        workDays: "주 5일",
+        probationPeriod: "수습기간 없음. 수습을 정한 경우에도 입력 임금을 동일 적용한다.",
+        terms: "휴게시간은 근로자가 자유롭게 이용하며 근무표 변경은 사전에 통지한다."
+      },
+      fixed_term: {
+        wageType: "monthly",
+        terms: "갱신은 계약 만료 전에 당사자가 서면 합의한다. 기간제법 제4조의 사용기간 제한과 예외를 준수한다."
+      },
+      daily: {
+        wageType: "daily",
+        insuranceTerms: "고용·산재보험 일용근로 신고 및 근로내용 확인신고를 법정 기준에 따라 처리한다.",
+        terms: "근로일 단위 계약이다. 주휴·연차는 일용직 명칭만으로 배제하지 않고 실제 계속근로와 소정근로시간 등 법정 요건으로 판단한다."
       },
       manager: {
         jobDescription: "매장 운영관리, 포스 마감, 현금·정산 점검, 위생·근태 관리, 직원 교육, 배달앱 운영계정 관리, 고객 클레임 대응",
         wageType: "monthly",
-        weeklyHours: "주 40시간 기준. 매장 운영상 필요한 마감·정산 업무는 사용자의 사전 승인을 받아 수행한다",
+        workTime: "",
+        restTime: "",
+        weeklyHours: "",
+        workDays: "",
         terms: ""
       },
       freelancer: {
@@ -172,7 +171,7 @@
       if (draft.startDate && draft.endDate && draft.endDate < draft.startDate) {
         throw new Error("계약 종료일은 입사일보다 빠를 수 없습니다.");
       }
-      if (["part_time", "regular", "manager"].includes(draft.contractType)) {
+      if (["part_time", "regular", "manager", "fixed_term", "daily"].includes(draft.contractType)) {
         if (draft.employmentTaxType !== "four_insurance") throw new Error("근로계약서는 4대보험 가입 근로자 구분으로 작성해야 합니다.");
         [
           ["입사일", draft.startDate], ["근무장소", draft.workplace], ["업무내용", draft.jobDescription],
@@ -182,6 +181,11 @@
           ["연장·야간·휴일근로", draft.overtimeTerms], ["연차/휴가/결근", draft.leaveTerms],
           ["4대보험/세무 처리", draft.insuranceTerms]
         ].forEach(([label, value]) => requireValue(label, value));
+        if (["fixed_term", "daily"].includes(draft.contractType)) {
+          requireValue("계약 종료일", draft.endDate);
+          if (draft.endDate && (!/^\d{4}-\d{2}-\d{2}$/.test(draft.endDate) || Number.isNaN(Date.parse(draft.endDate)) || new Date(draft.endDate).toISOString().slice(0, 10) !== draft.endDate)) throw new Error("계약 종료일 형식이 올바르지 않습니다.");
+        }
+        if (draft.contractType === "daily" && draft.wageType !== "daily") throw new Error("일용 근로계약서는 일급으로 작성해야 합니다.");
         if (draft.contractType === "part_time") requireValue("근로일별 근로시간", draft.dailyWorkSchedule);
         if (draft.foreignWorker) {
           requireValue("국적", draft.employeeNationality);
@@ -256,6 +260,7 @@
     }
 
     function contractPreviewHtml(contract) {
+      const isV3 = /-v3$/.test(contractValue(contract, "templateVersion", "template_version"));
       const contractType = contractValue(contract, "contractType", "contract_type");
       const employmentTaxType = contractValue(contract, "employmentTaxType", "employment_tax_type");
       const foreignWorker = Boolean(contractValue(contract, "foreignWorker", "foreign_worker"));
@@ -289,9 +294,13 @@
       const baseSalary = Number(contractValue(contract, "baseSalary", "base_salary") || 0);
       const nonTaxMealAllowance = Number(contractValue(contract, "nonTaxMealAllowance", "non_tax_meal_allowance") || 0);
       const taxableAllowance = Number(contractValue(contract, "taxableAllowance", "taxable_allowance") || 0);
-      const overtimeTerms = contractValue(contract, "overtimeTerms", "overtime_terms");
-      const leaveTerms = contractValue(contract, "leaveTerms", "leave_terms");
-      const insuranceTerms = contractValue(contract, "insuranceTerms", "insurance_terms");
+      const overtimeTerms = isV3
+        ? contractValue(contract, "overtimeTerms", "overtime_terms")
+        : effectiveSizeTerm(contract, "overtimeTerms", "overtime_terms", workplaceSizeCategory);
+      const leaveTerms = isV3
+        ? contractValue(contract, "leaveTerms", "leave_terms")
+        : effectiveSizeTerm(contract, "leaveTerms", "leave_terms", workplaceSizeCategory);
+      const insuranceTerms = contractValue(contract, "insuranceTerms", "insurance_terms") + (!isV3 && contractType === "daily" ? " 고용·산재보험 일용근로 신고와 근로내용 확인신고를 법정 기준에 따라 처리한다." : "");
       const mealUniformTerms = contractValue(contract, "mealUniformTerms", "meal_uniform_terms");
       const freelancerScope = contractValue(contract, "freelancerScope", "freelancer_scope");
       const freelancerSettlementTerms = contractValue(contract, "freelancerSettlementTerms", "freelancer_settlement_terms");
@@ -365,17 +374,20 @@
           ? ` 근로일별 근로시간: ${dailyWorkSchedule || "미입력"}.`
           : "";
         const managerNote = contractType === "manager"
-          ? "매니저는 포스 마감, 현금·정산, 위생·근태 점검, 직원 교육, 배달앱 운영계정 관리 책임을 포함한다."
+          ? "매니저는 포스 마감, 현금·정산, 위생·근태 점검, 직원 교육, 배달앱 운영계정 관리 책임을 포함한다." + (isV3 ? "" : " 매니저도 근로기준법상 근로자이며 직함만으로 연장·야간근로수당 적용에서 제외되지 않는다.")
           : "";
         clauses = [
-          contractClause("근로계약 기간", `${startDate || "입사일 미입력"}부터 ${endDate || "기간의 정함 없음"}까지로 한다. ${contractType === "regular" ? "기간의 정함이 없는 근로계약으로 한다." : ""}`),
+          contractClause("근로계약 기간", isV3
+            ? `${startDate || "입사일 미입력"}부터 ${endDate || "기간의 정함 없음"}까지로 한다. ${contractType === "regular" ? "기간의 정함이 없는 근로계약으로 한다." : ""}`
+            : endDate ? `${startDate}부터 ${endDate}까지로 한다.${contractType === "fixed_term" ? " 갱신은 만료 전 당사자가 서면 합의한다. 기간제법 제4조에 따라 2년 초과 사용 시 무기계약 전환 여부를 준수한다." : contractType === "daily" ? " 근로일 단위로 계약하며 계속근로 여부는 실제 근무관계로 판단한다." : ""}` : `${String(startDate).replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$1년 $2월 $3일")}부터 기간의 정함이 없는 근로계약으로 한다.`),
           contractClause("근무장소 및 업무", `${workplace || "근무장소 미입력"}에서 ${jobDescription || "업무내용 미입력"} 업무를 수행한다. ${managerNote}`),
           contractClause("소정근로시간 및 휴게", `${workTime || "근무시간 미입력"} / 휴게 ${restTime || "미입력"} / 주 소정근로시간 ${weeklyHours || "미입력"}. ${partTimeNote}`),
-          contractClause("근무일, 휴일, 주휴", `근무일은 ${workDays || "미입력"}, 휴일은 ${holidays || "미입력"}로 한다.${partTimeNote}`),
+          contractClause("근무일, 휴일, 주휴", `근무일은 ${workDays || "미입력"}, 휴일은 ${holidays || "미입력"}로 한다.${isV3 ? partTimeNote : ""}`),
           contractClause("임금, 계산방법, 지급방법", `${wageLine}. 임금 구성: ${wageComposition || "기본급, 법정수당, 공제항목 미입력"}. 최저임금 및 임금명세서 교부 기준을 준수한다.`),
           contractClause("연장·야간·휴일근로", overtimeTerms || "연장·야간·휴일근로는 사전 승인 기준으로 운영하고 법정 가산수당을 급여 지급 시 반영한다."),
           contractClause("휴가, 결근, 근태", leaveTerms || "연차유급휴가, 지각, 조퇴, 결근, 병가 처리는 근태기록과 법정 기준에 따라 급여내역서에 반영한다."),
           contractClause("4대보험 및 세무", insuranceTerms || `${taxLabel} 기준으로 취득 신고, 원천세, 급여명세서 교부를 처리한다.`),
+          ...(!isV3 ? [contractClause("퇴직급여", "사업장 규모와 무관하게 계속근로 1년 이상이고 4주 평균 주 15시간 이상인 근로자에게 퇴직급여보장법에 따른 퇴직급여를 지급한다. 주 15시간 미만 초단시간근로자는 주휴·연차·퇴직급여 적용 대상에서 제외되며 실제 계속근로와 소정근로시간으로 판단한다.")] : []),
           contractClause("수습 및 평가", contractValue(contract, "probationPeriod", "probation_period") || "수습기간 없음."),
           contractClause("식대, 유니폼, 보건증", mealUniformTerms || "식사 제공, 유니폼 지급·반납, 보건증 제출·갱신, 위생교육 이수 기준을 준수한다."),
           contractClause("퇴직 및 계약 해지", terminationTerms || "퇴직 시 사전 통보, 인수인계, 무단결근·중대한 위반 시 계약 해지 기준을 적용한다."),
@@ -387,7 +399,7 @@
       }
       const minorGuardianName = contractValue(contract, "minorGuardianName", "minor_guardian_name");
       if (minorGuardianName) {
-        clauses.push(contractClause("연소근로자 보호", `친권자/후견인 ${minorGuardianName}, 연락처 ${contractValue(contract, "minorGuardianPhone", "minor_guardian_phone") || "미입력"}. 연령증명서와 친권자/후견인 동의서를 사업장에 비치한다.`));
+        clauses.push(contractClause("연소근로자 보호", `친권자/후견인 ${minorGuardianName}, 연락처 ${contractValue(contract, "minorGuardianPhone", "minor_guardian_phone") || "미입력"}. ${isV3 ? "연령증명서와 친권자/후견인 동의서를 사업장에 비치한다." : "근로기준법 제66조에 따른 가족관계증명서와 친권자/후견인 동의서를 비치한다. 제69조에 따라 1일 7시간·주 35시간을 원칙으로 하며, 제70조에 따른 야간·휴일근로 제한을 준수한다."}`));
       }
       clauses.push(contractClause(
         isFreelancerContract ? "계약서 제공 및 전자서명" : isConfidentialityContract ? "서약서 제공 및 전자서명" : "계약서 교부 및 전자서명",
@@ -419,21 +431,47 @@
 
 
     const CONTRACT_STATUS = { draft: ["작성중", "info"], requested: ["서명요청", "warn"], signed: ["서명완료", "good"], archived: ["보관", "info"], cancelled: ["취소", "bad"] };
-    const EMPLOYMENT_TYPES = ["part_time", "regular", "manager"];
+    const EMPLOYMENT_TYPES = ["part_time", "regular", "manager", "fixed_term", "daily"];
+
+    // 자동 계산의 시간·초단시간 안내와 사용자가 추가한 약정은 보존한다.
+    // 규모가 바뀌었는데 이전 규모의 표준 문장이 남은 경우에만 현재 기준으로 교체한다.
+    function effectiveSizeTerm(contract, camel, snake, size) {
+      const text = contractValue(contract, camel, snake);
+      const five = ["five_plus", "over_5"].includes(size);
+      const generic = standardContractDefaults.common[camel];
+      const standard = [sizeTerms("under_5")[camel], sizeTerms("five_plus")[camel]];
+      if (!text || text === generic || standard.includes(text)
+          || (five && /^상시 5인 미만/.test(text)) || (!five && /^상시 5인 이상/.test(text))) return sizeTerms(size)[camel];
+      return text;
+    }
+
+    function sizeTerms(size) {
+      return ["five_plus", "over_5"].includes(size) ? {
+        overtimeTerms: "상시 5인 이상 사업장: 근로기준법 제56조에 따른 연장·야간·휴일근로 50% 이상 가산수당 등 법정 기준을 적용한다.",
+        leaveTerms: "상시 5인 이상 사업장: 근로기준법 제60조 연차유급휴가를 법정 요건에 따라 적용한다."
+      } : {
+        overtimeTerms: "상시 5인 미만 사업장: 근로기준법 제56조 가산 규정은 미적용하나 연장·야간·휴일의 실제 근로 임금은 지급하며 별도 유리한 약정을 준수한다.",
+        leaveTerms: "상시 5인 미만 사업장: 근로기준법 제60조 연차유급휴가는 미적용하며 약정 휴가와 법정 적용 요건을 준수한다."
+      };
+    }
 
     /** 계약 유형·신고 구분에 맞는 표준 조항 기본값(기존 buildContractDefaults 와 같은 병합 순서). */
-    function defaultsFor(contractType, taxType) {
+    function defaultsFor(contractType, taxType, business = {}) {
       return {
         ...standardContractDefaults.common,
         ...(standardContractDefaults[contractType] || {}),
-        ...(standardContractDefaults[taxType] || {})
+        ...(standardContractDefaults[taxType] || {}),
+        ...(contractType === "daily" ? { insuranceTerms: standardContractDefaults.daily.insuranceTerms } : {}),
+        ...sizeTerms(business.workplaceSizeCategory || business.workplace_size_category || "under_5"),
+        workplaceSizeCategory: business.workplaceSizeCategory || business.workplace_size_category || "under_5"
+
       };
     }
 
     /** 계약 유형이 정하는 신고 구분·임금 방식(기존 syncContractClassification). */
     function classificationFor(contractType) {
       if (contractType === "freelancer") return { employmentTaxType: "freelancer_33", wageType: "case_fee" };
-      if (EMPLOYMENT_TYPES.includes(contractType)) return { employmentTaxType: "four_insurance", wageType: contractType === "part_time" ? "hourly" : "monthly" };
+      if (EMPLOYMENT_TYPES.includes(contractType)) return { employmentTaxType: "four_insurance", wageType: contractType === "part_time" ? "hourly" : contractType === "daily" ? "daily" : "monthly" };
       return {};
     }
 
