@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.auth import TenantRole, require_tenant_role
 from app.core.goal_work_hierarchy_policy import goal_work_hierarchy_enabled
 from app.services import goal_approval_policy_schema as policy_schema
+from app.services.approval_profiles import profile_for_project, profile_options
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1287,7 +1288,7 @@ async def get_goal_approval_policy(
     from app.core.db_pool import get_pool
 
     row = await get_pool().fetchrow(
-        "SELECT COALESCE(approval_policy, '{}'::jsonb) AS p, title, status "
+        "SELECT COALESCE(approval_policy, '{}'::jsonb) AS p, title, status, project "
         "FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
         goal_id, _tenant_id(context),
     )
@@ -1295,8 +1296,11 @@ async def get_goal_approval_policy(
         raise HTTPException(status_code=404, detail="goal_not_found")
     policy = _policy_dict(row["p"])
     summary = policy_schema.effective_summary(policy)
+    profile = profile_for_project(row.get("project"))
     return {
         "goal_id": goal_id, "title": row["title"], "status": row["status"],
+        "profile": profile,
+        "options": profile_options(profile),
         "auto_approve_high": bool(policy.get("auto_approve_high")),
         "auto_approve_critical": bool(policy.get("auto_approve_critical")),
         "max_executions": int(policy.get("max_executions") or 0),
