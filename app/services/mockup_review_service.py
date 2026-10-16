@@ -743,6 +743,7 @@ async def request_changes(conn: Any, tenant: str, project: str, review_id: UUID,
         status = "changes_requested"
         held = await _hold_bindings(conn, head["id"])
         await _update_head(conn, head["id"], status=status, generation=generation)
+        await _resolve_actionable_notifications(conn, head, body.base_revision_id)
     position = await conn.fetchval(
         "SELECT count(*) FROM mockup_review_change_requests WHERE head_id=$1 AND status<>'resolved'", head["id"])
     event_id, response = await _event(
@@ -799,6 +800,7 @@ async def approve_review(conn: Any, tenant: str, project: str, review_id: UUID, 
                                     "idempotent": False})
     await _update_head(conn, head["id"], status="approved", approved_revision_id=revision["id"],
                        approval_event_id=event_id, generation=generation)
+    await _resolve_actionable_notifications(conn, head, revision["id"])
     await _emit(conn, head, "approved", event_id=event_id, actor=actor, revision_id=revision["id"],
                 revision=revision["revision"], audience=("owners", "requesters"))
     return response
@@ -828,6 +830,7 @@ async def revoke_review(conn: Any, tenant: str, project: str, review_id: UUID, a
                                      "bindings_held": held, "idempotent": False})
     await _update_head(conn, head["id"], status=status, approved_revision_id=None, approval_event_id=None,
                        generation=generation)
+    await _resolve_actionable_notifications(conn, head, revoked)
     await _emit(conn, head, "revoked", event_id=event_id, actor=actor, revision_id=revoked,
                 audience=("owners", "requesters"), detail=(body.reason or "")[:200])
     return response
@@ -1017,6 +1020,29 @@ async def _emit(conn: Any, head: Any, kind: str, *, event_id: int | None, actor:
         return 0
 
 
+_ACTIONABLE_KINDS = ("review_requested", "approval_waiting")
+
+
+async def _resolve_actionable_notifications(conn: Any, head: Any, revision_id: Any = None) -> int:
+    """Close the "please review / waiting for approval" rows for every recipient once the review is decided.
+
+    With revision_id only rows for that revision or older are closed: a newer revision that is submitted again
+    emits its own request rows, so a decision on an older revision must not silence them. Without it, all go.
+    Result rows (approved/revoked/change_received...) are never touched. Best effort like _emit.
+    """
+    try:
+        async with conn.transaction():
+            status = await conn.execute(
+                "UPDATE ohvis_notifications SET read_at=now() WHERE tenant_id=$1::uuid AND review_id=$2 "
+                "AND kind=ANY($3::text[]) AND read_at IS NULL AND ($4::uuid IS NULL OR revision IS NULL OR revision<="
+                "COALESCE((SELECT revision FROM mockup_review_revisions WHERE id=$4::uuid),2147483647))",
+                head["tenant_id"], head["id"], list(_ACTIONABLE_KINDS), revision_id)
+            return int(str(status).rsplit(" ", 1)[-1])
+    except Exception:  # noqa: BLE001 - inbox is best effort, the audited review state is the source of truth
+        logger.warning("ohvis notification resolve failed for review %s", head["id"], exc_info=True)
+        return 0
+
+
 async def _notify_submitted(conn: Any, head: Any, revision: Any, actor: str, event_id: int) -> None:
     if revision["revision"] > 1:
         await _emit(conn, head, "re_reported", event_id=event_id, actor=actor, revision_id=revision["id"],
@@ -1028,22 +1054,34 @@ async def _notify_submitted(conn: Any, head: Any, revision: Any, actor: str, eve
                 revision=revision["revision"], audience=("approvers",))
 
 
+# A request-type row is only actionable while its review is review_ready AND the row is about the head's current
+# revision. Judging by status alone would resurrect old rows as unread the moment a new revision is submitted (head back
+# to review_ready) - the new revision emits its own request rows, so rows of a superseded revision stay read. This also
+# covers rows created before _resolve_actionable_notifications existed, without any data UPDATE.
+_NOTIF_FROM = ("FROM ohvis_notifications n LEFT JOIN mockup_review_heads h "
+               "ON h.id=n.review_id AND h.tenant_id=n.tenant_id ")
+_NOTIF_IS_UNREAD = ("(n.read_at IS NULL AND NOT (n.kind=ANY(ARRAY['review_requested','approval_waiting']) "
+                    "AND h.id IS NOT NULL AND (h.status<>'review_ready' "
+                    "OR (n.revision_id IS NOT NULL AND n.revision_id IS DISTINCT FROM h.latest_revision_id))))")
+
+
 async def list_notifications(conn: Any, tenant: str, user: str, *, unread_only: bool = False,
                              project: str | None = None, limit: int = 50) -> dict:
     """Only the caller's own rows in the caller's tenant; there is no way to ask for someone else's inbox."""
     limit = max(1, min(limit, 200))
     rows = await conn.fetch(
-        "SELECT * FROM ohvis_notifications WHERE tenant_id=$1::uuid AND recipient_user_id=$2 "
-        "AND ($3::bool IS FALSE OR read_at IS NULL) AND ($4::text IS NULL OR project_key=$4) "
-        "ORDER BY created_at DESC,id DESC LIMIT $5", tenant, user, unread_only, project, limit)
+        f"SELECT n.*,{_NOTIF_IS_UNREAD} AS is_unread " + _NOTIF_FROM +
+        f"WHERE n.tenant_id=$1::uuid AND n.recipient_user_id=$2 AND ($3::bool IS FALSE OR {_NOTIF_IS_UNREAD}) "
+        "AND ($4::text IS NULL OR n.project_key=$4) ORDER BY n.created_at DESC,n.id DESC LIMIT $5",
+        tenant, user, unread_only, project, limit)
     unread = await conn.fetchval(
-        "SELECT count(*) FROM ohvis_notifications WHERE tenant_id=$1::uuid AND recipient_user_id=$2 "
-        "AND read_at IS NULL", tenant, user)
+        "SELECT count(*) " + _NOTIF_FROM +
+        f"WHERE n.tenant_id=$1::uuid AND n.recipient_user_id=$2 AND {_NOTIF_IS_UNREAD}", tenant, user)
     items = [{"id": r["id"], "kind": r["kind"], "title": r["title"], "body": r["body"], "link": r["link"],
               "project": r["project_key"], "review_id": str(r["review_id"]) if r["review_id"] else None,
               "revision_id": str(r["revision_id"]) if r["revision_id"] else None, "revision": r["revision"],
               "session_id": str(r["session_id"]) if r["session_id"] else None,
-              "read": r["read_at"] is not None, "created_at": r["created_at"].isoformat()} for r in rows]
+              "read": not r["is_unread"], "created_at": r["created_at"].isoformat()} for r in rows]
     return {"items": items, "unread": unread}
 
 

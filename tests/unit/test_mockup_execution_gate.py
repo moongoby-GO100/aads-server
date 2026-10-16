@@ -380,7 +380,7 @@ def test_resubmitting_a_revised_review_reports_to_requesters_and_first_submit_re
 
 def test_inbox_is_only_ever_the_callers_own_rows():
     seen = []
-    conn = FakeConn([("FROM ohvis_notifications WHERE", lambda *a: seen.append(a) or []),
+    conn = FakeConn([("FROM ohvis_notifications n LEFT JOIN", lambda *a: seen.append(a) or []),
                      ("count(*)", lambda *a: 0)])
     run(svc.list_notifications(conn, TENANT, "u1", unread_only=True, project="AADS", limit=9999))
     assert seen[0][0] == TENANT and seen[0][1] == "u1" and seen[0][4] == 200
