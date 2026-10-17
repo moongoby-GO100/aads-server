@@ -462,6 +462,34 @@ def test_state_shows_own_open_record_without_coordinates(client, db):
     assert "check_in_lat" not in json.dumps(body) and "latitude" not in json.dumps(body["branches"])
 
 
+@pytest.mark.parametrize("role", ["owner", "admin", "member", "viewer"])
+def test_inactive_membership_cannot_clock_or_change_consent(client, db, as_user, role):
+    user = _member("staff@example.com", role=role)
+    user["current_membership"]["status"] = "inactive"
+    as_user["user"] = user
+    for action in ("check-in", "check-out"):
+        assert _punch(client, action).status_code == 403
+    assert client.post(f"{BASE}/attendance/consent", json={"agree": True}).status_code == 403
+    assert db.rows == {} and db.audit == []
+
+
+def test_clock_payload_cannot_change_wage_or_close_coworker(client, db, as_user, clock):
+    _consent(client)
+    created = _punch(client, "check-in", meters=10, hourly_wage=99999,
+                     employee_email="coworker@example.com")
+    assert created.status_code == 201
+    row = _stored(db, created)
+    assert row["employee_email"] == "staff@example.com" and row["hourly_wage"] == 0
+    as_user["user"] = COWORKER
+    assert _punch(client, "check-out", meters=10, employee_email="staff@example.com").status_code == 409
+    assert row["check_out_at"] is None
+    as_user["user"] = EMPLOYEE
+    clock["value"] += timedelta(hours=8)
+    result = _punch(client, "check-out", meters=10, hourly_wage=99999)
+    assert result.status_code == 200
+    assert row["hourly_wage"] == 0 and row["check_out_at"] is not None
+
+
 # ── 관리자 ────────────────────────────────────────────────────────────────────
 
 def test_admin_location_summary_has_coordinates_member_forbidden(client, db, as_user):

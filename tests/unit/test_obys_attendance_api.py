@@ -5,6 +5,7 @@ UNIQUE (employee_email, work_date, start_at) 와 deleted_at soft delete 를 그�
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import itertools
 import re
 from contextlib import asynccontextmanager
@@ -134,6 +135,8 @@ def db():
 
 @pytest.fixture
 def client(monkeypatch, db):
+    # 역할 테스트의 멤버십 변경이 다음 HTTP 테스트로 새지 않게 격리한다.
+    monkeypatch.setitem(USER, "current_membership", deepcopy(USER["current_membership"]))
     async def businesses(*, user):
         assert user is USER
         return [BUSINESS]  # 현재 테넌트 소유 사업자만
@@ -356,3 +359,44 @@ def test_shift_screen_posts_to_attendance_api_and_marks_local_only_rows():
     assert upload.index("await saveShiftToServer(shift)") < upload.index("state.shifts = state.shifts.filter")
     # 화면 표시 상태는 서버 허용값으로 바꿔 보낸다.
     assert 'confirmed: "approved"' in html
+
+
+@pytest.mark.parametrize("role", ["member", "viewer", "owner", "admin"])
+@pytest.mark.parametrize("status", ["active", "inactive"])
+def test_manual_writes_require_active_admin(client, db, monkeypatch, role, status):
+    created = client.post(BASE, json=_payload())
+    assert created.status_code == 201, created.text
+    record_id = created.json()["record"]["id"]
+    before = dict(db.rows[record_id])
+    audit_before = list(db.audit)
+    monkeypatch.setitem(USER, "current_membership", {
+        **USER["current_membership"], "role": role, "status": status,
+    })
+    allowed = status == "active" and role in {"owner", "admin"}
+    update = client.put(f"{BASE}/{record_id}", json=_payload(hourly_wage=99999))
+    create = client.post(BASE, json=_payload(start_at="09:00", hourly_wage=99999))
+    delete = client.delete(f"{BASE}/{record_id}")
+    expected = [200, 201, 200] if allowed else [403, 403, 403]
+    assert [update.status_code, create.status_code, delete.status_code] == expected
+    if not allowed:
+        assert db.rows == {record_id: before}
+        assert db.audit == audit_before
+
+
+@pytest.mark.parametrize("mutation", ["missing", "mismatch"])
+def test_manual_writes_reject_invalid_membership_before_db(client, db, monkeypatch, mutation):
+    if mutation == "missing":
+        monkeypatch.delitem(USER, "current_membership")
+    else:
+        monkeypatch.setitem(USER, "current_membership", {
+            **USER["current_membership"], "tenant_id": "other-tenant",
+        })
+
+    async def connect():
+        raise AssertionError("unauthorized writes must not connect")
+
+    monkeypatch.setattr(api.upload_svc, "_connect", connect)
+    assert client.post(BASE, json=_payload()).status_code == 403
+    assert client.put(f"{BASE}/any", json=_payload()).status_code == 403
+    assert client.delete(f"{BASE}/any").status_code == 403
+    assert db.rows == {} and db.audit == []

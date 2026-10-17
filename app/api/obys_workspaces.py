@@ -909,6 +909,7 @@ async def create_attendance_record(
     payload: AttendanceRecordIn,
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
+    _require_attendance_admin(current_user)
     business = await _business(current_user, business_id)
     values = _attendance_values(business_id, payload)
     connection = await upload_svc._connect()
@@ -982,6 +983,7 @@ async def update_attendance_record(
     payload: AttendanceRecordIn,
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
+    _require_attendance_admin(current_user)
     business = await _business(current_user, business_id)
     values = _attendance_values(business_id, payload)
     connection = await upload_svc._connect()
@@ -1017,6 +1019,7 @@ async def delete_attendance_record(
     record_id: str,
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
+    _require_attendance_admin(current_user)
     await _business(current_user, business_id)
     connection = await upload_svc._connect()
     try:
