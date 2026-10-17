@@ -204,6 +204,66 @@ def test_runner_890f5c73_still_forbids_after_block_narrowing(gate_fn):
     assert _decide(gate_fn, text) == "FORBID"
 
 
+# ── DEPLOY_POLICY 입력 축소 (AADS-RUNNER-DEPLOY-POLICY-LINE-PRIORITY) ──
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "DEPLOY_POLICY: block",
+        "DEPLOY_POLICY: blocked",
+        "DEPLOY_POLICY: none",
+        "DEPLOY_POLICY: commit_only",
+        "DEPLOY_POLICY: no deploy",
+        "DEPLOY_POLICY: Do not deploy",
+        "DEPLOY_POLICY: push_only",
+        "DEPLOY_POLICY: block\n배포·운영 migration 실행을 하지 않는다",
+        "DEPLOY_POLICY: block\n커밋까지만",
+        "DEPLOY_POLICY: standard\nPUSH_ONLY=true",
+        "DEPLOY_POLICY: standard\nPUSH_ONLY: 1",
+        "DEPLOY_POLICY: standard\nPUSH ONLY",
+        "DEPLOY_POLICY: standard\n- push only",
+    ],
+)
+def test_deploy_policy_forbid_values_reuse_existing_gate(gate_fn, text):
+    assert _decide(gate_fn, text) == "FORBID"
+
+
+@pytest.mark.parametrize("value", ["false", "  false", "off"])
+def test_push_only_false_keeps_existing_clear_behavior(gate_fn, value):
+    assert _decide(gate_fn, f"DEPLOY_POLICY: standard\npush_only: {value}") == "ALLOW"
+
+
+def test_policy_standard_ignores_unrelated_body_deploy_prohibition(gate_fn):
+    assert _decide(gate_fn, "- DEPLOY_POLICY: standard\nPC Agent 재배포 금지") == "ALLOW"
+    assert _decide(gate_fn, "DEPLOY\tPOLICY: standard\nPC Agent 재배포 금지") == "ALLOW"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "DEPLOY_POLICY: standard\n배포 후 헬스체크를 하지 않으면 안 된다",
+        "DEPLOY_POLICY: standard\nPUSH_ONLY: false",
+        "DEPLOY_POLICY: standard\npush_only:  false",
+        "DEPLOY_POLICY: standard\npush_only: off",
+    ],
+)
+def test_policy_input_keeps_existing_exceptions(gate_fn, text):
+    assert _decide(gate_fn, text) == "ALLOW"
+
+
+@pytest.mark.parametrize("script_name", SCRIPTS)
+def test_policy_narrowing_is_identical_in_both_runner_scripts(script_name, tmp_path):
+    fn_file = tmp_path / f"{script_name}.sh"
+    fn_file.write_text(
+        "set -eo pipefail\n" + _extract_function(_read_script(script_name), "instruction_forbids_deploy"),
+        encoding="utf-8",
+    )
+    assert _decide(fn_file, "DEPLOY_POLICY: standard\nPC Agent 재배포 금지") == "ALLOW"
+    assert _decide(fn_file, "DEPLOY_POLICY: none") == "FORBID"
+    assert _decide(fn_file, "DEPLOY_POLICY: standard\nPUSH ONLY") == "FORBID"
+    assert _decide(fn_file, "DEPLOY\tPOLICY: standard\nPC Agent 재배포 금지") == "ALLOW"
+
+
 # ── 정적 계약 ───────────────────────────────────────────────────────────
 
 

@@ -2917,6 +2917,23 @@ inherit_approval_decision() {
 # 한정어 제외를 더했다 — 정당한 금지(runner-890f5c73 등)는 계속 막는다.
 instruction_forbids_deploy() {
     local text="$1" lowered="" scrubbed="" line="" clause="" rest="" gap="" trigger="" sep="" nl=$'\n'
+    # DEPLOY_POLICY가 있으면 기존 게이트의 판정 입력을 선언 관련 줄로만 좁힌다.
+    local policy_input="" policy_scan="" policy_line="" has_policy_line=0
+    local re_policy_input='^[[:space:]>*#-]*(deploy(ment)?|release)[_[:space:]-]?policy[[:space:]]*[:=]'
+    local re_push_input='push[_[:space:]-]?only'
+    local re_deploy_input='^[[:space:]>*#-]*deploy(ment)?[[:space:]]*[:=]'
+    while IFS= read -r policy_line || [[ -n "$policy_line" ]]; do
+        policy_scan=$(printf '%s' "$policy_line" | tr '[:upper:]' '[:lower:]')
+        if [[ "$policy_scan" =~ $re_policy_input ]]; then
+            has_policy_line=1
+            policy_input+="${policy_line}"$'\n'
+        elif [[ "$policy_scan" =~ $re_push_input ]] || [[ "$policy_scan" =~ $re_deploy_input ]]; then
+            policy_input+="${policy_line}"$'\n'
+        fi
+    done <<< "$text"
+    if (( has_policy_line )); then
+        text="$policy_input"
+    fi
     local re_sep='[_[:space:]-]?' re_bullet='^[[:space:]>*#-]*' re_word='([^[:alnum:]_]|$)'
     local re_off_push='push[_-]?only[[:space:]]*[:=][[:space:]]*(false|no|0|off)([^[:alnum:]_]|$)'
     local re_push_any='(^|[^[:alnum:]_])push[_-]?only([^[:alnum:]_]|$)'
