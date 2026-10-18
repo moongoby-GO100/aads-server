@@ -69,6 +69,8 @@ def resolve_session_ref(ref: str) -> str:
 class MilestoneCreateRequest(BaseModel):
     title: str
     sequence: int
+    description: Optional[str] = None
+    epics: Optional[list[dict[str, Any]]] = None
     completion_criteria: Optional[str] = None
     auto_advance: bool = True
     owner_session_id: Optional[UUID] = None
@@ -81,6 +83,7 @@ class MilestoneOwnerRequest(BaseModel):
 
 
 class GoalCreateRequest(BaseModel):
+    description: Optional[str] = None
     project: str
     title: str
     priority: str = "P2"
@@ -133,72 +136,44 @@ async def create_goal(
     req: GoalCreateRequest,
     context: dict[str, Any] = Depends(require_tenant_member),
 ):
-    from app.services.goal_manager import goal_state_machine
-    tenant_id = _tenant_id(context)
-    if any(ms.owner_session_id or ms.owner_role_key for ms in req.milestones or []):
-        # 담당 세션은 목표에 연결된 세션만 가능한데 목표 생성 시점엔 연결이 없다.
-        raise HTTPException(status_code=422, detail="milestone_owner_requires_existing_goal")
-    if req.activate:
-        from app.core.db_pool import get_pool
-        from app.services import goal_signals
+    from app.core.db_pool import get_pool
+    from app.services.goal_registration import register_goal, validation_errors
+    from app.services.goal_work_hierarchy import ActorScope
 
-        if goal_signals.is_p0(req.priority):
-            async with get_pool().acquire() as conn:
-                others = await goal_signals.active_p0_goals(conn, tenant_id)
-            if goal_signals.p0_cap_violation(
-                current_priority=None, current_status=None,
-                new_priority=req.priority, new_status="active", others=others,
-            ):
-                raise HTTPException(status_code=409, detail={
-                    "error": "p0_cap_exceeded", "cap": goal_signals.P0_CAP,
-                    "current_p0": [
-                        {"goal_id": o["goal_id"], "title": o["title"],
-                         "project": o["project"], "priority": o["priority"]}
-                        for o in others
-                    ],
-                })
-    result = await goal_state_machine.create_goal(
-        project=req.project,
-        title=req.title,
-        priority=req.priority,
-        success_criteria=req.success_criteria,
-        parent_goal_id=req.parent_goal_id,
-        tenant_id=tenant_id,
+    tenant_id = _tenant_id(context)
+    _, user_id, internal_admin = _tenant_identity(context)
+    if any(ms.owner_session_id or ms.owner_role_key for ms in req.milestones or []):
+        raise HTTPException(status_code=422, detail="milestone_owner_requires_existing_goal")
+    inp = {
+        "goal": {
+            "project": req.project, "title": req.title, "priority": req.priority,
+            "description": req.description, "success_criteria": req.success_criteria,
+            "parent_goal_id": req.parent_goal_id,
+        },
+        "milestones": [
+            {**ms.model_dump(), "sequence_order": ms.sequence}
+            for ms in req.milestones or []
+        ],
+    }
+    errors = validation_errors(inp)
+    if errors:
+        raise HTTPException(422, detail={"error": "invalid_goal_hierarchy", "errors": errors})
+    # Tenant-member authorization above permits this legacy REST creation path.
+    # Registration checks owner session ownership using this authenticated actor.
+    actor = ActorScope(
+        tenant_id=tenant_id, session_id=None, role_key="", project=req.project,
+        workspace_kind="project", user_id=user_id, internal_admin=internal_admin,
     )
+    async with get_pool().acquire() as conn:
+        result = await register_goal(
+            conn, inp, tenant_id=tenant_id, session_id=req.owner_session_id,
+            actor=actor, activate=req.activate,
+        )
+    if result.get("error") == "p0_cap_exceeded":
+        raise HTTPException(409, detail=result)
     if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
-    if req.milestones:
-        for ms in req.milestones:
-            await goal_state_machine.add_milestone(
-                goal_id=result["goal_id"],
-                title=ms.title,
-                sequence=ms.sequence,
-                completion_criteria=ms.completion_criteria,
-                auto_advance=ms.auto_advance,
-            )
-    if req.activate:
-        result = await goal_state_machine.activate_goal(result["goal_id"])
-    if req.owner_session_id:
-        from app.core.db_pool import get_pool
-        pool = get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO goal_task_links "
-                "  (goal_id, tenant_id, task_type, task_id, status, bind_source, bound_by, link_state) "
-                "VALUES ($1::uuid, $3::uuid, 'chat_session', $2, 'active', 'auto', 'system', 'active') "
-                "ON CONFLICT (goal_id, task_type, task_id) WHERE goal_id IS NOT NULL "
-                "DO UPDATE SET link_state = 'active', detach_reason = NULL, "
-                "              bind_source = 'auto', bound_by = 'system', updated_at = NOW() "
-                "  WHERE goal_task_links.link_state IS DISTINCT FROM 'active' "
-                "     OR goal_task_links.detach_reason IS NOT NULL",
-                result["goal_id"], req.owner_session_id, tenant_id,
-            )
-            await conn.execute(
-                "UPDATE goals SET owner_session_id = $2::uuid, updated_at = NOW() "
-                "WHERE id = $1::uuid AND owner_session_id IS NULL",
-                result["goal_id"], req.owner_session_id,
-            )
-    return result
+        raise HTTPException(422, detail=result)
+    return {**result, "status": "active" if req.activate else "draft"}
 
 
 class GoalDocRequest(BaseModel):

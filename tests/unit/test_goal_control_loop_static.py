@@ -42,8 +42,9 @@ def test_goal_manager_records_harness_traces_at_low_risk_points() -> None:
 
     assert "async def _trace(" in source
     assert "from app.services.ohvis_harness_trace import record_trace" in source
+    registration = (ROOT / "app" / "services" / "goal_registration.py").read_text(encoding="utf-8")
+    assert '"goal_create"' in registration
     for run_type in (
-        '"goal_create"',
         '"goal_activate"',
         '"milestone_add"',
         '"goal_task_link"',
@@ -83,7 +84,9 @@ def test_in_flight_goals_record_preservation_policy_evidence() -> None:
     source = (ROOT / "app" / "services" / "goal_manager.py").read_text(encoding="utf-8")
 
     # create_goal 한 곳에만 있으면 create_goal을 거치지 않은 목표는 증거가 0건이다.
-    assert source.count("_trace_policy(") >= 4
+    registration = (ROOT / "app" / "services" / "goal_registration.py").read_text(encoding="utf-8")
+    assert source.count("_trace_policy(") >= 3
+    assert "goal_state_machine._trace_policy(" in registration
     assert 'stage="activate"' in source
     assert 'stage="advance"' in source
     assert '"goal_policy"' in source

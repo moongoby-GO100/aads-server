@@ -31,19 +31,10 @@ class GoalPlanner:
         parent_goal_id: Optional[str] = None,
         deadline: Optional[str] = None,
     ) -> str:
-        from app.services.goal_manager import goal_state_machine
-
-        result = await goal_state_machine.create_goal(
-            project=project,
-            title=title,
-            priority=priority,
-            success_criteria=description,
-            parent_goal_id=parent_goal_id,
+        raise ValueError(
+            "invalid_goal_hierarchy: standalone goal creation is disabled; "
+            "use goal_registration.register_goal with a complete validated hierarchy"
         )
-        if deadline:
-            await goal_state_machine.update_goal(result["goal_id"], deadline=deadline)
-        logger.info("goal_created: %s title=%s project=%s", result["goal_id"], title, project)
-        return result["goal_id"]
 
     async def add_milestones(self, goal_id: str, milestones: list[MilestoneSpec]) -> list[str]:
         from app.services.goal_manager import goal_state_machine
@@ -69,23 +60,10 @@ class GoalPlanner:
         priority: str = "P2",
         activate: bool = False,
     ) -> dict[str, Any]:
-        from app.services.goal_manager import goal_state_machine
-
-        goal_id = await self.create_goal(
-            title=title,
-            description=description,
-            project=project,
-            priority=priority,
+        raise ValueError(
+            "invalid_goal_hierarchy: MilestoneSpec cannot express epic/story/task hierarchy; "
+            "use goal_registration.register_goal with a complete validated hierarchy"
         )
-        milestone_ids = await self.add_milestones(goal_id, milestones)
-        status: dict[str, Any] | None = None
-        if activate:
-            status = await goal_state_machine.activate_goal(goal_id)
-        return {
-            "goal_id": goal_id,
-            "milestone_ids": milestone_ids,
-            "status": status["status"] if status else "draft",
-        }
 
     async def link_task(
         self,

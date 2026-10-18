@@ -102,7 +102,7 @@ class MemoryConnection:
                 "tenant_id": a[1],
                 "project": a[2],
                 "title": a[3],
-                "status": "active",
+                "status": a[10],
                 "owner_role_key": a[8],
                 "owner_session_id": a[9],
                 "version": 1,
@@ -110,9 +110,13 @@ class MemoryConnection:
         elif "INSERT INTO milestones" in sql:
             self.milestones[a[0]] = {
                 "id": a[0],
+                "status": "pending",
+                "started_at": None,
                 "owner_role_key": a[9],
                 "owner_session_id": a[10],
             }
+        elif "UPDATE milestones SET status = 'in_progress'" in sql:
+            self.milestones[a[0]].update(status="in_progress", started_at="now")
         elif "INSERT INTO goal_task_links" in sql:
             self.links.append(a)
 

@@ -323,47 +323,12 @@ class GoalStateMachine:
         success_criteria: Optional[str] = None,
         parent_goal_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
+        *,
+        hierarchy_validated: bool = False,
     ) -> dict[str, Any]:
-        started_at = _trace_started_at()
-        pool = await self._pool()
-        goal_id = str(uuid.uuid4())
-        async with pool.acquire() as conn:
-            scoped_tenant = tenant_id or await conn.fetchval(
-                "SELECT aads_internal_tenant_id()"
-            )
-            if not scoped_tenant:
-                return {"error": "tenant_context_required"}
-            if parent_goal_id and not await conn.fetchval(
-                "SELECT 1 FROM goals WHERE id=$1::uuid AND tenant_id=$2::uuid",
-                parent_goal_id, scoped_tenant,
-            ):
-                return {"error": "parent_goal_not_found"}
-            await conn.execute(
-                """
-                INSERT INTO goals (
-                    id, project, title, priority, description, success_criteria,
-                    parent_goal_id, status, tenant_id
-                )
-                VALUES ($1::uuid, $2, $3, $4, $5, $5, $6::uuid, 'draft', $7::uuid)
-                """,
-                goal_id, project, title, priority,
-                success_criteria, parent_goal_id, scoped_tenant,
-            )
-        await self._trace(
-            "goal_create",
-            project=project,
-            goal_id=goal_id,
-            input_summary=f"{project} {priority} {title}",
-            output_summary="status=draft",
-            metadata={
-                "priority": priority,
-                "parent_goal_id": parent_goal_id,
-                "has_success_criteria": bool(success_criteria),
-            },
-            started_at=started_at,
-        )
-        await self._trace_policy(goal_id, project, title)
-        return {"goal_id": goal_id, "status": "draft"}
+        # A boolean cannot attest to persisted hierarchy. All creation must use
+        # goal_registration.register_goal, which validates and writes atomically.
+        return {"error": "invalid_goal_hierarchy"}
 
     async def activate_goal(self, goal_id: str) -> dict[str, Any]:
         started_at = _trace_started_at()

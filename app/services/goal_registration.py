@@ -89,7 +89,15 @@ def validation_errors(inp: dict[str, Any]) -> list[str]:
     return errors
 
 
-async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, session_id: str) -> dict:
+async def register_goal(
+    conn: Any,
+    inp: dict[str, Any],
+    *,
+    tenant_id: str,
+    session_id: str | None = None,
+    actor: hierarchy.ActorScope | None = None,
+    activate: bool = True,
+) -> dict:
     errors = validation_errors(inp)
     if errors:
         return {"error": "invalid_goal_hierarchy", "errors": errors}
@@ -99,19 +107,33 @@ async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, sessi
     counts = {"epic": 0, "story": 0, "task": 0}
     async with conn.transaction():
         # Session identity comes from the executor binding, never tool input claims.
-        session = await conn.fetchrow(
-            "SELECT user_id FROM chat_sessions WHERE id=$1::uuid AND tenant_id=$2::uuid",
-            session_id,
-            tenant_id,
-        )
-        if not session:
+        session_id = session_id or None
+        if actor is not None and actor.tenant_id != tenant_id:
             raise HTTPException(403, detail="project_scope_denied")
-        actor = await hierarchy.resolve_actor_scope(
-            conn,
-            tenant_id=tenant_id,
-            user_id=str(session["user_id"] or ""),
-            actor_session_id=session_id,
-        )
+        if session_id and actor is not None:
+            # Validate the requested owner with the authenticated caller's identity.
+            # Keep the caller as work-item creator, even for service principals.
+            owner = await hierarchy.resolve_actor_scope(
+                conn, tenant_id=tenant_id, user_id=actor.user_id,
+                actor_session_id=session_id, internal_admin=actor.internal_admin,
+            )
+            hierarchy.require_project_access(owner, project)
+        elif session_id:
+            session = await conn.fetchrow(
+                "SELECT user_id FROM chat_sessions WHERE id=$1::uuid AND tenant_id=$2::uuid",
+                session_id,
+                tenant_id,
+            )
+            if not session:
+                raise HTTPException(403, detail="project_scope_denied")
+            actor = await hierarchy.resolve_actor_scope(
+                conn,
+                tenant_id=tenant_id,
+                user_id=str(session["user_id"] or ""),
+                actor_session_id=session_id,
+            )
+        elif actor is None or actor.tenant_id != tenant_id:
+            raise HTTPException(403, detail="project_scope_denied")
         hierarchy.require_project_access(actor, project)
         if goal.get("parent_goal_id"):
             parent = await hierarchy.get_goal_scope(
@@ -122,7 +144,7 @@ async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, sessi
         await conn.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", f"goal-register:{tenant_id}"
         )
-        if goal_signals.is_p0(goal["priority"]):
+        if activate and goal_signals.is_p0(goal["priority"]):
             others = await goal_signals.active_p0_goals(conn, tenant_id)
             if goal_signals.p0_cap_violation(
                 current_priority=None,
@@ -147,7 +169,7 @@ async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, sessi
         await conn.execute(
             """INSERT INTO goals (id,tenant_id,project,title,description,success_criteria,priority,parent_goal_id,status,
                    owner_role_key,owner_session_id)
-               VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8::uuid,'active',$9,$10::uuid)""",
+               VALUES ($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8::uuid,$11,$9,$10::uuid)""",
             goal_id,
             tenant_id,
             project,
@@ -158,6 +180,7 @@ async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, sessi
             goal.get("parent_goal_id"),
             goal.get("owner_role_key"),
             session_id,
+            "active" if activate else "draft",
         )
         milestone_ids = []
 
@@ -208,7 +231,17 @@ async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, sessi
             )
             for j, epic in enumerate(ms["epics"]):
                 await create(epic, "epic", ms_id, f"{i}.{j}")
-        links = [(None, "chat_session", session_id)] + [
+        if activate:
+            first_index = min(
+                range(len(inp["milestones"])),
+                key=lambda index: inp["milestones"][index]["sequence_order"],
+            )
+            await conn.execute(
+                "UPDATE milestones SET status = 'in_progress', started_at = NOW(), "
+                "updated_at = NOW() WHERE id = $1::uuid",
+                milestone_ids[first_index],
+            )
+        links = ([(None, "chat_session", session_id)] if session_id else []) + [
             (milestone_ids[j["milestone_index"]], "pipeline_job", j["job_id"])
             for j in inp.get("linked_jobs", [])
         ]
@@ -223,6 +256,16 @@ async def register_goal(conn: Any, inp: dict[str, Any], *, tenant_id: str, sessi
                 kind,
                 task_id,
             )
+    # Preserve creation observability now that registration owns all goal writes.
+    from app.services.goal_manager import goal_state_machine
+
+    await goal_state_machine._trace(
+        "goal_create", project=project, goal_id=goal_id,
+        input_summary=f"{project} {goal['priority']} {goal['title']}",
+        output_summary="status=active" if activate else "status=draft",
+        conn=conn,
+    )
+    await goal_state_machine._trace_policy(goal_id, project, goal["title"], conn=conn)
     return {
         "goal_id": goal_id,
         "milestone_count": len(milestone_ids),
