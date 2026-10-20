@@ -801,6 +801,46 @@ autoheal_escalate() {
 AADS_PROVENANCE_SWEEP="${AADS_PROVENANCE_SWEEP:-1}"
 _AUTOHEAL_LIB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
 
+# 스위퍼가 실행할 record-release-provenance.sh 를 고른다. 운영 checkout 은 origin/main 의
+# 조상이 아닐 만큼 뒤처질 수 있고 다른 세션의 미커밋 변경이 있어 pull 하지 않는다 —
+# 대신 origin/main 의 사본을 임시 파일로 꺼내 실행한다(히스토리는 --repo 가 그대로 쥔다).
+# 우선순위: AADS_PROVENANCE_SCRIPT > origin/main 사본 > 로컬 사본(WARN). 어느 경우도 실패하지 않는다.
+# 결과: _AUTOHEAL_PROV_SCRIPT(실행 파일), _AUTOHEAL_PROV_TMP(지울 임시 파일, 없으면 빈 값).
+# EXIT 트랩은 deploy.sh 가 쥐고 있어 여기서 덮어쓰지 않고, 호출자가 _autoheal_provenance_cleanup 으로 지운다.
+_AUTOHEAL_PROV_SCRIPT=""
+_AUTOHEAL_PROV_TMP=""
+
+_autoheal_provenance_cleanup() {
+    [[ -n "$_AUTOHEAL_PROV_TMP" ]] && rm -f -- "$_AUTOHEAL_PROV_TMP"
+    _AUTOHEAL_PROV_TMP=""
+    return 0
+}
+
+_autoheal_resolve_provenance_script() {
+    local repo="$1" local_script="$2" tmp=""
+    _autoheal_provenance_cleanup
+    _AUTOHEAL_PROV_SCRIPT="$local_script"
+    if [[ -n "${AADS_PROVENANCE_SCRIPT:-}" ]]; then
+        if [[ -f "$AADS_PROVENANCE_SCRIPT" && -x "$AADS_PROVENANCE_SCRIPT" ]]; then
+            _AUTOHEAL_PROV_SCRIPT="$AADS_PROVENANCE_SCRIPT"
+            return 0
+        fi
+        echo "[provenance-sweep] WARN: AADS_PROVENANCE_SCRIPT 가 실행 가능한 파일이 아니다 — 무시" >&2
+    fi
+    if tmp="$(mktemp "${TMPDIR:-/tmp}/record-release-provenance.XXXXXX" 2>/dev/null)" \
+       && timeout 60 git -C "$repo" fetch -q origin >/dev/null 2>&1 \
+       && timeout 20 git -C "$repo" show "origin/main:scripts/record-release-provenance.sh" >"$tmp" 2>/dev/null \
+       && [[ "$(head -c 2 "$tmp" 2>/dev/null)" == "#!" ]] \
+       && chmod +x "$tmp"; then
+        _AUTOHEAL_PROV_TMP="$tmp"
+        _AUTOHEAL_PROV_SCRIPT="$tmp"
+        return 0
+    fi
+    [[ -n "$tmp" ]] && rm -f -- "$tmp"
+    echo "[provenance-sweep] WARN: origin/main 스크립트 사용 불가 — 로컬 사본 사용" >&2
+    return 0
+}
+
 autoheal_provenance_sweep() {
     local since_id="" dry="false"
     local limit="${AADS_PROVENANCE_SWEEP_LIMIT:-10}"
@@ -863,6 +903,11 @@ autoheal_provenance_sweep() {
         return 0
     fi
 
+    if [[ "$dry" != "true" ]]; then
+        _autoheal_resolve_provenance_script "$repo" "$recorder"
+        recorder="$_AUTOHEAL_PROV_SCRIPT"
+    fi
+
     local started=$SECONDS run_id release_sha n_ok=0 n_skipped=0 n_failed=0 skipped_ids="" rc n_rows
     while IFS='|' read -r run_id release_sha; do
         [[ "$run_id" =~ ^[0-9]+$ ]] || continue
@@ -895,6 +940,7 @@ autoheal_provenance_sweep() {
         echo "[provenance-sweep] deploy_run#${run_id} release=${release_sha} rows=${n_rows:-?}" >&2
         n_ok=$((n_ok + 1))
     done <<< "$rows"
+    _autoheal_provenance_cleanup
     echo "[provenance-sweep] done: processed=${n_ok} skipped=${n_skipped}${skipped_ids:+ (ids=${skipped_ids})} failed=${n_failed}" >&2
     return 0
 }
