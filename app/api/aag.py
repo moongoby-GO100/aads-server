@@ -36,6 +36,7 @@ from app.services.aag_governance import (
     require_project_role,
 )
 from app.services.aag_ingest_v2 import IngestConflictError, ingest_graph
+from app.services.aag_operations import AAGOperationsError, load_operations_view
 from app.services.aag_query_v2 import (
     AAGQueryError,
     consumer_telemetry,
@@ -409,6 +410,35 @@ async def get_brief_v2(
         findings=matches,
         status=status,
     )
+
+
+@router.get("/v2/operations")
+async def get_operations_v2(
+    project: str,
+    repository_id: str,
+    target_ref: str,
+    user: CurrentUser,
+    governance_scope: str = "default",
+) -> dict[str, Any]:
+    """Read-only operations view (aag-operations-v1); never triggers a scan."""
+    _require_v2_enabled()
+    try:
+        normalized = normalize_project(project)
+        await require_project_role(
+            _actor(user), normalized, {"viewer", "proposer", "approver", "admin"},
+        )
+    except AAGAuthorizationError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "insufficient_permission", "message": str(exc)},
+        ) from exc
+    try:
+        return await load_operations_view(
+            project=normalized, repository_id=repository_id, target_ref=target_ref,
+            governance_scope=governance_scope,
+        )
+    except AAGOperationsError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
 
 
 @router.post("/v2/runner-brief")

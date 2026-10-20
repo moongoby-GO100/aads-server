@@ -29,22 +29,35 @@ LOG="${AAG_ALL_PROJECTS_LOG:-/var/log/aads-pipeline/aag-all-projects.log}"
 REMOTE_114="${AAG_REMOTE_114:-root@114.207.244.86}"
 REMOTE_STAGE="${AAG_REMOTE_STAGE:-/tmp/aag-central-scanner}"
 SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=15)
+SCHED_PY="$REPO_DIR/scripts/aag_scheduler_state.py"
+SCHED_OWNER="all-projects:$$:$(date +%s)"
+# 하위 스크립트 종료코드 계약: 0=성공(스캔+적재) / 7=SKIP(실패도 성공도 아님) / 그 외=실패.
+EXIT_SKIPPED=7
 failures=()
+skipped=()
+refreshed=()
 
 mkdir -p "$(dirname "$LOG")" "$STATE_DIR"
-exec 9>"/tmp/aag-all-projects-refresh.lock"
+sched() { AAG_STATE_DIR="$STATE_DIR" python3 "$SCHED_PY" "$@"; }
+LOCK_FILE="${AAG_ALL_PROJECTS_LOCK:-/tmp/aag-all-projects-refresh.lock}"
+exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
-    printf '[%s] already running — skip\n' "$(date '+%F %T %Z')" >>"$LOG"
+    printf '[%s] STATUS project=ALL result=skipped reason=already_running\n' "$(date '+%F %T %Z')" >>"$LOG"
+    sched skip ALL --reason already_running >/dev/null 2>&1 || true
     exit 0
 fi
 
 log() { printf '[%s] %s\n' "$(date '+%F %T %Z')" "$*" | tee -a "$LOG"; }
 failed() { failures+=("$1"); log "STATUS project=$1 result=failed detail=$2"; }
+# skip 는 실패도 성공도 아니다 — refreshed 에 넣지 않으므로 freshness 증거로 세지 않는다.
+skipped_project() { skipped+=("$1"); log "STATUS project=$1 result=skipped reason=$2${3:+ $3}"; }
+beat() { sched heartbeat ALL --owner "$SCHED_OWNER" >/dev/null 2>&1 || true; }
 
 refresh_aads() {
     if systemctl start aads-aag-struct-check.service \
         && python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
             "AADS=/var/log/aads-pipeline/aag-struct/aads-graph.json" >>"$LOG" 2>&1; then
+        refreshed+=(AADS)
         log "STATUS project=AADS result=success"
     else
         failed AADS "scan_or_publish"
@@ -52,14 +65,24 @@ refresh_aads() {
 }
 
 refresh_go100_and_kis() {
-    if bash "$REPO_DIR/scripts/aag_go100_refresh.sh" >>"$LOG" 2>&1; then
-        log "STATUS project=GO100 result=success"
-    else
-        failed GO100 "remote_scan_or_publish"
+    bash "$REPO_DIR/scripts/aag_go100_refresh.sh" >>"$LOG" 2>&1
+    local go100_rc=$?
+    if ((go100_rc == EXIT_SKIPPED)); then
+        # "already running — skip" 뒤에 result=success 와 KIS 재발행이 이어지던 결함(2026-10-20).
+        local why
+        why="$(sched status GO100 --field last_skip_reason 2>/dev/null)"
+        skipped_project GO100 "${why:-go100_exit_7}"
+        skipped_project KIS upstream_go100_skipped "scope=shared_monorepo"
+        return
+    elif ((go100_rc != 0)); then
+        failed GO100 "remote_scan_or_publish rc=$go100_rc"
         return
     fi
+    refreshed+=(GO100)
+    log "STATUS project=GO100 result=success"
     if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
         "KIS@GO100=$STATE_DIR/go100/go100-graph.json" >>"$LOG" 2>&1; then
+        refreshed+=(KIS)
         log "STATUS project=KIS result=success scope=shared_monorepo"
     else
         failed KIS "shared_monorepo_publish"
@@ -100,6 +123,7 @@ refresh_generic_114() {
     fi
     if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
         "$project=$STATE_DIR/$slug/$slug-graph.json" >>"$LOG" 2>&1; then
+        refreshed+=("$project")
         log "STATUS project=$project result=success"
     else
         failed "$project" "snapshot_publish"
@@ -135,6 +159,7 @@ refresh_nas() {
     fi
     if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
         "NAS=$STATE_DIR/nas/nas-graph.json" >>"$LOG" 2>&1; then
+        refreshed+=(NAS)
         log "STATUS project=NAS result=success source=origin/main"
     else
         failed NAS "snapshot_publish"
@@ -168,21 +193,41 @@ refresh_ntv2() {
     fi
     if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
         "NTV2=$STATE_DIR/ntv2/ntv2-graph.json" >>"$LOG" 2>&1; then
+        refreshed+=(NTV2)
         log "STATUS project=NTV2 result=success source=origin/main"
     else
         failed NTV2 "snapshot_publish"
     fi
 }
 
+begin_rc=0
+sched begin ALL --owner "$SCHED_OWNER" --pid "$$" --stale-min 60 >/dev/null 2>&1 || begin_rc=$?
+if ((begin_rc == EXIT_SKIPPED)); then
+    log "STATUS project=ALL result=skipped reason=live_owner"
+    exit 0
+elif ((begin_rc != 0)); then
+    log "WARN scheduler_state_unavailable rc=$begin_rc — continuing without heartbeat"
+fi
+
 log "START projects=AADS,GO100,KIS,SF,NTV2,NAS"
-refresh_aads
-refresh_go100_and_kis
-refresh_generic_114 SF /data/shortflow rules_sf.yml sf
-refresh_ntv2
-refresh_nas
+beat; refresh_aads
+beat; refresh_go100_and_kis
+beat; refresh_generic_114 SF /data/shortflow rules_sf.yml sf
+beat; refresh_ntv2
+beat; refresh_nas
+
+join_csv() { local IFS=,; echo "$*"; }
 
 if ((${#failures[@]})); then
-    log "DONE result=failed projects=$(IFS=,; echo "${failures[*]}")"
+    log "DONE result=failed projects=$(join_csv "${failures[@]}") refreshed=$(join_csv "${refreshed[@]:-}") skipped=$(join_csv "${skipped[@]:-}")"
+    sched finish ALL --owner "$SCHED_OWNER" --outcome failed --reason "failed=$(join_csv "${failures[@]}")" --exit-code 1 >/dev/null 2>&1 || true
     exit 1
 fi
+if ((${#skipped[@]})); then
+    # 일부 프로젝트를 스캔하지 않았다. "success projects=6" 이라고 적지 않는다.
+    log "DONE result=partial_skipped refreshed=$(join_csv "${refreshed[@]:-}") skipped=$(join_csv "${skipped[@]}")"
+    sched finish ALL --owner "$SCHED_OWNER" --outcome partial --reason "partial_skipped=$(join_csv "${skipped[@]}")" --exit-code 0 >/dev/null 2>&1 || true
+    exit 0
+fi
 log "DONE result=success projects=6"
+sched finish ALL --owner "$SCHED_OWNER" --outcome success --reason all_refreshed --exit-code 0 >/dev/null 2>&1 || true
