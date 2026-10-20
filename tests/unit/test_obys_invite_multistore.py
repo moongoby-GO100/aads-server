@@ -409,12 +409,16 @@ def test_invite_create_model_accepts_targets_and_keeps_branch():
     assert api.InviteCreate().targets == []
 
 
-def test_invites_list_stays_closed_to_tenant_scoped_gate():
+def test_invites_gate_opens_only_list_create_and_revoke():
     from app.core import obys_tenant
 
     path = "/api/v1/yeoljeong-finance/employees/invites"
-    assert obys_tenant._is_tenant_scoped_path(path, "GET") is False
-    assert obys_tenant._is_tenant_scoped_path(path, "POST") is False
+    assert obys_tenant._is_tenant_scoped_path(path, "GET") is True
+    assert obys_tenant._is_tenant_scoped_path(path, "POST") is True
+    assert obys_tenant._is_tenant_scoped_path(path, "PATCH") is False
+    assert obys_tenant._is_tenant_scoped_path(path, "PUT") is False
+    assert obys_tenant._is_tenant_scoped_path(f"{path}/inv-12345678", "DELETE") is True
+    assert obys_tenant._is_tenant_scoped_path(f"{path}/inv-12345678", "GET") is False
 
 
 def test_v41_screen_uses_db_businesses_and_multi_select_targets():

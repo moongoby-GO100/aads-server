@@ -2540,6 +2540,7 @@ def _clean_invite_targets(raw: Any) -> list[dict[str, str]]:
 
 def _validated_invite_targets(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, str]]:
     caller_tenant = _tenant_id(user)
+    strict_tenant = not _is_legacy_caller(user)
     targets = _clean_invite_targets(payload.get("targets"))
     legacy = not targets
     if legacy:
@@ -2548,6 +2549,8 @@ def _validated_invite_targets(payload: dict[str, Any], user: dict[str, Any]) -> 
         branch = BRANCH_ALIASES.get(branch, branch)
         business_id = str(BUSINESS_BY_BRANCH.get(branch) or "")
         if not business_id:
+            if strict_tenant:
+                raise HTTPException(status_code=400, detail=INVITE_BUSINESS_ERROR)
             return []
         targets = [{"business_id": business_id, "branch": branch}]
     business_ids = [target["business_id"] for target in targets]
@@ -2561,7 +2564,11 @@ def _validated_invite_targets(payload: dict[str, Any], user: dict[str, Any]) -> 
         if _db_available():
             owner = _run_db(_db_business_tenant_id(business_id))
             if not owner or str(owner).strip() != caller_tenant:
-                raise HTTPException(status_code=400, detail=INVITE_BUSINESS_ERROR)
+                # 레거시 테넌트는 종전 400, 그 밖의 테넌트는 타 테넌트 사업자 존재 여부를 드러내지 않는 403.
+                raise HTTPException(
+                    status_code=403 if strict_tenant else 400,
+                    detail=INVITE_BUSINESS_ERROR,
+                )
         elif business_id not in CANONICAL_BUSINESS_IDS:
             raise HTTPException(status_code=400, detail=INVITE_BUSINESS_ERROR)
         info = _business_invite_info(business_id)
@@ -2600,6 +2607,12 @@ def _invite_view(invite: dict[str, Any], names: dict[str, str]) -> dict[str, Any
     return view
 
 
+def _is_legacy_caller(user: dict[str, Any]) -> bool:
+    from app.core.obys_tenant import is_legacy_obys_tenant
+
+    return is_legacy_obys_tenant(user)
+
+
 def _invite_scope_tenant(user: dict[str, Any]) -> str | None:
     """초대 열람·취소 범위. None 은 내부관리자(전체 열람), 그 밖에는 호출자의 검증된 테넌트."""
     role = str(user.get("user_role") or "").strip().lower()
@@ -2626,10 +2639,13 @@ def _invite_owner_tenants(invite: dict[str, Any]) -> set[str]:
     return owners
 
 
-def _invite_in_scope(invite: dict[str, Any], scope_tenant: str | None) -> bool:
+def _invite_in_scope(invite: dict[str, Any], scope_tenant: str | None, *, strict: bool = False) -> bool:
     if scope_tenant is None:
         return True
     owners = _invite_owner_tenants(invite)
+    if strict:
+        # 비레거시 테넌트: 소유 테넌트가 호출자로 확인되는 초대만. 귀속을 특정할 수 없으면 숨긴다.
+        return scope_tenant in owners
     # 테넌트를 특정할 수 없는 레거시 초대(매핑 없음·파일 모드)는 종전처럼 관리자에게 그대로 보인다.
     return not owners or scope_tenant in owners
 
@@ -2640,7 +2656,8 @@ def list_invites(user: dict[str, Any]) -> list[dict[str, Any]]:
     scope_tenant = _invite_scope_tenant(user)
     names: dict[str, str] = {}
     rows = sorted(_read("employee_invites"), key=lambda row: row.get("created_at", ""), reverse=True)
-    return [_invite_view(row, names) for row in rows if _invite_in_scope(row, scope_tenant)]
+    strict = not _is_legacy_caller(user)
+    return [_invite_view(row, names) for row in rows if _invite_in_scope(row, scope_tenant, strict=strict)]
 
 
 def revoke_invite(invite_id: str, user: dict[str, Any]) -> dict[str, Any]:
@@ -2650,7 +2667,7 @@ def revoke_invite(invite_id: str, user: dict[str, Any]) -> dict[str, Any]:
     invite = _find(rows, invite_id)
     if not invite:
         raise HTTPException(status_code=404, detail="초대를 찾을 수 없습니다")
-    if not _invite_in_scope(invite, _invite_scope_tenant(user)):
+    if not _invite_in_scope(invite, _invite_scope_tenant(user), strict=not _is_legacy_caller(user)):
         raise HTTPException(status_code=403, detail="다른 사업자의 초대는 취소할 수 없습니다")
     status = str(invite.get("status") or "").strip().lower()
     if status == "accepted":
@@ -2899,12 +2916,20 @@ def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
     if is_legacy_obys_tenant(user):
         rows = _read_hr("employee_join_requests", user)
         return sorted(_filter_user(rows, user, "email"), key=lambda row: row.get("requested_at", ""), reverse=True)
-    # 레거시 테넌트가 아니면 직원 본인이다 — 가입요청은 고용주 테넌트에 있으므로 본인 이메일 것만 읽는다.
-    _tenant_id(user)
+    # 레거시가 아닌 테넌트의 owner/admin 은 자기 테넌트에 귀속된 가입요청 전체를 본다(삭제 제외).
+    # 신규 가입자는 누구나 자기 개인 테넌트의 owner 이므로(직원도 포함) 본인 이메일의 가입요청
+    # (고용주 테넌트에 귀속)도 항상 합친다. 다른 사람의 타 테넌트 요청은 섞이지 않는다.
+    tenant_id = _tenant_id(user)
     email = _email(user)
-    if not email:
-        return []
-    return sorted(_read_join_requests_by_email(email), key=lambda row: row.get("requested_at", ""), reverse=True)
+    rows: dict[str, dict[str, Any]] = {}
+    if _is_admin(user):
+        for row in _read_hr("employee_join_requests", user):
+            if str(row.get("tenant_id") or "").strip() == tenant_id and not row.get("deleted_at"):
+                rows[str(row.get("id") or "")] = row
+    if email:
+        for row in _read_join_requests_by_email(email):
+            rows.setdefault(str(row.get("id") or ""), row)
+    return sorted(rows.values(), key=lambda row: row.get("requested_at", ""), reverse=True)
 
 
 JOIN_BRANCH_MISMATCH_ERROR = "직원의 사업자와 지점 연결이 일치하지 않습니다"

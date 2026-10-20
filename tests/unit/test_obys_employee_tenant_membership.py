@@ -433,7 +433,6 @@ def test_employee_can_file_join_request_but_admin_only_paths_stay_closed():
     ):
         assert obys_tenant._is_tenant_scoped_path(path, "POST")
     for path in (
-        "/api/v1/yeoljeong-finance/employees/invites",
         "/api/v1/yeoljeong-finance/employees/approved",
         "/api/v1/yeoljeong-finance/employees/approved/x/role",
     ):
@@ -1076,7 +1075,7 @@ async def test_gate_opens_only_signing_routes_for_non_legacy_tenant(monkeypatch,
         ("DELETE", "/api/v1/yeoljeong-finance/contracts/signing"),
         ("GET", "/api/v1/yeoljeong-finance/contracts/signing/signed-pdf"),
         ("POST", "/api/v1/yeoljeong-finance/contracts/signing/signed-pdf/regenerate"),
-        ("GET", "/api/v1/yeoljeong-finance/employees/invites"),
+        ("GET", "/api/v1/yeoljeong-finance/employees/approved"),
     ],
 )
 async def test_gate_keeps_other_contract_routes_closed(monkeypatch, method, path):

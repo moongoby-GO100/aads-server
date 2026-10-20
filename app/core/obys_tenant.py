@@ -39,7 +39,7 @@ _TENANT_SCOPED_PREFIXES = (
     "/api/v1/yeoljeong-finance/journals",
     # 직원 본인이 매장에 붙는 세 경로만 연다(2026-10-01 직원 가입요청 403 실측: 신규 가입자는
     # 반드시 자기 새 테넌트를 받아 레거시 허용목록에 없다).  /employees 전체를 열지 않는다 —
-    # /employees/invites(목록·생성)·/employees/approved* 는 관리자 전용이라 종전 판정을 그대로 탄다.
+    # /employees/approved* 는 관리자 전용이라 종전 판정을 그대로 탄다(초대 목록·생성·취소는 아래 _INVITE_ADMIN_WHITELIST).
     # 서비스가 가입요청 레코드를 고용주 테넌트(사업자 매핑)에 귀속하고, 목록은 본인 이메일 레코드만,
     # 승인·반려(PATCH /join-requests/{id}, 같은 prefix 에 걸린다)는 레코드 테넌트 == 호출자 테넌트일 때만 허용한다.
     "/api/v1/yeoljeong-finance/employees/join-requests",
@@ -74,6 +74,24 @@ _CONTRACT_SIGNING_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GET", re.compile(re.escape(_CONTRACTS_PATH) + "/" + _CONTRACT_ID_PATTERN + "/signing-view")),
 )
 
+# 대표(owner/admin)의 직원 초대 관리 — 목록·생성·취소 세 개만 (메서드, 경로 전체) 로 연다.
+# list_invites/create_invite/revoke_invite 는 서비스가 JWT 테넌트(_invite_scope_tenant)와
+# 대상 사업자 소유 테넌트(_db_business_tenant_id)를 대조하고 _is_admin 이 아니면 거부한다.
+# /employees/approved*, /contracts, /business-documents 는 여기서 열지 않는다.
+_INVITES_PATH = "/api/v1/yeoljeong-finance/employees/invites"
+_INVITE_ID_PATTERN = r"[A-Za-z0-9_-]{8,64}"
+_INVITE_ADMIN_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("GET", re.compile(re.escape(_INVITES_PATH))),
+    ("POST", re.compile(re.escape(_INVITES_PATH))),
+    ("DELETE", re.compile(re.escape(_INVITES_PATH) + "/" + _INVITE_ID_PATTERN)),
+)
+
+
+def _matches_whitelist(whitelist: tuple[tuple[str, re.Pattern[str]], ...], method: str, path: str) -> bool:
+    method = str(method or "").upper()
+    path = str(path or "")
+    return any(method == allowed_method and pattern.fullmatch(path) is not None for allowed_method, pattern in whitelist)
+
 
 def _is_contract_signing_route(method: str, path: str) -> bool:
     method = str(method or "").upper()
@@ -87,7 +105,7 @@ def _is_contract_signing_route(method: str, path: str) -> bool:
 def _is_tenant_scoped_path(path: str, method: str = "GET") -> bool:
     if any(path.startswith(prefix) for prefix in _TENANT_SCOPED_PREFIXES):
         return True
-    return _is_contract_signing_route(method, path)
+    return _is_contract_signing_route(method, path) or _matches_whitelist(_INVITE_ADMIN_WHITELIST, method, path)
 
 
 def _allowed_tenant_ids() -> frozenset[str]:
