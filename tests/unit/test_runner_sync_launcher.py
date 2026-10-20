@@ -361,7 +361,8 @@ def test_remote_transaction_never_puts_runner_path_in_any_argv():
     text = (ROOT / "scripts/sync_pipeline_runner_remote.sh").read_text(encoding="utf-8")
     ssh_lines = [ln for ln in text.splitlines() if ln.lstrip().startswith(("ssh ", "out=$(ssh", "state=$(ssh")) or 'ssh "${SSH_OPTS[@]}"' in ln]
     transaction = [ln for ln in ssh_lines if "bash -s" in ln]
-    assert len(transaction) == 3 and all('"bash -s"' in ln and "remote_runner" not in ln for ln in transaction)
+    # probe, maintenance preflight, default transaction + drain transaction (--drain-wait, AADS-RUNNER-SYNC-DRAIN-WAIT)
+    assert len(transaction) == 4 and all('"bash -s"' in ln and "remote_runner" not in ln for ln in transaction)
     apply_call = next(ln for ln in text.splitlines() if "python3 -" in ln and "PY_RUNNER_BUNDLE'" in ln)
     assert "$remote_runner" in apply_call.split("python3", 1)[0]  # env prefix, not argv
     assert "$remote_runner" not in apply_call.split("python3", 1)[1]

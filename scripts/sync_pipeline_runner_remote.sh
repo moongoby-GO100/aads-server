@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Synchronize the canonical Pipeline Runner script from AADS to remote runner hosts.
+#
+# 고부하 호스트(항상 BUSY)는 systemctl restart 대신 `--target X --drain-wait N` 으로 반영한다
+# (AADS-RUNNER-SYNC-DRAIN-WAIT, 2026-10-20). 신규 claim 만 멈추고 실행 중 작업이 끝나면 교체한다.
+# 타이머 경로는 이 플래그를 쓰지 않는다 — 드레인은 수동 명시 호출 전용이다.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,12 +45,18 @@ ONLY_TARGET=""
 # 실행 중 스크립트 파일을 덮어쓰는 것 자체도 bash 지연 읽기 때문에 위험하다.
 IGNORE_BUSY="${AADS_RUNNER_SYNC_IGNORE_BUSY:-0}"
 DEFERRED=0
+DRAIN_TIMEOUTS=0
+# 0 = 드레인 모드 아님(기본). 환경변수로는 켜지 않는다 — 타이머가 우연히 드레인에 들어가면 안 된다.
+DRAIN_WAIT=0
+DRAIN_WAIT_MIN=60
+DRAIN_WAIT_MAX=3600
 # 호스트별 결과 분리 (AADS-LLM-M6-DEPLOY-REGRESSION-GUARD, 2026-09-29).
 # jinah244 는 root 접근이 거부된다("mkdir: '/root' 디렉터리를 만들 수 없습니다: 허가 거부").
 # 예전에는 그 한 건이 set -e 로 스크립트 전체를 exit 1 로 끝내 유닛이 상시 failed 였고,
 # 러너 수정이 각 호스트에 닿았는지 판정할 신호가 죽어 있었다.
 #   synced   — 설치/검증 완료(이미 최신 포함)
 #   deferred — 러너 작업 중이라 의도적으로 미룸
+#   drain_timeout — --drain-wait 안에 실행 중 작업이 끝나지 않아 잠금을 못 얻음(변경 없음, claim 재개)
 #   skipped  — 설정으로 제외했거나 접근 거부(구조적으로 동기화 대상 아님). 종료코드 미반영
 #   failed   — 도달 가능한 호스트에서 실제 실패. 하나라도 있으면 exit 1
 SKIP_TARGETS="${AADS_RUNNER_SYNC_SKIP_TARGETS:-}"
@@ -59,6 +69,9 @@ TARGET_ERR_FILE=""
 usage() {
     cat <<'EOF'
 Usage: sync_pipeline_runner_remote.sh [--dry-run] [--no-restart] [--target NAME] [--ignore-busy]
+                                      [--target NAME --drain-wait SECONDS]
+
+고부하 호스트는 systemctl restart 대신 --target X --drain-wait N 으로 반영한다.
 
 Targets:
   contabo14  /root/scripts/pipeline-runner.sh  aads-pipeline-runner.service
@@ -67,6 +80,11 @@ Targets:
 Options:
   --ignore-busy                 override the DB busy count only after the live
                                 process probe has verified an empty worker set
+  --drain-wait SECONDS          manual drain: stop NEW claims only and wait up to SECONDS
+                                (60..3600) for running jobs to finish, then install/restart.
+                                Requires --target. Skips the BUSY/DB-busy pre-defer; the AWARE
+                                preflight and quiescent re-check still run. Timeout =>
+                                <host>=drain_timeout, nothing changed, claims resume.
 
 Environment:
   CANONICAL_RUNNER              local canonical runner script
@@ -97,6 +115,15 @@ while [[ $# -gt 0 ]]; do
             [[ -n "$ONLY_TARGET" ]] || { echo "ERROR: --target requires a value" >&2; exit 2; }
             shift 2
             ;;
+        --drain-wait)
+            DRAIN_WAIT="${2:-}"
+            if [[ ! "$DRAIN_WAIT" =~ ^[0-9]{1,5}$ ]] || (( 10#$DRAIN_WAIT < DRAIN_WAIT_MIN || 10#$DRAIN_WAIT > DRAIN_WAIT_MAX )); then
+                echo "ERROR: --drain-wait requires an integer ${DRAIN_WAIT_MIN}..${DRAIN_WAIT_MAX} (seconds)" >&2
+                exit 2
+            fi
+            DRAIN_WAIT=$((10#$DRAIN_WAIT))
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -108,6 +135,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if (( DRAIN_WAIT > 0 )) && [[ -z "$ONLY_TARGET" ]]; then
+    echo "ERROR: --drain-wait requires --target (draining every host at once is forbidden)" >&2
+    exit 2
+fi
 
 log() {
     printf '[%s] %s\n' "$(TZ=Asia/Seoul date '+%F %T KST')" "$*"
@@ -345,6 +377,14 @@ PY_RUNNER_BUNDLE
     printf 'MAINTENANCE_APPLIED changed=%s restart=%s\n' "$changed" "$restart_required"
 }
 
+# 드레인 모드 전용 콜백. 두 잠금을 모두 얻은 뒤에만 불리므로 첫 줄이 곧 "잠금 획득" 신호다.
+# SECONDS 는 원격 bash 가 시작된 뒤의 경과 초라 로컬/원격 시계 차이와 무관하다.
+runner_drain_apply() {
+    printf 'DRAIN_ACQUIRED elapsed=%s\n' "$SECONDS"
+    runner_apply_bundle "$@" || return $?
+    printf 'DRAIN_APPLIED elapsed=%s\n' "$SECONDS"
+}
+
 make_runner_bundle() {
     local archive="$1" remote_runner="$2" service="$3" service_unit="$4"
     python3 - "$archive" "$remote_runner" "$service" "$service_unit" "$CANONICAL_RUNNER" "$SCRIPT_DIR" "$REPO_ROOT" "$SYNC_REMOTE_UNITS" <<'PY_RUNNER_BUNDLE_CREATE'
@@ -415,12 +455,20 @@ sync_one_target() {
     fi
     # Preserve the conservative observation prefilter. Passing it is NEVER an
     # authorization: only the later two-lock transaction can install/restart.
+    # 드레인 모드(--drain-wait)는 BUSY 사전 defer 만 건너뛴다 — BUSY 인 채로 admission EX 를
+    # 걸어 실행 중 작업이 끝나길 기다리는 것이 목적이기 때문이다. AWARE preflight 와
+    # 트랜잭션 안의 quiescent 재검증(프로세스 probe 포함)은 그대로라 우회가 아니다.
+    local drain_wait="${DRAIN_WAIT:-0}"
     local process_state maintenance_state runner_host_name busy_count service_state
-    process_state=$(remote_runner_process_state "$host" "$service")
-    if should_defer_for_processes "$process_state"; then
-        log "${name}: sync deferred — live process state=${process_state}; DB/ignore-busy cannot override"
-        [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
-        return 0
+    if (( drain_wait > 0 )); then
+        log "${name}: DRAIN mode wait=${drain_wait}s — live-process/DB BUSY pre-defer skipped; AWARE preflight and quiescent re-check still enforced"
+    else
+        process_state=$(remote_runner_process_state "$host" "$service")
+        if should_defer_for_processes "$process_state"; then
+            log "${name}: sync deferred — live process state=${process_state}; DB/ignore-busy cannot override"
+            [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
+            return 0
+        fi
     fi
     maintenance_state=$(remote_runner_maintenance_state "$host" "$service")
     if [[ "$maintenance_state" != AWARE ]]; then
@@ -428,16 +476,22 @@ sync_one_target() {
         [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
         return 0
     fi
-    runner_host_name=$(remote_runner_host_name "$host" "$service")
-    busy_count=$(db_active_job_count "$runner_host_name")
-    service_state=$(remote_service_active "$host" "$service")
-    if should_defer_for_busy "$busy_count" "$IGNORE_BUSY" "$service_state"; then
-        log "${name}: sync deferred — host=${runner_host_name:-unknown} jobs=${busy_count:-unknown} service=${service_state:-unknown}"
-        [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
-        return 0
+    if (( drain_wait == 0 )); then
+        runner_host_name=$(remote_runner_host_name "$host" "$service")
+        busy_count=$(db_active_job_count "$runner_host_name")
+        service_state=$(remote_service_active "$host" "$service")
+        if should_defer_for_busy "$busy_count" "$IGNORE_BUSY" "$service_state"; then
+            log "${name}: sync deferred — host=${runner_host_name:-unknown} jobs=${busy_count:-unknown} service=${service_state:-unknown}"
+            [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
+            return 0
+        fi
     fi
     if [[ "$DRY_RUN" == 1 ]]; then
-        log "DRY_RUN ${name}: would acquire maintenance leases, verify bundle, and apply in one remote transaction"
+        if (( drain_wait > 0 )); then
+            log "DRY_RUN ${name}: would DRAIN — hold admission EX (new claims stop), wait up to ${drain_wait}s per lease for running jobs, then verify bundle and apply in one remote transaction; on timeout release and report drain_timeout"
+        else
+            log "DRY_RUN ${name}: would acquire maintenance leases, verify bundle, and apply in one remote transaction"
+        fi
         return 0
     fi
     local archive expected remote_archive payload rc=0
@@ -453,12 +507,46 @@ sync_one_target() {
     scp_put "$archive" "$host" "$remote_archive" || { rm -f "$archive"; return 1; }
     rm -f "$archive"
     payload="$(remote_set_args "$service" "$remote_archive" "$expected" "$remote_runner" "$RESTART_SERVICES")"$'\n'
-    payload+="$(declare -f runner_maintenance_metadata runner_maintenance_transaction runner_apply_bundle)"
-    payload+=$'\n''trap '\''rm -f "$2"'\'' EXIT'
-    payload+=$'\n''runner_maintenance_transaction "$1" 30 /run/aads-runner-maintenance runner_apply_bundle "$@"'
-    # A single SSH process owns admission EX, lifetime EX, installation and
-    # restart. Losing this connection cannot release leases held by apply children.
-    ssh "${SSH_OPTS[@]}" "$host" "bash -s" <<< "$payload" || rc=$?
+    if (( drain_wait > 0 )); then
+        payload+="$(declare -f runner_maintenance_metadata runner_maintenance_transaction runner_apply_bundle runner_drain_apply)"
+        payload+=$'\n''trap '\''rm -f "$2"'\'' EXIT'
+        payload+=$'\n''SECONDS=0'
+        payload+=$'\n'"runner_maintenance_transaction \"\$1\" ${drain_wait} /run/aads-runner-maintenance runner_drain_apply \"\$@\"; rc=\$?"
+        payload+=$'\n''printf '\''DRAIN_RESULT rc=%s elapsed=%s\n'\'' "$rc" "$SECONDS"; exit "$rc"'
+        # 트랜잭션은 admission/lifetime 순서로 각각 최대 drain_wait 초 기다리므로 최악 2배,
+        # 거기에 적용·재시작 여유를 더한다. 이 값은 drain_wait+120 보다 항상 크다.
+        # ServerAlive(30s x2)는 응답 없는 연결을 끊는 용도라 flock 대기 중에도 유지된다.
+        local drain_ssh_timeout=$(( 2 * drain_wait + 300 )) drain_out drain_start_ts
+        drain_out=$(mktemp) || return 1
+        drain_start_ts=$(date +%s)
+        log "${name}: DRAIN start wait=${drain_wait}s ssh_timeout=${drain_ssh_timeout}s — new claims stop until the lease is acquired or the wait expires"
+        set +e
+        timeout -k 30 "$drain_ssh_timeout" ssh "${SSH_OPTS[@]}" "$host" "bash -s" <<< "$payload" | tee "$drain_out"
+        rc=${PIPESTATUS[0]}
+        set -e
+        local acquired applied result_elapsed
+        acquired=$(sed -n 's/^DRAIN_ACQUIRED elapsed=\([0-9]*\)$/\1/p' "$drain_out" | head -1)
+        applied=$(sed -n 's/^DRAIN_APPLIED elapsed=\([0-9]*\)$/\1/p' "$drain_out" | head -1)
+        result_elapsed=$(sed -n 's/^DRAIN_RESULT rc=[0-9]* elapsed=\([0-9]*\)$/\1/p' "$drain_out" | head -1)
+        rm -f "$drain_out"
+        [[ -n "$acquired" ]] && log "${name}: DRAIN acquired elapsed=${acquired}s"
+        [[ -n "$applied" ]] && log "${name}: DRAIN applied elapsed=${applied}s total=$(( $(date +%s) - drain_start_ts ))s"
+        if [[ "$rc" == 3 && -z "$acquired" && "$result_elapsed" =~ ^[0-9]+$ ]] && (( result_elapsed + 1 >= drain_wait )); then
+            log "${name}: DRAIN timeout elapsed=${result_elapsed}s wait=${drain_wait}s — lease not acquired; nothing changed, admission released and claims resume"
+            [[ -n "$TARGET_STATE_FILE" ]] && printf drain_timeout > "$TARGET_STATE_FILE"
+            return 0
+        fi
+        if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+            log "${name}: DRAIN ssh hard timeout (${drain_ssh_timeout}s) — local ssh killed; remote bash exits and closes its lock fds"
+        fi
+    else
+        payload+="$(declare -f runner_maintenance_metadata runner_maintenance_transaction runner_apply_bundle)"
+        payload+=$'\n''trap '\''rm -f "$2"'\'' EXIT'
+        payload+=$'\n''runner_maintenance_transaction "$1" 30 /run/aads-runner-maintenance runner_apply_bundle "$@"'
+        # A single SSH process owns admission EX, lifetime EX, installation and
+        # restart. Losing this connection cannot release leases held by apply children.
+        ssh "${SSH_OPTS[@]}" "$host" "bash -s" <<< "$payload" || rc=$?
+    fi
     if [[ "$rc" == 3 ]]; then
         log "${name}: sync deferred — maintenance lease/capability could not be verified"
         [[ -n "$TARGET_STATE_FILE" ]] && printf deferred > "$TARGET_STATE_FILE"
@@ -510,7 +598,10 @@ main() {
         set -e
         [[ -s "$TARGET_ERR_FILE" ]] && cat "$TARGET_ERR_FILE" >&2
         state=$(cat "$TARGET_STATE_FILE" 2>/dev/null || true)
-        if [[ "$rc" == "0" && "$state" == "deferred" ]]; then
+        if [[ "$rc" == "0" && "$state" == "drain_timeout" ]]; then
+            DRAIN_TIMEOUTS=$((DRAIN_TIMEOUTS + 1))
+            summary+=" ${name}=drain_timeout"
+        elif [[ "$rc" == "0" && "$state" == "deferred" ]]; then
             DEFERRED=$((DEFERRED + 1))
             summary+=" ${name}=deferred"
         elif [[ "$rc" == "0" ]]; then
@@ -532,7 +623,7 @@ main() {
         exit 2
     fi
     log "sync summary:${summary}"
-    log "sync complete targets=${matched} synced=${synced} deferred=${DEFERRED} skipped=${skipped} failed=${failed}"
+    log "sync complete targets=${matched} synced=${synced} deferred=${DEFERRED} skipped=${skipped} failed=${failed} drain_timeout=${DRAIN_TIMEOUTS}"
     if [[ "$failed" -gt 0 ]]; then
         exit 1
     fi

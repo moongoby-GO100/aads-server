@@ -15,3 +15,7 @@ Target-slot drain policy (CEO directive 2026-10-06): `deploy.sh` waits up to `AA
 - 러너는 `HANDOVER.md`, `*/HANDOVER.md`, `docs/HANDOVER.md` 변경을 커밋 직전에 스테이징에서 제외한다(워크트리 파일은 보존, `handover_md_excluded` 이벤트 기록). 예외는 `RUNNER_ALLOW_HANDOVER_MD=1` 뿐이다.
 - 러너는 작업이 `awaiting_approval`/`done` 이 될 때 `entry_key=runner:<job_id>` 로 결과를 DB 에 upsert 하고 다시 읽어 확인한다. 실패하면 `handover_db_write_failed` 이벤트를 남기고 작업 결과에 "핸드오버 DB 미기록"을 표시한다(작업 자체는 실패시키지 않는다).
 - 이유: 2026-10-08 origin/main 커밋 10건 중 6건이 `HANDOVER.md` 를 수정해 병행 러너가 stale_base 를 반복했다.
+
+## 원격 러너 반영 (R-RELEASE, 2026-10-20)
+
+- 원격 러너 스크립트 반영은 `scripts/sync_pipeline_runner_remote.sh` 가 한다. 고부하 호스트는 `systemctl restart` 대신 `--target X --drain-wait N` 으로 반영한다(N=60~3600초, 신규 claim 만 멈추고 실행 중 작업이 끝나면 교체, 타임아웃이면 변경 없이 claim 재개 → 요약 `<host>=drain_timeout`). 타이머 경로는 이 플래그를 쓰지 않는다.
