@@ -76,33 +76,69 @@ db_exec() {
 # ── 후보 커밋 수집 ──────────────────────────────────────────────────────────
 # 기본은 DB: 이 프로젝트의 파이프라인 작업 커밋 중 아직 이 배포에 대해 기록되지
 # 않은 것들. 테스트/감사에서는 --candidates-file 로 대체한다.
+# 정렬 규칙 (2026-10-20 수정)
+# -------------------------------
+# 예전에는 `ORDER BY 1 LIMIT 500` 이었다. 커밋 해시 문자열 사전순이라 0~6 으로
+# 시작하는 오래된 해시가 500칸을 채우고, 7~f 로 시작하는 최신 커밋(cda45fdc,
+# fe850f38 …)은 영원히 후보에 들지 못했다 — 30일간 릴리스 완료 4건의 원인.
+# 이제 후보마다 "가장 최근에 관측된 시각"을 구해 최신순으로 LIMIT 한다.
+# 릴리스 HEAD 의 최근 조상 커밋이 얻어지면 그 7자 접두사로 SQL 에서 먼저 좁혀,
+# LIMIT 이 조상이 아닌 후보에 소비되지 않게 한다(좁히기는 필요조건일 뿐이다 —
+# 실제 판정은 아래 루프에서 호스트 Git 이 그대로 다시 한다. 조회 실패·빈 결과는
+# 필터 없이 진행하는 fail-open 이며, 기록 안전성은 필터에 의존하지 않는다).
+ANCESTOR_DAYS="${AADS_PROVENANCE_ANCESTOR_DAYS:-45}"
+ANCESTOR_MAX="${AADS_PROVENANCE_ANCESTOR_MAX:-3000}"
+
+ancestor_filter_sql() {
+    [[ "$ANCESTOR_DAYS" =~ ^[0-9]+$ && "$ANCESTOR_MAX" =~ ^[1-9][0-9]*$ ]] || return 0
+    (( ANCESTOR_DAYS > 0 )) || return 0
+    local prefixes
+    prefixes="$(git -C "$REPO" rev-list --max-count="$ANCESTOR_MAX" --since="${ANCESTOR_DAYS} days ago" \
+        "$RELEASE_SHA_FULL" 2>/dev/null | cut -c1-7 | grep -E '^[0-9a-f]{7}$' | sort -u | paste -sd, - | sed "s/\([0-9a-f]\{7\}\)/'\1'/g")" || true
+    [[ -n "$prefixes" ]] || return 0
+    printf "AND left(lower(candidates.candidate_ref), 7) = ANY (ARRAY[%s]::text[])" "$prefixes"
+}
+
+candidate_sql() {
+    local ancestor_filter
+    ancestor_filter="$(ancestor_filter_sql)"
+    cat <<SQL
+SELECT candidate_ref
+FROM (
+    SELECT DISTINCT ON (candidates.candidate_ref) candidates.candidate_ref, candidates.seen_at
+    FROM (
+        SELECT j.commit_hash AS candidate_ref,
+               COALESCE(j.updated_at, j.created_at) AS seen_at
+        FROM pipeline_jobs j
+        WHERE j.project = $(sql_lit "$PROJECT") AND j.commit_hash IS NOT NULL
+        UNION ALL
+        SELECT l.task_id AS candidate_ref,
+               COALESCE(l.updated_at, l.created_at) AS seen_at
+        FROM goal_task_links l
+        JOIN goals g ON g.id = l.goal_id
+        WHERE g.project = $(sql_lit "$PROJECT") AND l.task_type = 'release'
+    ) candidates
+    WHERE candidates.candidate_ref ~* '^[0-9a-f]{7,40}\$'
+      AND NOT EXISTS (
+          SELECT 1 FROM deploy_release_provenance p
+          WHERE p.deploy_run_id = ${DEPLOY_RUN_ID}
+            AND p.project = $(sql_lit "$PROJECT")
+            AND p.source_ref = candidates.candidate_ref
+      )
+      ${ancestor_filter}
+    ORDER BY candidates.candidate_ref, candidates.seen_at DESC NULLS LAST
+) latest
+ORDER BY latest.seen_at DESC NULLS LAST, latest.candidate_ref
+LIMIT ${MAX_CANDIDATES};
+SQL
+}
+
 CANDIDATES=""
 if [[ -n "$CANDIDATES_FILE" ]]; then
     [[ -r "$CANDIDATES_FILE" ]] || { log "FAIL: cannot read ${CANDIDATES_FILE}"; exit 64; }
     CANDIDATES="$(cat "$CANDIDATES_FILE")"
 else
-    if ! CANDIDATES="$(db_exec "
-        SELECT DISTINCT candidate_ref
-        FROM (
-            SELECT j.commit_hash AS candidate_ref
-            FROM pipeline_jobs j
-            WHERE j.project = $(sql_lit "$PROJECT") AND j.commit_hash IS NOT NULL
-            UNION
-            SELECT l.task_id AS candidate_ref
-            FROM goal_task_links l
-            JOIN goals g ON g.id = l.goal_id
-            WHERE g.project = $(sql_lit "$PROJECT") AND l.task_type = 'release'
-        ) candidates
-        WHERE candidate_ref IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1 FROM deploy_release_provenance p
-              WHERE p.deploy_run_id = ${DEPLOY_RUN_ID}
-                AND p.project = $(sql_lit "$PROJECT")
-                AND p.source_ref = candidates.candidate_ref
-          )
-        ORDER BY 1
-        LIMIT ${MAX_CANDIDATES};
-    ")"; then
+    if ! CANDIDATES="$(db_exec "$(candidate_sql)")"; then
         log "FAIL: could not load release provenance candidates"
         exit 5
     fi

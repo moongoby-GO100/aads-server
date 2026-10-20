@@ -77,6 +77,10 @@ class FakeConn:
             return {"evidence": self.evidence, "goal_id": GOAL_ID, "tenant_id": GOAL_ID}
         if "SELECT evidence FROM milestones" in query:
             return {"evidence": self.evidence}
+        if "SELECT instruction FROM pipeline_jobs" in query:
+            assert args[1] == GOAL_ID
+            job = self.jobs.get(args[0])
+            return {"instruction": job["instruction"]} if job and "instruction" in job else None
         if "SELECT p.created_at FROM pipeline_jobs p" in query:
             assert args[1] == GOAL_ID
             job = self.jobs.get(args[0])
@@ -426,3 +430,55 @@ def test_completion_accept_reason_values():
     assert _completion_accept_reason(_evidence_replacement(release_deploy_run_id=None)) is None
     assert _completion_accept_reason(_evidence_replacement(link_status=None)) is None
     assert _completion_accept_reason(_replacement("x", status="running", phase="running")) is None
+
+
+# 10) 재작업 사슬: 2라운드가 완료되면 원래 실패 링크까지 승계한다 ---------------------------------
+
+ROUND1 = "runner-55667788"
+
+
+def _chain(conn, *, round1_instruction=None):
+    conn.links[ROUND1] = dict(conn.links[FAILED], superseded_by=None)
+    conn.jobs[FAILED]["instruction"] = "원 지시"
+    conn.jobs[ROUND1] = {
+        "created_at": T0 + timedelta(minutes=1),
+        "instruction": round1_instruction or f"ALLOW_DUP_JOB\nAUTO_REWORK_OF: {FAILED}\nAUTO_REWORK_ROUND: 1/2\n",
+    }
+    conn.jobs[REWORK] = {"created_at": T0 + timedelta(minutes=5)}
+    conn.replacements = [_replacement(f"ALLOW_DUP_JOB\nAUTO_REWORK_OF: {ROUND1}\nAUTO_REWORK_ROUND: 2/2\n")]
+
+
+def test_round2_completion_supersedes_original_failed_link_through_round1(conn):
+    _chain(conn)
+    assert _run(conn) == 2
+    assert conn.links[ROUND1]["superseded_by"] == REWORK
+    assert conn.links[FAILED]["superseded_by"] == REWORK
+
+
+def test_chain_supersession_is_idempotent_and_repairs_earlier_partial_state(conn):
+    _chain(conn)
+    conn.links[ROUND1]["superseded_by"] = REWORK  # 수정 전 코드가 남긴 상태: 1라운드만 승계됨
+    assert _run(conn) == 1
+    assert conn.links[FAILED]["superseded_by"] == REWORK
+    assert _run(conn) == 0
+
+
+def test_chain_does_not_cross_into_ancestor_created_after_replacement(conn):
+    _chain(conn)
+    conn.jobs[FAILED]["created_at"] = T0 + timedelta(minutes=10)
+    assert _run(conn) == 1
+    assert conn.links[FAILED]["superseded_by"] is None
+
+
+def test_chain_cycle_terminates(conn):
+    _chain(conn, round1_instruction=f"AUTO_REWORK_OF: {FAILED}\n")
+    conn.jobs[FAILED]["instruction"] = f"AUTO_REWORK_OF: {ROUND1}\n"
+    assert _run(conn) == 2
+
+
+def test_unfinished_replacement_supersedes_nothing_in_chain(conn):
+    _chain(conn)
+    conn.replacements = [_replacement(f"AUTO_REWORK_OF: {ROUND1}\n", status="running", phase="running")]
+    assert _run(conn) == 0
+    assert conn.links[FAILED]["superseded_by"] is None
+    assert conn.links[ROUND1]["superseded_by"] is None

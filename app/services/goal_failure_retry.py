@@ -660,7 +660,45 @@ async def mark_explicit_retry_supersession(conn, milestone_id: str) -> int:
             if await _supersede_one(conn, milestone_id, row, columns, replacement,
                                     failed_id, marker, accept_reason):
                 count += 1
+        direct = {failed_id for failed_id, _ in markers}
+        for ancestor_id, marker in await _rework_ancestors(conn, row["tenant_id"], markers):
+            if ancestor_id in direct or ancestor_id == replacement["task_id"]:
+                continue
+            if await _supersede_one(conn, milestone_id, row, columns, replacement,
+                                    ancestor_id, marker, accept_reason):
+                count += 1
     return count
+
+
+async def _rework_ancestors(conn, tenant_id: str, markers: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """재작업 사슬을 거슬러 올라가며 선행 실패 job 을 모은다 (marker 는 ``chain_<종류>``).
+
+    재작업 1라운드가 다시 실패해 2라운드가 완료되면, 2라운드 지시는 1라운드만 가리킨다.
+    1라운드 링크만 승계되고 원래 실패 job 링크는 failed 로 남아 마일스톤이 영구히 blocked 가 된다.
+    같은 tenant 안에서 최대 _LINEAGE_MAX_HOPS 단계까지만 올라가고 순환은 끊는다.
+    """
+    seen = {failed_id for failed_id, _ in markers}
+    frontier = [failed_id for failed_id, _ in markers]
+    found: list[tuple[str, str]] = []
+    for _ in range(_LINEAGE_MAX_HOPS):
+        next_frontier: list[str] = []
+        for job_id in frontier:
+            row = await conn.fetchrow(
+                "SELECT instruction FROM pipeline_jobs WHERE job_id = $1 AND tenant_id = $2::uuid",
+                job_id, tenant_id,
+            )
+            if not row:
+                continue
+            for parent_id, marker in parse_supersede_markers(row["instruction"]):
+                if parent_id in seen:
+                    continue
+                seen.add(parent_id)
+                next_frontier.append(parent_id)
+                found.append((parent_id, f"chain_{marker}"))
+        if not next_frontier:
+            break
+        frontier = next_frontier
+    return found
 
 
 def _reject(milestone_id: str, failed_id: str, replacement_id, reason: str, marker: str) -> bool:
