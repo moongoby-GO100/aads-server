@@ -186,6 +186,145 @@ async def report_goal_events(project: str | None = None) -> dict[str, int]:
     return {"reported": reported}
 
 
+def _weekly_blockers(milestone: dict[str, Any]) -> list[str]:
+    if milestone["status"] in ("completed", "cancelled"):
+        return []
+    reasons = []
+    if milestone["status"] == "blocked":
+        reasons.append("마일스톤 blocked")
+    if milestone.get("dispatch_blocked_at"):
+        reasons.append("발송 차단: " + str(milestone.get("dispatch_note") or "사유 확인 필요"))
+    if not milestone.get("owner_session_id"):
+        reasons.append("담당 세션 미지정")
+    if milestone.get("failed_task_id"):
+        reasons.append("실패 작업 링크: " + milestone["failed_task_id"])
+    if milestone.get("retry_accounting", {}).get("exhausted"):
+        reasons.append("재작업 실제 실행 한도 소진")
+    return reasons
+
+
+async def _weekly_owner_question(conn: Any, goal: Any, milestone: dict[str, Any]) -> str:
+    """Ask from an existing lead only; the report log fences weekly submissions.
+
+    Keep the claim on an ambiguous transport error: the relay may have committed.
+    A negative response means this milestone was not accepted. In particular,
+    the pair-in-flight gate may reject this item while another conversation is
+    active, so release only this item's claim and allow a later retry. Keep the
+    claim when transport outcome is ambiguous because the relay may have committed.
+    """
+    origin = goal.get("lead_session_id")
+    target = milestone.get("owner_session_id")
+    if not origin or origin == target:
+        return "담당 확인 요청 보류 — 별도 기존 주도 세션 필요; 자동 실행 없음"
+    valid = await conn.fetchval(
+        "SELECT count(*) = 2 FROM chat_sessions WHERE id = ANY($1::uuid[]) "
+        "AND tenant_id=$2::uuid AND role_key IS NOT NULL "
+        "AND lower(role_key) NOT LIKE '%ceo%'",
+        [origin, target], goal["tenant_id"],
+    )
+    if not valid:
+        return "담당 확인 요청 보류 — 동일 테넌트의 기존 비CEO 담당/주도 필요"
+    event = _weekly_event_key() + ":owner_question"
+    subject = milestone["id"]
+    claimed = await conn.fetchval(
+        "INSERT INTO goal_report_log (goal_id, subject_id, event) "
+        "VALUES ($1::uuid, $2::uuid, $3) "
+        "ON CONFLICT (goal_id, subject_id, event) DO NOTHING RETURNING id",
+        goal["goal_id"], subject, event,
+    )
+    if not claimed:
+        return "담당 확인 요청 제출 시도 기록 있음 — 중복 전달 없음; 접수 여부/실행 시작 미확인"
+    from app.services.session_relay import ask
+    result = await ask(
+        origin_session_id=origin, target=target,
+        question=(f"GOAL_ID: {goal['goal_id']}\n"
+                  f"목표 {goal['goal_id']} / 항목 {subject}: 차단 원인과 필요한 승인·복구 절차를 확인해 "
+                  "주도 세션에 회신해 주세요. 원인 확인 요청이며 실행 승인이 아닙니다. "
+                  "작업 재제출, 차단 해제, 실행 예산 초기화, 승인 자동 처리를 하지 마세요."),
+    )
+    if result.get("sent"):
+        return "담당 확인 요청 접수 — 회신/승인 대기; 실행 시작 미확인"
+    await conn.execute(
+        "DELETE FROM goal_report_log WHERE goal_id=$1::uuid AND subject_id=$2::uuid AND event=$3",
+        goal["goal_id"], subject, event,
+    )
+    if result.get("error") == "already_in_flight":
+        return "담당 확인 요청 보류 — 담당 세션에서 다른 대화 진행 중; 재시도 대기"
+    return "담당 확인 전달 실패 — " + str(result.get("error") or "접수 미확인")
+
+
+async def _weekly_followup(conn: Any, goal: Any, milestone: dict[str, Any]) -> str:
+    """Use the formal reservation/policy path; never submit a runner job here.
+
+    This runs outside the report transaction: retry reservations must commit
+    before proposing. Failed proposals retain their backoff/retry evidence even
+    when this week's report has already been delivered.
+    """
+    if milestone["status"] in ("completed", "cancelled"):
+        return "완료/취소 — 조치 없음"
+    if goal.get("paused_at") or goal.get("goal_status") in ("completed", "cancelled", "archived"):
+        return "목표 일시중지 — 재개 승인 전 후속 요청 없음"
+    missing_owner = not milestone.get("owner_session_id")
+    if missing_owner and (not milestone.get("owner_role_key") or not goal.get("lead_session_id")):
+        return "담당 지정/생성 승인 필요 — 주도 세션/담당 역할 확인; 자동 생성 없음"
+    if "ceo" in str(milestone.get("owner_role_key") or "").lower():
+        return "CEO 자동 재제출 금지 — 수동 확인 필요"
+    if not missing_owner and not milestone.get("failed_task_id") and not goal.get("lead_session_id"):
+        return "담당 확인 요청 보류 — 기존 주도 세션 필요; 자동 실행 없음"
+    from app.main import _is_active_api_container_for_background_jobs
+    if not _is_active_api_container_for_background_jobs():
+        return "활성 슬롯 처리 대기 — 요청 미접수"
+    locked = False
+    try:
+        locked = await conn.fetchval(
+            "SELECT pg_try_advisory_lock(hashtext('aads_goal_control_cycle'))"
+        )
+        if not locked:
+            return "목표 제어 주기 처리 대기 — 요청 미접수"
+        if missing_owner:
+            requester = await conn.fetchval(
+                "SELECT id::text FROM chat_sessions WHERE id=$1::uuid "
+                "AND tenant_id=$2::uuid AND role_key IS NOT NULL "
+                "AND lower(role_key) NOT LIKE '%ceo%'",
+                goal["lead_session_id"], goal["tenant_id"],
+            )
+            if not requester:
+                return "담당 생성 승인 요청 보류 — 유효한 기존 주도 세션 필요"
+            from app.services.owner_session_provision import request_owner_session
+            result = await request_owner_session(
+                goal_id=goal["goal_id"], role_key=milestone["owner_role_key"],
+                project=goal["project"], requester_session_id=requester,
+            )
+            if result.get("request_id"):
+                return "담당 생성 승인 대기 — 요청 " + str(result["request_id"]) + "; 자동 생성/실행 없음"
+            return "담당 생성 승인 요청 실패 — 재시도 대기: " + str(result.get("error") or "요청 id 없음")
+        if not milestone.get("failed_task_id"):
+            return await _weekly_owner_question(conn, goal, milestone)
+        from app.services.goal_failure_retry import ensure_retry_candidate
+        result = await ensure_retry_candidate(
+            conn, milestone_id=milestone["id"], goal_id=goal["goal_id"],
+            failed_task_id=milestone["failed_task_id"],
+            reason="주간 목표 보고: 실패 링크 복구",
+        )
+        if result.get("created") or result.get("candidate_alive"):
+            return "복구 요청 접수 — 승인 또는 정책 허용 큐 대기; 실행 시작 미확인"
+        if result.get("why") in ("successor_active", "successor_completed"):
+            return ("기존 후속 작업 진행 중" if result["why"] == "successor_active" else "기존 후속 작업 완료") + " — " + str(result.get("successor") or "")
+        return "복구 보류/차단 — " + str(result.get("why") or "상태 확인 필요")
+    except Exception as exc:  # noqa: BLE001 — preserve report delivery on recovery failure
+        logger.warning("weekly_goal_followup_failed", milestone_id=milestone["id"], error=str(exc)[:200])
+        return "복구 연결 실패 — 정식 경로 재시도 대기: " + str(exc)[:160]
+    finally:
+        if locked:
+            try:
+                await conn.fetchval(
+                    "SELECT pg_advisory_unlock(hashtext('aads_goal_control_cycle'))"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("weekly_goal_followup_unlock_failed",
+                               milestone_id=milestone["id"], error=str(exc)[:200])
+
+
 async def report_weekly_goal_progress(
     project: str | None = None,
     *,
@@ -223,7 +362,8 @@ async def report_weekly_goal_progress(
         )
         rows = await conn.fetch(
             """
-            SELECT g.id::text AS goal_id, g.title, g.project,
+            SELECT g.id::text AS goal_id, g.title, g.project, g.status AS goal_status, g.paused_at,
+                   g.tenant_id::text AS tenant_id, g.owner_session_id::text AS lead_session_id,
                    COALESCE(
                        g.owner_session_id,
                        (
@@ -238,8 +378,7 @@ async def report_weekly_goal_progress(
                        )
                    )::text AS target_session_id,
                    count(m.id) FILTER (WHERE m.status <> 'cancelled') AS milestone_total,
-                   count(m.id) FILTER (WHERE m.status = 'completed') AS milestone_completed,
-                   count(m.id) FILTER (WHERE m.status = 'blocked') AS milestone_blocked
+                   count(m.id) FILTER (WHERE m.status = 'completed') AS milestone_completed
             FROM goals g
             LEFT JOIN milestones m ON m.goal_id = g.id
             WHERE ($1::text IS NULL OR g.project = $1)
@@ -257,8 +396,65 @@ async def report_weekly_goal_progress(
                 continue
             total = int(row["milestone_total"] or 0)
             completed = int(row["milestone_completed"] or 0)
-            blocked = int(row["milestone_blocked"] or 0)
             percent = round(100 * completed / total) if total else 0
+
+            # Read actual owners only; never resolve a missing owner to CEO.
+            from app.services.goal_binding import (
+                DONE_JOB_STATUSES, FAILED_JOB_STATUSES, RELEASE_GATED_PROJECTS,
+            )
+            from app.services.goal_failure_retry import attach_retry_accounting
+            from app.services.goal_manager import (
+                active_link_predicate,
+                link_optional_columns,
+                superseded_link_predicate,
+            )
+            columns = await link_optional_columns(conn)
+            milestones = [dict(m) for m in await conn.fetch(
+                f"""SELECT m.id::text, m.title, m.status, m.dispatch_blocked_at,
+                           m.dispatch_note, m.evidence, m.owner_session_id::text,
+                           COALESCE(s.role_key, m.owner_role_key) AS owner_role_key,
+                           (SELECT l.task_id FROM goal_task_links l
+                            JOIN pipeline_jobs j ON j.job_id = l.task_id
+                            WHERE l.milestone_id=m.id AND l.goal_id=g.id
+                              AND l.tenant_id=g.tenant_id AND j.tenant_id=g.tenant_id
+                              AND l.task_type='pipeline_job'
+                              AND (lower(trim(COALESCE(j.status, ''))) <> ALL($3::text[])
+                                   OR (upper(trim(COALESCE(j.project, ''))) = ANY($4::text[])
+                                       AND lower(trim(COALESCE(j.phase, ''))) = ANY($2::text[])))
+                              AND (lower(trim(COALESCE(j.status, ''))) = ANY($2::text[])
+                                   OR lower(trim(COALESCE(j.phase, ''))) = ANY($2::text[]))
+                              {active_link_predicate(columns, 'l')}
+                              {superseded_link_predicate(columns, 'l')}
+                            ORDER BY l.created_at DESC LIMIT 1) AS failed_task_id
+                    FROM milestones m JOIN goals g ON g.id=m.goal_id
+                    LEFT JOIN chat_sessions s ON s.id=m.owner_session_id AND s.tenant_id=g.tenant_id
+                    WHERE g.id=$1::uuid AND m.tenant_id=g.tenant_id
+                    ORDER BY m.sequence_order, m.id""", row["goal_id"],
+                sorted(FAILED_JOB_STATUSES), sorted(DONE_JOB_STATUSES), sorted(RELEASE_GATED_PROJECTS),
+            )]
+            milestones = await attach_retry_accounting(conn, row["tenant_id"], milestones)
+            details = ["목표 자체 blocked — 주도 담당의 원인 확인/승인 필요"] if row["goal_status"] == "blocked" else []
+            if row.get("paused_at"):
+                details.append("목표 일시중지 — 재개 승인 전 후속 요청 없음")
+            blocked = 0
+            for milestone in milestones:
+                reasons = _weekly_blockers(milestone)
+                if not reasons:
+                    continue
+                blocked += 1
+                action = await _weekly_followup(conn, row, milestone)
+                details.append(
+                    f"· {milestone['title']}: {', '.join(reasons)}; "
+                    f"담당 역할={milestone.get('owner_role_key') or '미지정'}, "
+                    f"세션={milestone.get('owner_session_id') or '미지정'}; 다음 행동: {action}"
+                )
+
+            if row["goal_status"] == "blocked" and not blocked:
+                action = await _weekly_followup(conn, row, {
+                    "id": row["goal_id"], "status": "blocked",
+                    "owner_session_id": target_session_id, "owner_role_key": "",
+                })
+                details.append("목표 차단 다음 행동: " + action)
 
             async with conn.transaction():
                 claimed = await conn.fetchval(
@@ -276,7 +472,9 @@ async def report_weekly_goal_progress(
                     f"주간 목표 달성률 — [{row['project']}] {row['title']}\n\n"
                     f"마일스톤 {completed}/{total} 완료 ({percent}%), "
                     f"차단 {blocked}건\n"
-                    "목표 화면에서 차단·승인 필요 항목과 다음 마일스톤을 확인해 주세요."
+                    f"보고 수신 세션={target_session_id}\n"
+                    + "\n".join(details)
+                    + "\n이 알림 저장은 실행 성공을 뜻하지 않습니다."
                 )
                 await conn.execute(
                     """
