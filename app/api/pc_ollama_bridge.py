@@ -63,7 +63,24 @@ _PEER_HOP_KEY = "_pc_ollama_peer_hop"
 _PEER_BASE_URLS = ("http://aads-server:8080", "http://aads-server-green:8080")
 
 
-async def _forward_to_peer(payload: dict[str, Any], detail: str) -> dict[str, Any] | None:
+_PEER_ROUTING_ERROR_CODES = frozenset({"PC_AGENT_OFFLINE", "NO_CAPABLE_AGENT"})
+_NO_RETRY_ERROR_CODES = frozenset({"COMMAND_TIMEOUT"})
+_AGENT_ATTEMPT_LIMIT = 3
+
+
+def _peer_bases() -> list[str]:
+    local = str(os.getenv("AADS_CONTAINER_NAME", "") or "").strip()
+    return [base for base in _PEER_BASE_URLS if not local or base.split("//", 1)[-1].split(":", 1)[0] != local]
+
+
+async def _forward_to_peer(
+    payload: dict[str, Any],
+    detail: str,
+    *,
+    error_code: str = "",
+    agent_failed: bool = False,
+    errors: list[str] | None = None,
+) -> dict[str, Any] | None:
     """PC Agent WebSocket 이 붙어 있는 반대편 슬롯으로 한 번만 넘긴다.
 
     PC Agent 연결은 `pc_agent_manager` 의 **프로세스 내** 레지스트리라, blue/green
@@ -71,11 +88,18 @@ async def _forward_to_peer(payload: dict[str, Any], detail: str) -> dict[str, An
     남아 있어서, LiteLLM 이 어느 쪽을 잡느냐에 따라 503 'no online PC agent' 가
     절반씩 났다(2026-09-21 실측: 200/503/200). 한 홉만 넘겨 그 틈을 없앤다.
 
-    자기 자신에게도 한 번 갈 수 있지만 `_PEER_HOP_KEY` 때문에 되돌아오지 않는다.
+    넘기는 경우: 로컬에 agent 가 없거나(라우팅 오류) 로컬 agent 를 다 시도하고도
+    실패했을 때(`agent_failed`). 자기 자신은 건너뛰고, `_PEER_HOP_KEY` 때문에
+    받은 쪽이 다시 넘기지 않는다. 반대편이 실패한 이유는 `errors` 에 모은다 —
+    그렇지 않으면 최종 503 이 로컬의 'no online PC agent' 로 보여 진짜 원인을 가린다.
     """
     if payload.get(_PEER_HOP_KEY):
         return None
-    if "no online PC agent" not in str(detail):
+    routing_failure = (
+        "no online PC agent" in str(detail)
+        or str(error_code or "") in _PEER_ROUTING_ERROR_CODES
+    )
+    if not (routing_failure or agent_failed):
         return None
 
     import httpx
@@ -83,7 +107,7 @@ async def _forward_to_peer(payload: dict[str, Any], detail: str) -> dict[str, An
     forwarded = {key: value for key, value in payload.items() if key != "stream"}
     forwarded[_PEER_HOP_KEY] = True
     token = _bridge_token()
-    for base in _PEER_BASE_URLS:
+    for base in _peer_bases():
         try:
             async with httpx.AsyncClient(timeout=310.0) as client:
                 response = await client.post(
@@ -92,6 +116,12 @@ async def _forward_to_peer(payload: dict[str, Any], detail: str) -> dict[str, An
                     headers={"Authorization": f"Bearer {token}"},
                 )
             if response.status_code != 200:
+                if errors is not None:
+                    try:
+                        peer_detail = response.json().get("detail")
+                    except Exception:
+                        peer_detail = None
+                    errors.append(f"{base.split('//', 1)[-1]} {response.status_code} {peer_detail or ''}".strip())
                 continue
             body = response.json()
             choices = body.get("choices") or []
@@ -104,7 +134,9 @@ async def _forward_to_peer(payload: dict[str, Any], detail: str) -> dict[str, An
                 "prompt_tokens": int(usage.get("prompt_tokens") or 0),
                 "completion_tokens": int(usage.get("completion_tokens") or 0),
             }
-        except Exception:  # 반대편도 죽어 있으면 원래 503 을 그대로 올린다
+        except Exception as exc:  # 반대편도 죽어 있으면 원래 503 을 그대로 올린다
+            if errors is not None:
+                errors.append(f"{base.split('//', 1)[-1]} {type(exc).__name__}")
             continue
     return None
 
@@ -197,6 +229,17 @@ def _finish_reason(content: str) -> str:
     return "stop" if content.strip() else "length"
 
 
+def _alternate_agent_ids(manager: Any, tried: set[str]) -> list[str]:
+    """아직 시도하지 않은, pc_ollama 능력이 있는 온라인 agent 목록."""
+    ids: list[str] = []
+    for status in manager.list_agent_statuses():
+        agent_id = str(status.get("agent_id") or "")
+        caps = {str(cap).lower() for cap in status.get("capabilities") or []}
+        if agent_id and agent_id not in tried and status.get("status") == "online" and "pc_ollama" in caps:
+            ids.append(agent_id)
+    return ids
+
+
 async def _run_pc_ollama_chat(payload: dict[str, Any]) -> dict[str, Any]:
     from app.services.pc_agent_manager import pc_agent_manager
 
@@ -216,30 +259,60 @@ async def _run_pc_ollama_chat(payload: dict[str, Any]) -> dict[str, Any]:
     }
     timeout_seconds = float(payload.get("timeout_seconds") or 300)
 
-    result = await pc_agent_manager.execute_routed_command(
-        command_type="ollama_chat",
-        params={
-            "model": ollama_model,
-            "messages": _normalize_messages(payload.get("messages")),
-            "temperature": temperature,
-            **sampling,
-            "max_tokens": max_tokens,
-            "timeout_seconds": timeout_seconds,
-            "think": bool(payload.get("think", False)),
-        },
-        job_type="pc_ollama",
-        required_capabilities=["pc_ollama"],
-        queue_if_busy=True,
-        wait_for_turn=True,
-        queue_wait_timeout_seconds=min(timeout_seconds, 120.0),
-        lease_ttl_seconds=int(timeout_seconds) + 30,
-        command_timeout_seconds=timeout_seconds,
-    )
+    async def _execute(agent_id: str = "") -> dict[str, Any]:
+        return await pc_agent_manager.execute_routed_command(
+            command_type="ollama_chat",
+            params={
+                "model": ollama_model,
+                "messages": _normalize_messages(payload.get("messages")),
+                "temperature": temperature,
+                **sampling,
+                "max_tokens": max_tokens,
+                "timeout_seconds": timeout_seconds,
+                "think": bool(payload.get("think", False)),
+            },
+            agent_id=agent_id,
+            job_type="pc_ollama",
+            required_capabilities=["pc_ollama"],
+            queue_if_busy=True,
+            wait_for_turn=True,
+            queue_wait_timeout_seconds=min(timeout_seconds, 120.0),
+            lease_ttl_seconds=int(timeout_seconds) + 30,
+            command_timeout_seconds=timeout_seconds,
+        )
+
+    result = await _execute()
+    # 라우터는 부하가 가장 낮은 PC 를 고른다. 그 PC 에 모델이 없어 오류가 나면
+    # 모델을 가진 CEO PC 가 같은 슬롯에 붙어 있어도 쓰이지 못했다(2026-10-20 실측).
+    tried: set[str] = set()
+    attempts = 1
+    while result.get("status") != "success" and attempts < _AGENT_ATTEMPT_LIMIT:
+        failed_agent = str((result.get("lease") or {}).get("agent_id") or "")
+        if not failed_agent or str(result.get("error_code") or "") in _NO_RETRY_ERROR_CODES:
+            break
+        tried.add(failed_agent)
+        alternates = _alternate_agent_ids(pc_agent_manager, tried)
+        if not alternates:
+            break
+        attempts += 1
+        result = await _execute(alternates[0])
     if result.get("status") != "success":
+        agent_failed = bool((result.get("lease") or {}).get("agent_id")) and (
+            str(result.get("error_code") or "") not in _NO_RETRY_ERROR_CODES
+        )
         detail = result.get("message") or result.get("detail") or result.get("error_code") or "PC Ollama route failed"
-        peer = await _forward_to_peer(payload, detail)
+        peer_errors: list[str] = []
+        peer = await _forward_to_peer(
+            payload,
+            detail,
+            error_code=str(result.get("error_code") or ""),
+            agent_failed=agent_failed,
+            errors=peer_errors,
+        )
         if peer is not None:
             return peer
+        if peer_errors:
+            detail = f"{detail} (peer: {'; '.join(peer_errors)})"
         raise HTTPException(status_code=503, detail=detail)
 
     data = (result.get("result") or {}).get("result") or {}
