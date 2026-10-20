@@ -2251,17 +2251,283 @@ p0p1_monitor_fail() {
     exit 1
 }
 
-# Bind-mounted sidecars are not recreated by the API blue/green compose start.
-# Reload them while holding the nginx cutover lock so a concurrent deploy cannot
-# race the mounted process or certify a route against stale sidecar code.
+# ── Finance sidecar topology ─────────────────────────────────────────────────
+# The finance service is NOT necessarily a local container. The approved
+# placements are a closed table keyed by the route nginx really uses
+# (upstream yeoljeong_finance_api). Do not make these env-overridable: an
+# env switch that selects "remote" or "optional" is a way to skip the gate.
+#   127.0.0.1:8210  remote  ssh -L tunnel to the APPROVED accounting host only
+#                           (FINANCE_TUNNEL_APPROVED_HOST); the listener pid's
+#                           real forward is resolved with `ssh -G`, never trusted
+#                           from the listener name or from /health/live
+#   127.0.0.1:8110  local   bind-mounted container yeoljeong-finance
+# Anything else (no/multiple upstream servers, other port) is unknown and
+# blocks the release. Deploy #5814 failed because a local container was
+# assumed while the live route was the remote tunnel.
+FINANCE_ROUTE_REMOTE_TUNNEL="127.0.0.1:8210"
+FINANCE_ROUTE_LOCAL_MOUNTED="127.0.0.1:8110"
+FINANCE_LOCAL_CONTAINER="yeoljeong-finance"
+# The remote tunnel is only approved when it really forwards to the current
+# ACCT host (cafe24_114). The retired jinah244 host (5.104.85.244) and any
+# unknown host are rejected even if /health/live answers 200 there.
+# FINANCE_TUNNEL_REMOTE_TARGET is the accounting finance listener behind the
+# tunnel; it mirrors the target of the tunnel that was live on 2026-10-20.
+FINANCE_TUNNEL_APPROVED_HOST="114.207.244.86"
+FINANCE_TUNNEL_REMOTE_TARGET="127.0.0.1:8110"
+
+# Seams for the process table; behavior tests replace them, nothing reads env.
+finance_proc_cmdline() { tr '\0' '\n' < "/proc/$1/cmdline"; }
+finance_ssh_resolve() { timeout 15 ssh -G "$@"; }
+
+# OpenSSH `ssh -G` prints forward endpoints bracketed ("[127.0.0.1]:8210
+# [127.0.0.1]:8110"); the bare "127.0.0.1:8210" form is also accepted. Both
+# normalize to host:port. A port-only bind ("8210"), a wildcard/other bind or a
+# hostname such as "[localhost]" is left as-is and therefore never matches the
+# strict loopback comparison below.
+finance_norm_endpoint() {
+    if [[ "$1" =~ ^\[([^][[:space:]]+)\]:([0-9]+)$ ]]; then
+        printf '%s:%s' "${BASH_REMATCH[1],,}" "${BASH_REMATCH[2]}"
+    elif [[ "$1" =~ ^([^][:[:space:]]+):([0-9]+)$ ]]; then
+        printf '%s:%s' "${BASH_REMATCH[1],,}" "${BASH_REMATCH[2]}"
+    else
+        printf '%s' "$1"
+    fi
+}
+
+# Validates, without any remote connection, that the ssh process listening on
+# 127.0.0.1:$1 forwards to the approved accounting destination.
+# rc 0 = approved; rc 1 + reason on stderr otherwise (fail closed).
+verify_finance_tunnel_destination() {
+    local port="$1" bind="127.0.0.1:$1" listener pid line
+    local -a pids args
+    local argv0 cfg key value host="" hops="" fwd_count=0 fwd_ok=false
+    local fwd_bind fwd_target fwd_extra
+    listener="$(ss -ltnpH "sport = :${port}" 2>/dev/null || true)"
+    if [[ -z "${listener//[[:space:]]/}" ]]; then
+        echo "finance remote route ${bind} has no listener (got: none)" >&2
+        return 1
+    fi
+    while IFS= read -r line; do
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+        if [[ "$line" != *"${bind} "* ]]; then
+            echo "finance tunnel listener is not bound to loopback ${bind} (got: ${line})" >&2
+            return 1
+        fi
+        if [[ "$line" != *'"ssh"'* ]]; then
+            echo "finance remote route ${bind} is not owned by an ssh tunnel listener (got: ${line})" >&2
+            return 1
+        fi
+        mapfile -t pids < <(grep -o 'pid=[0-9]*' <<< "$line" | cut -d= -f2 | sort -u)
+        if (( ${#pids[@]} != 1 )); then
+            echo "finance tunnel listener ${bind} must have exactly one owning pid (got: ${#pids[@]})" >&2
+            return 1
+        fi
+        if [[ -n "${pid:-}" && "$pid" != "${pids[0]}" ]]; then
+            echo "finance tunnel listener ${bind} is owned by multiple pids (${pid}, ${pids[0]})" >&2
+            return 1
+        fi
+        pid="${pids[0]}"
+    done <<< "$listener"
+    [[ -n "${pid:-}" ]] || { echo "finance tunnel listener pid unresolved" >&2; return 1; }
+
+    if ! mapfile -t args < <(finance_proc_cmdline "$pid" 2>/dev/null) || (( ${#args[@]} < 2 )); then
+        echo "finance tunnel pid ${pid} command line unreadable" >&2
+        return 1
+    fi
+    argv0="${args[0]##*/}"
+    if [[ "$argv0" != "ssh" ]]; then
+        echo "finance tunnel pid ${pid} is '${argv0}', not ssh" >&2
+        return 1
+    fi
+
+    # ssh -G resolves aliases/Host blocks from local config only; it never connects.
+    if ! cfg="$(finance_ssh_resolve "${args[@]:1}" 2>/dev/null)"; then
+        echo "finance tunnel pid ${pid}: ssh -G could not resolve its destination" >&2
+        return 1
+    fi
+    while read -r key value; do
+        case "$key" in
+            hostname) host="${value,,}" ;;
+            proxyjump|proxycommand)
+                [[ -n "$value" && "$value" != "none" ]] && hops="${key}=${value}" ;;
+            localforward)
+                read -r fwd_bind fwd_target fwd_extra <<< "$value"
+                if [[ -n "$fwd_extra" ]]; then
+                    fwd_count=$((fwd_count + 2))
+                elif [[ "$(finance_norm_endpoint "$fwd_bind")" == "$bind" ]]; then
+                    fwd_count=$((fwd_count + 1))
+                    [[ "$(finance_norm_endpoint "$fwd_target")" == "$FINANCE_TUNNEL_REMOTE_TARGET" ]] && fwd_ok=true
+                fi ;;
+        esac
+    done <<< "$cfg"
+
+    if [[ -z "$host" ]]; then
+        echo "finance tunnel pid ${pid}: destination host unresolved" >&2
+        return 1
+    fi
+    if [[ -n "$hops" ]]; then
+        echo "finance tunnel pid ${pid} reaches ${host} through an intermediate hop (${hops}); not an approved placement" >&2
+        return 1
+    fi
+    if [[ "$host" != "$FINANCE_TUNNEL_APPROVED_HOST" ]]; then
+        echo "finance tunnel destination ${host} is not the approved ACCT host ${FINANCE_TUNNEL_APPROVED_HOST} (cafe24_114); health 200 does not override this" >&2
+        return 1
+    fi
+    if (( fwd_count != 1 )) || [[ "$fwd_ok" != "true" ]]; then
+        echo "finance tunnel pid ${pid} must forward ${bind} to ${FINANCE_TUNNEL_REMOTE_TARGET} exactly once (forwards on ${bind}: ${fwd_count})" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Prints "<mode> <route>" (mode=local|remote) on stdout; reason on stderr, rc 1.
+resolve_finance_sidecar_topology() {
+    local conf="${UPSTREAM_CONF:-/etc/nginx/conf.d/aads-upstream.conf}"
+    local -a routes
+    local route listener why
+    [[ -r "$conf" ]] || { echo "nginx upstream config unreadable: ${conf}" >&2; return 1; }
+    mapfile -t routes < <(awk '
+        /^[[:space:]]*upstream[[:space:]]+yeoljeong_finance_api[[:space:]]*\{/ {in_up=1; next}
+        in_up && /^[[:space:]]*\}/ {in_up=0}
+        in_up && /^[[:space:]]*server[[:space:]]+/ {
+            v=$2; sub(/;.*/, "", v); print v
+        }' "$conf")
+    if (( ${#routes[@]} != 1 )); then
+        echo "unknown finance topology: yeoljeong_finance_api must have exactly one active server (found ${#routes[@]})" >&2
+        return 1
+    fi
+    route="${routes[0]}"
+    case "$route" in
+        "$FINANCE_ROUTE_LOCAL_MOUNTED")
+            # A local route is only local if no ssh forward sits on the port.
+            listener="$(ss -ltnpH "sport = :${route##*:}" 2>/dev/null || true)"
+            if [[ "$listener" == *'"ssh"'* || "$listener" == *'"autossh"'* ]]; then
+                echo "finance local route ${route} is owned by an ssh forward, contradicting the local placement (got: ${listener})" >&2
+                return 1
+            fi
+            echo "local ${route}"
+            ;;
+        "$FINANCE_ROUTE_REMOTE_TUNNEL")
+            # The remote route is only approved if the ssh forward owning the
+            # port really leads to the approved accounting host.
+            if ! why="$(verify_finance_tunnel_destination "${route##*:}" 2>&1)"; then
+                echo "$why" >&2
+                return 1
+            fi
+            echo "remote ${route}"
+            ;;
+        *)
+            echo "unknown finance topology: yeoljeong_finance_api routes to ${route}, not an approved placement" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Fills FINANCE_SIDECARS with the local containers that must exist and be
+# restarted (never the API itself); rc 1 + FINANCE_SIDECAR_ERROR on a forbidden name.
+finance_local_sidecar_list() {
+    local mode="$1" sidecar existing dup
+    local -a candidates extra
+    FINANCE_SIDECARS=()
+    FINANCE_SIDECAR_ERROR=""
+    candidates=()
+    [[ "$mode" == "local" ]] && candidates+=("$FINANCE_LOCAL_CONTAINER")
+    IFS=',' read -r -a extra <<< "${DEPLOY_MOUNTED_SIDECARS:-}"
+    candidates+=("${extra[@]}")
+    for sidecar in "${candidates[@]}"; do
+        sidecar="${sidecar//[[:space:]]/}"
+        [[ -z "$sidecar" ]] && continue
+        if [[ "$mode" == "remote" && "$sidecar" == "$FINANCE_LOCAL_CONTAINER" ]]; then
+            FINANCE_SIDECAR_ERROR="refusing obsolete local finance container ${sidecar} while finance topology=remote"
+            return 1
+        fi
+        if [[ "$sidecar" == aads-server* ]]; then
+            FINANCE_SIDECAR_ERROR="refusing API container as mounted sidecar: ${sidecar}"
+            return 1
+        fi
+        dup=false
+        for existing in "${FINANCE_SIDECARS[@]}"; do
+            [[ "$existing" == "$sidecar" ]] && dup=true
+        done
+        [[ "$dup" == "true" ]] || FINANCE_SIDECARS+=("$sidecar")
+    done
+    return 0
+}
+
+# Read-only health of the real finance route. $1 = URL, $2 = wait seconds.
+finance_route_health_wait() {
+    local url="$1" wait="$2" interval="${DEPLOY_SIDECAR_HEALTH_INTERVAL:-2}" elapsed=0
+    [[ "$interval" =~ ^[0-9]+$ ]] || interval=2
+    (( interval > 0 )) || interval=2
+    until curl -sf --max-time 5 "$url" >/dev/null 2>&1; do
+        (( elapsed >= wait )) && return 1
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+}
+
+# Authenticated public route: 200/401/403 proves nginx routing + auth gate;
+# 500/502/000 (broken config or dead upstream) fails.
+finance_public_route_check() {
+    local url="$1" code
+    code="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || echo 000)"
+    case "$code" in
+        200|401|403) return 0 ;;
+    esac
+    FINANCE_PUBLIC_CODE="$code"
+    return 1
+}
+
+# Runs BEFORE the image build and before any cutover. Read-only: it never
+# restarts or recreates anything. Local mode requires the container to exist;
+# remote mode requires the routed upstream to answer health.
+preflight_mounted_sidecar_topology() {
+    local topo mode route failure="" sidecar health_wait
+    health_wait="${DEPLOY_SIDECAR_PREFLIGHT_WAIT:-10}"
+    [[ "$health_wait" =~ ^[0-9]+$ ]] || health_wait=10
+
+    deploy_phase_start "sidecar_topology_preflight" "verifying"
+    if ! topo="$(resolve_finance_sidecar_topology 2>&1)"; then
+        failure="$topo"
+    else
+        mode="${topo%% *}"
+        route="${topo##* }"
+        if ! finance_local_sidecar_list "$mode"; then
+            failure="$FINANCE_SIDECAR_ERROR"
+        else
+            for sidecar in "${FINANCE_SIDECARS[@]}"; do
+                if ! docker inspect "$sidecar" >/dev/null 2>&1; then
+                    failure="required local sidecar absent: ${sidecar} (finance topology=${mode} route=${route})"
+                    break
+                fi
+            done
+        fi
+        if [[ -z "$failure" && "$mode" == "remote" ]]; then
+            finance_route_health_wait "http://${route}/health/live" "$health_wait" \
+                || failure="remote finance route health failed: http://${route}/health/live (waited ${health_wait}s)"
+        fi
+    fi
+
+    if [[ -n "$failure" ]]; then
+        echo "[deploy.sh] ❌ sidecar topology preflight: ${failure}"
+        deploy_phase_end "sidecar_topology_preflight" "blocked" "$failure"
+        notify "❌ 배포 차단(빌드 전): ${failure}"
+        return 1
+    fi
+    echo "[deploy.sh] ✅ sidecar topology preflight: finance=${mode} route=${route}"
+    deploy_phase_end "sidecar_topology_preflight" "success" "finance topology=${mode} route=${route}"
+}
+
+# Bind-mounted local sidecars are not recreated by the API blue/green compose
+# start. Reload them while holding the nginx cutover lock so a concurrent
+# deploy cannot race the mounted process or certify a route against stale
+# sidecar code. Remote finance is never restarted from here: only its routed
+# health is verified (read-only).
 reload_mounted_sidecars() {
-    local sidecar optional_sidecars internal_url public_url health_wait health_interval health_elapsed public_code
-    local -a sidecars optional_list
+    local sidecar internal_url public_url health_wait health_interval health_elapsed
+    local topo mode route
     local failure=""
 
-    IFS=',' read -r -a sidecars <<< "${DEPLOY_MOUNTED_SIDECARS:-yeoljeong-finance}"
-    IFS=',' read -r -a optional_list <<< "${DEPLOY_MOUNTED_SIDECAR_OPTIONAL:-}"
-    internal_url="${DEPLOY_SIDECAR_CHECK_URL:-http://localhost:8110/health/live}"
     public_url="${DEPLOY_SIDECAR_PUBLIC_CHECK_URL:-http://127.0.0.1/api/v1/yeoljeong-finance/health/live}"
     health_wait="${DEPLOY_SIDECAR_HEALTH_WAIT:-60}"
     health_interval="${DEPLOY_SIDECAR_HEALTH_INTERVAL:-2}"
@@ -2269,58 +2535,47 @@ reload_mounted_sidecars() {
     [[ "$health_interval" =~ ^[0-9]+$ ]] || health_interval=2
 
     deploy_phase_start "mounted_sidecar_reload" "verifying"
-    for sidecar in "${sidecars[@]}"; do
-        sidecar="${sidecar//[[:space:]]/}"
-        [[ -z "$sidecar" ]] && continue
-        if [[ "$sidecar" == aads-server* ]]; then
-            failure="refusing API container as mounted sidecar: ${sidecar}"
-            break
-        fi
+    if ! topo="$(resolve_finance_sidecar_topology 2>&1)"; then
+        failure="$topo"
+    else
+        mode="${topo%% *}"
+        route="${topo##* }"
+        internal_url="${DEPLOY_SIDECAR_CHECK_URL:-http://${route}/health/live}"
+        finance_local_sidecar_list "$mode" || failure="$FINANCE_SIDECAR_ERROR"
+    fi
 
-        local is_optional=false
-        local optional_sidecar
-        for optional_sidecar in "${optional_list[@]}"; do
-            optional_sidecar="${optional_sidecar//[[:space:]]/}"
-            [[ "$sidecar" == "$optional_sidecar" ]] && is_optional=true && break
-        done
-
-        if ! docker inspect "$sidecar" >/dev/null 2>&1; then
-            if [[ "$is_optional" == "true" ]]; then
-                echo "[deploy.sh] ⏭️ optional mounted sidecar absent: ${sidecar}"
-                continue
-            fi
-            failure="required sidecar absent: ${sidecar}"
-            break
-        fi
-
-        echo "[deploy.sh] ↻ mounted sidecar restart: ${sidecar}"
-        if ! docker restart "$sidecar" >/dev/null 2>&1; then
-            failure="mounted sidecar restart failed: ${sidecar}"
-            break
-        fi
-        health_elapsed=0
-        until curl -sf --max-time 5 "$internal_url" >/dev/null 2>&1; do
-            if (( health_elapsed >= health_wait )); then
-                failure="mounted sidecar internal health failed after ${health_elapsed}s: ${sidecar} (${internal_url})"
+    if [[ -z "$failure" ]]; then
+        for sidecar in "${FINANCE_SIDECARS[@]}"; do
+            if ! docker inspect "$sidecar" >/dev/null 2>&1; then
+                failure="required sidecar absent: ${sidecar}"
                 break
             fi
-            sleep "$health_interval"
-            health_elapsed=$((health_elapsed + health_interval))
+            echo "[deploy.sh] ↻ mounted sidecar restart: ${sidecar}"
+            if ! docker restart "$sidecar" >/dev/null 2>&1; then
+                failure="mounted sidecar restart failed: ${sidecar}"
+                break
+            fi
         done
-        [[ -n "$failure" ]] && break
+    fi
 
+    if [[ -z "$failure" ]]; then
+        # Local: internal warmup after the restart. Remote: nothing was
+        # restarted, the same probe just verifies the tunnel's real upstream.
+        if ! finance_route_health_wait "$internal_url" "$health_wait"; then
+            health_elapsed="$health_wait"
+            failure="mounted sidecar internal health failed after ${health_elapsed}s: finance ${mode} (${internal_url})"
+        fi
+    fi
+
+    if [[ -z "$failure" ]]; then
         # This route is intentionally authenticated. 401/403 verifies nginx
         # routing plus the auth gate; the internal probe above verifies the
         # sidecar process itself. Only a missing/broken public route fails.
-        public_code="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "$public_url" 2>/dev/null || echo 000)"
-        case "$public_code" in
-            200|401|403) ;;
-            *)
-                failure="mounted sidecar public health failed: ${sidecar} (${public_url}, http=${public_code})"
-                break
-                ;;
-        esac
-    done
+        FINANCE_PUBLIC_CODE=""
+        if ! finance_public_route_check "$public_url"; then
+            failure="mounted sidecar public health failed: finance ${mode} (${public_url}, http=${FINANCE_PUBLIC_CODE})"
+        fi
+    fi
 
     if [[ -n "$failure" ]]; then
         echo "[deploy.sh] ❌ ${failure}"
@@ -2328,7 +2583,236 @@ reload_mounted_sidecars() {
         notify "❌ Blue-Green 인증 실패: ${failure}"
         return 1
     fi
-    deploy_phase_end "mounted_sidecar_reload" "success" "mounted sidecars reloaded and publicly healthy"
+    deploy_phase_end "mounted_sidecar_reload" "success" "finance topology=${mode}: mounted sidecars reloaded/verified and publicly healthy"
+}
+
+# Writes the resume-owner FILE marker (a hint for the resume scanner, not the
+# DB owner_instance/owner_epoch lease fence, which this never touches) and reads
+# it back. rc 1 if the write failed or the stored value differs: a marker that
+# was not proven to be written must never be reported as set.
+# $1 container $2 true|false
+set_resume_owner_marker() {
+    local container="$1" value="$2" observed
+    [[ "$value" == "true" || "$value" == "false" ]] || return 1
+    docker exec "$container" sh -c "printf ${value} > /tmp/aads_execution_resume_owner" >/dev/null 2>&1 || return 1
+    observed="$(docker exec "$container" sh -c 'cat /tmp/aads_execution_resume_owner' 2>/dev/null)" || return 1
+    [[ "$observed" == "$value" ]]
+}
+
+# Prints the routing of the aads_api upstream block only, as sorted
+# "active:PORT backup:PORT " tokens (empty when the file/block is unreadable).
+# Shared by the stale-rollback guard and the post-edit verification so both
+# judge the file with the same parser.
+aads_api_routing_snapshot() {
+    awk '
+        /^[[:space:]]*upstream[[:space:]]+aads_api[[:space:]]*\{/ {in_up=1; next}
+        in_up && /^[[:space:]]*\}/ {in_up=0}
+        in_up && /^[[:space:]]*server[[:space:]]+127\.0\.0\.1:[0-9]+/ {
+            match($0, /127\.0\.0\.1:[0-9]+/)
+            port=substr($0, RSTART + 10, RLENGTH - 10)
+            print (($0 ~ /[[:space:]]backup[[:space:];]/) ? "backup:" : "active:") port
+        }' "$UPSTREAM_CONF" 2>/dev/null | sort | tr '\n' ' '
+}
+
+# Called with the nginx lock held, before the rollback edits anything. The
+# rollback only makes sense while the release this deploy cut over is still the
+# one being routed; if a newer release (or a slot reuse) took over meanwhile,
+# routing back to the old slot would undo someone else's release.
+# rc 0 = still the expected state; rc 1 + ROLLBACK_STALE_REASON otherwise.
+# $1 new_port $2 new_container $3 old_port $4 old_container
+rollback_expected_state_ok() {
+    local new_port="$1" new_container="$2" old_port="$3" old_container="$4"
+    local generation_now routing image image_id tag_id marker_port marker_container
+    ROLLBACK_STALE_REASON=""
+
+    generation_now="$(tr -d '[:space:]' < "$DEPLOY_GENERATION_FILE" 2>/dev/null || true)"
+    if [[ -z "${DEPLOY_GENERATION:-}" || "$generation_now" != "$DEPLOY_GENERATION" ]]; then
+        ROLLBACK_STALE_REASON="deploy generation is no longer this release (expected ${DEPLOY_GENERATION:-unset}, current ${generation_now:-missing}); a newer deploy took over"
+        return 1
+    fi
+
+    routing="$(aads_api_routing_snapshot)"
+    if [[ "$routing" != "active:${new_port} backup:${old_port} " ]]; then
+        ROLLBACK_STALE_REASON="nginx aads_api routing is not the cutover state active=${new_port} backup=${old_port} (observed: ${routing:-none})"
+        return 1
+    fi
+
+    image="$(docker inspect "$new_container" --format '{{.Config.Image}}' 2>/dev/null || true)"
+    image_id="$(docker inspect "$new_container" --format '{{.Image}}' 2>/dev/null || true)"
+    tag_id="$(docker image inspect "aads-server:${AADS_RELEASE_SHA}" --format '{{.Id}}' 2>/dev/null || true)"
+    if [[ -z "${AADS_RELEASE_SHA:-}" || "${image##*:}" != "$AADS_RELEASE_SHA" ]]; then
+        ROLLBACK_STALE_REASON="${new_container} runs image ${image:-unknown}, not this release ${AADS_RELEASE_SHA:-unset}"
+        return 1
+    fi
+    if [[ -z "$image_id" || "$image_id" != "$tag_id" ]]; then
+        ROLLBACK_STALE_REASON="${new_container} image generation ${image_id:-unknown} differs from aads-server:${AADS_RELEASE_SHA} (${tag_id:-missing})"
+        return 1
+    fi
+
+    marker_port="$(tr -d '[:space:]' < "$ACTIVE_PORT_FILE" 2>/dev/null || true)"
+    marker_container="$(tr -d '[:space:]' < "$ACTIVE_CONTAINER_FILE" 2>/dev/null || true)"
+    if [[ "$marker_port" != "$new_port" || "$marker_container" != "$new_container" ]]; then
+        ROLLBACK_STALE_REASON="active-slot state is ${marker_container:-missing}:${marker_port:-missing}, expected ${new_container}:${new_port}"
+        return 1
+    fi
+}
+
+# Restores routing to the previous (still healthy, not yet recycled) API slot
+# after a post-cutover finance/sidecar failure. Everything that edits the shared
+# nginx upstream happens inside one short lock window. The file is edited with
+# the same targeted sed as the cutover (not by copying the pre-deploy snapshot)
+# so unrelated upstream changes made while the lock was released survive.
+# Inside the lock it first proves the cutover state is still current
+# (rollback_expected_state_ok) and refuses to roll back a superseded release.
+# rc 0 = routing, active-slot state and the resume-owner file markers are back
+# on the previous slot, each write was read back, and routed health passed;
+# rc 1 = NOT (fully) restored. SIDECAR_ROLLBACK_ERROR says why, including any
+# failed compensation step, and the caller must not report success or assume
+# routing/state/ownership agree. DB lease fencing (owner_instance/owner_epoch)
+# is not touched, so live execution leases are never force-migrated by this.
+# Never rebuilds or restarts either slot, so streams on both slots are untouched.
+# $1 new_port $2 new_container $3 old_port $4 old_container
+rollback_cutover_after_sidecar_failure() {
+    local new_port="$1" new_container="$2" old_port="$3" old_container="$4"
+    local backup="${UPSTREAM_CONF}.pre_sidecar_rollback" old_slot new_slot
+    local routed=false owner_touched=false edited=false comp_failed=""
+    local comp_restored=false comp_reloaded=false
+    local sed_rc=0 observed_routing=""
+    SIDECAR_ROLLBACK_ERROR=""
+
+    deploy_phase_start "sidecar_failure_rollback" "rolling_back"
+    if [[ "$old_port" == "${GREEN_PORT:-}" ]]; then
+        old_slot="green"; new_slot="blue"
+    else
+        old_slot="blue"; new_slot="green"
+    fi
+
+    if ! curl -sf --max-time 5 "http://127.0.0.1:${old_port}/api/v1/health" >/dev/null 2>&1; then
+        SIDECAR_ROLLBACK_ERROR="previous slot ${old_container}:${old_port} is not healthy; routing left on ${new_container}:${new_port}"
+    elif ! acquire_nginx_switch_lock; then
+        SIDECAR_ROLLBACK_ERROR="nginx upstream lock unavailable; routing left on ${new_container}:${new_port}"
+    else
+        if ! rollback_expected_state_ok "$new_port" "$new_container" "$old_port" "$old_container"; then
+            SIDECAR_ROLLBACK_ERROR="stale rollback refused, routing/state/ownership left untouched: ${ROLLBACK_STALE_REASON}"
+        elif ! cp "$UPSTREAM_CONF" "$backup"; then
+            SIDECAR_ROLLBACK_ERROR="cannot snapshot ${UPSTREAM_CONF}; routing left on ${new_container}:${new_port}"
+        else
+            edited=true
+            # Scoped to the aads_api block so an unrelated upstream that happens
+            # to use the same port is never rewritten. The sed result and the
+            # re-parsed routing are both checked: a failed, partial or silently
+            # no-op edit must never reach reload/state/owner steps.
+            sed -i -E \
+                -e "/^[[:space:]]*upstream[[:space:]]+aads_api[[:space:]]*\{/,/^[[:space:]]*\}/{" \
+                -e "s/server 127\.0\.0\.1:${old_port} [^;]*;/server 127.0.0.1:${old_port} max_fails=1 fail_timeout=10s;/g" \
+                -e "s/server 127\.0\.0\.1:${new_port} [^;]*;/server 127.0.0.1:${new_port} max_fails=1 fail_timeout=10s backup;/g" \
+                -e "}" \
+                -e "s|# Active API slot:.*|# Active API slot: ${old_slot} (${old_port}). ${new_slot^} (${new_port}) is kept as rollback backup.|" \
+                "$UPSTREAM_CONF" || sed_rc=$?
+            observed_routing="$(aads_api_routing_snapshot)"
+            if (( sed_rc != 0 )); then
+                SIDECAR_ROLLBACK_ERROR="upstream edit failed (sed rc=${sed_rc}) while restoring ${old_container}:${old_port}"
+            elif [[ "$observed_routing" != "active:${old_port} backup:${new_port} " ]]; then
+                SIDECAR_ROLLBACK_ERROR="upstream edit did not produce active=${old_port} backup=${new_port} (observed: ${observed_routing:-none}); nginx not reloaded"
+            elif ! nginx_config_test >/dev/null 2>&1; then
+                SIDECAR_ROLLBACK_ERROR="nginx config test failed while restoring ${old_container}:${old_port}"
+            elif ! nginx_reload; then
+                SIDECAR_ROLLBACK_ERROR="nginx reload failed while restoring ${old_container}:${old_port}"
+            else
+                routed=true
+                sleep 2
+                if ! write_active_slot_state "$old_port" "$old_container" "deploy.sh" "sidecar failure routing rollback" \
+                    || ! verify_container_slot_markers "$old_container" "$old_port" "$old_container"; then
+                    SIDECAR_ROLLBACK_ERROR="active-slot state/marker restore failed for ${old_container}:${old_port}"
+                else
+                    owner_touched=true
+                    if ! set_resume_owner_marker "$old_container" true; then
+                        SIDECAR_ROLLBACK_ERROR="resume-owner marker write/read-back failed on ${old_container}"
+                    elif ! set_resume_owner_marker "$new_container" false; then
+                        SIDECAR_ROLLBACK_ERROR="resume-owner marker write/read-back failed on ${new_container}"
+                    elif ! curl -sf --max-time 5 "http://127.0.0.1:${old_port}/api/v1/health" >/dev/null 2>&1 \
+                        || ! curl -sf --max-time 5 -H "Host: ${DOWNTIME_PROBE_HOST}" "http://127.0.0.1/api/v1/health" >/dev/null 2>&1; then
+                        SIDECAR_ROLLBACK_ERROR="routed health failed after restoring ${old_container}:${old_port}"
+                    fi
+                fi
+            fi
+            if [[ -n "$SIDECAR_ROLLBACK_ERROR" && "$edited" == "true" ]]; then
+                # Put the file, reload, state and markers back as they were so
+                # routing and markers agree again. Every compensation step is
+                # checked and each one gates the next with an explicit
+                # condition (never errexit/`||` chaining, which a caller's
+                # `if ! rollback...` silently disables): a reload is only
+                # allowed after the restored file is proven to be the snapshot
+                # AND to route active=${new_port} backup=${old_port}; state and
+                # marker writes are only allowed after that reload succeeded.
+                # nginx accepts an all-active upstream, so `nginx -t` passing
+                # proves nothing about routing.
+                comp_restored=true
+                comp_reloaded=false
+                if ! cp "$backup" "$UPSTREAM_CONF" 2>/dev/null; then
+                    comp_failed+="upstream file restore (cp failed); "
+                    comp_restored=false
+                fi
+                if ! cmp -s "$backup" "$UPSTREAM_CONF"; then
+                    comp_failed+="upstream file restore (content differs from snapshot); "
+                    comp_restored=false
+                fi
+                if [[ "$(aads_api_routing_snapshot)" != "active:${new_port} backup:${old_port} " ]]; then
+                    comp_failed+="upstream routing re-verification (expected active=${new_port} backup=${old_port}); "
+                    comp_restored=false
+                fi
+                if [[ "$comp_restored" != "true" ]]; then
+                    comp_failed+="nginx not reloaded; "
+                fi
+                if [[ "$comp_restored" == "true" ]]; then
+                    if ! nginx_config_test >/dev/null 2>&1; then
+                        comp_failed+="nginx config test of restored upstream (not reloaded); "
+                    elif ! nginx_reload >/dev/null 2>&1; then
+                        comp_failed+="nginx reload of restored upstream; "
+                    else
+                        comp_reloaded=true
+                    fi
+                fi
+                if [[ "$routed" == "true" ]]; then
+                    if [[ "$comp_reloaded" != "true" ]]; then
+                        comp_failed+="active-slot state/marker restore skipped (restored routing not proven reloaded, state left as written); "
+                    else
+                        if ! write_active_slot_state "$new_port" "$new_container" "deploy.sh" "sidecar failure rollback failed; routing kept" >/dev/null 2>&1; then
+                            comp_failed+="active-slot state restore; "
+                        fi
+                        if ! verify_container_slot_markers "$new_container" "$new_port" "$new_container" >/dev/null 2>&1; then
+                            comp_failed+="slot marker re-verification; "
+                        fi
+                    fi
+                fi
+                if [[ "$owner_touched" == "true" ]]; then
+                    if [[ "$comp_reloaded" != "true" ]]; then
+                        comp_failed+="resume-owner marker restore skipped (restored routing not proven reloaded, markers left as written); "
+                    else
+                        if ! set_resume_owner_marker "$new_container" true; then
+                            comp_failed+="resume-owner marker restore on ${new_container}; "
+                        fi
+                        if ! set_resume_owner_marker "$old_container" false; then
+                            comp_failed+="resume-owner marker restore on ${old_container}; "
+                        fi
+                    fi
+                fi
+                if [[ -n "$comp_failed" ]]; then
+                    SIDECAR_ROLLBACK_ERROR="${SIDECAR_ROLLBACK_ERROR}; COMPENSATION FAILED (${comp_failed%; }): routing/state/ownership may disagree, manual verification required"
+                fi
+            fi
+        fi
+        release_nginx_switch_lock
+    fi
+
+    if [[ -n "$SIDECAR_ROLLBACK_ERROR" ]]; then
+        echo "[deploy.sh] ❌ sidecar failure routing rollback FAILED: ${SIDECAR_ROLLBACK_ERROR}"
+        audit_control "sidecar-failure-rollback" "${new_container}:${new_port}->${old_container}:${old_port}" "failed" "$SIDECAR_ROLLBACK_ERROR"
+        deploy_phase_end "sidecar_failure_rollback" "failed" "$SIDECAR_ROLLBACK_ERROR"
+        return 1
+    fi
+    audit_control "sidecar-failure-rollback" "${new_container}:${new_port}->${old_container}:${old_port}" "success" "routing, active-slot state and resume-owner file markers restored and read back; routed health passed (DB lease fencing untouched)"
+    deploy_phase_end "sidecar_failure_rollback" "success" "routing restored to ${old_container}:${old_port}"
 }
 
 schedule_standby_sync_retry() {
@@ -3209,6 +3693,12 @@ case "$MODE" in
         # 예전에는 10~20분 빌드가 끝난 뒤 다시 최대 180초를 기다려, 이미
         # 충분히 drain된 시간까지 직렬로 더했다. 빌드는 컨테이너를 건드리지
         # 않으므로 이 관측 창을 겹쳐도 실행 중 스트림 보호 계약은 그대로다.
+        # 필수 sidecar 토폴로지는 빌드·drain·cutover 전에 닫는다 (#5814: cutover 뒤에야 발견).
+        if ! preflight_mounted_sidecar_topology; then
+            record_deploy "blocked" "$MODE" "sidecar topology preflight failed before build"
+            exit 1
+        fi
+
         TARGET_DRAIN_STARTED_EPOCH="$(date +%s)"
         reconcile_inactive_target_recovery_executions "$NEW_CONTAINER"
         TARGET_STREAMS_BEFORE_BUILD="$(stream_count_for_port "$NEW_PORT")"
@@ -3406,7 +3896,14 @@ case "$MODE" in
         # The route is live now, but the bind-mounted finance sidecar still
         # serves its pre-release files until it has been restarted and checked.
         if ! reload_mounted_sidecars; then
-            record_deploy "failed" "$MODE" "mounted sidecar reload failed after nginx cutover"
+            if rollback_cutover_after_sidecar_failure "$NEW_PORT" "$NEW_CONTAINER" "$OLD_PORT" "$OLD_CONTAINER"; then
+                DEPLOY_UPSTREAM_SWITCHED=false
+                notify "❌ Blue-Green 실패: finance sidecar 검증 실패 — ${OLD_CONTAINER}:${OLD_PORT} 로 라우팅 복원 완료 (릴리스 미적용)"
+                record_deploy "failed" "$MODE" "mounted sidecar reload failed after nginx cutover; routing rolled back to ${OLD_CONTAINER}:${OLD_PORT}"
+            else
+                notify "🚨 Blue-Green 실패: finance sidecar 검증 실패 + 라우팅 복원 실패 — 라우팅/상태/소유 일치 미보장, 수동 점검 필요: ${SIDECAR_ROLLBACK_ERROR:0:300}"
+                record_deploy "failed" "$MODE" "mounted sidecar reload failed after nginx cutover; routing rollback FAILED (${SIDECAR_ROLLBACK_ERROR}); routing/state/ownership consistency not guaranteed, last cutover target=${NEW_CONTAINER}:${NEW_PORT}"
+            fi
             exit 1
         fi
 
