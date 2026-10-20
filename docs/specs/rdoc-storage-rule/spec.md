@@ -1,6 +1,6 @@
 # R-DOC 문서 저장 규칙 — 명세 (spec)
 
-- version 1.3.0 · 작성 2026-10-03 KST · 갱신 2026-10-14 KST · 프로젝트 AADS (1.1.0 = 6~14항 화면 개발 절차 추가, 1.2.0 = 15항 document_key 규칙·기존 키 보존 추가, 1.3.0 = 4항 게이트 현황을 2026-10-14 실측으로 교체. 1~3항·5~15항 의미 불변)
+- version 1.5.0 · 작성 2026-10-03 KST · 갱신 2026-10-20 KST · 프로젝트 AADS (1.1.0 = 6~14항 화면 개발 절차 추가, 1.2.0 = 15항 document_key 규칙·기존 키 보존 추가, 1.3.0 = 4항 게이트 현황을 2026-10-14 실측으로 교체, 1.4.0 = 16항 일일 정본 등록률 계측 정의 추가, 1.5.0 = 16.1 최초추가 판정을 전체 이력 기준으로 고정하고 16.6 tenant fail-closed 추가. 1~15항 의미 불변)
 - 짝 문서: 기획서 `docs/plans/20261003_AADS_RDOC_STORAGE_RULE_PLAN.md`(1.3.0), PRD `docs/prd/20261003_AADS_RDOC_STORAGE_RULE_PRD.md`(1.3.0)
 - 상태: 초안. `rdoc-storage-rule-spec` revision 1 로 등록돼 있고 승인 0건이다 [DB 조회, 2026-10-14]. 파일명 규칙의 최종 결정은 CEO 가 한다. M1 의 design 은 이 spec 이 맡는 것으로 본다 [미검증, CEO 확인 필요].
 - 출처 표기: [DB 조회] [코드 확인] [지시서 인용] [미측정]
@@ -258,3 +258,49 @@ ORDER BY 1, 2, 3;
 - 수집하지 못했거나 접근할 수 없는 서버는 분모에서 빼지 않고 [미측정] 행으로 남긴다.
 - 사본은 같은 sha256 을 하나로 세는 고유 수와 파일 수를 함께 적는다.
 - 2026-10-03 측정 결과: 측정한 범위(aads-server, aads-dashboard, aads-docs, contabo14 의 kis-autotrade-v4)에서 고유 문서 35건 중 내용 일치 등록 3건이다. 미측정 범위가 있어 전체 등록률이 아니다 [git조회] [DB조회] [미측정]. 표는 RESULT 에 있다.
+
+## 16. 일일 정본 등록률 계측 (RDOC-M5-METRIC)
+
+15.6 의 측정 규칙을 날짜별로 반복 수집하는 정의다. 구현은 `app/services/rdoc_registration_metrics.py`, 수집기는 `scripts/rdoc_registration_collect.py` 이다. 이 항은 계측 정의일 뿐 경고를 차단으로 올리는 근거가 아니다 (enforce 승격은 미구현이며 이 항의 범위 밖이다).
+
+### 16.1 지표 A — 신규 문서 등록률 (분모 = 문서)
+
+- 키는 (tenant_id, project_key, KST 일자, 지표) 이다. 일자는 KST 달력일이고 UTC 경계(15:00)를 쓰지 않는다.
+- 분모: 그날 `docs/reports/**/*.md` 로 새로 추가된 문서. "신규" 는 `git log --diff-filter=A` 의 **저장소 전체 이력에서 그 경로의 첫 추가** 시각이다. 수집 창(`--since`)은 출력 날짜만 자를 뿐 판정 기준이 아니다: 창 이전에 이미 있던 경로를 지우고 창 안에서 다시 추가해도 `readded_path` 로 빼고, 창 이전 문서와 같은 내용(같은 git blob)의 사본은 `duplicate_content` 로 뺀다. 그래서 같은 날짜는 하루 창으로 수집하든 여러 날 창으로 수집하든 같은 분모·제외 사유를 낸다. 얕은 clone 은 최초추가를 알 수 없어 수집을 실패시킨다. 이름만 바뀐 파일, 같은 경로의 재추가, 같은 sha256 사본, 빈 파일, md 가 아닌 파일은 분모에서 빼고 제외 사유별 개수를 행에 남긴다.
+- 분자: 같은 tenant·project 의 `project_document_revisions` 에 `source_path` 와 `content_hash`(sha256) 가 모두 같은 문서. 경로만 같고 내용이 다른 문서는 분자에 넣지 않고 `path_only` 로 따로 센다. 다른 tenant 나 다른 project 의 등록은 세지 않는다.
+- 프로젝트는 파일명의 두 번째 토큰이 알려진 project_key 일 때만 그 프로젝트로 귀속하고, 아니면 저장소 기본 프로젝트(AADS)로 본다.
+
+### 16.2 지표 B — 게이트 ok 비율 (A 와 섞지 않는다)
+
+- `canonical_gate_events` 의 verdict 가 ok 인 비율이다. 분모는 ok·missing_canonical·unknown 전부이다 (unknown 을 빼서 비율을 올리지 않는다).
+- 이 테이블에는 tenant 열이 없어 project 단위로만 나뉜다. tenant 격리가 되지 않는다는 한계를 행의 detail(`tenant_scope`)에 적는다. B 는 내부 tenant 행에 저장되지만 그 tenant 의 개인 지표가 아니라 project 전체 게이트 이벤트의 비율이다. 다른 tenant 의 지표처럼 보고하지 않는다.
+- commit 진입점은 DB 에 닿지 않는 hook 이라 판정이 항상 unknown 이다. 기록은 로컬 로그(`<git-common-dir>/canonical_gate.log`)에만 남으므로 이 테이블의 commit 행은 0건이 정상이다.
+- B 는 A 를 대신하지 못하고 A 도 B 를 대신하지 못한다. 두 지표는 별도 행으로 저장한다.
+
+### 16.3 분모 0, 누락 일자, 수집 품질
+
+- 분모가 0 이면 비율은 `N/A`(저장값 NULL, status=not_applicable) 이다. 0% 도 100% 도 아니다.
+- 수집기가 돌지 않아 행이 없는 날짜는 `not_collected` 이다. 0% 로도 성공으로도 채우지 않는다. 서비스가 꺼져 있었다는 사실이 "그날 신규 문서 0건" 으로 읽히면 안 된다.
+- 각 행의 quality: `on_time`(대상일 종료 후 다음날 24시 안에 origin 을 fetch 해 확인하고 수집), `late_backfill`(그 뒤 수집), `partial_day`(대상일이 끝나기 전 수집), `unverified_source`(origin fetch 를 확인하지 못함). `on_time` 행은 늦은 재수집으로 덮어쓰지 않는다.
+- 7일 연속은 `on_time` 행만 센다. 사이에 `not_collected`·`late_backfill`·`partial_day`·`unverified_source` 가 끼면 연속이 끊긴다.
+
+### 16.4 M5 완료 조건과 현재 상태
+
+- M5 는 실제 수집된 7일 연속 `on_time` 측정이 쌓여야 완료로 본다. 이 조건 없이 구현·테스트 통과만으로 완료를 주장하지 않는다.
+- 구분 1 — 계측 미실행/첫 수집 준비: 코드·수집기·롤백 문서와 단위 테스트가 있고, 운영 테이블(`rdoc_registration_daily`)과 타이머가 설치되지 않은 상태. 저장된 측정 행은 0건이다.
+- 구분 2 — 운영 수집 실행: 승인 후 테이블과 타이머를 설치하고 `collect --fetch --apply` 가 실제로 일자 행을 쌓은 상태. 이때부터 `report` 로 연속일수를 센다.
+- 2026-10-20 현재는 구분 1 이다(재작업 후에도 같다: 운영 수집·테이블·타이머 미설치, 저장 행 0건, M5 미완료). 테이블 DDL 과 롤백은 `scripts/pending_migrations/`, 타이머 단위는 `scripts/pending_units/` 에 두었고 `migrations/` 자동 적용 경로에 넣지 않았다. 설치는 별도 승인 사항이다. 타이머는 `Persistent=false` 라 꺼져 있던 날을 몰아서 수집해 on_time 으로 위장하지 않는다.
+- 롤백: 수집기를 멈추고(타이머 미설치면 해당 없음) `.down.sql` 로 인덱스·테이블을 제거한다. 코드 변경은 커밋 되돌리기로 끝나며 기존 정본 테이블은 건드리지 않는다.
+
+### 16.5 pre-commit hook 경고 (M3 연결)
+
+- hook 은 `docs/(prd|plans|design|contracts)/**` 와 `docs/reports/**/*.md` 를 스테이징해 커밋하면 경고하고 공용 git 디렉터리의 로그에 남긴다. 미등록 문서 때문에 커밋을 막지 않는다.
+- 스크립트가 없거나 실행에 실패하면 말없이 넘기지 않고 노란 경고를 낸다. 그래도 커밋은 막지 않는다. `CANONICAL_GATE_MODE=off` 는 경고 없이 끈다.
+- 검증은 임시 저장소의 실제 `git commit`(스테이징 fixture)이며 `tests/unit/test_canonical_gate_hook_staged.py` 가 맡는다. 운영 체크아웃의 `.git/hooks` 설치본 동기화는 별도 작업이다.
+
+### 16.6 tenant fail-closed (수집·조회 공통)
+
+- `collect` 와 `report` 는 DB 에서 신뢰 tenant(`public.aads_internal_tenant_id()`)를 읽고, 그 값이 있고 UUID 이며 `--tenant-id`(있다면)와 같을 때만 그 tenant 로 지표 SELECT·upsert 를 한다. `--tenant-id` 가 없으면 신뢰 tenant 를 쓴다.
+- 신뢰 tenant 없음, 형식 오류, 요청과 불일치는 전부 실패(종료코드 1)이며 지표 SELECT 와 쓰기를 한 번도 하지 않는다. `--tenant-id` 의 UUID 형식 오류는 DB 연결 전에 거부한다.
+- DB 연결의 읽기 전용 모드(`default_transaction_read_only`)는 어느 tenant 를 읽는지 막지 못한다. 읽기 전용은 쓰기 방지일 뿐 tenant 검증을 대신하지 않는다.
+- 다른 tenant 의 수집·조회는 이 수집기의 범위 밖이다.

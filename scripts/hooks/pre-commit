@@ -596,11 +596,18 @@ if [ -x "$ENV_DUP_SCRIPT" ]; then
 fi
 
 # ── 정본 게이트 (그림자 모드, AADS-CANONICAL-GATE-SHADOW-20261002) ───
-# docs/(prd|plans|design|contracts)/** 를 커밋할 때 경고하고 .git/canonical_gate.log 에 남긴다.
+# docs/(prd|plans|design|contracts)/** 와 docs/reports/**/*.md 를 커밋할 때 경고하고
+# <git-common-dir>/canonical_gate.log 에 남긴다(워크트리가 폐기돼도 남도록 공용 디렉터리).
 # **차단하지 않는다** — 위 게이트가 모두 통과한 뒤에만 도달하며, 이 블록은 종료코드를 바꾸지 않는다
-# (fail-open: 스크립트가 없거나 죽어도 `|| true`). CANONICAL_GATE_MODE=off 로 끈다.
-if [ -f "scripts/canonical_gate_commit.py" ]; then
-    timeout 10 python3 scripts/canonical_gate_commit.py || true
+# (fail-open). 다만 스크립트가 없거나 죽은 것은 조용히 넘기지 않고 노란 경고로 남긴다 —
+# 게이트가 말없이 꺼져 있던 것이 M3 근거 부족의 원인이었다. CANONICAL_GATE_MODE=off 로 끈다(경고도 없음).
+if [ "${CANONICAL_GATE_MODE:-shadow}" != "off" ]; then
+    if [ -f "scripts/canonical_gate_commit.py" ]; then
+        timeout 10 python3 scripts/canonical_gate_commit.py || \
+            echo -e "${YELLOW}  [정본 게이트] 실행 실패 또는 시간 초과(rc=$?) — 커밋은 계속합니다(그림자 모드). 이번 커밋의 정본 경고·기록이 빠졌습니다${NC}" >&2
+    else
+        echo -e "${YELLOW}  [정본 게이트] scripts/canonical_gate_commit.py 가 이 체크아웃에 없어 게이트를 건너뜁니다(그림자 모드: 차단 없음). origin/main 을 반영하세요${NC}" >&2
+    fi
 fi
 
 # ── 감사: hook 통과 서명 (--no-verify 우회 감지용) ──────────────────

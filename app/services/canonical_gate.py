@@ -42,7 +42,7 @@ _NOT_CANONICAL_ELIGIBLE_KINDS = frozenset({"prototype"})
 
 # scripts/canonical_gate_commit.py 의 CANDIDATE_RE 와 같아야 한다
 # (tests/unit/test_canonical_gate_shadow.py 가 대조한다).
-CANDIDATE_PATH_RE = re.compile(r"^docs/(prd|plans|design|contracts)/")
+CANDIDATE_PATH_RE = re.compile(r"^(docs/(prd|plans|design|contracts)/|docs/reports/.+\.md$)")
 
 
 def get_mode() -> str:

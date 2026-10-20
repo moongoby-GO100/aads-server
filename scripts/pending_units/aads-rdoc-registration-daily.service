@@ -1,0 +1,20 @@
+# 승인 전 템플릿이다. 설치(/etc/systemd/system 복사·enable)는 별도 승인 뒤에 한다.
+# 설치 전제: scripts/pending_migrations/20261020_rdoc_registration_daily.sql 적용 완료.
+# 제거(롤백): systemctl disable --now aads-rdoc-registration-daily.timer 후 두 유닛 파일 삭제.
+[Unit]
+Description=AADS R-DOC 일일 정본 등록률 수집 (M5)
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/aads/aads-server
+EnvironmentFile=-/root/.config/aads-runner.env
+Environment=HOME=/root
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# 어제(KST) 하루치. origin/main 을 fetch 해 최신성을 확인해야 on_time 으로 인정된다.
+# 호스트 체크아웃이 origin/main 보다 뒤처질 수 있어 로컬 HEAD 가 아니라 origin/main 을 쓴다.
+ExecStart=/usr/bin/python3 scripts/rdoc_registration_collect.py collect --fetch --apply
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-rdoc-registration-daily

@@ -403,7 +403,8 @@ def test_pre_commit_hook_block_cannot_change_exit_code():
     start = hook.index("# ── 정본 게이트 (그림자 모드")
     end = hook.index("# ── 감사: hook 통과 서명")
     block = hook[start:end]
-    assert "canonical_gate_commit.py" in block and "|| true" in block
+    # `|| true` 로 실패를 삼키면 게이트가 말없이 꺼진다(M3 근거 부족의 원인) — 경고 후 계속하는 것이 계약이다.
+    assert "canonical_gate_commit.py" in block and "|| \\\n" in block and "계속합니다" in block
     assert "exit " not in block.replace("종료코드", "")
     # 기존 차단 게이트들보다 뒤, 서명 기록보다 앞
     assert hook.index("AAG L1/L2 구조 게이트") < start < hook.index("HOOK_SIG=\"hook-verified:$(date +%s)\"\n# 호스트")

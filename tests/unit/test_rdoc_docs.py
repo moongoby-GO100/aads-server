@@ -102,7 +102,7 @@ def test_paths_are_ascii(path: Path):
 def test_versions_declared():
     assert "version 1.3.0" in PLAN.read_text(encoding="utf-8")
     assert "version 1.3.0" in PRD.read_text(encoding="utf-8")
-    assert "version 1.3.0" in SPEC.read_text(encoding="utf-8")
+    assert "version 1.5.0" in SPEC.read_text(encoding="utf-8")
 
 
 # ── 승인본 보존 ───────────────────────────────────────────────────────

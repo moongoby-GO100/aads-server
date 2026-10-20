@@ -1,0 +1,14 @@
+# 승인 전 템플릿이다(.service 와 한 쌍). 매일 00:20 KST — 전날이 끝난 직후라 on_time 으로 기록된다.
+# Persistent=true 는 쓰지 않는다: 서버가 꺼져 있던 날을 나중에 몰아 수집하면 late_backfill 이 되어
+# 7일 연속 실측으로 인정되지 않는다. 놓친 날은 not_collected 로 남는 것이 맞다.
+[Unit]
+Description=AADS R-DOC 일일 정본 등록률 수집 타이머 (M5)
+
+[Timer]
+OnCalendar=*-*-* 00:20:00 Asia/Seoul
+AccuracySec=1min
+Persistent=false
+Unit=aads-rdoc-registration-daily.service
+
+[Install]
+WantedBy=timers.target

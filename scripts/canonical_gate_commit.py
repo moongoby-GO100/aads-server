@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """정본 게이트(그림자) — pre-commit 진입점. 경고와 로그만, 종료코드는 항상 0.
 
-스테이징된 docs/(prd|plans|design|contracts)/** 추가·수정 파일을 찾아
+스테이징된 docs/(prd|plans|design|contracts)/** 와 docs/reports/**/*.md 추가·수정 파일을 찾아
   1) 노란색 경고를 stderr 로 내고
-  2) <git-dir>/canonical_gate.log 에 고정 형식으로 append 한다.
+  2) <git-common-dir>/canonical_gate.log 에 고정 형식으로 append 한다.
+     워크트리별 git-dir 이 아니라 공용 디렉터리라서, 러너 워크트리가 폐기돼도 기록이 남는다.
 
 DB 에 접근하지 않는다(commit hook 이 DB 지연으로 느려지거나 막히면 안 된다).
 그래서 판정은 항상 `unknown` 이고, 정본 등록 여부는 집계 단계에서 로그의 경로를
@@ -23,7 +24,7 @@ import subprocess
 import sys
 
 # app/services/canonical_gate.py 의 CANDIDATE_PATH_RE 와 같아야 한다.
-CANDIDATE_RE = re.compile(r"^docs/(prd|plans|design|contracts)/")
+CANDIDATE_RE = re.compile(r"^(docs/(prd|plans|design|contracts)/|docs/reports/.+\.md$)")
 LOG_NAME = "canonical_gate.log"
 FORMAT_TAG = "CGv1"
 YELLOW = "\033[1;33m"
@@ -34,6 +35,17 @@ def _git(*args: str) -> str:
     return subprocess.run(
         ["git", *args], capture_output=True, text=True, timeout=5, check=True,
     ).stdout
+
+
+def _git_common_dir() -> str:
+    """워크트리에서도 본체 .git 을 가리킨다. 구 git 이 --git-common-dir 를 모르면 --git-dir 로 대체."""
+    try:
+        out = _git("rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+        if out:
+            return out
+    except Exception:
+        pass
+    return _git("rev-parse", "--git-dir").strip()
 
 
 def candidates() -> list[tuple[str, str]]:
@@ -76,7 +88,7 @@ def main() -> int:
             f"  {YELLOW}[정본 게이트] {path} — 정본(project_document_heads) 등록 여부를 "
             f"hook 에서는 확인하지 않습니다. 정본 없이 만든 문서면 등록하세요 (그림자 모드: 차단 없음){NC}\n"
         )
-    log_path = os.path.join(_git("rev-parse", "--git-dir").strip(), LOG_NAME)
+    log_path = os.path.join(_git_common_dir(), LOG_NAME)
     with open(log_path, "a", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     return 0
