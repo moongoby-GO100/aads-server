@@ -645,3 +645,89 @@ async def test_approval_audit_is_atomic_with_the_head_pointer(env):
                                  manifest_hash=rev["manifest_hash"], confirm=False)
     assert unconfirmed.status_code == 422
     assert len(await events(env, review_id, "approved")) == 1
+
+
+# ------------------------------------------------- approval contract (M08/M16/M18, AC-M17)
+
+async def test_approval_and_revoke_retries_are_idempotent_and_old_versions_cannot_approve(env):
+    review_id, rev1, _ = await env.to_review_ready()
+    approve = dict(idempotency_key=env.key(), expected_generation=2, revision_id=rev1["revision_id"],
+                   manifest_hash=rev1["manifest_hash"], confirm=True)
+    first, retry = await env.post(f"/{review_id}/approve", who="approver", **approve), \
+        await env.post(f"/{review_id}/approve", who="approver", **approve)
+    assert first.status_code == 200 and retry.status_code == 200 and retry.json()["idempotent"] is True
+    assert retry.json()["approval_id"] == first.json()["approval_id"]
+    assert len(await events(env, review_id, "approved")) == 1
+    reused = await env.post(f"/{review_id}/approve", who="approver", **{**approve, "expected_generation": 9})
+    assert reused.status_code == 409 and code(reused) == "idempotency_key_conflict"
+    assert (await env.get(f"/{review_id}")).json()["generation"] == 3
+
+    revoke = dict(idempotency_key=env.key(), expected_generation=3, approval_id=first.json()["approval_id"],
+                  reason="재시도 멱등 확인")
+    gone, again = await env.post(f"/{review_id}/revoke", who="approver", **revoke), \
+        await env.post(f"/{review_id}/revoke", who="approver", **revoke)
+    assert gone.status_code == 200 and again.status_code == 200 and again.json()["idempotent"] is True
+    assert len(await events(env, review_id, "revoked")) == 1
+    assert (await env.get(f"/{review_id}")).json()["generation"] == 4
+
+    # AC-M17: a card for v1 stays open, v2 is submitted, then v1 approval is attempted
+    stale_id, v1, _ = await env.to_review_ready()
+    v2 = await env.add_revision(stale_id, 2, parent_revision_id=v1["revision_id"])
+    assert v2.status_code == 201, v2.text
+    sub = await env.post(f"/{stale_id}/submit", idempotency_key=env.key(), expected_generation=3,
+                         revision_id=v2.json()["revision_id"])
+    assert sub.status_code == 200, sub.text
+    late = await env.approve(stale_id, v1, 4)
+    assert late.status_code == 409 and code(late) == "stale_revision"
+    assert late.json()["detail"]["latest_revision_id"] == v2.json()["revision_id"]
+    assert await events(env, stale_id, "approved") == []
+    ok = await env.approve(stale_id, v2.json(), 4)
+    assert ok.status_code == 200, ok.text
+    again_v1 = await env.approve(stale_id, v1, 5)
+    assert again_v1.status_code == 409 and code(again_v1) == "stale_revision"
+    assert len(await events(env, stale_id, "approved")) == 1
+    view = (await env.get(f"/{stale_id}")).json()
+    assert view["approved_revision"]["revision_id"] == v2.json()["revision_id"]
+    assert {r["revision"]: r["status"] for r in view["revisions"]}[1] != "approved"
+
+
+async def test_mockup_create_change_revise_approve_and_reread(env):
+    """Disposable-DB demonstration of the whole loop; the approval here is a test-tenant record, not a CEO approval."""
+    review_id, rev1, _ = await env.to_review_ready()
+    assert (await env.get(f"/{review_id}")).json()["status"] == "review_ready"
+    cr = str(uuid4())
+    text = "  제목을 바꿔 주세요\n승인 버튼은 아래로  "
+    asked = await env.post(f"/{review_id}/changes", idempotency_key=env.key(), expected_generation=2,
+                           change_request_id=cr, base_revision_id=rev1["revision_id"],
+                           source_message_id=env.msgs["user"], comment=text)
+    assert asked.status_code == 201 and asked.json()["approved"] is False
+    blocked = await env.approve(review_id, rev1, 3)
+    assert blocked.status_code == 409 and await events(env, review_id, "approved") == []
+    started = await env.post(f"/{review_id}/revising", idempotency_key=env.key(), expected_generation=3)
+    assert started.status_code == 200, started.text
+    rev2 = await env.add_revision(review_id, 4, parent_revision_id=rev1["revision_id"], resolves=[
+        {"change_request_id": cr, "outcome": "applied", "reason": "제목과 버튼 위치 반영"}])
+    assert rev2.status_code == 201 and rev2.json()["status"] == "draft" and rev2.json()["approval_inherited"] is False
+    assert (await env.approve(review_id, rev2.json(), 5)).status_code == 409  # draft is not approvable
+    sub = await env.post(f"/{review_id}/submit", idempotency_key=env.key(), expected_generation=5,
+                         revision_id=rev2.json()["revision_id"])
+    assert sub.status_code == 200, sub.text
+    ok = await env.approve(review_id, rev2.json(), 6)
+    assert ok.status_code == 200, ok.text
+
+    view = (await env.get(f"/{review_id}")).json()
+    assert view["status"] == "approved" and view["pending_change_requests"] == 0
+    assert view["approved_revision"]["revision_id"] == rev2.json()["revision_id"]
+    assert view["approved_revision"]["manifest_hash"] == rev2.json()["manifest_hash"]
+    assert view["approved_revision"]["approval_id"] == ok.json()["approval_id"]
+    old = (await env.get(f"/{review_id}/revisions/{rev1['revision_id']}")).json()
+    assert old["manifest_hash"] == rev1["manifest_hash"] and old["is_approved"] is False
+    new = (await env.get(f"/{review_id}/revisions/{rev2.json()['revision_id']}")).json()
+    assert new["is_approved"] is True and new["parent_revision_id"] == rev1["revision_id"]
+    report = (await env.get(f"/{review_id}/change-report")).json()
+    item = report["change_requests"][0]
+    assert item["original_text"] == text and item["outcome"] == "applied"
+    assert item["base_revision"]["revision"] == 1 and item["new_revision"]["revision"] == 2
+    assert [e["action"] for e in await events(env, review_id)] == [
+        "created", "revision_created", "submitted", "changes_requested", "revising_started", "revision_created",
+        "submitted", "approved"]
