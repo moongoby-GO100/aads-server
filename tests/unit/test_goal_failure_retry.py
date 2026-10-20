@@ -102,6 +102,8 @@ class FakeConn:
             }
         if "SELECT evidence FROM milestones" in query:
             return {"evidence": self.evidence}
+        if "completion_checklist" in query:
+            return {"status": self.milestone_status, "version": 1, "completion_checklist": None}
         if "SELECT m.evidence, m.goal_id" in query:
             return {"evidence": self.evidence, "goal_id": GOAL_ID, "tenant_id": GOAL_ID}
         if "FROM pipeline_jobs WHERE job_id" in query:

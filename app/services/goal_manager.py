@@ -809,13 +809,34 @@ class GoalStateMachine:
                     all_done = True
 
             if all_done:
-                await conn.execute(
-                    """
-                    UPDATE milestones SET status = 'completed', completed_at = NOW(), updated_at = NOW()
-                    WHERE id = $1::uuid AND status != 'completed'
-                    """,
-                    milestone_id,
-                )
+                outcome = await self._complete_milestone_if_checklist_met(conn, milestone_id)
+                if outcome["result"] == "unmet":
+                    gate = outcome["gate"]
+                    logger.warning(
+                        "goal_milestone_checklist_unmet milestone=%s unmet=%s",
+                        milestone_id, [u["step"] for u in gate["unmet"]],
+                    )
+                    return {
+                        "milestone_id": milestone_id,
+                        "completed": False,
+                        "reason": "checklist_unmet",
+                        "status": gate["status"],
+                        "stale_completion": gate["status"] == "completed",
+                        "checklist_unmet": gate["unmet"],
+                    }
+                if outcome["result"] in ("version_conflict", "missing"):
+                    return {
+                        "milestone_id": milestone_id,
+                        "completed": False,
+                        "reason": outcome["result"],
+                    }
+                if outcome["result"] == "already_completed":
+                    return {
+                        "milestone_id": milestone_id,
+                        "completed": True,
+                        "already_completed": True,
+                    }
+                # 실제로 이번 호출이 완료로 바꾼 경우에만 이후 단계(이력 이동·다음 마일스톤 진입)를 밟는다.
                 try:
                     await archive_exhaustion_note(conn, milestone_id)
                 except Exception as exc:  # noqa: BLE001 — 이력 이동 실패가 완료 판정을 막지 않는다
@@ -847,6 +868,43 @@ class GoalStateMachine:
                     else {}
                 ),
             }
+
+    @staticmethod
+    async def _complete_milestone_if_checklist_met(conn, milestone_id: str) -> dict[str, Any]:
+        """체크리스트 판정과 완료 쓰기를 마일스톤 행잠금 한 트랜잭션으로 묶는다.
+
+        `update_checklist_item` 도 같은 행을 FOR UPDATE 로 잠그므로 판정과 쓰기 사이에
+        항목이 되돌려질 수 없고, 잠금이 없는 환경이어도 version CAS 가 막는다.
+        다음 단계 진입(`_advance_after_milestone`)은 새 conn 을 쓰므로 호출자가 커밋 뒤에 한다.
+        result: completed(이번 호출이 완료로 바꿈) | already_completed | unmet | version_conflict | missing
+        """
+        from app.services.milestone_checklist import evaluate_checklist
+
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                SELECT m.status, m.version,
+                       NULLIF(to_jsonb(m)->'completion_checklist', 'null'::jsonb) AS completion_checklist
+                FROM milestones m WHERE m.id = $1::uuid FOR UPDATE
+                """,
+                milestone_id,
+            )
+            if not row:
+                return {"result": "missing"}
+            gate = {**evaluate_checklist(row["completion_checklist"]), "status": row["status"]}
+            if gate["explicit"] and not gate["satisfied"]:
+                return {"result": "unmet", "gate": gate}
+            if row["status"] == "completed":
+                return {"result": "already_completed"}
+            tag = await conn.execute(
+                """
+                UPDATE milestones SET status = 'completed', completed_at = NOW(), updated_at = NOW(),
+                       version = version + 1
+                WHERE id = $1::uuid AND status != 'completed' AND version = $2
+                """,
+                milestone_id, row["version"],
+            )
+        return {"result": "completed" if tag == "UPDATE 1" else "version_conflict"}
 
     async def _recover_stale_milestone_block(
         self,

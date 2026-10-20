@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 require_tenant_viewer = require_tenant_role(TenantRole.VIEWER)
 require_tenant_member = require_tenant_role(TenantRole.MEMBER)
+require_tenant_admin = require_tenant_role(TenantRole.ADMIN)
 
 _SESSION_UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -304,6 +305,19 @@ class ConfirmRequest(BaseModel):
     ok: bool
     reason: Optional[str] = None
     negative: bool = False
+
+
+class ChecklistItemUpdateRequest(BaseModel):
+    status: Literal["pending", "in_progress", "blocked", "done", "completed"]
+    evidence: Optional[str] = Field(None, max_length=4000)
+    expected_version: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=200)
+
+
+class MilestoneCompletionCorrectionRequest(BaseModel):
+    expected_version: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=200)
+    reason: str = Field(min_length=10, max_length=2000)
 
 
 class InterveneRequest(BaseModel):
@@ -1892,6 +1906,90 @@ async def set_milestone_owner(
         "goal_id": gid, "milestone_id": mid, "owner_session_id": new_session,
         "owner_role_key": new_role, "version": version, "changed": True,
     }
+
+
+def _checklist_http_error(exc: Any) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.detail())
+
+
+@router.patch("/goals/{goal_id}/milestones/{milestone_id}/checklist/{step}")
+async def update_milestone_checklist_item(
+    goal_id: UUID, milestone_id: UUID, step: str, req: ChecklistItemUpdateRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
+    """체크리스트 항목 1개를 근거와 함께 갱신한다 (version CAS · request_id 멱등).
+
+    승인권자 항목을 done 으로 바꾸는 것은 사람 CEO 주체만 가능하다. 러너·서비스
+    키·시스템 주체의 done 은 승인으로 인정하지 않는다.
+    """
+    from app.core.db_pool import get_pool
+    from app.services.milestone_checklist import ChecklistError, update_checklist_item
+
+    tenant_id = _tenant_id(context)
+    actor = str((context.get("user") or {}).get("user_id") or "")
+    try:
+        async with get_pool().acquire() as conn:
+            result = await update_checklist_item(
+                conn, goal_id=str(goal_id), milestone_id=str(milestone_id),
+                tenant_id=tenant_id, step=step, status=req.status,
+                evidence=req.evidence, expected_version=req.expected_version,
+                request_id=req.request_id, actor=actor,
+                actor_is_approver=_is_ceo_principal(context),
+                now_iso=datetime.now(timezone.utc).isoformat(),
+            )
+    except ChecklistError as exc:
+        raise _checklist_http_error(exc) from exc
+    logger.info(
+        "milestone_checklist_item goal=%s milestone=%s step=%s tenant=%s actor=%s "
+        "changed=%s status=%s version=%s",
+        goal_id, milestone_id, step, tenant_id, actor, result.get("changed"),
+        result.get("status"), result.get("version"),
+    )
+    return {"goal_id": str(goal_id), **result}
+
+
+@router.post("/goals/{goal_id}/milestones/{milestone_id}/reopen-unverified")
+async def reopen_unverified_milestone(
+    goal_id: UUID, milestone_id: UUID, req: MilestoneCompletionCorrectionRequest,
+    context: dict[str, Any] = Depends(require_tenant_admin),
+):
+    """체크리스트가 미충족인데 completed 인 마일스톤만 in_progress 로 정정한다.
+
+    rewind 와 달리 발송 기록·증거·체크리스트를 지우지 않는다(비파괴).
+    """
+    from app.core.db_pool import get_pool
+    from app.services.goal_manager import goal_state_machine
+    from app.services.milestone_checklist import ChecklistError, reopen_unverified_completion
+
+    tenant_id = _tenant_id(context)
+    actor = str((context.get("user") or {}).get("user_id") or "")
+    try:
+        async with get_pool().acquire() as conn:
+            result = await reopen_unverified_completion(
+                conn, goal_id=str(goal_id), milestone_id=str(milestone_id),
+                tenant_id=tenant_id, expected_version=req.expected_version,
+                request_id=req.request_id, reason=req.reason, actor=actor,
+            )
+    except ChecklistError as exc:
+        raise _checklist_http_error(exc) from exc
+    if result.get("changed"):
+        await goal_state_machine._update_goal_progress(str(goal_id))
+        await goal_state_machine._trace(
+            "milestone_completion_corrected",
+            goal_id=str(goal_id),
+            input_summary=f"milestone={milestone_id} request_id={req.request_id}",
+            output_summary="completed -> in_progress (checklist unmet)",
+            metadata={
+                "milestone_id": str(milestone_id), "tenant_id": tenant_id, "actor": actor,
+                "reason": req.reason, "unmet": result.get("unmet"),
+                "version": result.get("version"),
+            },
+        )
+    logger.info(
+        "milestone_completion_corrected goal=%s milestone=%s tenant=%s actor=%s changed=%s",
+        goal_id, milestone_id, tenant_id, actor, result.get("changed"),
+    )
+    return {"goal_id": str(goal_id), **result}
 
 
 @router.post("/goals/{goal_id}/link-task")

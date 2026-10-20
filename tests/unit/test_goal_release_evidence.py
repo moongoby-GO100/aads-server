@@ -299,6 +299,12 @@ class _FakeDB:
             ms = self._milestone(args[0])
             return {"goal_id": ms["goal_id"]} if ms else None
 
+        if "completion_checklist" in q and "FROM milestones m WHERE m.id" in q:
+            ms = self._milestone(args[0])
+            return ({"status": ms["status"], "version": ms.get("version", 1),
+                     "completion_checklist": ms.get("completion_checklist")}
+                    if ms else None)
+
         if "SELECT sequence_order FROM milestones WHERE id" in q:
             ms = self._milestone(args[0])
             return {"sequence_order": ms["sequence_order"]} if ms else None
