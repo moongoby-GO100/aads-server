@@ -14,7 +14,12 @@ from typing import Any
 import asyncpg
 
 from app.core.db_pool import get_pool
-from app.services.aag_brief_v2 import build_brief_v2
+from app.services.aag_brief_v2 import (
+    brief_snapshot_from_row,
+    brief_status,
+    build_brief_v2,
+    match_findings,
+)
 from app.services.aag_query_v2 import (
     AAGQueryError,
     load_authoritative_snapshot,
@@ -110,6 +115,15 @@ def local_graph(project: str) -> tuple[dict[str, Any] | None, Path | None, str]:
     return None, None, f"{project.upper()} 스냅샷과 로컬 그래프가 없습니다."
 
 
+def _empty_v2_reason(page: dict[str, Any]) -> str:
+    """An empty page is a statement about the filter, not about absence of impact."""
+    reason = "필터 조건에 맞는 결함이 이 스냅샷에 없습니다(영향 없음/무결함의 증거가 아님)."
+    limits = page.get("limitation") or []
+    if limits:
+        reason += " 미입증 사유: " + "; ".join(limits)
+    return reason
+
+
 async def get_findings_data(
     project: str, *, rule: str | None = None, severity: str | None = None,
     path_prefix: str | None = None, limit: int = 50,
@@ -152,9 +166,11 @@ async def get_findings_data(
             "stale_minutes": stale_minutes(page["verified_at"]),
             "source": "central_db_v2",
             "authoritative": True,
+            "freshness": page.get("freshness"),
+            "limitation": page.get("limitation") or [],
             "findings": page["findings"],
             "pagination": page["pagination"],
-            "reason": "스냅샷에 결함이 없습니다." if not page["findings"] else "",
+            "reason": _empty_v2_reason(page) if not page["findings"] else "",
         }
     snapshot = await latest_snapshot(project)
     reason = ""
@@ -209,6 +225,11 @@ async def aag_findings_text(**params: Any) -> str:
         f"stale_minutes={data.get('stale_minutes', '-')} | source={data.get('source', '-')} | "
         f"snapshot_id={data.get('snapshot_id', '-')} | commit={data.get('commit_sha', '-')}"
     )
+    if data.get("source") == "central_db_v2":
+        freshness = data.get("freshness") or {}
+        header += f" | freshness={freshness.get('status', 'unknown')}"
+        if data.get("limitation"):
+            header += " | proof=not_proven"
     if not findings:
         return f"{header}\n결과 0건. 사유: {data.get('reason') or '필터 조건에 맞는 결함이 없습니다.'}"
     lines = [header, "severity | rule | location | detail", "--- | --- | --- | ---"]
@@ -238,41 +259,13 @@ async def aag_brief_text(
             )
             return "결과 0건. 사유: authoritative AAG v2 snapshot이 없습니다."
         target_key = target.strip().replace("\\", "/")
-        matches = []
-        for finding in snapshot.get("findings") or []:
-            identities = (
-                finding.get("file"), finding.get("module"), finding.get("path"),
-                finding.get("key"), finding.get("semantic_target"),
-            )
-            if any(
-                target_key and target_key in str(value or "").replace("\\", "/")
-                for value in identities
-            ):
-                matches.append(finding)
-        state = "detected" if matches else (
-            "partial" if snapshot.get("unresolved") else "not_detected"
+        matches = match_findings(
+            snapshot.get("findings") or [], target_key, snapshot["repository_id"],
         )
         result = build_brief_v2(
-            snapshot={
-                "snapshot_id": str(snapshot["snapshot_id"]),
-                "observation_id": str(snapshot["observation_id"]),
-                "run_id": str(snapshot["run_id"]),
-                "project": snapshot["project"],
-                "repository_id": snapshot["repository_id"],
-                "target_ref": snapshot["target_ref"],
-                "governance_scope": snapshot["governance_scope"],
-                "resolved_commit_sha": snapshot["resolved_commit_sha"],
-                "expected_target_ref_head_sha": snapshot["expected_target_ref_head_sha"],
-                "source": "central_db", "authoritative": True,
-                "verified_at": snapshot["verified_at"],
-                "analyzer": {
-                    "name": "scan_aads", "version": snapshot["scanner_version"],
-                    "ruleset_digest": snapshot["ruleset_digest"],
-                    "scan_scope_digest": snapshot["scan_scope_digest"],
-                },
-                "stats": snapshot.get("stats") or {}, "truncated": False,
-            },
-            target=target_key, findings=matches, status=state,
+            snapshot=brief_snapshot_from_row(snapshot),
+            target=target_key[:500], findings=matches,
+            status=brief_status(matches, snapshot.get("unresolved")),
         )
         await record_consumer_event(
             consumer="session-tool:aag_brief", api_version="v2",

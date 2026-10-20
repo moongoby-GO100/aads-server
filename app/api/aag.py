@@ -14,7 +14,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth import get_current_user
 from app.core.db_pool import get_pool
-from app.services.aag_brief_v2 import build_brief_v2
+from app.services.aag_brief_v2 import (
+    brief_snapshot_from_row,
+    brief_status,
+    build_brief_v2,
+    match_findings,
+    render_brief_text,
+    snapshot_freshness,
+    snapshot_limitations,
+)
 from app.services.aag_governance import (
     AAGAuthorizationError,
     AAGWorkflowError,
@@ -165,6 +173,15 @@ def _governance_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=409, detail=str(exc))
 
 
+def _json_field(value: Any, fallback: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return fallback
+    return value if isinstance(value, type(fallback)) else fallback
+
+
 def _require_v2_enabled() -> None:
     if os.getenv("AAG_V2_ENABLED", "0").strip().lower() not in {"1", "true", "yes", "on"}:
         raise HTTPException(status_code=404, detail="AAG v2 is disabled")
@@ -304,7 +321,7 @@ async def get_latest_snapshot_v2(
         )
     if not row:
         raise HTTPException(status_code=404, detail="No authoritative AAG v2 snapshot")
-    freshness_minutes = stale_minutes(row["verified_at"])
+    freshness = snapshot_freshness(row["verified_at"])
     return {
         "schema_version": "aag-v2",
         "snapshot": {
@@ -338,8 +355,15 @@ async def get_latest_snapshot_v2(
         "generated_at": row["generated_at"],
         "verified_at": row["verified_at"],
         "first_published_at": row["first_published_at"],
-        "freshness": {"status": "fresh", "age_minutes": freshness_minutes},
-        "limitation": [],
+        "freshness": freshness,
+        "limitation": snapshot_limitations({
+            "source": "central_db", "authoritative": True,
+            "resolved_commit_sha": row["resolved_commit_sha"],
+            "expected_target_ref_head_sha": row["expected_target_ref_head_sha"],
+            "verified_at": row["verified_at"],
+            "stats": _json_field(row["stats"], {}),
+            "unresolved": _json_field(row["unresolved"], []),
+        }),
     }
 
 
@@ -362,20 +386,10 @@ async def get_brief_v2(
     )
     snapshot = latest["snapshot"]
     target_key = target.strip().replace("\\", "/")
-    matches = []
-    for finding in snapshot.get("findings") or []:
-        identities = (
-            finding.get("file"), finding.get("module"), finding.get("path"),
-            finding.get("key"), finding.get("semantic_target"),
-        )
-        if any(
-            target_key and target_key in str(value or "").replace("\\", "/")
-            for value in identities
-        ):
-            matches.append(finding)
-    status = "detected" if matches else (
-        "partial" if snapshot.get("unresolved") else "not_detected"
+    matches = match_findings(
+        snapshot.get("findings") or [], target_key, latest["ref"]["repository_id"],
     )
+    status = brief_status(matches, snapshot.get("unresolved"))
     return build_brief_v2(
         snapshot={
             "snapshot_id": snapshot["id"],
@@ -436,46 +450,14 @@ async def get_runner_brief_v2(
         raise HTTPException(status_code=404, detail="No authoritative AAG v2 snapshot")
 
     target_key = body.target.strip().replace("\\", "/")
-    matches = []
-    for finding in snapshot.get("findings") or []:
-        identities = (
-            finding.get("file"), finding.get("module"), finding.get("path"),
-            finding.get("key"), finding.get("semantic_target"),
-        )
-        if any(
-            target_key and target_key in str(value or "").replace("\\", "/")
-            for value in identities
-        ):
-            matches.append(finding)
-    status = "detected" if matches else (
-        "partial" if snapshot.get("unresolved") else "not_detected"
+    matches = match_findings(
+        snapshot.get("findings") or [], target_key, snapshot["repository_id"],
     )
     brief = build_brief_v2(
-        snapshot={
-            "snapshot_id": str(snapshot["snapshot_id"]),
-            "observation_id": str(snapshot["observation_id"]),
-            "run_id": str(snapshot["run_id"]),
-            "project": snapshot["project"],
-            "repository_id": snapshot["repository_id"],
-            "target_ref": snapshot["target_ref"],
-            "governance_scope": snapshot["governance_scope"],
-            "resolved_commit_sha": snapshot["resolved_commit_sha"],
-            "expected_target_ref_head_sha": snapshot["expected_target_ref_head_sha"],
-            "source": "central_db",
-            "authoritative": True,
-            "verified_at": snapshot["verified_at"],
-            "analyzer": {
-                "name": "scan_aads",
-                "version": snapshot["scanner_version"],
-                "ruleset_digest": snapshot["ruleset_digest"],
-                "scan_scope_digest": snapshot["scan_scope_digest"],
-            },
-            "stats": snapshot.get("stats") or {},
-            "truncated": False,
-        },
-        target=target_key,
+        snapshot=brief_snapshot_from_row(snapshot),
+        target=target_key[:500],
         findings=matches,
-        status=status,
+        status=brief_status(matches, snapshot.get("unresolved")),
     )
     await record_consumer_event(
         consumer=f"pipeline-runner:{principal.credential_id}",
@@ -488,7 +470,7 @@ async def get_runner_brief_v2(
         snapshot_id=str(snapshot["snapshot_id"]),
         latency_ms=int((perf_counter() - started) * 1000),
     )
-    return {"brief": brief, "fallback_used": False}
+    return {"brief": brief, "brief_text": render_brief_text(brief), "fallback_used": False}
 
 
 @router.get("/v2/findings")

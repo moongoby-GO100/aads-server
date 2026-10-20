@@ -3898,6 +3898,17 @@ _SERVICE_AUTH_EXACT_PATHS = {
     "/api/v1/integrations/clobe/oauth/callback",
 }
 
+# AAG v2 scanner routes carry an opaque project credential (X-AAG-Scanner-Token)
+# that authenticate_scanner() verifies against aag_scanner_credentials (hash,
+# expiry, revocation, project binding) and rejects with 403 when it is missing
+# or wrong.  Runners and scanners have no JWT, so the middleware used to answer
+# 401 before the route ran.  Exempt exactly these (method, path) pairs: no
+# prefix, no other method, and never on header presence alone.
+_SERVICE_AUTH_EXACT_ROUTES = {
+    ("POST", "/api/v1/aag/v2/runner-brief"),
+    ("POST", "/api/v1/aag/v2/snapshots"),
+}
+
 # Public read-only routes must be listed individually. Never place the
 # surrounding project-docs prefix in the broad prefix exemptions above: that
 # would also expose /project-docs/scan (multi-project file metadata) and
@@ -3921,6 +3932,7 @@ async def jwt_auth_middleware(request: Request, call_next):
     if (
         any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES)
         or path in _SERVICE_AUTH_EXACT_PATHS
+        or (request.method, path) in _SERVICE_AUTH_EXACT_ROUTES
         or path in _PUBLIC_READONLY_EXACT_PATHS
     ):
         return await call_next(request)

@@ -5527,7 +5527,7 @@ run_job() {
         # 브리프 생성 실패가 본 작업을 실패시켜서는 안 되므로 전부 `|| true` 로 흘린다.
         local aag_brief="" aag_step0_hint="" aag_brief_lines=0
         local approved_document_brief=""
-        local aag_brief_bin="" aag_brief_source="" aag_out=""
+        local aag_brief_bin="" aag_brief_source="" aag_out="" aag_skip_reason="no_output_or_timeout"
         local aag_v2_enabled="${AAG_V2_RUNNER_ENABLED:-0}"
         local aag_token_var="AAG_SCANNER_TOKEN_${project^^}"
         aag_token_var="${aag_token_var//-/_}"
@@ -5564,8 +5564,15 @@ run_job() {
                         -H "@${aag_headers}" \
                         --data-binary "@${aag_payload}" \
                         "${aag_api_base}/aag/v2/runner-brief" 2>/dev/null) || aag_out=""
+                    # Only the server-rendered brief_text of a non-fallback response reaches the
+                    # worker prompt; raw JSON or a fallback payload is dropped (fail-closed).
+                    if [[ -n "$aag_out" ]]; then
+                        aag_out=$(printf '%s' "$aag_out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.stdout.write(d["brief_text"] if d.get("fallback_used") is False else "")' 2>/dev/null) || aag_out=""
+                    fi
+                    aag_skip_reason="central_v2_unavailable_or_no_snapshot"
                 fi
             else
+                aag_skip_reason="project_credential_missing"
                 log "  AAG_BRIEF_SKIP job=$job_id project=$project source=$aag_brief_source reason=project_credential_missing"
             fi
         else
@@ -5590,8 +5597,9 @@ run_job() {
             log "  AAG_BRIEF_OK job=$job_id project=$project source=$aag_brief_source bytes=${#aag_out} nodes=${aag_brief_lines}"
             record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"project\":\"${project}\",\"source\":\"${aag_brief_source}\",\"bytes\":${#aag_out},\"nodes\":${aag_brief_lines}}"
         elif [[ -n "$aag_brief_source" ]]; then
-            log "  AAG_BRIEF_SKIP job=$job_id project=$project source=$aag_brief_source reason=no_output_or_timeout"
-            record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"project\":\"${project}\",\"source\":\"${aag_brief_source}\",\"bytes\":0,\"nodes\":0,\"skipped_reason\":\"no_output_or_timeout\"}"
+            [[ "$aag_skip_reason" == project_credential_missing ]] || \
+                log "  AAG_BRIEF_SKIP job=$job_id project=$project source=$aag_brief_source reason=$aag_skip_reason"
+            record_runner_event "$job_id" "aag_brief_attached" "running" "claude_code_work" "$current_model" "" "$job_size" "" "{\"project\":\"${project}\",\"source\":\"${aag_brief_source}\",\"bytes\":0,\"nodes\":0,\"skipped_reason\":\"${aag_skip_reason}\"}"
         fi
 
         approved_document_brief=$(approved_document_runner_brief "$job_id" "$project")

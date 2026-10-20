@@ -16,6 +16,7 @@ from uuid import UUID
 import asyncpg
 
 from app.core.db_pool import get_pool
+from app.services.aag_brief_v2 import snapshot_freshness, snapshot_limitations
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,10 @@ async def query_findings_page(
         governance_scope=governance_scope, snapshot_id=snapshot_id,
     )
     if not snapshot:
+        if cursor or snapshot_id:
+            raise AAGQueryError(
+                "pinned snapshot is no longer the latest authoritative pointer; restart pagination"
+            )
         raise AAGQueryError("no authoritative AAG v2 snapshot")
     findings = sorted(
         [item for item in snapshot["findings"] if isinstance(item, dict) and _matches(item, filters)],
@@ -235,7 +240,15 @@ async def query_findings_page(
             "pinned": True, "offset": offset, "page_size": page_size,
             "returned": len(page), "total": len(findings), "next_cursor": next_cursor,
         },
-        "limitation": [],
+        "freshness": snapshot_freshness(snapshot["verified_at"]),
+        "limitation": snapshot_limitations({
+            "source": "central_db", "authoritative": True,
+            "resolved_commit_sha": snapshot["resolved_commit_sha"],
+            "expected_target_ref_head_sha": snapshot["expected_target_ref_head_sha"],
+            "verified_at": snapshot["verified_at"],
+            "stats": snapshot.get("stats") or {},
+            "unresolved": snapshot.get("unresolved") or [],
+        }),
     }
 
 
