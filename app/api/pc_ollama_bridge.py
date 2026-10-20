@@ -44,13 +44,19 @@ _MODEL_MAP = {
     "qwen2.5vl:3b": "qwen2.5vl:3b",
     "pc-qwen2.5vl-7b": "qwen2.5vl:7b",
     "qwen2.5vl:7b": "qwen2.5vl:7b",
-    # 2026-09-21 CEO PC 에 실제로 설치된 유일한 모델(`ollama list` 실측).
-    # IQ2_XS 는 27B 를 9.4GB 로 욱여넣은 2비트급 압축이다. 문장 이해·분류·구조
-    # 판단은 쓸 만하지만 숫자·고유명사·긴 논리 사슬에서 미끄러진다. 금액·수량
-    # 계산이나 최종 판정에 쓰지 마라 — 분류·요약·2차 판독 용도다.
-    "pc-qwen38-27b": "hf.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF:IQ2_XS",
-    "hf.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF:IQ2_XS": "hf.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF:IQ2_XS",
+    # 2026-10-20 CEO 지시로 27B 를 bonsai-2:27b(8.3GB, 32.5 tok/s) 로 교체했다.
+    # 기존 별칭 pc-qwen38-27b 는 검수 보조(runner_review_advisory_config)·LiteLLM 이
+    # 쓰므로 이름은 유지하고 실제 대상만 옮긴다. 옛 hf.co IQ2_XS 태그(10.2 tok/s)는 제거.
+    "pc-qwen38-27b": "bonsai-2:27b",
+    "pc-bonsai2-27b": "bonsai-2:27b",
+    "bonsai-2:27b": "bonsai-2:27b",
+    "pc-qwen35-9b": "qwen3.5:9b",
+    "qwen3.5:9b": "qwen3.5:9b",
 }
+
+# Bonsai README 권장 비사고 모드 샘플링. 호출자가 지정하지 않은 값에만 적용한다.
+_NON_THINKING_SAMPLING = {"temperature": 0.7, "top_p": 0.8, "presence_penalty": 1.5}
+_NON_THINKING_TARGETS = frozenset({"bonsai-2:27b", "qwen3.5:9b"})
 
 
 _PEER_HOP_KEY = "_pc_ollama_peer_hop"
@@ -201,7 +207,13 @@ async def _run_pc_ollama_chat(payload: dict[str, Any]) -> dict[str, Any]:
 
     options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
     max_tokens = payload.get("max_tokens") or options.get("num_predict") or 2048
-    temperature = payload.get("temperature", options.get("temperature", 0.2))
+    tuned = _NON_THINKING_SAMPLING if ollama_model in _NON_THINKING_TARGETS else {}
+    temperature = payload.get("temperature", options.get("temperature", tuned.get("temperature", 0.2)))
+    sampling = {
+        key: payload.get(key, options.get(key, tuned[key]))
+        for key in ("top_p", "presence_penalty")
+        if key in tuned or key in payload or key in options
+    }
     timeout_seconds = float(payload.get("timeout_seconds") or 300)
 
     result = await pc_agent_manager.execute_routed_command(
@@ -210,6 +222,7 @@ async def _run_pc_ollama_chat(payload: dict[str, Any]) -> dict[str, Any]:
             "model": ollama_model,
             "messages": _normalize_messages(payload.get("messages")),
             "temperature": temperature,
+            **sampling,
             "max_tokens": max_tokens,
             "timeout_seconds": timeout_seconds,
             "think": bool(payload.get("think", False)),

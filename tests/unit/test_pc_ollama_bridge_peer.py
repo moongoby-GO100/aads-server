@@ -54,3 +54,47 @@ def test_normalize_messages_does_not_fetch_remote_images():
     ])
 
     assert messages == [{"role": "user", "content": "check"}]
+
+
+def test_model_map_bonsai2_and_qwen35_aliases():
+    from app.api.pc_ollama_bridge import _MODEL_MAP
+
+    assert _MODEL_MAP["pc-qwen38-27b"] == "bonsai-2:27b"
+    assert _MODEL_MAP["pc-bonsai2-27b"] == "bonsai-2:27b"
+    assert _MODEL_MAP["pc-qwen35-9b"] == "qwen3.5:9b"
+    assert not any(v.startswith("hf.co/") for v in _MODEL_MAP.values())
+
+
+def test_run_pc_ollama_chat_sends_non_thinking_sampling(monkeypatch):
+    from app.api import pc_ollama_bridge
+    from app.services import pc_agent_manager as manager_module
+
+    captured = {}
+
+    async def fake_execute(**kwargs):
+        captured.update(kwargs["params"])
+        return {"status": "success", "result": {"result": {"content": "ok", "raw": {"done": True}}}}
+
+    monkeypatch.setattr(manager_module.pc_agent_manager, "execute_routed_command", fake_execute)
+    result = asyncio.run(pc_ollama_bridge._run_pc_ollama_chat(
+        {"model": "pc-bonsai2-27b", "messages": [{"role": "user", "content": "hi"}]}
+    ))
+
+    assert result["ollama_model"] == "bonsai-2:27b"
+    assert captured["think"] is False
+    assert captured["temperature"] == 0.7
+    assert captured["top_p"] == 0.8
+    assert captured["presence_penalty"] == 1.5
+
+    captured.clear()
+    asyncio.run(pc_ollama_bridge._run_pc_ollama_chat(
+        {"model": "pc-qwen35-9b", "temperature": 0.1, "messages": [{"role": "user", "content": "hi"}]}
+    ))
+    assert captured["temperature"] == 0.1
+
+    captured.clear()
+    asyncio.run(pc_ollama_bridge._run_pc_ollama_chat(
+        {"model": "pc-gemma4-e4b", "messages": [{"role": "user", "content": "hi"}]}
+    ))
+    assert captured["temperature"] == 0.2
+    assert "top_p" not in captured
