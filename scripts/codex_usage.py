@@ -34,6 +34,7 @@ import base64
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import time
@@ -413,6 +414,31 @@ def write_state(accounts: list[dict]) -> None:
     tmp.replace(STATE_FILE)
 
 
+def push_state_remote() -> None:
+    """갱신한 state.json 을 원격 러너 서버로 배포한다. 실패해도 수집을 막지 않는다.
+
+    원격 러너는 로컬 사본만 읽으므로 배포가 끊기면 꺼 둔 계정을 계속 고른다(2026-10-20).
+    SSH 대상·포트는 codex_auth_sync.sh 한 곳에만 둔다.
+    """
+    if os.getenv("CODEX_STATE_PUSH", "1") == "0":
+        return
+    script = Path(__file__).with_name("codex_auth_sync.sh")
+    # 새 세션으로 띄워 시간 초과 시 ssh/scp 자식까지 프로세스 그룹째 정리한다.
+    proc = None
+    try:
+        proc = subprocess.Popen(["bash", str(script), "--push-state"], start_new_session=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc.wait(timeout=240)
+    except Exception as exc:  # noqa: BLE001 — 배포 실패가 116 갱신을 막으면 안 된다
+        print(f"state.json 원격 배포 실패: {type(exc).__name__}")
+        if proc is not None and proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def push_rate_limit(key_name: str, retry_text: str) -> str:
     """한도 실패에서 읽은 복귀 시각을 DB 에 적는다."""
     try:
@@ -732,6 +758,7 @@ def main() -> int:
 
         # 릴레이는 state.json 만 읽고, API/대시보드는 DB 만 읽는다. 둘 다 여기서 쓴다.
         write_state(accounts)
+        push_state_remote()
         push_snapshots(accounts, usage)
         push_last_used(accounts)
         # is_active 는 건드리지 않는다 — 계정 비활성화는 CEO 승인 사항이다.

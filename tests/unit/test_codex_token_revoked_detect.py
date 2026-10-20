@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -294,7 +295,9 @@ def _state(tmp_path: Path, accounts: list[dict]) -> Path:
     for a in accounts:
         (tmp_path / a["key_name"]).mkdir(exist_ok=True)
     state = tmp_path / "state.json"
-    state.write_text(json.dumps({"accounts": accounts}))
+    # 피커는 updated_at 이 낡은 state.json 을 쓰지 않는다 — 기존 케이스는 방금 만든 파일로 본다.
+    state.write_text(json.dumps({"updated_at": datetime.now(timezone.utc).isoformat(),
+                                 "accounts": accounts}))
     return state
 
 

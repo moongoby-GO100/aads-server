@@ -2368,23 +2368,43 @@ get_db_anthropic_slots() {
 # 있는데도 MAIN 계정이 터뜨린 마커 때문에 사다리의 codex 6칸이 통째로 skip 됐다.
 # 계정 홈은 materialize_codex_accounts.py 가 만들어 두고, CODEX_HOME 으로
 # 계정을 고르는 방식은 codex_usage.py 가 이미 쓰고 있는 것과 같다.
+#
+# 2026-10-20: state.json 은 116 의 codex_usage.py --sync 가 만들어 원격으로 배포한다(codex_auth_sync.sh
+# --push-state). 배포가 끊긴 원격(contabo14)은 9/19 사본을 한 달 가까이 읽어, 꺼 둔 JINAH 를 계속 골라 401 이
+# 났다(codex.remote_state_json_stale). payload.updated_at 이 AADS_CODEX_STATE_MAX_AGE_SEC(기본 3600)보다
+# 오래됐거나 없거나 못 읽으면 낡은 것으로 보고 고르지 않는다 → 호출부가 기본 CODEX_HOME 을 쓴다.
 codex_pick_account_home() {
     local state="${AADS_CODEX_ACCOUNTS_STATE:-/root/.codex-accounts/state.json}"
     [[ -f "$state" ]] || return 1
-    python3 - "$state" <<'PY' || return 1
+    local max_age="${AADS_CODEX_STATE_MAX_AGE_SEC:-3600}" _out="" _rc=0
+    [[ "$max_age" =~ ^[0-9]+$ ]] || max_age=3600
+    _out="$(python3 - "$state" "$max_age" <<'PY'
 import json
 import os
 import re
 import sys
 import time
+from datetime import datetime
 
 try:
     with open(sys.argv[1], "r", encoding="utf-8") as handle:
         payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("payload")
 except Exception:
     raise SystemExit(1)
 
 now = time.time()
+age = None
+try:
+    stamp = datetime.fromisoformat(str(payload.get("updated_at")))
+    if stamp.tzinfo is not None:
+        age = now - stamp.timestamp()
+except (TypeError, ValueError):
+    pass
+if age is None or age > int(sys.argv[2]):
+    print("unknown" if age is None else int(age))
+    raise SystemExit(2)
 prefix = os.environ.get("AADS_CODEX_REVOKED_MARKER_PREFIX") or "/tmp/aads-codex-revoked-"
 best = None
 for acct in payload.get("accounts", []):
@@ -2428,6 +2448,48 @@ if not os.path.isdir(home):
     raise SystemExit(1)
 print(home)
 PY
+)" || _rc=$?
+    if [[ $_rc -eq 2 ]]; then
+        log "CODEX_STATE_STALE age=${_out}s max=${max_age}s state=${state} — 기본 CODEX_HOME 사용" >&2
+        return 1
+    fi
+    [[ $_rc -eq 0 && -n "$_out" ]] || return 1
+    printf '%s\n' "$_out"
+}
+
+# 시도마다 계정 홈을 고른다. 결과는 CODEX_PICKED_HOME(전역)에 둔다 — $(...) 로 부르면 export 가 서브셸에서 사라진다.
+# 피커가 실패(낡은 state.json·후보 없음)하면 이전 시도에서 우리가 export 한 CODEX_HOME 을 되돌려 기본 홈으로 복귀한다.
+# 안 되돌리면 낡은/폐기 계정 홈이 그대로 남아 "기본 CODEX_HOME 사용" 이 거짓이 된다(codex.remote_state_json_stale).
+# 러너가 시작 전에 받은 CODEX_HOME 은 우리가 만든 값이 아니므로 최초 export 직전에 기억했다가 그대로 복원한다.
+codex_restore_home() {
+    if [[ -n "${_CODEX_HOME_EXPORTED:-}" && "${CODEX_HOME:-}" == "$_CODEX_HOME_EXPORTED" ]]; then
+        if [[ "${_CODEX_HOME_ORIG_SET:-0}" == "1" ]]; then
+            export CODEX_HOME="${_CODEX_HOME_ORIG:-}"
+        else
+            unset CODEX_HOME
+        fi
+    fi
+    _CODEX_HOME_EXPORTED=""
+}
+
+codex_select_account_home() {
+    local picked=""
+    picked="$(codex_pick_account_home || true)"
+    CODEX_PICKED_HOME="$picked"
+    if [[ -n "$picked" ]]; then
+        if [[ -z "${_CODEX_HOME_EXPORTED:-}" ]]; then
+            if [[ -n "${CODEX_HOME+x}" ]]; then
+                _CODEX_HOME_ORIG="$CODEX_HOME"; _CODEX_HOME_ORIG_SET=1
+            else
+                _CODEX_HOME_ORIG=""; _CODEX_HOME_ORIG_SET=0
+            fi
+        fi
+        export CODEX_HOME="$picked"
+        _CODEX_HOME_EXPORTED="$picked"
+    else
+        codex_restore_home
+    fi
+    return 0
 }
 
 # 읽기전용은 앞 20줄 안에서 줄 전체가 `MODE: READ_ONLY`(대소문자 무시, 앞뒤 공백 허용)일 때만 참이다.
@@ -5595,9 +5657,9 @@ ${safe_instruction}"
             # 있으면 그 계정 홈으로 실행하고 마커는 보지 않는다 — 마커를 보는 것은
             # 쓸 수 있는 계정이 하나도 없을 때뿐이다.
             local _codex_home=""
-            _codex_home="$(codex_pick_account_home || true)"
+            codex_select_account_home
+            _codex_home="$CODEX_PICKED_HOME"
             if [[ -n "$_codex_home" ]]; then
-                export CODEX_HOME="$_codex_home"
                 log "  CODEX_ACCOUNT job=$job_id model=$current_model home=$(basename "$_codex_home")"
             fi
             local codex_disabled_until=""
@@ -5766,7 +5828,7 @@ ${safe_instruction}"
             mark_codex_account_revoked "$_revoked_key" "http401_token_revoked"
             db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[Codex] ${current_model} 계정 ${_revoked_key} 토큰 폐기(401) → 해당 계정만 제외' WHERE job_id='${job_id}';"
             # 고른 계정이 없을 때 이 홈이 export 된 채 남아 폐기 계정으로 다시 돌지 않게 한다.
-            [[ "${CODEX_HOME:-}" == "$_codex_home" ]] && unset CODEX_HOME
+            codex_restore_home
         fi
 
         # AADS-241: Codex 연결 재시도 (5초 x 12회 = 60초, 에러/리밋 즉시 폴백)

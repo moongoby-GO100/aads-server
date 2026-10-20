@@ -17,8 +17,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-LOG="/var/log/codex_auth_sync.log"
+LOG="${CODEX_SYNC_LOG:-/var/log/codex_auth_sync.log}"
 AUTH_FILE="/root/.codex/auth.json"
+STATE_FILE="${CODEX_STATE_FILE:-/root/.codex-accounts/state.json}"
 CODEX_BIN="${CODEX_BIN:-$(command -v codex 2>/dev/null || echo /usr/bin/codex)}"
 WARN_DAYS=3
 # 텔레그램 자격증명은 .env 를 읽은 **뒤**에 정한다 (아래 load_telegram_creds).
@@ -147,6 +148,53 @@ sync_to_remote() {
     fi
 }
 
+# 계정 state.json(priority/is_active/한도)을 원격 러너 서버로 원자적으로 배포한다 (2026-10-20).
+# 정본은 116 의 codex_usage.py --sync 가 만든 파일이다. 원격은 이 파일로 계정을 고르는데
+# (pipeline-runner.sh codex_pick_account_home) 배포가 없어 contabo14 사본이 9/19 에 멈춘 채
+# 꺼 둔 JINAH 를 계속 골랐다. auth.json·계정 홈 디렉터리는 건드리지 않고 값도 출력하지 않는다(R-KEY).
+# 어떤 경우에도 0 을 돌려준다 — 한 서버의 실패가 다른 서버 배포나 116 갱신을 막으면 안 된다.
+sync_state_to_remote() {
+    local label="$1" host="$2" port="${3:-22}"
+    local dir tmp
+    dir="$(dirname "$STATE_FILE")"
+    tmp="${STATE_FILE}.tmp.$$"
+
+    if [[ "$SYNC_ENABLED" != "1" ]]; then
+        log "STATE_SYNC: 비활성 노드($NODE_LABEL) — $label 배포 건너뜀"
+        return 0
+    fi
+    if [[ ! -s "$STATE_FILE" ]]; then
+        log "STATE_SYNC: $label — 로컬 state.json 없음/빈 파일, 건너뜀"
+        return 0
+    fi
+    # 임시 파일로 올리고 같은 디렉터리 안에서 mv — 원격 러너가 반쯤 쓰인 파일을 읽지 않는다.
+    # ConnectTimeout 은 연결 전까지만 제한한다. 연결 뒤 멈춘 서버가 다음 서버 배포를 막지 않도록
+    # 모든 ssh/scp 를 timeout 으로 감싼다(최악 서버당 4회 × (T+K)초 — codex_usage.py 의 240초 안에 두 서버가 들어간다).
+    local t="${STATE_SYNC_CMD_TIMEOUT:-20}" k="${STATE_SYNC_KILL_AFTER:-3}"
+    local opts="$SSH_OPTS -o ServerAliveInterval=5 -o ServerAliveCountMax=2"
+    if timeout -k "$k" "$t" ssh $opts -p "$port" "$host" "mkdir -p '$dir'" >/dev/null 2>&1 \
+       && timeout -k "$k" "$t" scp $opts -P "$port" "$STATE_FILE" "${host}:$tmp" >/dev/null 2>&1 \
+       && timeout -k "$k" "$t" ssh $opts -p "$port" "$host" "chmod 600 '$tmp' && mv -f '$tmp' '$STATE_FILE'" >/dev/null 2>&1; then
+        log "STATE_SYNC: $label ($host:$port) ← state.json 배포 성공"
+    else
+        timeout -k "$k" "$t" ssh $opts -p "$port" "$host" "rm -f '$tmp'" >/dev/null 2>&1 || true
+        log "STATE_SYNC: $label ($host:$port) ← state.json 배포 실패 또는 시간 초과 (원격 서버는 낡은 state.json 을 쓰게 된다)"
+    fi
+    return 0
+}
+
+push_state_all() {
+    sync_state_to_remote "contabo14" "$HOST_211" "$PORT_211" || true
+    sync_state_to_remote "cafe24_114" "$HOST_114" "$PORT_114" || true
+    return 0
+}
+
+# codex_usage.py --sync 가 state.json 을 쓴 직후 부른다. 토큰 검사·갱신은 하지 않는다.
+if [[ "${1:-}" == "--push-state" ]]; then
+    push_state_all
+    exit 0
+fi
+
 # ── 메인 로직 ──
 
 remaining=$(get_token_remaining_days)
@@ -213,6 +261,7 @@ if (( remaining_int < WARN_DAYS )); then
         # 회전이 어긋난다 — 이 즉시성이 이 설계의 핵심이다.
         sync_to_remote "contabo14" "$HOST_211" "$PORT_211"
         sync_to_remote "cafe24_114" "$HOST_114" "$PORT_114"
+        push_state_all
     fi
 
 # 3. 3일 이상 → 정상, 동기화만 확인
@@ -224,6 +273,7 @@ else
         log "DAILY_SYNC: 정기 전서버 동기화"
         sync_to_remote "contabo14" "$HOST_211" "$PORT_211"
         sync_to_remote "cafe24_114" "$HOST_114" "$PORT_114"
+        push_state_all
     fi
 fi
 
