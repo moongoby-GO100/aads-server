@@ -81,7 +81,7 @@ async def get_review(project_key: str, review_id: UUID, context: dict = VIEW):
 async def create_revision(project_key: str, review_id: UUID, body: RevisionCreate, response: Response,
                           context: dict = WRITE):
     result = await _run(project_key, context, "write",
-                        lambda c, t, p, a, e: svc.create_revision(c, t, p, review_id, a, body))
+                        lambda c, t, p, a, e: svc.create_revision(c, t, p, review_id, a, body, elevated=e))
     if result.get("idempotent"):
         response.status_code = 200
     elif result.get("pointer_applied") is False:
@@ -114,7 +114,7 @@ async def start_revising(project_key: str, review_id: UUID, body: RevisingStart,
 @router.post("/{review_id}/submit")
 async def submit_review(project_key: str, review_id: UUID, body: SubmitReview, context: dict = WRITE):
     return await _run(project_key, context, "write",
-                      lambda c, t, p, a, e: svc.submit_review(c, t, p, review_id, a, body))
+                      lambda c, t, p, a, e: svc.submit_review(c, t, p, review_id, a, body, elevated=e))
 
 
 @router.post("/{review_id}/changes", status_code=201)

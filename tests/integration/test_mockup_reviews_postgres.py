@@ -217,7 +217,7 @@ async def env(tmp_path, monkeypatch):
                 for table in ("mockup_review_task_bindings", "mockup_review_change_requests", "mockup_review_events",
                               "mockup_review_revisions", "mockup_review_heads", "project_document_events",
                               "project_document_revisions", "project_document_heads", "project_document_grants",
-                              "goal_task_links", "chat_messages", "chat_sessions", "chat_workspaces", "goals",
+                              "goal_task_links", "chat_messages", "chat_artifacts", "chat_sessions", "chat_workspaces", "goals",
                               "tenant_memberships"):
                     await conn.execute(f"DELETE FROM {table} WHERE tenant_id = ANY($1::uuid[])", tenants)
                 await conn.execute("DELETE FROM tenants WHERE id = ANY($1::uuid[])", tenants)

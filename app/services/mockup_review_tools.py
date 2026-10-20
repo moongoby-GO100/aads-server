@@ -250,7 +250,7 @@ async def run_action(*, tenant_id: str, session_id: str, inp: dict[str, Any], po
                     return _invalid(str(exc))
                 except ValidationError as exc:
                     return _invalid(_validation_message(exc))
-                return _view(project, await svc.create_revision(conn, tenant, project, review_id, actor, body))
+                return _view(project, await svc.create_revision(conn, tenant, project, review_id, actor, body, elevated=elevated))
 
             target = revision_id or head["latest_revision_id"]
             if not target:
@@ -267,7 +267,7 @@ async def run_action(*, tenant_id: str, session_id: str, inp: dict[str, Any], po
                 )
             except ValidationError as exc:
                 return _invalid(_validation_message(exc))
-            return _view(project, await svc.submit_review(conn, tenant, project, review_id, actor, submit))
+            return _view(project, await svc.submit_review(conn, tenant, project, review_id, actor, submit, elevated=elevated))
     except HTTPException as exc:
         return _http_error(exc)
 

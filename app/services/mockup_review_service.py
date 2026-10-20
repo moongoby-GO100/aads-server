@@ -482,6 +482,49 @@ async def _session_scope(conn: Any, tenant: str, project: str, session_id: UUID,
     return row
 
 
+SESSION_CARD_TYPE = "report"
+
+
+async def _bind_session_card(conn: Any, head: Any, revision: Any, actor: str, elevated: bool) -> dict:
+    """Idempotently make the review's chat card in its own session: one artifact per (tenant, session, review).
+
+    The binding keys come only from the locked head row, never from the caller. A deleted session is skipped
+    (chat cleanup must not block reviews); a session of another tenant/project or another user's private
+    session aborts the caller's transaction so the head never moves without its card.
+    """
+    if not head["session_id"]:
+        return {"action": "skipped", "reason": "no_session"}
+    session = await conn.fetchrow(
+        "SELECT s.tenant_id,s.user_id,s.workspace_id,w.tenant_id AS workspace_tenant,w.project_key,"
+        "w.name AS workspace_name,w.display_name AS workspace_display_name "
+        "FROM chat_sessions s JOIN chat_workspaces w ON w.id=s.workspace_id WHERE s.id=$1", head["session_id"])
+    if not session:
+        return {"action": "skipped", "reason": "session_not_found"}
+    tenant = head["tenant_id"]
+    if session["tenant_id"] != tenant or session["workspace_tenant"] != tenant or not _workspace_in_scope(
+        session["project_key"], (session["workspace_name"], session["workspace_display_name"]), head["project_key"],
+    ):
+        fail(404, "session_not_found")
+    if session["user_id"] and session["user_id"] != actor and not elevated:
+        fail(403, "session_access_denied")
+    title = f"목업 검토: {head['title']}"[:200]
+    content = (f"# 목업 검토: {head['title']}\n\n- 프로젝트: {head['project_key']}\n"
+               f"- 검토 ID: {head['id']}\n- 판: {revision['revision']}\n- 판 ID: {revision['id']}\n")
+    metadata = json.dumps({"subtype": "mockup_review", "mockup_review_id": str(head["id"]),
+                           "mockup_project": head["project_key"], "mockup_revision_id": str(revision["id"])})
+    updated = await conn.fetch(
+        "UPDATE chat_artifacts SET title=$4,content=$5,metadata=metadata||$6::jsonb,updated_at=now() "
+        "WHERE tenant_id=$1::uuid AND session_id=$2 AND metadata->>'mockup_review_id'=$3 RETURNING id",
+        tenant, head["session_id"], str(head["id"]), title, content, metadata)
+    if updated:
+        return {"action": "updated", "artifact_id": str(updated[0]["id"])}
+    created = await conn.fetchval(
+        "INSERT INTO chat_artifacts(tenant_id,session_id,workspace_id,type,title,content,metadata) "
+        "VALUES($1::uuid,$2,$3,$4,$5,$6,$7::jsonb) RETURNING id",
+        tenant, head["session_id"], session["workspace_id"], SESSION_CARD_TYPE, title, content, metadata)
+    return {"action": "created", "artifact_id": str(created)}
+
+
 def _revision_ref(row: Any) -> dict | None:
     if not row:
         return None
@@ -541,7 +584,7 @@ async def create_review(conn: Any, tenant: str, project: str, actor: str, elevat
 
 
 async def create_revision(conn: Any, tenant: str, project: str, review_id: UUID, actor: str,
-                          body: RevisionCreate) -> dict:
+                          body: RevisionCreate, *, elevated: bool = False) -> dict:
     head = await _lock(conn, tenant, project, review_id)
     rhash = request_hash("revision", body.model_dump(mode="json"))
     replayed = await _replay(conn, head, body.idempotency_key, "revision", rhash)
@@ -600,11 +643,12 @@ async def create_revision(conn: Any, tenant: str, project: str, review_id: UUID,
     generation = head["generation"] + 1
     await _update_head(conn, head["id"], status=status, latest_revision_id=revision["id"], generation=generation,
                        pointer_generation=generation)
+    card = await _bind_session_card(conn, head, revision, actor, elevated)
     _, response = await _event(
         conn, head, "revision_created", actor, generation_after=generation, revision_id=revision["id"],
         key=body.idempotency_key, rhash=rhash,
         payload={"revision": number, "parent_revision_id": parent, "resolves": [r.model_dump(mode="json") for r in body.resolves],
-                 "bindings_held": held, "batch": sorted(batch)},
+                 "bindings_held": held, "batch": sorted(batch), "session_card": card},
         build_response=lambda _eid: {**base, "pointer_applied": True, "generation": generation, "status": status,
                                      "parent_revision_id": str(parent) if parent else None,
                                      "unapproved": True, "approval_inherited": False, "bindings_held": held,
@@ -655,7 +699,8 @@ async def start_revising(conn: Any, tenant: str, project: str, review_id: UUID, 
     return response
 
 
-async def submit_review(conn: Any, tenant: str, project: str, review_id: UUID, actor: str, body: SubmitReview) -> dict:
+async def submit_review(conn: Any, tenant: str, project: str, review_id: UUID, actor: str, body: SubmitReview,
+                        *, elevated: bool = False) -> dict:
     head = await _lock(conn, tenant, project, review_id)
     rhash = request_hash("submit", body.model_dump(mode="json"))
     replayed = await _replay(conn, head, body.idempotency_key, "submit", rhash)
@@ -676,9 +721,10 @@ async def submit_review(conn: Any, tenant: str, project: str, review_id: UUID, a
         fail(422, "missing_artifacts", missing=issues, blocked_evidence=any(i["code"] == "blocked_evidence" for i in issues))
     generation = head["generation"] + 1
     await _update_head(conn, head["id"], status="review_ready", generation=generation)
+    card = await _bind_session_card(conn, head, revision, actor, elevated)
     event_id, response = await _event(
         conn, head, "submitted", actor, generation_after=generation, revision_id=revision["id"],
-        key=body.idempotency_key, rhash=rhash, payload={"manifest_hash": revision["manifest_hash"]},
+        key=body.idempotency_key, rhash=rhash, payload={"manifest_hash": revision["manifest_hash"], "session_card": card},
         build_response=lambda _eid: {"review_id": str(head["id"]), "revision_id": str(revision["id"]),
                                      "revision": revision["revision"], "manifest_hash": revision["manifest_hash"],
                                      "status": "review_ready", "generation": generation, "approved": False,
