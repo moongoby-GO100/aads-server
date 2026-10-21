@@ -33,7 +33,7 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-MAX_HOP = int(os.getenv("SESSION_RELAY_MAX_HOP", "3"))
+MAX_HOP = int(os.getenv("SESSION_RELAY_MAX_HOP", "30"))
 CONTEXT_LIMIT = int(os.getenv("SESSION_RELAY_CONTEXT_CHARS", "4000"))
 ANSWER_LIMIT = int(os.getenv("SESSION_RELAY_ANSWER_CHARS", "6000"))
 
@@ -474,7 +474,7 @@ async def _deliver_answer(origin_session_id: str, content: str,
     경로이고 응답률 96% 가 확인돼 있다.
 
     루프는 회신 방식이 아니라 **홉 수**로 막는다. 받은 답으로 또 물으면
-    hop 이 오르고 3회에서 막힌다. 회신을 죽여서 막을 일이 아니었다.
+    hop 이 오르고 MAX_HOP 회에서 막힌다. 회신을 죽여서 막을 일이 아니었다.
 
     물어본 쪽이 지금 응답 중이면 기다린다. 진행 중인 응답에 새 user 메시지가
     들어가면 그 응답이 버려진다 — 오늘 세션 5090a247 에서
@@ -526,7 +526,7 @@ def _format_reply(target_name: str, question: str, answer: str, relay_id: str) -
         f"{answer[:ANSWER_LIMIT]}\n\n"
         "── 이제 할 일 ──\n"
         "이 답을 반영해 다음을 진행하세요. 다른 담당의 의견이 더 필요하면 "
-        "`ask_session` 으로 물으세요(한 줄기당 3회까지). 충분하면 결론을 내고 "
+        f"`ask_session` 으로 물으세요(한 줄기당 {MAX_HOP}회까지). 충분하면 결론을 내고 "
         "CEO 에게 보고하세요. 이 메시지에 인사만 하고 끝내지 마세요."
         + _relay_tag(relay_id)
     )

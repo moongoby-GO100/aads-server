@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 
 from app.core.project_config import SEARCH_PROJECT_ENUM, SSH_PROJECT_ENUM
 from app.services import mockup_gate_rules as _mockup_rules
+from app.services.session_relay import MAX_HOP as _SESSION_RELAY_MAX_HOP
 
 # ─── AADS-186D: defer_loading 분류 ───────────────────────────────────────────
 # false (상시 로드): AI가 매 요청마다 반드시 알아야 하는 핵심 도구
@@ -499,7 +500,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "들어오므로 기다리지 말고 다른 일을 계속하세요. "
             "자기 담당 범위를 벗어나는 판단이 필요할 때 씁니다 — 예를 들어 진입 시점을 "
             "바꾸려 할 때 실매매 담당에게 슬리피지 영향을 묻습니다. "
-            "한 줄기당 3회까지만 오갈 수 있습니다."
+            f"한 줄기당 {_SESSION_RELAY_MAX_HOP}회까지만 오갈 수 있습니다."
         ),
         "input_schema": {
             "type": "object",

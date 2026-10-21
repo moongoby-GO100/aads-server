@@ -92,7 +92,31 @@ def test_reply_tells_what_to_do_next():
 
 
 def test_hop_limit_is_bounded():
-    assert 1 <= session_relay.MAX_HOP <= 5
+    assert 1 <= session_relay.MAX_HOP <= 100
+
+
+def test_max_hop_default_is_30_and_env_wins(monkeypatch):
+    """CEO 지시(2026-10-21): 기본 30. env SESSION_RELAY_MAX_HOP 가 있으면 env 가 우선."""
+    import importlib
+
+    monkeypatch.delenv("SESSION_RELAY_MAX_HOP", raising=False)
+    try:
+        assert importlib.reload(session_relay).MAX_HOP == 30
+        monkeypatch.setenv("SESSION_RELAY_MAX_HOP", "3")
+        assert importlib.reload(session_relay).MAX_HOP == 3
+    finally:
+        monkeypatch.delenv("SESSION_RELAY_MAX_HOP", raising=False)
+        importlib.reload(session_relay)
+
+
+def test_hop_limit_texts_follow_max_hop():
+    """안내 문구가 MAX_HOP 을 따라간다 — 하드코딩 '3회' 가 남으면 실제 한도와 어긋난다."""
+    from app.services import tool_registry
+
+    reply = session_relay._format_reply("T", "q", "a", RID_Q)
+    assert f"한 줄기당 {session_relay.MAX_HOP}회까지" in reply
+    desc = tool_registry._TOOLS["ask_session"]["description"]
+    assert f"한 줄기당 {session_relay.MAX_HOP}회까지만" in desc
 
 
 def test_context_is_capped():
@@ -440,21 +464,39 @@ async def _false():
     return False
 
 
-def test_answering_hop2_question_allows_hop3_and_hop3_is_blocked(monkeypatch):
-    """② hop2 질문에 답하는 턴 → 새 질문 hop3 허용. hop3 질문에 답하는 턴 → hop_limit."""
-    prompt2 = session_relay._build_question("T", "CTO", OTHER, "GO100Owner", "질문", "", RID_Q)
-    pool = _HopPool(trigger=prompt2, relays={RID_Q: _relay(2, OTHER, ORIGIN)})
+def test_answering_last_allowed_hop_is_allowed_and_next_is_blocked(monkeypatch):
+    """② MAX_HOP-1 질문에 답하는 턴 → 새 질문 MAX_HOP 허용. MAX_HOP 질문에 답하는 턴 → hop_limit."""
+    last = session_relay.MAX_HOP
+    prompt_prev = session_relay._build_question("T", "CTO", OTHER, "GO100Owner", "질문", "", RID_Q)
+    pool = _HopPool(trigger=prompt_prev, relays={RID_Q: _relay(last - 1, OTHER, ORIGIN)})
     base, basis = _hop(monkeypatch, pool)
-    assert (base, basis) == (2, f"relay_question:{RID_Q[:8]}:hop2")
-    assert base + 1 <= session_relay.MAX_HOP == 3
+    assert (base, basis) == (last - 1, f"relay_question:{RID_Q[:8]}:hop{last - 1}")
+    assert base + 1 <= session_relay.MAX_HOP
 
+    prompt_last = session_relay._build_question("T", "CTO", OTHER, "GO100Owner", "질문", "", RID_Q)
+    pool = _HopPool(trigger=prompt_last, relays={RID_Q: _relay(last, OTHER, ORIGIN)})
+    _patch_pool(monkeypatch, pool)
+    out = asyncio.run(session_relay.ask(ORIGIN, "CTO", "또 묻기"))
+    assert out["sent"] is False and out["error"] == "hop_limit"
+    assert f"relay_question:{RID_Q[:8]}:hop{last}" in out["message"]
+    assert out["hop_basis"] == f"relay_question:{RID_Q[:8]}:hop{last}"
+    assert f"{last}회" in out["message"]
+
+
+def test_env_max_hop_3_still_blocks_hop4(monkeypatch):
+    """env 로 3 을 주면 예전처럼 hop3 질문에 답하는 턴의 새 질문(hop4)이 막힌다."""
+    monkeypatch.setattr(session_relay, "MAX_HOP", 3)
     prompt3 = session_relay._build_question("T", "CTO", OTHER, "GO100Owner", "질문", "", RID_Q)
     pool = _HopPool(trigger=prompt3, relays={RID_Q: _relay(3, OTHER, ORIGIN)})
     _patch_pool(monkeypatch, pool)
     out = asyncio.run(session_relay.ask(ORIGIN, "CTO", "또 묻기"))
     assert out["sent"] is False and out["error"] == "hop_limit"
-    assert f"relay_question:{RID_Q[:8]}:hop3" in out["message"]
-    assert out["hop_basis"] == f"relay_question:{RID_Q[:8]}:hop3"
+    assert "3회" in out["message"]
+
+    prompt2 = session_relay._build_question("T", "CTO", OTHER, "GO100Owner", "질문", "", RID_Q)
+    pool = _HopPool(trigger=prompt2, relays={RID_Q: _relay(2, OTHER, ORIGIN)})
+    base, _ = _hop(monkeypatch, pool)
+    assert base + 1 <= session_relay.MAX_HOP
 
 
 def test_turn_that_received_reply_uses_relay_hop(monkeypatch):
@@ -567,8 +609,8 @@ def test_ceo_direct_turn_with_three_old_hop3_relays_sends_hop1(monkeypatch):
 
 
 def test_max_hop_env_and_notify_path_unchanged():
-    """MAX_HOP 기본 3 · env 동작 불변, 알림 경로는 hop 판별을 타지 않는다."""
+    """MAX_HOP 기본 30 · env 동작 불변, 알림 경로는 hop 판별을 타지 않는다."""
     src = inspect.getsource(session_relay)
-    assert 'int(os.getenv("SESSION_RELAY_MAX_HOP", "3"))' in src
+    assert 'int(os.getenv("SESSION_RELAY_MAX_HOP", "30"))' in src
     notify_src = inspect.getsource(session_relay.notify) + inspect.getsource(session_relay._run_notify)
     assert "_hop_basis" not in notify_src and "_relay_tag" not in notify_src
