@@ -18,6 +18,7 @@ import functools
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -41,6 +42,44 @@ def get_scheduler():
 
 def _execute_scheduled_job_sync(job_id: str, action_type: str, action_config: Dict[str, Any]):
     asyncio.run(_execute_scheduled_job(job_id, action_type, action_config))
+
+
+RESTORE_INTENT_KEYWORDS = (
+    "restore", "release", "revert", "rollback", "unpin", "unhold",
+    "원복", "복구", "해제",
+)
+_READBACK_NAME_MARKERS = ("check", "verify", "readout")
+_WRITE_SQL_RE = re.compile(
+    r"\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|merge|copy|call)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_pure_select(query: str) -> bool:
+    q = (query or "").strip().rstrip(";").strip()
+    if not re.match(r"(?i)^(select|with)\b", q) or ";" in q:
+        return False
+    return not _WRITE_SQL_RE.search(q)
+
+
+def check_restore_via_readonly_db_query(
+    name: str, action_type: str, action_config: Optional[Dict[str, Any]]
+) -> Optional[str]:
+    """원복성 예약이 SELECT 전용 db_query 로 등록되면 거부 사유를, 아니면 None 을 반환."""
+    if action_type != "db_query":
+        return None
+    name_l = (name or "").lower()
+    query = str((action_config or {}).get("query") or "")
+    haystack = f"{name_l}\n{query.lower()}"
+    if not any(k in haystack for k in RESTORE_INTENT_KEYWORDS):
+        return None
+    if any(m in name_l for m in _READBACK_NAME_MARKERS) and _is_pure_select(query):
+        return None
+    return (
+        "db_query 는 SELECT 전용이라 원복을 실행하지 못한다. remote_command 로 등록하거나 "
+        "원복 시각에 db_safe_write 로 직접 수행하라 "
+        "(오류 사전 ops.scheduled_restore_is_readonly_db_query)"
+    )
 
 
 PERSISTENT_JOBSTORE = "persistent"
@@ -335,6 +374,10 @@ async def schedule_task_on(
     valid_actions = ("remote_command", "health_check", "db_query", "url_check", "automation_run")
     if action_type not in valid_actions:
         return {"error": f"action_type은 {valid_actions} 중 하나여야 합니다"}
+
+    restore_guard = check_restore_via_readonly_db_query(name, action_type, action_config)
+    if restore_guard:
+        return {"error": restore_guard}
 
     valid_schedules = ("cron", "interval", "once")
     if schedule_type not in valid_schedules:
