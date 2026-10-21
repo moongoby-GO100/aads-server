@@ -4377,9 +4377,14 @@ async def regenerate_message(
     request: Request,
     mode: str = "regenerate",
     contract_version: Optional[str] = Query(None),
+    response_mode: Optional[str] = Query(None),
     context: TenantContext = Depends(require_tenant_member),
 ):
-    """AI 응답 재생성 또는 이어서 생성. mode=continue: 중단 지점부터 이어서 생성."""
+    """AI 응답 재생성 또는 이어서 생성. mode=continue: 중단 지점부터 이어서 생성.
+
+    response_mode 를 명시하면 그 모드로, 생략하면 원 턴이 계획만(plan)이었을 때 plan 을 이어받고
+    그 외에는 기존대로 quality 로 실행한다.
+    """
     negotiated_contract = _chat_contract_version(request, contract_version)
     from app.core.db_pool import get_pool
     pool = get_pool()
@@ -4413,6 +4418,28 @@ async def regenerate_message(
         if not user_msg:
             raise HTTPException(status_code=404, detail="이전 사용자 메시지를 찾을 수 없습니다")
 
+        effective_response_mode = "quality"
+        if response_mode and response_mode.strip():
+            effective_response_mode = svc._normalize_response_mode(response_mode)
+        else:
+            try:
+                origin_mode = await conn.fetchval(
+                    """SELECT response_mode FROM chat_turn_executions
+                       WHERE session_id = $1 AND user_message_id = $2
+                       ORDER BY created_at DESC LIMIT 1""",
+                    ai_msg["session_id"], user_msg["id"],
+                )
+            except Exception as origin_mode_err:
+                from app.services import plan_mode_guard
+                if plan_mode_guard.is_missing_mode_column_error(origin_mode_err):
+                    origin_mode = None
+                else:
+                    # 원 턴이 계획만이었는지 확인하지 못하면 실행 허용으로 진행하지 않는다.
+                    logger.warning("regenerate_origin_mode_lookup_failed", message_id=str(message_id), error=str(origin_mode_err)[:120])
+                    origin_mode = "plan"
+            if origin_mode == "plan":
+                effective_response_mode = "plan"
+
         if mode == "continue":
             await conn.execute(
                 "UPDATE chat_messages SET intent = 'continued' WHERE id = $1 AND tenant_id = $2::uuid",
@@ -4442,7 +4469,7 @@ async def regenerate_message(
         content=content,
         attachments=attachments,
         model_override=None,
-        response_mode="quality",
+        response_mode=effective_response_mode,
         reply_to_id=str(ai_msg["id"]),
     )
     bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)

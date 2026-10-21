@@ -2121,6 +2121,7 @@ async def test_collect_queued_interrupts_recovers_db_saved_interrupt_without_mem
         {
             "content": "검증 결과를 표로 다시 보고해",
             "attachments": [{"type": "text", "name": "note.txt"}],
+            "message_id": str(interrupt_id),
         }
     ]
     # 세 번 실행된다. ①② 는 sweep_stale_interrupts 의 3구간 분류 —

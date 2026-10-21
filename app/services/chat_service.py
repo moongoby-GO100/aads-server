@@ -20,6 +20,7 @@ from anthropic import APIStatusError
 from app.config import Settings
 from app.core.anthropic_client import get_client
 from app.core.db_pool import get_pool
+from app.services import plan_mode_guard as _plan_mode_guard
 from app.services import chat_interrupt_lifecycle as _interrupt_lifecycle
 from app.core import interrupt_attachments as _interrupt_attachments
 from app.services.model_switch_banner import (
@@ -787,7 +788,8 @@ _ACTIVE_STREAM_ABSOLUTE_CEILING_SEC_DEFAULT = 5400
 _STREAM_LIVENESS_IDLE_SEC = 120
 _RESPONSE_MODE_QUALITY = "quality"
 _RESPONSE_MODE_FAST = "fast"
-_VALID_RESPONSE_MODES = {_RESPONSE_MODE_QUALITY, _RESPONSE_MODE_FAST}
+_RESPONSE_MODE_PLAN = _plan_mode_guard.RESPONSE_MODE_PLAN
+_VALID_RESPONSE_MODES = {_RESPONSE_MODE_QUALITY, _RESPONSE_MODE_FAST, _RESPONSE_MODE_PLAN}
 _HISTORY_EXCLUDED_INTENTS = (
     "streaming_placeholder",
     "rate_limited",
@@ -982,11 +984,25 @@ def _requires_quality_response_mode(user_message: str, intent: Optional[str] = N
 
 
 def _should_enforce_completion_contract(response_mode: str) -> bool:
-    """Fast mode must not turn a valid quick reply into a recoverable stream error."""
-    return response_mode != _RESPONSE_MODE_FAST
+    """Fast mode must not turn a valid quick reply into a recoverable stream error.
+
+    plan 모드는 실행을 하지 않으므로 완료 계약(실행 증거 요구)과 자동 이어가기를 적용하지 않는다.
+    """
+    return response_mode not in (_RESPONSE_MODE_FAST, _RESPONSE_MODE_PLAN)
 
 
 def _response_mode_prompt_block(response_mode: str) -> str:
+    if response_mode == _RESPONSE_MODE_PLAN:
+        return (
+            "\n\n[응답 모드: plan — 계획만]\n"
+            "- 계획, 조회 결과, 설계, 검증 기준만 답한다. 어떤 것도 실행하지 않는다.\n"
+            "- 파일/DB/설정 변경, 문서 등록, 외부 발송, 미디어 생성, 예약, 승인, "
+            "Runner 제출·위임, 코드·셸 실행, git 쓰기·push, 배포는 호출하지 않는다. "
+            "읽기 전용 조회 도구만 사용할 수 있고 그 외 호출은 서버가 차단한다.\n"
+            "- 실행이 필요한 단계는 '실행 단계'로 적어 두고, 사용자가 상단 모드를 바꾼 뒤 "
+            "진행하도록 안내한다. 승인 카드·제안 카드·후속 실행 지시를 만들지 않는다.\n"
+            "- 답변은 목표, 현재 상태(조회 근거), 단계별 계획, 위험, 검증 기준 순으로 정리한다."
+        )
     if response_mode == _RESPONSE_MODE_FAST:
         return (
             "\n\n[응답 모드: fast]\n"
@@ -2856,8 +2872,13 @@ async def _get_or_create_turn_execution(
     *,
     user_message_id: Optional[uuid.UUID],
     requested_model: Optional[str],
+    response_mode: Optional[str] = None,
 ) -> str:
-    """같은 user_message_id의 실행이 있으면 재사용하고, 없으면 새 execution 생성."""
+    """같은 user_message_id의 실행이 있으면 재사용하고, 없으면 새 execution 생성.
+
+    response_mode 는 새로 만든 execution 에 기록한다. 재사용한 실행은 이 요청이 lease 를 얻고
+    plan 으로 재전송했을 때만 plan 으로 올리고, 다른 곳이 소유한 진행 중 실행은 건드리지 않는다.
+    """
     if user_message_id:
         existing_execution_id = await conn.fetchval(
             """
@@ -2892,6 +2913,9 @@ async def _get_or_create_turn_execution(
                         str(session_id)[:8],
                         str(existing_execution_id)[:8],
                     )
+                elif response_mode == _RESPONSE_MODE_PLAN:
+                    # 이 요청이 실행을 이어받았고 계획만으로 재전송했다면 저장 모드도 plan 이어야 한다.
+                    await _persist_execution_response_mode(conn, existing_execution_id, response_mode)
             await conn.execute(
                 "UPDATE chat_sessions SET current_execution_id = $2, updated_at = NOW() WHERE id = $1",
                 session_id,
@@ -3044,12 +3068,66 @@ async def _get_or_create_turn_execution(
     )
     execution_id = execution_row["id"]
     _execution_owner_epochs[str(execution_id)] = int(execution_row["owner_epoch"])
+    if response_mode:
+        await _persist_execution_response_mode(conn, execution_id, response_mode)
     await conn.execute(
         "UPDATE chat_sessions SET current_execution_id = $2, updated_at = NOW() WHERE id = $1",
         session_id,
         execution_id,
     )
     return str(execution_id)
+
+
+async def _persist_execution_response_mode(conn: Any, execution_id: Any, response_mode: str) -> None:
+    """execution 의 응답 모드를 남긴다. 재개·재생성·이어가기·MCP 브리지가 이 값을 읽는다.
+
+    plan 은 저장하지 못하면 예외를 그대로 올려 턴을 시작하지 않는다 — 저장 없이 진행하면
+    재개·재생성·브리지가 이 턴을 quality 로 읽어 실행 제한이 사라진다. fast/quality 는
+    저장이 실패해도 턴을 계속한다(읽는 쪽이 NULL 을 quality 로 본다).
+    """
+    try:
+        async with conn.transaction():
+            await conn.execute(
+                "UPDATE chat_turn_executions SET response_mode = $2 WHERE id = $1",
+                execution_id,
+                response_mode,
+            )
+    except Exception as exc:
+        logger.warning(
+            "execution_response_mode_persist_failed execution=%s mode=%s error=%s",
+            str(execution_id)[:8], response_mode, str(exc)[:120],
+        )
+        if response_mode == _RESPONSE_MODE_PLAN:
+            raise
+
+
+async def _load_execution_response_mode(execution_id: Any) -> Optional[str]:
+    """저장된 execution 응답 모드. 기록이 없으면 None(= 호출측이 quality 로 취급).
+
+    조회가 실패하면 plan 을 돌려준다(fail-closed): 저장된 모드를 모르는 채 quality 로
+    재개하면 계획만 턴의 실행 제한이 사라진다. 컬럼이 아직 없는 DB 는 plan 턴이 있을 수 없으므로 None.
+    """
+    if not execution_id:
+        return None
+    try:
+        execution_uuid = uuid.UUID(str(execution_id))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    try:
+        async with get_pool().acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT response_mode FROM chat_turn_executions WHERE id = $1",
+                execution_uuid,
+            )
+    except Exception as exc:
+        if _plan_mode_guard.is_missing_mode_column_error(exc):
+            return None
+        logger.warning(
+            "execution_response_mode_load_failed execution=%s error=%s -> plan(fail-closed)",
+            str(execution_id)[:8], str(exc)[:120],
+        )
+        return _RESPONSE_MODE_PLAN
+    return value if value in _VALID_RESPONSE_MODES else None
 
 
 async def get_execution(execution_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -8448,6 +8526,7 @@ async def _resume_single_stream(
         if _resume_lease_lost.is_set():
             raise ResumeFencedOut(f"resume_lease_lost_while_{stage}")
 
+    _resume_plan_token: Any = None
     try:
         _current_execution_id.set(execution_id)
         _current_execution_owner_epoch.set(owner_epoch)
@@ -8460,6 +8539,12 @@ async def _resume_single_stream(
         )
 
         _resume_bound_session.set(session_id)
+        # 계획만 모드 턴은 재개되어도 계획만 모드다. 저장값이 plan 일 때만 되살린다
+        # (fast/quality 재개의 기존 동작은 바꾸지 않는다).
+        _resume_response_mode = await _load_execution_response_mode(execution_id)
+        if _resume_response_mode != _RESPONSE_MODE_PLAN:
+            _resume_response_mode = _RESPONSE_MODE_QUALITY
+        _resume_plan_token = _plan_mode_guard.set_response_mode(_resume_response_mode)
         pool = get_pool()
         sid = uuid.UUID(session_id)
 
@@ -8745,6 +8830,8 @@ async def _resume_single_stream(
                 )
                 system_prompt = base_prompt or "You are a helpful AI assistant."
                 messages = raw_messages[-20:]
+            if _resume_response_mode == _RESPONSE_MODE_PLAN:
+                resume_instruction = _response_mode_prompt_block(_RESPONSE_MODE_PLAN).strip() + "\n\n" + resume_instruction
             system_prompt = ((system_prompt or "") + "\n\n" + resume_instruction).strip()
 
             # 붙여넣은 이미지 복원: 히스토리 텍스트에는 이미지 블록이 없으므로
@@ -8941,6 +9028,8 @@ async def _resume_single_stream(
 
             from app.services.tool_registry import ToolRegistry
             tools_for_api = ToolRegistry().get_tools("all")
+            if _resume_response_mode == _RESPONSE_MODE_PLAN:
+                tools_for_api = _plan_mode_guard.filter_offered_tools(tools_for_api)
 
             # 4-A. Redis Stream에 완성된 응답이 있는지 먼저 확인 (LLM 재호출 불필요할 수 있음)
             redis_content, redis_complete = await _redis_stream.reconstruct_from_stream(_stream_id)
@@ -9365,6 +9454,8 @@ async def _resume_single_stream(
         except Exception as _fb_err:
             logger.error(f"resume_fallback_save_failed: session={session_id[:8]} error={_fb_err}")
     finally:
+        if _resume_plan_token is not None:
+            _plan_mode_guard.reset_response_mode(_resume_plan_token)
         _resume_lease_stop.set()
         if _resume_lease_task is not None:
             try:
@@ -13352,6 +13443,8 @@ async def send_message_stream(
         return round(__import__("time").monotonic() - _trace_start_time, 3)
     _todo_context_token = _current_todo_context.set(None)
     _todo_context_token_mid: Any = None  # AADS: L5246 set() 토큰 추적 (역순 reset용)
+    # 모든 모드에서 명시적으로 설정한다 — 같은 Context 에 남은 이전 턴의 plan 값이 새 턴에 새지 않게 한다.
+    _plan_mode_token = _plan_mode_guard.set_response_mode(response_mode)
 
     try:
         from app.services.tool_executor import current_chat_session_id, current_tenant_id, resolve_bound_tenant_id
@@ -13839,6 +13932,7 @@ async def send_message_stream(
                 sid,
                 user_message_id=_saved_user_message_id,
                 requested_model=model_override,
+                response_mode=response_mode,
             )
             _current_execution_id.set(_execution_id_str)
             _current_execution_owner_epoch.set(
@@ -13988,7 +14082,7 @@ async def send_message_stream(
             system_prompt = (
                 system_prompt
                 + _response_mode_prompt_block(response_mode)
-                + _runner_fast_path_prompt_block()
+                + ("" if response_mode == _RESPONSE_MODE_PLAN else _runner_fast_path_prompt_block())
             )
             # 첫 응답 타임아웃을 컨텍스트 크기에 맞추기 위해 기록한다.
             # 큰 세션은 모델이 프롬프트를 읽는 데만 오래 걸린다 — 고정 90초로는
@@ -14102,7 +14196,11 @@ async def send_message_stream(
             "에러", "버그", "장애", "모니터", "헬스", "status", "check",
             "deploy", "fix", "error", "health", "지시서", "파이프라인",
         )
-        _skip_cache = any(kw in content for kw in _CACHE_BYPASS_KEYWORDS) or _requires_quality_response_mode(content, intent_override)
+        _skip_cache = (
+            any(kw in content for kw in _CACHE_BYPASS_KEYWORDS)
+            or _requires_quality_response_mode(content, intent_override)
+            or response_mode == _RESPONSE_MODE_PLAN
+        )
 
         # ── 임베딩 1회 공통 생성 (semantic_cache + contradiction_detector 공유) ──
         # skip_cache이고 CHANGE_KEYWORDS도 없으면 임베딩 불필요 → None 유지
@@ -14227,7 +14325,9 @@ async def send_message_stream(
             if _loop_intent:
                 try:
                     _loop_resp = ""
-                    if _loop_intent == "loop_start_confirm":
+                    if response_mode == _RESPONSE_MODE_PLAN and _loop_intent != "loop_status":
+                        _loop_resp = _plan_mode_guard.PLAN_MODE_BLOCK_MESSAGE
+                    elif _loop_intent == "loop_start_confirm":
                         from app.services.loop_chat_handler import handle_loop_start_confirm
                         _lr = await handle_loop_start_confirm(persisted_user_content, session_id, intent_result.model if intent_result else None)
                         _loop_resp = _lr["message"]
@@ -14747,6 +14847,9 @@ async def send_message_stream(
                     tools=len(_codex_tools),
                 )
 
+        if response_mode == _RESPONSE_MODE_PLAN:
+            tools_for_api = _plan_mode_guard.filter_offered_tools(tools_for_api)
+
         # 8.5a. AADS-188C: Agent SDK 실시간 자율 실행 (execute/code_modify 인텐트)
         # CEO 명시적 직접 실행 지시 시에만 Agent SDK, 그 외는 Runner 위임
         # Runner 위임 대상: 코드 작업 + CTO 분석 + 서비스 점검 (모든 자율 실행 인텐트)
@@ -14758,7 +14861,11 @@ async def send_message_stream(
             "직접 해", "직접 수정", "여기서 해", "여기서 수정", "바로 고쳐",
             "바로 수정", "세션에서 해", "세션에서 수정", "직접 처리",
         )
-        if intent in _RUNNER_DELEGATION_INTENTS and any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
+        if (
+            response_mode != _RESPONSE_MODE_PLAN
+            and intent in _RUNNER_DELEGATION_INTENTS
+            and any(t in content for t in _DIRECT_EXECUTION_TRIGGERS)
+        ):
             logger.info(f"[DIRECT_EXECUTION] session={sid_short} intent={intent} trigger_matched=True")
             # resume 지원: Phase A에서 프리페치한 세션 설정 사용 (#19)
             sdk_session_id: Optional[str] = _session_settings.get("sdk_session_id")
@@ -14925,7 +15032,11 @@ async def send_message_stream(
             intent = "runner_response"
 
         # 8.5b. execute/code_modify 인텐트 중 직접 실행 조건 미충족 → Runner 위임
-        if intent in _RUNNER_DELEGATION_INTENTS and not any(t in content for t in _DIRECT_EXECUTION_TRIGGERS):
+        if (
+            response_mode != _RESPONSE_MODE_PLAN
+            and intent in _RUNNER_DELEGATION_INTENTS
+            and not any(t in content for t in _DIRECT_EXECUTION_TRIGGERS)
+        ):
             logger.info(f"[RUNNER_DELEGATION] session={sid_short} intent={intent} → pipeline_runner")
             intent = "pipeline_runner"
 
@@ -15024,7 +15135,12 @@ async def send_message_stream(
         _AUTONOMOUS_INTENTS = frozenset({
             "pipeline_runner",
         })
-        if intent in _AUTONOMOUS_INTENTS and intent_result.use_tools and tools_for_api:
+        if (
+            response_mode != _RESPONSE_MODE_PLAN
+            and intent in _AUTONOMOUS_INTENTS
+            and intent_result.use_tools
+            and tools_for_api
+        ):
             # Pipeline Runner: 시스템 프롬프트에 파이프라인 가이드 주입
             _auto_system = system_prompt
             if intent == "pipeline_runner":
@@ -15735,7 +15851,7 @@ async def send_message_stream(
             intent=intent,
             user_message=content,
         )
-        if not _validation.is_valid and response_mode == _RESPONSE_MODE_FAST:
+        if not _validation.is_valid and response_mode in (_RESPONSE_MODE_FAST, _RESPONSE_MODE_PLAN):
             logger.warning(
                 f"output_validator_fast_mode_bypass: {_validation.violation_type} — "
                 f"{_validation.message} (intent={intent}, model={model_used}, tokens_out={output_tokens})"
@@ -15981,7 +16097,7 @@ async def send_message_stream(
 
         _critic_verdict = None
         try:
-            if response_mode == _RESPONSE_MODE_FAST:
+            if response_mode in (_RESPONSE_MODE_FAST, _RESPONSE_MODE_PLAN):
                 logger.info("response_critic_skipped_fast_mode session=%s", session_id[:8])
             else:
                 from app.services.response_critic import critique_response
@@ -16282,7 +16398,7 @@ async def send_message_stream(
                     "duration_ms": int(round(_duration_sec * 1000)),
                     "tool_event_count": len(tools_called or []),
                     "completion_auto_continue_count": _completion_auto_continue_count,
-                    "critic_skipped": response_mode == _RESPONSE_MODE_FAST,
+                    "critic_skipped": response_mode in (_RESPONSE_MODE_FAST, _RESPONSE_MODE_PLAN),
                 },
                 ensure_ascii=False,
             )
@@ -16438,7 +16554,7 @@ async def send_message_stream(
             logger.debug("bg_auto_reflexion_launch_error", error=str(_bg_err))
 
         # 시맨틱 캐시 저장 (도구 사용 + quality >= 0.7인 응답만)
-        if tools_called and len(full_response) > 200:
+        if tools_called and len(full_response) > 200 and response_mode != _RESPONSE_MODE_PLAN:
             try:
                 from app.services.semantic_cache import SemanticCache
                 _sem_cache_store = SemanticCache(pool=get_pool())
@@ -16477,6 +16593,7 @@ async def send_message_stream(
         # 역순 reset + helper 가드로 producer 사망(SSE 스트림 끊김) 방지.
         _safe_reset_context_var(_current_todo_context, _todo_context_token_mid, label=f"todo_mid:{session_id[:8]}")
         _safe_reset_context_var(_current_todo_context, _todo_context_token, label=f"todo_init:{session_id[:8]}")
+        _plan_mode_guard.reset_response_mode(_plan_mode_token)
         # `set_streaming` 은 함수 중간(≈11234행)에서 import 한다. 그 전에
         # 예외가 나면 이 finally 가 `UnboundLocalError: set_streaming` 을
         # 던지고 **진짜 오류를 가린다.**
