@@ -179,7 +179,56 @@ def _bind_aads_chat_session(name: str, params: dict) -> tuple[dict, str]:
     return bound, session_id
 
 
+async def _session_in_plan_mode(session_id: str) -> bool:
+    """이 브리지를 띄운 채팅 턴이 계획만 모드인지.
+
+    브리지는 별도 프로세스라 메인 프로세스의 ContextVar 가 오지 않는다. 띄울 때 넘긴 환경변수가
+    우선이고, 릴레이 경유처럼 환경변수가 없을 때는 세션의 현재 execution 에 저장된 모드를 본다.
+    조회가 실패하면 plan 으로 본다(fail-closed) — 읽기 도구는 계속 통과하고 부작용 도구만 막힌다.
+    컬럼이 아직 없는 DB 에는 plan 턴이 있을 수 없으므로 그때만 plan 이 아니다.
+    """
+    if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() == "plan":
+        return True
+    if not session_id:
+        return False
+    try:
+        from app.core.db_pool import get_pool
+
+        async with get_pool().acquire() as conn:
+            mode = await conn.fetchval(
+                """
+                SELECT te.response_mode
+                  FROM chat_sessions s
+                  JOIN chat_turn_executions te ON te.id = s.current_execution_id
+                 WHERE s.id = $1::uuid
+                """,
+                session_id,
+            )
+        return mode == "plan"
+    except Exception as exc:
+        from app.services import plan_mode_guard
+
+        if plan_mode_guard.is_missing_mode_column_error(exc):
+            return False
+        logger.warning(f"plan_mode_lookup_failed session={session_id[:8]}: {type(exc).__name__} -> plan(fail-closed)")
+        return True
+
+
 async def _call_tool(name: str, params: dict) -> str:
+    from app.services import plan_mode_guard
+
+    await _ensure_db()
+    _, session_id = _bind_aads_chat_session(name, params)
+    plan_token = plan_mode_guard.set_response_mode(
+        plan_mode_guard.RESPONSE_MODE_PLAN if await _session_in_plan_mode(session_id) else ""
+    )
+    try:
+        return await _call_tool_unguarded(name, params)
+    finally:
+        plan_mode_guard.reset_response_mode(plan_token)
+
+
+async def _call_tool_unguarded(name: str, params: dict) -> str:
     """도구 실행 래퍼 — ToolExecutor 우선, execute_tool 폴백.
 
     TOOL_NAME_MAP으로 MCP 이름 → ToolExecutor dispatch 이름 변환 후 실행.
@@ -293,6 +342,12 @@ async def list_tools() -> list[types.Tool]:
             description=td.get("description", ""),
             inputSchema=td.get("input_schema", {"type": "object", "properties": {}}),
         ))
+
+    if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() == "plan":
+        from app.services import plan_mode_guard
+
+        # 계획만 모드로 띄운 브리지는 읽기 후보가 아닌 도구를 아예 내보내지 않는다(차단은 _call_tool 이 한다).
+        return plan_mode_guard.filter_offered_tools(tools)
 
     if os.getenv("AADS_TOOL_RESIDENT_MODE", "0").strip() != "1":
         return tools

@@ -780,6 +780,11 @@ class ToolExecutor:
         """
         try:
             tool_input = dict(tool_input or {})
+            # 계획만 모드: 프로젝트 포괄 승인·자동 승인보다 먼저 판정한다.
+            from app.services import plan_mode_guard
+            _plan_block = plan_mode_guard.check(tool_name, tool_input)
+            if _plan_block:
+                return _plan_block
             # Tool calls are an execution boundary.  Observations supplied to
             # an LLM carry a structural taint marker and must never be promoted
             # into a tool argument, even if a model emits a plausible call.
@@ -998,6 +1003,10 @@ class ToolExecutor:
 
     async def _dispatch(self, tool_name: str, tool_input: Dict[str, Any]) -> Any:
         """도구 이름 → 실제 함수 매핑."""
+        from app.services import plan_mode_guard
+        _plan_block = plan_mode_guard.check(tool_name, tool_input)
+        if _plan_block:
+            return _plan_block
         dispatch = {
             "health_check":           self._health_check,
             "todo_write":             self._todo_write,
@@ -5660,12 +5669,13 @@ class ToolExecutor:
             INTERNAL_PIPELINE_HEADERS,
             get_pipeline_runner_api_url,
         )
+        from urllib.parse import quote
         job_id = inp.get("job_id", "")
         scope, session_id = _resolve_task_scope(inp)
         async with httpx.AsyncClient() as client:
             if job_id:
                 resp = await client.get(
-                    get_pipeline_runner_api_url(f"jobs/{job_id}"),
+                    get_pipeline_runner_api_url(f"jobs/{quote(str(job_id), safe='')}"),
                     headers=INTERNAL_PIPELINE_HEADERS,
                     timeout=10,
                 )

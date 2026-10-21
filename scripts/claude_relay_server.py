@@ -1598,7 +1598,7 @@ def _pick_codex_account(session_id, codex_dir, account_order=None):
     return auth_path, ("rebound" if pinned else "new")
 
 
-def _build_codex_home(session_id, mcp_cfg=None, account_order=None):
+def _build_codex_home(session_id, mcp_cfg=None, account_order=None, sandbox_mode=None):
     _CODEX_HOME_ROOT.mkdir(parents=True, exist_ok=True)
     safe_session = re.sub(r"[^A-Za-z0-9_.-]+", "_", session_id or "default")
     home = _CODEX_HOME_ROOT / safe_session
@@ -1643,7 +1643,7 @@ def _build_codex_home(session_id, mcp_cfg=None, account_order=None):
     cfg_lines = [
         # --- globals (공식 스펙: approval_policy, sandbox_mode, model_reasoning_effort) ---
         'approval_policy = ' + _toml_basic_string(_CODEX_APPROVAL_POLICY),
-        'sandbox_mode = ' + _toml_basic_string(_CODEX_SANDBOX_MODE),
+        'sandbox_mode = ' + _toml_basic_string(sandbox_mode or _CODEX_SANDBOX_MODE),
         'model_reasoning_effort = "high"',
         "",
     ]
@@ -2464,6 +2464,9 @@ async def handle_codex_stream(request):
     model = body.get("model", "gpt-5.5")
     codex_effort = _normalize_effort(body.get("effort"), _CODEX_EFFORT_VALUES)
     session_id = body.get("session_id", "")
+    # 계획만 모드: Codex 자체 셸·apply_patch 가 ToolExecutor 를 거치지 않으므로 샌드박스로 막는다.
+    plan_mode = body.get("plan_mode") is True
+    codex_sandbox_mode = "read-only" if plan_mode else _CODEX_SANDBOX_MODE
     account_order = body.get("account_order")
     if account_order is not None and not isinstance(account_order, list):
         return web.json_response({"error": "account_order must be a list"}, status=400)
@@ -2566,12 +2569,13 @@ async def handle_codex_stream(request):
                 return response
             codex_home = _build_codex_home(
                 session_id, mcp_cfg=mcp_template, account_order=account_order,
+                sandbox_mode=codex_sandbox_mode,
             )
             _codex_cwd = _resolve_codex_cwd(codex_project)
             codex_image_paths = _materialize_codex_image_attachments(image_attachments, session_id)
             cmd = list(codex_meta.get("argv", []) or []) + [
                 "exec", "--json",
-                "--sandbox", _CODEX_SANDBOX_MODE,
+                "--sandbox", codex_sandbox_mode,
                 "--skip-git-repo-check", "-C", _codex_cwd,
             ]
             for add_dir in _CODEX_ADD_DIRS:
@@ -2595,7 +2599,7 @@ async def handle_codex_stream(request):
                 len(codex_image_paths),
                 codex_meta.get("mode", "unknown"),
                 (mcp_diag or {}).get("path_mode", "unknown"),
-                _CODEX_SANDBOX_MODE,
+                codex_sandbox_mode,
                 _CODEX_APPROVAL_POLICY,
                 ",".join(_CODEX_ADD_DIRS) or "-",
             )
@@ -2604,6 +2608,10 @@ async def handle_codex_stream(request):
             proc_env.pop("OPENAI_BASE_URL", None)
             proc_env.pop("OPENAI_API_KEY", None)
             proc_env["AADS_SESSION_ID"] = session_id or "default"
+            if plan_mode:
+                proc_env["AADS_RESPONSE_MODE"] = "plan"
+            else:
+                proc_env.pop("AADS_RESPONSE_MODE", None)
             proc_env["HOME"] = codex_home
             proc_env.setdefault("TMPDIR", "/tmp")
             # AADS-191B-8B: OS 레벨 timeout 안전망 (Claude와 동일)
@@ -3205,7 +3213,8 @@ async def handle_health(request):
               "lease_count": len(_LEASE_REGISTRY),
               "stderr_read_timeout_sec": _STDERR_READ_TIMEOUT_SEC,
               "max_lease_sec": _MAX_LEASE_SEC,
-              "os_timeout_enabled": _OS_TIMEOUT_ENABLED}
+              "os_timeout_enabled": _OS_TIMEOUT_ENABLED,
+              "plan_mode_supported": True}
     if _DIRECT_OAUTH_ENABLED:
         selected_auth = _pick_auth()
         token1, token2, _current, _label1, _label2 = _read_oauth_tokens()

@@ -5084,6 +5084,11 @@ async def _stream_codex_relay_once(
         req_body["account_order"] = account_order
     if image_attachments:
         req_body["image_attachments"] = image_attachments
+    from app.services import plan_mode_guard as _plan_mode_guard
+
+    _plan_mode = _plan_mode_guard.plan_mode_active()
+    if _plan_mode:
+        req_body["plan_mode"] = True
     _effort_decision = _session_effort.current_decision(session_id)
     _effort_res = None
     _effort_ack_pending = False
@@ -5117,6 +5122,16 @@ async def _stream_codex_relay_once(
                 if hc.status_code != 200:
                     yield {"type": "error", "content": f"Codex Relay not healthy: {hc.status_code}"}
                     return
+                if _plan_mode:
+                    # plan_mode 를 모르는 옛 릴레이는 플래그를 무시하고 전체 권한으로 Codex 를 돌린다.
+                    # 읽기 전용 샌드박스를 보장할 수 없으면 Codex 를 쓰지 않는다(상위 폴백이 처리).
+                    try:
+                        _plan_supported = bool((hc.json() or {}).get("plan_mode_supported"))
+                    except Exception:
+                        _plan_supported = False
+                    if not _plan_supported:
+                        yield {"type": "error", "content": "Codex Relay does not support plan mode (read-only sandbox unavailable)"}
+                        return
             except Exception as hc_err:
                 yield {"type": "error", "content": f"Codex Relay unreachable: {hc_err}"}
                 return
@@ -5560,6 +5575,11 @@ async def _run_agent_sdk_with_key(
     # MCP config: 컨테이너 내부에서 직접 브릿지 실행
     if not session_id:
         logger.warning("agent_sdk_mcp_session_missing: 브릿지가 세션 없이 뜬다 — 세션 도구가 실패한다")
+    from app.services import plan_mode_guard as _plan_mode_guard
+
+    _bridge_env = {"AADS_SESSION_ID": session_id or ""}
+    if _plan_mode_guard.plan_mode_active():
+        _bridge_env["AADS_RESPONSE_MODE"] = _plan_mode_guard.RESPONSE_MODE_PLAN
     _mcp_cfg = json.dumps({
         "mcpServers": {
             "aads-tools": {
@@ -5569,7 +5589,7 @@ async def _run_agent_sdk_with_key(
                 # 빈 문자열이 나가면 브릿지가 세션을 잃고, 세션에 묶인 도구가
                 # 조용히 실패한다(`origin_session_missing`). 비면 로그로 남긴다 —
                 # 조용한 실패를 다음 사람이 또 추적하지 않도록.
-                "env": {"AADS_SESSION_ID": session_id or ""},
+                "env": _bridge_env,
             }
         }
     })

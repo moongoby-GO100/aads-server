@@ -2604,6 +2604,10 @@ async def lifespan(app: FastAPI):
                 )
                 await conn.execute(
                     "ALTER TABLE chat_turn_executions "
+                    "ADD COLUMN IF NOT EXISTS response_mode VARCHAR(20) DEFAULT NULL"
+                )
+                await conn.execute(
+                    "ALTER TABLE chat_turn_executions "
                     "ADD COLUMN IF NOT EXISTS interruption_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb"
                 )
                 for _lease_col, _lease_type in (
