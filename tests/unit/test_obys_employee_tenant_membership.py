@@ -1065,9 +1065,8 @@ async def test_gate_opens_only_signing_routes_for_non_legacy_tenant(monkeypatch,
 @pytest.mark.parametrize(
     "method,path",
     [
-        ("GET", "/api/v1/yeoljeong-finance/contracts"),
-        ("POST", "/api/v1/yeoljeong-finance/contracts"),
         ("POST", "/api/v1/yeoljeong-finance/contracts/abc/request-signature"),
+        ("DELETE", "/api/v1/yeoljeong-finance/contracts/2f6c1c0e-86d4-4f1d-9d52-0a9b8e7c1d3a"),
         ("GET", "/api/v1/yeoljeong-finance/contracts/signing-export"),
         ("POST", f"/api/v1/yeoljeong-finance/contracts/signing/{TOK}"),
         ("GET", "/api/v1/yeoljeong-finance/contracts/signing"),
@@ -1075,7 +1074,7 @@ async def test_gate_opens_only_signing_routes_for_non_legacy_tenant(monkeypatch,
         ("DELETE", "/api/v1/yeoljeong-finance/contracts/signing"),
         ("GET", "/api/v1/yeoljeong-finance/contracts/signing/signed-pdf"),
         ("POST", "/api/v1/yeoljeong-finance/contracts/signing/signed-pdf/regenerate"),
-        ("GET", "/api/v1/yeoljeong-finance/employees/approved"),
+        ("PATCH", "/api/v1/yeoljeong-finance/employees/approved/abc/role"),
     ],
 )
 async def test_gate_keeps_other_contract_routes_closed(monkeypatch, method, path):

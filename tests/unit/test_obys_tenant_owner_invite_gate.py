@@ -2,7 +2,7 @@
 
 2026-10-20 운영 실측: 신규 테넌트 대표가 '직원 초대·가입 승인' 화면에서 GET /employees/invites 를
 레거시 게이트에 막혀(403) 목록을 못 불러오고, 가입요청 목록은 본인 이메일 것만 돌아와 승인 대기가 0건이었다.
-여기서는 (1) 게이트가 초대 목록·생성·취소 세 (메서드, 경로)만 열고 /employees/approved·/contracts 등은 닫아 두는지,
+여기서는 (1) 게이트가 초대 목록·생성·취소 세 (메서드, 경로)를 열고 그 밖의 경로는 닫아 두는지(승인 직원·계약 화면 경로는 test_obys_tenant_owner_contracts_gate.py),
 (2) 서비스가 비레거시 테넌트에서 호출자 테넌트의 초대·가입요청만 다루는지 고정한다.
 
 오비서 DB 는 인메모리 가짜로 흉내 낸다 — 운영 DB·AADS 인증 DB 미접촉.
@@ -132,12 +132,10 @@ async def test_gate_opens_invite_list_create_revoke_for_new_tenant(method, path)
         ("GET", f"{BASE}/employees/invites/2f6c1c0e-86d4-4f1d-9d52-0a9b8e7c1d3a"),
         ("DELETE", f"{BASE}/employees/invites/2f6c1c0e-86d4-4f1d-9d52-0a9b8e7c1d3a/x"),
         ("GET", f"{BASE}/employees/invites-extra"),
-        ("GET", f"{BASE}/employees/approved"),
         ("GET", f"{BASE}/employees/approved/abc/role"),
         ("PATCH", f"{BASE}/employees/approved/abc/role"),
-        ("GET", f"{BASE}/contracts"),
-        ("POST", f"{BASE}/contracts"),
-        ("GET", f"{BASE}/business-documents"),
+        ("DELETE", f"{BASE}/contracts/2f6c1c0e-86d4-4f1d-9d52-0a9b8e7c1d3a"),
+        ("PATCH", f"{BASE}/business-documents/2f6c1c0e-86d4-4f1d-9d52-0a9b8e7c1d3a"),
         ("GET", f"{BASE}/employees"),
     ],
 )

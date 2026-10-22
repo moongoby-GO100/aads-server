@@ -285,7 +285,6 @@ def test_gate_opens_employee_self_paths(path):
 @pytest.mark.parametrize(
     "path",
     [
-        f"{BASE}/employees/approved",
         f"{BASE}/employees/approved/abc/role",
         f"{BASE}/employees/approved/abc/resync-employment",
         f"{BASE}/employees",

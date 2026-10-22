@@ -2621,6 +2621,15 @@ def _invite_scope_tenant(user: dict[str, Any]) -> str | None:
     return _tenant_id(user)
 
 
+def _require_owner_path_admin(user: dict[str, Any], detail: str) -> None:
+    """게이트가 신규 테넌트 대표에게 여는 경로의 서비스측 관문. 레거시 테넌트는 종전 판정 그대로, 그 밖에는 관리자만(직원 member 403)."""
+    tenant_id = _tenant_id(user)
+    if _is_legacy_caller({"tenant_id": tenant_id}):
+        return
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail=detail)
+
+
 def _invite_owner_tenants(invite: dict[str, Any]) -> set[str]:
     """초대 대상 사업자들의 소유 테넌트. _validated_invite_targets 와 같은 _db_business_tenant_id 판정을 쓴다."""
     targets = _clean_invite_targets(invite.get("targets"))
@@ -4477,7 +4486,16 @@ def _record_business_id(record: dict[str, Any]) -> str:
     if explicit and branch == OFFICE_WORKPLACE:
         # 사무실 근무자는 지점 이름으로 사업자를 유추할 수 없다(근무지 이름이 모든 office 사업자에 같다).
         return explicit
-    return explicit if explicit in CANONICAL_BUSINESS_IDS else str(BUSINESS_BY_BRANCH.get(branch) or "")
+    if explicit in CANONICAL_BUSINESS_IDS:
+        return explicit
+    derived = str(BUSINESS_BY_BRANCH.get(branch) or "")
+    if derived:
+        return derived
+    # 신규 테넌트가 DB 에 등록한 사업자(코드 상수에 없음). 레거시 테넌트·테넌트 미상 레코드는 종전처럼 비워 둔다.
+    tenant_id = str(record.get("tenant_id") or "").strip()
+    if explicit and tenant_id and not _is_legacy_caller({"tenant_id": tenant_id}):
+        return explicit
+    return ""
 
 
 def _row_in_business(row: dict[str, Any], business_id: str) -> bool:
@@ -4562,6 +4580,7 @@ def _employee_onboarding_profile(
 
 def list_approved_employees(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
     _tenant_id(user)
+    _require_owner_path_admin(user, "승인 직원 목록은 관리자만 조회할 수 있습니다")
     if not _is_admin(user):
         return []
     docs = _read_hr("onboarding_documents", user)
@@ -4828,6 +4847,7 @@ async def save_onboarding_document(
     expires_at: str = "",
 ) -> dict[str, Any]:
     tenant_id = _tenant_id(user)
+    _require_owner_path_admin(user, "입사서류 등록은 관리자만 할 수 있습니다")
     email = str(employee_email or _email(user)).strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="직원 이메일이 필요합니다")
@@ -5144,6 +5164,7 @@ def _onboarding_missing_document_rows(
 
 
 def list_onboarding_documents(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
+    _require_owner_path_admin(user, "입사서류 목록은 관리자만 조회할 수 있습니다")
     stored_rows = _read_hr("onboarding_documents", user)
     visible_rows = _filter_user(stored_rows, user, "employee_email", "uploaded_by")
     normalized_rows = []
@@ -5163,6 +5184,7 @@ def list_onboarding_documents(user: dict[str, Any], business_id: str | None = No
 
 
 def get_onboarding_document(document_id: str, user: dict[str, Any]) -> tuple[dict[str, Any], Path]:
+    _require_owner_path_admin(user, "입사서류는 관리자만 열람할 수 있습니다")
     record = _require_hr_record(_find(_read_hr("onboarding_documents", user), document_id), user, detail="입사서류를 찾을 수 없습니다")
     _require_onboarding_business_scope(record, user)
     if not _is_admin(user) and str(record.get("employee_email") or "").strip().lower() != _email(user):
@@ -5301,6 +5323,9 @@ def _business_document_scope(business_id: Any, user: dict[str, Any]) -> tuple[st
         if not matched:
             raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
         return tenant_id, normalized
+    # 파일 모드의 사업자 목록은 레거시 설정 파일뿐이다 — 테넌트 매핑이 없으니 신규 테넌트에는 닫는다.
+    if not _is_legacy_caller(user):
+        raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
     known = {str(item.get("id") or "") for item in get_settings(user)["settings"].get("businesses") or []}
     if normalized not in known:
         raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
@@ -5738,7 +5763,11 @@ def get_business_document_file(document_id: str, user: dict[str, Any]) -> tuple[
     return record, path
 
 
-def _contract_business(payload: dict[str, Any], employee: dict[str, Any] | None) -> tuple[str, str]:
+def _contract_business(
+    payload: dict[str, Any],
+    employee: dict[str, Any] | None,
+    user: dict[str, Any] | None = None,
+) -> tuple[str, str]:
     employee = employee or {}
     employee_branch = BRANCH_ALIASES.get(str(employee.get("branch") or "").strip(), str(employee.get("branch") or "").strip())
     employee_business_id = _record_business_id(employee)
@@ -5750,6 +5779,18 @@ def _contract_business(payload: dict[str, Any], employee: dict[str, Any] | None)
     if branch == OFFICE_WORKPLACE:
         office_view = _business_workplaces(business_id) if business_id else None
         if not office_view or OFFICE_WORKPLACE not in office_view["workplaces"]:
+            raise HTTPException(status_code=400, detail="계약서의 사업자와 지점 연결이 일치하지 않습니다")
+    elif (
+        branch
+        and business_id
+        and business_id not in CANONICAL_BUSINESS_IDS
+        and user is not None
+        and not _is_legacy_caller(user)
+        and _db_available()
+    ):
+        # 신규 테넌트의 DB 등록 사업자: 지점은 DB 의 활성 지점이어야 한다. 소유 테넌트 확인은 save_contract 가 먼저 한다.
+        view = _business_workplaces(business_id)
+        if not view or branch not in view["workplaces"]:
             raise HTTPException(status_code=400, detail="계약서의 사업자와 지점 연결이 일치하지 않습니다")
     elif branch and (business_id not in CANONICAL_BUSINESS_IDS or BUSINESS_BY_BRANCH.get(branch) != business_id):
         raise HTTPException(status_code=400, detail="계약서의 사업자와 지점 연결이 일치하지 않습니다")
@@ -5767,7 +5808,7 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
         if not employee or str(employee.get("status") or "").lower() != "approved":
             raise HTTPException(status_code=400, detail="승인된 가입 직원만 계약서에 선택할 수 있습니다")
 
-    business_id, branch = _contract_business(result, employee)
+    business_id, branch = _contract_business(result, employee, user)
     result["business_id"] = business_id
     result["branch"] = branch
     if employee:
@@ -6239,6 +6280,7 @@ def _normalize_contract_amendment(
 
 
 def list_contracts(user: dict[str, Any]) -> list[dict[str, Any]]:
+    _require_owner_path_admin(user, "계약서 목록은 관리자만 조회할 수 있습니다")
     rows = _with_amendment_marks(_read_hr("contracts", user))
     return sorted(_filter_user(rows, user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
 
@@ -6249,10 +6291,28 @@ def _revoke_contract_signature_request(contract: dict[str, Any]) -> None:
         contract.pop(key, None)
 
 
+def _require_contract_target_ownership(payload: dict[str, Any], user: dict[str, Any]) -> None:
+    """비레거시 호출자의 계약 작성·수정: 대상 직원과 사업자가 호출자 테넌트 소유가 아니면 403(타 테넌트 존재 여부 비노출).
+
+    직원은 _read_hr(JWT 테넌트 SQL 스코프)로, 사업자는 DB 사업자-테넌트 매핑으로 확인한다.
+    DB 가 설정돼 있는데 매핑을 읽지 못하면(None) 닫는다. 레거시 테넌트는 종전 판정(400)을 그대로 탄다.
+    """
+    if _is_legacy_caller(user):
+        return
+    denied = HTTPException(status_code=403, detail="이 테넌트에 속한 직원·사업자의 계약서만 작성할 수 있습니다")
+    request_id = str(payload.get("employee_request_id") or payload.get("employeeRequestId") or "").strip()
+    if request_id and _find(_read_hr("employee_join_requests", user), request_id) is None:
+        raise denied
+    business_id = str(payload.get("business_id") or payload.get("businessId") or "").strip()
+    if business_id and _db_available() and _run_db(_db_business_tenant_matches(business_id, _tenant_id(user))) is not True:
+        raise denied
+
+
 def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     _tenant_id(user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="계약서 작성 권한이 없습니다")
+    _require_contract_target_ownership(payload, user)
     rows = _read_hr("contracts", user)
     requested_id = str(payload.get("id") or "").strip()
     existing = _find(rows, requested_id) if requested_id else None
@@ -7492,6 +7552,7 @@ def signed_contract_pdf_for_download(contract_id: str, user: dict[str, Any]) -> 
     """관리자와 계약 당사자 본인만. 다른 테넌트·제3자는 존재 여부와 무관하게 403."""
     denied = HTTPException(status_code=403, detail="이 계약서 PDF 에 접근할 권한이 없습니다")
     _tenant_id(user)
+    _require_owner_path_admin(user, "이 계약서 PDF 에 접근할 권한이 없습니다")
     try:
         contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="")
     except HTTPException as exc:
