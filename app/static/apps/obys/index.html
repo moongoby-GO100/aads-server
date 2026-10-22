@@ -12350,9 +12350,13 @@
       return els.homeKpiGrid?.querySelector(`[data-home-kpi="${key}"]`) || null;
     }
 
+    const HOME_CARD_KEYS = ["sales", "bank", "review", "payroll", "approval"];
+    const homeSettledCards = new Set();
+
     function setHomeCard(key, value, hint) {
       const card = homeCard(key);
       if (!card) return;
+      homeSettledCards.add(key);
       card.querySelector("[data-kpi-value]").textContent = value;
       card.querySelector("[data-kpi-hint]").textContent = hint;
       const slot = card.querySelector("[data-kpi-state]");
@@ -12361,18 +12365,40 @@
       slot.innerHTML = "";
     }
 
-    function failHomeCard(key, reason) {
+    // 실패 카드는 "불러오는 중"으로 멈추지 않고 다시 시도와 허용 화면 이동을 함께 보여 준다.
+    // 403/404 는 보안 차단·경로 문제이므로 권한을 넓히지 않고, 역할별로 메뉴가 걸러지는 관리자 화면으로 안내한다.
+    function homeCardActions(status) {
+      const actions = [{ label: "다시 시도", primary: true, onClick: () => { loadTodayHome({ force: true }).catch(() => {}); } }];
+      if ([401, 403, 404].includes(Number(status))) {
+        actions.push({ label: "관리자 화면 열기", onClick: () => { window.location.assign("/static/apps/obys/admin.html"); } });
+      }
+      return actions;
+    }
+
+    function failHomeCard(key, reason, status = 0) {
       const card = homeCard(key);
       if (!card) return;
+      homeSettledCards.add(key);
       card.querySelector("[data-kpi-value]").textContent = "—";
       card.querySelector("[data-kpi-hint]").textContent = "";
-      renderState(card.querySelector("[data-kpi-state]"), { kind: "error", title: "불러오지 못했습니다", reason });
+      renderState(card.querySelector("[data-kpi-state]"), { kind: "error", title: "불러오지 못했습니다", reason, actions: homeCardActions(status) });
+    }
+
+    function failUnsettledHomeCards(reason) {
+      HOME_CARD_KEYS.filter(key => !homeSettledCards.has(key)).forEach(key => failHomeCard(key, reason));
     }
 
     function homeErrorReason(result) {
       const error = result?.reason;
-      if (Number(error?.status) === 403) return "이 계정에는 조회 권한이 없습니다.";
+      const status = Number(error?.status);
+      if (status === 403) return "이 계정에는 조회 권한이 없습니다. 권한이 있는 메뉴는 관리자 화면에서 확인하세요.";
+      if (status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+      if (status === 404) return "요청한 자료를 찾을 수 없습니다. 선택한 사업자를 확인하거나 관리자 화면에서 열어 보세요.";
       return error?.message || "잠시 후 다시 시도해 주세요.";
+    }
+
+    function homeErrorStatus(result) {
+      return Number(result?.reason?.status) || 0;
     }
 
     function sumRecords(rows, kind, date) {
@@ -12458,7 +12484,12 @@
     }
 
     async function loadTodayHome({ force = false } = {}) {
-      if (!hasServerAuth() || isEmployeeExperience()) return;
+      if (isEmployeeExperience()) return;
+      if (!hasServerAuth()) {
+        homeSettledCards.clear();
+        failUnsettledHomeCards("로그인 후 확인할 수 있습니다. 로그인해 주세요.");
+        return;
+      }
       if (homeLoading) return homeLoading;
       if (!force && Date.now() - homeLoadedAt < HOME_RELOAD_MS) return;
       const today = kstDate();
@@ -12472,6 +12503,7 @@
         if (card) renderState(card.querySelector("[data-kpi-state]"), { kind: "loading" });
       });
       renderState(els.homeTodoRows, { kind: "loading" });
+      homeSettledCards.clear();
       const q = homeQuery();
       homeLoading = Promise.allSettled([
         financeApi(`/sales${q}`),
@@ -12495,7 +12527,7 @@
           const settleToday = settlements.status === "fulfilled" ? sumRecords(settlements.value.settlements || [], "settlements", today) : 0;
           setHomeCard("sales", formatMoney(todaySum), `어제 ${formatMoney(sumRecords(rows, "sales", yesterday))} · ${diff}${settleToday ? ` · 정산 ${formatMoney(settleToday)}` : ""}`);
         } else {
-          failHomeCard("sales", homeErrorReason(sales));
+          failHomeCard("sales", homeErrorReason(sales), homeErrorStatus(sales));
         }
 
         if (bank.status === "fulfilled") {
@@ -12503,7 +12535,7 @@
           const accountCount = accounts.status === "fulfilled" ? (accounts.value.accounts || []).length : Number(totals.account_count || 0);
           setHomeCard("bank", formatMoney(totals.net), `입금 ${formatMoney(totals.total_in)} · 출금 ${formatMoney(totals.total_out)} · 계좌 ${accountCount}개`);
         } else {
-          failHomeCard("bank", homeErrorReason(bank));
+          failHomeCard("bank", homeErrorReason(bank), homeErrorStatus(bank));
         }
 
         if (reviews.status === "fulfilled") {
@@ -12512,7 +12544,7 @@
           setHomeCard("review", `최근 7일 ${recent.toLocaleString("ko-KR")}건`, `전체 ${pending.length.toLocaleString("ko-KR")}건`);
           if (recent) todos.push({ level: "p1", tag: "오늘", title: `검토 대기 ${recent}건 확인`, sub: `전체 ${pending.length}건`, view: "clobeReview", action: "검토하기" });
         } else {
-          failHomeCard("review", homeErrorReason(reviews));
+          failHomeCard("review", homeErrorReason(reviews), homeErrorStatus(reviews));
         }
 
         if (payroll.status === "fulfilled") {
@@ -12531,7 +12563,7 @@
             setHomeCard("payroll", "미정", statements.length ? `${month || "최근"} 급여내역서 ${statements.length}건 · 지급일 미입력` : "급여내역서 없음");
           }
         } else {
-          failHomeCard("payroll", homeErrorReason(payroll));
+          failHomeCard("payroll", homeErrorReason(payroll), homeErrorStatus(payroll));
         }
 
         const approvalParts = [joins, docs, signs];
@@ -12545,12 +12577,16 @@
           if (docCount) todos.push({ level: "p2", tag: "이번 주", title: `입사서류 ${docCount}건 검수`, view: "onboarding", action: "검수하기" });
           if (signCount) todos.push({ level: "p1", tag: "오늘", title: `서명 대기 계약서 ${signCount}건`, view: "contracts", action: "서명하기" });
         } else {
-          failHomeCard("approval", homeErrorReason(joins));
+          failHomeCard("approval", homeErrorReason(joins), homeErrorStatus(joins));
         }
 
         todos.push(...renderHomeCollect(collection));
         renderHomeTodos(todos);
         homeLoadedAt = Date.now();
+      }).catch(error => {
+        const reason = error?.message ? `화면을 그리는 중 오류가 났습니다: ${error.message}` : "화면을 그리는 중 오류가 났습니다.";
+        failUnsettledHomeCards(reason);
+        renderState(els.homeTodoRows, { kind: "error", title: "처리할 일을 불러오지 못했습니다", reason, actions: homeCardActions(0).slice(0, 1) });
       }).finally(() => {
         homeLoading = null;
       });
@@ -17254,7 +17290,11 @@
       const rememberedRecipeRedirect = rememberPostLoginRedirectFromUrl();
       syncServerAuthCookieFromStorage();
       if (!rememberedRecipeRedirect && await shouldOpenV41AppVerified() && openV41App()) return;
-      restoreUiState();
+      // 저장된 화면이 없으면 setView 가 불리지 않아 기본 화면(오늘 홈)의 5지표가 "불러오는 중"으로 멈춘다.
+      const restoredSavedView = restoreUiState();
+      if (!restoredSavedView && currentView === "dashboard" && hasServerAuth()) {
+        loadTodayHome().catch(err => showToast(`오늘 홈 집계 실패: ${err.message}`));
+      }
       readInviteTokenFromUrl();
       applyAuthHashDeepLink();
       handleContractLinkFromUrl().catch(err => showToast(`계약서 링크 확인 실패: ${err.message}`));

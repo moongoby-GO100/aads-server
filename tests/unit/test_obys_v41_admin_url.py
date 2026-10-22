@@ -16,6 +16,8 @@ INDEX = (OBYS / "index.html").read_text(encoding="utf-8")
 ADMIN = (OBYS / "admin.html").read_text(encoding="utf-8")
 REDIRECT = (OBYS / "mockup-v4-1.html").read_text(encoding="utf-8")
 OLD = "mockup-" + "v4-1"
+# 배포 제외 목록에 이 별칭을 넣지 말라는 경고 주석·검증이 의도적으로 옛 이름을 적는 파일.
+RELEASE_KEEP_REFERENCES = {"scripts/deploy_acct_app_cafe24.sh", "tests/unit/test_acct_app_cafe24_release.py"}
 
 
 def test_index_points_to_admin_html():
@@ -69,6 +71,8 @@ def test_no_other_references_to_the_old_name():
             if rel.startswith("app/static/reports/") or path.suffix == ".md" or path.suffix == ".pyc":
                 continue
             if path.resolve() in (self_path, redirect_path, allowed_release_test):
+                continue
+            if rel in RELEASE_KEEP_REFERENCES:
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
