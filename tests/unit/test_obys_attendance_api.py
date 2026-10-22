@@ -37,6 +37,7 @@ class FakeAttendanceDB:
         self.rows: dict[str, dict] = {}
         self.audit: list[tuple] = []
         self.weekly: dict[tuple, dict] = {}
+        self.list_args: list[tuple] = []
         self._ids = itertools.count(1)
 
     def _project(self, row):
@@ -96,6 +97,15 @@ class FakeConnection:
         assert "FROM yeoljeong_attendance_records" in sql and "deleted_at IS NULL" in sql
         rows = [row for row in self.db.rows.values()
                 if row["business_id"] == business_id and row["deleted_at"] is None]
+        if "ORDER BY work_date DESC, start_at DESC" in sql:
+            date_from, date_to, email, limit = args
+            self.db.list_args.append(args)
+            rows = [r for r in rows
+                    if (date_from is None or r["work_date"] >= date_from)
+                    and (date_to is None or r["work_date"] <= date_to)
+                    and (email is None or r["employee_email"].lower() == email)]
+            rows.sort(key=lambda r: (r["work_date"], r["start_at"]), reverse=True)
+            return [self.db._project(row) for row in rows[:limit]]
         return [self.db._project(row) for row in sorted(rows, key=lambda r: r["work_date"], reverse=True)]
 
     async def fetchrow(self, sql, *args):
@@ -382,7 +392,7 @@ def test_shift_screen_posts_to_attendance_api_and_marks_local_only_rows():
     assert "미저장(로컬 전용)" in html
     assert 'id="uploadLocalShiftsBtn"' in html and "data-upload-shift=" in html
     # 서버 저장이 성공한 로컬 근태만 로컬에서 지운다.
-    upload = html[html.index("async function uploadLocalShifts"):]
+    upload = html[html.index("async function pushLocalShifts"):]
     upload = upload[:upload.index("\n    }\n")]
     assert upload.index("await saveShiftToServer(shift)") < upload.index("state.shifts = state.shifts.filter")
     # 화면 표시 상태는 서버 허용값으로 바꿔 보낸다.
@@ -609,3 +619,100 @@ def test_weekly_route_is_registered_before_generic_routes():
     paths = [route.path for route in api.router.routes]
     weekly = paths.index("/workspaces/{business_id}/hr/attendance/weekly")
     assert weekly < paths.index("/workspaces/{business_id}/{route}/records")
+
+
+# ── 목록 조회 GET /attendance/records ─────────────────────────────────────────
+LIST_URL = BASE
+
+
+def _seed_list(db):
+    for day, start, email, name in (
+        ("2026-09-28", time(9, 0), EMAIL, "김민수"),
+        ("2026-09-29", time(9, 0), EMAIL, "김민수"),
+        ("2026-09-29", time(14, 0), EMAIL, "김민수"),
+        ("2026-09-30", time(9, 0), "lee@example.com", "이영희"),
+    ):
+        db.seed(business_id=BUSINESS["id"], employee_email=email, employee_name=name, branch="중화점",
+                work_date=date.fromisoformat(day), start_at=start, end_at=time(18, 0),
+                break_minutes=0, worked_minutes=480, status="pending")
+
+
+def _as_role(monkeypatch, role, email):
+    monkeypatch.setitem(USER, "email", email)
+    monkeypatch.setitem(USER, "current_membership", {**USER["current_membership"], "role": role})
+
+
+def test_attendance_list_route_is_registered_before_generic_routes():
+    paths = [(route.path, sorted(route.methods)) for route in api.router.routes]
+    specific = paths.index(("/workspaces/{business_id}/attendance/records", ["GET"]))
+    assert specific < paths.index(("/workspaces/{business_id}/{route}/records", ["GET"]))
+    assert specific < paths.index(("/workspaces/{business_id}/{route}/records/{record_id}", ["GET"]))
+
+
+def test_attendance_list_orders_by_work_date_then_start_desc_and_keeps_front_fields(client, db):
+    _seed_list(db)
+    body = client.get(LIST_URL, params={"limit": 500}).json()
+    raws = [(r["raw"]["work_date"], r["raw"]["start_at"]) for r in body["records"]]
+    assert raws == [("2026-09-30", "09:00:00"), ("2026-09-29", "14:00:00"),
+                    ("2026-09-29", "09:00:00"), ("2026-09-28", "09:00:00")]
+    raw = body["records"][0]["raw"]
+    for key in ("employee_name", "branch", "end_at", "break_minutes", "worked_minutes",
+                "hourly_wage", "status", "memo"):
+        assert key in raw
+    assert body["count"] == 4 and body["route"] == "attendance"
+    assert "night_minutes" not in raw and "employee_email" not in raw
+
+
+def test_attendance_list_excludes_soft_deleted(client, db):
+    _seed_list(db)
+    next(iter(db.rows.values()))["deleted_at"] = datetime.now(timezone.utc)
+    assert len(client.get(LIST_URL).json()["records"]) == 3
+
+
+def test_attendance_list_limit_bounds(client, db):
+    _seed_list(db)
+    assert client.get(LIST_URL, params={"limit": 501}).status_code == 422
+    assert client.get(LIST_URL, params={"limit": 0}).status_code == 422
+    assert client.get(LIST_URL).status_code == 200
+    assert db.list_args[-1][3] == 200  # 기본값
+    assert client.get(LIST_URL, params={"limit": 500}).status_code == 200
+    assert db.list_args[-1][3] == 500
+    assert len(client.get(LIST_URL, params={"limit": 2}).json()["records"]) == 2
+
+
+def test_attendance_list_from_to_filter(client, db):
+    _seed_list(db)
+
+    def days(**params):
+        response = client.get(LIST_URL, params=params)
+        assert response.status_code == 200, response.text
+        return {r["raw"]["work_date"] for r in response.json()["records"]}
+
+    assert days(**{"from": "2026-09-29"}) == {"2026-09-29", "2026-09-30"}
+    assert days(to="2026-09-29") == {"2026-09-28", "2026-09-29"}
+    assert days(**{"from": "2026-09-29", "to": "2026-09-29"}) == {"2026-09-29"}
+    assert days(employee_email="LEE@example.com") == {"2026-09-30"}  # 관리자 이메일 필터(대소문자 무시)
+    for bad in ({"from": "2026/09/29"}, {"to": "2026-13-40"}, {"from": "2026-10-01", "to": "2026-09-01"}):
+        assert client.get(LIST_URL, params=bad).status_code == 400
+
+
+def test_attendance_list_scopes_by_role_and_business(client, db, monkeypatch):
+    _seed_list(db)
+    assert len(client.get(LIST_URL).json()["records"]) == 4  # 관리자 전체
+
+    _as_role(monkeypatch, "member", EMAIL)
+    assert len(client.get(LIST_URL).json()["records"]) == 3  # 본인만
+    # member 가 남의 이메일을 넘겨도 본인 행만 본다
+    mine = client.get(LIST_URL, params={"employee_email": "lee@example.com"}).json()["records"]
+    assert len(mine) == 3 and {r["raw"]["employee_name"] for r in mine} == {"김민수"}
+
+    calls = len(db.list_args)
+    _as_role(monkeypatch, "member", "")
+    assert client.get(LIST_URL).json()["records"] == []
+    assert len(db.list_args) == calls  # 이메일 없는 member 는 DB 조회 없이 빈 목록
+
+    _as_role(monkeypatch, "viewer", EMAIL)
+    assert client.get(LIST_URL).status_code == 403
+
+    _as_role(monkeypatch, "owner", "owner@example.com")
+    assert client.get(f"/api/v1/workspaces/{OTHER_BUSINESS_ID}/attendance/records").status_code == 404

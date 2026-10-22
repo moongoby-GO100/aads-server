@@ -13683,23 +13683,127 @@
       });
     }
 
-    async function uploadLocalShifts(ids) {
-      const targets = state.shifts.filter(item => ids.includes(item.id));
-      const failed = [];
+    // 서버 UNIQUE(직원·사업자·근무일·시작시각) 충돌(409)은 "이미 서버에 있음"이므로 성공으로 센다.
+    async function pushLocalShifts(targets) {
+      const result = { attempted: targets.length, succeeded: 0, duplicate: 0, failed: [], aborted: false };
       for (const shift of targets) {
         try {
           await saveShiftToServer(shift);
+          result.succeeded += 1;
           state.shifts = state.shifts.filter(item => item.id !== shift.id);
         } catch (error) {
-          failed.push(`${shift.date} ${shift.staff}: ${error?.message || "서버 오류"}`);
+          if (Number(error?.status) === 409) {
+            result.succeeded += 1;
+            result.duplicate += 1;
+            state.shifts = state.shifts.filter(item => item.id !== shift.id);
+          } else if (Number(error?.status) === 401) {
+            result.aborted = true;
+            break;
+          } else {
+            result.failed.push({ shift, reason: error?.message || "서버 오류" });
+          }
         }
       }
       saveState();
+      return result;
+    }
+
+    async function uploadLocalShifts(ids) {
+      const targets = state.shifts.filter(item => ids.includes(item.id));
+      const result = await pushLocalShifts(targets);
       await loadAttendanceRecords().catch(() => {});
-      if (failed.length) {
-        showToast(`근태 서버 저장 실패 ${failed.length}건 — 로컬에 남겨 두었습니다. ${failed[0]}`);
+      if (result.failed.length) {
+        const first = result.failed[0];
+        showToast(`근태 서버 저장 실패 ${result.failed.length}건 — 로컬에 남겨 두었습니다. ${first.shift.date} ${first.shift.staff}: ${first.reason}`);
       } else {
         showToast(`근태 ${targets.length}건을 서버에 저장했습니다.`);
+      }
+      return result;
+    }
+
+    const ATTENDANCE_MIGRATION_LEDGER = "yeoljeong-attendance-migrated-v1";
+    const ATTENDANCE_MIGRATION_REASON_LIMIT = 20;
+    let attendanceMigrationRunning = false;
+
+    function loadAttendanceMigrationLedger() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(ATTENDANCE_MIGRATION_LEDGER) || "null");
+        if (parsed && typeof parsed === "object" && parsed.businesses && typeof parsed.businesses === "object") return parsed;
+      } catch (error) {
+        // 깨진 값은 새 장부로 대체한다.
+      }
+      return { version: 1, businesses: {} };
+    }
+
+    function saveAttendanceMigrationLedger(ledger) {
+      try {
+        localStorage.setItem(ATTENDANCE_MIGRATION_LEDGER, JSON.stringify(ledger));
+      } catch (error) {
+        // 저장 실패해도 이관 자체는 계속된다. 재시도 방지는 실패 건이 로컬에 남아 있는 한 다음 로드에서 다시 시도될 수 있다.
+      }
+    }
+
+    function shiftMigrationBusinessId(shift) {
+      return businessIdForBranchName(shift.branch) || selectedSettingsBusinessId() || "";
+    }
+
+    // 로그인 후 1회: 서버에 못 올린 로컬 근태를 사업자별로 자동 이관한다. 이미 시도해 실패한 건은 자동 재시도하지 않고
+    // 기존 수동 버튼(uploadLocalShiftsBtn)으로 복구한다. 결과(시도/성공/실패/사유)는 localStorage 장부에만 남긴다.
+    async function autoMigrateLocalShifts() {
+      if (attendanceMigrationRunning || !hasServerAuth() || employeePreview) return null;
+      if (!Array.isArray(state.shifts) || !state.shifts.length) return null;
+      const ledger = loadAttendanceMigrationLedger();
+      const alreadyFailed = new Set();
+      Object.values(ledger.businesses).forEach(entry => (entry.failedIds || []).forEach(id => alreadyFailed.add(id)));
+      const groups = new Map();
+      state.shifts.forEach(shift => {
+        if (alreadyFailed.has(shift.id)) return;
+        const businessId = shiftMigrationBusinessId(shift);
+        if (!businessId) return;
+        if (!groups.has(businessId)) groups.set(businessId, []);
+        groups.get(businessId).push(shift);
+      });
+      if (!groups.size) return null;
+      attendanceMigrationRunning = true;
+      const localBefore = state.shifts.length;
+      const run = { at: new Date().toISOString(), localBefore, localAfter: localBefore, attempted: 0, succeeded: 0, duplicate: 0, failed: 0 };
+      try {
+        for (const [businessId, targets] of groups) {
+          const result = await pushLocalShifts(targets);
+          const entry = ledger.businesses[businessId] || { attempted: 0, succeeded: 0, duplicate: 0, failed: 0, reasons: [], failedIds: [] };
+          entry.attempted += result.succeeded + result.failed.length;
+          entry.succeeded += result.succeeded;
+          entry.duplicate += result.duplicate;
+          entry.failed += result.failed.length;
+          entry.failedIds = [...new Set([...(entry.failedIds || []), ...result.failed.map(item => item.shift.id)])];
+          entry.reasons = [...(entry.reasons || []), ...result.failed.map(item => ({ date: item.shift.date, reason: String(item.reason).slice(0, 200) }))]
+            .slice(-ATTENDANCE_MIGRATION_REASON_LIMIT);
+          entry.lastAt = run.at;
+          ledger.businesses[businessId] = entry;
+          run.attempted += result.succeeded + result.failed.length;
+          run.succeeded += result.succeeded;
+          run.duplicate += result.duplicate;
+          run.failed += result.failed.length;
+          saveAttendanceMigrationLedger(ledger);
+          if (result.aborted) break;
+        }
+        await loadAttendanceRecords().catch(() => {});
+        run.localAfter = state.shifts.length;
+        run.serverCounts = serverShiftsError ? null : Object.fromEntries(
+          [...groups.keys()].map(businessId => [businessId, serverShifts.filter(item => item.businessId === businessId).length])
+        );
+        ledger.lastRun = run;
+        saveAttendanceMigrationLedger(ledger);
+        if (run.attempted) {
+          showToast(run.failed
+            ? `근태 ${run.succeeded}건 이관, ${run.failed}건 실패 — '미저장 근태 서버로 올리기' 버튼으로 다시 시도할 수 있습니다.`
+            : `근태 ${run.succeeded}건을 서버로 이관했습니다.`);
+        }
+        return run;
+      } catch (error) {
+        return null;
+      } finally {
+        attendanceMigrationRunning = false;
       }
     }
 
@@ -14705,7 +14809,7 @@
       if (pendingPhoneInviteToken) {
         acceptPendingPhoneInvite(authSession?.user?.name || "").catch(err => showToast(`초대 처리 실패: ${err.message}`));
       }
-      loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
+      loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`)).then(() => autoMigrateLocalShifts());
       loadTenantList().catch(() => {});
       if (canManageAutomation()) refreshServerAccounts().catch(() => {});
       loadOnboardingDocumentTypes().catch(() => {});
@@ -14828,7 +14932,7 @@
       els.gateSignupForm.organizationName.value = "열정국밥 운영관리";
       if (els.gateSignupForm.nationality) els.gateSignupForm.nationality.value = "대한민국";
       syncSignupBranchSelects();
-	      loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
+	      loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`)).then(() => autoMigrateLocalShifts());
 	      loadTenantList().catch(() => {});
 	      if (canManageAutomation()) refreshServerAccounts().catch(() => {});
       loadOnboardingDocumentTypes().catch(() => {});
@@ -17301,7 +17405,7 @@
       renderAuthState();
       if (rememberedRecipeRedirect && hasServerAuth() && followPostLoginRedirect()) return;
       refreshFinanceSessionInBackground();
-      if (hasServerAuth()) loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
+      if (hasServerAuth()) loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`)).then(() => autoMigrateLocalShifts());
       if (hasServerAuth()) loadTenantList().catch(() => {});
       if (canManageAutomation()) {
         refreshServerAccounts().catch(() => {});

@@ -965,6 +965,60 @@ def _attendance_response(business: dict[str, Any], row: Any) -> dict[str, Any]:
             "source": "yeoljeong_attendance_records"}
 
 
+ATTENDANCE_LIST_SQL = (
+    f"SELECT {ATTENDANCE_COLUMNS} FROM yeoljeong_attendance_records"
+    " WHERE business_id=$1 AND deleted_at IS NULL"
+    " AND ($2::date IS NULL OR work_date>=$2) AND ($3::date IS NULL OR work_date<=$3)"
+    " AND ($4::text IS NULL OR lower(employee_email)=$4)"
+    " ORDER BY work_date DESC, start_at DESC LIMIT $5"
+)
+
+
+def _attendance_filter_date(value: str | None, name: str) -> date | None:
+    if value is None or value == "":
+        return None
+    if not _ATTENDANCE_DATE.match(value):
+        raise HTTPException(status_code=400, detail=f"{name} 는 YYYY-MM-DD 형식이어야 합니다")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{name} 가 올바른 날짜가 아닙니다") from exc
+
+
+@router.get("/{business_id}/attendance/records")
+async def list_attendance_records(
+    business_id: str,
+    limit: int = Query(200, ge=1, le=500),
+    date_from: str | None = Query(None, alias="from", description="work_date 시작(YYYY-MM-DD, 포함)"),
+    date_to: str | None = Query(None, alias="to", description="work_date 끝(YYYY-MM-DD, 포함)"),
+    employee_email: str | None = Query(None, max_length=320),
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    business = await _business(current_user, business_id)
+    own_email = _require_route_read(current_user, "attendance")  # 관리자 None / member 본인 이메일
+    start = _attendance_filter_date(date_from, "from")
+    end = _attendance_filter_date(date_to, "to")
+    if start and end and start > end:
+        raise HTTPException(status_code=400, detail="from 은 to 보다 늦을 수 없습니다")
+    rows: list[Any] = []
+    if own_email != "":
+        # member 는 요청한 employee_email 과 무관하게 본인 행만 본다.
+        wanted = own_email if own_email is not None else (employee_email or "").strip().lower() or None
+        connection = await upload_svc._connect()
+        try:
+            rows = await connection.fetch(ATTENDANCE_LIST_SQL, business_id, start, end, wanted, limit)
+        finally:
+            await connection.close()
+    records = [_record("generic", dict(row), business["name"]) for row in rows]
+    return {
+        "business": {"id": business["id"], "name": business["name"]},
+        "route": "attendance",
+        "records": records,
+        "count": len(records),
+        "source": {"name": "yeoljeong_attendance_records", "live": True},
+    }
+
+
 @router.post("/{business_id}/attendance/records", status_code=201)
 async def create_attendance_record(
     business_id: str,
