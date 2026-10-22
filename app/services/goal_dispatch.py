@@ -60,7 +60,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import structlog
@@ -142,7 +142,24 @@ def _cycle_lock() -> asyncio.Lock:
 _NOT_AN_ANSWER = ("⏳", "⚠️ _응답 생성이", "_AI가 응답을 생성 중")
 
 
-def _build_message(row: Any, *, sent_before: int | None = None) -> str:
+_KST = timezone(timedelta(hours=9))
+_SUBSTITUTE_NOTE = "담당 세션 없음 — 목표 주도 세션으로 대체 발송"
+
+
+def _kst_hhmm(at: Any) -> str:
+    try:
+        return at.astimezone(_KST).strftime("%H:%M")
+    except (AttributeError, ValueError):
+        return "?"
+
+
+def _build_message(
+    row: Any,
+    *,
+    sent_before: int | None = None,
+    answered_without_progress: bool = False,
+    substitute: bool = False,
+) -> str:
     """지시문. `sent_before` 는 **소유권을 잡고 읽은** 발송 횟수다.
 
     조회 시점의 `row["dispatch_count"]` 를 그대로 믿으면, 조회와 발송
@@ -155,7 +172,8 @@ def _build_message(row: Any, *, sent_before: int | None = None) -> str:
     criteria = (row["completion_criteria"] or "").strip()
     if sent_before is None:
         sent_before = int(row["dispatch_count"] or 0)
-    again = sent_before > 0
+    # 막힘이 풀려 횟수가 0 으로 돌아와도, 답은 이미 한 번 받은 건이면 재알림이다.
+    again = sent_before > 0 or answered_without_progress
 
     head = "[목표 진행 — 재알림]" if again else "[목표 진행 — 착수]"
     body = [
@@ -169,7 +187,17 @@ def _build_message(row: Any, *, sent_before: int | None = None) -> str:
         body.append(f"\n{desc}")
     if criteria:
         body.append(f"\n## 완료 기준\n{criteria}")
-    if again:
+    if substitute:
+        body.append(
+            f"\n{_SUBSTITUTE_NOTE}. 이 마일스톤에는 담당 세션이 없어 주도 세션인 "
+            "너에게 보낸다. 직접 진행하거나 맡길 담당을 정해라."
+        )
+    if again and answered_without_progress:
+        body.append(
+            "\n앞서 보낸 지시에 답은 확인됐으나 러너 제출이나 완료 보고가 없다. "
+            "지금 진행하거나, 막힌 이유를 보고해라."
+        )
+    elif again:
         body.append(
             "\n앞서 같은 내용을 보냈는데 답이 확인되지 않았다. 응답이 중간에 "
             "끊겼을 수 있다. 이미 진행한 것이 있으면 그것부터 정리해서 답해라."
@@ -251,6 +279,81 @@ def note_record_reset(
     )
 
 
+_ANSWER_AFTER_SQL = """SELECT MIN(created_at) FROM chat_messages
+    WHERE session_id = $1 AND role = 'assistant'
+      AND created_at > $2 AND length(content) > 40
+      AND content NOT LIKE '⏳%'
+      AND content NOT LIKE '⚠️ _응답 생성이%'"""
+
+
+async def _has_runner_progress(conn, milestone_id: str) -> bool:
+    """살아 있는 러너 작업 링크가 있는가. 실제 job 상태도 대조한다."""
+    columns = await goal_manager.link_optional_columns(conn)
+    return bool(await conn.fetchval(
+        f"""
+        SELECT EXISTS (
+            SELECT 1 FROM goal_task_links
+            WHERE milestone_id = $1::uuid
+              AND task_type = 'pipeline_job'
+              {goal_manager.active_link_predicate(columns)}
+              {goal_manager.superseded_link_predicate(columns)}
+              AND status NOT IN ('failed', 'error', 'rejected', 'rejected_done')
+              AND NOT EXISTS (
+                  SELECT 1 FROM pipeline_jobs j
+                  WHERE j.job_id = goal_task_links.task_id
+                    AND j.status IN ('failed', 'error', 'rejected', 'rejected_done', 'cancelled')
+              )
+        )
+        """,
+        milestone_id,
+    ))
+
+
+async def _release_block_if_unblocked(conn, row: Any, session_id: str) -> str | None:
+    """막힌(`dispatch_blocked_at`) 마일스톤이 막힌 뒤에 움직였으면 막힘을 푼다.
+
+    사람이 확인해야 한다고 막아 둔 뒤에 담당이 답하거나 러너가 뜨면, 그 막힘은
+    이미 낡았다. 풀지 않으면 `count >= _MAX_DISPATCH` 라서 같은 사이클에 바로
+    다시 막히고, 사람은 움직인 건을 계속 "응답 없음" 으로 본다.
+
+    - 러너 링크: 막힘·메모만 치운다(`_clear_answered_block`). 횟수는 두지 않아
+      링크가 살아 있는 동안은 재발송이 없다.
+    - 막힌 시각 이후의 답(`_ANSWER_AFTER_SQL`, 기존 판정과 같은 기준): 횟수를 0 으로
+      되돌려 다음 주기에 진행 독촉이 다시 나가게 한다. 이전 값은 로그에 남긴다.
+
+    돌려주는 값은 풀린 사유이고, 아무것도 안 풀었으면 `None`.
+    """
+    milestone_id = row["milestone_id"]
+    if await _has_runner_progress(conn, milestone_id):
+        await _clear_answered_block(conn, milestone_id)
+        logger.info("goal_dispatch_block_released", milestone=str(milestone_id)[:8],
+                    reason="runner_progress")
+        return "runner_progress"
+
+    blocked_at = row["dispatch_blocked_at"]
+    answered_at = await conn.fetchval(_ANSWER_AFTER_SQL, session_id, blocked_at)
+    if not answered_at:
+        return None
+    result = await conn.execute(
+        "UPDATE milestones SET updated_at = NOW(), dispatch_blocked_at = NULL, "
+        "dispatch_note = NULL, dispatch_count = 0 "
+        "WHERE id = $1::uuid AND dispatch_blocked_at = $2",
+        milestone_id, blocked_at,
+    )
+    if not str(result).endswith(" 1"):
+        return None
+    note_record_reset(
+        milestone_id,
+        reason=f"막힌 뒤 담당 답 확인({_kst_hhmm(answered_at)} KST) — 막힘 해제",
+        where="answered_after_block",
+        prev_dispatched_at=row["dispatched_at"],
+        prev_dispatch_count=row["dispatch_count"],
+    )
+    logger.info("goal_dispatch_block_released", milestone=str(milestone_id)[:8],
+                reason="answered_after_block", answered_at=answered_at.isoformat())
+    return "answered_after_block"
+
+
 async def _requester_session(conn, row: Any) -> str:
     """승인 요청을 올릴 세션. **주도가 정본이다.**
 
@@ -278,31 +381,38 @@ async def _requester_session(conn, row: Any) -> str:
     return str(fallback or "")
 
 
-async def _handle_missing_owner(conn, row: Any, *, remaining: int) -> int:
+async def _handle_missing_owner(
+    conn, row: Any, *, remaining: int, write_notes: bool = True,
+) -> int:
     """담당 세션이 없는 마일스톤 하나를 처리한다. 올린 요청 수를 돌려준다.
 
     **여기서 세션을 만들지 않는다.** 만드는 것은 CEO 가 승인 카드를 누른
     뒤 `provision_owner_session` 하나뿐이다 — 채팅창이 대표님 모르게
     늘어나면 안 된다는 원칙(`add_goal_owner`)은 그대로다.
+
+    `write_notes=False` 는 주도 세션으로 대체 발송하는 건이다. 같은 사이클에서
+    발송 쪽이 `dispatch_note` 를 쓰므로, 여기서 또 쓰면 두 쪽이 서로 덮어쓴다.
     """
     milestone_id = row["milestone_id"]
+
+    async def note(text: str) -> None:
+        if write_notes:
+            await _note(conn, milestone_id, text)
+
     role = str(row["owner_role_key"] or "").strip()
 
     # 역할조차 안 적힌 마일스톤은 요청 대상이 아니다. 누구를 만들지 모른다.
     if not role:
-        await _note(conn, milestone_id, "담당 역할이 지정되지 않음")
+        await note("담당 역할이 지정되지 않음")
         return 0
 
     requester = await _requester_session(conn, row)
     if not requester:
-        await _note(conn, milestone_id, "주도 세션이 없어 승인 요청을 올릴 곳이 없음")
+        await note("주도 세션이 없어 승인 요청을 올릴 곳이 없음")
         return 0
 
     if remaining <= 0:
-        await _note(
-            conn, milestone_id,
-            f"담당 세션 없음(role={role}) — 이번 주기 요청 상한 초과, 다음 주기에 올림",
-        )
+        await note(f"담당 세션 없음(role={role}) — 이번 주기 요청 상한 초과, 다음 주기에 올림")
         return 0
 
     try:
@@ -319,7 +429,7 @@ async def _handle_missing_owner(conn, row: Any, *, remaining: int) -> int:
             "goal_owner_request_failed",
             milestone=str(milestone_id)[:8], role=role, error=str(exc)[:160],
         )
-        await _note(conn, milestone_id, f"담당 세션 없음(role={role}) — 승인 요청 실패")
+        await note(f"담당 세션 없음(role={role}) — 승인 요청 실패")
         return 0
 
     if result.get("error"):
@@ -327,10 +437,10 @@ async def _handle_missing_owner(conn, row: Any, *, remaining: int) -> int:
             "goal_owner_request_rejected",
             milestone=str(milestone_id)[:8], role=role, why=str(result["error"])[:160],
         )
-        await _note(conn, milestone_id, f"담당 세션 없음(role={role}) — {result['error']}")
+        await note(f"담당 세션 없음(role={role}) — {result['error']}")
         return 0
 
-    await _note(conn, milestone_id, f"담당 세션 없음(role={role}) — 생성 승인 요청함")
+    await note(f"담당 세션 없음(role={role}) — 생성 승인 요청함")
     logger.info(
         "goal_owner_request_open",
         milestone=str(milestone_id)[:8], role=role,
@@ -685,18 +795,42 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                                 milestone=row["milestone_id"], why=why)
                     skipped += 1
                     continue
-                if not row["session_id"]:
+                send_session = str(row["session_id"] or "")
+                substitute = False
+                if not send_session:
                     # 담당이 안 정해진 마일스톤. 말을 걸 곳이 **아직** 없다.
                     #
                     # 2026-09-17 이전에는 여기서 그냥 넘어갔다. 기록이 어디에도
                     # 남지 않아서, 담당 없는 마일스톤은 착수 상태로 열린 채
                     # 영원히 방치됐다 — 아무도 그런 것이 있는 줄 몰랐다.
                     # 이제 사유를 남기고, 주도 세션이 생성 승인을 요청한다.
-                    skipped += 1
-                    owner_requests += await _handle_missing_owner(
-                        conn, row, remaining=_OWNER_REQUEST_PER_CYCLE - owner_requests,
-                    )
-                    continue
+                    #
+                    # 주도 세션이 있으면 **그쪽으로 대체 발송한다.** 역할도 비고
+                    # 담당도 없는 건이 note 한 줄만 남기고 영원히 안 나가던 것을
+                    # 2026-10-22 실측으로 확인했다(주도는 있었다). 세션을 몰래
+                    # 만들지는 않는다 — 역할이 있으면 승인 요청은 그대로 올린다.
+                    lead = str(row.get("goal_lead_session_id") or "").strip()
+                    if not lead:
+                        skipped += 1
+                        owner_requests += await _handle_missing_owner(
+                            conn, row, remaining=_OWNER_REQUEST_PER_CYCLE - owner_requests,
+                        )
+                        continue
+                    send_session = lead
+                    substitute = True
+                    if str(row["owner_role_key"] or "").strip():
+                        owner_requests += await _handle_missing_owner(
+                            conn, row, remaining=_OWNER_REQUEST_PER_CYCLE - owner_requests,
+                            write_notes=False,
+                        )
+
+                # 막힌 건이 막힌 뒤에 움직였으면 푼다. 발송 상한·게이트 **앞**에서
+                # 본다 — 보내지 않는 판정이라 그것들에 막힐 이유가 없고, 뒤에 두면
+                # 발송이 바쁜 사이클마다 해제가 밀린다.
+                if row.get("dispatch_blocked_at") is not None and row["dispatched_at"] is not None:
+                    if await _release_block_if_unblocked(conn, row, send_session):
+                        skipped += 1
+                        continue
 
                 # 발송 상한은 담당 없는 건을 처리한 **뒤에** 본다. 먼저 보면
                 # 발송이 상한에 차는 사이클마다 승인 요청이 통째로 밀린다.
@@ -715,11 +849,11 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                     cost_gate, load_gate, owner_paused,
                 )
 
-                if str(row["session_id"]) in touched:
+                if send_session in touched:
                     skipped += 1
                     continue
 
-                paused, why = await owner_paused(row["goal_id"], str(row["session_id"]))
+                paused, why = await owner_paused(row["goal_id"], send_session)
                 if paused:
                     skipped += 1
                     continue
@@ -756,39 +890,22 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                     await _clear_load_defer(conn, row["milestone_id"])
 
                 # 보낸 뒤에 **진짜 답**이 왔는지 본다.
+                answered_at = None
+                answered_without_progress = False
                 if row["dispatched_at"] is not None:
-                    answered_at = None
                     # 살아 있는 러너 작업이 있으면 채팅 저장 지연 여부와
                     # 무관하게 재발송하지 않는다. 실제 job 상태도 대조한다.
-                    columns = await goal_manager.link_optional_columns(conn)
-                    has_progress = await conn.fetchval(
-                        f"""
-                        SELECT EXISTS (
-                            SELECT 1 FROM goal_task_links
-                            WHERE milestone_id = $1::uuid
-                              AND task_type = 'pipeline_job'
-                              {goal_manager.active_link_predicate(columns)}
-                              {goal_manager.superseded_link_predicate(columns)}
-                              AND status NOT IN ('failed', 'error', 'rejected', 'rejected_done')
-                              AND NOT EXISTS (
-                                  SELECT 1 FROM pipeline_jobs j
-                                  WHERE j.job_id = goal_task_links.task_id
-                                    AND j.status IN ('failed', 'error', 'rejected', 'rejected_done', 'cancelled')
-                              )
-                        )
-                        """,
-                        row["milestone_id"],
-                    )
+                    has_progress = await _has_runner_progress(conn, row["milestone_id"])
                     if has_progress:
                         await _clear_answered_block(conn, row["milestone_id"])
                         skipped += 1
                         continue
                     if (row["dispatched_session_id"] and
-                            str(row["dispatched_session_id"]) != str(row["session_id"])):
+                            str(row["dispatched_session_id"]) != send_session):
                         logger.warning(
                             "goal_dispatch_anchor_missing",
                             milestone=row["milestone_id"][:8],
-                            session=str(row["session_id"])[:8],
+                            session=send_session[:8],
                             why="담당 세션이 발송 당시 세션과 다름",
                         )
                     else:
@@ -797,43 +914,34 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                             WHERE session_id = $1 AND role IN ('user', 'system')
                               AND created_at > $2
                               AND content LIKE ('%' || $3 || '%')""",
-                            row["session_id"], row["dispatched_at"],
+                            send_session, row["dispatched_at"],
                             f"MILESTONE_ID: {row['milestone_id']}",
                         )
                         if anchor_at is None:
                             logger.warning(
                                 "goal_dispatch_anchor_missing",
                                 milestone=row["milestone_id"][:8],
-                                session=str(row["session_id"])[:8],
+                                session=send_session[:8],
                                 why="발송 태그 메시지를 찾지 못함",
                             )
-                            answered_at = await conn.fetchval(
-                                """SELECT MIN(created_at) FROM chat_messages
-                                WHERE session_id = $1 AND role = 'assistant'
-                                  AND created_at > $2 AND length(content) > 40
-                                  AND content NOT LIKE '⏳%'
-                                  AND content NOT LIKE '⚠️ _응답 생성이%'""",
-                                row["session_id"], row["dispatched_at"],
-                            )
-                        else:
-                            answered_at = await conn.fetchval(
-                                """SELECT MIN(created_at) FROM chat_messages
-                                WHERE session_id = $1 AND role = 'assistant'
-                                  AND created_at > $2 AND length(content) > 40
-                                  AND content NOT LIKE '⏳%'
-                                  AND content NOT LIKE '⚠️ _응답 생성이%'""",
-                                row["session_id"], anchor_at,
-                            )
+                        answered_at = await conn.fetchval(
+                            _ANSWER_AFTER_SQL, send_session,
+                            row["dispatched_at"] if anchor_at is None else anchor_at,
+                        )
                     if answered_at:
                         if answered_at > datetime.now(UTC) - timedelta(
                             minutes=_PROGRESS_GRACE_MIN
                         ):
                             skipped += 1
                             continue
+                        # 답은 왔는데 러너도 완료 보고도 없다. **답이 없는 것과
+                        # 다른 상태다** — 같은 문구로 섞으면 사람이 "응답 없음"
+                        # 으로 읽고 이미 답한 담당을 다시 깨운다.
+                        answered_without_progress = True
                         logger.warning(
                             "goal_dispatch_answer_without_progress",
                             milestone=row["milestone_id"],
-                            session=str(row["session_id"]),
+                            session=send_session,
                             answered_at=answered_at.isoformat(),
                             grace_min=_PROGRESS_GRACE_MIN,
                         )
@@ -841,14 +949,31 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 count = int(row["dispatch_count"] or 0)
                 if count >= _MAX_DISPATCH:
                     if row["dispatched_at"] is not None:
-                        await conn.execute(
+                        if answered_without_progress:
+                            block_note = (
+                                "담당이 답했으나 진행(러너·완료 보고)이 없음 — "
+                                f"확인된 답 {_kst_hhmm(answered_at)} KST"
+                            )
+                        else:
+                            block_note = (
+                                f"{_MAX_DISPATCH}회 보냈으나 답이 확인되지 않음 — "
+                                "사람이 확인해야 한다"
+                            )
+                        result = await conn.execute(
                             "UPDATE milestones SET dispatch_blocked_at = "
                             "COALESCE(dispatch_blocked_at, NOW()), dispatch_note = $2, "
                             "updated_at = NOW() WHERE id = $1::uuid AND "
                             "(dispatch_blocked_at IS NULL OR dispatch_note IS DISTINCT FROM $2)",
-                            row["milestone_id"],
-                            f"{_MAX_DISPATCH}회 보냈으나 답이 확인되지 않음 — 사람이 확인해야 한다",
+                            row["milestone_id"], block_note,
                         )
+                        if answered_without_progress and str(result).endswith(" 1"):
+                            logger.warning(
+                                "goal_dispatch_blocked_answered_no_progress",
+                                milestone=row["milestone_id"],
+                                session=send_session,
+                                answered_at=answered_at.isoformat(),
+                                count=count,
+                            )
                     gave_up += 1
                     continue
 
@@ -906,7 +1031,7 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                     "  AND (dispatched_at IS NULL "
                     "       OR dispatched_at < NOW() - ($3 || ' minutes')::interval) "
                     "RETURNING dispatch_count",
-                    row["milestone_id"], row["session_id"], str(_RETRY_AFTER_MIN),
+                    row["milestone_id"], send_session, str(_RETRY_AFTER_MIN),
                 )
                 if claimed is None:
                     # 다른 사이클이 이미 가져갔거나, 그 사이 마일스톤이
@@ -925,7 +1050,7 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                     logger.warning(
                         "goal_dispatch_claim_lost",
                         milestone=str(row["milestone_id"])[:8],
-                        session=str(row["session_id"])[:8],
+                        session=send_session[:8],
                         read_count=count,
                         read_dispatched_at=str(row["dispatched_at"] or ""),
                         why="이미 재시도 창 안에 발송 기록이 있거나 진행중이 아니다",
@@ -934,6 +1059,8 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                     continue
 
                 count_after = int(claimed["dispatch_count"] or 0)
+                if substitute:
+                    await _note(conn, row["milestone_id"], _SUBSTITUTE_NOTE)
 
                 # 스트림 소비는 **사이클에서 떼어낸다.**
                 #
@@ -949,8 +1076,12 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 _spawn_send(
                     goal_id=row["goal_id"],
                     milestone_id=row["milestone_id"],
-                    session_id=str(row["session_id"]),
-                    message=_build_message(row, sent_before=count_after - 1),
+                    session_id=send_session,
+                    message=_build_message(
+                        row, sent_before=count_after - 1,
+                        answered_without_progress=answered_without_progress,
+                        substitute=substitute,
+                    ),
                     attempt=count_after,
                     project=row["project"],
                     count_after=count_after,
@@ -959,7 +1090,7 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 )
 
                 sent += 1
-                touched.add(str(row["session_id"]))
+                touched.add(send_session)
 
         if sent or gave_up or owner_requests or links_repaired:
             logger.info(

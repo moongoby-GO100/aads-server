@@ -93,7 +93,8 @@ async def report_done(
             "UPDATE milestones SET status = 'review', reported_at = NOW(), "
             "started_at = COALESCE(started_at, NOW()), "
             "reported_by = NULLIF($2,'')::uuid, evidence = $3::jsonb, "
-            "review_asked_at = NULL, review_ask_count = 0, updated_at = NOW() "
+            "review_asked_at = NULL, review_ask_count = 0, "
+            "dispatch_blocked_at = NULL, dispatch_note = NULL, updated_at = NOW() "
             "WHERE id = $1::uuid",
             milestone_id, reporter_session_id, json.dumps(evidence, ensure_ascii=False),
         )
