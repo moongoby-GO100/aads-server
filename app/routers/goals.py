@@ -765,10 +765,23 @@ async def goal_board(
         logger.warning("goal_retry_accounting_attach_failed goal=%s error=%s", goal_id, str(exc)[:160])
 
     timer.lap("retry")
+    from app.services.goal_progress_state import empty_progress, progress_for_goals
+
+    async with pool.acquire() as conn:
+        progress = (await progress_for_goals(conn, [goal_id], tenant_id)).get(goal_id) or empty_progress()
+    for m in milestones:
+        m_progress = progress["milestones"].get(m["id"]) or {}
+        m["progress_state"] = m_progress.get("progress_state")
+        m["progress_reason"] = m_progress.get("progress_reason")
+    timer.lap("progress")
     docs = await goal_documents(goal_id, context)
     timer.lap("documents")
     return {
         "goal": dict(goal),
+        "progress_state": progress["progress_state"],
+        "progress_reason": progress["progress_reason"],
+        "progress_substitute": progress["progress_substitute"],
+        "blocked_milestones": progress["blocked_milestones"],
         "goal_paused": goal.get("paused_at") is not None,
         "goal_paused_reason": goal.get("paused_reason") if goal.get("paused_at") else None,
         "halted": await is_halted(),
@@ -1052,6 +1065,11 @@ async def goals_for_session(
         derived = await signals_for_rows(conn, [{**r, "id": r["goal_id"]} for r in goal_rows])
         live = await activity_for_goals(conn, [r["goal_id"] for r in goal_rows])
         unlinked = await unlinked_count(conn, session_id, _tenant_id(context))
+        from app.services.goal_progress_state import progress_for_goals
+
+        progress = await progress_for_goals(
+            conn, [r["goal_id"] for r in goal_rows], _tenant_id(context),
+        )
 
     goals = []
     for row in goal_rows:
@@ -1083,6 +1101,10 @@ async def goals_for_session(
             "strip_group": group,
             "strip_order": strip_order(group),
             "last_activity_at": signal.get("last_activity_at"),
+            "progress_state": progress[gid]["progress_state"],
+            "progress_reason": progress[gid]["progress_reason"],
+            "progress_substitute": progress[gid]["progress_substitute"],
+            "blocked_milestones": progress[gid]["blocked_milestones"],
         })
 
     from app.services.direction_guard import is_halted
@@ -1851,6 +1873,73 @@ async def confirm_milestone_api(
         )
 
     return result
+
+
+@router.post("/goals/milestones/{milestone_id}/redispatch")
+async def redispatch_milestone(
+    milestone_id: UUID,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
+    """진행중 마일스톤 1건의 발송 기록만 지워 다음 주기에 다시 보내게 한다.
+
+    담당 세션 단위인 `restart_owner` 와 달리 담당이 없는 마일스톤도 누를 수 있다.
+    보낼 곳(담당 또는 주도 세션)이 없으면 아무 일도 안 일어나므로 409 로 거절한다.
+    """
+    from app.core.db_pool import get_pool
+    from app.services.goal_dispatch import note_record_reset
+
+    mid = str(milestone_id)
+    tenant_id = _tenant_id(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        ms = await conn.fetchrow(
+            """
+            SELECT m.status, m.goal_id::text AS goal_id,
+                   m.dispatched_at, m.dispatch_count,
+                   (g.paused_at IS NOT NULL) AS goal_paused,
+                   (m.owner_session_id IS NOT NULL
+                    OR g.owner_session_id IS NOT NULL
+                    OR (m.owner_role_key IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM chat_sessions cs
+                         WHERE cs.tenant_id = $2::uuid AND cs.role_key = m.owner_role_key))
+                   ) AS has_target
+              FROM milestones m JOIN goals g ON g.id = m.goal_id
+             WHERE m.id = $1::uuid AND m.tenant_id = $2::uuid
+               FOR UPDATE OF m
+            """,
+            mid, tenant_id,
+        )
+        if not ms:
+            raise HTTPException(status_code=404, detail="milestone_not_found")
+        if ms["status"] != "in_progress":
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "milestone_not_in_progress",
+                        "message": "진행중인 마일스톤만 다시 보낼 수 있다"},
+            )
+        if not ms["has_target"]:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "no_dispatch_target",
+                        "message": "담당도 주도 세션도 없어 보낼 곳이 없다"},
+            )
+        await conn.execute(
+            "UPDATE milestones SET dispatched_at = NULL, dispatch_count = 0, "
+            "dispatch_note = NULL, dispatch_blocked_at = NULL, updated_at = NOW() "
+            "WHERE id = $1::uuid AND tenant_id = $2::uuid AND status = 'in_progress'",
+            mid, tenant_id,
+        )
+
+    note_record_reset(
+        mid,
+        reason=f"마일스톤 다시 보내기 API — goal={str(ms['goal_id'])[:8]}",
+        where="app/routers/goals.py:redispatch_milestone",
+        prev_dispatched_at=ms["dispatched_at"],
+        prev_dispatch_count=ms["dispatch_count"],
+    )
+    return {
+        "milestone_id": mid, "goal_id": ms["goal_id"],
+        "redispatched": True, "goal_paused": bool(ms["goal_paused"]),
+    }
 
 
 @router.post("/goals/milestones/{milestone_id}/rewind")
