@@ -3977,6 +3977,11 @@ async def jwt_auth_middleware(request: Request, call_next):
         _cors_h = {"access-control-allow-origin": _origin, "access-control-allow-credentials": "true", "vary": "Origin"}
     return JSONResponse(status_code=401, content={"detail": "인증이 필요합니다. Bearer 토큰을 제공하세요."}, headers=_cors_h)
 
+# 가장 바깥(인증 포함 시간을 재도록 jwt 미들웨어보다 나중에 등록)
+from app.core.server_timing import GoalServerTimingMiddleware  # noqa: E402
+
+app.add_middleware(GoalServerTimingMiddleware)
+
 # 글로벌 예외 핸들러
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:

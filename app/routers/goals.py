@@ -619,7 +619,9 @@ async def goal_board(
     (진행중 표시인지)으로 판단하면 어느 슬롯에서든 같은 답이 나온다.
     """
     from app.core.db_pool import get_pool
+    from app.core.server_timing import StepTimer
 
+    timer = StepTimer()
     tenant_id = _tenant_id(context)
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -630,6 +632,7 @@ async def goal_board(
             "FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
             goal_id, tenant_id,
         )
+        timer.lap("goal")
         if not goal:
             raise HTTPException(status_code=404, detail="goal_not_found")
 
@@ -676,6 +679,7 @@ async def goal_board(
             """,
             goal_id, tenant_id,
         )
+    timer.lap("owners")
 
     # 주도 정본을 먼저 꺼낸다. 세션 지정이 우선, 없으면 역할키.
     _goal_lead_session = str(goal["owner_session_id"] or "")
@@ -748,6 +752,7 @@ async def goal_board(
             """,
             goal_id, tenant_id, include_history,
         )
+    timer.lap("milestones")
 
     from app.services.direction_guard import is_halted
     from app.services.goal_failure_retry import attach_retry_accounting
@@ -759,7 +764,9 @@ async def goal_board(
     except Exception as exc:  # noqa: BLE001 — 부가 정보 실패가 목록을 막지 않는다
         logger.warning("goal_retry_accounting_attach_failed goal=%s error=%s", goal_id, str(exc)[:160])
 
+    timer.lap("retry")
     docs = await goal_documents(goal_id, context)
+    timer.lap("documents")
     return {
         "goal": dict(goal),
         "goal_paused": goal.get("paused_at") is not None,
