@@ -3206,7 +3206,129 @@ def _terminal_followup_dedupe_key(job_id: str, status: str, commit_sha: str | No
     return f"{_TERMINAL_FOLLOWUP_KEY_PREFIX}{job_id}:{status}:{sha}"
 
 
-def _terminal_followup_message(row, *, kind: str, commit_sha: str | None, rdoc: dict | None = None) -> str:
+_DEPLOY_STAGE_SECTION_TITLE = "## 배포 단계 결과(러너 기록)"
+_DEPLOY_ONLY_HEADER_RE = re.compile(r"^[ \t]*DEPLOY_ONLY[ \t]*:[ \t]*true(?![A-Za-z0-9_])")
+# 승인 후 배포는 작업이 시작된 뒤에 만들어진다. 종료 시각 뒤 여유는 시계 오차·늦은 기록용.
+_DEPLOY_RUN_MATCH_GRACE_SECONDS = 600
+
+
+def _has_deploy_only_header(instruction: str | None) -> bool:
+    """pipeline-runner.sh 의 is_deploy_only_instruction 과 같은 규칙: 앞 20줄, 줄 시작 마커."""
+    lines = (instruction or "").splitlines()[:20]
+    return any(_DEPLOY_ONLY_HEADER_RE.match(line) for line in lines)
+
+
+def _format_deploy_stage_section(run: dict | None, *, linked_by: str | None, reason: str = "",
+                                 job_id: str = "", sha: str | None = None, candidates: int = 1) -> str:
+    """DEPLOY_ONLY 종결 결과에 덧붙일 deploy_runs 요약. 연결에 실패하면 성공으로 쓰지 않는다."""
+    if not run:
+        return (
+            f"{_DEPLOY_STAGE_SECTION_TITLE}\n"
+            f"- 배포 기록 연결 실패: {reason or 'deploy_runs 행을 찾지 못함'}\n"
+            f"- job={job_id or '-'} release_sha={(sha or '-')[:12]}\n"
+            "- 위 Claude Code 단계의 '릴리스 미실행' 문구는 러너 배포 단계와 무관한 작업 단계 기록이다. "
+            "이 기록으로는 이 잡의 배포 결과를 확인할 수 없으므로 운영 슬롯 이미지로 직접 확인해야 한다."
+        )
+    if linked_by == "runner_job_id":
+        link = "runner_job_id 일치"
+    else:
+        extra = f", 후보 {candidates}건 중 최신" if candidates > 1 else ""
+        link = f"runner_job_id 없음 → release_sha+시간창 매칭{extra}"
+    slots = f"{run.get('current_slot') or '-'} → {run.get('candidate_slot') or '-'}"
+    lines = [
+        _DEPLOY_STAGE_SECTION_TITLE,
+        f"- deploy_runs #{run.get('id')} ({link})",
+        f"- release_sha: {run.get('release_sha') or '-'}",
+        f"- status: {run.get('status') or '-'} / phase: {run.get('phase') or '-'}",
+        f"- slot(current → candidate): {slots}",
+    ]
+    err = str(run.get("error_summary") or "").strip()
+    if err:
+        lines.append(f"- error_summary: {err[:300]}")
+    return "\n".join(lines)
+
+
+_DEPLOY_RUN_COLUMNS = "id, release_sha, status, phase, current_slot, candidate_slot, error_summary"
+
+
+async def _deploy_stage_section_for_job(pool, job_id: str, *, commit_sha: str | None) -> tuple[str | None, bool]:
+    """DEPLOY_ONLY 잡이 실행·연결한 deploy_runs 행 요약. (섹션 본문, 영구 기록해도 되는가).
+
+    DEPLOY_ONLY 가 아니면 (None, False). 조회 오류는 (실패 문구, False) — 일시 오류를
+    result_output 에 영구 기록하지 않는다.
+    """
+    try:
+        async with pool.acquire() as conn:
+            job = await conn.fetchrow(
+                "SELECT project, substring(instruction from 1 for 4000) AS instruction, "
+                "COALESCE(started_at, created_at) AS window_start, updated_at AS window_end "
+                "FROM pipeline_jobs WHERE job_id = $1",
+                job_id,
+            )
+            if not job or not _has_deploy_only_header(job["instruction"]):
+                return None, False
+            project = str(job["project"] or "AADS")
+            run = await conn.fetchrow(
+                f"SELECT {_DEPLOY_RUN_COLUMNS} FROM deploy_runs "
+                "WHERE upper(trim(project)) = upper(trim($1)) AND runner_job_id = $2 "
+                "ORDER BY id DESC LIMIT 1",
+                project, job_id,
+            )
+            if run:
+                return _format_deploy_stage_section(dict(run), linked_by="runner_job_id"), True
+
+            sha = (commit_sha or "").strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{7,40}", sha):
+                return _format_deploy_stage_section(
+                    None, linked_by=None, job_id=job_id, sha=sha,
+                    reason="runner_job_id 일치 행 없음, 커밋 SHA 도 없어 release_sha 매칭 불가",
+                ), True
+            window_start, window_end = job["window_start"], job["window_end"]
+            if window_start is None or window_end is None:
+                return _format_deploy_stage_section(
+                    None, linked_by=None, job_id=job_id, sha=sha,
+                    reason="runner_job_id 일치 행 없음, 작업 시간창을 알 수 없어 release_sha 매칭 불가",
+                ), True
+            rows = await conn.fetch(
+                f"SELECT {_DEPLOY_RUN_COLUMNS} FROM deploy_runs "
+                "WHERE upper(trim(project)) = upper(trim($1)) AND runner_job_id IS NULL "
+                "AND length(release_sha) >= 7 AND $2 LIKE release_sha || '%' "
+                "AND created_at >= $3 "
+                "AND created_at <= $4::timestamptz + make_interval(secs => $5) "
+                "ORDER BY id DESC LIMIT 5",
+                project, sha, window_start, window_end, float(_DEPLOY_RUN_MATCH_GRACE_SECONDS),
+            )
+            if rows:
+                return _format_deploy_stage_section(
+                    dict(rows[0]), linked_by="release_sha_window", candidates=len(rows),
+                ), True
+            return _format_deploy_stage_section(
+                None, linked_by=None, job_id=job_id, sha=sha,
+                reason="runner_job_id 일치 행 없음, release_sha+시간창으로도 못 찾음",
+            ), True
+    except Exception as exc:
+        logger.warning("pipeline_runner.deploy_stage_section_failed", job_id=job_id, error=str(exc)[:200])
+        return _format_deploy_stage_section(
+            None, linked_by=None, job_id=job_id, sha=commit_sha,
+            reason=f"deploy_runs 조회 오류({type(exc).__name__})",
+        ), False
+
+
+async def _append_deploy_stage_section(pool, job_id: str, section: str) -> None:
+    """result_output 끝에 한 번만 덧붙인다. Claude Code 단계 문구는 지우지 않는다(감사 이력)."""
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE pipeline_jobs SET result_output = COALESCE(result_output, '') || $2 "
+                "WHERE job_id = $1 AND position($3 in COALESCE(result_output, '')) = 0",
+                job_id, "\n\n" + section, _DEPLOY_STAGE_SECTION_TITLE,
+            )
+    except Exception as exc:
+        logger.warning("pipeline_runner.deploy_stage_append_failed", job_id=job_id, error=str(exc)[:200])
+
+
+def _terminal_followup_message(row, *, kind: str, commit_sha: str | None, rdoc: dict | None = None,
+                               deploy_section: str | None = None) -> str:
     # 문구에 "AI 검수 대기" 를 넣지 않는다 — chat_service 의 stale 승인 가드가 그 표식으로
     # 종결 잡 대상 트리거를 폐기하므로, 종결 결과 검토는 그 가드와 분리돼야 한다.
     job_id = row["job_id"]
@@ -3219,6 +3341,9 @@ def _terminal_followup_message(row, *, kind: str, commit_sha: str | None, rdoc: 
     guard = (
         "\n진행 중인 CEO 응답이나 추가 지시는 중단하지 말고, 이 검토는 job/상태/SHA 당 한 번만 전달됩니다."
     )
+    # 결과 미리보기는 앞 300자뿐이라 result_output 끝에 덧붙인 배포 단계 결과는 잘려 나간다.
+    # Claude Code 단계의 "릴리스 미실행" 이 러너 배포와 별개임을 본문에서 따로 보여 준다.
+    deploy_block = f"{deploy_section[:1200]}\n\n" if deploy_section else ""
     if kind == "completed":
         from app.services.document_refs import format_rdoc_lines
 
@@ -3226,7 +3351,7 @@ def _terminal_followup_message(row, *, kind: str, commit_sha: str | None, rdoc: 
         return (
             "[시스템] Pipeline Runner 작업 종결 결과 검토 (완료)\n\n" + head
             + (f"{rdoc_lines}\n" if rdoc_lines else "")
-            + f"**결과**:\n{output}\n\n"
+            + f"**결과**:\n{output}\n\n{deploy_block}"
             "산출물이 실제로 반영됐는지(커밋·변경 파일·테스트·배포 상태)를 도구로 직접 확인하고, "
             "남은 후속 단계가 있으면 이어서 수행한 뒤 확인한 사실만 CEO에게 보고하세요. "
             "도구 확인 없이 '정상 완료'로 보고하지 마세요." + guard
@@ -3234,7 +3359,7 @@ def _terminal_followup_message(row, *, kind: str, commit_sha: str | None, rdoc: 
     error_detail = _record_get(row, "error_detail") or "unknown"
     return (
         "[시스템] Pipeline Runner 작업 종결 결과 검토 (실패)\n\n" + head
-        + f"**에러 분류**: {error_detail}\n**에러**:\n{output}\n\n"
+        + f"**에러 분류**: {error_detail}\n**에러**:\n{output}\n\n{deploy_block}"
         "원인을 작업 로그·diff 로 진단하고, 안전한 후속 조치(재시도·분할·차단 사유 보고)를 이어서 수행하세요." + guard
     )
 
@@ -3277,10 +3402,15 @@ async def _enqueue_terminal_followup(pool, row, *, job_id: str, session_id: str 
         from app.services.document_refs import job_rdoc_compliance
 
         rdoc = await job_rdoc_compliance(pool, job_id)
+    deploy_section, persist_section = await _deploy_stage_section_for_job(pool, job_id, commit_sha=commit_sha)
+    if deploy_section and persist_section:
+        await _append_deploy_stage_section(pool, job_id, deploy_section)
     try:
         queued = await enqueue_next_step_reaction(
             session_id,
-            _terminal_followup_message(row, kind=kind, commit_sha=commit_sha, rdoc=rdoc),
+            _terminal_followup_message(
+                row, kind=kind, commit_sha=commit_sha, rdoc=rdoc, deploy_section=deploy_section,
+            ),
             dedupe_key=dedupe_key,
         )
     except Exception as exc:

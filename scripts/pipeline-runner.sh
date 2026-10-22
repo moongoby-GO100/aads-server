@@ -7787,6 +7787,7 @@ deploy_job() {
                     _aads_pre_sha="${_aads_pre_state#* }"
                     log "  BLUEGREEN aads-server — approved isolated worktree=$worktree_dir"
                     if AADS_DEPLOY_FOREGROUND=1 \
+                       AADS_RUNNER_JOB_ID="$job_id" \
                        AADS_DEPLOY_SOURCE_DIR="$worktree_dir" \
                        AADS_DEPLOY_STATE_DIR="$main_workdir" \
                        bash "$worktree_dir/deploy.sh" bluegreen >"$_aads_deploy_log" 2>&1; then

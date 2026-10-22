@@ -687,21 +687,34 @@ apply_release_schema_migrations() {
     exit 1
 }
 
+# 러너가 띄운 배포면 deploy_runs.runner_job_id 를 채운다. 2026-10-22 deploy_runs #5843 은
+# 이 값이 NULL 이라 러너 종결 결과와 연결되지 않았다. (project, runner_job_id) 는 UNIQUE 라
+# 같은 잡의 행이 이미 있으면 NULL 로 둔다 — INSERT 전체를 충돌로 죽이면 배포 기록이 사라진다.
+deploy_runner_job_id_sql() {
+    local rid="${AADS_RUNNER_JOB_ID:-}"
+    if [[ ! "$rid" =~ ^runner-[0-9a-zA-Z_-]+$ ]]; then
+        echo "NULL"
+        return 0
+    fi
+    echo "(SELECT '${rid}' WHERE NOT EXISTS (SELECT 1 FROM deploy_runs WHERE project='AADS' AND runner_job_id='${rid}'))"
+}
+
 deploy_observe_init() {
     if [[ -n "${DEPLOY_RUN_ID:-}" ]] || ! deploy_db_available; then
         return 0
     fi
-    local release_sql current_slot_sql candidate_slot_sql generation_sql run_id
+    local release_sql current_slot_sql candidate_slot_sql generation_sql run_id runner_job_expr
+    runner_job_expr="$(deploy_runner_job_id_sql)"
     release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
     current_slot_sql="$(sql_escape "${CURRENT_PORT:-${ACTIVE_PORT:-unknown}}")"
     candidate_slot_sql="$(sql_escape "${NEW_PORT:-}")"
     generation_sql="$(sql_escape "${DEPLOY_GENERATION:-}")"
     run_id="$(
         deploy_db_exec "
-            INSERT INTO deploy_runs(project, release_sha, status, phase, phase_started_at,
+            INSERT INTO deploy_runs(project, release_sha, runner_job_id, status, phase, phase_started_at,
                                     current_slot, candidate_slot, deploy_pid, deploy_generation,
                                     last_heartbeat_at, created_at, updated_at)
-            VALUES('AADS', '$release_sql', 'running', 'initializing', NOW(),
+            VALUES('AADS', '$release_sql', ${runner_job_expr}, 'running', 'initializing', NOW(),
                    '$current_slot_sql', NULLIF('$candidate_slot_sql', ''), $$,
                    NULLIF('$generation_sql', ''), NOW(), NOW(), NOW())
             RETURNING id;
@@ -851,7 +864,8 @@ queue_pending_deploy_request() {
         return 0
     fi
     ensure_deploy_observability_schema || return 0
-    local release_sql lock_pid_sql queue_reason_sql run_id changed_files_json changed_files_sql
+    local release_sql lock_pid_sql queue_reason_sql run_id changed_files_json changed_files_sql runner_job_expr
+    runner_job_expr="$(deploy_runner_job_id_sql)"
     release_sql="$(sql_escape "${AADS_RELEASE_SHA:-unknown}")"
     lock_pid_sql="$(sql_escape "$lock_pid")"
     queue_reason_sql="$(sql_escape "queued because active blue-green deploy is still syncing standby; active_pid=${lock_pid}")"
@@ -896,13 +910,13 @@ queue_pending_deploy_request() {
                 LIMIT 1
             ),
             inserted AS (
-                INSERT INTO deploy_runs(project, release_sha, status, phase, phase_started_at,
+                INSERT INTO deploy_runs(project, release_sha, runner_job_id, status, phase, phase_started_at,
                                         deploy_pid, last_heartbeat_at, queue_position,
                                         error_summary, requested_by, request_source,
                                         commit_status, push_status, auto_start,
                                         requested_at, created_at, updated_at,
                                         component, deploy_type, target_env, approval_policy)
-                SELECT 'AADS', '$release_sql', 'queued',
+                SELECT 'AADS', '$release_sql', ${runner_job_expr}, 'queued',
                        CASE WHEN EXISTS (
                            SELECT 1 FROM deploy_runs
                            WHERE project='AADS' AND component='api' AND target_env='production'
