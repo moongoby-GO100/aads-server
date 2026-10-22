@@ -371,7 +371,8 @@ def test_redispatch_clears_dispatch_record_and_traces_previous_values(monkeypatc
     (query, args), = conn.executed
     for fragment in (
         "dispatched_at = NULL", "dispatch_count = 0", "dispatch_note = NULL",
-        "dispatch_blocked_at = NULL", "status = 'in_progress'", "tenant_id = $2::uuid",
+        "dispatch_blocked_at = NULL", "dispatch_unblock_count = 0",
+        "status = 'in_progress'", "tenant_id = $2::uuid",
     ):
         assert fragment in query
     assert args == (MS, TENANT)

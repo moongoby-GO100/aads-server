@@ -1751,6 +1751,7 @@ async def restart_owner(
                 UPDATE milestones m
                    SET dispatched_at = NULL, dispatch_count = 0,
                        dispatch_note = NULL, dispatch_blocked_at = NULL,
+                       dispatch_unblock_count = 0,
                        updated_at = NOW()
                   FROM target t
                  WHERE m.id = t.id
@@ -1924,7 +1925,8 @@ async def redispatch_milestone(
             )
         await conn.execute(
             "UPDATE milestones SET dispatched_at = NULL, dispatch_count = 0, "
-            "dispatch_note = NULL, dispatch_blocked_at = NULL, updated_at = NOW() "
+            "dispatch_note = NULL, dispatch_blocked_at = NULL, "
+            "dispatch_unblock_count = 0, updated_at = NOW() "
             "WHERE id = $1::uuid AND tenant_id = $2::uuid AND status = 'in_progress'",
             mid, tenant_id,
         )

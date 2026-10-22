@@ -342,6 +342,9 @@ def test_restart_owner_traces_every_milestone_it_clears(monkeypatch) -> None:
         async def fetch(self, query: str, *_a):
             assert "WITH target" in query, "지운 건 전부를 받아 오지 않는다"
             assert "tenant_id = $3::uuid" in query
+            assert "dispatch_unblock_count = 0" in query, (
+                "수동 재시작이 답으로 막힘 해제 횟수를 지우지 않는다"
+            )
             return cleared
 
     monkeypatch.setattr(
