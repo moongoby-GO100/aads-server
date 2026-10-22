@@ -413,3 +413,37 @@ def test_w14b_recursive_revoke_and_retry_fails_closed():
     assert "lineage_backfill" in W14B
     reserve = SERVICE[SERVICE.index("async def reserve_grant_use"):SERVICE.index("async def reconcile_grant_use")]
     assert reserve.index("goal_approval_kill_switches") < reserve.index("idempotent_replay")
+
+
+class RollupConn:
+    def __init__(self):
+        self.statements = []
+
+    async def execute(self, sql, *args):
+        self.statements.append((sql, args))
+
+
+def test_goal_progress_rollup_writes_zero_to_one_ratio():
+    from app.services.goal_workflow_approval import rollup_ancestors
+
+    conn = RollupConn()
+    asyncio.run(rollup_ancestors(conn, tenant_id=TENANT, item_id=CHANGE))
+    goal_sql = next(sql for sql, _ in conn.statements if "UPDATE goals g SET progress" in sql)
+    assert "round(c.done::numeric/NULLIF(c.total,0),2)" in goal_sql
+    assert "100.0*" not in goal_sql
+    work_item_sql = next(sql for sql, _ in conn.statements if "UPDATE work_items w SET progress" in sql)
+    assert "100.0*" in work_item_sql
+
+
+def test_goal_progress_one_third_done_rounds_to_033():
+    from decimal import ROUND_HALF_EVEN, Decimal
+
+    ratio = (Decimal(1) / Decimal(3)).quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
+    assert float(ratio) == 0.33
+
+
+def test_goal_progress_normalize_migration_is_idempotent_and_non_destructive():
+    text = (ROOT / "migrations/20261022_goals_progress_ratio_normalize.sql").read_text()
+    sql = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("--")).upper()
+    assert "WHERE PROGRESS > 1" in sql
+    assert "DROP " not in sql and "TRUNCATE" not in sql and "DELETE" not in sql
