@@ -102,6 +102,7 @@ def require_pipeline_tenant_role(minimum: TenantRole):
                 authorization=authorization,
                 x_tenant_id=x_tenant_id,
                 x_monitor_key=x_monitor_key,
+                x_handover_key=None,
             )
             context = {
                 "user": current_user,

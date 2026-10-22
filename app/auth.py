@@ -1836,6 +1836,11 @@ async def get_current_user(
     """Bearer 토큰에서 사용자 정보 추출. Depends()로 사용."""
     if not JWT_AVAILABLE:
         raise HTTPException(status_code=503, detail='JWT not available')
+    # Depends 없이 직접 호출하면 Header(None) 기본값 객체가 그대로 들어온다 — str 이 아니면 미제공으로 본다.
+    authorization = authorization if isinstance(authorization, str) else None
+    x_tenant_id = x_tenant_id if isinstance(x_tenant_id, str) else None
+    x_monitor_key = x_monitor_key if isinstance(x_monitor_key, str) else None
+    x_handover_key = x_handover_key if isinstance(x_handover_key, str) else None
     handover_key = (x_handover_key or request.headers.get(HANDOVER_WRITE_KEY_HEADER) or '').strip()
     if handover_key:
         # 이 헤더는 POST /api/v1/handovers 에서만 의미가 있다. 다른 경로·메서드면 다른 자격으로 폴백하지 않고 거부한다.
