@@ -1043,7 +1043,8 @@ async def goals_for_session(
         )
         # 스트립 판정(M2b): 🔄·⏳ 활동, 휴면, 정렬 키, 마일스톤의 현재 러너, 세션 미연결 건수.
         from app.services.goal_activity import (
-            activity_for_goals, sort_for_strip, strip_rank, unlinked_count,
+            activity_for_goals, dropdown_sort_key, strip_group, strip_order, strip_rank,
+            unlinked_count,
         )
         from app.services.goal_signals import signals_for_rows
 
@@ -1064,6 +1065,11 @@ async def goals_for_session(
         paused_at = row.pop("paused_at", None)
         paused_reason = row.pop("paused_reason", None)
         row.pop("approval_policy", None)
+        group = strip_group(
+            activity, row.get("priority"), dormant,
+            paused=paused_at is not None, status=row.get("status"),
+            dispatch_note=row.get("dispatch_note"),
+        )
         goals.append({
             **row,
             "goal_paused": paused_at is not None,
@@ -1074,13 +1080,16 @@ async def goals_for_session(
             "activity": activity,
             "current_runner": runner,
             "strip_rank": strip_rank(activity, row.get("priority"), dormant),
+            "strip_group": group,
+            "strip_order": strip_order(group),
+            "last_activity_at": signal.get("last_activity_at"),
         })
 
     from app.services.direction_guard import is_halted
 
     return {
         "halted": await is_halted(),
-        "goals": sort_for_strip(goals),
+        "goals": sorted(goals, key=dropdown_sort_key),
         "unlinked_count": unlinked,
     }
 

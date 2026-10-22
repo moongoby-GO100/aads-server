@@ -1,0 +1,95 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>goal-dropdown_open</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0F0F0F;--card:#1A1A1A;--border:#2A2A2A;--text:#E5E5E5;--sub:#8a8a8a;--side:#141414;--hover:#252525;--input:#1E1E1E}
+body{background:var(--bg);color:var(--text);font:13px/1.45 "Noto Sans KR","WenQuanYi Zen Hei",system-ui,sans-serif}
+.app{display:flex;width:1440px;height:820px;overflow:hidden}
+.side{width:220px;flex:none;background:var(--side);border-right:1px solid var(--border);padding:14px 10px}
+.side b{display:block;margin:0 6px 12px;font-size:14px}
+.side .it{padding:8px 10px;border-radius:8px;color:var(--sub);margin-bottom:2px}
+.side .it.on{background:var(--hover);color:var(--text)}
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.top{height:48px;flex:none;display:flex;align-items:center;gap:10px;padding:0 18px;border-bottom:1px solid var(--border);font-weight:700}
+.top small{color:var(--sub);font-weight:400}
+.body{flex:1;display:flex;min-height:0}
+.col{flex:1;display:flex;flex-direction:column;min-width:0;padding:0 24px}
+.stripwrap{position:relative;padding:6px 0;border-bottom:1px solid var(--border);background:var(--bg);z-index:5}
+.stream{flex:1;overflow:hidden;padding:16px 0;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:680px;padding:10px 14px;border-radius:12px;background:var(--card);border:1px solid var(--border)}
+.msg.me{align-self:flex-end;background:#23263a;border-color:#33385a}
+.msg small{display:block;color:var(--sub);font-size:11px;margin-bottom:3px}
+.input{flex:none;margin:0 0 34px;height:52px;border:1px solid var(--border);border-radius:12px;background:var(--input);display:flex;align-items:center;padding:0 16px;color:var(--sub)}
+.panel{width:380px;flex:none;border-left:1px solid var(--border);background:var(--card);padding:16px}
+.panel h3{font-size:14px;display:flex;gap:6px;align-items:center}
+.pmeta{color:var(--sub);font-size:11.5px;margin:6px 0 8px}
+.pbar{height:6px;border-radius:3px;background:#2f3340;overflow:hidden;margin-bottom:14px}.pbar i{display:block;height:100%;background:#3b82f6}
+.plab{font-size:11px;color:var(--sub);margin:4px 0 6px;font-weight:700}
+.pms{padding:7px 0;border-bottom:1px solid var(--border);font-size:12.5px}
+.pr{flex:none;padding:0 5px;border-radius:4px;font-size:9.5px;font-weight:800;line-height:15px;color:#fff}
+.pr.p0{background:#b91c1c}.pr.p1{background:#c2410c}.pr.p2{background:#475569}
+.striprow{display:flex;align-items:center;gap:8px}
+.striprow .sp{flex:1}
+.trig{display:inline-flex;align-items:center;gap:7px;height:32px;max-width:660px;padding:0 10px 0 12px;border-radius:999px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;white-space:nowrap}
+.trig.on{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,.25)}
+.cnt{flex:none;padding:0 6px;border-radius:999px;font-size:10.5px;font-weight:700;line-height:17px}
+.cnt.working{background:rgba(59,130,246,.18);color:#93c5fd}.cnt.awaiting{background:rgba(245,158,11,.16);color:#fbbf24}.cnt.blocked{background:rgba(220,38,38,.18);color:#fca5a5}.cnt.link{border:1px dashed var(--border);color:var(--sub)}
+.vs{flex:none;width:1px;height:16px;background:#3a3a3a}
+.trig .tt{overflow:hidden;text-overflow:ellipsis;font-weight:700;min-width:0}
+.bar{flex:none;display:inline-block;width:48px;height:4px;border-radius:2px;background:#2f3340;overflow:hidden}
+.bar i{display:block;height:100%;background:#3b82f6}
+.pct{flex:none;color:var(--sub);font-size:11px;min-width:28px;text-align:right}
+.car{flex:none;color:var(--sub);font-size:11px}
+.chip2{flex:none;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap;border:1px solid var(--border);color:var(--text);background:var(--card)}
+.chip2.tidy{border-color:rgba(129,140,248,.7);color:#c7d2fe;background:rgba(99,102,241,.16)}
+.chip2.err{border-color:rgba(245,158,11,.7);color:#f59e0b;background:rgba(245,158,11,.10)}
+.chip2.sum{font-weight:600}.chip2.more{border-style:dashed;color:var(--sub);background:transparent;font-weight:400}
+.dd{position:absolute;left:0;top:44px;width:440px;max-height:520px;overflow:hidden;background:#161616;border:1px solid #363636;border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.6);z-index:30;display:flex;flex-direction:column}
+.ddb{overflow:hidden;flex:1}
+.ddh{display:flex;align-items:center;gap:6px;padding:10px 12px 8px;border-bottom:1px solid var(--border);font-weight:700;font-size:12.5px}
+.ddh small{color:var(--sub);font-weight:400}
+.grp{display:flex;align-items:center;gap:6px;height:26px;padding:0 12px;font-size:11px;color:var(--sub);font-weight:700;background:#121212;border-bottom:1px solid var(--border)}
+.grp .n{color:var(--text)}
+.row{display:flex;align-items:center;gap:7px;min-height:44px;padding:6px 12px;border-bottom:1px solid #222}
+.row.sel{background:rgba(37,99,235,.14);box-shadow:inset 3px 0 0 #3b82f6}
+.row.focus{outline:2px solid #60a5fa;outline-offset:-2px}
+.row .ic{flex:none;width:18px;text-align:center;font-size:12px;color:var(--sub)}
+.row .bd{flex:1;min-width:0}
+.row .t{display:flex;align-items:center;gap:5px;font-weight:600;font-size:12.5px;min-width:0}
+.row .t span.x{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .s{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--sub);margin-top:1px}
+.row .s.blk{color:#fca5a5}.row .s.pz{color:#cbd5e1}.row .s.idle{color:#f59e0b}
+.lead{flex:none;font-size:10px;color:#fbbf24}
+.aa{flex:none;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:700;white-space:nowrap;border:1px solid var(--border);color:var(--sub)}
+.aa.auto{color:#34d399;border-color:rgba(52,211,153,.55);background:rgba(16,185,129,.10)}
+.aa.warn{color:#f59e0b;border-color:rgba(245,158,11,.65);background:rgba(245,158,11,.10)}
+.aa.paused{background:rgba(148,163,184,.12)}
+.ddf{flex:none;display:flex;align-items:center;gap:8px;padding:9px 12px;background:#161616;border-top:1px solid var(--border);font-size:11.5px}
+.ddf a{margin-left:auto;color:#93c5fd;text-decoration:none}
+.muted{color:var(--sub)}
+.warnline{flex:none;padding:9px 12px;color:#f59e0b;font-size:11.5px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.btn{flex:none;padding:3px 10px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--text);font:inherit;font-size:11.5px}
+.empty{padding:26px 18px;color:var(--sub);font-size:12.5px;line-height:1.7;text-align:center}
+.sk{display:inline-block;height:10px;border-radius:5px;background:linear-gradient(90deg,#232323,#313131,#232323)}
+.ochips{display:flex;align-items:center;gap:6px;min-width:0;flex:1;overflow:hidden}
+.ochips.open{flex-wrap:wrap;max-height:290px}
+.ochip{display:inline-flex;align-items:center;gap:5px;flex:none;max-width:360px;padding:3px 7px 3px 9px;border-radius:999px;background:var(--card);font-size:11px;white-space:nowrap}
+.ochip b{overflow:hidden;text-overflow:ellipsis}
+.oghd{flex:none;padding-left:8px;margin-left:2px;border-left:1px solid var(--border);font-size:10.5px;color:var(--sub);white-space:nowrap}
+.fnote{position:fixed;left:0;right:0;bottom:0;padding:5px 12px;font-size:10.5px;color:#b5b5b5;background:rgba(24,24,24,.96);border-top:1px solid var(--border);z-index:60}
+.mob{width:390px;height:844px;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.m-top{height:48px;flex:none;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);font-weight:700}
+.m-strip{position:relative;flex:none;padding:6px 10px;border-bottom:1px solid var(--border)}
+.m-strip .trig{width:100%;max-width:none;height:36px}
+.m-strip .trig .tt{flex:1}
+.m-stream{flex:1;padding:12px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.m-stream .msg{max-width:320px}
+.m-input{flex:none;margin:0 10px 34px;height:46px;border:1px solid var(--border);border-radius:12px;background:var(--input);display:flex;align-items:center;padding:0 14px;color:var(--sub)}
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:40}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:70%;overflow:hidden;background:#161616;border-top:1px solid #3a3a3a;border-radius:14px 14px 0 0;z-index:41;box-shadow:0 -8px 24px rgba(0,0,0,.45);padding-bottom:26px;display:flex;flex-direction:column}
+.sheet .grab{flex:none;width:40px;height:4px;border-radius:2px;background:#444;margin:8px auto 2px}
+.sheet .row{min-height:52px}
+.sheet .ddh .x{margin-left:auto;font-size:16px;color:var(--sub);padding:0 4px}
+.orows{max-height:390px;overflow:hidden;border-top:1px solid var(--border)}
+.orow{display:flex;align-items:center;gap:6px;min-height:35px;padding:0 10px;border-bottom:1px solid var(--border);font-size:12.5px;white-space:nowrap}
+.orow .x{overflow:hidden;text-overflow:ellipsis}
+.oghm{height:22px;display:flex;align-items:center;padding:0 10px;font-size:10.5px;color:var(--sub)}
+</style></head><body><div class="app"><div class="side"><b>AADS 채팅</b><div class="it on">CEO 통합지시</div><div class="it">AADS 러너전문가</div><div class="it">GO100 장마감</div><div class="it">KIS 자동매매</div><div class="it">NTV2 알림</div><div class="it">SF 정산</div></div><div class="main"><div class="top">통합 지휘 세션 <small>CEO · AADS</small></div><div class="body"><div class="col"><div class="stripwrap"><div class="striprow"><span class="trig on" role="button" aria-haspopup="listbox" aria-expanded="true">🎯 <b>목표 6</b><span class="cnt blocked">⛔1</span><span class="vs"></span><span>⛔</span><span class="pr p1">P1</span><span class="tt">지시서 활성화·최적화 — 설계 대화 검토부터 실…</span><span class="bar"><i style="width:10%"></i></span><span class="pct">10%</span><span class="car">▴</span></span><span class="sp"></span><span class="chip2 tidy">🧹 휴면·차단 정리 18</span></div><div class="dd" role="dialog"><div class="ddh">이 대화의 목표 6 <small>· 전체 열린 목표 58 · P0 30</small></div><div class="ddb" role="listbox"><div class="grp">⛔ 막힘 <span class="n">1</span></div><div class="row" role="option" aria-selected="false"><span class="ic">⛔</span><span class="pr p1">P1</span><div class="bd"><div class="t"><span class="x">지시서 활성화·최적화 — 설계 대화 검토부터 실행 검증까지</span></div><div class="s blk">목표 상태 차단(blocked) — 사유·해제 조건은 목표 패널</div></div><span class="bar"><i style="width:10%"></i></span><span class="pct">10%</span></div><div class="grp">P0 <span class="n">1</span></div><div class="row" role="option" aria-selected="false"><span class="ic">●</span><span class="pr p0">P0</span><div class="bd"><div class="t"><span class="x">러너 검수 인프라 무응답 제거 — 승인 병목 해소</span><span class="lead">👑 주도</span></div></div><span class="bar"><i style="width:20%"></i></span><span class="pct">20%</span></div><div class="grp">P1 · P2 <span class="n">4</span></div><div class="row" role="option" aria-selected="false"><span class="ic">●</span><span class="pr p1">P1</span><div class="bd"><div class="t"><span class="x">오비스 UI/UX 디자인 기획 체계 구축 및 프로젝트별 승인 디자인 적용</span></div></div><span class="bar"><i style="width:0%"></i></span><span class="pct">0%</span></div><div class="row" role="option" aria-selected="false"><span class="ic">●</span><span class="pr p1">P1</span><div class="bd"><div class="t"><span class="x">목표 승인설정 프로젝트별 분리 — 비매매 프로젝트 자동통과 차단·문구 정정·게이트 보호</span><span class="lead">👑 주도</span></div><div class="s ">M5 운영 릴리스·E2E 검증·비매매 목표 체크 정리</div></div><span class="bar"><i style="width:60%"></i></span><span class="pct">60%</span></div><div class="row" role="option" aria-selected="false"><span class="ic">●</span><span class="pr p1">P1</span><div class="bd"><div class="t"><span class="x">OHVIS 문서 저장 규칙(R-DOC) — 모든 세션의 저장 위치·파일명·정본 등록 일원화</span></div></div><span class="bar"><i style="width:30%"></i></span><span class="pct">30%</span></div><div class="row" role="option" aria-selected="false"><span class="ic">●</span><span class="pr p1">P1</span><div class="bd"><div class="t"><span class="x">목표 우선순위·휴면 정리·자동승인 표시 일치</span></div></div><span class="bar"><i style="width:25%"></i></span><span class="pct">25%</span></div></div><div class="ddf"><span class="chip2 tidy">🧹 휴면·차단 정리 18건</span><a>목표 화면 전체 보기 →</a></div></div></div><div class="stream"><div class="msg me">채팅창의 목표띠를 드롭박스 버튼으로 바꾸고 진행우선순으로 보이게 바꾸면 어때?</div><div class="msg"><small>오비스 · 13:48</small>✅ 권장합니다. 한 줄 요약 버튼 + 진행 우선순 드롭다운이 채팅 공간과 판단 속도 모두 개선됩니다.</div><div class="msg me">기획, 설계, PRD, 목업 작성 저장하고 반영해</div></div><div class="input">메시지를 입력하세요…</div></div></div></div></div><div class="fnote">시안 — 목표 6건·전체 58·P0 30 은 2026-10-22 13:55 KST DB 실측. 🧹 정리 18건은 예시. 같은 그룹 안 순서는 마지막 활동순.</div></body></html>

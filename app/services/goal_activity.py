@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from app.services.goal_signals import is_p0, priority_rank
@@ -32,6 +33,8 @@ RANK_AWAITING = 1
 RANK_P0 = 2
 RANK_OTHER = 3
 RANK_DORMANT = 4
+
+STRIP_GROUP_ORDER = ("working", "awaiting", "blocked", "p0", "other", "paused", "dormant")
 
 _RUNNER_PICK_ORDER = {"running": 0, "claimed": 1, AWAITING_STATUS: 2}
 
@@ -68,6 +71,56 @@ def strip_sort_key(item: Mapping[str, Any]) -> tuple[int, int, str]:
 
 def sort_for_strip(items: Iterable[Mapping[str, Any]]) -> list[Any]:
     return sorted(items, key=strip_sort_key)
+
+
+def strip_group(
+    activity: Optional[str], priority: Any, dormant: bool,
+    *, paused: bool, status: Any, dispatch_note: Any,
+) -> str:
+    """드롭다운 진행 우선순 그룹. 위에서부터 처음 맞는 것."""
+    if paused:
+        return "paused"
+    if activity == ACTIVITY_WORKING:
+        return "working"
+    if activity == ACTIVITY_AWAITING:
+        return "awaiting"
+    if dormant or status == "draft":
+        return "dormant"
+    if status == "blocked" or (isinstance(dispatch_note, str) and dispatch_note.strip()):
+        return "blocked"
+    if is_p0(priority):
+        return "p0"
+    return "other"
+
+
+def strip_order(group: str) -> int:
+    return STRIP_GROUP_ORDER.index(group)
+
+
+def _activity_stamp(value: Any) -> Optional[float]:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def dropdown_sort_key(item: Mapping[str, Any]) -> tuple[int, int, float, str]:
+    """그룹 → 우선순위 → 최근 활동 먼저(없으면 맨 뒤) → 제목."""
+    stamp = _activity_stamp(item.get("last_activity_at"))
+    return (
+        int(item.get("strip_order", strip_order("other"))),
+        priority_rank(item.get("priority")),
+        float("inf") if stamp is None else -stamp,
+        str(item.get("title") or ""),
+    )
 
 
 def pick_current_runner(jobs: Iterable[Mapping[str, Any]]) -> Optional[dict[str, str]]:

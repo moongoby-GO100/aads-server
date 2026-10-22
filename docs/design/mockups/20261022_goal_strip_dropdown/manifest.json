@@ -1,0 +1,351 @@
+{
+ "screens": [
+  {
+   "screen_id": "goal-dropdown",
+   "title": "채팅 상단 목표띠 — 한 줄 드롭다운 버튼 + 진행 우선순 목록",
+   "route": "/chat",
+   "requirement_ids": [
+    "GD-1",
+    "GD-2",
+    "GD-3",
+    "GD-4",
+    "GD-5",
+    "GD-8",
+    "GD-9",
+    "GD-10"
+   ],
+   "states_not_applicable": {
+    "permission": "채팅 화면 안의 요소라 권한 오류 전용 화면이 없고 기존 채팅 오류 처리를 따른다",
+    "session-expired": "로그인 만료는 공통 로그인 화면으로 이동하며 이 요소 고유 화면이 없다",
+    "offline": "오프라인 전용 화면이 없고 기존 채팅 연결 오류 표시를 쓴다"
+   }
+  }
+ ],
+ "assets": [
+  {
+   "asset_id": "mockup-goal-dropdown_closed-1440x820",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-dropdown_closed_1440x820.png",
+   "sha256": "aa7a3b10546c1a99b4646decd93d9de6d86e46846528dc1c7571873504018362",
+   "byte_size": 55390,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "mockup",
+   "viewport": "1440x820",
+   "fixture_id": "session-closed",
+   "state": "default",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-goal-dropdown_closed_mobile-390x844",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-dropdown_closed_mobile_390x844.png",
+   "sha256": "69cb9e728fe64727de3b51ebb07ddd5091a9e1d28aab5a214dfb67c519af786e",
+   "byte_size": 27626,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "mockup",
+   "viewport": "390x844",
+   "fixture_id": "session-closed",
+   "state": "default",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-goal-dropdown_open-1440x820",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-dropdown_open_1440x820.png",
+   "sha256": "4e31086875f66046c04cb70a520692ce2260579dfe63424e5b4c13d133fb8efd",
+   "byte_size": 95183,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "mockup",
+   "viewport": "1440x820",
+   "fixture_id": "session-open",
+   "state": "default",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-goal-dropdown_open_mobile-390x844",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-dropdown_open_mobile_390x844.png",
+   "sha256": "44cd8682b1f21a8cd6859a200fabedb492a4d881b52789299accc00c8f63c458",
+   "byte_size": 57806,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "mockup",
+   "viewport": "390x844",
+   "fixture_id": "session-open",
+   "state": "default",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-goal-dropdown_all-groups-1440x820",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-dropdown_all-groups_1440x820.png",
+   "sha256": "1a49f6b1c70fdd4d846899513e957a9c23050e8feeac8b8711828a02b0ef8b6d",
+   "byte_size": 118889,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "mockup",
+   "viewport": "1440x820",
+   "fixture_id": "all-groups-open",
+   "state": "default",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-goal-dropdown_loading-1440x820",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-dropdown_loading_1440x820.png",
+   "sha256": "c52c1d4cc6e697364e089963b9053c1a280863cf50ca0c18317e17993d96160d",
+   "byte_size": 47432,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "mockup",
+   "viewport": "1440x820",
+   "fixture_id": "session-loading",
+   "state": "loading",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-goal-dropdown_empty-1440x820",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-dropdown_empty_1440x820.png",
+   "sha256": "d9f5b40795f24c95955b9a40f044f70522c1ee3c74fed5fc5b540a9f98afa8ef",
+   "byte_size": 63149,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "mockup",
+   "viewport": "1440x820",
+   "fixture_id": "session-empty",
+   "state": "empty",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-goal-dropdown_error-1440x820",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-dropdown_error_1440x820.png",
+   "sha256": "b53c8c19db0818571d931a626dbef0a1ed709895a172ca0da875efebb20bd4ee",
+   "byte_size": 96532,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "mockup",
+   "viewport": "1440x820",
+   "fixture_id": "session-error",
+   "state": "error",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "before-goal-strip_before_closed-1440x820",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-strip_before_closed_1440x820.png",
+   "sha256": "080119b6fc5c22b570105131b633fc8f6560c2dc9a9a965b43cc574b967d6ef3",
+   "byte_size": 62455,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "before",
+   "viewport": "1440x820",
+   "fixture_id": "session-closed",
+   "state": "default",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "source_reconstruction",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "before-goal-strip_before_closed_mobile-390x844",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-strip_before_closed_mobile_390x844.png",
+   "sha256": "cc3432a276b5826f4fdb7c7d3c97229939f8bcedd807d3c19acdb9d6c426e4ec",
+   "byte_size": 25959,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "before",
+   "viewport": "390x844",
+   "fixture_id": "session-closed",
+   "state": "default",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "source_reconstruction",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "before-goal-strip_before_open-1440x820",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-strip_before_open_1440x820.png",
+   "sha256": "4a28969971e67aeac61a95515c9a8f8fc4b71c90ceadda9c5839f7a63db9fbab",
+   "byte_size": 68901,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "before",
+   "viewport": "1440x820",
+   "fixture_id": "session-open",
+   "state": "default",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "source_reconstruction",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "before-goal-strip_before_open_mobile-390x844",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-strip_before_open_mobile_390x844.png",
+   "sha256": "6fdf22537cc70e55fddb8c3df6ea441d2f2649dc1c1884cb2077f8a0e6d97a12",
+   "byte_size": 40964,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "before",
+   "viewport": "390x844",
+   "fixture_id": "session-open",
+   "state": "default",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "source_reconstruction",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "before-goal-strip_before_all-groups-1440x820",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/png/goal-strip_before_all-groups_1440x820.png",
+   "sha256": "74d5164796c6be4f1097c32d666b8d9a6298b34d091f39273e1ad697a307de43",
+   "byte_size": 87795,
+   "mime": "image/png",
+   "screen_id": "goal-dropdown",
+   "phase": "before",
+   "viewport": "1440x820",
+   "fixture_id": "all-groups-open",
+   "state": "default",
+   "captured_at": "2026-10-22T05:03:06+00:00",
+   "capture_source": "source_reconstruction",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "html-goal-dropdown_closed",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-dropdown_closed.html",
+   "sha256": "9453d342ed812751f16c072efe51fd8a6a6466ba83cdf5bdefa91e14a508bebe",
+   "byte_size": 10658,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-dropdown_closed_mobile",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-dropdown_closed_mobile.html",
+   "sha256": "c3146d723afd5155d9d79f040798678f4218eedf5dbeb3476cf5439b0512795e",
+   "byte_size": 9915,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-dropdown_open",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-dropdown_open.html",
+   "sha256": "f29bf8b01392368d7f7be34fa00fd056c73d09c2f3993b929eb49fec1ee741bc",
+   "byte_size": 13449,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-dropdown_open_mobile",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-dropdown_open_mobile.html",
+   "sha256": "a7900b9ea37455847cd37f432abc302d57d29ec0b915f21d4dae3f5f9c2b0ecf",
+   "byte_size": 12733,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-dropdown_all-groups",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-dropdown_all-groups.html",
+   "sha256": "a8b7b4d3d504b68defceb32f9cc6e50fd21699772467f8fb9e9eade832052187",
+   "byte_size": 15395,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-dropdown_loading",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-dropdown_loading.html",
+   "sha256": "a73ed79d2e41404abfd599dfa5bb957440ccd2494980f150d96e55207714e13f",
+   "byte_size": 10327,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-dropdown_empty",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-dropdown_empty.html",
+   "sha256": "73054ddb9b5f53efe804fdaafc5cd6b65fd2762393905fa47075f71e68b87e08",
+   "byte_size": 10844,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-dropdown_error",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-dropdown_error.html",
+   "sha256": "eed6f687eaf63e6b3275e87818a43e26057c540269badc80baf18e1561123131",
+   "byte_size": 13503,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-strip_before_closed",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-strip_before_closed.html",
+   "sha256": "8a5f2fa7c134c1c0637118e3d9da08aaf53c8d6ebe9affb6433b7320834b93f3",
+   "byte_size": 11314,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-strip_before_closed_mobile",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-strip_before_closed_mobile.html",
+   "sha256": "a87c26ecfa7885bafdb4f843db3f5594aa4979280633ce0adcc416a690e4fddf",
+   "byte_size": 10565,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-strip_before_open",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-strip_before_open.html",
+   "sha256": "b5003e29c837ffd9406f4b0be8c0cc395e6cd8b54b363a460a850dae067eb868",
+   "byte_size": 11740,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-strip_before_open_mobile",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-strip_before_open_mobile.html",
+   "sha256": "c13f5fe79239787aa6a5dba0a6ffce0bc8d8d91c14859567e4ed1c56d4351814",
+   "byte_size": 10900,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-goal-strip_before_all-groups",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261022_goal_strip_dropdown/html/goal-strip_before_all-groups.html",
+   "sha256": "a852fd545654175f40a9d2dae79c25d86fafe86e6bf1d34c8e6a8c42f87d6047",
+   "byte_size": 12716,
+   "mime": "text/html"
+  }
+ ],
+ "evidence": [
+  {
+   "evidence_id": "render-goal-dropdown",
+   "kind": "browser_capture",
+   "screen_id": "goal-dropdown",
+   "route": "/chat",
+   "success": true,
+   "login_used": false,
+   "detail": "서버 Playwright chromium 으로 정적 HTML 시안 8장(1440x820·390x844, default·loading·empty·error)과 현행 GoalStrip 재현 5장을 캡처. 운영 /chat 은 로그인이 필요해 변경 전은 소스 재현. 실측: 이 대화 목표 6·전체 열린 58·P0 30(2026-10-22 13:55 KST DB).",
+   "recorded_at": "2026-10-22T05:03:06+00:00"
+  }
+ ],
+ "source_sha": "35fe03f"
+}
