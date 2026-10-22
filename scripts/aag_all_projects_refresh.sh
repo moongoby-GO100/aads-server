@@ -33,8 +33,12 @@ SCHED_PY="$REPO_DIR/scripts/aag_scheduler_state.py"
 SCHED_OWNER="all-projects:$$:$(date +%s)"
 # 하위 스크립트 종료코드 계약: 0=성공(스캔+적재) / 7=SKIP(실패도 성공도 아님) / 그 외=실패.
 EXIT_SKIPPED=7
+# aag_snapshot_push.py: 적재는 됐으나 DB 가 run 을 거부(source_behind·out_of_order …).
+EXIT_REJECTED=9
+AADS_SCAN_SCRIPT="${AAG_AADS_SCAN_SCRIPT:-$REPO_DIR/scripts/aag_scan_aads_clean.sh}"
 failures=()
 skipped=()
+rejected=()
 refreshed=()
 
 mkdir -p "$(dirname "$LOG")" "$STATE_DIR"
@@ -53,15 +57,41 @@ failed() { failures+=("$1"); log "STATUS project=$1 result=failed detail=$2"; }
 skipped_project() { skipped+=("$1"); log "STATUS project=$1 result=skipped reason=$2${3:+ $3}"; }
 beat() { sched heartbeat ALL --owner "$SCHED_OWNER" >/dev/null 2>&1 || true; }
 
-refresh_aads() {
-    if systemctl start aads-aag-struct-check.service \
-        && python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
-            "AADS=/var/log/aads-pipeline/aag-struct/aads-graph.json" >>"$LOG" 2>&1; then
-        refreshed+=(AADS)
-        log "STATUS project=AADS result=success"
+# 거부된 스캔은 성공이 아니다 — DB 가 확정한 result 를 그대로 기록한다.
+# refreshed 에 넣지 않으므로 freshness 증거로 세지 않는다. (2026-10-22: AADS 가
+# source_behind 로 96회 거부되는 동안 이 로그에는 result=success 가 찍혔다.)
+rejected_project() { rejected+=("$1"); log "STATUS project=$1 result=$2${3:+ $3}"; }
+
+# publish_graph PROJECT SPEC FAIL_DETAIL [LOG_SUFFIX]
+publish_graph() {
+    local project="$1" spec="$2" fail_detail="$3" suffix="${4:-}" out rc result verification
+    out="$(python3 "$REPO_DIR/scripts/aag_snapshot_push.py" "$spec" 2>&1)"
+    rc=$?
+    printf '%s\n' "$out" >>"$LOG"
+    result="$(printf '%s\n' "$out" | sed -n "s/^RESULT project=${project} .*result=\([a-z_]*\).*/\1/p" | tail -1)"
+    if ((rc == EXIT_REJECTED)); then
+        verification="$(printf '%s\n' "$out" | sed -n "s/^RESULT project=${project} .*verification=\([a-z_]*\).*/\1/p" | tail -1)"
+        rejected_project "$project" "${result:-rejected}" "verification=${verification:-unknown}${suffix:+ $suffix}"
+    elif ((rc == 0)); then
+        refreshed+=("$project")
+        log "STATUS project=$project result=success${suffix:+ $suffix}${result:+ run_result=$result}"
     else
-        failed AADS "scan_or_publish"
+        failed "$project" "$fail_detail"
     fi
+}
+
+refresh_aads() {
+    # 스캔 소스는 공유 호스트 체크아웃이 아니라 origin/main 전용 clean 클론이다.
+    local out rc=0
+    out="$(bash "$AADS_SCAN_SCRIPT" 2>&1)" || rc=$?
+    printf '%s\n' "$out" >>"$LOG"
+    case "$rc" in
+        0) publish_graph AADS "AADS=${AAG_AADS_OUT_DIR:-$STATE_DIR/aads}/aads-graph.json" snapshot_publish "source=origin/main" ;;
+        3) rejected_project AADS source_rejected \
+               "reason=$(printf '%s\n' "$out" | sed -n 's/^AAG_SOURCE_REJECTED reason=\([a-z_]*\).*/\1/p' | tail -1)" ;;
+        "$EXIT_SKIPPED") skipped_project AADS source_prepare_locked ;;
+        *) failed AADS "source_prepare_or_scan rc=$rc" ;;
+    esac
 }
 
 refresh_go100_and_kis() {
@@ -80,13 +110,7 @@ refresh_go100_and_kis() {
     fi
     refreshed+=(GO100)
     log "STATUS project=GO100 result=success"
-    if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
-        "KIS@GO100=$STATE_DIR/go100/go100-graph.json" >>"$LOG" 2>&1; then
-        refreshed+=(KIS)
-        log "STATUS project=KIS result=success scope=shared_monorepo"
-    else
-        failed KIS "shared_monorepo_publish"
-    fi
+    publish_graph KIS "KIS@GO100=$STATE_DIR/go100/go100-graph.json" shared_monorepo_publish "scope=shared_monorepo"
 }
 
 refresh_generic_114() {
@@ -121,13 +145,7 @@ refresh_generic_114() {
         failed "$project" "artifact_fetch"
         return
     fi
-    if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
-        "$project=$STATE_DIR/$slug/$slug-graph.json" >>"$LOG" 2>&1; then
-        refreshed+=("$project")
-        log "STATUS project=$project result=success"
-    else
-        failed "$project" "snapshot_publish"
-    fi
+    publish_graph "$project" "$project=$STATE_DIR/$slug/$slug-graph.json" snapshot_publish
 }
 
 refresh_nas() {
@@ -157,13 +175,7 @@ refresh_nas() {
         failed NAS "artifact_fetch"
         return
     fi
-    if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
-        "NAS=$STATE_DIR/nas/nas-graph.json" >>"$LOG" 2>&1; then
-        refreshed+=(NAS)
-        log "STATUS project=NAS result=success source=origin/main"
-    else
-        failed NAS "snapshot_publish"
-    fi
+    publish_graph NAS "NAS=$STATE_DIR/nas/nas-graph.json" snapshot_publish "source=origin/main"
 }
 
 refresh_ntv2() {
@@ -191,13 +203,7 @@ refresh_ntv2() {
         failed NTV2 "artifact_fetch"
         return
     fi
-    if python3 "$REPO_DIR/scripts/aag_snapshot_push.py" \
-        "NTV2=$STATE_DIR/ntv2/ntv2-graph.json" >>"$LOG" 2>&1; then
-        refreshed+=(NTV2)
-        log "STATUS project=NTV2 result=success source=origin/main"
-    else
-        failed NTV2 "snapshot_publish"
-    fi
+    publish_graph NTV2 "NTV2=$STATE_DIR/ntv2/ntv2-graph.json" snapshot_publish "source=origin/main"
 }
 
 begin_rc=0
@@ -218,9 +224,9 @@ beat; refresh_nas
 
 join_csv() { local IFS=,; echo "$*"; }
 
-if ((${#failures[@]})); then
-    log "DONE result=failed projects=$(join_csv "${failures[@]}") refreshed=$(join_csv "${refreshed[@]:-}") skipped=$(join_csv "${skipped[@]:-}")"
-    sched finish ALL --owner "$SCHED_OWNER" --outcome failed --reason "failed=$(join_csv "${failures[@]}")" --exit-code 1 >/dev/null 2>&1 || true
+if ((${#failures[@]} + ${#rejected[@]})); then
+    log "DONE result=failed projects=$(join_csv "${failures[@]:-}") rejected=$(join_csv "${rejected[@]:-}") refreshed=$(join_csv "${refreshed[@]:-}") skipped=$(join_csv "${skipped[@]:-}")"
+    sched finish ALL --owner "$SCHED_OWNER" --outcome failed --reason "failed=$(join_csv "${failures[@]:-}") rejected=$(join_csv "${rejected[@]:-}")" --exit-code 1 >/dev/null 2>&1 || true
     exit 1
 fi
 if ((${#skipped[@]})); then

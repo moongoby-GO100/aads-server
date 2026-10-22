@@ -18,7 +18,12 @@ HTTP(`POST /api/v1/aag/snapshot`)를 쓰지 않는 이유: 그 경로는 테넌�
     python3 scripts/aag_snapshot_push.py                      # reports/aag 전체
     python3 scripts/aag_snapshot_push.py GO100=/tmp/go100-graph.json
 
-종료코드: 0=적재함 / 1=적재할 그래프 없음·psql 실패.
+종료코드: 0=적재함(모든 v2 run 이 succeeded/no_change_success) / 1=적재할 그래프 없음·psql 실패 /
+9=적재는 됐으나 하나 이상의 run 이 거부됨(source_behind·out_of_order 등) — pointer 가 갱신되지
+않았으므로 freshness 증거가 아니다. 호출자는 이를 success 로 기록하면 안 된다.
+
+표준출력 `RESULT project=… run_id=… result=… verification=… authoritative=…` 한 줄이 v2 run 마다
+나온다. 이 값은 DB 트랜잭션이 확정한 aag_scan_runs.result 이며 호출자가 그대로 기록해야 한다.
 """
 from __future__ import annotations
 
@@ -29,7 +34,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Iterator
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -93,8 +98,13 @@ def _legacy_statement(project: str, graph: dict) -> str:
     )
 
 
+ACCEPTED_RESULTS = frozenset({"succeeded", "no_change_success"})
+EXIT_REJECTED = 9
+
+
 def _v2_statement(
-    project: str, graph: dict, *, identity_project: str | None = None
+    project: str, graph: dict, *, identity_project: str | None = None,
+    run_id: str | None = None,
 ) -> str | None:
     identity = graph.get("source_identity") or {}
     required = (
@@ -110,7 +120,7 @@ def _v2_statement(
         return None
 
     body = graph_content(graph, project=identity_project or project)
-    run_id = str(uuid4())
+    run_id = run_id or str(uuid4())
     content_hash = content_fingerprint(body)
     input_hash = input_fingerprint(
         project=project,
@@ -265,6 +275,46 @@ UPDATE aag_scan_runs r
     )
 
 
+def _results_statement(runs: list) -> str:
+    """Final in-transaction readback of what the DB actually decided for each run."""
+    ids = ", ".join("'%s'::uuid" % UUID(run_id) for _, run_id in runs)
+    return (
+        "\\pset format unaligned\n\\pset tuples_only on\n"
+        "SELECT 'AAGRESULT|' || r.project || '|' || r.id || '|' || r.result || '|' ||"
+        " COALESCE(o.verification_status, '') || '|' || COALESCE(o.authoritative::text, '')"
+        " FROM aag_scan_runs r LEFT JOIN aag_snapshot_observations o ON o.run_id = r.id"
+        " WHERE r.id IN (%s);\n" % ids
+    )
+
+
+def parse_results(stdout: str, runs: list) -> tuple:
+    """Return (passthrough_stdout, result_rows). A run with no row is reported as missing."""
+    rows: dict = {}
+    kept = []
+    for line in stdout.splitlines():
+        if line.startswith("AAGRESULT|"):
+            parts = line.split("|")
+            if len(parts) == 6:
+                rows[parts[2]] = {
+                    "project": parts[1], "run_id": parts[2], "result": parts[3],
+                    "verification": parts[4], "authoritative": parts[5] or "unknown",
+                }
+        else:
+            kept.append(line)
+    ordered = []
+    for project, run_id in runs:
+        ordered.append(rows.get(run_id) or {
+            "project": project, "run_id": run_id, "result": "missing",
+            "verification": "", "authoritative": "unknown",
+        })
+    return "\n".join(kept) + ("\n" if kept else ""), ordered
+
+
+def format_result(row: dict) -> str:
+    return "RESULT project=%(project)s run_id=%(run_id)s result=%(result)s" \
+           " verification=%(verification)s authoritative=%(authoritative)s" % row
+
+
 def _targets(argv: list) -> Iterator:
     """Yield (project, identity_project, path).
 
@@ -286,9 +336,11 @@ def _targets(argv: list) -> Iterator:
         yield path.name[: -len("-graph.json")].upper(), None, path
 
 
-def main() -> int:
+def main(argv: list | None = None) -> int:
     statements = []
-    for project, identity_project, path in _targets(sys.argv[1:]):
+    runs: list = []
+    legacy_only: list = []
+    for project, identity_project, path in _targets(sys.argv[1:] if argv is None else argv):
         try:
             graph = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -299,10 +351,15 @@ def main() -> int:
             continue
         try:
             statements.append(_legacy_statement(project, graph))
-            v2_statement = _v2_statement(project, graph, identity_project=identity_project)
+            run_id = str(uuid4())
+            v2_statement = _v2_statement(
+                project, graph, identity_project=identity_project, run_id=run_id
+            )
             if v2_statement:
                 statements.append(v2_statement)
+                runs.append((project, run_id))
             else:
+                legacy_only.append(project)
                 print(
                     "V2 SKIP %s — source identity/commit is incomplete; legacy only" % project,
                     file=sys.stderr,
@@ -320,7 +377,8 @@ def main() -> int:
         print("적재할 그래프가 없다", file=sys.stderr)
         return 1
 
-    sql = "BEGIN;\n%s\nCOMMIT;\n" % "\n".join(statements)
+    results_sql = _results_statement(runs) if runs else ""
+    sql = "BEGIN;\n%s\n%sCOMMIT;\n" % ("\n".join(statements), results_sql)
     try:
         proc = subprocess.run(
             ["docker", "exec", "-i", PG_CONTAINER,
@@ -330,11 +388,21 @@ def main() -> int:
     except (OSError, subprocess.TimeoutExpired) as exc:
         print("psql 실행 실패: %s" % exc, file=sys.stderr)
         return 1
-    sys.stdout.write(proc.stdout)
+    passthrough, rows = parse_results(proc.stdout, runs)
+    sys.stdout.write(passthrough)
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr)
         return 1
+    for row in rows:
+        print(format_result(row))
+    for project in legacy_only:
+        print("RESULT project=%s run_id= result=legacy_only verification= authoritative=false" % project)
     print("OK %d SQL statements applied" % len(statements))
+    rejected = [row for row in rows if row["result"] not in ACCEPTED_RESULTS]
+    if rejected:
+        print("REJECTED %s" % ",".join("%s=%s" % (r["project"], r["result"]) for r in rejected),
+              file=sys.stderr)
+        return EXIT_REJECTED
     return 0
 
 

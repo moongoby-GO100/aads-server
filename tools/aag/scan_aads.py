@@ -1587,6 +1587,9 @@ class Scan:
         self.stats: dict[str, Any] = {}
         self.nodes: list[dict] = []
         self.edges: list[dict] = []
+        self.py_parse_failed: set[str] = set()
+        self.entrypoints_missing: list[str] = []
+        self.fe_files_read = 0
 
     # ── 백엔드 ──────────────────────────────────────────────────────
     def scan_backend(self) -> None:
@@ -1607,6 +1610,7 @@ class Scan:
             info = parse_router_module(rel, read_text(self.root / rel))
             if info.parse_error:
                 self.warnings.append(f"파싱 실패 {rel}: {info.parse_error}")
+                self.py_parse_failed.add(rel)
                 continue
             if info.defines_router:
                 self.modules[rel] = info
@@ -1619,12 +1623,14 @@ class Scan:
             path = self.root / rel
             if not path.is_file():
                 self.warnings.append(f"엔트리포인트 없음: {rel}")
+                self.entrypoints_missing.append(rel)
                 continue
             self.entrypoints_present.append(rel)
             source = read_text(path)
             incs, _aliases, err = parse_entrypoint(rel, source)
             if err:
                 self.warnings.append(f"엔트리포인트 파싱 실패 {rel}: {err}")
+                self.py_parse_failed.add(rel)
                 continue
             direct = parse_router_module(rel, source)
             self.direct_routes.extend(direct.routes)
@@ -1725,6 +1731,7 @@ class Scan:
             texts[rel] = text
             consts_by_file[rel] = collect_ts_consts(text, fe["base_env_names"])
             imports_by_file[rel] = parse_ts_imports(text)
+        self.fe_files_read = len(texts)
 
         self.fe_calls: list[dict] = []
         for rel, text in texts.items():
@@ -2004,6 +2011,65 @@ def render_findings_md(scan: Scan) -> str:
     return "\n".join(out)
 
 
+_UNRESOLVED_CALL_KINDS = ("FRONTEND_URL", "FRONTEND_METHOD", "FRONTEND_VAR_SEGMENT")
+
+
+def _ratio(part: int, whole: int) -> float | None:
+    """0/0 은 100% 가 아니라 측정 불가(None)다."""
+    return round(part / whole, 4) if whole > 0 else None
+
+
+def compute_coverage(scan: Scan) -> dict[str, Any]:
+    """스캔이 대상 중 얼마를 실제로 읽고 해석했는지. stats.coverage 로 게시된다.
+
+    정의 (aag_operations.build_coverage 가 inventory_*/risk_* 를 읽는다):
+    - py_files_total / frontend_files_total: 규칙의 app_roots·frontend.roots 아래
+      확장자 필터를 통과한 소스 파일 수.
+    - py_files_as_nodes / frontend_files_as_nodes: 그 파일이 그래프 node id 로
+      나타난 수. 라우터·엔트리포인트·SQL 사용 모듈만 노드가 되므로 py 는 total 보다
+      작은 것이 정상이다 — "그래프에 보이는 비율"이지 완전성 지표가 아니다.
+    - unresolved_calls: 프런트 호출 지점 중 URL/메서드/경로 세그먼트를 확정하지
+      못해 계약 검사(PATH_DRIFT·ROUTE_MISSING)에서 빠진 수.
+    - frontend_calls_total = 해석된 호출 + URL/메서드 판정 불가 호출. external
+      호출(타 호스트)은 계약 대상이 아니므로 세지 않는다.
+      frontend_calls_checked = total - unresolved_calls (계약 검사까지 간 호출).
+    - inventory_scanned/total = (파싱 성공 py + 읽기 성공 프런트) / 전체 소스 파일.
+      파싱 실패·읽기 실패 파일이 있으면 complete 가 될 수 없다.
+    - risk_scanned/total = frontend_calls_checked / frontend_calls_total.
+    - unobserved_scopes: 설정돼 있으나 존재하지 않아 관측하지 못한 엔트리포인트.
+    """
+    node_ids = {n["id"] for n in scan.nodes}
+    kinds = [u["kind"] for u in scan.unresolved]
+    url_or_method = sum(1 for k in kinds if k in ("FRONTEND_URL", "FRONTEND_METHOD"))
+    unresolved_calls = sum(1 for k in kinds if k in _UNRESOLVED_CALL_KINDS)
+    calls_total = len(scan.fe_calls) + url_or_method
+    calls_resolved = max(calls_total - unresolved_calls, 0)
+    py_total = len(scan.py_files)
+    fe_total = len(scan.fe_files)
+    py_parsed = py_total - len(set(scan.py_parse_failed) & set(scan.py_files))
+    py_nodes = sum(1 for rel in scan.py_files if rel in node_ids)
+    fe_nodes = sum(1 for rel in scan.fe_files if rel in node_ids)
+    return {
+        "py_files_total": py_total,
+        "py_files_parsed": py_parsed,
+        "py_files_as_nodes": py_nodes,
+        "py_node_ratio": _ratio(py_nodes, py_total),
+        "frontend_files_total": fe_total,
+        "frontend_files_read": scan.fe_files_read,
+        "frontend_files_as_nodes": fe_nodes,
+        "frontend_node_ratio": _ratio(fe_nodes, fe_total),
+        "frontend_calls_total": calls_total,
+        "frontend_calls_checked": calls_resolved,
+        "unresolved_calls": unresolved_calls,
+        "call_resolution_ratio": _ratio(calls_resolved, calls_total),
+        "inventory_scanned": py_parsed + scan.fe_files_read,
+        "inventory_total": py_total + fe_total,
+        "risk_scanned": calls_resolved,
+        "risk_total": calls_total,
+        "unobserved_scopes": sorted(f"entrypoint:{rel}" for rel in scan.entrypoints_missing),
+    }
+
+
 def build_baseline(scan: Scan) -> dict[str, Any]:
     """다음 스캔이 이 수치를 넘으면 부채가 늘어난 것이다."""
     return {
@@ -2025,6 +2091,7 @@ def build_baseline(scan: Scan) -> dict[str, Any]:
             "sql_tables_referenced": len(scan.table_refs),
             "graph_nodes": len(scan.nodes),
             "graph_edges": len(scan.edges),
+            "coverage": compute_coverage(scan),
         },
         "findings_by_rule": counts_by_rule(scan.findings),
         "stable_key_version": STABLE_KEY_VERSION,

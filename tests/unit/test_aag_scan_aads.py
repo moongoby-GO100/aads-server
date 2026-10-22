@@ -837,3 +837,67 @@ def test_variable_segment_with_no_candidate_is_still_route_missing():
     routes = {"POST": ["/api/v1/other/{}/pause"]}
     verdict, _ = sc.classify_frontend_call("POST", "/api/v1/loops/{}/{}", routes)
     assert verdict == "ROUTE_MISSING"
+
+
+# ── stats.coverage ─────────────────────────────────────────────────────
+
+
+def _cov_scan(**over):
+    from types import SimpleNamespace
+    base = dict(
+        py_files=["a.py", "b.py", "c.py", "d.py"], py_parse_failed={"d.py"},
+        fe_files=["f1.ts", "f2.ts"], fe_files_read=2,
+        nodes=[{"id": "a.py"}, {"id": "b.py"}, {"id": "f1.ts"}, {"id": "f2.ts"}, {"id": "ns:/x"}],
+        fe_calls=[{}, {}, {}], unresolved=[], entrypoints_missing=[],
+    )
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_coverage_counts_files_nodes_and_ratios():
+    cov = sc.compute_coverage(_cov_scan())
+    assert cov["py_files_total"] == 4 and cov["py_files_parsed"] == 3
+    assert cov["py_files_as_nodes"] == 2 and cov["py_node_ratio"] == 0.5
+    assert cov["frontend_files_total"] == 2 and cov["frontend_files_as_nodes"] == 2
+    assert cov["frontend_node_ratio"] == 1.0
+    assert cov["unresolved_calls"] == 0 and cov["call_resolution_ratio"] == 1.0
+    assert (cov["inventory_scanned"], cov["inventory_total"]) == (5, 6)
+
+
+def test_coverage_unresolved_calls_do_not_double_count_var_segments():
+    unresolved = [
+        {"kind": "FRONTEND_URL"}, {"kind": "FRONTEND_METHOD"},
+        {"kind": "FRONTEND_VAR_SEGMENT"},  # one of the 3 resolved fe_calls, dropped later
+        {"kind": "SQL_TABLE"},             # not a frontend call
+    ]
+    cov = sc.compute_coverage(_cov_scan(unresolved=unresolved))
+    assert cov["unresolved_calls"] == 3
+    assert cov["frontend_calls_total"] == 5          # 3 resolved + URL + METHOD
+    assert cov["frontend_calls_checked"] == 2        # 5 - 3
+    assert (cov["risk_scanned"], cov["risk_total"]) == (2, 5)
+    assert cov["call_resolution_ratio"] == 0.4
+
+
+def test_coverage_zero_denominator_is_none_not_full():
+    cov = sc.compute_coverage(_cov_scan(fe_files=[], fe_files_read=0, fe_calls=[], nodes=[]))
+    assert cov["frontend_node_ratio"] is None and cov["call_resolution_ratio"] is None
+    assert cov["risk_total"] == 0
+
+
+def test_coverage_reports_missing_entrypoints_as_unobserved():
+    cov = sc.compute_coverage(_cov_scan(entrypoints_missing=["app/main.py"]))
+    assert cov["unobserved_scopes"] == ["entrypoint:app/main.py"]
+
+
+def test_coverage_feeds_operations_coverage_axis():
+    """The producer's keys must be the ones aag_operations.build_coverage reads."""
+    sys.path.insert(0, str(ROOT))
+    from app.services.aag_operations import build_coverage
+    axis, _ = build_coverage({"coverage": sc.compute_coverage(_cov_scan())})
+    assert axis["status"] == "partial"
+    assert (axis["inventory_scanned"], axis["inventory_total"]) == (5, 6)
+    full = sc.compute_coverage(_cov_scan(py_parse_failed=set()))
+    axis, _ = build_coverage({"coverage": full})
+    assert axis["status"] == "complete"
+    axis, _ = build_coverage({})
+    assert axis["status"] == "unknown"

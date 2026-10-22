@@ -160,9 +160,16 @@ print('generated=%s findings=%d %s routes=%s' % (
 #    생산자 부재였다. 적재 실패는 성공이 아니다 — 산출물 파일은 최신이어도
 #    DB 의 pointer 는 낡은 채이므로 exit 8 로 상위에 알리고 freshness 증거로
 #    세지 않는다. (예전에는 exit 0 이라 상위가 result=success 로 적었다.)
-if python3 "${REPO_DIR}/scripts/aag_snapshot_push.py" \
-    "GO100=${OUT_DIR}/go100-graph.json" >>"$LOG" 2>&1; then
+push_rc=0
+python3 "${REPO_DIR}/scripts/aag_snapshot_push.py" \
+    "GO100=${OUT_DIR}/go100-graph.json" >>"$LOG" 2>&1 || push_rc=$?
+if (( push_rc == 0 )); then
     log "SNAPSHOT_PUSHED"
+elif (( push_rc == 9 )); then
+    # 적재는 됐으나 DB 가 run 을 거부했다(source_behind 등). pointer 는 그대로다.
+    OUTCOME_REASON="snapshot_rejected"
+    log "SNAPSHOT_REJECTED rc=${EXIT_INGEST_FAILED} — DB 가 이 run 을 거부했다. RESULT 줄을 확인하라"
+    exit "$EXIT_INGEST_FAILED"
 else
     OUTCOME_REASON="snapshot_push_failed"
     log "SNAPSHOT_PUSH_FAILED rc=${EXIT_INGEST_FAILED} — aag_findings 가 local_graph 폴백으로 답한다"

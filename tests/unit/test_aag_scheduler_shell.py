@@ -55,7 +55,27 @@ exit 0
 PUSH_STUB = """import os, sys
 with open(os.environ["STUB_PUSH_LOG"], "a") as fh:
     fh.write(" ".join(sys.argv[1:]) + "\\n")
+spec = sys.argv[1] if len(sys.argv) > 1 else ""
+project = spec.partition("=")[0].partition("@")[0]
+if project == os.environ.get("STUB_PUSH_REJECT_PROJECT"):
+    print("RESULT project=%s run_id=r result=%s verification=commit_mismatch authoritative=false"
+          % (project, os.environ.get("STUB_PUSH_REJECT_RESULT", "source_behind")))
+    sys.exit(9)
+if project == "AADS" and os.environ.get("STUB_PUSH_OK_RESULT"):
+    print("RESULT project=AADS run_id=r result=%s verification=verified authoritative=true"
+          % os.environ["STUB_PUSH_OK_RESULT"])
 sys.exit(int(os.environ.get("STUB_PUSH_RC", "0")))
+"""
+
+AADS_SCAN_STUB = """#!/usr/bin/env bash
+rc="${STUB_AADS_SCAN_RC:-0}"
+case "$rc" in
+  0) echo "AAG_SCAN_AADS head=h expected=h graph=g scan_rc=1";;
+  3) echo "AAG_SOURCE_REJECTED reason=dirty_source root=/x";;
+  4) echo "AAG_SCAN_AADS_ABORT stage=scan rc=2";;
+  7) echo "AAG_SOURCE_SKIPPED reason=already_running root=/x";;
+esac
+exit "$rc"
 """
 
 NOW_WRAPPER = """import os, sys
@@ -220,6 +240,7 @@ exit "$rc"
 def _run_all(values, **extra):
     repo = Path(values["AAG_REPO_DIR"])
     _exe(repo / "scripts" / "aag_go100_refresh.sh", GO100_STUB)
+    _exe(repo / "scripts" / "aag_scan_aads_clean.sh", AADS_SCAN_STUB)
     return subprocess.run(
         ["bash", str(REPO / "scripts" / "aag_all_projects_refresh.sh")],
         env={**values, **extra}, capture_output=True, text=True, timeout=180,
@@ -288,3 +309,69 @@ def test_scripts_pass_bash_syntax_check():
     for name in ("aag_go100_refresh.sh", "aag_all_projects_refresh.sh"):
         assert subprocess.run(["bash", "-n", str(REPO / "scripts" / name)]).returncode == 0
     assert sys.version_info >= (3, 9)
+
+
+# ---- AADS source isolation / STATUS honesty ---------------------------------------
+def test_all_projects_aads_success_records_db_result(env):
+    tmp_path, _, values = env
+    proc = _run_all(values, STUB_PUSH_OK_RESULT="no_change_success")
+    log = _log(tmp_path, "all.log")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "STATUS project=AADS result=success source=origin/main run_result=no_change_success" in log
+    assert f"AADS={values['AAG_STATE_DIR']}/aads/aads-graph.json" in (tmp_path / "push.log").read_text()
+
+
+@pytest.mark.parametrize("db_result", ["source_behind", "out_of_order"])
+def test_all_projects_db_rejection_is_never_logged_as_success(env, db_result):
+    tmp_path, _, values = env
+    proc = _run_all(values, STUB_PUSH_REJECT_PROJECT="AADS", STUB_PUSH_REJECT_RESULT=db_result)
+    log = _log(tmp_path, "all.log")
+    assert proc.returncode == 1
+    assert f"STATUS project=AADS result={db_result} verification=commit_mismatch" in log
+    assert "STATUS project=AADS result=success" not in log
+    assert "DONE result=failed" in log and "rejected=AADS" in log
+    assert "result=success projects=6" not in log
+    state = _state(tmp_path, "ALL")
+    assert state["status"] == "failed" and state["last_success_at"] is None
+    # the other projects were still scanned and published
+    assert "STATUS project=NAS result=success" in log
+
+
+def test_all_projects_rejection_applies_to_every_project_not_just_aads(env):
+    tmp_path, _, values = env
+    proc = _run_all(values, STUB_PUSH_REJECT_PROJECT="NTV2")
+    log = _log(tmp_path, "all.log")
+    assert proc.returncode == 1
+    assert "STATUS project=NTV2 result=source_behind" in log
+    assert "STATUS project=NTV2 result=success" not in log
+
+
+def test_all_projects_dirty_scan_source_is_rejected_without_publishing(env):
+    tmp_path, _, values = env
+    proc = _run_all(values, STUB_AADS_SCAN_RC="3")
+    log = _log(tmp_path, "all.log")
+    assert proc.returncode == 1
+    assert "STATUS project=AADS result=source_rejected reason=dirty_source" in log
+    assert "STATUS project=AADS result=success" not in log
+    assert "AADS=" not in (tmp_path / "push.log").read_text()
+
+
+def test_all_projects_scan_source_locked_is_skip_and_scan_failure_is_failed(env):
+    tmp_path, _, values = env
+    proc = _run_all(values, STUB_AADS_SCAN_RC="7")
+    log = _log(tmp_path, "all.log")
+    assert proc.returncode == 0
+    assert "STATUS project=AADS result=skipped reason=source_prepare_locked" in log
+    assert "DONE result=partial_skipped" in log
+    proc = _run_all(values, STUB_AADS_SCAN_RC="4")
+    assert proc.returncode == 1
+    assert "STATUS project=AADS result=failed detail=source_prepare_or_scan rc=4" in _log(tmp_path, "all.log")
+
+
+def test_go100_db_rejection_is_exit_8_with_distinct_reason(env):
+    tmp_path, _, values = env
+    proc = _run_go100(values, STUB_PUSH_REJECT_PROJECT="GO100")
+    assert proc.returncode == 8
+    state = _state(tmp_path, "GO100")
+    assert state["status"] == "failed" and state["last_failure_reason"] == "snapshot_rejected"
+    assert "SNAPSHOT_REJECTED" in _log(tmp_path)
