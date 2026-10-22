@@ -20,7 +20,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
@@ -841,8 +841,12 @@ async def delete_contract(contract_id: str, current_user: dict = Depends(get_cur
 
 
 @router.get("/payroll")
-async def list_payroll(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"statements": await run_in_threadpool(svc.list_payroll, current_user)}
+async def list_payroll(
+    payroll_month: str = "",
+    include_history: bool = False,
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {"statements": await run_in_threadpool(svc.list_payroll, current_user, payroll_month, include_history)}
 
 
 @router.get("/payroll/defaults")
@@ -858,6 +862,43 @@ async def payroll_defaults(
 @router.post("/payroll")
 async def save_payroll(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"statement": await run_in_threadpool(svc.save_payroll, payload.model_dump(), current_user)}
+
+
+@router.post("/payroll/draft-from-attendance")
+async def payroll_draft_from_attendance(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"statement": await run_in_threadpool(svc.payroll_draft_from_attendance, payload.model_dump(), current_user)}
+
+
+@router.post("/payroll/delivery-consent")
+async def payroll_delivery_consent(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"consent": await run_in_threadpool(svc.record_payroll_delivery_consent, payload.model_dump(), current_user)}
+
+
+@router.post("/payroll/{statement_id}/confirm")
+async def confirm_payroll(statement_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"statement": await run_in_threadpool(svc.confirm_payroll, statement_id, current_user)}
+
+
+@router.post("/payroll/{statement_id}/pay")
+async def pay_payroll(statement_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"statement": await run_in_threadpool(svc.pay_payroll, statement_id, current_user)}
+
+
+@router.get("/payroll/{statement_id}/versions")
+async def payroll_versions(statement_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"versions": await run_in_threadpool(svc.payroll_versions, statement_id, current_user)}
+
+
+@router.get("/payroll/{statement_id}/pdf")
+async def payroll_pdf(statement_id: str, current_user: dict = Depends(get_current_user)) -> Response:
+    data, filename = await run_in_threadpool(svc.payroll_pdf_for_download, statement_id, current_user)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"}
+    return Response(content=data, media_type="application/pdf", headers=headers)
+
+
+@router.post("/payroll/{statement_id}/deliver")
+async def deliver_payroll(statement_id: str, resend: bool = False, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(partial(svc.deliver_payroll, statement_id, current_user, resend=resend))
 
 
 @router.delete("/payroll/{statement_id}")

@@ -400,14 +400,14 @@ def test_save_payroll_fills_only_missing_values_from_contract():
     assert saved["taxable_pay"] == 2600000
     assert saved["non_tax_meal_allowance"] == 200000
     assert saved["net_pay"] == 2750000
-    assert "status" not in saved  # 자동 확정하지 않는다 — 상태는 관리자가 정한다
+    assert saved["status"] == "draft"  # 자동 확정하지 않는다 — 저장은 항상 draft, 확정은 별도 전이다
     assert saved["source_contract_id"] == contract["id"]
     assert set(saved["contract_defaults_applied"]) == {
         "gross_pay", "taxable_pay", "non_tax_meal_allowance", "meal_provision", "employment_tax_type",
     }
     assert saved["contract_deviation"] == {}
     actions = [entry["action"] for entry in audit_rows() if entry["resource_type"] == "payroll_statement"]
-    assert actions == ["payroll.contract_defaults_applied"]
+    assert sorted(actions) == ["payroll.contract_defaults_applied", "payroll.created"]
 
 
 def test_save_payroll_never_overwrites_admin_values_and_records_deviation():

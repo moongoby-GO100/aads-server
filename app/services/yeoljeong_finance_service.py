@@ -1205,6 +1205,19 @@ async def _db_upsert_ledger(name: str, record: dict[str, Any]) -> bool:
                     updated_at = EXCLUDED.updated_at,
                     deleted_at = NULL
                 WHERE yeoljeong_payroll_statements.tenant_id = EXCLUDED.tenant_id
+                  AND (
+                    yeoljeong_payroll_statements.status NOT IN ('confirmed', 'paid')
+                    OR (
+                        EXCLUDED.status IN ('confirmed', 'paid')
+                        AND (yeoljeong_payroll_statements.status <> 'paid' OR EXCLUDED.status = 'paid')
+                        AND yeoljeong_payroll_statements.payroll_month = EXCLUDED.payroll_month
+                        AND yeoljeong_payroll_statements.gross_pay = EXCLUDED.gross_pay
+                        AND yeoljeong_payroll_statements.tax_withholding = EXCLUDED.tax_withholding
+                        AND yeoljeong_payroll_statements.insurance_deduction = EXCLUDED.insurance_deduction
+                        AND yeoljeong_payroll_statements.other_deduction = EXCLUDED.other_deduction
+                        AND yeoljeong_payroll_statements.net_pay = EXCLUDED.net_pay
+                    )
+                  )
                 """,
                 record_id,
                 str(record.get("employee_email") or "").strip().lower() or None,
@@ -8577,19 +8590,158 @@ def ensure_payroll_deliverable(statement: dict[str, Any]) -> None:
 
 # 직원에게 보여 줄 급여명세 상태(allow-list). draft·빈 값·cancelled·모르는 상태는 숨긴다.
 PAYROLL_EMPLOYEE_VISIBLE_STATUSES = frozenset({"confirmed", "paid"})
+PAYROLL_LOCKED_STATUSES = PAYROLL_EMPLOYEE_VISIBLE_STATUSES
+PAYROLL_EDITABLE_STATUSES = frozenset({"", "draft"})
+# 서버만 정하는 필드. 클라이언트가 보내도 버린다 — 상태·확정 주체·버전 체인·발송 이력을 위조할 수 없어야 한다.
+PAYROLL_SERVER_FIELDS = frozenset({
+    "status", "confirmed_by", "confirmed_at", "paid_by", "paid_at", "version", "root_id", "supersedes_id",
+    "superseded_by", "superseded_at", "attendance_basis", "deliveries", "created_by", "created_at", "updated_at",
+    "net_pay", "email_pending", "employee_email_masked", "source_contract_id", "contract_defaults_applied",
+    "contract_deviation", "deleted_at", "tenant_id", "totals", "payroll_validation_errors",
+})
+PAYROLL_CONTENT_FIELDS = (
+    "employee_name", "business_id", "branch", "payroll_month", "pay_date", "employment_tax_type", "meal_provision",
+    "gross_pay", "taxable_pay", "non_tax_meal_allowance", "tax_withholding", "insurance_deduction", "other_deduction",
+    "net_pay", "memo",
+)
+PAYROLL_DELIVERY_CONSENT_VERSION = "payroll-delivery-v1"
+PAYROLL_ATTENDANCE_WAGE_TYPES = ("hourly", "daily")
+_PAYROLL_DELIVERY_LOCK = threading.Lock()
 
 
-def list_payroll(user: dict[str, Any]) -> list[dict[str, Any]]:
+def _payroll_state(row: dict[str, Any]) -> str:
+    return str(row.get("status") or "").strip().lower()
+
+
+def _normalize_payroll_month(payload: dict[str, Any]) -> str:
+    """폼은 period, 서버·월 필터는 payroll_month 를 쓴다. 둘 다 받아 YYYY-MM 하나로 정규화한다."""
+    found: dict[str, str] = {}
+    for key in ("payroll_month", "period"):
+        text = str(payload.get(key) or "").strip()
+        if not text:
+            continue
+        match = re.fullmatch(r"(\d{4})[-./]?(0[1-9]|1[0-2])(?:[-./]?(?:0[1-9]|[12]\d|3[01]))?", text)
+        if not match:
+            raise HTTPException(status_code=400, detail=f"{key} 는 YYYY-MM 형식이어야 합니다")
+        found[key] = f"{match.group(1)}-{match.group(2)}"
+    if len(set(found.values())) > 1:
+        raise HTTPException(status_code=400, detail="payroll_month 와 period 가 서로 다른 월입니다")
+    return next(iter(found.values()), "")
+
+
+def _payroll_content(record: dict[str, Any]) -> dict[str, Any]:
+    content: dict[str, Any] = {}
+    for field in PAYROLL_CONTENT_FIELDS:
+        value = record.get(field)
+        content[field] = value if isinstance(value, int) and not isinstance(value, bool) else str(value or "").strip()
+    return content
+
+
+def _payroll_changes(before: dict[str, Any], after: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    old, new = _payroll_content(before), _payroll_content(after)
+    return {
+        key: {"before": str(old[key])[:200], "after": str(new[key])[:200]} if key == "memo" else {"before": old[key], "after": new[key]}
+        for key in PAYROLL_CONTENT_FIELDS
+        if old[key] != new[key]
+    }
+
+
+def _audit_payroll(user: dict[str, Any], record: dict[str, Any], action: str, details: dict[str, Any] | None = None) -> bool:
+    return _append_employment_audit(
+        tenant_id=str(record.get("tenant_id") or ""),
+        business_id=str(record.get("business_id") or ""),
+        actor=_email(user),
+        action=action,
+        resource_type=PAYROLL_AUDIT_RESOURCE,
+        resource_id=str(record.get("id") or ""),
+        details={
+            "payroll_month": str(record.get("payroll_month") or ""),
+            "version": int(record.get("version") or 1),
+            "status": _payroll_state(record) or "draft",
+            **(details or {}),
+        },
+    )
+
+
+def _payroll_with_totals(row: dict[str, Any]) -> dict[str, Any]:
+    from app.services.yeoljeong_payroll_pdf import payroll_totals
+
+    return {**row, "totals": payroll_totals(row)}
+
+
+def list_payroll(user: dict[str, Any], payroll_month: str = "", include_history: bool = False) -> list[dict[str, Any]]:
+    """본인(관리자는 테넌트 전체) 급여명세. 직원에게는 확정 이상만, 새 버전으로 대체된 이전 버전은 이력 조회에서만 보인다."""
     rows = _filter_user(_read_hr("payroll_statements", user), user, "employee_email")
     if not _is_admin(user):
-        rows = [row for row in rows if str(row.get("status") or "").strip().lower() in PAYROLL_EMPLOYEE_VISIBLE_STATUSES]
-    return sorted(rows, key=lambda row: row.get("updated_at", ""), reverse=True)
+        rows = [row for row in rows if _payroll_state(row) in PAYROLL_EMPLOYEE_VISIBLE_STATUSES]
+    if not include_history:
+        rows = [row for row in rows if not row.get("superseded_by")]
+    month = _normalize_payroll_month({"payroll_month": payroll_month}) if str(payroll_month or "").strip() else ""
+    if month:
+        rows = [row for row in rows if str(row.get("payroll_month") or "") == month]
+    return sorted((_payroll_with_totals(row) for row in rows), key=lambda row: row.get("updated_at", ""), reverse=True)
+
+
+def _admin_payroll_row(statement_id: str, user: dict[str, Any], *, action_label: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail=f"급여내역서 {action_label} 권한이 없습니다")
+    rows = _read_hr("payroll_statements", user)
+    row = _require_hr_record(_find(rows, statement_id), user, detail="급여내역서를 찾을 수 없습니다")
+    return rows, row
+
+
+def payroll_versions(statement_id: str, user: dict[str, Any]) -> list[dict[str, Any]]:
+    """같은 명세의 모든 버전(대체된 것 포함)을 버전 오름차순으로."""
+    rows, row = _admin_payroll_row(statement_id, user, action_label="이력 조회")
+    root = str(row.get("root_id") or row.get("id") or "")
+    chain = [item for item in rows if str(item.get("root_id") or item.get("id") or "") == root]
+    return [_payroll_with_totals(item) for item in sorted(chain, key=lambda item: (int(item.get("version") or 1), str(item.get("id"))))]
+
+
+def _validated_payroll_amounts(payload: dict[str, Any]) -> dict[str, int]:
+    amounts = {
+        field: _payroll_integer_for_api(payload.get(field), field=field)
+        for field in ("gross_pay", "taxable_pay", "non_tax_meal_allowance", "tax_withholding", "insurance_deduction", "other_deduction")
+    }
+    for field, value in amounts.items():
+        if value < 0:
+            raise HTTPException(status_code=400, detail=f"{field}은 0 이상이어야 합니다")
+    gross, taxable_pay, non_tax_meal = amounts["gross_pay"], amounts["taxable_pay"], amounts["non_tax_meal_allowance"]
+    if taxable_pay or non_tax_meal:
+        if taxable_pay + non_tax_meal != gross:
+            raise HTTPException(status_code=400, detail="과세급여와 비과세 식대 합계가 총지급액과 일치해야 합니다")
+        if non_tax_meal > 200000:
+            raise HTTPException(status_code=400, detail="비과세 식대는 월 200,000원 이내로 입력하십시오")
+        if non_tax_meal > 0 and str(payload.get("meal_provision") or "") != "cash_no_meal":
+            raise HTTPException(status_code=400, detail="사용자가 식사를 제공하는 경우 현금 식대를 비과세로 분류할 수 없습니다")
+    deductions = amounts["tax_withholding"] + amounts["insurance_deduction"] + amounts["other_deduction"]
+    if deductions > gross:
+        raise HTTPException(status_code=400, detail="공제 합계가 총지급액을 넘을 수 없습니다")
+    return amounts
 
 
 def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """저장. 확정(confirmed)·지급(paid) 명세는 덮어쓰지 않고 새 버전(draft)으로만 고친다.
+
+    status 는 서버만 정한다. 클라이언트의 status="confirmed" 는 확정 요청으로만 읽고, 확정자·시각은 서버가 채운다.
+    """
     _tenant_id(user)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="급여내역서 작성 권한이 없습니다")
+    wants_confirm = str(payload.get("status") or "").strip().lower() == "confirmed"
+    saved, changed = _save_payroll_record(payload, user)
+    if wants_confirm and changed and _payroll_state(saved) in PAYROLL_EDITABLE_STATUSES:
+        return confirm_payroll(str(saved["id"]), user)
+    return saved
+
+
+def _save_payroll_record(
+    raw_payload: dict[str, Any], user: dict[str, Any], *, server_fields: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], bool]:
+    """(저장된 레코드, 쓰기 여부). 잠긴 명세와 내용이 같으면 아무것도 쓰지 않는다."""
+    payload = {key: value for key, value in raw_payload.items() if key not in PAYROLL_SERVER_FIELDS}
+    requested_id = str(raw_payload.get("id") or "").strip()
     rows = _read_hr("payroll_statements", user)
     email = str(payload.get("employee_email") or "").strip().lower()
     request_id = str(payload.get("employee_request_id") or "").strip()
@@ -8599,6 +8751,7 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
         email = str(employee.get("email") or "").strip().lower()
     if not email and not _name_key(payload.get("employee_name")):
         raise HTTPException(status_code=400, detail="이메일이 없으면 직원 이름이 필요합니다")
+    month = _normalize_payroll_month(payload)
     derived = (
         _derive_current_employment(
             _read_hr("contracts", user),
@@ -8611,78 +8764,390 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
     )
     plan = _payroll_defaults_from_employment(derived)
     payload, defaults_applied, deviation = _apply_payroll_contract_defaults(payload, plan)
-    gross = _payroll_integer_for_api(payload.get("gross_pay"), field="gross_pay")
-    taxable_pay = _payroll_integer_for_api(payload.get("taxable_pay"), field="taxable_pay")
-    non_tax_meal = _payroll_integer_for_api(payload.get("non_tax_meal_allowance"), field="non_tax_meal_allowance")
-    if taxable_pay or non_tax_meal:
-        if taxable_pay + non_tax_meal != gross:
-            raise HTTPException(status_code=400, detail="과세급여와 비과세 식대 합계가 총지급액과 일치해야 합니다")
-        if non_tax_meal < 0 or non_tax_meal > 200000:
-            raise HTTPException(status_code=400, detail="비과세 식대는 월 200,000원 이내로 입력하십시오")
-        if non_tax_meal > 0 and str(payload.get("meal_provision") or "") != "cash_no_meal":
-            raise HTTPException(status_code=400, detail="사용자가 식사를 제공하는 경우 현금 식대를 비과세로 분류할 수 없습니다")
-    tax_withholding = _payroll_integer_for_api(payload.get("tax_withholding"), field="tax_withholding")
-    insurance_deduction = _payroll_integer_for_api(payload.get("insurance_deduction"), field="insurance_deduction")
-    other_deduction = _payroll_integer_for_api(payload.get("other_deduction"), field="other_deduction")
-    deductions = tax_withholding + insurance_deduction + other_deduction
+    amounts = _validated_payroll_amounts(payload)
+    net_pay = amounts["gross_pay"] - amounts["tax_withholding"] - amounts["insurance_deduction"] - amounts["other_deduction"]
+
+    existing = _find(rows, requested_id) if requested_id else None
+    target = existing
+    mode = "create"
+    if existing:
+        state = _payroll_state(existing)
+        if state in PAYROLL_EDITABLE_STATUSES:
+            mode = "update_draft"
+        elif state in PAYROLL_LOCKED_STATUSES:
+            if existing.get("superseded_by"):
+                raise HTTPException(status_code=409, detail="이미 새 버전으로 대체된 명세입니다. 최신 버전을 수정하십시오")
+            successor = next(
+                (item for item in rows if str(item.get("supersedes_id") or "") == str(existing.get("id")) and _payroll_state(item) in PAYROLL_EDITABLE_STATUSES),
+                None,
+            )
+            mode, target = ("update_draft", successor) if successor else ("new_version", existing)
+        else:
+            raise HTTPException(status_code=409, detail="수정할 수 없는 상태의 급여명세입니다")
+
     now = _now()
-    statement_id = str(payload.get("id") or uuid4())
+    actor = _email(user)
     statement = {
         **payload,
-        "id": statement_id,
         "employee_email": email,
         "employee_email_masked": _mask_email(email),
         "email_pending": not email,
-        "gross_pay": gross,
-        "taxable_pay": taxable_pay,
-        "non_tax_meal_allowance": non_tax_meal,
-        "tax_withholding": tax_withholding,
-        "insurance_deduction": insurance_deduction,
-        "other_deduction": other_deduction,
-        "net_pay": max(0, gross - deductions),
+        **amounts,
+        "net_pay": net_pay,
+        "payroll_month": month,
         "source_contract_id": plan["source_contract_id"],
         "contract_defaults_applied": defaults_applied,
         "contract_deviation": deviation,
-        "created_at": payload.get("created_at") or now,
+        "status": "draft",
         "updated_at": now,
     }
-    statement = _owned_hr_record(statement, user)
-    existing = _find(rows, statement_id)
-    if existing:
-        existing.update(statement)
-        saved = existing
+    statement.pop("period", None)
+    if month:
+        statement["period"] = month
+    if mode == "create":
+        statement_id = requested_id or str(uuid4())
+        statement.update(id=statement_id, version=1, root_id=statement_id, created_by=actor, created_at=now)
+    elif mode == "update_draft":
+        statement.update(
+            id=target["id"], version=int(target.get("version") or 1), root_id=target.get("root_id") or target["id"],
+            created_by=target.get("created_by") or actor, created_at=target.get("created_at") or now,
+        )
+        if target.get("supersedes_id"):
+            statement["supersedes_id"] = target["supersedes_id"]
+        if target.get("attendance_basis"):
+            statement["attendance_basis"] = target["attendance_basis"]
     else:
-        rows.insert(0, statement)
-        saved = statement
-    _write_hr_record("payroll_statements", saved, user)
-    for action, key, value in (
+        statement.update(
+            id=str(uuid4()), version=int(existing.get("version") or 1) + 1, root_id=existing.get("root_id") or existing["id"],
+            supersedes_id=existing["id"], created_by=actor, created_at=now,
+        )
+    if server_fields:
+        statement.update(server_fields)
+    statement = _owned_hr_record(statement, user)
+
+    if mode == "new_version" and not _payroll_changes(existing, statement) and not server_fields:
+        return existing, False
+
+    _write_hr_record("payroll_statements", statement, user)
+    action = {"create": "payroll.created", "update_draft": "payroll.updated", "new_version": "payroll.version_created"}[mode]
+    details: dict[str, Any] = {"changes": _payroll_changes(target or {}, statement) if target else {}}
+    if mode == "new_version":
+        details["previous_id"] = existing["id"]
+        details["previous_version"] = int(existing.get("version") or 1)
+    _audit_payroll(user, statement, action, details)
+    for audit_action, key, value in (
         ("payroll.contract_defaults_applied", "fields", defaults_applied),
         ("payroll.contract_deviation", "deviation", deviation),
     ):
         if value:
             _append_employment_audit(
-                tenant_id=str(saved.get("tenant_id") or ""),
-                business_id=str(saved.get("business_id") or ""),
-                actor=_email(user),
-                action=action,
+                tenant_id=str(statement.get("tenant_id") or ""),
+                business_id=str(statement.get("business_id") or ""),
+                actor=actor,
+                action=audit_action,
                 resource_type=PAYROLL_AUDIT_RESOURCE,
-                resource_id=statement_id,
+                resource_id=str(statement["id"]),
                 details={
                     key: value,
                     "source_contract_id": plan["source_contract_id"],
                     "employee_request_id": str((employee or {}).get("id") or ""),
-                    "payroll_month": str(saved.get("payroll_month") or ""),
+                    "payroll_month": str(statement.get("payroll_month") or ""),
                 },
             )
-    return saved
+    return statement, True
+
+
+def confirm_payroll(statement_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    """draft → confirmed. 확정자·시각은 서버가 채운다. 이전 버전이 있으면 그 버전을 대체 표시한다."""
+    rows, row = _admin_payroll_row(statement_id, user, action_label="확정")
+    state = _payroll_state(row)
+    if state not in PAYROLL_EDITABLE_STATUSES:
+        raise HTTPException(status_code=409, detail="작성중(draft) 명세만 확정할 수 있습니다")
+    from app.services.yeoljeong_payroll_pdf import payroll_totals
+
+    if row.get("payroll_validation_errors") or not payroll_totals(row)["consistent"]:
+        raise HTTPException(status_code=409, detail="금액이 올바르지 않거나 실수령액이 총지급액-공제 합계와 달라 확정할 수 없습니다")
+    now = _now()
+    confirmed = {**row, "status": "confirmed", "confirmed_by": _email(user), "confirmed_at": now, "updated_at": now}
+    _write_hr_record("payroll_statements", confirmed, user)
+    _audit_payroll(user, confirmed, "payroll.confirmed", {"net_pay": confirmed.get("net_pay")})
+    previous_id = str(confirmed.get("supersedes_id") or "")
+    previous = _find(rows, previous_id) if previous_id else None
+    if previous and not previous.get("superseded_by"):
+        marked = {**previous, "superseded_by": confirmed["id"], "superseded_at": now, "updated_at": now}
+        _write_hr_record("payroll_statements", marked, user)
+        _audit_payroll(user, marked, "payroll.superseded", {"superseded_by": confirmed["id"]})
+    return confirmed
+
+
+def pay_payroll(statement_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    """confirmed → paid. 금액은 건드리지 않는다."""
+    _, row = _admin_payroll_row(statement_id, user, action_label="지급 처리")
+    if _payroll_state(row) != "confirmed" or row.get("superseded_by"):
+        raise HTTPException(status_code=409, detail="확정(confirmed)된 최신 명세만 지급 처리할 수 있습니다")
+    now = _now()
+    paid = {**row, "status": "paid", "paid_by": _email(user), "paid_at": now, "updated_at": now}
+    _write_hr_record("payroll_statements", paid, user)
+    _audit_payroll(user, paid, "payroll.paid", {})
+    return paid
 
 
 def delete_payroll(statement_id: str, user: dict[str, Any]) -> None:
+    _, row = _admin_payroll_row(statement_id, user, action_label="삭제")
+    if _payroll_state(row) not in PAYROLL_EDITABLE_STATUSES:
+        _audit_payroll(user, row, "payroll.delete_rejected", {"reason": "locked"})
+        raise HTTPException(status_code=409, detail="확정·지급된 급여명세는 삭제할 수 없습니다. 정정은 새 버전으로 작성하십시오")
+    snapshot = _payroll_content(row)
+    if not _audit_payroll(user, row, "payroll.deleted", {"snapshot": snapshot}):
+        raise HTTPException(status_code=503, detail="감사 기록을 남길 수 없어 삭제하지 않았습니다")
+    _delete_hr_record("payroll_statements", statement_id, user)
+
+
+async def _db_fetch_payroll_attendance(business_id: str, employee_email: str, first_day: date, next_first_day: date) -> list[dict[str, Any]]:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        rows = await conn.fetch(
+            "SELECT id, work_date, worked_minutes, hourly_wage, status FROM yeoljeong_attendance_records "
+            "WHERE business_id = $1 AND employee_email = $2 AND work_date >= $3 AND work_date < $4 AND deleted_at IS NULL "
+            "ORDER BY work_date, start_at",
+            business_id, employee_email, first_day, next_first_day,
+        )
+        return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+def _payroll_attendance_rows(business_id: str, employee_email: str, month: str) -> list[dict[str, Any]]:
+    year, mon = int(month[:4]), int(month[5:7])
+    first_day = date(year, mon, 1)
+    next_first_day = date(year + (mon == 12), mon % 12 + 1, 1)
+    rows = _run_db(_db_fetch_payroll_attendance(business_id, employee_email, first_day, next_first_day)) if _db_available() else None
+    if not isinstance(rows, list):
+        raise HTTPException(status_code=503, detail="근태 저장소를 읽을 수 없어 급여 초안을 만들 수 없습니다")
+    return rows
+
+
+def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """확정(approved) 근태로 시급·일급제 급여 초안을 만든다. 미확정 근태가 남아 있거나 확정 근태가 없으면 거부한다."""
     _tenant_id(user)
     if not _is_admin(user):
-        raise HTTPException(status_code=403, detail="급여내역서 삭제 권한이 없습니다")
-    _require_hr_record(_find(_read_hr("payroll_statements", user), statement_id), user, detail="급여내역서를 찾을 수 없습니다")
-    _delete_hr_record("payroll_statements", statement_id, user)
+        raise HTTPException(status_code=403, detail="급여 초안 생성 권한이 없습니다")
+    month = _normalize_payroll_month({"payroll_month": payload.get("payroll_month")})
+    if not month:
+        raise HTTPException(status_code=400, detail="payroll_month(YYYY-MM)가 필요합니다")
+    employee = _find_employee_record(
+        user, employee_email=str(payload.get("employee_email") or ""), employee_request_id=str(payload.get("employee_request_id") or "")
+    )
+    if not employee:
+        raise HTTPException(status_code=404, detail="승인된 직원을 찾을 수 없습니다")
+    email = str(employee.get("email") or "").strip().lower()
+    business_id = _require_business_for_tenant(_record_business_id(employee), user)
+    derived = _derive_current_employment(
+        _read_hr("contracts", user), employee_email=email, employee_request_id=str(employee.get("id") or ""), business_id=business_id
+    )
+    if derived is None:
+        raise HTTPException(status_code=409, detail="서명 완료된 계약서가 없어 급여 초안을 만들 수 없습니다")
+    terms = derived["employment"]
+    wage_type = str(terms.get("wage_type") or "")
+    rate = int(terms.get("wage") or 0)
+    if wage_type not in PAYROLL_ATTENDANCE_WAGE_TYPES:
+        raise HTTPException(status_code=400, detail="근태 기반 초안은 시급제·일급제 계약만 만들 수 있습니다")
+    if rate <= 0:
+        raise HTTPException(status_code=409, detail="계약서에 단가가 없어 급여 초안을 만들 수 없습니다")
+
+    attendance = _payroll_attendance_rows(business_id, email, month)
+    approved = [row for row in attendance if str(row.get("status") or "").strip().lower() == "approved"]
+    unconfirmed = [row for row in attendance if str(row.get("status") or "").strip().lower() not in {"approved", "rejected"}]
+    if unconfirmed:
+        raise HTTPException(status_code=409, detail=f"확정되지 않은 근태 {len(unconfirmed)}건이 남아 있어 급여 초안을 만들 수 없습니다")
+    worked = [row for row in approved if int(row.get("worked_minutes") or 0) > 0]
+    if not worked:
+        raise HTTPException(status_code=409, detail="확정된 근태가 없어 급여 초안을 만들 수 없습니다")
+
+    minutes = sum(int(row["worked_minutes"]) for row in worked)
+    days = len({str(row.get("work_date")) for row in worked})
+    gross = (minutes * rate + 30) // 60 if wage_type == "hourly" else days * rate
+    basis = {
+        "source": "yeoljeong_attendance_records",
+        "wage_type": wage_type,
+        "rate": rate,
+        "approved_minutes": minutes,
+        "approved_days": days,
+        "record_ids": [str(row.get("id")) for row in worked],
+        "rate_mismatch_records": sum(1 for row in worked if wage_type == "hourly" and int(row.get("hourly_wage") or 0) not in (0, rate)),
+        "generated_at": _now(),
+    }
+    existing = [
+        row for row in _read_hr("payroll_statements", user)
+        if str(row.get("payroll_month") or "") == month
+        and str(row.get("employee_email") or "").strip().lower() == email
+        and _row_in_business(row, business_id)
+        and not row.get("superseded_by")
+    ]
+    if any(_payroll_state(row) in PAYROLL_LOCKED_STATUSES for row in existing):
+        raise HTTPException(status_code=409, detail="이미 확정된 급여명세가 있습니다. 정정은 해당 명세를 수정해 새 버전으로 작성하십시오")
+    draft = next((row for row in existing if _payroll_state(row) in PAYROLL_EDITABLE_STATUSES), None)
+    request = {
+        "id": draft["id"] if draft else "",
+        "employee_request_id": str(employee.get("id") or ""),
+        "employee_email": email,
+        "employee_name": str(employee.get("name") or ""),
+        "business_id": business_id,
+        "branch": str(employee.get("branch") or ""),
+        "payroll_month": month,
+        "gross_pay": gross,
+        "taxable_pay": gross,
+        "non_tax_meal_allowance": 0,
+        "tax_withholding": int((draft or {}).get("tax_withholding") or 0),
+        "insurance_deduction": int((draft or {}).get("insurance_deduction") or 0),
+        "other_deduction": int((draft or {}).get("other_deduction") or 0),
+        "memo": str((draft or {}).get("memo") or ""),
+    }
+    saved, _ = _save_payroll_record(request, user, server_fields={"attendance_basis": basis})
+    _audit_payroll(user, saved, "payroll.draft_from_attendance", {
+        "approved_minutes": minutes, "approved_days": days, "rate": rate, "gross_pay": gross, "wage_type": wage_type,
+    })
+    return saved
+
+
+def _payroll_delivery_consent_ok(employee: dict[str, Any] | None) -> bool:
+    consent = (employee or {}).get("payroll_delivery_consent")
+    return (
+        isinstance(consent, dict)
+        and consent.get("agreed") is True
+        and consent.get("version") == PAYROLL_DELIVERY_CONSENT_VERSION
+        and not consent.get("revoked_at")
+    )
+
+
+def record_payroll_delivery_consent(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """직원 본인이 전자 급여명세 수신에 동의(또는 철회)한다. 발송 게이트가 읽는 유일한 동의 근거다."""
+    _tenant_id(user)
+    email = _email(user)
+    employee = _find_employee_record(user, employee_email=email) if email else None
+    if not employee:
+        raise HTTPException(status_code=404, detail="승인된 직원 정보를 찾을 수 없습니다")
+    if payload.get("consent_version") != PAYROLL_DELIVERY_CONSENT_VERSION:
+        raise HTTPException(status_code=400, detail="수신 동의 문구를 새로 확인하십시오")
+    now = _now()
+    agreed = payload.get("agree") is True
+    consent = (
+        {"agreed": True, "version": PAYROLL_DELIVERY_CONSENT_VERSION, "agreed_at": now, "revoked_at": ""}
+        if agreed
+        else {**(employee.get("payroll_delivery_consent") or {}), "agreed": False, "revoked_at": now}
+    )
+    updated = {**employee, "payroll_delivery_consent": consent, "updated_at": now}
+    _write_hr_record("employee_join_requests", updated, user)
+    _append_employment_audit(
+        tenant_id=str(updated.get("tenant_id") or ""),
+        business_id=str(updated.get("business_id") or ""),
+        actor=email,
+        action="payroll.delivery_consent_agreed" if agreed else "payroll.delivery_consent_revoked",
+        resource_type=EMPLOYMENT_AUDIT_RESOURCE,
+        resource_id=str(updated.get("id") or ""),
+        details={"version": PAYROLL_DELIVERY_CONSENT_VERSION},
+    )
+    return {"agreed": agreed, "version": PAYROLL_DELIVERY_CONSENT_VERSION}
+
+
+def _send_payroll_notice(statement: dict[str, Any], pdf_sha256: str) -> dict[str, Any]:
+    """직원에게 명세 도착을 알린다. 사내 알림센터만 쓴다 — SMS·알림톡 같은 외부 채널은 이 경로에 없다."""
+    email = str(statement.get("employee_email") or "").strip().lower()
+    masked = _mask_email(email)
+    try:
+        from app.services import yeoljeong_ops_service
+
+        _run_coroutine(yeoljeong_ops_service.create_notification(
+            business_id=str(statement.get("business_id") or ""),
+            target_user=email,
+            notification_type="payroll_statement_ready",
+            title=f"{statement.get('payroll_month') or ''} 급여명세서가 도착했습니다",
+            body="급여명세 화면에서 확인하십시오.",
+            reference_type="payroll_statement",
+            reference_id=str(statement.get("id") or ""),
+        ))
+        return {"channel": "inapp", "status": "sent", "target_masked": masked, "error_detail": ""}
+    except Exception as exc:  # noqa: BLE001 — 실패는 발송 이력에 남기고 호출자에게는 상태로 돌려준다
+        logger.warning("payroll notice failed: statement=%s err=%s", statement.get("id"), type(exc).__name__)
+        return {"channel": "inapp", "status": "failed", "target_masked": masked, "error_detail": f"{type(exc).__name__}: {exc}"[:300]}
+
+
+def deliver_payroll(statement_id: str, user: dict[str, Any], *, resend: bool = False) -> dict[str, Any]:
+    """확정 이상 명세를 직원에게 교부한다. 직원 수신 동의가 있어야 하고, 명세 버전당 최초 발송은 1회만 나간다."""
+    from app.services.yeoljeong_payroll_pdf import PayrollPdfError, payroll_totals, render_payroll_statement_pdf
+
+    _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="급여명세 발송 권한이 없습니다")
+    with _PAYROLL_DELIVERY_LOCK:
+        rows = _read_hr("payroll_statements", user)
+        row = _require_hr_record(_find(rows, statement_id), user, detail="급여내역서를 찾을 수 없습니다")
+        if _payroll_state(row) not in PAYROLL_LOCKED_STATUSES:
+            raise HTTPException(status_code=409, detail="확정된 급여명세만 발송할 수 있습니다")
+        if row.get("superseded_by"):
+            raise HTTPException(status_code=409, detail="새 버전으로 대체된 명세는 발송할 수 없습니다")
+        ensure_payroll_deliverable(row)
+        employee = _find_employee_record(user, employee_email=str(row.get("employee_email") or ""))
+        if not _payroll_delivery_consent_ok(employee):
+            raise HTTPException(status_code=409, detail="직원의 전자 급여명세 수신 동의가 없어 발송할 수 없습니다")
+        if not payroll_totals(row)["consistent"]:
+            raise HTTPException(status_code=409, detail="실수령액이 총지급액-공제 합계와 달라 발송할 수 없습니다")
+
+        deliveries = [dict(item) for item in (row.get("deliveries") or []) if isinstance(item, dict)]
+        sent = [item for item in deliveries if item.get("status") == "sent"]
+        version = int(row.get("version") or 1)
+        initial_key = f"payroll:{row['id']}:v{version}:initial"
+        if resend:
+            if not any(item.get("idempotency_key") == initial_key for item in sent):
+                raise HTTPException(status_code=409, detail="최초 발송 전에는 재발송할 수 없습니다")
+            key, kind = f"payroll:{row['id']}:v{version}:resend:{len(sent)}", "resend"
+        else:
+            duplicate = next((item for item in sent if item.get("idempotency_key") == initial_key), None)
+            if duplicate:
+                return {"status": "duplicate", "duplicate": True, "delivery": duplicate, "delivery_count": len(sent)}
+            key, kind = initial_key, "initial"
+        try:
+            pdf = render_payroll_statement_pdf(row)
+        except PayrollPdfError as exc:
+            raise HTTPException(status_code=503, detail=f"급여명세 PDF 를 만들 수 없습니다: {exc}") from None
+        digest = hashlib.sha256(pdf).hexdigest()
+        result = _send_payroll_notice(row, digest)
+        entry = {
+            "idempotency_key": key,
+            "kind": kind,
+            "channel": result.get("channel", ""),
+            "status": result.get("status", "failed"),
+            "target_masked": result.get("target_masked", ""),
+            "error_detail": result.get("error_detail", ""),
+            "pdf_sha256": digest,
+            "net_pay": payroll_totals(row)["net_pay"],
+            "version": version,
+            "sent_by": _email(user),
+            "at": _now(),
+        }
+        updated = {**row, "deliveries": deliveries + [entry], "updated_at": entry["at"]}
+        _write_hr_record("payroll_statements", updated, user)
+        _audit_payroll(user, updated, "payroll.delivered" if entry["status"] == "sent" else "payroll.delivery_failed", {
+            "kind": kind, "idempotency_key": key, "channel": entry["channel"], "pdf_sha256": digest,
+        })
+        return {"status": entry["status"], "duplicate": False, "delivery": entry, "delivery_count": len(sent) + (entry["status"] == "sent")}
+
+
+def payroll_pdf_for_download(statement_id: str, user: dict[str, Any]) -> tuple[bytes, str]:
+    """관리자는 테넌트 내 확정 이상 명세, 직원은 본인 확정 이상 명세만. 숫자는 화면과 같은 payroll_totals 에서 나온다."""
+    from app.services.yeoljeong_payroll_pdf import PayrollPdfError, render_payroll_statement_pdf
+
+    rows = _filter_user(_read_hr("payroll_statements", user), user, "employee_email")
+    row = _find(rows, statement_id)
+    if not row or _payroll_state(row) not in PAYROLL_LOCKED_STATUSES:
+        raise HTTPException(status_code=404, detail="급여내역서를 찾을 수 없습니다")
+    try:
+        data = render_payroll_statement_pdf(row)
+    except PayrollPdfError as exc:
+        raise HTTPException(status_code=503, detail=f"급여명세 PDF 를 만들 수 없습니다: {exc}") from None
+    return data, f"payroll-{row.get('payroll_month') or 'statement'}-v{int(row.get('version') or 1)}.pdf"
 
 
 def _decode_csv(content: bytes) -> str:
