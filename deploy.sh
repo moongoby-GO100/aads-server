@@ -2261,6 +2261,13 @@ p0p1_monitor_fail() {
 #                           real forward is resolved with `ssh -G`, never trusted
 #                           from the listener name or from /health/live
 #   127.0.0.1:8110  local   bind-mounted container yeoljeong-finance
+#   (no proxy_pass reference) unused  upstream declared (or absent) but no active
+#                           proxy_pass in the real nginx config points at it, so
+#                           nothing is routed there and there is nothing to
+#                           health-check. Decided from the real config, never
+#                           from env; if the config cannot be read the gate fails
+#                           closed. Any reference at all falls back to the
+#                           local/remote rules above (jinah244 stays blocked).
 # Anything else (no/multiple upstream servers, other port) is unknown and
 # blocks the release. Deploy #5814 failed because a local container was
 # assumed while the live route was the remote tunnel.
@@ -2278,6 +2285,8 @@ FINANCE_TUNNEL_REMOTE_TARGET="127.0.0.1:8110"
 # Seams for the process table; behavior tests replace them, nothing reads env.
 finance_proc_cmdline() { tr '\0' '\n' < "/proc/$1/cmdline"; }
 finance_ssh_resolve() { timeout 15 ssh -G "$@"; }
+# Full effective nginx config as the running aads-nginx sees it (stdout only).
+finance_nginx_dump() { timeout 20 docker exec aads-nginx nginx -T 2>/dev/null; }
 
 # OpenSSH `ssh -G` prints forward endpoints bracketed ("[127.0.0.1]:8210
 # [127.0.0.1]:8110"); the bare "127.0.0.1:8210" form is also accepted. Both
@@ -2380,11 +2389,77 @@ verify_finance_tunnel_destination() {
     return 0
 }
 
-# Prints "<mode> <route>" (mode=local|remote) on stdout; reason on stderr, rc 1.
+# Fallback when `nginx -T` is unavailable: the active conf.d files next to
+# $UPSTREAM_CONF. Backup copies (.bak*, .pre*) are not live config.
+finance_confd_dump() {
+    local dir f found=false
+    dir="$(dirname "${UPSTREAM_CONF:-/etc/nginx/conf.d/aads-upstream.conf}")"
+    [[ -d "$dir" ]] || return 1
+    for f in "$dir"/*.conf "$dir"/*.inc; do
+        [[ -f "$f" ]] || continue
+        case "${f##*/}" in *.bak*|*.pre*) continue ;; esac
+        cat "$f" 2>/dev/null || return 1
+        printf '\n'
+        found=true
+    done
+    [[ "$found" == "true" ]]
+}
+
+# Counts non-comment lines of config text $1 matching ERE $2.
+finance_nginx_count() {
+    local n
+    n="$(sed -E 's/#.*$//' <<< "$1" | grep -cE "$2" || true)"
+    printf '%s' "${n:-0}"
+}
+
+FINANCE_ANY_PASS_RE='(^|[^A-Za-z0-9_])(proxy|fastcgi|grpc|uwsgi|scgi)_pass[[:space:]]'
+FINANCE_UPSTREAM_REF_RE="${FINANCE_ANY_PASS_RE}[^;]*yeoljeong_finance_api([^A-Za-z0-9_]|\$)"
+
+# Prints the effective nginx config (rc 0) or rc 1 when it cannot be judged. A
+# dump without a single *_pass directive is treated as unreadable: "zero
+# references" must come from a config that demonstrably contains the routing.
+finance_nginx_effective_config() {
+    local cfg
+    if cfg="$(finance_nginx_dump)" && (( $(finance_nginx_count "$cfg" "$FINANCE_ANY_PASS_RE") > 0 )); then
+        printf '%s\n' "$cfg"
+        return 0
+    fi
+    if cfg="$(finance_confd_dump 2>/dev/null)" && (( $(finance_nginx_count "$cfg" "$FINANCE_ANY_PASS_RE") > 0 )); then
+        printf '%s\n' "$cfg"
+        return 0
+    fi
+    return 1
+}
+
+# Prints "<mode> <route>" (mode=local|remote|unused) on stdout; reason on
+# stderr, rc 1. Nothing but the result may reach stderr on success: callers
+# capture stdout and stderr together.
 resolve_finance_sidecar_topology() {
     local conf="${UPSTREAM_CONF:-/etc/nginx/conf.d/aads-upstream.conf}"
     local -a routes
-    local route listener why
+    local route listener why cfg refs
+    if ! cfg="$(finance_nginx_effective_config)"; then
+        echo "cannot determine whether any proxy_pass references yeoljeong_finance_api (nginx -T and active conf.d files both unusable); failing closed" >&2
+        return 1
+    fi
+    refs="$(finance_nginx_count "$cfg" "$FINANCE_UPSTREAM_REF_RE")"
+    if (( refs == 0 )); then
+        routes=()
+        if [[ -r "$conf" ]]; then
+            mapfile -t routes < <(awk '
+                /^[[:space:]]*upstream[[:space:]]+yeoljeong_finance_api[[:space:]]*\{/ {in_up=1; next}
+                in_up && /^[[:space:]]*\}/ {in_up=0}
+                in_up && /^[[:space:]]*server[[:space:]]+/ {
+                    v=$2; sub(/;.*/, "", v); print v
+                }' "$conf")
+        fi
+        if (( ${#routes[@]} == 0 )); then
+            echo "unused none"
+        else
+            (IFS=','; echo "unused ${routes[*]}")
+        fi
+        return 0
+    fi
     [[ -r "$conf" ]] || { echo "nginx upstream config unreadable: ${conf}" >&2; return 1; }
     mapfile -t routes < <(awk '
         /^[[:space:]]*upstream[[:space:]]+yeoljeong_finance_api[[:space:]]*\{/ {in_up=1; next}
@@ -2437,8 +2512,8 @@ finance_local_sidecar_list() {
     for sidecar in "${candidates[@]}"; do
         sidecar="${sidecar//[[:space:]]/}"
         [[ -z "$sidecar" ]] && continue
-        if [[ "$mode" == "remote" && "$sidecar" == "$FINANCE_LOCAL_CONTAINER" ]]; then
-            FINANCE_SIDECAR_ERROR="refusing obsolete local finance container ${sidecar} while finance topology=remote"
+        if [[ ( "$mode" == "remote" || "$mode" == "unused" ) && "$sidecar" == "$FINANCE_LOCAL_CONTAINER" ]]; then
+            FINANCE_SIDECAR_ERROR="refusing obsolete local finance container ${sidecar} while finance topology=${mode}"
             return 1
         fi
         if [[ "$sidecar" == aads-server* ]]; then
@@ -2506,6 +2581,9 @@ preflight_mounted_sidecar_topology() {
             finance_route_health_wait "http://${route}/health/live" "$health_wait" \
                 || failure="remote finance route health failed: http://${route}/health/live (waited ${health_wait}s)"
         fi
+        if [[ -z "$failure" && "$mode" == "unused" ]]; then
+            echo "[deploy.sh] ℹ️ finance topology=unused (route=${route}): no proxy_pass references yeoljeong_finance_api; finance health wait skipped"
+        fi
     fi
 
     if [[ -n "$failure" ]]; then
@@ -2541,6 +2619,9 @@ reload_mounted_sidecars() {
         mode="${topo%% *}"
         route="${topo##* }"
         internal_url="${DEPLOY_SIDECAR_CHECK_URL:-http://${route}/health/live}"
+        if [[ "$mode" == "unused" ]]; then
+            echo "[deploy.sh] ℹ️ finance topology=unused (route=${route}): no proxy_pass references yeoljeong_finance_api; internal and public finance health checks skipped"
+        fi
         finance_local_sidecar_list "$mode" || failure="$FINANCE_SIDECAR_ERROR"
     fi
 
@@ -2558,7 +2639,7 @@ reload_mounted_sidecars() {
         done
     fi
 
-    if [[ -z "$failure" ]]; then
+    if [[ -z "$failure" && "$mode" != "unused" ]]; then
         # Local: internal warmup after the restart. Remote: nothing was
         # restarted, the same probe just verifies the tunnel's real upstream.
         if ! finance_route_health_wait "$internal_url" "$health_wait"; then
@@ -2567,7 +2648,7 @@ reload_mounted_sidecars() {
         fi
     fi
 
-    if [[ -z "$failure" ]]; then
+    if [[ -z "$failure" && "$mode" != "unused" ]]; then
         # This route is intentionally authenticated. 401/403 verifies nginx
         # routing plus the auth gate; the internal probe above verifies the
         # sidecar process itself. Only a missing/broken public route fails.
@@ -2582,6 +2663,10 @@ reload_mounted_sidecars() {
         deploy_phase_end "mounted_sidecar_reload" "error" "$failure"
         notify "❌ Blue-Green 인증 실패: ${failure}"
         return 1
+    fi
+    if [[ "$mode" == "unused" ]]; then
+        deploy_phase_end "mounted_sidecar_reload" "success" "finance topology=unused: no proxy_pass references yeoljeong_finance_api; finance health checks skipped"
+        return 0
     fi
     deploy_phase_end "mounted_sidecar_reload" "success" "finance topology=${mode}: mounted sidecars reloaded/verified and publicly healthy"
 }

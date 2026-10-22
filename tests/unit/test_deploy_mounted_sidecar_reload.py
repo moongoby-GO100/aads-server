@@ -52,15 +52,29 @@ def _run(
     ssh_g_style="bracket",
     real_ssh_g=False,
     extra_shell="",
+    nginx_dump=None,
+    conf_files=None,
+    upstream_block=True,
 ):
     conf = tmp_path / "upstream.conf"
     servers = "\n".join(f"    server {r} max_fails=3;" for r in routes)
-    conf.write_text(
-        "upstream other {\n    server 127.0.0.1:9999;\n}\n"
+    finance_block = (
         f"upstream yeoljeong_finance_api {{\n    zone y 64k;\n{servers}\n"
-        "    # server 127.0.0.1:1111; commented\n    keepalive 16;\n}\n",
+        "    # server 127.0.0.1:1111; commented\n    keepalive 16;\n}\n"
+        if upstream_block
+        else ""
+    )
+    conf.write_text(
+        "upstream other {\n    server 127.0.0.1:9999;\n}\n" + finance_block,
         encoding="utf-8",
     )
+    for name, text in (conf_files or {}).items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    # None = a live nginx -T whose server blocks route finance to the upstream;
+    # "FAIL" = nginx -T unavailable (falls back to the conf.d files).
+    dump_file = tmp_path / "nginx_dump.txt"
+    dump_file.write_text(NGINX_REFERENCED if nginx_dump in (None, "FAIL") else nginx_dump, encoding="utf-8")
+    dump_seam = "return 1" if nginx_dump == "FAIL" else 'cat "$NGINX_DUMP"'
     calls = tmp_path / "calls.log"
     script = tmp_path / "harness.sh"
     # real_ssh_g keeps the production finance_ssh_resolve (timeout 15 ssh -G).
@@ -71,6 +85,7 @@ def _run(
             set -uo pipefail
             UPSTREAM_CONF={conf}
             CALLS={calls}
+            NGINX_DUMP={dump_file}
             PRESENT=" {' '.join(present)} "
             HEALTHY=" {' '.join(healthy)} "
             PUBLIC_CODE={public}
@@ -136,6 +151,7 @@ def _run(
             }}
             {_topology_source()}
             finance_proc_cmdline() {{ finance_proc_cmdline_stub "$@"; }}
+            finance_nginx_dump() {{ echo "nginx-T" >> "$CALLS"; {dump_seam}; }}
             {resolve_override}
             {extra_shell}
             "$@"
@@ -150,6 +166,23 @@ def _run(
     proc_env.update(env or {})
     return script, calls, proc_env
 
+
+NGINX_OTHER_ONLY = """\
+server {
+    location /api/ { proxy_pass http://aads_api; }
+    location /chat/ { proxy_pass http://127.0.0.1:8101/; }
+}
+upstream yeoljeong_finance_api {
+    zone yeoljeong_finance_api 64k;
+    server 127.0.0.1:8210;
+}
+# proxy_pass http://yeoljeong_finance_api/commented-out;
+"""
+NGINX_REFERENCED = NGINX_OTHER_ONLY + """\
+server {
+    location /api/v1/yeoljeong-finance/ { proxy_pass http://yeoljeong_finance_api/api/v1/; }
+}
+"""
 
 _FRESH = iter(range(10**6))
 
@@ -1135,3 +1168,128 @@ def test_compensation_gates_are_explicit_conditions_in_source():
     assert comp.index("nginx_reload") < comp.index("comp_reloaded=true") < comp.index("write_active_slot_state")
     assert comp.index("comp_reloaded") < comp.index("set_resume_owner_marker")
     assert 'comp_reloaded" != "true"' in comp
+
+
+# ── behavior: unused upstream (no proxy_pass references it) ────────────────
+def _topology(tmp_path, **kw):
+    return _call(tmp_path, "resolve_finance_sidecar_topology", **kw)
+
+
+def test_unused_upstream_with_jinah244_tunnel_is_unused_not_blocked(tmp_path):
+    kw = dict(**REMOTE_OK, cmdline=_tunnel(f"partner@{OLD244_HOST}"), nginx_dump=NGINX_OTHER_ONLY)
+    proc, log = _topology(tmp_path, **kw)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == f"unused {REMOTE_ROUTE}"
+    assert proc.stderr == ""
+    assert "ssh -G" not in log and "ssh-REAL-CONNECT" not in log
+
+
+def test_missing_upstream_block_is_unused(tmp_path):
+    proc, _ = _topology(tmp_path, routes=[], upstream_block=False, nginx_dump=NGINX_OTHER_ONLY.split("upstream yeoljeong")[0])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == "unused none"
+
+
+def test_referenced_upstream_on_jinah244_tunnel_stays_blocked(tmp_path):
+    proc, _ = _topology(tmp_path, **REMOTE_OK, cmdline=_tunnel(f"partner@{OLD244_HOST}"))
+    assert proc.returncode == 1
+    assert OLD244_HOST in proc.stderr and APPROVED_HOST in proc.stderr
+
+
+def test_referenced_local_route_stays_local(tmp_path):
+    proc, _ = _topology(tmp_path, **LOCAL_OK)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == f"local {LOCAL_ROUTE}"
+
+
+def test_referenced_approved_tunnel_stays_remote(tmp_path):
+    proc, _ = _topology(tmp_path, **REMOTE_OK)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == f"remote {REMOTE_ROUTE}"
+
+
+BACKUP_REF = "server { location / { proxy_pass http://yeoljeong_finance_api/; } }\n"
+ACTIVE_OTHER = "server { location /api/ { proxy_pass http://aads_api; } }\n"
+
+
+def test_references_only_in_backup_files_are_unused(tmp_path):
+    files = {
+        "aads-routes.conf": ACTIVE_OTHER,
+        "aads-routes.bak.conf": BACKUP_REF,
+        "old.pre_edit.conf": BACKUP_REF,
+        "aads-routes.conf.bak.20261001": BACKUP_REF,
+        "notes.txt": BACKUP_REF,
+    }
+    kw = dict(**REMOTE_OK, cmdline=_tunnel(f"partner@{OLD244_HOST}"), nginx_dump="FAIL", conf_files=files)
+    proc, log = _topology(tmp_path, **kw)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == f"unused {REMOTE_ROUTE}"
+    assert "nginx-T" in log
+
+
+def test_reference_in_active_conf_d_file_blocks_when_nginx_t_fails(tmp_path):
+    files = {"aads-routes.conf": ACTIVE_OTHER, "finance.inc": BACKUP_REF}
+    kw = dict(**REMOTE_OK, cmdline=_tunnel(f"partner@{OLD244_HOST}"), nginx_dump="FAIL", conf_files=files)
+    proc, _ = _topology(tmp_path, **kw)
+    assert proc.returncode == 1
+    assert OLD244_HOST in proc.stderr
+
+
+def test_commented_and_similarly_named_references_do_not_count(tmp_path):
+    dump = ACTIVE_OTHER + "# proxy_pass http://yeoljeong_finance_api/;\nlocation /x { proxy_pass http://yeoljeong_finance_api_v2/; }\n"
+    proc, _ = _topology(tmp_path, **REMOTE_OK, nginx_dump=dump)
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == f"unused {REMOTE_ROUTE}"
+
+
+def test_unreadable_nginx_config_fails_closed(tmp_path):
+    for kw in (
+        dict(nginx_dump="FAIL"),  # no nginx -T, no active conf.d file with a *_pass
+        dict(nginx_dump="FAIL", conf_files={"only.bak.conf": BACKUP_REF}),
+        dict(nginx_dump=""),  # empty dump
+        dict(nginx_dump="user nginx;\nevents {}\n"),  # dump without any routing
+    ):
+        proc, log = _topology(tmp_path, **REMOTE_OK, cmdline=_tunnel(f"partner@{OLD244_HOST}"), **kw)
+        assert proc.returncode == 1, kw
+        assert "unused" not in proc.stdout, kw
+        assert "failing closed" in proc.stderr, kw
+
+
+def test_no_env_switch_can_force_unused():
+    body = _function_body("resolve_finance_sidecar_topology")
+    assert "unused" in body
+    assert "DEPLOY_FINANCE" not in DEPLOY and "FINANCE_UNUSED" not in DEPLOY
+    assert "docker exec aads-nginx nginx -T" in _function_body("finance_nginx_dump")
+
+
+UNUSED_KW = {**REMOTE_OK, "cmdline": _tunnel(f"partner@{OLD244_HOST}"), "nginx_dump": NGINX_OTHER_ONLY, "healthy": []}
+
+
+def test_unused_topology_skips_finance_health_in_both_gates_and_logs_it(tmp_path):
+    for fn in GATES:
+        proc, log = _call(tmp_path, fn, **UNUSED_KW, public="502")
+        assert proc.returncode == 0, (fn, proc.stdout + proc.stderr)
+        assert "finance topology=unused" in proc.stdout, fn
+        assert "skipped" in proc.stdout, fn
+        assert "curl " not in log, fn
+        assert "docker restart" not in log and "docker inspect" not in log, fn
+        assert f"end {'sidecar_topology_preflight' if fn.startswith('preflight') else 'mounted_sidecar_reload'} success" in log
+
+
+def test_unused_topology_still_enforces_explicit_extra_sidecar_and_refuses_obsolete_one(tmp_path):
+    proc, log = _call(tmp_path, "reload_mounted_sidecars", **UNUSED_KW, env={"DEPLOY_MOUNTED_SIDECARS": "extra-car"})
+    assert proc.returncode == 1 and "required sidecar absent: extra-car" in proc.stdout
+    proc, log = _call(
+        tmp_path, "reload_mounted_sidecars", **{**UNUSED_KW, "present": ["extra-car"]}, env={"DEPLOY_MOUNTED_SIDECARS": "extra-car"}
+    )
+    assert proc.returncode == 0 and "docker restart extra-car" in log and "curl " not in log
+    proc, log = _call(
+        tmp_path, "preflight_mounted_sidecar_topology", **UNUSED_KW, env={"DEPLOY_MOUNTED_SIDECARS": "yeoljeong-finance"}
+    )
+    assert proc.returncode == 1 and "topology=unused" in proc.stdout
+
+
+def test_referenced_remote_with_bad_health_still_fails_after_unused_support(tmp_path):
+    proc, _ = _call(tmp_path, "preflight_mounted_sidecar_topology", **{**REMOTE_OK, "healthy": []})
+    assert proc.returncode == 1
+    assert "remote finance route health failed" in proc.stdout
