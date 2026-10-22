@@ -2493,13 +2493,30 @@ codex_select_account_home() {
     return 0
 }
 
-# 읽기전용은 앞 20줄 안에서 줄 전체가 `MODE: READ_ONLY`(대소문자 무시, 앞뒤 공백 허용)일 때만 참이다.
+# 읽기전용은 앞 20줄(헤더) 안의 명시 표기로만 판정한다. 본문 자연어는 보지 않는다.
+#   ① 줄 전체가 `MODE: READ_ONLY` (READ-ONLY·READONLY 표기 허용, 대소문자 무시, 앞뒤 공백 허용)
+#   ② 첫 번째 비어있지 않은 줄이 READ_ONLY/READ-ONLY 토큰으로 시작한다 (예: "[READ-ONLY] 검증")
+#   ③ TITLE:/제목:/TYPE:/유형:/모드: 머리표의 값이 토큰으로 *시작*한다 (예: "TITLE: [READ-ONLY] …"). 값 중간 토큰은 무시한다
+# READ_ONLY_FILES(범위 선언 머리표)·READ_ONLY_PLUS 같은 합성어는 토큰이 아니다.
 # app/services/pipeline_runner_service.py 의 _is_read_only_instruction 과 같은 규칙이다 — 한쪽만 고치지 마라.
 # 2026-10-03 실측: 본문 자연어("수정하지", "read-only" 등)로 판정하던 때 새 파일만 만든 작업
 # (runner-4bc5f67e, runner-cb6d75c2)이 읽기전용으로 오판돼 done 처리 후 worktree 째 소실됐다.
+# 2026-10-22 실측: READ-ONLY 검증(runner-f3303c56)이 `MODE:` 줄이 없다는 이유로 diff 0건 cancelled 로 종결돼
+# 판정 보고가 채팅에 전달되지 않았다.
+_RO_TOKEN_ERE='READ[-_]?ONLY([^A-Za-z0-9_]|$)'
+_RO_SCOPE_ERE='READ[-_]?ONLY[-_]?FILES'
+_RO_LEAD_ERE='^[[:space:]#>*[(`-]*'"$_RO_TOKEN_ERE"
+_RO_HEADER_ERE='^[[:space:]#>*`-]*(TITLE|SUBJECT|TYPE|TASK_TYPE|KIND|제목|유형|작업유형|모드)[[:space:]*`]*[:：][[:space:]*`#>[(-]*'"$_RO_TOKEN_ERE"
 is_read_only_instruction() {
-    local instruction="${1:-}"
-    printf '%s' "$instruction" | head -20 | grep -qiE '^[[:space:]]*MODE[[:space:]]*:[[:space:]]*READ_ONLY[[:space:]]*$'
+    local instruction="${1:-}" head20 first_line
+    head20=$(printf '%s' "$instruction" | head -20)
+    printf '%s\n' "$head20" | grep -qiE '^[[:space:]]*MODE[[:space:]]*:[[:space:]]*READ[-_]?ONLY[[:space:]]*$' && return 0
+    first_line=$(printf '%s\n' "$head20" | grep -m1 -E '[^[:space:]]') || first_line=""
+    if [[ -n "$first_line" ]] && printf '%s\n' "$first_line" | grep -viE "$_RO_SCOPE_ERE" | grep -qiE "$_RO_LEAD_ERE"; then
+        return 0
+    fi
+    printf '%s\n' "$head20" | grep -viE "$_RO_SCOPE_ERE" | grep -qiE "$_RO_HEADER_ERE" && return 0
+    return 1
 }
 
 # stdin: NUL 구분 경로 목록. $1: git add 플래그(-N 기본, 무시된 파일 복구는 -fN).

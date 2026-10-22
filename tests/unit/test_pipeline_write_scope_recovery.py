@@ -320,13 +320,13 @@ def test_repair_endpoint_requires_admin_role_and_valid_ids():
 
 
 def _live_like():
-    """runner-c1c59525 는 본문에 'page.tsx·extensions 는 건드리지 마라' 만 적었다(쓰기 아님)."""
+    """TARGET 저장소 선언이 없는 지시서의 basename 약한 교집합(`page.tsx` 가 서로 다른 경로로 등장)."""
     return [
-        _job("runner-2066618c", "TARGET: /root/aads/aads-dashboard\n"
+        _job("runner-2066618c",
              "변경: src/app/docs/page.tsx, src/app/docs/CanonicalDocuments.tsx. page.tsx 의 탭 구성을 바꾼다.",
              status="awaiting_approval"),
-        _job("runner-c1c59525", "TARGET: /root/aads/aads-dashboard\n"
-             "4. 범위: src/app/chat/MarkdownRenderer.tsx 의 table 렌더러. page.tsx·확장(extensions/) 은 건드리지 마라.",
+        _job("runner-c1c59525",
+             "4. 범위: src/app/chat/MarkdownRenderer.tsx 의 table 렌더러. page.tsx 의 헤더 문구도 같이 고친다.",
              depends_on="runner-2066618c", logs=_auto("runner-2066618c")),
         _job("runner-4fddd8cf", "TARGET: /root/aads/aads-dashboard\n"
              "변경: src/app/chat/MarkdownRenderer.tsx 의 코드블록 렌더러",
@@ -334,6 +334,20 @@ def _live_like():
         _job("runner-e266ec09", "TARGET_FILES: src/app/chat/page.tsx, src/hooks/useArtifactPanel.ts",
              depends_on="runner-4fddd8cf"),
     ]
+
+
+def test_prohibition_only_page_tsx_is_no_longer_a_conflict_at_all():
+    """실측 원문: 'page.tsx·확장 은 건드리지 마라' 는 쓰기가 아니다 — 약한 교집합 검토 대상조차 아니다."""
+    rows = [
+        _job("runner-2066618c", "TARGET: /root/aads/aads-dashboard\n"
+             "변경: src/app/docs/page.tsx, src/app/docs/CanonicalDocuments.tsx. page.tsx 의 탭 구성을 바꾼다.",
+             status="awaiting_approval"),
+        _job("runner-c1c59525", "TARGET: /root/aads/aads-dashboard\n"
+             "4. 범위: src/app/chat/MarkdownRenderer.tsx 의 table 렌더러. page.tsx·확장(extensions/) 은 건드리지 마라.",
+             depends_on="runner-2066618c", logs=_auto("runner-2066618c")),
+    ]
+    edge = pr.plan_auto_dependency_repair(rows)[0]
+    assert edge["verdict"] == "false_auto_edge" and edge["weak_overlap"] is False
 
 
 def test_weak_basename_overlap_is_reported_not_released_by_default():

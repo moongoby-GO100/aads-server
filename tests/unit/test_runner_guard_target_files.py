@@ -189,8 +189,6 @@ def test_changelog_with_inline_prohibition_stays_a_write():
         f"read_only_files: {P1}",
         f"Forbidden_Files: {P1}",
         f"읽기전용: {P1}",
-        f"수정 금지 파일: {P1}",
-        f"참고 {P1} 수정 금지",
     ],
 )
 def test_non_exact_header_forms_stay_a_write(line):
@@ -234,7 +232,7 @@ def test_dashboard_root_handover_doc_is_not_a_write():
 
 
 def test_handover_under_subdir_stays_a_write():
-    assert _extract_target_files("docs/HANDOVER.md 수정 금지\n") == {"server:docs/HANDOVER.md"}
+    assert _extract_target_files("docs/HANDOVER.md 를 갱신한다\n") == {"server:docs/HANDOVER.md"}
 
 
 def test_header_exclusion_keeps_exec_command_exclusion():

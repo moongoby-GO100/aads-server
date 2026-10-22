@@ -189,7 +189,7 @@ def test_pipeline_runner_read_only_no_diff_completes_without_approval():
     assert "NO_CHANGES_READ_ONLY job=$job_id" in script
     assert "status='done', phase='done'" in script
     assert "completed_at=NOW()" in script
-    assert "MODE[[:space:]]*:[[:space:]]*READ_ONLY" in script
+    assert "MODE[[:space:]]*:[[:space:]]*READ[-_]?ONLY" in script
     assert "read-only 작업 완료 — 변경사항 0건이 정상 조건" in script
 
 

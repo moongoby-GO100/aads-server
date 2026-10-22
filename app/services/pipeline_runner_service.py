@@ -114,14 +114,34 @@ def _normalize_claude_cli_model(model: str) -> str:
     return resolve_model(value)
 
 
-_READ_ONLY_MARKER_RE = re.compile(r"^\s*MODE\s*:\s*READ_ONLY\s*$", re.IGNORECASE)
+_READ_ONLY_MARKER_RE = re.compile(r"^\s*MODE\s*:\s*READ[-_]?ONLY\s*$", re.IGNORECASE)
+_READ_ONLY_TOKEN = r"READ[-_]?ONLY(?![A-Za-z0-9_])"
+_READ_ONLY_LEAD_RE = re.compile(r"^[\s#>*\[(`-]*" + _READ_ONLY_TOKEN, re.IGNORECASE)
+_READ_ONLY_SCOPE_RE = re.compile(r"READ[-_]?ONLY[-_]?FILES", re.IGNORECASE)
+_READ_ONLY_HEADER_RE = re.compile(
+    r"^[\s#>*`-]*(?:TITLE|SUBJECT|TYPE|TASK_TYPE|KIND|제목|유형|작업유형|모드)[\s*`]*[:：][\s*`#>\[(-]*" + _READ_ONLY_TOKEN,
+    re.IGNORECASE,
+)
 _READ_ONLY_HEADER_LINES = 20
 
 
 def _is_read_only_instruction(instruction: str) -> bool:
-    """지시문 앞부분 헤더 줄에 `MODE: READ_ONLY` 가 있을 때만 참. 본문 자연어 문구는 보지 않는다."""
+    """지시문 앞 20줄 헤더의 명시 표기로만 참. 본문 자연어 문구는 보지 않는다.
+
+    `MODE: READ_ONLY|READ-ONLY` 줄, READ_ONLY 토큰으로 시작하는 첫 비어있지 않은 줄,
+    TITLE:/제목: 등 머리표의 값이 토큰으로 시작하는 줄(값 중간 토큰은 무시).
+    scripts/pipeline-runner.sh 의 is_read_only_instruction 과 같은 규칙이다 — 한쪽만 고치지 마라.
+    """
     lines = (instruction or "").splitlines()[:_READ_ONLY_HEADER_LINES]
-    return any(_READ_ONLY_MARKER_RE.match(line) for line in lines)
+    if any(_READ_ONLY_MARKER_RE.match(line) for line in lines):
+        return True
+    first = next((line for line in lines if line.strip()), "")
+    if _READ_ONLY_LEAD_RE.match(first) and not _READ_ONLY_SCOPE_RE.search(first):
+        return True
+    return any(
+        _READ_ONLY_HEADER_RE.match(line) and not _READ_ONLY_SCOPE_RE.search(line)
+        for line in lines
+    )
 
 
 def _is_read_only_done(instruction: str, git_diff: str, result_output: str) -> bool:

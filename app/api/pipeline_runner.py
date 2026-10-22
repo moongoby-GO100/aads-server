@@ -339,16 +339,78 @@ def _is_root_handover_doc(path: str) -> bool:
     return bool(_ROOT_HANDOVER_RE.match(path))
 
 
+# 금지/참조 문맥: 경로 "뒤" 같은 절에 수정 금지 계열 표현이 붙은 경우(또는 `금지 ...:` 목록 머리 뒤)에만
+# 수정 대상에서 뺀다. "app/api/pipeline_runner.py 는 중복 수정 금지" 같은 문장이 쓰기 범위로 잡혀
+# 무관한 작업을 직렬 대기시킨 사고(runner-c4a7b961 → runner-cb5f65e2, 2026-10-22)의 근거 규칙.
+# "X 삭제 금지, 로직 수정한다"·"X 의 금지 목록에 추가"처럼 실제로 고치는 경로는 제외하지 않는다.
+_PROHIBIT_AFTER_PATH_RE = re.compile(
+    r"^[\s`'\"]*(?:은|는|도|을|를)?\s*금지"
+    r"|(?:수정|변경|편집|쓰기)\s*금지(?:\s*(?:파일|사항|대상|함|임|입니다|이다))?\s*[.!]?\s*$"
+    r"|중복\s*수정|건드리지|건드리면|손대지|수정하지|변경하지"
+    r"|do\s+not\s+(?:modify|touch|edit|change)|don't\s+(?:modify|touch|edit|change)",
+    re.IGNORECASE,
+)
+_PROHIBIT_BEFORE_PATH_RE = re.compile(
+    r"(?:do\s+not|don't|never|must\s+not)\s+(?:modify|touch|edit|change)\s+(?:\S+\s+){0,2}$",
+    re.IGNORECASE,
+)
+_CLAUSE_BREAK_RE = re.compile(r"[,;()\[\]]|(?<=[.!?。])\s")
+_PROHIBIT_LISTHEAD_RE = re.compile(r"^[^:：]*?(?:금지|건드리지|손대지)[^:：]*[:：]")
+_TARGET_REPO_LINE_RE = re.compile(r"^[ \t>*`#-]*\**TARGET\**[ \t]*:[ \t]*(.*)$", re.MULTILINE)
+_EXPLICIT_REPO_PATH_RE = re.compile(r"^(?:/root/aads/)?aads-(?:server|dashboard)/|^/root/aads/aads-")
+
+
+def _declared_target_repo(text: str) -> str:
+    """지시문 `TARGET:` 줄이 정확히 한 저장소(server/dashboard)만 가리킬 때 그 이름. 아니면 빈 문자열."""
+    for m in _TARGET_REPO_LINE_RE.finditer(text or ""):
+        value = m.group(1)
+        repos = set()
+        if "aads-server" in value:
+            repos.add("server")
+        if "aads-dashboard" in value:
+            repos.add("dashboard")
+        if len(repos) == 1:
+            return next(iter(repos))
+    return ""
+
+
+def _in_prohibit_context(line: str, col: int, end_col: int) -> bool:
+    """line[col:end_col] 경로가 수정 금지 문맥(경로 뒤 금지 표현 / 금지 목록 머리 뒤)에 있는지."""
+    head = _PROHIBIT_LISTHEAD_RE.match(line)
+    if head and col >= head.end():
+        return True
+    start = 0
+    end = len(line)
+    for brk in _CLAUSE_BREAK_RE.finditer(line):
+        if brk.end() <= col:
+            start = brk.end()
+        elif brk.start() >= end_col:
+            end = brk.start()
+            break
+    return bool(
+        _PROHIBIT_AFTER_PATH_RE.search(line[end_col:end])
+        or _PROHIBIT_BEFORE_PATH_RE.search(line[start:col])
+    )
+
+
 def _scan_instruction_paths(
     text: str,
     skip_lines: frozenset[int] = frozenset(),
     *,
     exclude_header_lines: bool = True,
+    skipped: dict[str, str] | None = None,
 ) -> set[str]:
-    """지시문 본문에서 경로처럼 생긴 토큰을 모은다(실행 명령 인자·명시 머리표 줄·루트 핸드오버 제외)."""
+    """지시문 본문에서 경로처럼 생긴 토큰을 모은다.
+
+    제외: 실행 명령 인자·명시 머리표 줄·루트 핸드오버, 금지/참조 문맥 절에서만 등장한 경로,
+    TARGET 저장소가 선언돼 있을 때 저장소 근거 없이 다른 저장소로 추정된 경로.
+    `skipped` 를 주면 제외된 경로 → 사유("prohibit"|"other_repo")를 채운다(판단 근거 기록용).
+    """
     files: set[str] = set()
+    dropped: dict[str, str] = {}
     lines = text.splitlines()
     header_lines = _header_excluded_lines(text) if exclude_header_lines else set()
+    target_repo = _declared_target_repo(text)
     matches = list(_TARGET_FILE_RE.finditer(text)) + list(_SPECIAL_TARGET_RE.finditer(text))
     for match in matches:
         line_idx = text.count("\n", 0, match.start())
@@ -362,8 +424,23 @@ def _scan_instruction_paths(
         if _line_prefix_has_exec_command(prefix_on_line):
             continue
         normalized = _normalize_target_file_path(match.group(0))
-        if normalized and not _is_root_handover_doc(normalized):
-            files.add(normalized)
+        if not normalized or _is_root_handover_doc(normalized):
+            continue
+        if _in_prohibit_context(
+            line, match.start() - line_start, match.end() - line_start,
+        ):
+            dropped.setdefault(normalized, "prohibit")
+            continue
+        if (
+            target_repo
+            and normalized.split(":", 1)[0] != target_repo
+            and not _EXPLICIT_REPO_PATH_RE.match(match.group(0))
+        ):
+            dropped.setdefault(normalized, "other_repo")
+            continue
+        files.add(normalized)
+    if skipped is not None:
+        skipped.update({p: why for p, why in dropped.items() if p not in files})
     return files
 
 
@@ -407,6 +484,23 @@ class _WriteScope:
     forbidden: frozenset[str] = frozenset()
     undeclared: frozenset[str] = frozenset()
     error: str = ""
+    skipped: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def basis(self) -> str:
+        """충돌 판정 근거 한 줄(review_feedback 기록용)."""
+        if self.explicit:
+            kind = "TARGET_FILES 선언"
+        elif self.error:
+            kind = "본문 경로 보수 판정(선언 오류)"
+        else:
+            kind = "본문 경로 추정"
+        notes = []
+        for why, label in (("prohibit", "금지·참조 문맥"), ("other_repo", "타 저장소")):
+            n = sum(1 for _p, w in self.skipped if w == why)
+            if n:
+                notes.append(f"{label} {n}건 제외")
+        return kind + (f" ({', '.join(notes)})" if notes else "")
 
 
 def _is_dir_scope(path: str) -> bool:
@@ -527,11 +621,18 @@ def _parse_write_scope(instruction: str) -> _WriteScope:
                 error = f"TARGET_FILES 와 FORBIDDEN_FILES 가 모순: {w}"
                 break
 
-    legacy = _scan_instruction_paths(text, exclude_header_lines=not error)
+    legacy_skipped: dict[str, str] = {}
+    legacy = _scan_instruction_paths(
+        text, exclude_header_lines=not error, skipped=legacy_skipped,
+    )
     if error or not write:
-        return _WriteScope(explicit=False, write=frozenset(legacy), error=error)
+        return _WriteScope(
+            explicit=False, write=frozenset(legacy), error=error,
+            skipped=tuple(sorted(legacy_skipped.items())),
+        )
 
-    prose = _scan_instruction_paths(text, frozenset(marker_lines))
+    prose_skipped: dict[str, str] = {}
+    prose = _scan_instruction_paths(text, frozenset(marker_lines), skipped=prose_skipped)
     explicit_read_or_forbidden = read | forbidden
 
     def _declared_non_write(path: str) -> bool:
@@ -553,6 +654,7 @@ def _parse_write_scope(instruction: str) -> _WriteScope:
         read=frozenset(read),
         forbidden=frozenset(forbidden),
         undeclared=frozenset(undeclared),
+        skipped=tuple(sorted(prose_skipped.items())),
     )
 
 
@@ -581,6 +683,33 @@ def _log_write_scope(scope: _WriteScope, *, job_id: str, project: str) -> None:
         )
 
 
+def _actual_scope_files(instruction: str, actual_changed_files) -> set[str]:
+    """실제 worktree 변경 파일(저장소 상대 경로)을 TARGET 저장소 태그를 붙인 충돌 범위로 바꾼다.
+
+    저장소를 특정할 수 없거나(TARGET 미선언/복수) 기록이 비어 있으면 빈 집합 — 호출부는 선언 범위를 쓴다.
+    """
+    raw = actual_changed_files
+    if isinstance(raw, (str, bytes)):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return set()
+    if isinstance(raw, dict):
+        raw = raw.get("files") or raw.get("changed_files") or []
+    repo = _declared_target_repo(instruction)
+    if not repo or not isinstance(raw, list):
+        return set()
+    out: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        normalized = _normalize_target_file_path(item)
+        if not normalized or _is_root_handover_doc(f"{repo}:{normalized.split(':', 1)[1]}"):
+            continue
+        out.add(f"{repo}:{normalized.split(':', 1)[1]}")
+    return out
+
+
 def _batch_scope_owners(
     item_files: set[str] | frozenset[str],
     batch_file_owner: dict[str, str],
@@ -605,8 +734,12 @@ async def _find_active_file_conflict(
     incoming_goal_id: str = "",
     incoming_milestone_id: str = "",
     ignore_job_ids: set[str] | None = None,
+    incoming_basis: str = "",
 ) -> dict | None:
     """Return an active job touching one of target_files.
+
+    기존 작업의 범위는 실제 worktree 변경 파일(actual_changed_files)이 기록돼 있으면 그것을
+    우선하고, 없을 때만 지시문 선언/추정 범위를 쓴다. 반환 dict 의 ``basis`` 는 판단 근거다.
 
     A same-goal job may only depend on the same or an earlier milestone.  The
     previous newest-first lookup could make a recovered V11-1 depend on an
@@ -627,7 +760,7 @@ async def _find_active_file_conflict(
     )
     rows = await conn.fetch(
         """
-        SELECT job_id, instruction, status, phase
+        SELECT job_id, instruction, status, phase, actual_changed_files
         FROM pipeline_jobs
         WHERE project = $1
           AND tenant_id = $2::uuid
@@ -644,8 +777,21 @@ async def _find_active_file_conflict(
         existing_job_id = row["job_id"]
         if existing_job_id in ignored:
             continue
-        existing_files = _extract_target_files(row["instruction"] or "")
+        existing_actual = _actual_scope_files(
+            row["instruction"] or "", _record_get(row, "actual_changed_files"),
+        )
+        if existing_actual:
+            existing_files = existing_actual
+            existing_basis = "실제 worktree 변경 파일"
+        else:
+            existing_scope = _parse_write_scope(row["instruction"] or "")
+            existing_files = set(existing_scope.write)
+            existing_basis = existing_scope.basis
         overlap = _scope_overlap(target_files, existing_files)
+        basis = (
+            f"신규 작업 {incoming_basis or '선언 범위'} · "
+            f"기존 {existing_job_id} {existing_basis}"
+        )
         if overlap:
             existing_order = await _resolve_milestone_order(
                 conn,
@@ -662,6 +808,7 @@ async def _find_active_file_conflict(
                     "dependency_inversion": True,
                     "incoming_sequence": incoming_order[2],
                     "parent_sequence": existing_order[2],
+                    "basis": basis,
                 }
                 continue
             return {
@@ -669,6 +816,7 @@ async def _find_active_file_conflict(
                 "status": row["status"],
                 "phase": row["phase"],
                 "overlap": overlap,
+                "basis": basis,
             }
     if inverted_conflict:
         return inverted_conflict
@@ -2329,6 +2477,7 @@ async def submit_job(
                         incoming_instruction=req.instruction,
                         incoming_goal_id=req.goal_id,
                         incoming_milestone_id=req.milestone_id,
+                        incoming_basis=write_scope.basis,
                     )
                     if conflict:
                         if conflict.get("dependency_inversion"):
@@ -2348,6 +2497,7 @@ async def submit_job(
                         auto_dependency_reason = (
                             f"[Runner Guard] 동일 파일 충돌 감지: {overlap}; "
                             f"{auto_depends_on} 완료 후 자동 실행"
+                            f"\n[Runner Guard] 충돌 판단 근거: {conflict['basis']}"
                         )
                         logger.info(
                             "pipeline_runner.file_conflict_auto_dependency",
@@ -4464,6 +4614,7 @@ async def submit_batch(
                                 tenant_id=tenant_id,
                                 incoming_instruction=item.instruction,
                                 ignore_job_ids=set(key_to_job_id.values()),
+                                incoming_basis=item_scope.basis,
                             )
                             if conflict:
                                 if conflict.get("dependency_inversion"):
@@ -4475,6 +4626,7 @@ async def submit_batch(
                                 auto_dependency_reason = (
                                     "[Runner Guard] 활성 작업과 동일 파일 충돌 감지: "
                                     f"{', '.join(conflict['overlap'])}; {depends_on} 완료 후 자동 실행"
+                                    f"\n[Runner Guard] 충돌 판단 근거: {conflict['basis']}"
                                 )
 
                     await conn.execute(
