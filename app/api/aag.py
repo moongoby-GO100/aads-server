@@ -36,6 +36,11 @@ from app.services.aag_governance import (
     require_project_role,
 )
 from app.services.aag_ingest_v2 import IngestConflictError, ingest_graph
+from app.services.aag_mermaid import (
+    DEFAULT_MAX_NAMESPACES,
+    MAX_NAMESPACES_LIMIT,
+    render_snapshot_mermaid,
+)
 from app.services.aag_operations import AAGOperationsError, load_operations_view
 from app.services.aag_query_v2 import (
     AAGQueryError,
@@ -365,6 +370,63 @@ async def get_latest_snapshot_v2(
             "stats": _json_field(row["stats"], {}),
             "unresolved": _json_field(row["unresolved"], []),
         }),
+    }
+
+
+@router.get("/v2/mermaid")
+async def get_mermaid_v2(
+    project: str,
+    repository_id: str,
+    target_ref: str,
+    user: CurrentUser,
+    governance_scope: str = "default",
+    max_namespaces: Annotated[int, Query(ge=1, le=MAX_NAMESPACES_LIMIT)] = DEFAULT_MAX_NAMESPACES,
+) -> dict[str, Any]:
+    """Render the authoritative latest v2 snapshot as a namespace-level mermaid graph."""
+    _require_v2_enabled()
+    project = normalize_project(project)
+    try:
+        await require_project_role(_actor(user), project, {"viewer", "proposer", "approver", "admin"})
+    except AAGAuthorizationError as exc:
+        raise _governance_error(exc) from exc
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT p.snapshot_id, p.resolved_commit_sha, p.generated_at,
+                      s.nodes, s.edges, s.findings, s.node_count, s.edge_count
+                 FROM aag_latest_pointers p
+                 JOIN aag_graph_snapshots_v2 s
+                   ON s.id=p.snapshot_id AND s.project=p.project
+                  AND s.repository_id=p.repository_id
+                 JOIN aag_snapshot_observations o
+                   ON o.id=p.observation_id AND o.snapshot_id=p.snapshot_id
+                  AND o.run_id=p.run_id AND o.project=p.project
+                  AND o.repository_id=p.repository_id AND o.target_ref=p.target_ref
+                  AND o.governance_scope=p.governance_scope
+                  AND o.resolved_commit_sha=p.resolved_commit_sha
+                WHERE p.project=$1 AND p.repository_id=$2 AND p.target_ref=$3
+                  AND p.governance_scope=$4 AND s.publish_status='ready'
+                  AND o.authoritative=TRUE AND o.verification_status='verified'""",
+            project, repository_id.strip(), target_ref.strip(), governance_scope.strip(),
+        )
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{project} 프로젝트의 최신 AAG v2 스냅샷이 없습니다 (repository_id/target_ref/governance_scope 확인)",
+        )
+    rendered = render_snapshot_mermaid(
+        _json_field(row["nodes"], []),
+        _json_field(row["edges"], []),
+        _json_field(row["findings"], []),
+        max_namespaces=max_namespaces,
+    )
+    return {
+        "project": project,
+        "snapshot_id": str(row["snapshot_id"]),
+        "generated_at": row["generated_at"],
+        "resolved_commit_sha": row["resolved_commit_sha"],
+        "node_count": row["node_count"],
+        "edge_count": row["edge_count"],
+        **rendered,
     }
 
 
