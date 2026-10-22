@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -635,6 +636,115 @@ def _serialize_artifact(row: Any) -> dict[str, Any]:
     return result
 
 
+HUMAN_EDIT_SOURCES = frozenset({"user_edit", "artifact_edit"})
+
+
+def _turn_key(tenant_id: str, source: DraftSource) -> str:
+    """Identity of one chat turn: the selected AI reply, else the exact context window."""
+    if source.selected_assistant_message_id:
+        return f"msg:{source.selected_assistant_message_id}"
+    ids = sorted(str(message["id"]) for message in source.messages)
+    raw = f"{tenant_id}|{source.session_id}|{','.join(ids)}"
+    return "ctx:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+async def _find_turn_draft(
+    conn, *, tenant_uuid: uuid.UUID, source: DraftSource, turn_key: str, for_update: bool = False
+) -> Any:
+    """The active draft already made for this turn; superseded and milestone drafts never match."""
+    suffix = " ORDER BY created_at DESC, id DESC LIMIT 1" + (" FOR UPDATE" if for_update else "")
+    if source.selected_assistant_message_id:
+        return await conn.fetchrow(
+            """
+            SELECT * FROM directive_drafts
+             WHERE tenant_id = $1
+               AND classification->>'source_mode' = 'selected_response'
+               AND classification->>'selected_assistant_message_id' = $2
+               AND classification->>'superseded_by' IS NULL
+            """ + suffix,
+            tenant_uuid,
+            str(source.selected_assistant_message_id),
+        )
+    return await conn.fetchrow(
+        """
+        SELECT * FROM directive_drafts
+         WHERE tenant_id = $1 AND session_id = $2
+           AND classification->>'source_mode' = 'recent_context'
+           AND classification->>'turn_key' = $3
+           AND classification->>'superseded_by' IS NULL
+        """ + suffix,
+        tenant_uuid,
+        source.session_id,
+        turn_key,
+    )
+
+
+async def _is_frozen_draft(conn, draft: Any) -> bool:
+    """Reviewed/sent drafts and human-edited drafts must not be overwritten by a new generation."""
+    if draft["status"] != "draft":
+        return True
+    latest = await conn.fetchval(
+        """
+        SELECT change_source FROM directive_draft_revisions
+         WHERE draft_id = $1 ORDER BY revision DESC LIMIT 1
+        """,
+        draft["id"],
+    )
+    return latest in HUMAN_EDIT_SOURCES
+
+
+async def _insert_draft_artifact(
+    conn, *, tenant_uuid: uuid.UUID, draft: Any, workspace_id: Any, title: str, content: str,
+    revision: int, risk_level: str, project_key: str,
+) -> Any:
+    metadata = {
+        "subtype": "directive_draft",
+        "draft_id": str(draft["id"]),
+        "revision": revision,
+        "status": draft["status"],
+        "project_key": project_key,
+        "risk_level": risk_level,
+        "requires_human_review": True,
+    }
+    artifact = await conn.fetchrow(
+        """
+        INSERT INTO chat_artifacts
+            (tenant_id, session_id, workspace_id, type, title, content, metadata)
+        VALUES ($1, $2, $3, 'report', $4, $5, $6::jsonb)
+        RETURNING *
+        """,
+        tenant_uuid,
+        draft["session_id"],
+        workspace_id,
+        f"지시 초안: {title}"[:200],
+        content,
+        json.dumps(metadata, ensure_ascii=False),
+    )
+    await conn.execute(
+        "UPDATE directive_drafts SET artifact_id = $1 WHERE id = $2",
+        artifact["id"],
+        draft["id"],
+    )
+    return artifact
+
+
+async def _draft_result(
+    conn, *, tenant_uuid: uuid.UUID, draft: Any, artifact: Any, turn_dedup: str
+) -> dict[str, Any]:
+    if artifact is None and draft["artifact_id"]:
+        artifact = await conn.fetchrow(
+            "SELECT * FROM chat_artifacts WHERE id = $1 AND tenant_id = $2",
+            draft["artifact_id"],
+            tenant_uuid,
+        )
+    result = _serialize_row(draft)
+    if artifact is not None:
+        result["artifact_id"] = str(artifact["id"])
+        result["artifact"] = _serialize_artifact(artifact)
+    result["turn_dedup"] = turn_dedup
+    return result
+
+
 async def create_draft(
     *,
     tenant_id: str,
@@ -644,6 +754,11 @@ async def create_draft(
     message_ids: list[str] | None = None,
     composer_draft: str | None = None,
 ) -> dict[str, Any]:
+    """Create the draft for a turn, or add a revision to the one this turn already has.
+
+    The result carries ``turn_dedup``: ``created`` (new row), ``revised`` (new revision on the
+    existing row) or ``existing`` (existing row returned untouched).
+    """
     source = await _load_source(
         tenant_id=tenant_id,
         session_id=session_id,
@@ -651,6 +766,20 @@ async def create_draft(
         message_ids=message_ids,
         composer_draft=composer_draft,
     )
+    tenant_uuid = uuid.UUID(tenant_id)
+    actor_uuid = uuid.UUID(user_id) if user_id else None
+    turn_key = _turn_key(tenant_id, source)
+
+    # A repeated request for a frozen draft skips the LLM call entirely.
+    async with get_pool().acquire() as conn:
+        existing = await _find_turn_draft(
+            conn, tenant_uuid=tenant_uuid, source=source, turn_key=turn_key
+        )
+        if existing and await _is_frozen_draft(conn, existing):
+            return await _draft_result(
+                conn, tenant_uuid=tenant_uuid, draft=existing, artifact=None, turn_dedup="existing"
+            )
+
     # 최근 문답 모드는 사용자 요청만 판정하고, 응답 선택 모드는 선택된 후속 조치도 포함한다.
     risk_level = classify_risk(_risk_source_text(source))
     content, generation_mode, model_used = await generate_directive_content(
@@ -662,6 +791,7 @@ async def create_draft(
     fields = _field_map(content)
     title = fields.get("TITLE", "지시 초안")[:200]
     source_ids = [message["id"] for message in source.messages]
+    confidence = 0.75 if generation_mode == "generated" else 0.45
     classification = {
         "risk_level": risk_level,
         "generation_mode": generation_mode,
@@ -672,95 +802,150 @@ async def create_draft(
             if source.selected_assistant_message_id
             else None
         ),
+        "turn_key": turn_key,
         "requires_human_review": True,
         "auto_submit": False,
         "model_used": model_used,
         "composer_draft_included": bool(source.composer_draft),
         "composer_draft_content": source.composer_draft,
     }
-    tenant_uuid = uuid.UUID(tenant_id)
-    actor_uuid = uuid.UUID(user_id) if user_id else None
+    revision_metadata = {
+        "source_message_ids": [str(value) for value in source_ids],
+        "composer_draft": source.composer_draft,
+    }
     async with get_pool().acquire() as conn:
         async with conn.transaction():
-            draft = await conn.fetchrow(
-                """
-                INSERT INTO directive_drafts
-                    (tenant_id, session_id, created_by, project_key, title, content,
-                     risk_level, confidence, source_message_ids, classification, model_used)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid[], $10::jsonb, $11)
-                RETURNING *
-                """,
-                tenant_uuid,
-                source.session_id,
-                actor_uuid,
-                source.project_key,
-                title,
-                content,
-                risk_level,
-                0.75 if generation_mode == "generated" else 0.45,
-                source_ids,
-                json.dumps(classification, ensure_ascii=False),
-                model_used,
-            )
-            metadata = {
-                "subtype": "directive_draft",
-                "draft_id": str(draft["id"]),
-                "revision": 1,
-                "status": "draft",
-                "project_key": source.project_key,
-                "risk_level": risk_level,
-                "requires_human_review": True,
-            }
-            artifact = await conn.fetchrow(
-                """
-                INSERT INTO chat_artifacts
-                    (tenant_id, session_id, workspace_id, type, title, content, metadata)
-                VALUES ($1, $2, $3, 'report', $4, $5, $6::jsonb)
-                RETURNING *
-                """,
-                tenant_uuid,
-                source.session_id,
-                source.workspace_id,
-                f"지시 초안: {title}"[:200],
-                content,
-                json.dumps(metadata, ensure_ascii=False),
-            )
+            # Serialize same-turn requests; the unique index is the backstop behind this lock.
             await conn.execute(
-                "UPDATE directive_drafts SET artifact_id = $1 WHERE id = $2",
-                artifact["id"],
-                draft["id"],
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"directive_draft_turn:{tenant_id}:{turn_key}",
             )
+            current = await _find_turn_draft(
+                conn, tenant_uuid=tenant_uuid, source=source, turn_key=turn_key, for_update=True
+            )
+            if current:
+                if await _is_frozen_draft(conn, current):
+                    return await _draft_result(
+                        conn, tenant_uuid=tenant_uuid, draft=current, artifact=None,
+                        turn_dedup="existing",
+                    )
+                if current["content"] == content and current["title"] == title:
+                    return await _draft_result(
+                        conn, tenant_uuid=tenant_uuid, draft=current, artifact=None,
+                        turn_dedup="existing",
+                    )
+                revision = current["current_revision"] + 1
+                draft = await conn.fetchrow(
+                    """
+                    UPDATE directive_drafts
+                       SET title = $3, content = $4, risk_level = $5, confidence = $6,
+                           source_message_ids = $7::uuid[],
+                           classification = classification || $8::jsonb,
+                           model_used = $9, current_revision = $10, updated_at = NOW()
+                     WHERE id = $1 AND tenant_id = $2
+                    RETURNING *
+                    """,
+                    current["id"],
+                    tenant_uuid,
+                    title,
+                    content,
+                    risk_level,
+                    confidence,
+                    source_ids,
+                    json.dumps(classification, ensure_ascii=False),
+                    model_used,
+                    revision,
+                )
+                artifact = None
+                if draft["artifact_id"]:
+                    artifact = await conn.fetchrow(
+                        """
+                        UPDATE chat_artifacts
+                           SET title = $3, content = $4,
+                               metadata = metadata || jsonb_build_object('revision', $5::integer),
+                               updated_at = NOW()
+                         WHERE id = $1 AND tenant_id = $2
+                        RETURNING *
+                        """,
+                        draft["artifact_id"],
+                        tenant_uuid,
+                        f"지시 초안: {title}"[:200],
+                        content,
+                        revision,
+                    )
+                if artifact is None:
+                    artifact = await _insert_draft_artifact(
+                        conn, tenant_uuid=tenant_uuid, draft=draft, workspace_id=source.workspace_id,
+                        title=title, content=content, revision=revision,
+                        risk_level=risk_level, project_key=draft["project_key"],
+                    )
+                change_source = "regenerated"
+                action = "edited"
+                turn_dedup = "revised"
+                event_metadata = {"generation_mode": generation_mode, "turn_dedup": "revised"}
+            else:
+                draft = await conn.fetchrow(
+                    """
+                    INSERT INTO directive_drafts
+                        (tenant_id, session_id, created_by, project_key, title, content,
+                         risk_level, confidence, source_message_ids, classification, model_used)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid[], $10::jsonb, $11)
+                    RETURNING *
+                    """,
+                    tenant_uuid,
+                    source.session_id,
+                    actor_uuid,
+                    source.project_key,
+                    title,
+                    content,
+                    risk_level,
+                    confidence,
+                    source_ids,
+                    json.dumps(classification, ensure_ascii=False),
+                    model_used,
+                )
+                revision = 1
+                artifact = await _insert_draft_artifact(
+                    conn, tenant_uuid=tenant_uuid, draft=draft, workspace_id=source.workspace_id,
+                    title=title, content=content, revision=revision,
+                    risk_level=risk_level, project_key=source.project_key,
+                )
+                change_source = generation_mode
+                action = "created"
+                turn_dedup = "created"
+                event_metadata = {"generation_mode": generation_mode}
             await conn.execute(
                 """
                 INSERT INTO directive_draft_revisions
                     (tenant_id, draft_id, revision, title, content, change_source, editor_user_id, metadata)
-                VALUES ($1, $2, 1, $3, $4, $5, $6, $7::jsonb)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
                 """,
                 tenant_uuid,
                 draft["id"],
+                revision,
                 title,
                 content,
-                generation_mode,
+                change_source,
                 actor_uuid,
-                json.dumps({
-                    "source_message_ids": [str(value) for value in source_ids],
-                    "composer_draft": source.composer_draft,
-                }, ensure_ascii=False),
+                json.dumps(revision_metadata, ensure_ascii=False),
             )
             await conn.execute(
                 """
                 INSERT INTO directive_draft_events
                     (tenant_id, draft_id, revision, action, actor_user_id, metadata)
-                VALUES ($1, $2, 1, 'created', $3, $4::jsonb)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
                 """,
                 tenant_uuid,
                 draft["id"],
+                revision,
+                action,
                 actor_uuid,
-                json.dumps({"generation_mode": generation_mode}, ensure_ascii=False),
+                json.dumps(event_metadata, ensure_ascii=False),
             )
     result = _serialize_row(draft)
     result["artifact_id"] = str(artifact["id"])
     result["artifact"] = _serialize_artifact(artifact)
+    result["turn_dedup"] = turn_dedup
     return result
 
 
