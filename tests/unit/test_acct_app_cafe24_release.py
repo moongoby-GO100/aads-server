@@ -32,7 +32,13 @@ set -euo pipefail
 source "$SCRIPT_UNDER_TEST"
 D="$FAKE_DIR"
 
-sleep() { :; }
+sleep() {
+  if [[ -n ${FAKE_TERM_ON_WATCH_TICK:-} && ${1:-} == "$MONITOR_INTERVAL" ]]; then
+    echo x >> "$D/watch_ticks"
+    if (( $(wc -l < "$D/watch_ticks") == FAKE_TERM_ON_WATCH_TICK )); then kill -TERM $$; fi
+  fi
+  :
+}
 DEFAULT_BASE_CONFIG='{"Env":["PATH=/usr/bin","APP_X=a$b"],"WorkingDir":"/app","User":"appuser","Entrypoint":["/entry.sh"],"Cmd":["uvicorn","app:app"],"ExposedPorts":{"8000/tcp":{}},"Labels":{"org.opencontainers.image.revision":"base"},"StopSignal":"SIGINT","Healthcheck":{"Test":["CMD-SHELL","curl -f http://localhost:8000/health/live || exit 1"],"Interval":30000000000,"Retries":3}}'
 
 fake_op() {
@@ -1546,3 +1552,225 @@ def test_execution_target_registers_acct_app():
     assert target.command == ("bash", "/root/aads/aads-server/scripts/deploy_acct_app_cafe24.sh")
     assert target.route_url == "https://fb.newtalk.kr/health/live"
     assert mod.get_execution_target("ACCT", "fb-cutover").supports_rollback is False
+
+
+# ---- 상태 디렉터리 루트 차단 ---------------------------------------------------------------------
+UNSAFE_PATH_ENVS = {
+    "ACCT_APP_RELEASE_ROOT": "WORKTREE_ROOT",
+    "ACCT_APP_RESULT_DIR": "RESULT_DIR",
+    "ACCT_PG_BACKUP_DIR": "PG_BACKUP_DIR",
+    "ACCT_APACHE_BACKUP_DIR": "APACHE_BACKUP_DIR",
+    "ACCT_APP_LOCK_FILE": "LOCK",
+}
+UNSAFE_PATH_VALUES = [
+    "", "/", "//", "relative/dir", "./x", "/tmp", "/tmp/", "/root", "/etc", "/usr", "/var", "/home", "/home/",
+    "/root/../etc", "/tmp/x/..", "/tmp/./x", "/var/lib/..", "/tmp/a b",
+]
+
+
+@pytest.mark.parametrize("value", UNSAFE_PATH_VALUES)
+@pytest.mark.parametrize("name", UNSAFE_PATH_ENVS)
+def test_unsafe_state_paths_exit_2_before_any_remote_call_or_mkdir(box, name, value):
+    proc = box.run(env={name: value})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"unsafe {UNSAFE_PATH_ENVS[name]} " in proc.stderr
+    assert box.log() == [] and not (box.tmp / "results").exists() and not (box.tmp / "lock").exists()
+
+
+def test_home_directory_itself_is_refused_as_a_state_path(box):
+    home = box.tmp / "fakehome"
+    home.mkdir()
+    proc = box.run(env={"HOME": str(home), "ACCT_APP_RELEASE_ROOT": str(home)})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "unsafe WORKTREE_ROOT " in proc.stderr and box.log() == []
+
+
+def test_unsafe_paths_are_refused_in_rollback_mode_too(box):
+    proc = box.run("rollback", "acct-app-candidate-r8", "77", env={"ACCT_APP_RESULT_DIR": "/etc"})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert box.log() == []
+
+
+def test_default_state_paths_pass_the_guard(box):
+    env = {k: v for k, v in box.env.items() if not k.startswith(("ACCT_APP_", "ACCT_PG_", "ACCT_APACHE_"))}
+    proc = subprocess.run(
+        ["bash", str(box.harness), "--call", "validate_state_paths", "WORKTREE_ROOT", "RESULT_DIR", "PG_BACKUP_DIR", "APACHE_BACKUP_DIR", "LOCK"],
+        env=env, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_release_runs_normally_with_a_deep_custom_state_layout(box):
+    proc = box.run(env={"ACCT_PG_BACKUP_DIR": "/srv-not-system/x/backups", "ACCT_APACHE_BACKUP_DIR": "/root/fb-cutover-backups"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert box.port() == "8112"
+
+
+def _stray_dir(box, name):
+    d = box.tmp / name
+    d.mkdir()
+    (d / "keep.txt").write_text("keep\n")
+    return d
+
+
+def _cleanup_wt(box, root, target):
+    return subprocess.run(
+        ["bash", "-c", f'source "{SCRIPT}"; WORKTREE_ROOT={shlex.quote(str(root))}; SOURCE_REPO={shlex.quote(str(box.repo))}; '
+                       f'release_wt={shlex.quote(str(target))}; cleanup_release_wt'],
+        capture_output=True, text=True, env=box.env,
+    )
+
+
+def test_cleanup_release_wt_never_rm_rf_s_a_path_outside_the_release_root(box):
+    outside = _stray_dir(box, "outside")
+    root = box.tmp / "wt"
+    root.mkdir()
+    proc = _cleanup_wt(box, root, outside)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (outside / "keep.txt").read_text() == "keep\n"
+    assert "not removing" in proc.stdout
+
+
+def test_cleanup_release_wt_does_not_follow_dotdot_out_of_the_release_root(box):
+    outside = _stray_dir(box, "outside")
+    root = box.tmp / "wt"
+    root.mkdir()
+    proc = _cleanup_wt(box, root, f"{root}/../outside")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (outside / "keep.txt").exists()
+
+
+@pytest.mark.parametrize("sub", ["inside", "inside/deeper"])
+def test_cleanup_release_wt_removes_a_stray_directory_below_the_release_root(box, sub):
+    root = box.tmp / "wt"
+    target = root / sub
+    target.mkdir(parents=True)
+    (target / "f").write_text("x")
+    proc = _cleanup_wt(box, root, target)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("candidate", ["{root}", "{root}/", "{root}/../outside", "{root}/a/../../outside", "{root}x"])
+def test_path_is_under_rejects_the_root_itself_traversal_and_sibling_prefixes(box, candidate):
+    root = str(box.tmp / "wt")
+    proc = box.run("--call", "path_is_under", candidate.format(root=root), root)
+    assert proc.returncode != 0
+
+
+# ---- 5분 감시 중 중단 신호 ----------------------------------------------------------------------
+@pytest.mark.parametrize("tick", ["1", "2"])
+def test_term_during_the_watch_restores_the_previous_port_and_exits_143(box, tick):
+    proc = box.run(env={"FAKE_TERM_ON_WATCH_TICK": tick})
+    assert proc.returncode == 143, proc.stdout + proc.stderr
+    assert (box.fake / "watch_ticks").exists()
+    assert box.port() == "8111"
+    res = box.result(proc)
+    assert res["status"] == "failed" and res["recovered_previous_port"] is True
+    assert "acct-app-candidate-r8" in box.cands()
+    assert all("acct-app-candidate-r8" not in m for m in box.mutations())
+    assert box.mutations() == ["CMD docker rm -f acct-app-candidate-r9"]
+    assert box.cands() == ["acct-app-candidate-r8"]
+
+
+def test_term_during_the_watch_leaves_no_worktree_or_build_context(box):
+    wt_root, tmpdir = box.tmp / "wt", box.tmp / "tmpdir"
+    tmpdir.mkdir()
+    env = {"AADS_DEPLOY_REPO_DIR": "", "AADS_DEPLOY_SOURCE_REPO": str(box.repo), "ACCT_APP_RELEASE_ROOT": str(wt_root),
+           "TMPDIR": str(tmpdir), "FAKE_TERM_ON_WATCH_TICK": "2"}
+    proc = box.run(env=env)
+    assert proc.returncode == 143, proc.stdout + proc.stderr
+    assert box.port() == "8111"
+    assert list(wt_root.iterdir()) == [] and list(tmpdir.iterdir()) == []
+
+
+# ---- 실패 종료 시 임시 자원 ---------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "env,rc",
+    [
+        ({"FAKE_BUILD_FAIL": "1"}, 6),
+        ({"FAKE_BACKUP_FAIL": "1"}, 7),
+        ({"FAKE_MIG_FAIL": "clobe"}, 7),
+        ({"FAKE_START_FAIL": "1"}, 8),
+        ({"FAKE_CAND_UNHEALTHY": "1"}, 8),
+        ({"FAKE_CAND_NO_MARKER": "1"}, 8),
+    ],
+    ids=["build", "backup", "migration", "candidate-start", "candidate-unhealthy", "candidate-no-marker"],
+)
+def test_failed_release_leaves_no_worktree_build_context_or_git_registration(box, env, rc):
+    wt_root, tmpdir = box.tmp / "wt", box.tmp / "tmpdir"
+    tmpdir.mkdir()
+    env = {**env, "AADS_DEPLOY_REPO_DIR": "", "AADS_DEPLOY_SOURCE_REPO": str(box.repo), "ACCT_APP_RELEASE_ROOT": str(wt_root), "TMPDIR": str(tmpdir)}
+    proc = box.run(env=env)
+    assert proc.returncode == rc, proc.stdout + proc.stderr
+    assert "isolated release worktree" in proc.stdout
+    assert list(wt_root.iterdir()) == []
+    assert list(tmpdir.iterdir()) == []
+    assert len(git(box.repo, "worktree", "list").splitlines()) == 1
+    assert box.port() == "8111"
+
+
+def test_build_context_exists_during_the_build_and_is_gone_afterwards(box):
+    tmpdir = box.tmp / "tmpdir"
+    tmpdir.mkdir()
+    proc = box.run(env={"TMPDIR": str(tmpdir), "FAKE_BUILD_FAIL": "1"})
+    assert proc.returncode == 6
+    assert (box.fake / "build.tar").exists()  # 빌드 단계까지 실제로 도달했다
+    assert list(tmpdir.iterdir()) == []
+
+
+FAKE_DOCKER = r"""#!/bin/bash
+case "$1" in
+  inspect)
+    shift
+    fmt=""; [[ ${1:-} == -f ]] && { fmt=$2; shift 2; }
+    case $fmt in
+      "") exit 1 ;;
+      *Config.Env*) printf 'KEEP=1
+APP_PORT=8111
+' ;;
+      *RestartPolicy*) echo no ;;
+      *Config.User*) echo appuser ;;
+      *HostConfig.Memory*) echo 0 ;;
+      *Mounts*) : ;;
+      *len\ .Config.Entrypoint*) echo 0 ;;
+      *Config.Entrypoint*) printf 'uvicorn
+app:app
+--port
+8111
+' ;;
+      *) echo true ;;
+    esac ;;
+  run)
+    while [[ $# -gt 0 ]]; do [[ $1 == --env-file ]] && { echo "$2" > "$FAKE_ENVFILE_RECORD"; cp "$2" "$FAKE_ENVFILE_RECORD.content"; }; shift; done
+    echo "run failed" >&2; exit 1 ;;
+esac
+"""
+
+
+def _run_start_candidate_body(box, tmp_path, old_port="8111"):
+    body = (box.fake / "stdin.start_candidate").read_text()
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    docker = bindir / "docker"
+    docker.write_text(FAKE_DOCKER)
+    docker.chmod(0o755)
+    record = tmp_path / "envfile.path"
+    proc = subprocess.run(
+        ["bash", "-s", "--", "acct-app-candidate-r9", "acct-app-candidate-r8", "acct-pg", "acct-candidate:abcd", "8112", old_port, "a" * 40, "77"],
+        input=body, capture_output=True, text=True,
+        env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "FAKE_ENVFILE_RECORD": str(record)},
+    )
+    return proc, record
+
+
+@pytest.mark.parametrize("old_port,rc", [("8111", 1), ("9999", 92)], ids=["docker-run-fails", "port-rewrite-fails"])
+def test_start_candidate_remote_script_removes_its_envfile_when_it_fails(box, tmp_path, old_port, rc):
+    assert box.run().returncode == 0
+    proc, record = _run_start_candidate_body(box, tmp_path, old_port)
+    assert proc.returncode == rc, proc.stdout + proc.stderr
+    if rc == 1:
+        envf = Path(record.read_text().strip())
+        assert envf.parent == Path("/dev/shm") and envf.name.startswith("acct-app-env.")
+        assert "APP_PORT=8112" in Path(str(record) + ".content").read_text()
+        assert not envf.exists()

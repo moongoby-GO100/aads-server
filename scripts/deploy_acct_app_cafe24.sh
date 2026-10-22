@@ -44,11 +44,12 @@
 
 set -euo pipefail
 
+# 상태 경로 5개는 '-' 기본값이다: 미설정이면 기본값, 설정됐는데 비어 있으면 validate_state_paths 가 exit 2 로 거부한다.
 SOURCE_REPO="${AADS_DEPLOY_SOURCE_REPO:-/root/aads/aads-server}"
 REPO="${AADS_DEPLOY_REPO_DIR:-}"
-WORKTREE_ROOT="${ACCT_APP_RELEASE_ROOT:-/root/aads/state/acct-app-releases}"
-RESULT_DIR="${ACCT_APP_RESULT_DIR:-/root/aads/state/acct-app-release-results}"
-LOCK="${ACCT_APP_LOCK_FILE:-/tmp/aads-acct-app-cafe24.lock}"
+WORKTREE_ROOT="${ACCT_APP_RELEASE_ROOT-/root/aads/state/acct-app-releases}"
+RESULT_DIR="${ACCT_APP_RESULT_DIR-/root/aads/state/acct-app-release-results}"
+LOCK="${ACCT_APP_LOCK_FILE-/tmp/aads-acct-app-cafe24.lock}"
 CAFE24_SSH="${CAFE24_SSH:-server-114}"
 FB_HOST="fb.newtalk.kr"
 NS_CONTAINER="${NS_CONTAINER:-acct-pg}"
@@ -58,9 +59,9 @@ PG_CONTAINER="${ACCT_PG_CONTAINER:-acct-pg}"
 PG_DB="${ACCT_PG_DB:-obys}"
 AUTH_PG_DB="${ACCT_AUTH_PG_DB:-obys_auth}" # 인증 DB(saas_users). 업무 DB(PG_DB)와 반드시 다른 DB 여야 한다.
 PG_USER="${ACCT_PG_USER:-}"
-PG_BACKUP_DIR="${ACCT_PG_BACKUP_DIR:-/root/acct-release-backups}"
+PG_BACKUP_DIR="${ACCT_PG_BACKUP_DIR-/root/acct-release-backups}"
 APACHE_SITE="${ACCT_APACHE_SITE:-/etc/apache2/sites-available/00-zz-fb.newtalk.kr.conf}"
-APACHE_BACKUP_DIR="${ACCT_APACHE_BACKUP_DIR:-/root/fb-cutover-backups}"
+APACHE_BACKUP_DIR="${ACCT_APACHE_BACKUP_DIR-/root/fb-cutover-backups}"
 PREV_CONTAINER="${ACCT_PREV_CONTAINER:-}"   # empty -> discover_state picks it from the apache upstream port
 PREV_AUTODETECT=false
 R8_IMAGE_ID="sha256:71e5e811c220efbe9bc527f36836e0cdc9638794ec01a6b1bbd5256ea5e8150e"
@@ -212,10 +213,54 @@ docker_mut() { # docker_mut <rm|stop|start> [-f] <container>
     esac
 }
 
+# ---- state directory guard ----------------------------------------------------------------------
+# 환경변수로 바뀔 수 있는 상태 경로가 비었거나 상대경로이거나 '.'/'..' 를 품거나 시스템 루트 자체이면 거부한다.
+# 거부는 mkdir·flock·원격 호출보다 앞선다(exit 2).
+normalize_abs_path() { # collapse repeated '/', drop a trailing '/'; '/' stays '/'
+    local p=$1
+    while [[ $p == *//* ]]; do p=${p//\/\//\/}; done
+    [[ $p == / ]] || p=${p%/}
+    printf '%s' "${p:-/}"
+}
+unsafe_state_path() { # unsafe_state_path <value>: prints the reason and returns 0 when the path must be refused
+    local v=$1 n d
+    [[ -n $v ]] || { echo "empty"; return 0; }
+    [[ $v == /* ]] || { echo "not an absolute path"; return 0; }
+    [[ $v =~ [[:cntrl:][:space:]] ]] && { echo "contains whitespace or control characters"; return 0; }
+    [[ /$v/ == */../* || /$v/ == */./* ]] && { echo "contains a '.' or '..' component"; return 0; }
+    n="$(normalize_abs_path "$v")"
+    for d in / /root /etc /usr /var /tmp /home /bin /boot /dev /lib /lib64 /opt /proc /run /sbin /srv /sys /mnt ${HOME:+"$(normalize_abs_path "$HOME")"}; do
+        [[ $n == "$d" ]] && { echo "is the system directory $d itself"; return 0; }
+    done
+    return 1
+}
+validate_state_paths() { # validate_state_paths <VAR_NAME>...
+    local name why
+    for name in "$@"; do
+        if why="$(unsafe_state_path "${!name}")"; then
+            die 2 "unsafe $name '${!name}': $why"
+        fi
+    done
+}
+path_is_under() { # path_is_under <path> <root>: strictly below root, no '.'/'..' components
+    local p root
+    p="$(normalize_abs_path "$1")"
+    root="$(normalize_abs_path "$2")"
+    [[ $p == /* && $root != / && $p == "$root"/?* ]] || return 1
+    [[ /$p/ == */../* || /$p/ == */./* ]] && return 1
+    return 0
+}
+
 # ---- release worktree ---------------------------------------------------------------------------
 cleanup_release_wt() {
     [[ -n "$release_wt" ]] || return 0
-    git -C "$SOURCE_REPO" worktree remove --force "$release_wt" >/dev/null 2>&1 || rm -rf "$release_wt"
+    if git -C "$SOURCE_REPO" worktree remove --force "$release_wt" >/dev/null 2>&1; then
+        :
+    elif path_is_under "$release_wt" "$WORKTREE_ROOT"; then
+        rm -rf "$release_wt"
+    else
+        say "WARNING: not removing '$release_wt': outside the release root $WORKTREE_ROOT"
+    fi
     git -C "$SOURCE_REPO" worktree prune >/dev/null 2>&1 || true
     release_wt=""
 }
@@ -1276,6 +1321,7 @@ main_deploy() {
     [[ $MARKER =~ ^[A-Za-z0-9_.:/-]{3,100}$ ]] || die 2 "invalid marker string"
     [[ $MONITOR_SECONDS =~ ^[0-9]+$ && $MONITOR_INTERVAL =~ ^[1-9][0-9]*$ ]] || die 2 "invalid monitor settings"
     MODE=deploy
+    validate_state_paths WORKTREE_ROOT RESULT_DIR PG_BACKUP_DIR APACHE_BACKUP_DIR LOCK
     acquire_lock
     trap on_exit EXIT
     trap 'exit 143' TERM
@@ -1326,6 +1372,7 @@ main_rollback() {
     MODE=rollback
     owned_name "$target" || die 2 "rollback target must match $CANDIDATE_RE"
     [[ $RUN_ID =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || die 2 "invalid run id"
+    validate_state_paths RESULT_DIR APACHE_BACKUP_DIR LOCK
     acquire_lock
     trap on_exit EXIT
     trap 'exit 143' TERM
