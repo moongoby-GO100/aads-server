@@ -169,7 +169,9 @@ class _DocumentListDB:
             return 1
         return None
 
-    async def fetch(self, *_args):
+    async def fetch(self, query, *_args):
+        if "project_document_goal_links" in query:
+            return getattr(self, "canonical_rows", [])
         return self.rows
 
 
@@ -241,3 +243,118 @@ def test_spec_fills_requirement_slot_so_slices_keep_prd_signal(monkeypatch):
 
     assert result["missing"] == []
     assert result["has_design"] is True
+
+
+GOAL = "11111111-1111-4111-8111-111111111111"
+TENANT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+TENANT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+def _legacy(doc_id, kind, key, latest=True):
+    return {
+        "id": doc_id, "kind": kind, "doc_path": f"docs/{key}.md", "title": None,
+        "note": None, "created_at": None, "document_key": key, "version": "1.0.0",
+        "status": "active", "is_latest": latest, "change_summary": None,
+        "supersedes_id": None, "updated_at": None, "version_count": 1,
+    }
+
+
+def _canon(kind, key, approved=True, project_key="AADS", title="정본 문서"):
+    return {
+        "head_id": f"head-{key}", "kind": kind, "document_key": key,
+        "head_title": "head title", "approved_revision_id": "rev" if approved else None,
+        "updated_at": "2026-10-22", "project_key": project_key, "created_at": None,
+        "title": title, "version": "2.0.0", "version_count": 2,
+    }
+
+
+class _TenantCanonicalDB(_DocumentListDB):
+    """Canonical links are visible only to the tenant that owns them."""
+
+    def __init__(self, rows, canonical_by_tenant):
+        super().__init__(rows)
+        self.canonical_by_tenant = canonical_by_tenant
+        self.canonical_queries = 0
+
+    async def fetchval(self, query, *args):
+        return 1 if args[1] == TENANT_A else None
+
+    async def fetch(self, query, *args):
+        if "project_document_goal_links" in query:
+            self.canonical_queries += 1
+            assert "LIMIT 200" in query
+            assert "l.tenant_id = $1::uuid AND l.goal_id = $2::uuid" in query
+            return self.canonical_by_tenant.get(args[0], [])
+        return self.rows
+
+
+def _call(monkeypatch, db, tenant=TENANT_A, **kwargs):
+    from app.core import db_pool
+    from app.routers import goals
+
+    monkeypatch.setattr(db_pool, "get_pool", lambda: db)
+    return asyncio.run(goals.goal_documents(GOAL, {"tenant": {"id": tenant}}, **kwargs))
+
+
+def test_canonical_only_goal_gets_documents_and_design(monkeypatch):
+    db = _TenantCanonicalDB([], {TENANT_A: [_canon("plan", "plan:a"), _canon("prd", "prd:a", approved=False)]})
+    result = _call(monkeypatch, db)
+
+    assert db.canonical_queries == 1
+    assert {d["document_key"] for d in result["documents"]} == {"plan:a", "prd:a"}
+    plan = next(d for d in result["documents"] if d["kind"] == "plan")
+    assert plan["source"] == "canonical" and plan["approved"] is True
+    assert plan["doc_path"] is None and plan["is_latest"] is True
+    assert plan["version"] == "2.0.0" and plan["project_key"] == "AADS"
+    prd = next(d for d in result["documents"] if d["kind"] == "prd")
+    assert prd["approved"] is False
+    assert result["has_design"] is True and result["missing"] == []
+    assert result["has_history"] is True
+
+
+def test_canonical_spec_counts_as_requirement(monkeypatch):
+    db = _TenantCanonicalDB([], {TENANT_A: [_canon("plan", "plan:a"), _canon("spec", "spec:a")]})
+    result = _call(monkeypatch, db)
+
+    assert result["has_design"] is True and result["missing"] == []
+
+
+def test_goal_with_both_keeps_legacy_and_canonical(monkeypatch):
+    db = _TenantCanonicalDB([_legacy(1, "plan", "plan:old")], {TENANT_A: [_canon("prd", "prd:new")]})
+    result = _call(monkeypatch, db)
+
+    sources = {d["document_key"]: d["source"] for d in result["documents"]}
+    assert sources == {"plan:old": "legacy", "prd:new": "canonical"}
+    assert result["has_design"] is True
+
+
+def test_duplicate_document_key_prefers_canonical(monkeypatch):
+    db = _TenantCanonicalDB(
+        [_legacy(1, "plan", "plan:dup"), _legacy(2, "plan", "plan:dup", latest=False)],
+        {TENANT_A: [_canon("plan", "plan:dup")]},
+    )
+    result = _call(monkeypatch, db)
+
+    assert [(d["source"], d["document_key"]) for d in result["documents"]] == [("canonical", "plan:dup")]
+    history = result["document_history"]
+    assert len(history) == 3
+    assert [d["source"] for d in history].count("legacy") == 2
+    assert all(not d["is_latest"] for d in history if d["source"] == "legacy")
+    assert "prd" in result["missing"]
+
+
+def test_include_history_lists_shadowed_legacy(monkeypatch):
+    db = _TenantCanonicalDB([_legacy(1, "plan", "plan:dup")], {TENANT_A: [_canon("plan", "plan:dup")]})
+    result = _call(monkeypatch, db, include_history=True)
+
+    assert len(result["documents"]) == 2
+
+
+def test_other_tenant_cannot_see_canonical_documents(monkeypatch):
+    db = _TenantCanonicalDB([], {TENANT_A: [_canon("plan", "plan:a")]})
+
+    with pytest.raises(HTTPException) as exc:
+        _call(monkeypatch, db, tenant=TENANT_B)
+
+    assert exc.value.status_code == 404
+    assert db.canonical_queries == 0

@@ -776,6 +776,35 @@ async def goal_board(
     }
 
 
+_GOAL_DOC_KIND_RANK = {
+    "plan": 0, "prd": 1, "spec": 1, "design": 2, "architecture": 3,
+    "contract": 4, "tasks": 4, "prototype": 5, "report": 6,
+}
+
+
+def _canonical_goal_document(row: Any) -> dict[str, Any]:
+    """정본 판본 행을 goal_documents 행과 같은 모양으로 바꾼다."""
+    return {
+        "id": str(row["head_id"]),
+        "kind": row["kind"],
+        "doc_path": None,
+        "title": row["title"] or row["head_title"],
+        "note": None,
+        "created_at": row["created_at"],
+        "document_key": row["document_key"],
+        "version": row["version"],
+        "status": "approved" if row["approved_revision_id"] else "draft",
+        "is_latest": True,
+        "change_summary": None,
+        "supersedes_id": None,
+        "updated_at": row["updated_at"],
+        "version_count": row["version_count"] or 1,
+        "source": "canonical",
+        "project_key": row["project_key"],
+        "approved": row["approved_revision_id"] is not None,
+    }
+
+
 @router.get("/goals/{goal_id}/documents")
 async def goal_documents(
     goal_id: str,
@@ -810,7 +839,35 @@ async def goal_documents(
             "         d.document_key, d.is_latest DESC, d.created_at DESC",
             goal_id, _tenant_id(context),
         )
-    history = [dict(r) for r in rows]
+        # 정본 저장소(project_document_goal_links)는 goal_documents 와 별개다.
+        # l.project_key 는 목표 project 와 다를 수 있어 tenant·goal 로만 거른다.
+        canonical_rows = await conn.fetch(
+            "SELECT h.id AS head_id, h.kind, h.document_key, h.title AS head_title, "
+            "       h.approved_revision_id, h.updated_at, l.project_key, "
+            "       l.created_at, r.title, r.version, "
+            "       (SELECT count(*) FROM project_document_revisions rr "
+            "         WHERE rr.head_id = h.id)::integer AS version_count "
+            "FROM project_document_goal_links l "
+            "JOIN project_document_heads h ON h.id = l.head_id "
+            "     AND h.tenant_id = l.tenant_id "
+            "LEFT JOIN project_document_revisions r ON r.id = h.latest_revision_id "
+            "WHERE l.tenant_id = $1::uuid AND l.goal_id = $2::uuid "
+            "ORDER BY h.updated_at DESC LIMIT 200",
+            _tenant_id(context), goal_id,
+        )
+    canonical = [_canonical_goal_document(r) for r in canonical_rows]
+    canonical_keys = {d["document_key"] for d in canonical}
+    legacy = []
+    for r in rows:
+        d = dict(r)
+        d["source"] = "legacy"
+        if d["is_latest"] and d["document_key"] in canonical_keys:
+            d["is_latest"] = False
+        legacy.append(d)
+    history = sorted(
+        canonical + legacy,
+        key=lambda d: (_GOAL_DOC_KIND_RANK.get(d["kind"], 7), d["document_key"] or ""),
+    )
     latest = [d for d in history if d["is_latest"]]
     docs = history if include_history else latest
     kinds = {d["kind"] for d in latest}
