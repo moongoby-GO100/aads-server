@@ -364,7 +364,9 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "description": (
             "채팅 목표 등록 전용. 한글 제목, 마일스톤 3개 이상, 각 epic→story→task와 "
             "모든 완료/인수 기준을 검증해 한 트랜잭션으로 등록한다. active 생성, P0 상한 적용. "
-            "milestone_index는 0부터 시작한다."
+            "milestone_index는 0부터 시작한다. 주도담당은 이 세션이 같은 프로젝트 담당이면 자동 지정하고, "
+            "아니면 goal.owner_role_key 로 프로젝트의 활성 담당 역할을 지정한다. "
+            "확정 불가 시 owner_required 와 candidates 가 오며 목표는 만들어지지 않는다."
         ),
         "input_schema": {
             "type": "object",

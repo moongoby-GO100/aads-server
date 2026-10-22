@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from app.services import goal_signals
 from app.services import goal_work_hierarchy as hierarchy
+from app.services.goal_owner_resolver import resolve_goal_owner
 
 
 def validation_errors(inp: dict[str, Any]) -> list[str]:
@@ -45,6 +46,9 @@ def validation_errors(inp: dict[str, Any]) -> list[str]:
             UUID(str(goal["parent_goal_id"]))
         except (ValueError, TypeError):
             errors.append("goal.parent_goal_id: UUID 필수")
+    role_key = goal.get("owner_role_key")
+    if role_key is not None and (not isinstance(role_key, str) or len(role_key.strip()) > 100):
+        errors.append("goal.owner_role_key: 100자 이하 문자열")
 
     def work(node: Any, path: str, child_key: str | None) -> None:
         if not isinstance(node, dict):
@@ -97,7 +101,10 @@ async def register_goal(
     session_id: str | None = None,
     actor: hierarchy.ActorScope | None = None,
     activate: bool = True,
+    owner_session_id: str | None = None,
+    owner_role_key: str | None = None,
 ) -> dict:
+    """`session_id` 는 생성 주체(도구 바인딩) 세션이다. 명시 담당은 `owner_session_id` 로만 받는다."""
     errors = validation_errors(inp)
     if errors:
         return {"error": "invalid_goal_hierarchy", "errors": errors}
@@ -135,6 +142,26 @@ async def register_goal(
         elif actor is None or actor.tenant_id != tenant_id:
             raise HTTPException(403, detail="project_scope_denied")
         hierarchy.require_project_access(actor, project)
+        owner_session_id = owner_session_id or None
+        if owner_session_id and not session_id:
+            # REST path: the authenticated user may only name a session they own.
+            named = await hierarchy.resolve_actor_scope(
+                conn, tenant_id=tenant_id, user_id=actor.user_id,
+                actor_session_id=owner_session_id, internal_admin=actor.internal_admin,
+            )
+            hierarchy.require_project_access(named, project)
+        # Fail closed: no goal row (and no milestone/work item) without a confirmed owner.
+        owner = await resolve_goal_owner(
+            conn,
+            tenant_id=tenant_id,
+            project=project,
+            creator_session_id=session_id,
+            owner_role_key=owner_role_key or goal.get("owner_role_key"),
+            owner_session_id=owner_session_id,
+        )
+        if not owner.ok:
+            return owner.as_error()
+        owner_role, owner_session = owner.owner_role_key, owner.owner_session_id
         if goal.get("parent_goal_id"):
             parent = await hierarchy.get_goal_scope(
                 conn, tenant_id=tenant_id, goal_id=goal["parent_goal_id"]
@@ -178,8 +205,8 @@ async def register_goal(
             goal["success_criteria"],
             goal["priority"],
             goal.get("parent_goal_id"),
-            goal.get("owner_role_key"),
-            session_id,
+            owner_role,
+            owner_session,
             "active" if activate else "draft",
         )
         milestone_ids = []
@@ -226,8 +253,8 @@ async def register_goal(
                 ms["completion_criteria"],
                 ms["sequence_order"],
                 ms["auto_advance"],
-                goal.get("owner_role_key"),
-                session_id,
+                owner_role,
+                owner_session,
             )
             for j, epic in enumerate(ms["epics"]):
                 await create(epic, "epic", ms_id, f"{i}.{j}")
@@ -241,7 +268,7 @@ async def register_goal(
                 "updated_at = NOW() WHERE id = $1::uuid",
                 milestone_ids[first_index],
             )
-        links = ([(None, "chat_session", session_id)] if session_id else []) + [
+        links = [(None, "chat_session", owner_session)] + [
             (milestone_ids[j["milestone_index"]], "pipeline_job", j["job_id"])
             for j in inp.get("linked_jobs", [])
         ]

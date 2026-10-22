@@ -12,6 +12,7 @@ from app.services.db_write_sql_guard import (
     enforce_chat_goal_registration,
     validate_single_write,
 )
+from app.services.goal_owner_resolver import _SESSION_SQL
 from app.services.goal_registration import register_goal
 
 TENANT, SESSION = str(uuid4()), str(uuid4())
@@ -120,7 +121,12 @@ class MemoryConnection:
         elif "INSERT INTO goal_task_links" in sql:
             self.links.append(a)
 
+    async def fetch(self, sql, *a):
+        return []
+
     async def fetchrow(self, sql, *a):
+        if sql == _SESSION_SQL:
+            return {"session_id": a[0], "role_key": "dev", "title": "t", "project_key": "AADS"}
         if "workspace_name" in sql:
             return {
                 "session_id": SESSION,

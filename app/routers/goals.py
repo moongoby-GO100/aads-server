@@ -17,6 +17,7 @@ from app.auth import TenantRole, require_tenant_role
 from app.core.goal_work_hierarchy_policy import goal_work_hierarchy_enabled
 from app.services import goal_approval_policy_schema as policy_schema
 from app.services.goal_grant_suspension import sync_goal_grants
+from app.services.goal_owner_resolver import goal_owner_binding_policy as _resolver_owner_binding_policy
 from app.services.approval_profiles import profile_for_project, profile_options
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,8 @@ class GoalCreateRequest(BaseModel):
     success_criteria: Optional[str] = None
     parent_goal_id: Optional[str] = None
     milestones: Optional[list[MilestoneCreateRequest]] = None
-    owner_session_id: Optional[str] = None  # 생성과 동시에 담당 세션 연결
+    owner_session_id: Optional[str] = None  # 명시 담당 세션 (생략하면 owner_role_key/후보로 확정)
+    owner_role_key: Optional[str] = Field(None, max_length=100)
     activate: bool = False
 
 
@@ -164,6 +166,7 @@ async def create_goal(
             "project": req.project, "title": req.title, "priority": req.priority,
             "description": req.description, "success_criteria": req.success_criteria,
             "parent_goal_id": req.parent_goal_id,
+            "owner_role_key": req.owner_role_key,
         },
         "milestones": [
             {**ms.model_dump(), "sequence_order": ms.sequence}
@@ -181,7 +184,7 @@ async def create_goal(
     )
     async with get_pool().acquire() as conn:
         result = await register_goal(
-            conn, inp, tenant_id=tenant_id, session_id=req.owner_session_id,
+            conn, inp, tenant_id=tenant_id, owner_session_id=req.owner_session_id,
             actor=actor, activate=req.activate,
         )
     if result.get("error") == "p0_cap_exceeded":
@@ -304,15 +307,7 @@ def goal_owner_binding_policy(
     as_lead: bool,
 ) -> tuple[bool, str | None]:
     """Enforce local execution ownership with one explicit CEO coordinator exception."""
-    goal_key = (goal_project or "").strip().upper()
-    session_key = (session_project or "").strip().upper()
-    if goal_key and session_key == goal_key:
-        if collaboration_role == "portfolio_coordinator":
-            return False, "portfolio_coordinator_requires_ceo_workspace"
-        return True, None
-    if session_key == "CEO" and collaboration_role == "portfolio_coordinator" and not as_lead:
-        return True, None
-    return False, "cross_project_owner_denied"
+    return _resolver_owner_binding_policy(goal_project, session_project, collaboration_role, as_lead=as_lead)
 
 
 class ConfirmRequest(BaseModel):

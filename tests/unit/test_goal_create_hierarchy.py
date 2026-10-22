@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from app.routers import goals
 from app.services.goal_manager import GoalStateMachine
 from app.services.goal_planner import GoalPlanner, MilestoneSpec
-from tests.unit.test_goal_registration import MemoryConnection, TENANT, payload
+from tests.unit.test_goal_registration import SESSION, MemoryConnection, TENANT, payload
 
 
 @pytest.fixture
@@ -53,7 +53,13 @@ def rest_payload():
     p = payload()
     return {**p["goal"], "milestones": [
         {**ms, "sequence": ms["sequence_order"]} for ms in p["milestones"]
-    ]}
+    ], "owner_session_id": SESSION}
+
+
+def rest_payload_without_owner():
+    body = rest_payload()
+    body.pop("owner_session_id")
+    return body
 
 
 @pytest.mark.parametrize("missing", ["milestones", "epics"])
@@ -78,10 +84,20 @@ def test_rest_complete_hierarchy_saved_without_session(api):
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "draft"
     assert len(conn.goals) == 1 and len(conn.milestones) == 3 and len(conn.items) == 9
-    assert all(g["owner_session_id"] is None for g in conn.goals.values())
-    assert all(m["owner_session_id"] is None for m in conn.milestones.values())
-    assert not conn.links
+    assert all(g["owner_session_id"] == SESSION and g["owner_role_key"] == "dev"
+               for g in conn.goals.values())
+    assert all(m["owner_session_id"] == SESSION for m in conn.milestones.values())
     assert all(g["status"] == "draft" for g in conn.goals.values())
+
+
+def test_rest_without_owner_is_rejected_even_for_draft(api):
+    client, conn = api
+    response = client.post("/api/v1/goals", json=rest_payload_without_owner())
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "owner_required" and "candidates" in detail
+    assert not conn.goals and not conn.milestones and not conn.items and not conn.links
+    conn.execute.assert_not_awaited()
 
 
 def test_rest_failure_rolls_back(api):
@@ -157,7 +173,6 @@ def test_rest_rejects_other_users_owner_session(api):
 
 
 def test_rest_owned_session_keeps_authenticated_creator(api):
-    from tests.unit.test_goal_registration import SESSION
     client, conn = api
     p = rest_payload()
     p["owner_session_id"] = SESSION
