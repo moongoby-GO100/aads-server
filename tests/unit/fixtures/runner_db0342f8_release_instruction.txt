@@ -1,0 +1,39 @@
+DEPLOY_ONLY: true
+DEPLOY_POLICY: bluegreen
+ALLOW_DUP_JOB
+NO_AUTO_REWORK
+REWORK_OF: runner-c9211761
+TARGET: /root/aads/aads-server
+GOAL_ID: 40cfdfc5-06f9-4861-8dc9-27c8688cb3f7
+TASK_ID: AADS-RELEASE-API-AAG-AFTER-FINANCE-GATE-20261022-R2
+TITLE: AADS API 운영 bluegreen 릴리스 재제출 — origin/main(ff9b8337 이후) 운영 반영
+PRIORITY: P1
+SIZE: S
+APPROVAL: 사전 승인 838ebb77 (queue acfff9ef) — 세션 b749ff17 다음단계 P0
+
+코드는 바꾸지 않는다. 승인 후 Runner 가 origin/main HEAD 를 deploy.sh bluegreen 경로로 운영에 반영한다.
+
+재제출 사유(2026-10-22 14:56 KST 실측):
+- runner-c9211761 은 승인 뒤 phase=push_only_by_directive 로 종료됐다. instruction_forbids_deploy 가 지시서의 작업 규칙 문장(nginx 설정 수정·터널 정지·compose up·supervisorctl 를 하지 말라는 문장)을 배포 금지로 오인했다. 이번 지시서는 DEPLOY_POLICY: bluegreen 을 명시해 판정 입력을 정책 줄로 한정한다.
+- 운영 컨테이너 aads-server / aads-server-green 은 여전히 이미지 4c4f8c1424f3 이고, 실행 중 deploy.sh 는 없다.
+- obys-jinah-tunnel.service 는 14:52 KST 에 정지됐다. nginx 에서 yeoljeong_finance_api 를 참조하는 proxy_pass 는 0건이므로 deploy.sh 재무 점검은 mode=unused 로 판정돼야 한다.
+
+작업자 확인 항목(읽기 전용):
+1. origin/main HEAD 에 ff9b8337(runner-632058bc), e3cc0181(AAG 운영 API), f0ee53e3(v2 브리프)가 모두 조상으로 포함됐는지 확인.
+2. 실행 중 deploy.sh 프로세스 유무 확인.
+3. 운영 컨테이너 이미지와 /app/app/services/aag_operations.py 유무(배포 전 값) 기록.
+
+완료 기준(배포 후 실측):
+- deploy_runs 최신 api 행 status=success, 새 이미지 ID
+- 재무 점검 판정 로그(mode=unused)
+- 활성 컨테이너에 /app/app/services/aag_operations.py 존재
+- https://aads.newtalk.kr/api/v1/ops/health-check 200
+- /api/v1/aag/operations 응답 코드(인증 필요 시 401 이면 라우트 존재로 기록)
+- 5분 모니터링 결과
+
+[R-DOC 문서 저장 규칙 — 모든 프로젝트 공통]
+- 새 문서·리포트는 화면 제목·첫 제목(H1)·파일명의 제목 부분을 한글로 쓰고, 영문 kebab-case document_key 를 붙인다.
+- 새 문서는 정본(project_document_heads)에 초안으로 등록한다. 기존 문서의 key·경로는 바꾸지 않는다.
+- 보고에는 파일 경로를 링크처럼 적지 말고, 등록 결과의 열람 참조(view/report_line)를 그대로 쓴다.
+  열람 참조를 못 받았으면 '정본 미등록(미완료)' 또는 '열람 링크 미제공'이라고 적는다.
+

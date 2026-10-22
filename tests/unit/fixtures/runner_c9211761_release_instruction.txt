@@ -1,0 +1,35 @@
+DEPLOY_ONLY: true
+TARGET: /root/aads/aads-server
+GOAL_ID: 40cfdfc5-06f9-4861-8dc9-27c8688cb3f7
+TASK_ID: AADS-RELEASE-API-AAG-AFTER-FINANCE-GATE-20261022
+TITLE: AADS API 운영 bluegreen 릴리스 — 재무 점검 정합화(runner-632058bc) 반영 후 main, AAG v2·운영 API 검증
+PRIORITY: P1
+SIZE: S
+APPROVAL: 사전 승인 838ebb77 (queue 926177db) — 세션 b749ff17 다음단계 2
+
+이 잡은 코드를 바꾸지 않는다. 선행 runner-632058bc 가 push 된 origin/main HEAD 를 bluegreen 으로 운영에 반영한다.
+
+배경(2026-10-22 KST 실측):
+- main 기준 API 배포 #5819·#5830·#5831·#5839 가 deploy.sh 재무 점검(jinah244 터널)에서 차단됐다. 해당 upstream 은 proxy_pass 참조가 0건인 미사용 경로다. runner-632058bc 가 이를 'unused' 승인 구성으로 인정하도록 수정한다.
+- 같은 시각 다른 세션의 릴리스 runner-6b07e039 가 실행 중이다. 그 작업이 진행 중이면 끝날 때까지 기다린다. 병행 빌드는 금지다.
+- 운영 API 릴리스 4c4f8c14 에는 AAG 운영 API(e3cc0181)와 v2 브리프(f0ee53e3)가 없다.
+
+작업 규칙:
+1. 운영 반영은 bash /root/aads/aads-server/deploy.sh bluegreen 한 경로만 쓴다. /root/aads/AGENTS.md 와 aads-server/AGENTS.md 의 릴리스 조항을 따른다.
+2. 시작 전에 origin/main HEAD 에 runner-632058bc 커밋이 포함됐는지 확인한다. 없으면 배포하지 않고 중단 보고한다.
+3. runner-6b07e039 가 이미 같은 HEAD 이상을 성공 배포했다면 재배포하지 않고 그 결과만 검증한다.
+4. 재무 점검 단계의 판정 결과(mode=unused 기대)를 로그 그대로 보고한다.
+5. 실패하면 deploy.sh 롤백 결과와 원인 로그 요지를 남긴다. 운영 nginx 설정 수정, 터널 정지, docker compose up, supervisorctl restart 는 금지다.
+
+완료 기준(실측값):
+- deploy 기록 success, 새 이미지 ID
+- 활성 컨테이너에 /app/app/services/aag_operations.py 존재, /app/app/services/aag_brief_v2.py 에 v2 소비 코드 존재(e3cc0181·f0ee53e3 조상 확인)
+- https://aads.newtalk.kr/api/v1/ops/health-check 200
+- AAG 운영 API 응답 코드(예: /api/v1/aag/operations 또는 실제 라우트) 및 GO100 brief 상태값
+- 5분 모니터링 결과
+
+[R-DOC 문서 저장 규칙 — 모든 프로젝트 공통]
+- 새 문서·리포트는 화면 제목·첫 제목(H1)·파일명의 제목 부분을 한글로 쓰고, 영문 kebab-case document_key 를 붙인다.
+- 새 문서는 정본(project_document_heads)에 초안으로 등록한다. 기존 문서의 key·경로는 바꾸지 않는다.
+- 보고에는 파일 경로를 링크처럼 적지 말고, 등록 결과의 열람 참조(view/report_line)를 그대로 쓴다.
+  열람 참조를 못 받았으면 '정본 미등록(미완료)' 또는 '열람 링크 미제공'이라고 적는다.

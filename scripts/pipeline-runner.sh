@@ -2978,19 +2978,55 @@ inherit_approval_decision() {
 # 허용→금지로 44건 뒤집혔다. 블록이 "완료 기준:"·"롤백:" 같은 다른 라벨 절까지 이어지고,
 # "다른 서비스 재시작" 같은 한정된 금지를 배포 전체 금지로 봤기 때문이다. 블록 끝 조건과
 # 한정어 제외를 더했다 — 정당한 금지(runner-890f5c73 등)는 계속 막는다.
+#
+# 2026-10-22 (AADS-RUNNER-DEPLOY-DIRECTIVE-GATE-FALSE-POSITIVE): 릴리스 잡(앞 20줄에
+# `DEPLOY_ONLY: true`) runner-c9211761·db0342f8 이 승인 뒤 phase=push_only_by_directive 로 끝나
+# 배포가 실행되지 않았다. 둘 다 본문 산문이 걸렸다 — db0342f8 은 "…배포 금지로 오인했다"(오탐을
+# 설명하는 문장이 다시 오탐), c9211761 은 "배포하지 않고 중단 보고한다"·"…는 금지다" 같은 작업 규칙 문장.
+# 결정: 헤더의 `DEPLOY_ONLY: true` 자체가 배포 의도의 정책 선언이므로(DEPLOY_POLICY: bluegreen 이
+# 있든 없든) 본문 산문 스캔을 생략하고 1(제약 없음)을 돌려준다. 단 정책 선언 줄(PUSH_ONLY 선언,
+# DEPLOY_POLICY: push_only/none/block 등)이 같이 있으면 선언끼리 충돌이므로 0(금지)을 유지한다.
+# DEPLOY_ONLY 가 아닌 일반 잡의 산문 판정은 그대로다(미탐이 오탐보다 위험하다는 원칙).
+#
+# 로캘 고정: `.{0,12}`·`[^\n]{0,40}` 의 간격은 LC_ALL=C 에서 문자가 아니라 바이트로 센다(한글 1자=3바이트).
+# 실측: "배포는 이번 작업에서 아무 관련 없는 항목이라서 금지" 는 C 에서 ALLOW, C.UTF-8 에서 FORBID.
+# 러너·테스트·셸의 판정이 로캘에 따라 갈리지 않도록 함수 안에서 C.UTF-8 로 고정한다.
 instruction_forbids_deploy() {
+    local LC_ALL=C.UTF-8
     local text="$1" lowered="" scrubbed="" line="" clause="" rest="" gap="" trigger="" sep="" nl=$'\n'
+    # 릴리스 잡 예외. is_deploy_only_instruction 과 같은 규칙(앞 20줄, 줄 시작, 대소문자 구분)을 쓴다 — 한쪽만 고치지 마라.
+    local rel_n=0 rel_line="" rel_low="" rel_deploy_only=0 rel_conflict=0
+    local re_rel_deploy_only='^[[:space:]]*DEPLOY_ONLY[[:space:]]*:[[:space:]]*true([^[:alnum:]_]|$)'
+    local re_rel_push_decl='^[[:space:]>*#-]*push[_[:space:]-]?only([^[:alnum:]_]|$)'
+    local re_rel_push_off='push[_-]?only[[:space:]]*[:=][[:space:]]*(false|no|0|off)([^[:alnum:]_]|$)'
+    local re_rel_policy_forbid='^[[:space:]>*#-]*(deploy(ment)?|release)[_[:space:]-]?policy[[:space:]]*[:=][[:space:]]*(push[_[:space:]-]?only|commit[_[:space:]-]?only|no[_[:space:]-]?deploy|forbid(den)?|deny|denied|none|block(ed)?)([^[:alnum:]_]|$)'
+    while IFS= read -r rel_line || [[ -n "$rel_line" ]]; do
+        rel_n=$((rel_n + 1))
+        if (( rel_n <= 20 )) && [[ "$rel_line" =~ $re_rel_deploy_only ]]; then
+            rel_deploy_only=1
+        fi
+        rel_low="${rel_line,,}"
+        if [[ "$rel_low" =~ $re_rel_policy_forbid ]]; then
+            rel_conflict=1
+        elif [[ "$rel_low" =~ $re_rel_push_decl ]] && ! [[ "$rel_low" =~ $re_rel_push_off ]]; then
+            rel_conflict=1
+        fi
+    done <<< "$text"
+    if (( rel_deploy_only && ! rel_conflict )); then
+        return 1
+    fi
     # DEPLOY_POLICY가 있으면 기존 게이트의 판정 입력을 선언 관련 줄로만 좁힌다.
     local policy_input="" policy_scan="" policy_line="" has_policy_line=0
     local re_policy_input='^[[:space:]>*#-]*(deploy(ment)?|release)[_[:space:]-]?policy[[:space:]]*[:=]'
-    local re_push_input='push[_[:space:]-]?only'
+    local re_push_input='^[[:space:]>*#-]*push[_[:space:]-]?only([^[:alnum:]_]|$)'
+    local re_push_assign='push[_-]?only[[:space:]]*[:=][[:space:]]*(true|yes|1|on)([^[:alnum:]_]|$)'
     local re_deploy_input='^[[:space:]>*#-]*deploy(ment)?[[:space:]]*[:=]'
     while IFS= read -r policy_line || [[ -n "$policy_line" ]]; do
         policy_scan=$(printf '%s' "$policy_line" | tr '[:upper:]' '[:lower:]')
         if [[ "$policy_scan" =~ $re_policy_input ]]; then
             has_policy_line=1
             policy_input+="${policy_line}"$'\n'
-        elif [[ "$policy_scan" =~ $re_push_input ]] || [[ "$policy_scan" =~ $re_deploy_input ]]; then
+        elif [[ "$policy_scan" =~ $re_push_input ]] || [[ "$policy_scan" =~ $re_push_assign ]] || [[ "$policy_scan" =~ $re_deploy_input ]]; then
             policy_input+="${policy_line}"$'\n'
         fi
     done <<< "$text"

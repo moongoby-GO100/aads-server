@@ -124,3 +124,121 @@ def test_real_incident_instruction_would_have_been_blocked(gate_fn):
     )
 
     assert _decide(gate_fn, instruction) == "FORBID"
+
+
+# ── 릴리스 잡 오탐 보정 (AADS-RUNNER-DEPLOY-DIRECTIVE-GATE-FALSE-POSITIVE, 2026-10-22) ──
+# runner-c9211761·db0342f8 은 DEPLOY_ONLY 릴리스 잡인데 본문 산문이 배포 금지로 오인돼 배포가 건너뛰어졌다.
+# 판정은 로캘(C / C.UTF-8)에 따라 갈리면 안 되므로 모든 케이스를 두 로캘로 돌린다.
+
+LOCALES = ("C", "C.UTF-8")
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def _decide_in_locale(fn_file: Path, text: str, locale: str) -> str:
+    import os
+
+    env = {**os.environ, "LC_ALL": locale, "LANG": locale}
+    proc = subprocess.run(
+        ["bash", "-c", f'source "{fn_file}"; if instruction_forbids_deploy "$1"; '
+                       f"then echo FORBID; else echo ALLOW; fi", "_", text],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    return proc.stdout.strip()
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize(
+    "fixture",
+    ["runner_c9211761_release_instruction.txt", "runner_db0342f8_release_instruction.txt"],
+)
+def test_release_job_prose_is_not_a_deploy_forbid(gate_fn, fixture, locale):
+    text = (FIXTURES / fixture).read_text(encoding="utf-8")
+    assert _decide_in_locale(gate_fn, text, locale) == "ALLOW"
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "DEPLOY_ONLY: true\nPUSH_ONLY: true\nTARGET: /root/aads/aads-server",
+        "DEPLOY_ONLY: true\nPUSH_ONLY:true\n본문",
+        "DEPLOY_ONLY: true\nDEPLOY_POLICY: bluegreen\nPUSH_ONLY: true",
+        "DEPLOY_ONLY: true\nDEPLOY_POLICY: push_only\n본문",
+        "DEPLOY_ONLY: true\nDEPLOY_POLICY: bluegreen\nDEPLOY_POLICY: push_only",
+        "DEPLOY_ONLY: true\nDEPLOY_POLICY: none",
+        "DEPLOY_ONLY: true\nPUSH_ONLY",
+    ],
+)
+def test_release_job_with_push_only_declaration_is_forbidden(gate_fn, text, locale):
+    assert _decide_in_locale(gate_fn, text, locale) == "FORBID"
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "DEPLOY_ONLY: true\nDEPLOY_POLICY: bluegreen\n이번 작업에서는 배포 금지로 오인했다.",
+        "DEPLOY_ONLY :  true\n  Deploy_Policy:  BlueGreen\n배포하지 않고 중단 보고한다.",
+        "DEPLOY_ONLY: true\n배포하지 않고 중단 보고한다. 운영 nginx 설정 수정은 금지다.",
+        "DEPLOY_ONLY: true\nDEPLOY_POLICY: bluegreen\nPUSH_ONLY: false",
+    ],
+)
+def test_release_job_exception_skips_prose_scan(gate_fn, text, locale):
+    assert _decide_in_locale(gate_fn, text, locale) == "ALLOW"
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+def test_deploy_only_outside_header_window_is_not_release_job(gate_fn, locale):
+    text = "TASK_ID: X\n" * 25 + "DEPLOY_ONLY: true\n배포 금지"
+    assert _decide_in_locale(gate_fn, text, locale) == "FORBID"
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "PUSH_ONLY:true\nTARGET: /root/aads/aads-server",
+        "TARGET: /root/aads/aads-server\nDEPLOY_POLICY: push_only",
+        "PUSH_ONLY:true DEPLOY_POLICY:push_only TARGET: /root/aads/aads-server",
+        "DEPLOY_POLICY: bluegreen\nPUSH_ONLY: true",
+    ],
+)
+def test_general_job_policy_declaration_lines_forbid(gate_fn, text, locale):
+    assert _decide_in_locale(gate_fn, text, locale) == "FORBID"
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "phase=push_only_by_directive 로 끝난 잡을 분석한다.",
+        "TASK_ID: X\n선행 잡이 phase=push_only_by_directive 로 끝났다. 원인을 고친다.",
+        "DEPLOY_POLICY: bluegreen\n선행 잡이 phase=push_only 로 끝났다. 원인을 고친다.",
+    ],
+)
+def test_push_only_mentioned_only_in_prose_is_not_a_signal(gate_fn, text, locale):
+    assert _decide_in_locale(gate_fn, text, locale) == "ALLOW"
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "커밋까지만, 배포·재기동 절대 금지",
+        "빌드·배포 실행 금지",
+        "do not deploy",
+        "TASK_ID: X\n본문\n배포하지 않는다.",
+    ],
+)
+def test_general_job_existing_prose_forbids_are_kept(gate_fn, text, locale):
+    assert _decide_in_locale(gate_fn, text, locale) == "FORBID"
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+def test_decision_does_not_depend_on_shell_locale(gate_fn, locale):
+    """'배포' 와 '금지' 사이가 한글 15자(바이트 45) — LC_ALL=C 에서 바이트로 세면 40 을 넘어 놓쳤다."""
+    text = "배포는 이번 작업에서 아무 관련 없는 항목이라서 금지"
+    assert _decide_in_locale(gate_fn, text, locale) == "FORBID"
