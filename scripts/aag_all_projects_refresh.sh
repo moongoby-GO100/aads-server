@@ -126,6 +126,7 @@ refresh_generic_114() {
         "$REPO_DIR/tools/aag/scan_aads.py" \
         "$REPO_DIR/tools/aag/v2_contract.py" \
         "$REPO_DIR/tools/aag/code_deps.py" \
+        "$REPO_DIR/tools/aag/ops_assets.py" \
         "$REPO_DIR/tools/aag/$rules" \
         "$REMOTE_114:$REMOTE_STAGE/" >>"$LOG" 2>&1; then
         failed "$project" "scanner_sync"
@@ -158,6 +159,7 @@ refresh_nas() {
             "$REPO_DIR/tools/aag/scan_aads.py" \
             "$REPO_DIR/tools/aag/v2_contract.py" \
             "$REPO_DIR/tools/aag/code_deps.py" \
+            "$REPO_DIR/tools/aag/ops_assets.py" \
             "$REPO_DIR/tools/aag/rules_nas.yml" \
             "$REMOTE_114:$REMOTE_STAGE/" >>"$LOG" 2>&1; then
         failed NAS "scanner_sync"

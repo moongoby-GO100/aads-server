@@ -138,6 +138,34 @@ code_deps:
     tsconfig: frontend/tsconfig.json
     contract_findings: false
 
+# ── 운영 자산 노드·간선 (S2, AAG_SCAN_OPS_ASSETS=0 으로 끈다) ──────────────
+# 의미와 한계는 rules_aads.yml 의 같은 섹션 주석 참조. 존재하지 않는 디렉터리는 건너뛴다.
+ops_assets:
+  script_roots:
+    - scripts
+    - backend/scripts
+    - deploy
+  asset_roots:
+    - scripts
+    - backend/scripts
+    - deploy
+    - systemd
+    - nginx
+    - docker
+    - config
+  asset_root_globs:
+    - "docker-compose*.yml"
+    - "docker-compose*.yaml"
+    - "nginx*.conf"
+    - "*.service"
+    - "*.timer"
+    - "Dockerfile*"
+    - "crontab*"
+  path_prefix_map:
+    - /root/kis-autotrade-v4/
+    - /app/
+
+
 # ── STALE_BACKUP 판정 ───────────────────────────────────────────────────
 backup_patterns:
   - '\.bak$'

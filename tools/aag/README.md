@@ -33,6 +33,43 @@
 프런트 화면 노드(role/route)를 추가로 싣는다. 기존 노드 id·간선 종류는 그대로고 추가만 한다.
 `AAG_SCAN_CODE_DEPS=0` 이면 추출을 건너뛰고 출력이 S1 이전과 같다. 구현은 `code_deps.py`.
 
+## 운영 자산 간선 (S2)
+
+규칙 파일에 `ops_assets:` 섹션이 있으면 스크립트·systemd·crontab 파일·nginx·compose 를 노드로,
+`invokes`(스크립트→스크립트/모듈) · `runs`(timer→service→스크립트, crontab→스크립트, compose→엔트리) ·
+`proxies`(nginx location→upstream/API 네임스페이스) · `uses_image` · `builds` 를 간선으로 더한다.
+노드 kind 는 `script` `systemd_unit` `crontab` `nginx_location` `compose_service` `image` `upstream`
+`dockerfile` 이 늘고, `.py` 스크립트는 `module` 노드에 `role:"script"` 를 붙인다. 기존 id·kind 는 그대로다.
+`AAG_SCAN_OPS_ASSETS=0` 이면 추출을 건너뛰고 출력이 S1 스냅샷과 같다. 구현은 `ops_assets.py`.
+
+- 저장소에 커밋된 상태만 본다. 해석하지 못한 경로는 간선 없이 `unresolved_refs` 로 센다(추측 금지).
+  저장소 밖 절대경로(`/usr/bin/...`, 설치된 사본)는 `external_refs` 다.
+- 간선은 명령의 **실행 대상**에만 생긴다. `bash a.sh b.sh` 에서 `b.sh` 는 인자, `docker cp x.sh …` 는 호출이 아니다.
+  `__file__` 기준 경로(`Path(__file__).parents[1] / "x.sh"`)는 정확히 계산하고, 그 밖의 동적 접두
+  (`f"{root}/x.sh"`)는 `dynamic_path` 로만 센다. 작업 디렉터리(`cwd=`, systemd `WorkingDirectory`,
+  compose `working_dir`, `docker exec -w`, `cd`)가 저장소 밖이거나 미상이면 상대 경로를 저장소 파일에
+  잇지 않는다(`unknown_cwd`). compose 의 실제 argv 는 `entrypoint + command` 이다.
+- 운영 서버의 live crontab·활성 timer 는 이 그래프에 넣지 않는다. `ops_observation.py` +
+  `scripts/aag_ops_collect.py` 가 별도 관측(`aag_ops_observations`)으로 다룬다(읽기 전용, 기본은 계획만 출력).
+- `stats.ops_assets` 에 종류별 노드·간선 수와 해석 실패 표본, `coverage` 에 `scripts_total` /
+  `scripts_as_nodes` / `schedule_nodes` 가 붙는다.
+
+### 운영 수집 활성화 절차
+
+1. 승인된 릴리스 절차에서 `migrations/20261022_aag_ops_observations.sql` 을 먼저 적용한다.
+   기존 그래프 적재 테이블이나 latest pointer 를 변경하지 않는 추가 테이블이다.
+2. 같은 릴리스의 추출기·규칙·수집기를 배포한다. `AAG_SCAN_OPS_ASSETS=0` 으로
+   저장소 운영 자산 추출만 되돌릴 수 있다. 관측 테이블의 기존 데이터는 보존한다.
+3. 각 서버에서 `python3 scripts/aag_ops_collect.py --plan` 으로 명령·형식을 검토한 뒤,
+   운영자가 `--project PROJECT --host HOST --execute --out /tmp/aag-ops.json` 을 실행한다.
+   수집기는 원격 접속을 하지 않으며 두 읽기 명령에 각각 20초 제한을 둔다.
+4. 출력 JSON 을 중앙 적재 호스트로 전달해 `--from-json /tmp/aag-ops.json --sql` 로 검토하고
+   `--from-json /tmp/aag-ops.json --load` 로 적재한다. DB 컨테이너·계정은
+   `AAG_PG_CONTAINER`, `AAG_PG_USER`, `AAG_PG_DB` 로 지정한다.
+5. `command_status` 의 성공 여부와 서버별 최신 `collected_at` 을 확인한다.
+   같은 관측 JSON 재적재만 중복 제거한다. 같은 내용도 새 수집 시각이면 별도 행으로 보존한다.
+   정기 실행 등록은 이 변경에 포함하지 않는다.
+
 ## 고정선(baseline)
 
 `baseline_aads.json` 의 숫자는 **허용치가 아니라 현재 빚**이다.

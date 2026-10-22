@@ -39,10 +39,11 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from tools.aag import code_deps
+    from tools.aag import code_deps, ops_assets
     from tools.aag.v2_contract import STABLE_KEY_VERSION, normalize_findings
 except ModuleNotFoundError:  # direct `python tools/aag/scan_aads.py` execution
     import code_deps
+    import ops_assets
     from v2_contract import STABLE_KEY_VERSION, normalize_findings
 
 KST = timezone(timedelta(hours=9))
@@ -1600,6 +1601,12 @@ class Scan:
         self.code_linked_tests: list[str] = []
         self.code_py_files: list[str] = []
         self.fe_roots_resolved: list[str] = []
+        # AAG_SCAN_OPS_ASSETS=0 이면 S2 추출(스크립트·systemd·cron·nginx·compose)을 통째로 건너뛴다.
+        self.ops_assets_enabled = ops_assets.enabled() and bool(rules.get("ops_assets"))
+        self.ops_assets_stats: dict[str, Any] = {}
+        self.ops_script_files: list[str] = []
+        self.ops_asset_files: list[str] = []
+        self.ops_py_files: list[str] = []
 
     def effective_frontend(self) -> dict[str, Any]:
         """프런트 규칙. S1 이 켜져 있으면 `code_deps.frontend` 가 `frontend` 를 덮어쓴다.
@@ -1924,6 +1931,56 @@ class Scan:
             "frontend_page_routes": routes,
         }
 
+    # ── 운영 자산 (S2) ─────────────────────────────────────────────
+    def scan_ops_assets(self) -> None:
+        """스크립트·운영 자산 파일 목록을 모은다. 실패해도 스캔은 계속한다."""
+        if not self.ops_assets_enabled:
+            return
+        try:
+            cfg = self.rules.get("ops_assets") or {}
+            exclude = self.code_deps_exclude()
+            script_roots = list(cfg.get("script_roots") or [])
+            asset_roots = list(cfg.get("asset_roots") or [])
+            self.ops_script_files = iter_files(self.root, script_roots, [".py", ".sh", ".bash"], exclude)
+            assets = set(iter_files(self.root, asset_roots, [], exclude))
+            ignored = git_ignored_files(self.root)
+            for pattern in cfg.get("asset_root_globs") or []:
+                for p in sorted(self.root.glob(pattern)):
+                    if p.is_file() and p.as_posix() not in ignored:
+                        assets.add(p.relative_to(self.root).as_posix())
+            self.ops_asset_files = sorted(assets)
+            cd_cfg = self.rules.get("code_deps") or {}
+            py_roots = list(cfg.get("python_roots") or cd_cfg.get("python_roots")
+                            or self.rules["scan"]["app_roots"])
+            self.ops_py_files = sorted(
+                set(self.py_files) | set(iter_files(self.root, py_roots, [".py"], exclude))
+            )
+        except Exception as exc:  # noqa: BLE001 — 새 추출이 기존 스냅샷을 막으면 안 된다
+            self.ops_script_files, self.ops_asset_files, self.ops_py_files = [], [], []
+            self.ops_assets_stats = {"enabled": True, "error": f"{type(exc).__name__}: {exc}"}
+            self.warnings.append(f"ops_assets 파일 수집 실패 — 운영 자산 노드 없음: {exc}")
+
+    def _add_ops_assets_graph(self, nodes: dict[str, dict], edges: list[dict], add: Any) -> None:
+        """S2 노드·간선을 **추가만** 한다. 이미 있는 노드의 id·kind 는 바꾸지 않는다."""
+        if self.ops_assets_stats.get("error"):
+            return
+        cfg = self.rules.get("ops_assets") or {}
+        cd_cfg = self.rules.get("code_deps") or {}
+        import_roots = list(cfg.get("python_import_roots") or cd_cfg.get("python_import_roots") or [""])
+        try:
+            result = ops_assets.build(
+                cfg, self.ops_script_files, self.ops_asset_files, self.ops_py_files,
+                lambda rel: read_text(self.root / rel), import_roots, self.api_roots,
+                lambda path: namespace_key(path, self.api_roots), set(nodes), add,
+                lambda node_id: nodes[node_id],
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.ops_assets_stats = {"enabled": True, "error": f"{type(exc).__name__}: {exc}"}
+            self.warnings.append(f"ops_assets 추출 실패 — 운영 자산 간선 없음: {exc}")
+            return
+        self.ops_assets_stats = result["stats"]
+        edges.extend(result["edges"])
+
     # ── 규칙 적용 ──────────────────────────────────────────────────
     def apply_rules(self) -> None:
         sev = self.rules["severity"]
@@ -2017,9 +2074,17 @@ class Scan:
 
         if self.code_deps_enabled:
             self._add_code_deps_graph(nodes, edges, add)
+        if self.ops_assets_enabled:
+            self._add_ops_assets_graph(nodes, edges, add)
 
         self.nodes = sorted(nodes.values(), key=lambda n: (n["kind"], n["id"]))
         self.edges = edges
+        if self.ops_assets_enabled and not self.ops_assets_stats.get("error"):
+            by_kind: dict[str, int] = {}
+            for node in self.nodes:
+                if node["kind"] in ops_assets.NODE_KINDS:
+                    by_kind[node["kind"]] = by_kind.get(node["kind"], 0) + 1
+            self.ops_assets_stats["nodes"] = {k: by_kind.get(k, 0) for k in ops_assets.NODE_KINDS}
         self.ns_owners = {k: sorted(v) for k, v in sorted(ns_owners.items())}
 
 
@@ -2246,6 +2311,18 @@ def compute_coverage(scan: Scan) -> dict[str, Any]:
             "unresolved_imports": (stats.get("py") or {}).get("unresolved_imports", 0)
             + (stats.get("ts") or {}).get("unresolved_imports", 0),
         })
+    if getattr(scan, "ops_assets_enabled", False):
+        # S2 키도 플래그가 켜졌을 때만 붙는다.
+        ops = getattr(scan, "ops_assets_stats", None) or {}
+        scripts_total = len(scan.ops_script_files)
+        scripts_nodes = sum(1 for rel in scan.ops_script_files if rel in node_ids)
+        cov.update({
+            "scripts_total": scripts_total,
+            "scripts_as_nodes": scripts_nodes,
+            "script_node_ratio": _ratio(scripts_nodes, scripts_total),
+            "schedule_nodes": ops.get("schedule_nodes", 0),
+            "ops_unresolved_refs": ops.get("unresolved_refs", 0),
+        })
     return cov
 
 
@@ -2257,6 +2334,19 @@ def _code_deps_scope(scan: Scan) -> dict[str, Any]:
     for edge in scan.edges:
         by_kind[edge["kind"]] = by_kind.get(edge["kind"], 0) + 1
     return {"edges_by_kind": dict(sorted(by_kind.items())), "code_deps": scan.code_deps_stats}
+
+
+def _ops_assets_scope(scan: Scan) -> dict[str, Any]:
+    """플래그 off 면 빈 dict. S1 이 꺼져 있으면 edges_by_kind 도 여기서 채운다."""
+    if not getattr(scan, "ops_assets_enabled", False):
+        return {}
+    out: dict[str, Any] = {"ops_assets": scan.ops_assets_stats}
+    if not getattr(scan, "code_deps_enabled", False):
+        by_kind: dict[str, int] = {}
+        for edge in scan.edges:
+            by_kind[edge["kind"]] = by_kind.get(edge["kind"], 0) + 1
+        out["edges_by_kind"] = dict(sorted(by_kind.items()))
+    return out
 
 
 def build_baseline(scan: Scan) -> dict[str, Any]:
@@ -2282,6 +2372,7 @@ def build_baseline(scan: Scan) -> dict[str, Any]:
             "graph_edges": len(scan.edges),
             "coverage": compute_coverage(scan),
             **_code_deps_scope(scan),
+            **_ops_assets_scope(scan),
         },
         "findings_by_rule": counts_by_rule(scan.findings),
         "stable_key_version": STABLE_KEY_VERSION,
@@ -2400,6 +2491,7 @@ def main(argv: list[str] | None = None) -> int:
         scan.scan_backend()
         scan.scan_frontend()
         scan.scan_code_deps()
+        scan.scan_ops_assets()
     except Exception as exc:  # noqa: BLE001 — 실행 불가와 결함 0건을 반드시 구분한다
         print(f"ERROR: 스캔 실패 — {exc}", file=sys.stderr)
         return 2
