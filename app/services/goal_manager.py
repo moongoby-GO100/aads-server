@@ -809,7 +809,22 @@ class GoalStateMachine:
                     all_done = True
 
             if all_done:
-                outcome = await self._complete_milestone_if_checklist_met(conn, milestone_id)
+                outcome = await self._complete_milestone_if_checklist_met(
+                    conn, milestone_id,
+                    linked_task_ids=[str(link["task_id"]) for link in links],
+                )
+                if outcome["result"] == "gated":
+                    # 완료기준/수동 진행 게이트 — 'completed' 가 아니라 확인 대기. 완료는 confirm 경로로만.
+                    logger.info(
+                        "milestone_autocomplete_gated milestone=%s reason=%s",
+                        milestone_id, outcome["reason"],
+                    )
+                    return {
+                        "milestone_id": milestone_id,
+                        "completed": False,
+                        "status": outcome["status"],
+                        "reason": outcome["reason"],
+                    }
                 if outcome["result"] == "unmet":
                     gate = outcome["gate"]
                     logger.warning(
@@ -870,20 +885,26 @@ class GoalStateMachine:
             }
 
     @staticmethod
-    async def _complete_milestone_if_checklist_met(conn, milestone_id: str) -> dict[str, Any]:
+    async def _complete_milestone_if_checklist_met(
+        conn, milestone_id: str, linked_task_ids: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
         """체크리스트 판정과 완료 쓰기를 마일스톤 행잠금 한 트랜잭션으로 묶는다.
 
         `update_checklist_item` 도 같은 행을 FOR UPDATE 로 잠그므로 판정과 쓰기 사이에
         항목이 되돌려질 수 없고, 잠금이 없는 환경이어도 version CAS 가 막는다.
         다음 단계 진입(`_advance_after_milestone`)은 새 conn 을 쓰므로 호출자가 커밋 뒤에 한다.
-        result: completed(이번 호출이 완료로 바꿈) | already_completed | unmet | version_conflict | missing
+        result: completed(이번 호출이 완료로 바꿈) | already_completed | unmet | gated | version_conflict | missing
+
+        gated: `auto_advance=false` 이거나 `completion_criteria` 가 비어 있지 않으면 연결 task 가 전부
+        끝나도 자동 완료하지 않고 `review` 로 둔다(확인은 milestone_review.confirm 경로로만).
+        pending/in_progress/blocked 일 때만 전환하고, 이미 review 등이면 쓰지 않는다(멱등).
         """
         from app.services.milestone_checklist import evaluate_checklist
 
         async with conn.transaction():
             row = await conn.fetchrow(
                 """
-                SELECT m.status, m.version,
+                SELECT m.status, m.version, m.auto_advance, m.completion_criteria,
                        NULLIF(to_jsonb(m)->'completion_checklist', 'null'::jsonb) AS completion_checklist
                 FROM milestones m WHERE m.id = $1::uuid FOR UPDATE
                 """,
@@ -896,6 +917,39 @@ class GoalStateMachine:
                 return {"result": "unmet", "gate": gate}
             if row["status"] == "completed":
                 return {"result": "already_completed"}
+            criteria = str(row.get("completion_criteria") or "").strip()
+            auto_advance = row.get("auto_advance")
+            gate_reason = (
+                "auto_advance_disabled" if auto_advance is False
+                else "completion_criteria_gate" if criteria
+                else None
+            )
+            if gate_reason:
+                status = row["status"]
+                if status in ("pending", "in_progress", "blocked"):
+                    evidence = {
+                        "summary": "연결 task 전부 완료 — 완료기준 확인 대기 (자동 완료 게이트)",
+                        "source": "linked_tasks_all_done",
+                        "linked_tasks_all_done": True,
+                        "task_ids": list(linked_task_ids or []),
+                    }
+                    tag = await conn.execute(
+                        """
+                        UPDATE milestones SET status = 'review', reported_at = NOW(),
+                               started_at = COALESCE(started_at, NOW()),
+                               evidence = CASE WHEN jsonb_typeof(evidence) = 'object'
+                                               THEN evidence ELSE '{}'::jsonb END || $3::jsonb,
+                               review_asked_at = NULL, review_ask_count = 0,
+                               updated_at = NOW(), version = version + 1
+                        WHERE id = $1::uuid AND status IN ('pending', 'in_progress', 'blocked')
+                          AND version = $2
+                        """,
+                        milestone_id, row["version"], json.dumps(evidence, ensure_ascii=False),
+                    )
+                    if tag != "UPDATE 1":
+                        return {"result": "version_conflict"}
+                    status = "review"
+                return {"result": "gated", "reason": gate_reason, "status": status}
             tag = await conn.execute(
                 """
                 UPDATE milestones SET status = 'completed', completed_at = NOW(), updated_at = NOW(),
