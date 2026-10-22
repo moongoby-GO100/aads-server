@@ -157,7 +157,11 @@ class _TodoConn:
             statuses = set(args[arg_index])
             arg_index += 1
         max_items = None
-        if " LIMIT $" in normalized:
+        offset = 0
+        if " OFFSET $" in normalized:
+            offset = int(args[-1])
+            max_items = int(args[-2])
+        elif " LIMIT $" in normalized:
             max_items = int(args[-1])
 
         rows = []
@@ -174,7 +178,7 @@ class _TodoConn:
 
         rows.sort(key=lambda item: (0 if item["status"] in svc.TODO_ACTIVE_STATUSES else 1, item["sort_order"]))
         if max_items is not None:
-            rows = rows[:max_items]
+            rows = rows[offset:offset + max_items]
         return rows
 
 
@@ -271,6 +275,28 @@ async def test_list_todo_items_caps_response_size():
     listed = await svc.list_todo_items(session_id=session_id, max_items=2, conn=conn)
 
     assert [item["title"] for item in listed] == ["첫 항목", "둘째 항목"]
+
+
+@pytest.mark.asyncio
+async def test_list_todo_items_offset_pages_cover_all_rows_without_overlap():
+    conn = _TodoConn()
+    session_id = str(uuid.uuid4())
+    titles = [f"항목 {n}" for n in range(5)]
+    await svc.create_todo_items(
+        session_id=session_id,
+        message_id=str(uuid.uuid4()),
+        execution_id=str(uuid.uuid4()),
+        titles=titles,
+        source="user_turn",
+        conn=conn,
+    )
+
+    first = await svc.list_todo_items(session_id=session_id, max_items=2, conn=conn)
+    second = await svc.list_todo_items(session_id=session_id, max_items=2, offset=2, conn=conn)
+    third = await svc.list_todo_items(session_id=session_id, max_items=2, offset=4, conn=conn)
+
+    assert [item["title"] for item in first + second + third] == titles
+    assert await svc.list_todo_items(session_id=session_id, max_items=2, offset=10, conn=conn) == []
 
 
 @pytest.mark.asyncio

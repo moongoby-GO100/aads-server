@@ -5089,6 +5089,7 @@ async def get_session_todos(
     session_id: UUID,
     include_completed: bool = Query(False),
     limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0, description="TODO 목록의 페이지 시작 위치"),
     cleanup_stale: bool = Query(False, description="오래된 in_progress todo를 pending으로 정리 (쓰기)"),
     stale_minutes: int = Query(120, ge=5, le=1440),
     include_metadata: bool = Query(False, description="내부 metadata 포함 (기본 제외 — 응답의 약 80%)"),
@@ -5116,6 +5117,7 @@ async def get_session_todos(
             session_id=str(session_id),
             include_completed=include_completed,
             max_items=limit,
+            offset=offset,
         )
         if include_metadata:
             return [ChatTodoItemOut.model_validate(i).model_dump(mode="json") for i in items]
