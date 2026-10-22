@@ -99,6 +99,6 @@ def test_finance_service_keeps_its_own_priority_chain_and_feature_flag():
     assert db_url_fn.index('os.getenv("YEOLJEONG_FINANCE_DATABASE_URL")') < db_url_fn.index(
         'os.getenv("OBYS_DATABASE_URL")'
     )
-    assert db_url_fn.index('os.getenv("OBYS_DATABASE_URL")') < db_url_fn.index('os.getenv("DATABASE_URL"')
+    assert 'os.getenv("DATABASE_URL"' not in db_url_fn
     assert 'return url.replace("postgresql://", "postgre' in db_url_fn
-    assert 'if url else ""' in db_url_fn
+    assert "if not url:" in db_url_fn and 'return ""' in db_url_fn

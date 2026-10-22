@@ -937,6 +937,19 @@ def require_journal_write_enabled() -> None:
         )
 
 
+ACCOUNTING_WRITE_FROZEN_CODE = "accounting_write_moved_to_acct"
+ACCOUNTING_WRITE_FROZEN_MESSAGE = "회계 정본은 ACCT(회계원장)입니다. 오비서에서는 세금신고서·분류규칙을 생성·수정·삭제할 수 없습니다."
+
+
+def require_accounting_write_enabled() -> None:
+    """세금신고서·분류규칙 쓰기도 전표와 같은 OBYS_JOURNAL_WRITE_FROZEN 스위치를 따른다."""
+    if journal_writes_are_frozen():
+        raise HTTPException(
+            status_code=409,
+            detail={"code": ACCOUNTING_WRITE_FROZEN_CODE, "message": ACCOUNTING_WRITE_FROZEN_MESSAGE},
+        )
+
+
 def _require_approve(user: dict[str, Any]) -> None:
     membership = user.get("current_membership") or {}
     if (str(membership.get("tenant_id") or "") != str(user.get("tenant_id") or "")

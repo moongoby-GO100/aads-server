@@ -29,7 +29,7 @@ import subprocess
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from app.services.server_registry import get_server_host, get_server_ssh_port
 
@@ -1156,6 +1156,28 @@ def _dsn_host_port(dsn: str) -> str:
     return f"{host}:{port}"
 
 
+# 전표·원천(journal_entry/journal_line/source_file/atom_record)이 들어 있는 ACCT DB 이름.
+# cafe24_114 acct-pg 에는 obys/obys_auth/acct 3개 DB 가 있고 전표 테이블은 acct 에만 있다.
+# ACCT_DB_NAME/DSN 의 DB(obys)는 다른 용도라 acct_purchase·acct_sales 는 이 키로 DB 를 따로 고른다.
+_ACCT_LEDGER_DB_ENV = "ACCT_LEDGER_DB_NAME"
+_DEFAULT_ACCT_LEDGER_DB = "acct"
+_DB_NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,63}$")
+
+
+def acct_ledger_database_name() -> str:
+    """전표 조회가 붙을 DB 이름. 환경변수 ACCT_LEDGER_DB_NAME, 없으면 acct."""
+    name = (os.getenv(_ACCT_LEDGER_DB_ENV) or "").strip() or _DEFAULT_ACCT_LEDGER_DB
+    if not _DB_NAME_RE.match(name):
+        raise ValueError(f"{_ACCT_LEDGER_DB_ENV} 형식이 올바르지 않습니다")
+    return name
+
+
+def _dsn_with_database(dsn: str, database: str) -> str:
+    """DSN 의 DB 이름(경로)만 바꾼다. 사용자·비밀번호·호스트·쿼리는 그대로 둔다."""
+    parts = urlsplit(dsn)
+    return urlunsplit((parts.scheme, parts.netloc, "/" + database, parts.query, parts.fragment))
+
+
 def _resolve_acct_connection() -> Dict[str, Optional[str]]:
     """query_acct_database 의 접속 경로를 고른다 (우선순위 순).
 
@@ -1202,7 +1224,7 @@ def _resolve_acct_connection() -> Dict[str, Optional[str]]:
     }
 
 async def query_acct_database(
-    sql: str, acct_tenant_id: Optional[str] = None
+    sql: str, acct_tenant_id: Optional[str] = None, database: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     ACCT DB를 acct_app 전용 커넥션으로 조회한다.
@@ -1217,6 +1239,7 @@ async def query_acct_database(
     Args:
         sql: SELECT/WITH/EXPLAIN 쿼리
         acct_tenant_id: 숫자 tenant id. 주어지면 SET LOCAL acct.tenant_id 로 스코프 적용
+        database: 주어지면 DSN/ACCT_DB_NAME 의 DB 대신 이 DB 로 접속(전표는 acct DB)
 
     Returns:
         {"rows": list[dict], "columns": list[str], "row_count": int}
@@ -1226,6 +1249,8 @@ async def query_acct_database(
     error = validate_query(sql)
     if error:
         return {"error": error}
+    if database is not None and not _DB_NAME_RE.match(database):
+        return {"error": "database 이름 형식이 올바르지 않습니다"}
 
     tenant_value: Optional[str] = None
     if acct_tenant_id is not None:
@@ -1246,11 +1271,12 @@ async def query_acct_database(
         }
 
     q = sql.strip().rstrip(";")
+    connect_dsn = _dsn_with_database(dsn, database) if dsn and database else dsn
 
     try:
-        if dsn:
+        if connect_dsn:
             conn = await asyncpg.connect(
-                dsn,
+                connect_dsn,
                 timeout=_PG_POOL_CONNECT_TIMEOUT_SECONDS,
             )
         else:
@@ -1258,7 +1284,7 @@ async def query_acct_database(
             conn = await asyncpg.connect(
                 host="127.0.0.1",
                 port=local_port,
-                database=os.getenv("ACCT_DB_NAME"),
+                database=database or os.getenv("ACCT_DB_NAME"),
                 user=app_user,
                 password=app_password,
                 timeout=_PG_POOL_CONNECT_TIMEOUT_SECONDS,
@@ -1290,7 +1316,7 @@ async def query_acct_database(
         return {"error": f"DB 쿼리 시간 초과: {_PROJECT_DB_QUERY_TIMEOUT_SECONDS}초 초과"}
     except Exception as exc:
         safe_msg = _redact_ssh_key_paths(str(exc))
-        for secret in (dsn, app_user, app_password):
+        for secret in (dsn, connect_dsn, app_user, app_password):
             if secret:
                 safe_msg = safe_msg.replace(secret, "<redacted>")
         if any(kw in safe_msg.lower() for kw in ("password", "postgresql://", "credentials")):

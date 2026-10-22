@@ -1,7 +1,7 @@
 """ACCT 매입자료 화면 API (ACCT-LAYOUT-002).
 
-진아서버(jinah244) `acct` DB 에 적재된 위하고(WEHAGO) 카드매입 스냅샷을
-매입전표 그리드·마스터·검증 결과 형태로 돌려준다.
+cafe24_114 `acct-pg` 의 `acct` DB 에 적재된 위하고(WEHAGO) 카드매입 스냅샷을
+매입전표 그리드·마스터·검증 결과 형태로 돌려준다. (진아서버 jinah244 는 사용 중단.)
 
 데이터 경로
 -----------
@@ -13,6 +13,8 @@ rec_idx 기준으로 pivot 해서 전표 1건을 만든다. 기본 스냅샷은
 연결은 `ceo_chat_tools_db.query_acct_database` 를 재사용한다 —
 SSH 터널 + `acct_app` 자격증명 + 읽기전용 트랜잭션이 이미 그쪽에 있고,
 자격증명을 이 모듈에서 다시 다루지 않기 위해서다(R-KEY).
+접속 DB 는 `ACCT_LEDGER_DB_NAME`(기본 `acct`)으로 고른다 — acct-pg 의 `obys` DB 에는
+journal_entry/journal_line 이 없어 `ACCT_DB_NAME`/DSN 의 DB 를 그대로 쓰면 조회가 실패한다.
 
 보안
 ----
@@ -34,7 +36,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from app.api.ceo_chat_tools_db import query_acct_database
+from app.api.ceo_chat_tools_db import acct_ledger_database_name, query_acct_database
 from app.auth import get_current_user
 from app.services import obys_upload_service as obys_upload_svc
 
@@ -193,8 +195,16 @@ def _mask_pan(pan: Optional[str]) -> Optional[str]:
     return f"{head}-****-****-{tail}"
 
 
+def _ledger_database() -> str:
+    try:
+        return acct_ledger_database_name()
+    except ValueError as exc:
+        logger.error("acct_purchase: ACCT_LEDGER_DB_NAME 형식 오류")
+        raise HTTPException(status_code=503, detail="ACCT 원장 DB 설정이 올바르지 않습니다") from exc
+
+
 async def _fetch(sql: str) -> List[Dict[str, Any]]:
-    result = await query_acct_database(sql)
+    result = await query_acct_database(sql, database=_ledger_database())
     if isinstance(result, dict) and result.get("error"):
         logger.error("acct_purchase: ACCT 조회 실패 | %s", result["error"])
         raise HTTPException(status_code=502, detail=f"ACCT DB 조회 실패: {result['error']}")
@@ -203,7 +213,9 @@ async def _fetch(sql: str) -> List[Dict[str, Any]]:
 
 async def _fetch_acct_journals(sql: str, acct_tenant_id: int) -> List[Dict[str, Any]]:
     """ACCT journal reads always carry the RLS tenant selected from JWT scope."""
-    result = await query_acct_database(sql, acct_tenant_id=str(acct_tenant_id))
+    result = await query_acct_database(
+        sql, acct_tenant_id=str(acct_tenant_id), database=_ledger_database()
+    )
     if isinstance(result, dict) and result.get("error"):
         logger.error("acct_purchase: ACCT journal 조회 실패 | %s", result["error"])
         raise HTTPException(status_code=502, detail="ACCT 전표 조회 실패")

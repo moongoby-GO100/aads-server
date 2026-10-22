@@ -312,7 +312,7 @@
       request(`${API.accounting}/summary`), request(`${API.accounting}/tax-reports`)
     ]);
     byId("taxSummaryRows").innerHTML = [progress("매출", money(summary.total_sales)), progress("매입", money(summary.total_purchases)), progress("비용", money(summary.total_expenses)), progress("영업손익", money(summary.operating_profit))].join("");
-    byId("taxLedgerRows").innerHTML = reports.length ? reports.map(row => `<tr><td>${escapeHtml(text(row, "report_type"))}</td><td>${escapeHtml(text(row, "period_start"))} ~ ${escapeHtml(text(row, "period_end"))}</td><td>${escapeHtml(text(row, "status"))}</td><td>신고서 검토</td></tr>`).join("") : emptyRow(4, "등록된 세무 신고 자료가 없습니다.");
+    byId("taxLedgerRows").innerHTML = reports.length ? reports.map(row => `<tr><td>${escapeHtml(text(row, "report_type"))}</td><td>${escapeHtml(text(row, "period_start"))} ~ ${escapeHtml(text(row, "period_end"))}</td><td>${escapeHtml(text(row, "filing_label", "status"))}</td><td>신고서 검토</td></tr>`).join("") : emptyRow(4, "등록된 세무 신고 자료가 없습니다.");
     if (byId("taxLedgerBadge")) byId("taxLedgerBadge").textContent = `실DB ${reports.length}건`;
   }
 

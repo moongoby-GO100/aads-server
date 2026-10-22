@@ -18,8 +18,14 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from fastapi import HTTPException
+
 from app.core.obys_db import obys_db_url
-from app.services.obys_upload_service import require_journal_write_enabled
+from app.services import yeoljeong_withholding as withholding
+from app.services.obys_upload_service import (
+    require_accounting_write_enabled,
+    require_journal_write_enabled,
+)
 
 KST = timezone(timedelta(hours=9))
 
@@ -67,8 +73,11 @@ DEFAULT_CATEGORY_RULES: list[tuple[str, tuple[str, ...]]] = [
 # 매입(purchase)으로 취급하는 카테고리. 그 외 지출성 카테고리는 경비(expense).
 PURCHASE_CATEGORIES = {"식자재"}
 
-# 사업소득 원천징수세율 (프리랜서/일용직 3.3% 근사치)
-WITHHOLDING_TAX_RATE = 0.033
+# 사업소득 원천징수 합산 세율(소득세 3% + 지방소득세 0.3%). 값과 출처는 yeoljeong_withholding 이 정본이다.
+# 소득 구분 없이 이 값을 일괄 적용하지 않는다 — 원천세 신고는 income_kind 별로 계산한다.
+WITHHOLDING_TAX_RATE = float(
+    withholding.BUSINESS_INCOME_TAX_RATE * (1 + withholding.LOCAL_INCOME_TAX_RATIO)
+)
 
 
 def _match_category(text: str, custom_rules: list[dict[str, Any]]) -> tuple[str, str, str]:
@@ -447,12 +456,31 @@ async def get_pnl(
 # ---------------------------------------------------------------------------
 # 세무신고 (yeoljeong_tax_reports)
 # ---------------------------------------------------------------------------
+def _withholding_figures(income_kind: Any, labor_cost: float) -> tuple[Any, dict[str, Any]]:
+    """원천세 신고의 세액과 근거. 검증되지 않았거나 구분이 없으면 세액은 None(계산하지 않음)."""
+    kind = str(income_kind or "").strip()
+    if not kind:
+        return None, {
+            "status": "verification_required",
+            "income_kind": "",
+            "reason": "소득 구분(income_kind)이 없어 원천세를 계산하지 않았다",
+        }
+    try:
+        result = withholding.compute_withholding(kind, labor_cost)
+    except withholding.WithholdingUnverified as exc:
+        return None, {"status": "verification_required", "income_kind": kind, "reason": exc.reason}
+    except withholding.WithholdingKindUnknown as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return result["total"], {"status": "computed", **result}
+
+
 async def _calculate_tax_figures(
     conn: Any,
     business_id: str,
     report_type: str,
     period_start: Any,
     period_end: Any,
+    income_kind: Any = None,
 ) -> dict[str, Any]:
     rows = _rows(
         await conn.fetch(
@@ -482,8 +510,16 @@ async def _calculate_tax_figures(
         float(r["debit_total"]) - float(r["credit_total"]) for r in rows if r["category"] == "인건비"
     )
 
+    details: dict[str, Any] = {
+        "output_vat": output_vat,
+        "input_vat": input_vat,
+        "labor_cost": labor_cost,
+        "by_category": rows,
+    }
     if report_type == "withholding":
-        tax_amount = round(labor_cost * WITHHOLDING_TAX_RATE)
+        tax_amount, details["withholding"] = _withholding_figures(income_kind, labor_cost)
+        if details["withholding"]["status"] == "computed":
+            details["withholding_rate"] = WITHHOLDING_TAX_RATE
     else:
         tax_amount = vat_payable
 
@@ -492,14 +528,82 @@ async def _calculate_tax_figures(
         "total_purchases": total_purchases,
         "vat_payable": vat_payable,
         "tax_amount": tax_amount,
-        "details": {
-            "output_vat": output_vat,
-            "input_vat": input_vat,
-            "labor_cost": labor_cost,
-            "withholding_rate": WITHHOLDING_TAX_RATE,
-            "by_category": rows,
-        },
+        "details": details,
     }
+
+
+# ---------------------------------------------------------------------------
+# 신고 접수 구분 (P-10) — submitted 는 자기선언이다. 접수번호·접수일시가 있어야 접수 완료.
+# ---------------------------------------------------------------------------
+TAX_REPORT_STATUSES = ("draft", "file_generated", "submitted", "receipt_confirmed")
+_TAX_FILING_LABELS = {
+    "draft": "초안",
+    "file_generated": "신고 파일 생성(미제출)",
+    "submitted": "제출 선언(접수번호 없음 · 신고 완료 아님)",
+    "receipt_confirmed": "접수 완료",
+}
+_RECEIPT_PLACEHOLDERS = frozenset({"-", "--", "없음", "미정", "n/a", "na", "tbd", "none", "null", "unknown", "?", "0"})
+_RECEIPT_NUMBER_MAX = 64
+_NUMERIC_REPORT_FIELDS = ("total_sales", "total_purchases", "vat_payable", "tax_amount")
+
+
+def _details_of(row: dict[str, Any]) -> dict[str, Any]:
+    details = row.get("details")
+    if isinstance(details, str):
+        try:
+            details = json.loads(details)
+        except ValueError:
+            details = {}
+    return details if isinstance(details, dict) else {}
+
+
+def filing_view(row: dict[str, Any]) -> dict[str, Any]:
+    """신고서 행에 접수 구분 필드를 덧붙인다. 접수번호·접수일시 없이는 filing_complete 가 거짓이다."""
+    out = dict(row)
+    receipt = _details_of(row).get("receipt")
+    receipt = receipt if isinstance(receipt, dict) else {}
+    number = str(receipt.get("receipt_number") or "").strip()
+    received_at = receipt.get("received_at")
+    status = str(row.get("status") or "draft")
+    complete = status == "receipt_confirmed" and bool(number) and bool(received_at)
+    if status == "receipt_confirmed" and not complete:
+        label = "접수번호 없음 · 신고 완료 아님"
+    else:
+        label = _TAX_FILING_LABELS.get(status, f"알 수 없는 상태({status})")
+    out["filing_complete"] = complete
+    out["filing_label"] = label
+    out["receipt_number"] = number if complete else ""
+    out["receipt_received_at"] = received_at if complete else None
+    return out
+
+
+def _clean_receipt_number(value: Any) -> str:
+    number = str(value or "").strip()
+    if (
+        not number
+        or len(number) > _RECEIPT_NUMBER_MAX
+        or number.lower() in _RECEIPT_PLACEHOLDERS
+        or any(ch.isspace() or ord(ch) < 32 for ch in number)
+    ):
+        raise HTTPException(status_code=422, detail="접수 완료에는 유효한 접수번호가 필요합니다")
+    return number
+
+
+def _clean_received_at(value: Any) -> datetime:
+    if value in (None, ""):
+        raise HTTPException(status_code=422, detail="접수 완료에는 접수일시가 필요합니다")
+    if isinstance(value, datetime):
+        moment = value
+    else:
+        try:
+            moment = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="접수일시 형식이 올바르지 않습니다") from exc
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=KST)
+    if moment > _now() + timedelta(minutes=5):
+        raise HTTPException(status_code=422, detail="접수일시가 미래입니다")
+    return moment
 
 
 async def list_tax_reports(business_id: str = "biz-mia", report_type: str | None = None) -> list[dict[str, Any]]:
@@ -517,12 +621,13 @@ async def list_tax_reports(business_id: str = "biz-mia", report_type: str | None
             f"SELECT * FROM yeoljeong_tax_reports WHERE {where} ORDER BY period_start DESC, created_at DESC",
             *params,
         )
-        return _rows(rows)
+        return [filing_view(r) for r in _rows(rows)]
     finally:
         await conn.close()
 
 
 async def create_tax_report(payload: dict[str, Any]) -> dict[str, Any]:
+    require_accounting_write_enabled()
     import asyncpg
 
     business_id = payload.get("business_id") or "biz-mia"
@@ -532,7 +637,9 @@ async def create_tax_report(payload: dict[str, Any]) -> dict[str, Any]:
 
     conn = await asyncpg.connect(_db_url(), timeout=5)
     try:
-        figures = await _calculate_tax_figures(conn, business_id, report_type, period_start, period_end)
+        figures = await _calculate_tax_figures(
+            conn, business_id, report_type, period_start, period_end, payload.get("income_kind")
+        )
         row = await conn.fetchrow(
             """
             INSERT INTO yeoljeong_tax_reports (
@@ -552,7 +659,7 @@ async def create_tax_report(payload: dict[str, Any]) -> dict[str, Any]:
             json.dumps(figures["details"], ensure_ascii=False, default=str),
             payload.get("memo") or "",
         )
-        return _row(row)
+        return filing_view(_row(row))
     finally:
         await conn.close()
 
@@ -567,25 +674,60 @@ _TAX_REPORT_EDITABLE_FIELDS = (
 )
 
 
+async def tax_report_business_id(report_id: str) -> str | None:
+    """신고서가 속한 사업자(테넌트 소유 확인용). 없으면 None."""
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        return await conn.fetchval("SELECT business_id FROM yeoljeong_tax_reports WHERE id = $1", report_id)
+    finally:
+        await conn.close()
+
+
 async def update_tax_report(report_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    require_accounting_write_enabled()
     import asyncpg
 
     fields = {k: v for k, v in payload.items() if k in _TAX_REPORT_EDITABLE_FIELDS and v is not None}
+    status = fields.get("status")
+    if status is not None and status not in TAX_REPORT_STATUSES:
+        raise HTTPException(status_code=422, detail=f"알 수 없는 신고 상태: {status}")
+    has_receipt_input = bool(payload.get("receipt_number")) or payload.get("receipt_received_at") is not None
+    receipt: dict[str, Any] | None = None
+    if status == "receipt_confirmed":
+        receipt = {
+            "receipt_number": _clean_receipt_number(payload.get("receipt_number")),
+            "received_at": _clean_received_at(payload.get("receipt_received_at")).isoformat(),
+        }
+    elif has_receipt_input:
+        raise HTTPException(status_code=422, detail="접수번호·접수일시는 상태를 receipt_confirmed 로 바꿀 때만 입력한다")
+
     conn = await asyncpg.connect(_db_url(), timeout=5)
     try:
+        current = await conn.fetchrow("SELECT status FROM yeoljeong_tax_reports WHERE id = $1", report_id)
+        if current is None:
+            return None
+        if current["status"] == "receipt_confirmed":
+            if status not in (None, "receipt_confirmed") or any(f in fields for f in _NUMERIC_REPORT_FIELDS):
+                raise HTTPException(status_code=409, detail="접수 완료된 신고서의 상태·금액은 바꿀 수 없다")
+            if receipt is not None:
+                raise HTTPException(status_code=409, detail="이미 접수 완료된 신고서다")
         set_clauses = []
         params: list[Any] = [report_id]
         for key, value in fields.items():
             params.append(value)
             set_clauses.append(f"{key} = ${len(params)}")
-        if fields.get("status") == "submitted":
+        if status in ("submitted", "receipt_confirmed"):
             params.append(_now())
-            set_clauses.append(f"submitted_at = ${len(params)}")
+            set_clauses.append(f"submitted_at = COALESCE(submitted_at, ${len(params)})")
+        if receipt is not None:
+            params.append(json.dumps(receipt, ensure_ascii=False))
+            set_clauses.append(
+                f"details = COALESCE(details, '{{}}'::jsonb) || jsonb_build_object('receipt', ${len(params)}::jsonb)"
+            )
         params.append(_now())
         set_clauses.append(f"updated_at = ${len(params)}")
-        if not set_clauses:
-            row = await conn.fetchrow("SELECT * FROM yeoljeong_tax_reports WHERE id = $1", report_id)
-            return _row(row) if row else None
         row = await conn.fetchrow(
             f"""
             UPDATE yeoljeong_tax_reports
@@ -595,7 +737,7 @@ async def update_tax_report(report_id: str, payload: dict[str, Any]) -> dict[str
             """,
             *params,
         )
-        return _row(row) if row else None
+        return filing_view(_row(row)) if row else None
     finally:
         await conn.close()
 
@@ -610,14 +752,16 @@ async def calculate_tax_report(report_id: str) -> dict[str, Any] | None:
         if not report:
             return None
         report = _row(report)
+        stored_kind = (_details_of(report).get("withholding") or {}).get("income_kind")
         figures = await _calculate_tax_figures(
             conn,
             report["business_id"],
             report["report_type"],
             report["period_start"],
             report["period_end"],
+            stored_kind,
         )
-        return {**report, **figures}
+        return {**filing_view(report), **figures}
     finally:
         await conn.close()
 
@@ -640,6 +784,7 @@ async def list_category_rules(business_id: str = "biz-mia") -> list[dict[str, An
 
 
 async def create_category_rule(payload: dict[str, Any]) -> dict[str, Any]:
+    require_accounting_write_enabled()
     import asyncpg
 
     conn = await asyncpg.connect(_db_url(), timeout=5)
@@ -663,7 +808,28 @@ async def create_category_rule(payload: dict[str, Any]) -> dict[str, Any]:
         await conn.close()
 
 
+async def category_rule_business_id(rule_id: str) -> str | None:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        return await conn.fetchval("SELECT business_id FROM yeoljeong_category_rules WHERE id = $1", rule_id)
+    finally:
+        await conn.close()
+
+
+async def entry_business_id(entry_id: str) -> str | None:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        return await conn.fetchval("SELECT business_id FROM yeoljeong_accounting_entries WHERE id = $1", entry_id)
+    finally:
+        await conn.close()
+
+
 async def delete_category_rule(rule_id: str) -> bool:
+    require_accounting_write_enabled()
     import asyncpg
 
     conn = await asyncpg.connect(_db_url(), timeout=5)

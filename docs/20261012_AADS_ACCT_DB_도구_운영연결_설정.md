@@ -31,6 +31,16 @@ ACCT_APP_DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/obys
   열지 않으면 `obys-jinah-tunnel.service` 처럼 호스트 측 터널의 로컬 포트를 `<host>:<port>` 로 지정한다.
   컨테이너에서 호스트 터널로 붙으려면 localhost 가 아니라 호스트 게이트웨이 주소가 필요하다(실측 필요).
 
+## 전표 조회 DB 선택 (2026-10-22, 오비서 H3 P-15)
+
+cafe24_114 `acct-pg` 에는 DB 가 셋(`obys`, `obys_auth`, `acct`)이고 `journal_entry`/`journal_line` 은 `acct` 에만 있다.
+위 DSN 의 DB 이름이 `/obys` 이면 전표 쿼리가 "relation does not exist" 로 실패한다. 그래서 `acct_purchase` 의 전표 조회는
+DSN 의 DB 이름을 덮어써 `ACCT_LEDGER_DB_NAME`(기본 `acct`)에 붙는다. 터널 모드는 `ACCT_DB_NAME` 대신 이 값을 쓴다.
+
+- 같은 계정이 `acct` DB 에 CONNECT 권한이 있어야 한다. 2026-10-22 읽기 전용 점검에서
+  `permission denied for database "acct"` 가 났다 — 권한 부여(운영 DB 쓰기)는 이 작업에서 하지 않았다. 운영 담당이 처리한다.
+- 변수 이름 외에 값은 문서에 적지 않는다(R-KEY).
+
 ## 진단
 
 연결 실패 시 서버 로그에 `query_acct_database: 연결 실패 | mode=<경로> target=<host:port>` 가 남는다.
