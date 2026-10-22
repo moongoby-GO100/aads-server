@@ -37,6 +37,7 @@ SWEEP_BATCH="${SWEEP_BATCH:-5}"                      # 1회 실행당 재검수 
 SWEEP_MAX_RETRY="${REVIEW_RETRY_MAX:-${SWEEP_MAX_RETRY:-3}}" # 잡당 실제 재검수 상한
 ORIGIN_ADJUDICATION_RETRY_THRESHOLD="${REVIEW_ORIGIN_ADJUDICATION_RETRY_THRESHOLD:-3}"
 ORIGIN_ADJUDICATION_TIMEOUT_MIN="${REVIEW_ORIGIN_ADJUDICATION_TIMEOUT_MIN:-120}"
+CTO_ADJUDICATION_SESSION_ID="${REVIEW_CTO_ADJUDICATION_SESSION_ID:-}"
 SWEEP_BACKOFF_BASE_MIN="${SWEEP_BACKOFF_BASE_MIN:-10}"
 SWEEP_BACKOFF_MAX_MIN="${SWEEP_BACKOFF_MAX_MIN:-360}"
 # 연속으로 이만큼 인프라 사유 실패가 나오면 그때 배치를 멈춘다(진짜 회로 개방).
@@ -381,7 +382,8 @@ terminate_review_hold() {
                  error_message=COALESCE(error_message, 'review job terminated: ${detail}'),
                  claimed_by=NULL, lease_expires_at=NULL,
                  completed_at=COALESCE(completed_at, NOW()), updated_at=NOW()
-             WHERE ohvis_task_id LIKE 'review-adjudication:${job_id}:%'
+             WHERE (ohvis_task_id LIKE 'review-adjudication:${job_id}:%'
+                    OR ohvis_task_id LIKE 'review-adjudication-cto:${job_id}:%')
                AND status IN ('pending','claimed');"
     return 0
 }
@@ -477,6 +479,7 @@ WHERE status='review_hold'
   AND COALESCE(review_retry_count,0) < ${SWEEP_MAX_RETRY}
   AND (COALESCE(error_detail,'') <> 'review_origin_adjudication_pending'
        OR updated_at < NOW() - (${ORIGIN_ADJUDICATION_TIMEOUT_MIN}::text || ' minutes')::interval)
+  AND COALESCE(error_detail,'') <> 'review_cto_adjudication_pending'
   AND (review_retry_last_at IS NULL
        OR review_retry_last_at < NOW() - ((LEAST(${SWEEP_BACKOFF_MAX_MIN},
             (${SWEEP_BACKOFF_BASE_MIN} * POWER(2, COALESCE(review_retry_count,0)))::int))::text || ' minutes')::interval)
@@ -508,6 +511,13 @@ infra_retry() {
     log "  INFRA_RETRY ${jid} project=${proj} retry=${nxt}/${SWEEP_MAX_RETRY} ${reason}"
     if [[ "$nxt" -ge "$SWEEP_MAX_RETRY" ]]; then
         log "  REVIEW_RETRY_EXHAUSTED ${jid} project=${proj} retry=${nxt}/${SWEEP_MAX_RETRY}"
+        # 두 임계값 기본이 같아도 원 세션 이관이 종결보다 먼저 와야 한다.
+        # 실제로 이관됐을 때(error_detail=review_origin_adjudication_pending)만 종결을 미룬다.
+        if [[ "$nxt" -ge "$ORIGIN_ADJUDICATION_RETRY_THRESHOLD" ]] \
+           && enqueue_origin_adjudication "$jid" "$proj"; then
+            log "  ORIGIN_THRESHOLD ${jid} — 재검수 상한 도달, 종결 대신 원 세션 판정 이관"
+            return
+        fi
         terminate_review_hold "$jid" "review_failed" \
             "자동 재검수 상한(${SWEEP_MAX_RETRY}) 도달 — ${reason}"
         terminated=$((terminated + 1))
@@ -515,7 +525,7 @@ infra_retry() {
     fi
     if [[ "$nxt" -ge "$ORIGIN_ADJUDICATION_RETRY_THRESHOLD" ]]; then
         log "  ORIGIN_THRESHOLD ${jid} — 연속 무응답 판정 상한 도달, 원 세션 판정 이관"
-        enqueue_origin_adjudication "$jid" "$proj"
+        enqueue_origin_adjudication "$jid" "$proj" || true
     fi
 }
 
@@ -543,7 +553,7 @@ WITH target AS (
        AND j.status='review_hold'
        AND j.review_flag_category IN (${INFRA_CATEGORIES})
        AND COALESCE(j.review_retry_count,0) >= ${ORIGIN_ADJUDICATION_RETRY_THRESHOLD}
-       AND COALESCE(j.error_detail,'') <> 'review_origin_adjudication_expired'
+       AND COALESCE(j.error_detail,'') NOT IN ('review_origin_adjudication_expired', 'review_cto_adjudication_pending')
        AND COALESCE(j.commit_hash,'') ~ '^[0-9a-fA-F]{7,64}$'
        AND COALESCE(j.git_diff,'') <> ''
 ), marked AS (
@@ -569,19 +579,146 @@ RETURNING id::text;" 2>/dev/null | tr -d '[:space:]') || deferred_id=""
     if [[ -n "$deferred_id" ]]; then
         handed=$((handed + 1))
         log "  ORIGIN_ADJUDICATION_ENQUEUED ${jid} project=${proj} deferred=${deferred_id:0:8}"
-    else
-        log "  ORIGIN_ADJUDICATION_DEDUPED_OR_BLOCKED ${jid} project=${proj}"
+        return 0
     fi
+    log "  ORIGIN_ADJUDICATION_DEDUPED_OR_BLOCKED ${jid} project=${proj}"
+    # 멱등 차단이어도 이미 같은 증거의 요청이 살아 있으면 이관된 상태다.
+    # 호출자가 종결을 미룰지 판단하도록 실제 표식으로 확인한다.
+    local now_detail
+    now_detail=$(db_query "SELECT COALESCE(error_detail,'') FROM pipeline_jobs
+        WHERE job_id='${jid}' AND status='review_hold';" 2>/dev/null | tr -d '[:space:]') || now_detail=""
+    [[ "$now_detail" == "review_origin_adjudication_pending" ]]
 }
 
-# 원 세션 판정에도 명시적인 시간 상한이 있다. 상한이 끝난 작업을 다시 검수
-# 모델 백오프로 돌리면 원 세션과 모델 사이를 영구 순환하며 review_hold 건수가
-# 줄지 않는다. 이미 만료 표식이 남은 기존 적체를 스위프 시작 시 먼저 종결한다.
+# 원 세션 판정이 제한시간 안에 오지 않으면 곧바로 종결하지 않고 CTO 독립판정을
+# 1회 이관한다. 같은 tenant 의 role_key='CTO' 이고 원 세션과 다른 세션 중 최근
+# 활동 1개(REVIEW_CTO_ADJUDICATION_SESSION_ID 가 있으면 우선)에 원 세션 요청과
+# 같은 형식의 read-only 판정 요청을 넣는다. 판정 제출은 pipeline_review_adjudicate
+# 경로 그대로이며 승인 우회는 없다. 같은 증거(job/commit/diff)는 ohvis_task_id 로 멱등.
+# 이관되지 않으면(CTO 세션 없음·commit/diff 없음 등) 1을 돌려준다.
+enqueue_cto_adjudication() {
+    local jid="$1" proj="$2" deferred_id="" pinned_sql="NULL"
+    if [[ "$CTO_ADJUDICATION_SESSION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+        pinned_sql="'${CTO_ADJUDICATION_SESSION_ID,,}'"
+    fi
+    deferred_id=$(db_query "
+WITH target AS (
+    SELECT j.job_id, j.project, j.chat_session_id AS origin_session,
+           lower(j.commit_hash) AS commit_sha,
+           encode(digest(j.git_diff, 'sha256'), 'hex') AS diff_sha256,
+           length(j.git_diff) AS diff_bytes,
+           'review-adjudication-cto:' || j.job_id || ':' || lower(j.commit_hash) || ':' ||
+             encode(digest(j.git_diff, 'sha256'), 'hex') AS dedupe_key,
+           j.tenant_id
+      FROM pipeline_jobs j
+     WHERE j.job_id='${jid}'
+       AND j.project='${proj}'
+       AND j.status='review_hold'
+       AND COALESCE(j.error_detail,'') IN ('review_origin_adjudication_expired', 'review_cto_adjudication_pending')
+       AND COALESCE(j.commit_hash,'') ~ '^[0-9a-fA-F]{7,64}$'
+       AND COALESCE(j.git_diff,'') <> ''
+), cto AS (
+    SELECT t.*, s.id AS session_id
+      FROM target t
+      JOIN chat_sessions s
+        ON s.tenant_id = t.tenant_id
+       AND s.role_key = 'CTO'
+       AND s.id::text <> COALESCE(t.origin_session, '')
+     ORDER BY (s.id::text = ${pinned_sql}) DESC NULLS LAST, s.updated_at DESC
+     LIMIT 1
+), marked AS (
+    UPDATE pipeline_jobs j
+       SET error_detail='review_cto_adjudication_pending', updated_at=NOW()
+      FROM cto c
+     WHERE j.job_id=c.job_id AND j.status='review_hold'
+       AND COALESCE(j.error_detail,'') = 'review_origin_adjudication_expired'
+    RETURNING c.*
+)
+INSERT INTO chat_deferred_reactions
+       (session_id, system_message, ohvis_task_id, status, attempts, created_at, updated_at)
+SELECT m.session_id,
+       format('[시스템] Pipeline review 인프라가 자동 재검수 상한에 도달했고 원 세션 판정도 제한시간 안에 오지 않았습니다. 이 요청은 CTO 독립 read-only 판정입니다. 코드·Git·DB·배포를 변경하지 말고 저장된 instruction, git_diff, 테스트 증거만 검토하십시오. job_id=%s project=%s commit_sha=%s diff_sha256=%s diff_bytes=%s. 판정 후 pipeline_review_adjudicate(job_id, expected_commit_sha, expected_diff_sha256, verdict=APPROVE|REJECT|UNKNOWN, findings)를 정확히 1회 호출하십시오. APPROVE는 awaiting_approval까지만 이동하며 push·배포를 수행하지 않습니다. 최종 승인은 CEO 몫입니다.',
+              m.job_id, m.project, m.commit_sha, m.diff_sha256, m.diff_bytes),
+       m.dedupe_key, 'pending', 0, NOW(), NOW()
+  FROM marked m
+ WHERE NOT EXISTS (
+       SELECT 1 FROM chat_deferred_reactions q
+        WHERE q.ohvis_task_id=m.dedupe_key
+          AND q.status IN ('pending','claimed')
+ )
+RETURNING id::text;" 2>/dev/null | tr -d '[:space:]') || deferred_id=""
+    if [[ -n "$deferred_id" ]]; then
+        handed=$((handed + 1))
+        log "  CTO_ADJUDICATION_ENQUEUED ${jid} project=${proj} deferred=${deferred_id:0:8}"
+        return 0
+    fi
+    log "  CTO_ADJUDICATION_DEDUPED_OR_BLOCKED ${jid} project=${proj}"
+    local now_detail
+    now_detail=$(db_query "SELECT COALESCE(error_detail,'') FROM pipeline_jobs
+        WHERE job_id='${jid}' AND status='review_hold';" 2>/dev/null | tr -d '[:space:]') || now_detail=""
+    [[ "$now_detail" == "review_cto_adjudication_pending" ]]
+}
+
+# 원 세션 판정 만료 처리 — 만료 표식을 남기고 원 세션의 미소비 요청을 닫은 뒤
+# CTO 독립판정으로 승계한다. 이관할 수 없을 때만 기존처럼 fail-closed 종결한다.
+expire_origin_adjudication() {
+    local jid="$1" proj="$2" age_min=""
+    age_min=$(db_query "
+WITH expired AS (
+    SELECT job_id,
+           FLOOR(EXTRACT(EPOCH FROM (NOW() - updated_at)) / 60)::bigint AS age_min
+      FROM pipeline_jobs
+     WHERE job_id='${jid}'
+       AND status='review_hold'
+       AND error_detail='review_origin_adjudication_pending'
+       AND updated_at < NOW() - (${ORIGIN_ADJUDICATION_TIMEOUT_MIN}::text || ' minutes')::interval
+), marked AS (
+    UPDATE pipeline_jobs j
+       SET error_detail='review_origin_adjudication_expired', updated_at=NOW()
+      FROM expired e
+     WHERE j.job_id=e.job_id AND j.status='review_hold'
+    RETURNING e.age_min
+)
+SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || age_min=""
+    if [[ -z "$age_min" ]]; then
+        # 이미 expired 표식이 남은 적체(이전 주기에 이관 못한 건)는 표식 변경 없이 이어서 처리한다.
+        local cur
+        cur=$(db_query "SELECT COALESCE(error_detail,'') FROM pipeline_jobs
+            WHERE job_id='${jid}' AND status='review_hold';" 2>/dev/null | tr -d '[:space:]') || cur=""
+        if [[ "$cur" != "review_origin_adjudication_expired" ]]; then
+            log "  SKIP ${jid} — origin adjudication 만료 상태 변경 누락"
+            return 0
+        fi
+        age_min="unknown"
+    fi
+    db_exec "UPDATE chat_deferred_reactions
+             SET status='failed',
+                 error_message=COALESCE(error_message, 'origin adjudication expired'),
+                 claimed_by=NULL, lease_expires_at=NULL,
+                 completed_at=COALESCE(completed_at, NOW()), updated_at=NOW()
+             WHERE ohvis_task_id LIKE 'review-adjudication:${jid}:%'
+               AND status IN ('pending','claimed');"
+    log "ORIGIN_ADJUDICATION_EXPIRED ${jid} project=${proj} age_min=${age_min}"
+    if enqueue_cto_adjudication "$jid" "$proj"; then
+        return 0
+    fi
+    terminate_review_hold "$jid" "review_origin_adjudication_expired" \
+        "원 세션 판정 제한시간(${ORIGIN_ADJUDICATION_TIMEOUT_MIN}분) 만료(age=${age_min}분), CTO 독립판정 이관 불가 — 승인 없이 fail-closed 종결"
+    terminated=$((terminated + 1))
+    log "ORIGIN_ADJUDICATION_TERMINATED ${jid} project=${proj} age_min=${age_min}"
+}
+
+# 원 세션 판정에도 명시적인 시간 상한이 있다. 만료되면 곧바로 종결하지 않고
+# CTO 독립판정을 1회 이관하고(expire_origin_adjudication), CTO 판정까지 제한시간
+# 안에 오지 않을 때 비로소 fail-closed 종결한다. 만료 처리는 재검수 횟수와 무관하다 —
+# 상한(SWEEP_MAX_RETRY)에 닿은 작업은 select_sql 에 잡히지 않기 때문이다.
 expired_origin_rows=$(db_query "
 SELECT job_id, project
   FROM pipeline_jobs
  WHERE status='review_hold'
-   AND error_detail='review_origin_adjudication_expired'
+   AND (error_detail='review_origin_adjudication_expired'
+        OR (error_detail='review_origin_adjudication_pending'
+            AND updated_at < NOW() - (${ORIGIN_ADJUDICATION_TIMEOUT_MIN}::text || ' minutes')::interval))
  ORDER BY updated_at ASC
  LIMIT ${SWEEP_BATCH};" 2>/dev/null) || expired_origin_rows=""
 if [[ "$DRY_RUN" == "1" ]]; then
@@ -590,11 +727,30 @@ else
     while IFS=$'\x1e' read -r expired_job expired_project; do
         [[ -z "$expired_job" ]] && continue
         [[ "$expired_job" =~ ^runner-[0-9a-f]{6,32}$ ]] || continue
-        terminate_review_hold "$expired_job" "review_origin_adjudication_expired" \
-            "원 세션 판정 제한시간(${ORIGIN_ADJUDICATION_TIMEOUT_MIN}분) 만료 — 승인 없이 fail-closed 종결"
-        terminated=$((terminated + 1))
-        log "ORIGIN_ADJUDICATION_TERMINATED ${expired_job} project=${expired_project}"
+        expire_origin_adjudication "$expired_job" "$expired_project"
     done <<< "$expired_origin_rows"
+fi
+
+# CTO 독립판정도 같은 제한시간 안에 오지 않으면 fail-closed 종결한다(승인 없음).
+expired_cto_rows=$(db_query "
+SELECT job_id, project
+  FROM pipeline_jobs
+ WHERE status='review_hold'
+   AND error_detail='review_cto_adjudication_pending'
+   AND updated_at < NOW() - (${ORIGIN_ADJUDICATION_TIMEOUT_MIN}::text || ' minutes')::interval
+ ORDER BY updated_at ASC
+ LIMIT ${SWEEP_BATCH};" 2>/dev/null) || expired_cto_rows=""
+if [[ "$DRY_RUN" == "1" ]]; then
+    [[ -z "${expired_cto_rows//[[:space:]]/}" ]] || log "DRY_RUN expired cto adjudications present"
+else
+    while IFS=$'\x1e' read -r cto_job cto_project; do
+        [[ -z "$cto_job" ]] && continue
+        [[ "$cto_job" =~ ^runner-[0-9a-f]{6,32}$ ]] || continue
+        terminate_review_hold "$cto_job" "review_cto_adjudication_expired" \
+            "CTO 독립판정 제한시간(${ORIGIN_ADJUDICATION_TIMEOUT_MIN}분) 만료 — 승인 없이 fail-closed 종결"
+        terminated=$((terminated + 1))
+        log "CTO_ADJUDICATION_TERMINATED ${cto_job} project=${cto_project}"
+    done <<< "$expired_cto_rows"
 fi
 
 # 산출물이 없는 needs_retry 는 모델에 보낼 수 없으므로 명시적으로 종결한다.
@@ -621,11 +777,17 @@ SELECT job_id, project
  WHERE status='review_hold'
    AND (review_flag_category IN (${INFRA_CATEGORIES}) OR review_needs_retry IS TRUE)
    AND COALESCE(review_retry_count,0) >= ${SWEEP_MAX_RETRY}
+   AND COALESCE(error_detail,'') NOT IN ('review_origin_adjudication_pending', 'review_cto_adjudication_pending')
  ORDER BY updated_at ASC
  LIMIT ${SWEEP_BATCH};" 2>/dev/null) || exhausted_rows=""
 if [[ "$DRY_RUN" != "1" ]]; then
     while IFS=$'\x1e' read -r exhausted_job exhausted_project; do
         [[ "$exhausted_job" =~ ^runner-[0-9a-f]{6,32}$ ]] || continue
+        # 상한에 닿았어도 이관 표식이 아직 없는 작업(이관 실패·구버전 잔재)은 종결보다 원 세션 이관이 먼저다.
+        if enqueue_origin_adjudication "$exhausted_job" "$exhausted_project"; then
+            log "  ORIGIN_THRESHOLD ${exhausted_job} — 재검수 상한 도달, 종결 대신 원 세션 판정 이관"
+            continue
+        fi
         terminate_review_hold "$exhausted_job" "review_retry_exhausted" \
             "자동 재검수 상한(${SWEEP_MAX_RETRY}) 도달"
         terminated=$((terminated + 1))
@@ -641,7 +803,7 @@ SELECT job_id, project
    AND review_flag_category IN (${INFRA_CATEGORIES})
    AND COALESCE(review_retry_count,0) >= ${ORIGIN_ADJUDICATION_RETRY_THRESHOLD}
    AND COALESCE(review_retry_count,0) < ${SWEEP_MAX_RETRY}
-   AND COALESCE(error_detail,'') NOT IN ('review_origin_adjudication_pending', 'review_origin_adjudication_expired')
+   AND COALESCE(error_detail,'') NOT IN ('review_origin_adjudication_pending', 'review_origin_adjudication_expired', 'review_cto_adjudication_pending')
  ORDER BY updated_at ASC
  LIMIT ${SWEEP_BATCH};" 2>/dev/null) || handoff_rows=""
 if [[ "$DRY_RUN" == "1" ]]; then
@@ -650,7 +812,7 @@ else
     while IFS=$'\x1e' read -r handoff_job handoff_project; do
         [[ -z "$handoff_job" ]] && continue
         [[ "$handoff_job" =~ ^runner-[0-9a-f]{6,32}$ ]] || continue
-        enqueue_origin_adjudication "$handoff_job" "$handoff_project"
+        enqueue_origin_adjudication "$handoff_job" "$handoff_project" || true
     done <<< "$handoff_rows"
 fi
 
@@ -676,31 +838,7 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id error
         if [[ "$DRY_RUN" == "1" ]]; then
             log "ORIGIN_ADJUDICATION_EXPIRED ${job_id} project=${project} age_min=${origin_pending_age_min}"
         else
-            expired_age_min=$(db_query "
-WITH expired AS (
-    SELECT job_id,
-           FLOOR(EXTRACT(EPOCH FROM (NOW() - updated_at)) / 60)::bigint AS age_min
-      FROM pipeline_jobs
-     WHERE job_id='${job_id}'
-       AND status='review_hold'
-       AND error_detail='review_origin_adjudication_pending'
-       AND updated_at < NOW() - (${ORIGIN_ADJUDICATION_TIMEOUT_MIN}::text || ' minutes')::interval
-), marked AS (
-    UPDATE pipeline_jobs j
-       SET error_detail='review_origin_adjudication_expired', updated_at=NOW()
-      FROM expired e
-     WHERE j.job_id=e.job_id AND j.status='review_hold'
-    RETURNING e.age_min
-)
-SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min=""
-            if [[ -z "$expired_age_min" ]]; then
-                log "  SKIP ${job_id} — origin adjudication 만료 상태 변경 누락"
-                continue
-            fi
-            terminate_review_hold "$job_id" "review_origin_adjudication_expired" \
-                "원 세션 판정 제한시간(${ORIGIN_ADJUDICATION_TIMEOUT_MIN}분) 만료(age=${expired_age_min}분) — 승인 없이 fail-closed 종결"
-            terminated=$((terminated + 1))
-            log "ORIGIN_ADJUDICATION_TERMINATED ${job_id} project=${project} age_min=${expired_age_min}"
+            expire_origin_adjudication "$job_id" "$project"
             continue
         fi
     fi
@@ -957,12 +1095,18 @@ SELECT age_min FROM marked;" 2>/dev/null | tr -d '[:space:]') || expired_age_min
                  WHERE job_id='${job_id}' AND status='review_hold';"
         retried=$((retried + 1))
         if [[ "$next_retry" -ge "$SWEEP_MAX_RETRY" ]]; then
-            terminate_review_hold "$job_id" "review_retry_exhausted" \
-                "자동 재검수 상한(${SWEEP_MAX_RETRY}) 도달 — verdict=${verdict:-none} category=${category:-none}"
-            terminated=$((terminated + 1))
+            # 임계값과 상한이 같아도 원 세션 이관이 종결보다 먼저다. 실제 이관된 경우만 종결을 미룬다.
+            if [[ "$next_retry" -ge "$ORIGIN_ADJUDICATION_RETRY_THRESHOLD" ]] \
+               && enqueue_origin_adjudication "$job_id" "$project"; then
+                log "  ORIGIN_THRESHOLD $job_id — 재검수 상한 도달, 종결 대신 원 세션 판정 이관"
+            else
+                terminate_review_hold "$job_id" "review_retry_exhausted" \
+                    "자동 재검수 상한(${SWEEP_MAX_RETRY}) 도달 — verdict=${verdict:-none} category=${category:-none}"
+                terminated=$((terminated + 1))
+            fi
         elif [[ "$next_retry" -ge "$ORIGIN_ADJUDICATION_RETRY_THRESHOLD" ]]; then
             log "  ORIGIN_THRESHOLD $job_id — 연속 무응답 판정 상한 도달, 원 세션 판정 이관"
-            enqueue_origin_adjudication "$job_id" "$project"
+            enqueue_origin_adjudication "$job_id" "$project" || true
         fi
     fi
 

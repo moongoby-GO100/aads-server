@@ -130,8 +130,15 @@ def test_exhausted_review_is_handed_to_origin_session_once_with_bound_evidence()
     assert pre_handoff.index('if [[ "$DRY_RUN" == "1" ]]') < pre_handoff.index(
         'enqueue_origin_adjudication "$handoff_job" "$handoff_project"'
     )
-    assert script.count('enqueue_origin_adjudication "$jid" "$proj"') == 1
-    assert script.count('enqueue_origin_adjudication "$job_id" "$project"') == 1
+    # infra_retry: 상한 도달 시 종결 전 이관 1회 + 임계치 도달 시 이관 1회
+    assert script.count('enqueue_origin_adjudication "$jid" "$proj"') == 2
+    # 모델 재검수 루프: 상한 도달 시 종결 전 이관 1회 + 임계치 도달 시 이관 1회
+    assert script.count('enqueue_origin_adjudication "$job_id" "$project"') == 2
+    # exhausted 스테이지도 표식 없는 상한 도달 작업은 종결 전에 이관을 먼저 시도한다.
+    exhausted = script[script.index("exhausted_rows=$(db_query"):script.index("handoff_rows=$(db_query")]
+    assert exhausted.index('enqueue_origin_adjudication "$exhausted_job"') < exhausted.index(
+        'terminate_review_hold "$exhausted_job" "review_retry_exhausted"'
+    )
 
 
 def test_expired_origin_adjudication_is_terminal_and_cancels_deferred_reaction():
@@ -149,14 +156,15 @@ def test_expired_origin_adjudication_is_terminal_and_cancels_deferred_reaction()
         "# 이전 주기에 이미 임계치를 넘긴 작업"
     )]
     assert "error_detail='review_origin_adjudication_expired'" in expired_sweep
-    assert 'terminate_review_hold "$expired_job" "review_origin_adjudication_expired"' in expired_sweep
+    # 만료는 바로 종결이 아니라 CTO 승계 helper 로 간다.
+    assert 'expire_origin_adjudication "$expired_job" "$expired_project"' in expired_sweep
+    assert 'terminate_review_hold "$expired_job" "review_origin_adjudication_expired"' not in expired_sweep
 
     timeout_branch = script[script.index('if [[ "$error_detail" == "review_origin_adjudication_pending" ]]'):]
-    terminate = timeout_branch.index(
-        'terminate_review_hold "$job_id" "review_origin_adjudication_expired"'
-    )
-    assert timeout_branch.index("expired_age_min=") < terminate
-    assert timeout_branch.index("continue", terminate) > terminate
+    assert timeout_branch.index('expire_origin_adjudication "$job_id" "$project"') < timeout_branch.index("continue")
+    assert 'terminate_review_hold "$job_id" "review_origin_adjudication_expired"' not in timeout_branch.split(
+        "total=$((total + 1))", 1
+    )[0]
 
 
 def test_origin_adjudication_tool_and_state_machine_are_hash_and_session_bound():
@@ -167,7 +175,19 @@ def test_origin_adjudication_tool_and_state_machine_are_hash_and_session_bound()
     chat_tools = (root / "app/api/ceo_chat_tools.py").read_text(encoding="utf-8")
 
     endpoint = api.split("async def adjudicate_review_from_origin_session", 1)[1]
-    assert 'str(row["chat_session_id"] or "").lower() != req.caller_session_id' in endpoint
+    assert 'is_origin = str(row["chat_session_id"] or "").lower() == req.caller_session_id' in endpoint
+    # CTO 승계 경로 — pending 표식 + 같은 tenant + role_key=CTO + 증거에 묶인 미소비 요청이 모두 필요하다.
+    body = endpoint.split("# ─── AADS-211", 1)[0]
+    assert "_CTO_ADJUDICATION_PENDING" in body
+    assert 'caller_session["role_key"] != "CTO"' in body
+    assert 'caller_session["tenant_id"] != row["tenant_id"]' in body
+    assert 'f"review-adjudication-cto:{job_id}:{commit_sha}:{diff_sha256}"' in body
+    assert "status IN ('pending', 'claimed')" in body
+    assert "FOR UPDATE" in body.split("FROM chat_deferred_reactions", 1)[1]
+    assert "cto_review_adjudicated" in body
+    # 판정 API 자체는 push/deploy/빌드를 호출하지 않는다.
+    for forbidden in ("subprocess", "create_subprocess", "deploy_job", "git push", "docker "):
+        assert forbidden not in body
     assert 'row["tenant_id"] != row["session_tenant_id"]' in endpoint
     assert 'hashlib.sha256(diff_text.encode("utf-8")).hexdigest()' in endpoint
     assert "commit_sha != req.expected_commit_sha" in endpoint
@@ -356,3 +376,188 @@ def test_recovery_keeps_phase_review_hold_for_the_dashboard_board():
     body = _code_only(script[fn_start:script.index("# 재시도 추적 컬럼", fn_start)])
     assert "phase='review_hold_recovery'" not in body
     assert "SET phase=" not in body
+
+
+# ── AADS-REVIEW-NORESP-SUCCESSION-M3: 상한 도달 → 원 세션 이관 → CTO 승계 ──────
+
+import subprocess  # noqa: E402
+
+
+def _function_source(script: str, name: str) -> str:
+    start = script.index(f"{name}() {{")
+    return script[start:script.index("\n}\n", start) + 3]
+
+
+def _run_bash(body: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bash", "-c", body], capture_output=True, text=True, timeout=30, check=False
+    )
+
+
+def _infra_retry_harness(origin_rc: int) -> str:
+    script = _sweeper()
+    return f"""
+set -eo pipefail
+SWEEP_MAX_RETRY=3; ORIGIN_ADJUDICATION_RETRY_THRESHOLD=3
+retried=0; consec_infra=0; terminated=0
+sql_escape() {{ printf '%s' "$1"; }}
+db_exec() {{ :; }}
+log() {{ echo "LOG $*"; }}
+enqueue_origin_adjudication() {{ echo "ENQUEUE_ORIGIN $1 $2"; return {origin_rc}; }}
+terminate_review_hold() {{ echo "TERMINATE $2"; }}
+{_function_source(script, "infra_retry")}
+"""
+
+
+def test_third_no_response_hands_over_to_origin_instead_of_terminating():
+    """(a) 재시도 3회째 무응답 — 두 임계값 기본이 같아도 이관이 종결보다 먼저다."""
+    out = _run_bash(
+        _infra_retry_harness(0)
+        + 'infra_retry runner-aaaaaa01 AADS 2 "category=REVIEW_MODEL_NO_RESPONSE"; echo "terminated=$terminated"'
+    )
+    assert out.returncode == 0, out.stderr
+    assert "ENQUEUE_ORIGIN runner-aaaaaa01 AADS" in out.stdout
+    assert "TERMINATE" not in out.stdout
+    assert "terminated=0" in out.stdout
+
+
+def test_third_no_response_without_origin_session_terminates_as_before():
+    """(b) 이관 불가(원 세션 없음·commit/diff 없음) — 기존처럼 review_failed 종결."""
+    out = _run_bash(
+        _infra_retry_harness(1)
+        + 'infra_retry runner-aaaaaa01 AADS 2 "category=REVIEW_MODEL_NO_RESPONSE"; echo "terminated=$terminated"'
+    )
+    assert out.returncode == 0, out.stderr
+    assert "ENQUEUE_ORIGIN runner-aaaaaa01 AADS" in out.stdout
+    assert "TERMINATE review_failed" in out.stdout
+    assert "terminated=1" in out.stdout
+
+
+def test_below_cap_retry_does_not_terminate_or_change_backoff_path():
+    out = _run_bash(
+        _infra_retry_harness(0)
+        + 'infra_retry runner-aaaaaa01 AADS 0 "category=REVIEW_MODEL_NO_RESPONSE"; echo "terminated=$terminated"'
+    )
+    assert out.returncode == 0, out.stderr
+    assert "TERMINATE" not in out.stdout
+    assert "ENQUEUE_ORIGIN" not in out.stdout
+
+
+def test_origin_enqueue_happens_before_terminate_in_infra_retry_source():
+    block = _function_source(_sweeper(), "infra_retry")
+    assert block.index("enqueue_origin_adjudication") < block.index("terminate_review_hold")
+
+
+def _expire_harness(cto_rc: int, age_out: str = "130") -> str:
+    script = _sweeper()
+    return f"""
+set -eo pipefail
+ORIGIN_ADJUDICATION_TIMEOUT_MIN=120; terminated=0
+db_query() {{ case "$1" in *"SELECT age_min FROM marked"*) printf '%s' '{age_out}';; *) printf '%s' 'review_origin_adjudication_pending';; esac; }}
+db_exec() {{ echo "DB_EXEC"; }}
+log() {{ echo "LOG $*"; }}
+enqueue_cto_adjudication() {{ echo "ENQUEUE_CTO $1 $2"; return {cto_rc}; }}
+terminate_review_hold() {{ echo "TERMINATE $2"; }}
+{_function_source(script, "expire_origin_adjudication")}
+"""
+
+
+def test_origin_expiry_hands_over_to_cto_once_instead_of_terminating():
+    """(c) 원 세션 판정 만료 — 종결이 아니라 CTO 독립판정 이관."""
+    out = _run_bash(_expire_harness(0) + 'expire_origin_adjudication runner-aaaaaa01 AADS; echo "terminated=$terminated"')
+    assert out.returncode == 0, out.stderr
+    assert "ENQUEUE_CTO runner-aaaaaa01 AADS" in out.stdout
+    assert "TERMINATE" not in out.stdout
+    assert "terminated=0" in out.stdout
+
+
+def test_origin_expiry_without_cto_session_falls_back_to_fail_closed():
+    out = _run_bash(_expire_harness(1) + 'expire_origin_adjudication runner-aaaaaa01 AADS; echo "terminated=$terminated"')
+    assert out.returncode == 0, out.stderr
+    assert "TERMINATE review_origin_adjudication_expired" in out.stdout
+    assert "terminated=1" in out.stdout
+
+
+def test_origin_expiry_closes_unconsumed_origin_reaction_before_cto_handoff():
+    block = _function_source(_sweeper(), "expire_origin_adjudication")
+    assert "ohvis_task_id LIKE 'review-adjudication:${jid}:%'" in block
+    assert block.index("UPDATE chat_deferred_reactions") < block.index("enqueue_cto_adjudication")
+
+
+def test_cto_expiry_is_fail_closed_terminal():
+    """(d) CTO 판정도 제한시간 안에 없으면 fail-closed 종결."""
+    script = _sweeper()
+    stage = script[script.index("expired_cto_rows=$(db_query"):script.index("# 산출물이 없는 needs_retry")]
+    assert "error_detail='review_cto_adjudication_pending'" in stage
+    assert "ORIGIN_ADJUDICATION_TIMEOUT_MIN" in stage
+    assert 'terminate_review_hold "$cto_job" "review_cto_adjudication_expired"' in stage
+    # 종결 시 CTO 요청도 함께 닫는다.
+    terminal = script[script.index("terminate_review_hold() {"):script.index("# dirty 워크트리 판정")]
+    assert "review-adjudication-cto:${job_id}:%" in terminal
+
+
+def test_cto_pending_is_not_reselected_nor_terminated_as_exhausted():
+    script = _sweeper()
+    select = script.split('select_sql="', 1)[1].split('"\n\ntotal=', 1)[0]
+    assert "<> 'review_cto_adjudication_pending'" in select
+    exhausted = script[script.index("exhausted_rows=$(db_query"):script.index("handoff_rows=$(db_query")]
+    assert "'review_origin_adjudication_pending', 'review_cto_adjudication_pending'" in exhausted
+    handoff = script[script.index("handoff_rows=$(db_query"):script.index('if ! rows=$(db_query')]
+    assert "'review_cto_adjudication_pending'" in handoff
+
+
+def test_cto_enqueue_is_read_only_same_tenant_other_session_and_idempotent():
+    """(e) 멱등 키 — 같은 증거의 pending/claimed 요청이 있으면 재삽입하지 않는다."""
+    fn = _function_source(_sweeper(), "enqueue_cto_adjudication")
+    assert "s.role_key = 'CTO'" in fn
+    assert "s.tenant_id = t.tenant_id" in fn
+    assert "s.id::text <> COALESCE(t.origin_session, '')" in fn
+    assert "'review-adjudication-cto:' || j.job_id || ':' || lower(j.commit_hash) || ':' ||" in fn
+    assert "encode(digest(j.git_diff, 'sha256'), 'hex') AS dedupe_key" in fn
+    assert "q.status IN ('pending','claimed')" in fn
+    assert "review_cto_adjudication_pending" in fn
+    assert "pipeline_review_adjudicate" in fn
+    assert "REVIEW_CTO_ADJUDICATION_SESSION_ID" in _sweeper()
+    assert "s.updated_at DESC" in fn
+    # 원 세션 만료 표식이 있을 때만 승계한다 — 임의 작업을 CTO 로 보내지 않는다.
+    assert "IN ('review_origin_adjudication_expired', 'review_cto_adjudication_pending')" in fn
+
+
+def _cto_enqueue_harness(deferred: str, state: str) -> str:
+    script = _sweeper()
+    return f"""
+set -eo pipefail
+handed=0; CTO_ADJUDICATION_SESSION_ID=""
+log() {{ echo "LOG $*"; }}
+db_query() {{ case "$1" in *"RETURNING id::text"*) printf '%s' '{deferred}';; *) printf '%s' '{state}';; esac; }}
+{_function_source(script, "enqueue_cto_adjudication")}
+"""
+
+
+def test_cto_enqueue_duplicate_key_does_not_count_as_new_handoff_but_stays_pending():
+    out = _run_bash(
+        _cto_enqueue_harness("", "review_cto_adjudication_pending")
+        + 'rc=0; enqueue_cto_adjudication runner-aaaaaa01 AADS || rc=$?; echo "rc=$rc handed=$handed"'
+    )
+    assert out.returncode == 0, out.stderr
+    assert "rc=0 handed=0" in out.stdout
+    assert "CTO_ADJUDICATION_DEDUPED_OR_BLOCKED" in out.stdout
+
+
+def test_cto_enqueue_without_target_reports_not_handed_over():
+    out = _run_bash(
+        _cto_enqueue_harness("", "review_origin_adjudication_expired")
+        + 'rc=0; enqueue_cto_adjudication runner-aaaaaa01 AADS || rc=$?; echo "rc=$rc handed=$handed"'
+    )
+    assert out.returncode == 0, out.stderr
+    assert "rc=1 handed=0" in out.stdout
+
+
+def test_cto_enqueue_new_request_counts_once():
+    out = _run_bash(
+        _cto_enqueue_harness("0f0f0f0f-aaaa-bbbb-cccc-111122223333", "review_cto_adjudication_pending")
+        + 'rc=0; enqueue_cto_adjudication runner-aaaaaa01 AADS || rc=$?; echo "rc=$rc handed=$handed"'
+    )
+    assert out.returncode == 0, out.stderr
+    assert "rc=0 handed=1" in out.stdout
+    assert "CTO_ADJUDICATION_ENQUEUED" in out.stdout

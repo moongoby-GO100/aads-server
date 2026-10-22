@@ -4147,13 +4147,40 @@ async def retry_review(
             }
 
 
+_REVIEW_INFRA_CATEGORIES = frozenset(
+    {
+        "REVIEW_API_UNAVAILABLE",
+        "REVIEW_MODEL_NO_RESPONSE",
+        "REVIEW_PARSER_FAILURE",
+        "REVIEW_TIMEOUT",
+    }
+)
+_ORIGIN_ADJUDICATION_STALE_MARKERS = frozenset(
+    {"review_origin_adjudication_expired", "review_cto_adjudication_pending"}
+)
+_CTO_ADJUDICATION_PENDING = "review_cto_adjudication_pending"
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
 @router.post("/pipeline/jobs/{job_id}/adjudicate-review", tags=["pipeline-runner"])
 async def adjudicate_review_from_origin_session(
     job_id: str,
     req: PipelineReviewAdjudicateRequest,
     context: TenantContext = Depends(require_tenant_member),
 ):
-    """Accept a bounded, read-only review verdict from the originating session.
+    """Accept a bounded, read-only review verdict for a review_hold job.
+
+    Two callers are allowed. The originating chat session may judge while the
+    origin request is live. After the origin request expires the sweeper hands
+    the job to exactly one same-tenant CTO session (``review_cto_adjudication_pending``);
+    that session may judge only while its own unconsumed, unexpired request bound
+    to the current job/commit/diff hash exists.
 
     This is not deployment approval. APPROVE only moves a verified artifact to
     ``awaiting_approval``; push/deploy remain behind the existing approval gate.
@@ -4172,10 +4199,11 @@ async def adjudicate_review_from_origin_session(
                 SELECT j.job_id, j.project, j.status, j.chat_session_id,
                        j.tenant_id::text AS tenant_id, j.commit_hash,
                        j.git_diff, j.review_flag_category,
+                       COALESCE(j.error_detail, '') AS error_detail,
                        COALESCE(j.review_retry_count, 0) AS review_retry_count,
                        s.tenant_id::text AS session_tenant_id
                   FROM pipeline_jobs j
-                  JOIN chat_sessions s ON s.id::text = j.chat_session_id
+                  LEFT JOIN chat_sessions s ON s.id::text = j.chat_session_id
                  WHERE j.job_id = $1
                  FOR UPDATE OF j
                 """,
@@ -4185,29 +4213,33 @@ async def adjudicate_review_from_origin_session(
                 raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
             if row["status"] != "review_hold":
                 raise HTTPException(status_code=409, detail="review_hold 상태가 아닙니다")
-            if str(row["chat_session_id"] or "").lower() != req.caller_session_id:
-                raise HTTPException(status_code=403, detail="원 세션만 검수 판정을 제출할 수 있습니다")
-            if (
-                not row["tenant_id"]
-                or row["tenant_id"] != row["session_tenant_id"]
-                or row["tenant_id"] != caller_tenant_id
+
+            is_origin = str(row["chat_session_id"] or "").lower() == req.caller_session_id
+            if is_origin:
+                if row["error_detail"] in _ORIGIN_ADJUDICATION_STALE_MARKERS:
+                    raise HTTPException(status_code=403, detail="원 세션 판정 요청이 만료되어 CTO 판정으로 승계되었습니다")
+            else:
+                if row["error_detail"] != _CTO_ADJUDICATION_PENDING:
+                    raise HTTPException(status_code=403, detail="원 세션만 검수 판정을 제출할 수 있습니다")
+                caller_session = await conn.fetchrow(
+                    "SELECT tenant_id::text AS tenant_id, role_key FROM chat_sessions WHERE id = $1::uuid",
+                    req.caller_session_id,
+                )
+                if (
+                    not caller_session
+                    or not row["tenant_id"]
+                    or caller_session["tenant_id"] != row["tenant_id"]
+                    or caller_session["role_key"] != "CTO"
+                ):
+                    raise HTTPException(status_code=403, detail="지정된 같은 tenant의 CTO 세션만 판정할 수 있습니다")
+            if not row["tenant_id"] or row["tenant_id"] != caller_tenant_id or (
+                is_origin and row["tenant_id"] != row["session_tenant_id"]
             ):
                 raise HTTPException(status_code=409, detail="작업과 원 세션의 tenant가 일치하지 않습니다")
-            if row["review_flag_category"] not in {
-                "REVIEW_API_UNAVAILABLE",
-                "REVIEW_MODEL_NO_RESPONSE",
-                "REVIEW_PARSER_FAILURE",
-                "REVIEW_TIMEOUT",
-            }:
+            if row["review_flag_category"] not in _REVIEW_INFRA_CATEGORIES:
                 raise HTTPException(status_code=409, detail="리뷰 인프라 장애 작업만 원 세션 폴백이 가능합니다")
 
-            try:
-                retry_threshold = max(
-                    1,
-                    int(os.getenv("REVIEW_ORIGIN_ADJUDICATION_RETRY_THRESHOLD", "3")),
-                )
-            except ValueError:
-                retry_threshold = 3
+            retry_threshold = _env_positive_int("REVIEW_ORIGIN_ADJUDICATION_RETRY_THRESHOLD", 3)
             if int(row["review_retry_count"] or 0) < retry_threshold:
                 raise HTTPException(status_code=409, detail="자동 재검수 상한에 도달하지 않았습니다")
 
@@ -4217,7 +4249,32 @@ async def adjudicate_review_from_origin_session(
             if commit_sha != req.expected_commit_sha or diff_sha256 != req.expected_diff_sha256:
                 raise HTTPException(status_code=409, detail="검수 대상 SHA 또는 diff hash가 변경되었습니다")
 
-            findings = req.findings.strip() or "원 세션 read-only 판정"
+            reaction_id = None
+            if not is_origin:
+                # 요청은 job+commit+diff hash 로 멱등 키가 고정되고 지정된 CTO 세션에만 있다.
+                # 행 잠금으로 같은 요청의 동시 판정을 직렬화하고, 소비·만료·취소(status≠pending/claimed)는 거부한다.
+                reaction = await conn.fetchrow(
+                    """
+                    SELECT id FROM chat_deferred_reactions
+                     WHERE ohvis_task_id = $1
+                       AND session_id = $2::uuid
+                       AND status IN ('pending', 'claimed')
+                       AND created_at >= NOW() - ($3::int * INTERVAL '1 minute')
+                     ORDER BY created_at DESC
+                     LIMIT 1
+                     FOR UPDATE
+                    """,
+                    f"review-adjudication-cto:{job_id}:{commit_sha}:{diff_sha256}",
+                    req.caller_session_id,
+                    _env_positive_int("REVIEW_ORIGIN_ADJUDICATION_TIMEOUT_MIN", 120),
+                )
+                if not reaction:
+                    raise HTTPException(status_code=403, detail="유효한 CTO 판정 요청이 없습니다(미배정·만료·소비·증거 변경)")
+                reaction_id = reaction["id"]
+
+            adjudicator = "origin_session_adjudicator" if is_origin else "cto_session_adjudicator"
+            label = "원 세션 판정" if is_origin else "CTO 판정"
+            findings = req.findings.strip() or ("원 세션 read-only 판정" if is_origin else "CTO read-only 판정")
             if req.verdict == "APPROVE":
                 result = await conn.execute(
                     """
@@ -4226,13 +4283,14 @@ async def adjudicate_review_from_origin_session(
                            review_verdict='APPROVE', review_score=NULL,
                            review_flag_category=NULL, review_needs_retry=FALSE,
                            review_request_id=NULL, error_detail=NULL,
-                           review_feedback=COALESCE(review_feedback,'') || E'\n[원 세션 판정] APPROVE — ' || $2,
+                           review_feedback=COALESCE(review_feedback,'') || E'\n[' || $4::text || E'] APPROVE — ' || $2::text,
                            updated_at=NOW()
                      WHERE job_id=$1 AND status='review_hold' AND commit_hash=$3
                     """,
                     job_id,
                     findings,
                     commit_sha,
+                    label,
                 )
                 next_status, next_phase = "awaiting_approval", "awaiting_approval"
             elif req.verdict == "REJECT":
@@ -4243,17 +4301,19 @@ async def adjudicate_review_from_origin_session(
                            review_verdict='REQUEST_CHANGES', review_score=NULL,
                            review_flag_category='CODE_QUALITY', review_needs_retry=FALSE,
                            review_request_id=NULL,
-                           error_detail='review_failed: source=origin_session_adjudicator',
-                           review_feedback=COALESCE(review_feedback,'') || E'\n[원 세션 판정] REJECT — ' || $2,
+                           error_detail='review_failed: source=' || $5::text,
+                           review_feedback=COALESCE(review_feedback,'') || E'\n[' || $4::text || E'] REJECT — ' || $2::text,
                            updated_at=NOW(), completed_at=NOW()
                      WHERE job_id=$1 AND status='review_hold' AND commit_hash=$3
                     """,
                     job_id,
                     findings,
                     commit_sha,
+                    label,
+                    adjudicator,
                 )
                 next_status, next_phase = "error", "review_failed"
-            else:
+            elif is_origin:
                 result = await conn.execute(
                     """
                     UPDATE pipeline_jobs
@@ -4272,9 +4332,37 @@ async def adjudicate_review_from_origin_session(
                     commit_sha,
                 )
                 next_status, next_phase = "review_hold", "review_hold"
+            else:
+                # CTO 의 UNKNOWN 은 판정이 아니다. 재검수 루프로 되돌리지 않고 요청만 소비하며,
+                # updated_at 을 건드리지 않아 스위퍼의 CTO 만료(fail-closed 종결) 시계가 그대로 간다.
+                result = await conn.execute(
+                    """
+                    UPDATE pipeline_jobs
+                       SET review_verdict='UNKNOWN', review_score=NULL,
+                           review_feedback=COALESCE(review_feedback,'') || E'\n[CTO 판정] UNKNOWN — 판정 보류, 제한시간 만료 시 fail-closed 종결: ' || $2::text
+                     WHERE job_id=$1 AND status='review_hold' AND commit_hash=$3
+                       AND error_detail='review_cto_adjudication_pending'
+                    """,
+                    job_id,
+                    findings,
+                    commit_sha,
+                )
+                next_status, next_phase = "review_hold", "review_hold"
 
             if not result.endswith(" 1"):
                 raise HTTPException(status_code=409, detail="판정 저장 중 작업 상태가 변경되었습니다")
+            if reaction_id is not None:
+                consumed = await conn.execute(
+                    """
+                    UPDATE chat_deferred_reactions
+                       SET status='completed', completed_at=NOW(), claimed_by=NULL,
+                           lease_expires_at=NULL, error_message=NULL, updated_at=NOW()
+                     WHERE id=$1 AND status IN ('pending', 'claimed')
+                    """,
+                    reaction_id,
+                )
+                if not consumed.endswith(" 1"):
+                    raise HTTPException(status_code=409, detail="CTO 판정 요청이 이미 소비되었습니다")
             if req.verdict == "APPROVE":
                 # 승인 게이트(approve)는 code_reviews 최신 행만 본다.
                 # 원 세션 판정을 pipeline_jobs 에만 기록하면 게이트가 인프라 장애 FLAG 를
@@ -4286,25 +4374,26 @@ async def adjudicate_review_from_origin_session(
                         (job_id, project, verdict, score, feedback, diff_size,
                          model_used, cost, flag_category, failure_stage, needs_retry)
                     VALUES ($1, $2, 'APPROVE', 1.0, $3::jsonb, $4,
-                            'origin_session_adjudicator', 0, NULL, NULL, FALSE)
+                            $5, 0, NULL, NULL, FALSE)
                     """,
                     job_id,
                     row["project"],
                     json.dumps(
                         {
                             "summary": findings,
-                            "source": "origin_session_adjudicator",
+                            "source": adjudicator,
                             "commit_sha": commit_sha,
                         },
                         ensure_ascii=False,
                     ),
                     len(diff_text),
+                    adjudicator,
                 )
             await conn.execute(
                 """
                 INSERT INTO pipeline_runner_events
                     (job_id, tenant_id, project, event_type, status, phase, metadata)
-                VALUES ($1, $2::uuid, $3, 'origin_review_adjudicated', $4, $5,
+                VALUES ($1, $2::uuid, $3, $11::text, $4, $5,
                         jsonb_build_object('caller_session_id',$6::text,
                                            'commit_sha',$7::text,
                                            'diff_sha256',$8::text,
@@ -4321,6 +4410,7 @@ async def adjudicate_review_from_origin_session(
                 diff_sha256,
                 req.verdict,
                 findings,
+                "origin_review_adjudicated" if is_origin else "cto_review_adjudicated",
             )
 
     return {
@@ -4330,7 +4420,7 @@ async def adjudicate_review_from_origin_session(
         "phase": next_phase,
         "commit_sha": commit_sha,
         "diff_sha256": diff_sha256,
-        "message": "원 세션 판정이 중앙 상태 머신에 기록되었습니다",
+        "message": f"{label}이 중앙 상태 머신에 기록되었습니다",
     }
 
 
