@@ -33,6 +33,8 @@ UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 V41_TITLE = "V4.1"
 ADMIN_ROLES = ("owner", "admin")
 EMPLOYEE_MARKERS = ("신규 직원 서류 업로드", "입사서류", "계약서", "서류")
+PORTAL_ENTRY_MARKERS = ("계약서", "서류")
+SETTINGS_FAIL_TEXT = "기초설정 불러오기 실패"
 
 _FETCH_SNIPPET = """
 import asyncio, json, os
@@ -114,6 +116,14 @@ def snapshot(page: Any, path: Path) -> dict[str, Any]:
         "headings": _visible_headings(page),
         "onboarding_visible": page.evaluate(
             "() => { const e = document.getElementById('onboardingView'); return !!e && !e.classList.contains('hidden') && e.offsetParent !== null; }"
+        ),
+        "portal_visible": page.evaluate(
+            "() => { const e = document.getElementById('employeePortal'); return !!e && !e.classList.contains('hidden') && e.offsetParent !== null; }"
+        ),
+        "portal_entries": page.evaluate(
+            """() => [...document.querySelectorAll('#employeePortal [data-ep-nav]')]
+                .filter(e => e.offsetParent !== null && e.textContent.trim())
+                .map(e => e.textContent.trim().replace(/\\s+/g, ' ').slice(0, 20))"""
         ),
         "auth_gate_visible": page.evaluate(
             "() => { const e = document.getElementById('authGate'); return !!e && !e.classList.contains('hidden') && e.offsetParent !== null; }"
@@ -233,6 +243,14 @@ def _session_problems(role: str, sessions: list[dict[str, Any]]) -> list[str]:
     return problems
 
 
+def _employee_entry_visible(view: dict[str, Any]) -> bool:
+    """직원 첫 화면 판정 — 기존 onboarding 뷰, 또는 직원 포털(#employeePortal)이 계약서·입사서류 진입을 노출."""
+    if view.get("onboarding_visible") or any(m in " ".join(view.get("headings", [])) for m in EMPLOYEE_MARKERS):
+        return True
+    entries = " ".join(view.get("portal_entries") or [])
+    return bool(view.get("portal_visible")) and all(m in entries for m in PORTAL_ENTRY_MARKERS)
+
+
 def judge(role: str, result: dict[str, Any]) -> tuple[str, str]:
     if not result.get("login_submitted"):
         return "미실행", result.get("exception", "로그인 제출 전 중단")
@@ -256,11 +274,14 @@ def judge(role: str, result: dict[str, Any]) -> tuple[str, str]:
     else:
         if any(v.get("path", "").endswith("/admin.html") or V41_TITLE in v.get("title", "") for v in views):
             problems.append("직원이 V4.1 로 이동")
-        if not all(v.get("onboarding_visible") or any(m in " ".join(v.get("headings", [])) for m in EMPLOYEE_MARKERS) for v in views):
-            problems.append("계약서·서류(onboarding) 화면 아님")
+        if not all(_employee_entry_visible(v) for v in views):
+            problems.append("계약서·서류(onboarding) 진입 화면 아님")
+        if SETTINGS_FAIL_TEXT in (result.get("error_text") or ""):
+            problems.append("직원 화면에 기초설정 불러오기 실패 토스트 노출")
     basis = (
         f"pc={views[0].get('path')}#{views[0].get('hash')} mobile={views[1].get('path')} "
         f"onboarding={views[0].get('onboarding_visible')}/{views[1].get('onboarding_visible')} "
+        f"portal={views[0].get('portal_visible')}/{views[1].get('portal_visible')} "
         f"session={[(s.get('viewport'), s.get('http'), s.get('role')) for s in result.get('session_responses') or []]}"
     )
     if problems:

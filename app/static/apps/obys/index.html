@@ -13998,7 +13998,16 @@
 
     async function loadServerSettings() {
       if (!hasServerAuth()) return null;
-      const payload = await financeApi("/settings");
+      // GET /settings 는 테넌트 구분 없는 레거시 전역 JSON 이다. 직원은 쓰지 않으므로 부르지 않고,
+      // 설정 관리 권한이 없는 계정이 받은 403(신규 테넌트 게이트)은 오류 토스트 없이 빈 설정으로 진행한다.
+      if (isEmployeeAccount()) return null;
+      let payload;
+      try {
+        payload = await financeApi("/settings");
+      } catch (err) {
+        if (Number(err?.status) === 403 && !canManageSettings()) return null;
+        throw err;
+      }
       if (hasMeaningfulSettings(payload.settings)) {
         state.settings = mergeSettings(payload.settings);
         saveState();
