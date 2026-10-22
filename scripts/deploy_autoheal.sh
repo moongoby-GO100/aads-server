@@ -55,6 +55,10 @@ classify_deploy_failure() {
     fi
 
     case "$hay" in
+        # 릴리스 출처 가드(deploy.sh reject_unpushed_release)가 남기는 원인 키.
+        # "dirty worktree" 등 다른 패턴보다 먼저 잡아야 재시도 대상으로 새지 않는다.
+        *"deploy.release_sha_diverged_local_head"*|*"deploy.release_sha_head_mismatch"*)
+            echo "release_origin_blocked" ;;
         *"insufficient build disk"*|*"cannot read available disk"*|*"no space left on device"*)
             echo "disk_full" ;;
         *"dirty worktree"*)
@@ -155,6 +159,10 @@ autoheal_policy() {
         # 같은 태그가 다른 revision 을 가리키는 무결성 위반이다. 자동으로
         # 덮어쓰지 않는다 — 어느 이미지가 맞는지는 사람이 판정해야 한다.
         release_image_tag_mismatch)
+            echo "manual" ;;
+        # origin/main 에 없는 로컬 커밋이거나 태그·트리가 어긋난 릴리스다. 큐 워커의
+        # clean worktree 로 다시 태워도 같은 SHA 라 같은 가드에 걸린다 — 재시도 금지.
+        release_origin_blocked)
             echo "manual" ;;
         signal_interrupt)
             if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]] || autoheal_phase_is_post_switch "$phase"; then
@@ -314,6 +322,12 @@ remediate_deploy_failure() {
             # 작업 트리는 절대 건드리지 않는다(CEO/러너의 미커밋 작업 보호).
             # 큐 워커는 커밋된 SHA 의 clean detached worktree 에서 돌기 때문에
             # 같은 릴리스를 큐 경로로 다시 태우면 dirty 게이트 자체가 사라진다.
+            # 큐 워커는 같은 SHA 를 clean worktree 로 다시 태운다. 그 SHA 가 origin/main 에
+            # 없는 로컬 커밋이면 워커도 같은 출처 가드에 걸리므로 재시도하지 않고 escalate 한다.
+            if declare -F reject_unpushed_release >/dev/null 2>&1 && ! reject_unpushed_release >/dev/null 2>&1; then
+                autoheal_log "❌ 릴리스 출처 가드에 걸리는 SHA — clean worktree 우회 재시도를 중단한다 (${DEPLOY_RELEASE_ORIGIN_SUMMARY:-origin guard})"
+                return 1
+            fi
             autoheal_log "dirty worktree 교정: 작업 트리 보존, 큐 워커의 clean worktree 경로로 우회한다"
             AUTOHEAL_LAST_REMEDIATION="route_clean_worktree"
             ;;

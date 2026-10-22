@@ -59,6 +59,7 @@ ACTIVE_CONTAINER=aads-server-green
 audit_control() { printf 'AUDIT %s\\n' "$*" >> "$LOG"; }
 record_deploy() { printf 'RECORD %s\\n' "$*" >> "$LOG"; }
 stop_deploy_heartbeat() { :; }
+enforce_release_origin_guard() { :; }  # 출처 가드는 test_deploy_release_origin_guard.py 가 검증한다
 deploy_observe_init() { :; }
 deploy_estimated_remaining_ms() { echo NULL; }
 sql_escape() { printf '%s' "${1:-}" | sed "s/'/''/g"; }

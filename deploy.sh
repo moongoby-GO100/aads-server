@@ -1382,6 +1382,68 @@ enforce_ancestor_release_guard() {
     exit 0
 }
 
+# 릴리스 출처 가드. 이미지는 AADS_RELEASE_SHA 로 태그되지만 컨텍스트는
+# COMPOSE_DIR 의 HEAD 에서 archive 된다. 두 값이 어긋나거나 HEAD 가 로컬에만 있는
+# 커밋이면 어떤 트리가 어떤 태그로 나갈지 보장할 수 없다.
+# 2026-10-22 deploy_runs#5849·#5850: 로컬 main 70fe937d(origin/main 대비 ahead 18 /
+# behind 466)가 릴리스로 선택돼 구동본 커밋 458개가 빠진 이미지가 컷오버 직전까지 갔다.
+# 네트워크 의존을 피하려고 fetch 하지 않고 로컬 origin/main ref 로만 판정한다.
+# 판정 불가는 차단(fail-closed). 태그·트리 불일치는 우회 불가.
+# 의도된 미푸시 릴리스만 AADS_DEPLOY_ALLOW_UNPUSHED_RELEASE=1.
+reject_unpushed_release() {
+    DEPLOY_RELEASE_ORIGIN_SUMMARY=""
+    local sha sha_lc head_full main_full counts behind="unknown" ahead="unknown" reason="" cause=""
+    sha="${AADS_RELEASE_SHA:-}"
+    sha_lc="${sha,,}"
+    head_full="$(git -C "$COMPOSE_DIR" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
+
+    if [[ ! "$sha_lc" =~ ^[0-9a-f]{7,64}$ || -z "$head_full" || "$head_full" != "$sha_lc"* ]]; then
+        DEPLOY_RELEASE_ORIGIN_SUMMARY="deploy.release_sha_head_mismatch: release=${sha:-empty} source_head=${head_full:-unresolved} source=${COMPOSE_DIR} — release tag does not match the tree that would be archived"
+        echo "[deploy.sh] ❌ ${DEPLOY_RELEASE_ORIGIN_SUMMARY}"
+        audit_control "release-origin-guard" "aads-server:${sha:-unknown}" "blocked" "$DEPLOY_RELEASE_ORIGIN_SUMMARY"
+        return 1
+    fi
+
+    main_full="$(git -C "$COMPOSE_DIR" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' 2>/dev/null || true)"
+    if [[ -z "$main_full" ]]; then
+        reason="origin/main ref not found locally; ancestry cannot be proven"
+        cause="deploy.release_sha_diverged_local_head"
+    elif git -C "$COMPOSE_DIR" merge-base --is-ancestor "$head_full" "$main_full" 2>/dev/null; then
+        return 0
+    else
+        counts="$(git -C "$COMPOSE_DIR" rev-list --left-right --count "${main_full}...${head_full}" 2>/dev/null || true)"
+        if [[ "$counts" =~ ^([0-9]+)[[:space:]]+([0-9]+)$ ]]; then
+            behind="${BASH_REMATCH[1]}"
+            ahead="${BASH_REMATCH[2]}"
+        fi
+        reason="release commit is not an ancestor of local origin/main"
+        cause="deploy.release_sha_diverged_local_head"
+    fi
+
+    DEPLOY_RELEASE_ORIGIN_SUMMARY="${cause}: release=${sha} origin/main=${main_full:0:12} ahead=${ahead} behind=${behind} — ${reason}; push the commit and update origin/main, or deploy from a clean worktree at origin/main"
+    if [[ "${AADS_DEPLOY_ALLOW_UNPUSHED_RELEASE:-0}" == "1" ]]; then
+        echo "[deploy.sh] ⚠️ release-origin guard bypassed by AADS_DEPLOY_ALLOW_UNPUSHED_RELEASE=1: ${DEPLOY_RELEASE_ORIGIN_SUMMARY}"
+        audit_control "release-origin-guard" "aads-server:${sha}" "bypassed" "$DEPLOY_RELEASE_ORIGIN_SUMMARY"
+        return 0
+    fi
+    echo "[deploy.sh] ❌ ${DEPLOY_RELEASE_ORIGIN_SUMMARY}"
+    audit_control "release-origin-guard" "aads-server:${sha}" "blocked" "$DEPLOY_RELEASE_ORIGIN_SUMMARY"
+    return 1
+}
+
+# 차단은 원장에 blocked 로 남기고 exit 2 로 나간다. autoheal 은 이 원인을
+# 재시도하지 않고 escalate 한다(deploy_autoheal.sh autoheal_policy).
+enforce_release_origin_guard() {
+    if reject_unpushed_release; then
+        return 0
+    fi
+    DEPLOY_CURRENT_PHASE="preflight"
+    DEPLOY_PHASE_START_EPOCH="$(date +%s)"
+    deploy_phase_end "preflight" "blocked" "$DEPLOY_RELEASE_ORIGIN_SUMMARY"
+    record_deploy "blocked" "$MODE" "$DEPLOY_RELEASE_ORIGIN_SUMMARY"
+    exit 2
+}
+
 start_deploy_queue_worker() {
     local trigger="${1:-manual}"
     if [[ "$(deploy_queue_count)" == "0" ]]; then
@@ -2046,6 +2108,7 @@ ensure_deploy_observability_schema
 reconcile_stale_deploy_runs
 claim_latest_queued_deploy_request
 enforce_ancestor_release_guard
+enforce_release_origin_guard
 include_queued_ancestors_in_direct_release
 deploy_phase_start "preflight" "running"
 if [[ "${AADS_DEPLOY_QUEUE_WORKER:-false}" == "true" ]]; then
