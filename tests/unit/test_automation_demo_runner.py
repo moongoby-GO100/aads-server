@@ -21,6 +21,7 @@ from app.services.work_recipe.guard import RiskLevel
 from tests.unit.test_automation_drafts_api import ALICE, TENANT_A, Store
 
 PASSWORD = "S3cr3t-Pw!xyz"
+SK_LIKE = "sk" + "-" + "ant-oat01-abcdefghijklmnop"
 USERNAME = "owner-login-01"
 CRED = str(uuid.uuid4())
 SESSION = str(uuid.uuid4())
@@ -863,3 +864,252 @@ def test_progress_sentences_have_no_forbidden_terms():
     for step in plan(LOGIN, NAV, QUERY, SAVE) + [{"action": "download"}, {"action": "select", "label": "매장"}]:
         sentence = runner.describe(step, site_name="쿠팡이츠")
         assert all(term not in sentence for term in forbidden), sentence
+
+
+# ── 9. 사용자 할 일(task) → 입력·클릭·제출 단계 (T3-A) ─────────────────────
+
+SUBMIT_TASK = "피자 주문 폼에 이름 입력하고 주문 제출"
+FORM_STEPS = [
+    {"action": "fill", "selector": "input[name=custname]", "value": "홍길동", "label": "이름",
+     "risk": "READ", "purpose": "query"},
+    {"action": "click", "selector": "button >> text=Order", "label": "주문 제출", "risk": "READ", "purpose": "query"},
+]
+
+
+class Planner:
+    """계획기(LLM) 대역. 화면 글을 받아 정해 둔 출력을 돌려준다."""
+
+    def __init__(self, output: Any = None, *, error: Exception | None = None) -> None:
+        self.output = json.dumps(output if output is not None else FORM_STEPS, ensure_ascii=False) \
+            if not isinstance(output, str) else output
+        self.error = error
+        self.pages: list[str] = []
+
+    async def __call__(self, intent: dict[str, Any], page: str) -> Any:
+        self.pages.append(page)
+        if self.error:
+            raise self.error
+        return self.output
+
+
+def demo_planned(w: World, did: str, planner: Planner | None) -> runner.Outcome:
+    deps = w.deps()
+    deps.plan_steps = planner
+    return run(runner.run_demo(did, tenant_id=TENANT_A, deps=deps))
+
+
+def called(w: World) -> list[str]:
+    return [str(c.get("description")) for c in w.executor.calls]
+
+
+def test_default_deps_wire_the_planner():
+    assert runner.default_deps().plan_steps is not None
+
+
+def test_user_flow_plan_gets_submit_step_and_pauses_before_submitting(world, monkeypatch):
+    async def ask(text, tenant_id):
+        return {"task": SUBMIT_TASK, "output_kind": "screen"}
+
+    async def find(*, tenant_id, domain):
+        return [{"id": CRED, "display_name": "사장님 계정", "host": "httpbin.org"}]
+
+    monkeypatch.setattr(flow.parser, "_ask_llm", ask)
+    monkeypatch.setattr(flow, "list_recipes", lambda **kw: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr(flow.linker, "find_credentials", find)
+    started = run(flow.start(actor(), "https://httpbin.org/forms/post 에서 피자 주문 폼에 이름 입력하고 주문 제출"))
+    did = started["draft"]["id"]
+    assert started["draft"]["intent"]["task"] == SUBMIT_TASK
+    run(flow.confirm_intent(actor(), did, "intent_draft"))
+    run(flow.choose_credential(actor(), did, credential_id=CRED))
+    assert row(world, did)["state"] == "credential_ready"
+    run(flow.start_demo(actor(), did, "credential_ready"))
+    assert world.launched == [did] and row(world, did)["state"] == "demonstrating"
+
+    planner = Planner()
+    outcome = demo_planned(world, did, planner)
+    assert (outcome.status, outcome.risk) == ("paused", RiskLevel.WRITE_EXTERNAL.value)
+    data = row(world, did)
+    assert data["state"] == "paused_risk"
+    assert "주문 제출" not in called(world)  # 제출 단계는 실행기에 한 번도 가지 않았다
+    assert "이름" in called(world)  # 앞선 입력은 했다
+    plan_now = data["recording_ref"]["plan"]
+    submit = next(s for s in plan_now if s.get("label") == "주문 제출")
+    assert data["recording_ref"]["paused_seq"] == submit["seq"]
+    assert submit["risk"] == "WRITE_EXTERNAL" and submit["purpose"] == "navigate"
+    assert plan_now[-1]["action"] == "snapshot" and plan_now[-1]["seq"] == len(plan_now)
+    assert data["recording_ref"]["plan_state"] == "expanded" and "plan_fallback" not in data["evidence"]
+    assert len(planner.pages) == 1 and "row" in planner.pages[0]
+    assert data["recording_ref"]["paused_label"] == "주문 제출"
+
+
+def test_planner_risk_and_purpose_labels_cannot_lower_the_risk(world):
+    did = new_draft(world, credential=False)
+    steps = [{"action": "click", "selector": "button.go", "label": "제출", "risk": "READ", "purpose": "query"}]
+    outcome = demo_planned(world, did, Planner(steps))
+    assert outcome.status == "paused" and outcome.risk == RiskLevel.WRITE_EXTERNAL.value
+    assert "제출" not in called(world)
+    saved = row(world, did)["recording_ref"]["plan"]
+    assert [s["purpose"] for s in saved][1:3] == ["navigate", "query"]
+    assert saved[1]["risk"] == "WRITE_EXTERNAL"
+
+
+def test_enter_key_after_typing_is_never_a_free_read(world):
+    did = new_draft(world, credential=False)
+    steps = [{"action": "fill", "selector": "#q", "value": "abc", "label": "검색"},
+             {"action": "press", "selector": "#q", "value": "Enter", "label": "검색", "risk": "READ"}]
+    outcome = demo_planned(world, did, Planner(steps))
+    assert outcome.status == "paused" and outcome.seq == 3
+    assert [c["action"] for c in world.executor.calls] == ["navigate", "snapshot", "fill"]
+
+
+def test_read_only_task_steps_run_to_the_end(world):
+    did = new_draft(world, credential=False)
+    steps = [{"action": "fill", "selector": "#date", "value": "2026-10-13", "label": "조회 날짜", "role": "date"},
+             {"action": "click", "selector": "button.search", "label": "조회"}]
+    assert demo_planned(world, did, Planner(steps)).status == "done"
+    assert called(world)[-1] == "결과" and "조회" in called(world)
+
+
+def test_redemo_keeps_write_steps_and_their_risk(world):
+    did = new_draft(world, credential=False)
+    steps = [{"action": "click", "selector": "a.menu", "label": "제출", "role": "menu"},
+             {"action": "fill", "selector": "#date", "value": "2026-10-13", "label": "조회 날짜", "role": "date"},
+             {"action": "click", "selector": "button.go", "label": "보내기"}]
+    planner = Planner(steps)
+    assert demo_planned(world, did, planner).status == "paused"
+    world.store.set_state(did, "revising")
+    run(flow.redemo(actor(), did, "wrong_menu", {"menu": "정산 내역"}))
+    plan_menu = row(world, did)["recording_ref"]["plan"]
+    assert plan_menu[1]["label"] == "정산 내역" and plan_menu[1]["risk"] == "WRITE_EXTERNAL"
+    assert plan_menu[3]["risk"] == "WRITE_EXTERNAL"
+    world.executor.calls.clear()
+    assert demo_planned(world, did, planner).status == "paused"
+    assert len(planner.pages) == 1  # 같은 계획을 쓴다 — 다시 짜지 않는다
+    assert "보내기" not in called(world) and 'text="정산 내역"' not in [c.get("selector") for c in world.executor.calls]
+
+    world.store.set_state(did, "revising")
+    run(flow.redemo(actor(), did, "wrong_date", {"date": "2026-10-12"}))
+    plan_date = row(world, did)["recording_ref"]["plan"]
+    assert plan_date[2]["value"] == "2026-10-12"
+    assert [s["risk"] for s in plan_date if s["label"] in ("정산 내역", "보내기")] == ["WRITE_EXTERNAL"] * 2
+    world.executor.calls.clear()
+    assert demo_planned(world, did, planner).status == "paused"
+    assert "보내기" not in called(world)
+
+
+def test_no_automatic_approval_after_pause(world):
+    did = new_draft(world, credential=False)
+    planner = Planner([{"action": "click", "selector": "button.go", "label": "제출"}])
+    assert demo_planned(world, did, planner).status == "paused"
+    world.executor.calls.clear()
+    assert demo_planned(world, did, planner).status == "skipped"  # paused_risk 상태에서는 아무것도 하지 않는다
+    world.store.set_state(did, "demonstrating")  # 사람의 [진행] 없이 상태만 되돌린 경우
+    assert demo_planned(world, did, planner).status == "paused"
+    assert "제출" not in called(world) and len(planner.pages) == 1
+    assert row(world, did)["recording_ref"].get("approved_risk") in (None, {})
+
+
+def test_submit_runs_only_after_explicit_proceed(world):
+    did = new_draft(world, credential=False)
+    planner = Planner([{"action": "click", "selector": "button.go", "label": "제출"}])
+    demo_planned(world, did, planner)
+    run(flow.risk_decision(actor(), did, "proceed"))
+    world.executor.calls.clear()
+    assert demo_planned(world, did, planner).status == "done"
+    assert called(world).count("제출") == 1
+
+
+FALLBACK_CASES = [
+    ("planner_raises", Planner(error=RuntimeError("llm down")), "planner_unavailable"),
+    ("no_output", Planner("") , "invalid_schema"),
+    ("not_json", Planner("죄송합니다"), "invalid_schema"),
+    ("empty_list", Planner([]), "planner_empty"),
+    ("navigate_not_allowed", Planner([{"action": "navigate", "selector": "x", "url": "https://evil.example"}]),
+     "invalid_schema"),
+    ("missing_selector", Planner([{"action": "click", "label": "x"}]), "invalid_schema"),
+    ("fill_without_value", Planner([{"action": "fill", "selector": "#a"}]), "invalid_schema"),
+    ("bad_key", Planner([{"action": "press", "selector": "#a", "value": "Control+Alt+Delete"}]), "invalid_schema"),
+    ("bad_role", Planner([{"action": "click", "selector": "#a", "role": "date"}]), "invalid_schema"),
+    ("secret_reference", Planner([{"action": "fill", "selector": "#a", "value": "{{secret.password}}"}]),
+     "unsafe_value"),
+    ("too_many", Planner([{"action": "click", "selector": "#a"}] * 30), "too_many_steps"),
+]
+
+
+@pytest.mark.parametrize("name,planner,reason", FALLBACK_CASES, ids=[c[0] for c in FALLBACK_CASES])
+def test_planner_failure_falls_back_to_navigate_and_snapshot(world, name, planner, reason):
+    planner.pages.clear()
+    did = new_draft(world, credential=False)
+    assert demo_planned(world, did, planner).status == "done"
+    data = row(world, did)
+    assert [s["action"] for s in data["recording_ref"]["plan"]] == ["navigate", "snapshot"]
+    assert data["evidence"]["plan_fallback"] == reason and data["recording_ref"]["plan_state"] == "fallback"
+    assert [c["action"] for c in world.executor.calls] == ["navigate", "snapshot", "snapshot"]
+
+
+def test_missing_planner_or_task_is_a_fallback_not_an_error(world):
+    did = new_draft(world, credential=False)
+    assert demo_planned(world, did, None).status == "done"
+    assert "plan_state" not in row(world, did)["recording_ref"]
+
+
+def test_secret_in_task_is_never_sent_to_the_planner(world):
+    did = new_draft(world, credential=False)
+    world.store.rows[did]["intent"] = json.dumps({**json.loads(world.store.rows[did]["intent"]),
+                                                  "task": f"주문 제출 키 {SK_LIKE}"})
+    planner = Planner()
+    assert demo_planned(world, did, planner).status == "done"
+    assert planner.pages == [] and row(world, did)["evidence"]["plan_fallback"] == "task_has_secret"
+
+
+def test_screen_probe_failure_falls_back(world):
+    world.executor.script = {"화면 확인": [{"ok": False, "error": "timeout"}]}
+    did = new_draft(world, credential=False)
+    planner = Planner()
+    assert demo_planned(world, did, planner).status == "done"
+    assert planner.pages == [] and row(world, did)["evidence"]["plan_fallback"] == "snapshot_failed"
+
+
+def test_login_password_typed_by_the_planner_is_rejected(world):
+    did = new_draft(world)
+    steps = [{"action": "fill", "selector": "#a", "value": PASSWORD, "label": "메모"}]
+    assert demo_planned(world, did, Planner(steps)).status == "done"
+    data = row(world, did)
+    assert data["evidence"]["plan_fallback"] == "unsafe_value" and PASSWORD not in json.dumps(data, default=str)
+
+
+def test_task_steps_never_carry_secret_values_into_the_stored_plan(world):
+    did = new_draft(world)
+    steps = [{"action": "fill", "selector": "#a", "value": "홍길동", "label": "이름"},
+             {"action": "click", "selector": "button.go", "label": "제출"}]
+    demo_planned(world, did, Planner(steps))
+    blob = json.dumps(row(world, did), ensure_ascii=False, default=str)
+    assert PASSWORD not in blob
+    assert "{{secret.password}}" in blob  # 로그인 값은 참조로만 남는다
+
+
+def test_parse_task_steps_drops_planner_markings_and_floors_risk():
+    steps, reason = runner.parse_task_steps(
+        '```json\n[{"action":"fill","selector":"#n","value":"a","label":"이름","purpose":"login",'
+        '"login_submit":true,"approved_fragment":"x","credential_field":"password"},'
+        '{"action":"click","selector":"button","label":"다음","risk":"READ"}]\n```',
+        task=SUBMIT_TASK, domain="httpbin.org",
+    )
+    assert reason == ""
+    assert set(steps[0]) == {"action", "selector", "value", "label", "purpose"} and steps[0]["purpose"] == "navigate"
+    assert steps[1]["risk"] == "WRITE_EXTERNAL"  # 사용자 문장이 '제출' — 입력 뒤 누르기의 하한
+    assert runner.parse_task_steps({"steps": FORM_STEPS}, task="조회", domain="httpbin.org")[1] == ""
+
+
+def test_default_planner_uses_central_llm_client(monkeypatch):
+    seen: dict[str, Any] = {}
+
+    async def fake_call(prompt, **kwargs):
+        seen.update(prompt=prompt, **kwargs)
+        return "[]"
+
+    from app.core import anthropic_client
+
+    monkeypatch.setattr(anthropic_client, "call_llm_with_fallback", fake_call)
+    out = run(runner._default_plan_steps({"site_name": "httpbin", "task": SUBMIT_TASK}, "- textbox \"name\""))
+    assert out == "[]" and SUBMIT_TASK in seen["prompt"] and "textbox" in seen["prompt"]
