@@ -206,7 +206,7 @@ async def _session_in_plan_mode(session_id: str) -> bool:
             )
         return mode == "plan"
     except Exception as exc:
-        from app.services import plan_mode_guard
+        from mcp_servers import plan_mode_guard
 
         if plan_mode_guard.is_missing_mode_column_error(exc):
             return False
@@ -215,7 +215,7 @@ async def _session_in_plan_mode(session_id: str) -> bool:
 
 
 async def _call_tool(name: str, params: dict) -> str:
-    from app.services import plan_mode_guard
+    from mcp_servers import plan_mode_guard
 
     await _ensure_db()
     _, session_id = _bind_aads_chat_session(name, params)
@@ -223,6 +223,10 @@ async def _call_tool(name: str, params: dict) -> str:
         plan_mode_guard.RESPONSE_MODE_PLAN if await _session_in_plan_mode(session_id) else ""
     )
     try:
+        # API 이미지에 guard가 없는 구버전도 있으므로 브리지 자체에서 차단한다.
+        blocked = plan_mode_guard.check(TOOL_NAME_MAP.get(name, name), params)
+        if blocked is not None:
+            return blocked
         return await _call_tool_unguarded(name, params)
     finally:
         plan_mode_guard.reset_response_mode(plan_token)
@@ -344,7 +348,7 @@ async def list_tools() -> list[types.Tool]:
         ))
 
     if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() == "plan":
-        from app.services import plan_mode_guard
+        from mcp_servers import plan_mode_guard
 
         # 계획만 모드로 띄운 브리지는 읽기 후보가 아닌 도구를 아예 내보내지 않는다(차단은 _call_tool 이 한다).
         return plan_mode_guard.filter_offered_tools(tools)

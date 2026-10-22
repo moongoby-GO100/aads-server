@@ -48,6 +48,8 @@ async def test_mcp_bridge_binds_aads_session_for_runner_submit():
 
     with patch.dict(os.environ, {"AADS_SESSION_ID": session_id}, clear=False), patch(
         "mcp_servers.aads_tools_bridge._ensure_db", new=AsyncMock()
+    ), patch(
+        "mcp_servers.aads_tools_bridge._session_in_plan_mode", new=AsyncMock(return_value=False)
     ), patch("app.services.tool_executor.ToolExecutor", return_value=FakeExecutor()):
         result = await bridge._call_tool(
             "pipeline_runner_submit",
@@ -103,3 +105,58 @@ async def test_mcp_bridge_db_tool_returns_before_client_disconnect(monkeypatch):
     payload = json.loads(result[0].text)
     assert payload["error_code"] == "mcp_db_tool_deadline"
     assert payload["tool"] == "query_database"
+
+
+@pytest.mark.asyncio
+async def test_bridge_status_without_api_guard(monkeypatch):
+    """API 이미지에 plan guard가 없어도 브리지의 상태 조회는 실행한다."""
+    import builtins
+    import mcp_servers.aads_tools_bridge as bridge
+    original_import = builtins.__import__
+
+    def without_api_guard(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "app.services" and "plan_mode_guard" in (fromlist or ()):
+            raise ImportError("cannot import name 'plan_mode_guard' from 'app.services'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", without_api_guard)
+    monkeypatch.setattr(bridge, "_ensure_db", AsyncMock())
+    monkeypatch.setattr(bridge, "_session_in_plan_mode", AsyncMock(return_value=True))
+    execute = AsyncMock(return_value='{"status":"ok"}')
+    monkeypatch.setattr(bridge, "_call_tool_unguarded", execute)
+    result = await bridge.call_tool("pipeline_runner_status", {})
+    assert json.loads(result[0].text) == {"status": "ok"}
+    execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bridge_plan_blocks_before_dispatch_and_resets(monkeypatch):
+    import mcp_servers.aads_tools_bridge as bridge
+    from mcp_servers import plan_mode_guard as guard
+    monkeypatch.setattr(bridge, "_ensure_db", AsyncMock())
+    monkeypatch.setattr(bridge, "_session_in_plan_mode", AsyncMock(return_value=True))
+    execute = AsyncMock()
+    monkeypatch.setattr(bridge, "_call_tool_unguarded", execute)
+    for name in ("pipeline_runner_submit", "run_remote_command", "new_unknown_tool"):
+        payload = json.loads(await bridge._call_tool(name, {}))
+        assert payload["error"] == "plan_mode_blocked"
+        assert not guard.plan_mode_active()
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bridge_plan_catalog_without_api_guard(monkeypatch):
+    import mcp_servers.aads_tools_bridge as bridge
+    monkeypatch.setenv("AADS_RESPONSE_MODE", "plan")
+    monkeypatch.setattr(bridge, "_get_tool_definitions", lambda: [
+        {"name": "pipeline_runner_status"}, {"name": "run_remote_command"},
+    ])
+    assert [tool.name for tool in await bridge.list_tools()] == ["pipeline_runner_status"]
+
+
+@pytest.mark.asyncio
+async def test_bridge_lookup_failure_stays_fail_closed(monkeypatch):
+    import mcp_servers.aads_tools_bridge as bridge
+    monkeypatch.delenv("AADS_RESPONSE_MODE", raising=False)
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: (_ for _ in ()).throw(RuntimeError("DB unavailable")))
+    assert await bridge._session_in_plan_mode("11111111-1111-1111-1111-111111111111") is True
