@@ -90,7 +90,7 @@ class _Session:
             return {"companies": f.companies}
         cid = args["companyId"]
         if cid in f.denied:
-            raise clobe.ClobeError("forbidden")
+            raise clobe.ClobePermissionDenied("forbidden")
         if tool == "get_scraping_status":
             return {"assets": f.assets.get(cid, [])}
         kind = next(k for k, t in clobe.COLLECTION_DATA_TOOLS.items() if t == tool)

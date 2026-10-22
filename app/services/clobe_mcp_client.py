@@ -70,6 +70,28 @@ class ClobeTransientError(ClobeError):
     """재시도하면 풀릴 수 있는 장애(네트워크·429·5xx). 상태를 바꾸지 않는다."""
 
 
+ERROR_DETAIL_MAX = 200
+
+
+class ClobeToolError(ClobeError):
+    """도구가 isError 로 답했지만 권한 거부로 읽히지 않는 경우. 일시 오류로 취급한다(권한 상태를 바꾸지 않는다).
+
+    str(exc) 는 분류 코드("tool_error")만이고, 마스킹한 앞 200자는 detail 에 둔다.
+    """
+
+    def __init__(self, detail: str = "") -> None:
+        super().__init__("tool_error")
+        self.detail = detail
+
+
+class ClobePermissionDenied(ClobeToolError):
+    """도구 응답 문구가 명시적으로 권한 거부(권한/forbidden/permission/not a member 등)를 말할 때만."""
+
+    def __init__(self, detail: str = "") -> None:
+        super().__init__(detail)
+        self.args = ("permission_denied",)
+
+
 SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS clobe_mcp_oauth_client (
     redirect_uri TEXT PRIMARY KEY,
@@ -842,10 +864,47 @@ async def get_tool_input_schema(name: str) -> dict[str, Any]:
     return schema if isinstance(schema, dict) else {}
 
 
+_PERMISSION_DENIED_RE = re.compile(
+    r"permission|forbidden|not\s+a\s+member|not\s+authori[sz]ed|access\s+denied|no\s+access|권한|접근\s*(?:불가|거부|할\s*수\s*없|이\s*없)",
+    re.I,
+)
+_SECRET_KV_RE = re.compile(r"(?i)\b(access_token|refresh_token|id_token|token|secret|password|passwd|api[_-]?key|code|authorization)\b(\s*[=:]\s*)\S+")
+_BEARER_RE = re.compile(r"(?i)\bbearer\s+\S+")
+_LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-./+=]{24,}")
+
+
+def mask_error_text(text: Any, limit: int = ERROR_DETAIL_MAX) -> str:
+    """도구 오류 문구를 앞 limit 자로 줄이고 토큰·비밀값 모양을 가린다(마스킹 후 자른다 — 잘린 토큰 조각이 남지 않게)."""
+    out = re.sub(r"\s+", " ", str(text or "")).strip()
+    out = _BEARER_RE.sub("Bearer ***", out)
+    out = _SECRET_KV_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}***", out)
+    out = _LONG_TOKEN_RE.sub("***", out)
+    return out[:limit]
+
+
+def _tool_error_text(result: dict[str, Any]) -> str:
+    parts: list[str] = []
+    content = result.get("content")
+    if isinstance(content, list):
+        parts.extend(str(c.get("text") or "") for c in content if isinstance(c, dict))
+    structured = result.get("structuredContent")
+    if not parts and isinstance(structured, dict):
+        parts.append(str(structured.get("message") or structured.get("error") or ""))
+    return " ".join(p for p in parts if p)
+
+
+def classify_tool_error(result: dict[str, Any]) -> ClobeToolError:
+    """isError 응답을 권한 거부 / 일반 도구 오류로 가른다. 문구는 마스킹해 detail 에만 담는다."""
+    detail = mask_error_text(_tool_error_text(result))
+    if _PERMISSION_DENIED_RE.search(detail):
+        return ClobePermissionDenied(detail)
+    return ClobeToolError(detail)
+
+
 def parse_tool_json(result: dict[str, Any]) -> dict[str, Any]:
     """tools/call 결과에서 JSON 객체 하나를 꺼낸다. 오류·비JSON 은 분류 코드만 담아 거부한다."""
     if result.get("isError"):
-        raise ClobeError("tool_error")
+        raise classify_tool_error(result)
     structured = result.get("structuredContent")
     if isinstance(structured, dict):
         return structured

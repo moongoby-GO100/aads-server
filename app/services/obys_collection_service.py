@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -197,14 +198,77 @@ async def check_company_permission(
                 await session.call("get_scraping_status", {"companyId": company_id})
         except (clobe.ClobeReauthRequired, clobe.ClobeTransientError):
             raise
+        except clobe.ClobePermissionDenied as exc:
+            ok, error = False, _permission_error_text(exc)
         except clobe.ClobeError as exc:
-            ok, error = False, f"permission_denied:{str(exc)[:60]}"
+            # 명시적 권한 거부가 아닌 도구 오류는 권한 상태를 바꾸지 않는다.
+            logger.warning("clobe_permission_check_tool_error detail=%s", getattr(exc, "detail", None) or str(exc)[:60])
+            raise CollectionError("clobe_tool_error", 502) from None
         await conn.execute(
             "UPDATE obys_clobe_company_link SET permission_ok=$2, permission_error=$3, permission_checked_at=now() "
             "WHERE clobe_company_id=$1",
             company_id, ok, error,
         )
         return {"clobe_company_id": company_id, "permission_ok": ok, "error": error}
+    finally:
+        await conn.close()
+
+
+def _permission_error_text(exc: clobe.ClobeError) -> str:
+    return f"permission_denied:{getattr(exc, 'detail', '') or str(exc)[:60]}"
+
+
+_RECHECK_FAIL_RE = re.compile(r";recheck_fail=(\d+)$")
+
+
+def recheck_fail_count(permission_error: Any) -> int:
+    """permission_error 끝의 ;recheck_fail=N 꼬리표(연속 재확인 실패 횟수). 없으면 0 — 컬럼을 늘리지 않으려고 문구에 싣는다."""
+    m = _RECHECK_FAIL_RE.search(str(permission_error or ""))
+    return int(m.group(1)) if m else 0
+
+
+def _with_recheck_fail(error: str, fails: int) -> str:
+    return f"{_RECHECK_FAIL_RE.sub('', error)[:240]};recheck_fail={fails}"
+
+
+async def recheck_company_permission(
+    company_id: str, *, session_factory: Callable[[], Any] | None = None,
+) -> dict[str, Any]:
+    """permission_ok=FALSE 로 박힌 연결 회사를 get_scraping_status 1회로 다시 확인한다.
+
+    성공하면 TRUE 로 되돌려 다음 회차부터 수집 대상이 된다. 실패(권한 거부·도구 오류)는 FALSE 를 유지하고
+    permission_checked_at 을 갱신하며 연속 실패 횟수를 센다. 재인증 필요·일시 장애는 상태를 바꾸지 않고 그대로 던진다.
+    """
+    factory = session_factory or clobe.ReadSession
+    conn = await _connect()
+    try:
+        link = await _get_link(conn, company_id)
+        try:
+            _scoped_link_or_raise(link)
+        except CollectionError as exc:
+            return {"clobe_company_id": company_id, "status": "skipped", "reason": exc.code}
+        if link["permission_ok"] is not False or link["permission_error"] == ABSENT_ERROR:
+            return {"clobe_company_id": company_id, "status": "skipped", "reason": "not_recheckable"}
+        error: str
+        try:
+            async with factory() as session:
+                await session.call("get_scraping_status", {"companyId": company_id})
+        except (clobe.ClobeReauthRequired, clobe.ClobeTransientError):
+            raise
+        except clobe.ClobePermissionDenied as exc:
+            error = _permission_error_text(exc)
+        except clobe.ClobeError as exc:
+            error = f"tool_error:{getattr(exc, 'detail', '') or str(exc)[:60]}"
+        else:
+            await conn.execute(
+                "UPDATE obys_clobe_company_link SET permission_ok=TRUE, permission_error=NULL, permission_checked_at=now() "
+                "WHERE clobe_company_id=$1 AND permission_ok IS FALSE", company_id)
+            return {"clobe_company_id": company_id, "status": "recovered", "fails": 0}
+        fails = recheck_fail_count(link["permission_error"]) + 1
+        await conn.execute(
+            "UPDATE obys_clobe_company_link SET permission_error=$2, permission_checked_at=now() "
+            "WHERE clobe_company_id=$1 AND permission_ok IS FALSE", company_id, _with_recheck_fail(error, fails))
+        return {"clobe_company_id": company_id, "status": "still_failing", "fails": fails}
     finally:
         await conn.close()
 
@@ -755,11 +819,15 @@ async def _preflight(conn: Any, session: Any, ctx: RunCtx) -> dict[str, Any]:
         payload = await session.call("get_scraping_status", {"companyId": ctx.company_id})
     except (clobe.ClobeReauthRequired, clobe.ClobeTransientError):
         raise
-    except clobe.ClobeError as exc:
+    except clobe.ClobePermissionDenied as exc:
         await conn.execute(
             "UPDATE obys_clobe_company_link SET permission_ok=FALSE, permission_error=$2, permission_checked_at=now() "
-            "WHERE clobe_company_id=$1", ctx.company_id, f"permission_denied:{str(exc)[:60]}")
+            "WHERE clobe_company_id=$1", ctx.company_id, _permission_error_text(exc))
         raise CollectionError("permission_denied", 403) from None
+    except clobe.ClobeError as exc:
+        # 일반 tool_error 는 이 회차만 실패시킨다. permission_ok 를 FALSE 로 박으면 스케줄러가 그 회사를 영구히 건너뛴다.
+        logger.warning("clobe_preflight_tool_error detail=%s", getattr(exc, "detail", None) or str(exc)[:60])
+        raise CollectionError("clobe_tool_error", 502) from None
     await conn.execute(
         "UPDATE obys_clobe_company_link SET permission_ok=TRUE, permission_error=NULL, permission_checked_at=now() "
         "WHERE clobe_company_id=$1", ctx.company_id)

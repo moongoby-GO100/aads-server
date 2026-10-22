@@ -65,7 +65,11 @@ def world(monkeypatch):
     async def get_status():
         return {"status": "reauth_required" if w.reauth else "connected", "reauth_required": w.reauth}
 
+    async def load_recheck_candidates():
+        return []
+
     monkeypatch.setattr(sched, "load_state", load_state)
+    monkeypatch.setattr(sched, "load_recheck_candidates", load_recheck_candidates)
     monkeypatch.setattr(svc, "run_collection", run_collection)
     monkeypatch.setattr(clobe, "get_status", get_status)
     return w

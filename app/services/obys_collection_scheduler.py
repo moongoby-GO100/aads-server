@@ -33,6 +33,12 @@ FAILURE_STATUSES = frozenset({"failed", "error", "lease_lost", "needs_reauth"})
 _SEVERITY = ("needs_reauth", "lease_lost", "error", "failed", "partial", "succeeded")
 _SCOPE_CODES = frozenset({"company_blocked", "tenant_not_in_collection_scope", "company_not_linked"})
 
+RECHECK_HOURS_ENV = "OBYS_CLOBE_PERMISSION_RECHECK_HOURS"
+RECHECK_MAX_FAILS_ENV = "OBYS_CLOBE_PERMISSION_RECHECK_MAX_FAILS"
+DEFAULT_RECHECK_HOURS = 6.0
+DEFAULT_RECHECK_MAX_FAILS = 5
+_RECHECK_BACKOFF_CAP = 4  # 간격은 연속 실패마다 2배, 2**4 배(기본 96시간)에서 멈춘다.
+
 
 def instance_name() -> str:
     """수동 실행(기본 aads-api)과 달라야 한다 — 같은 이름이면 acquire_lease 가 재진입으로 보고 임대를 가로챈다."""
@@ -66,6 +72,80 @@ async def load_state() -> tuple[list[dict[str, Any]], dict[str, dict[str, dict[s
     for row in states:
         by_company.setdefault(row["clobe_company_id"], {})[row["data_kind"]] = dict(row)
     return [dict(r) for r in links], by_company
+
+
+def recheck_interval() -> timedelta | None:
+    """permission_ok=FALSE 회사를 다시 확인하는 최소 간격. 0 이하면 재확인을 끈다(None)."""
+    try:
+        hours = float(os.getenv(RECHECK_HOURS_ENV, "") or DEFAULT_RECHECK_HOURS)
+    except ValueError:
+        hours = DEFAULT_RECHECK_HOURS
+    return timedelta(hours=hours) if hours > 0 else None
+
+
+def recheck_max_fails() -> int:
+    try:
+        return max(1, int(os.getenv(RECHECK_MAX_FAILS_ENV, "") or DEFAULT_RECHECK_MAX_FAILS))
+    except ValueError:
+        return DEFAULT_RECHECK_MAX_FAILS
+
+
+def is_recheck_due(permission_checked_at: datetime | None, fails: int, now: datetime,
+                   interval: timedelta, max_fails: int) -> bool:
+    """마지막 확인 뒤 interval × 2^연속실패(상한 있음) 가 지났고, 연속 실패가 max_fails 미만이면 True."""
+    if fails >= max_fails:
+        return False
+    if permission_checked_at is None:
+        return True
+    if permission_checked_at.tzinfo is None:
+        permission_checked_at = permission_checked_at.replace(tzinfo=timezone.utc)
+    return now - permission_checked_at >= interval * (2 ** min(fails, _RECHECK_BACKOFF_CAP))
+
+
+async def load_recheck_candidates() -> list[dict[str, Any]]:
+    conn = await svc._connect()
+    try:
+        rows = await conn.fetch(
+            "SELECT clobe_company_id, permission_checked_at, permission_error FROM obys_clobe_company_link "
+            "WHERE link_status='linked' AND permission_ok IS FALSE "
+            "AND permission_error IS DISTINCT FROM $1 ORDER BY clobe_company_id", svc.ABSENT_ERROR)
+    finally:
+        await conn.close()
+    return [dict(r) for r in rows]
+
+
+async def recheck_permissions(now: datetime, deadline: float) -> list[dict[str, Any]]:
+    """간격이 지난 permission_ok=FALSE 회사를 get_scraping_status 1회로 다시 확인한다. 이 단계의 실패는 수집을 막지 않는다."""
+    interval = recheck_interval()
+    if interval is None:
+        return []
+    max_fails = recheck_max_fails()
+    try:
+        candidates = await load_recheck_candidates()
+    except Exception as exc:  # noqa: BLE001 - 재확인 조회 실패가 정기 수집을 막으면 안 된다
+        logger.warning("obys_scheduler_recheck_load_failed type=%s", type(exc).__name__)
+        return []
+    out: list[dict[str, Any]] = []
+    for row in candidates:
+        cid = row["clobe_company_id"]
+        fails = svc.recheck_fail_count(row.get("permission_error"))
+        if not is_recheck_due(row.get("permission_checked_at"), fails, now, interval, max_fails):
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            res = await asyncio.wait_for(svc.recheck_company_permission(cid), timeout=remaining)
+        except (clobe.ClobeReauthRequired, clobe.ClobeTransientError) as exc:
+            # 연결 문제는 회사 문제가 아니다 — 실패 횟수를 올리지 않고 이번 회차 재확인을 접는다.
+            out.append({"company_id": cid, "status": "recheck_unavailable", "detail": type(exc).__name__})
+            break
+        except Exception as exc:  # noqa: BLE001 - 한 회사의 예외가 다른 회사를 막지 않는다
+            logger.warning("obys_scheduler_recheck_failed type=%s", type(exc).__name__)
+            out.append({"company_id": cid, "status": "recheck_error", "detail": type(exc).__name__})
+            continue
+        out.append({"company_id": cid, "status": res.get("status"), "fails": res.get("fails")})
+    return out
 
 
 async def _reauth_confirmed() -> bool:
@@ -168,6 +248,7 @@ async def run_due(now: datetime | None = None, *, budget_seconds: float = BUDGET
     instance = instance_name()
     started = time.monotonic()
     deadline = started + budget_seconds
+    rechecks = await recheck_permissions(now, deadline)
     links, states = await load_state()
     companies: list[dict[str, Any]] = []
     reauth_confirmed = False
@@ -193,7 +274,7 @@ async def run_due(now: datetime | None = None, *, budget_seconds: float = BUDGET
     ok = not budget_exhausted and not any(s in FAILURE_STATUSES for s in tally)
     return {
         "ok": ok, "instance": instance, "today_kst": today.isoformat(), "total": len(companies),
-        "tally": tally, "budget_exhausted": budget_exhausted,
+        "tally": tally, "budget_exhausted": budget_exhausted, "permission_rechecks": rechecks,
         "elapsed_seconds": round(time.monotonic() - started, 1), "companies": companies,
     }
 
