@@ -3945,6 +3945,14 @@ async def jwt_auth_middleware(request: Request, call_next):
     if any(path.startswith(p) for p in _MONITOR_KEY_PATHS):
         return await call_next(request)
 
+    # 2-1) 핸드오버 쓰기 전용 키: (POST, 정확 경로) 하나만 통과. 키 검증은 get_current_user 가 한다.
+    #      헤더 유무만 보고 넘기므로 다른 경로·메서드는 아래 4)/5) 로 떨어져 401 이다.
+    if (
+        _auth_mod.is_handover_write_request(request.method, path)
+        and request.headers.get(_auth_mod.HANDOVER_WRITE_KEY_HEADER)
+    ):
+        return await call_next(request)
+
     # 3) OPTIONS (CORS preflight)
     if request.method == "OPTIONS":
         return await call_next(request)

@@ -3,9 +3,10 @@
 
 새 쓰기 경로를 만들지 않는다 — app.services.handover_store.upsert_handover_entry 를 그대로 쓴다.
 app 패키지를 import 할 수 없는 호스트(contabo14 등 DB_MODE=psql 원격 러너)에서는 같은 엔드포인트인
-POST {AADS_API_URL}/api/v1/handovers 로 폴백한다. 인증은 서버가 이미 쓰는 AADS_MONITOR_KEY(x-monitor-key)이며
-러너 EnvironmentFile(/root/.config/aads-runner.env)에만 둔다 — 코드에 하드코딩하지 않는다(R-KEY).
-미설정이면 error=http_fallback_unconfigured, HTTP 실패도 예외 없이 사유만 돌려준다(러너 작업은 계속).
+POST {AADS_API_URL}/api/v1/handovers 로 폴백한다. 인증 자격 우선순위: AADS_HANDOVER_WRITE_KEY(x-handover-key, POST /api/v1/handovers 전용·관리자 권한 없음)
+> AADS_MONITOR_KEY(x-monitor-key, 관리자 권한). 둘 다 러너 EnvironmentFile(/root/.config/aads-runner.env)에만 둔다 —
+코드에 하드코딩하지 않고 로그·이벤트에도 남기지 않는다(R-KEY). 둘 다 없으면 error=http_fallback_unconfigured,
+HTTP 실패도 예외 없이 사유만 돌려준다(러너 작업은 계속).
 stdin: JSON {"tenant_id","project","job_id","stage","job":{instruction,commit_hash,changed_files,
 result_output,review_verdict,review_score,status}}
 stdout: 한 줄 JSON {"ok":bool,"revision":int,"changed":bool,"entry_key":str,"error":str}
@@ -100,13 +101,26 @@ def build_entry(payload: dict) -> dict:
     }
 
 
+def select_auth_header() -> tuple[str, str] | None:
+    """(헤더 이름, 값). 쓰기 전용 키 > 모니터 키 > None. 값은 호출자가 요청 헤더에만 쓰고 기록하지 않는다."""
+    write_key = (os.getenv("AADS_HANDOVER_WRITE_KEY") or "").strip()
+    if write_key:
+        return "x-handover-key", write_key
+    monitor_key = (os.getenv("AADS_MONITOR_KEY") or "").strip()
+    if monitor_key:
+        return "x-monitor-key", monitor_key
+    return None
+
+
 def http_fallback_write(payload: dict, opener=urllib.request.urlopen, timeout: float = 20.0) -> dict:
     """handover_store 를 import 할 수 없을 때 POST /api/v1/handovers 로 같은 entry 를 upsert 한다. 예외를 던지지 않는다."""
     key = entry_key_for(str(payload.get("job_id") or ""))
     base = (os.getenv("AADS_API_URL") or "").strip().rstrip("/")
-    monitor_key = (os.getenv("AADS_MONITOR_KEY") or "").strip()
-    if not base or not monitor_key:
-        missing = [n for n, v in (("AADS_API_URL", base), ("AADS_MONITOR_KEY", monitor_key)) if not v]
+    auth = select_auth_header()
+    if not base or auth is None:
+        missing = ["AADS_API_URL"] if not base else []
+        if auth is None:
+            missing.append("AADS_HANDOVER_WRITE_KEY|AADS_MONITOR_KEY")
         return {"ok": False, "entry_key": key, "error": f"http_fallback_unconfigured: {','.join(missing)} not set"}
     try:
         entry = build_entry(payload)
@@ -114,7 +128,7 @@ def http_fallback_write(payload: dict, opener=urllib.request.urlopen, timeout: f
         body = json.dumps({"project_key": str(payload["project"]), **entry}, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
             f"{base}/api/v1/handovers", data=body, method="POST",
-            headers={"Content-Type": "application/json", "x-monitor-key": monitor_key},
+            headers={"Content-Type": "application/json", auth[0]: auth[1]},
         )
         with opener(req, timeout=timeout) as resp:
             status = int(getattr(resp, "status", 0) or resp.getcode())

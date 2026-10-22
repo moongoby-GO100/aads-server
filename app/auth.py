@@ -1747,16 +1747,103 @@ async def _load_tenant_context(user: dict, requested_tenant_id: Optional[str] = 
     }
 
 
+# ── 핸드오버 쓰기 전용 서비스 키 ─────────────────────────────────────
+# 원격 러너가 AADS_MONITOR_KEY(관리자 권한)를 갖지 않고 핸드오버만 쓰게 하는 범위 한정 자격.
+# 서버에는 원문이 아니라 SHA-256 hex 만 둔다(쉼표 구분 — 키 교체 기간에 둘 다 받는다).
+# 허용 범위는 (POST, /api/v1/handovers) 정확히 하나다. prefix 로 넓히지 않는다.
+HANDOVER_WRITE_KEY_HEADER = 'x-handover-key'
+HANDOVER_WRITE_KEY_ENV = 'AADS_HANDOVER_WRITE_KEY_SHA256'
+HANDOVER_WRITE_METHOD = 'POST'
+HANDOVER_WRITE_PATH = '/api/v1/handovers'
+HANDOVER_WRITER_USER_ID = 'system:handover-writer'
+_SHA256_HEX = re.compile(r'^[0-9a-f]{64}$')
+
+
+def is_handover_write_request(method: str, path: str) -> bool:
+    return (method or '').upper() == HANDOVER_WRITE_METHOD and path == HANDOVER_WRITE_PATH
+
+
+def _handover_write_key_hashes() -> list[str]:
+    hashes = []
+    for part in os.getenv(HANDOVER_WRITE_KEY_ENV, '').split(','):
+        candidate = part.strip().lower()
+        if _SHA256_HEX.match(candidate):
+            hashes.append(candidate)
+    return hashes
+
+
+def handover_write_key_matches(presented: Optional[str]) -> bool:
+    """제시된 키의 SHA-256 이 허용 해시 중 하나와 같으면 True. 해시 env 가 비면 항상 False(기능 꺼짐)."""
+    presented = (presented or '').strip()
+    hashes = _handover_write_key_hashes()
+    if not presented or not hashes:
+        return False
+    digest = hashlib.sha256(presented.encode('utf-8')).hexdigest()
+    matched = False
+    for allowed in hashes:
+        matched = hmac.compare_digest(digest, allowed) or matched
+    return matched
+
+
+async def _handover_writer_principal() -> dict:
+    """is_admin=False, internal 테넌트 member 권한만 갖는 핸드오버 쓰기 주체."""
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        tenant = await conn.fetchrow(
+            """
+            SELECT id::text AS id, slug, name, kind, status
+              FROM tenants
+             WHERE slug = 'internal'
+               AND deleted_at IS NULL
+             LIMIT 1
+            """
+        )
+    if not tenant:
+        raise HTTPException(status_code=503, detail='Internal tenant is not initialized')
+    return {
+        'user_id': HANDOVER_WRITER_USER_ID,
+        'email': 'handover-writer@aads.internal',
+        'is_admin': False,
+        'tenant_id': tenant['id'],
+        'current_tenant': {
+            'id': tenant['id'],
+            'slug': tenant['slug'],
+            'name': tenant['name'],
+            'kind': tenant['kind'],
+            'status': tenant['status'],
+        },
+        'current_membership': {
+            'id': 'service-handover-write-key',
+            'tenant_id': tenant['id'],
+            'user_id': HANDOVER_WRITER_USER_ID,
+            'role': TenantRole.MEMBER.value,
+            'status': 'active',
+        },
+        'tenant_role': TenantRole.MEMBER.value,
+        'user_role': 'service',
+        'is_internal_admin': False,
+    }
+
+
 # ── FastAPI Dependency: JWT에서 현재 사용자 추출 ─────────────────────
 async def get_current_user(
     request: Request,
     authorization: str = Header(None),
     x_tenant_id: Optional[str] = Header(None, alias='X-Tenant-ID'),
     x_monitor_key: Optional[str] = Header(None, alias='x-monitor-key'),
+    x_handover_key: Optional[str] = Header(None, alias=HANDOVER_WRITE_KEY_HEADER),
 ) -> dict:
     """Bearer 토큰에서 사용자 정보 추출. Depends()로 사용."""
     if not JWT_AVAILABLE:
         raise HTTPException(status_code=503, detail='JWT not available')
+    handover_key = (x_handover_key or request.headers.get(HANDOVER_WRITE_KEY_HEADER) or '').strip()
+    if handover_key:
+        # 이 헤더는 POST /api/v1/handovers 에서만 의미가 있다. 다른 경로·메서드면 다른 자격으로 폴백하지 않고 거부한다.
+        if not is_handover_write_request(request.method, request.url.path or ''):
+            raise HTTPException(status_code=401, detail='handover key is not valid for this route')
+        if not handover_write_key_matches(handover_key):
+            raise HTTPException(status_code=401, detail='invalid handover key')
+        return await _handover_writer_principal()
     monitor_key = (
         x_monitor_key
         or request.headers.get('x-monitor-key')

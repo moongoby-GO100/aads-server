@@ -1864,7 +1864,8 @@ runner_heavy_flush_events() {
 # R-001 (2026-10-08 개정): 작업 결과를 핸드오버 DB 에 upsert 하고 같은 entry_key 를 다시 읽어 확인한다.
 # 쓰기는 app.services.handover_store(scripts/runner_handover_write.py)를 그대로 쓴다 — 새 쓰기 경로 없음.
 # app/ 이 없는 원격 러너(contabo14 등)는 헬퍼가 POST $AADS_API_URL/api/v1/handovers 로 폴백한다 —
-# 인증은 러너 EnvironmentFile 의 AADS_MONITOR_KEY(x-monitor-key). 미설정이면 reason=http_fallback_unconfigured.
+# 인증은 러너 EnvironmentFile 의 AADS_HANDOVER_WRITE_KEY(x-handover-key, 이 POST 하나만 허용·관리자 권한 없음)를 먼저,
+# 없으면 AADS_MONITOR_KEY(x-monitor-key). 둘 다 없으면 reason=http_fallback_unconfigured. 키 값은 로그·이벤트에 남기지 않는다.
 # 실패해도 작업을 실패시키지 않는다(보수적 단계): runner_event(handover_db_write_failed)와
 # review_feedback 의 "핸드오버 DB 미기록" 표시만 남긴다. 끄는 법: RUNNER_HANDOVER_DB_WRITE=0
 runner_handover_record() {
