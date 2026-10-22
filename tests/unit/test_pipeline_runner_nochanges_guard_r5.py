@@ -287,16 +287,22 @@ def test_recheck_exhausted_clean_worktree_stays_no_changes(harness_file, tmp_pat
 
 def test_recheck_exhausted_dirty_worktree_errors_as_uncommitted(harness_file, tmp_path):
     """케이스 B: 재확인을 다 써도 diff 는 0건이지만 워크트리에 미커밋 변경이 있으면
-    no_changes 가 아니라 uncommitted_worktree_changes 로 error 종결해야 한다."""
+    no_changes 가 아니라 uncommitted_worktree_changes 로 error 종결해야 한다.
+
+    b4ffa9a0(2026-10-11) 이후 일반 untracked 파일은 capture_job_diff_text 의
+    untracked-fallback 으로 git_diff 에 포함돼 "변경 회복"(NO_CHANGES_RECHECK_RECOVERED)
+    으로 정상 진행한다 — 신규 파일을 리뷰에 싣기 위한 의도된 동작이다. 그래서 diff 에서
+    빠지는 러너 산출물(JOB_DIFF_EXCLUDE_SPECS 의 RESULT-*.md)만 있는 dirty 워크트리로
+    "diff 0건 + status dirty" 를 재현한다."""
     if not (__import__("shutil").which("bash") and __import__("shutil").which("git")):
         pytest.skip("bash/git 미설치 환경")
 
     worktree_dir = tmp_path / "wt_dirty"
     pre_sha = _init_repo(worktree_dir)
-    # 새 파일을 만들되 git add/commit 은 하지 않는다 — untracked 파일은 `git diff`에
-    # 잡히지 않아 재확인 루프 내내 git_diff 는 계속 비어 있지만, `git status
-    # --porcelain`에는 남는다. 이것이 실측 케이스 B(파일은 고쳤는데 커밋을 안 함)다.
-    (worktree_dir / "dirty.txt").write_text("uncommitted change\n", encoding="utf-8")
+    # 새 파일을 만들되 git add/commit 은 하지 않는다 — JOB_DIFF_EXCLUDE_SPECS 에 걸리는
+    # 파일은 git_diff(untracked-fallback 포함)에 잡히지 않아 재확인 루프 내내 비어 있지만,
+    # `git status --porcelain`에는 남는다. 이것이 케이스 B(커밋 누락)의 diff 0건 + dirty 다.
+    (worktree_dir / "RESULT-dirty.md").write_text("uncommitted change\n", encoding="utf-8")
 
     proc = _run_harness(
         harness_file,
@@ -317,7 +323,7 @@ def test_recheck_exhausted_dirty_worktree_errors_as_uncommitted(harness_file, tm
     db_text = harness_file["db_log"].read_text(encoding="utf-8")
     assert "error_detail='uncommitted_worktree_changes'" in db_text
     assert "status='error'" in db_text
-    assert "dirty.txt" in db_text
+    assert "RESULT-dirty.md" in db_text
     assert f"PRESERVED:job-1 {worktree_dir}" in db_text
     chat_text = harness_file["chat_log"].read_text(encoding="utf-8")
     assert "커밋 누락" in chat_text

@@ -7034,6 +7034,19 @@ approved_sha_is_live() {
     [[ "$active_port" == "$release_port" && "$active_digest" == "$release_digest" ]]
 }
 
+# 승인 SHA 가 origin/main 에 이미 있고 원격 head 가 전진한 경우의 판정 → done|proceed|fail
+#   live=yes → done / DEPLOY_ONLY 지시서 → proceed(배포 진행) / 그 외 → fail
+already_present_decision() {
+    local instruction="${1:-}" live="${2:-no}"
+    if [[ "$live" == "yes" ]]; then
+        echo done
+    elif is_deploy_only_instruction "$instruction"; then
+        echo proceed
+    else
+        echo fail
+    fi
+}
+
 # ── 배포 반영 게이트 (AADS-RUNNER-DONE-REQUIRES-LIVE-IMAGE, 2026-10-06) ──
 # runner-a5761224(20a97a9c) 는 deploy_runs #5599 가 target_drain_busy 로 blocked 인데도
 # health 만 보고 status=done · '배포 완료' 를 올렸다. /api/v1/health 는 **옛 이미지**가
@@ -7656,10 +7669,23 @@ deploy_job() {
     if [[ "$project" == "AADS" && "$push_state" == "already_present" ]]; then
         already_present_remote_sha=$(git -C "$worktree_dir" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || already_present_remote_sha=""
     fi
+    local _ap_diverged="false" _ap_decision="" _ap_live="no" _ap_instruction="" _ap_deploy_only_proceed="false"
     if [[ "$project" == "AADS" && "$push_state" == "already_present" \
         && "$already_present_remote_sha" != "$expected_sha" \
         && "$already_present_remote_sha" =~ ^[0-9a-f]{40}$ ]]; then
-        if ! approved_sha_is_live "$worktree_dir" "$expected_sha" "$main_workdir"; then
+        _ap_diverged="true"
+        _ap_instruction=$(read_job_instruction_strict "$job_id") || _ap_instruction=""
+        approved_sha_is_live "$worktree_dir" "$expected_sha" "$main_workdir" && _ap_live="yes"
+        _ap_decision=$(already_present_decision "$_ap_instruction" "$_ap_live")
+        if [[ "$_ap_decision" == "proceed" ]]; then
+            # DEPLOY_ONLY 는 승인 SHA 가 정의상 origin 에 있다 — 미반영이면 실패가 아니라 배포 대상이다.
+            _ap_deploy_only_proceed="true"
+            log "  DEPLOY_ONLY_ALREADY_PRESENT_PROCEED job=$job_id sha=$expected_sha remote=$already_present_remote_sha"
+            record_runner_event "$job_id" "deploy_only_already_present_proceed" "info" "deploying" "" "" "" "" "{\"sha\":\"${expected_sha}\",\"remote_sha\":\"${already_present_remote_sha}\"}"
+        fi
+    fi
+    if [[ "$_ap_diverged" == "true" && "$_ap_decision" != "proceed" ]]; then
+        if [[ "$_ap_decision" != "done" ]]; then
             _fail_job "$job_id" "$session_id" "deploy_already_present_unverified" "원격 포함 SHA 의 활성 릴리스 검증 실패"
             _release_deploy_lock "$project" "$job_id"
             promote_next_queued "$project"
@@ -7683,7 +7709,10 @@ deploy_job() {
     if [[ "$project" == "AADS" ]]; then
         local pushed_remote_sha
         pushed_remote_sha=$(git -C "$worktree_dir" ls-remote origin refs/heads/main 2>/dev/null | awk 'NR==1 {print $1}') || pushed_remote_sha=""
-        if [[ "$pushed_remote_sha" != "$expected_sha" || "$current_sha" != "$expected_sha" ]]; then
+        if [[ "$_ap_deploy_only_proceed" == "true" && "$current_sha" == "$expected_sha" ]] \
+            && git -C "$worktree_dir" merge-base --is-ancestor "$expected_sha" origin/main 2>/dev/null; then
+            : # DEPLOY_ONLY: origin/main 이 승인 SHA 보다 전진했어도 승인 SHA 가 조상이면 승인 SHA 그대로 배포한다
+        elif [[ "$pushed_remote_sha" != "$expected_sha" || "$current_sha" != "$expected_sha" ]]; then
             _fail_job "$job_id" "$session_id" "deploy_isolated_remote_changed" "승인 SHA와 실제 origin/main 불일치: 배포 차단"
             _release_deploy_lock "$project" "$job_id"
             return 1

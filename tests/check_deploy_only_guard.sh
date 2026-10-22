@@ -2,6 +2,7 @@
 # DEPLOY_ONLY 가드 검증 (AADS-RUNNER-DEPLOYONLY-FALSE-POSITIVE-DEADLOCK-20260930)
 #   R1: 릴리스잡 판정이 헤더 선언에만 반응하는가 — SQL 정규식을 psql 로 직접 평가
 #   R3: 셸 is_deploy_only_instruction 과 SQL DEPLOY_ONLY_HEADER_SQL 이 같은 결론을 내는가 (AADS-DEPLOYONLY-SHELL-SQL-SYNC-20260930)
+#   R4: already_present 분기 판정 — 순수 셸 함수 단위 검증 (DB·git·docker 무관)
 #   R2: 교착 경고(warn_stuck_dependency_queue) — TEMP 테이블 위에서 실행, 실제 pipeline_jobs 는 건드리지 않는다
 # 실행: bash tests/check_deploy_only_guard.sh   (PGUSER/PGDATABASE 환경 + aads-postgres 컨테이너 또는 PGHOST 접속 필요)
 set -u
@@ -118,6 +119,24 @@ check "V3-e 재점검해도 재경고 쿨다운 안에서는 중복 전송 없�
 before=$(wc -l < "$LOGF")
 DEP_STUCK_CHECK_INTERVAL_SEC=3600 warn_stuck_dependency_queue
 check "V3-f 점검 주기 미도래 시 DB 조회·로그 없음" "$before" "$(wc -l < "$LOGF")"
+
+# ── R4 ────────────────────────────────────────────────────────────────
+# already_present 분기 판정(AADS-RUNNER-DEPLOYONLY-ALREADY-PRESENT-20261022) — 순수 셸 함수, DB·git·docker 무관
+echo "== R4: already_present 분기 판정 (done|proceed|fail)"
+eval "$(extract_fn already_present_decision)"
+[[ "$(type -t already_present_decision)" == function ]] || { echo "already_present_decision 정의를 찾지 못했다"; exit 2; }
+DO_INSTR=$'TASK_ID: X\nDEPLOY_ONLY: true\nTITLE: 배포'
+NORMAL_INSTR=$'TASK_ID: X\nTITLE: 일반 코드잡\n\n본문에 DEPLOY_ONLY 언급'
+check "R4-①  DEPLOY_ONLY + live 아님 → 배포 진행(fail 아님)" proceed "$(already_present_decision "$DO_INSTR" no)"
+check "R4-②  DEPLOY_ONLY + live 참 → done" done "$(already_present_decision "$DO_INSTR" yes)"
+check "R4-③  일반 잡 + live 아님 → fail(deploy_already_present_unverified)" fail "$(already_present_decision "$NORMAL_INSTR" no)"
+check "R4-④  일반 잡 + live 참 → done" done "$(already_present_decision "$NORMAL_INSTR" yes)"
+check "R4-⑤  지시서 조회 실패(빈 값) + live 아님 → fail(보수적)" fail "$(already_present_decision "" no)"
+check "R4-⑥  live 인자 누락 + DEPLOY_ONLY → proceed" proceed "$(already_present_decision "$DO_INSTR")"
+for f in pipeline-runner.sh pipeline-runner.sh.local; do
+    check "R4-⑦  $f 가 분기에서 already_present_decision 사용" 1 "$(grep -c '_ap_decision=$(already_present_decision' "$ROOT/scripts/$f")"
+    check "R4-⑧  $f 에 deploy_only_already_present_proceed 이벤트" 1 "$(grep -c '"deploy_only_already_present_proceed"' "$ROOT/scripts/$f")"
+done
 
 echo
 echo "RESULT: PASS=$PASS FAIL=$FAIL"
