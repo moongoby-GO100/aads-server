@@ -215,7 +215,8 @@ docker_mut() { # docker_mut <rm|stop|start> [-f] <container>
 
 # ---- state directory guard ----------------------------------------------------------------------
 # 환경변수로 바뀔 수 있는 상태 경로가 비었거나 상대경로이거나 '.'/'..' 를 품거나 시스템 루트 자체이면 거부한다.
-# 거부는 mkdir·flock·원격 호출보다 앞선다(exit 2).
+# 거부는 mkdir·flock·원격 호출보다 앞선다(exit 2). 이미 존재하는 경로 구성요소 중 하나라도 심볼릭 링크이면(마지막 요소뿐 아니라 상위 디렉터리 포함)
+# 거부한다 — mkdir -p·rm -rf·flock 이 링크를 따라 밖으로 나가는 것을 막는다.
 normalize_abs_path() { # collapse repeated '/', drop a trailing '/'; '/' stays '/'
     local p=$1
     while [[ $p == *//* ]]; do p=${p//\/\//\/}; done
@@ -229,6 +230,13 @@ unsafe_state_path() { # unsafe_state_path <value>: prints the reason and returns
     [[ $v =~ [[:cntrl:][:space:]] ]] && { echo "contains whitespace or control characters"; return 0; }
     [[ /$v/ == */../* || /$v/ == */./* ]] && { echo "contains a '.' or '..' component"; return 0; }
     n="$(normalize_abs_path "$v")"
+    local acc="" rest=${n#/} part
+    while [[ -n $rest ]]; do
+        part=${rest%%/*}
+        if [[ $rest == */* ]]; then rest=${rest#*/}; else rest=""; fi
+        acc="$acc/$part"
+        [[ -L $acc ]] && { echo "contains an existing symbolic link ($acc)"; return 0; }
+    done
     for d in / /root /etc /usr /var /tmp /home /bin /boot /dev /lib /lib64 /opt /proc /run /sbin /srv /sys /mnt ${HOME:+"$(normalize_abs_path "$HOME")"}; do
         [[ $n == "$d" ]] && { echo "is the system directory $d itself"; return 0; }
     done
@@ -252,14 +260,21 @@ path_is_under() { # path_is_under <path> <root>: strictly below root, no '.'/'..
 }
 
 # ---- release worktree ---------------------------------------------------------------------------
+is_release_wt_tempdir() { # make_release_worktree 의 mktemp 결과(<WORKTREE_ROOT>/<소문자 12hex>.<6자>)만 true. 링크는 아님.
+    local p root
+    p="$(normalize_abs_path "$1")"
+    root="$(normalize_abs_path "$2")"
+    path_is_under "$p" "$root" || return 1
+    [[ ${p%/*} == "$root" && ${p##*/} =~ ^[0-9a-f]{12}\.[A-Za-z0-9]{6}$ && ! -L $p ]]
+}
 cleanup_release_wt() {
     [[ -n "$release_wt" ]] || return 0
     if git -C "$SOURCE_REPO" worktree remove --force "$release_wt" >/dev/null 2>&1; then
         :
-    elif path_is_under "$release_wt" "$WORKTREE_ROOT"; then
+    elif is_release_wt_tempdir "$release_wt" "$WORKTREE_ROOT"; then
         rm -rf "$release_wt"
     else
-        say "WARNING: not removing '$release_wt': outside the release root $WORKTREE_ROOT"
+        say "WARNING: not removing '$release_wt': not a release worktree directory directly below $WORKTREE_ROOT"
     fi
     git -C "$SOURCE_REPO" worktree prune >/dev/null 2>&1 || true
     release_wt=""
@@ -398,6 +413,13 @@ read -r -d '' R_PG_BACKUP <<'EOS' || true
 set -euo pipefail
 c=$1; u=$2; d=$3; dir=$4; label=$5
 umask 077
+p=$dir
+while [[ $p == *//* ]]; do p=${p//\/\//\/}; done
+while [[ $p == */ && $p != / ]]; do p=${p%/}; done
+while [[ $p == /?* ]]; do
+  [[ ! -L $p ]] || { echo "refusing symlinked backup dir component $p of $dir" >&2; exit 2; }
+  p=${p%/*}
+done
 mkdir -p "$dir"
 f="$dir/${d}_${label}_$(date +%Y%m%d_%H%M%S).dump"
 docker exec "$c" pg_dump -Fc -U "$u" -d "$d" > "$f"
@@ -491,6 +513,13 @@ read -r -d '' R_APACHE_SWITCH <<'EOS' || true
 set -uo pipefail
 SITE=$1; FROM=$2; TO=$3; BK=$4; MARKER=$5; FB=$6
 CTL=${ACCT_APACHECTL:-apache2ctl}
+p=$BK
+while [[ $p == *//* ]]; do p=${p//\/\//\/}; done
+while [[ $p == */ && $p != / ]]; do p=${p%/}; done
+while [[ $p == /?* ]]; do
+  [[ ! -L $p ]] || { echo "FAIL refusing symlinked backup dir component $p of $BK"; exit 1; }
+  p=${p%/*}
+done
 mkdir -p "$BK"
 ts=$(date +%Y%m%d_%H%M%S)
 bk="$BK/$(basename "$SITE").app-release.$ts"

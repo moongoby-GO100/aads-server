@@ -1606,6 +1606,137 @@ def test_release_runs_normally_with_a_deep_custom_state_layout(box):
     assert box.port() == "8112"
 
 
+def _symlinked_parent(box):
+    real = box.tmp / "real"
+    real.mkdir()
+    link = box.tmp / "link"
+    link.symlink_to(real)
+    return real, link
+
+
+@pytest.mark.parametrize("name", UNSAFE_PATH_ENVS)
+def test_existing_symlink_state_paths_exit_2_before_any_remote_call_or_mkdir(box, name):
+    real, link = _symlinked_parent(box)
+    proc = box.run(env={name: str(link)})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"unsafe {UNSAFE_PATH_ENVS[name]} " in proc.stderr and "symbolic link" in proc.stderr
+    assert box.log() == [] and list(real.iterdir()) == []
+
+
+@pytest.mark.parametrize("suffix", ["/state", "/state/", "/a/b/state", "//state", "/", "//"])
+@pytest.mark.parametrize("name", UNSAFE_PATH_ENVS)
+def test_state_path_below_a_symlinked_parent_exits_2_with_nothing_created(box, name, suffix):
+    real, link = _symlinked_parent(box)
+    proc = box.run(env={name: f"{link}{suffix}"})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"unsafe {UNSAFE_PATH_ENVS[name]} " in proc.stderr and "symbolic link" in proc.stderr
+    assert box.log() == [] and list(real.iterdir()) == [] and not (box.tmp / "results").exists()
+
+
+@pytest.mark.parametrize("name", UNSAFE_PATH_ENVS)
+def test_state_path_below_a_dangling_symlink_exits_2_without_creating_the_target(box, name):
+    link = box.tmp / "dangling"
+    link.symlink_to(box.tmp / "missing")
+    proc = box.run(env={name: f"{link}/state"})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert box.log() == [] and not (box.tmp / "missing").exists()
+
+
+@pytest.mark.parametrize("name", UNSAFE_PATH_ENVS)
+def test_state_path_with_a_symlink_in_the_middle_of_real_directories_is_refused(box, name):
+    real, link = _symlinked_parent(box)
+    outer = box.tmp / "outer"
+    outer.mkdir()
+    (outer / "hop").symlink_to(real)
+    proc = box.run(env={name: f"{outer}/hop/state"})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert box.log() == [] and list(real.iterdir()) == []
+
+
+def test_symlinked_parent_is_refused_in_rollback_mode_too(box):
+    real, link = _symlinked_parent(box)
+    proc = box.run("rollback", "acct-app-candidate-r8", "77", env={"ACCT_APP_RESULT_DIR": f"{link}/state"})
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert box.log() == [] and list(real.iterdir()) == []
+
+
+def test_real_directories_below_a_real_parent_are_not_mistaken_for_symlinks(box):
+    real = box.tmp / "real"
+    real.mkdir()
+    proc = box.run("--call", "unsafe_state_path", f"{real}/state/")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+
+
+class RemoteScript:
+    """Runs R_PG_BACKUP / R_APACHE_SWITCH locally with fake docker, apache2ctl and curl on PATH."""
+
+    def __init__(self, box):
+        self.box = box
+        self.bin = box.tmp / "fakebin"
+        self.bin.mkdir()
+        self.calls = box.tmp / "fakebin.calls"
+        for name in ("docker", "apache2ctl", "curl"):
+            f = self.bin / name
+            f.write_text(f'#!/bin/bash\necho "{name} $*" >> "{self.calls}"\n[[ $1 == exec && $* == *pg_dump* ]] && echo dumpdata\nexit 0\n')
+            f.chmod(0o755)
+
+    def run(self, var, *args):
+        text = subprocess.run(
+            ["bash", "-c", f'source "{SCRIPT}"; printf %s "${var}"'], env=self.box.env, capture_output=True, text=True, check=True,
+        ).stdout
+        assert text.strip()
+        env = {**self.box.env, "PATH": f"{self.bin}:{self.box.env['PATH']}"}
+        return subprocess.run(["bash", "-s", "--", *map(str, args)], input=text, env=env, capture_output=True, text=True, timeout=30)
+
+    def fake_calls(self):
+        return self.calls.read_text().splitlines() if self.calls.exists() else []
+
+
+BACKUP_DIR_CASES = ["{link}", "{link}/", "{link}/state", "{link}/state/", "{link}//state", "{link}/a/b"]
+
+
+@pytest.mark.parametrize("case", BACKUP_DIR_CASES)
+def test_remote_pg_backup_refuses_a_symlinked_backup_dir_or_parent(box, case):
+    real, link = _symlinked_parent(box)
+    proc = RemoteScript(box)
+    out = proc.run("R_PG_BACKUP", "acct-pg", "obys", "obys", case.format(link=link), "pre_x")
+    assert out.returncode == 2, out.stdout + out.stderr
+    assert "refusing symlinked backup dir" in out.stderr
+    assert proc.fake_calls() == [] and list(real.iterdir()) == []
+
+
+def test_remote_pg_backup_still_writes_the_dump_below_real_directories(box):
+    proc = RemoteScript(box)
+    target = box.tmp / "backups" / "deeper"
+    out = proc.run("R_PG_BACKUP", "acct-pg", "obys", "obys", f"{target}/", "pre_x")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "BACKUP_PATH=" in out.stdout and len(list(target.glob("obys_pre_x_*.dump"))) == 1
+    assert any("pg_dump" in c for c in proc.fake_calls())
+
+
+@pytest.mark.parametrize("case", BACKUP_DIR_CASES)
+def test_remote_apache_switch_refuses_a_symlinked_backup_dir_or_parent(box, case):
+    real, link = _symlinked_parent(box)
+    site = box.tmp / "vhost.conf"
+    site.write_text("ProxyPass / http://172.18.0.5:8111/\n")
+    proc = RemoteScript(box)
+    out = proc.run("R_APACHE_SWITCH", site, "8111", "8112", case.format(link=link), "marker", "fb.example")
+    assert out.returncode == 1, out.stdout + out.stderr
+    assert "FAIL refusing symlinked backup dir" in out.stdout
+    assert proc.fake_calls() == [] and list(real.iterdir()) == []
+    assert site.read_text() == "ProxyPass / http://172.18.0.5:8111/\n"
+
+
+def test_remote_apache_switch_guard_lets_a_real_backup_dir_through(box):
+    site = box.tmp / "vhost.conf"
+    site.write_text("ProxyPass / http://172.18.0.5:8111/\n")
+    bk = box.tmp / "bk" / "deeper"
+    out = RemoteScript(box).run("R_APACHE_SWITCH", site, "9999", "8112", f"{bk}/", "marker", "fb.example")
+    assert "refusing symlinked" not in out.stdout + out.stderr
+    assert "expected port 9999" in out.stdout and len(list(bk.glob("vhost.conf.app-release.*"))) == 1
+    assert site.read_text() == "ProxyPass / http://172.18.0.5:8111/\n"
+
+
 def _stray_dir(box, name):
     d = box.tmp / name
     d.mkdir()
@@ -1640,15 +1771,42 @@ def test_cleanup_release_wt_does_not_follow_dotdot_out_of_the_release_root(box):
     assert (outside / "keep.txt").exists()
 
 
-@pytest.mark.parametrize("sub", ["inside", "inside/deeper"])
-def test_cleanup_release_wt_removes_a_stray_directory_below_the_release_root(box, sub):
+RELEASE_TEMPDIR = "0123456789ab.Ab3Z9x"
+
+
+def test_cleanup_release_wt_removes_a_mktemp_style_directory_below_the_release_root(box):
+    root = box.tmp / "wt"
+    target = root / RELEASE_TEMPDIR
+    target.mkdir(parents=True)
+    (target / "f").write_text("x")
+    proc = _cleanup_wt(box, root, target)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    "sub",
+    ["inside", "inside/deeper", f"inside/{RELEASE_TEMPDIR}", "0123456789AB.Ab3Z9x", "0123456789ab.Ab3Z9", "0123456789a.Ab3Z9x", "0123456789ab"],
+)
+def test_cleanup_release_wt_keeps_directories_that_do_not_match_the_mktemp_pattern(box, sub):
     root = box.tmp / "wt"
     target = root / sub
     target.mkdir(parents=True)
     (target / "f").write_text("x")
     proc = _cleanup_wt(box, root, target)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert not target.exists()
+    assert (target / "f").exists() and "not removing" in proc.stdout
+
+
+def test_cleanup_release_wt_never_removes_through_a_symlink(box):
+    outside = _stray_dir(box, "outside")
+    root = box.tmp / "wt"
+    root.mkdir()
+    link = root / RELEASE_TEMPDIR
+    link.symlink_to(outside)
+    proc = _cleanup_wt(box, root, link)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (outside / "keep.txt").read_text() == "keep\n"
 
 
 @pytest.mark.parametrize("candidate", ["{root}", "{root}/", "{root}/../outside", "{root}/a/../../outside", "{root}x"])
