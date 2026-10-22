@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import zipfile
@@ -18,6 +19,8 @@ from fastapi import HTTPException
 from openpyxl import load_workbook
 
 from app.core.obys_db import obys_db_url
+
+logger = logging.getLogger(__name__)
 
 MAX_BYTES = 10 * 1024 * 1024
 MAX_UNPACKED_BYTES = 50 * 1024 * 1024
@@ -96,6 +99,56 @@ def tenant_session_for_user(user: dict[str, Any]) -> dict[str, Any]:
             "can_upload_own_documents": role != "viewer",
         },
     }
+
+
+OWN_EMPLOYEE_REQUEST_SQL = (
+    "SELECT * FROM yeoljeong_employee_join_requests h "
+    "WHERE h.deleted_at IS NULL AND h.tenant_id = $1 AND lower(h.employee_email) = $2 "
+    "AND EXISTS (SELECT 1 FROM yeoljeong_business_tenant_mapping m "
+    "WHERE m.business_id = h.business_id AND m.tenant_id = h.tenant_id) "
+    "ORDER BY h.updated_at DESC NULLS LAST, h.created_at DESC NULLS LAST, h.id DESC LIMIT 1"
+)
+
+
+def _employee_lookup_applies(user: dict[str, Any], session: dict[str, Any]) -> bool:
+    user_role = str(user.get("user_role") or "").strip().lower()
+    if user.get("is_internal_admin") or user_role in {"ceo", "admin", "system"}:
+        return False
+    if str(user.get("email") or "").strip() == "":
+        return False
+    return session["permissions"]["role"] not in {"owner", "admin"}
+
+
+async def _own_employee_request(user: dict[str, Any], tenant_id: UUID) -> dict[str, Any] | None:
+    from app.services.yeoljeong_finance_service import _db_row_to_record
+
+    conn = await _connect()
+    try:
+        row = await conn.fetchrow(OWN_EMPLOYEE_REQUEST_SQL, tenant_id, str(user.get("email") or "").strip().lower())
+        return _db_row_to_record("employee_join_requests", row) if row else None
+    finally:
+        await conn.close()
+
+
+async def session_for_current_user(user: dict[str, Any]) -> dict[str, Any]:
+    """비레거시 테넌트 /session: 멤버십 세션에 본인 직원 가입요청(현재 테넌트 한정)을 덧입힌다.
+
+    가입요청이 없거나 조회에 실패하면 tenant_session_for_user 응답을 그대로 돌려준다.
+    """
+    session = tenant_session_for_user(user)
+    if not _employee_lookup_applies(user, session):
+        return session
+    try:
+        own = await _own_employee_request(user, _tenant(user))
+    except Exception:
+        logger.warning("obys /session 직원 가입요청 조회 실패 — 멤버십 세션으로 응답", exc_info=True)
+        return session
+    if not own:
+        return session
+    from app.services.yeoljeong_finance_service import employee_request_permissions
+
+    session["permissions"].update(employee_request_permissions(own))
+    return session
 
 
 def _require_write(user: dict[str, Any]) -> None:

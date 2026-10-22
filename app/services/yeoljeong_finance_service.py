@@ -2375,6 +2375,40 @@ def list_document_types() -> list[dict[str, str]]:
     return DOCUMENT_TYPES
 
 
+def employee_request_permissions(own: dict[str, Any]) -> dict[str, Any]:
+    """직원 가입요청 한 건에서 /session permissions 를 만든다. 레거시·비레거시 테넌트가 같은 규칙을 쓴다."""
+    status = str(own.get("status") or "pending").strip().lower()
+    if status == "approved":
+        access_role = _employee_access_role(own.get("role"))
+        role_config = EMPLOYEE_ACCESS_ROLES[access_role]
+        return {
+            "role": access_role,
+            "role_label": role_config["label"],
+            "employee_request_status": status,
+            "employee_request_id": own.get("id"),
+            "can_view": True,
+            "can_edit_local_data": role_config["can_edit_local_data"],
+            "can_manage_settings": role_config["can_manage_settings"],
+            "can_manage_automation": role_config["can_manage_automation"],
+            "can_import_settlements": role_config["can_import_settlements"],
+            "can_manage_onboarding": role_config["can_manage_onboarding"],
+            "can_upload_own_documents": True,
+        }
+    return {
+        "role": f"employee_{status}",
+        "role_label": "직원 가입 반려" if status == "rejected" else "직원 가입요청",
+        "employee_request_status": status,
+        "employee_request_id": own.get("id"),
+        "can_view": True,
+        "can_edit_local_data": False,
+        "can_manage_settings": False,
+        "can_manage_automation": False,
+        "can_import_settlements": False,
+        "can_manage_onboarding": False,
+        "can_upload_own_documents": status != "rejected",
+    }
+
+
 def session_for_user(user: dict[str, Any]) -> dict[str, Any]:
     _tenant_id(user)
     email = _email(user)
@@ -2384,37 +2418,7 @@ def session_for_user(user: dict[str, Any]) -> dict[str, Any]:
     privileged_principal = bool(user.get("is_internal_admin")) or user_role in {"ceo", "admin", "system"}
     admin = _is_admin(user)
     if own and not privileged_principal:
-        status = str(own.get("status") or "pending").strip().lower()
-        if status == "approved":
-            access_role = _employee_access_role(own.get("role"))
-            role_config = EMPLOYEE_ACCESS_ROLES[access_role]
-            permissions = {
-                "role": access_role,
-                "role_label": role_config["label"],
-                "employee_request_status": status,
-                "employee_request_id": own.get("id"),
-                "can_view": True,
-                "can_edit_local_data": role_config["can_edit_local_data"],
-                "can_manage_settings": role_config["can_manage_settings"],
-                "can_manage_automation": role_config["can_manage_automation"],
-                "can_import_settlements": role_config["can_import_settlements"],
-                "can_manage_onboarding": role_config["can_manage_onboarding"],
-                "can_upload_own_documents": True,
-            }
-        else:
-            permissions = {
-                "role": f"employee_{status}",
-                "role_label": "직원 가입 반려" if status == "rejected" else "직원 가입요청",
-                "employee_request_status": status,
-                "employee_request_id": own.get("id"),
-                "can_view": True,
-                "can_edit_local_data": False,
-                "can_manage_settings": False,
-                "can_manage_automation": False,
-                "can_import_settlements": False,
-                "can_manage_onboarding": False,
-                "can_upload_own_documents": status != "rejected",
-            }
+        permissions = employee_request_permissions(own)
     elif admin:
         permissions = {
             "role": "owner",
