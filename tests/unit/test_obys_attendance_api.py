@@ -36,6 +36,7 @@ class FakeAttendanceDB:
     def __init__(self):
         self.rows: dict[str, dict] = {}
         self.audit: list[tuple] = []
+        self.weekly: dict[tuple, dict] = {}
         self._ids = itertools.count(1)
 
     def _project(self, row):
@@ -67,11 +68,31 @@ class FakeConnection:
         self.closed = True
 
     async def execute(self, sql, *args):
+        if "INSERT INTO yeoljeong_attendance_weekly" in sql:
+            email, business_id, week_start, worked, flag = args
+            assert "ON CONFLICT (employee_email,business_id,week_start)" in sql
+            row = self.db.weekly.setdefault((email, business_id, week_start), {
+                "employee_email": email, "business_id": business_id, "week_start": week_start,
+                "weekly_holiday_eligible": False, "full_attendance": False})
+            row.update({"worked_minutes": worked, "is_15h_or_more": flag,
+                        "computed_at": datetime.now(timezone.utc)})
+            return "INSERT 0 1"
         assert "INSERT INTO yeoljeong_audit_logs" in sql
         self.db.audit.append(args)
         return "INSERT 0 1"
 
-    async def fetch(self, sql, business_id):
+    async def fetch(self, sql, business_id, *args):
+        if "FROM yeoljeong_attendance_weekly" in sql:
+            week_start, *own = args
+            rows = [dict(w) for w in self.db.weekly.values()
+                    if w["business_id"] == business_id and w["week_start"] == week_start
+                    and (not own or w["employee_email"].lower() == own[0])]
+            for w in rows:
+                names = [r["employee_name"] for r in self.db.rows.values()
+                         if r["business_id"] == business_id and r["employee_email"] == w["employee_email"]
+                         and r["deleted_at"] is None]
+                w["employee_name"] = names[-1] if names else None
+            return rows
         assert "FROM yeoljeong_attendance_records" in sql and "deleted_at IS NULL" in sql
         rows = [row for row in self.db.rows.values()
                 if row["business_id"] == business_id and row["deleted_at"] is None]
@@ -82,12 +103,12 @@ class FakeConnection:
         now = datetime.now(timezone.utc)
         if sql.lstrip().startswith("INSERT INTO yeoljeong_attendance_records"):
             (business_id, email, masked, name, branch, work_date, start_at, end_at,
-             break_minutes, worked, wage, status, memo, actor) = args
+             break_minutes, worked, wage, status, memo, actor, night) = args
             values = {"business_id": business_id, "employee_email": email,
                       "employee_email_masked": masked, "employee_name": name, "branch": branch,
                       "work_date": work_date, "start_at": start_at, "end_at": end_at,
                       "break_minutes": break_minutes, "worked_minutes": worked,
-                      "hourly_wage": wage, "status": status, "memo": memo, "created_by": actor,
+                      "night_minutes": night, "hourly_wage": wage, "status": status, "memo": memo, "created_by": actor,
                       "created_at": now, "updated_at": now, "deleted_at": None}
             existing = db._conflict(email, work_date, start_at)
             if existing:
@@ -101,11 +122,19 @@ class FakeConnection:
         if sql.lstrip().startswith("SELECT"):
             row = db.rows.get(args[0])
             if row and row["business_id"] == args[1] and row["deleted_at"] is None:
+                if "FOR UPDATE" in sql:
+                    return {"employee_email": row["employee_email"], "work_date": row["work_date"]}
                 return db._project(row)
             return None
+        if "SET deleted_at=now()" in sql:
+            row = db.rows.get(args[0])
+            if not row or row["business_id"] != args[1] or row["deleted_at"] is not None:
+                return None
+            row["deleted_at"] = datetime.now(timezone.utc)
+            return {"id": args[0], "employee_email": row["employee_email"], "work_date": row["work_date"]}
         if sql.lstrip().startswith("UPDATE yeoljeong_attendance_records SET"):
             (record_id, business_id, email, masked, name, branch, work_date, start_at, end_at,
-             break_minutes, worked, wage, status, memo) = args
+             break_minutes, worked, wage, status, memo, night) = args
             row = db.rows.get(record_id)
             if not row or row["business_id"] != business_id or row["deleted_at"] is not None:
                 return None
@@ -115,17 +144,16 @@ class FakeConnection:
                         "employee_name": name, "branch": branch, "work_date": work_date,
                         "start_at": start_at, "end_at": end_at, "break_minutes": break_minutes,
                         "worked_minutes": worked, "hourly_wage": wage, "status": status,
-                        "memo": memo, "updated_at": now})
+                        "memo": memo, "night_minutes": night, "updated_at": now})
             return db._project(row)
         raise AssertionError(f"unexpected SQL: {sql}")
 
-    async def fetchval(self, sql, record_id, business_id):
-        assert "SET deleted_at=now()" in sql and "DELETE" not in sql.upper().split("SET")[0]
-        row = self.db.rows.get(record_id)
-        if not row or row["business_id"] != business_id or row["deleted_at"] is not None:
-            return None
-        row["deleted_at"] = datetime.now(timezone.utc)
-        return record_id
+    async def fetchval(self, sql, business_id, email, week_start, week_end):
+        assert "SUM(worked_minutes)" in sql and "deleted_at IS NULL" in sql and "status<>'rejected'" in sql
+        return sum(r["worked_minutes"] for r in self.db.rows.values()
+                   if r["business_id"] == business_id and r["employee_email"] == email
+                   and week_start <= r["work_date"] < week_end
+                   and r["deleted_at"] is None and r["status"] != "rejected")
 
 
 @pytest.fixture
@@ -400,3 +428,184 @@ def test_manual_writes_reject_invalid_membership_before_db(client, db, monkeypat
     assert client.put(f"{BASE}/any", json=_payload()).status_code == 403
     assert client.delete(f"{BASE}/any").status_code == 403
     assert db.rows == {} and db.audit == []
+
+
+# ── 야간시간(22:00~06:00) 산출 ────────────────────────────────────────────────
+@pytest.mark.parametrize(
+    ("start_at", "end_at", "break_minutes", "expected"),
+    [
+        ("10:00", "18:00", 60, 0),     # 야간 없음
+        ("06:00", "22:00", 0, 0),      # 경계: 06:00 에 끝나는 야간·22:00 에 시작하는 야간 사이
+        ("22:00", "06:00", 0, 480),    # 야간 전부, 자정 넘김
+        ("22:00", "06:00", 30, 450),   # 야간 전부 + 휴게는 주간이 없으므로 야간에서 차감
+        ("18:00", "02:00", 60, 240),   # 22~02 야간 240분, 휴게 60분은 주간(18~22)에서 먼저 차감
+        ("20:00", "23:00", 0, 60),     # 자정 전 종료
+        ("00:00", "08:00", 0, 360),    # 자정 시작, 06시까지만 야간
+        ("04:00", "23:00", 0, 180),    # 새벽 2시간 + 22~23 1시간
+        ("23:00", "23:30", 60, 0),     # 휴게가 근무보다 길면 0 으로 내려간다
+    ],
+)
+def test_night_minutes(start_at, end_at, break_minutes, expected):
+    assert api.attendance_night_minutes(
+        time.fromisoformat(start_at), time.fromisoformat(end_at), break_minutes) == expected
+
+
+def test_night_minutes_never_exceeds_worked_minutes():
+    for start in range(0, 24 * 60, 37):
+        for span in (1, 59, 241, 600, 1439):
+            end = (start + span) % (24 * 60)
+            s, e = time(start // 60, start % 60), time(end // 60, end % 60)
+            for brk in (0, 30, 90):
+                if span - brk < 0:
+                    continue
+                assert 0 <= api.attendance_night_minutes(s, e, brk) <= api.attendance_worked_minutes(s, e, brk)
+
+
+def test_night_minutes_is_stored_on_create_update_and_resurrect(client, db):
+    created = client.post(BASE, json=_payload(start_at="22:00", end_at="06:00", break_minutes=30))
+    record_id = created.json()["record"]["id"]
+    assert db.rows[record_id]["night_minutes"] == 450
+    client.put(f"{BASE}/{record_id}", json=_payload(start_at="22:00", end_at="03:00", break_minutes=0))
+    assert db.rows[record_id]["night_minutes"] == 300
+    client.put(f"{BASE}/{record_id}", json=_payload(start_at="10:00", end_at="18:00"))
+    assert db.rows[record_id]["night_minutes"] == 0
+    client.delete(f"{BASE}/{record_id}")
+    client.post(BASE, json=_payload(start_at="10:00", end_at="23:00", break_minutes=0))
+    assert db.rows[record_id]["night_minutes"] == 60  # 되살린 행도 새 값으로
+
+
+# ── 주간 집계 ────────────────────────────────────────────────────────────────
+WEEKLY = f"/api/v1/workspaces/{BUSINESS['id']}/hr/attendance/weekly"
+MON = date(2026, 9, 28)
+EMAIL = "kim@example.com"
+
+
+def _shift(client, day: str, hours: int, **extra):
+    end = f"{8 + hours:02d}:00"
+    response = client.post(BASE, json=_payload(
+        work_date=day, start_at="08:00", end_at=end, break_minutes=0, employee_email=EMAIL, **extra))
+    assert response.status_code == 201, response.text
+    return response.json()["record"]["id"]
+
+
+def _weekly_row(db, week=MON, business_id=BUSINESS["id"], email=EMAIL):
+    return db.weekly.get((email, business_id, week))
+
+
+def test_week_start_is_monday():
+    assert api.attendance_week_start(date(2026, 9, 28)) == date(2026, 9, 28)   # 월
+    assert api.attendance_week_start(date(2026, 10, 4)) == date(2026, 9, 28)   # 일
+    assert api.attendance_week_start(date(2026, 10, 5)) == date(2026, 10, 5)   # 다음 월
+
+
+def test_weekly_flag_flips_at_900_minutes_and_recomputes_on_every_write(client, db):
+    first = _shift(client, "2026-09-28", 8)
+    assert _weekly_row(db)["worked_minutes"] == 480
+    assert _weekly_row(db)["is_15h_or_more"] is False
+    second = _shift(client, "2026-10-04", 7)  # 일요일도 같은 주
+    row = _weekly_row(db)
+    assert row["worked_minutes"] == 900 and row["is_15h_or_more"] is True  # 정확히 15시간
+    assert row["weekly_holiday_eligible"] is False and row["full_attendance"] is False
+    assert row["computed_at"] is not None
+    # 다음 주 첫날은 다른 주로 집계된다.
+    _shift(client, "2026-10-05", 8)
+    assert _weekly_row(db)["worked_minutes"] == 900
+    assert _weekly_row(db, date(2026, 10, 5))["worked_minutes"] == 480
+
+    client.put(f"{BASE}/{second}", json=_payload(
+        work_date="2026-10-04", start_at="08:00", end_at="14:59", break_minutes=0, employee_email=EMAIL))
+    assert _weekly_row(db)["worked_minutes"] == 480 + 419
+    assert _weekly_row(db)["is_15h_or_more"] is False
+
+    client.delete(f"{BASE}/{first}")
+    assert _weekly_row(db)["worked_minutes"] == 419
+
+
+def test_weekly_excludes_rejected_and_soft_deleted_rows(client, db):
+    _shift(client, "2026-09-28", 8)
+    rejected = _shift(client, "2026-09-29", 8, status="rejected")
+    pending = _shift(client, "2026-09-30", 8, status="pending")
+    assert _weekly_row(db)["worked_minutes"] == 960  # rejected 제외, pending 포함
+    assert _weekly_row(db)["is_15h_or_more"] is True
+    client.delete(f"{BASE}/{pending}")
+    assert _weekly_row(db)["worked_minutes"] == 480
+    client.put(f"{BASE}/{rejected}", json=_payload(
+        work_date="2026-09-29", start_at="08:00", end_at="16:00", break_minutes=0,
+        employee_email=EMAIL, status="approved"))
+    assert _weekly_row(db)["worked_minutes"] == 960
+
+
+def test_moving_a_record_to_another_week_recomputes_both_weeks(client, db):
+    record_id = _shift(client, "2026-09-29", 8)
+    client.put(f"{BASE}/{record_id}", json=_payload(
+        work_date="2026-10-06", start_at="08:00", end_at="16:00", break_minutes=0, employee_email=EMAIL))
+    assert _weekly_row(db)["worked_minutes"] == 0
+    assert _weekly_row(db, date(2026, 10, 5))["worked_minutes"] == 480
+
+
+def test_moving_a_record_to_another_employee_recomputes_both(client, db):
+    record_id = _shift(client, "2026-09-29", 8)
+    client.put(f"{BASE}/{record_id}", json=_payload(
+        work_date="2026-09-29", start_at="08:00", end_at="16:00", break_minutes=0,
+        employee_email="lee@example.com"))
+    assert _weekly_row(db)["worked_minutes"] == 0
+    assert _weekly_row(db, email="lee@example.com")["worked_minutes"] == 480
+
+
+def test_weekly_is_keyed_per_business_and_employee(client, db):
+    _shift(client, "2026-09-28", 8)
+    client.post(BASE, json=_payload(work_date="2026-09-28", start_at="08:00", end_at="12:00",
+                                    break_minutes=0, employee_email="lee@example.com"))
+    assert _weekly_row(db)["worked_minutes"] == 480
+    assert _weekly_row(db, email="lee@example.com")["worked_minutes"] == 240
+    assert _weekly_row(db, business_id="biz-other-tenant") is None
+
+
+def test_weekly_get_returns_flag_and_masks_email(client, db):
+    _shift(client, "2026-09-28", 8)
+    _shift(client, "2026-09-29", 8)
+    # 주중 아무 날짜를 넘겨도 그 주의 월요일로 정규화한다.
+    response = client.get(WEEKLY, params={"week_start": "2026-09-30"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["week_start"] == "2026-09-28" and body["week_end"] == "2026-10-04"
+    assert body["threshold_minutes"] == 900 and body["business"]["id"] == BUSINESS["id"]
+    [employee] = body["employees"]
+    assert employee["worked_minutes"] == 960 and employee["is_15h_or_more"] is True
+    assert employee["employee_name"] == "김민수" and employee["employee_email_masked"] == "k***@example.com"
+    assert EMAIL not in response.text
+    assert client.get(WEEKLY, params={"week_start": "2026-10-05"}).json()["employees"] == []
+
+
+@pytest.mark.parametrize("bad", ["2026-9-28", "2026-02-30", "garbage", "28/09/2026"])
+def test_weekly_get_rejects_bad_week_start(client, bad):
+    assert client.get(WEEKLY, params={"week_start": bad}).status_code == 400
+
+
+def test_weekly_get_scopes_by_role_and_business(client, db, monkeypatch):
+    _shift(client, "2026-09-28", 8)
+    client.post(BASE, json=_payload(work_date="2026-09-28", start_at="08:00", end_at="20:00",
+                                    break_minutes=0, employee_email="lee@example.com"))
+    params = {"week_start": "2026-09-28"}
+    assert len(client.get(WEEKLY, params=params).json()["employees"]) == 2  # 관리자는 전체
+
+    def as_role(role, email):
+        monkeypatch.setitem(USER, "email", email)
+        monkeypatch.setitem(USER, "current_membership", {**USER["current_membership"], "role": role})
+
+    as_role("member", EMAIL)
+    rows = client.get(WEEKLY, params=params).json()["employees"]
+    assert [item["worked_minutes"] for item in rows] == [480]  # 본인 행만
+    as_role("member", "")
+    assert client.get(WEEKLY, params=params).json()["employees"] == []
+    as_role("viewer", EMAIL)
+    assert client.get(WEEKLY, params=params).status_code == 403
+    as_role("owner", "owner@example.com")
+    foreign = f"/api/v1/workspaces/{OTHER_BUSINESS_ID}/hr/attendance/weekly"
+    assert client.get(foreign, params=params).status_code == 404
+
+
+def test_weekly_route_is_registered_before_generic_routes():
+    paths = [route.path for route in api.router.routes]
+    weekly = paths.index("/workspaces/{business_id}/hr/attendance/weekly")
+    assert weekly < paths.index("/workspaces/{business_id}/{route}/records")

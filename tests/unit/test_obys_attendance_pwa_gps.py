@@ -66,6 +66,7 @@ class FakeDB:
         self.branches: dict[str, dict] = {}
         self.audit: list[dict] = []
         self.locks: list[str] = []
+        self.weekly: dict[tuple, dict] = {}
         self._ids = itertools.count(1)
 
     def add_branch(self, branch_id, name, lat=None, lng=None, radius=None, business_id=BUSINESS["id"]):
@@ -89,6 +90,11 @@ class FakeConnection:
         if "pg_advisory_xact_lock" in sql:
             self.db.locks.append(args[0])
             return "SELECT 1"
+        if "INSERT INTO yeoljeong_attendance_weekly" in sql:
+            email, business_id, week_start, worked, flag = args
+            self.db.weekly[(email, business_id, week_start)] = {
+                "worked_minutes": worked, "is_15h_or_more": flag}
+            return "INSERT 0 1"
         assert "INSERT INTO yeoljeong_audit_logs" in sql
         business_id, actor, action, record_id, details = args
         self.db.audit.append({"business_id": business_id, "actor": actor, "action": action,
@@ -112,7 +118,14 @@ class FakeConnection:
             rows = [r for r in rows if r["source"] == "pwa"]
         return [{c: r.get(c) for c in cols} for r in sorted(rows, key=lambda r: r["work_date"], reverse=True)]
 
-    async def fetchval(self, sql, business_id, email, work_date):
+    async def fetchval(self, sql, business_id, email, *dates):
+        if "SUM(worked_minutes)" in sql:
+            week_start, week_end = dates
+            return sum(r["worked_minutes"] for r in self.db.rows.values()
+                       if r["business_id"] == business_id and r["employee_email"] == email
+                       and week_start <= r["work_date"] < week_end
+                       and r["deleted_at"] is None and r["status"] != "rejected")
+        (work_date,) = dates
         assert "check_out_at IS NULL" in sql
         return next((r["id"] for r in self.db.rows.values()
                      if r["business_id"] == business_id and r["employee_email"] == email
@@ -160,14 +173,14 @@ class FakeConnection:
             return {c: row[c] for c in _columns(sql)}
         if head.startswith("UPDATE yeoljeong_attendance_records"):
             (record_id, business_id, check_out_at, end_at, worked, lat, lng, accuracy, distance,
-             result, status, memo, device, consent_at) = args
+             result, status, memo, device, consent_at, night) = args
             row = db.rows.get(record_id)
             if not row or row["business_id"] != business_id or row["check_out_at"] is not None:
                 return None
             row.update({"check_out_at": check_out_at, "end_at": end_at, "worked_minutes": worked,
                         "check_out_lat": lat, "check_out_lng": lng, "check_out_accuracy_m": accuracy,
                         "check_out_distance_m": distance, "geofence_result": result, "status": status,
-                        "memo": memo, "device_info": row["device_info"] or device,
+                        "memo": memo, "night_minutes": night, "device_info": row["device_info"] or device,
                         "location_consent_at": row["location_consent_at"] or consent_at})
             return {c: row[c] for c in _columns(sql)}
         if head.startswith("SELECT employee_email,"):
@@ -397,6 +410,11 @@ def test_overnight_shift_and_outside_check_out_is_pending(client, db, clock):
     assert record["worked_minutes"] == api.attendance_worked_minutes(time(22, 0), time(6, 0), 0) == 480
     assert (record["status"], record["geofence_result"]) == ("pending", "outside")
     assert "출근:" in record["memo"] and "퇴근:" in record["memo"] and "300m" in record["memo"]
+    # 퇴근 시 야간분이 저장되고 해당 주(2026-09-28 월요일 시작)가 재집계된다.
+    stored = next(iter(db.rows.values()))
+    assert stored["night_minutes"] == 480
+    assert db.weekly[("staff@example.com", BUSINESS["id"], date(2026, 9, 28))] == {
+        "worked_minutes": 480, "is_15h_or_more": False}
 
 
 def test_multiple_branches_require_selection(client, db):

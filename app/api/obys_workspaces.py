@@ -847,6 +847,34 @@ def attendance_worked_minutes(start_at: time, end_at: time, break_minutes: int) 
     return worked
 
 
+# 야간근로: 22:00~익일 06:00 (근로기준법 제56조). 분 단위 절대 시각(시작일 00:00=0)으로 본 창.
+_NIGHT_WINDOWS = ((0, 6 * 60), (22 * 60, 30 * 60), (46 * 60, 54 * 60))
+
+
+def attendance_night_minutes(start_at: time, end_at: time, break_minutes: int) -> int:
+    """야간(22:00~06:00) 근로분. 자정 넘김 포함, worked_minutes 와 같은 시작·종료 해석을 쓴다.
+
+    휴게시간은 위치(몇 시에 쉬었는지)를 저장하지 않으므로 주간(비야간) 구간에서 먼저
+    차감하고, 주간이 모자랄 때만 야간에서 차감한다. 결과는 항상 worked_minutes 이하다.
+    """
+    start = start_at.hour * 60 + start_at.minute
+    end = end_at.hour * 60 + end_at.minute
+    span = end - start
+    if span < 0:
+        span += 24 * 60
+    if span == 0:
+        return 0
+    raw = sum(max(0, min(start + span, hi) - max(start, lo)) for lo, hi in _NIGHT_WINDOWS)
+    return min(raw, max(span - break_minutes, 0))
+
+
+ATTENDANCE_WEEKLY_15H_MINUTES = 15 * 60
+
+
+def attendance_week_start(work_date: date) -> date:
+    return work_date - timedelta(days=work_date.weekday())
+
+
 def _attendance_values(business_id: str, payload: AttendanceRecordIn) -> dict[str, Any]:
     if not _ATTENDANCE_DATE.match(payload.work_date):
         raise HTTPException(status_code=400, detail="근무일은 YYYY-MM-DD 형식이어야 합니다")
@@ -882,6 +910,7 @@ def _attendance_values(business_id: str, payload: AttendanceRecordIn) -> dict[st
         "end_at": end_at,
         "break_minutes": payload.break_minutes,
         "worked_minutes": attendance_worked_minutes(start_at, end_at, payload.break_minutes),
+        "night_minutes": attendance_night_minutes(start_at, end_at, payload.break_minutes),
         "hourly_wage": payload.hourly_wage,
         "status": payload.status,
         "memo": payload.memo.strip(),
@@ -896,6 +925,39 @@ async def _attendance_audit(connection, business_id: str, user: dict[str, Any],
         business_id, upload_svc._actor(user), action, record_id,
         json.dumps(_json_value(details), ensure_ascii=False),
     )
+
+
+# 주간 집계(yeoljeong_attendance_weekly) — 월요일 시작 week_start × 직원 × 사업자.
+# 합산 대상: deleted_at IS NULL 이고 status <> 'rejected' 인 행(pending 은 포함 — 실제로
+#   일한 시간이 승인 대기일 뿐이고, 반려된 행만 근무로 인정하지 않는다).
+# 퇴근 전 PWA 행은 worked_minutes=0 이라 합계에 영향이 없다.
+# weekly_holiday_eligible·full_attendance 는 소정근로일(계약상 근무요일) 없이는 개근·주휴
+#   요건을 판정할 수 없어 INSERT 시 false 로만 두고 갱신하지 않는다(판정 로직 미구현).
+_ATTENDANCE_WEEK_SUM_SQL = (
+    "SELECT COALESCE(SUM(worked_minutes),0) FROM yeoljeong_attendance_records"
+    " WHERE business_id=$1 AND employee_email=$2 AND work_date>=$3 AND work_date<$4"
+    " AND deleted_at IS NULL AND status<>'rejected'"
+)
+_ATTENDANCE_WEEK_UPSERT_SQL = (
+    "INSERT INTO yeoljeong_attendance_weekly"
+    " (employee_email,business_id,week_start,worked_minutes,is_15h_or_more,"
+    "weekly_holiday_eligible,full_attendance,computed_at)"
+    " VALUES ($1,$2,$3,$4,$5,false,false,now())"
+    " ON CONFLICT (employee_email,business_id,week_start) DO UPDATE SET"
+    " worked_minutes=EXCLUDED.worked_minutes, is_15h_or_more=EXCLUDED.is_15h_or_more,"
+    " computed_at=now()"
+)
+
+
+async def _recompute_attendance_week(connection, business_id: str, employee_email: str,
+                                     work_date: date) -> None:
+    week_start = attendance_week_start(work_date)
+    total = int(await connection.fetchval(
+        _ATTENDANCE_WEEK_SUM_SQL, business_id, employee_email, week_start,
+        week_start + timedelta(days=7)) or 0)
+    await connection.execute(
+        _ATTENDANCE_WEEK_UPSERT_SQL, employee_email, business_id, week_start, total,
+        total >= ATTENDANCE_WEEKLY_15H_MINUTES)
 
 
 def _attendance_response(business: dict[str, Any], row: Any) -> dict[str, Any]:
@@ -920,14 +982,14 @@ async def create_attendance_record(
                 f"""INSERT INTO yeoljeong_attendance_records
                       (business_id,employee_email,employee_email_masked,employee_name,branch,
                        work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,
-                       source,status,memo,created_by)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'manual',$12,$13,$14)
+                       source,status,memo,created_by,night_minutes)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'manual',$12,$13,$14,$15)
                     ON CONFLICT (employee_email,business_id,work_date,start_at) DO UPDATE SET
                       employee_email_masked=EXCLUDED.employee_email_masked,
                       employee_name=EXCLUDED.employee_name, branch=EXCLUDED.branch,
                       end_at=EXCLUDED.end_at, break_minutes=EXCLUDED.break_minutes,
-                      worked_minutes=EXCLUDED.worked_minutes, hourly_wage=EXCLUDED.hourly_wage,
-                      source='manual', status=EXCLUDED.status, memo=EXCLUDED.memo,
+                      worked_minutes=EXCLUDED.worked_minutes, night_minutes=EXCLUDED.night_minutes,
+                      hourly_wage=EXCLUDED.hourly_wage, source='manual', status=EXCLUDED.status, memo=EXCLUDED.memo,
                       created_by=EXCLUDED.created_by, confirmed_by='', confirmed_at=NULL,
                       created_at=now(), updated_at=now(), deleted_at=NULL
                     WHERE yeoljeong_attendance_records.deleted_at IS NOT NULL
@@ -937,12 +999,14 @@ async def create_attendance_record(
                 values["employee_name"], values["branch"], values["work_date"],
                 values["start_at"], values["end_at"], values["break_minutes"],
                 values["worked_minutes"], values["hourly_wage"], values["status"],
-                values["memo"], upload_svc._actor(current_user),
+                values["memo"], upload_svc._actor(current_user), values["night_minutes"],
             )
             if row is None:
                 raise HTTPException(status_code=409, detail="같은 직원·근무일·시작시각 근태가 이미 있습니다")
             await _attendance_audit(connection, business_id, current_user, "attendance.create",
                                     str(row["id"]), dict(row))
+            await _recompute_attendance_week(connection, business_id, values["employee_email"],
+                                             values["work_date"])
     except asyncpg.UniqueViolationError as exc:
         raise HTTPException(status_code=409, detail="같은 직원·근무일·시작시각 근태가 이미 있습니다") from exc
     finally:
@@ -989,23 +1053,38 @@ async def update_attendance_record(
     connection = await upload_svc._connect()
     try:
         async with connection.transaction():
+            # 직원·근무일이 바뀔 수 있어 변경 전 주도 다시 집계해야 한다.
+            previous = await connection.fetchrow(
+                """SELECT employee_email,work_date FROM yeoljeong_attendance_records
+                    WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL FOR UPDATE""",
+                record_id, business_id,
+            )
+            if previous is None:
+                raise HTTPException(status_code=404, detail="현재 사업자의 근태를 찾을 수 없습니다")
             row = await connection.fetchrow(
                 f"""UPDATE yeoljeong_attendance_records SET
                       employee_email=$3, employee_email_masked=$4, employee_name=$5, branch=$6,
                       work_date=$7, start_at=$8, end_at=$9, break_minutes=$10,
                       worked_minutes=$11, hourly_wage=$12, status=$13, memo=$14,
-                      updated_at=now()
+                      night_minutes=$15, updated_at=now()
                     WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL
                     RETURNING {ATTENDANCE_COLUMNS}""",
                 record_id, business_id, values["employee_email"], values["employee_email_masked"],
                 values["employee_name"], values["branch"], values["work_date"],
                 values["start_at"], values["end_at"], values["break_minutes"],
                 values["worked_minutes"], values["hourly_wage"], values["status"], values["memo"],
+                values["night_minutes"],
             )
             if row is None:
                 raise HTTPException(status_code=404, detail="현재 사업자의 근태를 찾을 수 없습니다")
             await _attendance_audit(connection, business_id, current_user, "attendance.update",
                                     record_id, dict(row))
+            targets = {(values["employee_email"], attendance_week_start(values["work_date"])):
+                       values["work_date"]}
+            targets.setdefault((previous["employee_email"], attendance_week_start(previous["work_date"])),
+                               previous["work_date"])
+            for (email, _week_start), day in targets.items():
+                await _recompute_attendance_week(connection, business_id, email, day)
     except asyncpg.UniqueViolationError as exc:
         raise HTTPException(status_code=409, detail="같은 직원·근무일·시작시각 근태가 이미 있습니다") from exc
     finally:
@@ -1025,15 +1104,18 @@ async def delete_attendance_record(
     try:
         async with connection.transaction():
             # 물리 삭제하지 않는다 — 급여 산정 근거가 되므로 이력을 남긴다.
-            deleted = await connection.fetchval(
+            deleted = await connection.fetchrow(
                 """UPDATE yeoljeong_attendance_records SET deleted_at=now(), updated_at=now()
-                    WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL RETURNING id""",
+                    WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL
+                    RETURNING id,employee_email,work_date""",
                 record_id, business_id,
             )
             if deleted is None:
                 raise HTTPException(status_code=404, detail="현재 사업자의 근태를 찾을 수 없습니다")
             await _attendance_audit(connection, business_id, current_user, "attendance.delete",
                                     record_id, {"id": record_id})
+            await _recompute_attendance_week(connection, business_id, deleted["employee_email"],
+                                             deleted["work_date"])
     finally:
         await connection.close()
     return {"deleted": True, "id": record_id}
@@ -1397,6 +1479,7 @@ async def attendance_check_out(
                 branch_id="", branch_name=record["branch"] or "")
             # 근무분은 수기 입력과 같은 함수로 계산한다(자정 넘김·24시간 상한 동일).
             worked = attendance_worked_minutes(record["start_at"], end_at, int(record["break_minutes"] or 0))
+            night = attendance_night_minutes(record["start_at"], end_at, int(record["break_minutes"] or 0))
             combined = combined_geofence(record["geofence_result"], verdict["result"])
             status = ("rejected" if record["status"] == "rejected"
                       else "approved" if combined == "inside" else "pending")
@@ -1406,21 +1489,86 @@ async def attendance_check_out(
                       check_out_lng=$7, check_out_accuracy_m=$8, check_out_distance_m=$9,
                       geofence_result=$10, status=$11, memo=$12,
                       device_info=COALESCE(NULLIF(device_info,''),$13),
-                      location_consent_at=COALESCE(location_consent_at,$14), updated_at=now()
+                      location_consent_at=COALESCE(location_consent_at,$14), night_minutes=$15,
+                      updated_at=now()
                     WHERE id=$1 AND business_id=$2 AND check_out_at IS NULL AND deleted_at IS NULL
                     RETURNING {ATTENDANCE_CLOCK_COLUMNS}""",
                 record["id"], business_id, now, end_at, worked, verdict["latitude"],
                 verdict["longitude"], verdict["accuracy_m"], verdict["distance_m"], combined, status,
                 _clock_memo(record["memo"], "퇴근", verdict["reason"]), payload.device_info.strip(),
-                consent_at,
+                consent_at, night,
             )
             if row is None:
                 raise HTTPException(status_code=409, detail="이미 퇴근이 기록되었습니다")
             await _attendance_audit(connection, business_id, current_user, "attendance.check_out",
-                                    str(row["id"]), _clock_audit(verdict, branch) | {"worked_minutes": worked})
+                                    str(row["id"]), _clock_audit(verdict, branch)
+                                    | {"worked_minutes": worked, "night_minutes": night})
+            await _recompute_attendance_week(connection, business_id, identity["email"],
+                                             row["work_date"])
     finally:
         await connection.close()
     return _clock_response(business, row, verdict)
+
+
+@router.get("/{business_id}/hr/attendance/weekly")
+async def attendance_weekly(
+    business_id: str,
+    week_start: str | None = Query(None, description="YYYY-MM-DD, 그 날이 속한 주(월요일 시작). 생략하면 이번 주"),
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    business = await _business(current_user, business_id)
+    own_email = _require_route_read(current_user, "attendance")  # 관리자 None / 직원 본인 이메일
+    if week_start is None:
+        day = _clock_now().date()
+    else:
+        if not _ATTENDANCE_DATE.match(week_start):
+            raise HTTPException(status_code=400, detail="week_start 는 YYYY-MM-DD 형식이어야 합니다")
+        try:
+            day = date.fromisoformat(week_start)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="week_start 가 올바른 날짜가 아닙니다") from exc
+    monday = attendance_week_start(day)
+    rows: list[Any] = []
+    if own_email != "":
+        owner_filter = "" if own_email is None else " AND lower(w.employee_email)=$3"
+        args = (business_id, monday) if own_email is None else (business_id, monday, own_email)
+        connection = await upload_svc._connect()
+        try:
+            rows = await connection.fetch(
+                f"""SELECT w.employee_email,w.week_start,w.worked_minutes,w.is_15h_or_more,
+                           w.weekly_holiday_eligible,w.full_attendance,w.computed_at,
+                           (SELECT r.employee_name FROM yeoljeong_attendance_records r
+                             WHERE r.business_id=w.business_id AND r.employee_email=w.employee_email
+                               AND r.deleted_at IS NULL ORDER BY r.work_date DESC LIMIT 1) AS employee_name
+                      FROM yeoljeong_attendance_weekly w
+                     WHERE w.business_id=$1 AND w.week_start=$2{owner_filter}
+                     ORDER BY w.employee_email""",
+                *args,
+            )
+        finally:
+            await connection.close()
+    employees = []
+    for row in rows:
+        email = str(row["employee_email"] or "")
+        local, _, domain = email.partition("@")
+        employees.append({
+            "employee_name": row["employee_name"] or "",
+            "employee_email_masked": f"{local[:1]}***@{domain}" if "@" in email else "",
+            "week_start": _json_value(row["week_start"]),
+            "worked_minutes": int(row["worked_minutes"] or 0),
+            "is_15h_or_more": bool(row["is_15h_or_more"]),
+            "weekly_holiday_eligible": row["weekly_holiday_eligible"],
+            "full_attendance": row["full_attendance"],
+            "computed_at": _json_value(row["computed_at"]),
+        })
+    return {
+        "business": {"id": business["id"], "name": business["name"]},
+        "week_start": monday.isoformat(),
+        "week_end": (monday + timedelta(days=6)).isoformat(),
+        "threshold_minutes": ATTENDANCE_WEEKLY_15H_MINUTES,
+        "employees": employees,
+        "source": "yeoljeong_attendance_weekly",
+    }
 
 
 @router.get("/{business_id}/attendance/me/{record_id}")
