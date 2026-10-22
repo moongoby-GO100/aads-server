@@ -56,10 +56,17 @@ def _row(n: int = 1, **over) -> dict:
 
 
 class _Conn:
-    def __init__(self, rows: list[dict], *, answers=(), live_link=False) -> None:
+    def __init__(
+        self, rows: list[dict], *, answers=(), live_link=False,
+        questions=None, mentions=(), unblock_count=0,
+    ) -> None:
         self.rows = rows
         self.answers = list(answers)
         self.live_link = live_link
+        # None 이면 "막힌 직후 그 마일스톤에 대한 질문이 있었다" 로 본다.
+        self.questions = None if questions is None else list(questions)
+        self.mentions = list(mentions)
+        self.unblock_count = unblock_count
         self.executed: list[tuple[str, tuple]] = []
         self.claims: list[tuple] = []
         self.answer_queries: list[tuple] = []
@@ -74,6 +81,14 @@ class _Conn:
     async def fetchval(self, query, *args):
         if "FROM goal_task_links" in query:
             return self.live_link
+        if "dispatch_unblock_count" in query and query.lstrip().startswith("SELECT"):
+            return self.unblock_count
+        if "position(" in query and "role IN ('user', 'system')" in query:
+            if self.questions is None:
+                return args[1] + timedelta(minutes=1)
+            return min((q for q in self.questions if q > args[1]), default=None)
+        if "position(" in query and "role = 'assistant'" in query:
+            return min((m for m in self.mentions if m > args[1]), default=None)
         if "role IN ('user', 'system')" in query:
             return args[1] + timedelta(minutes=1)
         if "FROM chat_messages" in query:
@@ -288,10 +303,10 @@ def test_answer_after_block_releases_resets_count_and_logs(cycle) -> None:
     assert log.named("goal_dispatch_block_released")[0]["reason"] == "answered_after_block"
 
 
-def test_answer_query_for_release_starts_at_the_block_time(cycle) -> None:
+def test_answer_query_for_release_starts_at_the_milestone_question(cycle) -> None:
     row = _blocked()
     _result, conn, _spawned, _log = cycle([row], answers=[_ago(minutes=20)])
-    assert conn.answer_queries[0][1] == row["dispatch_blocked_at"]
+    assert conn.answer_queries[0][1] == row["dispatch_blocked_at"] + timedelta(minutes=1)
 
 
 def test_answer_before_block_does_not_release(cycle) -> None:
@@ -351,3 +366,82 @@ def test_report_done_clears_block_markers(monkeypatch) -> None:
     assert out["status"] == "review"
     (query,) = conn.executed
     assert "dispatch_blocked_at = NULL" in query and "dispatch_note = NULL" in query
+
+
+# ── D. 막힘 해제를 마일스톤 관련 답으로 한정 + 해제 횟수 상한 ───────────────
+
+def test_unrelated_assistant_message_after_block_does_not_release(cycle) -> None:
+    result, conn, spawned, log = cycle(
+        [_blocked()], answers=[_ago(minutes=50)], questions=[], mentions=[],
+    )
+    assert not conn.updates("dispatch_count = 0")
+    assert not log.named("goal_dispatch_record_reset")
+    assert not log.named("goal_dispatch_block_released")
+    assert result["gave_up"] == 1 and result["sent"] == 0 and spawned == []
+
+
+def test_question_mentioning_milestone_id_then_answer_releases(cycle) -> None:
+    result, conn, spawned, log = cycle(
+        [_blocked()], answers=[_ago(minutes=20)], questions=[_ago(minutes=30)],
+    )
+    assert result["skipped"] == 1 and spawned == []
+    (query, args), = conn.updates("dispatch_count = 0")
+    assert "dispatch_unblock_count" in query
+    assert log.named("goal_dispatch_block_released")[0]["reason"] == "answered_after_block"
+
+
+def test_question_without_later_answer_does_not_release(cycle) -> None:
+    result, conn, spawned, log = cycle(
+        [_blocked()], answers=[_ago(minutes=55)], questions=[_ago(minutes=50)],
+    )
+    assert not conn.updates("dispatch_count = 0")
+    assert result["gave_up"] == 1
+
+
+def test_assistant_message_mentioning_milestone_id_releases(cycle) -> None:
+    result, conn, spawned, log = cycle(
+        [_blocked()], answers=[], questions=[], mentions=[_ago(minutes=20)],
+    )
+    assert result["skipped"] == 1
+    assert conn.updates("dispatch_count = 0")
+    assert log.named("goal_dispatch_record_reset")
+
+
+def test_release_over_the_unblock_limit_keeps_block_and_records_note(cycle) -> None:
+    result, conn, spawned, log = cycle(
+        [_blocked()], answers=[_ago(minutes=50)], unblock_count=2,
+    )
+    assert not conn.updates("dispatch_count = 0")
+    assert not log.named("goal_dispatch_record_reset")
+    assert spawned == [] and result["sent"] == 0 and result["gave_up"] == 1
+    notes = [a[1] for _q, a in conn.updates("dispatch_note = $2, updated_at")]
+    assert "답으로 막힘 해제 2회 초과 — 사람이 확인해야 한다" in notes
+    for query, _args in conn.updates("dispatch_blocked_at = COALESCE"):
+        assert "NOT LIKE $3" in query, "발송 루프가 상한 메모를 덮어쓰면 안 된다"
+
+
+def test_release_below_the_unblock_limit_still_works(cycle) -> None:
+    result, conn, spawned, log = cycle(
+        [_blocked()], answers=[_ago(minutes=20)], unblock_count=1,
+    )
+    assert conn.updates("dispatch_count = 0")
+    assert result["skipped"] == 1
+
+
+def test_runner_link_release_resets_unblock_count(cycle) -> None:
+    result, conn, spawned, log = cycle([_blocked()], live_link=True, unblock_count=2)
+    (query, args), = conn.updates("dispatch_blocked_at = NULL, dispatch_note = NULL")
+    assert "dispatch_unblock_count = 0" in query
+    assert "dispatch_count = 0" not in query.replace("dispatch_unblock_count = 0", "")
+
+
+def test_report_done_resets_unblock_count() -> None:
+    import inspect
+
+    from app.services import milestone_review
+
+    assert "dispatch_unblock_count = 0" in inspect.getsource(milestone_review.report_done)
+
+
+def test_unblock_limit_default_is_two() -> None:
+    assert goal_dispatch._MAX_UNBLOCK == 2

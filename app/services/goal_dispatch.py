@@ -74,6 +74,9 @@ _MAX_PER_CYCLE = int(os.getenv("GOAL_DISPATCH_MAX_PER_CYCLE", "2"))
 _CANDIDATE_LIMIT = int(os.getenv("GOAL_DISPATCH_CANDIDATE_LIMIT", "60"))
 _MAX_DISPATCH = int(os.getenv("GOAL_DISPATCH_MAX_RETRY", "3"))
 _RETRY_AFTER_MIN = int(os.getenv("GOAL_DISPATCH_RETRY_AFTER_MIN", "30"))
+_MAX_UNBLOCK = int(os.getenv("GOAL_DISPATCH_MAX_UNBLOCK", "2"))
+_UNBLOCK_LIMIT_NOTE = "답으로 막힘 해제 {n}회 초과 — 사람이 확인해야 한다"
+_UNBLOCK_LIMIT_PREFIX = "답으로 막힘 해제 "
 _PROGRESS_GRACE_MIN = int(os.getenv("GOAL_DISPATCH_PROGRESS_GRACE_MIN", "45"))
 # 부하 때문에 미루는 데에도 **상한**을 둔다.
 #
@@ -229,8 +232,9 @@ async def _clear_answered_block(conn, milestone_id: str) -> None:
     """답이 확인되면 과거의 차단 신호와 설명 메모를 함께 치운다."""
     await conn.execute(
         "UPDATE milestones SET dispatch_blocked_at = NULL, dispatch_note = NULL, "
-        "updated_at = NOW() WHERE id = $1::uuid "
-        "AND (dispatch_blocked_at IS NOT NULL OR dispatch_note IS NOT NULL)",
+        "dispatch_unblock_count = 0, updated_at = NOW() WHERE id = $1::uuid "
+        "AND (dispatch_blocked_at IS NOT NULL OR dispatch_note IS NOT NULL "
+        "OR COALESCE(dispatch_unblock_count, 0) > 0)",
         milestone_id,
     )
 
@@ -286,6 +290,43 @@ _ANSWER_AFTER_SQL = """SELECT MIN(created_at) FROM chat_messages
       AND content NOT LIKE '⚠️ _응답 생성이%'"""
 
 
+# 막힌 뒤 "이 마일스톤에 관한" 질문(발송 지시 포함)이 세션에 들어온 가장 이른 시각.
+# 마일스톤 ID 태그나 제목이 본문에 있어야 한다 — 무관한 대화는 질문이 아니다.
+# 제목은 LIKE 와일드카드(%, _)가 섞일 수 있어 position() 으로 찾는다.
+_QUESTION_AFTER_SQL = """SELECT MIN(created_at) FROM chat_messages
+    WHERE session_id = $1 AND role IN ('user', 'system')
+      AND created_at > $2
+      AND (position($3 in content) > 0
+           OR ($4 <> '' AND position($4 in content) > 0))"""
+
+# 답 본문에 마일스톤 ID 가 직접 들어 있는 경우(질문 메시지가 없어도 인정).
+_MENTION_ANSWER_SQL = """SELECT MIN(created_at) FROM chat_messages
+    WHERE session_id = $1 AND role = 'assistant'
+      AND created_at > $2 AND length(content) > 40
+      AND content NOT LIKE '⏳%'
+      AND content NOT LIKE '⚠️ _응답 생성이%'
+      AND position($3 in content) > 0"""
+
+
+async def _answer_about_milestone(
+    conn, session_id: str, blocked_at: Any, milestone_id: str, title: str,
+) -> Any:
+    """막힌 시각 이후, **그 마일스톤에 대한** 담당의 답이 있으면 그 시각."""
+    tag = f"MILESTONE_ID: {milestone_id}"
+    question_at = await conn.fetchval(
+        _QUESTION_AFTER_SQL, session_id, blocked_at, tag, (title or "").strip(),
+    )
+    answered_at = None
+    if question_at is not None:
+        answered_at = await conn.fetchval(_ANSWER_AFTER_SQL, session_id, question_at)
+    mention_at = await conn.fetchval(
+        _MENTION_ANSWER_SQL, session_id, blocked_at, str(milestone_id),
+    )
+    if answered_at and mention_at:
+        return min(answered_at, mention_at)
+    return answered_at or mention_at
+
+
 async def _has_runner_progress(conn, milestone_id: str) -> bool:
     """살아 있는 러너 작업 링크가 있는가. 실제 job 상태도 대조한다."""
     columns = await goal_manager.link_optional_columns(conn)
@@ -330,13 +371,29 @@ async def _release_block_if_unblocked(conn, row: Any, session_id: str) -> str | 
                     reason="runner_progress")
         return "runner_progress"
 
+    # 상한을 먼저 본다. 답 유무와 상관없이 같은 메모를 유지해야 아래 발송 루프의
+    # 막힘 메모("N회 보냈으나…")와 서로 덮어쓰며 매 사이클 UPDATE 하지 않는다.
+    unblocked = int(await conn.fetchval(
+        "SELECT COALESCE(dispatch_unblock_count, 0) FROM milestones WHERE id = $1::uuid",
+        milestone_id,
+    ) or 0)
+    if unblocked >= _MAX_UNBLOCK:
+        await _note(conn, milestone_id, _UNBLOCK_LIMIT_NOTE.format(n=unblocked))
+        logger.info("goal_dispatch_unblock_limit", milestone=str(milestone_id)[:8],
+                    unblocked=unblocked, limit=_MAX_UNBLOCK)
+        return None
+
     blocked_at = row["dispatch_blocked_at"]
-    answered_at = await conn.fetchval(_ANSWER_AFTER_SQL, session_id, blocked_at)
+    answered_at = await _answer_about_milestone(
+        conn, session_id, blocked_at, milestone_id, row.get("milestone_title") or "",
+    )
     if not answered_at:
         return None
     result = await conn.execute(
         "UPDATE milestones SET updated_at = NOW(), dispatch_blocked_at = NULL, "
-        "dispatch_note = NULL, dispatch_count = 0 "
+        "dispatch_note = NULL, "
+        "dispatch_unblock_count = COALESCE(dispatch_unblock_count, 0) + 1, "
+        "dispatch_count = 0 "
         "WHERE id = $1::uuid AND dispatch_blocked_at = $2",
         milestone_id, blocked_at,
     )
@@ -713,6 +770,10 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 "ALTER TABLE milestones ADD COLUMN IF NOT EXISTS "
                 "dispatch_blocked_at timestamptz"
             )
+            await conn.execute(
+                "ALTER TABLE milestones ADD COLUMN IF NOT EXISTS "
+                "dispatch_unblock_count int DEFAULT 0"
+            )
 
             rows = await conn.fetch(
                 """
@@ -963,8 +1024,10 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                             "UPDATE milestones SET dispatch_blocked_at = "
                             "COALESCE(dispatch_blocked_at, NOW()), dispatch_note = $2, "
                             "updated_at = NOW() WHERE id = $1::uuid AND "
-                            "(dispatch_blocked_at IS NULL OR dispatch_note IS DISTINCT FROM $2)",
+                            "(dispatch_blocked_at IS NULL OR dispatch_note IS DISTINCT FROM $2) "
+                            "AND COALESCE(dispatch_note, '') NOT LIKE $3",
                             row["milestone_id"], block_note,
+                            _UNBLOCK_LIMIT_PREFIX + "%",
                         )
                         if answered_without_progress and str(result).endswith(" 1"):
                             logger.warning(
