@@ -66,6 +66,38 @@ def is_request_changes_failure(status: str, phase: str, error_detail: str) -> bo
     return False
 
 
+_GATE_STAGE = "pre_llm_preservation_gate"
+_LINE_RATIO_MARKERS = ("50%를 초과하고 순삭제", "추가 없이 삭제 라인")
+
+
+def _raw_issues(feedback: Any) -> list[str]:
+    if isinstance(feedback, (bytes, bytearray)):
+        feedback = feedback.decode("utf-8", "replace")
+    if isinstance(feedback, str):
+        try:
+            feedback = json.loads(feedback)
+        except ValueError:
+            return []
+    if not isinstance(feedback, dict) or not isinstance(feedback.get("issues"), list):
+        return []
+    return [str(x) for x in feedback["issues"] if str(x).strip()]
+
+
+def is_deterministic_line_gate_rejection(review: Any) -> bool:
+    """재작업으로 바뀔 수 없는 줄 수 비율 사전 게이트 반려인가.
+
+    사전 게이트는 diff 줄 수만 보므로 사유를 적어도 결과가 같다. 이슈가 전부 줄 수
+    사유일 때만 True — 심볼·범위 사유가 섞이면 재작업으로 고칠 수 있으니 False.
+    판정 근거가 없으면(행 없음, NULL) False 라 기존 동작을 유지한다.
+    """
+    if not review:
+        return False
+    if review["failure_stage"] != _GATE_STAGE or review["needs_retry"] is not False:
+        return False
+    issues = _raw_issues(review["feedback"])
+    return bool(issues) and all(any(m in i for m in _LINE_RATIO_MARKERS) for i in issues)
+
+
 def max_rounds(max_cycles: Any) -> int:
     try:
         cycles = int(max_cycles or 3)
@@ -181,6 +213,15 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
     instruction = row["instruction"] or ""
     if _OPT_OUT_RE.search(instruction):
         return {"skipped": "opt_out", "parent": job_id}
+    if row["phase"] == "review_failed":
+        gate_review = await conn.fetchrow(
+            "SELECT failure_stage, needs_retry, feedback FROM code_reviews "
+            "WHERE job_id = $1 ORDER BY created_at DESC LIMIT 1",
+            job_id,
+        )
+        if is_deterministic_line_gate_rejection(gate_review):
+            logger.info("pipeline_auto_rework.deterministic_gate", job_id=job_id)
+            return {"skipped": "deterministic_gate", "parent": job_id, "category": "PRESERVATION_HARD_GATE"}
     rounds_max = max_rounds(row["max_cycles"])
     next_round = current_round(instruction) + 1
     if next_round > rounds_max:

@@ -442,6 +442,11 @@ class ReviewVerdict:
     model_used: Optional[str] = None
 
 
+_PRESERVATION_LINE_GATE_NOTE = (
+    " (이 게이트는 diff 줄 수만 보며 보고서 내용은 판정하지 않습니다. "
+    "삭제가 작업 목적이면 재작업이 아니라 CEO 판정이 필요합니다)"
+)
+
 # LLM 프롬프트와 task_policy_compiler 의 개발자 지시 문구가 사전 게이트(_precheck_preservation_gate)와
 # 어긋나면 사전 게이트를 통과한 제자리 수정이 본 리뷰에서 같은 사유로 반려된다. 한 곳에서 만든다.
 PRESERVATION_RATIO_RULE_TEXT = (
@@ -1517,9 +1522,13 @@ def _precheck_preservation_gate(
         issues.append(
             f"삭제 라인({deletions})이 추가 라인({additions})의 50%를 초과하고 순삭제가 "
             f"{net_removal}줄입니다. 기존 구현 조사표와 삭제 사유가 필요합니다."
+            + _PRESERVATION_LINE_GATE_NOTE
         )
     elif additions == 0 and deletions > 0:
-        issues.append(f"추가 없이 삭제 라인({deletions})만 존재합니다. 삭제 사유가 필요합니다.")
+        issues.append(
+            f"추가 없이 삭제 라인({deletions})만 존재합니다. 삭제 사유가 필요합니다."
+            + _PRESERVATION_LINE_GATE_NOTE
+        )
 
     exemption_notes: dict[str, object] = {}
     confirmed_diff, truncated_tail_diff = _split_diff_by_completeness(

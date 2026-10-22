@@ -72,13 +72,16 @@ def test_second_round_does_not_stack_previous_section():
 
 
 class FakeConn:
-    def __init__(self, row, existing=None, feedback=None):
+    def __init__(self, row, existing=None, feedback=None, gate_review=None):
         self.row = row
+        self.gate_review = gate_review
         self.existing = existing
         self.feedback = feedback
         self.executed: list[tuple] = []
 
     async def fetchrow(self, sql, *args):
+        if "FROM code_reviews" in sql:
+            return self.gate_review
         return self.row
 
     async def fetchval(self, sql, *args):
@@ -167,3 +170,55 @@ def test_notify_hook_is_wired_before_terminal_suppression():
     hook = src.index("maybe_submit_auto_rework(conn, job_id)")
     suppress = src.index('logger.info("pipeline_runner.notify_terminal_suppressed"')
     assert hook < suppress
+
+
+RATIO_ISSUE = (
+    "삭제 라인(157)이 추가 라인(57)의 50%를 초과하고 순삭제가 100줄입니다. "
+    "기존 구현 조사표와 삭제 사유가 필요합니다."
+)
+
+
+def _gate_review(issues, stage="pre_llm_preservation_gate", needs_retry=False):
+    return {
+        "failure_stage": stage,
+        "needs_retry": needs_retry,
+        "feedback": json.dumps({"issues": issues}),
+    }
+
+
+def test_ratio_only_precheck_rejection_skips_rework():
+    conn = FakeConn(_row(), gate_review=_gate_review([RATIO_ISSUE]))
+    res = asyncio.run(ar.maybe_submit_auto_rework(conn, "runner-aaaaaaaa"))
+    assert res == {
+        "skipped": "deterministic_gate", "parent": "runner-aaaaaaaa",
+        "category": "PRESERVATION_HARD_GATE",
+    }
+    assert _inserts(conn) == []
+    assert conn.executed == []
+
+
+def test_ratio_plus_symbol_reason_still_reworks():
+    issues = [RATIO_ISSUE, "삭제된 public 함수/클래스/API 라우터가 감지되었습니다: foo"]
+    conn = FakeConn(
+        _row(), feedback=json.dumps({"issues": issues}), gate_review=_gate_review(issues),
+    )
+    res = asyncio.run(ar.maybe_submit_auto_rework(conn, "runner-aaaaaaaa"))
+    assert res and res["round"] == 1
+    assert len(_inserts(conn)) == 1
+
+
+def test_no_code_reviews_row_keeps_existing_behavior():
+    conn = FakeConn(_row(), feedback=json.dumps({"issues": ["결함A"]}), gate_review=None)
+    res = asyncio.run(ar.maybe_submit_auto_rework(conn, "runner-aaaaaaaa"))
+    assert res and res["round"] == 1
+    assert len(_inserts(conn)) == 1
+
+
+@pytest.mark.parametrize("review", [
+    _gate_review([RATIO_ISSUE], stage="review_analysis"),
+    _gate_review([RATIO_ISSUE], needs_retry=True),
+    {"failure_stage": None, "needs_retry": None, "feedback": None},
+    _gate_review([]),
+])
+def test_gate_check_requires_full_evidence(review):
+    assert not ar.is_deterministic_line_gate_rejection(review)
