@@ -39,8 +39,10 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from tools.aag import code_deps
     from tools.aag.v2_contract import STABLE_KEY_VERSION, normalize_findings
 except ModuleNotFoundError:  # direct `python tools/aag/scan_aads.py` execution
+    import code_deps
     from v2_contract import STABLE_KEY_VERSION, normalize_findings
 
 KST = timezone(timedelta(hours=9))
@@ -1590,6 +1592,38 @@ class Scan:
         self.py_parse_failed: set[str] = set()
         self.entrypoints_missing: list[str] = []
         self.fe_files_read = 0
+        # AAG_SCAN_CODE_DEPS=0 이면 S1 추출(import·tests·화면 노드)을 통째로 건너뛴다.
+        self.code_deps_enabled = code_deps.enabled() and bool(rules.get("code_deps"))
+        self.code_deps_edges: list[dict] = []
+        self.code_deps_stats: dict[str, Any] = {}
+        self.code_test_files: list[str] = []
+        self.code_linked_tests: list[str] = []
+        self.code_py_files: list[str] = []
+        self.fe_roots_resolved: list[str] = []
+
+    def effective_frontend(self) -> dict[str, Any]:
+        """프런트 규칙. S1 이 켜져 있으면 `code_deps.frontend` 가 `frontend` 를 덮어쓴다.
+
+        GO100 은 `frontend.roots: []` (JS 계약 검사 꺼짐) 를 유지한 채 Next.js 소스만
+        `code_deps.frontend` 로 추가한다 — 플래그를 끄면 이전 스냅샷과 같아야 해서다.
+        """
+        fe = dict(self.rules["frontend"])
+        if self.code_deps_enabled:
+            fe.update((self.rules.get("code_deps") or {}).get("frontend") or {})
+        return fe
+
+    def code_deps_exclude(self) -> list[str]:
+        """S1 이 켜져 있고 `code_deps.exclude_dir_names` 가 있으면 그것으로 디렉터리를 거른다.
+
+        전역 `scan.exclude_dir_names` 에는 `data`/`logs`/`review` 같은 이름이 있어
+        Next 라우트(`admin/data`)와 Python 패키지(`services/data`)가 통째로 빠지고,
+        그쪽으로 가는 import 가 전부 "해석 불가" 로 잡힌다.
+        """
+        if self.code_deps_enabled:
+            own = (self.rules.get("code_deps") or {}).get("exclude_dir_names")
+            if own:
+                return list(own)
+        return list(self.rules["scan"]["exclude_dir_names"])
 
     # ── 백엔드 ──────────────────────────────────────────────────────
     def scan_backend(self) -> None:
@@ -1709,11 +1743,18 @@ class Scan:
         """두 번 읽는다. 1패스로 파일별 base 상수를 모으고, 2패스에서 import 를
         따라간 뒤 호출을 해석한다. 한 번에 하면 `import { BASE_URL }` 이
         아직 읽지 않은 파일을 가리킬 때 순서에 따라 결과가 달라진다."""
-        fe = self.rules["frontend"]
+        fe = self.effective_frontend()
+        self.fe_roots_resolved = resolve_frontend_roots(self.root, fe["roots"])
         self.fe_files = iter_files(
-            self.root, resolve_frontend_roots(self.root, fe["roots"]), fe["extensions"],
-            self.rules["scan"]["exclude_dir_names"],
+            self.root, self.fe_roots_resolved, fe["extensions"],
+            self.code_deps_exclude(),
         )
+        if self.code_deps_enabled and fe["roots"] and not self.fe_files \
+                and not self.rules["frontend"]["roots"]:
+            # 새로 추가한 범위는 기존 스냅샷을 막지 않는다 — 경고만 남기고 coverage 로 드러난다.
+            self.warnings.append(
+                "code_deps.frontend.roots 가 설정됐지만 대상 파일 0개: " + ", ".join(fe["roots"])
+            )
         helpers: dict[str, str] = dict(fe.get("path_helpers") or {})
         aliases: dict[str, str] = dict(fe.get("path_aliases") or {})
         call_names = list(fe["call_names"]) + list(helpers)
@@ -1785,6 +1826,104 @@ class Scan:
                     "expr": call["url_expr"][:160], "method": method, "path": path,
                 })
 
+    # ── 코드 의존 (S1) ─────────────────────────────────────────────
+    def scan_code_deps(self) -> None:
+        """Python/TS import 간선, 테스트 간선, 화면 노드 속성. 실패해도 스캔은 계속한다.
+
+        실패를 조용히 삼키지 않는다 — warnings 와 stats.code_deps.error 에 남는다.
+        """
+        if not self.code_deps_enabled:
+            return
+        try:
+            self._scan_code_deps()
+        except Exception as exc:  # noqa: BLE001 — 새 추출이 기존 스냅샷을 막으면 안 된다
+            self.code_deps_edges = []
+            self.code_test_files = []
+            self.code_linked_tests = []
+            self.code_py_files = []
+            self.code_deps_stats = {"enabled": True, "error": f"{type(exc).__name__}: {exc}"}
+            self.warnings.append(f"code_deps 추출 실패 — import/tests 간선 없음: {exc}")
+
+    def _scan_code_deps(self) -> None:
+        cfg = self.rules.get("code_deps") or {}
+        scan_cfg = self.rules["scan"]
+        exclude = self.code_deps_exclude()
+        test_roots = list(cfg.get("test_roots") or [])
+        py_roots = list(cfg.get("python_roots") or scan_cfg["app_roots"]) + test_roots
+        import_roots = list(cfg.get("python_import_roots") or [""])
+        py_files = sorted(set(self.py_files) | set(iter_files(self.root, py_roots, [".py"], exclude)))
+        self.code_py_files = py_files
+        py = code_deps.build_py_deps(
+            py_files, lambda rel: read_text(self.root / rel), import_roots, test_roots,
+        )
+        self.code_test_files = py["test_files"]
+        self.code_linked_tests = py["linked_tests"]
+        for rel in py["parse_failed"]:
+            self.warnings.append(f"import 분석용 파싱 실패 {rel}")
+
+        fe = self.effective_frontend()
+        ts: dict[str, Any] = {"edges": [], "imports": 0, "unresolved": [], "external": {},
+                              "assets_skipped": 0, "tsconfig": "", "alias_patterns": []}
+        if self.fe_files:
+            tsconfig = str(fe.get("tsconfig") or "")
+            if tsconfig:
+                tsconfig = (self.root / tsconfig).resolve().as_posix()
+            else:
+                start = (self.root / self.fe_roots_resolved[0]).resolve() if self.fe_roots_resolved \
+                    else self.root
+                tsconfig = code_deps.find_tsconfig(
+                    start.as_posix(), os.path.isfile, stop_at=self.root.as_posix(),
+                )
+            root_posix = self.root.as_posix()
+
+            def key_of(abs_path: str) -> str:
+                return abs_path[len(root_posix) + 1:] if abs_path.startswith(root_posix + "/") else abs_path
+
+            ts = code_deps.build_ts_deps(
+                self.fe_files, lambda k: (self.root / k).as_posix(), key_of,
+                lambda k: read_text(Path(k) if os.path.isabs(k) else self.root / k),
+                tsconfig, extra_aliases=dict(fe.get("path_aliases") or {}),
+            )
+        self.code_deps_edges = list(py["edges"]) + list(ts["edges"])
+
+        sample = code_deps.UNRESOLVED_SAMPLE_LIMIT
+        roles: dict[str, int] = {}
+        routes = 0
+        for rel in self.fe_files:
+            info = code_deps.classify_next_file(rel)
+            roles[info["role"]] = roles.get(info["role"], 0) + 1
+            routes += 1 if info.get("route") is not None and info["role"] == "page" else 0
+        py_ext = py["external"]
+        ts_ext = ts["external"]
+        self.code_deps_stats = {
+            "enabled": True,
+            "flag": code_deps.FLAG_ENV,
+            "edges": {
+                "imports_py": py["imports"], "imports_ts": ts["imports"], "tests": py["tests"],
+            },
+            "py": {
+                "files_scanned": py["files_scanned"],
+                "parse_failed": len(py["parse_failed"]),
+                "external_imports": sum(py_ext.values()),
+                "external_packages": len(py_ext),
+                "external_top": dict(sorted(py_ext.items(), key=lambda kv: (-kv[1], kv[0]))[:10]),
+                "unresolved_imports": len(py["unresolved"]),
+                "unresolved_sample": py["unresolved"][:sample],
+            },
+            "ts": {
+                "tsconfig": ts["tsconfig"],
+                "alias_patterns": ts["alias_patterns"],
+                "external_imports": sum(ts_ext.values()),
+                "external_packages": len(ts_ext),
+                "external_top": dict(sorted(ts_ext.items(), key=lambda kv: (-kv[1], kv[0]))[:10]),
+                "assets_skipped": ts["assets_skipped"],
+                "unresolved_imports": len(ts["unresolved"]),
+                "unresolved_sample": ts["unresolved"][:sample],
+            },
+            "frontend_roles": dict(sorted(roles.items())),
+            "frontend_page_routes": routes,
+        }
+
     # ── 규칙 적용 ──────────────────────────────────────────────────
     def apply_rules(self) -> None:
         sev = self.rules["severity"]
@@ -1798,7 +1937,8 @@ class Scan:
         )
         raw += find_stale_backups(self.backup_candidates, self.rules["backup_patterns"])
 
-        for call in self.fe_calls:
+        contract_on = self.effective_frontend().get("contract_findings", True)
+        for call in (self.fe_calls if contract_on else []):
             verdict, why = classify_frontend_call(call["method"], call["path"], self.routes_by_method)
             if verdict == "OK":
                 continue
@@ -1875,9 +2015,35 @@ class Scan:
                 add(user, "module")
                 edges.append({"from": user, "to": f"table:{table}", "kind": "queries"})
 
+        if self.code_deps_enabled:
+            self._add_code_deps_graph(nodes, edges, add)
+
         self.nodes = sorted(nodes.values(), key=lambda n: (n["kind"], n["id"]))
         self.edges = edges
         self.ns_owners = {k: sorted(v) for k, v in sorted(ns_owners.items())}
+
+
+    def _add_code_deps_graph(self, nodes: dict[str, dict], edges: list[dict], add: Any) -> None:
+        """S1 노드·간선을 **추가만** 한다. 기존 노드의 id·kind 는 건드리지 않는다.
+
+        기존 노드에는 `role`/`route` 속성만 덧붙인다. 테스트 파일이 SQL 을 쓰면 이미 kind=module
+        노드이므로 kind 를 test 로 바꾸지 않고 role=test 로 표시한다.
+        """
+        tests = set(self.code_test_files)
+        for rel in self.code_py_files:
+            add(rel, "module")
+            if rel in tests:
+                nodes[rel]["role"] = "test"
+        for rel in self.fe_files:
+            add(rel, "frontend")
+            info = code_deps.classify_next_file(rel)
+            nodes[rel]["role"] = info["role"]
+            if "route" in info:
+                nodes[rel]["route"] = info["route"]
+        for edge in self.code_deps_edges:
+            for end in (edge["from"], edge["to"]):
+                add(end, "module")
+        edges.extend(self.code_deps_edges)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2049,7 +2215,7 @@ def compute_coverage(scan: Scan) -> dict[str, Any]:
     py_parsed = py_total - len(set(scan.py_parse_failed) & set(scan.py_files))
     py_nodes = sum(1 for rel in scan.py_files if rel in node_ids)
     fe_nodes = sum(1 for rel in scan.fe_files if rel in node_ids)
-    return {
+    cov = {
         "py_files_total": py_total,
         "py_files_parsed": py_parsed,
         "py_files_as_nodes": py_nodes,
@@ -2068,6 +2234,29 @@ def compute_coverage(scan: Scan) -> dict[str, Any]:
         "risk_total": calls_total,
         "unobserved_scopes": sorted(f"entrypoint:{rel}" for rel in scan.entrypoints_missing),
     }
+    if getattr(scan, "code_deps_enabled", False):
+        # S1 키는 플래그가 켜졌을 때만 붙는다 — 꺼진 스냅샷은 이전과 같아야 한다.
+        stats = getattr(scan, "code_deps_stats", None) or {}
+        tests_total = len(scan.code_test_files)
+        tests_linked = len(scan.code_linked_tests)
+        cov.update({
+            "test_files_total": tests_total,
+            "test_files_linked": tests_linked,
+            "test_link_ratio": _ratio(tests_linked, tests_total),
+            "unresolved_imports": (stats.get("py") or {}).get("unresolved_imports", 0)
+            + (stats.get("ts") or {}).get("unresolved_imports", 0),
+        })
+    return cov
+
+
+def _code_deps_scope(scan: Scan) -> dict[str, Any]:
+    """플래그 off 면 빈 dict — 기존 stats 키를 하나도 늘리지 않는다."""
+    if not getattr(scan, "code_deps_enabled", False):
+        return {}
+    by_kind: dict[str, int] = {}
+    for edge in scan.edges:
+        by_kind[edge["kind"]] = by_kind.get(edge["kind"], 0) + 1
+    return {"edges_by_kind": dict(sorted(by_kind.items())), "code_deps": scan.code_deps_stats}
 
 
 def build_baseline(scan: Scan) -> dict[str, Any]:
@@ -2092,6 +2281,7 @@ def build_baseline(scan: Scan) -> dict[str, Any]:
             "graph_nodes": len(scan.nodes),
             "graph_edges": len(scan.edges),
             "coverage": compute_coverage(scan),
+            **_code_deps_scope(scan),
         },
         "findings_by_rule": counts_by_rule(scan.findings),
         "stable_key_version": STABLE_KEY_VERSION,
@@ -2209,6 +2399,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         scan.scan_backend()
         scan.scan_frontend()
+        scan.scan_code_deps()
     except Exception as exc:  # noqa: BLE001 — 실행 불가와 결함 0건을 반드시 구분한다
         print(f"ERROR: 스캔 실패 — {exc}", file=sys.stderr)
         return 2

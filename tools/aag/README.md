@@ -27,6 +27,12 @@
 | 1 | 결함이 늘었다 |
 | 2 | **스캔 불가**(대상 파일 0개) — "위반 0건" 이 아니라 "점검 못함" |
 
+## 코드 의존 간선 (S1)
+
+규칙 파일에 `code_deps:` 섹션이 있으면 Python import(`imports`)·테스트(`tests`)·TS import 간선과
+프런트 화면 노드(role/route)를 추가로 싣는다. 기존 노드 id·간선 종류는 그대로고 추가만 한다.
+`AAG_SCAN_CODE_DEPS=0` 이면 추출을 건너뛰고 출력이 S1 이전과 같다. 구현은 `code_deps.py`.
+
 ## 고정선(baseline)
 
 `baseline_aads.json` 의 숫자는 **허용치가 아니라 현재 빚**이다.

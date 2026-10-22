@@ -89,6 +89,55 @@ frontend:
   path_helpers: {}
   path_aliases: {}
 
+# ── 코드 의존 간선 (S1, AAG_SCAN_CODE_DEPS=0 으로 끈다) ─────────────────
+# 저장소 루트에 .worktrees/.aads-worktrees 사본이 있으므로 루트를 통째로 훑지 않고
+# 아래 디렉터리만 본다.
+code_deps:
+  # 전역 exclude_dir_names 의 data/logs/review 는 `services/data`, `admin/data`,
+  # `strategies/[id]/review` 같은 실제 패키지·라우트까지 지운다. 의존 추출만 따로 거른다.
+  exclude_dir_names:
+    - __pycache__
+    - node_modules
+    - .git
+    - .next
+    - venv
+    - .venv
+    - backup
+    - backups
+    - ops-backups
+    - docs_cache
+    - test-results
+    - artifacts
+    - tmp
+    - patches
+  python_roots:
+    - backend
+    - tests
+    - scripts
+  # `from backend.app.x import y` 와 `from app.x import y` 가 둘 다 쓰인다.
+  python_import_roots:
+    - ""
+    - backend
+  test_roots:
+    - tests
+    - backend/tests
+  # 위 `frontend:` 는 계약 검사를 끈 채 비워 둔다(플래그를 끄면 이전 스냅샷과 같아야 한다).
+  # 플래그가 켜져 있을 때만 이 블록이 `frontend:` 를 덮어쓴다.
+  # contract_findings: false — 화면→API calls 간선은 싣되 PATH_DRIFT/ROUTE_MISSING 은
+  # 아직 내지 않는다(GO100 라우트 정합 검증 전).
+  frontend:
+    roots:
+      - frontend/src
+    extensions: [".ts", ".tsx"]
+    base_env_names:
+      - NEXT_PUBLIC_API_URL
+    fallback_base: ""
+    call_names:
+      - fetch
+      - EventSource
+    tsconfig: frontend/tsconfig.json
+    contract_findings: false
+
 # ── STALE_BACKUP 판정 ───────────────────────────────────────────────────
 backup_patterns:
   - '\.bak$'

@@ -89,6 +89,23 @@ frontend:
   path_aliases:
     "@/": aads-dashboard/src/
 
+# ── 코드 의존 간선 (S1, AAG_SCAN_CODE_DEPS=0 으로 끈다) ─────────────────
+# Python import(kind=imports)·테스트(kind=tests)·TS import 를 추가 간선으로 싣는다.
+# 이 섹션이 없는 프로젝트는 켜져 있어도 S1 추출을 하지 않는다.
+code_deps:
+  # import 대상이 될 수 있는 디렉터리. app_roots 에 더해 테스트·스크립트 모듈도 본다.
+  python_roots:
+    - app
+    - tests
+    - scripts
+    - tools
+  # sys.path 에 오르는 디렉터리. "" = 저장소 루트(`import app.core.x`).
+  python_import_roots:
+    - ""
+  # 이 아래 파일, 그리고 test_*.py / *_test.py / conftest.py 는 테스트로 본다.
+  test_roots:
+    - tests
+
 # ── STALE_BACKUP 판정 ───────────────────────────────────────────────────
 # 파일명 끝이 아래 정규식 중 하나에 걸리면 낡은 사본으로 본다.
 backup_patterns:

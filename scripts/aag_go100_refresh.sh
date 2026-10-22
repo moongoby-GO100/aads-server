@@ -80,6 +80,7 @@ ssh "${SSH_OPTS[@]}" "$REMOTE" "mkdir -p ${REMOTE_DIR}/out"
 scp "${SSH_OPTS[@]}" -q \
     "${REPO_DIR}/tools/aag/scan_aads.py" \
     "${REPO_DIR}/tools/aag/v2_contract.py" \
+    "${REPO_DIR}/tools/aag/code_deps.py" \
     "${REPO_DIR}/tools/aag/brief.py" \
     "${REPO_DIR}/tools/aag/rules_go100.yml" \
     "${REMOTE}:${REMOTE_DIR}/"
@@ -97,7 +98,7 @@ ssh "${SSH_OPTS[@]}" "$REMOTE" "touch ${scan_marker}"
 
 set +e
 ssh "${SSH_OPTS[@]}" "$REMOTE" \
-    "cd ${REMOTE_DIR} && AAG_PROJECT=GO100 AADS_COMMIT_SHA=${remote_sha} AAG_EXPECTED_TARGET_REF_HEAD_SHA=${remote_sha} timeout 900 python3 scan_aads.py --root ${TARGET_ROOT} --rules ${REMOTE_DIR}/rules_go100.yml --out-dir ${REMOTE_DIR}/out --json" \
+    "cd ${REMOTE_DIR} && AAG_SCAN_CODE_DEPS=${AAG_SCAN_CODE_DEPS:-1} AAG_PROJECT=GO100 AADS_COMMIT_SHA=${remote_sha} AAG_EXPECTED_TARGET_REF_HEAD_SHA=${remote_sha} timeout 900 python3 scan_aads.py --root ${TARGET_ROOT} --rules ${REMOTE_DIR}/rules_go100.yml --out-dir ${REMOTE_DIR}/out --json" \
     > ${TMP_DIR}/aag-go100-scan.json 2>${TMP_DIR}/aag-go100-scan.err
 scan_rc=$?
 set -e
