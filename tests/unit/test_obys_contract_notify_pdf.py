@@ -283,18 +283,11 @@ def test_signing_stores_pdf_with_sha256_and_size(isolated):
 
 
 def test_pdf_is_bound_to_signed_snapshot_not_current_body(isolated):
+    """PDF 는 봉인 스냅샷에서만 만들어진다. 파일이 사라져도 같은 바이트로 되살아난다."""
     pytest.importorskip("reportlab")
     contract = _signed_contract()["contract"]
     original_sha = contract["signed_pdf_sha256"]
     original_bytes = (Path(os.environ["OBYS_UPLOAD_ROOT"]) / contract["signed_pdf_path"]).read_bytes()
-
-    # 서명 뒤 저장소의 본문을 직접 바꾸고 PDF 파일도 지운다(재생성 강제).
-    rows = svc._read_file_rows("contracts")
-    for row in rows:
-        if row["id"] == contract["id"]:
-            row["job_description"] = "서명 후 몰래 바꾼 업무"
-            row["wage"] = 1
-    svc._write_file_rows("contracts", rows)
     (Path(os.environ["OBYS_UPLOAD_ROOT"]) / contract["signed_pdf_path"]).unlink()
 
     regenerated = _client(ADMIN).post(f"/yeoljeong-finance/contracts/{contract['id']}/signed-pdf/regenerate")
@@ -304,6 +297,28 @@ def test_pdf_is_bound_to_signed_snapshot_not_current_body(isolated):
     download = _client(ADMIN).get(f"/yeoljeong-finance/contracts/{contract['id']}/signed-pdf")
     assert download.status_code == 200
     assert download.content == original_bytes
+
+
+def test_body_tampered_after_signing_is_refused_instead_of_silently_regenerated(isolated):
+    """AADS-OBYS-H1 F-3: 서명 뒤 저장 본문이 바뀌면 PDF 를 되살려 주지 않고 409 + 감사 행을 남긴다(이전에는 조용히 200)."""
+    pytest.importorskip("reportlab")
+    contract = _signed_contract()["contract"]
+    pdf_file = Path(os.environ["OBYS_UPLOAD_ROOT"]) / contract["signed_pdf_path"]
+    rows = svc._read_file_rows("contracts")
+    for row in rows:
+        if row["id"] == contract["id"]:
+            row["job_description"] = "서명 후 몰래 바꾼 업무"
+            row["wage"] = 1
+    svc._write_file_rows("contracts", rows)
+    pdf_file.unlink()
+
+    regenerated = _client(ADMIN).post(f"/yeoljeong-finance/contracts/{contract['id']}/signed-pdf/regenerate")
+    assert regenerated.status_code == 409
+    assert _client(ADMIN).get(f"/yeoljeong-finance/contracts/{contract['id']}/signed-pdf").status_code == 409
+    assert not pdf_file.exists()
+    audits = [row for row in svc._read_file_rows(svc.CONTRACT_AUDIT_LOG) if row["action"] == "contract.integrity_violation"]
+    assert len(audits) == 2
+    assert audits[0]["details"]["changed_fields"] == ["job_description", "wage"]
 
 
 def test_pdf_generation_failure_keeps_signature_and_records_error(isolated, monkeypatch):

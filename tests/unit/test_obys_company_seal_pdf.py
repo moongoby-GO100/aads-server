@@ -77,7 +77,7 @@ def test_store_signed_pdf_passes_seal_inputs_to_renderer(monkeypatch, tmp_path):
         return b"%PDF-fake"
 
     monkeypatch.setattr(pdf, "render_signed_contract_pdf", fake_render)
-    monkeypatch.setattr(svc, "_persist_contract_delivery", lambda contract, user: None)
+    monkeypatch.setattr(svc, "_persist_contract_delivery", lambda contract, user, new_history=None: None)
     monkeypatch.setenv("OBYS_UPLOAD_ROOT", str(tmp_path))
     monkeypatch.setattr(svc, "_business_record_for_id", lambda business_id: {})
     contract = {
@@ -239,8 +239,9 @@ def test_signed_contract_pdf_keeps_its_frozen_seal_when_the_business_trade_name_
         return b"%PDF-fake"
 
     monkeypatch.setattr(pdf, "render_signed_contract_pdf", fake_render)
-    monkeypatch.setattr(svc, "_persist_contract_delivery", lambda contract, user: None)
+    monkeypatch.setattr(svc, "_persist_contract_delivery", lambda contract, user, new_history=None: None)
     monkeypatch.setenv("OBYS_UPLOAD_ROOT", str(tmp_path))
+    monkeypatch.setattr(svc, "DATA_DIR", tmp_path / "data")  # 재생성 감사 행(contract.pdf_regenerated)이 저장소 data 를 더럽히지 않게
     record = {"name": "열정국밥 중화점", "entityType": "corporation", "representative": "오윤희"}
     monkeypatch.setattr(svc, "_business_record_for_id", lambda business_id: dict(record))
     frozen = {"kind": "corporation", "company_name": "열정국밥 중화점", "representative": "오윤희"}

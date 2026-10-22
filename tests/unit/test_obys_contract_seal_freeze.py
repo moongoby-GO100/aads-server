@@ -92,7 +92,7 @@ def _render_spy(monkeypatch, tmp_path):
         return b"%PDF-fake"
 
     monkeypatch.setattr(pdf, "render_signed_contract_pdf", fake_render)
-    monkeypatch.setattr(svc, "_persist_contract_delivery", lambda contract, user: None)
+    monkeypatch.setattr(svc, "_persist_contract_delivery", lambda contract, user, new_history=None: None)
     return seen
 
 

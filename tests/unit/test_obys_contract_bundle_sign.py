@@ -287,23 +287,23 @@ def test_bundle_member_failing_single_contract_validation_is_409():
 
 
 def test_write_failure_midway_rolls_back_already_signed_contracts(monkeypatch):
+    """묶음 저장은 한 번의 원자 쓰기다 — 그 쓰기가 실패하면 어느 계약도 signed 가 되지 않는다(보상 되쓰기 없음)."""
     first, later = _pair()
-    real_write = svc._write_hr_record
-    calls = {"signed": 0}
+    real_write = svc._write_file_rows
+    calls = {"signed_batches": 0}
 
-    def flaky(name, record, user):
-        if name == "contracts" and record.get("status") == "signed":
-            calls["signed"] += 1
-            if calls["signed"] == 2:
-                raise HTTPException(status_code=404, detail="boom")
-        return real_write(name, record, user)
+    def flaky(name, rows):
+        if name == "contracts" and any(row.get("status") == "signed" for row in rows):
+            calls["signed_batches"] += 1
+            raise OSError("disk full")
+        return real_write(name, rows)
 
-    monkeypatch.setattr(svc, "_write_hr_record", flaky)
+    monkeypatch.setattr(svc, "_write_file_rows", flaky)
     with pytest.raises(HTTPException) as exc:
         svc.sign_contract_and_deliver(_sign_payload(later["sign_token"], first["id"]), EMPLOYEE)
     assert exc.value.status_code == 409
-    assert calls["signed"] == 2
-    monkeypatch.setattr(svc, "_write_hr_record", real_write)
+    assert calls["signed_batches"] == 1
+    monkeypatch.setattr(svc, "_write_file_rows", real_write)
     _assert_nothing_signed(first, later)
     retry = svc.sign_contract_and_deliver(_sign_payload(later["sign_token"], first["id"]), EMPLOYEE)
     assert {item["contract_id"] for item in retry["bundle"]["results"]} == {first["id"], later["id"]}

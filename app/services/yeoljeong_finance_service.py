@@ -90,6 +90,7 @@ try:
 except ValueError:
     CONTRACT_SIGN_LINK_TTL_DAYS = 14
 _CONTRACT_SIGN_LOCK = threading.Lock()
+_CONTRACT_FILE_COMMIT_LOCK = threading.Lock()  # 파일 모드(개발용)의 읽기-검사-쓰기만 직렬화한다. DB 모드의 이중 서명 방어는 조건부 UPDATE 다.
 
 DOCUMENT_TYPES: list[dict[str, str]] = [
     {
@@ -387,11 +388,28 @@ CONTRACT_SNAPSHOT_EXCLUDED_FIELDS = {
     "signed_pdf_bytes",
     "signed_pdf_generated_at",
     "signed_pdf_error",
+    # 재생성 때 밀려난 이전 PDF 의 sha·경로(append-only). 이 키를 제외하지 않으면 정상 재생성 뒤 해시 재계산이 어긋난다.
+    "signed_pdf_history",
     # 서명 시점에 서버가 정한 도장 입력. 클라이언트 값은 저장·서명 때 버려지므로 스냅샷 해시와 무관하다.
     "signed_pdf_seal",
     "delivered_at",
     "delivery_channel",
 }
+
+# 서명 뒤에도 바뀔 수 있는 키. 해시 제외 목록의 진부분집합이어야 한다(나머지 6개는 서명 원본이라 불변).
+CONTRACT_POST_SIGN_MUTABLE_FIELDS = frozenset(
+    {
+        "updated_at",
+        "signed_pdf_path",
+        "signed_pdf_sha256",
+        "signed_pdf_bytes",
+        "signed_pdf_generated_at",
+        "signed_pdf_error",
+        "signed_pdf_history",
+        "delivered_at",
+        "delivery_channel",
+    }
+)
 
 CANONICAL_BUSINESSES: list[dict[str, Any]] = [
     {
@@ -512,8 +530,13 @@ OFFICE_WORKPLACE = "사무실"
 WORKPLACE_MODES = ("branches", "office")
 
 
+def _now_dt() -> datetime:
+    """서비스의 단일 시계. 링크 만료·쿨다운·기록 시각이 모두 이 값을 쓴다 — 테스트는 이것 하나만 고정하면 된다."""
+    return datetime.now(KST)
+
+
 def _now() -> str:
-    return datetime.now(KST).isoformat(timespec="seconds")
+    return _now_dt().isoformat(timespec="seconds")
 
 
 def _delivery_baemin_security_cooldown_until(reference: datetime | None = None) -> str:
@@ -6308,6 +6331,26 @@ def _require_contract_target_ownership(payload: dict[str, Any], user: dict[str, 
         raise denied
 
 
+CONTRACT_AUDIT_LOG = "contract_audit_logs"
+CONTRACT_AUDIT_TYPE = "contract"
+
+
+def _append_contract_audit(
+    contract: dict[str, Any], user: dict[str, Any] | None, action: str, details: dict[str, Any] | None = None
+) -> bool:
+    """계약 상태 전이 감사 행 1건. 서명 이미지 본문은 넣지 않는다(sha 만). 실패해도 예외를 올리지 않는다."""
+    return _append_employment_audit(
+        tenant_id=str(contract.get("tenant_id") or ""),
+        business_id=str(contract.get("business_id") or ""),
+        actor=_email(user) if user else "",
+        action=action,
+        resource_type=CONTRACT_AUDIT_TYPE,
+        resource_id=str(contract.get("id") or ""),
+        details=details or {},
+        log_name=CONTRACT_AUDIT_LOG,
+    )
+
+
 def save_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     _tenant_id(user)
     if not _is_admin(user):
@@ -6352,11 +6395,15 @@ def request_contract_signature(contract_id: str, user: dict[str, Any]) -> dict[s
     if str(contract.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="서명 완료 계약서는 다시 서명 요청할 수 없습니다")
     _validate_contract_payload(contract)
+    previous_status = str(contract.get("status") or "")
     contract["status"] = "requested"
     contract["sign_token"] = contract.get("sign_token") or secrets.token_urlsafe(24)
     contract["requested_at"] = _now()
     contract["updated_at"] = contract["requested_at"]
     _write_hr_record("contracts", contract, user)
+    _append_contract_audit(
+        contract, user, "contract.requested", {"from": previous_status, "to": "requested", "requested_at": contract["requested_at"]}
+    )
     return contract
 
 
@@ -6437,7 +6484,7 @@ def _require_sign_link_alive(contract: dict[str, Any]) -> None:
     requested_at = _pg_ts(contract.get("requested_at"))
     if requested_at is None:
         return
-    if datetime.now(KST) - requested_at > timedelta(days=CONTRACT_SIGN_LINK_TTL_DAYS):
+    if _now_dt() - requested_at > timedelta(days=CONTRACT_SIGN_LINK_TTL_DAYS):
         raise HTTPException(
             status_code=410,
             detail=f"서명 링크가 만료되었습니다({CONTRACT_SIGN_LINK_TTL_DAYS}일). 관리자에게 서명 요청을 다시 받으십시오",
@@ -6545,6 +6592,124 @@ def _apply_contract_signature(
     contract["signed_snapshot_sha256"] = snapshot_sha256
 
 
+class _ContractSignConflict(Exception):
+    """조건부 서명 UPDATE 가 0행이다 — 이미 서명됐거나 요청 상태·토큰이 바뀌었다."""
+
+
+def _stored_sign_token_hash(contract: dict[str, Any]) -> str:
+    """서명 전 계약이 저장돼 있는 sign_token_hash 컬럼 값(_db_upsert_ledger 와 같은 규칙)."""
+    token = str(contract.get("sign_token") or "")
+    return hashlib.sha256(token.encode("utf-8")).hexdigest() if token else str(contract.get("sign_token_hash") or "")
+
+
+def _signed_audit_entry(contract: dict[str, Any]) -> dict[str, Any]:
+    audit = contract.get("signature_audit") if isinstance(contract.get("signature_audit"), dict) else {}
+    details: dict[str, Any] = {
+        "from": "requested",
+        "to": "signed",
+        "signed_at": str(contract.get("signed_at") or ""),
+        "signature_sha256": str(contract.get("signature_sha256") or ""),
+        "signed_snapshot_sha256": str(contract.get("signed_snapshot_sha256") or ""),
+        "tenant_id": str(contract.get("tenant_id") or ""),
+    }
+    if audit.get("bundle_id"):
+        details["bundle_id"] = str(audit["bundle_id"])
+    return details
+
+
+async def _db_sign_contracts_atomic(items: list[tuple[dict[str, Any], str]], *, actor: str) -> None:
+    """requested → signed 를 한 트랜잭션에서 조건부로 쓴다. 하나라도 0행이면 예외 → 전체 롤백.
+
+    프로세스 로컬 Lock 이 아니라 DB 의 ``status='requested' AND sign_token_hash`` 조건이 이중 서명을 막는다.
+    커밋 전에는 어떤 행도 signed 가 아니므로 서명 뒤 되쓰기(보상 쓰기)가 없다. 감사 행도 같은 트랜잭션이다.
+    """
+    import asyncpg
+
+    from app.services.yeoljeong_ops_service import _insert_audit_log_conn
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", "public.yeoljeong_contracts"):
+            raise RuntimeError("yeoljeong_contracts 테이블이 없습니다")
+        audit_ready = bool(await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", "public.yeoljeong_audit_logs"))
+        async with conn.transaction():
+            for contract, expected_token_hash in items:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE yeoljeong_contracts
+                       SET status = 'signed', signed_at = $4::timestamptz, signer_email = $5, signer_name = $6,
+                           sign_token_hash = $7, contract_payload = $8::jsonb, updated_at = $9::timestamptz
+                     WHERE id = $1 AND tenant_id = $2::uuid AND status = 'requested' AND deleted_at IS NULL
+                       AND (COALESCE(sign_token_hash, '') = '' OR sign_token_hash = $3)
+                 RETURNING id
+                    """,
+                    str(contract.get("id") or ""),
+                    _record_tenant_uuid(contract),
+                    expected_token_hash,
+                    _pg_ts(contract.get("signed_at")),
+                    str(contract.get("signer_email") or ""),
+                    str(contract.get("signer_name") or ""),
+                    str(contract.get("sign_token_hash") or ""),
+                    json.dumps(_db_payload_record("contracts", contract), ensure_ascii=False),
+                    _pg_ts(contract.get("updated_at") or contract.get("signed_at")),
+                )
+                if row is None:
+                    raise _ContractSignConflict(str(contract.get("id") or ""))
+                if audit_ready:
+                    await _insert_audit_log_conn(
+                        conn,
+                        business_id=str(contract.get("business_id") or ""),
+                        actor=actor,
+                        action="contract.signed",
+                        resource_type=CONTRACT_AUDIT_TYPE,
+                        resource_id=str(contract.get("id") or ""),
+                        details=_signed_audit_entry(contract),
+                    )
+    finally:
+        await conn.close()
+
+
+def _commit_signed_contracts(items: list[tuple[dict[str, Any], str]], user: dict[str, Any] | None) -> None:
+    """서명된 계약 1건 이상을 전부 아니면 전무로 저장한다. 충돌은 409, 저장 실패는 예외(아무것도 저장되지 않은 상태).
+
+    items: (서명 적용 후 계약, 서명 전 저장돼 있던 sign_token_hash).
+    """
+    tenant_id = _tenant_id(user)
+    for contract, _ in items:
+        if str(contract.get("tenant_id") or "").strip() != tenant_id:
+            raise HTTPException(status_code=403, detail="다른 테넌트의 데이터는 저장할 수 없습니다")
+    conflict = HTTPException(
+        status_code=409, detail="이미 서명되었거나 서명 요청이 바뀐 계약서입니다 — 한 건도 서명되지 않았습니다. 화면을 새로고침해 주십시오"
+    )
+    if _db_available():
+        try:
+            _run_coroutine(_db_sign_contracts_atomic(items, actor=_email(user) if user else ""))
+        except _ContractSignConflict:
+            raise conflict from None
+        return
+    with _CONTRACT_FILE_COMMIT_LOCK:
+        rows = _read_file_rows("contracts")
+        replaced: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for contract, expected_token_hash in items:
+            existing = _find(rows, str(contract.get("id") or ""))
+            stored_hash = _stored_sign_token_hash(existing) if existing else ""
+            if (
+                not existing
+                or existing.get("deleted_at")
+                or str(existing.get("tenant_id") or "").strip() != tenant_id
+                or str(existing.get("status") or "") != "requested"
+                or (stored_hash and stored_hash != expected_token_hash)
+            ):
+                raise conflict
+            replaced.append((existing, contract))
+        for existing, contract in replaced:
+            existing.clear()
+            existing.update(contract)
+        _write_file_rows("contracts", rows)
+    for contract, _ in items:
+        _append_contract_audit(contract, user, "contract.signed", _signed_audit_entry(contract))
+
+
 def _sign_contract_locked(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
     if _bundle_contract_ids(payload):
         raise HTTPException(status_code=400, detail="묶음 서명은 sign_contract_bundle 로만 처리합니다")
@@ -6559,6 +6724,7 @@ def _sign_contract_locked(payload: dict[str, Any], user: dict[str, Any] | None =
     _require_sign_link_alive(contract)
     signer_name, consent_version, signature_data_uri, signature_sha256 = _check_signature_payload(payload, contract)
     _validate_contract_payload(contract)
+    expected_token_hash = _stored_sign_token_hash(contract)
     _apply_contract_signature(
         contract,
         payload=payload,
@@ -6570,7 +6736,13 @@ def _sign_contract_locked(payload: dict[str, Any], user: dict[str, Any] | None =
         signature_sha256=signature_sha256,
         token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
     )
-    _write_hr_record("contracts", contract, user)
+    try:
+        _commit_signed_contracts([(contract, expected_token_hash)], user)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — 아무것도 저장되지 않았다
+        logger.error("contract sign not stored: contract=%s err=%s", contract.get("id"), exc)
+        raise HTTPException(status_code=503, detail="서명을 저장하지 못했습니다. 잠시 후 다시 시도하십시오") from None
     return contract
 
 
@@ -6685,7 +6857,7 @@ def list_pending_signature_contracts(user: dict[str, Any]) -> dict[str, Any]:
     email = _email(user)
     if not email or _is_admin(user):
         return empty
-    now = datetime.now(KST)
+    now = _now_dt()
     approved_requests = {
         str(row.get("id") or "")
         for row in _read_hr("employee_join_requests", user)
@@ -6771,7 +6943,7 @@ def request_contract_signature_renewal(payload: dict[str, Any], user: dict[str, 
     if history is None:
         raise HTTPException(status_code=503, detail="요청 이력을 확인할 수 없어 지금은 다시 요청할 수 없습니다")
     stamps = [stamp for stamp in (_pg_ts(row.get("created_at")) for row in history if row.get("event") == event) if stamp]
-    if stamps and (datetime.now(KST) - max(stamps)).total_seconds() < CONTRACT_RENEWAL_COOLDOWN_SECONDS:
+    if stamps and (_now_dt() - max(stamps)).total_seconds() < CONTRACT_RENEWAL_COOLDOWN_SECONDS:
         raise HTTPException(status_code=429, detail="이미 관리자에게 다시 요청했습니다. 잠시 후 확인해 주십시오")
     admin_emails = sorted(
         {
@@ -6812,6 +6984,9 @@ def request_contract_signature_renewal(payload: dict[str, Any], user: dict[str, 
         _append_contract_notification_logs(contract, event, results)
     except Exception as exc:  # noqa: BLE001
         logger.warning("contract renewal log failed: contract=%s err=%s", contract.get("id"), exc)
+    _append_contract_audit(
+        contract, user, "contract.signature_renewal_requested", {"from": "requested", "to": "requested", "admins_notified": sum(1 for item in results if item["status"] == "sent")}
+    )
     sent = sum(1 for item in results if item["status"] == "sent")
     return {"contract_id": str(contract.get("id") or ""), "notified": sent, "status": "sent" if sent else "not_delivered"}
 
@@ -6847,21 +7022,13 @@ def _bundle_member_for_signing(
         ) from None
 
 
-def _restore_contracts(originals: list[dict[str, Any]], user: dict[str, Any] | None) -> None:
-    for original in originals:
-        try:
-            _write_hr_record("contracts", original, user)
-        except Exception:  # noqa: BLE001 — 나머지도 계속 되돌린다
-            logger.exception("contract bundle rollback failed: contract=%s", original.get("id"))
-
-
 def sign_contract_bundle(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
     with _CONTRACT_SIGN_LOCK:
         return _sign_contract_bundle_locked(payload, user)
 
 
 def _sign_contract_bundle_locked(payload: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
-    """전부 아니면 전무: 모든 건을 먼저 검사하고, 쓰기 도중 실패하면 이미 쓴 건을 원상복구한다."""
+    """전부 아니면 전무: 모든 건을 먼저 검사하고, 한 트랜잭션(파일 모드는 단일 파일 교체)으로 저장한다."""
     token = str(payload.get("token") or "")
     rows = _read_hr("contracts", user)
     primary = _signing_contract_for_token(rows, token)
@@ -6892,44 +7059,49 @@ def _sign_contract_bundle_locked(payload: dict[str, Any], user: dict[str, Any] |
     ordered = sorted([primary, *members], key=_contract_bundle_sort_key)
     bundle_id = str(uuid4())
     contract_ids = [str(item.get("id") or "") for item in ordered]
-    originals = [copy.deepcopy(item) for item in ordered]
-    attempted: list[dict[str, Any]] = []
+    primary_id = str(primary.get("id") or "")
+    signed_items: list[dict[str, Any]] = []
+    commit_items: list[tuple[dict[str, Any], str]] = []
     previous: str | None = None
+    for item in ordered:
+        signed_at = _monotonic_signed_at(previous)
+        previous = signed_at
+        own_token = str(item.get("sign_token") or "")
+        token_hash = (
+            hashlib.sha256(token.encode("utf-8")).hexdigest()
+            if item is primary
+            else (hashlib.sha256(own_token.encode("utf-8")).hexdigest() if own_token else str(item.get("sign_token_hash") or ""))
+        )
+        expected_token_hash = _stored_sign_token_hash(item)
+        signed = copy.deepcopy(item)
+        _apply_contract_signature(
+            signed,
+            payload=payload,
+            signed_at=signed_at,
+            signer_name=signer_name,
+            signer_email=signer_email,
+            consent_version=consent_version,
+            signature_data_uri=signature_data_uri,
+            signature_sha256=signature_sha256,
+            token_hash=token_hash,
+            audit_extra={"bundle_id": bundle_id, "bundle_contract_ids": contract_ids},
+        )
+        signed_items.append(signed)
+        commit_items.append((signed, expected_token_hash))
     try:
-        for item, original in zip(ordered, originals):
-            signed_at = _monotonic_signed_at(previous)
-            previous = signed_at
-            own_token = str(item.get("sign_token") or "")
-            token_hash = (
-                hashlib.sha256(token.encode("utf-8")).hexdigest()
-                if item is primary
-                else (hashlib.sha256(own_token.encode("utf-8")).hexdigest() if own_token else str(item.get("sign_token_hash") or ""))
-            )
-            attempted.append(original)
-            _apply_contract_signature(
-                item,
-                payload=payload,
-                signed_at=signed_at,
-                signer_name=signer_name,
-                signer_email=signer_email,
-                consent_version=consent_version,
-                signature_data_uri=signature_data_uri,
-                signature_sha256=signature_sha256,
-                token_hash=token_hash,
-                audit_extra={"bundle_id": bundle_id, "bundle_contract_ids": contract_ids},
-            )
-            _write_hr_record("contracts", item, user)
-    except Exception as exc:  # noqa: BLE001 — 일부만 서명된 상태를 남기지 않는다
-        logger.error("contract bundle sign failed, rolling back: bundle=%s err=%s", bundle_id, exc)
-        _restore_contracts(attempted, user)
+        _commit_signed_contracts(commit_items, user)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — 한 트랜잭션이 롤백됐으므로 일부만 서명된 상태가 없다
+        logger.error("contract bundle sign failed, transaction rolled back: bundle=%s err=%s", bundle_id, exc)
         raise HTTPException(
             status_code=409, detail="묶음 서명 저장 중 오류가 발생해 한 건도 서명되지 않았습니다. 다시 시도하십시오"
         ) from None
     return {
         "bundle_id": bundle_id,
         "contract_ids": contract_ids,
-        "contracts": ordered,
-        "primary_id": str(primary.get("id") or ""),
+        "contracts": signed_items,
+        "primary_id": primary_id,
     }
 
 
@@ -6941,6 +7113,7 @@ def delete_contract(contract_id: str, user: dict[str, Any]) -> None:
     if str(contract.get("status") or "") == "signed":
         raise HTTPException(status_code=409, detail="서명 완료 계약서는 삭제할 수 없습니다")
     _delete_hr_record("contracts", contract_id, user)
+    _append_contract_audit(contract, user, "contract.deleted", {"from": str(contract.get("status") or ""), "to": "deleted"})
 
 
 # ---------------------------------------------------------------------------
@@ -7043,7 +7216,8 @@ async def _db_update_contract_delivery_columns(contract: dict[str, Any]) -> bool
             """
             UPDATE yeoljeong_contracts
                SET signed_pdf_path = $3, signed_pdf_sha256 = $4, signed_pdf_bytes = $5,
-                   delivered_at = $6::timestamptz, delivery_channel = $7
+                   delivery_channel = CASE WHEN delivered_at IS NULL THEN $7 ELSE delivery_channel END,
+                   delivered_at = COALESCE(delivered_at, $6::timestamptz)
              WHERE id = $1 AND tenant_id = $2::uuid AND deleted_at IS NULL
             """,
             str(contract.get("id") or ""),
@@ -7345,7 +7519,7 @@ def resend_contract_signature_notice(contract_id: str, user: dict[str, Any]) -> 
     ]
     if stamps:
         last_sent = max(stamps)
-        elapsed = (datetime.now(KST) - last_sent).total_seconds()
+        elapsed = (_now_dt() - last_sent).total_seconds()
         if elapsed < CONTRACT_NOTICE_RESEND_COOLDOWN_SECONDS:
             wait = int(CONTRACT_NOTICE_RESEND_COOLDOWN_SECONDS - elapsed) + 1
             raise HTTPException(status_code=429, detail=f"서명 요청 알림은 5분에 한 번만 보낼 수 있습니다. {wait}초 후 다시 시도하십시오")
@@ -7378,10 +7552,187 @@ def _verified_signed_pdf_path(contract: dict[str, Any]) -> Path | None:
     return path
 
 
-def _persist_contract_delivery(contract: dict[str, Any], user: dict[str, Any] | None) -> None:
-    _write_hr_record("contracts", contract, user)
+CONTRACT_PDF_PATCH_FIELDS = (
+    "signed_pdf_path",
+    "signed_pdf_sha256",
+    "signed_pdf_bytes",
+    "signed_pdf_generated_at",
+    "signed_pdf_error",
+)
+
+
+async def _db_persist_contract_delivery(
+    contract: dict[str, Any], new_history: list[dict[str, Any]], delivered_at: str, delivery_channel: str
+) -> bool:
+    """서명 뒤 가변 메타만 서명된 행에 합친다. 서명 원본 필드는 SET 에 없고, 이력은 `||` 로 덧붙이며, 교부 시각은 처음 한 번만 쓴다."""
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", "public.yeoljeong_contracts"):
+            return False
+        patch = {key: contract[key] for key in CONTRACT_PDF_PATCH_FIELDS if key in contract}
+        row = await conn.fetchrow(
+            """
+            UPDATE yeoljeong_contracts
+               SET contract_payload = jsonb_set(
+                       (contract_payload || $3::jsonb)
+                       || CASE WHEN COALESCE(contract_payload->>'delivered_at', '') = '' AND $5::text <> ''
+                               THEN jsonb_build_object('delivered_at', $5::text, 'delivery_channel', $6::text)
+                               ELSE '{}'::jsonb END,
+                       '{signed_pdf_history}',
+                       COALESCE(contract_payload->'signed_pdf_history', '[]'::jsonb) || $4::jsonb,
+                       true),
+                   updated_at = $7::timestamptz
+             WHERE id = $1 AND tenant_id = $2::uuid AND status = 'signed' AND deleted_at IS NULL
+         RETURNING id
+            """,
+            str(contract.get("id") or ""),
+            _record_tenant_uuid(contract),
+            json.dumps(patch, ensure_ascii=False),
+            json.dumps(new_history, ensure_ascii=False),
+            delivered_at,
+            delivery_channel,
+            _pg_ts(_now()),
+        )
+        return row is not None
+    finally:
+        await conn.close()
+
+
+def _persist_contract_delivery(
+    contract: dict[str, Any], user: dict[str, Any] | None, new_history: list[dict[str, Any]] | None = None
+) -> None:
+    """서명된 계약의 PDF·교부 메타만 저장한다. 전체 행 덮어쓰기(upsert)가 아니므로 서명 원본·이미지·서명 시각을 건드릴 수 없다."""
+    tenant_id = _tenant_id(user)
+    if str(contract.get("tenant_id") or "").strip() != tenant_id:
+        raise HTTPException(status_code=403, detail="다른 테넌트의 데이터는 저장할 수 없습니다")
+    history = list(new_history or [])
+    delivered_at = str(contract.get("delivered_at") or "")
+    delivery_channel = str(contract.get("delivery_channel") or "")
     if _db_available():
+        if not _run_coroutine(_db_persist_contract_delivery(contract, history, delivered_at, delivery_channel)):
+            raise HTTPException(status_code=404, detail="서명 완료된 계약서를 찾을 수 없습니다")
         _run_db(_db_update_contract_delivery_columns(contract))
+        return
+    with _CONTRACT_FILE_COMMIT_LOCK:
+        rows = _read_file_rows("contracts")
+        stored = _find(rows, str(contract.get("id") or ""))
+        if (
+            not stored
+            or stored.get("deleted_at")
+            or str(stored.get("tenant_id") or "").strip() != tenant_id
+            or str(stored.get("status") or "") != "signed"
+        ):
+            raise HTTPException(status_code=404, detail="서명 완료된 계약서를 찾을 수 없습니다")
+        for key in CONTRACT_PDF_PATCH_FIELDS:
+            if key in contract:
+                stored[key] = contract[key]
+        if history:
+            stored["signed_pdf_history"] = list(stored.get("signed_pdf_history") or []) + history
+        if delivered_at and not stored.get("delivered_at"):
+            stored["delivered_at"] = delivered_at
+            stored["delivery_channel"] = delivery_channel
+        _write_file_rows("contracts", rows)
+
+
+def _snapshot_digest(snapshot: dict[str, Any]) -> str:
+    encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _contract_integrity_problems(contract: dict[str, Any]) -> tuple[list[str], list[str], str]:
+    """서명된 계약의 봉인 해시를 현재 저장 내용에서 다시 계산한다. (문제 코드, 달라진 키, 현재 해시).
+
+    스냅샷과 해시가 둘 다 없는 옛 서명본은 비교할 기준이 없어 위반으로 보지 않는다(PDF 모듈이 따로 거절한다).
+    """
+    recorded = str(contract.get("signed_snapshot_sha256") or "")
+    snapshot = contract.get("signed_snapshot")
+    if not recorded and not snapshot:
+        return [], [], ""
+    problems: list[str] = []
+    if not recorded or not isinstance(snapshot, dict) or not snapshot:
+        return ["snapshot_missing"], [], ""
+    if _snapshot_digest(snapshot) != recorded:
+        problems.append("snapshot_hash_mismatch")
+    current, current_sha = _signed_contract_snapshot(contract)
+    changed: list[str] = []
+    if current_sha != recorded:
+        problems.append("payload_diverged_from_snapshot")
+        changed = sorted(key for key in set(current) | set(snapshot) if current.get(key) != snapshot.get(key))
+    # signature_data_uri 는 스냅샷 해시에서 빠져 있다. 이미지 자체는 스냅샷에 봉인된 signature_sha256 과 대조한다.
+    sealed_image_sha = str(snapshot.get("signature_sha256") or "")
+    prefix = "data:image/png;base64,"
+    uri = str(contract.get("signature_data_uri") or "")
+    try:
+        image_sha = hashlib.sha256(base64.b64decode(uri[len(prefix) :], validate=True)).hexdigest() if uri.startswith(prefix) else ""
+    except (binascii.Error, ValueError):
+        image_sha = ""
+    if sealed_image_sha and image_sha != sealed_image_sha:
+        problems.append("signature_image_mismatch")
+        changed = sorted({*changed, "signature_data_uri"})
+    return problems, changed, current_sha
+
+
+def _enforce_contract_integrity(contract: dict[str, Any], user: dict[str, Any] | None, *, action: str) -> None:
+    """서명 후 내용이 바뀌었으면 409 와 감사 행 `contract.integrity_violation` 을 남긴다. 값은 적지 않고 키 이름만 적는다."""
+    problems, changed, current_sha = _contract_integrity_problems(contract)
+    if not problems:
+        return
+    _append_contract_audit(
+        contract,
+        user,
+        "contract.integrity_violation",
+        {
+            "attempted": action,
+            "problems": problems,
+            "changed_fields": changed,
+            "expected_sha256": str(contract.get("signed_snapshot_sha256") or ""),
+            "actual_sha256": current_sha,
+        },
+    )
+    logger.error("contract integrity violation: contract=%s action=%s problems=%s", contract.get("id"), action, problems)
+    raise HTTPException(
+        status_code=409,
+        detail="서명 이후 계약서 내용이 변경된 흔적이 있어 PDF 를 제공하지 않습니다. 관리자에게 문의하십시오",
+    )
+
+
+def _archive_prior_signed_pdf(contract: dict[str, Any]) -> dict[str, Any] | None:
+    """덮어쓰기 직전 PDF 를 sha 이름의 사본으로 보존하고 이력 항목을 만든다. 직전 PDF 가 없으면 None."""
+    prior_sha = str(contract.get("signed_pdf_sha256") or "")
+    prior_rel = str(contract.get("signed_pdf_path") or "")
+    if not prior_sha:
+        return None
+    entry: dict[str, Any] = {
+        "sha256": prior_sha,
+        "path": prior_rel,
+        "bytes": int(contract.get("signed_pdf_bytes") or 0),
+        "generated_at": str(contract.get("signed_pdf_generated_at") or ""),
+        "archived": False,
+    }
+    try:
+        root = _contract_pdf_root().resolve()
+        source = (root / prior_rel).resolve()
+        if prior_rel and root in source.parents and source.is_file():
+            data = source.read_bytes()
+            actual = hashlib.sha256(data).hexdigest()
+            relative = Path(prior_rel)
+            archive_rel = relative.with_name(f"{relative.stem}.{actual[:16]}.prev.pdf")
+            archive = root / archive_rel
+            if not archive.exists():
+                tmp = archive.with_name(f"{archive.name}.{secrets.token_hex(4)}.tmp")
+                tmp.write_bytes(data)
+                os.chmod(tmp, 0o600)
+                tmp.replace(archive)
+            entry["path"] = str(archive_rel)
+            entry["archived"] = True
+            if actual != prior_sha:
+                entry["file_sha256"] = actual
+    except Exception as exc:  # noqa: BLE001 — 보존 실패가 재생성을 막지 않는다. 이력에는 sha 와 실패가 남는다
+        logger.error("prior signed pdf not archived: contract=%s err=%s", contract.get("id"), exc)
+        entry["archive_error"] = f"{type(exc).__name__}"[:80]
+    return entry
 
 
 async def _db_business_trade_name(business_id: str, tenant_id: UUID) -> dict[str, Any]:
@@ -7464,9 +7815,15 @@ def _frozen_contract_seal(contract: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _store_signed_contract_pdf(contract: dict[str, Any], user: dict[str, Any] | None) -> dict[str, Any]:
-    """봉인 스냅샷으로 PDF 를 만들어 보관하고 계약서에 메타를 남긴다. 예외를 올리지 않는다."""
+def _store_signed_contract_pdf(
+    contract: dict[str, Any], user: dict[str, Any] | None, *, reason: str = "post_sign"
+) -> dict[str, Any]:
+    """봉인 스냅샷으로 PDF 를 만들어 보관하고 계약서에 메타를 남긴다. 예외를 올리지 않는다.
+
+    직전 PDF 가 있으면 덮어쓰기 전에 사본을 보존하고 append-only signed_pdf_history 와 감사 행에 남긴다.
+    """
     result: dict[str, Any]
+    new_history: list[dict[str, Any]] = []
     try:
         from app.services import yeoljeong_contract_pdf as contract_pdf
 
@@ -7477,11 +7834,16 @@ def _store_signed_contract_pdf(contract: dict[str, Any], user: dict[str, Any] | 
         relative = _contract_pdf_relpath(contract)
         path = _contract_pdf_root() / relative
         path.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(data).hexdigest()
+        prior = _archive_prior_signed_pdf(contract)
+        if prior is not None:
+            prior.update({"replaced_at": _now(), "replaced_by_sha256": digest, "reason": reason})
+            new_history.append(prior)
+            contract["signed_pdf_history"] = list(contract.get("signed_pdf_history") or []) + [prior]
         tmp = path.with_name(f"{path.name}.{secrets.token_hex(4)}.tmp")
         tmp.write_bytes(data)
         os.chmod(tmp, 0o600)
         tmp.replace(path)
-        digest = hashlib.sha256(data).hexdigest()
         contract["signed_pdf_path"] = str(relative)
         contract["signed_pdf_sha256"] = digest
         contract["signed_pdf_bytes"] = len(data)
@@ -7493,10 +7855,24 @@ def _store_signed_contract_pdf(contract: dict[str, Any], user: dict[str, Any] | 
         contract["signed_pdf_error"] = f"{_now()} {type(exc).__name__}: {exc}"[:500]
         result = {"status": "failed", "error": contract["signed_pdf_error"]}
     try:
-        _persist_contract_delivery(contract, user)
+        _persist_contract_delivery(contract, user, new_history)
     except Exception as exc:  # noqa: BLE001
         logger.error("signed contract pdf meta not recorded: contract=%s err=%s", contract.get("id"), exc)
         result = {**result, "recorded": False}
+        return result
+    for entry in new_history:
+        _append_contract_audit(
+            contract,
+            user,
+            "contract.pdf_regenerated",
+            {
+                "from_sha256": entry.get("sha256", ""),
+                "to_sha256": entry.get("replaced_by_sha256", ""),
+                "archived_path": entry.get("path", ""),
+                "archived": bool(entry.get("archived")),
+                "reason": reason,
+            },
+        )
     return result
 
 
@@ -7545,7 +7921,11 @@ def regenerate_signed_contract_pdf(contract_id: str, user: dict[str, Any]) -> di
     contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="계약서를 찾을 수 없습니다")
     if str(contract.get("status") or "") != "signed":
         raise HTTPException(status_code=409, detail="서명 완료 계약서만 PDF 를 만들 수 있습니다")
-    return {"contract_id": str(contract.get("id") or ""), "signed_pdf": _store_signed_contract_pdf(contract, user)}
+    _enforce_contract_integrity(contract, user, action="regenerate")
+    return {
+        "contract_id": str(contract.get("id") or ""),
+        "signed_pdf": _store_signed_contract_pdf(contract, user, reason="admin_regenerate"),
+    }
 
 
 def signed_contract_pdf_for_download(contract_id: str, user: dict[str, Any]) -> tuple[Path, str]:
@@ -7566,9 +7946,10 @@ def signed_contract_pdf_for_download(contract_id: str, user: dict[str, Any]) -> 
         raise denied
     if str(contract.get("status") or "") != "signed":
         raise HTTPException(status_code=409, detail="서명 완료 계약서만 PDF 를 내려받을 수 있습니다")
+    _enforce_contract_integrity(contract, user, action="download")
     path = _verified_signed_pdf_path(contract)
     if path is None:
-        stored = _store_signed_contract_pdf(contract, user)
+        stored = _store_signed_contract_pdf(contract, user, reason="download_repair")
         path = _verified_signed_pdf_path(contract) if stored.get("status") == "stored" else None
         if path is None:
             raise HTTPException(status_code=503, detail="서명본 PDF 를 준비하지 못했습니다. 관리자에게 재생성을 요청하십시오")
@@ -7775,8 +8156,12 @@ def _append_employment_audit(
     resource_type: str,
     resource_id: str,
     details: dict[str, Any],
+    log_name: str = "employment_audit_logs",
 ) -> bool:
-    """감사로그 한 줄. DB 는 ops 서비스의 _insert_audit_log_conn 을 재사용한다. 예외를 올리지 않는다."""
+    """감사로그 한 줄. DB 는 ops 서비스의 _insert_audit_log_conn 을 재사용한다. 예외를 올리지 않는다.
+
+    log_name 은 파일 모드(DB 없음)에서만 쓰는 저장 파일 이름이다.
+    """
     entry_details = {**details, "tenant_id": tenant_id}
     try:
         if _db_available():
@@ -7794,7 +8179,7 @@ def _append_employment_audit(
             "details": entry_details,
             "created_at": _now(),
         }
-        _write_file_rows(EMPLOYMENT_AUDIT_LOG, [row] + _read_file_rows(EMPLOYMENT_AUDIT_LOG))
+        _write_file_rows(log_name, [row] + _read_file_rows(log_name))
         return True
     except Exception as exc:  # noqa: BLE001 — 감사로그 실패가 서명·급여 저장을 되돌리면 안 된다
         logger.error("employment audit not recorded: action=%s resource=%s err=%s", action, resource_id, exc)

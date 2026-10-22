@@ -47,16 +47,15 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "UPLOAD_DIR", tmp_path / "data" / "uploads" / "onboarding")
     monkeypatch.setattr(svc, "_run_db", _disable_db)
 
-    # 서명 시각이 같은 초에 겹치지 않도록 1분씩 흐르는 시계.
+    # 서명 시각이 같은 초에 겹치지 않도록 1분씩 흐르는 시계. 서비스의 시간 의존 경로(링크 만료·재요청 쿨다운 포함)가
+    # 모두 _now_dt 하나를 거치므로 이 시계 하나로 얼린다 — 실제 시각이 흘러도 결과가 변하지 않는다.
     clock = {"now": datetime(2026, 9, 30, 9, 0, tzinfo=svc.KST)}
 
     def fake_now():
         clock["now"] += timedelta(minutes=1)
-        return clock["now"].isoformat(timespec="seconds")
+        return clock["now"]
 
-    monkeypatch.setattr(svc, "_now", fake_now)
-    # 가짜 시계는 2026-09-30 에 고정이지만 서명 링크 만료 판정은 실제 현재 시각을 쓴다 — 시간이 지나면 410 으로 깨진다.
-    monkeypatch.setattr(svc, "CONTRACT_SIGN_LINK_TTL_DAYS", 36500)
+    monkeypatch.setattr(svc, "_now_dt", fake_now)
 
     async def fake_create_notification(**kwargs):
         return {"id": "ntf-test", **kwargs}
