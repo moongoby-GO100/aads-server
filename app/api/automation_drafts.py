@@ -54,6 +54,7 @@ class ConfirmIn(_Body):
 class CredentialIn(_Body):
     credential_id: str | None = Field(default=None, max_length=64)
     request_new: bool = False
+    no_login: bool = False
 
 
 class StateIn(_Body):
@@ -137,8 +138,10 @@ async def confirm_intent(
 async def choose_credential(
     draft_id: str, body: CredentialIn, context: TenantContext = Depends(require_member),
 ) -> dict[str, Any]:
-    """기존 계정을 고르거나(credential_id) 새 계정 입력을 요청한다(request_new)."""
-    return await _run(flow.choose_credential(_actor(context), draft_id, body.credential_id, body.request_new))
+    """기존 계정을 고르거나(credential_id), 새 계정 입력을 요청하거나(request_new), 로그인 없이 진행한다(no_login). 정확히 하나."""
+    return await _run(flow.choose_credential(
+        _actor(context), draft_id, body.credential_id, body.request_new, body.no_login,
+    ))
 
 
 @router.post("/{draft_id}/demo", status_code=202)

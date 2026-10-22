@@ -2,8 +2,10 @@
 
 입력 한 줄("쿠팡이츠 어제 매출 받아줘, 매일 아침")을 다음 형태로 바꾼다.
 
-    {site_name, url, domain, task, output_kind, schedule, login_required,
+    {site_name, url, domain, task, output_kind, schedule, login_required, login_hint,
      domain_source, needs_domain_confirm}
+
+login_required 는 항상 None 으로 시작한다 — 사용자가 [로그인 없이 진행]을 골랐을 때만 False 가 된다.
 
 - LLM 은 `call_llm_with_fallback` 으로 **1회만** 부른다(R-AUTH). 실패하면 규칙 해석만 쓰고 다시 부르지 않는다.
 - 도메인은 ① 문장 안 URL ② 사이트 이름 사전 ③ 이 테넌트 레시피 도메인 ④ LLM 제안 순으로 정한다.
@@ -300,7 +302,7 @@ async def parse_intent(
     output_kind = str(llm.get("output_kind") or "").strip().lower()
     if output_kind not in OUTPUT_KINDS:
         output_kind = "screen"
-    login_required = llm.get("login_required")
+    login_hint = llm.get("login_required")
     return {
         "site_name": site_name,
         "url": url or (f"https://{domain}" if domain else ""),
@@ -308,7 +310,9 @@ async def parse_intent(
         "task": task,
         "output_kind": output_kind,
         "schedule": parse_schedule(sentence),
-        "login_required": login_required if isinstance(login_required, bool) else True,
+        # login_required 는 사용자가 카드에서 고른 값만 담는다(None=아직 안 골랐음). 모델 추정은 login_hint 로만 둔다.
+        "login_required": None,
+        "login_hint": login_hint if isinstance(login_hint, bool) else None,
         "domain_source": source,
         "needs_domain_confirm": source in ("llm", ""),
     }

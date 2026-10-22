@@ -614,6 +614,82 @@ def test_ac09_wrong_password_submits_login_once_and_blocks_retry(world):
     assert relinked["draft"]["state"] == "credential_ready"
 
 
+# ── 4-1. 로그인 없이 진행한 초안 ────────────────────────────────────────────
+
+PUBLIC_URL = f"https://{DOMAIN}/forms/post"
+USER_FORM = '- textbox "아이디"\n- textbox "비밀번호"'
+
+
+def no_login_draft(w: World, **kw) -> str:
+    did = new_draft(w, state="credential_ready", credential=False, **kw)
+    data = row(w, did)
+    w.store.rows[did]["intent"] = json.dumps({**data["intent"], "url": PUBLIC_URL, "login_required": False})
+    return did
+
+
+def test_no_login_demo_plan_has_no_login_step_and_reaches_review(world):
+    did = no_login_draft(world)
+    started = run(flow.start_demo(actor(), did, "credential_ready"))
+    assert started["draft"]["state"] == "demonstrating" and world.launched == [did]
+    assert demo(world, did).status == "done"
+    steps = row(world, did)["recording_ref"]["plan"]
+    assert steps and all(step.get("purpose") != "login" for step in steps)
+    assert not any(step.get("credential_field") for step in steps)
+    assert [c["description"] for c in world.executor.calls].count("로그인") == 0
+    assert row(world, did)["state"] == "result_review"
+    assert row(world, did)["credential_id"] is None
+
+
+def test_no_login_draft_meeting_login_screen_fails_as_auth_failed_and_can_relink(world):
+    world.executor.script = {"쿠팡이츠": [_bounce(aria=USER_FORM)]}
+    did = no_login_draft(world)
+    run(flow.start_demo(actor(), did, "credential_ready"))
+    outcome = demo(world, did)
+    assert outcome.status == "failed" and outcome.failure_code == "auth_failed"
+    data = row(world, did)
+    assert data["state"] == "failed" and data["failure_code"] == "auth_failed"
+    view = flow.view(world.store.rows[did])
+    assert view["card"]["body"] == svc.NO_LOGIN_AUTH_FAILED_BODY
+    assert "relink_login" in [b["id"] for b in view["card"]["buttons"]]
+    with pytest.raises(flow.FlowError) as err:
+        run(flow.start_demo(actor(), did, "failed"))
+    assert err.value.code == "login_retry_blocked"
+    with pytest.raises(flow.FlowError) as both:
+        run(flow.choose_credential(actor(), did, credential_id=CRED, no_login=True))
+    assert both.value.status_code == 422
+
+    relinked = run(flow.choose_credential(actor(), did, credential_id=CRED))
+    assert relinked["draft"]["state"] == "credential_ready"
+    assert relinked["draft"]["credential_id"] == CRED
+    assert relinked["draft"]["intent"]["login_required"] is True
+    assert "plan" not in row(world, did)["recording_ref"]
+
+    run(flow.start_demo(actor(), did, "credential_ready"))
+    assert demo(world, did).status == "done"
+    steps = row(world, did)["recording_ref"]["plan"]
+    assert any(step.get("login_submit") for step in steps)
+    assert [c["description"] for c in world.executor.calls].count("로그인") == 1
+
+
+def test_no_login_redirect_to_login_address_is_also_auth_failed(world):
+    world.executor.script = {"쿠팡이츠": [_bounce("로그인 해 주세요")]}
+    did = no_login_draft(world)
+    run(flow.start_demo(actor(), did, "credential_ready"))
+    assert demo(world, did).failure_code == "auth_failed"
+
+
+def test_inspect_success_only_flags_login_screen_when_user_chose_no_login():
+    step = {"action": "navigate", "url": PUBLIC_URL, "purpose": "navigate"}
+    form = _bounce(aria=USER_FORM)
+    assert runner.inspect_success(step, form, pre_url="", no_login=True) == "auth_failed"
+    assert runner.inspect_success(step, form, pre_url="") is None
+    plain = {"ok": True, "evidence": {"url": PUBLIC_URL, "dom": {"text": "주문 양식"},
+                                      "aria": {"text": '- textbox "고객명"\n- textbox "전화번호"'}}}
+    assert runner.inspect_success(step, plain, pre_url="", no_login=True) is None
+    asked_for_login = {"action": "navigate", "url": LOGIN_URL, "purpose": "navigate"}
+    assert runner.inspect_success(asked_for_login, _bounce(), pre_url="", no_login=True) is None
+
+
 def test_challenge_also_blocks_retry(world):
     did = new_draft(world, state="failed", plan=plan(NAV, QUERY), failure_code="challenge")
     with pytest.raises(flow.FlowError) as err:

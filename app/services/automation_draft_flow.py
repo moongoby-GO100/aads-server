@@ -116,6 +116,7 @@ def public_draft(draft: dict[str, Any]) -> dict[str, Any]:
             "output_kind": intent.get("output_kind") or "screen",
             "schedule": intent.get("schedule"),
             "needs_domain_confirm": bool(intent.get("needs_domain_confirm")),
+            "login_required": intent.get("login_required") if isinstance(intent.get("login_required"), bool) else None,
         },
         "aliases": row["aliases"],
         "credential_id": str(row["credential_id"]) if row.get("credential_id") else None,
@@ -139,7 +140,10 @@ def _intent_fields(intent: dict[str, Any]) -> list[dict[str, str]]:
 
 def _card(draft: dict[str, Any]) -> dict[str, Any]:
     row = _norm(draft)
-    card = svc.build_card(row["state"], title=row.get("title") or "", failure_code=row.get("failure_code"))
+    card = svc.build_card(
+        row["state"], title=row.get("title") or "", failure_code=row.get("failure_code"),
+        no_login=row["intent"].get("login_required") is False and not row.get("credential_id"),
+    )
     if row["state"] == "intent_draft":
         card["fields"] = _intent_fields(row["intent"])
         card["needs_domain_confirm"] = bool(row["intent"].get("needs_domain_confirm"))
@@ -346,11 +350,15 @@ async def _issue_request(actor: Actor, draft: dict[str, Any]) -> tuple[dict[str,
 
 async def choose_credential(
     actor: Actor, draft_id: str, credential_id: str | None = None, request_new: bool = False,
+    no_login: bool = False,
 ) -> dict[str, Any]:
+    """credential_id · request_new · no_login 중 정확히 하나. no_login 은 사용자가 고른 경우에만 쓴다."""
     _require_enabled()
-    if bool(credential_id) == bool(request_new):
+    if sum((bool(credential_id), bool(request_new), bool(no_login))) != 1:
         raise FlowError(422, "credential_choice_required")
     draft = await _load(actor, draft_id)
+    if no_login:
+        return await _proceed_without_login(actor, draft)
     if request_new:
         _need_state(draft, "intent_confirmed")
         waiting, requested = await _issue_request(actor, draft)
@@ -365,9 +373,26 @@ async def choose_credential(
     if chosen is None:
         raise FlowError(422, "credential_mismatch")
     state = draft["state"]
-    await _apply(_set(actor, draft_id, state, {"credential_id": chosen["id"]}, "credential_linked_ref"))
+    fields: dict[str, Any] = {"credential_id": chosen["id"]}
+    if draft["intent"].get("login_required") is False:
+        # 로그인 없이 시작했다가 로그인 화면을 만난 초안: 로그인 단계가 없는 옛 계획·진행 기록은 버린다.
+        fields["intent"] = {**draft["intent"], "login_required": True}
+        fields["recording_ref"] = {
+            k: v for k, v in draft["recording_ref"].items() if k not in ("plan", "completed", "recorded")
+        }
+    await _apply(_set(actor, draft_id, state, fields, "credential_linked_ref"))
     ready = await _apply(_move(actor, draft_id, state, "credential_ready", "credential_selected"))
     return view(ready, credential={"status": "linked", "display_name": chosen["display_name"]})
+
+
+async def _proceed_without_login(actor: Actor, draft: dict[str, Any]) -> dict[str, Any]:
+    """[로그인 없이 진행] — 사용자가 직접 고른 경우에만 로그인 연결을 건너뛴다. credential_id 는 비워 둔다."""
+    _need_state(draft, "intent_confirmed", "credential_waiting")
+    draft_id, state = str(draft["id"]), draft["state"]
+    intent = {**draft["intent"], "login_required": False}
+    await _apply(_set(actor, draft_id, state, {"intent": intent}, "login_not_required"))
+    ready = await _apply(_move(actor, draft_id, state, "credential_ready", "credential_not_required"))
+    return view(ready, credential={"status": "not_required"})
 
 
 async def refresh_credential(actor: Actor, draft: dict[str, Any]) -> dict[str, Any]:

@@ -178,7 +178,7 @@ STATE_HEADLINES: dict[str, str] = {
 STATE_BODIES: dict[str, str] = {
     "intent_draft": "말씀하신 내용을 이렇게 이해했어요. 맞는지 확인해 주세요.",
     "intent_confirmed": "저장된 로그인이 있는지 확인하고 있어요.",
-    "credential_waiting": "안전한 입력창에 로그인 정보를 넣어 주세요. 30분 안에 넣지 않으면 닫혀요.",
+    "credential_waiting": "안전한 입력창에 로그인 정보를 넣어 주세요. 30분 안에 넣지 않으면 닫혀요. 로그인이 필요 없는 사이트라면 [로그인 없이 진행]을 눌러 주세요.",
     "credential_ready": "로그인 준비가 끝나서 곧 대신 해 볼게요.",
     "demonstrating": "사이트에서 대신 해 보고 있어요. 잠시만 기다려 주세요.",
     "paused_risk": "여기서부터는 사이트에 내용을 남기거나 바꾸는 단계예요. 계속할지 골라 주세요.",
@@ -203,11 +203,12 @@ FAILURE_BODIES: dict[str, str] = {
     "empty_result": "조건에 맞는 내용이 한 줄도 없었어요. 기간이나 조건을 바꿔서 다시 해 볼까요?",
     "transient": "사이트 응답이 느리거나 끊겼어요. 잠시 뒤에 다시 해 보세요.",
 }
+NO_LOGIN_AUTH_FAILED_BODY = "로그인 화면이 나왔어요. 이 사이트는 로그인이 필요한 것 같아요. 로그인을 연결하고 다시 해 볼까요?"
 GENERIC_FAILURE_BODY = "대신 해 보다가 멈췄어요. 다시 해 보거나 그만둘 수 있어요."
 
 _BUTTONS: dict[str, tuple[tuple[str, str, bool], ...]] = {
     "intent_draft": (("confirm_intent", "맞아요", True), ("edit_intent", "고칠래요", False), ("cancel", "취소", False)),
-    "credential_waiting": (("cancel", "취소", False),),
+    "credential_waiting": (("no_login", "로그인 없이 진행", False), ("cancel", "취소", False)),
     "demonstrating": (("cancel", "그만두기", False),),
     "paused_risk": (
         ("proceed", "진행", True), ("stop_here", "여기까지만", False), ("cancel", "취소", False),
@@ -232,12 +233,16 @@ _PC_SUGGESTION = ("continue_on_pc", "내 PC에서 계속하기")
 _PC_SUGGESTED_FAILURES = frozenset({"blocked", "challenge"})
 
 
-def build_card(state: str, *, title: str = "", failure_code: str | None = None) -> dict[str, Any]:
+def build_card(
+    state: str, *, title: str = "", failure_code: str | None = None, no_login: bool = False,
+) -> dict[str, Any]:
     """상태 → 사람 말 카드. 프론트는 문장을 만들지 않고 이 값을 그대로 그린다."""
     if state not in ALL_STATES:
         raise InvalidTransition(f"unknown_state:{state}")
     if state == "failed":
         body = FAILURE_BODIES.get(failure_code or "", GENERIC_FAILURE_BODY)
+        if no_login and failure_code == "auth_failed":
+            body = NO_LOGIN_AUTH_FAILED_BODY
         buttons = _FAILED_BUTTONS.get(failure_code or "", _FAILED_DEFAULT_BUTTONS)
     else:
         body = STATE_BODIES[state]
@@ -256,7 +261,7 @@ def build_card(state: str, *, title: str = "", failure_code: str | None = None) 
 
 def human_sentences() -> list[str]:
     """사용자에게 보이는 모든 고정 문장(사전 + 버튼 라벨). 금지 용어 검사 대상."""
-    texts = [*STATE_HEADLINES.values(), *STATE_BODIES.values(), *FAILURE_BODIES.values(), GENERIC_FAILURE_BODY]
+    texts = [*STATE_HEADLINES.values(), *STATE_BODIES.values(), *FAILURE_BODIES.values(), NO_LOGIN_AUTH_FAILED_BODY, GENERIC_FAILURE_BODY]
     groups = [*_BUTTONS.values(), *_FAILED_BUTTONS.values(), _FAILED_DEFAULT_BUTTONS]
     texts.extend(label for group in groups for _, label, _ in group)
     texts.append(_PC_SUGGESTION[1])

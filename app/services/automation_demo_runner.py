@@ -355,14 +355,33 @@ def has_auth_failed_text(result: Mapping[str, Any]) -> bool:
     return any(marker in lowered for marker in _AUTH_FAILED_TEXT)
 
 
-def inspect_success(step: Mapping[str, Any], result: Mapping[str, Any], *, pre_url: str) -> str | None:
-    """성공으로 돌아왔어도 화면이 실패를 말하는 경우(로그인 되돌아옴·인증 요구·차단 화면)."""
+def shows_login_screen(step: Mapping[str, Any], result: Mapping[str, Any], *, pre_url: str) -> bool:
+    """비밀번호 입력칸이 보이거나, 요청하지 않은 로그인 주소로 이동해 온 화면."""
+    aria = _aria_text(result)
+    if aria and _PASSWORD_BOX.search(aria):
+        return True
+    url, _ = _evidence_text(result)
+    if not _LOGIN_URL.search(url.split("?", 1)[0]):
+        return False
+    came_from = str(step.get("url") or pre_url).split("?", 1)[0]
+    return not _LOGIN_URL.search(came_from) and not login_form_gone(result)
+
+
+def inspect_success(
+    step: Mapping[str, Any], result: Mapping[str, Any], *, pre_url: str, no_login: bool = False,
+) -> str | None:
+    """성공으로 돌아왔어도 화면이 실패를 말하는 경우(로그인 되돌아옴·인증 요구·차단 화면).
+
+    no_login: 사용자가 [로그인 없이 진행]을 골랐다. 로그인 화면이 나오면 auth_failed — 다시 로그인을 연결하게 한다.
+    """
     url, text = _evidence_text(result)
     access = result.get("server_access")
     if isinstance(access, Mapping) and access.get("blocked"):
         return "blocked"
     if is_challenge(text, login_step=step.get("purpose") == "login"):
         return "challenge"
+    if no_login and shows_login_screen(step, result, pre_url=pre_url):
+        return "auth_failed"
     if step.get("login_submit"):
         lowered = text.lower()
         if any(marker in lowered for marker in _AUTH_FAILED_TEXT):
@@ -489,6 +508,7 @@ class _Run:
         self.intent = draft["intent"]
         self.domain = normalize_domain(self.intent.get("domain") or "")
         self.ref = draft["recording_ref"]
+        self.no_login = self.intent.get("login_required") is False and not draft.get("credential_id")
         self.plan: list[dict[str, Any]] = []
         self.done: set[int] = set()
         self.recorded: dict[int, dict[str, Any]] = {}
@@ -587,7 +607,7 @@ class _Run:
             result = await executor(_render(step, secrets, self.domain))
             result = result if isinstance(result, Mapping) else {"ok": False, "error": "invalid_result"}
             if result.get("ok"):
-                code = inspect_success(step, result, pre_url=self.last_url)
+                code = inspect_success(step, result, pre_url=self.last_url, no_login=self.no_login)
                 if code == "auth_failed" and step.get("login_submit") and not has_auth_failed_text(result):
                     result, code = await self.settle_login(executor, step, seq, result)
                 await self.frame(result, sentence)

@@ -470,6 +470,83 @@ def test_credential_request_new_from_choices(call, world):
     assert body["draft"]["state"] == "credential_waiting" and body["credential"]["status"] == "requested"
 
 
+def _credential_url(did):
+    return f"/api/v1/automation-drafts/{did}/credential"
+
+
+def test_no_link_never_skips_login_on_its_own_and_offers_no_login_button(call, world):
+    body = confirm(call, make(call)["draft"]["id"]).json()
+    assert body["draft"]["state"] == "credential_waiting"
+    assert body["draft"]["credential_id"] is None
+    assert body["draft"]["intent"]["login_required"] is None
+    ids = [b["id"] for b in body["card"]["buttons"]]
+    assert "no_login" in ids and "cancel" in ids
+    assert next(b for b in body["card"]["buttons"] if b["id"] == "no_login")["label"] == "로그인 없이 진행"
+
+
+def test_no_login_choice_moves_to_ready_without_credential_then_demo_starts(call, world):
+    did = make(call)["draft"]["id"]
+    confirm(call, did)
+    response = call.as_().post(_credential_url(did), json={"no_login": True})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["draft"]["state"] == "credential_ready"
+    assert body["draft"]["credential_id"] is None
+    assert body["draft"]["intent"]["login_required"] is False
+    assert body["credential"] == {"status": "not_required"}
+    assert any(e.get("type") == "credential_not_required" and e.get("to") == "credential_ready"
+               for e in world.store.events)
+    assert world.store.rows[did]["credential_id"] is None
+    started = call.as_().post(f"/api/v1/automation-drafts/{did}/demo", json={"expected_state": "credential_ready"})
+    assert started.status_code == 202 and started.json()["draft"]["state"] == "demonstrating"
+    assert world.launched == [did]
+
+
+def test_no_login_is_also_allowed_when_secure_input_could_not_open(call, world):
+    world.secure_input_ok = False
+    did = make(call)["draft"]["id"]
+    assert confirm(call, did).json()["draft"]["state"] == "intent_confirmed"
+    body = call.as_().post(_credential_url(did), json={"no_login": True}).json()
+    assert body["draft"]["state"] == "credential_ready"
+
+
+def test_credential_choice_must_be_exactly_one_of_three(call, world):
+    world.credentials = [{"id": CRED_ID, "display_name": "a", "host": "store.coupangeats.com", "verified": True}]
+    did = make(call)["draft"]["id"]
+    confirm(call, did)
+    url = _credential_url(did)
+    for payload in (
+        {"credential_id": CRED_ID, "no_login": True},
+        {"request_new": True, "no_login": True},
+        {"credential_id": CRED_ID, "request_new": True, "no_login": True},
+        {"no_login": False},
+    ):
+        response = call.as_().post(url, json=payload)
+        assert response.status_code == 422, payload
+        assert response.json()["detail"]["error"] == "credential_choice_required"
+    assert world.store.rows[did]["state"] == "intent_confirmed"
+    assert world.store.rows[did]["credential_id"] is None
+
+
+def test_no_login_in_wrong_state_is_409(call, world):
+    did = make(call)["draft"]["id"]
+    response = call.as_().post(_credential_url(did), json={"no_login": True})
+    assert response.status_code == 409 and response.json()["detail"]["error"] == "state_conflict"
+    assert world.store.rows[did]["state"] == "intent_draft"
+
+
+def test_no_login_does_not_follow_the_model_guess(call, world, monkeypatch):
+    async def guess_no_login(text, tenant_id):
+        return {"task": "공개 양식 확인", "output_kind": "screen", "login_required": False}
+
+    monkeypatch.setattr(parser, "_ask_llm", guess_no_login)
+    did = make(call)["draft"]["id"]
+    assert json.loads(world.store.rows[did]["intent"])["login_required"] is None
+    body = confirm(call, did).json()
+    assert body["draft"]["state"] == "credential_waiting"
+    assert body["draft"]["intent"]["login_required"] is None
+
+
 def test_credential_waiting_moves_to_ready_when_submitted(call, world):
     did = make(call)["draft"]["id"]
     confirm(call, did)
