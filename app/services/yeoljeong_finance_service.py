@@ -2670,6 +2670,34 @@ def _require_owner_path_admin(user: dict[str, Any], detail: str) -> None:
         raise HTTPException(status_code=403, detail=detail)
 
 
+def _approved_own_employee_request(user: dict[str, Any]) -> dict[str, Any] | None:
+    """호출자 테넌트에서 본인 이메일의 가장 최근 직원 가입요청이 approved 일 때만 그 레코드를 돌려준다(/session 과 같은 판정)."""
+    user_role = str(user.get("user_role") or "").strip().lower()
+    email = _email(user)
+    if not email or user.get("is_internal_admin") or user_role in {"ceo", "admin", "system"}:
+        return None
+    own = [row for row in _read_hr("employee_join_requests", user) if str(row.get("email") or "").strip().lower() == email]
+    if not own:
+        return None
+    own.sort(key=lambda row: str(row.get("updated_at") or row.get("reviewed_at") or row.get("requested_at") or ""), reverse=True)
+    latest = own[0]
+    if employee_request_permissions(latest)["employee_request_status"] != "approved":
+        return None
+    return latest
+
+
+def _require_onboarding_reader(user: dict[str, Any], detail: str) -> None:
+    """입사서류 조회 관문: 관리자(종전 판정)이거나 승인된 직원 본인. 그 밖(미승인 member·직원 기록 없음)은 403."""
+    try:
+        _require_owner_path_admin(user, detail)
+        return
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+    if _approved_own_employee_request(user) is None:
+        raise HTTPException(status_code=403, detail=detail)
+
+
 def _invite_owner_tenants(invite: dict[str, Any]) -> set[str]:
     """초대 대상 사업자들의 소유 테넌트. _validated_invite_targets 와 같은 _db_business_tenant_id 판정을 쓴다."""
     targets = _clean_invite_targets(invite.get("targets"))
@@ -5204,7 +5232,7 @@ def _onboarding_missing_document_rows(
 
 
 def list_onboarding_documents(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
-    _require_owner_path_admin(user, "입사서류 목록은 관리자만 조회할 수 있습니다")
+    _require_onboarding_reader(user, "입사서류 목록은 관리자 또는 승인된 직원 본인만 조회할 수 있습니다")
     stored_rows = _read_hr("onboarding_documents", user)
     visible_rows = _filter_user(stored_rows, user, "employee_email", "uploaded_by")
     normalized_rows = []
@@ -5224,11 +5252,11 @@ def list_onboarding_documents(user: dict[str, Any], business_id: str | None = No
 
 
 def get_onboarding_document(document_id: str, user: dict[str, Any]) -> tuple[dict[str, Any], Path]:
-    _require_owner_path_admin(user, "입사서류는 관리자만 열람할 수 있습니다")
+    _require_onboarding_reader(user, "입사서류는 관리자 또는 승인된 직원 본인만 열람할 수 있습니다")
     record = _require_hr_record(_find(_read_hr("onboarding_documents", user), document_id), user, detail="입사서류를 찾을 수 없습니다")
     _require_onboarding_business_scope(record, user)
     if not _is_admin(user) and str(record.get("employee_email") or "").strip().lower() != _email(user):
-        raise HTTPException(status_code=403, detail="본인 서류만 열람할 수 있습니다")
+        raise HTTPException(status_code=404, detail="입사서류를 찾을 수 없습니다")
     path = _onboarding_document_path(record)
     if path is None:
         raise HTTPException(status_code=404, detail="업로드 파일이 없습니다")
