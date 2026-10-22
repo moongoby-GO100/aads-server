@@ -25,6 +25,7 @@ from app.services.goal_failure_retry import (
     ensure_retry_candidate,
     mark_explicit_retry_supersession,
 )
+from app.services.goal_grant_suspension import sync_goal_grants
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +219,7 @@ async def _audited_goal_status_update(
                 conn, goal_id, old["status"], new_status,
                 actor=actor, tenant_id=old["tenant_id"], source=source,
             )
+            await sync_goal_grants(conn, goal_id, source=source)
     return result
 
 
@@ -1332,17 +1334,21 @@ class GoalStateMachine:
                 # 통째로 사라진다. 2026-09-21 M11 반려 때 실제로 그렇게 됐다 —
                 # goal 169e5328 이 completed_at 23:04:34 로 굳은 뒤 23:24:58 에
                 # progress 만 0.94 로 내려가고 status 는 그대로였다.
-                await conn.execute(
-                    """UPDATE goals
-                          SET progress = $2,
-                              status = CASE WHEN status = 'completed'
-                                            THEN 'active' ELSE status END,
-                              completed_at = CASE WHEN status = 'completed'
-                                                  THEN NULL ELSE completed_at END,
-                              updated_at = NOW()
-                        WHERE id = $1::uuid""",
-                    goal_id, progress,
-                )
+                # 목표 UPDATE 와 grant 정합은 한 트랜잭션이다. 정합이 실패하면 progress/status 도 되돌아간다.
+                async with conn.transaction():
+                    await conn.execute(
+                        """UPDATE goals
+                              SET progress = $2,
+                                  status = CASE WHEN status = 'completed'
+                                                THEN 'active' ELSE status END,
+                                  completed_at = CASE WHEN status = 'completed'
+                                                      THEN NULL ELSE completed_at END,
+                                  updated_at = NOW()
+                            WHERE id = $1::uuid""",
+                        goal_id, progress,
+                    )
+                    # completed → active 되돌림이면 목표 비활성 때문에 멈춘 grant 를 되살린다(멱등).
+                    await sync_goal_grants(conn, goal_id, source="goal_progress_reopen")
 
     async def check_goal_completion(self, goal_id: str) -> dict[str, Any]:
         pool = await self._pool()
@@ -1475,9 +1481,19 @@ class GoalStateMachine:
             from app.services.goal_activity import activity_for_goals, strip_rank
 
             live = await activity_for_goals(conn, [str(r["id"]) for r in rows])
+            # 정리 카드가 POST /goals/triage/apply 에 되돌려 보내는 후보 지문(테넌트 전체 기준). 실패해도 목록은 내려간다.
+            candidates_version = None
+            if tenant_id:
+                try:
+                    from app.services.goal_triage import current_candidates_version
+
+                    candidates_version = await current_candidates_version(conn, tenant_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("goal_candidates_version_failed: %s", str(exc)[:200])
         return [
             {
                 **derived.get(str(r["id"]), {}),
+                "candidates_version": candidates_version,
                 "activity": live[str(r["id"])]["activity"],
                 "strip_rank": strip_rank(
                     live[str(r["id"])]["activity"], r["priority"],
@@ -1534,6 +1550,7 @@ class GoalStateMachine:
                         conn, goal_id, old_status, new_status,
                         actor=actor, tenant_id=row["tenant_id"], source="update_goal",
                     )
+                    await sync_goal_grants(conn, goal_id, source="update_goal")
         if not row:
             return {"error": "goal_not_found"}
         return {"goal_id": goal_id, "updated": list(updates.keys())}

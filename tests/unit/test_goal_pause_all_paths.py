@@ -169,7 +169,26 @@ def test_pause_api_handlers_round_trip_and_tenant_scope(monkeypatch):
         paused_reason = None
         paused_by = None
 
-        async def fetchrow(self, query, goal_id, tenant_id, *values):
+        grant_sync = []
+
+        def transaction(self):
+            class Tx:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *_args):
+                    return False
+
+            return Tx()
+
+        async def fetch(self, query, *args):
+            self.grant_sync.append(query)
+            return []
+
+        async def fetchrow(self, query, goal_id, tenant_id=None, *values):
+            if query.startswith("SELECT tenant_id::text AS tenant_id, status, paused_at FROM goals"):
+                return {"tenant_id": "00000000-0000-4000-8000-000000000002",
+                        "status": "active", "paused_at": self.paused_at}
             if (goal_id != "00000000-0000-4000-8000-000000000001"
                     or tenant_id != "00000000-0000-4000-8000-000000000002"):
                 return None
@@ -209,6 +228,9 @@ def test_pause_api_handlers_round_trip_and_tenant_scope(monkeypatch):
     assert after_pause == ("now", "재기획", "ceo")
     assert resumed == {"goal_paused": False, "goal_paused_reason": None}
     assert (store.paused_at, store.paused_reason, store.paused_by) == (None, None, None)
+    # 일시정지·재개는 같은 트랜잭션에서 grant 를 정지·복원한다(AS-1·2).
+    from app.services import goal_grant_suspension as grant_rules
+    assert store.grant_sync == [grant_rules.SUSPEND_SQL, grant_rules.RESTORE_SQL]
 
 
 def test_tenant_member_cannot_pause_or_resume_ceo_goal():

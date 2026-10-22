@@ -177,6 +177,8 @@ class _FakeDB:
     async def fetch(self, query, *args):
         q = " ".join(query.split())
         self.queries.append((q, args))
+        if "goal_auto_approval_grants" in q:
+            return []
         if "information_schema.columns" in q and "goal_task_links" in q:
             names = [
                 "bind_source", "bound_by", "link_state", "detach_reason",
@@ -368,6 +370,13 @@ class _FakeDB:
                 key=lambda m: m["sequence_order"],
             )
             return {"id": found[0]["id"]} if found else None
+
+        if q.startswith("SELECT tenant_id::text AS tenant_id, status, paused_at FROM goals"):
+            goal = self._goal(str(args[0]))
+            if goal is None:
+                return None
+            return {"tenant_id": goal.get("tenant_id"), "status": goal["status"],
+                    "paused_at": goal.get("paused_at")}
 
         raise AssertionError(f"unhandled fetchrow query: {q[:160]}")
 

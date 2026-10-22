@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.auth import TenantRole, require_tenant_role
 from app.core.goal_work_hierarchy_policy import goal_work_hierarchy_enabled
 from app.services import goal_approval_policy_schema as policy_schema
+from app.services.goal_grant_suspension import sync_goal_grants
 from app.services.approval_profiles import profile_for_project, profile_options
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,19 @@ class GoalUpdateRequest(BaseModel):
 
 class GoalPauseRequest(BaseModel):
     reason: str
+
+
+class TriageActionRequest(BaseModel):
+    goal_id: UUID
+    action: Literal["resume", "pause", "close", "merge", "unblock"]
+    merge_into: Optional[UUID] = None
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+class TriageApplyRequest(BaseModel):
+    keep_p0: list[UUID] = Field(default_factory=list, max_length=3)
+    actions: list[TriageActionRequest] = Field(default_factory=list, max_length=200)
+    candidates_version: str = Field(min_length=1, max_length=128)
 
 
 class TaskStatusRequest(BaseModel):
@@ -1621,15 +1635,18 @@ async def pause_goal(
         raise HTTPException(status_code=400, detail="reason required")
     pool = get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "UPDATE goals SET paused_at = COALESCE(paused_at, NOW()), "
-            "paused_reason = $3, paused_by = $4, updated_at = NOW() "
-            "WHERE id = $1::uuid AND tenant_id = $2::uuid "
-            "RETURNING paused_at, paused_reason, paused_by",
-            goal_id, _tenant_id(context), reason,
-            str(context.get("user", {}).get("user_id")
-                or context.get("user", {}).get("id") or "unknown"),
-        )
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "UPDATE goals SET paused_at = COALESCE(paused_at, NOW()), "
+                "paused_reason = $3, paused_by = $4, updated_at = NOW() "
+                "WHERE id = $1::uuid AND tenant_id = $2::uuid "
+                "RETURNING paused_at, paused_reason, paused_by",
+                goal_id, _tenant_id(context), reason,
+                str(context.get("user", {}).get("user_id")
+                    or context.get("user", {}).get("id") or "unknown"),
+            )
+            if row:
+                await sync_goal_grants(conn, goal_id, source="goal_pause")
     if not row:
         raise HTTPException(status_code=404, detail="goal_not_found")
     return {"goal_paused": True, "goal_paused_reason": row["paused_reason"]}
@@ -1647,12 +1664,15 @@ async def resume_goal(
 
     pool = get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "UPDATE goals SET paused_at = NULL, paused_reason = NULL, "
-            "paused_by = NULL, updated_at = NOW() "
-            "WHERE id = $1::uuid AND tenant_id = $2::uuid RETURNING id",
-            goal_id, _tenant_id(context),
-        )
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "UPDATE goals SET paused_at = NULL, paused_reason = NULL, "
+                "paused_by = NULL, updated_at = NOW() "
+                "WHERE id = $1::uuid AND tenant_id = $2::uuid RETURNING id",
+                goal_id, _tenant_id(context),
+            )
+            if row:
+                await sync_goal_grants(conn, goal_id, source="goal_resume")
     if not row:
         raise HTTPException(status_code=404, detail="goal_not_found")
     return {"goal_paused": False, "goal_paused_reason": None}
@@ -2269,6 +2289,42 @@ async def reconcile_release_evidence(
 
     return await reconcile_release_links(
         project, dry_run=dry_run, limit=limit, tenant_id=_tenant_id(context),
+    )
+
+
+@router.post("/goals/triage/apply")
+async def apply_goal_triage(
+    req: TriageApplyRequest,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
+    """첫 정리 일괄 반영 (PRD goal-first-triage-execution-prd TR-1~6).
+
+    대표님만 호출한다. keep_p0 밖의 active P0 를 P1 로 내리고 actions 를 한 트랜잭션으로 반영하며,
+    반영 후 active P0 가 3개를 넘으면 전부 되돌리고 409 p0_cap_exceeded 를 돌려준다.
+    """
+    from app.core.db_pool import get_pool
+    from app.services.goal_triage import triage_apply
+
+    if not _is_ceo_principal(context):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "triage_ceo_only",
+                "message": "목표 일괄 정리는 대표님만 할 수 있습니다.",
+            },
+        )
+    tenant_id = _tenant_id(context)
+    user_id = _tenant_identity(context)[1]
+    return await triage_apply(
+        get_pool(), tenant_id=tenant_id, actor=f"user:{user_id}" if user_id else "user:unknown",
+        keep_p0=[str(g) for g in req.keep_p0],
+        actions=[
+            {"goal_id": str(a.goal_id), "action": a.action,
+             "merge_into": str(a.merge_into) if a.merge_into else None, "reason": a.reason}
+            for a in req.actions
+        ],
+        client_version=req.candidates_version, idempotency_key=idempotency_key,
     )
 
 

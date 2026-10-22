@@ -1012,11 +1012,13 @@ async def _decision(conn: Any, tenant_id: str, decision_id: str, decision: str,
 
 async def revoke_grant(conn: Any, *, tenant_id: str, grant_id: str, actor: ActorScope, reason: str) -> dict[str, Any]:
     _require_enabled()
+    # paused = 목표 비활성으로 멈춘 grant(goal_grant_suspension). 사람이 회수하면 durable revoked 로
+    # 바꿔야 목표가 재개돼도 되살아나지 않는다(복원은 paused 만 본다). 부모·자식 모두 같다.
     row = await conn.fetchrow(
         """UPDATE goal_auto_approval_grants SET status='revoked',revoked_by=$3::uuid,
            revoked_at=clock_timestamp(),revoke_reason=$4
            WHERE id=$1::uuid AND tenant_id=$2::uuid
-           AND status='active' RETURNING id::text,revocation_strategy""",
+           AND status IN ('active','paused') RETURNING id::text,revocation_strategy""",
         grant_id, tenant_id, actor.session_id, reason,
     )
     if not row:
@@ -1050,7 +1052,7 @@ async def revoke_grant(conn: Any, *, tenant_id: str, grant_id: str, actor: Actor
                JOIN descendants d ON g.parent_grant_id=d.id WHERE g.tenant_id=$3::uuid
            ) UPDATE goal_auto_approval_grants SET status='revoked',revoked_by=$2::uuid,
              revoked_at=clock_timestamp(),revoke_reason='parent_grant_revoked'
-             WHERE id IN (SELECT id FROM descendants) AND status='active'""",
+             WHERE id IN (SELECT id FROM descendants) AND status IN ('active','paused')""",
         grant_id, actor.session_id, tenant_id,
     )
     return _row_dict(row)

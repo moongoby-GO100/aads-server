@@ -217,6 +217,7 @@ ut_docker_run \
     -e PYTHONDONTWRITEBYTECODE=1 \
     -e JWT_SECRET_KEY="${JWT_SECRET_KEY:-unit-test-secret-not-for-production}" \
     -e OBYS_COLLECTION_TEST_DB_URL="${OBYS_COLLECTION_TEST_DB_URL:-}" \
+    -e GOAL_GRANT_TEST_ADMIN_URL="${GOAL_GRANT_TEST_ADMIN_URL:-}" \
     "$IMAGE" timeout -k 10 "$UT_TIMEOUT" python3 -m pytest "${targets[@]}" -q --tb=line -p no:cacheprovider
 rc=$?
 

@@ -64,6 +64,8 @@ class FakeConn:
         return Transaction()
 
     async def fetch(self, query, *args):
+        if "goal_auto_approval_grants" in query:
+            return []
         if "position($3 in p.instruction)" in query:
             return list(self.successors)
         if "FROM goal_task_links l JOIN pipeline_jobs p" in query:
@@ -112,6 +114,8 @@ class FakeConn:
             return {"goal_id": GOAL_ID}
         if "SELECT status, tenant_id::text AS tenant_id FROM goals" in query:
             return {"status": self.goal_status, "tenant_id": GOAL_ID}
+        if "SELECT tenant_id::text AS tenant_id, status, paused_at FROM goals" in query:
+            return {"tenant_id": GOAL_ID, "status": self.goal_status, "paused_at": None}
         raise AssertionError(query)
 
     async def fetchval(self, query, *args):

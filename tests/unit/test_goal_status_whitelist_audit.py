@@ -52,6 +52,9 @@ class _FakeGoalsDB:
         return self.goal["status"] if self._matches(goal_id, tenant_id) else None
 
     async def fetchrow(self, query, *args):
+        if query.lstrip().startswith("SELECT tenant_id::text AS tenant_id, status, paused_at FROM goals"):
+            # sync_goal_grants 의 잠금 읽기 — 이 가짜에는 grant 가 없다.
+            return {"tenant_id": self.goal["tenant_id"], "status": self.goal["status"], "paused_at": None}
         assert query.lstrip().startswith("UPDATE goals"), query
         columns = re.findall(r"(\w+) = \$(\d+)", query)
         goal_id, tenant_id = args[0], args[-1]
@@ -61,6 +64,10 @@ class _FakeGoalsDB:
         for column, index in columns:
             self.goal[column] = args[int(index) - 1]
         return {"id": self.goal["id"], "tenant_id": self.goal["tenant_id"]}
+
+    async def fetch(self, query, *args):
+        assert "goal_auto_approval_grants" in query, query
+        return []
 
     async def execute(self, query, *args):
         assert query.lstrip().startswith("INSERT INTO goal_status_audit"), query
@@ -256,6 +263,9 @@ class _PathDB:
         if "SELECT status, tenant_id::text AS tenant_id FROM goals" in query:
             goal = self.goals.get(str(args[0]))
             return dict(goal) if goal else None
+        if "SELECT tenant_id::text AS tenant_id, status, paused_at FROM goals" in query:
+            goal = self.goals.get(str(args[0]))
+            return {"tenant_id": goal["tenant_id"], "status": goal["status"], "paused_at": None} if goal else None
         found, value = self._pick(self.rows, query)
         if found:
             return value
