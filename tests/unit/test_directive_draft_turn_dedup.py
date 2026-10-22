@@ -152,6 +152,10 @@ class Harness:
         monkeypatch.setattr(service, "get_pool", lambda: FakePool(self.conn))
         monkeypatch.setattr(service, "_load_source", self._load_source)
         monkeypatch.setattr(service, "generate_directive_content", self._generate)
+        monkeypatch.setattr(service, "_resolve_goal_binding", self._no_goal)
+
+    async def _no_goal(self, *_args, **_kwargs):
+        return {}
 
     async def _load_source(self, **_kwargs):
         return self.source

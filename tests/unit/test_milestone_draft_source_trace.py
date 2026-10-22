@@ -169,8 +169,8 @@ class TraceConnection:
 
     async def fetchval(self, query, *args):
         assert "FROM goals" in query and "goal_task_links" in query
-        goal_id, tenant_id, milestone_id, session_id = args
-        return (self.goal_linked and goal_id == str(self.goal_id)
+        goal_id, tenant_id, milestone_id, session_id, explicit = args
+        return ((self.goal_linked or explicit) and goal_id == str(self.goal_id)
                 and tenant_id == self.tenant_id and milestone_id == str(self.milestone_id)
                 and session_id == str(self.session_id))
 

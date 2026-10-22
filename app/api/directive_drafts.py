@@ -31,6 +31,8 @@ class DraftCreateRequest(BaseModel):
     context_window: int = Field(default=8, ge=2, le=16)
     message_ids: list[UUID] | None = Field(default=None, max_length=16)
     composer_draft: str | None = Field(default=None, max_length=50_000)
+    goal_id: UUID | None = None
+    milestone_id: UUID | None = None
 
 
 class DraftUpdateRequest(BaseModel):
@@ -61,9 +63,13 @@ async def create_directive_draft(
             context_window=body.context_window,
             message_ids=[str(value) for value in body.message_ids] if body.message_ids else None,
             composer_draft=body.composer_draft,
+            goal_id=str(body.goal_id) if body.goal_id else None,
+            milestone_id=str(body.milestone_id) if body.milestone_id else None,
         )
     except drafts.DraftNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except drafts.GoalBindingError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

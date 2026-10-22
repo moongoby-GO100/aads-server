@@ -111,6 +111,14 @@ class DraftConflictError(RuntimeError):
     pass
 
 
+class GoalBindingError(RuntimeError):
+    """The selected goal/milestone does not belong to the draft's tenant or goal (HTTP 409)."""
+
+
+class GoalChangeNotConfirmedError(PermissionError):
+    """A formal goal/milestone change was requested from a turn the CEO did not confirm."""
+
+
 @dataclass(frozen=True)
 class DraftSource:
     session_id: uuid.UUID
@@ -206,6 +214,98 @@ def _user_request_text(messages: Iterable[dict[str, Any]]) -> str:
         for message in messages
         if message.get("role") == "user"
     ).strip()
+
+
+TURN_KINDS = ("fact", "proposal", "confirmed", "open")
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。？！])\s+|\n+")
+_NEGATION_RE = re.compile(
+    r"하지\s*마|하지\s*말|말고|금지|취소|반려|거부|안\s*돼|안\s*됩니다|아닙니다|아니야|중단|멈춰|보류|아직|나중에"
+)
+_QUESTION_RE = re.compile(
+    r"[?？]|[가-힣]까(?:요)?\s*[.!]*\s*$|나요|인가요|인가\b|는지|을지|할지|어때|어떻게|왜\s|무엇|뭘|뭐가"
+    r"|알려\s*줘|알려\s*주|설명해|검토\s*(?:해|부탁)|살펴\s*봐|알아\s*봐|확인해\s*봐|비교해|분석해"
+)
+_CONDITIONAL_RE = re.compile(
+    r"하면|되면|이면|라면|다면|으면|니면|있으면|없으면|보면|가면|오면|려면|싶으면|좋으면"
+    r"|만약|가정|혹시|인\s*경우|할\s*경우|싶은데|싶다|생각\s*중|고민"
+)
+_CONFIRM_RE = re.compile(
+    r"확정(?:합니다|한다|해|함|할게|하자|하겠|이다|이야|입니다|이에요|임)|^확정\s*[.!]*$"
+    r"|승인(?:합니다|한다|해|함|할게|이다|입니다)"
+    r"|진행\s*(?:해|하세요|합시다|바랍니다|시켜)"
+    r"|(?:그렇게|그대로|그걸로|이대로)\s*(?:해|하세요|합시다|진행|가자|가죠|확정)"
+    r"|동의(?:합니다|해)|오케이|\bok\b|\blgtm\b",
+    re.IGNORECASE,
+)
+_PROPOSAL_RE = re.compile(
+    r"좋겠|하자|합시다|제안|해\s*줘|해\s*주세요|해\s*주시|바꿔|변경해|추가해|수정해|삭제해|만들어|적용해"
+    r"|해야|하는\s*게\s*좋|하는\s*편이|필요합니다|필요해|고려|권장|추천|부탁"
+)
+
+
+def _classify_sentence(sentence: str) -> tuple[str, str]:
+    """(kind, trigger phrase) of one CEO sentence; doubt resolves to ``open``."""
+    for pattern in (_NEGATION_RE, _QUESTION_RE, _CONDITIONAL_RE):
+        match = pattern.search(sentence)
+        if match:
+            return "open", match.group(0).strip()
+    match = _CONFIRM_RE.search(sentence)
+    if match:
+        return "confirmed", match.group(0).strip()
+    match = _PROPOSAL_RE.search(sentence)
+    if match:
+        return "proposal", match.group(0).strip()
+    return "fact", ""
+
+
+def classify_turn(text: str | None, *, source_message_id: Any = None) -> dict[str, Any]:
+    """Rule-based turn kind of the CEO's own words (no LLM).
+
+    Only an explicit approval is ``confirmed``; questions, assumptions, conditionals and
+    negations are ``open``. Order when a turn mixes kinds: confirmed > open > proposal > fact.
+    """
+    message_id = str(source_message_id) if source_message_id else None
+    decisions: list[dict[str, Any]] = []
+    evidence: dict[str, list[str]] = {kind: [] for kind in TURN_KINDS}
+    for raw in _SENTENCE_SPLIT_RE.split((text or "").strip()):
+        sentence = raw.strip()
+        if not sentence:
+            continue
+        kind, phrase = _classify_sentence(sentence)
+        decisions.append({"kind": kind, "text": sentence[:300], "source_message_id": message_id})
+        if phrase and phrase not in evidence[kind]:
+            evidence[kind].append(phrase)
+    kinds = {decision["kind"] for decision in decisions}
+    turn_kind = next((k for k in ("confirmed", "open", "proposal", "fact") if k in kinds), "open")
+    return {
+        "turn_kind": turn_kind,
+        "turn_kind_evidence": evidence[turn_kind][:5],
+        "decisions": decisions[:20],
+    }
+
+
+def _turn_utterance(source: "DraftSource") -> tuple[str, Any]:
+    """The CEO utterance this draft answers: the unsent composer text, else the newest user message."""
+    composer_draft = (source.composer_draft or "").strip()
+    if composer_draft:
+        return composer_draft, None
+    for message in reversed(source.messages):
+        if message.get("role") == "user" and str(message.get("content") or "").strip():
+            return str(message["content"]).strip(), message.get("id")
+    return "", None
+
+
+def goal_change_allowed(turn_kind: str | None) -> bool:
+    return turn_kind == "confirmed"
+
+
+def require_confirmed_turn(turn_kind: str | None) -> None:
+    """Gate for any formal goals/milestones change made on behalf of a chat turn."""
+    if not goal_change_allowed(turn_kind):
+        raise GoalChangeNotConfirmedError(
+            f"turn_kind={turn_kind or 'unknown'}: 확정되지 않은 턴은 목표/마일스톤을 변경할 수 없습니다."
+        )
 
 
 def _selected_assistant_text(source: DraftSource) -> str:
@@ -648,6 +748,52 @@ def _turn_key(tenant_id: str, source: DraftSource) -> str:
     return "ctx:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
+async def _resolve_goal_binding(
+    conn, *, tenant_uuid: uuid.UUID, session_id: uuid.UUID,
+    goal_id: str | None, milestone_id: str | None,
+) -> dict[str, Any]:
+    """Goal/milestone a draft may reference: an explicit selection, else the session's single bound goal.
+
+    Never guesses: no explicit id and zero or several bound goals means no goal. A goal of
+    another tenant, or a milestone of another goal, raises GoalBindingError (409); a missing
+    goal is reported the same way so existence in other tenants is not revealed.
+    """
+    if milestone_id and not goal_id:
+        raise ValueError("milestone_id 는 goal_id 와 함께 지정해야 합니다.")
+    if goal_id:
+        goal_uuid = uuid.UUID(str(goal_id))
+        owner = await conn.fetchval("SELECT tenant_id FROM goals WHERE id = $1", goal_uuid)
+        if owner != tenant_uuid:
+            raise GoalBindingError("선택한 목표를 이 테넌트에서 사용할 수 없습니다.")
+        binding: dict[str, Any] = {"goal_id": str(goal_uuid), "goal_binding": "explicit"}
+        if milestone_id:
+            milestone_uuid = uuid.UUID(str(milestone_id))
+            milestone = await conn.fetchrow(
+                "SELECT goal_id, tenant_id FROM milestones WHERE id = $1", milestone_uuid
+            )
+            if (
+                not milestone
+                or milestone["goal_id"] != goal_uuid
+                or milestone["tenant_id"] != tenant_uuid
+            ):
+                raise GoalBindingError("선택한 마일스톤이 선택한 목표에 속하지 않습니다.")
+            binding["milestone_id"] = str(milestone_uuid)
+        return binding
+    from app.services.goal_manager import active_link_predicate, link_optional_columns
+
+    columns = await link_optional_columns(conn)
+    rows = await conn.fetch(
+        f"""SELECT DISTINCT l.goal_id FROM goal_task_links l
+              JOIN goals g ON g.id = l.goal_id AND g.tenant_id = $2
+             WHERE l.task_type = 'chat_session' AND l.task_id = $1
+               {active_link_predicate(columns, 'l')}""",
+        str(session_id), tenant_uuid,
+    )
+    if len(rows) == 1:
+        return {"goal_id": str(rows[0]["goal_id"]), "goal_binding": "session"}
+    return {}
+
+
 async def _find_turn_draft(
     conn, *, tenant_uuid: uuid.UUID, source: DraftSource, turn_key: str, for_update: bool = False
 ) -> Any:
@@ -742,6 +888,10 @@ async def _draft_result(
         result["artifact_id"] = str(artifact["id"])
         result["artifact"] = _serialize_artifact(artifact)
     result["turn_dedup"] = turn_dedup
+    stored = result.get("classification")
+    result["goal_change_allowed"] = goal_change_allowed(
+        stored.get("turn_kind") if isinstance(stored, dict) else None
+    )
     return result
 
 
@@ -753,11 +903,18 @@ async def create_draft(
     context_window: int = DEFAULT_CONTEXT_WINDOW,
     message_ids: list[str] | None = None,
     composer_draft: str | None = None,
+    goal_id: str | None = None,
+    milestone_id: str | None = None,
 ) -> dict[str, Any]:
     """Create the draft for a turn, or add a revision to the one this turn already has.
 
     The result carries ``turn_dedup``: ``created`` (new row), ``revised`` (new revision on the
     existing row) or ``existing`` (existing row returned untouched).
+
+    ``turn_kind`` (fact/proposal/confirmed/open) is classified from the CEO's own words and only
+    ``confirmed`` sets ``goal_change_allowed``; this function itself never writes goals or
+    milestones. ``goal_id``/``milestone_id`` must be explicit or the session's single bound goal;
+    a foreign-tenant goal or a milestone of another goal raises GoalBindingError.
     """
     source = await _load_source(
         tenant_id=tenant_id,
@@ -772,6 +929,10 @@ async def create_draft(
 
     # A repeated request for a frozen draft skips the LLM call entirely.
     async with get_pool().acquire() as conn:
+        goal_binding = await _resolve_goal_binding(
+            conn, tenant_uuid=tenant_uuid, session_id=source.session_id,
+            goal_id=goal_id, milestone_id=milestone_id,
+        )
         existing = await _find_turn_draft(
             conn, tenant_uuid=tenant_uuid, source=source, turn_key=turn_key
         )
@@ -792,6 +953,8 @@ async def create_draft(
     title = fields.get("TITLE", "지시 초안")[:200]
     source_ids = [message["id"] for message in source.messages]
     confidence = 0.75 if generation_mode == "generated" else 0.45
+    utterance, utterance_id = _turn_utterance(source)
+    turn_classification = classify_turn(utterance, source_message_id=utterance_id)
     classification = {
         "risk_level": risk_level,
         "generation_mode": generation_mode,
@@ -808,10 +971,13 @@ async def create_draft(
         "model_used": model_used,
         "composer_draft_included": bool(source.composer_draft),
         "composer_draft_content": source.composer_draft,
+        **turn_classification,
+        **goal_binding,
     }
     revision_metadata = {
         "source_message_ids": [str(value) for value in source_ids],
         "composer_draft": source.composer_draft,
+        "turn_kind": turn_classification["turn_kind"],
     }
     async with get_pool().acquire() as conn:
         async with conn.transaction():
@@ -946,6 +1112,7 @@ async def create_draft(
     result["artifact_id"] = str(artifact["id"])
     result["artifact"] = _serialize_artifact(artifact)
     result["turn_dedup"] = turn_dedup
+    result["goal_change_allowed"] = goal_change_allowed(turn_classification["turn_kind"])
     return result
 
 
@@ -1192,8 +1359,8 @@ async def load_draft_trace(conn, *, tenant_id: Any, draft_id: Any) -> dict[str, 
     goal_mismatch = None
     goal_id = classification.get("goal_id")
     if goal_id:
-        # The draft's goal must belong to the same tenant, own the milestone,
-        # and still be linked to the draft's session.
+        # The draft's goal must belong to the same tenant, own the milestone, and
+        # (unless it was selected explicitly) still be linked to the draft's session.
         goal_ok = await conn.fetchval(
             """SELECT EXISTS (
                    SELECT 1 FROM goals g
@@ -1201,11 +1368,12 @@ async def load_draft_trace(conn, *, tenant_id: Any, draft_id: Any) -> dict[str, 
                       AND ($3::text IS NULL OR EXISTS (
                           SELECT 1 FROM milestones m
                            WHERE m.id = $3::uuid AND m.goal_id = g.id))
-                      AND EXISTS (
+                      AND ($5::boolean OR EXISTS (
                           SELECT 1 FROM goal_task_links l
                            WHERE l.goal_id = g.id AND l.task_type = 'chat_session'
-                             AND l.task_id = $4::text))""",
+                             AND l.task_id = $4::text)))""",
             goal_id, tenant_uuid, classification.get("milestone_id"), str(draft["session_id"]),
+            classification.get("goal_binding") == "explicit",
         )
         goal_mismatch = 0 if goal_ok else 1
     revision_data = []
@@ -1217,6 +1385,7 @@ async def load_draft_trace(conn, *, tenant_id: Any, draft_id: Any) -> dict[str, 
             "revision": row["revision"], "change_source": row["change_source"],
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
             "source_message_ids": list((metadata or {}).get("source_message_ids") or []),
+            "turn_kind": (metadata or {}).get("turn_kind"),
         })
     integrity = {
         "source_message_count": len(source_ids),
@@ -1236,6 +1405,9 @@ async def load_draft_trace(conn, *, tenant_id: Any, draft_id: Any) -> dict[str, 
             "current_revision": draft["current_revision"],
             "source_mode": classification.get("source_mode"),
             "goal_id": goal_id, "milestone_id": classification.get("milestone_id"),
+            "turn_kind": classification.get("turn_kind"),
+            "turn_kind_evidence": classification.get("turn_kind_evidence"),
+            "decisions": classification.get("decisions"),
         },
         "source_messages": messages,
         "revisions": revision_data,
