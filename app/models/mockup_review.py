@@ -159,6 +159,21 @@ class ReviewCreate(BaseModel):
         return value
 
 
+class HtmlReviewCreate(ReviewCreate):
+    """A new draft from a self-contained UTF-8 HTML file; never an approval."""
+    change_type: ChangeType = "new"
+    filename: str = Field(min_length=1, max_length=200)
+    html: str = Field(min_length=1, max_length=2 * 1024 * 1024)
+
+    @field_validator("filename")
+    @classmethod
+    def html_filename(cls, value: str) -> str:
+        if ("/" in value or "\\" in value or any(ord(c) < 32 for c in value)
+                or not value.lower().endswith(".html") or value.startswith(".")):
+            raise ValueError("a plain .html filename is required")
+        return value
+
+
 class Resolution(BaseModel):
     change_request_id: UUID
     outcome: Literal["applied", "not_applied"]

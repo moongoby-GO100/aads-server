@@ -82,7 +82,8 @@ def _utc(value: datetime) -> str:
 
 def asset_roots() -> dict[str, Path]:
     configured = os.getenv("MOCKUP_REVIEW_ASSET_ROOT")
-    return {"docs": ROOT / "docs", "mockup_assets": Path(configured) if configured else ROOT / "data" / "mockup_assets"}
+    return {"docs": ROOT / "docs", "mockup_assets": Path(configured) if configured else ROOT / "data" / "mockup_assets",
+            "uploaded_mockups": ROOT / "app" / "data" / "mockup_assets" / "html-uploads"}
 
 
 class AssetProblem(Exception):
@@ -1452,7 +1453,7 @@ async def get_asset(conn: Any, tenant: str, project: str, review_id: UUID, revis
         data = await asyncio.to_thread(read_asset, asset["uri"])
     except AssetProblem as exc:
         fail(409, "asset_tampered", assets=[{"asset_id": asset_id, "reason": exc.code}])
-    if sha256_hex(data) != asset["sha256"]:
+    if sha256_hex(data) != asset["sha256"] or len(data) != asset["byte_size"]:
         fail(409, "asset_tampered", assets=[{"asset_id": asset_id, "reason": "hash_changed"}])
     return data, asset["mime"]
 

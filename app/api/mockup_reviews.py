@@ -11,11 +11,12 @@ from app.api.canonical_documents import _authorize, _project, _scope
 from app.auth import TenantRole, require_tenant_role
 from app.core.db_pool import get_pool
 from app.models.mockup_review import (
-    ApproveReview, ChangeCreate, ChangeIntake, ReviewCreate, RevisingStart, RevisionCreate, RevokeReview, SubmitReview,
+    ApproveReview, ChangeCreate, ChangeIntake, HtmlReviewCreate, ReviewCreate, RevisingStart, RevisionCreate, RevokeReview, SubmitReview,
     VerifyBundle,
 )
 from app.services import mockup_review_service as svc
 from app.services import mockup_approval_handoff
+from app.services import mockup_html_upload
 
 router = APIRouter(prefix="/projects/{project_key}/mockup-reviews", tags=["mockup-reviews"])
 VIEW = Depends(require_tenant_role(TenantRole.VIEWER))
@@ -55,6 +56,23 @@ async def list_notifications(project_key: str, unread_only: bool = False, limit:
     return await _run(project_key, context, "read",
                       lambda c, t, p, a, e: svc.list_notifications(c, t, a, unread_only=unread_only, project=p,
                                                                     limit=limit))
+
+
+@router.post("/html", status_code=201)
+async def upload_html(project_key: str, body: HtmlReviewCreate, response: Response, context: dict = WRITE):
+    created_files = []
+    try:
+        result = await _run(project_key, context, "write",
+                            lambda c, t, p, a, e: mockup_html_upload.register(c, t, p, a, e, body, created_files))
+    except BaseException:
+        for path in created_files:
+            path.unlink(missing_ok=True)
+            if path.parent.exists():
+                path.parent.rmdir()
+        raise
+    if result.get("idempotent"):
+        response.status_code = 200
+    return result
 
 
 @router.post("/notifications/{notification_id}/read")

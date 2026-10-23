@@ -97,8 +97,8 @@ async def env(tmp_path, monkeypatch):
                 for scoped in (project, other_project):
                     await conn.execute("INSERT INTO project_document_grants(tenant_id,project_key,user_id,access) "
                                        "VALUES($1,$2,$3,$4)", tenant_of[name], scoped, user, grants[name])
-        await conn.execute("INSERT INTO goals(id,title,project,status,tenant_id) VALUES($1,'mr goal',$2,'active',$3)",
-                           goal_id, project, tenants[0])
+        await conn.execute("INSERT INTO goals(id,title,project,status,tenant_id,owner_role_key,owner_session_id) VALUES($1,'mr goal',$2,'active',$3,'CTO',$4)",
+                           goal_id, project, tenants[0], session)
         await conn.execute("INSERT INTO goal_task_links(task_type,task_id,goal_id,tenant_id,link_state) "
                            "VALUES('pipeline',$1,$2,$3,'active')", task_id, goal_id, tenants[0])
         await conn.execute("INSERT INTO chat_workspaces(id,name,tenant_id,project_key) VALUES($1,'mr',$2,$3)",
@@ -731,3 +731,55 @@ async def test_mockup_create_change_revise_approve_and_reread(env):
     assert [e["action"] for e in await events(env, review_id)] == [
         "created", "revision_created", "submitted", "changes_requested", "revising_started", "revision_created",
         "submitted", "approved"]
+
+
+async def test_html_upload_roundtrip_and_retry(env, tmp_path, monkeypatch):
+    from app.services import mockup_review_service as svc
+    roots = svc.asset_roots()
+    monkeypatch.setattr(svc, 'asset_roots', lambda: {**roots, 'uploaded_mockups': tmp_path / 'uploads'})
+    body = dict(title='HTML 목업 등록', filename='목업.html', html='<html><style>body{color:navy}</style><h1>목업</h1></html>',
+                session_id=env.session, idempotency_key=env.key())
+    results = await asyncio.gather(env.post('/html', **body), env.post('/html', **body))
+    assert sorted(r.status_code for r in results) == [200, 201], [r.text for r in results]
+    registered = results[0].json()
+    review_id, revision_id = registered['review_id'], registered['revision_id']
+    assert (await env.get('')).status_code == 200
+    assert review_id in [r['review_id'] for r in (await env.get('')).json()['items']]
+    asset_path = f'/{review_id}/revisions/{revision_id}/assets/html'
+    asset = await env.get(asset_path)
+    assert asset.status_code == 200 and asset.text == body['html']
+    assert asset.headers['content-type'].startswith('text/html')
+    assert 'sandbox;' in asset.headers['content-security-policy']
+    assert (await env.get(asset_path, who='foreign')).status_code == 404
+    assert (await env.get(asset_path, who='nogrant')).status_code == 403
+    assert (await env.post('/html', who='reader', **{**body, 'idempotency_key':env.key()})).status_code == 403
+    assert (await env.post('/html', who='foreign', **{**body, 'idempotency_key':env.key()})).status_code == 404
+    assert (await env.post('/html', **{**body,'html':'<html>changed</html>'})).status_code == 409
+    head = (await env.get(f'/{review_id}')).json()
+    assert head['status'] == 'draft' and head['approved_revision'] is None
+    assert len(list((tmp_path/'uploads').glob('*/*.html'))) == 1
+
+
+async def test_html_upload_rejects_and_cleans_up(env, tmp_path, monkeypatch):
+    from app.services import mockup_review_service as svc
+    roots = svc.asset_roots()
+    store = tmp_path / 'uploads'
+    monkeypatch.setattr(svc, 'asset_roots', lambda: {**roots, 'uploaded_mockups':store})
+    body = dict(title='HTML 목업', filename='file.html', html='<html>ok</html>', session_id=env.session)
+    for patch, status in [({'filename':'../x.html'},422), ({'html':'not html'},422),
+        ({'html':'<html><img src="https://external.invalid/a"></html>'},422),
+        ({'html':'<html><link rel="stylesheet" href="x.css"></html>'},422),
+        ({'html':'<html>'+'가'*800000+'</html>'},413)]:
+        response = await env.post('/html', **{**body,**patch,'idempotency_key':env.key()})
+        assert response.status_code == status, response.text
+    assert not list(store.glob('*'))
+    original = svc.create_revision
+    async def broken(*args, **kwargs):
+        raise RuntimeError('injected revision failure')
+    monkeypatch.setattr(svc, 'create_revision', broken)
+    with pytest.raises(RuntimeError, match='injected'):
+        await env.post('/html', **body, idempotency_key=env.key())
+    assert not list(store.glob('*'))
+    monkeypatch.setattr(svc, 'create_revision', original)
+    response = await env.client.post(f'{BASE}/{env.project}/mockup-reviews/html',json={**body,'idempotency_key':env.key()})
+    assert response.status_code == 401
