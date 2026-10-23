@@ -1,6 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
+# 갱신 소유권·잠금·호출의 수명을 분리한다 (호스트 래퍼와 같은 구조, 같은 helper).
+#   A. prepare — 만료가 임박했을 때만 슬롯 잠금을 잡고 갱신 소유자 하나가 권위 파일을
+#                다시 읽어 컨테이너 안 CLI 로 갱신 → 검증 → 0600 원자 저장한다.
+#   B. call    — 잠금 없이 호출별 컨테이너 HOME 에서 모델을 호출한다. 컨테이너로 복사되는
+#                자격증명에는 refreshToken 이 없어 CLI 가 grant 를 다시 소진할 수 없다.
+#   C. watch   — 호출 중 갱신이 필요하면 helper 가 유일한 소유자로 갱신하고 accessToken 만 민다.
+#   D. reap    — docker exec 클라이언트 PID 만 죽이면 컨테이너 안 모델·도구 프로세스가
+#                남는다(docker daemon 이 별도 프로세스로 실행하기 때문). 그래서 호출별 태그
+#                AADS_CLAUDE_CALL_ID 를 `docker exec -e` 로 심고, 컨테이너 안에서 태그가 붙은
+#                프로세스와 자손만 TERM → KILL 로 회수한다. 다른 세션·컨테이너 전체는 건드리지 않는다.
+# 2026-09-16 실측: 갱신이 필요했던 호출 하나가 모델 호출이 끝날 때까지(6분 48초) 잠금을 쥐어
+# 같은 슬롯의 다른 세션 9개와 신규 채팅창이 응답하지 못했다. 잠금 대기 시간을 줄이거나
+# 잠금을 없애는 것이 아니라, 잠금을 갱신 구간에만 쥐는 것이 해법이다.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTAINER_NAME="${CLAUDE_DOCKER_CONTAINER:-aads-server}"
 CONTAINER_WRAPPER="${CLAUDE_DOCKER_WRAPPER:-/app/scripts/claude-oauth-wrapper.sh}"
 
@@ -9,114 +23,89 @@ CONTAINER_MCP_CONFIG=""
 CREDENTIAL_FILE="${CLAUDE_SLOT_CREDENTIALS_FILE:-}"
 CREDENTIAL_LOCK_FILE="${CLAUDE_SLOT_CREDENTIAL_LOCK_FILE:-}"
 OAUTH_SLOT="${CLAUDE_OAUTH_SLOT:-}"
-# 만료까지 이 시간 안으로 들어오면 배타 잠금을 잡는다 — 갱신이 겹쳐 refresh
-# token 이 서로를 무효화하는 것을 막기 위해서다.
-#
-# 기본값이 6000초(100분)였다. 토큰 수명이 약 8시간이니 **수명의 20%** 구간에서
-# 배타 잠금이 걸린다는 뜻이고, 그동안 같은 슬롯의 다른 호출은 전부 줄을 선다.
-# 2026-09-16 그 구간에 걸린 호출 하나가 6분 48초를 쥐고 있어 신규 채팅창까지
-# 응답하지 못했다. 갱신에 실제로 필요한 것은 몇 초다. 600초면 충분하고,
-# 배타 구간이 수명의 2% 로 줄어든다.
 REFRESH_LOCK_WINDOW_SEC="${CLAUDE_SLOT_REFRESH_LOCK_WINDOW_SEC:-600}"
+REFRESH_LOCK_WAIT_SEC="${CLAUDE_SLOT_REFRESH_LOCK_WAIT_SEC:-30}"
+REFRESH_TIMEOUT_SEC="${CLAUDE_SLOT_REFRESH_TIMEOUT_SEC:-40}"
+REFRESH_RETRY_SEC="${CLAUDE_SLOT_REFRESH_RETRY_SEC:-60}"
+WATCH_BELOW_SEC="${CLAUDE_SLOT_WATCH_BELOW_SEC:-6000}"
+WATCH_INTERVAL_SEC="${CLAUDE_SLOT_WATCH_INTERVAL_SEC:-5}"
+WATCH_STOP_WAIT_SEC="${CLAUDE_SLOT_WATCH_STOP_WAIT_SEC:-15}"
+REAP_GRACE_SEC="${CLAUDE_SLOT_REAP_GRACE_SEC:-5}"
+REAP_KILL_WAIT_SEC="${CLAUDE_SLOT_REAP_KILL_WAIT_SEC:-3}"
+DOCKER_CLEANUP_TIMEOUT_SEC="${CLAUDE_SLOT_DOCKER_CLEANUP_TIMEOUT_SEC:-20}"
+CREDENTIAL_HELPER="${CLAUDE_SLOT_CREDENTIAL_HELPER:-${SCRIPT_DIR}/claude_slot_credential.py}"
 CONTAINER_CREDENTIAL_HOME=""
 # 대화 기록 영속 저장소(컨테이너 안 경로). /root/aads/data/claude-sessions 가
 # 여기에 마운트돼 있어 컨테이너 교체를 넘어 살아남는다.
 CLAUDE_SESSION_STORE="${CLAUDE_SESSION_STORE:-/tmp/.claude-sdk/.claude}"
-LOCK_MODE="exclusive"
-ORIGINAL_CREDENTIAL_DIGEST=""
+STATE_DIR=""
+CHILD_PID=""
+CALL_ID=""
+WATCH_PID=""
+SIGNAL_EXIT=""
 
-validate_credential() {
-    python3 - "$1" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    payload = json.load(handle)
-oauth = payload.get("claudeAiOauth", payload)
-if not isinstance(oauth, dict):
-    raise SystemExit(1)
-if not isinstance(oauth.get("accessToken"), str) or not oauth["accessToken"]:
-    raise SystemExit(1)
-if not isinstance(oauth.get("refreshToken"), str) or not oauth["refreshToken"]:
-    raise SystemExit(1)
-PY
+helper() {
+    python3 "$CREDENTIAL_HELPER" "$@"
 }
 
-credential_requires_exclusive_lock() {
-    if [[ "${CLAUDE_SLOT_FORCE_EXCLUSIVE_LOCK:-0}" == "1" ]]; then
-        return 0
-    fi
-    python3 - "$1" "$REFRESH_LOCK_WINDOW_SEC" <<'PY'
-import json
-import sys
-import time
-
-with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    payload = json.load(handle)
-oauth = payload.get("claudeAiOauth", payload)
-expires_at = oauth.get("expiresAt") if isinstance(oauth, dict) else None
-try:
-    expires_at = float(expires_at)
-    if expires_at > 100_000_000_000:
-        expires_at /= 1000.0
-except (TypeError, ValueError):
-    raise SystemExit(0)
-window = max(0.0, float(sys.argv[2]))
-raise SystemExit(0 if expires_at <= time.time() + window else 1)
-PY
+# watcher 는 함수(helper)가 아니라 python3 를 직접 백그라운드로 띄운다 — 함수를 &로 띄우면
+# WATCH_PID 가 서브셸이 되어 TERM 이 python 에 닿지 않는다.
+# 갱신 도중인 watcher 를 바로 KILL 하면 이미 소진한 grant 를 잃는다. TERM 으로 커밋을 마칠
+# 시간을 상한 안에서 준 뒤에만 KILL 한다.
+stop_watcher() {
+    [[ -n "$WATCH_PID" ]] || return 0
+    kill -TERM "$WATCH_PID" >/dev/null 2>&1
+    local waited=0
+    while kill -0 "$WATCH_PID" 2>/dev/null && (( waited < WATCH_STOP_WAIT_SEC * 10 )); do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    kill -KILL "$WATCH_PID" >/dev/null 2>&1
+    wait "$WATCH_PID" >/dev/null 2>&1
+    WATCH_PID=""
 }
 
-sync_container_credential() {
-    local destination_dir
-    local staged
-    [[ -n "$CONTAINER_CREDENTIAL_HOME" && -n "$CREDENTIAL_FILE" ]] || return 0
-    destination_dir="$(dirname "$CREDENTIAL_FILE")"
-    staged="$(mktemp "${destination_dir}/.credentials.json.XXXXXX.tmp")"
-    if ! docker cp \
-        "${CONTAINER_NAME}:${CONTAINER_CREDENTIAL_HOME}/.claude/.credentials.json" \
-        "$staged" >/dev/null 2>&1; then
-        rm -f -- "$staged"
-        return 0
-    fi
-    chmod 600 "$staged"
-    if ! validate_credential "$staged"; then
-        rm -f -- "$staged"
-        return 0
-    fi
-    if cmp -s "$staged" "$CREDENTIAL_FILE"; then
-        rm -f -- "$staged"
-        return 0
-    fi
-    if [[ "$LOCK_MODE" == "shared" ]]; then
-        exec 8>"${CREDENTIAL_LOCK_FILE}.sync"
-        chmod 600 "${CREDENTIAL_LOCK_FILE}.sync"
-        flock -x 8
-        if [[ "$(sha256sum "$CREDENTIAL_FILE" | awk '{print $1}')" != "$ORIGINAL_CREDENTIAL_DIGEST" ]]; then
-            rm -f -- "$staged"
-            return 0
-        fi
-    fi
-    mv -f -- "$staged" "$CREDENTIAL_FILE"
+# 컨테이너 쪽 정리 호출은 모두 상한이 있다(docker 데몬이 응답하지 않아도 래퍼가 걸리지 않는다).
+docker_cleanup() {
+    timeout -k 2 "$DOCKER_CLEANUP_TIMEOUT_SEC" docker "$@" >/dev/null 2>&1 || true
 }
 
+# 정리 순서: ① 컨테이너 안 호출 트리 회수 → 호스트의 docker exec 클라이언트·자손 회수
+# (helper reap 이 이 순서로 한다) ② 래퍼가 띄운 자식 wait ③ watcher 정지(갱신 중이면 커밋 대기)
+# ④ 컨테이너 임시 HOME·MCP 설정 삭제 ⑤ 호스트 임시 파일 삭제.
 cleanup() {
     local exit_code=$?
     trap - EXIT
     set +e
-    sync_container_credential
+    if [[ -n "$SIGNAL_EXIT" ]]; then
+        exit_code="$SIGNAL_EXIT"
+    fi
+    if [[ -n "$CALL_ID" ]]; then
+        helper reap --call-id "$CALL_ID" --container "$CONTAINER_NAME" \
+            --grace "$REAP_GRACE_SEC" --kill-wait "$REAP_KILL_WAIT_SEC" \
+            --docker-timeout "$DOCKER_CLEANUP_TIMEOUT_SEC" >/dev/null || { [[ "$exit_code" != 0 ]] || exit_code=1; }
+    fi
+    if [[ -n "$CHILD_PID" ]]; then
+        kill -KILL "$CHILD_PID" 2>/dev/null
+        wait "$CHILD_PID" 2>/dev/null
+    fi
+    stop_watcher
     if [[ -n "$CONTAINER_CREDENTIAL_HOME" ]]; then
-        docker exec "$CONTAINER_NAME" sh -lc \
-            "rm -rf '$CONTAINER_CREDENTIAL_HOME'" >/dev/null 2>&1 || true
+        docker_cleanup exec "$CONTAINER_NAME" sh -lc "rm -rf '$CONTAINER_CREDENTIAL_HOME'"
     fi
     if [[ -n "$CONTAINER_MCP_CONFIG" ]]; then
-        docker exec "$CONTAINER_NAME" sh -lc "rm -f '$CONTAINER_MCP_CONFIG'" >/dev/null 2>&1 || true
+        docker_cleanup exec "$CONTAINER_NAME" sh -lc "rm -f '$CONTAINER_MCP_CONFIG'"
     fi
     if [[ -n "$LOCAL_MCP_CONFIG" ]]; then
         rm -f "$LOCAL_MCP_CONFIG" >/dev/null 2>&1 || true
     fi
+    [[ -n "$STATE_DIR" ]] && rm -rf -- "$STATE_DIR"
     exit "$exit_code"
 }
 trap cleanup EXIT
+trap 'SIGNAL_EXIT=143; exit 143' TERM
+trap 'SIGNAL_EXIT=130; exit 130' INT
+trap 'SIGNAL_EXIT=129; exit 129' HUP
 
 args=("$@")
 
@@ -125,45 +114,37 @@ if [[ -n "$CREDENTIAL_FILE" ]]; then
         echo "slot credential file is missing (slot=${OAUTH_SLOT:-unknown})" >&2
         exit 78
     }
-    validate_credential "$CREDENTIAL_FILE" || {
-        echo "slot credential file is incomplete (slot=${OAUTH_SLOT:-unknown})" >&2
+    command -v python3 >/dev/null 2>&1 || {
+        echo "python3 is required for slot credential handling" >&2
         exit 78
     }
-    command -v flock >/dev/null 2>&1 || {
-        echo "flock is required for slot credential serialization" >&2
+    [[ -f "$CREDENTIAL_HELPER" ]] || {
+        echo "slot credential helper is missing: ${CREDENTIAL_HELPER}" >&2
         exit 78
     }
-    CREDENTIAL_LOCK_FILE="${CREDENTIAL_LOCK_FILE:-${CREDENTIAL_FILE}.lock}"
+    CREDENTIAL_LOCK_FILE="${CREDENTIAL_LOCK_FILE:-$(dirname -- "$CREDENTIAL_FILE")/.credentials.lock}"
     mkdir -p -- "$(dirname "$CREDENTIAL_LOCK_FILE")"
-    exec 9>"$CREDENTIAL_LOCK_FILE"
-    chmod 600 "$CREDENTIAL_LOCK_FILE"
-    # 잠금 대기에 반드시 상한을 둔다.
-    #
-    # 2026-09-16 실측: 토큰 갱신이 필요해 배타 잠금을 잡은 호출 하나가 **모델
-    # 호출이 끝날 때까지** 잠금을 쥐고 있었다(6분 48초). 같은 슬롯을 쓰는 다른
-    # 세션 9개가 전부 flock -s 에서 막혀, 신규 채팅창조차 응답하지 못했다.
-    # 무한 대기는 한 호출의 지연을 전체 장애로 키운다.
-    #
-    # CLI owns token refresh, so keep serialization but fail fast to allow
-    # account fallback before the chat first-response watchdog (180s).
-    # Never downgrade/bypass the lock: concurrent refresh can revoke credentials.
-    _excl_wait="${CLAUDE_SLOT_EXCLUSIVE_LOCK_WAIT_SEC:-5}"
-    _shared_wait="${CLAUDE_SLOT_SHARED_LOCK_WAIT_SEC:-5}"
-    if credential_requires_exclusive_lock "$CREDENTIAL_FILE"; then
-        if ! flock -x -w "$_excl_wait" 9; then
-            echo "oauth_slot_busy: slot${OAUTH_SLOT:-?} exclusive credential lock exceeded ${_excl_wait}s" >&2
-            exit 75
-        fi
-    else
-        LOCK_MODE="shared"
-        if ! flock -s -w "$_shared_wait" 9; then
-            echo "oauth_slot_busy: slot${OAUTH_SLOT:-?} shared credential lock exceeded ${_shared_wait}s" >&2
-            exit 75
-        fi
+    STATE_DIR="$(mktemp -d "/tmp/claude-slot-state-${OAUTH_SLOT:-unknown}.XXXXXX")"
+    chmod 700 "$STATE_DIR"
+
+    # 갱신이 필요할 때만 잠금을 잡는다. 대기에는 상한이 있고, 시간 안에 못 잡으면 잠금 없이
+    # 실행하지 않고 oauth_slot_busy(75) 로 끝낸다 — 호출자가 잠시 뒤 다시 시도한다.
+    prepare_args=(
+        prepare --mode docker
+        --cred "$CREDENTIAL_FILE" --lock "$CREDENTIAL_LOCK_FILE" --slot "${OAUTH_SLOT:-unknown}"
+        --state "${STATE_DIR}/state.json" --snapshot "${STATE_DIR}/snapshot.json"
+        --window "$REFRESH_LOCK_WINDOW_SEC" --lock-wait "$REFRESH_LOCK_WAIT_SEC"
+        --refresh-timeout "$REFRESH_TIMEOUT_SEC" --retry-sec "$REFRESH_RETRY_SEC"
+        --watch-below "$WATCH_BELOW_SEC"
+        --container "$CONTAINER_NAME" --container-wrapper "$CONTAINER_WRAPPER"
+    )
+    if [[ "${CLAUDE_SLOT_FORCE_EXCLUSIVE_LOCK:-0}" == "1" ]]; then
+        prepare_args+=(--force)
     fi
-    ORIGINAL_CREDENTIAL_DIGEST="$(sha256sum "$CREDENTIAL_FILE" | awk '{print $1}')"
+    helper "${prepare_args[@]}" || exit $?
 
     CONTAINER_CREDENTIAL_HOME="/tmp/.claude-relay-slot-${OAUTH_SLOT:-unknown}-${BASHPID}-${RANDOM}"
+
     docker exec "$CONTAINER_NAME" sh -lc \
         "umask 077; mkdir -p '$CONTAINER_CREDENTIAL_HOME/.claude'" >/dev/null
 
@@ -188,8 +169,17 @@ if [[ -n "$CREDENTIAL_FILE" ]]; then
          && ln -sfn '$CLAUDE_SESSION_STORE/projects' '$CONTAINER_CREDENTIAL_HOME/.claude/projects'" \
         >/dev/null 2>&1 || echo "[claude-docker-wrapper] WARN: 대화 볼륨 연결 실패 — 이번 호출은 resume 불가" >&2
 
-    docker cp "$CREDENTIAL_FILE" \
+    docker cp "${STATE_DIR}/snapshot.json" \
         "${CONTAINER_NAME}:${CONTAINER_CREDENTIAL_HOME}/.claude/.credentials.json" >/dev/null
+
+    python3 "$CREDENTIAL_HELPER" watch --mode docker \
+        --cred "$CREDENTIAL_FILE" --lock "$CREDENTIAL_LOCK_FILE" \
+        --state "${STATE_DIR}/state.json" --slot "${OAUTH_SLOT:-unknown}" \
+        --container "$CONTAINER_NAME" --container-wrapper "$CONTAINER_WRAPPER" \
+        --push-path "${CONTAINER_CREDENTIAL_HOME}/.claude/.credentials.json" \
+        --window "$REFRESH_LOCK_WINDOW_SEC" --refresh-timeout "$REFRESH_TIMEOUT_SEC" \
+        --retry-sec "$REFRESH_RETRY_SEC" --interval "$WATCH_INTERVAL_SEC" >/dev/null &
+    WATCH_PID=$!
 fi
 
 for ((i = 0; i < ${#args[@]}; i++)); do
@@ -251,7 +241,8 @@ PY
     break
 done
 
-docker_args=(exec -i)
+CALL_ID="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+docker_args=(exec -i -e "AADS_CLAUDE_CALL_ID=${CALL_ID}")
 if [[ -n "$CONTAINER_CREDENTIAL_HOME" ]]; then
     docker_args+=(
         -e "CLAUDE_SLOT_CREDENTIAL_MODE=1"
@@ -263,4 +254,15 @@ elif [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
     docker_args+=(-e "CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}")
 fi
 
-docker "${docker_args[@]}" "$CONTAINER_NAME" "$CONTAINER_WRAPPER" "${args[@]}"
+# 백그라운드 + wait: 포그라운드 자식이 돌고 있으면 bash 는 TERM trap 을 자식이 끝난 뒤에야
+# 실행한다. 취소·타임아웃에서 정리가 건너뛰어지지 않도록 하고, stdin 은 3번 fd 로 넘긴다.
+exec 3<&0
+env "AADS_CLAUDE_CALL_ID=${CALL_ID}" docker "${docker_args[@]}" "$CONTAINER_NAME" "$CONTAINER_WRAPPER" "${args[@]}" <&3 3<&- &
+CHILD_PID=$!
+exec 3<&-
+set +e
+wait "$CHILD_PID"
+status=$?
+set -e
+CHILD_PID=""
+exit "$status"

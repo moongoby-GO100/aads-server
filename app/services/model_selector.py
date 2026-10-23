@@ -2937,10 +2937,14 @@ async def call_stream(
             )
 
         _auth_failed_slots = set()
+        # 갱신 대기(oauth_slot_busy)는 계정 문제가 아니므로 격리·쿨다운 대상이 아니다.
+        # 다만 같은 요청 안에서는 다시 기다리지 않고 다른 계정으로 넘어간다.
+        _busy_slots = set()
+        _fail_state = {"hard": False}
 
         async def _stream_with_slots(_target_model: str) -> AsyncGenerator[Dict[str, Any], None]:
             for _si, _slot in enumerate(_smart_slots):
-                if _slot in _auth_failed_slots:
+                if _slot in _auth_failed_slots or _slot in _busy_slots:
                     continue
                 if _si > 0:
                     logger.info(f"fallback[{_si}/{len(_smart_slots)}]: {_target_model} slot={_slot}")
@@ -2956,6 +2960,11 @@ async def call_stream(
                         if _is_request_rejected_error(_err_msg):
                             yield _request_rejected_event(_err_msg)
                             return
+                        if _is_oauth_slot_busy_error(_err_msg):
+                            _busy_slots.add(_slot)
+                            logger.warning("oauth_slot_busy_skip: slot=%s — 쿨다운·격리 없음", _slot)
+                            break
+                        _fail_state["hard"] = True
                         if any(k in _err_msg.lower() for k in ("429", "rate", "limit", "overloaded", "quota")):
                             _reset_secs = _parse_quota_reset_seconds(_err_msg)
                             _mark_slot_cooldown(_slot, duration_override=_reset_secs)
@@ -2993,7 +3002,7 @@ async def call_stream(
 
                 await _relay_clear_aads_session_for_oauth_fallback(session_id)
 
-                if _slot == _ACCOUNT_SLOTS[0] and not _is_cli_auth_error(_err_msg):
+                if _slot == _ACCOUNT_SLOTS[0] and not _suppresses_sdk_fallback(_err_msg):
                     _err = False
                     logger.info(f"relay_failed: SDK for {_target_model}[{_si}]")
                     async for event in _iter_agent_sdk_fallback(
@@ -3016,7 +3025,7 @@ async def call_stream(
                 _fb_seq.append((_dg, _sl))
 
         for _fi, (_fm, _fs) in enumerate(_fb_seq):
-            if _fs in _auth_failed_slots:
+            if _fs in _auth_failed_slots or _fs in _busy_slots:
                 continue
             if _fi > 0:
                 logger.info(f"fallback[{_fi}/{len(_fb_seq)}]: {_fm} slot={_fs}")
@@ -3034,6 +3043,11 @@ async def call_stream(
                         yield _request_rejected_event(_err_msg)
                         return
                     _err_lower = _err_msg.lower()
+                    if _is_oauth_slot_busy_error(_err_msg):
+                        _busy_slots.add(_fs)
+                        logger.warning("oauth_slot_busy_skip: slot=%s — 쿨다운·격리 없음", _fs)
+                        break
+                    _fail_state["hard"] = True
                     # 429/한도/크레딧 오류 → 복구 시간 파싱 후 쿨다운 등록
                     if any(k in _err_lower for k in ("429", "rate", "limit", "overloaded", "quota")):
                         _reset_secs = _parse_quota_reset_seconds(_err_msg)
@@ -3098,7 +3112,7 @@ async def call_stream(
             await _relay_clear_aads_session_for_oauth_fallback(session_id)
 
             # Tier2: Agent SDK (첫 계정에서만 — 컨테이너 고정 토큰)
-            if _fs == _ACCOUNT_SLOTS[0] and not _is_cli_auth_error(_err_msg):
+            if _fs == _ACCOUNT_SLOTS[0] and not _suppresses_sdk_fallback(_err_msg):
                 _err = False
                 logger.info(f"relay_failed: SDK for {_fm}[{_fi}]")
                 async for event in _iter_agent_sdk_fallback(
@@ -3120,7 +3134,26 @@ async def call_stream(
         #
         # 조용히 죽는 것이 가장 나쁘다. 대표님께 알리고, 사용자에게도 왜
         # 멈췄는지 보여준다.
-        await _alert_no_slots_left(_ACCOUNT_SLOTS, _slot_records, _quota_blocked, session_id)
+        _busy_only = bool(_busy_slots) and not _fail_state["hard"]
+        await _alert_no_slots_left(
+            _ACCOUNT_SLOTS, _slot_records, _quota_blocked, session_id,
+            busy_slots=_busy_slots, busy_only=_busy_only,
+        )
+
+        # 갱신 잠금 대기는 제공자 장애가 아니다. 장애 기록·동급 폴백 전에 종료한다.
+        if _busy_only:
+            yield {"type": "delta", "content": _OAUTH_SLOT_BUSY_ONLY_NOTICE}
+            yield {
+                "type": "interrupted", "content": "oauth_slot_busy",
+                "terminal": True, "reason": "oauth_slot_busy",
+                "error_type": "oauth_slot_busy",
+            }
+            yield {
+                "type": "error", "content": "oauth_slot_busy",
+                "terminal": True, "stream_status": "interrupted",
+                "reason": "oauth_slot_busy", "error_type": "oauth_slot_busy",
+            }
+            return
 
         # Tier3: LiteLLM 유료 경로 비활성화 (CEO 지시) → Codex CLI/samegrade 폴백으로 직행
         logger.info(f"litellm_direct_fallback_skipped: {_original_model} — paid route disabled, proceeding to samegrade")
@@ -3201,7 +3234,10 @@ async def call_stream(
                 logger.error(f"last_resort_sonnet_failed: {e}")
 
         if not _samegrade_success:
-            yield {"type": "delta", "content": "\n\n⚠️ _전체 LLM 장애 — 잠시 후 다시 시도해주세요._\n\n"}
+            yield {
+                "type": "delta",
+                "content": "\n\n⚠️ _전체 LLM 장애 — 잠시 후 다시 시도해주세요._\n\n",
+            }
             yield {
                 "type": "interrupted",
                 "content": "All LLM providers failed",
@@ -4501,11 +4537,53 @@ _CODEX_RETRYABLE_ERROR_MARKERS = _RELAY_RETRYABLE_ERROR_MARKERS
 _CODEX_NON_RETRYABLE_ERROR_MARKERS = _RELAY_NON_RETRYABLE_ERROR_MARKERS
 
 
+def _is_oauth_slot_busy_error(error_content: str) -> bool:
+    """같은 슬롯의 자격증명 갱신이 진행 중이라 이번 호출이 잠깐 비켜선 경우.
+
+    인증 실패도 한도 소진도 아니다. 계정은 멀쩡하고 갱신이 끝나면 곧 쓸 수 있다.
+    그래서 슬롯을 격리하지 않고 쿨다운·비활성화도 걸지 않는다.
+    """
+    return "oauth_slot_busy" in str(error_content or "").lower()
+
+
 def _is_cli_auth_error(error_content: str) -> bool:
+    if _is_oauth_slot_busy_error(error_content):
+        return False
     return (
-        any(marker in str(error_content) for marker in ("oauth_slot_unavailable", "oauth_slot_busy"))
+        "oauth_slot_unavailable" in str(error_content)
         or _classify_claude_auth_error(error_content) != "error"
     )
+
+
+def _suppresses_sdk_fallback(error_content: str) -> bool:
+    """이 오류 뒤에는 컨테이너 고정 토큰(SDK) 경로로 우회하지 않는다.
+
+    인증 오류는 원래 우회하지 않았고, 갱신 대기(busy)도 같은 계정 문제라 같은 취급이다.
+    """
+    return _is_cli_auth_error(error_content) or _is_oauth_slot_busy_error(error_content)
+
+
+def _oauth_slot_busy_retry_delays() -> tuple:
+    raw = os.environ.get("AADS_OAUTH_SLOT_BUSY_RETRY_DELAYS", "3,6")
+    delays = []
+    for part in str(raw).split(","):
+        try:
+            value = float(part.strip())
+        except ValueError:
+            continue
+        if value >= 0:
+            delays.append(min(value, 30.0))
+    return tuple(delays[:4])
+
+
+_OAUTH_SLOT_BUSY_NOTICE = (
+    "⏳ 계정 인증 갱신이 진행 중이라 잠시 기다립니다 "
+    "(한도 소진·인증 만료가 아닌 일시 대기입니다)."
+)
+_OAUTH_SLOT_BUSY_ONLY_NOTICE = (
+    "\n\n⚠️ _Claude 계정 인증 갱신 대기로 응답이 지연되고 있습니다 — "
+    "사용 가능한 계정의 갱신이 끝난 뒤 잠시 후 다시 시도해주세요._\n\n"
+)
 
 
 # ── 스트림 스톨 감시 (2026-10-02, 세션 9102c970) ───────────────────────────
@@ -4735,21 +4813,27 @@ async def _iter_agent_sdk_fallback(
 _NO_SLOT_ALERT_AT: Dict[str, float] = {}
 
 
-async def _alert_no_slots_left(slots, slot_records, quota_blocked, session_id) -> None:
+async def _alert_no_slots_left(
+    slots, slot_records, quota_blocked, session_id, busy_slots=None, busy_only=False
+) -> None:
     """쓸 계정이 하나도 남지 않았다는 사실을 알린다.
 
     폴백이 0개가 되는 상황은 드물지만, 드물기 때문에 아무도 대비하지 않는다.
     그러면 사용자는 "응답을 못 한다" 만 보고 이유를 알 수 없다.
     """
     now = _time_mod.time()
-    if now - _NO_SLOT_ALERT_AT.get("last", 0.0) < 900:
+    # 갱신 대기 경보가 진짜 "계정 없음" 경보의 중복 억제 시간을 잡아먹지 않게 키를 나눈다.
+    alert_key = "busy" if busy_only else "last"
+    if now - _NO_SLOT_ALERT_AT.get(alert_key, 0.0) < 900:
         return
-    _NO_SLOT_ALERT_AT["last"] = now
+    _NO_SLOT_ALERT_AT[alert_key] = now
 
     detail = []
     for slot in slots or []:
         label = (slot_records.get(slot) or {}).get("label") or ("slot%s" % slot)
-        if slot in (quota_blocked or {}):
+        if slot in (busy_slots or ()):
+            detail.append("%s 인증 갱신 대기(일시 혼잡)" % label)
+        elif slot in (quota_blocked or {}):
             detail.append("%s 주간 한도 소진" % label)
         elif not _is_slot_available(slot):
             detail.append("%s 쿨다운" % label)
@@ -4758,6 +4842,16 @@ async def _alert_no_slots_left(slots, slot_records, quota_blocked, session_id) -
     try:
         from app.services import ohvis_alert
 
+        if busy_only:
+            await ohvis_alert.notify(
+                "Claude 계정 인증 갱신 대기로 응답이 지연됩니다",
+                "사용 가능한 슬롯의 인증 갱신 대기로 이번 요청을 종료했습니다 — %s. "
+                "세션=%s. 갱신 대기 슬롯은 격리하지 않았습니다."
+                % (", ".join(detail) or "후보 없음", str(session_id or "-")[:8]),
+                severity=ohvis_alert.WARNING,
+                category="oauth_slot", project="AADS", dedupe_minutes=30,
+            )
+            return
         await ohvis_alert.notify(
             "쓸 수 있는 Claude 계정이 없습니다",
             "모든 슬롯을 시도했지만 응답하지 못했습니다 — %s. 세션=%s. "
@@ -4905,6 +4999,8 @@ async def _stream_cli_relay(
     partial_content = ""
     network_attempt_idx = 0
     auth_retry_used = False
+    busy_attempt_idx = 0
+    busy_delays = _oauth_slot_busy_retry_delays()
 
     while True:
         last_error: Optional[str] = None
@@ -4939,11 +5035,30 @@ async def _stream_cli_relay(
         # A refresh-capable CLI normally renews during the first call.  Some
         # versions surface the initial 401 before persisting the new token, so
         # allow exactly one immediate same-slot retry before account fallback.
+        # 갱신 대기는 인증 재시도·네트워크 재시도 예산을 쓰지 않는 별도의 짧은 예산으로 기다린다.
+        if _is_oauth_slot_busy_error(last_error) and busy_attempt_idx < len(busy_delays):
+            busy_delay = busy_delays[busy_attempt_idx]
+            busy_attempt_idx += 1
+            logger.warning(
+                "cli_relay_oauth_slot_busy_wait: model=%s session=%s slot=%s attempt=%s/%s",
+                model, (session_id or "default")[:8], oauth_slot or "auto",
+                busy_attempt_idx, len(busy_delays),
+            )
+            yield {
+                "type": "retry_progress",
+                "attempt": busy_attempt_idx,
+                "max_attempts": len(busy_delays),
+                "reason": "oauth_slot_busy",
+                "content": _OAUTH_SLOT_BUSY_NOTICE,
+            }
+            await asyncio.sleep(busy_delay)
+            continue
+
         if (
             _is_cli_auth_error(last_error) and not auth_retry_used
             and not any(
                 marker in last_error
-                for marker in ("oauth_slot_unavailable", "oauth_slot_busy", "subscription_inactive")
+                for marker in ("oauth_slot_unavailable", "subscription_inactive")
             )
         ):
             auth_retry_used = True
@@ -4965,7 +5080,10 @@ async def _stream_cli_relay(
             network_attempt_idx >= len(_CLI_RETRY_DELAYS)
             or not _is_cli_retryable_error(last_error)
         ):
-            yield {"type": "error", "content": last_error, "auth_retry_used": auth_retry_used}
+            error_event = {"type": "error", "content": last_error, "auth_retry_used": auth_retry_used}
+            if _is_oauth_slot_busy_error(last_error):
+                error_event["error_type"] = "oauth_slot_busy"
+            yield error_event
             return
 
         retry_delay = _CLI_RETRY_DELAYS[network_attempt_idx]

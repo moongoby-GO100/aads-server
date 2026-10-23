@@ -63,9 +63,16 @@ def is_subscription_inactive_text(value: Any) -> bool:
     return any(marker in text for marker in _SUBSCRIPTION_INACTIVE_MARKERS)
 
 
+def is_slot_busy_text(value: Any) -> bool:
+    """A call yielded to an in-progress credential renewal (not an auth failure)."""
+    return "oauth_slot_busy" in str(value or "").lower()
+
+
 def classify_auth_error(value: Any) -> str:
     """Classify an auth failure without retaining provider error text."""
     lowered = str(value or "").lower()
+    if "oauth_slot_busy" in lowered:
+        return "error"
     if any(marker in lowered for marker in _SUBSCRIPTION_INACTIVE_MARKERS):
         return SUBSCRIPTION_INACTIVE
     if "revoked" in lowered or "reused" in lowered:

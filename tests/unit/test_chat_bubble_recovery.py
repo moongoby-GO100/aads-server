@@ -181,15 +181,14 @@ async def test_slot_preflight_only_rejects_proven_auth_unavailability(monkeypatc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reason", ["oauth_slot_unavailable", "oauth_slot_busy"])
-async def test_unavailable_slot_immediately_returns_to_account_fallback(monkeypatch, reason):
+async def test_unavailable_slot_immediately_returns_to_account_fallback(monkeypatch):
     from app.services import model_selector as models
 
     calls = []
 
     async def failed_once(*args, **kwargs):
         calls.append(kwargs)
-        yield {"type": "error", "content": reason}
+        yield {"type": "error", "content": "oauth_slot_unavailable"}
 
     monkeypatch.setattr(models, "_stream_cli_relay_once", failed_once)
     monkeypatch.setattr(models, "_byok_owner_context", AsyncMock(return_value={"exempt": True}))
@@ -198,4 +197,42 @@ async def test_unavailable_slot_immediately_returns_to_account_fallback(monkeypa
     )]
     assert len(calls) == 1
     assert events[-1]["type"] == "error"
-    assert models._is_cli_auth_error(reason)  # Also suppresses stale SDK fallback.
+    assert models._is_cli_auth_error("oauth_slot_unavailable")  # Also suppresses stale SDK fallback.
+
+
+@pytest.mark.asyncio
+async def test_busy_slot_waits_in_its_own_bounded_budget_and_is_not_an_auth_error(monkeypatch):
+    from app.services import model_selector as models
+
+    calls = []
+
+    async def always_busy(*args, **kwargs):
+        calls.append(kwargs)
+        yield {"type": "error", "content": "oauth_slot_busy: slot2 credential renewal in progress (waited 30s)"}
+
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(models, "_stream_cli_relay_once", always_busy)
+    monkeypatch.setattr(models, "_byok_owner_context", AsyncMock(return_value={"exempt": True}))
+    monkeypatch.setattr(models.asyncio, "sleep", fake_sleep)
+    monkeypatch.setenv("AADS_OAUTH_SLOT_BUSY_RETRY_DELAYS", "1,2")
+    events = [event async for event in models._stream_cli_relay(
+        "claude-opus-5", "system", [{"role": "user", "content": "ping"}], oauth_slot="2",
+    )]
+
+    assert len(calls) == 3  # first try + two bounded busy waits
+    assert sleeps == [1.0, 2.0]
+    assert [e.get("reason") for e in events if e["type"] == "retry_progress"] == ["oauth_slot_busy"] * 2
+    assert all("force_oauth_refresh" not in call for call in calls)  # auth retry budget untouched
+    assert events[-1]["type"] == "error"
+    assert events[-1]["error_type"] == "oauth_slot_busy"
+    assert events[-1]["auth_retry_used"] is False
+    busy_text = events[-1]["content"]
+    assert not models._is_cli_auth_error(busy_text)
+    assert models._is_oauth_slot_busy_error(busy_text)
+    assert models._suppresses_sdk_fallback(busy_text)
+    for notice in (e["content"] for e in events if e["type"] == "retry_progress"):
+        assert "한도 소진" in notice and "아닌" in notice
