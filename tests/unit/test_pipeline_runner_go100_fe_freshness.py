@@ -60,8 +60,21 @@ def test_go100_frontend_uses_canonical_bluegreen_script():
 def test_go100_frontend_change_detection_kept():
     block = _go100_block(_read_script())
 
-    assert 'diff "$_pre_sha" HEAD --name-only -- frontend/' in block
+    assert 'diff "$_pre_sha" "$current_sha" --name-only -- frontend/' in block
     assert 'log "  SKIP go100-frontend (no frontend changes since $_pre_sha)"' in block
+
+
+def test_go100_frontend_change_detection_never_reads_runtime_head():
+    """런타임 repo HEAD 기준 diff 는 갈라진 로컬 커밋 때문에 백엔드 전용 커밋도 프론트 변경으로 오판한다."""
+    block = _go100_block(_read_script())
+    start = block.index('local _fe_changed=""')
+    end = block.index('if [ -n "$_fe_changed" ]; then')
+    detect = block[start:end]
+
+    assert "kis-autotrade-v4 diff" not in detect
+    assert "HEAD" not in detect
+    assert '"$worktree_dir" diff "$_pre_sha" "$current_sha"' in detect
+    assert '"$worktree_dir" diff "${current_sha}^" "$current_sha"' in detect
 
 
 def test_freshness_gate_only_runs_when_frontend_changed():
@@ -386,3 +399,92 @@ def test_prune_keeps_latest_n_and_leaves_no_ghost_worktrees(wt_fn_file, dirty_ru
     wts = [line.split(" ", 1)[1] for line in listed.splitlines() if line.startswith("worktree ")]
     assert sorted(wts) == sorted([str(runtime), *map(str, made[-2:])])
     assert "prunable" not in listed
+
+
+# ── 3) 변경 감지 동작: 런타임 HEAD 가 갈라져도 current_sha 만 본다 (AADS-RUNNER-GO100-FE-CHANGED-DIFF-TARGET-20261023) ──
+
+
+def _detect_snippet() -> str:
+    block = _go100_block(_read_script())
+    start = block.index('local _fe_changed=""')
+    end = block.index('if [ -n "$_fe_changed" ]; then')
+    return block[start:end]
+
+
+def _dgit(repo: Path, *args: str) -> str:
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=env
+    ).stdout.strip()
+
+
+def _commit(repo: Path, rel: str, text: str) -> str:
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    _dgit(repo, "add", rel)
+    _dgit(repo, "commit", "-q", "-m", f"touch {rel}")
+    return _dgit(repo, "rev-parse", "HEAD")
+
+
+def _run_detect(worktree: Path, pre_sha: str, current_sha: str) -> str:
+    script = f"""
+set -eo pipefail
+f() {{
+    local worktree_dir="{worktree}" _pre_sha="{pre_sha}" current_sha="{current_sha}"
+{_detect_snippet()}
+    printf '%s' "$_fe_changed"
+}}
+f
+"""
+    return subprocess.run(
+        ["bash", "-c", script], check=True, capture_output=True, text=True
+    ).stdout
+
+
+@pytest.fixture()
+def diverged_repos(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git 미설치 환경 — 동작 테스트 생략")
+    runtime = tmp_path / "runtime"
+    subprocess.run(["git", "init", "-q", str(runtime)], check=True)
+    _commit(runtime, "frontend/app.tsx", "v0")
+    _commit(runtime, "backend/a.py", "v0")
+    worktree = tmp_path / "wt"
+    subprocess.run(["git", "clone", "-q", str(runtime), str(worktree)], check=True)
+    # 런타임 repo 는 origin/main 과 갈라진 로컬 커밋(프론트 변경 포함)을 들고 있다
+    _commit(runtime, "frontend/app.tsx", "runtime-local-1")
+    _commit(runtime, "frontend/page.tsx", "runtime-local-2")
+    return runtime, worktree
+
+
+def test_backend_only_commit_yields_empty_fe_changed_when_runtime_head_diverged(diverged_repos):
+    runtime, worktree = diverged_repos
+    current = _commit(worktree, "backend/b.py", "backend-only")
+    pre = _dgit(worktree, "rev-parse", f"{current}^")
+
+    # 이전 구현(런타임 HEAD 기준)은 이 케이스에서 프론트 변경을 보고했다
+    assert _dgit(runtime, "diff", "--name-only", pre, "HEAD", "--", "frontend/") != ""
+    assert _run_detect(worktree, pre, current) == ""
+
+
+def test_frontend_commit_is_still_detected_from_current_sha(diverged_repos):
+    _runtime, worktree = diverged_repos
+    current = _commit(worktree, "frontend/new.tsx", "fe")
+    pre = _dgit(worktree, "rev-parse", f"{current}^")
+
+    assert _run_detect(worktree, pre, current) == "frontend/new.tsx"
+
+
+def test_empty_pre_sha_fallback_uses_current_sha_parent(diverged_repos):
+    _runtime, worktree = diverged_repos
+    backend = _commit(worktree, "backend/c.py", "backend-only")
+    assert _run_detect(worktree, "", backend) == ""
+    frontend = _commit(worktree, "frontend/other.tsx", "fe")
+    assert _run_detect(worktree, "", frontend) == "frontend/other.tsx"

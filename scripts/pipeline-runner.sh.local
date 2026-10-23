@@ -7976,13 +7976,16 @@ deploy_job() {
             # GO100 Frontend: npm build → restart (빌드 중 기존 서비스 유지)
             local _fe_dir="/root/kis-autotrade-v4/frontend"
             if [ -d "$_fe_dir" ]; then
-                # FIX (P0-A): 커밋 전 SHA 기준으로 frontend 변경 감지 (git diff HEAD는 커밋 후 항상 빈값)
+                # 변경 감지는 방금 push 한 current_sha 기준으로만 한다. 런타임 repo HEAD 는 origin/main 과
+                # 갈라진 로컬 커밋을 품고 있어 (예: 314 behind / 21 ahead) 백엔드 전용 커밋에서도
+                # frontend/ 변경으로 오판 → 장중 프론트 게이트 차단(go100-frontend:deploy_gate_blocked).
+                # current_sha 객체는 worktree_dir 에 반드시 있으므로 런타임 repo 가 아니라 거기서 계산한다
+                # (AADS-RUNNER-GO100-FE-CHANGED-DIFF-TARGET-20261023).
                 local _fe_changed=""
                 if [[ -n "$_pre_sha" ]]; then
-                    _fe_changed=$(git -C /root/kis-autotrade-v4 diff "$_pre_sha" HEAD --name-only -- frontend/ 2>/dev/null) || true
+                    _fe_changed=$(git -C "$worktree_dir" diff "$_pre_sha" "$current_sha" --name-only -- frontend/ 2>/dev/null) || true
                 else
-                    # FALLBACK: _pre_sha 비었을 때 HEAD~1..HEAD로 비교 (원 버그 재발 방지)
-                    _fe_changed=$(git -C /root/kis-autotrade-v4 diff HEAD~1 HEAD --name-only -- frontend/ 2>/dev/null) || true
+                    _fe_changed=$(git -C "$worktree_dir" diff "${current_sha}^" "$current_sha" --name-only -- frontend/ 2>/dev/null) || true
                 fi
                 if [ -n "$_fe_changed" ]; then
                     # 정본 무중단 경로: 비활성 슬롯 staging 빌드 → 산출물 검증 → health → nginx 전환.
