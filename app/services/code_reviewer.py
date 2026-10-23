@@ -90,8 +90,8 @@ _SCOPE_DECLARATION_RE = re.compile(
 )
 _SCOPE_PATH_RE = re.compile(
     r"(?:^|[\s,`'\"(])"
-    r"((?:/?[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+|"
-    r"[A-Za-z0-9_.-]+\.(?:py|pyi|js|jsx|ts|tsx|sql|md|json|ya?ml|toml|sh|html|css))"
+    r"((?:/?[\w.-]+/)+[\w.-]+|"
+    r"[\w.-]+\.(?:py|pyi|js|jsx|ts|tsx|sql|md|json|ya?ml|toml|sh|html|css))"
 )
 _EXCLUDED_REVIEW_MODELS_RE = re.compile(
     r"^\s*\[REVIEW_EXCLUDE_MODELS:\s*([^\]]+)\]\s*$", re.MULTILINE
