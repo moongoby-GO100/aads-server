@@ -1665,6 +1665,8 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("mcp_health_check_error", error=str(e))
         scheduler.add_job(_mcp_health_check_job, "interval", minutes=1, id="mcp_health_check", max_instances=1, coalesce=True)
+        from app.services.review_noresp_alert import register_scheduler_job as _register_review_noresp_alert
+        _register_review_noresp_alert(scheduler)
 
         # OHVIS Loop System: 활성 루프 폴링 (30초 주기)
         async def _run_loop_tick():
