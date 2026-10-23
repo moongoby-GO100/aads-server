@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import time
+import unicodedata
 from collections import Counter
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -707,7 +708,7 @@ def _extract_instruction_paths(instruction: str) -> set[str]:
 
 def _normalize_scope_path(path: str) -> str:
     """Convert an explicitly authorized path to the repo-relative form used by git."""
-    normalized = path.strip().rstrip(".,:;)").lstrip("./")
+    normalized = unicodedata.normalize("NFC", path).strip().rstrip(".,:;)").lstrip("./")
     for repo_marker in (
         "aads-server/",
         "aads-dashboard/",
@@ -727,7 +728,7 @@ def _extract_explicit_scope_paths(instruction: str) -> set[str]:
     paths: set[str] = set()
     in_scope_block = False
 
-    for line in (instruction or "").splitlines():
+    for line in unicodedata.normalize("NFC", instruction or "").splitlines():
         declaration = _SCOPE_DECLARATION_RE.match(line)
         if declaration:
             in_scope_block = True
@@ -1570,7 +1571,11 @@ def _precheck_preservation_gate(
     if allowed_paths and changed_paths:
         out_of_scope = [
             path for path in changed_paths
-            if not any(path == allowed or path.startswith(f"{allowed}/") for allowed in allowed_paths)
+            if not any(
+                unicodedata.normalize("NFC", path) == allowed
+                or unicodedata.normalize("NFC", path).startswith(f"{allowed}/")
+                for allowed in allowed_paths
+            )
         ]
         if out_of_scope:
             feedback["allowed_paths"] = sorted(allowed_paths)
