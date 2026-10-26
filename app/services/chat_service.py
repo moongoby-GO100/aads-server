@@ -13421,6 +13421,10 @@ async def send_message_stream(
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
     SSE 청크: data: {"type": "delta"|"thinking"|"tool_use"|"tool_result"|"done"|"error", ...}
     """
+    _reconciliation_request_override = model_override
+    _reconciliation_intent_override = intent_override
+    from app.services.llm_model_reconciliation import observe_compilation
+
     response_mode = _normalize_response_mode(response_mode)
     if response_mode == _RESPONSE_MODE_FAST and _requires_quality_response_mode(content, intent_override):
         response_mode = _RESPONSE_MODE_QUALITY
@@ -14039,8 +14043,9 @@ async def send_message_stream(
 
             # 세션 누적 비용 조회 (프론트엔드 표시용)
             _session_cost_row = await conn.fetchrow(
-                "SELECT cost_total, message_count FROM chat_sessions WHERE id = $1", sid
+                "SELECT cost_total, message_count, current_model FROM chat_sessions WHERE id = $1", sid
             )
+            _reconciliation_session_selected = _session_cost_row["current_model"] if _session_cost_row else None
             _session_cost = float(_session_cost_row["cost_total"] or 0) if _session_cost_row else 0
             _session_turns = int(_session_cost_row["message_count"] or 0) if _session_cost_row else 0
 
@@ -14902,6 +14907,12 @@ async def send_message_stream(
                         )
                         _sdk_system_prompt = _compiled_sdk_prompt.system_prompt
                         _sdk_prov = _compiled_sdk_prompt.provenance
+                        _sdk_prov["model_reconciliation"] = observe_compilation(
+                            request_override=_reconciliation_request_override,
+                            session_selected=_reconciliation_session_selected,
+                            compiled_model=_DEFAULT_PREMIUM_CLAUDE,
+                            intent_override=_reconciliation_intent_override,
+                        )
                         logger.info(
                             f"[PROMPT_COMPILER_SDK] compiled assets={len(_sdk_prov.get('applied_assets') or [])} "
                             f"layers={_sdk_prov.get('layers_applied')} chars={_sdk_prov.get('system_prompt_chars')}"
@@ -15079,6 +15090,12 @@ async def send_message_stream(
             except Exception:
                 pass
             _prov = _compiled_prompt.provenance
+            _prov["model_reconciliation"] = observe_compilation(
+                request_override=_reconciliation_request_override,
+                session_selected=_reconciliation_session_selected,
+                compiled_model=_execution_model_id,
+                intent_override=_reconciliation_intent_override,
+            )
             _current_binding = _current_turn_binding_status(
                 raw_messages,
                 _saved_user_message_id,
