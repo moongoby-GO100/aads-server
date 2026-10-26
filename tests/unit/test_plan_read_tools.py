@@ -83,3 +83,36 @@ async def test_probe_transaction_is_readonly(monkeypatch):
     assert await read.execute('plan_database_status', {}) == {'read_probe': 1, 'read_only': 'on'}
     assert conn.execute.await_count == 2
     assert conn.fetchrow.await_args.args == ("SELECT 1 AS read_probe, current_setting('transaction_read_only') AS read_only",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [ValueError("sensitive"), OSError("sensitive"), UnicodeError("sensitive")])
+async def test_bridge_returns_safe_read_error(monkeypatch, error):
+    from mcp_servers import aads_tools_bridge as bridge
+    monkeypatch.setattr(bridge, "_ensure_db", AsyncMock())
+    monkeypatch.setattr(bridge, "_session_in_plan_mode", AsyncMock(return_value=True))
+    monkeypatch.setattr(read, "execute", AsyncMock(side_effect=error))
+    result = await bridge._call_tool("plan_read_source", {"path": "app/main.py"})
+    assert json.loads(result)["error"] == "plan_read_denied"
+    assert "sensitive" not in result
+    assert not guard.plan_mode_active()
+
+
+@pytest.mark.parametrize("path", ["outside/main.py", "app/main.json", "app//main.py", "app/./main.py"])
+def test_source_rejects_unapproved_roots_and_types(path):
+    with pytest.raises(ValueError):
+        read.read_source(path)
+
+
+def test_source_rejects_oversize_and_hardlink(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(read, "ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    source = tmp_path / "app/main.py"
+    source.write_text("x" * 131073)
+    with pytest.raises(ValueError):
+        read.read_source("app/main.py")
+    source.write_text("x = 1")
+    os.link(source, tmp_path / "app/alias.py")
+    with pytest.raises(ValueError):
+        read.read_source("app/alias.py")

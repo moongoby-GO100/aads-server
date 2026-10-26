@@ -229,7 +229,12 @@ async def _call_tool(name: str, params: dict) -> str:
             return blocked
         from mcp_servers import plan_read_tools
         if name in plan_read_tools.NAMES:
-            return json.dumps(await plan_read_tools.execute(name, params), ensure_ascii=False)
+            try:
+                result = await plan_read_tools.execute(name, params)
+            except (ValueError, OSError, UnicodeError):
+                # Do not return filesystem paths or raw exception content.
+                return json.dumps({"error": "plan_read_denied", "message": "조회 인자 또는 파일 접근이 허용되지 않습니다."}, ensure_ascii=False)
+            return json.dumps(result, ensure_ascii=False)
         return await _call_tool_unguarded(name, params)
     finally:
         plan_mode_guard.reset_response_mode(plan_token)
