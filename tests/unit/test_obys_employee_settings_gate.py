@@ -186,6 +186,40 @@ class TestVerifierRecognisesEmployeePortal:
         verdict, basis = _load_verifier().judge("staff", _staff_result(error_text=text))
         assert verdict == "FAIL" and "기초설정" in basis
 
+    @pytest.mark.parametrize("viewport", ["pc", "mobile"])
+    def test_transient_settings_failure_fails_employee(self, viewport):
+        result = _staff_result()
+        result[viewport] = {**result[viewport], "settings_failure_seen": True}
+        verdict, basis = _load_verifier().judge("staff", result)
+        assert verdict == "FAIL" and "기초설정" in basis
+
+    @pytest.mark.skipif(NODE is None, reason="node 미설치 런타임")
+    def test_observer_remembers_removed_toast_without_storing_text(self):
+        observer = _load_verifier().SETTINGS_OBSERVER
+        harness = """
+const assert = require('node:assert/strict');
+global.window = {};
+global.document = {getElementById: () => null};
+const target = {nodeType: 1, closest: () => target};
+let notify;
+global.MutationObserver = class {
+    constructor(callback) { notify = callback; }
+    observe() {}
+};
+""" + observer + """
+assert.equal(window.__obysSettingsFailureSeen, false);
+notify([{target, oldValue: null, addedNodes: [{textContent: '정상 안내'}]}]);
+assert.equal(window.__obysSettingsFailureSeen, false);
+notify([{target: {nodeType: 1, closest: () => null}, oldValue: null,
+         addedNodes: [{textContent: '기초설정 불러오기 실패: script source'}]}]);
+assert.equal(window.__obysSettingsFailureSeen, false);
+notify([{target, oldValue: null, addedNodes: [{textContent: '기초설정 불러오기 실패: secret'}]}]);
+notify([{target, oldValue: null, addedNodes: [{textContent: ''}]}]);
+assert.deepEqual(window, {__obysSettingsFailureSeen: true});
+"""
+        proc = subprocess.run([NODE, "-e", harness], capture_output=True, text=True, timeout=10)
+        assert proc.returncode == 0, proc.stderr
+
     def test_no_portal_and_no_onboarding_still_fails(self):
         verdict, _ = _load_verifier().judge("staff", _staff_result(portal=False, entries=()))
         assert verdict == "FAIL"
