@@ -1,0 +1,45 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>목업 목록과 HTML 등록</title><style>*{box-sizing:border-box}body{margin:0;background:#f2f5fa;color:#17233b;font:16px/1.6 system-ui,sans-serif}main{max-width:1000px;margin:40px auto;padding:24px}.eyebrow{color:#4167dc;font-size:13px;font-weight:700}h1{font-size:32px;letter-spacing:-1px;margin:6px 0}p{color:#64718a}nav,.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:24px 0}button,.pill{border:1px solid #d5dcec;border-radius:10px;background:white;padding:12px 18px;color:#283a59;font:inherit}.primary{background:#315de1;color:white;border-color:#315de1}.layout{display:grid;grid-template-columns:1fr 300px;gap:24px}.card,aside{background:white;border:1px solid #e0e6f0;border-radius:18px;padding:24px}.list{display:grid;gap:12px}.row{border:1px solid #dce3ef;border-radius:12px;padding:16px}.row strong{display:block}.tag{font-size:12px;border-radius:20px;background:#eef2ff;color:#3c5cbd;padding:3px 9px}.meta{font-size:13px;color:#68768c;margin-top:8px}.steps{padding-left:20px}.notice{padding:14px;background:#f2f6ff;border-radius:10px;font-size:14px}.empty{border:1px dashed #b4c3df;border-radius:12px;padding:20px;margin-top:16px}@media(max-width:640px){main{margin:0;padding:18px}.layout{grid-template-columns:1fr}h1{font-size:25px}.card,aside{padding:18px}button{min-height:44px}}
+input,select{font:inherit;padding:10px;border:1px solid #d5dcec;border-radius:10px;max-width:100%;min-height:44px}button,a{touch-action:manipulation}button{cursor:pointer;min-height:44px}a{color:#315de1;overflow-wrap:anywhere}.layout>*{min-width:0}.row{overflow-wrap:anywhere}label{display:grid;gap:5px;margin:12px 0}input[type=search]{width:100%}[hidden]{display:none!important}:focus-visible{outline:3px solid #4167dc;outline-offset:3px}</style>
+<main><span class="eyebrow">AADS · 채팅 목업 · 시뮬레이션</span><h1>목업을 한 곳에서 보고, 바로 엽니다</h1><p>독립 실행 시안입니다. 운영 데이터 조회·업로드·로그인은 수행하지 않습니다.</p>
+<nav><button class="primary" id="chat">목업</button><button id="all">전체 리스트보기</button></nav>
+<div class="layout"><section class="card" id="library"><h2 tabindex="-1" id="heading">목업 보관함</h2><div class="toolbar"><button id="upload">HTML 목업 등록</button></div>
+<div class="notice">모든 목록 항목은 예시 또는 이 탭에서만 보관되는 등록 시뮬레이션입니다. 제목은 새 탭에서 열립니다.</div>
+<label>프로젝트<select id="project"><option value="">전체 프로젝트</option><option>AADS</option><option>DEMO</option></select></label>
+<label>상태<select id="status"><option value="">전체 상태</option><option>초안</option><option>검토 중</option><option>승인됨</option></select></label>
+<label>제목·프로젝트 검색<input id="search" type="search" placeholder="검색어 입력"></label>
+<div id="message" role="status" aria-live="polite"></div><div class="list" id="list"></div>
+<div id="error" class="empty" hidden>목록 조회 오류 시뮬레이션입니다. <button id="retry">다시 시도</button></div>
+<div id="expired" class="empty" hidden>세션 만료 시뮬레이션입니다. <button id="return">로그인 복귀 시뮬레이션</button></div>
+<form id="form" hidden><h2>HTML 등록 시뮬레이션</h2><label>등록 프로젝트<select id="uploadProject"><option>AADS</option><option>DEMO</option></select></label><label>HTML 파일 (UTF-8 · 2MB 이하)<input id="file" type="file" accept=".html,text/html" required></label><button class="primary" type="submit">등록 시뮬레이션</button><p id="feedback" role="alert"></p></form></section>
+<aside><h2>등록에서 확인까지</h2><ol class="steps"><li>프로젝트를 선택합니다.</li><li>HTML 파일을 선택합니다.</li><li>등록 시뮬레이션을 실행합니다.</li><li>목록의 제목을 눌러 새 탭을 확인합니다.</li></ol><div class="notice">등록 HTML은 스크립트·폼·외부 리소스가 차단된 미리보기로 엽니다. 운영 승인과 무관합니다.</div><h3>상태 체험</h3><div class="toolbar"><button id="fail">조회 오류</button><button id="expire">세션 만료</button><button id="empty">빈 목록</button><button id="restore">예시 복원</button></div></aside></div></main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const urls=[];
+function preview(html){
+ const policy="default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox";
+ const doc='<!doctype html><html lang="ko"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+policy+'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>등록 HTML 미리보기 · 시뮬레이션</title><body><p>등록 시뮬레이션 미리보기 · 운영 데이터 아님</p>'+html;
+ const url=URL.createObjectURL(new Blob([doc],{type:'text/html;charset=utf-8'}));urls.push(url);return url;
+}
+const examples=[{title:'목업 목록과 HTML 등록',project:'AADS',status:'초안',kind:'예시 데이터',url:preview('<h1>목업 목록과 HTML 등록</h1><p>목록에서 새 탭 열기를 확인하는 예시입니다.</p>')},{title:'채팅 화면 개선 시안',project:'DEMO',status:'검토 중',kind:'예시 데이터',url:preview('<h1>채팅 화면 개선 시안</h1><p>예시 데이터입니다.</p>')}];
+let rows=[...examples],state='ready';
+function render(){
+ $('error').hidden=state!=='error';$('expired').hidden=state!=='expired';$('list').replaceChildren();
+ if(state!=='ready'){ $('message').textContent='';return; }
+ const q=$('search').value.trim().toLowerCase();
+ const visible=rows.filter(r=>(!$('project').value||r.project===$('project').value)&&(!$('status').value||r.status===$('status').value)&&(!q||(r.title+' '+r.project).toLowerCase().includes(q)));
+ $('message').textContent=visible.length?visible.length+'개 항목 · 시뮬레이션':'등록된 목업이 없습니다. 검색·필터를 변경하거나 HTML 목업 등록으로 시작하세요.';
+ for(const r of visible){const article=document.createElement('article');article.className='row';const a=document.createElement('a');a.textContent=r.title+' ↗';a.href=r.url;a.target='_blank';a.rel='noopener noreferrer';const meta=document.createElement('div');meta.className='meta';meta.textContent=[r.project,r.status,r.kind].join(' · ');article.append(a,meta);$('list').append(article);}
+}
+function openList(){state='ready';render();$('heading').focus();$('library').scrollIntoView({block:'start'});}
+$('chat').onclick=openList;$('all').onclick=()=>{for(const id of ['project','status','search'])$(id).value='';openList();};
+for(const id of ['project','status','search'])$(id).addEventListener('input',render);
+$('upload').onclick=()=>{if(state==='expired')return; $('form').hidden=false;$('file').focus();};
+$('fail').onclick=()=>{state='error';render();};$('retry').onclick=openList;
+$('expire').onclick=()=>{state='expired';$('form').hidden=true;render();};$('return').onclick=openList;
+$('empty').onclick=()=>{rows=[];openList();};$('restore').onclick=()=>{rows=[...examples];openList();};
+$('form').onsubmit=async e=>{e.preventDefault();if(state==='expired')return;const f=$('file').files[0];
+ if(!f||!f.name.toLowerCase().endsWith('.html')||f.size===0||f.size>2*1024*1024){$('feedback').textContent='空 파일을 제외한 2MB 이하 .html 파일을 선택하세요.'.replace('空','빈');return;}
+ try{const html=new TextDecoder('utf-8',{fatal:true}).decode(await f.arrayBuffer());if(!/<(?:!doctype|html|head|body|h[1-6]|div|p)(?:\s|>)/i.test(html))throw new Error('html');rows.unshift({title:f.name,project:$('uploadProject').value,status:'초안',kind:'등록 시뮬레이션 · 이 탭 한정',url:preview(html)});$('project').value='';$('status').value='';$('search').value='';$('feedback').textContent='등록 시뮬레이션 완료 · 운영 업로드 없음';openList();}catch{$('feedback').textContent='UTF-8 HTML을 읽지 못했습니다. 파일을 확인한 뒤 다시 등록하세요.';}};
+window.addEventListener('pagehide',()=>urls.forEach(u=>URL.revokeObjectURL(u)));render();
+</script></html>

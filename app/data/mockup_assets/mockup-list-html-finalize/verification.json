@@ -1,0 +1,19 @@
+{
+  "review_id": "d1ee66ea-b0db-4536-a0f8-c7bd89dd6beb",
+  "last_known_revision_id": "687b3eac-0f6c-44f1-a6a9-a09e4296c39a",
+  "latest_verified": false,
+  "registered": false,
+  "submitted": false,
+  "html": {
+    "file": "목업-목록과-HTML-등록.html",
+    "sha256": "e77ad46ef834c61d018028b67bf86c6cd7ae267768edcfa830f5f8556e69f415",
+    "byte_size": 8249
+  },
+  "blockers": [
+    "authenticated preflight and review GET: network Operation not permitted",
+    "DB jobs, dirty ledger and canonical doc_refs not verified",
+    "Playwright invocation failed: MODULE_NOT_FOUND playwright",
+    "no screenshots, asset API verification, revision registration or submit completed"
+  ],
+  "preserved_original_sha256": "76222632070ae4374acd8106b90d001fd2777486d493f9e2540f333781a00d27"
+}
