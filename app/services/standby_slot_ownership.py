@@ -98,12 +98,21 @@ ON CONFLICT (execution_id) DO UPDATE
        released_at = NULL
 """
 
-# 이번 관측에 없는 열린 기록은 풀린 것이다(완료, 또는 그 슬롯이 다시 active).
+# 표시용 LIMIT 밖의 실행도 살아 있을 수 있다. 해제 여부는 표본이 아닌 DB 리스로 판정한다.
 _RELEASE_SQL = """
 UPDATE deploy_standby_holds
    SET released_at = NOW()
  WHERE released_at IS NULL
-   AND NOT (execution_id = ANY($1::uuid[]))
+   AND NOT EXISTS (
+       SELECT 1 FROM chat_turn_executions te
+        WHERE te.id = deploy_standby_holds.execution_id
+          AND te.status IN ('running', 'retrying')
+          AND te.completed_at IS NULL
+          AND te.owner_instance IS NOT NULL
+          AND te.owner_instance <> $1
+          AND te.lease_expires_at IS NOT NULL
+          AND te.lease_expires_at > NOW()
+   )
 """
 
 _OPEN_HOLDS_SQL = """
@@ -212,7 +221,7 @@ async def record_standby_holds(
             hold.get("held_seconds"),
         )
     released = await conn.execute(
-        _RELEASE_SQL, [uuid.UUID(h["execution_id"]) for h in holds],
+        _RELEASE_SQL, active_instance,
     )
     return {
         "active_instance": active_instance,

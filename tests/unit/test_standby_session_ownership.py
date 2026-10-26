@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
@@ -227,7 +228,40 @@ async def test_long_standby_hold_is_recorded(active_is_blue):
     assert upserts == [(EXECUTION, SESSION, "aads-server-green", "aads-server", 1600)]
     assert any("CREATE TABLE IF NOT EXISTS deploy_standby_holds" in s for s, _ in conn.executed)
     released = [a for s, a in conn.executed if "UPDATE deploy_standby_holds" in s]
-    assert released == [([uuid.UUID(EXECUTION)],)]
+    assert released == [("aads-server",)]
+
+
+def test_release_preserves_live_holds_beyond_observation_limit():
+    # Execute the release predicate over more rows than the monitor displays.
+    # SQLite supports this SQL; only PostgreSQL's clock function is substituted.
+    with sqlite3.connect(":memory:") as db:
+        db.create_function("NOW", 0, lambda: "2026-10-26 00:00:00")
+        db.executescript("""
+            CREATE TABLE deploy_standby_holds (execution_id TEXT, released_at TEXT);
+            CREATE TABLE chat_turn_executions (
+                id TEXT, status TEXT, completed_at TEXT,
+                owner_instance TEXT, lease_expires_at TEXT
+            );
+        """)
+        live_ids = [str(uuid.uuid4()) for _ in range(sso._LIST_LIMIT + 1)]
+        rows = [(eid, "running", None, "green", "2026-10-27") for eid in live_ids]
+        rows += [
+            ("retry", "retrying", None, "green", "2026-10-27"),
+            ("done", "completed", "2026-10-25", "green", "2026-10-27"),
+            ("expired", "running", None, "green", "2026-10-25"),
+            ("active", "running", None, "blue", "2026-10-27"),
+            ("unowned", "running", None, None, "2026-10-27"),
+            ("no-lease", "running", None, "green", None),
+        ]
+        db.executemany("INSERT INTO chat_turn_executions VALUES (?, ?, ?, ?, ?)", rows)
+        db.executemany("INSERT INTO deploy_standby_holds VALUES (?, NULL)",
+                       [(r[0],) for r in rows] + [("missing",)])
+        db.execute(sso._RELEASE_SQL, ("blue",))
+        open_ids = {r[0] for r in db.execute(
+            "SELECT execution_id FROM deploy_standby_holds WHERE released_at IS NULL"
+        )}
+        assert open_ids == set(live_ids) | {"retry"}
+        assert db.execute("SELECT COUNT(*) FROM chat_turn_executions").fetchone()[0] == len(rows)
 
 
 async def test_unknown_active_slot_records_nothing():
