@@ -64,7 +64,7 @@ async def _ensure_db():
             logger.info("DB pool initialized")
     except Exception as e:
         logger.warning(f"DB pool init failed (non-fatal): {e}")
-        _db_initialized = True
+        # A failed initialization must be retried by the next DB call.
 
 
 async def _heartbeat(interval: float = 30.0):
@@ -187,7 +187,7 @@ async def _session_in_plan_mode(session_id: str) -> bool:
     조회가 실패하면 plan 으로 본다(fail-closed) — 읽기 도구는 계속 통과하고 부작용 도구만 막힌다.
     컬럼이 아직 없는 DB 에는 plan 턴이 있을 수 없으므로 그때만 plan 이 아니다.
     """
-    if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() == "plan":
+    if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() not in {"", "quality", "fast"}:
         return True
     if not session_id:
         return False
@@ -204,7 +204,7 @@ async def _session_in_plan_mode(session_id: str) -> bool:
                 """,
                 session_id,
             )
-        return mode == "plan"
+        return str(mode or "").strip().lower() not in {"", "quality", "fast"}
     except Exception as exc:
         from mcp_servers import plan_mode_guard
 
@@ -217,7 +217,9 @@ async def _session_in_plan_mode(session_id: str) -> bool:
 async def _call_tool(name: str, params: dict) -> str:
     from mcp_servers import plan_mode_guard
 
-    await _ensure_db()
+    # Source inspection must work even when container DNS is unavailable.
+    if name != "plan_read_source":
+        await _ensure_db()
     _, session_id = _bind_aads_chat_session(name, params)
     plan_token = plan_mode_guard.set_response_mode(
         plan_mode_guard.RESPONSE_MODE_PLAN if await _session_in_plan_mode(session_id) else ""
@@ -227,6 +229,14 @@ async def _call_tool(name: str, params: dict) -> str:
         blocked = plan_mode_guard.check(TOOL_NAME_MAP.get(name, name), params)
         if blocked is not None:
             return blocked
+        from mcp_servers import plan_read_tools
+        if name in plan_read_tools.NAMES:
+            try:
+                result = await plan_read_tools.execute(name, params)
+            except (ValueError, OSError, UnicodeError):
+                # Do not return filesystem paths or raw exception content.
+                return json.dumps({"error": "plan_read_denied", "message": "조회 인자 또는 파일 접근이 허용되지 않습니다."}, ensure_ascii=False)
+            return json.dumps(result, ensure_ascii=False)
         return await _call_tool_unguarded(name, params)
     finally:
         plan_mode_guard.reset_response_mode(plan_token)
@@ -338,16 +348,21 @@ async def list_tools() -> list[types.Tool]:
 
     끄는 법: AADS_TOOL_RESIDENT_MODE=0 (기본값). 기존 동작 그대로다.
     """
-    defs = _get_tool_definitions()
+    from mcp_servers import plan_mode_guard, plan_read_tools
+
+    defs = [*_get_tool_definitions(), *plan_read_tools.DEFINITIONS]
     tools = []
     for td in defs:
         tools.append(types.Tool(
             name=td["name"],
             description=td.get("description", ""),
             inputSchema=td.get("input_schema", {"type": "object", "properties": {}}),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=td["name"] in plan_read_tools.VERIFIED_READ_ONLY_TOOLS,
+            ),
         ))
 
-    if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() == "plan":
+    if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() not in {"", "quality", "fast"}:
         from mcp_servers import plan_mode_guard
 
         # 계획만 모드로 띄운 브리지는 읽기 후보가 아닌 도구를 아예 내보내지 않는다(차단은 _call_tool 이 한다).
@@ -431,7 +446,6 @@ async def main():
         try:
             logger.warning(f"MCP server starting (attempt {attempt}/{max_retries})")
             async with stdio_server() as (read_stream, write_stream):
-                await _ensure_db()
                 heartbeat_task = asyncio.create_task(_heartbeat(30.0))
                 try:
                     await server.run(

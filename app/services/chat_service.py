@@ -916,8 +916,8 @@ def _expected_execution_write_epoch(
 
 
 def _normalize_response_mode(response_mode: Optional[str]) -> str:
-    normalized = (response_mode or _RESPONSE_MODE_QUALITY).strip().lower()
-    return normalized if normalized in _VALID_RESPONSE_MODES else _RESPONSE_MODE_QUALITY
+    normalized = str(response_mode or "").strip().lower() or _RESPONSE_MODE_QUALITY
+    return normalized if normalized in _VALID_RESPONSE_MODES else _RESPONSE_MODE_PLAN
 
 
 _DETAILED_RESPONSE_TRIGGERS = (
