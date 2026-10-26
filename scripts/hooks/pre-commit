@@ -318,7 +318,8 @@ if [ -f "scripts/pre_commit_test_map.py" ]; then
     exit 1
   fi
 else
-  echo -e "  ${YELLOW}⚠️ scripts/pre_commit_test_map.py 없음 — 단위 테스트 게이트 건너뜀${NC}"
+  echo -e "${RED}커밋 차단: scripts/pre_commit_test_map.py 없음 — 단위 테스트 게이트 실행 불가${NC}"
+  exit 1
 fi
 
 

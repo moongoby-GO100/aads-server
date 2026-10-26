@@ -10,6 +10,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
+
+import pytest
 import sys
 from pathlib import Path
 
@@ -134,3 +138,51 @@ def test_pre_commit_hook_calls_gate_map_outside_python_block_and_blocks():
     assert 'echo "$STAGED" | python3 scripts/pre_commit_test_map.py --run' in hook
     step3 = hook[hook.index("python3 scripts/pre_commit_test_map.py --run"):]
     assert 'GATE_RC" -eq 2' in step3 and 'GATE_RC" -ne 0' in step3
+
+
+def _run_hook_test_step(tmp_path, paths, runner_rc, *, module_present=True):
+    """실제 Step 3을 임시 디렉터리에서 실행한다. Git/index와 운영 훅은 건드리지 않는다."""
+    hook = (_REPO / "scripts/hooks/pre-commit").read_text(encoding="utf-8")
+    step = hook[hook.index("if [ -f \"scripts/pre_commit_test_map.py\" ]; then"):
+                hook.index("# ── R-AUTH 위반 감지")]
+    if module_present:
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        # 실제 선택/실행 로직을 사용하되 테스트 실행기만 주입한다.
+        (scripts / "pre_commit_test_map.py").write_text(
+            "import os, runpy, sys\n"
+            f"gate = runpy.run_path({str(_REPO / 'scripts/pre_commit_test_map.py')!r})\n"
+            "sys.exit(gate['run'](sys.stdin.read().splitlines(), "
+            "runner=lambda tests: (int(os.environ['GATE_TEST_RC']), 'test runner')))\n",
+            encoding="utf-8",
+        )
+    return subprocess.run(
+        ["bash", "-c", step], cwd=tmp_path, capture_output=True, text=True,
+        env={**os.environ, "STAGED": "\n".join(paths), "GATE_TEST_RC": str(runner_rc)},
+        timeout=10,
+    )
+
+
+@pytest.mark.parametrize("runner_rc", [0, 1, 2])
+@pytest.mark.parametrize("path,bundle", [
+    ("app/services/pipeline_runner_service.py", "runner"),
+    ("scripts/pipeline-runner.sh", "runner"),
+    ("deploy.sh", "deploy"),
+    ("README.md", None),
+])
+def test_actual_hook_test_step_selection_and_blocking(tmp_path, path, bundle, runner_rc):
+    proc = _run_hook_test_step(tmp_path, [path], runner_rc)
+    assert proc.returncode == (1 if bundle and runner_rc else 0), proc.stdout + proc.stderr
+    if bundle:
+        assert f"단위 테스트 [{bundle}] 실행" in proc.stdout
+        if runner_rc:
+            assert "커밋 차단" in proc.stdout
+    else:
+        assert "테스트 대응 파일 미변경" in proc.stdout
+
+
+def test_actual_hook_missing_mapping_module_blocks(tmp_path):
+    proc = _run_hook_test_step(tmp_path, ["scripts/pipeline-runner.sh"], 0, module_present=False)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "pre_commit_test_map.py" in proc.stdout
+    assert "커밋 차단" in proc.stdout
