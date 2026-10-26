@@ -356,11 +356,7 @@ async def list_tools() -> list[types.Tool]:
             description=td.get("description", ""),
             inputSchema=td.get("input_schema", {"type": "object", "properties": {}}),
             annotations=types.ToolAnnotations(
-                # Audit execution paths, not just the historical plan allowlist.
-                readOnlyHint=td["name"] in {
-                    "plan_read_source", "plan_database_status", "handover_search",
-                    "canonical_document_lookup", "pipeline_runner_status",
-                },
+                readOnlyHint=td["name"] in plan_read_tools.VERIFIED_READ_ONLY_TOOLS,
             ),
         ))
 

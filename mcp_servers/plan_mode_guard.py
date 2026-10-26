@@ -62,7 +62,7 @@ def reset_response_mode(token: Token) -> None:
 #    fact_check*, search_crawl_match, read_github_file, read_uploaded_file, google_sheets_read)
 #    와 DB 에 직접 접속하는 list_project_databases.
 _READ_ONLY_TOOLS = frozenset({
-    "plan_read_source", "plan_database_status",
+    "plan_read_source", "plan_database_status", "plan_database_schema",
     "health_check", "server_status", "get_all_service_status",
     "dashboard_query", "task_history", "cost_report", "tool_metrics",
     "llm_response_metrics", "tool_layer_audit",

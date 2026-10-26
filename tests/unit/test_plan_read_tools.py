@@ -116,3 +116,34 @@ def test_source_rejects_oversize_and_hardlink(tmp_path, monkeypatch):
     os.link(source, tmp_path / "app/alias.py")
     with pytest.raises(ValueError):
         read.read_source("app/alias.py")
+
+
+@pytest.mark.asyncio
+async def test_schema_parameter_binding_and_readonly(monkeypatch):
+    from app.core import db_pool
+    class Context:
+        def __init__(self, value): self.value = value
+        async def __aenter__(self): return self.value
+        async def __aexit__(self, *args): return False
+    class Connection:
+        def transaction(self, **kwargs):
+            assert kwargs == {"readonly": True}
+            return Context(self)
+        execute = AsyncMock()
+        fetch = AsyncMock(return_value=[{"column_name": "id", "data_type": "uuid", "is_nullable": "NO"}])
+    conn = Connection()
+    class Pool:
+        def acquire(self): return Context(conn)
+    monkeypatch.setattr(db_pool, "get_pool", lambda: Pool())
+    result = await read.execute("plan_database_schema", {"table": "project_handover_entries"})
+    assert result["columns"][0]["column_name"] == "id"
+    assert conn.fetch.await_args.args[1] == "project_handover_entries"
+    assert "table_name = $1" in conn.fetch.await_args.args[0]
+    for params in ({"table": "x; DELETE FROM x"}, {"table": "x", "sql": "SELECT 1"}, {"table": "pg_catalog.pg_authid"}):
+        with pytest.raises(ValueError):
+            await read.execute("plan_database_schema", params)
+    assert conn.fetch.await_count == 1
+
+
+def test_verified_read_metadata_is_guarded():
+    assert read.VERIFIED_READ_ONLY_TOOLS <= guard._READ_ONLY_TOOLS

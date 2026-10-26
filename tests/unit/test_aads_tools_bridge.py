@@ -151,7 +151,7 @@ async def test_bridge_plan_catalog_without_api_guard(monkeypatch):
     monkeypatch.setattr(bridge, "_get_tool_definitions", lambda: [
         {"name": "pipeline_runner_status"}, {"name": "run_remote_command"},
     ])
-    assert [tool.name for tool in await bridge.list_tools()] == ["pipeline_runner_status", "plan_read_source", "plan_database_status"]
+    assert {tool.name for tool in await bridge.list_tools()} == {"pipeline_runner_status", "plan_read_source", "plan_database_status", "plan_database_schema"}
 
 
 @pytest.mark.asyncio
