@@ -1953,6 +1953,7 @@ async def get_current_user(
         _normalize_email(email) == _normalize_email(ADMIN_EMAIL)
     )
     current_user = {
+        'auth_type': 'human_session',
         'user_id': payload.get('sub'),
         'email': email,
         'is_admin': is_admin_principal,

@@ -11,7 +11,7 @@ TENANT = "00000000-0000-0000-0000-000000000001"
 
 
 def context(role="member"):
-    return {"tenant": {"id": TENANT}, "user": {"id": "user-1"}, "membership": {"role": role}}
+    return {"tenant": {"id": TENANT}, "user": {"id": "user-1", "auth_type": "human_session"}, "membership": {"role": role, "status": "active"}}
 
 
 class GrantConnection:
@@ -250,3 +250,160 @@ def test_legacy_goal_document_link_validates_identity_and_hash(monkeypatch, tmp_
         asyncio.run(docs.link_legacy_goal_document("AADS", "prd", body, context("admin")))
     assert error.value.detail == "legacy_document_identity_mismatch"
     assert conn.writes == []
+
+
+@pytest.mark.parametrize("user,status", [("system:pipeline-runner", "active"), ("user-1", "removed")])
+def test_approval_rejects_nonhuman_or_removed_before_writes(monkeypatch, user, status):
+    conn = StubConnection()
+    monkeypatch.setattr(docs, "get_pool", lambda: conn)
+    ctx = context("admin")
+    ctx["user"]["id"] = user
+    ctx["membership"]["status"] = status
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(docs.approve_document("AADS", "prd", docs.DecisionInput(
+            revision_id="00000000-0000-0000-0000-000000000002", expected_generation=1), ctx))
+    assert error.value.status_code == 403
+    assert conn.writes == []
+
+
+def test_human_approval_and_duplicate_audit(monkeypatch):
+    from uuid import UUID
+    rid = UUID("00000000-0000-0000-0000-000000000002")
+    class Conn(StubConnection):
+        approved = None
+        async def fetchrow(self, sql, *args):
+            return {"id": "head-1", "generation": 1, "latest_revision_id": rid,
+                    "approved_revision_id": self.approved}
+        async def execute(self, sql, *args):
+            self.writes.append((sql, args))
+            if sql.startswith("UPDATE"):
+                self.approved = rid
+    conn = Conn()
+    monkeypatch.setattr(docs, "get_pool", lambda: conn)
+    body = docs.DecisionInput(revision_id=rid, expected_generation=1)
+    assert asyncio.run(docs.approve_document("AADS", "prd", body, context("admin")))["idempotent"] is False
+    assert conn.writes[-1][1][-1] == "user-1"
+    assert asyncio.run(docs.approve_document("AADS", "prd", body, context("admin")))["idempotent"] is True
+    assert len(conn.writes) == 2
+
+
+@pytest.mark.parametrize("tenant", [TENANT, "00000000-0000-0000-0000-000000000099"])
+def test_approval_denies_missing_or_cross_tenant_grant(monkeypatch, tenant):
+    class Conn(StubConnection):
+        async def fetchval(self, sql, *args):
+            assert args[:3] == (tenant, "AADS", "user-1")
+            assert args[3] == ["approve"]
+            return False
+    conn = Conn()
+    monkeypatch.setattr(docs, "get_pool", lambda: conn)
+    ctx = context()
+    ctx["tenant"]["id"] = tenant
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(docs.approve_document("AADS", "prd", docs.DecisionInput(
+            revision_id="00000000-0000-0000-0000-000000000002", expected_generation=1), ctx))
+    assert error.value.status_code == 403
+    assert conn.writes == []
+
+
+def test_lookup_recovers_after_database_failure():
+    from app.services.canonical_document_tools import lookup_documents
+    class Conn(StubConnection):
+        fail = True
+        async def fetchrow(self, sql, *args):
+            if self.fail:
+                raise RuntimeError("temporary database failure")
+            return None
+    conn = Conn()
+    kwargs = dict(tenant_id=TENANT, inp={"project": "AADS", "document_key": "prd"}, pool=conn)
+    with pytest.raises(RuntimeError):
+        asyncio.run(lookup_documents(**kwargs))
+    conn.fail = False
+    assert asyncio.run(lookup_documents(**kwargs))["registered"] is False
+    assert conn.writes == []
+
+
+@pytest.mark.parametrize("user", [
+    {"user_id": "primary", "id": "other", "auth_type": "human_session"},
+    {"user_id": "primary", "auth_type": "human_session"},
+])
+def test_approver_identity_matches_authorization(user):
+    ctx = context()
+    ctx["user"] = user
+    docs._require_human_approver(ctx)
+    conn = GrantConnection(True)
+    assert asyncio.run(docs._authorize(conn, ctx, "AADS", "approve"))[1] == "primary"
+    assert conn.args[2] == "primary"
+
+
+@pytest.mark.parametrize("membership", [None, {}, {"role": "owner"}, {"status": "removed"}])
+def test_missing_or_inactive_membership_fails_closed(membership):
+    ctx = context()
+    if membership is None:
+        ctx.pop("membership")
+    else:
+        ctx["membership"] = membership
+    with pytest.raises(HTTPException) as exc:
+        docs._require_human_approver(ctx)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("auth_type", [None, "service_token", "pipeline_runner", "handover_key"])
+def test_nonhuman_auth_rejected_without_system_prefix(auth_type):
+    ctx = context("owner")
+    ctx["user"] = {"user_id": "ordinary-looking-id", "auth_type": auth_type}
+    with pytest.raises(HTTPException) as exc:
+        docs._require_human_approver(ctx)
+    assert exc.value.detail == "human_login_required"
+
+
+def test_get_document_card_reports_read_only_capability(monkeypatch):
+    from uuid import UUID
+    rid = UUID("00000000-0000-0000-0000-000000000002")
+    class Conn(StubConnection):
+        async def fetchrow(self, sql, *args):
+            if "project_document_heads" in sql:
+                return {"id": "head", "tenant_id": TENANT, "document_key": "prd",
+                        "generation": 2, "latest_revision_id": rid, "approved_revision_id": None}
+            return {"id": rid, "revision": 2, "version": "1.0.1", "title": "설계"}
+        async def fetchval(self, sql, *args):
+            if "project_document_grants" in sql:
+                return "read" in args[3]
+            return None
+    monkeypatch.setattr(docs, "get_pool", lambda: Conn())
+    result = asyncio.run(docs.get_document("AADS", "prd", False, context()))
+    assert result["approval_card"]["can_approve"] is False
+    result = asyncio.run(docs.get_document("AADS", "prd", False, context("owner")))
+    assert result["approval_card"]["can_approve"] is True
+
+
+def test_audit_failure_rolls_back_then_human_can_retry(monkeypatch):
+    from contextlib import asynccontextmanager
+    from uuid import UUID
+    rid = UUID("00000000-0000-0000-0000-000000000002")
+    class Conn(StubConnection):
+        approved = None
+        fail_audit = True
+        @asynccontextmanager
+        async def transaction(self):
+            before = self.approved
+            try:
+                yield self
+            except Exception:
+                self.approved = before
+                raise
+        async def fetchrow(self, sql, *args):
+            return {"id": "head", "generation": 1, "latest_revision_id": rid,
+                    "approved_revision_id": self.approved}
+        async def execute(self, sql, *args):
+            if sql.startswith("UPDATE"):
+                self.approved = rid
+            elif self.fail_audit:
+                raise RuntimeError("audit unavailable")
+    conn = Conn()
+    monkeypatch.setattr(docs, "get_pool", lambda: conn)
+    body = docs.DecisionInput(revision_id=rid, expected_generation=1)
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        asyncio.run(docs.approve_document("AADS", "prd", body, context("owner")))
+    assert conn.approved is None
+    conn.fail_audit = False
+    assert asyncio.run(docs.approve_document("AADS", "prd", body, context("owner")))["idempotent"] is False

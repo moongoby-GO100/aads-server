@@ -43,6 +43,15 @@ def _scope(context: dict) -> tuple[str, str, bool]:
     return tenant, uid, elevated
 
 
+def _require_human_approver(context: dict) -> None:
+    # Use the same identity resolution as project authorization and audit.
+    _, actor, _ = _scope({**context, "membership": context.get("membership") or {}})
+    if context.get("user", {}).get("auth_type") != "human_session" or actor.startswith("system:"):
+        raise HTTPException(403, "human_login_required")
+    if (context.get("membership") or {}).get("status") != "active":
+        raise HTTPException(403, "active_membership_required")
+
+
 def _project(project_key: str) -> str:
     value = project_key.upper()
     if not PROJECT.fullmatch(value):
@@ -288,7 +297,20 @@ async def get_document(project_key: str, document_key: str, approved_only: bool 
             "SELECT action FROM project_document_events WHERE revision_id=$1 "
             "AND action IN ('review','approved','archived') ORDER BY id DESC LIMIT 1", revision_id,
         ) if revision_id else None
-        return {"document": dict(head), "revision": dict(row) if row else None,
+        from app.services.canonical_document_tools import approval_card
+        card = None
+        if row and not approved_only:
+            can_approve = False
+            try:
+                _require_human_approver(context)
+                await _authorize(conn, context, project, "approve")
+                can_approve = True
+            except HTTPException as exc:
+                if exc.status_code != 403:
+                    raise
+            card = approval_card(head, {**dict(row), "status": status or "draft"}, project,
+                                 can_approve=can_approve)
+        return {"approval_card": card, "document": dict(head), "revision": dict(row) if row else None,
                 "status": status or ("draft" if row else "missing"),
                 "authoritative": bool(row and revision_id == head["approved_revision_id"])}
 
@@ -376,6 +398,7 @@ class DecisionInput(BaseModel):
 async def approve_document(project_key: str, document_key: str, body: DecisionInput, context: dict = WRITE):
     project = _project(project_key)
     async with get_pool().acquire() as conn, conn.transaction():
+        _require_human_approver(context)
         tenant, actor = await _authorize(conn, context, project, "approve")
         head = await _head(conn, tenant, project, document_key, lock=True)
         if not head:

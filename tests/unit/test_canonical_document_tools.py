@@ -99,7 +99,7 @@ class FakePool:
 
 
 def _head(generation=0, approved=None):
-    return {"id": HEAD_ID, "document_key": "ovis-spec", "kind": "spec", "title": "t",
+    return {"id": HEAD_ID, "tenant_id": TENANT, "document_key": "ovis-spec", "kind": "spec", "title": "t",
             "generation": generation, "latest_revision_id": REV_ID if generation else None,
             "approved_revision_id": approved}
 
@@ -261,7 +261,8 @@ def test_register_never_calls_approve_and_leaves_approved_revision_untouched(mon
 def test_tool_sources_do_not_reference_approve_paths():
     for path in ("app/services/canonical_document_tools.py",):
         src = (_REPO / path).read_text(encoding="utf-8")
-        assert "approve_document(" not in src and "/approve\"" not in src
+        assert "approve_document(" not in src
+        assert "httpx" not in src and "requests.post" not in src
     executor = inspect.getsource(__import__("app.services.tool_executor", fromlist=["ToolExecutor"]).ToolExecutor)
     for fn in ("_canonical_document_register", "_canonical_document_lookup"):
         body = executor.split(f"async def {fn}")[1].split("    async def ")[0]
@@ -397,3 +398,14 @@ def test_chat_tool_entrypoint_has_migration_and_rollback():
     mig = (_REPO / "migrations" / "20261003_canonical_gate_events_chat_tool.sql").read_text(encoding="utf-8")
     down = (_REPO / "migrations" / "rollback" / "20261003_canonical_gate_events_chat_tool.down.sql").read_text(encoding="utf-8")
     assert "'chat_tool'" in mig and "'chat_tool'" in down and "DELETE FROM canonical_gate_events" in down
+
+
+def test_lookup_card_uses_latest_not_old_approved_revision():
+    head = _head(generation=12, approved="old-approved")
+    card = cdt.approval_card(head, {"id": str(REV_ID), "revision": 10,
+        "version": "2.0.0", "title": "한글 설계 계약", "status": "review"}, "AADS")
+    assert card["approved"] is False
+    assert card["title"] == "한글 설계 계약"
+    assert card["approval_body"] == {"revision_id": str(REV_ID), "expected_generation": 12}
+    assert card["content_endpoint"].endswith("/content?revision=10")
+    assert card["tenant_id"] == TENANT

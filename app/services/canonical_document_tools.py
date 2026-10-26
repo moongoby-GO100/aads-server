@@ -184,7 +184,40 @@ async def _document_summary(conn: Any, head: Any, project: str = "") -> dict[str
             revision=shown.get("revision"), status=shown.get("status") or "draft",
             authoritative=bool(approved_revision),
         )
+    if project and latest is not None:
+        summary["approval_card"] = approval_card(head, latest, project)
     return summary
+
+
+def approval_card(head: Any, latest: dict, project: str, *, can_approve: bool = False) -> dict[str, Any]:
+    """Read-only presentation data; never an executable model action or permission request.
+
+    Clients must refresh GET before confirmation, and again after POST (also on
+    network failure). A 409 requires refresh and explicit human reconfirmation.
+    """
+    from urllib.parse import quote
+
+    base = f"/api/v1/projects/{quote(project, safe='')}/documents/{quote(head['document_key'], safe='')}"
+    approved = str(head["approved_revision_id"] or "") == str(latest["id"])
+    return {
+        "type": "canonical_document_approval", "schema_version": 1,
+        "tenant_id": str(head["tenant_id"]), "project": project,
+        "document_key": head["document_key"], "title": latest["title"],
+        "revision_id": str(latest["id"]), "revision": latest["revision"],
+        "version": latest["version"], "generation": head["generation"],
+        "status": "approved" if approved else (latest.get("status") or "draft"),
+        "approved": approved,
+        "view": document_refs.canonical_view_ref(
+            project, head["document_key"], title=latest["title"],
+            revision=latest["revision"], status="approved" if approved else (latest.get("status") or "draft"),
+            authoritative=approved),
+        "content_endpoint": f"{base}/content?revision={latest['revision']}",
+        "refresh_endpoint": base,
+        "approval_endpoint": base + "/approve",
+        "approval_body": {"revision_id": str(latest["id"]), "expected_generation": head["generation"]},
+        "auth": "human_login_tenant_project_approve",
+        "can_approve": can_approve,
+    }
 
 
 async def lookup_documents(*, tenant_id: str, inp: dict[str, Any], pool: Any = None) -> dict[str, Any]:
@@ -227,3 +260,57 @@ async def lookup_documents(*, tenant_id: str, inp: dict[str, Any], pool: Any = N
             )
         documents = [await _document_summary(conn, row, project) for row in rows]
         return {"project": project, "registered": bool(documents), "total": len(documents), "documents": documents}
+
+
+# Lookup SQL already caps results at _LOOKUP_LIMIT=20. Cap each serialized card
+# at 4 KiB and the event at 24 KiB to stay below the 32,000-char transport budget.
+CARD_MAX_BYTES = 4096
+CARDS_MAX_BYTES = 24576
+
+
+def validated_approval_cards(cards: Any) -> list[dict]:
+    """Validate persisted presentation data; reconstruct every URL and action body.
+
+    Chat lookup has no human authorization context. Its cards always require an
+    authenticated refresh before enabling approval; stored capability is rejected.
+    """
+    import json
+    from uuid import UUID
+
+    if not isinstance(cards, list):
+        return []
+    valid = []
+    used = 0
+    for card in cards[:_LOOKUP_LIMIT]:
+        try:
+            if not isinstance(card, dict):
+                continue
+            size = len(json.dumps(card, ensure_ascii=False).encode("utf-8"))
+            if size > CARD_MAX_BYTES or used + size > CARDS_MAX_BYTES:
+                continue
+            UUID(card["tenant_id"])
+            UUID(card["revision_id"])
+            if not docs.KEY.fullmatch(card["document_key"]) or docs._project(card["project"]) != card["project"]:
+                continue
+            if any(type(card[k]) is not int or card[k] < minimum for k, minimum in
+                   (("generation", 0), ("revision", 1))):
+                continue
+            if (not isinstance(card["title"], str) or not 1 <= len(card["title"]) <= 300
+                    or not isinstance(card["version"], str) or len(card["version"]) > 50
+                    or card["status"] not in ("draft", "review", "approved", "archived")
+                    or type(card["approved"]) is not bool
+                    or card["can_approve"] is not False):
+                continue
+            rebuilt = approval_card(
+                {"tenant_id": card["tenant_id"], "document_key": card["document_key"],
+                 "generation": card["generation"],
+                 "approved_revision_id": card["revision_id"] if card["approved"] else None},
+                {"id": card["revision_id"], "revision": card["revision"], "title": card["title"],
+                 "version": card["version"], "status": card["status"]}, card["project"])
+            if rebuilt != card:
+                continue
+            valid.append(rebuilt)
+            used += size
+        except (ValueError, TypeError, KeyError, HTTPException):
+            continue
+    return valid

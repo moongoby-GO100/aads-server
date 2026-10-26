@@ -3676,7 +3676,7 @@ async def _stream_litellm_anthropic(
                     yield {"type": "tool_use", "tool_name": tu["name"], "tool_use_id": tu["id"], "tool_input": tool_input, "provider_executed": True}
                     try:
                         result = await _exec_tool(tu["name"], tool_input, "", session_id or "")
-                        yield {"type": "tool_result", "tool_name": tu["name"], "content": str(result)[:3000]}
+                        yield {"type": "tool_result", "tool_name": tu["name"], "content": _tool_result_content(result, tu["name"])}
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": tu["id"],
@@ -4397,7 +4397,7 @@ async def _stream_cli_relay_once(
                         except Exception as _iq_err:
                             logger.debug("interrupt peek failed: %s", str(_iq_err)[:100])
 
-                    mapped = _map_cli_event(event, session_id=session_id)
+                    mapped = _map_cli_event(event, session_id=session_id, tool_names=_tool_id_to_name)
                     if mapped is None:
                         # init 이벤트에서 session_id 캡처
                         evt_type = event.get("type", "")
@@ -5836,7 +5836,7 @@ async def _run_agent_sdk_with_key(
                                 "type": "tool_result",
                                 "tool_name": tool_name,
                                 "tool_use_id": tool_id,
-                                "content": str(result_content)[:3000],
+                                "content": _tool_result_content(result_content, tool_name),
                             }
                 yield {"type": "heartbeat"}
 
@@ -6164,7 +6164,8 @@ def _is_provider_failure_text(text: Any) -> bool:
     return any(marker in t for marker in _PROVIDER_FAILURE_TEXTS)
 
 
-def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+def _map_cli_event(event: dict, session_id: Optional[str] = None,
+                   tool_names: Optional[dict] = None) -> Optional[List[Dict[str, Any]]]:
     """Claude CLI NDJSON 이벤트 → AADS SSE 이벤트 리스트로 변환.
 
     Returns None if event should be skipped, otherwise a list of AADS events.
@@ -6243,9 +6244,9 @@ def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[Li
                 tool_use_id = block.get("tool_use_id", "")
                 tool_event = {
                     "type": "tool_result",
-                    "tool_name": "",  # _stream_claude_cli에서 복원
+                    "tool_name": (tool_names or {}).get(tool_use_id, ""),
                     "tool_use_id": tool_use_id,
-                    "content": str(result_content)[:3000],
+                    "content": _tool_result_content(result_content, (tool_names or {}).get(tool_use_id, "")),
                     "is_error": bool(block.get("is_error")),
                     "error_type": block.get("aads_error_type", ""),
                     "cancel_scope": block.get("aads_cancel_scope", ""),
@@ -6272,7 +6273,7 @@ def _map_cli_event(event: dict, session_id: Optional[str] = None) -> Optional[Li
             "type": "tool_result",
             "tool_name": tool_name,
             "tool_use_id": event.get("tool_use_id", ""),
-            "content": str(content)[:3000],
+            "content": _tool_result_content(content, tool_name),
             "is_error": bool(event.get("is_error")),
             "error_type": event.get("error_type", ""),
             "cancel_scope": event.get("cancel_scope", ""),
@@ -7067,3 +7068,22 @@ def _build_system_with_cache(system_prompt: str) -> List[Dict[str, Any]]:
         blocks.append({"type": "text", "text": rest})
 
     return blocks
+
+
+def _tool_result_content(content, tool_name: str) -> str:
+    """Only the named canonical lookup gets its bounded structured transport budget."""
+    text = str(content)
+    if tool_name != "canonical_document_lookup":
+        return text[:3000]
+    if len(text) > 32000:
+        # Preserve complete cards when a multi-document summary exceeds transport.
+        from app.services.canonical_document_tools import validated_approval_cards
+        try:
+            result = json.loads(text)
+            cards = ([result["approval_card"]] if result.get("approval_card") else
+                     [d["approval_card"] for d in result.get("documents", []) if d.get("approval_card")])
+            return json.dumps({"documents": [{"approval_card": c} for c in
+                              validated_approval_cards(cards)]}, ensure_ascii=False)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            pass
+    return text[:32000]
