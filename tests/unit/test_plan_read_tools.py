@@ -1,0 +1,251 @@
+"""계획 모드의 제한 조회 및 MCP 표기 회귀 검사."""
+import json
+from unittest.mock import AsyncMock
+import pytest
+from mcp_servers import plan_read_tools as read, plan_mode_guard as guard
+
+
+def test_source_boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(read, 'ROOT', tmp_path)
+    (tmp_path / 'app').mkdir()
+    (tmp_path / 'app/ok.py').write_text('answer = 42')
+    assert read.read_source('app/ok.py')['content'] == 'answer = 42'
+    (tmp_path / 'app/link.py').symlink_to(tmp_path / 'app/ok.py')
+    for path in ('app/../ok.py', '/etc/passwd', 'app/.env', 'app/link.py', 'app/secrets.py', 'app/$(echo x).env'):
+        with pytest.raises((ValueError, OSError)):
+            read.read_source(path)
+    (tmp_path / 'app/inline.py').write_text('password = "supersecret"')
+    with pytest.raises(ValueError):
+        read.read_source('app/inline.py')
+
+
+@pytest.mark.asyncio
+async def test_db_rejects_arbitrary_sql():
+    for sql in ('SELECT 1', 'SELECT dangerous_udf()', 'SELECT 1; DELETE FROM x', 'WITH x AS (DELETE FROM x RETURNING *) SELECT * FROM x'):
+        with pytest.raises(ValueError):
+            await read.execute('plan_database_status', {'sql': sql})
+
+
+@pytest.mark.asyncio
+async def test_tools_list_annotations_and_execution(monkeypatch):
+    from mcp_servers import aads_tools_bridge as bridge
+    monkeypatch.setenv('AADS_RESPONSE_MODE', 'plan')
+    monkeypatch.setattr(bridge, '_get_tool_definitions', lambda: [{'name': n} for n in ('handover_search', 'pipeline_runner_status', 'pipeline_runner_submit', 'query_db')])
+    tools = await bridge.list_tools()
+    assert {t.name for t in tools} == {'handover_search', 'pipeline_runner_status', *read.NAMES}
+    assert all(t.annotations.readOnlyHint is True for t in tools)
+    monkeypatch.setenv('AADS_RESPONSE_MODE', 'quality')
+    tools = await bridge.list_tools()
+    assert all(t.annotations.readOnlyHint is False for t in tools if t.name in {'query_db', 'pipeline_runner_submit'})
+    monkeypatch.setattr(bridge, '_ensure_db', AsyncMock())
+    monkeypatch.setenv('AADS_RESPONSE_MODE', 'plan')
+    assert json.loads(await bridge._call_tool('pipeline_runner_submit', {}))['blocked']
+
+
+@pytest.mark.parametrize('module', ['app.services.plan_mode_guard', 'mcp_servers.plan_mode_guard'])
+def test_unknown_mode_and_switch(module):
+    import importlib
+    policy = importlib.import_module(module)
+    for mode, blocked in [('unknown', True), (' PLAN ', True), ('quality', False), ('fast', False), ('plan', True)]:
+        token = policy.set_response_mode(mode)
+        try:
+            assert bool(policy.check('pipeline_runner_submit', {})) is blocked
+        finally:
+            policy.reset_response_mode(token)
+
+
+def test_policy_parity():
+    from app.services import plan_mode_guard as api
+    assert api._READ_ONLY_TOOLS == guard._READ_ONLY_TOOLS
+
+
+@pytest.mark.asyncio
+async def test_probe_transaction_is_readonly(monkeypatch):
+    from app.core import db_pool
+    class Context:
+        def __init__(self, value):
+            self.value = value
+        async def __aenter__(self):
+            return self.value
+        async def __aexit__(self, *args):
+            return False
+    class Connection:
+        def transaction(self, **kwargs):
+            assert kwargs == {'readonly': True}
+            return Context(self)
+        execute = AsyncMock()
+        fetchrow = AsyncMock(return_value={'read_probe': 1, 'read_only': 'on'})
+    conn = Connection()
+    class Pool:
+        def acquire(self):
+            return Context(conn)
+    monkeypatch.setattr(db_pool, 'get_pool', lambda: Pool())
+    assert await read.execute('plan_database_status', {}) == {'read_probe': 1, 'read_only': 'on'}
+    assert conn.execute.await_count == 2
+    assert conn.fetchrow.await_args.args == ("SELECT 1 AS read_probe, current_setting('transaction_read_only') AS read_only",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [ValueError("sensitive"), OSError("sensitive"), UnicodeError("sensitive")])
+async def test_bridge_returns_safe_read_error(monkeypatch, error):
+    from mcp_servers import aads_tools_bridge as bridge
+    monkeypatch.setattr(bridge, "_ensure_db", AsyncMock())
+    monkeypatch.setattr(bridge, "_session_in_plan_mode", AsyncMock(return_value=True))
+    monkeypatch.setattr(read, "execute", AsyncMock(side_effect=error))
+    result = await bridge._call_tool("plan_read_source", {"path": "app/main.py"})
+    assert json.loads(result)["error"] == "plan_read_denied"
+    assert "sensitive" not in result
+    assert not guard.plan_mode_active()
+
+
+@pytest.mark.parametrize("path", ["outside/main.py", "app/main.json", "app//main.py", "app/./main.py"])
+def test_source_rejects_unapproved_roots_and_types(path):
+    with pytest.raises(ValueError):
+        read.read_source(path)
+
+
+def test_source_rejects_oversize_and_hardlink(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(read, "ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    source = tmp_path / "app/main.py"
+    source.write_text("x" * 131073)
+    with pytest.raises(ValueError):
+        read.read_source("app/main.py")
+    source.write_text("x = 1")
+    os.link(source, tmp_path / "app/alias.py")
+    with pytest.raises(ValueError):
+        read.read_source("app/alias.py")
+
+
+@pytest.mark.asyncio
+async def test_schema_parameter_binding_and_readonly(monkeypatch):
+    from app.core import db_pool
+    class Context:
+        def __init__(self, value): self.value = value
+        async def __aenter__(self): return self.value
+        async def __aexit__(self, *args): return False
+    class Connection:
+        def transaction(self, **kwargs):
+            assert kwargs == {"readonly": True}
+            return Context(self)
+        execute = AsyncMock()
+        fetch = AsyncMock(return_value=[{"column_name": "id", "data_type": "uuid", "is_nullable": "NO"}])
+    conn = Connection()
+    class Pool:
+        def acquire(self): return Context(conn)
+    monkeypatch.setattr(db_pool, "get_pool", lambda: Pool())
+    result = await read.execute("plan_database_schema", {"table": "project_handover_entries"})
+    assert result["columns"][0]["column_name"] == "id"
+    assert conn.fetch.await_args.args[1] == "project_handover_entries"
+    assert "table_name = $1" in conn.fetch.await_args.args[0]
+    for params in ({"table": "x; DELETE FROM x"}, {"table": "x", "sql": "SELECT 1"}, {"table": "pg_catalog.pg_authid"}):
+        with pytest.raises(ValueError):
+            await read.execute("plan_database_schema", params)
+    assert conn.fetch.await_count == 1
+
+
+def test_verified_read_metadata_is_guarded():
+    assert read.VERIFIED_READ_ONLY_TOOLS <= guard._READ_ONLY_TOOLS
+
+
+@pytest.mark.parametrize("source", [
+    'PASSWORD: str = "SYNTHETIC_NOT_A_REAL_SECRET"',
+    'config = {"api_key": "SYNTHETIC_NOT_A_REAL_SECRET"}',
+    'config = {"clientSecret": "SYNTHETIC_NOT_A_REAL_SECRET"}',
+    'value = """SYNTHETIC_NOT_A_REAL_SECRET\nsecond line"""',
+    'value = "SYNTHETIC_" "NOT_A_REAL_SECRET"',
+    '# SYNTHETIC_NOT_A_REAL_SECRET\nanswer = 42',
+])
+def test_source_withholds_literals_and_comments(tmp_path, monkeypatch, source):
+    monkeypatch.setattr(read, "ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app/example.py").write_text(source)
+    result = read.read_source("app/example.py")["content"]
+    assert "SYNTHETIC" not in result
+    assert "NOT_A_REAL_SECRET" not in result
+
+
+@pytest.mark.parametrize("source", ['message = "hello world"', 'answer: int = 42', 'config = {"timeout": 30}'])
+def test_normal_source_structure_remains_available(tmp_path, monkeypatch, source):
+    monkeypatch.setattr(read, "ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app/example.py").write_text(source)
+    assert read.read_source("app/example.py")["content"]
+
+
+@pytest.mark.parametrize("source", ['value = f"{unknown}"', 'value = ('])
+def test_unsupported_source_fails_closed(tmp_path, monkeypatch, source):
+    monkeypatch.setattr(read, "ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app/example.py").write_text(source)
+    with pytest.raises(ValueError):
+        read.read_source("app/example.py")
+
+
+@pytest.mark.asyncio
+async def test_source_does_not_initialize_db(monkeypatch):
+    from mcp_servers import aads_tools_bridge as bridge
+    init = AsyncMock(side_effect=AssertionError("DB must not be needed"))
+    monkeypatch.setattr(bridge, "_ensure_db", init)
+    monkeypatch.setenv("AADS_RESPONSE_MODE", "plan")
+    monkeypatch.delenv("AADS_SESSION_ID", raising=False)
+    monkeypatch.setattr(read, "execute", AsyncMock(return_value={"content": "answer = 42"}))
+    assert "answer = 42" in await bridge._call_tool("plan_read_source", {"path": "app/example.py"})
+    init.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_db_initialization_is_retried(monkeypatch):
+    from mcp_servers import aads_tools_bridge as bridge
+    from app.core import db_pool
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unavailable/test")
+    monkeypatch.setattr(bridge, "_db_initialized", False)
+    init = AsyncMock(side_effect=[OSError("unavailable"), None])
+    monkeypatch.setattr(db_pool, "init_pool", init)
+    await bridge._ensure_db()
+    assert not bridge._db_initialized
+    await bridge._ensure_db()
+    assert bridge._db_initialized
+    assert init.await_count == 2
+
+
+@pytest.mark.parametrize("mode, blocked", [(None, False), ("", False), ("  ", False), (" QUALITY ", False), (" FAST ", False), (" PLAN ", True), ("unexpected", True)])
+def test_mode_semantics_parity(mode, blocked):
+    from app.services import plan_mode_guard as api
+    for policy in (api, guard):
+        token = policy.set_response_mode(mode)
+        try:
+            assert policy.plan_mode_active() is blocked
+        finally:
+            policy.reset_response_mode(token)
+
+
+def test_credential_keyword_remains_denied(tmp_path, monkeypatch):
+    monkeypatch.setattr(read, "ROOT", tmp_path)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app/example.py").write_text('configure(accessToken="SYNTHETIC_NOT_A_REAL_SECRET")')
+    with pytest.raises(ValueError):
+        read.read_source("app/example.py")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode, blocked", [(None, False), ("", False), ("  ", False), (" QUALITY ", False), (" FAST ", False), (" PLAN ", True), ("unexpected", True)])
+async def test_bridge_db_mode_parity(monkeypatch, mode, blocked):
+    from mcp_servers import aads_tools_bridge as bridge
+    from app.core import db_pool
+    class Connection:
+        fetchval = AsyncMock(return_value=mode)
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+    class Pool:
+        def acquire(self): return Connection()
+    monkeypatch.delenv("AADS_RESPONSE_MODE", raising=False)
+    monkeypatch.setattr(db_pool, "get_pool", lambda: Pool())
+    assert await bridge._session_in_plan_mode("synthetic-session") is blocked
+
+
+@pytest.mark.parametrize("mode, expected", [(None, "quality"), ("", "quality"), ("  ", "quality"), (" QUALITY ", "quality"), (" FAST ", "fast"), (" PLAN ", "plan"), ("unexpected", "plan")])
+def test_chat_mode_normalization_parity(mode, expected):
+    from app.services.chat_service import _normalize_response_mode
+    assert _normalize_response_mode(mode) == expected

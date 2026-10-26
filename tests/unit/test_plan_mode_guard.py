@@ -39,7 +39,7 @@ def test_plan_is_a_first_class_mode():
     assert chat_service._normalize_response_mode("fast") == "fast"
     assert chat_service._normalize_response_mode("quality") == "quality"
     assert chat_service._normalize_response_mode(None) == "quality"
-    assert chat_service._normalize_response_mode("planning") == "quality"
+    assert chat_service._normalize_response_mode("planning") == "plan"
 
 
 def test_plan_prompt_block_forbids_execution_and_differs_from_other_modes():
