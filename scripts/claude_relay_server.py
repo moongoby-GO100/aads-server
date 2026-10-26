@@ -1179,6 +1179,9 @@ async def _preflight_mcp_server(name, cfg):
         proc = await asyncio.create_subprocess_exec(
             cfg.get("command", ""),
             *list(cfg.get("args", []) or []),
+            # systemd supplies /dev/null as stdin. A stdio MCP server treats
+            # that EOF as a clean shutdown, which is not a startup failure.
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cfg.get("cwd") or None,
@@ -1208,11 +1211,21 @@ async def _preflight_mcp_server(name, cfg):
         })
     finally:
         if proc and proc.returncode is None:
+            # Close the protocol input first so docker exec can also reap the
+            # bridge inside the container instead of leaving an orphan there.
+            if proc.stdin is not None:
+                proc.stdin.close()
             try:
-                proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=1)
-            except (asyncio.TimeoutError, ProcessLookupError):
-                proc.kill()
+            except asyncio.TimeoutError:
+                try:
+                    proc.terminate()
+                    await asyncio.wait_for(proc.wait(), timeout=1)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    await proc.wait()
 
     _MCP_PREFLIGHT_CACHE[signature] = {"ts": time.time(), "diag": dict(diag)}
     return diag
