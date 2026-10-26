@@ -141,10 +141,25 @@ def main() -> int:
     shots.mkdir(parents=True, exist_ok=True)
     if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH") and Path("/root/.cache/ms-playwright").is_dir():
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/root/.cache/ms-playwright"
-    from playwright.sync_api import sync_playwright
+    def unavailable(stage: str, exc: Exception) -> int:
+        # 환경 오류도 기계 판독 가능한 결과를 남긴다. 예외 본문은 기록하지 않는다.
+        summary = dict(candidate_only=True, production_claim=False, vault_credential_used=False,
+                       status="unavailable", stage=stage, error_type=type(exc).__name__,
+                       passed=0, total=0, failed=[], screenshots=[], page_errors=[])
+        (out / "result.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"E2E_UNAVAILABLE {stage} {type(exc).__name__}")
+        return 2
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        return unavailable("playwright_import", exc)
 
     api = Api(server_manager_routes())
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_static_handler())
+    try:
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), make_static_handler())
+    except OSError as exc:
+        return unavailable("loopback_server", exc)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
     captured: list[dict] = []
@@ -170,8 +185,9 @@ def main() -> int:
         try:
             browser = pw.chromium.launch(args=["--no-sandbox"])
         except Exception as exc:  # noqa: BLE001
-            print("BROWSER_UNAVAILABLE", str(exc)[:200])
-            return 2
+            srv.shutdown()
+            srv.server_close()
+            return unavailable("browser_launch", exc)
 
         # ── A. admin.html 역할별 메뉴 ──
         manager = api.manager_routes
