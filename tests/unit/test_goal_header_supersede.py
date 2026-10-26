@@ -482,3 +482,40 @@ def test_unfinished_replacement_supersedes_nothing_in_chain(conn):
     assert _run(conn) == 0
     assert conn.links[FAILED]["superseded_by"] is None
     assert conn.links[ROUND1]["superseded_by"] is None
+
+
+def test_completed_chain_preserves_unrelated_failed_links(conn):
+    """한 계보의 완료 근거는 다른 실패 링크를 복구하지 않는다."""
+    _chain(conn)
+    unrelated = ("runner-bee81ee4", "runner-619f855d")
+    for task_id in unrelated:
+        conn.links[task_id] = dict(conn.links[FAILED])
+        conn.jobs[task_id] = {"created_at": T0, "instruction": "다른 승인 범위"}
+    before = {task_id: dict(conn.links[task_id]) for task_id in unrelated}
+
+    assert _run(conn) == 2
+    assert conn.links[FAILED]["superseded_by"] == REWORK
+    assert conn.links[ROUND1]["superseded_by"] == REWORK
+    assert _run(conn) == 0
+    assert {task_id: conn.links[task_id] for task_id in unrelated} == before
+
+
+def test_historical_completed_job_cannot_use_new_retry_card(conn, caplog):
+    """기존 완료 job 을 새 승인 카드 이후 생성된 재작업으로 취급하지 않는다."""
+    proposed_at = (T0 + timedelta(hours=1)).isoformat()
+    conn.evidence = {"retry_candidates": [{
+        "failed_task_id": FAILED, "card_id": "card-1", "at": proposed_at,
+    }]}
+    instruction = f"RETRY_OF_LINK: {FAILED}\n"
+    conn.replacements = [_replacement(instruction)]
+
+    with caplog.at_level(logging.WARNING):
+        assert _run(conn) == 0
+
+    assert conn.links[FAILED]["superseded_by"] is None
+    assert conn.evidence["retry_candidates"][0] == {
+        "failed_task_id": FAILED, "card_id": "card-1", "at": proposed_at,
+    }
+    assert conn.replacements[0]["instruction"] == instruction
+    assert conn.evidence_writes == 0
+    assert "reason=created_before_candidate" in caplog.text
