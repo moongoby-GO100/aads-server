@@ -187,7 +187,7 @@ async def _session_in_plan_mode(session_id: str) -> bool:
     조회가 실패하면 plan 으로 본다(fail-closed) — 읽기 도구는 계속 통과하고 부작용 도구만 막힌다.
     컬럼이 아직 없는 DB 에는 plan 턴이 있을 수 없으므로 그때만 plan 이 아니다.
     """
-    if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() == "plan":
+    if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() not in {"", "quality", "fast"}:
         return True
     if not session_id:
         return False
@@ -204,7 +204,7 @@ async def _session_in_plan_mode(session_id: str) -> bool:
                 """,
                 session_id,
             )
-        return mode == "plan"
+        return mode not in {None, "", "quality", "fast"}
     except Exception as exc:
         from mcp_servers import plan_mode_guard
 
@@ -227,6 +227,9 @@ async def _call_tool(name: str, params: dict) -> str:
         blocked = plan_mode_guard.check(TOOL_NAME_MAP.get(name, name), params)
         if blocked is not None:
             return blocked
+        from mcp_servers import plan_read_tools
+        if name in plan_read_tools.NAMES:
+            return json.dumps(await plan_read_tools.execute(name, params), ensure_ascii=False)
         return await _call_tool_unguarded(name, params)
     finally:
         plan_mode_guard.reset_response_mode(plan_token)
@@ -338,16 +341,25 @@ async def list_tools() -> list[types.Tool]:
 
     끄는 법: AADS_TOOL_RESIDENT_MODE=0 (기본값). 기존 동작 그대로다.
     """
-    defs = _get_tool_definitions()
+    from mcp_servers import plan_mode_guard, plan_read_tools
+
+    defs = [*_get_tool_definitions(), *plan_read_tools.DEFINITIONS]
     tools = []
     for td in defs:
         tools.append(types.Tool(
             name=td["name"],
             description=td.get("description", ""),
             inputSchema=td.get("input_schema", {"type": "object", "properties": {}}),
+            annotations=types.ToolAnnotations(
+                # Audit execution paths, not just the historical plan allowlist.
+                readOnlyHint=td["name"] in {
+                    "plan_read_source", "plan_database_status", "handover_search",
+                    "canonical_document_lookup", "pipeline_runner_status",
+                },
+            ),
         ))
 
-    if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() == "plan":
+    if str(os.getenv("AADS_RESPONSE_MODE", "") or "").strip().lower() not in {"", "quality", "fast"}:
         from mcp_servers import plan_mode_guard
 
         # 계획만 모드로 띄운 브리지는 읽기 후보가 아닌 도구를 아예 내보내지 않는다(차단은 _call_tool 이 한다).

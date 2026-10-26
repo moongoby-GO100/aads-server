@@ -25,7 +25,8 @@ def plan_mode_active() -> bool:
 
 
 def set_response_mode(mode: Optional[str]) -> Token:
-    return current_response_mode.set(RESPONSE_MODE_PLAN if mode == RESPONSE_MODE_PLAN else "")
+    normalized = str(mode or "").strip().lower()
+    return current_response_mode.set("" if normalized in {"", "quality", "fast"} else RESPONSE_MODE_PLAN)
 
 
 def is_missing_mode_column_error(exc: BaseException) -> bool:
@@ -61,13 +62,14 @@ def reset_response_mode(token: Token) -> None:
 #    fact_check*, search_crawl_match, read_github_file, read_uploaded_file, google_sheets_read)
 #    와 DB 에 직접 접속하는 list_project_databases.
 _READ_ONLY_TOOLS = frozenset({
+    "plan_read_source", "plan_database_status",
     "health_check", "server_status", "get_all_service_status",
     "dashboard_query", "task_history", "cost_report", "tool_metrics",
     "llm_response_metrics", "tool_layer_audit",
     "handover_search", "canonical_document_lookup",
     "web_search", "web_search_brave", "web_search_naver", "web_search_kakao",
     "web_search_google", "search_searxng", "search_naver_multi",
-    "gemini_grounding_search",
+    "gemini_grounding_search", "gemini_search", "search_naver", "search_kakao",
     "recall_notes", "semantic_code_search", "aag_findings", "aag_brief",
     "check_directive_status", "get_agenda", "list_agendas", "search_agendas",
     "pipeline_runner_status", "pipeline_c_status", "my_milestones",
