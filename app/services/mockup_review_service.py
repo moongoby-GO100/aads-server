@@ -82,7 +82,7 @@ def _utc(value: datetime) -> str:
 
 def asset_roots() -> dict[str, Path]:
     configured = os.getenv("MOCKUP_REVIEW_ASSET_ROOT")
-    return {"docs": ROOT / "docs", "mockup_assets": Path(configured) if configured else ROOT / "data" / "mockup_assets",
+    return {"docs": ROOT / "docs", "mockup_assets": Path(configured) if configured else ROOT / "app" / "data" / "mockup_assets",
             "uploaded_mockups": ROOT / "app" / "data" / "mockup_assets" / "html-uploads"}
 
 
@@ -106,13 +106,26 @@ def parse_asset_uri(uri: str) -> tuple[str, str]:
 
 def read_asset(uri: str) -> bytes:
     alias, rel = parse_asset_uri(uri)
-    root = asset_roots()[alias].resolve()
-    try:
-        path = (root / rel).resolve(strict=True)
-    except (OSError, RuntimeError) as exc:
-        raise AssetProblem("asset_not_found", uri) from exc
-    if not path.is_relative_to(root) or not path.is_file():
-        raise AssetProblem("asset_uri_not_allowed", "path escapes the allowed root")
+    roots = [asset_roots()[alias]]
+    # Compatibility is read-only and never overrides an explicitly configured store.
+    if alias == "mockup_assets" and not os.getenv("MOCKUP_REVIEW_ASSET_ROOT"):
+        roots.append(ROOT / "data" / "mockup_assets")
+    for candidate in roots:
+        root = candidate.resolve()
+        try:
+            path = (root / rel).resolve()
+            if not path.is_relative_to(root):
+                raise AssetProblem("asset_uri_not_allowed", "path escapes the allowed root")
+            path = path.resolve(strict=True)
+        except FileNotFoundError:
+            continue
+        except (OSError, RuntimeError) as exc:
+            raise AssetProblem("asset_not_found", uri) from exc
+        if not path.is_relative_to(root) or not path.is_file():
+            raise AssetProblem("asset_uri_not_allowed", "path escapes the allowed root")
+        break
+    else:
+        raise AssetProblem("asset_not_found", uri)
     try:
         with path.open("rb") as stream:
             data = stream.read(MAX_ASSET_BYTES + 1)
