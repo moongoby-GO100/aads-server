@@ -1,0 +1,128 @@
+{
+  "screens": [
+    {
+      "screen_id": "mockup-list-html-register",
+      "title": "목업 목록과 HTML 등록",
+      "route": "/chat/mockups",
+      "requirement_ids": [
+        "mockup-button-opens-list",
+        "all-list-entry",
+        "html-register-simulation",
+        "safe-new-tab-preview",
+        "failure-recovery",
+        "mobile-layout"
+      ],
+      "states_not_applicable": {
+        "loading": "정적 독립 목업이며 외부 데이터 요청이 없어 로딩 상태가 발생하지 않습니다.",
+        "permission": "운영 권한을 변경하지 않는 시뮬레이션 목업이며 권한 검증은 실제 구현 단계에서 수행합니다.",
+        "offline": "모든 자산을 문서 안에서 제공하는 정적 목업으로 네트워크 의존 동작이 없습니다."
+      }
+    }
+  ],
+  "assets": [
+    {
+      "asset_id": "mockup-list-html",
+      "role": "child",
+      "uri": "internal://mockup_assets/mockup-list-html-finalize/목업-목록과-HTML-등록.html",
+      "sha256": "e77ad46ef834c61d018028b67bf86c6cd7ae267768edcfa830f5f8556e69f415",
+      "byte_size": 8249,
+      "mime": "text/html",
+      "screen_id": "mockup-list-html-register",
+      "redaction_status": "not_required"
+    },
+    {
+      "asset_id": "mockup-list-desktop-default",
+      "role": "primary",
+      "uri": "internal://mockup_assets/mockup-list-html-finalize/desktop.png",
+      "sha256": "3b59a0ac7e28753edff70c758da9b4878ed995428f67bf6c467f946b5d868650",
+      "byte_size": 101267,
+      "mime": "image/png",
+      "screen_id": "mockup-list-html-register",
+      "phase": "mockup",
+      "viewport": "1440x1000",
+      "fixture_id": "interactive-v2",
+      "state": "default",
+      "captured_at": "2026-10-26T11:13:29Z",
+      "capture_source": "playwright_local_static",
+      "redaction_status": "not_required"
+    },
+    {
+      "asset_id": "mockup-list-mobile-default",
+      "role": "primary",
+      "uri": "internal://mockup_assets/mockup-list-html-finalize/mobile.png",
+      "sha256": "7c649f2443453000d89c8476b82862aaf14af58c7f3d486ba543cc5b10f77878",
+      "byte_size": 92838,
+      "mime": "image/png",
+      "screen_id": "mockup-list-html-register",
+      "phase": "mockup",
+      "viewport": "390x844",
+      "fixture_id": "interactive-v2",
+      "state": "default",
+      "captured_at": "2026-10-26T11:13:29Z",
+      "capture_source": "playwright_local_static",
+      "redaction_status": "not_required"
+    },
+    {
+      "asset_id": "mockup-list-error",
+      "role": "primary",
+      "uri": "internal://mockup_assets/mockup-list-html-finalize/state-error.png",
+      "sha256": "e20beba899da0081670dfddc95607b3f855ee5f6ee15688ab6d941e509b9dc9e",
+      "byte_size": 120087,
+      "mime": "image/png",
+      "screen_id": "mockup-list-html-register",
+      "phase": "mockup",
+      "viewport": "1440x1000",
+      "fixture_id": "interactive-v2",
+      "state": "error",
+      "captured_at": "2026-10-26T11:13:29Z",
+      "capture_source": "playwright_local_static",
+      "redaction_status": "not_required"
+    },
+    {
+      "asset_id": "mockup-list-empty",
+      "role": "primary",
+      "uri": "internal://mockup_assets/mockup-list-html-finalize/state-empty.png",
+      "sha256": "a1cce81240f34f1c57e3db5d0abf6d1324d223bef23a3a671eb523966f1d8dff",
+      "byte_size": 119515,
+      "mime": "image/png",
+      "screen_id": "mockup-list-html-register",
+      "phase": "mockup",
+      "viewport": "1440x1000",
+      "fixture_id": "interactive-v2",
+      "state": "empty",
+      "captured_at": "2026-10-26T11:13:29Z",
+      "capture_source": "playwright_local_static",
+      "redaction_status": "not_required"
+    },
+    {
+      "asset_id": "mockup-list-session-expired",
+      "role": "primary",
+      "uri": "internal://mockup_assets/mockup-list-html-finalize/state-session-expired.png",
+      "sha256": "0a31cace55c49591e0f3025cebb504b321e804beb02119b6421811a97c9f698f",
+      "byte_size": 96091,
+      "mime": "image/png",
+      "screen_id": "mockup-list-html-register",
+      "phase": "mockup",
+      "viewport": "390x844",
+      "fixture_id": "interactive-v2",
+      "state": "session-expired",
+      "captured_at": "2026-10-26T11:13:29Z",
+      "capture_source": "playwright_local_static",
+      "redaction_status": "not_required"
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "mockup-list-playwright-20261026",
+      "kind": "browser_capture",
+      "screen_id": "mockup-list-html-register",
+      "route": "/chat/mockups",
+      "success": true,
+      "login_used": false,
+      "detail": "독립 HTML 목업을 Playwright로 검증했습니다. 목록 즉시 열기, 전체 목록 초기화, 검색·필터, HTML 등록 시뮬레이션, noopener 새 탭 미리보기, 오류 재시도, 빈 상태, 세션 복귀, 모바일 가로 넘침 및 표시 버튼 44px를 포함한 13개 검사를 통과했습니다.",
+      "recorded_at": "2026-10-26T11:13:29Z"
+    }
+  ],
+  "design_tokens_version": "aads-chat-mockup-v1",
+  "source_sha": "c7122e33d99e01d1b22c69aba3b445ceb15f9471"
+}

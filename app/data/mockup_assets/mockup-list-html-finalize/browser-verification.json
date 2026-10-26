@@ -1,0 +1,58 @@
+{
+  "checks": [
+    {
+      "name": "desktop_default_items",
+      "passed": true
+    },
+    {
+      "name": "all_list_resets_filters",
+      "passed": true
+    },
+    {
+      "name": "project_filter",
+      "passed": true
+    },
+    {
+      "name": "html_register_simulation",
+      "passed": true
+    },
+    {
+      "name": "new_tab_noopener",
+      "passed": true
+    },
+    {
+      "name": "new_tab_preview",
+      "passed": true
+    },
+    {
+      "name": "error_state",
+      "passed": true
+    },
+    {
+      "name": "retry_recovers",
+      "passed": true
+    },
+    {
+      "name": "empty_state",
+      "passed": true
+    },
+    {
+      "name": "session_expired_state",
+      "passed": true
+    },
+    {
+      "name": "session_return_recovers",
+      "passed": true
+    },
+    {
+      "name": "mobile_no_horizontal_overflow",
+      "passed": true
+    },
+    {
+      "name": "mobile_visible_touch_targets_44px",
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "count": 13
+}
