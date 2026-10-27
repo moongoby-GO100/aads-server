@@ -54,6 +54,32 @@ def test_list_goals_sql_embeds_shared_case_expression() -> None:
     assert source.count("priority_order ASC NULLS LAST") == 2
 
 
+def test_open_goals_precede_terminal_goals_before_priority_ordering() -> None:
+    source = _norm(inspect.getsource(goal_manager.GoalStateMachine.list_goals))
+    open_first = "CASE WHEN status IN ('draft','active','blocked') THEN 0 ELSE 1 END"
+    assert source.count(open_first) == 2
+    assert source.count(
+        open_first + ", CASE upper(btrim(COALESCE(priority, '')))"
+    ) == 2
+
+    rows = [
+        {"id": "active-p1", "status": "active", "priority": "P1", "priority_order": 1},
+        {"id": "completed-p0", "status": "completed", "priority": "P0", "priority_order": 1},
+    ]
+    status_rank = {"active": 0, "draft": 1, "paused": 2, "blocked": 3, "completed": 4}
+    ordered = sorted(
+        rows,
+        key=lambda row: (
+            0 if row["status"] in {"draft", "active", "blocked"} else 1,
+            priority_rank(row["priority"]),
+            row["priority_order"] is None,
+            row["priority_order"] or 0,
+            status_rank.get(row["status"], 9),
+        ),
+    )
+    assert [row["id"] for row in ordered] == ["active-p1", "completed-p0"]
+
+
 # --- 발송 후보 정렬 ------------------------------------------------------
 
 def test_dispatch_outer_order_by_clause() -> None:

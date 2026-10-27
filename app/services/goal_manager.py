@@ -1459,6 +1459,7 @@ class GoalStateMachine:
                               paused_at, paused_reason, approval_policy
                        FROM goals WHERE project = $1
                          AND ($2::uuid IS NULL OR tenant_id = $2::uuid) ORDER BY
+                       CASE WHEN status IN ('draft','active','blocked') THEN 0 ELSE 1 END,
                        CASE upper(btrim(COALESCE(priority, ''))) WHEN 'P0-CRITICAL' THEN 0 WHEN 'P0' THEN 1 WHEN 'P1' THEN 2 WHEN 'P2' THEN 3 WHEN 'P3' THEN 4 ELSE 9 END,
                        priority_order ASC NULLS LAST,
                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
@@ -1470,6 +1471,7 @@ class GoalStateMachine:
                     """SELECT id, project, title, priority, priority_order, status, progress, created_at, completed_at,
                               paused_at, paused_reason, approval_policy
                        FROM goals WHERE ($1::uuid IS NULL OR tenant_id = $1::uuid) ORDER BY
+                       CASE WHEN status IN ('draft','active','blocked') THEN 0 ELSE 1 END,
                        CASE upper(btrim(COALESCE(priority, ''))) WHEN 'P0-CRITICAL' THEN 0 WHEN 'P0' THEN 1 WHEN 'P1' THEN 2 WHEN 'P2' THEN 3 WHEN 'P3' THEN 4 ELSE 9 END,
                        priority_order ASC NULLS LAST,
                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
