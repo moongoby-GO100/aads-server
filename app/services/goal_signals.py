@@ -70,6 +70,15 @@ def priority_rank(priority: Any) -> int:
     return _PRIORITY_RANK.get(str(priority or "").strip().upper(), _UNKNOWN_PRIORITY_RANK)
 
 
+def priority_rank_case_sql(column: str = "g.priority") -> str:
+    """priority_rank() 와 같은 순번을 SQL 안에서 계산하는 CASE 식(상수 공유)."""
+    whens = " ".join(f"WHEN '{key}' THEN {rank}" for key, rank in _PRIORITY_RANK.items())
+    return (
+        f"CASE upper(btrim(COALESCE({column}, ''))) {whens} "
+        f"ELSE {_UNKNOWN_PRIORITY_RANK} END"
+    )
+
+
 def is_p0(priority: Any) -> bool:
     """P0 상한 집계 대상. P0-CRITICAL 도 P0 다(PRD §1: P0 30개 중 P0-CRITICAL 2)."""
     return str(priority or "").strip().upper().startswith("P0")

@@ -2560,6 +2560,7 @@ async def lifespan(app: FastAPI):
                     ("chat_sessions", "effort_updated_at", "TIMESTAMPTZ DEFAULT NULL"),
                     ("milestones", "dispatch_blocked_at", "TIMESTAMPTZ DEFAULT NULL"),
                     ("milestones", "dispatch_unblock_count", "INTEGER DEFAULT 0"),
+                    ("goals", "priority_order", "INTEGER DEFAULT NULL"),
                     ("tool_results_archive", "is_error", "BOOLEAN DEFAULT FALSE"),
                     ("tool_results_archive", "result_summary", "TEXT"),
                     ("tool_results_archive", "latency_ms", "INTEGER DEFAULT 0"),
@@ -2570,6 +2571,12 @@ async def lifespan(app: FastAPI):
                     await conn.execute(
                         f"ALTER TABLE {_tbl} ADD COLUMN IF NOT EXISTS {_col} {_type}"
                     )
+                try:
+                    from app.services.goal_priority_order import backfill_priority_order
+
+                    await backfill_priority_order(conn)
+                except Exception as _po_exc:
+                    logger.warning("goal_priority_order_backfill_failed", error=str(_po_exc)[:200])
                 await conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS chat_turn_executions (

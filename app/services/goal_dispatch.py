@@ -781,7 +781,8 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                        completion_criteria, dispatch_count, dispatched_at,
                        dispatched_session_id, load_deferred_since,
                        dispatch_blocked_at, goal_title, project, goal_id,
-                       owner_role_key, goal_lead_session_id, session_id
+                       owner_role_key, goal_lead_session_id, session_id,
+                       goal_priority_rank, priority_order
                 FROM (
                 SELECT m.id::text AS milestone_id, m.title AS milestone_title,
                        m.description, m.completion_criteria,
@@ -793,6 +794,8 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                        COALESCE(g.owner_session_id::text, '') AS goal_lead_session_id,
                        COALESCE(m.owner_session_id, s.id) AS session_id,
                        m.sequence_order,
+                       CASE upper(btrim(COALESCE(g.priority, ''))) WHEN 'P0-CRITICAL' THEN 0 WHEN 'P0' THEN 1 WHEN 'P1' THEN 2 WHEN 'P2' THEN 3 WHEN 'P3' THEN 4 ELSE 9 END AS goal_priority_rank,
+                       g.priority_order,
                        ROW_NUMBER() OVER (
                            PARTITION BY g.id
                            ORDER BY m.sequence_order, m.dispatched_at NULLS FIRST
@@ -839,7 +842,15 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
                 -- 같은 목표 안에서는 goal_rn 이 곧 sequence_order 순이므로
                 -- 착수 순서 계약은 그대로다. 창 크기는 GOAL_DISPATCH_CANDIDATE_LIMIT
                 -- (기본 60). 발송 상한(_MAX_PER_CYCLE)은 그대로 두고 가시성만 넓힌다.
+                --
+                -- 2026-10-28. 같은 goal_rn 안에서 **목표 등급(P0→P3)과 대표님이
+                -- 정한 처리 순서(priority_order, 작을수록 먼저, NULL 은 맨 뒤)**를
+                -- 먼저 본다. 사이클당 발송 상한 때문에 P2 목표가 P0 보다 먼저
+                -- 나가던 문제다. goal_rn 이 첫 키라 목표 사이 공평과 같은 목표
+                -- 안 sequence_order 계약은 그대로다.
                 ORDER BY goal_rn,
+                         goal_priority_rank,
+                         priority_order ASC NULLS LAST,
                          COALESCE(dispatched_at, load_deferred_since) ASC NULLS FIRST,
                          sequence_order
                 LIMIT $3

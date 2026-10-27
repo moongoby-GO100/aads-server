@@ -130,6 +130,14 @@ class TriageApplyRequest(BaseModel):
     candidates_version: str = Field(min_length=1, max_length=128)
 
 
+class GoalOrderRequest(BaseModel):
+    priority_order: int = Field(ge=1, le=1_000_000)
+
+
+class GoalReorderRequest(BaseModel):
+    goal_ids: list[UUID] = Field(min_length=1, max_length=500)
+
+
 class TaskStatusRequest(BaseModel):
     task_type: str
     task_id: str
@@ -636,6 +644,7 @@ async def goal_board(
     async with pool.acquire() as conn:
         goal = await conn.fetchrow(
             "SELECT id::text, project, title, status, progress, paused_at, paused_reason, "
+            "       priority_order, "
             "       COALESCE(owner_role_key, '') AS owner_role_key, "
             "       COALESCE(owner_session_id::text, '') AS owner_session_id "
             "FROM goals WHERE id = $1::uuid AND tenant_id = $2::uuid",
@@ -1038,7 +1047,7 @@ async def goals_for_session(
         """
         SELECT DISTINCT ON (g.id)
                g.id::text AS goal_id, g.title, g.status, g.project,
-               g.priority, g.paused_at, g.paused_reason, g.approval_policy,
+               g.priority, g.priority_order, g.paused_at, g.paused_reason, g.approval_policy,
                COALESCE(g.progress, 0) AS progress,
                -- 이 세션이 그 목표의 주도인가. 담당과 구분해 그려야 한다 —
                -- 주도는 목표 전체를 지고, 담당은 자기 몫만 진다
@@ -2321,6 +2330,40 @@ async def apply_goal_triage(
         ],
         client_version=req.candidates_version, idempotency_key=idempotency_key,
     )
+
+
+@router.patch("/goals/{goal_id}/order")
+async def set_goal_priority_order(
+    goal_id: UUID, req: GoalOrderRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
+    """목표 한 건의 처리 순서(작을수록 먼저)를 정한다."""
+    from app.core.db_pool import get_pool
+    from app.services.goal_priority_order import set_goal_order
+
+    tenant_id = _tenant_id(context)
+    async with get_pool().acquire() as conn:
+        if not await set_goal_order(conn, str(goal_id), tenant_id, req.priority_order):
+            raise HTTPException(status_code=404, detail="goal_not_found")
+    return {"goal_id": str(goal_id), "priority_order": req.priority_order}
+
+
+@router.post("/goals/reorder")
+async def reorder_goals_api(
+    req: GoalReorderRequest,
+    context: dict[str, Any] = Depends(require_tenant_member),
+):
+    """주어진 목표 순서대로 1..n 을 다시 부여한다(한 트랜잭션)."""
+    from app.core.db_pool import get_pool
+    from app.services.goal_priority_order import ReorderError, reorder_goals
+
+    tenant_id = _tenant_id(context)
+    async with get_pool().acquire() as conn:
+        try:
+            count = await reorder_goals(conn, tenant_id, [str(g) for g in req.goal_ids])
+        except ReorderError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return {"reordered": count, "goal_ids": [str(g) for g in req.goal_ids]}
 
 
 @router.put("/goals/{goal_id}")

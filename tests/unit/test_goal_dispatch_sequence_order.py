@@ -66,6 +66,9 @@ def _simulate_window(rows: list[dict], limit: int) -> list[dict]:
     ranked.sort(
         key=lambda r: (
             r["goal_rn"],
+            r.get("rank", 0),
+            r.get("priority_order") is None,
+            r.get("priority_order") or 0,
             r["dispatched_at"] is not None,
             r["dispatched_at"] or "",
             r["sequence_order"],
@@ -82,7 +85,8 @@ def test_candidate_sql_is_round_robin_over_goals() -> None:
     assert outer, "바깥 ORDER BY 를 찾지 못했다"
     clause = re.sub(r"\s+", " ", outer.group(1)).lower()
     assert clause == (
-        "goal_rn, coalesce(dispatched_at, load_deferred_since) asc nulls first, "
+        "goal_rn, goal_priority_rank, priority_order asc nulls last, "
+        "coalesce(dispatched_at, load_deferred_since) asc nulls first, "
         "sequence_order"
     )
     for column in (

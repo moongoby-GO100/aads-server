@@ -1455,19 +1455,23 @@ class GoalStateMachine:
         async with pool.acquire() as conn:
             if project:
                 rows = await conn.fetch(
-                    """SELECT id, project, title, priority, status, progress, created_at, completed_at,
+                    """SELECT id, project, title, priority, priority_order, status, progress, created_at, completed_at,
                               paused_at, paused_reason, approval_policy
                        FROM goals WHERE project = $1
                          AND ($2::uuid IS NULL OR tenant_id = $2::uuid) ORDER BY
+                       CASE upper(btrim(COALESCE(priority, ''))) WHEN 'P0-CRITICAL' THEN 0 WHEN 'P0' THEN 1 WHEN 'P1' THEN 2 WHEN 'P2' THEN 3 WHEN 'P3' THEN 4 ELSE 9 END,
+                       priority_order ASC NULLS LAST,
                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
                        created_at DESC""",
                     project, tenant_id,
                 )
             else:
                 rows = await conn.fetch(
-                    """SELECT id, project, title, priority, status, progress, created_at, completed_at,
+                    """SELECT id, project, title, priority, priority_order, status, progress, created_at, completed_at,
                               paused_at, paused_reason, approval_policy
                        FROM goals WHERE ($1::uuid IS NULL OR tenant_id = $1::uuid) ORDER BY
+                       CASE upper(btrim(COALESCE(priority, ''))) WHEN 'P0-CRITICAL' THEN 0 WHEN 'P0' THEN 1 WHEN 'P1' THEN 2 WHEN 'P2' THEN 3 WHEN 'P3' THEN 4 ELSE 9 END,
+                       priority_order ASC NULLS LAST,
                        CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 WHEN 'blocked' THEN 3 WHEN 'completed' THEN 4 ELSE 9 END,
                        created_at DESC""",
                     tenant_id,
@@ -1504,6 +1508,7 @@ class GoalStateMachine:
                 "project": r["project"],
                 "title": r["title"],
                 "priority": r["priority"],
+                "priority_order": r.get("priority_order"),
                 "status": r["status"],
                 "goal_paused": r.get("paused_at") is not None,
                 "goal_paused_reason": r.get("paused_reason") if r.get("paused_at") else None,
