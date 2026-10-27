@@ -12,7 +12,7 @@ import json
 import os
 from types import SimpleNamespace
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
@@ -28,6 +28,8 @@ STATES = ("loading", "empty", "error", "permission", "session-expired", "offline
 def _dsn() -> str:
     dsn = os.getenv("AADS_MOCKUP_TEST_DATABASE_URL")
     if not dsn:
+        if os.getenv("AADS_CANONICAL_DB_REQUIRED") == "1":
+            pytest.fail("AADS_MOCKUP_TEST_DATABASE_URL not set; disposable test database required")
         pytest.skip("AADS_MOCKUP_TEST_DATABASE_URL not set")
     assert "test" in urlsplit(dsn).path.lower(), "refusing to run against a non-test database"
     return dsn
@@ -733,16 +735,26 @@ async def test_mockup_create_change_revise_approve_and_reread(env):
         "submitted", "approved"]
 
 
-async def test_html_upload_roundtrip_and_retry(env, tmp_path, monkeypatch):
+@pytest.mark.parametrize("filename", ["가입 화면.html", "결제 화면.html"])
+async def test_html_upload_roundtrip_and_retry(env, tmp_path, monkeypatch, filename):
     from app.services import mockup_review_service as svc
     roots = svc.asset_roots()
     monkeypatch.setattr(svc, 'asset_roots', lambda: {**roots, 'uploaded_mockups': tmp_path / 'uploads'})
-    body = dict(title='HTML 목업 등록', filename='목업.html', html='<html><style>body{color:navy}</style><h1>목업</h1></html>',
+    body = dict(title='HTML 목업 등록', filename=filename, html='<html><style>body{color:navy}</style><h1>목업</h1></html>',
                 session_id=env.session, idempotency_key=env.key())
     results = await asyncio.gather(env.post('/html', **body), env.post('/html', **body))
     assert sorted(r.status_code for r in results) == [200, 201], [r.text for r in results]
     registered = results[0].json()
     review_id, revision_id = registered['review_id'], registered['revision_id']
+    revision = (await env.get(f'/{review_id}/revisions/{revision_id}')).json()
+    assert revision['manifest']['assets'][0]['filename'] == filename
+    persisted = await env.conn.fetchval("SELECT manifest FROM mockup_review_revisions WHERE id=$1", UUID(revision_id))
+    if isinstance(persisted, str):
+        persisted = json.loads(persisted)
+    assert persisted['assets'][0]['filename'] == filename
+    assert persisted['assets'][0]['uri'].endswith('/mockup.html')
+    assert revision['manifest_hash'] == svc.manifest_hash(persisted)
+    assert (await env.post('/html', **{**body, 'filename': '다른 이름.html'})).status_code == 409
     assert (await env.get('')).status_code == 200
     assert review_id in [r['review_id'] for r in (await env.get('')).json()['items']]
     asset_path = f'/{review_id}/revisions/{revision_id}/assets/html'
@@ -766,7 +778,7 @@ async def test_html_upload_rejects_and_cleans_up(env, tmp_path, monkeypatch):
     store = tmp_path / 'uploads'
     monkeypatch.setattr(svc, 'asset_roots', lambda: {**roots, 'uploaded_mockups':store})
     body = dict(title='HTML 목업', filename='file.html', html='<html>ok</html>', session_id=env.session)
-    for patch, status in [({'filename':'../x.html'},422), ({'html':'not html'},422),
+    for patch, status in [({'filename':'../x.html'},422), ({'filename':'x\x7f.html'},422), ({'filename':'x\u202e.html'},422), ({'html':'not html'},422),
         ({'html':'<html><img src="https://external.invalid/a"></html>'},422),
         ({'html':'<html><link rel="stylesheet" href="x.css"></html>'},422),
         ({'html':'<html>'+'가'*800000+'</html>'},413)]:

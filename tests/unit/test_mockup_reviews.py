@@ -439,3 +439,106 @@ def test_session_scope_missing_session_is_404():
     with pytest.raises(HTTPException) as exc:
         asyncio.run(svc._session_scope(conn, TENANT_A, "AADS", uuid4(), OWNER, False))
     assert exc.value.status_code == 404
+
+
+@pytest.mark.parametrize('filename', ['../x.html', '/x.html', 'a\\x.html', '.x.html',
+                                      'x\x00.html', 'x\n.html', 'x\x7f.html', 'x\x85.html',
+                                      'x\u202e.html', '', ' ', 'x' * 201])
+def test_display_filename_rejects_unsafe_metadata(filename):
+    from app.models.mockup_review import HtmlReviewCreate
+    base = asset_dict('internal://mockup_assets/m/x.html', b'<html></html>', 'text/html', asset_id='html')
+    with pytest.raises(ValidationError):
+        AssetInput(**base, filename=filename)
+    with pytest.raises(ValidationError):
+        HtmlReviewCreate(title='목업', idempotency_key=KEY, filename=filename, html='<html></html>')
+
+
+def test_legacy_filename_absence_preserves_manifest_and_approval_hash(store):
+    raw = asset_dict(put(store, 'legacy.html', '<html></html>'), b'<html></html>', 'text/html', asset_id='html')
+    # These are the pre-filename canonical fields, including the existing null fields.
+    legacy_asset = {**raw, 'screen_id': None, 'phase': None, 'viewport': None,
+                    'fixture_id': None, 'state': None, 'captured_at': None,
+                    'capture_source': None, 'redaction_status': 'not_required'}
+    legacy_manifest = {'change_type': 'new', 'design_tokens_version': None, 'source_sha': None,
+                       'backend_only_rationale': None, 'screens': [], 'assets': [legacy_asset], 'evidence': []}
+    approved_hash = svc.manifest_hash(legacy_manifest)
+    for asset in (raw, {**raw, 'filename': None}, legacy_asset):
+        body = RevisionCreate(idempotency_key=KEY, expected_generation=0, manifest={'assets': [asset]})
+        normalized = build(body, 'new')
+        assert normalized == legacy_manifest
+        assert svc.manifest_hash(normalized) == approved_hash
+        assert 'filename' not in body.model_dump(mode='json')['manifest']['assets'][0]
+        assert not asyncio.run(svc.recheck_assets(legacy_manifest))
+
+
+@pytest.mark.parametrize('filename', ['가입 화면.html', '결제 화면.html'])
+def test_html_register_persisted_manifest_get_revision(tmp_path, monkeypatch, filename):
+    import json
+
+    from app.models.mockup_review import HtmlReviewCreate
+    from app.services import mockup_html_upload as upload
+
+    roots = svc.asset_roots()
+    monkeypatch.setattr(svc, 'asset_roots', lambda: {**roots, 'uploaded_mockups': tmp_path / 'uploads'})
+    review_id, revision_id, tenant_id = uuid4(), uuid4(), str(uuid4())
+    stored = {}
+    head = {}
+
+    class Conn:
+        async def execute(self, sql, *args):
+            if sql.startswith('UPDATE mockup_review_heads'):
+                head['create_request_hash'] = args[1]
+
+        async def fetchrow(self, sql, *args):
+            if 'create_idempotency_key' in sql:
+                return head or None
+            return stored
+
+        async def fetchval(self, *args):
+            return revision_id
+
+    async def create_review(*args, **kwargs):
+        head['id'] = review_id
+        return {'review_id': str(review_id)}
+
+    async def head_view(*args):
+        return {'review_id': str(review_id)}
+
+    async def persist(conn, tenant, project, head_id, actor, body, **kwargs):
+        manifest = await svc.build_manifest(body, 'new')
+        stored.update(id=revision_id, revision=1, parent_revision_id=None,
+                      manifest=json.dumps(manifest), manifest_hash=svc.manifest_hash(manifest),
+                      pointer_applied=True, created_by=actor, created_at=datetime.now().astimezone(),
+                      status='draft', is_latest=True, is_approved=False, doc_refs='[]',
+                      design_tokens_version=None, source_sha=None)
+        return {'review_id': str(head_id), 'revision_id': str(revision_id)}
+
+    monkeypatch.setattr(svc, 'create_review', create_review)
+    monkeypatch.setattr(svc, 'create_revision', persist)
+    monkeypatch.setattr(svc, 'head_view', head_view)
+
+    async def roundtrip():
+        conn = Conn()
+        body = HtmlReviewCreate(title='목업', filename=filename, html='<html>목업</html>', idempotency_key=KEY)
+        await upload.register(conn, tenant_id, 'AADS', 'actor', False, body)
+        result = await svc.get_revision(conn, tenant_id, 'AADS', review_id, revision_id)
+        asset = result['manifest']['assets'][0]
+        assert asset['filename'] == filename
+        assert json.loads(stored['manifest'])['assets'][0]['filename'] == filename
+        assert asset['uri'].split('/')[-1] == 'mockup.html'
+        assert filename not in asset['uri']
+        assert len(asset['uri'].split('/')[-2]) == 32
+        assert result['manifest_hash'] == svc.manifest_hash(json.loads(stored['manifest']))
+        assert next((tmp_path / 'uploads').glob('*/mockup.html')).read_text() == body.html
+        before = stored.copy()
+        retry = await upload.register(conn, tenant_id, 'AADS', 'actor', False, body)
+        assert retry['idempotent'] is True and retry['revision_id'] == str(revision_id)
+        assert stored == before
+        assert len(list((tmp_path / 'uploads').glob('*/mockup.html'))) == 1
+        with pytest.raises(HTTPException) as conflict:
+            await upload.register(conn, tenant_id, 'AADS', 'actor', False,
+                                  body.model_copy(update={'filename': '다른 이름.html'}))
+        assert conflict.value.status_code == 409
+        assert stored == before
+
+    asyncio.run(roundtrip())

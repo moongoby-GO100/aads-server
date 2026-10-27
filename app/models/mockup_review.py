@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -58,9 +59,18 @@ class ScreenInput(BaseModel):
         return self
 
 
+def _display_filename(value: str) -> str:
+    if (not value.strip() or value.startswith(".") or "/" in value or "\\" in value
+            or any(unicodedata.category(c).startswith("C") for c in value)):
+        raise ValueError("a plain filename without paths or control characters is required")
+    return value
+
+
 class AssetInput(BaseModel):
     asset_id: str
     role: Literal["primary", "child"] = "primary"
+    # Display metadata only; never used to resolve an asset path.
+    filename: str | None = Field(default=None, min_length=1, max_length=200)
     uri: str = Field(min_length=1, max_length=512)
     sha256: str
     byte_size: int = Field(ge=1)
@@ -73,6 +83,19 @@ class AssetInput(BaseModel):
     captured_at: datetime | None = None
     capture_source: str | None = Field(default=None, max_length=100)
     redaction_status: Literal["not_required", "masked", "pending"] = "not_required"
+
+    @field_validator("filename")
+    @classmethod
+    def valid_filename(cls, value: str | None) -> str | None:
+        return _display_filename(value) if value is not None else None
+
+    @model_serializer(mode="wrap")
+    def serialize_asset(self, handler):
+        data = handler(self)
+        # Preserve legacy canonical manifests and idempotency hashes exactly.
+        if self.filename is None:
+            data.pop("filename", None)
+        return data
 
     @model_validator(mode="after")
     def valid(self):
@@ -168,8 +191,8 @@ class HtmlReviewCreate(ReviewCreate):
     @field_validator("filename")
     @classmethod
     def html_filename(cls, value: str) -> str:
-        if ("/" in value or "\\" in value or any(ord(c) < 32 for c in value)
-                or not value.lower().endswith(".html") or value.startswith(".")):
+        _display_filename(value)
+        if not value.lower().endswith(".html"):
             raise ValueError("a plain .html filename is required")
         return value
 

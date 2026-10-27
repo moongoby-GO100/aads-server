@@ -53,7 +53,7 @@ async def register(conn, tenant: str, project: str, actor: str, elevated: bool, 
             stream.write(data)
         # Drafts are intentionally incomplete for approval until required evidence/docs are supplied.
         revision_body = RevisionCreate(idempotency_key=body.idempotency_key, expected_generation=0,
-            manifest={"assets": [{"asset_id": "html", "role": "child", "uri": uri,
+            manifest={"assets": [{"asset_id": "html", "role": "child", "uri": uri, "filename": body.filename,
                                   "sha256": svc.sha256_hex(data), "byte_size": len(data), "mime": "text/html"}]})
         # Reuse the dependency validator to require a single self-contained HTML file.
         try:
