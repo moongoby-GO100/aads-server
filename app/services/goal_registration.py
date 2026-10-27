@@ -103,6 +103,7 @@ async def register_goal(
     activate: bool = True,
     owner_session_id: str | None = None,
     owner_role_key: str | None = None,
+    confirm_foreign_owner_session: bool = False,
 ) -> dict:
     """`session_id` 는 생성 주체(도구 바인딩) 세션이다. 명시 담당은 `owner_session_id` 로만 받는다."""
     errors = validation_errors(inp)
@@ -162,6 +163,26 @@ async def register_goal(
         if not owner.ok:
             return owner.as_error()
         owner_role, owner_session = owner.owner_role_key, owner.owner_session_id
+        warning = None
+        if session_id and owner_session != session_id:
+            # Chat-tool path only: a goal must show up in the calling chat unless the caller confirms otherwise.
+            if not confirm_foreign_owner_session:
+                return {
+                    "error": "foreign_owner_session_requires_confirmation",
+                    "caller_session_id": session_id,
+                    "owner_session_id": owner_session,
+                    "owner_role_key": owner_role,
+                    "reason": "주도 담당 세션이 이 호출 채팅 세션과 다르면 목표가 이 채팅의 목표 띠에 보이지 않는다.",
+                    "hint": (
+                        "이 채팅이 주도 담당이면 owner_role_key/owner_session_id 를 비우세요. "
+                        "실행 담당은 마일스톤 owner_session_id 로 지정하세요. 정말 다른 세션이 "
+                        "주도 담당이어야 하면 confirm_foreign_owner_session=true 로 다시 등록하세요."
+                    ),
+                }
+            warning = (
+                f"주도 담당(owner_session_id={owner_session})이 호출 세션({session_id})과 달라 "
+                "이 채팅의 목표 띠에 표시되지 않을 수 있다."
+            )
         if goal.get("parent_goal_id"):
             parent = await hierarchy.get_goal_scope(
                 conn, tenant_id=tenant_id, goal_id=goal["parent_goal_id"]
@@ -293,8 +314,13 @@ async def register_goal(
         conn=conn,
     )
     await goal_state_machine._trace_policy(goal_id, project, goal["title"], conn=conn)
-    return {
+    result = {
         "goal_id": goal_id,
         "milestone_count": len(milestone_ids),
         **{f"{k}_count": v for k, v in counts.items()},
+        "owner_session_id": owner_session,
+        "owner_role_key": owner_role,
     }
+    if warning:
+        result["warning"] = warning
+    return result

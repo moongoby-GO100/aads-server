@@ -164,7 +164,7 @@ async def test_registration_counts_and_links():
     p = payload()
     p["linked_jobs"] = [{"milestone_index": 1, "job_id": "runner-job"}]
     result = await register_goal(conn, p, tenant_id=TENANT, session_id=SESSION)
-    assert {k: v for k, v in result.items() if k != "goal_id"} == {
+    assert {k: v for k, v in result.items() if k not in ("goal_id", "owner_session_id", "owner_role_key")} == {
         "milestone_count": 3,
         "epic_count": 3,
         "story_count": 3,
@@ -191,6 +191,85 @@ async def test_registration_records_owner_role_and_executor_session():
     assert len(conn.milestones) == 3
     assert all(ms["owner_role_key"] == "dev" for ms in conn.milestones.values())
     assert all(ms["owner_session_id"] == SESSION for ms in conn.milestones.values())
+
+
+@pytest.mark.asyncio
+async def test_owner_defaults_to_calling_session_and_reports_it():
+    conn = MemoryConnection()
+    result = await register_goal(conn, payload(), tenant_id=TENANT, session_id=SESSION)
+    assert result["owner_session_id"] == SESSION
+    assert result["owner_role_key"] == "dev"
+    assert "warning" not in result
+    assert conn.goals[result["goal_id"]]["owner_session_id"] == SESSION
+
+
+@pytest.mark.asyncio
+async def test_foreign_owner_session_without_confirmation_is_rejected():
+    conn = MemoryConnection()
+    other = str(uuid4())
+    result = await register_goal(
+        conn, payload(), tenant_id=TENANT, session_id=SESSION, owner_session_id=other,
+    )
+    assert result["error"] == "foreign_owner_session_requires_confirmation"
+    assert result["owner_session_id"] == other
+    assert result["caller_session_id"] == SESSION
+    assert "마일스톤 owner_session_id" in result["hint"]
+    assert not conn.goals and not conn.milestones and not conn.items and not conn.links
+
+
+@pytest.mark.asyncio
+async def test_foreign_owner_session_with_confirmation_registers_with_warning():
+    conn = MemoryConnection()
+    other = str(uuid4())
+    result = await register_goal(
+        conn, payload(), tenant_id=TENANT, session_id=SESSION, owner_session_id=other,
+        confirm_foreign_owner_session=True,
+    )
+    assert result["owner_session_id"] == other
+    assert other in result["warning"] and SESSION in result["warning"]
+    assert conn.goals[result["goal_id"]]["owner_session_id"] == other
+
+
+@pytest.mark.asyncio
+async def test_same_session_named_explicitly_needs_no_confirmation():
+    conn = MemoryConnection()
+    result = await register_goal(
+        conn, payload(), tenant_id=TENANT, session_id=SESSION, owner_session_id=SESSION,
+    )
+    assert "error" not in result and "warning" not in result
+
+
+@pytest.mark.asyncio
+async def test_executor_passes_owner_and_confirmation(monkeypatch):
+    from app.services import tool_executor as executor
+
+    seen = {}
+
+    async def fake_register(conn, inp, **kwargs):
+        seen.update(kwargs)
+        return {"goal_id": "g"}
+
+    @asynccontextmanager
+    async def acquire():
+        yield object()
+
+    monkeypatch.setattr("app.services.goal_registration.register_goal", fake_register)
+    monkeypatch.setattr("app.core.db_pool.get_pool", lambda: Mock(acquire=acquire))
+    monkeypatch.setattr(executor, "resolve_bound_tenant_id", AsyncMock(return_value=TENANT))
+    token = executor.current_chat_session_id.set(SESSION)
+    try:
+        other = str(uuid4())
+        await executor.ToolExecutor()._goal_register(
+            {**payload(), "owner_session_id": other, "confirm_foreign_owner_session": "true"}
+        )
+        assert seen["owner_session_id"] == other
+        assert seen["confirm_foreign_owner_session"] is True
+        assert seen["session_id"] == SESSION
+        await executor.ToolExecutor()._goal_register(payload())
+        assert seen["owner_session_id"] is None
+        assert seen["confirm_foreign_owner_session"] is False
+    finally:
+        executor.current_chat_session_id.reset(token)
 
 
 @pytest.mark.asyncio

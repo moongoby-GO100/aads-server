@@ -366,7 +366,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "모든 완료/인수 기준을 검증해 한 트랜잭션으로 등록한다. active 생성, P0 상한 적용. "
             "milestone_index는 0부터 시작한다. 주도담당은 이 세션이 같은 프로젝트 담당이면 자동 지정하고, "
             "아니면 goal.owner_role_key 로 프로젝트의 활성 담당 역할을 지정한다. "
-            "확정 불가 시 owner_required 와 candidates 가 오며 목표는 만들어지지 않는다."
+            "확정 불가 시 owner_required 와 candidates 가 오며 목표는 만들어지지 않는다. "
+            "owner_role_key/owner_session_id 를 비우면 호출 채팅 세션이 주도담당이다. 호출 세션과 다른 "
+            "세션이 주도담당으로 해석되면 confirm_foreign_owner_session=true 가 없을 때 등록이 거부된다 "
+            "(실행 담당은 마일스톤 owner_session_id 로 지정). 성공 응답에 owner_session_id·owner_role_key 포함."
         ),
         "input_schema": {
             "type": "object",
@@ -395,6 +398,11 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                         },
                         "required": ["title", "description", "completion_criteria", "sequence_order", "auto_advance", "epics"],
                     },
+                },
+                "owner_session_id": {"type": "string", "description": "주도담당 세션 id. 생략 시 호출 세션."},
+                "confirm_foreign_owner_session": {
+                    "type": "boolean",
+                    "description": "호출 세션이 아닌 세션을 주도담당으로 지정함을 명시 확인. 기본 false.",
                 },
                 "linked_jobs": {"type": "array", "items": {
                     "type": "object",

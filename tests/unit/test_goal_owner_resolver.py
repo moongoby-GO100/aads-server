@@ -246,7 +246,13 @@ async def test_register_ceo_creator_with_explicit_role_uses_project_assignment()
     )
     p = payload()
     p["goal"]["owner_role_key"] = "dev"
-    res = await register_goal(conn, p, tenant_id=TENANT, session_id=SESSION)
+    rejected = await register_goal(conn, p, tenant_id=TENANT, session_id=SESSION)
+    assert rejected["error"] == "foreign_owner_session_requires_confirmation"
+    assert not conn.goals
+    res = await register_goal(
+        conn, p, tenant_id=TENANT, session_id=SESSION, confirm_foreign_owner_session=True,
+    )
+    assert owner_sid in res["warning"]
     goal = conn.goals[res["goal_id"]]
     assert (goal["owner_role_key"], goal["owner_session_id"]) == ("dev", owner_sid)
     assert all(ms["owner_session_id"] == owner_sid for ms in conn.milestones.values())

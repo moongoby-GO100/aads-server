@@ -1424,7 +1424,13 @@ class ToolExecutor:
             return _missing_tenant_id_result("goal_register")
         try:
             async with get_pool().acquire() as conn:
-                return await register_goal(conn, inp, tenant_id=tenant_id, session_id=session_id)
+                return await register_goal(
+                    conn, inp, tenant_id=tenant_id, session_id=session_id,
+                    owner_session_id=str(inp.get("owner_session_id") or "").strip() or None,
+                    confirm_foreign_owner_session=_coerce_bool(
+                        inp.get("confirm_foreign_owner_session"), False
+                    ),
+                )
         except HTTPException as exc:
             return {"error": exc.detail}
 
