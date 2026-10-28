@@ -1,0 +1,46 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>chat-goal-panel_expanded</title><style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,'Pretendard','Noto Sans KR',sans-serif}
+body{background:#f1f5f9;color:#0f172a;padding:20px}
+h1{font-size:16px;margin-bottom:12px} .sub{font-size:12px;color:#64748b;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:12px}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;display:flex;gap:10px}
+.main{flex:1;min-width:0}.meta{display:flex;justify-content:space-between;font-size:11px;font-weight:800;color:#475569}
+.title{font-size:14px;font-weight:700;margin:6px 0}.bar{height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;background:#2563eb}.pct{font-size:11px;color:#64748b;margin-top:4px}
+.cm{margin-top:10px;padding-top:10px;border-top:1px dashed #e2e8f0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.cm b{font-weight:700}.mini{width:60px;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;display:inline-block}
+.mini i{display:block;height:100%;background:#0ea5e9}.chip{border:1px solid;border-radius:999px;padding:2px 8px;font-weight:700;cursor:pointer;min-height:24px}
+.ord{display:flex;flex-direction:column;gap:6px}.ord button{width:44px;height:44px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;font-size:16px}
+.open{margin-top:8px;padding:8px 10px;border:1px solid #dc2626;border-radius:8px;font-size:11.5px;color:#7f1d1d;background:#fef2f2}
+.btns{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}.btns button{min-height:44px;padding:0 14px;border-radius:8px;font-weight:700;font-size:12px}
+.p{background:#2563eb;color:#fff;border:0}.s{background:#fff;border:1px solid #cbd5e1}
+.sk{background:linear-gradient(90deg,#e2e8f0,#f1f5f9,#e2e8f0);border-radius:6px;height:14px}
+.note{font-size:11px;color:#64748b;margin-top:14px;line-height:1.6}
+@media(max-width:480px){.grid{grid-template-columns:1fr}.cm{font-size:11.5px}}
+</style></head><body><style>
+.chat{display:flex;height:860px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden}
+.left{flex:1;display:flex;flex-direction:column}.strip{position:relative;padding:8px 12px;border-bottom:1px solid #e2e8f0}
+.sbtn{display:flex;gap:8px;align-items:center;border:1px solid #cbd5e1;border-radius:10px;padding:8px 12px;font-size:12.5px;min-height:44px;background:#f8fafc}
+.dd{position:absolute;left:12px;top:60px;width:560px;background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:8px;z-index:2}
+.grp{font-size:11px;font-weight:800;color:#64748b;margin:8px 6px 4px}.it{padding:8px 10px;border-radius:8px}.it:hover{background:#f1f5f9}
+.it .tt{font-size:13px;font-weight:700}.it .cm{margin-top:4px;padding-top:0;border-top:0}
+.msgs{flex:1;padding:16px;color:#94a3b8;font-size:12px}
+.panel{width:430px;border-left:1px solid #e2e8f0;padding:14px;overflow:auto;background:#f8fafc}
+.now{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px}.now h3{font-size:12px;color:#64748b;margin-bottom:6px}
+.big{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin:8px 0}.big i{display:block;height:100%;background:#0ea5e9}
+.ms{display:flex;gap:8px;align-items:center;padding:8px 4px;border-bottom:1px solid #e2e8f0;font-size:12px}
+.dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}.ms .r{margin-left:auto;color:#64748b;white-space:nowrap}
+.rv{color:#7c3aed;font-weight:700}
+
+.new{outline:2px dashed #16a34a;outline-offset:2px;border-radius:6px;position:relative}
+.nb{display:inline-block;background:#16a34a;color:#fff;font-size:10px;font-weight:800;border-radius:4px;padding:1px 5px;margin-right:4px}
+.fix{background:#fef9c3;border-radius:4px;padding:0 3px}
+.ap{font-size:11px;color:#64748b;margin-left:22px}
+
+.msr{display:flex;gap:8px;align-items:center;padding:10px;border:1px solid #e2e8f0;border-radius:9px;background:#fff;margin-top:8px;cursor:pointer;min-height:44px;font-size:12px}
+.msr.on{border-color:#16a34a;border-left:3px solid #dc2626}.car{width:14px;font-size:11px;color:#475569}
+.tree{margin:4px 0 0 14px;padding-left:10px;border-left:2px solid #e2e8f0;font-size:12px}
+.ep{font-weight:800;margin:8px 0 4px}.st{font-weight:700;margin:6px 0 3px 10px}.tk{display:flex;gap:6px;margin:3px 0 3px 22px;line-height:1.45}
+.pill{font-size:10.5px;border:1px solid #94a3b8;color:#475569;border-radius:999px;padding:0 6px;white-space:nowrap;height:18px}
+.emp{margin:6px 0 0 14px;padding:10px;border:1px dashed #cbd5e1;border-radius:8px;font-size:12px;color:#475569}
+</style><h1>채팅 — 오른쪽 목표 패널 · 마일스톤을 눌러 업무 계층 펼침 · 7판</h1><div class="sub">지금 운영: 마일스톤 카드는 눌러도 반응 없음 — 카드 아래 작은 "▶ 업무 계층" 줄만 펼쳐진다. 시안: 단계 줄 전체(44px 이상)를 누르면 그 아래로 Epic→Story→Task 가 펼쳐지고, 업무가 없으면 빈 칸 대신 다음 행동을 보여 준다. 예시: 운영 DB 실측 업무 9건.</div><div class="chat"><div class="left"><div class="strip"><div class="sbtn">🎯 목표 6 ▾</div></div><div class="msgs">(대화 영역)</div></div><div class="panel" style="width:600px"><div style="font-size:15px;font-weight:800">🎯 오비스 UI/UX 디자인 기획 체계 구축</div><div style="font-size:12px;margin:4px 0 10px;color:#334155">진행 중 · 마일스톤 1/6 완료 · 0% · 승인: 전체 자동 0/2000 (지금 운영 그대로)</div><div class="msr"><span class="car">▶</span><span class="dot" style="background:#16a34a"></span><b>M1</b> 기존 자산 감사와 사용자 요구 명세 확정<span class="r" style="margin-left:auto;color:#16a34a">완료 · 작업 0/6 <span style="color:#b45309">⚠ 하위 작업 완료 표시 안 됨</span></span></div><div class="msr on"><span class="car">▼</span><span class="dot" style="background:#dc2626"></span><b>M2</b> 공통 디자인 원칙과 프로젝트 프로필 계약 수립<span class="r" style="margin-left:auto;color:#dc2626">막힘 · 작업 0/6</span></div><div class="tree new"><span class="nb">새로</span> 단계 줄을 누르면 바로 아래로 펼침 · 작업 0/6 (0%) · 진행 0<div class="ep">▼ 에픽 · 공통 디자인 원칙과 프로젝트 프로필 계약 수립 <span class="pill">초안</span> <span style="color:#64748b;font-weight:400">작업 0/6</span></div><div class="st">▼ 스토리 · 디자인 브리프와 공통 시각 기준 <span class="pill">초안</span> <span style="color:#64748b;font-weight:400">작업 0/3</span></div><div class="tk"><span>☐</span><span>원하는 인상·정보 밀도·핵심 행동 우선순위를 브리프로 작성한다</span><span class="pill">초안</span></div><div class="tk"><span>☐</span><span>레퍼런스의 출처·확인일·채택 및 제외 이유를 기록한다</span><span class="pill">초안</span></div><div class="tk"><span>☐</span><span>색·글꼴·여백·버튼·입력·카드·포커스 토큰과 상태 규칙을 명세한다</span><span class="pill">초안</span></div><div class="st">▼ 스토리 · 프로젝트 프로필과 승인 버전 계약 <span class="pill">초안</span> <span style="color:#64748b;font-weight:400">작업 0/3</span></div><div class="tk"><span>☐</span><span>프로젝트별 사용자·route·기존 컴포넌트·뷰포트를 프로필에 정의한다</span><span class="pill">초안</span></div><div class="tk"><span>☐</span><span>문서와 목업 revision·hash 및 추적 식별자 스키마를 확정한다</span><span class="pill">초안</span></div><div class="tk"><span>☐</span><span>개인정보·테넌트 격리·승인 철회·이전 버전 호환 정책을 명세한다</span><span class="pill">초안</span></div></div><div class="msr"><span class="car">▶</span><span class="dot" style="background:#dc2626"></span><b>M3</b> AADS 파일럿 시안과 승인 패키지 확정<span class="r" style="margin-left:auto;color:#dc2626">막힘 · 작업 0/10</span></div><div class="msr"><span class="car">▶</span><span class="dot" style="background:#94a3b8"></span><b>M4</b> 개발 인계와 서버 실행 검증 연결<span class="r" style="margin-left:auto;color:#64748b">대기</span></div><div class="emp new"><span class="nb">새로</span>업무가 없는 단계를 펼쳤을 때(예: "러너 검수 인프라 무응답 제거" M3): "이 단계에는 아직 Epic·Story·Task 가 없습니다. 진행률은 단계 순번으로만 보입니다." + <div class="btns"><button class="s">주도에게 업무 등록 요청</button></div></div></div></div></body></html>

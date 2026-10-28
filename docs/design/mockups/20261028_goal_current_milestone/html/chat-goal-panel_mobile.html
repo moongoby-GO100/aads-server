@@ -1,0 +1,39 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>chat-goal-panel_mobile</title><style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,'Pretendard','Noto Sans KR',sans-serif}
+body{background:#f1f5f9;color:#0f172a;padding:20px}
+h1{font-size:16px;margin-bottom:12px} .sub{font-size:12px;color:#64748b;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:12px}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;display:flex;gap:10px}
+.main{flex:1;min-width:0}.meta{display:flex;justify-content:space-between;font-size:11px;font-weight:800;color:#475569}
+.title{font-size:14px;font-weight:700;margin:6px 0}.bar{height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;background:#2563eb}.pct{font-size:11px;color:#64748b;margin-top:4px}
+.cm{margin-top:10px;padding-top:10px;border-top:1px dashed #e2e8f0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.cm b{font-weight:700}.mini{width:60px;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;display:inline-block}
+.mini i{display:block;height:100%;background:#0ea5e9}.chip{border:1px solid;border-radius:999px;padding:2px 8px;font-weight:700;cursor:pointer;min-height:24px}
+.ord{display:flex;flex-direction:column;gap:6px}.ord button{width:44px;height:44px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;font-size:16px}
+.open{margin-top:8px;padding:8px 10px;border:1px solid #dc2626;border-radius:8px;font-size:11.5px;color:#7f1d1d;background:#fef2f2}
+.btns{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}.btns button{min-height:44px;padding:0 14px;border-radius:8px;font-weight:700;font-size:12px}
+.p{background:#2563eb;color:#fff;border:0}.s{background:#fff;border:1px solid #cbd5e1}
+.sk{background:linear-gradient(90deg,#e2e8f0,#f1f5f9,#e2e8f0);border-radius:6px;height:14px}
+.note{font-size:11px;color:#64748b;margin-top:14px;line-height:1.6}
+@media(max-width:480px){.grid{grid-template-columns:1fr}.cm{font-size:11.5px}}
+</style></head><body><style>
+.chat{display:flex;height:860px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden}
+.left{flex:1;display:flex;flex-direction:column}.strip{position:relative;padding:8px 12px;border-bottom:1px solid #e2e8f0}
+.sbtn{display:flex;gap:8px;align-items:center;border:1px solid #cbd5e1;border-radius:10px;padding:8px 12px;font-size:12.5px;min-height:44px;background:#f8fafc}
+.dd{position:absolute;left:12px;top:60px;width:560px;background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:8px;z-index:2}
+.grp{font-size:11px;font-weight:800;color:#64748b;margin:8px 6px 4px}.it{padding:8px 10px;border-radius:8px}.it:hover{background:#f1f5f9}
+.it .tt{font-size:13px;font-weight:700}.it .cm{margin-top:4px;padding-top:0;border-top:0}
+.msgs{flex:1;padding:16px;color:#94a3b8;font-size:12px}
+.panel{width:430px;border-left:1px solid #e2e8f0;padding:14px;overflow:auto;background:#f8fafc}
+.now{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px}.now h3{font-size:12px;color:#64748b;margin-bottom:6px}
+.big{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin:8px 0}.big i{display:block;height:100%;background:#0ea5e9}
+.ms{display:flex;gap:8px;align-items:center;padding:8px 4px;border-bottom:1px solid #e2e8f0;font-size:12px}
+.dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}.ms .r{margin-left:auto;color:#64748b;white-space:nowrap}
+.rv{color:#7c3aed;font-weight:700}
+
+.new{outline:2px dashed #16a34a;outline-offset:2px;border-radius:6px;position:relative}
+.nb{display:inline-block;background:#16a34a;color:#fff;font-size:10px;font-weight:800;border-radius:4px;padding:1px 5px;margin-right:4px}
+.fix{background:#fef9c3;border-radius:4px;padding:0 3px}
+.ap{font-size:11px;color:#64748b;margin-left:22px}
+</style><h1>채팅 — 오른쪽 목표 패널 · 5판</h1><div class="sub">초록 점선 = 새로 추가. 노란 칠 = 영문 상태값(completed/failed/blocked) 한글화(CM-13). 나머지(업무 계층·완료 기준·승인 설정)는 지금 그대로 아래에 남는다.</div><div class="chat"><div class="left"><div class="strip"><div class="sbtn">🎯 목표 6 ▾</div></div><div class="msgs">(대화 영역)</div></div><div class="panel" style="width:560px"><div style="font-size:15px;font-weight:800">🎯 러너 검수 인프라 무응답 제거 — 승인 병목 해소</div><div style="font-size:12px;margin:4px 0 10px;color:#334155">진행 중 · 마일스톤 1/5 완료 · ⏸ 멈춤 · 20% · 승인: 수동 · 진행: 대기 <span class="ap" style="margin:0">(지금 운영 그대로)</span></div><div class="now new"><h3><span class="nb">새로</span>지금 단계</h3><div style="font-size:14px;font-weight:700">M2 리뷰 입력 축소 — 대용량 diff 분할 전송</div><div style="font-size:12px;margin-top:6px">단계 2/5 · 하위 작업 없음(진행률 대신 단계 순번) · <span style="color:#dc2626;font-weight:700">진행: 막힘</span></div><div style="font-size:11.5px;color:#7f1d1d;margin-top:6px">실패 작업 runner-3cd2acc8 · 재작업 한도 소진 · 담당 역할 미지정</div><div class="btns"><button class="p">다시 보내기</button><button class="s">담당 지정</button><span class="ap" style="margin:auto 0">← 지금은 단계 안쪽에 조건부로만 있는 버튼을 위로 끌어올림</span></div></div><div style="margin-top:12px;font-size:12px;font-weight:800;color:#64748b">단계 5 (업무 계층·완료 기준 펼침은 현행 유지)</div><div class="ms"><span class="dot" style="background:#16a34a"></span><b>M1</b> 검수 모델별 응답시간·timeout 원인 실측<span class="r"><span class="fix" style="color:#16a34a">상태 완료</span> · 업무 없음 · <span class="new" style="padding:0 3px"><span class="nb">새로</span>단계 1/5</span></span></div><div class="ms"><span class="dot" style="background:#dc2626"></span><b>M2</b> 리뷰 입력 축소 — 대용량 diff 분할 전송<span class="r"><span class="fix" style="color:#dc2626">상태 실패</span> · 업무 없음 · <span class="new" style="padding:0 3px"><span class="nb">새로</span>단계 2/5</span></span></div><div class="ms"><span class="dot" style="background:#dc2626"></span><b>M3</b> 무응답 시 대체 판정 경로 표준화<span class="r"><span class="fix" style="color:#dc2626">상태 막힘</span> · 업무 없음 · <span class="new" style="padding:0 3px"><span class="nb">새로</span>단계 3/5</span></span></div><div class="ms"><span class="dot" style="background:#dc2626"></span><b>M4</b> 무응답률 경보 추가<span class="r"><span class="fix" style="color:#dc2626">상태 막힘</span> · 업무 없음 · <span class="new" style="padding:0 3px"><span class="nb">새로</span>단계 4/5</span></span></div><div class="ms"><span class="dot" style="background:#dc2626"></span><b>M5</b> 목표 생성 시 주도담당 자동 지정·누락 차단<span class="r"><span class="fix" style="color:#dc2626">상태 막힘</span> · 업무 없음 · <span class="new" style="padding:0 3px"><span class="nb">새로</span>단계 5/5</span></span></div></div></div></body></html>

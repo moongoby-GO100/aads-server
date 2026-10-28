@@ -1,0 +1,39 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>chat-goal-panel_review</title><style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,'Pretendard','Noto Sans KR',sans-serif}
+body{background:#f1f5f9;color:#0f172a;padding:20px}
+h1{font-size:16px;margin-bottom:12px} .sub{font-size:12px;color:#64748b;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:12px}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;display:flex;gap:10px}
+.main{flex:1;min-width:0}.meta{display:flex;justify-content:space-between;font-size:11px;font-weight:800;color:#475569}
+.title{font-size:14px;font-weight:700;margin:6px 0}.bar{height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;background:#2563eb}.pct{font-size:11px;color:#64748b;margin-top:4px}
+.cm{margin-top:10px;padding-top:10px;border-top:1px dashed #e2e8f0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.cm b{font-weight:700}.mini{width:60px;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;display:inline-block}
+.mini i{display:block;height:100%;background:#0ea5e9}.chip{border:1px solid;border-radius:999px;padding:2px 8px;font-weight:700;cursor:pointer;min-height:24px}
+.ord{display:flex;flex-direction:column;gap:6px}.ord button{width:44px;height:44px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;font-size:16px}
+.open{margin-top:8px;padding:8px 10px;border:1px solid #dc2626;border-radius:8px;font-size:11.5px;color:#7f1d1d;background:#fef2f2}
+.btns{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}.btns button{min-height:44px;padding:0 14px;border-radius:8px;font-weight:700;font-size:12px}
+.p{background:#2563eb;color:#fff;border:0}.s{background:#fff;border:1px solid #cbd5e1}
+.sk{background:linear-gradient(90deg,#e2e8f0,#f1f5f9,#e2e8f0);border-radius:6px;height:14px}
+.note{font-size:11px;color:#64748b;margin-top:14px;line-height:1.6}
+@media(max-width:480px){.grid{grid-template-columns:1fr}.cm{font-size:11.5px}}
+</style></head><body><style>
+.chat{display:flex;height:860px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden}
+.left{flex:1;display:flex;flex-direction:column}.strip{position:relative;padding:8px 12px;border-bottom:1px solid #e2e8f0}
+.sbtn{display:flex;gap:8px;align-items:center;border:1px solid #cbd5e1;border-radius:10px;padding:8px 12px;font-size:12.5px;min-height:44px;background:#f8fafc}
+.dd{position:absolute;left:12px;top:60px;width:560px;background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:8px;z-index:2}
+.grp{font-size:11px;font-weight:800;color:#64748b;margin:8px 6px 4px}.it{padding:8px 10px;border-radius:8px}.it:hover{background:#f1f5f9}
+.it .tt{font-size:13px;font-weight:700}.it .cm{margin-top:4px;padding-top:0;border-top:0}
+.msgs{flex:1;padding:16px;color:#94a3b8;font-size:12px}
+.panel{width:430px;border-left:1px solid #e2e8f0;padding:14px;overflow:auto;background:#f8fafc}
+.now{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px}.now h3{font-size:12px;color:#64748b;margin-bottom:6px}
+.big{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;margin:8px 0}.big i{display:block;height:100%;background:#0ea5e9}
+.ms{display:flex;gap:8px;align-items:center;padding:8px 4px;border-bottom:1px solid #e2e8f0;font-size:12px}
+.dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}.ms .r{margin-left:auto;color:#64748b;white-space:nowrap}
+.rv{color:#7c3aed;font-weight:700}
+
+.new{outline:2px dashed #16a34a;outline-offset:2px;border-radius:6px;position:relative}
+.nb{display:inline-block;background:#16a34a;color:#fff;font-size:10px;font-weight:800;border-radius:4px;padding:1px 5px;margin-right:4px}
+.fix{background:#fef9c3;border-radius:4px;padding:0 3px}
+.ap{font-size:11px;color:#64748b;margin-left:22px}
+</style><h1>채팅 — 오른쪽 목표 패널(검토 대기 목표) · 5판</h1><div class="sub">대표님 질문 "주도 세션은 25% 라는데 왜 0%?" 에 대한 화면 답. 예시: 운영 DB 실측(2026-10-28).</div><div class="chat"><div class="left"><div class="strip"><div class="sbtn">🎯 목표 ▾</div></div><div class="msgs">(대화 영역)</div></div><div class="panel" style="width:560px"><div style="font-size:15px;font-weight:800">GO100 실매매 파이프라인 개선</div><div style="font-size:12px;margin:4px 0 10px">지금 운영: <b>0%</b> 만 보임 → 시안: <span class="new" style="padding:0 4px"><span class="nb">새로</span>확정 0% · <span class="rv">검토 대기 4단계</span></span></div><div class="now new"><h3><span class="nb">새로</span>지금 단계</h3><div style="font-size:14px;font-weight:700">진행 중 단계 없음 <span class="rv">· 검토 대기 4단계</span></div><div style="font-size:12px;margin-top:6px">담당이 M1~M4 완료를 보고했지만 아직 확인되지 않았습니다. 확인하면 확정 진행률이 오르고 M5 가 시작됩니다.</div><div class="btns"><button class="p">검토하기</button><button class="s">담당에게 다시 묻기</button></div></div><div style="margin-top:12px;font-size:12px;font-weight:800;color:#64748b">단계 6</div><div class="ms"><span class="dot" style="background:#7c3aed"></span><b>M1</b> 긴급 주문 안전 트랙(E1-a/E1-b)<span class="r" style="color:#7c3aed">검토 대기 · 작업 0/9</span></div><div class="ms"><span class="dot" style="background:#7c3aed"></span><b>M2</b> 0-D 서브디스크 이관 완결<span class="r" style="color:#7c3aed">검토 대기 · 작업 0/8</span></div><div class="ms"><span class="dot" style="background:#7c3aed"></span><b>M3</b> 0단계 자원 통제·관측·CI 기반<span class="r" style="color:#7c3aed">검토 대기 · 작업 0/10</span></div><div class="ms"><span class="dot" style="background:#7c3aed"></span><b>M4</b> A단계 기준선 측정·카드별 예산<span class="r" style="color:#7c3aed">검토 대기 · 작업 0/7</span></div><div class="ms"><span class="dot" style="background:#94a3b8"></span><b>M5</b> B~E 메모리/버스 신호 경로<span class="r" style="color:#94a3b8">대기 · 작업 0/7</span></div><div class="ms"><span class="dot" style="background:#94a3b8"></span><b>M6</b> F 레인별 전환과 G 정리<span class="r" style="color:#94a3b8">대기 · 작업 0/6</span></div></div></div></body></html>
