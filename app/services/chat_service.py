@@ -17560,9 +17560,11 @@ async def get_memory_context_info(
             LEFT JOIN chat_workspaces w ON s.workspace_id = w.id
             WHERE s.id = $1
               AND ($2::uuid IS NULL OR s.tenant_id = $2::uuid)
+              AND ($3::text IS NULL OR s.user_id = $3::text)
             """,
             session_uuid,
             tenant_uuid,
+            user_id,
         )
         if not session_row:
             return {}
@@ -17680,11 +17682,13 @@ async def get_memory_context_info(
             JOIN chat_sessions cs ON sn.session_id = cs.id
             WHERE cs.workspace_id = $1
               AND ($2::uuid IS NULL OR cs.tenant_id = $2::uuid)
+              AND ($3::text IS NULL OR cs.user_id = $3::text)
             ORDER BY sn.created_at DESC
-            LIMIT $3
+            LIMIT $4
             """,
             workspace_id,
             tenant_uuid,
+            user_id,
             _MEMORY_CONTEXT_ITEM_LIMIT,
         )
         session_summaries = []
