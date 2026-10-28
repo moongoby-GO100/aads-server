@@ -29,7 +29,7 @@ import shlex
 import socket
 import subprocess
 import uuid
-from datetime import datetime
+from datetime import date as _date, datetime
 
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -289,7 +289,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_snapshot",
-        "description": "현재 브라우저 페이지의 접근성 트리를 텍스트로 추출. 스크린샷보다 정확한 구조 분석. browser_navigate 후 사용.",
+        "description": "현재 브라우저 페이지를 텍스트로 관측. 서버 레인은 ARIA 스냅샷, PC 레인은 실제 URL+본문+컨트롤 상태(checked/selected/disabled/대화상자) 요약(ARIA 트리 아님). 탐색 중이면 제한 재시도 후 명시 실패. browser_navigate 후 사용.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -300,7 +300,7 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_screenshot",
-        "description": "현재 브라우저 페이지 PNG 스크린샷. base64 반환. 시각적 레이아웃 확인용. browser_navigate 후 사용.",
+        "description": "현재 브라우저 페이지(같은 탭) PNG 스크린샷을 접근 통제 아티팩트로 저장하고 REF 참조만 반환(base64 본문 없음, 새로 탐색하지 않음). 시각적 레이아웃 확인용.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -311,14 +311,24 @@ TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_click",
-        "description": "브라우저 페이지에서 CSS selector 또는 텍스트로 요소 클릭.\n예: browser_click(selector='button#submit') 또는 browser_click(selector='text=로그인')",
+        "description": (
+            "보이는 클릭 가능 요소를 한 번 클릭. 결과는 '클릭 전달됨'과 '후조건 검증됨([클릭 완료])'을 구분한다. "
+            "일치 요소가 0개/여러 개/비활성/가려짐이면 클릭하지 않고 사유를 알린다. 효과가 불확실하면 자동 재클릭하지 않는다.\n"
+            "예: browser_click(selector='text=저장', expect={'text_present':'저장되었습니다'})"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "selector": {
                     "type": "string",
-                    "description": "클릭할 요소의 CSS selector (예: button#submit, text=로그인)",
+                    "description": "클릭할 요소의 CSS selector (예: button#submit, text=로그인). text= 는 클릭 가능한 요소만 대상",
                 },
+                "nth": {"type": "integer", "description": "일치하는 보이는 요소가 여러 개일 때 선택할 0-기반 순번"},
+                "expect": {
+                    "type": "object",
+                    "description": "클릭 후 기대 후조건. 키: url_contains, url_changed, text_present, text_absent, selector_visible, selector_absent, checked({selector,value})",
+                },
+                "strict": {"type": "boolean", "description": "기본 true — 보이는 요소가 여러 개면 클릭하지 않고 후보를 알림"},
                 **browser_session_props(),
             },
             "required": ["selector"],
@@ -4423,58 +4433,170 @@ def _format_dom_fallback(elements: List[Dict[str, Any]], url: str, title: str) -
     return "\n".join(lines)
 
 
+_NAVIGATION_RACE_RE = re.compile(
+    r"execution context was destroyed|most likely because of a navigation|frame was detached|cannot find context",
+    re.IGNORECASE,
+)
+_SNAPSHOT_READ_ATTEMPTS = 3
+_SNAPSHOT_RETRY_SECONDS = 0.4
+
+
+def _is_pc_agent_page(page: Any) -> bool:
+    from app.browser_bridge.service import _LocalAgentPage
+
+    return isinstance(page, _LocalAgentPage)
+
+
+def _format_page_observation(obs: Dict[str, Any]) -> str:
+    """PC 레인 관측(href + 본문 + 컨트롤 상태)을 텍스트로 만든다. ARIA 트리가 아님을 머리말에 밝힌다."""
+    try:
+        from app.services.llmops_store import mask_secrets
+    except Exception:  # noqa: BLE001
+        def mask_secrets(text: str) -> str:  # type: ignore[misc]
+            return text
+
+    href = str(obs.get("href") or "")
+    lines = [
+        f"[페이지 관측 — {href}]",
+        f"URL: {href}",
+        f"제목: {str(obs.get('title') or '')[:200]}",
+        f"탭: target_id={obs.get('target_id') or '(미확정)'} | readyState={obs.get('ready') or '?'}"
+        f" | 안정={'예' if obs.get('stable', True) else '아니오(문서 로딩 중)'} | 읽기 시도={obs.get('attempts', 1)}",
+        "※ 본문 텍스트와 컨트롤 상태 요약이며 ARIA 접근성 트리가 아닙니다. 비밀번호 칸 값은 읽지 않습니다.",
+    ]
+    controls = obs.get("controls") or []
+    if controls:
+        lines.append(f"\n[컨트롤 {len(controls)}개]")
+        for item in controls:
+            label = item.get("role") or item.get("tag") or "?"
+            if item.get("type"):
+                label = f"{label}:{item['type']}"
+            parts = [f"- {label}"]
+            if item.get("name") and not item.get("secret"):
+                parts.append(f'"{mask_secrets(str(item["name"]))}"')
+            elif item.get("secret"):
+                parts.append("[filled]" if item.get("filled") else "[empty]")
+            for key in ("checked", "selected", "expanded"):
+                if key in item:
+                    parts.append(f"{key}={'true' if item[key] else 'false'}")
+            if item.get("selected_option"):
+                parts.append(f'option="{mask_secrets(str(item["selected_option"]))}"')
+            if item.get("disabled"):
+                parts.append("disabled")
+            lines.append("  " + " ".join(parts))
+    dialogs = obs.get("dialogs") or []
+    if dialogs:
+        lines.append(f"\n[열린 대화상자 {len(dialogs)}개]")
+        for item in dialogs:
+            lines.append(f"  - {item.get('role') or 'dialog'} {mask_secrets(str(item.get('name') or ''))} {mask_secrets(str(item.get('text') or ''))}".rstrip())
+    body = mask_secrets(str(obs.get("text") or ""))
+    lines.append("\n[본문 텍스트]" + (" (잘림)" if obs.get("text_truncated") else ""))
+    lines.append(body)
+    return "\n".join(lines)
+
+
+async def _read_server_snapshot(page: Any) -> str:
+    """서버 Playwright 페이지의 ARIA 스냅샷(실패 시 DOM 추출)을 읽는다. 탐색 경합은 호출자가 재시도한다."""
+    title = await page.title()
+
+    # 비밀번호 칸은 이름과 채움 여부(boolean)만 읽는다. 값 자체는 파이썬으로 가져오지 않는다.
+    password_fields: Dict[str, bool] = {}
+    try:
+        for item in await page.evaluate(_PASSWORD_FIELDS_JS):
+            key = str(item.get("name") or "")
+            password_fields[key] = password_fields.get(key, False) or bool(item.get("filled"))
+    except Exception as exc:  # noqa: BLE001
+        if _NAVIGATION_RACE_RE.search(str(exc)):
+            raise
+        logger.warning("browser_snapshot: 비밀번호 칸 식별 실패 — 이름 패턴으로만 마스킹")
+
+    # Playwright 1.47+ : page.accessibility 제거됨. aria snapshot(1.49+), 실패 시 DOM 텍스트 추출 폴백
+    snap_text = ""
+    try:
+        snap_text = _mask_password_fields_in_aria(
+            await page.locator("body").aria_snapshot(), password_fields
+        )
+    except Exception as exc:  # noqa: BLE001
+        if _NAVIGATION_RACE_RE.search(str(exc)):
+            raise
+
+    if not snap_text:
+        elements = await page.evaluate(_DOM_FALLBACK_JS)
+        snap_text = _format_dom_fallback(elements, page.url, title)
+
+    if len(snap_text) > 20_000:
+        snap_text = snap_text[:20_000] + "\n...(20KB 초과, 잘림)"
+    # 읽는 동안 탐색이 끝났을 수 있어 URL 은 읽은 뒤의 값을 쓴다.
+    return snap_text if snap_text.startswith("[") else f"[ARIA 스냅샷 — {page.url}]\n{snap_text}"
+
+
 @_pc_agent_deadline
 async def tool_browser_snapshot(browser_session_id: str = "", browser_work_key: str = "", browser_lane: str = "") -> str:
-    """현재 페이지의 UI 구조를 텍스트로 추출 (LLM 최적). 비밀번호 칸 값은 [filled]/[empty] 로 치환."""
+    """현재 페이지를 텍스트로 관측. PC 레인은 href+본문+컨트롤 상태, 서버 레인은 ARIA 스냅샷(비밀번호 값은 [filled]/[empty])."""
     ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
         page = await _current_page(ctx)
-        url = page.url
-        title = await page.title()
+        if _is_pc_agent_page(page):
+            from app.browser_bridge.service import BrowserBridgeError
 
-        # 비밀번호 칸은 이름과 채움 여부(boolean)만 읽는다. 값 자체는 파이썬으로 가져오지 않는다.
-        password_fields: Dict[str, bool] = {}
-        try:
-            for item in await page.evaluate(_PASSWORD_FIELDS_JS):
-                key = str(item.get("name") or "")
-                password_fields[key] = password_fields.get(key, False) or bool(item.get("filled"))
-        except Exception:
-            logger.warning("browser_snapshot: 비밀번호 칸 식별 실패 — 이름 패턴으로만 마스킹")
-
-        # Playwright 1.47+ : page.accessibility 제거됨
-        # aria snapshot 사용 (1.49+), 실패 시 DOM 텍스트 추출 폴백
-        snap_text = ""
-        try:
-            snap_text = _mask_password_fields_in_aria(
-                await page.locator("body").aria_snapshot(), password_fields
-            )
-        except Exception:
-            pass
-
-        if not snap_text:
-            elements = await page.evaluate(_DOM_FALLBACK_JS)
-            snap_text = _format_dom_fallback(elements, url, title)
-
-        if len(snap_text) > 20_000:
-            snap_text = snap_text[:20_000] + "\n...(20KB 초과, 잘림)"
-        return snap_text if snap_text.startswith("[") else f"[ARIA 스냅샷 — {url}]\n{snap_text}"
+            try:
+                return _format_page_observation(await page.observe())
+            except BrowserBridgeError as exc:
+                return f"[ERROR] 스냅샷 실패 ({exc.error_code or 'UNKNOWN'}): {exc}"
+        last_error: Optional[Exception] = None
+        for attempt in range(_SNAPSHOT_READ_ATTEMPTS):
+            try:
+                return await _read_server_snapshot(page)
+            except Exception as exc:  # noqa: BLE001
+                if not _NAVIGATION_RACE_RE.search(str(exc)):
+                    raise
+                last_error = exc
+                if attempt + 1 < _SNAPSHOT_READ_ATTEMPTS:
+                    try:
+                        await page.wait_for_load_state("domcontentloaded", timeout=3000)
+                    except Exception:  # noqa: BLE001
+                        await asyncio.sleep(_SNAPSHOT_RETRY_SECONDS)
+        return f"[ERROR] 스냅샷 실패 (SNAPSHOT_UNSTABLE): 페이지가 탐색 중이라 {_SNAPSHOT_READ_ATTEMPTS}회 읽기에 실패했습니다 — {last_error}"
     except Exception as e:
         return f"[ERROR] 스냅샷 실패: {e}"
 
 
 @_pc_agent_deadline
-async def tool_browser_screenshot(browser_session_id: str = "", browser_work_key: str = "", browser_lane: str = "") -> str:
-    """현재 페이지 PNG 스크린샷 촬영 (base64 반환)."""
+async def tool_browser_screenshot(
+    browser_session_id: str = "", browser_work_key: str = "", browser_lane: str = "", tenant_id: str = "",
+) -> str:
+    """현재 페이지 PNG 스크린샷을 접근 통제 아티팩트로 저장하고 참조만 반환 (base64 본문 없음, 새로 탐색하지 않음)."""
     ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
     try:
+        from app.services.browser_artifact_state import ArtifactError, redact_artifact_url, save_screenshot_artifact
+
         page = await _current_page(ctx)
         data = await page.screenshot(full_page=False, timeout=_BROWSER_TIMEOUT_MS)
-        b64 = base64.b64encode(data).decode("ascii")
-        return f"[스크린샷 PNG — base64]\nURL: {page.url}\nDATA:{b64}"
+        target_id = str(getattr(page, "last_screenshot_target_id", "") or "") if _is_pc_agent_page(page) else ""
+        try:
+            ref = save_screenshot_artifact(
+                png=data, tenant_id=tenant_id, session_id=browser_session_id, work_key=browser_work_key,
+                url=page.url, target_id=target_id,
+                source="pc_agent" if _is_pc_agent_page(page) else "server_playwright",
+            )
+        except ArtifactError as exc:
+            return f"[ERROR] 스크린샷 참조 생성 실패 ({exc.code}): {exc}"
+        lines = [
+            "[스크린샷 참조 — 접근 통제 아티팩트]",
+            f"URL: {redact_artifact_url(page.url) or '(알 수 없음)'}",
+        ]
+        if target_id:
+            lines.append(f"탭: target_id={target_id}")
+        lines += [
+            f"REF: {ref['ref']}",
+            f"크기: {ref['bytes']}B sha256={ref['sha256'][:16]}… 보관 {ref['expires_in_seconds']}초",
+            "※ 이미지 본문은 결과에 포함하지 않습니다. 같은 tenant 의 인증된 요청으로만 조회됩니다. 쿼리/프래그먼트는 URL 에서 제거했습니다.",
+        ]
+        return "\n".join(lines)
     except Exception as e:
         return f"[ERROR] 스크린샷 실패: {e}"
 
@@ -4615,6 +4737,220 @@ async def tool_capture_screenshot(
     return result_message + cleanup_summary
 
 
+_CLICK_EXPECT_KEYS = {
+    "url_contains", "url_changed", "text_present", "text_absent",
+    "selector_visible", "selector_absent", "checked",
+}
+_CLICK_ACTIONABLE_CSS = (
+    "a[href],button,input,select,textarea,summary,label,[role=button],[role=link],[role=menuitem],"
+    "[role=tab],[role=checkbox],[role=radio],[role=switch],[role=option],[onclick]"
+)
+_CLICK_FINGERPRINT_JS = """() => {
+    const text = document.body ? String(document.body.innerText || '') : '';
+    let h = 5381;
+    for (let i = 0; i < Math.min(text.length, 20000); i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+    let states = '';
+    document.querySelectorAll('input[type=checkbox],input[type=radio],[aria-checked],[aria-expanded],[aria-pressed],[aria-selected],details,option').forEach((e, i) => {
+        if (i < 400) states += (e.checked ? 'c' : '') + (e.selected ? 's' : '') + (e.open ? 'o' : '') + '|' +
+            (e.getAttribute('aria-checked') || '') + (e.getAttribute('aria-expanded') || '') +
+            (e.getAttribute('aria-pressed') || '') + (e.getAttribute('aria-selected') || '') + ';';
+    });
+    let g = 5381;
+    for (let k = 0; k < states.length; k++) g = ((g << 5) + g + states.charCodeAt(k)) | 0;
+    const dialogs = Array.from(document.querySelectorAll('dialog[open],[role=dialog],[role=alertdialog],[aria-modal=true]'))
+        .filter((d) => { const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).length;
+    return {href: String(location.href || ''), textLen: text.length, textHash: h, stateHash: g, dialogs};
+}"""
+
+
+def _normalize_click_expect(raw: Any) -> Tuple[Dict[str, Any], str]:
+    """expect(dict 또는 JSON 문자열)를 검증한다. 모르는 키는 무시하지 않고 거부한다."""
+    if raw in (None, "", {}):
+        return {}, ""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return {}, "expect 는 JSON 객체여야 합니다"
+    if not isinstance(raw, dict):
+        return {}, "expect 는 객체여야 합니다"
+    unknown = sorted(set(raw) - _CLICK_EXPECT_KEYS)
+    if unknown:
+        return {}, f"지원하지 않는 expect 키: {', '.join(unknown)}"
+    spec: Dict[str, Any] = {}
+    for key in ("url_contains", "text_present", "text_absent", "selector_visible", "selector_absent"):
+        if raw.get(key) not in (None, ""):
+            spec[key] = str(raw[key])[:300]
+    if raw.get("url_changed") in (True, "true", "True", 1):
+        spec["url_changed"] = True
+    checked = raw.get("checked")
+    if isinstance(checked, dict) and checked.get("selector"):
+        spec["checked"] = {"selector": str(checked["selector"])[:300], "value": checked.get("value", True) not in (False, "false", "False", 0)}
+    elif checked not in (None, ""):
+        return {}, "expect.checked 는 {selector, value} 형식이어야 합니다"
+    return spec, ""
+
+
+def _fingerprint_changes(before: Dict[str, Any], after: Dict[str, Any]) -> List[str]:
+    changed = []
+    if before.get("href") != after.get("href"):
+        changed.append("url")
+    if before.get("textHash") != after.get("textHash") or before.get("textLen") != after.get("textLen"):
+        changed.append("text")
+    if before.get("stateHash") != after.get("stateHash"):
+        changed.append("control_state")
+    if before.get("dialogs") != after.get("dialogs"):
+        changed.append("dialog")
+    return changed
+
+
+async def _server_expectation_checks(page: Any, expect: Dict[str, Any], href_before: str) -> Dict[str, bool]:
+    checks: Dict[str, bool] = {}
+    if "url_contains" in expect:
+        checks["url_contains"] = expect["url_contains"] in str(page.url)
+    if expect.get("url_changed"):
+        checks["url_changed"] = str(page.url) != href_before
+    if "text_present" in expect or "text_absent" in expect:
+        body = str(await page.evaluate("() => document.body ? String(document.body.innerText || '') : ''"))
+        if "text_present" in expect:
+            checks["text_present"] = expect["text_present"] in body
+        if "text_absent" in expect:
+            checks["text_absent"] = expect["text_absent"] not in body
+    try:
+        if "selector_visible" in expect:
+            loc = page.locator(expect["selector_visible"])
+            checks["selector_visible"] = any([await loc.nth(i).is_visible() for i in range(min(await loc.count(), 20))])
+        if "selector_absent" in expect:
+            checks["selector_absent"] = await page.locator(expect["selector_absent"]).count() == 0
+        if "checked" in expect:
+            checks["checked"] = bool(await page.locator(expect["checked"]["selector"]).first.is_checked()) == bool(expect["checked"]["value"])
+    except Exception:  # noqa: BLE001
+        for key in ("selector_visible", "selector_absent", "checked"):
+            if key in expect:
+                checks.setdefault(key, False)
+    return checks
+
+
+async def _server_click(
+    page: Any, selector: str, *, nth: Optional[int], strict: bool, expect: Dict[str, Any],
+) -> Dict[str, Any]:
+    """서버 Playwright 레인 클릭 — PC 레인과 같은 dispatched/verified 스키마를 돌려준다."""
+    def refusal(code: str, message: str, **extra: Any) -> Dict[str, Any]:
+        return {"error": message, "error_code": code, "dispatched": False, "dispatch_state": "not_dispatched", **extra}
+
+    locator = page.locator(selector)
+    total = await locator.count()
+    if total == 0:
+        return refusal("ELEMENT_NOT_FOUND", f"요소를 찾을 수 없습니다: {selector}", matched_count=0)
+    visible_idx = [i for i in range(min(total, 50)) if await locator.nth(i).is_visible()]
+    if not visible_idx:
+        return refusal("ELEMENT_HIDDEN", f"일치하는 요소가 모두 보이지 않습니다: {selector}", matched_count=total, visible_count=0)
+    if selector.lower().startswith("text="):
+        actionable = [
+            i for i in visible_idx
+            if await locator.nth(i).evaluate(f"(el) => !!el.closest({json.dumps(_CLICK_ACTIONABLE_CSS)})")
+        ]
+        if not actionable:
+            return refusal(
+                "ELEMENT_NOT_ACTIONABLE", "text 와 일치하는 요소가 있으나 클릭 가능한 요소(버튼/링크 등)가 아닙니다",
+                matched_count=total, visible_count=len(visible_idx),
+            )
+        visible_idx = actionable
+    if nth is not None:
+        if nth < 0 or nth >= len(visible_idx):
+            return refusal("NTH_OUT_OF_RANGE", "nth 범위 초과", visible_count=len(visible_idx))
+        chosen = visible_idx[nth]
+    elif len(visible_idx) > 1 and strict:
+        return refusal(
+            "SELECTOR_AMBIGUOUS", f"일치하는 보이는 요소가 {len(visible_idx)}개입니다. selector 를 좁히거나 nth 를 지정하세요",
+            matched_count=total, visible_count=len(visible_idx),
+        )
+    else:
+        chosen = visible_idx[0]
+    target = locator.nth(chosen)
+    if await target.is_disabled():
+        return refusal("ELEMENT_DISABLED", "요소가 비활성(disabled) 상태입니다", matched_count=total)
+
+    before = await page.evaluate(_CLICK_FINGERPRINT_JS)
+    try:
+        await target.click(timeout=10_000)
+    except Exception as exc:  # noqa: BLE001
+        message = str(exc)
+        if "intercepts pointer events" in message:
+            return refusal("ELEMENT_OBSCURED", "다른 요소가 클릭 지점을 가리고 있습니다", matched_count=total)
+        return {
+            "error": f"클릭 전달 여부를 확정하지 못했습니다: {message[:160]}", "error_code": "CLICK_DISPATCH_UNCERTAIN",
+            "dispatched": False, "dispatch_state": "uncertain", "retry_safe": False,
+        }
+
+    verified, checks, changed, state = False, {}, [], "unknown"
+    after: Dict[str, Any] = {}
+    if expect:
+        deadline = asyncio.get_running_loop().time() + 4.0
+        while True:
+            checks = await _server_expectation_checks(page, expect, str(before.get("href") or ""))
+            verified = set(checks) == set(expect) and all(checks.values())
+            if verified or asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(0.25)
+        state = "verified" if verified else "failed"
+    else:
+        await asyncio.sleep(0.7)
+        try:
+            after = await page.evaluate(_CLICK_FINGERPRINT_JS)
+            changed = _fingerprint_changes(before, after)
+            state = "observed_change" if changed else "no_observed_effect"
+        except Exception:  # noqa: BLE001
+            state = "unknown"  # 문서가 교체되는 중이면 변화를 확정하지 못한다
+    return {
+        "dispatched": True, "verified": verified, "verification_state": state, "retry_safe": False,
+        "matched_count": total, "visible_count": len(visible_idx), "checks": checks, "changed": changed,
+        "href_before": str(before.get("href") or ""), "href_after": str(page.url),
+    }
+
+
+def _format_click_result(selector: str, data: Dict[str, Any], note: str = "") -> str:
+    state = str(data.get("verification_state") or "unknown")
+    href_after = str(data.get("href_after") or "")
+    where = f" → {href_after}" if href_after and href_after != data.get("href_before") else ""
+    if state == "verified":
+        passed = ",".join(sorted(k for k, v in (data.get("checks") or {}).items() if v))
+        return f"[클릭 완료] selector={selector} (후조건 확인됨: {passed}){where}{note}"
+    if state == "observed_change":
+        return (
+            f"[클릭 전달됨·변화 관측] selector={selector} 변화={','.join(data.get('changed') or [])}{where}\n"
+            f"※ 기대 후조건(expect)을 지정하지 않아 성공으로 검증되지 않았습니다. 같은 클릭을 자동으로 다시 누르지 마세요.{note}"
+        )
+    if state == "no_observed_effect":
+        return (
+            f"[클릭 전달됨·변화 없음 — 미검증] selector={selector}\n"
+            "※ 클릭 이벤트는 전달됐지만 URL/본문/컨트롤 상태 변화가 관측되지 않았습니다. 다시 누르기 전에 "
+            f"browser_snapshot 으로 상태를 확인하세요(외부 쓰기라면 중복될 수 있음).{note}"
+        )
+    return (
+        f"[클릭 전달됨·미검증] selector={selector}\n"
+        f"※ 클릭 후 상태를 읽지 못했습니다(탐색 중일 수 있음). browser_snapshot 으로 확인하세요. 자동 재클릭 금지.{note}"
+    )
+
+
+def _format_click_error(selector: str, code: str, message: str, detail: Dict[str, Any]) -> str:
+    dispatched = detail.get("dispatched") is True
+    candidates = detail.get("candidates")
+    extra = f" 후보={json.dumps(candidates, ensure_ascii=False)[:300]}" if candidates else ""
+    if code == "CLICK_NOT_VERIFIED" or (dispatched and detail.get("verification_state") == "failed"):
+        checks = json.dumps(detail.get("checks") or {}, ensure_ascii=False)
+        return (
+            f"[ERROR] 클릭은 전달됐으나 기대 후조건을 확인하지 못했습니다 (CLICK_NOT_VERIFIED) selector={selector} checks={checks}\n"
+            "※ 자동으로 다시 클릭하지 않았습니다. browser_snapshot 으로 현재 상태를 확인한 뒤 판단하세요."
+        )
+    if detail.get("dispatch_state") == "uncertain":
+        return (
+            f"[ERROR] 클릭 전달 여부 불확실 ({code or 'UNKNOWN'}) selector={selector}: {message}\n"
+            "※ 효과가 불확실한 클릭이라 자동으로 재시도하지 않았습니다. browser_snapshot 으로 상태를 확인하세요."
+        )
+    return f"[ERROR] 클릭 실패 ({code or 'UNKNOWN'}) ({selector}): {message}{extra}"
+
+
 @_pc_agent_deadline
 async def tool_browser_click(
     selector: str,
@@ -4622,8 +4958,23 @@ async def tool_browser_click(
     browser_work_key: str = "",
     browser_lane: str = "",
     tenant_id: str = "",
+    nth: Any = None,
+    expect: Any = None,
+    strict: Any = True,
 ) -> str:
-    """CSS selector로 요소 클릭."""
+    """CSS selector 또는 text= 로 보이는 클릭 가능 요소를 한 번 클릭하고, 전달(dispatched)과 후조건 검증(verified)을 구분해 알린다."""
+    if not str(selector or "").strip():
+        return "[ERROR] selector 필수"
+    expect_spec, expect_error = _normalize_click_expect(expect)
+    if expect_error:
+        return f"[ERROR] 클릭 실패 (INVALID_EXPECT): {expect_error}"
+    nth_value: Optional[int] = None
+    if nth not in (None, ""):
+        try:
+            nth_value = int(nth)
+        except (TypeError, ValueError):
+            return "[ERROR] 클릭 실패 (INVALID_NTH): nth 는 정수여야 합니다"
+    strict_value = strict not in (False, "false", "False", 0, "0")
     ctx, err = await _acquire_pw_context(browser_session_id, browser_work_key, browser_lane=browser_lane)
     if err:
         return err
@@ -4632,12 +4983,25 @@ async def tool_browser_click(
         from app.services import browser_login_autosave as _autosave
 
         origin_before = _autosave.page_origin(page)
-        await page.click(selector, timeout=30_000)
+        if _is_pc_agent_page(page):
+            from app.browser_bridge.service import BrowserBridgeError
+
+            try:
+                data = await page.click_detailed(selector, strict=strict_value, nth=nth_value, expect=expect_spec or None)
+            except BrowserBridgeError as exc:
+                return _format_click_error(selector, exc.error_code, str(exc), exc.detail)
+        else:
+            data = await _server_click(page, selector, nth=nth_value, strict=strict_value, expect=expect_spec)
+            if data.get("error"):
+                return _format_click_error(selector, str(data.get("error_code") or ""), str(data.get("error")), data)
+            if expect_spec and not data.get("verified"):
+                data.update(error_code="CLICK_NOT_VERIFIED")
+                return _format_click_error(selector, "CLICK_NOT_VERIFIED", "후조건 미확인", data)
         note = await _autosave.on_submit(
             page, origin_before, tenant_id=tenant_id,
             fallback_session=browser_session_id or browser_work_key,
         )
-        return f"[클릭 완료] selector={selector}{note}"
+        return _format_click_result(selector, data, note)
     except Exception as e:
         return f"[ERROR] 클릭 실패 ({selector}): {e}"
 
@@ -5009,6 +5373,31 @@ async def tool_browser_tab_list(browser_session_id: str = "", browser_work_key: 
 
 # ─── 대화 히스토리 검색 ────────────────────────────────────────────────────────
 
+_HISTORY_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_history_date_range(
+    date_from: Any, date_to: Any,
+) -> Tuple[Optional[_date], Optional[_date], str]:
+    """YYYY-MM-DD 문자열을 date 로 변환한다. (from, to, 오류문자열). asyncpg 는 str 을 ::date 로 바인딩하지 못한다."""
+    parsed: List[Optional[_date]] = []
+    for label, raw in (("date_from", date_from), ("date_to", date_to)):
+        text = str(raw or "").strip()
+        if not text:
+            parsed.append(None)
+            continue
+        try:
+            if not _HISTORY_DATE_RE.match(text):
+                raise ValueError(text)
+            parsed.append(_date.fromisoformat(text))
+        except ValueError:
+            return None, None, f"[ERROR] {label} 형식 오류: '{text[:30]}' — YYYY-MM-DD 로 지정하세요"
+    start, end = parsed
+    if start and end and start > end:
+        return None, None, f"[ERROR] 날짜 범위 오류: date_from({start}) 이 date_to({end}) 보다 늦습니다"
+    return start, end, ""
+
+
 async def tool_search_chat_history(
     query: str,
     dsn: str,
@@ -5024,6 +5413,9 @@ async def tool_search_chat_history(
         return "[ERROR] query 필수"
     query = query.strip()
     limit = max(1, min(30, limit))
+    date_start, date_end, date_error = _parse_history_date_range(date_from, date_to)
+    if date_error:
+        return date_error
 
     # ── Semantic 모드 ──
     if mode == "semantic":
@@ -5035,6 +5427,8 @@ async def tool_search_chat_history(
             if not results:
                 return f"시맨틱 검색 '{query}' — 결과 없음 (임베딩 미생성 메시지가 많으면 backfill 필요)"
             lines = [f"[시맨틱 검색] '{query}' — {len(results)}건"]
+            if date_start or date_end:
+                lines.append("(date_from/date_to 는 keyword 모드에서만 적용됩니다)")
             for r in results:
                 lines.append(
                     f"\n📅 {r['created_at'][:16]} | {r['role']} | 유사도 {r['similarity']}"
@@ -5070,13 +5464,13 @@ async def tool_search_chat_history(
             conditions.append(f"m.role = ${param_idx}")
             params.append(role)
             param_idx += 1
-        if date_from:
+        if date_start:
             conditions.append(f"m.created_at >= ${param_idx}::date")
-            params.append(date_from)
+            params.append(date_start)
             param_idx += 1
-        if date_to:
+        if date_end:
             conditions.append(f"m.created_at < (${param_idx}::date + interval '1 day')")
-            params.append(date_to)
+            params.append(date_end)
             param_idx += 1
 
         where_clause = " AND ".join(conditions)
@@ -6276,6 +6670,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
             browser_lane=str(params.get("browser_lane") or ""),
+            tenant_id=str(params.get("tenant_id") or ""),
         )
     elif name == "browser_click":
         return await tool_browser_click(
@@ -6284,6 +6679,9 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             browser_work_key=params.get("browser_work_key", ""),
             browser_lane=str(params.get("browser_lane") or ""),
             tenant_id=str(params.get("tenant_id") or ""),
+            nth=params.get("nth"),
+            expect=params.get("expect"),
+            strict=params.get("strict", True),
         )
     elif name == "browser_fill":
         return await tool_browser_fill(

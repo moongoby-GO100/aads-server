@@ -16,6 +16,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.auth import TenantRole, require_tenant_role, verify_token
@@ -42,6 +43,7 @@ from app.services.channel_router import (
     directive_from_authenticated_context,
     payload_hash,
 )
+from app.services.browser_artifact_state import ArtifactError, load_screenshot_artifact
 from app.services.managed_browser import profile_info
 
 router = APIRouter(prefix="/browser-tasks", tags=["browser-tasks"])
@@ -222,6 +224,26 @@ async def api_check_browser_target_access(
 ) -> dict[str, Any]:
     return await check_browser_target_access(
         work_key=body.work_key, target_url=body.target_url, egress_policy=body.egress_policy,
+    )
+
+
+@router.get("/artifacts/{artifact_id}")
+async def api_get_browser_artifact(
+    artifact_id: str,
+    session_id: str = Query(default="", max_length=200),
+    work_key: str = Query(default="", max_length=120),
+    context: TenantContext = Depends(require_viewer),
+) -> Response:
+    try:
+        png, _meta = load_screenshot_artifact(
+            artifact_id=artifact_id, tenant_id=_tenant_id(context),
+            session_id=session_id, work_key=work_key,
+        )
+    except ArtifactError:
+        raise HTTPException(status_code=404, detail="browser_artifact_not_found") from None
+    return Response(
+        content=png, media_type="image/png",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )
 
 

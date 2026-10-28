@@ -373,7 +373,9 @@ async def test_browser_eval_preserves_bank_target_url_hint(monkeypatch):
     )
     captured: list[dict] = []
 
-    async def fake_send_cdp_command(port, method, params, *, timeout_seconds, target_id="", target_idx=0):
+    async def fake_send_cdp_command(
+        port, method, params, *, timeout_seconds, target_id="", target_idx=0, **routing
+    ):
         captured.append(
             {
                 "port": port,
@@ -381,6 +383,7 @@ async def test_browser_eval_preserves_bank_target_url_hint(monkeypatch):
                 "params": dict(params or {}),
                 "target_id": target_id,
                 "target_idx": target_idx,
+                "routing": dict(routing),
             }
         )
         return {
@@ -408,8 +411,9 @@ async def test_browser_eval_preserves_bank_target_url_hint(monkeypatch):
     )
 
     assert result["status"] == "success"
-    assert captured[0]["params"]["work_key"] == "yeoljeong-bank-shinhan-individual-abc"
-    assert captured[0]["params"]["target_url"] == "https://bank.shinhan.com/rib/easy/index.jsp"
+    assert captured[0]["routing"]["work_key"] == "yeoljeong-bank-shinhan-individual-abc"
+    assert captured[0]["routing"]["target_url"] == "https://bank.shinhan.com/rib/easy/index.jsp"
+    assert "work_key" not in captured[0]["params"] and "target_url" not in captured[0]["params"]
 
 
 def test_browser_window_cli_args_accepts_position_and_size():

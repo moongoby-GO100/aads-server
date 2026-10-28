@@ -50,12 +50,12 @@ RECORDED_TOOLS: dict[str, str] = {
 
 _SUCCESS_MARKERS: dict[str, tuple[str, ...]] = {
     "navigate": ("[탐색 완료]",),
-    "click": ("[클릭 완료]",),
+    "click": ("[클릭 완료]", "[클릭 전달됨·변화 관측]"),
     "fill": ("[입력 완료]",),
     "press": ("[키 입력 완료]",),
     "select": ("[옵션 선택 완료]",),
     "check": ("[체크 상태 설정 완료]",),
-    "snapshot": ("[ARIA 스냅샷", "[UI 요소 추출"),
+    "snapshot": ("[ARIA 스냅샷", "[UI 요소 추출", "[페이지 관측"),
     "screenshot": ("[스크린샷 PNG",),
 }
 

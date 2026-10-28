@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
+from time import monotonic as _monotonic
 from time import time as _time
 from typing import Any, Dict
 
@@ -36,6 +37,10 @@ _ERROR_RUNTIME_EVALUATE_TIMEOUT = "RUNTIME_EVALUATE_TIMEOUT"
 _ERROR_STALE_TARGET = "STALE_TARGET"
 _ERROR_SYNTAX_ERROR = "SYNTAX_ERROR"
 _ERROR_SPA_SHELL_ONLY = "SPA_SHELL_ONLY"
+_ERROR_TARGET_NOT_FOUND = "TARGET_NOT_FOUND"
+_ERROR_TARGET_MISMATCH = "TARGET_MISMATCH"
+_ERROR_CLICK_NOT_VERIFIED = "CLICK_NOT_VERIFIED"
+_ROUTING_HINT_KEYS = ("work_key", "target_url", "url_pattern", "expected_url")
 DOWNLOAD_CONTENT_MAX_BYTES = max(
     0,
     int(os.getenv("AADS_BROWSER_DOWNLOAD_CONTENT_MAX_BYTES", str(2 * 1024 * 1024)) or "0"),
@@ -592,6 +597,8 @@ async def _select_page_targets(
     target_url: str = "",
     url_pattern: str = "",
     require_url_match: bool = False,
+    strict_target: bool = False,
+    expected_url: str = "",
 ) -> list[dict[str, Any]]:
     try:
         targets = await _list_cdp_targets(port)
@@ -614,6 +621,28 @@ async def _select_page_targets(
         enriched = dict(target)
         enriched["targetId"] = str(target.get("targetId") or target.get("id") or "")
         pages.append(enriched)
+    if strict_target and target_id:
+        # Explicit target: this tab or nothing. Falling back to another tab would
+        # run a click/read against a page the caller never named.
+        exact = [page for page in pages if str(page.get("targetId") or "") == target_id]
+        if not exact:
+            raise CDPCommandError(
+                _ERROR_TARGET_NOT_FOUND,
+                f"지정한 탭을 찾을 수 없습니다 (target_id={target_id}, port={port})",
+                details={"port": port, "target_id": target_id, "open_page_count": len(pages)},
+            )
+        if expected_url and not _same_or_child_host(str(exact[0].get("url") or ""), expected_url):
+            raise CDPCommandError(
+                _ERROR_TARGET_MISMATCH,
+                "지정한 탭의 도메인이 기대한 URL과 다릅니다",
+                details={
+                    "port": port,
+                    "target_id": target_id,
+                    "expected_host": _url_hostname(expected_url),
+                    "actual_host": _url_hostname(str(exact[0].get("url") or "")),
+                },
+            )
+        return exact[:1]
     if not pages:
         raise CDPCommandError(
             _ERROR_STALE_TARGET,
@@ -893,6 +922,13 @@ async def _best_effort_target_probe(
     return report
 
 
+def _strip_routing_hints(params: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    """Routing hints steer tab selection; they are not CDP protocol fields."""
+    if not isinstance(params, dict) or not any(key in params for key in _ROUTING_HINT_KEYS):
+        return params
+    return {key: value for key, value in params.items() if key not in _ROUTING_HINT_KEYS}
+
+
 async def _send_cdp_command_unlocked(
     port: int,
     method: str,
@@ -901,6 +937,10 @@ async def _send_cdp_command_unlocked(
     timeout_seconds: float,
     target_id: str = "",
     target_idx: int = 0,
+    work_key: str = "",
+    target_url: str = "",
+    url_pattern: str = "",
+    expected_url: str = "",
 ) -> Dict[str, Any]:
     import websockets
 
@@ -908,15 +948,24 @@ async def _send_cdp_command_unlocked(
     if method.startswith("Browser.") or method.startswith("Target."):
         return await _send_cdp(browser_ws_url, method, params, timeout_seconds=timeout_seconds)
 
-    target_url_hint = str((params or {}).get("target_url") or (params or {}).get("url") or "")
-    url_pattern_hint = str((params or {}).get("url_pattern") or "")
-    work_key = _work_key_from_params(params)
+    hints = params or {}
+    # Keyword routing wins; hints embedded in params stay supported for older callers.
+    target_url_hint = str(target_url or hints.get("target_url") or hints.get("url") or "")
+    url_pattern_hint = str(url_pattern or hints.get("url_pattern") or "")
+    expected_url = str(expected_url or hints.get("expected_url") or "")
+    work_key = CDPSessionManager.normalize_work_key(work_key or hints.get("work_key") or "general")
+    params = _strip_routing_hints(params)
     require_url_match = bool((target_url_hint or url_pattern_hint) and work_key.startswith("yeoljeong-bank-"))
 
+    strict_target = bool(target_id)
+    selection = "explicit" if strict_target else ""
     if not target_id and not (target_url_hint or url_pattern_hint):
-        session = CDPSessionManager.get_session(_work_key_from_params(params))
+        session = CDPSessionManager.get_session(work_key)
         if session and session.last_target_id:
             target_id = session.last_target_id
+            selection = "session"
+    if not selection:
+        selection = "hint" if (target_url_hint or url_pattern_hint) else "index"
 
     candidates = await _select_page_targets(
         port,
@@ -925,8 +974,13 @@ async def _send_cdp_command_unlocked(
         target_url=target_url_hint,
         url_pattern=url_pattern_hint,
         require_url_match=require_url_match,
+        strict_target=strict_target,
+        expected_url=expected_url,
     )
-    attempts = candidates[: max(1, min(len(candidates), CDP_RECOVERY_RETRY_LIMIT + 1))]
+    if strict_target:
+        attempts = candidates[:1]
+    else:
+        attempts = candidates[: max(1, min(len(candidates), CDP_RECOVERY_RETRY_LIMIT + 1))]
     last_error: CDPCommandError | None = None
     deadline = asyncio.get_running_loop().time() + max(0.5, timeout_seconds)
 
@@ -949,12 +1003,14 @@ async def _send_cdp_command_unlocked(
             # the page and then time out, so record use before sending it.
             from . import browser_reclaim
             browser_reclaim.mark_observed(candidate_target_id)
+        attempt_started = _monotonic()
         try:
             async with await _connect_cdp_ws(
                 websockets,
                 browser_ws_url,
                 open_timeout=max(0.5, min(CDP_CONNECT_TIMEOUT_SECONDS, per_attempt_timeout)),
             ) as ws:
+                connected_at = _monotonic()
                 try:
                     await _request_cdp(
                         ws,
@@ -993,6 +1049,7 @@ async def _send_cdp_command_unlocked(
                         },
                     )
                 command_error: CDPCommandError | None = None
+                attached_at = _monotonic()
                 try:
                     pre_runtime_cleanup: dict[str, Any] = {}
                     if method == "Runtime.evaluate":
@@ -1015,6 +1072,13 @@ async def _send_cdp_command_unlocked(
                         "id": candidate_target_id,
                         "url": candidate_url,
                         "title": candidate_title,
+                        "selection": selection,
+                    }
+                    finished_at = _monotonic()
+                    result["_timing"] = {
+                        "handshake_ms": round((connected_at - attempt_started) * 1000),
+                        "attach_ms": round((attached_at - connected_at) * 1000),
+                        "command_ms": round((finished_at - attached_at) * 1000),
                     }
                     return result
                 except CDPCommandError as cmd_exc:
@@ -1046,6 +1110,8 @@ async def _send_cdp_command_unlocked(
             last_error = exc
             if exc.code not in {_ERROR_STALE_TARGET, _ERROR_RUNTIME_EVALUATE_TIMEOUT, _ERROR_CDP_NOT_READY}:
                 raise
+            if strict_target:
+                raise
             if exc.code == _ERROR_STALE_TARGET and (deadline - asyncio.get_running_loop().time()) > 2.0:
                 await asyncio.sleep(1.5)
 
@@ -1072,22 +1138,38 @@ async def _send_cdp_command(
     timeout_seconds: float,
     target_id: str = "",
     target_idx: int = 0,
+    work_key: str = "",
+    target_url: str = "",
+    url_pattern: str = "",
+    expected_url: str = "",
 ) -> Dict[str, Any]:
     # _send_cdp_command_unlocked calls _send_cdp/_request_cdp directly; it does
     # not call this wrapper. Reclaim uses those same low-level calls under this
     # lock, so its last check and close cannot race a normal command on the port.
+    requested_at = _monotonic()
     async with _owned_tab_lock(port):
+        lock_wait_ms = round((_monotonic() - requested_at) * 1000)
+        routing: Dict[str, Any] = {}
+        for key, value in (
+            ("work_key", work_key), ("target_url", target_url),
+            ("url_pattern", url_pattern), ("expected_url", expected_url),
+        ):
+            if value:
+                routing[key] = value
         result = await _send_cdp_command_unlocked(
             port, method, params, timeout_seconds=timeout_seconds,
-            target_id=target_id, target_idx=target_idx,
+            target_id=target_id, target_idx=target_idx, **routing,
         )
+        if isinstance(result, dict) and isinstance(result.get("_timing"), dict):
+            result["_timing"]["queue_ms"] = lock_wait_ms
         target = result.get("_target") if isinstance(result, dict) else None
         if isinstance(target, dict):
             resolved_id = str(target.get("id") or target.get("targetId") or "")
             if resolved_id:
                 from . import browser_reclaim
                 browser_reclaim.mark_observed(resolved_id)
-                session = CDPSessionManager.get_by_port(port)
+                session = CDPSessionManager.get_session(work_key) if work_key else None
+                session = session or CDPSessionManager.get_by_port(port)
                 if session:
                     CDPSessionManager.mark_healthy(
                         session.work_key, target_id=resolved_id,
@@ -1170,6 +1252,55 @@ def _is_spa_shell_only(diagnostics: dict[str, Any]) -> bool:
     body_text_length = int(diagnostics.get("bodyTextLength") or 0)
     card_count = int(diagnostics.get("cardCount") or 0)
     return ready_state in {"interactive", "complete"} and card_count == 0 and body_text_length < VVIC_SPA_MIN_TEXT_LENGTH
+
+
+def _routing_kwargs(params: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Tab routing carried by a browser_* command; empty values are omitted."""
+    source = params if isinstance(params, dict) else {}
+    routing: Dict[str, Any] = {}
+    for key in ("target_id", "work_key", "target_url", "url_pattern", "expected_url"):
+        value = str(source.get(key) or "").strip()
+        if value:
+            routing[key] = value
+    try:
+        target_idx = int(source.get("target_idx") or 0)
+    except (TypeError, ValueError):
+        target_idx = 0
+    if target_idx:
+        routing["target_idx"] = target_idx
+    return routing
+
+
+def _attach_target(data: Any, result: Dict[str, Any] | None) -> Any:
+    """Report which tab actually answered so callers can verify pinning."""
+    target = result.get("_target") if isinstance(result, dict) else None
+    if isinstance(data, dict) and isinstance(target, dict):
+        if target.get("id"):
+            data.setdefault("target_id", target.get("id"))
+        if target.get("url"):
+            data.setdefault("target_url", target.get("url"))
+        if target.get("selection"):
+            data.setdefault("target_selection", target.get("selection"))
+    return data
+
+
+def _target_error_details(exc: CDPCommandError) -> CDPCommandError:
+    if exc.code in {_ERROR_TARGET_NOT_FOUND, _ERROR_TARGET_MISMATCH}:
+        exc.details.setdefault("dispatch_state", "not_dispatched")
+    else:
+        exc.details.setdefault("dispatch_state", "uncertain")
+    exc.details.setdefault("retry_safe", False)
+    return exc
+
+
+def _pin_routing(routing: Dict[str, Any], result: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Follow-up CDP calls of one command must hit the tab that answered the first call."""
+    target = result.get("_target") if isinstance(result, dict) else None
+    pinned = dict(routing)
+    if isinstance(target, dict) and target.get("id"):
+        pinned["target_id"] = str(target["id"])
+        pinned.pop("target_idx", None)
+    return pinned
 
 
 def _record_cdp_success(params: Dict[str, Any] | None, target: dict[str, Any] | None = None) -> None:
@@ -1279,6 +1410,7 @@ async def browser_navigate(params: Dict[str, Any]) -> Dict[str, Any]:
     port = _effective_port(params)
     reuse_tab = _as_bool(params.get("reuse_tab", True), default=True)
     target_id = str(params.get("target_id", "") or "")
+    explicit_target = bool(target_id)
     reused = False
 
     if not target_id:
@@ -1307,7 +1439,15 @@ async def browser_navigate(params: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         timeout_seconds = _resolve_timeout(params, param_name="page_timeout_seconds", default=CDP_COMMAND_TIMEOUT_SECONDS, maximum=90.0)
-        result = await _send_cdp_command(port, "Page.navigate", {"url": url}, timeout_seconds=timeout_seconds, target_id=target_id)
+        try:
+            result = await _send_cdp_command(port, "Page.navigate", {"url": url}, timeout_seconds=timeout_seconds, target_id=target_id)
+        except CDPCommandError as nav_exc:
+            # A session/domain-derived tab may have been closed; only a caller-supplied target is binding.
+            if explicit_target or not target_id or nav_exc.code != _ERROR_TARGET_NOT_FOUND:
+                raise
+            target_id = ""
+            reused = False
+            result = await _send_cdp_command(port, "Page.navigate", {"url": url}, timeout_seconds=timeout_seconds, target_id="")
         target = result.get("_target", {}) if isinstance(result, dict) else {}
         navigated_target_id = str(target.get("id") or target.get("targetId") or target_id or "")
         CDPSessionManager.mark_healthy(
@@ -1327,53 +1467,397 @@ async def browser_navigate(params: Dict[str, Any]) -> Dict[str, Any]:
             },
         }
     except CDPCommandError as exc:
-        exc = await _diagnose_cdp_failure(port, params, exc)
+        exc = await _diagnose_cdp_failure(port, params, _target_error_details(exc))
         return _command_error_response(port, params, exc)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
 
+_STATE_FINGERPRINT_JS_FN = r"""
+function __fp() {
+  var body = document.body;
+  var text = body ? String(body.innerText || '') : '';
+  var h = 5381, n = Math.min(text.length, 20000);
+  for (var i = 0; i < n; i++) { h = ((h << 5) + h + text.charCodeAt(i)) | 0; }
+  var states = '';
+  var nodes = document.querySelectorAll('input[type=checkbox],input[type=radio],[aria-checked],[aria-expanded],[aria-pressed],[aria-selected],details,option');
+  for (var j = 0; j < nodes.length && j < 400; j++) {
+    var e = nodes[j];
+    states += (e.checked ? 'c' : '') + (e.selected ? 's' : '') + (e.open ? 'o' : '') + '|' +
+      (e.getAttribute('aria-checked') || '') + (e.getAttribute('aria-expanded') || '') +
+      (e.getAttribute('aria-pressed') || '') + (e.getAttribute('aria-selected') || '') + ';';
+  }
+  var g = 5381;
+  for (var k = 0; k < states.length; k++) { g = ((g << 5) + g + states.charCodeAt(k)) | 0; }
+  var dialogs = 0;
+  var dl = document.querySelectorAll('dialog[open],[role=dialog],[role=alertdialog],[aria-modal=true]');
+  for (var d = 0; d < dl.length; d++) {
+    var rr = dl[d].getBoundingClientRect();
+    if (rr.width > 0 && rr.height > 0) dialogs++;
+  }
+  return {href: String(location.href || ''), ready: document.readyState || '', textLen: text.length,
+          textHash: h, stateHash: g, dialogs: dialogs};
+}
+"""
+
+_CLICK_RESOLVE_JS = r"""
+(function() {
+__FP_FN__
+var spec = __SPEC__;
+function norm(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
+function visible(el) {
+  var r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return false;
+  var cs = getComputedStyle(el);
+  return cs.visibility !== 'hidden' && cs.display !== 'none' && parseFloat(cs.opacity || '1') > 0;
+}
+function nameOf(el) {
+  var t = (el.tagName || '').toLowerCase();
+  var ty = (el.getAttribute('type') || '').toLowerCase();
+  if (t === 'input' && (ty === 'button' || ty === 'submit' || ty === 'reset')) return norm(el.value);
+  return norm(el.getAttribute('aria-label') || el.innerText || el.textContent || el.getAttribute('title'));
+}
+function describe(el) {
+  return {tag: (el.tagName || '').toLowerCase(), role: el.getAttribute('role') || '',
+          type: (el.getAttribute('type') || '').toLowerCase(),
+          id: el.id ? String(el.id).slice(0, 40) : '', text: nameOf(el).slice(0, 40)};
+}
+function fail(code, message, extra) {
+  var o = {error: message, error_code: code, dispatched: false};
+  if (extra) { for (var k in extra) o[k] = extra[k]; }
+  return JSON.stringify(o);
+}
+var ACT = 'a[href],button,input:not([type=hidden]),select,textarea,summary,label,[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=radio],[role=switch],[role=option],[onclick],[tabindex]:not([tabindex="-1"])';
+var matches = [];
+try {
+  var tm = /^text\s*=\s*([\s\S]*)$/i.exec(spec.selector);
+  if (tm) {
+    var want = tm[1].trim(), exact = false;
+    var q = /^(["'])([\s\S]*)\1$/.exec(want);
+    if (q) { exact = true; want = q[2]; }
+    want = norm(want);
+    var lw = want.toLowerCase();
+    var hits = Array.prototype.slice.call(document.querySelectorAll(ACT)).filter(function(el) {
+      var n = nameOf(el);
+      return exact ? n === want : n.toLowerCase().indexOf(lw) >= 0;
+    });
+    matches = hits.filter(function(c) { return !hits.some(function(o) { return o !== c && c.contains(o); }); });
+    if (!matches.length && want) {
+      var loose = 0, all = document.body ? document.body.querySelectorAll('*') : [];
+      for (var i = 0; i < all.length && i < 6000; i++) {
+        var n2 = norm(all[i].innerText || '');
+        if (n2 && (exact ? n2 === want : n2.toLowerCase().indexOf(lw) >= 0) && visible(all[i])) loose++;
+      }
+      if (loose) return fail('ELEMENT_NOT_ACTIONABLE',
+        'text 와 일치하는 텍스트는 있으나 클릭 가능한 요소(버튼/링크 등)가 아닙니다', {matched_text_elements: loose});
+    }
+  } else {
+    matches = Array.prototype.slice.call(document.querySelectorAll(spec.selector));
+  }
+} catch (err) {
+  return fail('INVALID_SELECTOR', 'selector 해석 실패: ' + String((err && err.message) || err).slice(0, 120));
+}
+if (!matches.length) return fail('ELEMENT_NOT_FOUND', '요소를 찾을 수 없습니다: ' + spec.selector, {matched_count: 0});
+var vis = matches.filter(visible);
+if (!vis.length) return fail('ELEMENT_HIDDEN', '일치하는 요소가 모두 보이지 않습니다: ' + spec.selector, {matched_count: matches.length, visible_count: 0});
+var el;
+if (spec.nth !== null) {
+  if (spec.nth < 0 || spec.nth >= vis.length) return fail('NTH_OUT_OF_RANGE', 'nth 범위 초과', {visible_count: vis.length});
+  el = vis[spec.nth];
+} else if (vis.length > 1 && spec.strict) {
+  return fail('SELECTOR_AMBIGUOUS', '일치하는 보이는 요소가 ' + vis.length + '개입니다. selector 를 좁히거나 nth 를 지정하세요',
+    {matched_count: matches.length, visible_count: vis.length, candidates: vis.slice(0, 5).map(describe)});
+} else {
+  el = vis[0];
+}
+if (el.disabled || el.getAttribute('aria-disabled') === 'true' || (el.closest && el.closest('fieldset:disabled'))) {
+  return fail('ELEMENT_DISABLED', '요소가 비활성(disabled) 상태입니다', {target: describe(el)});
+}
+el.scrollIntoView({block: 'center', inline: 'center'});
+var r = el.getBoundingClientRect();
+var top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+if (top && top !== el && !el.contains(top) && !top.contains(el)) {
+  var lab = top.closest ? top.closest('label') : null;
+  var paired = lab && (lab === el || (el.labels && Array.prototype.indexOf.call(el.labels, lab) >= 0));
+  if (!paired) return fail('ELEMENT_OBSCURED', '다른 요소가 클릭 지점을 가리고 있습니다', {target: describe(el), covering: describe(top)});
+}
+var before = __fp();
+var hasChecked = 'checked' in el;
+var checkedBefore = hasChecked ? !!el.checked : null;
+el.click();
+return JSON.stringify({dispatched: true, before: before, target: describe(el),
+  matched_count: matches.length, visible_count: vis.length,
+  checked_before: checkedBefore, checked_after: hasChecked ? !!el.checked : null});
+})()
+"""
+
+_EXPECT_KEYS = {
+    "url_contains", "url_changed", "text_present", "text_absent",
+    "selector_visible", "selector_absent", "checked",
+}
+_EXPECT_EVAL_JS = r"""
+(function() {
+var spec = __SPEC__;
+var body = document.body ? String(document.body.innerText || '') : '';
+function visible(el) {
+  var r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return false;
+  var cs = getComputedStyle(el);
+  return cs.visibility !== 'hidden' && cs.display !== 'none';
+}
+var out = {href: String(location.href || '')};
+if (spec.url_contains) out.url_contains = out.href.indexOf(spec.url_contains) >= 0;
+if (spec.text_present) out.text_present = body.indexOf(spec.text_present) >= 0;
+if (spec.text_absent) out.text_absent = body.indexOf(spec.text_absent) < 0;
+if (spec.selector_visible) {
+  try { out.selector_visible = Array.prototype.slice.call(document.querySelectorAll(spec.selector_visible)).some(visible); }
+  catch (e) { out.selector_visible = false; }
+}
+if (spec.selector_absent) {
+  try { out.selector_absent = document.querySelectorAll(spec.selector_absent).length === 0; }
+  catch (e) { out.selector_absent = false; }
+}
+if (spec.checked && spec.checked.selector) {
+  try {
+    var ce = document.querySelector(spec.checked.selector);
+    out.checked = !!ce && (!!ce.checked === !!spec.checked.value);
+  } catch (e) { out.checked = false; }
+}
+return JSON.stringify(out);
+})()
+"""
+
+
+def _normalize_expectation(raw: Any) -> tuple[Dict[str, Any], str]:
+    """Return (expectation, error). Unknown keys are rejected rather than ignored."""
+    if raw in (None, "", {}):
+        return {}, ""
+    if not isinstance(raw, dict):
+        return {}, "expect 는 객체여야 합니다"
+    unknown = sorted(set(raw) - _EXPECT_KEYS)
+    if unknown:
+        return {}, f"지원하지 않는 expect 키: {', '.join(unknown)}"
+    spec: Dict[str, Any] = {}
+    for key in ("url_contains", "text_present", "text_absent", "selector_visible", "selector_absent"):
+        value = raw.get(key)
+        if value not in (None, ""):
+            spec[key] = str(value)[:300]
+    if _as_bool(raw.get("url_changed", False)):
+        spec["url_changed"] = True
+    checked = raw.get("checked")
+    if isinstance(checked, dict) and checked.get("selector"):
+        spec["checked"] = {"selector": str(checked["selector"])[:300], "value": _as_bool(checked.get("value", True), default=True)}
+    elif checked not in (None, ""):
+        return {}, "expect.checked 는 {selector, value} 형식이어야 합니다"
+    return spec, ""
+
+
+def _click_state_changes(before: Dict[str, Any], after: Dict[str, Any]) -> list[str]:
+    changed = []
+    if before.get("href") != after.get("href"):
+        changed.append("url")
+    if before.get("textHash") != after.get("textHash") or before.get("textLen") != after.get("textLen"):
+        changed.append("text")
+    if before.get("stateHash") != after.get("stateHash"):
+        changed.append("control_state")
+    if before.get("dialogs") != after.get("dialogs"):
+        changed.append("dialog")
+    return changed
+
+
+async def _read_json_eval(
+    port: int, expression: str, *, timeout_seconds: float, attempts: int, routing: Dict[str, Any],
+) -> tuple[Dict[str, Any] | None, str]:
+    """Evaluate on the pinned tab; a navigating document gets a few bounded re-reads."""
+    last = ""
+    for attempt in range(max(1, attempts)):
+        try:
+            result = await _send_cdp_command(
+                port, "Runtime.evaluate",
+                {"expression": expression, "returnByValue": True, "awaitPromise": False},
+                timeout_seconds=timeout_seconds, **routing,
+            )
+            if _runtime_exception_error(result) is None:
+                value = _decode_runtime_value(result)
+                if isinstance(value, dict):
+                    return value, ""
+                last = "non_object_result"
+            else:
+                last = "runtime_exception"
+        except CDPCommandError as exc:
+            last = exc.code
+            if exc.code in {_ERROR_TARGET_NOT_FOUND, _ERROR_TARGET_MISMATCH}:
+                break
+        if attempt + 1 < attempts:
+            await asyncio.sleep(0.3)
+    return None, last
+
+
 async def browser_click(params: Dict[str, Any]) -> Dict[str, Any]:
-    """CSS 셀렉터 클릭. params: selector(필수)"""
-    selector = params.get("selector", "")
+    """요소 클릭. params: selector(필수; CSS 또는 text=…), nth, strict(기본 true), expect, verify_settle_ms.
+
+    dispatched(클릭 이벤트 전달)와 verified(기대 후조건 확인)를 구분해 반환한다.
+    재전송하지 않는다 — 효과가 불확실한 클릭을 다시 누르면 외부 쓰기가 중복될 수 있다.
+    """
+    selector = str(params.get("selector", "") or "")
     if not selector:
         return {"status": "error", "data": {"error": "selector 파라미터가 필요합니다"}}
+    expectation, expect_error = _normalize_expectation(params.get("expect"))
+    if expect_error:
+        return {"status": "error", "data": {"error": expect_error, "error_code": "INVALID_EXPECT", "dispatched": False}}
+    nth_raw = params.get("nth")
+    try:
+        nth = int(nth_raw) if nth_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return {"status": "error", "data": {"error": "nth 는 정수여야 합니다", "error_code": "INVALID_NTH", "dispatched": False}}
 
     port = _effective_port(params)
     try:
-        # querySelector로 노드 찾기 → 좌표 계산 → 클릭
-        js = f"""
-        (function() {{
-            var el = document.querySelector({json.dumps(selector)});
-            if (!el) return JSON.stringify({{"error": "요소를 찾을 수 없습니다: " + {json.dumps(selector)}}});
-            var rect = el.getBoundingClientRect();
-            var x = rect.left + rect.width / 2;
-            var y = rect.top + rect.height / 2;
-            el.click();
-            return JSON.stringify({{"x": x, "y": y, "clicked": true}});
-        }})()
-        """
+        spec = {"selector": selector, "nth": nth, "strict": _as_bool(params.get("strict", True), default=True)}
+        js = _CLICK_RESOLVE_JS.replace("__FP_FN__", _STATE_FINGERPRINT_JS_FN).replace("__SPEC__", json.dumps(spec))
         timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
         result = await _send_cdp_command(
             port,
             "Runtime.evaluate",
             {"expression": js, "returnByValue": True, "awaitPromise": False},
             timeout_seconds=timeout_seconds,
+            **_routing_kwargs(params),
         )
         error = _runtime_exception_error(result)
         if error is not None:
             raise error
         data = _decode_runtime_value(result)
-        if isinstance(data, dict) and data.get("error"):
+        if not isinstance(data, dict):
+            return {"status": "error", "data": {"error": "클릭 결과를 해석하지 못했습니다", "error_code": "CLICK_RESULT_UNREADABLE", "dispatch_state": "uncertain", "retry_safe": False}}
+        _attach_target(data, result)
+        if data.get("error"):
             return {"status": "error", "data": data}
         _record_cdp_success(params, result.get("_target"))
-        logger.info("브라우저 클릭: %s", selector)
+
+        # Follow-ups must land on the tab that took the click, whatever selected it.
+        pinned = dict(_routing_kwargs(params))
+        resolved_id = str((result.get("_target") or {}).get("id") or "")
+        if resolved_id:
+            pinned["target_id"] = resolved_id
+        pinned.pop("target_idx", None)
+
+        before = data.pop("before", {}) if isinstance(data.get("before"), dict) else {}
+        verify_started = _monotonic()
+        checks: Dict[str, Any] = {}
+        after: Dict[str, Any] | None = None
+        verified = False
+        if expectation:
+            expect_timeout = _resolve_timeout(params, param_name="expect_timeout_seconds", default=4.0, maximum=20.0)
+            deadline = _monotonic() + expect_timeout
+            while True:
+                observed, read_error = await _read_json_eval(
+                    port, _EXPECT_EVAL_JS.replace("__SPEC__", json.dumps(expectation)),
+                    timeout_seconds=5.0, attempts=1, routing=pinned,
+                )
+                if observed is not None:
+                    after = {"href": observed.get("href", "")}
+                    checks = {key: bool(observed.get(key)) for key in expectation if key in observed and key != "url_changed"}
+                    if expectation.get("url_changed"):
+                        checks["url_changed"] = str(observed.get("href", "")) != str(before.get("href", ""))
+                    verified = bool(checks) and all(checks.values()) and set(checks) == set(expectation)
+                    if verified:
+                        break
+                elif read_error in {_ERROR_TARGET_NOT_FOUND, _ERROR_TARGET_MISMATCH}:
+                    checks["target"] = False
+                    break
+                if _monotonic() >= deadline:
+                    break
+                await asyncio.sleep(0.25)
+            state = "verified" if verified else "failed"
+            changed: list[str] = []
+        else:
+            try:
+                settle_ms = float(params.get("verify_settle_ms", 700) or 700)
+            except (TypeError, ValueError):
+                settle_ms = 700.0
+            await asyncio.sleep(max(0.0, min(settle_ms, 3000.0)) / 1000.0)
+            observed, _ = await _read_json_eval(
+                port, f"(function(){{{_STATE_FINGERPRINT_JS_FN} return JSON.stringify(__fp());}})()",
+                timeout_seconds=5.0, attempts=3, routing=pinned,
+            )
+            if observed is None or not before:
+                changed, state = [], "unknown"
+            else:
+                after = observed
+                changed = _click_state_changes(before, observed)
+                if data.get("checked_before") is not None and data.get("checked_before") != data.get("checked_after"):
+                    changed.append("checked")
+                state = "observed_change" if changed else "no_observed_effect"
+
+        verify_ms = round((_monotonic() - verify_started) * 1000)
+        href_after = str((after or {}).get("href") or "")
+        data.update({
+            "dispatched": True,
+            "verified": verified,
+            "verification_state": state,
+            "retry_safe": False,
+            "href_before": str(before.get("href") or ""),
+            "href_after": href_after,
+        })
+        if href_after:
+            data["target_url"] = href_after
+        if checks:
+            data["checks"] = checks
+        if changed:
+            data["changed"] = changed
+        timing = dict(result.get("_timing") or {})
+        timing["verify_ms"] = verify_ms
+        data["timings_ms"] = timing
+        logger.info("브라우저 클릭: %s state=%s", selector, state)
+        if expectation and not verified:
+            data.update({
+                "error": "클릭은 전달됐지만 기대한 후조건을 확인하지 못했습니다",
+                "error_code": _ERROR_CLICK_NOT_VERIFIED,
+            })
+            return {"status": "error", "data": data}
         return {"status": "success", "data": data}
     except CDPCommandError as exc:
-        exc = await _diagnose_cdp_failure(port, params, exc)
+        exc = await _diagnose_cdp_failure(port, params, _target_error_details(exc))
         return _command_error_response(port, params, exc)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
+
+
+async def _evaluate_dom_action(
+    port: int,
+    params: Dict[str, Any],
+    js: str,
+    *,
+    log_message: tuple | None = None,
+) -> Dict[str, Any]:
+    """DOM 조작 JS 를 같은 target 에서 실행하고 결과 계약을 맞춘다.
+
+    browser_fill / browser_select_option / browser_check 가 공유한다. target_id·work_key·
+    target_url 은 _routing_kwargs 로 그대로 전달하므로 다른 탭 fallback 이 생기지 않는다.
+    """
+    timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
+    try:
+        result = await _send_cdp_command(
+            port,
+            "Runtime.evaluate",
+            {"expression": js, "returnByValue": True, "awaitPromise": False},
+            timeout_seconds=timeout_seconds,
+            **_routing_kwargs(params),
+        )
+        error = _runtime_exception_error(result)
+        if error is not None:
+            raise error
+    except CDPCommandError as exc:
+        exc = await _diagnose_cdp_failure(port, params, _target_error_details(exc))
+        return _command_error_response(port, params, exc)
+    data = _decode_runtime_value(result)
+    if isinstance(data, dict) and data.get("error"):
+        return {"status": "error", "data": data}
+    _record_cdp_success(params, result.get("_target"))
+    if log_message:
+        logger.info(*log_message)
+    _attach_target(data, result)
+    return {"status": "success", "data": data}
 
 
 async def browser_fill(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1396,25 +1880,7 @@ async def browser_fill(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"filled": true, "selector": {json.dumps(selector)}}});
         }})()
         """
-        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
-        result = await _send_cdp_command(
-            port,
-            "Runtime.evaluate",
-            {"expression": js, "returnByValue": True, "awaitPromise": False},
-            timeout_seconds=timeout_seconds,
-        )
-        error = _runtime_exception_error(result)
-        if error is not None:
-            raise error
-        data = _decode_runtime_value(result)
-        if isinstance(data, dict) and data.get("error"):
-            return {"status": "error", "data": data}
-        _record_cdp_success(params, result.get("_target"))
-        logger.info("브라우저 입력: %s", selector)
-        return {"status": "success", "data": data}
-    except CDPCommandError as exc:
-        exc = await _diagnose_cdp_failure(port, params, exc)
-        return _command_error_response(port, params, exc)
+        return await _evaluate_dom_action(port, params, js, log_message=("브라우저 입력: %s", selector))
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
@@ -1430,6 +1896,7 @@ async def browser_press_key(params: Dict[str, Any]) -> Dict[str, Any]:
     try:
         timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
         target_info: dict[str, Any] | None = None
+        routing = _routing_kwargs(params)
         if selector:
             focus_js = f"""
             (function() {{
@@ -1444,6 +1911,7 @@ async def browser_press_key(params: Dict[str, Any]) -> Dict[str, Any]:
                 "Runtime.evaluate",
                 {"expression": focus_js, "returnByValue": True, "awaitPromise": False},
                 timeout_seconds=timeout_seconds,
+                **routing,
             )
             error = _runtime_exception_error(focus)
             if error is not None:
@@ -1452,16 +1920,17 @@ async def browser_press_key(params: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(data, dict) and data.get("error"):
                 return {"status": "error", "data": data}
             target_info = focus.get("_target") if isinstance(focus.get("_target"), dict) else None
+            routing = _pin_routing(routing, focus)
 
         if len(key) == 1:
-            result = await _send_cdp_command(port, "Input.insertText", {"text": key}, timeout_seconds=timeout_seconds)
+            result = await _send_cdp_command(port, "Input.insertText", {"text": key}, timeout_seconds=timeout_seconds, **routing)
         else:
-            result = await _send_cdp_command(port, "Input.dispatchKeyEvent", {"type": "keyDown", "key": key}, timeout_seconds=timeout_seconds)
-            await _send_cdp_command(port, "Input.dispatchKeyEvent", {"type": "keyUp", "key": key}, timeout_seconds=timeout_seconds)
+            result = await _send_cdp_command(port, "Input.dispatchKeyEvent", {"type": "keyDown", "key": key}, timeout_seconds=timeout_seconds, **routing)
+            await _send_cdp_command(port, "Input.dispatchKeyEvent", {"type": "keyUp", "key": key}, timeout_seconds=timeout_seconds, **routing)
         _record_cdp_success(params, target_info or result.get("_target"))
-        return {"status": "success", "data": {"key": key, "selector": selector}}
+        return {"status": "success", "data": _attach_target({"key": key, "selector": selector}, result)}
     except CDPCommandError as exc:
-        exc = await _diagnose_cdp_failure(port, params, exc)
+        exc = await _diagnose_cdp_failure(port, params, _target_error_details(exc))
         return _command_error_response(port, params, exc)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
@@ -1499,24 +1968,7 @@ async def browser_select_option(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"selected": matched, "selector": {json.dumps(selector)}}});
         }})()
         """
-        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
-        result = await _send_cdp_command(
-            port,
-            "Runtime.evaluate",
-            {"expression": js, "returnByValue": True, "awaitPromise": False},
-            timeout_seconds=timeout_seconds,
-        )
-        error = _runtime_exception_error(result)
-        if error is not None:
-            raise error
-        data = _decode_runtime_value(result)
-        if isinstance(data, dict) and data.get("error"):
-            return {"status": "error", "data": data}
-        _record_cdp_success(params, result.get("_target"))
-        return {"status": "success", "data": data}
-    except CDPCommandError as exc:
-        exc = await _diagnose_cdp_failure(port, params, exc)
-        return _command_error_response(port, params, exc)
+        return await _evaluate_dom_action(port, params, js)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
@@ -1543,24 +1995,7 @@ async def browser_check(params: Dict[str, Any]) -> Dict[str, Any]:
             return JSON.stringify({{"selector": {json.dumps(selector)}, "checked": Boolean(el.checked)}});
         }})()
         """
-        timeout_seconds = _resolve_timeout(params, param_name="evaluate_timeout_seconds", default=CDP_EVALUATE_TIMEOUT_SECONDS, maximum=90.0)
-        result = await _send_cdp_command(
-            port,
-            "Runtime.evaluate",
-            {"expression": js, "returnByValue": True, "awaitPromise": False},
-            timeout_seconds=timeout_seconds,
-        )
-        error = _runtime_exception_error(result)
-        if error is not None:
-            raise error
-        data = _decode_runtime_value(result)
-        if isinstance(data, dict) and data.get("error"):
-            return {"status": "error", "data": data}
-        _record_cdp_success(params, result.get("_target"))
-        return {"status": "success", "data": data}
-    except CDPCommandError as exc:
-        exc = await _diagnose_cdp_failure(port, params, exc)
-        return _command_error_response(port, params, exc)
+        return await _evaluate_dom_action(port, params, js)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
 
@@ -1582,18 +2017,22 @@ async def browser_file_upload(params: Dict[str, Any]) -> Dict[str, Any]:
     port = _effective_port(params)
     try:
         timeout_seconds = _resolve_timeout(params, param_name="page_timeout_seconds", default=CDP_COMMAND_TIMEOUT_SECONDS, maximum=45.0)
+        routing = _routing_kwargs(params)
         doc = await _send_cdp_command(
             port,
             "DOM.getDocument",
             {"depth": -1, "pierce": True},
             timeout_seconds=timeout_seconds,
+            **routing,
         )
+        routing = _pin_routing(routing, doc)
         root_id = doc.get("root", {}).get("nodeId")
         node = await _send_cdp_command(
             port,
             "DOM.querySelector",
             {"nodeId": root_id, "selector": selector},
             timeout_seconds=timeout_seconds,
+            **routing,
         )
         node_id = node.get("nodeId")
         if not node_id:
@@ -1603,11 +2042,12 @@ async def browser_file_upload(params: Dict[str, Any]) -> Dict[str, Any]:
             "DOM.setFileInputFiles",
             {"nodeId": node_id, "files": file_paths},
             timeout_seconds=timeout_seconds,
+            **routing,
         )
         _record_cdp_success(params, node.get("_target") or doc.get("_target"))
-        return {"status": "success", "data": {"selector": selector, "files": file_paths, "count": len(file_paths)}}
+        return {"status": "success", "data": _attach_target({"selector": selector, "files": file_paths, "count": len(file_paths)}, node)}
     except CDPCommandError as exc:
-        exc = await _diagnose_cdp_failure(port, params, exc)
+        exc = await _diagnose_cdp_failure(port, params, _target_error_details(exc))
         return _command_error_response(port, params, exc)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
@@ -1687,16 +2127,19 @@ async def browser_screenshot(params: Dict[str, Any]) -> Dict[str, Any]:
         if fmt == "jpeg":
             cdp_params["quality"] = quality
         timeout_seconds = _resolve_timeout(params, param_name="page_timeout_seconds", default=CDP_COMMAND_TIMEOUT_SECONDS, maximum=45.0)
-        result = await _send_cdp_command(port, "Page.captureScreenshot", cdp_params, timeout_seconds=timeout_seconds)
+        result = await _send_cdp_command(port, "Page.captureScreenshot", cdp_params, timeout_seconds=timeout_seconds, **_routing_kwargs(params))
         img_data = result.get("data", "")
         _record_cdp_success(params, result.get("_target"))
         logger.info("브라우저 스크린샷 캡처 (%s)", fmt)
         return {
             "status": "success",
-            "data": {"screenshot_base64": img_data, "format": fmt},
+            "data": _attach_target(
+                {"screenshot_base64": img_data, "format": fmt, "timings_ms": dict(result.get("_timing") or {})},
+                result,
+            ),
         }
     except CDPCommandError as exc:
-        exc = await _diagnose_cdp_failure(port, params, exc)
+        exc = await _diagnose_cdp_failure(port, params, _target_error_details(exc))
         return _command_error_response(port, params, exc)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
@@ -1724,6 +2167,7 @@ async def browser_get_text(params: Dict[str, Any]) -> Dict[str, Any]:
             "Runtime.evaluate",
             {"expression": js, "returnByValue": True, "awaitPromise": False},
             timeout_seconds=timeout_seconds,
+            **_routing_kwargs(params),
         )
         error = _runtime_exception_error(result)
         if error is not None:
@@ -1732,11 +2176,17 @@ async def browser_get_text(params: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(data, dict) and data.get("error"):
             return {"status": "error", "data": data}
         _record_cdp_success(params, result.get("_target"))
-        diagnostics = await _collect_page_diagnostics(
-            port,
-            timeout_seconds=min(3.0, timeout_seconds),
-            target_id=str((result.get("_target") or {}).get("id") or ""),
-        )
+        target_info = result.get("_target") or {}
+        diagnostics: dict[str, Any] = {}
+        diagnostics_ms = 0
+        if _looks_like_vvic_target(str(target_info.get("url") or ""), str(target_info.get("title") or "")):
+            diagnostics_started = _monotonic()
+            diagnostics = await _collect_page_diagnostics(
+                port,
+                timeout_seconds=min(3.0, timeout_seconds),
+                target_id=str(target_info.get("id") or ""),
+            )
+            diagnostics_ms = round((_monotonic() - diagnostics_started) * 1000)
         if _is_spa_shell_only(diagnostics):
             spa_error = CDPCommandError(
                 _ERROR_SPA_SHELL_ONLY,
@@ -1744,9 +2194,12 @@ async def browser_get_text(params: Dict[str, Any]) -> Dict[str, Any]:
                 details={"diagnostics": diagnostics},
             )
             return _command_error_response(port, params, spa_error)
+        if isinstance(data, dict):
+            _attach_target(data, result)
+            data["timings_ms"] = {**(result.get("_timing") or {}), "diagnostics_ms": diagnostics_ms}
         return {"status": "success", "data": data}
     except CDPCommandError as exc:
-        exc = await _diagnose_cdp_failure(port, params, exc)
+        exc = await _diagnose_cdp_failure(port, params, _target_error_details(exc))
         return _command_error_response(port, params, exc)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
@@ -1793,16 +2246,15 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
             "returnByValue": True,
             "awaitPromise": await_promise,
         }
-        for hint_key in ("work_key", "target_url", "url_pattern", "url"):
-            if params.get(hint_key):
-                cdp_params[hint_key] = params.get(hint_key)
+        routing = _routing_kwargs(params)
+        if params.get("url") and "target_url" not in routing:
+            routing["target_url"] = str(params.get("url"))
         result = await _send_cdp_command(
             port,
             "Runtime.evaluate",
             cdp_params,
             timeout_seconds=timeout_seconds,
-            target_id=str(params.get("target_id") or ""),
-            target_idx=int(params.get("target_idx", 0) or 0),
+            **routing,
         )
         error = _runtime_exception_error(result)
         if error is not None:
@@ -1812,15 +2264,17 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
             raise CDPCommandError(_ERROR_CDP_NOT_READY, str(res_data.get("description", "JS 실행 오류")))
         _record_cdp_success(params, result.get("_target"))
         diagnostics: dict[str, Any] = {}
-        elapsed = max(0.0, _time() - started_at)
-        remaining_budget = command_budget_seconds - elapsed
-        if remaining_budget > 0.7:
-            diagnostics_timeout = min(3.0, timeout_seconds, max(0.5, remaining_budget - 0.25))
+        diagnostics_ms = 0
+        target = result.get("_target", {}) if isinstance(result, dict) else {}
+        remaining_budget = command_budget_seconds - max(0.0, _time() - started_at)
+        if remaining_budget > 0.7 and _looks_like_vvic_target(str(target.get("url") or ""), str(target.get("title") or "")):
+            diagnostics_started = _monotonic()
             diagnostics = await _collect_page_diagnostics(
                 port,
-                timeout_seconds=diagnostics_timeout,
-                target_id=str((result.get("_target") or {}).get("id") or ""),
+                timeout_seconds=min(3.0, timeout_seconds, max(0.5, remaining_budget - 0.25)),
+                target_id=str(target.get("id") or ""),
             )
+            diagnostics_ms = round((_monotonic() - diagnostics_started) * 1000)
         if _is_spa_shell_only(diagnostics):
             spa_error = CDPCommandError(
                 _ERROR_SPA_SHELL_ONLY,
@@ -1828,7 +2282,8 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
                 details={"diagnostics": diagnostics},
             )
             return _command_error_response(port, params, spa_error)
-        target = result.get("_target", {}) if isinstance(result, dict) else {}
+        timings = dict(result.get("_timing") or {})
+        timings["diagnostics_ms"] = diagnostics_ms
         return {
             "status": "success",
             "data": {
@@ -1836,6 +2291,8 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
                 "type": res_data.get("type", ""),
                 "target_id": target.get("id"),
                 "target_url": target.get("url"),
+                "target_selection": target.get("selection"),
+                "timings_ms": timings,
                 "diagnostics": diagnostics,
                 "await_promise": await_promise,
                 "guard_reclaimed": guard_reclaimed,
@@ -1843,7 +2300,7 @@ async def browser_eval(params: Dict[str, Any]) -> Dict[str, Any]:
             },
         }
     except CDPCommandError as exc:
-        exc = await _diagnose_cdp_failure(port, params, exc)
+        exc = await _diagnose_cdp_failure(port, params, _target_error_details(exc))
         return _command_error_response(port, params, exc)
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": _ERROR_CDP_NOT_READY, "port": port}}
@@ -1904,7 +2361,7 @@ async def browser_health(params: Dict[str, Any]) -> Dict[str, Any]:
             "expression": "JSON.stringify({readyState: document.readyState, href: location.href, bodyLen: document.body ? document.body.innerText.length : -1})",
             "returnByValue": True,
             "awaitPromise": False,
-        }, timeout_seconds=5)
+        }, timeout_seconds=5, work_key=work_key)
         value = result.get("result", {}).get("value", "{}")
         data = json.loads(value) if isinstance(value, str) else (value or {})
         return {

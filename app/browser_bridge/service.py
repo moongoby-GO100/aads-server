@@ -108,6 +108,64 @@ LOCAL_AGENT_JS_COMMANDS = {
     "browser_get_text",
     "browser_eval",
 }
+# 효과가 불확실한 외부 쓰기를 자동 재전송하지 않는다 — 복구 후 재전송이 중복 제출이 될 수 있다.
+LOCAL_AGENT_NON_REPLAYABLE_COMMANDS = {"browser_click", "browser_download", "browser_press_key"}
+# 대상 탭을 PC 쪽에 명시해야 하는 명령(탐색은 탭을 새로 확정하므로 제외).
+LOCAL_AGENT_TARGET_PINNED_COMMANDS = LOCAL_AGENT_JS_COMMANDS | {"browser_screenshot", "browser_download", "browser_file_upload"}
+LOCAL_AGENT_OBSERVE_ATTEMPTS = 3
+LOCAL_AGENT_OBSERVE_RETRY_SECONDS = 0.4
+LOCAL_AGENT_OBSERVE_TEXT_LIMIT = 12000
+PAGE_OBSERVE_JS = r"""(function() {
+  function norm(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
+  function visible(el) {
+    var r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    var cs = getComputedStyle(el);
+    return cs.visibility !== 'hidden' && cs.display !== 'none';
+  }
+  function labelOf(el) {
+    var n = norm(el.getAttribute('aria-label'));
+    if (n) return n;
+    if (el.labels && el.labels.length) {
+      n = norm(Array.prototype.map.call(el.labels, function(l) { return l.textContent; }).join(' '));
+      if (n) return n;
+    }
+    var ty = (el.getAttribute('type') || '').toLowerCase();
+    if (el.tagName === 'INPUT' && (ty === 'button' || ty === 'submit' || ty === 'reset')) return norm(el.value);
+    return norm(el.innerText || el.textContent) || norm(el.getAttribute('title')) || norm(el.getAttribute('placeholder'));
+  }
+  var LIMIT = __TEXT_LIMIT__;
+  var body = document.body ? String(document.body.innerText || '') : '';
+  var out = {href: String(location.href || ''), title: document.title || '', ready: document.readyState || '',
+             text: body.slice(0, LIMIT), text_truncated: body.length > LIMIT, controls: [], dialogs: []};
+  var sel = 'button,a[href],input:not([type=hidden]),select,textarea,summary,[role=button],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=option]';
+  var nodes = document.querySelectorAll(sel);
+  for (var i = 0; i < nodes.length && out.controls.length < 150; i++) {
+    var el = nodes[i];
+    if (!visible(el)) continue;
+    var type = (el.getAttribute('type') || '').toLowerCase();
+    var ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+    var secret = type === 'password' || ac === 'current-password' || ac === 'new-password';
+    var c = {tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || '', type: type,
+             name: labelOf(el).slice(0, 60), disabled: !!(el.disabled || el.getAttribute('aria-disabled') === 'true')};
+    if (secret) { c.secret = true; c.filled = String(el.value || '').length > 0; }
+    if ('checked' in el && (type === 'checkbox' || type === 'radio')) c.checked = !!el.checked;
+    else if (el.getAttribute('aria-checked') !== null) c.checked = el.getAttribute('aria-checked') === 'true';
+    if (el.getAttribute('aria-selected') !== null) c.selected = el.getAttribute('aria-selected') === 'true';
+    if (el.getAttribute('aria-expanded') !== null) c.expanded = el.getAttribute('aria-expanded') === 'true';
+    if (el.tagName === 'SELECT' && el.selectedIndex >= 0 && el.options[el.selectedIndex]) {
+      c.selected_option = norm(el.options[el.selectedIndex].text).slice(0, 40);
+    }
+    out.controls.push(c);
+  }
+  var dl = document.querySelectorAll('dialog[open],[role=dialog],[role=alertdialog],[aria-modal=true]');
+  for (var d = 0; d < dl.length && out.dialogs.length < 10; d++) {
+    if (!visible(dl[d])) continue;
+    out.dialogs.push({role: dl[d].getAttribute('role') || dl[d].tagName.toLowerCase(),
+      name: norm(dl[d].getAttribute('aria-label')).slice(0, 60), text: norm(dl[d].innerText).slice(0, 200)});
+  }
+  return JSON.stringify(out);
+})()""".replace("__TEXT_LIMIT__", str(LOCAL_AGENT_OBSERVE_TEXT_LIMIT))
 SIDECAR_SERVICE_ROLES = {
     "yeoljeong-finance-worker",
 }
@@ -234,6 +292,7 @@ class _LocalAgentPage:
         self._service = service
         self._recovered_error_codes: set[str] = set()
         self.eval_skipped_reason = ""
+        self.last_screenshot_target_id = ""
         self._sync_from_session(session)
 
     def _sync_from_session(self, session: BrowserBridgeSession | None = None) -> None:
@@ -243,6 +302,25 @@ class _LocalAgentPage:
         self._agent_id = str(metadata.get("agent_id") or "")
         self._port = int(metadata.get("port") or 9222)
         self.url = str(metadata.get("last_url") or "about:blank")
+        self._target_id = str(metadata.get("page_target_id") or "")
+
+    def _pin_target(self, target_id: str) -> None:
+        target_id = str(target_id or "").strip()
+        if not target_id or target_id == self._target_id:
+            return
+        self._target_id = target_id
+        metadata = dict(self._session.endpoint.metadata or {})
+        metadata["page_target_id"] = target_id
+        self._session.endpoint.metadata = metadata
+
+    def _record_actual_url(self, url: str) -> None:
+        url = str(url or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return
+        self.url = url
+        metadata = dict(self._session.endpoint.metadata or {})
+        metadata["last_url"] = url
+        self._session.endpoint.metadata = metadata
 
     def _params(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = dict(params or {})
@@ -288,6 +366,8 @@ class _LocalAgentPage:
                 merged.setdefault("target_url", requested_url)
             if command_type in LOCAL_AGENT_JS_COMMANDS:
                 merged.setdefault("evaluate_timeout_seconds", max(1.0, min(60.0, command_timeout_seconds - 0.5)))
+            if self._target_id and command_type in LOCAL_AGENT_TARGET_PINNED_COMMANDS:
+                merged.setdefault("target_id", self._target_id)
 
             route_active_first = self._service._route_pc_agent_via_active_api_first()
             if route_active_first:
@@ -361,22 +441,50 @@ class _LocalAgentPage:
                             error_code=str(data.get("error_code") or ""),
                             detail=data,
                         )
+                    answered_by = str(data.get("target_id") or "")
+                    sent_target = str(merged.get("target_id") or "")
+                    if sent_target and answered_by and answered_by != sent_target:
+                        raise BrowserBridgeError(
+                            "PC 가 요청한 탭이 아닌 다른 탭에서 응답했습니다",
+                            error_code="TARGET_MISMATCH",
+                            detail={
+                                "requested_target_id": sent_target,
+                                "answered_target_id": answered_by,
+                                "command": command_type,
+                                "dispatch_state": "uncertain",
+                                "retry_safe": False,
+                            },
+                        )
+                    if answered_by:
+                        self._pin_target(answered_by)
+                    observed_url = ""
+                    if command_type != "browser_navigate":
+                        observed_url = str(data.get("href_after") or data.get("target_url") or "")
                     self._service._mark_local_agent_session_healthy(
                         self._session,
                         agent_id=self._agent_id,
                         port=self._port,
-                        last_url=requested_url,
+                        last_url=observed_url if observed_url.startswith("http") else (
+                            requested_url if command_type == "browser_navigate" else ""
+                        ),
                     )
+                    if observed_url.startswith("http"):
+                        self.url = observed_url
                     return data
                 self._service._mark_local_agent_session_healthy(
                     self._session,
                     agent_id=self._agent_id,
                     port=self._port,
-                    last_url=requested_url,
+                    last_url=requested_url if command_type == "browser_navigate" else "",
                 )
                 return {}
 
             error_code, error_message, error_detail = self._service._extract_pc_agent_route_error(result)
+            if command_type in LOCAL_AGENT_NON_REPLAYABLE_COMMANDS:
+                error_detail = dict(error_detail or {})
+                error_detail.setdefault("dispatch_state", "uncertain")
+                error_detail["retry_safe"] = False
+                raise BrowserBridgeError(error_message, error_code=error_code, detail=error_detail)
             if (
                 not recovery_attempted
                 and self._session.work_key
@@ -533,10 +641,79 @@ class _LocalAgentPage:
             command_timeout_seconds=LOCAL_AGENT_SNAPSHOT_TIMEOUT_SECONDS,
         )
         encoded = str(data.get("screenshot_base64") or "")
+        self.last_screenshot_target_id = str(data.get("target_id") or "")
         return base64.b64decode(encoded.encode("ascii")) if encoded else b""
 
-    async def click(self, selector: str, **_: Any) -> None:
-        await self._run_browser_command("browser_click", {"selector": selector})
+    async def click(self, selector: str, **kwargs: Any) -> None:
+        await self.click_detailed(selector, strict=bool(kwargs.get("strict", False)))
+
+    async def click_detailed(
+        self,
+        selector: str,
+        *,
+        strict: bool = True,
+        nth: int | None = None,
+        expect: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """클릭을 한 번만 전달하고 dispatched/verified 를 구분한 PC 응답을 돌려준다.
+
+        PC 가 클릭을 전달했지만 expect 후조건을 확인하지 못하면 BrowserBridgeError(CLICK_NOT_VERIFIED)
+        이며 detail.dispatched=True 이다. 이 경우에도 재전송하지 않는다.
+        """
+        params: dict[str, Any] = {"selector": selector, "strict": strict}
+        if nth is not None:
+            params["nth"] = int(nth)
+        if expect:
+            params["expect"] = dict(expect)
+        return await self._run_browser_command("browser_click", params)
+
+    async def observe(self, *, attempts: int = LOCAL_AGENT_OBSERVE_ATTEMPTS) -> dict[str, Any]:
+        """같은 탭의 href + 본문 + 컨트롤 상태(checked/selected/disabled/dialog)를 한 번에 읽는다.
+
+        탐색 중 문서가 교체되면(실행 컨텍스트 소멸 등) 제한된 횟수만 다시 읽고, 끝내 못 읽으면
+        SNAPSHOT_UNSTABLE 로 명시 실패한다. 본문 텍스트는 ARIA 트리가 아니다.
+        """
+        non_retryable = {"TARGET_MISMATCH", "TARGET_NOT_FOUND", "PC_AGENT_OFFLINE"}
+        last_code = ""
+        last_message = ""
+        total = max(1, int(attempts))
+        for attempt in range(1, total + 1):
+            try:
+                data = await self._run_browser_command(
+                    "browser_eval",
+                    {"expression": PAGE_OBSERVE_JS},
+                    command_timeout_seconds=30.0,
+                    queue_wait_timeout_seconds=5.0,
+                )
+            except BrowserBridgeError as exc:
+                if exc.error_code in non_retryable:
+                    raise
+                last_code, last_message = exc.error_code, str(exc)
+            else:
+                value = data.get("value")
+                if isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except ValueError:
+                        value = None
+                if isinstance(value, dict) and value.get("href"):
+                    stable = str(value.get("ready") or "") != "loading"
+                    if stable or attempt == total:
+                        self._record_actual_url(str(value.get("href") or ""))
+                        value["stable"] = stable
+                        value["attempts"] = attempt
+                        value["target_id"] = str(data.get("target_id") or self._target_id or "")
+                        return value
+                    last_code, last_message = "DOCUMENT_LOADING", "document.readyState=loading"
+                else:
+                    last_code, last_message = "OBSERVATION_UNREADABLE", "page observation was not an object"
+            if attempt < total:
+                await asyncio.sleep(LOCAL_AGENT_OBSERVE_RETRY_SECONDS)
+        raise BrowserBridgeError(
+            f"페이지 관측 실패 — 탐색 중이거나 읽을 수 없습니다 ({last_code or 'unknown'})",
+            error_code="SNAPSHOT_UNSTABLE",
+            detail={"attempts": total, "last_error_code": last_code, "last_error": last_message[:200]},
+        )
 
     async def fill(self, selector: str, value: str, **_: Any) -> None:
         # Assigning el.value can update React's value tracker before input fires,
