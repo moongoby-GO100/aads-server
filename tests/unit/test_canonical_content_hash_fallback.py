@@ -98,7 +98,7 @@ def _revision_row(version="1.0.0"):
 def test_register_same_hash_returns_idempotent_without_new_revision(monkeypatch):
     _stub_remote(monkeypatch, BODY.encode())
     conn = FakeConn(head=_head(generation=1), revisions=1, rows=[_revision_row()])
-    out = _register(conn, {"project": "GO100", "document_key": "doc-a", "kind": "spec",
+    out = _register(conn, {"project": "GO100", "document_key": "doc-a", "kind": "spec", "change_summary": "조회 분석 문서를 정본으로 등록",
                            "title": "문서 a", "file_path": PATH})
     assert out["registered"] is True and out["idempotent"] is True
     assert out["matched_by"] == "content_hash" and out["revision"] == 1 and out["version"] == "1.0.0"
@@ -111,14 +111,14 @@ def test_register_same_hash_returns_idempotent_without_new_revision(monkeypatch)
 def test_register_same_hash_with_explicit_other_version_is_idempotent(monkeypatch):
     _stub_remote(monkeypatch, BODY.encode())
     conn = FakeConn(head=_head(generation=1), revisions=1, rows=[_revision_row()])
-    out = _register(conn, {"project": "GO100", "document_key": "doc-a", "kind": "spec",
+    out = _register(conn, {"project": "GO100", "document_key": "doc-a", "kind": "spec", "change_summary": "조회 분석 문서를 정본으로 등록",
                            "title": "문서 a", "file_path": PATH, "version": "2.0.0"})
     assert out["idempotent"] is True and out["matched_by"] == "content_hash"
 
 
 def test_register_same_hash_without_file_path_still_conflicts():
     conn = FakeConn(head=_head(generation=1), revisions=1, rows=[_revision_row()])
-    out = _register(conn, {"project": "GO100", "document_key": "doc-a", "kind": "spec",
+    out = _register(conn, {"project": "GO100", "document_key": "doc-a", "kind": "spec", "change_summary": "조회 분석 문서를 정본으로 등록",
                            "title": "문서 a", "content": BODY})
     assert out["status"] == 409 and out["error"] == "revision_conflict"
 
@@ -127,6 +127,6 @@ def test_register_version_taken_by_other_content_still_conflicts(monkeypatch):
     _stub_remote(monkeypatch, BODY.encode())
     other = dict(_revision_row(), content_hash="0" * 64, id=HEAD_ID)
     conn = FakeConn(head=_head(generation=1), revisions=1, rows=[other, _revision_row("1.0.1")])
-    out = _register(conn, {"project": "GO100", "document_key": "doc-a", "kind": "spec",
+    out = _register(conn, {"project": "GO100", "document_key": "doc-a", "kind": "spec", "change_summary": "조회 분석 문서를 정본으로 등록",
                            "title": "문서 a", "file_path": PATH, "version": "1.0.0"})
     assert out["status"] == 409 and out["error"] == "revision_conflict"

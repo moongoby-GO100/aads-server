@@ -87,6 +87,7 @@ class StubConnection:
         self.generation = generation
         self.matches = matches
         self.writes = []
+        self.lookups = []
 
     def acquire(self):
         return self
@@ -112,12 +113,22 @@ class StubConnection:
         return self.matches
 
     async def fetchval(self, sql, *args):
+        if "FROM chat_sessions" in sql or "FROM goal_task_links" in sql or "FROM pipeline_jobs" in sql:
+            self.lookups.append(sql)
+            return 1
+        if "max(revision)" in sql:
+            return 1
         raise AssertionError(sql)
 
 
-def request(expected=1):
-    return docs.RevisionInput(document_key="requirements", kind="prd", title="PRD",
-                              version="1.0.0", content="safe text", expected_generation=expected)
+SESSION_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def request(expected=1, **over):
+    fields = dict(document_key="requirements", kind="prd", title="PRD", version="1.0.0", content="safe text",
+                  expected_generation=expected, source_session_id=SESSION_ID, change_summary="요구사항 정본 등록")
+    fields.update(over)
+    return docs.RevisionInput(**fields)
 
 
 def test_stale_generation_preserves_pointers(monkeypatch):
@@ -458,3 +469,90 @@ def test_already_approved_revision_is_idempotent_without_status_lookup(monkeypat
     result = asyncio.run(docs.approve_document("AADS", "prd", body, context("admin")))
     assert result == {"approved_revision_id": rid, "idempotent": True}
     assert conn.writes == []
+
+
+PROVENANCE_REASON = "작성 출처(세션 또는 러너)와 작성 사유가 필요합니다"
+
+
+@pytest.mark.parametrize("over", [
+    {"source_session_id": None},
+    {"change_summary": None},
+    {"change_summary": "   "},
+    {"source_session_id": None, "source_task_id": "  ", "change_summary": None},
+])
+def test_registration_without_provenance_or_reason_is_422_and_writes_nothing(monkeypatch, over):
+    conn = StubConnection(generation=0)
+    monkeypatch.setattr(docs, "get_pool", lambda: conn)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(docs.create_revision("AADS", request(**over), context("admin")))
+    assert error.value.status_code == 422
+    assert error.value.detail == PROVENANCE_REASON
+    assert conn.writes == [] and conn.lookups == []
+
+
+def test_authorization_failure_wins_over_provenance_422(monkeypatch):
+    class Denied(StubConnection):
+        async def fetchval(self, sql, *args):
+            return False
+
+    monkeypatch.setattr(docs, "get_pool", lambda: Denied())
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(docs.create_revision("AADS", request(source_session_id=None), context("member")))
+    assert error.value.status_code == 403
+
+
+def test_repository_import_with_source_path_is_allowed_without_session_or_task(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "plan.md").write_text("plan body")
+    monkeypatch.setattr(docs, "ROOT", root)
+    conn = StubConnection(generation=0)
+    monkeypatch.setattr(docs, "get_pool", lambda: conn)
+    body = request(expected=0, content="", source_path="docs/plan.md", source_session_id=None, change_summary=None)
+    with pytest.raises(AssertionError) as error:  # 출처 검사는 통과하고 StubConnection 이 INSERT 의 fetchrow 에서 멈춘다
+        asyncio.run(docs.create_revision("AADS", body, context("admin")))
+    assert "INSERT INTO project_document_revisions" in str(error.value)
+
+
+def test_provenance_problem_contract():
+    ok = dict(source_session_id=SESSION_ID, source_task_id=None, source_path=None, change_summary="사유")
+    assert docs.provenance_problem(**ok) is None
+    assert docs.provenance_problem(**{**ok, "source_session_id": None, "source_task_id": "runner-1a2b3c4d"}) is None
+    assert docs.provenance_problem(**{**ok, "source_session_id": None}) == PROVENANCE_REASON
+    assert docs.provenance_problem(**{**ok, "change_summary": ""}) == PROVENANCE_REASON
+    assert docs.provenance_problem(**{**ok, "source_session_id": None, "change_summary": None, "source_path": "docs/a.md"}) is None
+
+
+def test_session_and_runner_job_provenance_are_validated_and_stored(monkeypatch):
+    conn = StubConnection(generation=0)
+    monkeypatch.setattr(docs, "get_pool", lambda: conn)
+    with pytest.raises(AssertionError) as error:
+        asyncio.run(docs.create_revision(
+            "AADS", request(expected=0, source_task_id="runner-1a2b3c4d"), context("admin")))
+    assert "INSERT INTO project_document_revisions" in str(error.value)
+    assert any("FROM chat_sessions" in sql and "upper(w.project_key)" in sql for sql in conn.lookups)
+    assert any("FROM goal_task_links" in sql for sql in conn.lookups)
+
+
+def test_runner_job_not_linked_to_goal_is_accepted_via_pipeline_jobs():
+    calls = []
+
+    class Conn:
+        async def fetchval(self, sql, *args):
+            calls.append(sql)
+            return 1 if "FROM pipeline_jobs" in sql else None
+
+        async def execute(self, sql, *args):
+            pass
+
+        async def fetchrow(self, sql, *args):
+            return {"id": "head-1", "kind": "prd", "generation": 1}
+
+        async def fetch(self, sql, *args):
+            return [{"id": "r1", "content_hash": docs._body("safe text", None)[2], "version": "1.0.0", "idempotency_key": None}]
+
+    result = asyncio.run(docs.create_revision_in_tx(
+        Conn(), TENANT, "runner", "AADS",
+        request(expected=1, source_session_id=None, source_task_id="runner-1a2b3c4d")))
+    assert result["idempotent"] is True
+    assert any("FROM goal_task_links" in sql for sql in calls) and any("FROM pipeline_jobs" in sql for sql in calls)

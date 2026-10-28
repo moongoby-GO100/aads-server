@@ -61,7 +61,8 @@ def _patch_ssh(monkeypatch, proc):
 
 
 def _inp(**over):
-    base = {"project": "GO100", "document_key": "doc-a", "kind": "spec", "title": "조회 분석"}
+    base = {"project": "GO100", "document_key": "doc-a", "kind": "spec", "title": "조회 분석",
+            "change_summary": "조회 분석 문서를 정본으로 등록"}
     base.update(over)
     return base
 

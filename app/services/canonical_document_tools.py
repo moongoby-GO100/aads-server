@@ -14,6 +14,7 @@ import hashlib
 import logging
 import re
 import unicodedata
+import uuid
 from typing import Any, Optional
 
 from fastapi import HTTPException
@@ -78,6 +79,17 @@ async def register_document(
     if not content and not file_path:
         return _invalid("content 또는 file_path 중 하나는 필요합니다")
 
+    change_summary = str(inp.get("change_summary") or "").strip()
+    if len(change_summary) < docs.CHANGE_SUMMARY_MIN:
+        return _invalid(f"change_summary(왜 이 문서를 쓰는지 한 줄, {docs.CHANGE_SUMMARY_MIN}자 이상)가 필요합니다")
+    try:
+        source_session_id = uuid.UUID(str(session_id).strip()) if session_id else None
+    except ValueError:
+        source_session_id = None
+    source_task_id = str(inp.get("source_task_id") or "").strip() or None
+    if not source_session_id and not source_task_id:
+        return _invalid(docs.PROVENANCE_MESSAGE)
+
     actor = f"chat:{session_id[:8]}" if session_id else "canonical_document_tool"
     pool = pool or get_pool()
     try:
@@ -101,15 +113,18 @@ async def register_document(
                     version=str(inp.get("version") or f"1.0.{existing}"),
                     content=content,
                     source_path=file_path,
-                    source_task_id=str(inp.get("source_task_id") or "") or None,
+                    source_task_id=source_task_id,
+                    source_session_id=source_session_id,
                     goal_id=str(inp.get("goal_id") or "") or None,
-                    change_summary=str(inp.get("change_summary") or "") or None,
+                    change_summary=change_summary,
                     idempotency_key=str(inp.get("idempotency_key") or "") or None,
                     expected_generation=generation,
                 )
             except ValidationError as exc:
                 return _invalid("; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()))
-            result = await docs.create_revision_in_tx(conn, tenant_id, actor, project, body)
+            result = await docs.create_revision_in_tx(
+                conn, tenant_id, actor, project, body, session_any_project=True,
+            )
             revision_no = await conn.fetchval(
                 "SELECT revision FROM project_document_revisions WHERE id=$1", result["revision_id"],
             )

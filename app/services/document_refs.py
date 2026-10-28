@@ -39,12 +39,21 @@ RDOC_PROMPT_BLOCK = (
 RDOC_BLOCK_MARKER = "[R-DOC 문서 저장 규칙"
 
 
-def with_rdoc_block(instruction: str) -> str:
-    """러너 지시서 저장본 끝에 R-DOC 블록을 한 번만 덧붙인다(멱등). 해시·쓰기 범위 계산은 원문으로 한다."""
+def with_rdoc_block(instruction: str, job_id: Optional[str] = None) -> str:
+    """러너 지시서 저장본 끝에 R-DOC 블록을 한 번만 덧붙인다(멱등). 해시·쓰기 범위 계산은 원문으로 한다.
+
+    job_id 가 있으면 정본 등록 때 넣을 작성 출처(source_task_id)와 작성 사유(change_summary) 줄을 함께 붙인다.
+    """
     text = instruction or ""
     if RDOC_BLOCK_MARKER in text:
         return text
-    return text.rstrip("\n") + "\n\n" + RDOC_PROMPT_BLOCK
+    block = RDOC_PROMPT_BLOCK
+    if job_id:
+        block += (
+            f"- 정본 등록 시 작성 출처 source_task_id=\"{job_id}\" 와 작성 사유 change_summary(왜 이 문서를 쓰는지 한 줄, 10자 이상)를 반드시 넣는다. "
+            "둘 중 하나라도 없으면 등록이 거절된다.\n"
+        )
+    return text.rstrip("\n") + "\n\n" + block
 
 
 def canonical_content_api_path(

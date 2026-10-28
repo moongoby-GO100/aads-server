@@ -3501,7 +3501,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "기존 document_key 면 새 리비전이 추가되고 승인본(approved_revision_id)은 바뀌지 않습니다. "
             "승인은 이 도구로 할 수 없습니다(기존 승인 경로로만). "
             "document_key 는 소문자 kebab(예: ovis-recipe-spec), 슬래시·날짜·버전 금지. "
-            "content 또는 file_path(서버 저장소 기준 docs/·reports/ 상대경로) 중 하나가 필요합니다."
+            "content 또는 file_path(서버 저장소 기준 docs/·reports/ 상대경로) 중 하나가 필요합니다. "
+            "change_summary(작성 사유, 왜 이 문서를 쓰는지 한 줄·10자 이상)는 필수이며, 작성 출처인 현재 채팅 세션은 서버가 자동 기록합니다."
         ),
         "input_schema": {
             "type": "object",
@@ -3519,18 +3520,18 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "title": {"type": "string"},
                 "content": {"type": "string", "description": "본문. file_path 와 함께 주면 파일 내용과 같아야 함"},
                 "file_path": {"type": "string", "description": "저장소 상대경로(docs/… 또는 reports/…). 서버가 읽어 본문으로 사용"},
-                "change_summary": {"type": "string"},
+                "change_summary": {"type": "string", "description": "작성 사유(필수) — 왜 이 문서를 쓰는지 한 줄, 10자 이상"},
                 "version": {"type": "string", "description": "x.y.z. 생략 시 1.0.<기존 리비전 수> 자동"},
                 "expected_generation": {"type": "integer", "minimum": 0, "description": "생략 시 현재 generation 사용"},
-                "source_task_id": {"type": "string"},
+                "source_task_id": {"type": "string", "description": "러너 작업이면 해당 job_id(예: runner-1a2b3c4d). 채팅 세션은 서버가 자동 기록"},
                 "goal_id": {"type": "string", "description": "연결할 목표 UUID(같은 프로젝트여야 함)"},
                 "idempotency_key": {"type": "string"},
             },
-            "required": ["project", "document_key", "kind", "title"],
+            "required": ["project", "document_key", "kind", "title", "change_summary"],
         },
         "input_examples": [
             {"project": "AADS", "document_key": "ovis-recipe-spec", "kind": "spec", "title": "오비스 레시피 명세",
-             "file_path": "docs/plans/PRD-OVIS-RECIPE.md", "change_summary": "최초 등록"},
+             "file_path": "docs/plans/PRD-OVIS-RECIPE.md", "change_summary": "오비스 레시피 기능의 요구사항을 정본으로 최초 등록"},
         ],
     },
     "mockup_review_submit": {

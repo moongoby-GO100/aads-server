@@ -253,6 +253,21 @@ class RevisionInput(BaseModel):
         return self
 
 
+PROVENANCE_MESSAGE = "작성 출처(세션 또는 러너)와 작성 사유가 필요합니다"
+CHANGE_SUMMARY_MIN = 10
+
+
+def provenance_problem(*, source_session_id: Any, source_task_id: str | None, source_path: str | None,
+                       change_summary: str | None, summary_min: int = 1) -> str | None:
+    """작성 출처·사유가 빠졌으면 한글 사유, 충족이면 None. source_path(저장소 파일 가져오기)는 출처·사유 모두 면제한다."""
+    if source_path:
+        return None
+    has_source = bool(source_session_id) or bool((source_task_id or "").strip())
+    if not has_source or len((change_summary or "").strip()) < summary_min:
+        return PROVENANCE_MESSAGE
+    return None
+
+
 async def _head(conn: Any, tenant: str, project: str, key: str, lock: bool = False):
     return await conn.fetchrow(
         "SELECT * FROM project_document_heads WHERE tenant_id=$1::uuid AND project_key=$2 "
@@ -260,8 +275,12 @@ async def _head(conn: Any, tenant: str, project: str, key: str, lock: bool = Fal
     )
 
 
-async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str, body: RevisionInput) -> dict:
-    """Create a draft revision inside the caller's transaction. Never approves; approved_revision_id is untouched."""
+async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str, body: RevisionInput,
+                                *, session_any_project: bool = False) -> dict:
+    """Create a draft revision inside the caller's transaction. Never approves; approved_revision_id is untouched.
+
+    session_any_project: 서버가 바인딩한 채팅 세션(도구 경로)은 문서 프로젝트와 워크스페이스 프로젝트가 달라도 테넌트만 맞으면 출처로 받는다.
+    """
     content, source, digest = await _body_for_project(project, body.content, body.source_path)
     _safe_metadata(body.title, body.change_summary, body.source_task_id,
                    body.document_key, body.idempotency_key, source)
@@ -270,18 +289,32 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
         body.goal_id, tenant, project,
     ):
         raise HTTPException(404, "goal_not_found")
-    if body.source_session_id and not await conn.fetchval(
-        "SELECT 1 FROM chat_sessions s JOIN chat_workspaces w ON w.id=s.workspace_id "
-        "WHERE s.id=$1 AND s.tenant_id=$2::uuid AND w.tenant_id=$2::uuid AND upper(w.project_key)=$3",
-        body.source_session_id, tenant, project,
-    ):
-        raise HTTPException(404, "session_not_found")
-    if body.source_task_id and not await conn.fetchval(
-        "SELECT 1 FROM goal_task_links l LEFT JOIN milestones m ON m.id=l.milestone_id "
-        "JOIN goals g ON g.id=COALESCE(l.goal_id,m.goal_id) "
-        "WHERE l.task_id=$1 AND l.tenant_id=$2::uuid AND g.tenant_id=$2::uuid "
-        "AND g.project=$3 AND ($4::uuid IS NULL OR g.id=$4::uuid) LIMIT 1",
-        body.source_task_id, tenant, project, body.goal_id,
+    if body.source_session_id:
+        if session_any_project:
+            session_ok = await conn.fetchval(
+                "SELECT 1 FROM chat_sessions s WHERE s.id=$1 AND s.tenant_id=$2::uuid", body.source_session_id, tenant,
+            )
+        else:
+            session_ok = await conn.fetchval(
+                "SELECT 1 FROM chat_sessions s JOIN chat_workspaces w ON w.id=s.workspace_id "
+                "WHERE s.id=$1 AND s.tenant_id=$2::uuid AND w.tenant_id=$2::uuid AND upper(w.project_key)=$3",
+                body.source_session_id, tenant, project,
+            )
+        if not session_ok:
+            raise HTTPException(404, "session_not_found")
+    if body.source_task_id and not (
+        await conn.fetchval(
+            "SELECT 1 FROM goal_task_links l LEFT JOIN milestones m ON m.id=l.milestone_id "
+            "JOIN goals g ON g.id=COALESCE(l.goal_id,m.goal_id) "
+            "WHERE l.task_id=$1 AND l.tenant_id=$2::uuid AND g.tenant_id=$2::uuid "
+            "AND g.project=$3 AND ($4::uuid IS NULL OR g.id=$4::uuid) LIMIT 1",
+            body.source_task_id, tenant, project, body.goal_id,
+        )
+        # 목표에 연결되지 않은 러너 잡도 같은 테넌트·프로젝트의 실제 잡이면 작성 출처로 인정한다.
+        or await conn.fetchval(
+            "SELECT 1 FROM pipeline_jobs WHERE job_id=$1 AND tenant_id=$2::uuid AND upper(project)=$3 LIMIT 1",
+            body.source_task_id, tenant, project,
+        )
     ):
         raise HTTPException(404, "task_not_found")
     await conn.execute(
@@ -350,6 +383,12 @@ async def create_revision(project_key: str, body: RevisionInput, context: dict =
     project = _project(project_key)
     async with get_pool().acquire() as conn, conn.transaction():
         tenant, actor = await _authorize(conn, context, project, "write")
+        problem = provenance_problem(
+            source_session_id=body.source_session_id, source_task_id=body.source_task_id,
+            source_path=body.source_path, change_summary=body.change_summary,
+        )
+        if problem:
+            raise HTTPException(422, problem)
         return await create_revision_in_tx(conn, tenant, actor, project, body)
 
 

@@ -43,8 +43,8 @@ def test_empty_instruction_gets_block_only():
 
 def test_submit_paths_hash_from_original_instruction():
     src = open(pr.__file__, encoding="utf-8").read()
-    assert src.count("with_rdoc_block(req.instruction)") == 1
-    assert src.count("with_rdoc_block(item.instruction)") == 1
+    assert src.count("with_rdoc_block(req.instruction, job_id)") == 1
+    assert src.count("with_rdoc_block(item.instruction, job_id)") == 1
     # 해시는 원문에서 계산한다 — 주입이 중복 판정(instruction_hash)을 바꾸면 안 된다.
     assert hashlib.sha256(INSTR.encode()).hexdigest() != hashlib.sha256(dr.with_rdoc_block(INSTR).encode()).hexdigest()
 
@@ -125,3 +125,12 @@ def test_terminal_followup_message_includes_incomplete_line():
     except Exception as exc:  # 시그니처 변화 감지용
         pytest.fail(f"followup message failed: {exc}")
     assert dr.INCOMPLETE_MARK in msg
+
+
+def test_block_carries_runner_job_id_as_provenance_once():
+    once = dr.with_rdoc_block(INSTR, "runner-1a2b3c4d")
+    assert 'source_task_id="runner-1a2b3c4d"' in once
+    assert "change_summary" in once
+    assert once.count(dr.RDOC_BLOCK_MARKER) == 1
+    assert dr.with_rdoc_block(once, "runner-ffffffff") == once
+    assert "source_task_id" not in dr.with_rdoc_block(INSTR)

@@ -2524,7 +2524,7 @@ async def submit_job(
                             )) END,
                             NOW(), NOW(), $14::uuid)
                     """,
-                    job_id, req.project, with_rdoc_block(req.instruction), instruction_hash,
+                    job_id, req.project, with_rdoc_block(req.instruction, job_id), instruction_hash,
                     session_id, req.max_cycles, model, size,
                     worker_model or None, worker_model_reason or None,
                     req.parallel_group or None, effective_depends_on,
@@ -4736,7 +4736,7 @@ async def submit_batch(
                                 )) END,
                                 NOW(), NOW(), $14::uuid)
                         """,
-                        job_id, req.project, with_rdoc_block(item.instruction), instruction_hash,
+                        job_id, req.project, with_rdoc_block(item.instruction, job_id), instruction_hash,
                         req.session_id, req.max_cycles, model, size,
                         worker_model or None, worker_model_reason or None, pg, depends_on,
                         auto_dependency_reason,

@@ -106,7 +106,7 @@ def _head(generation=0, approved=None):
 
 def _inp(**over):
     base = {"project": "aads", "document_key": "ovis-spec", "kind": "spec", "title": "오비스 명세",
-            "content": "# 본문\n내용"}
+            "content": "# 본문\n내용", "change_summary": "오비스 명세를 정본으로 최초 등록"}
     base.update(over)
     return base
 
@@ -138,7 +138,7 @@ def test_tools_registered_in_registry_executor_and_group():
         assert hasattr(ToolExecutor, f"_{name}")
         assert f'"{name}":' in inspect.getsource(ToolExecutor._dispatch)
     reg = registry.get_tool("canonical_document_register")["input_schema"]
-    assert set(reg["required"]) == {"project", "document_key", "kind", "title"}
+    assert set(reg["required"]) == {"project", "document_key", "kind", "title", "change_summary"}
     assert set(reg["properties"]["kind"]["enum"]) == set(docs.RevisionInput.model_fields["kind"].annotation.__args__)
     assert registry.get_tool("canonical_document_lookup")["input_schema"]["required"] == ["project"]
 
@@ -199,7 +199,7 @@ def test_register_calls_shared_service_and_gate(monkeypatch, _stub_gate):
     created = AsyncMock(return_value={"document_id": HEAD_ID, "revision_id": REV_ID, "generation": 1, "idempotent": False})
     monkeypatch.setattr(docs, "create_revision_in_tx", created)
     conn = FakeConn(head=None)
-    out = _register(conn, _inp(change_summary="최초"))
+    out = _register(conn, _inp(change_summary="최초 등록 — 오비스 명세 신규 작성"))
 
     created.assert_awaited_once()
     args = created.await_args.args
@@ -207,7 +207,7 @@ def test_register_calls_shared_service_and_gate(monkeypatch, _stub_gate):
     body = args[4]
     assert isinstance(body, docs.RevisionInput)
     assert (body.document_key, body.kind, body.version, body.expected_generation) == ("ovis-spec", "spec", "1.0.0", 0)
-    assert body.change_summary == "최초"
+    assert body.change_summary == "최초 등록 — 오비스 명세 신규 작성"
     assert conn.in_tx is False
     _stub_gate.assert_awaited_once()
     kwargs = _stub_gate.await_args.kwargs
@@ -409,3 +409,80 @@ def test_lookup_card_uses_latest_not_old_approved_revision():
     assert card["approval_body"] == {"revision_id": str(REV_ID), "expected_generation": 12}
     assert card["content_endpoint"].endswith("/content?revision=10")
     assert card["tenant_id"] == TENANT
+
+
+# ── 5. 작성 출처·사유 필수화 ───────────────────────────────────────────
+
+
+class CapturingConn(FakeConn):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.insert_args = None
+        self.fetchval_calls: list[tuple] = []
+
+    async def fetchrow(self, sql, *args):
+        if "INSERT INTO project_document_revisions" in sql:
+            self.insert_args = args
+        return await super().fetchrow(sql, *args)
+
+    async def fetchval(self, sql, *args):
+        self.fetchval_calls.append((sql, args))
+        return await super().fetchval(sql, *args)
+
+
+def test_current_chat_session_is_recorded_automatically_without_model_input():
+    conn = CapturingConn(head=_head(generation=0))
+    out = _register(conn, _inp())
+    assert out["registered"] is True
+    # INSERT 인자: ... source_kind, source_task_id, source_session_id, goal_id, change_summary ...
+    assert conn.insert_args[10] is None
+    assert conn.insert_args[11] == uuid.UUID(SESSION)
+    assert conn.insert_args[13] == "오비스 명세를 정본으로 최초 등록"
+    session_checks = [c for c in conn.fetchval_calls if "FROM chat_sessions" in c[0]]
+    assert session_checks and "upper(w.project_key)" not in session_checks[0][0]
+
+
+def test_model_supplied_session_id_field_is_ignored_for_provenance(monkeypatch):
+    created = AsyncMock(return_value={"document_id": HEAD_ID, "revision_id": REV_ID, "generation": 1, "idempotent": False})
+    monkeypatch.setattr(docs, "create_revision_in_tx", created)
+    _register(FakeConn(), _inp(source_session_id=str(uuid.uuid4())))
+    assert created.await_args.args[4].source_session_id == uuid.UUID(SESSION)
+    assert created.await_args.kwargs == {"session_any_project": True}
+
+
+@pytest.mark.parametrize("summary", [None, "", "   ", "짧은사유", "123456789"])
+def test_missing_or_short_change_summary_rejected_before_any_query(summary):
+    conn = FakeConn()
+    out = _register(conn, _inp(change_summary=summary))
+    assert out["error"] == "invalid_input" and "change_summary" in out["message"]
+    assert conn.sql == []
+
+
+def test_no_session_and_no_task_is_rejected_with_korean_reason():
+    conn = FakeConn()
+    out = asyncio.run(cdt.register_document(tenant_id=TENANT, session_id="", inp=_inp(), pool=FakePool(conn)))
+    assert out["error"] == "invalid_input"
+    assert out["message"] == "작성 출처(세션 또는 러너)와 작성 사유가 필요합니다"
+    assert conn.sql == []
+
+
+def test_runner_job_id_is_accepted_as_source_when_no_chat_session():
+    conn = CapturingConn(head=_head(generation=0))
+    out = asyncio.run(cdt.register_document(
+        tenant_id=TENANT, session_id="", pool=FakePool(conn),
+        inp=_inp(source_task_id="runner-1a2b3c4d"),
+    ))
+    assert out["registered"] is True
+    assert conn.insert_args[10] == "runner-1a2b3c4d"
+    assert conn.insert_args[11] is None
+    assert any("pipeline_jobs" in c[0] for c in conn.fetchval_calls) or any(
+        "goal_task_links" in c[0] for c in conn.fetchval_calls)
+
+
+def test_registry_requires_change_summary_and_describes_provenance():
+    from app.services.tool_registry import ToolRegistry
+
+    schema = ToolRegistry().get_tool("canonical_document_register")
+    assert "change_summary" in schema["input_schema"]["required"]
+    assert "10자" in schema["input_schema"]["properties"]["change_summary"]["description"]
+    assert all(len(e["change_summary"]) >= 10 for e in schema["input_examples"])
