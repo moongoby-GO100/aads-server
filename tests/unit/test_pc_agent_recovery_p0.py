@@ -92,6 +92,15 @@ async def test_url_only_browser_context_bypasses_active_local_agent(monkeypatch)
         async def _headless_fallback_context(self):
             return headless_context
 
+        async def _evict_idle_headless_work_contexts(self, _ttl):
+            return None
+
+        async def _headless_work_context(self, _scope_key):
+            return headless_context
+
+        def _mark_headless_work_context_used(self, _scope_key):
+            return None
+
         async def acquire_playwright_context(self, **_kwargs):
             raise AssertionError("URL-only capture must not select the active Browser Bridge session")
 

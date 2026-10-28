@@ -1,5 +1,5 @@
 {
-  "version": "1.0.78",
+  "version": "1.0.79",
   "files": [
     "CHANGELOG",
     "RELEASE.md",
@@ -49,5 +49,5 @@
     "tray.py",
     "updater.py"
   ],
-  "sha256": "fb0fea83819c4ded813571914534ed8838d06a2a7853524977dfd080fd87aaf9"
+  "sha256": "17365d211b814fe5e40327fdb1ecf6a80b646809acdb749ad4a6d3c74c8e53b0"
 }
