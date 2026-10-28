@@ -1670,17 +1670,27 @@ async def send_message(
                 reason="no_active_db_execution",
             )
         else:
-            push_interrupt(
+            # 추가 지시 버튼(/interrupt)과 같은 접수 경로를 쓴다. 예전에는 여기서
+            # push_interrupt 만 해서 원문이 DB 에 남지 않았고, 새로고침하면 지시
+            # 버블이 사라졌다(2026-10-29 세션 65f926cb 08:35, 72시간 7건).
+            queued = await _queue_send_as_interrupt(
                 session_id_str,
-                message=content,
-                attachments=attachments if isinstance(attachments, list) else None,
+                content=content,
+                attachments=attachments,
+                idempotency_key=idempotency_key,
+                client_env=client_env,
+                context=context,
             )
-            logger.info(
-                "send_message_interrupt_queued",
-                session_id=session_id_str,
-                attachment_count=len(attachments or []),
-            )
-            return {"status": "interrupt_queued", "session_id": session_id_str}
+            if queued is not None:
+                logger.info(
+                    "send_message_interrupt_queued",
+                    session_id=session_id_str,
+                    attachment_count=len(attachments or []),
+                    message_id=queued.get("message_id"),
+                    duplicate=bool(queued.get("duplicate")),
+                )
+                return queued
+            # interrupt_session 이 낡은 실행으로 판정해 접수하지 않았다 — 일반 전송으로 진행한다.
 
     # ★ ContextVar를 HTTP 핸들러에서 조기 설정
     # with_background_completion 내부의 producer Task가 올바른 session_id를 상속받도록
@@ -3559,6 +3569,35 @@ class InterruptRequest(BaseModel):
     @classmethod
     def _coerce_client_env(cls, v: Any) -> Optional[ClientEnv]:
         return coerce_client_env(v)
+
+
+async def _queue_send_as_interrupt(
+    session_id: str,
+    *,
+    content: str,
+    attachments: Any,
+    idempotency_key: Optional[str],
+    client_env: Optional[dict],
+    context: TenantContext,
+) -> Optional[dict[str, Any]]:
+    """실행 중에 /chat/messages/send 로 온 지시를 추가 지시로 durable 접수한다.
+
+    접수되면 interrupt_session 의 응답(message_id·state 포함)에 기존 필드
+    status=interrupt_queued 를 더해 돌려주고, 접수되지 않으면(낡은 실행) None.
+    """
+    key = (idempotency_key or "").strip() or None
+    if key and len(key) > 128:
+        key = None
+    req = InterruptRequest(
+        content=content or "",
+        attachments=attachments if isinstance(attachments, list) else [],
+        idempotency_key=key,
+        client_env=client_env,
+    )
+    result = await interrupt_session(UUID(session_id), req, context)
+    if not result.get("queued"):
+        return None
+    return {**result, "status": "interrupt_queued", "session_id": session_id}
 
 
 @router.post("/chat/sessions/{session_id}/interrupt", tags=["chat-session"])
