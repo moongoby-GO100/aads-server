@@ -1,0 +1,174 @@
+{
+ "screens": [
+  {
+   "screen_id": "doc-tier-settings",
+   "title": "설정 > 모델 설정 > 러너 모델 — 코드 검수 3줄 · 문서 작성·검토 등급 · 교차 회사 확인",
+   "route": "/settings",
+   "requirement_ids": [
+    "FR-15",
+    "FR-16",
+    "FR-17",
+    "FR-18",
+    "FR-19",
+    "FR-21"
+   ],
+   "states_not_applicable": {
+    "empty": "러너 모델 설정은 항상 기본 행이 있어 빈 상태가 없다",
+    "loading": "현행 화면의 「로딩 중...」 문구를 그대로 쓰며 이번 변경 범위가 아니다",
+    "permission": "설정 화면은 기존 로그인·권한 처리를 따른다",
+    "session-expired": "로그인 만료는 공통 로그인 화면으로 이동한다"
+   }
+  },
+  {
+   "screen_id": "canonical-docs-tier",
+   "title": "문서 > 정본 — 목록·상세의 등급 배지와 작성/검토 모델·결과",
+   "route": "/docs",
+   "requirement_ids": [
+    "FR-7",
+    "FR-20",
+    "FR-21"
+   ],
+   "states_not_applicable": {
+    "loading": "현행 CanonicalListBody 의 로딩 상태를 그대로 쓴다",
+    "empty": "현행 「승인된 정본 없음」 문구를 그대로 쓴다",
+    "permission": "기존 문서 화면의 권한 오류 상자를 따른다",
+    "session-expired": "기존 「로그인 복구」 링크를 따른다"
+   }
+  }
+ ],
+ "assets": [
+  {
+   "asset_id": "mockup-before-1440x900",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261028_doc_tier_cross_review/evidence/before_1440x900.png",
+   "sha256": "24dc625ba62c369bd93f61d32dbc227f03318f6e710c40eb77d09a02dec850c6",
+   "byte_size": 234245,
+   "mime": "image/png",
+   "screen_id": "doc-tier-settings",
+   "phase": "before",
+   "viewport": "1440x900",
+   "fixture_id": "db-2026-10-28",
+   "state": "default",
+   "captured_at": "2026-10-28T07:05:38+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-before-390x844",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261028_doc_tier_cross_review/evidence/before_390x844.png",
+   "sha256": "80aae38f159ea855686e366f26a3adf1db1f67486b0a52055bfebcb184f5a1f4",
+   "byte_size": 274874,
+   "mime": "image/png",
+   "screen_id": "doc-tier-settings",
+   "phase": "before",
+   "viewport": "390x844",
+   "fixture_id": "db-2026-10-28",
+   "state": "default",
+   "captured_at": "2026-10-28T07:05:38+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-after-1440x900",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261028_doc_tier_cross_review/evidence/after_1440x900.png",
+   "sha256": "48227b11d353f3ccf5777197d82bde3a8af8e6893693a8b401ca3c45547f579e",
+   "byte_size": 392646,
+   "mime": "image/png",
+   "screen_id": "doc-tier-settings",
+   "phase": "mockup",
+   "viewport": "1440x900",
+   "fixture_id": "proposed-defaults",
+   "state": "default",
+   "captured_at": "2026-10-28T07:05:38+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-after-390x844",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261028_doc_tier_cross_review/evidence/after_390x844.png",
+   "sha256": "a53f06035acfd70a0b2a02749de57dd9c707bfaad3cd5d16429ecfaa0d0bfd84",
+   "byte_size": 450480,
+   "mime": "image/png",
+   "screen_id": "doc-tier-settings",
+   "phase": "mockup",
+   "viewport": "390x844",
+   "fixture_id": "proposed-defaults",
+   "state": "default",
+   "captured_at": "2026-10-28T07:05:38+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-docs_after-1440x900",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261028_doc_tier_cross_review/evidence/docs_after_1440x900.png",
+   "sha256": "31d245b707134472ad714ec0c5047fe0a95c47fda4334da5826bbf48363020dd",
+   "byte_size": 154644,
+   "mime": "image/png",
+   "screen_id": "canonical-docs-tier",
+   "phase": "mockup",
+   "viewport": "1440x900",
+   "fixture_id": "sample-docs",
+   "state": "default",
+   "captured_at": "2026-10-28T07:05:38+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "mockup-docs_after-390x844",
+   "role": "primary",
+   "uri": "internal://docs/design/mockups/20261028_doc_tier_cross_review/evidence/docs_after_390x844.png",
+   "sha256": "2b99315ef93a4f673bf6f3a2d2f11856490a175be6c14090ec4ce018102eb144",
+   "byte_size": 151829,
+   "mime": "image/png",
+   "screen_id": "canonical-docs-tier",
+   "phase": "mockup",
+   "viewport": "390x844",
+   "fixture_id": "sample-docs",
+   "state": "default",
+   "captured_at": "2026-10-28T07:05:38+00:00",
+   "capture_source": "static_html_render",
+   "redaction_status": "not_required"
+  },
+  {
+   "asset_id": "html-before",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261028_doc_tier_cross_review/before.html",
+   "sha256": "23acb0045e360939dc7b90a89b80f3ad9633146e51295bd8d8e9258afa0381e7",
+   "byte_size": 20372,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-after",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261028_doc_tier_cross_review/after.html",
+   "sha256": "5f9ec916fba437de2efacf8afa8d2d8db438ee881aa669185b5c965c082615de",
+   "byte_size": 25646,
+   "mime": "text/html"
+  },
+  {
+   "asset_id": "html-canonical_docs_after",
+   "role": "child",
+   "uri": "internal://docs/design/mockups/20261028_doc_tier_cross_review/canonical_docs_after.html",
+   "sha256": "535827390b3511b33781afe5151f13ac321fa21cd57a8b34e46ffcb0b5e5b902",
+   "byte_size": 15911,
+   "mime": "text/html"
+  }
+ ],
+ "evidence": [
+  {
+   "evidence_id": "render-doc-tier-cross-review",
+   "kind": "browser_capture",
+   "screen_id": "doc-tier-settings",
+   "route": "/settings",
+   "success": true,
+   "login_used": false,
+   "detail": "서버 Playwright chromium 으로 정적 HTML 시안 3장(변경 전·변경 후·정본 화면)을 데스크톱 1440x900·모바일 390x844 로 캡처(총 6장). 운영 /settings 는 로그인이 필요해 변경 전은 settings/page.tsx(origin/main e4e4e970)의 RunnerModelConfig 구조와 DB 값(runner_model_config, 2026-10-28)으로 재구성. 가로 넘침(scrollWidth-viewport): {\"before_1440\": 0, \"before_390\": 0, \"after_1440\": 0, \"after_390\": 0, \"docs_after_1440\": 0, \"docs_after_390\": 0}. 검토 모델 순서와 문서 예시는 제안·가상 값이며 확정이 아니다.",
+   "recorded_at": "2026-10-28T07:05:38+00:00"
+  }
+ ],
+ "source_sha": "e4e4e970"
+}
