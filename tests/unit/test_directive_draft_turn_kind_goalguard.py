@@ -399,3 +399,28 @@ def test_api_passes_goal_and_milestone_through(monkeypatch):
         {"tenant": {"id": TENANT_A}, "user": {}},
     ))
     assert seen["goal_id"] == str(goal_id) and seen["milestone_id"] == str(milestone_id)
+
+
+@pytest.mark.parametrize('mode', ['identical', 'changed', 'frozen'])
+@pytest.mark.parametrize('different_milestone', [False, True])
+def test_same_turn_cannot_silently_change_binding(h, mode, different_milestone):
+    goal, milestones = h.add_goal(milestones=2)
+    other_goal, [other_milestone] = h.add_goal()
+    h.set_source()
+    first = h.create(goal_id=str(goal), milestone_id=str(milestones[0]))
+    if mode == 'changed':
+        h.body = '변경된 생성 내용'
+    elif mode == 'frozen':
+        h.conn.drafts[0]['status'] = 'approved'
+    calls = h.llm_calls
+    with pytest.raises(service.GoalBindingError):
+        h.create(
+            goal_id=str(goal if different_milestone else other_goal),
+            milestone_id=str(milestones[1] if different_milestone else other_milestone),
+        )
+    assert h.llm_calls == calls
+    assert str(h.conn.drafts[0]['id']) == first['id']
+    assert h.conn.drafts[0]['classification']['goal_id'] == str(goal)
+    assert h.conn.drafts[0]['classification']['milestone_id'] == str(milestones[0])
+    assert len(h.conn.drafts) == len(h.conn.revisions) == 1
+    assert h.conn.formal_goal_writes == []

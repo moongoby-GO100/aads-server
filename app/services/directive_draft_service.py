@@ -825,6 +825,18 @@ async def _find_turn_draft(
     )
 
 
+def _check_existing_goal_binding(draft: Any, binding: dict[str, Any]) -> None:
+    """A turn's existing draft must never be returned or reassigned to another plan."""
+    stored = draft["classification"] or {}
+    if isinstance(stored, str):
+        stored = json.loads(stored)
+    for field in ("goal_id", "milestone_id"):
+        previous = stored.get(field)
+        requested = binding.get(field)
+        if (str(previous) if previous else None) != (str(requested) if requested else None):
+            raise GoalBindingError("같은 대화 턴의 기존 초안과 목표/마일스톤 연결이 다릅니다.")
+
+
 async def _is_frozen_draft(conn, draft: Any) -> bool:
     """Reviewed/sent drafts and human-edited drafts must not be overwritten by a new generation."""
     if draft["status"] != "draft":
@@ -936,6 +948,8 @@ async def create_draft(
         existing = await _find_turn_draft(
             conn, tenant_uuid=tenant_uuid, source=source, turn_key=turn_key
         )
+        if existing:
+            _check_existing_goal_binding(existing, goal_binding)
         if existing and await _is_frozen_draft(conn, existing):
             return await _draft_result(
                 conn, tenant_uuid=tenant_uuid, draft=existing, artifact=None, turn_dedup="existing"
@@ -990,6 +1004,7 @@ async def create_draft(
                 conn, tenant_uuid=tenant_uuid, source=source, turn_key=turn_key, for_update=True
             )
             if current:
+                _check_existing_goal_binding(current, goal_binding)
                 if await _is_frozen_draft(conn, current):
                     return await _draft_result(
                         conn, tenant_uuid=tenant_uuid, draft=current, artifact=None,
