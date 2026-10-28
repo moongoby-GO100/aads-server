@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.core.db_pool import get_pool
-from app.services.work_recipe import store
+from app.services.work_recipe import store, vault_reference
 from app.services.work_recipe import shinhan_corporate_manual as shinhan_manual
 from app.services.work_recipe.schema import RISK_LEVELS, WorkRecipe, parse_recipe, risk_rank
 
@@ -304,6 +304,9 @@ async def request_registration(
 ) -> dict[str, Any]:
     """Persist a dry-run draft. It is not visible to the recipe player yet."""
     await _validate_coupangeats_registration(recipe, tenant_id)
+    if vault_reference.has_vault_scope(recipe):
+        vault_reference.parse_scope(recipe)
+        vault_reference.secret_fill_steps(recipe, frozenset(i.name for i in recipe.inputs if i.secret))
     tenant = _tenant_uuid(tenant_id)
     domain = store.normalize_domain(recipe.domain)
     proposed_version = await store.next_version(name=recipe.name, domain=domain, tenant_id=tenant)

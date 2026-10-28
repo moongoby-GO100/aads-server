@@ -221,7 +221,13 @@ class RecipePlayer:
             status=STATUS_SUCCESS,
             started_at=_now(),
         )
-        result.run_id = await self._start_run(recipe, values, recipe_id=recipe_id)
+        secret_names = {item.name for item in recipe.inputs if item.secret}
+        secrets = _secret_texts(recipe, values)
+        result.run_id = await self._start_run(
+            recipe,
+            {key: (_REDACTED if key in secret_names else value) for key, value in values.items()},
+            recipe_id=recipe_id,
+        )
 
         planned: list[tuple[str, RecipeStep]] = [("step", step) for step in recipe.steps]
         if self._run_verify:
@@ -252,7 +258,7 @@ class RecipePlayer:
                 stop_index = index
                 break
 
-            step_result = await self._run_step(phase, step, values, declared, context)
+            step_result = await self._run_step(phase, step, values, declared, context, secrets)
             result.steps.append(step_result)
             await self._record_step(result.run_id, step_result)
             result.llm_calls += step_result.llm_calls
@@ -289,7 +295,10 @@ class RecipePlayer:
                 result.steps.append(skipped)
                 await self._record_step(result.run_id, skipped)
 
-        result.variables = dict(values)
+        result.variables = {
+            key: (_REDACTED if key in secret_names else value) for key, value in values.items()
+        }
+        result.error = _redact(result.error, secrets)
         result.finished_at = _now()
         await self._finish_run(result)
         return result
@@ -297,6 +306,24 @@ class RecipePlayer:
     # ---- 내부 ----------------------------------------------------------
 
     async def _run_step(
+        self,
+        phase: str,
+        step: RecipeStep,
+        values: Mapping[str, Any],
+        declared: set[str],
+        context: Mapping[str, Any] | None,
+        secrets: tuple[str, ...] = (),
+    ) -> StepResult:
+        outcome = await self._run_step_raw(phase, step, values, declared, context)
+        if secrets:
+            outcome.error = _redact(outcome.error, secrets)
+            outcome.output = _redact(outcome.output, secrets)
+            outcome.narration = _redact(outcome.narration, secrets)
+            outcome.evidence = _redact(outcome.evidence, secrets)
+            outcome.recovery = _redact(outcome.recovery, secrets)
+        return outcome
+
+    async def _run_step_raw(
         self,
         phase: str,
         step: RecipeStep,
@@ -409,6 +436,37 @@ class RecipePlayer:
 async def _maybe_await(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
+    return value
+
+
+_MIN_REDACT_LEN = 4
+_REDACTED = "***"
+_STRUCTURAL_KEYS = frozenset({"route", "reason", "resume", "signal", "status", "action", "phase"})
+
+
+def _secret_texts(recipe: WorkRecipe, values: Mapping[str, Any]) -> tuple[str, ...]:
+    """secret 으로 선언된 입력의 실제 값. 긴 값부터 지워야 부분 일치가 남지 않는다."""
+    found = {
+        str(values[item.name])
+        for item in recipe.inputs
+        if item.secret and isinstance(values.get(item.name), str)
+        and len(str(values[item.name])) >= _MIN_REDACT_LEN
+    }
+    return tuple(sorted(found, key=len, reverse=True))
+
+
+def _redact(value: Any, secrets: tuple[str, ...], *, _key: str = "") -> Any:
+    """결과 트리에서 secret 값 문자열을 지운다. 구조 키(route/reason...)는 코드값이라 건드리지 않는다."""
+    if not secrets or _key in _STRUCTURAL_KEYS:
+        return value
+    if isinstance(value, str):
+        for secret in secrets:
+            value = value.replace(secret, _REDACTED)
+        return value
+    if isinstance(value, Mapping):
+        return {key: _redact(item, secrets, _key=str(key)) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(item, secrets) for item in value]
     return value
 
 

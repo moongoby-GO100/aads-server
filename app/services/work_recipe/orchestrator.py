@@ -9,13 +9,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.services.channel_router import ActionIntent, ChannelRouter
-from app.services.work_recipe.audit import GuardedRunRecorder
+from app.services.work_recipe.audit import GuardedRunRecorder, record_credential_use
 from app.services.work_recipe.credential_scope import assert_credential_allowed
 from app.services.work_recipe.executor import BrowserRecipeExecutor
 from app.services.work_recipe.guard import is_internal_host
 from app.services.work_recipe.player import RunResult, play_recipe
 from app.services.work_recipe.schema import WorkRecipe, parse_recipe
 from app.services.work_recipe import shinhan_corporate_manual as shinhan_manual
+from app.services.work_recipe import vault_reference
 from app.services.work_recipe.store import list_recipes, normalize_domain, row_to_recipe
 from app.services.browser_recipe_registry import (
     COUPANGEATS_LOGIN_FRAGMENTS, COUPANGEATS_LOGIN_URL,
@@ -283,7 +284,17 @@ async def run_directive(
     if pc_lane:
         # Vault 해석과 단계 실행보다 먼저 막는다.
         await _assert_pc_lane_ready(recipe, browser_session_id, browser_work_key)
-    resolved_inputs = await _scoped_inputs(recipe, intent_inputs)
+    resolution: vault_reference.VaultResolution | None = None
+    if vault_reference.has_vault_scope(recipe):
+        # 승인 판본이 선언한 {credential_id, field} 만 쓴다. 호출자 값·권한은 받지 않고 테넌트는 서버 컨텍스트에서 온다.
+        resolution = await vault_reference.resolve_inputs(
+            recipe, intent_inputs, tenant_id=tenant_id, browser_work_key=browser_work_key,
+        )
+        resolved_inputs = resolution.values
+    else:
+        if not coupang:
+            _assert_secret_scope_declared(recipe)
+        resolved_inputs = await _scoped_inputs(recipe, intent_inputs)
     recorder = GuardedRunRecorder(
         domain=recipe.domain,
         tenant_id=tenant_id,
@@ -291,9 +302,12 @@ async def run_directive(
         task_id=task_id,
         requested_by=triggered_by,
     )
+    if resolution is not None:
+        recorder = _VaultUseAuditRecorder(recorder, recipe, resolution)
     executor = BrowserRecipeExecutor(
         browser_session_id=browser_session_id,
         browser_work_key=browser_work_key,
+        **({"secret_fill_steps": resolution.fill_steps} if resolution is not None else {}),
     )
     if coupang:
         step_executor = CoupangVerificationExecutor(executor, recipe, resolved_inputs)
@@ -322,6 +336,46 @@ async def run_directive(
             },
         },
     )
+
+
+class _VaultUseAuditRecorder:
+    """run 이 시작되면 Vault 사용을 감사 1행씩 남긴다. 감사에는 credential_id·field·허용 여부만 들어간다."""
+
+    def __init__(self, inner: Any, recipe: WorkRecipe, resolution: vault_reference.VaultResolution) -> None:
+        self._inner = inner
+        self._recipe = recipe
+        self._resolution = resolution
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    async def start_run(self, **kwargs: Any) -> Any:
+        run_id = self._inner.start_run(**kwargs)
+        if hasattr(run_id, "__await__"):
+            run_id = await run_id
+        for use in self._resolution.uses:
+            try:
+                await record_credential_use(
+                    run_id, self._recipe.domain, self._recipe.name,
+                    {"credential_id": use["credential_id"], "field": use["field"], "decision": "allow"},
+                )
+            except Exception as exc:  # noqa: BLE001 - 감사 실패가 실행 결과를 바꾸지 않는다
+                logger.warning("vault_reference_audit_failed type=%s", type(exc).__name__)
+        return run_id
+
+
+def _assert_secret_scope_declared(recipe: WorkRecipe) -> None:
+    """secret 입력이 있는 일반 레시피는 승인 판본에 credential_scope 가 있어야 한다.
+
+    scope 없는 레시피가 호출자의 {value} 를 받던 경로를 닫는다. 문자열 scope(쿠팡이츠·배달 조각)는
+    기존 별도 계약이라 그대로 둔다.
+    """
+    if not any(item.secret for item in recipe.inputs):
+        return
+    scope = recipe.metadata.get("credential_scope")
+    if isinstance(scope, str) and scope.strip():
+        return
+    raise vault_reference.VaultReferenceError("credential_scope_missing")
 
 
 _PC_LANES = frozenset({"pc", "pc_agent"})
@@ -562,7 +616,8 @@ class GenericVerificationExecutor:
             valid = False
         if not valid:
             return {"ok": False, "error": "verification_failed", "route": lane}
-        evidence = await self.executor._collect_evidence(page)
+        collect = getattr(self.executor, "_evidence_for", None) or self.executor._collect_evidence
+        evidence = await collect(page)
         if self.executor._evidence_shows_block({"evidence": evidence}):
             return {"ok": False, "error": "verification_blocked_page", "route": lane}
         for key in ("dom", "aria"):
@@ -584,6 +639,9 @@ async def _scoped_inputs(
     for item in recipe.inputs:
         if not item.secret or item.name not in resolved:
             continue
+        if vault_reference.has_vault_scope(recipe):
+            # Vault 참조 계약 레시피는 resolve_inputs 로만 해석한다 — 호출자 value 로 우회할 수 없다.
+            raise vault_reference.VaultReferenceError("plain_secret_rejected", input_name=item.name)
         credential_ref = resolved[item.name]
         if not isinstance(credential_ref, Mapping) or "value" not in credential_ref:
             raise ValueError(

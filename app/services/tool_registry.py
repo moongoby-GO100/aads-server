@@ -2290,7 +2290,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "directive": {"type": "string", "description": "run 시 실행할 자연어 지시"},
                 "inputs": {
                     "type": "object",
-                    "description": "비밀값은 credential_scope reference만 허용",
+                    "description": (
+                        "비밀 입력은 평문 value 를 받지 않는다. 승인 레시피 metadata.credential_scope 가 정한 "
+                        "{credential_id, field(username|password)} 참조만 허용하며 서버가 Vault 에서 실행 시점에 "
+                        "해석한다. 호출자가 value/allowed_domains/allowed_recipes/tenant_id 를 넣으면 거부된다. "
+                        "생략하면 승인된 참조를 그대로 쓴다."
+                    ),
                 },
                 "recipe_name": {"type": "string", "description": "register_e2e 레시피 이름"},
                 "domain": {"type": "string", "description": "register_e2e 대상 URL 또는 도메인"},

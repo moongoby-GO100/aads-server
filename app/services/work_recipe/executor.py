@@ -5,7 +5,7 @@ import hashlib
 import inspect
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -31,6 +31,7 @@ from app.services.work_recipe.schema import (
     OVERLAY_FORBIDDEN_MARKERS,
     overlay_host_matches,
 )
+from app.services.work_recipe.store import normalize_domain
 from app.services.work_recipe.shinhan_corporate_manual import (
     FinancialManualBlocked,
     assert_unregistered_navigation,
@@ -85,6 +86,19 @@ _OVERLAY_PROBE_SCRIPT = """(args) => {
         text: rootVisible ? String(root.innerText ?? root.textContent ?? '').slice(0, 600) : '',
     };
 }"""
+
+
+class SecretFillBlocked(RuntimeError):
+    """비밀 입력을 화면에 넣기 직전 검사에서 막혔다. 메시지는 코드뿐이다(값을 싣지 않는다)."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+_FRAME_SELECTOR = re.compile(r"enter-frame|internal:|>>\s*(?:css=)?i?frame", re.IGNORECASE)
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_SECRET_WITHHELD = {"status": "withheld", "reason": "secret_on_screen"}
 
 
 class OverlayNotDismissible(RuntimeError):
@@ -158,12 +172,17 @@ class BrowserRecipeExecutor:
         custom_rules: list[Mapping[str, Any]] | None = None,
         pre_approvals: list[Any] | None = None,
         approval_verifier: Callable[[Mapping[str, Any], RiskLevel], Any] | None = None,
+        secret_fill_steps: Iterable[int] | None = None,
     ) -> None:
         # 아래 네 값은 서버 코드가 생성자로만 넣는다. payload 로 들어온 값은 신뢰하지 않는다.
         self.instruction = instruction
         self.custom_rules = list(custom_rules or [])
         self.pre_approvals = list(pre_approvals or [])
         self._approval_verifier = approval_verifier
+        # Vault 참조로 해석된 비밀을 입력하는 단계 seq. 서버 코드만 생성자로 넣는다.
+        self._secret_fill_steps = frozenset(int(seq) for seq in (secret_fill_steps or ()))
+        # 비밀이 입력된 화면의 실제 URL. 같은 화면에 머무는 동안 증거(DOM/aria/스크린샷)를 남기지 않는다.
+        self._secret_screen_url = ""
         self.browser_session_id = browser_session_id
         self.browser_work_key = browser_work_key
         self.page_texts = list(page_texts or [])
@@ -275,7 +294,7 @@ class BrowserRecipeExecutor:
             self._assert_trusted_arguments(payload)
             page = await self._get_page(payload)
             output = await self._execute(page, action, payload)
-            evidence = await self._collect_evidence(page)
+            evidence = await self._evidence_for(page)
             regression = self._auth_regression(payload, evidence)
             if regression:
                 # 자동 재로그인·재시도·발송 재실행을 하지 않는다. 사람이 Vault 경로로 복구한다.
@@ -324,6 +343,22 @@ class BrowserRecipeExecutor:
                     "resume": "after_approval" if reason == "approval_required" else "human_completes_step",
                 },
                 **({"autoreview": review.to_dict()} if review else {}),
+            }
+        except SecretFillBlocked as exc:
+            return {
+                "ok": False,
+                "status": "blocked",
+                "error": f"secret_fill_blocked:{exc.code}",
+                "risk": level.value,
+                "llm_calls": 0,
+                "route": "human_gateway",
+                "evidence": {},
+                "recovery": {
+                    "route": "human_gateway",
+                    "reason": exc.code,
+                    "resume": "after_recipe_or_session_fixed",
+                    "auto_retry": False,
+                },
             }
         except OverlayNotDismissible as exc:
             return {
@@ -437,11 +472,10 @@ class BrowserRecipeExecutor:
         return str(context.get("domain") or "") if isinstance(context, Mapping) else ""
 
     def _assert_trusted_arguments(self, payload: Mapping[str, Any]) -> None:
-        arguments = {
-            key: payload.get(key)
-            for key in ("url", "selector", "value", "endpoint")
-            if payload.get(key) is not None
-        }
+        # Vault 에서 온 비밀 값은 페이지 유래 검사에서 뺀다 — 위반 메시지가 값을 발췌해 싣기 때문이다.
+        keys = ("url", "selector", "endpoint") if self._is_secret_fill(payload) else (
+            "url", "selector", "value", "endpoint")
+        arguments = {key: payload.get(key) for key in keys if payload.get(key) is not None}
         context = payload.get("context")
         page_texts = list(self.page_texts)
         if isinstance(context, Mapping):
@@ -481,6 +515,74 @@ class BrowserRecipeExecutor:
         pages = list(getattr(self._context, "pages", []) or [])
         self._page = pages[0] if pages else await self._context.new_page()
         return self._page
+
+    def _is_secret_fill(self, step: Mapping[str, Any]) -> bool:
+        if str(step.get("action") or "") != "fill" or not self._secret_fill_steps:
+            return False
+        try:
+            return int(step.get("seq")) in self._secret_fill_steps
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    async def _live_href(page: Any) -> str:
+        """facade 가 캐시한 page.url 이 아니라 브라우저가 지금 보는 실제 주소."""
+        try:
+            return str(await page.evaluate("window.location.href") or "")
+        except Exception:  # noqa: BLE001 - 확인 못 하면 빈 값 = 불허
+            return ""
+
+    @staticmethod
+    def _href_allowed(href: str, domain: str) -> bool:
+        try:
+            parts = urlsplit(href)
+            host = (parts.hostname or "").lower().removeprefix("www.")
+            scheme = parts.scheme.lower()
+            has_userinfo = bool(parts.username or parts.password)
+        except ValueError:
+            return False
+        wanted = normalize_domain(domain)
+        if not host or not wanted or host != wanted or has_userinfo:
+            return False
+        return scheme == "https" or (scheme == "http" and host in _LOOPBACK_HOSTS)
+
+    async def _fill_secret(self, page: Any, step: Mapping[str, Any], selector: str, timeout_ms: int) -> None:
+        """비밀 입력 직전 검사: 같은 탭의 실제 주소가 레시피 도메인과 정확히 같은 https 인가."""
+        domain = self._domain(step)
+        if not selector or _FRAME_SELECTOR.search(selector):
+            raise SecretFillBlocked("secret_fill_selector_not_allowed")
+        before = await self._live_href(page)
+        if not self._href_allowed(before, domain):
+            raise SecretFillBlocked("secret_fill_origin_mismatch")
+        pages = list(getattr(self._context, "pages", None) or [])
+        if (self._page is not None and page is not self._page) or (pages and page not in pages):
+            raise SecretFillBlocked("secret_fill_tab_changed")
+        self._secret_screen_url = before
+        try:
+            await page.fill(selector, str(step.get("value") or ""), timeout=timeout_ms)
+        except Exception as exc:  # noqa: BLE001
+            # 원 예외는 버린다 — 호출 로그/메시지에 입력 값이 실릴 수 있다.
+            raise RuntimeError(f"secret_fill_failed:{type(exc).__name__}") from None
+        after = await self._live_href(page)
+        self._secret_screen_url = after or "unknown"
+        if not self._href_allowed(after, domain):
+            try:
+                await page.fill(selector, "", timeout=timeout_ms)
+            except Exception:  # noqa: BLE001
+                pass
+            raise SecretFillBlocked("secret_fill_origin_changed")
+
+    async def _evidence_for(self, page: Any) -> dict[str, Any]:
+        """비밀이 입력된 화면에 머무는 동안은 DOM/aria/스크린샷을 남기지 않는다."""
+        if self._secret_screen_url:
+            live = await self._live_href(page)
+            if not live or live == self._secret_screen_url:
+                return {
+                    "url": mask_secrets(live), "dom": dict(_SECRET_WITHHELD),
+                    "aria": dict(_SECRET_WITHHELD), "screenshot": dict(_SECRET_WITHHELD),
+                }
+            self._secret_screen_url = ""
+        return await self._collect_evidence(page)
 
     async def _collect_evidence(self, page: Any) -> dict[str, Any]:
         """Capture safe structural evidence without persisting page secrets."""
@@ -579,6 +681,9 @@ class BrowserRecipeExecutor:
             await page.click(selector, timeout=timeout_ms)
             return None
         if action == "fill":
+            if self._is_secret_fill(step):
+                await self._fill_secret(page, step, selector, timeout_ms)
+                return None
             await page.fill(selector, str(step.get("value") or ""), timeout=timeout_ms)
             return None
         if action == "select":

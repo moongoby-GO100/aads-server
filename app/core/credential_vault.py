@@ -232,14 +232,20 @@ async def get_credential(
     credential_id: str | UUID,
     include_secrets: bool = True,
     tenant_id: str | None = None,
+    require_active: bool = False,
 ) -> dict[str, Any] | None:
-    """단일 자격증명 조회 (복호화 포함)."""
+    """단일 자격증명 조회 (복호화 포함).
+
+    require_active=True 면 비활성 e2e 행을 없는 것으로 본다(에이전트 볼트 쪽은
+    원래 is_active 로 거른다). 기본값은 False — 관리 화면은 비활성 행도 읽어야 한다.
+    """
     tenant_uuid = _require_tenant_uuid(tenant_id, "get_credential")
     require_vault_enabled()
     pool = get_pool()
     cred_uuid = credential_id if isinstance(credential_id, UUID) else UUID(credential_id)
     row = await pool.fetchrow(
-        "SELECT * FROM e2e_credentials WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM e2e_credentials WHERE id = $1 AND tenant_id = $2"
+        + (" AND is_active = TRUE" if require_active else ""),
         cred_uuid,
         tenant_uuid,
     )

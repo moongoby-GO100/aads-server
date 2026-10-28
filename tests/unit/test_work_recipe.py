@@ -388,8 +388,9 @@ async def test_run_and_steps_are_recorded():
     assert len(recorder.steps) == 5
     assert recorder.steps[0]["run_id"] == "run-1"
     assert recorder.finished == [{"run_id": "run-1", "status": "success", "llm_calls": 0}]
-    # secret 입력은 기록기로 넘어가되 마스킹은 저장 계층(store)의 책임이다
-    assert recorder.runs[0]["inputs"]["password"] == "pw"
+    # secret 입력은 player 가 기록기에 넘기기 전에 가린다 — 저장 계층만 믿지 않는다
+    assert recorder.runs[0]["inputs"]["password"] == "***"
+    assert recorder.runs[0]["inputs"]["shop_id"] == "42"
 
 
 async def test_llm_calls_from_executor_are_counted():

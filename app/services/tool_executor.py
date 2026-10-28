@@ -5925,6 +5925,7 @@ class ToolExecutor:
             )
             from app.services.work_recipe.approval import ApprovalRequired
             from app.services.work_recipe.orchestrator import RecipeConfirmation, run_directive
+            from app.services.work_recipe.vault_reference import VaultReferenceError
 
             payload = {"directive": directive, "inputs": inp.get("inputs") or {}}
             if inp.get("confirmed_draft_id"):
@@ -5957,6 +5958,8 @@ class ToolExecutor:
                     "run_id": str(exc.run_id) if exc.run_id else None,
                     "risk": exc.risk_level,
                 }
+            except VaultReferenceError as exc:
+                return {**exc.to_response(), "session_id": session_id}
             if result is None:
                 return {"error": "matching_recipe_not_found", "session_id": session_id}
             if isinstance(result, RecipeConfirmation):
