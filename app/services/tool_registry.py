@@ -3595,7 +3595,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "name": "skill_find",
         "description": (
             "등록된 스킬(ops_skill_library)을 자연어로 검색합니다(읽기 전용). "
-            "slug·등급(risk_tier)·정책을 돌려주며, 실행은 skill_execute 로 합니다."
+            "slug·등급(risk_tier)·정책과 한글 안내(summary_ko·use_when·guide), 실행 가능 여부(executable)를 돌려주며, "
+            "실행은 skill_execute 로 합니다. executable=false 스킬은 실행되지 않습니다."
         ),
         "input_schema": {
             "type": "object",

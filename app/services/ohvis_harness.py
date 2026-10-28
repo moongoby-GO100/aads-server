@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from jsonschema import Draft202012Validator, SchemaError, ValidationError
 
@@ -334,6 +335,89 @@ def _skill_scope_fields(owner_tenant_id: Any, tenant_id: str) -> dict[str, Any]:
     }
 
 
+# 입력을 되돌려줄 뿐 실제 동작이 없는 실행기. 이 실행기를 가진 스킬은 실행을 막는다.
+NOOP_SKILL_EXECUTORS = frozenset({"ohvis.contract-echo"})
+_LEARNED_SKILL_PREFIX = "learned-site-"
+_LEARNED_SUMMARY_KO = (
+    "스마트브라우저가 화면 관찰로 만든 후보입니다. "
+    "아직 실제 동작이 연결되지 않아 실행해도 결과가 없습니다."
+)
+_NOT_EXECUTABLE_NOOP_KO = (
+    "이 스킬은 아직 실제 동작이 연결되지 않은 후보입니다. "
+    "실행해도 입력을 되돌려줄 뿐 결과가 남지 않아 실행을 막았습니다."
+)
+_NOT_EXECUTABLE_NO_ACTIVE_KO = "실행 가능한 활성(active) 버전이 등록되어 있지 않습니다."
+_GUIDE_TEXT_KEYS = ("title_ko", "summary_ko", "outputs", "approval_ko")
+_GUIDE_LIST_KEYS = ("what_it_does", "use_when", "inputs", "related_tools")
+
+
+def skill_executability(executor: str | None) -> tuple[bool, str | None]:
+    """실행기 이름만으로 판정한다. no-op 실행기면 (False, 한글 사유)."""
+    if executor in NOOP_SKILL_EXECUTORS:
+        return False, _NOT_EXECUTABLE_NOOP_KO
+    return True, None
+
+
+def _site_domain(origin: Any) -> str | None:
+    if not origin:
+        return None
+    text = str(origin).strip()
+    parsed = urlparse(text if "://" in text else f"//{text}")
+    return parsed.hostname or None
+
+
+def _schema_inputs(schema: Any) -> list[dict[str, Any]]:
+    """active 버전 input_schema 에서 입력 항목(이름·설명·예시)을 뽑는다. 스키마에 있는 것만."""
+    if not isinstance(schema, Mapping):
+        return []
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return []
+    required = set(schema.get("required") or [])
+    items: list[dict[str, Any]] = []
+    for name, spec in properties.items():
+        spec = spec if isinstance(spec, Mapping) else {}
+        examples = spec.get("examples")
+        items.append({
+            "name": str(name),
+            "description": str(spec.get("description") or ""),
+            "example": examples[0] if isinstance(examples, list) and examples else spec.get("default"),
+            "required": name in required,
+        })
+    return items
+
+
+def skill_guide_fields(
+    *, slug: str, metadata: Any, executor: str | None, active_version: Any,
+    site_origin: Any = None, page_key: Any = None, input_schema: Any = None,
+) -> dict[str, Any]:
+    """한글 사용 안내(guide)와 실행 가능 여부. 기존 필드는 건드리지 않고 덧붙일 값만 만든다."""
+    meta = _loads_dict(metadata)
+    stored = meta.get("guide")
+    guide: dict[str, Any] | None = None
+    if isinstance(stored, Mapping):
+        guide = dict(stored)
+    elif str(slug or "").startswith(_LEARNED_SKILL_PREFIX) or (
+        executor in NOOP_SKILL_EXECUTORS and (page_key or site_origin)
+    ):
+        target = _site_domain(site_origin) or (str(page_key) if page_key else None) or str(slug)
+        guide = {"title_ko": f"사이트 관찰 후보: {target}", "summary_ko": _LEARNED_SUMMARY_KO}
+    if guide is not None:
+        for key in _GUIDE_TEXT_KEYS:
+            guide.setdefault(key, "")
+        for key in _GUIDE_LIST_KEYS:
+            guide.setdefault(key, [])
+        if not guide["inputs"]:
+            guide["inputs"] = _schema_inputs(input_schema)
+    executable, reason = skill_executability(executor)
+    if executable and not active_version:
+        executable, reason = False, _NOT_EXECUTABLE_NO_ACTIVE_KO
+    return {
+        "guide": guide, "executor": executor,
+        "executable": executable, "not_executable_reason_ko": reason,
+    }
+
+
 def _require_uuid(value: str, code: str = "invalid_skill_id") -> str:
     try:
         return str(uuid.UUID(str(value)))
@@ -362,6 +446,14 @@ async def list_skill_manifests(*, tenant_id: str, slug: str | None = None,
                       (SELECT count(*) FROM ops_skill_versions x WHERE x.skill_id=l.id) AS version_count,
                       (SELECT x.version FROM ops_skill_versions x
                         WHERE x.skill_id=l.id AND x.status='active' LIMIT 1) AS active_version,
+                      (SELECT x.manifest->>'executor' FROM ops_skill_versions x
+                        WHERE x.skill_id=l.id AND x.status='active' LIMIT 1) AS active_executor,
+                      (SELECT x.manifest->'provenance'->>'page_key' FROM ops_skill_versions x
+                        WHERE x.skill_id=l.id
+                        ORDER BY (x.status='active') DESC,x.created_at DESC LIMIT 1) AS page_key,
+                      (SELECT p.base_origin FROM authenticated_site_profiles p
+                        WHERE p.id::text=l.metadata->>'site_profile_id'
+                          AND p.tenant_id=l.tenant_id LIMIT 1) AS site_origin,
                       (SELECT count(*) FROM ops_skill_runs r
                         WHERE r.skill_id=l.id AND r.tenant_id=l.tenant_id) AS run_count,
                       lr.status AS latest_run_status,lr.started_at AS latest_run_started_at
@@ -393,7 +485,16 @@ async def list_skill_manifests(*, tenant_id: str, slug: str | None = None,
     for row in rows:
         item = _row_dict(row)
         item.update(_skill_scope_fields(item.pop("owner_tenant_id", None), tenant_id))
-        item.update(_skill_source_fields(item.pop("metadata_text", None)))
+        metadata_text = item.pop("metadata_text", None)
+        item.update(_skill_source_fields(metadata_text))
+        manifest = _loads_dict(item.get("manifest"))
+        item.update(skill_guide_fields(
+            slug=item.get("slug"), metadata=metadata_text,
+            executor=item.pop("active_executor", None) or manifest.get("executor"),
+            active_version=item.get("active_version"),
+            site_origin=item.pop("site_origin", None), page_key=item.pop("page_key", None),
+            input_schema=manifest.get("input_schema") if item.get("status") == "active" else None,
+        ))
         run_status = item.pop("latest_run_status", None)
         run_started = item.pop("latest_run_started_at", None)
         item["latest_run"] = (
@@ -414,7 +515,10 @@ async def get_skill_detail(*, tenant_id: str, skill_id: str) -> dict[str, Any]:
             """SELECT l.id::text AS skill_id,l.tenant_id::text AS owner_tenant_id,
                       l.slug,l.title,l.description,l.projects,l.intents,
                       l.risk_tier,l.allowed_tools,l.enabled,l.source_path,
-                      l.metadata::text AS metadata_text,l.created_at,l.updated_at
+                      l.metadata::text AS metadata_text,l.created_at,l.updated_at,
+                      (SELECT p.base_origin FROM authenticated_site_profiles p
+                        WHERE p.id::text=l.metadata->>'site_profile_id'
+                          AND p.tenant_id=l.tenant_id LIMIT 1) AS site_origin
                FROM ops_skill_library l
                WHERE l.id=$2::uuid
                  AND (l.tenant_id=$1::uuid
@@ -440,9 +544,18 @@ async def get_skill_detail(*, tenant_id: str, skill_id: str) -> dict[str, Any]:
         )
     detail = _row_dict(skill)
     detail.update(_skill_scope_fields(detail.pop("owner_tenant_id", None), tenant_id))
-    detail.update(_skill_source_fields(detail.pop("metadata_text", None)))
+    metadata_text = detail.pop("metadata_text", None)
+    detail.update(_skill_source_fields(metadata_text))
     version_items = [_row_dict(v) for v in versions]
-    active = next((v["version"] for v in version_items if v["status"] == "active"), None)
+    active_item = next((v for v in version_items if v["status"] == "active"), None)
+    active = active_item["version"] if active_item else None
+    guide_manifest = _loads_dict((active_item or (version_items[0] if version_items else {})).get("manifest"))
+    detail.update(skill_guide_fields(
+        slug=detail.get("slug"), metadata=metadata_text, executor=guide_manifest.get("executor"),
+        active_version=active, site_origin=detail.pop("site_origin", None),
+        page_key=_loads_dict(guide_manifest.get("provenance")).get("page_key"),
+        input_schema=guide_manifest.get("input_schema") if active_item else None,
+    ))
     run_items = []
     for run in runs:
         item = _row_dict(run)
@@ -774,6 +887,9 @@ async def execute_skill(
                 raise SkillRegistryError("active_skill_version_not_found", status_code=404)
             manifest = _validate_persisted_skill_version(row)
             _enforce_executable_risk_policy(manifest)
+            executable, reason_ko = skill_executability(manifest["executor"])
+            if not executable:
+                raise SkillRegistryError("skill_not_executable", reason_ko or "", status_code=409)
             executor = _SKILL_EXECUTORS.get(manifest["executor"])
             if executor is None:
                 raise SkillRegistryError("executor_not_registered", status_code=409)
@@ -1077,6 +1193,16 @@ def _skill_to_dict(skill: SkillSpec, score: int = 0, match_reason: list[str] | N
     }
 
 
+def _with_guide_fields(item: dict[str, Any], **guide_kwargs: Any) -> dict[str, Any]:
+    """skill_find 항목에 guide/executor/executable 과 채팅용 summary_ko·use_when 을 덧붙인다."""
+    fields = skill_guide_fields(slug=item.get("slug"), **guide_kwargs)
+    guide = fields["guide"] or {}
+    item.update(fields)
+    item["summary_ko"] = guide.get("summary_ko") or None
+    item["use_when"] = list(guide.get("use_when") or [])
+    return item
+
+
 def _score_skill(
     *,
     query_terms: set[str],
@@ -1118,7 +1244,16 @@ async def _fetch_db_skills() -> list[dict[str, Any]]:
             rows = await conn.fetch(
                 """
                 SELECT slug, title, description, projects, intents, risk_tier,
-                       allowed_tools, validation, source_path
+                       allowed_tools, validation, source_path, metadata::text AS metadata_text,
+                       (SELECT x.version FROM ops_skill_versions x
+                         WHERE x.skill_id=ops_skill_library.id AND x.status='active'
+                         LIMIT 1) AS active_version,
+                       (SELECT x.manifest->>'executor' FROM ops_skill_versions x
+                         WHERE x.skill_id=ops_skill_library.id AND x.status='active'
+                         LIMIT 1) AS active_executor,
+                       (SELECT x.manifest->'provenance'->>'page_key' FROM ops_skill_versions x
+                         WHERE x.skill_id=ops_skill_library.id
+                         ORDER BY (x.status='active') DESC, x.created_at DESC LIMIT 1) AS page_key
                 FROM ops_skill_library
                 WHERE enabled IS TRUE
                 ORDER BY updated_at DESC, slug
@@ -1316,7 +1451,7 @@ async def find_skills(
         if score > 0:
             slug = str(db_skill.get("slug") or "")
             seen_slugs.add(slug)
-            scored.append({
+            scored.append(_with_guide_fields({
                 "slug": slug,
                 "title": db_skill.get("title"),
                 "projects": projects,
@@ -1328,7 +1463,8 @@ async def find_skills(
                 "validation": [str(item) for item in _as_list(db_skill.get("validation"))],
                 "score": score + 1,
                 "match_reason": reasons + ["db_seed"],
-            })
+            }, metadata=db_skill.get("metadata_text"), executor=db_skill.get("active_executor"),
+                active_version=db_skill.get("active_version"), page_key=db_skill.get("page_key")))
 
     for skill in BUILTIN_SKILLS:
         if skill.slug in seen_slugs:
@@ -1344,7 +1480,9 @@ async def find_skills(
             terms=set(skill.terms),
         )
         if score > 0:
-            scored.append(_skill_to_dict(skill, score, reasons))
+            scored.append(_with_guide_fields(
+                _skill_to_dict(skill, score, reasons), metadata=None, executor=None, active_version=None,
+            ))
 
     for repo_skill in scan_repository_skills():
         haystack = _tokens(
@@ -1363,7 +1501,7 @@ async def find_skills(
             item = dict(repo_skill)
             item["score"] = score
             item["match_reason"] = reasons + (["terms:" + ",".join(matches[:5])] if matches else [])
-            scored.append(item)
+            scored.append(_with_guide_fields(item, metadata=None, executor=None, active_version=None))
 
     scored.sort(key=lambda item: (item.get("score", 0), item.get("slug", "")), reverse=True)
     return {

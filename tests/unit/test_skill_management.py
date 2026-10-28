@@ -760,3 +760,250 @@ def test_openapi_exposes_detail_route_and_list_filters(api):
     assert "get" in schema["paths"]["/ohvis/harness/skills/{skill_id}"]
     params = {p["name"] for p in schema["paths"]["/ohvis/harness/skills"]["get"]["parameters"]}
     assert {"project", "risk_tier", "enabled", "source", "q", "slug", "status"} <= params
+
+
+# ------------------------------------------- 6. 한글 사용 안내(guide) · 실행 가능 여부 (AADS-SKILL-GUIDE-SERVER-20261028)
+
+_GUIDE_KEYS = {"title_ko", "summary_ko", "what_it_does", "use_when", "inputs", "outputs",
+               "approval_ko", "related_tools"}
+_GUIDE_MIGRATION = _REPO / "migrations" / "20261028_skill_guide_ko.sql"
+_SHARED_SLUGS = {
+    "aads-bluegreen-release": "deploy", "runner-recovery": "write",
+    "authenticated-site-collector": "auth", "store-assistant-channel-collector": "auth",
+    "go100-market-open-check": "financial", "kis-broker-health": "financial",
+    "ntv2-merchant-contract": "write", "sf-video-pipeline-health": "read", "nas-image-job-health": "read",
+}
+
+
+def _migration_guides() -> dict[str, dict]:
+    import re
+
+    text = _GUIDE_MIGRATION.read_text(encoding="utf-8")
+    pairs = re.findall(r"\('([a-z0-9-]+)',\s*\$json\$(.*?)\$json\$::jsonb\)", text, re.S)
+    return {slug: json.loads(body) for slug, body in pairs}
+
+
+def test_guide_migration_covers_the_nine_shared_skills_with_full_guides():
+    guides = _migration_guides()
+    assert set(guides) == set(_SHARED_SLUGS)
+    for slug, guide in guides.items():
+        assert set(guide) == _GUIDE_KEYS, slug
+        assert guide["title_ko"] and guide["summary_ko"] and guide["outputs"], slug
+        assert 3 <= len(guide["what_it_does"]) <= 5 or slug in {
+            "store-assistant-channel-collector", "ntv2-merchant-contract",
+            "sf-video-pipeline-health", "nas-image-job-health"}, slug
+        assert 2 <= len(guide["use_when"]) <= 4, slug
+        assert guide["inputs"] == []  # 입력 스키마를 알 수 없는 항목은 지어내지 않고 비워 둔다
+        assert guide["related_tools"], slug
+        tier = _SHARED_SLUGS[slug]
+        if tier == "read":
+            assert "승인 없이 바로" in guide["approval_ko"], slug
+        else:
+            assert "대표님 승인" in guide["approval_ko"], slug
+
+
+def test_guide_related_tools_match_the_seeded_allowed_tools():
+    seed = (_REPO / "migrations" / "158_ohvis_harness_skill_wiki_foundation.sql").read_text(encoding="utf-8")
+    import re
+
+    for slug, guide in _migration_guides().items():
+        block = seed.split(f"'{slug}',", 1)[1]
+        tools = re.search(r"ARRAY\[([^\]]*)\],\s*'\[", block).group(1)
+        assert guide["related_tools"] == re.findall(r"'([^']+)'", tools), slug
+
+
+def test_guide_migration_merges_json_idempotently_without_destructive_or_policy_changes():
+    sql = _GUIDE_MIGRATION.read_text(encoding="utf-8")
+    upper = sql.upper()
+    for forbidden in ("DELETE", "DROP ", "TRUNCATE", "RISK_TIER", "ALLOWED_TOOLS", "UPDATED_AT"):
+        assert forbidden not in upper.replace("-- ", "").split("BEGIN;", 1)[1], forbidden
+    assert "COALESCE(l.metadata, '{}'::jsonb) || jsonb_build_object('guide', g.guide)" in sql
+    assert "l.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid" in sql
+    # jsonb || 의미를 파이썬으로 모사: 기존 키 보존 + guide 만 덮어쓰기, 두 번 적용해도 같다.
+    guide = _migration_guides()["sf-video-pipeline-health"]
+    before = {"harness": "media_ops", "guide": {"title_ko": "옛 값"}}
+
+    def merge(meta):
+        return {**(meta or {}), "guide": guide}
+
+    once = merge(before)
+    assert once["harness"] == "media_ops" and once["guide"] == guide
+    assert merge(once) == once
+    down = (_REPO / "migrations" / "rollback" / "20261028_skill_guide_ko.down.sql").read_text(encoding="utf-8")
+    assert "metadata - 'guide'" in down
+    assert all(f"'{slug}'" in down for slug in _SHARED_SLUGS)
+
+
+def test_list_returns_guide_executor_and_executable_and_keeps_legacy_fields(use_pool):
+    guide = {"title_ko": "영상 점검", "summary_ko": "요약", "use_when": ["언제"]}
+    use_pool(FakeConn(fetch_rows={"FROM ops_skill_library l": [_list_row(
+        metadata_text=json.dumps({"guide": guide, "harness": "media_ops"}),
+        active_executor="sf.health", manifest={"executor": "sf.health"})]}))
+    item = run(harness.list_skill_manifests(tenant_id=TENANT))[0]
+    assert item["guide"]["title_ko"] == "영상 점검"
+    assert set(item["guide"]) >= _GUIDE_KEYS  # 빠진 키는 빈 값으로 채워 모양을 고정한다
+    assert item["executor"] == "sf.health" and item["executable"] is True
+    assert item["not_executable_reason_ko"] is None
+    for legacy in ("skill_id", "slug", "title", "description", "version", "status", "manifest",
+                   "version_count", "active_version", "run_count", "latest_run", "scope", "source"):
+        assert legacy in item
+    for internal in ("active_executor", "page_key", "site_origin", "metadata_text"):
+        assert internal not in item
+
+
+def test_list_without_guide_is_null_and_no_active_version_is_not_executable(use_pool):
+    use_pool(FakeConn(fetch_rows={"FROM ops_skill_library l": [_list_row(active_version=None)]}))
+    item = run(harness.list_skill_manifests(tenant_id=TENANT))[0]
+    assert item["guide"] is None
+    assert item["executable"] is False and item["not_executable_reason_ko"]
+
+
+def test_learned_site_candidate_gets_computed_title_and_not_executable(use_pool):
+    manifest = {"executor": "ohvis.contract-echo", "provenance": {"page_key": "catalog/search/r68555"}}
+    use_pool(FakeConn(fetch_rows={"FROM ops_skill_library l": [_list_row(
+        slug="learned-site-4c4f830124e403c97e29bf39", title="Learned site interaction",
+        metadata_text=json.dumps({"site_profile_id": "p-1"}), active_executor="ohvis.contract-echo",
+        manifest=manifest, page_key="catalog/search/r68555", site_origin="https://shop.example.test:8443/a")]}))
+    item = run(harness.list_skill_manifests(tenant_id=TENANT))[0]
+    assert item["guide"]["title_ko"] == "사이트 관찰 후보: shop.example.test"
+    assert item["guide"]["summary_ko"] == (
+        "스마트브라우저가 화면 관찰로 만든 후보입니다. 아직 실제 동작이 연결되지 않아 실행해도 결과가 없습니다.")
+    assert item["executor"] == "ohvis.contract-echo"
+    assert item["executable"] is False
+    assert "실제 동작이 연결되지 않은" in item["not_executable_reason_ko"]
+    assert item["title"] == "Learned site interaction"  # 기존 필드는 그대로
+
+
+def test_learned_site_title_falls_back_to_page_key_then_slug():
+    base = {"slug": "learned-site-abc", "metadata": {}, "executor": "ohvis.contract-echo", "active_version": "1"}
+    with_key = harness.skill_guide_fields(**base, page_key="catalog/search/r1")
+    assert with_key["guide"]["title_ko"] == "사이트 관찰 후보: catalog/search/r1"
+    bare = harness.skill_guide_fields(**base)
+    assert bare["guide"]["title_ko"] == "사이트 관찰 후보: learned-site-abc"
+
+
+def test_stored_guide_wins_over_learned_title_and_inputs_come_from_active_schema():
+    schema = {"type": "object", "required": ["query"], "properties": {
+        "query": {"type": "string", "description": "검색어", "examples": ["영상 큐"]}, "limit": {"type": "integer"}}}
+    fields = harness.skill_guide_fields(
+        slug="learned-site-x", metadata={"guide": {"title_ko": "직접 쓴 제목"}}, executor="real.exec",
+        active_version="1", input_schema=schema)
+    assert fields["guide"]["title_ko"] == "직접 쓴 제목"
+    assert fields["guide"]["inputs"] == [
+        {"name": "query", "description": "검색어", "example": "영상 큐", "required": True},
+        {"name": "limit", "description": "", "example": None, "required": False}]
+    kept = harness.skill_guide_fields(
+        slug="s", metadata={"guide": {"inputs": [{"name": "직접"}]}}, executor="real.exec",
+        active_version="1", input_schema=schema)
+    assert kept["guide"]["inputs"] == [{"name": "직접"}]
+
+
+def test_executability_is_false_only_for_the_noop_executor_set():
+    assert harness.NOOP_SKILL_EXECUTORS == frozenset({"ohvis.contract-echo"})
+    assert harness.skill_executability("ohvis.contract-echo")[0] is False
+    assert harness.skill_executability("sf.health") == (True, None)
+    assert harness.skill_executability(None) == (True, None)
+
+
+def test_detail_includes_guide_and_executable_from_active_manifest(use_pool):
+    meta = json.dumps({"guide": {"title_ko": "상세 안내"}})
+    manifest = {"executor": "ohvis.contract-echo", "input_schema": {"type": "object"},
+                "provenance": {"page_key": "p/k"}}
+    use_pool(FakeConn(
+        fetchrow_map={"FROM ops_skill_library l": {
+            "skill_id": SKILL_ID, "owner_tenant_id": TENANT, "slug": "alpha", "title": "Alpha",
+            "description": "", "projects": [], "intents": [], "risk_tier": "read", "allowed_tools": [],
+            "enabled": True, "source_path": None, "metadata_text": meta, "created_at": "t",
+            "updated_at": "t", "site_origin": None}},
+        fetch_rows={"FROM ops_skill_versions v": [
+            {"version_id": "v1", "version": "1", "status": "active", "content_sha256": "x",
+             "manifest": json.dumps(manifest), "created_at": "t", "promoted_at": None, "promoted_by": None}]},
+    ))
+    detail = run(harness.get_skill_detail(tenant_id=TENANT, skill_id=SKILL_ID))
+    assert detail["guide"]["title_ko"] == "상세 안내"
+    assert detail["executor"] == "ohvis.contract-echo"
+    assert detail["executable"] is False and detail["not_executable_reason_ko"]
+    assert "site_origin" not in detail
+    for legacy in ("versions", "runs", "active_version", "version_count", "allowed_tools", "scope"):
+        assert legacy in detail
+
+
+def test_execute_skill_blocks_noop_executor_with_409_and_records_no_run(use_pool):
+    manifest = harness.validate_skill_manifest(_manifest("read", executor="ohvis.contract-echo",
+                                                         input_schema={"type": "object"}))
+    row = {"slug": "learned-site-x", "risk_tier": "read", "version_id": "ver-1", "status": "active",
+           "manifest": manifest, "content": harness._canonical_json(manifest),
+           "content_sha256": harness._sha256(manifest)}
+    conn = use_pool(FakeConn(fetchrow_map={"FROM ops_skill_library l JOIN ops_skill_versions v": row}))
+    with pytest.raises(harness.SkillRegistryError) as exc:
+        run(harness.execute_skill(tenant_id=TENANT, skill_id=SKILL_ID, version="1.0.0", input_data={},
+                                  idempotency_key="idem-12345", action_intent=_noop_intent()))
+    assert exc.value.code == "skill_not_executable" and exc.value.status_code == 409
+    assert "실제 동작이 연결되지 않은" in exc.value.detail
+    assert not any("INSERT INTO ops_skill_runs" in sql for sql, _ in conn.calls)
+
+
+def _noop_intent():
+    return sct._build_intent(TENANT, SESSION, {"skill_id": SKILL_ID, "version": "1.0.0", "input": {}}, "corr-2")
+
+
+def test_api_maps_not_executable_to_409_with_korean_reason(api, monkeypatch):
+    from app.api import ohvis_harness as api_module
+
+    monkeypatch.setattr(api_module, "execute_skill", AsyncMock(side_effect=harness.SkillRegistryError(
+        "skill_not_executable", "실제 동작이 연결되지 않은 후보입니다", status_code=409)))
+    response = api.client.post(f"/ohvis/harness/skills/{SKILL_ID}/execute", json={
+        "version": "1.0.0", "input": {}, "session_id": "s-1", "correlation_id": "c-1"})
+    assert response.status_code == 409
+    assert response.json()["detail"] == {"code": "skill_not_executable",
+                                          "message": "실제 동작이 연결되지 않은 후보입니다"}
+
+
+def test_chat_skill_execute_blocks_noop_before_asking_for_approval(gate):
+    rows = _skill_rows("write")
+    manifest = json.loads(rows[0]["manifest_text"])
+    manifest["executor"] = "ohvis.contract-echo"
+    manifest["input_schema"] = {"type": "object"}
+    rows[0]["manifest_text"] = json.dumps(manifest)
+    result = _exec(gate, rows, input={})
+    assert result["error"] == "skill_not_executable" and result["status_code"] == 409
+    gate.request_approval.assert_not_awaited()
+    gate.executed.assert_not_awaited()
+
+
+def test_skill_find_results_carry_guide_summary_use_when_and_executable(monkeypatch):
+    guide = {"title_ko": "영상 점검", "summary_ko": "영상 큐를 점검합니다.", "use_when": ["영상이 늦을 때"]}
+    learned_meta = {"site_profile_id": "p-1"}
+    rows = [
+        {"slug": "sf-video-pipeline-health", "title": "ShortFlow video pipeline health",
+         "description": "video queue", "projects": ["SF"], "intents": ["video"], "risk_tier": "read",
+         "allowed_tools": ["run_remote_command"], "validation": [], "source_path": "builtin:sf",
+         "metadata_text": json.dumps({"guide": guide}), "active_version": "1",
+         "active_executor": "sf.health", "page_key": None},
+        {"slug": "learned-site-aa", "title": "Learned site interaction", "description": "video candidate",
+         "projects": ["SF"], "intents": ["video"], "risk_tier": "read", "allowed_tools": [],
+         "validation": [], "source_path": None, "metadata_text": json.dumps(learned_meta),
+         "active_version": "1", "active_executor": "ohvis.contract-echo", "page_key": "catalog/search/r1"},
+    ]
+    monkeypatch.setattr(harness, "_fetch_db_skills", AsyncMock(return_value=rows))
+    monkeypatch.setattr(harness, "scan_repository_skills", lambda: [])
+    result = run(sct.skill_find(inp={"query": "video", "limit": 10}))
+    by_slug = {item["slug"]: item for item in result["skills"]}
+    sf = by_slug["sf-video-pipeline-health"]
+    assert sf["summary_ko"] == "영상 큐를 점검합니다." and sf["use_when"] == ["영상이 늦을 때"]
+    assert sf["guide"]["title_ko"] == "영상 점검" and sf["executor"] == "sf.health"
+    assert sf["executable"] is True and sf["not_executable_reason_ko"] is None
+    for legacy in ("title", "projects", "intents", "risk_tier", "policy", "allowed_tools", "score"):
+        assert legacy in sf
+    learned = by_slug["learned-site-aa"]
+    assert learned["guide"]["title_ko"] == "사이트 관찰 후보: catalog/search/r1"
+    assert learned["executable"] is False and learned["not_executable_reason_ko"]
+
+
+def test_skill_find_builtin_fallback_has_null_guide_and_is_not_executable(monkeypatch):
+    monkeypatch.setattr(harness, "_fetch_db_skills", AsyncMock(return_value=[]))
+    monkeypatch.setattr(harness, "scan_repository_skills", lambda: [])
+    skills = run(sct.skill_find(inp={"query": "aads bluegreen release"}))["skills"]
+    item = next(s for s in skills if s["slug"] == "aads-bluegreen-release")
+    assert item["guide"] is None and item["summary_ko"] is None and item["use_when"] == []
+    assert item["executable"] is False and item["not_executable_reason_ko"]

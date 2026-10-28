@@ -137,6 +137,9 @@ async def skill_execute(
         if tier not in harness.RISK_POLICIES:
             return _error("unknown_risk_tier", f"알 수 없는 등급 {tier}")
         harness._enforce_executable_risk_policy({"risk_tier": tier})
+        executable, reason_ko = harness.skill_executability(manifest["executor"])
+        if not executable:
+            return _error("skill_not_executable", reason_ko or "", status_code=409)
         if manifest["executor"] not in harness._SKILL_EXECUTORS:
             return _error("executor_not_registered", "코드에 등록된 실행기가 없습니다")
         harness._validate_instance(manifest["input_schema"], input_data, "input_schema_validation_failed")
