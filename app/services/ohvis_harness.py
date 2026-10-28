@@ -1267,6 +1267,8 @@ async def _fetch_db_skills() -> list[dict[str, Any]]:
 
 def scan_repository_skills() -> list[dict[str, Any]]:
     """Return local SKILL.md files as Skill Find candidates."""
+    from app.services.skill_file_import import infer_risk_tier, parse_allowed_tools, parse_frontmatter
+
     candidates: list[dict[str, Any]] = []
     for base in (".claude/skills", ".codex/skills"):
         root = _repo_root() / base
@@ -1278,6 +1280,8 @@ def scan_repository_skills() -> list[dict[str, Any]]:
             except Exception:
                 content = ""
             slug = path.parent.name
+            front = parse_frontmatter(content)
+            risk_tier, risk_reasons = infer_risk_tier(front, content)
             first_heading = next(
                 (line.lstrip("# ").strip() for line in content.splitlines() if line.strip().startswith("#")),
                 slug,
@@ -1287,10 +1291,11 @@ def scan_repository_skills() -> list[dict[str, Any]]:
                 "title": first_heading or slug,
                 "projects": list(PROJECTS),
                 "intents": ["skill", "ops"],
-                "risk_tier": "write" if "deploy" in content.lower() else "read",
-                "policy": RISK_POLICIES["write" if "deploy" in content.lower() else "read"],
+                "risk_tier": risk_tier,
+                "risk_reasons": risk_reasons,
+                "policy": RISK_POLICIES[risk_tier],
                 "source": str(path.relative_to(_repo_root())),
-                "allowed_tools": [],
+                "allowed_tools": parse_allowed_tools(front),
                 "validation": ["read SKILL.md before action", "follow skill instructions"],
                 "content_preview": content[:400],
             })
