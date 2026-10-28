@@ -12,6 +12,9 @@ import pytest
 os.environ.setdefault("JWT_SECRET_KEY", "unit-test-secret")
 from app.services import skill_file_import as sfi  # noqa: E402
 
+_FORBIDDEN_KEY = "ANTHROPIC_" + "API_KEY"  # R-AUTH: 부재 검사 전용 상수, 키를 읽지 않는다
+_NEGATION = ("않", "금지", "없", "버리", "충돌")
+
 ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = ROOT / ".claude" / "skills"
 BATCH1 = ("mcp-server-design", "skill-authoring", "systematic-debugging")
@@ -27,7 +30,7 @@ BATCH2 = (
 )
 SLUGS = BATCH1 + BATCH2
 CLEAN_ROOM_SLUGS = ("document-coauthoring", "release-changelog", "pairwise-test-design", "prompt-asset-authoring")
-BATCH3_ADAPTED = ("safe-db-query",)
+BATCH3_ADAPTED = ("safe-db-query", "aads-claude-api")
 BATCH3 = CLEAN_ROOM_SLUGS + BATCH3_ADAPTED
 ALL_SLUGS = SLUGS + BATCH3
 INSPIRED_BY_PREFIX = {
@@ -49,6 +52,7 @@ SOURCE_PREFIX = {
     "frontend-design-guide": "https://github.com/anthropics/skills/",
     **{slug: "https://github.com/obra/superpowers/" for slug in BATCH2[2:]},
     "safe-db-query": "https://github.com/sanjay3290/ai-skills/",
+    "aads-claude-api": "https://github.com/anthropics/skills/",
 }
 
 _PATH = ROOT / "app/services/ohvis_harness.py"
@@ -157,6 +161,28 @@ def test_safe_db_query_is_apache_adaptation_with_notice():
     notice = _read("safe-db-query").split("## 출처 및 변경 고지", 1)[1]
     assert "Apache License 2.0" in notice and "변경 사실" in notice
     assert not (SKILLS_DIR / "safe-db-query" / "scripts").exists()
+
+
+def test_aads_claude_api_is_apache_adaptation_with_notice():
+    front = sfi.parse_frontmatter(_read("aads-claude-api"))
+    assert front["license"] == "Apache-2.0"
+    assert len(_read("aads-claude-api").splitlines()) <= 150
+    notice = _read("aads-claude-api").split("## 출처 및 변경 고지", 1)[1]
+    assert "Apache License 2.0" in notice and "변경 사실" in notice
+
+
+def test_aads_claude_api_rauth_wins_and_never_instructs_key_use():
+    text = _read("aads-claude-api")
+    body = text.split("\n---\n", 1)[1]
+    first_h2 = next(line for line in body.splitlines() if line.startswith("## "))
+    assert first_h2 == "## 우선순위", "R-AUTH 우선 절이 맨 앞이어야 한다"
+    assert "R-AUTH" in body and "call_llm_with_fallback" in body
+    assert f"export {_FORBIDDEN_KEY}" not in text
+    getenv_lines = [line for line in text.splitlines() if f'os.getenv("{_FORBIDDEN_KEY}")' in line]
+    assert all(any(w in line for w in _NEGATION) for line in getenv_lines)
+    mentions = [line for line in text.splitlines() if _FORBIDDEN_KEY in line]
+    assert mentions, "금지 문맥 언급이 하나도 없다"
+    assert all(any(w in line for w in _NEGATION) for line in mentions)
 
 
 def test_safe_db_query_documents_query_database_parameter_name():
