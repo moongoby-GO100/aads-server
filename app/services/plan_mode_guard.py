@@ -69,7 +69,7 @@ _READ_ONLY_TOOLS = frozenset({
     "health_check", "server_status", "get_all_service_status",
     "dashboard_query", "task_history", "cost_report", "tool_metrics",
     "llm_response_metrics", "tool_layer_audit",
-    "handover_search", "canonical_document_lookup",
+    "handover_search", "canonical_document_lookup", "skill_find",
     "web_search", "web_search_brave", "web_search_naver", "web_search_kakao",
     "web_search_google", "search_searxng", "search_naver_multi",
     "gemini_grounding_search", "gemini_search", "search_naver", "search_kakao",

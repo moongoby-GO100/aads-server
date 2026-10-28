@@ -17,6 +17,7 @@ from app.services.ohvis_harness import (
     execute_skill,
     find_skills,
     get_harness_status,
+    get_skill_detail,
     list_skill_manifests,
     promote_skill_version,
     rollback_skill_version,
@@ -34,6 +35,19 @@ require_tenant_admin = require_tenant_role(TenantRole.ADMIN)
 tenant_viewer_dependency = Depends(require_tenant_viewer)
 tenant_member_dependency = Depends(require_tenant_member)
 tenant_admin_dependency = Depends(require_tenant_admin)
+
+
+async def require_skill_elevated(context: TenantContext = tenant_viewer_dependency) -> TenantContext:
+    """validate/promote/rollback/disable 는 CEO(elevated) 전용 — 문서 API 와 같은 판정을 쓴다."""
+    from app.api.canonical_documents import _scope
+
+    _, _, elevated = _scope(context)
+    if not elevated:
+        raise HTTPException(status_code=403, detail="elevated role required")
+    return context
+
+
+skill_elevated_dependency = Depends(require_skill_elevated)
 
 
 def _tenant_id(context: TenantContext) -> str:
@@ -146,11 +160,32 @@ async def ohvis_create_skill(
 async def ohvis_list_skills(
     slug: str | None = Query(None, max_length=120),
     version_status: str | None = Query(None, alias="status", max_length=20),
+    project: str | None = Query(None, max_length=40),
+    risk_tier: str | None = Query(None, max_length=20),
+    enabled: bool | None = Query(None),
+    source: str | None = Query(None, pattern="^(db|file)$"),
+    q: str | None = Query(None, max_length=200),
     context: TenantContext = tenant_viewer_dependency,
 ):
-    return {"items": await list_skill_manifests(
-        tenant_id=_tenant_id(context), slug=slug, status=version_status
-    )}
+    try:
+        items = await list_skill_manifests(
+            tenant_id=_tenant_id(context), slug=slug, status=version_status,
+            project=project, risk_tier=risk_tier, enabled=enabled, source=source, q=q,
+        )
+    except SkillRegistryError as exc:
+        _raise_registry_error(exc)
+    return {"items": items}
+
+
+@router.get("/ohvis/harness/skills/{skill_id}", tags=["ohvis-harness"])
+async def ohvis_get_skill(
+    skill_id: str,
+    context: TenantContext = tenant_viewer_dependency,
+):
+    try:
+        return await get_skill_detail(tenant_id=_tenant_id(context), skill_id=skill_id)
+    except SkillRegistryError as exc:
+        _raise_registry_error(exc)
 
 
 @router.put("/ohvis/harness/skills/{skill_id}", tags=["ohvis-harness"])
@@ -170,7 +205,7 @@ async def ohvis_update_skill(
 @router.delete("/ohvis/harness/skills/{skill_id}", tags=["ohvis-harness"])
 async def ohvis_disable_skill(
     skill_id: str,
-    context: TenantContext = tenant_admin_dependency,
+    context: TenantContext = skill_elevated_dependency,
 ):
     try:
         return await disable_skill(tenant_id=_tenant_id(context), skill_id=skill_id)
@@ -196,7 +231,7 @@ async def ohvis_add_skill_version(
 async def ohvis_validate_skill_version(
     skill_id: str,
     version: str,
-    context: TenantContext = tenant_viewer_dependency,
+    context: TenantContext = skill_elevated_dependency,
 ):
     try:
         return await validate_stored_skill(
@@ -211,7 +246,7 @@ async def ohvis_promote_skill_version(
     skill_id: str,
     version: str,
     req: SkillPromoteRequest,
-    context: TenantContext = tenant_admin_dependency,
+    context: TenantContext = skill_elevated_dependency,
 ):
     try:
         return await promote_skill_version(
@@ -248,7 +283,7 @@ async def ohvis_execute_skill(
 async def ohvis_rollback_skill_version(
     skill_id: str,
     req: SkillRollbackRequest,
-    context: TenantContext = tenant_admin_dependency,
+    context: TenantContext = skill_elevated_dependency,
 ):
     try:
         return await rollback_skill_version(

@@ -15,6 +15,7 @@ import inspect
 import json
 import re
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -265,21 +266,175 @@ async def create_skill(*, tenant_id: str, slug: str, title: str, description: st
         return _row_dict(row)
 
 
+_SKILL_SOURCES = frozenset({"db", "file"})
+_SENSITIVE_KEY_RE = re.compile(
+    r"(token|secret|passw|api[_-]?key|authorization|cookie|credential|otp|private[_-]?key)", re.I
+)
+_SUMMARY_LIMIT = 240
+
+
+def _loads_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _mask_sensitive(value: Any, depth: int = 0) -> Any:
+    if depth > 6:
+        return "..."
+    if isinstance(value, Mapping):
+        return {
+            str(k): ("***" if _SENSITIVE_KEY_RE.search(str(k)) else _mask_sensitive(v, depth + 1))
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_mask_sensitive(v, depth + 1) for v in value[:20]]
+    return value
+
+
+def _summarize(value: Any) -> str:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
+    text = json.dumps(_mask_sensitive(value), ensure_ascii=False, default=str, sort_keys=True)
+    return text if len(text) <= _SUMMARY_LIMIT else text[: _SUMMARY_LIMIT - 1] + "…"
+
+
+def _skill_source_fields(metadata: Any) -> dict[str, Any]:
+    """파일 출처(metadata.source_path) 여부와 drift 를 계산한다 (CAT-3)."""
+    from app.services.skill_file_import import compute_file_drift
+
+    meta = _loads_dict(metadata)
+    source_path = meta.get("source_path")
+    return {
+        "source": "file" if source_path else "db",
+        "file_path": source_path or None,
+        "file_drift": compute_file_drift(meta) if source_path else False,
+    }
+
+
+def _require_uuid(value: str, code: str = "invalid_skill_id") -> str:
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError as exc:
+        raise SkillRegistryError(code, status_code=422) from exc
+
+
 async def list_skill_manifests(*, tenant_id: str, slug: str | None = None,
-                               status: str | None = None) -> list[dict[str, Any]]:
+                               status: str | None = None, project: str | None = None,
+                               risk_tier: str | None = None, enabled: bool | None = None,
+                               source: str | None = None, q: str | None = None,
+                               ) -> list[dict[str, Any]]:
+    """Per-version rows (legacy shape) enriched with skill-level catalogue fields."""
+    if risk_tier is not None and risk_tier not in RISK_POLICIES:
+        raise SkillRegistryError("invalid_risk_tier", status_code=422)
+    if source is not None and source not in _SKILL_SOURCES:
+        raise SkillRegistryError("invalid_source", status_code=422)
     from app.core.db_pool import get_pool
     async with get_pool().acquire() as conn:
         rows = await conn.fetch(
             """SELECT l.id::text AS skill_id,l.slug,l.title,l.description,l.projects,l.intents,
-                      l.enabled,v.id::text AS version_id,v.version,v.status,v.manifest,
-                      v.content_sha256,v.created_at
-               FROM ops_skill_library l LEFT JOIN ops_skill_versions v ON v.skill_id=l.id
+                      l.enabled,l.risk_tier,l.metadata::text AS metadata_text,
+                      v.id::text AS version_id,v.version,v.status,v.manifest,
+                      v.content_sha256,v.created_at,
+                      (SELECT count(*) FROM ops_skill_versions x WHERE x.skill_id=l.id) AS version_count,
+                      (SELECT x.version FROM ops_skill_versions x
+                        WHERE x.skill_id=l.id AND x.status='active' LIMIT 1) AS active_version,
+                      (SELECT count(*) FROM ops_skill_runs r
+                        WHERE r.skill_id=l.id AND r.tenant_id=l.tenant_id) AS run_count,
+                      lr.status AS latest_run_status,lr.started_at AS latest_run_started_at
+               FROM ops_skill_library l
+               LEFT JOIN ops_skill_versions v ON v.skill_id=l.id
+               LEFT JOIN LATERAL (
+                   SELECT r.status,r.started_at FROM ops_skill_runs r
+                   WHERE r.skill_id=l.id AND r.tenant_id=l.tenant_id
+                   ORDER BY r.started_at DESC LIMIT 1) lr ON TRUE
                WHERE l.tenant_id=$1::uuid AND ($2::text IS NULL OR l.slug=$2)
                  AND ($3::text IS NULL OR v.status=$3)
+                 AND ($4::text IS NULL OR EXISTS (
+                      SELECT 1 FROM unnest(l.projects) p WHERE upper(p)=upper($4)))
+                 AND ($5::text IS NULL OR l.risk_tier=$5)
+                 AND ($6::boolean IS NULL OR l.enabled=$6)
+                 AND ($7::text IS NULL
+                      OR ($7='file') = (COALESCE(l.metadata->>'source_path','')<>''))
+                 AND ($8::text IS NULL
+                      OR strpos(lower(l.slug||' '||l.title||' '||l.description),lower($8))>0)
                ORDER BY l.slug,v.created_at DESC""",
-            tenant_id, slug, status,
+            tenant_id, slug, status, project, risk_tier, enabled, source, q,
         )
-        return [_row_dict(row) for row in rows]
+    items = []
+    for row in rows:
+        item = _row_dict(row)
+        item.update(_skill_source_fields(item.pop("metadata_text", None)))
+        run_status = item.pop("latest_run_status", None)
+        run_started = item.pop("latest_run_started_at", None)
+        item["latest_run"] = (
+            {"status": run_status, "started_at": run_started} if run_status else None
+        )
+        item["version_count"] = int(item.get("version_count") or 0)
+        item["run_count"] = int(item.get("run_count") or 0)
+        items.append(item)
+    return items
+
+
+async def get_skill_detail(*, tenant_id: str, skill_id: str) -> dict[str, Any]:
+    """Skill header, full version history and the last 10 runs (summaries only)."""
+    skill_id = _require_uuid(skill_id)
+    from app.core.db_pool import get_pool
+    async with get_pool().acquire() as conn:
+        skill = await conn.fetchrow(
+            """SELECT l.id::text AS skill_id,l.slug,l.title,l.description,l.projects,l.intents,
+                      l.risk_tier,l.allowed_tools,l.enabled,l.source_path,
+                      l.metadata::text AS metadata_text,l.created_at,l.updated_at
+               FROM ops_skill_library l WHERE l.tenant_id=$1::uuid AND l.id=$2::uuid""",
+            tenant_id, skill_id,
+        )
+        if not skill:
+            raise SkillRegistryError("skill_not_found", status_code=404)
+        versions = await conn.fetch(
+            """SELECT v.id::text AS version_id,v.version,v.status,v.content_sha256,v.manifest,
+                      v.created_at,v.promoted_at,v.promoted_by
+               FROM ops_skill_versions v WHERE v.skill_id=$1::uuid
+               ORDER BY v.created_at DESC""", skill_id,
+        )
+        runs = await conn.fetch(
+            """SELECT r.id::text AS run_id,v.version,r.status,r.input,r.output,r.error,
+                      r.cost_usd,r.latency_ms,r.input_hash,r.result_hash,r.approval_id::text AS approval_id,
+                      r.started_at,r.completed_at
+               FROM ops_skill_runs r LEFT JOIN ops_skill_versions v ON v.id=r.skill_version_id
+               WHERE r.skill_id=$1::uuid AND r.tenant_id=$2::uuid
+               ORDER BY r.started_at DESC LIMIT 10""", skill_id, tenant_id,
+        )
+    detail = _row_dict(skill)
+    detail.update(_skill_source_fields(detail.pop("metadata_text", None)))
+    version_items = [_row_dict(v) for v in versions]
+    active = next((v["version"] for v in version_items if v["status"] == "active"), None)
+    run_items = []
+    for run in runs:
+        item = _row_dict(run)
+        item["input_summary"] = _summarize(item.pop("input", None))
+        item["result_summary"] = _summarize(item.pop("output", None))
+        if item.get("cost_usd") is not None:
+            item["cost_usd"] = float(item["cost_usd"])
+        if item.get("error"):
+            item["error"] = str(item["error"])[:_SUMMARY_LIMIT]
+        run_items.append(item)
+    detail.update({
+        "version_count": len(version_items),
+        "active_version": active,
+        "versions": version_items,
+        "runs": run_items,
+        "run_count": len(run_items),
+    })
+    return detail
 
 
 async def update_skill(*, tenant_id: str, skill_id: str, title: str,
@@ -561,8 +716,14 @@ async def execute_skill(
     *, tenant_id: str, skill_id: str, version: str,
     input_data: Mapping[str, Any], idempotency_key: str | None,
     action_intent: ActionIntent, approval_id: str | None = None,
+    gateway_approved: bool = False,
 ) -> dict[str, Any]:
-    """Execute only an active, schema-valid, code-registered skill version."""
+    """Execute only an active, schema-valid, code-registered skill version.
+
+    ``gateway_approved`` is set solely by the chat tool after the live_trading_guard
+    approval card for this exact skill/version/input was approved; it replaces only
+    the ``approval_id`` scope match and never the destructive-tier rejection.
+    """
     from app.services.channel_router import ChannelRouter
 
     ChannelRouter().validate_action_intent(action_intent, capability="skill.execute")
@@ -629,7 +790,7 @@ async def execute_skill(
                     raise SkillRegistryError("idempotency_conflict", status_code=409)
                 return _row_dict(existing)
             approval = None
-            if manifest["risk_tier"] in HIGH_RISK_TIERS:
+            if manifest["risk_tier"] in HIGH_RISK_TIERS and not gateway_approved:
                 approval = await conn.fetchrow(
                     """SELECT id::text,tenant_id::text,decision,approval_scope,max_executions
                        FROM agent_permission_requests

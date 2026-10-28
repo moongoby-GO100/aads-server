@@ -277,6 +277,8 @@ _DATABASE_TOOLS = frozenset({
     "canonical_document_register",
     "canonical_document_lookup",
     "mockup_review_submit",
+    "skill_find",
+    "skill_execute",
 })
 
 
@@ -1017,6 +1019,8 @@ class ToolExecutor:
             "handover_export":        self._handover_export,
             "canonical_document_register": self._canonical_document_register,
             "canonical_document_lookup":   self._canonical_document_lookup,
+            "skill_find":                  self._skill_find,
+            "skill_execute":               self._skill_execute,
             "mockup_review_submit":        self._mockup_review_submit,
             "dashboard_query":        self._dashboard_query,
             "task_history":           self._task_history,
@@ -1536,6 +1540,22 @@ class ToolExecutor:
         if not tenant_id:
             return _missing_tenant_id_result("canonical_document_lookup")
         return await lookup_documents(tenant_id=tenant_id, inp=inp)
+
+    async def _skill_find(self, inp: Dict[str, Any]) -> Any:
+        """Read-only search over registered skills."""
+        from app.services.skill_chat_tools import skill_find
+
+        return await skill_find(inp=inp)
+
+    async def _skill_execute(self, inp: Dict[str, Any]) -> Any:
+        """Execute an active skill; non-read tiers require the guard approval."""
+        from app.services.skill_chat_tools import skill_execute
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+        if not tenant_id:
+            return _missing_tenant_id_result("skill_execute")
+        return await skill_execute(tenant_id=tenant_id, session_id=session_id, inp=inp)
 
     async def _mockup_review_submit(self, inp: Dict[str, Any]) -> Any:
         """Create/revise/submit/status for mockup reviews (no approve/revoke)."""

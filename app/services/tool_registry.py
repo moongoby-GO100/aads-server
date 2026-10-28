@@ -40,6 +40,8 @@ _DEFER_LOADING: Dict[str, bool] = {
     "canonical_document_register": True, # 문서 정본 초안 리비전 등록 (승인 없음)
     "canonical_document_lookup": True,   # 문서 정본 등록 여부 조회 (읽기 전용)
     "mockup_review_submit": True,        # 목업 검토 생성·리비전·제출·조회 (승인·철회 없음)
+    "skill_find": True,                  # 등록 스킬 검색 (읽기 전용)
+    "skill_execute": True,               # active 스킬 실행 (read 즉시, 그 외 승인 게이트)
     "list_project_databases": True,      # DB 목록 — 온디맨드
     "task_history": False,               # 작업 현황 — 빈번 조회
     "list_remote_dir": False,            # 파일 탐색 — 빈번 사용
@@ -3589,6 +3591,44 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             {"action": "submit", "project": "AADS", "review_id": "00000000-0000-0000-0000-000000000000"},
         ],
     },
+    "skill_find": {
+        "name": "skill_find",
+        "description": (
+            "등록된 스킬(ops_skill_library)을 자연어로 검색합니다(읽기 전용). "
+            "slug·등급(risk_tier)·정책을 돌려주며, 실행은 skill_execute 로 합니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "찾으려는 작업 설명"},
+                "project": {"type": "string"},
+                "intent": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+            },
+            "required": ["query"],
+        },
+        "input_examples": [{"query": "배민 로그인 사이트 수집", "project": "AADS"}],
+    },
+    "skill_execute": {
+        "name": "skill_execute",
+        "description": (
+            "active 상태의 등록 스킬을 실행하고 ops_skill_runs 에 기록합니다. "
+            "read 등급은 즉시 실행하고, write/deploy/auth/financial 은 대표님 승인 카드 승인 후 "
+            "같은 호출을 다시 실행해야 합니다(approval_required 응답). "
+            "candidate 등 active 가 아닌 버전과 destructive 등급은 실행하지 않습니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill": {"type": "string", "description": "스킬 slug 또는 id"},
+                "version": {"type": "string", "description": "생략 시 active 버전"},
+                "input": {"type": "object", "description": "스킬 input_schema 에 맞는 입력"},
+                "idempotency_key": {"type": "string", "description": "8자 이상. 생략 시 필요하면 입력으로 결정적 생성"},
+            },
+            "required": ["skill"],
+        },
+        "input_examples": [{"skill": "example-skill-slug", "input": {"query": "상태"}}],
+    },
     "canonical_document_lookup": {
         "name": "canonical_document_lookup",
         "description": (
@@ -3769,7 +3809,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "mockup_review_submit", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
+    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "mockup_review_submit", "skill_find", "skill_execute", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
