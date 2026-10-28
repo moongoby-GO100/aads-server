@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>오비서 근태 v2 · A 관리자 시작하기</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic",sans-serif;color:#172033;background:#f4f6fa;font-size:14px}*{box-sizing:border-box}body{margin:0;overflow-wrap:anywhere}
+button,input,select,textarea,.linkbtn{font:inherit;min-height:44px;border:1px solid #dce3ed;border-radius:8px;background:white;padding:8px 12px;max-width:100%}
+input,select,textarea{width:100%;min-width:0}textarea{min-height:88px}button,.linkbtn{cursor:pointer;color:#245fd0;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;text-align:center}
+button:disabled{opacity:.5;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,.linkbtn:focus-visible{outline:3px solid #8bb4ff}
+h1{font-size:26px;margin:8px 0}h2{font-size:18px;margin:0 0 6px}h3{margin:6px 0}
+.shell{display:grid;grid-template-columns:210px minmax(0,1fr);min-height:100vh}aside{background:#172033;color:#fff;padding:28px 20px}aside strong{font-size:24px}aside p{color:#b5c2d8}nav.side{margin-top:50px}nav.side div{padding:15px 10px}nav.side .active{background:#2f6fed;border-radius:9px}
+main{padding:28px;max-width:1550px;width:100%;min-width:0}.top,.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px}.top{justify-content:space-between}
+.muted,small{color:#667085}.notice{padding:14px;background:#fff6e5;border:1px solid #eed8aa;border-radius:10px;line-height:1.7}
+.panel{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:18px;margin-top:18px}
+.jump{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.jump .linkbtn{background:#fff;font-weight:600}.jump .linkbtn[aria-current=page]{background:#2f6fed;color:#fff;border-color:#2f6fed}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700;line-height:1.4;vertical-align:middle;white-space:nowrap}.tag.now{background:#e5f3ea;color:#176b44}.tag.new{background:#efe7fb;color:#5b2aa6}
+.legend{background:#fff;border:1px dashed #b9c4d6;border-radius:12px;padding:14px;margin-top:14px}.legend ul{margin:8px 0 0;padding-left:18px;line-height:1.9}
+.badge{display:inline-block;border-radius:30px;padding:4px 8px;color:#986012;background:#fff3df;font-size:12px}.badge.approved,.badge.ok{background:#e9f7ef;color:#17734d}.badge.rejected{background:#fdeeee;color:#b42318}.badge.working{background:#e8f0ff;color:#245fd0}.badge.wait{background:#efe7fb;color:#5b2aa6}
+.chip{display:inline-block;border-radius:6px;padding:3px 8px;font-size:12px;background:#fdeeee;color:#b42318;margin:2px 4px 2px 0}.chip.loc{background:#fff3df;color:#986012}.chip.coord{background:#eaf0ff;color:#245fd0}
+.primary{background:#2f6fed;color:white;border-color:#2f6fed}.danger{color:#b42318;border-color:#f1c0bb}
+.banner{padding:14px;border-radius:10px;border:1px solid;line-height:1.7;margin-top:14px}.banner.warn{background:#fff6e5;border-color:#eed8aa}.banner.ok{background:#e9f7ef;border-color:#bfe3cf}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}.metric{padding:18px;background:white;border:1px solid #e0e6ef;border-radius:12px}.metric b{display:block;font-size:28px;margin-top:10px}
+.cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:18px}
+.filters{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr)) repeat(3,minmax(100px,1fr));gap:10px}label{display:grid;gap:7px;color:#536075;min-width:0}
+.record{display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:10px;padding:17px 0;border-bottom:1px solid #edf0f5;align-items:center}.record p,.item p{margin:6px 0;line-height:1.5}
+.item{padding:14px 0;border-bottom:1px solid #edf0f5}.item .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.item.done{opacity:.85;background:#fafbfd}
+.steps{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:12px}.steps li{display:grid;grid-template-columns:44px minmax(0,1fr);gap:12px;padding:14px;border:1px solid #e0e6ef;border-radius:12px;background:#fbfcfe}
+.steps .n{width:44px;height:44px;border-radius:50%;background:#e8f0ff;color:#245fd0;display:grid;place-items:center;font-weight:800;font-size:18px}.steps li.done .n{background:#17734d;color:#fff}.steps .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #edf0f5}
+.detail{line-height:1.8}.empty{text-align:center;padding:45px 15px}.hidden,[hidden]{display:none!important}#toast{padding:12px;color:#245fd0;min-height:42px}
+dialog{width:min(520px,calc(100% - 24px));border:1px solid #dce3ed;border-radius:12px;padding:22px}dialog::backdrop{background:#17203388}dialog label{margin:12px 0}
+label.check{display:flex;align-items:center;gap:10px;min-height:44px;color:#172033}label.check input{width:22px;min-height:22px;height:22px;flex:none}
+#stateBox{line-height:1.8}.scenario{margin-top:22px;border-top:1px dashed #ddd;padding-top:15px}footer{line-height:1.7;margin-top:16px}
+@media(max-width:1100px){.grid,.cols{grid-template-columns:1fr}.filters{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.shell{grid-template-columns:1fr}aside{padding:12px 18px}aside p,nav.side{display:none}aside strong{font-size:18px}main{padding:16px}.filters{grid-template-columns:repeat(2,minmax(0,1fr))}.metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:12px}.metric b{font-size:22px}.record{grid-template-columns:1fr 1fr}.record button{width:100%}h1{font-size:23px}.toolbar>*{flex:1}.panel{padding:14px}.steps li{grid-template-columns:1fr}.steps .n{width:36px;height:36px}.jump .linkbtn{flex:1 1 40%}}
+</style><body><div class="shell"><aside><strong>오비서 <small>V4.1</small></strong><p>샘플 사업자 · 관리자</p><nav class="side"><div>업무 현황</div><div>직원 현황</div><div class="active">근태 현황</div><div>급여 현황</div></nav></aside><main>
+<nav class="jump" aria-label="목업 화면 이동"><a class="linkbtn" href="obys-attendance-admin-onboarding.html" data-s="A">A 관리자 시작하기</a><a class="linkbtn" href="obys-attendance-admin-today.html" data-s="B">B 관리자 오늘 현황</a><a class="linkbtn" href="obys-attendance-employee-clock.html" data-s="C">C 직원 출퇴근</a><a class="linkbtn" href="obys-attendance-employee-records.html" data-s="D">D 직원 내 기록</a></nav>
+<div class="top"><div><small>직원·급여 / 관리자 · 화면 A · screen_id obys-attendance-admin-onboarding</small><h1>근태 현황 · 시작하기</h1><p class="muted">아직 근태 기록이 없습니다. 아래 3단계를 마치면 직원 출근이 이곳에 쌓입니다.</p></div><span class="badge">v2 · 미승인 / 검토대기용 초안</span></div>
+<p class="notice">승인 검토용 목업 · 모든 정보는 가상 샘플입니다(실명·실전화번호 없음). 버튼은 데모이며 운영 반영·외부 요청이 없습니다. 이 화면은 운영 DB의 실제 첫 진입 상태(근태 기록 0건 · 지점 7곳 중 좌표 설정 0곳)를 그대로 옮긴 것입니다.</p>
+<section class="legend" aria-label="범례"><b>범례</b> <span class="tag now">현재 코드 있음</span> <span class="tag new">신규 — API·화면 없음</span>
+<ul><li>좌표 미설정 경고·지점 목록 <span class="tag now">현재 코드 있음</span> — attendance-admin.html 지점 표, 위치 판정 unknown</li><li>① 지점 위치·반경 설정 <span class="tag now">현재 코드 있음</span> — attendance-admin.html (반경 30~50m, 기본 50m, 상한 50m)</li><li>② 출퇴근 링크 복사·전달 버튼 <span class="tag new">신규 — API·화면 없음</span> (직원 화면 clock.html 자체는 현재 코드 있음)</li><li>"지금 할 일" 3단계 체크리스트·진행률 <span class="tag new">신규 — API·화면 없음</span> (단계 완료 판정은 지점 좌표 수·기록 건수로 계산하는 안)</li><li>③ 첫 출근 확인 → 오늘 현황(B) <span class="tag now">현재 코드 있음</span> 기록 목록 API 사용</li></ul></section>
+<div id="warn" class="banner warn" role="alert"><b>좌표 미설정 지점 <span id="unsetN">7</span>곳</b> — 지점 좌표가 없으면 위치 판정이 '알 수 없음'이 되어 해당 지점의 모든 출근이 <b>확인필요</b>로 남습니다. <span class="tag now">현재 코드 있음</span><div class="toolbar" style="margin-top:10px"><button id="toggleUnset" aria-expanded="false" aria-controls="unsetList">미설정 지점 7곳 보기</button></div>
+<div id="unsetList" hidden><table><thead><tr><th>지점</th><th>좌표</th><th>반경</th><th>출근 시 판정</th></tr></thead><tbody id="unsetRows"></tbody></table></div></div>
+<div class="metrics"><div class="metric"><small>근태 기록</small><b id="mRec">0건</b></div><div class="metric"><small>좌표 설정 지점</small><b id="mCoord">0 / 7</b></div><div class="metric"><small>오늘 출근</small><b>0명</b></div><div class="metric"><small>확인필요</small><b>0건</b></div></div>
+<section class="panel" aria-label="지금 할 일"><div class="top"><h2>지금 할 일 <small id="stepSum">3단계 중 0단계 완료</small></h2><span class="tag new">신규 — API·화면 없음</span></div>
+<ol class="steps">
+<li id="s1"><span class="n">1</span><div><b>지점 위치·반경 설정</b> <span class="tag now">현재 코드 있음</span><p class="muted">지점마다 위도·경도와 반경을 입력합니다. 반경은 <b>기본 50m · 상한 50m</b>(허용 30~50m, PRD r3 결정)이며, GPS 오차가 반경보다 크면 자동 확정하지 않고 확인필요로 남깁니다.</p><div class="acts"><button id="go1" class="primary">지점 위치 설정하러 가기 (attendance-admin.html)</button><button id="demoSet">데모: 샘플 강남점 설정 완료로 보기</button></div></div></li>
+<li id="s2"><span class="n">2</span><div><b>직원에게 출퇴근 링크 보내기</b> <span class="tag new">신규 — API·화면 없음</span><p class="muted">직원이 휴대폰에서 여는 주소: <code>/static/apps/obys/clock.html</code> (직원 계정 로그인 후 사용). 홈 화면에 설치하면 앱처럼 열립니다.</p><div class="acts"><button id="copy" class="primary">출퇴근 링크 복사</button><a class="linkbtn" href="obys-attendance-employee-clock.html">직원 화면 미리보기 (C)</a></div></div></li>
+<li id="s3"><span class="n">3</span><div><b>첫 출근 확인</b> <span class="tag now">현재 코드 있음</span><p class="muted">직원이 첫 출근을 누르면 오늘 현황(B)의 확인필요 대기함에 사유와 함께 나타납니다. 지금은 기록이 0건입니다.</p><div class="acts"><button id="openRecs">근태 기록 목록 열기</button><a class="linkbtn" href="obys-attendance-admin-today.html">오늘 현황 보기 (B)</a></div></div></li>
+</ol><div id="toast" role="status" aria-live="polite"></div></section>
+<section id="recs" class="panel" hidden aria-label="근태 기록 목록"><h2>출퇴근 기록</h2><div class="empty"><h3>아직 근태 기록이 없습니다</h3><p class="muted">직원이 출퇴근 링크로 첫 출근을 기록하면 여기에 나타납니다.<br>① 지점 위치·반경을 먼저 설정하면 첫 출근부터 위치 판정이 됩니다.</p><button id="closeRecs">닫기</button></div></section>
+<footer class="muted">좌표 미설정은 위치판정 unknown 입니다. unknown 은 반려가 아니라 확인필요이며, 관리자가 확인한 뒤 확정합니다. 지각·연장·주휴 등 미정 정책은 확정하거나 자동 판정하지 않습니다.</footer>
+</main></div>
+<script>
+'use strict';
+const KEY='obysAttV2',TODAY='2026-10-28';
+const BR={'br-gn':{name:'샘플 강남점',coord:true},'br-sc':{name:'샘플 서초점',coord:false},'br-ys':{name:'샘플 역삼점',coord:false}};
+const nm=k=>'샘플 직원 '+k;
+function seed(){const R=(id,e,b,date,i,o,brk,geo,st)=>({id,emp:e,branch:b,date,in:i,out:o,brk,geo,status:st});
+ const rec=[R('r1','B','br-gn',TODAY,'09:00',null,0,'inside','approved'),R('r2','C','br-sc',TODAY,'09:10',null,0,'unknown','pending'),R('r3','D','br-gn',TODAY,'08:00','17:00',60,'inside','approved'),R('r4','E','br-gn',TODAY,'09:30',null,0,'unknown','pending'),R('r5','F','br-gn','2026-10-27','09:00',null,0,'inside','pending'),R('r6','A','br-gn','2026-10-27','09:00',null,0,'inside','pending'),R('r7','B','br-gn','2026-10-26','09:00','18:00',60,'inside','approved'),R('r8','D','br-gn','2026-10-26','09:00','18:00',60,'inside','approved'),R('r9','A','br-gn','2026-10-26','09:00','18:00',60,'inside','approved')];
+ ['19','20','21','22','23'].forEach(d=>rec.push(R('ra'+d,'A','br-gn','2026-10-'+d,'09:00','18:00',60,'inside','approved')));
+ return {v:2,consent:null,devicePerm:'on',clock:{phase:'idle',branch:'br-gn',recId:null,brkStart:null,brkTotal:0},records:rec,corrections:[{id:'c1',recId:'r5',emp:'F',date:'2026-10-27',newOut:'18:00',reason:'퇴근 버튼을 누르지 못하고 퇴근했습니다.',requestedAt:'10-28 08:41',status:'pending',rejectReason:''}]}}
+let S;const mem={};
+function load(){try{S=JSON.parse(localStorage.getItem(KEY))}catch(e){S=mem.s||null}if(!S||S.v!==2)S=seed()}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){mem.s=S}}
+const tm=v=>+v.slice(0,2)*60+ +v.slice(3);
+function minutes(r){if(!r.out)return null;const a=tm(r.in),b=tm(r.out),span=b-a+(b<a?1440:0);return a===b||r.brk>span?null:span-r.brk}
+const hm=m=>m===null?'미산출':`${Math.floor(m/60)}시간 ${m%60}분`;
+function reasons(r){const o=[];if(r.status!=='pending')return o;if(!r.out&&r.date<TODAY)o.push('퇴근 누락');if(r.geo==='unknown')o.push(BR[r.branch].coord?'위치 미확인':'좌표 미설정 지점');if(r.geo==='outside')o.push('반경 밖');return o}
+const esc=s=>String(s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+const $=id=>document.getElementById(id);
+const names=['샘플 강남점','샘플 서초점','샘플 역삼점','샘플 송파점','샘플 마포점','샘플 성수점','샘플 판교점'];let setN=0;
+function render(){$('unsetN').textContent=7-setN;$('mCoord').textContent=setN+' / 7';$('toggleUnset').textContent='미설정 지점 '+(7-setN)+'곳 '+($('unsetList').hidden?'보기':'접기');
+ $('warn').hidden=setN===7;$('unsetRows').innerHTML=names.map((n,i)=>i<setN?`<tr><td>${n}</td><td>설정됨</td><td>50m</td><td>반경 안/밖 판정</td></tr>`:`<tr><td>${n}</td><td>미설정</td><td>—</td><td><span class="badge">판정 불가 → 확인필요</span></td></tr>`).join('');
+ const done=(setN===7?1:0);$('s1').classList.toggle('done',setN===7);$('stepSum').textContent=`3단계 중 ${done}단계 완료`+(setN>0&&setN<7?` · 지점 ${setN}/7 설정`:'')}
+$('toggleUnset').onclick=()=>{const h=$('unsetList').hidden;$('unsetList').hidden=!h;$('toggleUnset').setAttribute('aria-expanded',String(h));render()};
+$('go1').onclick=()=>{$('toast').textContent='attendance-admin.html 지점 좌표·반경 화면으로 이동합니다(데모 · 이동하지 않음).'};
+$('copy').onclick=()=>{$('toast').textContent='출퇴근 링크를 복사했습니다(데모 · 클립보드 미사용): /static/apps/obys/clock.html'};
+$('demoSet').onclick=()=>{setN=Math.min(7,setN+1);$('toast').textContent=`데모: 지점 ${setN}/7 설정 완료로 표시했습니다. 운영 반영 없음.`;render()};
+$('openRecs').onclick=()=>{$('recs').hidden=false};$('closeRecs').onclick=()=>{$('recs').hidden=true};
+document.querySelector('.jump [data-s=A]').setAttribute('aria-current','page');render();
+</script></body></html>

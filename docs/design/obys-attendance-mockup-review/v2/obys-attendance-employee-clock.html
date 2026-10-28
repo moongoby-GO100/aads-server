@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex"><title>오비서 근태 v2 · C 직원 출퇴근</title>
+<style>
+:root{color-scheme:light;--bg:#f4f5f7;--panel:#fff;--text:#1d2330;--muted:#5b6475;--line:#dde1e8;--primary:#2f6fed;--primary-dark:#1b4ec2;--out:#0f7b52;--warn-bg:#fff6e5;--warn-text:#8a5a00;--err-bg:#fdecec;--err-text:#b42318;--ok-bg:#e8f6ef;--ok-text:#0f7b52}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text)}
+body{font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;font-size:17px;line-height:1.5;min-height:100vh;word-break:keep-all;overflow-wrap:anywhere}
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;max-width:480px;margin:0 auto;padding:12px 16px 24px}
+.app{display:flex;flex-direction:column;gap:14px;min-width:0}.side{order:2;min-width:0}
+@media(min-width:900px){.layout{max-width:1000px;grid-template-columns:minmax(0,380px) minmax(0,480px);justify-content:center;gap:28px;padding:28px}.side{order:0}.app{order:1}}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px}header h1{font-size:20px;margin:0}header .who{color:var(--muted);font-size:14px;text-align:right}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}.panel h2{font-size:17px;margin:0 0 8px}
+.muted{color:var(--muted);font-size:15px}.status-line{font-size:22px;font-weight:700;margin:4px 0}.elapsed{font-size:30px;font-weight:800;font-variant-numeric:tabular-nums}
+.badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:14px;font-weight:700}.badge.ok{background:var(--ok-bg);color:var(--ok-text)}.badge.warn{background:var(--warn-bg);color:var(--warn-text)}.badge.err{background:var(--err-bg);color:var(--err-text)}.badge.wait{background:#efe7fb;color:#5b2aa6}.badge.work{background:#e8f0ff;color:#245fd0}
+.spacer{flex:1}
+.big-btn{display:block;width:100%;min-height:96px;border:0;border-radius:18px;font:inherit;font-size:28px;font-weight:800;color:#fff;background:var(--primary);box-shadow:0 4px 12px rgba(47,111,237,.25);touch-action:manipulation;cursor:pointer}
+.big-btn.out{background:var(--out)}.big-btn.brk{background:#b7791f}.big-btn:disabled{opacity:.55}
+.dock{position:sticky;bottom:8px;display:grid;gap:10px;padding-top:6px}
+.btn{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:56px;border-radius:12px;border:1px solid var(--line);background:#fff;color:var(--primary-dark);font:inherit;font-size:17px;font-weight:700;text-decoration:none;touch-action:manipulation;cursor:pointer;padding:6px 12px;text-align:center}
+.btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.btn.danger{color:var(--err-text);border-color:#f1c0bb}.btn:disabled{opacity:.5}
+.btn:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,.big-btn:focus-visible{outline:3px solid #8bb4ff}
+.row{display:flex;gap:10px}.row>*{flex:1}
+select,input[type=time],input[type=text],textarea{width:100%;min-height:56px;font:inherit;font-size:17px;border-radius:12px;border:1px solid var(--line);padding:0 12px;background:#fff}textarea{padding:10px 12px;min-height:96px}
+.alert{border-radius:12px;padding:14px;font-size:16px}.alert.err{background:var(--err-bg);color:var(--err-text)}.alert.warn{background:var(--warn-bg);color:var(--warn-text)}.alert.info{background:#e8f0ff;color:#1b4ec2}.alert.ok{background:var(--ok-bg);color:var(--ok-text)}.alert .btn{margin-top:10px}.alert p{margin:6px 0}
+ul.consent{margin:8px 0;padding-left:20px}ul.consent li{margin-bottom:6px}
+.link-btn{background:none;border:0;color:var(--muted);text-decoration:underline;font:inherit;font-size:15px;min-height:44px;padding:0 8px;cursor:pointer;display:inline-flex;align-items:center}
+.foot{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 12px}
+.jump{display:flex;flex-wrap:wrap;gap:8px}.jump a{flex:1 1 44%;display:inline-flex;align-items:center;justify-content:center;min-height:44px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--primary-dark);font-size:14px;font-weight:700;text-decoration:none;text-align:center;padding:4px 8px}.jump a[aria-current=page]{background:var(--primary);color:#fff;border-color:var(--primary)}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700;line-height:1.4;vertical-align:middle;white-space:nowrap}.tag.now{background:#e5f3ea;color:#176b44}.tag.new{background:#efe7fb;color:#5b2aa6}
+.legend{background:#fff;border:1px dashed #b9c4d6;border-radius:12px;padding:14px;font-size:15px}.legend ul{margin:8px 0 0;padding-left:18px;line-height:1.8}
+.demo{border:1px dashed #b9c4d6;border-radius:12px;padding:14px;background:#fafbfd;font-size:15px}.demo label{display:grid;gap:6px;margin-bottom:10px}
+.sum{display:grid;grid-template-columns:1fr 1fr;gap:10px}.sum .panel{padding:12px}.sum b{display:block;font-size:24px;margin-top:4px}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:8px}.seg button{min-height:48px;border:1px solid var(--line);border-radius:12px;background:#fff;font:inherit;font-weight:700;cursor:pointer;color:var(--primary-dark)}.seg button[aria-pressed=true]{background:var(--primary);color:#fff;border-color:var(--primary)}
+.rec{padding:12px 0;border-bottom:1px solid #edf0f5}.rec:last-child{border-bottom:0}.rec .top{display:flex;justify-content:space-between;gap:8px;align-items:center}.rec p{margin:4px 0}
+dialog{width:min(440px,calc(100% - 24px));border:1px solid var(--line);border-radius:16px;padding:18px}dialog::backdrop{background:#17203388}dialog label{display:grid;gap:6px;margin:12px 0;color:var(--muted)}
+[hidden],.hidden{display:none!important}#toast{min-height:24px;color:#245fd0;font-size:15px}
+</style><body><div class="layout">
+<div class="app">
+<nav class="jump" aria-label="목업 화면 이동"><a class="linkbtn" href="obys-attendance-admin-onboarding.html" data-s="A">A 관리자 시작하기</a><a class="linkbtn" href="obys-attendance-admin-today.html" data-s="B">B 관리자 오늘 현황</a><a class="linkbtn" href="obys-attendance-employee-clock.html" data-s="C">C 직원 출퇴근</a><a class="linkbtn" href="obys-attendance-employee-records.html" data-s="D">D 직원 내 기록</a></nav>
+<header><h1>출퇴근 <span class="tag now">현재 코드 있음</span></h1><div class="who"><div>샘플 직원 A</div><div>샘플 사업자</div></div></header>
+<p class="alert warn" style="margin:0">승인 검토용 목업 v2 · 가상 샘플 · 화면 C (screen_id obys-attendance-employee-clock). 위치·서버 호출 없음.</p>
+<section id="todayView" class="panel"><div class="muted">10월 28일 (수)</div><div class="status-line" id="todayStatus">아직 출근 전입니다</div><div class="elapsed" id="elapsed" hidden></div><div id="verdict"></div><p class="muted" id="reasonTxt"></p></section>
+<section id="branchView" class="panel"><h2>근무 지점 <span class="tag now">현재 코드 있음</span></h2><select id="branchSel" aria-label="근무 지점 선택"><option value="br-gn">샘플 강남점</option><option value="br-sc">샘플 서초점 (위치 미등록)</option><option value="br-ys">샘플 역삼점 (위치 미등록)</option></select></section>
+<section id="coordView" class="alert warn" hidden><b>이 지점은 위치가 등록되지 않았습니다.</b><p>위치 확인 불가 — 관리자 확인 후 확정됩니다. 출근은 그대로 기록되고 <b>확인필요</b>로 남습니다. <span class="tag now">현재 코드 있음</span></p></section>
+<section id="consentView" class="panel" hidden><h2>위치정보 수집·이용 동의 <span class="tag now">현재 코드 있음</span></h2><ul class="consent"><li><b>수집 항목</b>: 출근·퇴근 버튼을 누른 순간의 위치 1점. 근무 중 위치를 계속 추적하지 않습니다.</li><li><b>목적</b>: 매장 반경 안에서 기록했는지 확인합니다.</li><li><b>거부할 수 있습니다</b>: 동의하지 않아도 출퇴근은 기록됩니다. 다만 위치를 확인할 수 없어 <b>확인필요로 남고</b>, 사장님·관리자가 확인한 뒤 확정됩니다.</li></ul><div class="row"><button id="decline" class="btn" type="button">동의하지 않음</button><button id="agree" class="btn primary" type="button">동의합니다</button></div></section>
+<section id="declinedView" class="alert info" hidden><b>위치 없이 진행합니다.</b><p>출근·퇴근은 기록되지만 위치를 확인할 수 없어 <b>확인필요로 남습니다</b>. 관리자가 확인한 뒤 확정합니다.</p><button id="reAgree" class="btn" type="button">위치 동의하기</button></section>
+<section id="permView" class="alert warn" hidden><b>위치 권한이 꺼져 있습니다.</b><p>휴대폰 설정 &gt; 브라우저 &gt; 위치 권한을 <b>허용</b>으로 바꾼 뒤 다시 누르십시오. 위치 없이 기록하면 <b>확인필요</b>로 남습니다. <span class="tag now">현재 코드 있음</span></p><div class="row"><button id="retryLoc" class="btn" type="button">다시 시도</button><button id="noLoc" class="btn" type="button">위치 없이 기록</button></div></section>
+<section id="breakView" class="panel" hidden><h2>휴게 <span class="tag new">신규 — API·화면 없음</span></h2><p class="muted" id="breakTxt"></p><button id="breakStart" class="btn" type="button">휴게 시작</button></section>
+<section id="doneView" class="panel" hidden><h2>오늘 근무가 끝났습니다</h2><p id="doneTxt"></p><div class="row"><a class="btn primary" href="obys-attendance-employee-records.html">내 기록 보기 (D) <span class="tag new">신규</span></a></div><a class="btn" style="margin-top:10px" href="obys-attendance-admin-today.html">관리자 대기함 보기 (B)</a></section>
+<div class="spacer"></div>
+<div class="dock"><button id="breakEnd" class="big-btn brk" type="button" hidden>휴게 종료 <span class="tag new">신규</span></button><button id="clockBtn" class="big-btn" type="button" hidden>출근</button></div>
+<section class="demo" aria-label="데모 조작"><b>데모 조작 (실제 화면 아님)</b><label>기기 위치 권한<select id="perm"><option value="on">켜짐 (허용)</option><option value="off">꺼짐 (거부됨)</option></select></label><small class="muted">데모: 출근 후 시간이 흘러 현재 12:14 라고 가정합니다. 가상 시계를 사용하고 실제 위치는 읽지 않습니다.</small><div id="toast" role="status" aria-live="polite"></div><button id="reset" class="btn" type="button">처음부터 다시 (샘플 초기화)</button></section>
+<div class="foot"><button class="link-btn" type="button" id="refresh">새로고침</button><button class="link-btn" type="button" id="consentToggle" hidden>위치 동의 철회</button></div>
+</div>
+<aside class="side"><section class="legend" aria-label="범례"><b>범례</b> <span class="tag now">현재 코드 있음</span> <span class="tag new">신규 — API·화면 없음</span>
+<ul><li>지점 선택 <span class="tag now">현재 코드 있음</span> (clock.html branchSelect)</li><li>위치 동의 / 동의하지 않음 / 철회 <span class="tag now">현재 코드 있음</span> (consent API)</li><li>위치 권한 꺼짐 복구(다시 시도·위치 없이 기록) <span class="tag now">현재 코드 있음</span></li><li>출근 / 퇴근 큰 버튼·경과시간·오늘 상태 <span class="tag now">현재 코드 있음</span> (check-in / check-out / clock/state)</li><li>좌표 미설정 지점 안내 "위치 확인 불가 — 관리자 확인 후 확정" <span class="tag now">현재 코드 있음</span> (지점 has_geofence 표기 사용, 문구 보강)</li><li>휴게 시작 / 종료 <span class="tag new">신규 — API·화면 없음</span></li><li>완료 후 내 기록(D) 이동 <span class="tag new">신규 — API·화면 없음</span></li></ul>
+<p class="muted">터치 영역은 모두 44px 이상이고 핵심 버튼은 화면 아래쪽에 두어 한 손으로 누를 수 있습니다.</p></section></aside>
+</div>
+<script>
+'use strict';
+const KEY='obysAttV2',TODAY='2026-10-28';
+const BR={'br-gn':{name:'샘플 강남점',coord:true},'br-sc':{name:'샘플 서초점',coord:false},'br-ys':{name:'샘플 역삼점',coord:false}};
+const nm=k=>'샘플 직원 '+k;
+function seed(){const R=(id,e,b,date,i,o,brk,geo,st)=>({id,emp:e,branch:b,date,in:i,out:o,brk,geo,status:st});
+ const rec=[R('r1','B','br-gn',TODAY,'09:00',null,0,'inside','approved'),R('r2','C','br-sc',TODAY,'09:10',null,0,'unknown','pending'),R('r3','D','br-gn',TODAY,'08:00','17:00',60,'inside','approved'),R('r4','E','br-gn',TODAY,'09:30',null,0,'unknown','pending'),R('r5','F','br-gn','2026-10-27','09:00',null,0,'inside','pending'),R('r6','A','br-gn','2026-10-27','09:00',null,0,'inside','pending'),R('r7','B','br-gn','2026-10-26','09:00','18:00',60,'inside','approved'),R('r8','D','br-gn','2026-10-26','09:00','18:00',60,'inside','approved'),R('r9','A','br-gn','2026-10-26','09:00','18:00',60,'inside','approved')];
+ ['19','20','21','22','23'].forEach(d=>rec.push(R('ra'+d,'A','br-gn','2026-10-'+d,'09:00','18:00',60,'inside','approved')));
+ return {v:2,consent:null,devicePerm:'on',clock:{phase:'idle',branch:'br-gn',recId:null,brkStart:null,brkTotal:0},records:rec,corrections:[{id:'c1',recId:'r5',emp:'F',date:'2026-10-27',newOut:'18:00',reason:'퇴근 버튼을 누르지 못하고 퇴근했습니다.',requestedAt:'10-28 08:41',status:'pending',rejectReason:''}]}}
+let S;const mem={};
+function load(){try{S=JSON.parse(localStorage.getItem(KEY))}catch(e){S=mem.s||null}if(!S||S.v!==2)S=seed()}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){mem.s=S}}
+const tm=v=>+v.slice(0,2)*60+ +v.slice(3);
+function minutes(r){if(!r.out)return null;const a=tm(r.in),b=tm(r.out),span=b-a+(b<a?1440:0);return a===b||r.brk>span?null:span-r.brk}
+const hm=m=>m===null?'미산출':`${Math.floor(m/60)}시간 ${m%60}분`;
+function reasons(r){const o=[];if(r.status!=='pending')return o;if(!r.out&&r.date<TODAY)o.push('퇴근 누락');if(r.geo==='unknown')o.push(BR[r.branch].coord?'위치 미확인':'좌표 미설정 지점');if(r.geo==='outside')o.push('반경 밖');return o}
+const esc=s=>String(s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+const $=id=>document.getElementById(id);
+const VNOW=12*60+14;const f2=m=>String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+function rec(){return S.clock.recId?S.records.find(r=>r.id===S.clock.recId):null}
+function show(id,v){$(id).hidden=!v}
+function render(){const c=S.clock,r=rec(),br=BR[$('branchSel').value];$('perm').value=S.devicePerm;
+ const needC=S.consent===null&&c.phase==='idle';show('consentView',needC);show('declinedView',S.consent==='declined'&&c.phase==='idle');
+ show('todayView',!needC);show('branchView',c.phase==='idle');show('coordView',c.phase==='idle'&&!br.coord&&!needC);
+ show('clockBtn',!needC&&(c.phase==='idle'||c.phase==='working'));show('breakEnd',c.phase==='break');show('breakView',c.phase==='working'||c.phase==='break');show('doneView',c.phase==='done');
+ show('consentToggle',!needC);$('consentToggle').textContent=S.consent==='agreed'?'위치 동의 철회':'위치 동의하기';
+ const btn=$('clockBtn');btn.disabled=false;btn.classList.toggle('out',c.phase==='working');btn.textContent=c.phase==='working'?'퇴근':'출근';
+ const el=$('elapsed');el.hidden=!(c.phase==='working'||c.phase==='break');
+ if(c.phase==='idle'){$('todayStatus').textContent='아직 출근 전입니다';$('verdict').innerHTML='';$('reasonTxt').textContent=S.consent==='agreed'?'':'위치 미동의 — 기록은 확인필요로 남습니다.'}
+ else if(r){const m=(c.phase==='break'?c.brkStart:(c.phase==='done'?tm(r.out):c.vnow))-tm(r.in);
+  if(c.phase==='working'){$('todayStatus').textContent=`근무 중 · ${r.in} 출근`;el.textContent=`${Math.floor(m/60)}시간 ${String(m%60).padStart(2,'0')}분 근무 중`}
+  if(c.phase==='break'){$('todayStatus').textContent=`휴게 중 · ${f2(c.brkStart)} 시작`;el.textContent=`지금까지 ${Math.floor(m/60)}시간 ${String(m%60).padStart(2,'0')}분 근무`}
+  if(c.phase==='done'){$('todayStatus').textContent=`퇴근 완료 · ${r.in}~${r.out} (${hm(minutes(r))})`}
+  $('verdict').innerHTML=r.status==='approved'?'<span class="badge ok">자동 확정</span>':`<span class="badge warn">확인필요 · ${BR[r.branch].coord?'위치 미확인':'위치 확인 불가'}</span>`;
+  $('reasonTxt').textContent=r.status==='approved'?'':(BR[r.branch].coord?'위치를 확인하지 못했습니다. 관리자가 확인한 뒤 확정합니다.':'위치 확인 불가 — 관리자 확인 후 확정됩니다.');
+  $('breakTxt').textContent=c.phase==='break'?'휴게 중입니다. 끝나면 아래 큰 버튼 "휴게 종료"를 누르세요. 휴게시간은 근무시간에서 빠집니다.':`휴게를 하려면 시작을 누르세요.${c.brkTotal?' 오늘 휴게 합계 '+c.brkTotal+'분.':''}`;
+  show('breakStart',c.phase==='working');
+  if(c.phase==='done')$('doneTxt').innerHTML=`근무 ${hm(minutes(r))} (휴게 ${r.brk}분 제외). `+(r.status==='approved'?'위치가 확인되어 자동 확정되었습니다.':'위치를 확인하지 못해 <b>확인필요</b>로 남았습니다. 관리자 화면(B)의 대기함에 사유 "'+(BR[r.branch].coord?'위치 미확인':'좌표 미설정 지점')+'"로 나타납니다.')}
+}
+function clockIn(withLoc){const c=S.clock,key=$('branchSel').value,br=BR[key];const located=S.consent==='agreed'&&withLoc;const geo=located&&br.coord?'inside':'unknown';
+ const r={id:'r-a-today',emp:'A',branch:key,date:TODAY,in:'09:02',out:null,brk:0,geo,status:geo==='inside'?'approved':'pending'};S.records=S.records.filter(x=>x.id!==r.id);S.records.push(r);
+ Object.assign(c,{phase:'working',branch:key,recId:r.id,brkStart:null,brkTotal:0,vnow:VNOW});save();render()}
+function clockOut(withLoc){const c=S.clock,r=rec();r.out='18:05';r.brk=c.brkTotal;c.phase='done';save();render()}
+$('clockBtn').onclick=()=>{$('permView').hidden=true;const c=S.clock,withLoc=true;if(S.consent==='agreed'&&S.devicePerm==='off'){S.pendingOut=c.phase==='working';show('permView',true);$('toast').textContent='';return}if(c.phase==='idle')clockIn(withLoc);else clockOut(withLoc)};
+$('retryLoc').onclick=()=>{if(S.devicePerm==='off'){$('toast').textContent='아직 위치 권한이 꺼져 있습니다. 휴대폰 설정에서 허용으로 바꾼 뒤 다시 시도하세요.';return}show('permView',false);S.clock.phase==='idle'?clockIn(true):clockOut(true)};
+$('noLoc').onclick=()=>{show('permView',false);S.clock.phase==='idle'?clockIn(false):clockOut(false)};
+$('breakStart').onclick=()=>{S.clock.phase='break';S.clock.brkStart=VNOW;save();render()};
+$('breakEnd').onclick=()=>{const c=S.clock;c.brkTotal+=30;c.vnow=VNOW+30;c.phase='working';rec().brk=c.brkTotal;save();render()};
+$('agree').onclick=()=>{S.consent='agreed';$('toast').textContent='';save();render()};$('decline').onclick=()=>{S.consent='declined';$('toast').textContent='';save();render()};$('reAgree').onclick=()=>{S.consent='agreed';save();render()};
+$('consentToggle').onclick=()=>{if(S.consent==='agreed'){if(confirm('위치 동의를 철회하면 이후 출퇴근은 위치 없이 기록되고 모두 확인필요로 남습니다. 철회할까요?')){S.consent='declined';save();render()}}else{S.consent='agreed';save();render()}};
+$('perm').onchange=()=>{S.devicePerm=$('perm').value;save();show('permView',false)};
+$('branchSel').onchange=()=>{S.clock.branch=$('branchSel').value;save();render()};
+$('reset').onclick=()=>{S=seed();save();show('permView',false);$('branchSel').value='br-gn';$('toast').textContent='샘플을 초기화했습니다.';render()};
+$('refresh').onclick=()=>{render()};
+document.querySelector('.jump [data-s=C]').setAttribute('aria-current','page');load();if(S.clock.phase!=='idle')$('branchSel').value=S.clock.branch;else $('branchSel').value=S.clock.branch||'br-gn';render();
+</script></body></html>

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex"><title>오비서 근태 v2 · D 직원 내 기록</title>
+<style>
+:root{color-scheme:light;--bg:#f4f5f7;--panel:#fff;--text:#1d2330;--muted:#5b6475;--line:#dde1e8;--primary:#2f6fed;--primary-dark:#1b4ec2;--out:#0f7b52;--warn-bg:#fff6e5;--warn-text:#8a5a00;--err-bg:#fdecec;--err-text:#b42318;--ok-bg:#e8f6ef;--ok-text:#0f7b52}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text)}
+body{font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;font-size:17px;line-height:1.5;min-height:100vh;word-break:keep-all;overflow-wrap:anywhere}
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;max-width:480px;margin:0 auto;padding:12px 16px 24px}
+.app{display:flex;flex-direction:column;gap:14px;min-width:0}.side{order:2;min-width:0}
+@media(min-width:900px){.layout{max-width:1000px;grid-template-columns:minmax(0,380px) minmax(0,480px);justify-content:center;gap:28px;padding:28px}.side{order:0}.app{order:1}}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px}header h1{font-size:20px;margin:0}header .who{color:var(--muted);font-size:14px;text-align:right}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}.panel h2{font-size:17px;margin:0 0 8px}
+.muted{color:var(--muted);font-size:15px}.status-line{font-size:22px;font-weight:700;margin:4px 0}.elapsed{font-size:30px;font-weight:800;font-variant-numeric:tabular-nums}
+.badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:14px;font-weight:700}.badge.ok{background:var(--ok-bg);color:var(--ok-text)}.badge.warn{background:var(--warn-bg);color:var(--warn-text)}.badge.err{background:var(--err-bg);color:var(--err-text)}.badge.wait{background:#efe7fb;color:#5b2aa6}.badge.work{background:#e8f0ff;color:#245fd0}
+.spacer{flex:1}
+.big-btn{display:block;width:100%;min-height:96px;border:0;border-radius:18px;font:inherit;font-size:28px;font-weight:800;color:#fff;background:var(--primary);box-shadow:0 4px 12px rgba(47,111,237,.25);touch-action:manipulation;cursor:pointer}
+.big-btn.out{background:var(--out)}.big-btn.brk{background:#b7791f}.big-btn:disabled{opacity:.55}
+.dock{position:sticky;bottom:8px;display:grid;gap:10px;padding-top:6px}
+.btn{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:56px;border-radius:12px;border:1px solid var(--line);background:#fff;color:var(--primary-dark);font:inherit;font-size:17px;font-weight:700;text-decoration:none;touch-action:manipulation;cursor:pointer;padding:6px 12px;text-align:center}
+.btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}.btn.danger{color:var(--err-text);border-color:#f1c0bb}.btn:disabled{opacity:.5}
+.btn:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,.big-btn:focus-visible{outline:3px solid #8bb4ff}
+.row{display:flex;gap:10px}.row>*{flex:1}
+select,input[type=time],input[type=text],textarea{width:100%;min-height:56px;font:inherit;font-size:17px;border-radius:12px;border:1px solid var(--line);padding:0 12px;background:#fff}textarea{padding:10px 12px;min-height:96px}
+.alert{border-radius:12px;padding:14px;font-size:16px}.alert.err{background:var(--err-bg);color:var(--err-text)}.alert.warn{background:var(--warn-bg);color:var(--warn-text)}.alert.info{background:#e8f0ff;color:#1b4ec2}.alert.ok{background:var(--ok-bg);color:var(--ok-text)}.alert .btn{margin-top:10px}.alert p{margin:6px 0}
+ul.consent{margin:8px 0;padding-left:20px}ul.consent li{margin-bottom:6px}
+.link-btn{background:none;border:0;color:var(--muted);text-decoration:underline;font:inherit;font-size:15px;min-height:44px;padding:0 8px;cursor:pointer;display:inline-flex;align-items:center}
+.foot{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 12px}
+.jump{display:flex;flex-wrap:wrap;gap:8px}.jump a{flex:1 1 44%;display:inline-flex;align-items:center;justify-content:center;min-height:44px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--primary-dark);font-size:14px;font-weight:700;text-decoration:none;text-align:center;padding:4px 8px}.jump a[aria-current=page]{background:var(--primary);color:#fff;border-color:var(--primary)}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700;line-height:1.4;vertical-align:middle;white-space:nowrap}.tag.now{background:#e5f3ea;color:#176b44}.tag.new{background:#efe7fb;color:#5b2aa6}
+.legend{background:#fff;border:1px dashed #b9c4d6;border-radius:12px;padding:14px;font-size:15px}.legend ul{margin:8px 0 0;padding-left:18px;line-height:1.8}
+.demo{border:1px dashed #b9c4d6;border-radius:12px;padding:14px;background:#fafbfd;font-size:15px}.demo label{display:grid;gap:6px;margin-bottom:10px}
+.sum{display:grid;grid-template-columns:1fr 1fr;gap:10px}.sum .panel{padding:12px}.sum b{display:block;font-size:24px;margin-top:4px}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:8px}.seg button{min-height:48px;border:1px solid var(--line);border-radius:12px;background:#fff;font:inherit;font-weight:700;cursor:pointer;color:var(--primary-dark)}.seg button[aria-pressed=true]{background:var(--primary);color:#fff;border-color:var(--primary)}
+.rec{padding:12px 0;border-bottom:1px solid #edf0f5}.rec:last-child{border-bottom:0}.rec .top{display:flex;justify-content:space-between;gap:8px;align-items:center}.rec p{margin:4px 0}
+dialog{width:min(440px,calc(100% - 24px));border:1px solid var(--line);border-radius:16px;padding:18px}dialog::backdrop{background:#17203388}dialog label{display:grid;gap:6px;margin:12px 0;color:var(--muted)}
+[hidden],.hidden{display:none!important}#toast{min-height:24px;color:#245fd0;font-size:15px}
+</style><body><div class="layout">
+<div class="app">
+<nav class="jump" aria-label="목업 화면 이동"><a class="linkbtn" href="obys-attendance-admin-onboarding.html" data-s="A">A 관리자 시작하기</a><a class="linkbtn" href="obys-attendance-admin-today.html" data-s="B">B 관리자 오늘 현황</a><a class="linkbtn" href="obys-attendance-employee-clock.html" data-s="C">C 직원 출퇴근</a><a class="linkbtn" href="obys-attendance-employee-records.html" data-s="D">D 직원 내 기록</a></nav>
+<header><h1>내 기록 <span class="tag new">신규 — API·화면 없음</span></h1><div class="who"><div>샘플 직원 A</div><div>샘플 사업자</div></div></header>
+<p class="alert warn" style="margin:0">승인 검토용 목업 v2 · 가상 샘플 · 화면 D (screen_id obys-attendance-employee-records). 서버 호출 없음.</p>
+<div id="notice"></div>
+<div class="sum"><section class="panel"><small class="muted">이번 주 (10/26~11/01)</small><b id="sumW"></b></section><section class="panel"><small class="muted">이번 달 (10월)</small><b id="sumM"></b></section></div>
+<div class="seg" role="group" aria-label="기간 보기"><button id="tabW" aria-pressed="true" type="button">이번 주</button><button id="tabM" aria-pressed="false" type="button">이번 달</button></div>
+<section class="panel" aria-label="내 기록 목록"><h2>근무 기록 <span class="tag new">신규 — API·화면 없음</span></h2><div id="list"></div></section>
+<div id="toast" role="status" aria-live="polite"></div>
+<section class="demo" aria-label="데모 조작"><b>데모 조작 (실제 화면 아님)</b><p class="muted" style="margin:6px 0 10px">같은 가상 직원 A 로 이어집니다: C 에서 출근 → 여기서 정정 요청 → B 에서 승인/반려 → 여기서 결과 확인.</p><div class="row"><a class="btn" href="obys-attendance-admin-today.html">관리자 정정 처리 (B)</a><a class="btn" href="obys-attendance-employee-clock.html">출퇴근 (C)</a></div><button id="reset" class="btn" type="button" style="margin-top:10px">처음부터 다시 (샘플 초기화)</button></section>
+</div>
+<aside class="side"><section class="legend" aria-label="범례"><b>범례</b> <span class="tag now">현재 코드 있음</span> <span class="tag new">신규 — API·화면 없음</span>
+<ul><li>내 기록 목록 (날짜·지점·출퇴근·근무시간) <span class="tag new">신규 — API·화면 없음</span> — 현재는 단건 attendance/me/{record_id} 만 있음</li><li>이번 주 / 이번 달 근무시간 합계 <span class="tag new">신규 — API·화면 없음</span></li><li>퇴근 누락 알림 <span class="tag new">신규 — API·화면 없음</span></li><li>정정 요청 제출(시각·사유) <span class="tag new">신규 — API·화면 없음</span></li><li>처리 대기 · 승인/반려 결과(반려 사유) 표시 <span class="tag new">신규 — API·화면 없음</span></li><li>근무시간 계산식(퇴근−출근−휴게, 퇴근 누락은 미산출) <span class="tag now">현재 코드 있음</span> attendance_worked_minutes</li></ul>
+<p class="muted">출퇴근 버튼 화면(C)은 현재 코드 있음. 이 화면은 C 의 푸터에서 들어오는 별도 화면 안입니다.</p></section></aside>
+</div>
+<dialog id="fm"><h2>퇴근 시각 정정 요청</h2><p id="fmWho" class="muted"></p><label>정정할 퇴근 시각<input id="fmTime" type="time" value="18:00" required></label><label>사유 (5자 이상)<textarea id="fmReason" maxlength="100" placeholder="예: 퇴근 버튼을 누르지 못하고 퇴근했습니다."></textarea></label><div id="fmErr" class="muted" role="alert"></div><div class="row"><button id="fmCancel" class="btn" type="button">취소</button><button id="fmOk" class="btn primary" type="button">요청 보내기</button></div></dialog>
+<script>
+'use strict';
+const KEY='obysAttV2',TODAY='2026-10-28';
+const BR={'br-gn':{name:'샘플 강남점',coord:true},'br-sc':{name:'샘플 서초점',coord:false},'br-ys':{name:'샘플 역삼점',coord:false}};
+const nm=k=>'샘플 직원 '+k;
+function seed(){const R=(id,e,b,date,i,o,brk,geo,st)=>({id,emp:e,branch:b,date,in:i,out:o,brk,geo,status:st});
+ const rec=[R('r1','B','br-gn',TODAY,'09:00',null,0,'inside','approved'),R('r2','C','br-sc',TODAY,'09:10',null,0,'unknown','pending'),R('r3','D','br-gn',TODAY,'08:00','17:00',60,'inside','approved'),R('r4','E','br-gn',TODAY,'09:30',null,0,'unknown','pending'),R('r5','F','br-gn','2026-10-27','09:00',null,0,'inside','pending'),R('r6','A','br-gn','2026-10-27','09:00',null,0,'inside','pending'),R('r7','B','br-gn','2026-10-26','09:00','18:00',60,'inside','approved'),R('r8','D','br-gn','2026-10-26','09:00','18:00',60,'inside','approved'),R('r9','A','br-gn','2026-10-26','09:00','18:00',60,'inside','approved')];
+ ['19','20','21','22','23'].forEach(d=>rec.push(R('ra'+d,'A','br-gn','2026-10-'+d,'09:00','18:00',60,'inside','approved')));
+ return {v:2,consent:null,devicePerm:'on',clock:{phase:'idle',branch:'br-gn',recId:null,brkStart:null,brkTotal:0},records:rec,corrections:[{id:'c1',recId:'r5',emp:'F',date:'2026-10-27',newOut:'18:00',reason:'퇴근 버튼을 누르지 못하고 퇴근했습니다.',requestedAt:'10-28 08:41',status:'pending',rejectReason:''}]}}
+let S;const mem={};
+function load(){try{S=JSON.parse(localStorage.getItem(KEY))}catch(e){S=mem.s||null}if(!S||S.v!==2)S=seed()}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){mem.s=S}}
+const tm=v=>+v.slice(0,2)*60+ +v.slice(3);
+function minutes(r){if(!r.out)return null;const a=tm(r.in),b=tm(r.out),span=b-a+(b<a?1440:0);return a===b||r.brk>span?null:span-r.brk}
+const hm=m=>m===null?'미산출':`${Math.floor(m/60)}시간 ${m%60}분`;
+function reasons(r){const o=[];if(r.status!=='pending')return o;if(!r.out&&r.date<TODAY)o.push('퇴근 누락');if(r.geo==='unknown')o.push(BR[r.branch].coord?'위치 미확인':'좌표 미설정 지점');if(r.geo==='outside')o.push('반경 밖');return o}
+const esc=s=>String(s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+const $=id=>document.getElementById(id);
+let tab='W';const KEYREC='r6';
+const mine=()=>S.records.filter(r=>r.emp==='A').sort((a,b)=>b.date.localeCompare(a.date));
+const myCorr=()=>S.corrections.filter(c=>c.recId===KEYREC).slice(-1)[0]||null;
+const wd=d=>['일','월','화','수','목','금','토'][new Date(d+'T00:00:00Z').getUTCDay()];
+function badge(r,c){if(c&&c.status==='pending')return '<span class="badge wait">정정 요청 처리 대기</span>';if(c&&c.status==='approved')return '<span class="badge ok">정정 승인</span>';if(c&&c.status==='rejected'&&r.status==='pending')return '<span class="badge err">정정 반려</span>';if(r.status==='pending')return '<span class="badge warn">확인필요</span>';if(!r.out)return '<span class="badge work">근무 중</span>';return '<span class="badge ok">확정</span>'}
+function render(){const rs=mine(),c=myCorr(),wk=rs.filter(r=>r.date>='2026-10-26'),sum=a=>a.reduce((s,r)=>s+(minutes(r)||0),0);
+ $('sumW').textContent=hm(sum(wk));$('sumM').textContent=hm(sum(rs));$('tabW').setAttribute('aria-pressed',tab==='W');$('tabM').setAttribute('aria-pressed',tab==='M');
+ const miss=rs.find(r=>r.id===KEYREC),needs=miss&&!miss.out;let n='';
+ if(c&&c.status==='pending')n=`<div class="alert info" role="status"><b>정정 요청이 접수되어 처리 대기 중입니다.</b><p>${c.date} 퇴근 ${c.newOut} · 사유: ${esc(c.reason)}</p><p class="muted">관리자가 승인하거나 반려하면 이곳에 결과가 표시됩니다.</p></div>`;
+ else if(c&&c.status==='approved')n=`<div class="alert ok" role="status"><b>정정이 승인되었습니다.</b><p>${c.date} 퇴근 ${c.newOut} 로 반영되어 근무 ${hm(minutes(miss))} 이 합계에 포함되었습니다.</p></div>`;
+ else if(c&&c.status==='rejected')n=`<div class="alert err" role="alert"><b>정정 요청이 반려되었습니다.</b><p>반려 사유: ${esc(c.rejectReason)}</p><button id="again" class="btn" type="button">다시 요청하기</button></div>`;
+ else if(needs)n=`<div class="alert warn" role="alert"><b>퇴근 기록이 없는 날이 1건 있습니다.</b><p>${miss.date}(${wd(miss.date)}) 퇴근이 기록되지 않아 근무시간이 계산되지 않았습니다.</p><button id="openFm" class="btn primary" type="button">퇴근 시각 정정 요청하기</button></div>`;
+ $('notice').innerHTML=n;if($('openFm'))$('openFm').onclick=openFm;if($('again'))$('again').onclick=openFm;
+ const L=tab==='W'?wk:rs;$('list').innerHTML=L.length?L.map(r=>{const cc=r.id===KEYREC?c:null;return `<article class="rec"><div class="top"><b>${r.date.slice(5).replace('-','/')} (${wd(r.date)})</b>${badge(r,cc)}</div><p class="muted">${BR[r.branch].name}</p><p>${r.in} → ${r.out||(r.date===TODAY?'근무 중':'퇴근 누락')} · ${hm(minutes(r))}${r.brk?' · 휴게 '+r.brk+'분':''}</p>${r.status==='pending'&&r.geo==='unknown'?'<p class="muted">위치를 확인하지 못해 관리자 확인 후 확정됩니다.</p>':''}${!r.out&&r.date<TODAY&&!(cc&&cc.status==='pending')?'<p style="color:#8a5a00">퇴근 누락 — 근무시간에서 제외됨</p>':''}</article>`}).join(''):'<p class="muted">기록이 없습니다.</p>'}
+function openFm(){const miss=S.records.find(r=>r.id===KEYREC);$('fmWho').textContent=`${miss.date}(${wd(miss.date)}) · ${BR[miss.branch].name} · 출근 ${miss.in} · 퇴근 누락`;$('fmTime').value='18:00';$('fmReason').value='';$('fmErr').textContent='';$('fm').showModal()}
+$('fmCancel').onclick=()=>$('fm').close();
+$('fmOk').onclick=()=>{const v=$('fmReason').value.trim(),t=$('fmTime').value,miss=S.records.find(r=>r.id===KEYREC);if(!t){$('fmErr').textContent='정정할 퇴근 시각을 입력해 주세요.';return}if(t===miss.in){$('fmErr').textContent='퇴근 시각이 출근 시각과 같을 수 없습니다.';return}if(v.length<5){$('fmErr').textContent='사유를 5자 이상 입력해 주세요.';return}
+ S.corrections.push({id:'c'+(S.corrections.length+1),recId:KEYREC,emp:'A',date:miss.date,newOut:t,reason:v,requestedAt:'10-28 12:20',status:'pending',rejectReason:''});save();$('fm').close();$('toast').textContent='정정 요청을 보냈습니다. 처리 대기 중 · 관리자 화면(B)에 나타납니다(데모).';render()};
+$('tabW').onclick=()=>{tab='W';render()};$('tabM').onclick=()=>{tab='M';render()};
+$('reset').onclick=()=>{S=seed();save();tab='W';$('toast').textContent='샘플을 초기화했습니다.';render()};
+document.querySelector('.jump [data-s=D]').setAttribute('aria-current','page');load();render();
+</script></body></html>

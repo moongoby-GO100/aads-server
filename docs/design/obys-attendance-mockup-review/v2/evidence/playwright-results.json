@@ -1,0 +1,357 @@
+{
+  "tool": "playwright-core",
+  "results": [
+    {
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 1000,
+      "passed": true,
+      "console_errors": [],
+      "network_requests": [],
+      "horizontal_overflow": [],
+      "small_targets_under_44px": [],
+      "capture_count": 28,
+      "captures": [
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "default",
+          "file": "onboarding-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "coordinates-unset",
+          "file": "onboarding-desktop-coordinates-unset.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "empty",
+          "file": "onboarding-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "default",
+          "file": "today-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "detail",
+          "file": "today-desktop-detail.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "search-empty",
+          "file": "today-desktop-search-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "period-close",
+          "file": "today-desktop-period-close.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "loading",
+          "file": "today-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "empty",
+          "file": "today-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "error",
+          "file": "today-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "session-expired",
+          "file": "today-desktop-session-expired.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "permission",
+          "file": "today-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "offline",
+          "file": "today-desktop-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "consent",
+          "file": "clock-desktop-consent.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "default",
+          "file": "clock-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "coord-unset",
+          "file": "clock-desktop-coord-unset.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "permission-off",
+          "file": "clock-desktop-permission-off.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "denied",
+          "file": "clock-desktop-denied.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "working",
+          "file": "clock-desktop-working.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "break",
+          "file": "clock-desktop-break.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "done",
+          "file": "clock-desktop-done.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "default",
+          "file": "records-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "missing-clock-out",
+          "file": "records-desktop-missing-clock-out.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-submitted",
+          "file": "records-desktop-correction-submitted.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "correction-reject",
+          "file": "today-desktop-correction-reject.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-rejected",
+          "file": "records-desktop-correction-rejected.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "correction-approve",
+          "file": "today-desktop-correction-approve.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-result",
+          "file": "records-desktop-correction-result.png"
+        }
+      ],
+      "checks": [
+        "A:checklist-3-steps",
+        "A:coordinates-unset-7",
+        "A:radius-50m",
+        "A:empty",
+        "B:summary-4",
+        "B:inbox-3-reasons",
+        "B:detail-approve-edit-demo",
+        "B:search-empty",
+        "B:date-range-error",
+        "B:period-close-confirm",
+        "B:recovery-six-states",
+        "C:consent-denied-notice",
+        "C:permission-off-recovery",
+        "C:coord-unset-notice",
+        "C:working-break-done",
+        "C:denied-checkin-saved",
+        "JOURNEY1:C-denied->B-inbox",
+        "JOURNEY2:D-request->B-queue",
+        "B:correction-reject-reason-required",
+        "JOURNEY3:B-reject->D-reason",
+        "JOURNEY4:B-approve->D-result"
+      ]
+    },
+    {
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "passed": true,
+      "console_errors": [],
+      "network_requests": [],
+      "horizontal_overflow": [],
+      "small_targets_under_44px": [],
+      "capture_count": 28,
+      "captures": [
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "default",
+          "file": "onboarding-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "coordinates-unset",
+          "file": "onboarding-mobile-coordinates-unset.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "empty",
+          "file": "onboarding-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "default",
+          "file": "today-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "detail",
+          "file": "today-mobile-detail.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "search-empty",
+          "file": "today-mobile-search-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "period-close",
+          "file": "today-mobile-period-close.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "loading",
+          "file": "today-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "empty",
+          "file": "today-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "error",
+          "file": "today-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "session-expired",
+          "file": "today-mobile-session-expired.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "permission",
+          "file": "today-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "offline",
+          "file": "today-mobile-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "consent",
+          "file": "clock-mobile-consent.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "default",
+          "file": "clock-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "coord-unset",
+          "file": "clock-mobile-coord-unset.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "permission-off",
+          "file": "clock-mobile-permission-off.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "denied",
+          "file": "clock-mobile-denied.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "working",
+          "file": "clock-mobile-working.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "break",
+          "file": "clock-mobile-break.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "done",
+          "file": "clock-mobile-done.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "default",
+          "file": "records-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "missing-clock-out",
+          "file": "records-mobile-missing-clock-out.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-submitted",
+          "file": "records-mobile-correction-submitted.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "correction-reject",
+          "file": "today-mobile-correction-reject.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-rejected",
+          "file": "records-mobile-correction-rejected.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "correction-approve",
+          "file": "today-mobile-correction-approve.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-result",
+          "file": "records-mobile-correction-result.png"
+        }
+      ],
+      "checks": [
+        "A:checklist-3-steps",
+        "A:coordinates-unset-7",
+        "A:radius-50m",
+        "A:empty",
+        "B:summary-4",
+        "B:inbox-3-reasons",
+        "B:detail-approve-edit-demo",
+        "B:search-empty",
+        "B:date-range-error",
+        "B:period-close-confirm",
+        "B:recovery-six-states",
+        "C:consent-denied-notice",
+        "C:permission-off-recovery",
+        "C:coord-unset-notice",
+        "C:working-break-done",
+        "C:denied-checkin-saved",
+        "JOURNEY1:C-denied->B-inbox",
+        "JOURNEY2:D-request->B-queue",
+        "B:correction-reject-reason-required",
+        "JOURNEY3:B-reject->D-reason",
+        "JOURNEY4:B-approve->D-result"
+      ]
+    }
+  ]
+}

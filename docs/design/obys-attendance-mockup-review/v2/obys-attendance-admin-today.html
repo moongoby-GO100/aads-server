@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>오비서 근태 v2 · B 관리자 오늘 현황</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic",sans-serif;color:#172033;background:#f4f6fa;font-size:14px}*{box-sizing:border-box}body{margin:0;overflow-wrap:anywhere}
+button,input,select,textarea,.linkbtn{font:inherit;min-height:44px;border:1px solid #dce3ed;border-radius:8px;background:white;padding:8px 12px;max-width:100%}
+input,select,textarea{width:100%;min-width:0}textarea{min-height:88px}button,.linkbtn{cursor:pointer;color:#245fd0;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;text-align:center}
+button:disabled{opacity:.5;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,.linkbtn:focus-visible{outline:3px solid #8bb4ff}
+h1{font-size:26px;margin:8px 0}h2{font-size:18px;margin:0 0 6px}h3{margin:6px 0}
+.shell{display:grid;grid-template-columns:210px minmax(0,1fr);min-height:100vh}aside{background:#172033;color:#fff;padding:28px 20px}aside strong{font-size:24px}aside p{color:#b5c2d8}nav.side{margin-top:50px}nav.side div{padding:15px 10px}nav.side .active{background:#2f6fed;border-radius:9px}
+main{padding:28px;max-width:1550px;width:100%;min-width:0}.top,.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px}.top{justify-content:space-between}
+.muted,small{color:#667085}.notice{padding:14px;background:#fff6e5;border:1px solid #eed8aa;border-radius:10px;line-height:1.7}
+.panel{background:white;border:1px solid #e0e6ef;border-radius:12px;padding:18px;margin-top:18px}
+.jump{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.jump .linkbtn{background:#fff;font-weight:600}.jump .linkbtn[aria-current=page]{background:#2f6fed;color:#fff;border-color:#2f6fed}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700;line-height:1.4;vertical-align:middle;white-space:nowrap}.tag.now{background:#e5f3ea;color:#176b44}.tag.new{background:#efe7fb;color:#5b2aa6}
+.legend{background:#fff;border:1px dashed #b9c4d6;border-radius:12px;padding:14px;margin-top:14px}.legend ul{margin:8px 0 0;padding-left:18px;line-height:1.9}
+.badge{display:inline-block;border-radius:30px;padding:4px 8px;color:#986012;background:#fff3df;font-size:12px}.badge.approved,.badge.ok{background:#e9f7ef;color:#17734d}.badge.rejected{background:#fdeeee;color:#b42318}.badge.working{background:#e8f0ff;color:#245fd0}.badge.wait{background:#efe7fb;color:#5b2aa6}
+.chip{display:inline-block;border-radius:6px;padding:3px 8px;font-size:12px;background:#fdeeee;color:#b42318;margin:2px 4px 2px 0}.chip.loc{background:#fff3df;color:#986012}.chip.coord{background:#eaf0ff;color:#245fd0}
+.primary{background:#2f6fed;color:white;border-color:#2f6fed}.danger{color:#b42318;border-color:#f1c0bb}
+.banner{padding:14px;border-radius:10px;border:1px solid;line-height:1.7;margin-top:14px}.banner.warn{background:#fff6e5;border-color:#eed8aa}.banner.ok{background:#e9f7ef;border-color:#bfe3cf}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}.metric{padding:18px;background:white;border:1px solid #e0e6ef;border-radius:12px}.metric b{display:block;font-size:28px;margin-top:10px}
+.cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:18px}
+.filters{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr)) repeat(3,minmax(100px,1fr));gap:10px}label{display:grid;gap:7px;color:#536075;min-width:0}
+.record{display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:10px;padding:17px 0;border-bottom:1px solid #edf0f5;align-items:center}.record p,.item p{margin:6px 0;line-height:1.5}
+.item{padding:14px 0;border-bottom:1px solid #edf0f5}.item .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.item.done{opacity:.85;background:#fafbfd}
+.steps{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:12px}.steps li{display:grid;grid-template-columns:44px minmax(0,1fr);gap:12px;padding:14px;border:1px solid #e0e6ef;border-radius:12px;background:#fbfcfe}
+.steps .n{width:44px;height:44px;border-radius:50%;background:#e8f0ff;color:#245fd0;display:grid;place-items:center;font-weight:800;font-size:18px}.steps li.done .n{background:#17734d;color:#fff}.steps .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #edf0f5}
+.detail{line-height:1.8}.empty{text-align:center;padding:45px 15px}.hidden,[hidden]{display:none!important}#toast{padding:12px;color:#245fd0;min-height:42px}
+dialog{width:min(520px,calc(100% - 24px));border:1px solid #dce3ed;border-radius:12px;padding:22px}dialog::backdrop{background:#17203388}dialog label{margin:12px 0}
+label.check{display:flex;align-items:center;gap:10px;min-height:44px;color:#172033}label.check input{width:22px;min-height:22px;height:22px;flex:none}
+#stateBox{line-height:1.8}.scenario{margin-top:22px;border-top:1px dashed #ddd;padding-top:15px}footer{line-height:1.7;margin-top:16px}
+@media(max-width:1100px){.grid,.cols{grid-template-columns:1fr}.filters{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.shell{grid-template-columns:1fr}aside{padding:12px 18px}aside p,nav.side{display:none}aside strong{font-size:18px}main{padding:16px}.filters{grid-template-columns:repeat(2,minmax(0,1fr))}.metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:12px}.metric b{font-size:22px}.record{grid-template-columns:1fr 1fr}.record button{width:100%}h1{font-size:23px}.toolbar>*{flex:1}.panel{padding:14px}.steps li{grid-template-columns:1fr}.steps .n{width:36px;height:36px}.jump .linkbtn{flex:1 1 40%}}
+</style><body><div class="shell"><aside><strong>오비서 <small>V4.1</small></strong><p>샘플 사업자 · 관리자</p><nav class="side"><div>업무 현황</div><div>직원 현황</div><div class="active">근태 현황</div><div>급여 현황</div></nav></aside><main>
+<nav class="jump" aria-label="목업 화면 이동"><a class="linkbtn" href="obys-attendance-admin-onboarding.html" data-s="A">A 관리자 시작하기</a><a class="linkbtn" href="obys-attendance-admin-today.html" data-s="B">B 관리자 오늘 현황</a><a class="linkbtn" href="obys-attendance-employee-clock.html" data-s="C">C 직원 출퇴근</a><a class="linkbtn" href="obys-attendance-employee-records.html" data-s="D">D 직원 내 기록</a></nav>
+<div class="top"><div><small>직원·급여 / 관리자 · 화면 B · screen_id obys-attendance-admin-today</small><h1>근태 현황 · 오늘</h1><p class="muted">오늘 출근 현황과 확인이 필요한 건, 직원 정정 요청을 한곳에서 처리합니다.</p></div><span class="badge">v2 · 미승인 / 검토대기용 초안</span></div>
+<p class="notice">승인 검토용 목업 · 가상 샘플(직원 A~G). 기준일 2026-10-28(수). 예시: 지점 7곳 중 샘플 강남점만 좌표 설정이 끝난 뒤의 화면입니다(서초·역삼 미설정). 승인·반려·마감은 데모이며 운영 반영이 없습니다. 같은 가상 직원 A 가 C(출근)·D(정정 요청)에서 이어집니다.</p>
+<section class="legend" aria-label="범례"><b>범례</b> <span class="tag now">현재 코드 있음</span> <span class="tag new">신규 — API·화면 없음</span>
+<ul><li>요약 4칸·출퇴근 기록·필터·상세·승인/수정 데모 <span class="tag now">현재 코드 있음</span> (v1 유지, records API)</li><li>확인필요 대기함 + 사유(위치 미확인·퇴근 누락·좌표 미설정 지점) <span class="tag now">현재 코드 있음</span> — pending 기록·geofence 결과를 사유별로 모아 보여주는 화면 배치</li><li>직원 정정 요청 승인/반려(반려 사유 입력) <span class="tag new">신규 — API·화면 없음</span></li><li>기간 마감 → 급여 반영 확인 <span class="tag new">신규 — API·화면 없음</span> (근무시간 주간 재계산 hr/attendance/weekly 은 현재 코드 있음)</li><li>복구 상태 7종(조회 중·기록 없음·조회 실패·오프라인·권한 부족·세션 만료·검색결과 없음) <span class="tag now">현재 코드 있음</span> v1 유지</li></ul></section>
+<div class="metrics" id="metrics"></div>
+<div id="stateBox" class="panel" role="alert" hidden></div>
+<div id="live">
+<div class="cols">
+<section class="panel" id="inboxP" aria-label="확인필요 대기함"><div class="top"><h2>확인필요 대기함 <span id="inboxN"></span></h2><span class="tag now">현재 코드 있음</span></div><div id="inbox"></div></section>
+<section class="panel" id="corrP" aria-label="직원 정정 요청"><div class="top"><h2>직원 정정 요청 <span id="corrN"></span></h2><span class="tag new">신규 — API·화면 없음</span></div><div id="corr"></div></section>
+</div>
+<section class="panel" id="closeP" aria-label="기간 마감"><div class="top"><h2>기간 마감 → 급여 반영</h2><span class="tag new">신규 — API·화면 없음</span></div>
+<ol class="steps"><li><span class="n">1</span><div><b>확인필요 해소</b><p id="closeS1" class="muted"></p></div></li><li><span class="n">2</span><div><b>근무시간 합계 검토</b><p id="closeS2" class="muted"></p></div></li><li><span class="n">3</span><div><b>급여 반영 확인</b><p class="muted">반영 후에는 해당 주의 근태를 수정하면 재마감이 필요합니다.</p><div class="acts"><button id="closeBtn" class="primary">2026-10-26 ~ 11-01 주 마감하고 급여 반영 확인</button></div></div></li></ol></section>
+</div>
+<section class="panel filters" aria-label="근태 필터"><label>시작일<input id="from" type="date" value="2026-10-27"></label><label>종료일<input id="to" type="date" value="2026-10-28"></label><label>지점<select id="branch"><option value="">전체 지점</option><option value="br-gn">샘플 강남점</option><option value="br-sc">샘플 서초점</option><option value="br-ys">샘플 역삼점</option></select></label><label>직원<input id="search" placeholder="직원 검색" type="search"></label><label>상태<select id="status"><option value="">전체 상태</option><option value="pending">확인필요</option><option value="approved">승인</option><option value="rejected">반려</option></select></label><button id="reset">필터 초기화</button></section>
+<div class="grid"><section class="panel"><div class="top"><h2>출퇴근 기록</h2><small>조회 조건에 맞는 샘플 · 최대 500건 계약</small></div><div id="rows"></div></section><section class="panel detail" aria-label="직원 상세"><h2>직원 상세</h2><div id="detail">목록에서 상세를 선택하세요.</div><div id="toast" role="status" aria-live="polite"></div></section></div>
+<footer class="muted">근무시간: 퇴근 − 출근 (자정 넘김 +24시간) − 휴게. 동일 시각 또는 휴게 초과는 유효하지 않으며, 퇴근 누락은 미산출입니다.<br>pending=확인필요 · approved=승인 · rejected=반려. 위치판정 inside/outside/unknown 은 승인 상태와 구분합니다. 지각·연장·주휴 등 미정 정책은 확정하거나 자동 판정하지 않습니다.</footer>
+<div class="scenario toolbar"><label>검토 시나리오<select id="scenario"><option value="default">정상 목록</option><option value="loading">조회 중</option><option value="empty">기록 없음</option><option value="error">조회 실패</option><option value="session-expired">세션 만료</option><option value="permission">권한 부족</option><option value="offline">오프라인</option></select></label><small>복구 버튼은 정상 샘플로 돌아옵니다. 로그인·실제 API 호출 없음.</small></div>
+</main></div>
+<dialog id="edit"><h2>근태 수정 데모</h2><p>운영 반영 없음 · 샘플 입력 체험</p><label>휴게시간(분)<input id="pause" type="number" min="0" max="1440" value="60"></label><label>검토 메모<input id="memo" maxlength="100" value="샘플 기록 확인"></label><button id="save" class="primary">데모 저장</button> <button id="close">취소</button></dialog>
+<dialog id="rej"><h2>정정 요청 반려</h2><p id="rejWho" class="muted"></p><label>반려 사유 (직원 화면 D 에 그대로 표시됩니다) <span class="tag new">신규 — API·화면 없음</span><textarea id="rejReason" maxlength="100" placeholder="예: 근무 기록이 없어 확인할 수 없습니다. 점장에게 확인 후 다시 요청해 주세요."></textarea></label><div id="rejErr" class="muted" role="alert"></div><button id="rejOk" class="primary">반려 확정</button> <button id="rejCancel">취소</button></dialog>
+<dialog id="closeD"><h2>급여 반영 확인</h2><p id="closeTxt"></p><label class="check hidden" id="closeCkL"><input id="closeCk" type="checkbox"> 남은 확인필요 건은 제외하고 반영합니다.</label><button id="closeOk" class="primary">급여에 반영 (데모)</button> <button id="closeCancel">취소</button></dialog>
+<script>
+'use strict';
+const KEY='obysAttV2',TODAY='2026-10-28';
+const BR={'br-gn':{name:'샘플 강남점',coord:true},'br-sc':{name:'샘플 서초점',coord:false},'br-ys':{name:'샘플 역삼점',coord:false}};
+const nm=k=>'샘플 직원 '+k;
+function seed(){const R=(id,e,b,date,i,o,brk,geo,st)=>({id,emp:e,branch:b,date,in:i,out:o,brk,geo,status:st});
+ const rec=[R('r1','B','br-gn',TODAY,'09:00',null,0,'inside','approved'),R('r2','C','br-sc',TODAY,'09:10',null,0,'unknown','pending'),R('r3','D','br-gn',TODAY,'08:00','17:00',60,'inside','approved'),R('r4','E','br-gn',TODAY,'09:30',null,0,'unknown','pending'),R('r5','F','br-gn','2026-10-27','09:00',null,0,'inside','pending'),R('r6','A','br-gn','2026-10-27','09:00',null,0,'inside','pending'),R('r7','B','br-gn','2026-10-26','09:00','18:00',60,'inside','approved'),R('r8','D','br-gn','2026-10-26','09:00','18:00',60,'inside','approved'),R('r9','A','br-gn','2026-10-26','09:00','18:00',60,'inside','approved')];
+ ['19','20','21','22','23'].forEach(d=>rec.push(R('ra'+d,'A','br-gn','2026-10-'+d,'09:00','18:00',60,'inside','approved')));
+ return {v:2,consent:null,devicePerm:'on',clock:{phase:'idle',branch:'br-gn',recId:null,brkStart:null,brkTotal:0},records:rec,corrections:[{id:'c1',recId:'r5',emp:'F',date:'2026-10-27',newOut:'18:00',reason:'퇴근 버튼을 누르지 못하고 퇴근했습니다.',requestedAt:'10-28 08:41',status:'pending',rejectReason:''}]}}
+let S;const mem={};
+function load(){try{S=JSON.parse(localStorage.getItem(KEY))}catch(e){S=mem.s||null}if(!S||S.v!==2)S=seed()}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){mem.s=S}}
+const tm=v=>+v.slice(0,2)*60+ +v.slice(3);
+function minutes(r){if(!r.out)return null;const a=tm(r.in),b=tm(r.out),span=b-a+(b<a?1440:0);return a===b||r.brk>span?null:span-r.brk}
+const hm=m=>m===null?'미산출':`${Math.floor(m/60)}시간 ${m%60}분`;
+function reasons(r){const o=[];if(r.status!=='pending')return o;if(!r.out&&r.date<TODAY)o.push('퇴근 누락');if(r.geo==='unknown')o.push(BR[r.branch].coord?'위치 미확인':'좌표 미설정 지점');if(r.geo==='outside')o.push('반경 밖');return o}
+const esc=s=>String(s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+const $=id=>document.getElementById(id);
+const labels={pending:'확인필요',approved:'승인',rejected:'반려'},geos={inside:'반경 안',outside:'반경 밖',unknown:'판정 불가'};let rejId=null;
+const inRange=r=>(!$('from').value||r.date>=$('from').value)&&(!$('to').value||r.date<=$('to').value);
+function badge(r){if(r.status==='pending')return '<span class="badge">확인필요</span>';if(!r.out&&r.date===TODAY)return '<span class="badge working">근무 중</span>';return `<span class="badge ${r.status}">${labels[r.status]}</span>`}
+function chips(r){return reasons(r).map(x=>`<span class="chip ${x==='위치 미확인'?'loc':x==='좌표 미설정 지점'?'coord':''}">${x}</span>`).join('')}
+function metrics(){const t=S.records.filter(r=>r.date===TODAY),mode=$('scenario').value==='default';const n=['A','B','C','D','E','F','G'].length;const ci=new Set(t.map(r=>r.emp)).size;const v=[['출근',ci+'명'],['미출근',(n-ci)+'명'],['근무 중',t.filter(r=>!r.out).length+'명'],['확인필요',S.records.filter(r=>r.status==='pending').length+'건']];
+ $('metrics').innerHTML=v.map(([k,x])=>`<div class="metric"><small>${k}</small><b>${mode?x:'—'}</b></div>`).join('')}
+function inbox(){const L=S.records.filter(r=>r.status==='pending').sort((a,b)=>b.date.localeCompare(a.date));$('inboxN').textContent=L.length+'건';
+ $('inbox').innerHTML=L.length?L.map(r=>`<article class="item" data-rec="${r.id}"><b>${nm(r.emp)}</b> <small>${BR[r.branch].name} · ${r.date} · ${r.in}~${r.out||'—'}</small><p>${chips(r)}</p><div class="acts"><button data-detail="${r.id}" aria-label="${nm(r.emp)} 대기함 상세">상세 보기</button><button class="primary" data-demo-ok="${r.id}" aria-label="${nm(r.emp)} 대기함 승인">승인 데모</button></div></article>`).join(''):'<p class="empty muted">대기 중인 확인필요 건이 없습니다.</p>';
+ $('inbox').querySelectorAll('[data-detail]').forEach(b=>b.onclick=()=>select(b.dataset.detail));$('inbox').querySelectorAll('[data-demo-ok]').forEach(b=>b.onclick=()=>{$('toast').textContent='승인 동작 체험 완료 · 운영 반영 없음 · 목업 미승인 유지'})}
+function corr(){const L=S.corrections,P=L.filter(c=>c.status==='pending');$('corrN').textContent='대기 '+P.length+'건';
+ $('corr').innerHTML=L.length?L.slice().sort((a,b)=>(a.status==='pending'?0:1)-(b.status==='pending'?0:1)).map(c=>{const done=c.status!=='pending';return `<article class="item ${done?'done':''}" data-corr="${c.id}"><b>${nm(c.emp)}</b> <small>${c.date} · 요청 ${c.requestedAt}</small><p>퇴근 시각을 <b>${c.newOut}</b> 로 정정 요청<br><span class="muted">사유: ${esc(c.reason)}</span></p>${done?`<p><span class="badge ${c.status}">${c.status==='approved'?'승인됨':'반려됨'}</span> ${c.status==='rejected'?'반려 사유: '+esc(c.rejectReason):'기록에 퇴근 '+c.newOut+' 반영'}</p>`:`<div class="acts"><button class="primary" data-ap="${c.id}" aria-label="${nm(c.emp)} 정정 승인">승인</button><button class="danger" data-rj="${c.id}" aria-label="${nm(c.emp)} 정정 반려">반려</button></div>`}</article>`}).join(''):'<p class="empty muted">직원 정정 요청이 없습니다.</p>';
+ $('corr').querySelectorAll('[data-ap]').forEach(b=>b.onclick=()=>approve(b.dataset.ap));$('corr').querySelectorAll('[data-rj]').forEach(b=>b.onclick=()=>openReject(b.dataset.rj))}
+function approve(id){const c=S.corrections.find(x=>x.id===id),r=S.records.find(x=>x.id===c.recId);c.status='approved';r.out=c.newOut;r.status='approved';save();$('toast').textContent=`정정 승인 완료 · ${nm(c.emp)} ${c.date} 퇴근 ${c.newOut} 반영 · 직원 화면(D)에 결과 표시 · 운영 반영 없음`;renderAll()}
+function openReject(id){rejId=id;const c=S.corrections.find(x=>x.id===id);$('rejWho').textContent=`${nm(c.emp)} · ${c.date} · 퇴근 ${c.newOut} 정정 요청`;$('rejReason').value='';$('rejErr').textContent='';$('rej').showModal()}
+$('rejOk').onclick=()=>{const v=$('rejReason').value.trim();if(v.length<5){$('rejErr').textContent='반려 사유를 5자 이상 입력해 주세요. 직원에게 그대로 보입니다.';return}const c=S.corrections.find(x=>x.id===rejId);c.status='rejected';c.rejectReason=v;save();$('rej').close();$('toast').textContent=`정정 반려 완료 · ${nm(c.emp)}에게 사유가 표시됩니다 · 운영 반영 없음`;renderAll()};
+$('rejCancel').onclick=()=>$('rej').close();
+function closePanel(){const p=S.records.filter(r=>r.status==='pending').length,w=S.records.filter(r=>r.date>='2026-10-26'&&r.date<='2026-11-01');const tot=w.reduce((s,r)=>s+(minutes(r)||0),0),emps=new Set(w.filter(r=>minutes(r)).map(r=>r.emp)).size;
+ $('closeS1').textContent=p?`확인필요 ${p}건이 남아 있습니다. 위 대기함·정정 요청에서 처리하세요(남겨도 마감은 가능하지만 해당 건은 미산출).`:'확인필요 0건 — 모두 처리되었습니다.';
+ $('closeS2').textContent=`대상 ${emps}명 · 산출 근무시간 합계 ${hm(tot)} (퇴근 누락·무효 기록은 제외)`;$('closeBtn').dataset.p=p;$('closeBtn').dataset.t=tot;$('closeBtn').dataset.e=emps}
+$('closeBtn').onclick=()=>{const p=+$('closeBtn').dataset.p;$('closeTxt').textContent=`2026-10-26 ~ 11-01 주 · 대상 ${$('closeBtn').dataset.e}명 · 합계 ${hm(+$('closeBtn').dataset.t)}을(를) 급여에 반영합니다.`+(p?` 확인필요 ${p}건이 남아 있어 해당 건은 급여에서 제외됩니다.`:'');$('closeCkL').classList.toggle('hidden',!p);$('closeCk').checked=false;$('closeOk').disabled=!!p;$('closeD').showModal()};
+$('closeCk').onchange=()=>{$('closeOk').disabled=!$('closeCk').checked};$('closeCancel').onclick=()=>$('closeD').close();
+$('closeOk').onclick=()=>{$('closeD').close();$('toast').textContent='급여 반영 확인 완료 · 데모 · 운영 반영 없음'};
+function select(id){const r=S.records.find(x=>x.id===id);$('detail').innerHTML=`<h3>${nm(r.emp)}</h3><p>${BR[r.branch].name} · ${r.date}</p><p>출근 ${r.in} / 퇴근 ${r.out||'누락'}<br>휴게 ${r.brk}분 · 근무 ${hm(minutes(r))}<br>위치 ${geos[r.geo]} (${r.geo})${BR[r.branch].coord?'':' · 지점 좌표 미설정'}<br>상태 ${labels[r.status]} (${r.status})<br>확인 사유: ${chips(r)||'—'}</p><p class="muted">기록과 위치 API는 별도 계약입니다. 이 화면은 연결된 가상 샘플입니다.</p><button id="approve" class="primary">승인 데모</button> <button id="modify">수정 데모</button>`;
+ $('approve').onclick=()=>{$('toast').textContent='승인 동작 체험 완료 · 운영 반영 없음 · 목업 미승인 유지'};$('modify').onclick=()=>{$('pause').value=r.brk;$('edit').showModal()}}
+const msgs={loading:['조회 중','샘플 조회가 진행 중입니다.'],empty:['기록 없음','선택한 사업자의 등록 기록이 없습니다.'],error:['조회 실패','기록을 불러오지 못했습니다. 재시도해 주세요.'],'session-expired':['세션 만료','다시 로그인한 뒤 기존 조회 조건으로 복구합니다.'],permission:['권한 부족','소유자·관리자 권한을 확인하거나 관리자에게 접근을 요청하세요.'],offline:['오프라인','네트워크 연결을 확인한 뒤 다시 시도하세요.']};
+function rows(){const list=S.records.filter(r=>inRange(r)&&(!$('branch').value||r.branch===$('branch').value)&&nm(r.emp).includes($('search').value)&&(!$('status').value||r.status===$('status').value)).sort((a,b)=>b.date.localeCompare(a.date)||a.emp.localeCompare(b.emp));
+ if($('from').value&&$('to').value&&$('from').value>$('to').value){$('rows').innerHTML='<p class="empty">기간 오류 · 종료일은 시작일 이후로 선택하세요.</p>';return}
+ $('rows').innerHTML=list.length?list.map(r=>`<article class="record" data-row="${r.id}"><div><strong>${nm(r.emp)}</strong><p class="muted">${BR[r.branch].name}<br>${r.date}</p></div><div>${r.in} → ${r.out||(r.date===TODAY?'근무 중':'퇴근 누락')}<p>${!r.out&&r.date===TODAY?'근무 진행 중':hm(minutes(r))} · 휴게 ${r.brk}분</p></div><div>${badge(r)}<p>${geos[r.geo]}<br>${chips(r)||'—'}</p></div><button data-id="${r.id}" aria-label="${nm(r.emp)} ${r.date} 상세">상세 보기</button></article>`).join(''):'<p class="empty">검색결과 없음 · 필터를 바꾸거나 초기화하세요.</p>';
+ $('rows').querySelectorAll('[data-id]').forEach(b=>b.onclick=()=>select(b.dataset.id))}
+function renderAll(){const mode=$('scenario').value;metrics();$('detail').textContent='목록에서 상세를 선택하세요.';
+ $('live').hidden=mode!=='default';$('stateBox').hidden=mode==='default';
+ if(mode!=='default'){const [t,x]=msgs[mode];$('stateBox').innerHTML=`<h3>${t}</h3><p>${x}</p><button id="recover">${mode==='session-expired'?'로그인 복구 데모':mode==='permission'?'권한 확인 데모':'재시도'}</button>`;$('recover').onclick=()=>{$('scenario').value='default';renderAll()};$('rows').innerHTML='';return}
+ inbox();corr();closePanel();rows()}
+['from','to','branch','search','status','scenario'].forEach(id=>$(id).addEventListener('input',()=>{$('toast').textContent='';renderAll()}));
+$('reset').onclick=()=>{['branch','search','status'].forEach(id=>$(id).value='');$('from').value='2026-10-27';$('to').value='2026-10-28';renderAll()};
+$('close').onclick=()=>$('edit').close();$('save').onclick=()=>{if(!$('pause').checkValidity()){$('pause').reportValidity();return}$('edit').close();$('toast').textContent='수정 입력 확인 완료 · 샘플도 원본 유지 · 운영 반영 없음'};
+document.querySelector('.jump [data-s=B]').setAttribute('aria-current','page');load();renderAll();
+</script></body></html>
