@@ -148,7 +148,7 @@ async def test_retry_projection_exposes_only_current_live_progress(same_executio
     conn.fetchrow.return_value = {'execution_id':str(eid), 'status':'retrying', 'assistant_model_used':'interrupted', 'lease_valid':True, 'partial_content':'old error', 'tools_called':[]}
     cached = {'execution_id':str(eid if same_execution else uuid4()), 'is_streaming':True, 'tool_count':31, 'last_tool':'health_check', 'partial_content':'live investigation and verified progress'}
     with patch('app.core.db_pool.get_pool', return_value=_Pool(conn)):
-        result = await chat_read_model.get_streaming_status_projection(session_id=sid, tenant_id=uuid4(), cached_status=cached, has_live_runtime=live_runtime)
+        result = await chat_read_model.get_streaming_status_projection(session_id=sid, tenant_id=uuid4(), cached_status=cached, has_live_runtime=live_runtime, acked_completion_token=None)
     use_live = same_execution and live_runtime
     assert result['tool_count'] == (31 if use_live else 0)
     assert result['partial_content'] == (cached['partial_content'] if use_live else 'old error')
