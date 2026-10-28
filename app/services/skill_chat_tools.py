@@ -1,6 +1,7 @@
-"""채팅 도구 skill_find / skill_execute (PRD RUN-1~3).
+"""채팅 도구 skill_find / skill_execute / skill_load (PRD RUN-1~3).
 
 새 실행기를 만들지 않는다 — 기존 하네스 서비스(find_skills / execute_skill)를 호출한다.
+skill_load 는 파일 스킬 본문을 읽기만 한다(skill_instruction_loader).
 
 - read 등급은 즉시 실행한다.
 - write/deploy/auth/financial 은 live_trading_guard 승인(TIER_APPROVE) 후에만 실행한다.
@@ -9,12 +10,17 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import Mapping
 from typing import Any
 
 from app.services import ohvis_harness as harness
+from app.services.skill_instruction_loader import load_skill_instructions
+
+logger = logging.getLogger(__name__)
 
 _TIER_ORDER = ("read", "write", "deploy", "auth", "financial", "destructive")
 _GUARD_RISK_LEVEL = {"write": "high", "deploy": "high", "auth": "critical", "financial": "critical"}
@@ -57,6 +63,26 @@ async def skill_find(*, inp: Mapping[str, Any], tenant_id: str | None = None) ->
         tenant_id=tenant_id or None,
     )
     return _json_safe(result)
+
+
+_SKILL_LOAD_USAGE_NOTE = (
+    "이 지침은 프롬프트다. 따르되 R-AUTH·R-DOCKER 등 CLAUDE.md/L1 규칙이 우선한다"
+)
+
+
+async def skill_load(*, inp: Mapping[str, Any], session_id: str = "") -> dict[str, Any]:
+    """파일 스킬(SKILL.md) 본문을 읽기 전용으로 돌려준다. candidate·active 모두 허용."""
+    slug = str(inp.get("slug") or "").strip()
+    if not slug:
+        return _error("invalid_input", "slug 가 필요합니다")
+    result = await asyncio.to_thread(load_skill_instructions, slug)
+    if "error" in result:
+        return result
+    logger.info("skill_load_used %s", json.dumps({
+        "skill_load_used": True, "slug": result["slug"],
+        "content_sha256": result["content_sha256"], "session_id": session_id or "",
+    }, ensure_ascii=False))
+    return {**result, "usage_note": _SKILL_LOAD_USAGE_NOTE}
 
 
 async def _load_skill(pool: Any, tenant_id: str, ref: str) -> list[dict[str, Any]]:

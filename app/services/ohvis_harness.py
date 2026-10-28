@@ -135,6 +135,35 @@ def _contract_echo_executor(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 register_skill_executor("ohvis.contract-echo", _contract_echo_executor)
 
+MODEL_INSTRUCTIONS_EXECUTOR = "model-instructions"
+# 레지스트리 행의 slug 를 실행기 입력에 주입하는 실행기. 입력의 slug 는 신뢰하지 않는다.
+REGISTRY_SLUG_BOUND_EXECUTORS = frozenset({MODEL_INSTRUCTIONS_EXECUTOR})
+
+
+def _model_instructions_executor(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """SKILL.md 본문을 돌려주는 읽기 전용 실행기. slug 는 execute_skill 이 주입한다."""
+    from app.services.skill_instruction_loader import load_skill_instructions
+
+    result = load_skill_instructions(str(payload.get("slug") or ""))
+    if "error" in result:
+        raise SkillRegistryError(str(result["error"]), str(result.get("message") or ""))
+    return result
+
+
+register_skill_executor(MODEL_INSTRUCTIONS_EXECUTOR, _model_instructions_executor)
+
+
+def bind_registry_slug(executor_name: str, registry_slug: str, input_data: Mapping[str, Any]) -> dict[str, Any]:
+    """slug 주입 실행기에 한해 레지스트리 slug 를 입력에 넣는다. 입력의 slug 가 다르면 거부한다."""
+    payload = dict(input_data)
+    if executor_name not in REGISTRY_SLUG_BOUND_EXECUTORS:
+        return payload
+    supplied = payload.get("slug")
+    if supplied is not None and supplied != registry_slug:
+        raise SkillRegistryError("skill_slug_mismatch", status_code=422)
+    payload["slug"] = registry_slug
+    return payload
+
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -893,6 +922,7 @@ async def execute_skill(
             executor = _SKILL_EXECUTORS.get(manifest["executor"])
             if executor is None:
                 raise SkillRegistryError("executor_not_registered", status_code=409)
+            executor_input = bind_registry_slug(manifest["executor"], row["slug"], input_data)
             _validate_instance(
                 manifest["input_schema"], input_data, "input_schema_validation_failed"
             )
@@ -959,9 +989,9 @@ async def execute_skill(
     for attempt in range(1, attempts + 1):
         try:
             if inspect.iscoroutinefunction(executor):
-                value = executor(input_data)
+                value = executor(executor_input)
             else:
-                value = asyncio.to_thread(executor, input_data)
+                value = asyncio.to_thread(executor, executor_input)
             result = await asyncio.wait_for(value, timeout=manifest["timeout_seconds"])
             _validate_instance(
                 manifest["output_schema"], result, "output_schema_validation_failed"
@@ -1300,7 +1330,7 @@ def scan_repository_skills() -> list[dict[str, Any]]:
                 "policy": RISK_POLICIES[risk_tier],
                 "source": str(path.relative_to(_repo_root())),
                 "allowed_tools": parse_allowed_tools(front),
-                "validation": ["read SKILL.md before action", "follow skill instructions"],
+                "validation": ["skill_load(slug) 로 본문을 받은 뒤 따른다"],
                 "content_preview": content[:400],
             })
     return candidates

@@ -279,6 +279,7 @@ _DATABASE_TOOLS = frozenset({
     "canonical_document_review",
     "mockup_review_submit",
     "skill_find",
+    "skill_load",
     "skill_execute",
 })
 
@@ -1022,6 +1023,7 @@ class ToolExecutor:
             "canonical_document_lookup":   self._canonical_document_lookup,
             "canonical_document_review":   self._canonical_document_review,
             "skill_find":                  self._skill_find,
+            "skill_load":                  self._skill_load,
             "skill_execute":               self._skill_execute,
             "mockup_review_submit":        self._mockup_review_submit,
             "dashboard_query":        self._dashboard_query,
@@ -1560,6 +1562,13 @@ class ToolExecutor:
         session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
         tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
         return await skill_find(inp=inp, tenant_id=tenant_id or None)
+
+    async def _skill_load(self, inp: Dict[str, Any]) -> Any:
+        """Read-only load of a file skill's SKILL.md body."""
+        from app.services.skill_chat_tools import skill_load
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        return await skill_load(inp=inp, session_id=session_id)
 
     async def _skill_execute(self, inp: Dict[str, Any]) -> Any:
         """Execute an active skill; non-read tiers require the guard approval."""

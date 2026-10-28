@@ -55,7 +55,7 @@ def test_repository_skill_scan_exposes_local_skill_files():
     slugs = {item["slug"] for item in skills}
 
     assert "sales-channel-collector" in slugs
-    assert all("read SKILL.md before action" in item["validation"] for item in skills)
+    assert all("skill_load(slug) 로 본문을 받은 뒤 따른다" in item["validation"] for item in skills)
 
 
 def test_risk_policy_blocks_destructive_actions():

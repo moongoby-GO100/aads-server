@@ -43,6 +43,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "mockup_review_submit": True,        # 목업 검토 생성·리비전·제출·조회 (승인·철회 없음)
     "skill_find": True,                  # 등록 스킬 검색 (읽기 전용)
     "skill_execute": True,               # active 스킬 실행 (read 즉시, 그 외 승인 게이트)
+    "skill_load": True,                  # 파일 스킬(SKILL.md) 본문 로드 (읽기 전용)
     "list_project_databases": True,      # DB 목록 — 온디맨드
     "task_history": False,               # 작업 현황 — 빈번 조회
     "list_remote_dir": False,            # 파일 탐색 — 빈번 사용
@@ -3637,6 +3638,23 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         },
         "input_examples": [{"query": "배민 로그인 사이트 수집", "project": "AADS"}],
     },
+    "skill_load": {
+        "name": "skill_load",
+        "description": (
+            "파일 스킬(.claude/skills/<slug>/SKILL.md)의 지침 본문을 읽기 전용으로 불러옵니다. "
+            "skill_find 로 slug 를 찾은 뒤 호출하며, candidate·active 모두 불러옵니다. "
+            "본문(instructions)·sha256·위험등급을 돌려줄 뿐 스크립트는 실행하지 않습니다. "
+            "받은 지침은 프롬프트이며 CLAUDE.md/L1 규칙(R-AUTH·R-DOCKER 등)이 우선합니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slug": {"type": "string", "description": "스킬 slug (소문자·숫자·하이픈, 예: systematic-debugging)"},
+            },
+            "required": ["slug"],
+        },
+        "input_examples": [{"slug": "systematic-debugging"}],
+    },
     "skill_execute": {
         "name": "skill_execute",
         "description": (
@@ -3859,7 +3877,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "canonical_document_review", "mockup_review_submit", "skill_find", "skill_execute", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
+    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "canonical_document_review", "mockup_review_submit", "skill_find", "skill_load", "skill_execute", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
