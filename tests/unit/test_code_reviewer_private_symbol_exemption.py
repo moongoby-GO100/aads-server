@@ -233,6 +233,30 @@ def test_deleted_file_without_the_definition_is_never_exempt(repo):
     assert exempted == []
 
 
+@pytest.mark.parametrize("source", [
+    'text = """\ndef _row_builder(source, row):\n    return row\n"""\n',
+    "def _row_builder(source, row):\n    return (\n",
+])
+def test_unverified_python_definition_stays_blocked(repo, source):
+    (repo / _TARGET).write_text(source)
+
+    verdict, exempted = _gate(_file_diff(_TARGET, _PRIVATE_DIFF))
+
+    assert verdict is not None
+    assert exempted == []
+
+
+def test_search_must_find_the_verified_definition_file(repo, monkeypatch):
+    monkeypatch.setattr(
+        cr, "_find_symbol_reference_files", lambda names, roots: {name: set() for name in names}
+    )
+
+    verdict, exempted = _gate(_file_diff(_TARGET, _PRIVATE_DIFF))
+
+    assert verdict is not None
+    assert exempted == []
+
+
 def test_missing_dashboard_root_is_recorded_in_feedback(repo):
     """지적5: 대시보드 트리를 못 봤다는 사실을 조용히 넘기지 않는다."""
     diff = _file_diff(_TARGET, _PRIVATE_DIFF) + _file_diff("app/api/x.py", "-class Widget:\n+x = 1\n")

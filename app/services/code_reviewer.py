@@ -1108,9 +1108,14 @@ def _resolve_deleted_file_defining(path: str, name: str, kind: str = "function")
     if loaded is None:
         return None
     resolved, text = loaded
-    keyword = r"class" if kind == "class" else r"(?:async[ \t]+)?def"
-    definition = re.compile(rf"^[ \t]*{keyword}[ \t]+{re.escape(name)}\b", re.MULTILINE)
-    return resolved if definition.search(text) else None
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    definition_types = (ast.ClassDef,) if kind == "class" else (ast.FunctionDef, ast.AsyncFunctionDef)
+    return resolved if any(
+        isinstance(node, definition_types) and node.name == name for node in ast.walk(tree)
+    ) else None
 
 
 def _split_exempt_private_symbols(
@@ -1174,7 +1179,7 @@ def _split_exempt_private_symbols(
 
     exempt_names = {
         name for name, deleted_file in deleted_file_real.items()
-        if all(ref == deleted_file for ref in references[name])
+        if references.get(name) == {deleted_file}
     }
     if exempt_names and notes_out is not None:
         notes_out["preservation_exempt_search_roots"] = [os.path.basename(root) for root in roots]
