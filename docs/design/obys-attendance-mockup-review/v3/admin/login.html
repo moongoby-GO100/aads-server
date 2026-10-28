@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>로그인 · 오비서</title>
+<style>body{margin:0;font-family:-apple-system,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;background:#f4f6fa;color:#172033}main{max-width:400px;margin:60px auto;padding:24px;background:#fff;border:1px solid #e0e6ef;border-radius:14px}
+label{display:grid;gap:6px;margin-top:12px}input,button{font:inherit;min-height:44px;border:1px solid #dce3ed;border-radius:8px;padding:8px 12px;width:100%}button{background:#2f6fed;color:#fff;border-color:#2f6fed;font-weight:700;margin-top:16px;cursor:pointer}
+p{color:#5d6a80;line-height:1.6}@media(max-width:450px){main{margin:0;border-radius:0;border:0;min-height:100vh}}</style></head>
+<body><main><h1>로그인</h1><p>오비서 계정으로 로그인하세요. <span id="back"></span></p>
+<label>이메일<input id="email" type="email" value="sample@example.invalid" autocomplete="off"></label>
+<label>비밀번호<input id="pw" type="password" value="sample-demo" autocomplete="off"></label>
+<button type="button" id="login">로그인</button></main>
+<script>
+const ALLOWED=["obys-attendance-admin-today.html", "obys-attendance-admin-employees.html", "obys-attendance-admin-employee-calendar.html", "obys-attendance-admin-stats.html", "obys-attendance-admin-branches.html", "obys-attendance-admin-onboarding.html"];
+const ret=new URLSearchParams(location.search).get('return')||'';
+const file=ret.split('?')[0];
+const target=ALLOWED.includes(file)?ret:ALLOWED[0];
+document.getElementById('back').textContent='로그인 후 보던 화면으로 돌아갑니다.';
+document.getElementById('login').onclick=()=>{location.href=target;};
+</script></body></html>

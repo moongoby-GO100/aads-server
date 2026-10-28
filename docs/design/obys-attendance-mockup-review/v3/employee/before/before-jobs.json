@@ -1,0 +1,55 @@
+{
+ "bundle": "employee",
+ "static_root": "app/static (origin/main)",
+ "jobs": [
+  {
+   "screen": "home",
+   "vp": "desktop",
+   "fixture": "virtual-v3-employee-a",
+   "url": "/static/apps/obys/clock.html",
+   "file": "before-home-desktop-default.png",
+   "errors": []
+  },
+  {
+   "screen": "home",
+   "vp": "mobile",
+   "fixture": "virtual-v3-employee-a",
+   "url": "/static/apps/obys/clock.html",
+   "file": "before-home-mobile-default.png",
+   "errors": []
+  },
+  {
+   "screen": "clock",
+   "vp": "desktop",
+   "fixture": "virtual-v3-employee-a",
+   "url": "/static/apps/obys/clock.html",
+   "file": "before-clock-desktop-default.png",
+   "errors": []
+  },
+  {
+   "screen": "clock",
+   "vp": "mobile",
+   "fixture": "virtual-v3-employee-a",
+   "url": "/static/apps/obys/clock.html",
+   "file": "before-clock-mobile-default.png",
+   "errors": []
+  },
+  {
+   "screen": "records",
+   "vp": "desktop",
+   "fixture": "virtual-v3-employee-a",
+   "url": "/static/apps/obys/clock.html",
+   "file": "before-records-desktop-default.png",
+   "errors": []
+  },
+  {
+   "screen": "records",
+   "vp": "mobile",
+   "fixture": "virtual-v3-employee-a",
+   "url": "/static/apps/obys/clock.html",
+   "file": "before-records-mobile-default.png",
+   "errors": []
+  }
+ ],
+ "unhandled": []
+}

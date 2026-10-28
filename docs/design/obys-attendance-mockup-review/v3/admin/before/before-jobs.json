@@ -1,0 +1,105 @@
+{
+ "bundle": "admin",
+ "static_root": "app/static (origin/main)",
+ "jobs": [
+  {
+   "screen": "onboarding",
+   "vp": "desktop",
+   "fixture": "virtual-v3-empty",
+   "url": "/static/apps/obys/admin.html#attendance",
+   "file": "before-onboarding-desktop-default.png",
+   "errors": []
+  },
+  {
+   "screen": "onboarding",
+   "vp": "mobile",
+   "fixture": "virtual-v3-empty",
+   "url": "/static/apps/obys/admin.html#attendance",
+   "file": "before-onboarding-mobile-default.png",
+   "errors": []
+  },
+  {
+   "screen": "today",
+   "vp": "desktop",
+   "fixture": "virtual-v3-sample",
+   "url": "/static/apps/obys/admin.html#attendance",
+   "file": "before-today-desktop-default.png",
+   "errors": []
+  },
+  {
+   "screen": "today",
+   "vp": "mobile",
+   "fixture": "virtual-v3-sample",
+   "url": "/static/apps/obys/admin.html#attendance",
+   "file": "before-today-mobile-default.png",
+   "errors": []
+  },
+  {
+   "screen": "employees",
+   "vp": "desktop",
+   "fixture": "virtual-v3-sample",
+   "url": "/static/apps/obys/admin.html#attendance",
+   "file": "before-employees-desktop-default.png",
+   "errors": []
+  },
+  {
+   "screen": "employees",
+   "vp": "mobile",
+   "fixture": "virtual-v3-sample",
+   "url": "/static/apps/obys/admin.html#attendance",
+   "file": "before-employees-mobile-default.png",
+   "errors": []
+  },
+  {
+   "screen": "calendar",
+   "vp": "desktop",
+   "fixture": "virtual-v3-sample",
+   "url": "/static/apps/obys/admin.html#attendance",
+   "file": "before-calendar-desktop-default.png",
+   "errors": []
+  },
+  {
+   "screen": "calendar",
+   "vp": "mobile",
+   "fixture": "virtual-v3-sample",
+   "url": "/static/apps/obys/admin.html#attendance",
+   "file": "before-calendar-mobile-default.png",
+   "errors": []
+  },
+  {
+   "screen": "stats",
+   "vp": "desktop",
+   "fixture": "virtual-v3-sample",
+   "url": "/static/apps/obys/admin.html#attendance",
+   "file": "before-stats-desktop-default.png",
+   "errors": []
+  },
+  {
+   "screen": "stats",
+   "vp": "mobile",
+   "fixture": "virtual-v3-sample",
+   "url": "/static/apps/obys/admin.html#attendance",
+   "file": "before-stats-mobile-default.png",
+   "errors": []
+  },
+  {
+   "screen": "branches",
+   "vp": "desktop",
+   "fixture": "virtual-v3-branches",
+   "url": "/static/apps/obys/attendance-admin.html",
+   "file": "before-branches-desktop-default.png",
+   "errors": []
+  },
+  {
+   "screen": "branches",
+   "vp": "mobile",
+   "fixture": "virtual-v3-branches",
+   "url": "/static/apps/obys/attendance-admin.html",
+   "file": "before-branches-mobile-default.png",
+   "errors": []
+  }
+ ],
+ "unhandled": [
+  "/api/v1/yeoljeong-finance/session"
+ ]
+}

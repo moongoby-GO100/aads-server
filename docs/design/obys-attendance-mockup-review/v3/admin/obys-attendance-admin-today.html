@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>오늘 현황 · 오비서 관리자 근태 v3 목업</title><style>:root{font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;color:#172033;background:#f4f6fa;font-size:14px}
+*{box-sizing:border-box}body{margin:0;overflow-wrap:anywhere;word-break:keep-all}
+button,input,select,textarea,.linkbtn{font:inherit;min-height:44px;border:1px solid #dce3ed;border-radius:8px;background:#fff;padding:8px 12px;max-width:100%;color:#172033}
+input,select,textarea{width:100%;min-width:0}textarea{min-height:88px}
+button,.linkbtn{cursor:pointer;color:#245fd0;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;text-align:center;font-weight:600;min-width:44px}
+button:disabled{opacity:.5;cursor:not-allowed}:focus-visible{outline:3px solid #8bb4ff;outline-offset:1px}
+.primary{background:#2f6fed!important;color:#fff!important;border-color:#2f6fed!important}.danger{color:#b42318}
+h1{font-size:24px;margin:4px 0 6px}h2{font-size:17px;margin:0 0 8px}h3{font-size:15px;margin:4px 0}
+.shell{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100vh}
+aside{background:#172033;color:#fff;padding:24px 16px}aside .brand{font-size:22px;font-weight:800}aside .sub{color:#b5c2d8;margin:4px 0 24px}
+nav.side{display:grid;gap:6px}nav.side a{color:#dbe4f5;text-decoration:none;min-height:44px;display:flex;align-items:center;padding:0 12px;border-radius:9px}
+nav.side a[aria-current=page]{background:#2f6fed;color:#fff;font-weight:700}nav.side a.sec{margin-top:14px;border:1px dashed #3d4b66;color:#b5c2d8}
+main{padding:24px 28px;min-width:0;max-width:1240px}
+.top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:12px}
+.muted,small{color:#5d6a80}.panel{background:#fff;border:1px solid #e0e6ef;border-radius:12px;padding:18px;margin-top:16px}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700;line-height:1.4;vertical-align:middle;white-space:nowrap}
+.tag.now{background:#e5f3ea;color:#176b44}.tag.new{background:#efe7fb;color:#5b2aa6}.tag.policy{background:#fff3df;color:#8a5a00}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}.metric{padding:16px;background:#fff;border:1px solid #e0e6ef;border-radius:12px}.metric b{display:block;font-size:26px;margin-top:6px}
+.metrics.five{grid-template-columns:repeat(5,minmax(0,1fr))}
+.banner{padding:12px 14px;border-radius:10px;border:1px solid;line-height:1.7;margin-top:14px}.banner.warn{background:#fff6e5;border-color:#eed8aa}.banner.ok{background:#e9f7ef;border-color:#bfe3cf}.banner.info{background:#eef4ff;border-color:#c9d8f6}.banner.err{background:#fdeeee;border-color:#f1c0bb}
+.badge{display:inline-block;border-radius:30px;padding:3px 9px;font-size:12px;font-weight:600;background:#fff3df;color:#8a5a00;white-space:nowrap}
+.badge.ok{background:#e9f7ef;color:#17734d}.badge.err{background:#fdeeee;color:#b42318}.badge.info{background:#e8f0ff;color:#245fd0}.badge.gray{background:#eef0f4;color:#4b5565}
+.toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}.toolbar label{flex:1 1 150px}
+label .tag{justify-self:start}label{display:grid;gap:6px;color:#4b5565;min-width:0}
+.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #edf0f5;vertical-align:middle}th{font-size:12px;color:#5d6a80;font-weight:600}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.item{padding:12px 0;border-bottom:1px solid #edf0f5}.item p{margin:4px 0;line-height:1.5}
+.hidden,[hidden]{display:none!important}#toast{min-height:24px;color:#245fd0;margin-top:10px;font-weight:600}
+dialog{width:min(520px,calc(100% - 24px));border:1px solid #dce3ed;border-radius:12px;padding:20px}dialog::backdrop{background:#17203388}dialog label{margin:10px 0}
+label.check{display:flex;align-items:center;gap:10px;min-height:44px;color:#172033}label.check input{width:22px;height:22px;min-height:22px;flex:none}
+.scenario{margin-top:24px;border-top:1px dashed #c9d1de;padding-top:14px}.scenario label{max-width:360px}
+.state h2{margin-top:8px}.state p{line-height:1.7}.skel{height:18px;border-radius:6px;background:linear-gradient(90deg,#eef1f6,#f7f9fc,#eef1f6);margin:10px 0}.skel.short{width:50%}
+.legendbox{background:#fff;border:1px dashed #b9c4d6;border-radius:12px;padding:12px 14px;margin-top:16px;line-height:1.8}
+.err-text{color:#b42318;font-weight:600}
+svg text{font-family:inherit}
+@media(max-width:1100px){.cols{grid-template-columns:1fr}.metrics.five{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.shell{grid-template-columns:1fr}aside{padding:12px 14px}aside .sub{display:none}aside .brand{font-size:18px}
+ nav.side{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:8px}nav.side a{justify-content:center;text-align:center;padding:0 6px;font-size:13px}nav.side a.sec{margin-top:0}
+ main{padding:14px}h1{font-size:21px}.metrics,.metrics.five{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:12px}.metric b{font-size:21px}.panel{padding:12px}
+ .toolbar>*{flex:1 1 140px}.desk{display:none!important}}
+@media(min-width:701px){.mob{display:none!important}}
+</style></head>
+<body><div class="shell"><aside><div class="brand">오비서</div><div class="sub">관리자 · 근태 관리</div>
+<nav class="side" aria-label="근태 관리 메뉴"><a href="obys-attendance-admin-today.html" aria-current=page>오늘 현황</a><a href="obys-attendance-admin-employees.html">직원별 현황</a><a href="obys-attendance-admin-employee-calendar.html">출근 달력</a><a href="obys-attendance-admin-stats.html">통계</a><a href="obys-attendance-admin-branches.html">지점·근무지 관리</a><a class="sec" href="obys-attendance-admin-onboarding.html">근태 시작하기</a><a class="sec" href="../index.html">목업 목록</a></nav></aside>
+<main><style>
+.steps{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:12px}.steps li{display:grid;grid-template-columns:48px minmax(0,1fr);gap:12px;padding:14px;border:1px solid #e0e6ef;border-radius:12px;background:#fbfcfe}
+.steps .n{width:44px;height:44px;border-radius:50%;background:#e8f0ff;color:#245fd0;display:grid;place-items:center;font-weight:800;font-size:18px}.steps li.done .n{background:#17734d;color:#fff}
+.steps p{margin:4px 0;line-height:1.6}.linkbox{display:flex;gap:8px;flex-wrap:wrap}.linkbox input{flex:1 1 220px}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}.cal .dow{text-align:center;font-size:12px;color:#5d6a80;padding:4px 0}
+.cal button{min-height:64px;padding:4px;font-size:12px;flex-direction:column;gap:2px;border-radius:8px;min-width:0;font-weight:600}.cal button b{font-size:15px}.cal .blank{min-height:64px}
+.cal button[aria-pressed=true]{outline:3px solid #172033}
+.c-ok{background:#e9f7ef!important;color:#17734d!important}.c-late,.c-early{background:#fff3df!important;color:#8a5a00!important}.c-missing,.c-absent{background:#fdeeee!important;color:#b42318!important}
+.c-review{background:#efe7fb!important;color:#5b2aa6!important}.c-off{background:#f1f3f6!important;color:#8a94a6!important}.c-working{background:#e8f0ff!important;color:#245fd0!important}.c-future,.c-none{background:#fff!important;color:#9aa3b2!important}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.legend span{padding:3px 8px;border-radius:6px;font-size:12px;font-weight:600}
+.cards{display:grid;gap:10px}.ecard{border:1px solid #e0e6ef;border-radius:12px;padding:12px;background:#fff}.ecard dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:8px 0}.ecard dt{font-size:12px;color:#5d6a80}.ecard dd{margin:0;font-weight:700}
+.rowlink{justify-content:flex-start}
+.cand{display:grid;gap:8px;margin-top:10px}.cand button{justify-content:flex-start;text-align:left;flex-direction:column;align-items:flex-start;font-weight:600}.cand button small{font-weight:400}
+.cand button[aria-pressed=true]{border:2px solid #2f6fed;background:#eef4ff}
+.editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px}.stepbox{border:1px solid #e0e6ef;border-radius:10px;padding:12px;margin-top:10px}.stepbox h3 span{color:#245fd0}
+.coords{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.kpi small{display:block;margin-top:4px}
+@media(max-width:1100px){.editor-grid{grid-template-columns:1fr}}
+@media(max-width:700px){.steps li{grid-template-columns:1fr}.cal button{min-height:52px;font-size:11px}.cal button b{font-size:13px}.cal .blank{min-height:52px}.cal button .lbl{display:none}.ecard dl{grid-template-columns:repeat(2,minmax(0,1fr))}.coords{grid-template-columns:1fr}}
+</style>
+<div class="top"><div><h1>오늘 현황</h1><p class="muted">2026-10-28(수) 12:14 기준 · 가상 직원 8명 · 지점 5곳(좌표 설정 2곳)</p></div>
+<a class="linkbtn" href="obys-attendance-admin-onboarding.html">근태 시작하기 체크리스트</a></div>
+<div id="live">
+<div class="metrics">
+ <div class="metric">출근 <span class="tag now">현재 코드 있음</span><b id="mIn"></b></div><div class="metric">미출근 <span class="tag now">현재 코드 있음</span><b id="mNone"></b></div>
+ <div class="metric">근무 중 <span class="tag now">현재 코드 있음</span><b id="mWork"></b></div><div class="metric">확인필요 <span class="tag now">현재 코드 있음</span><b id="mReview"></b></div>
+</div>
+<div class="cols">
+<section class="panel"><h2>확인필요 대기함 <span id="inboxN" class="badge info"></span> <span class="tag now">현재 코드 있음</span></h2>
+<p class="muted">최근 7일(10-22~10-28) 확인필요 기록. 사유: 위치 미확인 · 퇴근 누락 · 좌표 미설정 지점. 위치판정과 승인 상태는 따로 봅니다.</p>
+<div id="inbox"></div></section>
+<section class="panel"><h2>정정 요청 <span id="corrN" class="badge"></span> <span class="tag new">신규 — API·화면 없음</span></h2>
+<p class="muted">직원 앱 '내 기록'에서 보낸 요청입니다. 반려에는 사유(5자 이상)가 필요합니다.</p>
+<div id="corr"></div></section>
+</div>
+<section class="panel"><h2>오늘 직원별 기록 <span class="tag now">현재 코드 있음</span></h2>
+<table class="desk"><thead><tr><th>직원</th><th>지점</th><th>출근</th><th>퇴근</th><th>위치판정</th><th>상태</th></tr></thead><tbody id="todayRows"></tbody></table>
+<div class="cards mob" id="todayCards"></div></section>
+<section class="panel"><h2>기간 마감 <span class="tag new">신규 — API·화면 없음</span></h2>
+<p>10월(10-01~10-31) 기록을 잠그고 급여 반영 전 확인을 끝냅니다. 미해결 건이 있어도 마감할 수 있지만, 확인 체크가 필요합니다.</p>
+<div class="acts"><button type="button" id="closeBtn" class="primary">10월 기간 마감</button><a class="linkbtn" href="obys-attendance-admin-stats.html">급여 반영 전 확인 요약 보기</a></div>
+<p id="closeState" class="muted">상태: 미마감</p></section>
+</div>
+<dialog id="rejDlg"><h2>정정 요청 반려</h2><p id="rejTitle"></p><label>반려 사유(직원에게 그대로 보입니다)<textarea id="rejReason"></textarea></label><p id="rejErr" class="err-text" role="alert"></p>
+<div class="acts"><button type="button" id="rejCancel">취소</button><button type="button" id="rejOk" class="primary">반려</button></div></dialog>
+<dialog id="closeDlg"><h2>10월 기간 마감</h2><p id="closeTxt"></p>
+<label class="check"><input type="checkbox" id="closeCk">미해결 건을 확인했고, 마감 후에는 정정 승인이 잠긴다는 것을 이해했습니다.</label>
+<div class="acts"><button type="button" id="closeCancel">취소</button><button type="button" id="closeOk" class="primary" disabled>마감</button></div></dialog>
+<section id="stateBox" class="panel" hidden aria-live="polite"></section>
+<p id="toast" role="status"></p>
+<section class="scenario" aria-label="검토용 상태 전환">
+<label>검토 상태(목업 전용)<select id="scenario">
+<option value="default">기본</option><option value="loading">불러오는 중</option><option value="empty">데이터 없음</option>
+<option value="error">조회 실패</option><option value="permission">권한 없음</option><option value="offline">오프라인</option>
+<option value="session-expired">세션 만료 → 로그인 화면으로 이동</option></select></label>
+<p class="muted">세션 만료는 안내 화면 없이 로그인 화면으로 즉시 이동하고, 로그인 후 이 화면으로 돌아옵니다.</p>
+</section>
+<footer class="legendbox"><b>표기</b> <span class="tag now">현재 코드 있음</span> 현재 저장소에 화면·API 가 있는 요소 · <span class="tag new">신규 — API·화면 없음</span> 승인 후 설계할 요소 · <span class="tag policy">정책 미정 — 설정 필요</span> 결정하지 않은 기준. 모든 이름·주소·좌표는 가상 데이터이며 외부 요청이 없습니다.</footer>
+</main></div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(msg){const t=$('toast');t.textContent=msg;}
+const FILE=location.pathname.split('/').pop();
+function setupScenario(texts){
+ const sel=$('scenario'),live=$('live'),box=$('stateBox');
+ sel.addEventListener('change',()=>{
+  const v=sel.value;
+  if(v==='session-expired'){location.href='login.html?return='+encodeURIComponent(FILE+location.search);return;}
+  live.hidden=v!=='default';box.hidden=v==='default';
+  if(v==='default'){box.innerHTML='';return;}
+  const t=texts[v];
+  box.className='panel state state-'+v;
+  box.innerHTML=(v==='loading'?'<div class="skel"></div><div class="skel"></div><div class="skel short"></div>':'')+
+   '<h2>'+esc(t[0])+'</h2><p>'+esc(t[1])+'</p><div class="acts"><button type="button" id="recover" class="primary">'+esc(t[2]||'다시 시도')+'</button></div>';
+  $('recover').onclick=()=>{sel.value='default';sel.dispatchEvent(new Event('change'));};
+ });
+}
+// ---- 가상 데이터(virtual-v3). 실명·실주소 없음. 기준일 2026-10-28(수).
+const TODAY='2026-10-28';
+const BRANCHES=[
+ {id:'b1',name:'샘플 1호점',addr:'가상시 샘플구 예시로 12',lat:37.500101,lng:127.000101,radius:50},
+ {id:'b2',name:'샘플 2호점',addr:'가상시 샘플구 시범대로 340',lat:37.500202,lng:127.000202,radius:40},
+ {id:'b3',name:'샘플 3호점',addr:'',lat:null,lng:null,radius:null},
+ {id:'b4',name:'샘플 4호점',addr:'',lat:null,lng:null,radius:null},
+ {id:'b5',name:'샘플 5호점',addr:'',lat:null,lng:null,radius:null}];
+const BR=Object.fromEntries(BRANCHES.map(b=>[b.id,b]));
+const EMPS=[
+ {id:'A',name:'샘플 직원 A',br:'b1',days:[1,2,3,4,5]},{id:'B',name:'샘플 직원 B',br:'b1',days:[1,2,3,4,5]},
+ {id:'C',name:'샘플 직원 C',br:'b1',days:[1,2,3,4,5]},{id:'D',name:'샘플 직원 D',br:'b2',days:[1,2,3,4,5]},
+ {id:'E',name:'샘플 직원 E',br:'b2',days:[1,2,3,4,5]},{id:'F',name:'샘플 직원 F',br:'b3',days:[2,3,4,5,6]},
+ {id:'G',name:'샘플 직원 G',br:'b4',days:[2,3,4,5,6]},{id:'H',name:'샘플 직원 H',br:'b5',days:[1,3,5]}];
+const EMP=Object.fromEntries(EMPS.map(e=>[e.id,e]));
+const pad=n=>String(n).padStart(2,'0');
+const ymd=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const hm=m=>pad(Math.floor(m/60))+':'+pad(m%60);
+const dur=m=>Math.floor(m/60)+'시간 '+(m%60)+'분';
+const mins=s=>{const[a,b]=s.split(':');return +a*60+ +b;};
+// 확정 사례(정정 요청과 오늘 현황이 같은 기록을 가리키도록 고정)
+const OVERRIDE={
+ 'A|2026-10-27':{kind:'missing'},'D|2026-10-23':{kind:'late',in:'09:24'},'B|2026-10-20':{kind:'missing',corrected:'18:00'},
+ 'C|2026-10-15':{kind:'early',out:'16:30'},'A|2026-10-28':{kind:'working',in:'08:58'},'B|2026-10-28':{kind:'working',in:'08:51'},
+ 'C|2026-10-28':{kind:'working',in:'09:12',late:true},'D|2026-10-28':{kind:'working',in:'08:55'},
+ 'E|2026-10-28':{kind:'working',in:'09:03',geo:'unknown',reason:'위치 미확인'},'F|2026-10-28':{kind:'none'},
+ 'G|2026-10-28':{kind:'none'},'H|2026-10-28':{kind:'working',in:'09:20',geo:'unknown',reason:'좌표 미설정 지점'}};
+function record(emp,date){
+ const e=EMP[emp],d=new Date(date+'T00:00:00');
+ if(date>TODAY||!e.days.includes(d.getDay()))return {emp,date,kind:'off'};
+ const o=OVERRIDE[emp+'|'+date]||{};
+ const doy=Math.floor((d-new Date(d.getFullYear(),0,1))/864e5);
+ const i=EMPS.indexOf(e),h=(i*31+doy*17)%29;
+ let kind=o.kind||(h===0?'late':h===1?'missing':h===2?'review':h===3?'early':h===4?'absent':'ok');
+ if(kind==='none'||kind==='absent')return {emp,date,kind,br:e.br};
+ const coord=!!BR[e.br].lat;
+ let inM=o.in?mins(o.in):(kind==='late'?9*60+11+(h%9):8*60+48+(h%11));
+ let outM=kind==='missing'||kind==='working'?null:(o.out?mins(o.out):kind==='early'?16*60+35+(h%7):18*60+(h%9));
+ let geo=o.geo||(coord?(kind==='review'?'unknown':'inside'):'unknown');
+ const recent=date>='2026-10-26';
+ let reason=o.reason||(kind==='missing'?'퇴근 누락':kind==='review'?'위치 미확인':(!coord&&recent)?'좌표 미설정 지점':'');
+ if(o.corrected){outM=mins(o.corrected);reason='';}
+ const pending=!!reason;
+ const brk=outM?60:0;
+ return {emp,date,kind,br:e.br,in:hm(inM),out:outM==null?null:hm(outM),brk,geo,status:pending?'pending':'approved',reason,
+  late:kind==='late'||!!o.late,early:kind==='early',missing:kind==='missing'&&!o.corrected,review:pending,
+  worked:outM==null?null:outM-inM-brk,corrected:o.corrected||null};
+}
+function daysBetween(from,to){const r=[];for(let d=new Date(from+'T00:00:00');ymd(d)<=to;d.setDate(d.getDate()+1))r.push(ymd(d));return r;}
+const CORRECTIONS=[
+ {id:'c1',emp:'A',date:'2026-10-27',type:'퇴근 누락',ask:'퇴근 18:02 추가',why:'퇴근 버튼을 누르지 못하고 퇴근했습니다.',state:'pending'},
+ {id:'c2',emp:'D',date:'2026-10-23',type:'출근 시각',ask:'출근 09:24 → 08:58',why:'매장 앞에서 위치 확인이 늦어졌습니다.',state:'pending'},
+ {id:'c3',emp:'B',date:'2026-10-20',type:'퇴근 누락',ask:'퇴근 18:00 추가',why:'마감 후 휴대폰 배터리가 꺼졌습니다.',state:'approved',by:'샘플 관리자',at:'10-21 10:12'},
+ {id:'c4',emp:'C',date:'2026-10-15',type:'퇴근 시각',ask:'퇴근 16:30 → 18:00',why:'재고 정리로 늦게 퇴근했습니다.',state:'rejected',by:'샘플 관리자',at:'10-16 09:40',note:'해당 일 재고 작업 일정이 없어 점장 확인 후 다시 요청해 주세요.'}];
+function summarize(emp,from,to){
+ const s={days:0,planned:0,worked:0,late:0,early:0,missing:0,review:0,absent:0,corr:CORRECTIONS.filter(c=>c.emp===emp&&c.date>=from&&c.date<=to).length};
+ for(const date of daysBetween(from,to)){const r=record(emp,date);if(r.kind==='off')continue;s.planned++;
+  if(r.kind==='absent'||r.kind==='none'){s.absent++;continue;}
+  s.days++;s.worked+=r.worked||0;if(r.late)s.late++;if(r.early)s.early++;if(r.missing)s.missing++;if(r.review)s.review++;}
+ return s;
+}
+
+setupScenario({"loading": ["근태 정보를 불러오는 중입니다", "잠시만 기다려 주세요. 3초 넘게 걸리면 다시 시도 버튼을 누르세요.", "다시 시도"], "error": ["근태 정보를 불러오지 못했습니다", "서버가 응답하지 않았습니다(가상 오류). 입력 중인 내용은 그대로 둡니다. 다시 시도하거나 잠시 후 열어 주세요.", "다시 시도"], "permission": ["근태 관리 권한이 없습니다", "이 화면은 회사 소유자·관리자만 볼 수 있습니다. 권한이 필요하면 소유자에게 관리자 권한을 요청하세요.", "권한 다시 확인"], "offline": ["인터넷 연결이 끊겼습니다", "연결이 돌아오면 다시 불러옵니다. 마지막으로 불러온 시각: 10-28 12:14(가상).", "연결 확인 후 다시 시도"], "empty": ["오늘 근태 기록이 없습니다", "직원이 출근 버튼을 누르면 여기에 나타납니다. 링크를 아직 공유하지 않았다면 근태 시작하기 ②단계를 확인하세요.", "다시 불러오기"]});
+
+const BADGE={ok:['정상','ok'],late:['지각','warn'],early:['조퇴','warn'],missing:['퇴근 누락','err'],review:['확인필요','info'],absent:['결근','err'],none:['미출근','gray'],working:['근무 중','info'],off:['휴무','gray']};
+function cellKind(r){if(r.kind==='off')return 'off';if(r.kind==='none'||r.kind==='absent')return r.kind==='none'?'none':'absent';
+ if(r.missing)return 'missing';if(r.review)return 'review';if(r.kind==='working')return 'working';if(r.late)return 'late';if(r.early)return 'early';return 'ok';}
+const badge=k=>'<span class="badge '+({warn:'',ok:'ok',err:'err',info:'info',gray:'gray'}[BADGE[k][1]])+'">'+BADGE[k][0]+'</span>';
+const geoText=r=>!r.in?'—':r.geo==='inside'?'반경 안':r.geo==='outside'?'반경 밖':'판정 불가';
+function bars(el,data,label){
+ const W=640,row=36,H=data.length*row+8,max=Math.max(1,...data.map(d=>d.value));
+ el.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" width="100%" role="img" aria-label="'+esc(label)+'">'+data.map((d,i)=>{
+  const w=Math.max(2,Math.round((W-250)*d.value/max));
+  return '<text x="0" y="'+(i*row+23)+'" font-size="14" fill="#4b5565">'+esc(d.label)+'</text><rect x="120" y="'+(i*row+8)+'" width="'+w+'" height="22" rx="4" fill="#2f6fed"/><text x="'+(128+w)+'" y="'+(i*row+24)+'" font-size="14" fill="#172033">'+esc(d.text)+'</text>';
+ }).join('')+'</svg>';
+}
+
+const today=EMPS.map(e=>record(e.id,TODAY));
+const inCnt=today.filter(r=>r.in).length;
+$('mIn').textContent=inCnt+'명 / '+EMPS.length;$('mNone').textContent=today.filter(r=>r.kind==='none').length+'명';
+$('mWork').textContent=today.filter(r=>r.kind==='working').length+'명';
+let inbox=[];for(const d of daysBetween('2026-10-22',TODAY))for(const e of EMPS){const r=record(e.id,d);if(r.review)inbox.push(r);}
+inbox.sort((a,b)=>b.date.localeCompare(a.date));
+function renderInbox(){
+ $('mReview').textContent=inbox.length+'건';$('inboxN').textContent=inbox.length+'건';
+ $('inbox').innerHTML=inbox.map(r=>'<div class="item" data-rec="'+r.emp+'|'+r.date+'"><p><b>'+esc(EMP[r.emp].name)+'</b> · '+r.date.slice(5)+' · '+esc(BR[r.br].name)+' <span class="badge '+(r.reason==='퇴근 누락'?'err':'info')+'">'+esc(r.reason)+'</span></p><p class="muted">출근 '+r.in+' · 퇴근 '+(r.out||'없음')+' · 위치 '+geoText(r)+'</p><div class="acts"><button type="button" data-ok="'+r.emp+'|'+r.date+'">확인 완료</button><a class="linkbtn" href="obys-attendance-admin-employee-calendar.html?emp='+r.emp+'&date='+r.date+'">달력에서 보기</a></div></div>').join('')||'<p class="banner ok">확인필요 기록이 없습니다.</p>';
+}
+renderInbox();
+$('inbox').onclick=e=>{const k=e.target.dataset.ok;if(!k)return;inbox=inbox.filter(r=>r.emp+'|'+r.date!==k);renderInbox();toast('확인 완료 처리(목업 · 운영 반영 없음)');};
+const corr=CORRECTIONS.map(c=>({...c}));
+function renderCorr(){
+ $('corrN').textContent='대기 '+corr.filter(c=>c.state==='pending').length+'건';
+ $('corr').innerHTML=corr.map(c=>'<div class="item" data-corr="'+c.id+'"><p><b>'+esc(EMP[c.emp].name)+'</b> · '+c.date.slice(5)+' · '+esc(c.type)+' '+(c.state==='pending'?'<span class="badge">대기</span>':c.state==='approved'?'<span class="badge ok">승인됨</span>':'<span class="badge err">반려됨</span>')+'</p><p>요청: '+esc(c.ask)+'</p><p class="muted">사유: '+esc(c.why)+'</p>'+
+ (c.state==='pending'?'<div class="acts"><button type="button" class="primary" data-ap="'+c.id+'">승인</button><button type="button" class="danger" data-rj="'+c.id+'">반려</button></div>':'<p class="muted">'+esc(c.by||'샘플 관리자')+' · '+esc(c.at||'방금')+(c.note?' · 반려 사유: '+esc(c.note):'')+'</p>')+'</div>').join('');
+}
+renderCorr();
+let rejId=null;
+$('corr').onclick=e=>{const ap=e.target.dataset.ap,rj=e.target.dataset.rj;
+ if(ap){const c=corr.find(x=>x.id===ap);c.state='approved';c.at='10-28 12:15';inbox=inbox.filter(r=>!(r.emp===c.emp&&r.date===c.date));renderCorr();renderInbox();toast('정정 승인 완료 — 해당 기록이 대기함에서 빠집니다(목업)');}
+ if(rj){rejId=rj;const c=corr.find(x=>x.id===rj);$('rejTitle').textContent=EMP[c.emp].name+' · '+c.date+' · '+c.ask;$('rejReason').value='';$('rejErr').textContent='';$('rejDlg').showModal();}};
+$('rejCancel').onclick=()=>$('rejDlg').close();
+$('rejOk').onclick=()=>{const v=$('rejReason').value.trim();if(v.length<5){$('rejErr').textContent='반려 사유를 5자 이상 입력하세요.';return;}
+ const c=corr.find(x=>x.id===rejId);c.state='rejected';c.note=v;c.at='10-28 12:16';$('rejDlg').close();renderCorr();toast('반려했습니다 — 직원 앱 내 기록에 사유가 보입니다(목업)');};
+function renderToday(){
+ $('todayRows').innerHTML=today.map(r=>'<tr><td>'+esc(EMP[r.emp].name)+'</td><td>'+esc(BR[EMP[r.emp].br].name)+'</td><td>'+(r.in||'—')+'</td><td>'+(r.out||'—')+'</td><td>'+geoText(r)+'</td><td>'+badge(cellKind(r))+(r.reason?' <small>'+esc(r.reason)+'</small>':'')+'</td></tr>').join('');
+ $('todayCards').innerHTML=today.map(r=>'<div class="ecard"><b>'+esc(EMP[r.emp].name)+'</b> '+badge(cellKind(r))+'<p class="muted">'+esc(BR[EMP[r.emp].br].name)+' · 출근 '+(r.in||'—')+' · 위치 '+geoText(r)+'</p></div>').join('');
+}
+renderToday();
+$('closeBtn').onclick=()=>{const p=corr.filter(c=>c.state==='pending').length;$('closeTxt').textContent='미해결: 확인필요 '+inbox.length+'건 · 정정 대기 '+p+'건. 마감하면 10월 기록이 잠기고 급여 반영 대상이 됩니다.';$('closeCk').checked=false;$('closeOk').disabled=true;$('closeDlg').showModal();};
+$('closeCk').onchange=()=>{$('closeOk').disabled=!$('closeCk').checked;};
+$('closeCancel').onclick=()=>$('closeDlg').close();
+$('closeOk').onclick=()=>{$('closeDlg').close();$('closeState').textContent='상태: 10월 마감됨(목업 · 운영 반영 없음)';toast('10월 기간 마감 완료(목업)');};
+</script></body></html>

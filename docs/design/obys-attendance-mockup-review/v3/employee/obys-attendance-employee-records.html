@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>내 기록 · 오비서 직원 근태 앱 v3 목업</title><style>:root{font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;color:#172033;background:#e9edf3;font-size:15px}
+*{box-sizing:border-box}body{margin:0;overflow-wrap:anywhere;word-break:keep-all}
+.app{max-width:480px;margin:0 auto;min-height:100vh;background:#f6f8fb;position:relative;display:flex;flex-direction:column}.app>main{flex:1}
+header.bar{background:#172033;color:#fff;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;gap:8px}header.bar b{font-size:17px}header.bar small{color:#b5c2d8}
+main{padding:14px 16px}
+button,input,select,textarea,.linkbtn{font:inherit;min-height:44px;border:1px solid #dce3ed;border-radius:10px;background:#fff;padding:8px 12px;max-width:100%;color:#172033}
+input,select,textarea{width:100%;min-width:0}textarea{min-height:96px}
+button,.linkbtn{cursor:pointer;color:#245fd0;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;text-align:center;font-weight:700;min-width:44px}
+button:disabled{opacity:.5}:focus-visible{outline:3px solid #8bb4ff;outline-offset:1px}
+.primary{background:#2f6fed!important;color:#fff!important;border-color:#2f6fed!important}.ghost{background:transparent}
+.big{width:100%;min-height:72px;font-size:22px;border-radius:16px}
+.card{background:#fff;border:1px solid #e0e6ef;border-radius:14px;padding:16px;margin-top:12px}
+h1{font-size:21px;margin:4px 0}h2{font-size:17px;margin:0 0 8px}p{line-height:1.6;margin:6px 0}
+.muted,small{color:#5d6a80}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700;line-height:1.4;vertical-align:middle;white-space:nowrap}
+.tag.now{background:#e5f3ea;color:#176b44}.tag.new{background:#efe7fb;color:#5b2aa6}
+.badge{display:inline-block;border-radius:30px;padding:3px 9px;font-size:12px;font-weight:700;background:#fff3df;color:#8a5a00;white-space:nowrap}
+.badge.ok{background:#e9f7ef;color:#17734d}.badge.err{background:#fdeeee;color:#b42318}.badge.info{background:#e8f0ff;color:#245fd0}.badge.gray{background:#eef0f4;color:#4b5565}
+.banner{padding:12px;border-radius:12px;border:1px solid;line-height:1.6;margin-top:12px}.banner.warn{background:#fff6e5;border-color:#eed8aa}.banner.ok{background:#e9f7ef;border-color:#bfe3cf}.banner.info{background:#eef4ff;border-color:#c9d8f6}.banner.err{background:#fdeeee;border-color:#f1c0bb}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.acts>*{flex:1 1 120px}
+label .tag{justify-self:start}label{display:grid;gap:6px;color:#4b5565;margin-top:8px}
+nav.tabs{position:sticky;bottom:0;width:100%;display:grid;grid-template-columns:repeat(4,1fr);background:#fff;border-top:1px solid #dce3ed;z-index:5}
+nav.tabs a{min-height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#5d6a80;text-decoration:none;font-size:12px;font-weight:600}nav.tabs a[aria-current=page]{color:#2f6fed}nav.tabs a span{font-size:18px}
+.hidden,[hidden]{display:none!important}#toast{min-height:22px;color:#245fd0;font-weight:700;margin-top:8px}
+.scenario{margin-top:20px;border-top:1px dashed #c9d1de;padding-top:12px}
+.state h2{margin-top:8px}.skel{height:18px;border-radius:6px;background:#e8ecf2;margin:10px 0}.skel.short{width:50%}
+.legendbox{border:1px dashed #b9c4d6;border-radius:12px;padding:10px 12px;margin-top:14px;font-size:13px;line-height:1.7;background:#fff}
+.err-text{color:#b42318;font-weight:700}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}.cal .dow{text-align:center;font-size:12px;color:#5d6a80;padding:4px 0}
+.cal button{min-height:52px;padding:2px;font-size:12px;flex-direction:column;border-radius:8px;min-width:0}.cal .blank{min-height:52px}
+.c-ok{background:#e9f7ef!important;color:#17734d!important}.c-late{background:#fff3df!important;color:#8a5a00!important}.c-missing{background:#fdeeee!important;color:#b42318!important}
+.c-review{background:#efe7fb!important;color:#5b2aa6!important}.c-off{background:#f1f3f6!important;color:#8a94a6!important}.c-working{background:#e8f0ff!important;color:#245fd0!important}.c-absent{background:#fdeeee!important;color:#b42318!important}.c-future{background:#fff!important;color:#b0b8c6!important}
+dialog{width:min(440px,calc(100% - 24px));border:1px solid #dce3ed;border-radius:14px;padding:18px}dialog::backdrop{background:#17203388}
+@media(min-width:900px){body{padding:24px 0}.app{border-radius:20px;overflow:hidden;box-shadow:0 10px 40px #17203322;min-height:auto}}
+</style></head>
+<body><div class="app"><header class="bar"><div><b>내 기록</b><br><small>샘플 직원 A · 샘플 1호점</small></div><a class="linkbtn ghost" style="color:#dbe4f5;border-color:#3d4b66" href="../index.html">목업 목록</a></header>
+<main>
+<div id="live">
+<div id="notice"></div>
+<section class="card"><div class="grid3" role="tablist"><button type="button" id="tabW" class="primary" role="tab">이번 주</button><button type="button" id="tabM" role="tab">이번 달</button><button type="button" id="tabC" role="tab">달력</button></div>
+<p id="sum" class="muted"></p><div id="list"></div><div id="calBox" hidden><h2 id="calTitle">2026년 10월</h2><div class="cal" id="cal"></div><div id="dayInfo" class="banner info" hidden></div></div></section>
+<section class="card" id="correction"><h2>정정 요청 <span class="tag new">신규 — API·화면 없음</span></h2>
+<div id="fm" hidden><label>날짜<input id="fmDate" type="date" value="2026-10-27"></label>
+<label>요청 내용<select id="fmType"><option>퇴근 시각 추가</option><option>출근 시각 수정</option><option>퇴근 시각 수정</option></select></label>
+<label>시각<input id="fmTime" type="time" value="18:02"></label><label>사유(5자 이상)<textarea id="fmReason"></textarea></label>
+<p id="fmErr" class="err-text" role="alert"></p><div class="acts"><button type="button" id="fmCancel">취소</button><button type="button" id="fmOk" class="primary">요청 보내기</button></div></div>
+<div id="fmClosed"><p class="muted">퇴근을 못 눌렀거나 시각이 틀렸으면 관리자에게 정정을 요청합니다.</p><button type="button" id="openFm">정정 요청 쓰기</button></div>
+<div id="demoRes" hidden class="acts"><button type="button" id="resOk">관리자 승인 결과 보기(목업)</button><button type="button" id="resNo">관리자 반려 결과 보기(목업)</button></div></section>
+</div>
+<section id="stateBox" class="card" hidden aria-live="polite"></section>
+<p id="toast" role="status"></p>
+<section class="scenario" aria-label="검토용 상태 전환">
+<label>검토 상태(목업 전용)<select id="scenario">
+<option value="default">기본</option><option value="loading">불러오는 중</option><option value="empty">데이터 없음</option>
+<option value="error">조회 실패</option><option value="permission">권한 없음</option><option value="offline">오프라인</option>
+<option value="session-expired">세션 만료 → 로그인 화면으로 이동</option></select></label>
+<p class="muted">세션 만료는 안내 화면 없이 로그인 화면으로 즉시 이동하고, 로그인 후 이 화면으로 돌아옵니다.</p>
+</section>
+<footer class="legendbox"><span class="tag now">현재 코드 있음</span> clock.html 에 있는 기능 · <span class="tag new">신규 — API·화면 없음</span> 승인 후 설계. 가상 데이터, 외부 요청 없음.</footer>
+</main><nav class="tabs" aria-label="직원 앱 메뉴"><a href="obys-attendance-employee-home.html"><span aria-hidden="true">⌂</span>홈</a><a href="obys-attendance-employee-clock.html"><span aria-hidden="true">◷</span>출퇴근</a><a href="obys-attendance-employee-records.html" aria-current=page><span aria-hidden="true">▦</span>내 기록</a><a href="obys-attendance-employee-home.html#alerts"><span aria-hidden="true">✉</span>알림</a></nav></div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(msg){const t=$('toast');t.textContent=msg;}
+const FILE=location.pathname.split('/').pop();
+function setupScenario(texts){
+ const sel=$('scenario'),live=$('live'),box=$('stateBox');
+ sel.addEventListener('change',()=>{
+  const v=sel.value;
+  if(v==='session-expired'){location.href='login.html?return='+encodeURIComponent(FILE+location.search);return;}
+  live.hidden=v!=='default';box.hidden=v==='default';
+  if(v==='default'){box.innerHTML='';return;}
+  const t=texts[v];
+  box.className='panel state state-'+v;
+  box.innerHTML=(v==='loading'?'<div class="skel"></div><div class="skel"></div><div class="skel short"></div>':'')+
+   '<h2>'+esc(t[0])+'</h2><p>'+esc(t[1])+'</p><div class="acts"><button type="button" id="recover" class="primary">'+esc(t[2]||'다시 시도')+'</button></div>';
+  $('recover').onclick=()=>{sel.value='default';sel.dispatchEvent(new Event('change'));};
+ });
+}
+// ---- 가상 데이터(virtual-v3). 실명·실주소 없음. 기준일 2026-10-28(수).
+const TODAY='2026-10-28';
+const BRANCHES=[
+ {id:'b1',name:'샘플 1호점',addr:'가상시 샘플구 예시로 12',lat:37.500101,lng:127.000101,radius:50},
+ {id:'b2',name:'샘플 2호점',addr:'가상시 샘플구 시범대로 340',lat:37.500202,lng:127.000202,radius:40},
+ {id:'b3',name:'샘플 3호점',addr:'',lat:null,lng:null,radius:null},
+ {id:'b4',name:'샘플 4호점',addr:'',lat:null,lng:null,radius:null},
+ {id:'b5',name:'샘플 5호점',addr:'',lat:null,lng:null,radius:null}];
+const BR=Object.fromEntries(BRANCHES.map(b=>[b.id,b]));
+const EMPS=[
+ {id:'A',name:'샘플 직원 A',br:'b1',days:[1,2,3,4,5]},{id:'B',name:'샘플 직원 B',br:'b1',days:[1,2,3,4,5]},
+ {id:'C',name:'샘플 직원 C',br:'b1',days:[1,2,3,4,5]},{id:'D',name:'샘플 직원 D',br:'b2',days:[1,2,3,4,5]},
+ {id:'E',name:'샘플 직원 E',br:'b2',days:[1,2,3,4,5]},{id:'F',name:'샘플 직원 F',br:'b3',days:[2,3,4,5,6]},
+ {id:'G',name:'샘플 직원 G',br:'b4',days:[2,3,4,5,6]},{id:'H',name:'샘플 직원 H',br:'b5',days:[1,3,5]}];
+const EMP=Object.fromEntries(EMPS.map(e=>[e.id,e]));
+const pad=n=>String(n).padStart(2,'0');
+const ymd=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const hm=m=>pad(Math.floor(m/60))+':'+pad(m%60);
+const dur=m=>Math.floor(m/60)+'시간 '+(m%60)+'분';
+const mins=s=>{const[a,b]=s.split(':');return +a*60+ +b;};
+// 확정 사례(정정 요청과 오늘 현황이 같은 기록을 가리키도록 고정)
+const OVERRIDE={
+ 'A|2026-10-27':{kind:'missing'},'D|2026-10-23':{kind:'late',in:'09:24'},'B|2026-10-20':{kind:'missing',corrected:'18:00'},
+ 'C|2026-10-15':{kind:'early',out:'16:30'},'A|2026-10-28':{kind:'working',in:'08:58'},'B|2026-10-28':{kind:'working',in:'08:51'},
+ 'C|2026-10-28':{kind:'working',in:'09:12',late:true},'D|2026-10-28':{kind:'working',in:'08:55'},
+ 'E|2026-10-28':{kind:'working',in:'09:03',geo:'unknown',reason:'위치 미확인'},'F|2026-10-28':{kind:'none'},
+ 'G|2026-10-28':{kind:'none'},'H|2026-10-28':{kind:'working',in:'09:20',geo:'unknown',reason:'좌표 미설정 지점'}};
+function record(emp,date){
+ const e=EMP[emp],d=new Date(date+'T00:00:00');
+ if(date>TODAY||!e.days.includes(d.getDay()))return {emp,date,kind:'off'};
+ const o=OVERRIDE[emp+'|'+date]||{};
+ const doy=Math.floor((d-new Date(d.getFullYear(),0,1))/864e5);
+ const i=EMPS.indexOf(e),h=(i*31+doy*17)%29;
+ let kind=o.kind||(h===0?'late':h===1?'missing':h===2?'review':h===3?'early':h===4?'absent':'ok');
+ if(kind==='none'||kind==='absent')return {emp,date,kind,br:e.br};
+ const coord=!!BR[e.br].lat;
+ let inM=o.in?mins(o.in):(kind==='late'?9*60+11+(h%9):8*60+48+(h%11));
+ let outM=kind==='missing'||kind==='working'?null:(o.out?mins(o.out):kind==='early'?16*60+35+(h%7):18*60+(h%9));
+ let geo=o.geo||(coord?(kind==='review'?'unknown':'inside'):'unknown');
+ const recent=date>='2026-10-26';
+ let reason=o.reason||(kind==='missing'?'퇴근 누락':kind==='review'?'위치 미확인':(!coord&&recent)?'좌표 미설정 지점':'');
+ if(o.corrected){outM=mins(o.corrected);reason='';}
+ const pending=!!reason;
+ const brk=outM?60:0;
+ return {emp,date,kind,br:e.br,in:hm(inM),out:outM==null?null:hm(outM),brk,geo,status:pending?'pending':'approved',reason,
+  late:kind==='late'||!!o.late,early:kind==='early',missing:kind==='missing'&&!o.corrected,review:pending,
+  worked:outM==null?null:outM-inM-brk,corrected:o.corrected||null};
+}
+function daysBetween(from,to){const r=[];for(let d=new Date(from+'T00:00:00');ymd(d)<=to;d.setDate(d.getDate()+1))r.push(ymd(d));return r;}
+const CORRECTIONS=[
+ {id:'c1',emp:'A',date:'2026-10-27',type:'퇴근 누락',ask:'퇴근 18:02 추가',why:'퇴근 버튼을 누르지 못하고 퇴근했습니다.',state:'pending'},
+ {id:'c2',emp:'D',date:'2026-10-23',type:'출근 시각',ask:'출근 09:24 → 08:58',why:'매장 앞에서 위치 확인이 늦어졌습니다.',state:'pending'},
+ {id:'c3',emp:'B',date:'2026-10-20',type:'퇴근 누락',ask:'퇴근 18:00 추가',why:'마감 후 휴대폰 배터리가 꺼졌습니다.',state:'approved',by:'샘플 관리자',at:'10-21 10:12'},
+ {id:'c4',emp:'C',date:'2026-10-15',type:'퇴근 시각',ask:'퇴근 16:30 → 18:00',why:'재고 정리로 늦게 퇴근했습니다.',state:'rejected',by:'샘플 관리자',at:'10-16 09:40',note:'해당 일 재고 작업 일정이 없어 점장 확인 후 다시 요청해 주세요.'}];
+function summarize(emp,from,to){
+ const s={days:0,planned:0,worked:0,late:0,early:0,missing:0,review:0,absent:0,corr:CORRECTIONS.filter(c=>c.emp===emp&&c.date>=from&&c.date<=to).length};
+ for(const date of daysBetween(from,to)){const r=record(emp,date);if(r.kind==='off')continue;s.planned++;
+  if(r.kind==='absent'||r.kind==='none'){s.absent++;continue;}
+  s.days++;s.worked+=r.worked||0;if(r.late)s.late++;if(r.early)s.early++;if(r.missing)s.missing++;if(r.review)s.review++;}
+ return s;
+}
+
+setupScenario({"loading": ["불러오는 중입니다", "오늘 근무 정보를 가져오고 있습니다. 오래 걸리면 다시 시도를 누르세요.", "다시 시도"], "error": ["정보를 불러오지 못했습니다", "서버가 응답하지 않았습니다(가상 오류). 출퇴근 버튼을 이미 눌렀다면 기록은 이 기기에 보관했다가 다시 보냅니다.", "다시 시도"], "permission": ["직원으로 연결되어 있지 않습니다", "이 계정은 회사 직원 명단과 연결되어 있지 않습니다. 관리자에게 직원 초대 링크를 다시 요청하세요.", "연결 다시 확인"], "offline": ["인터넷 연결이 끊겼습니다", "연결되면 자동으로 다시 시도합니다. 출퇴근 버튼은 연결된 뒤 다시 눌러 주세요.", "연결 확인 후 다시 시도"], "empty": ["아직 근무 기록이 없습니다", "첫 출근을 하면 여기에 날짜별 기록과 주간·월간 근무시간이 쌓입니다.", "출퇴근 화면으로 가기"]});
+
+let tab='W',req=null;
+const LBL={ok:'정상',late:'지각',early:'조퇴',missing:'누락',review:'확인필요',absent:'결근',off:'휴무',working:'근무 중',none:'미출근',future:'예정'};
+function kind(r){if(r.kind==='off')return 'off';if(!r.in)return 'absent';if(r.missing&&!(req&&req.state==='approved'&&r.date===req.date))return 'missing';if(r.kind==='working')return 'working';if(r.review)return 'review';if(r.late)return 'late';if(r.early)return 'early';return 'ok';}
+function rec(d){const r=record('A',d);if(req&&req.state==='approved'&&d===req.date&&!r.out){return {...r,out:req.time,worked:mins(req.time)-mins(r.in)-60,brk:60,missing:false,review:false,corrected:req.time};}return r;}
+function notice(){
+ let h='';
+ const miss=daysBetween('2026-10-01',TODAY).filter(d=>kind(rec(d))==='missing');
+ if(!req)h='<div class="banner warn"><b>이번 달 퇴근 기록이 없는 날이 '+miss.length+'건 있습니다.</b> '+miss.map(d=>d.slice(5)).join(', ')+' — 이날은 근무시간이 계산되지 않습니다. 가장 최근 날짜(10-27)부터 요청하세요.<div class="acts"><button type="button" id="nGo" class="primary">정정 요청하기</button></div></div>';
+ else if(req.state==='pending')h='<div class="banner info"><b>정정 요청 처리 대기</b> · '+req.date+' '+esc(req.type)+' '+req.time+'. 관리자가 확인하면 알림으로 알려 드립니다.</div>';
+ else if(req.state==='approved')h='<div class="banner ok"><b>정정 요청이 승인되었습니다.</b> '+req.date+' 퇴근 '+req.time+' 반영 · 이날 근무 '+dur(rec(req.date).worked)+'.</div>';
+ else h='<div class="banner err"><b>정정 요청이 반려되었습니다.</b> 사유: 퇴근 시각을 확인할 수 없습니다. 점장 확인 후 다시 요청해 주세요.<div class="acts"><button type="button" id="again" class="primary">다시 요청</button></div></div>';
+ $('notice').innerHTML=h;
+ if($('nGo'))$('nGo').onclick=openFm;if($('again'))$('again').onclick=()=>{req=null;openFm();};
+ $('demoRes').hidden=!(req&&req.state==='pending');
+}
+function list(){
+ const [from,to]=tab==='W'?['2026-10-26',TODAY]:['2026-10-01',TODAY];
+ $('list').hidden=tab==='C';$('calBox').hidden=tab!=='C';['W','M','C'].forEach(k=>$('tab'+k).classList.toggle('primary',k===tab));
+ const days=daysBetween(from,to).map(rec).filter(r=>r.kind!=='off').reverse();
+ const tot=days.reduce((a,r)=>a+(r.worked||0),0);
+ $('sum').textContent=(tab==='W'?'이번 주(10-26~)':tab==='M'?'이번 달(10-01~)':'10월 달력')+' · 근무 '+dur(tot)+(days.some(r=>kind(r)==='missing')?' · 퇴근 누락은 합계 제외':'');
+ $('list').innerHTML=days.map(r=>{const k=kind(r);return '<div class="card" style="margin-top:8px" data-date="'+r.date+'"><b>'+r.date.slice(5)+'</b> <span class="badge '+(k==='ok'?'ok':k==='missing'||k==='absent'?'err':k==='working'||k==='review'?'info':'')+'">'+LBL[k]+'</span>'+(r.corrected?' <small>정정 반영</small>':'')+(req&&req.state==='pending'&&req.date===r.date?' <span class="badge">정정 요청 처리 대기</span>':'')+'<p class="muted">'+(r.in?'출근 '+r.in+' · 퇴근 '+(r.out||'없음')+' · '+(r.worked==null?'근무시간 미산출':dur(r.worked)):'출근 기록 없음')+'</p></div>';}).join('');
+ let h=['일','월','화','수','목','금','토'].map(d=>'<div class="dow">'+d+'</div>').join('')+'<div class="blank"></div>'.repeat(new Date('2026-10-01T00:00:00').getDay());
+ for(let d=1;d<=31;d++){const date='2026-10-'+String(d).padStart(2,'0');const k=date>TODAY?(record('A',date).kind==='off'?'off':'future'):kind(rec(date));h+='<button type="button" class="c-'+k+'" data-day="'+date+'"><b>'+d+'</b><span>'+LBL[k]+'</span></button>';}
+ $('cal').innerHTML=h;
+}
+$('cal').onclick=e=>{const b=e.target.closest('[data-day]');if(!b)return;const r=rec(b.dataset.day);$('dayInfo').hidden=false;$('dayInfo').innerHTML='<b>'+b.dataset.day+'</b> · '+LBL[b.dataset.day>TODAY?'future':kind(r)]+(r.in?' · 출근 '+r.in+' · 퇴근 '+(r.out||'없음'):'');};
+['W','M','C'].forEach(k=>$('tab'+k).onclick=()=>{tab=k;list();});
+function openFm(){$('fm').hidden=false;$('fmClosed').hidden=true;$('fmErr').textContent='';$('fmReason').value='';$('correction').scrollIntoView();}
+$('openFm').onclick=openFm;$('fmCancel').onclick=()=>{$('fm').hidden=true;$('fmClosed').hidden=false;};
+$('fmOk').onclick=()=>{if($('fmReason').value.trim().length<5){$('fmErr').textContent='사유를 5자 이상 입력하세요.';return;}
+ req={date:$('fmDate').value,type:$('fmType').value,time:$('fmTime').value,state:'pending'};$('fm').hidden=true;$('fmClosed').hidden=false;notice();list();toast('정정 요청을 보냈습니다(목업 · 운영 반영 없음)');};
+$('resOk').onclick=()=>{req.state='approved';notice();list();};
+$('resNo').onclick=()=>{req.state='rejected';notice();list();};
+notice();list();
+if(location.hash==='#correction')openFm();
+</script></body></html>

@@ -1,0 +1,382 @@
+{
+  "tool": "playwright-core",
+  "bundle": "obys-attendance-v3-employee",
+  "results": [
+    {
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 1000,
+      "passed": true,
+      "console_errors": [],
+      "network_requests": [],
+      "horizontal_overflow": [],
+      "small_targets_under_44px": [],
+      "capture_count": 31,
+      "captures": [
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "default",
+          "file": "home-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "working",
+          "file": "home-desktop-working.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "loading",
+          "file": "home-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "empty",
+          "file": "home-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "error",
+          "file": "home-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "permission",
+          "file": "home-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "offline",
+          "file": "home-desktop-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "default",
+          "file": "clock-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "consent",
+          "file": "clock-desktop-consent.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "denied",
+          "file": "clock-desktop-denied.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "coord-unset",
+          "file": "clock-desktop-coord-unset.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "permission-off",
+          "file": "clock-desktop-permission-off.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "working",
+          "file": "clock-desktop-working.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "break",
+          "file": "clock-desktop-break.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "done",
+          "file": "clock-desktop-done.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "loading",
+          "file": "clock-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "empty",
+          "file": "clock-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "error",
+          "file": "clock-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "permission",
+          "file": "clock-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "offline",
+          "file": "clock-desktop-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "default",
+          "file": "records-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "calendar",
+          "file": "records-desktop-calendar.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "missing-clock-out",
+          "file": "records-desktop-missing-clock-out.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-submitted",
+          "file": "records-desktop-correction-submitted.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-rejected",
+          "file": "records-desktop-correction-rejected.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-approved",
+          "file": "records-desktop-correction-approved.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "loading",
+          "file": "records-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "empty",
+          "file": "records-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "error",
+          "file": "records-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "permission",
+          "file": "records-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "offline",
+          "file": "records-desktop-offline.png"
+        }
+      ],
+      "checks": [
+        "E:status-card+big-button",
+        "E:shortcuts",
+        "E:bottom-tabs",
+        "E:alert->D-correction",
+        "home:five-states+session-redirect+tabs",
+        "C:consent",
+        "C:denied-saves-review",
+        "C:coord-unset",
+        "C:permission-off-recovery",
+        "C:working-break-done",
+        "clock:five-states+session-redirect+tabs",
+        "D:month-calendar",
+        "D:missing->request",
+        "D:reason-5",
+        "D:pending",
+        "D:rejected->again",
+        "D:approved-result",
+        "records:five-states+session-redirect+tabs"
+      ]
+    },
+    {
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "passed": true,
+      "console_errors": [],
+      "network_requests": [],
+      "horizontal_overflow": [],
+      "small_targets_under_44px": [],
+      "capture_count": 31,
+      "captures": [
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "default",
+          "file": "home-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "working",
+          "file": "home-mobile-working.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "loading",
+          "file": "home-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "empty",
+          "file": "home-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "error",
+          "file": "home-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "permission",
+          "file": "home-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-home",
+          "state": "offline",
+          "file": "home-mobile-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "default",
+          "file": "clock-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "consent",
+          "file": "clock-mobile-consent.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "denied",
+          "file": "clock-mobile-denied.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "coord-unset",
+          "file": "clock-mobile-coord-unset.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "permission-off",
+          "file": "clock-mobile-permission-off.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "working",
+          "file": "clock-mobile-working.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "break",
+          "file": "clock-mobile-break.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "done",
+          "file": "clock-mobile-done.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "loading",
+          "file": "clock-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "empty",
+          "file": "clock-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "error",
+          "file": "clock-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "permission",
+          "file": "clock-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "offline",
+          "file": "clock-mobile-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "default",
+          "file": "records-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "calendar",
+          "file": "records-mobile-calendar.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "missing-clock-out",
+          "file": "records-mobile-missing-clock-out.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-submitted",
+          "file": "records-mobile-correction-submitted.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-rejected",
+          "file": "records-mobile-correction-rejected.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "correction-approved",
+          "file": "records-mobile-correction-approved.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "loading",
+          "file": "records-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "empty",
+          "file": "records-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "error",
+          "file": "records-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "permission",
+          "file": "records-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "offline",
+          "file": "records-mobile-offline.png"
+        }
+      ],
+      "checks": [
+        "E:status-card+big-button",
+        "E:shortcuts",
+        "E:bottom-tabs",
+        "E:alert->D-correction",
+        "home:five-states+session-redirect+tabs",
+        "C:consent",
+        "C:denied-saves-review",
+        "C:coord-unset",
+        "C:permission-off-recovery",
+        "C:working-break-done",
+        "clock:five-states+session-redirect+tabs",
+        "D:month-calendar",
+        "D:missing->request",
+        "D:reason-5",
+        "D:pending",
+        "D:rejected->again",
+        "D:approved-result",
+        "records:five-states+session-redirect+tabs"
+      ]
+    }
+  ]
+}

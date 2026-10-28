@@ -1,0 +1,592 @@
+{
+  "tool": "playwright-core",
+  "bundle": "obys-attendance-v3-admin",
+  "results": [
+    {
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 1000,
+      "passed": true,
+      "console_errors": [],
+      "network_requests": [],
+      "horizontal_overflow": [],
+      "small_targets_under_44px": [],
+      "capture_count": 49,
+      "captures": [
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "default",
+          "file": "onboarding-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "checklist-progress",
+          "file": "onboarding-desktop-checklist-progress.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "loading",
+          "file": "onboarding-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "empty",
+          "file": "onboarding-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "error",
+          "file": "onboarding-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "permission",
+          "file": "onboarding-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "offline",
+          "file": "onboarding-desktop-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "default",
+          "file": "today-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "correction-reject",
+          "file": "today-desktop-correction-reject.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "period-close",
+          "file": "today-desktop-period-close.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "loading",
+          "file": "today-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "empty",
+          "file": "today-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "error",
+          "file": "today-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "permission",
+          "file": "today-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "offline",
+          "file": "today-desktop-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "default",
+          "file": "branches-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "address-candidates",
+          "file": "branches-desktop-address-candidates.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "radius-over-limit",
+          "file": "branches-desktop-radius-over-limit.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "saved",
+          "file": "branches-desktop-saved.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "address-required",
+          "file": "branches-desktop-address-required.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "no-result",
+          "file": "branches-desktop-no-result.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "api-fail-manual",
+          "file": "branches-desktop-api-fail-manual.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "loading",
+          "file": "branches-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "empty",
+          "file": "branches-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "error",
+          "file": "branches-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "permission",
+          "file": "branches-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "offline",
+          "file": "branches-desktop-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "default",
+          "file": "employees-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "filtered",
+          "file": "employees-desktop-filtered.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "date-range-error",
+          "file": "employees-desktop-date-range-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "loading",
+          "file": "employees-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "empty",
+          "file": "employees-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "error",
+          "file": "employees-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "permission",
+          "file": "employees-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "offline",
+          "file": "employees-desktop-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "default",
+          "file": "calendar-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "day-detail",
+          "file": "calendar-desktop-day-detail.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "loading",
+          "file": "calendar-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "empty",
+          "file": "calendar-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "error",
+          "file": "calendar-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "permission",
+          "file": "calendar-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "offline",
+          "file": "calendar-desktop-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "default",
+          "file": "stats-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "branch-week",
+          "file": "stats-desktop-branch-week.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "loading",
+          "file": "stats-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "empty",
+          "file": "stats-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "error",
+          "file": "stats-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "permission",
+          "file": "stats-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "offline",
+          "file": "stats-desktop-offline.png"
+        }
+      ],
+      "checks": [
+        "onboarding:five-states+session-redirect+nav",
+        "A:checklist-3-steps",
+        "A:coords-0-of-5",
+        "A:records-0",
+        "today:five-states+session-redirect+nav",
+        "B:summary-4",
+        "B:inbox-3-reasons",
+        "B:reject-reason-5",
+        "B:approve-removes-inbox",
+        "B:period-close-confirm",
+        "branches:five-states+session-redirect+nav",
+        "F:address-search-3-candidates",
+        "F:auto-fill-lat-lng",
+        "F:radius-cap-50",
+        "F:address-first",
+        "F:no-result-recovery",
+        "F:api-fail-manual-entry",
+        "G:8-employees",
+        "G:branch-filter-sort",
+        "G:search-empty",
+        "G:date-range-error",
+        "G:row->H",
+        "employees:five-states+session-redirect+nav",
+        "H:month-grid",
+        "H:day-detail-correction",
+        "H:month-nav",
+        "H:deeplink-from-B",
+        "calendar:five-states+session-redirect+nav",
+        "I:5-kpis",
+        "I:3-svg-charts",
+        "I:policy-undecided",
+        "I:payroll-summary",
+        "stats:five-states+session-redirect+nav"
+      ]
+    },
+    {
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "passed": true,
+      "console_errors": [],
+      "network_requests": [],
+      "horizontal_overflow": [],
+      "small_targets_under_44px": [],
+      "capture_count": 49,
+      "captures": [
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "default",
+          "file": "onboarding-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "checklist-progress",
+          "file": "onboarding-mobile-checklist-progress.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "loading",
+          "file": "onboarding-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "empty",
+          "file": "onboarding-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "error",
+          "file": "onboarding-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "permission",
+          "file": "onboarding-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "offline",
+          "file": "onboarding-mobile-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "default",
+          "file": "today-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "correction-reject",
+          "file": "today-mobile-correction-reject.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "period-close",
+          "file": "today-mobile-period-close.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "loading",
+          "file": "today-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "empty",
+          "file": "today-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "error",
+          "file": "today-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "permission",
+          "file": "today-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-today",
+          "state": "offline",
+          "file": "today-mobile-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "default",
+          "file": "branches-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "address-candidates",
+          "file": "branches-mobile-address-candidates.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "radius-over-limit",
+          "file": "branches-mobile-radius-over-limit.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "saved",
+          "file": "branches-mobile-saved.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "address-required",
+          "file": "branches-mobile-address-required.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "no-result",
+          "file": "branches-mobile-no-result.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "api-fail-manual",
+          "file": "branches-mobile-api-fail-manual.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "loading",
+          "file": "branches-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "empty",
+          "file": "branches-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "error",
+          "file": "branches-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "permission",
+          "file": "branches-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-branches",
+          "state": "offline",
+          "file": "branches-mobile-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "default",
+          "file": "employees-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "filtered",
+          "file": "employees-mobile-filtered.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "date-range-error",
+          "file": "employees-mobile-date-range-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "loading",
+          "file": "employees-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "empty",
+          "file": "employees-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "error",
+          "file": "employees-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "permission",
+          "file": "employees-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employees",
+          "state": "offline",
+          "file": "employees-mobile-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "default",
+          "file": "calendar-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "day-detail",
+          "file": "calendar-mobile-day-detail.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "loading",
+          "file": "calendar-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "empty",
+          "file": "calendar-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "error",
+          "file": "calendar-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "permission",
+          "file": "calendar-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-employee-calendar",
+          "state": "offline",
+          "file": "calendar-mobile-offline.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "default",
+          "file": "stats-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "branch-week",
+          "file": "stats-mobile-branch-week.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "loading",
+          "file": "stats-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "empty",
+          "file": "stats-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "error",
+          "file": "stats-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "permission",
+          "file": "stats-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-stats",
+          "state": "offline",
+          "file": "stats-mobile-offline.png"
+        }
+      ],
+      "checks": [
+        "onboarding:five-states+session-redirect+nav",
+        "A:checklist-3-steps",
+        "A:coords-0-of-5",
+        "A:records-0",
+        "today:five-states+session-redirect+nav",
+        "B:summary-4",
+        "B:inbox-3-reasons",
+        "B:reject-reason-5",
+        "B:approve-removes-inbox",
+        "B:period-close-confirm",
+        "branches:five-states+session-redirect+nav",
+        "F:address-search-3-candidates",
+        "F:auto-fill-lat-lng",
+        "F:radius-cap-50",
+        "F:address-first",
+        "F:no-result-recovery",
+        "F:api-fail-manual-entry",
+        "G:8-employees",
+        "G:branch-filter-sort",
+        "G:search-empty",
+        "G:date-range-error",
+        "G:row->H",
+        "employees:five-states+session-redirect+nav",
+        "H:month-grid",
+        "H:day-detail-correction",
+        "H:month-nav",
+        "H:deeplink-from-B",
+        "calendar:five-states+session-redirect+nav",
+        "I:5-kpis",
+        "I:3-svg-charts",
+        "I:policy-undecided",
+        "I:payroll-summary",
+        "stats:five-states+session-redirect+nav"
+      ]
+    }
+  ]
+}
