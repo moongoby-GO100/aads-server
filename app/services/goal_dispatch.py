@@ -1177,3 +1177,326 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
             "sent": sent, "skipped": skipped, "gave_up": gave_up,
             "owner_requests": owner_requests, "links_repaired": links_repaired,
         }
+
+
+# ---------------------------------------------------------------------------
+# 담당 없는 막힘 마일스톤·업무 → 주도(또는 마일스톤 담당)에게 정리 요청
+#
+# 2026-10-28 실측. 대체 발송은 `status='in_progress'` 만 본다. 담당 없는 blocked
+# 22건·failed 2건은 주도가 있는데도 한 번도 말을 못 들었고, 담당 없는 업무
+# (epic 114·story 177·task 294)는 화면에 '담당 미지정'만 떴다.
+#
+# 여기서 보내는 것은 **정리 요청**이다. 재발송·재착수(dispatch_count 증가)도,
+# 마일스톤·업무 상태 변경도, 세션 생성도 하지 않는다. 판단은 받은 쪽이 한다.
+# ---------------------------------------------------------------------------
+_LEAD_TRIAGE_ENABLED = os.getenv("GOAL_LEAD_TRIAGE_ENABLED", "true").lower() in ("1", "true", "yes")
+_LEAD_TRIAGE_COOLDOWN_HOURS = int(os.getenv("GOAL_LEAD_TRIAGE_COOLDOWN_HOURS", "24"))
+_TRIAGE_ITEM_LIMIT = 30
+_TRIAGE_BLOCKED = ("blocked", "failed")
+_TRIAGE_TYPE_LABEL = {"epic": "에픽", "story": "스토리", "task": "태스크"}
+_TRIAGE_FAILED_LINK_STATUSES = ("failed", "error", "rejected", "rejected_done")
+
+_TRIAGE_CANDIDATE_SQL = """
+SELECT r.* FROM (
+    SELECT c.*, ROW_NUMBER() OVER (
+               PARTITION BY c.goal_id ORDER BY c.sequence_order) AS goal_rn
+    FROM (
+        SELECT m.id::text AS milestone_id, m.title AS milestone_title,
+               m.status AS milestone_status, m.dispatch_blocked_at,
+               m.dispatch_note, m.sequence_order, m.lead_triage_at,
+               g.title AS goal_title, g.project, g.id::text AS goal_id,
+               COALESCE(m.owner_role_key, '') AS owner_role_key,
+               COALESCE(g.owner_session_id::text, '') AS goal_lead_session_id,
+               COALESCE(m.owner_session_id, s.id)::text AS session_id,
+               CASE upper(btrim(COALESCE(g.priority, ''))) WHEN 'P0-CRITICAL' THEN 0 WHEN 'P0' THEN 1 WHEN 'P1' THEN 2 WHEN 'P2' THEN 3 WHEN 'P3' THEN 4 ELSE 9 END AS goal_priority_rank,
+               g.priority_order,
+               (SELECT count(*) FROM work_items w
+                 WHERE w.milestone_id = m.id AND w.assignment_id IS NULL
+                   AND w.status NOT IN ('completed', 'cancelled')) AS unassigned_count
+        FROM milestones m
+        JOIN goals g ON g.id = m.goal_id
+        LEFT JOIN LATERAL (
+            SELECT cs.id FROM chat_sessions cs
+             WHERE m.owner_session_id IS NULL
+               AND m.owner_role_key IS NOT NULL
+               AND cs.role_key = m.owner_role_key
+             ORDER BY cs.updated_at DESC NULLS LAST, cs.created_at DESC, cs.id
+             LIMIT 1
+        ) s ON TRUE
+        WHERE g.status IN ('active', 'blocked')
+          AND m.status IN ('in_progress', 'review', 'blocked', 'failed')
+          AND ($1::text IS NULL OR g.project = $1)
+          AND (m.lead_triage_at IS NULL
+               OR m.lead_triage_at < NOW() - ($2 || ' hours')::interval)
+    ) c
+    WHERE (c.milestone_status IN ('blocked', 'failed') AND c.session_id IS NULL)
+       OR c.unassigned_count > 0
+) r
+ORDER BY r.goal_rn, r.goal_priority_rank, r.priority_order ASC NULLS LAST, r.sequence_order
+LIMIT $3
+"""
+
+_TRIAGE_ITEMS_SQL = """
+SELECT w.type, w.title, w.status FROM work_items w
+ WHERE w.milestone_id = $1::uuid AND w.assignment_id IS NULL
+   AND w.status NOT IN ('completed', 'cancelled')
+ ORDER BY CASE w.type WHEN 'epic' THEN 0 WHEN 'story' THEN 1 ELSE 2 END,
+          w.created_at, w.id
+"""
+
+_TRIAGE_CLAIM_SQL = (
+    "UPDATE milestones SET lead_triage_at = NOW() WHERE id = $1::uuid "
+    "AND (lead_triage_at IS NULL "
+    "     OR lead_triage_at < NOW() - ($2 || ' hours')::interval) "
+    "RETURNING lead_triage_at"
+)
+
+_TRIAGE_FAILED_JOB_SQL = (
+    "SELECT task_id FROM goal_task_links WHERE milestone_id = $1::uuid "
+    "AND task_type = 'pipeline_job' AND status = ANY($2::text[]) "
+    "ORDER BY created_at DESC LIMIT 1"
+)
+
+
+def _build_triage_message(
+    row: Any,
+    items: list[Any],
+    *,
+    to_lead: bool,
+    failed_job_id: str | None = None,
+) -> str:
+    """정리 요청문. 자동 재착수가 아니라는 점과 할 일 네 가지를 분명히 적는다."""
+    status = str(row["milestone_status"] or "")
+    unowned_milestone = status in _TRIAGE_BLOCKED and not str(row["session_id"] or "").strip()
+    body = [
+        f"[목표 정리 요청] {row['goal_title']}",
+        "",
+        f"## 마일스톤\n**{row['milestone_title']}** (상태: {status})",
+        f"\nGOAL_ID: {row['goal_id']}\nMILESTONE_ID: {row['milestone_id']}",
+    ]
+    if unowned_milestone:
+        lines = [f"담당 세션이 없는 {status} 마일스톤이다."]
+        blocked_at = row.get("dispatch_blocked_at")
+        if blocked_at is not None:
+            lines.append(f"막힌 시각: {_kst_hhmm(blocked_at)} KST")
+        note = str(row.get("dispatch_note") or "").strip()
+        if note:
+            lines.append(f"기록된 사유: {note}")
+        if failed_job_id:
+            lines.append(f"최근 실패 러너 job: {failed_job_id}")
+        body.append("\n## 막힌 사유\n" + "\n".join(f"- {line}" for line in lines))
+
+    if items:
+        shown = items[:_TRIAGE_ITEM_LIMIT]
+        listing = [
+            f"- [{_TRIAGE_TYPE_LABEL.get(str(it['type']), str(it['type']))}] "
+            f"{it['title']} ({it['status']})"
+            for it in shown
+        ]
+        if len(items) > len(shown):
+            listing.append(f"- … 외 {len(items) - len(shown)}건")
+        body.append(f"\n## 담당 없는 업무 {len(items)}건\n" + "\n".join(listing))
+
+    who = "주도 세션인 너" if to_lead else "이 마일스톤 담당인 너"
+    todo = ["담당 지정 — 맡길 담당 세션을 정한다(세션 생성이 필요하면 대표님 승인 요청으로 올린다)."]
+    if items:
+        todo.append("업무 재배정 — 담당 없는 업무를 맡을 담당에게 배정한다.")
+    if unowned_milestone:
+        todo.append("막힘 해소 판단 — 막힌 원인을 확인하고 풀 수 있는지 판단한다.")
+        todo.append("취소 — 더 진행할 이유가 없으면 취소 의견과 근거를 보고한다.")
+    body.append(
+        f"\n## {who}가 할 일\n"
+        + "\n".join(f"{i}. {line}" for i, line in enumerate(todo, 1))
+        + "\n\n이 메시지는 정리 요청이다. 시스템은 마일스톤·업무 상태를 바꾸지 않았고 "
+        "재착수도 하지 않았다. 판단 결과와 근거를 답으로 남겨라."
+    )
+    return "\n".join(body)
+
+
+async def _send_triage(
+    *, goal_id: str, milestone_id: str, session_id: str, message: str,
+    previous_triage_at: Any,
+) -> None:
+    """정리 요청을 넣고 스트림이 끝날 때까지 기다린다 — 사이클 밖에서.
+
+    발송 자체가 못 나간 경우(목표 정지·예외)는 기록을 되돌려 24시간을 헛되이
+    잠그지 않는다. 타임아웃은 이미 전달된 것으로 본다.
+    """
+
+    async def _restore() -> None:
+        try:
+            from app.core.db_pool import get_pool
+
+            await get_pool().execute(
+                "UPDATE milestones SET lead_triage_at = $2 WHERE id = $1::uuid",
+                milestone_id, previous_triage_at,
+            )
+        except Exception as exc:  # noqa: BLE001 - 되돌리기 실패가 태스크를 죽이면 안 된다
+            logger.warning("goal_lead_triage_restore_failed",
+                           milestone=milestone_id[:8], error=str(exc)[:160])
+
+    async def _consume() -> bool:
+        async with _send_semaphore():
+            from app.services.orchestration_limits import goal_paused
+
+            paused, why = await goal_paused(goal_id)
+            if paused:
+                logger.info("goal_lead_triage_goal_paused", goal=goal_id,
+                            milestone=milestone_id[:8], why=why)
+                return False
+            from app.services import chat_service as cs
+
+            if await cs.handoff_internal_turn_if_standby(
+                session_id, message, source="goal_lead_triage",
+            ):
+                return True
+            async for _chunk in cs.send_message_stream(
+                session_id=session_id,
+                content=message,
+                intent_override="system_trigger",
+                response_mode="quality",
+            ):
+                pass
+            return True
+
+    try:
+        delivered = await asyncio.wait_for(_consume(), _SEND_TIMEOUT)
+    except TimeoutError:
+        logger.warning("goal_lead_triage_send_timeout",
+                       milestone=milestone_id[:8], session=session_id[:8],
+                       limit=_SEND_TIMEOUT)
+        return
+    except asyncio.CancelledError:
+        logger.warning("goal_lead_triage_cancelled",
+                       milestone=milestone_id[:8], session=session_id[:8])
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("goal_lead_triage_send_failed",
+                       milestone=milestone_id[:8], error=str(exc)[:160])
+        await _restore()
+        return
+    if not delivered:
+        await _restore()
+        return
+    logger.info("goal_lead_triage_sent",
+                milestone=milestone_id[:8], session=session_id[:8])
+
+
+def _spawn_triage(**kwargs: Any) -> asyncio.Task:
+    task = asyncio.create_task(_send_triage(**kwargs))
+    _send_tasks.add(task)
+    task.add_done_callback(_send_tasks.discard)
+    return task
+
+
+async def triage_unowned_milestones(project: str | None = None) -> dict[str, int]:
+    """담당 없는 막힘 마일스톤과 담당 없는 업무를 정리 요청으로 올린다.
+
+    받는 쪽은 마일스톤 담당이 있으면 담당, 없으면 목표 주도 세션이다.
+    둘 다 없으면 보내지 않고 `_handle_missing_owner` 경로로 사유만 남긴다.
+    """
+    result = {"sent": 0, "skipped": 0, "no_lead": 0, "owner_requests": 0}
+    if not _ENABLED or not _LEAD_TRIAGE_ENABLED:
+        return result
+
+    from app.core.db_pool import get_pool
+    from app.services.orchestration_limits import (
+        cost_gate, goal_paused, load_gate, owner_paused,
+    )
+
+    cooldown = str(_LEAD_TRIAGE_COOLDOWN_HOURS)
+    touched: set[str] = set()
+    async with get_pool().acquire() as conn:
+        await conn.execute(
+            "ALTER TABLE milestones ADD COLUMN IF NOT EXISTS lead_triage_at timestamptz"
+        )
+        rows = await conn.fetch(_TRIAGE_CANDIDATE_SQL, project, cooldown, _CANDIDATE_LIMIT)
+
+        for row in rows:
+            if result["sent"] + result["owner_requests"] >= _OWNER_REQUEST_PER_CYCLE:
+                break
+
+            paused, _why = await goal_paused(row["goal_id"])
+            if paused:
+                result["skipped"] += 1
+                continue
+
+            owner = str(row["session_id"] or "").strip()
+            lead = str(row["goal_lead_session_id"] or "").strip()
+            recipient = owner or lead
+            blocked_unowned = (
+                str(row["milestone_status"] or "") in _TRIAGE_BLOCKED and not owner
+            )
+
+            if not recipient:
+                # 주도도 담당도 없다. 보낼 곳이 없으니 세션을 만들지 않고 사유만 남긴다.
+                if not blocked_unowned:
+                    result["skipped"] += 1
+                    continue
+                claimed = await conn.fetchrow(_TRIAGE_CLAIM_SQL, row["milestone_id"], cooldown)
+                if claimed is None:
+                    result["skipped"] += 1
+                    continue
+                result["no_lead"] += 1
+                logger.info("goal_lead_triage_no_lead",
+                            milestone=row["milestone_id"][:8], goal=row["goal_id"][:8])
+                result["owner_requests"] += await _handle_missing_owner(
+                    conn, row,
+                    remaining=_OWNER_REQUEST_PER_CYCLE - result["sent"] - result["owner_requests"],
+                    write_notes=row.get("dispatch_blocked_at") is None,
+                )
+                continue
+
+            if recipient in touched:
+                result["skipped"] += 1
+                continue
+            owner_stopped, _why = await owner_paused(row["goal_id"], recipient)
+            if owner_stopped:
+                result["skipped"] += 1
+                continue
+            ok, why = await cost_gate(row["goal_id"])
+            if not ok:
+                logger.info("goal_lead_triage_cost_gated",
+                            milestone=row["milestone_id"][:8], why=why)
+                result["skipped"] += 1
+                continue
+            ok, why = await load_gate(row["project"])
+            if not ok:
+                logger.info("goal_lead_triage_load_gated",
+                            milestone=row["milestone_id"][:8], why=why)
+                result["skipped"] += 1
+                continue
+
+            items = list(await conn.fetch(_TRIAGE_ITEMS_SQL, row["milestone_id"]))
+            if not items and not blocked_unowned:
+                result["skipped"] += 1
+                continue
+            failed_job = None
+            if blocked_unowned:
+                failed_job = await conn.fetchval(
+                    _TRIAGE_FAILED_JOB_SQL, row["milestone_id"],
+                    list(_TRIAGE_FAILED_LINK_STATUSES),
+                )
+
+            # 보내기 전에 소유권부터 잡는다 — 24시간 안에 이미 보냈으면 빈손이다.
+            claimed = await conn.fetchrow(_TRIAGE_CLAIM_SQL, row["milestone_id"], cooldown)
+            if claimed is None:
+                result["skipped"] += 1
+                continue
+
+            _spawn_triage(
+                goal_id=row["goal_id"],
+                milestone_id=row["milestone_id"],
+                session_id=recipient,
+                message=_build_triage_message(
+                    row, items, to_lead=not owner,
+                    failed_job_id=str(failed_job) if failed_job else None,
+                ),
+                previous_triage_at=row.get("lead_triage_at"),
+            )
+            result["sent"] += 1
+            touched.add(recipient)
+
+    if result["sent"] or result["no_lead"] or result["owner_requests"]:
+        logger.info("goal_lead_triage_cycle", **result)
+    return result

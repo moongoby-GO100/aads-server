@@ -701,6 +701,19 @@ async def lifespan(app: FastAPI):
                 except Exception as e_disp:
                     logger.warning("goal_dispatch_failed", error=str(e_disp)[:200])
 
+                # 담당 없는 막힘 마일스톤·업무는 주도에게 정리 요청만 보낸다.
+                # 상태를 바꾸거나 재착수하지 않는다.
+                try:
+                    from app.services.goal_dispatch import triage_unowned_milestones
+
+                    await asyncio.wait_for(
+                        triage_unowned_milestones(None), _GOAL_STAGE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("goal_lead_triage_timeout", limit=_GOAL_STAGE_TIMEOUT)
+                except Exception as e_tri:
+                    logger.warning("goal_lead_triage_failed", error=str(e_tri)[:200])
+
                 # 담당이 신고한 완료를 주도에게 확인받는다.
                 #
                 # 이것이 없으면 마일스톤이 `review` 에서 영원히 멈춘다 —

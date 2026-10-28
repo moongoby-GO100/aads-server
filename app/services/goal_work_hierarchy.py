@@ -259,6 +259,134 @@ async def create_project_assignment(
     return _row_dict(row)
 
 
+_WORK_STATUSES = (
+    "draft", "ready", "in_progress", "in_review", "completed", "blocked",
+    "cancelled", "changes_requested",
+)
+_TASK_COUNT_KEYS = (
+    "completed", "in_progress", "blocked", "draft", "ready", "in_review", "cancelled",
+)
+_SUMMARY_KEYS = ("completed", "in_progress", "blocked")
+
+
+def _owner_view(source: str, row: Mapping[str, Any] | None) -> dict[str, Any]:
+    row = row or {}
+    return {
+        "source": source,
+        "session_id": row.get("session_id"),
+        "session_title": row.get("session_title"),
+        "role_key": row.get("role_key"),
+    }
+
+
+def resolve_effective_owner(
+    item: Mapping[str, Any],
+    assignments: Mapping[str, Mapping[str, Any]],
+    milestone_owner: Mapping[str, Any] | None,
+    goal_lead: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """실제 assignment -> 마일스톤 담당 -> 목표 주도 순으로 담당을 정한다.
+
+    조회용 표시일 뿐 DB 의 assignment_id 는 바꾸지 않는다. source 로 대행 여부를 밝힌다.
+    """
+    assignment_id = str(item.get("assignment_id") or "")
+    if assignment_id:
+        return _owner_view("assigned", assignments.get(assignment_id))
+    if milestone_owner and milestone_owner.get("session_id"):
+        return _owner_view("milestone_owner", milestone_owner)
+    if goal_lead and goal_lead.get("session_id"):
+        return _owner_view("goal_lead", goal_lead)
+    return _owner_view("none", None)
+
+
+def attach_work_aggregates(
+    items: Mapping[str, dict[str, Any]],
+    milestone_ids: Sequence[str],
+) -> dict[str, dict[str, dict[str, int]]]:
+    """epic/story 에 child_status_counts·task_counts 를 달고 마일스톤별 work_summary 를 돌려준다."""
+
+    def tally(item: dict[str, Any]) -> dict[str, int]:
+        tasks = {"total": 0, **dict.fromkeys(_TASK_COUNT_KEYS, 0)}
+        if item.get("type") == "task":
+            tasks["total"] = 1
+            if item.get("status") in _TASK_COUNT_KEYS:
+                tasks[item["status"]] = 1
+        children = dict.fromkeys(_WORK_STATUSES, 0)
+        for child in item["children"]:
+            status = str(child.get("status"))
+            children[status] = children.get(status, 0) + 1
+            for key, value in tally(child).items():
+                tasks[key] += value
+        if item.get("type") != "task":
+            item["child_status_counts"] = children
+            item["task_counts"] = dict(tasks)
+        return tasks
+
+    for item in items.values():
+        if not item.get("parent_id") or str(item["parent_id"]) not in items:
+            tally(item)
+
+    summaries = {
+        str(mid): {
+            kind: {"total": 0, **dict.fromkeys(_SUMMARY_KEYS, 0)}
+            for kind in ("epic", "story", "task")
+        }
+        for mid in milestone_ids
+    }
+    for item in items.values():
+        bucket = summaries.get(str(item.get("milestone_id")), {}).get(str(item.get("type")))
+        if bucket is None:
+            continue
+        bucket["total"] += 1
+        if item.get("status") in _SUMMARY_KEYS:
+            bucket[item["status"]] += 1
+    return summaries
+
+
+async def _owner_context(
+    conn: Any, *, tenant_id: str, project: str, goal_id: str, items: Mapping[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
+    assignment_ids = sorted({str(i["assignment_id"]) for i in items.values() if i.get("assignment_id")})
+    assignments: dict[str, dict[str, Any]] = {}
+    if assignment_ids:
+        for row in await conn.fetch(
+            """SELECT p.id::text AS id, p.role_key, p.session_id::text AS session_id,
+                      s.title AS session_title
+                 FROM project_role_assignments p
+                 LEFT JOIN chat_sessions s ON s.id=p.session_id AND s.tenant_id=p.tenant_id
+                WHERE p.tenant_id=$1::uuid AND p.project=$2 AND p.id=ANY($3::uuid[])""",
+            tenant_id, project, assignment_ids,
+        ):
+            assignments[str(row["id"])] = dict(row)
+    milestones = [
+        dict(row) for row in await conn.fetch(
+            """SELECT m.id::text AS milestone_id, m.title, m.sequence_order, m.status,
+                      os.id::text AS session_id, os.title AS session_title,
+                      COALESCE(NULLIF(m.owner_role_key, ''), os.role_key) AS role_key
+                 FROM milestones m
+                 LEFT JOIN LATERAL (
+                     SELECT cs.id, cs.title, cs.role_key FROM chat_sessions cs
+                      WHERE cs.id = m.owner_session_id
+                         OR (m.owner_session_id IS NULL AND m.owner_role_key IS NOT NULL
+                             AND cs.role_key = m.owner_role_key)
+                      ORDER BY (cs.id = m.owner_session_id) DESC NULLS LAST,
+                               cs.updated_at DESC NULLS LAST, cs.created_at DESC, cs.id
+                      LIMIT 1
+                 ) os ON TRUE
+                WHERE m.goal_id=$1::uuid AND m.tenant_id=$2::uuid AND m.project=$3
+                ORDER BY m.sequence_order, m.id""",
+            goal_id, tenant_id, project,
+        )
+    ]
+    lead_row = await conn.fetchrow(
+        """SELECT s.id::text AS session_id, s.title AS session_title, s.role_key
+             FROM goals g JOIN chat_sessions s ON s.id=g.owner_session_id
+            WHERE g.id=$1::uuid AND g.tenant_id=$2::uuid""",
+        goal_id, tenant_id,
+    )
+    return assignments, milestones, dict(lead_row) if lead_row else None
+
+
 async def get_goal_tree(
     conn: Any,
     *,
@@ -372,6 +500,14 @@ async def get_goal_tree(
             recovery["can_retry"] = recovery.get("delivery_state") == "failed"
             items[item_id]["last_error"] = recovery.get("last_error")
             items[item_id]["recovery"] = recovery
+    assignments, milestone_rows, goal_lead = await _owner_context(
+        conn, tenant_id=tenant_id, project=project, goal_id=goal_id, items=items,
+    )
+    milestone_owners = {m["milestone_id"]: m for m in milestone_rows}
+    for item in items.values():
+        item["effective_owner"] = resolve_effective_owner(
+            item, assignments, milestone_owners.get(str(item["milestone_id"])), goal_lead,
+        )
     roots: list[dict[str, Any]] = []
     for item in items.values():
         parent_id = item.get("parent_id")
@@ -379,11 +515,23 @@ async def get_goal_tree(
             items[parent_id]["children"].append(item)
         else:
             roots.append(item)
+    # children 연결이 끝난 뒤에만 집계가 하위 업무를 본다
+    summaries = attach_work_aggregates(items, [m["milestone_id"] for m in milestone_rows])
+    milestone_summaries = [
+        {
+            "milestone_id": m["milestone_id"], "title": m["title"],
+            "sequence_order": m["sequence_order"], "status": m["status"],
+            "owner": resolve_effective_owner({}, {}, m, goal_lead),
+            "work_summary": summaries[m["milestone_id"]],
+        }
+        for m in milestone_rows
+    ]
     return {
         "goal_id": str(goal["id"]), "tenant_id": tenant_id, "project": project,
         "version": goal["version"], "last_error": None,
         "pending_approval_count": sum(item["pending_approval_count"] for item in items.values()),
         "items": roots,
+        "milestones": milestone_summaries,
     }
 
 
