@@ -201,6 +201,15 @@ def test_script_truncates_at_limit(repos):
 # ── 본문 확정 ────────────────────────────────────────────────────────
 
 
+def _stub_origin(monkeypatch, raw=None, error=None):
+    async def fake(source):
+        if error:
+            raise error
+        return raw
+
+    monkeypatch.setattr(docs, "_read_origin_source", fake)
+
+
 def _stub_remote(monkeypatch, raw=None, error=None):
     async def fake(target, source):
         if error:
@@ -249,9 +258,10 @@ def test_body_for_remote_project_still_scans_credentials(monkeypatch):
 
 def test_body_for_local_project_uses_local_reader(monkeypatch):
     seen = []
-    monkeypatch.setattr(docs, "_body", lambda content, path: seen.append((content, path)) or (content, path, "h"))
-    asyncio.run(docs._body_for_project("AADS", "", "reports/a.md"))
-    assert seen == [("", "reports/a.md")]
+    monkeypatch.setattr(docs, "_read_local_source", lambda path: seen.append(path) or (BODY.encode(), "host"))
+    _stub_origin(monkeypatch, BODY.encode())
+    content, source, _ = asyncio.run(docs._body_for_project("AADS", "", "reports/a.md"))
+    assert seen == ["reports/a.md"] and (content, source) == (BODY, "reports/a.md")
 
 
 # ── 도구 경로 ────────────────────────────────────────────────────────

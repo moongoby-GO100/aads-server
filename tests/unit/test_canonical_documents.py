@@ -506,6 +506,11 @@ def test_repository_import_with_source_path_is_allowed_without_session_or_task(m
     (root / "docs").mkdir(parents=True)
     (root / "docs" / "plan.md").write_text("plan body")
     monkeypatch.setattr(docs, "ROOT", root)
+
+    async def no_origin(source):
+        raise HTTPException(422, "invalid_source_path")
+
+    monkeypatch.setattr(docs, "_read_origin_source", no_origin)
     conn = StubConnection(generation=0)
     monkeypatch.setattr(docs, "get_pool", lambda: conn)
     body = request(expected=0, content="", source_path="docs/plan.md", source_session_id=None, change_summary=None)

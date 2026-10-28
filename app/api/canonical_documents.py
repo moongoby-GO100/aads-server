@@ -2,15 +2,21 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
+import logging
+import os
 import posixpath
 import re
 import shlex
 import unicodedata
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
@@ -18,12 +24,19 @@ from app.auth import TenantRole, require_tenant_role
 from app.core.db_pool import get_pool
 from app.core.project_config import PROJECT_MAP, REMOTE_PROJECTS
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/projects/{project_key}/documents", tags=["canonical-documents"])
 ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_ROOT = ROOT
-# 운영 컨테이너의 /app/docs 는 낡은 이미지 사본이고 /app/reports 는 없다. 최신 파일은 읽기 전용
-# 마운트 /host/aads-server 에만 있으므로, 기본 ROOT 일 때만 이 마운트를 먼저 본다(경계 검사는 동일).
+# 운영 컨테이너(aads-server-green)의 /app/docs 는 빌드 시점 이미지 사본이다. /host/aads-server 로는
+# reports/ 하나만 읽기 전용 마운트되어 있고 docs/ 는 마운트되지 않는다(docker inspect 실측 2026-10-28).
+# 그래서 로컬(마운트 → 이미지)에서 못 찾거나 낡았을 수 있는 경우는 GitHub 원격 기본 브랜치를 본다.
 HOST_SOURCE_ROOT = Path("/host/aads-server")
+GITHUB_SOURCE_REPO = "moongoby-GO100/aads-server"
+GITHUB_SOURCE_BRANCH = "main"
+GITHUB_READ_TIMEOUT = 10.0
+SOURCE_NOT_FOUND_MESSAGE = "이미지·마운트·원격 기본 브랜치 어디에서도 파일을 찾지 못했습니다"
+SOURCE_REMOTE_FAILED_MESSAGE = SOURCE_NOT_FOUND_MESSAGE + "(원격 기본 브랜치 조회 실패: 네트워크 오류 또는 시간 초과)"
 MAX_DOCUMENT_BYTES = 262144
 KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 PROJECT = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
@@ -85,15 +98,19 @@ def _source_roots() -> list[Path]:
     return roots
 
 
-def _locate_source(candidate: Path) -> Path:
+def _locate_source_origin(candidate: Path) -> tuple[Path, str]:
     for root in _source_roots():
         try:
             resolved = (root / candidate).resolve(strict=True)
         except (OSError, ValueError):
             continue
         if resolved.is_file() and resolved.is_relative_to(root.resolve()):
-            return resolved
+            return resolved, ("host" if root == HOST_SOURCE_ROOT else "image")
     raise HTTPException(422, "invalid_source_path")
+
+
+def _locate_source(candidate: Path) -> Path:
+    return _locate_source_origin(candidate)[0]
 
 
 def _source_syntax(path: str | None) -> str | None:
@@ -119,8 +136,12 @@ def _safe_source(path: str | None) -> str | None:
 
 
 def _read_source(source: str) -> bytes:
-    """Read at most one byte past the limit, including if the file grows after stat."""
-    path = _locate_source(Path(source))
+    return _read_local_source(source)[0]
+
+
+def _read_local_source(source: str) -> tuple[bytes, str]:
+    """Read at most one byte past the limit, including if the file grows after stat. Returns (bytes, host|image)."""
+    path, origin = _locate_source_origin(Path(source))
     try:
         if path.stat().st_size > MAX_DOCUMENT_BYTES:
             raise HTTPException(413, "document_too_large")
@@ -130,7 +151,76 @@ def _read_source(source: str) -> bytes:
         raise HTTPException(422, "invalid_source_path") from exc
     if len(raw) > MAX_DOCUMENT_BYTES:
         raise HTTPException(413, "document_too_large")
+    return raw, origin
+
+
+def _source_not_found(message: str = SOURCE_NOT_FOUND_MESSAGE) -> HTTPException:
+    return HTTPException(422, {"code": "invalid_source_path", "message": message})
+
+
+async def _github_fetch(source: str) -> bytes:
+    from app.core.llm_key_provider import get_api_key
+
+    headers = {"Accept": "application/vnd.github+json"}
+    # tool_executor._read_github_file / chat_tools.read_github_file 과 같은 토큰 조회(레지스트리 → env). 새 키 없음.
+    pat = await get_api_key("GITHUB_TOKEN", fallback_env="GITHUB_TOKEN") or os.getenv("GITHUB_PAT", "")
+    if pat:
+        headers["Authorization"] = f"token {pat}"
+    # raw.githubusercontent.com 은 브랜치 ref 를 수 분간 캐시해 방금 푸시한 파일이 404 일 수 있어 contents API 를 쓴다.
+    url = f"https://api.github.com/repos/{GITHUB_SOURCE_REPO}/contents/{quote(source, safe='/')}"
+    async with httpx.AsyncClient(timeout=GITHUB_READ_TIMEOUT) as client:
+        response = await client.get(url, headers=headers, params={"ref": GITHUB_SOURCE_BRANCH})
+    if response.status_code == 404:
+        raise _source_not_found()
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict) or data.get("type") != "file":
+        raise _source_not_found()
+    if int(data.get("size") or 0) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(413, "document_too_large")
+    if data.get("encoding") != "base64":
+        raise ValueError("unexpected contents encoding")
+    raw = base64.b64decode(data.get("content") or "", validate=False)
+    if len(raw) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(413, "document_too_large")
     return raw
+
+
+async def _read_origin_source(source: str) -> bytes:
+    """GitHub 원격 기본 브랜치(origin/main)의 같은 경로 blob. 경로 검사는 로컬과 같고, 실패는 한글 사유의 422."""
+    source = _source_syntax(source) or ""
+    try:
+        return await asyncio.wait_for(_github_fetch(source), timeout=GITHUB_READ_TIMEOUT)
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, asyncio.TimeoutError, ValueError, binascii.Error, OSError) as exc:
+        logger.warning("canonical_source_remote_read_failed path=%s error=%s", source, exc.__class__.__name__)
+        raise _source_not_found(SOURCE_REMOTE_FAILED_MESSAGE) from exc
+
+
+async def _resolve_local_project_source(source: str) -> tuple[bytes, dict[str, Any]]:
+    """로컬(host→image)을 먼저 읽고 원격 기본 브랜치와 비교한다. 내용이 다르면 원격이 정본이고 로컬은 낡은 것이다."""
+    local = origin = None
+    try:
+        local, origin = _read_local_source(source)
+    except HTTPException as exc:
+        if exc.status_code != 422:
+            raise
+    remote = remote_error = None
+    try:
+        remote = await _read_origin_source(source)
+    except HTTPException as exc:
+        if exc.status_code != 422:
+            raise
+        remote_error = exc
+    if remote is not None:
+        if local == remote:
+            return local, {"source_resolved_from": origin, "source_stale_local": False, "source_remote_checked": True}
+        return remote, {"source_resolved_from": "remote", "source_stale_local": local is not None,
+                        "source_remote_checked": True}
+    if local is not None:
+        return local, {"source_resolved_from": origin, "source_stale_local": False, "source_remote_checked": False}
+    raise remote_error
 
 
 def _finalize(content: str, source: str | None) -> tuple[str, str | None, str]:
@@ -207,22 +297,31 @@ async def _read_remote_source(target: dict[str, Any], source: str) -> bytes:
 
 
 async def _body_for_project(project: str, content: str, source_path: str | None) -> tuple[str, str | None, str]:
+    return (await _body_for_project_ex(project, content, source_path))[:3]
+
+
+async def _body_for_project_ex(
+    project: str, content: str, source_path: str | None,
+) -> tuple[str, str | None, str, dict[str, Any]]:
     """원격 프로젝트는 그 저장소에서 읽어 검증한다(로컬 같은 경로의 다른 프로젝트 파일로 검증하지 않는다).
 
     SSH 전송 실패(502)이고 호출자가 content 를 줬을 때만 검증된 경로 형식 + 제공 content 로 저장한다.
     파일 없음·경로 탈출·내용 불일치는 그대로 거부한다.
     """
     target = _remote_target(project)
-    if target is None:
-        return _body(content, source_path)
     source = _source_syntax(source_path)
-    if source:
+    meta: dict[str, Any] = {}
+    if target is None:
+        if source:
+            raw, meta = await _resolve_local_project_source(source)
+            content = _verified_text(raw, content)
+    elif source:
         try:
             content = _verified_text(await _read_remote_source(target, source), content)
         except HTTPException as exc:
             if exc.status_code != 502 or not content:
                 raise
-    return _finalize(content, source)
+    return (*_finalize(content, source), meta)
 
 
 def _safe_metadata(*values: str | None) -> None:
@@ -281,7 +380,7 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
 
     session_any_project: 서버가 바인딩한 채팅 세션(도구 경로)은 문서 프로젝트와 워크스페이스 프로젝트가 달라도 테넌트만 맞으면 출처로 받는다.
     """
-    content, source, digest = await _body_for_project(project, body.content, body.source_path)
+    content, source, digest, source_meta = await _body_for_project_ex(project, body.content, body.source_path)
     _safe_metadata(body.title, body.change_summary, body.source_task_id,
                    body.document_key, body.idempotency_key, source)
     if body.goal_id and not await conn.fetchval(
@@ -339,14 +438,14 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
             raise HTTPException(409, "revision_conflict")
         same = next((row for row in matches if row["content_hash"] == digest and row["version"] == body.version), None)
         if same:
-            return {"document_id": head["id"], "revision_id": same["id"], "generation": head["generation"], "idempotent": True}
+            return {"document_id": head["id"], "revision_id": same["id"], "generation": head["generation"], "idempotent": True, **source_meta}
         # source_path 없이 content 로만 등록된 기존 리비전과 원본이 같은 경우: 새 리비전·UPDATE 없이 기존 것을 돌려준다.
         by_hash = next((row for row in matches if row["content_hash"] == digest), None) if body.source_path else None
         if by_hash:
             return {"document_id": head["id"], "revision_id": by_hash["id"], "generation": head["generation"],
                     "idempotent": True, "matched_by": "content_hash", "revision": by_hash["revision"],
                     "version": by_hash["version"],
-                    "approved": head["approved_revision_id"] == by_hash["id"]}
+                    "approved": head["approved_revision_id"] == by_hash["id"], **source_meta}
         raise HTTPException(409, "revision_conflict")
     if body.expected_generation != head["generation"]:
         raise HTTPException(409, "generation_conflict")
@@ -375,7 +474,7 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
             "VALUES($1,$2::uuid,$3,$4) ON CONFLICT DO NOTHING",
             head["id"], tenant, project, body.goal_id,
         )
-    return {"document_id": head["id"], "revision_id": revision["id"], "generation": head["generation"] + 1, "idempotent": False}
+    return {"document_id": head["id"], "revision_id": revision["id"], "generation": head["generation"] + 1, "idempotent": False, **source_meta}
 
 
 @router.post("", status_code=201)

@@ -133,9 +133,12 @@ async def register_document(
                 matched_status = "approved" if result.get("approved") else (
                     await conn.fetchval(_STATUS_SQL, result["revision_id"]) or "draft")
     except HTTPException as exc:
-        return {"error": str(exc.detail), "status": exc.status_code,
+        detail = exc.detail
+        code = str(detail.get("code")) if isinstance(detail, dict) else str(detail)
+        reason = str(detail.get("message")) if isinstance(detail, dict) else str(detail)
+        return {"error": code, "status": exc.status_code,
                 "message": "등록 실패 — 같은 내용·버전이 이미 있으면 version 을 지정하거나 내용을 바꾸세요"
-                if exc.status_code == 409 else str(exc.detail)}
+                if exc.status_code == 409 else reason}
 
     out: dict[str, Any] = {
         "registered": True,
@@ -157,6 +160,7 @@ async def register_document(
             "version": result.get("version"), "status": view_status, "approved": view_authoritative,
             "note": "같은 본문의 기존 리비전이 있어 새 리비전을 만들지 않았습니다(approved_revision 은 그대로).",
         })
+    out.update({k: result[k] for k in ("source_resolved_from", "source_stale_local", "source_remote_checked") if k in result})
     view = document_refs.canonical_view_ref(
         project, key, title=body.title, revision=int(revision_no) if revision_no is not None else None,
         status=view_status, authoritative=view_authoritative,
