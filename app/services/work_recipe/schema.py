@@ -32,12 +32,58 @@ ALLOWED_ACTIONS: tuple[str, ...] = (
 OVERLAY_DEFAULT_MAX_DISMISS = 3
 OVERLAY_MAX_DISMISS_LIMIT = 5
 OVERLAY_SELECTOR_MAX_LEN = 300
-OVERLAY_FORBIDDEN_MARKERS = re.compile(
+_OVERLAY_SENSITIVE_PATTERN = (
     r"consent|agree|terms|privacy|gdpr|cookie-?(?:banner|consent)|payment|checkout|billing|"
     r"security|warning|certificate|captcha|otp|auth|login|"
-    r"동의|약관|결제|보안|경고|인증|로그인",
+    r"동의|약관|결제|보안|경고|인증|로그인"
+)
+# 버튼 라벨로 닫기 대신 누르면 안 되는 동작(오늘 숨김·신청·연동·확인·저장). 사이트 공지 팝업 닫기가 라벨 검사에 쓴다.
+_OVERLAY_ACTION_PATTERN = (
+    r"하루\s*동안|다시\s*보지|오늘\s*(?:하루\s*)?(?:그만|보지)|신청|연동|확인|저장|구독|"
+    r"don'?t\s+show|do\s+not\s+show|never\s+show|\bapply\b|\bconnect\b|\bconfirm\b|\bsave\b|\bsubscribe\b|\bsubmit\b"
+)
+# 모달 자체가 동의·결제·보안·인증 성격인가(닫는 행위가 의사표시) — 제목/selector 검사용.
+OVERLAY_SENSITIVE_MARKERS = re.compile(_OVERLAY_SENSITIVE_PATTERN, re.IGNORECASE)
+OVERLAY_FORBIDDEN_MARKERS = re.compile(
+    f"{_OVERLAY_SENSITIVE_PATTERN}|{_OVERLAY_ACTION_PATTERN}",
     re.IGNORECASE,
 )
+
+# 서버 레인 '사이트 공지 팝업 닫기' — 도메인별 허용목록. 허용목록 밖 호스트에서는 동작하지 않는다.
+SITE_POPUP_MAX_CLOSE_DEFAULT = 10
+SITE_POPUP_MAX_CLOSE_LIMIT = 20
+# 팝업 안에서 누를 수 있는 버튼은 라벨이 정확히 이 중 하나일 때뿐이다(대소문자·앞뒤 공백 무시).
+SITE_POPUP_CLOSE_LABELS: tuple[str, ...] = ("닫기", "close", "×")
+
+
+@dataclass(frozen=True)
+class SitePopupPolicy:
+    domain: str
+    popup_selector: str
+
+
+SITE_POPUP_ALLOWLIST: dict[str, SitePopupPolicy] = {
+    "my.a-bly.com": SitePopupPolicy(
+        domain="my.a-bly.com",
+        popup_selector='[role="dialog"], [role="alertdialog"], [role="alert"]',
+    ),
+}
+
+
+def site_popup_policy_for(host: str) -> SitePopupPolicy | None:
+    """호스트가 허용목록 도메인(또는 그 하위)이면 정책, 아니면 None."""
+    for domain, policy in SITE_POPUP_ALLOWLIST.items():
+        if overlay_host_matches(host, domain):
+            return policy
+    return None
+
+
+def clamp_site_popup_max_close(value: Any) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return SITE_POPUP_MAX_CLOSE_DEFAULT
+    return max(1, min(number, SITE_POPUP_MAX_CLOSE_LIMIT))
 _OVERLAY_SELECTOR_CHARS = re.compile(r"""^[A-Za-z0-9_#.\[\]="'~*^$|:+> ()\-,]+$""")
 
 # PRD 4절 위험 등급표 — 순서가 곧 등급(낮음 → 높음)이다.

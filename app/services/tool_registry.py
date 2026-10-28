@@ -100,6 +100,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "browser_download": True,
     "browser_tab_list": True,
     "browser_clear_site_session": True,
+    "browser_dismiss_site_popups": True,
     "smart_browser": False,       # 채팅에서 승인 레시피 실행/E2E 레시피 등록
     "automation_draft": True,     # 대화로 업무 자동화 등록(초안 상태기계) — 온디맨드
     # ── 기타 ─────────────────────────────────────────────────────────────
@@ -317,7 +318,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
         "smart_browser", "automation_draft", "browser_connect", "browser_navigate", "browser_snapshot",
         "browser_screenshot", "browser_click", "browser_fill",
         "browser_press_key", "browser_select_option", "browser_check",
-        "browser_upload_file", "browser_download", "browser_tab_list", "browser_clear_site_session",
+        "browser_upload_file", "browser_download", "browser_tab_list", "browser_clear_site_session", "browser_dismiss_site_popups",
     ],
     # CEO 아젠다 관리
     "agenda":             ["add_agenda", "list_agendas", "get_agenda", "update_agenda", "decide_agenda", "search_agendas"],
@@ -376,6 +377,38 @@ def clear_site_session_schema() -> Dict[str, Any]:
             },
         },
         "required": ["browser_work_key", "origin"],
+    }
+
+
+DISMISS_SITE_POPUPS_DESCRIPTION = (
+    "서버 브라우저 작업공간(browser_work_key)의 현재 페이지에서 사이트 공지 팝업(모달·알림)을 위에서부터 하나씩 '닫기' 버튼으로만 닫는다. "
+    "공지 모달이 겹쳐 로그아웃·다른 버튼을 가릴 때(ELEMENT_OBSCURED) 쓴다. 허용목록(초기값 my.a-bly.com)에 있는 사이트에서만 동작하고, "
+    "그 밖은 site_not_allowlisted 로 거부한다. 팝업 안에서 라벨이 정확히 '닫기'/'Close'/'×' 인 버튼만 누르며, "
+    "'하루 동안 보지 않기'·'다시 보지 않기'·신청·연동·확인·동의·결제·저장 버튼과 체크박스는 누르지 않는다. "
+    "누를 때마다 그 팝업이 사라졌는지 확인하고 안 사라지면 1회 재시도 후 overlay_not_dismissible 로 중단한다. "
+    "결과: closed_count, remaining_count, closed_popups(팝업 텍스트 앞 40자), remaining_reason. "
+    "쿠키·저장소는 바꾸지 않는 일회성 닫기이며 강제 클릭을 쓰지 않는다. 서버 레인 전용 — PC 레인은 지원하지 않는다."
+)
+
+
+def dismiss_site_popups_schema() -> Dict[str, Any]:
+    """browser_dismiss_site_popups 입력 스키마. 호출마다 새 dict 를 돌려준다."""
+    return {
+        "type": "object",
+        "properties": {
+            **browser_session_props(short_session_desc=True),
+            "browser_work_key": {
+                "type": "string",
+                "description": "팝업을 닫을 서버 브라우저 작업공간 키 (필수, 예: ably-admin). 그 작업공간의 현재 페이지에서만 동작한다",
+            },
+            "max_close": {
+                "type": "integer",
+                "description": "이번 호출에서 닫을 팝업 최대 개수 (기본 10, 상한 20)",
+                "minimum": 1,
+                "maximum": 20,
+            },
+        },
+        "required": ["browser_work_key"],
     }
 
 
@@ -2290,6 +2323,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "input_schema": clear_site_session_schema(),
         "defer_loading": True,
     },
+    "browser_dismiss_site_popups": {
+        "name": "browser_dismiss_site_popups",
+        "description": DISMISS_SITE_POPUPS_DESCRIPTION,
+        "input_schema": dismiss_site_popups_schema(),
+        "defer_loading": True,
+    },
     "smart_browser": {
         "name": "smart_browser",
         "description": (
@@ -3916,7 +3955,7 @@ _GROUPS: Dict[str, List[str]] = {
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
-    "browser": ["read_remote_file", "list_remote_dir", "smart_browser", "automation_draft", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list", "browser_clear_site_session"],
+    "browser": ["read_remote_file", "list_remote_dir", "smart_browser", "automation_draft", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list", "browser_clear_site_session", "browser_dismiss_site_popups"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # 운영/관측 도구 그룹

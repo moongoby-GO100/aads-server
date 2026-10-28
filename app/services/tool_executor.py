@@ -263,7 +263,7 @@ _BROWSER_TOOLS = frozenset({
     "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot",
     "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
     "browser_check", "browser_upload_file", "browser_download", "browser_tab_list",
-    "browser_clear_site_session",
+    "browser_clear_site_session", "browser_dismiss_site_popups",
     "capture_screenshot", "e2e_verify",
 })
 _DATABASE_TOOLS = frozenset({
@@ -1103,6 +1103,7 @@ class ToolExecutor:
             "browser_download":       self._browser_download,
             "browser_tab_list":       self._browser_tab_list,
             "browser_clear_site_session": self._browser_clear_site_session,
+            "browser_dismiss_site_popups": self._browser_dismiss_site_popups,
             "smart_browser":          self._smart_browser,
             "automation_draft":       self._automation_draft,
             # AADS-190 Phase2-A: 서브에이전트
@@ -6251,6 +6252,16 @@ class ToolExecutor:
             browser_lane=str(inp.get("browser_lane") or ""),
         )
 
+    async def _browser_dismiss_site_popups(self, inp: Dict[str, Any]) -> Any:
+        """서버 레인 허용목록 사이트의 공지 팝업을 '닫기'로만 닫는다."""
+        from app.api.ceo_chat_tools import tool_browser_dismiss_site_popups
+        return await tool_browser_dismiss_site_popups(
+            browser_work_key=str(inp.get("browser_work_key") or ""),
+            max_close=inp.get("max_close"),
+            browser_session_id=str(inp.get("browser_session_id") or ""),
+            browser_lane=str(inp.get("browser_lane") or ""),
+        )
+
     async def _semantic_code_search(self, inp: Dict[str, Any]) -> Any:
         """AADS-188B: ChromaDB 벡터 기반 시맨틱 코드 검색."""
         query = inp.get("query", "")
@@ -6841,8 +6852,8 @@ _INTENT_TOOL_MAP: Dict[str, list] = {
     "task_query":             ["check_directive_status"],
     "status_check":           ["check_directive_status"],
     # AADS-159: 브라우저 인텐트
-    "browser":                ["smart_browser", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list", "browser_clear_site_session"],
-    "browser_action":         ["smart_browser", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list", "browser_clear_site_session"],
+    "browser":                ["smart_browser", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list", "browser_clear_site_session", "browser_dismiss_site_popups"],
+    "browser_action":         ["smart_browser", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list", "browser_clear_site_session", "browser_dismiss_site_popups"],
     # AADS-190: 원격 쓰기/패치/실행/Git 인텐트
     "code_modify":            ["read_remote_file", "write_remote_file", "patch_remote_file", "run_remote_command"],
     "code_fix":               ["read_remote_file", "patch_remote_file", "run_remote_command"],

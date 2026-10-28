@@ -28,7 +28,7 @@ from app.services.work_recipe.guard import (
 from app.services.work_recipe.schema import (
     ALLOWED_ACTIONS,
     OVERLAY_DEFAULT_MAX_DISMISS,
-    OVERLAY_FORBIDDEN_MARKERS,
+    OVERLAY_SENSITIVE_MARKERS,
     overlay_host_matches,
 )
 from app.services.work_recipe.store import normalize_domain
@@ -644,7 +644,7 @@ class BrowserRecipeExecutor:
                 host = (urlsplit(str(state.get("url") or getattr(page, "url", "") or "")).hostname or "")
                 if not overlay_host_matches(host, str(overlay.get("domain") or "")) or not state.get("rootVisible"):
                     continue
-                if OVERLAY_FORBIDDEN_MARKERS.search(str(state.get("text") or "")):
+                if OVERLAY_SENSITIVE_MARKERS.search(str(state.get("text") or "")):
                     raise OverlayNotDismissible("sensitive_content", dismissed)
                 if not state.get("closeVisible"):
                     raise OverlayNotDismissible("close_control_missing", dismissed)
