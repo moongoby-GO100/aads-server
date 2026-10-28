@@ -158,6 +158,13 @@ def _source_not_found(message: str = SOURCE_NOT_FOUND_MESSAGE) -> HTTPException:
     return HTTPException(422, {"code": "invalid_source_path", "message": message})
 
 
+class _RemoteSourceMissing(HTTPException):
+    """원격 확인은 성공했지만 기본 브랜치에 파일이 없는 경우."""
+
+    def __init__(self) -> None:
+        super().__init__(422, {"code": "invalid_source_path", "message": SOURCE_NOT_FOUND_MESSAGE})
+
+
 async def _github_fetch(source: str) -> bytes:
     from app.core.llm_key_provider import get_api_key
 
@@ -171,11 +178,11 @@ async def _github_fetch(source: str) -> bytes:
     async with httpx.AsyncClient(timeout=GITHUB_READ_TIMEOUT) as client:
         response = await client.get(url, headers=headers, params={"ref": GITHUB_SOURCE_BRANCH})
     if response.status_code == 404:
-        raise _source_not_found()
+        raise _RemoteSourceMissing()
     response.raise_for_status()
     data = response.json()
     if not isinstance(data, dict) or data.get("type") != "file":
-        raise _source_not_found()
+        raise _RemoteSourceMissing()
     if int(data.get("size") or 0) > MAX_DOCUMENT_BYTES:
         raise HTTPException(413, "document_too_large")
     if data.get("encoding") != "base64":
@@ -215,11 +222,14 @@ async def _resolve_local_project_source(source: str) -> tuple[bytes, dict[str, A
         remote_error = exc
     if remote is not None:
         if local == remote:
-            return local, {"source_resolved_from": origin, "source_stale_local": False, "source_remote_checked": True}
+            return local, {"source_resolved_from": origin, "source_stale_local": False,
+                           "source_remote_checked": True, "source_remote_status": "same"}
         return remote, {"source_resolved_from": "remote", "source_stale_local": local is not None,
-                        "source_remote_checked": True}
+                        "source_remote_checked": True, "source_remote_status": "differs"}
     if local is not None:
-        return local, {"source_resolved_from": origin, "source_stale_local": False, "source_remote_checked": False}
+        missing = isinstance(remote_error, _RemoteSourceMissing)
+        return local, {"source_resolved_from": origin, "source_stale_local": False,
+                       "source_remote_checked": missing, "source_remote_status": "missing" if missing else "unavailable"}
     raise remote_error
 
 

@@ -160,7 +160,7 @@ async def register_document(
             "version": result.get("version"), "status": view_status, "approved": view_authoritative,
             "note": "같은 본문의 기존 리비전이 있어 새 리비전을 만들지 않았습니다(approved_revision 은 그대로).",
         })
-    out.update({k: result[k] for k in ("source_resolved_from", "source_stale_local", "source_remote_checked") if k in result})
+    out.update({k: result[k] for k in ("source_resolved_from", "source_stale_local", "source_remote_checked", "source_remote_status") if k in result})
     view = document_refs.canonical_view_ref(
         project, key, title=body.title, revision=int(revision_no) if revision_no is not None else None,
         status=view_status, authoritative=view_authoritative,

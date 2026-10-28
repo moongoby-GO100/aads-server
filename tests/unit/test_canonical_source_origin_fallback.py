@@ -131,7 +131,7 @@ def test_same_local_and_remote_reports_local_origin(roots, github, where):
     (dict(zip(("host", "image"), roots))[where] / PATH).write_text(BODY, encoding="utf-8")
     github["response"] = FakeResponse(200, _file_payload(BODY.encode()))
     *_, meta = _body()
-    assert meta == {"source_resolved_from": where, "source_stale_local": False, "source_remote_checked": True}
+    assert meta == {"source_resolved_from": where, "source_stale_local": False, "source_remote_checked": True, "source_remote_status": "same"}
 
 
 # (b) 로컬과 원격 내용이 다르다 → 원격이 정본, source_stale_local=true
@@ -142,6 +142,7 @@ def test_stale_local_prefers_remote_and_flags_it(roots, github):
     content, source, digest, meta = _body()
     assert content == BODY and source == PATH and digest == hashlib.sha256(BODY.encode()).hexdigest()
     assert meta["source_resolved_from"] == "remote" and meta["source_stale_local"] is True
+    assert meta["source_remote_status"] == "differs" and meta["source_remote_checked"] is True
     out = _register(NewDocConn(), _inp())
     assert out["source_resolved_from"] == "remote" and out["source_stale_local"] is True
 
@@ -161,7 +162,17 @@ def test_remote_unavailable_falls_back_to_local_copy(roots, github):
     (image / PATH).write_text(BODY, encoding="utf-8")
     github["error"] = httpx.ConnectError("down")
     *_, meta = _body()
-    assert meta == {"source_resolved_from": "image", "source_stale_local": False, "source_remote_checked": False}
+    assert meta == {"source_resolved_from": "image", "source_stale_local": False, "source_remote_checked": False, "source_remote_status": "unavailable"}
+
+
+def test_local_source_with_remote_404_reports_missing_and_uses_local(roots, github):
+    host, _ = roots
+    (host / PATH).write_text(BODY, encoding="utf-8")
+    github["response"] = FakeResponse(404)
+    content, _, _, meta = _body()
+    assert content == BODY
+    assert meta == {"source_resolved_from": "host", "source_stale_local": False,
+                    "source_remote_checked": True, "source_remote_status": "missing"}
 
 
 # (c) 원격 404 → 422 + 한글 사유
