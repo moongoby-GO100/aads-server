@@ -1214,18 +1214,32 @@ class GoalStateMachine:
         async with pool.acquire() as conn:
             if project:
                 rows = await conn.fetch(
-                    "SELECT id FROM goals WHERE project = $1 "
+                    "SELECT id, project FROM goals WHERE project = $1 "
                     "AND ($2::uuid IS NULL OR tenant_id = $2::uuid) "
                     "AND status IN ('draft', 'active') ORDER BY created_at",
                     project, tenant_id,
                 )
             else:
                 rows = await conn.fetch(
-                    "SELECT id FROM goals WHERE ($1::uuid IS NULL OR tenant_id = $1::uuid) "
+                    "SELECT id, project FROM goals WHERE ($1::uuid IS NULL OR tenant_id = $1::uuid) "
                     "AND status IN ('draft', 'active') ORDER BY project, created_at",
                     tenant_id,
                 )
-        results = [await self.advance_goal(str(row["id"])) for row in rows]
+        # 목표 하나의 실패(예: ck_goals_owner_required 위반)가 나머지 목표와
+        # 이후 주기 단계를 막지 않도록 목표별로 격리한다.
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            goal_id = str(row["id"])
+            try:
+                results.append(await self.advance_goal(goal_id))
+            except Exception as exc:
+                error = str(exc)[:200]
+                logger.warning(
+                    "goal_advance_goal_failed goal_id=%s project=%s error=%s",
+                    goal_id, row.get("project"), error,
+                )
+                results.append({"goal_id": goal_id, "advanced": False, "error": error})
+        failed = sum(1 for item in results if item.get("error"))
         advanced = sum(1 for item in results if item.get("advanced"))
         # 게이트에 걸린 목표는 개별 trace 를 남기지 않는다. 대신 사이클당 한 줄인
         # 이 요약 trace 에 사유별 건수만 집계해 운영자가 원인을 볼 수 있게 한다.
@@ -1237,11 +1251,17 @@ class GoalStateMachine:
             "goals_advance_sweep",
             project=project,
             input_summary=f"advance_active_goals project={project or 'ALL'}",
-            output_summary=f"checked={len(results)} advanced={advanced} gated={sum(gated.values())}",
-            metadata={"checked": len(results), "advanced": advanced, "gated": gated},
+            output_summary=(
+                f"checked={len(results)} advanced={advanced} "
+                f"gated={sum(gated.values())} failed={failed}"
+            ),
+            metadata={"checked": len(results), "advanced": advanced, "gated": gated, "failed": failed},
             started_at=started_at,
         )
-        return {"checked": len(results), "advanced": advanced, "gated": gated, "results": results}
+        return {
+            "checked": len(results), "advanced": advanced, "gated": gated,
+            "failed": failed, "results": results,
+        }
 
     async def _advance_after_milestone(self, goal_id: str, completed_milestone_id: str) -> None:
         pool = await self._pool()

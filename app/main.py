@@ -683,7 +683,13 @@ async def lifespan(app: FastAPI):
                 # #310(일일 누적수익 3%)은 물론이고 NAS·NTV2·SF 의 진행 중
                 # 목표들도 스케줄러가 아예 건드리지 않고 있었다. 골
                 # 오케스트레이션이 한 프로젝트에서만 돌고 있었던 셈이다.
-                advanced = await goal_state_machine.advance_active_goals(None)
+                # 목표별 실패는 advance_active_goals 안에서 격리된다. 여기서는
+                # 목록 조회 같은 전체 실패가 와도 dispatch·triage 가 돌게 한다.
+                advanced = {"checked": 0, "advanced": 0, "failed": 0}
+                try:
+                    advanced = await goal_state_machine.advance_active_goals(None)
+                except Exception as e_adv:
+                    logger.warning("goal_advance_failed", error=str(e_adv)[:200])
 
                 # 상태만 옮기고 끝내면 담당은 자기 차례가 온 줄 모른다.
                 # 착수한 마일스톤의 담당 세션에 실제로 말을 건다.
@@ -759,6 +765,7 @@ async def lifespan(app: FastAPI):
                     release_completed=released.get("completed", 0),
                     checked=advanced.get("checked", 0),
                     advanced=advanced.get("advanced", 0),
+                    advance_failed=advanced.get("failed", 0),
                     dispatched=dispatched.get("sent", 0),
                     dispatch_gave_up=dispatched.get("gave_up", 0),
                     review_asked=reviewed.get("asked", 0),
