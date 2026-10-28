@@ -99,6 +99,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "browser_upload_file": True,
     "browser_download": True,
     "browser_tab_list": True,
+    "browser_clear_site_session": True,
     "smart_browser": False,       # 채팅에서 승인 레시피 실행/E2E 레시피 등록
     "automation_draft": True,     # 대화로 업무 자동화 등록(초안 상태기계) — 온디맨드
     # ── 기타 ─────────────────────────────────────────────────────────────
@@ -316,7 +317,7 @@ INTENT_REQUIRED_TOOLS: Dict[str, list] = {
         "smart_browser", "automation_draft", "browser_connect", "browser_navigate", "browser_snapshot",
         "browser_screenshot", "browser_click", "browser_fill",
         "browser_press_key", "browser_select_option", "browser_check",
-        "browser_upload_file", "browser_download", "browser_tab_list",
+        "browser_upload_file", "browser_download", "browser_tab_list", "browser_clear_site_session",
     ],
     # CEO 아젠다 관리
     "agenda":             ["add_agenda", "list_agendas", "get_agenda", "update_agenda", "decide_agenda", "search_agendas"],
@@ -347,6 +348,34 @@ def browser_session_props(*, short_session_desc: bool = False) -> Dict[str, Any]
             "enum": ["server", "pc"],
             "description": "실행 레인. 기본 'server'(서버 Playwright, 일반/공개 사이트). 로컬 PC·로그인된 CEO 브라우저가 꼭 필요할 때만 'pc'(browser_work_key 와 함께). PC 경로는 90초 안에 끝나지 않으면 pc_agent_browser_timeout 오류를 반환하며 서버로 자동 전환하지 않음",
         },
+    }
+
+
+CLEAR_SITE_SESSION_DESCRIPTION = (
+    "서버 브라우저 작업공간(browser_work_key)에서 지정한 사이트(origin)의 로그인 기록(쿠키·localStorage·sessionStorage)만 비운다. "
+    "그 origin 의 호스트와 상위 등록 도메인(예: my.a-bly.com·.a-bly.com) 쿠키만 지우고, 다른 사이트·다른 작업공간·전역 프로필은 건드리지 않는다. "
+    "로그인 레시피를 처음부터 녹화하려고 이미 로그인된 상태를 풀 때 쓴다. 결과는 지운 쿠키 개수와 도메인 목록뿐(값은 반환하지 않음). "
+    "browser_work_key 와 origin(https://호스트) 이 모두 필수이며, 와일드카드·내부 도메인(*.newtalk.kr, localhost)은 거부한다. "
+    "서버 레인 전용 — PC 레인(browser_lane=pc)은 지원하지 않는다."
+)
+
+
+def clear_site_session_schema() -> Dict[str, Any]:
+    """browser_clear_site_session 입력 스키마. 호출마다 새 dict 를 돌려준다."""
+    return {
+        "type": "object",
+        "properties": {
+            **browser_session_props(short_session_desc=True),
+            "browser_work_key": {
+                "type": "string",
+                "description": "로그인 기록을 비울 서버 브라우저 작업공간 키 (필수, 예: ably-admin). 이 작업공간만 영향받는다",
+            },
+            "origin": {
+                "type": "string",
+                "description": "비울 사이트 주소 (필수, https://호스트 형식, 예: https://my.a-bly.com). 경로·와일드카드 불가",
+            },
+        },
+        "required": ["browser_work_key", "origin"],
     }
 
 
@@ -2255,6 +2284,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         },
         "defer_loading": True,
     },
+    "browser_clear_site_session": {
+        "name": "browser_clear_site_session",
+        "description": CLEAR_SITE_SESSION_DESCRIPTION,
+        "input_schema": clear_site_session_schema(),
+        "defer_loading": True,
+    },
     "smart_browser": {
         "name": "smart_browser",
         "description": (
@@ -3881,7 +3916,7 @@ _GROUPS: Dict[str, List[str]] = {
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
-    "browser": ["read_remote_file", "list_remote_dir", "smart_browser", "automation_draft", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list"],
+    "browser": ["read_remote_file", "list_remote_dir", "smart_browser", "automation_draft", "browser_connect", "browser_navigate", "browser_snapshot", "browser_screenshot", "capture_screenshot", "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "browser_check", "browser_upload_file", "browser_download", "browser_tab_list", "browser_clear_site_session"],
     # AADS-188C Phase 2: 메타 도구 그룹 (Orchestrator)
     "meta": ["check_directive_status", "check_task_status", "read_task_logs", "terminate_task", "delegate_to_agent", "delegate_to_research", "spawn_subagent", "spawn_parallel_subagents"],
     # 운영/관측 도구 그룹

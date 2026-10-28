@@ -5,7 +5,8 @@ CEO Chat 도구 정의 및 실행 (AADS-157 + AADS-159)
 12개 browser 도구: browser_connect, browser_navigate, browser_snapshot,
                    browser_screenshot, browser_click, browser_fill,
                    browser_press_key, browser_select_option, browser_check,
-                   browser_upload_file, browser_download, browser_tab_list
+                   browser_upload_file, browser_download, browser_tab_list,
+                   browser_clear_site_session
 
 보안 규칙 (하드코딩, LLM 우회 불가):
   - read_file: /root/aads/ 하위만 허용. /etc, /proc, /root/.ssh 차단
@@ -36,7 +37,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from app.services import mockup_gate_rules as _mockup_rules
-from app.services.tool_registry import browser_session_props
+from app.services.tool_registry import (
+    CLEAR_SITE_SESSION_DESCRIPTION,
+    browser_session_props,
+    clear_site_session_schema,
+)
 
 logger = logging.getLogger(__name__)
 _GLOBAL_TASK_SCOPES = frozenset({"all", "global"})
@@ -438,6 +443,11 @@ TOOL_DEFINITIONS: List[Dict] = [
             },
             "required": [],
         },
+    },
+    {
+        "name": "browser_clear_site_session",
+        "description": CLEAR_SITE_SESSION_DESCRIPTION,
+        "input_schema": clear_site_session_schema(),
     },
     # ── SSH 원격 파일 접근 도구 (AADS-165) ────────────────────────────────────
     {
@@ -5371,6 +5381,53 @@ async def tool_browser_tab_list(browser_session_id: str = "", browser_work_key: 
         return f"[ERROR] 탭 목록 조회 실패: {e}"
 
 
+async def tool_browser_clear_site_session(
+    browser_work_key: str = "",
+    origin: str = "",
+    browser_session_id: str = "",
+    browser_lane: str = "",
+) -> str:
+    """서버 레인 작업공간(browser_work_key)에서 지정 사이트(origin)의 로그인 쿠키·저장소만 비운다."""
+    from app.browser_bridge.aads_adapter import normalize_browser_lane
+    from app.browser_bridge.service import (
+        SiteSessionClearRejected,
+        get_browser_bridge_service,
+        normalize_work_key,
+    )
+    from app.services.tool_executor import current_chat_session_id
+
+    chat_session = str(current_chat_session_id.get("") or "").strip()[:100] or "-"
+    work_key_text = str(browser_work_key or "").strip()
+
+    def _reject(code: str, message: str) -> str:
+        logger.info(
+            "browser_clear_site_session_audit work_key=%s origin=%s cleared=0 chat_session=%s rejected=%s",
+            work_key_text[:120] or "-", str(origin or "").strip()[:200] or "-", chat_session, code,
+        )
+        return f"[ERROR] 사이트 로그인 기록 비우기 거부 ({code}): {message}"
+
+    if browser_session_id or normalize_browser_lane(browser_lane) == "pc":
+        return _reject("pc_lane_unsupported", "PC 레인(browser_lane=pc / browser_session_id)은 지원하지 않습니다. 서버 레인 전용입니다")
+    if not work_key_text:
+        return _reject("work_key_required", "browser_work_key 는 필수입니다")
+    try:
+        key = normalize_work_key(work_key_text)
+    except ValueError as exc:
+        return _reject("work_key_invalid", str(exc))
+    try:
+        result = await get_browser_bridge_service().clear_headless_work_site_session(key, origin)
+    except SiteSessionClearRejected as exc:
+        return _reject(exc.code, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("browser_clear_site_session_failed work_key=%s error=%s", key, type(exc).__name__)
+        return f"[ERROR] 사이트 로그인 기록 비우기 실패: {type(exc).__name__}"
+    logger.info(
+        "browser_clear_site_session_audit work_key=%s origin=%s cleared=%d chat_session=%s",
+        key, result["origin"], result["cleared_cookie_count"], chat_session,
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
 # ─── 대화 히스토리 검색 ────────────────────────────────────────────────────────
 
 _HISTORY_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -6740,6 +6797,13 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
         return await tool_browser_tab_list(
             browser_session_id=params.get("browser_session_id", ""),
             browser_work_key=params.get("browser_work_key", ""),
+            browser_lane=str(params.get("browser_lane") or ""),
+        )
+    elif name == "browser_clear_site_session":
+        return await tool_browser_clear_site_session(
+            browser_work_key=params.get("browser_work_key", ""),
+            origin=params.get("origin", ""),
+            browser_session_id=params.get("browser_session_id", ""),
             browser_lane=str(params.get("browser_lane") or ""),
         )
     elif name in {"pc_execute", "device_execute"}:

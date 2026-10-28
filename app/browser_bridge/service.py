@@ -199,6 +199,66 @@ def normalize_work_key(work_key: str) -> str:
     return value
 
 
+_SITE_CLEAR_MULTI_PART_SUFFIXES = frozenset({
+    "co.kr", "or.kr", "ne.kr", "go.kr", "re.kr", "pe.kr", "ac.kr", "co.jp", "ne.jp", "or.jp",
+    "com.au", "co.uk", "org.uk", "com.cn", "com.tw", "com.hk", "co.nz", "com.br", "co.in", "com.sg",
+})
+_SITE_CLEAR_INTERNAL_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
+
+
+class SiteSessionClearRejected(ValueError):
+    """작업공간 사이트 쿠키 비우기 입력이 안전 조건을 어긴 경우."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def parse_site_session_origin(origin: str) -> tuple[str, str, tuple[str, ...]]:
+    """https://host 형식 origin 을 검증하고 (origin, host, 지울 쿠키 도메인 튜플)을 돌려준다.
+
+    쿠키 도메인은 host 부터 등록 도메인까지의 상위 도메인(예: my.a-bly.com → my.a-bly.com, a-bly.com).
+    """
+    text = str(origin or "").strip()
+    if not text:
+        raise SiteSessionClearRejected("origin_required", "origin 은 필수입니다 (예: https://my.a-bly.com)")
+    if "*" in text or "?" in text:
+        raise SiteSessionClearRejected("wildcard_not_allowed", "와일드카드/패턴은 허용하지 않습니다")
+    try:
+        parsed = urllib.parse.urlparse(text)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port
+    except ValueError:
+        raise SiteSessionClearRejected("origin_invalid", "origin 을 해석할 수 없습니다") from None
+    if parsed.scheme != "https" or not host:
+        raise SiteSessionClearRejected("origin_invalid", "origin 은 https://host 형식이어야 합니다")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
+        raise SiteSessionClearRejected("origin_invalid", "origin 에는 경로·계정·쿼리를 넣을 수 없습니다")
+    if port not in (None, 443):
+        raise SiteSessionClearRejected("origin_invalid", "https 기본 포트(443)만 허용합니다")
+    if (
+        host == "localhost"
+        or host.endswith(_SITE_CLEAR_INTERNAL_SUFFIXES)
+        or host == "newtalk.kr"
+        or host.endswith(".newtalk.kr")
+    ):
+        raise SiteSessionClearRejected("internal_domain", "내부 도메인(*.newtalk.kr, localhost 등)은 허용하지 않습니다")
+    try:
+        import ipaddress
+
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise SiteSessionClearRejected("internal_domain", "IP 주소 origin 은 허용하지 않습니다")
+    labels = host.split(".")
+    if len(labels) < 2 or host in _SITE_CLEAR_MULTI_PART_SUFFIXES:
+        raise SiteSessionClearRejected("origin_invalid", "등록 가능한 도메인이 아닙니다")
+    keep = 3 if ".".join(labels[-2:]) in _SITE_CLEAR_MULTI_PART_SUFFIXES else 2
+    domains = tuple(".".join(labels[i:]) for i in range(len(labels) - keep + 1))
+    return f"https://{host}", host, domains
+
+
 def is_extai_work_key(work_key: str) -> bool:
     value = (work_key or "").strip().lower()
     return value.startswith(EXTAI_WORK_KEY_PREFIXES)
@@ -2459,6 +2519,76 @@ class BrowserBridgeService:
         if evicted:
             logger.info("headless_work_contexts_evicted count=%d ttl=%.0fs", evicted, ttl)
         return evicted
+
+    async def clear_headless_work_site_session(self, work_key: str, origin: str) -> dict[str, Any]:
+        """서버 레인 work_key 컨텍스트에서 origin 사이트의 쿠키·localStorage·sessionStorage 만 지운다.
+
+        다른 도메인 쿠키·다른 work_key 컨텍스트는 건드리지 않고, 컨텍스트가 없으면 만들지도 않는다.
+        결과에는 쿠키 값을 담지 않는다(개수·도메인 이름만).
+        """
+        key = normalize_work_key(work_key)
+        site_origin, _host, domains = parse_site_session_origin(origin)
+        result: dict[str, Any] = {
+            "work_key": key,
+            "origin": site_origin,
+            "context_present": False,
+            "cleared_cookie_count": 0,
+            "cookie_domains": [],
+            "storage_cleared": False,
+        }
+        entry = self._headless_work_contexts.get(key)
+        if entry is None or not entry[0].is_connected():
+            return result
+        context = entry[1]
+        result["context_present"] = True
+
+        targets = []
+        for cookie in await context.cookies():
+            if str(cookie.get("domain") or "").lstrip(".").lower() in domains:
+                targets.append(cookie)
+        cleared_domains: set[str] = set()
+        for cookie in targets:
+            await context.clear_cookies(
+                name=cookie["name"], domain=cookie["domain"], path=cookie.get("path") or "/"
+            )
+            cleared_domains.add(cookie["domain"])
+        result["cleared_cookie_count"] = len(targets)
+        result["cookie_domains"] = sorted(cleared_domains)
+        result["storage_cleared"] = await self._clear_origin_web_storage(context, site_origin)
+        return result
+
+    async def _clear_origin_web_storage(self, context: Any, site_origin: str) -> bool:
+        script = (
+            "() => { try { localStorage.clear(); } catch (e) {} "
+            "try { sessionStorage.clear(); } catch (e) {} }"
+        )
+        try:
+            open_pages = [
+                p for p in context.pages
+                if not p.is_closed() and str(p.url or "").startswith(site_origin + "/")
+            ]
+            for page in open_pages:
+                await page.evaluate(script)
+            if open_pages:
+                return True
+            # 열린 페이지가 없으면 사이트 네트워크 요청 없이 빈 응답으로 origin 컨텍스트만 만든다.
+            page = await context.new_page()
+            try:
+                async def _blank(route: Any) -> None:
+                    if route.request.url.startswith(site_origin + "/"):
+                        await route.fulfill(status=200, content_type="text/html", body="<html></html>")
+                    else:
+                        await route.abort()
+
+                await page.route("**/*", _blank)
+                await page.goto(site_origin + "/", wait_until="domcontentloaded", timeout=10_000)
+                await page.evaluate(script)
+                return True
+            finally:
+                await page.close()
+        except Exception as exc:
+            logger.warning("clear_site_storage_failed origin=%s error=%s", site_origin, type(exc).__name__)
+            return False
 
     async def _context_for_session(self, session: BrowserBridgeSession) -> Any:
         cached = self._session_contexts.get(session.session_id)
