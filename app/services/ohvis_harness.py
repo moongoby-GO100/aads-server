@@ -86,6 +86,9 @@ RISK_POLICIES: dict[str, dict[str, Any]] = {
     },
 }
 
+# 운영 공용 스킬이 저장된 시스템 테넌트. 내부 테넌트(aads_internal_tenant_id())에게만 읽기 전용으로 보인다.
+SYSTEM_TENANT_ID = "00000000-0000-0000-0000-000000000000"
+
 SKILL_VERSION_STATES = frozenset({"draft", "candidate", "shadow", "active", "deprecated", "quarantined"})
 HIGH_RISK_TIERS = frozenset({"write", "deploy", "auth", "financial", "destructive"})
 _EXECUTOR_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{2,119}$")
@@ -321,6 +324,16 @@ def _skill_source_fields(metadata: Any) -> dict[str, Any]:
     }
 
 
+def _skill_scope_fields(owner_tenant_id: Any, tenant_id: str) -> dict[str, Any]:
+    """호출 테넌트 소유가 아닌 행(시스템 테넌트 공용 스킬)은 읽기 전용 shared 로 표시한다."""
+    shared = owner_tenant_id is not None and str(owner_tenant_id).lower() != str(tenant_id).lower()
+    return {
+        "scope": "shared" if shared else "tenant",
+        "read_only": shared,
+        "owner_label": "공용" if shared else None,
+    }
+
+
 def _require_uuid(value: str, code: str = "invalid_skill_id") -> str:
     try:
         return str(uuid.UUID(str(value)))
@@ -341,7 +354,8 @@ async def list_skill_manifests(*, tenant_id: str, slug: str | None = None,
     from app.core.db_pool import get_pool
     async with get_pool().acquire() as conn:
         rows = await conn.fetch(
-            """SELECT l.id::text AS skill_id,l.slug,l.title,l.description,l.projects,l.intents,
+            """SELECT l.id::text AS skill_id,l.tenant_id::text AS owner_tenant_id,
+                      l.slug,l.title,l.description,l.projects,l.intents,
                       l.enabled,l.risk_tier,l.metadata::text AS metadata_text,
                       v.id::text AS version_id,v.version,v.status,v.manifest,
                       v.content_sha256,v.created_at,
@@ -357,7 +371,12 @@ async def list_skill_manifests(*, tenant_id: str, slug: str | None = None,
                    SELECT r.status,r.started_at FROM ops_skill_runs r
                    WHERE r.skill_id=l.id AND r.tenant_id=l.tenant_id
                    ORDER BY r.started_at DESC LIMIT 1) lr ON TRUE
-               WHERE l.tenant_id=$1::uuid AND ($2::text IS NULL OR l.slug=$2)
+               WHERE (l.tenant_id=$1::uuid
+                      OR (l.tenant_id=$9::uuid
+                          AND $1::uuid=public.aads_internal_tenant_id()
+                          AND NOT EXISTS (SELECT 1 FROM ops_skill_library o
+                                           WHERE o.tenant_id=$1::uuid AND o.slug=l.slug)))
+                 AND ($2::text IS NULL OR l.slug=$2)
                  AND ($3::text IS NULL OR v.status=$3)
                  AND ($4::text IS NULL OR EXISTS (
                       SELECT 1 FROM unnest(l.projects) p WHERE upper(p)=upper($4)))
@@ -368,11 +387,12 @@ async def list_skill_manifests(*, tenant_id: str, slug: str | None = None,
                  AND ($8::text IS NULL
                       OR strpos(lower(l.slug||' '||l.title||' '||l.description),lower($8))>0)
                ORDER BY l.slug,v.created_at DESC""",
-            tenant_id, slug, status, project, risk_tier, enabled, source, q,
+            tenant_id, slug, status, project, risk_tier, enabled, source, q, SYSTEM_TENANT_ID,
         )
     items = []
     for row in rows:
         item = _row_dict(row)
+        item.update(_skill_scope_fields(item.pop("owner_tenant_id", None), tenant_id))
         item.update(_skill_source_fields(item.pop("metadata_text", None)))
         run_status = item.pop("latest_run_status", None)
         run_started = item.pop("latest_run_started_at", None)
@@ -391,14 +411,19 @@ async def get_skill_detail(*, tenant_id: str, skill_id: str) -> dict[str, Any]:
     from app.core.db_pool import get_pool
     async with get_pool().acquire() as conn:
         skill = await conn.fetchrow(
-            """SELECT l.id::text AS skill_id,l.slug,l.title,l.description,l.projects,l.intents,
+            """SELECT l.id::text AS skill_id,l.tenant_id::text AS owner_tenant_id,
+                      l.slug,l.title,l.description,l.projects,l.intents,
                       l.risk_tier,l.allowed_tools,l.enabled,l.source_path,
                       l.metadata::text AS metadata_text,l.created_at,l.updated_at
-               FROM ops_skill_library l WHERE l.tenant_id=$1::uuid AND l.id=$2::uuid""",
-            tenant_id, skill_id,
+               FROM ops_skill_library l
+               WHERE l.id=$2::uuid
+                 AND (l.tenant_id=$1::uuid
+                      OR (l.tenant_id=$3::uuid AND $1::uuid=public.aads_internal_tenant_id()))""",
+            tenant_id, skill_id, SYSTEM_TENANT_ID,
         )
         if not skill:
             raise SkillRegistryError("skill_not_found", status_code=404)
+        owner_tenant_id = dict(skill).get("owner_tenant_id") or tenant_id
         versions = await conn.fetch(
             """SELECT v.id::text AS version_id,v.version,v.status,v.content_sha256,v.manifest,
                       v.created_at,v.promoted_at,v.promoted_by
@@ -411,9 +436,10 @@ async def get_skill_detail(*, tenant_id: str, skill_id: str) -> dict[str, Any]:
                       r.started_at,r.completed_at
                FROM ops_skill_runs r LEFT JOIN ops_skill_versions v ON v.id=r.skill_version_id
                WHERE r.skill_id=$1::uuid AND r.tenant_id=$2::uuid
-               ORDER BY r.started_at DESC LIMIT 10""", skill_id, tenant_id,
+               ORDER BY r.started_at DESC LIMIT 10""", skill_id, owner_tenant_id,
         )
     detail = _row_dict(skill)
+    detail.update(_skill_scope_fields(detail.pop("owner_tenant_id", None), tenant_id))
     detail.update(_skill_source_fields(detail.pop("metadata_text", None)))
     version_items = [_row_dict(v) for v in versions]
     active = next((v["version"] for v in version_items if v["status"] == "active"), None)

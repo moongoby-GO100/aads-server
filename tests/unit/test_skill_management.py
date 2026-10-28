@@ -150,7 +150,7 @@ def test_list_passes_all_filters_to_sql_in_order(use_pool):
         enabled=False, source="file", q="수집",
     ))
     sql, args = conn.calls[0]
-    assert args == (TENANT, "s", "active", "aads", "write", False, "file", "수집")
+    assert args == (TENANT, "s", "active", "aads", "write", False, "file", "수집", harness.SYSTEM_TENANT_ID)
     assert "unnest(l.projects)" in sql and "l.risk_tier=$5" in sql and "l.enabled=$6" in sql
     assert "metadata->>'source_path'" in sql and "strpos(lower(" in sql
     assert " LIKE " not in sql.upper().replace("ILIKE", "")  # q 는 와일드카드를 해석하지 않는다
@@ -184,6 +184,77 @@ def test_unreadable_file_falls_back_to_stored_drift_flag():
     assert sfi.compute_file_drift(meta) is True
     assert sfi.compute_file_drift({**meta, "file_drift": False}) is False
     assert sfi.compute_file_drift({}) is False
+
+
+# ------------------------------------------- 1-b. 시스템 테넌트 공용 스킬 (읽기 전용)
+
+SYSTEM = "00000000-0000-0000-0000-000000000000"
+
+
+def test_list_marks_system_rows_shared_read_only(use_pool):
+    use_pool(FakeConn(fetch_rows={"FROM ops_skill_library l": [
+        _list_row(owner_tenant_id=TENANT, slug="mine"),
+        _list_row(owner_tenant_id=SYSTEM, slug="AADS blue-green release")]}))
+    mine, shared = run(harness.list_skill_manifests(tenant_id=TENANT))
+    assert (mine["scope"], mine["read_only"], mine["owner_label"]) == ("tenant", False, None)
+    assert (shared["scope"], shared["read_only"], shared["owner_label"]) == ("shared", True, "공용")
+    assert "owner_tenant_id" not in shared
+    assert shared["skill_id"] == SKILL_ID and shared["version"] == "1.0.0"  # 기존 필드 유지
+
+
+def test_list_sql_exposes_system_rows_only_to_internal_tenant_and_prefers_own_slug(use_pool):
+    conn = use_pool(FakeConn())
+    run(harness.list_skill_manifests(tenant_id=TENANT))
+    sql, args = conn.calls[0]
+    assert "l.tenant_id=$9::uuid" in sql and args[8] == SYSTEM
+    assert "$1::uuid=public.aads_internal_tenant_id()" in sql
+    assert "NOT EXISTS (SELECT 1 FROM ops_skill_library o" in sql
+    assert "o.tenant_id=$1::uuid AND o.slug=l.slug" in sql
+
+
+def test_detail_of_shared_skill_is_read_only_and_runs_follow_owner(use_pool):
+    conn = use_pool(FakeConn(fetchrow_map={"FROM ops_skill_library l": {
+        "skill_id": SKILL_ID, "owner_tenant_id": SYSTEM, "slug": "alpha", "title": "Alpha",
+        "description": "", "projects": [], "intents": [], "risk_tier": "read", "allowed_tools": [],
+        "enabled": True, "source_path": "builtin:alpha", "metadata_text": "{}",
+        "created_at": "t", "updated_at": "t"}}))
+    detail = run(harness.get_skill_detail(tenant_id=TENANT, skill_id=SKILL_ID))
+    assert (detail["scope"], detail["read_only"], detail["owner_label"]) == ("shared", True, "공용")
+    assert "owner_tenant_id" not in detail
+    skill_sql, skill_args = [c for c in conn.calls if "FROM ops_skill_library l" in c[0]][0]
+    assert skill_args == (TENANT, SKILL_ID, SYSTEM)
+    assert "public.aads_internal_tenant_id()" in skill_sql
+    runs_args = [c for c in conn.calls if "FROM ops_skill_runs r" in c[0]][0][1]
+    assert runs_args == (SKILL_ID, SYSTEM)
+
+
+@pytest.mark.parametrize("call", [
+    lambda: harness.update_skill(tenant_id=TENANT, skill_id=SKILL_ID, title="t", description="d",
+                                 projects=[], intents=[]),
+    lambda: harness.disable_skill(tenant_id=TENANT, skill_id=SKILL_ID),
+    lambda: harness.add_skill_version(tenant_id=TENANT, skill_id=SKILL_ID, manifest={
+        "version": "1.0.0", "executor": "x.y.z"}),
+    lambda: harness.validate_stored_skill(tenant_id=TENANT, skill_id=SKILL_ID, version="1.0.0"),
+    lambda: harness.rollback_skill_version(
+        tenant_id=TENANT, skill_id=SKILL_ID, actor="ceo", idempotency_key="idem-key-0002",
+        reason="r", evidence=[{"k": "v"}]),
+])
+def test_write_paths_never_touch_system_tenant_rows(use_pool, call):
+    conn = use_pool(FakeConn())  # 호출 테넌트 조건에 걸리는 행이 없으면 시스템 행은 변경 불가
+    with pytest.raises(harness.SkillRegistryError):
+        run(call())
+    for sql, args in conn.calls:
+        if "ops_skill_library" in sql:
+            assert "tenant_id=$1::uuid" in sql and args[0] == TENANT
+        assert SYSTEM not in args
+
+
+def test_write_and_execute_paths_do_not_reference_shared_visibility():
+    for name in ("update_skill", "disable_skill", "add_skill_version", "validate_stored_skill",
+                 "promote_skill_version", "rollback_skill_version", "execute_skill"):
+        src = inspect.getsource(getattr(harness, name))
+        assert "SYSTEM_TENANT_ID" not in src and "aads_internal_tenant_id" not in src, name
+        assert "tenant_id=$1::uuid" in src, name
 
 
 # ---------------------------------------------------------------- 2. 상세 API
