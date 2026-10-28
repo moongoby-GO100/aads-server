@@ -27,6 +27,7 @@ from app.services.goal_policy_foundation import (
     verify_immediately_before_execution,
 )
 from app.services.goal_policy_foundation import patch_hash as canonical_patch_hash
+from app.services.goal_progress import goal_progress_ratio
 from app.services.goal_work_hierarchy import ActorScope, _row_dict
 
 
@@ -1122,8 +1123,8 @@ async def rollup_ancestors(conn: Any, *, tenant_id: str, item_id: str) -> None:
     # Legacy milestones have no progress column.  Move them to review only
     # after every Epic was independently accepted; final acceptance remains a
     # separate manual gate.  Goal progress is informational for the same reason.
-    # goals.progress is a 0..1 ratio (same unit as goal_manager._update_goal_progress);
-    # work_items.progress stays 0..100.
+    # goals.progress is a 0..1 ratio computed by goal_progress_ratio (shared with
+    # goal_manager._update_goal_progress); work_items.progress stays 0..100.
     await conn.execute(
         """WITH scope AS (
              SELECT milestone_id,goal_id FROM work_items WHERE id=$1::uuid AND tenant_id=$2::uuid
@@ -1136,11 +1137,13 @@ async def rollup_ancestors(conn: Any, *, tenant_id: str, item_id: str) -> None:
              FROM epic_state e WHERE m.id=e.milestone_id""",
         item_id, tenant_id,
     )
-    await conn.execute(
-        """WITH scope AS (SELECT goal_id FROM work_items WHERE id=$1::uuid AND tenant_id=$2::uuid),
-           counts AS (SELECT w.goal_id,count(*) FILTER(WHERE w.status='completed') AS done,count(*) AS total
-             FROM work_items w JOIN scope s ON s.goal_id=w.goal_id WHERE w.tenant_id=$2::uuid GROUP BY w.goal_id)
-           UPDATE goals g SET progress=COALESCE(round(c.done::numeric/NULLIF(c.total,0),2),0),
-             updated_at=clock_timestamp() FROM counts c WHERE g.id=c.goal_id AND g.tenant_id=$2::uuid""",
+    goal_id = await conn.fetchval(
+        "SELECT goal_id::text FROM work_items WHERE id=$1::uuid AND tenant_id=$2::uuid",
         item_id, tenant_id,
     )
+    if goal_id:
+        progress = await goal_progress_ratio(conn, goal_id, tenant_id=tenant_id)
+        await conn.execute(
+            "UPDATE goals SET progress=$3,updated_at=clock_timestamp() WHERE id=$1::uuid AND tenant_id=$2::uuid",
+            goal_id, tenant_id, progress,
+        )

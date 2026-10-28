@@ -22,10 +22,12 @@ from app.services.goal_binding import (
 )
 from app.services.goal_failure_retry import (
     archive_exhaustion_note,
+    cascade_exemption_reason,
     ensure_retry_candidate,
     mark_explicit_retry_supersession,
 )
 from app.services.goal_grant_suspension import sync_goal_grants
+from app.services.goal_progress import goal_progress_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +201,7 @@ def _rows_affected(result: Any) -> int:
 
 async def _audited_goal_status_update(
     conn, goal_id: Any, new_status: str, sql: str, *args: Any,
-    source: str, actor: str,
+    source: str, actor: str, note: Optional[str] = None,
 ) -> Any:
     """goals.status 를 쓰는 UPDATE 를 그대로 실행하고, 실제 전이가 있었을 때만 감사 1행을 남긴다.
 
@@ -217,7 +219,7 @@ async def _audited_goal_status_update(
         if old and _rows_affected(result) > 0 and old["status"] != new_status:
             await _record_goal_status_audit(
                 conn, goal_id, old["status"], new_status,
-                actor=actor, tenant_id=old["tenant_id"], source=source,
+                actor=actor, tenant_id=old["tenant_id"], source=source, note=note,
             )
             await sync_goal_grants(conn, goal_id, source=source)
     return result
@@ -657,7 +659,20 @@ class GoalStateMachine:
                         goal_id=str(link["goal_id"]) if link["goal_id"] else "",
                         failed_task_id=task_id, reason="linked_task_failed",
                     )
+                    exempt = None
                     if link["goal_id"] and not (
+                        retry_candidate.get("created") or retry_candidate.get("candidate_alive")
+                    ):
+                        exempt = await cascade_exemption_reason(
+                            conn, goal_id=str(link["goal_id"]), task_id=task_id,
+                            status=status, phase=phase, tenant_id=tenant_id,
+                        )
+                        if exempt:
+                            logger.info(
+                                "goal_cascade_exempt goal=%s task=%s reason=%s",
+                                link["goal_id"], task_id, exempt,
+                            )
+                    if link["goal_id"] and not exempt and not (
                         retry_candidate.get("created") or retry_candidate.get("candidate_alive")
                     ):
                         await _audited_goal_status_update(
@@ -670,6 +685,7 @@ class GoalStateMachine:
                             """,
                             str(link["goal_id"]), tenant_id,
                             source="task_failure_cascade", actor="system:goal_manager",
+                            note=f"원인 job_id={task_id} status={status} phase={phase}",
                         )
                     results.append({
                         "milestone_id": str(link["milestone_id"]),
@@ -1295,7 +1311,6 @@ class GoalStateMachine:
         pool = await self._pool()
         async with pool.acquire() as conn:
             total, completed = await self._milestone_completion_stats(conn, goal_id)
-            progress = round(completed / total, 2) if total > 0 else 0.0
 
             if total > 0 and total == completed:
                 await _audited_goal_status_update(
@@ -1334,6 +1349,10 @@ class GoalStateMachine:
                 # 통째로 사라진다. 2026-09-21 M11 반려 때 실제로 그렇게 됐다 —
                 # goal 169e5328 이 completed_at 23:04:34 로 굳은 뒤 23:24:58 에
                 # progress 만 0.94 로 내려가고 status 는 그대로였다.
+                # 진행률 공식은 goal_progress_ratio 하나다(task 기반, task 가 없으면 마일스톤 비율).
+                progress = await goal_progress_ratio(
+                    conn, goal_id, milestones=(total, completed),
+                )
                 # 목표 UPDATE 와 grant 정합은 한 트랜잭션이다. 정합이 실패하면 progress/status 도 되돌아간다.
                 async with conn.transaction():
                     await conn.execute(

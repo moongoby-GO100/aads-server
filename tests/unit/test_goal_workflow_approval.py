@@ -28,6 +28,7 @@ TENANT = "00000000-0000-0000-0000-000000000001"
 SESSION = "00000000-0000-0000-0000-000000000002"
 OTHER = "00000000-0000-0000-0000-000000000003"
 CHANGE = "00000000-0000-0000-0000-000000000004"
+GOAL = "00000000-0000-0000-0000-000000000005"
 ROOT = Path(__file__).parents[2]
 SERVICE = (ROOT / "app/services/goal_workflow_approval.py").read_text()
 MIGRATION = (ROOT / "migrations/20260919_goal_work_hierarchy_m14.sql").read_text()
@@ -416,11 +417,18 @@ def test_w14b_recursive_revoke_and_retry_fails_closed():
 
 
 class RollupConn:
-    def __init__(self):
+    def __init__(self, *, finished=4, counted=44):
         self.statements = []
+        self.finished, self.counted = finished, counted
 
     async def execute(self, sql, *args):
         self.statements.append((sql, args))
+
+    async def fetchval(self, sql, *args):
+        return GOAL if "SELECT goal_id::text FROM work_items" in sql else None
+
+    async def fetchrow(self, sql, *args):
+        return {"finished": self.finished, "counted": self.counted}
 
 
 def test_goal_progress_rollup_writes_zero_to_one_ratio():
@@ -428,8 +436,10 @@ def test_goal_progress_rollup_writes_zero_to_one_ratio():
 
     conn = RollupConn()
     asyncio.run(rollup_ancestors(conn, tenant_id=TENANT, item_id=CHANGE))
-    goal_sql = next(sql for sql, _ in conn.statements if "UPDATE goals g SET progress" in sql)
-    assert "round(c.done::numeric/NULLIF(c.total,0),2)" in goal_sql
+    goal_sql, goal_args = next(
+        (sql, args) for sql, args in conn.statements if "UPDATE goals SET progress" in sql
+    )
+    assert goal_args == (GOAL, TENANT, 0.09)
     assert "100.0*" not in goal_sql
     work_item_sql = next(sql for sql, _ in conn.statements if "UPDATE work_items w SET progress" in sql)
     assert "100.0*" in work_item_sql

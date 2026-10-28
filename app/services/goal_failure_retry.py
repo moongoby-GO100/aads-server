@@ -182,6 +182,76 @@ async def find_valid_successor(conn, tenant_id: str, milestone_id: str, failed_t
     return completed
 
 
+_CASCADE_EXEMPT_STATUSES = {"rejected", "rejected_done", "cancelled"}
+_CASCADE_EXEMPT_PHASES = {"blocked_dependency", "rejected_done"}
+_DEPLOY_FALSE_POSITIVE_MARKERS = ("deploy_gate_blocked", "deploy_deferred_intraday")
+
+
+def _row_value(row, key: str):
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _has_push_succeeded(logs) -> bool:
+    """러너가 push 성공 시 logs 에 남기는 push_succeeded 이벤트(= 러너 로그의 GIT_PUSH_OK)."""
+    if isinstance(logs, str):
+        try:
+            logs = json.loads(logs)
+        except ValueError:
+            return False
+    return isinstance(logs, list) and any(
+        isinstance(item, dict) and item.get("event") == "push_succeeded" for item in logs
+    )
+
+
+async def cascade_exemption_reason(
+    conn, *, goal_id: str, task_id: str, status: str | None = None, phase: str | None = None,
+    tenant_id: str | None = None,
+) -> str | None:
+    """실패 링크가 목표를 blocked 로 만들면 안 되는 사유. 없으면 None (= 진짜 실패, 기존대로 차단).
+
+    * superseded_by_rework  — 같은 goal 에 이 job 을 REWORK_OF·RETRY_OF_LINK 등으로 가리키는 후속 job 이 있다.
+    * rejected_or_blocked_dependency — 세션이 반려했거나 선행 반려로 blocked_dependency 취소됐다.
+    * deploy_false_positive — 배포 게이트 오탐으로 error 가 됐지만 커밋은 이미 push 됐다.
+
+    조회가 실패하면 면제하지 않는다(fail closed): 실패를 놓치는 쪽이 오탐 차단보다 위험하다.
+    """
+    state = str(status or "").lower()
+    phase_l = str(phase or "").lower()
+    if state in _CASCADE_EXEMPT_STATUSES and phase_l in _CASCADE_EXEMPT_PHASES:
+        return "rejected_or_blocked_dependency"
+    try:
+        rows = await conn.fetch(
+            """SELECT pj.job_id, pj.instruction
+               FROM goal_task_links gl
+               JOIN pipeline_jobs pj ON pj.job_id = gl.task_id
+               WHERE gl.goal_id = $1::uuid AND gl.task_type = 'pipeline_job'
+                 AND pj.job_id <> $2 AND position($2 in pj.instruction) > 0
+                 AND ($3::uuid IS NULL OR gl.tenant_id = $3::uuid)
+               ORDER BY pj.created_at DESC LIMIT 20""",
+            goal_id, task_id, tenant_id,
+        )
+        for row in rows:
+            instruction = _row_value(row, "instruction")
+            if parse_retry_link(instruction) == task_id or any(
+                marked == task_id for marked, _ in parse_supersede_markers(instruction)
+            ):
+                return "superseded_by_rework"
+        job = await conn.fetchrow(
+            "SELECT error_detail, logs FROM pipeline_jobs WHERE job_id = $1", task_id,
+        )
+        detail = f"{_row_value(job, 'error_detail') or ''} {phase_l}"
+        if any(m in detail for m in _DEPLOY_FALSE_POSITIVE_MARKERS) and _has_push_succeeded(
+            _row_value(job, "logs"),
+        ):
+            return "deploy_false_positive"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("goal_cascade_exemption_lookup_failed task=%s: %s", task_id, str(exc)[:160])
+    return None
+
+
 def summarize_retry_accounting(evidence: dict | None, executions: dict[str, int] | None = None,
                                *, cap: int = _MAX_RETRY) -> dict:
     """제안·후보·실제 실행을 따로 센다. 소진 판정은 실제 실행 수 하나뿐이다.
