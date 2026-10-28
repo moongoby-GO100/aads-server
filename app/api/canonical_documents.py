@@ -501,6 +501,11 @@ async def approve_document(project_key: str, document_key: str, body: DecisionIn
             return {"approved_revision_id": body.revision_id, "idempotent": True}
         if head["generation"] != body.expected_generation or head["latest_revision_id"] != body.revision_id:
             raise HTTPException(409, "generation_conflict")
+        last = await conn.fetchval("SELECT action FROM project_document_events WHERE head_id=$1 AND revision_id=$2 "
+                                   "AND action IN ('review','approved','archived') ORDER BY id DESC LIMIT 1",
+                                   head["id"], body.revision_id)
+        if last != "review":
+            raise HTTPException(409, "revision_not_in_review")
         await conn.execute("UPDATE project_document_heads SET approved_revision_id=$2,generation=generation+1,updated_at=now() WHERE id=$1", head["id"], body.revision_id)
         await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
                            "VALUES($1::uuid,$2,$3,$4,'approved',$5)", tenant, project, head["id"], body.revision_id, actor)

@@ -274,6 +274,8 @@ def test_human_approval_and_duplicate_audit(monkeypatch):
         async def fetchrow(self, sql, *args):
             return {"id": "head-1", "generation": 1, "latest_revision_id": rid,
                     "approved_revision_id": self.approved}
+        async def fetchval(self, sql, *args):
+            return "review"
         async def execute(self, sql, *args):
             self.writes.append((sql, args))
             if sql.startswith("UPDATE"):
@@ -394,6 +396,8 @@ def test_audit_failure_rolls_back_then_human_can_retry(monkeypatch):
         async def fetchrow(self, sql, *args):
             return {"id": "head", "generation": 1, "latest_revision_id": rid,
                     "approved_revision_id": self.approved}
+        async def fetchval(self, sql, *args):
+            return "review"
         async def execute(self, sql, *args):
             if sql.startswith("UPDATE"):
                 self.approved = rid
@@ -407,3 +411,50 @@ def test_audit_failure_rolls_back_then_human_can_retry(monkeypatch):
     assert conn.approved is None
     conn.fail_audit = False
     assert asyncio.run(docs.approve_document("AADS", "prd", body, context("owner")))["idempotent"] is False
+
+
+def _status_conn(last_action, approved=None):
+    from uuid import UUID
+    rid = UUID("00000000-0000-0000-0000-000000000002")
+
+    class Conn(StubConnection):
+        async def fetchrow(self, sql, *args):
+            return {"id": "head-1", "generation": 1, "latest_revision_id": rid,
+                    "approved_revision_id": approved}
+
+        async def fetchval(self, sql, *args):
+            assert "action IN ('review','approved','archived')" in sql
+            assert args == ("head-1", rid)
+            return last_action
+
+    return Conn(), docs.DecisionInput(revision_id=rid, expected_generation=1), rid
+
+
+@pytest.mark.parametrize("last_action", [None, "archived", "approved"])
+def test_approval_requires_review_status(monkeypatch, last_action):
+    conn, body, _ = _status_conn(last_action)
+    monkeypatch.setattr(docs, "get_pool", lambda: conn)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(docs.approve_document("AADS", "prd", body, context("admin")))
+    assert error.value.status_code == 409
+    assert error.value.detail == "revision_not_in_review"
+    assert conn.writes == []
+
+
+def test_approval_succeeds_after_review(monkeypatch):
+    conn, body, rid = _status_conn("review")
+    monkeypatch.setattr(docs, "get_pool", lambda: conn)
+    result = asyncio.run(docs.approve_document("AADS", "prd", body, context("admin")))
+    assert result == {"approved_revision_id": rid, "idempotent": False}
+    assert any("UPDATE project_document_heads" in sql for sql in conn.writes)
+    assert any("INSERT INTO project_document_events" in sql for sql in conn.writes)
+
+
+def test_already_approved_revision_is_idempotent_without_status_lookup(monkeypatch):
+    from uuid import UUID
+    rid = UUID("00000000-0000-0000-0000-000000000002")
+    conn, body, _ = _status_conn("archived", approved=rid)
+    monkeypatch.setattr(docs, "get_pool", lambda: conn)
+    result = asyncio.run(docs.approve_document("AADS", "prd", body, context("admin")))
+    assert result == {"approved_revision_id": rid, "idempotent": True}
+    assert conn.writes == []

@@ -93,8 +93,11 @@ async def test_unlink_legacy_goal_document_on_isolated_postgres(monkeypatch):
             # Same key in another project and in another tenant: heads exist but hold no links.
             assert (await client.post(other_path, json=payload, headers=headers_a)).status_code == 201
             assert (await client.post(path, json=payload, headers=headers_b)).status_code == 201
-            approved = await client.post(f"{path}/{key}/approve", headers=headers_a, json={
+            reviewed = await client.post(f"{path}/{key}/review", headers=headers_a, json={
                 "revision_id": revision_id, "expected_generation": 1})
+            assert reviewed.status_code == 200, reviewed.text
+            approved = await client.post(f"{path}/{key}/approve", headers=headers_a, json={
+                "revision_id": revision_id, "expected_generation": 2})
             assert approved.status_code == 200, approved.text
 
             for doc_id in doc_ids:
