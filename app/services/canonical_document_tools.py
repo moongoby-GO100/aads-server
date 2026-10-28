@@ -1,14 +1,17 @@
-"""채팅 도구 canonical_document_register / canonical_document_lookup 구현.
+"""채팅 도구 canonical_document_register / canonical_document_lookup / canonical_document_review 구현.
 
 - register: 정본 문서의 **초안 리비전**만 만든다. approve 경로는 호출하지 않고
   approved_revision_id 도 바꾸지 않는다(승인은 POST .../approve 로만).
 - 생성은 app.api.canonical_documents.create_revision_in_tx (라우트와 같은 코드) 를 직접 호출한다.
 - 판정·기록은 app.services.canonical_gate (shadow, fail-open) 를 거친다.
 - lookup: 읽기 전용(SELECT 만).
+- review: 최신 리비전을 초안→검토로만 넘긴다(PM·CEO 통합지시 세션 한정, 사유 10자 이상).
+  승인·보관·본문 수정 경로는 없다. 전환 규칙은 API mark_review 와 같은 review_revision_in_tx 를 쓴다.
 """
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import unicodedata
 from typing import Any, Optional
@@ -19,6 +22,8 @@ from pydantic import ValidationError
 from app.api import canonical_documents as docs
 from app.core.db_pool import get_pool
 from app.services import canonical_gate, document_refs
+
+logger = logging.getLogger(__name__)
 
 TOOL_KEY_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _DATE_IN_KEY_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}-?(?:0[1-9]|1[0-2])(?:-?(?:0[1-9]|[12]\d|3[01]))?(?!\d)")
@@ -153,6 +158,91 @@ async def register_document(
     if gate:
         out["canonical_gate"] = gate
     return out
+
+
+REVIEW_REASON_MIN = 10
+# 정규화(소문자, 영숫자만) 후 비교한다. CEO 통합지시 세션은 별도로 판정한다.
+_REVIEW_ROLE_KEYS = frozenset({"pm", "projectmanager", "productmanager", "planner", "canonicalmanager",
+                               "canonicaldocumentmanager"})
+
+
+def _normalize_role(role_key: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(role_key or "").lower())
+
+
+async def _review_role_denial(conn: Any, tenant_id: str, session_id: str) -> Optional[str]:
+    """검토 전환을 할 수 없는 세션이면 한글 사유, 허용이면 None. 세션을 확인하지 못하면 거절."""
+    if not session_id:
+        return "채팅 세션을 확인할 수 없어 검토 전환을 할 수 없습니다"
+    from app.services.canonical_hierarchy_assignment import _is_ceo_integrated, _session_scope
+
+    try:
+        session = await _session_scope(conn, tenant_id, session_id)
+    except Exception:
+        logger.exception("canonical_document_review session lookup failed")
+        return "채팅 세션을 확인할 수 없어 검토 전환을 할 수 없습니다"
+    if not session:
+        return "채팅 세션을 확인할 수 없어 검토 전환을 할 수 없습니다"
+    role = _normalize_role(session["role_key"])
+    if role in _REVIEW_ROLE_KEYS or (role == "ceo" and _is_ceo_integrated(session)):
+        return None
+    return "정본 문서의 초안→검토 전환은 PM(기획·정본관리자) 역할 세션과 CEO 통합지시 세션만 할 수 있습니다"
+
+
+async def review_document(
+    *, tenant_id: str, session_id: str, inp: dict[str, Any], pool: Any = None,
+) -> dict[str, Any]:
+    """최신 리비전을 초안→검토로 넘긴다. 승인·보관·본문 수정은 하지 않는다."""
+    try:
+        project = docs._project(str(inp.get("project") or ""))
+    except HTTPException:
+        return _invalid("project 가 올바르지 않습니다")
+    key = str(inp.get("document_key") or "")
+    if not docs.KEY.fullmatch(key):
+        return _invalid("document_key 가 올바르지 않습니다")
+    reason = str(inp.get("reason") or "").strip()
+    if len(reason) < REVIEW_REASON_MIN:
+        return _invalid(f"reason(검토로 올리는 사유)을 {REVIEW_REASON_MIN}자 이상 적어야 합니다")
+
+    actor = f"chat:{session_id[:8]}" if session_id else "canonical_document_tool"
+    pool = pool or get_pool()
+    try:
+        async with pool.acquire() as conn:
+            denial = await _review_role_denial(conn, tenant_id, session_id)
+            if denial:
+                return {"error": "role_not_allowed", "message": denial}
+            async with conn.transaction():
+                head = await docs._head(conn, tenant_id, project, key, lock=True)
+                if not head:
+                    return {"error": "document_not_found", "message": "등록된 정본 문서가 없습니다"}
+                if not head["latest_revision_id"]:
+                    return {"error": "revision_not_found", "message": "검토로 넘길 리비전이 없습니다"}
+                revision_id = head["latest_revision_id"]
+                result = await docs.review_revision_in_tx(
+                    conn, tenant_id, project, head, revision_id, int(head["generation"]), actor,
+                )
+    except HTTPException as exc:
+        messages = {
+            "revision_already_decided": "이미 승인 또는 보관된 판본이라 검토로 되돌릴 수 없습니다",
+            "generation_conflict": "다른 변경과 충돌했습니다. 다시 조회한 뒤 시도하세요",
+        }
+        return {"error": str(exc.detail), "status": exc.status_code,
+                "message": messages.get(str(exc.detail), str(exc.detail))}
+
+    if not result["idempotent"]:
+        logger.info("canonical_document_review project=%s key=%s revision=%s actor=%s reason=%s",
+                    project, key, revision_id, actor, reason)
+    return {
+        "reviewed": True,
+        "project": project,
+        "document_key": key,
+        "revision_id": str(revision_id),
+        "status": "review",
+        "idempotent": result["idempotent"],
+        "approved": False,
+        "reason": reason,
+        "note": "검토 상태로 넘겼습니다. 승인은 CEO 가 기존 승인 경로로만 합니다.",
+    }
 
 
 def _rdoc_warnings(title: str, content: str, is_new_document: bool) -> list[str]:

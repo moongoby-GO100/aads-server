@@ -39,6 +39,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "handover_export": True,             # Markdown 호환 내보내기
     "canonical_document_register": True, # 문서 정본 초안 리비전 등록 (승인 없음)
     "canonical_document_lookup": True,   # 문서 정본 등록 여부 조회 (읽기 전용)
+    "canonical_document_review": True,   # 정본 최신 판본 초안→검토 전환 (PM·CEO 통합지시 한정, 승인 없음)
     "mockup_review_submit": True,        # 목업 검토 생성·리비전·제출·조회 (승인·철회 없음)
     "skill_find": True,                  # 등록 스킬 검색 (읽기 전용)
     "skill_execute": True,               # active 스킬 실행 (read 즉시, 그 외 승인 게이트)
@@ -3630,6 +3631,28 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         },
         "input_examples": [{"skill": "example-skill-slug", "input": {"query": "상태"}}],
     },
+    "canonical_document_review": {
+        "name": "canonical_document_review",
+        "description": (
+            "정본 문서 최신 판본을 초안→검토로 넘깁니다. 승인은 CEO 만 합니다. "
+            "PM 역할 세션과 CEO 통합지시 세션에서만 쓸 수 있고, reason(10자 이상)이 필요합니다. "
+            "이미 검토 상태면 그대로 성공(멱등)이며 승인·보관된 판본은 거절합니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "MCP 브리지 등 채팅 컨텍스트가 없는 호출에서만 명시. 생략 시 현재 채팅 세션을 사용.",
+                },
+                "project": {"type": "string", "description": "프로젝트 키(AADS/GO100/KIS/SF/NTV2 등)"},
+                "document_key": {"type": "string", "description": "검토로 넘길 정본 문서 키"},
+                "reason": {"type": "string", "description": "검토로 올리는 사유(10자 이상)"},
+            },
+            "required": ["project", "document_key", "reason"],
+        },
+        "input_examples": [{"project": "AADS", "document_key": "ovis-recipe-spec", "reason": "PRD 게이트 점검을 마쳐 CEO 승인 검토를 요청합니다"}],
+    },
     "canonical_document_lookup": {
         "name": "canonical_document_lookup",
         "description": (
@@ -3810,7 +3833,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "mockup_review_submit", "skill_find", "skill_execute", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
+    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "canonical_document_review", "mockup_review_submit", "skill_find", "skill_execute", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)

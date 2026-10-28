@@ -276,6 +276,7 @@ _DATABASE_TOOLS = frozenset({
     "handover_export",
     "canonical_document_register",
     "canonical_document_lookup",
+    "canonical_document_review",
     "mockup_review_submit",
     "skill_find",
     "skill_execute",
@@ -1019,6 +1020,7 @@ class ToolExecutor:
             "handover_export":        self._handover_export,
             "canonical_document_register": self._canonical_document_register,
             "canonical_document_lookup":   self._canonical_document_lookup,
+            "canonical_document_review":   self._canonical_document_review,
             "skill_find":                  self._skill_find,
             "skill_execute":               self._skill_execute,
             "mockup_review_submit":        self._mockup_review_submit,
@@ -1540,6 +1542,16 @@ class ToolExecutor:
         if not tenant_id:
             return _missing_tenant_id_result("canonical_document_lookup")
         return await lookup_documents(tenant_id=tenant_id, inp=inp)
+
+    async def _canonical_document_review(self, inp: Dict[str, Any]) -> Any:
+        """Move the latest canonical revision draft -> review (PM / CEO-integrated sessions only)."""
+        from app.services.canonical_document_tools import review_document
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+        if not tenant_id:
+            return _missing_tenant_id_result("canonical_document_review")
+        return await review_document(tenant_id=tenant_id, session_id=session_id, inp=inp)
 
     async def _skill_find(self, inp: Dict[str, Any]) -> Any:
         """Read-only search over registered skills."""

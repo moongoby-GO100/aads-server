@@ -582,6 +582,24 @@ def format_approved_brief(documents: list[dict], *, max_chars: int = 3000) -> st
     return "\n".join(parts) if len(parts) > 2 else empty
 
 
+async def review_revision_in_tx(
+    conn: Any, tenant: str, project: str, head: Any, revision_id: Any, expected_generation: int, actor: str,
+) -> dict:
+    """초안→검토 전환 규칙(API·채팅 도구 공용). 호출자가 head 를 FOR UPDATE 로 잠근 트랜잭션 안에서 부른다."""
+    last = await conn.fetchval("SELECT action FROM project_document_events WHERE head_id=$1 AND revision_id=$2 "
+                               "ORDER BY id DESC LIMIT 1", head["id"], revision_id)
+    if last == "review":
+        return {"status": "review", "idempotent": True}
+    if head["generation"] != expected_generation or head["latest_revision_id"] != revision_id:
+        raise HTTPException(409, "generation_conflict")
+    if last in ("approved", "archived"):
+        raise HTTPException(409, "revision_already_decided")
+    await conn.execute("UPDATE project_document_heads SET generation=generation+1,updated_at=now() WHERE id=$1", head["id"])
+    await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
+                       "VALUES($1::uuid,$2,$3,$4,'review',$5)", tenant, project, head["id"], revision_id, actor)
+    return {"status": "review", "idempotent": False}
+
+
 @router.post("/{document_key}/review")
 async def mark_review(project_key: str, document_key: str, body: DecisionInput, context: dict = WRITE):
     project = _project(project_key)
@@ -590,18 +608,7 @@ async def mark_review(project_key: str, document_key: str, body: DecisionInput, 
         head = await _head(conn, tenant, project, document_key, lock=True)
         if not head:
             raise HTTPException(404, "document_not_found")
-        last = await conn.fetchval("SELECT action FROM project_document_events WHERE head_id=$1 AND revision_id=$2 "
-                                   "ORDER BY id DESC LIMIT 1", head["id"], body.revision_id)
-        if last == "review":
-            return {"status": "review", "idempotent": True}
-        if head["generation"] != body.expected_generation or head["latest_revision_id"] != body.revision_id:
-            raise HTTPException(409, "generation_conflict")
-        if last in ("approved", "archived"):
-            raise HTTPException(409, "revision_already_decided")
-        await conn.execute("UPDATE project_document_heads SET generation=generation+1,updated_at=now() WHERE id=$1", head["id"])
-        await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
-                           "VALUES($1::uuid,$2,$3,$4,'review',$5)", tenant, project, head["id"], body.revision_id, actor)
-        return {"status": "review", "idempotent": False}
+        return await review_revision_in_tx(conn, tenant, project, head, body.revision_id, body.expected_generation, actor)
 
 
 class GoalLinkInput(BaseModel):
