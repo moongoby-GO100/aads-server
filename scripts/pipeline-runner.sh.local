@@ -3014,7 +3014,9 @@ instruction_forbids_deploy() {
     # 릴리스 잡 예외. is_deploy_only_instruction 과 같은 규칙(앞 20줄, 줄 시작, 대소문자 구분)을 쓴다 — 한쪽만 고치지 마라.
     local rel_n=0 rel_line="" rel_low="" rel_deploy_only=0 rel_conflict=0
     local re_rel_deploy_only='^[[:space:]]*DEPLOY_ONLY[[:space:]]*:[[:space:]]*true([^[:alnum:]_]|$)'
-    local re_rel_push_decl='^[[:space:]>*#-]*push[_[:space:]-]?only([^[:alnum:]_]|$)'
+    # push_only 는 `push_only: true` 류 대입이거나 그 줄에 단어 하나만 있을 때만 선언이다.
+    # 뒤에 한국어/영어 부정어가 붙은 줄("push_only 아님")은 선언이 아니다(runner.push_only_negation_misread).
+    local re_rel_push_decl='^[[:space:]>*#-]*push[_[:space:]-]?only[[:space:]*`]*([:=][[:space:]*`]*(true|yes|1|on)([^[:alnum:]_]|$)|[[:space:][:punct:]]*$)'
     local re_rel_push_off='push[_-]?only[[:space:]]*[:=][[:space:]]*(false|no|0|off)([^[:alnum:]_]|$)'
     local re_rel_policy_forbid='^[[:space:]>*#-]*(deploy(ment)?|release)[_[:space:]-]?policy[[:space:]]*[:=][[:space:]]*(push[_[:space:]-]?only|commit[_[:space:]-]?only|no[_[:space:]-]?deploy|forbid(den)?|deny|denied|none|block(ed)?)([^[:alnum:]_]|$)'
     while IFS= read -r rel_line || [[ -n "$rel_line" ]]; do
@@ -3086,6 +3088,15 @@ instruction_forbids_deploy() {
     while [[ "$scrubbed" =~ $re_off_push ]]; do
         scrubbed="${scrubbed/"${BASH_REMATCH[0]}"/ }"
     done
+    # 줄 머리의 "push_only 아님/해제/not …" 은 선언이 아니므로 지운다(DEPLOY_POLICY 값 줄은 건드리지 않는다).
+    local re_push_neg_line='^[[:space:]>*#-]*push[_[:space:]-]?only[[:space:]]*[:=]?[[:space:]]*(아님|아니|아닙|없음|해제|(not|no|false|off)([^[:alnum:]_]|$))' neg_out=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ $re_push_neg_line ]]; then
+            line="${line/"${BASH_REMATCH[0]}"/ }"
+        fi
+        neg_out+="${line}${nl}"
+    done <<< "$scrubbed"
+    scrubbed="$neg_out"
     if [[ "$scrubbed" =~ $re_push_any ]]; then
         return 0
     fi

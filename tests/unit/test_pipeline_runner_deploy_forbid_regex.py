@@ -348,6 +348,51 @@ def test_general_job_policy_declaration_lines_forbid(gate_fn, text, locale):
     assert _decide_in_locale(gate_fn, text, locale) == "FORBID"
 
 
+# ── PUSH_ONLY 뒤 부정어 오판 (runner.push_only_negation_misread, 2026-10-28) ──
+# runner-9ff033a7·977edaf2: 줄 머리 PUSH_ONLY 뒤에 한국어 부정어가 붙은 줄을 push-only 선언으로 읽었다.
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize("prefix", ["", "## 배포\n", "DEPLOY_ONLY: true\n", "DEPLOY_ONLY: true\nDEPLOY_POLICY: bluegreen\n"])
+@pytest.mark.parametrize(
+    "line",
+    [
+        "PUSH_ONLY 아님.",
+        "PUSH_ONLY: false",
+        "push only 아님",
+        "push_only 해제",
+        "PUSH_ONLY 없음",
+        "PUSH_ONLY not set",
+        "- push_only: no",
+    ],
+)
+def test_push_only_with_negation_is_not_a_declaration(gate_fn, prefix, line, locale):
+    assert _decide_in_locale(gate_fn, prefix + line, locale) == "ALLOW"
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize("prefix", ["", "DEPLOY_ONLY: true\n"])
+@pytest.mark.parametrize(
+    "line",
+    [
+        "PUSH_ONLY: true",
+        "PUSH_ONLY = yes",
+        "PUSH_ONLY",
+        "- push only",
+        "**PUSH_ONLY**: true",
+    ],
+)
+def test_push_only_true_or_bare_word_still_forbids(gate_fn, prefix, line, locale):
+    assert _decide_in_locale(gate_fn, prefix + line, locale) == "FORBID"
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+def test_push_only_negation_does_not_loosen_policy_lines(gate_fn, locale):
+    assert _decide_in_locale(gate_fn, "DEPLOY_POLICY: push_only 해제", locale) == "FORBID"
+    assert _decide_in_locale(gate_fn, "PUSH_ONLY 아님.\nDEPLOY_POLICY: push_only", locale) == "FORBID"
+    assert _decide_in_locale(gate_fn, "PUSH_ONLY 아님.\n배포 금지", locale) == "FORBID"
+
+
 @pytest.mark.parametrize("locale", LOCALES)
 @pytest.mark.parametrize(
     "text",
