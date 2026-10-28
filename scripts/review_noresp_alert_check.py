@@ -55,12 +55,22 @@ async def main() -> int:
         now = datetime.now(timezone.utc)
         if args.test_fire:
             ok = await nr.send_test_alert(now)
-            print("시험 알림 발송:", "성공" if ok else "실패")
+            print("시험 알림함 기록:", "성공" if ok else "실패")
+            print("※ 성공은 alert_history 저장 성공이며 외부 전달·실제 수신 확인이 아니다.")
             return 0 if ok else 1
 
         if args.current:
             rows = await nr.fetch_window_rows(pool, now - timedelta(days=cfg.window_days), now)
             s = nr.compute_noresp_rate(rows, now, cfg.window_days)
+            print(
+                f"관측구간(KST, 시작 포함·끝 제외): "
+                f"[{s.window_start.astimezone(nr.KST).isoformat()}, "
+                f"{s.window_end.astimezone(nr.KST).isoformat()})"
+            )
+            print(
+                f"임계 {cfg.threshold_pct:g}% / critical {cfg.critical_pct:g}% / "
+                f"최소표본 {cfg.min_samples} / 창 {cfg.window_days}일 (행 기준 판정)"
+            )
             print(f"행 기준 {s.numerator}/{s.denominator} = {s.row_rate_pct:.2f}%")
             print(f"job 기준 {s.job_numerator}/{s.job_denominator} = {s.job_rate_pct:.2f}%")
             print(f"최근 24시간 무응답 {s.last24h_numerator}건 / 별도지표 API_UNAVAILABLE {s.api_unavailable} TIMEOUT {s.timeout}")
