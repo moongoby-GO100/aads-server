@@ -84,6 +84,16 @@ async def _send_telegram_photo(token: str, chat_id: str, photo_path: str, captio
         return False
 
 
+async def send_ceo_text(text: str) -> bool:
+    """CEO 텔레그램 채널로 일반 텍스트(HTML) 전송. 토큰/채팅 미설정이면 False."""
+    token = _get_telegram_token()
+    chat_id = _get_telegram_chat_id()
+    if not (token and chat_id):
+        logger.info("ceo_notify_text_skipped", reason="token or chat_id not set")
+        return False
+    return await _send_telegram_message(token, chat_id, text)
+
+
 # ---------------------------------------------------------------------------
 # 메인 알림 함수
 # ---------------------------------------------------------------------------

@@ -1587,6 +1587,25 @@ async def lifespan(app: FastAPI):
 
         scheduler.add_job(_auth_daily_check, "cron", hour=9, minute=5, timezone="Asia/Seoul", id="auth_daily_check", replace_existing=True)
 
+        # 검토 대기 정본 문서 CEO 일일 요약 (09:00 KST, DB 기록으로 하루 1회)
+        async def _run_canonical_review_digest():
+            try:
+                from app.core.db_pool import get_pool
+                from app.services.canonical_review_digest import send_daily_digest
+                await send_daily_digest(get_pool())
+            except Exception as e:
+                logger.warning(f"canonical_review_digest failed: {e}")
+
+        scheduler.add_job(
+            _run_canonical_review_digest,
+            CronTrigger(hour=9, minute=0, timezone="Asia/Seoul"),
+            id="canonical_review_digest",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+
         # AADS-191: Pipeline Jobs 자동 정리 (1시간 주기)
         async def _run_pipeline_cleanup():
             try:

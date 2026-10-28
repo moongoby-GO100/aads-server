@@ -376,6 +376,18 @@ async def list_documents(project_key: str, q: str | None = Query(None, max_lengt
         return {"documents": [dict(row) for row in rows]}
 
 
+@router.get("/review-queue")
+async def review_queue(project_key: str, context: dict = VIEW):
+    from app.services.canonical_review_digest import fetch_review_queue
+
+    project = _project(project_key)
+    async with get_pool().acquire() as conn:
+        tenant, _ = await _authorize(conn, context, project, "read")
+        items = await fetch_review_queue(conn, tenant, project)
+    return {"project_key": project, "count": len(items),
+            "documents": [{k: v for k, v in item.items() if k != "tenant_id"} for item in items]}
+
+
 @router.get("/{document_key}")
 async def get_document(project_key: str, document_key: str, approved_only: bool = False,
                        context: dict = VIEW):
