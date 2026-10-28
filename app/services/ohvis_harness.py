@@ -1234,7 +1234,9 @@ def _score_skill(
     return score, reasons
 
 
-async def _fetch_db_skills() -> list[dict[str, Any]]:
+async def _fetch_db_skills(tenant_id: str | None = None) -> list[dict[str, Any]]:
+    """요청 테넌트와 시스템 공용 스킬만 반환한다. tenant_id 가 없으면 시스템 공용만."""
+    scope_tenant = str(tenant_id).strip() if tenant_id else SYSTEM_TENANT_ID
     try:
         from app.core.db_pool import get_pool
 
@@ -1256,9 +1258,11 @@ async def _fetch_db_skills() -> list[dict[str, Any]]:
                          ORDER BY (x.status='active') DESC, x.created_at DESC LIMIT 1) AS page_key
                 FROM ops_skill_library
                 WHERE enabled IS TRUE
+                  AND (tenant_id = $1::uuid OR tenant_id = $2::uuid)
                 ORDER BY updated_at DESC, slug
                 LIMIT 200
-                """
+                """,
+                scope_tenant, SYSTEM_TENANT_ID,
             )
             return [dict(row) for row in rows]
     except Exception:
@@ -1427,6 +1431,7 @@ async def find_skills(
     project: str | None = None,
     intent: str | None = None,
     limit: int = 5,
+    tenant_id: str | None = None,
 ) -> dict[str, Any]:
     """Return reusable OHVIS skills for a natural-language task."""
     query_terms = _tokens(query)
@@ -1434,7 +1439,7 @@ async def find_skills(
     scored: list[dict[str, Any]] = []
     seen_slugs: set[str] = set()
 
-    for db_skill in await _fetch_db_skills():
+    for db_skill in await _fetch_db_skills(tenant_id):
         projects = [str(item) for item in _as_list(db_skill.get("projects"))]
         intents = [str(item) for item in _as_list(db_skill.get("intents"))]
         terms = _tokens(

@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.auth import TenantRole, require_tenant_role
+from app.auth import TenantRole, get_current_user, require_tenant_role
 from app.services.channel_router import ChannelRouter, directive_from_authenticated_context
 from app.services.ohvis_harness import (
     RISK_POLICIES,
@@ -293,13 +293,30 @@ async def ohvis_rollback_skill_version(
         _raise_registry_error(exc)
 
 
+async def optional_tenant_id(request: Request) -> str | None:
+    """인증이 있으면 호출자 테넌트, 없거나 무효면 None(시스템 공용만 조회)."""
+    try:
+        user = await get_current_user(
+            request=request,
+            authorization=request.headers.get("authorization"),
+            x_tenant_id=request.headers.get("x-tenant-id"),
+            x_monitor_key=request.headers.get("x-monitor-key"),
+            x_handover_key=None,
+        )
+    except HTTPException:
+        return None
+    tenant = user.get("current_tenant") or {}
+    return str(tenant["id"]) if tenant.get("id") else None
+
+
 @router.post("/ohvis/harness/skill-find", tags=["ohvis-harness"])
-async def ohvis_skill_find(req: SkillFindRequest):
+async def ohvis_skill_find(req: SkillFindRequest, tenant_id: str | None = Depends(optional_tenant_id)):
     return await find_skills(
         query=req.query,
         project=req.project,
         intent=req.intent,
         limit=req.limit,
+        tenant_id=tenant_id,
     )
 
 

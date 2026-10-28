@@ -41,7 +41,7 @@ def stricter_tier(*tiers: str) -> str:
     return max((str(t) for t in tiers), key=lambda t: rank.get(t, len(_TIER_ORDER)))
 
 
-async def skill_find(*, inp: Mapping[str, Any]) -> dict[str, Any]:
+async def skill_find(*, inp: Mapping[str, Any], tenant_id: str | None = None) -> dict[str, Any]:
     query = str(inp.get("query") or "").strip()
     if not query:
         return _error("invalid_input", "query 가 필요합니다")
@@ -54,6 +54,7 @@ async def skill_find(*, inp: Mapping[str, Any]) -> dict[str, Any]:
         project=str(inp["project"]) if inp.get("project") else None,
         intent=str(inp["intent"]) if inp.get("intent") else None,
         limit=limit,
+        tenant_id=tenant_id or None,
     )
     return _json_safe(result)
 

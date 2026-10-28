@@ -568,7 +568,8 @@ def test_skill_find_delegates_to_harness_find_skills(monkeypatch):
     monkeypatch.setattr(harness, "find_skills", AsyncMock(return_value={"skills": [{"slug": "alpha"}]}))
     result = run(sct.skill_find(inp={"query": "수집", "project": "AADS", "limit": "3"}))
     assert result["skills"][0]["slug"] == "alpha"
-    harness.find_skills.assert_awaited_once_with(query="수집", project="AADS", intent=None, limit=3)
+    harness.find_skills.assert_awaited_once_with(
+        query="수집", project="AADS", intent=None, limit=3, tenant_id=None)
     assert run(sct.skill_find(inp={}))["error"] == "invalid_input"
 
 
@@ -1007,3 +1008,89 @@ def test_skill_find_builtin_fallback_has_null_guide_and_is_not_executable(monkey
     item = next(s for s in skills if s["slug"] == "aads-bluegreen-release")
     assert item["guide"] is None and item["summary_ko"] is None and item["use_when"] == []
     assert item["executable"] is False and item["not_executable_reason_ko"]
+
+
+# --- skill_find 테넌트 범위: 요청 테넌트 + 시스템 공용만 ---------------------------------
+
+SYSTEM_TENANT = "00000000-0000-0000-0000-000000000000"
+TENANT_B = "00000000-0000-0000-0000-000000000002"
+
+
+class _ScopedConn:
+    def __init__(self, rows):
+        self.rows = rows
+        self.sql = ""
+        self.args = ()
+
+    async def fetchval(self, *_a, **_k):
+        return True
+
+    async def fetch(self, sql, *args):
+        self.sql, self.args = sql, args
+        return [r for r in self.rows if r["tenant_id"] in args]
+
+
+class _ScopedPool:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def acquire(self):
+        conn = self.conn
+
+        class _Ctx:
+            async def __aenter__(self_inner):
+                return conn
+
+            async def __aexit__(self_inner, *_exc):
+                return False
+
+        return _Ctx()
+
+
+def _tenant_rows():
+    def row(slug, tenant):
+        return {"slug": slug, "title": slug, "description": "video queue check", "projects": ["SF"],
+                "intents": ["video"], "risk_tier": "read", "allowed_tools": [], "validation": [],
+                "source_path": None, "metadata_text": "{}", "active_version": "1",
+                "active_executor": "ohvis.contract-echo", "page_key": None, "tenant_id": tenant}
+    return [row("shared-video", SYSTEM_TENANT), row("learned-site-a", TENANT),
+            row("learned-site-b", TENANT_B)]
+
+
+def _scoped_find(monkeypatch, tenant_id):
+    from app.core import db_pool
+
+    conn = _ScopedConn(_tenant_rows())
+    monkeypatch.setattr(db_pool, "get_pool", lambda: _ScopedPool(conn))
+    monkeypatch.setattr(harness, "scan_repository_skills", lambda: [])
+    result = run(sct.skill_find(inp={"query": "video", "limit": 20}, tenant_id=tenant_id))
+    return conn, {item["slug"] for item in result["skills"]}
+
+
+def test_skill_find_tenant_a_sees_own_and_shared_but_not_tenant_b(monkeypatch):
+    conn, slugs = _scoped_find(monkeypatch, TENANT)
+    assert "tenant_id" in conn.sql
+    assert "learned-site-a" in slugs and "shared-video" in slugs
+    assert "learned-site-b" not in slugs
+
+
+def test_skill_find_without_tenant_returns_shared_only(monkeypatch):
+    conn, slugs = _scoped_find(monkeypatch, None)
+    assert conn.args == (SYSTEM_TENANT, SYSTEM_TENANT)
+    assert "shared-video" in slugs
+    assert not {"learned-site-a", "learned-site-b"} & slugs
+
+
+def test_skill_find_passes_tenant_to_harness(monkeypatch):
+    monkeypatch.setattr(harness, "find_skills", AsyncMock(return_value={"skills": []}))
+    run(sct.skill_find(inp={"query": "수집"}, tenant_id=TENANT))
+    assert harness.find_skills.await_args.kwargs["tenant_id"] == TENANT
+
+
+def test_skill_find_route_without_auth_has_no_tenant():
+    from starlette.requests import Request
+
+    from app.api import ohvis_harness as api
+
+    request = Request({"type": "http", "method": "POST", "path": "/ohvis/harness/skill-find", "headers": []})
+    assert run(api.optional_tenant_id(request)) is None

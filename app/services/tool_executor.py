@@ -1545,7 +1545,9 @@ class ToolExecutor:
         """Read-only search over registered skills."""
         from app.services.skill_chat_tools import skill_find
 
-        return await skill_find(inp=inp)
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+        return await skill_find(inp=inp, tenant_id=tenant_id or None)
 
     async def _skill_execute(self, inp: Dict[str, Any]) -> Any:
         """Execute an active skill; non-read tiers require the guard approval."""
