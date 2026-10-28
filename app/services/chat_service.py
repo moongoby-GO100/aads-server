@@ -439,6 +439,8 @@ _INTERRUPT_REASON_CATEGORIES = {
 def _classify_interruption_reason(reason: str, fallback: str = "unknown") -> str:
     """Return a stable category for interruption analytics."""
     normalized = str(reason or "").lower()
+    if "oauth_slot_busy" in normalized or "terminal_provider:" in normalized:
+        return "llm_provider_error"
     for category, tokens in _INTERRUPT_REASON_CATEGORIES.items():
         if any(str(token).lower() in normalized for token in tokens):
             return category
@@ -528,6 +530,8 @@ def _require_tenant_uuid(tenant_id: Optional[str], operation: str) -> uuid.UUID:
 def _should_auto_resume_interrupted_reason(reason: str) -> bool:
     normalized = (reason or "").strip()
     if not normalized:
+        return False
+    if "oauth_slot_busy" in normalized or "terminal_provider:" in normalized:
         return False
     blocked_tokens = (
         "CancelledError",
@@ -15542,13 +15546,14 @@ async def send_message_stream(
                                     yield f"data: {json.dumps(_closing, ensure_ascii=False)}\n\n"
                             except Exception as _effort_close_err:
                                 logger.debug("session_effort_finalize_failed: %s", _effort_close_err)
-                    elif etype == "error":
+                    elif etype == "error" or (etype == "interrupted" and event.get("terminal")):
+                        _provider_terminal = bool(event.get("terminal"))
                         _err_content = event.get('content', '오류')
                         _err_lower = _err_content.lower()
                         _attempt_failure_reason = _safe_fallback_reason(_err_content)
                         _is_auth_err = any(k in _err_lower for k in ("401", "403", "unauthorized", "forbidden"))
 
-                        if _stream_attempt < 2 and not _is_auth_err:
+                        if _stream_attempt < 2 and not _is_auth_err and not _provider_terminal:
                             # ── 재시도 가능: 에러 유형별 백오프 ──
                             if any(k in _err_lower for k in ("529", "overloaded", "overload")):
                                 _backoff = 2 * (2 ** _stream_attempt)  # 2s, 4s
@@ -15581,7 +15586,15 @@ async def send_message_stream(
                         if _stream_attempt > 0:
                             logger.error(f"stream_retry_exhausted: session={session_id[:8]} attempts=3 error={_err_content[:80]}")
                         _terminal_err_event = {'type': 'error', 'content': _err_content, 'model': model_used or intent_result.model, 'cost': str(cost_usd), 'input_tokens': input_tokens, 'output_tokens': output_tokens}
-                        if _turn_contract.user_pinned:
+                        if _provider_terminal:
+                            _terminal_reason = event.get('reason') or event.get('error_type') or _err_content
+                            _terminal_err_event.update(
+                                terminal=True, stream_status='interrupted', reason=_terminal_reason,
+                                error_type=event.get('error_type') or _terminal_reason,
+                            )
+                            if etype == 'interrupted':
+                                yield f"data: {json.dumps(event)}\n\n"
+                        if _turn_contract.user_pinned and not _provider_terminal:
                             # 직접 고른 모델은 바꾸지 않는다. 분류된 실패 원인만 덧붙여 그대로 알린다.
                             _terminal_err_event['content'] = _err_content + _tmc.pinned_failure_notice(
                                 _turn_contract.requested_model, _attempt_failure_reason, retried=_stream_attempt > 0,
@@ -15609,7 +15622,8 @@ async def send_message_stream(
                                         _conn,
                                         session_id,
                                         _execution_id_str,
-                                        _err_content or "stream_retry_exhausted",
+                                        (("oauth_slot_busy" if "oauth_slot_busy" in str(_terminal_reason) else "terminal_provider:" + str(_terminal_reason))
+                                         if _provider_terminal else (_err_content or "stream_retry_exhausted")),
                                         partial_content=full_response,
                                         delete_empty_placeholder=False,
                                     )
