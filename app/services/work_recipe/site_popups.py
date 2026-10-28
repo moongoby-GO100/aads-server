@@ -1,4 +1,4 @@
-"""서버 레인 사이트 공지 팝업 일괄 닫기 — 도메인 허용목록, '닫기' 버튼만 누른다.
+"""서버 레인 사이트 공지 팝업 일괄 닫기 — DB 공용 목록(browser_site_overlays, approved)의 도메인만, '닫기' 버튼만 누른다.
 
 겹쳐 뜬 공지 모달이 로그아웃 등 다른 클릭을 가린다(오류사전
 smart_browser.server_click_obscured_by_site_modals). 가려진 요소를 누르지 않는 browser_click 은
@@ -20,8 +20,8 @@ from app.services.work_recipe.schema import (
     SITE_POPUP_CLOSE_LABELS,
     SitePopupPolicy,
     clamp_site_popup_max_close,
-    site_popup_policy_for,
 )
+from app.services.work_recipe.site_overlays import site_popup_policy_for_host
 
 _REPORT_TEXT_LEN = 40
 _GONE_POLL_SECONDS = 0.15
@@ -185,14 +185,14 @@ async def _click_close(page: Any, target: Mapping[str, Any]) -> bool:
     return False
 
 
-async def dismiss_site_popups(page: Any, *, max_close: Any = None) -> dict[str, Any]:
-    """현재 페이지의 공지 팝업을 위에서부터 '닫기'로만 닫는다.
+async def dismiss_site_popups(page: Any, *, max_close: Any = None, tenant_id: Any = None) -> dict[str, Any]:
+    """현재 페이지의 공지 팝업을 위에서부터 '닫기'로만 닫는다. 허용 도메인·루트는 DB 공용 목록(approved)이다.
 
     SitePopupRejected(site_not_allowlisted) / OverlayNotDismissible(닫은 목록 포함) 를 던질 수 있다.
     """
     limit = clamp_site_popup_max_close(max_close)
     host = urlsplit(str(getattr(page, "url", "") or "")).hostname or ""
-    policy = site_popup_policy_for(host)
+    policy = await site_popup_policy_for_host(host, tenant_id)
     if policy is None:
         raise SitePopupRejected("site_not_allowlisted", f"허용목록에 없는 사이트입니다: {host or '(없음)'}")
 

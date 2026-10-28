@@ -6260,6 +6260,7 @@ class ToolExecutor:
             max_close=inp.get("max_close"),
             browser_session_id=str(inp.get("browser_session_id") or ""),
             browser_lane=str(inp.get("browser_lane") or ""),
+            tenant_id=str(inp.get("tenant_id") or ""),
         )
 
     async def _semantic_code_search(self, inp: Dict[str, Any]) -> Any:

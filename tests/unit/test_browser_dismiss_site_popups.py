@@ -87,6 +87,28 @@ class _FakePage:
 
 
 @pytest.fixture(autouse=True)
+def _approved_seed_list(monkeypatch: pytest.MonkeyPatch):
+    """공용 목록(DB)의 approved 시드와 같은 행을 돌려준다 — 허용 도메인은 이제 DB 가 정한다."""
+    from app.services.work_recipe import site_overlays
+
+    rows = [
+        site_overlays.SiteOverlay(
+            id=f"seed-{index}", tenant_id=None, domain="my.a-bly.com",
+            root_selector=root, close_selector='button[aria-label="close" i]',
+        )
+        for index, root in enumerate(['[role="dialog"]', '[role="alertdialog"]', '[role="alert"]'])
+    ]
+
+    async def fake_load() -> list:
+        return rows
+
+    site_overlays.invalidate_cache()
+    monkeypatch.setattr(site_overlays, "_load_approved", fake_load)
+    yield
+    site_overlays.invalidate_cache()
+
+
+@pytest.fixture(autouse=True)
 def _fast_polling(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.work_recipe import site_popups
 

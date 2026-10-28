@@ -82,6 +82,7 @@ from app.api.ohvis_llmops import router as ohvis_llmops_router
 from app.api.ohvis_tasks import router as ohvis_tasks_router
 from app.api.ohvis_console import router as ohvis_console_router
 from app.api.ohvis_recipes import router as ohvis_recipes_router
+from app.api.browser_site_overlays import router as browser_site_overlays_router
 from app.api.loops import router as loops_router
 from app.api.browser_tasks import router as browser_tasks_router
 from app.api.live_facts import router as live_facts_router
@@ -4149,6 +4150,7 @@ app.include_router(ohvis_llmops_router, prefix="/api/v1", tags=["ohvis-llmops"])
 app.include_router(ohvis_tasks_router, prefix="/api/v1", tags=["ohvis-tasks"])
 app.include_router(ohvis_console_router, prefix="/api/v1", tags=["ohvis-console"])
 app.include_router(ohvis_recipes_router, prefix="/api/v1", tags=["ohvis-recipes"])
+app.include_router(browser_site_overlays_router, prefix="/api/v1", tags=["browser-site-overlays"])
 app.include_router(loops_router, prefix="/api/v1", tags=["loops"])
 app.include_router(browser_tasks_router, prefix="/api/v1", tags=["browser-tasks"])
 app.include_router(live_facts_router, prefix="/api/v1", tags=["live-facts"])

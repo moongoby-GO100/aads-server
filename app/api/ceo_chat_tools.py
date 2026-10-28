@@ -4849,7 +4849,7 @@ async def _server_expectation_checks(page: Any, expect: Dict[str, Any], href_bef
 
 
 async def _server_click(
-    page: Any, selector: str, *, nth: Optional[int], strict: bool, expect: Dict[str, Any],
+    page: Any, selector: str, *, nth: Optional[int], strict: bool, expect: Dict[str, Any], tenant_id: str = "",
 ) -> Dict[str, Any]:
     """서버 Playwright 레인 클릭 — PC 레인과 같은 dispatched/verified 스키마를 돌려준다."""
     def refusal(code: str, message: str, **extra: Any) -> Dict[str, Any]:
@@ -4889,16 +4889,42 @@ async def _server_click(
         return refusal("ELEMENT_DISABLED", "요소가 비활성(disabled) 상태입니다", matched_count=total)
 
     before = await page.evaluate(_CLICK_FINGERPRINT_JS)
+    obscured: Dict[str, Any] = {}
     try:
         await target.click(timeout=10_000)
     except Exception as exc:  # noqa: BLE001
         message = str(exc)
-        if "intercepts pointer events" in message:
-            return refusal("ELEMENT_OBSCURED", "다른 요소가 클릭 지점을 가리고 있습니다", matched_count=total)
-        return {
-            "error": f"클릭 전달 여부를 확정하지 못했습니다: {message[:160]}", "error_code": "CLICK_DISPATCH_UNCERTAIN",
-            "dispatched": False, "dispatch_state": "uncertain", "retry_safe": False,
-        }
+        if "intercepts pointer events" not in message:
+            return {
+                "error": f"클릭 전달 여부를 확정하지 못했습니다: {message[:160]}", "error_code": "CLICK_DISPATCH_UNCERTAIN",
+                "dispatched": False, "dispatch_state": "uncertain", "retry_safe": False,
+            }
+        # 가린 레이어를 진단한다. 현재 도메인의 approved 공용 팝업 목록과 일치할 때만 그 팝업의 close 를 누르고
+        # 원래 클릭을 정확히 1회 재시도한다. 일치하지 않으면 거부하되 obscured_by 를 싣는다. force 클릭은 쓰지 않는다.
+        from app.services.work_recipe.site_overlays import handle_obscured_click
+
+        obscured = await handle_obscured_click(page, target, tenant_id=tenant_id)
+        diagnosis: Dict[str, Any] = {}
+        if obscured.get("obscured_by"):
+            diagnosis["obscured_by"] = obscured["obscured_by"]
+        if obscured.get("auto_dismissed"):
+            diagnosis["auto_dismissed"] = obscured["auto_dismissed"]
+        if not obscured.get("retry"):
+            if obscured.get("reason"):
+                diagnosis["auto_dismiss_skipped"] = obscured["reason"]
+            return refusal("ELEMENT_OBSCURED", "다른 요소가 클릭 지점을 가리고 있습니다", matched_count=total, **diagnosis)
+        try:
+            await target.click(timeout=10_000)
+        except Exception as retry_exc:  # noqa: BLE001
+            if "intercepts pointer events" in str(retry_exc):
+                return refusal(
+                    "ELEMENT_OBSCURED", "팝업을 닫고 1회 재시도했지만 다른 요소가 여전히 가리고 있습니다",
+                    matched_count=total, **diagnosis,
+                )
+            return {
+                "error": f"클릭 전달 여부를 확정하지 못했습니다: {str(retry_exc)[:160]}", "error_code": "CLICK_DISPATCH_UNCERTAIN",
+                "dispatched": False, "dispatch_state": "uncertain", "retry_safe": False, **diagnosis,
+            }
 
     verified, checks, changed, state = False, {}, [], "unknown"
     after: Dict[str, Any] = {}
@@ -4919,14 +4945,31 @@ async def _server_click(
             state = "observed_change" if changed else "no_observed_effect"
         except Exception:  # noqa: BLE001
             state = "unknown"  # 문서가 교체되는 중이면 변화를 확정하지 못한다
-    return {
+    result: Dict[str, Any] = {
         "dispatched": True, "verified": verified, "verification_state": state, "retry_safe": False,
         "matched_count": total, "visible_count": len(visible_idx), "checks": checks, "changed": changed,
         "href_before": str(before.get("href") or ""), "href_after": str(page.url),
     }
+    if obscured.get("auto_dismissed"):
+        result["auto_dismissed"] = obscured["auto_dismissed"]
+        if obscured.get("obscured_by"):
+            result["obscured_by"] = obscured["obscured_by"]
+    return result
+
+
+def _auto_dismiss_note(data: Dict[str, Any]) -> str:
+    dismissed = data.get("auto_dismissed")
+    if not dismissed:
+        return ""
+    obscured = data.get("obscured_by") or {}
+    return (
+        f"\n[자동 팝업 닫기] 승인된 공용 목록의 팝업({obscured.get('text', '')})을 닫고 원래 클릭을 1회 재시도했습니다 "
+        f"auto_dismissed={json.dumps(dismissed, ensure_ascii=False)[:300]}"
+    )
 
 
 def _format_click_result(selector: str, data: Dict[str, Any], note: str = "") -> str:
+    note = note + _auto_dismiss_note(data)
     state = str(data.get("verification_state") or "unknown")
     href_after = str(data.get("href_after") or "")
     where = f" → {href_after}" if href_after and href_after != data.get("href_before") else ""
@@ -4954,6 +4997,9 @@ def _format_click_error(selector: str, code: str, message: str, detail: Dict[str
     dispatched = detail.get("dispatched") is True
     candidates = detail.get("candidates")
     extra = f" 후보={json.dumps(candidates, ensure_ascii=False)[:300]}" if candidates else ""
+    for key in ("obscured_by", "auto_dismissed", "auto_dismiss_skipped"):
+        if detail.get(key):
+            extra += f" {key}={json.dumps(detail[key], ensure_ascii=False)[:300]}"
     if code == "CLICK_NOT_VERIFIED" or (dispatched and detail.get("verification_state") == "failed"):
         checks = json.dumps(detail.get("checks") or {}, ensure_ascii=False)
         return (
@@ -4962,7 +5008,7 @@ def _format_click_error(selector: str, code: str, message: str, detail: Dict[str
         )
     if detail.get("dispatch_state") == "uncertain":
         return (
-            f"[ERROR] 클릭 전달 여부 불확실 ({code or 'UNKNOWN'}) selector={selector}: {message}\n"
+            f"[ERROR] 클릭 전달 여부 불확실 ({code or 'UNKNOWN'}) selector={selector}: {message}{extra}\n"
             "※ 효과가 불확실한 클릭이라 자동으로 재시도하지 않았습니다. browser_snapshot 으로 상태를 확인하세요."
         )
     return f"[ERROR] 클릭 실패 ({code or 'UNKNOWN'}) ({selector}): {message}{extra}"
@@ -5008,7 +5054,9 @@ async def tool_browser_click(
             except BrowserBridgeError as exc:
                 return _format_click_error(selector, exc.error_code, str(exc), exc.detail)
         else:
-            data = await _server_click(page, selector, nth=nth_value, strict=strict_value, expect=expect_spec)
+            data = await _server_click(
+                page, selector, nth=nth_value, strict=strict_value, expect=expect_spec, tenant_id=tenant_id,
+            )
             if data.get("error"):
                 return _format_click_error(selector, str(data.get("error_code") or ""), str(data.get("error")), data)
             if expect_spec and not data.get("verified"):
@@ -5440,6 +5488,7 @@ async def tool_browser_dismiss_site_popups(
     max_close: Any = None,
     browser_session_id: str = "",
     browser_lane: str = "",
+    tenant_id: str = "",
 ) -> str:
     """서버 레인 작업공간의 현재 페이지에서 허용목록 사이트의 공지 팝업을 '닫기' 버튼으로만 위에서부터 닫는다."""
     from app.browser_bridge.aads_adapter import normalize_browser_lane
@@ -5473,7 +5522,7 @@ async def tool_browser_dismiss_site_popups(
         page = await _current_page(ctx)
         if _is_pc_agent_page(page):
             return _reject("pc_lane_unsupported", "PC 레인 페이지에서는 지원하지 않습니다")
-        result = await dismiss_site_popups(page, max_close=max_close)
+        result = await dismiss_site_popups(page, max_close=max_close, tenant_id=tenant_id)
     except SitePopupRejected as exc:
         return _reject(exc.code, str(exc))
     except OverlayNotDismissible as exc:

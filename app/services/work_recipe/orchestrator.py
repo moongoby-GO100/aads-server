@@ -307,6 +307,7 @@ async def run_directive(
     executor = BrowserRecipeExecutor(
         browser_session_id=browser_session_id,
         browser_work_key=browser_work_key,
+        tenant_id=tenant_id,
         **({"secret_fill_steps": resolution.fill_steps} if resolution is not None else {}),
     )
     if coupang:

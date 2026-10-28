@@ -486,12 +486,27 @@ def _overlay_selector(value: Any, *, seq: int, field_name: str) -> str:
     return selector
 
 
+def _overlay_max_dismiss(extra: Mapping[str, Any], *, seq: int) -> int:
+    max_raw = extra.get("max_dismiss", OVERLAY_DEFAULT_MAX_DISMISS)
+    try:
+        max_dismiss = int(max_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"steps[{seq}]: max_dismiss 가 정수가 아닙니다: {max_raw!r}") from exc
+    if not 1 <= max_dismiss <= OVERLAY_MAX_DISMISS_LIMIT:
+        raise ValueError(f"steps[{seq}]: max_dismiss 는 1~{OVERLAY_MAX_DISMISS_LIMIT} 이어야 합니다")
+    return max_dismiss
+
+
 def normalize_overlay_spec(extra: Mapping[str, Any], *, seq: int) -> dict[str, Any]:
     """dismiss_overlays 의 overlays/max_dismiss 를 검증해 정규화한다. 모르는 키는 거부."""
     unknown = sorted(set(extra) - {"overlays", "max_dismiss"})
     if unknown:
         raise ValueError(f"steps[{seq}]: dismiss_overlays 가 모르는 필드: {', '.join(map(str, unknown))}")
-    overlays_raw = extra.get("overlays")
+    # overlays 를 아예 적지 않으면 실행기가 현재 호스트의 공용 목록(browser_site_overlays, approved)을 쓴다.
+    # 적었는데 비었거나 형식이 틀리면 지금처럼 거부한다.
+    if "overlays" not in extra:
+        return {"max_dismiss": _overlay_max_dismiss(extra, seq=seq)}
+    overlays_raw = extra["overlays"]
     if not isinstance(overlays_raw, Sequence) or isinstance(overlays_raw, (str, bytes)) or not overlays_raw:
         raise ValueError(f"steps[{seq}]: dismiss_overlays 는 overlays 허용 목록이 필요합니다")
     overlays: list[dict[str, str]] = []
@@ -506,14 +521,7 @@ def normalize_overlay_spec(extra: Mapping[str, Any], *, seq: int) -> dict[str, A
             "root": _overlay_selector(item.get("root"), seq=seq, field_name="root"),
             "close": _overlay_selector(item.get("close"), seq=seq, field_name="close"),
         })
-    max_raw = extra.get("max_dismiss", OVERLAY_DEFAULT_MAX_DISMISS)
-    try:
-        max_dismiss = int(max_raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"steps[{seq}]: max_dismiss 가 정수가 아닙니다: {max_raw!r}") from exc
-    if not 1 <= max_dismiss <= OVERLAY_MAX_DISMISS_LIMIT:
-        raise ValueError(f"steps[{seq}]: max_dismiss 는 1~{OVERLAY_MAX_DISMISS_LIMIT} 이어야 합니다")
-    return {"overlays": overlays, "max_dismiss": max_dismiss}
+    return {"overlays": overlays, "max_dismiss": _overlay_max_dismiss(extra, seq=seq)}
 
 
 def _assert_step_vars(step: "RecipeStep", available: set[str]) -> None:

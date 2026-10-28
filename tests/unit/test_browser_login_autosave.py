@@ -472,6 +472,29 @@ async def test_browser_tools_do_not_echo_value_and_trigger_submit_hook(monkeypat
     page.fill = _fill
     page.click = _click
 
+    class _Item:
+        async def is_visible(self):
+            return True
+
+        async def is_disabled(self):
+            return False
+
+        async def click(self, timeout=None):
+            await page.click("#submit")
+
+    class _Locator:
+        async def count(self):
+            return 1
+
+        def nth(self, _i):
+            return _Item()
+
+    async def _evaluate(_script, *_a):
+        return {"href": page.url, "textLen": 1, "textHash": 1, "stateHash": 1, "dialogs": 0}
+
+    page.locator = lambda _selector: _Locator()
+    page.evaluate = _evaluate
+
     class _Ctx:
         pages = [page]
 

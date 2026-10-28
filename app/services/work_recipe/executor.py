@@ -173,7 +173,10 @@ class BrowserRecipeExecutor:
         pre_approvals: list[Any] | None = None,
         approval_verifier: Callable[[Mapping[str, Any], RiskLevel], Any] | None = None,
         secret_fill_steps: Iterable[int] | None = None,
+        tenant_id: Any = None,
     ) -> None:
+        # 공용 팝업 목록(browser_site_overlays) 조회 범위. 서버 코드만 생성자로 넣는다.
+        self._tenant_id = tenant_id
         # 아래 네 값은 서버 코드가 생성자로만 넣는다. payload 로 들어온 값은 신뢰하지 않는다.
         self.instruction = instruction
         self.custom_rules = list(custom_rules or [])
@@ -628,6 +631,12 @@ class BrowserRecipeExecutor:
         raw_overlays = step.get("overlays")
         overlays = [o for o in raw_overlays if isinstance(o, Mapping)] if isinstance(raw_overlays, list) else []
         dismissed: list[dict[str, Any]] = []
+        if not overlays:
+            # 단계에 적힌 overlays 가 없으면 현재 호스트의 공용 목록(approved)을 쓴다. 단계 overlays 가 있으면 그것이 우선.
+            from app.services.work_recipe.site_overlays import approved_overlays_for_host, overlays_to_step_specs
+
+            host = urlsplit(str(getattr(page, "url", "") or "")).hostname or ""
+            overlays = overlays_to_step_specs(await approved_overlays_for_host(host, self._tenant_id))
         if not overlays:
             return {"overlays_status": "no_op", "reason": "no_allowlist", "dismissed": dismissed}
 

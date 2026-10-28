@@ -382,7 +382,7 @@ def clear_site_session_schema() -> Dict[str, Any]:
 
 DISMISS_SITE_POPUPS_DESCRIPTION = (
     "서버 브라우저 작업공간(browser_work_key)의 현재 페이지에서 사이트 공지 팝업(모달·알림)을 위에서부터 하나씩 '닫기' 버튼으로만 닫는다. "
-    "공지 모달이 겹쳐 로그아웃·다른 버튼을 가릴 때(ELEMENT_OBSCURED) 쓴다. 허용목록(초기값 my.a-bly.com)에 있는 사이트에서만 동작하고, "
+    "공지 모달이 겹쳐 로그아웃·다른 버튼을 가릴 때(ELEMENT_OBSCURED) 쓴다. 공용 허용목록(DB browser_site_overlays 의 approved 행, 초기값 my.a-bly.com)에 있는 사이트에서만 동작하고, "
     "그 밖은 site_not_allowlisted 로 거부한다. 팝업 안에서 라벨이 정확히 '닫기'/'Close'/'×' 인 버튼만 누르며, "
     "'하루 동안 보지 않기'·'다시 보지 않기'·신청·연동·확인·동의·결제·저장 버튼과 체크박스는 누르지 않는다. "
     "누를 때마다 그 팝업이 사라졌는지 확인하고 안 사라지면 1회 재시도 후 overlay_not_dismissible 로 중단한다. "
