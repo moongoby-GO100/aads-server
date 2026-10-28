@@ -222,7 +222,7 @@ def _remove_action_phrases(text: str, actions: list[str]) -> str:
         if pattern:
             value = re.sub(pattern, " ", value)
     value = re.sub(r"\s*(?:및|하고|해서|하여|하고서)\s*", " ", value)
-    value = re.sub(r"(?:진행)(?:해|해줘|하고|하기)?", " ", value)
+    value = re.sub(r"(?<![0-9A-Za-z가-힣])진행(?:해|해줘|하고|하기)?(?![0-9A-Za-z가-힣])", " ", value)
     value = re.sub(r"(?:으로|로)$", "", value.strip())
     value = re.sub(r"\s+", " ", value).strip(" .:-")
     value = value.replace("PM식 TODO 기준", "PM식 TODO 작성 기준")

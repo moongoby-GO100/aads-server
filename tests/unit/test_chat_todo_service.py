@@ -471,6 +471,20 @@ def test_extract_todo_titles_splits_pm_actions_and_completion_intent():
     ]
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("진행률 보고", "진행률 보고"),
+        ("진행상황 보고서 정리", "진행상황 보고서 정리"),
+        ("PRD 작성 진행해줘", "PRD 작성"),
+        ("작업 진행하고 보고", "작업 보고"),
+        ("진행해", ""),
+    ],
+)
+def test_remove_action_phrases_preserves_progress_words_and_removes_requests(text, expected):
+    assert svc._remove_action_phrases(text, []) == expected
+
+
 def test_chat_todo_migration_contains_required_schema():
     content = Path("migrations/083_chat_todo_items.sql").read_text(encoding="utf-8")
 
