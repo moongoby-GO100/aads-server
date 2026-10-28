@@ -17,8 +17,8 @@ adapted: 2026-10-28
 ## 도구 고르기
 | 목적 | 도구 | 비고 |
 |---|---|---|
-| AADS 본체 DB 조회 | `query_database` | `sql` 파라미터. SELECT 만 |
-| KIS·GO100·SF·NTV2 등 프로젝트 DB 조회 | `query_project_database` | 어떤 DB 가 있는지는 `list_project_databases` 로 먼저 본다 |
+| AADS 본체 DB 조회 | `query_database` | `query` 파라미터(SELECT 문) |
+| KIS·GO100·SF·NTV2 등 프로젝트 DB 조회 | `query_project_database` | `project`·`query` 파라미터. 어떤 DB 가 있는지는 `list_project_databases` 로 먼저 본다 |
 | 쓰기(추가·수정·삭제) | `db_safe_write` | 이 스킬의 범위 밖. 아래 "쓰기가 필요할 때" |
 구현은 `app/services/tool_executor.py` 의 `_query_database`, `_query_project_database`, `_db_safe_write` 이다. 동작이 의심되면 코드를 `Read` 로 직접 확인한다.
 

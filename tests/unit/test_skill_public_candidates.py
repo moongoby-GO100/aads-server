@@ -159,6 +159,12 @@ def test_safe_db_query_is_apache_adaptation_with_notice():
     assert not (SKILLS_DIR / "safe-db-query" / "scripts").exists()
 
 
+def test_safe_db_query_documents_query_database_parameter_name():
+    text = _read("safe-db-query")
+    assert "`sql` 파라미터" not in text
+    assert "`query` 파라미터" in text
+
+
 @pytest.mark.parametrize("slug", BATCH3)
 def test_batch3_does_not_import_scripts_or_office_format_skills(slug):
     text = _read(slug).lower()
