@@ -21,6 +21,18 @@ from app.services.chat_interrupt_lifecycle import INTERRUPT_REPLY_INSTRUCTION, a
 logger = logging.getLogger(__name__)
 
 
+class AgentSDKExecutionError(RuntimeError):
+    """SDK execution failed; never interpret cleanup as successful completion."""
+
+    def __init__(self, cause: Exception):
+        self.reason = (
+            "sdk_session_not_found"
+            if "No conversation found with session ID" in str(cause)
+            else "sdk_execution_failed"
+        )
+        super().__init__(self.reason)
+
+
 async def _single_user_message(text: str, image_blocks: List[Dict[str, Any]]) -> AsyncGenerator[Dict[str, Any], None]:
     """client.query(AsyncIterable) 용 — 텍스트+이미지 content 배열 user 메시지 한 건."""
     yield {
@@ -416,6 +428,7 @@ class AgentSDKService:
         HEARTBEAT_SSE = f'data: {json.dumps({"type": "heartbeat"})}\n\n'
         client = ClaudeSDKClient(options=options)
         captured_session_id: Optional[str] = None
+        saw_result = False
         try:
             await client.connect()
             await client.query(prompt)
@@ -438,6 +451,10 @@ class AgentSDKService:
                 except StopAsyncIteration:
                     break
 
+                if isinstance(message, ResultMessage) and getattr(message, "is_error", False):
+                    raise RuntimeError(getattr(message, "result", None) or "sdk_error_result")
+                if isinstance(message, ResultMessage):
+                    saw_result = True
                 async for _c in self._render_sdk_message(message):
                     yield _c
                 if isinstance(message, SystemMessage) and getattr(message, "subtype", "") == "init":
@@ -448,16 +465,18 @@ class AgentSDKService:
                         client, chat_session_id, pop_interrupts
                     ):
                         yield _c
+            if not saw_result:
+                raise RuntimeError("sdk_missing_result")
         except Exception as exc:
             logger.warning("sdk_bidirectional_failed error=%s", str(exc)[:200])
-            yield f'data: {json.dumps({"type": "error", "content": str(exc)[:400]}, ensure_ascii=False)}\n\n'
+            raise AgentSDKExecutionError(exc) from exc
         finally:
             _active_iterators.pop(str(stream_key), None)
             try:
                 await client.disconnect()
             except Exception:
                 pass
-            yield f'data: {json.dumps({"type": "sdk_complete", "session_id": captured_session_id or ""})}\n\n'
+        yield f'data: {json.dumps({"type": "sdk_complete", "session_id": captured_session_id or ""})}\n\n'
 
     async def _inject_interrupts(
         self, client: Any, chat_session_id: str, pop_fn: Any,
@@ -605,6 +624,8 @@ class AgentSDKService:
 
                 # ── 최종 결과 ───────────────────────────────────────────────
                 elif isinstance(message, ResultMessage):
+                    if getattr(message, "is_error", False):
+                        raise AgentSDKExecutionError(RuntimeError(message.result or "sdk_error_result"))
                     if message.result:
                         yield f"data: {json.dumps({'type': 'delta', 'content': message.result})}\n\n"
                     yield f"data: {json.dumps({'type': 'sdk_complete', 'session_id': captured_session_id, 'stop_reason': getattr(message, 'stop_reason', 'end_turn')})}\n\n"
@@ -636,7 +657,9 @@ class AgentSDKService:
             msg = f"Agent SDK 실행 오류: {type(e).__name__}: {e}"
             logger.exception(f"AgentSDKService: {msg}")
             yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
-            raise
+            if isinstance(e, AgentSDKExecutionError):
+                raise
+            raise AgentSDKExecutionError(e) from e
 
         finally:
             _active_iterators.pop(str(_stream_key), None)

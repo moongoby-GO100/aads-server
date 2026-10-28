@@ -14886,6 +14886,7 @@ async def send_message_stream(
             response_mode != _RESPONSE_MODE_PLAN
             and intent in _RUNNER_DELEGATION_INTENTS
             and any(t in content for t in _DIRECT_EXECUTION_TRIGGERS)
+            and not _turn_contract.user_pinned
         ):
             logger.info(f"[DIRECT_EXECUTION] session={sid_short} intent={intent} trigger_matched=True")
             # resume 지원: Phase A에서 프리페치한 세션 설정 사용 (#19)
@@ -15051,8 +15052,34 @@ async def send_message_stream(
                         return
 
                 except Exception as _sdk_err:
-                    logger.warning(f"agent_sdk_failed (fallback to bridge): {_sdk_err}")
-                    # SDK 실패 → AutonomousExecutor fallback으로 계속 진행
+                    from app.services.agent_sdk_service import AgentSDKExecutionError
+
+                    _sdk_reason = (
+                        _sdk_err.reason if isinstance(_sdk_err, AgentSDKExecutionError)
+                        else "sdk_execution_failed"
+                    )
+                    logger.warning("agent_sdk_failed session=%s reason=%s", sid_short, _sdk_reason)
+                    # A missing conversation fails before any model/tool work. Clear
+                    # only that stale ID and let the normal model route handle it.
+                    if _sdk_reason == "sdk_session_not_found" and not full_response.strip():
+                        async with get_pool().acquire() as _conn:
+                            await _conn.execute(
+                                "UPDATE chat_sessions SET settings = settings - 'sdk_session_id' "
+                                "WHERE id = $1 AND settings->>'sdk_session_id' = $2",
+                                sid, sdk_session_id,
+                            )
+                    else:
+                        # Never repeat possibly side-effecting SDK work on a second
+                        # execution path. Preserve its original failure and partial.
+                        if _execution_id_str:
+                            async with get_pool().acquire() as _conn:
+                                await _mark_execution_interrupted(
+                                    _conn, session_id, _execution_id_str, _sdk_reason,
+                                    partial_content=full_response,
+                                    delete_empty_placeholder=False,
+                                )
+                        yield f"data: {json.dumps({'type': 'error', 'content': 'SDK 실행이 중단되었습니다.', 'reason': _sdk_reason, 'terminal': True, 'recoverable': False})}\n\n"
+                        return
 
         # 🔧 B안: auto_reaction 트리거 AI 응답 → intent='runner_response' (로그탭 이동)
         if intent_override == "auto_reaction":

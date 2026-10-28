@@ -1163,12 +1163,27 @@ async def get_streaming_status_projection(
     last_tool = str(tool_uses[-1].get("tool_name") or "") if tool_uses else ""
     lease_live = bool(values.get("lease_valid"))
     if phase in {"running", "retrying"}:
+        # Retry streams update runtime state before their final DB write. Do
+        # not hide real tool work behind the previous interruption bubble.
+        runtime = cached_status or {}
+        if (
+            has_live_runtime
+            and runtime.get("is_streaming")
+            and str(runtime.get("execution_id") or "") == str(execution_id)
+        ):
+            runtime_partial = str(runtime.get("partial_content") or "")
+            if len(runtime_partial) > len(partial):
+                partial = runtime_partial
+            runtime_tools = int(runtime.get("tool_count") or 0)
+            if runtime_tools >= tool_count:
+                tool_count = runtime_tools
+                last_tool = str(runtime.get("last_tool") or last_tool)
         producer_live = bool(has_live_runtime or lease_live)
         recovering = phase == "retrying" or str(
             values.get("assistant_model_used") or ""
         ) in {"interrupted", "stopped"}
         status_name = (
-            "recovering"
+            "tool_running" if producer_live and tool_count else "recovering"
             if recovering and producer_live
             else ("tool_running" if producer_live and tool_count else "generating")
             if producer_live
@@ -1179,6 +1194,7 @@ async def get_streaming_status_projection(
             "just_completed": False,
             **svc.stream_status_payload(status_name),
             "content_length": len(partial),
+            "token_count": len(partial) // 4,
             "partial_content": partial or None,
             "tool_count": tool_count,
             "last_tool": last_tool,
