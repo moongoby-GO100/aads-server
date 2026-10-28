@@ -32,12 +32,15 @@ ul.consent{margin:8px 0;padding-left:20px}ul.consent li{margin-bottom:6px}
 .seg{display:grid;grid-template-columns:1fr 1fr;gap:8px}.seg button{min-height:48px;border:1px solid var(--line);border-radius:12px;background:#fff;font:inherit;font-weight:700;cursor:pointer;color:var(--primary-dark)}.seg button[aria-pressed=true]{background:var(--primary);color:#fff;border-color:var(--primary)}
 .rec{padding:12px 0;border-bottom:1px solid #edf0f5}.rec:last-child{border-bottom:0}.rec .top{display:flex;justify-content:space-between;gap:8px;align-items:center}.rec p{margin:4px 0}
 dialog{width:min(440px,calc(100% - 24px));border:1px solid var(--line);border-radius:16px;padding:18px}dialog::backdrop{background:#17203388}dialog label{display:grid;gap:6px;margin:12px 0;color:var(--muted)}
+.skel{height:16px;border-radius:8px;background:#e6eaf1;margin:12px 0}.skel.w2{width:60%}#stateBox h2{font-size:20px}#stateBox .btn{margin-top:10px}
 [hidden],.hidden{display:none!important}#toast{min-height:24px;color:#245fd0;font-size:15px}
 </style><body><div class="layout">
 <div class="app">
 <nav class="jump" aria-label="목업 화면 이동"><a class="linkbtn" href="obys-attendance-admin-onboarding.html" data-s="A">A 관리자 시작하기</a><a class="linkbtn" href="obys-attendance-admin-today.html" data-s="B">B 관리자 오늘 현황</a><a class="linkbtn" href="obys-attendance-employee-clock.html" data-s="C">C 직원 출퇴근</a><a class="linkbtn" href="obys-attendance-employee-records.html" data-s="D">D 직원 내 기록</a></nav>
 <header><h1>출퇴근 <span class="tag now">현재 코드 있음</span></h1><div class="who"><div>샘플 직원 A</div><div>샘플 사업자</div></div></header>
 <p class="alert warn" style="margin:0">승인 검토용 목업 v2 · 가상 샘플 · 화면 C (screen_id obys-attendance-employee-clock). 위치·서버 호출 없음.</p>
+<section id="stateBox" class="panel" role="alert" hidden></section>
+<div id="live" style="display:contents">
 <section id="todayView" class="panel"><div class="muted">10월 28일 (수)</div><div class="status-line" id="todayStatus">아직 출근 전입니다</div><div class="elapsed" id="elapsed" hidden></div><div id="verdict"></div><p class="muted" id="reasonTxt"></p></section>
 <section id="branchView" class="panel"><h2>근무 지점 <span class="tag now">현재 코드 있음</span></h2><select id="branchSel" aria-label="근무 지점 선택"><option value="br-gn">샘플 강남점</option><option value="br-sc">샘플 서초점 (위치 미등록)</option><option value="br-ys">샘플 역삼점 (위치 미등록)</option></select></section>
 <section id="coordView" class="alert warn" hidden><b>이 지점은 위치가 등록되지 않았습니다.</b><p>위치 확인 불가 — 관리자 확인 후 확정됩니다. 출근은 그대로 기록되고 <b>확인필요</b>로 남습니다. <span class="tag now">현재 코드 있음</span></p></section>
@@ -48,11 +51,12 @@ dialog{width:min(440px,calc(100% - 24px));border:1px solid var(--line);border-ra
 <section id="doneView" class="panel" hidden><h2>오늘 근무가 끝났습니다</h2><p id="doneTxt"></p><div class="row"><a class="btn primary" href="obys-attendance-employee-records.html">내 기록 보기 (D) <span class="tag new">신규</span></a></div><a class="btn" style="margin-top:10px" href="obys-attendance-admin-today.html">관리자 대기함 보기 (B)</a></section>
 <div class="spacer"></div>
 <div class="dock"><button id="breakEnd" class="big-btn brk" type="button" hidden>휴게 종료 <span class="tag new">신규</span></button><button id="clockBtn" class="big-btn" type="button" hidden>출근</button></div>
-<section class="demo" aria-label="데모 조작"><b>데모 조작 (실제 화면 아님)</b><label>기기 위치 권한<select id="perm"><option value="on">켜짐 (허용)</option><option value="off">꺼짐 (거부됨)</option></select></label><small class="muted">데모: 출근 후 시간이 흘러 현재 12:14 라고 가정합니다. 가상 시계를 사용하고 실제 위치는 읽지 않습니다.</small><div id="toast" role="status" aria-live="polite"></div><button id="reset" class="btn" type="button">처음부터 다시 (샘플 초기화)</button></section>
+</div>
+<section class="demo" aria-label="데모 조작"><b>데모 조작 (실제 화면 아님)</b><label>검토 시나리오<select id="scenario"><option value="default">정상 화면</option><option value="loading">조회 중</option><option value="empty">배정 지점 없음</option><option value="error">조회 실패</option><option value="permission">직원 연결 안 됨</option><option value="session-expired">로그인 만료</option><option value="offline">오프라인</option></select></label><label>기기 위치 권한<select id="perm"><option value="on">켜짐 (허용)</option><option value="off">꺼짐 (거부됨)</option></select></label><small class="muted">데모: 출근 후 시간이 흘러 현재 12:14 라고 가정합니다. 가상 시계를 사용하고 실제 위치는 읽지 않습니다.</small><div id="toast" role="status" aria-live="polite"></div><button id="reset" class="btn" type="button">처음부터 다시 (샘플 초기화)</button></section>
 <div class="foot"><button class="link-btn" type="button" id="refresh">새로고침</button><button class="link-btn" type="button" id="consentToggle" hidden>위치 동의 철회</button></div>
 </div>
 <aside class="side"><section class="legend" aria-label="범례"><b>범례</b> <span class="tag now">현재 코드 있음</span> <span class="tag new">신규 — API·화면 없음</span>
-<ul><li>지점 선택 <span class="tag now">현재 코드 있음</span> (clock.html branchSelect)</li><li>위치 동의 / 동의하지 않음 / 철회 <span class="tag now">현재 코드 있음</span> (consent API)</li><li>위치 권한 꺼짐 복구(다시 시도·위치 없이 기록) <span class="tag now">현재 코드 있음</span></li><li>출근 / 퇴근 큰 버튼·경과시간·오늘 상태 <span class="tag now">현재 코드 있음</span> (check-in / check-out / clock/state)</li><li>좌표 미설정 지점 안내 "위치 확인 불가 — 관리자 확인 후 확정" <span class="tag now">현재 코드 있음</span> (지점 has_geofence 표기 사용, 문구 보강)</li><li>휴게 시작 / 종료 <span class="tag new">신규 — API·화면 없음</span></li><li>완료 후 내 기록(D) 이동 <span class="tag new">신규 — API·화면 없음</span></li></ul>
+<ul><li>지점 선택 <span class="tag now">현재 코드 있음</span> (clock.html branchSelect)</li><li>위치 동의 / 동의하지 않음 / 철회 <span class="tag now">현재 코드 있음</span> (consent API)</li><li>위치 권한 꺼짐 복구(다시 시도·위치 없이 기록) <span class="tag now">현재 코드 있음</span></li><li>출근 / 퇴근 큰 버튼·경과시간·오늘 상태 <span class="tag now">현재 코드 있음</span> (check-in / check-out / clock/state)</li><li>좌표 미설정 지점 안내 "위치 확인 불가 — 관리자 확인 후 확정" <span class="tag now">현재 코드 있음</span> (지점 has_geofence 표기 사용, 문구 보강)</li><li>휴게 시작 / 종료 <span class="tag new">신규 — API·화면 없음</span></li><li>완료 후 내 기록(D) 이동 <span class="tag new">신규 — API·화면 없음</span></li><li>조회 중("불러오는 중…")·조회 실패 + 다시 시도·로그인 만료(로그인 안내)·직원 연결 안 됨("연결된 사업장이 없습니다. 사장님께 직원 등록을 요청")·오프라인("오프라인 기록은 저장하지 않습니다") <span class="tag now">현재 코드 있음</span> (clock.html 의 문구를 상태별 화면으로 정리)</li><li>배정된 근무 지점이 없을 때의 전용 안내 <span class="tag new">신규 — API·화면 없음</span></li></ul>
 <p class="muted">터치 영역은 모두 44px 이상이고 핵심 버튼은 화면 아래쪽에 두어 한 손으로 누를 수 있습니다.</p></section></aside>
 </div>
 <script>
@@ -109,5 +113,15 @@ $('perm').onchange=()=>{S.devicePerm=$('perm').value;save();show('permView',fals
 $('branchSel').onchange=()=>{S.clock.branch=$('branchSel').value;save();render()};
 $('reset').onclick=()=>{S=seed();save();show('permView',false);$('branchSel').value='br-gn';$('toast').textContent='샘플을 초기화했습니다.';render()};
 $('refresh').onclick=()=>{render()};
+const NOW='<span class="tag now">현재 코드 있음</span>',NEW='<span class="tag new">신규 — API·화면 없음</span>';
+const msgs={loading:['불러오는 중…','오늘 출퇴근 상태와 근무 지점을 확인하고 있습니다. 확인이 끝나면 출근 버튼이 나타납니다. '+NOW+'<div class="skel"></div><div class="skel w2"></div>',null,'확인 끝난 화면으로(데모)'],
+empty:['배정된 근무 지점이 없습니다','이 사업장에서 출근을 기록할 근무 지점이 아직 배정되지 않았습니다. 사장님·관리자에게 근무 지점 배정을 요청해 주세요. '+NEW,null,'새로고침(데모: 정상 화면)'],
+error:['기록하지 못했습니다','출퇴근 상태를 불러오지 못했습니다. 이미 누른 기록은 서버 확인 전까지 반영 여부를 알 수 없으니, 다시 시도해 결과를 확인하세요. '+NOW,null,'다시 시도'],
+permission:['이 사업장 직원으로 연결되어 있지 않습니다','로그인한 계정이 이 사업장의 직원으로 등록되어 있지 않아 출퇴근을 기록할 수 없습니다. 사장님께 직원 등록(초대)을 요청해 주세요. 안내 문구 '+NOW+'(현재: "연결된 사업장이 없습니다. 사장님께 직원 등록을 요청하십시오")',null,'다시 확인(데모: 정상 화면)'],
+'session-expired':['로그인이 만료되었습니다','다시 로그인한 뒤 이 화면으로 돌아오십시오. 이미 기록된 출퇴근은 서버에 남아 있습니다. '+NOW,'오비서 로그인','로그인 복구(데모: 정상 화면)'],
+offline:['지금 기록할 수 없음','인터넷에 연결되어 있지 않습니다. 연결을 확인한 뒤 출근(퇴근) 버튼을 <b>다시 눌러 주세요</b>. 오프라인 상태에서 누른 기록은 저장하지 않으며 연결되어도 자동 전송되지 않습니다. '+NOW,null,'연결 확인 후 다시 시도']};
+function scen(){const m=$('scenario').value,box=$('stateBox');$('live').hidden=m!=='default';box.hidden=m==='default';
+ if(m!=='default'){const [t,x,link,b]=msgs[m];box.setAttribute('role',m==='loading'?'status':'alert');box.innerHTML=`<h2>${t}</h2><p>${x}</p>${link?`<a class="btn primary" href="obys-attendance-admin-onboarding.html">${link}</a>`:''}<button id="recover" class="btn" type="button">${b}</button>`;$('recover').onclick=()=>{$('scenario').value='default';scen()}}}
+$('scenario').addEventListener('input',scen);
 document.querySelector('.jump [data-s=C]').setAttribute('aria-current','page');load();if(S.clock.phase!=='idle')$('branchSel').value=S.clock.branch;else $('branchSel').value=S.clock.branch||'br-gn';render();
 </script></body></html>

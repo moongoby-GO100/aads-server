@@ -28,7 +28,7 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:10px 8px
 .detail{line-height:1.8}.empty{text-align:center;padding:45px 15px}.hidden,[hidden]{display:none!important}#toast{padding:12px;color:#245fd0;min-height:42px}
 dialog{width:min(520px,calc(100% - 24px));border:1px solid #dce3ed;border-radius:12px;padding:22px}dialog::backdrop{background:#17203388}dialog label{margin:12px 0}
 label.check{display:flex;align-items:center;gap:10px;min-height:44px;color:#172033}label.check input{width:22px;min-height:22px;height:22px;flex:none}
-#stateBox{line-height:1.8}.scenario{margin-top:22px;border-top:1px dashed #ddd;padding-top:15px}footer{line-height:1.7;margin-top:16px}
+.skel{height:16px;border-radius:8px;background:#e6eaf1;margin:12px 0}.skel.w2{width:60%}#stateBox{line-height:1.8}.scenario{margin-top:22px;border-top:1px dashed #ddd;padding-top:15px}footer{line-height:1.7;margin-top:16px}
 @media(max-width:1100px){.grid,.cols{grid-template-columns:1fr}.filters{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:700px){.shell{grid-template-columns:1fr}aside{padding:12px 18px}aside p,nav.side{display:none}aside strong{font-size:18px}main{padding:16px}.filters{grid-template-columns:repeat(2,minmax(0,1fr))}.metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:12px}.metric b{font-size:22px}.record{grid-template-columns:1fr 1fr}.record button{width:100%}h1{font-size:23px}.toolbar>*{flex:1}.panel{padding:14px}.steps li{grid-template-columns:1fr}.steps .n{width:36px;height:36px}.jump .linkbtn{flex:1 1 40%}}
 </style><body><div class="shell"><aside><strong>오비서 <small>V4.1</small></strong><p>샘플 사업자 · 관리자</p><nav class="side"><div>업무 현황</div><div>직원 현황</div><div class="active">근태 현황</div><div>급여 현황</div></nav></aside><main>
@@ -36,7 +36,9 @@ label.check{display:flex;align-items:center;gap:10px;min-height:44px;color:#1720
 <div class="top"><div><small>직원·급여 / 관리자 · 화면 A · screen_id obys-attendance-admin-onboarding</small><h1>근태 현황 · 시작하기</h1><p class="muted">아직 근태 기록이 없습니다. 아래 3단계를 마치면 직원 출근이 이곳에 쌓입니다.</p></div><span class="badge">v2 · 미승인 / 검토대기용 초안</span></div>
 <p class="notice">승인 검토용 목업 · 모든 정보는 가상 샘플입니다(실명·실전화번호 없음). 버튼은 데모이며 운영 반영·외부 요청이 없습니다. 이 화면은 운영 DB의 실제 첫 진입 상태(근태 기록 0건 · 지점 7곳 중 좌표 설정 0곳)를 그대로 옮긴 것입니다.</p>
 <section class="legend" aria-label="범례"><b>범례</b> <span class="tag now">현재 코드 있음</span> <span class="tag new">신규 — API·화면 없음</span>
-<ul><li>좌표 미설정 경고·지점 목록 <span class="tag now">현재 코드 있음</span> — attendance-admin.html 지점 표, 위치 판정 unknown</li><li>① 지점 위치·반경 설정 <span class="tag now">현재 코드 있음</span> — attendance-admin.html (반경 30~50m, 기본 50m, 상한 50m)</li><li>② 출퇴근 링크 복사·전달 버튼 <span class="tag new">신규 — API·화면 없음</span> (직원 화면 clock.html 자체는 현재 코드 있음)</li><li>"지금 할 일" 3단계 체크리스트·진행률 <span class="tag new">신규 — API·화면 없음</span> (단계 완료 판정은 지점 좌표 수·기록 건수로 계산하는 안)</li><li>③ 첫 출근 확인 → 오늘 현황(B) <span class="tag now">현재 코드 있음</span> 기록 목록 API 사용</li></ul></section>
+<ul><li>좌표 미설정 경고·지점 목록 <span class="tag now">현재 코드 있음</span> — attendance-admin.html 지점 표, 위치 판정 unknown</li><li>① 지점 위치·반경 설정 <span class="tag now">현재 코드 있음</span> — attendance-admin.html (반경 30~50m, 기본 50m, 상한 50m)</li><li>② 출퇴근 링크 복사·전달 버튼 <span class="tag new">신규 — API·화면 없음</span> (직원 화면 clock.html 자체는 현재 코드 있음)</li><li>"지금 할 일" 3단계 체크리스트·진행률 <span class="tag new">신규 — API·화면 없음</span> (단계 완료 판정은 지점 좌표 수·기록 건수로 계산하는 안)</li><li>③ 첫 출근 확인 → 오늘 현황(B) <span class="tag now">현재 코드 있음</span> 기록 목록 API 사용</li><li>복구 상태 5종(조회 중·조회 실패·로그인 만료·권한 없음·오프라인) <span class="tag now">현재 코드 있음</span> — admin.html 의 조회 중·연결 오류·세션 복구 표시 / 권한 요청 경로 안내 <span class="tag new">신규 — API·화면 없음</span></li></ul></section>
+<div id="stateBox" class="panel" role="alert" hidden></div>
+<div id="live">
 <div id="warn" class="banner warn" role="alert"><b>좌표 미설정 지점 <span id="unsetN">7</span>곳</b> — 지점 좌표가 없으면 위치 판정이 '알 수 없음'이 되어 해당 지점의 모든 출근이 <b>확인필요</b>로 남습니다. <span class="tag now">현재 코드 있음</span><div class="toolbar" style="margin-top:10px"><button id="toggleUnset" aria-expanded="false" aria-controls="unsetList">미설정 지점 7곳 보기</button></div>
 <div id="unsetList" hidden><table><thead><tr><th>지점</th><th>좌표</th><th>반경</th><th>출근 시 판정</th></tr></thead><tbody id="unsetRows"></tbody></table></div></div>
 <div class="metrics"><div class="metric"><small>근태 기록</small><b id="mRec">0건</b></div><div class="metric"><small>좌표 설정 지점</small><b id="mCoord">0 / 7</b></div><div class="metric"><small>오늘 출근</small><b>0명</b></div><div class="metric"><small>확인필요</small><b>0건</b></div></div>
@@ -47,6 +49,8 @@ label.check{display:flex;align-items:center;gap:10px;min-height:44px;color:#1720
 <li id="s3"><span class="n">3</span><div><b>첫 출근 확인</b> <span class="tag now">현재 코드 있음</span><p class="muted">직원이 첫 출근을 누르면 오늘 현황(B)의 확인필요 대기함에 사유와 함께 나타납니다. 지금은 기록이 0건입니다.</p><div class="acts"><button id="openRecs">근태 기록 목록 열기</button><a class="linkbtn" href="obys-attendance-admin-today.html">오늘 현황 보기 (B)</a></div></div></li>
 </ol><div id="toast" role="status" aria-live="polite"></div></section>
 <section id="recs" class="panel" hidden aria-label="근태 기록 목록"><h2>출퇴근 기록</h2><div class="empty"><h3>아직 근태 기록이 없습니다</h3><p class="muted">직원이 출퇴근 링크로 첫 출근을 기록하면 여기에 나타납니다.<br>① 지점 위치·반경을 먼저 설정하면 첫 출근부터 위치 판정이 됩니다.</p><button id="closeRecs">닫기</button></div></section>
+</div>
+<div class="scenario toolbar"><label>검토 시나리오<select id="scenario"><option value="default">정상(첫 진입)</option><option value="loading">조회 중</option><option value="error">조회 실패</option><option value="permission">권한 없음</option><option value="session-expired">로그인 만료</option><option value="offline">오프라인</option></select></label><small>복구 버튼은 첫 진입 화면으로 돌아옵니다. 로그인·실제 API 호출 없음.</small></div>
 <footer class="muted">좌표 미설정은 위치판정 unknown 입니다. unknown 은 반려가 아니라 확인필요이며, 관리자가 확인한 뒤 확정합니다. 지각·연장·주휴 등 미정 정책은 확정하거나 자동 판정하지 않습니다.</footer>
 </main></div>
 <script>
@@ -76,5 +80,14 @@ $('go1').onclick=()=>{$('toast').textContent='attendance-admin.html 지점 좌�
 $('copy').onclick=()=>{$('toast').textContent='출퇴근 링크를 복사했습니다(데모 · 클립보드 미사용): /static/apps/obys/clock.html'};
 $('demoSet').onclick=()=>{setN=Math.min(7,setN+1);$('toast').textContent=`데모: 지점 ${setN}/7 설정 완료로 표시했습니다. 운영 반영 없음.`;render()};
 $('openRecs').onclick=()=>{$('recs').hidden=false};$('closeRecs').onclick=()=>{$('recs').hidden=true};
+const NOW='<span class="tag now">현재 코드 있음</span>',NEW='<span class="tag new">신규 — API·화면 없음</span>';
+const msgs={loading:['근태 현황을 불러오는 중입니다','지점 좌표와 근태 기록 수를 확인하고 있습니다. 확인이 끝나면 시작하기 3단계가 나타납니다. '+NOW+' <div class="skel"></div><div class="skel w2"></div><div class="skel"></div>','조회가 끝날 때까지 기다리기(데모: 첫 화면으로)'],
+error:['근태 현황을 불러오지 못했습니다','서버 응답을 받지 못했습니다. 다시 시도해도 같으면 잠시 뒤 다시 열어 보세요. 조회에 실패한 동안에는 "기록 0건"으로 보이지 않도록 시작하기 단계를 숨깁니다. '+NOW,'다시 시도'],
+permission:['근태 관리 권한이 없습니다','이 계정은 이 사업장의 근태를 관리하는 소유자·관리자가 아닙니다. 사업장 소유자에게 근태 관리 권한을 요청하세요. 권한 안내 문구 '+NOW+' · 권한 요청 경로(요청 보내기) '+NEW,'권한 요청 방법 보기(데모)'],
+'session-expired':['로그인이 만료되었습니다','보안을 위해 로그인이 끝났습니다. 다시 로그인하면 이 시작하기 화면으로 돌아옵니다. 지점 좌표 설정 등 저장된 내용은 그대로입니다. '+NOW,'다시 로그인'],
+offline:['인터넷 연결이 끊겼습니다','연결을 확인한 뒤 다시 시도하세요. 연결이 없는 동안에는 지점 좌표·근태 기록 수를 새로 확인할 수 없습니다. '+NOW,'연결 후 다시 시도']};
+function scen(){const m=$('scenario').value,box=$('stateBox');$('live').hidden=m!=='default';box.hidden=m==='default';
+ if(m!=='default'){const [t,x,b]=msgs[m];box.setAttribute('role',m==='loading'?'status':'alert');box.innerHTML=`<h2>${t}</h2><p>${x}</p><div class="toolbar"><button id="recover" class="primary">${b}</button></div>`;$('recover').onclick=()=>{$('scenario').value='default';scen()}}}
+$('scenario').addEventListener('input',scen);
 document.querySelector('.jump [data-s=A]').setAttribute('aria-current','page');render();
 </script></body></html>

@@ -36,6 +36,19 @@ const TAP = 'button,a[href],select,input:not([type=checkbox]):not([type=hidden])
   const text = sel => page.locator(sel).first().innerText();
   const vis = async sel => (await page.locator(sel).filter({visible:true}).count());
   const checks = [];
+  const hid = sel => page.locator(sel).evaluate(e=>e.hidden);
+  const scenarios = async (key, expect) => {
+   for (const [state, re] of Object.entries(expect)) {
+    await page.locator('#scenario').selectOption(state);
+    assert.equal(await hid('#live'), true); assert.equal(await hid('#stateBox'), false);
+    assert.match(await text('#stateBox'), re);
+    assert.equal(await page.locator('#recover').count(), 1);
+    await cap(key, state);
+    await page.locator('#recover').click();
+    assert.equal(await hid('#live'), false); assert.equal(await hid('#stateBox'), true);
+    assert.equal(await page.locator('#scenario').inputValue(), 'default');
+   }
+  };
 
   // ---- A 관리자 시작하기
   await open('onboarding');
@@ -57,7 +70,8 @@ const TAP = 'button,a[href],select,input:not([type=checkbox]):not([type=hidden])
   await page.locator('#go1').click(); assert.match(await text('#toast'), /attendance-admin\.html/);
   await page.locator('#copy').click(); assert.match(await text('#toast'), /복사/);
   await page.locator('#demoSet').click(); assert.match(await text('#mCoord'), /1 \/ 7/); assert.match(await text('#warn'), /6곳/);
-  checks.push('A:checklist-3-steps','A:coordinates-unset-7','A:radius-50m','A:empty');
+  await scenarios('onboarding', {loading:/불러오는 중/,error:/불러오지 못했습니다/,'session-expired':/로그인이 만료/,permission:/근태 관리 권한이 없습니다/,offline:/연결이 끊겼습니다/});
+  checks.push('A:recovery-five-states','A:checklist-3-steps','A:coordinates-unset-7','A:radius-50m','A:empty');
 
   // ---- B 관리자 오늘 현황 (새 컨텍스트 저장소 = 가상 시드)
   await open('today');
@@ -133,7 +147,9 @@ const TAP = 'button,a[href],select,input:not([type=checkbox]):not([type=hidden])
   await page.locator('#clockBtn').click();
   assert.equal(await vis('#doneView'), 1); assert.match(await text('#doneTxt'), /8시간 33분/);
   await cap('clock','done');
-  checks.push('C:consent-denied-notice','C:permission-off-recovery','C:coord-unset-notice','C:working-break-done','C:denied-checkin-saved');
+  await open('clock');
+  await scenarios('clock', {loading:/불러오는 중/,empty:/배정된 근무 지점이 없습니다/,error:/기록하지 못했습니다/,'session-expired':/로그인이 만료/,permission:/직원으로 연결되어 있지 않습니다/,offline:/다시 눌러 주세요/});
+  checks.push('C:recovery-six-states','C:consent-denied-notice','C:permission-off-recovery','C:coord-unset-notice','C:working-break-done','C:denied-checkin-saved');
 
   // ---- 여정 접점 1: C 위치 거부 출근 -> B 대기함 '위치 미확인'
   await open('today');
@@ -148,6 +164,8 @@ const TAP = 'button,a[href],select,input:not([type=checkbox]):not([type=hidden])
   assert.match(await text('#notice'), /퇴근 기록이 없는 날이 1건/);
   assert.equal(await page.locator('.rec').count(), 3);
   await cap('records','default');
+  await scenarios('records', {loading:/불러오는 중/,empty:/근무 기록이 아직 없습니다/,error:/불러오지 못했습니다/,'session-expired':/입력 중이던 정정 요청은 이 기기에 보존/,permission:/직원으로 연결되어 있지 않습니다/,offline:/연결이 끊겼습니다/});
+  checks.push('D:recovery-six-states');
   await page.locator('#tabM').click(); assert.ok(await page.locator('.rec').count() >= 7); await page.locator('#tabW').click();
   await page.locator('#openFm').click();
   await page.locator('#fmOk').click(); assert.match(await text('#fmErr'), /5자 이상/);

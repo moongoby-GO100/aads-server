@@ -32,21 +32,25 @@ ul.consent{margin:8px 0;padding-left:20px}ul.consent li{margin-bottom:6px}
 .seg{display:grid;grid-template-columns:1fr 1fr;gap:8px}.seg button{min-height:48px;border:1px solid var(--line);border-radius:12px;background:#fff;font:inherit;font-weight:700;cursor:pointer;color:var(--primary-dark)}.seg button[aria-pressed=true]{background:var(--primary);color:#fff;border-color:var(--primary)}
 .rec{padding:12px 0;border-bottom:1px solid #edf0f5}.rec:last-child{border-bottom:0}.rec .top{display:flex;justify-content:space-between;gap:8px;align-items:center}.rec p{margin:4px 0}
 dialog{width:min(440px,calc(100% - 24px));border:1px solid var(--line);border-radius:16px;padding:18px}dialog::backdrop{background:#17203388}dialog label{display:grid;gap:6px;margin:12px 0;color:var(--muted)}
+.skel{height:16px;border-radius:8px;background:#e6eaf1;margin:12px 0}.skel.w2{width:60%}#stateBox h2{font-size:20px}#stateBox .btn{margin-top:10px}
 [hidden],.hidden{display:none!important}#toast{min-height:24px;color:#245fd0;font-size:15px}
 </style><body><div class="layout">
 <div class="app">
 <nav class="jump" aria-label="목업 화면 이동"><a class="linkbtn" href="obys-attendance-admin-onboarding.html" data-s="A">A 관리자 시작하기</a><a class="linkbtn" href="obys-attendance-admin-today.html" data-s="B">B 관리자 오늘 현황</a><a class="linkbtn" href="obys-attendance-employee-clock.html" data-s="C">C 직원 출퇴근</a><a class="linkbtn" href="obys-attendance-employee-records.html" data-s="D">D 직원 내 기록</a></nav>
 <header><h1>내 기록 <span class="tag new">신규 — API·화면 없음</span></h1><div class="who"><div>샘플 직원 A</div><div>샘플 사업자</div></div></header>
 <p class="alert warn" style="margin:0">승인 검토용 목업 v2 · 가상 샘플 · 화면 D (screen_id obys-attendance-employee-records). 서버 호출 없음.</p>
+<section id="stateBox" class="panel" role="alert" hidden></section>
+<div id="live" style="display:contents">
 <div id="notice"></div>
 <div class="sum"><section class="panel"><small class="muted">이번 주 (10/26~11/01)</small><b id="sumW"></b></section><section class="panel"><small class="muted">이번 달 (10월)</small><b id="sumM"></b></section></div>
 <div class="seg" role="group" aria-label="기간 보기"><button id="tabW" aria-pressed="true" type="button">이번 주</button><button id="tabM" aria-pressed="false" type="button">이번 달</button></div>
 <section class="panel" aria-label="내 기록 목록"><h2>근무 기록 <span class="tag new">신규 — API·화면 없음</span></h2><div id="list"></div></section>
+</div>
 <div id="toast" role="status" aria-live="polite"></div>
-<section class="demo" aria-label="데모 조작"><b>데모 조작 (실제 화면 아님)</b><p class="muted" style="margin:6px 0 10px">같은 가상 직원 A 로 이어집니다: C 에서 출근 → 여기서 정정 요청 → B 에서 승인/반려 → 여기서 결과 확인.</p><div class="row"><a class="btn" href="obys-attendance-admin-today.html">관리자 정정 처리 (B)</a><a class="btn" href="obys-attendance-employee-clock.html">출퇴근 (C)</a></div><button id="reset" class="btn" type="button" style="margin-top:10px">처음부터 다시 (샘플 초기화)</button></section>
+<section class="demo" aria-label="데모 조작"><b>데모 조작 (실제 화면 아님)</b><label>검토 시나리오<select id="scenario"><option value="default">정상 화면</option><option value="loading">조회 중</option><option value="empty">기록 없음</option><option value="error">조회 실패</option><option value="permission">직원 연결 안 됨</option><option value="session-expired">로그인 만료</option><option value="offline">오프라인</option></select></label><p class="muted" style="margin:6px 0 10px">같은 가상 직원 A 로 이어집니다: C 에서 출근 → 여기서 정정 요청 → B 에서 승인/반려 → 여기서 결과 확인.</p><div class="row"><a class="btn" href="obys-attendance-admin-today.html">관리자 정정 처리 (B)</a><a class="btn" href="obys-attendance-employee-clock.html">출퇴근 (C)</a></div><button id="reset" class="btn" type="button" style="margin-top:10px">처음부터 다시 (샘플 초기화)</button></section>
 </div>
 <aside class="side"><section class="legend" aria-label="범례"><b>범례</b> <span class="tag now">현재 코드 있음</span> <span class="tag new">신규 — API·화면 없음</span>
-<ul><li>내 기록 목록 (날짜·지점·출퇴근·근무시간) <span class="tag new">신규 — API·화면 없음</span> — 현재는 단건 attendance/me/{record_id} 만 있음</li><li>이번 주 / 이번 달 근무시간 합계 <span class="tag new">신규 — API·화면 없음</span></li><li>퇴근 누락 알림 <span class="tag new">신규 — API·화면 없음</span></li><li>정정 요청 제출(시각·사유) <span class="tag new">신규 — API·화면 없음</span></li><li>처리 대기 · 승인/반려 결과(반려 사유) 표시 <span class="tag new">신규 — API·화면 없음</span></li><li>근무시간 계산식(퇴근−출근−휴게, 퇴근 누락은 미산출) <span class="tag now">현재 코드 있음</span> attendance_worked_minutes</li></ul>
+<ul><li>내 기록 목록 (날짜·지점·출퇴근·근무시간) <span class="tag new">신규 — API·화면 없음</span> — 현재는 단건 attendance/me/{record_id} 만 있음</li><li>이번 주 / 이번 달 근무시간 합계 <span class="tag new">신규 — API·화면 없음</span></li><li>퇴근 누락 알림 <span class="tag new">신규 — API·화면 없음</span></li><li>정정 요청 제출(시각·사유) <span class="tag new">신규 — API·화면 없음</span></li><li>처리 대기 · 승인/반려 결과(반려 사유) 표시 <span class="tag new">신규 — API·화면 없음</span></li><li>복구 상태 6종(조회 중·기록 없음·조회 실패·직원 연결 안 됨·로그인 만료·오프라인)과 로그인 만료 시 입력 중이던 정정 요청 보존 <span class="tag new">신규 — API·화면 없음</span> (이 화면 자체가 신규)</li><li>근무시간 계산식(퇴근−출근−휴게, 퇴근 누락은 미산출) <span class="tag now">현재 코드 있음</span> attendance_worked_minutes</li></ul>
 <p class="muted">출퇴근 버튼 화면(C)은 현재 코드 있음. 이 화면은 C 의 푸터에서 들어오는 별도 화면 안입니다.</p></section></aside>
 </div>
 <dialog id="fm"><h2>퇴근 시각 정정 요청</h2><p id="fmWho" class="muted"></p><label>정정할 퇴근 시각<input id="fmTime" type="time" value="18:00" required></label><label>사유 (5자 이상)<textarea id="fmReason" maxlength="100" placeholder="예: 퇴근 버튼을 누르지 못하고 퇴근했습니다."></textarea></label><div id="fmErr" class="muted" role="alert"></div><div class="row"><button id="fmCancel" class="btn" type="button">취소</button><button id="fmOk" class="btn primary" type="button">요청 보내기</button></div></dialog>
@@ -88,5 +92,15 @@ $('fmOk').onclick=()=>{const v=$('fmReason').value.trim(),t=$('fmTime').value,mi
  S.corrections.push({id:'c'+(S.corrections.length+1),recId:KEYREC,emp:'A',date:miss.date,newOut:t,reason:v,requestedAt:'10-28 12:20',status:'pending',rejectReason:''});save();$('fm').close();$('toast').textContent='정정 요청을 보냈습니다. 처리 대기 중 · 관리자 화면(B)에 나타납니다(데모).';render()};
 $('tabW').onclick=()=>{tab='W';render()};$('tabM').onclick=()=>{tab='M';render()};
 $('reset').onclick=()=>{S=seed();save();tab='W';$('toast').textContent='샘플을 초기화했습니다.';render()};
+const NEW='<span class="tag new">신규 — API·화면 없음</span>';
+const msgs={loading:['내 기록을 불러오는 중…','이번 주·이번 달 근무 기록과 합계를 확인하고 있습니다. '+NEW+'<div class="skel"></div><div class="skel w2"></div><div class="skel"></div>',null,'확인 끝난 화면으로(데모)'],
+empty:['근무 기록이 아직 없습니다','첫 출근을 기록하면 이곳에 날짜별 근무시간이 쌓입니다. 퇴근을 누르지 못한 날이 생기면 여기서 정정 요청도 할 수 있습니다. '+NEW,['출퇴근 화면으로 (C)','obys-attendance-employee-clock.html'],'새로고침(데모: 정상 화면)'],
+error:['내 기록을 불러오지 못했습니다','서버 응답을 받지 못했습니다. 다시 시도해도 같으면 잠시 뒤 다시 열어 보세요. 정정 요청은 기록을 불러온 뒤에 보낼 수 있습니다. '+NEW,null,'다시 시도'],
+permission:['이 사업장 직원으로 연결되어 있지 않습니다','로그인한 계정이 이 사업장의 직원으로 등록되어 있지 않아 내 기록을 볼 수 없습니다. 사장님께 직원 등록(초대)을 요청해 주세요. '+NEW,null,'다시 확인(데모: 정상 화면)'],
+'session-expired':['로그인이 만료되었습니다','다시 로그인하면 내 기록으로 돌아옵니다. <b>입력 중이던 정정 요청은 이 기기에 보존</b>되어 로그인 후 같은 내용으로 다시 열립니다. '+NEW+'<div class="alert info" style="margin-top:10px"><b>보존된 정정 요청 (아직 보내지 않음)</b><p>10/27(화) 퇴근 18:00 · 사유: 퇴근 버튼을 누르지 못하고 퇴근했습니다.</p></div>',['오비서 로그인','obys-attendance-employee-clock.html'],'로그인 복구(데모: 정상 화면)'],
+offline:['인터넷 연결이 끊겼습니다','연결을 확인한 뒤 다시 시도해 주세요. 정정 요청은 연결된 상태에서만 보낼 수 있고, 입력한 내용은 이 화면에 남아 있습니다. 오프라인 중 정정 요청을 대신 저장해 보내지는 않습니다. '+NEW,null,'연결 확인 후 다시 시도']};
+function scen(){const m=$('scenario').value,box=$('stateBox');$('live').hidden=m!=='default';box.hidden=m==='default';
+ if(m!=='default'){const [t,x,link,b]=msgs[m];box.setAttribute('role',m==='loading'?'status':'alert');box.innerHTML=`<h2>${t}</h2><p>${x}</p>${link?`<a class="btn primary" href="${link[1]}">${link[0]}</a>`:''}<button id="recover" class="btn" type="button">${b}</button>`;$('recover').onclick=()=>{$('scenario').value='default';scen()}}}
+$('scenario').addEventListener('input',scen);
 document.querySelector('.jump [data-s=D]').setAttribute('aria-current','page');load();render();
 </script></body></html>

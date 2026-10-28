@@ -10,7 +10,7 @@
       "network_requests": [],
       "horizontal_overflow": [],
       "small_targets_under_44px": [],
-      "capture_count": 28,
+      "capture_count": 45,
       "captures": [
         {
           "screen_id": "obys-attendance-admin-onboarding",
@@ -26,6 +26,31 @@
           "screen_id": "obys-attendance-admin-onboarding",
           "state": "empty",
           "file": "onboarding-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "loading",
+          "file": "onboarding-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "error",
+          "file": "onboarding-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "session-expired",
+          "file": "onboarding-desktop-session-expired.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "permission",
+          "file": "onboarding-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "offline",
+          "file": "onboarding-desktop-offline.png"
         },
         {
           "screen_id": "obys-attendance-admin-today",
@@ -118,9 +143,69 @@
           "file": "clock-desktop-done.png"
         },
         {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "loading",
+          "file": "clock-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "empty",
+          "file": "clock-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "error",
+          "file": "clock-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "session-expired",
+          "file": "clock-desktop-session-expired.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "permission",
+          "file": "clock-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "offline",
+          "file": "clock-desktop-offline.png"
+        },
+        {
           "screen_id": "obys-attendance-employee-records",
           "state": "default",
           "file": "records-desktop-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "loading",
+          "file": "records-desktop-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "empty",
+          "file": "records-desktop-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "error",
+          "file": "records-desktop-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "session-expired",
+          "file": "records-desktop-session-expired.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "permission",
+          "file": "records-desktop-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "offline",
+          "file": "records-desktop-offline.png"
         },
         {
           "screen_id": "obys-attendance-employee-records",
@@ -154,6 +239,7 @@
         }
       ],
       "checks": [
+        "A:recovery-five-states",
         "A:checklist-3-steps",
         "A:coordinates-unset-7",
         "A:radius-50m",
@@ -165,12 +251,14 @@
         "B:date-range-error",
         "B:period-close-confirm",
         "B:recovery-six-states",
+        "C:recovery-six-states",
         "C:consent-denied-notice",
         "C:permission-off-recovery",
         "C:coord-unset-notice",
         "C:working-break-done",
         "C:denied-checkin-saved",
         "JOURNEY1:C-denied->B-inbox",
+        "D:recovery-six-states",
         "JOURNEY2:D-request->B-queue",
         "B:correction-reject-reason-required",
         "JOURNEY3:B-reject->D-reason",
@@ -186,7 +274,7 @@
       "network_requests": [],
       "horizontal_overflow": [],
       "small_targets_under_44px": [],
-      "capture_count": 28,
+      "capture_count": 45,
       "captures": [
         {
           "screen_id": "obys-attendance-admin-onboarding",
@@ -202,6 +290,31 @@
           "screen_id": "obys-attendance-admin-onboarding",
           "state": "empty",
           "file": "onboarding-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "loading",
+          "file": "onboarding-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "error",
+          "file": "onboarding-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "session-expired",
+          "file": "onboarding-mobile-session-expired.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "permission",
+          "file": "onboarding-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-admin-onboarding",
+          "state": "offline",
+          "file": "onboarding-mobile-offline.png"
         },
         {
           "screen_id": "obys-attendance-admin-today",
@@ -294,9 +407,69 @@
           "file": "clock-mobile-done.png"
         },
         {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "loading",
+          "file": "clock-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "empty",
+          "file": "clock-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "error",
+          "file": "clock-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "session-expired",
+          "file": "clock-mobile-session-expired.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "permission",
+          "file": "clock-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-clock",
+          "state": "offline",
+          "file": "clock-mobile-offline.png"
+        },
+        {
           "screen_id": "obys-attendance-employee-records",
           "state": "default",
           "file": "records-mobile-default.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "loading",
+          "file": "records-mobile-loading.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "empty",
+          "file": "records-mobile-empty.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "error",
+          "file": "records-mobile-error.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "session-expired",
+          "file": "records-mobile-session-expired.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "permission",
+          "file": "records-mobile-permission.png"
+        },
+        {
+          "screen_id": "obys-attendance-employee-records",
+          "state": "offline",
+          "file": "records-mobile-offline.png"
         },
         {
           "screen_id": "obys-attendance-employee-records",
@@ -330,6 +503,7 @@
         }
       ],
       "checks": [
+        "A:recovery-five-states",
         "A:checklist-3-steps",
         "A:coordinates-unset-7",
         "A:radius-50m",
@@ -341,12 +515,14 @@
         "B:date-range-error",
         "B:period-close-confirm",
         "B:recovery-six-states",
+        "C:recovery-six-states",
         "C:consent-denied-notice",
         "C:permission-off-recovery",
         "C:coord-unset-notice",
         "C:working-break-done",
         "C:denied-checkin-saved",
         "JOURNEY1:C-denied->B-inbox",
+        "D:recovery-six-states",
         "JOURNEY2:D-request->B-queue",
         "B:correction-reject-reason-required",
         "JOURNEY3:B-reject->D-reason",
