@@ -4121,6 +4121,7 @@ verify_go100_bundle_fresh() {
 go100_fe_failure_label() {
     case "${1:-}" in
         deploy_gate_blocked)     echo "go100-frontend:deploy_gate_blocked" ;;
+        deploy_deferred_intraday) echo "go100-frontend:deploy_deferred_intraday" ;;
         deploy_lock_busy)        echo "go100-frontend:deploy_lock_busy" ;;
         deploy_queued_not_applied) echo "go100-frontend:deploy_queued_not_applied" ;;
         build_failed)            echo "go100-frontend:build_failed" ;;
@@ -4137,6 +4138,14 @@ _go100_fe_out_has() {
     [ -n "${1:-}" ] && [ -r "$1" ] && grep -qF -- "$2" "$1" 2>/dev/null
 }
 
+# 0 = Deploy Gate 차단 사유가 장중 게이트다. 사유 문구는 GO100 저장소 소유라 패턴을 env 로 바꿀 수 있다.
+# '/' 가 든 줄은 dirty 파일 목록(경로)일 수 있으므로 제외한다 — 파일명에 "장중" 이 있어도 장중 보류로 오분류하지 않는다.
+_go100_fe_out_intraday() {
+    local _pat="${GO100_FE_INTRADAY_GATE_PATTERN:-장중|intraday|market[_ -]?hours}"
+    [ -n "${1:-}" ] && [ -r "$1" ] || return 1
+    grep -v '/' "$1" 2>/dev/null | grep -qiE -- "$_pat"
+}
+
 # $1=BG 스크립트 rc  $2=전체 출력 파일
 # stdout: 실패 라벨, 성공이면 빈 문자열. 항상 0 으로 끝난다 (set -e 안전).
 go100_fe_bg_classify() {
@@ -4146,6 +4155,8 @@ go100_fe_bg_classify() {
         if _go100_fe_out_has "$_out" "queued_for_deploy"; then
             go100_fe_failure_label deploy_queued_not_applied
         fi
+    elif _go100_fe_out_has "$_out" "Deploy Gate 차단" && _go100_fe_out_intraday "$_out"; then
+        go100_fe_failure_label deploy_deferred_intraday
     elif _go100_fe_out_has "$_out" "Deploy Gate 차단"; then
         go100_fe_failure_label deploy_gate_blocked
     elif _go100_fe_out_has "$_out" "동시 배포 차단" || _go100_fe_out_has "$_out" "release worktree 사용 중"; then
@@ -4166,6 +4177,7 @@ go100_fe_bg_classify() {
 go100_fe_failure_chat_text() {
     local _label="${1:-}" _rc="${2:-?}"
     case "$_label" in
+        *:deploy_deferred_intraday)  echo "GO100 프론트엔드 배포 보류 — 장중 게이트 차단(오류 아님, 빌드는 시작되지 않음, rc=$_rc). 장 종료 후 재배포 필요" ;;
         *:deploy_gate_blocked)       echo "GO100 프론트엔드 배포 안 됨 — Deploy Gate 차단(빌드는 시작되지 않음, rc=$_rc)" ;;
         *:deploy_lock_busy)          echo "GO100 프론트엔드 배포 안 됨 — 다른 배포가 락 점유 중(rc=$_rc)" ;;
         *:deploy_queued_not_applied) echo "GO100 프론트엔드 배포 안 됨 — 락 경합으로 큐에 이관됨(rc=$_rc, 이번 SHA 는 아직 미반영)" ;;
@@ -4174,6 +4186,56 @@ go100_fe_failure_chat_text() {
         *)                           echo "GO100 프론트엔드 blue-green 배포 실패 (rc=$_rc)" ;;
     esac
     return 0
+}
+
+# ── 배포 범위 판정 (AADS-RUNNER-GO100-DEPLOY-SCOPE-GUARD-20261028) ──────────────────────────
+# 2026-10-28 runner-a2a07712: .gitignore + docs 2파일 커밋인데 승인 후 `systemctl restart go100` 이 돌았고
+# (SIGTERM 90초 타임아웃 → 강제 kill, 08:50~09:10 재기동 금지 구간에서 약 100초 API 중단), 프론트도 73파일 변경으로
+# 오판돼 장중 게이트에 막혀 error 로 끝났다. 변경 범위는 런타임 checkout 이 아니라 push 한 SHA 로만 계산한다.
+
+# $1=worktree $2=pre_sha(비면 current_sha^) $3=current_sha → stdout: 변경 파일(한 줄에 하나).
+# rc 0 = 계산 성공(빈 목록 포함), rc!=0 = 계산 실패. quotepath=off: 한글 파일명이 "\354..." 로 인용되면 docs/* 매칭이 깨진다.
+deploy_changed_files() {
+    local _wt="${1:-}" _pre="${2:-}" _cur="${3:-}"
+    [[ -n "$_wt" && -n "$_cur" ]] || return 1
+    [[ -n "$_pre" ]] || _pre="${_cur}^"
+    git -C "$_wt" -c core.quotepath=off diff --name-only "$_pre" "$_cur" 2>/dev/null
+}
+
+# stdin=변경 파일 목록. 0 = 비어 있지 않고 전부 docs/**, *.md, .gitignore 다.
+deploy_files_docs_only() {
+    local _f="" _n=0
+    while IFS= read -r _f || [[ -n "$_f" ]]; do
+        [[ -n "$_f" ]] || continue
+        case "$_f" in
+            docs/*|*.md|.gitignore|*/.gitignore) ;;
+            *) return 1 ;;
+        esac
+        _n=$(( _n + 1 ))
+    done
+    (( _n > 0 ))
+}
+
+# GO100 API 재기동 금지 구간(KST, 시작 포함·끝 제외). 기본 08:50~09:10, 15:15~15:30.
+# stdout: 걸린 구간("0850-0910"), rc 0 = 지금은 재기동 금지. 시각을 못 읽으면 보수적으로 금지("clock_unknown").
+go100_restart_freeze_window() {
+    local _now="" _hhmm="" _w="" _s="" _e=""
+    _now=$(runner_market_hours_now_epoch)
+    _hhmm=$(TZ=Asia/Seoul date -d "@${_now}" '+%H%M' 2>/dev/null) || _hhmm=""
+    if [[ ! "$_hhmm" =~ ^[0-9]{4}$ ]]; then
+        printf 'clock_unknown'
+        return 0
+    fi
+    for _w in ${GO100_RESTART_FREEZE_WINDOWS:-0850-0910 1515-1530}; do
+        _s="${_w%-*}"
+        _e="${_w#*-}"
+        [[ "$_s" =~ ^[0-9]{4}$ && "$_e" =~ ^[0-9]{4}$ ]] || continue
+        if (( 10#$_hhmm >= 10#$_s && 10#$_hhmm < 10#$_e )); then
+            printf '%s' "$_w"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # ── GO100 프론트 clean 릴리스 워크트리 (AADS-RUNNER-GO100-FE-CLEAN-WORKTREE-20260930) ──
@@ -7777,6 +7839,28 @@ deploy_job() {
         return 1
     fi
 
+    # ── GO100 배포 범위 판정 (AADS-RUNNER-GO100-DEPLOY-SCOPE-GUARD-20261028) ──
+    # push 한 current_sha 와 _pre_sha 로만 계산한다(런타임 checkout HEAD 금지). 문서 전용이면 재기동·빌드·프론트 배포를 모두 생략한다.
+    local _deploy_deferred="" _deploy_files="" _deploy_files_ok="false"
+    if [[ "$project" == "GO100" ]]; then
+        if _deploy_files=$(deploy_changed_files "$worktree_dir" "$_pre_sha" "$current_sha"); then
+            _deploy_files_ok="true"
+        fi
+        if [[ "$_deploy_files_ok" == "true" ]] && deploy_files_docs_only <<< "$_deploy_files"; then
+            log "  DEPLOY_SKIP docs_only job=$job_id sha=${current_sha} files=$(printf '%s\n' "$_deploy_files" | wc -l) — 빌드·재기동·프론트 배포 생략"
+            db_update "UPDATE pipeline_jobs SET status='done', phase='deploy_skip_docs_only',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[게이트] DEPLOY_SKIP docs_only — 변경 파일이 전부 docs/**, *.md, .gitignore 라 빌드·재기동·프론트 배포를 건너뜀',
+                       deployed_at=NULL, completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+            record_runner_event "$job_id" "job_terminal" "done" "deploy_skip_docs_only" "" "" "" "" "{\"reason\":\"docs_only\",\"sha\":\"${current_sha}\"}"
+            runner_handover_record "$job_id" "done"
+            post_to_chat "$session_id" "✅ [Pipeline Runner] 문서 전용 커밋이라 빌드·재기동 없이 push 까지만 수행했습니다 (DEPLOY_SKIP docs_only): $job_id"
+            _release_deploy_lock "$project" "$job_id"
+            _notify_ai "$job_id"
+            promote_next_queued "$project"
+            return 0
+        fi
+    fi
+
     case "$project" in
         AADS)
             # API 릴리스는 승인된 격리 worktree의 immutable blue/green 경로만
@@ -7971,8 +8055,23 @@ deploy_job() {
             # GO100 API: systemd → restart (~2초)
             # HEARTBEAT: 서비스 재시작 직전 갱신
             db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-            systemctl restart go100 2>/dev/null || true
-            log "  RESTART go100 api"
+            # API 재기동은 backend/ 변경이 있을 때만, 그리고 재기동 금지 구간(KST 08:50~09:10, 15:15~15:30)이 아닐 때만 한다.
+            # 변경 목록을 못 구하면(_deploy_files_ok=false) backend 변경으로 간주하되 금지 구간 규칙은 그대로 적용한다.
+            # (AADS-RUNNER-GO100-DEPLOY-SCOPE-GUARD-20261028 — 오류 사전 runner.go100_api_unconditional_restart)
+            local _go100_be_changed="true" _go100_freeze=""
+            if [[ "$_deploy_files_ok" == "true" ]] && ! grep -q '^backend/' <<< "$_deploy_files"; then
+                _go100_be_changed="false"
+            fi
+            if [[ "$_go100_be_changed" != "true" ]]; then
+                log "  SKIP go100 api restart (no backend/ changes ${_pre_sha:0:9}..${current_sha:0:9})"
+            elif _go100_freeze=$(go100_restart_freeze_window); then
+                log "  DEPLOY_DEFER go100 api restart — 재기동 금지 구간 ${_go100_freeze} KST (강제 재기동 안 함, sha=${current_sha})"
+                post_to_chat "$session_id" "⏸ [Pipeline Runner] GO100 API 재기동 보류 — 재기동 금지 구간(${_go100_freeze} KST). push 는 완료됐고 재기동은 구간 종료 후 별도로 필요합니다: $job_id"
+                _deploy_deferred="${_deploy_deferred:+${_deploy_deferred};}go100-api:restart_window_${_go100_freeze}"
+            else
+                systemctl restart go100 2>/dev/null || true
+                log "  RESTART go100 api"
+            fi
             # GO100 Frontend: npm build → restart (빌드 중 기존 서비스 유지)
             local _fe_dir="/root/kis-autotrade-v4/frontend"
             if [ -d "$_fe_dir" ]; then
@@ -8033,7 +8132,12 @@ deploy_job() {
                             rm -f "$_fe_bg_outf"
                             # HEARTBEAT: GO100 프론트엔드 BG 배포 종료 직후 갱신
                             db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
-                            if [ -n "$_fe_bg_label" ]; then
+                            if [[ "$_fe_bg_label" == *:deploy_deferred_intraday ]]; then
+                                # 장중 게이트 차단은 빌드 실패가 아니다 — error 로 끝내지 않고 보류로 분류한다.
+                                log "  DEPLOY_DEFER go100-frontend 장중 게이트 차단 (rc=$_fe_bg_rc label=${_fe_bg_label})"
+                                post_to_chat "$session_id" "⏸ [Runner] $(go100_fe_failure_chat_text "$_fe_bg_label" "$_fe_bg_rc")"
+                                _deploy_deferred="${_deploy_deferred:+${_deploy_deferred};}${_fe_bg_label}"
+                            elif [ -n "$_fe_bg_label" ]; then
                                 log "  ERROR: go100-frontend blue-green 배포 실패 (rc=$_fe_bg_rc label=${_fe_bg_label})"
                                 post_to_chat "$session_id" "🔴 [Runner] $(go100_fe_failure_chat_text "$_fe_bg_label" "$_fe_bg_rc")"
                                 _build_fail="${_build_fail:+${_build_fail};}${_fe_bg_label}"
@@ -8045,7 +8149,7 @@ deploy_job() {
                     fi
 
                     # 번들 신선도 게이트: URL 200 이 아니라 활성 슬롯 BUILD_ID 가 병합 커밋보다 새것인지 본다.
-                    if [[ "$_build_fail" != *"go100-frontend:"* ]]; then
+                    if [[ "$_build_fail" != *"go100-frontend:"* ]] && [[ "$_deploy_deferred" != *"go100-frontend:"* ]]; then
                         local _fresh_out="" _fresh_status="" _fresh_color="" _fresh_bid="" _fresh_built="" _fresh_commit=""
                         _fresh_out=$(verify_go100_bundle_fresh "$GO100_REPO_DIR" "$GO100_NGINX_CONF") || _fresh_out=""
                         IFS='|' read -r _fresh_status _fresh_color _fresh_bid _fresh_built _fresh_commit <<< "$_fresh_out" || true
@@ -8122,11 +8226,12 @@ deploy_job() {
             # NTV2 Frontend: Docker 이미지 빌드 → build→swap
             # FIX (P0-A): 커밋 전 SHA 기준으로 변경 감지 (GO100/SF와 동일 패턴)
             local _ntv2_fe_changed=""
+            # 런타임 repo HEAD 가 아니라 방금 push 한 current_sha 를 worktree_dir 에서 비교한다
+            # (GO100 b29de785 와 같은 방식 — AADS-RUNNER-GO100-DEPLOY-SCOPE-GUARD-20261028).
             if [[ -n "$_pre_sha" ]]; then
-                _ntv2_fe_changed=$(git -C /srv/newtalk-v2 diff "$_pre_sha" HEAD --name-only -- frontend/ 2>/dev/null) || true
+                _ntv2_fe_changed=$(git -C "$worktree_dir" diff "$_pre_sha" "$current_sha" --name-only -- frontend/ 2>/dev/null) || true
             else
-                # FALLBACK: _pre_sha 비었을 때 HEAD~1..HEAD로 비교
-                _ntv2_fe_changed=$(git -C /srv/newtalk-v2 diff HEAD~1 HEAD --name-only -- frontend/ 2>/dev/null) || true
+                _ntv2_fe_changed=$(git -C "$worktree_dir" diff "${current_sha}^" "$current_sha" --name-only -- frontend/ 2>/dev/null) || true
             fi
             if [ -n "$_ntv2_fe_changed" ]; then
                 log "  ZERO-DOWNTIME newtalk-v2-frontend"
@@ -8335,6 +8440,15 @@ deploy_job() {
         record_runner_event "$job_id" "job_terminal" "error" "build_fail" "" "" "" "" "{\"error_detail\":\"${_build_fail}\"}"
         post_to_chat "$session_id" "🔴 [Pipeline Runner] 배포 부분 실패 — 빌드 실패 감지: ${_build_fail} (backend=${health_ok} frontend=${frontend_health_ok}): $job_id"
         log "  DEPLOYED_PARTIAL_FAIL job=$job_id build_fail=$_build_fail"
+    elif [[ -n "$_deploy_deferred" ]]; then
+        # 보류는 오류가 아니다: status=done(기존 소비자 호환), phase=deploy_deferred_intraday, deployed_at=NULL.
+        db_update "UPDATE pipeline_jobs SET status='done', phase='deploy_deferred_intraday',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[게이트] 배포 보류(장중/재기동 금지 구간): ${_deploy_deferred} — push 는 완료, 해당 단계는 미수행 backend=${health_ok} by=${RUNNER_HOSTNAME}',
+                   deployed_at=NULL, completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
+        record_runner_event "$job_id" "job_terminal" "done" "deploy_deferred_intraday" "" "" "" "" "{\"deferred\":\"${_deploy_deferred}\",\"backend_health\":\"${health_ok}\"}"
+        runner_handover_record "$job_id" "done"
+        post_to_chat "$session_id" "⏸ [Pipeline Runner] 배포 보류 (오류 아님): ${_deploy_deferred} — push 완료, 보류 단계는 금지 구간 종료 후 별도 배포 필요 (backend=${health_ok})"
+        log "  DEPLOY_DEFERRED job=$job_id deferred=$_deploy_deferred backend_health=$health_ok"
     else
         db_update "UPDATE pipeline_jobs SET status='done', phase='done',
                    review_feedback=COALESCE(review_feedback,'') || E'\n[v2.1][배포완료] backend_health=${health_ok} frontend_health=${frontend_health_ok} by=${RUNNER_HOSTNAME}',
