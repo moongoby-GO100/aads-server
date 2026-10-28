@@ -2260,14 +2260,33 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "채팅 세션에서 Smart Browser 승인 레시피를 조회·실행하거나, 화면 E2E가 성공한 "
             "브라우저 단계들을 세션 증거와 함께 승인 대기 레시피로 등록한다. "
             "action=list는 레시피 조회(승인 레시피 recipes + 승인 대기 초안 drafts), run은 자연어 지시에 정확히 매칭되는 승인 레시피 실행, "
-            "register_e2e는 screen_verified=true와 화면 증거가 있을 때만 등록한다. "
+            "register_e2e는 화면 증거가 있을 때만 승인 대기 초안으로 등록한다(승인은 별개). 증거는 capture_evidence 로 서버가 읽기 전용 관찰해 발급한 "
+            "artifact_id 만 신뢰 증거이며, 직접 적은 screen_verified=true 는 자기신고(self_reported)로만 표시된다. "
+            "register_batch 는 단일 목적 조각(pieces) 여러 개를 한 번에 초안으로 등록한다(조각별 결과·멱등, 자동 승인 없음). "
             "browser_* 를 쓰기 전에 먼저 list 로 승인 레시피를 확인하고, 있으면 run, 없으면 browser_* 를 쓴다 "
             "(browser_* 성공 경로는 자동 기록되어 서로 다른 세션에서 반복되면 승인 대기 초안이 된다)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["list", "run", "register_e2e"]},
+                "action": {"type": "string", "enum": ["list", "run", "register_e2e", "register_batch", "capture_evidence"]},
+                "url": {"type": "string", "description": "capture_evidence 관찰 대상 URL"},
+                "run_id": {"type": "string", "description": "capture_evidence 에 묶을 실행 id(선택)"},
+                "work_key": {"type": "string", "description": "register_e2e/register_batch 조각 work_key(spec.metadata 저장)"},
+                "idempotency_key": {"type": "string", "description": "register_batch 조각 멱등 키(8자 이상). 생략하면 조각 내용 해시로 만든다"},
+                "predecessor": {
+                    "type": "object",
+                    "description": "선행 조각 {name, version}(spec.metadata 저장)",
+                },
+                "pieces": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": (
+                        "register_batch 조각 목록(최대 20). 각 항목은 register_e2e 입력과 같다: "
+                        "recipe_name, domain, steps, verify, starts_when, succeeds_when, lane, work_key, "
+                        "predecessor, idempotency_key, e2e_evidence(artifact_id 권장). 최상위 domain/lane 은 기본값"
+                    ),
+                },
                 "directive": {"type": "string", "description": "run 시 실행할 자연어 지시"},
                 "inputs": {
                     "type": "object",
@@ -2293,7 +2312,8 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "e2e_evidence": {
                     "type": "object",
                     "description": (
-                        "screen_verified=true 및 screenshot_url 또는 snapshot_ref 필수. "
+                        "capture_evidence 가 돌려준 {artifact_id, ...} 를 그대로 넣는다(서버가 tenant/session/대상/만료/해시를 재검증, "
+                        "위조·만료·타 세션 증거는 거절). artifact_id 가 없으면 screen_verified=true 및 screenshot_url 또는 snapshot_ref 필수(자기신고). "
                         "verify, starts_when, succeeds_when, lane 도 여기에 넣을 수 있다"
                     ),
                 },

@@ -1645,6 +1645,7 @@ async def _decide_recipe_registration_card(
         card_scope = {}
     registration_id = str(card_scope.get("registration_id") or "")
     request_id = str(card["id"])
+    reason = (reason or "").strip()
     try:
         result = await decide_registration_as_human(
             registration_id,

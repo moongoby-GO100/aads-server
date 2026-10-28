@@ -29,6 +29,17 @@ STATUS_FAILED = "failed"
 STATUS_BLOCKED = "blocked"
 STATUS_SKIPPED = "skipped"
 
+_USER_MESSAGES = {
+    "completed": "작업을 끝냈습니다.",
+    "auth_required": (
+        "로그인이 풀려 작업을 멈췄습니다. 자동으로 다시 로그인하거나 발송을 재시도하지 않았습니다. "
+        "Vault 계정으로 직접 로그인을 마친 뒤 같은 단계부터 이어서 실행하세요."
+    ),
+    "overlay_needs_human": "화면을 가린 팝업을 안전하게 닫지 못해 멈췄습니다. 직접 확인해 주세요.",
+    "approval_required": "승인이 필요한 단계에서 멈췄습니다.",
+    "failed": "작업이 실패했습니다.",
+}
+
 ExecutorResult = Mapping[str, Any] | None
 StepExecutor = Callable[[dict[str, Any]], "ExecutorResult | Awaitable[ExecutorResult]"]
 
@@ -97,6 +108,22 @@ class RunResult:
     finished_at: datetime | None = None
 
     @property
+    def user_state(self) -> str:
+        """사용자가 이해할 실행 상태. 저장 status 값(DB 제약)은 바꾸지 않고 덧붙인다."""
+        if self.status == STATUS_SUCCESS:
+            return "completed"
+        for step in self.steps:
+            if step.status == STATUS_BLOCKED and step.recovery.get("reason") == "auth_required":
+                return "auth_required"
+            if step.status == STATUS_BLOCKED and str(step.recovery.get("reason") or "").startswith("overlay_"):
+                return "overlay_needs_human"
+        return "approval_required" if self.status == STATUS_BLOCKED else "failed"
+
+    @property
+    def user_message(self) -> str:
+        return _USER_MESSAGES.get(self.user_state, "")
+
+    @property
     def ok(self) -> bool:
         return self.status == STATUS_SUCCESS
 
@@ -115,6 +142,8 @@ class RunResult:
             "status": self.status,
             "llm_calls": self.llm_calls,
             "error": self.error,
+            "user_state": self.user_state,
+            "user_message": self.user_message,
             "failed_step_seq": self.failed_step_seq,
             "blocked_step_seq": self.blocked_step_seq,
             "blocked_risk": self.blocked_risk,

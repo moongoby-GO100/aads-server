@@ -52,8 +52,25 @@ def recovery_plan(*, failure_class: str, prior_attempts: int) -> dict[str, Any]:
     if failure_class == "network_transient":
         return {"action": "human_gateway", "retry_attempt": prior_attempts, "human_guidance": "네트워크 재시도 한도에 도달했습니다. 연결 상태를 확인한 뒤 새 복구 요청을 시작하세요."}
     if failure_class == "login_expired":
-        return {"action": "human_gateway", "retry_attempt": prior_attempts, "human_guidance": "로그인이 만료되었습니다. 사용자 환경에서 다시 로그인하고 OTP/인증서를 직접 완료한 뒤 재개하세요."}
+        # 자동 재로그인·발송 재시도는 하지 않는다. 사람이 기존 Vault 경로(credential_scope)로 복구한다.
+        return {
+            "action": "human_gateway",
+            "status": "auth_required",
+            "retry_attempt": prior_attempts,
+            "recovery_path": "vault_credential_scope",
+            "auto_relogin": False,
+            "auto_retry": False,
+            "human_guidance": "로그인이 만료되었습니다. 사용자 환경에서 다시 로그인하고 OTP/인증서를 직접 완료한 뒤 재개하세요.",
+        }
     return {"action": "human_gateway", "retry_attempt": prior_attempts, "human_guidance": "자동 복구 대상이 아닙니다. 안전한 페이지 상태를 확인한 뒤 Human Gateway에서 재개하세요."}
+
+
+def _user_view(failure_class: str) -> dict[str, Any]:
+    """저장 컬럼에 없는 사용자 노출 필드 — failure_class 에서 항상 같은 값으로 유도한다(재생 응답 포함)."""
+    if failure_class != "login_expired":
+        return {}
+    plan = recovery_plan(failure_class=failure_class, prior_attempts=0)
+    return {key: plan[key] for key in ("status", "recovery_path", "auto_relogin", "auto_retry")}
 
 
 def _safe_selector(value: Any) -> str | None:
@@ -131,7 +148,7 @@ async def record_recipe_recovery(
             str(tenant), idempotency_key,
         )
         if replay:
-            return {"idempotent": True, **dict(replay)}
+            return {"idempotent": True, **dict(replay), **_user_view(str(replay["failure_class"]))}
         prior_attempts = await conn.fetchval(
             """SELECT count(*) FROM browser_recipe_recovery_events
                  WHERE tenant_id=$1::uuid AND recipe_id=$2 AND recipe_version=$3 AND site_key=$4 AND page_key=$5
@@ -182,4 +199,4 @@ async def record_recipe_recovery(
             idempotency_key, failure_class, plan["action"], plan["retry_attempt"], MAX_RECOVERY_RETRIES,
             str(candidate_version_id) if candidate_version_id else None, json.dumps(cleaned_evidence), plan["human_guidance"],
         )
-    return {"idempotent": False, **dict(row)}
+    return {"idempotent": False, **dict(row), **_user_view(str(row["failure_class"]))}

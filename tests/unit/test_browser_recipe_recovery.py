@@ -89,3 +89,36 @@ def test_recording_is_tenant_scoped_idempotent_and_never_auto_promotes(monkeypat
         for query, _ in calls
     )
     assert not any("'active'" in query for query, _ in calls)
+
+
+def test_login_expired_comes_back_as_auth_required_without_relogin_or_retry(monkeypatch):
+    class Connection:
+        async def fetchrow(self, query, *args):
+            if "FROM browser_recipe_recovery_events" in query:
+                return None
+            return {"failure_class": "login_expired", "recovery_action": "human_gateway", "retry_attempt": 0,
+                    "retry_limit": 2, "candidate_artifact_version_id": None, "human_guidance": "login"}
+
+        async def fetchval(self, query, *args):
+            return 0
+
+        def transaction(self):
+            return Transaction()
+
+    class Transaction:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+
+    class Acquire:
+        async def __aenter__(self): return Connection()
+        async def __aexit__(self, *args): return False
+
+    monkeypatch.setattr(recovery, "get_pool", lambda: SimpleNamespace(acquire=lambda: Acquire()))
+    result = asyncio.run(recovery.record_recipe_recovery(
+        tenant_id="00000000-0000-0000-0000-000000000001", recipe_id="catalog", recipe_version="v1",
+        site_key="shop", page_key="orders", idempotency_key="recovery-002", error_code="session_expired",
+    ))
+    assert result["recovery_action"] == "human_gateway"
+    assert result["status"] == "auth_required"
+    assert result["recovery_path"] == "vault_credential_scope"
+    assert result["auto_relogin"] is False and result["auto_retry"] is False

@@ -4,8 +4,10 @@ from __future__ import annotations
 import hashlib
 import inspect
 import logging
+import re
 from collections.abc import Callable, Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.browser_bridge.aads_adapter import acquire_browser_context
 from app.browser_bridge.service import BrowserBridgeError, get_browser_bridge_service
@@ -23,7 +25,12 @@ from app.services.work_recipe.guard import (
     classify_step,
     requires_approval,
 )
-from app.services.work_recipe.schema import ALLOWED_ACTIONS
+from app.services.work_recipe.schema import (
+    ALLOWED_ACTIONS,
+    OVERLAY_DEFAULT_MAX_DISMISS,
+    OVERLAY_FORBIDDEN_MARKERS,
+    overlay_host_matches,
+)
 from app.services.work_recipe.shinhan_corporate_manual import (
     FinancialManualBlocked,
     assert_unregistered_navigation,
@@ -64,6 +71,29 @@ _SERVER_BLOCKED_MARKERS = (
 )
 # 차단 페이지는 짧다. 본문이 이보다 길면 같은 문구가 있어도 정상 페이지로 본다.
 _BLOCK_PAGE_TEXT_LIMIT = 2_000
+
+
+_OVERLAY_PROBE_SCRIPT = """(args) => {
+    const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+    const root = document.querySelector(args.root);
+    const rootVisible = visible(root);
+    const close = rootVisible ? root.querySelector(args.close) : null;
+    return {
+        url: window.location.href,
+        rootVisible,
+        closeVisible: visible(close),
+        text: rootVisible ? String(root.innerText ?? root.textContent ?? '').slice(0, 600) : '',
+    };
+}"""
+
+
+class OverlayNotDismissible(RuntimeError):
+    """허용 목록의 모달이지만 안전하게 닫지 못했다 — 사람에게 넘긴다."""
+
+    def __init__(self, reason: str, dismissed: list[dict[str, Any]]):
+        super().__init__(reason)
+        self.reason = reason
+        self.dismissed = dismissed
 
 
 def smart_browser_route(context: Mapping[str, Any] | None = None) -> dict[str, str]:
@@ -142,6 +172,9 @@ class BrowserRecipeExecutor:
         # 봇/WAF 차단을 만나 PC 레인으로 한 번 넘어가면 같은 recipe 의 남은
         # 단계도 그 레인에서 이어간다. 레인이 단계마다 흔들리면 로그인 세션이 끊긴다.
         self._pc_lane_forced = False
+        # 로그인 단계를 이미 지난(또는 context 가 인증 필요를 선언한) 실행에서만 "로그인 회귀" 를 본다.
+        # 공개 페이지의 "로그인" 링크 때문에 조회 레시피가 멈추면 안 된다.
+        self._authenticated_run = False
         # 서비스 초기화/설정 오류를 첫 단계보다 앞에서 드러낸다.
         self._service = get_browser_bridge_service()
 
@@ -188,6 +221,41 @@ class BrowserRecipeExecutor:
         return retried
 
     @staticmethod
+    def _step_targets_login(payload: Mapping[str, Any]) -> bool:
+        """이 단계 자체가 로그인 화면을 열거나 채우는 단계인가 (그러면 로그인 화면은 정상이다)."""
+        from app.services.auth_challenge_orchestrator import classify_portal_state
+
+        context = payload.get("context")
+        recipe_name = str(context.get("recipe_name") or "") if isinstance(context, Mapping) else ""
+        intent = " ".join(
+            str(payload.get(key) or "") for key in ("url", "selector", "description")
+        ) + " " + recipe_name
+        if re.search(r"login|signin|sign-in|logon|auth|로그인|인증", intent, re.IGNORECASE):
+            return True
+        return classify_portal_state(url=str(payload.get("url") or ""), text="").state in {
+            "login_required", "session_expired",
+        }
+
+    def _auth_regression(self, payload: Mapping[str, Any], evidence: Mapping[str, Any]) -> str:
+        """로그인 단계가 아닌데 화면이 로그인/세션 만료로 돌아갔으면 사유 코드, 아니면 빈 문자열."""
+        from app.services.auth_challenge_orchestrator import classify_portal_state
+
+        if str(payload.get("action") or "") == "dismiss_overlays":
+            return ""
+        if self._step_targets_login(payload):
+            self._authenticated_run = True
+            return ""
+        context = self._context_payload(payload)
+        if not (self._authenticated_run or context.get("requires_auth") is True):
+            return ""
+        dom = evidence.get("dom")
+        text = str(dom.get("text") or "") if isinstance(dom, Mapping) else ""
+        if len(text) > _BLOCK_PAGE_TEXT_LIMIT:
+            return ""
+        decision = classify_portal_state(url=str(evidence.get("url") or ""), text=text)
+        return decision.reason_code if decision.state in {"login_required", "session_expired"} else ""
+
+    @staticmethod
     def _evidence_shows_block(result: Mapping[str, Any]) -> bool:
         """증거 화면이 차단 페이지인가. 본문이 길면 차단 문구가 있어도 본문으로 본다."""
         evidence = result.get("evidence")
@@ -208,6 +276,27 @@ class BrowserRecipeExecutor:
             page = await self._get_page(payload)
             output = await self._execute(page, action, payload)
             evidence = await self._collect_evidence(page)
+            regression = self._auth_regression(payload, evidence)
+            if regression:
+                # 자동 재로그인·재시도·발송 재실행을 하지 않는다. 사람이 Vault 경로로 복구한다.
+                return {
+                    "ok": False,
+                    "status": "auth_required",
+                    "error": "auth_required: 로그인 화면으로 되돌아갔습니다",
+                    "risk": level.value,
+                    "llm_calls": 0,
+                    "route": "human_gateway",
+                    "evidence": evidence,
+                    "recovery": {
+                        "route": "human_gateway",
+                        "reason": "auth_required",
+                        "signal": regression,
+                        "resume": "login_then_retry_same_step",
+                        "recovery_path": "vault_credential_scope",
+                        "auto_relogin": False,
+                        "auto_retry": False,
+                    },
+                }
             return {
                 "ok": True,
                 "output": output,
@@ -235,6 +324,22 @@ class BrowserRecipeExecutor:
                     "resume": "after_approval" if reason == "approval_required" else "human_completes_step",
                 },
                 **({"autoreview": review.to_dict()} if review else {}),
+            }
+        except OverlayNotDismissible as exc:
+            return {
+                "ok": False,
+                "status": "blocked",
+                "error": f"overlay_not_dismissible:{exc.reason}",
+                "risk": level.value,
+                "llm_calls": 0,
+                "route": "human_gateway",
+                "evidence": {},
+                "output": {"dismissed": exc.dismissed},
+                "recovery": {
+                    "route": "human_gateway",
+                    "reason": f"overlay_{exc.reason}",
+                    "resume": "human_completes_step",
+                },
             }
         except BrowserBridgeError as exc:
             return {
@@ -412,6 +517,56 @@ class BrowserRecipeExecutor:
         description = str(payload.get("description") or "").strip()
         return description or f"Smart Browser가 {action} 단계를 완료했습니다."
 
+    async def _dismiss_overlays(self, page: Any, step: Mapping[str, Any], timeout_ms: int) -> dict[str, Any]:
+        """허용 목록의 모달만 닫는다. 없으면 no-op, 닫힘은 재조회로 검증, 횟수 상한을 둔다."""
+        try:
+            max_dismiss = max(1, int(step.get("max_dismiss") or OVERLAY_DEFAULT_MAX_DISMISS))
+        except (TypeError, ValueError):
+            max_dismiss = OVERLAY_DEFAULT_MAX_DISMISS
+        raw_overlays = step.get("overlays")
+        overlays = [o for o in raw_overlays if isinstance(o, Mapping)] if isinstance(raw_overlays, list) else []
+        dismissed: list[dict[str, Any]] = []
+        if not overlays:
+            return {"overlays_status": "no_op", "reason": "no_allowlist", "dismissed": dismissed}
+
+        async def probe(overlay: Mapping[str, Any]) -> Mapping[str, Any]:
+            state = await page.evaluate(
+                _OVERLAY_PROBE_SCRIPT, {"root": overlay["root"], "close": overlay["close"]}
+            )
+            return state if isinstance(state, Mapping) else {}
+
+        for _ in range(max_dismiss):
+            progressed = False
+            for overlay in overlays:
+                state = await probe(overlay)
+                host = (urlsplit(str(state.get("url") or getattr(page, "url", "") or "")).hostname or "")
+                if not overlay_host_matches(host, str(overlay.get("domain") or "")) or not state.get("rootVisible"):
+                    continue
+                if OVERLAY_FORBIDDEN_MARKERS.search(str(state.get("text") or "")):
+                    raise OverlayNotDismissible("sensitive_content", dismissed)
+                if not state.get("closeVisible"):
+                    raise OverlayNotDismissible("close_control_missing", dismissed)
+                await page.click(f"{overlay['root']} {overlay['close']}", timeout=timeout_ms)
+                after = await probe(overlay)
+                if after.get("rootVisible"):
+                    raise OverlayNotDismissible("not_closed_after_click", dismissed)
+                dismissed.append({"domain": overlay["domain"], "root": overlay["root"], "verified_closed": True})
+                progressed = True
+            if not progressed:
+                break
+        else:
+            # 상한만큼 닫았는데도 허용 목록 모달이 다시 떠 있으면 무한 루프 대신 사람에게 넘긴다.
+            for overlay in overlays:
+                state = await probe(overlay)
+                host = (urlsplit(str(state.get("url") or "")).hostname or "")
+                if state.get("rootVisible") and overlay_host_matches(host, str(overlay.get("domain") or "")):
+                    raise OverlayNotDismissible("reappeared_over_limit", dismissed)
+        return {
+            "overlays_status": "dismissed" if dismissed else "no_op",
+            "reason": "" if dismissed else "no_overlay_present",
+            "dismissed": dismissed,
+        }
+
     async def _execute(self, page: Any, action: str, step: Mapping[str, Any]) -> Any:
         selector = str(step.get("selector") or "")
         timeout = float(step.get("timeout") or 30.0)
@@ -455,6 +610,8 @@ class BrowserRecipeExecutor:
             if hasattr(target, "aria_snapshot"):
                 return await target.aria_snapshot()
             return await target.inner_text(timeout=timeout_ms)
+        if action == "dismiss_overlays":
+            return await self._dismiss_overlays(page, step, timeout_ms)
         if action == "api_call":
             endpoint = str(step.get("endpoint") or step.get("url") or "")
             options = step.get("value") if isinstance(step.get("value"), Mapping) else {}

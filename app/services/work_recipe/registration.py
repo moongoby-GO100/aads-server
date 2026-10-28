@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Mapping
 from typing import Any
@@ -112,7 +113,21 @@ def registration_error_status(exc: RegistrationError) -> int:
         return 403
     if str(exc) == "registration_not_found":
         return 404
+    if str(exc) == "rejection_reason_required":
+        return 422
     return 409
+
+
+REJECTION_REASON_MAX_LEN = 1000
+
+
+def normalize_rejection_reason(reason: Any) -> str:
+    from app.services.work_recipe.audit import mask_secrets
+
+    text = mask_secrets(str(reason or "").strip()).strip()
+    if not text:
+        raise RegistrationError("rejection_reason_required")
+    return text[:REJECTION_REASON_MAX_LEN]
 
 
 def _tenant_uuid(value: Any) -> uuid.UUID:
@@ -194,6 +209,53 @@ def normalize_flow_metadata(source: Mapping[str, Any]) -> dict[str, str]:
             raise ValueError(f"invalid_{key}")
         result[key] = value.strip()[:1000]
     return result
+
+
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,199}$")
+_WORK_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
+
+
+def normalize_piece_metadata(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Single-purpose piece links stored in spec.metadata: work_key, idempotency_key, predecessor{name,version}."""
+    result: dict[str, Any] = {}
+    work_key = source.get("work_key")
+    if work_key not in (None, ""):
+        if not isinstance(work_key, str) or not _WORK_KEY.fullmatch(work_key.strip()):
+            raise ValueError("invalid_work_key")
+        result["work_key"] = work_key.strip()
+    key = source.get("idempotency_key")
+    if key not in (None, ""):
+        if not isinstance(key, str) or not _IDEMPOTENCY_KEY.fullmatch(key.strip()):
+            raise ValueError("invalid_idempotency_key")
+        result["idempotency_key"] = key.strip()
+    predecessor = source.get("predecessor")
+    if predecessor not in (None, "", {}):
+        if not isinstance(predecessor, Mapping) or set(predecessor) - {"name", "version"}:
+            raise ValueError("invalid_predecessor")
+        name = predecessor.get("name")
+        version = predecessor.get("version")
+        if not isinstance(name, str) or not name.strip() or len(name) > 200 \
+                or isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise ValueError("invalid_predecessor")
+        result["predecessor"] = {"name": name.strip(), "version": version}
+    return result
+
+
+async def find_registration_by_idempotency_key(
+    *, tenant_id: Any, idempotency_key: str
+) -> dict[str, Any] | None:
+    """Any-status lookup, so a re-call after approve/reject cannot create a second draft."""
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT * FROM work_recipe_registration_requests
+             WHERE tenant_id=$1 AND spec->'metadata'->>'idempotency_key'=$2
+             ORDER BY requested_at DESC, id DESC LIMIT 1
+            """,
+            _tenant_uuid(tenant_id),
+            str(idempotency_key),
+        )
+    return _row(row) if row else None
 
 
 def build_dry_run(recipe: WorkRecipe, *, proposed_version: int) -> dict[str, Any]:
@@ -354,7 +416,9 @@ def registration_summary(row: Mapping[str, Any]) -> dict[str, Any]:
         "verify_count": len(verify),
         "requested_by": row.get("requested_by"),
         "requested_at": row.get("requested_at"),
+        "rejection_reason": str(row.get("decision_reason") or "") if row.get("status") == "rejected" else "",
         "screen_evidence_url": mask_url(evidence_url)[:1000],
+        "evidence_trust": str(evidence.get("trust") or ("self_reported" if evidence else "none")),
         "step_summaries": [describe(st, i, "step") for i, st in enumerate(steps, start=1)]
         + [describe(st, len(steps) + i, "verify") for i, st in enumerate(verify, start=1)],
     }
@@ -377,6 +441,8 @@ async def decide_registration_as_human(
         raise HumanDeciderRequired("human_decider_required")
     decider = decider_identity(principal)
     verdict = str(decision or "").strip().lower()
+    if verdict == "reject":
+        reason = normalize_rejection_reason(reason)
     if verdict == "approve":
         row = await get_registration(registration_id, tenant_id=tenant_id)
         if row is None:
@@ -413,6 +479,8 @@ async def decide_registration(
     verdict = str(decision or "").strip().lower()
     if verdict not in {"approve", "reject"}:
         raise RegistrationError("decision must be approve or reject")
+    if verdict == "reject":
+        reason = normalize_rejection_reason(reason)
     tenant = _tenant_uuid(tenant_id)
 
     async with get_pool().acquire() as conn, conn.transaction():

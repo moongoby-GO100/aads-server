@@ -6033,68 +6033,42 @@ class ToolExecutor:
                 return {"status": "approval_required", "session_id": session_id,
                         "registration": registration, "approval_card": card.get("status")}
 
-            if not isinstance(evidence, dict) or evidence.get("screen_verified") is not True:
-                return {"error": "screen_e2e_evidence_required"}
-            artifact_ref = str(
-                evidence.get("screenshot_url") or evidence.get("snapshot_ref") or ""
-            ).strip()
-            if not artifact_ref:
-                return {"error": "screenshot_or_snapshot_reference_required"}
+            from app.services.work_recipe.draft_registration import register_generic_draft
 
-            # Persist references only. Raw DOM/OCR and arbitrary fields can contain secrets.
-            safe_evidence = {
-                key: str(evidence[key])[:1000]
-                for key in ("screenshot_url", "snapshot_ref", "url", "captured_at", "tool")
-                if evidence.get(key) is not None
-            }
-            safe_evidence["screen_verified"] = True
-            from app.services.work_recipe import recorder as recorder_module
-            from app.services.work_recipe.registration import (
-                normalize_flow_metadata, normalize_verify_steps,
-            )
-
-            try:
-                top_verify = inp.get("verify")
-                evidence_verify = evidence.get("verify")
-                if top_verify and evidence_verify and top_verify != evidence_verify:
-                    raise ValueError("verify_conflict")
-                verify_steps = normalize_verify_steps(top_verify or evidence_verify)
-                flow_metadata = {
-                    **normalize_flow_metadata(evidence),
-                    **normalize_flow_metadata(inp),
-                }
-            except ValueError as exc:
-                return {"error": str(exc)}
-
-            recording = recorder_module.start_recording(
-                name,
-                domain,
-                tenant_id,
-                session_id=session_id,
-                e2e_evidence=safe_evidence,
-                verify=verify_steps,
-                flow_metadata=flow_metadata,
-            )
-            for raw_step in steps:
-                if not isinstance(raw_step, dict):
-                    return {"error": "invalid_recipe_step"}
-                payload = dict(raw_step)
-                succeeded = payload.pop("succeeded", True) is True
-                recording.record_step(payload, succeeded=succeeded)
-            registration = await recorder_module.finish_recording(
-                recording, created_by=f"chat:{session_id}"
-            )
+            outcome = await register_generic_draft(tenant_id=tenant_id, session_id=session_id, inp=inp)
+            if outcome.get("error"):
+                return {"error": outcome["error"]}
             from app.services.work_recipe.approval_card import propose_card
 
-            card = await propose_card(registration, chat_session_id=session_id)
+            card = await propose_card(outcome["registration"], chat_session_id=session_id)
             return {
                 "status": "approval_required",
                 "session_id": session_id,
-                "registration": registration,
+                "registration": outcome["registration"],
                 "approval_card": card.get("status"),
             }
 
-        return {"error": "unsupported_action", "allowed": ["list", "run", "register_e2e"]}
+        if action == "register_batch":
+            from app.services.work_recipe.draft_registration import register_draft_batch
+
+            return await register_draft_batch(tenant_id=tenant_id, session_id=session_id, inp=inp)
+
+        if action == "capture_evidence":
+            from app.services.work_recipe.dom_evidence import DomEvidenceError, issue_dom_evidence
+
+            try:
+                issued = await issue_dom_evidence(
+                    tenant_id=tenant_id, chat_session_id=session_id, agent=f"chat:{session_id}",
+                    url=str(inp.get("url") or inp.get("domain") or ""), verify=inp.get("verify"),
+                    browser_session_id=str(inp.get("browser_session_id") or ""),
+                    browser_work_key=str(inp.get("browser_work_key") or ""),
+                    run_id=str(inp.get("run_id") or ""),
+                )
+            except (ValueError, DomEvidenceError) as exc:
+                return {"error": str(exc)}
+            return {"status": "evidence_issued", "session_id": session_id, "e2e_evidence": issued}
+
+        return {"error": "unsupported_action", "allowed": ["list", "run", "register_e2e", "register_batch", "capture_evidence"]}
 
     async def _browser_navigate(self, inp: Dict[str, Any]) -> Any:
         """브라우저로 URL 이동."""

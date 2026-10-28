@@ -176,7 +176,7 @@ def test_invalid_risk_raises_value_error():
 def test_allowed_vocabulary_matches_prd():
     assert ALLOWED_ACTIONS == (
         "navigate", "click", "fill", "select", "press",
-        "upload", "download", "snapshot", "api_call",
+        "upload", "download", "snapshot", "api_call", "dismiss_overlays",
     )
     assert RISK_LEVELS == ("READ", "WRITE_INTERNAL", "WRITE_EXTERNAL", "IRREVERSIBLE")
     assert risk_rank("READ") < risk_rank("WRITE_INTERNAL") < risk_rank("WRITE_EXTERNAL") < risk_rank("IRREVERSIBLE")

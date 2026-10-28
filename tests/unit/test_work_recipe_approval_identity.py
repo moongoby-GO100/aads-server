@@ -221,7 +221,7 @@ def test_self_approval_is_refused_but_self_reject_is_allowed(client, decided, mo
     assert refused.json()["detail"] == "self_approval_blocked"
     assert decided == []
 
-    rejected = http.post("/ohvis/recipes/registrations/r-1/decision", json={"decision": "reject"})
+    rejected = http.post("/ohvis/recipes/registrations/r-1/decision", json={"decision": "reject", "reason": "범위 밖 작업"})
     assert rejected.status_code == 200
     assert decided[0]["decision"] == "reject" and decided[0]["decided_by"] == HUMAN_EMAIL
 
@@ -283,7 +283,7 @@ async def test_core_decide_registration_blocks_self_approval_for_any_caller(monk
         await registration.decide_registration(
             row["id"], tenant_id=TENANT, decision="approve", decided_by="Alice@Example.com")
     rejected = await registration.decide_registration(
-        row["id"], tenant_id=TENANT, decision="reject", decided_by="alice@example.com")
+        row["id"], tenant_id=TENANT, decision="reject", decided_by="alice@example.com", reason="중복 요청")
     assert rejected["status"] == "rejected"
 
 
@@ -312,7 +312,7 @@ def test_high_risk_approve_needs_confirm_high_risk(client, decided, monkeypatch,
     )
     assert ok.status_code == 200 and len(decided) == 1
 
-    reject = http.post("/ohvis/recipes/registrations/r-1/decision", json={"decision": "reject"})
+    reject = http.post("/ohvis/recipes/registrations/r-1/decision", json={"decision": "reject", "reason": "범위 밖 작업"})
     assert reject.status_code == 200
 
 

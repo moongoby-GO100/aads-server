@@ -890,7 +890,8 @@ def decide(monkeypatch):
     async def go(spec: dict[str, Any], verdict: str):
         holder.conn = _TxConn(_request_row(spec, store.normalize_domain(spec["domain"])))
         result = await registration.decide_registration(
-            holder.conn.request_row["id"], tenant_id=TENANT, decision=verdict, decided_by="ceo")
+            holder.conn.request_row["id"], tenant_id=TENANT, decision=verdict, decided_by="ceo",
+            reason="manifest 없음" if verdict == "reject" else "")
         return result, holder.conn
 
     return go

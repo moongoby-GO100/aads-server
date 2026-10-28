@@ -24,7 +24,21 @@ ALLOWED_ACTIONS: tuple[str, ...] = (
     "download",
     "snapshot",
     "api_call",
+    "dismiss_overlays",
 )
+
+# dismiss_overlays: 허용 목록(domain+root+close)에 있는 모달만 닫는다. 동의·결제·보안 경고는
+# 닫는 행위 자체가 의사표시이므로 selector 에 이런 표지가 있으면 레시피로 선언할 수 없다.
+OVERLAY_DEFAULT_MAX_DISMISS = 3
+OVERLAY_MAX_DISMISS_LIMIT = 5
+OVERLAY_SELECTOR_MAX_LEN = 300
+OVERLAY_FORBIDDEN_MARKERS = re.compile(
+    r"consent|agree|terms|privacy|gdpr|cookie-?(?:banner|consent)|payment|checkout|billing|"
+    r"security|warning|certificate|captcha|otp|auth|login|"
+    r"동의|약관|결제|보안|경고|인증|로그인",
+    re.IGNORECASE,
+)
+_OVERLAY_SELECTOR_CHARS = re.compile(r"""^[A-Za-z0-9_#.\[\]="'~*^$|:+> ()\-,]+$""")
 
 # PRD 4절 위험 등급표 — 순서가 곧 등급(낮음 → 높음)이다.
 RISK_LEVELS: tuple[str, ...] = (
@@ -124,6 +138,29 @@ class RecipeInput:
         return payload
 
 
+def _upload_value(value: Any, extra: dict[str, Any], *, seq: int) -> tuple[Any, dict[str, Any]]:
+    """upload 의 file_path/file_paths 는 실행 입력(value)과 같은 값이다 — value 로 모으고 따로 남기지 않는다."""
+    extra = dict(extra)
+    paths = extra.pop("file_paths", None)
+    single = extra.pop("file_path", None)
+    supplied = paths if paths not in (None, "", []) else single
+    if supplied in (None, "", []):
+        return value, extra
+    if isinstance(supplied, (list, tuple)):
+        if not all(isinstance(item, str) and item for item in supplied):
+            raise ValueError(f"steps[{seq}]: file_paths 는 비어 있지 않은 문자열 목록이어야 합니다")
+        supplied = list(supplied)
+    elif not isinstance(supplied, str):
+        raise ValueError(f"steps[{seq}]: file_path 는 문자열이어야 합니다")
+    if value in (None, "", []):
+        return supplied, extra
+    same = [value] if isinstance(value, str) else value
+    wanted = [supplied] if isinstance(supplied, str) else supplied
+    if same != wanted:
+        raise ValueError(f"steps[{seq}]: upload value 와 file_path(s) 가 서로 다릅니다")
+    return value, extra
+
+
 @dataclass
 class RecipeStep:
     """레시피의 한 단계."""
@@ -171,13 +208,20 @@ class RecipeStep:
             "save_as", "endpoint", "timeout", "description", "seq",
         }
         extra = {k: v for k, v in raw.items() if k not in known}
+        value = raw.get("value")
+        if action == "upload":
+            value, extra = _upload_value(value, extra, seq=seq)
+        if action == "dismiss_overlays":
+            extra = normalize_overlay_spec(extra, seq=seq)
+            if risk_rank(risk) > risk_rank(DEFAULT_RISK):
+                raise ValueError(f"steps[{seq}]: dismiss_overlays 는 risk=READ 만 허용합니다")
 
         return cls(
             seq=seq,
             action=action,
             selector=_opt_str(raw.get("selector")),
             url=_opt_str(raw.get("url")),
-            value=raw.get("value"),
+            value=value,
             wait_for=_opt_str(raw.get("wait_for")),
             risk=risk,
             save_as=_opt_str(raw.get("save_as")),
@@ -374,6 +418,56 @@ class WorkRecipe:
         for step in [*self.steps, *self.verify]:
             highest = max(highest, risk_rank(step.risk))
         return RISK_LEVELS[highest]
+
+
+def overlay_host_matches(host: str, allowed_domain: str) -> bool:
+    """호스트가 허용 도메인과 같거나 그 하위인가."""
+    host = str(host or "").strip().lower().rstrip(".")
+    allowed = str(allowed_domain or "").strip().lower().rstrip(".")
+    return bool(host and allowed) and (host == allowed or host.endswith("." + allowed))
+
+
+def _overlay_selector(value: Any, *, seq: int, field_name: str) -> str:
+    selector = str(value or "").strip()
+    if not selector or len(selector) > OVERLAY_SELECTOR_MAX_LEN or not _OVERLAY_SELECTOR_CHARS.fullmatch(selector):
+        raise ValueError(f"steps[{seq}]: overlays.{field_name} selector 가 비었거나 안전하지 않습니다")
+    if "," in selector:
+        raise ValueError(f"steps[{seq}]: overlays.{field_name} 는 selector 목록(,)을 쓸 수 없습니다")
+    if OVERLAY_FORBIDDEN_MARKERS.search(selector):
+        raise ValueError(
+            f"steps[{seq}]: overlays.{field_name} 는 동의·결제·보안 경고·인증 모달을 대상으로 할 수 없습니다"
+        )
+    return selector
+
+
+def normalize_overlay_spec(extra: Mapping[str, Any], *, seq: int) -> dict[str, Any]:
+    """dismiss_overlays 의 overlays/max_dismiss 를 검증해 정규화한다. 모르는 키는 거부."""
+    unknown = sorted(set(extra) - {"overlays", "max_dismiss"})
+    if unknown:
+        raise ValueError(f"steps[{seq}]: dismiss_overlays 가 모르는 필드: {', '.join(map(str, unknown))}")
+    overlays_raw = extra.get("overlays")
+    if not isinstance(overlays_raw, Sequence) or isinstance(overlays_raw, (str, bytes)) or not overlays_raw:
+        raise ValueError(f"steps[{seq}]: dismiss_overlays 는 overlays 허용 목록이 필요합니다")
+    overlays: list[dict[str, str]] = []
+    for index, item in enumerate(overlays_raw, start=1):
+        if not isinstance(item, Mapping) or set(item) - {"domain", "root", "close"}:
+            raise ValueError(f"steps[{seq}]: overlays[{index}] 는 domain/root/close 만 가진 매핑이어야 합니다")
+        domain = str(item.get("domain") or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", domain) or "." not in domain:
+            raise ValueError(f"steps[{seq}]: overlays[{index}].domain 이 올바른 도메인이 아닙니다")
+        overlays.append({
+            "domain": domain,
+            "root": _overlay_selector(item.get("root"), seq=seq, field_name="root"),
+            "close": _overlay_selector(item.get("close"), seq=seq, field_name="close"),
+        })
+    max_raw = extra.get("max_dismiss", OVERLAY_DEFAULT_MAX_DISMISS)
+    try:
+        max_dismiss = int(max_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"steps[{seq}]: max_dismiss 가 정수가 아닙니다: {max_raw!r}") from exc
+    if not 1 <= max_dismiss <= OVERLAY_MAX_DISMISS_LIMIT:
+        raise ValueError(f"steps[{seq}]: max_dismiss 는 1~{OVERLAY_MAX_DISMISS_LIMIT} 이어야 합니다")
+    return {"overlays": overlays, "max_dismiss": max_dismiss}
 
 
 def _assert_step_vars(step: "RecipeStep", available: set[str]) -> None:
