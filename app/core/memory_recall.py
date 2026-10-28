@@ -143,7 +143,7 @@ async def _build_session_notes(
     tenant_id: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> str:
-    """섹션 1: 이전 대화 요약 (session_notes 최근 3개, 해당 프로젝트 우선)."""
+    """섹션 1: 현재 세션 compaction 우선, 부족한 노트는 같은 tenant/user에서 보충."""
     try:
         async with _get_pool().acquire() as conn:
             scope_tenant_id = tenant_id
@@ -165,52 +165,46 @@ async def _build_session_notes(
                     if scope_user_id is None and scope_row["user_id"]:
                         scope_user_id = str(scope_row["user_id"])
 
-            if scope_tenant_id:
-                params: list[Any] = [scope_tenant_id]
-                where_clauses = ["cs.tenant_id = $1::uuid"]
-                if scope_user_id:
-                    params.append(scope_user_id)
-                    where_clauses.append(f"cs.user_id = ${len(params)}::text")
-                if project_id:
-                    params.append(project_id)
-                    project_param = len(params)
-                    where_clauses.append(f"(${project_param} = ANY(sn.projects_discussed) OR sn.projects_discussed IS NULL)")
-                    order_clause = f"ORDER BY CASE WHEN ${project_param} = ANY(sn.projects_discussed) THEN 0 ELSE 1 END, sn.created_at DESC"
-                else:
-                    order_clause = "ORDER BY sn.created_at DESC"
-                rows = await conn.fetch(
-                    f"""
-                    SELECT sn.summary, sn.key_decisions, sn.created_at, sn.projects_discussed
-                    FROM session_notes sn
-                    JOIN chat_sessions cs ON sn.session_id = cs.id
-                    WHERE {' AND '.join(where_clauses)}
-                    {order_clause}
-                    LIMIT 3
-                    """,
-                    *params,
+            # tenant를 확인할 수 없으면 전역 노트로 폴백하지 않는다.
+            if not scope_tenant_id:
+                return ""
+            params: list[Any] = [scope_tenant_id, session_uuid]
+            where_clauses = [
+                "cs.tenant_id = $1::uuid",
+                "sn.note_type IS DISTINCT FROM 'compaction_hash'",
+                "btrim(COALESCE(sn.summary, '')) !~ '^[0-9A-Fa-f]{32}$'",
+            ]
+            if scope_user_id:
+                params.append(scope_user_id)
+                where_clauses.append(f"cs.user_id = ${len(params)}::text")
+            current_session = "sn.session_id = $2::uuid"
+            project_order = ""
+            if project_id:
+                params.append(project_id)
+                project_param = len(params)
+                # 현재 세션 요약은 projects_discussed 태깅과 무관하게 유지한다.
+                where_clauses.append(
+                    f"({current_session} OR ${project_param} = ANY(sn.projects_discussed) "
+                    "OR sn.projects_discussed IS NULL)"
                 )
-            elif project_id:
-                rows = await conn.fetch(
-                    """
-                    SELECT summary, key_decisions, created_at, projects_discussed
-                    FROM session_notes
-                    WHERE $1 = ANY(projects_discussed) OR projects_discussed IS NULL
-                    ORDER BY
-                        CASE WHEN $1 = ANY(projects_discussed) THEN 0 ELSE 1 END,
-                        created_at DESC
-                    LIMIT 3
-                    """,
-                    project_id,
+                project_order = (
+                    f"CASE WHEN {current_session} OR ${project_param} = ANY(sn.projects_discussed) "
+                    "THEN 0 ELSE 1 END, "
                 )
-            else:
-                rows = await conn.fetch(
-                    """
-                    SELECT summary, key_decisions, created_at
-                    FROM session_notes
-                    ORDER BY created_at DESC
-                    LIMIT 3
-                    """,
-                )
+            rows = await conn.fetch(
+                f"""
+                SELECT sn.summary, sn.key_decisions, sn.created_at, sn.projects_discussed
+                FROM session_notes sn
+                JOIN chat_sessions cs ON sn.session_id = cs.id
+                WHERE {' AND '.join(where_clauses)}
+                ORDER BY CASE WHEN {current_session} THEN 0 ELSE 1 END,
+                    CASE WHEN {current_session} AND sn.note_type = 'compaction'
+                         THEN 0 ELSE 1 END,
+                    {project_order}sn.created_at DESC
+                LIMIT 3
+                """,
+                *params,
+            )
             if not rows:
                 return ""
             lines = []
@@ -222,7 +216,8 @@ async def _build_session_notes(
                     line += f" (결정: {', '.join(decisions[:2])})"
                 lines.append(line)
             text = "\n".join(lines)
-            return _truncate(text, _BUDGET["session_notes"])
+            # 긴 첫 줄도 버리지 않고 현재 요약의 앞부분을 예산만큼 보존한다.
+            return text[:_BUDGET["session_notes"]].rstrip()
     except Exception as e:
         # #13: 섹션별 실패 로깅
         logger.warning("memory_recall_section_failed", section="session_notes", error=str(e))
