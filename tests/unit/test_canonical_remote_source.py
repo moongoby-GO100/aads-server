@@ -278,7 +278,8 @@ def test_register_rejects_escape_for_remote_project(monkeypatch):
     assert out["error"] == "invalid_source_path" and out["status"] == 422
 
 
-def test_lookup_file_path_matches_normalized_candidates():
+def test_lookup_file_path_matches_normalized_candidates(monkeypatch):
+    _stub_remote(monkeypatch, error=HTTPException(502, "remote_source_unavailable"))
     decomposed = unicodedata.normalize("NFD", "/root/kis-autotrade-v4/" + KOREAN_PATH)
 
     class Spy(FakeConn):

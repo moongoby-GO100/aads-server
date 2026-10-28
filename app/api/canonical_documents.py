@@ -307,6 +307,13 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
         same = next((row for row in matches if row["content_hash"] == digest and row["version"] == body.version), None)
         if same:
             return {"document_id": head["id"], "revision_id": same["id"], "generation": head["generation"], "idempotent": True}
+        # source_path 없이 content 로만 등록된 기존 리비전과 원본이 같은 경우: 새 리비전·UPDATE 없이 기존 것을 돌려준다.
+        by_hash = next((row for row in matches if row["content_hash"] == digest), None) if body.source_path else None
+        if by_hash:
+            return {"document_id": head["id"], "revision_id": by_hash["id"], "generation": head["generation"],
+                    "idempotent": True, "matched_by": "content_hash", "revision": by_hash["revision"],
+                    "version": by_hash["version"],
+                    "approved": head["approved_revision_id"] == by_hash["id"]}
         raise HTTPException(409, "revision_conflict")
     if body.expected_generation != head["generation"]:
         raise HTTPException(409, "generation_conflict")

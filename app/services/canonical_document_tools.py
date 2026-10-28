@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from typing import Any, Optional
@@ -107,6 +108,10 @@ async def register_document(
             revision_no = await conn.fetchval(
                 "SELECT revision FROM project_document_revisions WHERE id=$1", result["revision_id"],
             )
+            matched_status = None
+            if result.get("matched_by"):
+                matched_status = "approved" if result.get("approved") else (
+                    await conn.fetchval(_STATUS_SQL, result["revision_id"]) or "draft")
     except HTTPException as exc:
         return {"error": str(exc.detail), "status": exc.status_code,
                 "message": "등록 실패 — 같은 내용·버전이 이미 있으면 version 을 지정하거나 내용을 바꾸세요"
@@ -124,8 +129,17 @@ async def register_document(
         "approved": False,
         "note": "초안 리비전만 등록했습니다. 승인은 기존 승인 경로(POST /api/v1/projects/{project}/documents/{key}/approve)로만 합니다.",
     }
+    view_status, view_authoritative = "draft", False
+    if result.get("matched_by"):
+        view_status, view_authoritative = matched_status, bool(result.get("approved"))
+        out.update({
+            "matched_by": result["matched_by"], "revision": result.get("revision"),
+            "version": result.get("version"), "status": view_status, "approved": view_authoritative,
+            "note": "같은 본문의 기존 리비전이 있어 새 리비전을 만들지 않았습니다(approved_revision 은 그대로).",
+        })
     view = document_refs.canonical_view_ref(
-        project, key, title=body.title, revision=int(revision_no) if revision_no is not None else None, status="draft", authoritative=False,
+        project, key, title=body.title, revision=int(revision_no) if revision_no is not None else None,
+        status=view_status, authoritative=view_authoritative,
     )
     out["view"] = view
     out["report_line"] = view["report_line"]
@@ -260,8 +274,37 @@ async def lookup_documents(*, tenant_id: str, inp: dict[str, Any], pool: Any = N
                 "ORDER BY h.updated_at DESC, h.id LIMIT $4",
                 tenant_id, project, query, _LOOKUP_LIMIT,
             )
+        matched_by = None
+        if file_path and not rows:
+            rows = await _heads_by_source_hash(conn, tenant_id, project, document_refs._norm(file_path))
+            matched_by = "content_hash" if rows else None
         documents = [await _document_summary(conn, row, project) for row in rows]
-        return {"project": project, "registered": bool(documents), "total": len(documents), "documents": documents}
+        if matched_by:
+            for document in documents:
+                document["matched_by"] = matched_by
+        out = {"project": project, "registered": bool(documents), "total": len(documents), "documents": documents}
+        if matched_by:
+            out["matched_by"] = matched_by
+        return out
+
+
+async def _heads_by_source_hash(conn: Any, tenant_id: str, project: str, path: str) -> list[Any]:
+    """source_path 로 못 찾은 경우의 보조 조회: 원본 sha256 이 같은 리비전을 가진 head. 읽기 실패는 '없음'."""
+    try:
+        source = docs._source_syntax(path)
+        target = docs._remote_target(project)
+        raw = await docs._read_remote_source(target, source) if target else docs._read_source(source)
+    except HTTPException:
+        return []
+    if not raw:
+        return []
+    return await conn.fetch(
+        "SELECT DISTINCT h.* FROM project_document_heads h "
+        "JOIN project_document_revisions r ON r.head_id=h.id "
+        "WHERE h.tenant_id=$1::uuid AND h.project_key=$2 AND r.tenant_id=$1::uuid "
+        "AND r.project_key=$2 AND r.content_hash=$3 ORDER BY h.document_key LIMIT $4",
+        tenant_id, project, hashlib.sha256(raw).hexdigest(), _LOOKUP_LIMIT,
+    )
 
 
 # Lookup SQL already caps results at _LOOKUP_LIMIT=20. Cap each serialized card
