@@ -22,6 +22,12 @@ from app.core.anthropic_client import get_client
 from app.core.db_pool import get_pool
 from app.services import plan_mode_guard as _plan_mode_guard
 from app.services import chat_interrupt_lifecycle as _interrupt_lifecycle
+from app.services.client_env import (
+    client_env_json,
+    client_env_prompt_block,
+    interrupt_env_lines,
+    normalize_client_env,
+)
 from app.core import interrupt_attachments as _interrupt_attachments
 from app.services.model_switch_banner import (
     build_switch_banner as _build_switch_banner,
@@ -2413,6 +2419,9 @@ async def _apply_deferred_interrupts_to_state(
         ).strip()
         if not interrupt_text:
             continue
+        _intr_env_lines = interrupt_env_lines(interrupts)
+        if _intr_env_lines:
+            interrupt_text = f"{interrupt_text}\n{_intr_env_lines}"
 
         attachment_note, interrupt_image_blocks = await _interrupt_attachments.build_interrupt_attachment_payload(
             session_id, interrupts,
@@ -2728,7 +2737,7 @@ async def _fetch_persisted_interrupts(
 
             rows = await conn.fetch(
                 """
-                SELECT id, content, attachments
+                SELECT id, content, attachments, client_env
                   FROM chat_messages m
                  WHERE m.session_id = $1
                    AND m.role = 'user'
@@ -2837,6 +2846,7 @@ async def _fetch_persisted_interrupts(
             "content": content,
             "attachments": attachments,
             "message_id": str(row["id"]),
+            **({"client_env": _env} if (_env := normalize_client_env(row["client_env"])) else {}),
         })
         seen.add(content)
 
@@ -10541,7 +10551,7 @@ def _message_select_fields(fields: str) -> str:
             # branch_id=버블 들여쓰기, reply_to_id=답글 연결,
             # is_hidden/quality_score=표시 판정. thinking_summary와 embedding 등
             # 대용량 컬럼은 명시적 detail 조회에만 포함한다.
-            "branch_id, reply_to_id, is_hidden, quality_score, "
+            "branch_id, reply_to_id, is_hidden, quality_score, client_env, "
             "CASE "
             "WHEN quality_details IS NULL THEN NULL "
             "WHEN role = 'assistant' AND ("
@@ -11627,6 +11637,7 @@ async def _save_message(
     thinking_summary: Optional[str] = None,
     reply_to_id: Optional[uuid.UUID] = None,
     idempotency_key: Optional[str] = None,
+    client_env: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     # Strip raw XML tool-call / tool-response / fabricated-result blocks from assistant messages
     # 닫힌 태그 + 닫히지 않은 태그(이후 전부) 모두 제거
@@ -11683,12 +11694,21 @@ async def _save_message(
                 json.dumps(attachments or []), json.dumps(sources or []), json.dumps(normalized_tools_called),
                 thinking_summary, reply_to_id, _branch_uuid,
             )
+        # 접속 환경은 사용자 메시지에만, 값이 있을 때만 쓴다(없으면 NULL 유지·기존 INSERT 불변).
+        _client_env_json = client_env_json(client_env) if role == "user" else None
+        if _client_env_json is not None:
+            await conn.execute(
+                "UPDATE chat_messages SET client_env = $2::jsonb WHERE id = $1",
+                row["id"], _client_env_json,
+            )
         # Update session message count (atomic with INSERT)
         await conn.execute(
             "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
             session_id,
         )
     result = _row_to_dict(row)
+    if _client_env_json is not None:
+        result["client_env"] = json.loads(_client_env_json)
     # 비동기 임베딩 생성 (실패해도 메시지 저장에 영향 없음)
     try:
         from app.services.chat_embedding_service import schedule_message_embedding
@@ -13432,6 +13452,7 @@ async def send_message_stream(
     idempotency_key: Optional[str] = None,
     tenant_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    client_env: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[str, None]:
     """
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
@@ -13918,7 +13939,7 @@ async def send_message_stream(
                     logger.info(f"user_msg_dedup session={session_id[:8]} — duplicate skipped")
                     _saved_user_message_id = existing_dup["id"]
                 else:
-                    _save_result = await _save_message(conn, sid, "user", persisted_user_content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid, idempotency_key=idempotency_key)
+                    _save_result = await _save_message(conn, sid, "user", persisted_user_content, model_used=model_override, intent=user_intent, attachments=attachments or [], reply_to_id=_reply_to_uuid, idempotency_key=idempotency_key, client_env=client_env)
                     if _save_result is None and idempotency_key:
                         logger.info(f"idempotency_key_dedup session={session_id[:8]} key={idempotency_key[:8]}")
                         _saved_user_message_id = await conn.fetchval(
@@ -14124,6 +14145,7 @@ async def send_message_stream(
                     _workspace_project_key_value,
                     str(_reply_to_uuid)[:8],
                 )
+            system_prompt = system_prompt + client_env_prompt_block(client_env)
             _customer_scope_block = _customer_tenant_prompt_block(tenant_scope)
             if _customer_scope_block:
                 system_prompt = system_prompt + _customer_scope_block
@@ -15806,6 +15828,9 @@ async def send_message_stream(
             ).strip()
             if not _interrupt_text:
                 continue
+            _intr_env_lines = interrupt_env_lines(_deferred_interrupts)
+            if _intr_env_lines:
+                _interrupt_text = f"{_interrupt_text}\n{_intr_env_lines}"
 
             _attachment_note, _interrupt_image_blocks = await _interrupt_attachments.build_interrupt_attachment_payload(
                 session_id, _deferred_interrupts,
@@ -17479,6 +17504,7 @@ _JSONB_FIELDS = frozenset({
     "quality_details",
     "diagnostics",
     "interruption_diagnostics",
+    "client_env",
 })
 
 

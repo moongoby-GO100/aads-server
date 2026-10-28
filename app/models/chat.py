@@ -10,7 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ─── Workspace ───────────────────────────────────────────────────────────────
@@ -139,6 +139,136 @@ class SessionAttentionAckOut(BaseModel):
 
 # ─── Message ─────────────────────────────────────────────────────────────────
 
+# ─── 메시지별 접속 환경 (client_env) ─────────────────────────────────────────
+# 데이터 최소 수집: 원문 User-Agent·IP·기기 모델명은 받지도 저장하지도 않는다.
+# 잘못된 값은 거절(422)하지 않고 안전한 값으로 정규화한다 — 접속 환경은 부가 정보라
+# 이것 때문에 메시지 전송이 막히면 안 된다.
+
+CLIENT_ENV_OS_FAMILIES = ("windows", "macos", "ios", "android", "linux", "chromeos", "other")
+CLIENT_ENV_BROWSER_FAMILIES = ("chrome", "safari", "edge", "firefox", "samsung", "other")
+_CLIENT_ENV_DEVICE_CLASSES = ("pc", "mobile", "tablet", "unknown")
+_CLIENT_ENV_ORIENTATIONS = ("portrait", "landscape")
+_CLIENT_ENV_SOURCES = ("client_hints", "user_agent", "user_set", "unknown")
+_CLIENT_ENV_VIEWPORT_MAX = 10000
+
+
+def _enum_or(value: Any, allowed: tuple, fallback: Any) -> Any:
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in allowed:
+            return lowered
+    return fallback
+
+
+class ClientEnv(BaseModel):
+    """한 메시지를 보낸 시점의 접속 환경. 알 수 없는 키는 버린다(extra=ignore)."""
+
+    device_class: Literal["pc", "mobile", "tablet", "unknown"] = "unknown"
+    viewport_w: Optional[int] = None
+    viewport_h: Optional[int] = None
+    orientation: Optional[Literal["portrait", "landscape"]] = None
+    os_family: Optional[str] = None
+    browser_family: Optional[str] = None
+    source: Literal["client_hints", "user_agent", "user_set", "unknown"] = "unknown"
+    user_override: bool = False
+    env_uncertain: bool = False
+
+    @field_validator("user_override", "env_uncertain", mode="before")
+    @classmethod
+    def _norm_bool(cls, v: Any) -> bool:
+        return v if isinstance(v, bool) else False
+
+    @field_validator("device_class", mode="before")
+    @classmethod
+    def _norm_device_class(cls, v: Any) -> Any:
+        return _enum_or(v, _CLIENT_ENV_DEVICE_CLASSES, "unknown")
+
+    @field_validator("viewport_w", "viewport_h", mode="before")
+    @classmethod
+    def _norm_viewport(cls, v: Any) -> Optional[int]:
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, float) and v.is_integer():
+            v = int(v)
+        if not isinstance(v, int):
+            return None
+        return v if 1 <= v <= _CLIENT_ENV_VIEWPORT_MAX else None
+
+    @field_validator("orientation", mode="before")
+    @classmethod
+    def _norm_orientation(cls, v: Any) -> Any:
+        return _enum_or(v, _CLIENT_ENV_ORIENTATIONS, None)
+
+    @field_validator("os_family", mode="before")
+    @classmethod
+    def _norm_os(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        return _enum_or(v, CLIENT_ENV_OS_FAMILIES, "other")
+
+    @field_validator("browser_family", mode="before")
+    @classmethod
+    def _norm_browser(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        return _enum_or(v, CLIENT_ENV_BROWSER_FAMILIES, "other")
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _norm_source(cls, v: Any) -> Any:
+        return _enum_or(v, _CLIENT_ENV_SOURCES, "unknown")
+
+
+_CLIENT_ENV_KEYS = frozenset(ClientEnv.model_fields)
+
+
+def _client_env_input_is_clean(raw: Dict[Any, Any]) -> bool:
+    """범위 밖 키·잘못된 타입·허용 목록 밖 열거값이 하나도 없으면 True."""
+    if any(not isinstance(k, str) or k not in _CLIENT_ENV_KEYS for k in raw):
+        return False
+    enums = {
+        "device_class": _CLIENT_ENV_DEVICE_CLASSES,
+        "orientation": _CLIENT_ENV_ORIENTATIONS,
+        "source": _CLIENT_ENV_SOURCES,
+    }
+    for key, value in raw.items():
+        if value is None:
+            continue
+        if key in enums:
+            if not (isinstance(value, str) and value.strip().lower() in enums[key]):
+                return False
+        elif key in ("viewport_w", "viewport_h"):
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _CLIENT_ENV_VIEWPORT_MAX:
+                return False
+        elif key in ("os_family", "browser_family"):
+            if not isinstance(value, str):
+                return False
+        elif not isinstance(value, bool):
+            return False
+    return True
+
+
+def coerce_client_env(value: Any) -> Optional[ClientEnv]:
+    """요청 본문의 client_env 를 ClientEnv 로. 거절하지 않는다.
+
+    None/빈 문자열은 구 클라이언트로 보고 None. 값이 있는데 객체가 아니거나 범위 밖이면
+    버리고 env_uncertain=True 로 표기한다.
+    """
+    if isinstance(value, ClientEnv):
+        return value
+    if value is None or value == "":
+        return None
+    if not isinstance(value, dict):
+        return ClientEnv(env_uncertain=True)
+    try:
+        env = ClientEnv(**{k: v for k, v in value.items() if isinstance(k, str)})
+    except Exception:
+        return ClientEnv(env_uncertain=True)
+    if not _client_env_input_is_clean(value):
+        env.env_uncertain = True
+    return env
+
+
 class MessageSendRequest(BaseModel):
     session_id: uuid.UUID
     content: str
@@ -147,6 +277,12 @@ class MessageSendRequest(BaseModel):
     response_mode: str = Field(default="quality", max_length=20)
     reply_to_id: Optional[uuid.UUID] = None
     idempotency_key: Optional[str] = Field(None, max_length=64)
+    client_env: Optional[ClientEnv] = None
+
+    @field_validator("client_env", mode="before")
+    @classmethod
+    def _coerce_client_env(cls, v: Any) -> Optional[ClientEnv]:
+        return coerce_client_env(v)
 
 
 class MessageUpdateRequest(BaseModel):
@@ -159,6 +295,12 @@ class BranchCreateRequest(BaseModel):
     model_override: Optional[str] = None
     response_mode: str = Field(default="quality", max_length=20)
     attachments: List[Any] = Field(default_factory=list)
+    client_env: Optional[ClientEnv] = None
+
+    @field_validator("client_env", mode="before")
+    @classmethod
+    def _coerce_client_env(cls, v: Any) -> Optional[ClientEnv]:
+        return coerce_client_env(v)
 
 
 class MessageOut(BaseModel):
@@ -180,6 +322,7 @@ class MessageOut(BaseModel):
     reply_to_id: Optional[uuid.UUID] = None
     branch_id: Optional[uuid.UUID] = None
     branch_point_id: Optional[uuid.UUID] = None
+    client_env: Optional[Dict[str, Any]] = None
     created_at: datetime
 
 

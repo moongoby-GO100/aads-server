@@ -27,7 +27,7 @@ from fastapi import (
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse, Response
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.core.interrupt_queue import is_streaming, push_interrupt, set_streaming
 from app.auth import TenantRole, require_tenant_role
@@ -38,6 +38,8 @@ from app.models.chat import (
     ArtifactOut,
     ArtifactUpdate,
     BranchCreateRequest,
+    ClientEnv,
+    coerce_client_env,
     ChatTodoBulkActionOut,
     ChatTodoBulkActionRequest,
     ChatTodoCreateRequest,
@@ -75,6 +77,7 @@ from app.models.chat import (
 )
 from app.services import chat_service as svc
 from app.services import chat_interrupt_lifecycle as _ilc
+from app.services.client_env import client_env_json, normalize_client_env
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -1521,6 +1524,7 @@ async def send_message(
     _MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 
     reply_to_id = None  # multipart에서도 초기화
+    client_env = None
 
     if "multipart/form-data" in content_type:
         form = await request.form()
@@ -1530,6 +1534,7 @@ async def send_message(
         response_mode = str(form.get("response_mode") or "quality")
         reply_to_id = str(form.get("reply_to_id")) if form.get("reply_to_id") else None
         idempotency_key = str(form.get("idempotency_key")) if form.get("idempotency_key") else None
+        client_env = normalize_client_env(form.get("client_env")) if form.get("client_env") else None
         if idempotency_key is not None and len(idempotency_key) > _IDEMPOTENCY_KEY_MAX_LENGTH:
             raise _invalid_message_payload([{
                 "field": "idempotency_key",
@@ -1610,6 +1615,7 @@ async def send_message(
         attachments = req.attachments
         reply_to_id = str(req.reply_to_id) if req.reply_to_id else None
         idempotency_key = req.idempotency_key if hasattr(req, 'idempotency_key') else None
+        client_env = req.client_env.model_dump() if req.client_env else None
 
     if not session_id_str or not await svc.get_session(session_id_str, tenant_id=_tenant_id(context)):
         raise _NOT_FOUND("session")
@@ -1694,6 +1700,7 @@ async def send_message(
         idempotency_key=idempotency_key,
         tenant_id=tenant_id,
         user_id=_user_id(context),
+        client_env=client_env,
     )
     # 클라이언트 연결 종료 시 백그라운드에서 LLM 생성 완료 → DB 저장 보장
     bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)
@@ -3546,6 +3553,12 @@ class InterruptRequest(BaseModel):
         default=None, max_length=128,
         description="같은 키로 재전송하면 새 지시를 만들지 않고 기존 접수를 돌려준다",
     )
+    client_env: Optional[ClientEnv] = None
+
+    @field_validator("client_env", mode="before")
+    @classmethod
+    def _coerce_client_env(cls, v: Any) -> Optional[ClientEnv]:
+        return coerce_client_env(v)
 
 
 @router.post("/chat/sessions/{session_id}/interrupt", tags=["chat-session"])
@@ -3564,6 +3577,7 @@ async def interrupt_session(
     sid = str(session_id)
     if not await svc.get_session(sid, tenant_id=_tenant_id(context)):
         raise _NOT_FOUND("session")
+    interrupt_client_env = req.client_env.model_dump() if req.client_env else None
 
     if is_streaming(sid):
         accepts_interrupt = False
@@ -3759,12 +3773,13 @@ async def interrupt_session(
                         else:
                             interrupt_message_id = await conn.fetchval(
                                 """INSERT INTO chat_messages
-                                   (session_id, role, content, intent, attachments)
-                                   VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb)
+                                   (session_id, role, content, intent, attachments, client_env)
+                                   VALUES ($1, 'user', $2, 'queued_interrupt', $3::jsonb, $4::jsonb)
                                    RETURNING id""",
                                 session_id,
                                 f"[추가 지시] {req.content}",
                                 _json.dumps(req.attachments or []),
+                                client_env_json(interrupt_client_env),
                             )
                             updated = await conn.execute(
                                 "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1",
@@ -3805,6 +3820,7 @@ async def interrupt_session(
                 req.content,
                 req.attachments if req.attachments else None,
                 message_id=str(interrupt_message_id) if interrupt_message_id else None,
+                client_env=interrupt_client_env,
             )
             logger.info("interrupt_queued", session_id=sid, content=req.content[:100],
                          attachments=len(req.attachments))
@@ -4646,6 +4662,7 @@ async def create_branch(
 
     pool = get_pool()
     tenant_id = _tenant_id(context)
+    client_env = req.client_env.model_dump() if req.client_env else None
     async with pool.acquire() as conn:
         # 1) 분기 기준 메시지 조회
         origin_msg = await conn.fetchrow(
@@ -4665,10 +4682,11 @@ async def create_branch(
         branch_id = _uuid.uuid4()
 
         # 2) 분기점 이전 메시지(자신 포함)만으로 히스토리 구성하여 user 메시지 저장
-        await conn.execute(
+        branch_msg_id = await conn.fetchval(
             """INSERT INTO chat_messages
                 (tenant_id, session_id, role, content, model_used, attachments, branch_id, branch_point_id)
-            VALUES ($1::uuid, $2, 'user', $3, $4, $5::jsonb, $6, $7)""",
+            VALUES ($1::uuid, $2, 'user', $3, $4, $5::jsonb, $6, $7)
+            RETURNING id""",
             tenant_id,
             origin_msg["session_id"],
             req.content,
@@ -4677,6 +4695,13 @@ async def create_branch(
             branch_id,
             message_id,
         )
+        if client_env is not None:
+            await conn.execute(
+                "UPDATE chat_messages SET client_env = $3::jsonb WHERE id = $1 AND tenant_id = $2::uuid",
+                branch_msg_id,
+                tenant_id,
+                client_env_json(client_env),
+            )
         await conn.execute(
             "UPDATE chat_sessions SET message_count = message_count + 1, updated_at = NOW() WHERE id = $1 AND tenant_id = $2::uuid",
             origin_msg["session_id"],
@@ -4695,6 +4720,7 @@ async def create_branch(
         response_mode=req.response_mode,
         branch_id=str(branch_id),
         branch_point_msg_id=str(message_id),
+        client_env=client_env,
     )
     bg_stream = svc.with_background_completion(raw_stream, session_id=session_id_str)
     return StreamingResponse(

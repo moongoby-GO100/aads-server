@@ -2592,6 +2592,7 @@ async def lifespan(app: FastAPI):
                     ("chat_messages", "intent", "TEXT DEFAULT NULL"),
                     ("chat_messages", "execution_id", "UUID DEFAULT NULL"),
                     ("chat_messages", "is_hidden", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                    ("chat_messages", "client_env", "JSONB DEFAULT NULL"),
                     ("chat_sessions", "current_execution_id", "UUID DEFAULT NULL"),
                     ("chat_sessions", "effort_mode", "VARCHAR(10) NOT NULL DEFAULT 'auto'"),
                     ("chat_sessions", "effort_manual", "VARCHAR(10) DEFAULT NULL"),

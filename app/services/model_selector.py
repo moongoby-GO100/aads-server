@@ -29,6 +29,7 @@ from app.core.claude_oauth_credentials import (  # noqa: E402
     redact_secret_text as _redact_secret_text,
 )
 from app.core.llm_key_provider import get_api_key as _get_db_key, get_provider_keys as _get_provider_keys  # noqa: E402
+from app.services.client_env import interrupt_env_lines  # noqa: E402
 from app.services.model_registry import get_executable_model_ids as _get_registry_executable_model_ids  # noqa: E402
 from app.services.model_registry import list_registered_models as _list_registered_models  # noqa: E402
 from app.services.model_registry import normalize_provider as _normalize_registry_provider  # noqa: E402
@@ -3706,6 +3707,9 @@ async def _stream_litellm_anthropic(
                     if has_interrupt(session_id):
                         interrupts = pop_interrupts(session_id)
                         interrupt_text = "\n".join(i["content"] for i in interrupts)
+                        _env_lines = interrupt_env_lines(interrupts)
+                        if _env_lines:
+                            interrupt_text = f"{interrupt_text}\n{_env_lines}"
                         # 인터럽트 첨부파일 → Vision content blocks
                         _intr_content: list | str = f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
                         _intr_images, _intr_notice = await asyncio.to_thread(
@@ -6971,6 +6975,9 @@ async def _stream_anthropic(
             if has_interrupt(session_id):
                 interrupts = pop_interrupts(session_id)
                 interrupt_text = "\n".join(i["content"] for i in interrupts)
+                _env_lines = interrupt_env_lines(interrupts)
+                if _env_lines:
+                    interrupt_text = f"{interrupt_text}\n{_env_lines}"
                 # 인터럽트 첨부파일 → Claude Vision content blocks
                 _intr_content: list | str = f"[CEO 추가 지시] 작업 도중 CEO가 새로운 지시를 보냈습니다. 현재까지의 작업 결과를 고려하고, 이 새 지시를 반영하여 다음 행동을 판단하세요. CEO 지시가 기존 작업과 충돌하면 CEO 지시를 우선합니다.\n\n{interrupt_text}{_interrupt_lifecycle.INTERRUPT_REPLY_INSTRUCTION}"
                 _intr_images, _intr_notice = await asyncio.to_thread(

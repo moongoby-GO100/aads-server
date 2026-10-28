@@ -225,6 +225,7 @@ async def test_committed_receipt_is_enqueued_and_acknowledged():
         "추가 지시 반영해 주세요",
         None,
         message_id=MESSAGE_ID,
+        client_env=None,
     )
     assert transaction.exit_exception_type is None
     # 접수 트랜잭션 1개 + 상태 기록용 savepoint 1개

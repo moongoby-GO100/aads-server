@@ -2106,6 +2106,7 @@ async def test_collect_queued_interrupts_recovers_db_saved_interrupt_without_mem
             "id": interrupt_id,
             "content": "[추가 지시] 검증 결과를 표로 다시 보고해",
             "attachments": [{"type": "text", "name": "note.txt"}],
+            "client_env": None,
         }
     ])
     conn.execute = AsyncMock()
