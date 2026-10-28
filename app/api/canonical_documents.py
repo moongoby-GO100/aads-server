@@ -1,8 +1,12 @@
 """Tenant and project scoped canonical documents. No legacy rows are mutated."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import posixpath
 import re
+import shlex
+import unicodedata
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
@@ -12,6 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.auth import TenantRole, require_tenant_role
 from app.core.db_pool import get_pool
+from app.core.project_config import PROJECT_MAP, REMOTE_PROJECTS
 
 router = APIRouter(prefix="/projects/{project_key}/documents", tags=["canonical-documents"])
 ROOT = Path(__file__).resolve().parents[2]
@@ -91,17 +96,26 @@ def _locate_source(candidate: Path) -> Path:
     raise HTTPException(422, "invalid_source_path")
 
 
-def _safe_source(path: str | None) -> str | None:
+def _source_syntax(path: str | None) -> str | None:
+    """상대경로·docs/reports 하위·'..' 금지 검사 후 NFC 정규화한 POSIX 경로를 돌려준다(파일 접근 없음)."""
     if path is None:
         return None
-    if not path or len(path) > 512 or "://" in path or "\\" in path or "\x00" in path:
+    path = unicodedata.normalize("NFC", path)
+    if (not path or len(path) > 512 or "://" in path or "\\" in path
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in path)):
         raise HTTPException(422, "invalid_source_path")
     candidate = Path(path)
     if (candidate.is_absolute() or not candidate.parts or candidate.parts[0] not in ("docs", "reports")
             or any(part in (".", "..") or part.startswith(".") for part in candidate.parts)):
         raise HTTPException(422, "invalid_source_path")
-    _locate_source(candidate)
     return candidate.as_posix()
+
+
+def _safe_source(path: str | None) -> str | None:
+    source = _source_syntax(path)
+    if source is not None:
+        _locate_source(Path(source))
+    return source
 
 
 def _read_source(source: str) -> bytes:
@@ -119,23 +133,96 @@ def _read_source(source: str) -> bytes:
     return raw
 
 
-def _body(content: str, source_path: str | None) -> tuple[str, str | None, str]:
-    source = _safe_source(source_path)
-    if source:
-        raw = _read_source(source)
-        try:
-            verified = raw.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise HTTPException(422, "source_must_be_utf8") from exc
-        if content and content != verified:
-            raise HTTPException(409, "source_content_mismatch")
-        content = verified
+def _finalize(content: str, source: str | None) -> tuple[str, str | None, str]:
     encoded = content.encode("utf-8")
     if not encoded or len(encoded) > MAX_DOCUMENT_BYTES:
         raise HTTPException(413, "document_size_out_of_range")
     if SECRET.search(content):
         raise HTTPException(422, "credential_content_rejected")
     return content, source, hashlib.sha256(encoded).hexdigest()
+
+
+def _verified_text(raw: bytes, content: str) -> str:
+    try:
+        verified = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(422, "source_must_be_utf8") from exc
+    if content and content != verified:
+        raise HTTPException(409, "source_content_mismatch")
+    return verified
+
+
+def _body(content: str, source_path: str | None) -> tuple[str, str | None, str]:
+    source = _safe_source(source_path)
+    if source:
+        content = _verified_text(_read_source(source), content)
+    return _finalize(content, source)
+
+
+def _remote_target(project: str) -> dict[str, Any] | None:
+    """SSH 로 읽어야 하는 원격 프로젝트(GO100 등)의 서버·작업 디렉터리. 로컬 프로젝트(AADS)는 None."""
+    target = PROJECT_MAP.get(project)
+    if project in REMOTE_PROJECTS and target and target.get("workdir", "/") != "/":
+        return target
+    return None
+
+
+# $1=저장소 상대경로 $2=작업 디렉터리 $3=최대 바이트. 작업 트리(낡고 dirty)가 아니라 origin/main 의 git 객체를 읽는다.
+# fetch 는 원격 추적 ref 만 바꾼다(실패해도 기존 ref 로 계속). blob(100644/100755) 아니면 exit 3.
+_REMOTE_READ_SCRIPT = (
+    'GIT_TERMINAL_PROMPT=0 timeout 8 git -C "$2" fetch -q origin main </dev/null >/dev/null 2>&1; '
+    'set -f; set -- "$1" "$2" "$3" $(git -C "$2" ls-tree -z origin/main -- "$1" 2>/dev/null | tr "\\0" "\\n"); '
+    'case "$4 $5" in "100644 blob"|"100755 blob") ;; *) exit 3;; esac; '
+    'git -C "$2" cat-file -e "$6" 2>/dev/null || exit 3; '
+    'git -C "$2" cat-file blob "$6" | head -c "$3"'
+)
+REMOTE_READ_TIMEOUT = 20
+
+
+async def _read_remote_source(target: dict[str, Any], source: str) -> bytes:
+    """원격 저장소 origin/main 의 문서 blob 을 최대 MAX_DOCUMENT_BYTES+1 바이트만 읽는다. 로컬 셸을 거치지 않는다."""
+    remote_cmd = "timeout 15 sh -c " + " ".join(shlex.quote(a) for a in (
+        _REMOTE_READ_SCRIPT, "sh", source, target["workdir"], str(MAX_DOCUMENT_BYTES + 1)))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+            "-p", str(target.get("port", "22")), f"root@{target['server']}", remote_cmd,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        raise HTTPException(502, "remote_source_unavailable") from exc
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=REMOTE_READ_TIMEOUT)
+    except asyncio.TimeoutError as exc:
+        proc.kill()
+        await proc.wait()
+        raise HTTPException(502, "remote_source_unavailable") from exc
+    if proc.returncode == 3:
+        raise HTTPException(422, "invalid_source_path")
+    if proc.returncode != 0:
+        raise HTTPException(502, "remote_source_unavailable")
+    if len(stdout) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(413, "document_too_large")
+    return stdout
+
+
+async def _body_for_project(project: str, content: str, source_path: str | None) -> tuple[str, str | None, str]:
+    """원격 프로젝트는 그 저장소에서 읽어 검증한다(로컬 같은 경로의 다른 프로젝트 파일로 검증하지 않는다).
+
+    SSH 전송 실패(502)이고 호출자가 content 를 줬을 때만 검증된 경로 형식 + 제공 content 로 저장한다.
+    파일 없음·경로 탈출·내용 불일치는 그대로 거부한다.
+    """
+    target = _remote_target(project)
+    if target is None:
+        return _body(content, source_path)
+    source = _source_syntax(source_path)
+    if source:
+        try:
+            content = _verified_text(await _read_remote_source(target, source), content)
+        except HTTPException as exc:
+            if exc.status_code != 502 or not content:
+                raise
+    return _finalize(content, source)
 
 
 def _safe_metadata(*values: str | None) -> None:
@@ -175,7 +262,7 @@ async def _head(conn: Any, tenant: str, project: str, key: str, lock: bool = Fal
 
 async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str, body: RevisionInput) -> dict:
     """Create a draft revision inside the caller's transaction. Never approves; approved_revision_id is untouched."""
-    content, source, digest = _body(body.content, body.source_path)
+    content, source, digest = await _body_for_project(project, body.content, body.source_path)
     _safe_metadata(body.title, body.change_summary, body.source_task_id,
                    body.document_key, body.idempotency_key, source)
     if body.goal_id and not await conn.fetchval(

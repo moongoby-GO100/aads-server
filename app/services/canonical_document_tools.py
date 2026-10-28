@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Optional
 
 from fastapi import HTTPException
@@ -241,12 +242,13 @@ async def lookup_documents(*, tenant_id: str, inp: dict[str, Any], pool: Any = N
             return {"project": project, "registered": True, **await _document_summary(conn, head, project)}
 
         if file_path:
+            candidates = sorted({document_refs._norm(file_path), unicodedata.normalize("NFC", file_path)})
             rows = await conn.fetch(
                 "SELECT DISTINCT h.* FROM project_document_heads h "
                 "JOIN project_document_revisions r ON r.head_id=h.id "
-                "WHERE h.tenant_id=$1::uuid AND h.project_key=$2 AND r.source_path=$3 "
+                "WHERE h.tenant_id=$1::uuid AND h.project_key=$2 AND r.source_path=ANY($3::text[]) "
                 "ORDER BY h.document_key LIMIT $4",
-                tenant_id, project, file_path, _LOOKUP_LIMIT,
+                tenant_id, project, candidates, _LOOKUP_LIMIT,
             )
         else:
             rows = await conn.fetch(

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Iterable, Optional
 from urllib.parse import quote
 
@@ -23,7 +24,7 @@ _EXEMPT_PARTS = ("docs/shared-lessons/", "docs/knowledge/", "docs/_index", "repo
 _EXEMPT_NAMES = ("HANDOVER.md", "INDEX.md", "README.md", "CHANGELOG.md")
 
 # 호스트·컨테이너 절대 경로의 저장소 루트. 이것만 떼어 저장소 기준 상대 경로로 맞춘다.
-_ABS_ROOT_RE = re.compile(r"^(?:/root/aads/[A-Za-z0-9._-]+|/host/aads-server|/app)/")
+_ABS_ROOT_RE = re.compile(r"^(?:/root/aads/[A-Za-z0-9._-]+|/root/kis-autotrade-v4|/host/aads-server|/app)/")
 _DATE_PREFIX_RE = re.compile(r"^\d{8}_")
 _HANGUL_RE = re.compile(r"[ㄱ-ㆎ가-힣]")
 
@@ -104,7 +105,7 @@ def file_view_ref(abs_path: str, *, title: Optional[str] = None) -> dict[str, An
 
 
 def _norm(path: str) -> str:
-    p = (path or "").strip().replace("\\", "/")
+    p = unicodedata.normalize("NFC", (path or "").strip()).replace("\\", "/")
     while p.startswith("./"):
         p = p[2:]
     m = _ABS_ROOT_RE.match(p)
