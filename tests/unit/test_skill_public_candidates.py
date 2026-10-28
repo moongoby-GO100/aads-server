@@ -1,4 +1,4 @@
-"""공개 스킬 방법론 3건의 사내 후보 스킬(SKILL.md) 계약 (AADS-SKILL-PUBLIC-CANDIDATES-20261028)."""
+"""공개 스킬 방법론 11건(1차 3 + 2차 8)의 사내 후보 스킬(SKILL.md) 계약 (AADS-SKILL-PUBLIC-CANDIDATES-20261028 / -B2-)."""
 from __future__ import annotations
 
 import importlib.util
@@ -14,13 +14,29 @@ from app.services import skill_file_import as sfi  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = ROOT / ".claude" / "skills"
-SLUGS = ("mcp-server-design", "skill-authoring", "systematic-debugging")
+BATCH1 = ("mcp-server-design", "skill-authoring", "systematic-debugging")
+BATCH2 = (
+    "webapp-verification",
+    "frontend-design-guide",
+    "verification-before-completion",
+    "writing-plans",
+    "test-driven-development",
+    "code-review-cycle",
+    "brainstorming",
+    "parallel-agent-dispatch",
+)
+SLUGS = BATCH1 + BATCH2
+APACHE_SLUGS = ("mcp-server-design", "skill-authoring", "webapp-verification", "frontend-design-guide")
+MIT_SLUGS = tuple(s for s in SLUGS if s not in APACHE_SLUGS)
 WRITE_TOOLS = {"bash", "edit", "write", "multiedit", "notebookedit"}
 ALLOWED_LICENSES = {"Apache-2.0", "MIT"}
 SOURCE_PREFIX = {
     "mcp-server-design": "https://github.com/anthropics/skills/",
     "skill-authoring": "https://github.com/anthropics/skills/",
     "systematic-debugging": "https://github.com/obra/superpowers/",
+    "webapp-verification": "https://github.com/anthropics/skills/",
+    "frontend-design-guide": "https://github.com/anthropics/skills/",
+    **{slug: "https://github.com/obra/superpowers/" for slug in BATCH2[2:]},
 }
 
 _PATH = ROOT / "app/services/ohvis_harness.py"
@@ -82,22 +98,27 @@ def test_body_h1_is_korean_and_has_promotion_and_notice_sections(slug):
     assert headings[-1] == "## 출처 및 변경 고지", "고지는 파일 끝 절이어야 한다"
 
 
-def test_license_notices_match_declared_license():
-    for slug in ("mcp-server-design", "skill-authoring"):
-        notice = _read(slug).split("## 출처 및 변경 고지", 1)[1]
-        assert "Apache License 2.0" in notice and "변경 사실" in notice
-    notice = _read("systematic-debugging").split("## 출처 및 변경 고지", 1)[1]
-    assert "MIT" in notice and "Copyright (c) 2025 Jesse Vincent" in notice and "변경 사실" in notice
+@pytest.mark.parametrize("slug", SLUGS)
+def test_license_notices_match_declared_license(slug):
+    front = sfi.parse_frontmatter(_read(slug))
+    notice = _read(slug).split("## 출처 및 변경 고지", 1)[1]
+    assert "변경 사실" in notice
+    if slug in APACHE_SLUGS:
+        assert front["license"] == "Apache-2.0"
+        assert "Apache License 2.0" in notice
+    else:
+        assert front["license"] == "MIT"
+        assert "MIT" in notice and "Copyright (c) 2025 Jesse Vincent" in notice
 
 
-def test_scan_skill_files_reports_three_slugs_as_read():
+def test_scan_skill_files_reports_all_slugs_as_read():
     entries = {e["slug"]: e for e in sfi.scan_skill_files([SKILLS_DIR])}
     for slug in SLUGS:
         assert entries[slug]["risk_tier"] == "read"
         assert entries[slug]["allowed_tools"] == ["Read", "Grep", "Glob"]
 
 
-def test_scan_repository_skills_includes_three_slugs(monkeypatch):
+def test_scan_repository_skills_includes_all_slugs(monkeypatch):
     monkeypatch.setattr(harness, "_repo_root", lambda: ROOT)
     found = {c["slug"]: c for c in harness.scan_repository_skills()}
     for slug in SLUGS:
@@ -109,3 +130,12 @@ def test_slugs_do_not_collide_with_existing_skills():
     dirs = sorted(p.parent.name for p in SKILLS_DIR.glob("*/SKILL.md"))
     assert len(dirs) == len(set(dirs))
     assert {"handoff", "sales-channel-collector", "tpp"} <= set(dirs)
+
+
+@pytest.mark.parametrize("slug", BATCH2)
+def test_batch2_does_not_import_original_scripts_or_unlicensed_sources(slug):
+    text = _read(slug)
+    assert not (SKILLS_DIR / slug / "scripts").exists()
+    lowered = text.lower()
+    for forbidden in ("--no-verify 를 쓴다", "with_server.py --server", "skills/docx", "skills/pdf", "skills/pptx", "skills/xlsx", "doc-coauthoring"):
+        assert forbidden not in lowered
