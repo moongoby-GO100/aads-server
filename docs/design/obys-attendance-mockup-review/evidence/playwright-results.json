@@ -1,0 +1,51 @@
+{
+  "tool": "playwright-core",
+  "results": [
+    {
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 1000,
+      "passed": true,
+      "console_errors": [],
+      "network_requests": [],
+      "captures": 10,
+      "checks": [
+        "filters",
+        "date-range-validation",
+        "detail",
+        "missing-clock-out",
+        "coordinates-unset",
+        "approve-demo",
+        "edit-demo",
+        "empty-vs-search-empty",
+        "recovery-six-states",
+        "auxiliary-location",
+        "formula",
+        "no-overflow"
+      ]
+    },
+    {
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "passed": true,
+      "console_errors": [],
+      "network_requests": [],
+      "captures": 10,
+      "checks": [
+        "filters",
+        "date-range-validation",
+        "detail",
+        "missing-clock-out",
+        "coordinates-unset",
+        "approve-demo",
+        "edit-demo",
+        "empty-vs-search-empty",
+        "recovery-six-states",
+        "auxiliary-location",
+        "formula",
+        "no-overflow"
+      ]
+    }
+  ]
+}
