@@ -98,6 +98,7 @@ ACCT_MIGRATION_ALLOWLIST=(
     20261001_obys_hrdoc_expiry_integrity_superseded.sql
     20261003_obys_clobe_collection.sql
     20261008_obys_clobe_mcp_store.sql
+    20261014_obys_journal_source_clobe.sql
 )
 # 인증 DB(AUTH_PG_DB)에만 적용하는 마이그레이션. 업무 DB 목록과 섞지 않는다 — 대상 DB 가 다르기 때문이다.
 ACCT_AUTH_MIGRATION_ALLOWLIST=(
@@ -998,6 +999,10 @@ migration_probe_sql() { # prints SQL returning t when the migration is already a
         20261008_obys_clobe_mcp_store.sql)
             # 4개 테이블 + (역할이 있으면) 그 역할의 클로브 테이블 권한. 역할이 없는 DB 는 GRANT 를 건너뛰므로 테이블만 본다.
             echo "/*probe*/ SELECT (SELECT count(*) FROM unnest(ARRAY['clobe_mcp_oauth_client','clobe_mcp_oauth_state','clobe_mcp_connection','clobe_mcp_tools']) t WHERE to_regclass('public.'||t) IS NOT NULL) = 4 AND (NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='acct_business_runtime_r5') OR (has_table_privilege('acct_business_runtime_r5','public.clobe_mcp_connection','SELECT,INSERT,UPDATE') AND has_table_privilege('acct_business_runtime_r5','public.obys_clobe_company_link','SELECT,INSERT,UPDATE')));"
+            ;;
+        20261014_obys_journal_source_clobe.sql)
+            # 전표 source_type CHECK 제약이 있고, 정의에 'clobe' 가 들어 있으며, 검증 완료(convalidated)인 경우.
+            echo "/*probe*/ SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.yeoljeong_journal_vouchers') AND conname='yeoljeong_journal_vouchers_source_type_check' AND convalidated AND pg_get_constraintdef(oid) LIKE '%''clobe''%');"
             ;;
         20261014_obys_auth_password_recovery.sql)
             # 인증 DB: saas_users 3컬럼 + 재설정 요청·감사 테이블 + 열린 요청 유일 인덱스.

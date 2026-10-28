@@ -25,6 +25,7 @@ MIG_GPS = "20260930_obys_attendance_pwa_gps.sql"
 MIG_HRDOC = "20261001_obys_hrdoc_expiry_integrity_superseded.sql"
 MIG_CLOBE = "20261003_obys_clobe_collection.sql"
 MIG_CLOBE_STORE = "20261008_obys_clobe_mcp_store.sql"
+MIG_JOURNAL = "20261014_obys_journal_source_clobe.sql"
 MIG_AUTH = "20261014_obys_auth_password_recovery.sql"
 
 HARNESS = r'''#!/bin/bash
@@ -152,10 +153,10 @@ fake_cmd() {
       sql="$(cat)"
       if [[ $sql == */\*identity\*/* ]]; then echo t
       elif [[ $sql == */\*probe\*/* ]]; then
-        if [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *idx_yeoljeong_attendance_pwa_open* ]]; then key=gps; elif [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *yeoljeong_journal_vouchers_source_type_check* ]]; then key=journal; elif [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *idx_yeoljeong_attendance_pwa_open* ]]; then key=gps; elif [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
         if [[ -f "$D/applied.$key" ]]; then echo t; else echo f; fi
       else
-        if [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *attendance_t* ]]; then key=gps; elif [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *journal_t* ]]; then key=journal; elif [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *attendance_t* ]]; then key=gps; elif [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
         echo "MIGAPPLY $key" >> "$D/ssh.log"
         if [[ ${FAKE_MIG_FAIL:-} == "$key" ]]; then return 1; fi
         touch "$D/applied.$key"
@@ -259,6 +260,7 @@ class Box:
             f"migrations/{MIG_HRDOC}": MIG_BODY.format(t="hrdoc_t"),
             f"migrations/{MIG_CLOBE}": MIG_BODY.format(t="obys_clobe_t"),
             f"migrations/{MIG_CLOBE_STORE}": MIG_BODY.format(t="clobe_mcp_t"),
+            f"migrations/{MIG_JOURNAL}": MIG_BODY.format(t="journal_t"),
             f"migrations/{MIG_AUTH}": MIG_BODY.format(t="obys_password_reset_requests"),
             "migrations/20260901_unrelated_aads.sql": "DROP TABLE aads_thing;\n",
             "deploy/obys/requirements.obys.lock": "fastapi==0.115\n",
@@ -351,7 +353,7 @@ def test_happy_path_builds_once_migrates_with_backup_first_and_switches_port(box
     assert res["new"]["image_reused"] is False
     assert res["backups"]["pg_dump"] == "/root/acct-release-backups/obys_pre_x.dump,/root/acct-release-backups/obys_auth_pre_x.dump"
     assert res["backups"]["apache_vhost"].startswith("/root/fb-cutover-backups/")
-    assert res["migrations"]["applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_AUTH]
+    assert res["migrations"]["applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
     assert res["cutover_kst"].endswith("KST")
     assert res["rollback_command"].endswith("rollback acct-app-candidate-r8 77")
     assert "/root/acct-release-backups/obys_pre_x.dump" in proc.stdout and "/root/acct-release-backups/obys_auth_pre_x.dump" in proc.stdout
@@ -360,7 +362,7 @@ def test_happy_path_builds_once_migrates_with_backup_first_and_switches_port(box
     log = box.log()
     assert log.index("OP pg_backup") < log.index("MIGAPPLY gps") < log.index("MIGAPPLY hrdoc") < log.index("MIGAPPLY clobe")
     assert log.index("MIGAPPLY clobe") < log.index("MIGAPPLY clobe_store")
-    assert log.index("MIGAPPLY clobe_store") < log.index("MIGAPPLY auth") < log.index("OP start_candidate") < log.index("OP apache_switch")
+    assert log.index("MIGAPPLY clobe_store") < log.index("MIGAPPLY journal") < log.index("MIGAPPLY auth") < log.index("OP start_candidate") < log.index("OP apache_switch")
     assert res["unrelated_containers_changed"] == []
     assert (box.tmp / "results" / "acct-app-77.json").exists()
 
@@ -916,11 +918,12 @@ def test_already_applied_migrations_are_skipped_without_backup(box):
     (box.fake / "applied.hrdoc").touch()
     (box.fake / "applied.clobe").touch()
     (box.fake / "applied.clobe_store").touch()
+    (box.fake / "applied.journal").touch()
     (box.fake / "applied.auth").touch()
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     res = box.result(proc)
-    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_AUTH]
+    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
     assert "OP pg_backup" not in box.log() and "MIGAPPLY hrdoc" not in box.log()
     assert res["backups"]["pg_dump"] == ""
 
@@ -934,13 +937,13 @@ def test_only_the_pending_migration_is_applied(box):
 
 def test_gps_migration_is_in_the_allowlist_and_applied_alone_when_it_is_the_only_pending_one(box):
     assert box.run("--call", "migration_allowed", MIG_GPS).returncode == 0
-    for key in ("hrdoc", "clobe", "clobe_store", "auth"):
+    for key in ("hrdoc", "clobe", "clobe_store", "journal", "auth"):
         (box.fake / f"applied.{key}").touch()
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     res = box.result(proc)
     assert res["migrations"]["applied"] == [MIG_GPS]
-    assert res["migrations"]["already_applied"] == [MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_AUTH]
+    assert res["migrations"]["already_applied"] == [MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
     log = box.log()
     assert log.index("OP pg_backup") < log.index("MIGAPPLY gps") < log.index("OP start_candidate")
 
@@ -1535,6 +1538,39 @@ def test_auth_db_equal_to_the_business_db_is_refused_before_any_migration(box):
     assert proc.returncode == 7, proc.stdout + proc.stderr
     assert "must differ" in proc.stderr
     assert "MIGAPPLY" not in "\n".join(box.log()) and box.port() == "8111"
+
+
+# ---- 전표 source_type 'clobe' 마이그레이션 ----------------------------------------------------------
+def _probe_sql(name):
+    return subprocess.run(
+        ["bash", "-c", f'source <(sed -n "/^migration_probe_sql()/,/^}}/p" "{SCRIPT}"); migration_probe_sql {name}'],
+        capture_output=True, text=True, check=True,
+    ).stdout
+
+
+def test_journal_source_clobe_migration_is_allowlisted_last_among_business_migrations_and_targets_the_business_db(box):
+    assert box.run("--call", "migration_allowed", MIG_JOURNAL).returncode == 0
+    assert box.run("--call", "migration_db", MIG_JOURNAL).stdout.strip() == "obys"
+    script = SCRIPT.read_text(encoding="utf-8")
+    block = re.search(r"ACCT_MIGRATION_ALLOWLIST=\(\n(.*?)\n\)", script, re.S).group(1).split()
+    assert block == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL]
+
+
+def test_journal_source_clobe_probe_requires_the_validated_clobe_constraint():
+    sql = _probe_sql(MIG_JOURNAL)
+    assert sql.startswith("/*probe*/")
+    assert "yeoljeong_journal_vouchers_source_type_check" in sql
+    assert "pg_get_constraintdef" in sql and "''clobe''" in sql
+    assert "convalidated" in sql
+    assert "ALTER TABLE" not in sql and "INSERT INTO" not in sql
+
+
+def test_journal_source_clobe_migration_passes_the_safety_scan(box):
+    path = ROOT / "migrations" / MIG_JOURNAL
+    assert box.run("--call", "migration_scan", str(path)).returncode == 0
+    code = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+    assert "DROP CONSTRAINT IF EXISTS yeoljeong_journal_vouchers_source_type_check" in code
+    assert not re.search(r"\bDROP\s+(TABLE|COLUMN|INDEX)\b|\bTRUNCATE\b|\bDELETE\s+FROM\b", code, re.I)
 
 
 # ---- registry -----------------------------------------------------------------------------------
