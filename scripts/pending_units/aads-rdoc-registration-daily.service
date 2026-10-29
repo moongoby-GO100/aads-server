@@ -13,7 +13,8 @@ Environment=HOME=/root
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 # 어제(KST) 하루치. origin/main 을 fetch 해 최신성을 확인해야 on_time 으로 인정된다.
 # 호스트 체크아웃이 origin/main 보다 뒤처질 수 있어 로컬 HEAD 가 아니라 origin/main 을 쓴다.
-ExecStart=/usr/bin/python3 scripts/rdoc_registration_collect.py collect --fetch --apply
+# 호스트 python3 에 asyncpg 가 없어 저장소 venv 를 사용한다.
+ExecStart=/root/aads/aads-server/.venv/bin/python scripts/rdoc_registration_collect.py collect --fetch --apply
 TimeoutStartSec=300
 StandardOutput=journal
 StandardError=journal

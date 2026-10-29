@@ -445,21 +445,22 @@ def test_read_queries_are_tenant_scoped():
         assert "tenant_id = $1::uuid" in sql
 
 
-# ── 운영 설치는 별도 승인: 자동 적용 경로에 두지 않는다 ─────────────────
+# ── 운영 적용된 스키마는 릴리스 마이그레이션에 포함한다 ─────────────────
 
 
 def test_schema_and_units_are_staged_outside_auto_apply_paths():
-    assert not list((_REPO / "migrations").glob("*rdoc_registration_daily*"))
-    assert not list((_REPO / "migrations" / "rollback").glob("*rdoc_registration_daily*"))
-    up = (_REPO / "scripts" / "pending_migrations" / "20261020_rdoc_registration_daily.sql").read_text(encoding="utf-8")
-    down = (_REPO / "scripts" / "pending_migrations" / "20261020_rdoc_registration_daily.down.sql").read_text(encoding="utf-8")
+    up = (_REPO / "migrations" / "20261020_rdoc_registration_daily.sql").read_text(encoding="utf-8")
+    down = (_REPO / "migrations" / "rollback" / "20261020_rdoc_registration_daily.down.sql").read_text(encoding="utf-8")
     assert "PRIMARY KEY (tenant_id, project_key, kst_date, metric)" in up
     assert "(status = 'not_applicable') = (denominator = 0)" in up and "(rate IS NULL) = (denominator = 0)" in up
+    assert "CREATE TABLE IF NOT EXISTS rdoc_registration_daily" in up
+    assert "CREATE INDEX IF NOT EXISTS rdoc_registration_daily_date_idx" in up
     assert "DROP TABLE IF EXISTS rdoc_registration_daily" in down
     timer = (_REPO / "scripts" / "pending_units" / "aads-rdoc-registration-daily.timer").read_text(encoding="utf-8")
     assert "Persistent=false" in timer, "꺼져 있던 날을 몰아 수집해 on_time 으로 위장하면 안 된다"
     service = (_REPO / "scripts" / "pending_units" / "aads-rdoc-registration-daily.service").read_text(encoding="utf-8")
     assert "--fetch --apply" in service
+    assert "ExecStart=/root/aads/aads-server/.venv/bin/python scripts/rdoc_registration_collect.py collect --fetch --apply" in service
 
 
 def test_full_history_window_invariance_without_git_mutations(monkeypatch):
