@@ -43,16 +43,20 @@ while (($#)); do
     shift
 done
 
-APPLY_BIN="${AADS_APPLY_MIGRATION_BIN:-${ROOT}/scripts/apply_migration.sh}"
-BASELINE_FILE="${AADS_MIGRATION_BASELINE_FILE:-${ROOT}/scripts/migrations_auto_apply_baseline.txt}"
+# Serialize ledger re-read, approval verification and apply for this database.
+# The outer deploy ownership fence remains authoritative for deployment.
+if ! $plan_only; then
+    lock_key="$(printf '%s|%s' "$PG_CONTAINER" "$PGDATABASE" | sha256sum | cut -d' ' -f1)"
+    exec {migration_lock}>"/tmp/aads-release-migrations-${lock_key}.lock"
+    flock -x "$migration_lock"
+fi
 
-# filename|sha256 per line. Tests pass a file; production reads the ledger.
+APPLY_BIN="${AADS_APPLY_MIGRATION_BIN:-${ROOT}/scripts/apply_migration.sh}"
+BASELINE_FILE="${ROOT}/scripts/migrations_auto_apply_baseline.txt"
+
+# filename|sha256 per line. Always read the live database ledger.
 read_ledger() {
-    if [[ -n "${AADS_MIGRATION_LEDGER_FILE:-}" ]]; then
-        cat "$AADS_MIGRATION_LEDGER_FILE"
-        return
-    fi
-    docker exec "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" -qAt -v ON_ERROR_STOP=1 \
+    timeout 60 docker exec "$PG_CONTAINER" psql -U "$PGUSER" -d "$PGDATABASE" -qAt -v ON_ERROR_STOP=1 \
         -c "SELECT filename || '|' || sha256 FROM schema_migrations;"
 }
 
@@ -156,13 +160,15 @@ if ((blocked)); then
     exit 4
 fi
 
-# There is no migration-specific, human-CEO-authenticated approval source yet.
-# Generic agent_permission_requests.decided_by is a tenant identifier, not proof
-# of a human CEO decision. Never accept a file or environment approval override.
-# Replace this function only after that trusted approval contract is established.
+# The verifier independently reads the full inventory and the DB ledger.
 verify_ceo_approval() {
-    echo "APPROVAL-SOURCE-UNRESOLVED 승인 원천 미확정" >&2
-    return 1
+    local approval_manifest rc=0
+    approval_manifest="$(mktemp)"
+    printf '%s' "$2" > "$approval_manifest"
+    python3 "${ROOT}/scripts/release_migration_approval.py" verify --root "$ROOT" \
+        --release-sha "$1" --manifest-file "$approval_manifest" || rc=$?
+    rm -f -- "$approval_manifest"
+    return "$rc"
 }
 
 # Bind the review manifest to immutable file bytes and the release identity.
@@ -229,7 +235,7 @@ elif ((${#pending[@]})); then
     printf 'RELEASE %s\n%s' "${release_sha:-unknown}" "$manifest"
     if ! verify_ceo_approval "$release_sha" "$manifest"; then
         echo "BLOCK-CEO-APPROVAL: PENDING migrations require a human CEO approval bound to RELEASE and every filename/sha256 above."
-        echo "승인 방법: CEO 사람 로그인으로 해당 명세를 검토. 승인 원천 미확정: 안전한 전용 승인 경로 확정 전에는 적용할 수 없습니다."
+        echo "승인 방법: CEO 사람 로그인으로 해당 명세를 검토. 정본 contract 문서를 검토 후 승인해야 합니다."
         exit 7
     fi
 fi

@@ -34,10 +34,15 @@ def release(tmp_path):
     (tmp_path / "scripts").mkdir()
     # Regression tests exercise application mechanics with a trusted-source stub.
     # This modifies only the disposable test copy; production has no bypass.
-    script = RUNNER.read_text().replace(
-        'echo "APPROVAL-SOURCE-UNRESOLVED 승인 원천 미확정" >&2\n    return 1',
-        'return 0',
-    )
+    script = RUNNER.read_text()
+    start = script.index('    local approval_manifest rc=0')
+    end = script.index('\n}', start)
+    script = script[:start] + '    return 0' + script[end:]
+    start = script.index('read_ledger() {')
+    end = script.index('\n}', start)
+    script = script[:start] + 'read_ledger() {\n    cat "$AADS_MIGRATION_LEDGER_FILE"' + script[end:]
+    script = script.replace('BASELINE_FILE="${ROOT}/scripts/migrations_auto_apply_baseline.txt"',
+                            'BASELINE_FILE="$AADS_MIGRATION_BASELINE_FILE"')
     (tmp_path / "scripts/apply_release_migrations.sh").write_text(script)
     ledger = tmp_path / "ledger.txt"
     ledger.write_text("")
@@ -276,3 +281,30 @@ def test_observability_schema_goes_through_the_ledger():
     ):
         assert f"--only {name}" in body
     assert "docker exec -i aads-postgres" not in body
+
+
+def test_concurrent_retry_reads_ledger_under_lock(release):
+    from concurrent.futures import ThreadPoolExecutor
+
+    release.write('20261029_serial.sql', 'SELECT 1;\n')
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: release.run(), range(2)))
+    assert [r.returncode for r in results] == [0, 0]
+    assert release.applied() == ['migrations/20261029_serial.sql']
+
+
+def test_plan_output_contract_is_unchanged(release):
+    release.write('20261029_plan.sql', 'SELECT 1;\n')
+    result = release.run('--plan')
+    assert result.returncode == 0
+    assert result.stdout == (
+        'PENDING migrations/20261029_plan.sql\n'
+        'SUMMARY pending=1 applied=0 skipped=0 drift=0 held=0 excluded=0 plan=true\n'
+    )
+
+
+def test_empty_inventory_needs_no_approval(release):
+    script = release.root / 'scripts/apply_release_migrations.sh'
+    script.write_text(script.read_text().replace('    return 0\n}', '    return 1\n}'))
+    assert release.run().returncode == 0
+    assert release.applied() == []
