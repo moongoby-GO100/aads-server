@@ -52,7 +52,7 @@ def test_three_loop_guards_exist():
     src = inspect.getsource(session_relay.ask)
     assert "hop_limit" in src, "홉 제한이 없다"
     assert "self_target" in src, "자기 자신 차단이 없다"
-    assert "already_in_flight" in src, "같은 쌍 중복 차단이 없다"
+    assert "pair_in_flight" in src and "duplicate_question" in src, "같은 쌍 대기·중복 차단이 없다"
     assert "target_busy" in src, "진행 중인 세션 보호가 없다"
 
 
@@ -186,6 +186,16 @@ def _s(sid, title, role, ts=1):
 
 
 class _AmbigPool:
+    def acquire(self):
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def connection():
+            yield self
+        return connection()
+
+    transaction = acquire
+
     """단계별로 미리 정한 행을 돌려준다. 쿼리 문구로 단계를 구분한다."""
 
     def __init__(self, sessions, alias_ids=(), title_match=None):

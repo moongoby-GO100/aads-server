@@ -334,6 +334,16 @@ def test_paused_relay_question_stays_queued(monkeypatch):
 
 
 class _RelayPool:
+    def acquire(self):
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def connection():
+            yield self
+        return connection()
+
+    transaction = acquire
+
     """dispatch_queued_relays 용 가짜 풀. 조회 SQL 과 쓰기를 기록한다."""
 
     def __init__(self, replies=None, queued=None):
@@ -355,8 +365,8 @@ class _RelayPool:
     async def fetchrow(self, *_args):
         return {"title": "origin", "role_key": "role"}
 
-    async def fetchval(self, *_args):
-        return "role"
+    async def fetchval(self, query, *_args):
+        return 0 if "SELECT count(*) FROM session_relay" in query else "role"
 
     async def execute(self, query, *args):
         self.writes.append((query, args))

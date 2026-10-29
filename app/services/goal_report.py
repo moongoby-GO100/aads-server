@@ -242,14 +242,14 @@ async def _weekly_owner_question(conn: Any, goal: Any, milestone: dict[str, Any]
                   "주도 세션에 회신해 주세요. 원인 확인 요청이며 실행 승인이 아닙니다. "
                   "작업 재제출, 차단 해제, 실행 예산 초기화, 승인 자동 처리를 하지 마세요."),
     )
+    if result.get("sent") and result.get("queued"):
+        return "담당 확인 요청 대기열 등록 — 자동 전달/회신 대기; 실행 시작 미확인"
     if result.get("sent"):
         return "담당 확인 요청 접수 — 회신/승인 대기; 실행 시작 미확인"
     await conn.execute(
         "DELETE FROM goal_report_log WHERE goal_id=$1::uuid AND subject_id=$2::uuid AND event=$3",
         goal["goal_id"], subject, event,
     )
-    if result.get("error") == "already_in_flight":
-        return "담당 확인 요청 보류 — 담당 세션에서 다른 대화 진행 중; 재시도 대기"
     return "담당 확인 전달 실패 — " + str(result.get("error") or "접수 미확인")
 
 

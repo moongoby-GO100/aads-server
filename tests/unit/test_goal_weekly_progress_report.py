@@ -341,7 +341,7 @@ async def test_owner_question_busy_pair_releases_only_item_claim_and_retries(mon
             db.execute('DELETE FROM claims WHERE goal=? AND subject=? AND event=?', args)
 
     relay = AsyncMock(side_effect=[
-        {'sent': False, 'error': 'already_in_flight', 'active_relay_id': 'other-relay'},
+        {'sent': False, 'error': 'pair_queue_full'},
         {'sent': True, 'queued': True, 'relay_id': 'relay-2'},
     ])
     monkeypatch.setattr(session_relay, 'ask', relay)
@@ -351,10 +351,10 @@ async def test_owner_question_busy_pair_releases_only_item_claim_and_retries(mon
     milestone = _milestone(id='m2')
 
     first = await goal_report._weekly_owner_question(conn, goal, milestone)
-    assert '진행 중' in first and '보류' in first
+    assert '전달 실패' in first and 'pair_queue_full' in first
     assert db.execute('SELECT count(*) FROM claims').fetchone()[0] == 0
     second = await goal_report._weekly_owner_question(conn, goal, milestone)
-    assert '접수' in second
+    assert '대기열 등록' in second
     assert db.execute('SELECT count(*) FROM claims').fetchone()[0] == 1
     assert all(call.kwargs['question'].startswith(f'GOAL_ID: {goal_id}\n') for call in relay.await_args_list)
     db.close()

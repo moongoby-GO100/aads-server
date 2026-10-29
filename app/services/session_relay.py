@@ -24,6 +24,7 @@ resume 자동 재시도가 시간당 1,256회까지 간 것이 같은 종류의 
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import os
 import re
 import uuid
@@ -292,13 +293,29 @@ async def _target_is_busy(target_session_id: str) -> bool:
         return False
 
 
-async def _pair_in_flight(origin: str, target: str) -> bool:
+@asynccontextmanager
+async def _pair_guard(pool: Any, origin: str, target: str):
+    """등록과 배달을 같은 무방향 쌍의 DB 트랜잭션으로 직렬화한다."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            key = ":".join(sorted((origin, target)))
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", key)
+            yield conn
+
+
+_PAIR_QUEUE_LIMIT = 5
+# 고아 회수는 6시간 초과 pending 을 건드리지 않는다. 오래된 잔존 행이 새
+# 질문과 배달을 영구히 막지 않도록 등록과 drainer 모두 기존 2시간 창을 쓴다.
+_PAIR_RECENT_SQL = "created_at > now() - interval '2 hours'"
+
+
+async def _pair_in_flight(origin: str, target: str, conn: Any = None) -> bool:
     from app.core.db_pool import get_pool
 
     try:
-        n = await get_pool().fetchval(
+        n = await (conn if conn is not None else get_pool()).fetchval(
             "SELECT count(*) FROM session_relay "
-            "WHERE status IN ('pending', 'queued') AND created_at > now() - interval '2 hours' "
+            "WHERE status IN ('pending', 'queued') AND " + _PAIR_RECENT_SQL + " "
             "AND ((origin_session_id = $1::uuid AND target_session_id = $2::uuid) "
             "  OR (origin_session_id = $2::uuid AND target_session_id = $1::uuid))",
             origin, target,
@@ -717,60 +734,83 @@ async def ask(origin_session_id: str, target: str, question: str,
     if tgt["id"] == origin_session_id:
         return {"sent": False, "error": "self_target", "message": "자기 자신에게는 물을 수 없습니다."}
 
-    if await _pair_in_flight(origin_session_id, tgt["id"]):
-        return {"sent": False, "error": "already_in_flight",
-                "message": f"{tgt.get('role_key') or tgt['title']} 와(과) 이미 주고받는 중입니다. 답을 기다리세요."}
     goal_id = await _relay_goal(origin_session_id, tgt["id"], question)
-    # 바쁘면 **반려하지 않고 대기열에 넣는다.**
-    #
-    # 2026-09-17 대표님 "목표 마일스톤에 접근이 안된다고 세션들에서 보고가
-    # 오는데". 실측: session_relay 123건 중 회신 8건(6.5%). 세션 d19a0e9e 는
-    # 목표관리자에게 두 번 보내 두 번 다 target_busy 로 반려됐고 "마일스톤
-    # 문제는 아직 전달되지 않았습니다" 로 끝났다.
-    #
-    # 반려가 오탐이어서가 아니다 — 그 순간 running 9건 전부 리스가 살아 있는
-    # 진짜 작업 중이었다. 문제는 **오래 일하는 세션에는 영영 못 닿는다**는
-    # 것이다. 목표관리자 36분, #119 전략관리자 52분째였고, 그 사이 도착한
-    # 질문은 전부 버려졌다.
-    #
-    # 끼어들지 않는다는 원래 판단은 그대로 지킨다(진행 중 응답이 깨진다).
-    # 지금 보내지 않을 뿐, 끝나면 보낸다.
-    if await _target_is_busy(tgt["id"]) or await _relay_paused(goal_id, "new"):
-        queued_id = str(uuid.uuid4())
-        await pool.execute(
-            "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
-            "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued', $6::uuid)",
-            queued_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
+    target_busy = await _target_is_busy(tgt["id"])
+    goal_paused = await _relay_paused(goal_id, "new")
+    async with _pair_guard(pool, origin_session_id, tgt["id"]) as conn:
+        pair_busy = await _pair_in_flight(origin_session_id, tgt["id"], conn)
+        duplicate = await conn.fetchval(
+            "SELECT count(*) FROM session_relay WHERE status IN ('pending', 'queued') "
+            "AND ((origin_session_id=$1::uuid AND target_session_id=$2::uuid) "
+            "OR (origin_session_id=$2::uuid AND target_session_id=$1::uuid)) "
+            "AND " + _PAIR_RECENT_SQL + " AND md5(question) = md5($3)",
+            origin_session_id, tgt["id"], question[:2000],
         )
-        logger.info("session_relay_queued relay=%s origin=%s target=%s hop=%d basis=%s",
-                    queued_id[:8], origin_session_id[:8], tgt["id"][:8], hop, hop_basis)
-        return {
-            "sent": True,
-            "queued": True,
-            "relay_id": queued_id,
-            "target_session": tgt["id"],
-            "target_role": tgt.get("role_key") or tgt["title"],
-            "hop": hop,
-            "message": f"{tgt.get('role_key') or tgt['title']} 가 지금 다른 작업 중이라 "
-                       "대기열에 넣었습니다. 그 작업이 끝나면 자동으로 전달되고 답은 이 "
-                       "대화에 들어옵니다 — 기다리지 말고 다른 일을 계속하세요.",
-        }
+        if duplicate:
+            return {"sent": False, "error": "duplicate_question",
+                    "message": "같은 질문이 이미 진행 중이거나 대기열에 있습니다."}
+        queued_count = await conn.fetchval(
+            "SELECT count(*) FROM session_relay WHERE status='queued' "
+            "AND ((origin_session_id=$1::uuid AND target_session_id=$2::uuid) "
+            "OR (origin_session_id=$2::uuid AND target_session_id=$1::uuid))",
+            origin_session_id, tgt["id"],
+        )
+        if (queued_count or 0) >= _PAIR_QUEUE_LIMIT:
+            return {"sent": False, "error": "pair_queue_full",
+                    "message": f"같은 담당과의 추가지시 대기열은 {_PAIR_QUEUE_LIMIT}건까지입니다."}
+        # 바쁘면 **반려하지 않고 대기열에 넣는다.**
+        #
+        # 2026-09-17 대표님 "목표 마일스톤에 접근이 안된다고 세션들에서 보고가
+        # 오는데". 실측: session_relay 123건 중 회신 8건(6.5%). 세션 d19a0e9e 는
+        # 목표관리자에게 두 번 보내 두 번 다 target_busy 로 반려됐고 "마일스톤
+        # 문제는 아직 전달되지 않았습니다" 로 끝났다.
+        #
+        # 반려가 오탐이어서가 아니다 — 그 순간 running 9건 전부 리스가 살아 있는
+        # 진짜 작업 중이었다. 문제는 **오래 일하는 세션에는 영영 못 닿는다**는
+        # 것이다. 목표관리자 36분, #119 전략관리자 52분째였고, 그 사이 도착한
+        # 질문은 전부 버려졌다.
+        #
+        # 끼어들지 않는다는 원래 판단은 그대로 지킨다(진행 중 응답이 깨진다).
+        # 지금 보내지 않을 뿐, 끝나면 보낸다.
+        if pair_busy or target_busy or goal_paused:
+            queued_id = str(uuid.uuid4())
+            await conn.execute(
+                "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
+                "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued', $6::uuid)",
+                queued_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
+            )
+            logger.info("session_relay_queued relay=%s origin=%s target=%s hop=%d basis=%s",
+                        queued_id[:8], origin_session_id[:8], tgt["id"][:8], hop, hop_basis)
+            return {
+                "sent": True,
+                "queued": True,
+                "reason": "pair_in_flight" if pair_busy else "target_busy_or_goal_paused",
+                "relay_id": queued_id,
+                "target_session": tgt["id"],
+                "target_role": tgt.get("role_key") or tgt["title"],
+                "hop": hop,
+                "message": (f"{tgt.get('role_key') or tgt['title']} 와 이미 주고받는 중이라 "
+                            "추가지시로 대기열에 넣었습니다. 진행 중인 대화가 끝나면 자동으로 전달됩니다."
+                            if pair_busy else f"{tgt.get('role_key') or tgt['title']} 가 지금 다른 작업 중이라 "
+                           "대기열에 넣었습니다. 그 작업이 끝나면 자동으로 전달되고 답은 이 "
+                           "대화에 들어옵니다 — 기다리지 말고 다른 일을 계속하세요."),
+            }
 
-    origin = await pool.fetchrow(
-        "SELECT title, coalesce(role_key,'') AS role_key FROM chat_sessions WHERE id = $1::uuid",
-        origin_session_id,
-    )
-    relay_id = str(uuid.uuid4())
-    prompt = _build_question(
-        origin["title"] if origin else "", origin["role_key"] if origin else "",
-        origin_session_id, tgt.get("role_key") or "", question, context, relay_id,
-    )
+        origin = await conn.fetchrow(
+            "SELECT title, coalesce(role_key,'') AS role_key FROM chat_sessions WHERE id = $1::uuid",
+            origin_session_id,
+        )
+        relay_id = str(uuid.uuid4())
+        prompt = _build_question(
+            origin["title"] if origin else "", origin["role_key"] if origin else "",
+            origin_session_id, tgt.get("role_key") or "", question, context, relay_id,
+        )
 
-    await pool.execute(
-        "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
-        "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'pending', $6::uuid)",
-        relay_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
-    )
+        await conn.execute(
+            "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
+            "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'pending', $6::uuid)",
+            relay_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
+        )
 
     task = asyncio.create_task(
         _run_relay(relay_id, tgt["id"], prompt, origin_session_id, question, goal_id)
@@ -1094,7 +1134,7 @@ async def dispatch_queued_relays() -> Dict[str, int]:
          WHERE status = 'queued'
            AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = session_relay.goal_id
                            AND g.paused_at IS NOT NULL)
-         ORDER BY target_session_id, created_at ASC
+         ORDER BY target_session_id, created_at ASC, id ASC
          LIMIT $1
         """,
         _RELAY_QUEUE_BATCH,
@@ -1102,13 +1142,24 @@ async def dispatch_queued_relays() -> Dict[str, int]:
     for r in rows:
         if await _target_is_busy(r["target"]):
             continue
-        # 'queued' 인 동안만 집는다. 두 프로세스가 같이 돌아도 한 번만 나간다.
-        claimed = await pool.execute(
-            "UPDATE session_relay SET status='pending' WHERE id=$1::uuid AND status='queued'",
-            r["id"],
-        )
-        if str(claimed).split()[-1] != "1":
-            continue
+        async with _pair_guard(pool, r["origin"], r["target"]) as conn:
+            # ask 와 같은 2시간 창의 pending 만 보호한다. 반대 방향도 같은 쌍이다.
+            blocked = await conn.fetchval(
+                "SELECT count(*) FROM session_relay WHERE "
+                "((origin_session_id=$1::uuid AND target_session_id=$2::uuid) "
+                "OR (origin_session_id=$2::uuid AND target_session_id=$1::uuid)) "
+                "AND ((status='pending' AND " + _PAIR_RECENT_SQL + ") OR (status='queued' AND "
+                "(created_at, id) < (SELECT created_at, id FROM session_relay WHERE id=$3::uuid)))",
+                r["origin"], r["target"], r["id"],
+            )
+            if blocked:
+                continue
+            claimed = await conn.execute(
+                "UPDATE session_relay SET status='pending' WHERE id=$1::uuid AND status='queued'",
+                r["id"],
+            )
+            if str(claimed).split()[-1] != "1":
+                continue
 
         origin = await pool.fetchrow(
             "SELECT title, coalesce(role_key,'') AS role_key FROM chat_sessions WHERE id = $1::uuid",
