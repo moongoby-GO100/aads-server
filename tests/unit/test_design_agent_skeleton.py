@@ -19,6 +19,7 @@ class Connection:
         self.execute = AsyncMock()
         self.fetchval = AsyncMock(return_value='row-id')
         self.fetchrow = AsyncMock()
+        self.fetch = AsyncMock(return_value=[{'skill_name': 'design-critique'}])
 
     def transaction(self):
         return self
@@ -164,7 +165,7 @@ async def test_budget_and_duplicate(duplicate, cost, expected):
 async def test_runner_records_terminal_run(monkeypatch, blocked):
     conn = Connection()
     conn.fetchrow.return_value = dict(id='trigger', event_type='manual',
-                                     project_key='p', payload={'a': 1})
+                                     project_key='p', payload={'a': 1, 'situation': 'S8'})
     monkeypatch.setattr(runner, 'check_run', AsyncMock(return_value=blocked))
     handler = AsyncMock()
     monkeypatch.setitem(runner.HANDLERS, 'manual', handler)
@@ -179,7 +180,7 @@ async def test_runner_records_terminal_run(monkeypatch, blocked):
 @pytest.mark.asyncio
 async def test_handler_denial_retained_in_run(monkeypatch):
     conn = Connection()
-    conn.fetchrow.return_value = dict(id='trigger', event_type='manual', project_key='p', payload={})
+    conn.fetchrow.return_value = dict(id='trigger', event_type='manual', project_key='p', payload={'situation': 'S8'})
     monkeypatch.setattr(runner, 'check_run', AsyncMock(return_value=None))
 
     async def denied(trigger, writer, budget):
@@ -223,7 +224,7 @@ def test_migration_static_contract():
 async def test_runner_real_budget_gate(monkeypatch, duplicate, cost, expected):
     conn = Connection()
     conn.fetchrow.return_value = dict(id='trigger', event_type='manual',
-                                     project_key='p', payload='{"a":1}')
+                                     project_key='p', payload='{"a":1,"situation":"S8"}')
     conn.fetchval.side_effect = ([True, 'run'] if duplicate else
                                 [False, Decimal(cost), 'run'])
     handler = AsyncMock()
@@ -246,7 +247,7 @@ async def test_no_queued_trigger_creates_no_run():
 @pytest.mark.asyncio
 async def test_runner_budget_exception_records_call_count(monkeypatch):
     conn = Connection()
-    conn.fetchrow.return_value = dict(id='trigger', event_type='manual', project_key='p', payload={})
+    conn.fetchrow.return_value = dict(id='trigger', event_type='manual', project_key='p', payload={'situation': 'S8'})
     monkeypatch.setattr(runner, 'check_run', AsyncMock(return_value=None))
 
     async def over_limit(trigger, writer, budget):

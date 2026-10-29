@@ -5,6 +5,7 @@ import json
 from .budget import BudgetExceeded, RunBudget, check_run
 from .config import Config
 from .queue import claim_next, mark_done, mark_failed
+from .skills import load_skill, required_skills, resolve_situation
 from .writer import DesignAgentWriter
 
 
@@ -45,9 +46,21 @@ async def process_one(pool, tenant_id, config=None):
             budget = RunBudget(config.max_llm_calls)
             error = None
             if not status:
+                writer = DesignAgentWriter(conn, tenant_id, trigger['project_key'], run_id)
                 try:
+                    situation = resolve_situation(handler, payload)
+                    names = await required_skills(conn, situation)
+                    loaded, failures = [], []
+                    for name in names:
+                        try:
+                            loaded.append(load_skill(name))
+                        except ValueError as exc:
+                            failures.append(str(exc))
+                    if failures:
+                        raise ValueError('; '.join(failures))
+                    await conn.execute("""UPDATE design_agent_runs SET skills_loaded=$3::jsonb
+                        WHERE id=$1 AND tenant_id=$2""", run_id, tenant_id, json.dumps(loaded))
                     # Roll back handler writes on failure while retaining the run audit.
-                    writer = DesignAgentWriter(conn, tenant_id, trigger['project_key'], run_id)
                     async with conn.transaction():
                         await HANDLERS[handler](trigger, writer, budget)
                     status = 'succeeded'
