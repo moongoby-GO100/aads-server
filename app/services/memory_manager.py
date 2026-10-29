@@ -81,6 +81,9 @@ class MemoryManager:
     Layer 1(Session Buffer), Layer 3(CKP)는 기존 시스템 유지.
     """
 
+    # Process-local counter; the singleton accumulates automatic summary failures.
+    auto_summarize_failures: int = 0
+
     # ── Layer 2: Working Memory ──────────────────────────────────────────────
 
     async def save_session_note(
@@ -100,6 +103,10 @@ class MemoryManager:
             summary, key_decisions, action_items, unresolved_issues = await self._auto_summarize(
                 messages, key_decisions, action_items, unresolved_issues
             )
+
+        if not summary:
+            # Automatic summarization failed: never persist a question as auto_save.
+            return SessionNote(session_id=session_id)
 
         # 언급된 프로젝트 추출
         projects = _extract_projects(messages)
@@ -591,9 +598,6 @@ class MemoryManager:
         unresolved_issues: Optional[List[str]],
     ) -> tuple[str, List[str], List[str], List[str]]:
         """Claude Haiku로 대화 요약 (~$0.001)."""
-        if not messages:
-            return "빈 세션", key_decisions or [], action_items or [], unresolved_issues or []
-
         # 최근 15개 메시지로 제한
         recent = messages[-15:]
         dialog = "\n".join(
@@ -602,6 +606,8 @@ class MemoryManager:
         )
 
         try:
+            if not messages:
+                raise ValueError("empty_messages")
             from app.core.anthropic_client import call_llm_with_fallback
             _system = (
                 "대화를 분석하여 JSON으로 요약하라. "
@@ -615,27 +621,43 @@ class MemoryManager:
                 f"대화:\n{dialog}", model="qwen-turbo",
                 max_tokens=400, system=_system,
             )
-            if not raw_text:
-                raise RuntimeError("all LLM failed")
+            if not isinstance(raw_text, str) or not raw_text.strip():
+                raise ValueError("empty_response")
 
+            # raw_decode accepts trailing prose; locating the first object also
+            # accepts markdown fences and explanatory text without logging content.
             raw = raw_text.strip()
-            if raw.startswith("{"):
-                parsed = json.loads(raw)
-                return (
-                    parsed.get("summary", "세션 요약"),
-                    parsed.get("key_decisions", []),
-                    parsed.get("action_items", []),
-                    parsed.get("unresolved_issues", []),
-                )
-        except Exception as e:
-            logger.warning(f"memory_manager auto_summarize haiku error: {e}")
-
-        # 폴백: 마지막 사용자 메시지 첫 줄
-        last_user = next(
-            (m for m in reversed(messages) if m.get("role") == "user"), None
-        )
-        summary = str(last_user.get("content", ""))[:100] if last_user else "세션 요약"
-        return summary, [], [], []
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1].strip()
+                if raw.endswith("```"):
+                    raw = raw[:-3].rstrip()
+            start = raw.find("{")
+            if start < 0:
+                raise ValueError("missing_json_object")
+            parsed, _ = json.JSONDecoder().raw_decode(raw[start:])
+            summary = parsed.get("summary")
+            if not isinstance(summary, str) or len(summary.strip()) < 10:
+                raise ValueError("invalid_summary")
+            summary = summary.strip()
+            last_user = next(
+                (m for m in reversed(messages) if m.get("role") == "user"), None
+            )
+            if last_user and summary == str(last_user.get("content", ""))[:100].strip():
+                raise ValueError("question_echo")
+            lists = [parsed.get(key, []) for key in (
+                "key_decisions", "action_items", "unresolved_issues"
+            )]
+            if any(not isinstance(items, list) or
+                   any(not isinstance(item, str) for item in items) for items in lists):
+                raise ValueError("invalid_summary_lists")
+            return summary, *lists
+        except Exception as exc:
+            self.auto_summarize_failures += 1
+            logger.warning(
+                "memory_manager auto_summarize failed: error_type=%s failures=%d; save skipped",
+                type(exc).__name__, self.auto_summarize_failures,
+            )
+            return "", [], [], []
 
 
 # ─── 헬퍼 ─────────────────────────────────────────────────────────────────────
