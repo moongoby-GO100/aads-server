@@ -19,6 +19,9 @@ from app.services.release_evidence import is_certified_deploy_row
 logger = logging.getLogger(__name__)
 # 계보당 "실제 실행" 상한. 제안(후보) 개수는 이 한도를 쓰지 않는다. 환경변수로 2 를 넘길 수 없다.
 _MAX_RETRY = min(2, max(0, int(os.getenv("GOAL_FAILED_LINK_RETRY_MAX", "2"))))
+# 계보 표식 없는 세션 제출도 포함하는 마일스톤 실패 작업 상한(최근 24시간).
+_MILESTONE_FAILURE_MAX = max(1, int(os.getenv("GOAL_FAILED_LINK_MILESTONE_MAX", "4")))
+_SESSION_DIRECT_MARKER = "세션 직접 수행"
 _RETRY_MARKER = re.compile(r"^RETRY_OF_LINK: (\S+)$", re.MULTILINE)
 # 장부 함수(charge_goal_retry_execution)와 같은 줄 단위 규칙이다. 본문 중간의 언급은 잡지 않는다.
 _RETRY_LINK_LINE = re.compile(r"^RETRY_OF_LINK: (\S+)[ \t\r]*$", re.MULTILINE)
@@ -388,7 +391,7 @@ async def ensure_retry_candidate(
             row = await conn.fetchrow(
                 """SELECT m.title, m.evidence, m.owner_session_id::text AS milestone_owner,
                           g.owner_session_id::text AS goal_owner, m.owner_role_key,
-                          m.status AS milestone_status,
+                          m.status AS milestone_status, m.dispatch_note,
                           g.tenant_id::text AS tenant_id
                    FROM milestones m JOIN goals g ON g.id = m.goal_id
                    WHERE m.id = $1::uuid AND g.id = $2::uuid
@@ -398,6 +401,37 @@ async def ensure_retry_candidate(
             if not row:
                 return {"created": False, "why": "milestone_not_found"}
             tenant_id = row["tenant_id"]
+            # 계보 검사/후보 예약과 같은 행 잠금 안에서 검사한다. 승계된 실패도
+            # 최근 실패 총량에 포함해 계보/승계 표식 변경으로 예산이 되살아나지 않게 한다.
+            note = row.get("dispatch_note") or ""
+            stop_reason = None
+            failures = None
+            if _SESSION_DIRECT_MARKER in note:
+                stop_reason = "session_direct_execution"
+                review_note = "자동 재작업 중단 — 세션 직접 수행 지정, 사람 확인 필요"
+            else:
+                failures = int(await conn.fetchval(
+                    """SELECT count(DISTINCT l.task_id)
+                       FROM goal_task_links l
+                       JOIN pipeline_jobs p ON p.job_id = l.task_id AND p.tenant_id = l.tenant_id
+                       WHERE l.milestone_id = $1::uuid AND l.tenant_id = $2::uuid
+                         AND l.task_type = 'pipeline_job' AND l.status = 'failed'
+                         AND COALESCE(p.completed_at, p.updated_at, p.created_at)
+                             >= NOW() - INTERVAL '24 hours'""",
+                    milestone_id, tenant_id,
+                ) or 0)
+                if failures >= _MILESTONE_FAILURE_MAX:
+                    stop_reason = "milestone_failure_limit"
+                    review_note = (f"자동 재작업 중단 — 최근 24시간 실패 작업 "
+                                   f"{failures}/{_MILESTONE_FAILURE_MAX}건, 사람 확인 필요")
+            if stop_reason:
+                if review_note not in note:
+                    await conn.execute(
+                        "UPDATE milestones SET dispatch_note = $2, updated_at = NOW() "
+                        "WHERE id = $1::uuid AND tenant_id = $3::uuid",
+                        milestone_id, f"{note}\n{review_note}".strip(), tenant_id,
+                    )
+                return {"created": False, "why": stop_reason, "failures": failures}
             evidence = _evidence(row["evidence"])
             candidates = evidence.get("retry_candidates", [])
             now = datetime.now(UTC)

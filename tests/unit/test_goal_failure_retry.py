@@ -41,6 +41,7 @@ class FakeConn:
         self.successors = []
         self.job_instructions = {}
         self.executions = {}
+        self.recent_failures = []
 
     def is_in_transaction(self):
         return self.outer_transaction
@@ -100,7 +101,8 @@ class FakeConn:
                 "title": "실패 마일스톤", "evidence": self.evidence,
                 "milestone_owner": self.owner, "goal_owner": None,
                 "owner_role_key": "builder" if self.role_session else None,
-                "tenant_id": GOAL_ID,
+                "tenant_id": GOAL_ID, "dispatch_note": self.dispatch_note,
+                "milestone_status": self.milestone_status,
             }
         if "SELECT evidence FROM milestones" in query:
             return {"evidence": self.evidence}
@@ -119,6 +121,14 @@ class FakeConn:
         raise AssertionError(query)
 
     async def fetchval(self, query, *args):
+        if "count(DISTINCT l.task_id)" in query:
+            assert args == (MILESTONE_ID, GOAL_ID)
+            assert "p.tenant_id = l.tenant_id" in query
+            assert "l.status = 'failed'" in query
+            assert "COALESCE(p.completed_at, p.updated_at, p.created_at)" in query
+            assert "INTERVAL '24 hours'" in query
+            return len({job for job, at in self.recent_failures
+                        if at >= datetime.now(UTC) - timedelta(hours=24)})
         if "FROM goal_retry_executions" in query:
             return self.executions.get(args[2], 0)
         if "FROM chat_sessions WHERE role_key" in query:
@@ -724,3 +734,66 @@ def test_outer_transaction_and_missing_goal_do_not_propose(harness, monkeypatch)
     conn.outer_transaction = False
     assert asyncio.run(ensure_retry_candidate(conn, **{**args, "goal_id": ""}))["why"] == "missing_goal_id"
     assert conn.evidence == {}
+
+
+@pytest.mark.parametrize("count,created", [(3, True), (4, False), (8, False)])
+def test_milestone_failure_limit_across_independent_lineages(harness, monkeypatch, count, created):
+    from app.services import goal_failure_retry as retry
+    monkeypatch.setattr(retry, "_MILESTONE_FAILURE_MAX", 4)
+    conn, _ = harness
+    conn.recent_failures = [(f"independent-{i}", datetime.now(UTC)) for i in range(count)]
+    conn.dispatch_note = "기존 사유"
+    proposed = []
+    async def propose(**kwargs):
+        proposed.append(kwargs)
+        return {"cards": [{"id": "card-new"}]}
+    monkeypatch.setattr(next_step_proposals, "propose", propose)
+    for task in ("new-lineage-1", "new-lineage-2"):
+        result = asyncio.run(ensure_retry_candidate(
+            conn, milestone_id=MILESTONE_ID, goal_id=GOAL_ID,
+            failed_task_id=task, reason="linked_task_failed",
+        ))
+        assert result["created"] is created
+    assert len(proposed) == (2 if created else 0)
+    if not created:
+        assert result["why"] == "milestone_failure_limit"
+        assert conn.evidence == {}
+        assert conn.dispatch_note.startswith("기존 사유")
+        assert "사람 확인 필요" in conn.dispatch_note
+        assert conn.dispatch_note.count("자동 재작업 중단") == 1
+
+
+@pytest.mark.parametrize("note,blocked", [("세션 직접 수행", True),
+    ("담당: 세션 직접 수행\n기존 사유", True), ("세션이 직접 처리할 수도 있음", False)])
+def test_explicit_session_direct_marker(harness, monkeypatch, note, blocked):
+    conn, _ = harness
+    conn.dispatch_note = note
+    proposed = []
+    async def propose(**kwargs):
+        proposed.append(kwargs)
+        return {"cards": [{"id": "card-new"}]}
+    monkeypatch.setattr(next_step_proposals, "propose", propose)
+    result = asyncio.run(ensure_retry_candidate(
+        conn, milestone_id=MILESTONE_ID, goal_id=GOAL_ID,
+        failed_task_id="job-1", reason="linked_task_failed",
+    ))
+    assert result["created"] is not blocked
+    assert len(proposed) == (0 if blocked else 1)
+    if blocked:
+        assert result["why"] == "session_direct_execution"
+        assert conn.evidence == {}
+        assert conn.dispatch_note.startswith(note)
+        assert "사람 확인 필요" in conn.dispatch_note
+
+
+def test_old_and_duplicate_failures_do_not_exhaust_milestone(harness, monkeypatch):
+    conn, _ = harness
+    conn.recent_failures = [("old", datetime.now(UTC) - timedelta(hours=25))] * 8
+    conn.recent_failures += [("same", datetime.now(UTC))] * 8
+    async def propose(**_kwargs):
+        return {"cards": [{"id": "card-new"}]}
+    monkeypatch.setattr(next_step_proposals, "propose", propose)
+    assert asyncio.run(ensure_retry_candidate(
+        conn, milestone_id=MILESTONE_ID, goal_id=GOAL_ID,
+        failed_task_id="new", reason="linked_task_failed",
+    ))["created"]
