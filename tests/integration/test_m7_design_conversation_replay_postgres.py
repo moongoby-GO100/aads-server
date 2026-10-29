@@ -49,7 +49,7 @@ async def database(monkeypatch):
                            workspace, tenant)
         await conn.execute("INSERT INTO chat_sessions(id,tenant_id,workspace_id,title) VALUES($1,$2,$3,'설계 재현')",
                            session, tenant, workspace)
-        await conn.execute("INSERT INTO goals(id,tenant_id,title) VALUES($1,$2,'설계 목표')", goal, tenant)
+        await conn.execute("INSERT INTO goals(id,tenant_id,title,owner_role_key,owner_session_id) VALUES($1,$2,'설계 목표','CTO',$3)", goal, tenant, session)
         await conn.execute("INSERT INTO milestones(id,tenant_id,goal_id,title) VALUES($1,$2,$3,'설계 단계')",
                            uuid.uuid4(), tenant, goal)
         for turn in CORPUS['turns']:
@@ -156,7 +156,7 @@ async def exercise(monkeypatch, scenario):
             foreign_tenant, foreign_goal = uuid.uuid4(), uuid.uuid4()
             await conn.execute("INSERT INTO tenants(id,slug,name) VALUES($1,$2,'외부')", foreign_tenant, 'm7-replay-' + foreign_tenant.hex)
             owned_tenants.append(foreign_tenant)
-            await conn.execute("INSERT INTO goals(id,tenant_id,title) VALUES($1,$2,'외부 목표')", foreign_goal, foreign_tenant)
+            await conn.execute("INSERT INTO goals(id,tenant_id,title,owner_role_key,owner_session_id) VALUES($1,$2,'외부 목표','CTO',$3)", foreign_goal, foreign_tenant, session)
             with pytest.raises(service.GoalBindingError):
                 await service.create_draft(**{**args, 'goal_id': str(foreign_goal)})
             other_session, other_message = uuid.uuid4(), uuid.uuid4()
@@ -166,7 +166,7 @@ async def exercise(monkeypatch, scenario):
             with pytest.raises(ValueError):
                 await service.create_draft(**{**args, 'message_ids': [str(other_message)]})
             other = uuid.uuid4()
-            await conn.execute("INSERT INTO goals(id,tenant_id,title) VALUES($1,$2,'다른 목표')", other, tenant)
+            await conn.execute("INSERT INTO goals(id,tenant_id,title,owner_role_key,owner_session_id) VALUES($1,$2,'다른 목표','CTO',$3)", other, tenant, session)
             with pytest.raises(service.GoalBindingError):
                 await service.create_draft(**{**args, 'goal_id': str(other)})
             with pytest.raises(service.GoalBindingError):
