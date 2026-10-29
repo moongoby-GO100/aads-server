@@ -614,3 +614,94 @@ def test_persisted_site_block_routes_next_execution_to_human(monkeypatch):
         second_submit.assert_not_awaited()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("case,clicks", [
+    ("success", 1), ("unresponsive", 1), ("blocked", 0),
+    ("server", 0), ("limited", 0), ("unresolved", 0),
+    ("focus_failed", 0), ("click_failed", 1),
+])
+def test_native_single_click_and_human_fallback(case, clicks):
+    events = []
+    page = AsyncMock()
+    state = {"url": 1, "requests": 1, "navigation": 1,
+             "blocked": "captcha_required" if case == "blocked" else ""}
+    authenticated = False
+
+    async def evaluate(script, *args):
+        if script == PROBE:
+            return state
+        if script == human_login.SUCCESS_PROBE:
+            return authenticated
+        events.append("coordinate")
+        return {"resolved": "0"} if case == "unresolved" else {"resolved": "1", "x": "20", "y": "30"}
+
+    async def command(name, args, **kwargs):
+        nonlocal authenticated
+        events.append(name)
+        if (case, name) in {("focus_failed", "window_focus"), ("click_failed", "mouse_click")}:
+            raise RuntimeError("PC command failed")
+        if name == "mouse_click":
+            assert args == {"x": 20, "y": 30, "button": "left", "clicks": 1}
+            authenticated = case == "success"
+
+    async def wait(payload, reason):
+        nonlocal authenticated
+        authenticated = True
+        assert reason in {"human_submit_required", "captcha_required"}
+        return {"id": "task"}
+
+    page.evaluate.side_effect = evaluate
+    page._run_browser_command.side_effect = command
+    page.title.return_value = "Login"
+    store = AsyncMock()
+    store.access.side_effect = lambda **kw: case == "limited" and kw.get("reserve", False)
+    executor = AsyncMock(return_value={"ok": True})
+    wrapper = HumanLoginExecutor(
+        executor, SimpleNamespace(login_page=page, login_lane=lambda p: "server" if case == "server" else "pc"),
+        contract(submit_mode="pc_native_click", submit_observation_seconds=0), store,
+        AsyncMock(side_effect=wait), AsyncMock(),
+    )
+
+    async def run():
+        result = await wrapper({"phase": "step", "seq": 3, "selector": "#submit"})
+        if case == "server":
+            assert result["error"] == "pc_native_click_requires_pc_lane"
+        elif case == "blocked":
+            assert result["error"] == "captcha_required"
+        else:
+            assert result["ok"]
+            expected = {"success": "pc_native_click_submitted", "unresponsive": "pc_native_click_failed_fallback_human",
+                        "unresolved": "pc_native_click_coordinate_unresolved"}.get(case)
+            if expected:
+                assert result["output"]["submit_status"] == expected
+            await wrapper({"phase": "step", "seq": 4})
+            executor.assert_awaited_once()
+    asyncio.run(run())
+    assert events.count("mouse_click") == clicks
+    if case == "focus_failed":
+        assert events == ["coordinate", "window_focus"]
+    if clicks:
+        assert events == ["coordinate", "window_focus", "mouse_click"]
+        assert any(c.kwargs.get("reserve") for c in store.access.await_args_list)
+
+
+def test_native_contract_normalization():
+    assert normalize_login_contract(contract())["submit_mode"] == "browser"
+    assert normalize_login_contract(contract(submit_mode="pc_native_click"))["submit_mode"] == "pc_native_click"
+    assert normalize_login_contract(contract(submit_mode="pc_native_click", human_submit_required=True))["submit_mode"] == "human"
+    with pytest.raises(ValueError, match="login_submit_mode_invalid"):
+        normalize_login_contract(contract(submit_mode="other"))
+
+
+def test_bank_native_click_regression(monkeypatch):
+    from app.services import yeoljeong_bank_browser_connector as bank
+    page = AsyncMock()
+    monkeypatch.setattr(bank, "_evaluate_page", AsyncMock(return_value={"resolved": "1", "x": "10", "y": "20"}))
+    monkeypatch.setattr(bank, "_try_pc_agent_keyboard_type", AsyncMock(return_value=True))
+    result = asyncio.run(bank._try_pc_agent_click_and_type(page, "#field", "test-value"))
+    assert result == {"attempted": "1", "coordinate_resolved": "1", "window_focused": "1",
+                      "mouse_clicked": "1", "field_cleared": "1", "typed": "1"}
+    assert [c.args[0] for c in page._run_browser_command.await_args_list] == [
+        "window_focus", "mouse_click", "keyboard_hotkey", "keyboard_press"]
+    assert page._run_browser_command.await_args_list[0].args[1] == {"title": "간편조회서비스"}

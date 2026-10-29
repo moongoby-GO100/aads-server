@@ -341,3 +341,25 @@ async def test_run_directive_persists_last_completed_checkpoint(monkeypatch, com
     intent = ChannelRouter().route_directive(envelope, capability='recipe.execute')
     await o.run_directive('login', 'tenant', action_intent=intent)
     assert saved[0]['checkpoint'] == recovery['checkpoint'] == expected
+
+
+@pytest.mark.parametrize("mode", [None, "browser", "pc_native_click", "human"])
+@pytest.mark.parametrize("human_required", [False, True])
+def test_normalize_login_contract_is_idempotent(mode, human_required):
+    raw = contract()
+    if mode is not None:
+        raw["submit_mode"] = mode
+    if human_required:
+        raw["human_submit_required"] = True
+    if mode in {"pc_native_click", "human"} or human_required:
+        raw.update(submit_step=3, succeeds_when=[
+            {"kind": "url_equals", "value": "https://example.com/home"}
+        ])
+    normalized = normalize_login_contract(raw)
+    assert normalize_login_contract(normalized) == normalized
+
+
+@pytest.mark.parametrize("mode", ["pc_native_click", "human"])
+def test_explicit_submit_mode_requires_submit_step(mode):
+    with pytest.raises(ValueError, match="login_submit_step_required"):
+        normalize_login_contract({**contract(), "submit_mode": mode})

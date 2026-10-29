@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 
+from app.services.pc_native_click import element_click_point, click_point
 from app.core.db_pool import get_pool
 from app.services.error_book import record_candidate
 
@@ -122,6 +123,10 @@ def validate_login_steps(recipe, contract):
     submit_seq = contract["submit_step"]
     if not any(s.seq == submit_seq and s.action in {"click", "press"} for s in recipe.steps):
         raise ValueError("login_submit_step_invalid")
+    if contract.get("submit_mode") == "pc_native_click" and not any(
+        s.seq == submit_seq and s.action == "click" and s.selector for s in recipe.steps
+    ):
+        raise ValueError("login_native_submit_selector_required")
     allowed = {"navigate", "fill", "wait", "assert"}
     if any(s.action not in allowed for s in recipe.steps if s.seq < submit_seq):
         raise ValueError("login_prefix_must_not_submit")
@@ -216,20 +221,43 @@ class HumanLoginExecutor:
                 if observed["blocked"]:
                     return await self.stop(payload, observed["blocked"])
             return result
+        native = self.contract.get("submit_mode") == "pc_native_click" and not self.contract.get("human_submit_required")
+        if native and self.browser.login_lane(payload) != "pc":
+            return self.blocked("pc_native_click_requires_pc_lane")
+        native_status = None
         before = await self.observe(page)
         if before["blocked"]:
             return await self.stop(payload, before["blocked"])
-        human = self.contract.get("human_submit_required", False) or await self.policy()
+        human = (self.contract.get("human_submit_required", False)
+                 or self.contract.get("submit_mode") == "human" or await self.policy())
         if not human and await self.policy(reserve=True):
-            await self.wait(payload, "daily_login_submit_limit")
-            return self.blocked("daily_login_submit_limit")
+            if native:
+                human = True
+            else:
+                await self.wait(payload, "daily_login_submit_limit")
+                return self.blocked("daily_login_submit_limit")
+        if native and not human:
+            point = await element_click_point(page, payload.get("selector", ""))
+            if point.get("resolved") != "1":
+                native_status = "pc_native_click_coordinate_unresolved"
+                human = True
+            else:
+                try:
+                    title = await page.title()
+                    clicked = await click_point(page, point, title=title, require_focus=True)
+                except Exception:
+                    clicked = {}
+                native_status = ("pc_native_click_submitted" if clicked.get("mouse_clicked") == "1"
+                                 else "pc_native_click_failed_fallback_human")
+                human = native_status != "pc_native_click_submitted"
         task = None
         if human:
             task = await self.wait(payload, "human_submit_required")
             timeout = self.contract.get("human_submit_timeout_seconds", 600)
         else:
             # Never re-submit, even if the browser reports an ambiguous failure.
-            await self.operation("step_executor", self.executor, payload)
+            if not native:
+                await self.operation("step_executor", self.executor, payload)
             timeout = self.contract.get("submit_observation_seconds", 5)
         deadline = time.monotonic() + timeout
         while True:
@@ -240,11 +268,21 @@ class HumanLoginExecutor:
                 self.done = True
                 if task:
                     await self.finish(task, True)
-                return {"ok": True, "output": {"human_submit": human}}
+                return {"ok": True, "output": {"human_submit": human,
+                        **({"submit_status": native_status} if native_status else {})}}
             if time.monotonic() >= deadline:
                 if human:
                     await self.finish(task, False, "human_login_timeout")
-                    return self.blocked("human_login_timeout")
+                    result = self.blocked("human_login_timeout")
+                    if native_status:
+                        result["submit_status"] = native_status
+                    return result
+                if native:
+                    native_status = "pc_native_click_failed_fallback_human"
+                    human = True
+                    task = await self.wait(payload, "human_submit_required")
+                    deadline = time.monotonic() + self.contract.get("human_submit_timeout_seconds", 600)
+                    continue
                 if all(observed[k] == before[k] for k in ("url", "requests", "navigation")):
                     return await self.stop(payload, "bot_protection_suspected")
                 await self.wait(payload, "login_verification_failed")

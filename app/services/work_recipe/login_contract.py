@@ -41,6 +41,7 @@ def normalize_login_contract(raw):
     if not isinstance(raw, Mapping) or raw.get("version") != 1:
         raise ValueError("login_contract_version_invalid")
     allowed = {
+        "submit_mode",
         "human_submit_required",
         "submit_step",
         "succeeds_when",
@@ -67,6 +68,8 @@ def normalize_login_contract(raw):
             raise ValueError("login_contract_reference_invalid")
     if "human_submit_required" in raw and type(raw["human_submit_required"]) is not bool:
         raise ValueError("human_submit_required_invalid")
+    if raw.get("submit_mode", "browser") not in {"browser", "pc_native_click", "human"}:
+        raise ValueError("login_submit_mode_invalid")
     if any(
         key in raw
         for key in (
@@ -75,7 +78,7 @@ def normalize_login_contract(raw):
             "human_submit_timeout_seconds",
             "submit_observation_seconds",
         )
-    ) or raw.get("human_submit_required"):
+    ) or raw.get("human_submit_required") or raw.get("submit_mode") in {"pc_native_click", "human"}:
         if type(raw.get("submit_step")) is not int or raw["submit_step"] < 1:
             raise ValueError("login_submit_step_required")
         checks = raw.get("succeeds_when")
@@ -105,6 +108,7 @@ def normalize_login_contract(raw):
             if key in raw and (type(raw[key]) is not int or not 1 <= raw[key] <= 3600):
                 raise ValueError("login_wait_timeout_invalid")
     result = deepcopy(dict(raw))
+    result["submit_mode"] = "human" if raw.get("human_submit_required") else raw.get("submit_mode", "browser")
     result.setdefault("access", "unknown")
     if result["access"] not in ACCESS:
         raise ValueError("login_contract_access_invalid")

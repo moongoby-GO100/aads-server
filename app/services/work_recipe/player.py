@@ -219,7 +219,7 @@ class RecipePlayer:
         if "login_contract" in recipe.metadata:
             approved = recipe.metadata["login_contract"]
             contract = {**approved, **context.get("login_contract", {})}
-            for key in ("submit_step", "human_submit_required", "succeeds_when",
+            for key in ("submit_mode", "submit_step", "human_submit_required", "succeeds_when",
                         "human_submit_timeout_seconds", "submit_observation_seconds"):
                 if key in approved:
                     contract[key] = approved[key]
