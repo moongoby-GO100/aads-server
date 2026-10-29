@@ -9873,7 +9873,19 @@ async def create_workspace(data: Dict[str, Any], tenant_id: Optional[str] = None
             # [C안 2/4] 표시명 → 프로젝트 정규 키 자동 파생
             normalize_project_label(data.get("project_key") or data["name"]),
         )
-        return _row_to_dict(row)
+        result = _row_to_dict(row)
+    # Complete the primary insert before attempting optional design registration.
+    result["design_registration"] = "skipped"
+    if tenant_uuid:
+        try:
+            from app.services.design_project_registry import register_design_project
+            result["design_registration"] = await register_design_project(
+                tenant_uuid, result.get("project_key"), data["name"],
+            )
+        except Exception:
+            logging.getLogger(__name__).warning("Design registration failed", exc_info=True)
+            result["design_registration"] = "failed"
+    return result
 
 
 async def update_workspace(workspace_id: str, data: Dict[str, Any], tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:

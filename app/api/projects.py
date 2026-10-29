@@ -59,6 +59,8 @@ class CreateProjectResponse(BaseModel):
     status: str
     checkpoint_stage: str
     interrupt_payload: dict | None = None
+    # This legacy endpoint has no authenticated tenant context.
+    design_registration: str = "skipped"
 
 
 
