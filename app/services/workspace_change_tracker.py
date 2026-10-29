@@ -37,6 +37,8 @@ _BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
 def _is_ignored_change_path(project: str, repo: str, file_path: str) -> bool:
     """Return true for runtime state files that must not enter the change ledger."""
     normalized = _normalize_repo_path(project, repo, file_path)
+    if normalized.startswith("var/ops/evidence/"):
+        return True
     if project == "AADS" and repo == "aads-server" and normalized in _AADS_RUNTIME_STATE_PATHS:
         return True
     if project == "AADS" and normalized.endswith(_AADS_RUNTIME_SUFFIXES):
@@ -166,7 +168,9 @@ async def record_change(
                  NOW(), NOW(), $8, $9, $10,
                  $11, $12, $13, NOW())
             ON CONFLICT (session_id, project, repo, file_path) DO UPDATE SET
-                source_tool = EXCLUDED.source_tool,
+                source_tool = CASE WHEN EXCLUDED.source_tool = 'git_status_snapshot'
+                    AND chat_workspace_change_ledger.change_origin = 'chat_direct'
+                    THEN chat_workspace_change_ledger.source_tool ELSE EXCLUDED.source_tool END,
                 change_summary = EXCLUDED.change_summary,
                 status = $7,
                 last_error = '',
@@ -174,7 +178,8 @@ async def record_change(
                 commit_message = NULL,
                 owner = EXCLUDED.owner,
                 task_id = EXCLUDED.task_id,
-                change_origin = EXCLUDED.change_origin,
+                change_origin = CASE WHEN EXCLUDED.source_tool = 'git_status_snapshot'
+                    THEN chat_workspace_change_ledger.change_origin ELSE EXCLUDED.change_origin END,
                 git_status = EXCLUDED.git_status,
                 git_branch = EXCLUDED.git_branch,
                 git_head_sha = EXCLUDED.git_head_sha,
@@ -520,6 +525,10 @@ async def sync_git_dirty_snapshot(
             if _is_ignored_change_path(project, repo_name, path):
                 ignored_paths.append(path)
                 continue
+            if entry["git_status"] == "??" and path not in claim_set:
+                ignored_paths.append(path)
+                current_paths.add(path)
+                continue
             is_claimed = not claim_set or path in claim_set
             current_paths.add(path)
             recorded_paths.append(path)
@@ -624,6 +633,13 @@ async def _config_syntax_errors(
         except Exception as exc:  # 읽기 실패는 차단하지 않는다(기존 동작 유지)
             logger.warning("config syntax check read failed: %s (%s)", path, exc)
             continue
+        # tool_run_remote_command returns a display envelope before stdout.
+        lines = text.splitlines()
+        if lines and re.match(r"^\[.+ 명령 실행 — exit=\d+\]$", lines[0]):
+            if "exit=0]" not in lines[0]:
+                errors[path] = "config read failed: " + lines[0]
+                continue
+            text = "\n".join(lines[2:])
         if not text or len(text) > 2_000_000:
             continue
         try:
@@ -839,12 +855,39 @@ async def _finalize_group(
     # 죽어 배포 preflight 전체가 영구 차단됐다. 실제 커밋 가능한 경로만 남긴다.
     skipped_outside = [path for path in file_paths if not _is_committable_path(path)]
     file_paths = [path for path in file_paths if _is_committable_path(path)]
+    skipped_foreign: list[str] = []
+    row_by_path = {_normalize_repo_path(project, repo, row["file_path"]): row for row in rows}
+    for path in file_paths:
+        row = row_by_path[path]
+        if (_is_ignored_change_path(project, repo, path)
+                or (str(row.get("git_status", "")).strip() == "??"
+                    and (row.get("source_tool") in ("git_status_snapshot", "run_remote_command")
+                         or row.get("owner") == "UNKNOWN-PREEXISTING-DIRTY"))):
+            skipped_foreign.append(path)
+    file_paths = [path for path in file_paths if path not in skipped_foreign]
     skipped_missing: list[str] = []
     if file_paths:
         try:
             status_text = await _run_git_command(
                 project, repo, "git -c core.quotepath=false status --porcelain"
             )
+            entries = _parse_porcelain_entries(status_text)
+            for entry in entries:
+                path = entry["path"]
+                row = row_by_path.get(path, {})
+                if (entry["git_status"] == "??" and path in file_paths
+                        and (row.get("source_tool") in ("git_status_snapshot", "run_remote_command")
+                             or row.get("owner") == "UNKNOWN-PREEXISTING-DIRTY")):
+                    skipped_foreign.append(path)
+            # --no-index also detects paths tracked before a later ignore rule.
+            for path in list(file_paths):
+                output = await _run_git_command(
+                    project, repo,
+                    f"git check-ignore --no-index -q -- {shlex.quote(path)} && echo AADS_IGNORED || true",
+                )
+                if "AADS_IGNORED" in output.splitlines():
+                    skipped_foreign.append(path)
+            file_paths = [path for path in file_paths if path not in skipped_foreign]
             changed = _parse_porcelain_paths(status_text)
             if changed:
                 skipped_missing = [path for path in file_paths if path not in changed]
@@ -876,6 +919,9 @@ async def _finalize_group(
         "commit_message": "",
         "detail": "",
     }
+    if skipped_foreign:
+        result["warnings"] = [{"reason": "excluded_non_session_or_runtime", "files": sorted(set(skipped_foreign))}]
+        logger.warning("workspace_finalize_excluded project=%s session=%s files=%s", project, session_id, skipped_foreign)
     if skipped_outside or skipped_missing:
         result["skipped_outside_repo"] = skipped_outside[:20]
         result["skipped_not_dirty"] = skipped_missing[:20]
