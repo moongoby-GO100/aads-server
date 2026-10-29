@@ -405,6 +405,17 @@ async def create_design_modification_request(
     normalized_project_key = _normalize_project_key(payload.project_key)
     normalized_request_type = _validate_request_type(payload.request_type)
     normalized_status = _validate_status(payload.status) or "draft"
+    if normalized_status == "review":
+        for field in ("allowed_scope", "forbidden_scope", "acceptance_criteria"):
+            value = getattr(payload, field)
+            if isinstance(value, str):
+                value = value.strip()
+                try:
+                    value = json.loads(value)
+                except (ValueError, TypeError):
+                    pass
+            if not value:
+                raise HTTPException(status_code=400, detail=f"{field} is required for review")
     user_prompt = payload.user_prompt.strip()
     if not user_prompt:
         raise HTTPException(status_code=400, detail="user_prompt is required")

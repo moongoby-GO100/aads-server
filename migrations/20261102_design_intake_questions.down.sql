@@ -1,0 +1,2 @@
+-- Non-destructive rollback: retain intake records and tables.
+-- Revert the application commit to disable these gates; no database SQL required.
