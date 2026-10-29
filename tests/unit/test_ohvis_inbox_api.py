@@ -145,12 +145,13 @@ def notify(id_=NOTIFY_ID, decision="notified", at=None):
             "gate_source": "goal", "decision": decision, "created_at": at or ago(hours=1), "project": "AADS"}
 
 
-def make_client(pool: FakePool, monkeypatch, role="admin") -> TestClient:
+def make_client(pool: FakePool, monkeypatch, role="admin", internal=True) -> TestClient:
     monkeypatch.setattr(inbox, "get_pool", lambda: pool)
     app = FastAPI()
     app.include_router(inbox.router, prefix="/api/v1")
     app.dependency_overrides[get_current_user] = lambda: {
         "user_id": "u-admin", "current_tenant": {"id": TENANT}, "current_membership": {"role": role},
+        "is_internal_admin": internal,
     }
     return TestClient(app)
 
@@ -463,6 +464,30 @@ def test_non_admin_gets_403(pool, monkeypatch, method, path, kwargs, role):
 def test_owner_is_allowed(pool, monkeypatch):
     c = make_client(pool, monkeypatch, role="owner")
     assert c.get("/api/v1/inbox/summary").status_code == 200
+
+
+# alert_history 는 테넌트 구분이 없는 호스트·운영 경보다 — 고객 테넌트 관리자에게 보이면 안 된다.
+
+
+def test_customer_tenant_admin_does_not_see_host_alerts(pool, monkeypatch):
+    c = make_client(pool, monkeypatch, internal=False)
+    for tab in ("action", "alert"):
+        items = c.get("/api/v1/inbox", params={"tab": tab}).json()["items"]
+        assert not [i for i in items if i["source"] == "alert"]
+    summary = c.get("/api/v1/inbox/summary").json()
+    assert summary["tabs"]["alert"] == {"total": 0, "unread": 0}
+    assert not [s for s in pool.sql if "FROM alert_history" in s]
+
+
+def test_customer_tenant_admin_cannot_acknowledge_host_alerts(pool, monkeypatch):
+    c = make_client(pool, monkeypatch, internal=False)
+    before = {a["id"]: a["acknowledged"] for a in pool.alerts}
+    r = c.post("/api/v1/inbox/read", json={"items": [{"source": "alert", "source_id": "1"}]})
+    assert r.status_code == 200 and r.json()["marked"] == {"alert": 0}
+    for tab in ("alert", "action"):
+        out = c.post("/api/v1/inbox/read-all", json={"tab": tab, "before": NOW.isoformat()}).json()
+        assert out["marked"]["alert"] == 0
+    assert {a["id"]: a["acknowledged"] for a in pool.alerts} == before
 
 
 # ── 읽음 판정: 목업 알림 목록과 같은 기준 ─────────────────────────────────

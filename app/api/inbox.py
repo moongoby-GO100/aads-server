@@ -130,6 +130,9 @@ class Ctx:
     tenant_id: str
     user_id: str
     now: datetime
+    # alert_history 는 테넌트 칸이 없는 호스트·운영 경보다. 고객 테넌트 관리자에게 보이거나
+    # 그들이 확인 처리하면 안 되므로 내부 운영자(is_internal_admin)에게만 연다(briefing 과 같은 기준).
+    internal_admin: bool = False
 
 
 class ReadRef(BaseModel):
@@ -370,6 +373,8 @@ async def _read_marks(pool: Any, ctx: Ctx, source: str, ids: list[str]) -> dict[
 
 
 async def load_alerts(pool: Any, ctx: Ctx) -> SourceResult:
+    if not ctx.internal_admin:
+        return SourceResult()
     rows = await pool.fetch(
         "SELECT id, severity, category, title, message, project, acknowledged, created_at "
         "FROM alert_history "
@@ -547,7 +552,8 @@ def _ctx(context: dict) -> Ctx:
     uid = str(user.get("user_id") or user.get("id") or "")
     if not uid:
         raise HTTPException(status_code=403, detail="user_identity_required")
-    return Ctx(tenant_id=str(context["tenant"]["id"]), user_id=uid, now=datetime.now(timezone.utc))
+    return Ctx(tenant_id=str(context["tenant"]["id"]), user_id=uid, now=datetime.now(timezone.utc),
+               internal_admin=bool(user.get("is_internal_admin")))
 
 
 def _pool() -> Any:
@@ -677,8 +683,14 @@ async def _read_ohvis(pool: Any, ctx: Ctx, ids: list[str]) -> int:
     return len(ids)
 
 
+async def _zero() -> int:
+    return 0
+
+
 def _mark_ops(pool: Any, ctx: Ctx, source: str, ids: list[str]) -> Callable[[], Awaitable[int]]:
     if source == "alert":
+        if not ctx.internal_admin:
+            return _zero
         return lambda: _ack_alert_groups(pool, ids)
     if source == "notify":
         return lambda: _ack_notifies(pool, ctx, ids)
@@ -733,6 +745,8 @@ async def inbox_read_all(body: ReadAllBody, context: dict = ADMIN):
     ops: dict[str, Callable[[], Awaitable[int]]] = {}
 
     async def ack_alerts(critical_only: bool) -> int:
+        if not ctx.internal_admin:
+            return 0
         status = await pool.execute(
             "UPDATE alert_history SET acknowledged = TRUE, acknowledged_at = COALESCE(acknowledged_at, now()) "
             "WHERE acknowledged IS NOT TRUE AND created_at <= $1 "
