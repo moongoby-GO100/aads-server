@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.services.work_recipe import orchestrator
 from app.services.work_recipe import recorder as recorder_module
 
@@ -20,14 +22,18 @@ async def test_recorder_replaces_credentials_before_saving(monkeypatch):
         "example_login", "https://www.example.com/login", "tenant-1"
     )
     recording.record_step({"action": "navigate", "url": "https://example.com/login"})
+    from uuid import uuid4
+    binding = {"credential_id": str(uuid4()), "field": "password"}
+    recording.set_credential_scope({"credential_1": binding})
     recording.record_step(
-        {"action": "fill", "selector": "input[type=password]", "value": "raw-password"}
+        {"action": "fill", "selector": "input[type=password]", "value": "{{credential_1}}"}
     )
     await recording.finish_recording()
 
     recipe = saved["recipe"]
     serialized = recipe.to_yaml()
-    assert "raw-password" not in serialized
+    assert "credential_scope" in serialized
+    assert recipe.metadata["credential_scope"]["inputs"]["credential_1"] == binding
     assert recipe.steps[1].value == "{{credential_1}}"
     assert recipe.inputs[0].secret is True
     assert recipe.domain == "example.com"
@@ -128,6 +134,12 @@ def _admin_ctx(*, admin: bool = True) -> dict:
     }
 
 
+def _viewer_override(context):
+    async def override():
+        return context
+    return override
+
+
 def test_ohvis_recipes_router_is_mounted():
     from app.main import app
 
@@ -146,26 +158,26 @@ def test_ohvis_recipes_router_is_mounted():
     assert ("POST", "/api/v1/ohvis/recipes/registrations/{registration_id}/decision") in paths
 
 
-def test_ohvis_recipes_requires_internal_admin(monkeypatch):
+async def test_ohvis_recipes_requires_internal_admin(monkeypatch):
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
+    from httpx import ASGITransport, AsyncClient
 
     from app.api import ohvis_console, ohvis_recipes
 
     app = FastAPI()
     app.include_router(ohvis_recipes.router)
-    app.dependency_overrides[ohvis_console.require_viewer] = lambda: _admin_ctx(admin=False)
-    client = TestClient(app)
+    app.dependency_overrides[ohvis_console.require_viewer] = _viewer_override(_admin_ctx(admin=False))
+    client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
-    response = client.post(
+    response = await client.post(
         "/ohvis/recipes/recording", json={"name": "login", "domain": "example.com"}
     )
     assert response.status_code == 403
 
 
-async def test_ohvis_recipes_full_recording_cycle(monkeypatch):
+async def test_ohvis_recipes_full_recording_cycle(monkeypatch, recording_db):
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
+    from httpx import ASGITransport, AsyncClient
 
     from app.api import ohvis_console, ohvis_recipes
 
@@ -200,30 +212,30 @@ async def test_ohvis_recipes_full_recording_cycle(monkeypatch):
 
     app = FastAPI()
     app.include_router(ohvis_recipes.router)
-    app.dependency_overrides[ohvis_console.require_viewer] = lambda: _admin_ctx()
-    client = TestClient(app)
+    app.dependency_overrides[ohvis_console.require_viewer] = _viewer_override(_admin_ctx())
+    client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
-    started = client.post(
+    started = await client.post(
         "/ohvis/recipes/recording", json={"name": "example_login", "domain": "https://example.com/login"}
     )
     assert started.status_code == 200
     recording_id = started.json()["recording_id"]
 
-    stepped = client.post(
+    stepped = await client.post(
         f"/ohvis/recipes/recording/{recording_id}/steps",
         json={"payload": {"action": "navigate", "url": "https://example.com/login"}},
     )
     assert stepped.status_code == 200
     assert stepped.json()["step_count"] == 1
 
-    finished = client.post(f"/ohvis/recipes/recording/{recording_id}/finish", json={})
+    finished = await client.post(f"/ohvis/recipes/recording/{recording_id}/finish", json={})
     assert finished.status_code == 200
     assert finished.json()["status"] == "approval_required"
     assert finished.json()["registration"]["id"] == "registration-1"
     assert finished.json()["registration"]["dry_run"]["steps"] == [{"seq": 1}]
     assert saved["requested_by"] == "moong76@gmail.com"
 
-    approved = client.post(
+    approved = await client.post(
         "/ohvis/recipes/registrations/registration-1/decision",
         json={"decision": "approve", "reason": "dry-run 확인"},
     )
@@ -232,13 +244,13 @@ async def test_ohvis_recipes_full_recording_cycle(monkeypatch):
     assert approved.json()["registration"]["recipe"]["id"] == "recipe-1"
 
     # 종료된 recording_id 는 재사용할 수 없다
-    stale = client.get(f"/ohvis/recipes/recording/{recording_id}")
+    stale = await client.get(f"/ohvis/recipes/recording/{recording_id}")
     assert stale.status_code == 404
 
 
 async def test_ohvis_recipes_lists_pending_registrations_for_current_tenant(monkeypatch):
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
+    from httpx import ASGITransport, AsyncClient
 
     from app.api import ohvis_console, ohvis_recipes
 
@@ -262,9 +274,9 @@ async def test_ohvis_recipes_lists_pending_registrations_for_current_tenant(monk
     monkeypatch.setattr(ohvis_recipes, "list_registrations", list_registrations)
     app = FastAPI()
     app.include_router(ohvis_recipes.router)
-    app.dependency_overrides[ohvis_console.require_viewer] = lambda: _admin_ctx()
+    app.dependency_overrides[ohvis_console.require_viewer] = _viewer_override(_admin_ctx())
 
-    response = TestClient(app).get("/ohvis/recipes/registrations")
+    response = await AsyncClient(transport=ASGITransport(app=app), base_url="http://test").get("/ohvis/recipes/registrations")
 
     assert response.status_code == 200
     assert response.json()["registrations"][0]["id"] == "registration-1"
@@ -273,7 +285,7 @@ async def test_ohvis_recipes_lists_pending_registrations_for_current_tenant(monk
 
 async def test_ohvis_recipes_accepts_status_decision_contract(monkeypatch):
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
+    from httpx import ASGITransport, AsyncClient
 
     from app.api import ohvis_console, ohvis_recipes
 
@@ -286,12 +298,229 @@ async def test_ohvis_recipes_accepts_status_decision_contract(monkeypatch):
     monkeypatch.setattr(ohvis_recipes, "decide_registration_as_human", decide_registration)
     app = FastAPI()
     app.include_router(ohvis_recipes.router)
-    app.dependency_overrides[ohvis_console.require_viewer] = lambda: _admin_ctx()
+    app.dependency_overrides[ohvis_console.require_viewer] = _viewer_override(_admin_ctx())
 
-    response = TestClient(app).post(
+    response = await AsyncClient(transport=ASGITransport(app=app), base_url="http://test").post(
         "/ohvis/recipes/registrations/registration-1/decision",
         json={"status": "approved", "reason": "검토 완료"},
     )
 
     assert response.status_code == 200
     assert response.json()["status"] == "approved"
+
+
+@pytest.fixture
+def recording_db(monkeypatch):
+    """Exercise the DB adapter with serialized rows and transaction rollback."""
+    from contextlib import asynccontextmanager
+    from copy import deepcopy
+
+    from app.services.work_recipe import recording_store
+
+    rows = {}
+
+    class Connection:
+        @asynccontextmanager
+        async def transaction(self):
+            snapshot = deepcopy(rows)
+            try:
+                yield
+            except Exception:
+                rows.clear()
+                rows.update(snapshot)
+                raise
+
+        async def fetchrow(self, query, rid, tenant):
+            assert "tenant_id=$2" in query and "FOR UPDATE" in query
+            state = rows.get((rid, tenant))
+            return {"state": state} if state is not None else None
+
+        async def execute(self, query, rid, tenant, *args):
+            if query.startswith("DELETE"):
+                rows.pop((rid, tenant))
+            else:
+                rows[(rid, tenant)] = args[0]
+
+    class Pool:
+        @asynccontextmanager
+        async def acquire(self):
+            yield Connection()
+
+    monkeypatch.setattr(recording_store, "get_pool", lambda: Pool())
+    return rows
+
+
+@pytest.fixture(autouse=True)
+def no_recording_notifications(monkeypatch):
+    async def notify(*args, **kwargs):
+        return False
+    monkeypatch.setattr(recorder_module.approval_notifier, "notify_pending_created", notify)
+
+
+async def test_pc_recording_survives_reconstruction(recording_db):
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+
+    from app.api import ohvis_recipes as api
+    from app.services.work_recipe import recording_store
+    tenant = str(uuid4())
+    context = {"tenant": {"id": tenant}}
+    started = await api.start_recording(api.RecordingStartIn(
+        name="pc login", domain="example.com", lane="pc", browser_work_key="pc-work",
+        credential_scope={"account": {"credential_id": str(uuid4()), "field": "username"}},
+    ), context)
+    rid = started["recording_id"]
+    await api.record_recording_step(rid, api.RecordingStepIn(payload={
+        "action": "fill", "selector": "#username", "value": "{{account}}",
+    }), context)
+    # No recorder object is retained: each request deserializes the DB row.
+    async with recording_store.owned(rid, tenant) as restored:
+        assert restored.flow_metadata["lane"] == "pc"
+        assert restored.flow_metadata["browser_work_key"] == "pc-work"
+        assert restored.flow_metadata["credential_scope"]["inputs"]["account"]["field"] == "username"
+    await api.record_recording_step(rid, api.RecordingStepIn(payload={"action": "snapshot"}), context)
+    assert (await api.get_recording_status(rid, context))["step_count"] == 2
+    with pytest.raises(HTTPException) as exc:
+        await api.get_recording_status(rid, {"tenant": {"id": str(uuid4())}})
+    assert exc.value.status_code == 404
+
+
+async def test_rejected_step_and_finish_preserve_state(recording_db):
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+
+    from app.api import ohvis_recipes as api
+    context = {"tenant": {"id": str(uuid4())}}
+    rid = (await api.start_recording(api.RecordingStartIn(name="login", domain="example.com"), context))["recording_id"]
+    with pytest.raises(HTTPException):
+        await api.finish_recording(rid, api.RecordingFinishIn(), context)
+    assert (await api.get_recording_status(rid, context))["step_count"] == 0
+    with pytest.raises(HTTPException):
+        await api.record_recording_step(rid, api.RecordingStepIn(payload={
+            "action": "fill", "selector": "#password", "value": uuid4().hex,
+        }), context)
+    assert (await api.get_recording_status(rid, context))["step_count"] == 0
+
+
+def test_scope_validation_and_plaintext_rejection():
+    from uuid import uuid4
+    recorder = recorder_module
+    recording = recorder.start_recording("login", "example.com")
+    binding = {"credential_id": str(uuid4()), "field": "password"}
+    recording.set_credential_scope({"password": binding})
+    with pytest.raises(ValueError, match="plaintext"):
+        recording.record_step({"action": "fill", "selector": "#password", "value": uuid4().hex})
+    with pytest.raises(ValueError):
+        recording.set_credential_scope({"password": {**binding, "value": uuid4().hex}})
+    recording.record_step({"action": "fill", "selector": "#password", "value": "{{password}}"})
+    with pytest.raises(ValueError, match="mismatch"):
+        recording.set_credential_scope({"password": {**binding, "field": "username"}})
+
+
+async def test_step_scope_is_saved_and_invalid_update_rolls_back(recording_db):
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+
+    from app.api import ohvis_recipes as api
+
+    context = {"tenant": {"id": str(uuid4())}}
+    rid = (await api.start_recording(
+        api.RecordingStartIn(name="manual_login", domain="example.com", lane="pc"), context
+    ))["recording_id"]
+    binding = {"credential_id": str(uuid4()), "field": "password"}
+    await api.record_recording_step(rid, api.RecordingStepIn(
+        credential_scope={"account_password": binding},
+        payload={"action": "fill", "selector": "#password", "value": "{{account_password}}"},
+    ), context)
+    before = await api.get_recording_status(rid, context)
+    assert before["metadata"]["credential_scope"]["inputs"]["account_password"] == binding
+    with pytest.raises(HTTPException) as exc:
+        await api.record_recording_step(rid, api.RecordingStepIn(
+            credential_scope={"account_password": {**binding, "field": "username"}},
+            payload={"action": "snapshot"},
+        ), context)
+    assert exc.value.status_code == 400
+    assert await api.get_recording_status(rid, context) == before
+
+
+def test_bound_secret_is_rejected_outside_fill_value():
+    from uuid import uuid4
+
+    recording = recorder_module.start_recording("manual_login", "example.com")
+    recording.set_credential_scope({
+        "account_password": {"credential_id": str(uuid4()), "field": "password"},
+    })
+    with pytest.raises(ValueError, match="secret_input_unsupported_use"):
+        recording.record_step({"action": "navigate", "url": "https://example.com/{{account_password}}"})
+    assert recording.steps == []
+
+
+def test_scope_rejects_invalid_variable_name():
+    from uuid import uuid4
+
+    recording = recorder_module.start_recording("manual_login", "example.com")
+    with pytest.raises(ValueError):
+        recording.set_credential_scope({
+            "invalid variable": {"credential_id": str(uuid4()), "field": "username"},
+        })
+    assert recording.flow_metadata == {}
+
+
+@pytest.mark.parametrize("operation", ["create", "owned"])
+async def test_missing_recording_table_returns_service_unavailable(monkeypatch, operation):
+    from contextlib import asynccontextmanager
+    from asyncpg import UndefinedTableError
+    from fastapi import HTTPException
+    from app.services.work_recipe import recording_store
+
+    class Connection:
+        @asynccontextmanager
+        async def transaction(self):
+            yield
+
+        async def execute(self, *args):
+            raise UndefinedTableError("missing recording table")
+
+        async def fetchrow(self, *args):
+            raise UndefinedTableError("missing recording table")
+
+    class Pool:
+        @asynccontextmanager
+        async def acquire(self):
+            yield Connection()
+
+    monkeypatch.setattr(recording_store, "get_pool", lambda: Pool())
+    recording = recorder_module.start_recording("fixture", "example.com", "11111111-1111-1111-1111-111111111111")
+    with pytest.raises(HTTPException) as error:
+        if operation == "create":
+            await recording_store.create("fixture-id", recording)
+        else:
+            async with recording_store.owned("fixture-id", "11111111-1111-1111-1111-111111111111"):
+                pytest.fail("missing table must not yield a recording")
+    assert error.value.status_code == 503
+    assert error.value.detail == "recording_store_unavailable"
+
+
+async def test_recording_schema_ensure_uses_idempotent_migration(monkeypatch):
+    from contextlib import asynccontextmanager
+    from app.services.work_recipe import recording_store
+
+    statements = []
+
+    class Connection:
+        async def execute(self, sql):
+            statements.append(sql)
+
+    class Pool:
+        @asynccontextmanager
+        async def acquire(self):
+            yield Connection()
+
+    monkeypatch.setattr(recording_store, "get_pool", lambda: Pool())
+    await recording_store.ensure_recording_schema()
+    assert len(statements) == 1
+    assert "CREATE TABLE IF NOT EXISTS work_recipe_recordings" in statements[0]
+    assert "CREATE INDEX IF NOT EXISTS work_recipe_recordings_tenant_idx" in statements[0]

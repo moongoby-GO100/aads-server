@@ -246,7 +246,11 @@ def test_replay_requires_another_chat_session_on_the_designated_pc_lane(monkeypa
     from app.browser_bridge import service
 
     recipe = _open_recipe(_trusted())
-    intent = SimpleNamespace(tenant_id="fixture-tenant", payload={"directive": recipe.name, "inputs": {}})
+    intent = SimpleNamespace(
+        tenant_id="fixture-tenant",
+        authenticated_provenance={"user_id": "fixture-user"},
+        payload={"directive": recipe.name, "inputs": {}},
+    )
     class Router:
         def validate_action_intent(self, value, **kwargs):
             return value

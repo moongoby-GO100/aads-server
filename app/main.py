@@ -2789,6 +2789,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("wol_network_table_ensure_failed", error=str(e))
 
+    # 녹화 상태도 슬롯 시작 시 기존 ensure 방식으로 스키마를 보장한다.
+    try:
+        from app.services.work_recipe.recording_store import ensure_recording_schema
+        await ensure_recording_schema()
+        logger.info("work_recipe_recording_schema_ensured")
+    except Exception as e:
+        logger.warning("work_recipe_recording_schema_ensure_failed", error=str(e))
+
     # Workspace change ledger 테이블 사전 생성
     try:
         from app.services.workspace_change_tracker import ensure_workspace_change_table
