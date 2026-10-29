@@ -584,24 +584,17 @@ def _telegram_creds() -> tuple[str, str]:
 
 
 def send_telegram(text: str) -> bool:
-    """텔레그램 통보. 성공 여부를 돌려준다 — 실패한 통보를 보낸 것으로 기록하면 안 된다.
+    """운영 통보. 성공 여부를 돌려준다 — 실패한 통보를 보낸 것으로 기록하면 안 된다.
 
-    자격증명·엔드포인트는 codex_auth_sync.sh 의 send_telegram 과 같다(같은 봇).
+    2026-10-29: api.telegram.org 는 /etc/hosts 로 의도적으로 막혀 있다(AADS_TELEGRAM_BLOCK_20260605).
+    codex_auth_sync.sh 의 send_telegram 과 같이 공통 알림(오비스 알림함 우선)으로 보낸다.
     """
-    import urllib.parse
-    import urllib.request
+    import subprocess
 
-    token, chat = _telegram_creds()
-    if not token or not chat:
-        return False
-    body = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
+    script = os.getenv("AADS_NOTIFY_SCRIPT", "/root/aads/aads-server/scripts/aads_notify.sh")
     try:
-        with urllib.request.urlopen(
-                urllib.request.Request(
-                    f"https://api.telegram.org/bot{token}/sendMessage", data=body),
-                timeout=10) as resp:
-            return resp.status == 200
-    except Exception:  # noqa: BLE001 — 예외 문자열에 URL(=토큰)이 들어가므로 삼킨다
+        return subprocess.run([script, text], capture_output=True, timeout=120).returncode == 0
+    except (OSError, subprocess.SubprocessError):
         return False
 
 

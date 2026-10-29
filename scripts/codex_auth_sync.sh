@@ -74,14 +74,13 @@ log() {
     printf '[%s] %s\n' "$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')" "$*" >> "$LOG"
 }
 
+# 2026-10-29: api.telegram.org 는 /etc/hosts 로 의도적으로 막혀 있다(AADS_TELEGRAM_BLOCK_20260605).
+# 직접 curl 하면 알림이 사라지므로 공통 알림(오비스 알림함 우선)으로 보낸다. 앱 알림함은 HTML 을
+# 렌더링하지 않으므로 태그는 걷어낸다.
 send_telegram() {
     local msg="$1"
-    if [[ -n "$TELEGRAM_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]]; then
-        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-            -d "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${msg}" \
-            -d "parse_mode=HTML" > /dev/null 2>&1 || true
-    fi
+    "${AADS_NOTIFY_SCRIPT:-/root/aads/aads-server/scripts/aads_notify.sh}" \
+        "$(printf '%s' "$msg" | sed 's/<[^>]*>//g')" > /dev/null 2>&1 || true
 }
 
 get_token_remaining_days() {

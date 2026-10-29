@@ -18,11 +18,8 @@ TELEGRAM_CHAT_ID=$(grep -oP '^TELEGRAM_CHAT_ID=\K.*' "${COMPOSE_DIR}/.env" 2>/de
 
 notify() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG"
-    if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
-        curl -sf -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="🔍 [AADS Validate] $1" >/dev/null 2>&1 || true
-    fi
+    # 2026-10-29: 텔레그램은 의도적 차단 상태(AADS_TELEGRAM_BLOCK_20260605) — 공통 알림(오비스 알림함 우선)으로 보낸다.
+    "${COMPOSE_DIR}/scripts/aads_notify.sh" "🔍 [AADS Validate] $1" >/dev/null 2>&1 || true
 }
 
 # 0. .env 중복 키 감지 (2026-09-16 추가)
