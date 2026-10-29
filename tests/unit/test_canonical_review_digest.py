@@ -32,6 +32,8 @@ class FakeConn:
 
     async def fetch(self, sql, *args):
         self.last_fetch = (sql, args)
+        if "FROM tenant_memberships" in sql:
+            return getattr(self, "recipients", [{"user_id": "ceo"}])
         return self.rows
 
     async def fetchval(self, sql, *args):
@@ -129,3 +131,99 @@ def test_message_format_groups_by_project_and_caps_ten():
 def test_review_queue_route_precedes_document_key_route():
     paths = [r.path for r in docs.router.routes if "GET" in getattr(r, "methods", ())]
     assert paths.index(docs.router.prefix + "/review-queue") < paths.index(docs.router.prefix + "/{document_key}")
+
+
+def mock_channels(monkeypatch, *, sent=1, configured=True):
+    from unittest.mock import AsyncMock
+    from app.services import push_notifications, ceo_notify
+
+    push = AsyncMock(return_value={"sent": sent, "failed": int(not sent)})
+    telegram = AsyncMock(side_effect=RuntimeError("telegram unavailable"))
+    monkeypatch.setattr(push_notifications, "is_web_push_configured", lambda: configured)
+    monkeypatch.setattr(push_notifications, "send_web_push_to_user", push)
+    monkeypatch.setattr(ceo_notify, "send_ceo_text", telegram)
+    return push, telegram
+
+
+def test_web_push_success_records_and_second_call_skips(monkeypatch):
+    push, telegram = mock_channels(monkeypatch)
+    pool = FakePool([row("a")])
+    first = asyncio.run(digest.send_daily_digest(pool, now=NOW))
+    sql, args = pool.conn.last_fetch
+    assert args == (T1,)
+    assert "role IN ('owner','admin')" in sql
+    assert "status='active'" in sql and "deleted_at IS NULL" in sql
+    second = asyncio.run(digest.send_daily_digest(pool, now=NOW))
+    assert first["sent"] == 1 and len(pool.log) == 1
+    assert second["skipped"] == 1
+    assert push.await_count == telegram.await_count == 1
+    assert push.call_args.kwargs["tenant_id"] == T1
+    assert push.call_args.kwargs["user_id"] == "ceo"
+    assert push.call_args.kwargs["payload"]["tag"] == "canonical-review-digest-20261028"
+
+
+def test_zero_web_push_and_telegram_failure_does_not_record(monkeypatch):
+    push, telegram = mock_channels(monkeypatch, sent=0)
+    pool = FakePool([row("a")])
+    result = asyncio.run(digest.send_daily_digest(pool, now=NOW))
+    assert result["failed"] == 1 and not pool.log
+    assert push.await_count == telegram.await_count == 1
+
+
+def test_no_recipient_skips(monkeypatch):
+    push, telegram = mock_channels(monkeypatch)
+    pool = FakePool([row("a")])
+    pool.conn.recipients = []
+    result = asyncio.run(digest.send_daily_digest(pool, now=NOW))
+    assert result["skipped"] == 1 and not pool.log
+    push.assert_not_awaited()
+    telegram.assert_not_awaited()
+
+
+def test_vapid_not_configured_skips(monkeypatch):
+    push, _ = mock_channels(monkeypatch, configured=False)
+    pool = FakePool([row("a")])
+    result = asyncio.run(digest.send_daily_digest(pool, now=NOW))
+    assert result["skipped"] == 1 and not pool.log
+    push.assert_not_awaited()
+
+
+def test_push_payload_plain_bounded_and_oldest_first():
+    items = asyncio.run(digest.fetch_review_queue(
+        FakeConn([row("new", days_ago=1), row("old", title="<b>오래된</b>", days_ago=4)], set()),
+        T1, now=NOW,
+    ))
+    payload = digest.format_push_payload(items, NOW.date())
+    assert payload["title"] == "검토 대기 정본 2건"
+    assert payload["url"] == "/docs"
+    assert payload["body"] == "AADS 2건\n오래된 (4일); 제목 (1일)"
+    items[0]["title"] = "긴 제목" * 100
+    assert len(digest.format_push_payload(items, NOW.date())["body"]) <= 240
+
+
+def test_recipient_lookup_failure_skips(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    push, _ = mock_channels(monkeypatch)
+    pool = FakePool([row("a")])
+    original_fetch = pool.conn.fetch
+
+    async def fetch(sql, *args):
+        if "FROM tenant_memberships" in sql:
+            raise RuntimeError("membership unavailable")
+        return await original_fetch(sql, *args)
+
+    pool.conn.fetch = AsyncMock(side_effect=fetch)
+    result = asyncio.run(digest.send_daily_digest(pool, now=NOW))
+    assert result["skipped"] == 1 and not pool.log
+    push.assert_not_awaited()
+
+
+def test_partial_recipient_success_records(monkeypatch):
+    push, _ = mock_channels(monkeypatch)
+    push.side_effect = [RuntimeError("push unavailable"), {"sent": 1}]
+    pool = FakePool([row("a")])
+    pool.conn.recipients = [{"user_id": "owner"}, {"user_id": "admin"}]
+    result = asyncio.run(digest.send_daily_digest(pool, now=NOW))
+    assert result["sent"] == 1 and len(pool.log) == 1
+    assert push.await_count == 2

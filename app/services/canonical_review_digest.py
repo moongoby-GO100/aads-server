@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import html
+import re
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Any, Awaitable, Callable
@@ -79,16 +80,68 @@ def format_digest(items: list[dict]) -> str:
     return text
 
 
-async def _default_sender(text: str) -> bool:
-    from app.services.ceo_notify import send_ceo_text
+def format_push_payload(items: list[dict], digest_date: date) -> dict:
+    def plain(value: str) -> str:
+        return " ".join(re.sub(r"<[^>]*>", "", html.unescape(value)).split())
 
-    return await send_ceo_text(text)
+    counts: dict[str, int] = defaultdict(int)
+    for item in items:
+        counts[plain(item["project_key"])] += 1
+    projects = ", ".join(f"{key} {count}건" for key, count in sorted(counts.items()))
+    oldest = sorted(items, key=lambda item: (item["review_at"], item["document_key"]))[:3]
+    titles = "; ".join(f"{plain(item['title'])[:40]} ({item['waiting_days']}일)" for item in oldest)
+    return {"title": f"검토 대기 정본 {len(items)}건", "body": f"{projects}\n{titles}"[:240],
+            "url": "/docs", "tag": f"canonical-review-digest-{digest_date:%Y%m%d}"}
+
+
+async def _default_sender(tenant_id: str, items: list[dict], *, conn: Any,
+                          digest_date: date) -> str:
+    from app.services.ceo_notify import send_ceo_text
+    from app.services.push_notifications import is_web_push_configured, send_web_push_to_user
+
+    reason = ""
+    try:
+        # Savepoint keeps a missing/unavailable membership table from aborting the daily transaction.
+        async with conn.transaction():
+            recipients = await conn.fetch(
+                "SELECT DISTINCT user_id::text AS user_id FROM tenant_memberships "
+                "WHERE tenant_id=$1::uuid AND role IN ('owner','admin') "
+                "AND status='active' AND deleted_at IS NULL", tenant_id,
+            )
+    except Exception:
+        recipients = []
+    if not recipients:
+        reason = "no_recipient"
+    elif not is_web_push_configured():
+        reason = "vapid_not_configured"
+    if reason:
+        logger.warning("canonical_review_digest_send_skipped", tenant_id=tenant_id, reason=reason)
+        return "skipped"
+
+    sent = 0
+    payload = format_push_payload(items, digest_date)
+    for recipient in recipients:
+        try:
+            response = await send_web_push_to_user(
+                tenant_id=tenant_id, user_id=recipient["user_id"], payload=payload,
+            )
+            sent += response.get("sent", 0)
+        except Exception:
+            logger.warning("canonical_review_digest_send_failed", tenant_id=tenant_id, reason="push_failed")
+    # Telegram is supplementary; neither its return value nor exception determines success.
+    try:
+        await send_ceo_text(format_digest(items))
+    except Exception:
+        logger.warning("canonical_review_digest_telegram_failed", tenant_id=tenant_id)
+    if sent < 1:
+        logger.warning("canonical_review_digest_send_failed", tenant_id=tenant_id, reason="push_failed")
+        return "failed"
+    return "sent"
 
 
 async def send_daily_digest(pool: Any, *, now: datetime | None = None,
                             sender: Callable[[str], Awaitable[bool]] | None = None) -> dict:
     """KST 날짜·테넌트당 1회 발송. 두 블루그린 슬롯이 동시에 불러도 advisory lock 과 기록 PK 로 중복이 없다."""
-    send = sender or _default_sender
     digest_date: date = (now or _kst_now()).astimezone(KST).date()
     result = {"date": digest_date.isoformat(), "sent": 0, "skipped": 0, "failed": 0}
     async with pool.acquire() as conn, conn.transaction():
@@ -104,9 +157,15 @@ async def send_daily_digest(pool: Any, *, now: datetime | None = None,
             ):
                 result["skipped"] += 1
                 continue
-            if not await send(format_digest(tenant_items)):
-                result["failed"] += 1
-                logger.warning("canonical_review_digest_send_failed", tenant_id=tenant_id)
+            if sender is not None:
+                # Preserve the existing text/bool injection interface.
+                outcome = "sent" if await sender(format_digest(tenant_items)) else "failed"
+                if outcome == "failed":
+                    logger.warning("canonical_review_digest_send_failed", tenant_id=tenant_id, reason="push_failed")
+            else:
+                outcome = await _default_sender(tenant_id, tenant_items, conn=conn, digest_date=digest_date)
+            if outcome != "sent":
+                result[outcome] += 1
                 continue
             await conn.execute(
                 "INSERT INTO canonical_review_digest_log(digest_date,tenant_id,pending_count) "
