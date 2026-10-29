@@ -748,6 +748,20 @@ def _turn_key(tenant_id: str, source: DraftSource) -> str:
     return "ctx:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
+def _revision_turn_metadata(classification: Any) -> dict[str, Any]:
+    """Keep the historic turn_kind shape and only the supported evidence fields."""
+    if isinstance(classification, str):
+        try:
+            classification = json.loads(classification)
+        except (TypeError, json.JSONDecodeError):
+            classification = None
+    if not isinstance(classification, dict):
+        return {}
+    return {key: classification[key]
+            for key in ("turn_kind", "decisions", "turn_kind_evidence")
+            if classification.get(key) is not None}
+
+
 async def _resolve_goal_binding(
     conn, *, tenant_uuid: uuid.UUID, session_id: uuid.UUID,
     goal_id: str | None, milestone_id: str | None,
@@ -991,18 +1005,47 @@ async def create_draft(
     revision_metadata = {
         "source_message_ids": [str(value) for value in source_ids],
         "composer_draft": source.composer_draft,
-        "turn_kind": turn_classification["turn_kind"],
+        **_revision_turn_metadata(turn_classification),
     }
     async with get_pool().acquire() as conn:
         async with conn.transaction():
-            # Serialize same-turn requests; the unique index is the backstop behind this lock.
+            # Serialize session writes, including retransmissions with distinct message IDs.
+            # The unique index remains the backstop for selected-response turns.
             await conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                f"directive_draft_turn:{tenant_id}:{turn_key}",
+                f"directive_draft_turn:{tenant_id}:{source.session_id}",
             )
             current = await _find_turn_draft(
                 conn, tenant_uuid=tenant_uuid, source=source, turn_key=turn_key, for_update=True
             )
+            # Preserve ID-based turn keys. Only an identical generated revision from
+            # the same single-user input may reuse another turn's existing result.
+            if (not current and len(source.messages) == 1
+                    and source.messages[0].get("role") == "user" and not source.composer_draft):
+                duplicate = await conn.fetchrow(
+                    """
+                    SELECT d.* FROM directive_drafts d
+                    JOIN chat_messages m ON m.id = d.source_message_ids[1]
+                     AND m.tenant_id = d.tenant_id AND m.session_id = d.session_id
+                    WHERE d.tenant_id = $1 AND d.session_id = $2 AND d.project_key = $3
+                      AND d.classification->>'source_mode' = 'recent_context'
+                      AND d.classification->>'superseded_by' IS NULL
+                      AND cardinality(d.source_message_ids) = 1 AND m.role = 'user'
+                      AND m.content = $4 AND d.content = $5 AND d.title = $6
+                      AND d.classification->>'goal_id' IS NOT DISTINCT FROM $7::text
+                      AND d.classification->>'milestone_id' IS NOT DISTINCT FROM $8::text
+                      AND NOT COALESCE((d.classification->>'composer_draft_included')::boolean, false)
+                    ORDER BY d.created_at DESC, d.id DESC LIMIT 1 FOR UPDATE OF d
+                    """,
+                    tenant_uuid, source.session_id, source.project_key,
+                    source.messages[0].get("content"), content, title,
+                    goal_binding.get("goal_id"), goal_binding.get("milestone_id"),
+                )
+                if duplicate:
+                    return await _draft_result(
+                        conn, tenant_uuid=tenant_uuid, draft=duplicate, artifact=None,
+                        turn_dedup="existing",
+                    )
             if current:
                 _check_existing_goal_binding(current, goal_binding)
                 if await _is_frozen_draft(conn, current):
@@ -1494,8 +1537,8 @@ async def update_draft(
             await conn.execute(
                 """
                 INSERT INTO directive_draft_revisions
-                    (tenant_id, draft_id, revision, title, content, change_source, editor_user_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    (tenant_id, draft_id, revision, title, content, change_source, editor_user_id, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
                 """,
                 tenant_uuid,
                 draft_uuid,
@@ -1504,6 +1547,10 @@ async def update_draft(
                 next_content,
                 change_source,
                 actor_uuid,
+                json.dumps({
+                    "source_message_ids": [str(value) for value in current["source_message_ids"]],
+                    **_revision_turn_metadata(dict(current).get("classification")),
+                }, ensure_ascii=False),
             )
             await conn.execute(
                 """

@@ -33,6 +33,7 @@ class FakeConn:
         self.artifacts: list[dict] = []
         self.revisions: list[dict] = []
         self.events: list[dict] = []
+        self.messages: dict = {}
 
     @asynccontextmanager
     async def transaction(self):
@@ -42,6 +43,21 @@ class FakeConn:
         return row["classification"].get("superseded_by") is None
 
     async def fetchrow(self, query, *args):
+        if "JOIN chat_messages m" in query:
+            tenant, session, project, text, content, title, goal, milestone = args
+            hits = [d for d in self.drafts
+                    if d["tenant_id"] == tenant and d["session_id"] == session
+                    and d["project_key"] == project and self._active(d)
+                    and d["classification"].get("source_mode") == "recent_context"
+                    and len(d["source_message_ids"]) == 1
+                    and self.messages.get(d["source_message_ids"][0], {}).get("content") == text
+                    and d["content"] == content and d["title"] == title
+                    and d["classification"].get("goal_id") == goal
+                    and d["classification"].get("milestone_id") == milestone
+                    and not d["classification"].get("composer_draft_included")]
+            return hits[-1] if hits else None
+        if "SELECT * FROM directive_drafts WHERE id" in query:
+            return next((d for d in self.drafts if (d["id"], d["tenant_id"]) == args), None)
         if "FROM directive_drafts" in query and "selected_assistant_message_id' = $2" in query:
             tenant, mid = args
             hits = [
@@ -80,6 +96,11 @@ class FakeConn:
             self.drafts.append(row)
             return row
         if "UPDATE directive_drafts" in query and "SET title = $3" in query:
+            if len(args) == 5:
+                did, tenant, title, content, revision = args
+                row = next(d for d in self.drafts if d["id"] == did and d["tenant_id"] == tenant)
+                row.update(title=title, content=content, current_revision=revision)
+                return row
             did, tenant, title, content, risk, conf, ids, cls, model, revision = args
             row = next(d for d in self.drafts if d["id"] == did and d["tenant_id"] == tenant)
             row.update(
@@ -119,6 +140,8 @@ class FakeConn:
         if "UPDATE directive_drafts SET artifact_id" in query:
             artifact_id, draft_id = args
             next(d for d in self.drafts if d["id"] == draft_id)["artifact_id"] = artifact_id
+        elif "UPDATE chat_artifacts" in query:
+            await self.fetchrow(query, *args)
         elif "INSERT INTO directive_draft_revisions" in query:
             tenant, draft_id, revision, title, content, change_source, editor, metadata = args
             if any(r["draft_id"] == draft_id and r["revision"] == revision for r in self.revisions):
@@ -128,7 +151,11 @@ class FakeConn:
                 "change_source": change_source, "metadata": json.loads(metadata),
             })
         elif "INSERT INTO directive_draft_events" in query:
-            tenant, draft_id, revision, action, actor, metadata = args
+            if len(args) == 4:
+                tenant, draft_id, revision, actor = args
+                action = "edited"
+            else:
+                tenant, draft_id, revision, action, actor, metadata = args
             self.events.append({"draft_id": draft_id, "revision": revision, "action": action})
         else:
             raise AssertionError(query)
@@ -158,6 +185,7 @@ class Harness:
         return {}
 
     async def _load_source(self, **_kwargs):
+        self.conn.messages.update({m["id"]: m for m in self.source.messages})
         return self.source
 
     async def _generate(self, source, risk_level, **_kwargs):
