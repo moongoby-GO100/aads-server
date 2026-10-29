@@ -54,7 +54,14 @@ class FakeConn:
             return self.session
         if "FROM project_document_heads" in sql:
             return self.head
+        if "FROM project_document_revisions" in sql:
+            return {"id": REV_ID, "doc_tier": "D2", "author_model": "claude-sonnet-5-5"}
         return None
+
+    async def fetch(self, sql, *args):
+        assert "FROM project_document_reviews" in sql
+        return [{"reviewer_model": "codex:gpt-6.1-sol", "reviewer_provider": "openai",
+                 "verdict": "pass", "cross_company": True, "created_at": "now"}]
 
     async def fetchval(self, sql, *args):
         self.sql.append(sql)

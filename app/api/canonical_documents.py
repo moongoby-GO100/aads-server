@@ -539,7 +539,21 @@ async def list_documents(project_key: str, q: str | None = Query(None, max_lengt
             "AND (NOT $5::bool OR selected.id IS NOT NULL) "
             "ORDER BY h.updated_at DESC,h.id LIMIT $6", tenant, project, kind, q, approved_only, limit,
         )
-        return {"documents": [{**dict(row), **revision_metadata(row, row["kind"])} for row in rows]}
+        from app.services.doc_cross_review import summarize
+        ids = [r['approved_revision_id'] if approved_only else r['latest_revision_id'] for r in rows]
+        reviews = await conn.fetch('SELECT * FROM project_document_reviews WHERE revision_id=ANY($1::uuid[]) ORDER BY id', [i for i in ids if i]) if rows else []
+        grouped = {}
+        for review in reviews:
+            grouped.setdefault(review['revision_id'], []).append(review)
+        documents = []
+        for row, revision_id in zip(rows, ids):
+            metadata = revision_metadata(row, row['kind'])
+            history = grouped.get(revision_id, [])
+            result = summarize(metadata['doc_tier'] or metadata.get('doc_tier_computed'), row['author_model'], history)
+            if row['doc_tier'] is None and not history:
+                result['review_state'] = 'not_required'
+            documents.append({**dict(row), **metadata, **result})
+        return {"documents": documents}
 
 
 @router.get("/review-queue")
@@ -582,7 +596,9 @@ async def get_document(project_key: str, document_key: str, approved_only: bool 
                     raise
             card = approval_card(head, {**dict(row), "status": status or "draft"}, project,
                                  can_approve=can_approve)
-        return {"approval_card": card, "document": dict(head), "revision": {**dict(row), **revision_metadata({**dict(row), "goal_linked": head.get("goal_linked", False)}, head.get("kind", ""))} if row else None,
+        from app.services.doc_cross_review import summary
+        review_metadata = await summary(conn, head, row) if row else {}
+        return {**review_metadata, "approval_card": card, "document": dict(head), "revision": {**dict(row), **review_metadata, **revision_metadata({**dict(row), "goal_linked": head.get("goal_linked", False)}, head.get("kind", ""))} if row else None,
                 "status": status or ("draft" if row else "missing"),
                 "authoritative": bool(row and revision_id == head["approved_revision_id"])}
 
@@ -680,6 +696,8 @@ async def approve_document(project_key: str, document_key: str, body: DecisionIn
             return {"approved_revision_id": body.revision_id, "idempotent": True}
         if head["generation"] != body.expected_generation or head["latest_revision_id"] != body.revision_id:
             raise HTTPException(409, "generation_conflict")
+        from app.services.doc_cross_review import enforce
+        await enforce(conn, tenant, project, head, body.revision_id, approve=True)
         last = await conn.fetchval("SELECT action FROM project_document_events WHERE head_id=$1 AND revision_id=$2 "
                                    "AND action IN ('review','approved','archived') ORDER BY id DESC LIMIT 1",
                                    head["id"], body.revision_id)
@@ -759,12 +777,16 @@ async def review_revision_in_tx(
         return {"status": "review", "idempotent": True}
     if head["generation"] != expected_generation or head["latest_revision_id"] != revision_id:
         raise HTTPException(409, "generation_conflict")
+    from app.services.doc_cross_review import enforce
+    metadata = await enforce(conn, tenant, project, head, revision_id)
+    if metadata.get("doc_tier") == "D1":
+        return {"status": "not_required", "idempotent": True, **metadata}
     if last in ("approved", "archived"):
         raise HTTPException(409, "revision_already_decided")
     await conn.execute("UPDATE project_document_heads SET generation=generation+1,updated_at=now() WHERE id=$1", head["id"])
     await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
                        "VALUES($1::uuid,$2,$3,$4,'review',$5)", tenant, project, head["id"], revision_id, actor)
-    return {"status": "review", "idempotent": False}
+    return {"status": "review", "idempotent": False, **metadata}
 
 
 @router.post("/{document_key}/review")
@@ -985,3 +1007,20 @@ async def unlink_legacy_goal_document(project_key: str, document_key: str, goal_
             archived = True
         return {"unlinked": True, "goal_document_id": goal_document_id, "revision_id": removed["revision_id"],
                 "remaining_links": remaining, "archived": archived}
+
+
+@router.post("/{document_key}/cross-review")
+async def cross_review_document(project_key: str, document_key: str, body: DecisionInput, context: dict = WRITE):
+    from app.services.doc_cross_review import execute_review
+    project = _project(project_key)
+    async with get_pool().acquire() as conn:
+        tenant, _ = await _authorize(conn, context, project, "write")
+        head = await _head(conn, tenant, project, document_key)
+        if not head:
+            raise HTTPException(404, "document_not_found")
+        if head["generation"] != body.expected_generation or head["latest_revision_id"] != body.revision_id:
+            raise HTTPException(409, "generation_conflict")
+        revision = await conn.fetchrow("SELECT * FROM project_document_revisions WHERE head_id=$1 AND id=$2", head["id"], body.revision_id)
+        if not revision:
+            raise HTTPException(404, "revision_not_found")
+    return await execute_review(tenant, project, head, revision)

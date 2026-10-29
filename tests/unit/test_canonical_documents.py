@@ -287,8 +287,14 @@ def test_human_approval_and_duplicate_audit(monkeypatch):
     class Conn(StubConnection):
         approved = None
         async def fetchrow(self, sql, *args):
+            if "project_document_revisions" in sql:
+                return {"id": rid, "doc_tier": "D2", "author_model": "claude-sonnet-5-5"}
             return {"id": "head-1", "generation": 1, "latest_revision_id": rid,
                     "approved_revision_id": self.approved}
+        async def fetch(self, sql, *args):
+            return [{"reviewer_model": "codex:gpt-6.1-sol", "reviewer_provider": "openai",
+                     "verdict": "pass", "cross_company": True, "created_at": "now"}]
+
         async def fetchval(self, sql, *args):
             return "review"
         async def execute(self, sql, *args):
@@ -409,8 +415,14 @@ def test_audit_failure_rolls_back_then_human_can_retry(monkeypatch):
                 self.approved = before
                 raise
         async def fetchrow(self, sql, *args):
+            if "project_document_revisions" in sql:
+                return {"id": rid, "doc_tier": "D2", "author_model": "claude-sonnet-5-5"}
             return {"id": "head", "generation": 1, "latest_revision_id": rid,
                     "approved_revision_id": self.approved}
+        async def fetch(self, sql, *args):
+            return [{"reviewer_model": "codex:gpt-6.1-sol", "reviewer_provider": "openai",
+                     "verdict": "pass", "cross_company": True, "created_at": "now"}]
+
         async def fetchval(self, sql, *args):
             return "review"
         async def execute(self, sql, *args):
@@ -434,8 +446,14 @@ def _status_conn(last_action, approved=None):
 
     class Conn(StubConnection):
         async def fetchrow(self, sql, *args):
+            if "project_document_revisions" in sql:
+                return {"id": rid, "doc_tier": "D2", "author_model": "claude-sonnet-5-5"}
             return {"id": "head-1", "generation": 1, "latest_revision_id": rid,
                     "approved_revision_id": approved}
+
+        async def fetch(self, sql, *args):
+            return [{"reviewer_model": "codex:gpt-6.1-sol", "reviewer_provider": "openai",
+                     "verdict": "pass", "cross_company": True, "created_at": "now"}]
 
         async def fetchval(self, sql, *args):
             assert "action IN ('review','approved','archived')" in sql

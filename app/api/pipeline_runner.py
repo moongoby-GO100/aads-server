@@ -17,7 +17,7 @@ from typing import Literal, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator, model_serializer
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 from app.auth import TenantRole, get_current_user, tenant_role_allows
 from app.core.project_config import PROJECT_MAP
@@ -4857,8 +4857,18 @@ async def lock_status(
 
 class _RunnerModelItem(BaseModel):
     """size별 모델 우선순위."""
-    size: str = Field(..., pattern=r"^(XS|S|M|L|XL|AI_REVIEW)$")
+    size: str = Field(..., pattern=r"^(XS|S|M|L|XL|AI_REVIEW|AI_REVIEW_LIGHT|AI_REVIEW_STD|AI_REVIEW_HEAVY)$")
     models: list[str] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def validate_review_companies(self):
+        if self.size in {"AI_REVIEW_LIGHT", "AI_REVIEW_STD", "AI_REVIEW_HEAVY"}:
+            from app.services.doc_tier import provider_of
+            from app.services.code_reviewer import _is_cli_review_model
+            if not all(_is_cli_review_model(m) for m in self.models) or {provider_of(m) for m in self.models} != {"anthropic", "openai"}:
+                raise ValueError("검토 모델에는 Claude·Codex CLI 두 회사가 모두 있어야 합니다")
+        return self
+
 
 
 class _RunnerModelConfigUpdate(BaseModel):
@@ -4879,7 +4889,7 @@ async def get_runner_model_config():
         )
         effective_by_size = {
             size: await _get_model_cycle_for_size(conn, size)
-            for size in ["XS", "S", "M", "L", "XL", "AI_REVIEW"]
+            for size in ["XS", "S", "M", "L", "XL", "AI_REVIEW", "AI_REVIEW_LIGHT", "AI_REVIEW_STD", "AI_REVIEW_HEAVY"]
         }
     configs = []
     for r in rows:

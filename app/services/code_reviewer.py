@@ -354,7 +354,29 @@ _INFRA_FAILURE_CATEGORIES = frozenset({
 })
 
 
-async def _get_review_models() -> list[str]:
+def review_config_for_size(size: str) -> str:
+    return 'AI_REVIEW_' + ('LIGHT' if size in ('XS', 'S') else 'HEAVY' if size in ('L', 'XL') else 'STD')
+
+
+def cross_first(models: list[str], author_model: str | None) -> list[str]:
+    from app.services.doc_tier import provider_of
+    author = provider_of(author_model)
+    cross = [m for m in models if provider_of(m) in ('anthropic', 'openai') and provider_of(m) != author]
+    return cross + [m for m in models if m not in cross] if author in ('anthropic', 'openai') else models
+
+
+async def _job_review_context(job_id: str) -> dict:
+    try:
+        from app.core.db_pool import get_pool
+        async with get_pool().acquire() as conn:
+            row = await conn.fetchrow('SELECT size,actual_model FROM pipeline_jobs WHERE job_id=$1', job_id)
+            return dict(row) if row else {}
+    except Exception:
+        logger.warning('review_job_context_lookup_failed')
+        return {}
+
+
+async def _get_review_models(size: str | None = None) -> list[str]:
     """Return DB-ordered AI_REVIEW models that execute through a CLI relay.
 
     AI review is part of the runner contract, so it must use the same Codex or
@@ -369,9 +391,10 @@ async def _get_review_models() -> list[str]:
         pool = get_pool()
         candidates: list[str] = []
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT models FROM runner_model_config WHERE size = 'AI_REVIEW'"
-            )
+            key = review_config_for_size(size) if size else 'AI_REVIEW'
+            row = await conn.fetchrow("SELECT models FROM runner_model_config WHERE size=$1", key)
+            if not row and key != 'AI_REVIEW':
+                row = await conn.fetchrow("SELECT models FROM runner_model_config WHERE size = 'AI_REVIEW'")
         if row:
             raw = row["models"]
             if isinstance(raw, str):
@@ -393,6 +416,8 @@ async def _get_review_models() -> list[str]:
         # slot transition; filtering through it here previously removed later
         # DB candidates before they could be tried.  Preserve every configured
         # CLI candidate in its DB order instead.
+        if not ordered and size is not None:
+            return await _get_review_models()
         return ordered
     except Exception as e:
         logger.warning("review_model_db_lookup_failed: %s", _sanitize_review_text(e, limit=80))
@@ -1750,6 +1775,11 @@ async def _save_review_result(
     # Defend the persistence boundary as well as verdict construction: future
     # callers must not be able to store unredacted model/proxy text directly.
     safe_feedback = _sanitize_review_feedback(verdict.feedback)
+    if isinstance(safe_feedback, dict) and model_used:
+        from app.services.doc_tier import provider_of
+        context = await _job_review_context(job_id)
+        author = provider_of(context.get('actual_model'))
+        safe_feedback['cross'] = author in ('anthropic', 'openai') and provider_of(model_used) in ('anthropic', 'openai') and author != provider_of(model_used)
     exemption = _PRESERVATION_EXEMPTIONS.get()
     if exemption and exemption[0] == job_id and isinstance(safe_feedback, dict):
         for key, value in exemption[1].items():
@@ -1961,8 +1991,9 @@ async def review_code_diff(
 위 기준에 따라 JSON으로 판정하세요."""
 
     try:
-        configured_models = await _get_review_models()
-        review_models = _review_attempt_models(configured_models, instruction)
+        job_context = await _job_review_context(job_id)
+        configured_models = await _get_review_models(job_context['size']) if job_context.get('size') else await _get_review_models()
+        review_models = cross_first(_review_attempt_models(configured_models, instruction), job_context.get('actual_model'))
         used_model = review_models[0] if review_models else "unconfigured"
 
         # 응답 실패와 JSON 파싱 실패는 같은 모델을 다시 부르지 않고 DB에 등록된

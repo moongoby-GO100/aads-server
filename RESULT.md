@@ -113,3 +113,36 @@ POST JSON: {"revision_id":"<GET 최신 revision UUID>","expected_generation":<GE
 - 코드/테스트 수정 완료. commit/push/build/deploy 실행하지 않음. 승인 후 Runner 빌드 검증 대상.
 - DB 사전 연결 PermissionError로 핸드오버 DB 미기록. entry_key=runner:runner-3327ee51의 upsert/readback 확인 미완료; Runner의 awaiting_approval 처리에 인계한다. HANDOVER.md 변경 없음.
 - 롤백: 이번 8개 Python 파일의 작업 diff만 되돌리면 된다. DB 마이그레이션·운영 문서 변경 없음.
+
+
+## 교차 검토 승인본 재반영 결과 (runner-c3275e55)
+
+### STEP 0 조사 및 변경 전 분류
+
+- 기준 HEAD 및 로컬 origin/main: 043bcf3e0193f2659447cf945b53be92a962ac47. 초기 작업 트리 clean. git fetch origin main은 Git 관리 디렉터리 읽기 전용으로 실패하여 원격 최신 여부는 확인하지 못했다.
+- 유지: code_reviewer의 diff 전처리, _cross_file_moves, 보존 게이트·예외·측정·CLI 실행 및 code_reviews 저장 계약. review_code_diff의 보존 게이트 흐름을 그대로 두고 모델 선택 부분에만 승인 diff 적용.
+- 수정: _get_review_models(등급 설정 및 기존 AI_REVIEW 폴백), _save_review_result(cross 메타데이터), review_code_diff(cross_first 정렬).
+- 신규(승인 커밋 복원): review_config_for_size, cross_first, _job_review_context. pipeline_jobs 조회 및 runner_model_config 읽기 추가.
+- 수정: canonical_documents의 list_documents/get_document/review_revision_in_tx/approve_document에 검토 상태·강제 게이트 연결. 기존 권한·사람 승인·정본 판본 처리 유지. 신규: cross_review_document 라우트.
+- 수정: pipeline_runner._RunnerModelItem 검증 및 get_runner_model_config 등급 목록. canonical_document_tools.review_document의 상태·구조화 오류 반환. 나머지 함수·클래스·엔드포인트 유지.
+- 신규(승인 커밋 복원): doc_cross_review의 ReviewerPick, pick_reviewers, tier_of, summarize, summary, notify_blocked, _record, execute_review, schedule, enforce. CLI relay, project_document_reviews, lease/budget 접점 및 비동기 검토 task 등록. 별도 주기 스케줄러 추가 없음.
+- 신규: 승인본의 정방향/롤백 SQL 파일 및 test_doc_cross_review. 수정: 기존 canonical_documents 및 canonical_document_review_tool 테스트 fake DB. 기존 테스트 삭제 없음. scripts/run_unit_tests.sh는 유지.
+- 변경 전 범위 사유: 착수 브리프에 없는 API 2개, canonical_document_tools, doc_cross_review, SQL 2개, test_doc_cross_review는 지정 승인 커밋 자체의 변경 파일이므로 동일 변경 목록 복원을 위해 포함한다. RESULT.md는 기존 내용 뒤에 이번 결과만 추가한다. 새 앱 구현이나 추가 개선은 하지 않는다.
+- 삭제 없음. DB 마이그레이션 적용·운영 설정 변경 없음. 코드 롤백은 이번 작업 diff만 되돌리는 방식이며 SQL 롤백 파일은 승인본 그대로 보존한다.
+- 커밋 생성 금지 지시에 따라 cherry-pick 대신 f3078d8d의 RESULT.md 제외 diff를 git apply로 적용한다. 부모 커밋 생성/검증은 수행하지 않는다.
+
+### 실제 반영 및 검증 결과
+
+- 변경 파일(승인본과 같은 11개): RESULT.md, app/api/canonical_documents.py, app/api/pipeline_runner.py, app/services/canonical_document_tools.py, app/services/code_reviewer.py, app/services/doc_cross_review.py, migrations/20261029_doc_cross_review.sql, migrations/rollback/20261029_doc_cross_review.down.sql, tests/unit/test_canonical_document_review_tool.py, tests/unit/test_canonical_documents.py, tests/unit/test_doc_cross_review.py.
+- 승인 diff는 충돌 없이 적용됐다. 코드/테스트/SQL 10개 파일 모두 승인본과 추가·삭제 줄 또는 신규 파일 바이트가 동일함을 검증했다. 최신 main의 교차 파일 이동 보존 게이트는 수정하지 않았으며 AI_REVIEW 3분할·cross_first가 동일 review_code_diff 흐름에 공존한다.
+- 요구 명령 실행: bash scripts/run_unit_tests.sh tests/unit/test_code_reviewer_cross_file_move.py tests/unit/test_doc_cross_review.py tests/unit/test_canonical_documents.py tests/unit/test_canonical_document_review_tool.py tests/unit/test_canonical_review_chat_card.py tests/unit/test_doc_tier.py → 종료코드 2. 기준 이미지 부재(no such container: aads-server/aads-server-green).
+- 호스트 기존 가상환경 Python 3.12.3 사용, 테스트용 JWT_SECRET_KEY 지정. 문서 관련 5개 파일 별도 실행: 260 passed in 4.20s.
+- 최초 호스트 pytest(요구 6개 + test_code_reviewer_*.py 전체)는 24개 진행 후 정지. 단일 테스트 faulthandler 진단에서도 asyncio.runners.close → run_until_complete → selectors.select에서 대기하는 상태를 확인했다. 이 실행은 통과로 처리하지 않는다. 프로세스 종료 명령은 실행하지 않았다.
+- 호스트 우회 검증: 별도 Python 실행에서 asyncio.to_thread만 동일 함수를 호출하는 async wrapper로 치환한 뒤 pytest.main으로 요구 6개 + tests/unit/test_code_reviewer_*.py 전체 실행. **516 passed in 23.68s, 실패 0, 종료코드 0**. 앱/테스트 파일 변경 없이 검증했으며 스레드 실행·종료 자체는 이 결과가 검증하지 않는다. 원래 호스트 pytest 및 단일 진단 실행은 종료 완료를 확인하지 못했다.
+- 변경 Python 8개: /root/aads/aads-server/.venv/bin/ruff check --select F821,F811 → All checks passed, 종료코드 0.
+- 변경 Python 8개: python3 -m compileall -q → 종료코드 0. git diff --check → 종료코드 0.
+- 승인본 변경 파일 집합 11개 일치 검사 및 10개 코드/테스트/SQL 승인 diff 동일성 검사 → 통과. RESULT.md의 기존 내용은 보존했다.
+- 원격 최신 origin/main은 fetch 권한 제약으로 미확인. 로컬 origin/main=HEAD=043bcf3e 기준으로 반영. git cherry-pick/commit/push 실행 없음, 커밋 부모 완료 기준은 검증하지 못했다. 빌드 실행 없음: 승인 후 Runner 빌드 검증 대상.
+- 운영 마이그레이션/runner_model_config 값/대시보드/compose/.env/시크릿/HANDOVER.md 변경 없음. 새 정본 문서 생성 없이 기존 RESULT.md만 추가했으며 열람 링크 미제공.
+
+- 핸드오버 DB 미기록: 기존 runner_handover_write.write_and_verify 경로를 쓰기 위해 pipeline_jobs의 tenant/project 조회를 시도했으나 연결/종료 대기 상태로 upsert/readback 성공을 확인하지 못했다. handover_db_write_failed 이벤트를 이 결과에 기록하며, Runner의 awaiting_approval 처리에 DB 재기록을 인계한다. 쓰기 전용/monitor 자격은 현재 환경에 없고 비밀 값 조회·복사·출력은 하지 않았다.

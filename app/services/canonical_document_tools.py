@@ -247,6 +247,8 @@ async def review_document(
             "revision_already_decided": "이미 승인 또는 보관된 판본이라 검토로 되돌릴 수 없습니다",
             "generation_conflict": "다른 변경과 충돌했습니다. 다시 조회한 뒤 시도하세요",
         }
+        if isinstance(exc.detail, dict):
+            return {"error": exc.detail.get("code"), "status": exc.status_code, **exc.detail}
         return {"error": str(exc.detail), "status": exc.status_code,
                 "message": messages.get(str(exc.detail), str(exc.detail))}
 
@@ -254,11 +256,13 @@ async def review_document(
         logger.info("canonical_document_review project=%s key=%s revision=%s actor=%s reason=%s",
                     project, key, revision_id, actor, reason)
     return {
+        "doc_tier": result.get("doc_tier"),
+        "review_state": result.get("review_state"),
         "reviewed": True,
         "project": project,
         "document_key": key,
         "revision_id": str(revision_id),
-        "status": "review",
+        "status": result["status"],
         "idempotent": result["idempotent"],
         "approved": False,
         "reason": reason,
