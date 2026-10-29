@@ -1,5 +1,6 @@
 # 승인 전 템플릿이다. 설치(/etc/systemd/system 복사·enable)는 별도 승인 뒤에 한다.
 # 설치 전제: scripts/pending_migrations/20261020_rdoc_registration_daily.sql 적용 완료.
+# 설치 전제: git -C /root/aads/aads-server worktree add --detach /root/aads/rdoc-collector origin/main (공유 체크아웃은 건드리지 않고 전용 worktree에서 실행).
 # 제거(롤백): systemctl disable --now aads-rdoc-registration-daily.timer 후 두 유닛 파일 삭제.
 [Unit]
 Description=AADS R-DOC 일일 정본 등록률 수집 (M5)
@@ -7,10 +8,14 @@ Description=AADS R-DOC 일일 정본 등록률 수집 (M5)
 [Service]
 Type=oneshot
 User=root
-WorkingDirectory=/root/aads/aads-server
+WorkingDirectory=/root/aads/rdoc-collector
 EnvironmentFile=-/root/.config/aads-runner.env
+# 서버 .env의 DATABASE_URL은 connection_params()(scripts/project_document_m3_inventory.py:369)가 PG*보다 먼저 사용하지만 호스트에서 해석할 수 없는 Docker 내부 호스트를 가리키므로, 접속 정보는 /root/.config/aads-runner.env의 PG*를 사용한다.
 Environment=HOME=/root
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# 전용 worktree를 실행 전 origin/main 에 맞춰 고정한다.
+ExecStartPre=git -C /root/aads/aads-server fetch --quiet origin main
+ExecStartPre=git -C /root/aads/rdoc-collector checkout --quiet --detach --force origin/main
 # 어제(KST) 하루치. origin/main 을 fetch 해 최신성을 확인해야 on_time 으로 인정된다.
 # 호스트 체크아웃이 origin/main 보다 뒤처질 수 있어 로컬 HEAD 가 아니라 origin/main 을 쓴다.
 # 호스트 python3 에 asyncpg 가 없어 저장소 venv 를 사용한다.

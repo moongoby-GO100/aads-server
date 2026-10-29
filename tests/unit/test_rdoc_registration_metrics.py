@@ -459,6 +459,10 @@ def test_schema_and_units_are_staged_outside_auto_apply_paths():
     timer = (_REPO / "scripts" / "pending_units" / "aads-rdoc-registration-daily.timer").read_text(encoding="utf-8")
     assert "Persistent=false" in timer, "꺼져 있던 날을 몰아 수집해 on_time 으로 위장하면 안 된다"
     service = (_REPO / "scripts" / "pending_units" / "aads-rdoc-registration-daily.service").read_text(encoding="utf-8")
+    assert "WorkingDirectory=/root/aads/rdoc-collector" in service
+    assert "ExecStartPre=git -C /root/aads/aads-server fetch --quiet origin main" in service
+    assert "ExecStartPre=git -C /root/aads/rdoc-collector checkout --quiet --detach --force origin/main" in service
+    assert "/root/aads/aads-server/.env" not in service
     assert "--fetch --apply" in service
     assert "ExecStart=/root/aads/aads-server/.venv/bin/python scripts/rdoc_registration_collect.py collect --fetch --apply" in service
 
