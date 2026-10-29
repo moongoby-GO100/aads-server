@@ -418,6 +418,17 @@ def test_lost_lease_discards_cli_result(monkeypatch):
     assert not db.rows
 
 
+def test_rollback_sql_preserves_tables_and_does_not_restore_check():
+    from pathlib import Path
+    import re
+
+    down = Path('migrations/rollback/20261029_doc_cross_review.down.sql').read_text()
+    body = re.sub(r'--[^\n]*', '', down)
+    assert re.search(r'\bDROP\s+TABLE\b', body, re.IGNORECASE) is None
+    assert re.search(r'\bTRUNCATE\b', body, re.IGNORECASE) is None
+    assert re.search(r'\bADD\s+CONSTRAINT\s+runner_model_config_size_chk\b', body, re.IGNORECASE) is None
+
+
 def test_d3_failure_exhaustion_releases_daily_reservation(monkeypatch):
     db = ReviewDB([CLAUDE, OPUS, CODEX])
     original = db.execute

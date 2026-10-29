@@ -146,3 +146,27 @@ POST JSON: {"revision_id":"<GET 최신 revision UUID>","expected_generation":<GE
 - 운영 마이그레이션/runner_model_config 값/대시보드/compose/.env/시크릿/HANDOVER.md 변경 없음. 새 정본 문서 생성 없이 기존 RESULT.md만 추가했으며 열람 링크 미제공.
 
 - 핸드오버 DB 미기록: 기존 runner_handover_write.write_and_verify 경로를 쓰기 위해 pipeline_jobs의 tenant/project 조회를 시도했으나 연결/종료 대기 상태로 upsert/readback 성공을 확인하지 못했다. handover_db_write_failed 이벤트를 이 결과에 기록하며, Runner의 awaiting_approval 처리에 DB 재기록을 인계한다. 쓰기 전용/monitor 자격은 현재 환경에 없고 비밀 값 조회·복사·출력은 하지 않았다.
+
+## 문서 교차 검토 롤백 보정 결과 (AADS-DOC-CROSS-REVIEW-ROLLBACK-NO-DROP-20261029)
+
+### STEP 0 기존 구현 분류
+
+| 대상 | 분류 및 처리 |
+|---|---|
+| `20261029_doc_cross_review.down.sql` 트랜잭션 | 유지: BEGIN/COMMIT |
+| rollback backup 테이블 생성 및 세 행 백업 | 유지: CREATE TABLE IF NOT EXISTS와 INSERT 보존 |
+| 세 교차 검토 설정 행 DELETE | 유지: 요청된 백업 후 제거 순서 보존 |
+| runner_model_config_size_chk 제거 | 수정: DROP CONSTRAINT만 수행하고 재추가하지 않음 |
+| document_cross_review_budget/leases 테이블 | 수정: 보존, DROP 문 제거 |
+| 기존 test_doc_cross_review 테스트 | 유지: 삭제·수정 없음 |
+| 롤백 SQL 정적 회귀 테스트 | 신규: 주석 제외 DROP TABLE/TRUNCATE 및 CHECK 재추가 부재 확인 |
+| 삭제 | 없음 |
+
+### 실제 변경 및 검증
+
+- 변경: migrations/rollback/20261029_doc_cross_review.down.sql, tests/unit/test_doc_cross_review.py. 요청된 결과 기록은 이 RESULT.md에 추가했다.
+- `bash scripts/run_unit_tests.sh tests/unit/test_doc_cross_review.py`: 종료코드 2. 테스트 컨테이너 `aads-server`, `aads-server-green`가 없어 5초 간격 6회 재시도 후 중단됐다. 통과 아님.
+- 전체 `git diff --stat`: RESULT.md를 포함해 3개 파일(38 insertions, 5 deletions). 보고서 기록 요구까지 반영한 결과다.
+- 대상 코드 2개만 `git diff --stat -- migrations/rollback/20261029_doc_cross_review.down.sql tests/unit/test_doc_cross_review.py`: 2 files changed, 14 insertions(+), 5 deletions(-).
+- `git diff --check`: 통과.
+- up 마이그레이션, 앱 코드, 운영 DB 및 HANDOVER.md 변경 없음. commit/push/build/deploy 실행 없음.
