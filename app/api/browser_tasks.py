@@ -634,6 +634,23 @@ class AuthWaitTransition(BaseModel):
     artifact_id: str = ""
 
 
+@router.post("/{task_id}/auth-evidence")
+async def api_issue_auth_evidence(task_id: str, req: AuthWaitTransition,
+                                 context: TenantContext = Depends(require_member)) -> dict[str, Any]:
+    from app.services.auth_challenge_orchestrator import issue_auth_wait_evidence
+    try:
+        return await issue_auth_wait_evidence(
+            tenant_id=_tenant_id(context), task_id=task_id, user_id=_user_id(context), scope=req.scope,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status = 429 if code == "auth_evidence_rate_limited" else 409
+        if code == "auth_task_not_found":
+            status = 404
+        raise HTTPException(status_code=status, detail=code,
+                            headers={"Retry-After": "10"} if status == 429 else None) from exc
+
+
 @router.post("/{task_id}/auth-resume")
 async def api_resume_auth_wait(task_id: str, req: AuthWaitTransition,
                                context: TenantContext = Depends(require_member)) -> dict[str, Any]:

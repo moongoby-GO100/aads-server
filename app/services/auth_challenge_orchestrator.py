@@ -397,3 +397,80 @@ async def auth_wait_user(*, tenant_id: str, session_id: str, provenance_user: st
     ):
         raise ValueError("auth_session_user_mismatch")
     return str(user)
+
+
+async def issue_auth_wait_evidence(
+    *, tenant_id: str, task_id: str, user_id: str, scope: dict[str, Any],
+) -> dict[str, Any]:
+    """Reserve a capture across API instances, then observe outside the row lock."""
+    import uuid
+    from datetime import datetime, timezone
+    import structlog
+    from app.core.db_pool import get_pool
+    from app.services.browser_task_gateway import _json_dict, append_browser_task_event
+    from app.services.work_recipe.dom_evidence import issue_dom_evidence, verify_dom_evidence
+
+    scope = validate_auth_scope(scope)
+    await auth_wait_user(tenant_id=tenant_id, session_id=scope["session_id"], provenance_user=user_id)
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT * FROM browser_tasks WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+                uuid.UUID(tenant_id), uuid.UUID(task_id),
+            )
+            if not row or str(row["user_id"]) != user_id:
+                raise ValueError("auth_task_not_found")
+            result = _json_dict(row["result"])
+            if (result.get("auth_scope") != scope or scope["tenant_id"] != tenant_id
+                    or str(row["session_id"]) != scope["session_id"]):
+                raise ValueError("auth_scope_mismatch")
+            if row["status"] != "waiting_for_user":
+                raise ValueError("auth_wait_already_consumed")
+            if datetime.fromisoformat(scope["expires_at"].replace("Z", "+00:00")) <= datetime.now(timezone.utc):
+                raise ValueError("auth_scope_expired")
+            browser_session = str(result.get("browser_session_id") or "")
+            if (scope["lane"] == "pc") != bool(browser_session):
+                raise ValueError("auth_evidence_browser_scope_mismatch")
+            limited = await conn.fetchval(
+                """SELECT EXISTS(SELECT 1 FROM browser_task_events
+                   WHERE tenant_id=$1 AND task_id=$2 AND event_type='auth:evidence_requested'
+                   AND created_at > NOW() - INTERVAL '10 seconds')""",
+                uuid.UUID(tenant_id), uuid.UUID(task_id),
+            )
+            if limited:
+                raise ValueError("auth_evidence_rate_limited")
+            await append_browser_task_event(conn=conn, tenant_id=tenant_id, task_id=task_id,
+                                            event_type="auth:evidence_requested", payload={})
+            wait_started = row["updated_at"]
+    logger = structlog.get_logger(__name__)
+    logger.info("auth_evidence_requested", task_id=task_id)
+    issued = await issue_dom_evidence(
+        tenant_id=tenant_id, chat_session_id=scope["session_id"],
+        agent=f"chat:{scope['session_id']}", url=scope["target"], verify=result.get("verify"),
+        lane=scope["lane"], browser_session_id=browser_session,
+        browser_work_key=scope["work_key"] if browser_session else "",
+    )
+    trusted = await verify_dom_evidence(
+        tenant_id=tenant_id, chat_session_id=scope["session_id"], claimed=issued,
+        domain=scope["target"], verify=result.get("verify"),
+    )
+    if trusted["lane"] != scope["lane"]:
+        raise ValueError("auth_evidence_lane_mismatch")
+    if scope["lane"] == "pc" and (
+        trusted.get("browser_session_id") != browser_session or trusted.get("work_key") != scope["work_key"]
+    ):
+        raise ValueError("auth_evidence_browser_scope_mismatch")
+    if datetime.fromisoformat(trusted["captured_at"].replace("Z", "+00:00")) <= wait_started:
+        raise ValueError("auth_evidence_predates_wait")
+    # A concurrent cancel/resume must not produce a successful capture response.
+    async with get_pool().acquire() as conn:
+        current = await conn.fetchrow(
+            "SELECT * FROM browser_tasks WHERE tenant_id=$1 AND id=$2",
+            uuid.UUID(tenant_id), uuid.UUID(task_id),
+        )
+    if (not current or current["status"] != "waiting_for_user"
+            or current["updated_at"] != wait_started or _json_dict(current["result"]) != result):
+        raise ValueError("auth_evidence_binding_changed")
+    logger.info("auth_evidence_issued", task_id=task_id, artifact_id=trusted["artifact_id"])
+    return {"artifact_id": trusted["artifact_id"], "captured_at": trusted["captured_at"],
+            "origin": "server_observation", "verified": True}

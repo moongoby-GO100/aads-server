@@ -573,3 +573,11 @@ async def test_server_redirect_private_url_rejected_before_artifact(store, page,
     with pytest.raises(de.DomEvidenceError, match='private_target_rejected'):
         await _issue(lane=lane)
     assert calls == [URL] and not store.rows
+
+
+async def test_capture_preserves_subsecond_wait_ordering(store, page):
+    before = datetime.now(timezone.utc)
+    issued = await _issue()
+    assert datetime.fromisoformat(issued['captured_at']) > before
+    trusted = await _verify(issued)
+    assert trusted['captured_at'] == issued['captured_at']

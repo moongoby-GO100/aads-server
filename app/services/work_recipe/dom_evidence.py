@@ -42,7 +42,7 @@ def binding_hash(binding: Mapping[str, Any]) -> str:
 
 
 def _iso(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).isoformat(timespec="seconds")
+    return moment.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _parse_iso(value: Any) -> datetime | None:
