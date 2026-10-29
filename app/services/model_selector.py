@@ -7154,9 +7154,9 @@ def _build_system_with_cache(system_prompt: str) -> List[Dict[str, Any]]:
 
 
 def _tool_result_content(content, tool_name: str) -> str:
-    """Only the named canonical lookup gets its bounded structured transport budget."""
+    """Canonical lookup and review get the bounded structured transport budget."""
     text = str(content)
-    if tool_name != "canonical_document_lookup":
+    if tool_name not in {"canonical_document_lookup", "canonical_document_review"}:
         return text[:3000]
     if len(text) > 32000:
         # Preserve complete cards when a multi-document summary exceeds transport.

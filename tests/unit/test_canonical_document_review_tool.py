@@ -228,7 +228,8 @@ async def test_executor_handler_requires_tenant_and_delegates(monkeypatch):
         assert res["error"] == "missing_tenant_id"
         te.current_tenant_id.set(TENANT)
         te.current_chat_session_id.set(SESSION)
-        rev = AsyncMock(return_value={"reviewed": True})
+        rev = AsyncMock(return_value={"reviewed": True, "project": "AADS", "document_key": "design"})
+        monkeypatch.setattr(cdt, "lookup_documents", AsyncMock(return_value={"registered": True}))
         monkeypatch.setattr(cdt, "review_document", rev)
         assert (await te.ToolExecutor()._canonical_document_review(_inp()))["reviewed"] is True
         assert rev.await_args.kwargs["tenant_id"] == TENANT and rev.await_args.kwargs["session_id"] == SESSION

@@ -1810,7 +1810,7 @@ def _tool_result_event_snapshot(event: Dict[str, Any], content_limit: int = 500)
         "tool_use_id": event.get("tool_use_id", ""),
         "content": str(event.get("content", ""))[:content_limit],
     }
-    if event.get("tool_name") == "canonical_document_lookup":
+    if event.get("tool_name") in {"canonical_document_lookup", "canonical_document_review"}:
         try:
             result = json.loads(str(event.get("content", "")))
             cards = ([result["approval_card"]] if result.get("approval_card") else
@@ -1963,7 +1963,7 @@ def normalize_tool_events(tools_called: Any) -> List[Dict[str, Any]]:
                 "tool_use_id": str(item.get("tool_use_id") or ""),
                 "content": str(item.get("content") or "")[:500],
             }
-            if tool_name == "canonical_document_lookup" and isinstance(item.get("canonical_document_cards"), list):
+            if tool_name in {"canonical_document_lookup", "canonical_document_review"} and isinstance(item.get("canonical_document_cards"), list):
                 from app.services.canonical_document_tools import validated_approval_cards
                 payload["canonical_document_cards"] = validated_approval_cards(item["canonical_document_cards"])
             for key in ("is_error", "error_type", "cancel_scope", "raw_error"):

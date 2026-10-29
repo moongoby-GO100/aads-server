@@ -1556,7 +1556,17 @@ class ToolExecutor:
         tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
         if not tenant_id:
             return _missing_tenant_id_result("canonical_document_review")
-        return await review_document(tenant_id=tenant_id, session_id=session_id, inp=inp)
+        result = await review_document(tenant_id=tenant_id, session_id=session_id, inp=inp)
+        if result.get("reviewed") and not result.get("error"):
+            from app.services.canonical_document_tools import lookup_documents
+
+            document = await lookup_documents(
+                tenant_id=tenant_id,
+                inp={"project": result["project"], "document_key": result["document_key"]},
+            )
+            if document.get("approval_card"):
+                result["approval_card"] = document["approval_card"]
+        return result
 
     async def _skill_find(self, inp: Dict[str, Any]) -> Any:
         """Read-only search over registered skills."""
