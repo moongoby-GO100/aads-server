@@ -5944,10 +5944,86 @@ def _format_messages_as_text(messages: List[Dict[str, Any]], has_resume: bool = 
 
     def _compact(role: str, content: str) -> str:
         if role == "assistant" and len(content) > 1000:
-            return content[:800] + "\n...[응답 축소]..." + content[-200:]
-        if role == "user" and len(content) > 1600:
-            return content[:1300] + "\n...[지시 축소]..." + content[-300:]
-        return content
+            head, tail, label = 800, 200, "응답"
+        elif role == "user" and len(content) > 1600:
+            head, tail, label = 1300, 300, "지시"
+        else:
+            return content
+
+        # Scan complete source lines, retaining only lines touched by the omitted
+        # middle. Table groups stay intact; newest next steps precede job lines.
+        groups = []
+        table = []
+        in_table = False
+        offset = 0
+        for raw in content.splitlines(keepends=True):
+            line = raw.rstrip("\r\n")
+            stripped = line.strip()
+            end = offset + len(raw)
+            in_middle = offset < len(content) - tail and end > head
+            offset = end
+            if not stripped.startswith("|"):
+                if table:
+                    groups.append((0, table))
+                    table = []
+                in_table = False
+            header = bool(_re_mod.match(r"^\|\s*순위\s*\|", stripped))
+            if header:
+                if table:
+                    groups.append((0, table))
+                table = []
+                in_table = True
+            if in_table and stripped.startswith("|"):
+                if in_middle:
+                    table.append((offset, line))
+                continue
+            if not in_middle:
+                continue
+            if _re_mod.search(r"(?<![\w-])runner-[0-9a-f]{8}(?![\w-])", line):
+                groups.append((1, [(offset, line)]))
+            elif (
+                _re_mod.search(r"`[0-9a-fA-F]{7,40}`", line)
+                or stripped.startswith("→ ")
+                or (stripped.startswith("|") and any(
+                    word in line for word in ("승인", "반려", "보류", "미완료")
+                ))
+            ):
+                groups.append((2, [(offset, line)]))
+        if table:
+            groups.append((0, table))
+
+        marker = "\n...[%s 축소 — 보존 항목]...\n" % label
+        budget = 1200 - len(marker)
+        selected = []
+        latest_table = max((lines[-1][0] for kind, lines in groups if kind == 0), default=-1)
+        jobs = [lines for kind, lines in groups if kind == 1]
+        newest_job = max(jobs, key=lambda lines: lines[-1][0], default=[])
+        job_reserve = min(sum(len(line) + 1 for _, line in newest_job), budget)
+
+        def _priority(item):
+            kind, lines = item
+            rank = (0 if lines[-1][0] == latest_table else 2) if kind == 0 else (1 if kind == 1 else 3)
+            return rank, -lines[-1][0]
+
+        for priority, lines in sorted(groups, key=_priority):
+            available = budget - job_reserve if priority == 0 else budget
+            size = sum(len(line) + 1 for _, line in lines)
+            if size <= available:
+                selected.extend(lines)
+                budget -= size
+            elif priority == 0:
+                # Oversize tables still retain their header and newest rows.
+                candidates = lines[:1] + list(reversed(lines[1:]))
+                for item in candidates:
+                    size = len(item[1]) + 1
+                    if size <= available:
+                        selected.append(item)
+                        available -= size
+                        budget -= size
+        if selected:
+            preserved = "\n".join(line for _, line in sorted(selected)) + "\n"
+            return content[:head] + marker + preserved + content[-tail:]
+        return content[:head] + "\n...[%s 축소]..." % label + content[-tail:]
 
     def _render_history(history: List[Dict[str, Any]]) -> str:
         parts = []
