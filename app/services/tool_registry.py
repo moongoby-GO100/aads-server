@@ -3666,6 +3666,26 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "description": "revision 전용. 서버 docs/ 기준 상대경로(예 docs/design/mockups/20261015_goal_strip_dormancy/manifest.json). manifest 와 둘 중 하나",
                 },
                 "manifest": {"type": "object", "description": "revision 전용 manifest 본문(screens/assets/evidence). manifest_path 와 둘 중 하나"},
+                "html_source": {
+                    "type": "object",
+                    "description": (
+                        "revision 전용 편의 입력. HTML 한 장을 목업 asset 으로 가져와 manifest.assets 에 primary 항목으로 덧붙인다. "
+                        "url(https, aads.newtalk.kr·v2.newtalk.kr 등 허용 호스트) 또는 upload_path(이 채팅에 올린 .html) 중 하나. "
+                        "HTML 안에 외부 주소(http(s)·//·/절대경로)나 상대 경로 참조가 있으면 등록하지 않고 목록과 함께 거절한다 "
+                        "— 이미지·폰트를 data: 로 넣은 단일 HTML 이어야 한다. screen_id 는 manifest 화면이 하나뿐이면 생략 가능."
+                    ),
+                    "properties": {
+                        "url": {"type": "string"},
+                        "upload_path": {"type": "string"},
+                        "screen_id": {"type": "string"},
+                        "asset_id": {"type": "string"},
+                        "phase": {"type": "string", "enum": ["before", "mockup", "implemented"]},
+                        "viewport": {"type": "string", "description": "desktop|mobile|tablet|1440x900 형식. 기본 desktop"},
+                        "state": {"type": "string", "description": "기본 default"},
+                        "fixture_id": {"type": "string"},
+                        "capture_source": {"type": "string"},
+                    },
+                },
                 "doc_refs": {
                     "type": "array",
                     "items": {

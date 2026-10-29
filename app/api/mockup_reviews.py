@@ -116,10 +116,10 @@ async def get_revision(project_key: str, review_id: UUID, revision_id: UUID, con
 @router.get("/{review_id}/revisions/{revision_id}/assets/{asset_id}")
 async def get_asset(project_key: str, review_id: UUID, revision_id: UUID, asset_id: str = ASSET_ID,
                     context: dict = VIEW):
-    data, mime = await _run(project_key, context, "read",
-                            lambda c, t, p, a, e: svc.get_asset(c, t, p, review_id, revision_id, asset_id))
+    data, mime, csp = await _run(project_key, context, "read",
+                            lambda c, t, p, a, e: svc.get_asset(c, t, p, review_id, revision_id, asset_id, with_policy=True))
     headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=31536000, immutable",
-               "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'"}
+               "Content-Security-Policy": csp}
     return Response(content=data, media_type=mime, headers=headers)
 
 

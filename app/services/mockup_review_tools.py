@@ -22,8 +22,9 @@ from app.auth import (
 )
 from app.core.db_pool import get_pool
 from app.models.mockup_review import (
-    DocRefInput, ManifestInput, ReviewCreate, RevisionCreate, SubmitReview,
+    AssetInput, DocRefInput, ManifestInput, ReviewCreate, RevisionCreate, SubmitReview,
 )
+from app.services import mockup_html_import
 from app.services import mockup_review_service as svc
 
 ACTIONS = ("create", "revision", "submit", "status")
@@ -110,6 +111,48 @@ def _load_manifest(inp: dict[str, Any]) -> ManifestInput:
         return ManifestInput.model_validate(_unwrap_manifest(body))
     except ValidationError as exc:
         raise _Invalid("manifest: " + _validation_message(exc)) from exc
+
+
+_HTML_SOURCE_KEYS = frozenset({"url", "upload_path", "asset_id", "screen_id", "phase", "viewport", "state",
+                               "fixture_id", "capture_source"})
+
+
+def _parse_html_source(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise _Invalid("html_source 는 {url} 또는 {upload_path} 객체여야 합니다")
+    unknown = sorted(set(raw) - _HTML_SOURCE_KEYS)
+    if unknown:
+        raise _Invalid("html_source 에 알 수 없는 키가 있습니다: " + ", ".join(unknown))
+    url, upload = str(raw.get("url") or "").strip(), str(raw.get("upload_path") or "").strip()
+    if bool(url) == bool(upload):
+        raise _Invalid("html_source 에는 url 과 upload_path 중 정확히 하나가 필요합니다")
+    return raw
+
+
+async def _add_html_asset(project: str, session_id: str, source: dict[str, Any], manifest: ManifestInput) -> None:
+    """HTML 을 asset 저장소에 가져온 뒤 manifest.assets 에 primary 항목으로 덧붙인다 (기존 항목은 그대로)."""
+    screen_id = str(source.get("screen_id") or "").strip()
+    if not screen_id:
+        if len(manifest.screens) != 1:
+            raise _Invalid("html_source.screen_id 가 필요합니다 (manifest 의 화면이 정확히 하나일 때만 생략 가능)")
+        screen_id = manifest.screens[0].screen_id
+    if source.get("url"):
+        stored, _ = await mockup_html_import.import_from_url(project, str(source["url"]))
+    else:
+        stored, _ = await mockup_html_import.import_from_chat_upload(project, session_id, str(source["upload_path"]))
+    try:
+        asset = AssetInput(
+            asset_id=str(source.get("asset_id") or "") or f"html-{stored['sha256'][:12]}",
+            role="primary", uri=stored["uri"], sha256=stored["sha256"], byte_size=stored["byte_size"],
+            mime=stored["mime"], screen_id=screen_id, phase=source.get("phase") or "mockup",
+            viewport=source.get("viewport") or "desktop", fixture_id=source.get("fixture_id") or "html-import",
+            state=source.get("state") or "default",
+            captured_at=mockup_html_import.stored_at(stored["uri"]),
+            capture_source=source.get("capture_source") or "html_import",
+        )
+    except ValidationError as exc:
+        raise _Invalid("html_source: " + _validation_message(exc)) from exc
+    manifest.assets.append(asset)
 
 
 async def _chat_context(conn: Any, tenant_id: str, session_id: str) -> Optional[dict[str, Any]]:
@@ -204,6 +247,11 @@ async def run_action(*, tenant_id: str, session_id: str, inp: dict[str, Any], po
             raise _Invalid("review_id 가 필요합니다")
         if action == "create":
             create_body = _create_body(inp, session_id)
+        html_source = None
+        if inp.get("html_source") not in (None, "", {}):
+            if action != "revision":
+                raise _Invalid("html_source 는 action=revision 에서만 쓸 수 있습니다")
+            html_source = _parse_html_source(inp["html_source"])
         revision_id = _uuid(inp["revision_id"], "revision_id") if inp.get("revision_id") else None
         parent_id = _uuid(inp["parent_revision_id"], "parent_revision_id") if inp.get("parent_revision_id") else None
         explicit_gen = inp.get("expected_generation")
@@ -235,6 +283,8 @@ async def run_action(*, tenant_id: str, session_id: str, inp: dict[str, Any], po
             if action == "revision":
                 try:
                     manifest = _load_manifest(inp)
+                    if html_source:
+                        await _add_html_asset(project, session_id, html_source, manifest)
                     body = RevisionCreate(
                         manifest=manifest, doc_refs=doc_refs, parent_revision_id=parent_id,
                         manifest_hash=inp.get("manifest_hash") or None,

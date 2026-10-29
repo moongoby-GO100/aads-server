@@ -72,6 +72,7 @@ from app.api.directive_drafts import router as directive_drafts_router
 from app.api.braming import router as braming_router
 from app.api.project_docs import router as project_docs_router
 from app.api.canonical_documents import router as canonical_documents_router
+from app.api.mockup_assets import router as mockup_assets_router
 from app.api.mockup_reviews import router as mockup_reviews_router
 from app.api.inbox import router as inbox_router
 from app.api.ohvis_main_chat import router as ohvis_main_chat_router
@@ -4138,6 +4139,7 @@ app.include_router(braming_router)
 app.include_router(project_docs_router, prefix="/api/v1", tags=["project-docs"])
 app.include_router(canonical_documents_router, prefix="/api/v1")
 app.include_router(mockup_reviews_router, prefix="/api/v1")
+app.include_router(mockup_assets_router, prefix="/api/v1")
 app.include_router(inbox_router, prefix="/api/v1")
 app.include_router(ohvis_main_chat_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1", tags=["files"])

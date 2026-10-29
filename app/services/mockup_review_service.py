@@ -43,6 +43,9 @@ EXTENSION_MIME = {
     ".js": "text/javascript", ".woff2": "font/woff2",
 }
 TEXT_MIME = {"text/html", "text/css", "text/javascript", "image/svg+xml"}
+LEGACY_ASSET_CSP = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'"
+HTML_ASSET_CSP = ("sandbox allow-scripts; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline' data:; "
+                  "font-src data:; script-src 'unsafe-inline'")
 BLOCKED_BEFORE_SOURCES = {"login_redirect", "login_screen", "error_page", "blocked"}
 VISUAL_EVIDENCE = {"browser_capture", "snapshot"}
 _BAD_URI_CHARS = re.compile(r"[\\?#%:\x00-\x1f\x7f]")
@@ -196,10 +199,8 @@ def _child_uri(parent_uri: str, ref: str) -> str | None:
     return ASSET_SCHEME + joined
 
 
-def child_references(asset: dict, data: bytes) -> set[str]:
-    """Normalized internal URIs of every sub-resource a text asset pulls in."""
-    mime = asset["mime"]
-    text = data.decode("utf-8", errors="replace")
+def raw_references(mime: str, text: str) -> list[str]:
+    """Every sub-resource reference string a text asset declares, before URI normalisation."""
     raw: list[str] = []
     if mime == "text/html":
         collector = _RefCollector()
@@ -210,6 +211,12 @@ def child_references(asset: dict, data: bytes) -> set[str]:
             raw.extend(_css_refs(block))
     elif mime == "text/css":
         raw.extend(_css_refs(text))
+    return raw
+
+
+def child_references(asset: dict, data: bytes) -> set[str]:
+    """Normalized internal URIs of every sub-resource a text asset pulls in."""
+    raw = raw_references(asset["mime"], data.decode("utf-8", errors="replace"))
     found = set()
     for ref in raw:
         target = _child_uri(asset["uri"], ref)
@@ -1452,7 +1459,7 @@ async def get_revision(conn: Any, tenant: str, project: str, review_id: UUID, re
 
 
 async def get_asset(conn: Any, tenant: str, project: str, review_id: UUID, revision_id: UUID,
-                    asset_id: str) -> tuple[bytes, str]:
+                    asset_id: str, *, with_policy: bool = False) -> tuple:
     row = await conn.fetchrow(
         "SELECT r.manifest FROM mockup_review_revisions r JOIN mockup_review_heads h ON h.id=r.head_id "
         "WHERE r.id=$1 AND r.head_id=$2 AND h.tenant_id=$3::uuid AND h.project_key=$4",
@@ -1468,6 +1475,11 @@ async def get_asset(conn: Any, tenant: str, project: str, review_id: UUID, revis
         fail(409, "asset_tampered", assets=[{"asset_id": asset_id, "reason": exc.code}])
     if sha256_hex(data) != asset["sha256"] or len(data) != asset["byte_size"]:
         fail(409, "asset_tampered", assets=[{"asset_id": asset_id, "reason": "hash_changed"}])
+    if with_policy:
+        # Only the content-addressed single-file import namespace gets scripts.
+        imported = (asset["mime"] == "text/html" and re.fullmatch(
+            rf"internal://mockup_assets/{re.escape(project)}/html/[0-9a-f]{{16}}/index\.html", asset["uri"]))
+        return data, asset["mime"], HTML_ASSET_CSP if imported else LEGACY_ASSET_CSP
     return data, asset["mime"]
 
 
