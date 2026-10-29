@@ -83,6 +83,36 @@ def _validate_request_type(request_type: str | None) -> str:
     return normalized
 
 
+def missing_design_scope_fields(
+    allowed_scope: Any, forbidden_scope: Any, acceptance_criteria: Any,
+) -> list[str]:
+    """Return scope fields without meaningful content, including JSON inputs."""
+    def filled(value: Any) -> bool:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return False
+            try:
+                return filled(json.loads(value))
+            except json.JSONDecodeError:
+                return True
+        if isinstance(value, list):
+            return any(str(item).strip() for item in value)
+        if isinstance(value, dict):
+            if "notes" in value:
+                return filled(value["notes"])
+            return any(filled(item) for item in value.values())
+        return bool(value)
+
+    return [
+        field for field, value in (
+            ("allowed_scope", allowed_scope),
+            ("forbidden_scope", forbidden_scope),
+            ("acceptance_criteria", acceptance_criteria),
+        ) if not filled(value)
+    ]
+
+
 def _as_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
@@ -405,17 +435,15 @@ async def create_design_modification_request(
     normalized_project_key = _normalize_project_key(payload.project_key)
     normalized_request_type = _validate_request_type(payload.request_type)
     normalized_status = _validate_status(payload.status) or "draft"
-    if normalized_status == "review":
-        for field in ("allowed_scope", "forbidden_scope", "acceptance_criteria"):
-            value = getattr(payload, field)
-            if isinstance(value, str):
-                value = value.strip()
-                try:
-                    value = json.loads(value)
-                except (ValueError, TypeError):
-                    pass
-            if not value:
-                raise HTTPException(status_code=400, detail=f"{field} is required for review")
+    if normalized_status in {"review", "ready", "running", "approved"}:
+        missing = missing_design_scope_fields(
+            payload.allowed_scope, payload.forbidden_scope, payload.acceptance_criteria,
+        )
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{', '.join(missing)} is required for {normalized_status}",
+            )
     user_prompt = payload.user_prompt.strip()
     if not user_prompt:
         raise HTTPException(status_code=400, detail="user_prompt is required")

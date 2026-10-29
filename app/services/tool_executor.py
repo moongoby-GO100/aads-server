@@ -1683,11 +1683,31 @@ class ToolExecutor:
             request_type = "other"
 
         def _list_from(value: Any) -> list[str]:
+            if isinstance(value, dict):
+                value = value.get("notes", list(value.values()))
             if isinstance(value, list):
                 return [str(item).strip() for item in value if str(item).strip()]
             if isinstance(value, str):
-                return [line.strip() for line in value.splitlines() if line.strip()]
+                try:
+                    parsed = json.loads(value)
+                except json.JSONDecodeError:
+                    return [line.strip() for line in value.splitlines() if line.strip()]
+                return _list_from(parsed)
             return []
+
+        from app.api.design_modifications import missing_design_scope_fields
+
+        allowed_scope = inp.get("allowed_scope")
+        if not isinstance(allowed_scope, dict):
+            allowed_scope = {"notes": _list_from(allowed_scope)}
+        forbidden_scope = inp.get("forbidden_scope")
+        if not isinstance(forbidden_scope, dict):
+            forbidden_scope = {"notes": _list_from(forbidden_scope)}
+        acceptance_criteria = _list_from(inp.get("acceptance_criteria"))
+        missing_fields = missing_design_scope_fields(
+            allowed_scope, forbidden_scope, acceptance_criteria,
+        )
+        request_status = "draft" if missing_fields else "ready"
 
         screen_id = str(inp.get("screen_id") or "").strip()
         screen_route = str(inp.get("screen_route") or "").strip()
@@ -1732,7 +1752,7 @@ class ToolExecutor:
                         VALUES (
                             $1, NULLIF($2, '')::uuid, $3, $4::jsonb,
                             $5, $6::jsonb, $7::jsonb,
-                            $8::jsonb, 'ready'
+                            $8::jsonb, $9
                         )
                         RETURNING id, project_key, screen_id, user_prompt,
                                   request_type, status, created_at
@@ -1748,9 +1768,10 @@ class ToolExecutor:
                     user_prompt,
                     json.dumps(normalized_card, ensure_ascii=False),
                     request_type,
-                    json.dumps({"notes": _list_from(inp.get("allowed_scope"))}, ensure_ascii=False),
-                    json.dumps({"notes": _list_from(inp.get("forbidden_scope"))}, ensure_ascii=False),
-                    json.dumps(_list_from(inp.get("acceptance_criteria")), ensure_ascii=False),
+                    json.dumps(allowed_scope, ensure_ascii=False),
+                    json.dumps(forbidden_scope, ensure_ascii=False),
+                    json.dumps(acceptance_criteria, ensure_ascii=False),
+                    request_status,
                 )
         except Exception as exc:
             return {"error": str(exc)}
@@ -1764,7 +1785,7 @@ class ToolExecutor:
             except Exception as exc:
                 context_pack = {"error": str(exc)}
 
-        return {
+        result = {
             "status": "created",
             "request": dict(row),
             "context_pack": context_pack,
@@ -1773,6 +1794,10 @@ class ToolExecutor:
                 "workbench": f"/design/modifications/{request_id}/workbench",
             },
         }
+        if missing_fields:
+            result["missing_fields"] = missing_fields
+            result["draft_reason"] = "수정 범위와 완료 기준이 부족하여 초안으로 저장했습니다: " + ", ".join(missing_fields)
+        return result
 
     async def _read_github_file(self, inp: Dict[str, Any]) -> Any:
         repo = (inp.get("repo") or "").strip()
