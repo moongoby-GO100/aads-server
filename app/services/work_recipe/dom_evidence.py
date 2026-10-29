@@ -78,10 +78,28 @@ def _json_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+async def validate_server_observation_url(url: str) -> None:
+    """Public server captures cannot target loopback, private or metadata addresses."""
+    import asyncio
+    import ipaddress
+    import socket
+
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme not in {"http", "https"} or not host or parts.username or parts.password:
+        raise DomEvidenceError("dom_evidence_url_invalid")
+    try:
+        resolved = await asyncio.to_thread(socket.getaddrinfo, host, parts.port or 443, type=socket.SOCK_STREAM)
+    except (OSError, ValueError):
+        raise DomEvidenceError("dom_evidence_dns_unavailable") from None
+    if not resolved or any(not ipaddress.ip_address(item[4][0]).is_global for item in resolved):
+        raise DomEvidenceError("dom_evidence_private_target_rejected")
+
+
 async def issue_dom_evidence(
     *, tenant_id: Any, chat_session_id: str, agent: str, url: str,
     verify: Any, browser_session_id: str = "", browser_work_key: str = "",
-    run_id: str = "", ttl_seconds: int = DEFAULT_TTL_SECONDS,
+    run_id: str = "", lane: str = "", ttl_seconds: int = DEFAULT_TTL_SECONDS,
 ) -> dict[str, Any]:
     """읽기 전용 verify(assertion) 를 지금 화면에서 실제로 돌려 통과했을 때만 artifact 를 발급한다."""
     from app.services.work_recipe.executor import BrowserRecipeExecutor
@@ -89,6 +107,12 @@ async def issue_dom_evidence(
     from app.services.work_recipe.registration import normalize_verify_steps
     from app.services.work_recipe.schema import WorkRecipe
 
+    if lane not in {"", "server", "pc", "pc_agent"}:
+        raise DomEvidenceError("dom_evidence_lane_invalid")
+    if lane == "server" and (browser_session_id or browser_work_key):
+        raise DomEvidenceError("dom_evidence_lane_conflict")
+    if not browser_session_id:
+        await validate_server_observation_url(url)
     assertions = normalize_verify_steps(verify)
     if not assertions:
         raise DomEvidenceError("dom_evidence_verify_required")
@@ -99,15 +123,15 @@ async def issue_dom_evidence(
     tenant = uuid.UUID(str(tenant_id))
     session = str(browser_session_id or "").strip()
     work_key = str(browser_work_key or "").strip()
-    # PC 세션이 지정되면 PC 레인으로 관찰한다. 지정이 없으면 서버 헤드리스이며,
-    # 사내 호스트가 아니면 GenericVerificationExecutor 가 pc_agent_lane_required 로 거절한다.
+    # PC 세션 없는 관찰은 서버 URL 검증을 거친다. PC 세션과 혼용하지 않는다.
     context = {"smart_browser": {"server_access_blocked": True}} if session else {}
 
     recipe = WorkRecipe.from_dict({
         "name": "dom_evidence_observation", "domain": target_host,
         "steps": [{"action": "snapshot", "selector": "body"}], "verify": assertions,
+        "metadata": {"lane": "server"} if lane == "server" else {},
     })
-    executor = BrowserRecipeExecutor(browser_session_id=session or None, browser_work_key=work_key or None)
+    executor = BrowserRecipeExecutor(browser_session_id=session or None, browser_work_key=work_key or None, tenant_id=tenant_id)
     verifier = GenericVerificationExecutor(executor, recipe)
     try:
         page = await executor._get_page({"url": url, "context": context})
@@ -116,6 +140,8 @@ async def issue_dom_evidence(
     except Exception as exc:
         raise DomEvidenceError(f"dom_evidence_page_unavailable:{type(exc).__name__}") from exc
     current_url = str(getattr(page, "url", "") or "")
+    if not session:
+        await validate_server_observation_url(current_url)
     if urlsplit(current_url).scheme not in {"http", "https"} or not host_within(_host_of(current_url), target_host):
         raise DomEvidenceError("dom_evidence_origin_mismatch")
 
@@ -207,5 +233,6 @@ async def verify_dom_evidence(
         "artifact_id": str(row["id"]), "screenshot_url": str(row["storage_uri"]),
         "url": str(row["source_url"]), "captured_at": meta["captured_at"],
         "expires_at": meta["expires_at"], "binding_hash": digest,
-        "assertions": stored_assertions,
+        "browser_session_id": meta.get("browser_session_id", ""), "work_key": meta.get("work_key", ""),
+        "assertions": stored_assertions, "lane": "pc" if meta.get("route") == "pc_agent" else "server",
     }

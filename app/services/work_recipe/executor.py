@@ -120,6 +120,9 @@ def smart_browser_route(context: Mapping[str, Any] | None = None) -> dict[str, s
     handled by the Human Gateway after the Browser Agent observes them.
     """
     context = context or {}
+    if "login_contract" in context:
+        from app.services.work_recipe.login_contract import contract_route
+        return contract_route(context["login_contract"])
     smart_context = context.get("smart_browser")
     if isinstance(smart_context, Mapping):
         context = {**context, **smart_context}
@@ -211,6 +214,10 @@ class BrowserRecipeExecutor:
             return {"ok": False, "status": "blocked", "route": "browser_agent", "llm_calls": 0,
                     "error": f"financial_manual_blocked:{exc.code}"}
 
+        route = self._route(payload)
+        if route["runtime"] == "human_gateway":
+            return {"ok": False, "status": "waiting_for_user", "error": route["reason"],
+                    "recovery": {"route": "human_gateway", "reason": route["reason"], "resume": "same_work_session"}}
         result = await self._attempt(action, payload)
         # 봇 차단은 예외로만 오지 않는다. 쿠팡처럼 "Access Denied" 한 장을
         # 200 으로 돌려주면 단계는 성공하고 증거만 차단 화면이 된다(2026-09-21 실측).
@@ -220,6 +227,10 @@ class BrowserRecipeExecutor:
         if not blocked:
             return result
         recovery = result.get("recovery") or {}
+        if "login_contract" in self._context_payload(payload):
+            return {**result, "ok": False, "status": "waiting_for_user",
+                    "access": "server_restricted_pc_unverified",
+                    "recovery": {"route": "human_gateway", "reason": "pc_verification_required", "resume": "same_work_session"}}
         # 서버 IP 가 막힌 것은 사람이 풀어 줄 수 있는 문제가 아니다.
         # PC 레인이 준비돼 있으면 같은 단계를 그 레인에서 한 번 더 실행한다.
         resume = "pc_lane_also_failed" if self._pc_lane_forced else "needs_browser_work_key"
@@ -296,7 +307,27 @@ class BrowserRecipeExecutor:
             review = await self._gate(payload, level)
             self._assert_trusted_arguments(payload)
             page = await self._get_page(payload)
+            contract = self._context_payload(payload).get("login_contract")
+            if isinstance(contract, Mapping) and (contract.get("challenge") or {}).get("active"):
+                return {"ok": False, "status": "waiting_for_user", "route": "human_gateway",
+                        "error": "active_auth_challenge",
+                        "recovery": {"route": "human_gateway", "reason": "active_auth_challenge", "resume": "same_work_session"}}
+            if isinstance(contract, Mapping) and contract.get("oauth"):
+                from app.services.work_recipe.login_contract import assert_oauth_scope
+                opener = await page.evaluate("(() => { try { return window.opener ? window.opener.location.origin + window.opener.location.pathname : location.origin + location.pathname; } catch (_) { return ''; } })()")
+                assert_oauth_scope(contract, current_url=await self._live_href(page),
+                                   opener_url=opener, target_url=payload.get("url") or contract["oauth"]["target"])
             output = await self._execute(page, action, payload)
+            if isinstance(contract, Mapping):
+                challenge_visible = await page.evaluate("""() => {
+                    const selectors = ['input[autocomplete="one-time-code"]', '[data-auth-challenge="active"]'];
+                    return selectors.some(s => [...document.querySelectorAll(s)].some(el =>
+                        !el.disabled && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)));
+                }""")
+                if challenge_visible is True:
+                    return {"ok": False, "status": "waiting_for_user", "route": "human_gateway",
+                            "error": "active_auth_challenge", "evidence": {},
+                            "recovery": {"route": "human_gateway", "reason": "active_auth_challenge", "resume": "same_work_session", "step_completed": True}}
             evidence = await self._evidence_for(page)
             regression = self._auth_regression(payload, evidence)
             if regression:

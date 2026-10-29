@@ -187,3 +187,213 @@ def approved_operator_input(payload: dict[str, Any]) -> str:
         return ""
     value = str(payload.get("approved_input") or payload.get("captcha_value") or "")
     return re.sub(r"[^0-9A-Za-z-]", "", value)[:32]
+
+
+AUTH_SCOPE_FIELDS = frozenset(
+    {
+        "tenant_id",
+        "business_ref",
+        "account_ref",
+        "session_id",
+        "work_key",
+        "lane",
+        "target",
+        "recipe_name",
+        "recipe_version",
+        "checkpoint",
+        "expires_at",
+    }
+)
+
+
+def validate_auth_scope(scope: Any) -> dict[str, Any]:
+    """Only references belong in a durable Human Gateway checkpoint."""
+    from datetime import datetime
+    from urllib.parse import urlsplit
+
+    if not isinstance(scope, dict) or set(scope) != AUTH_SCOPE_FIELDS:
+        raise ValueError("auth_scope_invalid")
+    if any(not str(value).strip() for value in scope.values()):
+        raise ValueError("auth_scope_incomplete")
+    if scope["lane"] not in {"server", "pc"}:
+        raise ValueError("auth_lane_invalid")
+    target = urlsplit(str(scope["target"]))
+    if (
+        target.scheme != "https"
+        or not target.hostname
+        or target.query
+        or target.fragment
+        or target.username
+        or target.password
+    ):
+        raise ValueError("auth_target_invalid")
+    if (
+        type(scope["checkpoint"]) is not int
+        or scope["checkpoint"] < 0
+        or type(scope["recipe_version"]) is not int
+    ):
+        raise ValueError("auth_checkpoint_invalid")
+    expiry = datetime.fromisoformat(str(scope["expires_at"]).replace("Z", "+00:00"))
+    if expiry.tzinfo is None:
+        raise ValueError("auth_expiry_invalid")
+    return dict(scope)
+
+
+async def persist_auth_wait(
+    *,
+    scope: dict[str, Any],
+    user_id: str,
+    reason: str,
+    verify: list[dict[str, Any]],
+    browser_session_id: str = "",
+) -> dict[str, Any]:
+    """Reuse browser_tasks and its event ledger; never persist challenge values."""
+    from app.services.browser_task_gateway import create_browser_task, update_browser_task_status
+
+    scope = validate_auth_scope(scope)
+    if not verify:
+        raise ValueError("auth_resume_verification_required")
+    task = await create_browser_task(
+        tenant_id=scope["tenant_id"],
+        user_id=user_id,
+        work_key=scope["work_key"],
+        session_id=scope["session_id"],
+        target_url=scope["target"],
+        current_step=str(scope["checkpoint"]),
+    )
+    return await update_browser_task_status(
+        tenant_id=scope["tenant_id"],
+        task_id=task["id"],
+        status="waiting_for_user",
+        result={
+            "auth_scope": scope,
+            "reason": reason,
+            "verify": verify,
+            "browser_session_id": browser_session_id,
+            "challenge_values_persisted": False,
+        },
+    )
+
+
+async def transition_auth_wait(
+    *,
+    tenant_id: str,
+    task_id: str,
+    user_id: str,
+    scope: dict[str, Any],
+    action: str,
+    artifact_id: str = "",
+) -> dict[str, Any]:
+    """Serialize resume/cancel with a DB row lock and fresh, session-bound screen evidence."""
+    import json
+    import uuid
+    from datetime import datetime, timezone
+    from app.core.db_pool import get_pool
+    from app.services.browser_task_gateway import (
+        _json_dict,
+        _task_to_dict,
+        append_browser_task_event,
+    )
+    from app.services.work_recipe.dom_evidence import verify_dom_evidence
+
+    scope = validate_auth_scope(scope)
+    if action not in {"resume", "cancel"}:
+        raise ValueError("auth_action_invalid")
+    trusted = None
+    evidence_result = None
+    if action == "resume" and datetime.fromisoformat(
+        scope["expires_at"].replace("Z", "+00:00")
+    ) > datetime.now(timezone.utc):
+        async with get_pool().acquire() as conn:
+            snapshot = await conn.fetchrow(
+                "SELECT * FROM browser_tasks WHERE tenant_id=$1 AND id=$2",
+                uuid.UUID(tenant_id),
+                uuid.UUID(task_id),
+            )
+        if not snapshot or str(snapshot["user_id"]) != user_id:
+            raise ValueError("auth_task_not_found")
+        evidence_result = _json_dict(snapshot["result"])
+        if evidence_result.get("auth_scope") != scope or scope["tenant_id"] != tenant_id:
+            raise ValueError("auth_scope_mismatch")
+        if snapshot["status"] != "waiting_for_user":
+            raise ValueError("auth_wait_already_consumed")
+        trusted = await verify_dom_evidence(
+            tenant_id=tenant_id,
+            chat_session_id=scope["session_id"],
+            claimed={"artifact_id": artifact_id},
+            domain=scope["target"],
+            verify=evidence_result.get("verify"),
+        )
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT * FROM browser_tasks WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+                uuid.UUID(tenant_id),
+                uuid.UUID(task_id),
+            )
+            if not row or str(row["user_id"]) != user_id:
+                raise ValueError("auth_task_not_found")
+            result = _json_dict(row["result"])
+            if result.get("auth_scope") != scope or scope["tenant_id"] != tenant_id:
+                raise ValueError("auth_scope_mismatch")
+            if row["status"] != "waiting_for_user":
+                raise ValueError("auth_wait_already_consumed")
+            expired = datetime.fromisoformat(
+                scope["expires_at"].replace("Z", "+00:00")
+            ) <= datetime.now(timezone.utc)
+            if expired:
+                status = "expired"
+            elif action == "cancel":
+                status = "cancelled"
+            else:
+                if (
+                    trusted is None
+                    or result != evidence_result
+                    or trusted.get("artifact_id") != artifact_id
+                ):
+                    raise ValueError("auth_evidence_binding_changed")
+                if scope["lane"] == "pc" and (
+                    trusted.get("browser_session_id") != result.get("browser_session_id")
+                    or trusted.get("work_key") != scope["work_key"]
+                ):
+                    raise ValueError("auth_evidence_browser_scope_mismatch")
+                if trusted["lane"] != scope["lane"]:
+                    raise ValueError("auth_evidence_lane_mismatch")
+                # Capture must follow the wait; old login screenshots cannot unlock it.
+                captured = datetime.fromisoformat(trusted["captured_at"].replace("Z", "+00:00"))
+                if captured <= row["updated_at"]:
+                    raise ValueError("auth_evidence_predates_wait")
+                status = "queued"
+                result["resume_artifact_id"] = artifact_id
+            updated = await conn.fetchrow(
+                "UPDATE browser_tasks SET status=$3,result=$4::jsonb,updated_at=NOW() WHERE tenant_id=$1 AND id=$2 RETURNING *",
+                uuid.UUID(tenant_id),
+                uuid.UUID(task_id),
+                status,
+                json.dumps(result),
+            )
+            await append_browser_task_event(
+                conn=conn,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                event_type="auth:" + status,
+                payload={"checkpoint": scope["checkpoint"]},
+            )
+            return _task_to_dict(updated)
+
+
+async def auth_wait_user(*, tenant_id: str, session_id: str, provenance_user: str) -> str:
+    """Resolve a tool's session principal to the same user the dashboard authenticates."""
+    from app.core.db_pool import get_pool
+
+    async with get_pool().acquire() as conn:
+        user = await conn.fetchval(
+            "SELECT user_id::text FROM chat_sessions WHERE id=$1::uuid AND tenant_id=$2::uuid",
+            session_id,
+            tenant_id,
+        )
+    if not user or (
+        not provenance_user.startswith("chat-session:") and str(user) != provenance_user
+    ):
+        raise ValueError("auth_session_user_mismatch")
+    return str(user)

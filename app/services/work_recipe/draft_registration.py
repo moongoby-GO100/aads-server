@@ -80,6 +80,18 @@ async def register_generic_draft(
             **registration_module.normalize_flow_metadata(inp),
         }
         piece_metadata = registration_module.normalize_piece_metadata(inp)
+        metadata = inp.get("metadata") or {}
+        if not isinstance(metadata, Mapping):
+            raise ValueError("metadata_invalid")
+        for key in ("login_contract", "credential_scope"):
+            value = inp.get(key, metadata.get(key))
+            if value is not None:
+                if key == "login_contract":
+                    from app.services.work_recipe.login_contract import normalize_login_contract
+                    value = normalize_login_contract(value)
+                elif not isinstance(value, Mapping):
+                    raise ValueError("credential_scope_invalid")
+                piece_metadata[key] = value
         screen = await _screen_evidence(
             evidence, tenant_id=tenant_id, session_id=session_id, domain=domain,
             verify=top_verify or evidence_verify,
@@ -105,6 +117,10 @@ async def register_generic_draft(
             name, domain, tenant_id, session_id=session_id, e2e_evidence=screen,
             verify=verify_steps, flow_metadata={**flow_metadata, **piece_metadata},
         )
+        scope = piece_metadata.get("credential_scope")
+        if isinstance(scope, Mapping):
+            from app.services.work_recipe.schema import RecipeInput
+            recording.inputs = [RecipeInput(name=str(key), secret=True) for key in scope.get("inputs", {})]
         for raw_step in steps:
             payload = dict(raw_step)
             succeeded = payload.pop("succeeded", True) is True
@@ -142,7 +158,7 @@ async def register_draft_batch(
         return {"error": "pieces_required"}
     if len(pieces) > MAX_BATCH_PIECES:
         return {"error": f"too_many_pieces:max_{MAX_BATCH_PIECES}"}
-    defaults = {key: inp[key] for key in ("domain", "lane") if inp.get(key) not in (None, "")}
+    defaults = {key: inp[key] for key in ("domain", "lane", "login_contract", "credential_scope") if inp.get(key) not in (None, "")}
 
     from app.services.work_recipe.approval_card import propose_card
 

@@ -138,3 +138,19 @@ async def test_without_verify_behaviour_is_unchanged(captured):
 def test_recorder_default_has_no_verify():
     recording = recorder_module.start_recording("n", "example.com", TENANT_ID)
     assert recording.verify == [] and recording.flow_metadata == {}
+
+
+async def test_credential_scope_and_login_contract_roundtrip(captured):
+    scope = {'version': 1, 'inputs': {'vault_password': {
+        'credential_id': '22222222-2222-2222-2222-222222222222', 'field': 'password'}},
+        'allowed_domains': ['example.com'], 'allowed_recipes': ['login_screen_check']}
+    contract = {'version': 1, 'access': 'unknown', 'primary': ['password'], 'options': ['passkey']}
+    result = await _register(credential_scope=scope, login_contract=contract,
+        steps=[{'action': 'fill', 'selector': '#password', 'value': '{{vault_password}}'}])
+    assert result['status'] == 'approval_required'
+    recipe = parse_recipe(captured['spec'])
+    from app.services.work_recipe.vault_reference import parse_scope
+    assert parse_scope(recipe).inputs['vault_password'].field == 'password'
+    assert recipe.metadata['credential_scope'] == scope
+    assert recipe.metadata['login_contract']['options'] == ['passkey']
+    assert recipe.steps[0].value == '{{vault_password}}'

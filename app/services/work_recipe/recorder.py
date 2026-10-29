@@ -52,8 +52,13 @@ class WorkRecipeRecorder:
         raw = dict(payload)
         raw.pop("seq", None)
         if self._is_credential_step(raw):
+            scoped_variable = ""
+            if self.flow_metadata.get("credential_scope"):
+                match = re.fullmatch(r"\{\{\s*([\w.]+)\s*\}\}", str(raw.get("value") or ""))
+                scoped_variable = match.group(1) if match else ""
             variable = str(
                 raw.pop("credential_variable", "")
+                or scoped_variable
                 or f"credential_{len(self.inputs) + 1}"
             )
             raw.pop("credential", None)

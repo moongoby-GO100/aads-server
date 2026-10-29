@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 SCOPE_VERSION = 1
 SUPPORTED_FIELDS: frozenset[str] = frozenset({"username", "password"})
 _REFERENCE_KEYS = frozenset({"credential_id", "field"})
-_SCOPE_KEYS = frozenset({"version", "inputs", "allowed_domains", "allowed_recipes", "work_key"})
+_SCOPE_KEYS = frozenset({"version", "inputs", "allowed_domains", "allowed_recipes", "work_key", "tenant_id", "account_ref", "business_ref"})
 _WORK_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
 _SINGLE_VARIABLE = re.compile(r"^\s*\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}\s*$")
 # credential_vault.get_credential 은 복호화에 실패하면 이 문자열을 값 자리에 넣는다.
@@ -267,6 +267,13 @@ def _assert_credential_usable(
             code, input_name=name, credential_id=binding.credential_id, field_name=binding.field
         )
 
+    declared_scope = recipe.metadata.get("credential_scope") or {}
+    if declared_scope.get("tenant_id") and _uuid_text(declared_scope["tenant_id"]) != _uuid_text(tenant_id):
+        raise blocked("credential_not_found")
+    credential_metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
+    for key in ("account_ref", "business_ref"):
+        if declared_scope.get(key) and declared_scope[key] != credential_metadata.get(key):
+            raise blocked("credential_scope_mismatch")
     row_tenant = _uuid_text(item.get("tenant_id"))
     if not row_tenant or row_tenant != _uuid_text(tenant_id):
         raise blocked("credential_not_found")

@@ -113,6 +113,8 @@ class RunResult:
         if self.status == STATUS_SUCCESS:
             return "completed"
         for step in self.steps:
+            if step.recovery.get("status") == "waiting_for_user":
+                return "waiting_for_user"
             if step.status == STATUS_BLOCKED and step.recovery.get("reason") == "auth_required":
                 return "auth_required"
             if step.status == STATUS_BLOCKED and str(step.recovery.get("reason") or "").startswith("overlay_"):
@@ -235,6 +237,8 @@ class RecipePlayer:
 
         stop_index: int | None = None
         for index, (phase, step) in enumerate(planned):
+            if phase == "step" and step.seq <= int((context or {}).get("resume_checkpoint") or 0):
+                continue
             guard_hook = getattr(self._recorder, "before_step", None)  # P1 승인 게이트/도메인 가드
             if guard_hook is not None:
                 await _maybe_await(guard_hook(run_id=result.run_id, step=step, phase=phase))

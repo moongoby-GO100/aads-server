@@ -263,21 +263,32 @@ async def run_directive(
     coupang = recipe.name in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}
     if coupang:
         validate_coupangeats_recipe(recipe)
-        if (not browser_session_id or browser_work_key != recipe.metadata["work_key"]
-                or triggered_by == f"chat:{recipe.metadata.get('source_chat_session_id')}"):
+        if (
+            not browser_session_id
+            or browser_work_key != recipe.metadata["work_key"]
+            or triggered_by == f"chat:{recipe.metadata.get('source_chat_session_id')}"
+        ):
             raise ValueError("coupangeats_pc_session_or_replay_boundary_required")
         from app.browser_bridge.service import get_browser_bridge_service
 
         session = get_browser_bridge_service().sessions.get(browser_session_id)
-        if (session is None or session.work_key != browser_work_key
-                or str(session.endpoint.kind.value) != "local_agent"):
+        if (
+            session is None
+            or session.work_key != browser_work_key
+            or str(session.endpoint.kind.value) != "local_agent"
+        ):
             raise ValueError("coupangeats_pc_lane_required")
     if shinhan_manual.is_shinhan_recipe(recipe):
         # 금융 레시피는 락 → 서버측 승인 → Vault 해석 순서가 따로 있다. 신한 로직은 전부 그 모듈에 있다.
         return await shinhan_manual.run_financial_recipe(
-            recipe, action_intent=action_intent, tenant_id=tenant_id, intent_inputs=intent_inputs,
-            browser_session_id=browser_session_id, browser_work_key=browser_work_key,
-            triggered_by=triggered_by, task_id=task_id,
+            recipe,
+            action_intent=action_intent,
+            tenant_id=tenant_id,
+            intent_inputs=intent_inputs,
+            browser_session_id=browser_session_id,
+            browser_work_key=browser_work_key,
+            triggered_by=triggered_by,
+            task_id=task_id,
         )
     shinhan_manual.assert_unregistered_runtime_host(recipe, intent_inputs)
     pc_lane = not coupang and _recipe_requires_pc_lane(recipe)
@@ -288,7 +299,10 @@ async def run_directive(
     if vault_reference.has_vault_scope(recipe):
         # 승인 판본이 선언한 {credential_id, field} 만 쓴다. 호출자 값·권한은 받지 않고 테넌트는 서버 컨텍스트에서 온다.
         resolution = await vault_reference.resolve_inputs(
-            recipe, intent_inputs, tenant_id=tenant_id, browser_work_key=browser_work_key,
+            recipe,
+            intent_inputs,
+            tenant_id=tenant_id,
+            browser_work_key=browser_work_key,
         )
         resolved_inputs = resolution.values
     else:
@@ -316,33 +330,221 @@ async def run_directive(
         step_executor = GenericVerificationExecutor(executor, recipe)
     else:
         step_executor = executor
-    return await play_recipe(
-        recipe,
-        step_executor,
-        resolved_inputs,
-        recorder=recorder,
-        max_risk="IRREVERSIBLE",
-        context={
-            "domain": recipe.domain,
-            # Recipe metadata is registered/approved along with the immutable
-            # recipe version.  It is the only source allowed to request a
-            # native PC lane; a chat directive cannot promote itself there.
-            "smart_browser": {
-                "native_auth_required": bool(recipe.metadata.get("native_auth_required")),
-                "requires_local_security_programs": bool(recipe.metadata.get("requires_local_security_programs")),
-                # 봇/WAF 가 데이터센터 IP 를 막는 사이트는 처음부터 PC 레인으로 간다.
-                # native_auth_required 를 대신 켜서 우회하지 않는다.
-                "server_access_blocked": coupang or pc_lane or bool(recipe.metadata.get("server_access_blocked")),
-                "requires_residential_ip": bool(recipe.metadata.get("requires_residential_ip")),
+    execution_contract = recipe.metadata.get("login_contract")
+    auth_user_id = str(action_intent.authenticated_provenance.get("user_id") or triggered_by)
+    if isinstance(execution_contract, Mapping) and execution_contract.get("account_ref"):
+        from app.services.auth_challenge_orchestrator import auth_wait_user
+
+        auth_user_id = await auth_wait_user(
+            tenant_id=str(tenant_id),
+            session_id=action_intent.session_id,
+            provenance_user=auth_user_id,
+        )
+    resume_checkpoint = 0
+    auth_task_id = str(action_intent.payload.get("auth_task_id") or "")
+    if auth_task_id:
+        import uuid
+        from datetime import datetime, timezone
+        from app.core.db_pool import get_pool
+        from app.services.browser_task_gateway import _json_dict
+
+        contract = recipe.metadata.get("login_contract") or {}
+        async with get_pool().acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT * FROM browser_tasks WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+                    uuid.UUID(str(tenant_id)),
+                    uuid.UUID(auth_task_id),
+                )
+                if not row or row["status"] != "queued" or str(row["user_id"]) != auth_user_id:
+                    raise ValueError("auth_resume_not_queued")
+                saved = _json_dict(row["result"])
+                scope = saved.get("auth_scope") or {}
+                checks = {
+                    "tenant_id": str(tenant_id),
+                    "session_id": action_intent.session_id,
+                    "business_ref": contract.get("business_ref"),
+                    "account_ref": contract.get("account_ref"),
+                    "recipe_name": recipe.name,
+                    "recipe_version": recipe.version,
+                }
+                if any(scope.get(key) != value for key, value in checks.items()) or not saved.get(
+                    "resume_artifact_id"
+                ):
+                    raise ValueError("auth_resume_scope_mismatch")
+                if saved.get("browser_session_id", "") != str(browser_session_id or ""):
+                    raise ValueError("auth_resume_browser_session_mismatch")
+                if scope.get("work_key") != (
+                    browser_work_key or recipe.metadata.get("work_key") or recipe.name
+                ):
+                    raise ValueError("auth_resume_work_key_mismatch")
+                if datetime.fromisoformat(
+                    scope["expires_at"].replace("Z", "+00:00")
+                ) <= datetime.now(timezone.utc):
+                    raise ValueError("auth_resume_expired")
+                resume_checkpoint = int(scope["checkpoint"])
+                # Saved variables may include secrets; never serialize them for resume.
+                if any(step.save_as for step in recipe.steps if step.seq <= resume_checkpoint):
+                    raise ValueError("auth_resume_saved_variables_unsupported")
+        # Probe the retained live session immediately before replay. A disconnected PC,
+        # expired login or changed screen must never replay a submit/send step.
+        try:
+            live_context = {"domain": recipe.domain, "login_contract": contract}
+            if executor._route({"context": live_context})["runtime"] != (
+                "pc_agent" if scope["lane"] == "pc" else "browser_agent"
+            ):
+                raise ValueError("auth_resume_lane_mismatch")
+            await executor._get_page({"url": scope["target"], "context": live_context})
+            for step in recipe.verify:
+                observed = await step_executor(
+                    {**step.to_dict(), "phase": "verify", "context": live_context}
+                )
+                if observed.get("ok") is not True:
+                    raise ValueError("auth_resume_live_verification_failed")
+        except Exception:
+            # Release the consumed resume request so both resume and cancel work.
+            async with get_pool().acquire() as conn:
+                await conn.execute(
+                    "UPDATE browser_tasks SET status='waiting_for_user',updated_at=NOW() "
+                    "WHERE tenant_id=$1 AND id=$2 AND status='queued'",
+                    uuid.UUID(str(tenant_id)),
+                    uuid.UUID(auth_task_id),
+                )
+            raise
+        # Recheck ownership after the live probe; no browser I/O under the lock.
+        async with get_pool().acquire() as conn:
+            async with conn.transaction():
+                current = await conn.fetchrow(
+                    "SELECT * FROM browser_tasks WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+                    uuid.UUID(str(tenant_id)),
+                    uuid.UUID(auth_task_id),
+                )
+                if (
+                    not current
+                    or current["status"] != "queued"
+                    or str(current["user_id"]) != auth_user_id
+                    or _json_dict(current["result"]) != saved
+                ):
+                    raise ValueError("auth_resume_not_queued")
+                await conn.execute(
+                    "UPDATE browser_tasks SET status='running',updated_at=NOW() WHERE tenant_id=$1 AND id=$2",
+                    uuid.UUID(str(tenant_id)),
+                    uuid.UUID(auth_task_id),
+                )
+        execution_contract = {
+            **contract,
+            "challenge": {**(contract.get("challenge") or {"kind": "manual"}), "active": False},
+        }
+    try:
+        played = await play_recipe(
+            recipe,
+            step_executor,
+            resolved_inputs,
+            recorder=recorder,
+            max_risk="IRREVERSIBLE",
+            context={
+                "domain": recipe.domain,
+                "resume_checkpoint": resume_checkpoint,
+                **(
+                    {"login_contract": execution_contract} if execution_contract is not None else {}
+                ),
+                # Recipe metadata is registered/approved along with the immutable
+                # recipe version.  It is the only source allowed to request a
+                # native PC lane; a chat directive cannot promote itself there.
+                "smart_browser": {
+                    "native_auth_required": bool(recipe.metadata.get("native_auth_required")),
+                    "requires_local_security_programs": bool(
+                        recipe.metadata.get("requires_local_security_programs")
+                    ),
+                    # 봇/WAF 가 데이터센터 IP 를 막는 사이트는 처음부터 PC 레인으로 간다.
+                    # native_auth_required 를 대신 켜서 우회하지 않는다.
+                    "server_access_blocked": coupang
+                    or pc_lane
+                    or bool(recipe.metadata.get("server_access_blocked")),
+                    "requires_residential_ip": bool(recipe.metadata.get("requires_residential_ip")),
+                },
             },
-        },
-    )
+        )
+        contract = recipe.metadata.get("login_contract")
+        if isinstance(contract, Mapping) and not played.ok:
+            waiting = next(
+                (step for step in played.steps if step.recovery.get("route") == "human_gateway"), None
+            )
+            if (
+                waiting is not None
+                and contract.get("business_ref")
+                and contract.get("account_ref")
+                and recipe.verify
+            ):
+                from datetime import datetime, timedelta, timezone
+                from app.services.auth_challenge_orchestrator import persist_auth_wait
+                from urllib.parse import urlsplit
+
+                observation = contract.get("observation") or {}
+                origin = observation.get("origin") or "https://" + recipe.domain
+                parsed = urlsplit(origin)
+                scope = {
+                    "tenant_id": str(tenant_id),
+                    "business_ref": contract["business_ref"],
+                    "account_ref": contract["account_ref"],
+                    "session_id": action_intent.session_id,
+                    "work_key": browser_work_key or recipe.metadata.get("work_key") or recipe.name,
+                    "lane": "pc"
+                    if executor._route({"context": {"login_contract": contract}})["runtime"]
+                    == "pc_agent"
+                    else "server",
+                    "target": f"{parsed.scheme}://{parsed.netloc}{parsed.path}",
+                    "recipe_name": recipe.name,
+                    "recipe_version": recipe.version,
+                    "checkpoint": waiting.seq
+                    if waiting.recovery.get("step_completed")
+                    else waiting.seq - 1,
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+                }
+                task = await persist_auth_wait(
+                    scope=scope,
+                    user_id=auth_user_id,
+                    reason=str(waiting.recovery.get("reason") or "auth_required"),
+                    verify=[step.to_dict() for step in recipe.verify],
+                    browser_session_id=str(browser_session_id or ""),
+                )
+                waiting.recovery.update(
+                    {
+                        "auth_task_id": task["id"],
+                        "status": "waiting_for_user",
+                        "checkpoint": waiting.seq
+                        if waiting.recovery.get("step_completed")
+                        else waiting.seq - 1,
+                        "expires_at": scope["expires_at"],
+                    }
+                )
+        if auth_task_id:
+            from app.services.browser_task_gateway import update_browser_task_status
+
+            await update_browser_task_status(
+                tenant_id=str(tenant_id),
+                task_id=auth_task_id,
+                status="completed" if played.ok else "failed",
+            )
+        return played
+    except Exception:
+        if auth_task_id:
+            from app.services.browser_task_gateway import update_browser_task_status
+
+            await update_browser_task_status(
+                tenant_id=str(tenant_id),
+                task_id=auth_task_id,
+                status="failed",
+            )
+        raise
 
 
 class _VaultUseAuditRecorder:
     """run 이 시작되면 Vault 사용을 감사 1행씩 남긴다. 감사에는 credential_id·field·허용 여부만 들어간다."""
 
-    def __init__(self, inner: Any, recipe: WorkRecipe, resolution: vault_reference.VaultResolution) -> None:
+    def __init__(
+        self, inner: Any, recipe: WorkRecipe, resolution: vault_reference.VaultResolution
+    ) -> None:
         self._inner = inner
         self._recipe = recipe
         self._resolution = resolution
@@ -357,8 +559,14 @@ class _VaultUseAuditRecorder:
         for use in self._resolution.uses:
             try:
                 await record_credential_use(
-                    run_id, self._recipe.domain, self._recipe.name,
-                    {"credential_id": use["credential_id"], "field": use["field"], "decision": "allow"},
+                    run_id,
+                    self._recipe.domain,
+                    self._recipe.name,
+                    {
+                        "credential_id": use["credential_id"],
+                        "field": use["field"],
+                        "decision": "allow",
+                    },
                 )
             except Exception as exc:  # noqa: BLE001 - 감사 실패가 실행 결과를 바꾸지 않는다
                 logger.warning("vault_reference_audit_failed type=%s", type(exc).__name__)
@@ -587,7 +795,9 @@ class GenericVerificationExecutor:
             return await self.executor(payload)
         lane = self.executor._route(payload)["runtime"]
         internal = is_internal_host(self.recipe.domain)
-        if not internal and lane != "pc_agent":
+        contract = self.recipe.metadata.get("login_contract") or {}
+        server_verified = contract.get("access") == "server_verified"
+        if not internal and lane != "pc_agent" and self.recipe.metadata.get("lane") != "server" and not server_verified:
             return {"ok": False, "error": "pc_agent_lane_required", "route": lane}
         page = self.executor._page
         if page is None:

@@ -2362,6 +2362,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                         "predecessor, idempotency_key, e2e_evidence(artifact_id 권장). 최상위 domain/lane 은 기본값"
                     ),
                 },
+                "auth_task_id": {"type": "string", "description": "사용자가 auth-resume 한 동일 계정·판본의 checkpoint 작업 id"},
                 "directive": {"type": "string", "description": "run 시 실행할 자연어 지시"},
                 "inputs": {
                     "type": "object",
@@ -2372,6 +2373,9 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                         "생략하면 승인된 참조를 그대로 쓴다."
                     ),
                 },
+                "login_contract": {"type": "object", "description": "version=1 접근/인증/팝업 관측 계약. 비밀값 금지"},
+                "credential_scope": {"type": "object", "description": "승인본에 보존할 Vault credential_id+field 바인딩"},
+                "metadata": {"type": "object", "description": "login_contract/credential_scope 등록 메타데이터"},
                 "recipe_name": {"type": "string", "description": "register_e2e 레시피 이름"},
                 "domain": {"type": "string", "description": "register_e2e 대상 URL 또는 도메인"},
                 "steps": {"type": "array", "items": {"type": "object"}},

@@ -496,6 +496,11 @@ async def api_update_browser_task_status(
     body: BrowserTaskStatusPatch,
     context: TenantContext = Depends(require_member),
 ) -> dict[str, Any]:
+    if (body.result or {}).get("auth_scope") or (body.result or {}).get("resume_artifact_id"):
+        raise HTTPException(status_code=409, detail="auth_transition_endpoint_required")
+    current = await get_browser_task(tenant_id=_tenant_id(context), task_id=task_id)
+    if current and (current.get("result") or {}).get("auth_scope"):
+        raise HTTPException(status_code=409, detail="auth_transition_endpoint_required")
     task = await update_browser_task_status(
         tenant_id=_tenant_id(context),
         task_id=task_id,
@@ -517,6 +522,8 @@ async def api_retry_browser_task(
     current = await get_browser_task(tenant_id=_tenant_id(context), task_id=task_id)
     if not current:
         raise HTTPException(status_code=404, detail="browser_task_not_found")
+    if (current.get("result") or {}).get("auth_scope"):
+        raise HTTPException(status_code=409, detail="auth_transition_endpoint_required")
     if current.get("status") in {"running", "queued"}:
         return {"status": "already_active", "task": current}
     if current.get("status") in {"approval_required", "auth_required"}:
@@ -620,3 +627,31 @@ async def api_reject_permission(
     if not request:
         raise HTTPException(status_code=404, detail="permission_request_not_found_or_expired")
     return {"status": "rejected", "request": request}
+
+
+class AuthWaitTransition(BaseModel):
+    scope: dict[str, Any]
+    artifact_id: str = ""
+
+
+@router.post("/{task_id}/auth-resume")
+async def api_resume_auth_wait(task_id: str, req: AuthWaitTransition,
+                               context: TenantContext = Depends(require_member)) -> dict[str, Any]:
+    from app.services.auth_challenge_orchestrator import transition_auth_wait
+    try:
+        return await transition_auth_wait(tenant_id=_tenant_id(context), task_id=task_id,
+                                          user_id=_user_id(context), scope=req.scope,
+                                          action="resume", artifact_id=req.artifact_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/auth-cancel")
+async def api_cancel_auth_wait(task_id: str, req: AuthWaitTransition,
+                               context: TenantContext = Depends(require_member)) -> dict[str, Any]:
+    from app.services.auth_challenge_orchestrator import transition_auth_wait
+    try:
+        return await transition_auth_wait(tenant_id=_tenant_id(context), task_id=task_id,
+                                          user_id=_user_id(context), scope=req.scope, action="cancel")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

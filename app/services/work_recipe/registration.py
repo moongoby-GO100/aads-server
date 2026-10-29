@@ -303,6 +303,22 @@ async def request_registration(
     requested_by: str = "",
 ) -> dict[str, Any]:
     """Persist a dry-run draft. It is not visible to the recipe player yet."""
+    if "login_contract" in recipe.metadata:
+        from app.services.work_recipe.login_contract import normalize_login_contract
+        from app.services.work_recipe.dom_evidence import verify_dom_evidence
+        contract = normalize_login_contract(recipe.metadata["login_contract"])
+        observation = contract.get("observation")
+        if observation:
+            trusted = await verify_dom_evidence(
+                tenant_id=tenant_id, chat_session_id=str(recipe.metadata.get("source_chat_session_id") or ""),
+                claimed={"artifact_id": observation["artifact_id"]}, domain=recipe.domain,
+            )
+            from urllib.parse import urlsplit
+            if (urlsplit(trusted["url"]).netloc != urlsplit(observation["origin"]).netloc
+                    or trusted["expires_at"] != observation["expires_at"]
+                    or trusted["lane"] != observation["lane"]):
+                raise ValueError("login_contract_observation_mismatch")
+        recipe.metadata["login_contract"] = contract
     await _validate_coupangeats_registration(recipe, tenant_id)
     if vault_reference.has_vault_scope(recipe):
         vault_reference.parse_scope(recipe)

@@ -40,3 +40,96 @@ def test_resume_token_is_opaque_and_stable():
     assert token == make_resume_token("work", "session", "run")
     assert len(token) == 32
     assert "work" not in token and "session" not in token
+
+
+def test_durable_scope_never_accepts_challenge_values():
+    import pytest
+    with pytest.raises(ValueError, match='auth_scope_invalid'):
+        orchestrator.validate_auth_scope({'otp': '123456'})
+
+
+async def test_persistent_resume_cancel_expiry_and_cross_account(monkeypatch):
+    import json
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    import pytest
+    from app.core import db_pool
+    from app.services import browser_task_gateway as gateway
+    from app.services.work_recipe import dom_evidence
+
+    now = datetime.now(timezone.utc)
+    tenant = str(uuid.uuid4())
+    scope = dict(tenant_id=tenant, business_ref='business', account_ref='account',
+                 session_id=str(uuid.uuid4()), work_key='work', lane='server', target='https://example.com',
+                 recipe_name='login', recipe_version=2, checkpoint=3,
+                 expires_at=(now + timedelta(minutes=5)).isoformat())
+    row = dict(id=str(uuid.uuid4()), tenant_id=tenant, user_id='user', status='waiting_for_user',
+               updated_at=now, result={'auth_scope': scope, 'verify': [{'assertion': 'element_visible', 'selector': '#account'}]})
+    locked = []
+    class Context:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            locked.clear()
+            return False
+        def transaction(self):
+            return self
+        async def fetchrow(self, sql, *args):
+            if 'FOR UPDATE' in sql:
+                locked.append(True)
+            if sql.startswith('UPDATE'):
+                row.update(status=args[2], result=json.loads(args[3]))
+            return dict(row)
+    class Pool:
+        def acquire(self):
+            return Context()
+    async def evidence(**kwargs):
+        assert not locked, 'evidence must be verified before FOR UPDATE'
+        assert kwargs['verify'] == row['result']['verify']
+        return {'artifact_id': kwargs['claimed']['artifact_id'], 'lane': 'server', 'captured_at': (now + timedelta(seconds=1)).isoformat()}
+    async def event(**kwargs):
+        pass
+    monkeypatch.setattr(db_pool, 'get_pool', lambda: Pool())
+    monkeypatch.setattr(gateway, '_task_to_dict', dict)
+    monkeypatch.setattr(gateway, 'append_browser_task_event', event)
+    monkeypatch.setattr(dom_evidence, 'verify_dom_evidence', evidence)
+    args = dict(tenant_id=tenant, task_id=row['id'], user_id='user', scope=scope, action='resume', artifact_id='fresh')
+    with pytest.raises(ValueError, match='scope_mismatch'):
+        await orchestrator.transition_auth_wait(**{**args, 'scope': {**scope, 'account_ref': 'other'}})
+    result = await orchestrator.transition_auth_wait(**args)
+    assert result['status'] == 'queued'
+    with pytest.raises(ValueError, match='already_consumed'):
+        await orchestrator.transition_auth_wait(**args)
+    row['status'] = 'waiting_for_user'
+    assert (await orchestrator.transition_auth_wait(**{**args, 'action': 'cancel'}))['status'] == 'cancelled'
+    row['status'] = 'waiting_for_user'
+    expired_scope = {**scope, 'expires_at': (now - timedelta(seconds=1)).isoformat()}
+    row['result']['auth_scope'] = expired_scope
+    assert (await orchestrator.transition_auth_wait(**{**args, 'scope': expired_scope}))['status'] == 'expired'
+
+
+async def test_status_patch_none_result_and_auth_guard(monkeypatch):
+    from types import SimpleNamespace
+    import pytest
+    from fastapi import HTTPException
+    from app.api import browser_tasks as api
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(api, '_tenant_id', lambda context: 'tenant')
+    get = AsyncMock(return_value={'result': {}})
+    update = AsyncMock(return_value={'id': 'task'})
+    monkeypatch.setattr(api, 'get_browser_task', get)
+    monkeypatch.setattr(api, 'update_browser_task_status', update)
+    async def display(value, context): return value
+    monkeypatch.setattr(api, '_display', display)
+    body = api.BrowserTaskStatusPatch.model_construct(status='running', result=None)
+    assert (await api.api_update_browser_task_status('task', body, SimpleNamespace()))['status'] == 'updated'
+    get.assert_awaited_once()
+    assert update.await_args.kwargs['result'] is None
+    get.reset_mock()
+    update.reset_mock()
+    get.return_value = {'result': {'auth_scope': {'account_ref': 'account'}}}
+    with pytest.raises(HTTPException) as error:
+        await api.api_update_browser_task_status('task', body, SimpleNamespace())
+    assert error.value.status_code == 409
+    get.assert_awaited_once()
+    update.assert_not_awaited()

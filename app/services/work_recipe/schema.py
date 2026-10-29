@@ -375,6 +375,10 @@ class WorkRecipe:
         if not isinstance(metadata, Mapping):
             raise ValueError("metadata 는 매핑이어야 합니다")
 
+        if "login_contract" in metadata:
+            from app.services.work_recipe.login_contract import normalize_login_contract
+            metadata = {**metadata, "login_contract": normalize_login_contract(metadata["login_contract"])}
+
         recipe = cls(
             name=name,
             domain=domain,

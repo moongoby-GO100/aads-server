@@ -84,6 +84,16 @@ def store(monkeypatch):
 
 @pytest.fixture
 def page(monkeypatch):
+    import asyncio
+    import socket
+
+    async def inline_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", inline_thread)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))
+    ])
     holder = {"page": _Page()}
 
     async def acquire(**kwargs):
@@ -515,3 +525,51 @@ def test_tool_registry_exposes_new_actions_and_fields():
     props = tool["input_schema"]["properties"]
     assert {"register_batch", "capture_evidence"} <= set(props["action"]["enum"])
     assert {"pieces", "idempotency_key", "predecessor", "work_key", "url", "run_id"} <= set(props)
+
+
+async def test_explicit_server_lane_issues_public_site_evidence(store, page, monkeypatch):
+    import asyncio
+    import socket
+    async def inline_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+    monkeypatch.setattr(asyncio, "to_thread", inline_thread)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
+    page['page'] = _Page('https://example.com/orders')
+    issued = await _issue(url='https://example.com/orders', lane='server')
+    trusted = await _verify(issued, domain='example.com')
+    assert trusted['lane'] == 'server'
+    with pytest.raises(de.DomEvidenceError, match='lane_conflict'):
+        await _issue(lane='server', browser_session_id=SESSION)
+
+
+async def test_explicit_server_lane_rejects_metadata_ssrf(monkeypatch):
+    import asyncio
+    import socket
+    async def inline_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+    monkeypatch.setattr(asyncio, "to_thread", inline_thread)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))])
+    with pytest.raises(de.DomEvidenceError, match="private_target_rejected"):
+        await _issue(url="http://169.254.169.254/latest/meta-data", lane="server")
+
+
+@pytest.mark.parametrize('lane', ['server', ''])
+@pytest.mark.parametrize('destination', ['http://127.0.0.1/', 'http://10.0.0.1/', 'http://169.254.169.254/'])
+async def test_server_redirect_private_url_rejected_before_artifact(store, page, monkeypatch, destination, lane):
+    import socket
+    import asyncio
+    async def inline_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+    monkeypatch.setattr(asyncio, "to_thread", inline_thread)
+    calls = []
+    async def acquire(self, payload):
+        calls.append(payload['url'])
+        return _Page(destination)
+    def resolve(host, *args, **kwargs):
+        address = host if host[0].isdigit() else '8.8.8.8'
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (address, 443))]
+    monkeypatch.setattr(socket, 'getaddrinfo', resolve)
+    monkeypatch.setattr(executor_module.BrowserRecipeExecutor, '_get_page', acquire)
+    with pytest.raises(de.DomEvidenceError, match='private_target_rejected'):
+        await _issue(lane=lane)
+    assert calls == [URL] and not store.rows

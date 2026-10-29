@@ -5940,6 +5940,8 @@ class ToolExecutor:
             from app.services.work_recipe.vault_reference import VaultReferenceError
 
             payload = {"directive": directive, "inputs": inp.get("inputs") or {}}
+            if inp.get("auth_task_id"):
+                payload["auth_task_id"] = str(inp["auth_task_id"])
             if inp.get("confirmed_draft_id"):
                 payload["confirmed_draft_id"] = str(inp["confirmed_draft_id"])
             envelope = directive_from_authenticated_context(
@@ -6077,7 +6079,7 @@ class ToolExecutor:
                     url=str(inp.get("url") or inp.get("domain") or ""), verify=inp.get("verify"),
                     browser_session_id=str(inp.get("browser_session_id") or ""),
                     browser_work_key=str(inp.get("browser_work_key") or ""),
-                    run_id=str(inp.get("run_id") or ""),
+                    run_id=str(inp.get("run_id") or ""), lane=str(inp.get("lane") or ""),
                 )
             except (ValueError, DomEvidenceError) as exc:
                 return {"error": str(exc)}
