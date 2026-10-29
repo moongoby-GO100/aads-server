@@ -41,6 +41,11 @@ def normalize_login_contract(raw):
     if not isinstance(raw, Mapping) or raw.get("version") != 1:
         raise ValueError("login_contract_version_invalid")
     allowed = {
+        "human_submit_required",
+        "submit_step",
+        "succeeds_when",
+        "human_submit_timeout_seconds",
+        "submit_observation_seconds",
         "version",
         "access",
         "observation",
@@ -60,6 +65,45 @@ def normalize_login_contract(raw):
             not isinstance(raw[key], str) or not raw[key].strip() or len(raw[key]) > 200
         ):
             raise ValueError("login_contract_reference_invalid")
+    if "human_submit_required" in raw and type(raw["human_submit_required"]) is not bool:
+        raise ValueError("human_submit_required_invalid")
+    if any(
+        key in raw
+        for key in (
+            "submit_step",
+            "succeeds_when",
+            "human_submit_timeout_seconds",
+            "submit_observation_seconds",
+        )
+    ) or raw.get("human_submit_required"):
+        if type(raw.get("submit_step")) is not int or raw["submit_step"] < 1:
+            raise ValueError("login_submit_step_required")
+        checks = raw.get("succeeds_when")
+        if not isinstance(checks, list) or not checks:
+            raise ValueError("login_success_conditions_required")
+        for check in checks:
+            if (
+                not isinstance(check, Mapping)
+                or set(check) != {"kind", "value"}
+                or check["kind"] not in {"url_equals", "text_contains"}
+                or not isinstance(check["value"], str)
+                or not check["value"]
+            ):
+                raise ValueError("login_success_condition_invalid")
+            if check["kind"] == "url_equals":
+                target = urlsplit(check["value"])
+                if (
+                    target.scheme not in {"https", "http"}
+                    or not target.hostname
+                    or target.username
+                    or target.password
+                    or target.query
+                    or target.fragment
+                ):
+                    raise ValueError("login_success_url_invalid")
+        for key in ("human_submit_timeout_seconds", "submit_observation_seconds"):
+            if key in raw and (type(raw[key]) is not int or not 1 <= raw[key] <= 3600):
+                raise ValueError("login_wait_timeout_invalid")
     result = deepcopy(dict(raw))
     result.setdefault("access", "unknown")
     if result["access"] not in ACCESS:

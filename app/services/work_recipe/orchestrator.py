@@ -14,6 +14,9 @@ from app.services.work_recipe.credential_scope import assert_credential_allowed
 from app.services.work_recipe.executor import BrowserRecipeExecutor
 from app.services.work_recipe.guard import is_internal_host
 from app.services.work_recipe.player import RunResult, play_recipe
+from app.services.work_recipe.human_login import (
+    HumanLoginExecutor, LoginPolicyStore, validate_login_steps,
+)
 from app.services.work_recipe.schema import WorkRecipe, parse_recipe
 from app.services.work_recipe import shinhan_corporate_manual as shinhan_manual
 from app.services.work_recipe import vault_reference
@@ -260,6 +263,9 @@ async def run_directive(
         if not confirmed or confirmed not in match.matched_draft_ids:
             return RecipeConfirmation(match)
         recipe = match.recipe
+    login_contract = recipe.metadata.get("login_contract") or {}
+    if login_contract.get("submit_step"):
+        validate_login_steps(recipe, login_contract)
     coupang = recipe.name in {part["name"] for part in COUPANGEATS_LOGIN_FRAGMENTS}
     if coupang:
         validate_coupangeats_recipe(recipe)
@@ -435,6 +441,80 @@ async def run_directive(
             **contract,
             "challenge": {**(contract.get("challenge") or {"kind": "manual"}), "active": False},
         }
+    if (
+        isinstance(execution_contract, Mapping)
+        and execution_contract.get("submit_step")
+        and not auth_task_id
+    ):
+        from app.services.auth_challenge_orchestrator import persist_auth_wait
+        from app.services.browser_task_gateway import update_browser_task_status
+        from datetime import datetime, timedelta, timezone
+        from urllib.parse import urlsplit
+
+        contract = execution_contract
+        submit_seq = contract["submit_step"]
+        if (
+            not resolution or not contract.get("business_ref")
+            or not contract.get("account_ref") or not recipe.verify
+        ):
+            raise ValueError("human_login_checkpoint_scope_required")
+
+        async def wait_login(payload, reason):
+            origin = urlsplit(
+                (contract.get("observation") or {}).get("origin") or "https://" + recipe.domain
+            )
+            wait_seconds = contract.get("human_submit_timeout_seconds", 600)
+            scope = {
+                "tenant_id": str(tenant_id),
+                "business_ref": contract["business_ref"],
+                "account_ref": contract["account_ref"],
+                "session_id": action_intent.session_id,
+                "work_key": browser_work_key or recipe.metadata.get("work_key") or recipe.name,
+                "lane": executor.login_lane(payload),
+                "target": f"{origin.scheme}://{origin.netloc}{origin.path}",
+                "recipe_name": recipe.name,
+                "recipe_version": recipe.version,
+                "checkpoint": submit_seq,
+                "expires_at": (
+                    datetime.now(timezone.utc) + timedelta(seconds=wait_seconds)
+                ).isoformat(),
+            }
+            message = reason
+            if reason == "human_submit_required":
+                message = (
+                    f"{recipe.domain} 사이트 로그인 버튼만 눌러 주세요 "
+                    f"(PC: {executor.login_pc_label})"
+                )
+            return await persist_auth_wait(
+                scope=scope,
+                user_id=auth_user_id,
+                reason=reason,
+                verify=[step.to_dict() for step in recipe.verify],
+                browser_session_id=str(browser_session_id or ""),
+                current_step=message,
+            )
+
+        async def finish_login(task, ok, reason=""):
+            updated = await update_browser_task_status(
+                tenant_id=str(tenant_id),
+                task_id=task["id"],
+                status="completed" if ok else "failed",
+                result={
+                    "reason": reason or "human_login_completed",
+                    "keep_browser_open": True,
+                },
+            )
+            if updated is None:
+                raise RuntimeError("login_checkpoint_task_missing")
+
+        step_executor = HumanLoginExecutor(
+            step_executor, executor, contract,
+            LoginPolicyStore(
+                tenant_id, recipe.domain,
+                [use["credential_id"] for use in resolution.uses],
+            ),
+            wait_login, finish_login,
+        )
     try:
         played = await play_recipe(
             recipe,
@@ -472,6 +552,7 @@ async def run_directive(
             )
             if (
                 waiting is not None
+                and not contract.get("submit_step")
                 and contract.get("business_ref")
                 and contract.get("account_ref")
                 and recipe.verify

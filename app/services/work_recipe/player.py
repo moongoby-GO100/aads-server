@@ -213,6 +213,19 @@ class RecipePlayer:
         context: Mapping[str, Any] | None = None,
         recipe_id: Any = None,
     ) -> RunResult:
+        # Approved recipe metadata is authoritative even for callers without a
+        # context. An ingress cannot override the submit retry/timeout policy.
+        context = dict(context or {})
+        if "login_contract" in recipe.metadata:
+            approved = recipe.metadata["login_contract"]
+            contract = {**approved, **context.get("login_contract", {})}
+            for key in ("submit_step", "human_submit_required", "succeeds_when",
+                        "human_submit_timeout_seconds", "submit_observation_seconds"):
+                if key in approved:
+                    contract[key] = approved[key]
+                else:
+                    contract.pop(key, None)
+            context["login_contract"] = contract
         values = recipe.resolve_inputs(inputs)
         declared: set[str] = set(values.keys())
 
@@ -345,6 +358,10 @@ class RecipePlayer:
         )
         started = time.monotonic()
         timeout = step.timeout or self._step_timeout
+        contract = (context or {}).get("login_contract") or {}
+        if phase == "step" and step.seq == contract.get("submit_step"):
+            timeout = max(timeout, max(contract.get("human_submit_timeout_seconds", 600),
+                                       contract.get("submit_observation_seconds", 5)) + 30)
 
         try:
             rendered = step.render(values, declared=sorted(declared))
@@ -360,7 +377,8 @@ class RecipePlayer:
             payload_base["context"] = dict(context)
 
         last_error = ""
-        for attempt in range(1, self._retries + 2):
+        attempts = 1 if phase == "step" and step.seq == contract.get("submit_step") else self._retries + 1
+        for attempt in range(1, attempts + 1):
             outcome.attempts = attempt
             payload = dict(payload_base)
             payload["attempt"] = attempt

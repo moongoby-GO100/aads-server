@@ -203,6 +203,18 @@ class BrowserRecipeExecutor:
         # 서비스 초기화/설정 오류를 첫 단계보다 앞에서 드러낸다.
         self._service = get_browser_bridge_service()
 
+    @property
+    def login_page(self):
+        """Retained live page for read-only login checkpoint observations."""
+        return self._page
+
+    def login_lane(self, payload):
+        return "pc" if self._route(payload)["runtime"] == "pc_agent" else "server"
+
+    @property
+    def login_pc_label(self):
+        return getattr(self._page, "_agent_id", "") or "연결된 PC"
+
     async def __call__(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = str(payload.get("action") or "")
         if action not in ALLOWED_ACTIONS:

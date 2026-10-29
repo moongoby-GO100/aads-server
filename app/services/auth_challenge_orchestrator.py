@@ -246,6 +246,7 @@ async def persist_auth_wait(
     reason: str,
     verify: list[dict[str, Any]],
     browser_session_id: str = "",
+    current_step: str = "",
 ) -> dict[str, Any]:
     """Reuse browser_tasks and its event ledger; never persist challenge values."""
     from app.services.browser_task_gateway import create_browser_task, update_browser_task_status
@@ -259,9 +260,9 @@ async def persist_auth_wait(
         work_key=scope["work_key"],
         session_id=scope["session_id"],
         target_url=scope["target"],
-        current_step=str(scope["checkpoint"]),
+        current_step=current_step or str(scope["checkpoint"]),
     )
-    return await update_browser_task_status(
+    waiting = await update_browser_task_status(
         tenant_id=scope["tenant_id"],
         task_id=task["id"],
         status="waiting_for_user",
@@ -273,6 +274,14 @@ async def persist_auth_wait(
             "challenge_values_persisted": False,
         },
     )
+
+    if waiting is None:
+        raise RuntimeError("login_checkpoint_task_missing")
+    if current_step:
+        from app.services.browser_task_gateway import notify_browser_task_status
+
+        await notify_browser_task_status(waiting)
+    return waiting
 
 
 async def transition_auth_wait(
