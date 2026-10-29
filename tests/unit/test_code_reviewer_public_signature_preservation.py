@@ -213,3 +213,55 @@ def test_class_is_not_normalized_with_def():
     )
 
     assert "class Thing" in cr._removed_preservation_symbols(diff)
+
+
+def test_two_feeder_initializers_rewritten_in_their_own_classes():
+    body = ""
+    for name, base, args in (
+        ("StreamTickFeeder", "DbTickFeeder", "output_queue, *, source=None"),
+        ("StreamMinuteBarFeeder", "DbMinuteBarFeeder", "callback=None, *, source"),
+    ):
+        body += (
+            f"-class {name}({base}):\n"
+            f"-    def __init__(self, {args}, db_factory={base}, **kwargs):\n"
+            f"+class {name}({base}, Updated):\n"
+            f"+    def __init__(self, {args}, db_factory={base}, option=True, **kwargs):\n"
+            "         pass\n"
+        )
+    diff = _file_diff(_SERVICE, body)
+    assert cr._removed_preservation_symbols(diff) == []
+    assert cr._precheck_preservation_gate(diff, "", None) is None
+
+
+def test_one_class_initializer_deleted_while_other_is_rewritten():
+    diff = _file_diff(_SERVICE,
+        " class A:\n-    def __init__(self):\n-        pass\n"
+        " class B:\n-    def __init__(self):\n"
+        "+    def __init__(self, option=True):\n         pass\n")
+    assert cr._removed_preservation_symbols(diff) == ["def __init__"]
+    assert cr._precheck_preservation_gate(diff, "", None) is not None
+
+
+def test_initializer_moved_between_classes_stays_gated():
+    diff = _file_diff(_SERVICE,
+        " class A:\n-    def __init__(self):\n-        pass\n"
+        " class B:\n+    def __init__(self):\n+        pass\n")
+    assert cr._removed_preservation_symbols(diff) == ["def __init__"]
+    assert cr._precheck_preservation_gate(diff, "", None) is not None
+
+
+def test_hunk_class_context_disambiguates_initializers():
+    diff = _file_diff(_SERVICE,
+        "-    def __init__(self):\n+    def __init__(self, x):\n"
+        "@@ -20,2 +20,2 @@ class B:\n"
+        "-    def __init__(self):\n+    def __init__(self, y):\n"
+    ).replace("@@ -1,8 +1,8 @@", "@@ -1,2 +1,2 @@ class A:")
+    assert cr._removed_preservation_symbols(diff) == []
+
+
+def test_hunk_gap_does_not_reuse_previous_class_scope():
+    diff = _file_diff(_SERVICE,
+        " class A:\n-    def __init__(self):\n+    def __init__(self, x):\n"
+        "@@ -20,2 +20,2 @@\n"
+        "-    def __init__(self):\n+    def __init__(self, y):\n")
+    assert cr._removed_preservation_symbols(diff) == ["def __init__"]

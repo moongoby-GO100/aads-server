@@ -946,14 +946,58 @@ def _signature_key(symbol: str) -> str:
     return _ASYNC_DEF_RE.sub("def ", symbol)
 
 
+def _diff_symbol_scopes(
+    file_diff: str,
+) -> tuple[list[tuple[str, Optional[str]]], list[tuple[str, Optional[str]]]]:
+    """Track old/new class stacks independently; a hunk gap invalidates scope."""
+    stacks: list[list[tuple[int, str]]] = [[], []]
+    records: tuple[list[tuple[str, Optional[str]]], list[tuple[str, Optional[str]]]] = ([], [])
+    for line in file_diff.splitlines():
+        hunk = _HUNK_HEADER_RE.match(line)
+        if hunk:
+            stacks = [[], []]
+            context = line[hunk.end():].lstrip()
+            hint = re.match(r"class[ \t]+([A-Za-z_][A-Za-z0-9_]*)", context)
+            if hint:
+                # git's section heading omits indentation: use only a direct
+                # method (indent > 0) until an explicit declaration takes over.
+                stacks = [[(0, hint.group(1))], [(0, hint.group(1))]]
+            continue
+        if line.startswith(("---", "+++", "diff ", "index ", "\\")):
+            continue
+        if not line or line[0] not in " +-":
+            continue
+        sides = (0,) if line[0] == "-" else (1,) if line[0] == "+" else (0, 1)
+        content = line[1:]
+        stripped = content.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(content.expandtabs(8)) - len(stripped.expandtabs(8))
+        for side in sides:
+            stack = stacks[side]
+            while stack and indent <= stack[-1][0]:
+                stack.pop()
+            scope = stack[-1][1] if stack else None
+            if line[0] in "-+":
+                records[side].extend(
+                    (_signature_key(symbol), scope)
+                    for symbol in _DELETED_SYMBOL_RE.findall("-" + content)
+                )
+            cls = re.match(r"class[ \t]+([A-Za-z_][A-Za-z0-9_]*)", stripped)
+            if cls:
+                stack.append((indent, cls.group(1)))
+    return records
+
+
 def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
     """Keep hard gates for removals, without calling private edits deletions.
 
-    Match a declaration only when it occurs exactly once on each side of the
-    same file diff. This covers signature edits and indentation moves, for
-    public and private declarations alike; it does not certify behavior, which
+    Match declarations by enclosing class when the diff establishes scope;
+    otherwise require exactly one occurrence on each side of the same file.
+    This covers signature edits and indentation moves for public and private
+    declarations alike; it does not certify behavior, which
     still goes through the normal review. Renames, routes whose path is not in
-    the symbol, and ambiguous duplicate names remain gated.
+    the symbol, and duplicate names without class evidence remain gated.
     """
     removed: list[_RemovedSymbol] = []
     for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
@@ -966,6 +1010,9 @@ def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
                 if line.startswith("+") and not line.startswith("+++")
             )
         )
+        deleted_scopes, added_scopes = _diff_symbol_scopes(file_diff)
+        scoped_deleted_counts = Counter(deleted_scopes)
+        scoped_added_counts = Counter(added_scopes)
         deleted_counts = Counter(_signature_key(s) for s in deletions)
         added_counts = Counter(_signature_key(s) for s in additions)
         header = _DIFF_HEADER_PATH_RE.match(file_diff)
@@ -977,10 +1024,10 @@ def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
                 surplus = count - deleted_counts[symbol]
                 if surplus > 0 and _TEST_FUNCTION_RE.fullmatch(symbol):
                     rename_pool[symbol] = surplus
-        for raw_symbol, old_line in deleted_lines:
+        for index, (raw_symbol, old_line) in enumerate(deleted_lines):
             symbol = _signature_key(raw_symbol)
-            # 같은 파일 diff 에서 같은 선언이 정확히 한 번 사라지고 한 번 다시
-            # 생겼으면 그것은 삭제가 아니라 시그니처 재작성·들여쓰기 이동이다.
+            # 클래스 스코프를 확인하면 (클래스, 선언)별 개수를 비교한다.
+            # 스코프가 불명확하면 같은 파일의 정확히 1/1 재작성만 면제한다.
             # 종전에는 이 면제를 private 함수(_foo)로만 한정했고, 그래서 공개
             # 함수의 여러 줄 시그니처 전환이 통째로 "삭제"로 잡혔다.
             # 2026-09-18 실측 — runner-3eeda0e6 / runner-2872d735 두 건이
@@ -993,10 +1040,22 @@ def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
             declaration = re.fullmatch(
                 r"(?:async[ \t]+def|def|class)[ \t]+[A-Za-z_][A-Za-z0-9_]*", symbol
             )
+            scope = deleted_scopes[index][1]
+            if scope is not None:
+                matched = (
+                    scoped_deleted_counts[(symbol, scope)]
+                    == scoped_added_counts[(symbol, scope)]
+                )
+            else:
+                matched = False
+            # When either side's enclosing class cannot be established, keep
+            # the legacy unique-name rule; known different classes never match.
+            if deleted_counts[symbol] == added_counts[symbol] == 1:
+                matched = matched or scope is None or (symbol, None) in scoped_added_counts
             preserved = (
                 file_diff.startswith("diff --git ")
                 and declaration
-                and deleted_counts[symbol] == added_counts[symbol] == 1
+                and matched
             )
             if not preserved and in_test_file and _TEST_FUNCTION_RE.fullmatch(symbol):
                 # 사라진 테스트 함수 이름을 같은 파일에서 다른 이름으로 다시 추가했으면
