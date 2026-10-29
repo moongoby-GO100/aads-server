@@ -933,11 +933,12 @@ def _deleted_symbol_lines(file_diff: str) -> list[tuple[str, Optional[int]]]:
 
 
 def _removed_preservation_symbols(
-    diff: str, project: Optional[str] = None, notes_out: Optional[dict] = None
+    diff: str, project: Optional[str] = None, notes_out: Optional[dict] = None,
+    *, count_diff: Optional[str] = None,
 ) -> list[str]:
     """삭제 심볼 목록. project 를 주면 스코프 기반 면제(규칙 A/B/C)까지 적용한다."""
     return _split_scope_exempt_symbols(
-        diff, _removed_preservation_symbol_records(diff), project, notes_out
+        diff, _removed_preservation_symbol_records(diff, notes_out, count_diff=count_diff), project, notes_out
     )
 
 
@@ -989,7 +990,72 @@ def _diff_symbol_scopes(
     return records
 
 
-def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
+def _cross_file_moves(diff: str, count_diff: Optional[str] = None) -> dict[str, dict]:
+    """Unique declarations only; imports must actually bind the old public name.
+
+    Deleted source files stay subject to the existing reference-search rules.
+    Call only with the confirmed portion of an upstream-truncated diff.
+    """
+    deleted: dict[str, list[str]] = {}
+    added: dict[str, list[str]] = {}
+    sections: dict[str, str] = {}
+    for section in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
+        paths = _extract_changed_files(section)
+        if not paths:
+            continue
+        path = paths[0]
+        sections[path] = section
+        for prefix, records in (("-", deleted), ("+", added)):
+            for line in section.splitlines():
+                if line.startswith(prefix) and not line.startswith(prefix * 3):
+                    for symbol in _DELETED_SYMBOL_RE.findall("-" + line[1:]):
+                        records.setdefault(_signature_key(symbol), []).append(path)
+    global_counts = []
+    for prefix in ("-", "+"):
+        global_counts.append(Counter(
+            _signature_key(symbol)
+            for line in (count_diff if count_diff is not None else diff).splitlines()
+            if line.startswith(prefix) and not line.startswith(prefix * 3)
+            for symbol in _DELETED_SYMBOL_RE.findall("-" + line[1:])
+        ))
+    moves = {}
+    for symbol, sources in deleted.items():
+        targets = added.get(symbol, [])
+        if len(sources) != 1 or len(targets) != 1 or sources[0] == targets[0]:
+            continue
+        if not re.fullmatch(r"(?:def|class) [A-Za-z_][A-Za-z0-9_]*", symbol):
+            continue
+        if any(counts[symbol] != 1 for counts in global_counts):
+            continue
+        source = sections[sources[0]]
+        if re.search(r"^\+\+\+ /dev/null$", source, re.MULTILINE):
+            continue
+        name = symbol.split()[-1]
+        # Parse complete added statements, including parenthesized imports.
+        # Unparseable hunks fail closed; comments/strings cannot expose names.
+        additions = "\n".join(line[1:] for line in source.splitlines()
+                              if line.startswith("+") and not line.startswith("+++"))
+        try:
+            tree = ast.parse(additions)
+        except (SyntaxError, ValueError):
+            continue
+        exposed = False
+        for node in tree.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                exposed |= any((alias.asname or (alias.name if isinstance(node, ast.ImportFrom)
+                                                 else alias.name.split('.')[0])) == name
+                               for alias in node.names)
+            elif isinstance(node, ast.Assign):
+                exposed |= any(isinstance(target, ast.Name) and target.id == name
+                               for target in node.targets)
+        if exposed:
+            moves[symbol] = {"symbol": symbol, "from": sources[0], "to": targets[0]}
+    return moves
+
+
+def _removed_preservation_symbol_records(
+    diff: str, notes_out: Optional[dict] = None, *, count_diff: Optional[str] = None
+) -> list[_RemovedSymbol]:
     """Keep hard gates for removals, without calling private edits deletions.
 
     Match declarations by enclosing class when the diff establishes scope;
@@ -999,6 +1065,9 @@ def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
     still goes through the normal review. Renames, routes whose path is not in
     the symbol, and duplicate names without class evidence remain gated.
     """
+    moves = _cross_file_moves(diff, count_diff)
+    if moves and notes_out is not None:
+        notes_out["preservation_moved_symbols"] = list(moves.values())
     removed: list[_RemovedSymbol] = []
     for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
         deleted_lines = _deleted_symbol_lines(file_diff)
@@ -1064,7 +1133,7 @@ def _removed_preservation_symbol_records(diff: str) -> list[_RemovedSymbol]:
                 if pair is not None:
                     rename_pool[pair] -= 1
                     preserved = True
-            if not preserved:
+            if not preserved and symbol not in moves:
                 removed.append(
                     _RemovedSymbol(raw_symbol, header.group(2) if header else None, old_line)
                 )
@@ -1601,7 +1670,8 @@ def _precheck_preservation_gate(
     )
     symbol_matches, exempted_symbols = _split_exempt_private_symbols(
         confirmed_diff,
-        _removed_preservation_symbols(confirmed_diff, project, exemption_notes),
+        _removed_preservation_symbols(confirmed_diff, project, exemption_notes,
+                                      count_diff=preservation_diff),
         project,
         exemption_notes,
     )
@@ -1872,12 +1942,18 @@ async def review_code_diff(
             f" 확정할 수 없다(판정 불가): {', '.join(unverified_symbols[:10])}. 삭제로 단정하지 마라.\n"
         )
 
+    moved_symbols = preservation_exemption.get("preservation_moved_symbols") or []
+    move_notice = (
+        "\n[보존 게이트 이동 면제] preservation_moved_symbols: "
+        + json.dumps(moved_symbols, ensure_ascii=False)
+        + "\n같은 diff 내 선언 이동과 원 파일 재노출만 확인했다. 동작 동일성은 리뷰하라.\n"
+    ) if moved_symbols else ""
     prompt = f"""다음 코드 변경사항을 리뷰하세요.
 
 프로젝트: {project}
 작업 지시: {instruction[:500]}
 변경 파일: {', '.join(files_changed or [])}
-{truncation_notice}
+{truncation_notice}{move_notice}
 ```diff
 {truncated_diff}
 ```
@@ -2210,6 +2286,8 @@ async def review_code_diff(
             needs_retry=needs_retry,
             model_used=used_model,
         )
+        if moved_symbols:
+            verdict_obj.feedback["preservation_moved_symbols"] = moved_symbols
         if unverified_symbols:
             unverified_issue = (
                 "[판정 불가(truncated)] diff 절단으로 삭제 여부를 확정할 수 없는 심볼: "
