@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from app.auth import TenantRole, require_tenant_role
+from app.services.doc_tier import compute_doc_tier, provider_of, revision_metadata
 from app.core.db_pool import get_pool
 from app.core.project_config import PROJECT_MAP, REMOTE_PROJECTS
 
@@ -379,7 +380,8 @@ def provenance_problem(*, source_session_id: Any, source_task_id: str | None, so
 
 async def _head(conn: Any, tenant: str, project: str, key: str, lock: bool = False):
     return await conn.fetchrow(
-        "SELECT * FROM project_document_heads WHERE tenant_id=$1::uuid AND project_key=$2 "
+        "SELECT *,EXISTS(SELECT 1 FROM project_document_goal_links gl WHERE gl.head_id=project_document_heads.id) AS goal_linked "
+        "FROM project_document_heads WHERE tenant_id=$1::uuid AND project_key=$2 "
         "AND document_key=$3" + (" FOR UPDATE" if lock else ""), tenant, project, key,
     )
 
@@ -448,26 +450,40 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
             raise HTTPException(409, "revision_conflict")
         same = next((row for row in matches if row["content_hash"] == digest and row["version"] == body.version), None)
         if same:
-            return {"document_id": head["id"], "revision_id": same["id"], "generation": head["generation"], "idempotent": True, **source_meta}
+            return {"document_id": head["id"], "revision_id": same["id"], "generation": head["generation"], "idempotent": True, **revision_metadata(same, body.kind), **source_meta}
         # source_path 없이 content 로만 등록된 기존 리비전과 원본이 같은 경우: 새 리비전·UPDATE 없이 기존 것을 돌려준다.
         by_hash = next((row for row in matches if row["content_hash"] == digest), None) if body.source_path else None
         if by_hash:
             return {"document_id": head["id"], "revision_id": by_hash["id"], "generation": head["generation"],
                     "idempotent": True, "matched_by": "content_hash", "revision": by_hash["revision"],
                     "version": by_hash["version"],
-                    "approved": head["approved_revision_id"] == by_hash["id"], **source_meta}
+                    "approved": head["approved_revision_id"] == by_hash["id"], **revision_metadata(by_hash, body.kind), **source_meta}
         raise HTTPException(409, "revision_conflict")
     if body.expected_generation != head["generation"]:
         raise HTTPException(409, "generation_conflict")
     next_revision = await conn.fetchval(
         "SELECT COALESCE(max(revision),0)+1 FROM project_document_revisions WHERE head_id=$1", head["id"],
     )
+    author_model = "unknown"
+    if body.source_task_id:
+        author_model = await conn.fetchval(
+            "SELECT actual_model FROM pipeline_jobs WHERE job_id=$1 AND tenant_id=$2::uuid AND upper(project)=$3",
+            body.source_task_id, tenant, project,
+        ) or "unknown"
+    if not isinstance(author_model, str):
+        author_model = "unknown"
+    goal_linked = bool(body.goal_id) or bool(await conn.fetchval(
+        "SELECT 1 FROM project_document_goal_links WHERE head_id=$1 LIMIT 1", head["id"],
+    ))
+    metadata = {"doc_tier": compute_doc_tier(body.kind, len(content), goal_linked),
+                "author_model": author_model, "author_provider": provider_of(author_model)}
     revision = await conn.fetchrow(
-        "INSERT INTO project_document_revisions(head_id,tenant_id,project_key,revision,version,title,content,content_hash,source_path,source_kind,source_task_id,source_session_id,goal_id,change_summary,author_id,idempotency_key) "
-        "VALUES($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id",
+        "INSERT INTO project_document_revisions(head_id,tenant_id,project_key,revision,version,title,content,content_hash,source_path,source_kind,source_task_id,source_session_id,goal_id,change_summary,author_id,idempotency_key,doc_tier,author_model,author_provider) "
+        "VALUES($1,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id",
         head["id"], tenant, project, next_revision, body.version, body.title, content, digest,
         source, "repository" if source else "api", body.source_task_id, body.source_session_id,
         body.goal_id, body.change_summary, actor, body.idempotency_key,
+        metadata["doc_tier"], metadata["author_model"], metadata["author_provider"],
     )
     await conn.execute(
         "UPDATE project_document_heads SET latest_revision_id=$2,generation=generation+1,title=$3,updated_at=now() WHERE id=$1",
@@ -484,7 +500,7 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
             "VALUES($1,$2::uuid,$3,$4) ON CONFLICT DO NOTHING",
             head["id"], tenant, project, body.goal_id,
         )
-    return {"document_id": head["id"], "revision_id": revision["id"], "generation": head["generation"] + 1, "idempotent": False, **source_meta}
+    return {"document_id": head["id"], "revision_id": revision["id"], "generation": head["generation"] + 1, "idempotent": False, **metadata, **source_meta}
 
 
 @router.post("", status_code=201)
@@ -510,6 +526,8 @@ async def list_documents(project_key: str, q: str | None = Query(None, max_lengt
         tenant, _ = await _authorize(conn, context, project, "read")
         rows = await conn.fetch(
             "SELECT h.id,h.document_key,h.kind,selected.title,h.generation,h.latest_revision_id,h.approved_revision_id,h.updated_at, "
+            "selected.doc_tier,selected.author_model,selected.author_provider,char_length(selected.content) AS char_count, "
+            "EXISTS(SELECT 1 FROM project_document_goal_links gl WHERE gl.head_id=h.id) AS goal_linked, "
             "COALESCE((SELECT e.action FROM project_document_events e WHERE e.revision_id=selected.id "
             "AND e.action IN ('review','approved','archived') ORDER BY e.id DESC LIMIT 1),'draft') AS status "
             "FROM project_document_heads h LEFT JOIN project_document_revisions selected "
@@ -521,7 +539,7 @@ async def list_documents(project_key: str, q: str | None = Query(None, max_lengt
             "AND (NOT $5::bool OR selected.id IS NOT NULL) "
             "ORDER BY h.updated_at DESC,h.id LIMIT $6", tenant, project, kind, q, approved_only, limit,
         )
-        return {"documents": [dict(row) for row in rows]}
+        return {"documents": [{**dict(row), **revision_metadata(row, row["kind"])} for row in rows]}
 
 
 @router.get("/review-queue")
@@ -564,7 +582,7 @@ async def get_document(project_key: str, document_key: str, approved_only: bool 
                     raise
             card = approval_card(head, {**dict(row), "status": status or "draft"}, project,
                                  can_approve=can_approve)
-        return {"approval_card": card, "document": dict(head), "revision": dict(row) if row else None,
+        return {"approval_card": card, "document": dict(head), "revision": {**dict(row), **revision_metadata({**dict(row), "goal_linked": head.get("goal_linked", False)}, head.get("kind", ""))} if row else None,
                 "status": status or ("draft" if row else "missing"),
                 "authoritative": bool(row and revision_id == head["approved_revision_id"])}
 
@@ -614,6 +632,7 @@ async def get_document_content(project_key: str, document_key: str,
         "is_binary": False,
         "format": "markdown",
         "canonical": {
+            **revision_metadata({**dict(row), "goal_linked": head.get("goal_linked", False)}, head.get("kind", "")),
             "document_key": document_key,
             "revision": row["revision"],
             "revision_id": str(row["id"]),
@@ -636,11 +655,11 @@ async def document_history(project_key: str, document_key: str, context: dict = 
         head = await _head(conn, tenant, project, document_key)
         if not head:
             raise HTTPException(404, "document_not_found")
-        rows = await conn.fetch("SELECT r.id,r.revision,r.version,r.title,r.content_hash,r.source_path,r.change_summary,r.author_id,r.created_at, "
+        rows = await conn.fetch("SELECT r.id,r.revision,r.version,r.title,r.content_hash,r.source_path,r.change_summary,r.author_id,r.created_at,r.doc_tier,r.author_model,r.author_provider,char_length(r.content) AS char_count,r.goal_id, "
                                 "COALESCE((SELECT e.action FROM project_document_events e WHERE e.revision_id=r.id "
                                 "AND e.action IN ('review','approved','archived') ORDER BY e.id DESC LIMIT 1),'draft') AS status "
                                 "FROM project_document_revisions r WHERE r.head_id=$1 ORDER BY r.revision DESC LIMIT 100", head["id"])
-        return {"revisions": [dict(row) for row in rows]}
+        return {"revisions": [{**dict(row), **revision_metadata({**dict(row), "goal_linked": head.get("goal_linked", False)}, head.get("kind", ""))} for row in rows]}
 
 
 class DecisionInput(BaseModel):

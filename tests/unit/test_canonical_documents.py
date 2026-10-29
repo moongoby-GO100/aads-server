@@ -113,6 +113,10 @@ class StubConnection:
         return self.matches
 
     async def fetchval(self, sql, *args):
+        if "SELECT actual_model" in sql:
+            return "claude-sonnet-5-5"
+        if "FROM project_document_goal_links" in sql:
+            return None
         if "FROM chat_sessions" in sql or "FROM goal_task_links" in sql or "FROM pipeline_jobs" in sql:
             self.lookups.append(sql)
             return 1
@@ -561,3 +565,29 @@ def test_runner_job_not_linked_to_goal_is_accepted_via_pipeline_jobs():
         request(expected=1, source_session_id=None, source_task_id="runner-1a2b3c4d")))
     assert result["idempotent"] is True
     assert any("FROM goal_task_links" in sql for sql in calls) and any("FROM pipeline_jobs" in sql for sql in calls)
+
+
+@pytest.mark.parametrize("model,provider", [("codex:gpt-6.1-sol", "openai"), (None, "unknown")])
+def test_registration_stores_server_metadata(monkeypatch, model, provider):
+    class Conn(StubConnection):
+        inserted = None
+
+        async def fetchval(self, sql, *args):
+            if "SELECT actual_model" in sql:
+                assert args == ("runner-1a2b3c4d", TENANT, "AADS")
+                return model
+            return await super().fetchval(sql, *args)
+
+        async def fetchrow(self, sql, *args):
+            if "INSERT INTO project_document_revisions" in sql:
+                self.inserted = args
+                return {"id": "new-revision"}
+            return await super().fetchrow(sql, *args)
+
+    conn = Conn(generation=0)
+    body = request(expected=0, source_task_id="runner-1a2b3c4d",
+                   doc_tier="D1", author_model="untrusted", author_provider="untrusted")
+    result = asyncio.run(docs.create_revision_in_tx(conn, TENANT, "user", "AADS", body))
+    assert conn.inserted[-3:] == ("D3", model or "unknown", provider)
+    assert result["doc_tier"] == "D3"
+    assert result["author_model"] == (model or "unknown")

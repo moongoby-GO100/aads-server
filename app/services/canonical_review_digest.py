@@ -12,6 +12,8 @@ from datetime import date, datetime
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
+from app.services.doc_tier import revision_metadata
+
 import structlog
 
 logger = structlog.get_logger()
@@ -24,6 +26,8 @@ _LOCK_KEY = "canonical_review_digest"
 
 _QUEUE_SQL = (
     "SELECT h.tenant_id::text AS tenant_id, h.project_key, h.document_key, h.kind, r.title, "
+    "r.doc_tier,r.author_model,r.author_provider,char_length(r.content) AS char_count, "
+    "EXISTS(SELECT 1 FROM project_document_goal_links gl WHERE gl.head_id=h.id) AS goal_linked, "
     "ev.created_at AS review_at "
     "FROM project_document_heads h "
     "JOIN project_document_revisions r ON r.id=h.latest_revision_id AND r.head_id=h.id "
@@ -47,8 +51,12 @@ async def fetch_review_queue(conn: Any, tenant_id: str | None, project_key: str 
     rows = await conn.fetch(_QUEUE_SQL, tenant_id, project_key)
     items = []
     for row in rows:
+        metadata = revision_metadata(row, row["kind"])
+        if (metadata["doc_tier"] or metadata.get("doc_tier_computed")) in ("D1", "SPLIT"):
+            continue
         review_kst = row["review_at"].astimezone(KST)
         items.append({
+            **metadata,
             "tenant_id": row["tenant_id"],
             "project_key": row["project_key"],
             "document_key": row["document_key"],

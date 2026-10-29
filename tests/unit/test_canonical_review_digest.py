@@ -227,3 +227,17 @@ def test_partial_recipient_success_records(monkeypatch):
     result = asyncio.run(digest.send_daily_digest(pool, now=NOW))
     assert result["sent"] == 1 and len(pool.log) == 1
     assert push.await_count == 2
+
+
+def test_queue_excludes_light_and_split_and_exposes_legacy_metadata():
+    rows = [dict(row("light"), kind="report", char_count=15000),
+            dict(row("split"), char_count=50001),
+            dict(row("standard"), kind="tasks", char_count=15000),
+            dict(row("heavy"), doc_tier="D3", author_model="codex:gpt-6.1-sol",
+                 author_provider="openai")]
+    conn = FakeConn(rows, set())
+    items = asyncio.run(digest.fetch_review_queue(conn, T1, "AADS", now=NOW))
+    assert [item["document_key"] for item in items] == ["standard", "heavy"]
+    assert items[0]["doc_tier"] is None
+    assert items[0]["doc_tier_computed"] == "D2"
+    assert items[1]["author_provider"] == "openai"

@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from app.api import canonical_documents as docs
 from app.core.db_pool import get_pool
 from app.services import canonical_gate, document_refs
+from app.services.doc_tier import revision_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ _STATUS_SQL = (
     "SELECT action FROM project_document_events WHERE revision_id=$1 "
     "AND action IN ('review','approved','archived') ORDER BY id DESC LIMIT 1"
 )
-_REVISION_COLS = "id,revision,version,title,content_hash,source_path,change_summary,created_at"
+_REVISION_COLS = "id,revision,version,title,content_hash,source_path,change_summary,created_at,doc_tier,author_model,author_provider,char_length(content) AS char_count,goal_id,EXISTS(SELECT 1 FROM project_document_goal_links gl WHERE gl.head_id=project_document_revisions.head_id) AS goal_linked"
 
 
 def validate_document_key(key: str) -> Optional[str]:
@@ -152,6 +153,7 @@ async def register_document(
         "approved": False,
         "note": "초안 리비전만 등록했습니다. 승인은 기존 승인 경로(POST /api/v1/projects/{project}/documents/{key}/approve)로만 합니다.",
     }
+    out.update({k: result[k] for k in ("doc_tier", "author_model", "author_provider", "doc_tier_computed") if k in result})
     view_status, view_authoritative = "draft", False
     if result.get("matched_by"):
         view_status, view_authoritative = matched_status, bool(result.get("approved"))
@@ -287,6 +289,7 @@ async def _document_summary(conn: Any, head: Any, project: str = "") -> dict[str
         )
         data = _jsonable(row)
         if data is not None:
+            data.update(revision_metadata(row, head["kind"]))
             data["status"] = await conn.fetchval(_STATUS_SQL, revision_id) or "draft"
         return data
 
