@@ -9,12 +9,15 @@ Pre-Flight Checker (AADS-178)
 GET /api/v1/directives/preflight?task_id={id}&depends_on={id}
 응답: { queue_clear, depends_met, duplicate, conflicts, recommendation }
 """
-import logging
 import os
 import re
 from typing import List, Optional
 
-logger = logging.getLogger(__name__)
+import structlog
+
+# 아래 로그 호출은 키워드 인자를 쓴다. 표준 logging 은 이를 받지 못해 TypeError 를
+# 던졌고, 그 때문에 /directives/preflight 가 depends_on·결과 기록 시점마다 500 이었다.
+logger = structlog.get_logger(__name__)
 
 _PENDING_DIR = "/root/.genspark/directives/pending"
 _RUNNING_DIR = "/root/.genspark/directives/running"
