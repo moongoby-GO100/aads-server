@@ -20,7 +20,8 @@
 #   APPLY    applied now via scripts/apply_migration.sh
 #
 # Exit codes: 0 ok, 2 usage, 4 destructive SQL in a pending file (nothing
-# applied), 5 a migration failed (later files not attempted), 6 ledger unreadable.
+# applied), 5 a migration failed (later files not attempted), 6 ledger unreadable,
+# 7 CEO approval unavailable/mismatched, 8 schema inspection failed.
 
 set -euo pipefail
 
@@ -153,6 +154,84 @@ for path in "${pending[@]}"; do
 done
 if ((blocked)); then
     exit 4
+fi
+
+# There is no migration-specific, human-CEO-authenticated approval source yet.
+# Generic agent_permission_requests.decided_by is a tenant identifier, not proof
+# of a human CEO decision. Never accept a file or environment approval override.
+# Replace this function only after that trusted approval contract is established.
+verify_ceo_approval() {
+    echo "APPROVAL-SOURCE-UNRESOLVED 승인 원천 미확정" >&2
+    return 1
+}
+
+# Bind the review manifest to immutable file bytes and the release identity.
+# An extracted deploy archive has no .git; deploy.sh exports AADS_RELEASE_SHA.
+release_sha="${AADS_RELEASE_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)}"
+manifest=""
+for path in "${pending[@]}"; do
+    name="migrations/$(basename "$path")"
+    digest="$(sha256sum "$path" | awk '{print $1}')"
+    manifest+="${name}|${digest}"$'\n'
+done
+
+# Read-only best-effort SQL syntax recognition: ALTER TABLE ... ADD COLUMN /
+# ADD CONSTRAINT, including repeated ADD clauses and quoted identifiers.
+# Only information_schema SELECTs reach psql; migration text is never executed.
+inspect_pending_objects() {
+    python3 - "${pending[@]}" <<'PYDRIFT'
+import os
+import re
+import subprocess
+import sys
+
+ident = r'(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z_0-9$]*)'
+qualified = rf'{ident}(?:\s*\.\s*{ident})?'
+def unquote(value):
+    return value[1:-1].replace('""', '"') if value.startswith('"') else value.lower()
+def literal(value):
+    return "'" + value.replace("'", "''") + "'"
+for filename in sys.argv[1:]:
+    sql = open(filename).read()
+    sql = re.sub(r'/\*.*?\*/|--[^\n]*', ' ', sql, flags=re.S)
+    for match in re.finditer(
+        rf'\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?({qualified})(.*?);',
+        sql, re.I | re.S,
+    ):
+        parts = re.findall(ident, match[1])
+        schema, table = ('public', unquote(parts[0])) if len(parts) == 1 else map(unquote, parts)
+        for addition in re.finditer(
+            rf'\bADD\s+(COLUMN|CONSTRAINT)\s+(?:IF\s+NOT\s+EXISTS\s+)?({ident})', match[2], re.I,
+        ):
+            kind, name = addition[1].upper(), unquote(addition[2])
+            view, field = ('columns', 'column_name') if kind == 'COLUMN' else ('table_constraints', 'constraint_name')
+            query = (f"SELECT count(*) FROM information_schema.{view} WHERE table_schema={literal(schema)} "
+                     f"AND table_name={literal(table)} AND {field}={literal(name)};")
+            result = subprocess.run(
+                ['timeout', '60', 'docker', 'exec', os.environ.get('PG_CONTAINER', 'aads-postgres'),
+                 'psql', '-U', os.environ.get('PGUSER', 'aads'), '-d', os.environ.get('PGDATABASE', 'aads'),
+                 '-qAt', '-v', 'ON_ERROR_STOP=1', '-c', query],
+                capture_output=True, text=True,
+            )
+            if result.returncode or not result.stdout.strip().isdigit():
+                print(f'DRIFT-ERROR cannot inspect {schema}.{table}.{name}', file=sys.stderr)
+                sys.exit(8)
+            if int(result.stdout.strip()):
+                print(f'DRIFT migrations/{os.path.basename(filename)} (unledgered {kind} {schema}.{table}.{name} already exists)')
+PYDRIFT
+}
+
+if $plan_only; then
+    if ((${#pending[@]})); then
+        inspect_pending_objects || exit 8
+    fi
+elif ((${#pending[@]})); then
+    printf 'RELEASE %s\n%s' "${release_sha:-unknown}" "$manifest"
+    if ! verify_ceo_approval "$release_sha" "$manifest"; then
+        echo "BLOCK-CEO-APPROVAL: PENDING migrations require a human CEO approval bound to RELEASE and every filename/sha256 above."
+        echo "승인 방법: CEO 사람 로그인으로 해당 명세를 검토. 승인 원천 미확정: 안전한 전용 승인 경로 확정 전에는 적용할 수 없습니다."
+        exit 7
+    fi
 fi
 
 applied=0

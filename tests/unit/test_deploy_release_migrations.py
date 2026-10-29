@@ -7,7 +7,6 @@ goal dispatch failed with "column paused_at does not exist".
 
 import hashlib
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -29,7 +28,13 @@ def release(tmp_path):
     """A release tree plus a fake apply_migration.sh that records into the ledger file."""
     (tmp_path / "migrations").mkdir()
     (tmp_path / "scripts").mkdir()
-    shutil.copy(RUNNER, tmp_path / "scripts/apply_release_migrations.sh")
+    # Regression tests exercise application mechanics with a trusted-source stub.
+    # This modifies only the disposable test copy; production has no bypass.
+    script = RUNNER.read_text().replace(
+        'echo "APPROVAL-SOURCE-UNRESOLVED 승인 원천 미확정" >&2\n    return 1',
+        'return 0',
+    )
+    (tmp_path / "scripts/apply_release_migrations.sh").write_text(script)
     ledger = tmp_path / "ledger.txt"
     ledger.write_text("")
     calls = tmp_path / "calls.txt"
