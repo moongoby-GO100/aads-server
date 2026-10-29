@@ -58,14 +58,16 @@ def test_subagent_default_prompt_carries_rdoc_block():
 
 
 class _Conn:
-    def __init__(self, files, registered):
-        self.files, self.registered = files, registered
+    def __init__(self, files, registered=(), revisions=()):
+        self.files, self.registered, self.revisions = files, registered, revisions
 
     async def fetchrow(self, sql, *a):
         return {"tenant_id": "t-1", "actual_changed_files": json.dumps(self.files)}
 
-    async def fetch(self, sql, tenant, paths):
-        return [{"source_path": p} for p in paths if p in self.registered]
+    async def fetch(self, sql, tenant, paths, job_id):
+        rows = [{"source_path": p, "source_task_id": None, "title": None} for p in paths if p in self.registered]
+        rows.extend(self.revisions)
+        return rows
 
 
 class _Pool:
@@ -99,6 +101,20 @@ async def test_job_compliance_incomplete_when_report_not_registered():
 async def test_job_compliance_complete_when_registered_and_scoped_by_tenant():
     res = await dr.job_rdoc_compliance(_Pool(_Conn([NEW_DOC], {NEW_DOC})), "j1")
     assert res["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_job_compliance_complete_when_same_job_and_title_registered():
+    revision = {"source_path": None, "source_task_id": "j1", "title": "문서 저장 결과"}
+    res = await dr.job_rdoc_compliance(_Pool(_Conn([NEW_DOC], revisions=[revision])), "j1")
+    assert res["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_job_compliance_incomplete_when_job_registered_title_does_not_match():
+    revision = {"source_path": None, "source_task_id": "j1", "title": "다른 제목"}
+    res = await dr.job_rdoc_compliance(_Pool(_Conn([NEW_DOC], revisions=[revision])), "j1")
+    assert res["status"] == "incomplete" and res["missing"] == [NEW_DOC]
 
 
 @pytest.mark.asyncio

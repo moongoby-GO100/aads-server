@@ -216,7 +216,7 @@ def _iter_files(value: Any) -> list[str]:
 
 
 async def job_rdoc_compliance(pool: Any, job_id: str) -> Optional[dict[str, Any]]:
-    """러너 잡의 R-DOC 준수 판정. 같은 테넌트에 source_path 로 등록된 리비전만 '등록됨' 으로 본다.
+    """러너 잡의 R-DOC 준수 판정. source_path 또는 작업 출처와 제목으로 등록 여부를 확인한다.
 
     fail-open: 조회가 실패하면 None(보고 문구만 줄고 흐름은 막지 않는다).
     """
@@ -233,10 +233,23 @@ async def job_rdoc_compliance(pool: Any, job_id: str) -> Optional[dict[str, Any]
             if not docs:
                 return evaluate_rdoc_compliance(files, [])
             rows = await conn.fetch(
-                "SELECT DISTINCT source_path FROM project_document_revisions "
-                "WHERE tenant_id = $1::uuid AND source_path = ANY($2::text[])",
-                row["tenant_id"], docs,
+                "SELECT source_path, source_task_id, title FROM project_document_revisions "
+                "WHERE tenant_id = $1::uuid AND (source_path = ANY($2::text[]) OR source_task_id = $3)",
+                row["tenant_id"], docs, job_id,
             )
-        return evaluate_rdoc_compliance(files, [r["source_path"] for r in rows])
+        registered_paths = [r["source_path"] for r in rows if r["source_path"]]
+        registered_names = { _norm(path).rsplit("/", 1)[-1] for path in registered_paths }
+        for doc in docs:
+            if doc.rsplit("/", 1)[-1] in registered_names:
+                continue
+            expected_title = title_part(doc).strip()
+            if any(
+                r["source_task_id"] == job_id
+                and isinstance(r["title"], str)
+                and r["title"].strip() == expected_title
+                for r in rows
+            ):
+                registered_paths.append(doc)
+        return evaluate_rdoc_compliance(files, registered_paths)
     except Exception:  # noqa: BLE001
         return None
