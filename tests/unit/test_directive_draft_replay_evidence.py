@@ -95,7 +95,7 @@ def test_create_revision_whitelists_classification_and_keeps_turn_kind(monkeypat
     h.create()
     metadata = h.conn.revisions[0]['metadata']
     assert metadata['turn_kind'] == 'confirmed'
-    assert set(metadata) == {'source_message_ids', 'composer_draft', 'turn_kind', 'decisions', 'turn_kind_evidence'}
+    assert set(metadata) == {'source_message_ids', 'composer_draft', 'turn_kind', 'decisions', 'turn_kind_evidence', 'review_bundle'}
 
 
 @pytest.mark.parametrize('classification', [None, {}, {'turn_kind': 'open', 'decisions': None},

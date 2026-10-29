@@ -129,6 +129,8 @@ class FakeConn:
         raise AssertionError(query)
 
     async def fetchval(self, query, *args):
+        if "SELECT EXISTS (SELECT 1 FROM chat_sessions" in query:
+            return True
         if "SELECT change_source FROM directive_draft_revisions" in query:
             rows = [r for r in self.revisions if r["draft_id"] == args[0]]
             return max(rows, key=lambda r: r["revision"])["change_source"] if rows else None

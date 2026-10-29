@@ -28,6 +28,8 @@ def _user_id(context: TenantContext) -> str | None:
 
 
 class DraftCreateRequest(BaseModel):
+    draft_id: UUID | None = None
+    base_revision: int | None = Field(default=None, ge=1)
     context_window: int = Field(default=8, ge=2, le=16)
     message_ids: list[UUID] | None = Field(default=None, max_length=16)
     composer_draft: str | None = Field(default=None, max_length=50_000)
@@ -36,6 +38,9 @@ class DraftCreateRequest(BaseModel):
 
 
 class DraftUpdateRequest(BaseModel):
+    session_id: UUID | None = None
+    goal_id: UUID | None = None
+    milestone_id: UUID | None = None
     title: str | None = Field(default=None, min_length=1, max_length=200)
     content: str | None = Field(default=None, min_length=1, max_length=50_000)
     expected_revision: int | None = Field(default=None, ge=1)
@@ -60,6 +65,8 @@ async def create_directive_draft(
             tenant_id=_tenant_id(context),
             user_id=_user_id(context),
             session_id=str(session_id),
+            draft_id=str(body.draft_id) if body.draft_id else None,
+            base_revision=body.base_revision,
             context_window=body.context_window,
             message_ids=[str(value) for value in body.message_ids] if body.message_ids else None,
             composer_draft=body.composer_draft,
@@ -68,7 +75,7 @@ async def create_directive_draft(
         )
     except drafts.DraftNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
-    except drafts.GoalBindingError as exc:
+    except (drafts.GoalBindingError, drafts.DraftConflictError) as exc:
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -102,10 +109,13 @@ async def update_directive_draft(
             title=body.title,
             content=body.content,
             expected_revision=body.expected_revision,
+            session_id=str(body.session_id) if body.session_id else None,
+            goal_id=str(body.goal_id) if body.goal_id else None,
+            milestone_id=str(body.milestone_id) if body.milestone_id else None,
         )
     except drafts.DraftNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
-    except drafts.DraftConflictError as exc:
+    except (drafts.DraftConflictError, drafts.GoalBindingError) as exc:
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -129,3 +139,16 @@ async def record_directive_draft_event(
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/directive-drafts/{draft_id}/trace")
+async def trace_directive_draft(
+    draft_id: UUID,
+    context: TenantContext = Depends(require_tenant_viewer),
+) -> dict[str, Any]:
+    try:
+        return await drafts.trace_draft_sources(tenant_id=_tenant_id(context), draft_id=str(draft_id))
+    except drafts.DraftNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (drafts.GoalBindingError, drafts.DraftConflictError) as exc:
+        raise HTTPException(409, str(exc)) from exc

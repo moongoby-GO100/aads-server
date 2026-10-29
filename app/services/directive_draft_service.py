@@ -615,8 +615,9 @@ async def _fetch_recent_context_messages(
         args.append(as_of)
     return await conn.fetch(
         f"""
-        SELECT id, role, content, created_at FROM (
-            SELECT id, role, content, created_at
+        SELECT id, role, content, created_at, tool_refs FROM (
+            SELECT id, role, content, created_at,
+                   to_jsonb(chat_messages)->'tools_called' AS tool_refs
               FROM chat_messages
              WHERE session_id = $1 AND tenant_id = $2
                AND role IN ('user', 'assistant')
@@ -670,7 +671,8 @@ async def _load_source(
             parsed_ids = list(dict.fromkeys(uuid.UUID(value) for value in message_ids))
             rows = await conn.fetch(
                 """
-                SELECT id, role, content, created_at
+                SELECT id, role, content, created_at,
+                       to_jsonb(chat_messages)->'tools_called' AS tool_refs
                   FROM chat_messages
                  WHERE session_id = $1 AND tenant_id = $2 AND id = ANY($3::uuid[])
                  ORDER BY created_at ASC
@@ -760,6 +762,90 @@ def _revision_turn_metadata(classification: Any) -> dict[str, Any]:
     return {key: classification[key]
             for key in ("turn_kind", "decisions", "turn_kind_evidence")
             if classification.get(key) is not None}
+
+
+def _mask_secrets(text: Any) -> str:
+    """Redact credentials before persisting or returning review evidence."""
+    value = str(text or "")
+    value = re.sub(r'(?i)("(?:token|password|secret|api[_-]?key)"\s*:\s*")[^"\s]{16,}',
+                   r'\1[REDACTED]', value)
+    value = re.sub(r"(?i)(?<![a-z0-9])sk-[a-z0-9_-]{20,}\b", "[REDACTED]", value)
+    value = re.sub(r"(?i)\bbearer\s+[a-z0-9._~-]{20,}(?![a-z0-9._~-])", "[REDACTED]", value)
+    value = re.sub(r"(?i)(\b(?:token|password|secret|api[_-]?key)\s*[=:]\s*)[^\s,;]{16,}",
+                   r"\1[REDACTED]", value)
+    return value
+
+
+def _masked_snapshot(text: Any) -> str:
+    return _mask_secrets(text)[:4000]
+
+
+def _safe_evidence(value: Any) -> Any:
+    if isinstance(value, str):
+        return _mask_secrets(value)
+    if isinstance(value, dict):
+        return {key: _safe_evidence(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_safe_evidence(item) for item in value]
+    return value
+
+
+def _review_bundle(source: DraftSource, content: str, binding: dict[str, Any],
+                   classification: dict[str, Any], base_revision: int | None) -> dict[str, Any]:
+    return {
+        "session_id": str(source.session_id), **binding, "base_revision": base_revision,
+        "sources": [{"message_id": str(m["id"]), "role": m.get("role"),
+                     "content_hash": hashlib.sha256(str(m.get("content") or "").encode()).hexdigest(),
+                     "snapshot": _masked_snapshot(m.get("content"))} for m in source.messages],
+        "tool_results": [{"message_id": str(m["id"]),
+                          "snapshot": _masked_snapshot(json.dumps(m.get("tool_refs"), ensure_ascii=False))}
+                         for m in source.messages if m.get("tool_refs")],
+        "composer_draft": _masked_snapshot(source.composer_draft),
+        "response_draft": _masked_snapshot(content),
+        "decisions": [{**d, "text": _masked_snapshot(d.get("text")),
+                       "disposition": "rejected" if _NEGATION_RE.search(d.get("text", ""))
+                       else "accepted" if d["kind"] == "confirmed" else "open"}
+                      for d in (classification.get("decisions") or [])],
+        "change_proposal": _masked_snapshot(content),
+        "rationale": [_masked_snapshot(v) for v in (classification.get("turn_kind_evidence") or [])],
+    }
+
+
+async def _validate_saved_scope(conn, draft: Any) -> None:
+    """Recheck persisted bindings on reads and edits, including legacy rows."""
+    stored = _serialize_row(draft).get("classification") or {}
+    if not isinstance(stored, dict):
+        stored = {}
+    valid = await conn.fetchval(
+        """SELECT EXISTS (SELECT 1 FROM chat_sessions
+               WHERE id = $1 AND tenant_id = $2)
+           AND ($3::text IS NULL OR EXISTS (SELECT 1 FROM goals
+               WHERE id = $3::uuid AND tenant_id = $2))
+           AND ($4::text IS NULL OR EXISTS (SELECT 1 FROM milestones
+               WHERE id = $4::uuid AND ($3::text IS NULL OR goal_id = $3::uuid) AND tenant_id = $2))
+           AND NOT EXISTS (SELECT 1 FROM chat_messages
+               WHERE id = ANY($5::uuid[]) AND (session_id <> $1 OR tenant_id <> $2))""",
+        draft["session_id"], draft["tenant_id"], stored.get("goal_id"),
+        stored.get("milestone_id"), draft["source_message_ids"],
+    )
+    if not valid:
+        raise GoalBindingError("draft tenant/session/goal/milestone scope mismatch")
+
+
+async def _explicit_draft(conn, *, tenant_uuid, source, draft_id, base_revision, binding,
+                          for_update=False):
+    row = await conn.fetchrow(
+        "SELECT * FROM directive_drafts WHERE id = $1 AND tenant_id = $2"
+        + (" FOR UPDATE" if for_update else ""), uuid.UUID(draft_id), tenant_uuid)
+    if not row or row["session_id"] != source.session_id:
+        raise DraftNotFoundError("draft not found in selected session")
+    await _validate_saved_scope(conn, row)
+    _check_existing_goal_binding(row, binding)
+    if row["current_revision"] != base_revision:
+        raise DraftConflictError(f"revision conflict: current={row['current_revision']}")
+    if await _is_frozen_draft(conn, row):
+        raise DraftConflictError("reviewed or human-edited draft is protected")
+    return row
 
 
 async def _resolve_goal_binding(
@@ -914,6 +1000,8 @@ async def _draft_result(
         result["artifact_id"] = str(artifact["id"])
         result["artifact"] = _serialize_artifact(artifact)
     result["turn_dedup"] = turn_dedup
+    if turn_dedup == "existing":
+        result["unchanged"] = True
     stored = result.get("classification")
     result["goal_change_allowed"] = goal_change_allowed(
         stored.get("turn_kind") if isinstance(stored, dict) else None
@@ -931,6 +1019,8 @@ async def create_draft(
     composer_draft: str | None = None,
     goal_id: str | None = None,
     milestone_id: str | None = None,
+    draft_id: str | None = None,
+    base_revision: int | None = None,
 ) -> dict[str, Any]:
     """Create the draft for a turn, or add a revision to the one this turn already has.
 
@@ -942,6 +1032,8 @@ async def create_draft(
     milestones. ``goal_id``/``milestone_id`` must be explicit or the session's single bound goal;
     a foreign-tenant goal or a milestone of another goal raises GoalBindingError.
     """
+    if (draft_id is None) != (base_revision is None):
+        raise ValueError("draft_id and base_revision must be provided together")
     source = await _load_source(
         tenant_id=tenant_id,
         session_id=session_id,
@@ -959,9 +1051,8 @@ async def create_draft(
             conn, tenant_uuid=tenant_uuid, session_id=source.session_id,
             goal_id=goal_id, milestone_id=milestone_id,
         )
-        existing = await _find_turn_draft(
-            conn, tenant_uuid=tenant_uuid, source=source, turn_key=turn_key
-        )
+        existing = None if draft_id else await _find_turn_draft(
+            conn, tenant_uuid=tenant_uuid, source=source, turn_key=turn_key)
         if existing:
             _check_existing_goal_binding(existing, goal_binding)
         if existing and await _is_frozen_draft(conn, existing):
@@ -969,44 +1060,54 @@ async def create_draft(
                 conn, tenant_uuid=tenant_uuid, draft=existing, artifact=None, turn_dedup="existing"
             )
 
-    # 최근 문답 모드는 사용자 요청만 판정하고, 응답 선택 모드는 선택된 후속 조치도 포함한다.
+    async def prepare_revision():
+        # 최근 문답 모드는 사용자 요청만 판정하고, 응답 선택 모드는 선택된 후속 조치도 포함한다.
+        risk_level = classify_risk(_risk_source_text(source))
+        content, generation_mode, model_used = await generate_directive_content(
+            source,
+            risk_level,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        fields = _field_map(content)
+        title = fields.get("TITLE", "지시 초안")[:200]
+        source_ids = [message["id"] for message in source.messages]
+        confidence = 0.75 if generation_mode == "generated" else 0.45
+        utterance, utterance_id = _turn_utterance(source)
+        turn_classification = _safe_evidence(classify_turn(utterance, source_message_id=utterance_id))
+        classification = {
+            "risk_level": risk_level,
+            "generation_mode": generation_mode,
+            "context_message_count": len(source.messages),
+            "source_mode": "selected_response" if source.selected_assistant_message_id else "recent_context",
+            "selected_assistant_message_id": (
+                str(source.selected_assistant_message_id)
+                if source.selected_assistant_message_id
+                else None
+            ),
+            "turn_key": turn_key,
+            "requires_human_review": True,
+            "auto_submit": False,
+            "model_used": model_used,
+            "composer_draft_included": bool(source.composer_draft),
+            "composer_draft_content": _mask_secrets(source.composer_draft) if source.composer_draft else None,
+            **turn_classification,
+            **goal_binding,
+        }
+        revision_metadata = {
+            "source_message_ids": [str(value) for value in source_ids],
+            "composer_draft": _mask_secrets(source.composer_draft) if source.composer_draft else None,
+            **_revision_turn_metadata(turn_classification),
+            "review_bundle": _review_bundle(source, content, {"tenant_id": tenant_id, **goal_binding},
+                                            turn_classification, base_revision),
+        }
+        classification["review_bundle"] = revision_metadata["review_bundle"]
+        return content, title, source_ids, confidence, classification, revision_metadata, model_used, generation_mode
+
     risk_level = classify_risk(_risk_source_text(source))
-    content, generation_mode, model_used = await generate_directive_content(
-        source,
-        risk_level,
-        tenant_id=tenant_id,
-        user_id=user_id,
-    )
-    fields = _field_map(content)
-    title = fields.get("TITLE", "지시 초안")[:200]
-    source_ids = [message["id"] for message in source.messages]
-    confidence = 0.75 if generation_mode == "generated" else 0.45
-    utterance, utterance_id = _turn_utterance(source)
-    turn_classification = classify_turn(utterance, source_message_id=utterance_id)
-    classification = {
-        "risk_level": risk_level,
-        "generation_mode": generation_mode,
-        "context_message_count": len(source.messages),
-        "source_mode": "selected_response" if source.selected_assistant_message_id else "recent_context",
-        "selected_assistant_message_id": (
-            str(source.selected_assistant_message_id)
-            if source.selected_assistant_message_id
-            else None
-        ),
-        "turn_key": turn_key,
-        "requires_human_review": True,
-        "auto_submit": False,
-        "model_used": model_used,
-        "composer_draft_included": bool(source.composer_draft),
-        "composer_draft_content": source.composer_draft,
-        **turn_classification,
-        **goal_binding,
-    }
-    revision_metadata = {
-        "source_message_ids": [str(value) for value in source_ids],
-        "composer_draft": source.composer_draft,
-        **_revision_turn_metadata(turn_classification),
-    }
+    if not draft_id:
+        content, title, source_ids, confidence, classification, revision_metadata, model_used, generation_mode = await prepare_revision()
+
     async with get_pool().acquire() as conn:
         async with conn.transaction():
             # Serialize session writes, including retransmissions with distinct message IDs.
@@ -1015,9 +1116,13 @@ async def create_draft(
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                 f"directive_draft_turn:{tenant_id}:{source.session_id}",
             )
-            current = await _find_turn_draft(
-                conn, tenant_uuid=tenant_uuid, source=source, turn_key=turn_key, for_update=True
-            )
+            current = (await _explicit_draft(
+                conn, tenant_uuid=tenant_uuid, source=source, draft_id=draft_id,
+                base_revision=base_revision, binding=goal_binding, for_update=True) if draft_id else
+                await _find_turn_draft(conn, tenant_uuid=tenant_uuid, source=source,
+                                       turn_key=turn_key, for_update=True))
+            if draft_id:
+                content, title, source_ids, confidence, classification, revision_metadata, model_used, generation_mode = await prepare_revision()
             # Preserve ID-based turn keys. Only an identical generated revision from
             # the same single-user input may reuse another turn's existing result.
             if (not current and len(source.messages) == 1
@@ -1058,6 +1163,10 @@ async def create_draft(
                         conn, tenant_uuid=tenant_uuid, draft=current, artifact=None,
                         turn_dedup="existing",
                     )
+                if draft_id:
+                    stored = _serialize_row(current).get("classification") or {}
+                    for key in ("turn_key", "source_mode", "selected_assistant_message_id"):
+                        classification[key] = stored.get(key)
                 revision = current["current_revision"] + 1
                 draft = await conn.fetchrow(
                     """
@@ -1170,7 +1279,9 @@ async def create_draft(
     result["artifact_id"] = str(artifact["id"])
     result["artifact"] = _serialize_artifact(artifact)
     result["turn_dedup"] = turn_dedup
-    result["goal_change_allowed"] = goal_change_allowed(turn_classification["turn_kind"])
+    if turn_dedup == "existing":
+        result["unchanged"] = True
+    result["goal_change_allowed"] = goal_change_allowed(classification["turn_kind"])
     return result
 
 
@@ -1399,7 +1510,7 @@ async def load_draft_trace(conn, *, tenant_id: Any, draft_id: Any) -> dict[str, 
                  "created_at": row["created_at"].isoformat() if row["created_at"] else None,
                  "in_draft_session": same_tenant and same_session}
         if same_tenant and same_session:
-            entry["preview"] = row["preview"]
+            entry["preview"] = _masked_snapshot(row["preview"])
         messages.append(entry)
     revisions = await conn.fetch(
         """SELECT revision, change_source, metadata, created_at
@@ -1425,7 +1536,7 @@ async def load_draft_trace(conn, *, tenant_id: Any, draft_id: Any) -> dict[str, 
                     WHERE g.id = $1::uuid AND g.tenant_id = $2
                       AND ($3::text IS NULL OR EXISTS (
                           SELECT 1 FROM milestones m
-                           WHERE m.id = $3::uuid AND m.goal_id = g.id))
+                           WHERE m.id = $3::uuid AND m.goal_id = g.id AND m.tenant_id = $2))
                       AND ($5::boolean OR EXISTS (
                           SELECT 1 FROM goal_task_links l
                            WHERE l.goal_id = g.id AND l.task_type = 'chat_session'
@@ -1444,6 +1555,7 @@ async def load_draft_trace(conn, *, tenant_id: Any, draft_id: Any) -> dict[str, 
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
             "source_message_ids": list((metadata or {}).get("source_message_ids") or []),
             "turn_kind": (metadata or {}).get("turn_kind"),
+            "review_bundle": (metadata or {}).get("review_bundle"),
         })
     integrity = {
         "source_message_count": len(source_ids),
@@ -1483,7 +1595,19 @@ async def load_draft_trace(conn, *, tenant_id: Any, draft_id: Any) -> dict[str, 
 
 async def trace_draft_sources(*, tenant_id: str, draft_id: str) -> dict[str, Any]:
     async with get_pool().acquire() as conn:
-        return await load_draft_trace(conn, tenant_id=tenant_id, draft_id=draft_id)
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            draft = await conn.fetchrow(
+                "SELECT * FROM directive_drafts WHERE id = $1 AND tenant_id = $2",
+                uuid.UUID(draft_id), uuid.UUID(tenant_id))
+            if not draft:
+                raise DraftNotFoundError("draft not found")
+            await _validate_saved_scope(conn, draft)
+            trace = await load_draft_trace(conn, tenant_id=tenant_id, draft_id=draft_id)
+            if any(trace["integrity"].get(key) for key in (
+                "foreign_session_messages", "foreign_tenant_messages", "goal_mismatch",
+            )):
+                raise GoalBindingError("draft source scope mismatch")
+            return _safe_evidence(trace)
 
 
 async def update_draft(
@@ -1495,6 +1619,9 @@ async def update_draft(
     content: str | None,
     expected_revision: int | None,
     change_source: str = "user_edit",
+    session_id: str | None = None,
+    goal_id: str | None = None,
+    milestone_id: str | None = None,
 ) -> dict[str, Any]:
     tenant_uuid = uuid.UUID(tenant_id)
     draft_uuid = uuid.UUID(draft_id)
@@ -1508,9 +1635,18 @@ async def update_draft(
             )
             if not current:
                 raise DraftNotFoundError("directive draft not found")
+            await _validate_saved_scope(conn, current)
+            if session_id and str(current["session_id"]) != session_id:
+                raise DraftNotFoundError("draft not found in selected session")
+            stored = _serialize_row(current).get("classification") or {}
+            if not isinstance(stored, dict):
+                stored = {}
+            for field, requested in (("goal_id", goal_id), ("milestone_id", milestone_id)):
+                if requested and stored.get(field) != requested:
+                    raise GoalBindingError("draft goal/milestone does not match selection")
             if expected_revision is not None and current["current_revision"] != expected_revision:
                 raise DraftConflictError(f"revision conflict: current={current['current_revision']}")
-            next_content = (content if content is not None else current["content"]).strip()
+            next_content = (content if content is not None else current["content"])
             valid, errors = validate_directive(
                 next_content, expected_project=current["project_key"]
             )
@@ -1520,6 +1656,15 @@ async def update_draft(
             next_title = (
                 title if title is not None else content_title or current["title"]
             ).strip()[:200]
+            if next_content == current["content"] and next_title == current["title"]:
+                return {**_serialize_row(current), "unchanged": True}
+            review_metadata = {}
+            if isinstance(stored.get("review_bundle"), dict):
+                bundle = {**stored["review_bundle"], "base_revision": current["current_revision"],
+                          "response_draft": _masked_snapshot(next_content),
+                          "change_proposal": _masked_snapshot(next_content),
+                          "rationale": ["Explicit human edit; approval is recorded separately"]}
+                review_metadata["review_bundle"] = bundle
             next_revision = current["current_revision"] + 1
             updated = await conn.fetchrow(
                 """
@@ -1550,6 +1695,7 @@ async def update_draft(
                 json.dumps({
                     "source_message_ids": [str(value) for value in current["source_message_ids"]],
                     **_revision_turn_metadata(dict(current).get("classification")),
+                    **review_metadata,
                 }, ensure_ascii=False),
             )
             await conn.execute(

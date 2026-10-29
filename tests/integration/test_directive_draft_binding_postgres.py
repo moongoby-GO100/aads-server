@@ -45,8 +45,12 @@ async def exercise(monkeypatch, scenario):
             CREATE TABLE chat_artifacts (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
                 tenant_id uuid, session_id uuid, workspace_id uuid, type text, title text,
                 content text, metadata jsonb DEFAULT '{}', updated_at timestamptz DEFAULT now());
-            CREATE TABLE goals (id uuid PRIMARY KEY, tenant_id uuid);
+            CREATE TABLE goals (id uuid PRIMARY KEY, tenant_id uuid,
+                owner_role_key text NOT NULL, owner_session_id uuid NOT NULL,
+                CONSTRAINT ck_goals_owner_required CHECK (
+                    owner_role_key <> '' AND owner_session_id IS NOT NULL));
             CREATE TABLE milestones (id uuid PRIMARY KEY, goal_id uuid, tenant_id uuid);
+            CREATE TABLE goal_task_links (goal_id uuid, task_type text, task_id text);
         """)
         for filename in ("172_directive_draft_copilot.sql", "20261022_directive_draft_turn_dedup.sql"):
             await conn.execute((ROOT / "migrations" / filename).read_text())
@@ -61,8 +65,9 @@ async def exercise(monkeypatch, scenario):
         await conn.execute("INSERT INTO chat_workspaces VALUES($1,'테스트','AADS')", workspace)
         await conn.executemany("INSERT INTO chat_sessions VALUES($1,$2,$3,'테스트')",
                               [(session, tenant, workspace), (other_session, tenant, workspace)])
-        await conn.executemany("INSERT INTO goals VALUES($1,$2)",
-                              [(goal, tenant), (other_goal, tenant), (foreign_goal, foreign)])
+        await conn.executemany("INSERT INTO goals VALUES($1,$2,'ceo',$3)",
+                              [(goal, tenant, session), (other_goal, tenant, session),
+                               (foreign_goal, foreign, other_session)])
         await conn.executemany("INSERT INTO milestones VALUES($1,$2,$3)",
                               [(milestone, goal, tenant), (other_milestone, other_goal, tenant)])
         question = {"question": "목표를 바꿔도 될까요?",
@@ -111,7 +116,24 @@ async def exercise(monkeypatch, scenario):
             assert await conn.fetchval("SELECT count(*) FROM directive_draft_events") == expected
             return
         first = await service.create_draft(**kwargs)
-        if scenario == "stale_revision":
+        if scenario == "explicit_bundle":
+            trace_before = await service.trace_draft_sources(tenant_id=str(tenant), draft_id=first["id"])
+            continuation = dict(kwargs, draft_id=first["id"], base_revision=1,
+                                composer_draft="근거를 보완해줘")
+            second = await service.create_draft(**continuation)
+            assert second["current_revision"] == 2 and second["id"] == first["id"]
+            with pytest.raises(service.DraftConflictError):
+                await service.create_draft(**continuation)
+            continuation["base_revision"] = 2
+            assert (await service.create_draft(**continuation))["turn_dedup"] == "existing"
+            trace_after = await service.trace_draft_sources(tenant_id=str(tenant), draft_id=first["id"])
+            assert trace_before["revisions"][0] == trace_after["revisions"][0]
+            assert trace_after["revisions"][1]["review_bundle"]["base_revision"] == 1
+            await service.record_event(tenant_id=str(tenant), user_id=None,
+                                       draft_id=first["id"], action="approved")
+            with pytest.raises(service.DraftConflictError):
+                await service.create_draft(**continuation)
+        elif scenario == "stale_revision":
             edit = dict(tenant_id=str(tenant), user_id=None, draft_id=first["id"],
                         title="수정", content=None, expected_revision=1)
             await service.update_draft(**edit)
@@ -151,7 +173,7 @@ async def exercise(monkeypatch, scenario):
 
 
 @pytest.mark.parametrize("scenario", [
-    "concurrent", "different_content", "concurrent_binding", "stale_revision",
+    "concurrent", "different_content", "concurrent_binding", "stale_revision", "explicit_bundle",
     "cross_tenant", "cross_session", "foreign_goal", "cross_goal", "question", "assumption",
 ])
 def test_real_draft_binding_and_revisions(monkeypatch, scenario):
