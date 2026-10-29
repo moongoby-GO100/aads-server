@@ -13,12 +13,11 @@ import os
 import re
 from typing import List, Optional
 
-import logging
+import structlog
 
-# 구조화 필드는 표준 logging 의 extra 로 전달한다.
-# 표준 logging 은 키워드 인자를 받지 못해 TypeError 로 /directives/preflight 가 500이 됐다.
-# extra 는 현 포맷터에서 출력되지 않으므로 핵심 필드를 메시지에도 남긴다.
-logger = logging.getLogger(__name__)
+# 아래 로그 호출은 키워드 인자를 쓴다. 표준 logging 은 이를 받지 못해 TypeError 를
+# 던졌고, 그 때문에 /directives/preflight 가 depends_on·결과 기록 시점마다 500 이었다.
+logger = structlog.get_logger(__name__)
 
 _PENDING_DIR = "/root/.genspark/directives/pending"
 _RUNNING_DIR = "/root/.genspark/directives/running"
@@ -124,7 +123,7 @@ def run_preflight(
     if depends_on:
         depends_met = _check_done_folder(depends_on)
         if not depends_met:
-            logger.info('preflight_depends_not_met task_id=%s depends_on=%s', task_id, depends_on, extra={'task_id': task_id, 'depends_on': depends_on})
+            logger.info("preflight_depends_not_met", task_id=task_id, depends_on=depends_on)
 
     # ── 4. recommendation 판정 ─────────────────────────────────
     if duplicate:
@@ -134,7 +133,16 @@ def run_preflight(
     else:
         recommendation = "PROCEED"
 
-    logger.info('preflight_result task_id=%s depends_on=%s queue_clear=%s depends_met=%s duplicate=%s conflicts=%s recommendation=%s', task_id, depends_on, queue_clear, depends_met, duplicate, conflicts, recommendation, extra={'task_id': task_id, 'depends_on': depends_on, 'queue_clear': queue_clear, 'depends_met': depends_met, 'duplicate': duplicate, 'conflicts': conflicts, 'recommendation': recommendation})
+    logger.info(
+        "preflight_result",
+        task_id=task_id,
+        depends_on=depends_on,
+        queue_clear=queue_clear,
+        depends_met=depends_met,
+        duplicate=duplicate,
+        conflicts=conflicts,
+        recommendation=recommendation,
+    )
 
     return {
         "queue_clear": queue_clear,

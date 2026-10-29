@@ -12,7 +12,7 @@ AADS-181: GET /directives/all — 3서버 통합 디렉티브 조회.
 import os
 import re
 
-import logging
+import structlog
 
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -22,9 +22,9 @@ from pydantic import BaseModel, Field
 
 from app.services.preflight_checker import run_preflight
 
-# 표준 logging 은 키워드 인자를 받지 못해 TypeError 로 /directives/preflight 가 500이 됐다.
-# extra 는 현 포맷터에서 출력되지 않으므로 핵심 필드를 메시지에도 남긴다.
-logger = logging.getLogger(__name__)
+# 아래 로그 호출은 키워드 인자를 쓴다. 표준 logging 은 이를 받지 못해 TypeError 를
+# 던졌고, 그 때문에 /directives/preflight 가 depends_on·결과 기록 시점마다 500 이었다.
+logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 _PENDING_DIR = "/root/.genspark/directives/pending"
@@ -144,7 +144,7 @@ async def submit_directive(req: DirectiveSubmitRequest):
         os.makedirs(_PENDING_DIR, exist_ok=True)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
-        logger.info('directive_submitted task_id=%s file=%s', req.task_id, filepath, extra={'task_id': req.task_id, 'file': filepath})
+        logger.info("directive_submitted", task_id=req.task_id, file=filepath)
         return DirectiveSubmitResponse(
             status="ok",
             task_id=req.task_id,
@@ -152,13 +152,13 @@ async def submit_directive(req: DirectiveSubmitRequest):
             path=filepath,
         )
     except PermissionError as e:
-        logger.error('directive_submit_permission_error path=%s error=%s', filepath, str(e), extra={'path': filepath, 'error': str(e)})
+        logger.error("directive_submit_permission_error", path=filepath, error=str(e))
         raise HTTPException(
             status_code=500,
             detail="지시서 파일 쓰기 권한 없음 (root 소유 디렉토리). 관리자 확인 필요.",
         )
     except Exception as e:
-        logger.error('directive_submit_failed error=%s', str(e), extra={'error': str(e)})
+        logger.error("directive_submit_failed", error=str(e))
         raise HTTPException(status_code=500, detail=f"지시서 생성 실패: {e}")
 
 
@@ -180,7 +180,7 @@ def submit_directive_sync(req: DirectiveSubmitRequest) -> DirectiveSubmitRespons
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
 
-    logger.info('directive_submitted_sync task_id=%s file=%s', req.task_id, filepath, extra={'task_id': req.task_id, 'file': filepath})
+    logger.info("directive_submitted_sync", task_id=req.task_id, file=filepath)
     return DirectiveSubmitResponse(
         status="ok",
         task_id=req.task_id,
@@ -261,7 +261,7 @@ async def get_all_directives(
             "scanned_at": data.get("scanned_at"),
         }
     except Exception as e:
-        logger.error('get_all_directives_error error=%s', str(e), extra={'error': str(e)})
+        logger.error("get_all_directives_error", error=str(e))
         raise HTTPException(500, f"3서버 디렉티브 조회 실패: {e}")
 
 
@@ -283,7 +283,12 @@ async def get_directive_preflight(
         result = run_preflight(task_id=task_id, depends_on=depends_on)
         return PreflightResponse(**result)
     except Exception as e:
-        logger.error('preflight_check_failed task_id=%s depends_on=%s error=%s', task_id, depends_on, str(e), extra={'task_id': task_id, 'depends_on': depends_on, 'error': str(e)})
+        logger.error(
+            "preflight_check_failed",
+            task_id=task_id,
+            depends_on=depends_on,
+            error=str(e),
+        )
         raise HTTPException(status_code=500, detail=f"Pre-Flight Check 실패: {e}")
 
 
@@ -364,5 +369,5 @@ async def update_directive_model_config(req: _DirectiveModelConfigUpdate):
                     item.max_tokens,
                 )
     invalidate_directive_model_cache()
-    logger.info('directive_model_config_updated count=%s', len(req.configs), extra={'count': len(req.configs)})
+    logger.info("directive_model_config_updated", count=len(req.configs))
     return {"status": "ok", "message": f"{len(req.configs)}개 역할 지시서 모델 설정 업데이트 완료"}
