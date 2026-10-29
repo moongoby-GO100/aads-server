@@ -23,6 +23,10 @@ def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_down_migrations_are_kept_out_of_migrations_root():
+    assert list(ROOT.glob("migrations/*.down.sql")) == []
+
+
 @pytest.fixture
 def release(tmp_path):
     """A release tree plus a fake apply_migration.sh that records into the ledger file."""
