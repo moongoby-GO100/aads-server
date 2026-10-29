@@ -476,6 +476,7 @@ def test_extract_todo_titles_splits_pm_actions_and_completion_intent():
     [
         ("진행률 보고", "진행률 보고"),
         ("진행상황 보고서 정리", "진행상황 보고서 정리"),
+        ("진행중 러너 확인", "진행중 러너 확인"),
         ("PRD 작성 진행해줘", "PRD 작성"),
         ("작업 진행하고 보고", "작업 보고"),
         ("진행해", ""),
