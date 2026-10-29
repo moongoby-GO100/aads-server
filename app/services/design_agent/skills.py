@@ -25,7 +25,11 @@ def load_skill(name):
             raise ValueError('Frontmatter name mismatch')
         if metadata.get('status') not in {'candidate', 'active'}:
             raise ValueError('Invalid skill status')
-        return {'name': name, 'status': metadata['status'],
+        version = metadata.get('version')
+        if name.startswith('design-') or 'version' in metadata:
+            if not isinstance(version, str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version):
+                raise ValueError('Missing or invalid skill version (x.y.z required)')
+        return {'name': name, 'status': metadata['status'], 'version': version,
                 'sha256': hashlib.sha256(data).hexdigest()}
     except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
         raise ValueError(f'Skill {name}: {exc}') from exc

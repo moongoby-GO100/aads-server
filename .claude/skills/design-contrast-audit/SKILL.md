@@ -4,6 +4,7 @@ description: "모바일·접근성·운영 화면 어긋남에서 계산 근거�
 allowed-tools: Read, Grep, Glob
 risk_tier: read
 status: candidate
+version: 0.2.0
 executor: model-instructions
 ---
 # 대비와 조작 영역 점검
@@ -22,6 +23,8 @@ sRGB 채널을 선형화(c<=0.04045이면 c/12.92, 아니면 ((c+0.055)/1.055)^2
 넘침은 같은 viewport에서 scrollWidth>clientWidth 및 요소 경계를 계산하고 의도된 내부 스크롤과 문서 넘침을 구분한다.
 실패·질문 조건: 스타일·치수 누락이면 평가불가와 측정 요청. 스크린샷 인상으로 통과시키지 않는다.
 
+각 계산은 대상 요소·상태·viewport·측정 시점과 입력 및 실행 결과를 연결한다. 상태별 대비와 포커스 표시를 따로 확인한다. 측정 입력이 충돌하거나 실행 실패면 평가불가이며 통과를 선언하지 않는다.
+
 ## 검증 fixture
 
 입력: {calculation_results: {contrast_black_white: 21, button_width: 44, button_height: 43, scrollWidth: 390, clientWidth: 375}}
@@ -30,3 +33,23 @@ sRGB 채널을 선형화(c<=0.04045이면 c/12.92, 아니면 ((c+0.055)/1.055)^2
 기대: 모든 미측정 항목 '평가불가', 통과 없음.
 
 위 fixture는 기대 동작 명세다. 실제 모델 수행 검증·사용 증거와 사람 승인 전에는 active로 승격하지 않는다.
+
+### 정상 fixture
+
+입력: {calculation_results: 대비 21, 폭 44, 높이 44, overflow 0, evidence: 실행기록}
+기대: 측정 범위 내 통과.
+
+### 누락 fixture
+
+입력: {bounding_boxes: null}
+기대: 터치 평가불가, 측정 요청.
+
+### 충돌 fixture
+
+입력: {calculation_results: 동일 요소 높이 43과 44}
+기대: 측정 조건 확인, 통과 보류.
+
+### 실패 fixture
+
+입력: {calculation_results: 실행 실패}
+기대: 평가불가, 실행 결과 요청.
