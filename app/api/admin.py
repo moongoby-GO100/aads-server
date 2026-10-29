@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Optional, Sequence
 from zoneinfo import ZoneInfo
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -307,20 +308,20 @@ async def get_token_profile():
 
 
 @router.get("/admin/design/projects")
-async def list_design_projects():
-    """Open Design Hub Phase 0 read-only project registry preview."""
-    from app.services.design_audit_service import ALLOWED_PROJECT_ROOTS
+async def list_design_projects(current_user: dict = Depends(require_internal_admin)):
+    """Read the authenticated tenant's project registry."""
+    from app.core.db_pool import get_pool
 
-    projects = [
-        {
-            "project_key": project_key,
-            "display_name": project_key.replace("_", " "),
-            "repo_path": root.as_posix(),
-            "status": "draft",
-            "read_only": True,
-        }
-        for project_key, root in sorted(ALLOWED_PROJECT_ROOTS.items())
-    ]
+    try:
+        tenant_id = UUID(str(current_user.get("tenant_id") or ""))
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=403, detail="tenant_id required") from exc
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT project_key, display_name, repo_path, status FROM design_projects "
+            "WHERE tenant_id = $1::uuid ORDER BY project_key", tenant_id,
+        )
+    projects = [{**dict(row), "read_only": True} for row in rows]
     return {"projects": projects, "count": len(projects), "phase": "0"}
 
 

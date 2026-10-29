@@ -199,8 +199,9 @@ def _serialize_context_pack_row(row: dict[str, Any], context: dict[str, Any], so
     }
 
 
-async def build_context_pack(request_id: UUID) -> dict[str, Any]:
+async def build_context_pack(request_id: UUID, tenant_id: UUID) -> dict[str, Any]:
     """Build and persist a Design Context Pack for a modification request draft."""
+    tenant_id = UUID(str(tenant_id))
     pool = get_pool()
 
     async with pool.acquire() as conn:
@@ -225,13 +226,14 @@ async def build_context_pack(request_id: UUID) -> dict[str, Any]:
                    s.component_paths AS screen_component_paths,
                    s.metadata AS screen_metadata
             FROM design_modification_requests r
-            LEFT JOIN design_projects p
-                ON p.project_key = r.project_key
+            JOIN design_projects p
+                ON p.project_key = r.project_key AND p.tenant_id = $2::uuid
             LEFT JOIN design_screens s
                 ON s.id = r.screen_id
             WHERE r.id = $1::uuid
             """,
             request_id,
+            tenant_id,
         )
         if request_row is None:
             raise DesignContextRequestNotFound(str(request_id))
@@ -257,11 +259,13 @@ async def build_context_pack(request_id: UUID) -> dict[str, Any]:
             """
             SELECT id, version, mode, tokens, created_by, created_at
             FROM design_token_sets
-            WHERE project_key = $1
+            WHERE project_key = $1 AND tenant_id = $2::uuid
+              AND status = 'approved'
             ORDER BY created_at DESC
             LIMIT 1
             """,
             project_key,
+            tenant_id,
         )
 
         missing_context: list[dict[str, str]] = []
@@ -336,6 +340,8 @@ async def build_context_pack(request_id: UUID) -> dict[str, Any]:
             token = dict(token_row)
             tokens = _safe_value(_coerce_dict(token.get("tokens")))
             design_tokens = {
+                "tenant_id": str(tenant_id),
+                "project_key": project_key,
                 "id": str(token.get("id")),
                 "version": str(token.get("version") or ""),
                 "mode": str(token.get("mode") or ""),
@@ -355,7 +361,7 @@ async def build_context_pack(request_id: UUID) -> dict[str, Any]:
             if not tokens:
                 missing_context.append(_missing("design_tokens", "latest design_token_sets row has empty tokens"))
         else:
-            missing_context.append(_missing("design_tokens", "no design_token_sets row is stored for the project"))
+            missing_context.append(_missing("design_tokens", "no approved design_token_sets"))
 
         allowed_scope = _safe_value(_coerce_json(request.get("allowed_scope"), {}))
         forbidden_scope = _safe_value(_coerce_json(request.get("forbidden_scope"), {}))

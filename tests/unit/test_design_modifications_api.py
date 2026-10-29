@@ -205,7 +205,7 @@ class _DesignConn:
 
 
 def _current_user():
-    return {"user_id": "ceo-1", "email": "ceo@aads.dev", "is_admin": True}
+    return {"tenant_id": "2d701a8c-9596-4757-8588-faa4f7837112", "user_id": "ceo-1", "email": "ceo@aads.dev", "is_admin": True}
 
 
 @pytest.mark.asyncio
@@ -281,7 +281,7 @@ async def test_list_design_modification_requests(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_design_modification_context_pack(monkeypatch):
-    async def _fake_build_context_pack(request_id):
+    async def _fake_build_context_pack(request_id, tenant_id):
         return {
             "context_pack": {"request_id": str(request_id), "missing_context": []},
             "source_count": 3,

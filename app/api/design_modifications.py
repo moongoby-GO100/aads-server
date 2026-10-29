@@ -713,7 +713,11 @@ async def build_design_modification_context_pack(
 ) -> dict[str, Any]:
     _require_user_id(current_user)
     try:
-        return await build_context_pack(request_id)
+        try:
+            tenant_id = UUID(str(current_user.get("tenant_id") or ""))
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="tenant_id required") from exc
+        return await build_context_pack(request_id, tenant_id)
     except DesignContextRequestNotFound as exc:
         raise HTTPException(status_code=404, detail="design modification request not found") from exc
     except asyncpg.UndefinedTableError as exc:

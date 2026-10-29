@@ -151,7 +151,7 @@ async def test_build_context_pack_collects_required_context_and_redacts_secrets(
     conn = _BuilderConn(str(tmp_path))
     monkeypatch.setattr(builder, "get_pool", lambda: _Pool(conn))
 
-    result = await builder.build_context_pack(UUID(REQUEST_ID))
+    result = await builder.build_context_pack(UUID(REQUEST_ID), UUID("2d701a8c-9596-4757-8588-faa4f7837112"))
 
     context = result["context_pack"]["context"]
     assert context["project"]["key"] == "AADS"
@@ -179,7 +179,7 @@ async def test_build_context_pack_persists_missing_context(monkeypatch, tmp_path
     conn = _BuilderConn(str(tmp_path), missing=True)
     monkeypatch.setattr(builder, "get_pool", lambda: _Pool(conn))
 
-    result = await builder.build_context_pack(UUID(REQUEST_ID))
+    result = await builder.build_context_pack(UUID(REQUEST_ID), UUID("2d701a8c-9596-4757-8588-faa4f7837112"))
 
     missing_keys = {item["key"] for item in result["context_pack"]["missing_context"]}
     assert {

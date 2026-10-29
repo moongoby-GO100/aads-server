@@ -1760,7 +1760,7 @@ class ToolExecutor:
         if build_context:
             try:
                 from app.services.design_context_builder import build_context_pack
-                context_pack = await build_context_pack(uuid.UUID(request_id))
+                context_pack = await build_context_pack(uuid.UUID(request_id), await resolve_bound_tenant_id())
             except Exception as exc:
                 context_pack = {"error": str(exc)}
 
