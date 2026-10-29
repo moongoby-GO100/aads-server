@@ -460,3 +460,41 @@ def test_schema_and_units_are_staged_outside_auto_apply_paths():
     assert "Persistent=false" in timer, "꺼져 있던 날을 몰아 수집해 on_time 으로 위장하면 안 된다"
     service = (_REPO / "scripts" / "pending_units" / "aads-rdoc-registration-daily.service").read_text(encoding="utf-8")
     assert "--fetch --apply" in service
+
+
+def test_full_history_window_invariance_without_git_mutations(monkeypatch):
+    """10-01 최초 추가, 10-18 삭제, 10-19 재추가·과거 사본: A 이력만으로 재현."""
+    old = "docs/reports/old.md"
+    copy = "docs/reports/copy.md"
+    fresh = "docs/reports/fresh.md"
+    history = [
+        (epoch(2026, 10, 1, 10, 0), old, "a" * 40),
+        (epoch(2026, 10, 19, 10, 0), old, "b" * 40),
+        (epoch(2026, 10, 19, 10, 0), copy, "a" * 40),
+        (epoch(2026, 10, 19, 10, 0), fresh, "c" * 40),
+    ]
+    bodies = {"a" * 40: b"old", "b" * 40: b"readd", "c" * 40: b"fresh"}
+
+    def git(repo, *args, **kwargs):
+        if args[0] == "rev-parse":
+            return b"false"
+        if args[0] == "log":
+            assert not any(a.startswith("--since") for a in args)
+            return "\n".join(
+                f"@@{i:040x}\t{int(ts)}\n:000000 100644 {'0' * 40} {blob} A\t{path}"
+                for i, (ts, path, blob) in enumerate(reversed(history))
+            ).encode()
+        if args[0] == "ls-tree":
+            return b""
+        raise AssertionError(args)
+
+    monkeypatch.setattr(m, "_git", git)
+    monkeypatch.setattr(m, "_blob_sizes", lambda repo, ids: {oid: len(bodies[oid]) for oid in ids})
+    monkeypatch.setattr(m, "_read_blobs", lambda repo, ids: {oid: bodies[oid] for oid in ids})
+    results = []
+    for since in (dt.date(2026, 10, 1), dt.date(2026, 10, 10), D):
+        rows = _a_over_git("unused", since, D, D)
+        results.append(rows[D])
+    assert results[0] == results[1] == results[2]
+    assert results[0]["denominator"] == 1
+    assert results[0]["excluded_reasons"] == {m.EXCL_READD: 1, m.EXCL_DUP_CONTENT: 1}

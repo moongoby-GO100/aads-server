@@ -203,3 +203,24 @@ def test_collect_uses_history_not_window_only_listing(env, capsys, monkeypatch):
     rc, _ = _run(env, capsys, monkeypatch, "collect", "--ref", "HEAD",
                  "--start", "2026-10-19", "--end", "2026-10-19")
     assert rc == 0 and seen["since"] == dt.date(2026, 10, 19)
+
+
+@pytest.mark.parametrize("cmd", ["collect", "report"])
+@pytest.mark.parametrize("trusted", ["", "invalid-uuid", RuntimeError("tenant lookup failed")])
+def test_shared_tenant_boundary_fails_closed(env, capsys, monkeypatch, cmd, trusted):
+    env["install"](trusted)
+    original = FakeConn.fetchval
+
+    async def lookup(self, sql, *args):
+        if isinstance(self.trusted, Exception):
+            raise self.trusted
+        return await original(self, sql, *args)
+
+    monkeypatch.setattr(FakeConn, "fetchval", lookup)
+    argv = [cmd, "--tenant-id", TRUSTED]
+    if cmd == "collect":
+        argv += ["--apply", "--ref", "HEAD"]
+    rc, out = _run(env, capsys, monkeypatch, *argv)
+    assert rc == 1 and "error" in out
+    _no_metric_io(env)
+    assert env["read"].closed

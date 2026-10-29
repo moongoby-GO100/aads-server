@@ -67,6 +67,12 @@ async def _connect(read_only: bool):
         asyncpg.connect(**_inv.connection_params(), timeout=5, server_settings=settings), timeout=10)
 
 
+async def _trusted_tenant(conn, requested) -> str:
+    """collect/report 공용 경계: 내부 tenant 확인 실패 시 지표 I/O 전에 중단한다."""
+    trusted = await conn.fetchval("SELECT public.aads_internal_tenant_id()::text")
+    return m.resolve_trusted_tenant(trusted, requested)
+
+
 async def collect(args) -> dict:
     m.parse_tenant_uuid(args.tenant_id, "--tenant-id")  # 형식 오류는 DB 연결 전에 거부
     now = dt.datetime.now(m.KST)
@@ -81,8 +87,7 @@ async def collect(args) -> dict:
     conn = await _connect(read_only=True)
     try:
         async with conn.transaction(readonly=True, isolation="repeatable_read"):
-            trusted = await conn.fetchval("SELECT public.aads_internal_tenant_id()::text")
-            tenant = m.resolve_trusted_tenant(trusted, args.tenant_id)
+            tenant = await _trusted_tenant(conn, args.tenant_id)
             known = [r["project_key"] for r in await conn.fetch(m.KNOWN_PROJECTS_SQL, tenant)]
             files = m.collect_report_history(repo, args.ref, start)
             docs, excluded = m.classify_new_files(files, args.project, known, since=start)
@@ -129,8 +134,7 @@ async def report(args) -> dict:
     start = args.start or (end - dt.timedelta(days=m.REQUIRED_CONSECUTIVE_DAYS - 1))
     conn = await _connect(read_only=True)
     try:
-        trusted = await conn.fetchval("SELECT public.aads_internal_tenant_id()::text")
-        tenant = m.resolve_trusted_tenant(trusted, args.tenant_id)
+        tenant = await _trusted_tenant(conn, args.tenant_id)
         out = {"tenant_id": tenant, "start": start, "end": end, "reports": []}
         try:
             for metric in m.METRICS:
