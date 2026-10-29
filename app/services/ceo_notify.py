@@ -2,7 +2,7 @@
 CEO 알림 서비스 — T-026.
 
 notify_ceo(project_id, qa_result, screenshots, scorecard)
-  1. 텔레그램으로 전송 (GO100_TELEGRAM_BOT_TOKEN 또는 AADS_TELEGRAM_BOT_TOKEN)
+  1. 텔레그램으로 전송 (AADS_ → GO100_ → TELEGRAM_ 환경변수 순)
      - 스크린샷 이미지 (diff 있으면 diff 이미지도)
      - 스코어카드 요약
      - PASS/CONDITIONAL/FAIL 판정
@@ -20,17 +20,19 @@ import structlog
 
 logger = structlog.get_logger()
 
-# 텔레그램 토큰 환경변수 (우선순위: AADS_TELEGRAM_BOT_TOKEN → GO100_TELEGRAM_BOT_TOKEN)
+# 텔레그램 환경변수 우선순위: AADS_ → GO100_ → 공통 TELEGRAM_
 def _get_telegram_token() -> str:
     return (
         os.getenv("AADS_TELEGRAM_BOT_TOKEN", "")
         or os.getenv("GO100_TELEGRAM_BOT_TOKEN", "")
+        or os.getenv("TELEGRAM_BOT_TOKEN", "")
     )
 
 def _get_telegram_chat_id() -> str:
     return (
         os.getenv("AADS_TELEGRAM_CHAT_ID", "")
         or os.getenv("GO100_TELEGRAM_CHAT_ID", "")
+        or os.getenv("TELEGRAM_CHAT_ID", "")
     )
 
 
