@@ -79,15 +79,14 @@ async def register_spec_drift(instruction, job_id, project, details):
 
 async def apply_spec_review(instruction, job_id, project, details):
     """검수 결과 메시지에 실등록 결과만 반영한다."""
-    if not parse_spec_refs(instruction):
-        return
     try:
+        if not parse_spec_refs(instruction):
+            return
         drafts = await asyncio.wait_for(register_spec_drift(instruction, job_id, project, details), 10)
+        details['spec_drafts'] = drafts
+        lines = [f"⚠️ 문서 수정 필요 — {d['document_key']} r{d['revision']} 초안 등록(승인 대기)" for d in drafts]
+        if not lines:
+            lines = [f"문서 대조: {details.get('spec_alignment', 'not_applicable')}"]
+        details['summary'] = str(details.get('summary') or '리뷰 완료') + '\n' + '\n'.join(lines)
     except Exception:
         logger.warning('spec_drift_failed_open', exc_info=True)
-        drafts = []
-    details['spec_drafts'] = drafts
-    lines = [f"⚠️ 문서 수정 필요 — {d['document_key']} r{d['revision']} 초안 등록(승인 대기)" for d in drafts]
-    if not lines:
-        lines = [f"문서 대조: {details.get('spec_alignment', 'not_applicable')}"]
-    details['summary'] = details.get('summary', '리뷰 완료') + '\n' + '\n'.join(lines)

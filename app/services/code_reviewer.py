@@ -2319,8 +2319,11 @@ async def review_code_diff(
         # timeout/error and the final valid model in the durable code_reviews
         # record so later review_hold recovery can make an informed exclusion.
         details["attempt_evidence"] = attempt_evidence
-        from app.services.spec_drift import apply_spec_review
-        await apply_spec_review(instruction, job_id, project, details)
+        try:
+            from app.services.spec_drift import apply_spec_review
+            await apply_spec_review(instruction, job_id, project, details)
+        except Exception:
+            logger.warning('spec_review_failed_open', exc_info=True)
         verdict_obj = _build_review_verdict(
             verdict=verdict,
             score=score,

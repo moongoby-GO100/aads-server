@@ -150,3 +150,29 @@ def test_registered_notification():
             await drift.apply_spec_review('SPEC_REF: sample', 'runner-test', 'AADS', value)
         assert '⚠️ 문서 수정 필요 — sample r4 초안 등록(승인 대기)' in value['summary']
     asyncio.run(run())
+
+
+def test_apply_spec_review_handles_null_summary():
+    async def run():
+        value = {'spec_alignment': 'aligned', 'summary': None}
+        await drift.apply_spec_review('SPEC_REF: sample', 'runner-test', 'AADS', value)
+        assert '문서 대조:' in value['summary']
+    asyncio.run(run())
+
+
+def test_review_code_diff_survives_spec_review_exception():
+    async def run():
+        async def inline(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        model = AsyncMock(return_value=json.dumps(details()))
+        with patch.object(cr.asyncio, 'to_thread', inline), patch.object(
+            cr, '_job_review_context', AsyncMock(return_value={})), patch.object(
+            cr, '_get_review_models', AsyncMock(return_value=['codex:gpt-test'])), patch.object(
+            cr, '_call_review_model', model), patch.object(cr, '_save_review_result', AsyncMock()), patch(
+            'app.services.spec_drift.parse_spec_refs', side_effect=RuntimeError('parse failed')), patch(
+            'app.services.review_advisory.schedule_review_advisory'):
+            verdict = await cr.review_code_diff(project='AADS', job_id='runner-test',
+                instruction='SPEC_REF: sample', diff='diff --git a/a.py b/a.py\n', files_changed=['a.py'])
+        assert verdict.verdict == 'APPROVE'
+    asyncio.run(run())
