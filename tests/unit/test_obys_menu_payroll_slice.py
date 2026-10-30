@@ -77,15 +77,17 @@ def test_membership_source_and_permission_retry_execute():
     source = '\n'.join(line(p) for p in [
         'const MANAGER_READ_ROUTES=', 'function canReadRouteV41(',
         'function renderNav(', 'async function loadReadPermissionV41(',
-        'async function startWorkspaceV41(', 'function handleStartupError(',
+        'function handleStartupError(',
         'function renderSessionRecovery(',
     ])
+    source += '\nasync function startWorkspaceV41(){' + HTML.split('async function startWorkspaceV41(){', 1)[1].split('    const initial=', 1)[0]
     menu = re.search(r'const menu=(\[.*?\n    \]);', HTML, re.S).group(1)
     code = '''const assert=require('node:assert/strict');
 const state={route:'attendance'},nav={innerHTML:''},page={innerHTML:''};
 const elements={businessName:{},businessMeta:{},loginRecoveryBtn:{},recoveryRetryBtn:{}};
 const document={getElementById:id=>elements[id]};
-function escapeHtml(s){return s};function clearAuthAndOpenLogin(){};
+function escapeHtml(s){return s};let logins=0;function clearAuthAndOpenLogin(){logins++};
+function peopleWorkLinksV41(){return ""};async function loadEmployeePreviewPermissionV41(){};
 let payload, failure, renders=0, organizations=0, businesses=0, loads=0;
 async function organizationApi(path){assert.equal(path,'/me');if(failure)throw failure;return payload}
 function renderPageV41(){renders++};async function loadOrganizations(){organizations++};
@@ -104,7 +106,7 @@ async function loadBusinesses(){businesses++};async function loadLiveRoute(){loa
   const before=loads;
   await startWorkspaceV41().catch(handleStartupError);
   assert.equal(state.readRole,null);assert.equal(loads,before);
-  assert.equal(state.route,'attendance');assert.ok(page.innerHTML.includes('recoveryRetryBtn'));
+  assert.equal(state.route,'attendance');if(status===401)assert.equal(logins,1);else assert.ok(page.innerHTML.includes('recoveryRetryBtn'));
   assert.equal(nav.innerHTML.includes('data-route="payroll"'),false);
   failure=null;payload={tenant_id:'t',membership:{tenant_id:'t',status:'active',role:'member'}};
   await elements.recoveryRetryBtn.onclick();

@@ -120,9 +120,9 @@ def test_live_admin_entry_reaches_existing_forms():
     admin = (ROOT / 'app/static/apps/obys/admin.html').read_text()
     assert 'function peopleWorkLinksV41()' in admin
     assert '${g.label==="직원·급여"?peopleWorkLinksV41():""}' in admin
-    assert 'state.legacyAccess===true' in admin
-    assert admin.count('기존 관리화면에서 처리') == 1
-    assert 'people_view=payroll' in admin
+    assert admin.count('기존 관리화면에서 처리') == 0
+    assert 'index.html?legacy=1' not in admin
+    assert 'href="/static/apps/obys/clock.html"' in admin
     assert 'people_view=${view}' not in admin
     assert 'if(Number(error.status)===401){clearAuthAndOpenLogin();return}' in admin
     assert 'includes(peopleEntry)) setView(peopleEntry)' in HTML

@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 from decimal import Decimal
 import json
+import hashlib
 import math
 import re
 from typing import Any, Annotated, Literal
@@ -83,7 +84,7 @@ GENERIC_ROUTE_SQL: dict[str, tuple[str, str]] = {
     "purchase-orders": ("SELECT id,branch_id,order_date,supplier,status,total_amount,items,received_at,invoice_number,created_at FROM yeoljeong_purchase_orders WHERE business_id=$1 ORDER BY order_date DESC LIMIT 500", "yeoljeong_purchase_orders"),
     "employees": ("SELECT id,employee_name,employee_email_masked,business_id,branch,role,status,requested_at,reviewed_at FROM yeoljeong_employee_join_requests WHERE business_id=$1 AND deleted_at IS NULL ORDER BY requested_at DESC LIMIT 500", "yeoljeong_employee_join_requests"),
     "attendance": ("SELECT id,employee_name,branch,work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,status,memo,created_at,updated_at FROM yeoljeong_attendance_records WHERE business_id=$1 AND deleted_at IS NULL ORDER BY work_date DESC LIMIT 500", "yeoljeong_attendance_records"),
-    "payroll": ("SELECT id,employee_name,branch,payroll_month,gross_pay,tax_withholding,insurance_deduction,other_deduction,net_pay,status,created_at FROM yeoljeong_payroll_statements WHERE business_id=$1 AND deleted_at IS NULL ORDER BY payroll_month DESC LIMIT 500", "yeoljeong_payroll_statements"),
+    "payroll": ("SELECT id,employee_name,branch,payroll_month,gross_pay,tax_withholding,insurance_deduction,other_deduction,(tax_withholding+insurance_deduction+other_deduction) AS total_deductions,net_pay,status,created_at FROM yeoljeong_payroll_statements WHERE business_id=$1 AND deleted_at IS NULL ORDER BY payroll_month DESC LIMIT 500", "yeoljeong_payroll_statements"),
     "hr-docs": ("SELECT id,employee_name,branch,document_type,document_label,status,original_filename,issue_date,uploaded_at,expires_at,superseded_by FROM yeoljeong_onboarding_documents WHERE business_id=$1 AND deleted_at IS NULL ORDER BY uploaded_at DESC LIMIT 500", "yeoljeong_onboarding_documents"),
     "tax-returns": ("SELECT id,report_type,period_start,period_end,status,total_sales,total_purchases,vat_payable,tax_amount,submitted_at,created_at FROM yeoljeong_tax_reports WHERE business_id=$1 ORDER BY period_end DESC LIMIT 500", "yeoljeong_tax_reports"),
     "approvals": ("SELECT id,approval_type,reference_id,title,description,requested_by,status,priority,created_at FROM yeoljeong_approvals WHERE business_id=$1 ORDER BY created_at DESC LIMIT 500", "yeoljeong_approvals"),
@@ -449,6 +450,9 @@ def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any
         "amount": str(amount),
         "status": status,
         "display": display,
+        "employee_key": (hashlib.sha256(
+            (business_name + ":" + str(row.get("employee_id") or str(row.get("employee_email") or "").strip().lower())).encode()
+        ).hexdigest() if row.get("employee_id") or row.get("employee_email") else None),
         "raw": _public_raw(row),
     }
 
@@ -542,6 +546,98 @@ async def _local_source_rows(route, user, business_id, date_from, date_to):
     return [(category, row) for row in rows] + [("uploaded", row) for row in uploaded]
 
 
+_LEGACY_PEOPLE_WHERE = (
+    " h WHERE business_id=$1"
+    " AND (to_jsonb(h)->>'deleted_at') IS NULL"
+    " AND ((to_jsonb(h)->>'tenant_id') IS NULL OR to_jsonb(h)->>'tenant_id'=$2)"
+    " AND ($5::text IS NULL OR lower(to_jsonb(h)->>'employee_email')=$5)"
+)
+LEGACY_PEOPLE_SQL: dict[str, str] = {
+    "payroll": (
+        "SELECT * FROM yeoljeong_payroll_statements" + _LEGACY_PEOPLE_WHERE
+        + " AND ($3::text IS NULL OR left(payroll_month,7)>=$3)"
+        " AND ($4::text IS NULL OR left(payroll_month,7)<=$4)"
+        " ORDER BY payroll_month DESC, id DESC LIMIT $6"
+    ),
+    "attendance": (
+        "SELECT * FROM yeoljeong_attendance_records" + _LEGACY_PEOPLE_WHERE
+        + " AND ($3::text IS NULL OR work_date::text>=$3)"
+        " AND ($4::text IS NULL OR work_date::text<=$4)"
+        " ORDER BY work_date DESC, id DESC LIMIT $6"
+    ),
+}
+
+
+def _merge_people_rows(rows, legacy, route, limit=500):
+    """Normalize records and order both sources before applying the response limit."""
+    merged = {str(row["id"]): dict(row) for row in legacy}
+    merged.update({str(row["id"]): dict(row) for row in rows})
+    key = "payroll_month" if route == "payroll" else "work_date"
+    return sorted(merged.values(), key=lambda row: (
+        str(row.get(key) or ""), str(row.get("start_at") or ""), str(row["id"])), reverse=True)[:limit]
+
+
+async def _fetch_legacy_people(sql, *, parameters):
+    # Reuse the payroll service's dedicated OBYS DSN, never the journal-only acct DB.
+    from app.services.yeoljeong_finance_service import _db_url
+
+    dsn = _db_url()
+    if not dsn:
+        raise HTTPException(status_code=503, detail="기존 근태·급여 DB 연결이 구성되지 않았습니다")
+    connection = await asyncpg.connect(dsn, timeout=5)
+    try:
+        async with connection.transaction(readonly=True):
+            return [dict(row) for row in await connection.fetch(sql, *parameters, timeout=10)]
+    finally:
+        await connection.close()
+
+
+async def _legacy_people_rows(user, business_id, route, start=None, end=None, email=None, limit=500):
+    """Read legacy source only for its owning tenant and an exact canonical identity."""
+    from app.core.obys_tenant import is_legacy_obys_tenant
+    from app.services.yeoljeong_finance_service import CANONICAL_BUSINESSES
+
+    if not is_legacy_obys_tenant(user):
+        return []
+    business = await _business(user, business_id)
+    def digits(value):
+        return re.sub(r"\D", "", str(value or ""))
+    registration = digits(business.get("registration_no"))
+    matches = [item for item in CANONICAL_BUSINESSES
+               if (registration and registration == digits(item.get("registrationNo")))
+               or (not registration and business.get("name") == item["name"])]
+    if len(matches) != 1:
+        return []
+    legacy_id = matches[0]["id"]
+    if legacy_id not in acct_purchase._acct_company_map():
+        return []
+    # SQL text is a fixed literal per route; every value (including dates/email) is a bind parameter.
+    # The authenticated legacy owner gate above is mandatory: old rows may lack tenant_id.
+    sql = LEGACY_PEOPLE_SQL[route]
+    if route == "payroll":
+        # payroll_month is TEXT 'YYYY-MM'; compare months so a 'YYYY-MM-01' bound keeps that month.
+        start, end = (str(start)[:7] if start else None), (str(end)[:7] if end else None)
+    fetched = await _fetch_legacy_people(
+        sql,
+        parameters=(legacy_id, str(user["tenant_id"]), str(start) if start else None,
+                    str(end) if end else None, email, limit),
+    )
+    allowed = ((set(ATTENDANCE_COLUMNS.split(",")) | {"employee_email", "employee_id"}) if route == "attendance" else {
+        "id", "employee_id", "employee_email", "employee_name", "branch", "payroll_month", "gross_pay", "base_salary", "allowance",
+        "tax_withholding", "insurance_deduction", "other_deduction", "total_deductions",
+        "net_pay", "status", "created_at", "updated_at", "totals",
+    })
+    rows = [{key: value for key, value in dict(row).items() if key in allowed}
+            for row in fetched]
+    if route == "payroll":
+        for row in rows:
+            deductions = [row.get(key) for key in
+                          ("tax_withholding", "insurance_deduction", "other_deduction")]
+            if all(value is not None for value in deductions):
+                row["total_deductions"] = sum((Decimal(str(value)) for value in deductions), Decimal(0))
+    return [{**row, "legacy_source": True} for row in rows]
+
+
 async def _source_rows(
     *, route: str, user: dict[str, Any], business_id: str,
     date_from: str | None, date_to: str | None,
@@ -553,6 +649,8 @@ async def _source_rows(
         connection = await upload_svc._connect()
         try:
             rows = await connection.fetch(ATTENDANCE_OWN_SQL, business_id, own_email)
+            legacy = await _legacy_people_rows(user, business_id, route, date_from, date_to, own_email)
+            rows = _merge_people_rows(rows, legacy, route)
             return [("generic", dict(row)) for row in rows], "yeoljeong_attendance_records"
         finally:
             await connection.close()
@@ -642,7 +740,22 @@ async def _source_rows(
         sql, source = GENERIC_ROUTE_SQL[route]
         connection = await upload_svc._connect()
         try:
-            rows = await connection.fetch(sql, business_id)
+            if route == "payroll":
+                start = str(date_from)[:7] if date_from else None
+                end = str(date_to)[:7] if date_to else None
+                rows = list(await connection.fetch(
+                    "SELECT *, (tax_withholding+insurance_deduction+other_deduction) AS total_deductions "
+                    "FROM yeoljeong_payroll_statements WHERE business_id=$1 AND deleted_at IS NULL "
+                    "AND ($2::text IS NULL OR left(payroll_month,7)>=$2) "
+                    "AND ($3::text IS NULL OR left(payroll_month,7)<=$3) ORDER BY payroll_month DESC,id DESC",
+                    business_id, start, end))
+            else:
+                rows = list(await connection.fetch(sql, business_id))
+            if route in {"payroll", "attendance"}:
+                legacy = await _legacy_people_rows(user, business_id, route, date_from, date_to, limit=None)
+                rows = _merge_people_rows(rows, legacy, route, None)
+                if legacy:
+                    source += "+acct_legacy"
             kind = "bank-account" if source == "yeoljeong_bank_accounts" else "generic"
             return [(kind, dict(row)) for row in rows], source
         finally:
@@ -966,7 +1079,7 @@ def _attendance_response(business: dict[str, Any], row: Any) -> dict[str, Any]:
 
 
 ATTENDANCE_LIST_SQL = (
-    f"SELECT {ATTENDANCE_COLUMNS} FROM yeoljeong_attendance_records"
+    f"SELECT {ATTENDANCE_COLUMNS},employee_email FROM yeoljeong_attendance_records"
     " WHERE business_id=$1 AND deleted_at IS NULL"
     " AND ($2::date IS NULL OR work_date>=$2) AND ($3::date IS NULL OR work_date<=$3)"
     " AND ($4::text IS NULL OR lower(employee_email)=$4)"
@@ -989,6 +1102,7 @@ def _attendance_filter_date(value: str | None, name: str) -> date | None:
 async def list_attendance_records(
     business_id: str,
     limit: int = Query(200, ge=1, le=500),
+    offset: Annotated[int, Query(ge=0)] = 0,
     date_from: str | None = Query(None, alias="from", description="work_date 시작(YYYY-MM-DD, 포함)"),
     date_to: str | None = Query(None, alias="to", description="work_date 끝(YYYY-MM-DD, 포함)"),
     employee_email: str | None = Query(None, max_length=320),
@@ -1001,20 +1115,30 @@ async def list_attendance_records(
     if start and end and start > end:
         raise HTTPException(status_code=400, detail="from 은 to 보다 늦을 수 없습니다")
     rows: list[Any] = []
+    legacy: list[dict[str, Any]] = []
+    # 두 원천을 각각 offset+limit 건까지만 읽어 병합·정렬한 뒤 잘라낸다(전체 이력 무제한 조회 금지).
+    window = offset + limit
     if own_email != "":
         # member 는 요청한 employee_email 과 무관하게 본인 행만 본다.
         wanted = own_email if own_email is not None else (employee_email or "").strip().lower() or None
         connection = await upload_svc._connect()
         try:
-            rows = await connection.fetch(ATTENDANCE_LIST_SQL, business_id, start, end, wanted, limit)
+            rows = await connection.fetch(ATTENDANCE_LIST_SQL, business_id, start, end, wanted, window)
         finally:
             await connection.close()
-    records = [_record("generic", dict(row), business["name"]) for row in rows]
+    rows = [dict(row) for row in rows]
+    if own_email != "":
+        legacy = await _legacy_people_rows(current_user, business_id, "attendance", start, end, wanted, window)
+    merged = _merge_people_rows(rows, legacy, "attendance", None) if legacy else rows
+    has_more = len(merged) > window or len(rows) >= window or len(legacy) >= window
+    records = [_record("generic", dict(row), business["name"]) for row in merged[offset:window]]
     return {
         "business": {"id": business["id"], "name": business["name"]},
         "route": "attendance",
         "records": records,
         "count": len(records),
+        "has_more": has_more,
+        "next_offset": offset + len(records),
         "source": {"name": "yeoljeong_attendance_records", "live": True},
     }
 
@@ -1794,12 +1918,15 @@ async def workspace_records(
         date_from=date_from, date_to=date_to, own_email=own_email,
     )
     source_rows = _filter_source_dates(source_rows, date_from, date_to)
-    records = _filter(
+    matching = _filter(
         [_record(kind, row, business["name"]) for kind, row in source_rows], search, status
-    )[offset:offset+limit]
+    )
+    records = matching[offset:offset+limit]
     return {
         "business": {"id": business["id"], "name": business["name"]},
         "route": selected_route,
+        "has_more": offset + len(records) < len(matching),
+        "next_offset": offset + len(records),
         "records": records,
         "count": len(records),
         "source": {"name": source, "live": source != "not_configured"},

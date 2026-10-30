@@ -170,3 +170,38 @@ POST JSON: {"revision_id":"<GET 최신 revision UUID>","expected_generation":<GE
 - 대상 코드 2개만 `git diff --stat -- migrations/rollback/20261029_doc_cross_review.down.sql tests/unit/test_doc_cross_review.py`: 2 files changed, 14 insertions(+), 5 deletions(-).
 - `git diff --check`: 통과.
 - up 마이그레이션, 앱 코드, 운영 DB 및 HANDOVER.md 변경 없음. commit/push/build/deploy 실행 없음.
+
+## 근태·급여 재검토 교정 결과 (runner-2120f418 / 재작업 2차)
+
+### STEP 0 기존 구현 조사와 분류
+
+- 시작 작업 트리는 clean이었다. 반려 산출물 4d4a95637a4d의 코드·테스트 7개 파일 diff를 git apply로 복원했다. 금지된 worktree/checkout/commit 명령은 사용하지 않았다.
+- 유지: 기존 renderPageV41의 다른 메뉴 렌더링, workspaceApi/401 clearAuthAndOpenLogin, 서버 인증·권한·사업자 접근 검사, 출퇴근 저장/수정 API, 급여 상태 전이·금액 계산, 기존 CANONICAL_BUSINESSES 및 acct_company_map 매핑, 읽기 전용 레거시 접속.
+- 수정: admin.html의 attendanceLoadV41/loadLiveRoute/renderPeopleV41/월 변경 이벤트. 전용 근태·급여 화면, 새 화면 내 직원 진입, 레거시 관리자 링크 제거는 반려 산출물을 유지하며 아래 세 결함만 보정했다.
+- 수정: obys_workspaces.py의 _source_rows(급여 날짜 바인딩), list_attendance_records(병합 후 페이지 분할), workspace_records(다음 페이지 메타데이터), _record(마스킹과 별개 직원 키), _legacy_people_rows(직원 식별 필드 보존). 기존 라우트 경로 유지, 새로운 엔드포인트/스케줄러/테이블 없음.
+- 신규: peopleMonthBoundsV41/peopleLoadV41, 서버 익명 직원 키 및 회귀 테스트. 기존 테스트 파일 삭제 없음.
+- 범위 사유: 브리프에 개별 열거되지 않은 obys_workspaces.py는 지시된 V4.1 조회 응답과 테넌트 격리 구현의 실제 소유 모듈이다. admin.html 및 tests/unit/test_obys_people_dedicated_views.py와 기존 people 테스트 4개는 원 지시 및 반려 커밋의 변경 파일이다. 테스트 게이트 scripts/run_unit_tests.sh는 수정하지 않았다. RESULT.md는 기존 보고서에 결과를 추가한다.
+- DB 접점 유지: yeoljeong_payroll_statements/yeoljeong_attendance_records 조회, 기존 사업자 소유권 검사 및 읽기 전용 legacy transaction. 마이그레이션과 운영 DB 쓰기 없음.
+- 삭제: 관리자 legacy 링크/이동 핸들러만 반려 커밋대로 제거. 로그인 index.html 진입과 직원 초대 링크는 유지. 롤백은 이번 7개 코드·테스트 파일 diff만 복구하면 되며 DB 롤백은 없다.
+
+### 리뷰 지적별 처리
+
+1. P1 월 변경: 실제 loadLiveRoute 호출로 변경. 근태는 선택 월의 from/to, 급여는 date_from/date_to를 서버에 전송한다. 급여 로컬 SQL은 날짜를 바인딩한 뒤 조회하고 레거시도 같은 월을 바인딩한다. 병합 전 500건 제한을 없애고 응답은 500건씩 페이지 분할한다. 프론트는 has_more/next_offset을 따라 모두 읽는다. 초기 급여는 기존대로 최신 자료 월을 선택한다. 월 요청 실행 테스트와 601건 근태 페이지 회귀 테스트 통과.
+2. P1 동명이인: 이름 Set/이름 find를 제거하고 서버 직원 키로 목록·달력·통계·개인 상세를 구분한다. 키는 서버의 employee_id 또는 정규화 이메일과 사업자 이름의 SHA-256이며 이메일 마스킹은 유지한다. 식별 근거가 없는 기록은 record ID별로 분리하여 이름만으로 합치지 않는다. 급여 상세는 직원 이름 대신 명세 record ID로 선택한다. 렌더러 실행으로 동명이인 달력과 두 번째 급여명세 선택을 검증했다.
+3. P2 검색 후 미출근: 검색 결과의 직원 범위에서 후보를 고르고, 오늘 기록 유무는 검색 전 전체 월 자료로 판정한다. 검색에서 빠진 출근자를 미출근으로 추가하지 않는다. 검색 회귀 실행 테스트 통과.
+
+### 실제 검증 결과와 제한
+
+- 요구 명령 실행: bash scripts/run_unit_tests.sh tests/unit/test_obys_people_e2e_fix.py tests/unit/test_obys_people_menu_button_audit.py tests/unit/test_obys_attendance_api.py tests/unit/test_obys_stale_tenant_session_relogin.py tests/unit/test_obys_v41_payroll_permissions.py tests/unit/test_obys_menu_payroll_slice.py tests/unit/test_obys_payroll_state_machine.py tests/unit/test_obys_people_dedicated_views.py → exit 2. 기준 컨테이너 aads-server 없음. 통과 아님.
+- 호스트 기존 가상환경으로 동일 전체 pytest 실행: 첫 실행은 Pillow 의존성 누락으로 수집 오류(exit 2). 시스템의 기존 dist-packages를 PYTHONPATH에 추가한 재실행은 20개 진행 후 HTTP TestClient 단계에서 대기하며 종료되지 않았다. asyncio.to_thread를 실행 프로세스 내에서만 직접 호출로 바꾼 별도 진단도 같은 지점에서 대기했다. 두 실행 모두 완료/통과로 기록하지 않는다. 프로세스 종료 명령은 실행하지 않았다.
+- 호스트 별도 실행: people_e2e_fix, people_menu_button_audit, menu_payroll_slice, people_dedicated_views 4파일 → 36 passed, exit 0. 이후 601건 회귀 테스트 추가 후 people_dedicated_views 단독 → 13 passed, exit 0.
+- 신규 테스트는 기존 급여 매핑 사업자 조회 및 타 테넌트 0건, 본인 근태 이메일 강제, 읽기 전용 DB transaction/close, 명세 금액 표시, 전용 탭과 공통 안내 카드 부재, 관리자 legacy 링크 부재, 월 요청·페이지·동명이인·검색을 포함한다.
+- python3 tests/unit/obys_people_e2e_fix_check.py → exit 1. 로컬 HTTP 서버 socket 생성이 PermissionError(Operation not permitted)로 거절됨. 3시나리오/403 0건 미검증, 호스트 실행 필요.
+- python3 -m compileall -q app/api/obys_workspaces.py tests/unit/test_obys_people_dedicated_views.py → exit 0.
+- ruff check --select F821,F811 동일 두 파일 → All checks passed, exit 0.
+- python3 scripts/dup_guard.py --paths 동일 두 파일 → exit 0. git diff --check → exit 0.
+- 사업자 연결은 기존 정본 매핑에 정확히 일치하는 경우만 허용한다. 매핑 없는 사업자는 기존 자료 미연결로 표시한다. 운영 7사업자 실데이터 조회는 수행하지 않아 실제 연결별 건수는 미확인이다.
+- 근무 예정표 원천과 지각·결근 판정 기준은 연결되지 않아 미집계 표시를 유지한다. 식별자가 없는 과거 근태는 기록 단위로 분리하며 동일 직원 월 합산을 추측하지 않는다. 브라우저 시각 검증과 전체 HTTP 테스트 exit 0는 미완료다.
+- 변경 파일: app/api/obys_workspaces.py, app/static/apps/obys/admin.html, tests/unit/obys_people_e2e_fix_check.py, tests/unit/test_obys_menu_payroll_slice.py, tests/unit/test_obys_people_e2e_fix.py, tests/unit/test_obys_people_menu_button_audit.py, tests/unit/test_obys_people_dedicated_views.py, RESULT.md.
+- commit/push/build/deploy 미실행, 새 SHA 없음. HANDOVER.md/테스트 게이트/시크릿 수정 없음.
+- 새 정본 문서 생성 없음. 기존 RESULT.md 결과 추가이며 열람 링크 미제공. 운영 DB 쓰기 금지 범위에 따라 핸드오버 DB 미기록; Runner 완료 처리의 DB upsert/readback에 인계한다.

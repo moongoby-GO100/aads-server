@@ -63,7 +63,7 @@ function peopleWorkLinksV41(){''' + menu + '''
   if(!ok){assert.deepEqual(state.settings.businesses,[]);assert.deepEqual(state.settings.branches,[]);assert(!/멀티테넌트|열정국밥|중화점|biz-junghwa/.test(document.body.innerHTML));assert.equal((document.body.innerHTML.match(/<a /g)||[]).length,1)}
  }
  state.legacyAccess=false;assert(!peopleWorkLinksV41().includes('legacy=1'));assert(peopleWorkLinksV41().includes('출퇴근 하기'));
- state.legacyAccess=true;assert.equal((peopleWorkLinksV41().match(/legacy=1/g)||[]).length,1);
+ state.legacyAccess=true;assert.equal((peopleWorkLinksV41().match(/legacy=1/g)||[]).length,0);
 })().catch(e=>{console.error(e);process.exitCode=1});''')
     result = subprocess.run(['node', str(script)], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr

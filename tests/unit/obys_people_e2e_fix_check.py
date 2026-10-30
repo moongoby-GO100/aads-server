@@ -57,7 +57,7 @@ async def main():
                         await page.wait_for_timeout(400)
                         group = page.locator('[data-group="직원·급여"]')
                         assert await group.locator('button[data-route]').count() == 4
-                        assert await group.locator('a[href*="legacy=1"]').count() == int(legacy)
+                        assert await group.locator('a[href*="legacy=1"]').count() == 0
                         if width < 500:
                             if not await page.locator('#side.show').count(): await page.locator('#menuToggle').click()
                         file = f'{scenario}-{device}-admin-{view}.png'
