@@ -10,7 +10,9 @@ from fastapi import HTTPException
 
 from app.services import goal_signals
 from app.services import goal_work_hierarchy as hierarchy
-from app.services.goal_owner_resolver import resolve_goal_owner
+from app.services.goal_owner_resolver import (
+    _SESSION_SQL, goal_owner_binding_policy, resolve_goal_owner,
+)
 
 
 def validation_errors(inp: dict[str, Any]) -> list[str]:
@@ -69,6 +71,16 @@ def validation_errors(inp: dict[str, Any]) -> list[str]:
             errors.append(f"{path}: 객체 필수")
             continue
         title(ms, path)
+        role = ms.get("owner_role_key")
+        if role is not None and (not isinstance(role, str) or len(role) > 100):
+            errors.append(f"{path}.owner_role_key: 100자 이하 문자열")
+        if "owner_session_id" in ms:
+            try:
+                if not isinstance(ms["owner_session_id"], str):
+                    raise ValueError
+                UUID(ms["owner_session_id"])
+            except (ValueError, TypeError):
+                errors.append(f"{path}.owner_session_id: UUID 필수")
         for key in ("description", "completion_criteria"):
             if not text(ms.get(key)):
                 errors.append(f"{path}.{key}: 필수")
@@ -183,6 +195,30 @@ async def register_goal(
                 f"주도 담당(owner_session_id={owner_session})이 호출 세션({session_id})과 달라 "
                 "이 채팅의 목표 띠에 표시되지 않을 수 있다."
             )
+        # Validate every assignment before any goal/hierarchy writes (fail closed).
+        milestone_owners = []
+        for i, ms in enumerate(inp["milestones"]):
+            role = (ms.get("owner_role_key") or "").strip() or None
+            sid = ms.get("owner_session_id")
+            if sid:
+                sess = await conn.fetchrow(_SESSION_SQL, sid, tenant_id)
+                reason = None
+                if not sess:
+                    reason = "owner_session_not_found"
+                elif not goal_owner_binding_policy(
+                    project, sess["project_key"], "project_owner", as_lead=True,
+                )[0]:
+                    reason = "cross_project_owner_denied"
+                elif role and role != (sess["role_key"] or ""):
+                    reason = "owner_role_mismatch"
+                if reason:
+                    return {"error": "milestone_owner_out_of_scope",
+                            "milestone_index": i, "reason": reason}
+                milestone_owners.append((role or sess["role_key"] or None, str(sess["session_id"])))
+            elif role:
+                milestone_owners.append((role, None))
+            else:
+                milestone_owners.append((owner_role, owner_session))
         if goal.get("parent_goal_id"):
             parent = await hierarchy.get_goal_scope(
                 conn, tenant_id=tenant_id, goal_id=goal["parent_goal_id"]
@@ -275,8 +311,8 @@ async def register_goal(
                 ms["completion_criteria"],
                 ms["sequence_order"],
                 ms["auto_advance"],
-                owner_role,
-                owner_session,
+                milestone_owners[i][0],
+                milestone_owners[i][1],
             )
             # Count successful INSERT assignments, rather than requested milestone ids.
             if inserted_owner_session and inserted_owner_session == str(owner_session):
@@ -325,7 +361,7 @@ async def register_goal(
         "owner_session_id": owner_session,
         "owner_role_key": owner_role,
     }
-    # Registration currently assigns every milestone to the resolved lead.
+    # Warnings use the owners returned by the milestone INSERTs.
     from app.services.milestone_review import _alt_reviewer
 
     warnings = [

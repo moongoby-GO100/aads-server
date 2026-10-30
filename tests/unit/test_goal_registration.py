@@ -86,6 +86,7 @@ class MemoryConnection:
         self.goals, self.milestones, self.items, self.links = {}, {}, {}, []
         self.fail_at = fail_at
         self.keys = []
+        self.sessions = {}
 
     @asynccontextmanager
     async def transaction(self):
@@ -126,6 +127,9 @@ class MemoryConnection:
 
     async def fetchrow(self, sql, *a):
         if sql == _SESSION_SQL:
+            if a[0] in self.sessions:
+                row = self.sessions[a[0]]
+                return row if row["tenant_id"] == a[1] else None
             return {"session_id": a[0], "role_key": "dev", "title": "t", "project_key": "AADS"}
         if "workspace_name" in sql:
             return {
@@ -423,3 +427,74 @@ async def test_warning_counts_inserted_owners():
         "주도가 직접 맡은 마일스톤 2개 — 확인자는 같은 프로젝트 다른 담당이 필요",
         "no_alternate_reviewer",
     ]
+
+
+@pytest.mark.asyncio
+async def test_milestone_explicit_session_reduces_lead_warning():
+    conn = MemoryConnection()
+    sid = str(uuid4())
+    conn.sessions[sid] = {"session_id": sid, "role_key": "qa",
+                          "project_key": "AADS", "tenant_id": TENANT}
+    p = payload()
+    p["milestones"][0].update(owner_session_id=sid, owner_role_key="qa")
+    result = await register_goal(conn, p, tenant_id=TENANT, session_id=SESSION)
+    first = next(iter(conn.milestones.values()))
+    assert (first["owner_role_key"], first["owner_session_id"]) == ("qa", sid)
+    assert "마일스톤 2개" in result["warnings"][0]
+
+
+@pytest.mark.parametrize("project,tenant,role,reason", [
+    ("OTHER", TENANT, "qa", "cross_project_owner_denied"),
+    ("AADS", str(uuid4()), "qa", "owner_session_not_found"),
+    ("AADS", TENANT, "dev", "owner_role_mismatch"),
+    ("AADS", TENANT, "", "owner_role_mismatch"),
+])
+@pytest.mark.asyncio
+async def test_milestone_owner_scope_failure_creates_no_rows(project, tenant, role, reason):
+    conn = MemoryConnection()
+    sid = str(uuid4())
+    conn.sessions[sid] = {"session_id": sid, "role_key": role,
+                          "project_key": project, "tenant_id": tenant}
+    p = payload()
+    p["milestones"][2].update(owner_session_id=sid, owner_role_key="qa")
+    result = await register_goal(conn, p, tenant_id=TENANT, session_id=SESSION)
+    assert result == {"error": "milestone_owner_out_of_scope", "milestone_index": 2,
+                      "reason": reason}
+    assert not conn.goals and not conn.milestones and not conn.items and not conn.links
+
+
+@pytest.mark.asyncio
+async def test_role_only_milestone_leaves_session_for_dispatch():
+    conn = MemoryConnection()
+    p = payload()
+    p["milestones"][0]["owner_role_key"] = "qa"
+    result = await register_goal(conn, p, tenant_id=TENANT, session_id=SESSION)
+    first = next(iter(conn.milestones.values()))
+    assert first["owner_role_key"] == "qa"
+    assert first["owner_session_id"] is None
+    assert "마일스톤 2개" in result["warnings"][0]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("owner_role_key", 1), ("owner_role_key", "x" * 101),
+    ("owner_session_id", "invalid"), ("owner_session_id", 1),
+    ("owner_session_id", None),
+])
+@pytest.mark.asyncio
+async def test_milestone_owner_format_validation(field, value):
+    p = payload()
+    p["milestones"][0][field] = value
+    conn = AsyncMock()
+    result = await register_goal(conn, p, tenant_id=TENANT, session_id=SESSION)
+    assert result["error"] == "invalid_goal_hierarchy"
+    assert any(f"milestones[0].{field}" in error for error in result["errors"])
+    conn.transaction.assert_not_called()
+
+
+def test_milestone_owner_schema_optional():
+    from app.services.tool_registry import _TOOLS
+
+    ms = _TOOLS["goal_register"]["input_schema"]["properties"]["milestones"]["items"]
+    assert ms["properties"]["owner_role_key"]["maxLength"] == 100
+    assert ms["properties"]["owner_session_id"]["format"] == "uuid"
+    assert not {"owner_role_key", "owner_session_id"}.intersection(ms["required"])

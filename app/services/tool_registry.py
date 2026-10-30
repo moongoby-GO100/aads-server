@@ -458,6 +458,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                             "completion_criteria": {"type": "string"},
                             "sequence_order": {"type": "integer"},
                             "auto_advance": {"type": "boolean"},
+                            "owner_role_key": {"type": "string", "maxLength": 100,
+                                "description": "비우면 주도가 맡는다. 주도가 맡은 단계는 같은 프로젝트 다른 담당이 확인한다"},
+                            "owner_session_id": {"type": "string", "format": "uuid",
+                                "description": "같은 tenant·프로젝트의 실행 담당 세션. 비우면 주도가 맡는다. 주도가 맡은 단계는 같은 프로젝트 다른 담당이 확인한다"},
                             "epics": {"type": "array", "minItems": 1, "items":
                                 _goal_register_work_schema("stories", _goal_register_work_schema(
                                     "tasks", _goal_register_work_schema()))},
