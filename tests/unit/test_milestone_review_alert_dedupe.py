@@ -27,6 +27,7 @@ def test_ceo_alert_titles_are_distinct_and_stable(monkeypatch, milestone_title):
             "557ba817-0000-0000-0000-000000000002",
         )
     ]
+    monkeypatch.setattr(milestone_review, "lead_self_approval_evidence", AsyncMock(return_value={"ok": False, "jobs": [], "reason": "증거 부족"}))
     conn = AsyncMock()
     conn.fetch.return_value = rows
     conn.fetchval.return_value = "CTO"

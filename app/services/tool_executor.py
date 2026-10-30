@@ -5375,9 +5375,11 @@ class ToolExecutor:
         )
 
     async def _confirm_milestone(self, inp: Dict[str, Any]) -> Any:
-        """주도가 판정한다. **자기 마일스톤은 못 한다** — 자기 확인은 확인이 아니다."""
+        """주도가 판정한다. 자기 승인은 객관 증거와 설정을 확인한다."""
         from app.core.db_pool import get_pool
-        from app.services.milestone_review import confirm
+        from app.services.milestone_review import (
+            confirm, lead_self_approval_enabled, lead_self_approval_evidence,
+        )
 
         mid = str(inp.get("milestone_id") or "")
         # 빈 문자열이면 아래 자기확인 차단이 **절대 발동하지 않는다.**
@@ -5389,6 +5391,8 @@ class ToolExecutor:
                 "message": "판정 세션을 확인할 수 없어 판정할 수 없다",
             }
         tenant_id = None
+        confirmer = "lead"
+        reason = str(inp.get("reason") or "")
         if mid and sid:
             scope = await get_pool().fetchrow(
                 "SELECT s.tenant_id::text AS tenant_id, "
@@ -5409,16 +5413,28 @@ class ToolExecutor:
                 mid, sid,
             )
             if own:
-                return {
-                    "error": "cannot_confirm_own_milestone",
-                    "message": "자기가 맡은 마일스톤은 판정할 수 없다. "
-                               "대표님께 올라간다 — 근거만 정확히 남겨라.",
-                }
+                lead = await get_pool().fetchval(
+                    "SELECT g.owner_session_id::text FROM goals g "
+                    "JOIN milestones m ON m.goal_id = g.id WHERE m.id = $1::uuid", mid,
+                )
+                allowed = lead == sid and lead_self_approval_enabled() and not inp.get("negative")
+                evidence = {"ok": False, "reason": "주도·설정·음성 판정 조건 불충족"}
+                if allowed and inp.get("ok"):
+                    async with get_pool().acquire() as conn:
+                        evidence = await lead_self_approval_evidence(conn, mid)
+                    allowed = evidence["ok"]
+                if not allowed:
+                    return {"error": "cannot_confirm_own_milestone", "reason": evidence["reason"],
+                            "message": "자기 판정 조건을 충족하지 못했다."}
+                confirmer = "lead_self"
+                if inp.get("ok"):
+                    reason = "[주도 자기 승인] jobs=" + ",".join(evidence["jobs"]) + "\n" + reason
         return await confirm(
             mid,
             ok=bool(inp.get("ok")),
-            reason=str(inp.get("reason") or ""),
+            reason=reason,
             negative=bool(inp.get("negative")),
+            confirmer=confirmer,
             tenant_id=tenant_id,
         )
 

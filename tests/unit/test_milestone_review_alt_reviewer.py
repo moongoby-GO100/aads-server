@@ -19,6 +19,7 @@ async def test_review_routing(monkeypatch, self_owned, alternate, count, asked, 
                goal_title='목표', project='AADS', owner='CTO' if self_owned else 'dev',
                owner_session='lead' if self_owned else 'dev', review_ask_count=count,
                evidence={'summary': '검증 근거'}, completion_criteria='완료')
+    monkeypatch.setattr(review, "lead_self_approval_evidence", AsyncMock(return_value={"ok": False, "jobs": [], "reason": "증거 부족"}))
     conn = AsyncMock()
     conn.fetch.return_value = [row]
     conn.fetchval.return_value = 'CTO'
@@ -52,6 +53,7 @@ async def test_review_routing(monkeypatch, self_owned, alternate, count, asked, 
 
 @pytest.mark.asyncio
 async def test_candidate_scope_and_order(monkeypatch):
+    monkeypatch.setattr(review, "lead_self_approval_evidence", AsyncMock(return_value={"ok": False, "jobs": [], "reason": "증거 부족"}))
     conn = AsyncMock()
     conn.fetch.return_value = [{'session_id': 'lead'}, {'session_id': 'qa'}]
     monkeypatch.setattr(review, '_lead_session', AsyncMock(return_value='lead'))
@@ -161,6 +163,7 @@ async def test_confirm_requires_session(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_known_lead_avoids_duplicate_lookup(monkeypatch):
+    monkeypatch.setattr(review, "lead_self_approval_evidence", AsyncMock(return_value={"ok": False, "jobs": [], "reason": "증거 부족"}))
     conn = AsyncMock()
     conn.fetch.return_value = [{'session_id': 'qa'}]
     lookup = AsyncMock()

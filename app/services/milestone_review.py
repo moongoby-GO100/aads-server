@@ -20,8 +20,9 @@
 없다. 그리고 근거를 적게 하면 담당이 스스로 한 번 더 본다. 완료 기준에
 숫자가 있으면 `numbers` 를 필수로 받는다.
 
-**자기 확인은 확인이 아니다.** 주도가 맡은 마일스톤은 주도가 확인할 수
-없다 — 같은 프로젝트 대체 확인자에게 먼저 요청하고 없으면 대표님께 올라간다.
+**주도는 객관 증거가 있으면 자기 단계를 승인할 수 있다.** 기본 활성화된
+`MILESTONE_LEAD_SELF_APPROVE` 가 켜져 있고 완료 작업·커밋·AI 검수 증거가
+충분해야 한다. 부족하면 대체 확인자, 없으면 대표님께 요청한다. 음성 판정은 대표님 몫이다.
 
 **주도가 확인을 안 하면 또 멈춘다.** 지시와 같은 재알림을 건다
 (30분 / 3회 / 그 뒤 대표님).
@@ -42,6 +43,53 @@ _REVIEW_MAX_ASK = int(os.getenv("MILESTONE_REVIEW_MAX_ASK", "3"))
 
 # 완료 기준에 숫자가 들어 있으면 신고에도 숫자를 요구한다.
 _HAS_NUMBER = re.compile(r"\d")
+
+
+def lead_self_approval_enabled() -> bool:
+    return os.getenv("MILESTONE_LEAD_SELF_APPROVE", "1") != "0"
+
+
+async def lead_self_approval_evidence(conn: Any, milestone_id: str) -> dict:
+    """연결된 러너 작업을 합쳐 읽고 자기 승인에 필요한 객관 증거를 검사한다."""
+    evidence = await conn.fetchval(
+        "SELECT evidence FROM milestones WHERE id = $1::uuid", milestone_id,
+    )
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence)
+        except ValueError:
+            evidence = None
+    ids = set(re.findall(r"\brunner-[0-9a-f]{8}\b", json.dumps(evidence)))
+    links = await conn.fetch(
+        "SELECT task_id FROM goal_task_links WHERE milestone_id = $1::uuid "
+        "AND task_type = 'pipeline_job'", milestone_id,
+    )
+    ids.update(str(row["task_id"]) for row in links)
+    jobs = await conn.fetch(
+        "SELECT job_id, status, commit_hash, review_verdict, error_detail "
+        "FROM pipeline_jobs WHERE job_id = ANY($1::text[])", sorted(ids),
+    ) if ids else []
+    reasons = []
+    if not evidence:
+        reasons.append("milestones.evidence 비어 있음")
+    if not jobs:
+        reasons.append("연결된 pipeline_job 없음")
+    missing = ids - {row["job_id"] for row in jobs}
+    if missing:
+        reasons.append("연결 작업 조회 불가: " + ",".join(sorted(missing)))
+    if not any(row["status"] == "done" and str(row["commit_hash"] or "").strip()
+               and row["review_verdict"] == "APPROVE" for row in jobs):
+        reasons.append("done + commit_hash + AI 검수 APPROVE 작업 없음")
+    busy = [row["job_id"] for row in jobs if row["status"] in
+            ("queued", "claimed", "running", "awaiting_approval", "approved", "deploying", "review_hold")]
+    errors = [row["job_id"] for row in jobs if row["status"] == "error"
+              or str(row["error_detail"] or "").strip()]
+    if busy:
+        reasons.append("활성 작업: " + ",".join(busy))
+    if errors:
+        reasons.append("미해결 error: " + ",".join(errors))
+    return {"ok": not reasons, "jobs": sorted(row["job_id"] for row in jobs),
+            "reason": "; ".join(reasons)}
 
 
 async def report_done(
@@ -339,7 +387,7 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
                     "WHERE id = $1::uuid",
                     lead,
                 ) or ""
-            # 주도 자신의 마일스톤이면 자기 확인이 된다 — 대표님께 올린다.
+            # 주도 자신의 마일스톤이면 객관 증거에 따라 자기 승인 경로를 고른다.
             # 역할명이 'Lead' 로 끝나는지 보는 것으로는 못 잡았다. #119 는
             # 주도가 CTO 이고 CTO 가 맡은 마일스톤이 3건이다 — 예전 판정은
             # 그걸 자기확인이 아니라고 보고 주도에게 자기 것을 보냈다.
@@ -347,15 +395,19 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
                 (lead and row["owner_session"] and lead == row["owner_session"])
                 or (lead_role and row["owner"] and lead_role == row["owner"])
             )
+            self_evidence = {"ok": False, "jobs": []}
+            if self_confirm and lead and lead_self_approval_enabled():
+                self_evidence = await lead_self_approval_evidence(conn, row["milestone_id"])
+            self_allowed = self_evidence["ok"]
             alternate = None
-            if self_confirm and int(row["review_ask_count"] or 0) < _REVIEW_MAX_ASK:
+            if self_confirm and not self_allowed and int(row["review_ask_count"] or 0) < _REVIEW_MAX_ASK:
                 alternate = await _alt_reviewer(
                     conn, row["goal_id"], row["owner_session"], row["owner"],
                     lead_session=lead,
                 )
             to_ceo = (
                 int(row["review_ask_count"] or 0) >= _REVIEW_MAX_ASK
-                or (self_confirm and not alternate)
+                or (self_confirm and not self_allowed and not alternate)
                 or not lead
             )
 
@@ -380,12 +432,14 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
                     logger.warning("review_escalate_failed", error=str(exc)[:160])
                 escalated += 1
 
-            reviewer = alternate or (lead if not self_confirm else None)
+            reviewer = alternate or (lead if not self_confirm or (self_allowed and not to_ceo) else None)
             if reviewer:
                 try:
                     from app.services import chat_service as cs
 
                     _ask = _ask_text(row, to_ceo=False)
+                    if self_allowed:
+                        _ask += "\n주도 자기 승인 가능(증거: " + ",".join(self_evidence["jobs"]) + ")"
                     if alternate:
                         _ask = _ask.replace("[완료 확인 요청 — 주도]", "[완료 확인 요청 — 대체 확인자]", 1)
                         _ask += ("\n주도가 직접 맡은 단계라 주도 대신 확인을 요청합니다"
