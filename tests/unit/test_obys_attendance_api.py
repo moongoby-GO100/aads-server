@@ -385,7 +385,8 @@ def test_shift_form_saves_to_server_and_reports_failure_without_clearing_form():
 
 def test_shift_screen_posts_to_attendance_api_and_marks_local_only_rows():
     html = INDEX.read_text(encoding="utf-8")
-    assert "fetch(`/api/v1/workspaces${path}`" in html
+    # workspaceApi 는 사람 화면 중복 클릭 방지(peopleFetch)를 거쳐 같은 주소로 보낸다.
+    assert "peopleFetch(`/api/v1/workspaces${path}`" in html
     assert re.search(r"workspaceApi\(`/\$\{encodeURIComponent\(businessId\)\}/attendance/records`, \{\s*method: \"POST\"", html)
     assert 'method: "DELETE"' in html and "/attendance/records/${encodeURIComponent(serverShiftId)}" in html
     # 기존 로컬 근태는 버리지 않고 미저장으로 표시하고 서버로 올릴 수 있다.

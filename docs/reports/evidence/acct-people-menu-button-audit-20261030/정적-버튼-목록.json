@@ -1,0 +1,338 @@
+[
+  {
+    "menu": "직원",
+    "tag": "button",
+    "id": "openEmployeeSignupPrimaryBtn",
+    "label": "직원 회원가입 화면 열기",
+    "attributes": "type=\"button\" id=\"openEmployeeSignupPrimaryBtn\" class=\"primary\""
+  },
+  {
+    "menu": "직원",
+    "tag": "button",
+    "id": "goOnboardingFromEmployeesBtn",
+    "label": "입사서류 등록으로 이동",
+    "attributes": "type=\"button\" id=\"goOnboardingFromEmployeesBtn\""
+  },
+  {
+    "menu": "직원",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 화면 동적 안내 영역",
+    "attributes": "name=\"businessId\" required"
+  },
+  {
+    "menu": "직원",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 화면 동적 안내 영역",
+    "attributes": "name=\"branch\""
+  },
+  {
+    "menu": "직원",
+    "tag": "button",
+    "id": "",
+    "label": "다시 불러오기",
+    "attributes": "type=\"button\" data-join-workplace-retry hidden"
+  },
+  {
+    "menu": "직원",
+    "tag": "button",
+    "id": "refreshEmployeeJoinRequestsBtn",
+    "label": "가입요청 새로고침",
+    "attributes": "id=\"refreshEmployeeJoinRequestsBtn\" type=\"button\""
+  },
+  {
+    "menu": "직원",
+    "tag": "button",
+    "id": "submitEmployeeJoinRequestBtn",
+    "label": "가입요청 보내기",
+    "attributes": "id=\"submitEmployeeJoinRequestBtn\" class=\"primary\" type=\"submit\""
+  },
+  {
+    "menu": "직원",
+    "tag": "button",
+    "id": "goSignupFromEmployeesBtn",
+    "label": "회원가입 화면 열기",
+    "attributes": "type=\"button\" id=\"goSignupFromEmployeesBtn\""
+  },
+  {
+    "menu": "직원",
+    "tag": "button",
+    "id": "acceptEmployeeInviteBtn",
+    "label": "초대 수락",
+    "attributes": "id=\"acceptEmployeeInviteBtn\" type=\"submit\""
+  },
+  {
+    "menu": "직원",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 화면 동적 안내 영역",
+    "attributes": "name=\"branch\""
+  },
+  {
+    "menu": "직원",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 운영 입력자 조회 전용 운영관리자",
+    "attributes": "name=\"role\""
+  },
+  {
+    "menu": "직원",
+    "tag": "button",
+    "id": "createEmployeeInviteBtn",
+    "label": "초대 링크 생성",
+    "attributes": "id=\"createEmployeeInviteBtn\" type=\"submit\""
+  },
+  {
+    "menu": "직원",
+    "tag": "button",
+    "id": "refreshEmployeeInvitesBtn",
+    "label": "대기 초대 새로고침",
+    "attributes": "id=\"refreshEmployeeInvitesBtn\" type=\"button\""
+  },
+  {
+    "menu": "근태",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 화면 동적 안내 영역",
+    "attributes": "name=\"branch\" required"
+  },
+  {
+    "menu": "근태",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 확정 확인필요",
+    "attributes": "name=\"status\""
+  },
+  {
+    "menu": "근태",
+    "tag": "button",
+    "id": "clearShiftBtn",
+    "label": "비우기",
+    "attributes": "type=\"button\" id=\"clearShiftBtn\""
+  },
+  {
+    "menu": "근태",
+    "tag": "button",
+    "id": "",
+    "label": "저장",
+    "attributes": "type=\"submit\" class=\"primary\""
+  },
+  {
+    "menu": "근태",
+    "tag": "button",
+    "id": "uploadLocalShiftsBtn",
+    "label": "미저장 근태 서버로 올리기",
+    "attributes": "id=\"uploadLocalShiftsBtn\" class=\"hidden\""
+  },
+  {
+    "menu": "근태",
+    "tag": "button",
+    "id": "downloadShiftCsvBtn",
+    "label": "CSV 저장",
+    "attributes": "id=\"downloadShiftCsvBtn\""
+  },
+  {
+    "menu": "급여",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 직접 입력",
+    "attributes": "name=\"employeeRequestId\""
+  },
+  {
+    "menu": "급여",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 화면 동적 안내 영역",
+    "attributes": "name=\"branch\" required"
+  },
+  {
+    "menu": "급여",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 4대보험 가입 근로자 3.3% 프리랜서 원천징수",
+    "attributes": "name=\"employmentTaxType\""
+  },
+  {
+    "menu": "급여",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 사용자 식사 제공 식사 미제공 · 현금 식대",
+    "attributes": "name=\"mealProvision\""
+  },
+  {
+    "menu": "급여",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 작성중",
+    "attributes": "name=\"status\""
+  },
+  {
+    "menu": "급여",
+    "tag": "button",
+    "id": "payrollAttendanceDraftBtn",
+    "label": "확정 근태로 초안 만들기",
+    "attributes": "type=\"button\" id=\"payrollAttendanceDraftBtn\""
+  },
+  {
+    "menu": "급여",
+    "tag": "button",
+    "id": "clearPayrollBtn",
+    "label": "비우기",
+    "attributes": "type=\"button\" id=\"clearPayrollBtn\""
+  },
+  {
+    "menu": "급여",
+    "tag": "button",
+    "id": "",
+    "label": "급여내역서 저장",
+    "attributes": "type=\"submit\" class=\"primary\""
+  },
+  {
+    "menu": "급여",
+    "tag": "button",
+    "id": "",
+    "label": "전자 명세 수신 동의",
+    "attributes": "type=\"button\" data-payroll-consent=\"agree\""
+  },
+  {
+    "menu": "급여",
+    "tag": "button",
+    "id": "",
+    "label": "수신 동의 철회",
+    "attributes": "type=\"button\" data-payroll-consent=\"revoke\""
+  },
+  {
+    "menu": "입사서류",
+    "tag": "button",
+    "id": "signPendingStrip",
+    "label": "화면 동적 안내 영역",
+    "attributes": "type=\"button\" id=\"signPendingStrip\" class=\"sign-pending-strip hidden\""
+  },
+  {
+    "menu": "입사서류",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 화면 동적 안내 영역",
+    "attributes": "name=\"branch\" required"
+  },
+  {
+    "menu": "입사서류",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 화면 동적 안내 영역",
+    "attributes": "name=\"documentType\" required"
+  },
+  {
+    "menu": "입사서류",
+    "tag": "button",
+    "id": "refreshOnboardingDocsBtn",
+    "label": "서류 현황 새로고침",
+    "attributes": "type=\"button\" id=\"refreshOnboardingDocsBtn\""
+  },
+  {
+    "menu": "입사서류",
+    "tag": "button",
+    "id": "uploadOnboardingDocBtn",
+    "label": "서류 업로드",
+    "attributes": "type=\"submit\" id=\"uploadOnboardingDocBtn\" class=\"primary\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 승인된 직원을 선택하십시오",
+    "attributes": "name=\"employeeRequestId\" required"
+  },
+  {
+    "menu": "계약서",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 화면 동적 안내 영역",
+    "attributes": "name=\"branch\" required"
+  },
+  {
+    "menu": "계약서",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 단시간/아르바이트 근로계약서 정규직 근로계약서 매니저 근로계약서 기간제 근로계약서 일용 근로계약서 3.3% 프리랜서 용역계약서 보안/개인정보 서약서",
+    "attributes": "name=\"contractType\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 4대보험 가입 근로자 3.3% 프리랜서 원천징수",
+    "attributes": "name=\"employmentTaxType\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 내국인/해당없음 외국인 직원",
+    "attributes": "name=\"foreignWorker\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 해당 없음 서면 동의서 확인 완료",
+    "attributes": "name=\"minorGuardianConsent\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 시급 월급 일급 건별/용역비",
+    "attributes": "name=\"wageType\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 상시 5인 미만 상시 5인 이상",
+    "attributes": "name=\"workplaceSizeCategory\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "select",
+    "id": "",
+    "label": "선택: 사용자 식사 제공 · 비과세 식대 미적용 식사 미제공 · 현금 식대 지급",
+    "attributes": "name=\"mealProvision\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "button",
+    "id": "clearContractBtn",
+    "label": "비우기",
+    "attributes": "type=\"button\" id=\"clearContractBtn\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "button",
+    "id": "fillContractDefaultsBtn",
+    "label": "표준 기본값 다시 채우기",
+    "attributes": "type=\"button\" id=\"fillContractDefaultsBtn\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "button",
+    "id": "applyRegularSalaryPresetBtn",
+    "label": "월 300만원 급여안 적용",
+    "attributes": "type=\"button\" id=\"applyRegularSalaryPresetBtn\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "button",
+    "id": "previewContractBtn",
+    "label": "미리보기 갱신",
+    "attributes": "type=\"button\" id=\"previewContractBtn\""
+  },
+  {
+    "menu": "계약서",
+    "tag": "button",
+    "id": "",
+    "label": "계약서 저장",
+    "attributes": "type=\"submit\" class=\"primary\""
+  }
+]

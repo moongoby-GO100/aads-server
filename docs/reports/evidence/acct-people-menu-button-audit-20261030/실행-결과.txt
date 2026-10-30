@@ -1,0 +1,143 @@
+지정 단위 테스트 스크립트: exit 2
+[run_unit_tests] 기준 이미지를 찾지 못했습니다 (5초 간격 6회 재시도) — 시도한 후보와 실패 사유:
+  - container:aads-server -> no such container
+  - container:aads-server-green -> no such container
+[run_unit_tests] docker ps --filter name=aads-server 요약:
+
+급여 API 테스트 포함 로컬 pytest: exit 2
+ModuleNotFoundError: No module named fastapi
+수집 중단, API 검증 미완료
+
+node --check index.html inline 3: exit 0
+
+node --check index.html inline 9: exit 0
+
+node --check admin.html inline 5: exit 0
+
+node --check clock.html inline 0: exit 0
+
+python3 -m pytest -q tests/unit/test_obys_people_menu_button_audit.py tests/unit/test_obys_clock_menu_link.py tests/unit/test_obys_admin_employee_preview.py tests/unit/test_obys_uiux_states_mobile.py tests/unit/test_obys_contract_wage_autosplit.py tests/unit/test_obys_contract_types_clauses.py tests/unit/test_obys_admin_attendance_view.py
+exit 1
+............................................FFFF...                      [100%]
+=================================== FAILURES ===================================
+_ test_backend_new_types_require_end_date_and_daily_wage[fixed_term-\uae30\uac04\uc81c \uadfc\ub85c\uacc4\uc57d\uc11c] _
+
+kind = 'fixed_term', title = '기간제 근로계약서'
+
+    @pytest.mark.parametrize('kind,title', [('fixed_term', '기간제 근로계약서'), ('daily', '일용 근로계약서')])
+    def test_backend_new_types_require_end_date_and_daily_wage(kind, title):
+>       from fastapi import HTTPException
+E       ModuleNotFoundError: No module named 'fastapi'
+
+tests/unit/test_obys_contract_types_clauses.py:69: ModuleNotFoundError
+_ test_backend_new_types_require_end_date_and_daily_wage[daily-\uc77c\uc6a9 \uadfc\ub85c\uacc4\uc57d\uc11c] _
+
+kind = 'daily', title = '일용 근로계약서'
+
+    @pytest.mark.parametrize('kind,title', [('fixed_term', '기간제 근로계약서'), ('daily', '일용 근로계약서')])
+    def test_backend_new_types_require_end_date_and_daily_wage(kind, title):
+>       from fastapi import HTTPException
+E       ModuleNotFoundError: No module named 'fastapi'
+
+tests/unit/test_obys_contract_types_clauses.py:69: ModuleNotFoundError
+_ test_backend_accepts_complete_new_contract_and_rejects_invalid_date[fixed_term] _
+
+kind = 'fixed_term'
+
+    @pytest.mark.parametrize('kind', ['fixed_term', 'daily'])
+    def test_backend_accepts_complete_new_contract_and_rejects_invalid_date(kind):
+>       from fastapi import HTTPException
+E       ModuleNotFoundError: No module named 'fastapi'
+
+tests/unit/test_obys_contract_types_clauses.py:81: ModuleNotFoundError
+__ test_backend_accepts_complete_new_contract_and_rejects_invalid_date[daily] __
+
+kind = 'daily'
+
+    @pytest.mark.parametrize('kind', ['fixed_term', 'daily'])
+    def test_backend_accepts_complete_new_contract_and_rejects_invalid_date(kind):
+>       from fastapi import HTTPException
+E       ModuleNotFoundError: No module named 'fastapi'
+
+tests/unit/test_obys_contract_types_clauses.py:81: ModuleNotFoundError
+=============================== warnings summary ===============================
+../../usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464
+  /usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: asyncio_mode
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/unit/test_obys_contract_types_clauses.py::test_backend_new_types_require_end_date_and_daily_wage[fixed_term-\uae30\uac04\uc81c \uadfc\ub85c\uacc4\uc57d\uc11c]
+FAILED tests/unit/test_obys_contract_types_clauses.py::test_backend_new_types_require_end_date_and_daily_wage[daily-\uc77c\uc6a9 \uadfc\ub85c\uacc4\uc57d\uc11c]
+FAILED tests/unit/test_obys_contract_types_clauses.py::test_backend_accepts_complete_new_contract_and_rejects_invalid_date[fixed_term]
+FAILED tests/unit/test_obys_contract_types_clauses.py::test_backend_accepts_complete_new_contract_and_rejects_invalid_date[daily]
+4 failed, 47 passed, 1 warning in 3.37s
+
+python3 -m compileall -q tests/unit/test_obys_people_menu_button_audit.py tests/unit/obys_people_browser_check.py app/obys_standalone.py
+exit 0
+
+python3 tests/unit/obys_people_browser_check.py
+exit 1
+Traceback (most recent call last):
+  File "/tmp/aads-wt-runner-23ec0a6d/tests/unit/obys_people_browser_check.py", line 105, in <module>
+    asyncio.run(main())
+  File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/tmp/aads-wt-runner-23ec0a6d/tests/unit/obys_people_browser_check.py", line 18, in main
+    browser = await pw.chromium.launch(headless=True, args=['--no-sandbox'])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/playwright/async_api/_generated.py", line 16731, in launch
+    await self._impl_obj.launch(
+  File "/usr/local/lib/python3.12/dist-packages/playwright/_impl/_browser_type.py", line 97, in launch
+    await self._channel.send(
+  File "/usr/local/lib/python3.12/dist-packages/playwright/_impl/_connection.py", line 76, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/playwright/_impl/_connection.py", line 632, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TargetClosedError: BrowserType.launch: Target page, context or browser has been closed
+Browser logs:
+
+<launching> /root/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-back-forward-cache --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,BoundaryEventDispatchTracksNodeRemoval,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --no-sandbox --no-sandbox --user-data-dir=/tmp/playwright_chromiumdev_profile-h9GArP --remote-debugging-pipe --no-startup-window
+<launched> pid=103
+[pid=103][err] [1030/024540.227787:FATAL:content/browser/sandbox_host_linux.cc:41] Check failed: . shutdown: Operation not permitted (1)
+Call log:
+  - <launching> /root/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-back-forward-cache --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,BoundaryEventDispatchTracksNodeRemoval,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --no-sandbox --no-sandbox --user-data-dir=/tmp/playwright_chromiumdev_profile-h9GArP --remote-debugging-pipe --no-startup-window
+  - <launched> pid=103
+  - [pid=103][err] [1030/024540.227787:FATAL:content/browser/sandbox_host_linux.cc:41] Check failed: . shutdown: Operation not permitted (1)
+  - [pid=103] <gracefully close start>
+  - [pid=103] <kill>
+  - [pid=103] <will force kill>
+  - [pid=103] <process did exit: exitCode=null, signal=SIGTRAP>
+  - [pid=103] starting temporary directories cleanup
+  - [pid=103] finished temporary directories cleanup
+  - [pid=103] <gracefully close end>
+
+
+최종 node --check index.html inline 3: exit 0
+
+최종 node --check index.html inline 9: exit 0
+
+최종 node --check admin.html inline 5: exit 0
+
+최종 node --check clock.html inline 0: exit 0
+
+git diff --check: exit 0
+
+최종 관련 pytest (사람 버튼·메뉴·미리보기·UI 상태·급여 자동분리·관리자 근태): exit 0
+45 passed, 1 warning in 4.81s
+경고: pytest asyncio_mode 설정을 현재 로컬 환경이 인식하지 못함.
+
+== 재작업 1회차 (runner-39f37da6)
+run_unit_tests.sh test_obys_people_menu_button_audit.py test_obys_payroll_state_machine.py: exit 0 (39 passed, 5 skipped: node 없음)
+host pytest test_obys_people_menu_button_audit.py: exit 0 (10 passed)
+Playwright obys_people_browser_check.py: exit 0
+{"checks": ["PC·모바일 메뉴 여덟 항목 일치", "급여 확정 실제 행 버튼 중복 클릭: POST 1회, 목록 GET 갱신", "명세 전달 HTTP 200 / status=failed를 성공으로 표시하지 않음", "403은 인증을 제거하지 않음", "401 로그인 화면 즉시 노출"], "screens": 18, "page_errors": []}

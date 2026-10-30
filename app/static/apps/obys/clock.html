@@ -203,6 +203,16 @@
       clearTimeout(timeoutId);
     }
     const payload = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      for (const key of [SERVER_AUTH_TOKEN_KEY, FB_ACCESS_TOKEN_KEY, "yeoljeong-finance-auth-user"]) {
+        localStorage.removeItem(key);
+      }
+      for (const cookieName of ["aads_token", "fb_access_token"]) {
+        document.cookie = `${cookieName}=; Max-Age=0; path=/; SameSite=Lax`;
+      }
+      window.location.replace("/static/apps/obys/index.html#login");
+      throw Object.assign(new Error("다시 로그인해 주세요."), { status: 401 });
+    }
     if (!response.ok) {
       const detail = typeof payload.detail === "string" ? payload.detail : (payload.detail?.message || `오류 ${response.status}`);
       throw Object.assign(new Error(detail), { status: response.status });
@@ -363,7 +373,10 @@
     await loadState();
   }
 
+  let clockSaving = false;
   async function runClock(withLocation) {
+    if (clockSaving) return;
+    clockSaving = true;
     clearError();
     const btn = $("clockBtn");
     btn.disabled = true;
@@ -375,6 +388,7 @@
       if (error.status === 409) await loadState();
       showError(error, () => runClock(withLocation));
     } finally {
+      clockSaving = false;
       if (state.clock) render();
     }
   }

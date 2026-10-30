@@ -4400,15 +4400,13 @@
                 <label>상태
                   <select name="status">
                     <option value="draft">작성중</option>
-                    <option value="confirmed">확정</option>
-                    <option value="paid">지급완료</option>
-                    <option value="cancelled">취소</option>
                   </select>
                 </label>
                 <label class="span-2">메모
                   <textarea name="memo" placeholder="근태 반영, 공제 사유, 지급 특이사항"></textarea>
                 </label>
                 <div class="span-2" style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
+                  <button type="button" id="payrollAttendanceDraftBtn">확정 근태로 초안 만들기</button>
                   <button type="button" id="clearPayrollBtn">비우기</button>
                   <button type="submit" class="primary">급여내역서 저장</button>
                 </div>
@@ -4418,6 +4416,10 @@
           <section class="panel">
             <div class="panel-head">
               <h2 class="panel-title">급여내역서 현황</h2>
+              <div id="payrollConsentActions" class="hidden">
+                <button type="button" data-payroll-consent="agree">전자 명세 수신 동의</button>
+                <button type="button" data-payroll-consent="revoke">수신 동의 철회</button>
+              </div>
               <span id="payrollSummary" class="badge info">0건</span>
             </div>
             <div class="panel-body">
@@ -8500,8 +8502,8 @@
           ? `<span class="badge warn" title="이 브라우저에만 있고 서버에는 없습니다">미저장(로컬 전용)</span>`
           : `<span class="badge ${klass}">${label}</span>`;
         const actions = row.localOnly
-          ? `<button data-upload-shift="${escapeHtml(row.id)}" title="서버에 저장">서버 저장</button>${employeeMode ? "" : ` <button class="icon danger" data-delete-shift="${escapeHtml(row.id)}" title="로컬 삭제">-</button>`}`
-          : (employeeMode ? "" : `<button class="icon danger" data-delete-server-shift="${escapeHtml(row.serverId)}" data-shift-business="${escapeHtml(row.businessId)}" title="삭제">-</button>`);
+          ? `<button data-upload-shift="${escapeHtml(row.id)}" title="서버에 저장">서버 저장</button>${employeeMode ? "" : ` <button class="icon danger" data-delete-shift="${escapeHtml(row.id)}" title="로컬 삭제">삭제</button>`}`
+          : (employeeMode ? "" : `<button class="icon danger" data-delete-server-shift="${escapeHtml(row.serverId)}" data-shift-business="${escapeHtml(row.businessId)}" title="삭제">삭제</button>`);
         return `
           <tr>
             <td>${escapeHtml(row.date)}</td>
@@ -8708,7 +8710,7 @@
             <td>${isMissing ? `<span class="muted">업로드 필요</span>` : `${escapeHtml(doc.original_filename || "-")}<br><span class="muted">${sizeKb.toLocaleString("ko-KR")}KB</span>`}</td>
             <td><span class="badge ${statusClass}">${escapeHtml(statusLabel)}</span>${doc.review_memo ? `<br><span class="muted">${escapeHtml(doc.review_memo)}</span>` : ""}</td>
             <td class="num" style="display:flex; gap:6px; justify-content:flex-end">
-              ${isMissing ? `<span class="muted">서류 업로드 대기</span>` : `<button data-download-onboarding="${escapeHtml(doc.id)}">열기</button><button class="icon danger" data-delete-onboarding="${escapeHtml(doc.id)}" title="삭제">-</button>`}
+              ${isMissing ? `<span class="muted">서류 업로드 대기</span>` : `<button data-download-onboarding="${escapeHtml(doc.id)}">열기</button><button class="icon danger" data-delete-onboarding="${escapeHtml(doc.id)}" title="삭제">삭제</button>`}
             </td>
           </tr>`;
       }).join("");
@@ -8753,7 +8755,7 @@
                 <button data-edit-contract="${escapeHtml(item.id)}">수정</button>
                 <button data-request-contract="${escapeHtml(item.id)}">서명요청</button>
                 ${item.status === "requested" ? `<button data-copy-contract="${escapeHtml(link)}">링크복사</button>` : ""}
-                <button class="icon danger" data-delete-contract="${escapeHtml(item.id)}" title="삭제">-</button>
+                <button class="icon danger" data-delete-contract="${escapeHtml(item.id)}" title="삭제">삭제</button>
               `}
               ${employeePreviewButtonHtml(employeeEmail, employeeName)}
             ` : (employeeMode && item.status === "requested" ? `<button data-sign-contract="${escapeHtml(item.id)}" class="primary">내용 확인·서명</button>` : `<button data-preview-contract="${escapeHtml(item.id)}">미리보기</button>${item.status === "signed" ? `<button data-download-contract-pdf="${escapeHtml(item.id)}" class="primary">서명본 PDF</button>` : ""}`);
@@ -8774,6 +8776,7 @@
       queueEmployeePortalSync();
       const employeeMode = isEmployeeExperience();
       const managerMode = canManageOnboarding();
+      document.getElementById("payrollConsentActions")?.classList.toggle("hidden", !employeeMode || Boolean(employeePreview));
       const rows = visiblePayrollStatements().slice().sort((a, b) => String(b.updated_at || b.updatedAt || b.period || "").localeCompare(String(a.updated_at || a.updatedAt || a.period || "")));
       const pending = rows.filter(item => item.status === "draft").length;
       if (els.payrollSummary) {
@@ -8796,17 +8799,27 @@
       els.payrollRows.innerHTML = rows.map(item => {
         const status = payrollStatusLabels[item.status] || payrollStatusLabels.draft;
         const employmentTaxType = item.employmentTaxType || item.employment_tax_type || "";
+        const locked = ["confirmed", "paid"].includes(item.status);
+        const editable = !item.status || item.status === "draft";
+        const latest = !item.superseded_by;
+        const sent = (item.deliveries || []).some(delivery => delivery.status === "sent");
+        const actionButton = (action, label) => `<button data-payroll-action="${action}" data-statement-id="${escapeHtml(item.id)}">${label}</button>`;
         const actions = managerMode
-          ? `<button data-edit-payroll="${escapeHtml(item.id)}">수정</button><button class="icon danger" data-delete-payroll="${escapeHtml(item.id)}" title="삭제">-</button>`
+          ? `${latest && (editable || locked) ? `<button data-edit-payroll="${escapeHtml(item.id)}">${locked ? "정정 초안 작성" : "수정"}</button>` : ""}
+             ${editable ? `<button class="danger" data-delete-payroll="${escapeHtml(item.id)}">삭제</button>${actionButton("confirm", "급여 확정")}` : ""}
+             ${latest && item.status === "confirmed" ? actionButton("pay", "지급 완료 기록") : ""}
+             ${latest && locked ? actionButton(sent ? "resend" : "deliver", sent ? "명세 재전달" : "명세 전달") : ""}
+             ${actionButton("versions", "수정 이력")}`
           : `<span class="muted">본인 확인용</span>`;
+        const pdfAction = locked ? actionButton("pdf", "명세 PDF") : "";
         return `
           <tr>
-            <td>${escapeHtml(item.period || "-")}<br><span class="muted">지급 ${escapeHtml(item.pay_date || item.payDate || "-")}</span></td>
+            <td>${escapeHtml(item.payroll_month || item.period || "-")}<br><span class="muted">지급 ${escapeHtml(item.pay_date || item.payDate || "-")}</span></td>
             <td>${escapeHtml(item.employee_name || item.employeeName || "-")}<br><span class="muted">${escapeHtml(item.employee_email_masked || item.employee_email || item.employeeEmail || "")}</span></td>
             <td>${escapeHtml(item.branch || "-")}<br><span class="muted">${escapeHtml(employmentTaxTypeLabels[employmentTaxType] || item.employment_tax_label || "-")}</span></td>
             <td class="num">${formatMoney(item.gross_pay || item.grossPay || 0)}<br><span class="muted">과세 ${formatMoney(item.taxable_pay || item.taxablePay || 0)} · 비과세 식대 ${formatMoney(item.non_tax_meal_allowance || item.nonTaxMealAllowance || 0)}</span><br><span class="muted">실지급 ${formatMoney(item.net_pay || item.netPay || 0)}</span></td>
             <td><span class="badge ${status[1]}">${escapeHtml(status[0])}</span></td>
-            <td class="num" style="display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap">${actions}</td>
+            <td class="num" style="display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap">${actions}${pdfAction}</td>
           </tr>`;
       }).join("");
     }
@@ -8994,8 +9007,11 @@
 
     function applyRegularSalaryPreset(overwrite = false) {
       if (!els.contractForm || els.contractForm.contractType?.value !== "regular") return;
+      // overwrite 는 기본급·식대·임금구성 문구만 다시 계산한다. 이미 입력한 월 총액(wage)은 덮지 않는다.
+      // 예전에는 식사 제공 여부 변경·표준 문구 채우기(overwrite=true)가 약정 총액을 300만원으로 조용히 바꿨다.
+      // 300만원 예시는 '월 300만원 급여안 적용' 버튼이 확인 후 wage 를 직접 넣는다.
       const gross = Number(els.contractForm.wage?.value || 3000000);
-      if (overwrite || !Number(els.contractForm.wage?.value || 0)) els.contractForm.wage.value = "3000000";
+      if (!Number(els.contractForm.wage?.value || 0)) els.contractForm.wage.value = "3000000";
       const appliedGross = Number(els.contractForm.wage?.value || gross || 3000000);
       const cashMeal = els.contractForm.mealProvision?.value === "cash_no_meal";
       const meal = cashMeal ? Math.min(200000, appliedGross) : 0;
@@ -9817,7 +9833,7 @@
       els.payrollForm.employeeName.value = statement.employeeName || statement.employee_name || "";
       els.payrollForm.employeeEmail.value = statement.employeeEmail || statement.employee_email || "";
       els.payrollForm.branch.value = statement.branch || "";
-      els.payrollForm.period.value = statement.period || selectedMonth();
+      els.payrollForm.period.value = statement.payroll_month || statement.period || selectedMonth();
       els.payrollForm.payDate.value = statement.payDate || statement.pay_date || "";
       els.payrollForm.employmentTaxType.value = statement.employmentTaxType || statement.employment_tax_type || "four_insurance";
       els.payrollForm.grossPay.value = statement.grossPay || statement.gross_pay || "";
@@ -9827,10 +9843,12 @@
       els.payrollForm.taxWithholding.value = statement.taxWithholding || statement.tax_withholding || 0;
       els.payrollForm.insuranceDeduction.value = statement.insuranceDeduction || statement.insurance_deduction || 0;
       els.payrollForm.otherDeduction.value = statement.otherDeduction || statement.other_deduction || 0;
-      els.payrollForm.status.value = statement.status || "draft";
+      // 서버 _save_payroll_record 는 상태를 항상 draft 로 저장하고, 확정·지급 명세는 덮지 않고
+      // supersedes_id 로 이어지는 새 버전(정정 초안)을 만든다. 확정·지급은 행의 '급여 확정'·'지급 완료 기록'으로만 바꾼다.
+      els.payrollForm.status.value = "draft";
       els.payrollForm.memo.value = statement.memo || "";
       if (els.payrollEditBadge) {
-        els.payrollEditBadge.textContent = "수정 중";
+        els.payrollEditBadge.textContent = ["confirmed", "paid"].includes(statement.status) ? "정정 초안 작성 중" : "수정 중";
         els.payrollEditBadge.className = "badge warn";
       }
       setView("payroll");
@@ -13548,6 +13566,7 @@
     }
 
     function buildApiError(response, payload, fallback) {
+      if (response.status === 401 && hasServerAuth()) handleExpiredServerSession();
       const inactive = isTenantMembershipInactive(response, payload);
       const error = new Error(inactive ? TENANT_MEMBERSHIP_INACTIVE_MESSAGE : (payload.detail || payload.message || fallback));
       error.status = response.status;
@@ -13571,16 +13590,117 @@
       return payload;
     }
 
+    // PEOPLE-ACTIONS:BEGIN
+    const peopleRequests = new Map();
+    // timeoutSignal=true: options.signal 이 financeApi·workspaceApi 의 시간 제한용이다(호출자 취소가 아님).
+    // 합쳐진 요청은 첫 호출자의 시간 제한을 따르고, 제한이 지나면 모두 같은 '응답 지연' 오류를 받는다.
+    async function peopleFetch(url, options = {}, { timeoutSignal = false } = {}) {
+      const method = String(options.method || "GET").toUpperCase();
+      const scoped = /\/(payroll|contracts|employees|onboarding|employee-|attendance)(\/|\?|$)/.test(url);
+      // 같은 변경 요청의 중복 클릭만 합친다. 문자열 본문이 아니거나(FormData 등) 호출자가 취소 signal 을 넘긴 요청은 합치지 않는다.
+      if (["GET", "HEAD"].includes(method) || !scoped || (options.signal && !timeoutSignal) ||
+          (options.body != null && typeof options.body !== "string")) return fetch(url, options);
+      const headers = [...new Headers(options.headers).entries()].sort();
+      const key = JSON.stringify([serverAuthToken(), url, method, options.body, headers, options.credentials]);
+      let pending = peopleRequests.get(key);
+      if (!pending) {
+        pending = fetch(url, options).finally(() => peopleRequests.delete(key));
+        peopleRequests.set(key, pending);
+      }
+      // 원본 응답은 읽지 않고 두고, 모든 호출자(첫 호출자 포함)가 각자 clone 을 받는다.
+      return (await pending).clone();
+    }
+
+    async function runPayrollAction(button) {
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        const action = button.dataset.payrollAction;
+        const id = button.dataset.statementId;
+        const base = `/payroll/${encodeURIComponent(id || "")}`;
+        if (action === "versions") {
+          const payload = await financeApi(`${base}/versions`);
+          alert((payload.versions || []).map(row =>
+            `버전 ${row.version || 1} · ${payrollStatusLabels[row.status]?.[0] || "작성중"} · 실지급 ${formatMoney(row.net_pay || 0)} · ${String(row.updated_at || "").slice(0, 16)}`
+          ).join("\n") || "수정 이력이 없습니다.");
+        } else if (action === "pdf") {
+          const response = await fetch(`/api/v1/yeoljeong-finance${base}/pdf`, { headers: apiAuthOnlyHeaders() });
+          if (!response.ok) throw buildApiError(response, await response.json().catch(() => ({})), "명세 조회 실패");
+          const url = URL.createObjectURL(await response.blob());
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = "급여명세서.pdf";
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
+        } else {
+          if (!canManageOnboarding()) throw new Error("관리자 권한이 필요합니다.");
+          const labels = { confirm: "급여를 확정", pay: "실제 이체를 확인하고 지급 완료로 기록", deliver: "직원에게 급여명세를 전달", resend: "직원에게 급여명세를 다시 전달" };
+          if (!labels[action]) throw new Error("처리할 수 없는 급여 작업입니다.");
+          if (!confirm(`${labels[action]}하시겠습니까?`)) return;
+          const endpoint = action === "resend" ? "deliver?resend=true" : action;
+          const result = await financeApi(`${base}/${endpoint}`, { method: "POST" });
+          await loadPayrollStatements();
+          if (["deliver", "resend"].includes(action) && !["sent", "duplicate"].includes(result.status)) {
+            throw new Error(result.delivery?.error_detail || "명세 전달에 실패했습니다. 수신 동의와 발송 설정을 확인해 주세요.");
+          }
+          showToast(result.status === "duplicate" ? "이미 전달한 명세입니다." : "급여 작업을 완료했습니다.");
+        }
+      } catch (error) {
+        showToast(`급여 처리 실패: ${error.message}`);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function createAttendancePayrollDraft(button) {
+      if (button.disabled) return;
+      const form = els.payrollForm;
+      if (!canManageOnboarding()) return showToast("관리자 권한이 필요합니다.");
+      if (!form.employeeRequestId.value || !form.period.value) return showToast("직원과 정산월을 먼저 선택해 주세요.");
+      if (!confirm("선택한 직원과 정산월의 확정 근태로 초안을 저장합니다. 기존 작성중 명세의 금액이 바뀔 수 있습니다. 계속하시겠습니까?")) return;
+      button.disabled = true;
+      try {
+        const payload = await financeApi("/payroll/draft-from-attendance", { method: "POST", body: JSON.stringify({
+          employee_request_id: form.employeeRequestId.value, payroll_month: form.period.value
+        }) });
+        await loadPayrollStatements();
+        fillPayrollForm(payload.statement);
+        showToast("확정 근태를 반영한 초안을 저장했습니다. 공제액을 확인해 주세요.");
+      } catch (error) {
+        showToast(`근태 반영 실패: ${error.message}`);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function updatePayrollConsent(button) {
+      if (button.disabled) return;
+      const agree = button.dataset.payrollConsent === "agree";
+      if (!confirm(agree
+        ? "급여명세서를 전자 문서로 전달받는 데 동의하시겠습니까? 이 화면에서 언제든 철회할 수 있습니다."
+        : "전자 급여명세 수신 동의를 철회하시겠습니까?")) return;
+      button.disabled = true;
+      try {
+        await financeApi("/payroll/delivery-consent", { method: "POST", body: JSON.stringify({ agree, consent_version: "payroll-delivery-v1" }) });
+        showToast(agree ? "수신 동의를 저장했습니다." : "수신 동의를 철회했습니다.");
+      } catch (error) {
+        showToast(`수신 동의 처리 실패: ${error.message}`);
+      } finally {
+        button.disabled = false;
+      }
+    }
+    // PEOPLE-ACTIONS:END
+
     async function financeApi(path, options = {}) {
       assertEmployeePreviewReadOnly(options.method);
       const controller = new AbortController();
       const timeoutMs = Number(options.timeoutMs || 15000);
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      const response = await fetch(`/api/v1/yeoljeong-finance${path}`, {
+      const response = await peopleFetch(`/api/v1/yeoljeong-finance${path}`, {
         ...options,
         headers: { ...apiHeaders(), ...(options.headers || {}) },
         signal: options.signal || controller.signal
-      }).catch(error => {
+      }, { timeoutSignal: !options.signal }).catch(error => {
         if (error?.name === "AbortError") throw new Error(`API 응답 지연: ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다.`);
         throw error;
       }).finally(() => clearTimeout(timeoutId));
@@ -13596,11 +13716,11 @@
       const controller = new AbortController();
       const timeoutMs = Number(options.timeoutMs || 15000);
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      const response = await fetch(`/api/v1/workspaces${path}`, {
+      const response = await peopleFetch(`/api/v1/workspaces${path}`, {
         ...options,
         headers: { ...apiHeaders(), ...(options.headers || {}) },
         signal: options.signal || controller.signal
-      }).catch(error => {
+      }, { timeoutSignal: !options.signal }).catch(error => {
         if (error?.name === "AbortError") throw new Error(`API 응답 지연: ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다.`);
         throw error;
       }).finally(() => clearTimeout(timeoutId));
@@ -14267,7 +14387,21 @@
 	      return payload;
 	    }
 
+    async function withPeopleForm(form, action) {
+      if (form.dataset.peopleBusy === "1") return;
+      form.dataset.peopleBusy = "1";
+      const controls = [...form.querySelectorAll('[type="submit"]')].map(control => [control, control.disabled]);
+      controls.forEach(([control]) => { control.disabled = true; });
+      try {
+        return await action();
+      } finally {
+        delete form.dataset.peopleBusy;
+        controls.forEach(([control, disabled]) => { control.disabled = disabled; });
+      }
+    }
+
     async function createEmployeeInvite(form) {
+      return withPeopleForm(form, async () => {
       if (!canManageOnboarding()) {
         showToast("직원 초대는 총괄 운영관리자 또는 운영관리자 권한이 필요합니다.");
         return;
@@ -14304,7 +14438,8 @@
           : "초대가 생성됐지만 토큰이 응답에 없습니다. 대기 초대 목록을 확인하십시오.";
       }
       if (link) {
-        copyText(inviteShareMessage(invite, link)).then(copied => showToast(copied ? "초대 문구를 복사했습니다." : "초대 링크를 생성했습니다."));
+        const copied = await copyText(inviteShareMessage(invite, link));
+        showToast(copied ? "초대 문구를 복사했습니다." : "초대 링크를 생성했습니다.");
       } else {
         showToast("초대를 생성했습니다.");
       }
@@ -14313,9 +14448,11 @@
       initSelects();
       await loadEmployeeInvites();
       renderOperationalPages();
+      });
     }
 
     async function acceptEmployeeInvite(form) {
+      return withPeopleForm(form, async () => {
       const token = form.token.value.trim();
       const password = form.password.value;
       if (!token || !password) {
@@ -14339,9 +14476,11 @@
       form.reset();
       setView("onboarding");
       showToast("초대를 수락했습니다. 입사서류를 등록하십시오.");
+      });
     }
 
     async function submitEmployeeJoinRequest(form) {
+      return withPeopleForm(form, async () => {
       if (!hasServerAuth()) {
         showToast("회원가입 또는 로그인 후 가입요청을 보낼 수 있습니다.");
         return;
@@ -14371,6 +14510,7 @@
       showToast(payload.request?.status === "approved"
         ? "가입이 자동 승인되었습니다. 사업자·지점이 잘못되었다면 관리자에게 변경을 요청하십시오."
         : "가입요청을 보냈습니다. 관리자가 직원관리 화면에서 승인합니다.");
+      });
     }
 
     async function reviewEmployeeJoinRequest(requestId, action) {
@@ -14381,6 +14521,8 @@
       const target = employeeJoinRequests.find(item => String(item.id || "") === String(requestId));
       if (action === "rejected" && String(target?.status || "").toLowerCase() === "approved"
           && !window.confirm(`${target?.name || "직원"}님은 이미 승인(자동승인 포함)된 직원입니다. 반려하면 사업자 접근 권한이 회수됩니다. 계속할까요?`)) return;
+      if (action === "rejected" && String(target?.status || "").toLowerCase() !== "approved"
+          && !confirm("선택한 직원의 가입요청을 반려하시겠습니까?")) return;
       const memo = action === "approved" ? "입사 요청 승인" : "입사 요청 반려";
       await financeApi(`/employees/join-requests/${encodeURIComponent(requestId)}`, {
         method: "PATCH",
@@ -14619,6 +14761,7 @@
     }
 
     async function uploadOnboardingDocument(form) {
+      return withPeopleForm(form, async () => {
       if (!hasServerAuth()) {
         showToast("회원가입 또는 로그인 후 입사서류를 업로드할 수 있습니다.");
         return;
@@ -14654,6 +14797,7 @@
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
+        if (response.status === 401) handleExpiredServerSession();
         const message = response.status === 413
           ? "파일은 최대 15MB까지 업로드할 수 있습니다. 파일 크기를 줄인 뒤 다시 시도하십시오."
           : (payload.detail || payload.message || `UPLOAD ${response.status}`);
@@ -14663,6 +14807,7 @@
       prefillOnboardingForm();
       await loadOnboardingDocuments();
       showToast("입사서류를 업로드했습니다.");
+      });
     }
 
     async function deleteOnboardingDocument(documentId) {
@@ -14730,7 +14875,7 @@
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.detail || payload.message || `파일 조회 ${response.status}`);
+          throw buildApiError(response, payload, `파일 조회 ${response.status}`);
         }
         const blob = await response.blob();
         const contentType = String(response.headers.get("content-type") || blob.type || "application/octet-stream").split(";")[0];
@@ -16050,6 +16195,13 @@
     }
 
     function bindEvents() {
+      document.getElementById("payrollAttendanceDraftBtn")?.addEventListener("click", event => createAttendancePayrollDraft(event.currentTarget));
+      document.addEventListener("click", event => {
+        const action = event.target.closest("[data-payroll-action]");
+        if (action) runPayrollAction(action);
+        const consent = event.target.closest("[data-payroll-consent]");
+        if (consent) updatePayrollConsent(consent);
+      });
       document.querySelectorAll("[data-ledger-upload]").forEach(panel => {
         panel.querySelector("[data-upload-submit]")?.addEventListener("click", () => submitLedgerUpload(panel).catch(error => showToast(error.message)));
         panel.querySelector("[data-upload-refresh]")?.addEventListener("click", () => loadLedgerUploads(panel.dataset.ledgerUpload).catch(error => showToast(error.message)));
@@ -16505,8 +16657,9 @@
         uploadLocalShifts(state.shifts.map(item => item.id)).catch(err => showToast(`근태 서버 저장 실패: ${err.message}`));
       });
 
-      els.contractForm.addEventListener("submit", async event => {
+      els.contractForm.addEventListener("submit", event => {
         event.preventDefault();
+        withPeopleForm(event.currentTarget, async () => {
         applyContractDefaults(false);
         const draft = contractDraftFromForm();
         try {
@@ -16619,10 +16772,12 @@
         clearContractForm();
         renderAll();
         showToast(target ? "계약서를 수정했습니다." : "계약서를 저장했습니다.");
+        }).catch(error => showToast(`저장 실패: ${error.message}`));
       });
 
-      els.payrollForm?.addEventListener("submit", async event => {
+      els.payrollForm?.addEventListener("submit", event => {
         event.preventDefault();
+        withPeopleForm(event.currentTarget, async () => {
         maybeAutoFreelancerTax(els.payrollForm);
         const data = Object.fromEntries(new FormData(els.payrollForm).entries());
         const grossPay = Number(data.grossPay || 0);
@@ -16665,9 +16820,11 @@
         payrollStatements = [saved, ...payrollStatements.filter(item => item.id !== saved.id)];
         state.payrollStatements = payrollStatements;
         saveState();
+        await loadPayrollStatements();
         clearPayrollForm();
         renderAll();
         showToast(target ? "급여내역서를 수정했습니다." : "급여내역서를 저장했습니다.");
+        }).catch(error => showToast(`저장 실패: ${error.message}`));
       });
 
       els.contractForm?.employeeRequestId?.addEventListener("change", event => {
@@ -16694,6 +16851,7 @@
           showToast("정규직 근로계약서에서만 월 300만원 급여안을 적용할 수 있습니다.");
           return;
         }
+        if (!confirm("현재 급여 입력을 월 300만원 예시로 바꾸시겠습니까? 사업장 약정 금액을 확인해 주세요.")) return;
         els.contractForm.wage.value = "3000000";
         applyRegularSalaryPreset(true);
         updateContractPreview(null, "월 300만원 급여안 반영");
@@ -17210,6 +17368,7 @@
           showToast("거래를 삭제했습니다.");
         }
         if (shiftId) {
+          if (!confirm("선택한 미저장 근태를 삭제하시겠습니까?")) return;
           state.shifts = state.shifts.filter(item => item.id !== shiftId);
           saveState();
           renderAll();
@@ -17219,6 +17378,7 @@
           uploadLocalShifts([uploadShiftId]).catch(err => showToast(`근태 서버 저장 실패: ${err.message}`));
         }
         if (serverShiftId) {
+          if (!confirm("선택한 서버 근태를 삭제하시겠습니까?")) return;
           const shiftBusinessId = event.target.dataset.shiftBusiness || "";
           workspaceApi(`/${encodeURIComponent(shiftBusinessId)}/attendance/records/${encodeURIComponent(serverShiftId)}`, { method: "DELETE" })
             .then(() => loadAttendanceRecords())
@@ -17404,7 +17564,9 @@
       syncServerAuthCookieFromStorage();
       if (!rememberedRecipeRedirect && await shouldOpenV41AppVerified() && openV41App()) return;
       // 저장된 화면이 없으면 setView 가 불리지 않아 기본 화면(오늘 홈)의 5지표가 "불러오는 중"으로 멈춘다.
+      const peopleEntry = new URLSearchParams(window.location.search).get("people_view");
       const restoredSavedView = restoreUiState();
+      if (["employees", "attendance", "payroll", "onboarding", "contracts", "approvals"].includes(peopleEntry)) setView(peopleEntry);
       if (!restoredSavedView && currentView === "dashboard" && hasServerAuth()) {
         loadTodayHome().catch(err => showToast(`오늘 홈 집계 실패: ${err.message}`));
       }

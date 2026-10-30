@@ -147,7 +147,8 @@ def test_frontend_handles_inactive_membership_code_in_api_wrappers():
     html = _html()
     assert 'TENANT_MEMBERSHIP_INACTIVE_CODE = "tenant_membership_inactive"' in html
     assert 'headers?.get("X-Auth-Error-Code")' in html
-    assert len(re.findall(r"throw buildApiError\(response, payload,", html)) == 3
+    # financeApi·workspaceApi·authApi + 입사서류 파일 열기(2026-10-30, 401·소속 해제 처리 공유)
+    assert len(re.findall(r"throw buildApiError\(response, payload,", html)) == 4
     body = re.search(r"function handleTenantMembershipInactive\(\) \{(.*?)\n    \}\n", html, re.S).group(1)
     assert "tenantMembershipInactiveHandled" in body
     assert "clearServerAuthToken()" in body and "saveAuthSession(null)" in body
