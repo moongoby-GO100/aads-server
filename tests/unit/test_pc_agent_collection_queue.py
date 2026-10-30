@@ -70,10 +70,9 @@ def test_sync_db_api_fails_closed_inside_running_event_loop(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_sync_db_api_releases_pool_between_asyncio_run_calls(monkeypatch):
-    """Regression: the drain CLI calls several sync queue APIs in a row. Each one
-    uses asyncio.run(), which closes its loop, so a pool cached from the previous
-    call must be released or the next call fails with 'Event loop is closed'."""
+def test_sync_db_api_reuses_private_loop_between_calls(monkeypatch):
+    """Verify consecutive sync calls use the same private loop, keeping the pool
+    bound to that loop and avoiding 'Event loop is closed'."""
     monkeypatch.setenv("DATABASE_URL", "postgresql://configured")
 
     import app.core.db_pool as db_pool_module
@@ -93,7 +92,7 @@ def test_sync_db_api_releases_pool_between_asyncio_run_calls(monkeypatch):
 
     assert queue_module._run_db(fake_operation("first")) == "first"
     assert queue_module._run_db(fake_operation("second")) == "second"
-    assert events == ["op:first", "close_pool", "op:second", "close_pool"]
+    assert events == ["op:first", "op:second"]
 
 
 def test_async_db_error_does_not_fall_back_to_json(tmp_path, monkeypatch):

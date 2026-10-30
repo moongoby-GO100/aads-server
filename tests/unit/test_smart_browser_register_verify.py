@@ -130,9 +130,8 @@ async def test_without_verify_behaviour_is_unchanged(captured):
     spec = captured["spec"]
     assert "verify" not in spec
     assert not {"starts_when", "succeeds_when", "lane"} & set(spec["metadata"])
-    assert set(spec["metadata"]) == {
-        "recorded", "credentials", "source_chat_session_id", "screen_e2e"
-    }
+    # c158d4fb(runner-e57b1bc7)에서 recorder 가 credentials 메타를 더 넣지 않게 바뀌었음.
+    assert set(spec["metadata"]) == {"recorded", "source_chat_session_id", "screen_e2e"}
 
 
 def test_recorder_default_has_no_verify():
