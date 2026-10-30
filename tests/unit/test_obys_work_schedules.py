@@ -299,6 +299,11 @@ def test_migration_and_ui_contract():
     ):
         assert marker in html
     assert "근무표 미연결" not in html
+    # 근무 일정은 이메일을 직접 치지 않고 승인 직원 목록에서 고른다(2026-10-30 대표 지시).
+    assert "scheduleEmployeePicker" in html and "schedulePickAll" in html
+    assert "/employees/approved?business_id=" in html
+    assert "근무표 직원 이메일" not in html and 'name="emails"' not in html
+    assert "근무 일정을 등록할 직원을 선택하세요." in html
     assert "employeeWorkSchedules" in Path("app/static/apps/obys/index.html").read_text()
 
 
