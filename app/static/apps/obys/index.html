@@ -3060,16 +3060,16 @@
           </div>
         </div>
         <div class="top-actions">
-          <a class="doc-link app-only hidden" data-doc-key="index" href="/static/reports/20260716_yeoljeong_store_assistant_docs_index.html" target="_blank" rel="noopener noreferrer">문서</a>
-          <a class="doc-link app-only hidden" data-doc-key="technical" href="/static/reports/20260716_yeoljeong_store_assistant_technical.html" target="_blank" rel="noopener noreferrer">기술</a>
-          <a class="doc-link app-only hidden" data-doc-key="architecture" href="/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html" target="_blank" rel="noopener noreferrer">기획</a>
-          <a class="doc-link app-only hidden" data-doc-key="dbTransition" href="/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html" target="_blank" rel="noopener noreferrer">DB전환</a>
-          <a class="doc-link app-only hidden" data-external-link="unniHome" href="https://unni.newtalk.kr/" target="_blank" rel="noopener noreferrer">언니냉면 홈</a>
-          <a class="doc-link app-only hidden" data-external-link="unniRecipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">레시피</a>
-          <button id="sampleBtn" class="app-only hidden" title="샘플 데이터 다시 불러오기">샘플</button>
-          <button id="importBtn" class="app-only hidden" title="CSV 또는 JSON 파일 가져오기">가져오기</button>
-          <button id="exportBtn" class="app-only hidden" title="현재 데이터를 JSON으로 저장">내보내기</button>
-          <button id="resetBtn" class="danger app-only hidden" title="브라우저 저장 데이터를 초기화">초기화</button>
+          <a data-development-tool class="doc-link app-only hidden" data-doc-key="index" href="/static/reports/20260716_yeoljeong_store_assistant_docs_index.html" target="_blank" rel="noopener noreferrer">문서</a>
+          <a data-development-tool class="doc-link app-only hidden" data-doc-key="technical" href="/static/reports/20260716_yeoljeong_store_assistant_technical.html" target="_blank" rel="noopener noreferrer">기술</a>
+          <a data-development-tool class="doc-link app-only hidden" data-doc-key="architecture" href="/static/reports/20260716_yeoljeong_store_assistant_architecture_design_plan.html" target="_blank" rel="noopener noreferrer">기획</a>
+          <a data-development-tool class="doc-link app-only hidden" data-doc-key="dbTransition" href="/static/reports/20260716_yeoljeong_store_assistant_db_transition_plan.html" target="_blank" rel="noopener noreferrer">DB전환</a>
+          <a data-development-tool class="doc-link app-only hidden" data-external-link="unniHome" href="https://unni.newtalk.kr/" target="_blank" rel="noopener noreferrer">언니냉면 홈</a>
+          <a data-development-tool class="doc-link app-only hidden" data-external-link="unniRecipes" href="https://fb.newtalk.kr/unni-naengmyeon/recipes">레시피</a>
+          <button id="sampleBtn" data-development-tool class="app-only hidden" title="샘플 데이터 다시 불러오기">샘플</button>
+          <button id="importBtn" data-development-tool class="app-only hidden" title="CSV 또는 JSON 파일 가져오기">가져오기</button>
+          <button id="exportBtn" data-development-tool class="app-only hidden" title="현재 데이터를 JSON으로 저장">내보내기</button>
+          <button id="resetBtn" data-development-tool class="danger app-only hidden" title="브라우저 저장 데이터를 초기화">초기화</button>
           <div class="auth-panel">
             <div id="authState" class="auth-state">
               <span class="badge warn">로그인 필요</span>
@@ -3185,8 +3185,8 @@
         <div class="sidebar-brand"><span class="sidebar-mark">FB</span><span>오비서</span></div>
         <div class="workspace-card">
           <small>현재 사업장</small>
-          <b>열정국밥 통합 운영</b>
-          <small>중화점 · 성신여대점 · 미아점</small>
+          <b id="legacyWorkspaceName">사업장 확인 중</b>
+          <small id="legacyWorkspaceBranches"></small>
         </div>
         <nav class="side-nav" aria-label="좌측 주요 화면">
           <div class="side-label" data-nav-group="today">오늘</div>
@@ -7217,11 +7217,11 @@
         button.classList.toggle("hidden", isAuthed && !allowed);
         button.disabled = isAuthed && !allowed;
       });
-      document.querySelectorAll("[data-external-link]").forEach(link => {
+      document.querySelectorAll("[data-external-link]:not([data-development-tool])").forEach(link => {
         link.classList.toggle("hidden", !isAuthed);
       });
       [els.sampleBtn, els.importBtn, els.exportBtn, els.resetBtn, els.csvBtn, els.downloadCsvBtn, els.downloadShiftCsvBtn].forEach(button => {
-        if (button) button.classList.toggle("hidden", !isAuthed || employeeMode);
+        if (button && !button.hasAttribute("data-development-tool")) button.classList.toggle("hidden", !isAuthed || employeeMode);
       });
       document.querySelectorAll("#appFilters label").forEach(label => {
         label.classList.toggle("hidden", isAuthed && employeeMode);
@@ -12309,6 +12309,9 @@
     }
 
     function renderAll() {
+        document.getElementById("legacyWorkspaceName").textContent = settings().businesses.map(b => b.name).join(" · ");
+        document.getElementById("legacyWorkspaceBranches").textContent = settings().branches.map(b => b.name).join(" · ");
+
       renderSettings();
       renderAuthState();
       renderKpis();
@@ -12766,6 +12769,12 @@
       });
     }
 
+    function syncDevelopmentTools() {
+      const isAuthed = hasServerAuth();
+      const permissions = authPermissions();
+      document.querySelectorAll("[data-development-tool]").forEach(el => el.classList.toggle("hidden", !(isAuthed && permissions.can_manage_settings === true && window.OBYS_DEVELOPMENT_TOOLS === true)));
+    }
+
     function setView(view) {
       const permitted = allowedViews();
       currentView = permitted.includes(view) ? view : defaultView();
@@ -12801,6 +12810,7 @@
       saveUiState();
       syncBottomTabs();
       queueEmployeePortalSync();
+      syncDevelopmentTools();
       applyAccessPolicy();
     }
 
@@ -14956,6 +14966,7 @@
       els.gateLoginForm.reset();
       if (followPostLoginRedirect()) return;
       if (await shouldOpenV41AppVerified() && openV41App()) return;
+      if (!await verifyLegacyEntry()) return;
       setView(savedUiView() || defaultView());
       renderAuthState();
       refreshFinanceSessionInBackground();
@@ -15224,7 +15235,8 @@
       els.signupBtn.classList.toggle("hidden", true);
       els.logoutBtn.classList.toggle("hidden", !isAuthed);
       if (els.authGate) els.authGate.classList.toggle("hidden", isAuthed);
-      document.querySelectorAll(".app-only").forEach(el => el.classList.toggle("hidden", !isAuthed));
+      document.querySelectorAll(".app-only:not([data-development-tool])").forEach(el => el.classList.toggle("hidden", !isAuthed));
+      syncDevelopmentTools();
       applyAccessPolicy();
       const canAutomate = canManageAutomation();
       [els.refreshServerAccountsBtn, els.syncDeliveryBtn, els.syncFinancialBtn, els.serverImportSettlementBtn].forEach(button => {
@@ -17551,7 +17563,52 @@
       });
     }
 
+    let legacyEntryModulesPromise;
+    function loadLegacyEntryModules() {
+      return legacyEntryModulesPromise ||= loadLegacyEntryModulesOnce();
+    }
+
+    async function loadLegacyEntryModulesOnce() {
+      // The parser may still be reading the deferred tags after the session request.
+      if (document.readyState === "loading") await new Promise(resolve => document.addEventListener("DOMContentLoaded", resolve, {once: true}));
+      const sources = document.querySelectorAll("script[data-legacy-module]");
+      if (sources.length !== 2) throw new Error(`Legacy module tags missing: ${sources.length}`);
+      for (const source of sources) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = source.src;
+          script.async = false;
+          script.dataset.legacyLoadedModule = source.src;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error(`Legacy module load failed: ${source.src}`));
+          document.head.appendChild(script);
+        });
+      }
+    }
+
+    // Check once before rendering defaults or starting any legacy data requests.
+    async function verifyLegacyEntry() {
+      if (!hasServerAuth()) return true;
+      try {
+        const session = await financeApi("/session");
+        if (session.legacy_access === true) {
+          saveAuthSession({...session, permissions_verified: true});
+          return true;
+        }
+      } catch (error) {
+        console.error("Legacy entry verification failed", error);
+        // Fail closed; raw server detail is never shown on this boundary.
+      }
+      state.settings.businesses = [];
+      state.settings.branches = [];
+      document.body.innerHTML = '<main style="max-width:640px;margin:12vh auto;padding:24px;font-family:sans-serif"><h1>이 화면은 기존 매장 전용입니다.</h1><a href="/static/apps/obys/admin.html" style="display:inline-block;padding:14px;background:#174f45;color:white;border-radius:8px">새 관리화면으로 이동</a></main>';
+      return false;
+    }
+
     async function init() {
+      if (!await verifyLegacyEntry()) return;
+      // Auto-loading modules must also wait for the tenant decision.
+      await loadLegacyEntryModules();
       initSelects();
       setDefaults();
       setAuthMode("login");
@@ -17596,11 +17653,14 @@
       }
     }
 
-    init();
+    init().catch(error => {
+      console.error("Legacy entry initialization failed", error);
+      document.body.innerHTML = '<main style="padding:24px"><p>화면을 새로고침해 주세요.</p></main>';
+    });
   </script>
   <script src="/static/apps/obys/modules/ledger-details.js?v=20261014-r1"></script>
-  <script src="/static/apps/obys/modules/clobe-collection.js?v=20261014-r1"></script>
-  <script src="/static/apps/obys/modules/data-overview.js?v=20261014-r1"></script>
+  <script type="application/obys-deferred" data-legacy-module src="/static/apps/obys/modules/clobe-collection.js?v=20261014-r1"></script>
+  <script type="application/obys-deferred" data-legacy-module src="/static/apps/obys/modules/data-overview.js?v=20261014-r1"></script>
   <script src="/static/apps/obys/modules/account-recovery.js?v=20261014-r2"></script>
   <script src="/static/apps/obys/modules/store-assistant-v2.js"></script>
   <script>

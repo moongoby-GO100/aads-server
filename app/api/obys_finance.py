@@ -518,9 +518,12 @@ class BankQuickInquiryPayload(BaseModel):
 
 @router.get("/session")
 async def get_session(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    if not is_legacy_obys_tenant(current_user):
-        return await upload_svc.session_for_current_user(current_user)
-    return await run_in_threadpool(svc.session_for_user, current_user)
+    legacy_access = is_legacy_obys_tenant(current_user)
+    if not legacy_access:
+        session = await upload_svc.session_for_current_user(current_user)
+    else:
+        session = await run_in_threadpool(svc.session_for_user, current_user)
+    return {**session, "legacy_access": legacy_access}
 
 
 @router.get("/onboarding/document-types")

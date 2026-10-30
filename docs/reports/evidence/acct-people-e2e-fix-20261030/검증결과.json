@@ -1,0 +1,33 @@
+{
+  "host-unit": {
+    "exit_code": 0
+  },
+  "compile": {
+    "exit_code": 0
+  },
+  "diff-check": {
+    "exit_code": 0
+  },
+  "browser-attempt": {
+    "exit_code": 1
+  },
+  "inline-js": {
+    "exit_code": 0,
+    "scripts": 3
+  },
+  "required-unit": {
+    "exit_code": 2,
+    "reason": "기준 이미지 없음: aads-server / aads-server-green"
+  },
+  "server-tests-host": {
+    "exit_code": 2,
+    "reason": "asyncpg / fastapi 미설치, 수집 실패"
+  },
+  "browser": {
+    "status": "호스트 실행 필요",
+    "screens": 0,
+    "result_json_generated": false,
+    "403": "미검증",
+    "pageerror": "미검증"
+  }
+}
