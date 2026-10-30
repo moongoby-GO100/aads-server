@@ -231,6 +231,7 @@ async def register_goal(
             "active" if activate else "draft",
         )
         milestone_ids = []
+        lead_self_assigned_count = 0
 
         async def create(
             node: dict, kind: str, ms_id: str, path: str, parent_id: str | None = None
@@ -261,10 +262,10 @@ async def register_goal(
         for i, ms in enumerate(inp["milestones"]):
             ms_id = str(uuid4())
             milestone_ids.append(ms_id)
-            await conn.execute(
+            inserted_owner_session = await conn.fetchval(
                 """INSERT INTO milestones (id,goal_id,tenant_id,project,title,description,completion_criteria,
                    sequence_order,auto_advance,status,owner_role_key,owner_session_id)
-                   VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,'pending',$10,$11::uuid)""",
+                   VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,'pending',$10,$11::uuid) RETURNING owner_session_id::text""",
                 ms_id,
                 goal_id,
                 tenant_id,
@@ -277,6 +278,9 @@ async def register_goal(
                 owner_role,
                 owner_session,
             )
+            # Count successful INSERT assignments, rather than requested milestone ids.
+            if inserted_owner_session and inserted_owner_session == str(owner_session):
+                lead_self_assigned_count += 1
             for j, epic in enumerate(ms["epics"]):
                 await create(epic, "epic", ms_id, f"{i}.{j}")
         if activate:
@@ -321,6 +325,18 @@ async def register_goal(
         "owner_session_id": owner_session,
         "owner_role_key": owner_role,
     }
+    # Registration currently assigns every milestone to the resolved lead.
+    from app.services.milestone_review import _alt_reviewer
+
+    warnings = [
+        f"주도가 직접 맡은 마일스톤 {lead_self_assigned_count}개 — "
+        "확인자는 같은 프로젝트 다른 담당이 필요"
+    ]
+    # Newly created goals may not yet have other goal_task_links participants.
+    # No alternate is a warning only; registration must remain allowed.
+    if not await _alt_reviewer(conn, goal_id, owner_session, owner_role, lead_session=owner_session):
+        warnings.append("no_alternate_reviewer")
+    result["warnings"] = warnings
     if warning:
         result["warning"] = warning
     return result

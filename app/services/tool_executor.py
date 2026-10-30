@@ -5383,7 +5383,25 @@ class ToolExecutor:
         # 빈 문자열이면 아래 자기확인 차단이 **절대 발동하지 않는다.**
         # 스키마에 session_id 가 없으므로 실제로 한 번도 발동한 적이 없었다.
         sid = _resolve_bound_chat_session_id(inp.get("session_id"))
+        if not sid:
+            return {
+                "error": "confirming_session_required",
+                "message": "판정 세션을 확인할 수 없어 판정할 수 없다",
+            }
+        tenant_id = None
         if mid and sid:
+            scope = await get_pool().fetchrow(
+                "SELECT s.tenant_id::text AS tenant_id, "
+                "s.tenant_id = m.tenant_id AS same_tenant "
+                "FROM milestones m CROSS JOIN chat_sessions s "
+                "WHERE m.id = $1::uuid AND s.id = $2::uuid",
+                mid, sid,
+            )
+            if not scope:
+                return {"error": "confirmation_scope_unavailable"}
+            if not scope["same_tenant"]:
+                return {"error": "cannot_confirm_foreign_tenant"}
+            tenant_id = scope["tenant_id"]
             own = await get_pool().fetchval(
                 "SELECT 1 FROM milestones m JOIN chat_sessions s ON s.id = $2::uuid "
                 "WHERE m.id = $1::uuid AND (m.owner_session_id = s.id "
@@ -5401,6 +5419,7 @@ class ToolExecutor:
             ok=bool(inp.get("ok")),
             reason=str(inp.get("reason") or ""),
             negative=bool(inp.get("negative")),
+            tenant_id=tenant_id,
         )
 
     async def _ask_session(self, inp: Dict[str, Any]) -> Any:

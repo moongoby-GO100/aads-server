@@ -21,7 +21,7 @@
 숫자가 있으면 `numbers` 를 필수로 받는다.
 
 **자기 확인은 확인이 아니다.** 주도가 맡은 마일스톤은 주도가 확인할 수
-없다 — 대표님께 올라간다.
+없다 — 같은 프로젝트 대체 확인자에게 먼저 요청하고 없으면 대표님께 올라간다.
 
 **주도가 확인을 안 하면 또 멈춘다.** 지시와 같은 재알림을 건다
 (30분 / 3회 / 그 뒤 대표님).
@@ -213,6 +213,40 @@ async def _lead_session(conn: Any, goal_id: str) -> Optional[str]:
     )
 
 
+async def _alt_reviewer(
+    conn: Any, goal_id: str, owner_session: Optional[str], owner_role: str,
+    *, lead_session: Optional[str] = None,
+) -> Optional[str]:
+    """같은 목표 참여자 중 같은 테넌트·프로젝트의 독립 확인자를 선택한다."""
+    rows = await conn.fetch(
+        """
+        SELECT s.id::text AS session_id, COALESCE(s.role_key, '') AS role_key
+        FROM goals g
+        JOIN chat_sessions s ON s.tenant_id = g.tenant_id
+        JOIN chat_workspaces w ON w.id = s.workspace_id AND w.tenant_id = g.tenant_id
+        WHERE g.id = $1::uuid AND upper(w.project_key) = upper(g.project)
+          AND s.id IS DISTINCT FROM $2::uuid
+          AND s.id IS DISTINCT FROM g.owner_session_id
+          AND ($3::text = '' OR COALESCE(s.role_key, '') <> $3)
+          AND (
+            EXISTS (SELECT 1 FROM goal_task_links l WHERE l.goal_id = g.id
+                    AND l.task_type = 'chat_session' AND l.task_id = s.id::text)
+            OR EXISTS (SELECT 1 FROM milestones m WHERE m.goal_id = g.id
+                       AND m.owner_session_id = s.id)
+          )
+        ORDER BY CASE WHEN upper(s.role_key) ~ '(PM|QA)' THEN 0 ELSE 1 END,
+                 s.updated_at DESC NULLS LAST, s.id
+        """,
+        goal_id, owner_session, owner_role or '',
+    )
+    if not rows:
+        return None
+    # Reuse the resolved lead when available. The lookup remains necessary for
+    # legacy goals whose lead comes from a goal_task_links %Lead participant.
+    lead = lead_session or await _lead_session(conn, goal_id)
+    return next((r["session_id"] for r in rows if r["session_id"] != lead), None)
+
+
 def _ask_text(row: Any, to_ceo: bool) -> str:
     ev = row["evidence"] or {}
     if isinstance(ev, str):
@@ -305,9 +339,15 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
                 (lead and row["owner_session"] and lead == row["owner_session"])
                 or (lead_role and row["owner"] and lead_role == row["owner"])
             )
+            alternate = None
+            if self_confirm and int(row["review_ask_count"] or 0) < _REVIEW_MAX_ASK:
+                alternate = await _alt_reviewer(
+                    conn, row["goal_id"], row["owner_session"], row["owner"],
+                    lead_session=lead,
+                )
             to_ceo = (
                 int(row["review_ask_count"] or 0) >= _REVIEW_MAX_ASK
-                or self_confirm
+                or (self_confirm and not alternate)
                 or not lead
             )
 
@@ -332,17 +372,22 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
                     logger.warning("review_escalate_failed", error=str(exc)[:160])
                 escalated += 1
 
-            if lead and not self_confirm:
+            reviewer = alternate or (lead if not self_confirm else None)
+            if reviewer:
                 try:
                     from app.services import chat_service as cs
 
                     _ask = _ask_text(row, to_ceo=False)
+                    if alternate:
+                        _ask = _ask.replace("[완료 확인 요청 — 주도]", "[완료 확인 요청 — 대체 확인자]", 1)
+                        _ask += ("\n주도가 직접 맡은 단계라 주도 대신 확인을 요청합니다"
+                                 f"\nMILESTONE_ID: {row['milestone_id']}")
                     # 사이클이 컷오버를 넘기면 이 프로세스는 스탠바이다 — active 로 넘긴다.
                     if not await cs.handoff_internal_turn_if_standby(
-                        lead, _ask, source="milestone_review",
+                        reviewer, _ask, source="milestone_review",
                     ):
                         async for _c in cs.send_message_stream(
-                            session_id=lead, content=_ask,
+                            session_id=reviewer, content=_ask,
                             intent_override="system_trigger", response_mode="quality",
                         ):
                             pass

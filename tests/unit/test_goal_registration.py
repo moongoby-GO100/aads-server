@@ -154,6 +154,9 @@ class MemoryConnection:
         raise AssertionError(sql)
 
     async def fetchval(self, sql, *a):
+        if "INSERT INTO milestones" in sql:
+            await self.execute(sql, *a)
+            return self.milestones[a[0]]["owner_session_id"]
         assert "FROM pipeline_jobs" in sql
         return 1
 
@@ -164,12 +167,13 @@ async def test_registration_counts_and_links():
     p = payload()
     p["linked_jobs"] = [{"milestone_index": 1, "job_id": "runner-job"}]
     result = await register_goal(conn, p, tenant_id=TENANT, session_id=SESSION)
-    assert {k: v for k, v in result.items() if k not in ("goal_id", "owner_session_id", "owner_role_key")} == {
+    assert {k: v for k, v in result.items() if k not in ("goal_id", "owner_session_id", "owner_role_key", "warnings")} == {
         "milestone_count": 3,
         "epic_count": 3,
         "story_count": 3,
         "task_count": 3,
     }
+    assert result["warnings"] == ["주도가 직접 맡은 마일스톤 3개 — 확인자는 같은 프로젝트 다른 담당이 필요", "no_alternate_reviewer"]
     assert len(conn.goals) == 1 and len(conn.items) == 9
     assert len(set(conn.keys)) == 9
     assert all(key.startswith(f"goal-register:{result['goal_id']}:") for key in conn.keys)
@@ -391,3 +395,31 @@ def test_tool_available_to_chat_and_schema_is_complete():
         assert "acceptance_criteria" in work["required"]
         if children:
             work = work["properties"][children]["items"]
+
+
+@pytest.mark.asyncio
+async def test_registration_warns_without_blocking_with_alternate(monkeypatch):
+    alternate = AsyncMock(return_value="qa-session")
+    monkeypatch.setattr("app.services.milestone_review._alt_reviewer", alternate)
+    result = await register_goal(MemoryConnection(), payload(), tenant_id=TENANT, session_id=SESSION)
+    assert result["milestone_count"] == 3
+    assert result["warnings"] == ["주도가 직접 맡은 마일스톤 3개 — 확인자는 같은 프로젝트 다른 담당이 필요"]
+    assert alternate.await_args.args[2:] == (SESSION, "dev")
+
+
+@pytest.mark.asyncio
+async def test_warning_counts_inserted_owners():
+    class ReassignedConnection(MemoryConnection):
+        async def fetchval(self, sql, *args):
+            value = await super().fetchval(sql, *args)
+            if "INSERT INTO milestones" in sql and len(self.milestones) == 2:
+                self.milestones[args[0]]["owner_session_id"] = "other-session"
+                return "other-session"
+            return value
+
+    result = await register_goal(ReassignedConnection(), payload(), tenant_id=TENANT, session_id=SESSION)
+    assert result["milestone_count"] == 3
+    assert result["warnings"] == [
+        "주도가 직접 맡은 마일스톤 2개 — 확인자는 같은 프로젝트 다른 담당이 필요",
+        "no_alternate_reviewer",
+    ]

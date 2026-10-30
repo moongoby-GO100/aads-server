@@ -43,6 +43,7 @@ def test_ceo_alert_titles_are_distinct_and_stable(monkeypatch, milestone_title):
     monkeypatch.setattr(
         milestone_review, "_lead_session", AsyncMock(return_value="lead")
     )
+    monkeypatch.setattr(milestone_review, "_alt_reviewer", AsyncMock(return_value=None))
     notify = AsyncMock(return_value=True)
     monkeypatch.setattr(ohvis_alert, "notify", notify)
 
