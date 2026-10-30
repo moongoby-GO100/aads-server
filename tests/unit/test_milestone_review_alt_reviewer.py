@@ -12,6 +12,8 @@ from app.services import milestone_review as review, orchestration_limits, ohvis
 @pytest.mark.parametrize('self_owned,alternate,count,asked,escalated', [
     (True, 'qa', 0, 1, 0), (True, None, 0, 0, 1),
     (True, 'qa', review._REVIEW_MAX_ASK, 0, 1), (False, None, 0, 1, 0),
+    (True, None, review._REVIEW_MAX_ASK + 1, 0, 1),
+    (False, None, review._REVIEW_MAX_ASK + 1, 1, 1),
 ])
 async def test_review_routing(monkeypatch, self_owned, alternate, count, asked, escalated):
     from app.services import chat_service
@@ -47,6 +49,8 @@ async def test_review_routing(monkeypatch, self_owned, alternate, count, asked, 
             assert '[완료 확인 요청 — 대체 확인자]' in content
             assert '주도가 직접 맡은 단계라 주도 대신 확인을 요청합니다' in content
             assert 'MILESTONE_ID: 12345678-id' in content
+    if not asked:
+        handoff.assert_not_awaited()
     if count >= review._REVIEW_MAX_ASK:
         alt.assert_not_awaited()
 

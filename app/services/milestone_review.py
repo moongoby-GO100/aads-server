@@ -41,6 +41,9 @@ logger = structlog.get_logger(__name__)
 _REVIEW_RETRY_MIN = int(os.getenv("MILESTONE_REVIEW_RETRY_MIN", "30"))
 _REVIEW_MAX_ASK = int(os.getenv("MILESTONE_REVIEW_MAX_ASK", "3"))
 
+# PostgreSQL ARE: 표식 줄 안의 완전한 작업 ID만 해소 근거로 인정한다.
+_RETRY_MARKER_PATTERN = r"(?n)^(RETRY_OF|RETRY_OF_LINK|REWORK_OF|SUPERSEDES)[ \t]*:[^\n]*\m{job_id}\M"
+
 # 완료 기준에 숫자가 들어 있으면 신고에도 숫자를 요구한다.
 _HAS_NUMBER = re.compile(r"\d")
 
@@ -84,12 +87,31 @@ async def lead_self_approval_evidence(conn: Any, milestone_id: str) -> dict:
             ("queued", "claimed", "running", "awaiting_approval", "approved", "deploying", "review_hold")]
     errors = [row["job_id"] for row in jobs if row["status"] == "error"
               or str(row["error_detail"] or "").strip()]
+    # 검증된 ID만 정규식에 넣는다. 잘못된 ID는 미해결 상태로 남긴다.
+    retry_ids = [job_id for job_id in errors
+                 if re.fullmatch(r"runner-[0-9a-f]{8}", job_id)]
+    for job_id in errors:
+        if job_id not in retry_ids:
+            logger.info("milestone_retry_invalid_job_id", job_id=job_id, milestone_id=milestone_id)
+    resolved = await conn.fetch(
+        "SELECT original.job_id FROM pipeline_jobs original "
+        "WHERE original.job_id = ANY($1::text[]) AND EXISTS ("
+        "WITH candidates AS MATERIALIZED ("
+        "SELECT successor.instruction FROM pipeline_jobs successor "
+        "WHERE successor.status = 'done' AND successor.review_verdict = 'APPROVE' "
+        "AND successor.created_at > original.created_at) "
+        "SELECT 1 FROM candidates WHERE instruction ~ "
+        "replace($2::text, '{job_id}', original.job_id))", retry_ids,
+        _RETRY_MARKER_PATTERN,
+    ) if retry_ids else []
+    resolved_errors = sorted(row["job_id"] for row in resolved)
+    errors = [job_id for job_id in errors if job_id not in resolved_errors]
     if busy:
         reasons.append("활성 작업: " + ",".join(busy))
     if errors:
         reasons.append("미해결 error: " + ",".join(errors))
     return {"ok": not reasons, "jobs": sorted(row["job_id"] for row in jobs),
-            "reason": "; ".join(reasons)}
+            "reason": "; ".join(reasons), "resolved_errors": resolved_errors}
 
 
 async def report_done(
@@ -432,7 +454,7 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
                     logger.warning("review_escalate_failed", error=str(exc)[:160])
                 escalated += 1
 
-            reviewer = alternate or (lead if not self_confirm or (self_allowed and not to_ceo) else None)
+            reviewer = alternate or (lead if not self_confirm or self_allowed else None)
             if reviewer:
                 try:
                     from app.services import chat_service as cs

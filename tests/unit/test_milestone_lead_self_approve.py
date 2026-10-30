@@ -57,7 +57,7 @@ async def test_confirm(monkeypatch, lead, enabled, ok, negative, evidence_ok, ex
     ('error', 'a'*40, 'APPROVE', None, {'summary': '완료'}, False),
     ('done', '', 'APPROVE', None, {'summary': '완료'}, False),
     ('done', 'a'*40, 'REJECT', None, {'summary': '완료'}, False),
-    ('done', 'a'*40, 'APPROVE', '미해결', {'summary': '완료'}, False),
+    ('done', 'a'*40, 'APPROVE', '잔존 오류', {'summary': '완료'}, False),
     ('done', 'a'*40, 'APPROVE', None, {}, False),
 ])
 async def test_evidence(status, sha, verdict, error, ev, allowed):
@@ -66,15 +66,15 @@ async def test_evidence(status, sha, verdict, error, ev, allowed):
     conn.fetch.side_effect = [[{'task_id': 'runner-1234abcd'}], [dict(
         job_id='runner-1234abcd', status=status, commit_hash=sha,
         review_verdict=verdict, error_detail=error,
-    )]]
+    )], []]
     result = await review.lead_self_approval_evidence(conn, 'mid')
     assert result['ok'] is allowed
     assert bool(result['reason']) is not allowed
-    assert conn.fetch.await_args.args[1] == ['runner-1234abcd']
+    assert conn.fetch.await_args_list[1].args[1] == ['runner-1234abcd']
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("count", [0, review._REVIEW_MAX_ASK])
+@pytest.mark.parametrize("count", [0, review._REVIEW_MAX_ASK, 41, 45])
 async def test_ask_lead(monkeypatch, count):
     from app.services import chat_service, orchestration_limits, ohvis_alert
     conn = AsyncMock()
@@ -98,14 +98,20 @@ async def test_ask_lead(monkeypatch, count):
     handoff = AsyncMock(return_value=True)
     monkeypatch.setattr(chat_service, 'handoff_internal_turn_if_standby', handoff)
     if count >= review._REVIEW_MAX_ASK:
-        assert await review.ask_pending_reviews() == {'asked': 0, 'escalated': 1}
-        notify.assert_awaited_once()
-        handoff.assert_not_awaited()
-        return
-    assert await review.ask_pending_reviews() == {'asked': 1, 'escalated': 0}
+        expected_escalated = 1
+    else:
+        expected_escalated = 0
+    assert await review.ask_pending_reviews() == {'asked': 1, 'escalated': expected_escalated}
+    handoff.assert_awaited_once()
     assert handoff.await_args.args[0] == 'lead'
     assert '주도 자기 승인 가능(증거: runner-1234abcd)' in handoff.await_args.args[1]
-    notify.assert_not_awaited()
+    if count >= review._REVIEW_MAX_ASK:
+        notify.assert_awaited_once()
+    else:
+        notify.assert_not_awaited()
+    sql, _, retry = conn.fetch.await_args.args
+    assert 'm.review_asked_at < NOW()' in sql
+    assert retry == str(review._REVIEW_RETRY_MIN)
 
 
 @pytest.mark.asyncio
@@ -160,3 +166,97 @@ async def test_confirm_persists_self_approval_note(monkeypatch):
     sql, mid, status, review_note, tenant = conn.execute.await_args.args
     assert 'review_note = NULLIF($3' in sql
     assert (mid, status, review_note, tenant) == ('mid', 'completed', note, 'tenant')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('successor_verdict', ['APPROVE', 'REJECT', None])
+@pytest.mark.parametrize('original_status', ['error', 'done'])
+async def test_retry_resolves_error_only_with_later_done_approve(successor_verdict, original_status):
+    resolved = successor_verdict == 'APPROVE'
+    conn = AsyncMock()
+    conn.fetchval.return_value = {'refs': ['runner-1234abcd', 'runner-87654321']}
+    conn.fetch.side_effect = [[], [
+        dict(job_id='runner-1234abcd', status=original_status, commit_hash=None,
+             review_verdict=None, error_detail='approval_commit_failed'),
+        dict(job_id='runner-87654321', status='done', commit_hash='a'*40,
+             review_verdict='APPROVE', error_detail=None),
+    ], [{'job_id': 'runner-1234abcd'}] if resolved else []]
+    result = await review.lead_self_approval_evidence(conn, 'mid')
+    assert result['ok'] is resolved
+    assert result['resolved_errors'] == (['runner-1234abcd'] if resolved else [])
+    assert ('미해결 error' in result['reason']) is not resolved
+    sql, errors, marker_pattern = conn.fetch.await_args.args
+    assert errors == ['runner-1234abcd']
+    assert "successor.status = 'done'" in sql
+    assert "successor.review_verdict = 'APPROVE'" in sql
+    assert 'successor.created_at > original.created_at' in sql
+    assert 'WITH candidates AS MATERIALIZED' in sql
+    assert "instruction ~" in sql
+    assert "strpos" not in sql
+    assert marker_pattern == review._RETRY_MARKER_PATTERN
+    assert "replace($2::text, '{job_id}', original.job_id)" in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('instruction,verdict,resolved', [
+    ('설명\nRETRY_OF_LINK: runner-1234abcd\n완료', 'APPROVE', True),
+    ('본문에서 runner-1234abcd 를 설명한다', 'APPROVE', False),
+    ('RETRY_OF_LINK: runner-1234abcd', 'REJECT', False),
+    ('설명 RETRY_OF_LINK: runner-1234abcd', 'APPROVE', False),
+    ('RETRY_OF_LINK: 다른 작업\nrunner-1234abcd', 'APPROVE', False),
+    ('RETRY_OF_LINK: runner-1234abcd0', 'APPROVE', False),
+    *[(f'{marker}: runner-1234abcd', 'APPROVE', True)
+      for marker in ('RETRY_OF', 'REWORK_OF', 'SUPERSEDES')],
+])
+async def test_retry_marker_line(instruction, verdict, resolved):
+    import re
+
+    conn = AsyncMock()
+    conn.fetchval.return_value = {'refs': ['runner-1234abcd', 'runner-87654321']}
+
+    async def fetch(sql, ids, marker_pattern=None):
+        if 'goal_task_links' in sql:
+            return []
+        if 'WITH candidates AS MATERIALIZED' not in sql:
+            return [
+                dict(job_id='runner-1234abcd', status='error', commit_hash=None,
+                     review_verdict=None, error_detail='failed'),
+                dict(job_id='runner-87654321', status='done', commit_hash='a'*40,
+                     review_verdict='APPROVE', error_detail=None),
+            ]
+        assert marker_pattern == review._RETRY_MARKER_PATTERN
+        pattern = review._RETRY_MARKER_PATTERN.replace('{job_id}', ids[0])
+        pattern = pattern.removeprefix('(?n)').replace(r'\m', r'\b').replace(r'\M', r'\b')
+        return ([{'job_id': ids[0]}]
+                if verdict == 'APPROVE' and re.search(pattern, instruction, re.MULTILINE)
+                else [])
+
+    conn.fetch.side_effect = fetch
+    result = await review.lead_self_approval_evidence(conn, 'mid')
+    assert result['ok'] is resolved
+    assert result['resolved_errors'] == (['runner-1234abcd'] if resolved else [])
+    assert ('미해결 error' in result['reason']) is not resolved
+
+
+@pytest.mark.asyncio
+async def test_invalid_retry_id_stays_unresolved(monkeypatch):
+    from unittest.mock import Mock
+
+    log = Mock()
+    monkeypatch.setattr(review.logger, "info", log)
+    conn = AsyncMock()
+    conn.fetchval.return_value = {'summary': '완료'}
+    conn.fetch.side_effect = [
+        [{'task_id': 'runner-invalid.*'}, {'task_id': 'runner-87654321'}],
+        [dict(job_id='runner-invalid.*', status='error', commit_hash=None,
+              review_verdict=None, error_detail='failed'),
+         dict(job_id='runner-87654321', status='done', commit_hash='a'*40,
+              review_verdict='APPROVE', error_detail=None)],
+    ]
+    result = await review.lead_self_approval_evidence(conn, 'mid')
+    assert result['ok'] is False
+    assert result['resolved_errors'] == []
+    assert conn.fetch.await_count == 2
+    log.assert_called_once_with(
+        "milestone_retry_invalid_job_id", job_id="runner-invalid.*", milestone_id="mid",
+    )
