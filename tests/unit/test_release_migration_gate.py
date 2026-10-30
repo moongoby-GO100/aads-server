@@ -1,4 +1,4 @@
-"""CEO source remains fail closed until a human identity contract is available."""
+"""로컬 격리 셸에서 승인 바인딩과 plan 분류를 검증한다."""
 import hashlib
 import os
 
@@ -12,7 +12,9 @@ release = migration_tests.release
 
 @pytest.fixture
 def gated(release):
-    (release.root / 'scripts/apply_release_migrations.sh').write_text(RUNNER.read_text())
+    path = release.root / 'scripts/apply_release_migrations.sh'
+    # Keep the fixture ledger transport and deny approval by default.
+    path.write_text(path.read_text().replace('    return 0\n}', '    return 1\n}', 1))
     return release
 
 
@@ -20,7 +22,7 @@ def test_pending_without_approval_stops(gated):
     gated.write('001.sql', 'SELECT 1;')
     result = gated.run()
     assert result.returncode == 7
-    assert '승인 원천 미확정' in result.stderr
+    assert 'BLOCK-CEO-APPROVAL' in result.stdout
     assert 'migrations/001.sql|' in result.stdout
     assert not gated.applied()
 
@@ -38,7 +40,7 @@ def stub_source(gated, digest, *, fail=False):
         "'migrations/001.sql|" + digest + "'" + "$'\\n' ]]"
     )
     path.write_text(script.replace(
-        'echo "APPROVAL-SOURCE-UNRESOLVED 승인 원천 미확정" >&2\n    return 1', replacement,
+        '    return 1\n}', '    ' + replacement + '\n}', 1,
     ))
 
 

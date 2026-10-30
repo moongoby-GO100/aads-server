@@ -24,7 +24,7 @@ def approved(tmp_path):
                 release_sha=SHA, manifest=items, manifest_sha256=a.manifest_hash(items),
                 expires_at='2099-01-01T00:00:00+00:00')
     doc = dict(approved_revision_id='rev', latest_revision_id='rev', revision_id='rev',
-               action='approved', actor_id='human-id', auth_type='human_session', owner=True)
+               action='approved', actor_id='6b4da42c-1234-4567-890a-123456789abc', owner=True)
     state = dict(tenant_id='tenant', target_db='aads', ledger={}, document=doc)
     def encode():
         doc['content'] = '# 릴리스 승인\n```aads-migration-approval\n' + json.dumps(data) + '\n```\n'
@@ -35,7 +35,7 @@ def approved(tmp_path):
 
 def test_approved(approved):
     root, state, _, _ = approved
-    assert a.verify(root, SHA, a.inventory(root, {}), state).startswith('APPROVED revision_id=rev approver=human-id')
+    assert a.verify(root, SHA, a.inventory(root, {}), state).startswith('APPROVED revision_id=rev approver=6b4da42c-1234-4567-890a-123456789abc')
 
 
 def test_retry(approved):
@@ -115,6 +115,8 @@ CASES = [
     ('revised', 'not_approved'), ('hash', 'hash_mismatch'), ('release', 'release_mismatch'),
     ('extra', 'manifest_mismatch'), ('bytes', 'manifest_mismatch'),
     ('tenant', 'scope_mismatch'), ('db', 'scope_mismatch'),
+    ('chat', 'approver_not_human'), ('inactive_user', 'approver_not_owner'),
+    ('membership_tenant', 'approver_not_owner'), ('actor_type', 'approver_not_human'),
     ('lookup', 'lookup_failed'), ('omitted', 'manifest_mismatch'),
     ('manifest_hash', 'manifest_mismatch'), ('retry_drift', 'manifest_mismatch'),
 ]
@@ -124,8 +126,11 @@ def mutate(case, root, state, data, encode):
     doc = state['document']
     if case == 'missing': state['document'] = None
     elif case == 'owner': doc['owner'] = False
+    elif case == 'chat': doc['actor_id'] = 'chat:12345678'
+    elif case in ('inactive_user', 'membership_tenant'): doc['owner'] = False
+    elif case == 'actor_type': doc['actor_id'] = None
     elif case == 'system': doc['actor_id'] = 'system:monitor'
-    elif case == 'auth': doc.pop('auth_type')
+    elif case == 'auth': doc.pop('actor_id')
     elif case == 'expiry': data['expires_at'] = '2000-01-01T00:00:00Z'
     elif case in ('archived', 'review'): doc['action'] = case
     elif case == 'revised': doc['latest_revision_id'] = 'new'
@@ -213,3 +218,12 @@ def test_lookup_error_is_closed(approved, monkeypatch, capsys):
     monkeypatch.setattr(a.sys, 'argv', ['approval', 'verify', '--root', str(root), '--release-sha', SHA])
     assert a.main() == 1
     assert capsys.readouterr().out == 'lookup_failed\n'
+
+
+@pytest.mark.parametrize('actor', [None, 1, {}, [], '', 'chat:12345678',
+    'system:owner', 'service:owner', 'monitor', 'assistant', 'human-id'])
+def test_non_uuid_actor_is_closed(approved, actor):
+    root, state, _, _ = approved
+    state['document']['actor_id'] = actor
+    with pytest.raises(a.Rejected, match='approver_not_human'):
+        a.verify(root, SHA, a.inventory(root, {}), state)

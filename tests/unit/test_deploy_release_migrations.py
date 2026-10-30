@@ -81,6 +81,7 @@ def release(tmp_path):
         def run(self, *args: str) -> subprocess.CompletedProcess:
             env = dict(
                 os.environ,
+                AADS_RELEASE_SHA=os.environ.get("AADS_RELEASE_SHA", "a" * 40),
                 AADS_MIGRATION_LEDGER_FILE=str(ledger),
                 AADS_APPLY_MIGRATION_BIN=str(fake_apply),
                 AADS_MIGRATION_BASELINE_FILE=str(baseline),

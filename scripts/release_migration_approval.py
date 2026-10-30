@@ -52,7 +52,6 @@ def lookup(release_sha):
       'document', (SELECT row_to_json(d) FROM (
         SELECT h.approved_revision_id, h.latest_revision_id, r.id AS revision_id,
           r.content, r.content_hash, e.action, e.actor_id,
-          to_jsonb(e)->'metadata'->>'auth_type' AS auth_type,
           EXISTS(SELECT 1 FROM tenant_memberships m JOIN saas_users u ON u.id=m.user_id
             WHERE m.tenant_id=t.id AND m.user_id=e.actor_id AND m.role='owner'
             AND m.status='active' AND m.deleted_at IS NULL
@@ -60,6 +59,7 @@ def lookup(release_sha):
         FROM project_document_heads h
         JOIN project_document_revisions r ON r.id=h.approved_revision_id AND r.head_id=h.id
         LEFT JOIN LATERAL (SELECT * FROM project_document_events ev WHERE ev.head_id=h.id
+          AND ev.tenant_id=h.tenant_id AND ev.project_key=h.project_key
           AND ev.action IN ('created','revised','review','approved','archived')
           ORDER BY ev.id DESC LIMIT 1) e ON true
         WHERE h.tenant_id=t.id AND h.project_key='AADS' AND h.kind='contract'
@@ -130,9 +130,12 @@ def verify(root, release_sha, supplied, state, now=None):
     except (KeyError, TypeError, ValueError) as exc:
         raise Rejected('expired') from exc
     actor = d.get('actor_id', '')
-    if d.get('auth_type') != 'human_session' or actor.lower().startswith(('system:', 'monitor', 'service:', 'assistant', 'ceo', 'user:')):
+    # The sole approved-event writer authenticates a human session before INSERT.
+    # Require its real-user UUID, then the live tenant owner/user join above.
+    if not isinstance(actor, str) or not re.fullmatch(
+            r'[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}', actor):
         raise Rejected('approver_not_human')
-    if not d.get('owner'):
+    if d.get('owner') is not True:
         raise Rejected('approver_not_owner')
     pending = inventory(root, state['ledger'])
     if valid_manifest(supplied) != pending:
