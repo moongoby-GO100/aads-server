@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.collection_datasets import router as collection_datasets_router
 import app.auth as auth_module
 from app.api import (
     acct_purchase,
@@ -179,6 +180,7 @@ app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"
 app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])
 app.include_router(obys_workspaces.router, prefix="/api/v1", tags=["obys-workspaces"])
 app.include_router(obys_collections.router, prefix="/api/v1", tags=["obys-collections"])
+app.include_router(collection_datasets_router, prefix="/api/v1")
 app.include_router(clobe_integration.router, prefix="/api/v1", tags=["clobe-integration"])
 app.include_router(unni_naengmyeon.router, prefix="/api/v1", tags=["unni-naengmyeon"])
 

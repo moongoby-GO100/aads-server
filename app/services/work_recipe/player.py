@@ -206,6 +206,21 @@ class RecipePlayer:
     # ---- 공개 API ------------------------------------------------------
 
     async def play(
+        self, recipe: WorkRecipe, inputs: Mapping[str, Any] | None = None, *,
+        context: Mapping[str, Any] | None = None, recipe_id: Any = None,
+    ) -> RunResult:
+        from app.services import collection_dataset_store as store
+        datasets = sorted({str(s.extra["dataset"]) for s in [*recipe.steps, *recipe.verify]
+                           if s.action in {"extract", "paginate"} and s.extra.get("dataset")})
+        if not datasets:
+            return await self._play(recipe, inputs, context=context, recipe_id=recipe_id)
+        ctx = dict(context or {})
+        async with store.execution_scope(ctx.get("tenant_id"), datasets, recipe.domain,
+                                         automatic=bool(ctx.get("automatic"))) as conn:
+            ctx["_dataset_connection"] = conn
+            return await self._play(recipe, inputs, context=ctx, recipe_id=recipe_id)
+
+    async def _play(
         self,
         recipe: WorkRecipe,
         inputs: Mapping[str, Any] | None = None,
@@ -280,7 +295,44 @@ class RecipePlayer:
                 stop_index = index
                 break
 
+            if step.action in {"extract", "paginate"} and step.extra.get("dataset"):
+                from app.services.collection_pause import is_collection_paused
+                if await is_collection_paused("smart_browser", dataset_key=str(step.extra["dataset"]),
+                                              tenant_id=str(context["tenant_id"])):
+                    result.status = STATUS_BLOCKED
+                    result.error = "COLLECTION_PAUSED"
+                    result.blocked_step_seq = step.seq
+                    stop_index = index
+                    break
             step_result = await self._run_step(phase, step, values, declared, context, secrets)
+            if step.action in {"extract", "paginate"} and step.extra.get("dataset"):
+                from app.services import collection_dataset_store as store
+                output = step_result.output if isinstance(step_result.output, Mapping) else {}
+                if step_result.status != STATUS_SUCCESS:
+                    output = {**output, "status": "extraction_failed"}
+                try:
+                    saved = await store.upsert(context["_dataset_connection"], context["tenant_id"],
+                                               str(step.extra["dataset"]), output,
+                                               recipe_run_id=result.run_id, error_code=step_result.error)
+                    if saved["status"] == "action_required":
+                        step_result.status = STATUS_BLOCKED
+                except Exception:
+                    step_result.status = STATUS_FAILED
+                    step_result.error = "dataset_store_failed"
+            # 로그인/탐색에서 멈춘 경우에도 대상 데이터셋의 자동 재시도를 막는다.
+            if step_result.status != STATUS_SUCCESS and context.get("_dataset_connection"):
+                from app.services import collection_dataset_store as store
+                pending = {str(s.extra["dataset"]) for _, s in planned
+                           if s.action in {"extract", "paginate"} and s.extra.get("dataset")}
+                pending.discard(str(step.extra.get("dataset", "")))
+                for dataset_key in sorted(pending):
+                    try:
+                        await store.upsert(context["_dataset_connection"], context["tenant_id"],
+                                           dataset_key, {"status": "failed", "rows": []},
+                                           recipe_run_id=result.run_id, error_code=step_result.error)
+                    except Exception:
+                        step_result.status = STATUS_FAILED
+                        step_result.error = "dataset_store_failed"
             result.steps.append(step_result)
             await self._record_step(result.run_id, step_result)
             result.llm_calls += step_result.llm_calls
@@ -382,8 +434,9 @@ class RecipePlayer:
         payload_base = rendered.to_dict(include_seq=True)
         payload_base["phase"] = phase
         if context:
-            payload_base["context"] = dict(context)
+            payload_base["context"] = {k: v for k, v in context.items() if k != "_dataset_connection"}
 
+        dataset_step = step.action in {"extract", "paginate"} and bool(step.extra.get("dataset"))
         last_error = ""
         attempts = 1 if phase == "step" and step.seq == contract.get("submit_step") else self._retries + 1
         if step.action == "paginate":
@@ -420,6 +473,15 @@ class RecipePlayer:
                     outcome.route = str(
                         data.get("route") or outcome.recovery.get("route") or "browser_agent"
                     )[:80]
+                    from app.services.delivery_collection_gate import user_action_kind
+                    if dataset_step and (user_action_kind(last_error) or last_error.lower() in {
+                        "auth_required", "login_required", "captcha", "portal_blocked",
+                    }):
+                        outcome.status = STATUS_BLOCKED
+                        outcome.error = last_error
+                        outcome.evidence = _mapping_or_empty(data.get("evidence"))
+                        outcome.duration_ms = int((time.monotonic() - started) * 1000)
+                        return outcome
                     if reported_status == STATUS_BLOCKED or outcome.route in {"human_gateway", "pc_agent"}:
                         outcome.status = STATUS_BLOCKED
                         outcome.error = last_error
@@ -434,6 +496,14 @@ class RecipePlayer:
                     outcome.evidence = _mapping_or_empty(data.get("evidence"))
                     outcome.duration_ms = int((time.monotonic() - started) * 1000)
                     return outcome
+            from app.services.delivery_collection_gate import user_action_kind
+            if dataset_step and (user_action_kind(last_error) or last_error.lower() in {
+                "auth_required", "login_required", "captcha", "portal_blocked",
+            }):
+                outcome.status = STATUS_BLOCKED
+                outcome.error = last_error
+                outcome.duration_ms = int((time.monotonic() - started) * 1000)
+                return outcome
             if attempt <= self._retries and self._retry_delay > 0:
                 await asyncio.sleep(self._retry_delay)
 

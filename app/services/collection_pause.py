@@ -66,11 +66,14 @@ async def _load(force: bool = False) -> dict:
     return dict(value)
 
 
-async def is_collection_paused(kind: str = "delivery") -> bool:
+async def is_collection_paused(kind: str = "delivery", *, dataset_key: str | None = None, tenant_id: str | None = None) -> bool:
     """해당 수집이 멈춤 상태인지."""
     value = await _load()
     if bool(value.get("all")):
         return True
+    if dataset_key and kind == "smart_browser":
+        if value.get("smart_browser_datasets", {}).get(f"{tenant_id}:{dataset_key}"):
+            return True
     return bool(value.get(str(kind)))
 
 
@@ -85,6 +88,8 @@ async def set_collection_paused(
     *,
     reason: str = "",
     by: str = "",
+    dataset_key: str | None = None,
+    tenant_id: str | None = None,
 ) -> dict:
     """스위치를 켜거나 끈다. 누가 왜 멈췄는지 같이 남긴다.
 
@@ -94,7 +99,12 @@ async def set_collection_paused(
     from app.core.db_pool import get_pool
 
     value = await _load(force=True)
-    value[str(kind)] = bool(paused)
+    if dataset_key:
+        if kind != "smart_browser" or not tenant_id:
+            raise ValueError("dataset pause requires smart_browser tenant")
+        value.setdefault("smart_browser_datasets", {})[f"{tenant_id}:{dataset_key}"] = bool(paused)
+    else:
+        value[str(kind)] = bool(paused)
     value["reason"] = reason or value.get("reason") or ""
     value["by"] = by or value.get("by") or ""
     value["updated_at"] = time.strftime("%FT%T+09:00")
