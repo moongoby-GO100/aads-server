@@ -52,7 +52,7 @@ async def test_loaded_evidence(monkeypatch):
     update = next(c for c in conn.execute.call_args_list if 'SET skills_loaded=' in c.args[0])
     assert update.args[1:3] == ('row-id', 't')
     assert json.loads(update.args[3]) == [skills.load_skill('design-critique')]
-    assert json.loads(update.args[3])[0]['version'] == '0.2.0'
+    assert json.loads(update.args[3])[0]['version'] == '0.3.0'
 
 
 @pytest.mark.asyncio
@@ -92,7 +92,7 @@ def test_event_routes(event, situation):
 def test_candidate_files_and_fixture(name):
     evidence = skills.load_skill(name)
     data = (skills.SKILLS_ROOT / name / 'SKILL.md').read_bytes()
-    assert evidence == {'name': name, 'status': 'candidate', 'version': '0.2.0',
+    assert evidence == {'name': name, 'status': 'candidate', 'version': '0.3.0',
                         'sha256': hashlib.sha256(data).hexdigest()}
     assert '## 검증 fixture' in data.decode()
 
