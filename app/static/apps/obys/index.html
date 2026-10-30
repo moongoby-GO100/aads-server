@@ -3725,6 +3725,7 @@
       </section>
 
       <section id="attendanceView" class="hidden">
+        <section class="panel"><div class="panel-head"><h2 class="panel-title">내 오늘·이번 주 근무 일정</h2></div><div class="panel-body" id="employeeWorkSchedules" aria-live="polite">근무 일정을 조회하면 여기에 표시됩니다.</div></section>
         <div class="grid content-grid">
           <section class="panel">
             <div class="panel-head"><h2 class="panel-title">근태 입력</h2></div>
@@ -13771,6 +13772,23 @@
       };
     }
 
+    async function loadEmployeeWorkSchedules(businesses) {
+      const target = document.getElementById("employeeWorkSchedules");
+      if (!target) return;
+      try {
+        const now = new Date(), kst = new Intl.DateTimeFormat("sv-SE", {timeZone:"Asia/Seoul",year:"numeric",month:"2-digit",day:"2-digit"}).format(now);
+        const day = new Date(kst+"T12:00:00+09:00"), monday = new Date(day);
+        monday.setUTCDate(day.getUTCDate()-(day.getUTCDay()+6)%7);
+        const sunday = new Date(monday); sunday.setUTCDate(monday.getUTCDate()+6);
+        const from=monday.toISOString().slice(0,10), to=sunday.toISOString().slice(0,10);
+        const blocks = await Promise.all(businesses.map(async business => {
+          const response = await workspaceApi(`/${encodeURIComponent(business.id)}/attendance/schedules?${new URLSearchParams({from,to})}`);
+          return (response.schedules||[]).map(s=>`<p><b>${escapeHtml(s.work_date===kst?"오늘 · ":"")}${escapeHtml(s.work_date)}</b> · ${escapeHtml(business.name)} · ${escapeHtml(s.kind==="work"?s.start_time.slice(0,5)+"–"+s.end_time.slice(0,5):s.kind==="leave"?"휴가":"휴무")} · ${escapeHtml(s.judgment?.status||"")}</p>`).join("");
+        }));
+        target.innerHTML = blocks.filter(Boolean).join("") || "이번 주 등록된 근무 일정이 없습니다.";
+      } catch(error) { target.textContent = error?.message || "근무 일정을 조회하지 못했습니다."; }
+    }
+
     async function loadAttendanceRecords() {
       if (!hasServerAuth()) {
         serverShifts = [];
@@ -13785,6 +13803,7 @@
           const payload = await workspaceApi(`/${encodeURIComponent(business.id)}/attendance/records?limit=500`);
           (payload.records || []).forEach(record => next.push(shiftFromServerRecord(record, business.id)));
         }
+        if(isEmployeeExperience()) await loadEmployeeWorkSchedules(businesses);
         serverShifts = next;
         serverShiftsError = "";
         setViewError("attendance", "server", null);

@@ -205,3 +205,44 @@ POST JSON: {"revision_id":"<GET 최신 revision UUID>","expected_generation":<GE
 - 변경 파일: app/api/obys_workspaces.py, app/static/apps/obys/admin.html, tests/unit/obys_people_e2e_fix_check.py, tests/unit/test_obys_menu_payroll_slice.py, tests/unit/test_obys_people_e2e_fix.py, tests/unit/test_obys_people_menu_button_audit.py, tests/unit/test_obys_people_dedicated_views.py, RESULT.md.
 - commit/push/build/deploy 미실행, 새 SHA 없음. HANDOVER.md/테스트 게이트/시크릿 수정 없음.
 - 새 정본 문서 생성 없음. 기존 RESULT.md 결과 추가이며 열람 링크 미제공. 운영 DB 쓰기 금지 범위에 따라 핸드오버 DB 미기록; Runner 완료 처리의 DB upsert/readback에 인계한다.
+
+## 오비서 근무표 재검토 교정 결과 (ACCT-V41-WORK-SCHEDULE-LATE-ABSENT-20261030)
+
+document_key: obys-work-schedule-rework-result
+열람 링크 미제공. 기존 RESULT.md에 결과를 추가했으며 새 정본 문서는 생성하지 않았다.
+
+### STEP 0 기존 구현 조사 및 분류
+
+- 시작 HEAD ba42dc6b, 작업 트리 clean. 반려 커밋 814efe4f640f936b7cb7fa41e2912c14fa9ad7d9의 8개 파일 diff를 git show/git apply로 복원했다. 기존 산출물을 통째 재작성하지 않았다.
+- 유지: _business, _require_route_read, _require_attendance_admin, require_legacy_obys_access, _legacy_people_rows의 소유 테넌트/정확한 사업자 매핑, _record/_public_raw 마스킹, 출퇴근 CRUD·주간 재계산·감사 로그, offset+limit 근태 목록 창, 기존 라우터 mount /api/v1/workspaces. 스케줄러 추가/변경 없음.
+- 수정: list_attendance_records/ATTENDANCE_LIST_SQL의 판정 연결; 판정 함수와 일별 합산; list_work_schedules의 로컬/레거시 묶음 보강; _save_work_schedule의 마스킹 이메일 갱신. 반려본의 관리자 renderPeopleV41 근무표/현황/통계/달력, 직원 index.html 일정 읽기 전용 연결을 유지한다.
+- 신규(반려 산출물 복원): WorkScheduleIn/Employee/BulkIn, 일정 GET/POST/PUT/DELETE 및 bulk, _schedule_business/_schedule_values/expand_work_schedules, 계약 차이 판정, work_schedules 마이그레이션/보존 롤백 SQL, 신규 테스트. 재검토에서 _schedule_time/_schedule_record_key/_attendance_schedule_matches/_schedule_actual_records를 추가했다.
+- DB 접점: 기존 attendance_records/weekly, 계약·사업자·감사 조회/쓰기는 유지. 신규 yeoljeong_work_schedules의 활성 행 부분 고유키 및 business_id/work_date 인덱스. 운영 DB 접속·마이그레이션 적용 없음.
+- 삭제: 기존 함수/라우트/파일/테스트 삭제 없음. 반복 attendance 상관 서브쿼리 및 행별 레거시 호출만 묶음 처리로 교체했다. 호출처 계약 유지, 롤백은 이번 코드 diff 복구 및 필요 시 제공된 데이터 보존 rename SQL 사용(직접 실행하지 않음).
+- 명시 파일 외 변경 사유: app/static/apps/obys/index.html은 원 지시 5번 직원 홈의 실제 소유 파일이다. 신규 마이그레이션/rollback/test_obys_work_schedules.py는 원 지시의 필수 산출물이다. test_obys_people_dedicated_views.py는 반려본의 기존 근무표 UI 기대값 및 목록 601건 회귀 mock을 새 묶음 조회 접점과 분리하기 위해 보완했다. RESULT.md는 요청된 조사/검증/지적별 처리 기록이다. finance service는 수정하지 않았다.
+
+### 리뷰 지적별 처리
+
+1. DB 행은 조회 직후 dict로 변환하고 page_rows에 판정을 넣은 뒤 그 동일 page_rows를 응답으로 사용한다. MappingProxyType 불변 행 입력으로 raw.judgment.late_minutes가 실제 응답에 남고 원본은 바뀌지 않는 테스트 통과. _public_raw는 judgment를 재귀 직렬화한다.
+2. total_worked_minutes가 없거나 None일 때 실근로 계산값을 사용하도록 명시 분기했다. None 및 480 회귀 통과.
+3. time/datetime/ISO timestamp(Z 포함)를 공통 파서에서 지원하고 KST로 변환한다. 여러 행 중 잘못된 시각 행은 제외하여 유효한 직원 기록 처리를 계속한다. timestamp 분할 근무와 malformed 혼합 테스트 통과.
+4. 출퇴근 목록에서 근무표·실적 jsonb_agg 상관 쿼리를 제거했다. 페이지 직원/날짜 키를 JSON으로 한 번 전달하여 근무표를 조회하고, 실제 기록도 일괄 조회하여 서버에서 그룹화한다. 조회 창과 하루 500행 한도 유지.
+5. 같은 날짜/이메일 키를 set으로 중복 제거한다. attendance 조회는 한 묶음 ranked SQL에서 실행하며 행별 jsonb_agg 반복/actual_records 응답 중복을 제거했다. lower(email)은 대소문자가 섞인 기존 자료 호환을 위해 한 묶음 조인에 남겨두었다. 운영 실행계획·성능 측정은 하지 않았다.
+6. 레거시 보강을 요청 기간 전체에 대해 1회 실행 후 직원/날짜로 묶는다. 상한은 페이지 일정 수 × 500, 최대 500,000행이며 무제한 조회가 아니다. 1,000개 일정의 DB fetch 2회/레거시 1회 회귀 통과. 레거시 장애는 503으로 명시하여 잘못된 결근 집계를 반환하지 않는 테스트 통과. 실제 대용량 성능과 이 상한을 넘는 레거시 자료 완전성은 미검증이다.
+7. 신규 HTTP 테스트에서 member 요청 employee_email을 본인으로 강제, POST/PUT/DELETE/bulk 403, 다른 사업자·다른 테넌트의 읽기/쓰기 403을 확인했다. bulk 초과 422/정확히 1,000개 허용/선택 칸 등록 테스트 포함. HTTP 테스트는 비동기 httpx ASGITransport로 실행하며 로그인 의존성도 async로 재정의한다. 운영 인증 게이트 변경 없음.
+8. ON CONFLICT에서도 employee_email_masked=EXCLUDED.employee_email_masked를 갱신한다. UPDATE의 고유키 충돌→409 트랜잭션 처리는 유지했다.
+
+정책: ATTENDANCE_LATE_GRACE_MINUTES = 0. 서버 KST 기준 결근/오늘 미출근/야간 근무/정상·지각·조퇴·초과·휴무·일정없음 판정을 사용한다. UI는 서버 판정값을 표시한다.
+
+### 실제 검증
+
+- 필수 bash scripts/run_unit_tests.sh + 지정 8파일 + 신규 test_obys_work_schedules.py 실행: exit 2. 기준 container:aads-server 없음(6회 재시도). 게이트 수정 없음, 통과 아님.
+- 동일 9파일 호스트 pytest: exit 2. test_obys_v41_payroll_permissions.py 및 test_obys_payroll_state_machine.py 수집 시 PIL 미설치. 처음 PYTHONPATH로 시스템 패키지를 우선한 시도는 typing_extensions.Sentinel ImportError로 실패했고, 이후 venv 기본 경로를 사용했다.
+- 최종 호스트 pytest: test_obys_work_schedules.py 전체 + test_obys_people_e2e_fix.py + test_obys_people_menu_button_audit.py + test_obys_menu_payroll_slice.py → **52 passed, exit 0 (5.91s)**. 신규 28개 전체 포함, node 검사에는 shutil.which("node") skip 가드 유지.
+- dedicated_views 포함 중간 부분 실행: 51 pass/7 fail. 6개는 PIL 미설치, 1개는 새 조회 접점에 맞지 않는 기존 mock이었다. mock 보완 후 재실행 52 pass/6 fail(PIL), exit 1. 최종 전체 게이트 통과로 기록하지 않는다.
+- 초기 TestClient 실행은 10개 후 대기했고 종료 완료를 확인하지 못했다. 프로세스 종료 명령은 사용하지 않았다. 신규 테스트를 비동기 ASGI 방식으로 바꾼 최종 실행은 정상 종료했다.
+- python3 tests/unit/obys_people_e2e_fix_check.py: exit 1, 로컬 HTTP 소켓 생성 PermissionError. **호스트 실행 필요**, 3시나리오/403 0건 미검증.
+- 최종 python3 -m compileall -q (수정 Python 3파일), ruff check --select F821,F811, python3 scripts/dup_guard.py --paths, git diff --check: 모두 exit 0.
+- scripts/deploy_acct_app_cafe24.sh diff는 allowlist **1행 추가만** 확인. HANDOVER.md/테스트 게이트/시크릿 변경 없음.
+- 변경 파일: RESULT.md, app/api/obys_workspaces.py, app/static/apps/obys/admin.html, app/static/apps/obys/index.html, migrations/20261030_obys_work_schedules.sql, migrations/rollback/20261030_obys_work_schedules.down.sql, scripts/deploy_acct_app_cafe24.sh, tests/unit/test_obys_people_dedicated_views.py, tests/unit/test_obys_work_schedules.py.
+- commit/push/build/deploy 미실행, 새 SHA 없음. 승인 후 Runner 빌드 검증 대상. 핸드오버 DB 미기록 — Runner 완료 처리의 DB upsert/readback 대상.

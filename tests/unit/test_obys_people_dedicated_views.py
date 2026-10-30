@@ -157,14 +157,16 @@ def test_people_renderer_executes_payroll_and_all_attendance_tabs(tmp_path):
                 "function payrollDisplayV41(", "function attendanceStatusV41(",
                 "function attendanceReviewV41(", "function attendanceMinutesV41(",
                 "function attendanceDisplayV41(", "function liveRow(", "function filteredRows(c)",
-                "function peopleWorkLinksV41(")
+                "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(",
+                "function workSchedulePanelV41(")
     helpers = "\n".join(next(line.strip() for line in html.splitlines() if line.strip().startswith(prefix)) for prefix in prefixes)
     renderer = "function renderPeopleV41(c){" + html.split("function renderPeopleV41(c){", 1)[1].split("function renderPageV41(){", 1)[0]
     script = tmp_path / "people-render.cjs"
     script.write_text('''const assert=require('node:assert/strict');
 const state={route:'payroll',peopleMonth:'2026-09',readRole:'member',status:'전체 상태',selected:{},search:''};
 const configs={payroll:{title:'급여 현황',columns:['직원','총지급액','공제','실수령','상태'],hierarchy:[]},attendance:{title:'근태 현황',columns:['직원','일자','지점','근무시간','상태'],hierarchy:[]}};
-const element={};const elements={};const document={getElementById:id=>elements[id]||(elements[id]={})};
+const element={};const elements={};const document={getElementById:id=>elements[id]||(elements[id]={addEventListener(){}})};
+function bindWorkSchedulesV41(){};
 const page={innerHTML:'',querySelectorAll:()=>[]};
 const kstDateV41=()=>'2026-09-30';function renderPageV41(){};function loadLiveRoute(){};function openDetailV41(){};
 ''' + helpers + renderer + '''
@@ -178,11 +180,14 @@ for(const tab of ['today','employees','detail','schedule','stats']){
  assert(!page.innerHTML.includes('업무별 상세 탐색'));assert(!page.innerHTML.includes('핵심 관점'));
  assert(!page.innerHTML.includes('undefined'));
  if(tab==='stats')assert(page.innerHTML.includes('8시간 0분'));
- if(tab==='today'){assert(page.innerHTML.includes('직원A'));assert(page.innerHTML.includes('근무표 미연결'));}
+ if(tab==='today'){assert(page.innerHTML.includes('직원A'));assert(page.innerHTML.includes('근무표 미등록 — 근무 일정 탭에서 등록'));}
 }
 configs.attendance.data.push(liveRow({id:'a2',raw:{work_date:'2026-09-29',start_at:'10:00',status:'approved'},display:{직원:'직원B',일자:'2026-09-29'}},configs.attendance));
 state.peopleTab='today';renderPeopleV41(configs.attendance);
-assert(page.innerHTML.includes('미출근'));assert(page.innerHTML.includes('직원B'));assert(page.innerHTML.includes('오늘 출근 기록 없음'));
+assert(page.innerHTML.includes('미출근'));assert(!page.innerHTML.includes('직원B')); // 기록 이력만으로 미출근을 추측하지 않는다.
+state.workSchedules={month:{rows:[],counts:{}},today:{counts:{미출근:1},rows:[{employee_key:'staff-b',employee_name:'직원B',judgment:{status:'미출근',labels:['미출근']},start_time:'09:00',end_time:'18:00'}]}};
+renderPeopleV41(configs.attendance);assert(page.innerHTML.includes('직원B'));assert(page.innerHTML.includes('예정 09:00'));
+state.workSchedules=null;
 // Search must never turn a present employee into a missing employee.
 state.search='직원B';renderPeopleV41(configs.attendance);
 assert(!page.innerHTML.includes('직원A'));
@@ -254,6 +259,7 @@ def test_month_loader_requests_selected_month_and_every_page(tmp_path):
     script.write_text("""const assert=require('node:assert/strict');
 const state={route:'attendance',businessId:'biz',peopleMonth:'2025-12',peopleMonthSelected:true};
 const kstDateV41=()=> '2026-10-30';const calls=[];
+async function loadWorkSchedulesV41(business,bounds){assert.equal(business,"biz");assert.equal(bounds.from,"2025-12-01");return {month:{rows:[]},today:{rows:[]}}}
 async function workspaceApi(path){calls.push(path);return {records:[{id:calls.length}],has_more:calls.length%2===1,next_offset:calls.length%2===1?500:501}}
 """ + helpers + """
 (async()=>{let result=await peopleLoadV41();assert.equal(result[1].records.length,2);
@@ -280,6 +286,7 @@ def test_attendance_month_paginates_more_than_500_without_truncation(monkeypatch
     async def check():
         monkeypatch.setattr(api, "_business", AsyncMock(return_value={"id": "v41", "name": "사업자"}))
         monkeypatch.setattr(api, "_require_route_read", lambda *args: None)
+        monkeypatch.setattr(api, "_attendance_schedule_matches", AsyncMock(return_value={}))
         rows = [{"id": str(i), "employee_email": "same@example.test", "work_date": "2025-12-01"} for i in range(601)]
         connection = SimpleNamespace(fetch=AsyncMock(side_effect=lambda sql, *args, **kw: rows[:args[-1]]),
                                      close=AsyncMock())

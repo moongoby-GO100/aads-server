@@ -94,6 +94,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o Ser
 
 # Fixed on purpose: nothing from the environment or the command line can add to it.
 ACCT_MIGRATION_ALLOWLIST=(
+    20261030_obys_work_schedules.sql
     20260930_obys_attendance_pwa_gps.sql
     20261001_obys_hrdoc_expiry_integrity_superseded.sql
     20261003_obys_clobe_collection.sql
@@ -1007,6 +1008,10 @@ migration_probe_sql() { # prints SQL returning t when the migration is already a
         20261014_obys_auth_password_recovery.sql)
             # 인증 DB: saas_users 3컬럼 + 재설정 요청·감사 테이블 + 열린 요청 유일 인덱스.
             echo "/*probe*/ SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='saas_users' AND column_name IN ('must_change_password','session_version','password_changed_at')) = 3 AND to_regclass('public.obys_password_reset_requests') IS NOT NULL AND to_regclass('public.obys_password_reset_audit') IS NOT NULL AND to_regclass('public.uq_obys_pwreset_open_per_user_tenant_method') IS NOT NULL;"
+            ;;
+        20261030_obys_work_schedules.sql)
+            # 근무 일정 테이블 + 활성 일정 유일 인덱스 + (역할이 있으면) 런타임 역할의 읽기·쓰기 권한.
+            echo "/*probe*/ SELECT to_regclass('public.yeoljeong_work_schedules') IS NOT NULL AND to_regclass('public.idx_obys_work_schedules_active') IS NOT NULL AND (NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='acct_business_runtime_r5') OR has_table_privilege('acct_business_runtime_r5','public.yeoljeong_work_schedules','SELECT,INSERT,UPDATE'));"
             ;;
         *) return 1 ;;
     esac

@@ -1085,7 +1085,8 @@ def _attendance_response(business: dict[str, Any], row: Any) -> dict[str, Any]:
 
 
 ATTENDANCE_LIST_SQL = (
-    f"SELECT {ATTENDANCE_COLUMNS},employee_email FROM yeoljeong_attendance_records"
+    f"SELECT {ATTENDANCE_COLUMNS},employee_email"
+    " FROM yeoljeong_attendance_records"
     " WHERE business_id=$1 AND deleted_at IS NULL"
     " AND ($2::date IS NULL OR work_date>=$2) AND ($3::date IS NULL OR work_date<=$3)"
     " AND ($4::text IS NULL OR lower(employee_email)=$4)"
@@ -1137,7 +1138,12 @@ async def list_attendance_records(
         legacy = await _legacy_people_rows(current_user, business_id, "attendance", start, end, wanted, window)
     merged = _merge_people_rows(rows, legacy, "attendance", None) if legacy else rows
     has_more = len(merged) > window or len(rows) >= window or len(legacy) >= window
-    records = [_record("generic", dict(row), business["name"]) for row in merged[offset:window]]
+    page_rows = merged[offset:window]
+    schedules = await _attendance_schedule_matches(business_id, page_rows)
+    for row in page_rows:
+        key = _schedule_record_key(row)
+        row["judgment"] = attendance_schedule_judgment(schedules.get(key), row)
+    records = [_record("generic", dict(row), business["name"]) for row in page_rows]
     return {
         "business": {"id": business["id"], "name": business["name"]},
         "route": "attendance",
@@ -1147,6 +1153,408 @@ async def list_attendance_records(
         "next_offset": offset + len(records),
         "source": {"name": "yeoljeong_attendance_records", "live": True},
     }
+
+
+# 정책값: 지각 유예는 0분. 화면에서는 판정·분 차이를 계산하지 않는다.
+ATTENDANCE_LATE_GRACE_MINUTES = 0
+
+
+class WorkScheduleIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    employee_email: str = Field(min_length=3, max_length=320)
+    employee_name: str = Field(default="", max_length=100)
+    branch: str = Field(default="", max_length=100)
+    work_date: date
+    start_time: time | None = None
+    end_time: time | None = None
+    break_minutes: int = Field(default=0, ge=0, lt=1440)
+    kind: Literal["work", "off", "leave"] = "work"
+    memo: str = Field(default="", max_length=500)
+
+
+class WorkScheduleEmployee(BaseModel):
+    model_config = {"extra": "forbid"}
+    employee_email: str = Field(min_length=3, max_length=320)
+    employee_name: str = Field(default="", max_length=100)
+    branch: str = Field(default="", max_length=100)
+
+
+class WorkScheduleBulkIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    employees: list[WorkScheduleEmployee] = Field(min_length=1, max_length=1000)
+    date_from: date
+    date_to: date
+    weekdays: list[int] = Field(min_length=1, max_length=7)
+    start_time: time | None = None
+    end_time: time | None = None
+    break_minutes: int = Field(default=0, ge=0, lt=1440)
+    kind: Literal["work", "off", "leave"] = "work"
+    memo: str = Field(default="", max_length=500)
+    # 격자에서 선택한 칸은 패턴과 별도로 정확한 날짜·직원만 적용한다.
+    cells: list[WorkScheduleIn] | None = Field(default=None, max_length=1000)
+
+
+def _schedule_record_key(row):
+    return (str(row.get("employee_email") or "").strip().lower(), str(row.get("work_date"))[:10])
+
+
+async def _attendance_schedule_matches(business_id, records):
+    keys = set(_schedule_record_key(r) for r in records if r.get("employee_email"))
+    if not keys:
+        return {}
+    connection = await upload_svc._connect()
+    try:
+        rows = await connection.fetch("""SELECT s.* FROM yeoljeong_work_schedules s
+            JOIN jsonb_to_recordset($2::jsonb) AS k(email text, day date)
+              ON s.employee_email=k.email AND s.work_date=k.day
+            WHERE s.business_id=$1 AND s.deleted_at IS NULL""", business_id,
+            json.dumps([{"email": email, "day": day} for email, day in keys]))
+        actual = await _schedule_actual_records(connection, business_id, rows)
+        return {_schedule_record_key(r): {**dict(r), "actual_records": actual.get(_schedule_record_key(r), [])}
+                for r in rows}
+    finally:
+        await connection.close()
+
+
+async def _schedule_actual_records(connection, business_id, schedules):
+    keys = set(_schedule_record_key(r) for r in schedules)
+    if not keys:
+        return {}
+    rows = await connection.fetch("""WITH ranked AS (
+        SELECT a.*, row_number() OVER (PARTITION BY lower(a.employee_email), a.work_date
+          ORDER BY a.start_at) AS schedule_rank
+        FROM yeoljeong_attendance_records a
+        JOIN jsonb_to_recordset($2::jsonb) AS k(email text, day date)
+          ON a.work_date=k.day AND lower(a.employee_email)=k.email
+        WHERE a.business_id=$1 AND a.deleted_at IS NULL AND a.status <> 'rejected'
+    ) SELECT * FROM ranked WHERE schedule_rank<=500""", business_id,
+        json.dumps([{"email": email, "day": day} for email, day in keys]))
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(_schedule_record_key(row), []).append(dict(row))
+    return grouped
+
+
+def _schedule_time(value):
+    if isinstance(value, datetime):
+        return value.astimezone(ZoneInfo("Asia/Seoul")).time() if value.tzinfo else value.time()
+    if isinstance(value, time):
+        return value
+    try:
+        return time.fromisoformat(str(value))
+    except ValueError:
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return _schedule_time(stamp)
+
+
+def _schedule_day_record(records):
+    """여러 출퇴근은 최초 출근·최종 퇴근·실근로 합계로 판정한다."""
+    if not isinstance(records, list):
+        return records or {}
+    valid = []
+    for row in records:
+        try:
+            row = dict(row)
+            if not row.get("start_at") or row.get("status") == "rejected":
+                continue
+            for field, stamp_field in (("start_at", "check_in_at"), ("end_at", "check_out_at")):
+                value = row.get(field)
+                if value and (isinstance(value, datetime) or "T" in str(value) or " " in str(value)):
+                    row.setdefault(stamp_field, value)
+                if row.get(stamp_field):
+                    datetime.fromisoformat(str(row[stamp_field]).replace("Z", "+00:00"))
+            row["start_at"] = _schedule_time(row["start_at"])
+            if row.get("end_at"):
+                row["end_at"] = _schedule_time(row["end_at"])
+            valid.append(row)
+        except (ValueError, TypeError):
+            continue
+    records = valid
+    if not records:
+        return {}
+    records.sort(key=lambda r: str(r.get("check_in_at") or r["start_at"]))
+    first, last = records[0], records[-1]
+    result = {**first, "end_at": last.get("end_at"), "check_out_at": last.get("check_out_at")}
+    if len(records) > 1 and all(r.get("end_at") for r in records):
+        result["total_worked_minutes"] = sum(attendance_worked_minutes(
+            _schedule_time(r["start_at"]), _schedule_time(r["end_at"]),
+            int(r.get("break_minutes") or 0)) for r in records)
+    return result
+
+
+def attendance_schedule_judgment(schedule, record=None, *, now=None):
+    source = (schedule or {}).get("actual_records") or record
+    record = _schedule_day_record(source if isinstance(source, list) else [source] if source else [])
+    now = now or datetime.now(ZoneInfo("Asia/Seoul"))
+    today = now.astimezone(ZoneInfo("Asia/Seoul")).date()
+    result = {"labels": [], "late_minutes": 0, "early_minutes": 0, "overtime_minutes": 0}
+    if not schedule:
+        result["labels"] = ["일정없음"]
+    elif schedule["kind"] != "work":
+        result["labels"] = ["휴무"]
+    elif not record or not record.get("start_at"):
+        day = date.fromisoformat(str(schedule["work_date"])[:10])
+        result["labels"] = ["결근" if day < today else "미출근" if day == today else "예정"]
+    else:
+        def minutes(value):
+            t = _schedule_time(value)
+            return t.hour * 60 + t.minute
+        planned_start, planned_end = minutes(schedule["start_time"]), minutes(schedule["end_time"])
+        if planned_end <= planned_start:
+            planned_end += 1440
+        actual_start = minutes(record["start_at"])
+        actual_end = minutes(record["end_at"]) if record.get("end_at") else None
+        # PWA timestamps retain the day offset at the KST midnight boundary.
+        def timestamp_minutes(value):
+            stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            stamp = stamp.astimezone(ZoneInfo("Asia/Seoul"))
+            base = date.fromisoformat(str(schedule["work_date"])[:10])
+            return (stamp.date() - base).days * 1440 + stamp.hour * 60 + stamp.minute
+        if record.get("check_in_at"):
+            actual_start = timestamp_minutes(record["check_in_at"])
+        elif planned_end >= 1440 and actual_start < planned_start - 720:
+            actual_start += 1440
+        if record.get("check_out_at"):
+            actual_end = timestamp_minutes(record["check_out_at"])
+        elif actual_end is not None:
+            while actual_end < actual_start:
+                actual_end += 1440
+        result["late_minutes"] = max(0, actual_start - planned_start - ATTENDANCE_LATE_GRACE_MINUTES)
+        if actual_end is not None:
+            result["early_minutes"] = max(0, planned_end - actual_end)
+            actual_worked = record.get("total_worked_minutes")
+            if actual_worked is None:
+                actual_worked = max(0, actual_end - actual_start - int(record.get("break_minutes") or 0))
+            planned_worked = planned_end - planned_start - int(schedule.get("break_minutes") or 0)
+            result["overtime_minutes"] = max(0, actual_worked - planned_worked)
+        result["labels"] = [label for key, label in (("late_minutes", "지각"), ("early_minutes", "조퇴"),
+                                                    ("overtime_minutes", "초과")) if result[key]] or ["정상"]
+    result["status"] = "·".join(result["labels"])
+    return result
+
+
+def _schedule_values(payload):
+    email = payload.employee_email.strip().lower()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+", email):
+        raise HTTPException(422, "직원 이메일을 확인하세요")
+    if any(t is not None and t.tzinfo is not None for t in (payload.start_time, payload.end_time)):
+        raise HTTPException(422, "근무 시각은 KST 현지 시각으로 입력하세요")
+    if payload.kind == "work":
+        if payload.start_time is None or payload.end_time is None:
+            raise HTTPException(422, "근무 시작·종료 시각이 필요합니다")
+        try:
+            worked = attendance_worked_minutes(payload.start_time, payload.end_time, payload.break_minutes)
+        except HTTPException as exc:
+            raise HTTPException(422, exc.detail) from exc
+        if worked <= 0:
+            raise HTTPException(422, "휴게시간을 제외한 근무시간이 필요합니다")
+    local, domain = email.split("@", 1)
+    return (email, f"{local[:1]}***@{domain}", payload.employee_name, payload.branch, payload.work_date,
+            payload.start_time, payload.end_time, payload.break_minutes, payload.kind, payload.memo)
+
+
+SCHEDULE_READ_SQL = """
+SELECT s.*, c.contract_payload
+FROM yeoljeong_work_schedules s
+LEFT JOIN LATERAL (
+    SELECT contract_payload FROM yeoljeong_contracts
+    WHERE business_id=s.business_id AND lower(employee_email)=s.employee_email
+      AND tenant_id=$6::uuid AND deleted_at IS NULL AND status='signed'
+    ORDER BY signed_at DESC NULLS LAST, updated_at DESC LIMIT 1
+) c ON true
+WHERE s.business_id=$1 AND s.deleted_at IS NULL
+ AND s.work_date BETWEEN $2 AND $3 AND ($4::text IS NULL OR s.employee_email=$4)
+ORDER BY s.work_date,s.employee_email LIMIT 1001 OFFSET $5
+"""
+
+
+def _schedule_json(value):
+    return json.loads(value) if isinstance(value, str) else value or {}
+
+
+def _contract_schedule_difference(schedule, payload):
+    text = str(payload.get("daily_work_schedule") or payload.get("dailyWorkSchedule") or "").strip()
+    if not text:
+        return None
+    day = "월화수목금토일"[schedule["work_date"].weekday()]
+    for line in text.splitlines():
+        match = re.match(r"([월화수목금토일 ,·]+)\s+(\d{2}:\d{2})[-~–](\d{2}:\d{2})(.*)", line)
+        if match and day in match[1]:
+            rest = re.search(r"휴게\s*(?:\d{2}:\d{2}[-~–]\d{2}:\d{2}\s*)?(\d+)분", match[4])
+            differs = (schedule["kind"] != "work" or str(schedule["start_time"])[:5] != match[2]
+                       or str(schedule["end_time"])[:5] != match[3]
+                       or (rest is not None and schedule["break_minutes"] != int(rest[1])))
+            return {"different": differs, "contract": line, "message": "계약서 근로시간과 근무표가 다릅니다" if differs else ""}
+    return {"different": True, "contract": text, "message": "계약서 근로일과 근무표가 다릅니다"} if schedule["kind"] == "work" else None
+
+
+@router.get("/{business_id}/attendance/schedules")
+async def list_work_schedules(
+    business_id: str,
+    date_from: str | None = Query(None, alias="from"),
+    date_to: str | None = Query(None, alias="to"),
+    employee_email: str | None = Query(None, max_length=320),
+    offset: int = Query(0, ge=0),
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    business = await _schedule_business(current_user, business_id)
+    own = _require_route_read(current_user, "attendance")
+    today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+    start = _attendance_filter_date(date_from, "from") or today - timedelta(days=today.weekday())
+    end = _attendance_filter_date(date_to, "to") or start + timedelta(days=6)
+    if end < start or (end - start).days > 61:
+        raise HTTPException(422, "조회 기간은 최대 62일입니다")
+    wanted = own if own is not None else (employee_email or "").strip().lower() or None
+    if wanted == "":
+        return {"schedules": [], "has_more": False, "next_offset": offset}
+    connection = await upload_svc._connect()
+    try:
+        rows = await connection.fetch(SCHEDULE_READ_SQL, business_id, start, end, wanted, offset,
+                                      str(upload_svc._tenant(current_user)))
+        actual_by_key = await _schedule_actual_records(connection, business_id, rows[:1000])
+    finally:
+        await connection.close()
+    # One legacy read for the entire requested window, never one read per schedule.
+    try:
+        legacy = await _legacy_people_rows(current_user, business_id, "attendance", start, end, wanted, 500 * min(len(rows), 1000)) if rows else []
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Do not turn a source outage into false absence judgments.
+        raise HTTPException(503, "기존 근태 조회가 지연되고 있습니다. 다시 시도하세요") from exc
+    legacy_by_key = {}
+    for record in legacy:
+        legacy_by_key.setdefault(_schedule_record_key(record), []).append(record)
+    schedules = []
+    counts = {}
+    for row in rows[:1000]:
+        item = dict(row)
+        actual = actual_by_key.get(_schedule_record_key(item)) or legacy_by_key.get(_schedule_record_key(item), [])
+        contract = _schedule_json(item.pop("contract_payload", None))
+        day_record = _schedule_day_record(actual)
+        identity = str(day_record.get("employee_id") or item["employee_email"])
+        item["employee_key"] = hashlib.sha256((business["name"] + ":" + identity).encode()).hexdigest()
+        item["judgment"] = attendance_schedule_judgment(item, actual)
+        item["contract_difference"] = _contract_schedule_difference(item, contract)
+        item["has_check_in"] = bool(day_record.get("start_at"))
+        if item["has_check_in"]:
+            counts["출근"] = counts.get("출근", 0) + 1
+        for label in item["judgment"]["labels"]:
+            counts[label] = counts.get(label, 0) + 1
+        schedules.append({key: _json_value(value) for key, value in item.items()})
+    return {"schedules": schedules, "counts": counts, "has_more": len(rows) > 1000,
+            "next_offset": offset + len(schedules), "late_grace_minutes": ATTENDANCE_LATE_GRACE_MINUTES}
+
+
+async def _schedule_business(user, business_id):
+    # 기존 사업자 스코프는 유지하고 신규 API에서는 격리 거부를 명시적으로 403 처리한다.
+    try:
+        return await _business(user, business_id)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(403, "현재 테넌트의 사업자가 아닙니다") from exc
+        raise
+
+
+async def _save_work_schedule(connection, business_id, payload, user, schedule_id=None):
+    from uuid import uuid4
+    values = _schedule_values(payload)
+    if schedule_id is not None:
+        row = await connection.fetchrow("""
+            UPDATE yeoljeong_work_schedules SET employee_email=$3, employee_email_masked=$4,
+              employee_name=$5,branch=$6,work_date=$7,start_time=$8,end_time=$9,break_minutes=$10,
+              kind=$11,memo=$12,updated_at=now()
+            WHERE business_id=$1 AND id=$2 AND deleted_at IS NULL RETURNING *
+        """, business_id, schedule_id, *values)
+        if row is None:
+            raise HTTPException(403, "현재 사업자의 근무표가 아닙니다")
+    else:
+        row = await connection.fetchrow("""
+            INSERT INTO yeoljeong_work_schedules
+              (id,business_id,employee_email,employee_email_masked,employee_name,branch,work_date,
+               start_time,end_time,break_minutes,kind,memo,created_by)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+            ON CONFLICT (business_id,employee_email,work_date) WHERE deleted_at IS NULL
+            DO UPDATE SET employee_email_masked=EXCLUDED.employee_email_masked,
+              employee_name=EXCLUDED.employee_name,branch=EXCLUDED.branch,
+              start_time=EXCLUDED.start_time,end_time=EXCLUDED.end_time,break_minutes=EXCLUDED.break_minutes,
+              kind=EXCLUDED.kind,memo=EXCLUDED.memo,updated_at=now() RETURNING *
+        """, str(uuid4()), business_id, *values, upload_svc._actor(user))
+    await _attendance_audit(connection, business_id, user, "attendance.schedule.save", str(row["id"]), dict(row))
+    return {key: _json_value(value) for key, value in dict(row).items()}
+
+
+async def _write_work_schedules(business_id, payloads, user, schedule_id=None):
+    _require_attendance_admin(user)
+    await _schedule_business(user, business_id)
+    for payload in payloads:
+        _schedule_values(payload)
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            return [await _save_work_schedule(connection, business_id, payload, user, schedule_id) for payload in payloads]
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(409, "같은 직원·근무일의 일정이 있습니다") from exc
+    finally:
+        await connection.close()
+
+
+@router.post("/{business_id}/attendance/schedules", status_code=201)
+async def create_work_schedule(business_id: str, payload: WorkScheduleIn,
+                               current_user: dict[str, Any] = Depends(get_current_user)):
+    return {"schedule": (await _write_work_schedules(business_id, [payload], current_user))[0]}
+
+
+def expand_work_schedules(payload):
+    if payload.cells is not None:
+        if not payload.cells:
+            raise HTTPException(422, "선택한 칸이 없습니다")
+        return payload.cells
+    if payload.date_to < payload.date_from or (payload.date_to - payload.date_from).days > 365:
+        raise HTTPException(422, "등록 기간은 최대 366일입니다")
+    if any(day not in range(7) for day in payload.weekdays):
+        raise HTTPException(422, "요일은 월요일 0부터 일요일 6까지입니다")
+    days = [payload.date_from + timedelta(days=i) for i in range((payload.date_to-payload.date_from).days+1)
+            if (payload.date_from + timedelta(days=i)).weekday() in payload.weekdays]
+    if len(days) * len(payload.employees) > 1000:
+        raise HTTPException(422, "일괄 등록은 최대 1,000행입니다")
+    values = payload.model_dump(exclude={"employees", "date_from", "date_to", "weekdays", "cells"})
+    return [WorkScheduleIn(**employee.model_dump(), work_date=day, **values)
+            for employee in payload.employees for day in days]
+
+
+@router.post("/{business_id}/attendance/schedules/bulk")
+async def bulk_work_schedules(business_id: str, payload: WorkScheduleBulkIn,
+                              current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_attendance_admin(current_user)
+    await _schedule_business(current_user, business_id)
+    rows = await _write_work_schedules(business_id, expand_work_schedules(payload), current_user)
+    return {"schedules": rows, "count": len(rows)}
+
+
+@router.put("/{business_id}/attendance/schedules/{schedule_id}")
+async def update_work_schedule(business_id: str, schedule_id: str, payload: WorkScheduleIn,
+                               current_user: dict[str, Any] = Depends(get_current_user)):
+    return {"schedule": (await _write_work_schedules(business_id, [payload], current_user, schedule_id))[0]}
+
+
+@router.delete("/{business_id}/attendance/schedules/{schedule_id}")
+async def delete_work_schedule(business_id: str, schedule_id: str,
+                               current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_attendance_admin(current_user)
+    await _schedule_business(current_user, business_id)
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            row = await connection.fetchrow("""UPDATE yeoljeong_work_schedules
+                SET deleted_at=now(),updated_at=now()
+                WHERE business_id=$1 AND id=$2 AND deleted_at IS NULL RETURNING id""", business_id, schedule_id)
+            if row is None:
+                raise HTTPException(403, "현재 사업자의 근무표가 아닙니다")
+            await _attendance_audit(connection, business_id, current_user, "attendance.schedule.delete", schedule_id, {})
+    finally:
+        await connection.close()
+    return {"deleted": True, "id": schedule_id}
 
 
 @router.post("/{business_id}/attendance/records", status_code=201)
