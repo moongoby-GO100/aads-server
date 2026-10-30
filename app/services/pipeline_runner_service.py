@@ -206,6 +206,18 @@ async def _update_linked_goal_state_with_phase(
         logger.warning("goal_completion_check_failed job=%s: %s", job_id, exc)
 
 
+async def _sync_work_items_running(job_id: str) -> None:
+    """목표 링크 상태를 바꾸지 않고 실행 중 업무만 최선 노력으로 갱신한다."""
+    try:
+        from app.core.db_pool import get_pool
+        from app.services.goal_work_item_sync import sync_runner
+
+        async with get_pool().acquire() as conn, conn.transaction():
+            await sync_runner(conn, job_id, "running")
+    except Exception as exc:
+        logger.warning("work_item_running_sync_failed job=%s: %s", job_id, exc)
+
+
 async def _reconcile_job_goal_links(job_id: str) -> None:
     """DB 에 직접 종료 상태를 쓴 경로에서, 저장된 실제 상태로 목표 링크를 재조정한다.
 
@@ -2539,6 +2551,8 @@ class PipelineCJob:
                     await emit_task_completed(self.job_id, self.status, self.review_feedback or self.error_msg or "")
                 except Exception:
                     pass
+            if self.status in ("running", "in_progress"):
+                await _sync_work_items_running(self.job_id)
             if self.status in _TERMINAL_JOB_STATUSES:
                 await _update_linked_goal_state_with_phase(
                     self.job_id, self.status, self.phase,

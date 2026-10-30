@@ -193,6 +193,16 @@ async def autolink_job(
     except Exception as exc:  # noqa: BLE001 — 연결 실패는 제출 실패가 아니다
         logger.warning("goal_autolink_failed job=%s: %s", job_id, str(exc)[:200])
         result = _none(REASON_ERROR)
+    try:
+        if result.linked:
+            from app.core.db_pool import get_pool
+            from app.services.goal_work_item_sync import bind_work_items
+
+            async with get_pool().acquire() as conn:
+                async with conn.transaction():
+                    await bind_work_items(conn, job_id, instruction)
+    except Exception as exc:
+        logger.warning("work_item_bind_failed job=%s: %s", job_id, str(exc)[:200])
     await _record(job_id, result)
     logger.info(
         "goal_autolink job=%s source=%s goal=%s milestone=%s reason=%s",

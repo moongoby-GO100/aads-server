@@ -172,6 +172,14 @@ async def confirm(
                 prev_dispatched_at=row["dispatched_at"],
                 prev_dispatch_count=row["dispatch_count"],
             )
+    if new == "completed" or not ok:
+        try:
+            from app.services.goal_work_item_sync import sync_milestone
+
+            async with pool.acquire() as conn, conn.transaction():
+                await sync_milestone(conn, milestone_id, "completed" if ok else "rejected")
+        except Exception as exc:
+            logger.warning("work_item_sync_failed", error=str(exc)[:200])
     logger.info(
         "milestone_confirmed", milestone=milestone_id[:8],
         result=new, by=confirmer,

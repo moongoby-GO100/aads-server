@@ -150,6 +150,33 @@ def cycle(monkeypatch):
     return _run, log, spawned
 
 
+@pytest.mark.parametrize("failure", ["missing_transaction", "reconcile_error"])
+def test_work_item_sync_failure_does_not_stop_dispatch(cycle, monkeypatch, failure) -> None:
+    from contextlib import nullcontext
+    from unittest.mock import AsyncMock
+
+    from app.services import goal_work_item_sync
+
+    reconcile = AsyncMock(side_effect=RuntimeError("reconcile failed"))
+    monkeypatch.setattr(goal_work_item_sync, "reconcile_runner_items", reconcile)
+    if failure == "reconcile_error":
+        monkeypatch.setattr(_Conn, "transaction", lambda self: nullcontext(), raising=False)
+
+    run, log, spawned = cycle
+    result, _conn = run([_row(1)], {"dispatch_count": 1})
+
+    assert result["sent"] == 1
+    assert len(spawned) == 1
+    errors = log.named("work_item_sync_failed")
+    assert len(errors) == 1
+    if failure == "missing_transaction":
+        reconcile.assert_not_awaited()
+        assert "transaction" in errors[0]["error"]
+    else:
+        reconcile.assert_awaited_once_with(_conn, None)
+        assert errors[0]["error"] == "reconcile failed"
+
+
 def test_an_empty_claim_never_reaches_the_send(cycle) -> None:
     """소유권 UPDATE 가 0행이면 **발송 자체가 일어나지 않는다.**
 

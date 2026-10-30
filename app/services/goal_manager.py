@@ -37,6 +37,7 @@ _FAILED_TASK_STATUSES = set(FAILED_JOB_STATUSES)
 
 # migration 166 이전 이미지(블루/그린 과도기)에서도 죽지 않도록 선택 컬럼을 1회만 확인한다.
 _LINK_OPTIONAL_COLUMNS = (
+    "work_item_ids", "work_items_synced_status",
     "bind_source", "bound_by", "link_state", "detach_reason",
     "superseded_by", "superseded_at", "last_job_status", "reconciled_at", "updated_at",
 )
@@ -588,6 +589,14 @@ class GoalStateMachine:
                 status, phase, resolved_project,
             )
             columns = await link_optional_columns(conn)
+            if task_type == "pipeline_job" and "work_item_ids" in columns:
+                from app.services.goal_work_item_sync import sync_runner
+
+                try:
+                    async with conn.transaction():
+                        await sync_runner(conn, task_id, status, phase, tenant_id)
+                except Exception as exc:
+                    logger.warning("work_item_sync_failed: %s", str(exc)[:200])
             status_sets = ["status = $3"]
             if "last_job_status" in columns:
                 status_sets.append("last_job_status = $3")
@@ -976,6 +985,14 @@ class GoalStateMachine:
                 """,
                 milestone_id, row["version"],
             )
+            if tag == "UPDATE 1":
+                from app.services.goal_work_item_sync import sync_milestone
+
+                try:
+                    async with conn.transaction():
+                        await sync_milestone(conn, milestone_id, "completed")
+                except Exception as exc:
+                    logger.warning("work_item_sync_failed: %s", str(exc)[:200])
         return {"result": "completed" if tag == "UPDATE 1" else "version_conflict"}
 
     async def _recover_stale_milestone_block(

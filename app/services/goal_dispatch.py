@@ -758,6 +758,13 @@ async def dispatch_pending_milestones(project: str | None = None) -> dict[str, i
             # 지시를 보내기 전에 연결고리부터 메운다. 링크가 없으면 담당은
             # 지시를 받아도 자기 화면에서 그 목표를 찾을 수 없다.
             links_repaired = await repair_owner_links(conn)
+            from app.services.goal_work_item_sync import reconcile_runner_items
+
+            try:
+                async with conn.transaction():
+                    await reconcile_runner_items(conn, project)
+            except Exception as exc:
+                logger.warning("work_item_sync_failed", error=str(exc)[:200])
 
             # 부하로 밀린 시각을 적어 둘 칸. 없으면 만든다(있으면 아무 일도
             # 안 한다). 마이그레이션 파일이 안 돈 서버에서도 게이트가 상한
