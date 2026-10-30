@@ -45,25 +45,26 @@ def literal(s):
     return "'" + s.replace("'", "''") + "'"
 
 
-def lookup(release_sha):
+def lookup(release_sha, root=None):
     # One SELECT, one statement snapshot; no approval files or environment decisions.
     query = f"""SELECT json_build_object(
       'tenant_id', t.id::text, 'target_db', current_database(),
-      'document', (SELECT row_to_json(d) FROM (
-        SELECT h.approved_revision_id, h.latest_revision_id, r.id AS revision_id,
+      'documents', (SELECT json_agg(d) FROM (
+        SELECT h.document_key, h.approved_revision_id, h.latest_revision_id, r.id AS revision_id,
           r.content, r.content_hash, e.action, e.actor_id,
           EXISTS(SELECT 1 FROM tenant_memberships m JOIN saas_users u ON u.id=m.user_id
             WHERE m.tenant_id=t.id AND m.user_id=e.actor_id AND m.role='owner'
             AND m.status='active' AND m.deleted_at IS NULL
             AND u.status='active' AND u.deleted_at IS NULL) AS owner
         FROM project_document_heads h
-        JOIN project_document_revisions r ON r.id=h.approved_revision_id AND r.head_id=h.id
+        LEFT JOIN project_document_revisions r ON r.id=h.approved_revision_id AND r.head_id=h.id
         LEFT JOIN LATERAL (SELECT * FROM project_document_events ev WHERE ev.head_id=h.id
           AND ev.tenant_id=h.tenant_id AND ev.project_key=h.project_key
           AND ev.action IN ('created','revised','review','approved','archived')
           ORDER BY ev.id DESC LIMIT 1) e ON true
         WHERE h.tenant_id=t.id AND h.project_key='AADS' AND h.kind='contract'
-          AND h.document_key={literal('migration-apply-' + release_sha[:12])}
+          AND (h.document_key={literal('migration-apply-' + release_sha[:12])}
+            OR h.document_key LIKE 'migration-apply-m-%')
       ) d),
       'ledger', COALESCE((SELECT json_object_agg(filename,sha256) FROM schema_migrations),'{{}}'::json))
       FROM tenants t WHERE t.slug='internal' AND t.status='active' AND t.deleted_at IS NULL;"""
@@ -74,7 +75,17 @@ def lookup(release_sha):
          os.environ.get('PGUSER', 'aads'), '-d', os.environ.get('PGDATABASE', 'aads'),
          '-qAt', '-v', 'ON_ERROR_STOP=1', '-c', query],
         capture_output=True, text=True, timeout=65, check=True)
-    return json.loads(result.stdout)
+    state = json.loads(result.stdout)
+    documents = {d['document_key']: d for d in state.pop('documents', None) or []}
+    release_key = 'migration-apply-' + release_sha[:12]
+    if release_key in documents:
+        state['document'] = documents[release_key]
+    elif root is not None:
+        key = 'migration-apply-m-' + manifest_hash(inventory(root, state['ledger']))[:12]
+        state['document'] = documents.get(key)
+    else:
+        state['document'] = None
+    return state
 
 
 def inventory(root, ledger):
@@ -114,12 +125,21 @@ def verify(root, release_sha, supplied, state, now=None):
         raise Rejected('invalid_document')
     if not isinstance(data, dict):
         raise Rejected('invalid_document')
-    if data.get('release_sha') != release_sha:
+    binding = data.get('binding', 'release')
+    if binding not in ('release', 'manifest'):
+        raise Rejected('scope_mismatch')
+    origin_sha = data.get('release_sha')
+    if (not isinstance(origin_sha, str) or not re.fullmatch('[0-9a-f]{40}', origin_sha)
+            or (binding == 'release' and origin_sha != release_sha)):
         raise Rejected('release_mismatch')
     for k, v in {'purpose': 'migration_apply', 'project': 'AADS',
                  'tenant_id': state['tenant_id'], 'target_db': state['target_db']}.items():
         if data.get(k) != v:
             raise Rejected('scope_mismatch')
+    expected_key = ('migration-apply-m-' + str(data.get('manifest_sha256', ''))[:12]
+                    if binding == 'manifest' else 'migration-apply-' + release_sha[:12])
+    if 'document_key' in d and d['document_key'] != expected_key:
+        raise Rejected('scope_mismatch')
     approved = valid_manifest(data.get('manifest'))
     if data.get('manifest_sha256') != manifest_hash(approved):
         raise Rejected('manifest_mismatch')
@@ -140,6 +160,8 @@ def verify(root, release_sha, supplied, state, now=None):
     pending = inventory(root, state['ledger'])
     if valid_manifest(supplied) != pending:
         raise Rejected('manifest_mismatch')
+    if binding == 'manifest' and approved != pending:
+        raise Rejected('manifest_mismatch')
     by_name = {x['file']: x['sha256'] for x in approved}
     if any(by_name.get(x['file']) != x['sha256'] for x in pending):
         raise Rejected('manifest_mismatch')
@@ -149,10 +171,10 @@ def verify(root, release_sha, supplied, state, now=None):
             raise Rejected('manifest_mismatch')
         if name not in {x['file'] for x in pending} and state['ledger'].get(name, state['ledger'].get(path.name)) != sha:
             raise Rejected('manifest_mismatch')
-    return f"APPROVED revision_id={d['revision_id']} approver={actor} manifest_sha256={data['manifest_sha256']}"
+    return f"APPROVED revision_id={d['revision_id']} approver={actor} manifest_sha256={data['manifest_sha256']} binding={binding}"
 
 
-def register(content, sha):
+def register(content, sha, binding='release', manifest_sha256=None):
     # Caller supplies a normal existing API login credential; never an approval override.
     base = os.environ['AADS_API_URL'].rstrip('/') + '/api/v1/projects/AADS/documents'
     def post(url, body):
@@ -160,10 +182,11 @@ def register(content, sha):
             'Content-Type': 'application/json', 'Authorization': 'Bearer ' + os.environ['AADS_ACCESS_TOKEN']})
         with urlopen(req, timeout=30) as response:
             return json.load(response)
-    key = 'migration-apply-' + sha[:12]
+    key = ('migration-apply-m-' + manifest_sha256[:12] if binding == 'manifest'
+           else 'migration-apply-' + sha[:12])
     result = post(base, dict(document_key=key, kind='contract', title='릴리스 마이그레이션 적용 승인',
         version='1.0.0', content=content, expected_generation=0,
-        source_task_id='runner-fffc8833', change_summary='정확한 릴리스 SQL 명세의 사람 승인 검토 요청'))
+        source_task_id='runner-3b18076c', change_summary='정확한 릴리스 SQL 명세의 사람 승인 검토 요청'))
     return post(base + '/' + key + '/review', dict(revision_id=result['revision_id'], expected_generation=result['generation']))
 
 
@@ -174,13 +197,14 @@ def main():
     parser.add_argument('--release-sha')
     parser.add_argument('--manifest-file', type=Path)
     parser.add_argument('--register', action='store_true')
+    parser.add_argument('--binding', choices=['manifest', 'release'], default='manifest')
     args = parser.parse_args()
     try:
         sha = args.release_sha or os.environ.get('AADS_RELEASE_SHA') or subprocess.check_output(
             ['git', '-C', str(args.root), 'rev-parse', 'HEAD'], text=True).strip()
         if not re.fullmatch('[0-9a-f]{40}', sha):
             raise Rejected('release_mismatch')
-        state = lookup(sha)
+        state = lookup(sha, args.root)
         if args.command == 'verify':
             supplied = [{'file': line.split('|')[0], 'sha256': line.split('|')[1]}
                         for line in args.manifest_file.read_text().splitlines() if line]
@@ -188,7 +212,7 @@ def main():
         else:
             items = inventory(args.root, state['ledger'])
             data = dict(purpose='migration_apply', project='AADS', tenant_id=state['tenant_id'],
-                target_db=state['target_db'], release_sha=sha, manifest=items,
+                target_db=state['target_db'], release_sha=sha, binding=args.binding, manifest=items,
                 manifest_sha256=manifest_hash(items), expires_at=(datetime.now(timezone.utc)+timedelta(hours=24)).isoformat())
             content = '# 릴리스 마이그레이션 적용 승인\n\nAPI 롤백은 적용된 SQL을 되돌리지 않음\n\n'
             for item in items:
@@ -197,7 +221,7 @@ def main():
             content += '\n```aads-migration-approval\n' + json.dumps(data, ensure_ascii=False, indent=2) + '\n```\n'
             print(content)
             if args.register:
-                print(json.dumps(register(content, sha), ensure_ascii=False))
+                print(json.dumps(register(content, sha, args.binding, data['manifest_sha256']), ensure_ascii=False))
         return 0
     except Rejected as exc:
         print(str(exc))

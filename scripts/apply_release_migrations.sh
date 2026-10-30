@@ -160,7 +160,8 @@ if ((blocked)); then
     exit 4
 fi
 
-# The verifier independently reads the full inventory and the DB ledger.
+# The verifier independently reads the full inventory and the DB ledger, then
+# selects the release key first or falls back to the current manifest key.
 verify_ceo_approval() {
     local approval_manifest rc=0
     approval_manifest="$(mktemp)"
@@ -270,7 +271,7 @@ elif ((${#pending[@]})); then
     fi
     printf 'RELEASE %s\n%s' "${release_sha:-unknown}" "$manifest"
     if ! verify_ceo_approval "$release_sha" "$manifest"; then
-        echo "BLOCK-CEO-APPROVAL: PENDING migrations require a human CEO approval bound to RELEASE and every filename/sha256 above."
+        echo "BLOCK-CEO-APPROVAL: PENDING migrations require a human CEO approval bound to RELEASE or the exact pending manifest (every filename/sha256 above)."
         echo "승인 방법: CEO 사람 로그인으로 해당 명세를 검토. 정본 contract 문서를 검토 후 승인해야 합니다."
         exit 7
     fi

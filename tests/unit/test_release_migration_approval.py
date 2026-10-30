@@ -195,12 +195,12 @@ def test_lookup_uses_only_select_and_readonly(monkeypatch):
         assert not any(x in sql for x in ('INSERT ', 'UPDATE ', 'DELETE '))
         return subprocess.CompletedProcess(cmd, 0, '{}', '')
     monkeypatch.setattr(a.subprocess, 'run', run)
-    assert a.lookup(SHA) == {}
+    assert a.lookup(SHA) == {'document': None}
 
 
 def test_draft_stdout_does_not_register_or_approve(approved, monkeypatch, capsys):
     root, state, _, _ = approved
-    monkeypatch.setattr(a, 'lookup', lambda sha: state)
+    monkeypatch.setattr(a, 'lookup', lambda sha, root: state)
     monkeypatch.setattr(a, 'register', lambda *args: pytest.fail('unexpected registration'))
     monkeypatch.setattr(a.sys, 'argv', ['approval', 'draft', '--root', str(root), '--release-sha', SHA])
     assert a.main() == 0
@@ -212,7 +212,7 @@ def test_draft_stdout_does_not_register_or_approve(approved, monkeypatch, capsys
 
 def test_lookup_error_is_closed(approved, monkeypatch, capsys):
     root, _, _, _ = approved
-    def fail(sha):
+    def fail(sha, root):
         raise TimeoutError()
     monkeypatch.setattr(a, 'lookup', fail)
     monkeypatch.setattr(a.sys, 'argv', ['approval', 'verify', '--root', str(root), '--release-sha', SHA])
@@ -226,4 +226,91 @@ def test_non_uuid_actor_is_closed(approved, actor):
     root, state, _, _ = approved
     state['document']['actor_id'] = actor
     with pytest.raises(a.Rejected, match='approver_not_human'):
+        a.verify(root, SHA, a.inventory(root, {}), state)
+
+
+def test_manifest_binding_accepts_later_release(approved):
+    root, state, data, encode = approved
+    data['binding'] = 'manifest'
+    encode()
+    assert 'binding=manifest' in a.verify(root, 'b' * 40, a.inventory(root, {}), state)
+    result, calls = run_short_sha_gate(root, state, 'b' * 12, 'b' * 40)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls.exists()
+
+
+@pytest.mark.parametrize('case,code', [x for x in CASES if x[0] not in ('release', 'lookup')])
+def test_manifest_binding_preserves_rejections(approved, case, code):
+    root, state, data, encode = approved
+    data['binding'] = 'manifest'
+    mutate(case, root, state, data, encode)
+    with pytest.raises(a.Rejected, match=code):
+        a.verify(root, 'b' * 40, a.inventory(root, state['ledger']), state)
+
+
+@pytest.mark.parametrize('origin', [None, '', 'a' * 12, 123])
+def test_manifest_binding_requires_valid_audit_release(approved, origin):
+    root, state, data, encode = approved
+    data.update(binding='manifest', release_sha=origin)
+    encode()
+    with pytest.raises(a.Rejected, match='release_mismatch'):
+        a.verify(root, SHA, a.inventory(root, {}), state)
+
+
+def test_manifest_binding_requires_exact_pending_set(approved):
+    root, state, data, encode = approved
+    data['binding'] = 'manifest'
+    encode()
+    item = data['manifest'][0]
+    state['ledger'][item['file']] = item['sha256']
+    with pytest.raises(a.Rejected, match='manifest_mismatch'):
+        a.verify(root, SHA, [], state)
+
+
+@pytest.mark.parametrize('release_present', [False, True])
+def test_lookup_manifest_fallback_and_release_precedence(approved, monkeypatch, release_present):
+    root, state, data, _ = approved
+    key = 'migration-apply-m-' + data['manifest_sha256'][:12]
+    documents = [dict(state['document'], document_key=key)]
+    if release_present:
+        # Even an unapproved release head blocks fallback.
+        documents.append(dict(document_key='migration-apply-' + SHA[:12], approved_revision_id=None))
+    payload = dict(state, documents=documents)
+    payload.pop('document')
+    def run(cmd, **kwargs):
+        sql = cmd[-1]
+        assert sql.count(';') == 1
+        assert 'LEFT JOIN project_document_revisions' in sql
+        assert 'default_transaction_read_only=on' in cmd[5]
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), '')
+    monkeypatch.setattr(a.subprocess, 'run', run)
+    found = a.lookup(SHA, root)['document']
+    assert found['document_key'] == ('migration-apply-' + SHA[:12] if release_present else key)
+
+
+@pytest.mark.parametrize('binding', ['manifest', 'release'])
+def test_draft_binding_and_registration_key(approved, monkeypatch, capsys, binding):
+    root, state, data, _ = approved
+    monkeypatch.setattr(a, 'lookup', lambda sha, root: state)
+    registered = []
+    monkeypatch.setattr(a, 'register', lambda *args: registered.append(args))
+    args = ['approval', 'draft', '--root', str(root), '--release-sha', SHA, '--register']
+    if binding == 'release':
+        args += ['--binding', binding]
+    monkeypatch.setattr(a.sys, 'argv', args)
+    assert a.main() == 0
+    content = capsys.readouterr().out
+    assert f'"binding": "{binding}"' in content
+    assert f'"release_sha": "{SHA}"' in content
+    assert registered[0][1:] == (SHA, binding, data['manifest_sha256'])
+
+
+@pytest.mark.parametrize('binding', ['release', 'manifest'])
+def test_document_key_must_match_binding(approved, binding):
+    root, state, data, encode = approved
+    data['binding'] = binding
+    encode()
+    state['document']['document_key'] = ('migration-apply-' + SHA[:12] if binding == 'manifest'
+                                         else 'migration-apply-m-' + data['manifest_sha256'][:12])
+    with pytest.raises(a.Rejected, match='scope_mismatch'):
         a.verify(root, SHA, a.inventory(root, {}), state)
