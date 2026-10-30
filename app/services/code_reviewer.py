@@ -311,6 +311,13 @@ def _validate_review_details(details: object) -> Optional[dict]:
         return None
     if not isinstance(details.get("issues"), list):
         return None
+    alignment = details.get("spec_alignment")
+    delta = details.get("spec_delta", "")
+    if (alignment not in ("aligned", "deviates", "spec_update_needed", "not_applicable")
+            or "spec_delta" not in details or not isinstance(delta, str) or len(delta) > 600):
+        alignment, delta = "not_applicable", ""
+    details["spec_alignment"] = alignment
+    details["spec_delta"] = delta
     return details
 
 
@@ -1990,6 +1997,12 @@ async def review_code_diff(
 
 위 기준에 따라 JSON으로 판정하세요."""
 
+    from app.services.spec_drift import review_spec_prompt
+    try:
+        prompt += await asyncio.wait_for(review_spec_prompt(instruction, job_id, project), 5)
+    except Exception:
+        logger.warning("spec_prompt_failed_open")
+
     try:
         job_context = await _job_review_context(job_id)
         configured_models = await _get_review_models(job_context['size']) if job_context.get('size') else await _get_review_models()
@@ -2306,6 +2319,8 @@ async def review_code_diff(
         # timeout/error and the final valid model in the durable code_reviews
         # record so later review_hold recovery can make an informed exclusion.
         details["attempt_evidence"] = attempt_evidence
+        from app.services.spec_drift import apply_spec_review
+        await apply_spec_review(instruction, job_id, project, details)
         verdict_obj = _build_review_verdict(
             verdict=verdict,
             score=score,
