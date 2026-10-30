@@ -25,7 +25,7 @@ def test_role_navigation_and_payroll_execute():
     menu = re.search(r'const menu=(\[.*?\n    \]);', HTML, re.S).group(1)
     source = '\n'.join(line(p) for p in [
         'const MANAGER_READ_ROUTES=', 'function canReadRouteV41(',
-        'function renderNav(', 'function payrollMoneyV41(',
+        'function peopleWorkLinksV41(', 'function renderNav(', 'function payrollMoneyV41(',
         'function payrollDisplayV41(', 'function liveRow(',
         'async function loadLiveRoute(',
     ])
@@ -43,12 +43,13 @@ for(const role of [null,'unknown','member','viewer','owner','admin']){{
 }}
 const raw={{gross_pay:'3000000',tax_withholding:'100000',insurance_deduction:200000,other_deduction:'0',net_pay:'2700000'}};
 const row=liveRow({{id:'p1',status:'확정',raw,display:{{직원:'테스트',기본급:'잘못된 값'}}}},configs.payroll);
-assert.equal(row.총지급액,'3,000,000원');assert.equal(row.공제,'300,000원');assert.equal(row.실수령,'2,700,000원');
-assert.equal(row.기본급,'미산출');assert.equal(row.수당,'미산출');
-assert.equal(payrollDisplayV41({{raw:{{...raw,other_deduction:null}}}}).공제,'미산출');
+assert.equal(row.총지급액,'3,000,000원');assert.equal(row.공제,'미집계');assert.equal(row.실수령,'2,700,000원');
+assert.equal(row.기본급,'미집계');assert.equal(row.수당,'미집계');
+assert.equal(payrollDisplayV41({{raw:{{...raw,other_deduction:null}}}}).공제,'미집계');
 assert.equal(payrollDisplayV41({{raw:{{gross_pay:0,net_pay:0}}}}).총지급액,'0원');
-for(const value of [null,undefined,'',' ',true,[], 'NaN','Infinity'])assert.equal(payrollMoneyV41(value),'미산출');
-assert.equal(payrollDisplayV41({{}}).실수령,'미산출');
+for(const value of [null,undefined,'',' ',true,[], 'NaN','Infinity'])assert.equal(payrollMoneyV41(value),'미집계');
+assert.equal(payrollDisplayV41({{}}).실수령,'미집계');
+assert.equal(payrollDisplayV41({{raw:{{total_deductions:300000}}}}).공제,'300,000원');
 const other={{columns:['직원']}};assert.equal(liveRow({{display:{{직원:'유지'}}}},other).직원,'유지');
 const paths=[];const history={{replaceState(){{}}}},document={{getElementById:()=>null}};
 function renderPageV41(){{}};function renderSessionRecovery(){{throw Error('unexpected session failure')}};
@@ -65,7 +66,10 @@ def test_permission_gates_run_before_requests_and_render():
     assert load.index('canReadRouteV41(state.route)') < load.index('workspaceApi(')
     render = HTML.split('function renderPageV41(){', 1)[1]
     assert render.index('canReadRouteV41(state.route)') < render.index('filteredRows(c)')
-    assert 'await loadReadPermissionV41();renderPageV41()' in HTML
+    start = HTML.split('async function startWorkspaceV41(){', 1)[1].split('startWorkspaceV41().catch', 1)[0]
+    # 읽기 권한 확인이 사업자·직원 조회와 화면 데이터 로드보다 먼저 끝나야 한다.
+    assert start.index('await loadReadPermissionV41();') < start.index('await Promise.all(')
+    assert start.index('await loadReadPermissionV41();') < start.index('await loadLiveRoute();')
 
 
 @pytest.mark.skipif(not shutil.which('node'), reason='node unavailable')

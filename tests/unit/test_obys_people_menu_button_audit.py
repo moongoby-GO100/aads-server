@@ -136,7 +136,7 @@ def test_payroll_renderer_state_permissions(tmp_path):
 const queueEmployeePortalSync=()=>{},isEmployeeExperience=()=>!manager,canManageOnboarding=()=>manager;
 const document={getElementById:()=>null};let employeePreview=null;
 const rows=[{id:'draft',status:'draft'},{id:'confirmed',status:'confirmed'},{id:'paid',status:'paid'},{id:'old',status:'paid',superseded_by:'new'}];
-const visiblePayrollStatements=()=>rows,escapeHtml=x=>String(x),formatMoney=x=>String(x),employmentTaxTypeLabels={};
+const selectedMonth=()=>'',visiblePayrollStatements=()=>rows,escapeHtml=x=>String(x),formatMoney=x=>String(x),employmentTaxTypeLabels={};
 const payrollStatusLabels={draft:['작성중','info'],confirmed:['확정','good'],paid:['지급완료','good']};
 const els={payrollRows:{innerHTML:''}};
 function renderPayroll() {''' + source + '''
@@ -201,3 +201,28 @@ form.wage.value='';applyRegularSalaryPreset(true);assert.equal(form.wage.value,'
 ''')
     result=subprocess.run(['node',str(script)],capture_output=True,text=True)
     assert result.returncode == 0,result.stderr
+
+
+@NEEDS_NODE
+def test_v41_people_filters_and_server_payroll_amounts(tmp_path):
+    admin = (ROOT / 'app/static/apps/obys/admin.html').read_text()
+    names = ['payrollMoneyV41', 'payrollDisplayV41', 'attendanceMetricsV41', 'filteredRows']
+    functions = '\n'.join(next(line.strip() for line in reversed(admin.splitlines())
+                              if line.strip().startswith(f'function {name}(')) for name in names)
+    script = tmp_path / 'people-v41.cjs'
+    script.write_text('''const assert=require('node:assert/strict');
+const state={route:'payroll',peopleMonth:'2026-10',peopleEmployee:'직원 가',peopleBranch:'매장 가',selected:{},status:'전체 상태',search:''};
+''' + functions + '''
+const row=(month,name,branch)=>({'직원':name,'지점':branch,__live:{raw:{payroll_month:month}}});
+const c={data:[row('2026-10','직원 가','매장 가'),row('2026-09','직원 가','매장 가'),row('2026-10','직원 나','매장 가'),row('2026-10','직원 가','매장 나')]};
+assert.equal(filteredRows(c).length,1);
+state.route='home';assert.equal(filteredRows(c).length,4);
+const display=payrollDisplayV41({raw:{gross_pay:3000000,net_pay:2700000,tax_withholding:100000,insurance_deduction:200000,status:'draft'}});
+assert.equal(display.공제,'미집계');assert.equal(display.상태,'확정 전');
+assert.equal(display.총지급액,'3,000,000원');assert.equal(display.실수령,'2,700,000원');
+assert.equal(payrollDisplayV41({raw:{totals:{total_deductions:123456},status:'paid'}}).공제,'123,456원');
+assert.equal(payrollDisplayV41({raw:{status:'confirmed'}}).상태,'확정');
+assert.deepEqual(attendanceMetricsV41([{__live:{raw:{start_at:'09:00'}}}]),['출근|1건','지각|미집계','결근|미집계','초과|미집계']);
+''')
+    result = subprocess.run(['node', str(script)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

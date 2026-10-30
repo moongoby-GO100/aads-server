@@ -3003,7 +3003,8 @@
       main { padding: 12px 12px calc(56px + env(safe-area-inset-bottom) + 24px); }
       .subtitle { white-space: normal; }
     }
-  </style>
+  #attendanceView button,#attendanceView input,#payrollView button,#payrollView input,#payrollView summary{min-height:44px}
+    </style>
   <link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">
   <link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20261014-r1">
   <link rel="stylesheet" href="/static/apps/obys/modules/clobe-collection.css?v=20261014-r1">
@@ -3769,7 +3770,7 @@
           </section>
           <section class="panel">
             <div class="panel-head">
-              <h2 class="panel-title">근태 목록</h2>
+              <h2 class="panel-title">근태 목록</h2><label>조회월 <input type="month" id="employeeAttendanceMonth"></label><span id="employeeAttendanceSummary" aria-live="polite"></span>
               <div style="display:flex; gap:8px; flex-wrap:wrap">
                 <button id="uploadLocalShiftsBtn" class="hidden">미저장 근태 서버로 올리기</button>
                 <button id="downloadShiftCsvBtn">CSV 저장</button>
@@ -4415,7 +4416,7 @@
           </section>
           <section class="panel">
             <div class="panel-head">
-              <h2 class="panel-title">급여내역서 현황</h2>
+              <h2 class="panel-title">급여내역서 현황</h2><label>급여월 <input type="month" id="employeePayrollMonth"></label>
               <div id="payrollConsentActions" class="hidden">
                 <button type="button" data-payroll-consent="agree">전자 명세 수신 동의</button>
                 <button type="button" data-payroll-consent="revoke">수신 동의 철회</button>
@@ -8495,6 +8496,10 @@
 
     function renderShiftRows() {
       const employeeMode = isEmployeeExperience();
+      const monthInput = document.getElementById("employeeAttendanceMonth");
+      if(monthInput){monthInput.value=selectedMonth();monthInput.onchange=()=>{els.monthFilter.value=monthInput.value;renderAll()}}
+      const summary = document.getElementById("employeeAttendanceSummary");
+      if(summary)summary.textContent=`${selectedMonth()} · 근무 ${visibleShifts().length}건 · ${formatHour(visibleShifts().reduce((sum,row)=>sum+shiftHours(row),0))}`;
       const rows = visibleShifts().slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
       els.shiftRows.innerHTML = rows.length ? rows.map(row => {
         const [label, klass] = statusLabels[row.status] || statusLabels.pending;
@@ -8776,8 +8781,10 @@
       queueEmployeePortalSync();
       const employeeMode = isEmployeeExperience();
       const managerMode = canManageOnboarding();
+      const monthInput = document.getElementById("employeePayrollMonth");
+      if(monthInput){monthInput.value=selectedMonth();monthInput.onchange=()=>{els.monthFilter.value=monthInput.value;renderAll()}}
       document.getElementById("payrollConsentActions")?.classList.toggle("hidden", !employeeMode || Boolean(employeePreview));
-      const rows = visiblePayrollStatements().slice().sort((a, b) => String(b.updated_at || b.updatedAt || b.period || "").localeCompare(String(a.updated_at || a.updatedAt || a.period || "")));
+      const rows = visiblePayrollStatements().filter(item => String(item.payroll_month || item.period || "").startsWith(selectedMonth())).slice().sort((a, b) => String(b.updated_at || b.updatedAt || b.period || "").localeCompare(String(a.updated_at || a.updatedAt || a.period || "")));
       const pending = rows.filter(item => item.status === "draft").length;
       if (els.payrollSummary) {
         els.payrollSummary.textContent = `급여내역서 ${rows.length}건 / 작성중 ${pending}건`;
@@ -8797,7 +8804,7 @@
         return;
       }
       els.payrollRows.innerHTML = rows.map(item => {
-        const status = payrollStatusLabels[item.status] || payrollStatusLabels.draft;
+        const status = ["confirmed", "paid"].includes(item.status) ? payrollStatusLabels[item.status] : ["확정 전", "warn"];
         const employmentTaxType = item.employmentTaxType || item.employment_tax_type || "";
         const locked = ["confirmed", "paid"].includes(item.status);
         const editable = !item.status || item.status === "draft";
@@ -8817,9 +8824,9 @@
             <td>${escapeHtml(item.payroll_month || item.period || "-")}<br><span class="muted">지급 ${escapeHtml(item.pay_date || item.payDate || "-")}</span></td>
             <td>${escapeHtml(item.employee_name || item.employeeName || "-")}<br><span class="muted">${escapeHtml(item.employee_email_masked || item.employee_email || item.employeeEmail || "")}</span></td>
             <td>${escapeHtml(item.branch || "-")}<br><span class="muted">${escapeHtml(employmentTaxTypeLabels[employmentTaxType] || item.employment_tax_label || "-")}</span></td>
-            <td class="num">${formatMoney(item.gross_pay || item.grossPay || 0)}<br><span class="muted">과세 ${formatMoney(item.taxable_pay || item.taxablePay || 0)} · 비과세 식대 ${formatMoney(item.non_tax_meal_allowance || item.nonTaxMealAllowance || 0)}</span><br><span class="muted">실지급 ${formatMoney(item.net_pay || item.netPay || 0)}</span></td>
+            <td class="num">${item.gross_pay == null && item.grossPay == null ? "미집계" : formatMoney(item.gross_pay ?? item.grossPay)}<br><span class="muted">과세 ${item.taxable_pay == null && item.taxablePay == null ? "미집계" : formatMoney(item.taxable_pay ?? item.taxablePay)} · 비과세 식대 ${item.non_tax_meal_allowance == null && item.nonTaxMealAllowance == null ? "미집계" : formatMoney(item.non_tax_meal_allowance ?? item.nonTaxMealAllowance)}</span><br><span class="muted">실지급 ${item.net_pay == null && item.netPay == null ? "미집계" : formatMoney(item.net_pay ?? item.netPay)}</span></td>
             <td><span class="badge ${status[1]}">${escapeHtml(status[0])}</span></td>
-            <td class="num" style="display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap">${actions}${pdfAction}</td>
+            <td class="num" style="display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap">${actions}${pdfAction}<details><summary>지급·공제 상세</summary>${[["총지급액","gross_pay","grossPay"],["과세급여","taxable_pay","taxablePay"],["비과세 식대","non_tax_meal_allowance","nonTaxMealAllowance"],["원천세","tax_withholding","taxWithholding"],["보험 공제","insurance_deduction","insuranceDeduction"],["기타 공제","other_deduction","otherDeduction"],["실지급액","net_pay","netPay"]].map(([label,snake,camel])=>`<p>${label}: ${item[snake] == null && item[camel] == null ? "미집계" : formatMoney(item[snake] ?? item[camel])}</p>`).join("")}</details></td>
           </tr>`;
       }).join("");
     }

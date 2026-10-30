@@ -132,6 +132,8 @@ class FakeConnection:
         if sql.lstrip().startswith("SELECT"):
             row = db.rows.get(args[0])
             if row and row["business_id"] == args[1] and row["deleted_at"] is None:
+                if "AND lower(employee_email)=$3" in sql and row["employee_email"].lower() != args[2]:
+                    return None
                 if "FOR UPDATE" in sql:
                     return {"employee_email": row["employee_email"], "work_date": row["work_date"]}
                 return db._project(row)
@@ -717,3 +719,22 @@ def test_attendance_list_scopes_by_role_and_business(client, db, monkeypatch):
 
     _as_role(monkeypatch, "owner", "owner@example.com")
     assert client.get(f"/api/v1/workspaces/{OTHER_BUSINESS_ID}/attendance/records").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_member_own_attendance_get_remains_allowed_and_other_detail_is_hidden(client, db, monkeypatch):
+    _seed_list(db)
+    _as_role(monkeypatch, "member", EMAIL)
+    result = await api.list_attendance_records(
+        BUSINESS["id"], limit=500, date_from="2026-09-01", date_to="2026-09-30",
+        employee_email="lee@example.com", current_user=USER,
+    )
+    assert len(result["records"]) == 3
+    assert db.list_args[-1][2] == EMAIL
+    assert all(db.rows[r["id"]]["employee_email"] == EMAIL for r in result["records"])
+    own = result["records"][0]["id"]
+    other = next(key for key, row in db.rows.items() if row["employee_email"] != EMAIL)
+    assert (await api.get_attendance_record(BUSINESS["id"], own, USER))["record"]["id"] == own
+    with pytest.raises(HTTPException) as exc:
+        await api.get_attendance_record(BUSINESS["id"], other, USER)
+    assert exc.value.status_code == 404
