@@ -16,6 +16,7 @@ from app.services.model_registry import (
     list_provider_summaries,
     list_registered_models,
     normalize_provider,
+    release_date_fields,
     sync_model_registry,
 )
 from app.services.ai_route_resolver import AI_ROUTE_KEYS, ROUTE_GROUPS
@@ -360,6 +361,7 @@ def _routing_preference_payload(row: Any) -> dict[str, Any]:
         "verification_status": row["verification_status"],
         "notes": note,
         "metadata": metadata,
+        **release_date_fields(metadata),
         "capabilities": capabilities,
         "pricing": pricing,
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
@@ -398,6 +400,7 @@ def _routing_error_model_payload(row: Any) -> dict[str, Any]:
         "is_executable": row["is_executable"],
         "verification_status": row["verification_status"],
         "note": note,
+        **release_date_fields(metadata),
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
         "last_verified_at": row["last_verified_at"].isoformat() if row["last_verified_at"] else None,
     }
@@ -431,6 +434,7 @@ async def _fetch_last_registry_sync() -> dict[str, Any] | None:
 _SELECTOR_FIELDS = (
     "provider", "model_id", "display_name", "input_cost", "output_cost",
     "is_active", "is_selectable", "is_executable",
+    "release_date", "release_date_source", "release_date_verified_at",
 )
 # 채팅 페이지가 별칭 모델을 걸러낼 때 읽는 키들. canonical_model 이 빠지면
 # alias 판정이 조용히 어긋난다(page.tsx:2012, 2027).
