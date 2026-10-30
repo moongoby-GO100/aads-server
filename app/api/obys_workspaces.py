@@ -1456,7 +1456,7 @@ async def _schedule_business(user, business_id):
         raise
 
 
-async def _save_work_schedule(connection, business_id, payload, user, schedule_id=None):
+async def _save_work_schedule(connection, business_id, payload, user, schedule_id=None, *, preserve_existing=False):
     from uuid import uuid4
     values = _schedule_values(payload)
     if schedule_id is not None:
@@ -1469,7 +1469,7 @@ async def _save_work_schedule(connection, business_id, payload, user, schedule_i
         if row is None:
             raise HTTPException(403, "현재 사업자의 근무표가 아닙니다")
     else:
-        row = await connection.fetchrow("""
+        insert_sql = """
             INSERT INTO yeoljeong_work_schedules
               (id,business_id,employee_email,employee_email_masked,employee_name,branch,work_date,
                start_time,end_time,break_minutes,kind,memo,created_by)
@@ -1479,7 +1479,12 @@ async def _save_work_schedule(connection, business_id, payload, user, schedule_i
               employee_name=EXCLUDED.employee_name,branch=EXCLUDED.branch,
               start_time=EXCLUDED.start_time,end_time=EXCLUDED.end_time,break_minutes=EXCLUDED.break_minutes,
               kind=EXCLUDED.kind,memo=EXCLUDED.memo,updated_at=now() RETURNING *
-        """, str(uuid4()), business_id, *values, upload_svc._actor(user))
+        """
+        if preserve_existing:
+            insert_sql = insert_sql[:insert_sql.index("            DO UPDATE")] + " DO NOTHING RETURNING *"
+        row = await connection.fetchrow(insert_sql, str(uuid4()), business_id, *values, upload_svc._actor(user))
+        if row is None:
+            return None
     await _attendance_audit(connection, business_id, user, "attendance.schedule.save", str(row["id"]), dict(row))
     return {key: _json_value(value) for key, value in dict(row).items()}
 
@@ -1530,6 +1535,143 @@ async def bulk_work_schedules(business_id: str, payload: WorkScheduleBulkIn,
     await _schedule_business(current_user, business_id)
     rows = await _write_work_schedules(business_id, expand_work_schedules(payload), current_user)
     return {"schedules": rows, "count": len(rows)}
+
+
+class ContractSchedulesIn(BaseModel):
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+    date_from: date = Field(alias="from")
+    date_to: date = Field(alias="to")
+    employee_emails: list[str] = Field(default_factory=list, max_length=1000)
+    overwrite: bool = False
+
+
+def contract_schedule_pattern(payload):
+    """Only explicit weekdays and clock ranges authorize automatic schedules."""
+    daily = str(payload.get("daily_work_schedule") or "")
+    pattern = {}
+    clock = r"([0-2]\d:[0-5]\d)\s*[-~–]\s*(?:익일\s*)?([0-2]\d:[0-5]\d)"
+    def entry(text, rest_text):
+        match = re.search(clock, text)
+        rest_text = re.split(r"[,)]|실근로", rest_text, maxsplit=1)[0]
+        rest = re.search(r"(\d+)\s*분", rest_text)
+        hours = re.search(r"(\d+(?:\.\d+)?)\s*시간", rest_text)
+        if not match or not (rest or hours):
+            return None
+        try:
+            start, end = time.fromisoformat(match[1]), time.fromisoformat(match[2])
+            minutes = int(rest[1]) if rest else 0
+            if hours:
+                minutes += int(float(hours[1]) * 60)
+            if not 0 <= minutes < 1440 or start == end:
+                return None
+            if attendance_worked_minutes(start, end, minutes) <= 0:
+                return None
+            return {"start_time": start.isoformat()[:5], "end_time": end.isoformat()[:5],
+                    "break_minutes": minutes, "overnight": end < start}
+        except (ValueError, HTTPException):
+            return None
+    for line in daily.splitlines():
+        days = re.match(r"^\s*([월화수목금토일 ·,]+)\s+", line)
+        value = entry(line, line.split("휴게", 1)[-1]) if "휴게" in line else None
+        if days and value:
+            for day in days[1]:
+                if day in "월화수목금토일":
+                    pattern["월화수목금토일".index(day)] = value
+    if pattern:
+        return pattern
+    text = str(payload.get("work_time") or "")
+    if any(word in daily + text for word in ("상호 협의", "해당 없음", "회차별")):
+        return {}
+    days_text = str(payload.get("work_days") or "")
+    # Only an explicit parenthesized weekday list or a pure weekday list is accepted.
+    days = re.search(r"\(([월화수목금토일 ·,]+)\)", days_text) or re.fullmatch(r"([월화수목금토일 ·,]+)", days_text)
+    value = entry(text, str(payload.get("rest_time") or ""))
+    if days and value:
+        return {"월화수목금토일".index(d): value for d in days[1] if d in "월화수목금토일"}
+    return {}
+
+
+CONTRACT_SCHEDULE_SQL = """
+SELECT DISTINCT ON (lower(employee_email)) * FROM yeoljeong_contracts
+WHERE tenant_id=$1::uuid AND business_id=$2 AND status='signed' AND deleted_at IS NULL
+ AND (cardinality($3::text[])=0 OR lower(employee_email)=ANY($3::text[]))
+ORDER BY lower(employee_email), signed_at DESC NULLS LAST, updated_at DESC, id DESC
+LIMIT 1001
+"""
+
+
+async def _contract_schedules(business_id, payload, user, *, apply=False):
+    _require_attendance_admin(user)
+    await _schedule_business(user, business_id)
+    if payload.date_to < payload.date_from or (payload.date_to-payload.date_from).days > 61:
+        raise HTTPException(422, "계약 일정 기간은 최대 62일입니다")
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            contracts = await connection.fetch(CONTRACT_SCHEDULE_SQL, str(upload_svc._tenant(user)),
+                business_id, [email.strip().lower() for email in payload.employee_emails])
+            if len(contracts) > 1000:
+                raise HTTPException(422, "직원을 선택해 범위를 줄이세요")
+            existing = await connection.fetch("""SELECT employee_email,work_date FROM yeoljeong_work_schedules
+                WHERE business_id=$1 AND deleted_at IS NULL AND work_date BETWEEN $2 AND $3""",
+                business_id, payload.date_from, payload.date_to)
+            keys = {_schedule_record_key(dict(row)) for row in existing}
+            results, total = [], 0
+            for row in contracts:
+                contract = dict(row)
+                terms = _schedule_json(contract.get("contract_payload"))
+                pattern = contract_schedule_pattern(terms)
+                result = {"employee_email": contract["employee_email"], "employee_name": contract.get("employee_name", ""),
+                    "contract_type": contract.get("contract_type"), "pattern": pattern,
+                    "basis": "\n".join(str(terms.get(k) or "") for k in ("daily_work_schedule", "work_days", "work_time", "rest_time")),
+                    "created": 0, "updated": 0, "skipped": 0, "unparseable": int(not bool(pattern)), "schedules": [],
+                    "reason": "" if pattern else "계약서에 고정 근무일 없음(용역·상호 협의) — 직접 등록"}
+                try:
+                    start = max(payload.date_from, date.fromisoformat(str(terms.get("start_date") or payload.date_from)[:10]))
+                    end = min(payload.date_to, date.fromisoformat(str(terms.get("end_date") or payload.date_to)[:10]))
+                except ValueError:
+                    result.update(unparseable=1, reason="계약 기간을 확인하세요 — 직접 등록")
+                    pattern = {}
+                if pattern:
+                    for offset in range(max(0, (end-start).days+1)):
+                        day = start + timedelta(days=offset)
+                        if day.weekday() not in pattern:
+                            continue
+                        value = pattern[day.weekday()]
+                        item = WorkScheduleIn(employee_email=contract["employee_email"],
+                            employee_name=contract.get("employee_name") or "", branch=contract.get("branch") or "",
+                            work_date=day, **{k:v for k,v in value.items() if k != "overnight"},
+                            memo=f"계약서 기준(서명일 {str(contract.get('signed_at') or '')[:10]})")
+                        total += 1
+                        if total > 1000:
+                            raise HTTPException(422, "계약 일정은 최대 1,000행입니다")
+                        exists = _schedule_record_key(item.model_dump()) in keys
+                        if exists and not payload.overwrite:
+                            result["skipped"] += 1
+                            continue
+                        saved = await _save_work_schedule(connection, business_id, item, user,
+                            preserve_existing=not payload.overwrite) if apply else item.model_dump(mode="json")
+                        if saved is None:
+                            result["skipped"] += 1
+                        else:
+                            result["updated" if exists else "created"] += 1
+                            result["schedules"].append(saved)
+                results.append(result)
+            return {"employees": results, "applied": apply}
+    finally:
+        await connection.close()
+
+
+@router.get("/{business_id}/attendance/schedules/from-contracts")
+async def preview_contract_schedules(business_id: str, date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"), current_user: dict[str, Any] = Depends(get_current_user)):
+    return await _contract_schedules(business_id, ContractSchedulesIn(date_from=date_from, date_to=date_to), current_user)
+
+
+@router.post("/{business_id}/attendance/schedules/from-contracts")
+async def apply_contract_schedules(business_id: str, payload: ContractSchedulesIn,
+    current_user: dict[str, Any] = Depends(get_current_user)):
+    return await _contract_schedules(business_id, payload, current_user, apply=True)
 
 
 @router.put("/{business_id}/attendance/schedules/{schedule_id}")
