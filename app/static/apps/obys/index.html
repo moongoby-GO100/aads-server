@@ -17592,6 +17592,7 @@
       try {
         const session = await financeApi("/session");
         if (session.legacy_access === true) {
+          // Saving renders auth state and starts dashboard requests: legacy tenants only.
           saveAuthSession({...session, permissions_verified: true});
           return true;
         }

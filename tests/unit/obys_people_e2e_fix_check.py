@@ -29,7 +29,6 @@ async def main():
                 businesses = [{'id': 'legacy-store', 'name': '기존 테스트 매장', 'branches': [{'id': 'branch-test', 'name': '테스트 지점'}]}] if legacy else []
                 session = {'legacy_access': legacy, 'user': {'email': 'owner@example.test'}, 'permissions': {'role': 'owner', 'can_manage_settings': True, 'can_manage_onboarding': True, 'can_view': True}, 'permissions_verified': True}
                 requests, errors, forbidden, console_errors = [], [], [], []
-                admin_forbidden = []
 
                 async def mock(route):
                     path = urlparse(route.request.url).path
@@ -64,16 +63,13 @@ async def main():
                         file = f'{scenario}-{device}-admin-{view}.png'
                         await page.screenshot(path=str(OUT / file), full_page=True)
                         screens.append(file)
-                        if not legacy:
+                        if empty_registry:
                             assert await page.get_by_role('link', name='사업자 등록하기').count() == 1
                             text = await page.locator('body').inner_text()
                             assert not any(x in text for x in ['열정국밥', '중화점', 'biz-junghwa', '멀티테넌트 격리', 'DB 연결 확인 필요'])
-                    # V4.1(admin.html) 의 비레거시 403 은 r50 부터 있던 별도 과제다 — 기록만 하고,
-                    # 이번 수정 범위인 구화면 진입(아래)에서는 403 이 0건이어야 한다.
-                    admin_forbidden.extend(forbidden); forbidden.clear()
-                    other = [m for m in console_errors if 'status of 403' not in m]
-                    assert not other, other
-                    console_errors.clear()
+                    # 관리화면에서도 403 및 콘솔 오류를 허용하지 않는다.
+                    assert not forbidden, forbidden
+                    assert not console_errors, console_errors
                     for view in ['employees', 'attendance', 'payroll', 'onboarding', 'contracts', 'approvals']:
                         await page.goto(f'{origin}/static/apps/obys/index.html?legacy=1&view=legacy&people_view={view}')
                         await page.wait_for_timeout(450)
@@ -91,7 +87,7 @@ async def main():
                 assert not forbidden, forbidden
                 assert not errors, errors
                 assert not console_errors, console_errors
-                results.append({'scenario': scenario, 'checks': 'passed', 'requests': requests, '403_requests': forbidden, 'admin_v41_403_known': sorted(set(admin_forbidden)), 'page_errors': errors, 'console_errors': console_errors, 'screens': screens})
+                results.append({'scenario': scenario, 'checks': 'passed', 'requests': requests, '403_requests': forbidden, 'page_errors': errors, 'console_errors': console_errors, 'screens': screens})
                 await context.close()
             await browser.close()
     finally:
