@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.logging_config import configure_logging
 
+from app.api import design_intake
 from app.api import health, projects, checkpoints, stream, auth, context, visual_qa, mobile_qa, memory, terminal, browser_bridge, design_modifications, google_sheets, obys_finance, notifications, unni_naengmyeon
 from app.api import obys_dashboard, obys_inventory, obys_accounting, obys_ops
 from app.api import acct_purchase, acct_sales
@@ -4122,6 +4123,7 @@ app.include_router(agenda_router, prefix="/api/v1/agenda", tags=["agenda"])
 app.include_router(hot_reload_router, prefix="/api/v1", tags=["hot-reload"])
 app.include_router(admin_router, prefix="/api/v1", tags=["admin"])
 app.include_router(admin_users_router, prefix="/api/v1", tags=["admin-users"])
+app.include_router(design_intake.router, prefix="/api/v1")
 app.include_router(design_modifications.router, prefix="/api/v1", tags=["design-modifications"])
 app.include_router(obys_finance.router, prefix="/api/v1", tags=["yeoljeong-finance"])
 app.include_router(obys_finance.public_router, prefix="/api/v1", tags=["yeoljeong-finance-public"])
