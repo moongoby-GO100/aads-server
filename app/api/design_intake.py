@@ -56,19 +56,41 @@ def _question(row):
     return result
 
 
+async def _intake_response(conn, tenant, session):
+    if session is None:
+        return {"session_id": None, "questions": [], "round": None, "brief": {},
+                "brief_confirmed": False, "brief_confirmed_at": None}
+    session_id = session["id"]
+    rows = await conn.fetch('''SELECT id, area, question, options, recommended,
+        answer, answer_source, confirmed_at FROM design_intake_questions
+        WHERE session_id=$1 AND tenant_id=$2 ORDER BY id''', session_id, tenant)
+    brief = session["brief"]
+    return {"session_id": session_id, "questions": [_question(row) for row in rows],
+            "round": session["round"],
+            "brief": json.loads(brief) if isinstance(brief, str) else brief,
+            "brief_confirmed": session["brief_confirmed_at"] is not None,
+            "brief_confirmed_at": session["brief_confirmed_at"]}
+
+
+@router.get("/by-chat/{chat_session_id}")
+async def get_intake_by_chat(chat_session_id: UUID, context: dict = VIEW):
+    tenant = _tenant(context)
+    async with get_pool().acquire() as conn, conn.transaction():
+        session = await conn.fetchrow('''SELECT * FROM design_intake_sessions
+            WHERE chat_session_id=$1 AND tenant_id=$2
+            ORDER BY created_at DESC, id DESC LIMIT 1''', chat_session_id, tenant)
+        return await _intake_response(conn, tenant, session)
+
+
 @router.get("/{session_id}")
 async def get_intake(session_id: UUID, context: dict = VIEW):
     tenant = _tenant(context)
     async with get_pool().acquire() as conn, conn.transaction():
-        session = await _session(conn, tenant, session_id)
-        rows = await conn.fetch('''SELECT id, area, question, options, recommended,
-            answer, answer_source, confirmed_at FROM design_intake_questions
-            WHERE session_id=$1 AND tenant_id=$2 ORDER BY id''', session_id, tenant)
-        brief = session["brief"]
-        return {"session_id": session_id, "questions": [_question(row) for row in rows],
-                "brief": json.loads(brief) if isinstance(brief, str) else brief,
-                "brief_confirmed": session["brief_confirmed_at"] is not None,
-                "brief_confirmed_at": session["brief_confirmed_at"]}
+        session = await conn.fetchrow('''SELECT * FROM design_intake_sessions
+            WHERE id=$1 AND tenant_id=$2''', session_id, tenant)
+        if session is None:
+            raise HTTPException(404, "intake session not found")
+        return await _intake_response(conn, tenant, session)
 
 
 @router.post("/{session_id}/answers")

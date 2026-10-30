@@ -16,12 +16,14 @@ from app.services.design_agent import intake
 SESSION = UUID('00000000-0000-0000-0000-000000000001')
 QUESTION = UUID('00000000-0000-0000-0000-000000000002')
 TENANT = UUID('00000000-0000-0000-0000-000000000003')
+CHAT = UUID('00000000-0000-0000-0000-000000000005')
 OTHER = UUID('00000000-0000-0000-0000-000000000004')
 
 
 class Connection:
     def __init__(self):
-        self.session = {'round': 1, 'brief': '{}', 'brief_confirmed_at': None}
+        self.session_queries = []
+        self.session = {'id': SESSION, 'round': 1, 'brief': '{}', 'brief_confirmed_at': None}
         self.question = dict(id=QUESTION, area='layout', question='배치는?',
                              options='["A", "B", "C"]', recommended='B',
                              answer=None, answer_source=None, confirmed_at=None)
@@ -31,6 +33,11 @@ class Connection:
 
     async def fetchrow(self, sql, *args):
         if 'FROM design_intake_sessions' in sql:
+            self.session_queries.append(sql)
+            if 'chat_session_id=$1' in sql:
+                assert 'tenant_id=$2' in sql
+                assert 'ORDER BY created_at DESC' in sql and 'LIMIT 1' in sql
+                return self.session if args == (CHAT, TENANT) else None
             return self.session if args == (SESSION, TENANT) else None
         if 'SELECT recommended' in sql:
             return self.question if args == (QUESTION, SESSION, TENANT) else None
@@ -78,10 +85,13 @@ async def client(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get(client):
-    http, _, _ = client
+    http, conn, _ = client
+    conn.session['round'] = 2
     response = await http.get(f'/api/v1/design/intake/{SESSION}')
     assert response.status_code == 200
     data = response.json()
+    assert data['round'] == 2
+    assert all('FOR UPDATE' not in sql for sql in conn.session_queries)
     assert data['brief_confirmed'] is False
     assert data['questions'][0]['options'] == ['A', 'B', 'C']
     assert data['questions'][0]['confirmed_at'] is None
@@ -155,3 +165,36 @@ async def test_missing_question_404(client):
     response = await http.post(f'/api/v1/design/intake/{SESSION}/answers', json={
         'question_id': str(OTHER), 'answer': 'A', 'answer_source': 'user'})
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_by_chat_matches_get_without_lock(client):
+    http, conn, _ = client
+    conn.session['round'] = 3
+    response = await http.get(f'/api/v1/design/intake/by-chat/{CHAT}')
+    direct = await http.get(f'/api/v1/design/intake/{SESSION}')
+    assert response.status_code == direct.status_code == 200
+    assert response.json() == direct.json()
+    assert response.json()['round'] == 3
+    assert all('FOR UPDATE' not in sql for sql in conn.session_queries)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('other_tenant', [False, True])
+async def test_by_chat_empty_and_tenant_isolation(client, other_tenant):
+    http, _, context = client
+    if other_tenant:
+        context['tenant']['id'] = str(OTHER)
+    chat = CHAT if other_tenant else OTHER
+    response = await http.get(f'/api/v1/design/intake/by-chat/{chat}')
+    assert response.status_code == 200
+    assert response.json() == {
+        'session_id': None, 'questions': [], 'round': None, 'brief': {},
+        'brief_confirmed': False, 'brief_confirmed_at': None,
+    }
+
+
+def test_by_chat_route_precedes_session_route():
+    paths = [route.path for route in api.router.routes]
+    assert paths.index('/design/intake/by-chat/{chat_session_id}') < paths.index(
+        '/design/intake/{session_id}')
