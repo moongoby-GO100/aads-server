@@ -226,6 +226,11 @@ class RecipePlayer:
                 else:
                     contract.pop(key, None)
             context["login_contract"] = contract
+        if any(s.action == "extract" for s in recipe.steps):
+            context["collection_steps"] = {
+                str(s.extra.get("name") or s.save_as): s.to_dict()
+                for s in recipe.steps if s.action == "extract"
+            }
         values = recipe.resolve_inputs(inputs)
         declared: set[str] = set(values.keys())
 
@@ -358,6 +363,9 @@ class RecipePlayer:
         )
         started = time.monotonic()
         timeout = step.timeout or self._step_timeout
+        if step.action == "paginate" and step.timeout is None:
+            pages = step.extra.get("max_pages", 20)
+            timeout = pages * self._step_timeout + (pages - 1) * step.extra.get("delay_ms", 1000) / 1000
         contract = (context or {}).get("login_contract") or {}
         if phase == "step" and step.seq == contract.get("submit_step"):
             timeout = max(timeout, max(contract.get("human_submit_timeout_seconds", 600),
@@ -378,6 +386,8 @@ class RecipePlayer:
 
         last_error = ""
         attempts = 1 if phase == "step" and step.seq == contract.get("submit_step") else self._retries + 1
+        if step.action == "paginate":
+            attempts = 1  # 페이지 이동 후 실패한 수집을 중간 페이지부터 재시도하지 않는다.
         for attempt in range(1, attempts + 1):
             outcome.attempts = attempt
             payload = dict(payload_base)
@@ -394,8 +404,17 @@ class RecipePlayer:
                 data = dict(raw) if isinstance(raw, Mapping) else {}
                 outcome.llm_calls += _int_or_zero(data.get("llm_calls"))
                 reported_status = str(data.get("status") or "")
-                if data.get("ok") is False or reported_status in {STATUS_FAILED, STATUS_BLOCKED}:
+                collection_output = data.get("output", data)
+                allowed_collection_statuses = {"success", "no_records"}
+                if step.action == "paginate":
+                    allowed_collection_statuses.add("partial")
+                collection_failed = step.action in {"extract", "paginate"} and (
+                    not isinstance(collection_output, Mapping)
+                    or collection_output.get("status") not in allowed_collection_statuses
+                )
+                if data.get("ok") is False or reported_status in {STATUS_FAILED, STATUS_BLOCKED, "extraction_failed"} or collection_failed:
                     last_error = str(data.get("error") or "step reported failure")
+                    outcome.output = data.get("output", data.get("data", raw))
                     outcome.recovery = _mapping_or_empty(data.get("recovery"))
                     outcome.narration = str(data.get("narration") or "Smart Browser 단계가 실패해 복구 경로를 준비했습니다.")[:500]
                     outcome.route = str(

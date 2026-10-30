@@ -25,6 +25,8 @@ ALLOWED_ACTIONS: tuple[str, ...] = (
     "snapshot",
     "api_call",
     "dismiss_overlays",
+    "extract",
+    "paginate",
 )
 
 # dismiss_overlays: 허용 목록(domain+root+close)에 있는 모달만 닫는다. 동의·결제·보안 경고는
@@ -255,6 +257,8 @@ class RecipeStep:
         }
         extra = {k: v for k, v in raw.items() if k not in known}
         value = raw.get("value")
+        if action in {"extract", "paginate"}:
+            extra = normalize_collection_spec(action, extra)
         if action == "upload":
             value, extra = _upload_value(value, extra, seq=seq)
         if action == "dismiss_overlays":
@@ -389,6 +393,21 @@ class WorkRecipe:
             verify=verify,
             metadata=dict(metadata),
         )
+        named = {}
+        for step in steps:
+            if step.action != "extract":
+                continue
+            name = step.extra.get("name") or step.save_as
+            if name:
+                if not isinstance(name, str):
+                    raise ValueError("extract 단계 이름은 문자열이어야 합니다")
+                if name in named:
+                    raise ValueError("중복 단계 이름")
+                named[name] = step
+        for step in [*steps, *verify]:
+            if step.action == "paginate":
+                if any(name not in named or named[name].action != "extract" for name in step.extra["steps"]):
+                    raise ValueError("paginate steps 는 같은 레시피 extract 이름이어야 합니다")
         recipe.validate_variables()
         return recipe
 
@@ -560,3 +579,58 @@ def parse_recipe(source: str | Mapping[str, Any]) -> WorkRecipe:
 def dump_recipe(recipe: WorkRecipe) -> str:
     """레시피를 YAML 문자열로 직렬화한다."""
     return recipe.to_yaml()
+
+
+COLLECTION_TYPES = frozenset({"text", "int", "money", "number", "date", "datetime", "url", "bool"})
+
+
+def normalize_collection_spec(action: str, extra: Mapping[str, Any]) -> dict[str, Any]:
+    """수집 선언을 파싱 시점과 실행 직전에 동일하게 검증한다."""
+    spec = dict(extra)
+    def integer(name: str, default: int, low: int, high: int) -> int:
+        value = spec.get(name, default)
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError(f"{name}: {low}..{high} 정수여야 합니다")
+        return value
+    if action == "extract":
+        if not isinstance(spec.get("row_selector"), str) or not spec["row_selector"].strip():
+            raise ValueError("row_selector 필수")
+        fields = spec.get("fields")
+        if not isinstance(fields, Mapping) or not fields:
+            raise ValueError("fields 필수")
+        for name, field_spec in fields.items():
+            if not isinstance(name, str) or not name or re.search(r"password|passwd|token|cookie|secret|주민|계좌번호", name, re.I):
+                raise ValueError("금지된 필드 이름")
+            if not isinstance(field_spec, Mapping) or not isinstance(field_spec.get("type"), str) or field_spec["type"] not in COLLECTION_TYPES:
+                raise ValueError("잘못된 field type")
+            selector = field_spec.get("selector")
+            if not isinstance(selector, str) or not selector.strip() or re.search(r"xpath=|^/|\.\.|>>|^[a-z-]+=", selector, re.I):
+                raise ValueError("field selector 는 행 내부 CSS selector 여야 합니다")
+            if "required" in field_spec and type(field_spec["required"]) is not bool:
+                raise ValueError("required 는 bool 이어야 합니다")
+            if "attr" in field_spec and (not isinstance(field_spec["attr"], str) or not field_spec["attr"].strip() or field_spec["attr"].lower().startswith("on") or field_spec["attr"].lower() in {"innerhtml", "outerhtml", "srcdoc"}):
+                raise ValueError("잘못된 attr")
+        keys = spec.get("key_fields")
+        if not isinstance(keys, list) or not keys or any(not isinstance(k, str) or k not in fields for k in keys):
+            raise ValueError("key_fields 는 fields 의 비어 있지 않은 부분집합이어야 합니다")
+        spec["max_rows"] = integer("max_rows", 500, 1, 2000)
+        spec["min_rows"] = integer("min_rows", 0, 0, spec["max_rows"])
+        if spec.get("no_records_marker") is not None and not isinstance(spec["no_records_marker"], str):
+            raise ValueError("no_records_marker 는 selector 문자열이어야 합니다")
+    else:
+        names = spec.get("steps")
+        if not isinstance(names, list) or not names or any(not isinstance(n, str) or not n for n in names):
+            raise ValueError("paginate steps 필수")
+        if bool(spec.get("next_selector")) == bool(spec.get("url_template")):
+            raise ValueError("next_selector 또는 url_template 중 하나가 필요합니다")
+        if spec.get("url_template") and (not isinstance(spec["url_template"], str) or "{page}" not in spec["url_template"]):
+            raise ValueError("url_template 에 {page} 필수")
+        if spec.get("next_selector") and not isinstance(spec["next_selector"], str):
+            raise ValueError("next_selector 는 문자열이어야 합니다")
+        spec["max_pages"] = integer("max_pages", 20, 1, 50)
+        spec["delay_ms"] = integer("delay_ms", 1000, 1000, 2147483647)
+        stops = spec.get("stop_when", ["next_missing", "no_new_keys"])
+        if not isinstance(stops, list) or any(not isinstance(x, str) or x not in {"next_missing", "no_new_keys"} for x in stops):
+            raise ValueError("잘못된 stop_when")
+        spec["stop_when"] = stops
+    return spec

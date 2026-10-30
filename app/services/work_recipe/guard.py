@@ -81,7 +81,7 @@ WRITE_SIGNALS: tuple[str, ...] = (
 _IRREVERSIBLE_ACTIONS: frozenset[str] = frozenset({"payment", "pay", "purchase"})
 _WRITE_ACTIONS: frozenset[str] = frozenset({"submit", "api_call", "upload"})
 # 읽기로 끝나는 action — 신호어가 붙어도 이동/조회 이상은 하지 않는다.
-_READ_ACTIONS: frozenset[str] = frozenset({"navigate", "snapshot", "download", "select", "dismiss_overlays"})
+_READ_ACTIONS: frozenset[str] = frozenset({"navigate", "snapshot", "download", "select", "dismiss_overlays", "extract", "paginate"})
 
 # 등급 판정에 쓰는 필드. `value` 는 일부러 뺀다 — 사용자가 입력한 **데이터**이지
 # 행위의 의도가 아니다. 검색창에 "삭제"를 치는 것과 삭제 버튼을 누르는 것은 다르다.

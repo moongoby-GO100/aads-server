@@ -340,6 +340,11 @@ class BrowserRecipeExecutor:
                     return {"ok": False, "status": "waiting_for_user", "route": "human_gateway",
                             "error": "active_auth_challenge", "evidence": {},
                             "recovery": {"route": "human_gateway", "reason": "active_auth_challenge", "resume": "same_work_session", "step_completed": True}}
+            if action in {"extract", "paginate"}:
+                return {"ok": output["status"] != "extraction_failed", "output": output,
+                        "status": output["status"], "risk": level.value, "llm_calls": 0,
+                        "error": "extraction_failed" if output["status"] == "extraction_failed" else "",
+                        "route": self._route(payload)["runtime"], "evidence": {}}
             evidence = await self._evidence_for(page)
             regression = self._auth_regression(payload, evidence)
             if regression:
@@ -721,11 +726,200 @@ class BrowserRecipeExecutor:
             "dismissed": dismissed,
         }
 
+    @staticmethod
+    def _collection_value(value: Any, kind: str) -> Any:
+        from datetime import date, datetime
+        from urllib.parse import urlsplit
+        import math
+
+        if value is None or not str(value).strip():
+            return None
+        text = str(value).strip()
+        if kind == "int":
+            return int(text.replace(",", ""))
+        if kind in {"number", "money"}:
+            cleaned = text.replace(",", "")
+            if kind == "money":
+                cleaned = re.sub(r"[₩$€£원\s]", "", cleaned)
+            number = float(cleaned)
+            if not math.isfinite(number):
+                raise ValueError("non-finite number")
+            return number
+        if kind == "bool":
+            normalized = text.lower()
+            if normalized not in {"true", "false", "1", "0", "yes", "no", "예", "아니오"}:
+                raise ValueError("invalid bool")
+            return normalized in {"true", "1", "yes", "예"}
+        if kind == "date":
+            return date.fromisoformat(text).isoformat()
+        if kind == "datetime":
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat()
+        if kind == "url" and (urlsplit(text).scheme not in {"http", "https"} or not urlsplit(text).hostname):
+            raise ValueError("invalid url")
+        return text
+
+    @staticmethod
+    def _mask_collection(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        # 동일 값은 동일 마스크로 보존해 개인정보 키의 중복 제거도 가능하다.
+        def mask(match):
+            return "***[" + hashlib.sha256(match.group().encode()).hexdigest()[:16] + "]"
+        value = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", mask, value)
+        return re.sub(r"(?<!\w)(?:\+\d{1,3}[- .]?)?(?:\(?\d{2,4}\)?[- .]?)\d{3,4}[- .]?\d{4}(?!\w)", mask, value)
+
+    async def _collection_dom(self, page: Any, spec: Mapping[str, Any]) -> tuple[list, bool]:
+        """서버는 row locator, PC는 browser_eval 내 row.querySelector 만 사용한다."""
+        if hasattr(page, "_run_browser_command"):
+            import json
+            expression = """(() => {
+                const spec = SPEC;
+                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+                const rows = Array.from(document.querySelectorAll(spec.row_selector)).slice(0, spec.max_rows).map(row => {
+                    const result = {};
+                    for (const [name, field] of Object.entries(spec.fields)) {
+                        const cell = row.querySelector(field.selector);
+                        result[name] = !cell ? null : field.attr ? cell.getAttribute(field.attr) : cell.innerText;
+                    }
+                    return result;
+                });
+                return {rows, marker: !!spec.no_records_marker && Array.from(document.querySelectorAll(spec.no_records_marker)).some(visible)};
+            })()""".replace("SPEC", json.dumps(dict(spec), ensure_ascii=False))
+            result = await page._run_browser_command("browser_eval", {"expression": expression})
+            data = result.get("value")
+            if isinstance(data, str):
+                data = json.loads(data)
+            if not isinstance(data, dict) or not isinstance(data.get("rows"), list):
+                raise ValueError("invalid collection DOM response")
+            return data["rows"], data.get("marker") is True
+        rows = page.locator(spec["row_selector"])
+        values = []
+        for index in range(min(await rows.count(), spec["max_rows"])):
+            row = rows.nth(index)
+            record = {}
+            for name, field in spec["fields"].items():
+                try:
+                    cell = row.locator(field["selector"]).first
+                    if await cell.count() == 0:
+                        record[name] = None
+                    elif field.get("attr"):
+                        record[name] = await cell.get_attribute(field["attr"])
+                    else:
+                        record[name] = await cell.inner_text()
+                except Exception:
+                    # 셀 실패는 값/HTML/예외 본문을 노출하지 않고 row_errors 로 보고한다.
+                    record[name] = None
+            values.append(record)
+        marker = False
+        if spec.get("no_records_marker"):
+            matches = page.locator(spec["no_records_marker"])
+            for index in range(await matches.count()):
+                if await matches.nth(index).is_visible():
+                    marker = True
+                    break
+        return values, marker
+
+    async def _extract(self, page: Any, step: Mapping[str, Any]) -> dict[str, Any]:
+        from app.services.work_recipe.schema import normalize_collection_spec
+        spec = normalize_collection_spec("extract", step)
+        raw_rows, marker = await self._collection_dom(page, spec)
+        rows, errors = [], []
+        filled = 0
+        required = [name for name, field in spec["fields"].items() if field.get("required")]
+        for index, raw in enumerate(raw_rows):
+            row = {}
+            for name, field in spec["fields"].items():
+                try:
+                    value = self._collection_value(raw.get(name), field["type"])
+                except (ValueError, TypeError, OverflowError):
+                    value = None
+                    errors.append({"row": index, "field": name, "error": "invalid_type"})
+                if value is None and field.get("required"):
+                    errors.append({"row": index, "field": name, "error": "required_missing"})
+                if name in required and value is not None:
+                    filled += 1
+                row[name] = self._mask_collection(value)
+            rows.append(row)
+        rate = filled / (len(rows) * len(required)) if rows and required else 1.0
+        status = "extraction_failed"
+        if rows and len(rows) >= spec["min_rows"] and rate >= .95:
+            status = "success"
+        elif not rows and marker:
+            status = "no_records"
+        return {"rows": rows, "row_count": len(rows), "row_errors": errors,
+                "required_fill_rate": rate, "status": status}
+
+    async def _next_exists(self, page: Any, selector: str) -> bool:
+        if hasattr(page, "_run_browser_command"):
+            import json
+            response = await page._run_browser_command("browser_eval", {"expression":
+                "(() => { const e = document.querySelector(" + json.dumps(selector) +
+                "); return !!e && !e.disabled && e.getAttribute('aria-disabled') !== 'true' && !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length); })()"})
+            return response.get("value") in (True, "true")
+        locator = page.locator(selector).first
+        return bool(await locator.count() and await locator.is_visible() and
+                    await locator.is_enabled() and await locator.get_attribute("aria-disabled") != "true")
+
+    async def _paginate(self, page: Any, step: Mapping[str, Any]) -> dict[str, Any]:
+        import asyncio
+        from app.services.work_recipe.schema import normalize_collection_spec
+        spec = normalize_collection_spec("paginate", step)
+        definitions = (step.get("context") or {}).get("collection_steps", {})
+        extracts = []
+        for name in spec["steps"]:
+            definition = definitions.get(name)
+            if not isinstance(definition, Mapping) or definition.get("action") != "extract":
+                raise ValueError("paginate references unknown extract")
+            extracts.append((name, definition))
+        merged, seen, errors = [], set(), []
+        rates = []
+        for page_number in range(1, spec["max_pages"] + 1):
+            if spec.get("url_template"):
+                url = spec["url_template"].replace("{page}", str(page_number))
+                assert_unregistered_navigation({**step, "action": "navigate", "url": url})
+                await page.goto(url)
+            added = 0
+            for name, definition in extracts:
+                output = await self._extract(page, definition)
+                errors.extend({**error, "page": page_number, "step": name} for error in output["row_errors"])
+                rates.append(output["required_fill_rate"])
+                if output["status"] == "extraction_failed":
+                    return {"rows": merged, "row_count": len(merged), "row_errors": errors,
+                            "required_fill_rate": min(rates), "status": "extraction_failed", "pages": page_number}
+                for row in output["rows"]:
+                    key = (name, *(row.get(field) for field in definition["key_fields"]))
+                    if any(value is None for value in key[1:]):
+                        return {"rows": merged, "row_count": len(merged), "row_errors": errors,
+                                "required_fill_rate": min(rates), "status": "extraction_failed", "pages": page_number}
+                    if key not in seen:
+                        seen.add(key)
+                        merged.append(row)
+                        added += 1
+            status = "success" if merged else "no_records"
+            if not added and "no_new_keys" in spec["stop_when"]:
+                break
+            if spec.get("next_selector") and not await self._next_exists(page, spec["next_selector"]):
+                if "next_missing" not in spec["stop_when"]:
+                    status = "extraction_failed"
+                break
+            if page_number == spec["max_pages"]:
+                status = "partial"
+                break
+            await asyncio.sleep(spec["delay_ms"] / 1000)
+            if spec.get("next_selector"):
+                await page.click(spec["next_selector"])
+        return {"rows": merged, "row_count": len(merged), "row_errors": errors,
+                "required_fill_rate": min(rates), "status": status, "pages": page_number}
+
     async def _execute(self, page: Any, action: str, step: Mapping[str, Any]) -> Any:
         selector = str(step.get("selector") or "")
         timeout = float(step.get("timeout") or 30.0)
         timeout_ms = int(timeout * 1000)
 
+        if action == "extract":
+            return await self._extract(page, step)
+        if action == "paginate":
+            return await self._paginate(page, step)
         if action == "navigate":
             await page.goto(str(step.get("url") or ""), timeout=timeout_ms)
             return {"url": str(getattr(page, "url", step.get("url") or ""))}
