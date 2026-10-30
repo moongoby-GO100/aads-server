@@ -2583,6 +2583,11 @@ async def submit_job(
         goal_link = None
         logger.warning("pipeline_runner.goal_link_fail", job_id=job_id, error=str(exc))
 
+    from app.services.spec_ref import bind_runner_specs, merge_spec_warning
+    spec_warning = await bind_runner_specs(
+        instruction=req.instruction, goal_id=goal_link.goal_id if goal_link else req.goal_id,
+        tenant_id=_tenant_id(context), project=req.project, job_id=job_id,
+    )
     # 정본 게이트(그림자): 목표가 확정된 제출만 판정·기록한다. 제출 결과는 바꾸지 않는다.
     gate = None
     if goal_link:
@@ -2591,6 +2596,7 @@ async def submit_job(
             goal_id=goal_link.goal_id, tenant_id=_tenant_id(context),
             project=req.project, job_id=job_id,
         )
+    gate = merge_spec_warning(gate, spec_warning)
     return JobSubmitResponse(job_id=job_id, status="queued", message=msg, canonical_gate=gate)
 
 
@@ -4809,6 +4815,21 @@ async def submit_batch(
         for (gate_job_id, _goal_id), gate in zip(gate_targets, gates):
             if gate and gate_job_id in by_job:
                 by_job[gate_job_id]["canonical_gate"] = gate
+
+    import asyncio
+    from app.services.spec_ref import bind_runner_specs, merge_spec_warning
+    linked_goals = dict(gate_targets)
+    spec_warnings = await asyncio.gather(*(
+        bind_runner_specs(
+            instruction=item.instruction,
+            goal_id=linked_goals.get(result["job_id"]) or item.goal_id,
+            tenant_id=tenant_id, project=req.project, job_id=result["job_id"],
+        ) for item, result in pending_links
+    ))
+    for (_, result), warning in zip(pending_links, spec_warnings):
+        combined = merge_spec_warning(result.get("canonical_gate"), warning)
+        if combined:
+            result["canonical_gate"] = combined
 
     return {
         "parallel_group": pg,
