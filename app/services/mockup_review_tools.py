@@ -87,19 +87,25 @@ def _unwrap_manifest(data: Any) -> Any:
     return data
 
 
-def _load_manifest(inp: dict[str, Any]) -> ManifestInput:
+async def _load_manifest(inp: dict[str, Any]) -> tuple[ManifestInput, dict[str, Any]]:
     path = str(inp.get("manifest_path") or "").strip()
     body = inp.get("manifest")
+    source_meta: dict[str, Any] = {}
     if bool(path) == bool(body):
         raise _Invalid("manifest_path 와 manifest 중 정확히 하나가 필요합니다")
     if path:
         if not path.startswith(_MANIFEST_PREFIX):
             raise _Invalid("manifest_path 는 서버 docs/ 기준 상대경로여야 합니다")
         try:
-            raw = docs._read_source(docs._safe_source(path) or "")
+            # _safe_source 와 같은 경로 검사만 먼저 한다. 로컬 부재는 원격에서 해소할 수 있다.
+            source = docs._source_syntax(path) or ""
+            raw, source_meta = await docs._resolve_local_project_source(source)
             body = json.loads(raw.decode("utf-8"))
         except HTTPException as exc:
-            raise _Invalid(f"manifest_path 를 읽을 수 없습니다: {exc.detail}") from exc
+            detail = exc.detail
+            if isinstance(detail, dict) and detail.get("code") == "invalid_source_path":
+                detail = "invalid_source_path"
+            raise _Invalid(f"manifest_path 를 읽을 수 없습니다: {detail}") from exc
         except (ValueError, UnicodeDecodeError) as exc:
             raise _Invalid("manifest_path 파일이 올바른 JSON 이 아닙니다") from exc
     elif isinstance(body, str):
@@ -108,7 +114,7 @@ def _load_manifest(inp: dict[str, Any]) -> ManifestInput:
         except ValueError as exc:
             raise _Invalid("manifest 가 올바른 JSON 이 아닙니다") from exc
     try:
-        return ManifestInput.model_validate(_unwrap_manifest(body))
+        return ManifestInput.model_validate(_unwrap_manifest(body)), source_meta
     except ValidationError as exc:
         raise _Invalid("manifest: " + _validation_message(exc)) from exc
 
@@ -282,7 +288,7 @@ async def run_action(*, tenant_id: str, session_id: str, inp: dict[str, Any], po
             generation = head["generation"] if explicit_gen is None else explicit_gen
             if action == "revision":
                 try:
-                    manifest = _load_manifest(inp)
+                    manifest, source_meta = await _load_manifest(inp)
                     if html_source:
                         await _add_html_asset(project, session_id, html_source, manifest)
                     body = RevisionCreate(
@@ -300,7 +306,10 @@ async def run_action(*, tenant_id: str, session_id: str, inp: dict[str, Any], po
                     return _invalid(str(exc))
                 except ValidationError as exc:
                     return _invalid(_validation_message(exc))
-                return _view(project, await svc.create_revision(conn, tenant, project, review_id, actor, body, elevated=elevated))
+                result = _view(project, await svc.create_revision(
+                    conn, tenant, project, review_id, actor, body, elevated=elevated))
+                result.update(source_meta)
+                return result
 
             target = revision_id or head["latest_revision_id"]
             if not target:

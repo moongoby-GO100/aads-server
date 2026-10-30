@@ -89,6 +89,25 @@ class FakePool:
         return _Acq()
 
 
+@pytest.fixture(autouse=True)
+def source_readers(monkeypatch):
+    """파일 선택은 실제 resolver 로 검증하되 git·네트워크 접근은 차단한다."""
+    raw = (_REPO / _MANIFEST).read_bytes()
+
+    def local(source):
+        if source == _MANIFEST:
+            return raw, "host"
+        raise HTTPException(422, "invalid_source_path")
+
+    async def remote(source):
+        if source == _MANIFEST:
+            return raw
+        raise mrt.docs._RemoteSourceMissing()
+
+    monkeypatch.setattr(mrt.docs, "_read_local_source", local)
+    monkeypatch.setattr(mrt.docs, "_read_origin_source", remote)
+
+
 @pytest.fixture
 def services(monkeypatch):
     mocks = {
@@ -389,3 +408,79 @@ async def test_executor_handler_requires_tenant_and_delegates(monkeypatch):
     finally:
         te.current_tenant_id.reset(token_t)
         te.current_chat_session_id.reset(token_s)
+
+
+@pytest.mark.parametrize("local_state, expected_origin, remote_status", [
+    ("same", "host", "same"),
+    ("missing", "remote", "differs"),
+    ("stale", "remote", "differs"),
+])
+def test_manifest_path_resolves_against_origin(local_state, expected_origin, remote_status, services, monkeypatch):
+    path = "docs/design/remote-only/manifest.json"
+    remote_body = {"screens": [{"screen_id": "remote-screen", "title": "원격 화면",
+                                "route": "/remote", "requirement_ids": ["REQ-1"]}]}
+    remote_raw = json.dumps(remote_body).encode()
+    reads = []
+
+    def local(source):
+        reads.append(("local", source))
+        if local_state == "missing":
+            raise HTTPException(422, "invalid_source_path")
+        return (remote_raw if local_state == "same" else b'{"screens": []}'), "host"
+
+    async def remote(source):
+        reads.append(("remote", source))
+        return remote_raw
+
+    monkeypatch.setattr(mrt.docs, "_read_local_source", local)
+    monkeypatch.setattr(mrt.docs, "_read_origin_source", remote)
+    out = run(FakeConn(), action="revision", review_id=REVIEW, manifest_path=path)
+    assert out["revision_id"] == REVISION
+    assert out["source_resolved_from"] == expected_origin
+    assert out["source_remote_status"] == remote_status
+    assert out["source_stale_local"] is (local_state == "stale")
+    assert reads == [("local", path), ("remote", path)]
+    body = services["create_revision"].await_args.args[5]
+    assert body.manifest.screens[0].screen_id == "remote-screen"
+
+
+@pytest.mark.parametrize("path", ["reports/manifest.json", "../docs/manifest.json", "docs/../manifest.json",
+                                  "docs/design/../../manifest.json", "docs/secret/manifest.json"])
+def test_manifest_path_invalid_or_missing_keeps_error(path, services, monkeypatch):
+    local = AsyncMock()
+    remote = AsyncMock(side_effect=mrt.docs._RemoteSourceMissing())
+    if path == "docs/secret/manifest.json":
+        def local(source):
+            raise HTTPException(422, "invalid_source_path")
+    monkeypatch.setattr(mrt.docs, "_read_local_source", local)
+    monkeypatch.setattr(mrt.docs, "_read_origin_source", remote)
+    out = run(FakeConn(), action="revision", review_id=REVIEW, manifest_path=path)
+    assert out["error"] == "invalid_input"
+    expected = ("manifest_path 는 서버 docs/ 기준 상대경로여야 합니다" if not path.startswith("docs/")
+                else "manifest_path 를 읽을 수 없습니다: invalid_source_path")
+    assert out["message"] == expected
+    services["create_revision"].assert_not_awaited()
+    if path != "docs/secret/manifest.json":
+        local.assert_not_called()
+        remote.assert_not_awaited()
+
+
+@pytest.mark.parametrize("failure, message", [
+    (HTTPException(413, "document_too_large"), "manifest_path 를 읽을 수 없습니다: document_too_large"),
+    (b"{invalid", "manifest_path 파일이 올바른 JSON 이 아닙니다"),
+    (b"\xff", "manifest_path 파일이 올바른 JSON 이 아닙니다"),
+])
+def test_manifest_path_preserves_size_and_json_errors(failure, message, services, monkeypatch):
+    def local(source):
+        raise HTTPException(422, "invalid_source_path")
+
+    async def remote(source):
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(mrt.docs, "_read_local_source", local)
+    monkeypatch.setattr(mrt.docs, "_read_origin_source", remote)
+    out = run(FakeConn(), action="revision", review_id=REVIEW, manifest_path=_MANIFEST)
+    assert out == {"error": "invalid_input", "message": message}
+    services["create_revision"].assert_not_awaited()
