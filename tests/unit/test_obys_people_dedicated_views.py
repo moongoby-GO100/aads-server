@@ -31,6 +31,30 @@ async def _check_legacy_scope(monkeypatch):
     fetch.assert_not_called()
 
 
+def test_legacy_mapping_uses_same_business_id_when_canonical_registration_is_blank(monkeypatch):
+    async def check():
+        owner = {"tenant_id": _DEFAULT_LEGACY_TENANT_IDS[0]}
+        # 운영 실측(2026-10-30): V4.1 성신여대점은 id 가 biz-sungshin 이고 등록번호가 있지만,
+        # 기존 사업자 목록의 biz-sungshin 등록번호는 비어 있어 등록번호 비교만으로는 연결되지 않았다.
+        business = AsyncMock(return_value={"id": "biz-sungshin", "name": "열정국밥 성신여대점", "registration_no": "870-13-02784"})
+        fetch = AsyncMock(return_value=[{"id": "legacy-s1", "business_id": "biz-sungshin"}])
+        monkeypatch.setattr(api, "_business", business)
+        monkeypatch.setattr(api, "_fetch_legacy_people", fetch)
+        rows = await api._legacy_people_rows(owner, "biz-sungshin", "payroll")
+        assert [row["id"] for row in rows] == ["legacy-s1"]
+        assert fetch.call_args.kwargs["parameters"][:2] == ("biz-sungshin", owner["tenant_id"])
+        fetch.reset_mock()
+        # 같은 id 라도 기존 목록 등록번호가 있는데 다르면 연결하지 않는다.
+        business.return_value = {"id": "biz-mia", "name": "열정국밥_미아점", "registration_no": "111-11-11111"}
+        assert await api._legacy_people_rows(owner, "biz-mia", "payroll") == []
+        fetch.assert_not_called()
+        # 다른 테넌트는 같은 id 여도 조회하지 않는다.
+        business.return_value = {"id": "biz-sungshin", "name": "열정국밥 성신여대점", "registration_no": "870-13-02784"}
+        assert await api._legacy_people_rows({"tenant_id": "foreign"}, "biz-sungshin", "payroll") == []
+        fetch.assert_not_called()
+    asyncio.run(check())
+
+
 def test_dedicated_people_views_do_not_render_generic_guidance():
     html = Path("app/static/apps/obys/admin.html").read_text()
     renderer = html.split("function renderPeopleV41(c){", 1)[1].split("function renderPageV41(){", 1)[0]

@@ -603,9 +603,15 @@ async def _legacy_people_rows(user, business_id, route, start=None, end=None, em
     def digits(value):
         return re.sub(r"\D", "", str(value or ""))
     registration = digits(business.get("registration_no"))
+    # 1순위: V4.1 사업자 id 가 승인된 기존 사업자 id 와 같으면 같은 원장이다(성신여대점처럼 기존 목록의
+    # 등록번호가 비어 있어도 연결된다). 기존 목록에 등록번호가 있는데 다르면 연결하지 않는다.
     matches = [item for item in CANONICAL_BUSINESSES
-               if (registration and registration == digits(item.get("registrationNo")))
-               or (not registration and business.get("name") == item["name"])]
+               if item["id"] == business.get("id")
+               and (not digits(item.get("registrationNo")) or digits(item.get("registrationNo")) == registration)]
+    if not matches:
+        matches = [item for item in CANONICAL_BUSINESSES
+                   if (registration and registration == digits(item.get("registrationNo")))
+                   or (not registration and business.get("name") == item["name"])]
     if len(matches) != 1:
         return []
     legacy_id = matches[0]["id"]
