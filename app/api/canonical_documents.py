@@ -733,38 +733,83 @@ async def archive_document(project_key: str, document_key: str, body: DecisionIn
         return {"archived": True}
 
 
-async def approved_brief(conn: Any, tenant_id: str, project_key: str, limit: int = 8) -> list[dict]:
+async def approved_brief(conn: Any, tenant_id: str, project_key: str, limit: int = 8, goal_ids: list[Any] | None = None) -> list[dict]:
     """M2 read-only contract: bounded approved revisions, never draft content."""
     if not 1 <= limit <= 20:
         raise ValueError("limit out of range")
     rows = await conn.fetch(
-        "SELECT h.document_key,h.kind,r.title,r.version,left(r.content,4000) AS excerpt,r.content_hash "
+        "SELECT h.document_key,h.kind,r.title,r.version,r.content AS excerpt,r.content_hash, "
+        "CASE WHEN EXISTS (SELECT 1 FROM project_document_goal_links l "
+        "WHERE l.head_id=h.id AND l.goal_id=ANY($4::uuid[])) "
+        "OR EXISTS (SELECT 1 FROM project_document_revisions linked "
+        "WHERE linked.head_id=h.id AND linked.tenant_id=h.tenant_id "
+        "AND linked.project_key=h.project_key AND linked.goal_id=ANY($4::uuid[])) "
+        "THEN 0 ELSE 1 END AS goal_rank "
         "FROM project_document_heads h JOIN project_document_revisions r ON r.id=h.approved_revision_id "
         "AND r.head_id=h.id AND r.tenant_id=h.tenant_id AND r.project_key=h.project_key "
-        "WHERE h.tenant_id=$1::uuid AND h.project_key=$2 ORDER BY h.updated_at DESC LIMIT $3",
-        tenant_id, _project(project_key), limit,
+        "WHERE h.tenant_id=$1::uuid AND h.project_key=$2 ORDER BY goal_rank,h.updated_at DESC,h.document_key LIMIT $3",
+        tenant_id, _project(project_key), limit, list(goal_ids or []),
     )
     return [dict(row) for row in rows]
 
 
 def format_approved_brief(documents: list[dict], *, max_chars: int = 3000) -> str:
     """Use at most 3,000 characters as a conservative 3,000-token budget."""
-    empty = "승인된 정본 문서 없음/조회 불가"
+    from app.services.spec_ref import extract_acceptance
+
+    max_chars = max(0, min(max_chars, 3000))
+    empty = "승인된 정본 문서 없음/조회 불가"[:max_chars]
     if not documents:
         return empty
     parts = ["[프로젝트 승인 정본 문서]", "아래는 승인 포인터가 가리키는 문서의 발췌입니다."]
     for row in documents[:8]:
         raw_excerpt = str(row.get("excerpt") or "")
         raw_title = str(row.get("title") or "")
-        excerpt = raw_excerpt[:1200]
+        excerpt = extract_acceptance(raw_excerpt) or raw_excerpt[:1200]
         title = raw_title[:120]
         if not excerpt or SECRET.search(raw_excerpt) or SECRET.search(raw_title):
             continue
-        item = f"\n- {str(row.get('document_key') or '')[:128]} ({str(row.get('version') or '')[:32]}): {title}\n{excerpt}"
+        prefix = "[목표 연결] " if row.get("goal_rank") == 0 else ""
+        item = f"\n- {prefix}{str(row.get('document_key') or '')[:128]} ({str(row.get('version') or '')[:32]}): {title}\n{excerpt}"
         if len("\n".join(parts)) + 1 + len(item) > max_chars:
             break
         parts.append(item)
     return "\n".join(parts) if len(parts) > 2 else empty
+
+
+async def approved_index(conn: Any, tenant_id: str, project_keys, limit: int = 40) -> list[dict]:
+    """Return approved metadata only within the caller's authorized projects."""
+    if not 1 <= limit <= 40:
+        raise ValueError("limit out of range")
+    projects = sorted({_project(key) for key in project_keys})
+    if not projects:
+        return []
+    rows = await conn.fetch(
+        "SELECT h.document_key,h.project_key,r.revision,r.version,r.title "
+        "FROM project_document_heads h JOIN project_document_revisions r ON r.id=h.approved_revision_id "
+        "AND r.head_id=h.id AND r.tenant_id=h.tenant_id AND r.project_key=h.project_key "
+        "WHERE h.tenant_id=$1::uuid AND h.project_key=ANY($2::text[]) "
+        "ORDER BY h.updated_at DESC,h.project_key,h.document_key LIMIT $3",
+        tenant_id, projects, limit,
+    )
+    return [dict(row) for row in rows]
+
+
+def format_approved_index(documents: list[dict], *, max_chars: int = 2000) -> str:
+    max_chars = max(0, min(max_chars, 2000))
+    empty = "승인된 정본 문서 없음/조회 불가"[:max_chars]
+    parts = ["[프로젝트 승인 정본 문서 목록]"]
+    for row in documents[:40]:
+        values = [str(row.get(key) or "") for key in
+                  ("project_key", "document_key", "revision", "version", "title")]
+        if any(SECRET.search(value) for value in values):
+            continue
+        project, key, revision, version, title = values
+        item = f"- {project[:64]} | {key[:128]}@r{revision[:16]} ({version[:32]}) | {title[:120]}"
+        if len("\n".join(parts)) + 1 + len(item) > max_chars:
+            break
+        parts.append(item)
+    return "\n".join(parts) if len(parts) > 1 else empty
 
 
 async def review_revision_in_tx(

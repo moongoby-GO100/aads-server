@@ -786,7 +786,9 @@ _SECTION_CHARS_LAST: dict[str, int] = {}
 
 async def _build_approved_document_layer(session_id: str, db_conn) -> str:
     """Resolve document scope from the persisted session, never the display name."""
-    from app.api.canonical_documents import approved_brief, format_approved_brief
+    from app.api.canonical_documents import (
+        approved_brief, format_approved_brief, approved_index, format_approved_index,
+    )
 
     unavailable = "승인된 정본 문서 없음/조회 불가"
     if db_conn is None or not session_id:
@@ -800,6 +802,16 @@ async def _build_approved_document_layer(session_id: str, db_conn) -> str:
         )
         if not scope or not all(scope.get(key) for key in ("tenant_id", "project_key", "user_id")):
             return unavailable
+        if scope["project_key"].upper() == "CEO":
+            grants = await db_conn.fetch(
+                "SELECT DISTINCT project_key FROM project_document_grants "
+                "WHERE tenant_id=$1::uuid AND user_id=$2 AND access=ANY($3::text[])",
+                scope["tenant_id"], scope["user_id"], ["read", "write", "approve"],
+            )
+            documents = await approved_index(
+                db_conn, scope["tenant_id"], [row["project_key"] for row in grants],
+            )
+            return format_approved_index(documents)
         allowed = await db_conn.fetchval(
             "SELECT EXISTS(SELECT 1 FROM project_document_grants "
             "WHERE tenant_id=$1::uuid AND project_key=$2 AND user_id=$3 "
@@ -809,7 +821,14 @@ async def _build_approved_document_layer(session_id: str, db_conn) -> str:
         )
         if not allowed:
             return unavailable
-        documents = await approved_brief(db_conn, scope["tenant_id"], scope["project_key"])
+        goals = await db_conn.fetch(
+            "SELECT id FROM goals WHERE tenant_id=$1::uuid AND owner_session_id=$2::uuid "
+            "AND status NOT IN ('done','completed','cancelled','superseded','archived')",
+            scope["tenant_id"], session_id,
+        )
+        documents = await approved_brief(
+            db_conn, scope["tenant_id"], scope["project_key"], goal_ids=[row["id"] for row in goals],
+        )
         return format_approved_brief(documents)
     except Exception:  # noqa: BLE001 — document lookup must fail closed on database errors
         logger.warning("approved_document_brief_unavailable")

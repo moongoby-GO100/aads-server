@@ -172,7 +172,7 @@ def test_brief_only_reads_approved_pointer_and_is_bounded():
         async def fetch(self, sql, *args):
             assert "r.id=h.approved_revision_id" in sql
             assert "h.tenant_id=$1::uuid AND h.project_key=$2" in sql
-            assert args == (TENANT, "AADS", 8)
+            assert args == (TENANT, "AADS", 8, [])
             return [{"document_key": "plan", "excerpt": "approved"}]
 
     assert asyncio.run(docs.approved_brief(BriefConn(), TENANT, "AADS"))[0]["excerpt"] == "approved"
