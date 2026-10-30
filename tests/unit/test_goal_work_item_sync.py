@@ -83,6 +83,9 @@ class Transaction:
 class FakeConnection:
     def __init__(self, state='in_review', synced=None):
         self.rows = tree(state, 'completed')
+        for row in self.rows:
+            row.update(tenant_id=str(uuid4()), project="AADS")
+        self.events = []
         self.synced = synced
         self.status = 'done'
         self.locks = 0
@@ -105,10 +108,13 @@ class FakeConnection:
     async def execute(self, sql, *args):
         if 'UPDATE goal_task_links' in sql:
             self.synced = args[2]
+        elif 'INSERT INTO work_item_events' in sql:
+            self.events.append(args)
         else:
             for row in self.rows:
                 if row['id'] == args[0]:
                     row['status'] = args[1]
+                    return 'UPDATE 1'
 
 
 def test_rejected_reconcile_and_new_job_running():
@@ -134,7 +140,6 @@ def test_missing_schema_noops(monkeypatch):
     conn = AsyncMock()
     asyncio.run(bind_work_items(conn, 'j', f'WORK_ITEM_ID: {uuid4()}'))
     asyncio.run(sync_runner(conn, 'j', 'running'))
-    asyncio.run(sync_milestone(conn, 'm', 'rejected'))
     asyncio.run(reconcile_runner_items(conn))
     conn.fetch.assert_not_called()
     conn.execute.assert_not_called()
@@ -195,3 +200,89 @@ def test_schema_probe_requires_both_columns(monkeypatch):
     monkeypatch.setattr(goal_manager, '_link_columns_cache', None)
     conn.fetch.return_value.append({'column_name': 'work_items_synced_status'})
     assert asyncio.run(probe(conn)) is True
+
+
+@pytest.mark.parametrize('event,target', [('completed', 'completed'), ('rejected', 'changes_requested')])
+def test_milestone_audits_without_runner_columns(monkeypatch, event, target):
+    import json
+    from uuid import UUID
+    from app.services.goal_work_item_sync import sync_milestone
+
+    probe = AsyncMock(side_effect=AssertionError('runner schema must not be probed'))
+    monkeypatch.setattr('app.services.goal_work_item_sync.schema_ready', probe)
+    conn = FakeConnection()
+    conn.rows[1]['status'] = 'in_review'
+    assert asyncio.run(sync_milestone(conn, 'm', event)) == 2
+    assert len(conn.events) == 2
+    for args in conn.events:
+        row = next(row for row in conn.rows if row['id'] == args[3])
+        assert args[:3] == (row['tenant_id'], row['project'], 'work_item')
+        assert args[4:7] == ('status_synced_from_milestone', None, None)
+        assert json.loads(args[7]) == {
+            'from': 'in_review', 'to': target, 'milestone_id': 'm', 'event': event,
+        }
+        assert UUID(args[8])
+        assert row['status'] == target
+    assert asyncio.run(sync_milestone(conn, 'm', event)) == 0
+    assert len(conn.events) == 2
+    probe.assert_not_called()
+
+
+class BackfillConnection(FakeConnection):
+    def __init__(self):
+        super().__init__()
+        self.rows = [dict(id=str(uuid4()), milestone_id=mid, goal_id='g',
+                          parent_id=None, type='task', status=state,
+                          tenant_id=str(uuid4()), project='AADS')
+                     for mid in ('complete', 'open')
+                     for state in ('in_review', 'draft', 'ready', 'blocked',
+                                   'cancelled', 'changes_requested', 'completed')]
+
+    async def fetch(self, sql, *args):
+        if 'JOIN milestones' in sql:
+            assert "m.status='completed'" in sql
+            assert "w.status='in_review'" in sql
+            assert 'w.goal_id=$1::uuid' in sql
+            assert 'm.id=$2::uuid' in sql
+            return [dict(row) for row in self.rows
+                    if row['milestone_id'] == 'complete' and row['status'] == 'in_review'
+                    and (args[0] is None or row['goal_id'] == args[0])
+                    and (args[1] is None or row['milestone_id'] == args[1])]
+        return [row for row in self.rows if row['milestone_id'] == args[0]]
+
+    async def fetchval(self, sql, *args):
+        return 'completed' if args[0] == 'complete' else 'in_progress'
+
+
+def test_backfill_dry_run_and_apply_idempotence():
+    from scripts.backfill_completed_milestone_work_items import backfill, parse_args
+    from copy import deepcopy
+
+    assert not parse_args([]).apply
+    assert not parse_args(['--dry-run']).apply
+    conn = BackfillConnection()
+    before = deepcopy(conn.rows)
+    conn.execute = AsyncMock(wraps=conn.execute)
+    result = asyncio.run(backfill(conn))
+    assert result['count'] == 1 and result['changed'] == 0
+    assert conn.rows == before and conn.events == []
+    conn.execute.assert_not_awaited()
+    assert asyncio.run(backfill(conn, goal_id='other'))['count'] == 0
+    assert asyncio.run(backfill(conn, milestone_id='open'))['count'] == 0
+    result = asyncio.run(backfill(conn, apply=True))
+    assert result['changed'] == 1 and len(conn.events) == 1
+    for old, new in zip(before, conn.rows):
+        expected = 'completed' if old['milestone_id'] == 'complete' and old['status'] == 'in_review' else old['status']
+        assert new['status'] == expected
+    assert asyncio.run(backfill(conn, apply=True))['changed'] == 0
+    assert len(conn.events) == 1
+
+
+def test_backfill_rechecks_milestone_before_writing():
+    from scripts.backfill_completed_milestone_work_items import backfill
+
+    conn = BackfillConnection()
+    conn.fetchval = AsyncMock(return_value='in_progress')
+    result = asyncio.run(backfill(conn, apply=True))
+    assert result['count'] == 1 and result['changed'] == 0
+    assert conn.events == []

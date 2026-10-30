@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from uuid import UUID
+from uuid import UUID, NAMESPACE_URL, uuid5
 
 
 def parse_work_item_ids(instruction):
@@ -74,19 +74,34 @@ def transition_plan(rows, event, linked_ids=()):
 
 async def sync_milestone(conn, milestone_id, event, linked_ids=()):
     """마일스톤 잠금 아래 업무와 상위 항목의 상태를 반영한다."""
-    if not await schema_ready(conn):
-        return
+    from app.services.goal_workflow_approval import append_event
+
+    changed = 0
     async with conn.transaction():
         await conn.fetchval('SELECT id FROM milestones WHERE id=$1::uuid FOR UPDATE', milestone_id)
         rows = await conn.fetch("""
-            SELECT id, parent_id, type, status FROM work_items
+            SELECT id, parent_id, type, status, tenant_id, project FROM work_items
             WHERE milestone_id=$1::uuid ORDER BY id FOR UPDATE
         """, milestone_id)
+        originals = {str(row["id"]): dict(row) for row in rows}
         for item_id, state in transition_plan(rows, event, linked_ids).items():
-            await conn.execute("""UPDATE work_items SET status=$2, version=version+1,
+            result = await conn.execute("""UPDATE work_items SET status=$2, version=version+1,
                 updated_at=NOW(), completed_at=CASE WHEN $2='completed' THEN NOW() ELSE NULL END
                 WHERE id=$1::uuid AND status IS DISTINCT FROM $2
                   AND status NOT IN ('cancelled','blocked')""", item_id, state)
+            if result != 'UPDATE 1':
+                continue
+            row = originals[item_id]
+            await append_event(
+                conn, tenant_id=str(row['tenant_id']), project=row['project'],
+                aggregate_type='work_item', aggregate_id=item_id,
+                event_type='status_synced_from_milestone', actor=None,
+                payload={'from': row['status'], 'to': state,
+                         'milestone_id': str(milestone_id), 'event': event},
+                correlation_id=str(uuid5(NAMESPACE_URL, f'milestone:{milestone_id}')),
+            )
+            changed += 1
+    return changed
 
 
 async def sync_runner(conn, job_id, status, phase=None, tenant_id=None):
