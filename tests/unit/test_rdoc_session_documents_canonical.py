@@ -34,7 +34,9 @@ def _ledger(path):
 
 def _canon(path, approved=False):
     return {"project_key": "AADS", "document_key": "rdoc-result", "revision": 2, "title": "문서 저장 결과",
-            "source_path": path, "at": NOW, "approved": approved}
+            "source_path": path, "at": NOW, "approved": approved,
+            "is_latest": True, "latest_revision": 2,
+            "approved_revision": 2 if approved else None, "in_review": False, "superseded": False}
 
 
 @pytest.fixture

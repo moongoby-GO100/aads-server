@@ -453,9 +453,24 @@ async def collect_session_documents(session_id: Any, limit: int = 80) -> Dict[st
         rows = await pool.fetch(
             """
             SELECT h.project_key, h.document_key, r.revision, r.title, r.source_path,
-                   r.created_at AS at, (r.id = h.approved_revision_id) AS approved
+                   r.created_at AS at, (r.id = h.approved_revision_id) AS approved,
+                   (r.id = h.latest_revision_id) AS is_latest,
+                   latest.revision AS latest_revision,
+                   approved.revision AS approved_revision,
+                   COALESCE(
+                       r.id = h.latest_revision_id
+                       AND (h.approved_revision_id IS NULL OR r.id <> h.approved_revision_id)
+                       AND (SELECT e.action FROM project_document_events e
+                            WHERE e.revision_id = r.id
+                              AND e.action IN ('review', 'approved', 'archived')
+                            ORDER BY e.id DESC LIMIT 1) = 'review',
+                       FALSE
+                   ) AS in_review,
+                   (r.id <> h.latest_revision_id) AS superseded
             FROM project_document_revisions r
             JOIN project_document_heads h ON h.id = r.head_id
+            LEFT JOIN project_document_revisions latest ON latest.id = h.latest_revision_id
+            LEFT JOIN project_document_revisions approved ON approved.id = h.approved_revision_id
             WHERE r.tenant_id = (SELECT s.tenant_id FROM chat_sessions s WHERE s.id = $1)
               AND (r.source_session_id = $1
                    OR r.author_id = 'chat:' || left($1::text, 8)
@@ -482,6 +497,11 @@ async def collect_session_documents(session_id: Any, limit: int = 80) -> Dict[st
                 "title": r["title"],
                 "source_path": r["source_path"],
                 "approved": bool(r["approved"]),
+                "is_latest": bool(r["is_latest"]),
+                "latest_revision": r["latest_revision"],
+                "approved_revision": r["approved_revision"],
+                "in_review": bool(r["in_review"]),
+                "superseded": bool(r["superseded"]),
                 "at": r["at"].isoformat() if hasattr(r["at"], "isoformat") else r["at"],
                 "view": ref,
             })
