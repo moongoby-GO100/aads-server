@@ -313,12 +313,20 @@ async def ask_pending_reviews(project: Optional[str] = None) -> Dict[str, int]:
 
             if to_ceo:
                 try:
-                    from app.services.goal_report import _telegram
+                    from app.services.ohvis_alert import WARNING, notify
 
-                    await _telegram(
-                        f"✅ [{row['project']}] 완료 확인 요청\n"
+                    suffix = f" ({row['milestone_id'][:8]})"
+                    prefix = f"✅ [{row['project']}] 완료 확인 요청 · "
+                    title = prefix + row['title']
+                    if len(title) + len(suffix) > 200:
+                        title = title[:199 - len(suffix)] + "…"
+                    await notify(
+                        title + suffix,
                         f"{row['goal_title']}\n{row['title']}\n"
-                        f"담당 {row['owner'] or '미지정'} — 대표님 확인이 필요합니다"
+                        f"담당 {row['owner'] or '미지정'} — 대표님 확인이 필요합니다",
+                        severity=WARNING,
+                        category="goal",
+                        dedupe_minutes=30,
                     )
                 except Exception as exc:
                     logger.warning("review_escalate_failed", error=str(exc)[:160])
