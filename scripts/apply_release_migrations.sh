@@ -171,9 +171,41 @@ verify_ceo_approval() {
     return "$rc"
 }
 
+# Resolve deploy.sh's short release identifier to the immutable commit SHA.
+# Extracted release archives have no .git, so also consult the caller's checkout.
+resolve_release_sha() {
+    local input="${AADS_RELEASE_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)}"
+    local candidate=""
+    if [[ "$input" =~ ^[0-9a-f]{40}$ ]]; then
+        printf '%s\n' "$input"
+        return 0
+    fi
+    if [[ ! "$input" =~ ^[0-9a-f]{1,39}$ ]]; then
+        echo "cannot resolve full release sha from ${input:-unknown}" >&2
+        return 1
+    fi
+    if [[ "${AADS_RELEASE_SHA_FULL:-}" =~ ^[0-9a-f]{40}$ &&
+          "${AADS_RELEASE_SHA_FULL}" == "$input"* ]]; then
+        printf '%s\n' "$AADS_RELEASE_SHA_FULL"
+        return 0
+    fi
+    candidate="$(git -C "$ROOT" rev-parse --verify "${input}^{commit}" 2>/dev/null || true)"
+    if [[ "$candidate" =~ ^[0-9a-f]{40}$ && "$candidate" == "$input"* ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+    candidate="$(git rev-parse --verify "${input}^{commit}" 2>/dev/null || true)"
+    if [[ "$candidate" =~ ^[0-9a-f]{40}$ && "$candidate" == "$input"* ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+    echo "cannot resolve full release sha from $input" >&2
+    return 1
+}
+
 # Bind the review manifest to immutable file bytes and the release identity.
 # An extracted deploy archive has no .git; deploy.sh exports AADS_RELEASE_SHA.
-release_sha="${AADS_RELEASE_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)}"
+release_sha=""
 manifest=""
 for path in "${pending[@]}"; do
     name="migrations/$(basename "$path")"
@@ -232,6 +264,10 @@ if $plan_only; then
         inspect_pending_objects || exit 8
     fi
 elif ((${#pending[@]})); then
+    if ! release_sha="$(resolve_release_sha)"; then
+        echo "BLOCK-CEO-APPROVAL: cannot verify approval without the full release SHA."
+        exit 7
+    fi
     printf 'RELEASE %s\n%s' "${release_sha:-unknown}" "$manifest"
     if ! verify_ceo_approval "$release_sha" "$manifest"; then
         echo "BLOCK-CEO-APPROVAL: PENDING migrations require a human CEO approval bound to RELEASE and every filename/sha256 above."

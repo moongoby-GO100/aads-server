@@ -45,6 +45,69 @@ def test_retry(approved):
     assert a.verify(root, SHA, [], state).startswith('APPROVED')
 
 
+def run_short_sha_gate(root, state, short_sha, full_sha=None):
+    """Run the shell gate against the fixture's DB state and a short SHA."""
+    module = (ROOT / 'scripts/release_migration_approval.py').read_text()
+    start = module.index('    # One SELECT')
+    end = module.index('\n\ndef inventory', start)
+    (root / 'scripts/release_migration_approval.py').write_text(
+        module[:start] + '    return ' + repr(state) + '\n' + module[end:])
+    shell = (ROOT / 'scripts/apply_release_migrations.sh').read_text()
+    start = shell.index('read_ledger() {')
+    end = shell.index('\n}', start)
+    (root / 'scripts/apply_release_migrations.sh').write_text(
+        shell[:start] + 'read_ledger() {\n    cat "$AADS_MIGRATION_LEDGER_FILE"' + shell[end:])
+    ledger = root / 'ledger'
+    ledger.write_text('')
+    calls = root / 'calls'
+    apply = root / 'apply.sh'
+    apply.write_text(f'#!/bin/bash\necho write >> {calls}\n')
+    apply.chmod(0o755)
+    env = dict(os.environ, AADS_RELEASE_SHA=short_sha,
+               AADS_MIGRATION_LEDGER_FILE=str(ledger),
+               AADS_APPLY_MIGRATION_BIN=str(apply))
+    if full_sha is not None:
+        env['AADS_RELEASE_SHA_FULL'] = full_sha
+    return subprocess.run(
+        ['bash', str(root / 'scripts/apply_release_migrations.sh'), '--root', str(root)],
+        env=env, text=True, capture_output=True, timeout=10), calls
+
+
+def test_short_sha_resolves_from_full_environment_and_approves(approved):
+    root, state, _, _ = approved
+    result, calls = run_short_sha_gate(root, state, SHA[:12], SHA)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f'RELEASE {SHA}\n' in result.stdout
+    assert calls.exists()
+
+
+def test_short_sha_without_approval_is_blocked(approved):
+    root, state, _, _ = approved
+    state['document'] = None
+    result, calls = run_short_sha_gate(root, state, SHA[:12], SHA)
+    assert result.returncode == 7
+    assert 'BLOCK-CEO-APPROVAL' in result.stdout
+    assert not calls.exists()
+
+
+def test_unresolvable_short_sha_is_blocked_without_fabrication(approved):
+    root, state, _, _ = approved
+    result, calls = run_short_sha_gate(root, state, 'f' * 12)
+    assert result.returncode == 7
+    assert 'cannot resolve full release sha from ' + 'f' * 12 in result.stderr
+    assert 'RELEASE ' not in result.stdout
+    assert not calls.exists()
+
+
+def test_mismatched_full_environment_sha_is_not_adopted(approved):
+    root, state, _, _ = approved
+    result, calls = run_short_sha_gate(root, state, 'b' * 12, SHA)
+    assert result.returncode == 7
+    assert 'cannot resolve full release sha from ' + 'b' * 12 in result.stderr
+    assert 'RELEASE ' not in result.stdout
+    assert not calls.exists()
+
+
 CASES = [
     ('missing', 'not_approved'), ('owner', 'approver_not_owner'),
     ('system', 'approver_not_human'), ('auth', 'approver_not_human'),
