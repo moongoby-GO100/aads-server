@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>직원 상세 · 오비서 관리자 근태 v4 목업</title><style>:root{font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;color:#172033;background:#f4f6fa;font-size:14px}
+*{box-sizing:border-box}body{margin:0;overflow-wrap:anywhere;word-break:keep-all}
+button,input,select,textarea,.linkbtn{font:inherit;min-height:44px;border:1px solid #dce3ed;border-radius:8px;background:#fff;padding:8px 12px;max-width:100%;color:#172033}
+input,select,textarea{width:100%;min-width:0}textarea{min-height:88px}
+button,.linkbtn{cursor:pointer;color:#245fd0;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;text-align:center;font-weight:600;min-width:44px}
+button:disabled{opacity:.5;cursor:not-allowed}:focus-visible{outline:3px solid #8bb4ff;outline-offset:1px}
+.primary{background:#2f6fed!important;color:#fff!important;border-color:#2f6fed!important}.danger{color:#b42318}
+h1{font-size:24px;margin:4px 0 6px}h2{font-size:17px;margin:0 0 8px}h3{font-size:15px;margin:4px 0}
+.shell{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100vh}
+aside{background:#172033;color:#fff;padding:24px 16px}aside .brand{font-size:22px;font-weight:800}aside .sub{color:#b5c2d8;margin:4px 0 24px}
+nav.side{display:grid;gap:6px}nav.side a{color:#dbe4f5;text-decoration:none;min-height:44px;display:flex;align-items:center;padding:0 12px;border-radius:9px}
+nav.side a[aria-current=page]{background:#2f6fed;color:#fff;font-weight:700}nav.side a.sec{margin-top:14px;border:1px dashed #3d4b66;color:#b5c2d8}
+main{padding:24px 28px;min-width:0;max-width:1240px}
+.top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:12px}
+.muted,small{color:#5d6a80}.panel{background:#fff;border:1px solid #e0e6ef;border-radius:12px;padding:18px;margin-top:16px}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700;line-height:1.4;vertical-align:middle;white-space:nowrap}
+.tag.now{background:#e5f3ea;color:#176b44}.tag.new{background:#efe7fb;color:#5b2aa6}.tag.policy{background:#fff3df;color:#8a5a00}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}.metric{padding:16px;background:#fff;border:1px solid #e0e6ef;border-radius:12px}.metric b{display:block;font-size:26px;margin-top:6px}
+.metrics.five{grid-template-columns:repeat(5,minmax(0,1fr))}
+.banner{padding:12px 14px;border-radius:10px;border:1px solid;line-height:1.7;margin-top:14px}.banner.warn{background:#fff6e5;border-color:#eed8aa}.banner.ok{background:#e9f7ef;border-color:#bfe3cf}.banner.info{background:#eef4ff;border-color:#c9d8f6}.banner.err{background:#fdeeee;border-color:#f1c0bb}
+.badge{display:inline-block;border-radius:30px;padding:3px 9px;font-size:12px;font-weight:600;background:#fff3df;color:#8a5a00;white-space:nowrap}
+.badge.ok{background:#e9f7ef;color:#17734d}.badge.err{background:#fdeeee;color:#b42318}.badge.info{background:#e8f0ff;color:#245fd0}.badge.gray{background:#eef0f4;color:#4b5565}
+.toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}.toolbar label{flex:1 1 150px}
+label .tag{justify-self:start}label{display:grid;gap:6px;color:#4b5565;min-width:0}
+.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #edf0f5;vertical-align:middle}th{font-size:12px;color:#5d6a80;font-weight:600}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.item{padding:12px 0;border-bottom:1px solid #edf0f5}.item p{margin:4px 0;line-height:1.5}
+.hidden,[hidden]{display:none!important}#toast{min-height:24px;color:#245fd0;margin-top:10px;font-weight:600}
+dialog{width:min(520px,calc(100% - 24px));border:1px solid #dce3ed;border-radius:12px;padding:20px}dialog::backdrop{background:#17203388}dialog label{margin:10px 0}
+label.check{display:flex;align-items:center;gap:10px;min-height:44px;color:#172033}label.check input{width:22px;height:22px;min-height:22px;flex:none}
+.scenario{margin-top:24px;border-top:1px dashed #c9d1de;padding-top:14px}.scenario label{max-width:360px}
+.state h2{margin-top:8px}.state p{line-height:1.7}.skel{height:18px;border-radius:6px;background:linear-gradient(90deg,#eef1f6,#f7f9fc,#eef1f6);margin:10px 0}.skel.short{width:50%}
+.legendbox{background:#fff;border:1px dashed #b9c4d6;border-radius:12px;padding:12px 14px;margin-top:16px;line-height:1.8}
+.err-text{color:#b42318;font-weight:600}
+svg text{font-family:inherit}
+@media(max-width:1100px){.cols{grid-template-columns:1fr}.metrics.five{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.shell{grid-template-columns:1fr}aside{padding:12px 14px}aside .sub{display:none}aside .brand{font-size:18px}
+ nav.side{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:8px}nav.side a{justify-content:center;text-align:center;padding:0 6px;font-size:13px}nav.side a.sec{margin-top:0}
+ main{padding:14px}h1{font-size:21px}.metrics,.metrics.five{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{padding:12px}.metric b{font-size:21px}.panel{padding:12px}
+ .toolbar>*{flex:1 1 140px}.desk{display:none!important}}
+@media(min-width:701px){.mob{display:none!important}}
+</style></head>
+<body><div class="shell"><aside><div class="brand">오비서</div><div class="sub">관리자 · 근태 관리</div>
+<nav class="side" aria-label="근태 관리 메뉴"><a href="obys-attendance-admin-today.html">오늘 현황</a><a href="obys-attendance-admin-roster.html" aria-current=page>직원 목록</a><a href="obys-attendance-admin-employees.html">직원별 현황</a><a href="obys-attendance-admin-employee-calendar.html">출근 달력</a><a href="obys-attendance-admin-schedule.html">근무 일정</a><a href="obys-attendance-admin-attendance-edit.html">출근·결근 처리</a><a href="obys-attendance-admin-stats.html">통계</a><a href="obys-attendance-admin-branches.html">지점·근무지 관리</a><a class="sec" href="obys-attendance-admin-onboarding.html">근태 시작하기</a><a class="sec" href="../index.html">목업 목록</a></nav></aside>
+<main><style>
+.steps{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:12px}.steps li{display:grid;grid-template-columns:48px minmax(0,1fr);gap:12px;padding:14px;border:1px solid #e0e6ef;border-radius:12px;background:#fbfcfe}
+.steps .n{width:44px;height:44px;border-radius:50%;background:#e8f0ff;color:#245fd0;display:grid;place-items:center;font-weight:800;font-size:18px}.steps li.done .n{background:#17734d;color:#fff}
+.steps p{margin:4px 0;line-height:1.6}.linkbox{display:flex;gap:8px;flex-wrap:wrap}.linkbox input{flex:1 1 220px}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}.cal .dow{text-align:center;font-size:12px;color:#5d6a80;padding:4px 0}
+.cal button{min-height:64px;padding:4px;font-size:12px;flex-direction:column;gap:2px;border-radius:8px;min-width:0;font-weight:600}.cal button b{font-size:15px}.cal .blank{min-height:64px}
+.cal button[aria-pressed=true]{outline:3px solid #172033}
+.c-ok{background:#e9f7ef!important;color:#17734d!important}.c-late,.c-early{background:#fff3df!important;color:#8a5a00!important}.c-missing,.c-absent{background:#fdeeee!important;color:#b42318!important}
+.c-review{background:#efe7fb!important;color:#5b2aa6!important}.c-off{background:#f1f3f6!important;color:#8a94a6!important}.c-working{background:#e8f0ff!important;color:#245fd0!important}.c-future,.c-none{background:#fff!important;color:#9aa3b2!important}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.legend span{padding:3px 8px;border-radius:6px;font-size:12px;font-weight:600}
+.cards{display:grid;gap:10px}.ecard{border:1px solid #e0e6ef;border-radius:12px;padding:12px;background:#fff}.ecard dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:8px 0}.ecard dt{font-size:12px;color:#5d6a80}.ecard dd{margin:0;font-weight:700}
+.rowlink{justify-content:flex-start}
+.cand{display:grid;gap:8px;margin-top:10px}.cand button{justify-content:flex-start;text-align:left;flex-direction:column;align-items:flex-start;font-weight:600}.cand button small{font-weight:400}
+.cand button[aria-pressed=true]{border:2px solid #2f6fed;background:#eef4ff}
+.editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px}.stepbox{border:1px solid #e0e6ef;border-radius:10px;padding:12px;margin-top:10px}.stepbox h3 span{color:#245fd0}
+.coords{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.kpi small{display:block;margin-top:4px}
+@media(max-width:1100px){.editor-grid{grid-template-columns:1fr}}
+@media(max-width:700px){.steps li{grid-template-columns:1fr}.cal button{min-height:52px;font-size:11px}.cal button b{font-size:13px}.cal .blank{min-height:52px}.cal button .lbl{display:none}.ecard dl{grid-template-columns:repeat(2,minmax(0,1fr))}.coords{grid-template-columns:1fr}}
+.who{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px}
+.tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:16px}.tabs button{font-weight:600}.tabs button[aria-selected=true]{background:#172033;color:#fff;border-color:#172033}
+.kv{display:grid;grid-template-columns:160px minmax(0,1fr);gap:0}.kv>div{padding:10px 8px;border-bottom:1px solid #edf0f5}.kv>div:nth-child(odd){color:#5d6a80;font-size:13px}
+code.raw{background:#f4f6fa;border:1px solid #e0e6ef;border-radius:6px;padding:2px 6px;font-size:13px}
+.metrics.seven{grid-template-columns:repeat(7,minmax(0,1fr))}
+.hist{list-style:none;margin:0;padding:0}.hist li{padding:10px 0;border-bottom:1px solid #edf0f5;line-height:1.6}
+@media(max-width:1100px){.metrics.seven{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:700px){.tabs{grid-template-columns:repeat(2,minmax(0,1fr))}.metrics.seven{grid-template-columns:repeat(2,minmax(0,1fr))}.kv{grid-template-columns:1fr}.kv>div:nth-child(odd){border-bottom:0;padding-bottom:0}}
+</style>
+
+<div class="top"><div><h1 id="title">직원 상세 <span class="tag new">신규 — API·화면 없음</span></h1>
+<div class="who" id="who"></div></div>
+<div class="acts" style="margin:0"><label style="min-width:220px">직원<select id="emp"></select></label></div></div>
+<div id="live">
+<div class="acts"><a class="linkbtn" id="toCal" href="obys-attendance-admin-employee-calendar.html">달력 보기</a><a class="linkbtn" id="toEdit" href="obys-attendance-admin-attendance-edit.html">출근·결근 처리</a><a class="linkbtn" id="toSched" href="obys-attendance-admin-schedule.html">근무 일정 설정</a><a class="linkbtn" href="obys-attendance-admin-roster.html">직원 목록으로</a></div>
+<div class="tabs" role="tablist" aria-label="직원 상세 탭">
+<button type="button" role="tab" id="t-summary" data-tab="summary">① 근태 요약</button><button type="button" role="tab" id="t-contract" data-tab="contract">② 근무 조건</button><button type="button" role="tab" id="t-schedule" data-tab="schedule">③ 근무 일정</button><button type="button" role="tab" id="t-history" data-tab="history">④ 출근/결근 이력</button></div>
+<section class="panel" id="pane" role="tabpanel"></section>
+</div>
+<section id="stateBox" class="panel" hidden aria-live="polite"></section>
+<p id="toast" role="status"></p>
+<section class="scenario" aria-label="검토용 상태 전환">
+<label>검토 상태(목업 전용)<select id="scenario">
+<option value="default">기본</option><option value="loading">불러오는 중</option><option value="empty">데이터 없음</option>
+<option value="error">조회 실패</option><option value="permission">권한 없음</option><option value="offline">오프라인</option>
+<option value="session-expired">세션 만료 → 로그인 화면으로 이동</option></select></label>
+<p class="muted">세션 만료는 안내 화면 없이 로그인 화면으로 즉시 이동하고, 로그인 후 이 화면으로 돌아옵니다.</p>
+</section>
+<footer class="legendbox"><b>표기</b> <span class="tag now">현재 코드 있음</span> 현재 저장소에 화면·API 가 있는 요소 · <span class="tag new">신규 — API·화면 없음</span> 승인 후 설계할 요소 · <span class="tag policy">정책 미정 — 설정 필요</span> 결정하지 않은 기준. 모든 이름·주소·좌표는 가상 데이터이며 외부 요청이 없습니다.</footer>
+</main></div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(msg){const t=$('toast');t.textContent=msg;}
+const FILE=location.pathname.split('/').pop();
+function setupScenario(texts){
+ const sel=$('scenario'),live=$('live'),box=$('stateBox');
+ sel.addEventListener('change',()=>{
+  const v=sel.value;
+  if(v==='session-expired'){location.href='login.html?return='+encodeURIComponent(FILE+location.search);return;}
+  live.hidden=v!=='default';box.hidden=v==='default';
+  if(v==='default'){box.innerHTML='';return;}
+  const t=texts[v];
+  box.className='panel state state-'+v;
+  box.innerHTML=(v==='loading'?'<div class="skel"></div><div class="skel"></div><div class="skel short"></div>':'')+
+   '<h2>'+esc(t[0])+'</h2><p>'+esc(t[1])+'</p><div class="acts"><button type="button" id="recover" class="primary">'+esc(t[2]||'다시 시도')+'</button></div>';
+  $('recover').onclick=()=>{sel.value='default';sel.dispatchEvent(new Event('change'));};
+ });
+}
+// ---- 가상 데이터(virtual-v4). 실명·실주소 없음. 기준일 2026-10-28(수).
+const TODAY='2026-10-28';
+const BRANCHES=[
+ {id:'b1',name:'샘플 1호점',addr:'가상시 샘플구 예시로 12',lat:37.500101,lng:127.000101,radius:50},
+ {id:'b2',name:'샘플 2호점',addr:'가상시 샘플구 시범대로 340',lat:37.500202,lng:127.000202,radius:40},
+ {id:'b3',name:'샘플 3호점',addr:'',lat:null,lng:null,radius:null},
+ {id:'b4',name:'샘플 4호점',addr:'',lat:null,lng:null,radius:null},
+ {id:'b5',name:'샘플 5호점',addr:'',lat:null,lng:null,radius:null}];
+const BR=Object.fromEntries(BRANCHES.map(b=>[b.id,b]));
+const EMPS=[
+ {id:'A',name:'샘플 직원 A',br:'b1',days:[1,2,3,4,5]},{id:'B',name:'샘플 직원 B',br:'b1',days:[1,2,3,4,5]},
+ {id:'C',name:'샘플 직원 C',br:'b1',days:[1,2,3,4,5]},{id:'D',name:'샘플 직원 D',br:'b2',days:[1,2,3,4,5]},
+ {id:'E',name:'샘플 직원 E',br:'b2',days:[1,2,3,4,5]},{id:'F',name:'샘플 직원 F',br:'b3',days:[2,3,4,5,6]},
+ {id:'G',name:'샘플 직원 G',br:'b4',days:[2,3,4,5,6]},{id:'H',name:'샘플 직원 H',br:'b5',days:[1,3,5]}];
+const EMP=Object.fromEntries(EMPS.map(e=>[e.id,e]));
+const pad=n=>String(n).padStart(2,'0');
+const ymd=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const hm=m=>pad(Math.floor(m/60))+':'+pad(m%60);
+const dur=m=>Math.floor(m/60)+'시간 '+(m%60)+'분';
+const mins=s=>{const[a,b]=s.split(':');return +a*60+ +b;};
+// 확정 사례(정정 요청과 오늘 현황이 같은 기록을 가리키도록 고정)
+const OVERRIDE={
+ 'A|2026-10-27':{kind:'missing'},'D|2026-10-23':{kind:'late',in:'09:24'},'B|2026-10-20':{kind:'missing',corrected:'18:00'},
+ 'C|2026-10-15':{kind:'early',out:'16:30'},'A|2026-10-28':{kind:'working',in:'08:58'},'B|2026-10-28':{kind:'working',in:'08:51'},
+ 'C|2026-10-28':{kind:'working',in:'09:12',late:true},'D|2026-10-28':{kind:'working',in:'08:55'},
+ 'E|2026-10-28':{kind:'working',in:'09:03',geo:'unknown',reason:'위치 미확인'},'F|2026-10-28':{kind:'none'},
+ 'G|2026-10-28':{kind:'none'},'H|2026-10-28':{kind:'working',in:'09:20',geo:'unknown',reason:'좌표 미설정 지점'}};
+function record(emp,date){
+ const e=EMP[emp],d=new Date(date+'T00:00:00');
+ if(date>TODAY||!e.days.includes(d.getDay()))return {emp,date,kind:'off'};
+ const o=OVERRIDE[emp+'|'+date]||{};
+ const doy=Math.floor((d-new Date(d.getFullYear(),0,1))/864e5);
+ const i=EMPS.indexOf(e),h=(i*31+doy*17)%29;
+ let kind=o.kind||(h===0?'late':h===1?'missing':h===2?'review':h===3?'early':h===4?'absent':'ok');
+ if(kind==='none'||kind==='absent')return {emp,date,kind,br:e.br};
+ const coord=!!BR[e.br].lat;
+ let inM=o.in?mins(o.in):(kind==='late'?9*60+11+(h%9):8*60+48+(h%11));
+ let outM=kind==='missing'||kind==='working'?null:(o.out?mins(o.out):kind==='early'?16*60+35+(h%7):18*60+(h%9));
+ let geo=o.geo||(coord?(kind==='review'?'unknown':'inside'):'unknown');
+ const recent=date>='2026-10-26';
+ let reason=o.reason||(kind==='missing'?'퇴근 누락':kind==='review'?'위치 미확인':(!coord&&recent)?'좌표 미설정 지점':'');
+ if(o.corrected){outM=mins(o.corrected);reason='';}
+ const pending=!!reason;
+ const brk=outM?60:0;
+ return {emp,date,kind,br:e.br,in:hm(inM),out:outM==null?null:hm(outM),brk,geo,status:pending?'pending':'approved',reason,
+  late:kind==='late'||!!o.late,early:kind==='early',missing:kind==='missing'&&!o.corrected,review:pending,
+  worked:outM==null?null:outM-inM-brk,corrected:o.corrected||null};
+}
+function daysBetween(from,to){const r=[];for(let d=new Date(from+'T00:00:00');ymd(d)<=to;d.setDate(d.getDate()+1))r.push(ymd(d));return r;}
+const CORRECTIONS=[
+ {id:'c1',emp:'A',date:'2026-10-27',type:'퇴근 누락',ask:'퇴근 18:02 추가',why:'퇴근 버튼을 누르지 못하고 퇴근했습니다.',state:'pending'},
+ {id:'c2',emp:'D',date:'2026-10-23',type:'출근 시각',ask:'출근 09:24 → 08:58',why:'매장 앞에서 위치 확인이 늦어졌습니다.',state:'pending'},
+ {id:'c3',emp:'B',date:'2026-10-20',type:'퇴근 누락',ask:'퇴근 18:00 추가',why:'마감 후 휴대폰 배터리가 꺼졌습니다.',state:'approved',by:'샘플 관리자',at:'10-21 10:12'},
+ {id:'c4',emp:'C',date:'2026-10-15',type:'퇴근 시각',ask:'퇴근 16:30 → 18:00',why:'재고 정리로 늦게 퇴근했습니다.',state:'rejected',by:'샘플 관리자',at:'10-16 09:40',note:'해당 일 재고 작업 일정이 없어 점장 확인 후 다시 요청해 주세요.'}];
+function summarize(emp,from,to){
+ const s={days:0,planned:0,worked:0,late:0,early:0,missing:0,review:0,absent:0,corr:CORRECTIONS.filter(c=>c.emp===emp&&c.date>=from&&c.date<=to).length};
+ for(const date of daysBetween(from,to)){const r=record(emp,date);if(r.kind==='off')continue;s.planned++;
+  if(r.kind==='absent'||r.kind==='none'){s.absent++;continue;}
+  s.days++;s.worked+=r.worked||0;if(r.late)s.late++;if(r.early)s.early++;if(r.missing)s.missing++;if(r.review)s.review++;}
+ return s;
+}
+
+setupScenario({"loading": ["근태 정보를 불러오는 중입니다", "잠시만 기다려 주세요. 3초 넘게 걸리면 다시 시도 버튼을 누르세요.", "다시 시도"], "error": ["근태 정보를 불러오지 못했습니다", "서버가 응답하지 않았습니다(가상 오류). 입력 중인 내용은 그대로 둡니다. 다시 시도하거나 잠시 후 열어 주세요.", "다시 시도"], "permission": ["근태 관리 권한이 없습니다", "이 화면은 회사 소유자·관리자만 볼 수 있습니다. 권한이 필요하면 소유자에게 관리자 권한을 요청하세요.", "권한 다시 확인"], "offline": ["인터넷 연결이 끊겼습니다", "연결이 돌아오면 다시 불러옵니다. 마지막으로 불러온 시각: 10-28 12:14(가상).", "연결 확인 후 다시 시도"], "empty": ["이 직원의 근태 정보가 없습니다", "아직 출근 기록·근무 일정·계약서가 하나도 없습니다. 근무 일정을 먼저 등록하고, 직원에게 출퇴근 링크를 공유하세요.", "다시 불러오기"]});
+const BADGE={ok:['정상','ok'],late:['지각','warn'],early:['조퇴','warn'],missing:['퇴근 누락','err'],review:['확인필요','info'],absent:['결근','err'],none:['미출근','gray'],working:['근무 중','info'],off:['휴무','gray']};
+function cellKind(r){if(r.kind==='off')return 'off';if(r.kind==='none'||r.kind==='absent')return r.kind==='none'?'none':'absent';
+ if(r.missing)return 'missing';if(r.review)return 'review';if(r.kind==='working')return 'working';if(r.late)return 'late';if(r.early)return 'early';return 'ok';}
+const badge=k=>'<span class="badge '+({warn:'',ok:'ok',err:'err',info:'info',gray:'gray'}[BADGE[k][1]])+'">'+BADGE[k][0]+'</span>';
+const geoText=r=>!r.in?'—':r.geo==='inside'?'반경 안':r.geo==='outside'?'반경 밖':'판정 불가';
+// ---- v4 추가 가상 데이터(virtual-v4-roster). 직원 명부·계약서 근무조건(문자열 그대로)·근무 일정·처리 이력.
+// 계약서 값은 ACCT 의 contract_payload 처럼 형식이 제각각인 문자열이다 — 해석(parseContract)은 신규 기능이다.
+const CLOSED_TO='2026-09-30';// 이 날까지 마감된 기간: 수정 불가
+const ROSTER=[
+ {id:'A',state:'active',job:'매장 관리',joined:'2025-03-02',contract:'signed',app:true,consent:true},
+ {id:'B',state:'active',job:'주방',joined:'2025-06-16',contract:'signed',app:true,consent:true},
+ {id:'C',state:'active',job:'홀 서빙',joined:'2026-01-05',contract:'signed',app:true,consent:true},
+ {id:'D',state:'active',job:'매장 관리',joined:'2024-11-11',contract:'signed',app:true,consent:true},
+ {id:'E',state:'active',job:'홀 서빙',joined:'2026-08-18',contract:'unsigned',app:true,consent:false},
+ {id:'F',state:'active',job:'주방',joined:'2026-04-01',contract:'signed',app:true,consent:true},
+ {id:'G',state:'active',job:'홀 서빙',joined:'2026-09-07',contract:'signed',app:false,consent:false},
+ {id:'H',state:'active',job:'단시간 근무',joined:'2026-10-05',contract:'none',app:true,consent:true},
+ {id:'P',name:'샘플 가입자 P',br:'b2',state:'pending',job:'',joined:null,requested:'2026-10-27',contract:'none',app:false,consent:false},
+ {id:'R',name:'샘플 퇴사자 R',br:'b1',state:'left',job:'주방',joined:'2025-02-03',left:'2026-09-30',contract:'signed',app:false,consent:false}];
+ROSTER.forEach(p=>{if(EMP[p.id]){p.name=EMP[p.id].name;p.br=EMP[p.id].br;}});
+const RO=Object.fromEntries(ROSTER.map(p=>[p.id,p]));
+const CONTRACTS={
+ A:{signed_at:'2025-02-27',work_days:'월~금',work_time:'09:00~18:00',rest_time:'12:00~13:00(60분)',holidays:'토·일요일, 법정공휴일',weekly_hours:'40시간'},
+ B:{signed_at:'2025-06-12',work_days:'월~금',work_time:'09:00~18:00',rest_time:'60분',holidays:'토, 일',weekly_hours:'주 40시간'},
+ C:{signed_at:'2026-01-02',work_days:'월~금',work_time:'09:00 ~ 18:00',rest_time:'1시간',holidays:'토·일',weekly_hours:'40'},
+ D:{signed_at:'2024-11-08',work_days:'월,화,수,목,금',work_time:'10:00~19:00',rest_time:'15:00~16:00',holidays:'토·일요일',weekly_hours:'40시간'},
+ E:{signed_at:null,work_days:'월~금',work_time:'09:00~18:00',rest_time:'60분',holidays:'토, 일',weekly_hours:'40시간'},
+ F:{signed_at:'2026-03-30',work_days:'화~토',work_time:'10:00~19:00',rest_time:'14:00~15:00',holidays:'일·월요일',weekly_hours:'40시간'},
+ G:{signed_at:'2026-09-04',work_days:'화,수,목,금,토',work_time:'10:00 ~ 19:00',rest_time:'1시간',holidays:'매주 일, 월',weekly_hours:'40'},
+ R:{signed_at:'2025-01-30',work_days:'월~금',work_time:'08:00~17:00',rest_time:'60분',holidays:'토·일',weekly_hours:'40시간'}};
+const DOW=['일','월','화','수','목','금','토'];const DOW_ORDER=[1,2,3,4,5,6,0];
+function parseContract(c){
+ if(!c)return null;const out={days:[],in:null,out:null,brk:null,weekly:null,problems:[]};
+ const s=c.work_days.replace(/\s/g,'');const rng=s.match(/^([일월화수목금토])~([일월화수목금토])$/);
+ if(rng){let i=DOW.indexOf(rng[1]);const j=DOW.indexOf(rng[2]);for(;;){out.days.push(i);if(i===j)break;i=(i+1)%7;}}
+ else s.split(/[,·]/).forEach(x=>{const i=DOW.indexOf(x[0]);if(i>=0)out.days.push(i);});
+ const t=c.work_time.match(/(\d{1,2}):(\d{2})\s*~\s*(\d{1,2}):(\d{2})/);
+ if(t){out.in=pad(+t[1])+':'+t[2];out.out=pad(+t[3])+':'+t[4];}else out.problems.push('근무시간');
+ const r=c.rest_time;let m=r.match(/(\d+)분/),h=r.match(/(\d+)시간/),rr=r.match(/(\d{1,2}):(\d{2})\s*~\s*(\d{1,2}):(\d{2})/);
+ out.brk=m?+m[1]:h?+h[1]*60:rr?(+rr[3]*60+ +rr[4])-(+rr[1]*60+ +rr[2]):null;if(out.brk==null)out.problems.push('휴게');
+ const w=c.weekly_hours.match(/(\d+)/);out.weekly=w?+w[1]:null;
+ return out;
+}
+const wk=(days,i,o,b,br)=>Object.fromEntries(days.map(d=>[d,{in:i,out:o,brk:b,br}]));
+const SCHEDULES={
+ A:{from:'2026-10-01',week:wk([1,2,3,4,5],'09:00','18:00',60,'b1'),hist:[{at:'2026-09-28 10:20',by:'샘플 관리자',what:'최초 등록 — 계약서 값 불러오기',from:'2026-10-01'}]},
+ B:{from:'2026-10-01',week:wk([1,2,3,4,5],'09:00','18:00',60,'b1'),hist:[{at:'2026-09-28 10:22',by:'샘플 관리자',what:'최초 등록 — 계약서 값 불러오기',from:'2026-10-01'}]},
+ C:{from:'2026-10-01',week:wk([1,2,3,4,5],'09:00','18:00',60,'b1'),hist:[{at:'2026-09-28 10:22',by:'샘플 관리자',what:'최초 등록 — 여러 명 같이 설정(A·B·C)',from:'2026-10-01'}]},
+ D:{from:'2026-10-12',week:wk([1,2,3,4,5],'09:00','18:00',60,'b2'),hist:[
+  {at:'2026-10-08 17:05',by:'샘플 관리자',what:'퇴근 17:30→18:00, 휴게 30분→60분',from:'2026-10-12'},
+  {at:'2026-09-28 10:25',by:'샘플 관리자',what:'최초 등록 — 직접 입력 09:00~17:30, 휴게 30분',from:'2026-10-01'}]}};
+const EXCEPTIONS=[{emp:'A',date:'2026-11-06',type:'off',memo:'개인 사유 휴무(사전 협의)'},{emp:'D',date:'2026-10-31',type:'swap',in:'10:00',out:'15:00',memo:'금요일 대신 토요일 근무'}];
+const EXC_LABEL={off:'휴무 추가',swap:'대체 근무',time:'근무 시간 변경'};
+const BR_HOLIDAYS=[{br:'',date:'2026-12-25',name:'성탄절(공휴일)'},{br:'b1',date:'2026-11-16',name:'샘플 1호점 정기 휴무'}];
+// 관리자 처리 이력(출근/결근 개별 처리·정정 승인). 원래 값은 지우지 않고 함께 둔다.
+const DECISIONS=[
+ {emp:'B',date:'2026-10-20',before:'퇴근 누락',after:'정상',orig:'퇴근 없음',changed:'퇴근 18:00',by:'샘플 관리자',at:'2026-10-21 10:12',why:'정정 요청 승인 — 마감 후 휴대폰 배터리가 꺼짐'},
+ {emp:'A',date:'2026-10-08',before:'미출근',after:'결근',orig:'기록 없음',changed:'—',by:'샘플 관리자',at:'2026-10-09 09:31',why:'연락 없이 출근하지 않음 — 본인 통화로 확인'},
+ {emp:'D',date:'2026-09-24',before:'미출근',after:'결근',orig:'기록 없음',changed:'—',by:'샘플 관리자',at:'2026-09-25 11:02',why:'연락 없이 출근하지 않음 — 9월 마감 전 확정'}];
+const CONTRACT_LBL={signed:['서명 완료','ok'],unsigned:['미서명','warn'],none:['계약서 없음','err']};
+const STATE_LBL={active:['재직','ok'],pending:['가입대기','info'],left:['퇴사','gray']};
+const bdg=(t,c)=>'<span class="badge '+(c==='warn'?'':c)+'">'+esc(t)+'</span>';
+const weekMinutes=week=>Object.values(week).reduce((a,d)=>a+Math.max(0,mins(d.out)-mins(d.in)-(+d.brk||0)),0);
+function todayKind(id){if(!EMP[id])return null;const r=record(id,TODAY);return cellKind(r);}
+
+const qs=new URLSearchParams(location.search);
+const ACT=ROSTER.filter(p=>p.state!=='pending');
+let emp=RO[qs.get('emp')]&&RO[qs.get('emp')].state!=='pending'?qs.get('emp'):'A';
+let tab=['summary','contract','schedule','history'].includes(qs.get('tab'))?qs.get('tab'):'summary';
+$('emp').innerHTML=ACT.map(p=>'<option value="'+p.id+'">'+esc(p.name)+(p.state==='left'?' (퇴사)':'')+'</option>').join('');$('emp').value=emp;
+const MONTH_FROM='2026-10-01';
+function header(){
+ const p=RO[emp];
+ $('title').innerHTML=esc(p.name)+' <span class="tag new">신규 — API·화면 없음</span>';
+ $('who').innerHTML=bdg(...STATE_LBL[p.state])+' '+esc(BR[p.br].name)+' · '+esc(p.job||'직무 미정')+' · '+(p.joined?'입사 '+p.joined:'')+(p.left?' · '+p.left+' 퇴사':'')+' '+bdg('계약 '+CONTRACT_LBL[p.contract][0],CONTRACT_LBL[p.contract][1])+' '+(p.app?bdg('앱 연결됨','ok'):bdg('앱 미연결','err'))+' '+(p.consent?bdg('위치 동의','ok'):bdg('위치 미동의',''));
+ const live=p.state==='active';
+ $('toCal').href='obys-attendance-admin-employee-calendar.html?emp='+emp;
+ $('toEdit').href='obys-attendance-admin-attendance-edit.html?emp='+emp+'&date='+TODAY;
+ $('toSched').href='obys-attendance-admin-schedule.html?emp='+emp;
+ [$('toCal'),$('toEdit'),$('toSched')].forEach(a=>a.hidden=!live);
+}
+function setTab(t){tab=t;document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===t)));
+ const u=new URL(location.href);u.searchParams.set('emp',emp);u.searchParams.set('tab',t);try{history.replaceState(null,'',u.search);}catch(_){}
+ ({summary,contract,schedule,history:hist})[t]();}
+function summary(){
+ const p=RO[emp];
+ if(p.state==='left'){$('pane').innerHTML='<h2>근태 요약</h2><div class="banner info">'+p.left+' 퇴사한 직원입니다. 퇴사 전 기록은 ④ 출근/결근 이력에서 봅니다. 이번 달 집계 대상이 아닙니다.</div>';return;}
+ const s=summarize(emp,MONTH_FROM,TODAY),sch=!!SCHEDULES[emp];
+ const m=[['근무일',s.days+'일',''],['근무시간',dur(s.worked),''],['지각',s.late+'회','예시'],['조퇴',s.early+'회','예시'],['결근',sch?s.absent+'일':'판정 불가',sch?'':'일정 미등록'],['퇴근 누락',s.missing+'회',''],['확인필요',s.review+'건','']];
+ const recent=daysBetween('2026-10-22',TODAY).reverse().map(d=>{const r=record(emp,d),k=cellKind(r);return '<tr><td>'+d.slice(5)+' ('+DOW[new Date(d+'T00:00:00').getDay()]+')</td><td>'+badge(k)+'</td><td>'+(r.in||'—')+' ~ '+(r.out||(r.in?'<span class="err-text">없음</span>':'—'))+'</td><td>'+(r.reason?esc(r.reason):'')+'</td></tr>';}).join('');
+ $('pane').innerHTML='<h2>이번 달 근태 요약 <small>'+MONTH_FROM+' ~ '+TODAY+'</small></h2><div class="metrics seven" id="sumM">'+m.map(([a,b,c])=>'<div class="metric">'+a+'<b>'+b+'</b>'+(c?'<small>'+esc(c)+'</small>':'')+'</div>').join('')+'</div>'+
+ (sch?'':'<div class="banner warn" id="noSchedWarn">근무 일정이 등록되지 않아 <b>결근을 판정할 수 없습니다.</b> 출근하지 않은 날은 "미출근" 으로만 표시됩니다. <a class="linkbtn" href="obys-attendance-admin-schedule.html?emp='+emp+'">근무 일정 등록</a></div>')+
+ '<p class="muted">지각·조퇴 기준 <span class="tag policy">정책 미정 — 설정 필요</span> — 지각 허용 분이 정해지지 않아 지각·조퇴 수는 가상 예시입니다. 결근 자동 판정 시각도 <span class="tag policy">정책 미정 — 설정 필요</span>.</p>'+
+ '<h3>최근 7일</h3><table><thead><tr><th>날짜</th><th>상태</th><th>출근 ~ 퇴근</th><th>확인 사유</th></tr></thead><tbody>'+recent+'</tbody></table>';
+}
+function contract(){
+ const p=RO[emp],c=CONTRACTS[emp];
+ if(!c){$('pane').innerHTML='<h2>근무 조건(계약서)</h2><div class="banner err" id="noContract">이 직원은 근로계약서가 없습니다. 계약서는 기존 화면 <b>관리자 › 직원·급여 › 계약·인사증빙</b> 에서 작성합니다 <span class="tag now">현재 코드 있음</span>. 계약서 없이도 근무 일정은 직접 입력할 수 있습니다.<div class="acts"><a class="linkbtn" href="obys-attendance-admin-schedule.html?emp='+emp+'">근무 일정 직접 입력</a></div></div>';return;}
+ const x=parseContract(c),weekH=x.in?Math.round(x.days.length*(mins(x.out)-mins(x.in)-(x.brk||0))/60*10)/10:null;
+ const row=(k,lab,v)=>'<div>'+lab+'</div><div><code class="raw">'+esc(v)+'</code> <small class="muted">'+k+'</small></div>';
+ $('pane').innerHTML='<h2>근무 조건(계약서) <span class="tag now">현재 데이터 있음 — 계약서 문자열</span></h2>'+
+ (p.contract==='unsigned'?'<div class="banner warn" id="unsignedWarn">이 계약서는 <b>아직 서명되지 않았습니다.</b> 아래 값은 확정 조건이 아닙니다. 서명 후 일정을 만드는 편이 안전합니다.</div>':'<p class="muted">서명일 '+esc(c.signed_at)+' · 읽기 전용 — 수정은 계약서 화면에서 합니다.</p>')+
+ '<div class="kv" id="kv">'+row('work_days','근무요일',c.work_days)+row('work_time','근무시간',c.work_time)+row('rest_time','휴게',c.rest_time)+row('holidays','휴일',c.holidays)+row('weekly_hours','주 소정근로시간',c.weekly_hours)+'</div>'+
+ '<h3 style="margin-top:14px">해석 결과 <span class="tag new">신규 — API·화면 없음</span></h3><p id="parsed">요일 '+x.days.map(d=>DOW[d]).sort((a,b)=>DOW_ORDER.indexOf(DOW.indexOf(a))-DOW_ORDER.indexOf(DOW.indexOf(b))).join('·')+' · '+(x.in||'?')+'~'+(x.out||'?')+' · 휴게 '+(x.brk??'?')+'분 → 계산 주 '+(weekH??'?')+'시간 (계약서 주 소정 '+(x.weekly??'?')+'시간)'+(weekH!==x.weekly?' <span class="badge">계약서 값끼리 맞지 않음</span>':' <span class="badge ok">일치</span>')+'</p>'+
+ (SCHEDULES[emp]&&SCHEDULES[emp].week[1]&&x.in&&SCHEDULES[emp].week[1].in!==x.in?'<div class="banner warn" id="diffWarn">현재 근무 일정(월 '+SCHEDULES[emp].week[1].in+'~'+SCHEDULES[emp].week[1].out+')이 계약서 근무시간('+x.in+'~'+x.out+')과 다릅니다. 어느 쪽을 기준으로 할지 <span class="tag policy">정책 미정 — 설정 필요</span></div>':'')+
+ '<p class="muted">계약서 문자열은 형식이 제각각이라("월~금", "월,화,수,목,금", "1시간", "60분") 그대로 일정이 되지 않습니다. 아래 버튼은 해석한 값을 근무 일정 화면에 채워 넣기만 하고, 저장은 관리자가 확인한 뒤에 합니다.</p>'+
+ (p.state==='active'?'<div class="acts"><a class="linkbtn primary" id="mkSched" href="obys-attendance-admin-schedule.html?emp='+emp+'&src=contract">이 값으로 일정 만들기</a></div>':'');
+}
+function schedule(){
+ const p=RO[emp],s=SCHEDULES[emp];
+ if(!s){$('pane').innerHTML='<h2>근무 일정</h2><div class="banner warn" id="noSched">'+(p.state==='left'?'퇴사 직원이라 근무 일정이 없습니다.':'근무 일정이 아직 없습니다. 일정이 없으면 <b>결근 판정과 출근율 계산을 할 수 없습니다.</b>')+(p.state==='active'?'<div class="acts"><a class="linkbtn primary" href="obys-attendance-admin-schedule.html?emp='+emp+(CONTRACTS[emp]?'&src=contract':'')+'">'+(CONTRACTS[emp]?'계약서 값으로 일정 만들기':'근무 일정 등록')+'</a></div>':'')+'</div>';return;}
+ const rows=DOW_ORDER.map(d=>{const w=s.week[d];return '<tr><td>'+DOW[d]+'</td>'+(w?'<td>'+w.in+'</td><td>'+w.out+'</td><td>'+w.brk+'분</td><td>'+esc(BR[w.br].name)+'</td>':'<td colspan="4"><span class="badge gray">휴무</span></td>')+'</tr>';}).join('');
+ const ex=EXCEPTIONS.filter(e=>e.emp===emp);
+ $('pane').innerHTML='<h2>근무 일정 <span class="tag new">신규 — API·화면 없음</span></h2><p>적용 시작일 <b>'+s.from+'</b> · 주 '+dur(weekMinutes(s.week))+'</p>'+
+ '<table id="weekT"><thead><tr><th>요일</th><th>출근</th><th>퇴근</th><th>휴게</th><th>근무 지점</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+ '<h3 style="margin-top:14px">예외일</h3>'+(ex.length?ex.map(e=>'<p>'+e.date+' · '+EXC_LABEL[e.type]+(e.in?' '+e.in+'~'+e.out:'')+' · '+esc(e.memo)+'</p>').join(''):'<p class="muted">등록된 예외일 없음</p>')+
+ '<h3>변경 이력</h3><ul class="hist" id="schedHist">'+s.hist.map(h=>'<li><b>'+esc(h.at)+'</b> · '+esc(h.by)+'<br>'+esc(h.what)+' · '+h.from+'부터 적용</li>').join('')+'</ul>'+
+ '<div class="acts"><a class="linkbtn primary" href="obys-attendance-admin-schedule.html?emp='+emp+'">일정 변경</a></div>';
+}
+function hist(){
+ const p=RO[emp];
+ const from=p.state==='left'?'2026-09-01':'2026-09-22',to=p.state==='left'?p.left:TODAY;
+ const rows=[];
+ if(EMP[emp])for(const d of daysBetween(from,to).reverse()){const r=record(emp,d),k=cellKind(r);const dec=DECISIONS.find(x=>x.emp===emp&&x.date===d);
+  if(k==='ok'&&!dec||k==='off')continue;
+  rows.push('<tr data-date="'+d+'"><td>'+d.slice(5)+'</td><td>'+(dec?bdg(dec.after,dec.after==='정상'?'ok':'err')+' <small>원래 '+esc(dec.before)+'</small>':badge(k))+'</td><td>'+(dec?esc(dec.by)+'<small>'+esc(dec.at)+'</small>':'자동 판정')+'</td><td>'+(dec?esc(dec.why)+'<small>원래 값 '+esc(dec.orig)+' → '+esc(dec.changed)+'</small>':r.reason?esc(r.reason):'')+'</td><td>'+(d<=CLOSED_TO?'<span class="badge gray">마감</span>':'<a class="linkbtn" href="obys-attendance-admin-attendance-edit.html?emp='+emp+'&date='+d+'">처리</a>')+'</td></tr>');}
+ const cs=CORRECTIONS.filter(c=>c.emp===emp);
+ $('pane').innerHTML='<h2>출근/결근 이력 <small>'+from+' ~ '+to+' · 정상 근무일 제외</small></h2>'+
+ (rows.length?'<table id="histT"><thead><tr><th>날짜</th><th>상태</th><th>처리자</th><th>사유·원래 값</th><th>처리</th></tr></thead><tbody>'+rows.join('')+'</tbody></table>':'<p class="muted" id="histEmpty">이 기간에 정상 외 기록이 없습니다.</p>')+
+ '<h3 style="margin-top:14px">정정 요청 이력 <span class="tag new">신규 — API·화면 없음</span></h3>'+(cs.length?cs.map(c=>'<p>'+c.date.slice(5)+' · '+esc(c.type)+' · '+esc(c.ask)+' · '+(c.state==='pending'?'<span class="badge">대기</span>':c.state==='approved'?'<span class="badge ok">승인</span> '+esc(c.by)+' '+esc(c.at):'<span class="badge err">반려</span> '+esc(c.note))+'</p>').join(''):'<p class="muted">정정 요청 없음</p>')+
+ '<p class="muted">9월 30일까지는 마감된 기간이라 수정할 수 없습니다. 원래 기록은 지우지 않고 처리 이력과 함께 보존합니다.</p>';
+}
+document.querySelector('.tabs').onclick=e=>{const b=e.target.closest('[data-tab]');if(b)setTab(b.dataset.tab);};
+$('emp').onchange=()=>{emp=$('emp').value;header();setTab(tab);};
+header();setTab(tab);
+</script></body></html>
