@@ -411,6 +411,52 @@ def _anthropic_slot_map(records: list[dict[str, Any]]) -> dict[str, str]:
     }
 
 
+def _antigravity_usage(binding, email, state, *, relay_available):
+    """Only accept measured provider quota explicitly attributed to this account.
+
+    No installed collector currently supplies it. This adapter also supports a
+    future relay collector without passing arbitrary relay fields to the client.
+    """
+    result = {"windows": [], "used_percent": None, "resets_at": None,
+              "usage_status": "not_measured", "usage_note": "Quota has not been measured",
+              "usage_collected_at": None, "usage_summary": None}
+    if not relay_available:
+        result.update(usage_status="collection_failed", usage_note="Relay unavailable")
+        return result
+    if not binding:
+        return result
+    status = binding.get("usage_status", "unsupported")
+    if status != "available":
+        result.update(usage_status=status if status in {"unsupported", "collection_failed", "not_measured"} else "not_measured",
+                      usage_note={"unsupported": "Installed relay has no supported provider quota collector",
+                                  "collection_failed": "Provider quota collection failed"}.get(status, "Quota has not been measured"))
+        return result
+    try:
+        if state != "ok" or not email or str(binding.get("quota_account", "")).casefold() != email.casefold():
+            raise ValueError("account mismatch")
+        collected = datetime.fromisoformat(binding["usage_collected_at"].replace("Z", "+00:00"))
+        if collected.tzinfo is None:
+            raise ValueError("missing timezone")
+        windows = []
+        for win in binding["windows"]:
+            percent = win["used_percent"]
+            minutes = win["window_minutes"]
+            reset = datetime.fromisoformat(win["resets_at"].replace("Z", "+00:00"))
+            if (isinstance(percent, bool) or not isinstance(percent, (int, float))
+                    or not 0 <= percent <= 100 or type(minutes) is not int or minutes <= 0 or reset.tzinfo is None):
+                raise ValueError("invalid quota")
+            windows.append({"window_minutes": minutes, "used_percent": percent, "resets_at": reset.isoformat()})
+        if not windows:
+            raise ValueError("empty quota")
+    except (KeyError, TypeError, ValueError, AttributeError):
+        result.update(usage_status="collection_failed", usage_note="Quota missing valid measurement or account attribution")
+        return result
+    result.update(windows=windows, used_percent=windows[0]["used_percent"], resets_at=windows[0]["resets_at"],
+                  usage_status="available", usage_note="Account-attributed provider quota",
+                  usage_collected_at=collected.isoformat())
+    return result
+
+
 def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str, Any]:
     """Google(Antigravity) 구독 계정 1건을 합성한다.
 
@@ -422,9 +468,14 @@ def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str
         state = "unknown"
     elif binding.get("needs_login"):
         state = "needs_login"
-    else:
+    elif binding.get("bound"):
         state = "ok"
+    else:
+        state = "unknown"
     email = (binding or {}).get("account")
+    if not isinstance(email, str) or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", email):
+        email = None
+    usage = _antigravity_usage(binding, email, state, relay_available=bindings is not None)
     label = "Google 구독 (Antigravity)" + (f" · {email}" if email else "")
     return {
         "subscription_status": None, "subscription_checked_at": None, "subscription_hold": False,
@@ -438,13 +489,16 @@ def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str
         **_needs_login_detail(binding),
         "binding_mismatch": False,
         "actual_account": email,
+        "account_source": "agy_credential_metadata" if (binding or {}).get("account_source") == "agy_credential_metadata" else None,
+        "account_verified": bool((binding or {}).get("account_verified")),
         "login_in_progress": False,
         "login_target": None,
         "subscription": None,
         "rate_limited_until": None,
         "windows": [],
         "used_percent": None, "resets_at": None, "snapshot_age_hours": None,
-        "ok_72h": 0, "limit_72h": 0, "notes": None,
+        "ok_72h": None, "limit_72h": None, "notes": None,
+        **usage,
     }
 
 
@@ -540,6 +594,12 @@ async def llm_overview() -> dict[str, Any]:
         except Exception:
             masked = "****"
 
+        if provider == "antigravity":
+            # A legacy DB row must not import Codex snapshots as Google quota.
+            account = _antigravity_account(bindings)
+            account.update(key_name=row["key_name"], is_active=row["is_active"])
+            accounts.append(account)
+            continue
         if provider in SUBSCRIPTION_PROVIDERS:
             slot = slot_of.get(row["key_name"])
             quarantined_slot4 = (

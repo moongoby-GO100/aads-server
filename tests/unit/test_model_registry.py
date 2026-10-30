@@ -466,3 +466,104 @@ async def test_fetch_gemini_models_skips_when_google_routes_disabled(monkeypatch
     assert rows == []
     assert result["status"] == "skipped"
     assert result["error"] == "google_routes_disabled"
+
+
+@pytest.mark.parametrize("metadata", [
+    {}, {"raw": {"created": 1700000000}}, {"release_date": "2026-10-30"},
+    {"release_date": "2026-02-30", "release_date_source": "https://example.com/release", "release_date_verified_at": "2026-10-30T00:00:00Z"},
+])
+def test_release_unknown_is_null(metadata):
+    assert model_registry.release_date_fields(metadata) == {
+        "release_date": None, "release_date_source": None, "release_date_verified_at": None}
+
+
+def test_release_survives_template_discovery_merge():
+    metadata = {"release_date": "2026-10-01", "release_date_source": "https://example.com/release",
+                "release_date_verified_at": "2026-10-30T00:00:00Z"}
+    base = {"provider": "openai", "model_id": "test", "family": "test", "metadata": {}}
+    discovered = {**base, "metadata": metadata}
+    row, = model_registry._merge_model_rows([base], [discovered])
+    assert model_registry.release_date_fields(row["metadata"]) == metadata
+    row, = model_registry._merge_model_rows([row], [base])
+    assert model_registry.release_date_fields(row["metadata"]) == metadata
+
+
+@pytest.mark.asyncio
+async def test_discovery_reports_observed_skips_without_latest_guarantee(monkeypatch):
+    async def skipped():
+        return [], {"status": "skipped", "error": "google_routes_disabled", "runtime_executable": False}
+    for name in ("_fetch_openai_models", "_fetch_anthropic_models", "_fetch_gemini_models",
+                 "_fetch_litellm_models", "_fetch_kimi_models", "_fetch_codex_cli_models"):
+        monkeypatch.setattr(model_registry, name, skipped)
+    rows, runs = await model_registry.discover_provider_model_rows([], enabled=True)
+    assert rows == []
+    assert all(run["status"] == "skipped" and run["observed_at"] for run in runs)
+    assert len(runs) == 6
+    assert all("latest_catalog_guaranteed" not in run for run in runs)
+    google = next(run for run in runs if run["provider"] == "gemini")
+    assert google["error"] == "google_routes_disabled"
+    assert google["runtime_executable"] is False
+
+
+@pytest.mark.asyncio
+async def test_disabled_discovery_has_observation_time():
+    rows, runs = await model_registry.discover_provider_model_rows([], enabled=False)
+    assert rows == []
+    assert runs[0]["status"] == "skipped"
+    assert runs[0]["observed_at"]
+    assert "latest_catalog_guaranteed" not in runs[0]
+
+
+def test_discovery_populates_reviewed_release_and_unknown_stays_null():
+    row = model_registry._discovered_model_row(provider="openai", model_id="gpt-4.1",
+        display_name="GPT 4.1", key_state={}, raw={"created": 1}, source="test")
+    assert model_registry.release_date_fields(row["metadata"])["release_date"] == "2025-04-14"
+    assert model_registry._reviewed_release_fields("openai", "gpt-4.1-2099-01-01") == {}
+    assert model_registry._reviewed_release_fields("antigravity", "gpt-4.1") == {}
+
+
+@pytest.mark.asyncio
+async def test_release_upsert_postgres_preserves_only_release_tuple():
+    """Exercise the actual sync UPDATE expression against isolated TEMP data."""
+    import ast
+    import inspect
+    import json
+    import os
+    dsn = os.getenv("AADS_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("AADS_TEST_POSTGRES_DSN unavailable; PostgreSQL merge not verified")
+    import asyncpg
+    tree = ast.parse(inspect.getsource(model_registry.sync_model_registry))
+    sql = next(n.value for n in ast.walk(tree) if isinstance(n, ast.Constant)
+               and isinstance(n.value, str) and "INSERT INTO llm_models" in n.value)
+    expression = sql.split("metadata = ", 1)[1].split(",\n                            execution_model_id", 1)[0]
+    conn = await asyncpg.connect(dsn, timeout=5, command_timeout=5)
+    try:
+        await conn.execute("CREATE TEMP TABLE registry_release_merge_test (model_id text PRIMARY KEY, metadata jsonb)")
+        release = {"release_date": "2025-01-01", "release_date_source": "https://example.com/release",
+                   "release_date_verified_at": "2026-10-30T00:00:00Z"}
+        await conn.execute("INSERT INTO registry_release_merge_test VALUES ('test', $1::jsonb)",
+                           json.dumps({**release, "raw": {"stale": True}, "discovery_requirement": "old"}))
+        upsert = ("INSERT INTO registry_release_merge_test AS llm_models VALUES ('test', $1::jsonb) "
+                  "ON CONFLICT (model_id) DO UPDATE SET metadata = " + expression)
+        for incoming in ({"raw": {"fresh": True}}, {"raw": {"fresh": True}, **model_registry._reviewed_release_fields("openai", "gpt-4.1")}):
+            await conn.execute(upsert, json.dumps(incoming))
+            saved = json.loads(await conn.fetchval("SELECT metadata::text FROM registry_release_merge_test"))
+            assert model_registry.release_date_fields(saved) == release
+            assert saved["raw"] == {"fresh": True}
+            assert "discovery_requirement" not in saved
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_discovery_observes_failures_without_changing_provider_set(monkeypatch):
+    async def failed():
+        raise RuntimeError("test catalog unavailable")
+    for name in ("_fetch_openai_models", "_fetch_anthropic_models", "_fetch_gemini_models",
+                 "_fetch_litellm_models", "_fetch_kimi_models", "_fetch_codex_cli_models"):
+        monkeypatch.setattr(model_registry, name, failed)
+    rows, runs = await model_registry.discover_provider_model_rows([], enabled=True)
+    assert rows == []
+    assert len(runs) == 6
+    assert all(run["status"] == "failed" and run["observed_at"] for run in runs)

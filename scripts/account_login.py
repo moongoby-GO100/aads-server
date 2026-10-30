@@ -477,25 +477,37 @@ async def cancel(login_id: str) -> dict:
 
 
 def _antigravity_binding() -> dict:
-    """Google(Antigravity) 구독 로그인 여부. agy 바이너리와 토큰 파일의 존재만 본다 (R-KEY).
+    """Read only agy's credential identity, never return tokens or refresh them.
 
-    토큰 파일은 열지 않는다. 표시용 이메일만 google_accounts.json 의 active 에서 읽는다.
+    id_token_email belongs to this credential, unlike Gemini's independent active
+    account. A valid local credential is bound, but is not a live provider probe.
     """
-    token = ANTIGRAVITY_HOME_ROOT / "antigravity-cli" / "antigravity-oauth-token"
-    try:
-        bound = ANTIGRAVITY_BIN.exists() and token.is_file()
-    except OSError:
-        bound = False
+    path = ANTIGRAVITY_HOME_ROOT / "antigravity-cli" / "antigravity-oauth-token"
     account = None
+    present = None
+    bound = False
     try:
-        active = json.loads((ANTIGRAVITY_HOME_ROOT / "google_accounts.json").read_text()).get("active")
-        if isinstance(active, str) and active.strip():
-            account = active.strip()
-    except (OSError, ValueError, AttributeError):
+        present = ANTIGRAVITY_BIN.is_file() and path.is_file()
+        if present:
+            if path.stat().st_size > 65536:
+                raise ValueError("oversized credential metadata")
+            payload = json.loads(path.read_text())
+            email = payload.get("id_token_email")
+            if isinstance(email, str) and re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", email.strip()):
+                account = email.strip()
+            token = payload.get("token") or {}
+            expiry = datetime.fromisoformat(str(token.get("expiry", "")).replace("Z", "+00:00"))
+            bound = bool(account and token.get("access_token") and expiry.tzinfo
+                         and expiry > datetime.now(timezone.utc))
+    except (OSError, ValueError, TypeError, AttributeError):
         pass
     return {
         "target": "antigravity:host", "kind": "antigravity", "account": account,
-        "bound": bound, "needs_login": not bound,
+        "bound": bound, "needs_login": present is False,
+        "credential_present": present, "account_verified": False,
+        "account_source": "agy_credential_metadata" if account else None,
+        "usage_status": "unsupported", "usage_collected_at": None,
+        "usage_note": "Installed agy has no read-only quota command; local credentials are not a live authentication check.",
     }
 
 

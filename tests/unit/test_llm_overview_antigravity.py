@@ -51,6 +51,14 @@ def _run_overview(monkeypatch, relay_payload, rows=None):
     async def no_clear():
         return {}
 
+    async def no_rows(*args, **kwargs):
+        return []
+
+    from app.services import oauth_usage_tracker, account_primary
+    monkeypatch.setattr(account_primary, "relay_slot_subscriptions", no_clear)
+    from app.core import auth_provider
+    monkeypatch.setattr(oauth_usage_tracker, "get_slot_usage_all", no_rows)
+    monkeypatch.setattr(auth_provider, "get_oauth_key_records_async", no_rows)
     monkeypatch.setattr(llm_keys, "get_pool", lambda: Pool())
     monkeypatch.setattr(llm_keys, "_relay_call", relay)
     monkeypatch.setattr(llm_keys, "decrypt_value", lambda _v: "sk-ant-oat01-abcdef")
@@ -144,12 +152,11 @@ def _patch_agy(monkeypatch, tmp_path, with_bin=True):
     return root
 
 
-def test_bindings_checks_existence_only_and_never_leaks_values(monkeypatch, tmp_path):
+def test_bindings_uses_agy_identity_and_never_leaks_values(monkeypatch, tmp_path):
     root = _patch_agy(monkeypatch, tmp_path)
     (root / "antigravity-cli").mkdir(parents=True)
     token = root / "antigravity-cli" / "antigravity-oauth-token"
-    token.write_text(json.dumps({"token": {"access_token": SECRET}}))
-    token.chmod(0)  # 열 수 없는 파일이어도 존재만 보므로 bound 여야 한다
+    token.write_text(json.dumps({"id_token_email": "agy@example.com", "token": {"access_token": SECRET, "expiry": "2099-01-01T00:00:00Z"}}))
     (root / "google_accounts.json").write_text(json.dumps({"active": "me@example.com", "old": []}))
 
     opened = []
@@ -168,8 +175,10 @@ def test_bindings_checks_existence_only_and_never_leaks_values(monkeypatch, tmp_
     (agy,) = [b for b in result if b["kind"] == "antigravity"]
     assert agy["target"] == "antigravity:host"
     assert agy["bound"] is True and agy["needs_login"] is False
-    assert agy["account"] == "me@example.com"
-    assert "antigravity-oauth-token" not in opened
+    assert agy["credential_present"] is True
+    assert agy["account_verified"] is False
+    assert agy["account"] == "agy@example.com"
+    assert "google_accounts.json" not in opened
     assert SECRET not in json.dumps(result)
 
 
@@ -183,3 +192,101 @@ def test_bindings_unbound_when_token_or_binary_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(account_login, "ANTIGRAVITY_BIN", tmp_path / "missing-agy")
     (agy,) = account_login.bindings()
     assert agy["bound"] is False and agy["needs_login"] is True
+
+
+@pytest.mark.parametrize("binding,expected", [
+    ({"bound": False, "needs_login": False}, "unknown"),
+    ({"bound": False, "needs_login": True}, "needs_login"),
+    ({"bound": True, "needs_login": False}, "ok"),
+])
+def test_antigravity_states_and_unknown_quota(binding, expected):
+    account = llm_keys._antigravity_account({"antigravity:host": binding})
+    assert account["state"] == expected
+    assert account["used_percent"] is None
+    assert account["usage_status"] == "unsupported"
+    assert account["usage_summary"] is None
+    assert account["ok_72h"] is None
+
+
+def test_antigravity_rejects_unattributed_quota():
+    binding = {"bound": True, "account": "me@example.com", "quota_account": "other@example.com",
+               "windows": [{"used_percent": 35}], "used_percent": 35, "usage_status": "available"}
+    account = llm_keys._antigravity_account({"antigravity:host": binding})
+    assert account["windows"] == []
+    assert account["used_percent"] is None
+    assert account["usage_collected_at"] is None
+    assert account["usage_status"] == "collection_failed"
+
+
+def test_antigravity_relay_unavailable_contract():
+    account = llm_keys._antigravity_account(None)
+    assert account["usage_status"] == "collection_failed"
+    assert account["actual_account"] is None
+
+
+def test_antigravity_accepts_attributed_quota_and_allowlists_fields():
+    binding = {"bound": True, "account": "me@example.com", "quota_account": "ME@example.com",
+        "usage_status": "available", "usage_collected_at": "2026-10-30T10:00:00Z",
+        "windows": [{"window_minutes": 300, "used_percent": 35,
+                     "resets_at": "2026-10-30T15:00:00Z", "access_token": SECRET}]}
+    account = llm_keys._antigravity_account({"antigravity:host": binding})
+    assert account["used_percent"] == 35
+    assert account["usage_status"] == "available"
+    assert account["usage_collected_at"]
+    assert SECRET not in json.dumps(account)
+    binding["quota_account"] = "other@example.com"
+    rejected = llm_keys._antigravity_account({"antigravity:host": binding})
+    assert rejected["used_percent"] is None
+    assert rejected["usage_status"] == "collection_failed"
+
+
+@pytest.mark.parametrize("credential", [{}, {"id_token_email": "invalid"},
+    {"id_token_email": "agy@example.com", "token": {"access_token": SECRET, "expiry": "2000-01-01T00:00:00Z"}}])
+def test_antigravity_invalid_or_expired_credential_is_unknown(monkeypatch, tmp_path, credential):
+    root = _patch_agy(monkeypatch, tmp_path)
+    (root / "antigravity-cli").mkdir(parents=True)
+    (root / "antigravity-cli" / "antigravity-oauth-token").write_text(json.dumps(credential))
+    binding = account_login._antigravity_binding()
+    assert binding["bound"] is False
+    assert binding["needs_login"] is False
+    assert llm_keys._antigravity_account({"antigravity:host": binding})["state"] == "unknown"
+
+
+def test_antigravity_unreadable_credential_is_unknown(monkeypatch, tmp_path):
+    root = _patch_agy(monkeypatch, tmp_path)
+    (root / "antigravity-cli").mkdir(parents=True)
+    path = root / "antigravity-cli" / "antigravity-oauth-token"
+    path.write_text("{}")
+    def denied(*args, **kwargs):
+        raise PermissionError("unreadable")
+    monkeypatch.setattr(type(path), "read_text", denied)
+    binding = account_login._antigravity_binding()
+    assert binding["bound"] is False
+    assert binding["account"] is None
+    assert binding["needs_login"] is False
+
+
+def test_host_identity_reaches_overview(monkeypatch, tmp_path):
+    root = _patch_agy(monkeypatch, tmp_path)
+    (root / "antigravity-cli").mkdir(parents=True)
+    (root / "antigravity-cli" / "antigravity-oauth-token").write_text(json.dumps({
+        "id_token_email": "agy@example.com", "token": {"access_token": SECRET, "expiry": "2099-01-01T00:00:00Z"}}))
+    binding = account_login._antigravity_binding()
+    account, = _agy(_run_overview(monkeypatch, {"bindings": [binding]}))
+    assert account["state"] == "ok"
+    assert account["actual_account"] == "agy@example.com"
+    assert account["account_source"] == "agy_credential_metadata"
+    assert account["account_verified"] is False
+    assert account["usage_status"] == "unsupported"
+    assert account["used_percent"] is None
+
+
+@pytest.mark.parametrize("percent", [-1, 101, float("nan"), True, "35"])
+def test_quota_invalid_percent_is_not_presented_as_usage(percent):
+    binding = {"bound": True, "account": "me@example.com", "quota_account": "me@example.com",
+        "usage_status": "available", "usage_collected_at": "2026-10-30T10:00:00Z",
+        "windows": [{"window_minutes": 300, "used_percent": percent, "resets_at": "2026-10-30T15:00:00Z"}]}
+    account = llm_keys._antigravity_account({"antigravity:host": binding})
+    assert account["usage_status"] == "collection_failed"
+    assert account["windows"] == []
+    assert account["used_percent"] is None

@@ -999,6 +999,7 @@ def _discovered_model_row(
         "execution_base_url": template.execution_base_url,
         "raw": raw or {},
     }
+    metadata.update(_reviewed_release_fields(provider, model_id))
     metadata.update(_compatibility_alias_metadata(model_id))
     metadata.update(_accepted_alias_metadata(provider, model_id))
     metadata.update(_commercial_metadata(provider, model_id))
@@ -1240,7 +1241,8 @@ async def discover_provider_model_rows(
     if enabled is None:
         enabled = (os.getenv("LLM_MODEL_DISCOVERY_ENABLED", "1").strip().lower() not in {"0", "false", "no"})
     if not enabled:
-        return [], [{"provider": "all", "status": "skipped", "error": "disabled", "count": 0}]
+        return [], [{"provider": "all", "status": "skipped", "error": "disabled", "count": 0,
+                     "observed_at": datetime.now(timezone.utc).isoformat()}]
 
     key_state = _build_key_state(key_rows)
     fetchers = {
@@ -1315,6 +1317,9 @@ async def discover_provider_model_rows(
                 "discovered_model_count": 0,
                 "model_source": "template",
             })
+    observed_at = datetime.now(timezone.utc).isoformat()
+    for run in run_results:
+        run["observed_at"] = observed_at
     return all_rows, run_results
 
 
@@ -1341,6 +1346,7 @@ def _merge_model_rows(template_rows: list[dict[str, Any]], discovered_rows: list
         metadata["auto_discovery_supported"] = discovered_metadata.get("auto_discovery_supported", metadata.get("auto_discovery_supported"))
         metadata["discovery_requirement"] = discovered_metadata.get("discovery_requirement", metadata.get("discovery_requirement"))
         metadata["discovery_mode"] = discovered_metadata.get("discovery_mode", metadata.get("discovery_mode"))
+        metadata.update({k: v for k, v in release_date_fields(discovered_metadata).items() if v is not None})
         metadata["raw"] = discovered_metadata.get("raw", {})
         existing["metadata"] = metadata
         existing["last_verified_at"] = existing.get("last_verified_at") or row.get("last_verified_at")
@@ -1394,6 +1400,7 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                 "execution_model_id": template.execution_model_id,
                 "execution_base_url": template.execution_base_url,
             }
+            metadata.update(_reviewed_release_fields(provider, template.model_id))
             metadata.update(_compatibility_alias_metadata(template.model_id))
             metadata.update(_accepted_alias_metadata(provider, template.model_id))
             metadata.update(_commercial_metadata(provider, template.model_id))
@@ -1602,6 +1609,44 @@ async def _fetch_registry_rows(conn: asyncpg.Connection) -> list[dict[str, Any]]
     return [dict(row) for row in rows]
 
 
+# Official release announcements checked 2026-10-30. Only exact IDs are
+# covered; unknown/new models remain null until an official source is reviewed.
+_VERIFIED_RELEASES = {
+    ("openai", "gpt-4.1"): ("2025-04-14", "https://openai.com/index/gpt-4-1/"),
+    ("openai", "gpt-4.1-mini"): ("2025-04-14", "https://openai.com/index/gpt-4-1/"),
+    ("openai", "gpt-4.1-nano"): ("2025-04-14", "https://openai.com/index/gpt-4-1/"),
+    ("anthropic", "claude-sonnet-4-5"): ("2025-09-29", "https://www.anthropic.com/news/claude-sonnet-4-5"),
+    ("anthropic", "claude-sonnet-4-5-20250929"): ("2025-09-29", "https://www.anthropic.com/news/claude-sonnet-4-5"),
+}
+
+
+def _reviewed_release_fields(provider: str, model_id: str) -> dict[str, str]:
+    release = _VERIFIED_RELEASES.get((provider, model_id))
+    if release is None:
+        return {}
+    return {"release_date": release[0], "release_date_source": release[1],
+            "release_date_verified_at": "2026-10-30T11:08:43Z"}
+
+
+def release_date_fields(metadata: Any) -> dict[str, Any]:
+    """Only explicit, sourced release metadata; never infer from created/name/first_seen."""
+    meta = _coerce_json_object(metadata)
+    value = meta.get("release_date")
+    source = meta.get("release_date_source")
+    verified = meta.get("release_date_verified_at")
+    try:
+        if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
+            raise ValueError("invalid date")
+        if not isinstance(source, str) or not source.startswith("https://"):
+            raise ValueError("missing public source")
+        if not isinstance(verified, str):
+            raise ValueError("missing verification time")
+        datetime.fromisoformat(verified.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return dict.fromkeys(("release_date", "release_date_source", "release_date_verified_at"))
+    return {"release_date": value, "release_date_source": source, "release_date_verified_at": verified}
+
+
 async def list_registered_models(*, provider: str | None = None, active_only: bool = False) -> list[dict[str, Any]]:
     cache_key = f"models:{normalize_provider(provider or '')}:{int(active_only)}"
     cached = _cache_get(cache_key)
@@ -1624,6 +1669,7 @@ async def list_registered_models(*, provider: str | None = None, active_only: bo
             continue
         normalized_row = dict(row)
         normalized_row["metadata"] = _coerce_json_object(normalized_row.get("metadata"))
+        normalized_row.update(release_date_fields(normalized_row["metadata"]))
         normalized_row["capabilities"] = _coerce_json_object(normalized_row.get("capabilities"))
         normalized_row["pricing"] = _coerce_json_object(normalized_row.get("pricing"))
         filtered.append(normalized_row)
@@ -1936,6 +1982,8 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
             async with conn.transaction():
                 for row in model_rows:
                     metadata = _coerce_json_object(row.get("metadata"))
+                    for key, value in _reviewed_release_fields(row["provider"], row["model_id"]).items():
+                        metadata.setdefault(key, value)
                     metadata["sync_token"] = sync_token
                     capabilities = _coerce_json_object(row.get("capabilities"))
                     pricing = _coerce_json_object(row.get("pricing"))
@@ -1974,7 +2022,14 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                             is_active = EXCLUDED.is_active,
                             activation_source = EXCLUDED.activation_source,
                             linked_key_name = EXCLUDED.linked_key_name,
-                            metadata = EXCLUDED.metadata,
+                            metadata = EXCLUDED.metadata || COALESCE((
+                                SELECT jsonb_object_agg(key, value)
+                                FROM jsonb_each(COALESCE(llm_models.metadata, '{}'::jsonb))
+                                WHERE key IN ('release_date', 'release_date_source', 'release_date_verified_at')
+                                  AND llm_models.metadata->>'release_date' IS NOT NULL
+                                  AND llm_models.metadata->>'release_date_source' IS NOT NULL
+                                  AND llm_models.metadata->>'release_date_verified_at' IS NOT NULL
+                            ), '{}'::jsonb),
                             execution_model_id = EXCLUDED.execution_model_id,
                             discovery_source = EXCLUDED.discovery_source,
                             last_seen_at = NOW(),

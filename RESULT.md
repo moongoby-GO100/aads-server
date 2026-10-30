@@ -246,3 +246,68 @@ document_key: obys-work-schedule-rework-result
 - scripts/deploy_acct_app_cafe24.sh diff는 allowlist **1행 추가만** 확인. HANDOVER.md/테스트 게이트/시크릿 변경 없음.
 - 변경 파일: RESULT.md, app/api/obys_workspaces.py, app/static/apps/obys/admin.html, app/static/apps/obys/index.html, migrations/20261030_obys_work_schedules.sql, migrations/rollback/20261030_obys_work_schedules.down.sql, scripts/deploy_acct_app_cafe24.sh, tests/unit/test_obys_people_dedicated_views.py, tests/unit/test_obys_work_schedules.py.
 - commit/push/build/deploy 미실행, 새 SHA 없음. 승인 후 Runner 빌드 검증 대상. 핸드오버 DB 미기록 — Runner 완료 처리의 DB upsert/readback 대상.
+
+
+---
+
+## 설정 모델·Antigravity 계정 API 재작업 결과
+
+document_key: settings-model-account-api-rework-result
+source_task_id: runner-b8e1a061
+change_summary: 반려된 계정 식별·quota 귀속·출시일 보존 구현과 검증 결과를 후속 화면 작업에 전달한다.
+작업: runner-f2b2113a, 자동 재작업 1/2.
+정본 미등록(미완료), 열람 링크 미제공. DB 연결 시간 초과로 정본 등록과 실행 원장 확인이 불가능했다.
+
+### 출발점·사전 점검
+
+- 제공된 격리 작업트리는 최초 clean. HEAD와 로컬 origin/main 모두 8ee4fb6a1c2ac7b2c20be5073ec817eec9cc33a4였다. 원격 fetch는 수행하지 않았다.
+- 이전 e20d1ad0db55의 의도된 6개 파일 diff를 git apply --check 후 적용하여 이어서 수정했다. 다른 작업의 dirty 파일을 덮어쓰지 않았다.
+- /root/aads/AGENTS.md, 저장소 AGENTS.md와 제공 AAG를 먼저 확인했다. 추가 라우트·테이블·스키마를 만들지 않았다.
+- pipeline_jobs/ledger/동일파일 충돌 DB 사전 조회는 asyncpg 연결 단계에서 TimeoutError였다. 충돌 없음으로 판정하지 않았으며 작업 상태·의존성을 변경하지 않았다. 기존 Runner가 제공한 격리 작업트리와 ALLOW_DUP_JOB/AUTO_REWORK 범위에서 파일만 수정했다. 원장 재확인은 미완료다.
+- error_book.py match 실행: psql 실행파일 없음으로 실패. 원인 확인 뒤 register도 실제 실행했으나 같은 이유로 DB 미기록. 확인한 원인은 아래 1·2·4번이다.
+
+### STEP 0 기존 구현 분류 및 변경 범위
+
+- [유지] app/main.py의 시작 시 sync, _run_periodic_model_registry_sync와 APScheduler 등록(LLM_MODEL_REGISTRY_SYNC_HOURS 기본 6h). 기존 API mount 유지, main.py 변경 없음.
+- [수정] model_registry의 _discovered_model_row, _merge_model_rows, build_registry_snapshots, list_registered_models, sync_model_registry: 기존 metadata 안에서 출시일 3개 필드 수집·노출·보존. 테이블 추가 없음.
+- [수정] discover_provider_model_rows: 기존 6 provider 실행 결과에 observed_at만 추가. 성공/failed/skipped·error·runtime_executable·discovery_requirement 유지.
+- [유지] 공급자 fetcher와 Google route 비활성 정책, 기존 Claude/Codex 인증·LLM 호출·DB 조회·audit/discovery_runs 저장 접점.
+- [수정] llm_keys의 _antigravity_account, llm_overview: bound 상태 분기·이메일 안전 필드·quota 귀속·legacy DB 행의 Codex snapshot 오귀속 차단. CRUD·로그인 엔드포인트 유지.
+- [수정] account_login._antigravity_binding: agy 자체 credential의 id_token_email 및 만료시각 사용. 로그인/토큰 쓰기/갱신/유료 생성 호출 없음.
+- [신규] _antigravity_usage, release_date_fields, _reviewed_release_fields 및 공식 발표 날짜 5개 exact ID 매핑, 회귀 테스트. 기존 구현을 통째로 교체하지 않았다.
+- [삭제] 기존 함수·라우트·테이블 삭제 없음. 이전 반려 변경의 3s 전역 timeout, 상수 latest_catalog_guaranteed, 가짜 Antigravity discovery run 추가만 제거했다. 기존 소비자 계약으로 돌아가므로 별도 호출처 이관 없음.
+- 지시된 핵심 파일 외 변경 사유: app/api/llm_models.py는 실제 기존 모델 API serializer/selector에도 같은 출시일 필드를 노출하기 위해 변경. tests/unit/test_llm_overview_antigravity.py, tests/unit/test_model_registry.py는 요구된 상태·오귀속·날짜 보존 회귀 검증. 기존 RESULT.md는 요구한 번호별 검수 근거와 JSON 계약 보고를 위해 이 절만 추가(기존 내용 보존).
+
+### 리뷰 지적별 처리
+
+1. 고정 bound=False 제거. 호스트 agy 파일의 실제 schema 키(auth_method/id_token_email/token, token.expiry 등)만 확인했고 값은 출력하지 않았다. 독립 Google active 계정을 쓰지 않는다. id_token_email·access_token 존재·timezone 있는 미래 expiry를 모두 확인한 로컬 자격증명은 bound=True, 이메일을 actual_account에 전달한다. account_source=agy_credential_metadata, account_verified=False로 실시간 공급자 검사를 했다고 표현하지 않는다. 만료·손상·권한 실패는 unknown, 바이너리/credential 부재는 needs_login. test_host_identity_reaches_overview가 실제 binding→overview 경로를 검증한다.
+2. 빈 값 하드코딩으로 통과하던 검증을 교정. usage_status=available일 때 bound 상태·quota_account 대소문자 무시 일치·timezone 있는 측정시각·정상 window를 검증한다. 같은 fixture에서 정상 계정은 35%를 수용하고 다른 계정은 collection_failed/null로 거부한다. 잘못된 수치도 거부, 반환 window는 allowlist 필드만 포함한다. 실제 설치 agy에 quota collector가 있다는 뜻은 아니다.
+3. 신규 asyncio.wait_for(3s) 제거. overview의 Claude/Codex를 포함한 공통 relay 통신은 기존 httpx 20s/connect 2s timeout과 HTTPException 처리 그대로다. 새 동기 네트워크 probe를 추가하지 않았다. credential은 64KiB 상한의 로컬 읽기만 하며 overview는 기존 비동기 relay 경유다.
+4. 전체 metadata 얕은 병합 제거. ON CONFLICT는 새 metadata로 교체하고, 기존 release_date/source/verified_at이 모두 non-null일 때 그 3개 값만 보존한다. 수동 검증된 날짜를 우선 보존하며 raw/discovery_requirement 등은 새 실행 값으로 교체·제거된다. 실제 sync SQL expression을 실행하는 PostgreSQL TEMP TABLE 테스트 추가. AADS_TEST_POSTGRES_DSN 미제공으로 이 테스트는 SKIP, DB 수준 검증 통과를 주장하지 않는다.
+5. 읽기 전용이던 날짜 처리에 실제 공급 경로 추가. 공식 발표로 확인한 GPT-4.1/mini/nano와 Sonnet 4.5의 일반/고정 ID 총 5개에 날짜·URL·확인시각을 template/discovery/sync에서 채운다. https://openai.com/index/gpt-4-1/ (2025-04-14), https://www.anthropic.com/news/claude-sonnet-4-5 (2025-09-29), 확인 2026-10-30T11:08:43Z. 모델명 날짜/API created/first_seen 추론 없음. 다른 최신 모델 날짜는 여전히 null이며 전체 회사 최신 출시일 자동 수집 보장을 구현한 것은 아니다.
+6. 항상 False인 필드와 Antigravity 합성 skipped run 삭제. run_results 소비자는 sync_model_registry의 Codex 보존·review_required·audit·discovery_runs insert, llm_models.list_model_discovery_runs의 행 반환임을 확인했다. 기존 provider 수/의미를 유지하고 observed_at만 추가. disabled/skipped/failed 테스트 및 기존 성공 discovery 테스트 통과. Antigravity catalog adapter 미지원은 계약/한계에 명시한다.
+7. llm_models.py import를 normalize_provider 다음 release_date_fields 순서로 정렬했다.
+8. 현재 기준 코드에 이미 from datetime import date, datetime, timezone이 있었다. 불필요한 import 수정 없이 실제 날짜 파싱 테스트·F821 검사·py_compile로 NameError 부재를 검증했다.
+
+### 실행한 검증
+
+- 최초 pytest: JWT_SECRET_KEY 미설정으로 collection error. 운영 시크릿을 읽거나 바꾸지 않고 테스트 프로세스에만 명시적 가짜 JWT 값을 지정해 재실행했다.
+- timeout 60 env JWT_SECRET_KEY=<테스트 전용 값> /root/aads/aads-server/.venv/bin/python -m pytest tests/unit/test_llm_overview_antigravity.py tests/unit/test_model_registry.py tests/unit/test_llm_keys_slot_mapping.py tests/unit/test_model_registry_tier_backfill.py -q: **68 passed, 1 skipped (2.88s)**.
+- SKIP: test_release_upsert_postgres_preserves_only_release_tuple (테스트 PostgreSQL DSN 없음). 운영 PostgreSQL 연결도 TimeoutError. DB merge는 미검증이다.
+- python3 -m py_compile: 위 변경 Python 6개 파일 전부 통과.
+- venv python -m ruff check --select F821,F811: 변경 Python 6개 파일 All checks passed.
+- git diff --check 통과.
+- agy --help, agy help models만 실행: account/quota 명령 없음. agy models 자체는 토큰 자동갱신을 유발할 수 있어 실행하지 않았다.
+- http://127.0.0.1:8000의 /api/v1/health, /api/v1/llm-keys/overview, /api/v1/llm-models/discovery-runs GET은 모두 URLError. 실제 API 응답·운영 health 미검증.
+- 실제 scheduler/discovery DB 재조회 불가. 2026-10-30 19:25:05 KST cron hourly_cli_discovery 수치 및 OAuth/Google skipped 사유는 제공 브리프 근거이며 새 실측으로 주장하지 않는다. skipped는 최신 자동 갱신 성공이 아니다.
+- commit/push/build/deploy/서비스 재시작 실행 없음. HANDOVER.md 변경 없음.
+
+### 후속 화면 JSON 계약·fixture 및 미완료
+
+설정 모델·계정 API 재작업. release 세 필드는 nullable; 검증한 정확한 모델 ID 5개만 공식 발표로 채움, 미확인 모델 null. actual_account는 agy id_token_email, 만료되거나 잘못된 credential은 unknown, 자격증명/바이너리 없음 needs_login. bound는 로컬 유효성, account_verified=false(실시간 공급자 검사 없음). usage_status=available|unsupported|collection_failed|not_measured. windows는 [{window_minutes:int,used_percent:number,resets_at:ISO8601}], quota_account 일치·측정시각 필수. usage_summary=null: 계정 귀속 AADS 통계 미확인, 통계 schema/값을 추정해 제공하지 않음. 실제 agy quota collector 미지원, 실제 quota 미측정; quota_fixture는 테스트 전용. 기존 Claude/Codex 및 20s relay timeout 유지. JSON fixture: {"model": {"release_date": "2025-04-14", "release_date_source": "https://openai.com/index/gpt-4-1/", "release_date_verified_at": "2026-10-30T11:08:43Z"}, "account": {"provider": "antigravity", "actual_account": "agy@example.com", "bound": true, "state": "ok", "account_source": "agy_credential_metadata", "account_verified": false, "usage_status": "unsupported", "usage_note": "Installed relay has no supported provider quota collector", "usage_collected_at": null, "usage_summary": null, "windows": [], "used_percent": null, "resets_at": null}, "quota_fixture": {"bound": true, "account": "agy@example.com", "quota_account": "agy@example.com", "usage_status": "available", "usage_collected_at": "2026-10-30T10:00:00Z", "windows": [{"window_minutes": 300, "used_percent": 35, "resets_at": "2026-10-30T15:00:00Z"}]}}
+
+출시일 미확인은 release_date/release_date_source/release_date_verified_at 모두 null. available이 아닌 quota는 windows=[], used_percent/resets_at/usage_collected_at=null이다. usage_note는 서버가 정한 설명만 내보내며 relay 임의 문자열은 노출하지 않는다. 기존 ok_72h/limit_72h 키는 유지하되 미측정을 0건으로 표현하지 않고 null을 반환한다. usage_summary는 현재 null만 제공하며 검증되지 않은 계정별 호출수·토큰 통계를 만들어 넣지 않는다.
+
+핸드오버 DB 미기록: scripts/runner_handover_write.py로 entry_key=runner:runner-f2b2113a와 위 JSON 계약을 전달해 write_and_verify를 시도했으나 timeout 12 종료코드 124. DB 쓰기 및 재조회 성공은 확인하지 못했다. AADS_API_URL/handOver 인증 환경도 없고 tenant_id를 확인할 DB도 없어 임의 테넌트로 쓰지 않았다. handover_db_write_failed에 해당하는 실패를 여기 기록하며 실제 DB 이벤트 기록도 미확인이다. error_book DB 기록·정본 등록·운영 충돌 원장·실제 API·실제 provider quota·DB 수준 검증이 미완료다.
+
+롤백: 이번 의도된 6개 Python 파일의 diff만 역적용하면 이전 동작으로 돌아간다. 새 스키마·운영 데이터 변경 없음. 이 RESULT 절을 제거할 경우에도 기존 보고 내용은 보존한다.
