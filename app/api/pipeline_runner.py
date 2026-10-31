@@ -4012,6 +4012,13 @@ async def approve_or_reject(
     except Exception as exc:
         logger.warning("pipeline_runner.goal_state_update_fail", job_id=job_id, error=str(exc))
 
+    from app.services.spec_ref import check_spec_warning
+    stale_warning = None
+    if req.action == "approve":
+        stale_warning = await check_spec_warning(
+            instruction=row["instruction"] or "", tenant_id=tenant_id,
+            project=row["project"], job_id=job_id, approval=True, pool=pool)
+
     action_kr = "승인됨" if req.action == "approve" else "거부됨"
     logger.info("pipeline_runner.job_action", job_id=job_id, action=req.action)
 
@@ -4049,7 +4056,9 @@ async def approve_or_reject(
         else:
             logger.warning(f"autonomy_record_on_reject_failed: {e}")
 
-    return {"job_id": job_id, "action": req.action, "message": f"작업이 {action_kr}"}
+    return {"job_id": job_id, "action": req.action,
+            "message": f"작업이 {action_kr}" + ("\n" + stale_warning["message"] if stale_warning else ""),
+            "spec_warning": stale_warning}
 
 
 @router.post("/pipeline/jobs/{job_id}/retry-review", tags=["pipeline-runner"])

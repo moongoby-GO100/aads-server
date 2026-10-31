@@ -5665,7 +5665,14 @@ class ToolExecutor:
                 tenant_id,
             )
             await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", job_id)
+        from app.services.spec_ref import check_spec_warning
+        import re
+        goal_match = re.search(r"(?m)^\s*GOAL_ID:\s*([0-9a-fA-F-]{36})\s*$", instruction)
+        spec_warning = await check_spec_warning(
+            instruction=instruction, goal_id=payload.get("goal_id") or (goal_match[1] if goal_match else None),
+            tenant_id=tenant_id, project=project, job_id=job_id, pool=pool)
         return {
+            "spec_warning": spec_warning,
             "job_id": job_id,
             "status": "queued",
             "message": "Pipeline Runner API 인증 실패로 DB fallback enqueue를 수행했습니다.",
@@ -5699,6 +5706,7 @@ class ToolExecutor:
                     "parallel_group": parallel_group,
                     "depends_on": depends_on,
                     "_mockup_gate_checked": True,
+                    "goal_id": item.get("goal_id"),
                 },
                 reason,
             )
@@ -5734,6 +5742,7 @@ class ToolExecutor:
             "session_id": _session_id,
             "max_cycles": int(inp.get("max_cycles", 3)),
             "size": inp.get("size", "M"),
+            "goal_id": inp.get("goal_id") or None,
             **({"worker_model": inp["worker_model"]} if inp.get("worker_model") else {}),
             **({"worker_model_reason": inp["worker_model_reason"]} if inp.get("worker_model_reason") else {}),
             **({"parallel_group": inp["parallel_group"]} if inp.get("parallel_group") else {}),

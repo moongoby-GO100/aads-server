@@ -130,11 +130,13 @@ async def bind_runner_specs(*, instruction, goal_id, tenant_id, project, job_id,
                     'message': '기준 문서 확인 경고 — 제출은 계속 진행합니다.'}
         return None
 
+    first = await check_spec_warning(instruction=instruction, goal_id=goal_id,
+        tenant_id=tenant_id, project=project, job_id=job_id, pool=pool)
     try:
-        return await asyncio.wait_for(run(), gate.get_timeout_seconds())
+        return merge_spec_warning(await asyncio.wait_for(run(), gate.get_timeout_seconds()), first)
     except Exception as exc:
         gate.logger.warning('runner_spec_ref.failed_open', job_id=job_id, error=type(exc).__name__)
-        return None
+        return first
 
 
 def merge_spec_warning(existing, warning):
@@ -143,3 +145,56 @@ def merge_spec_warning(existing, warning):
     if not existing:
         return warning
     return {**existing, 'spec_ref': warning}
+
+
+async def check_spec_warning(*, instruction, tenant_id, project, job_id,
+                             goal_id=None, approval=False, pool=None):
+    """최신 판본 경고만 반환한다. 조회·감사는 작업 트랜잭션과 분리한다."""
+    change = re.search(r"(?m)^\s*SPEC_CHANGE:|범위\s*변경|요구\s*변경|사양\s*변경|기획\s*변경", instruction)
+    if not approval and (not goal_id or not change):
+        return None
+    refs = parse_spec_refs(instruction)
+    if approval and not any(r['revision'] is not None for r in refs):
+        return None
+
+    async def run():
+        nonlocal pool
+        if pool is None:
+            from app.core.db_pool import get_pool
+            pool = get_pool()
+        messages = []
+        async with pool.acquire() as conn:
+            if approval:
+                for ref in refs:
+                    if ref['revision'] is None:
+                        continue
+                    row = await conn.fetchrow(
+                        _EXPLICIT_SQL.replace('COALESCE(h.approved_revision_id, h.latest_revision_id)',
+                                              'h.latest_revision_id'),
+                        tenant_id, project, ref['document_key'], None)
+                    if row and row['revision'] > ref['revision']:
+                        messages.append(f"⚠️ 낡은 문서 기준: 작업은 {ref['document_key']} r{ref['revision']}, 현재 r{row['revision']}")
+            else:
+                rows = await conn.fetch(_GOAL_SQL.replace(
+                    'COALESCE(h.approved_revision_id, h.latest_revision_id)', 'h.latest_revision_id'),
+                    tenant_id, project, goal_id)
+                for row in rows:
+                    if not any(r['document_key'] == row['document_key'] and
+                               r['revision'] == row['revision'] for r in refs):
+                        messages.append('변경 지시입니다. 먼저 canonical_document_register 로 '
+                            f"{row['document_key']} 새 판본을 올리고 SPEC_REF: {row['document_key']}@r{row['revision'] + 1} "
+                            '을 넣어 다시 제출하십시오')
+        if not messages:
+            return None
+        entrypoint = 'runner_approve_stale' if approval else 'chat_spec_first'
+        warning = dict(verdict='stale_spec' if approval else 'spec_first',
+                       entrypoint=entrypoint, message='\n'.join(messages))
+        await gate._record(pool, entrypoint, project, job_id, warning['verdict'],
+                           warning, gate.get_mode(), gate.get_timeout_seconds())
+        return warning
+
+    try:
+        return await asyncio.wait_for(run(), gate.get_timeout_seconds() * 2)
+    except Exception as exc:
+        gate.logger.warning('spec_warning.failed_open', job_id=job_id, error=type(exc).__name__)
+        return None

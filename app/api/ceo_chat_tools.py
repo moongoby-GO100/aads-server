@@ -6977,6 +6977,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
                 json={
                     "project": params.get("project", "AADS"),
                     "instruction": params.get("instruction", ""),
+                    "goal_id": params.get("goal_id") or None,
                     "session_id": _sid,
                     "max_cycles": int(params.get("max_cycles", 3)),
                     "size": params.get("size", "M"),
