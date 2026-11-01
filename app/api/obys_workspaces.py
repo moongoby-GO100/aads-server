@@ -83,8 +83,8 @@ GENERIC_ROUTE_SQL: dict[str, tuple[str, str]] = {
     "inventory": ("SELECT id,branch_id,name,category,unit,current_stock,min_stock,unit_cost,supplier,updated_at FROM yeoljeong_inventory_items WHERE business_id=$1 ORDER BY name LIMIT 500", "yeoljeong_inventory_items"),
     "purchase-orders": ("SELECT id,branch_id,order_date,supplier,status,total_amount,items,received_at,invoice_number,created_at FROM yeoljeong_purchase_orders WHERE business_id=$1 ORDER BY order_date DESC LIMIT 500", "yeoljeong_purchase_orders"),
     "employees": ("SELECT id,employee_name,employee_email_masked,business_id,branch,role,status,requested_at,reviewed_at FROM yeoljeong_employee_join_requests WHERE business_id=$1 AND deleted_at IS NULL ORDER BY requested_at DESC LIMIT 500", "yeoljeong_employee_join_requests"),
-    "attendance": ("SELECT id,employee_name,branch,work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,status,memo,created_at,updated_at FROM yeoljeong_attendance_records WHERE business_id=$1 AND deleted_at IS NULL ORDER BY work_date DESC LIMIT 500", "yeoljeong_attendance_records"),
-    "payroll": ("SELECT id,employee_name,branch,payroll_month,gross_pay,tax_withholding,insurance_deduction,other_deduction,(tax_withholding+insurance_deduction+other_deduction) AS total_deductions,net_pay,status,created_at FROM yeoljeong_payroll_statements WHERE business_id=$1 AND deleted_at IS NULL ORDER BY payroll_month DESC LIMIT 500", "yeoljeong_payroll_statements"),
+    "attendance": ("SELECT id,employee_name,employee_email,branch,work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,status,memo,created_at,updated_at FROM yeoljeong_attendance_records WHERE business_id=$1 AND deleted_at IS NULL ORDER BY work_date DESC LIMIT 500", "yeoljeong_attendance_records"),
+    "payroll": ("SELECT id,employee_name,employee_email,branch,payroll_month,gross_pay,tax_withholding,insurance_deduction,other_deduction,(tax_withholding+insurance_deduction+other_deduction) AS total_deductions,net_pay,status,created_at FROM yeoljeong_payroll_statements WHERE business_id=$1 AND deleted_at IS NULL ORDER BY payroll_month DESC LIMIT 500", "yeoljeong_payroll_statements"),
     "hr-docs": ("SELECT id,employee_name,branch,document_type,document_label,status,original_filename,issue_date,uploaded_at,expires_at,superseded_by FROM yeoljeong_onboarding_documents WHERE business_id=$1 AND deleted_at IS NULL ORDER BY uploaded_at DESC LIMIT 500", "yeoljeong_onboarding_documents"),
     "tax-returns": ("SELECT id,report_type,period_start,period_end,status,total_sales,total_purchases,vat_payable,tax_amount,submitted_at,created_at FROM yeoljeong_tax_reports WHERE business_id=$1 ORDER BY period_end DESC LIMIT 500", "yeoljeong_tax_reports"),
     "approvals": ("SELECT id,approval_type,reference_id,title,description,requested_by,status,priority,created_at FROM yeoljeong_approvals WHERE business_id=$1 ORDER BY created_at DESC LIMIT 500", "yeoljeong_approvals"),
@@ -122,7 +122,7 @@ ROUTE_READ_ROLES: dict[str, frozenset[str]] = {
 _ROUTE_FORBIDDEN = "이 화면은 소유자·관리자만 조회할 수 있습니다"
 
 ATTENDANCE_OWN_SQL = (
-    "SELECT id,employee_name,branch,work_date,start_at,end_at,break_minutes,worked_minutes,"
+    "SELECT id,employee_name,employee_email,branch,work_date,start_at,end_at,break_minutes,worked_minutes,"
     "hourly_wage,status,memo,created_at,updated_at FROM yeoljeong_attendance_records "
     "WHERE business_id=$1 AND deleted_at IS NULL AND lower(employee_email)=$2 "
     "ORDER BY work_date DESC LIMIT 500"
@@ -450,11 +450,17 @@ def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any
         "amount": str(amount),
         "status": status,
         "display": display,
-        "employee_key": (hashlib.sha256(
-            (business_name + ":" + str(row.get("employee_id") or str(row.get("employee_email") or "").strip().lower())).encode()
-        ).hexdigest() if row.get("employee_id") or row.get("employee_email") else None),
+        "employee_key": _employee_key(business_name, row.get("employee_id"), row.get("employee_email")),
         "raw": _public_raw(row),
     }
+
+
+def _employee_key(business_name: str, employee_id: Any, employee_email: Any) -> str | None:
+    """직원 식별키. 기록(_record)과 근무표가 같은 규칙을 쓴다 — 이메일(소문자·공백 제거) 우선, 없으면 employee_id."""
+    identity = str(employee_email or "").strip().lower() or str(employee_id or "").strip()
+    if not identity:
+        return None
+    return hashlib.sha256((str(business_name) + ":" + identity).encode()).hexdigest()
 
 
 async def _business(user: dict[str, Any], business_id: str) -> dict[str, Any]:
@@ -1432,8 +1438,7 @@ async def list_work_schedules(
         actual = actual_by_key.get(_schedule_record_key(item)) or legacy_by_key.get(_schedule_record_key(item), [])
         contract = _schedule_json(item.pop("contract_payload", None))
         day_record = _schedule_day_record(actual)
-        identity = str(day_record.get("employee_id") or item["employee_email"])
-        item["employee_key"] = hashlib.sha256((business["name"] + ":" + identity).encode()).hexdigest()
+        item["employee_key"] = _employee_key(business["name"], day_record.get("employee_id"), item["employee_email"])
         item["judgment"] = attendance_schedule_judgment(item, actual)
         item["contract_difference"] = _contract_schedule_difference(item, contract)
         item["has_check_in"] = bool(day_record.get("start_at"))
