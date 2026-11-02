@@ -1300,7 +1300,10 @@ def attendance_schedule_judgment(schedule, record=None, *, now=None):
         result["labels"] = ["휴무"]
     elif not record or not record.get("start_at"):
         day = date.fromisoformat(str(schedule["work_date"])[:10])
-        result["labels"] = ["결근" if day < today else "미출근" if day == today else "예정"]
+        result["labels"] = ["확인필요" if day < today else "미출근" if day == today else "예정"]
+    elif record.get("check_in_at") and not record.get("check_out_at"):
+        # start_at=end_at is the open-clock placeholder, never evidence of a completed shift.
+        result["labels"] = ["확인필요", "퇴근누락"]
     else:
         def minutes(value):
             t = _schedule_time(value)
@@ -2042,7 +2045,7 @@ def geofence_radius_m(branch: dict[str, Any] | None) -> int:
 
 def judge_geofence(*, consent: bool, latitude: float | None, longitude: float | None,
                    accuracy_m: float | None, branch: dict[str, Any] | None) -> dict[str, Any]:
-    """반경 판정. 확실히 안일 때만 inside/approved — 나머지는 전부 확인필요(pending)."""
+    """위치는 보조 증거다. 반경 안이어도 최종 근태는 관리자 확인 대기다."""
     radius = geofence_radius_m(branch)
     verdict: dict[str, Any] = {
         "result": "unknown", "status": "pending", "radius_m": radius,
@@ -2067,8 +2070,8 @@ def judge_geofence(*, consent: bool, latitude: float | None, longitude: float | 
     if accuracy > radius:
         return {**verdict, "reason": f"GPS 오차 {accuracy}m 가 반경 {radius}m 보다 큼 — 판정 불가"}
     if distance <= radius:
-        return {**verdict, "result": "inside", "status": "approved",
-                "reason": f"매장에서 {distance}m (반경 {radius}m 안)"}
+        return {**verdict, "result": "inside", "status": "pending",
+                "reason": f"매장에서 {distance}m (반경 {radius}m 안) — 관리자 확인 필요"}
     return {**verdict, "result": "outside", "reason": f"매장에서 {distance}m (반경 {radius}m 밖)"}
 
 
@@ -2323,7 +2326,7 @@ async def attendance_check_out(
             night = attendance_night_minutes(record["start_at"], end_at, int(record["break_minutes"] or 0))
             combined = combined_geofence(record["geofence_result"], verdict["result"])
             status = ("rejected" if record["status"] == "rejected"
-                      else "approved" if combined == "inside" else "pending")
+                      else "pending")
             row = await connection.fetchrow(
                 f"""UPDATE yeoljeong_attendance_records SET
                       check_out_at=$3, end_at=$4, worked_minutes=$5, check_out_lat=$6,

@@ -252,12 +252,12 @@ def _stored(db, response):
 
 # ── 반경 판정 ────────────────────────────────────────────────────────────────
 
-def test_inside_radius_is_auto_approved_as_pwa(client, db):
+def test_inside_radius_requires_admin_confirmation_as_pwa(client, db):
     _consent(client)
     response = _punch(client, "check-in", meters=20)
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body["record"]["status"] == "approved"
+    assert body["record"]["status"] == "pending"
     assert body["record"]["geofence_result"] == "inside"
     assert body["record"]["source"] == "pwa"
     assert body["judgement"]["distance_m"] == 20
@@ -324,7 +324,7 @@ def test_without_consent_location_is_not_stored_and_pending(client, db):
 
 def test_withdrawn_consent_stops_location_collection(client, db, clock):
     _consent(client)
-    assert _punch(client, "check-in", meters=10).json()["record"]["status"] == "approved"
+    assert _punch(client, "check-in", meters=10).json()["record"]["status"] == "pending"
     _consent(client, agree=False)
     clock["value"] = datetime(2026, 9, 30, 18, 0, tzinfo=KST)
     out = _punch(client, "check-out", meters=10)
@@ -356,7 +356,7 @@ def test_accuracy_boundary(accuracy, expected):
     lat, lng = _north(10)
     verdict = api.judge_geofence(consent=True, latitude=lat, longitude=lng, accuracy_m=accuracy, branch=branch)
     assert verdict["result"] == expected
-    assert verdict["status"] == ("approved" if expected == "inside" else "pending")
+    assert verdict["status"] == "pending"
 
 
 def test_branch_radius_is_used_but_capped():
@@ -393,7 +393,7 @@ def test_check_out_uses_existing_worked_minutes_function(client, db, clock):
     record = out.json()["record"]
     assert record["worked_minutes"] == api.attendance_worked_minutes(time(10, 0), time(18, 30), 0) == 510
     assert (record["start_at"], record["end_at"]) == ("10:00:00", "18:30:00")
-    assert record["status"] == "approved" and record["geofence_result"] == "inside"
+    assert record["status"] == "pending" and record["geofence_result"] == "inside"
     assert record["open"] is False
     # 두 번째 퇴근은 열린 출근이 없으므로 409.
     assert _punch(client, "check-out", meters=15).status_code == 409

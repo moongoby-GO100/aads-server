@@ -547,3 +547,14 @@ def test_delivery_requires_linked_employee_account(sender):
         svc.deliver_payroll(confirmed["id"], ADMIN)
     assert exc.value.status_code == 409
     assert sender == []
+
+
+def test_legacy_approved_open_clock_cannot_generate_payroll(monkeypatch):
+    sign_contract()
+    row = {**attendance(5, 480), "check_in_at": "2026-10-05T09:00:00+09:00", "check_out_at": None}
+    fake_attendance(monkeypatch, [row])
+    with pytest.raises(HTTPException) as exc:
+        svc.payroll_draft_from_attendance({"employee_email": EMPLOYEE["email"], "payroll_month": MONTH}, ADMIN)
+    assert exc.value.status_code == 409
+    assert "퇴근 확인" in exc.value.detail
+    assert svc._read_hr("payroll_statements", ADMIN) == []

@@ -8937,7 +8937,7 @@ async def _db_fetch_payroll_attendance(business_id: str, employee_email: str, fi
     conn = await asyncpg.connect(_db_url(), timeout=5)
     try:
         rows = await conn.fetch(
-            "SELECT id, work_date, worked_minutes, hourly_wage, status FROM yeoljeong_attendance_records "
+            "SELECT id, work_date, worked_minutes, hourly_wage, status, check_in_at, check_out_at FROM yeoljeong_attendance_records "
             "WHERE business_id = $1 AND employee_email = $2 AND work_date >= $3 AND work_date < $4 AND deleted_at IS NULL "
             "ORDER BY work_date, start_at",
             business_id, employee_email, first_day, next_first_day,
@@ -8986,6 +8986,10 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         raise HTTPException(status_code=409, detail="계약서에 단가가 없어 급여 초안을 만들 수 없습니다")
 
     attendance = _payroll_attendance_rows(business_id, email, month)
+    incomplete = [row for row in attendance if row.get("check_in_at") and not row.get("check_out_at")
+                  and str(row.get("status") or "").strip().lower() != "rejected"]
+    if incomplete:
+        raise HTTPException(status_code=409, detail=f"퇴근 확인이 필요한 근태 {len(incomplete)}건이 남아 있어 급여 초안을 만들 수 없습니다")
     approved = [row for row in attendance if str(row.get("status") or "").strip().lower() == "approved"]
     unconfirmed = [row for row in attendance if str(row.get("status") or "").strip().lower() not in {"approved", "rejected"}]
     if unconfirmed:
