@@ -1,0 +1,1010 @@
+{
+  "title": "스마트브라우저 공통 업무 실행 엔진 요구 추적표",
+  "document_key": "smart-browser-work-engine-traceability",
+  "source_task_id": "runner-2c331979",
+  "source_bundle_sha256": "be353cb5a1a1496d4c2122a50a8aa55e16793f4904cc47712fbfbd67156c970b",
+  "source_revisions": [
+    {
+      "id": "c70dde6b-e5cf-4a77-b313-45bfcd841024",
+      "document_key": "smart-browser-work-engine-plan",
+      "content_hash": "6228f19b34670609d75266d66af126c8e8e3495f62cbe8a2d98eeb045a341bb8"
+    },
+    {
+      "id": "c0957334-b960-4d9a-877c-88eb0b03e339",
+      "document_key": "smart-browser-work-engine-prd",
+      "content_hash": "dabf341001bd53df0bae72e9dd7f20b8352e283514978e9e5d8f4a84d9870310"
+    },
+    {
+      "id": "9c75f903-26a9-468d-944c-481de7fa4259",
+      "document_key": "smart-browser-work-engine-design",
+      "content_hash": "cd160213e2415fef432e03e56fc116a8d1e0f7e3db88054f29dfabb5f5dcccd9"
+    },
+    {
+      "id": "59745def-8780-4f63-8a72-24e72f350aef",
+      "document_key": "smart-browser-collection-recipe-design",
+      "content_hash": "0df770b758bef03e17933406c6d3f79b9ae0d4b6762c0a076681603d1b143386"
+    }
+  ],
+  "source_status": "rev1 review/gen2; approved 아님; rev4 참조도 승인 아님",
+  "predecessor": {
+    "job_id": "runner-c7ed1499",
+    "status": "rejected_done",
+    "rejected_result_sha": "62bdac0b"
+  },
+  "successor": "runner-2c331979",
+  "base_sha": "34afd0d5c784b4902f073be10ea61d3c4a583848",
+  "result_sha": null,
+  "sha_note": "미커밋 문서 검증 시점; 실제 결과 commit SHA는 최종 Runner RESULT에서 기록",
+  "job_snapshot_source": "fixtures/review-jobs.json (제공 snapshot; live 아님)",
+  "slices": {
+    "D0": {
+      "job_id": "runner-2c331979",
+      "status": "incomplete",
+      "actual_sha": null,
+      "verification": "measured_local_only",
+      "not_run_reason": "문서 검증만 수행; 정본 등록/live ledger/DB 핸드오버 미확인"
+    },
+    "E0": {
+      "job_id": "runner-801f00fd",
+      "status": "not_run",
+      "actual_sha": null,
+      "verification": "planned",
+      "not_run_reason": "실제 successor 연결만 확인; 제공 snapshot ai_review c3b04b0b76e1fde053c950e9a8ce45cc549f0b14는 과거 정보이며 실제 인수 not_run"
+    },
+    "B1": {
+      "job_id": "runner-2c77a119",
+      "status": "not_run",
+      "actual_sha": null,
+      "verification": "planned",
+      "not_run_reason": "D0 문서 작업 범위; 구현·운영 인수 미실행"
+    },
+    "B2": {
+      "job_id": "runner-8e90a992",
+      "status": "not_run",
+      "actual_sha": null,
+      "verification": "planned",
+      "not_run_reason": "D0 문서 작업 범위; 구현·운영 인수 미실행"
+    },
+    "B3": {
+      "job_id": "runner-34040ef1",
+      "status": "not_run",
+      "actual_sha": null,
+      "verification": "planned",
+      "not_run_reason": "D0 문서 작업 범위; 구현·운영 인수 미실행"
+    },
+    "B4": {
+      "job_id": "runner-6bcb8321",
+      "status": "not_run",
+      "actual_sha": null,
+      "verification": "planned",
+      "not_run_reason": "D0 문서 작업 범위; 구현·운영 인수 미실행"
+    },
+    "U1": {
+      "job_id": "runner-0a64318e",
+      "status": "not_run",
+      "actual_sha": null,
+      "verification": "planned",
+      "not_run_reason": "D0 문서 작업 범위; 구현·운영 인수 미실행"
+    },
+    "V1": {
+      "job_id": "runner-1ee1919b",
+      "status": "not_run",
+      "actual_sha": null,
+      "verification": "planned",
+      "not_run_reason": "D0 문서 작업 범위; 구현·운영 인수 미실행"
+    }
+  },
+  "requirements": [
+    {
+      "id": "FR-01",
+      "source_requirement": "| FR-01 P0 | MCP·REST·모듈·SDK·예약이 동일 ApplicationService를 사용한다 | 입구별 동일 요청/권한/결과 계약 시험 |",
+      "slice": "B3",
+      "job_id": "runner-34040ef1",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/api/smart_browser_executions.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-01 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-02",
+      "source_requirement": "| FR-02 P0 | tenant/project/principal은 인증 문맥에서 결정. 다른 세션 ID·프로젝트를 본문으로 주입해 확대할 수 없다 | 위조 scope 및 타 테넌트·프로젝트 음성 시험 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-02 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-03",
+      "source_requirement": "| FR-03 P0 | 업무·attempt·step·artifact의 영속 ID와 상태, 단조 event_seq를 제공 | 새 세션/프로세스 재시작 후 조회 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-03 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-04",
+      "source_requirement": "| FR-04 P0 | 멱등 키로 요청 중복 방지, 동일 키+다른 payload는 409 | 동시 요청 및 응답 유실 재전송 시험 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-04 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-05",
+      "source_requirement": "| FR-05 P0 | DB lease와 owner_epoch로 한 실행 소유자만 action/저장 가능 | 오래된 worker의 기록·dispatch 거부 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-05 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-06",
+      "source_requirement": "| FR-06 P0 | 검증된 단계 완료 후 checkpoint. 변수·레시피 hash·인증 범위·후조건 복원 | 중간 save_as 참조를 쓰는 후속 단계 재개 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-06 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-07",
+      "source_requirement": "| FR-07 P0 | 외부 효과 불명 시 needs_reconciliation으로 멈춤. 자동 재클릭 금지 | 쓰기 성공 직후 ACK 소실 장애 주입 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-07 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-08",
+      "source_requirement": "| FR-08 P0 | 모든 외부 쓰기·다운로드·업로드는 기존 정책 검사. 승인 범위를 새 후보나 새 URL로 확대하지 않는다 | 승인 만료·다른 action/selector·중복 소비 거부 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-08 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-09",
+      "source_requirement": "| FR-09 P0 | 데이터 품질·타입·키·빈 결과·원자 commit·변경 커서 통합 | 기존 수집 rev4 §7 및 AC-08~11 |",
+      "slice": "B2",
+      "job_id": "runner-8e90a992",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/collection.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-09 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-10",
+      "source_requirement": "| FR-10 P1 | DOM·접근성·화면 이미지 관측, 구조화 계획, 한 행동 후 재관측/검증 | 버튼 이동·라벨 변경·지연·팝업 fixture |",
+      "slice": "B4",
+      "job_id": "runner-6bcb8321",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/planner.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-10 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-11",
+      "source_requirement": "| FR-11 P1 | 실패 분류→복구 후보→격리 시험→승인본 승격. 승인본은 불변 | 후보 실패 때 이전 승인본과 스케줄 보존 |",
+      "slice": "B4",
+      "job_id": "runner-6bcb8321",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/planner.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-11 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-12",
+      "source_requirement": "| FR-12 P1 | 서버/PC 레인 명시 바인딩, PC 단절·잠금·포커스 불일치 시 대기 | 서버·PC 어댑터 별도 시험 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-12 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-13",
+      "source_requirement": "| FR-13 P1 | 예약은 기존 scheduler, PC 실행은 기존 fenced queue 사용 | 예약/수동 겹침 병합, 중단·쿨다운 |",
+      "slice": "B2",
+      "job_id": "runner-8e90a992",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/collection.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-13 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-14",
+      "source_requirement": "| FR-14 P1 | 같은 테넌트의 허용 프로젝트·세션 간 레시피·결과 재사용 | 다른 세션에서 발견→실행→증거 확인 |",
+      "slice": "B3",
+      "job_id": "runner-34040ef1",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/api/smart_browser_executions.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-14 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-15",
+      "source_requirement": "| FR-15 P1 | UI에서 입력·진행·마지막 오류·승인·재개·결과 확인을 연결 | PC/모바일 첫 실행·복구 시나리오 |",
+      "slice": "U1",
+      "job_id": "runner-0a64318e",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "aads-dashboard 기존 route (확인 전)"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-15 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-16",
+      "source_requirement": "| FR-16 P1 | 실측 단계 지연·모델 호출·비용·재시도·사용자 개입·저장 건수 기록 | request→effect→result trace와 비용 합산 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-16 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-17",
+      "source_requirement": "| FR-17 P1 | 다운로드·export는 권한 있는 artifact로 제공; CSV 수식 주입 차단 | 직접 URL 무권한·타 tenant 접근 거부 |",
+      "slice": "B3",
+      "job_id": "runner-34040ef1",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/api/smart_browser_executions.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-17 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "FR-18",
+      "source_requirement": "| FR-18 P1 | 동일 업무 Aside 비교 도구와 정답·원본 증거를 남김 | 사전 고정 시험 묶음, 실패·중단 포함 집계 |",
+      "slice": "E0",
+      "job_id": "runner-801f00fd",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "tests/benchmarks/smart_browser/"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "FR-18 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-01",
+      "source_requirement": "| AC-01 | 동일 tenant/project의 세션 A와 B, 허용된 결과 조회 | 같은 execution과 결과; 다른 tenant는 존재 은닉 |",
+      "slice": "B3",
+      "job_id": "runner-34040ef1",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/api/smart_browser_executions.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-01 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-02",
+      "source_requirement": "| AC-02 | SDK token의 프로젝트/tenant를 본문으로 바꿈 | 403 scope_mismatch, 실행·artifact 생성 0 |",
+      "slice": "B3",
+      "job_id": "runner-34040ef1",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/api/smart_browser_executions.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-02 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-03",
+      "source_requirement": "| AC-03 | 같은 principal과 key로 동시 20 요청 | execution 1, 같은 ticket; payload 차이는 409 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-03 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-04",
+      "source_requirement": "| AC-04 | worker1 lease 만료 후 worker2 소유권 획득 | epoch 증가, worker1 dispatch/기록/commit 전부 거부 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-04 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-05",
+      "source_requirement": "| AC-05 | save_as 후 worker 강제 종료·재개 | 검증된 값 복원, 단계 중복 없음, secret 재해결 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-05 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-06",
+      "source_requirement": "| AC-06 | 외부 쓰기 완료 직후 응답 소실 | 자동 재클릭 0, needs_reconciliation; 읽기 증거로만 확정 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-06 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-07",
+      "source_requirement": "| AC-07 | 승인 토큰 만료·selector/origin 변경·재사용 | 차단, 승인 범위 확대·우회 0 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-07 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-08",
+      "source_requirement": "| AC-08 | 정상 1,001행을 500개씩 읽음 | 500/500/1, 누락·중복 0, cursor scope 검증 |",
+      "slice": "B2",
+      "job_id": "runner-8e90a992",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/collection.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-08 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-09",
+      "source_requirement": "| AC-09 | 같은 데이터 두 번 후 한 행 변경 | 두 번째 new/changed=0; 세 번째 changed=1 |",
+      "slice": "B2",
+      "job_id": "runner-8e90a992",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/collection.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-09 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-10",
+      "source_requirement": "| AC-10 | 키/필수 변환 실패 6%, 또는 3페이지째 실패 | 전체 records 변경 0, 사유별 집계 일치 |",
+      "slice": "B2",
+      "job_id": "runner-8e90a992",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/collection.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-10 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-11",
+      "source_requirement": "| AC-11 | 0행+빈 표지, 행 존재+빈 표지, 전부 탈락 | 첫 경우만 no_records, 나머지 실패 |",
+      "slice": "B2",
+      "job_id": "runner-8e90a992",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/collection.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-11 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-12",
+      "source_requirement": "| AC-12 | 두 필드의 구분자·NFC·타입 충돌 입력 | 동일 정규값만 같은 키; text/int 구분 |",
+      "slice": "B2",
+      "job_id": "runner-8e90a992",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/collection.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-12 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-13",
+      "source_requirement": "| AC-13 | 같은 업무를 예약·MCP·SDK가 동시 요청 | 정책에 따라 병합, cooldown·paused 명시 |",
+      "slice": "B2",
+      "job_id": "runner-8e90a992",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/collection.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-13 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-14",
+      "source_requirement": "| AC-14 | 버튼 위치 변경·지연·허용 팝업 | 검증된 후보만 진행, 모호하면 중단 |",
+      "slice": "B4",
+      "job_id": "runner-6bcb8321",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/planner.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-14 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-15",
+      "source_requirement": "| AC-15 | PC offline·다른 창 전경·브라우저 인증 만료 | 다른 PC/창 무단 입력 0, 복구 안내 |",
+      "slice": "B1",
+      "job_id": "runner-2c77a119",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/service.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-15 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-16",
+      "source_requirement": "| AC-16 | 권한 read 없음 또는 dataset_keys=[] | 조회/파일 생성 차단; 빈 허용목록은 전체 허용 아님 |",
+      "slice": "B3",
+      "job_id": "runner-34040ef1",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/api/smart_browser_executions.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-16 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-17",
+      "source_requirement": "| AC-17 | UI 새로고침·세션 이동·SSE 단절 | 마지막 event 이후 재연결, 상태/결과 유지 |",
+      "slice": "U1",
+      "job_id": "runner-0a64318e",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "aads-dashboard 기존 route (확인 전)"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-17 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-18",
+      "source_requirement": "| AC-18 | public/private URL redirect·HTML 속 지시·secret 요청 | SSRF/권한상승/secret 유출 차단 |",
+      "slice": "B4",
+      "job_id": "runner-6bcb8321",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/planner.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-18 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-19",
+      "source_requirement": "| AC-19 | 복구 후보 실패/승인 거절 | 승인본 hash·예약 연결 변화 없음 |",
+      "slice": "B4",
+      "job_id": "runner-6bcb8321",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "app/services/smart_browser_engine/planner.py"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-19 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    },
+    {
+      "id": "AC-20",
+      "source_requirement": "| AC-20 | Aside와 동일 fixture·계정 범위·reset 조건 | 성공·정확성·개입·시간·비용·복구 원본 기록, 미측정 분리 |",
+      "slice": "E0",
+      "job_id": "runner-801f00fd",
+      "acceptance_slice": "V1",
+      "acceptance_job_id": "runner-1ee1919b",
+      "implementation_path": [
+        "tests/benchmarks/smart_browser/"
+      ],
+      "implementation_path_status": "planned_unverified",
+      "test_name": "AC-20 원문 인수 시나리오",
+      "command": null,
+      "planned_command": "B/V 담당자가 실제 테스트 수집 후 확정; pytest <담당 테스트 경로>",
+      "exit_code": null,
+      "artifact_ref": null,
+      "tested_sha": null,
+      "environment": "not_run",
+      "status": "not_run",
+      "not_run_reason": "D0에서 앱·PG·PC·Aside 시험 미실행"
+    }
+  ],
+  "pm_tests": [
+    {
+      "id": "PM-C1-T1",
+      "slices": [
+        "B1",
+        "B2",
+        "B3",
+        "V1"
+      ],
+      "status": "not_run",
+      "command": null,
+      "exit_code": null,
+      "tested_sha": null,
+      "artifact_ref": null,
+      "not_run_reason": "실제 PostgreSQL/API/GC 시험은 각 구현 담당 및 V1 책임"
+    },
+    {
+      "id": "PM-C1-T2",
+      "slices": [
+        "B1",
+        "B2",
+        "B3",
+        "V1"
+      ],
+      "status": "not_run",
+      "command": null,
+      "exit_code": null,
+      "tested_sha": null,
+      "artifact_ref": null,
+      "not_run_reason": "실제 PostgreSQL/API/GC 시험은 각 구현 담당 및 V1 책임"
+    },
+    {
+      "id": "PM-C2-T1",
+      "slices": [
+        "B2",
+        "B3",
+        "V1"
+      ],
+      "status": "not_run",
+      "command": null,
+      "exit_code": null,
+      "tested_sha": null,
+      "artifact_ref": null,
+      "not_run_reason": "실제 PostgreSQL/API/GC 시험은 각 구현 담당 및 V1 책임"
+    },
+    {
+      "id": "PM-C2-T2",
+      "slices": [
+        "B2",
+        "B3",
+        "V1"
+      ],
+      "status": "not_run",
+      "command": null,
+      "exit_code": null,
+      "tested_sha": null,
+      "artifact_ref": null,
+      "not_run_reason": "실제 PostgreSQL/API/GC 시험은 각 구현 담당 및 V1 책임"
+    },
+    {
+      "id": "PM-C3-T1",
+      "slices": [
+        "B1",
+        "B3",
+        "V1"
+      ],
+      "status": "not_run",
+      "command": null,
+      "exit_code": null,
+      "tested_sha": null,
+      "artifact_ref": null,
+      "not_run_reason": "실제 PostgreSQL/API/GC 시험은 각 구현 담당 및 V1 책임"
+    },
+    {
+      "id": "PM-C3-T2",
+      "slices": [
+        "B1",
+        "B3",
+        "V1"
+      ],
+      "status": "not_run",
+      "command": null,
+      "exit_code": null,
+      "tested_sha": null,
+      "artifact_ref": null,
+      "not_run_reason": "실제 PostgreSQL/API/GC 시험은 각 구현 담당 및 V1 책임"
+    }
+  ],
+  "canonical_registration": "정본 미등록(미완료)",
+  "handover": "핸드오버 DB 미기록",
+  "cost": "미측정",
+  "local_validation": {
+    "status": "pass",
+    "checks": 264,
+    "command": "python3 docs/specs/smart-browser-work-engine/validate_contract.py",
+    "exit_code": 0,
+    "artifact_ref": "/tmp/sb-d0-0bbaf3f7-validation.log",
+    "tested_sha": null,
+    "environment": "uncommitted document bytes; standalone repository fixtures",
+    "scope": "document/schema only; application acceptance not_run"
+  },
+  "live_preflight": {
+    "local_queue": "not_verified",
+    "active_pipeline_jobs": "not_verified",
+    "same_file_ledger": "not_verified",
+    "reason": "이번 세션 git status clean 확인; AADS query_database/run_preflight/ledger 도구 미제공. 원 세션 PROCEED와 dirty ledger 0은 제공된 과거 근거이며 재조회 아님"
+  },
+  "e0_lineage": [
+    "runner-0dc26357",
+    "runner-087dac9a",
+    "runner-801f00fd"
+  ],
+  "assignment_note": "지시대로 B1/B2/B3/B4/U1/V1 기존 ID 유지. 제공 snapshot의 B2/B4/V1 supersession은 원 세션 공식 relink 확인 대상이며 여기서 임의 변경하지 않음."
+}

@@ -1,0 +1,178 @@
+{
+  "project": "AADS",
+  "source": "query_database in owner review turn; snapshot, not live",
+  "reviewed_commit": "ceb8e0c6ca035a98f8658a469382aba9875c220d",
+  "jobs": [
+    {
+      "job_id": "runner-5832be43",
+      "status": "queued",
+      "phase": "queued",
+      "depends_on": "runner-34040ef1",
+      "parallel_group": "sb-work-engine-20261102"
+    },
+    {
+      "job_id": "runner-51b9e7ad",
+      "status": "queued",
+      "phase": "queued",
+      "depends_on": "runner-0a64318e",
+      "parallel_group": "sb-work-engine-20261102"
+    },
+    {
+      "job_id": "runner-801f00fd",
+      "status": "awaiting_approval",
+      "phase": "awaiting_approval",
+      "depends_on": null,
+      "parallel_group": null
+    },
+    {
+      "job_id": "runner-0a64318e",
+      "status": "queued",
+      "phase": "queued",
+      "depends_on": "runner-5832be43",
+      "parallel_group": "sb-work-engine-20261102"
+    },
+    {
+      "job_id": "runner-0bbaf3f7",
+      "status": "queued",
+      "phase": "queued",
+      "depends_on": "runner-e56889ba",
+      "parallel_group": null
+    },
+    {
+      "job_id": "runner-2c77a119",
+      "status": "queued",
+      "phase": "queued",
+      "depends_on": "runner-0bbaf3f7",
+      "parallel_group": "sb-work-engine-20261102"
+    },
+    {
+      "job_id": "runner-07e4997f",
+      "status": "queued",
+      "phase": "queued",
+      "depends_on": "runner-2c77a119",
+      "parallel_group": "sb-work-engine-20261102"
+    },
+    {
+      "job_id": "runner-34040ef1",
+      "status": "queued",
+      "phase": "queued",
+      "depends_on": "runner-07e4997f",
+      "parallel_group": "sb-work-engine-20261102"
+    },
+    {
+      "job_id": "runner-2c331979",
+      "source": "current assigned successor instruction",
+      "supersedes": "runner-0bbaf3f7",
+      "rework_of": "runner-0bbaf3f7"
+    }
+  ],
+  "historical_jobs": [
+    {
+      "job_id": "runner-0a64318e",
+      "status": "cancelled",
+      "phase": "blocked_dependency",
+      "commit_hash": null,
+      "depends_on": "runner-6bcb8321",
+      "goal_id": null,
+      "milestone_id": null
+    },
+    {
+      "job_id": "runner-2c77a119",
+      "status": "cancelled",
+      "phase": "blocked_dependency",
+      "commit_hash": null,
+      "depends_on": "runner-3580253c",
+      "goal_id": null,
+      "milestone_id": null
+    },
+    {
+      "job_id": "runner-34040ef1",
+      "status": "cancelled",
+      "phase": "blocked_dependency",
+      "commit_hash": null,
+      "depends_on": "runner-8e90a992",
+      "goal_id": null,
+      "milestone_id": null
+    },
+    {
+      "job_id": "runner-3580253c",
+      "status": "rolling_back",
+      "phase": "rolling_back",
+      "commit_hash": "ceb8e0c6ca035a98f8658a469382aba9875c220d",
+      "depends_on": null,
+      "goal_id": null,
+      "milestone_id": null
+    },
+    {
+      "job_id": "runner-6bcb8321",
+      "status": "cancelled",
+      "phase": "blocked_dependency",
+      "commit_hash": null,
+      "depends_on": "runner-34040ef1",
+      "goal_id": null,
+      "milestone_id": null
+    },
+    {
+      "job_id": "runner-1ee1919b",
+      "status": "queued",
+      "phase": "queued",
+      "commit_hash": null,
+      "depends_on": "runner-0a64318e",
+      "goal_id": null,
+      "milestone_id": null
+    },
+    {
+      "job_id": "runner-e56889ba",
+      "status": "queued",
+      "phase": "queued",
+      "commit_hash": null,
+      "depends_on": "runner-deae0f46",
+      "goal_id": null,
+      "milestone_id": null
+    },
+    {
+      "job_id": "runner-801f00fd",
+      "status": "running",
+      "phase": "ai_review",
+      "commit_hash": "c3b04b0b76e1fde053c950e9a8ce45cc549f0b14",
+      "depends_on": null,
+      "goal_id": null,
+      "milestone_id": null
+    },
+    {
+      "job_id": "runner-8e90a992",
+      "status": "cancelled",
+      "phase": "blocked_dependency",
+      "commit_hash": null,
+      "depends_on": "runner-2c77a119",
+      "goal_id": null,
+      "milestone_id": null
+    },
+    {
+      "job_id": "runner-0dc26357",
+      "status": "error",
+      "phase": "review_failed",
+      "commit_hash": "ac448688545003e558c64a6ac9e5808c21ab8664",
+      "depends_on": null,
+      "goal_id": null,
+      "milestone_id": null
+    },
+    {
+      "job_id": "runner-087dac9a",
+      "status": "rejected_done",
+      "phase": "rejected_done",
+      "commit_hash": "1370541ca6f5c07a119210d5d88b5f830745ba2c",
+      "depends_on": null,
+      "goal_id": null,
+      "milestone_id": null
+    }
+  ],
+  "supersession": {
+    "runner-3580253c": "runner-0bbaf3f7",
+    "runner-8e90a992": "runner-07e4997f",
+    "runner-6bcb8321": "runner-5832be43",
+    "runner-1ee1919b": "runner-51b9e7ad",
+    "runner-0bbaf3f7": "runner-2c331979"
+  },
+  "note": "Official pipeline_runner_submit SUPERSEDES responses and query_database confirm successor chain. Preserve original IDs as history; current assignment is given above. Overrides the earlier instruction's assumption that B2/B4/V1 retain their IDs; those rows were cancelled before execution by dependency cascade. No direct DB state edits."
+}

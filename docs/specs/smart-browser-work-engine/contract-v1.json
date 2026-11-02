@@ -1,0 +1,749 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aads:smart-browser-work-engine:contract-v1",
+  "title": "스마트브라우저 공통 업무 실행 엔진 계약",
+  "description": "smart-browser-work-engine-contract; rev1 기반 검토 초안. 실행 승인이 아니며 미확정 wire 이름은 계약명세의 차단 조건을 따른다. 루트는 Request. DTO별 검증은 $defs를 지정한다.",
+  "type": "object",
+  "$ref": "#/$defs/Request",
+  "$defs": {
+    "SafeValue": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SafeValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/SafeValue"
+          }
+        }
+      ]
+    },
+    "Inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/SafeValue"
+      },
+      "description": "선언된 레시피 입력 스키마로 추가 검증 필수. secret 평문 금지. 인증·selector 덮어쓰기 불가. 유일한 동적 필드 맵이며 DTO 추가 필드는 거부한다."
+    },
+    "RecipeRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "hash"
+      ],
+      "additionalProperties": false
+    },
+    "Location": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "lane": {
+              "const": "server"
+            },
+            "device_id": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "lane",
+            "device_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "lane": {
+              "const": "pc"
+            },
+            "device_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "lane",
+            "device_id"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Limits": {
+      "type": "object",
+      "properties": {
+        "max_actions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 50
+        },
+        "max_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 600
+        },
+        "max_llm_calls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "default": 8
+        },
+        "max_pages": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 100
+        },
+        "max_depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3,
+          "default": 3
+        },
+        "max_urls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 1000
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 10000
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20971520,
+          "default": 20971520
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "CredentialRef": {
+      "type": "string",
+      "pattern": "^vault:[^\\s]+$"
+    },
+    "Request": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": 1
+        },
+        "recipe_ref": {
+          "$ref": "#/$defs/RecipeRef"
+        },
+        "task_intent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputs": {
+          "$ref": "#/$defs/Inputs"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "limits": {
+          "$ref": "#/$defs/Limits"
+        },
+        "credential_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CredentialRef"
+          }
+        },
+        "allow_partial": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "contract_version",
+        "inputs",
+        "location"
+      ],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "recipe_ref"
+          ],
+          "not": {
+            "required": [
+              "task_intent"
+            ]
+          }
+        },
+        {
+          "required": [
+            "task_intent"
+          ],
+          "not": {
+            "required": [
+              "recipe_ref"
+            ]
+          }
+        }
+      ]
+    },
+    "IdempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "별도 헤더/MCP·SDK 인자; collection rev4 길이 규칙 재사용 초안"
+    },
+    "Ticket": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": 1
+        },
+        "execution_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "running",
+            "waiting_auth",
+            "waiting_approval",
+            "waiting_device",
+            "paused",
+            "needs_reconciliation",
+            "succeeded",
+            "partial",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_step": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "merged": {
+          "type": "boolean"
+        },
+        "reason_code": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "retry_after": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_event_cursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "trace_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "contract_version",
+        "execution_id",
+        "request_id",
+        "status",
+        "merged",
+        "next_event_cursor",
+        "trace_id"
+      ],
+      "additionalProperties": false
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "enum": [
+                "scope_mismatch",
+                "forbidden",
+                "not_found",
+                "recipe_not_approved",
+                "feature_unavailable",
+                "idempotency_conflict",
+                "paused",
+                "auth_required",
+                "approval_required",
+                "device_offline",
+                "foreground_mismatch",
+                "captcha",
+                "access_blocked",
+                "selector_ambiguous",
+                "page_changed",
+                "verification_failed",
+                "needs_reconciliation",
+                "resource_exhausted",
+                "dependency_unavailable",
+                "cursor_expired"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "retry_after": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "next_action": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "retry_after",
+            "next_action"
+          ],
+          "additionalProperties": false
+        },
+        "execution_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "Checkpoint": {
+      "type": "object",
+      "properties": {
+        "execution_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recipe_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "verified_step": {
+          "type": "string",
+          "minLength": 1
+        },
+        "safe_values": {
+          "$ref": "#/$defs/Inputs"
+        },
+        "artifact_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "context_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "postconditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "evidence_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "execution_id",
+        "seq",
+        "recipe_hash",
+        "verified_step",
+        "safe_values",
+        "artifact_refs",
+        "context_fingerprint",
+        "postconditions",
+        "evidence_ref",
+        "created_at"
+      ],
+      "additionalProperties": false
+    },
+    "Control": {
+      "type": "object",
+      "properties": {
+        "target_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "target_ref"
+      ],
+      "additionalProperties": false
+    },
+    "Observation": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": 1
+        },
+        "origin": {
+          "type": "string",
+          "format": "uri"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "document_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tab_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "frame_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dom_summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ax_summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "screenshot_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "visible_controls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Control"
+          }
+        },
+        "page_state": {
+          "enum": [
+            "auth",
+            "captcha",
+            "access_blocked",
+            "ready"
+          ]
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "redaction_manifest": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "contract_version",
+        "origin",
+        "url",
+        "document_revision",
+        "tab_ref",
+        "frame_ref",
+        "dom_summary",
+        "ax_summary",
+        "screenshot_ref",
+        "visible_controls",
+        "page_state",
+        "timestamp",
+        "redaction_manifest"
+      ],
+      "additionalProperties": false
+    },
+    "PlannedAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "enum": [
+            "navigate",
+            "click",
+            "fill",
+            "select",
+            "press",
+            "upload",
+            "download",
+            "snapshot",
+            "api_call",
+            "dismiss_overlays",
+            "extract",
+            "paginate"
+          ]
+        },
+        "target_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "postcondition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "risk": {
+          "enum": [
+            "READ",
+            "WRITE_INTERNAL",
+            "WRITE_EXTERNAL",
+            "IRREVERSIBLE"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "action",
+        "target_ref",
+        "evidence_ref",
+        "postcondition",
+        "risk",
+        "confidence"
+      ],
+      "additionalProperties": false
+    },
+    "ActionPlan": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": 1
+        },
+        "document_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "$ref": "#/$defs/PlannedAction"
+        },
+        "plan": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PlannedAction"
+          },
+          "minItems": 1,
+          "maxItems": 50
+        }
+      },
+      "required": [
+        "contract_version",
+        "document_revision"
+      ],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "action"
+          ],
+          "not": {
+            "required": [
+              "plan"
+            ]
+          }
+        },
+        {
+          "required": [
+            "plan"
+          ],
+          "not": {
+            "required": [
+              "action"
+            ]
+          }
+        }
+      ]
+    },
+    "ChangesQuery": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 500
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "LegacyFieldType": {
+      "enum": [
+        "text",
+        "int",
+        "money",
+        "number",
+        "date",
+        "datetime",
+        "url",
+        "bool"
+      ]
+    },
+    "FieldTypeV1": {
+      "enum": [
+        "text",
+        "int",
+        "decimal",
+        "bool",
+        "date",
+        "datetime"
+      ]
+    }
+  }
+}
