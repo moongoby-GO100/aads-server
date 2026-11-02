@@ -12988,7 +12988,10 @@
       if (hourly) hourly.value = "12000";
       const selectedBusiness = selectedSettingsBusinessId();
       const selectedBranch = selectedBusinessBranches()[0]?.name || activeBranches()[0]?.name || "";
+      const joinForms = joinWorkplaceForms();
       document.querySelectorAll('select[name="businessId"]').forEach(select => {
+        // Signup company and branch come from join workplaces or the resolved invite.
+        if (joinForms.includes(select.form)) return;
         if (selectedBusiness && settings().businesses.some(item => item.id === selectedBusiness)) select.value = selectedBusiness;
       });
       if (selectedBranch) {

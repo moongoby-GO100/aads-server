@@ -1353,6 +1353,16 @@ acquire_lock() {
 }
 
 # ---- entrypoints --------------------------------------------------------------------------------
+validate_monitor_settings() {
+    # Reject shortened certification and malformed shell arithmetic before any side effects.
+    local name value
+    for name in MONITOR_SECONDS MONITOR_INTERVAL MONITOR_FAIL_THRESHOLD; do
+        value=${!name}
+        [[ $value =~ ^[1-9][0-9]{0,5}$ ]] || die 2 "invalid monitor settings: $name"
+    done
+    (( MONITOR_SECONDS >= 300 && MONITOR_INTERVAL <= MONITOR_SECONDS )) || die 2 "monitor requires at least 300 seconds and an interval within the watch window"
+}
+
 main_deploy() {
     RELEASE_SHA="${1:-}"
     RUN_ID="${2:-0}"
@@ -1362,7 +1372,7 @@ main_deploy() {
     SHA8="${RELEASE_SHA:0:8}"
     [[ $RUN_ID =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || die 2 "invalid run id"
     [[ $MARKER =~ ^[A-Za-z0-9_.:/-]{3,100}$ ]] || die 2 "invalid marker string"
-    [[ $MONITOR_SECONDS =~ ^[0-9]+$ && $MONITOR_INTERVAL =~ ^[1-9][0-9]*$ ]] || die 2 "invalid monitor settings"
+    validate_monitor_settings
     MODE=deploy
     validate_state_paths WORKTREE_ROOT RESULT_DIR PG_BACKUP_DIR APACHE_BACKUP_DIR LOCK
     acquire_lock

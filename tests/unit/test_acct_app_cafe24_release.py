@@ -247,7 +247,7 @@ class Box:
             "AADS_DEPLOY_REPO_DIR": str(self.repo),
             "ACCT_APP_LOCK_FILE": str(tmp / "lock"),
             "ACCT_APP_RESULT_DIR": str(tmp / "results"),
-            "MONITOR_SECONDS": "30",
+            "MONITOR_SECONDS": "300",
             "MONITOR_INTERVAL": "10",
             "ACCT_HEALTH_WAIT_SECONDS": "6",
         }
@@ -1307,7 +1307,7 @@ def test_no_purge_when_the_switch_fails(box):
 
 
 def test_failed_watch_restores_the_port_and_purges_the_edge_again(box):
-    proc = box.run(env={"FAKE_PUB_FAIL_AFTER": "3", "MONITOR_SECONDS": "60"})
+    proc = box.run(env={"FAKE_PUB_FAIL_AFTER": "3", "MONITOR_SECONDS": "300"})
     assert proc.returncode == 10, proc.stdout + proc.stderr
     assert box.port() == "8111"
     assert box.log().count("OP cf_purge") == 2
