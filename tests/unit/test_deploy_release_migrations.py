@@ -45,6 +45,8 @@ def release(tmp_path):
     script = script.replace('BASELINE_FILE="${ROOT}/scripts/migrations_auto_apply_baseline.txt"',
                             'BASELINE_FILE="$AADS_MIGRATION_BASELINE_FILE"')
     (tmp_path / "scripts/apply_release_migrations.sh").write_text(script)
+    (tmp_path / "scripts/release_migration_approval.py").write_bytes(
+        (ROOT / "scripts/release_migration_approval.py").read_bytes())
     ledger = tmp_path / "ledger.txt"
     ledger.write_text("")
     calls = tmp_path / "calls.txt"
@@ -220,7 +222,7 @@ def test_plan_applies_nothing(release):
     assert release.applied() == []
 
 
-def test_actual_release_inventory_holds_obys_and_keeps_aads_pending(release, monkeypatch):
+def test_actual_release_inventory_defers_obys_and_keeps_aads_pending(release, monkeypatch):
     # Reproduce #5931's five pending files with real SQL bytes and policy.
     names = (
         "20261030_collection_datasets.sql",
@@ -243,7 +245,7 @@ def test_actual_release_inventory_holds_obys_and_keeps_aads_pending(release, mon
 
     result = release.run("--plan")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "HOLD migrations/20261030_obys_work_schedules.sql" in result.stdout
+    assert "DEFER migrations/20261030_obys_work_schedules.sql" in result.stdout
     assert [line.split()[1] for line in result.stdout.splitlines()
             if line.startswith("PENDING ")] == expected
     assert release.applied() == []
@@ -257,6 +259,9 @@ def test_actual_release_inventory_holds_obys_and_keeps_aads_pending(release, mon
     assert items == [{"file": name, "sha256": sha(ROOT / name)} for name in expected]
     with pytest.raises(approval.Rejected, match="not_approved"):
         approval.verify(release.root, "a" * 40, items, {"document": None})
+    applied = release.run()
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert release.applied() == expected
 
 
 def test_only_limits_to_named_files(release):
@@ -348,4 +353,22 @@ def test_empty_inventory_needs_no_approval(release):
     script = release.root / 'scripts/apply_release_migrations.sh'
     script.write_text(script.read_text().replace('    return 0\n}', '    return 1\n}'))
     assert release.run().returncode == 0
+    assert release.applied() == []
+
+
+def test_unknown_database_blocks_before_apply(release, monkeypatch):
+    release.write('001.sql', 'SELECT 1;')
+    monkeypatch.setenv('PGDATABASE', 'unknown')
+    result = release.run()
+    assert result.returncode == 2
+    assert 'BLOCK-TARGET' in result.stderr
+    assert release.applied() == []
+
+
+def test_unknown_classification_blocks_before_apply(release):
+    release.write('001.sql', 'SELECT 1;')
+    module = release.root / 'scripts/release_migration_approval.py'
+    module.write_text(module.read_text().replace("MIGRATION_TARGETS = {", "MIGRATION_TARGETS = {'migrations/001.sql': 'unknown',"))
+    result = release.run()
+    assert result.returncode == 2
     assert release.applied() == []

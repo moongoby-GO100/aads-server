@@ -314,3 +314,21 @@ def test_document_key_must_match_binding(approved, binding):
                                          else 'migration-apply-m-' + data['manifest_sha256'][:12])
     with pytest.raises(a.Rejected, match='scope_mismatch'):
         a.verify(root, SHA, a.inventory(root, {}), state)
+
+
+def test_business_inventory_preserves_pending_outside_aads_baseline(tmp_path):
+    (tmp_path / 'migrations').mkdir()
+    (tmp_path / 'scripts').mkdir()
+    name = 'migrations/20261030_obys_work_schedules.sql'
+    (tmp_path / name).write_bytes((ROOT / name).read_bytes())
+    (tmp_path / 'scripts/migrations_auto_apply_baseline.txt').write_text(name + '\n')
+    assert a.inventory(tmp_path, {}) == []
+    expected = [{'file': name, 'sha256': a.digest((ROOT / name).read_bytes())}]
+    assert a.inventory(tmp_path, {}, 'acct_business') == expected
+    assert a.inventory(tmp_path, {name: expected[0]['sha256']}, 'acct_business') == []
+    acct = (ROOT / 'scripts/deploy_acct_app_cafe24.sh').read_text()
+    allowlist = acct.split('ACCT_MIGRATION_ALLOWLIST=(', 1)[1].split(')', 1)[0]
+    assert Path(name).name in allowlist
+    assert '20261030_obys_work_schedules.sql)' in acct
+    with pytest.raises(a.Rejected, match='unknown_migration_target'):
+        a.inventory(tmp_path, {}, 'unknown')

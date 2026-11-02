@@ -1,5 +1,5 @@
 #!/bin/bash
-# Apply every pending migrations/*.sql of a release through the checksum ledger.
+# Apply pending AADS migrations/*.sql through the checksum ledger.
 #
 # 2026-09-29 866df31a: deploy.sh applied only three hard-coded SQL files, so
 # migrations/20260929_goal_pause_all_paths.sql shipped with the code but never
@@ -15,6 +15,7 @@
 #   SKIP     recorded in schema_migrations with the same sha256
 #   DRIFT    recorded with a different sha256 — already applied, never re-run
 #   HOLD     listed in the baseline (pre-ledger, applied by hand or unverified)
+#   DEFER    business DB SQL; pending its separate ACCT release probe/apply
 #   EXCLUDE  *.verify.sql / *rollback* — not a forward migration
 #   PENDING  --plan only: would be applied
 #   APPLY    applied now via scripts/apply_migration.sh
@@ -42,6 +43,17 @@ while (($#)); do
     esac
     shift
 done
+
+# This entrypoint owns only AADS; business SQL remains with the ACCT release.
+[[ "$PGDATABASE" == aads ]] || { echo "BLOCK-TARGET unknown database: $PGDATABASE" >&2; exit 2; }
+if ! target_rows="$(python3 "$ROOT/scripts/release_migration_approval.py" targets --root "$ROOT")"; then
+    echo "BLOCK-TARGET cannot classify release inventory" >&2
+    exit 2
+fi
+declare -A migration_targets=()
+while IFS='|' read -r name target; do
+    [[ -n "$name" ]] && migration_targets["$name"]="$target"
+done <<< "$target_rows"
 
 # Serialize ledger re-read, approval verification and apply for this database.
 # The outer deploy ownership fence remains authoritative for deployment.
@@ -127,6 +139,13 @@ while IFS= read -r path; do
             counts_exclude=$((counts_exclude + 1))
             continue
             ;;
+    esac
+    case "${migration_targets[$name]:-unknown}" in
+        aads) ;;
+        acct_business)
+            echo "DEFER $name (target=acct_business; application unverified here; pending ACCT DB probe via scripts/deploy_acct_app_cafe24.sh)"
+            continue ;;
+        *) echo "BLOCK-TARGET $name" >&2; exit 2 ;;
     esac
     sha="$(sha256sum "$path" | awk '{print $1}')"
     # Manual runs from another checkout recorded the bare basename

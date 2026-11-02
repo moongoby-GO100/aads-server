@@ -45,6 +45,22 @@ def literal(s):
     return "'" + s.replace("'", "''") + "'"
 
 
+# Root migrations are AADS unless explicitly assigned to the business release.
+# Business inventory is pending until its own DB ledger/probe proves application;
+# the AADS legacy baseline must never hide it.
+MIGRATION_TARGETS = {
+    'migrations/20261030_obys_work_schedules.sql': 'acct_business',
+}
+VALID_TARGETS = {'aads', 'acct_business'}
+
+
+def migration_target(name):
+    target = MIGRATION_TARGETS.get(name, 'aads')
+    if target not in VALID_TARGETS:
+        raise Rejected('unknown_migration_target')
+    return target
+
+
 def lookup(release_sha, root=None):
     # One SELECT, one statement snapshot; no approval files or environment decisions.
     query = f"""SELECT json_build_object(
@@ -88,7 +104,9 @@ def lookup(release_sha, root=None):
     return state
 
 
-def inventory(root, ledger):
+def inventory(root, ledger, target="aads"):
+    if target not in VALID_TARGETS:
+        raise Rejected('unknown_migration_target')
     baseline = root / 'scripts/migrations_auto_apply_baseline.txt'
     held = {line.split()[0] for line in baseline.read_text().splitlines()
             if line.strip() and not line.lstrip().startswith('#')} if baseline.exists() else set()
@@ -97,11 +115,13 @@ def inventory(root, ledger):
         name = 'migrations/' + path.name
         if path.name.endswith('.verify.sql') or 'rollback' in path.name:
             continue
+        if migration_target(name) != target:
+            continue
         sha = digest(path.read_bytes())
         recorded = ledger.get(name, ledger.get(path.name))
         if recorded is not None:
             continue
-        if name not in held:
+        if target != 'aads' or name not in held:
             items.append({'file': name, 'sha256': sha})
     return items
 
@@ -136,6 +156,8 @@ def verify(root, release_sha, supplied, state, now=None):
                  'tenant_id': state['tenant_id'], 'target_db': state['target_db']}.items():
         if data.get(k) != v:
             raise Rejected('scope_mismatch')
+    if state.get('target_db') != 'aads':
+        raise Rejected('unknown_migration_target')
     expected_key = ('migration-apply-m-' + str(data.get('manifest_sha256', ''))[:12]
                     if binding == 'manifest' else 'migration-apply-' + release_sha[:12])
     if 'document_key' in d and d['document_key'] != expected_key:
@@ -192,7 +214,7 @@ def register(content, sha, binding='release', manifest_sha256=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['draft', 'verify'])
+    parser.add_argument('command', choices=['draft', 'verify', 'targets'])
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--release-sha')
     parser.add_argument('--manifest-file', type=Path)
@@ -200,6 +222,13 @@ def main():
     parser.add_argument('--binding', choices=['manifest', 'release'], default='manifest')
     args = parser.parse_args()
     try:
+        if args.command == 'targets':
+            for path in sorted((args.root / 'migrations').glob('*.sql')):
+                name = 'migrations/' + path.name
+                print(name + '|' + migration_target(name))
+            return 0
+        if os.environ.get('PGDATABASE', 'aads') != 'aads':
+            raise Rejected('unknown_migration_target')
         sha = args.release_sha or os.environ.get('AADS_RELEASE_SHA') or subprocess.check_output(
             ['git', '-C', str(args.root), 'rev-parse', 'HEAD'], text=True).strip()
         if not re.fullmatch('[0-9a-f]{40}', sha):
