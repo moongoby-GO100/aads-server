@@ -1,3 +1,5 @@
+import pytest
+
 from app.services import yeoljeong_delivery_collectors as collectors
 
 
@@ -436,7 +438,8 @@ def test_coupangeats_account_shape_passes_scope_without_vault_account(monkeypatc
         collectors._coupangeats_scope({**account, "branch": "other"}, "2026-09-01", "2026-09-02")
 
 
-def test_coupangeats_candidate_does_not_replace_existing_records(tmp_path, monkeypatch):
+@pytest.fixture
+def authenticated_collector(monkeypatch):
     import sys
     from types import SimpleNamespace
 
@@ -462,6 +465,9 @@ def test_coupangeats_candidate_does_not_replace_existing_records(tmp_path, monke
     monkeypatch.setattr(collectors, "_security_block_result", lambda page, response: None)
     monkeypatch.setattr(collectors, "_dismiss_optional_prompts", lambda page, config: None)
     monkeypatch.setattr(collectors, "_save_session_state", lambda context, service, account: None)
+
+
+def test_coupangeats_candidate_does_not_replace_existing_records(tmp_path, monkeypatch, authenticated_collector):
     monkeypatch.setattr(collectors, "_collect_section", lambda *args: ([{"주문번호": "one", "주문일": "2026-09-01", "주문금액": "12000"}], "table"))
     monkeypatch.setattr(collectors, "normalize_record", lambda service, kind, row, business, branch: {"kind": kind})
     monkeypatch.setattr(collectors, "coupangeats_sales_candidate", lambda *args: (_ for _ in ()).throw(PermissionError("private root")))
@@ -578,3 +584,64 @@ def test_coupangeats_download_uses_original_browser_artifact(tmp_path, monkeypat
     with pytest.raises(TimeoutError):
         collectors.coupangeats_query_or_download(Page(), tmp_path, time.monotonic() + 0.02)
     assert not list(tmp_path.iterdir())
+
+
+def test_account_reviews_only_is_partial_and_empty_sales_is_unverified(tmp_path, monkeypatch, authenticated_collector):
+    monkeypatch.setattr(collectors, "_collect_section", lambda *args: ([{"리뷰내용": "ok"}], "review_cards") if args[-1] == "reviews" else ([], "SECTION_NOT_FOUND" if args[-1] == "settlements" else "table"))
+    monkeypatch.setattr(collectors, "normalize_record", lambda service, kind, row, business, branch: {"kind": kind})
+    monkeypatch.setattr(collectors, "coupangeats_sales_candidate", lambda *args: (_ for _ in ()).throw(PermissionError("private root")))
+    monkeypatch.setenv("YEOLJEONG_COUPANGEATS_SALES_PRIVATE_ROOT", str(tmp_path))
+    account = _candidate_account(monkeypatch)
+    result = collectors.collect_account(account, "", "2026-09-01", "2026-09-01")
+    assert result["status"] == "partial"
+    assert result["records"]["reviews"]
+    assert result["diagnostics"]["collection_results"] == result["collection_results"]
+    assert result["collection_results"]["sales"]["status"] == "partial"
+    assert result["collection_results"]["sales"]["next_action"] == "verify_source_zero_or_retry"
+    assert result["collection_results"]["settlements"]["status"] == "failed"
+    assert result["collection_results"]["settlements"]["next_action"] == "restore_section_and_retry"
+
+
+def test_collection_coverage_never_certifies_unqueried_or_empty_sources():
+    kinds = ("sales", "settlements")
+    assert collectors._collection_results({}, {}, kinds) == {
+        kind: {"status": "partial", "next_action": "verify_source_zero_or_retry"}
+        for kind in kinds
+    }
+    for source in ("table", "download"):
+        result = collectors._collection_results({"sales": []}, {"sales": source}, ("sales",))
+        assert result["sales"]["status"] == "partial"
+    result = collectors._collection_results(
+        {"sales": [{"id": "one"}]}, {"sales": "SECTION_NOT_FOUND"}, ("sales",)
+    )
+    assert result["sales"]["status"] == "failed"
+
+
+def test_collection_coverage_complete_requires_each_source_and_rows():
+    kinds = collectors.DELIVERY_RECORD_TYPES
+    result = collectors._collection_results(
+        {kind: [{"id": kind}] for kind in kinds},
+        {kind: "download" for kind in kinds}, kinds,
+    )
+    assert all(item == {"status": "complete", "next_action": "reconcile_source_api_db"}
+               for item in result.values())
+
+
+@pytest.mark.parametrize(
+    "rows,source,expected",
+    [([{"id": "one"}], "download", "succeeded"),
+     ([], "SECTION_NOT_FOUND", "failed"),
+     ([], "download", "partial")],
+)
+def test_account_status_requires_coverage_of_all_sections(
+    monkeypatch, authenticated_collector, rows, source, expected,
+):
+    monkeypatch.delenv("YEOLJEONG_COUPANGEATS_SALES_PRIVATE_ROOT", raising=False)
+    monkeypatch.setattr(collectors, "_collect_section", lambda *args: (rows, source))
+    monkeypatch.setattr(collectors, "normalize_record", lambda *args: {"id": "one"})
+    result = collectors.collect_account(
+        _candidate_account(monkeypatch), "", "2026-09-01", "2026-09-01",
+    )
+    assert result["status"] == expected
+    assert result["error_code"] == ("" if expected == "succeeded" else "INCOMPLETE_COLLECTION")
+    assert set(result["collection_results"]) == set(collectors.DELIVERY_RECORD_TYPES)

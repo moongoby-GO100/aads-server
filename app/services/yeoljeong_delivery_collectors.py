@@ -891,6 +891,28 @@ def _collect_section(
     return [], "NO_EXPORT_OR_TABLE"
 
 
+def _collection_results(
+    records: dict[str, list[dict[str, Any]]], diagnostics: dict[str, Any],
+    expected_kinds: Any,
+) -> dict[str, dict[str, str]]:
+    """Report extraction coverage, not a financial reconciliation certificate.
+
+    An empty table/download does not prove that the requested day had no rows.
+    Until independent source-zero evidence exists, leave it partial.
+    """
+    results = {}
+    for kind in expected_kinds:
+        source = diagnostics.get(kind)
+        if source in {"SECTION_NOT_FOUND", "NO_EXPORT_OR_TABLE"}:
+            status, action = "failed", "restore_section_and_retry"
+        elif records.get(kind) and source in {"table", "list_table", "review_cards", "download"}:
+            status, action = "complete", "reconcile_source_api_db"
+        else:
+            status, action = "partial", "verify_source_zero_or_retry"
+        results[kind] = {"status": status, "next_action": action}
+    return results
+
+
 def collect_account(
     account: dict[str, Any],
     password: str,
@@ -985,10 +1007,15 @@ def collect_account(
             _save_session_state(context, service, account)
             browser.close()
             browser = None
-            total = sum(len(rows) for rows in collected.values())
+            coverage = _collection_results(collected, diagnostics, config["sections"])
+            diagnostics["collection_results"] = coverage
+            statuses = {item["status"] for item in coverage.values()}
+            status = ("succeeded" if statuses == {"complete"} else
+                      "failed" if statuses == {"failed"} else "partial")
             return {
-                "status": "succeeded" if total else "partial",
-                "error_code": "" if total else "AUTHENTICATED_NO_ROWS",
+                "status": status,
+                "error_code": "" if status == "succeeded" else "INCOMPLETE_COLLECTION",
+                "collection_results": coverage,
                 "records": collected,
                 "diagnostics": diagnostics,
             }
