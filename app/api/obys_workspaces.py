@@ -1630,12 +1630,14 @@ def _contract_break_minutes(text, *, need_keyword=False):
 
 
 def _contract_period(terms):
+    # start_date is required; an empty end_date means an open-ended contract (no fixed term).
     period = {}
     for key in ("start_date", "end_date"):
         try:
             period[key] = date.fromisoformat(str(terms.get(key) or "")[:10]).isoformat()
         except ValueError:
             period[key] = None
+    period["open_ended"] = bool(period["start_date"]) and not str(terms.get("end_date") or "").strip()
     return period
 
 
@@ -1687,7 +1689,7 @@ def contract_schedule_suggestion(terms, pattern=None):
         "출근시각": bool(default["start_time"]),
         "퇴근시각": bool(default["end_time"]),
         "휴게시간": default["break_minutes"] is not None and all(v.get("break_minutes") is not None for v in per_day.values()),
-        "계약기간": bool(period["start_date"] and period["end_date"]),
+        "계약기간": bool(period["start_date"] and (period["end_date"] or period["open_ended"])),
     }
     suggested = {"workdays": sorted(workdays), "weekdays": {k: per_day[k] for k in sorted(per_day)}, "default": default}
     return suggested, [field for field in CONTRACT_SCHEDULE_FIELDS if not filled[field]], filled

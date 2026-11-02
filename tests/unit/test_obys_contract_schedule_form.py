@@ -25,7 +25,7 @@ def _free(clock):
 REAL = {
     "홍석빈": {"daily_work_schedule": "\n".join(f"{d} 09:00-21:00 (휴게 90분, 실근로 10시간 30분)" for d in "월화수목일"),
               "work_days": "주 5일(월·화·수·목·일)", "work_time": "09:00-21:00", "rest_time": "90분",
-              "start_date": "2026-01-01", "end_date": "2026-12-31"},
+              "start_date": "2026-10-01", "end_date": ""},
     "김민우": _free("09:00~21:00"),
     "하영훈": _free("22:00~익일 10:00"),
     "양재혁": _free("21:00~익일 09:00"),
@@ -49,6 +49,8 @@ def test_regular_contract_is_complete():
     result = _result("홍석빈")
     assert result["missing"] == []
     assert all(result["filled_from_contract"].values())
+    # 종료일이 비어 있으면 기간의 정함이 없는 계약: 부족 항목이 아니다
+    assert result["contract_period"] == {"start_date": "2026-10-01", "end_date": None, "open_ended": True}
     assert result["suggested"]["workdays"] == [0, 1, 2, 3, 6]
     expected = {"start_time": "09:00", "end_time": "21:00", "break_minutes": 90, "overnight": False}
     assert result["suggested"]["default"] == expected
@@ -144,7 +146,7 @@ async def test_preview_response_is_backward_compatible_and_adds_form_keys(monkey
     assert employee["missing"] == ["근무요일", "계약기간"]
     assert employee["suggested"]["default"]["start_time"] == "09:00"
     assert employee["filled_from_contract"]["휴게시간"] is True
-    assert employee["contract_period"] == {"start_date": None, "end_date": None}
+    assert employee["contract_period"] == {"start_date": None, "end_date": None, "open_ended": False}
     json.dumps(employee)
 
 
@@ -273,7 +275,7 @@ def test_missing_badges_and_highlight(tmp_path):
     _run(tmp_path, r"""
 form=makeForm([]);
 const t=await show();const [hong,kim]=t.cards;
-assert.equal(countOf(kim.html,NOT_IN),3);
+assert.equal(countOf(kim.html,NOT_IN),2);
 assert(kim.html.includes('계약서에 없는 항목: 근무요일, 계약기간'));
 assert(kim.html.includes('\x3cfieldset class=\x22cf-missing\x22>\x3clegend>근무요일 \x3cspan class=\x22badge warn\x22>'));
 assert(kim.html.includes('class=\x22field cf-missing\x22 name=\x22date_from\x22'));
@@ -285,7 +287,7 @@ apiResult={employees:[{employee_email:'z@x.test',employee_name:'제로',contract
   suggested:{workdays:[],weekdays:{},default:{start_time:null,end_time:null,break_minutes:null,overnight:false}},
   missing:['근무요일','출근시각','퇴근시각','휴게시간','계약기간'],filled_from_contract:{}}]};
 const zt=await show();const z=zt.cards[0];
-assert.equal(countOf(z.html,NOT_IN),6);
+assert.equal(countOf(z.html,NOT_IN),5);
 for(const n of ['cf_start','cf_end','cf_break'])assert(z.html.includes('class=\x22field cf-missing\x22 name=\x22'+n+'\x22'));
 assert.equal(z.ctl('cf_start').value,'');assert.deepEqual(z.checkedDays(),[]);
 let removed=0;const s=z.ctl('cf_start');s.classList={remove(){removed++}};s.value='08:30';
@@ -401,4 +403,47 @@ assert.equal(form.elements.start_time.value,'09:00');assert.equal(form.elements.
 assert.equal(t.cards.length,2);
 form=makeForm([]);t=await show();assert.equal(t.cards.length,4);assert.equal(form.events,0);
 form=null;t=await show(YANG);assert.equal(t.cards.length,1);assert.equal(t.cards[0].ctl('cf_start').value,'21:00');
+""")
+
+
+# ------------------------------------------------------------------ 종료일 없는 계약(기간의 정함 없음)
+@pytest.mark.parametrize("terms,missing_period,open_ended", [
+    ({"start_date": "2026-10-01", "end_date": ""}, False, True),
+    ({"start_date": "2026-10-01"}, False, True),
+    ({"start_date": "2026-10-01", "end_date": None}, False, True),
+    ({"start_date": "2026-10-01", "end_date": "2027-09-30"}, False, False),
+    ({"start_date": "2026-10-01", "end_date": "invalid"}, True, False),
+    ({"end_date": "2027-09-30"}, True, False),
+    ({"start_date": "", "end_date": ""}, True, False),
+    ({"start_date": "2026-13-45", "end_date": ""}, True, False),
+])
+def test_missing_or_invalid_contract_period(terms, missing_period, open_ended):
+    _, missing, filled = api.contract_schedule_suggestion(terms)
+    assert ("계약기간" in missing) is missing_period
+    assert filled["계약기간"] is (not missing_period)
+    assert api._contract_period(terms)["open_ended"] is open_ended
+
+
+def test_open_ended_regular_contract_has_nothing_missing_and_ui_shows_info(tmp_path):
+    terms = dict(REAL["홍석빈"], end_date="")
+    assert api.contract_schedule_suggestion(terms)[1] == []
+    _need_node()
+    _run(tmp_path, r"""
+const c=(await show()).cards[0];
+assert(c.html.includes('종료일 없음(기간의 정함 없음)'));
+assert(c.html.includes('이번 근무표 등록 시작일'));
+assert(c.html.includes('이번 근무표 등록 종료일'));
+assert(!c.html.includes(NOT_IN));assert(!c.html.includes('cf-missing'));
+assert(c.html.includes('class=\x22field\x22 name=\x22date_to\x22'));
+assert(c.html.includes('계약 기간 2026-10-01 ~ 종료일 없음(기간의 정함 없음)'));
+""", [_result("홍석빈", terms)])
+
+
+def test_freelancer_without_start_date_flags_only_start_not_end(tmp_path):
+    _need_node()
+    _run(tmp_path, r"""
+const kim=(await show()).cards[1];
+assert(kim.html.includes('class=\x22field cf-missing\x22 name=\x22date_from\x22'));
+assert(kim.html.includes('class=\x22field\x22 name=\x22date_to\x22'));
+assert(!kim.html.includes('종료일 없음(기간의 정함 없음)'));
 """)
