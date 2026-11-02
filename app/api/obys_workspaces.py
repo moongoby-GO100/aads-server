@@ -1596,6 +1596,103 @@ def contract_schedule_pattern(payload):
     return {}
 
 
+CONTRACT_SCHEDULE_FIELDS = ("근무요일", "출근시각", "퇴근시각", "휴게시간", "계약기간")
+_CONTRACT_CLOCK = re.compile(r"([0-2]\d:[0-5]\d)\s*[-~–]\s*(?:익일\s*)?([0-2]\d:[0-5]\d)")
+_CONTRACT_WEEKDAYS = "월화수목금토일"
+
+
+def _contract_clock_range(text):
+    """First valid clock range such as '09:00~21:00' or '22:00~익일 10:00'."""
+    for match in _CONTRACT_CLOCK.finditer(str(text or "")):
+        try:
+            start, end = time.fromisoformat(match[1]), time.fromisoformat(match[2])
+        except ValueError:
+            continue
+        if start != end:
+            return {"start_time": match[1], "end_time": match[2], "overnight": end < start}
+    return None
+
+
+def _contract_break_minutes(text, *, need_keyword=False):
+    """Break length from 'N시간'/'N분' text. work_time also states worked hours, so it needs '휴게'."""
+    text = str(text or "")
+    if "휴게" in text:
+        text = text.split("휴게", 1)[1]
+    elif need_keyword:
+        return None
+    text = re.split(r"[,)]|실근로|제외|\n", text, maxsplit=1)[0]
+    hours = re.search(r"(\d+(?:\.\d+)?)\s*시간", text)
+    minutes = re.search(r"(\d+)\s*분", text)
+    if not hours and not minutes:
+        return None
+    total = (round(float(hours[1]) * 60) if hours else 0) + (int(minutes[1]) if minutes else 0)
+    return total if 0 <= total < 1440 else None
+
+
+def _contract_period(terms):
+    period = {}
+    for key in ("start_date", "end_date"):
+        try:
+            period[key] = date.fromisoformat(str(terms.get(key) or "")[:10]).isoformat()
+        except ValueError:
+            period[key] = None
+    return period
+
+
+def contract_schedule_suggestion(terms, pattern=None):
+    """Prefill hints for the admin form. Weekdays are never invented: only explicit ones are returned.
+
+    Returns (suggested, missing, filled). Unlike contract_schedule_pattern this keeps the parseable
+    '1회 기준' clock range and break of freelancer (용역) contracts, whose workdays are truly missing.
+    """
+    terms = terms if isinstance(terms, dict) else {}
+    pattern = contract_schedule_pattern(terms) if pattern is None else pattern
+    daily, work_time = str(terms.get("daily_work_schedule") or ""), str(terms.get("work_time") or "")
+    general_break = _contract_break_minutes(work_time, need_keyword=True)
+    if general_break is None:
+        general_break = _contract_break_minutes(terms.get("rest_time"))
+    per_day, workdays = {}, set()
+    for line in daily.splitlines():
+        days = re.match(r"^\s*([월화수목금토일 ·,]+)\s+", line)
+        if not days:
+            continue
+        indexes = [_CONTRACT_WEEKDAYS.index(d) for d in days[1] if d in _CONTRACT_WEEKDAYS]
+        workdays.update(indexes)
+        clock = _contract_clock_range(line)
+        if clock:
+            value = dict(clock, break_minutes=_contract_break_minutes(line) if "휴게" in line else None)
+            per_day.update({index: dict(value) for index in indexes})
+    for index, value in (pattern or {}).items():
+        per_day[int(index)] = dict(value)
+        workdays.add(int(index))
+    freelancer = any(word in daily + work_time + str(terms.get("work_days") or "") for word in ("상호 협의", "해당 없음", "회차별"))
+    days_text = str(terms.get("work_days") or "")
+    listed = re.search(r"\(([월화수목금토일 ·,]+)\)", days_text) or re.fullmatch(r"([월화수목금토일 ·,]+)", days_text)
+    if listed and not (freelancer and not per_day):
+        workdays.update(_CONTRACT_WEEKDAYS.index(d) for d in listed[1] if d in _CONTRACT_WEEKDAYS)
+    first = per_day[min(per_day)] if per_day else None
+    clock = _contract_clock_range(work_time)
+    default = dict(first or clock or {"start_time": None, "end_time": None, "overnight": False})
+    default.setdefault("break_minutes", None)
+    if default["break_minutes"] is None:
+        default["break_minutes"] = general_break
+    for value in per_day.values():
+        if value.get("break_minutes") is None:
+            value["break_minutes"] = general_break
+    if not per_day and workdays and default["start_time"] and default["end_time"]:
+        per_day = {index: dict(default) for index in workdays}
+    period = _contract_period(terms)
+    filled = {
+        "근무요일": bool(workdays),
+        "출근시각": bool(default["start_time"]),
+        "퇴근시각": bool(default["end_time"]),
+        "휴게시간": default["break_minutes"] is not None and all(v.get("break_minutes") is not None for v in per_day.values()),
+        "계약기간": bool(period["start_date"] and period["end_date"]),
+    }
+    suggested = {"workdays": sorted(workdays), "weekdays": {k: per_day[k] for k in sorted(per_day)}, "default": default}
+    return suggested, [field for field in CONTRACT_SCHEDULE_FIELDS if not filled[field]], filled
+
+
 CONTRACT_SCHEDULE_SQL = """
 SELECT DISTINCT ON (lower(employee_email)) * FROM yeoljeong_contracts
 WHERE tenant_id=$1::uuid AND business_id=$2 AND status='signed' AND deleted_at IS NULL
@@ -1626,11 +1723,14 @@ async def _contract_schedules(business_id, payload, user, *, apply=False):
                 contract = dict(row)
                 terms = _schedule_json(contract.get("contract_payload"))
                 pattern = contract_schedule_pattern(terms)
+                suggested, missing, filled = contract_schedule_suggestion(terms, pattern)
                 result = {"employee_email": contract["employee_email"], "employee_name": contract.get("employee_name", ""),
                     "contract_type": contract.get("contract_type"), "pattern": pattern,
                     "basis": "\n".join(str(terms.get(k) or "") for k in ("daily_work_schedule", "work_days", "work_time", "rest_time")),
                     "created": 0, "updated": 0, "skipped": 0, "unparseable": int(not bool(pattern)), "schedules": [],
-                    "reason": "" if pattern else "계약서에 고정 근무일 없음(용역·상호 협의) — 직접 등록"}
+                    "reason": "" if pattern else "계약서에 고정 근무일 없음(용역·상호 협의) — 직접 등록",
+                    "suggested": suggested, "missing": missing, "filled_from_contract": filled,
+                    "contract_period": _contract_period(terms)}
                 try:
                     start = max(payload.date_from, date.fromisoformat(str(terms.get("start_date") or payload.date_from)[:10]))
                     end = min(payload.date_to, date.fromisoformat(str(terms.get("end_date") or payload.date_to)[:10]))
