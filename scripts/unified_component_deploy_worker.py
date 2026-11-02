@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -141,6 +142,34 @@ def run_command(target: ExecutionTarget, command: tuple[str, ...], timeout: int 
     return subprocess.run(argv, text=True, capture_output=True, timeout=timeout)
 
 
+def prepare_release_target(target: ExecutionTarget, release_sha: str, run_id: int) -> ExecutionTarget:
+    """ACCT builds and its deploy script must both come from the committed release.
+
+    The shared checkout can contain other sessions' work. Preserve it and keep
+    the existing clean-repository preflight on an isolated release worktree.
+    """
+    if target.key != ("ACCT", "app") or target.executor != "local":
+        return target
+    if len(release_sha) != 40 or any(c not in "0123456789abcdef" for c in release_sha):
+        raise RuntimeError("ACCT release SHA must be a full lowercase Git commit id")
+    root = Path(os.environ.get("AADS_COMPONENT_RELEASE_ROOT", "/root/aads/state/component-releases"))
+    root.mkdir(parents=True, exist_ok=True)
+    release = root / f"acct-app-{int(run_id)}-{release_sha[:12]}"
+    if release.is_symlink():
+        raise RuntimeError("release worktree must not be a symlink")
+    if not release.exists():
+        result = run_command(target, ("git", "-C", target.repo_path, "worktree", "add", "--detach", str(release), release_sha))
+        if result.returncode:
+            raise RuntimeError(f"release worktree creation failed: {result.stderr.strip()[:500]}")
+    head = run_command(target, ("git", "-C", str(release), "rev-parse", "HEAD"))
+    if head.returncode or head.stdout.strip() != release_sha:
+        raise RuntimeError("release worktree HEAD does not match requested SHA")
+    script = release / "scripts/deploy_acct_app_cafe24.sh"
+    if not script.is_file():
+        raise RuntimeError("ACCT deploy script is absent from release worktree")
+    return replace(target, repo_path=str(release), command=("bash", str(script)))
+
+
 def preflight(target: ExecutionTarget, release_sha: str) -> None:
     if len(release_sha) < 7 or not all(ch in "0123456789abcdefABCDEF" for ch in release_sha):
         raise RuntimeError("release SHA must be a hexadecimal Git object id")
@@ -231,6 +260,7 @@ def main() -> int:
         update_run(args.run_id, "running", "host_preflight")
         thread = threading.Thread(target=heartbeat, args=(args.run_id, target, owner, stop), daemon=True)
         thread.start()
+        target = prepare_release_target(target, row["release_sha"], args.run_id)
         preflight(target, row["release_sha"])
         current_phase = "deploying"
         update_run(args.run_id, "running", "deploying")
