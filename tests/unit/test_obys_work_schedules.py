@@ -7,9 +7,9 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 import pytest_asyncio
-import httpx
 from fastapi import FastAPI, HTTPException
 
 from app.api import obys_workspaces as api
@@ -114,7 +114,7 @@ class Connection:
         if "WITH ranked" in sql:
             return [{**r["actual_record"], "employee_email": r["employee_email"], "work_date": r["work_date"]}
                     for r in self.rows if r.get("actual_record")]
-        start, end, email, offset, tenant = args
+        start, end, email, _offset, tenant = args
         self.calls.append((sql, business, email, tenant))
         assert "s.business_id=$1" in sql and "tenant_id=$6::uuid" in sql
         return [
@@ -563,7 +563,7 @@ async def test_november_overwrite_is_visible_to_month_week_and_person(client, mo
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method,suffix", [("post", ""), ("put", "/s1")])
 async def test_single_write_never_returns_preserved_null(client, method, suffix):
-    http, user, db = client
+    http, user, _db = client
     user["current_membership"]["role"] = "owner"
     response = await http.request(method, BASE + suffix, json={
         "employee_email": "staff@example.com", "work_date": "2026-11-02",
@@ -577,11 +577,14 @@ async def test_single_write_never_returns_preserved_null(client, method, suffix)
 async def test_save_keep_and_overwrite_postgres_temp_fixture(monkeypatch):
     """Run production INSERT against a temporary table; never write business data."""
     import os
+
     import asyncpg
     dsn = os.getenv("AADS_TEST_POSTGRES_DSN")
     if not dsn:
         pytest.skip("AADS_TEST_POSTGRES_DSN not configured")
     conn = await asyncpg.connect(dsn, timeout=5)
+    transaction = conn.transaction()
+    await transaction.start()
     try:
         # Use the migration's actual schema, replacing only the business FK.
         migration = Path("migrations/20261030_obys_work_schedules.sql").read_text()
@@ -605,4 +608,5 @@ async def test_save_keep_and_overwrite_postgres_temp_fixture(monkeypatch):
         assert await conn.fetchval("SELECT count(*) FROM yeoljeong_work_schedules") == 1
         assert api._attendance_audit.await_count == 2
     finally:
+        await transaction.rollback()
         await conn.close()

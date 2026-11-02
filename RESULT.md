@@ -401,3 +401,51 @@ change_summary: 반려된 계정 식별·quota 귀속·출시일 보존 구현�
 
 - 최종 DB 기록 실측: pipeline_jobs/ledger 제한 실행은 TimeoutError 및 timeout exit 124. runner_handover_write.py로 entry_key=runner:runner-cf632cb5 upsert/readback 시도는 7초 timeout, 기록·재조회 미확인. tenant_id는 확인되지 않아 빈 값으로 전달했으며 임의 실제 tenant를 지정하지 않음. 핸드오버 DB 미기록.
 - 최종 git diff --check exit 0. 변경 파일은 RESULT.md와 위 코드/테스트 5파일, 총 6파일.
+
+
+## 근무표 수정 재등록 잔여 결함 교정 결과 (runner-8a862568)
+
+- document_key: obys-schedule-reregistration-rework-result. source_task_id: runner-8a862568. change_summary: 수정 버튼 회귀 누락과 저장 응답 미확정 및 재조회 실패 표시를 교정하고 검증 한계를 기록한다.
+- 정본 미등록(미완료), 열람 링크 미제공. 기존 RESULT의 내용은 보존하고 이번 결과만 추가한다. DB 연결 권한과 API 주소/인증 설정이 없어 정본 초안 등록을 실행할 수 없다.
+- 상태: 코드 수정 완료, 운영 문제 해결 확정 불가. 최초 git status --short는 clean, HEAD와 로컬 origin/main은 모두 86770fb8de087d74c55f70b585b3e56929de4989. 기존 격리 worktree를 그대로 사용했다. 원격 fetch 및 새 worktree 생성은 수행하지 않아 원격 최신 여부는 미확인이다.
+
+### STEP 0 기존 구현 및 변경 범위
+
+- [유지] app/api/obys_workspaces.py: WorkScheduleIn/WorkScheduleBulkIn, _schedule_values, expand_work_schedules, _save_work_schedule, _write_work_schedules, list_work_schedules, create_work_schedule, bulk_work_schedules, update_work_schedule, delete_work_schedule, contract_schedule_pattern/suggestion, _contract_schedules 및 preview/apply 엔드포인트. 현재 HEAD는 bulk preserve_existing 전달과 빈 cells/기간/요일 검증 및 보존 반환 집계를 이미 포함한다. 원작업 API diff를 중복 적용하지 않았다.
+- [유지] DB 접점 yeoljeong_work_schedules의 사업자/직원/일자 충돌키와 soft-delete 조건, yeoljeong_contracts 읽기 및 _attendance_audit. 스케줄러 변경 없음. 단일 POST/PUT, 개인별/주간/월간 GET 및 실제 출퇴근 데이터 보존 회귀를 유지한다.
+- [수정] app/static/apps/obys/admin.html bindContractFormsV41: 정수/비음수/요청 수 정합성에 더해 overwrite 응답의 preserved=0 검증. 성공 화면의 0칸 실패를 0칸 미처리로 변경. 첫 그룹 응답 실패/소실도 재조회하며 DB 저장 여부 미확정과 동일 값 재시도를 안내한다. loadLiveRoute가 내부 처리하는 state.liveError도 확인하여 저장 결과와 재조회 실패를 별도 표시한다.
+- [유지] contractFormHtmlV41/read/cells/bulkPayload, 수정·재등록 확인 버튼, 제외 요일 보존 안내, 계약서/서명/초대 이메일 선택화 및 점포 선택 구현. 제외 요일을 삭제하는 동작은 추가하지 않았다.
+- [수정/신규] tests/unit/test_obys_contract_schedule_form.py: makeTarget이 실제 update 버튼을 반환하고 radio 선택/confirm 취소를 구현. 요청 cells로 상태 저장/재조회하며 시간·요일 변경, 선택 제외 요일 보존, 재시도 멱등성, 첫 요청 실패, 저장 후 응답 소실, 재조회 실패, 음수/null/소수/문자열/집계 초과/overwrite 보존 응답을 검증한다. 실제 DOM Chromium 합성 테스트도 추가했다(AADS_TEST_BROWSER=1 명시 실행용). 기존 lint 지적도 같은 테스트 파일 안에서 정리했다.
+- [수정] tests/unit/test_obys_work_schedules.py: 기존 PostgreSQL TEMP TABLE fixture를 명시 transaction/rollback으로 감쌌다. 기존 audit와 upsert 보존/덮어쓰기 검증은 유지. 파일 내 import 및 미사용 변수 lint 정리.
+- [수정 사유] 기존 RESULT.md는 지시된 분류/명령/실패/미검증 결과를 남기기 위해 추가 기록한다. AAG는 부분 그래프이고 실제 수정 대상은 지시서가 지정한 원작업 4개 파일이다. 원작업은 git show --stat 및 git diff 401bca12^ 401bca12로 확인했고, 현재 코드와 git diff 401bca12 HEAD를 비교했다. 추가 기능 모듈/경로는 만들지 않았다.
+- [삭제] 없음. 호출처 삭제 영향 없음. 롤백은 이번 4개 파일 변경분만 역적용하며 업무DB 복원 작업은 없다.
+
+### 검수 사실오인 증거
+
+- 실행: git show 401bca12^:app/api/obys_workspaces.py (1473~1507행 조회).
+- 부모 코드의 _save_work_schedule 서명에 이미 preserve_existing=False가 있고 DO NOTHING RETURNING * 및 row is None일 때 None 반환이 존재한다. 따라서 해당 인자를 원작업 신규 추가로 보아 TypeError를 예상한 지적은 부모 코드와 불일치한다. 리뷰 게이트를 우회하지 않았다.
+- 현재 HEAD는 overwrite에서 예상치 못한 None 반환을 오류로 처리하는 후속 교정도 포함한다. 원작업 변경을 맹목 cherry-pick하지 않았다.
+
+### 실행 검증
+
+- 최초 공식 venv pytest는 JWT_SECRET_KEY 미설정으로 수집 오류 2건. 테스트 전용 환경값만 지정한 후 재실행했다(운영 시크릿 변경 없음).
+- 최종 명령: JWT_SECRET_KEY=<테스트 전용 값> /root/aads/aads-server/.venv/bin/python -m pytest tests/unit/test_obys_work_schedules.py tests/unit/test_obys_contract_schedule_form.py tests/unit/test_obys_contract_schedule_picker.py tests/unit/test_obys_contract_schedule_autofill.py -q. 최종 숫자는 아래 추기.
+- PostgreSQL fixture는 AADS_TEST_POSTGRES_DSN 미설정으로 skip. 실제 PostgreSQL rollback/upsert 검증 미실행이며 성공으로 계산하지 않는다. 업무DB 테스트 write 없음.
+- Chromium 합성 테스트는 추가 직후 기본 실행에서 실제 launch 시도: TargetClosedError, sandbox_host_linux.cc: Operation not permitted로 실패(당시 110 passed, 1 failed, 1 skipped). 이후 별도 통합 실행 opt-in으로 분리했다. 설치는 확인됐으므로 설치 부재로 처리하지 않았다. 일반 Chromium channel 대안도 시도했으나 crashpad setsockopt: Operation not permitted로 실패. 브라우저 E2E 미실행(실제 여정 진입 불가), 화면 캡처 없음. Node 합성 클릭 회귀는 단위 테스트 통과에 포함된다.
+- /root/aads/aads-server/.venv/bin/python -m ruff check tests/unit/test_obys_work_schedules.py tests/unit/test_obys_contract_schedule_form.py: 초기 기존 지적 7개 확인 후 정리, 최종 결과 아래 추기.
+- /root/aads/aads-server/.venv/bin/python -m compileall -q tests/unit/test_obys_work_schedules.py tests/unit/test_obys_contract_schedule_form.py 및 scripts/dup_guard.py --paths <위 코드/테스트 3개 파일>, git diff --check 실행. 최종 결과 아래 추기.
+- 빌드 미실행: 승인 후 Runner 빌드 검증 대상. commit/push/build/deploy 명령 미실행. 새 커밋/푸시 URL 없음. 저장소 참조: https://github.com/moongoby-GO100/aads-server (원격 설정 조회만 수행).
+
+### 운영 접근 및 미확인 사항
+
+- /root/aads/AGENTS.md와 저장소 AGENTS.md 읽음. 하위 AGENTS.md 없음. 공유 dirty/HANDOVER.md 변경 없음.
+- 오류사전: printf <증상> | timeout 65 /root/aads/aads-server/.venv/bin/python scripts/error_book.py match - → exit 2, psql 실행파일 없음. 등록은 하지 않았다. 실제 직원 원인이 확인되지 않아 오류사전에 추측을 쓰지 않았다.
+- 활성 pipeline_jobs/동일파일 및 ledger 충돌, 승인 browser recipe/Vault: PGHOST/PGPORT 연결 대안을 asyncpg로 시도했으나 PermissionError [Errno 1] Operation not permitted. 조회 완료/무충돌로 보고하지 않는다. Vault 원문·PII·토큰 출력 없음.
+- 승인 SSH: ssh -o BatchMode=yes -o ConnectTimeout=8 server-114 'timeout 30 hostname' → exit 255, socket Operation not permitted (114.207.244.86:7916). 명시 IP/7916 대안도 동일 실패. 구244/jinah 접속 없음.
+- HTTP 폴백: curl --connect-timeout 5 --max-time 10 -I http://114.207.244.86 → exit 7 연결 실패.
+- API health 폴백: 같은 curl 옵션으로 https://114.207.244.86/api/health → exit 7 연결 실패. 실제 배포 health 경로 확정 전의 연결 시도이며 endpoint 부재로 단정하지 않는다.
+- 컨테이너 폴백: timeout 10 docker ps --format '{{.Names}}' → exit 1, docker.sock permission denied. 원격 SSH도 실패하여 acct-pg/obys 읽기 불가.
+- 운영 배포 SHA, ACCT/app 저장·조회 경로와 AADS 코드 동일성, 대상 회사/양재혁 identity/2026-11/branch/key, #attendance 실제 저장·재조회·새로고침 및 #employees 성신여대점 초대 회사/점포 일치 화면은 모두 미검증. 직원 실제 일정·서명·출퇴근 기록 수정 없음. 요일·시간의 정답은 임의 설정하지 않았다.
+- 핸드오버: scripts/runner_handover_write.py의 http_fallback_write를 entry_key=runner:runner-8a862568로 호출 → ok=false, http_fallback_unconfigured (AADS_API_URL 및 쓰기키/monitor키 미설정). DB도 접근 실패하여 쓰기/재조회 불가. handover_db_write_failed: 핸드오버 DB 미기록. 서버 이벤트 원장 자체의 기록도 연결 불가로 미확인. HANDOVER.md는 수정하지 않았다.
+
+- 최종 검증 확정: 위 4개 공식 단위 파일 **118 passed, 2 skipped in 9.37s** (PostgreSQL DSN 미설정 1개, opt-in Chromium 통합 1개). ruff **All checks passed**, compileall exit 0, dup_guard exit 0, git diff --check exit 0. Node의 전체 admin script 구문 검사도 통과 테스트에 포함된다. 최종 변경 파일은 RESULT.md와 admin.html 및 테스트 2개, 총 4개다.
