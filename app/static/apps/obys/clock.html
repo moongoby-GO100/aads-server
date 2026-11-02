@@ -120,6 +120,7 @@
     <div class="elapsed" id="todayElapsed" hidden></div>
     <div id="todayVerdict"></div>
     <p class="muted" id="todayReason"></p>
+    <p class="muted">현재는 수기와 위치 확인을 병행합니다. 위치는 보조 자료이며, 기록은 관리자 확인 후 확정됩니다.</p>
   </section>
 
   <section id="branchView" class="panel" hidden>
@@ -148,6 +149,7 @@
   <div class="spacer"></div>
 
   <button id="clockBtn" class="big-btn" type="button" hidden>출근</button>
+  <button id="manualClockBtn" class="btn" type="button" hidden>위치 없이 출근 기록</button>
 
   <section id="installView" class="panel" hidden>
     <h2>홈 화면에 설치</h2>
@@ -172,7 +174,7 @@
   const BRANCH_KEY = "obys_clock_branch_id";
   const DECLINED_KEY = "obys_clock_location_declined";  // "동의하지 않음" 을 고른 기기
   const $ = id => document.getElementById(id);
-  const state = { businessId: "", clock: null, pending: null, timer: null, installPrompt: null };
+  const state = { businessId: "", clock: null, pending: null, timer: null, installPrompt: null, loadId: 0, loading: false };
 
   function cookieValue(name) {
     const target = `${encodeURIComponent(name)}=`;
@@ -239,7 +241,7 @@
   }
   function verdictBadge(record) {
     if (!record) return "";
-    if (record.status === "approved") return '<span class="badge ok">자동 확정</span>';
+    if (record.status === "approved") return '<span class="badge ok">확정</span>';
     if (record.status === "rejected") return '<span class="badge warn">반려</span>';
     if (record.geofence_result === "outside") return '<span class="badge warn">확인필요 · 매장 반경 밖</span>';
     return '<span class="badge warn">확인필요</span>';
@@ -267,6 +269,7 @@
     show("consentView", needsConsent);
     show("todayView", !needsConsent);
     show("clockBtn", !needsConsent);
+    show("manualClockBtn", !needsConsent && consentAgreed());
     $("consentToggleBtn").textContent = consentAgreed() ? "위치 동의 철회" : "위치 동의하기";
     show("consentToggleBtn", !needsConsent);
 
@@ -289,7 +292,13 @@
     const btn = $("clockBtn");
     btn.textContent = open ? "퇴근" : "출근";
     btn.classList.toggle("out", Boolean(open));
-    btn.disabled = false;
+    btn.disabled = clockSaving || state.loading;
+    $("manualClockBtn").textContent = open ? "위치 없이 퇴근 기록" : "위치 없이 출근 기록";
+    for (const id of ["manualClockBtn", "businessSelect", "branchSelect", "refreshBtn", "consentToggleBtn",
+                      "consentAgreeBtn", "consentDeclineBtn", "retryLocationBtn", "withoutLocationBtn", "retryBtn"]) {
+      $(id).disabled = clockSaving;
+    }
+    $("manualClockBtn").disabled = clockSaving || state.loading;
 
     const branches = clock.branches || [];
     show("branchView", !open && branches.length > 1);
@@ -303,12 +312,25 @@
 
   async function loadState() {
     clearError();
+    const businessId = state.businessId;
+    const loadId = ++state.loadId;
+    state.loading = true;
+    $("clockBtn").disabled = true;
+    $("manualClockBtn").disabled = true;
     try {
-      state.clock = await api(`/${encodeURIComponent(state.businessId)}/attendance/clock/state`);
+      const clock = await api(`/${encodeURIComponent(businessId)}/attendance/clock/state`);
+      if (loadId !== state.loadId || businessId !== state.businessId) return;
+      state.clock = clock;
       render();
     } catch (error) {
+      if (loadId !== state.loadId || businessId !== state.businessId) return;
       if (error.status === 401) { show("loginView", true); return; }
       showError(error, loadState);
+    } finally {
+      if (loadId === state.loadId) {
+        state.loading = false;
+        if (state.clock?.business.id === state.businessId) render();
+      }
     }
   }
 
@@ -341,6 +363,7 @@
   }
 
   async function submitClock(withLocation) {
+    const businessId = state.businessId;
     const open = state.clock.open_record;
     const action = open ? "check-out" : "check-in";
     const body = {
@@ -368,16 +391,23 @@
         return;
       }
     }
-    await api(`/${encodeURIComponent(state.businessId)}/attendance/${action}`, { method: "POST", body: JSON.stringify(body) });
+    try {
+      await api(`/${encodeURIComponent(businessId)}/attendance/${action}`, { method: "POST", body: JSON.stringify(body) });
+    } catch (error) {
+      // 응답 유실·서버 오류에서는 저장 여부를 모른다. 재전송 대신 서버 기록부터 확인한다.
+      if (error.offline || error.status >= 500) error.uncertainCommit = true;
+      throw error;
+    }
     show("permissionView", false);
     await loadState();
   }
 
   let clockSaving = false;
   async function runClock(withLocation) {
-    if (clockSaving) return;
+    if (clockSaving || state.loading || state.clock?.business.id !== state.businessId) return;
     clockSaving = true;
     clearError();
+    render();
     const btn = $("clockBtn");
     btn.disabled = true;
     btn.textContent = "기록 중…";
@@ -385,8 +415,14 @@
       await submitClock(withLocation);
     } catch (error) {
       // 409(이미 출근·출근 없음)는 화면 상태가 낡은 것이다 — 새 상태를 받은 뒤 오류를 보인다.
-      if (error.status === 409) await loadState();
-      showError(error, () => runClock(withLocation));
+      if (error.status === 409 || error.uncertainCommit) {
+        await loadState();
+        showError(new Error(error.uncertainCommit
+          ? "서버 처리 결과를 확인해야 합니다. 다시 시도는 기록 조회만 수행합니다. 기록을 확인한 뒤 필요한 출퇴근 버튼을 눌러 주세요."
+          : error.message), loadState);
+      } else {
+        showError(error, () => runClock(withLocation));
+      }
     } finally {
       clockSaving = false;
       if (state.clock) render();
@@ -414,6 +450,7 @@
     }
   });
   $("clockBtn").addEventListener("click", () => runClock(true));
+  $("manualClockBtn").addEventListener("click", () => runClock(false));
   $("retryLocationBtn").addEventListener("click", () => { show("permissionView", false); runClock(true); });
   $("withoutLocationBtn").addEventListener("click", () => { show("permissionView", false); runClock(false); });
   $("retryBtn").addEventListener("click", () => state.pending?.());
