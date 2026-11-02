@@ -1,0 +1,291 @@
+[
+  {
+    "command": [
+      "/usr/bin/python3",
+      "tests/benchmarks/smart_browser/benchmark.py",
+      "plan"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stderr": "",
+    "stdout_sha256": "74cf0060d9a71012b768247bc0c2badd7cd08ddfeb36f5b468fb590cf44c1ca5",
+    "phase": "initial_cli_verification"
+  },
+  {
+    "command": [
+      "/usr/bin/python3",
+      "tests/benchmarks/smart_browser/benchmark.py",
+      "not-run",
+      "--adapter",
+      "browser_agent"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stderr": "",
+    "stdout_sha256": "51370d974b18fd67a72561d669efc16d22c978ecb29c28de4ad3a58e86e48b95",
+    "phase": "initial_cli_verification"
+  },
+  {
+    "command": [
+      "/usr/bin/python3",
+      "tests/benchmarks/smart_browser/benchmark.py",
+      "evaluate",
+      "tests/benchmarks/smart_browser/evidence/browser_agent-not-run.json"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stderr": "",
+    "stdout_sha256": "874a26d62fe463989300c93d83bfb7e2313f02305b2acdcf0bef8f3bad04490e",
+    "phase": "initial_cli_verification"
+  },
+  {
+    "command": [
+      "/usr/bin/python3",
+      "tests/benchmarks/smart_browser/benchmark.py",
+      "not-run",
+      "--adapter",
+      "Aside"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stderr": "",
+    "stdout_sha256": "161b52ae02876fd432f659afa12b1559da722f9458352225b8d0a5687a491847",
+    "phase": "initial_cli_verification"
+  },
+  {
+    "command": [
+      "/usr/bin/python3",
+      "tests/benchmarks/smart_browser/benchmark.py",
+      "evaluate",
+      "tests/benchmarks/smart_browser/evidence/Aside-not-run.json"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stderr": "",
+    "stdout_sha256": "f5cf486d699d033683291bf6b8853677cb3da9d4263923c26e29b40cfe0e01eb",
+    "phase": "initial_cli_verification"
+  },
+  {
+    "command": [
+      "/usr/bin/python3",
+      "tests/benchmarks/smart_browser/benchmark.py",
+      "evaluate",
+      "tests/benchmarks/smart_browser/evidence/invalid-input.json"
+    ],
+    "exit_code": 2,
+    "expected_exit_code": 2,
+    "stderr": "",
+    "stdout_sha256": "886e2c903127c2ad3d7ceb5869ade4481f645064a95dcf971e51589d600d1621",
+    "phase": "initial_cli_verification"
+  },
+  {
+    "command": [
+      "/usr/bin/python3",
+      "tests/benchmarks/smart_browser/browser_smoke.py"
+    ],
+    "exit_code": 2,
+    "expected_exit_code": 2,
+    "stderr": "",
+    "stdout_sha256": "fdb46351bf9bc184189139b3db2ea59b8027bae2f9bda078bc2457509c368311",
+    "phase": "initial_cli_verification"
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stderr": "",
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "phase": "initial_cli_verification"
+  },
+  {
+    "phase": "final",
+    "command": [
+      "pytest",
+      "tests/benchmarks/smart_browser/",
+      "-q",
+      "--junitxml=tests/benchmarks/smart_browser/evidence/pytest.xml"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stdout": ".............................s.s.s.                                      [100%]\n=============================== warnings summary ===============================\n../../usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: asyncio_mode\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n32 passed, 3 skipped, 1 warning in 1.18s\n",
+    "stderr": ""
+  },
+  {
+    "phase": "final",
+    "command": [
+      "ruff",
+      "check",
+      "tests/benchmarks/smart_browser/",
+      "--output-format",
+      "concise"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  },
+  {
+    "phase": "final",
+    "command": [
+      "python3",
+      "-m",
+      "compileall",
+      "-q",
+      "tests/benchmarks/smart_browser"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "phase": "final",
+    "command": [
+      "python3",
+      "tests/benchmarks/smart_browser/benchmark.py",
+      "plan"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stdout": "{\n  \"kind\": \"plan_not_measurement\",\n  \"repetitions\": 3,\n  \"trials\": [\n    {\n      \"trial\": 1,\n      \"order\": [\n        \"browser_agent\",\n        \"Aside\"\n      ]\n    },\n    {\n      \"trial\": 2,\n      \"order\": [\n        \"Aside\",\n        \"browser_agent\"\n      ]\n    },\n    {\n      \"trial\": 3,\n      \"order\": [\n        \"browser_agent\",\n        \"Aside\"\n      ]\n    }\n  ],\n  \"reset\": \"POST /reset before each adapter/fixture/trial\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "phase": "final",
+    "command": [
+      "python3",
+      "tests/benchmarks/smart_browser/benchmark.py",
+      "evaluate",
+      "tests/benchmarks/smart_browser/evidence/browser_agent-not-run.json"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stdout": "{\n  \"kind\": \"adapter_results\",\n  \"adapter\": \"browser_agent\",\n  \"denominator\": 60,\n  \"counts\": {\n    \"not_run\": 60\n  },\n  \"accuracy\": null,\n  \"wall_seconds_measured\": null,\n  \"wall_measurement_count\": 0,\n  \"interventions_measured\": null,\n  \"cost_usd\": null,\n  \"cost_measurement_count\": 0,\n  \"recovery_observed\": {\n    \"true\": 0,\n    \"false\": 0\n  },\n  \"comparison_claim\": \"N/A; no superiority inference\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "phase": "final",
+    "command": [
+      "python3",
+      "tests/benchmarks/smart_browser/benchmark.py",
+      "evaluate",
+      "tests/benchmarks/smart_browser/evidence/Aside-not-run.json"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stdout": "{\n  \"kind\": \"adapter_results\",\n  \"adapter\": \"Aside\",\n  \"denominator\": 60,\n  \"counts\": {\n    \"not_run\": 60\n  },\n  \"accuracy\": null,\n  \"wall_seconds_measured\": null,\n  \"wall_measurement_count\": 0,\n  \"interventions_measured\": null,\n  \"cost_usd\": null,\n  \"cost_measurement_count\": 0,\n  \"recovery_observed\": {\n    \"true\": 0,\n    \"false\": 0\n  },\n  \"comparison_claim\": \"N/A; no superiority inference\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "phase": "final",
+    "command": [
+      "python3",
+      "tests/benchmarks/smart_browser/benchmark.py",
+      "evaluate",
+      "tests/benchmarks/smart_browser/evidence/invalid-input.json"
+    ],
+    "exit_code": 2,
+    "expected_exit_code": 2,
+    "stdout": "{\"error\": \"'unknown' is not one of ['passed', 'failed', 'cancelled', 'blocked', 'crashed', 'not_run', 'not_applicable']\"}\n",
+    "stderr": ""
+  },
+  {
+    "phase": "final",
+    "command": [
+      "python3",
+      "tests/benchmarks/smart_browser/browser_smoke.py"
+    ],
+    "exit_code": 2,
+    "expected_exit_code": 2,
+    "stdout": "{\"status\": \"not_run\", \"reason\": \"PermissionError: [Errno 1] Operation not permitted\"}\n",
+    "stderr": ""
+  },
+  {
+    "phase": "final",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit_code": 0,
+    "expected_exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "phase": "final",
+    "command": [
+      "python3",
+      "in-process new-file trailing-whitespace scan"
+    ],
+    "exit_code": 1,
+    "errors": [
+      {
+        "path": "tests/benchmarks/smart_browser/evidence/pytest-initial-socket-denied.xml",
+        "line": 6
+      },
+      {
+        "path": "tests/benchmarks/smart_browser/evidence/pytest-initial-socket-denied.xml",
+        "line": 7
+      },
+      {
+        "path": "tests/benchmarks/smart_browser/evidence/pytest-initial-socket-denied.xml",
+        "line": 12
+      },
+      {
+        "path": "tests/benchmarks/smart_browser/evidence/pytest-initial-socket-denied.xml",
+        "line": 38
+      },
+      {
+        "path": "tests/benchmarks/smart_browser/evidence/pytest-initial-socket-denied.xml",
+        "line": 39
+      },
+      {
+        "path": "tests/benchmarks/smart_browser/evidence/pytest-initial-socket-denied.xml",
+        "line": 44
+      },
+      {
+        "path": "tests/benchmarks/smart_browser/evidence/pytest-initial-socket-denied.xml",
+        "line": 70
+      },
+      {
+        "path": "tests/benchmarks/smart_browser/evidence/pytest-initial-socket-denied.xml",
+        "line": 71
+      },
+      {
+        "path": "tests/benchmarks/smart_browser/evidence/pytest-initial-socket-denied.xml",
+        "line": 76
+      }
+    ]
+  },
+  {
+    "command": [
+      "python3",
+      "normalize initial JUnit trailing whitespace"
+    ],
+    "exit_code": 0,
+    "note": "Traceback content preserved; trailing spaces removed from generated XML."
+  },
+  {
+    "command": [
+      "python3",
+      "new-file trailing-whitespace scan"
+    ],
+    "exit_code": 0,
+    "errors": []
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

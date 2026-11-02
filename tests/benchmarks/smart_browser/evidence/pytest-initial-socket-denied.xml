@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="3" failures="0" skipped="0" tests="31" time="1.390" timestamp="2026-11-02T04:31:05.841566+01:00" hostname="vmi3267555"><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_all_schema_and_input_contracts" time="0.102" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_unimplemented_adapters" time="0.035" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_oracle_mismatch_and_mock_guard" time="0.096" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_failures_in_denominator[failed]" time="0.035" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_failures_in_denominator[cancelled]" time="0.035" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_failures_in_denominator[blocked]" time="0.031" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_failures_in_denominator[crashed]" time="0.029" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[missing]" time="0.005" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[duplicate]" time="0.017" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[unknown]" time="0.017" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[status]" time="0.007" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[extra]" time="0.004" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[hash]" time="0.016" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[permissions]" time="0.014" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[seed]" time="0.015" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[reset]" time="0.018" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[version]" time="0.015" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[artifact]" time="0.034" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[time]" time="0.012" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[cost]" time="0.005" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[nan]" time="0.004" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[inf]" time="0.005" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[interventions]" time="0.004" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[not-run-measured]" time="0.017" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[no-artifact]" time="0.020" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[no-time]" time="0.022" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reject_invalid[reason]" time="0.030" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_artifact_hash" time="0.017" /><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_http_all_fixtures_and_oracle_isolation" time="0.001"><error message="failed on setup with &quot;PermissionError: [Errno 1] Operation not permitted&quot;">@pytest.fixture
+    def server():
+&gt;       with FixtureServer() as s:
+             ^^^^^^^^^^^^^^^
+
+tests/benchmarks/smart_browser/test_benchmark.py:20:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests/benchmarks/smart_browser/fixture_server.py:13: in __init__
+    super().__init__(('127.0.0.1', port), Handler)
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;socket.socket fd=-1, family=0, type=0, proto=0&gt;
+family = &lt;AddressFamily.AF_INET: 2&gt;, type = &lt;SocketKind.SOCK_STREAM: 1&gt;
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+&gt;       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError</error></testcase><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_reset_reproducible" time="0.001"><error message="failed on setup with &quot;PermissionError: [Errno 1] Operation not permitted&quot;">@pytest.fixture
+    def server():
+&gt;       with FixtureServer() as s:
+             ^^^^^^^^^^^^^^^
+
+tests/benchmarks/smart_browser/test_benchmark.py:20:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests/benchmarks/smart_browser/fixture_server.py:13: in __init__
+    super().__init__(('127.0.0.1', port), Handler)
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;socket.socket fd=-1, family=0, type=0, proto=0&gt;
+family = &lt;AddressFamily.AF_INET: 2&gt;, type = &lt;SocketKind.SOCK_STREAM: 1&gt;
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+&gt;       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError</error></testcase><testcase classname="tests.benchmarks.smart_browser.test_benchmark" name="test_faults_and_scope_cursor" time="0.001"><error message="failed on setup with &quot;PermissionError: [Errno 1] Operation not permitted&quot;">@pytest.fixture
+    def server():
+&gt;       with FixtureServer() as s:
+             ^^^^^^^^^^^^^^^
+
+tests/benchmarks/smart_browser/test_benchmark.py:20:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests/benchmarks/smart_browser/fixture_server.py:13: in __init__
+    super().__init__(('127.0.0.1', port), Handler)
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;socket.socket fd=-1, family=0, type=0, proto=0&gt;
+family = &lt;AddressFamily.AF_INET: 2&gt;, type = &lt;SocketKind.SOCK_STREAM: 1&gt;
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+&gt;       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError</error></testcase></testsuite></testsuites>

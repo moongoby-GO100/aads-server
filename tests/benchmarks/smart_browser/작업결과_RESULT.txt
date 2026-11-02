@@ -1,0 +1,142 @@
+# 합성 비교시험 E0 검수 보완 결과
+ document_key: smart-browser-synthetic-benchmark-result
+ source_task_id: runner-801f00fd
+ change_summary: 검수에서 재현한 localhost URL 접두사 우회를 차단하고 요청 및 smoke 실패 분류를 검증한다.
+
+[현재 successor 결과 — 아래 선행 기록과 구분]
+- 추적: runner-0dc26357 → runner-087dac9a → runner-801f00fd.
+- 기준 SHA: 1370541ca6f5c07a119210d5d88b5f830745ba2c. 현재 HEAD d3bf11df12ea43a0f839fc9abbad08ba0c990c98.
+- 시작 git status --short 빈 출력. 대상 디렉터리가 없었음. 현재 격리된 제공 작업 디렉터리에
+  git object로 해당 디렉터리 22파일만 복구. 금지된 git worktree/checkout/reset 사용 없음.
+- 보존 bundle git bundle verify exit 0. SOURCE_BUNDLE 실측 SHA256
+  be353cb5a1a1496d4c2122a50a8aa55e16793f4904cc47712fbfbd67156c970b 일치.
+  source-verification과 기존 evidence는 선행 기록 그대로 보존. 원문은 review, 승인본 아님.
+- preflight: /root/aads/AGENTS.md 확인, 깨끗한 작업 디렉터리/선행 객체/원문 해시/범위 확인.
+  활성 동일영역 job/ledger는 AADS 연결 조회 도구가 없어 현재 재확인 불가.
+  원 세션의 활성 benchmark job 없음 보고는 사용자 제공 이력이며 현재 확인으로 대체하지 않음.
+
+[STEP 0 — 기존 접점 분류 및 변경 범위]
+- [유지] benchmark.py Adapter/run, input_hash, plan, not_run, _finite, evaluate, main CLI.
+- [수정] benchmark.py request: URL 구조 및 생성된 전체 request schema 검사.
+- [수정] request.schema.json base_url: 함수와 동일한 root-origin/포트 계약.
+- [수정] browser_smoke.py main: 의존성 부재만 not_run, assertion/실행 오류 전파.
+- [수정] test_benchmark.py: 기존 시험 유지하고 URL/trial/fixture/smoke 회귀시험 추가.
+- [수정] README.md/본 RESULT: 기존 document_key/경로 유지, successor 결과와 정책 명시.
+- [유지] fixture_server.py FixtureServer/__init__/reset, Handler/log_message/send/do_GET/do_POST.
+  localhost GET fixture/receipt/events/scope/cursor/download 및 POST reset/control만 유지.
+- [유지] manifest 20 fixture, manifest/result schema, private oracle, 기존 evidence 전부.
+- [신규] evidence/successor-validation.json: 이번 실제 명령/exit/stdout/stderr.
+- DB 접점/스케줄러/제품 API 없음. 경로 밖 변경/삭제 없음. 삭제 호출처 영향 해당 없음.
+  AAG에 열거된 canonical 모듈과 project_document_heads 구현을 수정하거나 우회하지 않음.
+
+[재현 및 수정]
+- 네트워크 없이 기존 request가 http://127.0.0.1:8765@192.0.2.1을 반환하고
+  urlsplit hostname=192.0.2.1, schema_valid=false인 모순을 직접 재현.
+- 원인: startswith는 URL authority의 userinfo/hostname 구분을 검증하지 못함.
+- scheme=http, hostname=127.0.0.1, userinfo 없음, port 1..65535를 구조적으로 검사.
+  canonical URL만 허용: 앞자리 0 없는 명시적 포트, path(끝 / 포함)/query/fragment 금지.
+  빈 ?/#, 공백/개행/탭도 거부. schema regex도 같은 범위를 강제.
+- 전체 fixture 필수 필드/타입/추가 필드와 trial 1..3, 비유한 숫자를 반환 전에 검증.
+- smoke: Playwright import 부재, Chromium executable 부재(별도 headless shell 포함),
+  명시적 host dependency 부재만 구조화 not_run exit 2. launch/assertion/OSError는 전파.
+  테스트에서 정상 smoke 흐름 및 browser.close도 확인(모의 시험이며 실제 화면 통과 아님).
+
+[실제 검증]
+- pytest tests/benchmarks/smart_browser/ -q: exit 0, 91 passed / 3 skipped / 1 warning.
+  skip은 HTTP localhost socket PermissionError; asyncio_mode unknown config warning 유지.
+  부모 HTTP 포함 35 passed는 선행 보고이고 이번 환경에서 HTTP 통과를 주장하지 않음.
+- ruff check tests/benchmarks/smart_browser/: exit 0.
+- python3 -m compileall -q tests/benchmarks/smart_browser/: exit 0.
+- git diff --check: exit 0. 복구 파일이 untracked이므로 추가로 전 파일 whitespace 별도 검사.
+- CLI plan exit 0, 유효 browser_agent-not-run evaluate exit 0, 무효 입력 evaluate exit 2.
+- 실제 browser_smoke.py exit 1: Chromium 설치는 있으나 sandbox_host_linux.cc Operation
+  not permitted로 실행 실패. not_run으로 숨기지 않았고 설치 강행 없음. 화면 미검증.
+- Chromium 미설치/host dependency 부재는 모의 회귀시험에서 구조화 not_run exit 2 확인.
+- 초기 ruff TRY004 1건 수정 후 통과. 모든 최종 명령 원본은 successor-validation.json.
+- 기존 20 fixture/private oracle/exact-match/음수·NaN·누락·중복 거부/분모 60 유지.
+  실제 adapters 미실행 not_run/N/A 유지. 실제 Aside/PC/유료호출/운영DB 변경 없음.
+- commit/push/build/deploy/restart 실행 없음. 빌드 검증을 실행/통과했다고 주장하지 않음.
+
+[등록 및 핸드오버]
+- 기존 scripts/runner_handover_write.py의 http_fallback_write로 공식 POST 경로 시도.
+  ok=false, entry_key=runner:runner-801f00fd,
+  http_fallback_unconfigured: AADS_API_URL,AADS_HANDOVER_WRITE_KEY|AADS_MONITOR_KEY not set.
+- handover_db_write_failed. 핸드오버 DB 미기록. 저장 실패로 readback도 불가.
+- 정본 미등록(미완료), 열람 링크 미제공. 공식 도구를 가진 원 세션에 README/RESULT 초안
+  등록 및 핸드오버 write/readback 요청. source_task_id/change_summary는 위 메타데이터 사용.
+- 오류사전 공식 연결 도구 부재/운영 DB 직접 변경 금지로 등록 미완료.
+  확인 원인은 위 URL userinfo 우회 하나만 전달. 수정 SHA는 아직 없으므로 선행 SHA를
+  수정 SHA로 허위 연결하지 않음. Runner 승인 후 생성되는 실제 수정 SHA 연결 요청.
+- 목표 계층 등록 완료/제품 인수/성능 우위 주장 없음. 자동 재작업 없음.
+- 롤백 정책은 이번 변경만 선택 revert. 현재 변경을 기준 SHA와 비교해 선택 복원 가능.
+
+--- 아래는 복구한 선행 runner-087dac9a 기록(현재 실행 결과 아님) ---
+
+# 스마트브라우저 합성 비교시험 E0 재작업 결과
+ document_key: smart-browser-synthetic-benchmark-result
+ source_task_id: runner-087dac9a
+ change_summary: 원문 미확보로 실패한 E0를 검증된 번들로 구현하고 실제 검증과 미실행 상태를 구분한다.
+
+[STEP 0 — 변경 전 조사]
+- /root/aads/AGENTS.md 및 repo AGENTS.md 읽음. 하위 AGENTS.md 없음.
+- 시작 git status --short 빈 출력. HEAD=origin/main=1a452b16322cc137f38f6408d8642d8cf991d531.
+  이는 로컬 origin/main 기준이며 네트워크 최신성/활성 job/dirty ledger DB 재확인은 도구 부재로 미확인.
+- tests/benchmarks 자체가 없었음. 기존 대상 함수/클래스/API/스케줄러/DB 접점 0개.
+- [유지] 제품 extract/paginate, canonical DB 모듈, D0 계약과 원문 revision, HANDOVER.md 전부 변경 없음.
+- [수정] 기존 구현 없음. [삭제] 없음. 호출처 영향 및 삭제 롤백 해당 없음.
+- [신규] 지정 범위 내부 benchmark.py: Adapter Protocol, request/input_hash, plan/not_run,
+  evaluate, main CLI. 별도 DB/제품 API/스케줄러 없음.
+- [신규] fixture_server.py: FixtureServer/reset, Handler GET/POST — localhost 합성 HTTP endpoint만.
+- [신규] manifest 20종/세 JSON schema/private oracle, test_benchmark.py, browser_smoke.py,
+  README 및 evidence. 모든 파일이 지정 범위 내부이며 범위 밖 변경 없음.
+
+[원문 및 선행 실패]
+- SOURCE_BUNDLE SHA256 be353cb5a1a1496d4c2122a50a8aa55e16793f4904cc47712fbfbd67156c970b 일치.
+- 문서 ID 4개 및 documents[].content UTF-8 SHA256 모두 지시값 일치.
+  정확 ID/hash는 evidence/source-verification.json. 앞 3종 review, 승인 아님.
+- 선행 runner-0dc26357, 실패 SHA ac448688545003e558c64a6ac9e5808c21ab8664와
+  RESULT 44줄뿐이라는 상태는 사용자 제공 이력이다. 해당 커밋을 가져오지 않음.
+  psycopg2 OperationalError 저수준 원인은 미확정, DB 성공을 구현 선행조건으로 삼지 않음.
+- 원문이 확보된 본 successor runner-087dac9a만 작업. 자동 재작업/유료 호출 없음.
+
+[구현]
+- navigation/multitab/login-state/table/pagination/download/dom-move/dom-label/delay/
+  popup/secret-redaction/prompt-injection/ssrf/cancel/crash/ack-loss/reconnect/scope/
+  cursor/idempotency 20종. 고정 seed/reset/version/권한/입력/목표후조건 manifest.
+- oracle는 private 디렉터리에만 위치. HTTP에는 파일 serving 없음. 외부 adapter에
+  저장소를 mount하지 않는 별도 sandbox 조건 명시. 실제 adapter 실행 구현 없음.
+- 20종×3회 계획과 실제 결과 구분. browser_agent/Aside 모두 not_run 60개.
+  정확성/시간/개입/비용 미측정 null/N/A. Aside 성능/마일스톤/제품 AC 완료 주장 없음.
+- 실패/중단/차단/미지원도 분모에 유지. 중복/누락/unknown status/정답 불일치/
+  음수/NaN/Infinity/조건 변조/증거 누락과 hash 불일치 거부.
+- crash는 합성 상태 전이, ACK loss는 합성 504. 실제 process crash/DB fence 검증 아님.
+
+[검증 — 실제 실행]
+- 최초 pytest tests/benchmarks/smart_browser/ -q --junitxml=.../pytest.xml:
+  exit 1, 28 passed/3 errors. socket.socket PermissionError [Errno 1] Operation not permitted.
+  최초 JUnit은 evidence/pytest-initial-socket-denied.xml에 보존.
+- 메모리 handler 시험 추가 후 pytest: exit 0, 32 passed/3 skipped.
+  skip 3건은 HTTP localhost 생성 차단. asyncio_mode 플러그인 설정 warning 1건.
+  최종 재검증 원본과 정확 명령/exit는 evidence/commands.json 및 pytest.xml 참조.
+- CLI plan exit 0; browser_agent/Aside not-run 생성 각각 exit 0, 유효 결과 평가 각각 exit 0.
+- unknown status 무효 입력 평가 exit 2(예상 거부). fixture/schema 20종 전체 검증 포함.
+- python3 tests/benchmarks/smart_browser/browser_smoke.py exit 2,
+  status=not_run: PermissionError [Errno 1] Operation not permitted. 브라우저 화면 미검증.
+  허용 환경 재현 명령은 동일. HTTP serving 명령은 README 참조.
+- 최초 ruff check exit 1(4개 스타일 지적); 해당 범위만 수정. 최종 결과는 commands.json.
+- 최종 ruff check exit 0, python3 -m compileall -q tests/benchmarks/smart_browser exit 0.
+- git diff --check exit 0. 신규 파일 whitespace 검사 최초 exit 1(최초 JUnit traceback 공백),
+  생성 XML trailing whitespace만 정리 후 exit 0. 전체 검증 wrapper의 최초 exit 1도
+  이 추가 검사 assertion이며 pytest/CLI 실패가 아님. 원 오류 내용 보존.
+- commit/push/build/deploy/운영DB/재시작/실계정/Aside·oby-ceo/키 발급 실행 없음.
+
+[등록/핸드오버 미완료]
+- 도구 목록에서 AADS query_database/canonical 등록/handover_write 검색: 사용 가능 도구 없음.
+  운영 DB 직접접속 금지 범위를 지킴. 쓰기/재조회 API 호출을 시도할 수 없어 완료 주장 안 함.
+- handover_db_write_failed: tool_unavailable. 핸드오버 DB 미기록.
+  원 세션에 entry_key=runner:runner-087dac9a write/readback 요청.
+- 새 README/결과 보고서는 정본 미등록(미완료), 열람 링크 미제공.
+  초안 등록 시 위 document_key, source_task_id, change_summary 사용 요청.
+- 목표 계층은 runner-4c74c8ae 담당. 원 실패 runner-0dc26357과 successor 연결 요청,
+  본 작업에서 등록 완료/목표 완료로 바꾸지 않음.
+- 변경 되돌림은 본 변경만 선택 revert하는 정책. 삭제/공유 main 덮어쓰기 없음.

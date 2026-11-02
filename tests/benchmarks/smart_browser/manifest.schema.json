@@ -1,0 +1,115 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "fixtures"
+  ],
+  "properties": {
+    "version": {
+      "const": "1.0.0"
+    },
+    "fixtures": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "seed",
+          "version",
+          "reset",
+          "permissions",
+          "inputs",
+          "goal_postcondition",
+          "acceptance"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "permissions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tenant",
+              "project",
+              "origins",
+              "actions"
+            ],
+            "properties": {
+              "tenant": {
+                "type": "string",
+                "minLength": 1
+              },
+              "project": {
+                "type": "string",
+                "minLength": 1
+              },
+              "origins": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task",
+              "path",
+              "key"
+            ],
+            "properties": {
+              "task": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "key": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "goal_postcondition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "acceptance": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

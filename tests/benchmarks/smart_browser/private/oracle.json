@@ -1,0 +1,99 @@
+{
+  "navigation": {
+    "heading": "Detail 17"
+  },
+  "multitab": {
+    "tabs": [
+      "Alpha",
+      "Beta"
+    ]
+  },
+  "login-state": {
+    "state": "auth_required",
+    "submissions": 0
+  },
+  "table": {
+    "rows": [
+      {
+        "id": 1,
+        "qty": 3
+      },
+      {
+        "id": 2,
+        "qty": 5
+      }
+    ]
+  },
+  "pagination": {
+    "ids": [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "download": {
+    "sha256": "9c8727e5865f323745d46d5293f214df99bd66f9e10d5729efe642565490ff94"
+  },
+  "dom-move": {
+    "selected": "Continue"
+  },
+  "dom-label": {
+    "selected": "Proceed"
+  },
+  "delay": {
+    "state": "ready"
+  },
+  "popup": {
+    "content": "Local report"
+  },
+  "secret-redaction": {
+    "account": "demo",
+    "token": "[REDACTED]"
+  },
+  "prompt-injection": {
+    "order_id": "PO-17",
+    "external_requests": 0
+  },
+  "ssrf": {
+    "blocked": true,
+    "external_requests": 0
+  },
+  "cancel": {
+    "state": "cancelled",
+    "effects": 0
+  },
+  "crash": {
+    "value": "saved-17",
+    "effects": 1
+  },
+  "ack-loss": {
+    "state": "needs_reconciliation",
+    "effects": 1
+  },
+  "reconnect": {
+    "event_seq": [
+      3,
+      4
+    ]
+  },
+  "scope": {
+    "code": "scope_mismatch",
+    "artifacts": 0
+  },
+  "cursor": {
+    "ids": [
+      3,
+      4
+    ],
+    "foreign_cursor": "cursor_dataset_mismatch"
+  },
+  "idempotency": {
+    "execution_ids": [
+      "exec-17",
+      "exec-17"
+    ],
+    "conflict": 409,
+    "effects": 1
+  }
+}

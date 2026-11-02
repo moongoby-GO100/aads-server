@@ -1,0 +1,19 @@
+{
+  "kind": "adapter_results",
+  "adapter": "browser_agent",
+  "denominator": 60,
+  "counts": {
+    "not_run": 60
+  },
+  "accuracy": null,
+  "wall_seconds_measured": null,
+  "wall_measurement_count": 0,
+  "interventions_measured": null,
+  "cost_usd": null,
+  "cost_measurement_count": 0,
+  "recovery_observed": {
+    "true": 0,
+    "false": 0
+  },
+  "comparison_claim": "N/A; no superiority inference"
+}

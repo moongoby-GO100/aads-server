@@ -1,0 +1,1628 @@
+{
+  "contract_version": 1,
+  "adapter": "browser_agent",
+  "adapter_version": "unimplemented",
+  "mode": "real",
+  "records": [
+    {
+      "fixture_id": "navigation",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "d09f4bf89018824461b13d028d2d0474a9adcd64fc0c493c61f40515b1dd1b7b",
+      "fixture_version": "1.0.0",
+      "seed": 1701,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "multitab",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "9ec4e678a2253f639c6b89402a476aae7d234152c7ce028be25ea6f5a413ea2e",
+      "fixture_version": "1.0.0",
+      "seed": 1702,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "login-state",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "d56ac73c833620b9a858640dcfddae6d3a70fc4b985b050df1c97e8de005078c",
+      "fixture_version": "1.0.0",
+      "seed": 1703,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "table",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "c2fb9d27dc0074ba70afa02b070fceb47eb2302ec3a58f93a7cac52013f8b56a",
+      "fixture_version": "1.0.0",
+      "seed": 1704,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "pagination",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "b544ef758e92e49692bf2e566ec0763a927a87e9e7234890188f648fe0abe39b",
+      "fixture_version": "1.0.0",
+      "seed": 1705,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "download",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "be45b8fb17cb06dfb9bb44894116dbb2e904f0564cda5b925f6437aefe97ad65",
+      "fixture_version": "1.0.0",
+      "seed": 1706,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "dom-move",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "e66185a507b1f1894e16c423ceadfb25de203468917dae2cb90ad714d1d999bc",
+      "fixture_version": "1.0.0",
+      "seed": 1707,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "dom-label",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "cd5914e82e6501304f2b2cc5b544a4def274e5676bf47c24b1e433262bf3d35f",
+      "fixture_version": "1.0.0",
+      "seed": 1708,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "delay",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "9ef91c9d11e74b53c84d46a29753c1ffe392853795986c6ba83a9c3967adb69d",
+      "fixture_version": "1.0.0",
+      "seed": 1709,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "popup",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "5eb2282957cb375d477ff2952b02596e6d2e2458b3740fec54a9f3aa87e5683d",
+      "fixture_version": "1.0.0",
+      "seed": 1710,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "secret-redaction",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "0243e474cefab58b989ffe752a34710fdd970a48424770e0cee5cd5328f2b19a",
+      "fixture_version": "1.0.0",
+      "seed": 1711,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "prompt-injection",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "1de302a40c0c86afe6b50258965c59e210a1193698840276f90199f6ec730df2",
+      "fixture_version": "1.0.0",
+      "seed": 1712,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "ssrf",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "2275a82a64d6b392494aa0d7808d2bcda553402adde7f0cdeb2e0da2bd50ac4c",
+      "fixture_version": "1.0.0",
+      "seed": 1713,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "cancel",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "b465fb173d149f987c4352913f0691d30365c1a9f2980eba03ba3b420fe027a8",
+      "fixture_version": "1.0.0",
+      "seed": 1714,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "crash",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "3f265a802a4f2389de88053e4def343fadd7b1215d84b32d426b7e7383b5cff1",
+      "fixture_version": "1.0.0",
+      "seed": 1715,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "ack-loss",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "22bbd9556af2cb203af1b2d879fad38608f43439d80bab25c2482c26c40f73d2",
+      "fixture_version": "1.0.0",
+      "seed": 1716,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "reconnect",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "2239e2faafd990aacc497fdc52c6fdfb9831f067fdf1439665b981006bdcec24",
+      "fixture_version": "1.0.0",
+      "seed": 1717,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "scope",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "e9f0e4e029acc8d908a52b051496fdc8cfc35570d5ef1a2a23bd309dc987cd34",
+      "fixture_version": "1.0.0",
+      "seed": 1718,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "cursor",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "a3e9c00e336873ac00b3b6bf06f0b117d192cd2d6bd2c2c574c608714ccf5cd0",
+      "fixture_version": "1.0.0",
+      "seed": 1719,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "idempotency",
+      "trial": 1,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "2139b3121e696c68ef178720150c5273b4ed789f71e8dd45db821b8c3cd2526e",
+      "fixture_version": "1.0.0",
+      "seed": 1720,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "navigation",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "d09f4bf89018824461b13d028d2d0474a9adcd64fc0c493c61f40515b1dd1b7b",
+      "fixture_version": "1.0.0",
+      "seed": 1701,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "multitab",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "9ec4e678a2253f639c6b89402a476aae7d234152c7ce028be25ea6f5a413ea2e",
+      "fixture_version": "1.0.0",
+      "seed": 1702,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "login-state",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "d56ac73c833620b9a858640dcfddae6d3a70fc4b985b050df1c97e8de005078c",
+      "fixture_version": "1.0.0",
+      "seed": 1703,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "table",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "c2fb9d27dc0074ba70afa02b070fceb47eb2302ec3a58f93a7cac52013f8b56a",
+      "fixture_version": "1.0.0",
+      "seed": 1704,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "pagination",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "b544ef758e92e49692bf2e566ec0763a927a87e9e7234890188f648fe0abe39b",
+      "fixture_version": "1.0.0",
+      "seed": 1705,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "download",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "be45b8fb17cb06dfb9bb44894116dbb2e904f0564cda5b925f6437aefe97ad65",
+      "fixture_version": "1.0.0",
+      "seed": 1706,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "dom-move",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "e66185a507b1f1894e16c423ceadfb25de203468917dae2cb90ad714d1d999bc",
+      "fixture_version": "1.0.0",
+      "seed": 1707,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "dom-label",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "cd5914e82e6501304f2b2cc5b544a4def274e5676bf47c24b1e433262bf3d35f",
+      "fixture_version": "1.0.0",
+      "seed": 1708,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "delay",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "9ef91c9d11e74b53c84d46a29753c1ffe392853795986c6ba83a9c3967adb69d",
+      "fixture_version": "1.0.0",
+      "seed": 1709,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "popup",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "5eb2282957cb375d477ff2952b02596e6d2e2458b3740fec54a9f3aa87e5683d",
+      "fixture_version": "1.0.0",
+      "seed": 1710,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "secret-redaction",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "0243e474cefab58b989ffe752a34710fdd970a48424770e0cee5cd5328f2b19a",
+      "fixture_version": "1.0.0",
+      "seed": 1711,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "prompt-injection",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "1de302a40c0c86afe6b50258965c59e210a1193698840276f90199f6ec730df2",
+      "fixture_version": "1.0.0",
+      "seed": 1712,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "ssrf",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "2275a82a64d6b392494aa0d7808d2bcda553402adde7f0cdeb2e0da2bd50ac4c",
+      "fixture_version": "1.0.0",
+      "seed": 1713,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "cancel",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "b465fb173d149f987c4352913f0691d30365c1a9f2980eba03ba3b420fe027a8",
+      "fixture_version": "1.0.0",
+      "seed": 1714,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "crash",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "3f265a802a4f2389de88053e4def343fadd7b1215d84b32d426b7e7383b5cff1",
+      "fixture_version": "1.0.0",
+      "seed": 1715,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "ack-loss",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "22bbd9556af2cb203af1b2d879fad38608f43439d80bab25c2482c26c40f73d2",
+      "fixture_version": "1.0.0",
+      "seed": 1716,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "reconnect",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "2239e2faafd990aacc497fdc52c6fdfb9831f067fdf1439665b981006bdcec24",
+      "fixture_version": "1.0.0",
+      "seed": 1717,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "scope",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "e9f0e4e029acc8d908a52b051496fdc8cfc35570d5ef1a2a23bd309dc987cd34",
+      "fixture_version": "1.0.0",
+      "seed": 1718,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "cursor",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "a3e9c00e336873ac00b3b6bf06f0b117d192cd2d6bd2c2c574c608714ccf5cd0",
+      "fixture_version": "1.0.0",
+      "seed": 1719,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "idempotency",
+      "trial": 2,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "2139b3121e696c68ef178720150c5273b4ed789f71e8dd45db821b8c3cd2526e",
+      "fixture_version": "1.0.0",
+      "seed": 1720,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "navigation",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "d09f4bf89018824461b13d028d2d0474a9adcd64fc0c493c61f40515b1dd1b7b",
+      "fixture_version": "1.0.0",
+      "seed": 1701,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "multitab",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "9ec4e678a2253f639c6b89402a476aae7d234152c7ce028be25ea6f5a413ea2e",
+      "fixture_version": "1.0.0",
+      "seed": 1702,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "login-state",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "d56ac73c833620b9a858640dcfddae6d3a70fc4b985b050df1c97e8de005078c",
+      "fixture_version": "1.0.0",
+      "seed": 1703,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "table",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "c2fb9d27dc0074ba70afa02b070fceb47eb2302ec3a58f93a7cac52013f8b56a",
+      "fixture_version": "1.0.0",
+      "seed": 1704,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "pagination",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "b544ef758e92e49692bf2e566ec0763a927a87e9e7234890188f648fe0abe39b",
+      "fixture_version": "1.0.0",
+      "seed": 1705,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "download",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "be45b8fb17cb06dfb9bb44894116dbb2e904f0564cda5b925f6437aefe97ad65",
+      "fixture_version": "1.0.0",
+      "seed": 1706,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "dom-move",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "e66185a507b1f1894e16c423ceadfb25de203468917dae2cb90ad714d1d999bc",
+      "fixture_version": "1.0.0",
+      "seed": 1707,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "dom-label",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "cd5914e82e6501304f2b2cc5b544a4def274e5676bf47c24b1e433262bf3d35f",
+      "fixture_version": "1.0.0",
+      "seed": 1708,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "delay",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "9ef91c9d11e74b53c84d46a29753c1ffe392853795986c6ba83a9c3967adb69d",
+      "fixture_version": "1.0.0",
+      "seed": 1709,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "popup",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "5eb2282957cb375d477ff2952b02596e6d2e2458b3740fec54a9f3aa87e5683d",
+      "fixture_version": "1.0.0",
+      "seed": 1710,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "secret-redaction",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "0243e474cefab58b989ffe752a34710fdd970a48424770e0cee5cd5328f2b19a",
+      "fixture_version": "1.0.0",
+      "seed": 1711,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "prompt-injection",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "1de302a40c0c86afe6b50258965c59e210a1193698840276f90199f6ec730df2",
+      "fixture_version": "1.0.0",
+      "seed": 1712,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "ssrf",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "2275a82a64d6b392494aa0d7808d2bcda553402adde7f0cdeb2e0da2bd50ac4c",
+      "fixture_version": "1.0.0",
+      "seed": 1713,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "cancel",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "b465fb173d149f987c4352913f0691d30365c1a9f2980eba03ba3b420fe027a8",
+      "fixture_version": "1.0.0",
+      "seed": 1714,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "crash",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "3f265a802a4f2389de88053e4def343fadd7b1215d84b32d426b7e7383b5cff1",
+      "fixture_version": "1.0.0",
+      "seed": 1715,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "ack-loss",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "22bbd9556af2cb203af1b2d879fad38608f43439d80bab25c2482c26c40f73d2",
+      "fixture_version": "1.0.0",
+      "seed": 1716,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "reconnect",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "2239e2faafd990aacc497fdc52c6fdfb9831f067fdf1439665b981006bdcec24",
+      "fixture_version": "1.0.0",
+      "seed": 1717,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "scope",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "e9f0e4e029acc8d908a52b051496fdc8cfc35570d5ef1a2a23bd309dc987cd34",
+      "fixture_version": "1.0.0",
+      "seed": 1718,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "cursor",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "a3e9c00e336873ac00b3b6bf06f0b117d192cd2d6bd2c2c574c608714ccf5cd0",
+      "fixture_version": "1.0.0",
+      "seed": 1719,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    },
+    {
+      "fixture_id": "idempotency",
+      "trial": 3,
+      "status": "not_run",
+      "reason": "adapter_not_implemented",
+      "input_hash": "2139b3121e696c68ef178720150c5273b4ed789f71e8dd45db821b8c3cd2526e",
+      "fixture_version": "1.0.0",
+      "seed": 1720,
+      "permissions": {
+        "tenant": "synthetic",
+        "project": "A",
+        "origins": [
+          "fixture-origin"
+        ],
+        "actions": [
+          "read",
+          "synthetic-control"
+        ]
+      },
+      "reset": "POST /reset before every adapter trial",
+      "wall_seconds": null,
+      "interventions": null,
+      "cost_usd": null,
+      "recovery": null,
+      "answer": null,
+      "artifacts": []
+    }
+  ]
+}

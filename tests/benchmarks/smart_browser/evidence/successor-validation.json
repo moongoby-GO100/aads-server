@@ -1,0 +1,88 @@
+{
+  "source_task_id": "runner-801f00fd",
+  "results": [
+    {
+      "command": [
+        "pytest",
+        "tests/benchmarks/smart_browser/",
+        "-q"
+      ],
+      "exit": 0,
+      "stdout": ".............................s.s.s...................................... [ 76%]\n......................                                                   [100%]\n=============================== warnings summary ===============================\n../../usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: asyncio_mode\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n91 passed, 3 skipped, 1 warning in 1.29s\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "ruff",
+        "check",
+        "tests/benchmarks/smart_browser/"
+      ],
+      "exit": 0,
+      "stdout": "All checks passed!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python3",
+        "-m",
+        "compileall",
+        "-q",
+        "tests/benchmarks/smart_browser/"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python3",
+        "tests/benchmarks/smart_browser/benchmark.py",
+        "plan"
+      ],
+      "exit": 0,
+      "stdout": "{\n  \"kind\": \"plan_not_measurement\",\n  \"repetitions\": 3,\n  \"trials\": [\n    {\n      \"trial\": 1,\n      \"order\": [\n        \"browser_agent\",\n        \"Aside\"\n      ]\n    },\n    {\n      \"trial\": 2,\n      \"order\": [\n        \"Aside\",\n        \"browser_agent\"\n      ]\n    },\n    {\n      \"trial\": 3,\n      \"order\": [\n        \"browser_agent\",\n        \"Aside\"\n      ]\n    }\n  ],\n  \"reset\": \"POST /reset before each adapter/fixture/trial\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python3",
+        "tests/benchmarks/smart_browser/benchmark.py",
+        "evaluate",
+        "tests/benchmarks/smart_browser/evidence/browser_agent-not-run.json"
+      ],
+      "exit": 0,
+      "stdout": "{\n  \"kind\": \"adapter_results\",\n  \"adapter\": \"browser_agent\",\n  \"denominator\": 60,\n  \"counts\": {\n    \"not_run\": 60\n  },\n  \"accuracy\": null,\n  \"wall_seconds_measured\": null,\n  \"wall_measurement_count\": 0,\n  \"interventions_measured\": null,\n  \"cost_usd\": null,\n  \"cost_measurement_count\": 0,\n  \"recovery_observed\": {\n    \"true\": 0,\n    \"false\": 0\n  },\n  \"comparison_claim\": \"N/A; no superiority inference\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python3",
+        "tests/benchmarks/smart_browser/benchmark.py",
+        "evaluate",
+        "tests/benchmarks/smart_browser/evidence/invalid-input.json"
+      ],
+      "exit": 2,
+      "stdout": "{\"error\": \"'unknown' is not one of ['passed', 'failed', 'cancelled', 'blocked', 'crashed', 'not_run', 'not_applicable']\"}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python3",
+        "tests/benchmarks/smart_browser/browser_smoke.py"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"/tmp/aads-wt-runner-801f00fd/tests/benchmarks/smart_browser/browser_smoke.py\", line 61, in <module>\n    raise SystemExit(main())\n                     ^^^^^^\n  File \"/tmp/aads-wt-runner-801f00fd/tests/benchmarks/smart_browser/browser_smoke.py\", line 24, in main\n    browser = p.chromium.launch(headless=True)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/playwright/sync_api/_generated.py\", line 16702, in launch\n    self._sync(\n  File \"/usr/local/lib/python3.12/dist-packages/playwright/_impl/_sync_base.py\", line 115, in _sync\n    return task.result()\n           ^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/playwright/_impl/_browser_type.py\", line 97, in launch\n    await self._channel.send(\n  File \"/usr/local/lib/python3.12/dist-packages/playwright/_impl/_connection.py\", line 76, in send\n    return await self._connection.wrap_api_call(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/playwright/_impl/_connection.py\", line 632, in wrap_api_call\n    raise rewrite_error(error, f\"{parsed_st['apiName']}: {error}\") from None\nplaywright._impl._errors.TargetClosedError: BrowserType.launch: Target page, context or browser has been closed\nBrowser logs:\n\n<launching> /root/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-back-forward-cache --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,BoundaryEventDispatchTracksNodeRemoval,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --no-sandbox --user-data-dir=/tmp/playwright_chromiumdev_profile-iQEWf9 --remote-debugging-pipe --no-startup-window\n<launched> pid=59\n[pid=59][err] [1102/044902.397659:FATAL:content/browser/sandbox_host_linux.cc:41] Check failed: . shutdown: Operation not permitted (1)\nCall log:\n  - <launching> /root/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-back-forward-cache --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,BoundaryEventDispatchTracksNodeRemoval,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --no-sandbox --user-data-dir=/tmp/playwright_chromiumdev_profile-iQEWf9 --remote-debugging-pipe --no-startup-window\n  - <launched> pid=59\n  - [pid=59][err] [1102/044902.397659:FATAL:content/browser/sandbox_host_linux.cc:41] Check failed: . shutdown: Operation not permitted (1)\n  - [pid=59] <gracefully close start>\n  - [pid=59] <kill>\n  - [pid=59] <will force kill>\n  - [pid=59] <process did exit: exitCode=null, signal=SIGTRAP>\n  - [pid=59] starting temporary directories cleanup\n  - [pid=59] finished temporary directories cleanup\n  - [pid=59] <gracefully close end>\n\n"
+    }
+  ]
+}

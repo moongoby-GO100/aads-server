@@ -1,0 +1,28 @@
+{
+  "kind": "plan_not_measurement",
+  "repetitions": 3,
+  "trials": [
+    {
+      "trial": 1,
+      "order": [
+        "browser_agent",
+        "Aside"
+      ]
+    },
+    {
+      "trial": 2,
+      "order": [
+        "Aside",
+        "browser_agent"
+      ]
+    },
+    {
+      "trial": 3,
+      "order": [
+        "browser_agent",
+        "Aside"
+      ]
+    }
+  ],
+  "reset": "POST /reset before each adapter/fixture/trial"
+}

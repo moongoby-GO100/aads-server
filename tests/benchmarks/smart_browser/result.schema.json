@@ -1,0 +1,159 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "adapter",
+    "adapter_version",
+    "mode",
+    "records"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": 1
+    },
+    "adapter": {
+      "enum": [
+        "browser_agent",
+        "Aside"
+      ]
+    },
+    "adapter_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "enum": [
+        "real",
+        "self_test"
+      ]
+    },
+    "records": {
+      "type": "array",
+      "minItems": 60,
+      "maxItems": 60,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fixture_id",
+          "trial",
+          "status",
+          "reason",
+          "input_hash",
+          "fixture_version",
+          "seed",
+          "permissions",
+          "reset",
+          "wall_seconds",
+          "interventions",
+          "cost_usd",
+          "recovery",
+          "answer",
+          "artifacts"
+        ],
+        "properties": {
+          "fixture_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "trial": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "failed",
+              "cancelled",
+              "blocked",
+              "crashed",
+              "not_run",
+              "not_applicable"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input_hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "fixture_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "permissions": {
+            "type": "object"
+          },
+          "reset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "wall_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "interventions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "recovery": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "answer": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
