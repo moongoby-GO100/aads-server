@@ -147,6 +147,8 @@ CANDIDATE_CREATED=0
 CUTOVER_ATTEMPTED=0
 RECOVERED=0
 COMPLETED=0
+MONITOR_STATUS="not_run"
+MONITOR_TICKS=0
 MIGRATIONS_APPLIED=()
 MIGRATIONS_SKIPPED=()
 ASSET_VERSION=""
@@ -1263,19 +1265,37 @@ cutover() {
 }
 
 monitor() {
-    local iters=$(( (MONITOR_SECONDS + MONITOR_INTERVAL - 1) / MONITOR_INTERVAL )) i fails=0 st
+    local iters=$(( (MONITOR_SECONDS + MONITOR_INTERVAL - 1) / MONITOR_INTERVAL )) i fails=0 st logs watch_started
+    watch_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    MONITOR_STATUS="running"
     say "public watch: ${MONITOR_SECONDS}s every ${MONITOR_INTERVAL}s (fail after $MONITOR_FAIL_THRESHOLD consecutive misses)"
     for ((i = 1; i <= iters; i++)); do
         sleep "$MONITOR_INTERVAL"
+        MONITOR_TICKS=$i
         st="$(rdocker inspect -f '{{.State.Running}}' "$NEW_CONTAINER" 2>/dev/null || echo unknown)"
+        # Only inspect logs from this verification window; preserve the active service on failure.
+        if ! logs="$(rdocker logs --since "$watch_started" --tail 1000 "$NEW_CONTAINER" 2>&1)"; then
+            MONITOR_STATUS="failed"
+            say "watch cannot read container logs at tick $i"
+            return 1
+        fi
+        if grep -Eiq '(^|[^[:alnum:]_])(P0|P1|CRITICAL|FATAL)([^[:alnum:]_]|$)|Traceback \(most recent call last\)' <<<"$logs"; then
+            MONITOR_STATUS="failed"
+            say "watch detected P0/P1 or fatal application error at tick $i"
+            return 1
+        fi
         if [[ $st == true ]] && verify_public "$MARKER"; then
             fails=0
         else
             fails=$((fails + 1))
             say "watch miss $fails/$MONITOR_FAIL_THRESHOLD at tick $i (container running=$st)"
-            (( fails >= MONITOR_FAIL_THRESHOLD )) && return 1
+            if (( fails >= MONITOR_FAIL_THRESHOLD )); then
+                MONITOR_STATUS="failed"
+                return 1
+            fi
         fi
     done
+    MONITOR_STATUS="passed"
     return 0
 }
 
@@ -1284,6 +1304,7 @@ emit_result() { # emit_result <status>
     local status=$1 out
     mkdir -p "$RESULT_DIR" 2>/dev/null || true
     out="$(
+        R_MONITOR_STATUS="$MONITOR_STATUS" R_MONITOR_TICKS="$MONITOR_TICKS" R_MONITOR_SECONDS="$MONITOR_SECONDS" R_MONITOR_INTERVAL="$MONITOR_INTERVAL" \
         R_STATUS="$status" R_SHA="$RELEASE_SHA" R_RUN="$RUN_ID" R_MODE="$MODE" R_PREV="$PREV_CONTAINER" \
             R_PREV_IMAGE="$PREV_IMAGE_ID" R_PREV_PORT="$OLD_PORT" R_NEW="$NEW_CONTAINER" R_NEW_PORT="$NEW_PORT" \
             R_IMAGE_TAG="$IMAGE_TAG" R_IMAGE_ID="$IMAGE_ID" R_REUSED="$IMAGE_REUSED" R_PGBK="$PG_BACKUP_PATH" \
@@ -1301,6 +1322,8 @@ purge_detail["status"] = e("R_PURGE_STATUS") or "not_run"
 doc = {
     "status": e("R_STATUS"),
     "mode": e("R_MODE"),
+    "monitor": {"status": e("R_MONITOR_STATUS"), "seconds": int(e("R_MONITOR_SECONDS")),
+                "interval": int(e("R_MONITOR_INTERVAL")), "ticks": int(e("R_MONITOR_TICKS"))},
     "release_sha": e("R_SHA"),
     "run_id": e("R_RUN"),
     "previous": {"container": e("R_PREV"), "image_id": e("R_PREV_IMAGE"), "port": e("R_PREV_PORT")},
@@ -1393,8 +1416,29 @@ main_deploy() {
         if [[ ${existing#*|} == "$OLD_PORT" ]]; then
             NEW_CONTAINER="${existing%%|*}"
             NEW_PORT="$OLD_PORT"
-            IMAGE_TAG="acct-candidate:${SHA8}"
-            say "release ${SHA8} is already served by ${existing%%|*} on port $OLD_PORT; nothing to do"
+            # Inspect the immutable running image, never a mutable SHA tag.
+            local active_info active_sha active_rev
+            [[ $NEW_CONTAINER == "$PREV_CONTAINER" && $(cand_field "$NEW_CONTAINER" 2) == true ]] \
+                || die 12 "same-release container is not the running upstream"
+            [[ $(cand_field "$NEW_CONTAINER" 4) == "$PREV_IMAGE_ID" ]] \
+                || die 12 "same-release container image differs from inspected upstream image"
+            active_info="$(image_info "$PREV_IMAGE_ID")" || die 12 "cannot inspect active release image"
+            IFS='|' read -r IMAGE_ID active_sha active_rev <<<"$active_info"
+            [[ $IMAGE_ID == "$PREV_IMAGE_ID" && $active_sha == "$RELEASE_SHA" && ( $active_rev == "$SHA8" || $active_rev == "$RELEASE_SHA" ) ]] \
+                || die 12 "active image ID/SHA/revision does not match requested release"
+            IMAGE_TAG="$IMAGE_ID"
+            IMAGE_REUSED=true
+            ASSET_STAMP="image_reused"
+            # snapshot_unrelated excludes NEW_CONTAINER; use the same exclusion on both reads.
+            SNAPSHOT_BEFORE="$(snapshot_unrelated)" || die 12 "cannot snapshot containers for active verification"
+            candidate_ok "http://$UP_IP:$NEW_PORT" "$MARKER" || die 12 "active release direct health/marker verification failed"
+            verify_public "$MARKER" || die 12 "active release public health/marker verification failed"
+            need_budget $((MONITOR_SECONDS + MONITOR_INTERVAL + 30)) "already-active certification watch"
+            say "release ${SHA8} is already served by $NEW_CONTAINER; verifying without mutation"
+            if ! monitor; then
+                die 10 "already-active public watch failed; existing service preserved"
+            fi
+            check_unrelated_unchanged || die 11 "unrelated containers changed during already-active verification"
             COMPLETED=1
             emit_result already_active
             return 0

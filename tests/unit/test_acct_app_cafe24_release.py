@@ -206,7 +206,7 @@ pub_get_body() {
   [[ $(pub_state) == ok ]] || return 1
   case $1 in
     */health/live) printf '{"status":"ok"}' ;;
-    */index.html) if [[ $(cat "$D/port") != 8111 ]]; then printf 'downloadSignedContractPdf'; else printf 'old'; fi ;;
+    */index.html) if [[ $(cat "$D/port") != 8111 || -n ${FAKE_ALREADY_ACTIVE:-} ]]; then printf 'downloadSignedContractPdf'; else printf 'old'; fi ;;
     *) printf 'x' ;;
   esac
 }
@@ -1324,8 +1324,13 @@ def test_release_already_active_is_a_noop(box):
     (box.fake / "cands").write_text(
         f"acct-app-candidate-r8|true|8111|{R8_IMAGE}|{box.sha}\n"
     )
-    proc = box.run()
+    (box.fake / "images" / R8_IMAGE.replace(":", "_")).write_text(
+        f"{R8_IMAGE}|{box.sha}|{box.sha[:8]}\n"
+    )
+    proc = box.run(env={"FAKE_ALREADY_ACTIVE": "1"})
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert box.result(proc)["monitor"]["status"] == "passed"
+    assert box.result(proc)["monitor"]["ticks"] == 30
     assert box.result(proc)["status"] == "already_active"
     assert box.builds() == 0 and box.mutations() == []
 
