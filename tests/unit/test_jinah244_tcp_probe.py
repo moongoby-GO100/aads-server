@@ -162,3 +162,20 @@ def test_lease_defaults_only_include_active_targets():
         assert "5.104.85.244" not in content
         for line in lines:
             assert line in content
+
+
+@pytest.mark.parametrize("module_name", ["health_checker", "alert_manager"])
+def test_release_monitoring_sources_exclude_retired_probe(module_name):
+    """Check release sources as well as behavior, including dormant alert paths."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "app" / "services" / f"{module_name}.py").read_text(
+        encoding="utf-8"
+    )
+    for retired_marker in (
+        "ssh_port_jinah244",
+        "jinah244_ssh_port_unreachable",
+        "5.104.85.244",
+    ):
+        assert retired_marker not in source, f"{module_name}: {retired_marker}"

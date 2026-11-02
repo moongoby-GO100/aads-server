@@ -1,5 +1,19 @@
 # 오비서 정지 소속 세션 재로그인 복구 결과
 
+## 폐기 서버 운영 후속 검증 결과 (runner-42316eb0)
+
+- 상태: 저장소 수정·검증 완료, 운영 반영 및 인증 미완료. 금지 명령, lease 전송, 시크릿 접근, 폐기 서버 접속은 수행하지 않았다.
+- 변경 전 범위 판단: 명시된 `tests/unit/test_jinah244_tcp_probe.py`만 코드 변경. 기존 RESULT에는 이 결과만 추가하며 이전 기록은 보존한다. 새 문서 및 HANDOVER.md 변경 없음.
+- STEP 0 분류: 기존 TCP 성공/거부/타임아웃 테스트, 인프라 상태·활성 SSH 보존 테스트, AlertManager 기존 경보 보존 테스트, lease 기본 대상 테스트는 유지. 배포 대상 두 모듈 소스의 폐기 프로브·경보 키/IP 부재 검사는 신규(2개 매개변수 사례). `test_alert_path.py`의 알림 전달·중복 억제·keeper 테스트 및 helper는 유지. 삭제 없음.
+- STEP 0 운영 접점: `health_checker.check_infra`, `_check_tcp_reachable`, `AlertManager.evaluate_rules`, 두 lease 스크립트와 service는 유지(선행 정리 이미 포함). HTTP 라우터/mount, 스케줄러, DB 접점 신규·변경 없음. deploy_runs/ledger/handover DB 실측은 미완료.
+- 기준 SHA: HEAD `d074cb0d`. `git merge-base --is-ancestor`로 `53e89b49`, `4772ebc861de`, 선행 `d074cb0d` 포함을 각각 exit 0으로 확인. 최초 작업 트리는 clean. origin 최신 상태 및 원격 실행 소유권/동일 파일 충돌은 미확인.
+- 운영 기준 대비 관련 diff 확인: 폐기 인프라 체크 및 전용 경보 삭제, lease 기본 대상에서 폐기 IP 제거. 활성 두 호스트, service Nice=5 및 두 ExecStart는 저장소에서 보존. 전체 차이는 110개 파일이므로 ancestry만으로 전체 운영 기능 보존이나 릴리스 적합성을 보증하지 않는다. ACCT 라우팅/DB 목적지는 미확인.
+- 실제 검증: `/root/aads/aads-server/.venv/bin/python -m pytest -q tests/unit/test_jinah244_tcp_probe.py tests/unit/test_alert_path.py tests/unit/test_jinah244_no_new_use.py` → 38 passed in 8.17s.
+- 실제 검증: `bash -n scripts/claude-lease-push.sh scripts/slot_lease_push.sh deploy.sh` 및 `git diff --check` → exit 0. 두 모듈 소스에서 폐기 프로브·경보 키/IP 부재 검사 통과. 실행 중 컨테이너 코드 확인 결과는 아님.
+- 빌드 검증: 승인 후 Runner 빌드 검증 대상. commit/push/build/deploy 실행 없음, 새 배포 ID 없음.
+- 미완료: 활성 runner/deploy_runs/ledger와 중복 릴리스 여부, 공유 호스트 파일 dirty/소유권·백업, 설치 service 반영 및 effective Environment, 외부 HTTP 200, 두 슬롯 digest, routed health/rollback 및 5분 P0/P1·폐기 경보 재발 관찰. 운영 변경이 없어 이번 작업의 운영 롤백은 해당 없음. 코드 복원은 신규 테스트 함수만 제거하면 됨.
+- 핸드오버 DB 미기록: 사용 가능한 연결 도구와 확인된 tenant 문맥이 없고 시크릿 접근 금지 범위에서 쓰기·재조회하지 못함. 요청 고정 key는 `runner:runner-42316eb0`, project AADS, entry_type verification. DB 실패 이벤트 기록도 미수행. 정본 미등록(미완료), 열람 링크 미제공.
+
 document_key: obys-stale-tenant-session-relogin-result (정본 미등록 — 등록 도구 없음, 열람 링크 미제공)
 
 ## STEP 0 기존 구현 분류
