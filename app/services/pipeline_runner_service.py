@@ -12,18 +12,17 @@ Pipeline Runner Orchestrator — 채팅 → Claude Code 자율 작업 → 검수
 """
 import asyncio
 import base64
+import datetime as _dt
 import json
 import logging
 import os
-import datetime as _dt
-from pathlib import Path
 import re
 import shlex
 import time
 import uuid
-
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Dict, NamedTuple, Optional
 
 from app.core.project_config import PROJECT_MAP
@@ -32,13 +31,11 @@ from app.services.goal_binding import (
     parse_goal_binding,
     remediation_purpose,
 )
+from app.services.goal_link_policy import is_goal_project_allowed
 from scripts.claude_model_contract import resolve_model
 
 logger = logging.getLogger(__name__)
 
-# AADS-hosted runner jobs may explicitly bind to ACCT goals. Keep this
-# relationship directional; the reverse mapping is intentionally absent.
-GOAL_LINK_HOST_PROJECTS = {"AADS": frozenset({"ACCT"})}
 
 # ─── 설정 ─────────────────────────────────────────────────────────────────────
 _CLAUDE_TIMEOUT = 3600      # Claude Code 직접 대기 타임아웃 (60분, 폴링 모드 폴백용)
@@ -275,7 +272,7 @@ async def _link_job_to_goal_explicit(
     `GoalLink(goal_id, milestone_id)` 를 돌려준다 — milestone_id 는 요청 필드가 아니라
     지시서 메타까지 반영해 검증을 통과한 값이며, 호출부는 이 값을 그대로 저장해야 한다
     (요청 필드를 다시 넘기면 방금 쓴 milestone_id 를 NULL 로 덮는다). 지정된 목표는 작업과 같은
-    프로젝트여야 하며, AADS 작업은 명시 연결에 한해 ACCT 목표도 허용한다.
+    프로젝트여야 하며, AADS 작업은 명시 연결에 한해 ACCT·FOOD 목표도 허용한다(goal_link_policy).
     그 외 조합은 거부한다. 목표는 draft/active 상태여야 한다.
     blocked 목표는 같은 goal·tenant·project 의 열린(pending/in_progress/blocked) 마일스톤이
     명시된 경우에만 연결한다(REMEDIATION_PURPOSE 유무 무관). 연결만 하고 상태는 바꾸지 않는다.
@@ -309,7 +306,7 @@ async def _link_job_to_goal_explicit(
                 logger.warning("goal_link_rejected_cross_tenant job=%s goal=%s", job_id, binding.goal_id)
                 return None
             goal_project = goal["project"]
-            if goal_project != project and goal_project not in GOAL_LINK_HOST_PROJECTS.get(project, ()):
+            if not is_goal_project_allowed(project, goal_project):
                 logger.warning(
                     "goal_link_rejected_cross_project job=%s goal=%s goal_project=%s job_project=%s",
                     job_id, binding.goal_id, goal["project"], project,
@@ -1576,8 +1573,8 @@ class PipelineCJob:
                     f"기존 대시보드 유지. 수동: `bash /root/aads/aads-dashboard/deploy.sh`"
                 )
 
-            from app.services.qa_pipeline import run_full_qa
             from app.services.ceo_notify import notify_ceo
+            from app.services.qa_pipeline import run_full_qa
 
             self._log("frontend_qa", "대시보드 배포 후 QA 검증 시작...")
             await self._post_to_chat(
@@ -2631,8 +2628,9 @@ async def _find_recent_session(project: str) -> str:
                 return await _query(conn, project)
         except RuntimeError:
             # pool 미초기화 (MCP / 독립 프로세스 경로) → 직접 연결
-            import asyncpg as _asyncpg
             import os as _os
+
+            import asyncpg as _asyncpg
             db_url = _os.getenv("DATABASE_URL", "")
             if not db_url:
                 logger.warning(f"_find_recent_session: pool 없음 + DATABASE_URL 미설정, project={project}")

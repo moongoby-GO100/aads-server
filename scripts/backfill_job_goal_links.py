@@ -34,6 +34,7 @@ from typing import Any, Mapping, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.goal_binding import parse_goal_binding  # noqa: E402
+from app.services.goal_link_policy import is_goal_project_allowed
 
 OPEN_MILESTONE_STATUSES = ("pending", "in_progress", "blocked")
 LINKABLE_GOAL_STATUSES = ("draft", "active", "blocked")
@@ -79,7 +80,7 @@ def plan_link(
         return None, "goal_not_found"
     if goal["tenant_id"] != job["tenant_id"]:
         return None, "cross_tenant"
-    if goal["project"] != job["project"]:
+    if not is_goal_project_allowed(job["project"], goal["project"]):
         return None, "cross_project"
     status = goal["status"]
     if status not in LINKABLE_GOAL_STATUSES:
@@ -92,7 +93,7 @@ def plan_link(
             milestone
             and milestone["goal_id"] == goal["goal_id"]
             and milestone["tenant_id"] == job["tenant_id"]
-            and milestone["project"] == job["project"]
+            and milestone["project"] == goal["project"]
         )
         if not valid:
             if blocked:

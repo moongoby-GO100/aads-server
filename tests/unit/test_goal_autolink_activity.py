@@ -222,6 +222,42 @@ def test_existing_but_rejected_directive_goal_fails_closed(world):
     assert world.job_updates == []
 
 
+FOOD_GOAL = "f00d0916-0916-4a01-9a01-000000000001"
+FOOD_MS = "f00d0916-0916-4a01-9a01-000000000011"
+
+
+def test_directive_links_aads_job_to_food_goal_through_same_validation(world):
+    world.add_goal(FOOD_GOAL, project="FOOD")
+    world.add_milestone(FOOD_MS, FOOD_GOAL, project="FOOD")
+    result = _autolink(instruction=f"GOAL_ID: {FOOD_GOAL}\nMILESTONE_ID: {FOOD_MS}\n")
+    assert (result.goal_id, result.milestone_id, result.source) == (FOOD_GOAL, FOOD_MS, "directive")
+    assert world.job_updates[0][:3] == (JOB, FOOD_GOAL, FOOD_MS)
+    assert world.links[0][0] == TENANT and world.links[0][4] == BIND_SOURCE_EXPLICIT_DIRECTIVE
+
+
+def test_explicit_argument_links_aads_job_to_food_goal(world):
+    world.add_goal(FOOD_GOAL, project="FOOD")
+    world.add_milestone(FOOD_MS, FOOD_GOAL, project="FOOD")
+    result = _autolink(goal_id=FOOD_GOAL, milestone_id=FOOD_MS, instruction="x")
+    assert (result.goal_id, result.milestone_id, result.source) == (FOOD_GOAL, FOOD_MS, "explicit")
+
+
+def test_food_goal_of_other_tenant_fails_closed_without_session_fallback(world):
+    world.add_goal(FOOD_GOAL, project="FOOD", tenant="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    world.add_goal(GOAL_B)
+    world.candidates = [_cand(GOAL_B, MS_B)]
+    result = _autolink(instruction=f"GOAL_ID: {FOOD_GOAL}\n")
+    assert world.job_updates == []
+    assert result.source == "none"
+
+
+def test_food_goal_is_never_picked_by_session_inference(world):
+    # 세션 후보 SQL 은 job.project 에 묶여 있어 AADS 작업이 FOOD 목표를 암묵 선택할 수 없다.
+    assert "g.project = $3" in gal.SESSION_CANDIDATES_SQL and "ms.project = $3" in gal.SESSION_CANDIDATES_SQL
+    result = _autolink(instruction="FOOD 인사 작업이지만 메타데이터는 없다")
+    assert world.job_updates == [] and result.source == "none"
+
+
 def test_closed_session_candidate_is_rejected_by_the_same_validation(world):
     world.add_goal(GOAL_B, status="completed")
     world.candidates = [_cand(GOAL_B, MS_B)]
@@ -510,8 +546,8 @@ def test_list_goals_adds_activity_and_strip_rank_and_keeps_existing_fields(world
 
 
 def test_goals_for_session_sorts_strip_and_reports_unlinked_count(world, monkeypatch):
-    from app.routers import goals as goals_router
     import app.services.direction_guard as direction_guard
+    from app.routers import goals as goals_router
 
     async def halted():
         return False

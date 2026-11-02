@@ -1,5 +1,26 @@
 # 오비서 정지 소속 세션 재로그인 복구 결과
 
+## FOOD 인사 M1 기존 목표 연결 보존 교정 결과 (runner-401e7e23)
+
+- document_key: food-hr-goal-link-rework-result. source_task_id: runner-401e7e23. change_summary: 기존 링크 덮어쓰기와 되돌림의 작업 연결 손실을 방지하는 교정 결과 기록.
+- 상태: 코드 수정 및 단위 검증 완료, 승인 대기. 정본 미등록(미완료), 열람 링크 미제공. 기존 RESULT에 결과만 추가하는 이유는 요청된 STEP 0·검증·미검증 기록을 보존하기 위함이며, HANDOVER.md는 변경하지 않음.
+- 정확한 기준 SHA: ea0215f549f3e0b5743f6323360d4e309574b67e. 보존한 선행 구현 SHA: 16f92c34462737c2be7e87731c0d46f5d95e09bd. 새 커밋 없음. 시작 시 현재 격리 작업트리 clean. 선행 커밋의 코드·테스트 8개 파일 diff만 적용했으며 과거 보고서와 다른 공유 작업트리/static은 변경하지 않음.
+- 변경 범위 사유: AAG는 관련분만 제시했고 현 HEAD에는 backfill·공통 정책 모듈이 없었음. 지시서가 직접 지정한 선행 커밋에서 실제 호출경로(제출/활동 자동연결 → 명시 연결 정책, 재조정, 일반 backfill)를 확인한 뒤 해당 구현을 복원함. AADS는 호스팅 프로젝트이고 FOOD는 업무 목표 프로젝트인 방향성 정책, ACCT 호환, tenant/milestone 검사와 미배포 done 승격 금지는 유지.
+- STEP 0 유지: goal_binding 파서, 기존 제출·활동·목표 조회 테스트/fixture, 재조정 plan_actions의 릴리스 증거 판정, 일반 backfill plan_link의 tenant/상태 검사. HTTP mount/엔드포인트/스케줄러 신규 없음.
+- STEP 0 수정: pipeline_runner_service._link_job_to_goal_explicit, goal_link_reconciler.plan_actions, backfill_job_goal_links.plan_link는 선행 정책 공유 변경을 보존. test_goal_link_integrity.py와 test_goal_autolink_activity.py에는 선행 FOOD 검증 사례를 보존하고 import 순서를 정리함.
+- STEP 0 신규(현 HEAD 대비)/수정(선행 구현 대비): app/services/goal_link_policy.py의 is_goal_project_allowed 및 scripts/backfill_food_hr_m1_links.py의 plan_target, _snapshot, _print_snapshot, run, main, _DryRunRollback과 SQL 상수. 새 owned_link는 insert-only v2 출처만 인정. tests/unit/test_food_hr_m1_backfill.py의 _load/_job/_goal/_ms/_plan/_Tx/_Conn/conn fixture와 기존 dry-run/멱등/되돌림/불변성 테스트를 유지·교정하고 회귀 사례 추가. 삭제한 함수/파일 없음. 중복 프로젝트 정책 상수는 선행 커밋대로 공통 함수로 통합하며 호출부 영향은 위 3경로, 코드 롤백은 이 변경분만 역적용하는 방식(운영 데이터 변경 없음).
+- DB 접점: pipeline_jobs의 목표·milestone 연결, goal_task_links의 INSERT/제한된 detach, goals/milestones의 SELECT·전후 전체 행 비교. project_document_heads와 project_handover_entries는 요청된 메타데이터 기록 대상이나 이번 환경에서 연결 미확인.
+- 교정: 기존 링크는 상태(active/detached/completed), 다른 milestone/goal/tenant 및 release 증거와 무관하게 보존하고 skip. 직접 만든 v2 활성 연결만 멱등 noop. UPSERT를 ON CONFLICT DO NOTHING으로 변경하고 INSERT 0 0을 실패 처리하여 선행 job UPDATE까지 트랜잭션 롤백. job의 원래 milestone만 있는 경우도 보존. v1 표지는 기존 링크 덮어쓰기 이력이 가능하므로 revert 소유권 증거로 인정하지 않음.
+- 안전한 revert: v2 job-created만 작업 목표 연결을 되돌리고 v2 link-only는 원래 작업 연결 유지. tenant/milestone/bind_source/active/증거 없음 조건과 UPDATE 1 검증을 적용. 되돌린 detached 링크는 재활성화하지 않고 반복 apply/revert에도 보존. 기존 링크는 전체 컬럼 SELECT와 전후 비교로 추가 보호.
+- 실제 검증: JWT_SECRET_KEY에 테스트 전용 임시값을 준 저장소 venv Python으로 tests/unit/test_food_hr_m1_backfill.py, tests/unit/test_goal_link_integrity.py, tests/unit/test_goal_autolink_activity.py, tests/unit/test_runner_deploy_directive_contract.py, tests/unit/test_pipeline_runner_deploy_directive_gate.py 실행 → 325 passed in 12.05s. 기존 링크 모든 필드 비교, 경쟁 INSERT 0, 작업 UPDATE 0, detach/revert UPDATE 0 롤백, 증거 있는 링크, tenant/goal/milestone 충돌, 원래 연결 보존, 반복 apply/revert 포함.
+- 초기 실패도 기록: 기본 Python은 fastapi 미설치로 관련 테스트 실패; 저장소 venv의 초기 실행은 JWT_SECRET_KEY 부재로 9개 실패. 테스트 임시 설정 후 전체 지정 테스트 통과. 프로덕션 인증 설정은 변경하지 않음.
+- Ruff: 신규 3개 파일 전체 검사 통과. 기존 5개 파일 전체 검사는 기준 HEAD부터 존재한 진단 135건으로 실패(통과로 보고하지 않음); 코드/메시지별 baseline 대조에서 신규 진단 0건. 해당 파일 E9/F63/F7/F82 검사는 통과. git diff --check 통과. 빌드 항목: 승인 후 Runner 빌드 검증 대상. 금지 명령 실행 없음.
+- PostgreSQL 미검증: 로컬 postgres/initdb/pg_ctl/psql 실행파일 및 격리 테스트 DSN 없음. 기본 Python에는 asyncpg가 없으나 저장소 venv에는 있음. PG 환경으로 connect_timeout=5 읽기 전용 psycopg2 연결을 시도했으나 상세 메시지 없는 OperationalError로 연결 실패하여 SELECT도 실행되지 않음. 운영 DB 쓰기 없음, PostgreSQL 통합·운영 dry-run을 통과로 보고하지 않음. 단위 경쟁 INSERT 테스트는 mock 반환 검증이므로 PostgreSQL 동시성 실증이 아님.
+- 현재 DB 기반 목표 링크 누락/행수, 동일 backfill 활성 runner 수와 ledger reconciled_clean 재확인은 연결 실패로 미확인. 과거 사전조회 결과를 현재 사실로 재사용하지 않음. 실제 연결 후속 조치는 이번 범위에서 수행하지 않음. localStorage 대비 DB 행수·인증 weekly·캐시삭제 유지 등 운영 완료기준 미검증.
+- 문서·핸드오버: 정본 새 판본 초안 등록 및 entry_key=runner:runner-401e7e23 upsert/재조회 미수행. DB 연결 실패, API URL/쓰기 키/monitor 키 미설정, 전용 연결 도구 없음. 핸드오버 DB 미기록; handover_db_write_failed DB 이벤트도 미기록. 운영 완료나 문서 등록 완료로 보고하지 않음.
+- 비용: 실측 비용 자료 미제공으로 금액 산정 불가. 외부 LLM/API 호출 없음.
+
+
 ## 폐기 서버 운영 후속 검증 결과 (runner-42316eb0)
 
 - 상태: 저장소 수정·검증 완료, 운영 반영 및 인증 미완료. 금지 명령, lease 전송, 시크릿 접근, 폐기 서버 접속은 수행하지 않았다.

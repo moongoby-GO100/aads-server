@@ -260,8 +260,8 @@ def test_aads_job_rejects_go100_goal(monkeypatch):
 
 
 def test_acct_job_rejects_aads_goal(monkeypatch):
-    from app.services import pipeline_runner_service as prs
     import app.services.goal_manager as gm
+    from app.services import pipeline_runner_service as prs
 
     conn = _FakeConn({"id": GOAL_A, "tenant_id": "00000000-0000-0000-0000-000000000001", "project": "AADS", "status": "active"})
 
@@ -272,6 +272,122 @@ def test_acct_job_rejects_aads_goal(monkeypatch):
     monkeypatch.setattr(gm, "goal_state_machine", _Machine())
     assert asyncio.run(prs._link_job_to_goal_explicit("runner-test", "ACCT", goal_id=GOAL_A)) is None
     assert not any("UPDATE pipeline_jobs" in query for query, _ in conn.executed)
+
+
+FOOD_GOAL = "f00d0916-0916-4a01-9a01-000000000001"
+FOOD_MILESTONE = "f00d0916-0916-4a01-9a01-000000000011"
+_TENANT_1 = "00000000-0000-0000-0000-000000000001"
+_FOOD_DIRECTIVE = f"GOAL_ID: {FOOD_GOAL}\nMILESTONE_ID: {FOOD_MILESTONE}\n본문\n"
+
+
+def _food_goal(**over):
+    return {"id": FOOD_GOAL, "tenant_id": _TENANT_1, "project": "FOOD", "status": "active", **over}
+
+
+def test_aads_job_explicitly_links_food_goal_with_same_milestone_and_tenant(monkeypatch, caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO):
+        result, linked = _run_auto_link(monkeypatch, _food_goal(), instruction=_FOOD_DIRECTIVE)
+    assert result == (FOOD_GOAL, FOOD_MILESTONE)
+    assert linked["goal_id"] == FOOD_GOAL and linked["milestone_id"] == FOOD_MILESTONE
+    assert linked["tenant_id"] == _TENANT_1
+    assert linked["bind_source"] == BIND_SOURCE_EXPLICIT_DIRECTIVE
+    assert "goal_link_host_project job=runner-test job_project=AADS goal_project=FOOD" in caplog.text
+
+
+def test_aads_job_links_food_goal_via_explicit_arguments(monkeypatch):
+    result, linked = _run_auto_link(
+        monkeypatch, _food_goal(), goal_id=FOOD_GOAL, milestone_id=FOOD_MILESTONE,
+    )
+    assert result == (FOOD_GOAL, FOOD_MILESTONE)
+    assert linked["bind_source"] == BIND_SOURCE_EXPLICIT_API
+
+
+def test_food_link_does_not_touch_goal_milestone_or_release_state(monkeypatch):
+    import app.services.goal_manager as gm
+    from app.services import pipeline_runner_service as prs
+
+    conn = _FakeConn(_food_goal())
+
+    class _Machine:
+        async def _pool(self):
+            return _FakePool(conn)
+
+    monkeypatch.setattr(gm, "goal_state_machine", _Machine())
+    asyncio.run(prs._link_job_to_goal_explicit("runner-test", "AADS", instruction=_FOOD_DIRECTIVE))
+    writes = [q for q, _ in conn.executed]
+    assert any("INSERT INTO goal_task_links" in q for q in writes)
+    assert not any("UPDATE goals" in q or "UPDATE milestones" in q for q in writes)
+    assert not any("dispatch_blocked_at" in q or "release_deploy_run_id" in q for q in writes)
+    link_sql = next(q for q in writes if "INSERT INTO goal_task_links" in q)
+    assert "'pending'" in link_sql and "'completed'" not in link_sql
+
+
+def test_food_job_rejects_aads_goal_reverse_direction(monkeypatch):
+    import app.services.goal_manager as gm
+    from app.services import pipeline_runner_service as prs
+
+    conn = _FakeConn(_food_goal(project="AADS"))
+
+    class _Machine:
+        async def _pool(self):
+            return _FakePool(conn)
+
+    monkeypatch.setattr(gm, "goal_state_machine", _Machine())
+    assert asyncio.run(prs._link_job_to_goal_explicit("runner-test", "FOOD", goal_id=FOOD_GOAL)) is None
+    assert not any("UPDATE pipeline_jobs" in query for query, _ in conn.executed)
+
+
+@pytest.mark.parametrize("job_project", ["ACCT", "GO100", "KIS"])
+def test_non_host_projects_cannot_link_food_goal(monkeypatch, job_project):
+    import app.services.goal_manager as gm
+    from app.services import pipeline_runner_service as prs
+
+    conn = _FakeConn(_food_goal())
+
+    class _Machine:
+        async def _pool(self):
+            return _FakePool(conn)
+
+    monkeypatch.setattr(gm, "goal_state_machine", _Machine())
+    assert asyncio.run(prs._link_job_to_goal_explicit(
+        "runner-test", job_project, instruction=_FOOD_DIRECTIVE)) is None
+    assert conn.executed == []
+
+
+def test_aads_job_rejects_food_goal_of_other_tenant(monkeypatch):
+    result, linked = _run_auto_link(
+        monkeypatch, _food_goal(tenant_id="00000000-0000-0000-0000-000000000002"),
+        instruction=_FOOD_DIRECTIVE,
+    )
+    assert result is None and linked == {}
+
+
+def test_aads_job_food_goal_with_foreign_milestone_does_not_guess(monkeypatch):
+    result, linked = _run_auto_link(
+        monkeypatch, _food_goal(), instruction=_FOOD_DIRECTIVE, milestone_owned=False,
+    )
+    assert result == (FOOD_GOAL, None)
+    assert linked["milestone_id"] is None
+
+
+def test_aads_job_without_goal_context_links_nothing(monkeypatch):
+    result, linked = _run_auto_link(monkeypatch, _food_goal(), instruction="FOOD 관련 작업만 있음")
+    assert result is None and linked == {}
+
+
+def test_policy_is_directional_and_keeps_acct():
+    from app.services.goal_link_policy import is_goal_project_allowed
+
+    assert is_goal_project_allowed("AADS", "AADS")
+    assert is_goal_project_allowed("AADS", "ACCT")
+    assert is_goal_project_allowed("AADS", "FOOD")
+    assert not is_goal_project_allowed("FOOD", "AADS")
+    assert not is_goal_project_allowed("ACCT", "FOOD")
+    assert not is_goal_project_allowed("AADS", "GO100")
+    assert not is_goal_project_allowed("AADS", None)
+    assert not is_goal_project_allowed(None, "FOOD")
 
 
 def test_cross_tenant_goal_is_rejected(monkeypatch):
@@ -317,8 +433,8 @@ def test_blocked_goal_open_milestone_links_without_remediation(monkeypatch, stat
 
 
 def test_blocked_goal_link_updates_job_but_never_goal_or_milestone_state(monkeypatch):
-    from app.services import pipeline_runner_service as prs
     import app.services.goal_manager as gm
+    from app.services import pipeline_runner_service as prs
 
     conn = _FakeConn(_BLOCKED_GOAL)
 
@@ -408,9 +524,8 @@ def test_missing_goal_binding_is_rejected(monkeypatch):
 
 def test_no_explicit_context_never_touches_the_database(monkeypatch):
     """근거가 없으면 목표 조회조차 하지 않고 조용히 건너뛴다."""
-    from app.services import pipeline_runner_service as prs
-
     import app.services.goal_manager as gm
+    from app.services import pipeline_runner_service as prs
 
     class _Exploding:
         async def _pool(self):
@@ -574,6 +689,23 @@ def test_cross_project_link_is_detached_with_evidence():
 def test_aads_hosted_acct_goal_link_survives_reconciliation():
     row = _link(job_project="AADS", goal_project="ACCT")
     assert all(action["kind"] != "misbound" for action in plan_actions([row]))
+
+
+def test_aads_hosted_food_goal_link_survives_reconciliation():
+    row = _link(job_project="AADS", goal_project="FOOD")
+    assert all(action["kind"] != "misbound" for action in plan_actions([row]))
+
+
+def test_food_reconciliation_does_not_complete_unreleased_aads_job():
+    row = _link(job_project="AADS", goal_project="FOOD", job_status="done", job_phase="done",
+                link_status="pending")
+    assert all(action["kind"] != "stale" for action in plan_actions([row]))
+
+
+def test_reverse_and_unrelated_food_links_are_still_detached():
+    for job_project, goal_project in (("FOOD", "AADS"), ("ACCT", "FOOD"), ("GO100", "FOOD")):
+        actions = plan_actions([_link(job_project=job_project, goal_project=goal_project)])
+        assert actions[0]["kind"] == "misbound", (job_project, goal_project)
 
 
 def test_unlisted_cross_project_link_is_still_detached():
