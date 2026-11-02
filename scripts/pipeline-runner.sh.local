@@ -3695,7 +3695,30 @@ commit_job_worktree_for_approval() {
     elif [[ -n "$adopted_sha" ]]; then
         log "  APPROVAL_COMMIT_ADOPTED_EXISTING job=$job_id sha=$adopted_sha (워커가 워크트리에서 이미 커밋)" >&2
     else
-        local commit_msg="Pipeline-Runner: ${job_id} — ${instruction:0:80}" commit_out commit_err exit_code=0
+        local commit_msg commit_out commit_err exit_code=0
+        # Normalize before truncation: a raw instruction slice can leave a lone
+        # character on a separate line, which the unchanged commit-msg hook rejects.
+        commit_msg=$(printf '%s' "$instruction" | python3 -c '
+import re
+import sys
+import unicodedata
+
+def clean(value):
+    return " ".join("".join(
+        " " if unicodedata.category(c).startswith("C") else c
+        for c in value
+    ).split())
+
+instruction = sys.stdin.read()
+title = ""
+for line in instruction.splitlines():
+    match = re.match(r"^TITLE:[ \t]*(.*)$", clean(line))
+    if match and match.group(1).strip():
+        title = match.group(1)
+        break
+summary = clean(title or instruction)[:80].rstrip() or "작업 변경 반영"
+print("fix(pipeline-runner): " + clean(sys.argv[1]) + " — " + summary)
+' "$job_id") || return 1
         commit_out=$(mktemp "/tmp/pipeline-approval-commit-${job_id}.out.XXXXXX")
         commit_err=$(mktemp "/tmp/pipeline-approval-commit-${job_id}.err.XXXXXX")
         ALLOW_AUTH_COMMIT=1 git -C "$worktree_dir" commit -m "$commit_msg" >"$commit_out" 2>"$commit_err" || exit_code=$?
