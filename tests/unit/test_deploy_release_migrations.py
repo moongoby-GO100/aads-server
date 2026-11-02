@@ -6,6 +6,7 @@ goal dispatch failed with "column paused_at does not exist".
 """
 
 import hashlib
+import importlib.util
 import os
 import subprocess
 from pathlib import Path
@@ -217,6 +218,45 @@ def test_plan_applies_nothing(release):
     assert result.returncode == 0
     assert "PENDING migrations/20260929_a.sql" in result.stdout
     assert release.applied() == []
+
+
+def test_actual_release_inventory_holds_obys_and_keeps_aads_pending(release, monkeypatch):
+    # Reproduce #5931's five pending files with real SQL bytes and policy.
+    names = (
+        "20261030_collection_datasets.sql",
+        "20261030_goal_work_item_sync.sql",
+        "20261030_obys_work_schedules.sql",
+        "20261030_spec_first_stale_events.sql",
+        "20261102_design_intake_questions_chat_session.sql",
+    )
+    for name in names:
+        release.write(name, (ROOT / "migrations" / name).read_text())
+    (release.root / "baseline.txt").write_bytes(BASELINE.read_bytes())
+    (release.root / "scripts/migrations_auto_apply_baseline.txt").write_bytes(BASELINE.read_bytes())
+    expected = [f"migrations/{name}" for name in names if "obys" not in name]
+
+    # Only the disposable test's read-only schema transport is simulated.
+    docker = release.root / "docker"
+    docker.write_text('#!/bin/bash\nprintf "0\\n"\n')
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{release.root}:{os.environ['PATH']}")
+
+    result = release.run("--plan")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "HOLD migrations/20261030_obys_work_schedules.sql" in result.stdout
+    assert [line.split()[1] for line in result.stdout.splitlines()
+            if line.startswith("PENDING ")] == expected
+    assert release.applied() == []
+
+    # The independent approval inventory must agree with the shell plan.
+    spec = importlib.util.spec_from_file_location(
+        "release_approval", ROOT / "scripts/release_migration_approval.py")
+    approval = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(approval)
+    items = approval.inventory(release.root, {})
+    assert items == [{"file": name, "sha256": sha(ROOT / name)} for name in expected]
+    with pytest.raises(approval.Rejected, match="not_approved"):
+        approval.verify(release.root, "a" * 40, items, {"document": None})
 
 
 def test_only_limits_to_named_files(release):
