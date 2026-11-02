@@ -459,7 +459,6 @@ async def _check_cpu() -> Dict[str, Any]:
 
 async def check_infra() -> Dict[str, Any]:
     """인프라 전체 점검 (병렬)."""
-    jinah244 = get_server_config("jinah244")
     results = await asyncio.gather(
         _check_db(),
         _check_github_pat(),
@@ -470,13 +469,11 @@ async def check_infra() -> Dict[str, Any]:
         _check_disk("114"),
         _check_memory(),
         _check_cpu(),
-        _check_tcp_reachable(jinah244["host"], jinah244["ssh_port"], timeout=5),
         return_exceptions=True,
     )
 
     keys = ["db", "github_pat", "ssh_211", "ssh_114",
-            "disk_68", "disk_211", "disk_114", "memory_68", "cpu_68",
-            "ssh_port_jinah244"]
+            "disk_68", "disk_211", "disk_114", "memory_68", "cpu_68"]
     infra = {}
     issues = []
     for i, key in enumerate(keys):
