@@ -90,5 +90,60 @@ def test_live_paths_untouched():
     nginx = ROOT / "nginx-aads-upstream.conf"
     if nginx.exists():
         assert "8210" in nginx.read_text(encoding="utf-8")
-    tools_db = (ROOT / "app/api/ceo_chat_tools_db.py").read_text(encoding="utf-8")
-    assert "get_server_host" in tools_db and "jinah244" in tools_db
+    from app.api import ceo_chat_tools_db as db
+
+    assert callable(db._ensure_ssh_tunnel)
+    assert callable(db.validate_query)
+    assert db.validate_query("DELETE FROM journal_entry")
+    assert db.validate_query("SELECT 1") is None
+
+
+def test_acct_without_explicit_host_never_starts_tunnel(monkeypatch):
+    import pytest
+    from app.api import ceo_chat_tools_db as db
+
+    monkeypatch.setitem(db._SSH_TUNNEL_PROJECTS, "ACCT", {**db._SSH_TUNNEL_PROJECTS["ACCT"], "ssh_host": ""})
+    def unexpected(*args, **kwargs):
+        pytest.fail("unconfigured ACCT must not create or reuse a tunnel")
+    monkeypatch.setattr(db.subprocess, "Popen", unexpected)
+    monkeypatch.setattr(db, "_cleanup_idle_ssh_tunnels", unexpected)
+    with pytest.raises(ValueError, match="ACCT_SSH_HOST"):
+        db._ensure_ssh_tunnel("ACCT")
+
+
+def test_acct_config_defaults_and_override_precedence(monkeypatch):
+    import ast
+    from app.api import ceo_chat_tools_db as db
+
+    # Evaluate the actual import-time configuration with isolated environment values.
+    tree = ast.parse((ROOT / "app/api/ceo_chat_tools_db.py").read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.AnnAssign)
+                and getattr(n.target, "id", "") == "_SSH_TUNNEL_PROJECTS")
+    def config():
+        return eval(compile(ast.Expression(node.value), "tunnel-config", "eval"), vars(db))
+    for key in list(db.os.environ):
+        if key.startswith(("ACCT_", "SF_", "NTV2_", "SSH_")):
+            monkeypatch.delenv(key)
+    defaults = config()
+    assert defaults["ACCT"]["ssh_host"] == ""
+    assert defaults["SF"]["ssh_host"] == defaults["NTV2"]["ssh_host"] == get_server_host("cafe24_114")
+    assert defaults["SF"]["remote_port"] == 3306
+    assert defaults["NTV2"]["remote_port"] == 3307
+    monkeypatch.setenv("SSH_HOST", "global.example")
+    monkeypatch.setenv("SSH_ACCT_HOST", "legacy.example")
+    monkeypatch.setenv("ACCT_SSH_HOST", "explicit.example")
+    monkeypatch.setenv("ACCT_SSH_PORT", "2222")
+    monkeypatch.setenv("ACCT_DB_HOST", "db.internal")
+    monkeypatch.setenv("ACCT_DB_PORT", "15432")
+    acct = config()["ACCT"]
+    assert (acct["ssh_host"], acct["ssh_port"], acct["remote_host"], acct["remote_port"]) == ("explicit.example", 2222, "db.internal", 15432)
+    monkeypatch.delenv("ACCT_SSH_HOST")
+    assert config()["ACCT"]["ssh_host"] == "legacy.example"
+    monkeypatch.delenv("SSH_ACCT_HOST")
+    assert config()["ACCT"]["ssh_host"] == "global.example"
+
+
+def test_current_tool_descriptions_use_cafe24_acct():
+    text = (ROOT / "app/api/ceo_chat_tools.py").read_text()
+    assert "ACCT→cafe24_114" in text
+    assert "jinah244" not in text

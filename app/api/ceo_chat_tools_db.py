@@ -55,8 +55,8 @@ _DEFAULT_DB_ENDPOINT: Dict[str, Tuple[str, str]] = {
     "GO100": (get_server_host("contabo14"), "5432"),
     "SF": ("127.0.0.1", "3306"),
     "NTV2": ("127.0.0.1", "3307"),
-    # ACCT(진아실장, jinah244)의 PostgreSQL 은 listen_addresses=localhost 라 밖에서
-    # 붙을 수 없다. 포트를 열지 않고 SSH 터널로만 간다 — 아래 _SSH_TUNNEL_PROJECTS 참조.
+    # ACCT의 SSH 원격 DB 주소는 환경설정으로 지정한다.
+    # 아래 _SSH_TUNNEL_PROJECTS 참조.
     "ACCT": ("127.0.0.1", "5432"),
 }
 
@@ -171,13 +171,12 @@ _SSH_TUNNEL_PROJECTS: Dict[str, Dict[str, Any]] = {
         remote_host="127.0.0.1",
         remote_port=3307,
     ),
-    # ACCT — PostgreSQL 이지만 터널을 탄다. jinah244 의 postgres 는 localhost 에만
-    # 귀를 열어 두었고, 812만 행짜리 회계 원장을 공인 IP 로 꺼낼 이유가 없다.
-    # 계정은 읽기 전용 롤(acct_ro)만 쓴다.
+    # ACCT — cafe24_114로 이전. SSH 호스트에서 도달하는 DB endpoint 확인 전에는
+    # 자동 터널을 만들지 않는다. 명시적 SSH 환경설정과 읽기 전용 롤(acct_ro)을 사용한다.
     "ACCT": _ssh_tunnel_config(
         "ACCT",
-        ssh_host=get_server_host("jinah244"),
-        ssh_port=get_server_ssh_port("jinah244"),
+        ssh_host="",
+        ssh_port=get_server_ssh_port("cafe24_114"),
         ssh_user="root",
         ssh_key="/root/.ssh/id_ed25519",
         remote_host="127.0.0.1",
@@ -813,6 +812,9 @@ def _ensure_ssh_tunnel(project: str) -> int:
     if not tunnel_config:
         raise ValueError(f"프로젝트 {project}의 SSH 터널 설정 없음")
 
+    if not tunnel_config["ssh_host"]:
+        raise ValueError(f"프로젝트 {project}의 검증된 SSH 호스트 설정 필요: {project}_SSH_HOST")
+
     pool_key = _ssh_tunnel_pool_key(tunnel_config)
 
     with _ssh_tunnel_lock:
@@ -1184,7 +1186,7 @@ def _resolve_acct_connection() -> Dict[str, Optional[str]]:
     1. ACCT_APP_DATABASE_URL — 운영 ACCT(cafe24_114 acct-pg) 직결 DSN
     2. ACCT_DATABASE_URL     — 하위 호환 DSN
     3. ACCT_DB_APP_USER/PASSWORD + SSH 터널(_SSH_TUNNEL_PROJECTS["ACCT"],
-       기본 목적지는 사용 중단된 jinah244; ACCT_SSH_HOST/ACCT_SSH_PORT 로 변경)
+       자동 SSH 호스트 기본값 없음; 검증된 ACCT_SSH_HOST/ACCT_SSH_PORT 설정 필요)
 
     반환 target 은 로그용 '호스트:포트' 이며 자격증명을 포함하지 않는다.
     """
