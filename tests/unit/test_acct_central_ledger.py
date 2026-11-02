@@ -15,10 +15,11 @@ from app.services.deploy_observability import git_release_preflight
 from app.services.deploy_adapters.base import BaseDeployAdapter, DeployRequest
 
 
-def test_acct_project_maps_to_jinah244():
-    assert PROJECT_TO_SERVER["ACCT"] == "jinah244"
+def test_acct_project_maps_to_cafe24_114():
+    assert PROJECT_TO_SERVER["ACCT"] == "cafe24_114"
     assert "ACCT" in ALL_PROJECTS
-    assert get_server_host("jinah244") == "5.104.85.244"
+    assert get_server_host(PROJECT_TO_SERVER["ACCT"]) == "114.207.244.86"
+    assert "ACCT" in list_servers()[2]["projects"]
 
 
 def test_jinah244_is_not_health_monitored():
@@ -27,6 +28,7 @@ def test_jinah244_is_not_health_monitored():
 
 
 def test_jinah244_is_in_ledger():
+    assert len(LEDGER_SERVER_IDS) == 4
     assert "jinah244" in LEDGER_SERVER_IDS
     assert "jinah244" in [server["id"] for server in list_ledger_servers()]
 

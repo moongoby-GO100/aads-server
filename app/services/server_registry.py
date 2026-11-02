@@ -16,6 +16,7 @@ from typing import Dict, List, Any
 
 STATUS_ACTIVE = "active"
 STATUS_DECOMMISSIONING = "decommissioning"
+STATUS_RETIRED = "retired"
 
 # ─── 서버 정의 (정규 명칭) ────────────────────────────────────────────────
 _CONTABO116: Dict[str, Any] = {
@@ -56,7 +57,7 @@ _CAFE24_114: Dict[str, Any] = {
     "ssh_port": 7916,
     "type": "ssh",
     "provider": "Cafe24",
-    "projects": ["SF", "NTV2", "NAS"],
+    "projects": ["SF", "NTV2", "NAS", "ACCT"],
     "directive_base": "/root/.genspark/directives",
     "http_health_urls": [
         "https://v2.newtalk.kr/",
@@ -73,15 +74,14 @@ _JINAH244: Dict[str, Any] = {
     "ssh_port": 22,
     "type": "ssh",
     "provider": "Contabo",
-    "projects": ["ACCT"],
+    "projects": [],
     "directive_base": "/root/.genspark/directives",
     "http_health_urls": [],
-    "display_name": "진아실장 서버 / 회계비서 (사용 중단·이관 대기)",
+    "display_name": "진아실장 서버 / 회계비서 (사용 중단·폐기)",
     "legacy_ids": ["244"],
-    # 2026-10-02 CEO 결정: 신규 사용 중단. 원장에는 남긴다 — ACCT DB 터널이
-    # get_server_host("jinah244") 를 쓰고 OBYS 재무 API(8210 터널)도 아직 이 서버에 의존한다.
-    "status": STATUS_DECOMMISSIONING,
-    "status_label": "사용 중단(이관 대기)",
+    # 2026-11-02 CEO 결정: 폐기. ACCT 운영은 cafe24_114, 이 항목은 원장 보존용.
+    "status": STATUS_RETIRED,
+    "status_label": "사용 중단(폐기)",
 }
 
 # 헬스체크 대상 서버 ID 목록 — 워치독과 헬스 집계는 이 리스트 기준
@@ -129,7 +129,7 @@ PROJECT_TO_SERVER: Dict[str, str] = {
     "SF": "cafe24_114",
     "NTV2": "cafe24_114",
     "NAS": "cafe24_114",
-    "ACCT": "jinah244",
+    "ACCT": "cafe24_114",
 }
 
 # 프로젝트 별칭 정규화 (ShortFlow → SF, NewTalk → NTV2 등)
@@ -176,7 +176,7 @@ def get_server_status(server_id: str) -> str:
 
 def is_server_decommissioning(server_id: str) -> bool:
     """신규 배포·동기화 대상에서 빠진 '사용 중단' 서버인가."""
-    return get_server_status(server_id) == STATUS_DECOMMISSIONING
+    return get_server_status(server_id) in {STATUS_DECOMMISSIONING, STATUS_RETIRED}
 
 
 def get_server_host(server_id: str) -> str:

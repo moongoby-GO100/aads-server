@@ -1,7 +1,7 @@
 """진아서버(jinah244) 신규 사용 중단(2026-10-02 CEO 결정) 회귀 테스트.
 
 배포·동기화 기본 대상에서는 빠지고, 원장에는 '사용 중단' 으로 남으며,
-운영 의존(ACCT DB 터널·OBYS 8210 터널)은 그대로여야 한다.
+폐기 상태에서도 기존 호스트 조회 호환성을 보존한다.
 """
 from __future__ import annotations
 
@@ -54,12 +54,12 @@ def test_runner_sync_leaves_restore_hint():
     assert "AADS_RUNNER_SYNC_TARGETS" in _function_body(text, "default_targets")
 
 
-def test_registry_marks_jinah244_decommissioning_but_keeps_ledger():
+def test_registry_marks_jinah244_retired_but_keeps_ledger():
     entry = SERVER_REGISTRY["jinah244"]
-    assert entry["status"] == "decommissioning"
-    assert entry["status_label"] == "사용 중단(이관 대기)"
+    assert entry["status"] == "retired"
+    assert entry["status_label"] == "사용 중단(폐기)"
     assert "사용 중단" in entry["display_name"]
-    assert get_server_status("jinah244") == "decommissioning"
+    assert get_server_status("jinah244") == "retired"
     assert is_server_decommissioning("244")
     assert not is_server_decommissioning("contabo116")
     assert get_server_status("contabo14") == "active"
