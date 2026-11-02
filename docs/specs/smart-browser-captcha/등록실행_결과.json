@@ -1,0 +1,160 @@
+{
+  "title": "스마트브라우저 캡챠 등록 인계 및 검증 결과",
+  "document_key": "smart-browser-captcha-execution-result",
+  "source_task_id": "runner-6fbe30cd",
+  "reviewed_base_sha": "d6152b7cf758a459772282ffd70868ac31484587",
+  "reviewed_bundle_sha256": "6fedf15b210f479319d94634d76d70e2e7d1a1dd53f587a36263ea61d8f0d76b",
+  "reviewed_file_sha256": {
+    "docs/plans/20261102_AADS_스마트브라우저_CAPTCHA개선_기획서.md": "b0d178e3e3e8f1485756574b52672f0598a089c2cfe1647f4486344f4881b03d",
+    "docs/prd/20261102_AADS_스마트브라우저_CAPTCHA개선_PRD.md": "f739a7568e9a63f5cc3d7514720024ec452077220b1217427e780d0c87d5e26f",
+    "docs/design/20261102_AADS_스마트브라우저_CAPTCHA개선_설계서.md": "1bbc56ee901a696a4da6029933281955c93e0cb154b1a96385f6a02d51315194",
+    "docs/specs/smart-browser-captcha/업무계층_등록계획.json": "791166ccea54f54311ed321df8d438281bcfa7dc85c4562592fd088fc9948f60",
+    "docs/specs/smart-browser-captcha/validate_manifest.py": "fd0fd2111c5dcd84ae1e489fb4440b459b2251a5de265992247aadbc8007150d"
+  },
+  "source_snapshot": {
+    "sha256": "f2554430e5f670714b50b9892c64806b3f441700a8d2fb565dec24e87306aa34",
+    "source": "current_session_query_database",
+    "session_id": "65f926cb-75c0-47e5-bc2d-b22310dbcd02",
+    "verification": "4/4 raw UTF-8 content hashes matched",
+    "live": false
+  },
+  "source_hashes_verified": 4,
+  "historical_predecessor_attempts": {
+    "job_id": "runner-94f7eafb",
+    "read_attempts": [
+      {
+        "method": "GET",
+        "path": "/api/v1/directives/preflight",
+        "status": null,
+        "error": "URLError: <urlopen error [Errno -3] Temporary failure in name resolution>"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/goals/1a463229-5bbe-4c7e-b020-71b157acc241/status",
+        "status": null,
+        "error": "URLError: <urlopen error [Errno -3] Temporary failure in name resolution>"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/goals/1a463229-5bbe-4c7e-b020-71b157acc241/tree",
+        "status": null,
+        "error": "URLError: <urlopen error [Errno -3] Temporary failure in name resolution>"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/projects/AADS/documents/smart-browser-captcha-plan",
+        "status": null,
+        "error": "URLError: <urlopen error [Errno -3] Temporary failure in name resolution>"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/projects/AADS/documents/smart-browser-captcha-prd",
+        "status": null,
+        "error": "URLError: <urlopen error [Errno -3] Temporary failure in name resolution>"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/projects/AADS/documents/smart-browser-captcha-design",
+        "status": null,
+        "error": "URLError: <urlopen error [Errno -3] Temporary failure in name resolution>"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/handovers?project_key=AADS&q=smart-browser-v4-review-20261102",
+        "status": null,
+        "error": "URLError: <urlopen error [Errno -3] Temporary failure in name resolution>"
+      }
+    ],
+    "database_probe": "localhost:5432 PermissionError [Errno 1] Operation not permitted",
+    "interpretation": "historical transport DNS/EPERM failures; not permission denial and not repeated in this task"
+  },
+  "current_access": {
+    "normal_query_or_registration_mcp_available": false,
+    "live_preflight_pipeline_ledger": "not_run; tools unavailable; snapshot only",
+    "same_file_local_conflict": false,
+    "network_registration_retried": false,
+    "secret_access": false
+  },
+  "writes_submitted": false,
+  "db_writes": 0,
+  "documents_registered": 0,
+  "milestones_registered": 0,
+  "epics_registered": 0,
+  "stories_registered": 0,
+  "tasks_registered": 0,
+  "runner_links_registered": 0,
+  "db_before_counts": null,
+  "db_after_counts": null,
+  "static_validation": {
+    "manifest": {
+      "exit_code": 0,
+      "status": "passed"
+    },
+    "negative_mutations": {
+      "count": 90,
+      "rejected": 90,
+      "status": "passed"
+    },
+    "compileall": {
+      "exit_code": 0,
+      "status": "passed"
+    },
+    "git_diff_check": {
+      "exit_code": 0,
+      "status": "passed",
+      "limitation": "untracked original seven files require separate whitespace scan"
+    },
+    "seven_file_whitespace_scan": {
+      "status": "passed",
+      "exit_code": 0,
+      "files": 7
+    }
+  },
+  "live_verification": {
+    "goal_status_owner_title": "not_run",
+    "active_pipeline_ledger": "not_run",
+    "canonical_generation_lookup": "not_run",
+    "canonical_register_readback": "not_run",
+    "hierarchy_create_readback": "not_run",
+    "database_idempotency_replay": "not_run",
+    "runner_link_readback": "not_run",
+    "server_site_e2e": "not_run",
+    "pc_site_e2e": "not_run",
+    "recipe_register_approve_replay": "not_run",
+    "PM_C1_C2_C3_postgres_gc": "not_run"
+  },
+  "planned_counts": {
+    "C": {
+      "milestones": 5,
+      "epics": 5,
+      "stories": 10,
+      "tasks": 20
+    },
+    "existing_M": {
+      "milestones_preserved": 13,
+      "epics": 13,
+      "stories": 13,
+      "tasks": 13
+    }
+  },
+  "handover": {
+    "ok": false,
+    "entry_key": "runner:runner-6fbe30cd",
+    "reason": "normal handover tool unavailable; no transport retry/secret access; original session handoff pending"
+  },
+  "events": [
+    {
+      "event": "handover_db_write_failed",
+      "persisted_to_server": false,
+      "reason": "normal tool unavailable; 핸드오버 DB 미기록"
+    }
+  ],
+  "registration_status": "정본 미등록(미완료)",
+  "view": null,
+  "report_line": null,
+  "handoff_session_id": "65f926cb-75c0-47e5-bc2d-b22310dbcd02",
+  "cost_usd": null,
+  "paid_tool_calls": 0,
+  "cost_note": "actual cost unmeasured; null is not $0",
+  "forbidden_operations_executed": false
+}
