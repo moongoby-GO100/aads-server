@@ -56,6 +56,7 @@
       <button type="button" class="btn" data-payroll-action="pay">지급 완료로 기록</button>
       <button type="button" class="btn" data-payroll-action="deliver">명세서 발송</button></div>
       <p role="status" data-payroll-message></p><div data-payroll-versions></div>`;
+    host.querySelectorAll("button,select,input").forEach(control => {control.style.minHeight = "44px";});
     const form = host.querySelector("form"), picker = host.querySelector("[data-payroll-employee]");
     const statementPicker = host.querySelector("[data-payroll-statement]");
     const message = host.querySelector("[data-payroll-message]");
@@ -114,7 +115,7 @@
       } catch (error) {
         if (current() && requestGeneration === generation) message.textContent = error.message;
       } finally {
-        busy = false;if(current())restoreButtons();
+        busy = false;if(current()){restoreButtons();if(message.textContent === "처리 중입니다.")message.textContent = "";}
       }
     };
     const saved = async statement => {

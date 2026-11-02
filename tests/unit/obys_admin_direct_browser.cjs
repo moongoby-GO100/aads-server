@@ -110,6 +110,7 @@ try{for(const width of [1920,390]){
   await window.ObysPayrollAdmin.mount(document.getElementById('payroll'),{api,businessId:'fixture-b',month:'2026-11',onSaved:()=>{window.savedCount++},downloadPdf:id=>{window.pdfCalls.push(id)}});
  });
  const choose=page.locator('[data-payroll-employee]');
+ assert.equal(await page.locator('#payroll').evaluate(host=>[...host.querySelectorAll('button,select,input')].every(control=>control.getBoundingClientRect().height>=44)),true);
  assert.equal(await page.locator('input[name="gross_pay"]').inputValue(),'10000');
  assert.equal(await page.locator('[data-payroll-statement] option[value="other-business"]').count(),0);
  await choose.selectOption('b@example.test');
@@ -134,6 +135,15 @@ try{for(const width of [1920,390]){
  assert.equal(await page.locator('input[name="gross_pay"]').inputValue(),'21000');
  if(evidence)await page.screenshot({path:`${evidence}/payroll-${width}-workflow.png`,fullPage:true});
  assert.equal(await page.evaluate(()=>window.payrollCalls.filter(c=>/\/(confirm|pay|deliver)$/.test(c.path)).length),0);
+ await choose.selectOption('a@example.test');
+ await page.locator('[data-payroll-action="defaults"]').click();
+ await page.waitForFunction(()=>document.querySelector('input[name="gross_pay"]').value==='12000'&&document.querySelector('[data-payroll-message]').textContent!=='처리 중입니다.');
+ assert.ok((await page.locator('[data-payroll-basis]').innerText()).includes('서명 계약 기준'));
+ const draftCalls=await page.evaluate(()=>window.payrollCalls.filter(c=>c.path==='/payroll/draft-from-attendance').length);
+ page.removeAllListeners('dialog');page.on('dialog',d=>d.dismiss());
+ await page.locator('[data-payroll-action="draft"]').click();
+ await page.waitForFunction(()=>document.querySelector('[data-payroll-message]').textContent==='');
+ assert.equal(await page.evaluate(()=>window.payrollCalls.filter(c=>c.path==='/payroll/draft-from-attendance').length),draftCalls);
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({width,roster:'PASS',payroll:'PASS',fixture:true,productionWrites:0,pageErrors:0}));
  await page.close();
