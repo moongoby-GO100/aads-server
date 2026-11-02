@@ -3909,8 +3909,14 @@ async def accept_invite_with_auto_approval(payload: dict[str, Any], user: dict[s
     result = await asyncio.to_thread(accept_invite, payload, user)
     requests: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
+    # 링크만 전달한 초대는 실제 신청자를 관리자가 확인한 뒤 승인한다.
+    invite = await asyncio.to_thread(_find_invite, str(payload.get("token") or ""))
+    email_bound = bool(str(invite.get("email") or "").strip())
     for created in result["requests"]:
-        outcome = await auto_approve_join_request(created)
+        if email_bound:
+            outcome = await auto_approve_join_request(created)
+        else:
+            outcome = {"approved": False, "reason": "invite_without_email", "request": created}
         requests.append(outcome["request"])
         summaries.append(_auto_approve_summary(outcome))
     return {**result, "request": requests[0], "requests": requests, "auto_approve": summaries}

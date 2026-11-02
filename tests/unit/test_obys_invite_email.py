@@ -347,8 +347,62 @@ def test_index_invite_form_requires_email_and_locks_signup_email():
     assert "invite.email_masked" in html
 
 
-def test_v41_invite_form_requires_email():
+def test_v41_invite_form_allows_optional_email():
     html = Path("app/static/apps/obys/admin.html").read_text(encoding="utf-8")
-    assert 'name="email" type="email" placeholder="직원 이메일(필수)" required' in html
+    assert 'name="email" type="email" placeholder="직원 이메일(선택)" title=' in html
+    assert 'id="empInviteCopyV41"' in html
+    assert 'input.select()' in html
     assert "body={name:form.name.value.trim(),email," in html
     assert "invite.email_masked" in html
+
+
+def test_email_free_accept_requires_admin_approval_even_when_auto_enabled(db, monkeypatch):
+    import asyncio
+
+    invite = _invite()
+
+    async def unexpected_auto_approval(record):
+        raise AssertionError("이메일 미지정 초대는 자동승인 금지")
+
+    monkeypatch.setattr(svc, "auto_approve_join_request", unexpected_auto_approval)
+    # 실제 수락은 fixture 저장소에서 실행하고, 스레드 전달만 격리한다.
+    from unittest.mock import AsyncMock
+    accepted = svc.accept_invite({"token": invite["token"]}, EMPLOYEE)
+    monkeypatch.setattr(svc.asyncio, "to_thread", AsyncMock(side_effect=[accepted, _stored(invite["id"])]))
+    result = asyncio.run(svc.accept_invite_with_auto_approval({"token": invite["token"]}, EMPLOYEE))
+    assert result["request"]["status"] == "pending"
+    assert result["request"]["email"] == EMPLOYEE["email"]
+    assert result["auto_approve"] == [{"approved": False, "reason": "invite_without_email"}]
+
+
+@pytest.mark.parametrize("state,expected", [("expired", 410), ("revoked", 404), ("accepted", 409)])
+def test_email_free_invite_cannot_be_reused_or_accepted_after_expiry(db, state, expected):
+    invite = _invite()
+    rows = svc._read_file_rows("employee_invites")
+    if state == "expired":
+        rows[0]["expires_at"] = "2000-01-01T00:00:00+09:00"
+    elif state == "accepted":
+        svc.accept_invite({"token": invite["token"]}, EMPLOYEE)
+        rows = svc._read_file_rows("employee_invites")
+    else:
+        rows[0]["status"] = state
+    svc._write_file_rows("employee_invites", rows)
+    before = len(db.ledgers["employee_join_requests"])
+    with pytest.raises(HTTPException) as exc:
+        svc.accept_invite({"token": invite["token"]}, STRANGER)
+    assert exc.value.status_code == expected
+    assert len(db.ledgers["employee_join_requests"]) == before
+
+
+def test_email_bound_accept_keeps_existing_auto_approval_policy(db, monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    invite = _invite(email=EMP_EMAIL)
+    accepted = svc.accept_invite({"token": invite["token"]}, EMPLOYEE)
+    monkeypatch.setattr(svc.asyncio, "to_thread", AsyncMock(side_effect=[accepted, _stored(invite["id"])]))
+    approve = AsyncMock(return_value={"approved": False, "reason": "auto_approve_disabled", "request": accepted["request"]})
+    monkeypatch.setattr(svc, "auto_approve_join_request", approve)
+    result = asyncio.run(svc.accept_invite_with_auto_approval({"token": invite["token"]}, EMPLOYEE))
+    approve.assert_awaited_once_with(accepted["request"])
+    assert result["auto_approve"] == [{"approved": False, "reason": "auto_approve_disabled"}]

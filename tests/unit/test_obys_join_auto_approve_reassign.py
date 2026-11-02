@@ -280,9 +280,9 @@ def test_notification_failure_does_not_undo_approval(world):
     assert result["request"]["status"] == "approved"
 
 
-def test_invite_accept_is_auto_approved(world):
+def test_email_bound_invite_accept_is_auto_approved(world):
     svc._write_file_rows(
-        "employee_invites", [{"id": "inv-1", "token": "tok-1", "branch": "성신여대점", "name": "초대 직원", "status": "pending"}]
+        "employee_invites", [{"id": "inv-1", "token": "tok-1", "email": EMP_EMAIL, "branch": "성신여대점", "name": "초대 직원", "status": "pending"}]
     )
     result = asyncio.run(svc.accept_invite_with_auto_approval({"token": "tok-1"}, EMPLOYEE))
     assert result["request"]["status"] == "approved"
