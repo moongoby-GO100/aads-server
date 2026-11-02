@@ -164,6 +164,7 @@
   </footer>
 </main>
 
+<script src="modules/attendance-corrections.js?v=20261102-r1"></script>
 <script>
 (() => {
   "use strict";
@@ -312,6 +313,7 @@
 
   async function loadState() {
     clearError();
+    $("attendanceCorrections")?.remove();
     const businessId = state.businessId;
     const loadId = ++state.loadId;
     state.loading = true;
@@ -322,6 +324,9 @@
       if (loadId !== state.loadId || businessId !== state.businessId) return;
       state.clock = clock;
       render();
+      let corrections = $("attendanceCorrections");
+      if (!corrections) { corrections = document.createElement("section"); corrections.id = "attendanceCorrections"; corrections.className = "card"; $("todayView").after(corrections); }
+      window.ObysAttendanceCorrections.mount(corrections, {api, businessId, onSaved:loadState});
     } catch (error) {
       if (loadId !== state.loadId || businessId !== state.businessId) return;
       if (error.status === 401) { show("loginView", true); return; }

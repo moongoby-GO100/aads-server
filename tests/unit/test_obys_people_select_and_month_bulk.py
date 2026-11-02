@@ -91,9 +91,11 @@ def test_detail_tab_select_switches_calendar_rows(tmp_path):
 const state={route:'attendance',peopleMonth:'2026-10',readRole:'owner',status:'전체 상태',selected:{},search:'',businessId:'b1',peopleTab:'detail'};
 const configs={payroll:{title:'급여',columns:['직원','총지급액','공제','실수령','상태']},attendance:{title:'근태',columns:['직원','일자','지점','근무시간','상태']}};
 const handlers={};const elements={};
-const document={getElementById:id=>elements[id]||(elements[id]={dataset:{},addEventListener:(t,f)=>{handlers[id+':'+t]=f}})};
+const workspaceApi=async()=>({});
+const window={ObysAttendanceCorrections:{mount(host,options){assert.equal(options.manager,true);assert.equal(options.businessId,'b1')}}};
+const document={createElement:()=>({}),getElementById:id=>elements[id]||(elements[id]={dataset:{},addEventListener:(t,f)=>{handlers[id+':'+t]=f}})};
 function bindWorkSchedulesV41(){};function bindManualEmployeePickerV41(){};
-const page={innerHTML:'',insertAdjacentHTML(){},querySelectorAll:()=>[]};
+const page={innerHTML:'',append(){},insertAdjacentHTML(){},querySelectorAll:()=>[]};
 let rerenders=0;const kstDateV41=()=>'2026-10-30';function renderPageV41(){rerenders++};function openDetailV41(){};function previewContractSchedulesV41(){};
 async function loadLiveRoute(){};
 ''' + helpers + renderer + r'''

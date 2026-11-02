@@ -19,7 +19,7 @@ const source = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 const scenario = process.argv[2], elements = new Map(), handlers = {}, calls = [];
 const el = id => {
   if (!elements.has(id)) elements.set(id, {hidden:true, disabled:false, value:'', textContent:'',
-    innerHTML:'', classList:{toggle(){}}, addEventListener(name, fn){this[name] = fn;}});
+    innerHTML:'', remove(){}, classList:{toggle(){}}, addEventListener(name, fn){this[name] = fn;}});
   return elements.get(id);
 };
 const storage = new Map([['aads_token','fixture-token']]);
@@ -47,7 +47,7 @@ const context = {console,Date,Promise,Error,encodeURIComponent,decodeURIComponen
   setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},localStorage,fetch,
   document:{cookie:'',getElementById:el},matchMedia:()=>({matches:true}),confirm:()=>true,
   navigator:{onLine:true,userAgent:'fixture',geolocation:{getCurrentPosition(){geoReads++;throw Error('unexpected location request')}}},
-  window:{location:{replace(){}},addEventListener:(name,fn)=>{handlers[name]=fn}}};
+  window:{ObysAttendanceCorrections:{mount(){}},location:{replace(){}},addEventListener:(name,fn)=>{handlers[name]=fn}}};
 vm.runInNewContext(source, context);
 const flush = async()=>{for(let i=0;i<12;i++)await new Promise(resolve=>setImmediate(resolve));};
 (async()=>{

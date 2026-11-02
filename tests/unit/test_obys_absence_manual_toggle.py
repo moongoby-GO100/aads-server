@@ -50,9 +50,11 @@ def test_absence_buttons_render_and_call_api(tmp_path):
     script.write_text('''const assert=require('node:assert/strict');
 const state={route:'attendance',peopleMonth:'2026-10',readRole:'owner',status:'전체 상태',selected:{},search:'',businessId:'b1',peopleTab:'detail',peoplePerson:'k@x.test'};
 const configs={payroll:{title:'급여',columns:['직원','총지급액','공제','실수령','상태']},attendance:{title:'근태',columns:['직원','일자','지점','근무시간','상태']}};
-const elements={};const document={getElementById:id=>elements[id]||(elements[id]={addEventListener(){}})};
+const mounts=[],hosts=[];
+const window={ObysAttendanceCorrections:{mount(host,options){mounts.push({host,options});assert.equal(options.manager,true);assert.equal(options.businessId,'b1');assert.equal(options.api,workspaceApi);assert.equal(host,hosts.at(-1));assert.equal(host.className,'section')}}};
+const elements={};const document={createElement:tag=>{assert.equal(tag,'section');return {}},getElementById:id=>elements[id]||(elements[id]={addEventListener(){}})};
 function bindWorkSchedulesV41(){};function bindManualEmployeePickerV41(){};
-let buttons=[];const page={innerHTML:'',insertAdjacentHTML(){},querySelectorAll:s=>s==='[data-absence-action]'?buttons:[]};
+let buttons=[];const page={innerHTML:'',append(host){hosts.push(host)},insertAdjacentHTML(){},querySelectorAll:s=>s==='[data-absence-action]'?buttons:[]};
 const kstDateV41=()=>'2026-10-30';function renderPageV41(){};function openDetailV41(){};
 const calls=[],toasts=[];let reloads=0;async function loadLiveRoute(){reloads++}
 async function workspaceApi(path,opt){calls.push([path,opt]);}
@@ -63,6 +65,7 @@ state.workSchedules={month:{rows:[sch('2026-10-01'),sch('2026-10-02',{judgment:{
 const rec=(id,d,status)=>liveRow({id,employee_key:'k@x.test',raw:{id,employee_name:'김직원',employee_email:'k@x.test',work_date:d,start_at:'09:00:00',end_at:'18:00:00',break_minutes:60,hourly_wage:10000,status,branch:'본점'},display:{직원:'김직원',일자:d}},configs.attendance);
 configs.attendance.data=[rec('r1','2026-10-01','approved'),rec('r2','2026-10-02','rejected')];
 renderPeopleV41(configs.attendance);
+assert.equal(mounts.length,1);assert.equal(hosts.length,1);
 const html=page.innerHTML;
 assert(html.includes('2026-10-01 (목)'));
 assert(html.includes('aria-label="2026-10-30 (금)" aria-current="date"'));
@@ -78,6 +81,7 @@ const mk=(action,day,id)=>({dataset:{absenceAction:action,absenceDay:day,recordI
 buttons=[mk('mark-absent','2026-10-01','r1'),mk('restore-present','2026-10-02','r2'),mk('mark-present','2026-10-03','')];
 renderPeopleV41(configs.attendance);
 (async()=>{
+ assert.equal(mounts.length,2);assert.equal(hosts.length,2);
  for(const b of buttons)await b.onclick();
  assert.equal(calls.length,3);assert.equal(reloads,3);assert.equal(toasts.length,0);
  assert(confirms[0].includes('2026-10-01')&&confirms[0].includes('김직원'));
@@ -87,7 +91,7 @@ renderPeopleV41(configs.attendance);
  assert.equal(calls[1][1].method,'PUT');assert.equal(body(1).status,'approved');
  assert.equal(calls[2][1].method,'POST');assert(calls[2][0].endsWith('/attendance/records'));
  assert.equal(body(2).status,'approved');assert.equal(body(2).memo,'출근(수기 확인)');assert.equal(body(2).end_at,'18:00');assert.equal(body(2).break_minutes,60);assert.equal(body(2).employee_email,'k@x.test');
- state.readRole='member';renderPeopleV41(configs.attendance);assert(!page.innerHTML.includes('결근으로 변경'));
+ state.readRole='member';renderPeopleV41(configs.attendance);assert(!page.innerHTML.includes('결근으로 변경'));assert.equal(mounts.length,2);assert.equal(hosts.length,2);
 })().catch(e=>{console.error(e);process.exit(1)});
 ''')
     result = subprocess.run(["node", str(script)], capture_output=True, text=True)
