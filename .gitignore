@@ -137,3 +137,6 @@ docs/reports/*SECURITY_AUDIT*
 # 러너가 절단된 리뷰 diff 의 전량을 워크트리에 남기는 사람용 파일 (_persist_full_diff_if_truncated).
 # 추적되면 diff 앞머리를 혼자 다 먹어 실제 소스 변경이 리뷰에서 잘려 나간다 (2026-09-30, 6건 유입).
 .runner_full_diff.patch
+
+# Host-generated token-free account identity; never source-controlled.
+app/data/antigravity_identity.json
