@@ -25,6 +25,7 @@ from app.api import (
     obys_finance,
     obys_inventory,
     obys_workspaces,
+    obys_attendance_corrections,
     unni_naengmyeon,
 )
 
@@ -178,6 +179,7 @@ app.include_router(obys_finance.router, prefix="/api/v1", tags=["yeoljeong-finan
 app.include_router(obys_finance.public_router, prefix="/api/v1", tags=["yeoljeong-finance-public"])
 app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"])
 app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])
+app.include_router(obys_attendance_corrections.router, prefix="/api/v1")
 app.include_router(obys_workspaces.router, prefix="/api/v1", tags=["obys-workspaces"])
 app.include_router(obys_collections.router, prefix="/api/v1", tags=["obys-collections"])
 app.include_router(collection_datasets_router, prefix="/api/v1")
