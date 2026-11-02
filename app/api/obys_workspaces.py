@@ -1196,6 +1196,7 @@ class WorkScheduleBulkIn(BaseModel):
     break_minutes: int = Field(default=0, ge=0, lt=1440)
     kind: Literal["work", "off", "leave"] = "work"
     memo: str = Field(default="", max_length=500)
+    preserve_existing: bool = False
     # 격자에서 선택한 칸은 패턴과 별도로 정확한 날짜·직원만 적용한다.
     cells: list[WorkScheduleIn] | None = Field(default=None, max_length=1000)
 
@@ -1500,12 +1501,14 @@ async def _save_work_schedule(connection, business_id, payload, user, schedule_i
             insert_sql = insert_sql[:insert_sql.index("            DO UPDATE")] + " DO NOTHING RETURNING *"
         row = await connection.fetchrow(insert_sql, str(uuid4()), business_id, *values, upload_svc._actor(user))
         if row is None:
-            return None
+            if preserve_existing:
+                return None
+            raise HTTPException(500, "근무표 저장 결과를 확인할 수 없습니다")
     await _attendance_audit(connection, business_id, user, "attendance.schedule.save", str(row["id"]), dict(row))
     return {key: _json_value(value) for key, value in dict(row).items()}
 
 
-async def _write_work_schedules(business_id, payloads, user, schedule_id=None):
+async def _write_work_schedules(business_id, payloads, user, schedule_id=None, *, preserve_existing=False):
     _require_attendance_admin(user)
     await _schedule_business(user, business_id)
     for payload in payloads:
@@ -1513,7 +1516,7 @@ async def _write_work_schedules(business_id, payloads, user, schedule_id=None):
     connection = await upload_svc._connect()
     try:
         async with connection.transaction():
-            return [await _save_work_schedule(connection, business_id, payload, user, schedule_id) for payload in payloads]
+            return [await _save_work_schedule(connection, business_id, payload, user, schedule_id, preserve_existing=preserve_existing) for payload in payloads]
     except asyncpg.UniqueViolationError as exc:
         raise HTTPException(409, "같은 직원·근무일의 일정이 있습니다") from exc
     finally:
@@ -1539,7 +1542,9 @@ def expand_work_schedules(payload):
             if (payload.date_from + timedelta(days=i)).weekday() in payload.weekdays]
     if len(days) * len(payload.employees) > 1000:
         raise HTTPException(422, "일괄 등록은 최대 1,000행입니다")
-    values = payload.model_dump(exclude={"employees", "date_from", "date_to", "weekdays", "cells"})
+    values = payload.model_dump(exclude={"employees", "date_from", "date_to", "weekdays", "cells", "preserve_existing"})
+    if not days:
+        raise HTTPException(422, "선택한 기간에 등록할 요일이 없습니다")
     return [WorkScheduleIn(**employee.model_dump(), work_date=day, **values)
             for employee in payload.employees for day in days]
 
@@ -1549,8 +1554,11 @@ async def bulk_work_schedules(business_id: str, payload: WorkScheduleBulkIn,
                               current_user: dict[str, Any] = Depends(get_current_user)):
     _require_attendance_admin(current_user)
     await _schedule_business(current_user, business_id)
-    rows = await _write_work_schedules(business_id, expand_work_schedules(payload), current_user)
-    return {"schedules": rows, "count": len(rows)}
+    rows = await _write_work_schedules(
+        business_id, expand_work_schedules(payload), current_user,
+        preserve_existing=payload.preserve_existing)
+    saved = [row for row in rows if row is not None]
+    return {"schedules": saved, "count": len(saved), "preserved": len(rows) - len(saved)}
 
 
 class ContractSchedulesIn(BaseModel):

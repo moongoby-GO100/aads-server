@@ -145,9 +145,14 @@ class Connection:
             ]
             return dict(zip(keys, args))
         assert "WHERE business_id=$1 AND id=$2 AND deleted_at IS NULL" in sql
-        return next(
+        row = next(
             (r for r in self.rows if r["business_id"] == args[0] and r["id"] == args[1]), None
         )
+        if row is not None and sql.lstrip().startswith("UPDATE"):
+            keys = ("employee_email", "employee_email_masked", "employee_name", "branch",
+                    "work_date", "start_time", "end_time", "break_minutes", "kind", "memo")
+            row.update(zip(keys, args[2:]))
+        return row
 
     async def execute(self, *args):
         return "INSERT 0 1"
@@ -475,3 +480,129 @@ async def test_legacy_outage_does_not_report_absence(monkeypatch):
         await api.list_work_schedules('biz-a', date_from='2026-10-29', date_to='2026-10-29',
             employee_email=None, offset=0, current_user={})
     assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_bulk_keep_is_enforced_in_database_not_loaded_roster(client, monkeypatch):
+    http, user, db = client
+    user['current_membership']['role'] = 'owner'
+    original = db.fetchrow
+
+    async def conflict(sql, *args):
+        if sql.lstrip().startswith('INSERT') and 'DO NOTHING' in sql:
+            return None  # Existing row absent from the browser's loaded week.
+        return await original(sql, *args)
+
+    monkeypatch.setattr(db, 'fetchrow', conflict)
+    payload = {
+        'employees': [{'employee_email': 'staff@example.com'}],
+        'date_from': '2026-11-02', 'date_to': '2026-11-02',
+        'weekdays': [0], 'kind': 'off', 'preserve_existing': True,
+    }
+    response = await http.post(BASE + '/bulk', json=payload)
+    assert response.status_code == 200
+    assert response.json() == {'schedules': [], 'count': 0, 'preserved': 1}
+    payload['preserve_existing'] = False
+    result = (await http.post(BASE + '/bulk', json=payload)).json()
+    assert result['count'] == 1 and result['preserved'] == 0
+    assert result['schedules'][0]['work_date'] == '2026-11-02'
+
+
+@pytest.mark.asyncio
+async def test_bulk_empty_weekday_range_is_not_success(client):
+    http, user, db = client
+    user['current_membership']['role'] = 'owner'
+    response = await http.post(BASE + '/bulk', json={
+        'employees': [{'employee_email': 'staff@example.com'}],
+        'date_from': '2026-11-01', 'date_to': '2026-11-01',
+        'weekdays': [0], 'kind': 'off',
+    })
+    assert response.status_code == 422
+    assert not db.calls
+
+
+@pytest.mark.asyncio
+async def test_november_overwrite_is_visible_to_month_week_and_person(client, monkeypatch):
+    http, user, db = client
+    user['current_membership']['role'] = 'owner'
+    db.rows[0].update(work_date='2026-11-02', start_time='09:00', end_time='18:00',
+                      break_minutes=60, actual_record={'start_at': '09:30', 'end_at': '18:00'})
+    before = dict(db.rows[0])
+    original = db.fetchrow
+
+    async def upsert(sql, *args):
+        if sql.lstrip().startswith('INSERT'):
+            incoming = await original(sql, *args)
+            assert incoming['business_id'] == 'biz-a'
+            row = db.rows[0]
+            assert incoming['employee_email'] == row['employee_email']
+            if 'DO NOTHING' in sql:
+                return None
+            row.update({k: v for k, v in incoming.items() if k != 'id'})
+            return dict(row)
+        return await original(sql, *args)
+
+    monkeypatch.setattr(db, 'fetchrow', upsert)
+    result = await http.post(BASE + '/bulk', json={
+        'employees': [{'employee_email': 'staff@example.com'}],
+        'date_from': '2026-11-02', 'date_to': '2026-11-02', 'weekdays': [0],
+        'start_time': '10:00', 'end_time': '19:00', 'break_minutes': 45,
+    })
+    assert result.status_code == 200 and result.json()['count'] == 1
+    for span in ['from=2026-11-01&to=2026-11-30', 'from=2026-11-02&to=2026-11-08']:
+        for suffix in ['', '&employee_email=staff@example.com']:
+            for _refresh in range(2):
+                response = await http.get(BASE + '?' + span + suffix)
+                row = response.json()['schedules'][0]
+                assert row['start_time'] == '10:00:00' and row['break_minutes'] == 45
+                assert row['judgment']['late_minutes'] == 0
+    assert db.rows[0]['id'] == before['id']
+    assert db.rows[0]['actual_record'] == before['actual_record']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,suffix", [("post", ""), ("put", "/s1")])
+async def test_single_write_never_returns_preserved_null(client, method, suffix):
+    http, user, db = client
+    user["current_membership"]["role"] = "owner"
+    response = await http.request(method, BASE + suffix, json={
+        "employee_email": "staff@example.com", "work_date": "2026-11-02",
+        "start_time": "10:00", "end_time": "19:00", "break_minutes": 45,
+    })
+    assert response.status_code in (200, 201)
+    assert response.json()["schedule"]["break_minutes"] == 45
+
+
+@pytest.mark.asyncio
+async def test_save_keep_and_overwrite_postgres_temp_fixture(monkeypatch):
+    """Run production INSERT against a temporary table; never write business data."""
+    import os
+    import asyncpg
+    dsn = os.getenv("AADS_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("AADS_TEST_POSTGRES_DSN not configured")
+    conn = await asyncpg.connect(dsn, timeout=5)
+    try:
+        # Use the migration's actual schema, replacing only the business FK.
+        migration = Path("migrations/20261030_obys_work_schedules.sql").read_text()
+        ddl = migration[migration.index("CREATE TABLE"):migration.index("CREATE INDEX")]
+        ddl = ddl.replace("CREATE TABLE IF NOT EXISTS", "CREATE TEMP TABLE")
+        ddl = ddl.replace(" REFERENCES yeoljeong_businesses(id)", "")
+        await conn.execute(ddl)
+        await conn.execute("SET search_path TO pg_temp")
+        monkeypatch.setattr(api, "_attendance_audit", AsyncMock())
+        user = {"email": "fixture@example.test"}
+        first = api.WorkScheduleIn(employee_email="fixture@example.test", work_date="2026-11-02",
+            start_time="09:00", end_time="18:00", break_minutes=60)
+        updated = api.WorkScheduleIn(**{**first.model_dump(), "start_time": "10:00", "break_minutes": 45})
+        saved = await api._save_work_schedule(conn, "fixture-business", first, user)
+        assert await api._save_work_schedule(conn, "fixture-business", updated, user,
+            preserve_existing=True) is None
+        row = await conn.fetchrow("SELECT * FROM yeoljeong_work_schedules")
+        assert row["break_minutes"] == 60
+        result = await api._save_work_schedule(conn, "fixture-business", updated, user)
+        assert result["id"] == saved["id"] and result["break_minutes"] == 45
+        assert await conn.fetchval("SELECT count(*) FROM yeoljeong_work_schedules") == 1
+        assert api._attendance_audit.await_count == 2
+    finally:
+        await conn.close()

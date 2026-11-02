@@ -21,7 +21,7 @@ try{for(const width of [1920,390]){
  const escapeHtml=value=>String(value??'').replace(/[&<>"]/g,'');
  const kstDateV41=()=> '2026-11-02';
  const peopleMonthBoundsV41=()=>({month:state.peopleMonth,...scheduleMonthRangeV41(state.peopleMonth)});
- const workspaceApi=async(path,options={})=>{window.fixturePaths.push(path);if(options.method==='POST'){window.fixtureWrites.push(JSON.parse(options.body));return {count:1}}return {schedules:[{id:'fixture-schedule',employee_email:'one@example.test',employee_name:'시험 직원',work_date:'2026-11-30',kind:'work',start_time:'22:00',end_time:'06:00',break_minutes:0}],counts:{}}};
+ const workspaceApi=async(path,options={})=>{window.fixturePaths.push(path);if(options.method==='POST'){const body=JSON.parse(options.body);window.fixtureWrites.push(body);const preserved=body.preserve_existing?body.cells.filter(c=>c.employee_email==='one@example.test'&&c.work_date==='2026-11-30').length:0;return {count:(body.cells?.length||1)-preserved,preserved}}return {schedules:[{id:'fixture-schedule',employee_email:'one@example.test',employee_name:'시험 직원',work_date:'2026-11-30',kind:'work',start_time:'22:00',end_time:'06:00',break_minutes:0}],counts:{}}};
  let renderPageV41=()=>{page.innerHTML=workSchedulePanelV41(escapeHtml);bindWorkSchedulesV41()};
  const loadLiveRoute=async()=>{state.workSchedules=await loadWorkSchedulesV41(state.businessId,peopleMonthBoundsV41());renderPageV41()};
  const previewContractSchedulesV41=()=>{},openRosterEditorV41=()=>{};
@@ -65,11 +65,14 @@ try{for(const width of [1920,390]){
  contractTarget.innerHTML=contractFormsHtmlV41([{employee_email:'one@example.test',employee_name:'시험 직원',suggested:{workdays:[0],default:{start_time:'22:00',end_time:'06:00',break_minutes:0}},missing:[]}],'2026-11-30','2026-11-30',false);
  bindContractFormsV41(contractTarget,state.businessId);`});
  await page.locator('[data-cf-save]').click();
- assert.equal(await page.evaluate(()=>window.fixtureWrites.length),2,'preserve option must not overwrite');
+ assert.equal(await page.evaluate(()=>window.fixtureWrites.length),3,'server must confirm preservation');
+ assert.equal(await page.evaluate(()=>window.fixtureWrites[2].preserve_existing),true);
+ assert.ok((await page.locator('[data-cf-status]').innerText()).includes('1칸 보존'));
  await page.locator('input[name="cf_start"]').fill('20:00');
  await page.locator('[data-cf-update]').click();
- await page.waitForFunction(()=>window.fixtureWrites.length===3);
- assert.equal(await page.evaluate(()=>window.fixtureWrites[2].cells[0].start_time),'20:00');
+ await page.waitForFunction(()=>window.fixtureWrites.length===4);
+ assert.equal(await page.evaluate(()=>window.fixtureWrites[3].preserve_existing),false);
+ assert.equal(await page.evaluate(()=>window.fixtureWrites[3].cells[0].start_time),'20:00');
  const peopleSource=admin.slice(admin.indexOf('    function renderPeopleV41('),admin.indexOf('    function renderPageV41('));
  await page.addScriptTag({content:`
  const filteredRows=c=>c.data,peopleWorkLinksV41=()=>'',bindManualEmployeePickerV41=()=>{};

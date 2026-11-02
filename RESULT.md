@@ -346,3 +346,58 @@ change_summary: 반려된 계정 식별·quota 귀속·출시일 보존 구현�
 핸드오버 DB 미기록: scripts/runner_handover_write.py로 entry_key=runner:runner-f2b2113a와 위 JSON 계약을 전달해 write_and_verify를 시도했으나 timeout 12 종료코드 124. DB 쓰기 및 재조회 성공은 확인하지 못했다. AADS_API_URL/handOver 인증 환경도 없고 tenant_id를 확인할 DB도 없어 임의 테넌트로 쓰지 않았다. handover_db_write_failed에 해당하는 실패를 여기 기록하며 실제 DB 이벤트 기록도 미확인이다. error_book DB 기록·정본 등록·운영 충돌 원장·실제 API·실제 provider quota·DB 수준 검증이 미완료다.
 
 롤백: 이번 의도된 6개 Python 파일의 diff만 역적용하면 이전 동작으로 돌아간다. 새 스키마·운영 데이터 변경 없음. 이 RESULT 절을 제거할 경우에도 기존 보고 내용은 보존한다.
+
+
+## 근무표 수정 저장 재작업 결과 (runner-cf632cb5)
+
+- document_key: obys-november-schedule-save-rework-result. source_task_id: runner-8c637e58. change_summary: 근무표 저장 반려 지적의 실제 구현을 검증하고 보존 및 부분 실패 집계를 교정한다.
+- 정본 미등록(미완료), 열람 링크 미제공. 기존 RESULT에 요청된 검수 결과만 추가. HANDOVER.md 변경 없음.
+- 기준 HEAD 및 로컬 origin/main: 6ba5a03d73946cbf825bdea07cebf95edb92a4ab. 최초 git status clean. 원격 fetch 미실행이므로 최신 원격 SHA라고 단정하지 않음. 제공된 격리 작업트리에서 이전 401bca12dd3e1812157a42de9d55d4fdf56fd1b2의 지정 4파일 diff를 git apply --check 후 적용해 이어서 수정. 타 작업 dirty/초대 수정 코드는 덮어쓰지 않음. 선행 runner 완료 여부와 동시 작업 ledger는 DB 조회 불가로 미확인. ALLOW_DUP_JOB 재작업 범위의 로컬 변경만 수행.
+- GitHub 기준 참조: https://github.com/moongoby-GO100/aads-server/commit/6ba5a03d73946cbf825bdea07cebf95edb92a4ab . 새 commit/push 없음, 변경분 GitHub URL 없음. 운영 미반영 상태. 실제 cafe24 배포 SHA 미확인.
+
+### STEP 0 분류 및 변경 사유
+
+- [유지] _save_work_schedule의 기존 preserve_existing 키워드 및 ON CONFLICT DO NOTHING, UPDATE/사업자 스코프, _schedule_business, _schedule_values, expand_work_schedules 기간·상한, list_work_schedules 조회·판정, 계약 기준 API, 단건 POST/PUT 라우트, 기존 초대/요일 표시. 새 엔드포인트·스케줄러·테이블 없음.
+- [수정] WorkScheduleBulkIn, _write_work_schedules, bulk_work_schedules: 보존 플래그 전달, DB 보존 None만 집계, 빈 요일 결과 422. _save_work_schedule은 overwrite에서 예상치 못한 None을 500으로 거부(보존 시에만 None 허용).
+- [수정] bindContractFormsV41: 조회된 일정으로 사전 제외하지 않고 전체 선택 칸을 서버로 전달. 각 요청의 count/preserved 정수·음수·합계를 검증. 확인된 저장/보존만 누적하고 나머지는 결과 미확인/미처리로 표시. 두 번째 요청 실패 시 첫 요청 반영은 유지됨을 표시하고 재조회. 재조회 오류는 저장 실패와 분리. 버튼 복원.
+- [유지] contractCellsV41, contractFormReadV41, contractBulkPayloadV41의 선택 날짜·요일·시간·휴게 검증. 미선택 요일의 기존 행은 삭제하지 않음. 사용자의 수정 범위를 넘어선 자동 삭제 없음. 실제 계약서/출퇴근/직원 데이터 수정 없음.
+- [수정] 기존 tests/unit/test_obys_work_schedules.py와 test_obys_contract_schedule_form.py: 지정 회귀 검증. PUT fixture가 실제 수정 파라미터를 반영하도록 보완. JS mock은 날짜 특례 집계를 없애고 직원/날짜 키 기반 Map에 저장·보존 처리. 화면에 없는 서버 기존 행도 보존 검증.
+- [추가 변경 사유] tests/unit/obys_admin_direct_browser.cjs는 기존 승인 브라우저 레시피가 클라이언트 keep 필터로 요청 생략을 기대하여 새 서버 보존 계약과 충돌함. 서버 응답 count/preserved 및 보존·수정 요청 검증으로 갱신. 운영 로그인이나 쓰기 경로 추가 없음.
+- [신규] 기존 테스트 파일 안의 단건 POST/PUT 응답 회귀, 부분 요청 실패·잘못된 2xx 집계 회귀, 실제 production INSERT를 사용하는 선택적 PostgreSQL TEMP TABLE fixture. 업무 테이블에 테스트 write하지 않음.
+- [삭제] 파일·함수·DB 행 삭제 없음. 롤백은 이번 지정 파일 diff만 역적용; 운영 데이터/스키마 변경 없음.
+- DB 접점: yeoljeong_work_schedules INSERT/UPDATE/SELECT, 기존 attendance audit. 단건과 bulk의 권한·테넌트 검사는 기존 경로 유지. 급여·계약 불변 정책 추가 변경 없음.
+
+### 리뷰 1~5 처리
+
+1. 지적 전제는 현 기준과 다름: 기준 _save_work_schedule(약 1475행)에 preserve_existing=False 인자가 있고, 약 1499행에 DO NOTHING RETURNING *와 None 반환이 이미 존재. 이 구현을 보존하고 _write_work_schedules가 플래그를 실제 전달하도록 이전 변경을 복원. overwrite None의 오성공 차단도 추가.
+2. 위 production SQL 분기를 사용하는 단위 테스트 실제 실행. PostgreSQL TEMP TABLE 테스트도 추가했지만 DSN 부재로 skip이며 실제 DB 통과를 주장하지 않음. mock 조회 테스트는 실제 DB 실증과 구분.
+3. 단건 POST/PUT는 기본 overwrite를 유지하고 각각 비-null 저장값 응답을 검증. None은 keep 경로에서만 허용. 필터는 bulk만 사용. PUT 테스트의 기존 mock 미갱신으로 첫 확장 실행이 실패하여 fixture를 보완 후 재실행.
+4. 성공의 실패 건수는 전체 칸 - 서버 확인 합계로 계산. count/preserved 합계 불일치 및 0/0 응답은 성공 처리하지 않음. JS mock의 특례 날짜 대신 stateful 직원/날짜 Map으로 keep/overwrite 검증. 브라우저 레시피의 낡은 응답 계약도 수정.
+5. kept에 클라이언트 추정값이 들어가지 않음(기존 Set은 비어 있어 r.kept=0). 확인 완료한 응답의 count/preserved만 누적. 두 번째 요청 실패 및 잘못된 2xx 집계를 테스트. 다중 요청은 원자적이지 않으며 네트워크 실패 시 해당 요청의 DB 반영 여부를 알 수 없으므로 실패 확정 대신 결과 미확인/미처리로 표시. 확정된 앞 요청은 재조회.
+
+### 원인과 실측 한계
+
+- 코드 수준 재현: 주간 화면에 로드된 행만으로 keep를 판단하면 다른 날짜의 기존 행을 보호할 수 없음. 이전 bulk는 서버 보존 플래그를 받지 않아 기본 upsert. 선택된 요일만 보내고 미선택 요일은 남는 기존 정책 유지. 이번 교정은 서버 보존과 명시적인 overwrite/집계 확인을 연결함.
+- 양재혁 2026-11 실데이터의 실제 무변화 원인은 미확정. identity/employee_key/branch/조회월/중복/급여 잠금 및 성신여대점 초대 수정의 운영 정상 여부를 실측하지 못함. 임의 일정 변경/초대 발급 없음.
+- /root/aads/AGENTS.md와 저장소 AGENTS.md 및 제공 AAG partial/not_proven 확인. 별도 하위 AGENTS 파일은 rg --files -g AGENTS.md 결과 없음.
+- timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=5 server-114 'timeout 10 hostname': exit 255, socket Operation not permitted. 승인 대상 114.207.244.86:7916 해석만 확인. 구244/jinah 미사용.
+- OBYS 전용 _connect 읽기 시도: ObysDatabaseUrlMissing. 임의 AADS DB 대체 연결 없음. pipeline_jobs 읽기/동일파일 ledger 연결도 현재 환경에서 확인 불가. 충돌 없음으로 판정하지 않음.
+- 기존 브라우저 레시피 node tests/unit/obys_admin_direct_browser.cjs: exit 1, playwright 미설치. PLAYWRIGHT_MODULE=/root/aads/aads-server/node_modules/playwright-core 재시도: exit 1, Chromium 실행파일 없음. 브라우저 미실행, 실제 #attendance 캡처 없음. Vault 도메인·테넌트 자격 도구 없음; 임의 로그인 미시도.
+- HTTP/API health 폴백 http://127.0.0.1:8000/api/v1/health GET: URLError. 원격 컨테이너 확인은 SSH 차단으로 불가. 운영 SHA/API/실제 DB 검증 미완료.
+
+### 실행 검증
+
+- JWT_SECRET_KEY=fixture-only-not-production /root/aads/aads-server/.venv/bin/python -m pytest tests/unit/test_obys_work_schedules.py tests/unit/test_obys_contract_schedule_form.py -q: 초기 67 passed.
+- 확장 5파일: 위 2파일 + test_obys_roster_navigation.py + test_obys_contract_schedule_autofill.py + test_obys_contract_schedule_picker.py: 첫 실행 1 failed,108 passed,1 skipped (PUT mock 미갱신). 보완 후 최종 109 passed,1 skipped (9.75s).
+- skip: test_save_keep_and_overwrite_postgres_temp_fixture, AADS_TEST_POSTGRES_DSN 없음. 실제 PostgreSQL 트랜잭션·동시성·운영 DB 연동 미검증. 월간/주간/개인 GET 및 새 조회 반복은 ASGI/mock 회귀로 검증했으며 실제 브라우저 새로고침 실증은 아님.
+- python3 -m compileall -q 수정 Python 3파일: exit 0.
+- venv python -m ruff check --select F821,F811 수정 Python 3파일: exit 0.
+- python3 scripts/dup_guard.py --paths 변경 코드/테스트 5파일: exit 0.
+- node --check tests/unit/obys_admin_direct_browser.cjs 및 git diff --check: exit 0.
+- bash scripts/run_unit_tests.sh는 프로세스 종료 cleanup 경로를 포함하여 이번 금지 조건 하에서 실행하지 않고 호스트 pytest로 검증. 통과 주장 없음.
+- error_book.py match /tmp/roster-rework.patch 및 register(obys.schedule-client-keep-stale): 모두 psql 실행파일 없음으로 exit 2. DB 오류사전 미기록. 운영 원인은 사전 원인으로 단정하지 않음.
+- 빌드 항목: 승인 후 Runner 빌드 검증 대상. 금지된 commit/push/build/deploy/프로세스 종료/서비스 재시작 명령 실행 없음.
+- 핸드오버 DB 미기록. tenant 확인 불가로 임의 tenant 쓰기 금지; 아래 기록 시도 결과도 실패로 남김. handover_db_write_failed 이벤트의 DB 저장도 미확인.
+
+- 최종 DB 기록 실측: pipeline_jobs/ledger 제한 실행은 TimeoutError 및 timeout exit 124. runner_handover_write.py로 entry_key=runner:runner-cf632cb5 upsert/readback 시도는 7초 timeout, 기록·재조회 미확인. tenant_id는 확인되지 않아 빈 값으로 전달했으며 임의 실제 tenant를 지정하지 않음. 핸드오버 DB 미기록.
+- 최종 git diff --check exit 0. 변경 파일은 RESULT.md와 위 코드/테스트 5파일, 총 6파일.

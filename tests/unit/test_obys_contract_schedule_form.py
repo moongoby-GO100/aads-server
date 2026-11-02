@@ -171,7 +171,10 @@ const HONG='hong@x.test',HA='ha@x.test',YANG='yang@x.test';
 const toasts=[];function showToast(m){toasts.push(m)}
 let reloads=0;async function loadLiveRoute(){reloads++}
 const calls=[];let apiResult={employees:EMPLOYEES};
-async function workspaceApi(path,opt){calls.push([path,opt]);return path.includes('from-contracts')?apiResult:{}}
+const serverRows=new Map();let failRequest=0,invalidCounts=false;
+const serverKey=c=>[c.employee_email.toLowerCase(),c.work_date].join('|');
+async function workspaceApi(path,opt){calls.push([path,opt]);if(path.includes('from-contracts'))return apiResult;if(failRequest===posts().length)throw new Error('fixture request failed');const body=JSON.parse(opt.body);let count=0,preserved=0;for(const cell of body.cells){const key=serverKey(cell);if(body.preserve_existing&&serverRows.has(key)){preserved++;continue}serverRows.set(key,{...cell});count++}return invalidCounts?{count:0,preserved:0}:{count,preserved}}
+
 const flush=async()=>{for(let i=0;i<6;i++)await new Promise(r=>setImmediate(r))};
 function parseAttrs(s){const a={};for(const m of s.matchAll(/([\w-]+)=\x22([^\x22]*)\x22/g))a[m[1]]=m[2];return a}
 function makeCard(html){
@@ -194,7 +197,7 @@ function makeTarget(){return {isConnected:true,textContent:'',cards:[],buttons:[
     this.buttons=this.cards.map(c=>(c.saveButton={disabled:false,closest:()=>c,onclick:null}));
     this.all={disabled:false,onclick:null};this.buttons.push(this.all);this.allStatus={textContent:''}},
   addEventListener(n,f){this.handlers[n]=f},
-  querySelectorAll(sel){if(sel==='[data-cf-save]')return this.buttons.filter(b=>b!==this.all);if(sel==='[data-cf]')return this.cards;if(sel==='button')return this.buttons;throw new Error(sel)},
+  querySelectorAll(sel){if(sel==='[data-cf-update]')return [];if(sel==='[data-cf-save]')return this.buttons.filter(b=>b!==this.all);if(sel==='[data-cf]')return this.cards;if(sel==='button')return this.buttons;throw new Error(sel)},
   querySelector(sel){if(sel==='[data-cf-save-all]')return this.all;if(sel==='[data-cf-all-status]')return this.allStatus;throw new Error(sel)}}}
 const cl=()=>({set:{},toggle(n,on){this.set[n]=!!on}});
 function makeForm(checkedEmails){return {elements:{date_from:{value:'2026-11-01'},date_to:{value:'2026-11-30'},start_time:{value:'09:00',classList:cl()},end_time:{value:'18:00',classList:cl()},break_minutes:{value:'60',classList:cl()}},
@@ -312,22 +315,23 @@ assert.equal(countOf(c.html,'name=\x22cf_s_'),7);
 def test_cells_payload_keep_and_overwrite_validates_against_bulk_model(tmp_path):
     _need_node()
     out = _run(tmp_path, r"""
-state.workSchedules={month:{rows:[{employee_email:'HONG@x.test',work_date:'2026-11-02'}]}};
+serverRows.set(HONG+'|2026-11-02',{start_time:'07:00'});
+state.workSchedules={month:{rows:[]}};
 form=makeForm([]);
 const t=await show();const hong=t.cards[0];
 await click(hong.saveButton);
 assert.equal(posts().length,1);assert.equal(posts()[0][1].method,'POST');
 let body=JSON.parse(posts()[0][1].body);
-assert.equal(body.cells.length,21);assert(!body.cells.some(c=>c.work_date==='2026-11-02'));
-assert.equal(hong.status.textContent,'21칸 등록 · 1칸 보존');assert.equal(toasts.at(-1),'21칸 등록 · 1칸 보존');
-assert.equal(state.scheduleNotice,'21칸 등록 · 1칸 보존');assert.equal(reloads,1);
+assert.equal(body.cells.length,22);assert(body.cells.some(c=>c.work_date==='2026-11-02'));assert.equal(body.preserve_existing,true);
+assert.equal(hong.status.textContent,'21칸 저장(신규·수정) · 1칸 보존 · 0칸 실패');assert.equal(toasts.at(-1),'21칸 저장(신규·수정) · 1칸 보존 · 0칸 실패');
+assert.equal(state.scheduleNotice,'21칸 저장(신규·수정) · 1칸 보존 · 0칸 실패');assert.equal(reloads,1);
 assert.deepEqual(body.cells[0],{employee_email:'hong@x.test',employee_name:'홍석빈',branch:'',work_date:'2026-11-01',start_time:'09:00',end_time:'21:00',break_minutes:90,kind:'work',memo:'계약서 기준 일정(관리자 보완)'});
 const first=body;
 hong.ctl('cf_mode_0','keep').checked=false;hong.ctl('cf_mode_0','overwrite').checked=true;
 await click(hong.saveButton);
 body=JSON.parse(posts()[1][1].body);
 assert.equal(body.cells.length,22);assert(body.cells.some(c=>c.work_date==='2026-11-02'));
-assert.equal(hong.status.textContent,'22칸 등록 · 0칸 보존');
+assert.equal(hong.status.textContent,'22칸 저장(신규·수정) · 0칸 보존 · 0칸 실패');
 hong.ctl('cf_weekday',6).checked=false;hong.ctl('cf_s_0').value='10:00';hong.ctl('cf_b_0').value='45';
 await click(hong.saveButton);
 body=JSON.parse(posts()[2][1].body);
@@ -372,7 +376,7 @@ for(const c of [kim,ha,yang])c.ctl('cf_weekday',0).checked=true;
 await click(t.all);
 assert.equal(posts().length,1);const b=JSON.parse(posts()[0][1].body);
 assert.equal(b.cells.length,22+5*3);assert.equal(b.employees.length,4);
-assert.equal(t.allStatus.textContent,'37칸 등록 · 0칸 보존');assert.equal(reloads,1);
+assert.equal(t.allStatus.textContent,'37칸 저장(신규·수정) · 0칸 보존 · 0칸 실패');assert.equal(reloads,1);
 assert.deepEqual(b.cells.filter(c=>c.employee_email===HA).map(c=>c.start_time),['22:00','22:00','22:00','22:00','22:00']);
 for(const c of t.cards){for(let i=0;i<7;i++)c.ctl('cf_weekday',i).checked=true;c.ctl('date_from').value='2026-01-01';c.ctl('date_to').value='2026-12-31'}
 await click(t.all);
@@ -446,4 +450,20 @@ const kim=(await show()).cards[1];
 assert(kim.html.includes('class=\x22field cf-missing\x22 name=\x22date_from\x22'));
 assert(kim.html.includes('class=\x22field\x22 name=\x22date_to\x22'));
 assert(!kim.html.includes('종료일 없음(기간의 정함 없음)'));
+""")
+
+
+def test_partial_groups_and_invalid_response_are_not_reported_as_success(tmp_path):
+    _need_node()
+    _run(tmp_path, r"""
+form=makeForm([]);const t=await show();
+for(const c of t.cards)c.ctl('cf_weekday',0).checked=true;
+const kim=t.cards[1];kim.ctl('cf_mode_1','keep').checked=false;kim.ctl('cf_mode_1','overwrite').checked=true;
+failRequest=2;await click(t.all);
+assert.equal(posts().length,2);
+assert(t.allStatus.textContent.includes('32칸 저장 확인 · 0칸 보존 확인 · 5칸 결과 미확인/미처리'));
+assert.equal(serverRows.size,32);assert.equal(reloads,1);assert(t.buttons.every(b=>!b.disabled));
+failRequest=0;invalidCounts=true;await click(kim.saveButton);
+assert(kim.status.textContent.includes('0칸 저장 확인 · 0칸 보존 확인 · 5칸 결과 미확인/미처리'));
+assert(!kim.status.textContent.includes('0칸 실패'));
 """)
