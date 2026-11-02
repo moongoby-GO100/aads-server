@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh AADS Antigravity account identity without interrupting model requests
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=60s
+Unit=aads-antigravity-identity.service
+
+[Install]
+WantedBy=timers.target

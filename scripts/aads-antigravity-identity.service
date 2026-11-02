@@ -1,0 +1,8 @@
+[Unit]
+Description=AADS Antigravity token-free account identity projection
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /root/aads/aads-server/scripts/account_login.py --export-antigravity-identity /root/aads/aads-server/app/data/antigravity_identity.json
+TimeoutStartSec=15
+NoNewPrivileges=true

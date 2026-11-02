@@ -39,6 +39,7 @@ import pty
 import re
 import secrets
 import time
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -511,6 +512,28 @@ def _antigravity_binding() -> dict:
     }
 
 
+def export_antigravity_identity(destination: Path) -> None:
+    """Atomically project identity only into API's shared non-secret data dir."""
+    binding = _antigravity_binding()
+    data = {
+        "schema_version": 1,
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+        "account": binding.get("account"),
+        "account_source": binding.get("account_source"),
+    }
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    name = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=destination.parent, delete=False) as out:
+            name = out.name
+            json.dump(data, out)
+        os.chmod(name, 0o640)
+        os.replace(name, destination)
+    finally:
+        if name and os.path.exists(name):
+            os.unlink(name)
+
+
 def bindings() -> list[dict]:
     """구독 계정이 실제로 런타임에 닿아 있는지. 화면의 '로그인 필요' 판정에 쓴다.
 
@@ -591,3 +614,11 @@ def public(sess: dict) -> dict:
             if sess["kind"] == "claude" and sess["state"] == "success" else None
         ),
     }
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Export token-free Antigravity identity without restarting the relay')
+    parser.add_argument('--export-antigravity-identity', type=Path, required=True)
+    args = parser.parse_args()
+    export_antigravity_identity(args.export_antigravity_identity)
