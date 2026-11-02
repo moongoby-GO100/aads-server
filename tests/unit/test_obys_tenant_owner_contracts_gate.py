@@ -216,7 +216,7 @@ CLOSED_ROUTES = [
     ("PATCH", f"{BASE}/business-documents/{CONTRACT_ID}"),
     ("DELETE", f"{BASE}/business-documents/{CONTRACT_ID}"),
     ("PUT", f"{BASE}/business-documents"),
-    ("GET", f"{BASE}/payroll"),
+    ("GET", f"{BASE}/payroll-extra"),
 ]
 
 

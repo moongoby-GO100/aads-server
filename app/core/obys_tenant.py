@@ -111,6 +111,24 @@ _OWNER_CONTRACT_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(re.escape(_BUSINESS_DOCUMENTS_PATH))),
 )
 
+# Payroll uses _read_hr(..., user)'s SQL tenant predicate and
+# _write_hr_record's tenant ownership check. Mutations/versions also require
+# the administrator role in the service; employee reads retain own-row and
+# confirmed/paid visibility checks. Keep this an exact method/path list.
+_PAYROLL_PATH = "/api/v1/yeoljeong-finance/payroll"
+_PAYROLL_ID_PATTERN = r"(?!(?:defaults|draft-from-attendance|delivery-consent)(?:/|$))[A-Za-z0-9_-]{8,64}"
+_PAYROLL_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("GET", re.compile(re.escape(_PAYROLL_PATH))),
+    ("POST", re.compile(re.escape(_PAYROLL_PATH))),
+    ("GET", re.compile(re.escape(_PAYROLL_PATH) + "/defaults")),
+    ("POST", re.compile(re.escape(_PAYROLL_PATH) + "/draft-from-attendance")),
+    ("GET", re.compile(re.escape(_PAYROLL_PATH) + "/" + _PAYROLL_ID_PATTERN + "/versions")),
+    ("GET", re.compile(re.escape(_PAYROLL_PATH) + "/" + _PAYROLL_ID_PATTERN + "/pdf")),
+    ("POST", re.compile(re.escape(_PAYROLL_PATH) + "/" + _PAYROLL_ID_PATTERN + "/confirm")),
+    ("POST", re.compile(re.escape(_PAYROLL_PATH) + "/" + _PAYROLL_ID_PATTERN + "/pay")),
+    ("POST", re.compile(re.escape(_PAYROLL_PATH) + "/" + _PAYROLL_ID_PATTERN + "/deliver")),
+)
+
 
 def _matches_whitelist(whitelist: tuple[tuple[str, re.Pattern[str]], ...], method: str, path: str) -> bool:
     method = str(method or "").upper()
@@ -134,6 +152,7 @@ def _is_tenant_scoped_path(path: str, method: str = "GET") -> bool:
         _is_contract_signing_route(method, path)
         or _matches_whitelist(_INVITE_ADMIN_WHITELIST, method, path)
         or _matches_whitelist(_OWNER_CONTRACT_WHITELIST, method, path)
+        or _matches_whitelist(_PAYROLL_WHITELIST, method, path)
     )
 
 
