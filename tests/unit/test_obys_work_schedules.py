@@ -47,7 +47,7 @@ SCHEDULE = {
             "조퇴",
             (0, 10, 0),
         ),
-        (SCHEDULE, None, "결근", (0, 0, 0)),
+        (SCHEDULE, None, "확인필요", (0, 0, 0)),
         (
             SCHEDULE,
             {"start_at": "09:00", "end_at": "19:00", "break_minutes": 60},
@@ -79,7 +79,7 @@ def test_kst_midnight_and_overnight():
     )
     assert (
         api.attendance_schedule_judgment(s, now=datetime(2026, 10, 30, 15, 0, tzinfo=UTC))["status"]
-        == "결근"
+        == "확인필요"
     )
     s.update(start_time="22:00", end_time="06:00")
     r = {"start_at": "22:00", "end_at": "06:00", "break_minutes": 60}

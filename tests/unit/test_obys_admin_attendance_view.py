@@ -17,8 +17,8 @@ def test_attendance_source_and_empty_state():
     config = line('attendance:C(')
     assert 'source:src(' in config and 'source:none(' not in config
     assert '"records","obys.yeoljeong_attendance_records"' in config
-    assert '등록된 근태 기록이 없습니다.' in HTML
-    assert '["근태 건수|0건","누락·수정 대기|0건"]' in HTML
+    assert '조회 조건에 해당하는 직원 자료가 없습니다.' in HTML
+    assert '["근태 건수","누락·수정 대기"]' in config
     api = (ROOT / 'app/api/obys_workspaces.py').read_text()
     assert 'ATTENDANCE_STATUSES = frozenset({"pending", "approved", "rejected"})' in api
     columns = api.split('ATTENDANCE_COLUMNS = (', 1)[1].split(')', 1)[0]
@@ -35,13 +35,13 @@ def test_attendance_mapping_and_api_execute():
     source = '\n'.join(line(prefix) for prefix in [
         'function attendanceStatusV41(', 'function attendanceReviewV41(',
         'function attendanceMinutesV41(', 'function attendanceDisplayV41(',
-        'async function attendanceLoadV41(', 'function liveRow(',
+        'async function attendanceLoadV41(', 'async function peopleLoadV41(', 'async function loadWorkSchedulesV41(', 'function liveRow(',
         'async function loadLiveRoute(', 'function filteredRows(',
     ])
     code = '''const assert=require('node:assert/strict');
 const state={readRole:'admin',route:'attendance',businessId:'b',dateFrom:'2026-10-01',dateTo:'2026-10-23',requestId:0,status:'전체 상태',selected:{},tab:'records'};
 const configs={attendance:{columns:['근태번호','일자','지점','직원','근무시간','이상유형','상태'],hierarchy:[]}};
-const document={getElementById:()=>null};function canReadRouteV41(){return true};function renderPageV41(){};
+const document={getElementById:()=>null};function canReadRouteV41(){return true};function renderPageV41(){};function peopleMonthBoundsV41(){return {month:'2026-10',from:'2026-10-01',to:'2026-10-31'}};function kstDateV41(){return '2026-10-23'};
 let paths=[], payload={records:[],source:{name:'yeoljeong_attendance_records',live:true}};
 async function workspaceApi(path){paths.push(path);return payload};
 ''' + source + '''
@@ -61,15 +61,15 @@ async function workspaceApi(path){paths.push(path);return payload};
  }
  assert.equal(attendanceDisplayV41({raw:{geofence_result:'outside',status:'pending'}}).이상유형,'—');
  payload.records=['pending','approved','rejected','확인 필요','확인필요'].map(status=>({id:status,status,raw:{status}}));
- await loadLiveRoute();assert.equal(paths.length,1);
+ await loadLiveRoute();assert.equal(paths.length,3);
  const url=new URL(paths[0],'http://test');assert.equal(url.pathname,'/b/attendance/records');
- assert.equal(url.searchParams.get('from'),'2026-10-01');assert.equal(url.searchParams.get('to'),'2026-10-23');
+ assert.equal(url.searchParams.get('from'),'2026-10-01');assert.equal(url.searchParams.get('to'),'2026-10-31');
  assert.equal(url.searchParams.has('date_from'),false);
- assert.deepEqual(state.liveMetrics,[{label:'근태 건수',value:'5건'},{label:'누락·수정 대기',value:'3건'}]);
+ assert.equal(configs.attendance.data.length,5);assert.deepEqual(state.liveMetrics,[]);
  assert.equal(state.liveSource.live,true);assert.equal(state.liveHasMore,false);
  state.status='확인필요';assert.equal(filteredRows(configs.attendance).length,2);
  state.status='전체 상태';state.tab='exceptions';assert.equal(filteredRows(configs.attendance).length,3);
- payload.records=[];await loadLiveRoute();assert.equal(state.liveMetrics[0].value,'0건');assert.equal(state.liveSource.live,true);
+ payload.records=[];await loadLiveRoute();assert.equal(configs.attendance.data.length,0);assert.deepEqual(state.liveMetrics,[]);assert.equal(state.liveSource.live,true);
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''
     result = subprocess.run(['node', '-e', code], capture_output=True, text=True, timeout=30)
