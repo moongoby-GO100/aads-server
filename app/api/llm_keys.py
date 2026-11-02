@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -457,6 +459,28 @@ def _antigravity_usage(binding, email, state, *, relay_available):
     return result
 
 
+ANTIGRAVITY_IDENTITY_SNAPSHOT = Path(__file__).resolve().parents[1] / "data" / "antigravity_identity.json"
+
+
+def _antigravity_identity() -> dict[str, str] | None:
+    """Read a fresh, token-free host identity projection; never infer live auth."""
+    try:
+        if ANTIGRAVITY_IDENTITY_SNAPSHOT.stat().st_size > 4096:
+            return None
+        data = json.loads(ANTIGRAVITY_IDENTITY_SNAPSHOT.read_text())
+        sampled = datetime.fromisoformat(data["collected_at"])
+        age = (datetime.now(timezone.utc) - sampled).total_seconds()
+        account = data["account"]
+        if (data.get("schema_version") != 1 or not 0 <= age <= 180
+                or data.get("account_source") != "agy_credential_metadata"
+                or not isinstance(account, str)
+                or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", account)):
+            return None
+        return {"account": account, "account_source": "agy_credential_metadata"}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
 def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str, Any]:
     """Google(Antigravity) 구독 계정 1건을 합성한다.
 
@@ -464,6 +488,12 @@ def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str
     있으므로 릴레이 바인딩으로만 상태를 정한다. DB 행이 아니라서 켜기/끄기 대상이 아니다.
     """
     binding = bindings.get(ANTIGRAVITY_BINDING_KEY) if bindings is not None else None
+    # Old relay processes keep their imported metadata code until every chat
+    # drains. Identity can refresh separately without interrupting those chats.
+    identity = _antigravity_identity()
+    if identity is not None and (not (binding or {}).get("account")
+                                 or (binding or {}).get("account_source") != "agy_credential_metadata"):
+        binding = {**(binding or {}), **identity, "account_verified": False}
     if binding is None:
         state = "unknown"
     elif binding.get("needs_login"):
