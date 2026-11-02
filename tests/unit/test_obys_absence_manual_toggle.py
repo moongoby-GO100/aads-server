@@ -41,7 +41,7 @@ def test_absence_buttons_render_and_call_api(tmp_path):
     prefixes = ("function escapeHtml(", "function metricHtml(", "function payrollMoneyV41(",
                 "function payrollDisplayV41(", "function attendanceStatusV41(",
                 "function attendanceReviewV41(", "function attendanceMinutesV41(",
-                "function attendanceDisplayV41(", "function liveRow(", "function filteredRows(c)",
+                "function displayDateV41(", "function attendanceTimeV41(", "function attendanceDisplayV41(", "function liveRow(", "function filteredRows(c)",
                 "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(",
                 "function workSchedulePanelV41(")
     helpers = "\n".join(next(line.strip() for line in html.splitlines() if line.strip().startswith(p)) for p in prefixes)
@@ -64,6 +64,13 @@ const rec=(id,d,status)=>liveRow({id,employee_key:'k@x.test',raw:{id,employee_na
 configs.attendance.data=[rec('r1','2026-10-01','approved'),rec('r2','2026-10-02','rejected')];
 renderPeopleV41(configs.attendance);
 const html=page.innerHTML;
+assert(html.includes('2026-10-01 (목)'));
+assert(html.includes('aria-label="2026-10-30 (금)" aria-current="date"'));
+assert.equal((html.match(/data-day=/g)||[]).length,31);
+assert(html.includes('<span></span>'.repeat(4)));
+assert(!html.includes('data-day="2026-11-01"'));
+assert.equal(attendanceTimeV41('2026-12-31T15:30:00Z'),'2027-01-01 (금) 00:30');
+assert.equal(attendanceTimeV41('2027-01-01T00:30:00'),'2027-01-01 (금) 00:30');
 assert(html.includes('결근으로 변경'));assert(html.includes('출근으로 되돌리기'));assert(html.includes('출근으로 처리'));
 assert(html.includes('위치기반 출퇴근이 안정화될 때까지'));
 assert(!html.includes('data-absence-day="2026-10-31"'));assert(!html.includes('data-absence-day="2026-10-05"'));

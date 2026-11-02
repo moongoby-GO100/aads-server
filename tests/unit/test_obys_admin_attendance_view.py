@@ -34,7 +34,7 @@ def test_attendance_source_and_empty_state():
 def test_attendance_mapping_and_api_execute():
     source = '\n'.join(line(prefix) for prefix in [
         'function attendanceStatusV41(', 'function attendanceReviewV41(',
-        'function attendanceMinutesV41(', 'function attendanceDisplayV41(',
+        'function attendanceMinutesV41(', 'function displayDateV41(', 'function attendanceTimeV41(', 'function attendanceDisplayV41(',
         'async function attendanceLoadV41(', 'async function peopleLoadV41(', 'async function loadWorkSchedulesV41(', 'function liveRow(',
         'async function loadLiveRoute(', 'function filteredRows(',
     ])

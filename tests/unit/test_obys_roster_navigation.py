@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.mark.skipif(not shutil.which("node"), reason="node required")
 def test_roster_period_navigation_and_boundary_reads():
     html = (ROOT / "app/static/apps/obys/admin.html").read_text()
-    names = ["scheduleMonthRangeV41", "captureScheduleDraftV41", "restoreScheduleDraftV41",
+    names = ["displayDateV41", "scheduleMonthRangeV41", "captureScheduleDraftV41", "restoreScheduleDraftV41",
              "scheduleNavigateV41", "scheduleShiftV41", "loadWorkSchedulesV41", "workSchedulePanelV41"]
     source = "\n".join(next(line.strip() for line in html.splitlines()
                             if line.strip().startswith((f"function {name}(", f"async function {name}(")))
@@ -54,9 +54,20 @@ const workspaceApi = async path => {paths.push(new URL('http://fixture'+path));r
  const esc=value=>String(value??'');const monthHTML=workSchedulePanelV41(esc);
  assert.equal((monthHTML.split('</thead>')[0].match(/<th>/g)||[]).length,31);
  assert.ok(monthHTML.includes('22:00–06:00'));
+ assert.ok(monthHTML.includes('2026-11-30 (월)'));
+ assert.ok(monthHTML.includes('2026-11-01 (일) ~ 2026-11-30 (월)'));
+ assert.ok(!monthHTML.includes('2026-11-31'));
+ assert.equal(displayDateV41('2028-02-29'),'2028-02-29 (화)');
+ assert.equal(displayDateV41('2026-02-29'),'확인필요');
+ assert.equal(displayDateV41(''),'미등록');
+ assert.equal(displayDateV41('bad'),'확인필요');
+ assert.equal(displayDateV41('2026-12-31T15:30:00Z'),'2027-01-01 (금)');
  state.scheduleView='week';const weekHTML=workSchedulePanelV41(esc);
+ assert.ok(weekHTML.includes('2026-10-26 (월) ~ 2026-11-01 (일)'));
  assert.equal((weekHTML.split('</thead>')[0].match(/<th>/g)||[]).length,8);
 })().catch(error=>{console.error(error);process.exitCode=1});
 '''
-    result = subprocess.run(["node", "-e", script], text=True, capture_output=True, timeout=30)
-    assert result.returncode == 0, result.stdout + result.stderr
+    import os
+    for tz in ["UTC", "Asia/Seoul", "America/Los_Angeles", "Pacific/Kiritimati"]:
+        result = subprocess.run(["node", "-e", script], env={**os.environ, "TZ": tz}, text=True, capture_output=True, timeout=30)
+        assert result.returncode == 0, tz + result.stdout + result.stderr

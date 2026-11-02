@@ -156,7 +156,7 @@ def test_people_renderer_executes_payroll_and_all_attendance_tabs(tmp_path):
     prefixes = ("function escapeHtml(", "function metricHtml(", "function payrollMoneyV41(",
                 "function payrollDisplayV41(", "function attendanceStatusV41(",
                 "function attendanceReviewV41(", "function attendanceMinutesV41(",
-                "function attendanceDisplayV41(", "function liveRow(", "function filteredRows(c)",
+                "function displayDateV41(", "function attendanceTimeV41(", "function attendanceDisplayV41(", "function liveRow(", "function filteredRows(c)",
                 "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(",
                 "function workSchedulePanelV41(")
     helpers = "\n".join(next(line.strip() for line in html.splitlines() if line.strip().startswith(prefix)) for prefix in prefixes)

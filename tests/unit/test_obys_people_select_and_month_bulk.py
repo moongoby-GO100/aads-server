@@ -83,7 +83,7 @@ def test_detail_tab_select_switches_calendar_rows(tmp_path):
     html = ADMIN.read_text()
     helpers = _lines(html, ("function escapeHtml(", "function metricHtml(", "function payrollMoneyV41(",
         "function payrollDisplayV41(", "function attendanceStatusV41(", "function attendanceReviewV41(",
-        "function attendanceMinutesV41(", "function attendanceDisplayV41(", "function liveRow(",
+        "function attendanceMinutesV41(", "function displayDateV41(", "function attendanceTimeV41(", "function attendanceDisplayV41(", "function liveRow(",
         "function filteredRows(c)", "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(",
         "function scheduleMonthRangeV41(", "function scheduleCountV41(", "function workSchedulePanelV41("))
     renderer = "function renderPeopleV41(c){" + html.split("function renderPeopleV41(c){", 1)[1].split("function renderPageV41(){", 1)[0]
@@ -110,21 +110,21 @@ state.peopleTab='detail';renderPeopleV41(configs.attendance);
 let h=page.innerHTML;
 assert(h.includes('직원 선택'));assert(h.includes('id="peoplePersonSelect"'));
 for(const opt of ['김가 · 본점','이나 · 강남점','박다 · 강남점'])assert(h.includes(opt),opt);
-assert(h.includes('김가 · 출근 달력'));assert(h.includes('data-person')===false||true);
+assert(h.includes('김가 · 2026-10 출근 달력'));assert(h.includes('data-person')===false||true);
 assert(typeof handlers['peoplePersonSelect:change']==='function');
 // 선택 변경 -> state 갱신 + 재렌더 호출 -> 달력이 선택 직원 행으로 전환
 handlers['peoplePersonSelect:change']({target:{value:'KEY-C'}});
 assert.equal(state.peoplePerson,'KEY-C');assert.equal(rerenders,1);
 renderPeopleV41(configs.attendance);h=page.innerHTML;
-assert(h.includes('박다 · 출근 달력'));assert(h.includes('지각'));assert(!h.includes('김가 · 출근 달력'));
+assert(h.includes('박다 · 2026-10 출근 달력'));assert(h.includes('지각'));assert(!h.includes('김가 · 2026-10 출근 달력'));
 assert(h.includes('<option value="KEY-C" selected>'));
 // 일정 있는 직원: 결근 처리 버튼 노출, 계약 미리보기 이메일은 선택 직원 일정의 이메일
 assert(h.includes('data-absence-action'));
 assert(h.includes('data-email="da@x.test"'));
 state.peoplePerson='KEY-B';renderPeopleV41(configs.attendance);h=page.innerHTML;
-assert(h.includes('이나 · 출근 달력'));assert(h.includes('data-email="na@x.test"'));
+assert(h.includes('이나 · 2026-10 출근 달력'));assert(h.includes('data-email="na@x.test"'));
 state.peoplePerson='KEY-A';renderPeopleV41(configs.attendance);h=page.innerHTML;
-assert(h.includes('김가 · 출근 달력'));assert(!h.includes('data-email="na@x.test"'));assert(h.includes('id="personalContractPreview" data-email=""'));
+assert(h.includes('김가 · 2026-10 출근 달력'));assert(!h.includes('data-email="na@x.test"'));assert(h.includes('id="personalContractPreview" data-email=""'));
 '''
     _run(tmp_path / "select.cjs", body)
 
