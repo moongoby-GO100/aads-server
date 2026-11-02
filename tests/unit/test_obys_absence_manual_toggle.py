@@ -109,10 +109,65 @@ def _record(status):
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=ZoneInfo("Asia/Seoul"))
 
 
-def test_rejected_record_on_past_work_day_is_absent():
-    assert api.attendance_schedule_judgment(_schedule(), _record("rejected"), now=NOW)["status"] == "결근"
-    assert api.attendance_schedule_judgment({**_schedule(), "actual_records": [_record("rejected")]}, now=NOW)["status"] == "결근"
+def test_explicit_admin_absence_on_past_work_day_is_absent():
+    assert api.attendance_schedule_judgment(_schedule(), {**_record("rejected"), "memo": "결근(대표 확인)"}, now=NOW)["status"] == "결근"
+    assert api.attendance_schedule_judgment({**_schedule(), "actual_records": [{**_record("rejected"), "memo": "결근(대표 확인)"}]}, now=NOW)["status"] == "결근"
 
 
 def test_approved_record_on_past_work_day_is_normal():
     assert api.attendance_schedule_judgment(_schedule(), _record("approved"), now=NOW)["status"] == "정상"
+
+
+@pytest.mark.parametrize("memo", [None, "", "일반 반려", "결근", "결근(대표 확인) 추가"])
+def test_ordinary_rejection_remains_unconfirmed(memo):
+    record = {**_record("rejected"), "memo": memo}
+    assert api.attendance_schedule_judgment(_schedule(), record, now=NOW)["status"] == "확인필요"
+
+
+def test_restoring_manual_absence_and_mixed_records():
+    absence = {**_record("rejected"), "memo": "결근(대표 확인)"}
+    restored = {**absence, "status": "approved", "memo": "출근(수기 확인)"}
+    assert api.attendance_schedule_judgment(_schedule(), restored, now=NOW)["status"] == "정상"
+    for records in ([absence, restored], [restored, absence]):
+        assert api.attendance_schedule_judgment(_schedule(), records, now=NOW)["status"] == "정상"
+
+
+@pytest.mark.parametrize("day,status", [("2026-10-10", "확인필요"), ("2026-10-30", "미출근"), ("2026-10-31", "예정")])
+def test_no_record_does_not_automatically_become_absent(day, status):
+    assert api.attendance_schedule_judgment({**_schedule(), "work_date": day}, now=NOW)["status"] == status
+
+
+@pytest.mark.asyncio
+async def test_schedule_query_keeps_explicit_absence():
+    from datetime import date
+    from unittest.mock import AsyncMock
+
+    record = {**_record("rejected"), "memo": "결근(대표 확인)",
+              "employee_email": "staff@example.com", "work_date": date(2026, 10, 10)}
+    connection = AsyncMock()
+    connection.fetch.return_value = [record]
+    grouped = await api._schedule_actual_records(connection, "b1", [record])
+    sql = connection.fetch.call_args.args[0]
+    assert "a.status <> 'rejected' OR a.memo = '결근(대표 확인)'" in sql
+    assert "a.business_id=$1 AND a.deleted_at IS NULL" in sql
+    assert api.attendance_schedule_judgment(_schedule(), next(iter(grouped.values())), now=NOW)["status"] == "결근"
+
+
+@pytest.mark.asyncio
+async def test_schedule_list_counts_manual_absence_without_check_in(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    schedule = {**_schedule(), "employee_email": "staff@example.com"}
+    absence = {**schedule, **_record("rejected"), "memo": "결근(대표 확인)"}
+    connection = AsyncMock()
+    connection.fetch.side_effect = [[schedule], [absence]]
+    monkeypatch.setattr(api, "_schedule_business", AsyncMock(return_value={"name": "테스트 사업자"}))
+    monkeypatch.setattr(api, "_require_route_read", lambda *args: None)
+    monkeypatch.setattr(api.upload_svc, "_tenant", lambda user: "tenant")
+    monkeypatch.setattr(api.upload_svc, "_connect", AsyncMock(return_value=connection))
+    monkeypatch.setattr(api, "_legacy_people_rows", AsyncMock(return_value=[]))
+    result = await api.list_work_schedules("b1", date_from="2026-10-10", date_to="2026-10-10",
+                                           employee_email=None, offset=0, current_user={})
+    assert result["schedules"][0]["judgment"]["status"] == "결근"
+    assert result["schedules"][0]["has_check_in"] is False
+    assert result["counts"] == {"결근": 1}

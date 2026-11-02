@@ -1232,7 +1232,7 @@ async def _schedule_actual_records(connection, business_id, schedules):
         FROM yeoljeong_attendance_records a
         JOIN jsonb_to_recordset($2::jsonb) AS k(email text, day date)
           ON a.work_date=k.day AND lower(a.employee_email)=k.email
-        WHERE a.business_id=$1 AND a.deleted_at IS NULL AND a.status <> 'rejected'
+        WHERE a.business_id=$1 AND a.deleted_at IS NULL AND (a.status <> 'rejected' OR a.memo = '결근(대표 확인)')
     ) SELECT * FROM ranked WHERE schedule_rank<=500""", business_id,
         json.dumps([{"email": email, "day": day} for email, day in keys]))
     grouped = {}
@@ -1258,10 +1258,16 @@ def _schedule_day_record(records):
     if not isinstance(records, list):
         return records or {}
     valid = []
+    manual_absences = []
     for row in records:
         try:
             row = dict(row)
-            if not row.get("start_at") or row.get("status") == "rejected":
+            if row.get("status") == "rejected":
+                # Existing admin mark-absent contract; ordinary rejections are not absence.
+                if row.get("memo") == "결근(대표 확인)":
+                    manual_absences.append(row)
+                continue
+            if not row.get("start_at"):
                 continue
             for field, stamp_field in (("start_at", "check_in_at"), ("end_at", "check_out_at")):
                 value = row.get(field)
@@ -1277,7 +1283,7 @@ def _schedule_day_record(records):
             continue
     records = valid
     if not records:
-        return {}
+        return manual_absences[0] if manual_absences else {}
     records.sort(key=lambda r: str(r.get("check_in_at") or r["start_at"]))
     first, last = records[0], records[-1]
     result = {**first, "end_at": last.get("end_at"), "check_out_at": last.get("check_out_at")}
@@ -1298,6 +1304,8 @@ def attendance_schedule_judgment(schedule, record=None, *, now=None):
         result["labels"] = ["일정없음"]
     elif schedule["kind"] != "work":
         result["labels"] = ["휴무"]
+    elif record.get("status") == "rejected" and record.get("memo") == "결근(대표 확인)":
+        result["labels"] = ["결근"]
     elif not record or not record.get("start_at"):
         day = date.fromisoformat(str(schedule["work_date"])[:10])
         result["labels"] = ["확인필요" if day < today else "미출근" if day == today else "예정"]
@@ -1444,7 +1452,7 @@ async def list_work_schedules(
         item["employee_key"] = _employee_key(business["name"], day_record.get("employee_id"), item["employee_email"])
         item["judgment"] = attendance_schedule_judgment(item, actual)
         item["contract_difference"] = _contract_schedule_difference(item, contract)
-        item["has_check_in"] = bool(day_record.get("start_at"))
+        item["has_check_in"] = bool(day_record.get("start_at")) and day_record.get("status") != "rejected"
         if item["has_check_in"]:
             counts["출근"] = counts.get("출근", 0) + 1
         for label in item["judgment"]["labels"]:
