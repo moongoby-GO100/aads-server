@@ -22,7 +22,7 @@ try{for(const width of [1920,390]){
  const kstDateV41=()=> '2026-11-02';
  const peopleMonthBoundsV41=()=>({month:state.peopleMonth,...scheduleMonthRangeV41(state.peopleMonth)});
  const workspaceApi=async(path,options={})=>{window.fixturePaths.push(path);if(options.method==='POST'){window.fixtureWrites.push(JSON.parse(options.body));return {count:1}}return {schedules:[{id:'fixture-schedule',employee_email:'one@example.test',employee_name:'시험 직원',work_date:'2026-11-30',kind:'work',start_time:'22:00',end_time:'06:00',break_minutes:0}],counts:{}}};
- const renderPageV41=()=>{page.innerHTML=workSchedulePanelV41(escapeHtml);bindWorkSchedulesV41()};
+ let renderPageV41=()=>{page.innerHTML=workSchedulePanelV41(escapeHtml);bindWorkSchedulesV41()};
  const loadLiveRoute=async()=>{state.workSchedules=await loadWorkSchedulesV41(state.businessId,peopleMonthBoundsV41());renderPageV41()};
  const previewContractSchedulesV41=()=>{},openRosterEditorV41=()=>{};
  ${names.map(line).join('\n')}
@@ -70,6 +70,20 @@ try{for(const width of [1920,390]){
  await page.locator('[data-cf-update]').click();
  await page.waitForFunction(()=>window.fixtureWrites.length===3);
  assert.equal(await page.evaluate(()=>window.fixtureWrites[2].cells[0].start_time),'20:00');
+ const peopleSource=admin.slice(admin.indexOf('    function renderPeopleV41('),admin.indexOf('    function renderPageV41('));
+ await page.addScriptTag({content:`
+ const filteredRows=c=>c.data,peopleWorkLinksV41=()=>'',bindManualEmployeePickerV41=()=>{};
+ ${peopleSource}
+ state.route='attendance';state.peopleTab='employees';state.peopleMonth='2026-11';state.peopleEmployeeEmail='';state.peoplePerson='';
+ state.workSchedules={month:{rows:[]}};
+ state.peopleEmployees={'fixture-b':[{id:'employee-a',email:'a@example.test',name:'시험 직원 A',branch:'지점 A'},{id:'employee-b',email:'b@example.test',name:'시험 직원 B',branch:'지점 B'}]};
+ Object.assign(configs.attendance,{title:'근태 현황',columns:[],hierarchy:[]});
+ renderPageV41=()=>renderPeopleV41(configs.attendance);renderPageV41();`});
+ await page.locator('button[data-person="employee:fixture-b:b@example.test"]').click();
+ assert.ok((await page.locator('main').innerText()).includes('시험 직원 B · 출근 달력'));
+ await page.locator('#peoplePersonSelect').selectOption('employee:fixture-b:a@example.test');
+ assert.ok((await page.locator('main').innerText()).includes('시험 직원 A · 출근 달력'));
+ if(evidence)await page.screenshot({path:`${evidence}/attendance-${width}-employee-empty.png`,fullPage:true});
  await page.setContent(`<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body><main class="page"><section class="section" id="payroll"></section></main></body></html>`);
  await page.addScriptTag({path:path.join(root,'app/static/apps/obys/modules/payroll-admin.js')});
  await page.evaluate(async()=>{
