@@ -27,6 +27,7 @@ MIG_CLOBE = "20261003_obys_clobe_collection.sql"
 MIG_CLOBE_STORE = "20261008_obys_clobe_mcp_store.sql"
 MIG_JOURNAL = "20261014_obys_journal_source_clobe.sql"
 MIG_AUTH = "20261014_obys_auth_password_recovery.sql"
+MIG_SCHEDULES = "20261030_obys_work_schedules.sql"
 
 HARNESS = r'''#!/bin/bash
 set -euo pipefail
@@ -153,10 +154,10 @@ fake_cmd() {
       sql="$(cat)"
       if [[ $sql == */\*identity\*/* ]]; then echo t
       elif [[ $sql == */\*probe\*/* ]]; then
-        if [[ $sql == *yeoljeong_journal_vouchers_source_type_check* ]]; then key=journal; elif [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *idx_yeoljeong_attendance_pwa_open* ]]; then key=gps; elif [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *yeoljeong_work_schedules* ]]; then key=schedules; elif [[ $sql == *yeoljeong_journal_vouchers_source_type_check* ]]; then key=journal; elif [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *idx_yeoljeong_attendance_pwa_open* ]]; then key=gps; elif [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
         if [[ -f "$D/applied.$key" ]]; then echo t; else echo f; fi
       else
-        if [[ $sql == *journal_t* ]]; then key=journal; elif [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *attendance_t* ]]; then key=gps; elif [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *schedules_t* ]]; then key=schedules; elif [[ $sql == *journal_t* ]]; then key=journal; elif [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *attendance_t* ]]; then key=gps; elif [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
         echo "MIGAPPLY $key" >> "$D/ssh.log"
         if [[ ${FAKE_MIG_FAIL:-} == "$key" ]]; then return 1; fi
         touch "$D/applied.$key"
@@ -262,6 +263,7 @@ class Box:
             f"migrations/{MIG_CLOBE_STORE}": MIG_BODY.format(t="clobe_mcp_t"),
             f"migrations/{MIG_JOURNAL}": MIG_BODY.format(t="journal_t"),
             f"migrations/{MIG_AUTH}": MIG_BODY.format(t="obys_password_reset_requests"),
+            f"migrations/{MIG_SCHEDULES}": MIG_BODY.format(t="schedules_t"),
             "migrations/20260901_unrelated_aads.sql": "DROP TABLE aads_thing;\n",
             "deploy/obys/requirements.obys.lock": "fastapi==0.115\n",
         }.items():
@@ -353,7 +355,7 @@ def test_happy_path_builds_once_migrates_with_backup_first_and_switches_port(box
     assert res["new"]["image_reused"] is False
     assert res["backups"]["pg_dump"] == "/root/acct-release-backups/obys_pre_x.dump,/root/acct-release-backups/obys_auth_pre_x.dump"
     assert res["backups"]["apache_vhost"].startswith("/root/fb-cutover-backups/")
-    assert res["migrations"]["applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
+    assert res["migrations"]["applied"] == [MIG_SCHEDULES, MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
     assert res["cutover_kst"].endswith("KST")
     assert res["rollback_command"].endswith("rollback acct-app-candidate-r8 77")
     assert "/root/acct-release-backups/obys_pre_x.dump" in proc.stdout and "/root/acct-release-backups/obys_auth_pre_x.dump" in proc.stdout
@@ -913,7 +915,29 @@ def self_write(box, body):
 
 
 # ---- migrations ---------------------------------------------------------------------------------
+def test_schedule_migration_targets_business_db_and_is_verified_before_cutover(box):
+    assert box.run("--call", "migration_db", MIG_SCHEDULES).stdout.strip() == "obys"
+    proc = box.run()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    log = box.log()
+    assert log.index("OP pg_backup") < log.index("MIGAPPLY schedules") < log.index("OP start_candidate")
+    sql = _probe_sql(MIG_SCHEDULES)
+    assert "yeoljeong_work_schedules" in sql
+    assert "idx_obys_work_schedules_active" in sql
+    assert "has_table_privilege" in sql
+
+
+def test_failed_schedule_migration_preserves_routing_and_never_starts_candidate(box):
+    proc = box.run(env={"FAKE_MIG_FAIL": "schedules"})
+    assert proc.returncode == 7, proc.stdout + proc.stderr
+    assert box.port() == "8111"
+    assert "OP start_candidate" not in box.log()
+    assert "OP apache_switch" not in box.log()
+    assert box.result(proc)["status"] == "failed"
+
+
 def test_already_applied_migrations_are_skipped_without_backup(box):
+    (box.fake / "applied.schedules").touch()
     (box.fake / "applied.gps").touch()
     (box.fake / "applied.hrdoc").touch()
     (box.fake / "applied.clobe").touch()
@@ -923,7 +947,7 @@ def test_already_applied_migrations_are_skipped_without_backup(box):
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     res = box.result(proc)
-    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
+    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_SCHEDULES, MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
     assert "OP pg_backup" not in box.log() and "MIGAPPLY hrdoc" not in box.log()
     assert res["backups"]["pg_dump"] == ""
 
@@ -937,13 +961,13 @@ def test_only_the_pending_migration_is_applied(box):
 
 def test_gps_migration_is_in_the_allowlist_and_applied_alone_when_it_is_the_only_pending_one(box):
     assert box.run("--call", "migration_allowed", MIG_GPS).returncode == 0
-    for key in ("hrdoc", "clobe", "clobe_store", "journal", "auth"):
+    for key in ("schedules", "hrdoc", "clobe", "clobe_store", "journal", "auth"):
         (box.fake / f"applied.{key}").touch()
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     res = box.result(proc)
     assert res["migrations"]["applied"] == [MIG_GPS]
-    assert res["migrations"]["already_applied"] == [MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
+    assert res["migrations"]["already_applied"] == [MIG_SCHEDULES, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
     log = box.log()
     assert log.index("OP pg_backup") < log.index("MIGAPPLY gps") < log.index("OP start_candidate")
 
@@ -1553,7 +1577,7 @@ def test_journal_source_clobe_migration_is_allowlisted_last_among_business_migra
     assert box.run("--call", "migration_db", MIG_JOURNAL).stdout.strip() == "obys"
     script = SCRIPT.read_text(encoding="utf-8")
     block = re.search(r"ACCT_MIGRATION_ALLOWLIST=\(\n(.*?)\n\)", script, re.S).group(1).split()
-    assert block == [MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL]
+    assert block == [MIG_SCHEDULES, MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL]
 
 
 def test_journal_source_clobe_probe_requires_the_validated_clobe_constraint():
