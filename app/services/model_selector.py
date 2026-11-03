@@ -1404,8 +1404,8 @@ _GEMINI_THINKING_MODELS = {
 # Groq 모델 (LiteLLM 경유, 무료)
 _GROQ_MODELS = {"groq-gpt-oss-120b", "groq-gpt-oss-20b", "groq-qwen3.8-27b"}
 # OpenAI 모델 (LiteLLM/OpenAI-compatible 경유)
-_OPENAI_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
-_OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "o3", "o3-mini", "o3-pro"}
+_OPENAI_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
+_OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "o3", "o3-mini", "o3-pro"}
 # OpenAI 직결 경로는 LiteLLM 프록시와 달리 파라미터를 번역해 주지 않는다.
 # 2026-09-19 실측: gpt-5.6-sol 채팅이 매 턴 HTTP 400 으로 죽고 "[... 실행 불가 →
 # Codex CLI 전환]" 배너만 남았다. 세 제약이 동시에 걸려 있었다.
@@ -1423,9 +1423,9 @@ _OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-5.6-
 #   reasoning_effort="none" → 400 (low/medium/high/xhigh 만 허용)
 # gpt-6-sol 과 달리 'none' 이 없으므로 도구 턴을 Chat Completions 로 살릴 방법이
 # 없다. gpt-6-astra 와 같은 처리(Responses API 필요)로 묶는다.
-_OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+_OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 _OPENAI_DIRECT_MAX_TOOLS = 128
-_OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra", "gpt-6.1-sol"}
+_OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra"}
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
 _CODEX_MODELS = {"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
