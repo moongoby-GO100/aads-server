@@ -743,3 +743,15 @@ def test_boundary_correction_mixed_with_original_row_uses_effective_order(day, r
     assert result['basis']['actual_start_minutes'] == 540
     assert result['basis']['actual_end_minutes'] == 1080
     assert rows == original
+
+
+def test_manual_attendance_save_feedback_calendar_record_and_single_person():
+    # 2026-11-04 운영 E2E 재현: 수동 등록 후 안내 없음, 달력 "일정없음", 직원 선택 중복.
+    html = Path("app/static/apps/obys/admin.html").read_text()
+    # 저장 결과가 재렌더 뒤에도 남아야 반영 여부를 확인할 수 있다.
+    assert 'id="attendanceManualStatus">${esc(state.attendanceManualNotice||"")}</p>' in html
+    assert "저장 완료 · " in html and '"(익일)"' in html and "아래 표와 출근 달력에 표시됩니다" in html
+    # 근무표가 없어도 기록이 있으면 달력에 기록 시각을 보여준다.
+    assert '(r?`기록 ${attendanceTimeV41(raw(r).check_in_at||raw(r).start_at)}' in html
+    # 기록 이메일은 마스킹되므로, 이름이 유일할 때만 같은 사람으로 잇는다(동명이인은 분리 유지).
+    assert "sameName.length===1&&approvedPeople.filter(" in html
