@@ -294,7 +294,8 @@ def test_draft_binding_and_registration_key(approved, monkeypatch, capsys, bindi
     monkeypatch.setattr(a, 'lookup', lambda sha, root: state)
     registered = []
     monkeypatch.setattr(a, 'register', lambda *args: registered.append(args))
-    args = ['approval', 'draft', '--root', str(root), '--release-sha', SHA, '--register']
+    args = ['approval', 'draft', '--root', str(root), '--release-sha', SHA, '--register',
+            '--source-task-id', 'runner-fa76e4f0']
     if binding == 'release':
         args += ['--binding', binding]
     monkeypatch.setattr(a.sys, 'argv', args)
@@ -302,7 +303,7 @@ def test_draft_binding_and_registration_key(approved, monkeypatch, capsys, bindi
     content = capsys.readouterr().out
     assert f'"binding": "{binding}"' in content
     assert f'"release_sha": "{SHA}"' in content
-    assert registered[0][1:] == (SHA, binding, data['manifest_sha256'])
+    assert registered[0][1:] == (SHA, binding, data['manifest_sha256'], 'runner-fa76e4f0')
 
 
 @pytest.mark.parametrize('binding', ['release', 'manifest'])
@@ -316,10 +317,10 @@ def test_document_key_must_match_binding(approved, binding):
         a.verify(root, SHA, a.inventory(root, {}), state)
 
 
-def test_business_inventory_preserves_pending_outside_aads_baseline(tmp_path):
+@pytest.mark.parametrize('name', sorted(a.MIGRATION_TARGETS))
+def test_business_inventory_preserves_pending_outside_aads_baseline(tmp_path, name):
     (tmp_path / 'migrations').mkdir()
     (tmp_path / 'scripts').mkdir()
-    name = 'migrations/20261030_obys_work_schedules.sql'
     (tmp_path / name).write_bytes((ROOT / name).read_bytes())
     (tmp_path / 'scripts/migrations_auto_apply_baseline.txt').write_text(name + '\n')
     assert a.inventory(tmp_path, {}) == []
@@ -328,7 +329,35 @@ def test_business_inventory_preserves_pending_outside_aads_baseline(tmp_path):
     assert a.inventory(tmp_path, {name: expected[0]['sha256']}, 'acct_business') == []
     acct = (ROOT / 'scripts/deploy_acct_app_cafe24.sh').read_text()
     allowlist = acct.split('ACCT_MIGRATION_ALLOWLIST=(', 1)[1].split(')', 1)[0]
-    assert Path(name).name in allowlist
+    if name.endswith('20261030_obys_work_schedules.sql'):
+        assert Path(name).name in allowlist
     assert '20261030_obys_work_schedules.sql)' in acct
     with pytest.raises(a.Rejected, match='unknown_migration_target'):
         a.inventory(tmp_path, {}, 'unknown')
+
+
+def test_registration_requires_source_before_lookup(monkeypatch, capsys):
+    monkeypatch.setattr(a, 'lookup', lambda *args: pytest.fail('unexpected lookup'))
+    monkeypatch.setattr(a.sys, 'argv', ['approval', 'draft', '--root', str(ROOT), '--register'])
+    assert a.main() == 1
+    assert capsys.readouterr().out == 'source_task_id_required\n'
+
+
+def test_registration_preserves_current_task(monkeypatch):
+    bodies = []
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self): return b'{"revision_id":"rev","generation":1}'
+    def send(req, **kwargs):
+        bodies.append(json.loads(req.data))
+        return Response()
+    monkeypatch.setenv('AADS_API_URL', 'https://example.invalid')
+    monkeypatch.setenv('AADS_ACCESS_TOKEN', 'test-only')
+    monkeypatch.setattr(a, 'urlopen', send)
+    a.register('draft', SHA, source_task_id='runner-fa76e4f0')
+    assert bodies[0]['source_task_id'] == 'runner-fa76e4f0'
+    assert len(bodies[0]['change_summary']) >= 10
+    assert bodies[1] == {'revision_id': 'rev', 'expected_generation': 1}
+    with pytest.raises(a.Rejected, match='source_task_id_required'):
+        a.register('draft', SHA)

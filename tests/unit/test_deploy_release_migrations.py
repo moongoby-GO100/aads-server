@@ -223,11 +223,12 @@ def test_plan_applies_nothing(release):
 
 
 def test_actual_release_inventory_defers_obys_and_keeps_aads_pending(release, monkeypatch):
-    # Reproduce #5931's five pending files with real SQL bytes and policy.
+    # Exercise business DB separation with real SQL bytes and policy.
     names = (
         "20261030_collection_datasets.sql",
         "20261030_goal_work_item_sync.sql",
         "20261030_obys_work_schedules.sql",
+        "20261102_obys_attendance_corrections.sql",
         "20261030_spec_first_stale_events.sql",
         "20261102_design_intake_questions_chat_session.sql",
     )
@@ -246,6 +247,7 @@ def test_actual_release_inventory_defers_obys_and_keeps_aads_pending(release, mo
     result = release.run("--plan")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "DEFER migrations/20261030_obys_work_schedules.sql" in result.stdout
+    assert "DEFER migrations/20261102_obys_attendance_corrections.sql" in result.stdout
     assert [line.split()[1] for line in result.stdout.splitlines()
             if line.startswith("PENDING ")] == expected
     assert release.applied() == []
@@ -262,6 +264,11 @@ def test_actual_release_inventory_defers_obys_and_keeps_aads_pending(release, mo
     applied = release.run()
     assert applied.returncode == 0, applied.stdout + applied.stderr
     assert release.applied() == expected
+    assert "DEFER migrations/20261102_obys_attendance_corrections.sql" in applied.stdout
+    assert [x["file"] for x in approval.inventory(release.root, {}, "acct_business")] == [
+        "migrations/20261030_obys_work_schedules.sql",
+        "migrations/20261102_obys_attendance_corrections.sql",
+    ]
 
 
 def test_only_limits_to_named_files(release):

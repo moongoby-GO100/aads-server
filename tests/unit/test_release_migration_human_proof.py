@@ -80,7 +80,7 @@ def test_lookup_matches_existing_schema_and_live_owner(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, '{}', '')
 
     monkeypatch.setattr(a.subprocess, 'run', capture)
-    assert a.lookup(SHA) == {}
+    assert a.lookup(SHA) == {'document': None}
 
 
 def test_isolated_postgres_human_proof(tmp_path, monkeypatch):

@@ -50,6 +50,7 @@ def literal(s):
 # the AADS legacy baseline must never hide it.
 MIGRATION_TARGETS = {
     'migrations/20261030_obys_work_schedules.sql': 'acct_business',
+    'migrations/20261102_obys_attendance_corrections.sql': 'acct_business',
 }
 VALID_TARGETS = {'aads', 'acct_business'}
 
@@ -196,7 +197,9 @@ def verify(root, release_sha, supplied, state, now=None):
     return f"APPROVED revision_id={d['revision_id']} approver={actor} manifest_sha256={data['manifest_sha256']} binding={binding}"
 
 
-def register(content, sha, binding='release', manifest_sha256=None):
+def register(content, sha, binding='release', manifest_sha256=None, source_task_id=None):
+    if not isinstance(source_task_id, str) or not source_task_id.strip():
+        raise Rejected('source_task_id_required')
     # Caller supplies a normal existing API login credential; never an approval override.
     base = os.environ['AADS_API_URL'].rstrip('/') + '/api/v1/projects/AADS/documents'
     def post(url, body):
@@ -208,7 +211,7 @@ def register(content, sha, binding='release', manifest_sha256=None):
            else 'migration-apply-' + sha[:12])
     result = post(base, dict(document_key=key, kind='contract', title='릴리스 마이그레이션 적용 승인',
         version='1.0.0', content=content, expected_generation=0,
-        source_task_id='runner-3b18076c', change_summary='정확한 릴리스 SQL 명세의 사람 승인 검토 요청'))
+        source_task_id=source_task_id, change_summary='정확한 릴리스 SQL 명세의 사람 승인 검토 요청'))
     return post(base + '/' + key + '/review', dict(revision_id=result['revision_id'], expected_generation=result['generation']))
 
 
@@ -219,9 +222,12 @@ def main():
     parser.add_argument('--release-sha')
     parser.add_argument('--manifest-file', type=Path)
     parser.add_argument('--register', action='store_true')
+    parser.add_argument('--source-task-id', help='정본 등록을 요청한 실제 작업 ID')
     parser.add_argument('--binding', choices=['manifest', 'release'], default='manifest')
     args = parser.parse_args()
     try:
+        if args.register and not (args.source_task_id and args.source_task_id.strip()):
+            raise Rejected('source_task_id_required')
         if args.command == 'targets':
             for path in sorted((args.root / 'migrations').glob('*.sql')):
                 name = 'migrations/' + path.name
@@ -250,7 +256,7 @@ def main():
             content += '\n```aads-migration-approval\n' + json.dumps(data, ensure_ascii=False, indent=2) + '\n```\n'
             print(content)
             if args.register:
-                print(json.dumps(register(content, sha, args.binding, data['manifest_sha256']), ensure_ascii=False))
+                print(json.dumps(register(content, sha, args.binding, data['manifest_sha256'], args.source_task_id), ensure_ascii=False))
         return 0
     except Rejected as exc:
         print(str(exc))
