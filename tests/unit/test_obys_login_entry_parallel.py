@@ -349,3 +349,14 @@ def test_boot_transient_failure_preserves_credentials_and_requires_retry():
       }
     })().catch(e=>{console.error(e);process.exitCode=1});
     ''')
+
+
+def test_login_waits_for_handler_and_never_defaults_to_get():
+    import re
+
+    form = re.search(r'<form id="gateLoginForm"[^>]*>', HTML).group(0)
+    assert 'method="post"' in form
+    assert 'onsubmit="event.preventDefault()"' in form
+    assert re.search(r'<button id="gateLoginSubmitBtn"[^>]* disabled>', HTML)
+    bind = _function_source(HTML, 'bindEvents')
+    assert bind.index('els.gateLoginForm.addEventListener("submit"') < bind.index('getElementById("gateLoginSubmitBtn").disabled = false')

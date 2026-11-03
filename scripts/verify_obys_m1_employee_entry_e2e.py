@@ -127,7 +127,7 @@ def _visible_headings(page: Any) -> list[str]:
 def snapshot(page: Any, path: Path) -> dict[str, Any]:
     page.screenshot(path=str(path), full_page=False)
     return {
-        "url": page.url,
+        "url": page.url.split("?", 1)[0],
         "path": page.url.split("?")[0].split("#")[0].replace("https://fb.newtalk.kr", ""),
         "hash": page.url.split("#", 1)[1] if "#" in page.url else "",
         "title": page.title(),

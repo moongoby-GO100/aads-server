@@ -3111,7 +3111,7 @@
             <button id="authModeSignup" type="button" role="tab" aria-selected="false">직원 회원가입</button>
             <a id="authModeOwnerSignup" href="/static/apps/obys/signup.html" role="tab" aria-selected="false" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 12px;border-radius:8px;text-decoration:none;font-weight:600;color:#1b4ec2;background:#edf4ff;border:1px solid #c7dbff">사업자 회원가입</a>
           </div>
-          <form id="gateLoginForm" class="panel-body">
+          <form id="gateLoginForm" class="panel-body" method="post" onsubmit="event.preventDefault()">
             <p id="authGateNotice" class="hidden" role="alert" style="margin:0 0 8px;padding:10px 12px;border-radius:8px;background:#fff4e5;border:1px solid #ffd59a;color:#7a4300;font-weight:600"></p>
             <label>이메일
               <input name="email" type="email" autocomplete="username" required>
@@ -3119,7 +3119,7 @@
             <label>비밀번호
               <input name="password" type="password" autocomplete="current-password" required>
             </label>
-            <button class="primary" type="submit">로그인</button>
+            <button id="gateLoginSubmitBtn" class="primary" type="submit" disabled>로그인</button>
             <details style="margin-top:8px"><summary style="cursor:pointer;min-height:44px;line-height:44px">아이디·비밀번호 찾기</summary><div id="gateRecoveryLinks" style="display:flex;gap:8px;margin-top:8px">
               <button id="openFindIdFromGateBtn" type="button" data-ar-open="find-id" style="flex:1 1 0;min-height:44px;min-width:44px">아이디 찾기</button>
               <button id="openResetFromGateBtn" type="button" data-ar-open="reset" style="flex:1 1 0;min-height:44px;min-width:44px">비밀번호 찾기</button>
@@ -16608,6 +16608,7 @@
         loginToServer(String(data.email || "").trim(), String(data.password || ""))
           .catch(err => showToast(`로그인 실패: ${err.message}`));
       });
+      document.getElementById("gateLoginSubmitBtn").disabled = false;
       [els.gateSignupForm, els.signupForm, els.employeeJoinRequestForm].forEach(form => {
         form?.businessId?.addEventListener("change", syncSignupBranchSelects);
         form?.addEventListener("reset", () => setTimeout(syncSignupBranchSelects, 0));
