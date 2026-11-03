@@ -652,6 +652,8 @@ async def upload_onboarding_document(
     employee_name: str = Form(...),
     employee_email: str = Form(...),
     branch: str = Form(""),
+    employee_request_id: str = Form(""),
+    business_id: str = Form(""),
     document_type: str = Form(...),
     issue_date: str = Form(""),
     expires_at: str = Form(""),
@@ -663,6 +665,8 @@ async def upload_onboarding_document(
         employee_name=employee_name,
         employee_email=employee_email,
         branch=branch,
+        employee_request_id=employee_request_id,
+        business_id=business_id,
         document_type=document_type,
         issue_date=issue_date,
         expires_at=expires_at,
@@ -677,6 +681,19 @@ async def upload_onboarding_document(
 async def download_onboarding_document(document_id: str, current_user: dict = Depends(get_current_user)) -> FileResponse:
     document, path = await run_in_threadpool(svc.get_onboarding_document, document_id, current_user)
     return FileResponse(path, media_type=document.get("content_type") or "application/octet-stream", filename=document.get("original_filename") or path.name)
+
+
+@router.get("/onboarding/documents/{document_id}/preview")
+async def preview_onboarding_document(document_id: str, current_user: Annotated[dict, Depends(get_current_user)]) -> FileResponse:
+    document, path = await run_in_threadpool(svc.get_onboarding_document, document_id, current_user)
+    media_type = str(document.get("content_type") or "").split(";", 1)[0].lower()
+    if media_type not in {"application/pdf", "image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=415, detail="바로보기를 지원하지 않는 형식입니다. 내려받기를 이용하십시오")
+    return FileResponse(
+        path, media_type=media_type, filename=document.get("original_filename") or path.name,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.post("/onboarding/documents/{document_id}/bankbook-extract")

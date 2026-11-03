@@ -4603,6 +4603,7 @@ def _employee_onboarding_profile(
     *,
     employee_email: str,
     employee_request_id: str,
+    business_id: str = "",
 ) -> dict[str, Any]:
     """Return privacy-minimised fields verified from an employee's uploaded documents."""
     email = str(employee_email or "").strip().lower()
@@ -4610,10 +4611,12 @@ def _employee_onboarding_profile(
     matched = [
         row
         for row in documents
-        if str(row.get("status") or "").strip().lower() not in {"missing", "superseded"}
+        if str(row.get("status") or "").strip().lower() not in {"missing", "superseded", "deleted", "rejected"}
+        and (not business_id or _record_business_id(row) == business_id)
         and (
-            (request_id and str(row.get("employee_request_id") or "").strip() == request_id)
-            or (email and str(row.get("employee_email") or "").strip().lower() == email)
+            str(row.get("employee_request_id") or "").strip() == request_id
+            if request_id and row.get("employee_request_id")
+            else bool(email and str(row.get("employee_email") or "").strip().lower() == email)
         )
     ]
     profile: dict[str, Any] = {}
@@ -4677,6 +4680,7 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
             docs,
             employee_email=email,
             employee_request_id=str(employee.get("id") or ""),
+            business_id=employee_business_id,
         )
         for field in ONBOARDING_PROFILE_FIELDS:
             if not employee.get(field) and document_profile.get(field):
@@ -4871,6 +4875,7 @@ async def _db_supersede_onboarding_documents(record: dict[str, Any]) -> int:
                AND document_type = $7 AND id <> $1 AND deleted_at IS NULL
                AND status = ANY($8::text[])
                AND (uploaded_at, id) < ($9::timestamptz, $1)
+               AND COALESCE(metadata->>'employee_request_id', '') = $10
             """,
             str(record["id"]),
             _pg_ts(record.get("updated_at")),
@@ -4881,6 +4886,7 @@ async def _db_supersede_onboarding_documents(record: dict[str, Any]) -> int:
             str(record.get("document_type") or ""),
             list(ONBOARDING_SUPERSEDABLE_STATUSES),
             _pg_ts(record.get("uploaded_at")),
+            str(record.get("employee_request_id") or ""),
         )
         return int(result.rsplit(" ", 1)[-1])
     finally:
@@ -4896,6 +4902,7 @@ def _supersede_onboarding_file_rows(rows: list[dict[str, Any]], record: dict[str
             or str(row.get("id")) == str(record["id"])
             or str(row.get("tenant_id") or "") != str(record["tenant_id"])
             or _record_business_id(row) != str(record.get("business_id") or "")
+            or str(row.get("employee_request_id") or "") != str(record.get("employee_request_id") or "")
             or str(row.get("employee_email") or "").strip().lower() != wanted_email
             or str(row.get("document_type") or "") != str(record.get("document_type") or "")
             or str(row.get("status") or "uploaded").strip().lower() not in ONBOARDING_SUPERSEDABLE_STATUSES
@@ -4919,6 +4926,8 @@ async def save_onboarding_document(
     upload: UploadFile,
     user: dict[str, Any],
     expires_at: str = "",
+    employee_request_id: str = "",
+    business_id: str = "",
 ) -> dict[str, Any]:
     tenant_id = _tenant_id(user)
     _require_owner_path_admin(user, "입사서류 등록은 관리자만 할 수 있습니다")
@@ -4932,20 +4941,27 @@ async def save_onboarding_document(
         if _db_available()
         else _read_hr("employee_join_requests", user)
     )
-    employee = next(
-        (
-            row
-            for row in (employee_rows or [])
-            if str(row.get("email") or "").strip().lower() == email
-            and str(row.get("status") or "pending").strip().lower() != "rejected"
-        ),
-        None,
-    )
+    request_id = str(employee_request_id or "").strip()
+    selected_business = str(business_id or "").strip()
+    selected_branch = BRANCH_ALIASES.get(branch.strip(), branch.strip())
+    candidates = [row for row in (employee_rows or [])
+                  if str(row.get("email") or "").strip().lower() == email
+                  and str(row.get("status") or "pending").strip().lower() != "rejected"
+                  and (not request_id or str(row.get("id") or "") == request_id)
+                  and (not selected_business or _record_business_id(row) == selected_business)
+                  and (not selected_branch or BRANCH_ALIASES.get(str(row.get("branch") or "").strip(),
+                       str(row.get("branch") or "").strip()) == selected_branch)]
+    if (request_id or selected_business) and not candidates:
+        raise HTTPException(status_code=404, detail="해당 직원의 입사요청과 근무 점포를 찾을 수 없습니다")
+    if len(candidates) > 1:
+        raise HTTPException(status_code=409, detail="입사요청이 여러 개입니다. 직원과 근무 점포를 다시 선택하십시오")
+    employee = candidates[0] if candidates else None
     employee_branch = str((employee or {}).get("branch") or "").strip()
     normalized_branch = BRANCH_ALIASES.get(employee_branch or branch.strip(), employee_branch or branch.strip())
     business_id = _record_business_id(employee or {"branch": normalized_branch})
     if not business_id or (_db_available() and not await _db_business_tenant_matches(business_id, tenant_id)):
         raise HTTPException(status_code=403, detail="테넌트에 귀속되지 않은 사업자입니다")
+    _require_onboarding_business_scope({"business_id": business_id}, user)
     meta = _document_meta(document_type)
     issued, expires = _business_document_dates(issue_date, expires_at)
     if str(document_type or "").strip() in ONBOARDING_EXPIRY_REQUIRED_TYPES and not expires:
@@ -5890,6 +5906,7 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
             _read_hr("onboarding_documents", user),
             employee_email=str(employee.get("email") or ""),
             employee_request_id=request_id,
+            business_id=business_id,
         )
         employee_defaults = {
             "employee_request_id": request_id,
@@ -5907,7 +5924,8 @@ def _fill_contract_reference_data(payload: dict[str, Any], user: dict[str, Any])
             "onboarding_document_summary": document_profile.get("onboarding_document_summary") or "",
         }
         for key, value in employee_defaults.items():
-            if not str(result.get(key) or "").strip() and value:
+            camel_key = key.split("_")[0] + "".join(part.title() for part in key.split("_")[1:])
+            if not str(_contract_payload_value(result, key, camel_key) or "").strip() and value:
                 result[key] = value
         profile_number = str(document_profile.get("bank_account_number") or "").strip()
         if profile_number and not _contract_account_number(result):

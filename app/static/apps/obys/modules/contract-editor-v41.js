@@ -44,6 +44,9 @@
     { g: "wage", name: "nonTaxMealAllowance", label: "비과세 식대", type: "number" },
     { g: "wage", name: "taxableAllowance", label: "기타 과세수당", type: "number" },
     { g: "wage", name: "payDate", label: "급여지급일", type: "text" },
+    { g: "wage", name: "bankName", label: "은행명", type: "text" },
+    { g: "wage", name: "bankAccountHolder", label: "예금주", type: "text" },
+    { g: "wage", name: "bankAccountNumber", label: "계좌번호", type: "text", hint: "통장 판독이 안 되면 직접 입력하십시오. 마스킹된 번호는 저장할 수 없습니다." },
     { g: "wage", name: "payMethod", label: "지급방법", type: "text" },
     { g: "wage", name: "wageComposition", label: "임금 구성/공제", type: "textarea" },
     { g: "wage", name: "probationPeriod", label: "수습", type: "textarea" },
@@ -105,7 +108,7 @@
     return pair ? pair[0] : field.label;
   }
   const EMPLOYER_MEAL_NOTE = "회사가 식사를 제공하면 현금 식대는 비과세가 안 됩니다";
-  const PASS_THROUGH = ["bankName", "bankAccountHolder", "bankAccountNumber", "bankAccountMasked", "healthCertificateValidUntil", "onboardingDocumentSummary", "amendsContractId"];
+  const PASS_THROUGH = ["bankAccountMasked", "healthCertificateValidUntil", "onboardingDocumentSummary", "amendsContractId"];
   // 추천값이 없는 필수값의 안내. 생년월일·주소·임금은 추정하지 않는다(시급제 최저시급만 버튼으로 제안).
   const NO_SUGGEST_HINT = {
     employeeBirthDate: "입사서류(신분증·주민등록등본)나 직원에게 확인해 입력하십시오.",
@@ -1559,8 +1562,8 @@
     const email = String(employee.email || "").toLowerCase();
     const requestId = String(employee.id || "");
     return (list || []).filter(item => String(item.status || "") !== "superseded" && String(item.status || "") !== "deleted")
-      .filter(item => (email && String(item.employee_email || "").toLowerCase() === email) || (requestId && String(item.employee_request_id || "") === requestId))
-      .filter(item => !item.business_id || !employee.business_id || String(item.business_id) === String(employee.business_id))
+      .filter(item => requestId && item.employee_request_id ? String(item.employee_request_id) === requestId : Boolean(email && String(item.employee_email || "").toLowerCase() === email))
+      .filter(item => !employee.business_id || String(item.business_id || "") === String(employee.business_id))
       .sort((a, b) => String(b.uploaded_at || b.created_at || "").localeCompare(String(a.uploaded_at || a.created_at || "")));
   }
   async function openDocs(employee) {
@@ -1594,7 +1597,7 @@
         <td data-label="서류"><b>${esc(item.document_label || item.document_type || "-")}</b><small>${esc(item.original_filename || "")}</small></td>
         <td data-label="상태">${esc(item.status_label || item.status || "-")}${item.expiry_label ? ` <span class="badge warn">${esc(item.expiry_label)}</span>` : ""}</td>
         <td data-label="발급·만료">${esc(String(item.issue_date || "").slice(0, 10) || "-")}${item.expires_at ? ` ~ ${esc(String(item.expires_at).slice(0, 10))}` : ""}</td>
-        <td data-label="처리"><button class="btn" type="button" data-cv41-doc-dl="${esc(item.id)}">내려받기</button></td>
+        <td data-label="처리"><button class="btn" type="button" data-cv41-doc-view="${esc(item.id)}">바로보기</button> <button class="btn" type="button" data-cv41-doc-dl="${esc(item.id)}">내려받기</button></td>
       </tr>`).join("");
     docsDialog.innerHTML = `
       <div class="modal-head cv41-head"><div><h2 id="cv41DocsTitle">직원 입사서류 등록</h2><p>${esc(employee.name || "이름 없음")} · ${esc(businessName(employee.business_id))} · ${esc(employee.branch || "지점 미정")}</p></div><button class="close" type="button" data-cv41-docs-close aria-label="닫기">×</button></div>
@@ -1623,6 +1626,7 @@
     syncExpiry();
     docsDialog.querySelectorAll("[data-cv41-doc-pick]").forEach(button => button.addEventListener("click", () => { typeSelect.value = button.dataset.cv41DocPick; syncExpiry(); docsDialog.querySelector("#cv41DocFile")?.focus(); }));
     docsDialog.querySelector("[data-cv41-doc-upload]")?.addEventListener("click", uploadDoc);
+    docsDialog.querySelectorAll("[data-cv41-doc-view]").forEach(button => button.addEventListener("click", () => downloadDoc(button.dataset.cv41DocView, button, true)));
     docsDialog.querySelectorAll("[data-cv41-doc-dl]").forEach(button => button.addEventListener("click", () => downloadDoc(button.dataset.cv41DocDl, button)));
   }
   async function uploadDoc() {
@@ -1642,6 +1646,8 @@
     const form = new FormData();
     form.append("employee_name", D.employee.name || "");
     form.append("employee_email", D.employee.email || "");
+    form.append("employee_request_id", D.employee.id || "");
+    form.append("business_id", D.employee.business_id || "");
     form.append("branch", D.employee.branch || "");
     form.append("document_type", type);
     form.append("issue_date", issue);
@@ -1662,21 +1668,28 @@
       renderDocs();
     }
   }
-  async function downloadDoc(documentId, button) {
+  async function downloadDoc(documentId, button, inline = false) {
+    const viewer = inline ? window.open("about:blank", "_blank") : null;
+    if (viewer) viewer.opener = null;
     if (button) button.disabled = true;
     try {
-      const response = await fetch(`/api/v1/yeoljeong-finance/onboarding/documents/${encodeURIComponent(documentId)}/download`, { credentials: "same-origin", headers: { ...(S.ctx?.headers?.() || {}) } });
+      const endpoint = inline
+        ? `/api/v1/yeoljeong-finance/onboarding/documents/${encodeURIComponent(documentId)}/preview`
+        : `/api/v1/yeoljeong-finance/onboarding/documents/${encodeURIComponent(documentId)}/download`;
+      const response = await fetch(endpoint, { credentials: "same-origin", headers: { ...(S.ctx?.headers?.() || {}) } });
       if (!response.ok) { const error = new Error(`서류를 받을 수 없습니다 (HTTP ${response.status})`); error.status = response.status; throw error; }
       const blob = await response.blob();
       const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(response.headers.get("content-disposition") || "");
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = match ? decodeURIComponent(match[1]) : `document-${documentId}`;
-      document.body.append(link); link.click(); link.remove();
+      if (inline && viewer) viewer.location.replace(url);
+      else if (inline) { URL.revokeObjectURL(url); throw new Error("팝업을 허용한 뒤 바로보기를 다시 눌러주십시오"); }
+      else { link.download = match ? decodeURIComponent(match[1]) : `document-${documentId}`; document.body.append(link); link.click(); link.remove(); }
       setTimeout(() => URL.revokeObjectURL(url), 30000);
     } catch (error) {
-      D.error = errorText(error, "서류 내려받기"); renderDocs();
+      viewer?.close();
+      D.error = errorText(error, "서류 바로보기·내려받기"); renderDocs();
     } finally {
       if (button) button.disabled = false;
     }
