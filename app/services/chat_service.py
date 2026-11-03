@@ -12773,8 +12773,10 @@ async def _process_deferred_reactions_once(max_rows: int = 3) -> int:
             continue
 
         message = row["system_message"]
-        # 다음단계 지시만 대상이다. 완료·실패 보고는 종결 잡을 가리키는 게 정상이다.
-        if str(row.get("dedupe_key") or "").startswith("next_step:"):
+        # 대표님이 명시 승인한 실행 지시는 종결 잡의 결과를 근거로 할 수 있다.
+        # 자동 다음단계 제안만 재검증한다. 완료·실패 보고도 종결 잡을 가리키는 게 정상이다.
+        dedupe_key = str(row.get("dedupe_key") or "")
+        if dedupe_key.startswith("next_step:") and not dedupe_key.startswith("next_step:approval:"):
             from app.services.deferred_reaction_freshness import annotate_or_skip
 
             async with get_pool().acquire() as fresh_conn:

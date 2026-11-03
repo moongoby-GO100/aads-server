@@ -170,7 +170,7 @@ def _patch(monkeypatch, fakes):
 async def test_next_step_row_with_all_terminal_jobs_is_skipped(monkeypatch):
     fakes = _QueueFakes(
         "[시스템] runner-70643263 승인",
-        "next_step:approval:s:k",
+        "next_step:auto:s:k",
         [_job("runner-70643263", "rejected_done")],
     )
     chat_service, trigger = _patch(monkeypatch, fakes)
