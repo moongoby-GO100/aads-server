@@ -236,7 +236,7 @@ def test_node_text_roundtrip_and_manual_protection(node_result):
     assert "%" not in p["text"] and p["back"] == "3" and p["none"] == "none"
     assert node_result["pay"]["back"] == {"period": "prev", "day": "last"}
     assert node_result["term"] == ["3m", "none", "custom"]
-    assert node_result["free"] == {"applies": False, "hideWork": True}
+    assert node_result["free"] == {"applies": True, "hideWork": True}
     assert node_result["patch"] == {"hasEnd": True, "skippedManual": True, "hasOvertime": True}
 
 

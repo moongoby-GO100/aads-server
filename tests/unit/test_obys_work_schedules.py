@@ -637,3 +637,109 @@ async def test_save_keep_and_overwrite_postgres_temp_fixture(monkeypatch):
     finally:
         await transaction.rollback()
         await conn.close()
+
+
+@pytest.mark.parametrize('actual_break,expected_overtime', [(90, 0), (0, 90)])
+@pytest.mark.parametrize('timestamps', [False, True])
+def test_overnight_630_minutes_and_explained_break_difference(actual_break, expected_overtime, timestamps):
+    schedule = {**SCHEDULE, 'id': 'night', 'start_time': '21:00', 'end_time': '09:00',
+                'break_minutes': 90}
+    record = {'start_at': '21:00', 'end_at': '09:00', 'break_minutes': actual_break}
+    if timestamps:
+        record.update(check_in_at='2026-10-29T12:00:00Z', check_out_at='2026-10-30T00:00:00Z')
+    result = api.attendance_schedule_judgment(schedule, record, now=NOW)
+    assert result['overtime_minutes'] == expected_overtime
+    basis = result['basis']
+    assert basis['planned_worked_minutes'] == 630
+    assert basis['actual_worked_minutes'] == 720 - actual_break
+    assert basis['planned_break_minutes'] == 90
+    assert basis['actual_break_minutes'] == actual_break
+    assert basis['overnight'] and basis['source'] == 'work_schedule'
+    assert basis['schedule_id'] == 'night'
+    assert record['break_minutes'] == actual_break  # Evidence is never rewritten.
+
+
+def test_split_shift_explanation_uses_sum_of_actual_breaks():
+    records = [{'start_at': '09:00', 'end_at': '12:00', 'break_minutes': 10},
+               {'start_at': '13:00', 'end_at': '18:00', 'break_minutes': 20}]
+    result = api.attendance_schedule_judgment(SCHEDULE, records, now=NOW)
+    assert result['basis']['actual_worked_minutes'] == 450
+    assert result['basis']['actual_break_minutes'] == 30
+    assert result['basis']['actual_source'] == 'daily_total'
+
+
+def test_corrected_night_clocks_override_stale_pwa_evidence():
+    schedule = {**SCHEDULE, 'start_time': '21:00', 'end_time': '09:00', 'break_minutes': 90}
+    record = {'start_at': '21:00', 'end_at': '09:00', 'break_minutes': 90,
+              'check_in_at': '2026-10-29T11:00:00Z',
+              'check_out_at': '2026-10-30T01:00:00Z'}
+    original = dict(record)
+    uncorrected = {**record, 'start_at': '20:00', 'end_at': '10:00'}
+    assert api.attendance_schedule_judgment(schedule, uncorrected, now=NOW)['overtime_minutes'] == 120
+    result = api.attendance_schedule_judgment(schedule, record, now=NOW)
+    assert result['overtime_minutes'] == 0
+    assert result['basis']['actual_worked_minutes'] == 630
+    assert result['basis']['clock_basis'] == 'corrected_wall_clock'
+    assert record == original
+
+
+@pytest.mark.parametrize('seconds', ['30', '30.123456'])
+def test_pwa_seconds_do_not_remove_night_record_date(seconds):
+    schedule = {**SCHEDULE, 'start_time': '21:00', 'end_time': '09:00', 'break_minutes': 90}
+    record = {'start_at': '08:00', 'end_at': '09:00', 'break_minutes': 0,
+              'check_in_at': f'2026-10-29T08:00:{seconds}+09:00',
+              'check_out_at': f'2026-10-29T09:00:{seconds}+09:00'}
+    original = dict(record)
+    result = api.attendance_schedule_judgment(schedule, record, now=NOW)
+    assert (result['late_minutes'], result['early_minutes'], result['overtime_minutes']) == (0, 1440, 0)
+    assert result['basis']['clock_basis'] == 'record_clock'
+    assert record == original
+
+
+@pytest.mark.parametrize('raw_seconds', ['00', '30'])
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('timestamp_style', ['kst', 'utc', 'mixed'])
+def test_corrected_and_original_rows_keep_first_in_last_out(reverse, timestamp_style, raw_seconds):
+    records = [
+        {'start_at': '09:00', 'end_at': '12:00', 'break_minutes': 0,
+         'check_in_at': f'2026-10-29T09:00:{raw_seconds}+09:00',
+         'check_out_at': f'2026-10-29T12:00:{raw_seconds}+09:00'},
+        {'start_at': '13:00', 'end_at': '18:00', 'break_minutes': 0,
+         'check_in_at': '2026-10-29T13:30:30+09:00',
+         'check_out_at': '2026-10-29T18:00:30+09:00'},
+    ]
+    if timestamp_style != 'kst':
+        for row in records[:1] if timestamp_style == 'mixed' else records:
+            for field in ('check_in_at', 'check_out_at'):
+                row[field] = datetime.fromisoformat(row[field]).astimezone(UTC).isoformat()
+    if reverse:
+        records.reverse()
+    originals = [dict(r) for r in records]
+    result = api.attendance_schedule_judgment(SCHEDULE, records, now=NOW)
+    assert result['labels'] == ['정상']
+    assert (result['late_minutes'], result['early_minutes'], result['overtime_minutes']) == (0, 0, 0)
+    assert result['basis']['actual_start_minutes'] == 540
+    assert result['basis']['actual_end_minutes'] == 1080
+    assert result['basis']['actual_worked_minutes'] == 480
+    assert records == originals
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('day', ['2026-10-29', '2026-10-31'])
+def test_boundary_correction_mixed_with_original_row_uses_effective_order(day, reverse):
+    rows = [
+        dict(work_date=day, start_at='09:00', end_at='12:00', break_minutes=0,
+             check_in_at='2026-10-29T21:00:30+09:00',
+             check_out_at='2026-10-30T09:00:30+09:00'),
+        dict(work_date=day, start_at='13:00', end_at='18:00', break_minutes=0,
+             check_in_at=day+'T13:00:30+09:00', check_out_at=day+'T18:00:30+09:00'),
+    ]
+    if reverse:
+        rows.reverse()
+    original = [dict(row) for row in rows]
+    result = api.attendance_schedule_judgment({**SCHEDULE, 'work_date': day}, rows, now=NOW)
+    assert result['labels'] == ['정상']
+    assert result['basis']['actual_worked_minutes'] == 480
+    assert result['basis']['actual_start_minutes'] == 540
+    assert result['basis']['actual_end_minutes'] == 1080
+    assert rows == original

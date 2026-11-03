@@ -97,6 +97,9 @@ _EMPLOYEES_APPROVED_PATH = "/api/v1/yeoljeong-finance/employees/approved"
 _DOCUMENT_ID_PATTERN = r"[A-Za-z0-9_-]{8,64}"
 _OWNER_CONTRACT_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GET", re.compile(re.escape(_EMPLOYEES_APPROVED_PATH))),
+    ("GET", re.compile(re.escape("/api/v1/yeoljeong-finance/employees/archived"))),
+    ("DELETE", re.compile(re.escape(_EMPLOYEES_APPROVED_PATH) + "/" + _DOCUMENT_ID_PATTERN)),
+    ("POST", re.compile(re.escape(_EMPLOYEES_APPROVED_PATH) + "/" + _DOCUMENT_ID_PATTERN + "/restore")),
     ("GET", re.compile(re.escape(_CONTRACTS_PATH))),
     ("POST", re.compile(re.escape(_CONTRACTS_PATH))),
     ("POST", re.compile(re.escape(_CONTRACTS_PATH) + "/" + _CONTRACT_ID_PATTERN + "/request-signature")),
@@ -116,12 +119,13 @@ _OWNER_CONTRACT_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
 # the administrator role in the service; employee reads retain own-row and
 # confirmed/paid visibility checks. Keep this an exact method/path list.
 _PAYROLL_PATH = "/api/v1/yeoljeong-finance/payroll"
-_PAYROLL_ID_PATTERN = r"(?!(?:defaults|draft-from-attendance|delivery-consent)(?:/|$))[A-Za-z0-9_-]{8,64}"
+_PAYROLL_ID_PATTERN = r"(?!(?:defaults|draft-from-attendance|draft-from-contract|delivery-consent)(?:/|$))[A-Za-z0-9_-]{8,64}"
 _PAYROLL_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GET", re.compile(re.escape(_PAYROLL_PATH))),
     ("POST", re.compile(re.escape(_PAYROLL_PATH))),
     ("GET", re.compile(re.escape(_PAYROLL_PATH) + "/defaults")),
     ("POST", re.compile(re.escape(_PAYROLL_PATH) + "/draft-from-attendance")),
+    ("POST", re.compile(re.escape(_PAYROLL_PATH) + "/draft-from-contract")),
     ("GET", re.compile(re.escape(_PAYROLL_PATH) + "/" + _PAYROLL_ID_PATTERN + "/versions")),
     ("GET", re.compile(re.escape(_PAYROLL_PATH) + "/" + _PAYROLL_ID_PATTERN + "/pdf")),
     ("POST", re.compile(re.escape(_PAYROLL_PATH) + "/" + _PAYROLL_ID_PATTERN + "/confirm")),

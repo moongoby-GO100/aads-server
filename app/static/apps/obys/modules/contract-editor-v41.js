@@ -24,7 +24,7 @@
   const AUTO = window.ObysContractAutofill || null;
 
   const ROUTES = new Set(["employees", "hr-docs"]);
-  const S = { ctx: null, employees: [], contracts: [], businesses: [], loadedAt: 0, loading: null, loadError: null, filter: "all" };
+  const S = { ctx: null, employees: [], archived: [], archivedError: "", contracts: [], businesses: [], loadedAt: 0, loading: null, loadError: null, filter: "all" };
   let E = null; // 열린 편집기 상태
   let dialog = null;
 
@@ -103,7 +103,9 @@
     daily: ["일급", "1일 금액을 원 단위로 입력합니다. 근무일 수 기준 월 예상액과 주휴수당이 자동 계산됩니다."],
     monthly: ["월 총액", "식대·수당을 포함한 월 총액을 원 단위로 입력합니다. 과세 기본급은 월 총액 − 비과세 식대 − 기타 과세수당으로 자동 계산됩니다."]
   };
+  const SERVICE_LABELS = {startDate:"용역 시작일",endDate:"용역 종료일",workplace:"용역 수행장소/방식",jobDescription:"용역 업무내용",wageType:"용역비 산정 방식",wage:"확정 용역비",payDate:"용역비 지급일",wageComposition:"용역비 구성/원천징수",workDays:"수행 일정",workTime:"수행 시간(별도 합의)",restTime:"휴식",weeklyHours:"수행 회차 기준",dailyWorkSchedule:"수행 일정 상세",holidays:"휴일 규정",overtimeTerms:"추가 수행",leaveTerms:"일정 변경",insuranceTerms:"세무 처리"};
   function wageLabelOf(field) {
+    if (E?.values?.contractType === "freelancer" && SERVICE_LABELS[field.name]) return SERVICE_LABELS[field.name];
     const pair = field.name === "wage" ? WAGE_LABELS[E?.values?.wageType] : null;
     return pair ? pair[0] : field.label;
   }
@@ -425,7 +427,7 @@
       workplaceSizeCategory: v.workplaceSizeCategory, startDate: v.startDate, contractDate: v.contractDate, endDate: v.endDate,
       term: E.auto.term, probation: E.auto.probation, payPeriod: E.auto.payPeriod, payDay: E.auto.payDay, payMethod: E.auto.payMethod,
       sched: E.sched && E.sched.days.length ? E.sched : null, weeklyMinutesFallback: AUTO.parseWeeklyText(v.weeklyHours) || 0,
-      jobDescription: v.jobDescription, birthDate: v.employeeBirthDate, healthCertificateValidUntil: v.healthCertificateValidUntil,
+      jobDescription: v.jobDescription, savedPayDate: v.payDate, savedPayMethod: v.payMethod, birthDate: v.employeeBirthDate, healthCertificateValidUntil: v.healthCertificateValidUntil,
       splitMonthlyWage: C.splitMonthlyWage
     };
   }
@@ -439,7 +441,12 @@
     if (!autoOn()) return;
     E.auto.term = AUTO.termFromDates(v.startDate, v.endDate);
     if (["fixed_term", "daily"].includes(v.contractType) && !v.endDate) E.auto.term = "custom";
-    if (mode !== "saved") return;
+    if (mode !== "saved") {
+      const pay = AUTO.parsePayDate(v.payDate);
+      if (pay) { E.auto.payPeriod = pay.period; E.auto.payDay = pay.day; }
+      E.auto.payMethod = AUTO.parsePayMethod(v.payMethod) || "";
+      return;
+    }
     E.auto.probation = AUTO.parseProbation(v.probationPeriod) || "";
     const pay = AUTO.parsePayDate(v.payDate);
     if (pay) { E.auto.payPeriod = pay.period; E.auto.payDay = pay.day; }
@@ -454,6 +461,12 @@
       nonTaxMealAllowance: E.wageManual.has("nonTaxMealAllowance") ? v.nonTaxMealAllowance : null
     }).composition || "";
     if (composition === standard || (legacy && composition === legacy)) E.autoManual.delete("wageComposition");
+    if (v.contractType === "freelancer") {
+      const defaults = C.defaultsFor("freelancer", "freelancer_33");
+      ["freelancerScope", "freelancerSettlementTerms"].forEach(name => {
+        if (String(v[name] || "").trim() === String(defaults[name] || "").trim()) E.autoManual.delete(name);
+      });
+    }
   }
   function autoRun(activeEl) {
     if (!AUTO || !E) return null;
@@ -481,9 +494,10 @@
   }
   function autoInputsHtml(group) {
     if (!autoOn() || readOnly()) return "";
-    const items = AUTO_SELECTS.filter(item => item.g === group);
+    const freelancer = E.values.contractType === "freelancer";
+    const items = AUTO_SELECTS.filter(item => item.g === group && !(freelancer && item.key === "probation"));
     if (!items.length) return "";
-    return `<div class="cv41-auto-inputs" role="group" aria-label="자동 계산 입력">${items.map(item => `<div class="form-field"><label for="cv41_auto_${item.key}">${esc(item.label)}</label><select class="field" id="cv41_auto_${item.key}" data-cv41-auto="${item.key}">${item.options.map(([key, label]) => `<option value="${esc(key)}" ${String(E.auto[item.key]) === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>${item.hint ? `<small>${esc(item.hint)}</small>` : ""}</div>`).join("")}</div>`;
+    return `<div class="cv41-auto-inputs" role="group" aria-label="자동 계산 입력">${items.map(item => `<div class="form-field"><label for="cv41_auto_${item.key}">${esc(freelancer ? ({term:"용역기간",payPeriod:"용역비 정산기간",payDay:"용역비 지급일"}[item.key] || item.label) : item.label)}</label><select class="field" id="cv41_auto_${item.key}" data-cv41-auto="${item.key}">${item.options.map(([key, label]) => `<option value="${esc(key)}" ${String(E.auto[item.key]) === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>${item.hint ? `<small>${esc(item.hint)}</small>` : ""}</div>`).join("")}</div>`;
   }
   const dur = minutes => SCH.duration(Math.round(minutes));
   const hoursText = value => `${Number.isInteger(value) ? value : Math.round(value * 100) / 100}시간`;
@@ -492,6 +506,7 @@
     if (!r) return "";
     const head = "<h3>자동 계산 요약</h3>";
     if (!r.applies) return `${head}<p class="cv41-sum-empty">용역·비밀유지 계약은 근로시간·주휴·최저임금을 계산하지 않습니다.</p>`;
+    if (r.freelancer) return `${head}<dl class="cv41-sum-grid"><div><dt>용역기간</dt><dd>${esc(E.values.startDate || "시작일 확인 필요")} ~ ${esc(r.period.endDate || "별도 합의")}</dd></div><div><dt>합의 용역비</dt><dd>${r.fee === null ? "금액 확인 필요" : esc(C.formatMoney(r.fee))}</dd></div><div><dt>업무범위</dt><dd>${esc(E.values.freelancerScope || "업무내용을 입력하십시오")}</dd></div></dl><p>용역기간·금액·업무내용 변경이 자동 반영됩니다. 직접 수정한 약정은 보존합니다. 분할 지급·검수·해지 기준은 당사자 합의 내용을 확인하십시오.</p>`;
     const money = C.formatMoney;
     const rows = [];
     const v = E.values;
@@ -699,12 +714,15 @@
     if (!force && S.loadedAt && Date.now() - S.loadedAt < 15000) return;
     S.loading = (async () => {
       try {
-        const [employees, contracts, registry] = await Promise.all([
+        const [employees, contracts, registry, archived] = await Promise.all([
           api("/employees/approved"),
           api("/contracts"),
-          api("/tenant-registry/businesses").catch(() => ({ businesses: [] }))
+          api("/tenant-registry/businesses").catch(() => ({ businesses: [] })),
+          api("/employees/archived").catch(error => ({ employees: [], error: error.message }))
         ]);
         S.employees = employees.employees || [];
+        S.archived = archived.employees || [];
+        S.archivedError = archived.error || "";
         S.contracts = contracts.contracts || [];
         S.businesses = registry.businesses || [];
         S.loadedAt = Date.now();
@@ -773,6 +791,23 @@
     box.querySelector("[data-cv41-reload]")?.addEventListener("click", () => refresh());
     box.querySelector("[data-cv41-new]")?.addEventListener("click", () => openEditor({}));
     box.querySelectorAll("[data-cv41-filter]").forEach(button => button.addEventListener("click", () => { S.filter = button.dataset.cv41Filter; renderSection(route, box); }));
+    box.querySelectorAll("[data-cv41-archive], [data-cv41-restore]").forEach(button => button.addEventListener("click", async () => {
+      const restore = Boolean(button.dataset.cv41Restore);
+      const id = button.dataset.cv41Restore || button.dataset.cv41Archive;
+      const employee = (restore ? S.archived : S.employees).find(row => String(row.id) === id);
+      if (!employee) return;
+      const label = restore ? "복구" : "목록에서 삭제(보관)";
+      if (!confirm(`${employee.name || "직원"} · ${employee.branch || businessName(employee.business_id)} 소속을 ${label}하시겠습니까? 계정·계약·급여·서류·근태는 보존됩니다.`)) return;
+      button.disabled = true;
+      try {
+        await api(`/employees/approved/${encodeURIComponent(id)}${restore ? "/restore" : ""}`, { method: restore ? "POST" : "DELETE" });
+        await refresh();
+        const stillWrong = restore ? S.archived.some(row => String(row.id) === id) : S.employees.some(row => String(row.id) === id);
+        if (S.loadError || stillWrong) throw new Error("변경 결과를 확인하지 못했습니다. 다시 조회하십시오.");
+        S.ctx?.toast?.(`${label} 완료 · 서버 재조회 확인`);
+      } catch (error) { S.ctx?.toast?.(errorText(error, label)); }
+      finally { button.disabled = false; }
+    }));
     box.querySelectorAll("[data-cv41-employee]").forEach(button => button.addEventListener("click", () => {
       const employee = S.employees.find(item => employeeKey(item) === button.dataset.cv41Employee);
       const latest = employee && contractsOf(employee)[0];
@@ -832,23 +867,25 @@
   }
   function employeeTable() {
     const employees = visibleEmployees();
-    if (!employees.length) return '<div class="empty">이 사업자에 승인된 직원이 없습니다. 위 가입요청을 승인하면 여기에 표시됩니다.</div>';
+    const archived = S.archived.filter(row => inCurrentBusiness(row.business_id));
+    const archiveHtml = `<details><summary>삭제(보관)한 직원 ${archived.length}명 · 복구</summary><p>해당 소속만 보관하며 기존 기록은 보존합니다.</p>${S.archivedError ? `<p role="alert">보관 목록 조회 실패: ${esc(S.archivedError)}</p>` : ""}${archived.map(row => `<p>${esc(row.name)} · ${esc(row.branch)} <button class="btn" style="min-height:44px" data-cv41-restore="${esc(row.id)}">복구</button></p>`).join("")}</details>`;
+    if (!employees.length) return '<div class="empty">이 사업자에 승인된 직원이 없습니다.</div>' + archiveHtml;
     const rows = employees.map(employee => {
       const latest = contractsOf(employee)[0];
       const [key] = latest ? statusOf(latest) : ["none"];
       const action = !latest ? "계약 작성" : key === "draft" ? "이어서 작성" : key === "requested" ? "서명 현황" : "계약 보기";
       const docs = Number(employee.onboarding_document_count || 0);
       return `<tr>
-        <td data-label="직원"><b>${esc(employee.name || "이름 없음")}</b><small>${esc(employee.email_masked || "")}</small></td>
+        <td data-label="직원"><b>${esc(employee.name || "이름 없음")}</b><small>${esc(employee.email_masked || "")}</small>${employee.duplicate_count > 1 ? `<span class="badge warn">같은 계정·사업자 ${employee.duplicate_count}건 · 중복 확인</span>` : ""}</td>
         <td data-label="사업자·지점">${esc(businessName(employee.business_id))}<small>${esc(employee.branch || "지점 미정")}</small></td>
         <td data-label="입사서류">${docs ? `${docs}건` : '<span class="badge warn">미제출</span>'}</td>
         <td data-label="계약">${latest ? `${badge(statusOf(latest))}<small>${esc(fmtTime(latest.updated_at))}</small>` : '<span class="badge bad">작성 필요</span>'}${gapBadge(rowMissingCount(employee, latest))}</td>
-        <td data-label="처리"><button class="btn ${latest ? "" : "primary"}" type="button" data-cv41-employee="${esc(employeeKey(employee))}">${action}</button> <button class="btn" type="button" data-cv41-docs="${esc(employeeKey(employee))}">서류 등록</button>${previewButton(employee.email, employee.name)}</td>
+        <td data-label="처리"><button class="btn ${latest ? "" : "primary"}" type="button" data-cv41-employee="${esc(employeeKey(employee))}">${action}</button> <button class="btn" type="button" data-cv41-docs="${esc(employeeKey(employee))}">서류 등록</button>${previewButton(employee.email, employee.name)} <button class="btn" style="min-height:44px" type="button" data-cv41-archive="${esc(employee.id)}">삭제</button></td>
       </tr>`;
     }).join("");
     const held = employees.map(employee => rowMissingCount(employee, contractsOf(employee)[0])).filter(Boolean).length;
     const heldNote = held ? `<p class="cv41-alert warn">계약 보류 ${held}건 — 빈 필수값이 있습니다. [계약 작성]·[이어서 작성]을 누르면 빈 칸이 빨갛게 표시되고 추천값을 넣을 수 있습니다.</p>` : "";
-    return `${heldNote}<div class="table-wrap"><table class="cv41-table"><thead><tr><th>직원</th><th>사업자·지점</th><th>입사서류</th><th>계약</th><th>처리</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    return `${heldNote}${archiveHtml}<div class="table-wrap"><table class="cv41-table"><thead><tr><th>직원</th><th>사업자·지점</th><th>입사서류</th><th>계약</th><th>처리</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   function contractTable() {
     const counts = { all: 0, draft: 0, requested: 0, signed: 0 };
@@ -1018,7 +1055,7 @@
   function stepConditions() {
     const type = E.values.contractType || "part_time";
     const monthlyWage = E.values.wageType === "monthly";
-    const visible = field => (!field.only || field.only === type) && (monthlyWage || !WAGE_SPLIT_FIELDS.includes(field.name));
+    const visible = field => (!field.only || field.only === type) && (monthlyWage || !WAGE_SPLIT_FIELDS.includes(field.name)) && !(type === "freelancer" && field.name === "probationPeriod");
     if (AUTO) autoRun();
     const live = liveCheck();
     const liveLabels = live.labels;
@@ -1026,6 +1063,7 @@
     const groupHtml = GROUPS.map(([key, title]) => {
       const fields = FIELDS.filter(field => field.g === key && visible(field));
       const hasMissing = fields.some(field => E.missing.some(label => FIELD_BY_LABEL.get(label) === field.name) || E.live.has(field.name));
+      if (type === "freelancer") title = ({wage:"용역비·정산",work:"수행 일정·추가 약정",employee:"수행자 인적사항 (가입·입사서류에서 자동 채움)",employer:"발주자(사업자) 정보"})[key] || title;
       const collapsible = key === "employee" || key === "employer";
       const picker = key === "work" && schedVisible() ? schedHtml() : "";
       const autoIn = autoInputsHtml(key);
@@ -1037,7 +1075,7 @@
     }).join("");
     const lockNote = E.contract && statusOf(E.contract)[0] === "requested"
       ? '<p class="cv41-alert warn">서명요청을 보낸 계약서입니다. 조건을 바꿔 저장하면 보낸 서명 링크가 무효가 되고 서명요청을 다시 보내야 합니다.</p>' : "";
-    return `${lockNote}${amendNoteHtml()}<p class="notice">표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 임금 금액은 자동으로 넣지 않습니다. 임금 방식과 금액을 넣으면 기본임금·주휴수당·연장/야간 가산·월 예상 총액과 임금 구성/공제 문구가 자동 계산됩니다(월급제는 과세 기본급·비과세 식대·기타 과세수당도). <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${AUTO ? `<section class="cv41-autosum" id="cv41AutoSummary" aria-live="polite" aria-label="자동 계산 요약">${autoSummaryHtml()}</section>` : ""}${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels, live.blocker)}</div>`}${groupHtml}`;
+    return `${lockNote}${amendNoteHtml()}${type === "freelancer" ? '<p class="notice">용역 시작일·기간·확정 용역비·업무내용을 입력하면 기간·정산·업무범위가 자동 반영됩니다. 직접 수정한 약정은 보존합니다. 검수·분할 지급·해지 정산은 합의 내용을 확인하십시오.</p>' : ''}<p class="notice" ${type === "freelancer" ? 'hidden' : ''}>표준 조항은 초안입니다. 실제 근무표·임금으로 고쳐 쓰십시오. 임금 금액은 자동으로 넣지 않습니다. 임금 방식과 금액을 넣으면 기본임금·주휴수당·연장/야간 가산·월 예상 총액과 임금 구성/공제 문구가 자동 계산됩니다(월급제는 과세 기본급·비과세 식대·기타 과세수당도). <button class="btn" type="button" data-cv41-defaults ${readOnly() ? "disabled" : ""}>빈 칸을 표준 조항으로 채우기</button></p>${AUTO ? `<section class="cv41-autosum" id="cv41AutoSummary" aria-live="polite" aria-label="자동 계산 요약">${autoSummaryHtml()}</section>` : ""}${readOnly() ? "" : `<div id="cv41Missing">${missingPanelHtml(liveLabels, live.blocker)}</div>`}${groupHtml}`;
   }
   function amendNoteHtml() {
     const originalId = E.values.amendsContractId;

@@ -766,6 +766,7 @@ def test_concurrent_file_audit_appends_are_not_lost(env):
 def test_db_audit_failure_falls_back_to_file_ledger(env, monkeypatch):
     """리뷰 지적 2: 감사 마이그레이션(HOLD) 적용 전 DB INSERT 가 실패해도 이벤트를 잃지 않는다."""
     monkeypatch.setattr(svc, "_db_available", lambda: True)
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation: operation())
     monkeypatch.setattr(svc, "_run_db", _disable_db)  # 실패 = None
 
     assert svc._record_membership_audit_sync({"id": "a-1", "join_request_id": "j-1"}) is True
@@ -1128,9 +1129,12 @@ def test_gate_open_paths_resolve_only_to_signing_handlers():
         if getattr(route, "path", "") in (
             "/yeoljeong-finance/contracts/signing/{token}",
             "/yeoljeong-finance/contracts/signing",
+            "/yeoljeong-finance/contracts/{contract_id}/signing-view",
+            "/yeoljeong-finance/contracts/pending-signature",
+            "/yeoljeong-finance/contracts/signing-renewal",
         )
     }
-    assert signing_handlers == {api.get_contract_signing, api.sign_contract}
+    assert {api.get_contract_signing, api.sign_contract, api.get_contract_signing_view_by_id} <= signing_handlers
 
     probes = set()
     for route in api.router.routes:
@@ -1220,7 +1224,11 @@ def test_signing_lookups_are_bound_to_jwt_tenant():
     for fn in (svc.get_contract_by_token, svc._sign_contract_locked):
         source = inspect.getsource(fn)
         assert '_read_hr("contracts", user)' in source
-        assert "_contract_signer_email(contract, user)" in source
+        if fn is svc.get_contract_by_token:
+            assert "_checked_signing_contract(" in source
+            assert "_contract_signer_email(contract, user)" in inspect.getsource(svc._checked_signing_contract)
+        else:
+            assert "_contract_signer_email(contract, user)" in source
     assert "_require_hr_record(contract, user" in inspect.getsource(svc._contract_signer_email)
     assert "_is_admin(user)" in inspect.getsource(svc._contract_signer_email)
 

@@ -82,7 +82,7 @@ GENERIC_ROUTE_SQL: dict[str, tuple[str, str]] = {
     "documents": ("SELECT id,category,original_filename,status,imported_rows,duplicate_rows,rejected_rows,created_by,created_at FROM yeoljeong_uploads WHERE business_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 500", "yeoljeong_uploads"),
     "inventory": ("SELECT id,branch_id,name,category,unit,current_stock,min_stock,unit_cost,supplier,updated_at FROM yeoljeong_inventory_items WHERE business_id=$1 ORDER BY name LIMIT 500", "yeoljeong_inventory_items"),
     "purchase-orders": ("SELECT id,branch_id,order_date,supplier,status,total_amount,items,received_at,invoice_number,created_at FROM yeoljeong_purchase_orders WHERE business_id=$1 ORDER BY order_date DESC LIMIT 500", "yeoljeong_purchase_orders"),
-    "employees": ("SELECT id,employee_name,employee_email_masked,business_id,branch,role,status,requested_at,reviewed_at FROM yeoljeong_employee_join_requests WHERE business_id=$1 AND deleted_at IS NULL ORDER BY requested_at DESC LIMIT 500", "yeoljeong_employee_join_requests"),
+    "employees": ("SELECT id,employee_name,employee_email_masked,business_id,branch,role,status,requested_at,reviewed_at FROM yeoljeong_employee_join_requests WHERE business_id=$1 AND deleted_at IS NULL AND status <> 'archived' ORDER BY requested_at DESC LIMIT 500", "yeoljeong_employee_join_requests"),
     "attendance": ("SELECT id,employee_name,employee_email,branch,work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,status,memo,created_at,updated_at FROM yeoljeong_attendance_records WHERE business_id=$1 AND deleted_at IS NULL ORDER BY work_date DESC LIMIT 500", "yeoljeong_attendance_records"),
     "payroll": ("SELECT id,employee_name,employee_email,branch,payroll_month,gross_pay,tax_withholding,insurance_deduction,other_deduction,(tax_withholding+insurance_deduction+other_deduction) AS total_deductions,net_pay,status,created_at FROM yeoljeong_payroll_statements WHERE business_id=$1 AND deleted_at IS NULL ORDER BY payroll_month DESC LIMIT 500", "yeoljeong_payroll_statements"),
     "hr-docs": ("SELECT id,employee_name,branch,document_type,document_label,status,original_filename,issue_date,uploaded_at,expires_at,superseded_by FROM yeoljeong_onboarding_documents WHERE business_id=$1 AND deleted_at IS NULL ORDER BY uploaded_at DESC LIMIT 500", "yeoljeong_onboarding_documents"),
@@ -1276,6 +1276,31 @@ def _schedule_day_record(records):
                     row.setdefault(stamp_field, value)
                 if row.get(stamp_field):
                     datetime.fromisoformat(str(row[stamp_field]).replace("Z", "+00:00"))
+            # Compare at stored minute precision. Reconstruct BOTH endpoints when
+            # corrected, since retaining an evidence date can add/remove a day.
+            # Evidence fields remain immutable, including in the returned copy.
+            if row.get("check_in_at") and row.get("check_out_at"):
+                local = ZoneInfo("Asia/Seoul")
+                originals = []
+                corrected = False
+                for clock, stamp in (("start_at", "check_in_at"), ("end_at", "check_out_at")):
+                    original = datetime.fromisoformat(str(row[stamp]).replace("Z", "+00:00"))
+                    original = original.replace(tzinfo=local) if original.tzinfo is None else original.astimezone(local)
+                    originals.append(original)
+                    if row.get(clock):
+                        effective = _schedule_time(row[clock])
+                        corrected |= (effective.hour, effective.minute) != (original.hour, original.minute)
+                day = date.fromisoformat(str(row["work_date"])[:10]) if row.get("work_date") else originals[0].date()
+                corrected |= day != originals[0].date()
+                if corrected and row.get("end_at"):
+                    start_clock, end_clock = _schedule_time(row["start_at"]), _schedule_time(row["end_at"])
+                    begin = datetime.combine(day, start_clock.replace(second=0, microsecond=0), local)
+                    finish = datetime.combine(day, end_clock.replace(second=0, microsecond=0), local)
+                    if finish < begin:
+                        finish += timedelta(days=1)
+                    row["calculation_check_in_at"] = begin.isoformat()
+                    row["calculation_check_out_at"] = finish.isoformat()
+                    row["clock_basis"] = "corrected_wall_clock"
             row["start_at"] = _schedule_time(row["start_at"])
             if row.get("end_at"):
                 row["end_at"] = _schedule_time(row["end_at"])
@@ -1285,13 +1310,38 @@ def _schedule_day_record(records):
     records = valid
     if not records:
         return manual_absences[0] if manual_absences else {}
-    records.sort(key=lambda r: str(r.get("check_in_at") or r["start_at"]))
-    first, last = records[0], records[-1]
+    # Compare every row on a single local timeline, never ISO dates against times.
+    anchor = next((datetime.fromisoformat(str(r["check_in_at"]).replace("Z", "+00:00"))
+                   .astimezone(ZoneInfo("Asia/Seoul")).date()
+                   for r in records if r.get("check_in_at")), date(2000, 1, 1))
+
+    def order_minutes(row, clock, stamp):
+        if row.get(stamp):
+            value = datetime.fromisoformat(str(row.get("calculation_" + stamp) or row[stamp]).replace("Z", "+00:00"))
+            value = value.replace(tzinfo=ZoneInfo("Asia/Seoul")) if value.tzinfo is None else value.astimezone(ZoneInfo("Asia/Seoul"))
+            return value.date().toordinal() * 1440 + value.hour * 60 + value.minute
+        value = row.get(clock) or row["start_at"]
+        day = date.fromisoformat(str(row["work_date"])[:10]) if row.get("work_date") else anchor
+        offset = 1440 if clock == "end_at" and value < row["start_at"] else 0
+        return day.toordinal() * 1440 + value.hour * 60 + value.minute + offset
+
+    records.sort(key=lambda r: order_minutes(r, "start_at", "check_in_at"))
+    first = records[0]
+    last = max(records, key=lambda r: order_minutes(r, "end_at", "check_out_at"))
     result = {**first, "end_at": last.get("end_at"), "check_out_at": last.get("check_out_at")}
+    for stamp in ("check_in_at", "check_out_at"):
+        source_row = first if stamp == "check_in_at" else last
+        if source_row.get("calculation_" + stamp):
+            result["calculation_" + stamp] = source_row["calculation_" + stamp]
+        else:
+            result.pop("calculation_" + stamp, None)
+    if any(r.get("clock_basis") == "corrected_wall_clock" for r in records):
+        result["clock_basis"] = "corrected_wall_clock"
     if len(records) > 1 and all(r.get("end_at") for r in records):
-        result["total_worked_minutes"] = sum(attendance_worked_minutes(
-            _schedule_time(r["start_at"]), _schedule_time(r["end_at"]),
-            int(r.get("break_minutes") or 0)) for r in records)
+        result["total_break_minutes"] = sum(int(r.get("break_minutes") or 0) for r in records)
+        result["total_worked_minutes"] = sum(max(0,
+            order_minutes(r, "end_at", "check_out_at") - order_minutes(r, "start_at", "check_in_at")
+            - int(r.get("break_minutes") or 0)) for r in records)
     return result
 
 
@@ -1329,11 +1379,11 @@ def attendance_schedule_judgment(schedule, record=None, *, now=None):
             base = date.fromisoformat(str(schedule["work_date"])[:10])
             return (stamp.date() - base).days * 1440 + stamp.hour * 60 + stamp.minute
         if record.get("check_in_at"):
-            actual_start = timestamp_minutes(record["check_in_at"])
+            actual_start = timestamp_minutes(record.get("calculation_check_in_at") or record["check_in_at"])
         elif planned_end >= 1440 and actual_start < planned_start - 720:
             actual_start += 1440
         if record.get("check_out_at"):
-            actual_end = timestamp_minutes(record["check_out_at"])
+            actual_end = timestamp_minutes(record.get("calculation_check_out_at") or record["check_out_at"])
         elif actual_end is not None:
             while actual_end < actual_start:
                 actual_end += 1440
@@ -1345,6 +1395,20 @@ def attendance_schedule_judgment(schedule, record=None, *, now=None):
                 actual_worked = max(0, actual_end - actual_start - int(record.get("break_minutes") or 0))
             planned_worked = planned_end - planned_start - int(schedule.get("break_minutes") or 0)
             result["overtime_minutes"] = max(0, actual_worked - planned_worked)
+            result["basis"] = {
+                "source": "work_schedule", "schedule_id": str(schedule.get("id") or ""),
+                "work_date": str(schedule["work_date"])[:10], "timezone": "Asia/Seoul",
+                "start_time": str(schedule["start_time"])[:5],
+                "end_time": str(schedule["end_time"])[:5],
+                "overnight": planned_end >= 1440,
+                "planned_break_minutes": int(schedule.get("break_minutes") or 0),
+                "actual_break_minutes": int(record.get("total_break_minutes", record.get("break_minutes")) or 0),
+                "planned_worked_minutes": planned_worked, "actual_worked_minutes": actual_worked,
+                "actual_start_minutes": actual_start, "actual_end_minutes": actual_end,
+                "clock_basis": record.get("clock_basis", "record_clock"),
+                "actual_source": "daily_total" if record.get("total_worked_minutes") is not None else "clock_span",
+                "formula": "max(0, actual_worked_minutes - planned_worked_minutes)",
+            }
         result["labels"] = [label for key, label in (("late_minutes", "지각"), ("early_minutes", "조퇴"),
                                                     ("overtime_minutes", "초과")) if result[key]] or ["정상"]
     result["status"] = "·".join(result["labels"])

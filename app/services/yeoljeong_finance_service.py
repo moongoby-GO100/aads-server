@@ -27,7 +27,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -1550,11 +1550,11 @@ def _read_join_requests_by_email(email: str) -> list[dict[str, Any]]:
     """직원 본인 이메일의 가입요청을 고용주 테넌트와 무관하게 읽는다(본인 레코드만)."""
     if _db_available():
         rows = _run_db(_db_fetch_join_requests_by_email(email))
-        return rows if isinstance(rows, list) else []
+        return [row for row in rows if row.get("status") != "archived"] if isinstance(rows, list) else []
     return [
         row
         for row in _read_file_rows("employee_join_requests")
-        if str(row.get("tenant_id") or "").strip() and str(row.get("email") or "").strip().lower() == email
+        if row.get("status") != "archived" and str(row.get("tenant_id") or "").strip() and str(row.get("email") or "").strip().lower() == email
     ]
 
 
@@ -2676,7 +2676,7 @@ def _approved_own_employee_request(user: dict[str, Any]) -> dict[str, Any] | Non
     email = _email(user)
     if not email or user.get("is_internal_admin") or user_role in {"ceo", "admin", "system"}:
         return None
-    own = [row for row in _read_hr("employee_join_requests", user) if str(row.get("email") or "").strip().lower() == email]
+    own = [row for row in _read_hr("employee_join_requests", user) if row.get("status") != "archived" and str(row.get("email") or "").strip().lower() == email]
     if not own:
         return None
     own.sort(key=lambda row: str(row.get("updated_at") or row.get("reviewed_at") or row.get("requested_at") or ""), reverse=True)
@@ -2991,7 +2991,7 @@ def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
     from app.core.obys_tenant import is_legacy_obys_tenant
 
     if is_legacy_obys_tenant(user):
-        rows = _read_hr("employee_join_requests", user)
+        rows = [row for row in _read_hr("employee_join_requests", user) if row.get("status") != "archived"]
         return sorted(_filter_user(rows, user, "email"), key=lambda row: row.get("requested_at", ""), reverse=True)
     # 레거시가 아닌 테넌트의 owner/admin 은 자기 테넌트에 귀속된 가입요청 전체를 본다(삭제 제외).
     # 신규 가입자는 누구나 자기 개인 테넌트의 owner 이므로(직원도 포함) 본인 이메일의 가입요청
@@ -3001,7 +3001,7 @@ def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     if _is_admin(user):
         for row in _read_hr("employee_join_requests", user):
-            if str(row.get("tenant_id") or "").strip() == tenant_id and not row.get("deleted_at"):
+            if str(row.get("tenant_id") or "").strip() == tenant_id and not row.get("deleted_at") and row.get("status") != "archived":
                 rows[str(row.get("id") or "")] = row
     if email:
         for row in _read_join_requests_by_email(email):
@@ -3161,10 +3161,48 @@ def _prepare_join_request(
     return record, scope_user, existing
 
 
+@asynccontextmanager
+async def _employee_write_lock(email: str):
+    """One identity lock for signup, archiving and settlement across API slots."""
+    if not _db_available():
+        _ensure_dirs()
+        lock = open(DATA_DIR / ".employee-write.lock", "a+")
+        await asyncio.to_thread(fcntl.flock, lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+        return
+    import asyncpg
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('lock_timeout', '10s', true)")
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", "obys-employee-write:" + email)
+            yield
+    finally:
+        await conn.close()
+
+
+def _serialized_employee_write(email: str, operation):
+    async def locked():
+        async with _employee_write_lock(email):
+            return await asyncio.to_thread(operation)
+    return asyncio.run(locked())
+
+
 def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
-    record, scope_user, _existing = _prepare_join_request(payload, user)
-    _write_hr_record("employee_join_requests", record, scope_user)
-    return record
+    email = str(payload.get("email") or _email(user)).strip().lower()
+    # The account identity is fixed before the read/insert pair. Both API slots
+    # share this DB lock, so simultaneous signup cannot insert a second row.
+    def write():
+        record, scope_user, existing = _prepare_join_request(payload, user)
+        if existing and existing.get("status") == "archived":
+            raise HTTPException(status_code=409, detail="보관 처리된 소속입니다. 관리자에게 복구를 요청하십시오")
+        _write_hr_record("employee_join_requests", record, scope_user)
+        return record
+    return _serialized_employee_write(email, write)
 
 
 def review_join_request(
@@ -4655,6 +4693,78 @@ def _employee_onboarding_profile(
     return profile
 
 
+def list_archived_employees(user: dict[str, Any]) -> list[dict[str, Any]]:
+    _tenant_id(user)
+    _require_owner_path_admin(user, "보관 직원 목록은 관리자만 조회할 수 있습니다")
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="직원 정리 권한이 없습니다")
+    return [row for row in _read_hr("employee_join_requests", user) if row.get("status") == "archived"]
+
+
+async def archive_employee(request_id: str, user: dict[str, Any], *, restore: bool = False) -> dict[str, Any]:
+    """Archive one employment, leaving account, contracts, payroll and evidence intact."""
+    from app import auth as auth_module
+    _tenant_id(user)
+    _require_owner_path_admin(user, "직원 삭제·복구는 관리자만 할 수 있습니다")
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="직원 정리 권한이 없습니다")
+    def lookup():
+        row = _find(_read_hr("employee_join_requests", user), request_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="직원 소속을 찾을 수 없습니다")
+        _require_business_for_tenant(_record_business_id(row), user)
+        if _employee_access_role(row.get("role")) == "admin":
+            raise HTTPException(status_code=409, detail="관리자 소속은 직원 정리에서 삭제할 수 없습니다")
+        return row
+    original = await asyncio.to_thread(lookup)
+    email = str(original.get("email") or "").strip().lower()
+    # Reuse the membership lock held by approval/role changes. Unavailable lock
+    # is an error: never advertise an archive whose access change is unverified.
+    async with _employee_write_lock(email):
+        async with auth_module.employee_membership_lock(_tenant_id(user), email) as conn:
+            original = await asyncio.to_thread(lookup)
+            target = "approved" if restore else "archived"
+            if original.get("status") == target:
+                return {"employee": original, "changed": False}
+            expected = "archived" if restore else "approved"
+            if original.get("status") != expected:
+                raise HTTPException(status_code=409, detail="직원 상태가 바뀌었습니다. 다시 조회하십시오")
+            row = copy.deepcopy(original)
+            row["status"] = target
+            row["updated_at"] = _now()
+            row["archive_history"] = [*row.get("archive_history", []), {
+                "action": "restored" if restore else "archived", "at": row["updated_at"], "actor": _email(user)}]
+            if not restore:
+                row["archived_at"] = row["updated_at"]
+            else:
+                row.pop("archived_at", None)
+            await asyncio.to_thread(_write_hr_record, "employee_join_requests", row, user)
+            try:
+                remaining = [r for r in await asyncio.to_thread(_read_hr, "employee_join_requests", user)
+                             if r.get("status") == "approved" and str(r.get("email") or "").strip().lower() == email
+                             and str(r.get("id")) != request_id]
+                if not restore and remaining:
+                    # Membership belongs to the person/tenant. Transfer its ownership
+                    # evidence so deleting a duplicate cannot revoke another employment.
+                    marker = row.get("membership_link") or {}
+                    if marker.get("membership_id") and not marker.get("revoked_at"):
+                        keeper = copy.deepcopy(remaining[0])
+                        if not (keeper.get("membership_link") or {}).get("membership_id"):
+                            keeper["membership_link"] = copy.deepcopy(marker)
+                            await asyncio.to_thread(_write_hr_record, "employee_join_requests", keeper, user)
+                    membership = {"status": "preserved", "reason": "other_approved_employment"}
+                else:
+                    membership = await sync_employee_tenant_membership(
+                        row, "approved" if restore else "rejected", user,
+                        previous_status="approved" if not restore else "archived", source="employee_archive", conn=conn)
+                    if membership.get("status") == "error":
+                        raise HTTPException(status_code=503, detail="직원 접근권한 반영에 실패해 소속 변경을 취소했습니다")
+            except BaseException:
+                await asyncio.to_thread(_write_hr_record, "employee_join_requests", original, user)
+                raise
+            return {"employee": row, "changed": True, "membership": membership,
+                    "preserved": ["account", "contracts", "payroll", "documents", "attendance"]}
+
 def list_approved_employees(user: dict[str, Any], business_id: str | None = None) -> list[dict[str, Any]]:
     _tenant_id(user)
     _require_owner_path_admin(user, "승인 직원 목록은 관리자만 조회할 수 있습니다")
@@ -4665,7 +4775,8 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
     payroll = _read_hr("payroll_statements", user)
 
     result = []
-    for row in _read_hr("employee_join_requests", user):
+    employee_rows = _read_hr("employee_join_requests", user)
+    for row in employee_rows:
         if row.get("status") != "approved":
             continue
         employee_business_id = _record_business_id(row)
@@ -4674,6 +4785,11 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
         email = str(row.get("email") or "").strip().lower()
         employee = dict(row)
         employee["business_id"] = employee_business_id
+        employee["duplicate_count"] = sum(
+            1 for other in employee_rows if other.get("status") == "approved"
+            and _record_business_id(other) == employee_business_id
+            and str(other.get("email") or "").strip().lower() == email
+        ) if email else 1
         employee["branch"] = BRANCH_ALIASES.get(str(employee.get("branch") or ""), str(employee.get("branch") or ""))
         employee["email_masked"] = employee.get("email_masked") or _mask_email(email)
         document_profile = _employee_onboarding_profile(
@@ -8071,6 +8187,8 @@ EMPLOYMENT_SNAPSHOT_FIELDS = (
     ("weekly_hours", "weeklyHours"),
     ("pay_date", "payDate"),
     ("pay_method", "payMethod"),
+    ("freelancer_scope", "freelancerScope"),
+    ("freelancer_settlement_terms", "freelancerSettlementTerms"),
     ("workplace", "workplace"),
     ("business_id", "businessId"),
     ("branch", "branch"),
@@ -8295,8 +8413,9 @@ def _find_employee_record(
     rows = [row for row in _read_hr("employee_join_requests", user) if str(row.get("status") or "").lower() == "approved"]
     if request_id:
         found = _find(rows, request_id)
-        if found:
-            return found
+        if found and email and str(found.get("email") or "").strip().lower() != email:
+            raise HTTPException(status_code=403, detail="직원 ID와 이메일이 다릅니다")
+        return found
     if email:
         return next((row for row in rows if str(row.get("email") or "").strip().lower() == email), None)
     return None
@@ -8530,6 +8649,8 @@ def _payroll_defaults_from_employment(derived: dict[str, Any] | None) -> dict[st
             "start_date": terms.get("start_date") or "",
             "end_date": terms.get("end_date") or "",
             "pay_date": terms.get("pay_date") or "",
+            "freelancer_scope": terms.get("freelancer_scope") or "",
+            "freelancer_settlement_terms": terms.get("freelancer_settlement_terms") or "",
         },
         "basis": "",
         "reason": "",
@@ -8565,7 +8686,7 @@ def _payroll_defaults_from_employment(derived: dict[str, Any] | None) -> dict[st
     return result
 
 
-def payroll_defaults(employee_email: str, payroll_month: str, user: dict[str, Any]) -> dict[str, Any]:
+def payroll_defaults(employee_email: str, payroll_month: str, user: dict[str, Any], employee_request_id: str = "") -> dict[str, Any]:
     denied = HTTPException(status_code=403, detail="급여 기준값 조회 권한이 없습니다")
     _tenant_id(user)
     if not _is_admin(user):
@@ -8573,7 +8694,7 @@ def payroll_defaults(employee_email: str, payroll_month: str, user: dict[str, An
     month = str(payroll_month or "").strip()
     if month and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
         raise HTTPException(status_code=400, detail="payroll_month 는 YYYY-MM 형식이어야 합니다")
-    employee = _find_employee_record(user, employee_email=employee_email)
+    employee = _find_employee_record(user, employee_email=employee_email, employee_request_id=employee_request_id)
     if not employee:
         raise denied
     derived = _derive_current_employment(
@@ -8649,7 +8770,7 @@ PAYROLL_SERVER_FIELDS = frozenset({
     "status", "confirmed_by", "confirmed_at", "paid_by", "paid_at", "version", "root_id", "supersedes_id",
     "superseded_by", "superseded_at", "attendance_basis", "deliveries", "created_by", "created_at", "updated_at",
     "net_pay", "email_pending", "employee_email_masked", "source_contract_id", "contract_defaults_applied",
-    "contract_deviation", "deleted_at", "tenant_id", "totals", "payroll_validation_errors",
+    "contract_deviation", "settlement_basis", "deleted_at", "tenant_id", "totals", "payroll_validation_errors",
 })
 PAYROLL_CONTENT_FIELDS = (
     "employee_name", "business_id", "branch", "payroll_month", "pay_date", "employment_tax_type", "meal_provision",
@@ -8789,7 +8910,8 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
 
 
 def _save_payroll_record(
-    raw_payload: dict[str, Any], user: dict[str, Any], *, server_fields: dict[str, Any] | None = None
+    raw_payload: dict[str, Any], user: dict[str, Any], *, server_fields: dict[str, Any] | None = None,
+    employment_override: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any], bool]:
     """(저장된 레코드, 쓰기 여부). 잠긴 명세와 내용이 같으면 아무것도 쓰지 않는다."""
     payload = {key: value for key, value in raw_payload.items() if key not in PAYROLL_SERVER_FIELDS}
@@ -8804,7 +8926,7 @@ def _save_payroll_record(
     if not email and not _name_key(payload.get("employee_name")):
         raise HTTPException(status_code=400, detail="이메일이 없으면 직원 이름이 필요합니다")
     month = _normalize_payroll_month(payload)
-    derived = (
+    derived = employment_override or (
         _derive_current_employment(
             _read_hr("contracts", user),
             employee_email=str(employee.get("email") or ""),
@@ -8873,6 +8995,8 @@ def _save_payroll_record(
             id=str(uuid4()), version=int(existing.get("version") or 1) + 1, root_id=existing.get("root_id") or existing["id"],
             supersedes_id=existing["id"], created_by=actor, created_at=now,
         )
+    if target and target.get("settlement_basis"):
+        statement["settlement_basis"] = copy.deepcopy(target["settlement_basis"])
     if server_fields:
         statement.update(server_fields)
     statement = _owned_hr_record(statement, user)
@@ -8979,6 +9103,71 @@ def _payroll_attendance_rows(business_id: str, employee_email: str, month: str) 
     if not isinstance(rows, list):
         raise HTTPException(status_code=503, detail="근태 저장소를 읽을 수 없어 급여 초안을 만들 수 없습니다")
     return rows
+
+
+def payroll_draft_from_contract(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """Freelancer settlement, with an explicitly confirmed amount and one draft per contract/month."""
+    _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="용역 정산 초안 생성 권한이 없습니다")
+    employee = _find_employee_record(user, employee_email=str(payload.get("employee_email") or ""),
+                                     employee_request_id=str(payload.get("employee_request_id") or ""))
+    if not employee:
+        raise HTTPException(status_code=404, detail="승인된 직원을 찾을 수 없습니다")
+    business_id = _require_business_for_tenant(_record_business_id(employee), user)
+    if str(payload.get("business_id") or "") != business_id:
+        raise HTTPException(status_code=403, detail="직원의 사업자와 정산 사업자가 다릅니다")
+    month = _normalize_payroll_month(payload)
+    if not month:
+        raise HTTPException(status_code=400, detail="정산월이 필요합니다")
+    raw = payload.get("gross_pay")
+    if isinstance(raw, bool) or not re.fullmatch(r"[0-9]+", str(raw or "")) or int(raw) <= 0 or int(raw) > 10**12:
+        raise HTTPException(status_code=400, detail="이번 지급의 확정 용역비를 원 단위 양수로 입력하십시오")
+    if payload.get("amount_confirmed") is not True:
+        raise HTTPException(status_code=400, detail="이번 지급금액 확인이 필요합니다")
+    email = str(employee.get("email") or "").strip().lower()
+    def create():
+        first = date.fromisoformat(month + "-01")
+        last = (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        derived = _derive_current_employment(_read_hr("contracts", user), employee_email=email,
+                    employee_request_id=str(employee["id"]), business_id=business_id, today=last)
+        if not derived or derived["employment"].get("contract_type") != "freelancer":
+            raise HTTPException(status_code=409, detail="서명 완료된 프리랜서 용역계약서가 필요합니다")
+        terms = derived["employment"]
+        try:
+            contract_start = date.fromisoformat(str(terms.get("start_date") or ""))
+            contract_end = date.fromisoformat(str(terms["end_date"])) if terms.get("end_date") else last
+        except ValueError:
+            raise HTTPException(status_code=409, detail="용역계약 기간을 확인하십시오")
+        period_start, period_end = max(first, contract_start), min(last, contract_end)
+        if period_end < period_start:
+            raise HTTPException(status_code=409, detail="정산월이 용역기간과 겹치지 않습니다")
+        gross = int(raw)
+        existing = [row for row in _read_hr("payroll_statements", user)
+                    if row.get("source_contract_id") == derived["contract_id"]
+                    and row.get("employee_request_id") == employee["id"]
+                    and row.get("payroll_month") == month and _record_business_id(row) == business_id]
+        if existing:
+            latest = max(existing, key=lambda row: (int(row.get("version") or 1), str(row.get("updated_at") or "")))
+            if int(latest.get("gross_pay") or 0) != gross:
+                raise HTTPException(status_code=409, detail="이미 생성된 정산이 있습니다. 기존 초안을 선택해 수정하십시오")
+            return _payroll_with_totals(latest)
+        basis = {"source": "signed_freelancer_contract", "contract_id": derived["contract_id"],
+                 "period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
+                 "agreed_fee": terms.get("wage"), "confirmed_amount": gross,
+                 "scope": terms.get("freelancer_scope") or "", "terms": terms.get("freelancer_settlement_terms") or "",
+                 "confirmed_by": _email(user), "confirmed_at": _now()}
+        # Existing freelancer mode is 3.3%. This is a draft; administrators can
+        # inspect and adjust the withholding before confirmation, payment or send.
+        record, _ = _save_payroll_record({"business_id": business_id, "employee_email": email,
+            "employee_request_id": employee["id"], "employee_name": employee.get("name") or "",
+            "branch": employee.get("branch") or "", "payroll_month": month,
+            "employment_tax_type": "freelancer_33", "pay_date": terms.get("pay_date") or "",
+            "gross_pay": gross, "taxable_pay": gross, "non_tax_meal_allowance": 0,
+            "tax_withholding": gross * 33 // 1000, "insurance_deduction": 0, "other_deduction": 0},
+            user, server_fields={"settlement_basis": basis}, employment_override=derived)
+        return _payroll_with_totals(record)
+    return _serialized_employee_write(email, create)
 
 
 def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:

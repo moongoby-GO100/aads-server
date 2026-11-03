@@ -52,6 +52,7 @@
       <p data-payroll-totals aria-live="polite"></p><div class="toolbar">
       <button type="button" class="btn" data-payroll-action="defaults">계약 기준값 불러오기</button>
       <button type="button" class="btn" data-payroll-action="draft">승인 근태로 초안 만들기</button>
+      <button type="button" class="btn" data-payroll-action="settlement">프리랜서 용역 정산 초안</button>
       <button type="button" class="btn" data-payroll-action="confirm">명세 확정</button>
       <button type="button" class="btn" data-payroll-action="pdf">PDF 보기</button>
       <button type="button" class="btn" data-payroll-action="versions">변경 이력</button>
@@ -90,7 +91,9 @@
       host.querySelector("[data-payroll-state]").textContent = active
         ? `${month} · ${statusName(active.status)} · 버전 ${active.version || 1}${["confirmed", "paid"].includes(active.status) ? " · 수정 저장 시 새 초안 생성" : ""}`
         : `${month} · 새 초안`;
-      host.querySelector("[data-payroll-basis]").textContent = active?.attendance_basis
+      host.querySelector("[data-payroll-basis]").textContent = active?.settlement_basis
+        ? `용역기간 ${active.settlement_basis.period_start} ~ ${active.settlement_basis.period_end} · 확인한 지급액 ${money(active.settlement_basis.confirmed_amount)} · ${active.settlement_basis.scope || "업무범위는 계약 확인"}`
+        : active?.attendance_basis
         ? `승인 근태 ${active.attendance_basis.approved_days}일 · ${active.attendance_basis.approved_minutes}분 기준`
         : active?.source_contract_id ? "서명 계약서 기준값 적용" : "계약·근태 기준값을 조회하거나 금액을 확인해 입력하세요.";
       totals();restoreButtons();
@@ -157,11 +160,23 @@
     host.querySelectorAll("[data-payroll-action]").forEach(button => {button.onclick = () => execute(async () => {
       const action = button.dataset.payrollAction;
       if (action === "defaults") {
-        const result = await api(`/payroll/defaults?${new URLSearchParams({employee_email:selected,payroll_month:month})}`);
+        const result = await api(`/payroll/defaults?${new URLSearchParams({employee_email:selected,employee_request_id:employee().id||"",payroll_month:month})}`);
         if (!current()) return;
         for (const [name] of amounts) if (result.defaults?.[name] !== undefined) form.elements[name].value = result.defaults[name] ?? "";
         host.querySelector("[data-payroll-basis]").textContent = [result.basis,result.reason,result.period_note].filter(Boolean).join(" · ");
         remember();totals();return;
+      }
+      if (action === "settlement") {
+        const plan = await api(`/payroll/defaults?${new URLSearchParams({employee_email:selected,employee_request_id:employee().id||"",payroll_month:month})}`);
+        if (plan.contract_type !== "freelancer") throw new Error("서명 완료된 프리랜서 용역계약서가 필요합니다.");
+        const gross = form.elements.gross_pay.value;
+        if (!gross || !Number.isSafeInteger(Number(gross)) || Number(gross) <= 0) {
+          host.querySelector("[data-payroll-basis]").textContent = `계약 용역비 ${money(plan.contract_terms?.wage)} · 용역기간 ${plan.contract_terms?.start_date || "확인 필요"} ~ ${plan.contract_terms?.end_date || "별도 합의"}. 총지급액 칸에 이번 지급의 확정금액을 입력한 후 다시 누르세요. 총계약금을 매월 자동 지급하지 않습니다.`;
+          throw new Error("이번 지급의 확정 용역비를 총지급액에 입력하세요.");
+        }
+        if (!confirm(`${month} ${employee().name || employee().employee_name} · 이번 용역 정산금액 ${money(gross)}으로 초안을 저장할까요? 계약 총액·검수·분할 지급 여부를 확인하세요. 확정·지급·발송은 별도입니다.`)) return;
+        const result = await api("/payroll/draft-from-contract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({business_id:businessId,employee_email:selected,employee_request_id:employee().id||"",payroll_month:month,gross_pay:Number(gross),amount_confirmed:true})});
+        await saved(result.statement);return;
       }
       if (action === "draft") {
         if (!confirm(`${month} ${employee().name || employee().employee_name} 직원의 승인 근태로 초안을 저장할까요?`)) return;

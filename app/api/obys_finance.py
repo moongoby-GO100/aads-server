@@ -587,6 +587,21 @@ async def list_approved_employees(
     return {"employees": await run_in_threadpool(svc.list_approved_employees, current_user, business_id)}
 
 
+@router.get("/employees/archived")
+async def archived_employees(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"employees": await run_in_threadpool(svc.list_archived_employees, current_user)}
+
+
+@router.delete("/employees/approved/{request_id}")
+async def archive_employee(request_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await svc._run_shielded(svc.archive_employee(request_id, current_user))
+
+
+@router.post("/employees/approved/{request_id}/restore")
+async def restore_employee(request_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await svc._run_shielded(svc.archive_employee(request_id, current_user, restore=True))
+
+
 @router.patch("/employees/approved/{request_id}/role")
 async def update_approved_employee_role(
     request_id: str,
@@ -873,10 +888,11 @@ async def list_payroll(
 async def payroll_defaults(
     employee_email: str,
     payroll_month: str = "",
+    employee_request_id: str = "",
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
     # 계약 기본값과 근거만 돌려준다. 저장·확정은 하지 않는다.
-    return await run_in_threadpool(svc.payroll_defaults, employee_email, payroll_month, current_user)
+    return await run_in_threadpool(svc.payroll_defaults, employee_email, payroll_month, current_user, employee_request_id)
 
 
 @router.post("/payroll")
@@ -887,6 +903,11 @@ async def save_payroll(payload: GenericPayload, current_user: dict = Depends(get
 @router.post("/payroll/draft-from-attendance")
 async def payroll_draft_from_attendance(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"statement": await run_in_threadpool(svc.payroll_draft_from_attendance, payload.model_dump(), current_user)}
+
+
+@router.post("/payroll/draft-from-contract")
+async def payroll_draft_from_contract(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"statement": await run_in_threadpool(svc.payroll_draft_from_contract, payload.model_dump(), current_user)}
 
 
 @router.post("/payroll/delivery-consent")

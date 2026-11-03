@@ -173,9 +173,9 @@ const toasts=[];function showToast(m){toasts.push(m)}
 let reloads=0,reloadFailure=false;async function loadLiveRoute(){reloads++;state.liveError=reloadFailure?"fixture reload failed":"";state.workSchedules.month.rows=[...serverRows.values()]}
 let confirmedUpdate=true;const confirm=()=>confirmedUpdate;
 const calls=[];let apiResult={employees:EMPLOYEES};
-const serverRows=new Map();let failRequest=0,invalidCounts=false,lostResponse=false;
+const serverRows=new Map();let failRequest=0,invalidCounts=false,lostResponse=false,readbackFailure=false;
 const serverKey=c=>[c.employee_email.toLowerCase(),c.work_date].join('|');
-async function workspaceApi(path,opt){calls.push([path,opt]);if(path.includes('from-contracts'))return apiResult;if(failRequest===posts().length)throw new Error('fixture request failed');const body=JSON.parse(opt.body);let count=0,preserved=0;for(const cell of body.cells){const key=serverKey(cell);if(body.preserve_existing&&serverRows.has(key)){preserved++;continue}serverRows.set(key,{...cell});count++}if(lostResponse)throw new Error("fixture response lost after commit");return invalidCounts?(invalidCounts===true?{count:0,preserved:0}:invalidCounts):{count,preserved}}
+async function workspaceApi(path,opt){calls.push([path,opt]);if(path.includes('from-contracts'))return apiResult;if(path.includes('/attendance/schedules?')){if(readbackFailure)throw new Error('fixture readback failed');const q=new URLSearchParams(path.split('?')[1]);assert((new Date(q.get('to'))-new Date(q.get('from')))/864e5<=61,'API range must not exceed 62 days');return {schedules:[...serverRows.values()].filter(r=>r.employee_email===q.get('employee_email')&&r.work_date>=q.get('from')&&r.work_date<=q.get('to'))}}if(failRequest===posts().length)throw new Error('fixture request failed');const body=JSON.parse(opt.body);let count=0,preserved=0;const written=[];for(const cell of body.cells){const key=serverKey(cell);if(body.preserve_existing&&serverRows.has(key)){preserved++;continue}serverRows.set(key,{...cell});written.push({...cell});count++}if(lostResponse)throw new Error("fixture response lost after commit");return invalidCounts?(invalidCounts===true?{count:0,preserved:0}:invalidCounts):{count,preserved,schedules:written}}
 
 const flush=async()=>{for(let i=0;i<6;i++)await new Promise(r=>setImmediate(r))};
 function parseAttrs(s){const a={};for(const m of s.matchAll(/([\w-]+)=\x22([^\x22]*)\x22/g))a[m[1]]=m[2];return a}
@@ -319,7 +319,7 @@ assert.equal(countOf(c.html,'name=\x22cf_s_'),7);
 def test_cells_payload_keep_and_overwrite_validates_against_bulk_model(tmp_path):
     _need_node()
     out = _run(tmp_path, r"""
-serverRows.set(HONG+'|2026-11-02',{start_time:'07:00'});
+serverRows.set(HONG+'|2026-11-02',{employee_email:HONG,work_date:'2026-11-02',start_time:'07:00',end_time:'18:00',break_minutes:60,kind:'work'});
 state.workSchedules={month:{rows:[]}};
 form=makeForm([]);
 const t=await show();const hong=t.cards[0];
@@ -327,15 +327,15 @@ await click(hong.saveButton);
 assert.equal(posts().length,1);assert.equal(posts()[0][1].method,'POST');
 let body=JSON.parse(posts()[0][1].body);
 assert.equal(body.cells.length,22);assert(body.cells.some(c=>c.work_date==='2026-11-02'));assert.equal(body.preserve_existing,true);
-assert.equal(hong.status.textContent,'21칸 저장(신규·수정) · 1칸 보존 · 0칸 미처리');assert.equal(toasts.at(-1),'21칸 저장(신규·수정) · 1칸 보존 · 0칸 미처리');
-assert.equal(state.scheduleNotice,'21칸 저장(신규·수정) · 1칸 보존 · 0칸 미처리');assert.equal(reloads,1);
+assert(hong.status.textContent.startsWith('21칸 저장(신규·수정) · 1칸 보존 · 0칸 미처리 · 요청기간 재조회 확인'));assert.equal(toasts.at(-1),hong.status.textContent);
+assert.equal(state.scheduleNotice,hong.status.textContent);assert.equal(reloads,1);
 assert.deepEqual(body.cells[0],{employee_email:'hong@x.test',employee_name:'홍석빈',branch:'',work_date:'2026-11-01',start_time:'09:00',end_time:'21:00',break_minutes:90,kind:'work',memo:'계약서 기준 일정(관리자 보완)'});
 const first=body;
 hong.ctl('cf_mode_0','keep').checked=false;hong.ctl('cf_mode_0','overwrite').checked=true;
 await click(hong.saveButton);
 body=JSON.parse(posts()[1][1].body);
 assert.equal(body.cells.length,22);assert(body.cells.some(c=>c.work_date==='2026-11-02'));
-assert.equal(hong.status.textContent,'22칸 저장(신규·수정) · 0칸 보존 · 0칸 미처리');
+assert(hong.status.textContent.startsWith('22칸 저장(신규·수정) · 0칸 보존 · 0칸 미처리 · 요청기간 재조회 확인'));
 hong.ctl('cf_weekday',6).checked=false;hong.ctl('cf_s_0').value='10:00';hong.ctl('cf_b_0').value='45';
 await click(hong.saveButton);
 body=JSON.parse(posts()[2][1].body);
@@ -380,7 +380,7 @@ for(const c of [kim,ha,yang])c.ctl('cf_weekday',0).checked=true;
 await click(t.all);
 assert.equal(posts().length,1);const b=JSON.parse(posts()[0][1].body);
 assert.equal(b.cells.length,22+5*3);assert.equal(b.employees.length,4);
-assert.equal(t.allStatus.textContent,'37칸 저장(신규·수정) · 0칸 보존 · 0칸 미처리');assert.equal(reloads,1);
+assert(t.allStatus.textContent.startsWith('37칸 저장(신규·수정) · 0칸 보존 · 0칸 미처리 · 요청기간 재조회 확인'));assert.equal(reloads,1);
 assert.deepEqual(b.cells.filter(c=>c.employee_email===HA).map(c=>c.start_time),['22:00','22:00','22:00','22:00','22:00']);
 for(const c of t.cards){for(let i=0;i<7;i++)c.ctl('cf_weekday',i).checked=true;c.ctl('date_from').value='2026-01-01';c.ctl('date_to').value='2026-12-31'}
 await click(t.all);
@@ -525,7 +525,7 @@ const kstDateV41=()=>'2026-11-02';
 function showToast(){}
 async function workspaceApi(path,opt){
  if(path.includes('from-contracts'))return {employees:fixtureEmployees};
- if(!opt)return {schedules:[...rows.values()]};
+ if(!opt||!opt.method)return {schedules:[...rows.values()]};
  const body=JSON.parse(opt.body);requests.push(body);let count=0,preserved=0;
  for(const c of body.cells){const key=c.employee_email+'|'+c.work_date;
  if(body.preserve_existing&&rows.has(key)){preserved++;continue}rows.set(key,{...c});count++}
@@ -571,9 +571,66 @@ def test_response_lost_after_commit_reloads_and_retry_is_idempotent(tmp_path):
     _run(tmp_path, r"""
 form=makeForm([]);const t=await show(HONG),card=t.cards[0];lostResponse=true;
 await click(card.updateButton);
-assert(card.status.textContent.includes('DB 저장 여부 미확정'));
+assert(card.status.textContent.includes('현재 저장값 재조회 확인'));assert(!card.status.textContent.includes('DB 저장 여부 미확정'));assert(!card.status.textContent.includes('결과 미확인/미처리'));
 const size=serverRows.size;assert(size>0);
 assert.equal(state.workSchedules.month.rows.length,size);
 lostResponse=false;await click(card.updateButton);
 assert.equal(serverRows.size,size);assert(!card.status.textContent.includes('결과 미확인'));
+""")
+
+
+def test_save_readback_covers_requested_period_and_preserved_night_values(tmp_path):
+    _need_node()
+    _run(tmp_path, r"""
+form=makeForm([]);const t=await show(YANG),card=t.cards[0];
+card.ctl('date_from').value='2026-10-01';card.ctl('date_to').value='2026-10-31';
+card.ctl('cf_weekday',0).checked=true;
+serverRows.set(YANG+'|2026-10-05',{employee_email:YANG,work_date:'2026-10-05',start_time:'09:00',end_time:'18:00',break_minutes:60,kind:'work'});
+await click(card.saveButton);
+assert(card.status.textContent.includes('1칸 보존'));
+assert(card.status.textContent.includes('2026-10-05 현재 저장값(보존 모드) 09:00→18:00'));
+assert(card.status.textContent.includes('2026-10-26 적용 확인 21:00→익일 09:00 · 휴게 90분'));
+assert(calls.some(c=>c[0].includes('employee_email=yang%40x.test')&&c[0].includes('from=2026-10-05')&&c[0].includes('to=2026-10-26')));
+await click(card.updateButton);
+assert(card.status.textContent.includes('2026-10-05 적용 확인 21:00→익일 09:00 · 휴게 90분'));
+readbackFailure=true;await click(card.updateButton);
+assert(card.status.textContent.includes('재조회 실패'));
+""")
+
+
+def test_readback_rejects_missing_foreign_employee_and_mismatched_values(tmp_path):
+    _need_node()
+    _run(tmp_path, r"""
+const cell={employee_email:YANG,work_date:'2026-10-05',start_time:'21:00',end_time:'09:00',break_minutes:90,kind:'work'};
+serverRows.set('foreign',{...cell,employee_email:HA});
+await assert.rejects(()=>verifyContractSchedulesV41('b1',new Map([[false,[cell]]])),/재조회되지/);
+serverRows.set(serverKey(cell),{...cell,start_time:'09:00'});
+await assert.rejects(()=>verifyContractSchedulesV41('b1',new Map([[false,[cell]]])),/저장값이 다릅니다/);
+""")
+
+
+def test_readback_follows_pages_and_rejects_invalid_cursor(tmp_path):
+    _need_node()
+    _run(tmp_path, r"""
+const cell={employee_email:YANG,work_date:'2026-10-05',start_time:'21:00',end_time:'09:00',break_minutes:90,kind:'work'};
+const offsets=[];workspaceApi=async path=>{const offset=Number(new URLSearchParams(path.split('?')[1]).get('offset'));offsets.push(offset);return offset===0?{schedules:[],has_more:true,next_offset:1000}:{schedules:[cell],has_more:false}};
+assert((await verifyContractSchedulesV41('b1',new Map([[false,[cell]]]))).includes('적용 확인'));
+assert.deepEqual(offsets,[0,1000]);
+workspaceApi=async()=>({schedules:[],has_more:true,next_offset:0});
+await assert.rejects(()=>verifyContractSchedulesV41('b1',new Map([[false,[cell]]])),/재조회 위치/);
+""")
+
+
+def test_preserve_mode_newly_written_row_mismatch_is_failure(tmp_path):
+    _need_node()
+    _run(tmp_path, r"""
+form=makeForm([]);const t=await show(YANG),card=t.cards[0];
+card.ctl('cf_weekday',0).checked=true;
+const originalApi=workspaceApi;
+workspaceApi=async(path,opt)=>{const result=await originalApi(path,opt);
+if(path.includes('/attendance/schedules?'))result.schedules=result.schedules.map(r=>({...r,start_time:'08:00'}));
+return result};
+await click(card.saveButton);
+assert(card.status.textContent.includes('저장값이 다릅니다'));
+assert(!card.status.textContent.includes('기존 일정 보존'));
 """)

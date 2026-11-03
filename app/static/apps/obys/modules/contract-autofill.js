@@ -22,9 +22,9 @@
   const WEEK_MIN = 2400;
   const NIGHT_WINDOWS = [[0, 360], [1320, 1800], [2760, 3240]];
   const TERM_MONTHS = { "3m": 3, "6m": 6, "1y": 12, "2y": 24 };
-  const NON_WORK_TYPES = ["freelancer", "confidentiality"];
+  const NON_WORK_TYPES = ["confidentiality"];
   const SIMPLE_LABOR_RE = /(홀|서빙|주방보조|설거지|배달|포장|청소|세척|잡일|단순)/;
-  const AUTO_TEXT_FIELDS = ["probationPeriod", "payDate", "payMethod", "overtimeTerms", "leaveTerms", "insuranceTerms", "wageComposition"];
+  const AUTO_TEXT_FIELDS = ["probationPeriod", "payDate", "payMethod", "overtimeTerms", "leaveTerms", "insuranceTerms", "wageComposition", "freelancerScope", "freelancerSettlementTerms"];
 
   const won = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}원`;
   const hm = min => (SCH ? SCH.duration(Math.round(min)) : `${Math.round(min)}분`);
@@ -315,8 +315,35 @@ const hoursLabel = v => `${Number.isInteger(v) ? v : round2(v)}시간`;
    *          jobDescription, birthDate, healthCertificateValidUntil, splitMonthlyWage(fn, 선택) }
    * 반환: { applies, period, time, holiday, hours, wage, texts, age, warnings, notes, blockers }
    */
+  function computeFreelancer(input) {
+    const termKey = input.term || "none";
+    const endDate = termKey === "custom" ? String(input.endDate || "")
+      : TERM_MONTHS[termKey] ? periodEnd(input.startDate, TERM_MONTHS[termKey]) : "";
+    const warnings = [], blockers = [], texts = { endDate };
+    if (parseDate(input.startDate) && parseDate(endDate) && endDate < input.startDate)
+      blockers.push("용역 종료일이 시작일보다 빠릅니다.");
+    const fee = Number(input.wage);
+    const known = Number.isSafeInteger(fee) && fee > 0;
+    const payDate = payDateText(input.payPeriod, input.payDay);
+    const payMethod = payMethodText(input.payMethod);
+    if (payDate !== undefined) texts.payDate = payDate;
+    if (payMethod !== undefined) texts.payMethod = payMethod;
+    const scope = String(input.jobDescription || "").trim();
+    if (scope) texts.freelancerScope = scope;
+    if (known) {
+      texts.wageComposition = `합의 용역비 ${won(fee)}. 사업소득 원천징수 후 지급하며, 추가 용역비는 별도 합의한다.`;
+      const period = input.startDate ? `${input.startDate}부터 ${endDate || "별도 합의한 종료일까지"}` : "용역기간 확인 필요";
+      texts.freelancerSettlementTerms = `용역기간: ${period}. 합의 용역비 ${won(fee)}. 지급일: ${payDate || input.savedPayDate || "별도 합의 필요"}. 지급방법: ${payMethod || input.savedPayMethod || "별도 합의 필요"}. 분할 지급·검수·해지 시 기성정산 기준은 직접 확인하여 추가한다.`;
+    } else warnings.push("확정 용역비를 입력하십시오. 미확인 금액은 자동으로 정하지 않습니다.");
+    return { applies: true, hideWork: true, freelancer: true,
+      period: { termKey, endDate }, texts, warnings, blockers,
+      notes: ["근로시간·주휴·최저임금 계산 없이 용역기간·합의금액·업무범위를 반영합니다. 직접 수정한 약정은 보존합니다."],
+      fee: known ? fee : null };
+  }
+
   function compute(input = {}) {
     const type = input.contractType || "part_time";
+    if (type === "freelancer") return computeFreelancer(input);
     if (NON_WORK_TYPES.includes(type)) return { applies: false, hideWork: true, texts: {}, warnings: [], notes: [], blockers: [] };
     const warnings = [];
     const notes = [];

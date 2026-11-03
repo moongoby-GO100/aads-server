@@ -738,3 +738,51 @@ async def test_member_own_attendance_get_remains_allowed_and_other_detail_is_hid
     with pytest.raises(HTTPException) as exc:
         await api.get_attendance_record(BUSINESS["id"], other, USER)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('original_start,original_end,start,end,brk,day,worked', [
+    ('2026-10-29T21:00:30+09:00', '2026-10-30T09:00:30+09:00', '09:00', '18:00', 60, '2026-10-29', 480),
+    ('2026-10-29T09:00:30+09:00', '2026-10-29T18:00:30+09:00', '21:00', '09:00', 90, '2026-10-29', 630),
+    ('2026-10-29T09:00:30+09:00', '2026-10-29T18:00:30+09:00', '09:00', '18:00', 60, '2026-10-31', 480),
+])
+async def test_corrected_calendar_api_roundtrip(monkeypatch, db, original_start, original_end,
+                                         start, end, brk, day, worked):
+    """Real HTTP update/read paths against the persisted DB fixture, then calendar helper."""
+    import httpx
+    async def businesses(*, user):
+        return [BUSINESS]
+    async def connect():
+        return FakeConnection(db)
+    monkeypatch.setattr(api.upload_svc, 'list_businesses', businesses)
+    monkeypatch.setattr(api.upload_svc, '_connect', connect)
+    app = FastAPI()
+    app.include_router(api.router, prefix='/api/v1')
+    async def current_user():
+        return USER
+    app.dependency_overrides[get_current_user] = current_user
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        created = await client.post(BASE, json=_payload(work_date='2026-10-29'))
+        assert created.status_code == 201, created.text
+        record_id = created.json()['record']['id']
+        stored = db.rows[record_id]
+        stored.update(check_in_at=original_start, check_out_at=original_end)
+        evidence = (stored['check_in_at'], stored['check_out_at'])
+        response = await client.put(f'{BASE}/{record_id}', json=_payload(
+            work_date=day, start_at=start, end_at=end, break_minutes=brk))
+        assert response.status_code == 200, response.text
+        reread = await client.get(f'{BASE}/{record_id}')
+        assert reread.status_code == 200
+        raw = reread.json()['record']['raw']
+        assert raw['work_date'] == day and raw['worked_minutes'] == worked
+        # Calendar fetches full attendance rows (including immutable clock evidence).
+        persisted = dict(db.rows[record_id])
+        reduced = api._schedule_day_record([persisted])
+        assert (reduced['check_in_at'], reduced['check_out_at']) == evidence
+        schedule = dict(work_date=day, start_time=start, end_time=end,
+                        break_minutes=brk, kind='work')
+        judgment = api.attendance_schedule_judgment(schedule, [persisted])
+        assert judgment['basis']['actual_worked_minutes'] == worked
+        assert judgment['labels'] == ['정상']
+        assert judgment['basis']['clock_basis'] == 'corrected_wall_clock'
+        assert (stored['check_in_at'], stored['check_out_at']) == evidence
