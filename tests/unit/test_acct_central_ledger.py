@@ -28,7 +28,7 @@ def test_jinah244_is_not_health_monitored():
 
 
 def test_jinah244_is_in_ledger():
-    assert len(LEDGER_SERVER_IDS) == 4
+    assert len(LEDGER_SERVER_IDS) == 5
     assert "jinah244" in LEDGER_SERVER_IDS
     assert "jinah244" in [server["id"] for server in list_ledger_servers()]
 

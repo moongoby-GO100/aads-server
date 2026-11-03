@@ -53,7 +53,7 @@ async def _get_cached_or_build(key: str, builder_coro) -> str:
 # 그래서 셋을 지킨다.
 #   1. 출처는 `/ops` 와 **같은 함수** 하나다. 여기서 DB 를 보지 않는다.
 #   2. 매 턴 새로 만든다. 60초 캐시(`_get_cached_or_build`)에 넣지 않는다.
-#   3. **구성 조회시각과 건강 실측시각을 같은 수치로 쓰지 않는다.** 원장 4대와
+#   3. **구성 조회시각과 건강 실측시각을 같은 수치로 쓰지 않는다.** 원장 5대와
 #      감시 3대도 별개 값으로 적는다 — jinah244 는 감시 대상이 아니므로
 #      상태가 `unknown` 인 것이지 장애가 아니다.
 _LEDGER_SOURCE = "code:app/services/server_registry.py::list_ledger_servers"
