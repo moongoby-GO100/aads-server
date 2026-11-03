@@ -152,3 +152,13 @@ def test_concurrent_settlement_one_draft_only(settlement):
         rows=list(pool.map(lambda _:svc.payroll_draft_from_contract(settlement,ADMIN),range(12)))
     assert len({r['id'] for r in rows})==1
     assert len(svc._read_hr('payroll_statements',ADMIN))==1
+
+
+def test_archived_duplicate_does_not_hide_remaining_employee_session(world):
+    duplicate = {**ROW, 'id':'employee02'}
+    svc._write_file_rows('employee_join_requests',[ROW, duplicate])
+    asyncio.run(svc.archive_employee('employee01',ADMIN))
+    session=svc.session_for_user(MEMBER)
+    assert session['permissions']['employee_request_status']=='approved'
+    assert session['permissions']['employee_request_id']=='employee02'
+    assert svc._approved_own_employee_request(MEMBER)['id']=='employee02'

@@ -2425,7 +2425,7 @@ def employee_request_permissions(own: dict[str, Any]) -> dict[str, Any]:
 def session_for_user(user: dict[str, Any]) -> dict[str, Any]:
     _tenant_id(user)
     email = _email(user)
-    joins = _read_hr("employee_join_requests", user)
+    joins = [row for row in _read_hr("employee_join_requests", user) if row.get("status") != "archived"]
     own = next((row for row in joins if str(row.get("email") or "").strip().lower() == email), None)
     user_role = str(user.get("user_role") or "").strip().lower()
     privileged_principal = bool(user.get("is_internal_admin")) or user_role in {"ceo", "admin", "system"}
