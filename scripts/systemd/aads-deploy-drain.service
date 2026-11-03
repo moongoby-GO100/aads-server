@@ -7,5 +7,9 @@ Requires=docker.service
 Type=oneshot
 ExecStart=/bin/bash /root/aads/aads-server/scripts/aads_deploy_drain.sh systemd_timer
 TimeoutStartSec=120
+# 드레인은 작업기를 nohup 으로 띄우고 바로 끝난다. 기본 KillMode=control-group 이면
+# oneshot 종료와 함께 작업기까지 죽어 배포가 queued 에 머문다(2026-11-04 #5957·#5958 실측,
+# systemd-run 시험: control-group=자식 종료, process=자식 생존). 주 프로세스만 정리한다.
+KillMode=process
 StandardOutput=append:/var/log/aads-deploy-drain.log
 StandardError=append:/var/log/aads-deploy-drain.log
