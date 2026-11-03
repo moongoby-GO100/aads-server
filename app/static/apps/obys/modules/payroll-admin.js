@@ -7,13 +7,14 @@
     ["non_tax_meal_allowance", "비과세 식대"], ["tax_withholding", "원천세"],
     ["insurance_deduction", "보험 공제"], ["other_deduction", "기타 공제"]
   ];
-  const money = value => Number(value).toLocaleString("ko-KR") + "원";
+  const money = value => value === null || value === undefined || value === "" ? "미집계" : Number(value).toLocaleString("ko-KR") + "원";
   const email = row => String(row.email || row.employee_email || "").trim().toLowerCase();
   const statusName = value => ({draft:"초안",needs_review:"검토 필요",confirmed:"확정",paid:"지급 완료"}[value] || "상태 확인 필요");
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
   async function mount(host, options) {
     const {api, businessId, month, onSaved, downloadPdf} = options;
+    if (options.canManage !== true) { host.innerHTML = '<p role="alert">급여 관리 권한이 없습니다.</p>'; return; }
     const current = () => host.isConnected;
     host.innerHTML = '<p role="status">직원과 급여명세를 불러오는 중입니다.</p>';
     let employees, statements;
@@ -23,8 +24,8 @@
         api(`/payroll?payroll_month=${encodeURIComponent(month)}`)
       ]);
       if (!current()) return;
-      employees = (people.employees || []).filter(row => email(row));
-      statements = (payroll.statements || []).filter(row =>
+      employees = (people?.employees || []).filter(row => email(row));
+      statements = (payroll?.statements || []).filter(row =>
         String(row.business_id || "") === String(businessId) && !row.superseded_by);
     } catch (error) {
       if (!current()) return;
@@ -36,13 +37,14 @@
       host.innerHTML = '<p>승인된 직원이 없습니다. 직원 현황에서 승인한 뒤 다시 조회하세요.</p>';
       return;
     }
+    const allEmployees = employees.slice();
     let selected = email(employees.find(row => email(row) === options.selectedEmail) || employees[0]);
     let active = null, busy = false, generation = 0;
     const key = () => `${businessId}|${month}|${selected}`;
     const employee = () => employees.find(row => email(row) === selected);
     const ownStatements = () => statements.filter(row => email(row) === selected && row.payroll_month === month);
     host.innerHTML = `<h2>급여 초안 · 명세 관리</h2><p>직원과 월을 선택하고 계약·승인 근태 기준으로 작성합니다. 확정된 명세를 수정하면 기존 명세를 보존한 새 버전으로 저장합니다.</p>
-      <div class="toolbar"><label>직원 선택<select class="field" data-payroll-employee>${employees.map(row => `<option value="${esc(email(row))}">${esc(row.name || row.employee_name || "이름 미등록")} · ${esc(row.branch || "지점 미등록")} · ${esc(email(row).replace(/^(.).*@/, "$1***@"))}</option>`).join("")}</select></label>
+      <div class="toolbar"><label>점포 선택<select class="field" data-payroll-branch><option value="">전체 점포</option>${[...new Set(allEmployees.map(row => row.branch || ""))].filter(Boolean).map(branch => `<option value="${esc(branch)}">${esc(branch)}</option>`).join("")}</select></label><label>직원 선택<select class="field" data-payroll-employee>${employees.map(row => `<option value="${esc(email(row))}">${esc(row.name || row.employee_name || "이름 미등록")} · ${esc(row.branch || "지점 미등록")} · ${esc(email(row).replace(/^(.).*@/, "$1***@"))}</option>`).join("")}</select></label>
       <label>명세 선택<select class="field" data-payroll-statement></select></label></div>
       <p data-payroll-state role="status"></p><p data-payroll-basis></p>
       <form data-payroll-form class="toolbar">${amounts.map(([name, label]) => `<label>${label}<input class="field" name="${name}" type="number" min="0" step="1" required></label>`).join("")}
@@ -103,6 +105,12 @@
       host.querySelector("[data-payroll-versions]").textContent = "";
       fill(rows[0]);
     };
+    host.querySelector("[data-payroll-branch]").onchange = event => {
+      remember();
+      employees = allEmployees.filter(row => !event.target.value || row.branch === event.target.value);
+      picker.innerHTML = employees.map(row => `<option value="${esc(email(row))}">${esc(row.name || row.employee_name || "이름 미등록")}</option>`).join("");
+      selected = email(employees[0]);options.onSelect?.(selected);selectEmployee();
+    };
     picker.onchange = () => {remember();selected = picker.value;options.onSelect?.(selected);selectEmployee();};
     statementPicker.onchange = () => {remember();generation++;fill(ownStatements().find(row => row.id === statementPicker.value));};
     form.oninput = () => {remember();totals();restoreButtons();};
@@ -120,16 +128,24 @@
     };
     const saved = async statement => {
       if (!current()) return;
+      if (!statement?.id) throw new Error("저장 응답을 확인할 수 없습니다. 입력값을 보존했습니다. 다시 조회하세요.");
+      // Re-read authoritative server totals before discarding any local edits.
+      const result = await api(`/payroll?${new URLSearchParams({payroll_month:month})}`);
+      const persisted = (result?.statements || []).find(row => row.id === statement.id
+        && String(row.business_id || "") === String(businessId) && email(row) === selected
+        && row.payroll_month === month);
+      if (!persisted) throw new Error("저장 결과를 재조회하지 못했습니다. 입력값을 보존했습니다.");
+      statement = persisted;
       drafts.delete(key());
       statements = [statement, ...statements.filter(row => row.id !== statement.id && row.id !== statement.supersedes_id)];
       statementPicker.innerHTML = '<option value="">새 초안 작성</option>' + ownStatements().map(row => `<option value="${esc(row.id)}">${esc(month)} · ${statusName(row.status)} · 버전 ${row.version || 1}</option>`).join("");
       statementPicker.value = statement.id;
       fill(statement);
-      message.textContent = `저장 완료 · 총지급 ${money(statement.gross_pay)} · 공제 ${money(statement.totals?.total_deductions ?? Number(statement.tax_withholding || 0)+Number(statement.insurance_deduction || 0)+Number(statement.other_deduction || 0))} · 실수령 ${money(statement.net_pay)}`;
+      message.textContent = `저장 완료 · 총지급 ${money(statement.gross_pay)} · 공제 ${money(statement.totals?.total_deductions)} · 실수령 ${money(statement.net_pay)}`;
       await onSaved?.();
     };
     form.onsubmit = event => {
-      event.preventDefault();if (!form.reportValidity()) return;
+      event.preventDefault();if (!form.reportValidity()) return;remember();
       execute(async () => {
         const person = employee(), payload = {business_id:businessId, employee_email:selected,
           employee_name:person.name || person.employee_name, employee_request_id:person.id || "", payroll_month:month,
@@ -143,7 +159,7 @@
       if (action === "defaults") {
         const result = await api(`/payroll/defaults?${new URLSearchParams({employee_email:selected,payroll_month:month})}`);
         if (!current()) return;
-        for (const [name] of amounts) if (result.defaults?.[name] !== undefined) form.elements[name].value = result.defaults[name];
+        for (const [name] of amounts) if (result.defaults?.[name] !== undefined) form.elements[name].value = result.defaults[name] ?? "";
         host.querySelector("[data-payroll-basis]").textContent = [result.basis,result.reason,result.period_note].filter(Boolean).join(" · ");
         remember();totals();return;
       }

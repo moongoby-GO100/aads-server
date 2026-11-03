@@ -271,7 +271,7 @@
     }
     const tiles = model.tiles;
     const sub = [model.branch, "직원"].filter(Boolean).join(" · ");
-    return `<div class="ep-body"><div class="ep-hello"><h3>안녕하세요, ${esc(model.employeeName)} 님</h3><p>${esc(sub)}</p></div>${todo}
+    return `<div class="ep-body"><div class="ep-hello"><h3>안녕하세요, ${esc(model.employeeName)} 님</h3><p>${esc(sub)}</p>${model.readOnly ? '<p role="status">읽기 전용 미리보기입니다. 출퇴근 기록은 직원 본인 계정에서 진행하세요.</p>' : '<a class="ep-btn ep-clock-link" href="/static/apps/obys/clock.html">출퇴근 하기</a>'}</div>${todo}${model.sorted.length ? "" : '<p class="ep-scope-notice" role="status">현재 계정의 회사·점포 범위에서 확인된 계약이 없습니다. 연결 정보가 부족하면 관리자에게 확인해 주세요.</p>'}
       <div class="ep-grid3">
         <div class="ep-card ep-tile ep-pc-only"><small>계약서</small><b>서명 대기 ${model.counts.pending}건</b><span>서명 완료 ${model.counts.signed}건</span></div>
         <div class="ep-card ep-tile" role="button" tabindex="0" data-ep-nav="payroll"><small>${pcm("이번 달 급여명세", "급여명세")}</small><b>${pcm(tiles.payroll.pc, tiles.payroll.m)}</b><span class="ep-pc-only">${esc(tiles.payroll.hint)}</span></div>
@@ -441,8 +441,10 @@
   function onboardingTile(docs, requiredTypes) {
     const required = Array.isArray(requiredTypes) ? requiredTypes : [];
     if (!required.length) return { pc: "제출할 서류 없음", m: "없음", hint: "" };
-    const done = required.filter(meta => (docs || []).some(doc => doc.document_type === meta.type
-      && !["missing", "rejected", "superseded"].includes(String(doc.status || "").toLowerCase()) && !doc.missing_document));
+    const done = required.filter(meta => !(docs || []).some(doc => doc.document_type === meta.type
+      && (doc.missing_document || doc.is_placeholder || String(doc.status).toLowerCase() === "resubmit_required"))
+      && (docs || []).some(doc => doc.document_type === meta.type
+      && !["missing", "rejected", "needs_fix", "resubmit_required", "superseded"].includes(String(doc.status || "").toLowerCase()) && !doc.missing_document));
     const missing = required.filter(meta => !done.includes(meta));
     return {
       pc: `${done.length} / ${required.length} 제출`,
@@ -491,6 +493,7 @@
       const list = contracts();
       return {
         screen: state.screen,
+        readOnly: state.readOnly,
         legacyTab: state.legacyTab,
         filter: state.filter,
         state,

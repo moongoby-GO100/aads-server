@@ -16,7 +16,7 @@ HTML = INDEX.read_text(encoding="utf-8")
 
 def _preview_block() -> str:
     match = re.search(
-        r"// ADMIN-EMPLOYEE-PREVIEW:BEGIN\n(.*?)// ADMIN-EMPLOYEE-PREVIEW:END", HTML, re.S
+        r"// ADMIN-EMPLOYEE-PREVIEW:BEGIN\n(.*?)// ADMIN-EMPLOYEE-PREVIEW:END", HTML, re.DOTALL
     )
     assert match, "ADMIN-EMPLOYEE-PREVIEW 블록이 없다"
     return match.group(1)
@@ -24,14 +24,14 @@ def _preview_block() -> str:
 
 def _handoff_block() -> str:
     match = re.search(
-        r"// ADMIN-EMPLOYEE-PREVIEW-HANDOFF:BEGIN\n(.*?)// ADMIN-EMPLOYEE-PREVIEW-HANDOFF:END", HTML, re.S
+        r"// ADMIN-EMPLOYEE-PREVIEW-HANDOFF:BEGIN\n(.*?)// ADMIN-EMPLOYEE-PREVIEW-HANDOFF:END", HTML, re.DOTALL
     )
     assert match, "ADMIN-EMPLOYEE-PREVIEW-HANDOFF 블록이 없다"
     return match.group(1)
 
 
 def _function_source(name: str) -> str:
-    found = re.search(rf"^    (?:async )?function {name}\(", HTML, re.M)
+    found = re.search(rf"^[ \t]*(?:async )?function {re.escape(name)}\(", HTML, re.MULTILINE)
     assert found, name
     start = found.start()
     open_at = HTML.index(") {", start) + 2
@@ -217,9 +217,9 @@ assert.equal(employeePreviewButtonHtml('emp@example.com', '홍길동'), '', '미
 assert.equal(startEmployeePreview({ email: 'other@example.com', name: '다른사람' }), false);
 assert.equal(currentEmployeeEmail(), 'emp@example.com');
 
-assert.equal(isCurrentEmployeeRecord({ employee_email: 'EMP@example.com' }), true);
+assert.equal(isCurrentEmployeeRecord({ employee_email: 'EMP@example.com' }), false);
 assert.equal(isCurrentEmployeeRecord({ employee_email: 'other@example.com', employee_name: '홍길동' }), false);
-assert.equal(isCurrentEmployeeRecord({ employee_name: '홍길동' }), true);
+assert.equal(isCurrentEmployeeRecord({ employee_name: '홍길동' }), false);
 assert.equal(isCurrentEmployeeRecord({ employeeName: '김철수' }), false);
 assert.equal(isCurrentEmployeeRecord({}), false);
 
@@ -316,6 +316,7 @@ def test_preview_lifecycle_and_write_block_execute_in_node(tmp_path):
     script.write_text(NODE_HARNESS, encoding="utf-8")
     result = subprocess.run(
         ["node", str(script)],
+        check=False,
         text=True,
         capture_output=True,
         timeout=30,

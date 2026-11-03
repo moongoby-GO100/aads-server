@@ -189,3 +189,5 @@ body.employee-preview .ep-side-sum { top: 118px; }
   .ep-done-actions { flex-direction: column; width: 100%; }
   .ep-done-actions .ep-btn { width: 100%; min-height: 52px; font-size: 16px; border-radius: 12px; }
 }
+
+.ep-clock-link { display:inline-flex; min-height:44px; align-items:center; margin:8px 0; text-decoration:none; }

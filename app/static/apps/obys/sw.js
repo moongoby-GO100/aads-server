@@ -11,7 +11,7 @@
  * 릴리스 SHA 로 바꾼다 — 손으로 올릴 필요 없다(저장소 값은 로컬 개발용). 셸은 네트워크 우선이라 버전을
  * 깜빡해도 온라인 상태에서는 새 파일을 받는다. 캐시는 오프라인 안내용 사본이다.
  */
-const CACHE_VERSION = "obys-clock-shell-20261015-r1";
+const CACHE_VERSION = "obys-clock-shell-20261103-r1";
 const CACHE_PREFIX = "obys-clock-shell-";
 const APP_SHELL = [
   "/static/apps/obys/clock.html",
@@ -44,6 +44,8 @@ self.addEventListener("fetch", event => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  // Invitation/signature and redirect query strings must always reach the network unchanged.
+  if (url.search) return;
   if (!APP_SHELL_PATHS.has(url.pathname)) return;  // API·근태·기타 화면은 캐시하지 않는다
   event.respondWith(
     fetch(request, { cache: "no-store" })

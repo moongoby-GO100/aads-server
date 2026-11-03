@@ -21,7 +21,7 @@ NODE = shutil.which("node")
 
 
 def _function_source(html: str, name: str, indent: str = "    ") -> str:
-    found = re.search(rf"^{indent}(?:async )?function {name}\(", html, re.M)
+    found = re.search(rf"^[ \t]*(?:async )?function {re.escape(name)}\(", html, re.MULTILINE)
     assert found, name
     start = found.start()
     open_at = html.index(") {", start) + 2
@@ -38,7 +38,7 @@ def _function_source(html: str, name: str, indent: str = "    ") -> str:
 
 
 def _block(begin: str, end: str) -> str:
-    match = re.search(rf"// {begin}\n(.*?)// {end}", INDEX, re.S)
+    match = re.search(rf"// {begin}\n(.*?)// {end}", INDEX, re.DOTALL)
     assert match, begin
     return match.group(1)
 
@@ -55,6 +55,7 @@ def _run_node(script_body: str, env: dict, tmp_path) -> str:
     script.write_text(script_body, encoding="utf-8")
     result = subprocess.run(
         [NODE, str(script)],
+        check=False,
         text=True,
         capture_output=True,
         timeout=30,
@@ -126,7 +127,7 @@ class TestV41Entry:
 
     def test_v41_navigates_to_index_without_personal_data_in_url(self):
         opener = _line_starting(V41, "function openEmployeePreviewV41")
-        assert 'window.location.href="/static/apps/obys/index.html?legacy=1&view=legacy"' in opener
+        assert 'window.location.href="/static/apps/obys/index.html?employee_preview=1"' in opener
         # index.html 이 로그인 상태를 V4.1 로 되돌리지 않도록 legacy 진입 URL 을 쓴다.
         assert "email" not in re.search(r'window\.location\.href="([^"]*)"', opener).group(1)
         assert "encodeURIComponent" not in opener
@@ -409,14 +410,15 @@ const vm = require('node:vm');
 const store = new Map();
 const toasts = [];
 const entries = [{ hidden: true }, { hidden: true }];
-const location = { href: '' };
+const location = { href: '', hash: '#employees' };
 let session = { permissions: { can_manage_onboarding: true } };
 let failSession = false;
 const ctx = {
   JSON, Date, Promise, Map, console, process,
   state: {},
+  renderNav: () => {},
   window: { location, obysContractV41: { rerender() { ctx.rerendered = (ctx.rerendered || 0) + 1; } } },
-  document: { querySelectorAll: sel => (sel === '[data-employee-preview-entry]' ? entries : []) },
+  document: { getElementById: () => ({hidden:false}), querySelectorAll: sel => (sel === '[data-employee-preview-entry]' ? entries : []) },
   sessionStorage: { setItem: (k, v) => store.set(k, v), getItem: k => store.get(k) ?? null },
   showToast: m => toasts.push(m),
   financeApiV41: async path => { assert.equal(path, '/session'); if (failSession) throw new Error('403'); return session; },
@@ -445,13 +447,13 @@ V41_CHECKS = r"""
 
   // 메뉴 → 선택창 요청, 행 버튼 → 직원 지정 요청. URL 에는 개인정보가 없다.
   assert.equal(openEmployeePreviewV41({ open: 'picker' }), true);
-  assert.equal(location.href, '/static/apps/obys/index.html?legacy=1&view=legacy');
+  assert.equal(location.href, '/static/apps/obys/index.html?employee_preview=1');
   let saved = JSON.parse(store.get('obys.employeePreviewRequest'));
   assert.equal(saved.open, 'picker');
   assert.equal(Math.abs(Date.now() - saved.createdAt) < 5000, true, '생성시각 포함');
 
   openEmployeePreviewV41({ email: 'emp@example.com', name: '홍길동' });
-  assert.equal(location.href.includes('emp'), false);
+  assert.equal(location.href.includes('emp@example.com'), false);
   assert.equal(location.href.includes('%40'), false);
   assert.equal(location.href.includes('@'), false);
   assert.equal(location.href.includes('홍길동'), false);

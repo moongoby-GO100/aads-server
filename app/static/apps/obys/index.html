@@ -2282,6 +2282,7 @@
     body.employee-preview .tenant-switcher { display: none !important; }
     body.employee-view [data-employee-preview-menu],
     body.employee-preview [data-employee-preview-menu] { display: none !important; }
+    .side-nav [data-employee-preview-menu] { display:none !important; }
     [data-employee-preview-menu] { min-height: 44px; white-space: normal; word-break: keep-all; line-height: 1.25; }
     .employee-preview-picker {
       position: fixed;
@@ -3103,9 +3104,9 @@
         </div>
         <section class="auth-card">
           <div class="panel-head">
-            <h2 id="authGateTitle" class="panel-title">운영관리 로그인</h2>
+            <h2 id="authGateTitle" class="panel-title">오비서 로그인</h2>
           </div>
-          <div class="auth-mode-tabs" role="tablist" aria-label="인증 방식">
+          <div class="auth-mode-tabs hidden" aria-hidden="true">
             <button id="authModeLogin" class="active" type="button" role="tab" aria-selected="true">로그인</button>
             <button id="authModeSignup" type="button" role="tab" aria-selected="false">직원 회원가입</button>
             <a id="authModeOwnerSignup" href="/static/apps/obys/signup.html" role="tab" aria-selected="false" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 12px;border-radius:8px;text-decoration:none;font-weight:600;color:#1b4ec2;background:#edf4ff;border:1px solid #c7dbff">사업자 회원가입</a>
@@ -3119,12 +3120,13 @@
               <input name="password" type="password" autocomplete="current-password" required>
             </label>
             <button class="primary" type="submit">로그인</button>
-            <div id="gateRecoveryLinks" style="display:flex;gap:8px;margin-top:8px">
+            <details style="margin-top:8px"><summary style="cursor:pointer;min-height:44px;line-height:44px">아이디·비밀번호 찾기</summary><div id="gateRecoveryLinks" style="display:flex;gap:8px;margin-top:8px">
               <button id="openFindIdFromGateBtn" type="button" data-ar-open="find-id" style="flex:1 1 0;min-height:44px;min-width:44px">아이디 찾기</button>
               <button id="openResetFromGateBtn" type="button" data-ar-open="reset" style="flex:1 1 0;min-height:44px;min-width:44px">비밀번호 찾기</button>
-            </div>
-            <button id="openSignupFromGateBtn" type="button">직원 회원가입</button>
-            <a id="ownerSignupFromGateBtn" href="/static/apps/obys/signup.html" style="display:flex;align-items:center;justify-content:center;min-height:44px;margin-top:8px;border-radius:8px;text-decoration:none;font-weight:700;color:#fff;background:#2f6fed;border:1px solid #2f6fed">사업자 회원가입 (대표님 · 신규 사업자)</a>
+            </div></details>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+            <button id="openSignupFromGateBtn" type="button" style="min-height:44px;background:transparent;border:0;color:#315a80;padding:4px 0">직원 회원가입</button>
+            <a id="ownerSignupFromGateBtn" href="/static/apps/obys/signup.html" style="display:flex;align-items:center;justify-content:center;min-height:44px;text-decoration:underline;color:#315a80">사업자 회원가입</a></div>
           </form>
           <form id="gateSignupForm" class="panel-body hidden">
             <label>직원 이름(실명)
@@ -6685,12 +6687,12 @@
     // 마스킹된 이메일(*)뿐이고 이름도 없으면 대상을 특정할 수 없어 제외한다.
     function employeePreviewCandidates() {
       const found = new Map();
-      const add = (rawEmail, rawName, rawBranch) => {
+      const add = (rawEmail, rawName, rawBranch, assignmentId = "") => {
         const email = String(rawEmail || "").trim().toLowerCase();
         const safeEmail = email.includes("*") ? "" : email;
         const name = String(rawName || "").trim();
         if (!safeEmail && !name) return;
-        const key = safeEmail || `name:${name}`;
+        const key = assignmentId ? `assignment:${assignmentId}` : safeEmail || `name:${name}`;
         const branch = String(rawBranch || "").trim();
         const prev = found.get(key);
         if (prev) {
@@ -6698,11 +6700,11 @@
           if (!prev.branch && branch) prev.branch = branch;
           return;
         }
-        found.set(key, { email: safeEmail, name, branch });
+        found.set(key, { email: safeEmail, name, branch, requestId: String(assignmentId || "") });
       };
       (employeeJoinRequests || [])
         .filter(item => String(item.status || "").toLowerCase() === "approved")
-        .forEach(item => add(item.email || item.employee_email, item.name || item.employee_name, item.branch));
+        .forEach(item => add(item.email || item.employee_email, item.name || item.employee_name, item.branch, item.id));
       (approvedEmployees || []).forEach(item => add(item.email || item.employee_email, item.name || item.employee_name, item.branch));
       ((state && state.contracts) || []).forEach(item => add(
         item.employeeEmail || item.employee_email,
@@ -6733,7 +6735,7 @@
       }
       list.innerHTML = rows.map(item => {
         const sub = [item.branch, maskEmployeePreviewEmail(item.email)].filter(Boolean).join(" · ");
-        return `<button type="button" class="employee-preview-pick" data-preview-employee data-preview-email="${escapeHtml(item.email)}" data-preview-name="${escapeHtml(item.name)}"><b>${escapeHtml(item.name || maskEmployeePreviewEmail(item.email))}</b>${sub ? `<span>${escapeHtml(sub)}</span>` : ""}</button>`;
+        return `<button type="button" class="employee-preview-pick" data-preview-employee data-preview-request-id="${escapeHtml(item.requestId)}" data-preview-email="${escapeHtml(item.email)}" data-preview-name="${escapeHtml(item.name)}"><b>${escapeHtml(item.name || maskEmployeePreviewEmail(item.email))}</b>${sub ? `<span>${escapeHtml(sub)}</span>` : ""}</button>`;
       }).join("");
     }
 
@@ -6835,9 +6837,20 @@
         showToast("미리볼 직원 정보를 찾을 수 없습니다.");
         return false;
       }
+      const requestId = String(target?.requestId || "").trim();
+      if (!email && !requestId) {
+        showToast("승인된 직원 목록에서 근무 점포를 선택해 주세요.");
+        openEmployeePreviewPicker();
+        return false;
+      }
+      if (requestId && !employeeJoinRequests.some(item => String(item.id) === requestId
+        && String(item.status).toLowerCase() === "approved")) {
+        showToast("승인된 직원 정보를 다시 불러온 후 선택해 주세요.");
+        return false;
+      }
       closeEmployeePreviewPicker();
       employeePreviewReturnView = currentView;
-      employeePreview = { email, name: name || email };
+      employeePreview = { email, name: name || email, requestId };
       document.body.classList.add("employee-preview");
       if (typeof MutationObserver !== "undefined") {
         employeePreviewObserver = new MutationObserver(queueEmployeePreviewSweep);
@@ -6892,7 +6905,7 @@
       if (trigger) {
         event.preventDefault();
         event.stopPropagation();
-        startEmployeePreview({ email: trigger.dataset.previewEmail, name: trigger.dataset.previewName });
+        startEmployeePreview({ email: trigger.dataset.previewEmail, name: trigger.dataset.previewName, requestId: trigger.dataset.previewRequestId });
         return;
       }
       if (!employeePreview) return;
@@ -7055,19 +7068,49 @@
       return String(user.name || selfSignup.name || email || "직원").trim();
     }
 
-    function isCurrentEmployeeRecord(record) {
+    function isCurrentEmployeeRecord(record, options = {}) {
       if (!isEmployeeExperience()) return true;
+      if (!record || typeof record !== "object") return false;
+      const clean = value => String(value || "").trim();
       const email = currentEmployeeEmail();
-      const name = currentEmployeeName();
-      const recordEmail = String(record.employee_email || record.employeeEmail || record.email || "").trim().toLowerCase();
-      const recordName = String(record.employee_name || record.employeeName || record.staff || record.name || "").trim();
-      if (email && recordEmail) return recordEmail === email;
-      if (name && recordName) return recordName === name;
-      return false;
+      const user = authSession?.user || {};
+      const requestId = employeePreview ? clean(employeePreview.requestId) : clean(authPermissions().employee_request_id);
+      // Only server-loaded approved assignments may establish company/store scope.
+      const assignments = typeof employeeJoinRequests === "undefined" ? [] : employeeJoinRequests;
+      const scopes = assignments.filter(item => String(item.status).toLowerCase() === "approved"
+        && (!clean(item.tenant_id || item.tenantId) || clean(item.tenant_id || item.tenantId) === clean(user.tenant_id))
+        && ((requestId && clean(item.id) === requestId)
+          || (email && clean(item.email || item.employee_email).toLowerCase() === email)
+          || (!employeePreview && user.id && clean(item.user_id || item.employee_user_id) === clean(user.id))));
+      const business = clean(record.business_id || record.businessId);
+      const branch = clean(record.branch || record.branch_name);
+      const tenant = clean(record.tenant_id || record.tenantId);
+      if (tenant && tenant !== clean(user.tenant_id)) return false;
+      const recordId = clean(record.employee_request_id || record.employeeRequestId || record.employee_id);
+      const matchingScopes = scopes.filter(item => business && clean(item.business_id || item.businessId) === business
+        && (!recordId || clean(item.id) === recordId)
+        && (!clean(item.branch) || branch === clean(item.branch)
+          || (options.allowMissingBranch === true && !branch)));
+      if (!matchingScopes.length) return false;
+      const recordUser = clean(record.user_id || record.employee_user_id);
+      const recordEmail = clean(record.employee_email || record.employeeEmail || record.email).toLowerCase();
+      if (recordUser && !employeePreview && user.id && recordUser !== clean(user.id)) return false;
+      if (email && recordEmail && recordEmail !== email) return false;
+      return Boolean((recordId && matchingScopes.some(item => clean(item.id) === recordId))
+        || (recordUser && !employeePreview && user.id && recordUser === clean(user.id))
+        || (email && !email.includes("*") && recordEmail === email));
     }
 
     function visibleOnboardingDocuments() {
-      return isEmployeeExperience() ? onboardingDocuments.filter(isCurrentEmployeeRecord) : onboardingDocuments;
+      if (!isEmployeeExperience()) return onboardingDocuments;
+      // Derive placeholders from the latest assignments and types at render time.
+      // Either parallel response can arrive first; preserve server resubmission metadata.
+      const employees = employeeJoinRequests
+        .filter(item => String(item.status).toLowerCase() === "approved")
+        .map(item => ({ ...item, employee_request_id: item.id }))
+        .filter(item => isCurrentEmployeeRecord(item));
+      return mergeOnboardingMissingRows(onboardingDocuments.filter(row => !row.client_generated), employees)
+        .filter(row => isCurrentEmployeeRecord(row));
     }
 
     function requiredOnboardingDocumentTypes() {
@@ -7079,32 +7122,60 @@
 
     function mergeOnboardingMissingRows(documents, employees) {
       const rows = Array.isArray(documents) ? documents.slice() : [];
-      const existingKeys = new Set(rows.map(row => {
-        const email = String(row.employee_email || row.employeeEmail || row.email || "").trim().toLowerCase();
-        const documentType = String(row.document_type || row.documentType || "").trim();
-        return `${email}::${documentType}`;
-      }));
+      const clean = value => String(value || "").trim();
       const requiredTypes = requiredOnboardingDocumentTypes();
       (Array.isArray(employees) ? employees : []).forEach(employee => {
-        const email = String(employee.email || employee.employee_email || employee.employeeEmail || "").trim().toLowerCase();
-        if (!email) return;
+        const email = clean(employee.email || employee.employee_email || employee.employeeEmail).toLowerCase();
+        const requestId = clean(employee.employee_request_id || employee.id);
+        if (!email && !requestId) return;
+        const business = clean(employee.business_id || employee.businessId);
+        const tenant = clean(employee.tenant_id || employee.tenantId);
         requiredTypes.forEach(meta => {
           const documentType = meta.type;
-          const key = `${email}::${documentType}`;
-          if (existingKeys.has(key)) return;
-          existingKeys.add(key);
+          const matches = row => {
+            const rowId = clean(row.employee_request_id || row.employeeRequestId);
+            const rowEmail = clean(row.employee_email || row.employeeEmail || row.email).toLowerCase();
+            return clean(row.document_type || row.documentType) === documentType
+              && clean(row.business_id || row.businessId) === business
+              && (!tenant || !clean(row.tenant_id || row.tenantId) || clean(row.tenant_id || row.tenantId) === tenant)
+              && clean(row.branch) === clean(employee.branch)
+              && (rowId && requestId ? rowId === requestId : Boolean(email && email === rowEmail));
+          };
+          const resubmitStatuses = ["rejected", "needs_fix", "resubmit_required", "revision_requested"];
+          const submitted = rows.some(row => matches(row) && !row.deleted_at
+            && !row.is_placeholder && !row.missing_document
+            && !resubmitStatuses.includes(clean(row.status).toLowerCase())
+            && clean(row.status).toLowerCase() !== "superseded");
+          if (submitted) {
+            // A later upload resolves an earlier server-generated resubmission row.
+            for (let i = rows.length - 1; i >= 0; i--) {
+              if (matches(rows[i]) && (rows[i].is_placeholder || rows[i].missing_document)) rows.splice(i, 1);
+            }
+            return;
+          }
+          if (rows.some(row => matches(row) && !row.deleted_at
+            && (row.is_placeholder || row.missing_document))) return;
+          const previous = rows.filter(row => matches(row) && !row.deleted_at
+            && resubmitStatuses.includes(clean(row.status).toLowerCase()))
+            .sort((a, b) => clean(b.uploaded_at).localeCompare(clean(a.uploaded_at)))[0];
           rows.push({
-            id: `missing-${employee.id || email}-${documentType}`,
-            employee_request_id: employee.id || "",
+            id: `missing-${employee.id || email}-${business}-${documentType}`,
+            employee_request_id: requestId,
+            business_id: employee.business_id || employee.businessId || "",
+            tenant_id: employee.tenant_id || employee.tenantId || "",
             employee_name: employee.name || employee.employee_name || employee.employeeName || "",
             employee_email: email,
-            employee_email_masked: employee.email_masked || employee.employee_email_masked || maskedEmail(email),
+            employee_email_masked: employee.email_masked || employee.employee_email_masked || (email ? maskedEmail(email) : ""),
             branch: employee.branch || "",
             document_type: documentType,
             document_label: meta.label,
             requirement: meta.requirement,
-            status: "missing",
-            status_label: "작성 필요",
+            status: previous ? "resubmit_required" : "missing",
+            status_label: previous ? "재제출 필요" : "작성 필요",
+            previous_document_id: previous?.id || "",
+            previous_status: previous?.status || "",
+            review_memo: previous?.review_memo || "",
+            client_generated: true,
             original_filename: "",
             size_bytes: 0,
             uploaded_at: "",
@@ -7124,7 +7195,8 @@
 
     function visiblePayrollStatements() {
       const rows = payrollStatements || [];
-      return isEmployeeExperience() ? rows.filter(isCurrentEmployeeRecord) : rows;
+      // Payroll storage has no branch field; company and employee identity remain mandatory.
+      return isEmployeeExperience() ? rows.filter(row => isCurrentEmployeeRecord(row, { allowMissingBranch: true })) : rows;
     }
 
     function visibleShifts() {
@@ -7265,7 +7337,7 @@
       els.authModeLogin?.setAttribute("aria-selected", String(isLogin));
       els.authModeSignup?.setAttribute("aria-selected", String(isSignup));
       els.authModeInvite?.setAttribute("aria-selected", String(isInvite));
-      if (els.authGateTitle) els.authGateTitle.textContent = isSignup ? "직원 회원가입" : (isInvite ? "초대 수락 보조" : "운영관리 로그인");
+      if (els.authGateTitle) els.authGateTitle.textContent = isSignup ? "직원 회원가입" : (isInvite ? "초대 수락 보조" : "오비서 로그인");
       if (els.authGateBadge) {
         els.authGateBadge.textContent = isSignup ? "직접 입력" : (isInvite ? "초대 필요" : "계정 필요");
         els.authGateBadge.className = `badge ${isSignup || isInvite ? "info" : "warn"}`;
@@ -8661,7 +8733,7 @@
         const status = doc.status || "uploaded";
         const isMissing = Boolean(doc.missing_document || doc.is_placeholder || status === "missing");
         const statusClass = status === "approved" ? "good" : (status === "rejected" ? "bad" : (status === "needs_fix" || isMissing ? "warn" : "info"));
-        const statusLabel = isMissing ? "작성 필요" : status;
+        const statusLabel = isMissing ? (doc.status_label || "작성 필요") : status;
         const canReview = canManageOnboarding();
         return `
           <tr>
@@ -8706,7 +8778,7 @@
         const uploadedAt = isMissing ? "미제출" : (String(doc.uploaded_at || "").slice(0, 10) || "-");
         const sizeKb = Math.max(1, Math.round((Number(doc.size_bytes) || 0) / 1024));
         const statusClass = status === "approved" ? "good" : (status === "rejected" ? "bad" : (status === "needs_fix" || isMissing ? "warn" : "info"));
-        const statusLabel = isMissing ? "작성 필요" : status;
+        const statusLabel = isMissing ? (doc.status_label || "작성 필요") : status;
         return `
           <tr>
             <td>${escapeHtml(uploadedAt)}</td>
@@ -8716,7 +8788,7 @@
             <td>${isMissing ? `<span class="muted">업로드 필요</span>` : `${escapeHtml(doc.original_filename || "-")}<br><span class="muted">${sizeKb.toLocaleString("ko-KR")}KB</span>`}</td>
             <td><span class="badge ${statusClass}">${escapeHtml(statusLabel)}</span>${doc.review_memo ? `<br><span class="muted">${escapeHtml(doc.review_memo)}</span>` : ""}</td>
             <td class="num" style="display:flex; gap:6px; justify-content:flex-end">
-              ${isMissing ? `<span class="muted">서류 업로드 대기</span>` : `<button data-download-onboarding="${escapeHtml(doc.id)}">열기</button><button class="icon danger" data-delete-onboarding="${escapeHtml(doc.id)}" title="삭제">삭제</button>`}
+              ${isMissing ? (employeePreview ? `<span class="muted">읽기 전용</span>` : `<button type="button" data-start-onboarding="${escapeHtml(doc.id)}">${status === "resubmit_required" ? "재제출" : "서류 작성"}</button>`) : `<button data-download-onboarding="${escapeHtml(doc.id)}">열기</button><button class="icon danger" data-delete-onboarding="${escapeHtml(doc.id)}" title="삭제">삭제</button>`}
             </td>
           </tr>`;
       }).join("");
@@ -9708,7 +9780,7 @@
       try {
         const response = await fetch(`/api/v1/yeoljeong-finance/contracts/${encodeURIComponent(contractId)}/signed-pdf`, { headers: apiAuthOnlyHeaders() });
         if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
+          const payload = (await response.json().catch(() => ({}))) || {};
           if (isTenantMembershipInactive(response, payload)) {
             handleTenantMembershipInactive();
             throw new Error(TENANT_MEMBERSHIP_INACTIVE_MESSAGE);
@@ -10562,7 +10634,7 @@
           headers: apiAuthOnlyHeaders(),
           body: formData
         });
-        const payload = await response.json().catch(() => ({}));
+        const payload = (await response.json().catch(() => ({}))) || {};
         if (!response.ok) throw new Error(payload.detail || payload.message || `UPLOAD ${response.status}`);
         doc = payload.document;
       } catch (err) {
@@ -10956,7 +11028,7 @@
           headers: apiAuthOnlyHeaders(),
           body: data
         });
-        const payload = await response.json().catch(() => ({}));
+        const payload = (await response.json().catch(() => ({}))) || {};
         // 서버가 원본을 보관했다고 답하기 전에는 성공으로 보이지 않는다.
         if (!response.ok || !payload.document?.id) throw new Error(payload.detail || payload.message || `등록 ${response.status}`);
         form.reset();
@@ -11012,7 +11084,7 @@
           headers: apiAuthOnlyHeaders()
         });
         if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
+          const payload = (await response.json().catch(() => ({}))) || {};
           throw new Error(payload.detail || payload.message || `다운로드 ${response.status}`);
         }
         const url = URL.createObjectURL(await response.blob());
@@ -12855,7 +12927,7 @@
           headers: { Accept: "application/json" },
           signal: controller.signal
         });
-        const payload = await response.json().catch(() => ({}));
+        const payload = (await response.json().catch(() => ({}))) || {};
         if (!response.ok || !Array.isArray(payload.businesses)) throw new Error(payload.detail || `API ${response.status}`);
         joinWorkplaces.businesses = payload.businesses;
         joinWorkplaces.state = "ok";
@@ -13464,7 +13536,7 @@
 
     function safeRecipeRedirectPath(value) {
       const redirectPath = String(value || "").trim();
-      return redirectPath.startsWith("/unni-naengmyeon/recipes") ? redirectPath : "";
+      return /^\/unni-naengmyeon\/recipes(?:[?#]|$)/.test(redirectPath) && !/[\\\r\n]/.test(redirectPath) ? redirectPath : "";
     }
 
     function readPostLoginRedirectFromUrl() {
@@ -13498,6 +13570,7 @@
     function shouldOpenV41App() {
       const params = new URLSearchParams(window.location.search);
       if (params.get("legacy") === "1" && params.get("view") === "legacy") return false;
+      if (params.get("employee_preview") === "1" && canManageOnboardingReal()) return false;
       if (readPostLoginRedirectFromUrl() || params.has("yf_contract_token")) return false;
       // 초대 링크는 로그인 상태여도 V4.1 로 넘기지 않는다 — shouldOpenV41App() 이
       // readInviteTokenFromUrl() 보다 먼저 돌아 pendingPhoneInviteToken 이 아직 비어 있다
@@ -13587,6 +13660,7 @@
     }
 
     function buildApiError(response, payload, fallback) {
+      payload = payload || {};
       if (response.status === 401 && hasServerAuth()) handleExpiredServerSession();
       const inactive = isTenantMembershipInactive(response, payload);
       const error = new Error(inactive ? TENANT_MEMBERSHIP_INACTIVE_MESSAGE : (payload.detail || payload.message || fallback));
@@ -13604,7 +13678,7 @@
         ...options,
         headers: { ...apiHeaders(), ...(options.headers || {}) }
       });
-      const payload = await response.json().catch(() => ({}));
+      const payload = (await response.json().catch(() => ({}))) || {};
       if (!response.ok) {
         throw buildApiError(response, payload, `AUTH ${response.status}`);
       }
@@ -13725,7 +13799,7 @@
         if (error?.name === "AbortError") throw new Error(`API 응답 지연: ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다.`);
         throw error;
       }).finally(() => clearTimeout(timeoutId));
-      const payload = await response.json().catch(() => ({}));
+      const payload = (await response.json().catch(() => ({}))) || {};
       if (!response.ok) {
         throw buildApiError(response, payload, `API ${response.status}`);
       }
@@ -13745,7 +13819,7 @@
         if (error?.name === "AbortError") throw new Error(`API 응답 지연: ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다.`);
         throw error;
       }).finally(() => clearTimeout(timeoutId));
-      const payload = await response.json().catch(() => ({}));
+      const payload = (await response.json().catch(() => ({}))) || {};
       if (!response.ok) {
         throw buildApiError(response, payload, `API ${response.status}`);
       }
@@ -13762,6 +13836,13 @@
         id: `srv:${record.id}`,
         serverId: String(record.id),
         businessId,
+        business_id: businessId,
+        tenant_id: raw.tenant_id || record.tenant_id || "",
+        employee_email: raw.employee_email || record.employee_email || "",
+        employee_request_id: raw.employee_request_id || record.employee_request_id || "",
+        employee_id: raw.employee_id || record.employee_id || "",
+        employee_user_id: raw.employee_user_id || record.employee_user_id || "",
+        user_id: raw.user_id || record.user_id || "",
         date: String(raw.work_date || "").slice(0, 10),
         branch: raw.branch || "",
         staff: raw.employee_name || "",
@@ -13972,7 +14053,7 @@
         ...options,
         headers: { ...apiHeaders(), ...(options.headers || {}) }
       });
-      const payload = await response.json().catch(() => ({}));
+      const payload = (await response.json().catch(() => ({}))) || {};
       if (!response.ok) {
         const error = new Error(payload.detail || payload.message || `API ${response.status}`);
         error.status = response.status;
@@ -14055,7 +14136,7 @@
       form.append("category", panel.dataset.ledgerUpload);
       form.append("file", file);
       const response = await fetch("/api/v1/yeoljeong-finance/uploads", { method: "POST", headers: apiAuthOnlyHeaders(), body: form });
-      const payload = await response.json().catch(() => ({}));
+      const payload = (await response.json().catch(() => ({}))) || {};
       if (!response.ok) throw new Error(payload.detail || `업로드 ${response.status}`);
       await loadLedgerUploads(panel.dataset.ledgerUpload);
       showToast(payload.status === "duplicate" ? "이미 반영된 동일 파일입니다." : "원장을 저장하고 반영했습니다.");
@@ -14070,7 +14151,7 @@
     async function downloadLedgerUpload(uploadId) {
       const response = await fetch(`/api/v1/yeoljeong-finance/uploads/${encodeURIComponent(uploadId)}/download`, { headers: apiAuthOnlyHeaders() });
       if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
+        const payload = (await response.json().catch(() => ({}))) || {};
         throw new Error(payload.detail || `다운로드 ${response.status}`);
       }
       const blob = await response.blob();
@@ -14196,6 +14277,7 @@
       if (Array.isArray(payload.document_types) && payload.document_types.length) {
         onboardingDocumentTypes = payload.document_types;
         initSelects();
+        renderOnboarding();
       }
     }
 
@@ -14219,12 +14301,13 @@
         }
         documents = mergeOnboardingMissingRows(documents, approvedEmployees);
       } else if (isEmployeeExperience()) {
-        documents = mergeOnboardingMissingRows(documents, [{
-          id: authPermissions().employee_request_id || currentEmployeeEmail(),
-          name: currentEmployeeName(),
-          email: currentEmployeeEmail(),
-          branch: authPermissions().branch || ""
-        }]);
+        // Generate required-document placeholders only from server-approved assignments.
+        const requestId = employeePreview ? "" : String(authPermissions().employee_request_id || "").trim();
+        const email = currentEmployeeEmail();
+        const assignments = employeeJoinRequests.filter(item => String(item.status).toLowerCase() === "approved"
+          && ((requestId && String(item.id || "").trim() === requestId)
+            || (email && String(item.email || item.employee_email || "").trim().toLowerCase() === email)));
+        documents = mergeOnboardingMissingRows(documents, assignments);
       }
       onboardingDocuments = documents;
       renderOnboarding();
@@ -14249,8 +14332,14 @@
         renderEmployees();
         return;
       }
-      const payload = await financeApi("/employees/join-requests");
+      const params = new URLSearchParams();
+      if (canManageOnboarding()) {
+        const businessId = selectedSettingsBusinessId();
+        if (businessId) params.set("business_id", businessId);
+      }
+      const payload = await financeApi(`/employees/join-requests${params.size ? "?" + params.toString() : ""}`);
       employeeJoinRequests = payload.requests || [];
+      renderOnboarding();
       renderEmployees();
       renderOperationalPages();
     }
@@ -14834,7 +14923,7 @@
         headers: apiAuthOnlyHeaders(),
         body: formData
       });
-      const payload = await response.json().catch(() => ({}));
+      const payload = (await response.json().catch(() => ({}))) || {};
       if (!response.ok) {
         if (response.status === 401) handleExpiredServerSession();
         const message = response.status === 413
@@ -14847,6 +14936,22 @@
       await loadOnboardingDocuments();
       showToast("입사서류를 업로드했습니다.");
       });
+    }
+
+    function startOnboardingDocument(documentId) {
+      if (employeePreview || !hasServerAuth()) return false;
+      const row = visibleOnboardingDocuments().find(item => String(item.id) === String(documentId));
+      if (!row || !(row.is_placeholder || row.missing_document)) return false;
+      const form = els.onboardingUploadForm;
+      if (!form) return false;
+      setView("onboarding");
+      form.employeeName.value = row.employee_name || currentEmployeeName();
+      form.employeeEmail.value = row.employee_email || currentEmployeeEmail();
+      form.branch.value = row.branch || "";
+      form.documentType.value = row.document_type || "";
+      suggestOnboardingExpiry(form);
+      focusElement(form.file);
+      return true;
     }
 
     async function deleteOnboardingDocument(documentId) {
@@ -14913,7 +15018,7 @@
           signal: filePreviewAbortController.signal
         });
         if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
+          const payload = (await response.json().catch(() => ({}))) || {};
           throw buildApiError(response, payload, `파일 조회 ${response.status}`);
         }
         const blob = await response.blob();
@@ -16073,7 +16178,7 @@
           headers: apiAuthOnlyHeaders(),
           body: formData
         });
-        const payload = await response.json().catch(() => ({}));
+        const payload = (await response.json().catch(() => ({}))) || {};
         if (!response.ok) throw new Error(payload.detail || payload.message || `은행파일 반영 ${response.status}`);
         const records = (payload.transactions || []).map(row => ({
           id: row.id || uid(),
@@ -16226,7 +16331,7 @@
         headers: apiAuthOnlyHeaders(),
         body: formData
       });
-      const payload = await response.json().catch(() => ({}));
+      const payload = (await response.json().catch(() => ({}))) || {};
       if (!response.ok) {
         throw new Error(payload.detail || payload.message || `증빙 등록 ${response.status}`);
       }
@@ -17490,6 +17595,8 @@
           openEvidenceImport(openImportService);
           showToast(financialTransactionServices.has(openImportService) ? "CSV 내용을 붙여넣은 뒤 거래 CSV 반영 또는 증빙 서버 등록을 실행하십시오." : "파일/사진을 선택한 뒤 증빙 서버 등록을 실행하십시오.");
         }
+        const onboardingStartId = event.target.closest("[data-start-onboarding]")?.dataset.startOnboarding;
+        if (onboardingStartId) startOnboardingDocument(onboardingStartId);
         if (onboardingDownloadId) {
           downloadOnboardingDocument(onboardingDownloadId);
         }
@@ -17620,19 +17727,24 @@
       if (!hasServerAuth()) return true;
       try {
         const session = await financeApi("/session");
-        if (session.legacy_access === true) {
-          // Saving renders auth state and starts dashboard requests: legacy tenants only.
-          saveAuthSession({...session, permissions_verified: true});
+        // Verify identity before selecting employee or administrator experience.
+        authSession = {...session, permissions_verified: true};
+        localStorage.setItem(AUTH_USER_KEY, JSON.stringify(authSession));
+        if (session.legacy_access === true || isEmployeeAccount()) return true;
+        if (shouldOpenV41App()) return !openV41App();
+        return true; // Invitation/signature/approved redirect stays on this entry.
+      } catch (error) {
+        if (error?.status === 401) {
+          clearServerAuthToken();
+          authSession = null;
+          localStorage.removeItem(AUTH_USER_KEY);
           return true;
         }
-      } catch (error) {
-        console.error("Legacy entry verification failed", error);
-        // Fail closed; raw server detail is never shown on this boundary.
+        // Keep credentials on transient errors, but never render using unverified permissions.
+        document.body.insertAdjacentHTML("beforeend", '<section id="sessionRetry" role="alert" style="position:fixed;inset:0;z-index:99999;background:#fff;display:grid;place-content:center;padding:24px;text-align:center"><h1>연결을 확인해 주세요</h1><p>로그인 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.</p><button type="button" style="min-height:48px" id="sessionRetryButton">다시 연결</button></section>');
+        document.getElementById("sessionRetryButton").onclick = () => window.location.reload();
+        return false;
       }
-      state.settings.businesses = [];
-      state.settings.branches = [];
-      document.body.innerHTML = '<main style="max-width:640px;margin:12vh auto;padding:24px;font-family:sans-serif"><h1>이 화면은 기존 매장 전용입니다.</h1><a href="/static/apps/obys/admin.html" style="display:inline-block;padding:14px;background:#174f45;color:white;border-radius:8px">새 관리화면으로 이동</a></main>';
-      return false;
     }
 
     async function init() {
