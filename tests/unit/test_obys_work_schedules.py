@@ -111,6 +111,18 @@ class Connection:
         yield
 
     async def fetch(self, sql, business, *args):
+        if "UPDATE yeoljeong_work_schedules SET deleted_at" in sql:
+            emails, start, end, weekdays = args
+            retired = []
+            for row in self.rows:
+                day = date.fromisoformat(str(row["work_date"])[:10])
+                if (row["business_id"] == business and row["employee_email"] in emails
+                        and start <= day <= end and day.weekday() not in weekdays
+                        and row.get("kind") == "work" and not row.get("memo", "")
+                        and not row.get("deleted_at")):
+                    row["deleted_at"] = "fixture-retired"
+                    retired.append(dict(row))
+            return retired
         if "WITH ranked" in sql:
             return [{**r["actual_record"], "employee_email": r["employee_email"], "work_date": r["work_date"]}
                     for r in self.rows if r.get("actual_record")]
@@ -607,6 +619,21 @@ async def test_save_keep_and_overwrite_postgres_temp_fixture(monkeypatch):
         assert result["id"] == saved["id"] and result["break_minutes"] == 45
         assert await conn.fetchval("SELECT count(*) FROM yeoljeong_work_schedules") == 1
         assert api._attendance_audit.await_count == 2
+        # Execute the production replacement SQL against the same isolated schema.
+        tuesday = first.model_copy(update={"work_date": date(2026, 11, 3)})
+        exception = first.model_copy(update={"work_date": date(2026, 11, 4), "memo": "manual exception"})
+        await api._save_work_schedule(conn, "fixture-business", tuesday, user)
+        await api._save_work_schedule(conn, "fixture-business", exception, user)
+        bulk = api.WorkScheduleBulkIn(employees=[{"employee_email": first.employee_email}],
+            date_from="2026-11-01", date_to="2026-11-30", weekdays=[0],
+            start_time="21:00", end_time="09:00")
+        await api._retire_excluded_schedule_days(conn, "fixture-business", bulk, user)
+        await api._retire_excluded_schedule_days(conn, "fixture-business", bulk, user)
+        assert await conn.fetchval("SELECT count(*) FROM yeoljeong_work_schedules WHERE deleted_at IS NULL") == 2
+        assert await conn.fetchval("SELECT memo FROM yeoljeong_work_schedules WHERE work_date=$1 AND deleted_at IS NULL",
+                                   date(2026, 11, 4)) == "manual exception"
+        assert await conn.fetchval("SELECT deleted_at IS NOT NULL FROM yeoljeong_work_schedules WHERE work_date=$1",
+                                   date(2026, 11, 3))
     finally:
         await transaction.rollback()
         await conn.close()

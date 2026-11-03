@@ -48,6 +48,11 @@ class Connection:
                          signed_at='2026-10-01', contract_payload=self.terms)]
         return [dict(employee_email='staff@example.test', work_date=date(2026, 10, 26))]
 
+    async def execute(self, sql, *args):
+        assert 'pg_advisory_xact_lock' in sql
+        assert args[0] == 'obys-schedule:biz-a:staff@example.test'
+        return 'SELECT 1'
+
     async def close(self):
         pass
 
@@ -139,6 +144,11 @@ async def test_admin_denied_before_database(monkeypatch):
 @pytest.mark.asyncio
 async def test_concurrent_insert_preserves_manual_schedule(monkeypatch):
     class InsertConnection:
+        async def execute(self, sql, *args):
+            assert 'pg_advisory_xact_lock' in sql
+            assert args[0] == 'obys-schedule:biz-a:staff@example.test'
+            return 'SELECT 1'
+
         async def fetchrow(self, sql, *args):
             assert 'DO NOTHING RETURNING *' in sql
             assert 'DO UPDATE' not in sql

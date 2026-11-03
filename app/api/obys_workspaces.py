@@ -1473,9 +1473,33 @@ async def _schedule_business(user, business_id):
         raise
 
 
+async def _lock_schedule_employees(connection, business_id, emails):
+    # Stable order prevents overlapping bulk requests from deadlocking.
+    for email in sorted({email.strip().lower() for email in emails}):
+        await connection.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                                 f"obys-schedule:{business_id}:{email}")
+
+
+async def _retire_excluded_schedule_days(connection, business_id, payload, user):
+    # Only plain work plans are replaceable. Leave/off and annotated manual
+    # exceptions remain intact; attendance and payroll tables are never written.
+    rows = await connection.fetch("""
+        UPDATE yeoljeong_work_schedules SET deleted_at=now(),updated_at=now()
+        WHERE business_id=$1 AND employee_email=ANY($2::text[])
+          AND work_date BETWEEN $3 AND $4 AND deleted_at IS NULL
+          AND NOT ((extract(isodow FROM work_date)::int - 1)=ANY($5::int[]))
+          AND kind='work' AND memo='' RETURNING *
+    """, business_id, sorted({e.employee_email.strip().lower() for e in payload.employees}),
+        payload.date_from, payload.date_to, payload.weekdays)
+    for row in rows:
+        await _attendance_audit(connection, business_id, user, "attendance.schedule.replace",
+                                str(row["id"]), dict(row))
+
+
 async def _save_work_schedule(connection, business_id, payload, user, schedule_id=None, *, preserve_existing=False):
     from uuid import uuid4
     values = _schedule_values(payload)
+    await _lock_schedule_employees(connection, business_id, [payload.employee_email])
     if schedule_id is not None:
         row = await connection.fetchrow("""
             UPDATE yeoljeong_work_schedules SET employee_email=$3, employee_email_masked=$4,
@@ -1508,7 +1532,7 @@ async def _save_work_schedule(connection, business_id, payload, user, schedule_i
     return {key: _json_value(value) for key, value in dict(row).items()}
 
 
-async def _write_work_schedules(business_id, payloads, user, schedule_id=None, *, preserve_existing=False):
+async def _write_work_schedules(business_id, payloads, user, schedule_id=None, *, preserve_existing=False, replace_pattern=None):
     _require_attendance_admin(user)
     await _schedule_business(user, business_id)
     for payload in payloads:
@@ -1516,6 +1540,9 @@ async def _write_work_schedules(business_id, payloads, user, schedule_id=None, *
     connection = await upload_svc._connect()
     try:
         async with connection.transaction():
+            await _lock_schedule_employees(connection, business_id, [p.employee_email for p in payloads])
+            if replace_pattern is not None:
+                await _retire_excluded_schedule_days(connection, business_id, replace_pattern, user)
             return [await _save_work_schedule(connection, business_id, payload, user, schedule_id, preserve_existing=preserve_existing) for payload in payloads]
     except asyncpg.UniqueViolationError as exc:
         raise HTTPException(409, "같은 직원·근무일의 일정이 있습니다") from exc
@@ -1556,7 +1583,9 @@ async def bulk_work_schedules(business_id: str, payload: WorkScheduleBulkIn,
     await _schedule_business(current_user, business_id)
     rows = await _write_work_schedules(
         business_id, expand_work_schedules(payload), current_user,
-        preserve_existing=payload.preserve_existing)
+        preserve_existing=payload.preserve_existing,
+        replace_pattern=(payload if payload.kind == "work" and payload.cells is None
+                         and not payload.preserve_existing else None))
     saved = [row for row in rows if row is not None]
     return {"schedules": saved, "count": len(saved), "preserved": len(rows) - len(saved)}
 
@@ -1735,6 +1764,9 @@ async def _contract_schedules(business_id, payload, user, *, apply=False):
                 business_id, [email.strip().lower() for email in payload.employee_emails])
             if len(contracts) > 1000:
                 raise HTTPException(422, "직원을 선택해 범위를 줄이세요")
+            if apply:
+                await _lock_schedule_employees(connection, business_id,
+                                               [row["employee_email"] for row in contracts])
             existing = await connection.fetch("""SELECT employee_email,work_date FROM yeoljeong_work_schedules
                 WHERE business_id=$1 AND deleted_at IS NULL AND work_date BETWEEN $2 AND $3""",
                 business_id, payload.date_from, payload.date_to)
