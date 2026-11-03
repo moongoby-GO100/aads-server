@@ -11,7 +11,7 @@ from typing import Any, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth import TenantRole, require_tenant_role
 from app.core.goal_work_hierarchy_policy import goal_work_hierarchy_enabled
@@ -70,6 +70,15 @@ def resolve_session_ref(ref: str) -> str:
 
 
 class MilestoneCreateRequest(BaseModel):
+    idempotency_key: Optional[str] = Field(None, min_length=1, max_length=200)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value):
+        if value is not None and not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
+
     title: str
     sequence: int
     description: Optional[str] = None
@@ -169,6 +178,8 @@ async def create_goal(
     _, user_id, internal_admin = _tenant_identity(context)
     if any(ms.owner_session_id or ms.owner_role_key for ms in req.milestones or []):
         raise HTTPException(status_code=422, detail="milestone_owner_requires_existing_goal")
+    if any(ms.idempotency_key is not None for ms in req.milestones or []):
+        raise HTTPException(status_code=422, detail="milestone_idempotency_requires_existing_goal")
     inp = {
         "goal": {
             "project": req.project, "title": req.title, "priority": req.priority,
@@ -177,7 +188,7 @@ async def create_goal(
             "owner_role_key": req.owner_role_key,
         },
         "milestones": [
-            {**ms.model_dump(), "sequence_order": ms.sequence}
+            {**ms.model_dump(exclude={"idempotency_key"}), "sequence_order": ms.sequence}
             for ms in req.milestones or []
         ],
     }
@@ -2019,8 +2030,17 @@ async def add_milestone(
     goal_id: str, req: MilestoneCreateRequest,
     context: dict[str, Any] = Depends(require_tenant_member),
 ):
+    """Create a pending milestone without changing goal status or existing owners.
+
+    No key creates a fresh milestone. Keys are exact, tenant/goal scoped strings;
+    equal effective payloads replay the first response (including its pending status),
+    changed payloads return 409. description/epics are unsupported here (422).
+    The existing HTTP 200 response contract is preserved for creation and replay.
+    """
     from app.core.db_pool import get_pool
     from app.services.goal_manager import goal_state_machine
+    if req.description is not None or req.epics is not None:
+        raise HTTPException(status_code=422, detail="milestone_description_epics_not_supported")
     tenant_id = _tenant_id(context)
     owner_session_id = str(req.owner_session_id) if req.owner_session_id else None
     owner_role_key = (req.owner_role_key or "").strip() or None
@@ -2030,15 +2050,23 @@ async def add_milestone(
             await _validate_milestone_owner_session(
                 conn, goal_id, str(goal["project"] or ""), owner_session_id, tenant_id,
             )
-    result = await goal_state_machine.add_milestone(
-        goal_id=goal_id,
-        title=req.title,
-        sequence=req.sequence,
-        completion_criteria=req.completion_criteria,
-        auto_advance=req.auto_advance,
-        owner_session_id=owner_session_id,
-        owner_role_key=owner_role_key,
-    )
+    from app.services.milestone_idempotency import MilestoneConflict, MilestoneGoalNotFound
+    try:
+        result = await goal_state_machine.add_milestone(
+            goal_id=goal_id,
+            tenant_id=tenant_id,
+            idempotency_key=req.idempotency_key,
+            title=req.title,
+            sequence=req.sequence,
+            completion_criteria=req.completion_criteria,
+            auto_advance=req.auto_advance,
+            owner_session_id=owner_session_id,
+            owner_role_key=owner_role_key,
+        )
+    except MilestoneConflict as exc:
+        raise HTTPException(status_code=409, detail="idempotency_key_payload_conflict") from exc
+    except MilestoneGoalNotFound as exc:
+        raise HTTPException(status_code=404, detail="goal_not_found") from exc
     return result
 
 
