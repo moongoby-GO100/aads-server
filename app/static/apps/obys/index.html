@@ -13990,7 +13990,7 @@
     // 로그인 후 1회: 서버에 못 올린 로컬 근태를 사업자별로 자동 이관한다. 이미 시도해 실패한 건은 자동 재시도하지 않고
     // 기존 수동 버튼(uploadLocalShiftsBtn)으로 복구한다. 결과(시도/성공/실패/사유)는 localStorage 장부에만 남긴다.
     async function autoMigrateLocalShifts() {
-      if (attendanceMigrationRunning || !hasServerAuth() || employeePreview) return null;
+      if (attendanceMigrationRunning || !hasServerAuth() || employeePreview || authSession?.legacy_access === false) return null;
       if (!Array.isArray(state.shifts) || !state.shifts.length) return null;
       const ledger = loadAttendanceMigrationLedger();
       const alreadyFailed = new Set();
@@ -14240,7 +14240,7 @@
       if (!hasServerAuth()) return null;
       // GET /settings 는 테넌트 구분 없는 레거시 전역 JSON 이다. 직원은 쓰지 않으므로 부르지 않고,
       // 설정 관리 권한이 없는 계정이 받은 403(신규 테넌트 게이트)은 오류 토스트 없이 빈 설정으로 진행한다.
-      if (isEmployeeAccount()) return null;
+      if (isEmployeeAccount() || authSession?.legacy_access === false) return null;
       let payload;
       try {
         payload = await financeApi("/settings");

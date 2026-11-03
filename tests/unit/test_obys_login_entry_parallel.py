@@ -360,3 +360,20 @@ def test_login_waits_for_handler_and_never_defaults_to_get():
     assert re.search(r'<button id="gateLoginSubmitBtn"[^>]* disabled>', HTML)
     bind = _function_source(HTML, 'bindEvents')
     assert bind.index('els.gateLoginForm.addEventListener("submit"') < bind.index('getElementById("gateLoginSubmitBtn").disabled = false')
+
+
+def test_nonlegacy_admin_preview_does_not_load_global_legacy_settings():
+    run_js('''const assert=require('node:assert/strict');
+    let authSession={legacy_access:false},employee=false,calls=0;
+    const hasServerAuth=()=>true,isEmployeeAccount=()=>employee,canManageSettings=()=>true;
+    const financeApi=async()=>{calls++;return {settings:{}}};
+    const hasMeaningfulSettings=()=>false;
+    ''' + _function_source(HTML, 'loadServerSettings') + '''
+    (async()=>{
+      assert.equal(await loadServerSettings(),null);assert.equal(calls,0);
+      authSession.legacy_access=true;await loadServerSettings();assert.equal(calls,1);
+      employee=true;await loadServerSettings();assert.equal(calls,1);
+    })().catch(e=>{console.error(e);process.exitCode=1});
+    ''')
+    migration = _function_source(HTML, 'autoMigrateLocalShifts')
+    assert 'authSession?.legacy_access === false' in migration
