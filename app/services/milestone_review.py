@@ -114,6 +114,20 @@ async def lead_self_approval_evidence(conn: Any, milestone_id: str) -> dict:
             "reason": "; ".join(reasons), "resolved_errors": resolved_errors}
 
 
+async def _execute_reject_aware(conn, template: str, reject_clause: str, *args) -> None:
+    """`{reject}` 자리에 review_rejected_at 대입을 넣어 실행한다. 열이 없으면(마이그레이션
+    미적용) 그 절을 빼고 다시 실행한다 — 이 UPDATE 들은 트랜잭션 밖이라 재시도해도 안전하다."""
+    import asyncpg
+
+    try:
+        await conn.execute(template.replace("{reject}", reject_clause), *args)
+    except asyncpg.UndefinedColumnError as exc:
+        if "review_rejected_at" not in str(exc):
+            raise
+        logger.warning("milestones.review_rejected_at 열 없음 — 게이트 없이 기존 동작으로 폴백")
+        await conn.execute(template.replace("{reject}", ""), *args)
+
+
 async def report_done(
     milestone_id: str, evidence: Dict[str, Any], reporter_session_id: str = ""
 ) -> Dict[str, Any]:
@@ -159,14 +173,16 @@ async def report_done(
                            "`numbers` 에 before/after 를 넣어라.",
             }
 
-        await conn.execute(
+        await _execute_reject_aware(
+            conn,
             "UPDATE milestones SET status = 'review', reported_at = NOW(), "
             "started_at = COALESCE(started_at, NOW()), "
             "reported_by = NULLIF($2,'')::uuid, evidence = $3::jsonb, "
             "review_asked_at = NULL, review_ask_count = 0, "
             "dispatch_blocked_at = NULL, dispatch_note = NULL, dispatch_unblock_count = 0, "
-            "updated_at = NOW() "
+            "{reject}updated_at = NOW() "
             "WHERE id = $1::uuid",
+            "review_rejected_at = NULL, ",
             milestone_id, reporter_session_id, json.dumps(evidence, ensure_ascii=False),
         )
     logger.info("milestone_reported", milestone=milestone_id[:8], title=row["title"][:30])
@@ -222,12 +238,14 @@ async def confirm(
             new = "in_progress"
             # 반려하면 발송 기록을 지운다 — 그래야 다시 지시가 나간다.
             # 안 지우면 "답은 왔다" 로 판정돼 조용히 멈춘다.
-            await conn.execute(
+            await _execute_reject_aware(
+                conn,
                 "UPDATE milestones SET status = 'in_progress', reported_at = NULL, "
                 "evidence = NULL, review_note = NULLIF($2,''), "
                 "dispatched_at = NULL, dispatch_count = 0, "
-                "review_asked_at = NULL, review_ask_count = 0, updated_at = NOW() "
+                "review_asked_at = NULL, review_ask_count = 0, {reject}updated_at = NOW() "
                 "WHERE id = $1::uuid AND ($3::uuid IS NULL OR tenant_id = $3::uuid)",
+                "review_rejected_at = NOW(), ",
                 milestone_id, reason, tenant_id,
             )
             # 기록을 지운 자취를 남긴다. 반려는 정상 기능이지만, 지운 것이

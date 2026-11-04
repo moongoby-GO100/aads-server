@@ -40,6 +40,7 @@ _LINK_OPTIONAL_COLUMNS = (
     "work_item_ids", "work_items_synced_status",
     "bind_source", "bound_by", "link_state", "detach_reason",
     "superseded_by", "superseded_at", "last_job_status", "reconciled_at", "updated_at",
+    "milestone_linked_at",
 )
 _link_columns_cache: Optional[set] = None
 
@@ -47,6 +48,19 @@ _link_columns_cache: Optional[set] = None
 # paused 를 빼는 이유: 2026-09-30 NTV2 목표가 status='paused'(paused_at NULL)로 직접 바뀌어 패널·착수가 통째로 멈췄다.
 # 일시중지는 status 가 아니라 POST /api/v1/goals/{goal_id}/pause (paused_at) 경로다.
 _ALLOWED_GOAL_STATUS = frozenset({"draft", "active", "blocked", "completed", "cancelled", "archived"})
+
+
+_reject_col_warned = False
+
+
+def _warn_reject_col_missing() -> None:
+    global _reject_col_warned
+    if not _reject_col_warned:
+        _reject_col_warned = True
+        logger.warning(
+            "milestones.review_rejected_at 열 없음 — 반려 후 재신고 게이트 없이 기존 동작으로 폴백 "
+            "(migrations/20261104_milestone_review_rejected_at.sql 미적용)"
+        )
 
 
 async def link_optional_columns(conn) -> set:
@@ -872,6 +886,13 @@ class GoalStateMachine:
                         "status": outcome["status"],
                         "reason": outcome["reason"],
                     }
+                if outcome["result"] == "gated_after_reject":
+                    return {
+                        "milestone_id": milestone_id,
+                        "completed": False,
+                        "status": outcome["status"],
+                        "reason": "gated_after_reject",
+                    }
                 if outcome["result"] == "unmet":
                     gate = outcome["gate"]
                     logger.warning(
@@ -940,7 +961,7 @@ class GoalStateMachine:
         `update_checklist_item` 도 같은 행을 FOR UPDATE 로 잠그므로 판정과 쓰기 사이에
         항목이 되돌려질 수 없고, 잠금이 없는 환경이어도 version CAS 가 막는다.
         다음 단계 진입(`_advance_after_milestone`)은 새 conn 을 쓰므로 호출자가 커밋 뒤에 한다.
-        result: completed(이번 호출이 완료로 바꿈) | already_completed | unmet | gated | version_conflict | missing
+        result: completed(이번 호출이 완료로 바꿈) | already_completed | unmet | gated | gated_after_reject | version_conflict | missing
 
         gated: `auto_advance=false` 이거나 `completion_criteria` 가 비어 있지 않으면 연결 task 가 전부
         끝나도 자동 완료하지 않고 `review` 로 둔다(확인은 milestone_review.confirm 경로로만).
@@ -952,7 +973,9 @@ class GoalStateMachine:
             row = await conn.fetchrow(
                 """
                 SELECT m.status, m.version, m.auto_advance, m.completion_criteria,
-                       NULLIF(to_jsonb(m)->'completion_checklist', 'null'::jsonb) AS completion_checklist
+                       NULLIF(to_jsonb(m)->'completion_checklist', 'null'::jsonb) AS completion_checklist,
+                       (to_jsonb(m) ? 'review_rejected_at') AS has_reject_col,
+                       (to_jsonb(m)->>'review_rejected_at')::timestamptz AS review_rejected_at
                 FROM milestones m WHERE m.id = $1::uuid FOR UPDATE
                 """,
                 milestone_id,
@@ -971,8 +994,38 @@ class GoalStateMachine:
                 else "completion_criteria_gate" if criteria
                 else None
             )
+            status = row["status"]
+            has_reject_col = row.get("has_reject_col")
+            if has_reject_col is False:
+                _warn_reject_col_missing()
+            rejected_at = row.get("review_rejected_at") if has_reject_col else None
+            if status in ("pending", "in_progress", "blocked") and rejected_at is not None:
+                # 주도가 반려한 뒤에는 반려 이후 새로 연결된 작업이 있어야만 다시 올린다(자동 완료 포함).
+                # 연결 task 가 그대로 전부 끝나 있다는 사실만으로는 반려가 풀리지 않는다.
+                columns = await link_optional_columns(conn)
+                linked_at = (
+                    "COALESCE(milestone_linked_at, created_at)"
+                    if "milestone_linked_at" in columns else "created_at"
+                )
+                has_new_link = await conn.fetchval(
+                    f"""
+                    SELECT EXISTS (
+                        SELECT 1 FROM goal_task_links
+                        WHERE milestone_id = $1::uuid AND {linked_at} > $2
+                          {active_link_predicate(columns)}
+                          {superseded_link_predicate(columns)}
+                    )
+                    """,
+                    milestone_id, rejected_at,
+                )
+                if not has_new_link:
+                    logger.info(
+                        "milestone_review_gated_after_reject milestone=%s rejected_at=%s",
+                        milestone_id, rejected_at,
+                    )
+                    return {"result": "gated_after_reject", "reason": "review_rejected",
+                            "status": status}
             if gate_reason:
-                status = row["status"]
                 if status in ("pending", "in_progress", "blocked"):
                     evidence = {
                         "summary": "연결 task 전부 완료 — 완료기준 확인 대기 (자동 완료 게이트)",
@@ -981,12 +1034,13 @@ class GoalStateMachine:
                         "task_ids": list(linked_task_ids or []),
                     }
                     tag = await conn.execute(
-                        """
+                        f"""
                         UPDATE milestones SET status = 'review', reported_at = NOW(),
                                started_at = COALESCE(started_at, NOW()),
                                evidence = CASE WHEN jsonb_typeof(evidence) = 'object'
-                                               THEN evidence ELSE '{}'::jsonb END || $3::jsonb,
+                                               THEN evidence ELSE '{{}}'::jsonb END || $3::jsonb,
                                review_asked_at = NULL, review_ask_count = 0,
+                               {"review_rejected_at = NULL," if has_reject_col else ""}
                                updated_at = NOW(), version = version + 1
                         WHERE id = $1::uuid AND status IN ('pending', 'in_progress', 'blocked')
                           AND version = $2
