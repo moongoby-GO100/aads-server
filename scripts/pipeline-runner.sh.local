@@ -5308,7 +5308,7 @@ claim_queued_job() (
         exec 8>"${RUNNER_CAPACITY_LOCK_FILE:-/tmp/pipeline-runner-capacity.lock}"
         flock -x 8 || return 1
         local server_running
-        server_running=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE status IN ('running','claimed') $1;") || return 1
+        server_running=$(db_exec "SELECT count(*) FROM pipeline_jobs WHERE status IN ('running','claimed') $1 $(runner_pool_host_scope_sql);") || return 1
         server_running="${server_running//[[:space:]]/}"
         [[ "$server_running" =~ ^[0-9]+$ ]] || return 1
         (( server_running < MAX_CONCURRENT_SERVER )) || return 0
@@ -5333,14 +5333,14 @@ _claim_queued_job() {
     db_exec "UPDATE pipeline_jobs SET status='claimed', runner_host='${RUNNER_HOST_NAME}', updated_at=NOW()
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
-                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter ${RUNNER_MH_CLAIM_EXTRA:-}
+                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter ${RUNNER_MH_CLAIM_EXTRA:-} $(runner_pool_claim_extra_sql)
                   AND (p.depends_on IS NULL OR EXISTS (
                        SELECT 1 FROM pipeline_jobs dep
                        WHERE dep.job_id = p.depends_on AND dep.status = 'done'))
                   AND (SELECT COUNT(*) FROM pipeline_jobs r
                        WHERE r.project = p.project
                          AND r.status IN ('running', 'claimed')
-                         AND r.job_id != p.job_id) < ${MAX_CONCURRENT_PER_PROJECT:-6}
+                         AND r.job_id != p.job_id $(runner_pool_host_scope_sql r)) < ${MAX_CONCURRENT_PER_PROJECT:-6}
                   ${engine_predicate}
                 ORDER BY CASE WHEN p.instruction ~* '(^|[[:space:]])PRIORITY:[[:space:]]*P0' THEN 1 ELSE 0 END DESC,
                          CASE WHEN p.logs @> '[{\"event\": \"file_conflict_dependency_requeued\"}]'::jsonb THEN 1 ELSE 0 END DESC,
@@ -5417,6 +5417,114 @@ dispatch_claimed_job() {
     run_job "$job_id" "$project" "$decoded_instruction" "$session_id" "${max_cycles:-3}" "${job_model:-litellm:minimax-m2.7}" "${job_size:-M}" "${parallel_group:-}" &
     _bg_jobs[$!]="${job_id}|${session_id}"
     log "  BG_START: job=$job_id pid=$! (parallel)"
+}
+
+# ── 러너 풀: 배포 위임 · 서버 단위 상한 · 한가한 서버 우선 (2026-11-04) ─────────────
+# 기획: docs/design/20261104_AADS_러너 풀 이전과 AI 실행 중계 분산 실행 기획.md
+# 모두 환경변수로 켤 때만 동작한다. 설정이 없는 러너(116·contabo14·카페24)는 기존과 같다.
+#
+# RUNNER_DEPLOY_DELEGATE_HOST (예: server-116)
+#   이 러너는 코딩·테스트·커밋까지만 하고 배포는 그 호스트의 러너가 한다.
+#   - 승인·반려 작업을 가져가지 않는다(배포 호스트 러너가 가져간다).
+#   - DEPLOY_ONLY 릴리스 작업을 가져가지 않는다.
+#   - 승인 대기/승인 상태인 자기 작업의 커밋을 배포 호스트 저장소(refs/runner-handoff/<job>)로
+#     보내고, 같은 경로(/tmp/aads-wt-<job>)에 작업 폴더를 만들어 둔다. 배포 호스트의
+#     deploy_isolated_git_preflight 는 그 폴더가 등록돼 있어야 배포한다.
+# RUNNER_CAPACITY_SCOPE=host
+#   MAX_CONCURRENT_SERVER·MAX_CONCURRENT_PER_PROJECT 를 프로젝트 전체가 아니라 이 서버가
+#   돌리는 작업 수로 센다. 없으면 기존처럼 프로젝트 전체 기준이다.
+# RUNNER_CLAIM_MAX_PSI (예: 40)
+#   이 서버의 CPU PSI some avg60 이 기준을 넘으면 이번 주기에는 새 작업을 받지 않는다.
+#   진행 중 작업과 배포·반려 처리에는 영향이 없다.
+RUNNER_DEPLOY_DELEGATE_HOST="${RUNNER_DEPLOY_DELEGATE_HOST:-}"
+RUNNER_CAPACITY_SCOPE="${RUNNER_CAPACITY_SCOPE:-}"
+RUNNER_CLAIM_MAX_PSI="${RUNNER_CLAIM_MAX_PSI:-}"
+RUNNER_HANDOFF_STATE_DIR="${RUNNER_HANDOFF_STATE_DIR:-/var/lib/aads-runner/handoff}"
+RUNNER_POOL_BUSY_STATE=""
+
+runner_is_deploy_delegate() { [[ -n "$RUNNER_DEPLOY_DELEGATE_HOST" ]]; }
+
+# 동시 실행 계산을 이 서버로 좁히는 SQL 조각. $1 = 테이블 별칭(없으면 별칭 없이).
+runner_pool_host_scope_sql() {
+    [[ "$RUNNER_CAPACITY_SCOPE" == "host" ]] || return 0
+    local col="runner_host"
+    [[ -n "${1:-}" ]] && col="${1}.runner_host"
+    printf "AND %s = '%s'" "$col" "${RUNNER_HOST_NAME//\'/\'\'}"
+}
+
+# 작업 선택에 더할 조건. 배포 위임 러너는 DEPLOY_ONLY 릴리스 작업을 가져가지 않는다.
+runner_pool_claim_extra_sql() {
+    runner_is_deploy_delegate || return 0
+    printf 'AND NOT (%s)' "$DEPLOY_ONLY_HEADER_SQL"
+}
+
+runner_cpu_psi_avg60() {
+    awk '/^some/ {for (i = 1; i <= NF; i++) if ($i ~ /^avg60=/) {sub("avg60=", "", $i); print $i}}' \
+        "${RUNNER_PSI_FILE:-/proc/pressure/cpu}" 2>/dev/null
+}
+
+# 0 = 새 작업을 받아도 된다, 1 = 바쁘니 이번 주기는 양보한다. 상태가 바뀔 때만 로그를 남긴다.
+runner_claim_psi_ok() {
+    [[ "$RUNNER_CLAIM_MAX_PSI" =~ ^[0-9]+$ ]] || return 0
+    local v
+    v=$(runner_cpu_psi_avg60)
+    [[ "$v" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 0
+    if awk -v v="$v" -v m="$RUNNER_CLAIM_MAX_PSI" 'BEGIN { exit !(v > m) }'; then
+        if [[ "$RUNNER_POOL_BUSY_STATE" != "busy" ]]; then
+            log "  CLAIM_DEFERRED_BUSY psi_avg60=${v} > ${RUNNER_CLAIM_MAX_PSI} — 새 작업을 받지 않음(한가한 서버 우선)"
+            RUNNER_POOL_BUSY_STATE="busy"
+        fi
+        return 1
+    fi
+    if [[ "$RUNNER_POOL_BUSY_STATE" == "busy" ]]; then
+        log "  CLAIM_RESUMED psi_avg60=${v} <= ${RUNNER_CLAIM_MAX_PSI}"
+    fi
+    RUNNER_POOL_BUSY_STATE="ok"
+    return 0
+}
+
+# 한 작업의 커밋·작업 폴더를 배포 호스트로 넘긴다. 0 = 완료.
+runner_deploy_handoff_one() {
+    local job_id="$1" sha="$2" host="$RUNNER_DEPLOY_DELEGATE_HOST"
+    local wt="/tmp/aads-wt-${job_id}" head="" common="" main="" remote_head=""
+    [[ "$job_id" =~ ^[A-Za-z0-9_-]+$ && "$sha" =~ ^[0-9a-f]{40}$ && -n "$host" ]] || return 1
+    [[ -d "$wt" ]] || { log "  DEPLOY_HANDOFF_SKIP job=$job_id — 작업 폴더 없음 $wt"; return 1; }
+    head=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || return 1
+    [[ "$head" == "$sha" ]] || { log "  DEPLOY_HANDOFF_SKIP job=$job_id — HEAD(${head:0:12}) != commit_hash(${sha:0:12})"; return 1; }
+    common=$(git -C "$wt" rev-parse --git-common-dir 2>/dev/null) || return 1
+    [[ "$common" == /* ]] || common="$wt/$common"
+    main=$(dirname "$(realpath -m "$common")")
+    [[ "$main" =~ ^/[A-Za-z0-9._/-]+$ ]] || return 1
+    timeout "${RUNNER_HANDOFF_PUSH_TIMEOUT:-300}" git -C "$wt" push -q "${host}:${main}" \
+        "${sha}:refs/runner-handoff/${job_id}" 2>/dev/null || { log "  DEPLOY_HANDOFF_PUSH_FAILED job=$job_id host=$host"; return 1; }
+    remote_head=$(timeout "${RUNNER_HANDOFF_SSH_TIMEOUT:-120}" ssh -o BatchMode=yes "$host" \
+        "set -e; if [ ! -d '$wt' ]; then git -C '$main' worktree add -q --detach '$wt' '$sha'; fi; git -C '$wt' rev-parse HEAD" 2>/dev/null) \
+        || { log "  DEPLOY_HANDOFF_WORKTREE_FAILED job=$job_id host=$host"; return 1; }
+    [[ "$remote_head" == "$sha" ]] || { log "  DEPLOY_HANDOFF_WORKTREE_MISMATCH job=$job_id remote=${remote_head:0:12}"; return 1; }
+    return 0
+}
+
+# 매 주기 호출. 이 서버가 만든 승인 대기·승인 작업 중 아직 넘기지 않은 것을 넘긴다.
+runner_deploy_handoff_sweep() {
+    runner_is_deploy_delegate || return 0
+    mkdir -p "$RUNNER_HANDOFF_STATE_DIR" 2>/dev/null || return 0
+    local rows job_id sha session_id mark
+    rows=$(db_exec "SELECT job_id, COALESCE(commit_hash,''), COALESCE(chat_session_id::text,'') FROM pipeline_jobs
+                    WHERE runner_host=$(sql_escape "$RUNNER_HOST_NAME")
+                      AND status IN ('awaiting_approval','approved')
+                      AND updated_at > NOW() - INTERVAL '7 days';" 2>/dev/null) || return 0
+    while IFS=$'\x1e' read -r job_id sha session_id; do
+        [[ -n "$job_id" && -n "$sha" ]] || continue
+        mark="$RUNNER_HANDOFF_STATE_DIR/${job_id}.${sha:0:12}"
+        [[ -f "${mark}.done" ]] && continue
+        if runner_deploy_handoff_one "$job_id" "$sha"; then
+            touch "${mark}.done"
+            log "  DEPLOY_HANDOFF_OK job=$job_id sha=${sha:0:12} host=$RUNNER_DEPLOY_DELEGATE_HOST"
+        elif [[ ! -f "${mark}.failed" ]]; then
+            touch "${mark}.failed"
+            [[ -n "$session_id" ]] && post_to_chat "$session_id" "⚠️ [Pipeline Runner] 배포 서버 인계 실패: $job_id — 승인해도 배포 단계에서 막힐 수 있습니다. 러너 로그 DEPLOY_HANDOFF_* 를 확인하세요."
+        fi
+    done <<< "$rows"
 }
 
 claim_approved_job() {
@@ -9441,7 +9549,11 @@ main() {
             runner_market_hours_claim_extra "$project_filter" || true
         fi
         local pending
-        pending=$(claim_queued_job "$project_filter" 2>/dev/null) || true
+        if runner_claim_psi_ok; then
+            pending=$(claim_queued_job "$project_filter" 2>/dev/null) || true
+        else
+            pending=""
+        fi
 
         if [[ -n "$pending" ]]; then
             dispatch_claimed_job "$pending"
@@ -9449,7 +9561,12 @@ main() {
 
         # 2) approved 작업 원자적 클레임 (C4)
         local approved
-        approved=$(claim_approved_job "$project_filter" 2>/dev/null) || true
+        if runner_is_deploy_delegate; then
+            runner_deploy_handoff_sweep || true
+            approved=""
+        else
+            approved=$(claim_approved_job "$project_filter" 2>/dev/null) || true
+        fi
 
         if [[ -n "$approved" ]]; then
             # FIX: ASCII RS(0x1e) 구분자 사용
@@ -9464,7 +9581,11 @@ main() {
 
         # 3) rejected 작업 코드 원복
         local rejected
-        rejected=$(claim_rejected_job "$project_filter" 2>/dev/null) || true
+        if runner_is_deploy_delegate; then
+            rejected=""
+        else
+            rejected=$(claim_rejected_job "$project_filter" 2>/dev/null) || true
+        fi
 
         if [[ -n "$rejected" ]]; then
             IFS=$'\x1e' read -r job_id project session_id <<< "$rejected"
