@@ -1,5 +1,6 @@
 """Cross-company selection, enforcement, and legacy settings contracts."""
 import asyncio
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -55,6 +56,22 @@ def test_gate_409_and_auto_schedule(monkeypatch):
         asyncio.run(cross.enforce(conn, 'tenant', 'AADS', {'id': 'head'}, 'rev'))
     assert exc.value.status_code == 409 and exc.value.detail['code'] == 'cross_review_required'
     schedule.assert_called_once()
+
+
+def test_gate_409_detail_is_json_serializable(monkeypatch):
+    from datetime import datetime
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {'id': 'rev', 'doc_tier': 'D2', 'author_model': CLAUDE}
+    conn.fetch.return_value = [{'reviewer_model': CODEX, 'reviewer_provider': 'openai', 'verdict': 'reject',
+                                'cross_company': True, 'created_at': datetime(2026, 11, 4, 15, 1, 0)}]
+    schedule = __import__('unittest.mock', fromlist=['Mock']).Mock()
+    monkeypatch.setattr(cross, 'schedule', schedule)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(cross.enforce(conn, 'tenant', 'AADS', {'id': 'head'}, 'rev'))
+    assert exc.value.status_code == 409 and exc.value.detail['code'] == 'cross_review_required'
+    assert exc.value.detail['review_state'] == 'rejected'
+    assert json.dumps(exc.value.detail) is not None
+    assert exc.value.detail['review_models'][0]['at'] == '2026-11-04T15:01:00'
 
 
 def test_gate_rollback_switch_and_d1_approve(monkeypatch):

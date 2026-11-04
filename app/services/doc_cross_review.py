@@ -51,8 +51,14 @@ def tier_of(revision, head):
 
 
 def summarize(tier, author_model, rows):
+    def serialize_at(created_at):
+        if created_at is None:
+            return None
+        if hasattr(created_at, 'isoformat'):
+            return created_at.isoformat()
+        return created_at
     models = [{'model': r['reviewer_model'], 'provider': r['reviewer_provider'],
-               'verdict': r['verdict'], 'cross_company': r['cross_company'], 'at': r['created_at']} for r in rows]
+               'verdict': r['verdict'], 'cross_company': r['cross_company'], 'at': serialize_at(r['created_at'])} for r in rows]
     # Only substantive outcomes replace a previous pass/reject.
     latest = {}
     for r in rows:
