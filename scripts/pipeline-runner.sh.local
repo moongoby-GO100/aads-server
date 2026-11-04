@@ -5225,6 +5225,29 @@ _watchdog_check() {
     fi
 }
 
+# AI 리뷰 응답(JSON, stdin)에서 반려 사유 한 줄을 꺼낸다.
+# issues 는 배열 / JSON 인코딩 문자열 / 평문 / null 로 온다. 해석 가능하면 fromjson 으로 풀고
+# (사유 안의 따옴표는 그대로 둔다), 비어 있으면 feedback(객체 또는 JSON 문자열).summary 로 대체한다.
+# 해석 불가한 입력은 빈 문자열 — 호출부가 실패를 삼키지 않도록 항상 exit 0.
+parse_review_issues() {
+    jq -r '
+        def unwrap: if type == "string" then (. as $s | try fromjson catch $s) else . end;
+        def joined: map(select(. != null and . != "") | if type == "string" then . else tojson end) | join("; ");
+        (.issues | unwrap) as $iss
+        | (.feedback | unwrap) as $fb
+        | (if ($iss | type) == "array" then ($iss | joined)
+           elif ($iss | type) == "string" then $iss
+           elif $iss == null then ""
+           else ($iss | tojson) end) as $text
+        | if $text != "" then $text
+          else (if ($fb | type) == "object" then ($fb.summary // "")
+                elif ($fb | type) == "string" then $fb
+                else "" end
+                | if type == "string" then . else tojson end)
+          end
+    ' 2>/dev/null || true
+}
+
 # C1: 채팅방 메시지 — session_id는 UUID 포맷 검증
 post_to_chat() {
     local session_id="$1" content="$2"
@@ -6713,6 +6736,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     local review_score="1.0"
     local review_flag_category=""
     local review_needs_retry="false"
+    local review_issues=""
     if [[ -n "$git_diff" && ${#git_diff} -gt 10 ]]; then
         if looks_like_git_diff "$git_diff"; then
             log "  AI_REVIEW job=$job_id"
@@ -6820,8 +6844,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
                 log "  AI_REVIEW_RESULT job=$job_id request_id=${review_request_id} verdict=$review_verdict score=$review_score flag_category=${review_flag_category:-none} needs_retry=$review_needs_retry"
 
                 if [[ "$review_verdict" == "REQUEST_CHANGES" ]]; then
-                    local review_issues=""
-                    review_issues=$(echo "$review_response" | jq -r '.issues | join("; ")' 2>/dev/null || echo "")
+                    review_issues=$(printf '%s' "$review_response" | parse_review_issues)
                     log "  AI_REVIEW_REQUEST_CHANGES job=$job_id issues=$review_issues"
                     post_to_chat "$session_id" "🔍 [AI Reviewer] 코드 수정 요청 (score=${review_score}): ${review_issues:0:500}"
                 elif [[ "$review_verdict" == "FLAG" && -n "$review_flag_category" ]]; then
@@ -6881,11 +6904,15 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             review_hold_note="FLAG+hold — 리뷰 인프라 장애로 승인 보류"
         fi
         log "  AI_REVIEW_HOLD job=$job_id status=${review_hold_status} phase=${review_hold_phase} ${review_error_detail}"
+        local _ai_reviewer_note="${review_hold_note} — ${review_error_detail}"
+        if [[ -n "$review_issues" ]]; then
+            _ai_reviewer_note="${_ai_reviewer_note}"$'\n'"[AI Reviewer] issues: ${review_issues:0:1500}"
+        fi
         db_update "UPDATE pipeline_jobs SET status='${review_hold_status}', phase='${review_hold_phase}',
                    error_detail=$(sql_escape "$review_error_detail"),
                    result_output=$(sql_escape "$output"),
                    git_diff=$(sql_escape "$git_diff"),
-                   review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] ${review_hold_note} — ${review_error_detail}',
+                   review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] ' || $(sql_escape "$_ai_reviewer_note"),
                    completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
         # 위 UPDATE 는 result_output·git_diff 를 통째로 싣는다. 그게 어떤 이유로든
         # 실패하면 행은 여전히 status='running' 이고, 60초 안에 watchdog 이
@@ -6899,7 +6926,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             log "  REVIEW_HOLD_WRITE_MISSED job=$job_id status='${_hold_now}' expected='${review_hold_status}' — payload 없이 재시도"
             db_update "UPDATE pipeline_jobs SET status='${review_hold_status}', phase='${review_hold_phase}',
                        error_detail=$(sql_escape "$review_error_detail"),
-                       review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] ${review_hold_note} — ${review_error_detail}',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] ' || $(sql_escape "$_ai_reviewer_note"),
                        completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
         fi
         record_runner_event "$job_id" "job_terminal" "$review_hold_status" "$review_hold_phase" "$job_model" "" "$job_size" "" "{\"error_detail\":\"${review_hold_phase}\",\"verdict\":\"${review_verdict}\",\"flag_category\":\"${review_flag_category}\",\"policy\":\"FLAG+hold\"}"
