@@ -4249,7 +4249,7 @@ def test_save_employment_contract_adds_a4_standard_template_meta(tmp_path, monke
     )
 
     assert saved["document_kind"] == "standard_employment_contract"
-    assert saved["template_version"] == "majangbiseo-employment-2026-07-identity-table-v3"
+    assert saved["template_version"] == "majangbiseo-employment-2026-07-identity-table-v4"
     assert saved["print_title"] == "표준근로계약서"
 
 
@@ -4275,7 +4275,7 @@ def test_save_freelancer_contract_adds_a4_service_template_meta(tmp_path, monkey
     )
 
     assert saved["document_kind"] == "freelancer_service_contract"
-    assert saved["template_version"] == "majangbiseo-freelancer-2026-07-identity-table-v3"
+    assert saved["template_version"] == "majangbiseo-freelancer-2026-07-identity-table-v4"
     assert saved["print_title"] == "3.3% 프리랜서 용역계약서"
 
 
