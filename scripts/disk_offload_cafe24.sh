@@ -78,6 +78,15 @@ RSYNC_SSH="ssh $SSH_OPTS"
 RSYNC_RETRIES="${AADS_OFFLOAD_RSYNC_RETRIES:-30}"
 RSYNC_RETRY_SLEEP="${AADS_OFFLOAD_RSYNC_RETRY_SLEEP:-15}"
 RSYNC_ATTEMPT_TIMEOUT="${AADS_OFFLOAD_RSYNC_ATTEMPT_TIMEOUT:-1800}"
+# 카페24 회선 트래픽 분산(2026-11-04 CEO 지시: "트래픽 용량 고려해서 5분 분산").
+# 카페24 수신량 실측: 11:00 KST(=이 작업 03:00 CET) 한 시간에 11.2GiB 가 몰렸다.
+# 전송 단계(워크트리 → 보존 덤프 재검증 → 새 덤프) 사이에 5분 간격을 두고,
+# rsync 전송에는 속도 상한을 둔다. 0 이면 각각 끈다.
+# 덤프 스트리밍(pg_dump | ssh)은 pv 가 없어 상한을 걸지 않는다 — pg_dump 속도(약 4~5MB/s)에 묶인다.
+PHASE_GAP_SEC="${AADS_OFFLOAD_PHASE_GAP_SEC:-300}"
+BWLIMIT_KBPS="${AADS_OFFLOAD_BWLIMIT_KBPS:-10240}"
+RSYNC_BW=()
+[[ "$BWLIMIT_KBPS" =~ ^[1-9][0-9]*$ ]] && RSYNC_BW=(--bwlimit="$BWLIMIT_KBPS")
 # 방금 만든 worktree가 pipeline_jobs 에 등록되기 전에 삭제되지 않도록 최소 경과
 # 시간을 둔다. auto_trigger.sh 는 worktree 생성 직후 바로 작업을 시작하므로
 # 2시간이면 등록/첫 커밋 어느 쪽으로든 상태가 갈린다(R1 리뷰 지적 1).
@@ -193,11 +202,23 @@ eligible() {
     return 0
 }
 
+# 전송 단계 사이 간격. DRY-RUN 에서는 기록만 한다.
+phase_gap() {
+    local next="$1"
+    [[ "$PHASE_GAP_SEC" =~ ^[0-9]+$ ]] && (( PHASE_GAP_SEC > 0 )) || return 0
+    if (( DRY_RUN )); then
+        log "DRY-RUN phase gap ${PHASE_GAP_SEC}s before $next"
+        return 0
+    fi
+    log "PHASE gap ${PHASE_GAP_SEC}s before $next (cafe24 traffic spread)"
+    sleep "$PHASE_GAP_SEC"
+}
+
 # 끊겨도 --partial --inplace 로 이어 받는다. 마지막 시도까지 실패하면 1 을 반환한다.
 rsync_resume() {
     local src="$1" dst="$2" attempt rc=1
     for (( attempt = 1; attempt <= RSYNC_RETRIES; attempt++ )); do
-        timeout "$RSYNC_ATTEMPT_TIMEOUT" rsync -a --partial --append \
+        timeout "$RSYNC_ATTEMPT_TIMEOUT" rsync -a --partial --append "${RSYNC_BW[@]}" \
             -e "$RSYNC_SSH" "$src" "$dst"
         rc=$?
         (( rc == 0 )) && return 0
@@ -386,7 +407,7 @@ if [[ -d "$WORKTREES" ]]; then
             log "DRY-RUN worktree offload candidate $wt -> $dst; source preserved"
             continue
         fi
-        if ! remote_mkdir "$dst" || ! timeout 1800 rsync -a --checksum \
+        if ! remote_mkdir "$dst" || ! timeout 1800 rsync -a --checksum "${RSYNC_BW[@]}" \
             -e "$RSYNC_SSH" "$wt/" "$REMOTE:$dst/"; then
             fail "worktree rsync failed $wt"
             continue
@@ -410,6 +431,8 @@ if [[ -d "$WORKTREES" ]]; then
     done
 fi
 
+phase_gap "retained dump backfill"
+
 dump="$DUMPS/aads_$DAY.dump"
 dump_dst="$(dump_remote_path "$dump")"
 if (( DRY_RUN )); then
@@ -422,6 +445,7 @@ else
     mkdir -p "$DUMPS" || { fail "cannot create $DUMPS"; exit 1; }
     chmod 700 "$DUMPS" || fail "cannot chmod $DUMPS"
     backfill_retained_dumps
+    phase_gap "new pg_dump"
     free_kb="$(df -Pk "$DUMPS" | awk 'NR==2 {print $4}')"
     latest_dump_bytes="$(find "$DUMPS" -maxdepth 1 -type f -name 'aads_????????.dump' \
         -printf '%s\n' | sort -nr | head -n 1)"
