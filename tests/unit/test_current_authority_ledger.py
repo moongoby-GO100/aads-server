@@ -6,7 +6,7 @@
 
 검사 범위
   1. 원장 스냅샷이 코드 레지스트리(`list_ledger_servers`)에서 나오고
-     원장 4대 / 감시 3대를 **별개 값**으로 센다.
+     원장 4대 / 감시 4대를 **별개 값**으로 센다.
   2. 구역 텍스트에 출처·구성 조회시각·스냅샷 hash 가 있고, 파일 변경일을
      건강 실측시각과 구분해 적는다.
   3. 두 진입점이 같은 함수를 호출하고, 60초 TTL 캐시 밖에서 매 턴 새로 만든다.
@@ -26,7 +26,7 @@ import pytest
 
 from app.services import context_builder as cb
 from app.services import prompt_compiler as pc
-from app.services.server_registry import CANONICAL_SERVER_IDS, LEDGER_SERVER_IDS
+from app.services.server_registry import HEALTH_MONITORED_SERVER_IDS, LEDGER_SERVER_IDS
 
 
 # ─── 1. 스냅샷 ───────────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ def test_snapshot_counts_ledger_and_health_separately():
     snap = cb.build_server_ledger_snapshot()
 
     assert snap["ledger_count"] == len(LEDGER_SERVER_IDS) == 6
-    assert snap["health_monitored_count"] == len(CANONICAL_SERVER_IDS) == 3
+    assert snap["health_monitored_count"] == len(HEALTH_MONITORED_SERVER_IDS) == 4
     # 두 수치가 같아지면 "감시 안 하는 서버" 가 사라졌다는 뜻이다.
     assert snap["ledger_count"] != snap["health_monitored_count"]
 
@@ -43,7 +43,7 @@ def test_snapshot_counts_ledger_and_health_separately():
     assert ids == list(LEDGER_SERVER_IDS)
     for server in snap["servers"]:
         assert server["host"], f"{server['server_id']} 주소 누락"
-        assert server["health_monitored"] is (server["server_id"] in CANONICAL_SERVER_IDS)
+        assert server["health_monitored"] is (server["server_id"] in HEALTH_MONITORED_SERVER_IDS)
 
 
 def test_snapshot_source_is_code_registry_not_db():
@@ -80,7 +80,7 @@ def test_section_reports_source_read_time_and_hash():
     assert "구성 조회시각" in section
     assert snap["snapshot_hash"] in section
     assert "원장 서버 6대" in section
-    assert "건강 감시 대상 3대" in section
+    assert "건강 감시 대상 4대" in section
 
 
 def test_section_separates_file_mtime_from_health_observation():
@@ -174,7 +174,7 @@ def test_layer2_no_longer_copies_server_config():
 
 
 def test_ledger_section_needs_no_database():
-    """DB 없는 진입점에서도 원장 4대·감시 3대가 나온다."""
+    """DB 없는 진입점에서도 원장 4대·감시 4대가 나온다."""
     section = cb.build_server_ledger_block().section
     assert "원장 서버 6대" in section
     assert "조회 실패" not in section
@@ -225,7 +225,7 @@ def test_ledger_provenance_reaches_prompt_compiler():
     assert prov["available"] is True
     assert prov["source"] == cb._LEDGER_SOURCE
     assert prov["ledger_count"] == 6
-    assert prov["health_monitored_count"] == 3
+    assert prov["health_monitored_count"] == 4
     assert prov["snapshot_hash"]
     assert prov["registry_read_at"] == prov["observed_at"]
     assert prov["registry_file_mtime"]
@@ -305,7 +305,7 @@ def test_evidence_is_attached_even_when_the_table_is_missing():
     assert ledger, "조기-return 경로에서 원장 증거가 사라졌다"
     assert ledger["available"] is True
     assert ledger["ledger_count"] == 6
-    assert ledger["health_monitored_count"] == 3
+    assert ledger["health_monitored_count"] == 4
 
 
 def test_table_check_happens_after_evidence_is_filled():

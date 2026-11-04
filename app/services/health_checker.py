@@ -5,12 +5,14 @@ Part 1~5 핵심 로직 모듈화
 import os
 import json
 import asyncio
+import re
+import shlex
 import subprocess
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 import structlog
 import asyncpg
-from app.services.server_registry import get_server_config, get_server_host
+from app.services.server_registry import get_server_config, get_server_host, is_health_monitored
 
 logger = structlog.get_logger()
 
@@ -457,8 +459,127 @@ async def _check_cpu() -> Dict[str, Any]:
     return result
 
 
+# ─── contabo92 (GO100 보관 DB) 건강감시 ──────────────────────────────────────
+# 기존 수집 경로(_run_local_cmd + SSH)를 그대로 쓴다. 직접 root@92 키는 거부되므로
+# 승인된 경로인 contabo14 의 ssh alias(mesh-92) 를 한 번 거친다.
+# R-REMOTE-TIMEOUT: 중첩 SSH 뒤 원격 명령은 로컬 subprocess timeout 으로 끝나지 않으므로
+# 원격 쪽 모든 명령(df/systemctl/psql/ssh)에 `timeout N` 을 직접 건다.
+# 시간 예산(부등식은 test_probe92_time_budget_inequality 가 고정한다):
+#   단계 timeout × 단계 수 + ssh 접속(ConnectTimeout) < 내부 ssh < hop 원격 < 로컬 subprocess
+_PROBE92_STEP_TIMEOUT = 3          # df/systemctl/psql/free 각 단계 상한
+_PROBE92_STEPS = 4
+_PROBE92_CONNECT_TIMEOUT = 5       # ssh ConnectTimeout (두 hop 공통)
+_PROBE92_INNER_TIMEOUT = 22        # contabo14 → mesh-92 ssh 전체
+_PROBE92_HOP_REMOTE_TIMEOUT = 26   # contabo14 에서 도는 timeout
+_PROBE92_HOP_TIMEOUT = 34          # 서버68 로컬 subprocess timeout
+
+
+def _build_probe92_script(db_name: str) -> str:
+    """92 에서 실행할 읽기 전용 점검 스크립트. 값은 `KEY=값` 줄로 출력한다."""
+    t = _PROBE92_STEP_TIMEOUT
+    db = shlex.quote(db_name)
+    return (
+        "echo SSH=ok; "
+        f"echo DISK=$(timeout {t} df -P / | awk 'NR==2{{print $5\" \"$4\" \"$2}}'); "
+        f"echo PG_SERVICE=$(timeout {t} systemctl is-active postgresql 2>&1 | head -1); "
+        f"echo DB=$(PGOPTIONS='-c default_transaction_read_only=on' timeout {t} "
+        f"runuser -u postgres -- psql -X -At -d {db} -c 'SELECT 1' 2>&1 | head -1); "
+        "echo LOAD=$(cat /proc/loadavg | cut -d' ' -f1-3); "
+        "echo NPROC=$(nproc); "
+        f"echo MEM=$(timeout {t} free -m | awk '/^Mem:/{{print $2\" \"$7}}'); "
+        "echo END=ok"
+    )
+
+
+def _parse_probe92_output(output: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """점검 출력 → 항목별 결과. 파싱 못 한 항목은 ok=False 로 남겨 경보가 누락되지 않게 한다."""
+    kv: Dict[str, str] = {}
+    for line in (output or "").splitlines():
+        m = re.match(r"^([A-Z_]+)=(.*)$", line.strip())
+        if m:
+            kv[m.group(1)] = m.group(2).strip()
+    warn = int(cfg.get("disk_warn_pct", 80))
+    crit = int(cfg.get("disk_crit_pct", 90))
+
+    ssh = {"ok": kv.get("SSH") == "ok", "method": "ssh_via_contabo14"}
+    if not ssh["ok"]:
+        ssh.update(error=(output or "timeout or unreachable")[:200], severity="warning")
+
+    # 프로브가 끝까지 돌지 못했거나(SSH 실패·END 없음) 값을 못 받은 항목은 "모름"이다.
+    # 모름은 장애 확정이 아니므로 critical 로 올리지 않고 warning 으로 둔다.
+    complete = ssh["ok"] and kv.get("END") == "ok"
+    disk: Dict[str, Any] = {"ok": False, "error": "no disk output", "severity": "warning"}
+    parts = kv.get("DISK", "").split()
+    if len(parts) == 3 and parts[0].endswith("%") and parts[0][:-1].isdigit():
+        pct = int(parts[0][:-1])
+        # 경고(80%~)도 ok=False 로 둬야 check_infra 가 issues 에 넣어 DEGRADED 로 반영한다.
+        disk = {"ok": pct < warn, "usage_pct": pct,
+                "avail_kb": int(parts[1]) if parts[1].isdigit() else None,
+                "total_kb": int(parts[2]) if parts[2].isdigit() else None,
+                "warn_pct": warn, "crit_pct": crit}
+        if pct >= crit:
+            disk["severity"] = "critical"
+        elif pct >= warn:
+            disk["severity"] = "warning"
+
+    svc, dbv = kv.get("PG_SERVICE", ""), kv.get("DB", "")
+    pg_active = svc == "active"
+    db_ok = dbv == "1"
+    pg: Dict[str, Any] = {"ok": pg_active and db_ok, "service": svc,
+                          "db_select1": db_ok, "db_name": cfg.get("db_name")}
+    if not pg["ok"]:
+        # 실제로 받은 비정상 값(inactive/failed, psql 오류 문구)만 critical. 빈 값은 단계 timeout·잘림.
+        got_bad = (bool(svc) and not pg_active) or (bool(dbv) and not db_ok)
+        pg["severity"] = "critical" if (ssh["ok"] and got_bad) else "warning"
+        pg["error"] = f"service={svc or '?'} db={dbv[:120] or '?'}"
+
+    load: Dict[str, Any] = {"ok": False, "error": "no load output", "severity": "warning"}
+    lp = kv.get("LOAD", "").split()
+    try:
+        l1, nproc = float(lp[0]), int(kv.get("NPROC", "0"))
+        load = {"ok": True, "load_1m": l1, "load_5m": float(lp[1]), "load_15m": float(lp[2]),
+                "cores": nproc}
+        mp = kv.get("MEM", "").split()
+        if len(mp) == 2 and mp[0].isdigit() and mp[1].isdigit() and int(mp[0]) > 0:
+            load["memory_total_mb"] = int(mp[0])
+            load["memory_available_mb"] = int(mp[1])
+            load["memory_pct"] = round((1 - int(mp[1]) / int(mp[0])) * 100, 1)
+        if nproc and l1 > nproc * 2:
+            load.update(ok=False, severity="warning", error=f"load {l1} > 2x cores({nproc})")
+        elif load.get("memory_pct", 0) > 90:
+            load.update(ok=False, severity="warning", error=f"memory {load['memory_pct']}%")
+    except (IndexError, ValueError):
+        pass
+    return {"ssh": ssh, "disk": disk, "postgres": pg, "load": load, "complete": complete}
+
+
+async def _check_contabo92() -> Dict[str, Any]:
+    """contabo92 SSH·디스크·PostgreSQL·부하를 한 번의 접속으로 실측한다."""
+    cfg = dict(get_server_config("contabo92").get("health_probe") or {})
+    if not cfg:
+        return {"ssh": {"ok": False, "error": "no health_probe config", "severity": "warning"}}
+    via_host = get_server_host(cfg.get("via_server", "contabo14"))
+    inner = (
+        f"timeout {_PROBE92_INNER_TIMEOUT} ssh -o BatchMode=yes "
+        f"-o ConnectTimeout={_PROBE92_CONNECT_TIMEOUT} -o StrictHostKeyChecking=yes "
+        f"{shlex.quote(cfg['via_alias'])} "
+        f"{shlex.quote(_build_probe92_script(cfg['db_name']))}"
+    )
+    hop = (
+        # 호스트 키는 known_hosts 에 이미 등록된 것만 신뢰한다(미등록이면 접속 거부 → ssh 실패로 보고).
+        # 자동 수락(no/accept-new)은 최초 접속 MITM 이 점검 출력을 위조할 수 있어 쓰지 않는다.
+        f"ssh -o BatchMode=yes -o ConnectTimeout={_PROBE92_CONNECT_TIMEOUT} -o StrictHostKeyChecking=yes "
+        f"root@{via_host} {shlex.quote('timeout ' + str(_PROBE92_HOP_REMOTE_TIMEOUT) + ' ' + inner)}"
+    )
+    out = await _run_local_cmd(hop, timeout=_PROBE92_HOP_TIMEOUT)
+    result = _parse_probe92_output(out, cfg)
+    result["checked_at"] = datetime.now(KST).isoformat()
+    return result
+
+
 async def check_infra() -> Dict[str, Any]:
     """인프라 전체 점검 (병렬)."""
+    probe92 = is_health_monitored("contabo92")
     results = await asyncio.gather(
         _check_db(),
         _check_github_pat(),
@@ -469,6 +590,8 @@ async def check_infra() -> Dict[str, Any]:
         _check_disk("114"),
         _check_memory(),
         _check_cpu(),
+        # contabo92 프로브는 최대 ~34초라 순차로 두면 health-check 응답이 그만큼 늘어난다.
+        *([_check_contabo92()] if probe92 else []),
         return_exceptions=True,
     )
 
@@ -476,6 +599,17 @@ async def check_infra() -> Dict[str, Any]:
             "disk_68", "disk_211", "disk_114", "memory_68", "cpu_68"]
     infra = {}
     issues = []
+    # contabo92: 건강감시 대상으로 편입된 경우에만 같은 수집·이슈 경로에 합류시킨다.
+    if probe92:
+        p92 = results[-1]
+        results = list(results[:-1])
+        if isinstance(p92, BaseException):  # 프로브 오류가 기존 3대 점검을 막지 않게 한다
+            p92 = {"ssh": {"ok": False, "error": str(p92)[:200], "severity": "warning"}}
+        for name in ("ssh", "disk", "postgres", "load"):
+            if name in p92:
+                keys.append(f"{name}_92")
+                results.append(p92[name])
+        infra["contabo92_checked_at"] = p92.get("checked_at")
     for i, key in enumerate(keys):
         if isinstance(results[i], Exception):
             infra[key] = {"ok": False, "error": str(results[i])}

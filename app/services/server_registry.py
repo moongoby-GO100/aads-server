@@ -111,6 +111,15 @@ _CONTABO92: Dict[str, Any] = {
     "display_name": "contabo92 (GO100 보관 DB·백업, 증설)",
     "legacy_ids": [],
     "status": STATUS_ACTIVE,
+    # 2026-11-05 건강감시 편입. 직접 root@ 키는 거부되므로 승인된 경로인
+    # contabo14 의 ssh alias(mesh-92) 로만 들어간다. 키·비밀번호는 여기에 두지 않는다(R-KEY).
+    "health_probe": {
+        "via_server": "contabo14",
+        "via_alias": "mesh-92",
+        "db_name": "go100_history",
+        "disk_warn_pct": 80,
+        "disk_crit_pct": 90,
+    },
 }
 
 # 2026-11-04 대표님 증설: 116 의 채팅과 러너 경합을 풀기 위한 범용 러너 풀 주력 서버.
@@ -144,6 +153,9 @@ _CONTABO42: Dict[str, Any] = {
 #   contabo92·contabo42(2026-11-04)도 같은 이유로 제외했다. PostgreSQL 설치 후 health URL/포트
 #   검사를 채우고 감시 대상 편입은 별도로 결정한다.
 CANONICAL_SERVER_IDS: List[str] = ["contabo116", "contabo14", "cafe24_114"]
+# 건강감시·디스크 경보 대상(2026-11-05). CANONICAL 은 건드리지 않는다 — 그쪽은 기존 3대 순회
+# (워치독·헬스 집계)가 쓰므로, contabo92 는 health_probe 설정이 있는 서버로만 별도 편입한다.
+HEALTH_MONITORED_SERVER_IDS: List[str] = [*CANONICAL_SERVER_IDS, "contabo92"]
 LEDGER_SERVER_IDS: List[str] = [*CANONICAL_SERVER_IDS, "jinah244", "contabo92", "contabo42"]
 
 # 구 ID → 신 ID 별칭
@@ -263,3 +275,13 @@ def list_servers() -> List[Dict[str, Any]]:
 def list_ledger_servers() -> List[Dict[str, Any]]:
     """별칭 중복 없이 원장과 화면에 노출할 서버 목록 반환."""
     return [SERVER_REGISTRY[sid] for sid in LEDGER_SERVER_IDS]
+
+
+def is_health_monitored(server_id: str) -> bool:
+    """건강감시 대상인가 (표시용 판정과 실제 감시 경로가 같은 목록을 본다)."""
+    return resolve_server_id(server_id) in HEALTH_MONITORED_SERVER_IDS
+
+
+def list_health_monitored_servers() -> List[Dict[str, Any]]:
+    """건강감시 대상 서버 목록(별칭 중복 없음)."""
+    return [SERVER_REGISTRY[sid] for sid in HEALTH_MONITORED_SERVER_IDS]

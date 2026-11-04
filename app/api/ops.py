@@ -3688,7 +3688,7 @@ def _ops_status_payload(
 
 def _server_meta_list() -> List[Dict[str, Any]]:
     """원장 서버를 별칭 중복 없이 표시한다. 헬스 감시는 별도 목록을 따른다."""
-    from app.services.server_registry import CANONICAL_SERVER_IDS, LEDGER_SERVER_IDS
+    from app.services.server_registry import LEDGER_SERVER_IDS, is_health_monitored
 
     metas: List[Dict[str, Any]] = []
     for sid in LEDGER_SERVER_IDS:
@@ -3699,7 +3699,7 @@ def _server_meta_list() -> List[Dict[str, Any]]:
             "display_name": cfg.get("display_name") or sid,
             "type": cfg.get("type", "ssh"),
             "legacy_ids": cfg.get("legacy_ids") or [],
-            "health_monitored": sid in CANONICAL_SERVER_IDS,
+            "health_monitored": is_health_monitored(sid),
             "projects": cfg.get("projects") or [],
         })
     return metas

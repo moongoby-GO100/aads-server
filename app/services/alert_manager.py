@@ -123,6 +123,41 @@ class AlertManager:
                 server="contabo116",
             ))
 
+        # contabo92 (GO100 보관 DB): 디스크(경고 80% / 위험 90%), SSH, PostgreSQL
+        # 경고와 위험은 category 를 분리한다 — 같은 category 면 1시간 중복 방지가
+        # 85% 경고 직후의 91% 위험 알림을 삼킨다.
+        d92 = metrics.get("contabo92_disk_usage_percent")
+        if d92 is not None and d92 >= 90:
+            alerts.append(Alert(
+                severity="CRITICAL", category="disk_full",
+                title="contabo92 디스크 사용량 위험",
+                message=f"contabo92 디스크 사용량 {d92:.1f}% (위험 90%)",
+                server="contabo92",
+            ))
+        elif d92 is not None and d92 >= 80:
+            alerts.append(Alert(
+                severity="WARNING", category="disk_warning",
+                title="contabo92 디스크 사용량 경고",
+                message=f"contabo92 디스크 사용량 {d92:.1f}% (경고 80%)",
+                server="contabo92",
+            ))
+        if metrics.get("contabo92_ssh_ok") is False:
+            alerts.append(Alert(
+                severity="WARNING", category="ssh_timeout",
+                title="contabo92 SSH 접속 실패",
+                message="contabo92 SSH 도달 실패(mesh-92 경유). "
+                        + str(metrics.get("contabo92_ssh_error") or "")[:150],
+                server="contabo92",
+            ))
+        elif metrics.get("contabo92_pg_ok") is False:
+            alerts.append(Alert(
+                severity="CRITICAL", category="health_fail",
+                title="contabo92 PostgreSQL 장애",
+                message="contabo92 PostgreSQL 비활성 또는 go100_history 접속 실패: "
+                        + str(metrics.get("contabo92_pg_error") or "")[:150],
+                server="contabo92",
+            ))
+
         # cost_exceed: 오늘 AI 비용 조회
         daily_cost = metrics.get("daily_cost_usd", 0.0)
         if daily_cost > 5.0:
@@ -177,6 +212,26 @@ class AlertManager:
             metrics["disk_usage_percent"] = usage.used / usage.total * 100
         except Exception:
             metrics["disk_usage_percent"] = 0
+
+        # contabo92 (기존 health_checker 수집 경로 재사용). SSH·PostgreSQL 결과도 함께 싣는다.
+        try:
+            from app.services.health_checker import _check_contabo92
+            p92 = await _check_contabo92()
+            ssh = p92.get("ssh") or {}
+            metrics["contabo92_ssh_ok"] = bool(ssh.get("ok"))
+            if not ssh.get("ok"):
+                metrics["contabo92_ssh_error"] = ssh.get("error", "")
+            else:
+                pct = (p92.get("disk") or {}).get("usage_pct")
+                if pct is not None:
+                    metrics["contabo92_disk_usage_percent"] = float(pct)
+                pg = p92.get("postgres") or {}
+                # 프로브 미완료로 값을 못 받은 경우(severity=warning)는 장애 확정이 아니므로 CRITICAL 금지
+                metrics["contabo92_pg_ok"] = bool(pg.get("ok")) or pg.get("severity") == "warning"
+                if not pg.get("ok"):
+                    metrics["contabo92_pg_error"] = pg.get("error", "")
+        except Exception as e:
+            logger.warning("alert_manager_contabo92_probe_failed", error=str(e))
 
         # 메모리 사용량
         try:

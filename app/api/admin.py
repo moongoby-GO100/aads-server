@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.auth import require_internal_admin
-from app.services.server_registry import CANONICAL_SERVER_IDS, list_ledger_servers
+from app.services.server_registry import is_health_monitored, list_ledger_servers
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(require_internal_admin)])
@@ -91,7 +91,7 @@ def _deploy_server_groups() -> list[dict[str, Any]]:
             "name": server.get("display_name", server["id"]),
             "ip": server.get("host", ""),
             "projects": tuple(server.get("projects", ())),
-            "health_monitored": server["id"] in CANONICAL_SERVER_IDS,
+            "health_monitored": is_health_monitored(server["id"]),
         }
         for server in list_ledger_servers()
     ]

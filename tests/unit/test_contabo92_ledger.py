@@ -3,6 +3,7 @@
 from app.services.server_registry import (
     ALL_PROJECTS,
     CANONICAL_SERVER_IDS,
+    HEALTH_MONITORED_SERVER_IDS,
     LEDGER_SERVER_IDS,
     PROJECT_TO_SERVER,
     SERVER_REGISTRY,
@@ -10,17 +11,26 @@ from app.services.server_registry import (
     get_server_host,
     get_server_ssh_port,
     get_servers_for_projects,
+    is_health_monitored,
+    list_health_monitored_servers,
     list_ledger_servers,
     list_servers,
     resolve_server_id,
 )
 
 
-def test_contabo92_is_in_ledger_but_not_health_monitored():
+def test_contabo92_is_health_monitored_but_not_canonical():
+    """2026-11-05 건강감시 편입. 기존 3대 순회(CANONICAL)는 그대로 둔다."""
     assert "contabo92" in [s["id"] for s in list_ledger_servers()]
     assert "contabo92" in LEDGER_SERVER_IDS
+    assert "contabo92" in HEALTH_MONITORED_SERVER_IDS
+    assert is_health_monitored("contabo92")
     assert "contabo92" not in CANONICAL_SERVER_IDS
     assert "contabo92" not in [s["id"] for s in list_servers()]
+    assert [s["id"] for s in list_health_monitored_servers()][-1] == "contabo92"
+    assert len(HEALTH_MONITORED_SERVER_IDS) == 4
+    assert not is_health_monitored("contabo42")
+    assert not is_health_monitored("jinah244")
 
 
 def test_contabo92_lookup():

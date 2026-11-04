@@ -109,7 +109,7 @@ def _registry_file_mtime() -> str:
 
 def build_server_ledger_snapshot() -> Dict[str, Any]:
     """현재 서버 원장 스냅샷. **DB 를 보지 않는다** — DB 없는 진입점도 같은 값."""
-    from app.services.server_registry import CANONICAL_SERVER_IDS, list_ledger_servers
+    from app.services.server_registry import is_health_monitored, list_ledger_servers
 
     servers: List[Dict[str, Any]] = []
     for entry in list_ledger_servers():
@@ -120,7 +120,7 @@ def build_server_ledger_snapshot() -> Dict[str, Any]:
                 "display_name": str(entry.get("display_name") or sid),
                 "host": str(entry.get("host") or ""),
                 "projects": [str(p) for p in (entry.get("projects") or [])],
-                "health_monitored": sid in CANONICAL_SERVER_IDS,
+                "health_monitored": is_health_monitored(sid),
             }
         )
     # hash 는 **구성만** 담는다. 조회시각을 섞으면 매 턴 달라져서 "구성이
