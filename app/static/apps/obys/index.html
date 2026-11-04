@@ -12833,8 +12833,8 @@
       document.querySelectorAll(".tab").forEach(btn => btn.classList.toggle("active", btn.dataset.view === currentView));
       syncSubTabs();
       if (currentView === "dashboard") loadTodayHome().catch(err => showToast(`오늘 홈 집계 실패: ${err.message}`));
-      if (currentView === "dashboard") window.obysDataOverview?.openGlance();
-      if (currentView === "sales") window.obysDataOverview?.openDelivery();
+      if (currentView === "dashboard" && ownerBusinessApisAllowed()) window.obysDataOverview?.openGlance();
+      if (currentView === "sales" && ownerBusinessApisAllowed()) window.obysDataOverview?.openDelivery();
       if (currentView === "employees" && canManageOnboarding()) trackViewLoad("employees", "invites", loadEmployeeInvites(), "초대 조회 실패");
       if (currentView === "employees" && hasServerAuth()) trackViewLoad("employees", "joins", loadEmployeeJoinRequests(), "가입요청 조회 실패");
       if (currentView === "employees" && hasServerAuth()) trackViewLoad("employees", "documents", loadOnboardingDocuments(), "서류 조회 실패");
@@ -14227,8 +14227,10 @@
     function renderBusinessListState() {
       const el = els.businessListState;
       if (!el) return;
-      const pending = businessListStatus.state === "loading" || businessListStatus.state === "failed";
-      const show = ownerApisAllowed() && pending && !(state.settings?.businesses || []).length;
+      // 실패는 로컬 사업자가 있어도 숨기지 않는다 — 숨기면 재시도 버튼이 사라지고 조회가 계속 막힌다.
+      const failed = businessListStatus.state === "failed";
+      const loading = businessListStatus.state === "loading" && !(state.settings?.businesses || []).length;
+      const show = ownerApisAllowed() && (failed || loading);
       el.classList.toggle("hidden", !show);
       if (!show) {
         el.innerHTML = "";
@@ -14339,10 +14341,15 @@
 
     async function persistSettingsToServer() {
       if (!hasServerAuth() || !canManageSettings()) return null;
-      return financeApi("/settings", {
+      const saved = await financeApi("/settings", {
         method: "PUT",
         body: JSON.stringify({ settings: settings() })
       });
+      // 빈 목록·실패로 막힌 뒤 사업자를 추가·저장했다면 서버 목록을 다시 받아 ready 와 화면 자료를 복구한다.
+      if (businessListStatus.state !== "ready") {
+        loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
+      }
+      return saved;
     }
 
     function syncSettingsToServer() {
@@ -15181,7 +15188,7 @@
       if (followPostLoginRedirect()) return;
       if (await shouldOpenV41AppVerified() && openV41App()) return;
       if (!await verifyLegacyEntry()) return;
-      await ensureOwnerEntryModules();
+      // 개요 모듈은 여기서 싣지 않는다 — 아래 loadServerSettings 가 사업자 목록을 ready 로 만든 뒤 settleBusinessList 가 싣는다.
       setView(savedUiView() || defaultView());
       renderAuthState();
       refreshFinanceSessionInBackground();
@@ -17833,9 +17840,9 @@
     async function init() {
       if (!await verifyLegacyEntry()) return;
       // Auto-loading modules must also wait for the tenant decision.
-      // 매출·수집 개요 모듈은 로드되는 즉시 소유자용 API 를 부른다 — 직원 계정·직원 미리보기에는 싣지 않는다.
-      // 직원으로 열었다가 같은 페이지에서 소유자로 로그인하면 loginToServer·settleBusinessList 가 뒤늦게 싣는다.
-      if (!isEmployeeExperience()) await loadLegacyEntryModules();
+      // 매출·수집 개요 모듈은 로드되는 즉시 소유자용 API(/today-overview·/status)를 부른다.
+      // 그래서 init 에서는 싣지 않고, 서버 사업자 목록이 ready 가 된 뒤 settleBusinessList 가 싣는다
+      // (처음 진입·로그인 직후·직원→소유자 전환 모두 같은 경로).
       initSelects();
       setDefaults();
       setAuthMode("login");

@@ -249,14 +249,16 @@ class TestD2EmployeeSkipsOwnerApis:
         assert first == "if (!ownerBusinessApisAllowed()) return;", (name, first)
 
     def test_employee_does_not_load_overview_modules_at_init(self):
+        # 2026-11-04 검수 지적: 소유자도 init 에서 싣지 않는다(사업자 목록 ready 후 settleBusinessList 가 싣는다).
         init = _between("async function init()", "init().catch(")
-        assert "if (!isEmployeeExperience()) await loadLegacyEntryModules();" in init
-        assert "\n      await loadLegacyEntryModules();" not in init
+        assert "loadLegacyEntryModules()" not in init
 
     def test_modules_are_loaded_late_for_owner_login_after_employee_session(self):
         # 리뷰 지적 2: 직원으로 열린 페이지에서 소유자로 로그인해도 모듈이 실려야 한다.
+        # 2026-11-04 검수 지적: 로그인 직후에도 사업자 목록 ready 전에는 싣지 않고, settleBusinessList 가 싣는다.
         login = _function_source("loginToServer")
-        assert login.index("verifyLegacyEntry()") < login.index("ensureOwnerEntryModules()") < login.index("setView(")
+        assert "ensureOwnerEntryModules()" not in login
+        assert login.index("verifyLegacyEntry()") < login.index("loadServerSettings()")
         assert "ensureOwnerEntryModules()" in _function_source("settleBusinessList")
 
     @needs_node
@@ -384,3 +386,51 @@ def test_inline_scripts_pass_node_check(tmp_path):
         target.write_text(body, encoding="utf-8")
         result = subprocess.run([NODE, "--check", str(target)], check=False, text=True, capture_output=True, timeout=60)
         assert result.returncode == 0, result.stderr
+
+
+# ── runner-c131887c 검수 지적 반영(2026-11-04): 개요 모듈 선로딩 우회, 실패 후 사업자 추가 시 복구 ──
+
+
+def test_init_does_not_load_overview_modules_before_business_list_ready():
+    # data-overview.js 는 로드 즉시 /today-overview·/status 를 부르므로 init 에서 먼저 싣지 않는다.
+    init_body = _function_source("init")
+    assert "loadLegacyEntryModules" not in init_body
+    settle = _function_source("settleBusinessList")
+    assert settle.index("ownerBusinessApisAllowed()") < settle.index("ensureOwnerEntryModules()")
+
+
+def test_set_view_overview_calls_wait_for_business_list():
+    set_view = _function_source("setView")
+    for call in ("window.obysDataOverview?.openGlance()", "window.obysDataOverview?.openDelivery()"):
+        for line in [ln for ln in set_view.splitlines() if call in ln]:
+            assert "ownerBusinessApisAllowed()" in line, line
+
+
+def test_persist_settings_refetches_business_list_when_not_ready():
+    body = _function_source("persistSettingsToServer")
+    assert 'businessListStatus.state !== "ready"' in body
+    assert body.index('method: "PUT"') < body.index("loadServerSettings()")
+
+
+@needs_node
+def test_failed_business_list_keeps_retry_visible_with_local_businesses(tmp_path):
+    harness = "\n".join([
+        "const out = {};",
+        "const els = { businessListState: { innerHTML: '', classList: { hidden: true, toggle(_, v) { this.hidden = v; } } } };",
+        "const state = { settings: { businesses: [{ id: 'biz-local', name: '새 사업자' }] } };",
+        "const businessListStatus = { state: 'failed', message: '등록된 사업자가 없습니다' };",
+        "function ownerApisAllowed() { return true; }",
+        "function retryBusinessList() {}",
+        "function renderState(el, spec) { el.innerHTML = spec.title + '|' + spec.actions.map(a => a.label).join(','); }",
+        _function_source("renderBusinessListState"),
+        "renderBusinessListState();",
+        "out.failed = { hidden: els.businessListState.classList.hidden, html: els.businessListState.innerHTML };",
+        "businessListStatus.state = 'loading';",
+        "renderBusinessListState();",
+        "out.loading = { hidden: els.businessListState.classList.hidden };",
+        "console.log(JSON.stringify(out));",
+    ])
+    result = _run_node(harness, tmp_path)
+    assert result["failed"]["hidden"] is False
+    assert "다시 시도" in result["failed"]["html"]
+    assert result["loading"]["hidden"] is True
