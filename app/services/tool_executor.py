@@ -6082,7 +6082,7 @@ class ToolExecutor:
             "session_id": _session_id,
             "max_cycles": int(inp.get("max_cycles", 3)),
             "size": inp.get("size", "M"),
-            "goal_id": inp.get("goal_id") or None,
+            **({"goal_id": inp["goal_id"]} if inp.get("goal_id") else {}),
             **({"worker_model": inp["worker_model"]} if inp.get("worker_model") else {}),
             **({"worker_model_reason": inp["worker_model_reason"]} if inp.get("worker_model_reason") else {}),
             **({"parallel_group": inp["parallel_group"]} if inp.get("parallel_group") else {}),
