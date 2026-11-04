@@ -139,6 +139,25 @@ def test_run_error_mapping_never_leaks_internal_text(monkeypatch, exc, code, det
     assert resp.status_code == code and resp.json()["detail"] == detail
 
 
+def test_each_run_request_passes_its_own_unique_instance_name(monkeypatch):
+    seen = []
+
+    async def runnable(company_id):
+        return None
+
+    async def capture(company_id, **kw):
+        seen.append(kw["instance"])
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(svc, "require_runnable_company", runnable)
+    monkeypatch.setattr(svc, "run_collection", capture)
+    c = _client(_user("owner", admin=True))
+    assert c.post("/api/v1/obys-collections/companies/c1/runs", json={}).status_code == 200
+    assert c.post("/api/v1/obys-collections/companies/c1/runs", json={}).status_code == 200
+    assert len(seen) == 2 and seen[0] != seen[1]
+    assert all(i.startswith(f"{svc.DEFAULT_INSTANCE}:manual:") for i in seen)
+
+
 def test_review_and_confirm_role_split(monkeypatch):
     async def ok_review(*a, **k):
         return {"updated": 1, "skipped": 0, "stage": "reviewed"}

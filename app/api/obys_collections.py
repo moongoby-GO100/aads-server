@@ -149,7 +149,8 @@ async def start_run(company_id: str, body: RunRequest, user: dict[str, Any] = De
             _role_ok(user, _MANAGE_ROLES)
             await svc.require_company_tenant(company_id, user.get("tenant_id"))
         return await svc.run_collection(
-            company_id, kinds=body.kinds, period_start=body.period_start, period_end=body.period_end, mode=body.mode)
+            company_id, kinds=body.kinds, period_start=body.period_start, period_end=body.period_end, mode=body.mode,
+            instance=svc.manual_instance_name())
     except (svc.CollectionError, clobe.ClobeError) as exc:
         raise _raise(exc) from None
 

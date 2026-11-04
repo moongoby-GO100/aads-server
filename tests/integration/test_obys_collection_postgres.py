@@ -639,8 +639,32 @@ async def test_leases_are_per_company_so_other_company_runs_while_one_is_held(db
     assert await n(db, "obys_clobe_item", "WHERE business_id='biz-eonni'") == 19
 
 
-async def test_same_instance_name_overlap_still_leaves_a_single_writer(db):
-    """수동 버튼 두 번(둘 다 기본 인스턴스 이름): 재진입으로 둘 다 임대를 얻어도 펜싱이 먼저 시작한 쪽의 쓰기를 멈춘다."""
+async def test_manual_double_click_second_gets_409_and_first_run_finishes(db):
+    """수동 버튼 두 번: 요청별 고유 instance 라 두 번째는 collection_in_progress(409)이고 먼저 시작한 수집은 끝까지 간다."""
+    fake_a, fake_b = fake_for(C_DANHARU), fake_for(C_DANHARU)
+    await svc.discover_companies(session_factory=fake_a)
+    inside, release = asyncio.Event(), asyncio.Event()
+    fake_a.hook = _hold_at(inside, release)
+    task_a = asyncio.create_task(
+        svc.run_collection(C_DANHARU, session_factory=fake_a, instance=svc.manual_instance_name(), **PERIOD))
+    try:
+        await asyncio.wait_for(inside.wait(), 30)
+        with pytest.raises(svc.CollectionError) as err:
+            await svc.run_collection(C_DANHARU, session_factory=fake_b, instance=svc.manual_instance_name(), **PERIOD)
+        assert (err.value.code, err.value.status) == ("collection_in_progress", 409)
+    finally:
+        release.set()
+    first = await asyncio.wait_for(task_a, 60)
+    assert first["status"] == "succeeded", first
+    assert [c for c in fake_b.calls if c[0] != "get_my_context"] == []
+    assert await n(db, "obys_clobe_item") == 19
+    assert await db.fetchval("SELECT owner_epoch FROM obys_clobe_collection_lease") == 1
+    assert await n(db, "obys_clobe_collection_run", "WHERE status='lease_lost'") == 0
+    assert await n(db, "obys_clobe_collection_run", "WHERE status='running'") == 0
+
+
+async def test_same_instance_name_reentry_is_still_fenced_to_a_single_writer(db):
+    """재진입 가드는 유지된다: 호출자가 같은 이름을 쓰면 두 번째가 임대를 얻고 펜싱이 먼저 시작한 쪽의 쓰기를 멈춘다."""
     fake_a, fake_b = fake_for(C_DANHARU), fake_for(C_DANHARU)
     await svc.discover_companies(session_factory=fake_a)
     inside, release = asyncio.Event(), asyncio.Event()
@@ -648,16 +672,11 @@ async def test_same_instance_name_overlap_still_leaves_a_single_writer(db):
     task_a = asyncio.create_task(svc.run_collection(C_DANHARU, session_factory=fake_a, **PERIOD))
     try:
         await asyncio.wait_for(inside.wait(), 30)
-        try:
-            second = await svc.run_collection(C_DANHARU, session_factory=fake_b, **PERIOD)
-        except svc.CollectionError as exc:
-            second = exc
+        second = await svc.run_collection(C_DANHARU, session_factory=fake_b, **PERIOD)
     finally:
         release.set()
     first = await asyncio.wait_for(task_a, 60)
-    # 현재 동작: 같은 이름이면 두 번째가 재진입으로 임대를 얻고 먼저 시작한 쪽이 lease_lost 로 멈춘다(409 가 아니다).
-    # 이 단언은 그 사실을 고정한다 — 호출자가 실행마다 고유한 instance 를 쓰게 되면 위 distinct-instance 테스트의 계약이 적용된다.
-    assert first["status"] == "lease_lost" and not isinstance(second, Exception) and second["status"] == "succeeded"
+    assert first["status"] == "lease_lost" and second["status"] == "succeeded"
     assert await n(db, "obys_clobe_item") == 19
     assert await db.fetchval("SELECT count(*) FROM (SELECT 1 FROM obys_clobe_item GROUP BY tenant_id, business_id, "
                              "data_kind, source_key, item_hash HAVING count(*) > 1) d") == 0

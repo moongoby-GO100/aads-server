@@ -30,6 +30,11 @@ ABSENT_AFTER_MISSES = 2
 DEFAULT_INSTANCE = "aads-api"
 
 
+def manual_instance_name() -> str:
+    """수동 실행 요청마다 고유한 임대 소유자 이름 — 같은 이름이면 acquire_lease 가 재진입으로 보고 진행 중 수집의 임대를 가로챈다."""
+    return f"{DEFAULT_INSTANCE}:manual:{uuid.uuid4()}"
+
+
 class CollectionError(Exception):
     def __init__(self, code: str, status: int = 409):
         super().__init__(code)

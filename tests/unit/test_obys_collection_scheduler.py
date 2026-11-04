@@ -674,12 +674,22 @@ def test_lease_sql_guard_is_in_the_service():
     src = Path(svc.__file__).read_text(encoding="utf-8")
     assert "WHERE obys_clobe_collection_lease.lease_expires_at < now()" in src
     assert "OR obys_clobe_collection_lease.owner_instance = EXCLUDED.owner_instance" in src
+    # 재진입 허용은 그대로이므로, 수동 요청이 서로 가로채지 않으려면 API 가 요청마다 고유 이름을 넘겨야 한다.
+    api_src = (Path(svc.__file__).parents[1] / "api" / "obys_collections.py").read_text(encoding="utf-8")
+    assert "instance=svc.manual_instance_name()" in api_src
+
+
+def test_manual_instance_name_is_unique_per_request_and_distinct_from_default_and_scheduler():
+    names = {svc.manual_instance_name() for _ in range(50)}
+    assert len(names) == 50
+    assert all(n.startswith(f"{svc.DEFAULT_INSTANCE}:manual:") for n in names)
+    assert svc.DEFAULT_INSTANCE not in names and sched.instance_name() not in names
 
 
 def test_manual_run_holding_lease_blocks_scheduler(monkeypatch):
     store, started = _lease_world(monkeypatch)
     manual_conn = _LeaseConn(store, None)
-    run(svc.acquire_lease(manual_conn, "c1", svc.DEFAULT_INSTANCE))  # 수동 버튼이 수집 중
+    run(svc.acquire_lease(manual_conn, "c1", svc.manual_instance_name()))  # 수동 버튼이 수집 중
     with pytest.raises(svc.CollectionError) as err:
         run(svc.run_collection("c1", kinds=[core.KIND_BANK], instance=sched.instance_name(),
                                session_factory=_Session))
@@ -691,14 +701,15 @@ def test_scheduler_holding_lease_blocks_manual_button(monkeypatch):
     store, started = _lease_world(monkeypatch)
     run(svc.acquire_lease(_LeaseConn(store, None), "c1", sched.instance_name()))
     with pytest.raises(svc.CollectionError) as err:
-        run(svc.run_collection("c1", kinds=[core.KIND_BANK], session_factory=_Session))  # API 기본 인스턴스
+        run(svc.run_collection("c1", kinds=[core.KIND_BANK], instance=svc.manual_instance_name(),
+                               session_factory=_Session))  # API 수동 요청
     assert err.value.code == "collection_in_progress" and err.value.status == 409
     assert started == []
 
 
 def test_scheduler_sees_manual_lease_as_skipped_busy_end_to_end(monkeypatch):
     store, started = _lease_world(monkeypatch)
-    run(svc.acquire_lease(_LeaseConn(store, None), "c1", svc.DEFAULT_INSTANCE))
+    run(svc.acquire_lease(_LeaseConn(store, None), "c1", svc.manual_instance_name()))
 
     async def load_state():
         return [{"clobe_company_id": "c1"}], {}
@@ -716,12 +727,23 @@ def test_scheduler_sees_manual_lease_as_skipped_busy_end_to_end(monkeypatch):
 
 
 def test_default_instance_name_would_have_hijacked_the_manual_lease(monkeypatch):
-    """스케줄러가 기본 이름(aads-api)을 썼다면 같은 owner 재진입으로 임대를 가로챘을 것 — 이름 분리의 근거."""
+    """같은 이름(aads-api)은 재진입으로 임대를 가로챈다(가드는 유지). 그래서 수동 요청은 요청별 고유 이름을 쓰고 두 번째는 409 를 받는다."""
     store, started = _lease_world(monkeypatch)
     run(svc.acquire_lease(_LeaseConn(store, None), "c1", svc.DEFAULT_INSTANCE))
     result = run(svc.run_collection("c1", kinds=[core.KIND_BANK], instance=svc.DEFAULT_INSTANCE, session_factory=_Session))
     assert result["status"] == "succeeded" and started == [svc.DEFAULT_INSTANCE]
     assert sched.instance_name() != svc.DEFAULT_INSTANCE
+
+
+def test_second_manual_request_gets_409_and_does_not_touch_the_first_lease(monkeypatch):
+    store, started = _lease_world(monkeypatch)
+    first = svc.manual_instance_name()
+    run(svc.acquire_lease(_LeaseConn(store, None), "c1", first))
+    with pytest.raises(svc.CollectionError) as err:
+        run(svc.run_collection("c1", kinds=[core.KIND_BANK], instance=svc.manual_instance_name(), session_factory=_Session))
+    assert (err.value.code, err.value.status) == ("collection_in_progress", 409)
+    assert store["c1"]["owner"] == first and store["c1"]["epoch"] == 1
+    assert started == []
 
 
 # (5) D21-2: 같은 회사에 겹치는 실행은 하나만 클로브까지 가고, 백필도 보유 회사를 skipped_busy 로 건너뛴다
