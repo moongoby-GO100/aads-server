@@ -4399,6 +4399,242 @@ go100_create_frontend_release_worktree() {
     return 0
 }
 
+# ── GO100 배포·재기동 실행 위치 (AADS-RUNNER-GO100-HOST-CONTABO92-PHASE1-20261104) ──
+# 작업 수행 호스트(contabo92)와 실매매 운영 호스트(contabo14)를 나누기 위한 선택 경로다.
+# GO100_DEPLOY_SSH_HOST 가 비어 있으면(기본) go100_deploy_call 은 "$@" 를 그대로 부른다 — 지금과 똑같이 로컬 실행.
+# 설정하면 승인 후 단계(API 재기동, 프론트 릴리스 워크트리·BG 배포·번들 신선도, 백엔드 헬스체크, 롤백 재기동)를
+# `ssh <host> bash -s` 로 그 호스트에서 돌린다. push 는 원래대로 작업 호스트에서 한다.
+#   - 함수는 declare -f 로 보내므로 원격도 이 스크립트와 같은 코드를 실행한다(원격용 사본을 두지 않는다).
+#   - 장중 정책 환경변수(GO100_INTRADAY_*, GO100_ALLOW_INTRADAY_DEPLOY, GO100_DEPLOY_COMPONENT)는 그 명령에만 export 한다.
+#     GO100_GATE_SKIP·GO100_ALLOW_DIRTY_DEPLOY 같은 비상 우회는 넘기지 않는다 — 운영 호스트에서 직접 걸어야 한다.
+#   - 종료코드는 원격 명령의 것을 그대로 돌려준다. 124/137=시간 초과, 255=ssh 실패. 0 이 아니면 stderr 와 runner.log 에 남긴다.
+#   - 원격 stdout/stderr 는 그대로 흘려보내므로 호출측의 리다이렉트·캡처가 로컬과 같게 동작한다.
+#   - GO100_REPO_DIR 등 경로는 양쪽이 같아야 한다(두 호스트 모두 /root/kis-autotrade-v4).
+GO100_DEPLOY_SSH_HOST="${GO100_DEPLOY_SSH_HOST:-}"
+GO100_DEPLOY_SSH_TIMEOUT="${GO100_DEPLOY_SSH_TIMEOUT:-2700}"
+GO100_DEPLOY_SSH_CONNECT_TIMEOUT="${GO100_DEPLOY_SSH_CONNECT_TIMEOUT:-15}"
+GO100_DEPLOY_SSH_BIN="${GO100_DEPLOY_SSH_BIN:-ssh}"
+GO100_DEPLOY_ENV_PASS_RE='^(GO100_INTRADAY_[A-Z0-9_]+|GO100_ALLOW_INTRADAY_DEPLOY|GO100_DEPLOY_COMPONENT)$'
+GO100_DEPLOY_REMOTE_FUNCS=(
+    _go100_path_in_use _go100_remove_release_worktree go100_prune_release_worktrees
+    go100_create_frontend_release_worktree go100_active_frontend_color verify_go100_bundle_fresh
+    go100_runtime_has_sha
+)
+GO100_DEPLOY_REMOTE_VARS=(
+    GO100_REPO_DIR GO100_NGINX_CONF GO100_RELEASE_WORKTREE_ROOT GO100_RELEASE_WORKTREE_KEEP
+    GO100_RELEASE_WORKTREE_MIN_FREE_MB GO100_RELEASE_WORKTREE_MIN_AGE_MIN GO100_RELEASE_NPM_CI_TIMEOUT
+)
+
+go100_deploy_is_remote() {
+    [[ -n "${GO100_DEPLOY_SSH_HOST:-}" ]]
+}
+
+# stdout: 원격에서 `bash -s` 로 읽힐 스크립트. 마지막 줄 하나에 명령과 exit 를 둔다 —
+# bash 는 그 줄을 다 읽은 뒤 실행하므로 명령이 stdin 을 읽어도 스크립트를 먹지 않는다.
+go100_deploy_remote_script() {
+    local _v=""
+    printf 'set -o pipefail\n'
+    for _v in "${GO100_DEPLOY_REMOTE_VARS[@]}"; do
+        [[ -n "${!_v+x}" ]] && printf '%s=%q\n' "$_v" "${!_v}"
+    done
+    while IFS= read -r _v; do
+        [[ "$_v" =~ $GO100_DEPLOY_ENV_PASS_RE ]] && printf 'export %s=%q\n' "$_v" "${!_v}"
+    done < <(compgen -e)
+    declare -f "${GO100_DEPLOY_REMOTE_FUNCS[@]}"
+    # 원격 log 는 stderr 로만 쓴다 — 원격에는 LOG_DIR 이 없고, stdout 캡처(워크트리 경로 등)를 더럽히지 않는다.
+    # 줄 첫머리가 log() 가 아닌 printf 한 줄로 낸다 — heredoc 본문은 dup_guard(sh-dup-func)가 로컬 재정의로 오탐한다.
+    printf '%s\n' 'log() { echo "[$(date '"'"'+%Y-%m-%d %H:%M:%S'"'"')] $*" >&2; }'
+    printf '%q ' "$@"
+    printf '</dev/null; exit $?\n'
+}
+
+# 사용: [GO100_DEPLOY_CALL_TIMEOUT=초] go100_deploy_call <함수|명령> [인자...]
+go100_deploy_call() {
+    if ! go100_deploy_is_remote; then
+        "$@"
+        return
+    fi
+    local _host="$GO100_DEPLOY_SSH_HOST" _t="${GO100_DEPLOY_CALL_TIMEOUT:-$GO100_DEPLOY_SSH_TIMEOUT}"
+    local _rc=0 _why="" _msg=""
+    [[ "$_t" =~ ^[0-9]+$ ]] && (( _t > 0 )) || _t=2700
+    timeout --kill-after=15 "$_t" "$GO100_DEPLOY_SSH_BIN" -o BatchMode=yes \
+        -o ConnectTimeout="$GO100_DEPLOY_SSH_CONNECT_TIMEOUT" -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
+        "$_host" 'bash -s' < <(go100_deploy_remote_script "$@") || _rc=$?
+    if (( _rc != 0 )); then
+        case "$_rc" in
+            124|137) _why="timeout_${_t}s" ;;
+            255) _why="ssh_failed" ;;
+            *) _why="remote_rc" ;;
+        esac
+        _msg="[$(date '+%Y-%m-%d %H:%M:%S')]   GO100_DEPLOY_REMOTE host=${_host} rc=${_rc} reason=${_why} cmd=${1:-}"
+        echo "$_msg" >&2
+        [[ -n "${LOG_DIR:-}" ]] && { echo "$_msg" >> "$LOG_DIR/runner.log"; } 2>/dev/null || true
+    fi
+    return "$_rc"
+}
+
+# ── 원격 모드 통신 실패 구분과 운영 호스트 코드 반영 검증 (AADS-RUNNER-GO100-HOST-CONTABO92-PHASE1-20261104-R2) ──
+# 원격 모드에서 124/137(시간 초과)·255(ssh 실패)는 "명령이 없음/실패" 가 아니라 "확인하지 못함" 이다.
+# `test -d` 의 rc=1(없음)과 구분하지 않으면 통신 실패가 프론트 배포 생략·재기동 무시로 번지고 health 가 기존 서비스로
+# 통과해 done 으로 끝난다. 로컬 모드(GO100_DEPLOY_SSH_HOST 비어 있음)는 항상 1(해당 없음)이라 기존 동작이 그대로다.
+# $1=rc → 0 이면 통신 실패
+go100_deploy_comm_failed() {
+    go100_deploy_is_remote || return 1
+    case "${1:-0}" in
+        124|137|255) return 0 ;;
+    esac
+    return 1
+}
+
+# $1=rc → stdout: timeout | ssh_failed
+go100_deploy_comm_label() {
+    case "${1:-}" in
+        124|137) echo "timeout" ;;
+        *) echo "ssh_failed" ;;
+    esac
+    return 0
+}
+
+# 운영 호스트에서 실행된다(declare -f 로 전송). $1=저장소 $2=SHA(40자리) $3...=검증할 경로(파일 또는 디렉터리, 1개 이상 필수).
+# 조상 관계만으로는 실행 파일이 그 SHA 내용이라는 보장이 없다 — HEAD 가 SHA 를 품고 있어도 파일을 구버전으로 미커밋 수정했거나
+# 후속 커밋이 배포 커밋을 revert 했을 수 있다. 그래서 (1) SHA 가 HEAD 의 조상이고 (2) 지정 경로의 작업트리 내용이
+# SHA 트리와 같을 때만 0 이다. 경로 밖(운영 작업트리의 무관한 미커밋 변경 수백 건)은 보지 않는다.
+# (2) 는 git diff 를 쓰지 않는다 — diff 는 인덱스의 assume-unchanged/skip-worktree 표시와 stat 캐시를 믿어서 구버전 내용을 놓친다.
+# 대신 SHA 트리(ls-tree)의 blob 해시를 파일 내용의 실제 해시(hash-object)와 비교하고, 디렉터리는 파일 시스템을 직접 훑어
+# SHA 트리에 없는 파일(추적 안 됨·ignore 무관, __pycache__ 제외)이 하나라도 있으면 미반영으로 본다.
+# 0=반영됨, 1=SHA 객체 없음 또는 HEAD 에 미포함, 2=저장소 아님, 3=SHA 형식 오류, 4=검증 경로 없음(fail-closed),
+# 5=지정 경로의 작업트리 내용이 SHA 와 다름(미커밋 변경·revert·삭제·추가 모두 포함), 6=비교 자체를 못 함.
+# 읽기 전용이다 — reset/checkout/pull 로 운영 작업트리를 건드리지 않고, 인덱스 갱신 잠금도 잡지 않는다.
+go100_runtime_has_sha() {
+    local _repo="${1:-}" _sha="${2:-}"
+    shift 2 2>/dev/null || shift $#
+    [[ "$_sha" =~ ^[0-9a-f]{40}$ ]] || return 3
+    git -C "$_repo" rev-parse --git-dir >/dev/null 2>&1 || return 2
+    git -C "$_repo" cat-file -e "${_sha}^{commit}" 2>/dev/null || return 1
+    git -C "$_repo" merge-base --is-ancestor "$_sha" HEAD 2>/dev/null || return 1
+    (( $# > 0 )) || return 4
+    _repo="${_repo%/}"
+    local _p="" _ent="" _meta="" _path="" _mode="" _type="" _oid="" _f="" _rel="" _i=0 _fmode="" _sent=0
+    local -A _want=()
+    local -a _files=() _oids=()
+    _fmode=$(git -C "$_repo" config --bool core.fileMode 2>/dev/null) || _fmode=true
+    for _p in "$@"; do
+        _p="${_p%/}"
+        [[ -n "$_p" && "$_p" != /* && "/$_p/" != *"/../"* && "/$_p/" != *"/./"* ]] || return 4
+        _sent=0
+        # SHA 트리의 기대 내용은 객체 DB 에서만 읽는다(인덱스·작업트리를 보지 않는다).
+        while IFS= read -r -d '' _ent; do
+            if [[ "$_ent" != *$'\t'* ]]; then _sent=1; continue; fi
+            _meta="${_ent%%$'\t'*}"
+            _path="${_ent#*$'\t'}"
+            read -r _mode _type _oid <<< "$_meta"
+            [[ "$_type" == "blob" ]] || return 6
+            _want["$_path"]="${_mode}:${_oid}"
+        done < <({ git --literal-pathspecs -C "$_repo" ls-tree -r -z --full-tree "$_sha" -- "$_p" 2>/dev/null && printf 'END\0'; })
+        (( _sent == 1 )) || return 6
+        # 작업트리 쪽은 SHA 트리에 없는 파일이 하나라도 있으면 미반영이다. 추적 여부·ignore 와 무관하게 파일 시스템을 직접 훑는다.
+        # (__pycache__ 는 인터프리터가 재생성하는 산출물이라 제외한다.)
+        if [[ -d "$_repo/$_p" && ! -L "$_repo/$_p" ]]; then
+            while IFS= read -r -d '' _f; do
+                _rel="${_f#"$_repo"/}"
+                [[ "/$_rel/" == */__pycache__/* ]] && continue
+                [[ -n "${_want[$_rel]+x}" ]] || return 5
+            done < <(find "$_repo/$_p" \( -type f -o -type l \) -print0 2>/dev/null)
+        elif [[ -e "$_repo/$_p" || -L "$_repo/$_p" ]]; then
+            [[ -n "${_want[$_p]+x}" ]] || return 5
+        fi
+    done
+    (( ${#_want[@]} > 0 )) || return 0
+    # 추적 표시(assume-unchanged/skip-worktree)와 stat 캐시를 신뢰하지 않고 실제 파일 내용으로 blob 해시를 직접 계산해 비교한다.
+    for _path in "${!_want[@]}"; do
+        _mode="${_want[$_path]%%:*}"
+        _oid="${_want[$_path]#*:}"
+        _f="$_repo/$_path"
+        [[ "$_path" == *$'\n'* ]] && return 5
+        if [[ "$_mode" == "120000" ]]; then
+            [[ -L "$_f" ]] || return 5
+            [[ "$(printf '%s' "$(readlink "$_f")" | git -C "$_repo" hash-object --stdin 2>/dev/null)" == "$_oid" ]] || return 5
+            continue
+        fi
+        [[ -f "$_f" && ! -L "$_f" ]] || return 5
+        if [[ "$_fmode" != "false" ]]; then
+            if [[ "$_mode" == "100755" ]]; then [[ -x "$_f" ]] || return 5; else [[ ! -x "$_f" ]] || return 5; fi
+        fi
+        _files+=("$_path")
+    done
+    if (( ${#_files[@]} > 0 )); then
+        mapfile -t _oids < <(printf '%s\n' "${_files[@]}" | git -C "$_repo" hash-object --stdin-paths 2>/dev/null)
+        (( ${#_oids[@]} == ${#_files[@]} )) || return 6
+        for _i in "${!_files[@]}"; do
+            [[ "${_oids[$_i]}" == "${_want[${_files[$_i]}]#*:}" ]] || return 5
+        done
+    fi
+    return 0
+}
+
+# 배포 대상 중 운영 API 코드에 해당하는 경로만 뽑는다(stdout, 줄 단위). $1=목록 확보 여부(true|false) $2=변경 파일 목록.
+# 목록이 있으면 그 중 backend/ 파일만, 목록을 못 구했거나 backend/ 가 없으면 backend/ 전체를 비교한다(보수적, fail-closed).
+go100_backend_verify_paths() {
+    local _ok="${1:-false}" _files="${2:-}" _out=""
+    if [[ "$_ok" == "true" ]]; then
+        _out=$(grep '^backend/' <<< "$_files") || true
+    fi
+    if [[ -n "$_out" ]]; then
+        printf '%s\n' "$_out"
+    else
+        printf '%s\n' "backend/"
+    fi
+}
+
+# 원격 모드 전용 API 재기동. fail-closed: 운영 호스트의 실행 코드(검증 경로)가 $1(SHA) 내용이 아니면 재기동 명령을 보내지 않는다.
+# $1=SHA(배포는 current_sha, 롤백은 rollback_sha) $2=실패 라벨 접두(go100-api | rollback) $3...=검증 경로(생략하면 backend/)
+# 반환 0=검증·재기동·재검증 완료, 1=실패. 실패 사유는 전역 GO100_REMOTE_FAIL_LABEL 에 `<접두>:<사유>` 로 남긴다
+# (사유: ssh_failed | timeout | remote_sha_not_applied | remote_code_mismatch | restart_failed | remote_sha_lost).
+GO100_REMOTE_FAIL_LABEL=""
+go100_remote_api_restart() {
+    local _sha="${1:-}" _pfx="${2:-go100-api}" _rc=0
+    local -a _paths=()
+    shift 2 2>/dev/null || shift $#
+    _paths=("$@")
+    (( ${#_paths[@]} > 0 )) || _paths=("backend/")
+    GO100_REMOTE_FAIL_LABEL=""
+    GO100_DEPLOY_CALL_TIMEOUT=60 go100_deploy_call go100_runtime_has_sha "$GO100_REPO_DIR" "$_sha" "${_paths[@]}" || _rc=$?
+    if (( _rc != 0 )); then
+        if go100_deploy_comm_failed "$_rc"; then
+            GO100_REMOTE_FAIL_LABEL="${_pfx}:$(go100_deploy_comm_label "$_rc")"
+        elif (( _rc == 5 )); then
+            GO100_REMOTE_FAIL_LABEL="${_pfx}:remote_code_mismatch"
+        else
+            GO100_REMOTE_FAIL_LABEL="${_pfx}:remote_sha_not_applied"
+        fi
+        log "  GO100_REMOTE_RESTART_BLOCKED host=${GO100_DEPLOY_SSH_HOST} sha=${_sha:0:9} verify_rc=${_rc} label=${GO100_REMOTE_FAIL_LABEL} — 운영 호스트 코드에 SHA 미반영/확인 불가, 재기동 안 함"
+        return 1
+    fi
+    _rc=0
+    GO100_DEPLOY_CALL_TIMEOUT=180 go100_deploy_call systemctl restart go100 || _rc=$?
+    if (( _rc != 0 )); then
+        if go100_deploy_comm_failed "$_rc"; then
+            GO100_REMOTE_FAIL_LABEL="${_pfx}:$(go100_deploy_comm_label "$_rc")"
+        else
+            GO100_REMOTE_FAIL_LABEL="${_pfx}:restart_failed"
+        fi
+        log "  GO100_REMOTE_RESTART_FAILED host=${GO100_DEPLOY_SSH_HOST} sha=${_sha:0:9} rc=${_rc} label=${GO100_REMOTE_FAIL_LABEL}"
+        return 1
+    fi
+    _rc=0
+    GO100_DEPLOY_CALL_TIMEOUT=60 go100_deploy_call go100_runtime_has_sha "$GO100_REPO_DIR" "$_sha" "${_paths[@]}" || _rc=$?
+    if (( _rc != 0 )); then
+        if go100_deploy_comm_failed "$_rc"; then
+            GO100_REMOTE_FAIL_LABEL="${_pfx}:$(go100_deploy_comm_label "$_rc")"
+        else
+            GO100_REMOTE_FAIL_LABEL="${_pfx}:remote_sha_lost"
+        fi
+        log "  GO100_REMOTE_RESTART_UNVERIFIED host=${GO100_DEPLOY_SSH_HOST} sha=${_sha:0:9} verify_rc=${_rc} label=${GO100_REMOTE_FAIL_LABEL} — 재기동 후 SHA 재검증 실패"
+        return 1
+    fi
+    return 0
+}
+
 # ── 에러 분류 ─────────────────────────────────────────────────────────
 persist_auth_recovery() {
     local job_id="$1" state="$2" reason="$3" retry_count="$4"
@@ -8102,13 +8338,32 @@ deploy_job() {
                 log "  DEPLOY_DEFER go100 api restart — 재기동 금지 구간 ${_go100_freeze} KST (강제 재기동 안 함, sha=${current_sha})"
                 post_to_chat "$session_id" "⏸ [Pipeline Runner] GO100 API 재기동 보류 — 재기동 금지 구간(${_go100_freeze} KST). push 는 완료됐고 재기동은 구간 종료 후 별도로 필요합니다: $job_id"
                 _deploy_deferred="${_deploy_deferred:+${_deploy_deferred};}go100-api:restart_window_${_go100_freeze}"
+            elif go100_deploy_is_remote; then
+                # 원격 모드: 운영 호스트 코드에 current_sha 가 있는지 확인한 뒤에만 재기동하고, 통신·재기동·검증 실패는 배포 실패로 기록한다.
+                # 로컬 모드의 아래 else 분기(재기동 실패 무시)는 바꾸지 않는다.
+                local -a _be_verify_paths=()
+                mapfile -t _be_verify_paths < <(go100_backend_verify_paths "$_deploy_files_ok" "$_deploy_files")
+                if go100_remote_api_restart "$current_sha" go100-api "${_be_verify_paths[@]}"; then
+                    log "  RESTART go100 api (host=${GO100_DEPLOY_SSH_HOST}) sha=${current_sha:0:9} 운영 호스트 코드 포함 확인"
+                else
+                    log "  ERROR: go100 api 원격 배포 실패 (host=${GO100_DEPLOY_SSH_HOST} label=${GO100_REMOTE_FAIL_LABEL} sha=${current_sha})"
+                    post_to_chat "$session_id" "🔴 [Pipeline Runner] GO100 API 원격 배포 실패 — ${GO100_REMOTE_FAIL_LABEL} (host=${GO100_DEPLOY_SSH_HOST}, sha=${current_sha:0:9}). 운영 호스트 코드 미반영/통신 실패라 성공으로 처리하지 않습니다: $job_id"
+                    _build_fail="${_build_fail:+${_build_fail};}${GO100_REMOTE_FAIL_LABEL}"
+                fi
             else
-                systemctl restart go100 2>/dev/null || true
-                log "  RESTART go100 api"
+                GO100_DEPLOY_CALL_TIMEOUT=180 go100_deploy_call systemctl restart go100 2>/dev/null || true
+                log "  RESTART go100 api${GO100_DEPLOY_SSH_HOST:+ (host=${GO100_DEPLOY_SSH_HOST})}"
             fi
             # GO100 Frontend: npm build → restart (빌드 중 기존 서비스 유지)
             local _fe_dir="/root/kis-autotrade-v4/frontend"
-            if [ -d "$_fe_dir" ]; then
+            # 존재 검사는 rc=1(없음)과 통신 실패(원격 모드의 124/137/255)를 구분한다. 로컬 모드는 comm_failed 가 항상 거짓이라 기존과 같다.
+            local _fe_dir_rc=0
+            GO100_DEPLOY_CALL_TIMEOUT=60 go100_deploy_call test -d "$_fe_dir" || _fe_dir_rc=$?
+            if go100_deploy_comm_failed "$_fe_dir_rc"; then
+                log "  ERROR: go100-frontend 디렉터리 확인 실패 — 통신 실패는 '없음'이 아니다 (rc=${_fe_dir_rc} host=${GO100_DEPLOY_SSH_HOST})"
+                post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 배포 단계 확인 실패 ($(go100_deploy_comm_label "$_fe_dir_rc"), host=${GO100_DEPLOY_SSH_HOST}) — 배포 여부 불명이라 성공으로 처리하지 않습니다"
+                _build_fail="${_build_fail:+${_build_fail};}go100-frontend:$(go100_deploy_comm_label "$_fe_dir_rc")"
+            elif [ "$_fe_dir_rc" -eq 0 ]; then
                 # 변경 감지는 방금 push 한 current_sha 기준으로만 한다. 런타임 repo HEAD 는 origin/main 과
                 # 갈라진 로컬 커밋을 품고 있어 (예: 314 behind / 21 ahead) 백엔드 전용 커밋에서도
                 # frontend/ 변경으로 오판 → 장중 프론트 게이트 차단(go100-frontend:deploy_gate_blocked).
@@ -8125,7 +8380,13 @@ deploy_job() {
                     # go100-frontend.service 는 masked 라 systemctl restart 는 no-op 이었고,
                     # frontend/.next 는 존재하지 않아 BUILD_ID 비교도 발화할 수 없었다 (2026-09-30).
                     local _fe_bg_script="${GO100_REPO_DIR}/scripts/deploy_frontend_blue_green.sh"
-                    if [ ! -f "$_fe_bg_script" ]; then
+                    local _fe_bg_probe_rc=0
+                    GO100_DEPLOY_CALL_TIMEOUT=60 go100_deploy_call test -f "$_fe_bg_script" || _fe_bg_probe_rc=$?
+                    if go100_deploy_comm_failed "$_fe_bg_probe_rc"; then
+                        log "  ERROR: go100-frontend blue-green 스크립트 확인 실패 — 통신 실패 (rc=${_fe_bg_probe_rc} host=${GO100_DEPLOY_SSH_HOST})"
+                        post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 blue-green 스크립트 확인 실패 ($(go100_deploy_comm_label "$_fe_bg_probe_rc")) — 배포 안 됨"
+                        _build_fail="${_build_fail:+${_build_fail};}go100-frontend:$(go100_deploy_comm_label "$_fe_bg_probe_rc")"
+                    elif [ "$_fe_bg_probe_rc" -ne 0 ]; then
                         # npx 직접 빌드로 폴백하지 않는다 — 활성 슬롯에 닿지 않는 경로다.
                         log "  ERROR: go100-frontend blue-green 스크립트 없음: $_fe_bg_script"
                         post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 blue-green 스크립트 없음 — 배포 안 됨"
@@ -8136,8 +8397,8 @@ deploy_job() {
                         # 생성 실패 시 런타임 워크트리로 폴백하지 않는다.
                         local _fe_release_dir="" _fe_release_errf=""
                         _fe_release_errf=$(mktemp "/tmp/go100-release-wt-${job_id}.XXXXXX")
-                        go100_prune_release_worktrees "$GO100_REPO_DIR" "$(( GO100_RELEASE_WORKTREE_KEEP > 0 ? GO100_RELEASE_WORKTREE_KEEP - 1 : 0 ))"
-                        if ! _fe_release_dir=$(go100_create_frontend_release_worktree "$GO100_REPO_DIR" "$current_sha" 2>"$_fe_release_errf") \
+                        GO100_DEPLOY_CALL_TIMEOUT=300 go100_deploy_call go100_prune_release_worktrees "$GO100_REPO_DIR" "$(( GO100_RELEASE_WORKTREE_KEEP > 0 ? GO100_RELEASE_WORKTREE_KEEP - 1 : 0 ))" || true
+                        if ! _fe_release_dir=$(go100_deploy_call go100_create_frontend_release_worktree "$GO100_REPO_DIR" "$current_sha" 2>"$_fe_release_errf") \
                             || [ -z "$_fe_release_dir" ]; then
                             tail -20 "$_fe_release_errf" | tee -a "$LOG_DIR/runner.log" || true
                             log "  ERROR: go100-frontend release worktree 생성 실패 (sha=${current_sha}) — 런타임 워크트리 폴백 안 함"
@@ -8155,7 +8416,7 @@ deploy_job() {
                             # 파일로 리다이렉트하므로 rc 는 BG 스크립트의 것이 그대로 남는다.
                             # .next-build-cache 시드·회수와 슬롯 교체는 GO100_RUNTIME_WORKDIR(런타임) 기준으로 그대로 돈다.
                             _fe_bg_outf=$(mktemp "/tmp/go100-fe-bg-${job_id}.XXXXXX")
-                            if GO100_RELEASE_WORKDIR="$_fe_release_dir" GO100_RUNTIME_WORKDIR="$GO100_REPO_DIR" \
+                            if go100_deploy_call env GO100_RELEASE_WORKDIR="$_fe_release_dir" GO100_RUNTIME_WORKDIR="$GO100_REPO_DIR" \
                                 bash "$_fe_bg_script" --apply >"$_fe_bg_outf" 2>&1; then
                                 _fe_bg_rc=0
                             else
@@ -8163,6 +8424,9 @@ deploy_job() {
                             fi
                             tail -30 "$_fe_bg_outf" | tee -a "$LOG_DIR/runner.log" || true
                             _fe_bg_label=$(go100_fe_bg_classify "$_fe_bg_rc" "$_fe_bg_outf") || _fe_bg_label=""
+                            if go100_deploy_comm_failed "$_fe_bg_rc"; then
+                                _fe_bg_label="go100-frontend:$(go100_deploy_comm_label "$_fe_bg_rc")"
+                            fi
                             rm -f "$_fe_bg_outf"
                             # HEARTBEAT: GO100 프론트엔드 BG 배포 종료 직후 갱신
                             db_update "UPDATE pipeline_jobs SET updated_at=NOW() WHERE job_id='${job_id}' AND status='deploying';"
@@ -8179,18 +8443,24 @@ deploy_job() {
                         fi
                         rm -f "$_fe_release_errf"
                         # 성공·실패와 무관하게 최근 N 개만 남긴다(큐 워커가 쓰는 워크트리는 in_use 로 보존).
-                        go100_prune_release_worktrees "$GO100_REPO_DIR" "$GO100_RELEASE_WORKTREE_KEEP"
+                        GO100_DEPLOY_CALL_TIMEOUT=300 go100_deploy_call go100_prune_release_worktrees "$GO100_REPO_DIR" "$GO100_RELEASE_WORKTREE_KEEP" || true
                     fi
 
                     # 번들 신선도 게이트: URL 200 이 아니라 활성 슬롯 BUILD_ID 가 병합 커밋보다 새것인지 본다.
                     if [[ "$_build_fail" != *"go100-frontend:"* ]] && [[ "$_deploy_deferred" != *"go100-frontend:"* ]]; then
-                        local _fresh_out="" _fresh_status="" _fresh_color="" _fresh_bid="" _fresh_built="" _fresh_commit=""
-                        _fresh_out=$(verify_go100_bundle_fresh "$GO100_REPO_DIR" "$GO100_NGINX_CONF") || _fresh_out=""
+                        local _fresh_out="" _fresh_status="" _fresh_color="" _fresh_bid="" _fresh_built="" _fresh_commit="" _fresh_rc=0
+                        _fresh_out=$(GO100_DEPLOY_CALL_TIMEOUT=60 go100_deploy_call verify_go100_bundle_fresh "$GO100_REPO_DIR" "$GO100_NGINX_CONF") || { _fresh_rc=$?; _fresh_out=""; }
                         IFS='|' read -r _fresh_status _fresh_color _fresh_bid _fresh_built _fresh_commit <<< "$_fresh_out" || true
+                        go100_deploy_comm_failed "$_fresh_rc" && _fresh_status="comm_failed"
                         local _fresh_built_kst="-" _fresh_commit_kst="-"
                         [[ "$_fresh_built" =~ ^[0-9]+$ ]] && _fresh_built_kst=$(TZ=Asia/Seoul date -d "@$_fresh_built" '+%Y-%m-%d %H:%M:%S KST' 2>/dev/null || echo "$_fresh_built")
                         [[ "$_fresh_commit" =~ ^[0-9]+$ ]] && _fresh_commit_kst=$(TZ=Asia/Seoul date -d "@$_fresh_commit" '+%Y-%m-%d %H:%M:%S KST' 2>/dev/null || echo "$_fresh_commit")
                         case "$_fresh_status" in
+                            comm_failed)
+                                log "  ERROR: go100-frontend 신선도 확인 실패 — 통신 실패 (rc=${_fresh_rc} host=${GO100_DEPLOY_SSH_HOST})"
+                                post_to_chat "$session_id" "🔴 [Runner] GO100 프론트엔드 번들 신선도 확인 실패 ($(go100_deploy_comm_label "$_fresh_rc")) — 서빙 번들 미확인"
+                                _build_fail="${_build_fail:+${_build_fail};}go100-frontend:$(go100_deploy_comm_label "$_fresh_rc")"
+                                ;;
                             fresh)
                                 log "  go100-frontend bundle fresh (color=${_fresh_color} BUILD_ID=${_fresh_bid} built=${_fresh_built_kst})"
                                 ;;
@@ -8315,13 +8585,18 @@ deploy_job() {
     # (첫 확인이 10초 뒤 → 5초 뒤).
     local health_budget_sec="${HEALTH_CHECK_BUDGET_SEC:-180}"
     local health_interval_sec="${HEALTH_CHECK_INTERVAL_SEC:-5}"
+    # GO100 백엔드 health_url 은 localhost 다 — 배포 호스트가 따로 있으면 그 호스트에서 확인한다.
+    local -a _health_via=()
+    if [[ "$project" == "GO100" ]] && go100_deploy_is_remote; then
+        _health_via=(go100_deploy_call)
+    fi
     if [[ -n "$health_url" ]]; then
         health_ok="FAIL"
         local _waited=0
         while (( _waited < health_budget_sec )); do
             sleep "$health_interval_sec"
             _waited=$(( _waited + health_interval_sec ))
-            if curl -sf -m 10 -o /dev/null "$health_url"; then
+            if GO100_DEPLOY_CALL_TIMEOUT=30 ${_health_via[@]+"${_health_via[@]}"} curl -sf -m 10 -o /dev/null "$health_url"; then
                 health_ok="OK"
                 log "  HEALTH_OK job=$job_id after=${_waited}s url=$health_url"
                 break
@@ -8370,7 +8645,7 @@ deploy_job() {
         cd "$worktree_dir" 2>/dev/null || true
         if verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir" \
             && git -C "$worktree_dir" revert --no-edit "$current_sha" 2>/dev/null; then
-            local rollback_sha rollback_out rollback_err rollback_exit=0
+            local rollback_sha rollback_out rollback_err rollback_exit=0 _rollback_remote_note=""
             rollback_sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)
             rollback_out=$(mktemp "/tmp/pipeline-rollback-${job_id}.out.XXXXXX")
             rollback_err=$(mktemp "/tmp/pipeline-rollback-${job_id}.err.XXXXXX")
@@ -8408,7 +8683,18 @@ deploy_job() {
                     systemctl restart kis-v41-api 2>/dev/null || true
                     ;;
                 GO100)
-                    systemctl restart go100 2>/dev/null || true
+                    if go100_deploy_is_remote; then
+                        # 원격 모드: 운영 호스트 코드에 rollback_sha 가 있어야만 재기동한다(fail-closed). 없으면 재기동하지 않고 사유를 남긴다.
+                        local -a _rb_verify_paths=()
+                        mapfile -t _rb_verify_paths < <(go100_backend_verify_paths "$_deploy_files_ok" "$_deploy_files")
+                        if ! go100_remote_api_restart "$rollback_sha" rollback "${_rb_verify_paths[@]}"; then
+                            _rollback_remote_note="${GO100_REMOTE_FAIL_LABEL}"
+                            log "  ROLLBACK_REMOTE_RESTART_NOT_DONE job=$job_id label=${_rollback_remote_note} — 롤백 SHA 가 운영 호스트에 반영되지 않았거나 통신 실패, 수동 복구 필요"
+                            post_to_chat "$session_id" "🔴 [Pipeline Runner] GO100 롤백 재기동 미수행 (${_rollback_remote_note}) — 운영 호스트 코드에 롤백 SHA(${rollback_sha:0:9}) 반영을 확인하지 못했습니다. 수동 복구 필요: $job_id"
+                        fi
+                    else
+                        GO100_DEPLOY_CALL_TIMEOUT=180 go100_deploy_call systemctl restart go100 2>/dev/null || true
+                    fi
                     ;;
                 SF)
                     docker restart shortflow-worker 2>/dev/null || true
@@ -8421,7 +8707,7 @@ deploy_job() {
             sleep 10
             local rollback_health="FAIL"
             if [[ -n "$health_url" ]]; then
-                if curl -sf -o /dev/null "$health_url" 2>/dev/null; then
+                if GO100_DEPLOY_CALL_TIMEOUT=30 ${_health_via[@]+"${_health_via[@]}"} curl -sf -o /dev/null "$health_url" 2>/dev/null; then
                     rollback_health="OK"
                 fi
             fi
@@ -8439,9 +8725,9 @@ deploy_job() {
 
             db_update "UPDATE pipeline_jobs SET status='error', phase='health_check_fail_rollback',
                        error_detail='health_check_fail_rollback',
-                       review_feedback=COALESCE(review_feedback,'') || E'\n[자동롤백] health-check 실패 → git revert → rollback_health=${rollback_health}',
+                       review_feedback=COALESCE(review_feedback,'') || E'\n[자동롤백] health-check 실패 → git revert → rollback_health=${rollback_health}${_rollback_remote_note:+ remote_restart=${_rollback_remote_note}}',
                        completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
-            record_runner_event "$job_id" "job_terminal" "error" "health_check_fail_rollback" "" "" "" "" "{\"error_detail\":\"health_check_fail_rollback\",\"rollback_health\":\"${rollback_health}\"}"
+            record_runner_event "$job_id" "job_terminal" "error" "health_check_fail_rollback" "" "" "" "" "{\"error_detail\":\"health_check_fail_rollback\",\"rollback_health\":\"${rollback_health}\"${_rollback_remote_note:+,\"remote_restart\":\"${_rollback_remote_note}\"}}"
             post_to_chat "$session_id" "🔴 [Pipeline Runner] 자동 롤백으로 에러 처리: $job_id"
             _release_deploy_lock "$project" "$job_id"
             _notify_ai "$job_id"

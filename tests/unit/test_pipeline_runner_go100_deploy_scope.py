@@ -246,7 +246,8 @@ def _decision_harness(tmp_path, wt: Path, pre: str, cur: str, hhmm: str, project
 
     helpers = "set -eo pipefail\n"
     for name in ("runner_market_hours_now_epoch", "deploy_changed_files",
-                 "deploy_files_docs_only", "go100_restart_freeze_window"):
+                 "deploy_files_docs_only", "go100_restart_freeze_window",
+                 "go100_deploy_is_remote", "go100_deploy_call"):
         helpers += _extract_function(script, name)
 
     sysl = tmp_path / "systemctl.log"
