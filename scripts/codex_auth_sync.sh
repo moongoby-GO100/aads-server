@@ -28,6 +28,9 @@ WARN_DAYS=3
 # host + port 분리: scp는 -P, ssh는 -p 로 포트를 각각 받아야 한다.
 HOST_211="5.104.86.14";     PORT_211="22"
 HOST_114="114.207.244.86";  PORT_114="7916"
+# 2026-11-04: GO100 러너 이전 대상 contabo92, 러너 풀 contabo42 추가(116 이 갱신 주체, 원격은 받아 쓰기만).
+HOST_92="13.140.248.92";    PORT_92="22"
+HOST_42="46.250.255.42";    PORT_42="22"
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=no"
 
 [[ -f /root/aads/.env ]] && source /root/aads/.env
@@ -185,6 +188,8 @@ sync_state_to_remote() {
 push_state_all() {
     sync_state_to_remote "contabo14" "$HOST_211" "$PORT_211" || true
     sync_state_to_remote "cafe24_114" "$HOST_114" "$PORT_114" || true
+    sync_state_to_remote "contabo92" "$HOST_92" "$PORT_92" || true
+    sync_state_to_remote "contabo42" "$HOST_42" "$PORT_42" || true
     return 0
 }
 
@@ -260,6 +265,8 @@ if (( remaining_int < WARN_DAYS )); then
         # 회전이 어긋난다 — 이 즉시성이 이 설계의 핵심이다.
         sync_to_remote "contabo14" "$HOST_211" "$PORT_211"
         sync_to_remote "cafe24_114" "$HOST_114" "$PORT_114"
+        sync_to_remote "contabo92" "$HOST_92" "$PORT_92"
+        sync_to_remote "contabo42" "$HOST_42" "$PORT_42"
         push_state_all
     fi
 
@@ -272,6 +279,8 @@ else
         log "DAILY_SYNC: 정기 전서버 동기화"
         sync_to_remote "contabo14" "$HOST_211" "$PORT_211"
         sync_to_remote "cafe24_114" "$HOST_114" "$PORT_114"
+        sync_to_remote "contabo92" "$HOST_92" "$PORT_92"
+        sync_to_remote "contabo42" "$HOST_42" "$PORT_42"
         push_state_all
     fi
 fi
