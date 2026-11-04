@@ -3875,8 +3875,131 @@ git_fetch_origin_with_retry() {
     return 1
 }
 
+# ── M3 체크포인트 이어받기 (CKPT-RESUME-BEGIN) ──────────────────────
+# 러너 종료로 재대기한 작업이 다시 시작될 때 M2 가 저장한 체크포인트(base_sha + patch)로 작업 폴더를 만든다.
+# 기준: docs/design/20261104_AADS_러너 재시작 시 작업 이어가기 기획.md 3.2·3.3.
+# 이어받기는 부가 기능이다 — 어떤 실패·시간 초과도 작업을 error 로 만들지 않고 origin/main 새 폴더로 폴백한다.
+# 러너 풀의 다른 호스트가 저장한 체크포인트도 받으므로 host 로 거르지 않는다.
+# _ckpt_bounded / _ckpt_is_true / _ckpt_pos_int 는 M2 블록(CKPT-BEGIN)에 있다.
+CHECKPOINT_RESUME_MAX_AGE_SEC="${CHECKPOINT_RESUME_MAX_AGE_SEC:-86400}"
+CHECKPOINT_RESUME_TIMEOUT="${CHECKPOINT_RESUME_TIMEOUT:-30}"
+CHECKPOINT_RESUME_FILES_MAX=50
+
+_ckpt_resume_remove_worktree() {
+    local main="$1" wt="$2"
+    if [[ -e "$wt" ]]; then
+        git -C "$main" worktree remove "$wt" --force >/dev/null 2>&1 || rm -rf "$wt" 2>/dev/null || true
+    fi
+    git -C "$main" worktree prune >/dev/null 2>&1 || true
+    return 0
+}
+
+# 하위 셸 안에서 실행(시간 상한 적용). stdout 한 줄: resumed|<id>|<files>|<bytes>|<host>  또는  skipped|<reason>
+# 이어받으면 파일 목록(최대 50개)을 $tmpd/files 에 남긴다. 건너뛰는 경우 작업 폴더는 만들어져 있을 수 있다(호출자가 정리).
+_ckpt_resume_apply() {
+    local jid="$1" main="$2" wt="$3" tmpd="$4" cid="$5"
+    local q_id q_job out row base sha bytes host nfiles age_ok hash_ok got
+    q_id="'${cid}'::uuid"
+    q_job=$(sql_escape "$jid")
+    out=$(db_exec "SELECT to_regclass('public.pipeline_job_checkpoints') IS NOT NULL;" 2>/dev/null | tr -d '[:space:]') \
+        || { echo "skipped|db_error"; return 0; }
+    _ckpt_is_true "$out" || { echo "skipped|table_missing"; return 0; }
+    row=$(db_exec "SELECT c.base_sha, c.patch_sha256, c.bytes, c.host, jsonb_array_length(c.files),
+        EXTRACT(EPOCH FROM (now() - c.created_at)) <= $(_ckpt_pos_int "$CHECKPOINT_RESUME_MAX_AGE_SEC" 86400),
+        (COALESCE(p.instruction_hash,'') <> '' AND p.instruction_hash = c.instruction_hash)
+        FROM pipeline_job_checkpoints c JOIN pipeline_jobs p ON p.job_id = c.job_id
+        WHERE c.id = ${q_id} AND c.job_id = ${q_job};" 2>/dev/null) \
+        || { echo "skipped|db_error"; return 0; }
+    [[ -n "$row" ]] || { echo "skipped|none"; return 0; }
+    IFS=$'\x1e' read -r base sha bytes host nfiles age_ok hash_ok <<< "$row"
+    _ckpt_is_true "$age_ok" || { echo "skipped|expired"; return 0; }
+    _ckpt_is_true "$hash_ok" || { echo "skipped|hash_mismatch"; return 0; }
+    [[ "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "skipped|base_missing"; return 0; }
+    git -C "$main" rev-parse --verify "${base}^{commit}" >/dev/null 2>&1 || { echo "skipped|base_missing"; return 0; }
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "skipped|sha_mismatch"; return 0; }
+    [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
+    [[ "$nfiles" =~ ^[0-9]+$ ]] || nfiles=0
+    # 큰 SQL 결과는 변수에 담지 않고 파일로 받는다(patch 는 최대 2MiB).
+    db_exec "SELECT encode(patch,'base64') FROM pipeline_job_checkpoints WHERE id = ${q_id} AND job_id = ${q_job};" \
+        >"$tmpd/patch.b64" 2>/dev/null || { echo "skipped|db_error"; return 0; }
+    base64 -d "$tmpd/patch.b64" >"$tmpd/patch" 2>/dev/null || { echo "skipped|sha_mismatch"; return 0; }
+    got=$(sha256sum "$tmpd/patch" | cut -d' ' -f1)
+    [[ "$got" == "$sha" ]] || { echo "skipped|sha_mismatch"; return 0; }
+    git -C "$main" worktree add --detach "$wt" "$base" >/dev/null 2>&1 || { echo "skipped|base_missing"; return 0; }
+    git -C "$wt" apply --index --binary "$tmpd/patch" >/dev/null 2>&1 || { echo "skipped|apply_failed"; return 0; }
+    # 적용 결과는 전부 index 에 올라가 있어야 한다. 작업 트리에만 남은 변경이 있으면 이어받은 상태를 믿을 수 없다.
+    git -C "$wt" diff --quiet >/dev/null 2>&1 || { echo "skipped|apply_failed"; return 0; }
+    db_exec "SELECT f FROM pipeline_job_checkpoints c, jsonb_array_elements_text(c.files) WITH ORDINALITY AS t(f,n)
+        WHERE c.id = ${q_id} AND c.job_id = ${q_job} ORDER BY t.n LIMIT ${CHECKPOINT_RESUME_FILES_MAX};" \
+        >"$tmpd/files" 2>/dev/null || : >"$tmpd/files"
+    host="${host//|/}"
+    echo "resumed|${cid}|${nfiles}|${bytes}|${host}"
+}
+
+# _ckpt_resume_try <job_id> <main_workdir> <worktree_dir> <지시문 앞머리를 받을 변수 이름>
+# 반환: 0=이어받음(작업 폴더에 patch 가 index 로 적용됨), 1=이어받지 않음(작업 폴더 없음 보장).
+_ckpt_resume_try() {
+    local jid="$1" main="$2" wt="$3" outvar="$4"
+    printf -v "$outvar" '%s' ""
+    local line cid tmpd res="" rc=0 kind="" a="" b="" c="" d="" spent_saved ms
+    local brief f shown=0 base_now
+    # 마지막 재대기 표시 줄만 본다. 표시가 없거나 checkpoint=<id> 가 없으면 소음 없이 기존 경로.
+    if ! line=$(db_exec "SELECT t.l FROM pipeline_jobs p, LATERAL unnest(string_to_array(COALESCE(p.review_feedback,''), E'\n')) WITH ORDINALITY AS t(l,n)
+            WHERE p.job_id=$(sql_escape "$jid") AND position($(sql_escape "$SHUTDOWN_REQUEUE_MARK") in t.l) > 0
+            ORDER BY t.n DESC LIMIT 1;" 2>/dev/null); then
+        log "  checkpoint 이어받기 건너뜀 job=$jid reason=db_error"
+        record_runner_event "$jid" "checkpoint_resume_skipped" "" "" "" "" "" "" "{\"reason\":\"db_error\"}" || true
+        return 1
+    fi
+    [[ "$line" =~ checkpoint=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) ]] || return 1
+    cid="${BASH_REMATCH[1]}"
+    tmpd=$(mktemp -d 2>/dev/null) || return 1
+
+    spent_saved=$_CKPT_SPENT_MS
+    ms=$(( $(_ckpt_pos_int "$CHECKPOINT_RESUME_TIMEOUT" 30) * 1000 ))
+    _ckpt_bounded "$ms" "$tmpd/result" _ckpt_resume_apply "$jid" "$main" "$wt" "$tmpd" "$cid" || rc=$?
+    _CKPT_SPENT_MS=$spent_saved
+    if (( rc == 124 )); then
+        res="skipped|timeout"
+    else
+        res=$(head -n1 "$tmpd/result" 2>/dev/null) || res=""
+    fi
+    IFS='|' read -r kind a b c d <<< "$res"
+
+    if [[ "$kind" == "resumed" && "$a" == "$cid" ]]; then
+        brief="[이전 시도 이어받기]"$'\n'"이전 시도에서 아래 파일을 이미 수정했다. 이어서 완료하라."$'\n'
+        brief+="해당 변경은 작업 폴더에 이미 적용되어 있다(git index 에 staged). 처음부터 다시 만들지 말고 현재 파일 상태를 확인한 뒤 남은 부분만 완료하라."$'\n'
+        while IFS= read -r f && (( shown < CHECKPOINT_RESUME_FILES_MAX )); do
+            f="${f//$'\r'/}"
+            [[ -n "$f" ]] || continue
+            brief+="- ${f}"$'\n'
+            shown=$(( shown + 1 ))
+        done < "$tmpd/files"
+        if [[ "$b" =~ ^[0-9]+$ ]] && (( b > shown )); then
+            brief+="- (외 $(( b - shown ))개)"$'\n'
+        fi
+        brief+=$'\n'
+        rm -rf "$tmpd"
+        base_now=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || base_now=""
+        log "  WORKTREE_RESUMED: $wt base=${base_now} checkpoint=${cid}"
+        record_runner_event "$jid" "job_resumed_from_checkpoint" "" "" "" "" "" "" \
+            "{\"checkpoint_id\":\"${cid}\",\"files\":${b:-0},\"bytes\":${c:-0},\"from_host\":\"$(_receipt_json_str "$d" 100)\"}" || true
+        printf -v "$outvar" '%s' "$brief"
+        return 0
+    fi
+
+    rm -rf "$tmpd"
+    [[ "$kind" == "skipped" && "$a" =~ ^(none|expired|hash_mismatch|base_missing|sha_mismatch|apply_failed|table_missing|db_error|timeout)$ ]] || a="db_error"
+    _ckpt_resume_remove_worktree "$main" "$wt"
+    log "  checkpoint 이어받기 건너뜀 job=$jid checkpoint=$cid reason=$a"
+    record_runner_event "$jid" "checkpoint_resume_skipped" "" "" "" "" "" "" "{\"reason\":\"${a}\",\"checkpoint_id\":\"${cid}\"}" || true
+    return 1
+}
+# ── M3 체크포인트 이어받기 (CKPT-RESUME-END) ────────────────────────
+
 prepare_clean_job_worktree() {
     local job_id="$1" project="$2" session_id="$3" main_workdir="$4" worktree_dir="$5"
+    local resume_out_var="${6:-}" resumed=0 _resume_text=""
 
     if [[ ! "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ ]]; then
         _fail_job "$job_id" "$session_id" "invalid_job_id" "worktree 생성 거부: job_id 형식 오류"
@@ -3918,19 +4041,28 @@ prepare_clean_job_worktree() {
     if [[ -e "$worktree_dir" ]]; then
         git -C "$main_workdir" worktree remove "$worktree_dir" --force >/dev/null 2>&1 || rm -rf "$worktree_dir" 2>/dev/null || true
     fi
-    git -C "$main_workdir" worktree add --detach "$worktree_dir" origin/main >/dev/null 2>&1 || {
-        _fail_job "$job_id" "$session_id" "worktree_create_failed" "clean worktree 생성 실패: ${worktree_dir}"
-        return 1
-    }
-
-    local wt_dirty
-    wt_dirty=$(git_dirty_count "$worktree_dir")
-    if [[ "${wt_dirty:-999}" -ne 0 ]]; then
-        _fail_job "$job_id" "$session_id" "worktree_not_clean" "생성된 worktree가 clean 상태가 아님: dirty=${wt_dirty}"
-        return 1
+    if _ckpt_resume_try "$job_id" "$main_workdir" "$worktree_dir" _resume_text; then
+        resumed=1
+    else
+        git -C "$main_workdir" worktree add --detach "$worktree_dir" origin/main >/dev/null 2>&1 || {
+            _fail_job "$job_id" "$session_id" "worktree_create_failed" "clean worktree 생성 실패: ${worktree_dir}"
+            return 1
+        }
     fi
 
-    log "  WORKTREE_CLEAN: $worktree_dir base=origin/main"
+    # 이어받은 폴더는 patch 가 index 에 올라가 있어 dirty 가 정상이다(적용 직후 검증은 _ckpt_resume_apply 가 했다).
+    if (( resumed == 0 )); then
+        local wt_dirty
+        wt_dirty=$(git_dirty_count "$worktree_dir")
+        if [[ "${wt_dirty:-999}" -ne 0 ]]; then
+            _fail_job "$job_id" "$session_id" "worktree_not_clean" "생성된 worktree가 clean 상태가 아님: dirty=${wt_dirty}"
+            return 1
+        fi
+        log "  WORKTREE_CLEAN: $worktree_dir base=origin/main"
+    fi
+    if [[ -n "$resume_out_var" ]]; then
+        printf -v "$resume_out_var" '%s' "$_resume_text"
+    fi
     return 0
 }
 
@@ -5940,6 +6072,7 @@ run_job() {
 
     local use_worktree=false
     local worktree_dir=""
+    local resume_brief=""
 
     # 로컬 Git 프로젝트는 항상 origin/main 기반 clean worktree에서만 실행한다.
     # main workdir fallback은 세션 간 변경 혼입과 최신 main 이탈을 만들기 때문에 금지한다.
@@ -5958,7 +6091,7 @@ run_job() {
             rm -f /tmp/.pipeline_current_job
             return 1
         fi
-        prepare_clean_job_worktree "$job_id" "$project" "$session_id" "$workdir" "$worktree_dir" || {
+        prepare_clean_job_worktree "$job_id" "$project" "$session_id" "$workdir" "$worktree_dir" resume_brief || {
             _release_work_lock "$project" "$job_id" "$parallel_group"
             # 이전 시도가 아직 .out/.err를 쓰고 있을 수 있어 산출물은 보존한다.
             promote_next_queued "$project"
@@ -6299,7 +6432,7 @@ ${aag_step0_hint}- 대상 파일의 기존 함수/클래스/엔드포인트/스�
 - 삭제가 필요하면 삭제 대상, 호출처 영향, 롤백 방법을 RESULT에 명시하세요.
 - 지시서에 명시되지 않은 파일을 변경해야 하면 변경 전 사유를 RESULT에 명시하세요.
 
-${safe_instruction}"
+${resume_brief}${safe_instruction}"
 
         if [[ $attempt -eq 0 ]]; then
             log "  MODEL_ATTEMPT job=$job_id model=$current_model cycle=$cycle_num attempt=1/$total_attempts"
