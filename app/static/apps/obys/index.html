@@ -3281,6 +3281,7 @@
         </section>
 
     <main id="appMain" class="app-only hidden">
+      <div id="businessListState" class="hidden" aria-live="polite"></div>
       <section id="dashboardView">
         <div class="home-head" aria-label="오늘 홈 머리줄">
           <h2>오늘 홈</h2>
@@ -6095,58 +6096,11 @@
       can_upload_own_documents: false
     };
 
+    // 사업자·지점·계좌는 서버 응답(/settings)으로만 채운다. 어떤 회사의 실매장도 여기에 두지 않는다.
     const defaultSettings = {
-      businesses: [
-        {
-          id: "biz-junghwa",
-          entityType: "corporation",
-          name: "열정국밥 중화점",
-          registrationNo: "710-86-04499",
-          representative: "오윤희",
-          taxType: "일반과세",
-          openedAt: "2026-07-01",
-          address: "서울특별시 중랑구 봉화산로27길 8, 1층(중화동)",
-          memo: "법인사업자 / 법인등록번호 110111-0961922 / 주류판매신고번호 146-5-11334"
-        },
-        {
-          id: "biz-sungshin",
-          entityType: "individual",
-          name: "열정국밥 성신여대점",
-          registrationNo: "",
-          representative: "",
-          taxType: "일반과세",
-          openedAt: "",
-          address: "",
-          memo: "개인사업자 2"
-        },
-        {
-          id: "biz-mia",
-          entityType: "individual",
-          name: "열정국밥_미아점",
-          registrationNo: "874-21-02160",
-          representative: "최미미",
-          taxType: "일반과세",
-          openedAt: "2025-04-01",
-          address: "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)",
-          memo: "개인사업자 3 / 주류판매신고번호 210-5-62608"
-        }
-      ],
-      branches: [
-        { id: "branch-junghwa", name: "중화점", businessId: "biz-junghwa", status: "active", phone: "", address: "서울특별시 중랑구 봉화산로27길 8, 1층(중화동)" },
-        { id: "branch-sungshin", name: "성신여대점", businessId: "biz-sungshin", status: "active", phone: "", address: "" },
-        { id: "branch-gangbuk-mia", name: "열정국밥_미아점", businessId: "biz-mia", status: "active", phone: "", address: "서울특별시 강북구 도봉로76길 42, 1층 점포일부(좌측)" }
-      ],
-      accounts: [
-        {
-          id: "acct-sungshin-ibk",
-          bank: "IBK기업은행",
-          name: "성신여대점 운영계좌",
-          accountNo: "005-******-01-017",
-          businessId: "biz-sungshin",
-          holder: "김영주",
-          memo: "통장사본 기준 / 예금종류 보통예금 / 신규일 2017-06-22 / 관리점 삼양동"
-        }
-      ],
+      businesses: [],
+      branches: [],
+      accounts: [],
       staff: [],
       integrations: [
         {
@@ -6155,8 +6109,8 @@
           label: "배민 셀프서비스",
           loginUrl: "https://biz-member.baemin.com/login",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "********",
           collectionMode: "portal-csv",
           status: "vault-ready",
@@ -6169,8 +6123,8 @@
           label: "쿠팡이츠 사장님",
           loginUrl: "https://store.coupangeats.com/merchant/login",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "********",
           collectionMode: "portal-csv",
           status: "vault-ready",
@@ -6183,8 +6137,8 @@
           label: "요기요 사장님",
           loginUrl: "https://ceo.yogiyo.co.kr/login",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "********",
           collectionMode: "portal-csv",
           status: "vault-ready",
@@ -6197,8 +6151,8 @@
           label: "땡겨요",
           loginUrl: "https://boss.ddangyo.com/",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "********",
           collectionMode: "portal-csv",
           status: "vault-ready",
@@ -6211,8 +6165,8 @@
           label: "메이트포스",
           loginUrl: "https://www.matetech.co.kr/login",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "********",
           collectionMode: "pos-export",
           status: "vault-ready",
@@ -6225,8 +6179,8 @@
           label: "신한은행 기업",
           loginUrl: "https://bank.shinhan.com/rib/easy/index.jsp#210000000000",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "Vault/입력 필요",
           collectionMode: "bank-quick-service",
           status: "ready",
@@ -6239,13 +6193,13 @@
           label: "기업은행 기업",
           loginUrl: "https://kiup.ibk.co.kr/",
           username: "",
-          businessId: "biz-sungshin",
-          branch: "성신여대점",
+          businessId: "",
+          branch: "",
           passwordMasked: "Vault/입력 필요",
           collectionMode: "bank-openbanking",
           status: "ready",
           vaultService: "yeoljeong-ibk-business",
-          memo: "성신여대점 운영계좌 거래내역 수집 및 입금 대사 대상"
+          memo: "운영계좌 거래내역 수집 및 입금 대사 대상"
         },
         {
           id: "int-coupang-supplier",
@@ -6253,8 +6207,8 @@
           label: "쿠팡 매입처",
           loginUrl: "https://supplier.coupang.com/",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "Vault/입력 필요",
           collectionMode: "purchase-portal",
           status: "ready",
@@ -6267,8 +6221,8 @@
           label: "마켓봄",
           loginUrl: "https://marketbom.com/",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "********",
           collectionMode: "portal-csv",
           status: "vault-ready",
@@ -6281,8 +6235,8 @@
           label: "뉴통",
           loginUrl: "",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "Vault/입력 필요",
           collectionMode: "purchase-portal",
           status: "ready",
@@ -6295,8 +6249,8 @@
           label: "발주고",
           loginUrl: "",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "Vault/입력 필요",
           collectionMode: "purchase-portal",
           status: "ready",
@@ -6309,8 +6263,8 @@
           label: "거래내역서/영수증 업로드",
           loginUrl: "",
           username: "",
-          businessId: "biz-mia",
-          branch: "열정국밥_미아점",
+          businessId: "",
+          branch: "",
           passwordMasked: "",
           collectionMode: "receipt-photo",
           status: "manual",
@@ -6323,7 +6277,7 @@
           label: "홈택스",
           loginUrl: "https://www.hometax.go.kr/",
           username: "",
-          businessId: "biz-mia",
+          businessId: "",
           branch: "",
           passwordMasked: "Vault/입력 필요",
           collectionMode: "hometax-certificate",
@@ -6337,7 +6291,7 @@
           label: "계산서/증빙 업로드",
           loginUrl: "",
           username: "",
-          businessId: "biz-mia",
+          businessId: "",
           branch: "",
           passwordMasked: "",
           collectionMode: "tax-invoice-upload",
@@ -6348,15 +6302,13 @@
       ]
     };
 
+    // 예전 빌드가 브라우저 저장소에 심어 둔 특정 회사 매장. 서버 응답이 아닌 저장본에서만 걷어 낸다.
+    const LEGACY_SEED_BUSINESS_IDS = new Set(["biz-junghwa", "biz-sungshin", "biz-mia"]);
+    const LEGACY_SEED_BRANCH_IDS = new Set(["branch-junghwa", "branch-sungshin", "branch-gangbuk-mia"]);
+    const LEGACY_SEED_ACCOUNT_IDS = new Set(["acct-sungshin-ibk"]);
+
     const sampleData = {
-      entries: [
-        { id: uid(), date: "2026-07-01", branch: "중화점", type: "sales", vendor: "포스 카드매출", channel: "카드", amount: 1820000, status: "confirmed", memo: "" },
-        { id: uid(), date: "2026-07-01", branch: "중화점", type: "sales", vendor: "배달앱 매출", channel: "배달앱", amount: 640000, status: "confirmed", memo: "" },
-        { id: uid(), date: "2026-07-02", branch: "중화점", type: "bank", vendor: "카카오뱅크 입금", channel: "계좌", amount: 1764000, status: "pending", memo: "카드 정산 차이 확인" },
-        { id: uid(), date: "2026-07-03", branch: "중화점", type: "marketbom", vendor: "마켓봄 식자재", channel: "마켓봄", amount: 438000, status: "confirmed", memo: "육수/부자재" },
-        { id: uid(), date: "2026-07-04", branch: "중화점", type: "expense", vendor: "가스비", channel: "계좌", amount: 186000, status: "confirmed", memo: "" },
-        { id: uid(), date: "2026-07-05", branch: "성신여대점", type: "sales", vendor: "포스 카드매출", channel: "카드", amount: 1260000, status: "confirmed", memo: "" }
-      ],
+      entries: [],
       // 근태 정본은 서버다. 샘플 근태는 "미저장" 으로 떠서 실데이터로 올라갈 수 있어 두지 않는다.
       shifts: [],
       contracts: [],
@@ -6437,7 +6389,7 @@
           deliverySales: Array.isArray(parsed.deliverySales) ? parsed.deliverySales : [],
           deliverySettlements: Array.isArray(parsed.deliverySettlements) ? parsed.deliverySettlements : [],
           deliveryReviews: Array.isArray(parsed.deliveryReviews) ? parsed.deliveryReviews : [],
-          settings: mergeSettings(parsed.settings),
+          settings: mergeSettings(dropLegacySeedSettings(parsed.settings)),
           meta: parsed.meta || {}
         };
       } catch (err) {
@@ -6462,48 +6414,51 @@
       return merged;
     }
 
-    const CANONICAL_BUSINESS_IDS = new Set(defaultSettings.businesses.map(item => item.id));
-    const CANONICAL_BRANCH_IDS = new Set(defaultSettings.branches.map(item => item.id));
-    const CANONICAL_BRANCH_NAMES = new Set(defaultSettings.branches.map(item => item.name));
-    const MIA_BUSINESS_ID = "biz-mia";
-    const MIA_BRANCH_NAME = "열정국밥_미아점";
-    const MIA_DELIVERY_SERVICES = new Set(["baemin", "coupangeats", "yogiyo", "ddangyo"]);
+    function dropLegacySeedSettings(settings) {
+      if (!settings || typeof settings !== "object") return settings;
+      const keep = (items, seedIds) => (Array.isArray(items) ? items.filter(item => !seedIds.has(item?.id)) : items);
+      const scrub = items => (Array.isArray(items) ? items.map(item => {
+        if (!item || !LEGACY_SEED_BUSINESS_IDS.has(item.businessId)) return item;
+        return { ...item, businessId: "", business_id: "", branch: "" };
+      }) : items);
+      return {
+        ...settings,
+        businesses: keep(settings.businesses, LEGACY_SEED_BUSINESS_IDS),
+        branches: keep(settings.branches, LEGACY_SEED_BRANCH_IDS),
+        accounts: keep(settings.accounts, LEGACY_SEED_ACCOUNT_IDS),
+        integrations: scrub(settings.integrations)
+      };
+    }
 
     function normalizeBusinessScope(next) {
       const activeBusinessIds = new Set(next.businesses.map(item => item.id).filter(Boolean));
       const activeBranchNames = new Set(next.branches.map(item => item.name).filter(Boolean));
       next.accounts.forEach(item => {
-        if (!activeBusinessIds.has(item.businessId)) item.businessId = MIA_BUSINESS_ID;
-        if (item.branch && !activeBranchNames.has(item.branch)) item.branch = MIA_BRANCH_NAME;
+        if (item.businessId && !activeBusinessIds.has(item.businessId)) item.businessId = "";
+        if (item.branch && !activeBranchNames.has(item.branch)) item.branch = "";
       });
       next.integrations.forEach(item => {
-        if (!activeBusinessIds.has(item.businessId)) item.businessId = MIA_BUSINESS_ID;
-        if (item.business_id && !activeBusinessIds.has(item.business_id)) item.business_id = item.businessId;
-        if (item.branch && !activeBranchNames.has(item.branch)) item.branch = MIA_BRANCH_NAME;
+        if (item.businessId && !activeBusinessIds.has(item.businessId)) item.businessId = "";
+        if (item.business_id && !activeBusinessIds.has(item.business_id)) item.business_id = item.businessId || "";
+        if (item.branch && !activeBranchNames.has(item.branch)) item.branch = "";
       });
       return next;
     }
 
+    // 배달 포털 연동은 그 지점이 속한 사업자(서버가 준 목록 안의 id)에 묶는다. 특정 회사 id 를 대신 채워 넣지 않는다.
+    const DELIVERY_PORTAL_SERVICES = new Set(["baemin", "coupangeats", "yogiyo", "ddangyo"]);
+
     function normalizeMiaBusinessLinks(next) {
-      const miaBranch = next.branches.find(item => item.id === "branch-gangbuk-mia");
-      if (miaBranch) miaBranch.businessId = MIA_BUSINESS_ID;
+      const businessIds = new Set(next.businesses.map(item => item.id).filter(Boolean));
       next.integrations.forEach(item => {
-        if (!MIA_DELIVERY_SERVICES.has(item.service)) return;
+        if (!DELIVERY_PORTAL_SERVICES.has(item.service)) return;
         const branch = next.branches.find(candidate => candidate.name === item.branch);
-        if (branch?.businessId && CANONICAL_BUSINESS_IDS.has(branch.businessId)) {
-          item.businessId = branch.businessId;
-          item.business_id = branch.businessId;
-          return;
-        }
-        const scopedBusinessId = item.businessId || item.business_id || "";
-        if (CANONICAL_BUSINESS_IDS.has(scopedBusinessId)) {
-          item.businessId = scopedBusinessId;
-          item.business_id = scopedBusinessId;
-          return;
-        }
-        item.businessId = MIA_BUSINESS_ID;
-        item.business_id = MIA_BUSINESS_ID;
-        if (!item.branch) item.branch = MIA_BRANCH_NAME;
+        const scopedBusinessId = branch?.businessId && businessIds.has(branch.businessId)
+          ? branch.businessId
+          : (item.businessId || item.business_id || "");
+        if (!businessIds.has(scopedBusinessId)) return;
+        item.businessId = scopedBusinessId;
+        item.business_id = scopedBusinessId;
       });
       return next;
     }
@@ -7060,12 +7015,24 @@
       return String(authSession?.user?.email || "").trim().toLowerCase();
     }
 
+    // 표시 이름 순서: 직원 기록 name → 계정 name → 이메일 @ 앞부분. 전체 이메일은 화면에 내보내지 않는다.
     function currentEmployeeName() {
-      if (employeePreview) return employeePreview.name;
-      const user = authSession?.user || {};
+      const clean = value => String(value || "").trim();
+      const plain = value => {
+        const text = clean(value);
+        return text && !text.includes("@") ? text : "";
+      };
       const email = currentEmployeeEmail();
+      const emailLocal = plain(email.split("@")[0]);
+      if (employeePreview) return plain(employeePreview.name) || emailLocal || "직원";
+      const user = authSession?.user || {};
+      const requestId = clean(authPermissions().employee_request_id);
+      const records = typeof employeeJoinRequests === "undefined" ? [] : employeeJoinRequests;
+      const own = records.find(item => String(item.status).toLowerCase() === "approved"
+        && ((requestId && clean(item.id) === requestId)
+          || (email && clean(item.email || item.employee_email).toLowerCase() === email)));
       const selfSignup = loadEmployeeSelfSignupMap()[email] || {};
-      return String(user.name || selfSignup.name || email || "직원").trim();
+      return plain(own?.name || own?.employee_name) || plain(user.name) || plain(selfSignup.name) || emailLocal || "직원";
     }
 
     function isCurrentEmployeeRecord(record, options = {}) {
@@ -12392,6 +12359,7 @@
         document.getElementById("legacyWorkspaceName").textContent = settings().businesses.map(b => b.name).join(" · ");
         document.getElementById("legacyWorkspaceBranches").textContent = settings().branches.map(b => b.name).join(" · ");
 
+      renderBusinessListState();
       renderSettings();
       renderAuthState();
       renderKpis();
@@ -12591,6 +12559,7 @@
         failUnsettledHomeCards("로그인 후 확인할 수 있습니다. 로그인해 주세요.");
         return;
       }
+      if (!ownerBusinessApisAllowed()) return;
       if (homeLoading) return homeLoading;
       if (!force && Date.now() - homeLoadedAt < HOME_RELOAD_MS) return;
       const today = kstDate();
@@ -13421,7 +13390,7 @@
     }
 
     function fallbackBranch(branch) {
-      const defaultBranch = activeBranches()[0]?.name || "중화점";
+      const defaultBranch = activeBranches()[0]?.name || "";
       return branch || (selectedBranch() !== "전체" ? selectedBranch() : defaultBranch);
     }
 
@@ -14104,7 +14073,7 @@
     async function loadLedgerUploads(category) {
       const panel = document.querySelector(`[data-ledger-upload="${category}"]`);
       const businessId = selectedSettingsBusinessId();
-      if (!panel || !hasServerAuth() || !businessId) return;
+      if (!panel || !ownerBusinessApisAllowed() || !businessId) return;
       const [payload, ledger] = await Promise.all([
         financeApi(`/uploads?business_id=${encodeURIComponent(businessId)}&category=${encodeURIComponent(category)}`),
         financeApi(`/uploaded-ledger?business_id=${encodeURIComponent(businessId)}&category=${encodeURIComponent(category)}&limit=20`)
@@ -14171,7 +14140,7 @@
     }
 
     async function loadInventoryData({ silent = false } = {}) {
-      if (!hasServerAuth()) return;
+      if (!ownerBusinessApisAllowed()) return;
       if (els.inventoryDataState) els.inventoryDataState.textContent = "매입·재고 데이터를 불러오는 중입니다…";
       try {
         const [items, orders, balances] = await Promise.all([
@@ -14192,7 +14161,7 @@
     }
 
     async function loadSalesLedger({ silent = false } = {}) {
-      if (!hasServerAuth()) return;
+      if (!ownerBusinessApisAllowed()) return;
       if (els.salesDataState) els.salesDataState.textContent = "매출·정산 원장을 불러오는 중입니다…";
       try {
         const business = selectedSettingsBusinessId();
@@ -14236,6 +14205,86 @@
       ));
     }
 
+    // 소유자·관리자용 API(매출·정산·수집·재고)는 직원 계정과 관리자 직원 미리보기에서 부르지 않는다.
+    function ownerApisAllowed() {
+      return hasServerAuth() && !isEmployeeExperience();
+    }
+
+    const businessListStatus = { state: "idle", message: "" };
+
+    // 사업자 범위가 필요한 자료는 서버 사업자 목록 조회가 성공한 뒤에만 읽는다. 조회 전·조회 중·실패에서는 막는다.
+    function ownerBusinessApisAllowed() {
+      return ownerApisAllowed() && businessListStatus.state === "ready";
+    }
+
+    function businessListFailureText(error) {
+      const status = Number(error?.status) || 0;
+      if (status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+      if (status === 403) return "이 계정으로는 사업자 목록을 볼 수 없습니다.";
+      return "네트워크 또는 서버 문제로 사업자 목록을 받지 못했습니다.";
+    }
+
+    function renderBusinessListState() {
+      const el = els.businessListState;
+      if (!el) return;
+      const pending = businessListStatus.state === "loading" || businessListStatus.state === "failed";
+      const show = ownerApisAllowed() && pending && !(state.settings?.businesses || []).length;
+      el.classList.toggle("hidden", !show);
+      if (!show) {
+        el.innerHTML = "";
+        return;
+      }
+      if (businessListStatus.state === "loading") {
+        el.innerHTML = '<div class="state" role="status"><strong>사업자 목록을 불러오는 중입니다…</strong></div>';
+        return;
+      }
+      renderState(el, {
+        kind: "error",
+        title: "사업자 목록을 불러오지 못했습니다",
+        reason: businessListStatus.message,
+        actions: [{ label: "다시 시도", primary: true, onClick: () => retryBusinessList() }]
+      });
+    }
+
+    function setBusinessListStatus(next, error = null, message = "") {
+      businessListStatus.state = next;
+      businessListStatus.message = next === "failed" ? (message || businessListFailureText(error)) : "";
+      renderBusinessListState();
+    }
+
+    function loadOwnerData() {
+      if (!ownerBusinessApisAllowed()) return;
+      loadDeliveryLedgers({ silent: true }).catch(() => {});
+      loadSalesLedger({ silent: true }).catch(() => {});
+      loadInventoryData({ silent: true }).catch(() => {});
+    }
+
+    async function ensureOwnerEntryModules() {
+      if (isEmployeeExperience()) return;
+      try {
+        await loadLegacyEntryModules();
+      } catch (err) {
+        showToast(`화면 모듈을 불러오지 못했습니다: ${err.message}`);
+      }
+    }
+
+    // 목록이 확정되기 전에 setView 가 건너뛴 현재 화면의 자료를, 확정 직후 다시 읽는다.
+    async function settleBusinessList() {
+      if (!ownerBusinessApisAllowed()) return;
+      await ensureOwnerEntryModules();
+      loadOwnerData();
+      if (canManageAutomation()) refreshBankAccounts({ silent: true }).catch(() => {});
+      if (currentView === "dashboard") {
+        loadTodayHome({ force: true }).catch(err => showToast(`오늘 홈 집계 실패: ${err.message}`));
+        window.obysDataOverview?.openGlance();
+      }
+      if (currentView === "sales") window.obysDataOverview?.openDelivery();
+    }
+
+    function retryBusinessList() {
+      return loadServerSettings().catch(err => showToast(`기초설정 불러오기 실패: ${err.message}`));
+    }
+
     async function loadServerSettings() {
       if (!hasServerAuth()) return null;
       // GET /settings 는 테넌트 구분 없는 레거시 전역 JSON 이다. 직원은 쓰지 않으므로 부르지 않고,
@@ -14256,6 +14305,37 @@
       }
       return payload;
     }
+
+    // 서버 사업자 목록을 받는다. 비어 있지 않은 businesses 를 실제로 받았을 때만 "ready" 가 된다.
+    // 403 을 삼키고 null 을 돌려주는 경로·빈 목록·실패는 모두 ready 가 아니므로 사업자 범위 조회가 막힌다.
+    // 진입점 호출 모양과 위 함수 본문은 그대로 두고 상태 추적만 바깥에서 입힌다.
+    function trackBusinessListLoad(fetcher) {
+      return async function trackedLoadServerSettings() {
+        if (!hasServerAuth()) return null;
+        if (isEmployeeExperience()) return fetcher();
+        setBusinessListStatus("loading");
+        let payload;
+        try {
+          payload = await fetcher();
+        } catch (err) {
+          setBusinessListStatus("failed", err);
+          throw err;
+        }
+        if (!payload) {
+          setBusinessListStatus("failed", { status: 403 });
+          return payload;
+        }
+        if (!(payload.settings?.businesses || []).length) {
+          setBusinessListStatus("failed", null, "등록된 사업자가 없습니다. 기초설정에서 사업자를 추가한 뒤 다시 시도해 주세요.");
+          return payload;
+        }
+        setBusinessListStatus("ready");
+        settleBusinessList().catch(() => {});
+        return payload;
+      };
+    }
+
+    loadServerSettings = trackBusinessListLoad(loadServerSettings);
 
     async function persistSettingsToServer() {
       if (!hasServerAuth() || !canManageSettings()) return null;
@@ -15101,6 +15181,7 @@
       if (followPostLoginRedirect()) return;
       if (await shouldOpenV41AppVerified() && openV41App()) return;
       if (!await verifyLegacyEntry()) return;
+      await ensureOwnerEntryModules();
       setView(savedUiView() || defaultView());
       renderAuthState();
       refreshFinanceSessionInBackground();
@@ -15626,6 +15707,7 @@
     async function refreshBankAccounts({ silent = false, scopeOverride = null } = {}) {
       if (!canManageAutomation()) return;
       const scope = scopeOverride || selectedAutomationScope();
+      if (!ownerBusinessApisAllowed() || !scope.business_id) return;
       const branchId = branchIdForName(scope.branch);
       const query = new URLSearchParams({ business_id: scope.business_id });
       if (branchId) query.set("branch_id", branchId);
@@ -15784,7 +15866,7 @@
     }
 
     async function loadDeliverySettlements() {
-      if (!hasServerAuth()) return;
+      if (!ownerBusinessApisAllowed()) return;
       const selectedBusiness = selectedSettingsBusinessId();
       const query = selectedBusiness ? `?business_id=${encodeURIComponent(selectedBusiness)}` : "";
       const payload = await financeApi(`/settlements${query}`);
@@ -15795,7 +15877,7 @@
     }
 
     async function loadDeliverySales() {
-      if (!hasServerAuth()) return;
+      if (!ownerBusinessApisAllowed()) return;
       const selectedBusiness = selectedSettingsBusinessId();
       const query = selectedBusiness ? `?business_id=${encodeURIComponent(selectedBusiness)}` : "";
       const payload = await financeApi(`/sales${query}`);
@@ -15806,7 +15888,7 @@
     }
 
     async function loadDeliveryReviews() {
-      if (!hasServerAuth()) return;
+      if (!ownerBusinessApisAllowed()) return;
       const selectedBusiness = selectedSettingsBusinessId();
       const query = selectedBusiness ? `?business_id=${encodeURIComponent(selectedBusiness)}` : "";
       const payload = await financeApi(`/reviews${query}`);
@@ -15817,7 +15899,7 @@
     }
 
     async function loadCollectionStatus() {
-      if (!hasServerAuth()) return;
+      if (!ownerBusinessApisAllowed()) return;
       const selectedBusiness = selectedSettingsBusinessId();
       const query = selectedBusiness ? `?business_id=${encodeURIComponent(selectedBusiness)}` : "";
       const payload = await financeApi(`/collection-status${query}`);
@@ -15826,7 +15908,7 @@
     }
 
     async function loadDeliveryLedgers({ silent = false } = {}) {
-      if (!hasServerAuth()) return;
+      if (!ownerBusinessApisAllowed()) return;
       await Promise.all([
         loadDeliverySettlements(),
         loadDeliverySales(),
@@ -17751,7 +17833,9 @@
     async function init() {
       if (!await verifyLegacyEntry()) return;
       // Auto-loading modules must also wait for the tenant decision.
-      await loadLegacyEntryModules();
+      // 매출·수집 개요 모듈은 로드되는 즉시 소유자용 API 를 부른다 — 직원 계정·직원 미리보기에는 싣지 않는다.
+      // 직원으로 열었다가 같은 페이지에서 소유자로 로그인하면 loginToServer·settleBusinessList 가 뒤늦게 싣는다.
+      if (!isEmployeeExperience()) await loadLegacyEntryModules();
       initSelects();
       setDefaults();
       setAuthMode("login");
@@ -17781,11 +17865,6 @@
       if (canManageAutomation()) {
         refreshServerAccounts().catch(() => {});
         trackViewLoad("accounts", "bank", refreshBankAccounts({ silent: true }));
-      }
-      if (hasServerAuth()) loadDeliveryLedgers({ silent: true }).catch(() => {});
-      if (hasServerAuth()) {
-        loadSalesLedger({ silent: true }).catch(() => {});
-        loadInventoryData({ silent: true }).catch(() => {});
       }
       if (canManageOnboarding()) loadEmployeeInvites().catch(() => {});
       if (hasServerAuth()) {
