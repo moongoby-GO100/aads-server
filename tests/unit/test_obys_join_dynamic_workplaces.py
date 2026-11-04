@@ -119,7 +119,7 @@ def db(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(svc, "_db_available", lambda: True)
-    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation: operation())
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation, *lock_keys: operation())
     monkeypatch.setattr(svc, "_run_db", run_db)
     monkeypatch.setattr(svc, "_db_fetch_ledger", fake_fetch_ledger)
     monkeypatch.setattr(svc, "_db_upsert_ledger", fake_upsert_ledger)
@@ -138,7 +138,7 @@ def _listing() -> dict[str, dict]:
 
 
 def _join(business_id: str, branch: str = "") -> dict:
-    payload = {"name": "양재혁", "email": EMP_EMAIL, "business_id": business_id}
+    payload = {"name": "양재혁", "email": EMP_EMAIL, "business_id": business_id, "phone": "010-1234-5678"}
     if branch:
         payload["branch"] = branch
     return svc.upsert_join_request(payload, EMPLOYEE)
@@ -221,7 +221,7 @@ def test_tenant_unlinked_business_is_not_exposed(monkeypatch):
     import asyncpg
 
     monkeypatch.setattr(svc, "_db_available", lambda: True)
-    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation: operation())
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation, *lock_keys: operation())
     monkeypatch.setattr(svc, "_db_url", lambda: "postgresql://unused")
     all_businesses = {"biz-junghwa": "열정국밥 중화점", UNLINKED_BIZ: "시크블랙", OFFICE_BIZ: "단하루"}
     linked = {"biz-junghwa", OFFICE_BIZ}

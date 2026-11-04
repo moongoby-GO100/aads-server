@@ -54,15 +54,15 @@ def isolated(tmp_path, monkeypatch):
         "employee_join_requests",
         [
             _join("join-mia", "가입 직원", EMPLOYEE["email"]),
-            _join("join-other", "다른 직원", OTHER_EMPLOYEE["email"]),
+            _join("join-other", "다른 직원", OTHER_EMPLOYEE["email"], "010-9999-0000"),
             {**_join("join-admin", "점장", "manager@example.com"), "role": "admin"},
         ],
     )
 
 
-def _join(join_id, name, email):
+def _join(join_id, name, email, phone="010-1234-5678"):
     return {
-        "id": join_id, "name": name, "email": email, "address": "서울시 직원 주소", "phone": "010-1234-5678",
+        "id": join_id, "name": name, "email": email, "address": "서울시 직원 주소", "phone": phone,
         "birth_date": "1990-01-01", "tenant_id": TENANT, "business_id": "biz-mia", "branch": "열정국밥_미아점",
         "status": "approved",
     }

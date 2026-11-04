@@ -592,12 +592,14 @@ def test_account_email_changed_since_request_is_identity_mismatch(env):
 
 def test_upsert_join_request_binds_requester_only_for_own_email(env):
     employee = _user(EMPLOYER, "member")
-    own = svc.upsert_join_request({"name": EMP_NAME, "email": EMP_EMAIL, "branch": "열정국밥_미아점"}, employee)
+    own = svc.upsert_join_request(
+        {"name": EMP_NAME, "email": EMP_EMAIL, "branch": "열정국밥_미아점", "phone": "010-1111-2222"}, employee
+    )
     assert own["requester_user_id"] == EMP_ID and own["requester_email"] == EMP_EMAIL
     assert svc._join_request_account_id(own) == EMP_ID
 
     forged = svc.upsert_join_request(
-        {"name": "피해자", "email": "victim@example.com", "branch": "열정국밥_미아점"}, employee
+        {"name": "피해자", "email": "victim@example.com", "branch": "열정국밥_미아점", "phone": "010-3333-4444"}, employee
     )
     assert "requester_user_id" not in forged
     assert forged["registered_by"] == EMP_EMAIL
@@ -766,7 +768,7 @@ def test_concurrent_file_audit_appends_are_not_lost(env):
 def test_db_audit_failure_falls_back_to_file_ledger(env, monkeypatch):
     """리뷰 지적 2: 감사 마이그레이션(HOLD) 적용 전 DB INSERT 가 실패해도 이벤트를 잃지 않는다."""
     monkeypatch.setattr(svc, "_db_available", lambda: True)
-    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation: operation())
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation, *lock_keys: operation())
     monkeypatch.setattr(svc, "_run_db", _disable_db)  # 실패 = None
 
     assert svc._record_membership_audit_sync({"id": "a-1", "join_request_id": "j-1"}) is True

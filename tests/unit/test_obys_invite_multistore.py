@@ -131,7 +131,7 @@ def db(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(svc, "_db_available", lambda: True)
-    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation: operation())
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation, *lock_keys: operation())
     monkeypatch.setattr(svc, "_run_db", run_db)
     monkeypatch.setattr(svc, "_db_fetch_ledger", fake_fetch_ledger)
     monkeypatch.setattr(svc, "_db_upsert_ledger", fake_upsert_ledger)
@@ -232,7 +232,7 @@ def test_legacy_branch_only_builds_one_target(db):
 def test_accept_creates_one_request_per_store_in_each_employer_tenant(db):
     # 두 매장이 서로 다른 고용주 테넌트 소속인 초대(레코드를 직접 심는다).
     svc._write_file_rows("employee_invites", [{
-        "id": "inv-multi", "token": "tok-multi", "name": "초대 직원", "status": "pending",
+        "id": "inv-multi", "token": "tok-multi", "name": "초대 직원", "phone": "010-1234-5678", "status": "pending",
         "targets": [
             {"business_id": "biz-sungshin", "branch": "성신여대점"},
             {"business_id": "biz-junghwa", "branch": "중화점"},
@@ -264,7 +264,7 @@ def test_created_invite_round_trips_through_accept(db):
 
 
 def test_legacy_invite_without_targets_still_accepts_single_request(db):
-    svc._write_file_rows("employee_invites", [{"id": "inv-old", "token": "tok-old", "branch": "성신여대점", "status": "pending"}])
+    svc._write_file_rows("employee_invites", [{"id": "inv-old", "token": "tok-old", "branch": "성신여대점", "phone": "010-1234-5678", "status": "pending"}])
     result = svc.accept_invite({"token": "tok-old", "name": "양재혁", "branch": "미아점"}, EMPLOYEE)
     assert result["request"]["business_id"] == "biz-sungshin"
     assert len(result["requests"]) == 1

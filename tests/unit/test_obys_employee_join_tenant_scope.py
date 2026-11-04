@@ -108,7 +108,7 @@ def db(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(svc, "_db_available", lambda: True)
-    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation: operation())
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation, *lock_keys: operation())
     monkeypatch.setattr(svc, "_run_db", run_db)
     monkeypatch.setattr(svc, "_db_fetch_ledger", fake_fetch_ledger)
     monkeypatch.setattr(svc, "_db_upsert_ledger", fake_upsert_ledger)
@@ -142,7 +142,7 @@ def db(tmp_path, monkeypatch):
 
 
 def _apply(user: dict = EMPLOYEE, **extra) -> dict:
-    return svc.upsert_join_request({"name": "신규 직원", "email": EMP_EMAIL, "branch": "성신여대점", **extra}, user)
+    return svc.upsert_join_request({"name": "신규 직원", "email": EMP_EMAIL, "phone": "010-1234-5678", "branch": "성신여대점", **extra}, user)
 
 
 # --- 1. 신규 테넌트 직원의 성신여대점 가입요청 -----------------------------------------------
@@ -161,7 +161,7 @@ def test_new_tenant_employee_request_is_owned_by_employer_tenant(db):
 
 def test_invite_accept_uses_the_invited_business_not_payload_branch(db):
     svc._write_file_rows("employee_invites", [{
-        "id": "inv-1", "token": "tok-1", "branch": "성신여대점", "name": "초대 직원", "status": "pending",
+        "id": "inv-1", "token": "tok-1", "branch": "성신여대점", "name": "초대 직원", "phone": "010-1234-5678", "status": "pending",
     }])
     record = svc.accept_invite({"token": "tok-1", "branch": "미아점"}, EMPLOYEE)
     assert record["business_id"] == "biz-sungshin"

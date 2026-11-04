@@ -214,6 +214,7 @@ class JoinRequestCreate(BaseModel):
 class ReviewPayload(BaseModel):
     action: str = Field(default="approved")
     memo: str = ""
+    duplicate_resolution: str = ""
 
 
 class EmployeeRoleUpdate(BaseModel):
@@ -576,7 +577,9 @@ async def create_employee_join_request(payload: JoinRequestCreate, current_user:
 @router.patch("/employees/join-requests/{request_id}")
 async def review_employee_join_request(request_id: str, payload: ReviewPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     # 승인 → 고용주 테넌트 member 연결, 반려 → 회수. 결과는 membership 에 담는다.
-    return await svc.review_join_request_with_membership(request_id, payload.action, payload.memo, current_user)
+    return await svc.review_join_request_with_membership(
+        request_id, payload.action, payload.memo, current_user, duplicate_resolution=payload.duplicate_resolution
+    )
 
 
 @router.get("/employees/approved")
@@ -815,6 +818,11 @@ async def save_contract(payload: GenericPayload, current_user: dict = Depends(ge
 async def request_contract_signature(contract_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     # 알림 실패는 200 을 유지하고 notify.status 로만 알린다.
     return await run_in_threadpool(svc.request_contract_signature_with_notice, contract_id, current_user)
+
+
+@router.get("/contracts/{contract_id}/signature-duplicate-check")
+async def check_contract_signature_duplicates(contract_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.contract_signature_duplicate_check, contract_id, current_user)
 
 
 @router.post("/contracts/{contract_id}/resend-signature-notice")

@@ -46,7 +46,7 @@ def isolated(tmp_path, monkeypatch):
 
 
 def _request(store: dict, **extra) -> dict:
-    return svc.upsert_join_request({"name": "겸직 직원", "email": EMP_EMAIL, **store, **extra}, EMPLOYEE)
+    return svc.upsert_join_request({"name": "겸직 직원", "email": EMP_EMAIL, "phone": "010-1234-5678", **store, **extra}, EMPLOYEE)
 
 
 def _rows() -> list[dict]:
@@ -83,7 +83,7 @@ def test_three_stores_three_requests():
 
 def test_branch_only_payload_resolves_business_and_does_not_overwrite_other_store():
     first = _request(MIA)
-    second = svc.upsert_join_request({"name": "직원", "email": EMP_EMAIL, "branch": "중화점"}, EMPLOYEE)
+    second = svc.upsert_join_request({"name": "직원", "email": EMP_EMAIL, "phone": "010-1234-5678", "branch": "중화점"}, EMPLOYEE)
     assert second["id"] != first["id"]
     assert second["business_id"] == "biz-junghwa"
     assert len(_rows()) == 2
@@ -91,7 +91,7 @@ def test_branch_only_payload_resolves_business_and_does_not_overwrite_other_stor
 
 def test_payload_without_branch_or_business_keeps_existing_values():
     first = _request(MIA)
-    updated = svc.upsert_join_request({"name": "이름변경", "email": EMP_EMAIL}, EMPLOYEE)
+    updated = svc.upsert_join_request({"name": "이름변경", "email": EMP_EMAIL, "phone": "010-1234-5678"}, EMPLOYEE)
     assert updated["id"] == first["id"]
     assert updated["business_id"] == "biz-mia"
     assert updated["branch"] == "열정국밥_미아점"
@@ -130,7 +130,7 @@ def test_payload_without_business_on_blank_row_keeps_prior_behavior():
         {"id": "legacy-1", "email": EMP_EMAIL, "tenant_id": TENANT, "business_id": "", "branch": "", "status": "pending"},
     ])
     with pytest.raises(HTTPException) as excinfo:
-        svc.upsert_join_request({"name": "이름", "email": EMP_EMAIL}, EMPLOYEE)
+        svc.upsert_join_request({"name": "이름", "email": EMP_EMAIL, "phone": "010-1234-5678"}, EMPLOYEE)
     assert excinfo.value.status_code == 400
     assert [row["id"] for row in _rows()] == ["legacy-1"]
 
@@ -152,7 +152,7 @@ def test_two_blank_business_rows_reject_with_400():
 def test_branch_business_mismatch_still_400():
     with pytest.raises(HTTPException) as excinfo:
         svc.upsert_join_request(
-            {"name": "직원", "email": EMP_EMAIL, "business_id": "biz-junghwa", "branch": "열정국밥_미아점"}, EMPLOYEE
+            {"name": "직원", "email": EMP_EMAIL, "phone": "010-1234-5678", "business_id": "biz-junghwa", "branch": "열정국밥_미아점"}, EMPLOYEE
         )
     assert excinfo.value.status_code == 400
     assert "일치하지 않습니다" in str(excinfo.value.detail)
@@ -163,7 +163,7 @@ def test_mismatch_against_existing_row_is_still_400():
     _request(MIA)
     with pytest.raises(HTTPException) as excinfo:
         svc.upsert_join_request(
-            {"name": "직원", "email": EMP_EMAIL, "business_id": "biz-mia", "branch": "중화점"}, EMPLOYEE
+            {"name": "직원", "email": EMP_EMAIL, "phone": "010-1234-5678", "business_id": "biz-mia", "branch": "중화점"}, EMPLOYEE
         )
     assert excinfo.value.status_code == 400
 

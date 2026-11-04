@@ -99,7 +99,7 @@ def db(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(svc, "_db_available", lambda: True)
-    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation: operation())
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation, *lock_keys: operation())
     monkeypatch.setattr(svc, "_run_db", run_db)
     monkeypatch.setattr(svc, "_db_fetch_ledger", fake_fetch_ledger)
     monkeypatch.setattr(svc, "_db_upsert_ledger", fake_upsert_ledger)
@@ -112,7 +112,7 @@ def db(tmp_path, monkeypatch):
 
 
 def _join(business_id: str, branch: str = "") -> dict:
-    payload = {"name": "양재혁", "email": EMP_EMAIL, "business_id": business_id}
+    payload = {"name": "양재혁", "email": EMP_EMAIL, "business_id": business_id, "phone": "010-1234-5678"}
     if branch:
         payload["branch"] = branch
     return svc.upsert_join_request(payload, EMPLOYEE)

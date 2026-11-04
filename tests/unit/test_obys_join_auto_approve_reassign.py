@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import zlib
 from contextlib import asynccontextmanager
 
 import pytest
@@ -142,7 +143,7 @@ def world(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(svc, "_db_available", lambda: True)
-    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation: operation())
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation, *lock_keys: operation())
     monkeypatch.setattr(svc, "_run_db", run_db)
     monkeypatch.setattr(svc, "_db_fetch_ledger", fake_fetch_ledger)
     monkeypatch.setattr(svc, "_db_upsert_ledger", fake_upsert_ledger)
@@ -233,8 +234,13 @@ def world(tmp_path, monkeypatch):
     return w
 
 
+def _phone_for(email: str) -> str:
+    digits = str(zlib.crc32(email.encode()) % 10**8).zfill(8)
+    return f"010-{digits[:4]}-{digits[4:]}"
+
+
 def _join(user=EMPLOYEE, **extra) -> dict:
-    payload = {"name": "신규 직원", "email": user["email"], "branch": "성신여대점", **extra}
+    payload = {"name": "신규 직원", "email": user["email"], "branch": "성신여대점", "phone": _phone_for(user["email"]), **extra}
     return asyncio.run(svc.create_join_request_with_auto_approval(payload, user))
 
 
@@ -283,7 +289,7 @@ def test_notification_failure_does_not_undo_approval(world):
 
 def test_email_bound_invite_accept_is_auto_approved(world):
     svc._write_file_rows(
-        "employee_invites", [{"id": "inv-1", "token": "tok-1", "email": EMP_EMAIL, "branch": "성신여대점", "name": "초대 직원", "status": "pending"}]
+        "employee_invites", [{"id": "inv-1", "token": "tok-1", "email": EMP_EMAIL, "branch": "성신여대점", "name": "초대 직원", "phone": "010-1234-5678", "status": "pending"}]
     )
     result = asyncio.run(svc.accept_invite_with_auto_approval({"token": "tok-1"}, EMPLOYEE))
     assert result["request"]["status"] == "approved"

@@ -6,6 +6,7 @@
  * 서버 API 는 기존 것을 그대로 쓴다(새 API·DB 변경 없음):
  *   GET  /employees/approved                      승인 직원(회사·점포 연결)
  *   GET  /contracts, POST /contracts              목록·저장(서버 validator 가 최종 판정)
+ *   GET  /contracts/{id}/signature-duplicate-check 발송 전 같은 사업장 중복 계정 경고(차단 아님)
  *   POST /contracts/{id}/request-signature        서명요청 — 계약 결과와 notify.status 가 따로 온다
  *   POST /contracts/{id}/resend-signature-notice  알림만 재전송(계약을 새로 만들지 않는다)
  *   GET  /contracts/{id}/signed-pdf               서명본 PDF
@@ -876,7 +877,7 @@
       const action = !latest ? "계약 작성" : key === "draft" ? "이어서 작성" : key === "requested" ? "서명 현황" : "계약 보기";
       const docs = Number(employee.onboarding_document_count || 0);
       return `<tr>
-        <td data-label="직원"><b>${esc(employee.name || "이름 없음")}</b><small>${esc(employee.email_masked || "")}</small>${employee.duplicate_count > 1 ? `<span class="badge warn">같은 계정·사업자 ${employee.duplicate_count}건 · 중복 확인</span>` : ""}</td>
+        <td data-label="직원"><b>${esc(employee.name || "이름 없음")}</b><small>${esc(employee.email_masked || "")}</small>${employee.duplicate_count > 1 ? `<span class="badge warn">${(employee.duplicate_basis || []).includes("phone") ? "중복 의심 · 같은 휴대폰" : "같은 계정·사업자"} ${employee.duplicate_count}건 · 중복 확인</span>` : ""}${employee.phone_missing ? `<span class="badge">휴대폰 미입력</span>` : ""}</td>
         <td data-label="사업자·지점">${esc(businessName(employee.business_id))}<small>${esc(employee.branch || "지점 미정")}</small></td>
         <td data-label="입사서류">${docs ? `${docs}건` : '<span class="badge warn">미제출</span>'}</td>
         <td data-label="계약">${latest ? `${badge(statusOf(latest))}<small>${esc(fmtTime(latest.updated_at))}</small>` : '<span class="badge bad">작성 필요</span>'}${gapBadge(rowMissingCount(employee, latest))}</td>
@@ -927,6 +928,7 @@
       error: "",
       missing: [],
       notify: null,
+      dupWarnings: [],
       sessionLost: false,
       wageManual: new Set(),
       autoComposition: "",
@@ -1109,12 +1111,15 @@
     const html = C.contractPreviewHtml(currentDraft());
     return `<p class="notice">아래는 입력한 조건 그대로의 계약서입니다. 사용자 정보가 비어 있으면 저장할 때 사업자 등록정보로 채워지고, 저장 후 화면에 서버 기준 계약서가 다시 표시됩니다.</p><div class="cv41-guidance">${C.contractDraftGuidanceHtml(currentDraft())}</div><article class="cv41-paper">${html}</article>`;
   }
+  function dupWarningHtml() {
+    return (E.dupWarnings || []).map(item => `<div class="cv41-alert warn" role="status"><b>중복 계정 경고</b> ${esc(item.message)}</div>`).join("");
+  }
   function notifyHtml() {
-    if (!E.notify) return "";
+    if (!E.notify) return dupWarningHtml();
     const status = String(E.notify.status || "");
     const ok = status === "sent" || status === "success" || status === "ok";
     const channels = (E.notify.channels || []).map(item => `<li>${esc(item.channel || "-")}: ${esc(item.status || "-")}${item.target_masked ? ` (${esc(item.target_masked)})` : ""}${item.error_detail ? ` — ${esc(String(item.error_detail).slice(0, 120))}` : ""}</li>`).join("");
-    return `<div class="cv41-alert ${ok ? "good" : "warn"}" role="status"><b>${ok ? "직원에게 서명 알림을 보냈습니다." : "서명요청은 저장됐지만 알림 전송은 확인되지 않았습니다."}</b>${ok ? "" : " 서명 링크를 복사해 직접 보내거나 ‘알림 다시 보내기’를 누르십시오."}${channels ? `<ul>${channels}</ul>` : ""}</div>`;
+    return `<div class="cv41-alert ${ok ? "good" : "warn"}" role="status"><b>${ok ? "직원에게 서명 알림을 보냈습니다." : "서명요청은 저장됐지만 알림 전송은 확인되지 않았습니다."}</b>${ok ? "" : " 서명 링크를 복사해 직접 보내거나 ‘알림 다시 보내기’를 누르십시오."}${channels ? `<ul>${channels}</ul>` : ""}</div>${dupWarningHtml()}`;
   }
   function stepSaved() {
     const contract = E.contract;
@@ -1449,7 +1454,7 @@
     try {
       const response = await api("/contracts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payloadFromDraft(draft, E.contract?.id)) });
       adopt(response.contract);
-      E.dirty = false; E.notify = null; E.sessionLost = false; E.step = 3;
+      E.dirty = false; E.notify = null; E.dupWarnings = []; E.sessionLost = false; E.step = 3;
       S.ctx?.toast?.(`계약서를 저장했습니다 (번호 ${String(response.contract?.id || "").slice(0, 8)}).`);
     } catch (error) {
       await handleError(error, "계약서 저장");
@@ -1472,15 +1477,25 @@
     S.contracts = [contract, ...S.contracts.filter(item => item.id !== contract.id)];
     setUrl({ cv41_contract: contract.id });
   }
+  function warningsOf(response) {
+    const list = Array.isArray(response?.warnings) ? response.warnings : (response?.warning ? [response.warning] : []);
+    return list.filter(item => item && item.message);
+  }
   async function requestSignature() {
     if (E.busy || !E.contract || E.dirty) return;
     E.busy = "request"; E.error = ""; render();
     try {
-      const response = await api(`/contracts/${encodeURIComponent(E.contract.id)}/request-signature`, { method: "POST" });
+      const contractPath = `/contracts/${encodeURIComponent(E.contract.id)}`;
+      // 발송 전에 같은 사업장 중복 계정을 확인한다. 조회가 실패해도 발송은 막지 않는다(응답에도 같은 경고가 온다).
+      let precheck = [];
+      try { precheck = warningsOf(await api(`${contractPath}/signature-duplicate-check`)); } catch (_error) { precheck = []; }
+      if (precheck.length && !confirm(`${precheck.map(item => item.message).join("\n\n")}\n\n그래도 서명요청을 보낼까요?`)) return;
+      const response = await api(`${contractPath}/request-signature`, { method: "POST" });
       adopt(response.contract);
       E.notify = response.notify || null;
+      E.dupWarnings = warningsOf(response);
       E.sessionLost = false;
-      S.ctx?.toast?.("서명요청을 저장했습니다. 알림 결과를 확인하십시오.");
+      S.ctx?.toast?.(E.dupWarnings.length ? "서명요청을 저장했습니다. 중복 계정 경고를 확인하십시오." : "서명요청을 저장했습니다. 알림 결과를 확인하십시오.");
     } catch (error) {
       await handleError(error, "서명 요청");
     } finally {

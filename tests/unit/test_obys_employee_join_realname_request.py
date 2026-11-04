@@ -124,7 +124,7 @@ def db(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(svc, "_db_available", lambda: True)
-    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation: operation())
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation, *lock_keys: operation())
     monkeypatch.setattr(svc, "_run_db", run_db)
     monkeypatch.setattr(svc, "_db_fetch_ledger", fake_fetch_ledger)
     monkeypatch.setattr(svc, "_db_upsert_ledger", fake_upsert_ledger)
@@ -157,7 +157,8 @@ def db(tmp_path, monkeypatch):
 
 
 def _join(user: dict = EMPLOYEE, **extra) -> dict:
-    body = {"name": EMP_NAME, "email": user["email"], "branch": "성신여대점", "business_id": "biz-sungshin", **extra}
+    phone = "010-1111-2222" if user["email"] == EMP_EMAIL else "010-3333-4444"
+    body = {"name": EMP_NAME, "email": user["email"], "branch": "성신여대점", "business_id": "biz-sungshin", "phone": phone, **extra}
     return svc.upsert_join_request(body, user)
 
 
@@ -194,7 +195,7 @@ def test_direct_signup_creates_pending_request_with_real_name(db):
 
 
 def test_direct_signup_resolves_business_from_branch_when_only_branch_is_given(db):
-    record = svc.upsert_join_request({"name": EMP_NAME, "email": EMP_EMAIL, "branch": "성신여대점"}, EMPLOYEE)
+    record = svc.upsert_join_request({"name": EMP_NAME, "email": EMP_EMAIL, "branch": "성신여대점", "phone": "010-1111-2222"}, EMPLOYEE)
     assert record["business_id"] == "biz-sungshin"
     assert record["tenant_id"] == EMPLOYER
 
@@ -401,7 +402,7 @@ def test_legacy_invite_without_a_usable_expiry_still_works(db, expires_at):
 # --- D. 다른 테넌트 회사/점포로의 요청 -----------------------------------------------------------
 def test_request_for_another_tenants_company_is_owned_by_that_company_never_by_the_requester_tenant(db):
     record = svc.upsert_join_request(
-        {"name": EMP_NAME, "email": EMP_EMAIL, "business_id": OTHER_BIZ, "branch": OTHER_BRANCH}, EMPLOYEE
+        {"name": EMP_NAME, "email": EMP_EMAIL, "business_id": OTHER_BIZ, "branch": OTHER_BRANCH, "phone": "010-1111-2222"}, EMPLOYEE
     )
     assert record["tenant_id"] == OTHER_TENANT
     assert record["tenant_id"] != NEW_EMP_TENANT

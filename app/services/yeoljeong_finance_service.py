@@ -2762,14 +2762,205 @@ def revoke_invite(invite_id: str, user: dict[str, Any]) -> dict[str, Any]:
 INVITE_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+$")
 
 
-def _normalize_invite_email(raw: Any) -> str:
-    """초대 이메일 검증·소문자 정규화. 비어 있으면 ''(이메일 없는 예전 방식 초대)."""
+# ---------------------------------------------------------------------------
+# 직원 가입 규칙 (OBYS-JOIN-RULES-20261104)
+#
+# 2026-11-04 실측: 오타 도메인(naver.comc)이 INVITE_EMAIL_RE 를 통과해 10/22 자동승인됐고,
+# 초대 링크(empal, 휴대폰 빈칸)와 직접 가입(gmail)이 한 사람에게 계정 둘을 만들었다.
+# 이메일·휴대폰 검증은 가입(_prepare_join_request)·초대(create_invite)·초대수락이 모두 아래 함수를 쓴다.
+# ---------------------------------------------------------------------------
+JOIN_TRUSTED_EMAIL_DOMAINS = (
+    "naver.com", "gmail.com", "daum.net", "hanmail.net", "kakao.com",
+    "nate.com", "hotmail.com", "outlook.com", "icloud.com", "empal.com",
+)
+# 신뢰 도메인과 철자가 가까워도 실재하는 도메인 — 오타로 오인해 막지 않는다.
+JOIN_KNOWN_EMAIL_DOMAINS = frozenset({
+    "mail.com", "email.com", "msn.com", "live.com", "me.com", "mac.com", "yahoo.com", "yahoo.co.kr",
+    "protonmail.com", "proton.me", "korea.com", "hanmir.com", "dreamwiz.com", "paran.com", "lycos.co.kr",
+    "kakao.co.kr", "hotmail.co.kr", "outlook.kr", "outlook.co.kr",
+})
+JOIN_TEST_EMAIL_DOMAINS = frozenset({"obys.invalid", "example.test", "aads.dev"})
+JOIN_RESERVED_EMAIL_SUFFIXES = (".invalid", ".test", ".example", ".localhost")
+JOIN_PHONE_REQUIRED_ERROR = "휴대폰 번호를 입력해 주십시오"
+JOIN_PHONE_FORMAT_ERROR = "휴대폰 번호 형식이 올바르지 않습니다 (예: 010-1234-5678)"
+
+
+def _edit_distance(left: str, right: str) -> int:
+    previous = list(range(len(right) + 1))
+    for i, a in enumerate(left, 1):
+        current = [i]
+        for j, b in enumerate(right, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a != b)))
+        previous = current
+    return previous[-1]
+
+
+def suggest_email_domain(domain: str) -> str:
+    """주요 도메인의 오타로 보이면 맞는 도메인을, 아니면 ''. 신뢰·실재·시험 도메인은 항상 ''."""
+    domain = str(domain or "").strip().lower()
+    if (
+        not domain
+        or domain in JOIN_TRUSTED_EMAIL_DOMAINS
+        or domain in JOIN_KNOWN_EMAIL_DOMAINS
+        or domain in JOIN_TEST_EMAIL_DOMAINS
+        or domain.endswith(JOIN_RESERVED_EMAIL_SUFFIXES)
+    ):
+        return ""
+    best, best_distance = "", 3
+    for trusted in JOIN_TRUSTED_EMAIL_DOMAINS:
+        # TLD 뒤에 글자가 붙은 형태(naver.comc, gmail.comm) — 편집거리가 3 이상이어도 잡는다.
+        if domain.startswith(trusted) and domain[len(trusted)] != ".":
+            return trusted
+        distance = _edit_distance(domain, trusted)
+        if distance < best_distance:
+            best, best_distance = trusted, distance
+    return best
+
+
+def validate_join_email(raw: Any, *, required: bool = True, format_error: str = "이메일 형식이 올바르지 않습니다") -> str:
+    """가입·초대·가입요청 공통 이메일 검증. 소문자 정규화한 값을 돌려준다.
+
+    required=False 이고 비어 있으면 ''. 형식 오류·주요 도메인 오타는 400(오타면 "혹시 naver.com 인가요?").
+    """
     email = str(raw or "").strip().lower()
     if not email:
+        if required:
+            raise HTTPException(status_code=400, detail="이메일을 입력해 주십시오")
         return ""
     if len(email) > 254 or not INVITE_EMAIL_RE.match(email):
-        raise HTTPException(status_code=400, detail="초대 이메일 형식이 올바르지 않습니다")
+        raise HTTPException(status_code=400, detail=format_error)
+    domain = email.rsplit("@", 1)[1]
+    tld = domain.rsplit(".", 1)[1]
+    if len(tld) < 2 or not tld.isalpha():
+        raise HTTPException(status_code=400, detail=format_error)
+    suggestion = suggest_email_domain(domain)
+    if suggestion:
+        raise HTTPException(
+            status_code=400,
+            detail=f"이메일 도메인 '{domain}' 이(가) 올바르지 않은 것 같습니다. 혹시 {suggestion} 인가요?",
+        )
     return email
+
+
+def normalize_kr_mobile(raw: Any) -> str:
+    """휴대폰 숫자 정규화: 01 로 시작하는 10~11자리(+82 접두는 0 으로 환원). 아니면 ''."""
+    digits = re.sub(r"\D+", "", str(raw or ""))
+    if digits.startswith("82") and digits[2:3] == "1":
+        digits = "0" + digits[2:]
+    return digits if digits.startswith("01") and len(digits) in (10, 11) else ""
+
+
+def validate_join_phone(raw: Any, *, required: bool = True) -> str:
+    """정규화된 휴대폰 숫자. 비어 있으면 required 일 때 400, 아니면 ''. 형식이 틀리면 항상 400."""
+    if not re.sub(r"\D+", "", str(raw or "")):
+        if required:
+            raise HTTPException(status_code=400, detail=JOIN_PHONE_REQUIRED_ERROR)
+        return ""
+    normalized = normalize_kr_mobile(raw)
+    if not normalized:
+        raise HTTPException(status_code=400, detail=JOIN_PHONE_FORMAT_ERROR)
+    return normalized
+
+
+def _normalize_invite_email(raw: Any) -> str:
+    """초대 이메일 검증·소문자 정규화. 비어 있으면 ''(이메일 없는 예전 방식 초대)."""
+    return validate_join_email(raw, required=False, format_error="초대 이메일 형식이 올바르지 않습니다")
+
+
+def _join_phone_key(row: dict[str, Any]) -> str:
+    return normalize_kr_mobile(row.get("phone") or row.get("employee_phone"))
+
+
+def _join_name_key(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def _join_row_in_business(row: dict[str, Any], business_id: str) -> bool:
+    return bool(business_id) and (
+        str(row.get("business_id") or "").strip() == business_id or _record_business_id(row) == business_id
+    )
+
+
+def _join_duplicate_matches(
+    rows: list[dict[str, Any]], *, email: str, business_id: str, name: str, phone_key: str
+) -> dict[str, list[dict[str, Any]]]:
+    """같은 사업장의 approved/pending 중 이메일이 다른 계정을 휴대폰 일치(phone)·이름만 일치(name)로 나눈다."""
+    result: dict[str, list[dict[str, Any]]] = {"phone": [], "name": []}
+    name_key = _join_name_key(name)
+    for row in rows:
+        if row.get("deleted_at") or str(row.get("status") or "").strip().lower() not in {"approved", "pending"}:
+            continue
+        if str(row.get("email") or "").strip().lower() == email or not _join_row_in_business(row, business_id):
+            continue
+        other_phone = _join_phone_key(row)
+        if phone_key and other_phone == phone_key:
+            result["phone"].append(row)
+        elif name_key and _join_name_key(row.get("name")) == name_key:
+            result["name"].append(row)
+    return result
+
+
+def _join_duplicate_account_view(row: dict[str, Any]) -> dict[str, Any]:
+    email = str(row.get("email") or "").strip().lower()
+    return {
+        "id": str(row.get("id") or ""),
+        "email_masked": _mask_email(email),
+        "status": str(row.get("status") or ""),
+        "name": str(row.get("name") or ""),
+    }
+
+
+def _masked_emails(rows: list[dict[str, Any]]) -> str:
+    return ", ".join(sorted({_mask_email(str(row.get("email") or "").strip().lower()) for row in rows}))
+
+
+def _enforce_join_phone_rules(
+    record: dict[str, Any],
+    payload: dict[str, Any],
+    existing: dict[str, Any] | None,
+    rows: list[dict[str, Any]],
+    *,
+    self_signup: bool,
+) -> None:
+    """휴대폰 필수·중복 가입 차단. 본인 가입(직접·초대)에만 필수와 409 를 적용한다 — 관리자 대리 등록은 형식만 본다.
+
+    같은 사업장에 같은 정규화 휴대폰의 approved/pending 이 다른 이메일로 있으면 409(저장·자동승인 없음).
+    이름만 같고 휴대폰이 다르면 record['duplicate_warning'] 에 경고만 남긴다.
+    """
+    phone_input = str(payload.get("phone") or record.get("phone") or "").strip()
+    legacy_blank = bool(existing) and str(existing.get("status") or "").strip().lower() == "approved" and not phone_input
+    phone_key = validate_join_phone(phone_input, required=self_signup and not legacy_blank)
+    record.pop("duplicate_warning", None)
+    if not self_signup:
+        return
+    email = str(record.get("email") or "").strip().lower()
+    matches = _join_duplicate_matches(
+        rows, email=email, business_id=str(record.get("business_id") or ""), name=str(record.get("name") or ""), phone_key=phone_key
+    )
+    if phone_key and matches["phone"]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"이미 {_masked_emails(matches['phone'])} 계정으로 가입돼 있습니다. 그 계정으로 로그인하세요",
+        )
+    if matches["name"]:
+        record["duplicate_warning"] = {
+            "type": "same_name_different_phone",
+            "accounts": [_join_duplicate_account_view(row) for row in matches["name"]],
+        }
+
+
+def join_request_warnings(record: dict[str, Any]) -> list[dict[str, Any]]:
+    warning = record.get("duplicate_warning")
+    if not isinstance(warning, dict) or not warning.get("accounts"):
+        return []
+    masked = ", ".join(str(item.get("email_masked") or "") for item in warning["accounts"])
+    return [
+        {
+            "code": "same_name_different_phone",
+            "message": f"같은 이름의 다른 계정({masked})이 있습니다. 같은 분이면 기존 계정으로 로그인하고, 아니면 관리자 확인을 기다려 주십시오",
+            "accounts": warning["accounts"],
+        }
+    ]
 
 
 def create_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -2948,7 +3139,8 @@ def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
 
     def _reject(exc: HTTPException, item: dict[str, Any]) -> HTTPException:
         where = item.get("branch") or item.get("business_id") or ""
-        return HTTPException(status_code=400, detail=f"초대 수락 실패({where}): {exc.detail}" if where else str(exc.detail))
+        status = 409 if exc.status_code == 409 and item.get("phone") else 400
+        return HTTPException(status_code=status, detail=f"초대 수락 실패({where}): {exc.detail}" if where else str(exc.detail))
 
     # 1단계: 저장 없이 전 매장을 먼저 검증한다 — 한 곳이라도 안 되면 아무것도 만들지 않는다.
     for item in requests_payloads:
@@ -2987,7 +3179,32 @@ def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
     return {**created[0], "requests": created, "request": created[0], "payroll_link": payroll_link}
 
 
+def _annotate_join_request_duplicates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """관리자 검토용: 대기 요청마다 같은 사업장·같은 휴대폰의 다른 계정(마스킹)과 휴대폰 미입력 여부를 붙인다."""
+    annotated = []
+    for row in rows:
+        phone_key = _join_phone_key(row)
+        item = dict(row)
+        item["phone_missing"] = not re.sub(r"\D+", "", str(row.get("phone") or ""))
+        if str(row.get("status") or "").strip().lower() == "pending" and phone_key:
+            others = _join_duplicate_matches(
+                rows,
+                email=str(row.get("email") or "").strip().lower(),
+                business_id=str(row.get("business_id") or "").strip() or _record_business_id(row),
+                name="",
+                phone_key=phone_key,
+            )["phone"]
+            item["duplicate_suspect"] = bool(others)
+            item["duplicate_accounts"] = [_join_duplicate_account_view(other) for other in others]
+        annotated.append(item)
+    return annotated
+
+
 def list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
+    return _annotate_join_request_duplicates(_list_join_requests(user))
+
+
+def _list_join_requests(user: dict[str, Any]) -> list[dict[str, Any]]:
     from app.core.obys_tenant import is_legacy_obys_tenant
 
     if is_legacy_obys_tenant(user):
@@ -3064,6 +3281,12 @@ def _resolve_join_business_by_branch(branch: str) -> str:
     return business_ids[0] if business_ids else ""
 
 
+def _is_join_proxy_registration(user: dict[str, Any], email: str) -> bool:
+    """관리자가 다른 직원 이메일로 대신 등록하는 경우만 True. 일반 member 가 남의 이메일을 보내는 것은 대리 등록이 아니다."""
+    requester_email = _email(user)
+    return bool(requester_email and requester_email != email and _is_admin(user))
+
+
 def _prepare_join_request(
     payload: dict[str, Any], user: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
@@ -3072,6 +3295,7 @@ def _prepare_join_request(
     email = str(payload.get("email") or _email(user)).strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="직원 이메일이 필요합니다")
+    email = validate_join_email(email)
     # 겸직: 가입요청의 식별 키는 (email, business_id) 다. 사업자가 다르면 별개 고용주라 별개 요청이다.
     payload_branch = str(payload.get("branch") or "").strip()
     payload_branch = BRANCH_ALIASES.get(payload_branch, payload_branch)
@@ -3157,13 +3381,21 @@ def _prepare_join_request(
         record["requested_by"] = requester_email
     elif not existing:
         record["registered_by"] = requester_email
+    _enforce_join_phone_rules(
+        record, payload, existing, rows,
+        self_signup=not _is_join_proxy_registration(user, email),
+    )
     record = _owned_hr_record(record, scope_user)
     return record, scope_user, existing
 
 
 @asynccontextmanager
-async def _employee_write_lock(email: str):
-    """One identity lock for signup, archiving and settlement across API slots."""
+async def _employee_write_lock(email: str, *extra_keys: str):
+    """One identity lock for signup, archiving and settlement across API slots.
+
+    extra_keys 는 이메일과 함께 잡는 추가 잠금이다(예: 가입 휴대폰 중복 검사용 테넌트 키). 교착을 피하려고
+    모든 키를 정렬해 같은 순서로 잡는다.
+    """
     if not _db_available():
         _ensure_dirs()
         lock = open(DATA_DIR / ".employee-write.lock", "a+")
@@ -3175,21 +3407,39 @@ async def _employee_write_lock(email: str):
             lock.close()
         return
     import asyncpg
+    keys = sorted({"obys-employee-write:" + email, *extra_keys})
     conn = await asyncpg.connect(_db_url(), timeout=5)
     try:
         async with conn.transaction():
             await conn.execute("SELECT set_config('lock_timeout', '10s', true)")
-            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", "obys-employee-write:" + email)
+            for key in keys:
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", key)
             yield
     finally:
         await conn.close()
 
 
-def _serialized_employee_write(email: str, operation):
+def _serialized_employee_write(email: str, operation, *extra_keys: str):
     async def locked():
-        async with _employee_write_lock(email):
+        async with _employee_write_lock(email, *extra_keys):
             return await asyncio.to_thread(operation)
     return asyncio.run(locked())
+
+
+def _join_signup_lock_key(payload: dict[str, Any], email: str, user: dict[str, Any]) -> str:
+    """가입 휴대폰 중복 검사(_enforce_join_phone_rules)가 읽는 행 집합 = 대상 사업자 고용주 테넌트의 가입요청 전체.
+
+    그래서 이메일이 아니라 그 테넌트를 잠근다. 서로 다른 이메일의 동시 가입이 같은 목록을 읽고 둘 다 저장하는 것을 막는다.
+    """
+    branch = str(payload.get("branch") or "").strip()
+    branch = BRANCH_ALIASES.get(branch, branch)
+    business_id = (
+        str(payload.get("business_id") or "").strip()
+        or str(BUSINESS_BY_BRANCH.get(branch) or "")
+        or _resolve_join_business_by_branch(branch)
+    )
+    scope_user = _join_request_scope(business_id, email, user) if business_id else user
+    return "obys-join-signup:" + _tenant_id(scope_user)
 
 
 def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -3202,11 +3452,17 @@ def upsert_join_request(payload: dict[str, Any], user: dict[str, Any]) -> dict[s
             raise HTTPException(status_code=409, detail="보관 처리된 소속입니다. 관리자에게 복구를 요청하십시오")
         _write_hr_record("employee_join_requests", record, scope_user)
         return record
-    return _serialized_employee_write(email, write)
+    return _serialized_employee_write(email, write, _join_signup_lock_key(payload, email, user))
 
 
 def review_join_request(
-    request_id: str, action: str, memo: str, user: dict[str, Any], *, auto: bool = False
+    request_id: str,
+    action: str,
+    memo: str,
+    user: dict[str, Any],
+    *,
+    auto: bool = False,
+    duplicate_resolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _require_review_tenant(request_id, user)
     if not _is_admin(user):
@@ -3220,6 +3476,10 @@ def review_join_request(
     record["reviewed_by"] = _email(user)
     record["reviewed_at"] = _now()
     record["updated_at"] = record["reviewed_at"]
+    if duplicate_resolution:
+        record["duplicate_resolution"] = duplicate_resolution
+        if duplicate_resolution.get("choice") == "link_existing":
+            record["linked_to_request_id"] = str(duplicate_resolution.get("linked_request_id") or "")
     if auto:
         record["auto_approved"] = True
         record["auto_approved_at"] = record["reviewed_at"]
@@ -3545,15 +3805,106 @@ def _precheck_join_review(request_id: str, action: str, user: dict[str, Any]) ->
     return str((record or {}).get("email") or (record or {}).get("employee_email") or "").strip().lower()
 
 
+JOIN_DUPLICATE_RESOLUTIONS = {"link_existing": "기존 계정에 연결", "separate": "별도 승인"}
+JOIN_DUPLICATE_AUDIT_ACTION = "join_request.duplicate_resolved"
+JOIN_DUPLICATE_AUDIT_TYPE = "employee_join_request"
+
+
+def _duplicate_phone_accounts(record: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    """같은 사업장에서 같은 정규화 휴대폰을 쓰는 다른 이메일의 approved/pending 가입요청."""
+    phone_key = _join_phone_key(record)
+    business_id = str(record.get("business_id") or "").strip() or _record_business_id(record)
+    if not phone_key or not business_id:
+        return []
+    matches = _join_duplicate_matches(
+        _read_hr("employee_join_requests", user),
+        email=str(record.get("email") or "").strip().lower(),
+        business_id=business_id,
+        name="",
+        phone_key=phone_key,
+    )
+    return matches["phone"]
+
+
+def _resolve_join_duplicate_review(
+    request_id: str, action: str, memo: str, duplicate_resolution: str, user: dict[str, Any]
+) -> tuple[str, str, dict[str, Any] | None]:
+    """승인 전에 같은 휴대폰의 다른 계정이 있는지 보고 관리자의 선택을 요구한다.
+
+    반환 (action, memo, 기록할 선택). link_existing 은 이 요청을 반려로 닫고 기존 계정을 가리킨다.
+    관리자가 아니거나 요청이 없으면 아무것도 하지 않는다(뒤 단계가 403/404 를 낸다).
+    """
+    if action != "approved" or not _is_admin(user):
+        return action, memo, None
+    record = _find(_read_hr("employee_join_requests", user), request_id)
+    if not record:
+        return action, memo, None
+    others = _duplicate_phone_accounts(record, user)
+    if not others:
+        return action, memo, None
+    choice = str(duplicate_resolution or "").strip().lower()
+    masked = _masked_emails(others)
+    if choice not in JOIN_DUPLICATE_RESOLUTIONS:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"같은 휴대폰으로 이미 가입된 계정({masked})이 있습니다. "
+                "'기존 계정에 연결'(link_existing) 또는 '별도 승인'(separate) 중 하나를 선택해 주십시오"
+            ),
+        )
+    linked = next((row for row in others if str(row.get("status") or "").strip().lower() == "approved"), None)
+    if choice == "link_existing":
+        if str(record.get("status") or "").strip().lower() != "pending":
+            raise HTTPException(status_code=409, detail="대기 중인 가입요청만 기존 계정에 연결할 수 있습니다")
+        if not linked:
+            raise HTTPException(status_code=409, detail="연결할 승인된 기존 계정이 없습니다. '별도 승인'을 선택해 주십시오")
+    info = {
+        "choice": choice,
+        "choice_label": JOIN_DUPLICATE_RESOLUTIONS[choice],
+        "other_request_ids": [str(row.get("id") or "") for row in others],
+        "other_emails_masked": masked,
+        "linked_request_id": str((linked or {}).get("id") or "") if choice == "link_existing" else "",
+        "resolved_by": _email(user),
+        "resolved_at": _now(),
+    }
+    if choice == "link_existing":
+        memo = f"기존 계정에 연결({_mask_email(str(linked.get('email') or ''))})" + (f" · {memo}" if memo else "")
+        return "rejected", memo, info
+    return action, memo, info
+
+
+def _audit_join_duplicate_resolution(record: dict[str, Any], info: dict[str, Any], user: dict[str, Any]) -> bool:
+    return _append_employment_audit(
+        tenant_id=str(record.get("tenant_id") or ""),
+        business_id=str(record.get("business_id") or ""),
+        actor=_email(user),
+        action=JOIN_DUPLICATE_AUDIT_ACTION,
+        resource_type=JOIN_DUPLICATE_AUDIT_TYPE,
+        resource_id=str(record.get("id") or ""),
+        details={
+            "choice": info["choice"],
+            "result_status": str(record.get("status") or ""),
+            "other_request_ids": info["other_request_ids"],
+            "other_emails_masked": info["other_emails_masked"],
+        },
+        log_name="join_request_audit_logs",
+    )
+
+
 def _review_join_request_with_previous(
-    request_id: str, action: str, memo: str, user: dict[str, Any], auto: bool = False
+    request_id: str,
+    action: str,
+    memo: str,
+    user: dict[str, Any],
+    auto: bool = False,
+    duplicate_resolution: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     previous = _find(_read_hr("employee_join_requests", user), request_id) or {}
     previous_status = str(previous.get("status") or "")
     if auto and previous_status.strip().lower() != "pending":
         # 락 안에서 다시 본다 — 그 사이 관리자가 반려·승인했으면 자동승인이 덮어쓰지 않는다.
         raise HTTPException(status_code=409, detail="대기 중인 가입요청만 자동승인할 수 있습니다")
-    return review_join_request(request_id, action, memo, user, auto=auto), previous_status
+    return review_join_request(request_id, action, memo, user, auto=auto, duplicate_resolution=duplicate_resolution), previous_status
 
 
 async def review_join_request_with_membership(
@@ -3563,6 +3914,7 @@ async def review_join_request_with_membership(
     user: dict[str, Any],
     *,
     auto: bool = False,
+    duplicate_resolution: str = "",
 ) -> dict[str, Any]:
     """가입요청 승인·반려 + 고용주 테넌트 멤버십 연결·회수.
 
@@ -3586,6 +3938,11 @@ async def review_join_request_with_membership(
 
     tenant_id = _tenant_id(user)
     employee_email = await asyncio.to_thread(_precheck_join_review, request_id, action, user)
+    resolution: dict[str, Any] | None = None
+    if not auto:
+        action, memo, resolution = await asyncio.to_thread(
+            _resolve_join_duplicate_review, request_id, action, memo, duplicate_resolution, user
+        )
     try:
         async with AsyncExitStack() as stack:
             conn = None
@@ -3594,7 +3951,7 @@ async def review_join_request_with_membership(
             except Exception as exc:  # noqa: BLE001
                 logger.error("employee membership lock unavailable: request=%s err=%s", request_id, exc)
             record, previous_status = await asyncio.to_thread(
-                _review_join_request_with_previous, request_id, action, memo, user, auto
+                _review_join_request_with_previous, request_id, action, memo, user, auto, resolution
             )
             try:
                 membership = await sync_employee_tenant_membership(
@@ -3624,6 +3981,8 @@ async def review_join_request_with_membership(
                     logger.exception("auto approve: link-pending flag not cleared: request=%s", request_id)
     except _AutoApprovalNotLinked as failed:
         return {"request": failed.record, "membership": failed.membership, "auto_approved": False}
+    if resolution:
+        await asyncio.to_thread(_audit_join_duplicate_resolution, record, resolution, user)
     return {"request": record, "membership": membership, **({"auto_approved": True} if auto else {})}
 
 
@@ -3899,6 +4258,13 @@ async def auto_approve_join_request(record: dict[str, Any]) -> dict[str, Any]:
         reason = _auto_approve_skip_reason(record)
         if not reason and not await employee_join_auto_approve_enabled_async(tenant_id):
             reason = "auto_approve_disabled"
+        if not reason:
+            try:
+                if await asyncio.to_thread(_duplicate_phone_accounts, record, actor):
+                    reason = "duplicate_phone_suspect"
+            except Exception:  # noqa: BLE001
+                logger.exception("join request duplicate check failed: request=%s", request_id)
+                reason = "duplicate_check_failed"
         if reason:
             return {**outcome, "reason": reason}
         result = await _run_shielded(review_join_request_with_membership(request_id, "approved", "자동승인", actor, auto=True))
@@ -3940,7 +4306,11 @@ def _auto_approve_summary(outcome: dict[str, Any]) -> dict[str, Any]:
 async def create_join_request_with_auto_approval(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     record = await asyncio.to_thread(upsert_join_request, payload, user)
     outcome = await auto_approve_join_request(record)
-    return {"request": outcome["request"], "auto_approve": _auto_approve_summary(outcome)}
+    return {
+        "request": outcome["request"],
+        "auto_approve": _auto_approve_summary(outcome),
+        "warnings": join_request_warnings(outcome["request"]),
+    }
 
 
 async def accept_invite_with_auto_approval(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -3957,7 +4327,8 @@ async def accept_invite_with_auto_approval(payload: dict[str, Any], user: dict[s
             outcome = {"approved": False, "reason": "invite_without_email", "request": created}
         requests.append(outcome["request"])
         summaries.append(_auto_approve_summary(outcome))
-    return {**result, "request": requests[0], "requests": requests, "auto_approve": summaries}
+    warnings = [warning for item in requests for warning in join_request_warnings(item)]
+    return {**result, "request": requests[0], "requests": requests, "auto_approve": summaries, "warnings": warnings}
 
 
 def update_approved_employee_role(request_id: str, role: str, memo: str, user: dict[str, Any]) -> dict[str, Any]:
@@ -4785,11 +5156,23 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
         email = str(row.get("email") or "").strip().lower()
         employee = dict(row)
         employee["business_id"] = employee_business_id
-        employee["duplicate_count"] = sum(
-            1 for other in employee_rows if other.get("status") == "approved"
-            and _record_business_id(other) == employee_business_id
-            and str(other.get("email") or "").strip().lower() == email
-        ) if email else 1
+        phone_key = _join_phone_key(row)
+        same_business = [
+            other for other in employee_rows
+            if other.get("status") == "approved" and _record_business_id(other) == employee_business_id
+        ]
+        same_email = [other for other in same_business if str(other.get("email") or "").strip().lower() == email] if email else []
+        same_phone = [
+            other for other in same_business
+            if phone_key and _join_phone_key(other) == phone_key and str(other.get("email") or "").strip().lower() != email
+        ]
+        # 이메일이 같거나 정규화 휴대폰이 같은 승인 계정 수(자기 포함). 휴대폰이 다른 이메일은 같은 사람일 수 있어 합친다.
+        employee["duplicate_count"] = (len(same_email) if email else 1) + len(same_phone)
+        employee["duplicate_suspect"] = employee["duplicate_count"] > 1
+        employee["duplicate_basis"] = (["email"] if len(same_email) > 1 else []) + (["phone"] if same_phone else [])
+        employee["duplicate_accounts"] = [_join_duplicate_account_view(other) for other in same_phone]
+        employee["phone_missing"] = not re.sub(r"\D+", "", str(row.get("phone") or ""))
+        employee["phone_missing_label"] = "휴대폰 미입력" if employee["phone_missing"] else ""
         employee["branch"] = BRANCH_ALIASES.get(str(employee.get("branch") or ""), str(employee.get("branch") or ""))
         employee["email_masked"] = employee.get("email_masked") or _mask_email(email)
         document_profile = _employee_onboarding_profile(
@@ -6685,11 +7068,43 @@ def _require_employee_still_approved(contract: dict[str, Any], user: dict[str, A
         raise HTTPException(status_code=403, detail="직원 가입 승인이 확인되지 않아 계약서에 서명할 수 없습니다")
 
 
+def _contract_business_id(contract: dict[str, Any]) -> str:
+    return str(_contract_payload_value(contract, "business_id", "businessId") or contract.get("business_id") or "").strip()
+
+
+def _is_same_person_other_account(contract: dict[str, Any], employee_email: str, user: dict[str, Any]) -> bool:
+    """서명 링크를 연 계정이 계약 수신 계정과 같은 사람인가 — 같은 사업장·같은 정규화 휴대폰일 때만 참.
+
+    판정에 실패하면 False(기존 안내 문구)다. 안내 문구를 바꾸는 용도라 오류가 403 을 500 으로 바꾸면 안 된다.
+    """
+    try:
+        business_id = _contract_business_id(contract)
+        viewer_email = _email(user)
+        rows = [
+            row for row in _read_hr("employee_join_requests", user)
+            if not row.get("deleted_at")
+            and str(row.get("status") or "").strip().lower() in {"approved", "pending"}
+            and _row_in_business(row, business_id)
+        ]
+        viewer_phones = {_join_phone_key(row) for row in rows if str(row.get("email") or "").strip().lower() == viewer_email}
+        target_phones = {_join_phone_key(row) for row in rows if str(row.get("email") or "").strip().lower() == employee_email}
+        target_phones.add(normalize_kr_mobile(contract.get("employee_phone")))
+        return bool((viewer_phones & target_phones) - {""})
+    except Exception:  # noqa: BLE001
+        logger.exception("same-person check failed: contract=%s", contract.get("id"))
+        return False
+
+
 def _require_signing_account(contract: dict[str, Any], user: dict[str, Any] | None) -> None:
     """다른 직원 계정으로 열었으면 어느 계정으로 보냈는지 가린 이메일로 알린다(원문 이메일은 노출 금지)."""
     if user and _email(user) and not _is_admin(user):
         employee_email = str(contract.get("employee_email") or "").strip().lower()
         if employee_email and _email(user) != employee_email:
+            if _is_same_person_other_account(contract, employee_email, user):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"이 계약서는 {_mask_email(employee_email)} 계정 앞으로 발송됐습니다. 그 계정으로 다시 로그인하세요",
+                )
             raise HTTPException(
                 status_code=403,
                 detail=f"이 계약서는 {_mask_email(employee_email)} 계정으로 보냈습니다. 해당 계정으로 로그인해 주십시오",
@@ -7476,12 +7891,79 @@ def _notify_contract_event(contract: dict[str, Any], event: str) -> dict[str, An
     return {"event": event, "status": status, "channels": results, "logged": logged}
 
 
+def _contract_duplicate_account_warning(contract: dict[str, Any], user: dict[str, Any]) -> dict[str, Any] | None:
+    """같은 사업장에 같은 이름 또는 같은 정규화 휴대폰의 승인 계정이 2개 이상이면 경고(마스킹 목록). 발송은 막지 않는다."""
+    business_id = _contract_business_id(contract)
+    target_email = str(contract.get("employee_email") or "").strip().lower()
+    approved = [
+        row for row in _read_hr("employee_join_requests", user)
+        if not row.get("deleted_at")
+        and str(row.get("status") or "").strip().lower() == "approved"
+        and _row_in_business(row, business_id)
+    ]
+    target_name = _join_name_key(contract.get("employee_name"))
+    target_phones = {_join_phone_key(row) for row in approved if str(row.get("email") or "").strip().lower() == target_email}
+    target_phones.add(normalize_kr_mobile(contract.get("employee_phone")))
+    target_phones.discard("")
+    accounts: dict[str, dict[str, Any]] = {}
+    for row in approved:
+        email = str(row.get("email") or "").strip().lower()
+        matched = []
+        if target_name and _join_name_key(row.get("name")) == target_name:
+            matched.append("name")
+        if _join_phone_key(row) in target_phones:
+            matched.append("phone")
+        if email == target_email:
+            matched = matched or ["target"]
+        if not matched:
+            continue
+        entry = accounts.setdefault(
+            email,
+            {
+                "email_masked": _mask_email(email),
+                "name": str(row.get("name") or ""),
+                "phone_masked": _mask_phone(str(row.get("phone") or "")),
+                "is_target": email == target_email,
+                "matched_by": [],
+            },
+        )
+        entry["matched_by"] = sorted(set(entry["matched_by"]) | set(matched))
+    if len(accounts) < 2:
+        return None
+    listing = ", ".join(item["email_masked"] for item in accounts.values())
+    return {
+        "code": "duplicate_accounts",
+        "message": (
+            f"같은 사업장에 같은 이름 또는 같은 휴대폰의 승인 계정이 {len(accounts)}개 있습니다({listing}). "
+            f"계약서는 {_mask_email(target_email)} 계정 앞으로 발송됩니다. 직원 본인이 쓰는 계정이 맞는지 확인해 주십시오"
+        ),
+        "accounts": list(accounts.values()),
+    }
+
+
+def contract_signature_duplicate_check(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    """발송 전 화면 확인용 — 서명 요청 상태를 바꾸지 않고 중복 계정 경고만 돌려준다."""
+    _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="서명 요청 권한이 없습니다")
+    contract = _require_hr_record(_find(_read_hr("contracts", user), contract_id), user, detail="계약서를 찾을 수 없습니다")
+    warning = _contract_duplicate_account_warning(contract, user)
+    return {"warning": warning, "warnings": [warning] if warning else []}
+
+
 def request_contract_signature_with_notice(contract_id: str, user: dict[str, Any]) -> dict[str, Any]:
     contract = request_contract_signature(contract_id, user)
+    try:
+        warning = _contract_duplicate_account_warning(contract, user)
+    except Exception:  # noqa: BLE001
+        logger.exception("contract duplicate-account warning failed: contract=%s", contract.get("id"))
+        warning = None
     return {
         "contract": contract,
         "notify": _notify_contract_event(contract, "signature_requested"),
         "bundle_notice": _signature_bundle_notice(contract, user),
+        "warning": warning,
+        "warnings": [warning] if warning else [],
     }
 
 
