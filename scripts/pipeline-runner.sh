@@ -5527,6 +5527,60 @@ runner_deploy_handoff_sweep() {
     done <<< "$rows"
 }
 
+# ── 운영 폴더 동기화 함수 (2026-11-04) ─────────────────────────────────────────
+# RUNNER_LIVE_SYNC_PROJECTS(쉼표 구분)에 든 프로젝트만 운영 폴더를 승인 SHA 까지 ff-only 로 옮긴다.
+# 반환: 0 = 운영 HEAD 가 승인 SHA 를 포함(원래 포함이거나 동기화 성공)
+#       1 = 동기화 실패(재기동 금지) — 사유는 RUNNER_LIVE_SYNC_REASON
+#       2 = 대상 아님(운영 폴더를 건드리지 않음, 경고만) — 정본화 전 GO100 등
+RUNNER_LIVE_SYNC_PROJECTS="${RUNNER_LIVE_SYNC_PROJECTS:-}"
+RUNNER_LIVE_SYNC_REASON=""
+runner_live_sync_enabled() {
+    case ",${RUNNER_LIVE_SYNC_PROJECTS}," in
+        *",$1,"*) return 0 ;;
+    esac
+    return 1
+}
+runner_sync_live_workdir() {
+    local project="$1" wd="$2" sha="$3" files="${4:-}" overlap=""
+    RUNNER_LIVE_SYNC_REASON=""
+    [[ "$project" == "AADS" ]] && return 0
+    if [[ -z "$wd" ]] || ! git -C "$wd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        RUNNER_LIVE_SYNC_REASON="workdir_missing"
+        return 2
+    fi
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { RUNNER_LIVE_SYNC_REASON="sha_invalid"; return 1; }
+    if git -C "$wd" merge-base --is-ancestor "$sha" HEAD 2>/dev/null; then
+        return 0
+    fi
+    if ! runner_live_sync_enabled "$project"; then
+        RUNNER_LIVE_SYNC_REASON="not_enabled"
+        return 2
+    fi
+    if ! git -C "$wd" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+        timeout "${RUNNER_LIVE_SYNC_FETCH_TIMEOUT:-120}" git -C "$wd" fetch -q origin 2>/dev/null \
+            || { RUNNER_LIVE_SYNC_REASON="fetch_failed"; return 1; }
+    fi
+    if [[ -n "$files" ]]; then
+        overlap=$(comm -12 \
+            <(git -C "$wd" status --porcelain 2>/dev/null | cut -c4- | sed 's#^.* -> ##' | sort -u) \
+            <(printf '%s\n' "$files" | sed '/^$/d' | sort -u) 2>/dev/null)
+        if [[ -n "$overlap" ]]; then
+            RUNNER_LIVE_SYNC_REASON="dirty_overlap:$(printf '%s' "$overlap" | head -3 | tr '\n' ',')"
+            return 1
+        fi
+    fi
+    if ! git -C "$wd" merge --ff-only "$sha" >/dev/null 2>&1; then
+        git -C "$wd" merge --abort >/dev/null 2>&1 || true
+        RUNNER_LIVE_SYNC_REASON="ff_only_failed"
+        return 1
+    fi
+    if ! git -C "$wd" merge-base --is-ancestor "$sha" HEAD 2>/dev/null; then
+        RUNNER_LIVE_SYNC_REASON="head_mismatch"
+        return 1
+    fi
+    return 0
+}
+
 claim_approved_job() {
     local filter="$1"
     db_exec "UPDATE pipeline_jobs SET status='deploying', phase='deploying', updated_at=NOW()
@@ -8296,6 +8350,31 @@ deploy_job() {
             _notify_ai "$job_id"
             promote_next_queued "$project"
             return 0
+        fi
+    fi
+
+    # ── 운영 폴더 동기화 (2026-11-04, 오류 사전 runner.go100_deploy_not_applied_to_live) ──
+    # 비-AADS 프로젝트의 서비스는 main workdir 을 직접 실행한다. 지금까지 push 뒤 운영 폴더를
+    # 승인 SHA 로 옮기는 단계가 없어, 재기동이 옛 코드를 다시 띄우고도 done 이 됐다
+    # (GO100 최근 14일 backend 변경 150건 운영 미반영, NTV2 13커밋 미반영 — 2026-11-04 실측).
+    if [[ "$project" != "AADS" ]]; then
+        local _live_files="$_deploy_files" _live_rc=0
+        if [[ -z "$_live_files" ]]; then
+            _live_files=$(deploy_changed_files "$worktree_dir" "$_pre_sha" "$current_sha" 2>/dev/null) || _live_files=""
+        fi
+        runner_sync_live_workdir "$project" "$main_workdir" "$current_sha" "$_live_files" || _live_rc=$?
+        if (( _live_rc == 0 )); then
+            log "  LIVE_WORKDIR_SYNCED project=$project sha=${current_sha:0:12} workdir=$main_workdir"
+        elif (( _live_rc == 2 )); then
+            log "  LIVE_WORKDIR_NOT_SYNCED project=$project sha=${current_sha:0:12} reason=${RUNNER_LIVE_SYNC_REASON}"
+            db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\\n[경고] 운영 폴더 미동기화(${RUNNER_LIVE_SYNC_REASON}) — 재기동해도 이번 변경이 운영에 반영되지 않을 수 있음', updated_at=NOW() WHERE job_id='${job_id}';"
+            post_to_chat "$session_id" "⚠️ [Pipeline Runner] 운영 미반영 경고: ${project} 운영 폴더(${main_workdir})를 승인 SHA(${current_sha:0:9})로 옮기지 않았습니다(${RUNNER_LIVE_SYNC_REASON}). push 는 완료됐지만 재기동으로는 이번 변경이 운영에 들어가지 않습니다: $job_id"
+        else
+            log "  LIVE_WORKDIR_SYNC_FAILED project=$project sha=${current_sha:0:12} reason=${RUNNER_LIVE_SYNC_REASON} — 재기동하지 않음"
+            _fail_job "$job_id" "$session_id" "deploy_live_sync_failed" "운영 폴더(${main_workdir})를 승인 SHA 로 옮기지 못해 재기동하지 않음: ${RUNNER_LIVE_SYNC_REASON} (push 는 완료)"
+            _release_deploy_lock "$project" "$job_id"
+            promote_next_queued "$project"
+            return 1
         fi
     fi
 
