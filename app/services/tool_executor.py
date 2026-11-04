@@ -6745,25 +6745,69 @@ class ToolExecutor:
         workspace_id = inp.get("workspace_id", "").strip()
         max_chars = int(inp.get("max_chars", 100000))
 
+        import uuid as _uuid
+
         from app.core.db_pool import get_pool
+
+        # 현재 채팅 세션의 첨부(chat_files)를 drive 보다 먼저 본다. 세션이 없으면(MCP 브리지 등) 기존 동작.
+        session_id = str(current_chat_session_id.get("") or "").strip()
+        sess_uuid = None
+        if session_id:
+            try:
+                sess_uuid = _uuid.UUID(session_id)
+            except ValueError:
+                sess_uuid = None
+
+        if filename and sess_uuid is not None:
+            chat_file_result = await self._read_chat_files_fallback(filename, max_chars)
+            if chat_file_result is not None:
+                return chat_file_result
+
+        file_uuid = None
+        if filename:
+            try:
+                file_uuid = _uuid.UUID(filename)
+            except ValueError:
+                file_uuid = None
+
+        session_files: list = []
         pool = get_pool()
         async with pool.acquire() as conn:
-            if workspace_id:
-                import uuid as _uuid
-                ws_filter = _uuid.UUID(workspace_id)
-            else:
-                ws_filter = None
+            ws_filter = _uuid.UUID(workspace_id) if workspace_id else None
+
+            if not filename and sess_uuid is not None:
+                session_files = await conn.fetch(
+                    "SELECT id, original_name, mime_type, file_size, created_at "
+                    "FROM chat_files WHERE session_id = $1::uuid "
+                    "ORDER BY created_at DESC LIMIT 20",
+                    sess_uuid,
+                )
 
             # 파일명 검색 또는 전체 목록
             if filename:
-                if ws_filter:
+                rows = []
+                if file_uuid is not None:
+                    # file_id 로 직접 조회해도 workspace_id 격리 조건은 파일명 조회와 동일하게 적용한다.
+                    if ws_filter:
+                        rows = await conn.fetch(
+                            "SELECT id, filename, file_path, file_type, file_size, created_at "
+                            "FROM chat_drive_files WHERE id = $1 AND workspace_id = $2 LIMIT 1",
+                            file_uuid, ws_filter,
+                        )
+                    else:
+                        rows = await conn.fetch(
+                            "SELECT id, filename, file_path, file_type, file_size, created_at "
+                            "FROM chat_drive_files WHERE id = $1 LIMIT 1",
+                            file_uuid,
+                        )
+                if not rows and ws_filter:
                     rows = await conn.fetch(
                         "SELECT id, filename, file_path, file_type, file_size, created_at "
                         "FROM chat_drive_files WHERE workspace_id = $1 AND filename ILIKE $2 "
                         "ORDER BY created_at DESC LIMIT 10",
                         ws_filter, f"%{filename}%",
                     )
-                else:
+                elif not rows:
                     rows = await conn.fetch(
                         "SELECT id, filename, file_path, file_type, file_size, created_at "
                         "FROM chat_drive_files WHERE filename ILIKE $1 "
@@ -6785,10 +6829,28 @@ class ToolExecutor:
                         "ORDER BY created_at DESC LIMIT 20",
                     )
 
-        if not rows and filename:
-            chat_file_result = await self._read_chat_files_fallback(filename)
+        # 세션이 있으면 위에서 세션 범위 조회를 이미 했다. 세션이 없을 때만 기존 전체 조회로 내려간다.
+        if not rows and filename and sess_uuid is None:
+            chat_file_result = await self._read_chat_files_fallback(filename, max_chars)
             if chat_file_result is not None:
                 return chat_file_result
+
+        if session_files:
+            file_list = [
+                {"source": "chat_files", "file_id": str(r["id"]), "filename": r["original_name"],
+                 "type": r["mime_type"], "size": r["file_size"], "created_at": str(r["created_at"])[:19],
+                 "uploaded": str(r["created_at"])[:19]}
+                for r in session_files
+            ]
+            file_list += [
+                {"source": "drive", "file_id": str(r["id"]), "filename": r["filename"],
+                 "type": r["file_type"], "size": r["file_size"], "created_at": str(r["created_at"])[:19],
+                 "uploaded": str(r["created_at"])[:19]}
+                for r in rows
+            ]
+            return {"status": "list", "files": file_list, "total": len(file_list),
+                    "hint": "특정 파일을 읽으려면 filename에 파일명 또는 file_id를 지정하세요. "
+                            "source=chat_files 는 현재 채팅에 첨부된 파일입니다."}
 
         if not rows:
             return {"status": "not_found", "message": f"'{filename}' 파일을 찾을 수 없습니다.", "hint": "filename을 비워서 전체 목록을 조회해 보세요."}
@@ -6824,8 +6886,9 @@ class ToolExecutor:
 
         # 여러 건 → 목록
         file_list = [
-            {"filename": r["filename"], "type": r["file_type"], "size": r["file_size"],
-             "uploaded": str(r["created_at"])[:19]}
+            {"source": "drive", "file_id": str(r["id"]), "filename": r["filename"],
+             "type": r["file_type"], "size": r["file_size"],
+             "created_at": str(r["created_at"])[:19], "uploaded": str(r["created_at"])[:19]}
             for r in rows
         ]
         return {"status": "list", "files": file_list, "total": len(file_list),
@@ -6833,7 +6896,7 @@ class ToolExecutor:
 
 
 
-    async def _read_chat_files_fallback(self, query: str) -> Optional[Dict[str, Any]]:
+    async def _read_chat_files_fallback(self, query: str, max_chars: int = 100000) -> Optional[Dict[str, Any]]:
         """chat_drive_files 에 없을 때 채팅 첨부 테이블 chat_files 에서 찾는다.
 
         현재 세션이 있으면 그 세션 첨부만, 없으면 전체에서 파일명 ILIKE 또는 file_id(uuid) 로 매칭한다.
@@ -6895,8 +6958,9 @@ class ToolExecutor:
             "file_size": row["file_size"],
             "path": fpath,
         }
-        if not os.path.isfile(fpath):
-            return {"status": "file_missing", "message": "디스크에서 파일을 찾을 수 없습니다.", **base}
+        if not fpath or not os.path.isfile(fpath):
+            return {"status": "file_missing",
+                    "message": "DB 기록은 있으나 원본이 서버에 없음(재배포로 유실 가능)", **base}
         if str(row["mime_type"] or "").startswith("image/"):
             return {
                 "status": "image",
@@ -6908,11 +6972,44 @@ class ToolExecutor:
             }
         text_exts = {".txt", ".md", ".csv", ".json", ".py", ".js", ".ts", ".html", ".css",
                      ".yaml", ".yml", ".toml", ".sh", ".sql", ".log", ".xml", ".ini", ".cfg", ".conf"}
-        if os.path.splitext(fpath)[1].lower() in text_exts:
+        ext = os.path.splitext(fpath)[1].lower()
+        if ext in text_exts:
             with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read(100000)
+                content = f.read(max_chars)
             return {"status": "ok", "filename": fname, "file_size": row["file_size"], "content": content,
-                    "truncated": len(content) >= 100000}
+                    "truncated": len(content) >= max_chars}
+        if ext in (".xlsx", ".xls"):
+            def _xlsx_to_csv_text() -> tuple:
+                import csv as _csv
+                import io as _io
+
+                from openpyxl import load_workbook
+
+                wb = load_workbook(fpath, read_only=True, data_only=True)
+                try:
+                    out = ""
+                    for sheet_name in wb.sheetnames:
+                        buf = _io.StringIO()
+                        writer = _csv.writer(buf)
+                        for r in wb[sheet_name].iter_rows(values_only=True):
+                            writer.writerow([("" if c is None else str(c)) for c in r])
+                            if len(out) + buf.tell() > max_chars:
+                                break
+                        out += f"## Sheet: {sheet_name}\n{buf.getvalue()}\n"
+                        if len(out) > max_chars:
+                            return out[:max_chars], True
+                    return out, False
+                finally:
+                    wb.close()
+
+            try:
+                content, truncated = await asyncio.to_thread(_xlsx_to_csv_text)
+            except Exception as e:
+                return {"status": "read_error", "filename": fname, "file_size": row["file_size"],
+                        "error": f"엑셀 파싱 실패: {type(e).__name__}: {e}",
+                        "message": "파일은 서버에 있으나 내용을 읽지 못했습니다(없는 파일이 아님)."}
+            return {"status": "ok", "filename": fname, "file_size": row["file_size"], "content": content,
+                    "truncated": truncated}
         return {"status": "binary_file", **base,
                 "message": "바이너리 파일은 텍스트로 읽을 수 없습니다."}
 
