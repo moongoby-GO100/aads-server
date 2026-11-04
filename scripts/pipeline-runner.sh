@@ -3709,14 +3709,32 @@ def clean(value):
         for c in value
     ).split())
 
+META = re.compile(
+    r"^(GOAL_ID|MILESTONE_ID|ALLOW_DUP_JOB|PUSH_ONLY|DEPLOY_POLICY|DEPLOY_ONLY|TARGET|TARGET_FILES"
+    r"|PRIORITY|SIZE|APPROVAL|TASK_ID|AUTO_REWORK_OF|AUTO_REWORK_ROUND|REWORK_OF|SUPERSEDES)(?=[: \t]|$)"
+)
+
+def cut(text, limit=80):
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    if text[limit].isspace():
+        return head.rstrip()
+    space = head.rfind(" ")
+    return head[:space].rstrip() if space >= limit // 2 else head.rstrip()
+
 instruction = sys.stdin.read()
 title = ""
+body = []
 for line in instruction.splitlines():
-    match = re.match(r"^TITLE:[ \t]*(.*)$", clean(line))
+    line = clean(line)
+    match = re.match(r"^TITLE:[ \t]*(.*)$", line)
     if match and match.group(1).strip():
         title = match.group(1)
         break
-summary = clean(title or instruction)[:80].rstrip() or "작업 변경 반영"
+    if line and not META.match(line):
+        body.append(line)
+summary = cut(title or " ".join(body)) or "작업 변경 반영"
 print("fix(pipeline-runner): " + clean(sys.argv[1]) + " — " + summary)
 ' "$job_id") || return 1
         commit_out=$(mktemp "/tmp/pipeline-approval-commit-${job_id}.out.XXXXXX")

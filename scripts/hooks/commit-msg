@@ -1,6 +1,8 @@
 #!/bin/bash
-COMMIT_MSG=$(cat "$1")
-if echo "$COMMIT_MSG" | grep -qxE '(and|Claude Code|update|fix|test|wip|.)'; then
+# 무의미 메시지 검사는 제목 줄(첫 비주석 줄)에만 건다. 본문에 한 글자 줄('G', '-')이
+# 있다는 이유로 정상 제목의 커밋을 막으면 러너 자동 커밋이 거부된다(runner-e58c103d).
+FIRST_LINE=$(grep -v '^#' "$1" | sed '/^$/d' | head -1)
+if printf '%s\n' "$FIRST_LINE" | grep -qxE '(and|Claude Code|update|fix|test|wip|.)'; then
   echo "ERROR: 무의미 커밋 메시지 거부. 형식: feat(T-XXX): 설명"
   exit 1
 fi

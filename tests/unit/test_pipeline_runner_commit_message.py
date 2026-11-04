@@ -1,4 +1,4 @@
-"""승인 메시지 생성과 변경하지 않은 commit-msg 계약의 경계 회귀."""
+"""승인 메시지 생성과 commit-msg 훅(제목 줄 검사) 계약의 경계 회귀."""
 import re
 import subprocess
 from pathlib import Path
@@ -44,15 +44,17 @@ def test_job_identity_keeps_duplicate_subjects_distinct():
     assert generate('TITLE: 같은 작업') == generate('TITLE: 같은 작업')
 
 
-def test_real_hook_contract_rejects_old_message_and_preserves_audit(tmp_path):
+def test_real_hook_contract_accepts_old_message_and_preserves_audit(tmp_path):
     # Use a non-repository cwd: successful subject validation must still encounter
     # the existing missing-pre-commit-signature gate, never bypass it.
+    # 무의미 검사는 제목 줄에만 걸리므로, 본문에 한 글자 줄이 있는 옛 메시지도 이제 제목 검사는 통과한다.
     hook = ROOT / 'scripts/hooks/commit-msg'
     message_file = tmp_path / 'message'
     message_file.write_text('Pipeline-Runner: runner-e93f7592 — ' + 'A' * 78 + '\nR')
     old = subprocess.run(['bash', str(hook), str(message_file)], cwd=tmp_path,
                          capture_output=True, text=True, check=False)
-    assert old.returncode == 1 and '무의미' in old.stdout
+    assert '무의미' not in old.stdout
+    assert old.returncode == 1 and 'pre-commit hook 서명 없음' in old.stdout
     message_file.write_text(generate('A' * 78 + '\nR\n본문'))
     new = subprocess.run(['bash', str(hook), str(message_file)], cwd=tmp_path,
                          capture_output=True, text=True, check=False)
