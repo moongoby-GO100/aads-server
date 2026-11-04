@@ -67,6 +67,13 @@ _CAFE24_114: Dict[str, Any] = {
     ],
     "display_name": "cafe24_114 (SF/NTV2/NAS)",
     "legacy_ids": ["114"],
+    # 루트(/) 외에 헬스 화면에 따로 보여 줄 디스크. path 가 속한 마운트를 df 로 조회한다.
+    "extra_disk_paths": [
+        {
+            "label": "백업 서브디스크",
+            "path": "/home/danharoo/www/data/files/goods/goodscode/_aads-backup",
+        },
+    ],
 }
 
 _JINAH244: Dict[str, Any] = {

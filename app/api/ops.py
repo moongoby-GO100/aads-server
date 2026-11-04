@@ -1644,6 +1644,7 @@ def _remote_health_config(server_id: str) -> dict[str, Any] | None:
         "port": 9090,
         "ssh_port": int(cfg.get("ssh_port", 22)),
         "type": cfg.get("type", "ssh"),
+        "extra_disk_paths": list(cfg.get("extra_disk_paths") or []),
     }
 
 
@@ -1725,6 +1726,50 @@ def _parse_df_h(output: str) -> dict[str, Any]:
         "disk_used": parts[2],
         "disk_available": parts[3],
     }
+
+
+def _parse_df_extra(output: str, label: str) -> Optional[dict[str, Any]]:
+    """`df -P -h <path>` 출력 → extra_disks 항목. 파싱 불가면 None."""
+    lines = [line for line in output.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None
+    parts = lines[-1].split(None, 5)
+    if len(parts) < 6:
+        return None
+    pct_match = re.fullmatch(r"(\d+)%", parts[4])
+    if not pct_match:
+        return None
+    return {
+        "label": label,
+        "mount": parts[5].strip(),
+        "device": parts[0],
+        "size": parts[1],
+        "used": parts[2],
+        "available": parts[3],
+        "pct": int(pct_match.group(1)),
+    }
+
+
+def _collect_extra_disks(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """서버 설정의 extra_disk_paths 를 읽기 전용 df -P 로 조회. 실패한 경로는 건너뛴다."""
+    import shlex
+
+    disks: list[dict[str, Any]] = []
+    for entry in cfg.get("extra_disk_paths") or []:
+        try:
+            path = entry.get("path") if isinstance(entry, dict) else str(entry)
+            if not path:
+                continue
+            label = (entry.get("label") if isinstance(entry, dict) else None) or path
+            result = _run_server_probe(cfg, f"df -P -h -- {shlex.quote(path)}", timeout=8)
+            if result.returncode != 0:
+                continue
+            item = _parse_df_extra(result.stdout, label)
+            if item:
+                disks.append(item)
+        except Exception as exc:
+            logger.warning("extra_disk_probe_failed", server=cfg.get("id"), error=str(exc)[:120])
+    return disks
 
 
 def _parse_uptime(output: str) -> dict[str, Any]:
@@ -1857,6 +1902,7 @@ def _collect_server_health_fallback(cfg: dict[str, Any]) -> dict[str, Any]:
         "checked_at": datetime.now(KST).isoformat(),
         "services": {},
         "errors": errors[:3],
+        "extra_disks": _collect_extra_disks(cfg),
         **metrics,
     }
 
@@ -1874,6 +1920,8 @@ async def remote_server_health(server_id: str):
             payload.setdefault("server_id", cfg.get("id"))
             payload.setdefault("host", cfg.get("host"))
             payload.setdefault("source", "health_server")
+            if not isinstance(payload.get("extra_disks"), list):
+                payload["extra_disks"] = _collect_extra_disks(cfg)
             return payload
         fallback = _collect_server_health_fallback(cfg)
         if r.stderr.strip():
