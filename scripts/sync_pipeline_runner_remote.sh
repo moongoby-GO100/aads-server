@@ -223,7 +223,10 @@ remote_runner_process_state() {
 # 작업을 잡는다 — 2026-10-11 NTV2 신규 파일 diff 누락의 원인. 읽기 전용으로 찾아 경고만 한다.
 warn_stale_runner_processes() {
     local name="$1" host="$2" out=""
-    out=$(ssh "${SSH_OPTS[@]}" "$host" 'for p in $(pgrep -f "[p]ipeline-runner.sh" 2>/dev/null); do
+    # ssh -n: 이 함수는 대상 목록을 stdin(here-string)으로 읽는 while 루프 안에서 불린다.
+    # -n 이 없으면 ssh 가 남은 대상 행을 먹어 첫 대상 뒤 대상이 통째로 빠진다
+    # (2026-11-04 실측: cafe24_114 가 매번 빠져 targets=1, 114 러너가 10/12 판에 고정).
+    out=$(ssh -n "${SSH_OPTS[@]}" "$host" 'for p in $(pgrep -f "[p]ipeline-runner.sh" 2>/dev/null); do
         l=$(readlink "/proc/$p/fd/255" 2>/dev/null) || continue
         case "$l" in *pipeline-runner.sh*"(deleted)"*) u=$(awk -F/ "/name=systemd|:\/system.slice\//{print \$NF; exit}" "/proc/$p/cgroup" 2>/dev/null); echo "pid=$p unit=${u:-unknown}";; esac
     done' 2>/dev/null) || out=""
