@@ -25,6 +25,13 @@ _AUTO_REFRESH_MIN_INTERVAL_SECONDS = max(15, int(os.getenv("LLM_MODEL_REGISTRY_A
 _cache: dict[str, tuple[Any, float]] = {}
 _auto_refresh_attempts: dict[str, float] = {}
 _GOOGLE_ROUTE_ENV = "AADS_ALLOW_GOOGLE_COMMERCIAL_ROUTES"
+_DEEPSEEK_MODELS_URL = (os.getenv("DEEPSEEK_MODELS_URL") or "https://api.deepseek.com/models").strip()
+_DISCOVERY_STALE_AFTER_SECONDS = max(
+    3600.0, float(os.getenv("LLM_MODEL_DISCOVERY_STALE_HOURS", "72")) * 3600.0
+)
+
+_GLOBAL_DISCOVERY_PROVIDER = "all"
+_DISCOVERY_PROVIDERS = ("openai", "anthropic", "gemini", "litellm", "kimi", "deepseek", "codex")
 
 _PROVIDER_ALIASES = {
     "anthropic": "anthropic",
@@ -554,6 +561,8 @@ _DISCOVERY_REQUIREMENTS = {
     "openai": "Bearer provider key required",
     "gemini": "Google Generative Language API key required",
     "litellm": "LiteLLM master key and /model/info endpoint required",
+    "kimi": "Moonshot provider key required for GET /v1/models",
+    "deepseek": "DeepSeek provider key (central key store) required for official GET /models",
 }
 
 _PROVIDER_META = {
@@ -826,7 +835,7 @@ def _provider_auto_discovery_supported(provider: str, provider_state: dict[str, 
             key.get("is_available") and _anthropic_key_supports_models_api(str(key.get("key_name") or ""))
             for key in provider_state.get("keys", [])
         )
-    return provider in {"openai", "gemini", "litellm"} and int(provider_state.get("available_key_count", 0)) > 0
+    return provider in {"openai", "gemini", "litellm", "kimi", "deepseek"} and int(provider_state.get("available_key_count", 0)) > 0
 
 
 def _provider_discovery_requirement(provider: str) -> str:
@@ -1224,7 +1233,7 @@ async def _fetch_kimi_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
             resp.raise_for_status()
             data = resp.json()
     except Exception as exc:
-        return [], {"status": "failed", "error": str(exc)[:200], "count": 0}
+        return [], {"status": "failed", "error": _discovery_error_code(exc, 200), "count": 0}
     rows = [
         {"model_id": item["id"], "display_name": item.get("id", ""), "raw": item}
         for item in data.get("data", [])
@@ -1240,6 +1249,183 @@ async def _fetch_codex_cli_models() -> tuple[list[dict[str, Any]], dict[str, Any
     return await asyncio.to_thread(read_codex_models_cache)
 
 
+def _discovery_error_code(exc: BaseException, limit: int = 500) -> str:
+    """HTTP 오류는 공급자와 무관한 코드(http_<status>)로 정규화한다. 예외 문자열에는 요청 URL(?key=...)이 실릴 수 있다."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"http_{exc.response.status_code}"
+    if isinstance(exc, httpx.HTTPError):
+        return f"fetch_error:{type(exc).__name__}"
+    return str(exc)[:limit]
+
+
+def classify_deepseek_catalog(listed_ids: Iterable[str]) -> dict[str, Any]:
+    """공식 목록을 canonical / alias / 미검증 신규로 나눈다. 목록에 없는 canonical 은 폐기가 아니라 '일시 미확인' 이다."""
+    listed = sorted({str(item or "").strip() for item in listed_ids if str(item or "").strip()})
+    canonical_ids = set(_PROVIDER_MODELS.get("deepseek", ()))
+    alias_ids = sorted(item for item in listed if item in _DEEPSEEK_COMPATIBILITY_ALIASES)
+    canonical_listed = sorted(item for item in listed if item in canonical_ids)
+    served_via_alias = {_DEEPSEEK_COMPATIBILITY_ALIASES[item] for item in alias_ids}
+    return {
+        "canonical_ids": canonical_listed,
+        "alias_ids": alias_ids,
+        "unverified_new_ids": sorted(
+            item for item in listed if item not in canonical_ids and item not in _DEEPSEEK_COMPATIBILITY_ALIASES
+        ),
+        "missing_canonical_ids": sorted(
+            item for item in canonical_ids if item not in canonical_listed and item not in served_via_alias
+        ),
+        "absence_policy": "missing_is_transient; retirement only by forced list or official shutdown_date",
+    }
+
+
+async def _fetch_deepseek_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """DeepSeek 공식 GET /models. 키는 중앙 키 저장소에서만 읽고 어디에도 기록하지 않는다."""
+    api_key = await _get_first_provider_key("deepseek")
+    if not api_key:
+        return [], {
+            "status": "skipped",
+            "error": "missing_key",
+            "count": 0,
+            "discovery_source": "deepseek_api",
+            "auto_discovery_supported": False,
+            "model_source": "template",
+        }
+    try:
+        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
+            response = await client.get(_DEEPSEEK_MODELS_URL, headers={"Authorization": f"Bearer {api_key}"})
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:
+        return [], {
+            "status": "failed",
+            "error": _discovery_error_code(exc),
+            "count": 0,
+            "discovery_source": "deepseek_api",
+            "model_source": "template",
+        }
+    items = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(items, list) or payload.get("error"):
+        # HTTP 200 이어도 목록 구조가 아니면 '빈 목록 성공' 이 아니라 실패다.
+        return [], {
+            "status": "failed",
+            "error": "schema_invalid",
+            "count": 0,
+            "discovery_source": "deepseek_api",
+            "model_source": "template",
+        }
+    rows = [
+        {"model_id": str(item["id"]).strip(), "display_name": _display_name_for_provider("deepseek", str(item["id"]).strip()), "raw": item}
+        for item in items
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
+    return rows, {
+        "status": "ok",
+        "count": len(rows),
+        "discovery_source": "deepseek_api",
+        "auto_discovery_supported": True,
+        "model_source": "discovery",
+        **classify_deepseek_catalog(row["model_id"] for row in rows),
+    }
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, (int, float)):
+        try:
+            parsed = datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _discovery_reason_class(status: str, error: str) -> str:
+    if error == "oauth_runtime_only_models_api_unavailable":
+        return "oauth_runtime_only"
+    if error == "google_routes_disabled":
+        return "route_policy_disabled"
+    if error == "disabled":
+        return "discovery_disabled"
+    if error in {"missing_key", "no_kimi_key"}:
+        return "missing_key"
+    if error in {"http_401", "http_403"}:
+        return "auth_rejected"
+    if error == "http_429":
+        return "rate_limited"
+    if error.startswith("http_"):
+        return "fetch_failed"
+    if status == "unavailable":
+        return "source_unavailable"
+    if status == "ok":
+        return ""
+    return "other" if status == "skipped" else "fetch_failed"
+
+
+def classify_discovery_run(
+    run: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    prior_success_at: Any = None,
+    stale_after_seconds: float | None = None,
+) -> dict[str, Any]:
+    """회사별 발견 1회를 ok/skipped/error/stale 로 판정한다. ok 만 '최신 확인됨' 이다."""
+    now = now or datetime.now(timezone.utc)
+    stale_after = _DISCOVERY_STALE_AFTER_SECONDS if stale_after_seconds is None else stale_after_seconds
+    status = str(run.get("status") or "").strip().lower()
+    error = str(run.get("error") or "").strip()
+    if status == "ok":
+        state = "ok"
+    elif status == "skipped":
+        state = "skipped"
+    else:
+        state = "error"
+    observed = _parse_timestamp(run.get("observed_at"))
+    raw_fetched = run.get("fetched_at")
+    source_fetched = _parse_timestamp(raw_fetched)
+    is_cache_source = bool(run.get("source_path")) or str(run.get("discovery_source") or "") == cli_model_autoreg.DISCOVERY_SOURCE
+    reason_override = ""
+    reference = source_fetched or observed
+    if state == "ok" and is_cache_source and source_fetched is None:
+        # 캐시 출처는 읽은 시각(observed_at)이 아니라 원본 fetched_at 만 신선도의 근거다.
+        state = "stale"
+        reason_override = "cache_timestamp_missing" if raw_fetched in (None, "") else "cache_timestamp_invalid"
+    elif state == "ok" and reference is not None and (now - reference).total_seconds() > stale_after:
+        state = "stale"
+    reason_class = reason_override or _discovery_reason_class(status, error)
+    succeeded = state in {"ok", "stale"}
+    prior = _parse_timestamp(prior_success_at)
+    last_success = observed if succeeded else prior
+    return {
+        "state": state,
+        "latest_confirmed": state == "ok",
+        "reason_class": reason_class,
+        "manual_registration_required": reason_class == "oauth_runtime_only",
+        "last_attempt_at": observed.isoformat() if observed else None,
+        "last_success_at": last_success.isoformat() if last_success else None,
+        "source_fetched_at": run.get("fetched_at"),
+    }
+
+
+def summarize_discovery_states(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    buckets: dict[str, list[str]] = {"ok": [], "skipped": [], "error": [], "stale": []}
+    runs = list(runs)
+    for run in runs:
+        buckets.setdefault(str(run.get("state") or "error"), []).append(str(run.get("provider") or "unknown"))
+    complete = bool(runs) and all(not buckets[name] for name in ("skipped", "error", "stale"))
+    return {
+        **buckets,
+        "discovery_complete": complete,
+        "status": "ok" if complete else "partial" if buckets["ok"] else "error",
+    }
+
+
 async def discover_provider_model_rows(
     key_rows: Iterable[dict[str, Any]],
     *,
@@ -1248,8 +1434,15 @@ async def discover_provider_model_rows(
     if enabled is None:
         enabled = (os.getenv("LLM_MODEL_DISCOVERY_ENABLED", "1").strip().lower() not in {"0", "false", "no"})
     if not enabled:
-        return [], [{"provider": "all", "status": "skipped", "error": "disabled", "count": 0,
-                     "observed_at": datetime.now(timezone.utc).isoformat()}]
+        # 가상 공급자 'all' 대신 실제 공급자마다 기록해야 회사별 최신 확인 판정이 비활성화를 반영한다.
+        observed_dt = datetime.now(timezone.utc)
+        disabled_runs = []
+        for provider in _DISCOVERY_PROVIDERS:
+            run = {"provider": provider, "status": "skipped", "error": "disabled", "count": 0,
+                   "observed_at": observed_dt.isoformat()}
+            run.update(classify_discovery_run(run, now=observed_dt))
+            disabled_runs.append(run)
+        return [], disabled_runs
 
     key_state = _build_key_state(key_rows)
     fetchers = {
@@ -1258,6 +1451,7 @@ async def discover_provider_model_rows(
         "gemini": _fetch_gemini_models,
         "litellm": _fetch_litellm_models,
         "kimi": _fetch_kimi_models,
+        "deepseek": _fetch_deepseek_models,
         "codex": _fetch_codex_cli_models,
     }
     all_rows: list[dict[str, Any]] = []
@@ -1304,7 +1498,10 @@ async def discover_provider_model_rows(
                 "model_source": result.get("model_source") or ("discovery" if discovered else "template"),
                 **{
                     key: result[key]
-                    for key in ("discovery_source", "source_path", "fetched_at", "hidden_count")
+                    for key in (
+                        "discovery_source", "source_path", "fetched_at", "hidden_count",
+                        "canonical_ids", "alias_ids", "unverified_new_ids", "missing_canonical_ids", "absence_policy",
+                    )
                     if key in result
                 },
             })
@@ -1316,7 +1513,7 @@ async def discover_provider_model_rows(
                 "status": "failed",
                 "count": 0,
                 "active_count": 0,
-                "error": str(exc)[:500],
+                "error": _discovery_error_code(exc),
                 "runtime_executable": provider in _KEYLESS_PROVIDERS or int(provider_state.get("available_key_count", 0)) > 0,
                 "auto_discovery_supported": _provider_auto_discovery_supported(provider, provider_state),
                 "discovery_requirement": _provider_discovery_requirement(provider),
@@ -1324,9 +1521,16 @@ async def discover_provider_model_rows(
                 "discovered_model_count": 0,
                 "model_source": "template",
             })
-    observed_at = datetime.now(timezone.utc).isoformat()
+    observed_dt = datetime.now(timezone.utc)
+    observed_at = observed_dt.isoformat()
     for run in run_results:
         run["observed_at"] = observed_at
+        run.update(classify_discovery_run(run, now=observed_dt))
+    # 공식 목록에서 이번에 실제로 확인된 행에만 확인 시각을 찍는다. llm_models.last_seen_at 은 템플릿 재저장으로도 갱신되므로 최신 확인의 근거가 아니다.
+    confirmed_providers = {run["provider"] for run in run_results if run.get("latest_confirmed")}
+    for row in all_rows:
+        if row["provider"] in confirmed_providers:
+            row["metadata"]["catalog_confirmed_at"] = observed_at
     return all_rows, run_results
 
 
@@ -1355,6 +1559,8 @@ def _merge_model_rows(template_rows: list[dict[str, Any]], discovered_rows: list
         metadata["discovery_mode"] = discovered_metadata.get("discovery_mode", metadata.get("discovery_mode"))
         metadata.update({k: v for k, v in release_date_fields(discovered_metadata).items() if v is not None})
         metadata["raw"] = discovered_metadata.get("raw", {})
+        if discovered_metadata.get("catalog_confirmed_at"):
+            metadata["catalog_confirmed_at"] = discovered_metadata["catalog_confirmed_at"]
         existing["metadata"] = metadata
         existing["last_verified_at"] = existing.get("last_verified_at") or row.get("last_verified_at")
         existing["capabilities"] = row.get("capabilities") or existing.get("capabilities") or {}
@@ -1940,6 +2146,86 @@ def _catalog_tier(provider: str, model_id: str) -> tuple[str | None, str | None]
     return _MODEL_TIER_CATALOG.get((provider, model_id), (None, None))
 
 
+async def _fetch_last_discovery_success(conn: asyncpg.Connection) -> dict[str, str]:
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT provider, MAX(created_at) AS last_success_at
+            FROM llm_model_discovery_runs
+            WHERE status = 'ok'
+            GROUP BY provider
+            """
+        )
+    except asyncpg.UndefinedTableError:
+        return {}
+    return {
+        str(row["provider"]): row["last_success_at"].isoformat()
+        for row in rows
+        if row["last_success_at"] is not None
+    }
+
+
+def classify_stored_discovery_run(
+    *,
+    status: Any,
+    error: Any,
+    details: Any,
+    created_at: Any,
+    prior_success_at: Any = None,
+) -> dict[str, Any]:
+    """llm_model_discovery_runs 한 행을 읽는 시점 기준으로 다시 판정한다. 목록/요약 API 가 같은 규칙을 쓰게 하는 단일 경로."""
+    details = _coerce_json_object(details)
+    run = {
+        "status": status,
+        "error": error,
+        "fetched_at": details.get("fetched_at"),
+        "source_path": details.get("source_path"),
+        "discovery_source": details.get("discovery_source"),
+        "observed_at": created_at,
+    }
+    return classify_discovery_run(run, prior_success_at=prior_success_at or details.get("last_success_at"))
+
+
+async def list_provider_discovery_freshness() -> dict[str, dict[str, Any]]:
+    """회사별 마지막 시도/마지막 성공/현재 판정. 오래된 ok 는 읽는 시점 기준으로 stale 이 된다."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        try:
+            latest = await conn.fetch(
+                """
+                SELECT DISTINCT ON (provider) provider, status, error, details, created_at
+                FROM llm_model_discovery_runs
+                ORDER BY provider, created_at DESC, id DESC
+                """
+            )
+            prior_success = await _fetch_last_discovery_success(conn)
+        except asyncpg.UndefinedTableError:
+            return {}
+    # 과거에 가상 공급자 'all' 로 남은 전역 비활성화 기록 — 그보다 오래된 회사별 기록은 비활성 이후 확인된 것이 아니다.
+    global_run = next((row for row in latest if str(row["provider"]) == _GLOBAL_DISCOVERY_PROVIDER), None)
+    result: dict[str, dict[str, Any]] = {}
+    for row in latest:
+        provider = str(row["provider"])
+        if provider == _GLOBAL_DISCOVERY_PROVIDER:
+            continue
+        source = row
+        if (
+            global_run is not None
+            and global_run["created_at"] is not None
+            and row["created_at"] is not None
+            and global_run["created_at"] > row["created_at"]
+        ):
+            source = global_run
+        result[provider] = classify_stored_discovery_run(
+            status=source["status"],
+            error=source["error"],
+            details=source["details"],
+            created_at=source["created_at"],
+            prior_success_at=prior_success.get(provider),
+        )
+    return result
+
+
 async def sync_model_registry(*, triggered_by: str = "system", reason: str = "") -> dict[str, Any]:
     sync_token = uuid.uuid4().hex
     pool = get_pool()
@@ -1954,11 +2240,27 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
             for r in await conn.fetch("SELECT provider, model_id FROM llm_models")
         }
         verified_codex_ids = await cli_model_autoreg.fetch_verified_codex_ids(conn)
+        prior_success = await _fetch_last_discovery_success(conn)
     manual_active_keys = {(r["provider"], r["model_id"]) for r in manual_rows}
     template_rows, provider_rows = build_registry_snapshots(key_rows)
     key_state = _build_key_state(key_rows)
     normalized_providers = _collect_provider_normalizations(key_state)
     discovered_rows, discovery_runs = await discover_provider_model_rows(key_rows)
+    for run in discovery_runs:
+        # 실패·skip 회차는 마지막 성공 시각을 전진시키지 않는다 — 이전 성공 기록을 그대로 둔다.
+        if not run.get("last_success_at"):
+            run["last_success_at"] = prior_success.get(str(run.get("provider") or ""))
+    discovery_summary = summarize_discovery_states(discovery_runs)
+    provider_status = [
+        {
+            key: run.get(key)
+            for key in (
+                "provider", "state", "latest_confirmed", "reason_class", "error", "manual_registration_required",
+                "last_attempt_at", "last_success_at", "source_fetched_at", "count", "model_source",
+            )
+        }
+        for run in discovery_runs
+    ]
     model_rows = _merge_model_rows(template_rows, discovered_rows)
     for row in model_rows:
         if (row["provider"], row["model_id"]) in manual_active_keys:
@@ -2113,6 +2415,8 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                         "normalized_providers": normalized_providers,
                         "review_required_providers": review_required_providers,
                         "discovery": discovery_runs,
+                        "provider_status": provider_status,
+                        "discovery_summary": discovery_summary,
                     },
                 )
                 for run in discovery_runs:
@@ -2159,11 +2463,25 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
         cli_autoreg = {"error": str(exc)[:200]}
 
     invalidate_registry_cache()
+    # ok 는 '레지스트리 저장 성공' 이다. 회사별 최신 확인 여부는 discovery_status/provider_status 로 따로 본다.
+    log_fn = logger.info if discovery_summary["discovery_complete"] else logger.warning
+    log_fn(
+        "model_registry.sync_done write_ok=True discovery_status=%s ok=%s skipped=%s error=%s stale=%s",
+        discovery_summary["status"],
+        ",".join(discovery_summary["ok"]),
+        ",".join(discovery_summary["skipped"]),
+        ",".join(discovery_summary["error"]),
+        ",".join(discovery_summary["stale"]),
+    )
     return {
         "ok": True,
         "models_synced": len(model_rows),
         "providers": provider_rows,
         "discovery": discovery_runs,
+        "discovery_status": discovery_summary["status"],
+        "discovery_complete": discovery_summary["discovery_complete"],
+        "discovery_summary": discovery_summary,
+        "provider_status": provider_status,
         "cli_autoreg": cli_autoreg,
         "normalized_providers": normalized_providers,
         "review_required_providers": review_required_providers,

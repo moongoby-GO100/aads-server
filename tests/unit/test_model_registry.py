@@ -493,12 +493,12 @@ async def test_discovery_reports_observed_skips_without_latest_guarantee(monkeyp
     async def skipped():
         return [], {"status": "skipped", "error": "google_routes_disabled", "runtime_executable": False}
     for name in ("_fetch_openai_models", "_fetch_anthropic_models", "_fetch_gemini_models",
-                 "_fetch_litellm_models", "_fetch_kimi_models", "_fetch_codex_cli_models"):
+                 "_fetch_litellm_models", "_fetch_kimi_models", "_fetch_deepseek_models", "_fetch_codex_cli_models"):
         monkeypatch.setattr(model_registry, name, skipped)
     rows, runs = await model_registry.discover_provider_model_rows([], enabled=True)
     assert rows == []
     assert all(run["status"] == "skipped" and run["observed_at"] for run in runs)
-    assert len(runs) == 6
+    assert len(runs) == 7
     assert all("latest_catalog_guaranteed" not in run for run in runs)
     google = next(run for run in runs if run["provider"] == "gemini")
     assert google["error"] == "google_routes_disabled"
@@ -561,9 +561,9 @@ async def test_discovery_observes_failures_without_changing_provider_set(monkeyp
     async def failed():
         raise RuntimeError("test catalog unavailable")
     for name in ("_fetch_openai_models", "_fetch_anthropic_models", "_fetch_gemini_models",
-                 "_fetch_litellm_models", "_fetch_kimi_models", "_fetch_codex_cli_models"):
+                 "_fetch_litellm_models", "_fetch_kimi_models", "_fetch_deepseek_models", "_fetch_codex_cli_models"):
         monkeypatch.setattr(model_registry, name, failed)
     rows, runs = await model_registry.discover_provider_model_rows([], enabled=True)
     assert rows == []
-    assert len(runs) == 6
+    assert len(runs) == 7
     assert all(run["status"] == "failed" and run["observed_at"] for run in runs)

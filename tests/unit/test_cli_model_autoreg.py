@@ -127,6 +127,8 @@ class DbConn:
                 return []
             self.candidates[key] = {"status": "discovered", "product_name": args[1], "source": args[2]}
             return [{"model_id": args[0]}]
+        if "MAX(created_at) AS last_success_at" in query:
+            return []  # 회사별 마지막 발견 성공 시각 — 이 fake 는 이력이 없다.
         if "SELECT provider, model_id, execution_model_id" in query:
             return []  # 채팅 LLM 후보 반영(register_chat_llm_candidates)은 별도 테스트에서 다룬다.
         if "FROM model_routing_preferences WHERE route_key" in query:
@@ -222,6 +224,8 @@ async def test_missing_cache_records_unavailable_run(monkeypatch, no_cache, api_
     assert codex_run["status"] == "unavailable"
     assert "not_found:" in codex_run["error"] and "missing-mirror.json" in codex_run["error"]
     assert not [r for r in rows if r["provider"] == "codex"]
+    assert codex_run["state"] == "error" and codex_run["reason_class"] == "source_unavailable"
+    assert codex_run["latest_confirmed"] is False
 
     conn = DbConn()
     await _sync(monkeypatch, conn)

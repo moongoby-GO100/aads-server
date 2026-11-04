@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 from app.core.db_pool import get_pool
 from app.services import cli_model_autoreg
 from app.services.model_registry import (
+    classify_stored_discovery_run,
+    list_provider_discovery_freshness,
     list_provider_summaries,
     list_registered_models,
     normalize_provider,
@@ -478,8 +480,18 @@ async def list_llm_models(
 async def get_provider_summary() -> dict[str, Any]:
     summaries = await list_provider_summaries()
     last_sync = await _fetch_last_registry_sync()
+    try:
+        freshness = await list_provider_discovery_freshness()
+    except Exception:
+        logger.exception("llm_models.discovery_freshness_failed")
+        freshness = {}
+    # 요약 캐시를 오염시키지 않도록 복사본에 붙인다.
+    summaries = [{**row, "discovery_freshness": freshness.get(row["provider"])} for row in summaries]
     return {
         "providers": summaries,
+        "latest_confirmed_providers": sorted(p for p, f in freshness.items() if f["latest_confirmed"]),
+        "not_latest_confirmed_providers": sorted(p for p, f in freshness.items() if not f["latest_confirmed"]),
+        "stale_providers": sorted(p for p, f in freshness.items() if f["state"] == "stale"),
         "total": len(summaries),
         "active_provider_count": sum(1 for row in summaries if row.get("active_model_count", 0) > 0),
         "runtime_executable_provider_count": sum(1 for row in summaries if row.get("runtime_executable")),
@@ -516,6 +528,12 @@ async def list_model_discovery_runs(limit: int = Query(20, ge=1, le=100)) -> dic
             "id": row["id"],
             "provider": row["provider"],
             "status": row["status"],
+            "freshness": classify_stored_discovery_run(
+                status=row["status"],
+                error=row["error"],
+                details=row["details"],
+                created_at=row["created_at"],
+            ),
             "discovered_count": row["discovered_count"],
             "active_count": row["active_count"],
             "error": row["error"],
