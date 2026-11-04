@@ -356,7 +356,10 @@ def test_confirmed_attendance_becomes_hourly_payroll_draft_with_matching_amount(
     assert seen == [("biz-mia", EMPLOYEE["email"], MONTH)]
     assert draft["status"] == "draft"
     assert draft["gross_pay"] == 12 * 11000
-    assert draft["net_pay"] == 12 * 11000
+    # 4대보험 근로자 명세는 법정 공제가 자동 산정된다(소득세는 입력 대기).
+    # 국민연금은 하한 410,000원 기준(19,470) + 건강은 근로자 부담 하한(10,080) + 장기요양(10,080 기준 1,320) + 고용 1,180
+    assert draft["insurance_deduction"] == 19470 + 10080 + 1320 + 1180
+    assert draft["net_pay"] == 12 * 11000 - draft["insurance_deduction"]
     assert draft["attendance_basis"]["approved_minutes"] == 720
     assert draft["attendance_basis"]["record_ids"] == ["att-5", "att-7"]
     assert svc.list_payroll(EMPLOYEE) == []
@@ -396,6 +399,14 @@ def test_attendance_draft_requires_hourly_or_daily_contract_and_unlocked_month(m
     assert exc.value.status_code == 409  # 서명 계약 없음
     sign_contract()
     draft = svc.payroll_draft_from_attendance(request, ADMIN)
+    with pytest.raises(HTTPException) as blocked:  # 소득세 입력 대기 중에는 확정할 수 없다
+        svc.confirm_payroll(draft["id"], ADMIN)
+    assert blocked.value.status_code == 409
+    items = [
+        {**item, "amount": 0, "confirmed": True} if item["code"] in ("income_tax", "local_income_tax") else item
+        for item in draft["deduction_items"]
+    ]
+    draft = svc.save_payroll({**draft, "deduction_items": items}, ADMIN)
     svc.confirm_payroll(draft["id"], ADMIN)
     with pytest.raises(HTTPException) as exc:
         svc.payroll_draft_from_attendance(request, ADMIN)

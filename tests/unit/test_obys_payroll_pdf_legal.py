@@ -73,6 +73,7 @@ PAY_ITEMS = [
 DEDUCTION_ITEMS = [
     {"code": "national_pension", "label": "국민연금", "amount": 112500},
     {"code": "health_insurance", "label": "건강보험", "amount": 88650},
+    {"code": "long_term_care", "label": "노인장기요양보험", "amount": 10860},
     {"code": "employment_insurance", "label": "고용보험", "amount": 22500},
     {"code": "income_tax", "label": "소득세", "amount": 40000},
     {"code": "local_income_tax", "label": "지방소득세", "amount": 4000},
@@ -85,7 +86,7 @@ def wage_payload(**overrides):
         "employee_email": EMPLOYEE_EMAIL, "employee_name": "가입 직원", "business_id": "biz-mia", "branch": "열정국밥_미아점",
         "payroll_month": MONTH, "pay_date": "2026-11-10", "employment_tax_type": "four_insurance",
         "gross_pay": 2500000, "taxable_pay": 2300000, "non_tax_meal_allowance": 200000, "meal_provision": "cash_no_meal",
-        "tax_withholding": 44000, "insurance_deduction": 223650, "other_deduction": 0,
+        "tax_withholding": 44000, "insurance_deduction": 234510, "other_deduction": 0,
         "pay_items": PAY_ITEMS, "deduction_items": DEDUCTION_ITEMS, "work_summary": WORK_SUMMARY,
     }
     payload.update(overrides)
@@ -154,8 +155,8 @@ def test_wage_rows_have_all_legal_items():
     assert row_value(rows, "연장근로시간") == "20시간"
     assert row_value(rows, "야간근로시간") == "0시간"
     assert row_value(rows, "휴일근로시간") == "8시간"
-    assert row_value(rows, "공제 합계") == "267,650원"
-    assert row_value(rows, "실지급액") == "2,232,350원"
+    assert row_value(rows, "공제 합계") == "278,510원"
+    assert row_value(rows, "실지급액") == "2,221,490원"
 
 
 def test_wage_rows_list_each_deduction_item_and_do_not_print_resident_number():
@@ -258,8 +259,8 @@ def test_blank_totals_are_derived_from_items():
         payload.pop(field)
     payload.update(taxable_pay=0, non_tax_meal_allowance=0)
     saved = svc.save_payroll(payload, ADMIN)
-    assert (saved["gross_pay"], saved["tax_withholding"], saved["insurance_deduction"], saved["other_deduction"]) == (2500000, 44000, 223650, 0)
-    assert saved["net_pay"] == 2232350
+    assert (saved["gross_pay"], saved["tax_withholding"], saved["insurance_deduction"], saved["other_deduction"]) == (2500000, 44000, 234510, 0)
+    assert saved["net_pay"] == 2221490
 
 
 def test_confirm_blocks_when_stored_items_drift_from_totals():
@@ -547,11 +548,12 @@ def test_new_wage_statement_without_pay_date_cannot_be_confirmed(blank):
 
 
 def test_wage_statement_with_deduction_but_no_deduction_items_is_blocked():
+    # 4대보험 명세는 항목 없이 합계만 보내도 자동 산정 항목이 생기지만, 소득세가 입력 대기라 확정은 막힌다.
     payload = wage_payload(deduction_items=None)
     draft = svc.save_payroll(payload, ADMIN)
     with pytest.raises(HTTPException) as exc:
         svc.confirm_payroll(draft["id"], ADMIN)
-    assert exc.value.status_code == 409 and "공제 항목별 금액" in exc.value.detail
+    assert exc.value.status_code == 409 and "소득세" in exc.value.detail
 
 
 def test_overtime_night_holiday_time_requires_calc_note_on_matching_item():
@@ -573,11 +575,21 @@ def test_wage_statement_with_all_required_items_confirms():
 
 
 def test_zero_deduction_wage_statement_needs_no_deduction_items():
+    # 4대보험 근로자 명세는 이제 법정 공제 항목이 자동으로 생긴다. 소득세를 관리자가 0원으로 확인해야 확정된다.
     pay = [{"code": "base", "label": "기본급", "amount": 1000000, "calc_note": "월급"}]
-    saved = confirmed(wage_payload(
+    payload = wage_payload(
         gross_pay=1000000, taxable_pay=1000000, non_tax_meal_allowance=0, tax_withholding=0, insurance_deduction=0,
         pay_items=pay, deduction_items=None, work_summary=None, meal_provision="",
-    ))
+    )
+    draft = svc.save_payroll(payload, ADMIN)
+    with pytest.raises(HTTPException) as exc:
+        svc.confirm_payroll(draft["id"], ADMIN)
+    assert exc.value.status_code == 409 and "소득세" in exc.value.detail
+    items = [
+        {**item, "amount": 0, "confirmed": True} if item["code"] in ("income_tax", "local_income_tax") else item
+        for item in draft["deduction_items"]
+    ]
+    saved = confirmed({**payload, "id": draft["id"], "deduction_items": items, "insurance_deduction": draft["insurance_deduction"]})
     assert saved["status"] == "confirmed"
 
 

@@ -9630,12 +9630,12 @@ PAYROLL_SERVER_FIELDS = frozenset({
     "superseded_by", "superseded_at", "attendance_basis", "deliveries", "created_by", "created_at", "updated_at",
     "net_pay", "email_pending", "employee_email_masked", "source_contract_id", "contract_defaults_applied",
     "contract_deviation", "settlement_basis", "deleted_at", "tenant_id", "totals", "payroll_validation_errors",
-    "employee_no", "employee_birth_date", "source_kind", "import_task", "statement_payload",
+    "employee_no", "employee_birth_date", "source_kind", "import_task", "statement_payload", "deduction_basis",
 })
 PAYROLL_CONTENT_FIELDS = (
     "employee_name", "business_id", "branch", "payroll_month", "pay_date", "employment_tax_type", "meal_provision",
     "gross_pay", "taxable_pay", "non_tax_meal_allowance", "tax_withholding", "insurance_deduction", "other_deduction",
-    "net_pay", "memo", "pay_items", "deduction_items", "work_summary",
+    "net_pay", "memo", "pay_items", "deduction_items", "work_summary", "deduction_basis",
 )
 PAYROLL_DELIVERY_CONSENT_VERSION = "payroll-delivery-v1"
 PAYROLL_ATTENDANCE_WAGE_TYPES = ("hourly", "daily")
@@ -9735,7 +9735,7 @@ def payroll_versions(statement_id: str, user: dict[str, Any]) -> list[dict[str, 
     return [_payroll_with_totals(item) for item in sorted(chain, key=lambda item: (int(item.get("version") or 1), str(item.get("id"))))]
 
 
-def _validated_payroll_amounts(payload: dict[str, Any]) -> dict[str, int]:
+def _validated_payroll_amounts(payload: dict[str, Any], *, enforce_deduction_cap: bool = True) -> dict[str, int]:
     amounts = {
         field: _payroll_integer_for_api(payload.get(field), field=field)
         for field in ("gross_pay", "taxable_pay", "non_tax_meal_allowance", "tax_withholding", "insurance_deduction", "other_deduction")
@@ -9752,7 +9752,7 @@ def _validated_payroll_amounts(payload: dict[str, Any]) -> dict[str, int]:
         if non_tax_meal > 0 and str(payload.get("meal_provision") or "") != "cash_no_meal":
             raise HTTPException(status_code=400, detail="사용자가 식사를 제공하는 경우 현금 식대를 비과세로 분류할 수 없습니다")
     deductions = amounts["tax_withholding"] + amounts["insurance_deduction"] + amounts["other_deduction"]
-    if deductions > gross:
+    if enforce_deduction_cap and deductions > gross:
         raise HTTPException(status_code=400, detail="공제 합계가 총지급액을 넘을 수 없습니다")
     return amounts
 
@@ -9770,6 +9770,45 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
     if wants_confirm and changed and _payroll_state(saved) in PAYROLL_EDITABLE_STATUSES:
         return confirm_payroll(str(saved["id"]), user)
     return saved
+
+
+def _apply_statutory_payroll_deductions(statement: dict[str, Any], target: dict[str, Any] | None) -> None:
+    """four_insurance 명세의 4대보험·소득세 항목을 항목 단위로 채우고 합계·실수령액을 다시 맞춘다(제자리 수정).
+
+    프리랜서(3.3%)·기타 구분은 건드리지 않는다. 관리자가 고친 항목은 보존하고 자동 항목만 현재 과세급여로 재계산한다."""
+    if str(statement.get("employment_tax_type") or "").strip() != "four_insurance":
+        return
+    from app.services.yeoljeong_payroll_deductions import INSURANCE_CODES, TAX_CODES, apply_statutory_deductions
+    from app.services.yeoljeong_payroll_pdf import PayrollItemError, normalize_payroll_items, payroll_items_errors
+
+    try:
+        current = normalize_payroll_items(statement).get("deduction_items")
+    except PayrollItemError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    taxable = _payroll_integer_for_api(statement.get("gross_pay"), field="gross_pay") - _payroll_integer_for_api(
+        statement.get("non_tax_meal_allowance"), field="non_tax_meal_allowance"
+    )
+    items, basis = apply_statutory_deductions(
+        current,
+        month=str(statement.get("payroll_month") or ""),
+        taxable_pay=taxable,
+        previous_basis=(target or {}).get("deduction_basis") or None,
+        totals={field: statement.get(field) for field in ("tax_withholding", "insurance_deduction", "other_deduction")},
+    )
+    try:
+        items = normalize_payroll_items({"deduction_items": items})["deduction_items"]
+    except PayrollItemError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    statement["deduction_items"] = items
+    statement["deduction_basis"] = basis
+    for field, codes in (("tax_withholding", TAX_CODES), ("insurance_deduction", INSURANCE_CODES), ("other_deduction", ("other",))):
+        statement[field] = sum(item["amount"] for item in items if item["code"] in codes)
+    amounts = _validated_payroll_amounts(statement)
+    statement.update(amounts)
+    statement["net_pay"] = amounts["gross_pay"] - amounts["tax_withholding"] - amounts["insurance_deduction"] - amounts["other_deduction"]
+    errors = payroll_items_errors(statement)
+    if errors:
+        raise HTTPException(status_code=400, detail=errors[0])
 
 
 def _save_payroll_record(
@@ -9802,7 +9841,11 @@ def _save_payroll_record(
     plan = _payroll_defaults_from_employment(derived)
     payload = _payroll_payload_with_items(payload)
     payload, defaults_applied, deviation = _apply_payroll_contract_defaults(payload, plan)
-    amounts = _validated_payroll_amounts(payload)
+    # 4대보험 근로자는 자동 항목을 저장 직전에 다시 계산하므로, 요청에 실려 온 이전 공제 합계로 지급액 초과를
+    # 판단하면 총지급액을 낮추는 정상 수정이 막힌다. 초과 검증은 재계산 뒤 합계로 _apply_statutory_payroll_deductions 가 한다.
+    amounts = _validated_payroll_amounts(
+        payload, enforce_deduction_cap=str(payload.get("employment_tax_type") or "").strip() != "four_insurance",
+    )
     from app.services.yeoljeong_payroll_pdf import payroll_items_errors
 
     item_errors = payroll_items_errors({**payload, **amounts})
@@ -9871,7 +9914,13 @@ def _save_payroll_record(
         statement.update(server_fields)
     statement = _owned_hr_record(statement, user)
 
-    if mode == "new_version" and not _payroll_changes(existing, statement) and not server_fields:
+    if mode == "new_version" and not server_fields:
+        # 자동 산정 이전의 내용이 같으면(과거 항목 없는 확정 명세 재저장 포함) 새 버전을 만들지 않는다.
+        probe = {**statement, "deduction_basis": existing["deduction_basis"]} if existing.get("deduction_basis") else statement
+        if not _payroll_changes(existing, probe):
+            return existing, False
+    _apply_statutory_payroll_deductions(statement, target)
+    if mode == "new_version" and not server_fields and not _payroll_changes(existing, statement):
         return existing, False
 
     _write_hr_record("payroll_statements", statement, user)
