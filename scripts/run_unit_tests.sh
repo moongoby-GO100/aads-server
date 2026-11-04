@@ -28,6 +28,100 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
+# ── 동시 실행 상한 (AADS-UT-CONCURRENCY-CAP-20261104) ──
+# 러너 단위테스트가 컨테이너로 3개 이상 동시에 떠 contabo116 load 가 21까지 올랐다.
+# flock 슬롯 N개(기본 2, AADS_UT_MAX_PARALLEL)를 잡은 프로세스만 진행한다.
+# 슬롯은 열린 fd 에 걸린 flock 이라 프로세스가 어떻게 끝나든 커널이 해제한다.
+# 슬롯이 계속 차 있으면 AADS_UT_SLOT_WAIT(기본 300)초 뒤 종료코드 2(실행 불가).
+# 기본값은 scripts/pre_commit_test_map.py 의 GROUP_TIMEOUT_SEC(=900)보다 작아야 한다 —
+# 커밋 게이트가 먼저 타임아웃으로 죽기 전에 이 스크립트가 종료코드 2 로 사유를 남기며 끝난다.
+# 대기 중에는 AADS_UT_WAIT_NOTICE(기본 30)초마다 stderr 에 진행 한 줄을 남긴다.
+# ── UT_SLOT_BEGIN ──
+# 양의 정수만 받는다. 10# 로 8진수 해석을 막는다("08" 산술 오류, "00" 슬롯 0개 방지).
+# 0·빈 값·비숫자·7자리 초과는 기본값.
+ut_positive_int() {
+    local v="$1" def="$2"
+    if [[ "$v" =~ ^[0-9]{1,6}$ ]] && [ $((10#$v)) -gt 0 ]; then
+        printf '%s' $((10#$v))
+    else
+        printf '%s' "$def"
+    fi
+}
+
+# 잠금 디렉터리는 호출자 소유의 진짜 디렉터리여야 한다. 심볼릭 링크이거나 남의 소유이거나
+# 그룹/타인 쓰기 가능이면 거부한다(root 실행 시 링크 대상 파일이 잘리는 것을 막는다).
+ut_prepare_lock_dir() {
+    local dir="$1" owner mode
+    if [ -L "$dir" ]; then
+        echo "[run_unit_tests] 잠금 디렉터리가 심볼릭 링크입니다: $dir" >&2
+        return 1
+    fi
+    if [ ! -e "$dir" ]; then
+        (umask 077; mkdir "$dir") 2>/dev/null || [ -d "$dir" ] || return 1
+    fi
+    if [ -L "$dir" ] || [ ! -d "$dir" ]; then
+        echo "[run_unit_tests] 잠금 디렉터리가 올바르지 않습니다: $dir" >&2
+        return 1
+    fi
+    owner="$(stat -c %u "$dir" 2>/dev/null)"
+    mode="$(stat -c %a "$dir" 2>/dev/null)"
+    if [ "$owner" != "$(id -u)" ]; then
+        echo "[run_unit_tests] 잠금 디렉터리 소유자가 다릅니다: $dir (uid=$owner)" >&2
+        return 1
+    fi
+    case "$mode" in
+        *[2367][0-7]|*[0-7][2367])
+            echo "[run_unit_tests] 잠금 디렉터리가 그룹/타인 쓰기 가능입니다: $dir (mode=$mode)" >&2
+            return 1 ;;
+    esac
+    return 0
+}
+
+UT_SLOT_FD=""
+
+# 성공 0, 대기 초과·검증 실패·flock 없음 2.
+ut_acquire_slot() {
+    local max wait notice dir i f fd start elapsed next_notice
+    max="$(ut_positive_int "${AADS_UT_MAX_PARALLEL:-}" 2)"
+    wait="$(ut_positive_int "${AADS_UT_SLOT_WAIT:-}" 300)"
+    notice="$(ut_positive_int "${AADS_UT_WAIT_NOTICE:-}" 30)"
+    dir="${AADS_UT_LOCK_DIR:-/tmp/aads-ut-slots-$(id -u)}"
+    if ! command -v flock >/dev/null 2>&1; then
+        echo "[run_unit_tests] flock 를 찾을 수 없습니다 — 동시 실행 상한을 적용할 수 없습니다." >&2
+        return 2
+    fi
+    ut_prepare_lock_dir "$dir" || return 2
+    start=$SECONDS
+    next_notice=$notice
+    while :; do
+        for ((i = 0; i < max; i++)); do
+            f="$dir/slot-$i.lock"
+            if [ -L "$f" ] || { [ -e "$f" ] && [ ! -f "$f" ]; }; then
+                echo "[run_unit_tests] 슬롯 파일이 일반 파일이 아닙니다: $f" >&2
+                return 2
+            fi
+            # >> 는 내용을 자르지 않는다.
+            exec {fd}>>"$f" || return 2
+            if flock -n "$fd"; then
+                UT_SLOT_FD="$fd"
+                return 0
+            fi
+            exec {fd}>&-
+        done
+        elapsed=$((SECONDS - start))
+        if [ "$elapsed" -ge "$wait" ]; then
+            echo "[run_unit_tests] 동시 실행 슬롯(${max}개)이 ${wait}초 동안 차 있습니다 — 실행 불가(종료코드 2)." >&2
+            return 2
+        fi
+        if [ "$elapsed" -ge "$next_notice" ]; then
+            echo "[run_unit_tests] 슬롯 대기 중 (경과 ${elapsed}초, 상한 ${max}개)" >&2
+            next_notice=$((next_notice + notice))
+        fi
+        sleep 1
+    done
+}
+# ── UT_SLOT_END ──
+
 # ── 컨테이너 수명 관리 (R-BG, runner.unit_test_container_orphan) ──
 # `docker run --rm` 은 포그라운드 클라이언트가 SIGKILL 로 죽어도 컨테이너를 지우지 않는다(dockerd 가 소유).
 # 러너가 job 을 종결하며 프로세스 트리를 죽이면 클라이언트만 죽고 pytest 컨테이너는 남았다(실측 2026-10-16).
@@ -128,6 +222,8 @@ resolve_test_image_candidates() {
     done
     printf '%s\n' "${out[@]}"
 }
+
+ut_acquire_slot || exit 2
 
 mapfile -t RUNTIME_CANDIDATES < <(resolve_test_image_candidates)
 if [ ${#RUNTIME_CANDIDATES[@]} -eq 0 ]; then
