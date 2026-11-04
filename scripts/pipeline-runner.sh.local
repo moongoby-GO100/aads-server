@@ -5165,6 +5165,14 @@ check_duplicate() {
 }
 
 # ── 프로세스 생존 확인 (watchdog) ──────────────────────────────────────
+# 이 러너가 가져간 작업만(서버 정보 없는 옛 작업 포함). runner_pid 는 그 작업을 돌린 서버의
+# 프로세스 번호라 다른 서버에서 kill -0/kill 하면 안 된다. 2026-11-04 116 watchdog 가
+# contabo42 작업(pid 48727)을 116 에서 찾지 못해 WATCHDOG_DEAD_PROCESS 로 error 전환했고,
+# 42 는 그 상태를 보고 정상 실행 중이던 작업을 스스로 종료했다(runner-9b48ed0c).
+runner_own_jobs_sql() {
+    printf "AND (runner_host IS NULL OR runner_host = '%s')" "${RUNNER_HOST_NAME//\'/\'\'}"
+}
+
 _watchdog_check() {
     local filter="$1"
     # 모델 실행과 리뷰는 서로 다른 예산을 사용한다. 리뷰 진입 시 updated_at을
@@ -5183,7 +5191,7 @@ _watchdog_check() {
                              (phase IS DISTINCT FROM 'ai_review'
                               AND started_at < NOW() - INTERVAL '${MAX_JOB_RUNTIME} seconds')
                            )
-                           $filter
+                           $filter $(runner_own_jobs_sql)
                          RETURNING job_id;" 2>/dev/null) || true
     if [[ -n "$timed_out" ]]; then
         log "  WATCHDOG_TIMEOUT: $timed_out"
@@ -5214,7 +5222,7 @@ _watchdog_check() {
     local stale_rows
     stale_rows=$(db_exec "SELECT job_id, runner_pid FROM pipeline_jobs
                           WHERE status='running' AND runner_pid IS NOT NULL
-                          $filter;" 2>/dev/null) || true
+                          $filter $(runner_own_jobs_sql);" 2>/dev/null) || true
 
     if [[ -n "$stale_rows" ]]; then
         while IFS=$'\x1e' read -r s_job_id s_pid; do
@@ -9136,7 +9144,7 @@ _recover_stuck_jobs() {
                              AND started_at IS NOT NULL
                              AND started_at < NOW() - INTERVAL '${MAX_RUNTIME} seconds'
                              AND updated_at < NOW() - INTERVAL '10 minutes'
-                             $filter;" 2>/dev/null) || true
+                             $filter $(runner_own_jobs_sql);" 2>/dev/null) || true
     if [[ -n "$zombie_rows" ]]; then
         while IFS=$'\x1e' read -r z_job z_pid z_session z_project; do
             z_job="${z_job// /}"
