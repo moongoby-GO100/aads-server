@@ -1,6 +1,9 @@
 """급여 관리자 핸들러를 합성 API/DOM으로 검증한다. 실직원 자료 접근 없음."""
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / 'app/static/apps/obys/modules/payroll-admin.js'
@@ -63,5 +66,7 @@ def test_payroll_handlers_save_readback_failure_permissions_and_confirmation():
       assert.equal(calls.some(path=>/\/(pay|deliver)$/.test(path)),false);
     })().catch(e=>{console.error(e);process.exitCode=1});
     '''
+    if not shutil.which("node"):
+        pytest.skip("node 미설치 — 호스트에서 실행")
     result = subprocess.run(['node', '-e', script, str(MODULE)], capture_output=True, text=True, timeout=20, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
