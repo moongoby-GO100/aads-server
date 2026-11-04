@@ -785,6 +785,100 @@ def _extract_explicit_scope_paths(instruction: str) -> set[str]:
     return paths
 
 
+_REVIEW_INSTRUCTION_HEAD_CHARS = 6000
+_REVIEW_SCOPE_MEMO_MAX_LINES = 10
+_REVIEW_SCOPE_MEMO_LINE_CHARS = 1000
+_SCOPE_MEMO_LINE_RE = re.compile(r"^[ \t]*(?:-[ \t]*)?범위 ?메모[^\n]*$", re.MULTILINE)
+# 한 번의 정규식으로 전문을 훑는다. 이어지는 줄은 "-/* 글머리표 줄" 또는 "경로 하나뿐인 줄"
+# 이고 빈 줄에서 반드시 멈춘다 — 각 반복이 개행으로 시작하므로 백트래킹이 선형이다.
+_TARGET_FILES_DECL_RE = re.compile(
+    r"^[ \t>*`#-]*\**TARGET_FILES\**[ \t]*[:=][ \t]*([^\n]*)"
+    r"((?:\n[ \t]*[-*][ \t]+[^\n]*|\n[ \t]*`?[\w.@/-]+`?[ \t]*(?=\n|$))*)",
+    re.MULTILINE,
+)
+_TARGET_FILES_TOKEN_RE = re.compile(r"^[\w.@-]+(?:/[\w.@-]+)*/?$")
+
+
+def _target_files_token(raw: str) -> str:
+    token = raw.strip().strip("`'\"").rstrip(",;")
+    if not token or not _TARGET_FILES_TOKEN_RE.match(token):
+        return ""
+    last = token.rstrip("/").rsplit("/", 1)[-1]
+    if "/" not in token and "." not in last:
+        return ""
+    return _normalize_scope_path(token)
+
+
+def _extract_declared_target_files(instruction: str) -> set[str]:
+    """지시서 전문의 `TARGET_FILES:` 선언 경로. 하드 게이트가 보지 않는 형식이라 참고용으로만 쓴다.
+
+    값이 같은 줄에 있으면 그 값만, 비어 있으면 바로 이어지는(빈 줄 전까지) 목록만 읽는다.
+    """
+    text = unicodedata.normalize("NFC", instruction or "")
+    paths: set[str] = set()
+    for match in _TARGET_FILES_DECL_RE.finditer(text):
+        inline = re.sub(r"\([^)]*\)", " ", match.group(1)).replace("`", " ")
+        if inline.strip():
+            raws = [t for t in re.split(r"[\s,;]+", inline) if t]
+        else:
+            raws = []
+            for item in match.group(2).split("\n"):
+                item = re.sub(r"^[ \t]*[-*][ \t]+", "", item).strip()
+                if item:
+                    raws.append(item.split(None, 1)[0])
+        for raw in raws:
+            token = _target_files_token(raw)
+            if token:
+                paths.add(token)
+    return paths
+
+
+def _build_review_instruction_section(instruction: Optional[str]) -> str:
+    """리뷰 프롬프트의 '작업 지시' 부분. 허용 파일 블록은 전문 기준이며 절단하지 않는다."""
+    text = unicodedata.normalize("NFC", instruction or "")
+    parts: list[str] = []
+
+    gate_paths = sorted(_extract_explicit_scope_paths(text))
+    if gate_paths:
+        parts.append(
+            f"허용 파일(하드 게이트 인식 — 지시서 전문에서 하드 게이트와 같은 규칙으로 추출, {len(gate_paths)}개):\n"
+            + "\n".join(f"- {path}" for path in gate_paths)
+        )
+    else:
+        parts.append("허용 파일 선언 없음 (하드 게이트가 인식하는 '허용 파일:' 계열 선언 0개)")
+
+    declared = sorted(_extract_declared_target_files(text))
+    if declared:
+        parts.append(
+            f"TARGET_FILES 선언(지시서 전문에서 추출, {len(declared)}개 — 하드 게이트는 이 형식을 검사하지 않는다):\n"
+            + "\n".join(f"- {path}" for path in declared)
+        )
+
+    memo_lines = [m.group(0).strip() for m in _SCOPE_MEMO_LINE_RE.finditer(text)]
+    if memo_lines:
+        shown = memo_lines[:_REVIEW_SCOPE_MEMO_MAX_LINES]
+        cut_lines = sum(1 for line in shown if len(line) > _REVIEW_SCOPE_MEMO_LINE_CHARS)
+        block = "범위 메모:\n" + "\n".join(
+            f"- {line[:_REVIEW_SCOPE_MEMO_LINE_CHARS]}" for line in shown
+        )
+        if len(memo_lines) > len(shown) or cut_lines:
+            block += (
+                f"\n(범위 메모 {len(memo_lines)}줄 중 {len(shown)}줄 표시, "
+                f"{cut_lines}줄은 줄당 {_REVIEW_SCOPE_MEMO_LINE_CHARS}자로 일부 절단)"
+            )
+        parts.append(block)
+
+    head = text[:_REVIEW_INSTRUCTION_HEAD_CHARS]
+    body = f"지시서 본문:\n{head}"
+    if len(text) > _REVIEW_INSTRUCTION_HEAD_CHARS:
+        body += (
+            f"\n(지시서 전체 {len(text)}자 중 앞 {_REVIEW_INSTRUCTION_HEAD_CHARS:,}자 — 이하 생략. "
+            "허용 파일은 위 블록이 전문 기준)"
+        )
+    parts.append(body)
+    return "\n\n".join(parts)
+
+
 def _diff_line_counts(diff: str) -> tuple[int, int]:
     additions = 0
     deletions = 0
@@ -1988,7 +2082,8 @@ async def review_code_diff(
     prompt = f"""다음 코드 변경사항을 리뷰하세요.
 
 프로젝트: {project}
-작업 지시: {instruction[:500]}
+작업 지시:
+{_build_review_instruction_section(instruction)}
 변경 파일: {', '.join(files_changed or [])}
 {truncation_notice}{move_notice}
 ```diff
