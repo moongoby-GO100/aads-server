@@ -3832,6 +3832,49 @@ worktree_busy_pids() {
     return 0
 }
 
+# origin fetch 일시 실패(네트워크·SSH 거부)에 대한 제한 재시도.
+# stderr 원문은 어디에도 싣지 않는다(URL 사용자명 자리 토큰 유출 방지) — 종류 분류값만 남긴다.
+# 결과: GIT_FETCH_LAST_KIND, GIT_FETCH_ATTEMPTS 전역 설정. 0=성공 1=실패.
+git_fetch_origin_with_retry() {
+    local workdir="$1"
+    local max_attempts=3
+    local t="${RUNNER_GIT_FETCH_TIMEOUT_SEC:-45}"
+    [[ "$t" =~ ^[0-9]+$ ]] && (( 10#$t >= 1 && 10#$t <= 300 )) && t=$((10#$t)) || t=45
+    local -a sleeps
+    read -r -a sleeps <<< "${RUNNER_GIT_FETCH_RETRY_SLEEPS:-10 30}"
+    local attempt rc kind errfile
+    GIT_FETCH_LAST_KIND=""
+    GIT_FETCH_ATTEMPTS=0
+    for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+        GIT_FETCH_ATTEMPTS=$attempt
+        errfile=$(mktemp 2>/dev/null) || errfile=/dev/null
+        rc=0
+        timeout --kill-after=5 "$t" git -C "$workdir" fetch --prune origin >/dev/null 2>"$errfile" || rc=$?
+        if (( rc == 0 )); then
+            [[ "$errfile" != /dev/null ]] && rm -f "$errfile"
+            return 0
+        fi
+        if (( rc == 124 || rc == 137 )); then
+            kind=timeout
+        elif grep -qiE 'permission denied \(publickey|no matching host key|could not read from remote repository.*publickey' "$errfile" 2>/dev/null; then
+            kind=publickey
+        elif grep -qiE 'host key verification failed|remote host identification has changed' "$errfile" 2>/dev/null; then
+            kind=host_key
+        elif grep -qiE 'could not resolve host|connection refused|connection timed out|connection reset|network is unreachable' "$errfile" 2>/dev/null; then
+            kind=network
+        else
+            kind=other
+        fi
+        [[ "$errfile" != /dev/null ]] && rm -f "$errfile"
+        GIT_FETCH_LAST_KIND="$kind"
+        log "  GIT_FETCH_RETRY attempt=${attempt}/${max_attempts} rc=${rc} kind=${kind}"
+        if (( attempt < max_attempts )); then
+            sleep "${sleeps[attempt-1]:-30}"
+        fi
+    done
+    return 1
+}
+
 prepare_clean_job_worktree() {
     local job_id="$1" project="$2" session_id="$3" main_workdir="$4" worktree_dir="$5"
 
@@ -3853,8 +3896,9 @@ prepare_clean_job_worktree() {
         return 1
     fi
 
-    git -C "$main_workdir" fetch --prune origin >/dev/null 2>&1 || {
-        _fail_job "$job_id" "$session_id" "git_fetch_failed" "origin/main 최신화 실패: ${project}"
+    git_fetch_origin_with_retry "$main_workdir" || {
+        _fail_job "$job_id" "$session_id" "git_fetch_failed" \
+            "origin/main 최신화 실패: ${project} (${GIT_FETCH_ATTEMPTS}회 시도, 마지막 종류: ${GIT_FETCH_LAST_KIND})"
         return 1
     }
     git -C "$main_workdir" rev-parse --verify origin/main^{commit} >/dev/null 2>&1 || {

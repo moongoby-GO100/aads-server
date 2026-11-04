@@ -27,7 +27,7 @@ def runner(request, tmp_path):
              "git_dirty_count", "verify_isolated_job_worktree", "job_was_requeued",
              "requeue_scope_violations", "verify_worker_commit_provenance",
              "commit_job_worktree_for_approval", "worktree_busy_pids",
-             "prepare_clean_job_worktree")
+             "git_fetch_origin_with_retry", "prepare_clean_job_worktree")
     script = tmp_path / "functions.sh"
     script.write_text("set -eo pipefail\n" + "\n".join(
         extract(source, n) for n in names if f"{n}() {{" in source
@@ -197,7 +197,7 @@ def test_two_runner_copies_keep_integrity_helpers_identical():
     sources = [(ROOT / "scripts" / n).read_text() for n in RUNNERS]
     for name in ("requeue_scope_violations", "verify_worker_commit_provenance",
                  "commit_job_worktree_for_approval", "worktree_busy_pids",
-                 "prepare_clean_job_worktree"):
+                 "git_fetch_origin_with_retry", "prepare_clean_job_worktree"):
         assert extract(sources[0], name) == extract(sources[1], name)
 
 
