@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import json
 import logging
 import os
@@ -82,6 +83,9 @@ class _CommandGuard:
     acquired_at: float
 
 
+_SCOPED_WORK_KEY_PREFIX = "chat-pc-"
+
+
 class CDPSessionManager:
     _sessions: dict[str, CDPSession] = {}
     _port_pool: list[int] = [9222, 9333, 9444, 9555, 9666, 9777]
@@ -100,6 +104,14 @@ class CDPSessionManager:
         with cls._lock:
             for session in cls._sessions.values():
                 if session.port == port:
+                    return session
+        return None
+
+    @classmethod
+    def get_scoped_owner(cls, port: int) -> CDPSession | None:
+        with cls._lock:
+            for session in cls._sessions.values():
+                if session.port == port and session.work_key.startswith(_SCOPED_WORK_KEY_PREFIX):
                     return session
         return None
 
@@ -267,8 +279,26 @@ def _coerce_port(value: Any, default: int = CDP_PORT) -> int:
     return default
 
 
-def _effective_port(params: Dict[str, Any] | None = None) -> int:
+class InvalidPortError(ValueError):
+    """Raised by strict port resolution instead of silently falling back to the default port."""
+
+
+def _parse_port_strict(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise InvalidPortError(repr(value))
+    text = str(value).strip()
+    if not text.isascii() or not text.isdigit():
+        raise InvalidPortError(repr(value))
+    port = int(text)
+    if not 1 <= port <= 65535:
+        raise InvalidPortError(repr(value))
+    return port
+
+
+def _effective_port(params: Dict[str, Any] | None = None, *, strict: bool = False) -> int:
     if isinstance(params, dict) and "port" in params:
+        if strict:
+            return _parse_port_strict(params.get("port"))
         return _coerce_port(params.get("port"), CDP_PORT)
     if isinstance(params, dict):
         work_key = CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
@@ -279,6 +309,52 @@ def _effective_port(params: Dict[str, Any] | None = None) -> int:
     if general:
         return general.port
     return CDP_PORT
+
+
+_SCOPED_COMMANDS = (
+    "browser_navigate", "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
+    "browser_check", "browser_file_upload", "browser_download", "browser_screenshot", "browser_get_text",
+    "browser_eval", "browser_tabs", "browser_health", "browser_close_tab",
+)
+
+
+def _scope_violation(params: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    """Reject any call whose resolved browser belongs to a chat-scoped (chat-pc-*) session it does not own.
+
+    The port is resolved with _effective_port(strict=True) -- the same function the handlers use --
+    so an omitted/default port cannot dodge the check. A scoped key with no live session of its own
+    must fail instead of falling back to the default browser, and a port owned by a scoped session
+    is reachable only with that exact work_key. Invalid port values are rejected, never defaulted.
+    """
+    if not isinstance(params, dict):
+        return None
+    work_key = CDPSessionManager.normalize_work_key(params.get("work_key", "general"))
+    try:
+        port = _effective_port(params, strict=True)
+    except InvalidPortError:
+        return {"status": "error", "data": {"error": "invalid_port", "error_code": "INVALID_PORT"}}
+    if work_key.startswith(_SCOPED_WORK_KEY_PREFIX):
+        session = CDPSessionManager.get_session(work_key)
+        if not session:
+            code = "WORK_KEY_SESSION_REQUIRED"
+        elif port != session.port:
+            code = "WORK_KEY_PORT_MISMATCH"
+        else:
+            return None
+    else:
+        owner = CDPSessionManager.get_scoped_owner(port)
+        if owner is None or owner.work_key == work_key:
+            return None
+        code = "WORK_KEY_REQUIRED_FOR_OWNED_PORT"
+    return {"status": "error", "data": {"error": code.lower(), "error_code": code}}
+
+
+def _scoped_command(handler):
+    @functools.wraps(handler)
+    async def wrapper(params: Dict[str, Any]) -> Dict[str, Any]:
+        return _scope_violation(params) or await handler(params)
+
+    return wrapper
 
 
 async def _http_get_json(port: int, path: str, timeout: float = 2.0) -> Any:
@@ -2861,3 +2937,7 @@ async def browser_launch(params: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"status": "error", "data": {"error": str(e), "error_code": "CDP_NOT_READY"}}
+
+
+for _name in _SCOPED_COMMANDS:
+    globals()[_name] = _scoped_command(globals()[_name])
