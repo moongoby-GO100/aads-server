@@ -34,7 +34,7 @@ from app.services.server_registry import CANONICAL_SERVER_IDS, LEDGER_SERVER_IDS
 def test_snapshot_counts_ledger_and_health_separately():
     snap = cb.build_server_ledger_snapshot()
 
-    assert snap["ledger_count"] == len(LEDGER_SERVER_IDS) == 5
+    assert snap["ledger_count"] == len(LEDGER_SERVER_IDS) == 6
     assert snap["health_monitored_count"] == len(CANONICAL_SERVER_IDS) == 3
     # 두 수치가 같아지면 "감시 안 하는 서버" 가 사라졌다는 뜻이다.
     assert snap["ledger_count"] != snap["health_monitored_count"]
@@ -79,7 +79,7 @@ def test_section_reports_source_read_time_and_hash():
     assert snap["source"] in section
     assert "구성 조회시각" in section
     assert snap["snapshot_hash"] in section
-    assert "원장 서버 5대" in section
+    assert "원장 서버 6대" in section
     assert "건강 감시 대상 3대" in section
 
 
@@ -176,7 +176,7 @@ def test_layer2_no_longer_copies_server_config():
 def test_ledger_section_needs_no_database():
     """DB 없는 진입점에서도 원장 4대·감시 3대가 나온다."""
     section = cb.build_server_ledger_block().section
-    assert "원장 서버 5대" in section
+    assert "원장 서버 6대" in section
     assert "조회 실패" not in section
 
 
@@ -224,7 +224,7 @@ def test_ledger_provenance_reaches_prompt_compiler():
     prov = compiled.provenance["server_ledger"]
     assert prov["available"] is True
     assert prov["source"] == cb._LEDGER_SOURCE
-    assert prov["ledger_count"] == 5
+    assert prov["ledger_count"] == 6
     assert prov["health_monitored_count"] == 3
     assert prov["snapshot_hash"]
     assert prov["registry_read_at"] == prov["observed_at"]
@@ -304,7 +304,7 @@ def test_evidence_is_attached_even_when_the_table_is_missing():
     ledger = compiled.provenance.get("server_ledger")
     assert ledger, "조기-return 경로에서 원장 증거가 사라졌다"
     assert ledger["available"] is True
-    assert ledger["ledger_count"] == 5
+    assert ledger["ledger_count"] == 6
     assert ledger["health_monitored_count"] == 3
 
 

@@ -8,6 +8,7 @@ AADS-181: 서버 레지스트리 (Single Source of Truth)
   cafe24_114 = 114.207.244.86 (SF/NTV2/NAS) ← 구 "114" / 116.120.58.155 구 IP
 2026-11-04 증설:
   contabo92  = 13.140.248.92  (GO100 과거 DB 보관본·백업 수신, 서비스 미구성)
+  contabo42  = 46.250.255.42  (AADS 범용 러너 풀 주력, 116 과 같은 데이터센터)
 
 하위호환: 구 서버 ID("68","211","114")는 SERVER_ID_ALIAS 및
 SERVER_REGISTRY 내 동일 객체 참조로 계속 동작한다.
@@ -112,6 +113,25 @@ _CONTABO92: Dict[str, Any] = {
     "status": STATUS_ACTIVE,
 }
 
+# 2026-11-04 대표님 증설: 116 의 채팅과 러너 경합을 풀기 위한 범용 러너 풀 주력 서버.
+# 12코어·47GB·774GB, Ubuntu 24.04, 116 과 RTT 0.5ms. 서비스(HTTP)는 두지 않는다.
+# projects 를 비우는 이유는 contabo92 와 같다(원장 소비자가 projects 를 그대로 집계).
+_CONTABO42: Dict[str, Any] = {
+    "id": "contabo42",
+    "host": "46.250.255.42",
+    "ssh_alias": "contabo42",
+    "ssh_port": 22,
+    "type": "ssh",
+    "provider": "Contabo",
+    "projects": [],
+    "role": "AADS 범용 러너 풀",
+    "directive_base": "/root/.genspark/directives",
+    "http_health_urls": [],
+    "display_name": "contabo42 (러너 풀, 증설)",
+    "legacy_ids": [],
+    "status": STATUS_ACTIVE,
+}
+
 # 헬스체크 대상 서버 ID 목록 — 워치독과 헬스 집계는 이 리스트 기준
 #
 # ⚠ jinah244 는 **일부러 여기에 넣지 않았다** (2026-09-16). 이 리스트를 도는 쪽은
@@ -121,10 +141,10 @@ _CONTABO92: Dict[str, Any] = {
 #   넣으려면 http_health_urls 를 먼저 채우고 별도로 결정하라.
 #   원장·화면 노출은 LEDGER_SERVER_IDS 를 별도로 순회한다. 헬스체크 순회에는
 #   이 목록을 사용하지 않아 244 의 빈 health URL 이 장애로 집계되지 않는다.
-#   contabo92(2026-11-04)도 같은 이유로 제외했다. PostgreSQL 설치 후 health URL/포트
+#   contabo92·contabo42(2026-11-04)도 같은 이유로 제외했다. PostgreSQL 설치 후 health URL/포트
 #   검사를 채우고 감시 대상 편입은 별도로 결정한다.
 CANONICAL_SERVER_IDS: List[str] = ["contabo116", "contabo14", "cafe24_114"]
-LEDGER_SERVER_IDS: List[str] = [*CANONICAL_SERVER_IDS, "jinah244", "contabo92"]
+LEDGER_SERVER_IDS: List[str] = [*CANONICAL_SERVER_IDS, "jinah244", "contabo92", "contabo42"]
 
 # 구 ID → 신 ID 별칭
 SERVER_ID_ALIAS: Dict[str, str] = {
@@ -145,6 +165,7 @@ SERVER_REGISTRY: Dict[str, Dict[str, Any]] = {
     "cafe24_114": _CAFE24_114,
     "jinah244": _JINAH244,
     "contabo92": _CONTABO92,
+    "contabo42": _CONTABO42,
     # ── 하위호환 별칭 (기존 코드 보호용, 신규 사용 금지) ──
     "244": _JINAH244,
     "68": _CONTABO116,
