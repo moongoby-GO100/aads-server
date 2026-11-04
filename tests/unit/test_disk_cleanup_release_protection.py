@@ -50,3 +50,38 @@ def test_selector_fails_closed_without_release_ledger(tmp_path):
     output = _run_selector(tmp_path, ledger_fails=True)
     assert 'tagged-image cleanup deferred' in output
     assert 'removed:' not in output
+
+
+def _run_stale_test_reaper(tmp_path):
+    # 2026-11-04: 멈춘 pytest 컨테이너가 옛 릴리스 이미지를 "active" 로 붙잡아 회수 0% 가 반복됐다.
+    block = "STALE_TEST_SECONDS=" + SOURCE.split("STALE_TEST_SECONDS=", 1)[1].split("\nACTIVE_IMAGE_IDS=", 1)[0]
+    fake = tmp_path / "docker"
+    fake.write_text(r'''#!/bin/bash
+case "$1" in
+  ps) printf 'old_ut\nold_plain\nfresh_ut\napi\n' ;;
+  inspect)
+    case "$4" in
+      old_ut) echo "/old_ut|2026-10-26T00:05:52Z|1|python3 -m pytest tests/unit/x.py" ;;
+      old_plain) echo "/sharp_borg|2026-10-28T09:15:44Z||python3 -m pytest tests/unit/y.py" ;;
+      fresh_ut) echo "/fresh|$(date -u -d '-10 min' +%Y-%m-%dT%H:%M:%SZ)|1|timeout -k 10 1200 python3 -m pytest z" ;;
+      api) echo "/aads-server|2026-10-01T00:00:00Z||supervisord -c /app/supervisord.conf" ;;
+    esac ;;
+  rm) echo "$3" >> "$REMOVED" ;;
+esac
+''')
+    fake.chmod(0o755)
+    removed = tmp_path / "removed.txt"
+    removed.write_text("")
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "REMOVED": str(removed), "LOG": str(tmp_path / "log")}
+    subprocess.run(["bash", "-c", block], check=True, env=env)
+    return removed.read_text().split()
+
+
+def test_stale_unit_test_containers_are_reaped_before_active_image_scan(tmp_path):
+    assert SOURCE.index("STALE_TEST_SECONDS=") < SOURCE.index("ACTIVE_IMAGE_IDS=")
+    assert sorted(_run_stale_test_reaper(tmp_path)) == ["old_plain", "old_ut"]
+
+
+def test_builder_cache_retention_is_72h():
+    assert 'docker builder prune -af --filter "until=72h"' in SOURCE
+    assert 'until=168h' not in SOURCE.split("prune_project_images\n", 1)[0].split("STALE_TEST_SECONDS=", 1)[1]

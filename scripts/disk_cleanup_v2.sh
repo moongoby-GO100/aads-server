@@ -58,6 +58,31 @@ timeout 90 "$(dirname "$0")/reclaim_runner_worktrees.sh" >> "$LOG" 2>&1 || true
 # - tagged 이미지가 쌓이는 blue/green 특성상 dangling prune만으로는 부족하므로
 #   AADS 계열 과거 태그 중 미사용 이미지만 선별 삭제한다.
 echo "[DOCKER] 미사용 이미지/빌드캐시 정리" >> "$LOG"
+
+# 멈춘 단위 테스트 컨테이너를 먼저 회수한다.
+#
+# 2026-11-04 실측: timeout 도입 전의 `docker run ... python3 -m pytest` 컨테이너 2개가
+# 6일·9일째 CPU 0% 로 멈춰 있었다(sharp_borg, jovial_albattani). 아래
+# ACTIVE_IMAGE_IDS 가 실행 중 컨테이너 기준이라 그 옛 릴리스 이미지(각 약 1.5GB)를
+# "active" 로 보고 계속 남겼고, 디스크 가드는 87→87, 96→96, 97→97 로 회수 0%
+# 를 반복했다. 단위 테스트는 1200초 상한이므로 6시간을 넘긴 것은 멈춘 것이다.
+STALE_TEST_SECONDS="${AADS_STALE_TEST_CONTAINER_SECONDS:-21600}"
+now_epoch="$(date +%s)"
+docker ps -q | while read -r cid; do
+    info="$(docker inspect --format '{{.Name}}|{{.State.StartedAt}}|{{index .Config.Labels "aads.unit_test"}}|{{join .Config.Cmd " "}}' "$cid" 2>/dev/null)" || continue
+    IFS='|' read -r cname started ut_label cmd <<<"$info"
+    case "$ut_label|$cmd" in
+        1\|*|*\|python3\ -m\ pytest*|*\|timeout\ *python3\ -m\ pytest*) ;;
+        *) continue ;;
+    esac
+    started_epoch="$(date -d "$started" +%s 2>/dev/null)" || continue
+    age=$(( now_epoch - started_epoch ))
+    if [ "$age" -gt "$STALE_TEST_SECONDS" ]; then
+        echo "[DOCKER] reap stale unit-test container ${cname#/} age=${age}s" >> "$LOG"
+        docker rm -f "$cid" >> "$LOG" 2>&1 || true
+    fi
+done
+
 ACTIVE_IMAGE_IDS="$(docker ps -q | xargs -r docker inspect --format '{{.Image}}' | sort -u || true)"
 
 is_active_image() {
@@ -110,7 +135,8 @@ prune_project_images() {
 }
 
 docker image prune -f --filter "dangling=true" >> "$LOG" 2>&1 || true
-docker builder prune -af --filter "until=168h" >> "$LOG" 2>&1 || true
+# 2026-11-04: 168h → 72h. 회수 가능 빌드 캐시가 4GB 쌓인 채 디스크가 98% 까지 갔다.
+docker builder prune -af --filter "until=72h" >> "$LOG" 2>&1 || true
 docker container prune -f >> "$LOG" 2>&1 || true
 prune_project_images
 docker pull node:20-slim >> "$LOG" 2>&1 || true
