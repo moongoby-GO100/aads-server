@@ -722,3 +722,61 @@ def test_default_instance_name_would_have_hijacked_the_manual_lease(monkeypatch)
     result = run(svc.run_collection("c1", kinds=[core.KIND_BANK], instance=svc.DEFAULT_INSTANCE, session_factory=_Session))
     assert result["status"] == "succeeded" and started == [svc.DEFAULT_INSTANCE]
     assert sched.instance_name() != svc.DEFAULT_INSTANCE
+
+
+# (5) D21-2: 같은 회사에 겹치는 실행은 하나만 클로브까지 가고, 백필도 보유 회사를 skipped_busy 로 건너뛴다
+def test_two_overlapping_runs_on_one_company_only_first_reaches_clobe_and_loser_keeps_hands_off_the_lease(monkeypatch):
+    store, started = _lease_world(monkeypatch)
+    async def scenario():
+        release = asyncio.Event()
+        entered = asyncio.Event()
+
+        async def preflight(conn, session, ctx):
+            started.append(ctx.instance)
+            entered.set()
+            await release.wait()
+            return {}
+
+        monkeypatch.setattr(svc, "_preflight", preflight)
+        first = asyncio.create_task(svc.run_collection("c1", kinds=[core.KIND_BANK], instance="api-A", session_factory=_Session))
+        await entered.wait()
+        with pytest.raises(svc.CollectionError) as err:
+            await svc.run_collection("c1", kinds=[core.KIND_BANK], instance="api-B", session_factory=_Session)
+        assert (err.value.code, err.value.status) == ("collection_in_progress", 409)
+        assert store["c1"]["owner"] == "api-A" and store["c1"]["epoch"] == 1
+        assert store["c1"]["expires"] > time.monotonic()          # 거절된 쪽이 보유자의 임대를 풀지 않았다
+        release.set()
+        return await first
+
+    result = run(scenario())
+    assert result["status"] == "succeeded" and started == ["api-A"]
+    assert store["c1"]["expires"] <= time.monotonic()              # 보유자는 끝나면 반납한다
+
+
+def test_other_company_is_not_blocked_by_a_held_lease(monkeypatch):
+    store, started = _lease_world(monkeypatch)
+    run(svc.acquire_lease(_LeaseConn(store, None), "c1", "api-A"))
+    result = run(svc.run_collection("c2", kinds=[core.KIND_BANK], instance="api-B", session_factory=_Session))
+    assert result["status"] == "succeeded" and started == ["api-B"]
+
+
+def test_backfill_skips_company_held_by_manual_run_with_real_lease_logic_and_does_not_hijack_it(monkeypatch):
+    store, started = _lease_world(monkeypatch)
+    run(svc.acquire_lease(_LeaseConn(store, None), "c1", svc.DEFAULT_INSTANCE))    # 수동 버튼이 c1 을 수집 중
+
+    async def load_state():
+        return [{"clobe_company_id": "c1"}, {"clobe_company_id": "c2"}], {}
+
+    monkeypatch.setattr(sched, "load_state", load_state)
+    real = svc.run_collection
+
+    async def with_session(company_id, **kw):
+        return await real(company_id, session_factory=_Session, **kw)
+
+    monkeypatch.setattr(svc, "run_collection", with_session)
+    out = run(sched.run_backfill([core.KIND_BANK], date(2026, 10, 1), date(2026, 10, 2), pause_seconds=0))
+    assert [(r["company_id"], r["status"]) for r in out["results"]] == [("c1", "skipped_busy"), ("c2", "succeeded")]
+    assert out["results"][0]["detail"] == "collection_in_progress" and out["ok"] is True
+    assert started == [sched.instance_name()]                      # c2 만 시작했고 c1 은 클로브 전에 막혔다
+    assert store["c1"]["owner"] == svc.DEFAULT_INSTANCE and store["c1"]["epoch"] == 1   # 백필이 임대를 가로채지 않았다
+    assert store["c1"]["expires"] > time.monotonic()

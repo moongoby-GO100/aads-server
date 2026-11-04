@@ -5,8 +5,10 @@ OBYS_COLLECTION_TEST_DB_URL 이 가리키는 DB 는 테스트가 스키마를 �
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -93,6 +95,8 @@ class _Session:
             raise clobe.ClobePermissionDenied("forbidden")
         if tool == "get_scraping_status":
             return {"assets": f.assets.get(cid, [])}
+        if tool == core.CHANNEL_TOOL:       # 채널은 연결하지 않은 회사 — 빈 응답(미연결). 건수 대사 대상이 아니다
+            return {"content": f.data.get(cid, {}).get(core.KIND_CHANNEL, [])}
         kind = next(k for k, t in clobe.COLLECTION_DATA_TOOLS.items() if t == tool)
         items = f.data.get(cid, {}).get(kind, [])
         if kind == core.KIND_CASH:
@@ -406,7 +410,9 @@ async def test_live_run_lands_in_review_box_only_and_never_touches_ledger(db):
     assert cash_types == {"PURCHASE", "SALES"}
     assert all(a["size"] == 3 for t, a in fake.calls if t != "get_my_context" and "size" in a)
     state = await db.fetch("SELECT data_kind, status, last_success_at FROM obys_clobe_collection_state")
-    assert {r["status"] for r in state} == {"succeeded"} and len(state) == 4
+    by_kind = {r["data_kind"]: r["status"] for r in state}   # 채널은 클로브에 연결하지 않은 회사라 미연결 상태로 남는다
+    assert {k: by_kind[k] for k in core.DATA_KINDS} == {k: "succeeded" for k in core.DATA_KINDS}
+    assert by_kind == {**{k: "succeeded" for k in core.DATA_KINDS}, core.KIND_CHANNEL: "not_connected"}
 
 
 async def test_same_batch_rerun_and_shadow_create_zero_duplicates(db):
@@ -423,7 +429,7 @@ async def test_same_batch_rerun_and_shadow_create_zero_duplicates(db):
     assert shadow["status"] == "succeeded"
     assert sum(r["counts"]["would_insert"] for r in shadow["runs"]) == 0
     assert await db.fetch("SELECT item_id, item_hash FROM obys_clobe_item ORDER BY item_id") == snapshot
-    assert await n(db, "obys_clobe_collection_run", "WHERE mode='shadow' AND status='succeeded'") == 4
+    assert await n(db, "obys_clobe_collection_run", "WHERE mode='shadow' AND status='succeeded'") == len(core.COLLECTION_KINDS)
 
 
 async def test_shadow_on_empty_db_reports_would_insert_but_writes_nothing(db):
@@ -538,6 +544,185 @@ async def test_expired_lease_is_taken_over_with_higher_epoch(db):
     row = await db.fetchrow("SELECT owner_epoch FROM obys_clobe_collection_lease")
     assert row["owner_epoch"] == 6
     assert await db.fetchval("SELECT owner_epoch FROM obys_clobe_collection_run") == 6
+
+
+# ── D21-2 단일 실행권 · 멱등 재처리 ──────────────────────
+
+def _hold_at(inside: asyncio.Event, release: asyncio.Event):
+    """첫 데이터 호출에서 멈춰 세운다 — 그 사이 다른 실행이 겹치게 하려는 것이다(수집 도중 상태를 고정)."""
+    async def hook(count, tool, args):
+        if tool == "get_tax_invoices" and not inside.is_set():
+            inside.set()
+            await release.wait()
+    return hook
+
+
+async def _lease_alive(db, company_id):
+    return await db.fetchval(
+        "SELECT lease_expires_at > now() FROM obys_clobe_collection_lease WHERE clobe_company_id=$1", company_id)
+
+
+async def test_overlapping_runs_same_company_only_holder_writes_and_other_gets_collection_in_progress(db):
+    fake_a, fake_b = fake_for(C_DANHARU), fake_for(C_DANHARU)
+    await svc.discover_companies(session_factory=fake_a)
+    inside, release = asyncio.Event(), asyncio.Event()
+    fake_a.hook = _hold_at(inside, release)
+    fake_a.calls.clear()
+    task_a = asyncio.create_task(svc.run_collection(C_DANHARU, session_factory=fake_a, instance="api-A", **PERIOD))
+    try:
+        await asyncio.wait_for(inside.wait(), 30)             # A 가 수집 한복판(임대 보유)에 있다
+        with pytest.raises(svc.CollectionError) as e:
+            await svc.run_collection(C_DANHARU, session_factory=fake_b, instance="api-B", **PERIOD)
+        assert (e.value.code, e.value.status) == ("collection_in_progress", 409)
+        assert fake_b.calls == []                              # 클로브 호출 전에 막혔다
+        assert await n(db, "obys_clobe_collection_run", "WHERE owner_instance='api-B'") == 0
+        lease = await db.fetchrow("SELECT owner_instance, owner_epoch FROM obys_clobe_collection_lease")
+        assert (lease["owner_instance"], lease["owner_epoch"]) == ("api-A", 1)   # 거절이 임대를 건드리지 않는다
+        assert await _lease_alive(db, C_DANHARU) is True        # 거절된 쪽이 보유자의 임대를 풀지 않는다
+    finally:
+        release.set()
+    out_a = await asyncio.wait_for(task_a, 60)
+    assert out_a["status"] == "succeeded", out_a
+    assert await n(db, "obys_clobe_item") == 19
+    assert {r["owner_instance"] for r in await db.fetch("SELECT owner_instance FROM obys_clobe_collection_run")} == {"api-A"}
+    assert await n(db, "obys_clobe_collection_run") == len(core.COLLECTION_KINDS)
+    assert await _lease_alive(db, C_DANHARU) is False           # 끝나면 임대를 반납한다
+    retry = await svc.run_collection(C_DANHARU, session_factory=fake_b, instance="api-B", **PERIOD)   # 반납 후 B 는 정상 진행
+    assert retry["status"] == "succeeded"
+    assert sum(r["counts"]["inserted"] for r in retry["runs"]) == 0
+    assert sum(r["counts"]["unchanged"] for r in retry["runs"]) == 19
+    assert await n(db, "obys_clobe_item") == 19
+    assert await db.fetchval("SELECT owner_epoch FROM obys_clobe_collection_lease") == 2
+
+
+async def test_simultaneous_start_has_exactly_one_winner_whichever_task_runs_first(db):
+    fakes = {"api-A": fake_for(C_DANHARU), "api-B": fake_for(C_DANHARU)}
+    await svc.discover_companies(session_factory=fakes["api-A"])
+    inside, release = asyncio.Event(), asyncio.Event()
+    for f in fakes.values():
+        f.hook = _hold_at(inside, release)
+    tasks = {name: asyncio.create_task(svc.run_collection(C_DANHARU, session_factory=f, instance=name, **PERIOD))
+             for name, f in fakes.items()}
+    try:
+        await asyncio.wait_for(inside.wait(), 30)
+        done, _ = await asyncio.wait(tasks.values(), timeout=30, return_when=asyncio.FIRST_COMPLETED)
+        assert len(done) == 1                                   # 임대를 못 잡은 쪽만 끝나 있다
+    finally:
+        release.set()
+    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+    losers = [r for r in results if isinstance(r, svc.CollectionError)]
+    winners = [r for r in results if isinstance(r, dict)]
+    assert len(losers) == 1 and losers[0].code == "collection_in_progress", results
+    assert len(winners) == 1 and winners[0]["status"] == "succeeded", results
+    winner = next(name for name, t in tasks.items() if not t.exception())
+    loser = next(name for name in tasks if name != winner)
+    assert [c for c in fakes[loser].calls if c[0] != "get_my_context"] == []   # discover 때의 컨텍스트 조회만 있다
+    assert await n(db, "obys_clobe_item") == 19
+    assert {r["owner_instance"] for r in await db.fetch("SELECT owner_instance FROM obys_clobe_collection_run")} == {winner}
+    assert await db.fetchval("SELECT owner_epoch FROM obys_clobe_collection_lease") == 1
+
+
+async def test_leases_are_per_company_so_other_company_runs_while_one_is_held(db):
+    fake_a, fake_b = fake_for(C_DANHARU, C_EONNI), fake_for(C_DANHARU, C_EONNI)
+    await linked(db, fake_a)
+    inside, release = asyncio.Event(), asyncio.Event()
+    fake_a.hook = _hold_at(inside, release)
+    task_a = asyncio.create_task(svc.run_collection(C_DANHARU, session_factory=fake_a, instance="api-A", **PERIOD))
+    try:
+        await asyncio.wait_for(inside.wait(), 30)
+        other = await svc.run_collection(C_EONNI, session_factory=fake_b, instance="api-B", **PERIOD)
+        assert other["status"] == "succeeded"
+    finally:
+        release.set()
+    assert (await asyncio.wait_for(task_a, 60))["status"] == "succeeded"
+    assert await n(db, "obys_clobe_item", "WHERE business_id='biz-danharu'") == 19
+    assert await n(db, "obys_clobe_item", "WHERE business_id='biz-eonni'") == 19
+
+
+async def test_same_instance_name_overlap_still_leaves_a_single_writer(db):
+    """수동 버튼 두 번(둘 다 기본 인스턴스 이름): 재진입으로 둘 다 임대를 얻어도 펜싱이 먼저 시작한 쪽의 쓰기를 멈춘다."""
+    fake_a, fake_b = fake_for(C_DANHARU), fake_for(C_DANHARU)
+    await svc.discover_companies(session_factory=fake_a)
+    inside, release = asyncio.Event(), asyncio.Event()
+    fake_a.hook = _hold_at(inside, release)
+    task_a = asyncio.create_task(svc.run_collection(C_DANHARU, session_factory=fake_a, **PERIOD))
+    try:
+        await asyncio.wait_for(inside.wait(), 30)
+        try:
+            second = await svc.run_collection(C_DANHARU, session_factory=fake_b, **PERIOD)
+        except svc.CollectionError as exc:
+            second = exc
+    finally:
+        release.set()
+    first = await asyncio.wait_for(task_a, 60)
+    # 현재 동작: 같은 이름이면 두 번째가 재진입으로 임대를 얻고 먼저 시작한 쪽이 lease_lost 로 멈춘다(409 가 아니다).
+    # 이 단언은 그 사실을 고정한다 — 호출자가 실행마다 고유한 instance 를 쓰게 되면 위 distinct-instance 테스트의 계약이 적용된다.
+    assert first["status"] == "lease_lost" and not isinstance(second, Exception) and second["status"] == "succeeded"
+    assert await n(db, "obys_clobe_item") == 19
+    assert await db.fetchval("SELECT count(*) FROM (SELECT 1 FROM obys_clobe_item GROUP BY tenant_id, business_id, "
+                             "data_kind, source_key, item_hash HAVING count(*) > 1) d") == 0
+    assert await n(db, "obys_clobe_collection_run", "WHERE status='running'") == 0
+
+
+@pytest.mark.parametrize("kind", list(core.DATA_KINDS))
+async def test_recollecting_same_company_kind_period_does_not_add_rows_or_change_hashes(db, kind):
+    fake = fake_for(C_DANHARU)
+    await svc.discover_companies(session_factory=fake)
+    cols = "item_id, data_kind, source_key, item_hash, stage, first_run_id, first_seen_at"
+    first = await svc.run_collection(C_DANHARU, kinds=[kind], session_factory=fake, **PERIOD)
+    assert first["status"] == "succeeded", first
+    inserted = first["runs"][0]["counts"]["inserted"]
+    snapshot = await db.fetch(f"SELECT {cols} FROM obys_clobe_item ORDER BY data_kind, source_key, item_hash")
+    assert len(snapshot) == inserted
+    for round_no in (2, 3):
+        again = await svc.run_collection(C_DANHARU, kinds=[kind], session_factory=fake, **PERIOD)
+        assert again["status"] == "succeeded", again
+        c = again["runs"][0]["counts"]
+        assert (c["inserted"], c["revised"]) == (0, 0) and c["unchanged"] == inserted, (round_no, c)
+        assert await db.fetch(f"SELECT {cols} FROM obys_clobe_item ORDER BY data_kind, source_key, item_hash") == snapshot
+    assert await n(db, "obys_clobe_collection_run", f"WHERE data_kind='{kind}' AND status='succeeded'") == 3
+    assert await db.fetchval("SELECT count(DISTINCT last_run_id) FROM obys_clobe_item") == 1   # 마지막 실행이 본 시각만 갱신
+
+
+async def test_recollect_after_review_keeps_stage_and_adds_nothing(db):
+    fake = fake_for(C_DANHARU, counts={core.KIND_TAX: 3, core.KIND_BANK: 0, core.KIND_CASH: 0, core.KIND_CARD: 0})
+    await svc.discover_companies(session_factory=fake)
+    await svc.run_collection(C_DANHARU, kinds=[core.KIND_TAX], session_factory=fake, **PERIOD)
+    ids = await _ids(db, core.KIND_TAX)
+    await svc.review_items(TENANT, "biz-danharu", ids[:2], "approve", actor="admin@x")
+    before = await db.fetch("SELECT item_id, item_hash, stage FROM obys_clobe_item ORDER BY item_id")
+    assert sorted(r["stage"] for r in before) == ["review_box", "reviewed", "reviewed"]
+    again = await svc.run_collection(C_DANHARU, kinds=[core.KIND_TAX], session_factory=fake, **PERIOD)
+    assert again["runs"][0]["counts"]["inserted"] == 0 and again["runs"][0]["counts"]["unchanged"] == 3
+    assert await db.fetch("SELECT item_id, item_hash, stage FROM obys_clobe_item ORDER BY item_id") == before   # 검토 결과가 되돌려지지 않는다
+
+
+async def test_backfill_marks_company_held_by_a_live_run_skipped_busy_and_still_collects_the_rest(db, monkeypatch):
+    from app.services import obys_collection_scheduler as sched
+
+    fake_a, fake_bf = fake_for(C_DANHARU, C_EONNI), fake_for(C_DANHARU, C_EONNI)
+    await linked(db, fake_a)
+    monkeypatch.setattr(clobe, "ReadSession", fake_bf)           # run_backfill 은 session_factory 를 넘기지 않는다
+    inside, release = asyncio.Event(), asyncio.Event()
+    fake_a.hook = _hold_at(inside, release)
+    manual = asyncio.create_task(svc.run_collection(C_DANHARU, session_factory=fake_a, **PERIOD))   # 수동 버튼 실행(기본 이름)
+    try:
+        await asyncio.wait_for(inside.wait(), 30)
+        out = await sched.run_backfill([core.KIND_TAX], date(2026, 9, 1), date(2026, 9, 30), pause_seconds=0)
+    finally:
+        release.set()
+    assert (await asyncio.wait_for(manual, 60))["status"] == "succeeded"
+    by = {r["company_id"]: r for r in out["results"]}
+    assert by[C_DANHARU]["status"] == "skipped_busy" and by[C_DANHARU]["detail"] == "collection_in_progress"
+    assert by[C_EONNI]["status"] == "succeeded" and by[C_EONNI]["runs"][0]["counts"]["inserted"] == 5
+    assert out["ok"] is True                                    # 임대 충돌은 실패가 아니다
+    assert not any(a.get("companyId") == C_DANHARU for t, a in fake_bf.calls if t != "get_my_context")   # 보유 회사는 클로브를 안 부른다
+    assert await db.fetchval("SELECT count(*) FROM obys_clobe_collection_run WHERE clobe_company_id=$1 "
+                             "AND owner_instance <> $2", C_DANHARU, svc.DEFAULT_INSTANCE) == 0   # 보유 회사에 백필 실행 흔적이 없다
+    assert await n(db, "obys_clobe_item", "WHERE business_id='biz-eonni'") == 5
+    again = await sched.run_backfill([core.KIND_TAX], date(2026, 9, 1), date(2026, 9, 30), pause_seconds=0)   # 반납 후 재시도
+    assert [r["status"] for r in again["results"]] == ["succeeded", "succeeded"]
+    assert sum(r["runs"][0]["counts"]["inserted"] for r in again["results"] if r["company_id"] == C_EONNI) == 0
 
 
 async def test_revised_item_goes_to_review_box_and_old_version_is_superseded(db):
@@ -665,7 +850,7 @@ async def test_status_contract_for_ui(db):
     tenant_view = await svc.company_status(TENANT)
     assert [c["clobe_company_id"] for c in tenant_view["companies"]] == [C_DANHARU]
     c = tenant_view["companies"][0]
-    assert set(c["kinds"]) == set(core.DATA_KINDS) and c["kinds"][core.KIND_BANK]["status"] == "succeeded"
+    assert set(c["kinds"]) == set(core.COLLECTION_KINDS) and c["kinds"][core.KIND_BANK]["status"] == "succeeded"
     assert c["kinds"][core.KIND_TAX]["status"] == "never_run"
     assert c["kinds"][core.KIND_BANK]["last_success_at"] and c["kinds"][core.KIND_BANK]["covered_to"] == "2026-09-30"
     assert c["item_stage_counts"] == {"review_box": 7} and "reg_no" not in c
@@ -864,6 +1049,7 @@ async def test_source_type_migration_is_idempotent_and_rollback_is_guarded(vouch
     assert await n(db, "yeoljeong_journal_vouchers") == 1
     with pytest.raises(asyncpg.RaiseError):                      # clobe 전표가 있으면 롤백은 멈춘다
         await db.execute(VOUCHER_DOWN.read_text(encoding="utf-8"))
+    await db.execute("ROLLBACK")                                 # 롤백 스크립트의 가드가 자기 BEGIN 안에서 예외를 던져 트랜잭션이 열린 채 남는다
     await db.execute("DELETE FROM yeoljeong_journal_vouchers")   # 격리 테스트 DB 정리용
     await db.execute(VOUCHER_DOWN.read_text(encoding="utf-8"))
     with pytest.raises(asyncpg.CheckViolationError):
