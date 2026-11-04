@@ -288,6 +288,67 @@ if ! ut_docker_run -v "$TESTDEPS_DIR":/testdeps "$IMAGE" \
     fi
 fi
 
+# ── node 마운트 (AADS-UT-NODE-MOUNT-20261105) ──
+# 운영 이미지에는 node 가 없어 화면 JS 를 node 로 실행하는 테스트가 전부 skip 됐다
+# (runner-8e4e8a62: 7 passed·8 skipped). 이미지를 건드리지 않고 호스트 node 를 읽기 전용으로 연결한다.
+# 우선순위: AADS_TEST_NO_NODE=1(마운트 안 함) → AADS_TEST_NODE_BIN → 호스트 PATH 의 node.
+# 마운트 전에 같은 이미지로 `node --version` 을 시험 실행하고, 실패하면 마운트하지 않고 경고를 남긴다.
+# 결과: UT_NODE_MOUNT(docker 인자 배열), UT_NODE_STATUS(요약 줄에 쓸 문구). 항상 0 을 돌려준다 —
+# node 가 없어도 종료코드 의미(0/1/2)는 바뀌지 않는다.
+# ── UT_NODE_BEGIN ──
+UT_NODE_MOUNT=()
+UT_NODE_STATUS=""
+
+ut_node_unavailable() {
+    UT_NODE_MOUNT=()
+    UT_NODE_STATUS="not mounted($1)"
+    printf '\033[33m[run_unit_tests] node 마운트 불가 — node 테스트는 skip 됩니다(%s)\033[0m\n' "$1" >&2
+    return 0
+}
+
+ut_prepare_node_mount() {
+    local image="$1" bin real out rc line
+    UT_NODE_MOUNT=()
+    UT_NODE_STATUS=""
+
+    if [ "${AADS_TEST_NO_NODE:-}" = "1" ]; then
+        ut_node_unavailable "AADS_TEST_NO_NODE=1"
+        return 0
+    fi
+
+    bin="${AADS_TEST_NODE_BIN:-}"
+    if [ -z "$bin" ]; then
+        bin="$(command -v node 2>/dev/null)"
+        if [ -z "$bin" ]; then
+            ut_node_unavailable "호스트에 node 없음"
+            return 0
+        fi
+    fi
+    real="$(readlink -f "$bin" 2>/dev/null)"
+    if [ -z "$real" ] || [ ! -f "$real" ] || [ ! -x "$real" ]; then
+        ut_node_unavailable "실행 가능한 node 파일이 아님: $bin"
+        return 0
+    fi
+
+    out="$(mktemp 2>/dev/null)" || { ut_node_unavailable "임시 파일 생성 실패"; return 0; }
+    ut_docker_run -v "$real":/usr/local/bin/node:ro "$image" \
+        timeout 30 /usr/local/bin/node --version >"$out" 2>&1
+    rc=$?
+    line="$(head -n 1 "$out" 2>/dev/null | tr -d '\r')"
+    rm -f "$out"
+    if [ $rc -ne 0 ] || [[ ! "$line" =~ ^v[0-9]+\.[0-9]+ ]]; then
+        ut_node_unavailable "시험 실행 실패 rc=$rc ${line:0:120}"
+        return 0
+    fi
+
+    UT_NODE_MOUNT=(-v "$real":/usr/local/bin/node:ro)
+    UT_NODE_STATUS="mounted $line"
+    return 0
+}
+# ── UT_NODE_END ──
+
+ut_prepare_node_mount "$IMAGE"
+
 # 대시보드 정적 테스트는 리포지터리 밖의 ../aads-dashboard 를 읽는다.
 # 마운트하지 않으면 경로가 없어 조용히 aads-server 안의 낡은 사본으로 폴백하고,
 # 운영에 배포된 적 없는 코드를 검증하게 된다 — 게이트가 거짓말하는 또 하나의 경로다.
@@ -307,6 +368,7 @@ ut_docker_run \
     -v /root/.ssh:/root/.ssh:ro \
     -v "$REPO_ROOT":/app \
     "${dashboard_mount[@]}" \
+    ${UT_NODE_MOUNT[@]+"${UT_NODE_MOUNT[@]}"} \
     -v "$TESTDEPS_DIR":/testdeps \
     -w /app \
     -e PYTHONPATH=/testdeps \
@@ -316,6 +378,8 @@ ut_docker_run \
     -e GOAL_GRANT_TEST_ADMIN_URL="${GOAL_GRANT_TEST_ADMIN_URL:-}" \
     "$IMAGE" timeout -k 10 "$UT_TIMEOUT" python3 -m pytest "${targets[@]}" -q --tb=line -p no:cacheprovider
 rc=$?
+
+echo "[run_unit_tests] node: $UT_NODE_STATUS"
 
 # 124(timeout 의 TERM) / 137(-k 후 KILL 또는 클라이언트 SIGKILL) = 시간 상한 초과 또는 강제 종료.
 # 검증이 끝나지 않았으므로 테스트 실패(1)로 본다.
