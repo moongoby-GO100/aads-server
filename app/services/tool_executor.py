@@ -22,6 +22,7 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 import httpx
 
@@ -285,42 +286,138 @@ _DATABASE_TOOLS = frozenset({
 })
 
 
-async def _fetch_pc_agent_statuses_from_api() -> list[dict[str, Any]]:
+_PC_API_RETRY_DELAY = 0.4
+
+
+def _pc_api_error_reason(exc: BaseException) -> str:
+    """예외를 고정 문구로만 분류한다 (str(exc) 원문은 비밀값이 섞일 수 있어 쓰지 않는다)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.ConnectError):
+        return "connect_error"
+    if isinstance(exc, ValueError):
+        return "invalid_json"
+    return "transport_error"
+
+
+def _pc_api_candidate_label(url: str, index: int) -> str:
+    """후보 URL 대신 쓸 안전한 라벨 (host:port 와 고정 경로만, 파싱 실패 시 candidate-N)."""
+    fallback = f"candidate-{index}"
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return fallback
+    if parsed.scheme not in ("http", "https") or not host:
+        return fallback
+    host_port = f"{host}:{port}" if port else host
+    return f"{host_port}/pc-agent/agents"
+
+
+def _split_pc_api_base(base: str) -> tuple[str, tuple[str, str] | None] | None:
+    """base URL 에서 userinfo·쿼리·프래그먼트를 떼어 (비밀 없는 base, auth) 로 돌려준다.
+
+    httpx 는 요청 URL 전체를 INFO 로그에 남기므로 비밀값은 URL 에 두지 않고 auth 인자로만 넘긴다.
+    파싱 불가면 None (호출부가 고정 문구만 기록한다).
+    """
+    try:
+        parts = urlsplit(base.strip())
+        host = parts.hostname
+        port = parts.port
+        username, password = parts.username, parts.password
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not host:
+        return None
+    netloc = f"[{host}]" if ":" in host else host
+    if port:
+        netloc = f"{netloc}:{port}"
+    clean = urlunsplit((parts.scheme, netloc, parts.path.rstrip("/"), "", ""))
+    auth = None
+    if username is not None or password is not None:
+        auth = (unquote(username or ""), unquote(password or ""))
+    return clean, auth
+
+
+async def _fetch_pc_agent_statuses_from_api_detailed() -> tuple[list[dict[str, Any]], list[str], bool]:
     """Read the live PC-Agent registry from the API process.
 
-    MCP bridge workers run outside the Uvicorn process that owns the in-memory
-    WebSocket registry.  Reading ``pc_agent_manager`` directly from a bridge
-    therefore reports zero agents even while the API has a healthy connection.
-    The REST endpoint already implements blue/green peer fallback, so use it as
-    the cross-process source of truth when the local registry is empty.
+    Returns ``(agents, errors, reached)``.  ``reached`` is True when at least one
+    candidate answered 2xx with a valid payload, so an empty ``agents`` list means
+    a confirmed zero.  ``reached`` False means every candidate failed and the
+    count is unknown; ``errors`` carries one reason per failed candidate.
+    Transient failures (connect/timeout/5xx) are retried once; 4xx are not.
     """
-    configured = str(os.getenv("AADS_API_URL", "") or "").rstrip("/")
-    candidates: list[str] = []
-    for base in (
-        configured,
-        f"{_AADS_API_BASE.rstrip('/')}/api/v1",
-        "http://127.0.0.1:8100/api/v1",
-        "http://127.0.0.1:8102/api/v1",
+    configured = str(os.getenv("AADS_API_URL", "") or "")
+    candidates: list[tuple[str, tuple[str, str] | None]] = []
+    errors: list[str] = []
+    for raw_index, base in enumerate(
+        (
+            configured,
+            f"{_AADS_API_BASE.rstrip('/')}/api/v1",
+            "http://127.0.0.1:8100/api/v1",
+            "http://127.0.0.1:8102/api/v1",
+        ),
+        start=1,
     ):
         if not base:
             continue
-        normalized = base if base.endswith("/api/v1") else f"{base}/api/v1"
-        url = f"{normalized}/pc-agent/agents"
-        if url not in candidates:
-            candidates.append(url)
+        split = _split_pc_api_base(base)
+        if split is None:
+            errors.append(f"candidate-{raw_index}: invalid candidate")
+            continue
+        clean_base, auth = split
+        normalized = clean_base if clean_base.endswith("/api/v1") else f"{clean_base}/api/v1"
+        candidate = (f"{normalized}/pc-agent/agents", auth)
+        if candidate not in candidates:
+            candidates.append(candidate)
 
+    reached = False
     async with httpx.AsyncClient(timeout=5.0) as client:
-        for url in candidates:
-            try:
-                response = await client.get(url)
-                response.raise_for_status()
-                payload = response.json()
-            except (httpx.HTTPError, ValueError, TypeError):
+        for index, (url, auth) in enumerate(candidates, start=1):
+            label = _pc_api_candidate_label(url, index)
+            payload: Any = None
+            ok = False
+            for attempt in (1, 2):
+                try:
+                    response = await client.get(url, auth=auth)
+                    response.raise_for_status()
+                    payload = response.json()
+                    ok = True
+                    break
+                except (httpx.HTTPError, ValueError, TypeError) as exc:
+                    transient = isinstance(exc, httpx.TransportError) or (
+                        isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
+                    )
+                    if transient and attempt == 1:
+                        await asyncio.sleep(_PC_API_RETRY_DELAY)
+                        continue
+                    errors.append(f"{label}: {_pc_api_error_reason(exc)}")
+                    break
+            if not ok:
                 continue
             agents = payload.get("agents") if isinstance(payload, dict) else None
-            if isinstance(agents, list) and agents:
-                return [item for item in agents if isinstance(item, dict)]
-    return []
+            if not isinstance(agents, list):
+                errors.append(f"{label}: invalid payload")
+                continue
+            if not agents:
+                reached = True
+                continue
+            valid = [item for item in agents if isinstance(item, dict)]
+            if not valid:
+                errors.append(f"{label}: invalid payload")
+                continue
+            return valid, errors, True
+    return [], errors, reached
+
+
+async def _fetch_pc_agent_statuses_from_api() -> list[dict[str, Any]]:
+    """Backward-compatible wrapper returning only the agent list."""
+    agents, _errors, _reached = await _fetch_pc_agent_statuses_from_api_detailed()
+    return agents
 
 
 _PC_ROUTE_FALLBACK_ERROR_CODES = frozenset({
@@ -4747,8 +4844,23 @@ class ToolExecutor:
         statuses = pc_agent_manager.list_agent_statuses()
         backend_source = "local"
         if not statuses:
-            statuses = await _fetch_pc_agent_statuses_from_api()
-            backend_source = "api_fallback" if statuses else "local"
+            statuses, errors, reached = await _fetch_pc_agent_statuses_from_api_detailed()
+            if statuses:
+                backend_source = "api_fallback"
+            elif not reached:
+                logger.warning("pc_list_agents API fallback failed for all candidates: %s", errors)
+                return {
+                    "agents": [],
+                    "count": 0,
+                    "online_count": None,
+                    "status": "unavailable",
+                    "backend_source": "unavailable",
+                    "message": "PC Agent 목록을 조회하지 못했습니다(0대 아님). 원인: "
+                    + ("; ".join(errors) if errors else "알 수 없음"),
+                    "errors": errors,
+                }
+            else:
+                backend_source = "api_empty"
         if not statuses:
             return {
                 "agents": [],

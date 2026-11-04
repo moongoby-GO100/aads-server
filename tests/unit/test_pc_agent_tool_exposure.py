@@ -183,19 +183,23 @@ async def test_pc_list_agents_uses_api_fallback_outside_uvicorn(monkeypatch: pyt
         lambda: [],
     )
 
-    async def fake_fetch_statuses() -> list[dict[str, object]]:
-        return [
-            {
-                "agent_id": "oby-ceo",
-                "hostname": "ceo-desktop",
-                "capabilities": ["interactive_browser"],
-                "command_types": ["browser_launch", "browser_tabs"],
-                "status": "online",
-            }
-        ]
+    async def fake_fetch_statuses() -> tuple[list[dict[str, object]], list[str], bool]:
+        return (
+            [
+                {
+                    "agent_id": "oby-ceo",
+                    "hostname": "ceo-desktop",
+                    "capabilities": ["interactive_browser"],
+                    "command_types": ["browser_launch", "browser_tabs"],
+                    "status": "online",
+                }
+            ],
+            [],
+            True,
+        )
 
     monkeypatch.setattr(
-        "app.services.tool_executor._fetch_pc_agent_statuses_from_api",
+        "app.services.tool_executor._fetch_pc_agent_statuses_from_api_detailed",
         fake_fetch_statuses,
     )
 
