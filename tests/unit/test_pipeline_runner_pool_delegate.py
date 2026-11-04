@@ -152,3 +152,13 @@ def test_claim_queries_use_pool_hooks():
     assert "('running','claimed') $1 $(runner_pool_host_scope_sql);" in SCRIPT
     assert "AND r.job_id != p.job_id $(runner_pool_host_scope_sql r)) <" in SCRIPT
     assert "${RUNNER_MH_CLAIM_EXTRA:-} $(runner_pool_claim_extra_sql)" in SCRIPT
+
+
+def test_project_lock_and_promotion_are_host_scoped_in_pool_mode():
+    # 2026-11-04: contabo42 가 claim 한 작업을 check_project_lock(프로젝트 전체 running 수)이
+    # 116 작업까지 세어 곧바로 queued 로 되돌렸다(같은 작업 4회 반복).
+    lock = SCRIPT[SCRIPT.index("check_project_lock() {"):SCRIPT.index("promote_next_queued() {")]
+    assert "AND job_id != '${exclude_job_id}' $(runner_pool_host_scope_sql);" in lock
+    promo = SCRIPT[SCRIPT.index("promote_next_queued() {"):]
+    promo = promo[:promo.index("\n}\n")]
+    assert "status IN ('running','claimed') $(runner_pool_host_scope_sql);" in promo

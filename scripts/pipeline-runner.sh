@@ -4875,7 +4875,7 @@ check_project_lock() {
     local running_count
     running_count=$(db_exec "SELECT count(*) FROM pipeline_jobs
                              WHERE project='${project}' AND status IN ('running','claimed')
-                             AND job_id != '${exclude_job_id}';" 2>/dev/null)
+                             AND job_id != '${exclude_job_id}' $(runner_pool_host_scope_sql);" 2>/dev/null)
     running_count="${running_count// /}"
     if [[ -n "$running_count" && "$running_count" -ge "${MAX_CONCURRENT_PER_PROJECT}" ]]; then
         echo "$running_count"
@@ -4890,7 +4890,7 @@ promote_next_queued() {
     # running/claimed 작업이 아직 있으면 승격하지 않음
     local still_running
     still_running=$(db_exec "SELECT count(*) FROM pipeline_jobs
-                             WHERE project='${project}' AND status IN ('running','claimed');" 2>/dev/null)
+                             WHERE project='${project}' AND status IN ('running','claimed') $(runner_pool_host_scope_sql);" 2>/dev/null)
     still_running="${still_running// /}"
     if [[ -n "$still_running" && "$still_running" -ge "${MAX_CONCURRENT_PER_PROJECT}" ]]; then
         return 0
