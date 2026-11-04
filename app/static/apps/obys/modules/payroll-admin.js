@@ -7,6 +7,14 @@
     ["non_tax_meal_allowance", "비과세 식대"], ["tax_withholding", "원천세"],
     ["insurance_deduction", "보험 공제"], ["other_deduction", "기타 공제"]
   ];
+  const payCodes = [["base","기본급"],["overtime","연장근로수당"],["night","야간근로수당"],["holiday","휴일근로수당"],["weekly_holiday","주휴수당"],["meal","식대"],["bonus","상여금"],["other","기타수당"]];
+  const dedCodes = [["national_pension","국민연금"],["health_insurance","건강보험"],["long_term_care","노인장기요양보험"],["employment_insurance","고용보험"],["income_tax","소득세"],["local_income_tax","지방소득세"],["other","기타 공제"]];
+  const insuranceCodes = ["national_pension","health_insurance","long_term_care","employment_insurance"], taxCodes = ["income_tax","local_income_tax"];
+  const workFields = [["work_days","근로일수(일)"],["work_minutes","총 근로시간(분)"],["overtime_minutes","연장근로(분)"],["night_minutes","야간근로(분)"],["holiday_minutes","휴일근로(분)"]];
+  const clone = value => JSON.parse(JSON.stringify(value ?? null));
+  // 프리랜서 3.3%: 소득세 3%(10원 미만 절사) + 지방소득세 = 소득세의 10%(10원 미만 절사). 서버 freelancer_withholding 과 같은 식.
+  const withholding = gross => {const income = Math.floor(Math.floor(gross * 3 / 100) / 10) * 10; return {income, local: Math.floor(Math.floor(income / 10) / 10) * 10};};
+  const sumItems = (rows, codes) => rows.filter(row => !codes || codes.includes(row.code)).reduce((total, row) => total + (Number(row.amount) || 0), 0);
   const money = value => value === null || value === undefined || value === "" ? "미집계" : Number(value).toLocaleString("ko-KR") + "원";
   const email = row => String(row.email || row.employee_email || "").trim().toLowerCase();
   const statusName = value => ({draft:"초안",needs_review:"검토 필요",confirmed:"확정",paid:"지급 완료"}[value] || "상태 확인 필요");
@@ -40,6 +48,7 @@
     const allEmployees = employees.slice();
     let selected = email(employees.find(row => email(row) === options.selectedEmail) || employees[0]);
     let active = null, busy = false, generation = 0;
+    let pay = [], ded = [], work = {}, planTaxType = "";
     const key = () => `${businessId}|${month}|${selected}`;
     const employee = () => employees.find(row => email(row) === selected);
     const ownStatements = () => statements.filter(row => email(row) === selected && row.payroll_month === month);
@@ -47,8 +56,10 @@
       <div class="toolbar"><label>점포 선택<select class="field" data-payroll-branch><option value="">전체 점포</option>${[...new Set(allEmployees.map(row => row.branch || ""))].filter(Boolean).map(branch => `<option value="${esc(branch)}">${esc(branch)}</option>`).join("")}</select></label><label>직원 선택<select class="field" data-payroll-employee>${employees.map(row => `<option value="${esc(email(row))}">${esc(row.name || row.employee_name || "이름 미등록")} · ${esc(row.branch || "지점 미등록")} · ${esc(email(row).replace(/^(.).*@/, "$1***@"))}</option>`).join("")}</select></label>
       <label>명세 선택<select class="field" data-payroll-statement></select></label></div>
       <p data-payroll-state role="status"></p><p data-payroll-basis></p>
-      <form data-payroll-form class="toolbar">${amounts.map(([name, label]) => `<label>${label}<input class="field" name="${name}" type="number" min="0" step="1" required></label>`).join("")}
+      <form data-payroll-form class="toolbar">${amounts.map(([name, label]) => `<label data-wrap="${name}">${label}<input class="field" name="${name}" type="number" min="0" step="1" required></label>`).join("")}
+      <label>임금지급일<input class="field" data-payroll-pay-date maxlength="40" placeholder="예: 2026-11-10 또는 매월 10일"></label>
       <button class="btn primary" type="submit">초안 저장</button></form>
+      <div data-payroll-items></div>
       <p data-payroll-totals aria-live="polite"></p><div class="toolbar">
       <button type="button" class="btn" data-payroll-action="defaults">계약 기준값 불러오기</button>
       <button type="button" class="btn" data-payroll-action="draft">승인 근태로 초안 만들기</button>
@@ -63,9 +74,120 @@
     const form = host.querySelector("form"), picker = host.querySelector("[data-payroll-employee]");
     const statementPicker = host.querySelector("[data-payroll-statement]");
     const message = host.querySelector("[data-payroll-message]");
+    const itemsHost = host.querySelector("[data-payroll-items]");
+    const payDateInput = host.querySelector("[data-payroll-pay-date]");
+    const isFreelancer = () => (active?.employment_tax_type || planTaxType || employee()?.current_employment?.employment_tax_type) === "freelancer_33";
     const inputValues = () => Object.fromEntries(amounts.map(([name]) => [name, form.elements[name].value]));
-    const remember = () => drafts.set(key(), {id:active?.id || "", ...inputValues()});
-    const dirty = () => amounts.some(([name]) => form.elements[name].value !== String(active?.[name] ?? ""));
+    const snapshot = (p, d, w) => JSON.stringify({p:p.map(row => [row.code, row.label, Number(row.amount), row.calc_note || ""]), d:d.map(row => [row.code, row.label, Number(row.amount)]),
+      w:workFields.map(([name]) => w[name] === undefined || w[name] === "" ? null : Number(w[name]))});
+    const remember = () => drafts.set(key(), {id:active?.id || "", ...inputValues(), pay_date:payDateInput.value, items:clone({pay, ded, work})});
+    const dirty = () => amounts.some(([name]) => form.elements[name].value !== String(active?.[name] ?? ""))
+      || payDateInput.value !== String(active?.pay_date ?? "")
+      || snapshot(pay, ded, work) !== snapshot(active?.pay_items || [], active?.deduction_items || [], active?.work_summary || {});
+    const itemPayload = () => ({
+      pay_items:pay.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), calc_note:row.calc_note || ""})),
+      deduction_items:ded.map(row => ({code:row.code, label:row.label, amount:Number(row.amount)})),
+      work_summary:Object.fromEntries(workFields.filter(([name]) => work[name] !== undefined && work[name] !== "").map(([name]) => [name, Number(work[name])]))
+    });
+    const itemsComplete = () => [...pay, ...ded].every(row => row.amount !== "" && row.amount !== undefined && Number.isSafeInteger(Number(row.amount)) && Number(row.amount) >= 0);
+    // 항목을 쓰면 해당 합계 칸은 항목 합계로 고정(읽기 전용)한다. 항목이 없으면 기존 간편 입력 그대로.
+    const syncDerived = () => {
+      const lock = (name, on, value) => {const control = form.elements[name]; control.readOnly = on; if (on) control.value = String(value);};
+      lock("gross_pay", pay.length > 0, sumItems(pay));
+      lock("taxable_pay", pay.length > 0, Math.max(sumItems(pay) - (Number(form.elements.non_tax_meal_allowance.value) || 0), 0));
+      lock("tax_withholding", ded.length > 0, sumItems(ded, taxCodes));
+      lock("insurance_deduction", ded.length > 0, sumItems(ded, insuranceCodes));
+      lock("other_deduction", ded.length > 0, sumItems(ded, ["other"]));
+      const insurance = host.querySelector('[data-wrap="insurance_deduction"]');
+      if (insurance) insurance.style.display = isFreelancer() && !Number(form.elements.insurance_deduction.value) ? "none" : "";
+      if (isFreelancer() && form.elements.insurance_deduction.value === "") form.elements.insurance_deduction.value = "0";
+    };
+    const itemTable = (kind, rows, codes, title) => `<h3>${title}</h3>${rows.length ? `<table><thead><tr><th>구분</th><th>항목명</th><th>금액(원)</th>${kind === "pay" ? "<th>계산방법</th>" : ""}<th></th></tr></thead><tbody>${rows.map((row, index) => `<tr>
+      <td><select class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="code">${codes.map(([code, label]) => `<option value="${code}"${code === row.code ? " selected" : ""}>${label}</option>`).join("")}</select></td>
+      <td><input class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="label" maxlength="40" value="${esc(row.label)}"></td>
+      <td><input class="field" style="min-height:44px" type="number" min="0" step="1" data-item="${kind}" data-i="${index}" data-k="amount" value="${esc(row.amount)}"></td>
+      ${kind === "pay" ? `<td><input class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="calc_note" maxlength="200" placeholder="예: 시급 × 시간" value="${esc(row.calc_note || "")}"></td>` : ""}
+      <td><button type="button" class="btn" style="min-height:44px" data-item-del="${kind}" data-i="${index}">삭제</button></td></tr>`).join("")}</tbody></table>` : "<p>항목 없음 — 위 합계 칸에 간편 입력할 수 있습니다.</p>"}
+      <button type="button" class="btn" style="min-height:44px" data-item-add="${kind}">${kind === "pay" ? "지급 항목 추가" : "공제 항목 추가"}</button>`;
+    const renderItems = () => {
+      const freelancer = isFreelancer();
+      itemsHost.innerHTML = itemTable("pay", pay, payCodes, "지급 항목") + itemTable("ded", ded, freelancer ? dedCodes.filter(([code]) => !insuranceCodes.includes(code)) : dedCodes, freelancer ? "원천징수 항목" : "공제 항목")
+        + (freelancer ? '<button type="button" class="btn" style="min-height:44px" data-item-tax="1">3.3% 자동 계산(소득세 3% · 지방소득세 0.3%)</button>' : "")
+        + `<h3>근로일수 및 근로시간</h3><div class="toolbar">${workFields.map(([name, label]) => `<label>${label}<input class="field" style="min-height:44px" type="number" min="0" step="1" data-work-field="${name}" value="${esc(work[name] ?? "")}"></label>`).join("")}</div>`;
+    };
+    const refresh = () => {syncDerived(); remember(); totals(); restoreButtons();};
+    itemsHost.oninput = event => {
+      const control = event.target, data = control.dataset || {};
+      if (data.workField) work[data.workField] = control.value;
+      else if (data.item) {
+        const row = (data.item === "pay" ? pay : ded)[Number(data.i)];
+        if (!row) return;
+        row[data.k] = control.value;
+        if (data.k === "code") {row.label = (((data.item === "pay" ? payCodes : dedCodes).find(([code]) => code === row.code)) || [])[1] || row.label; renderItems();}
+      }
+      refresh();
+    };
+    // 소득세+지방소득세 합계(지방소득세 = 소득세의 10%, 10원 미만 절사)를 둘로 나눈다. 정확히 나뉘지 않으면 null.
+    const splitTax = total => {
+      let k = Math.max(Math.floor(total / 11) - 2, 0);
+      while (k * 10 + Math.floor(k / 10) * 10 < total) k++;
+      return k * 10 + Math.floor(k / 10) * 10 === total ? {income:k * 10, local:Math.floor(k / 10) * 10} : null;
+    };
+    // 공제 항목이 처음 생기면 syncDerived 가 세 공제 칸을 항목 합계로 덮어쓰므로, 간편 입력에 있던 금액을 먼저 항목으로 옮긴다.
+    // 4대보험은 항목별로 나눌 근거가 없어 옮기지 못하므로 사용자가 직접 나누도록 막는다(조용히 0원이 되는 것 방지).
+    // 원천세는 소득세·지방소득세로 정확히 나뉠 때만 옮기고, 아니면 한쪽에 몰아 넣지 않고 막는다.
+    const seedDeductions = (replaceTax = false) => {
+      if (ded.length) return true;
+      const read = name => Number(form.elements[name].value) || 0;
+      if (read("insurance_deduction") > 0) {
+        message.textContent = "보험 공제 금액이 입력되어 있습니다. 항목으로 전환하면 사라지므로, 금액을 기억한 뒤 보험 공제 칸을 0으로 바꾸고 국민연금 등 항목별로 입력하세요.";
+        return false;
+      }
+      const taxTotal = read("tax_withholding"), tax = taxTotal > 0 && !replaceTax ? splitTax(taxTotal) : null;
+      if (taxTotal > 0 && !replaceTax && !tax) {
+        message.textContent = "원천세 금액을 소득세와 지방소득세로 나눌 수 없습니다. 금액을 기억한 뒤 원천세 칸을 0으로 바꾸고 소득세·지방소득세 항목을 직접 입력하세요.";
+        return false;
+      }
+      if (tax) {
+        ded.push({code:"income_tax", label:isFreelancer() ? "사업소득세(3%)" : "소득세", amount:tax.income});
+        if (tax.local > 0) ded.push({code:"local_income_tax", label:"지방소득세", amount:tax.local});
+      }
+      if (read("other_deduction") > 0) ded.push({code:"other", label:"기타 공제", amount:read("other_deduction")});
+      return true;
+    };
+    // 지급 항목이 처음 생기면 syncDerived 가 총지급액·과세 지급액을 항목 합계로 덮어쓰므로, 간편 입력의 총지급액을 기본급(+비과세 식대) 항목으로 먼저 옮긴다.
+    const seedPay = () => {
+      if (pay.length) return true;
+      const read = name => Number(form.elements[name].value) || 0;
+      const gross = read("gross_pay"), meal = read("non_tax_meal_allowance");
+      if (gross <= 0) return true;
+      if (meal > gross) {
+        message.textContent = "비과세 식대가 총지급액보다 큽니다. 금액을 바로잡은 뒤 항목을 추가하세요.";
+        return false;
+      }
+      if (gross - meal > 0) pay.push({code:"base", label:"기본급", amount:gross - meal, calc_note:""});
+      if (meal > 0) pay.push({code:"meal", label:"식대", amount:meal, calc_note:""});
+      return true;
+    };
+    const nextPayCode = () => payCodes.find(([code]) => !pay.some(row => row.code === code)) || payCodes[0];
+    itemsHost.onclick = event => {
+      const data = (event.target.closest ? event.target.closest("button") : event.target)?.dataset || {};
+      if (data.itemAdd) {
+        if (data.itemAdd === "pay" && !seedPay()) return;
+        if (data.itemAdd === "ded" && !seedDeductions()) return;
+        if (data.itemAdd === "pay") {const [code, label] = nextPayCode(); pay.push({code, label, amount:"", calc_note:""});}
+        else ded.push({code:isFreelancer() ? "income_tax" : "national_pension", label:isFreelancer() ? "소득세" : "국민연금", amount:""});
+      } else if (data.itemDel) {
+        (data.itemDel === "pay" ? pay : ded).splice(Number(data.i), 1);
+      } else if (data.itemTax) {
+        const gross = Number(form.elements.gross_pay.value);
+        if (!Number.isSafeInteger(gross) || gross < 0 || form.elements.gross_pay.value === "") {message.textContent = "총지급액(용역비)을 먼저 입력하세요."; return;}
+        if (!seedDeductions(true)) return;
+        const tax = withholding(gross);
+        ded = [...ded.filter(row => !taxCodes.includes(row.code)), {code:"income_tax", label:"사업소득세(3%)", amount:tax.income}, {code:"local_income_tax", label:"지방소득세(0.3%)", amount:tax.local}];
+      } else return;
+      renderItems(); refresh();
+    };
     const totals = () => {
       const values = inputValues();
       const known = amounts.every(([name]) => values[name] !== "" && Number.isSafeInteger(Number(values[name])) && Number(values[name]) >= 0);
@@ -88,6 +210,10 @@
       const draft = drafts.get(key());
       const values = draft && draft.id === (active?.id || "") ? draft : active || {};
       amounts.forEach(([name]) => {form.elements[name].value = values[name] ?? "";});
+      payDateInput.value = values.pay_date ?? "";
+      const source = values.items || {pay:clone(active?.pay_items) || [], ded:clone(active?.deduction_items) || [], work:clone(active?.work_summary) || {}};
+      pay = source.pay || []; ded = source.ded || []; work = source.work || {};
+      renderItems(); syncDerived();
       host.querySelector("[data-payroll-state]").textContent = active
         ? `${month} · ${statusName(active.status)} · 버전 ${active.version || 1}${["confirmed", "paid"].includes(active.status) ? " · 수정 저장 시 새 초안 생성" : ""}`
         : `${month} · 새 초안`;
@@ -100,6 +226,7 @@
     };
     const selectEmployee = () => {
       generation++;
+      planTaxType = "";
       picker.value = selected;
       const rows = ownStatements();
       statementPicker.innerHTML = '<option value="">새 초안 작성</option>' + rows.map(row => `<option value="${esc(row.id)}">${esc(month)} · ${statusName(row.status)} · 버전 ${row.version || 1}</option>`).join("");
@@ -116,7 +243,7 @@
     };
     picker.onchange = () => {remember();selected = picker.value;options.onSelect?.(selected);selectEmployee();};
     statementPicker.onchange = () => {remember();generation++;fill(ownStatements().find(row => row.id === statementPicker.value));};
-    form.oninput = () => {remember();totals();restoreButtons();};
+    form.oninput = () => {syncDerived();remember();totals();restoreButtons();};
     const execute = async operation => {
       if (busy) return;
       busy = true;restoreButtons();message.textContent = "처리 중입니다.";
@@ -150,8 +277,11 @@
     form.onsubmit = event => {
       event.preventDefault();if (!form.reportValidity()) return;remember();
       execute(async () => {
+        if (!itemsComplete()) throw new Error("지급·공제 항목의 금액을 0원 이상 정수로 입력하세요.");
         const person = employee(), payload = {business_id:businessId, employee_email:selected,
           employee_name:person.name || person.employee_name, employee_request_id:person.id || "", payroll_month:month,
+          ...(active?.employment_tax_type ? {employment_tax_type:active.employment_tax_type} : {}), ...itemPayload(),
+          ...(payDateInput.value.trim() ? {pay_date:payDateInput.value.trim()} : {}),
           ...(active?.id ? {id:active.id} : {}), ...Object.fromEntries(amounts.map(([name]) => [name, Number(form.elements[name].value)]))};
         const result = await api("/payroll", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
         await saved(result.statement);
@@ -163,12 +293,16 @@
         const result = await api(`/payroll/defaults?${new URLSearchParams({employee_email:selected,employee_request_id:employee().id||"",payroll_month:month})}`);
         if (!current()) return;
         for (const [name] of amounts) if (result.defaults?.[name] !== undefined) form.elements[name].value = result.defaults[name] ?? "";
+        planTaxType = result.defaults?.employment_tax_type || "";
+        if (!payDateInput.value.trim() && result.contract_terms?.pay_date) payDateInput.value = result.contract_terms.pay_date;
+        renderItems();syncDerived();
         host.querySelector("[data-payroll-basis]").textContent = [result.basis,result.reason,result.period_note].filter(Boolean).join(" · ");
         remember();totals();return;
       }
       if (action === "settlement") {
         const plan = await api(`/payroll/defaults?${new URLSearchParams({employee_email:selected,employee_request_id:employee().id||"",payroll_month:month})}`);
         if (plan.contract_type !== "freelancer") throw new Error("서명 완료된 프리랜서 용역계약서가 필요합니다.");
+        planTaxType = "freelancer_33";
         const gross = form.elements.gross_pay.value;
         if (!gross || !Number.isSafeInteger(Number(gross)) || Number(gross) <= 0) {
           host.querySelector("[data-payroll-basis]").textContent = `계약 용역비 ${money(plan.contract_terms?.wage)} · 용역기간 ${plan.contract_terms?.start_date || "확인 필요"} ~ ${plan.contract_terms?.end_date || "별도 합의"}. 총지급액 칸에 이번 지급의 확정금액을 입력한 후 다시 누르세요. 총계약금을 매월 자동 지급하지 않습니다.`;

@@ -9202,6 +9202,45 @@ def _payroll_value_missing(value: Any) -> bool:
     return value is None or (isinstance(value, str) and value.strip() == "")
 
 
+def _payroll_payload_with_items(payload: dict[str, Any]) -> dict[str, Any]:
+    """pay_items·deduction_items·work_summary 를 검증·정리하고, 비어 있는 합계 칸만 항목 합계로 채운다."""
+    from app.services.yeoljeong_payroll_pdf import (
+        INSURANCE_DEDUCTION_CODES,
+        TAX_DEDUCTION_CODES,
+        PayrollItemError,
+        normalize_payroll_items,
+    )
+
+    try:
+        items = normalize_payroll_items(payload)
+    except PayrollItemError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    result = {key: value for key, value in payload.items() if key not in {"pay_items", "deduction_items", "work_summary"}}
+    result.update(items)
+    if "pay_items" in items and _payroll_value_missing(result.get("gross_pay")):
+        result["gross_pay"] = sum(item["amount"] for item in items["pay_items"])
+    for field, codes in (
+        ("tax_withholding", TAX_DEDUCTION_CODES), ("insurance_deduction", INSURANCE_DEDUCTION_CODES), ("other_deduction", ("other",)),
+    ):
+        if "deduction_items" in items and _payroll_value_missing(result.get(field)):
+            result[field] = sum(item["amount"] for item in items["deduction_items"] if item["code"] in codes)
+    return result
+
+
+def _payroll_employee_identity(employee: dict[str, Any] | None) -> dict[str, str]:
+    """임금명세서에 찍을 근로자 식별. 생년월일은 기록에 YYYY-MM-DD 로 있을 때만, 주민등록번호는 어떤 경우에도 옮기지 않는다."""
+    if not employee:
+        return {}
+    identity: dict[str, str] = {}
+    number = str(employee.get("employee_no") or employee.get("id") or "").strip()
+    if number and not re.search(r"\d{6}\s*-?\s*[1-8]\d{6}", number):
+        identity["employee_no"] = number
+    birth = str(employee.get("birth_date") or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", birth):
+        identity["employee_birth_date"] = birth
+    return identity
+
+
 def _apply_payroll_contract_defaults(
     payload: dict[str, Any], plan: dict[str, Any]
 ) -> tuple[dict[str, Any], list[str], dict[str, dict[str, Any]]]:
@@ -9210,6 +9249,10 @@ def _apply_payroll_contract_defaults(
     defaults = plan.get("defaults") or {}
     applied: list[str] = []
     deviation: dict[str, dict[str, Any]] = {}
+    contract_pay_date = str((plan.get("contract_terms") or {}).get("pay_date") or "").strip()
+    if contract_pay_date and _payroll_value_missing(result.get("pay_date")):
+        result["pay_date"] = contract_pay_date
+        applied.append("pay_date")
     for field in ("meal_provision", "employment_tax_type"):
         if field not in defaults:
             continue
@@ -9253,11 +9296,12 @@ PAYROLL_SERVER_FIELDS = frozenset({
     "superseded_by", "superseded_at", "attendance_basis", "deliveries", "created_by", "created_at", "updated_at",
     "net_pay", "email_pending", "employee_email_masked", "source_contract_id", "contract_defaults_applied",
     "contract_deviation", "settlement_basis", "deleted_at", "tenant_id", "totals", "payroll_validation_errors",
+    "employee_no", "employee_birth_date", "source_kind", "import_task", "statement_payload",
 })
 PAYROLL_CONTENT_FIELDS = (
     "employee_name", "business_id", "branch", "payroll_month", "pay_date", "employment_tax_type", "meal_provision",
     "gross_pay", "taxable_pay", "non_tax_meal_allowance", "tax_withholding", "insurance_deduction", "other_deduction",
-    "net_pay", "memo",
+    "net_pay", "memo", "pay_items", "deduction_items", "work_summary",
 )
 PAYROLL_DELIVERY_CONSENT_VERSION = "payroll-delivery-v1"
 PAYROLL_ATTENDANCE_WAGE_TYPES = ("hourly", "daily")
@@ -9288,14 +9332,17 @@ def _payroll_content(record: dict[str, Any]) -> dict[str, Any]:
     content: dict[str, Any] = {}
     for field in PAYROLL_CONTENT_FIELDS:
         value = record.get(field)
-        content[field] = value if isinstance(value, int) and not isinstance(value, bool) else str(value or "").strip()
+        if isinstance(value, (list, dict)):
+            content[field] = json.dumps(value, ensure_ascii=False, sort_keys=True) if value else ""
+        else:
+            content[field] = value if isinstance(value, int) and not isinstance(value, bool) else str(value or "").strip()
     return content
 
 
 def _payroll_changes(before: dict[str, Any], after: dict[str, Any]) -> dict[str, dict[str, Any]]:
     old, new = _payroll_content(before), _payroll_content(after)
     return {
-        key: {"before": str(old[key])[:200], "after": str(new[key])[:200]} if key == "memo" else {"before": old[key], "after": new[key]}
+        key: {"before": str(old[key])[:200], "after": str(new[key])[:200]} if key in {"memo", "pay_items", "deduction_items", "work_summary"} else {"before": old[key], "after": new[key]}
         for key in PAYROLL_CONTENT_FIELDS
         if old[key] != new[key]
     }
@@ -9419,8 +9466,14 @@ def _save_payroll_record(
         else None
     )
     plan = _payroll_defaults_from_employment(derived)
+    payload = _payroll_payload_with_items(payload)
     payload, defaults_applied, deviation = _apply_payroll_contract_defaults(payload, plan)
     amounts = _validated_payroll_amounts(payload)
+    from app.services.yeoljeong_payroll_pdf import payroll_items_errors
+
+    item_errors = payroll_items_errors({**payload, **amounts})
+    if item_errors:
+        raise HTTPException(status_code=400, detail=item_errors[0])
     net_pay = amounts["gross_pay"] - amounts["tax_withholding"] - amounts["insurance_deduction"] - amounts["other_deduction"]
 
     existing = _find(rows, requested_id) if requested_id else None
@@ -9460,6 +9513,7 @@ def _save_payroll_record(
     statement.pop("period", None)
     if month:
         statement["period"] = month
+    statement.update(_payroll_employee_identity(employee))
     if mode == "create":
         statement_id = requested_id or str(uuid4())
         statement.update(id=statement_id, version=1, root_id=statement_id, created_by=actor, created_at=now)
@@ -9521,9 +9575,15 @@ def confirm_payroll(statement_id: str, user: dict[str, Any]) -> dict[str, Any]:
     state = _payroll_state(row)
     if state not in PAYROLL_EDITABLE_STATUSES:
         raise HTTPException(status_code=409, detail="작성중(draft) 명세만 확정할 수 있습니다")
-    from app.services.yeoljeong_payroll_pdf import payroll_totals
+    from app.services.yeoljeong_payroll_pdf import payroll_totals, wage_statement_required_errors
 
-    if row.get("payroll_validation_errors") or not payroll_totals(row)["consistent"]:
+    required_errors = wage_statement_required_errors(row)
+    if required_errors:
+        raise HTTPException(status_code=409, detail=required_errors[0])
+    totals = payroll_totals(row)
+    if totals["item_errors"]:
+        raise HTTPException(status_code=409, detail=f"항목과 합계가 달라 확정할 수 없습니다: {totals['item_errors'][0]}")
+    if row.get("payroll_validation_errors") or not totals["consistent"]:
         raise HTTPException(status_code=409, detail="금액이 올바르지 않거나 실수령액이 총지급액-공제 합계와 달라 확정할 수 없습니다")
     now = _now()
     confirmed = {**row, "status": "confirmed", "confirmed_by": _email(user), "confirmed_at": now, "updated_at": now}
@@ -9639,14 +9699,22 @@ def payroll_draft_from_contract(payload: dict[str, Any], user: dict[str, Any]) -
                  "agreed_fee": terms.get("wage"), "confirmed_amount": gross,
                  "scope": terms.get("freelancer_scope") or "", "terms": terms.get("freelancer_settlement_terms") or "",
                  "confirmed_by": _email(user), "confirmed_at": _now()}
-        # Existing freelancer mode is 3.3%. This is a draft; administrators can
-        # inspect and adjust the withholding before confirmation, payment or send.
+        # Freelancer mode is 3.3% (소득세 3% + 지방소득세 소득세의 10%, 각 10원 미만 절사). This is a draft;
+        # administrators can inspect and adjust the withholding before confirmation, payment or send.
+        from app.services.yeoljeong_payroll_pdf import freelancer_withholding
+
+        tax = freelancer_withholding(gross)
         record, _ = _save_payroll_record({"business_id": business_id, "employee_email": email,
             "employee_request_id": employee["id"], "employee_name": employee.get("name") or "",
             "branch": employee.get("branch") or "", "payroll_month": month,
             "employment_tax_type": "freelancer_33", "pay_date": terms.get("pay_date") or "",
             "gross_pay": gross, "taxable_pay": gross, "non_tax_meal_allowance": 0,
-            "tax_withholding": gross * 33 // 1000, "insurance_deduction": 0, "other_deduction": 0},
+            "pay_items": [{"code": "other", "label": "용역비", "amount": gross, "calc_note": "확인한 이번 지급 용역비"}],
+            "deduction_items": [
+                {"code": "income_tax", "label": "사업소득세(3%)", "amount": tax["income_tax"]},
+                {"code": "local_income_tax", "label": "지방소득세(0.3%)", "amount": tax["local_income_tax"]},
+            ],
+            "tax_withholding": tax["total"], "insurance_deduction": 0, "other_deduction": 0},
             user, server_fields={"settlement_basis": basis}, employment_override=derived)
         return _payroll_with_totals(record)
     return _serialized_employee_write(email, create)
@@ -9724,6 +9792,7 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         "business_id": business_id,
         "branch": str(employee.get("branch") or ""),
         "payroll_month": month,
+        "pay_date": str((draft or {}).get("pay_date") or ""),
         "gross_pay": gross,
         "taxable_pay": gross,
         "non_tax_meal_allowance": 0,
@@ -9731,7 +9800,15 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         "insurance_deduction": int((draft or {}).get("insurance_deduction") or 0),
         "other_deduction": int((draft or {}).get("other_deduction") or 0),
         "memo": str((draft or {}).get("memo") or ""),
+        "pay_items": [{
+            "code": "base", "label": "기본급", "amount": gross,
+            "calc_note": f"시급 {rate:,}원 × 승인 근로 {minutes}분(분 단위 환산, 원 미만 반올림)" if wage_type == "hourly"
+            else f"일급 {rate:,}원 × 근로 {days}일",
+        }],
+        "work_summary": {"work_days": days, "work_minutes": minutes},
     }
+    if (draft or {}).get("deduction_items"):
+        request["deduction_items"] = draft["deduction_items"]
     saved, _ = _save_payroll_record(request, user, server_fields={"attendance_basis": basis})
     _audit_payroll(user, saved, "payroll.draft_from_attendance", {
         "approved_minutes": minutes, "approved_days": days, "rate": rate, "gross_pay": gross, "wage_type": wage_type,
@@ -9836,7 +9913,7 @@ def deliver_payroll(statement_id: str, user: dict[str, Any], *, resend: bool = F
                 return {"status": "duplicate", "duplicate": True, "delivery": duplicate, "delivery_count": len(sent)}
             key, kind = initial_key, "initial"
         try:
-            pdf = render_payroll_statement_pdf(row)
+            pdf = render_payroll_statement_pdf(_payroll_for_pdf(row, user))
         except PayrollPdfError as exc:
             raise HTTPException(status_code=503, detail=f"급여명세 PDF 를 만들 수 없습니다: {exc}") from None
         digest = hashlib.sha256(pdf).hexdigest()
@@ -9862,6 +9939,20 @@ def deliver_payroll(statement_id: str, user: dict[str, Any], *, resend: bool = F
         return {"status": entry["status"], "duplicate": False, "delivery": entry, "delivery_count": len(sent) + (entry["status"] == "sent")}
 
 
+def _payroll_for_pdf(row: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """저장 시점 근로자 식별이 없는 과거 명세는 직원 기록에서 사원번호·생년월일을 보충한다. 명세에 있는 값이 우선한다."""
+    if row.get("employee_no") and row.get("employee_birth_date"):
+        return row
+    try:
+        employee = _find_employee_record(
+            user, employee_email=str(row.get("employee_email") or ""), employee_request_id=str(row.get("employee_request_id") or "")
+        )
+    except HTTPException:
+        employee = None
+    supplement = _payroll_employee_identity(employee)
+    return {**supplement, **{key: value for key, value in row.items() if not (key in supplement and _payroll_value_missing(value))}}
+
+
 def payroll_pdf_for_download(statement_id: str, user: dict[str, Any]) -> tuple[bytes, str]:
     """관리자는 테넌트 내 확정 이상 명세, 직원은 본인 확정 이상 명세만. 숫자는 화면과 같은 payroll_totals 에서 나온다."""
     from app.services.yeoljeong_payroll_pdf import PayrollPdfError, render_payroll_statement_pdf
@@ -9871,7 +9962,7 @@ def payroll_pdf_for_download(statement_id: str, user: dict[str, Any]) -> tuple[b
     if not row or _payroll_state(row) not in PAYROLL_LOCKED_STATUSES:
         raise HTTPException(status_code=404, detail="급여내역서를 찾을 수 없습니다")
     try:
-        data = render_payroll_statement_pdf(row)
+        data = render_payroll_statement_pdf(_payroll_for_pdf(row, user))
     except PayrollPdfError as exc:
         raise HTTPException(status_code=503, detail=f"급여명세 PDF 를 만들 수 없습니다: {exc}") from None
     return data, f"payroll-{row.get('payroll_month') or 'statement'}-v{int(row.get('version') or 1)}.pdf"

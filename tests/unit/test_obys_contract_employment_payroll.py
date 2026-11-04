@@ -400,10 +400,11 @@ def test_save_payroll_fills_only_missing_values_from_contract():
     assert saved["taxable_pay"] == 2600000
     assert saved["non_tax_meal_allowance"] == 200000
     assert saved["net_pay"] == 2750000
+    assert saved["pay_date"] == "매월 10일"  # 임금지급일은 비어 있을 때만 계약서 값으로 채운다
     assert saved["status"] == "draft"  # 자동 확정하지 않는다 — 저장은 항상 draft, 확정은 별도 전이다
     assert saved["source_contract_id"] == contract["id"]
     assert set(saved["contract_defaults_applied"]) == {
-        "gross_pay", "taxable_pay", "non_tax_meal_allowance", "meal_provision", "employment_tax_type",
+        "gross_pay", "taxable_pay", "non_tax_meal_allowance", "meal_provision", "employment_tax_type", "pay_date",
     }
     assert saved["contract_deviation"] == {}
     actions = [entry["action"] for entry in audit_rows() if entry["resource_type"] == "payroll_statement"]
@@ -548,3 +549,24 @@ def test_backfill_script_defaults_to_dry_run(monkeypatch, capsys):
     assert module.main(["--tenant", TENANT, "--apply"]) == 0
     assert employee()["current_employment_contract_id"] == contract["id"]
     assert audit_rows()[0]["details"]["trigger"] == "backfill"
+
+
+# --- 프리랜서 정산 초안: 3.3% 분리 (소득세 3% + 지방소득세 소득세의 10%, 각 10원 미만 절사) --------------
+
+
+@pytest.mark.parametrize("gross,income,local", [(1000000, 30000, 3000), (1234567, 37030, 3700)])
+def test_freelancer_settlement_draft_splits_withholding(gross, income, local):
+    contract = sign(freelancer_contract())["contract"]
+    draft = svc.payroll_draft_from_contract(
+        {"employee_email": EMPLOYEE["email"], "business_id": "biz-mia", "payroll_month": "2026-10",
+         "gross_pay": gross, "amount_confirmed": True},
+        ADMIN,
+    )
+    assert draft["employment_tax_type"] == "freelancer_33"
+    assert draft["source_contract_id"] == contract["id"]
+    assert [(item["code"], item["amount"]) for item in draft["deduction_items"]] == [
+        ("income_tax", income), ("local_income_tax", local)]
+    assert draft["tax_withholding"] == income + local
+    assert draft["insurance_deduction"] == 0
+    assert draft["net_pay"] == gross - income - local
+    assert draft["totals"]["consistent"] is True

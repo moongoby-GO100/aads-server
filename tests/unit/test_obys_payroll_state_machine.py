@@ -86,10 +86,24 @@ def audit_actions():
 def statement(**overrides):
     payload = {
         "employee_email": EMPLOYEE["email"], "employee_name": "가입 직원", "business_id": "biz-mia", "branch": "열정국밥_미아점",
-        "payroll_month": MONTH, "gross_pay": 3000000, "tax_withholding": 100000, "insurance_deduction": 200000,
-        "other_deduction": 0,
+        "payroll_month": MONTH, "pay_date": "2026-10-10", "gross_pay": 3000000, "tax_withholding": 100000,
+        "insurance_deduction": 200000, "other_deduction": 0,
     }
     payload.update(overrides)
+    amounts = [payload.get(f) for f in ("gross_pay", "tax_withholding", "insurance_deduction", "other_deduction")]
+    if all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in amounts):
+        # 신규 근로자 명세는 확정 시 구성항목·공제 상세가 필수다 — 합계에 맞는 항목을 기본으로 채운다.
+        payload.setdefault("pay_items", [{"code": "base", "label": "기본급", "amount": payload["gross_pay"], "calc_note": "월 기본급"}])
+        deductions = [
+            {"code": code, "label": label, "amount": payload[field]}
+            for field, code, label in (
+                ("tax_withholding", "income_tax", "소득세"), ("insurance_deduction", "national_pension", "국민연금"),
+                ("other_deduction", "other", "기타 공제"),
+            )
+            if payload[field]
+        ]
+        if deductions:
+            payload.setdefault("deduction_items", deductions)
     return payload
 
 
@@ -419,6 +433,9 @@ def test_pdf_totals_equal_screen_totals():
     assert response.headers["content-type"] == "application/pdf"
     text = pdf_text(response.content)
     for label, value in payroll_pdf.payroll_pdf_rows(listed):
+        if label.startswith("계산방법 · "):
+            assert value.split()[0] in text
+            continue
         assert label in text and value in text
     assert f"{screen['gross_pay']:,}원" in text
     assert f"{screen['total_deductions']:,}원" in text

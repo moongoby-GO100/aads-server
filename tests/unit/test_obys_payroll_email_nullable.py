@@ -26,7 +26,14 @@ from tests.unit.test_obys_invite_email import db as invite_db  # noqa: F401  (py
 
 
 @pytest.fixture(name="db")
-def _db(request):
+def _db(request, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def no_db_lock(_email, *_extra_keys):
+        yield
+
+    monkeypatch.setattr(svc, "_employee_write_lock", no_db_lock)
     return request.getfixturevalue("invite_db")
 
 
@@ -146,7 +153,8 @@ def test_delivery_allowed_with_email():
 
 def test_confirmed_status_itself_is_not_blocked_without_email(db):
     saved = svc.save_payroll(
-        {"employee_name": "양재혁", "business_id": "biz-sungshin", "status": "confirmed", "payroll_month": "2026-09"}, ADMIN
+        {"employee_name": "양재혁", "business_id": "biz-sungshin", "status": "confirmed", "payroll_month": "2026-09",
+         "pay_date": "2026-09-10", "pay_items": [{"code": "base", "label": "기본급", "amount": 1000000, "calc_note": "월 기본급"}]}, ADMIN
     )
     assert saved["status"] == "confirmed"
     assert saved["email_pending"] is True
