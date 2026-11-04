@@ -111,6 +111,9 @@ _AUTH_EXEMPT_PREFIXES = (
     # 조리법 화면은 미인증이면 401 JSON 이 아니라 로그인 화면으로 보내야 하므로
     # 미들웨어를 통과시키고 라우트가 직접 판정한다(unni_recipes).
     "/unni-naengmyeon",
+    # 오비서 서명본 PDF 1회용 링크(앱 안 브라우저는 새 창에서 세션을 잃는다). 토큰이 인증이며 라우터가
+    # 해시 대조·5분 만료·1회 사용을 강제한다. 이 접두 아래 라우트는 그 하나뿐이다.
+    "/api/v1/yeoljeong-finance/contracts/signed-pdf/t/",
     "/static",
     "/docs",
     "/openapi.json",
@@ -177,6 +180,7 @@ async def api_live_health_check():
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(obys_finance.router, prefix="/api/v1", tags=["yeoljeong-finance"])
 app.include_router(obys_finance.public_router, prefix="/api/v1", tags=["yeoljeong-finance-public"])
+app.include_router(obys_finance.signed_pdf_link_router, prefix="/api/v1", tags=["yeoljeong-finance-signed-pdf-link"])
 app.include_router(acct_purchase.router, prefix="/api/v1", tags=["acct-purchase"])
 app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])
 app.include_router(obys_attendance_corrections.router, prefix="/api/v1")

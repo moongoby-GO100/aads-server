@@ -6,6 +6,12 @@ from logging.handlers import RotatingFileHandler
 
 import structlog
 
+from app.core.access_log_redact import (
+    install_access_log_redaction,
+    install_handler_redaction,
+    redact_signed_pdf_link_processor,
+)
+
 _APP_LOG_FILE = os.getenv("APP_LOG_FILE", "/var/log/aads-app.log")
 _APP_LOG_MAX_BYTES = 20 * 1024 * 1024  # 20MB
 _APP_LOG_BACKUP_COUNT = 3
@@ -22,6 +28,7 @@ def configure_logging(log_level: str = "INFO", json_format: bool = False) -> Non
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.StackInfoRenderer(),
+        redact_signed_pdf_link_processor,
     ]
 
     if json_format:
@@ -74,3 +81,5 @@ def configure_logging(log_level: str = "INFO", json_format: bool = False) -> Non
 
     for uvicorn_logger in ["uvicorn", "uvicorn.error", "uvicorn.access"]:
         logging.getLogger(uvicorn_logger).propagate = True
+    install_access_log_redaction()
+    install_handler_redaction()

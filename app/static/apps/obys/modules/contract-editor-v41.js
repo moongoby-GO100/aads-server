@@ -10,6 +10,7 @@
  *   POST /contracts/{id}/request-signature        서명요청 — 계약 결과와 notify.status 가 따로 온다
  *   POST /contracts/{id}/resend-signature-notice  알림만 재전송(계약을 새로 만들지 않는다)
  *   GET  /contracts/{id}/signed-pdf               서명본 PDF
+ *   POST /contracts/{id}/signed-pdf/link          서명본 PDF 1회용 열기 링크(휴대폰·앱 안 브라우저)
  *   POST /contracts/{id}/signed-pdf/regenerate    서명본 PDF 재생성
  * 양식·검증·미리보기는 modules/contract-core.js(기존 화면과 같은 코드)를 쓴다.
  *
@@ -1541,30 +1542,131 @@
       E.busy = ""; render();
     }
   }
+  /** 휴대폰·앱 안 브라우저 판정. blob URL + download 속성 저장이 막히는 환경을 가려낸다. */
+  function pdfClientKind(ua = navigator.userAgent || "") {
+    const inAppName = /KAKAOTALK/i.test(ua) ? "kakaotalk"
+      : /NAVER/i.test(ua) ? "naver"
+      : /Instagram/i.test(ua) ? "instagram"
+      : /FBAN|FBAV/i.test(ua) ? "facebook"
+      : /\bLine\//i.test(ua) ? "line"
+      : /;\s*wv\)/i.test(ua) ? "webview" : "";
+    const ios = /iPhone|iPad|iPod/i.test(ua);
+    const android = /Android/i.test(ua);
+    return { inApp: Boolean(inAppName), inAppName, ios, android, mobile: ios || android };
+  }
+  async function readPdfError(response, fallback) {
+    let detail = "";
+    try { detail = (await response.json()).detail || ""; } catch (_error) {}
+    const error = new Error(detail || `${fallback} (HTTP ${response.status})`);
+    error.status = response.status;
+    return error;
+  }
+  async function requestPdfLink(contractId) {
+    const response = await fetch(`/api/v1/yeoljeong-finance/contracts/${encodeURIComponent(contractId)}/signed-pdf/link`, {
+      method: "POST", credentials: "same-origin", headers: { ...(S.ctx?.headers?.() || {}) }
+    });
+    if (!response.ok) throw await readPdfError(response, "서명본 PDF 열기 링크를 만들 수 없습니다");
+    const data = await response.json();
+    return new URL(data.url, location.origin).href;
+  }
+  /** 새 창으로 열고, 팝업이 막히면 현재 창에서 연다. */
+  function openPdfWindow(url) {
+    const opened = window.open(url, "_blank");
+    if (!opened) location.href = url;
+  }
+  function externalBrowserUrl(url, kind) {
+    if (kind.android) {
+      const target = new URL(url);
+      return `intent://${target.host}${target.pathname}${target.search}#Intent;scheme=https;package=com.android.chrome;end`;
+    }
+    if (kind.inAppName === "kakaotalk") return `kakaotalk://web/openExternal?url=${encodeURIComponent(url)}`;
+    return "";
+  }
+  async function copyPdfLink(url) {
+    try { await navigator.clipboard.writeText(url); return true; } catch (_error) {}
+    const field = document.createElement("textarea");
+    field.value = url; field.setAttribute("readonly", ""); field.style.cssText = "position:fixed;opacity:0;";
+    document.body.append(field); field.select();
+    let done = false;
+    try { done = document.execCommand("copy"); } catch (_error) {}
+    field.remove();
+    return done;
+  }
+  /** 앱 안 브라우저 안내. 링크는 5분·1회용이라 세 버튼 중 처음 열린 곳에서만 PDF 가 열린다. */
+  function showInAppPdfGuide(url, kind) {
+    const sheet = document.createElement("dialog");
+    sheet.setAttribute("aria-label", "서명본 PDF 열기 안내");
+    sheet.style.cssText = "max-width:min(92vw,420px);width:100%;border:0;border-radius:14px;padding:18px;";
+    const text = document.createElement("p");
+    text.style.cssText = "margin:0 0 6px;font-weight:700;";
+    text.textContent = "이 앱 안에서는 저장이 안 될 수 있습니다. 다른 브라우저로 열기";
+    const note = document.createElement("p");
+    note.style.cssText = "margin:0 0 14px;font-size:13px;line-height:1.5;";
+    note.textContent = "아래 링크는 5분 안에 한 번만 열립니다. 세 가지 중 하나만 누르십시오.";
+    const status = document.createElement("p");
+    status.setAttribute("role", "status");
+    status.style.cssText = "margin:10px 0 0;font-size:13px;min-height:1.2em;";
+    sheet.append(text, note);
+    const addButton = (label, handler) => {
+      const button = document.createElement("button");
+      button.type = "button"; button.textContent = label;
+      button.style.cssText = "display:block;width:100%;min-height:48px;margin:0 0 8px;font-size:15px;";
+      button.addEventListener("click", handler);
+      sheet.append(button);
+      return button;
+    };
+    const external = externalBrowserUrl(url, kind);
+    if (external) addButton("다른 브라우저로 열기", () => { location.href = external; });
+    addButton("링크 복사", async () => {
+      status.textContent = (await copyPdfLink(url)) ? "링크를 복사했습니다. 크롬·사파리 주소창에 붙여넣어 여십시오." : "복사하지 못했습니다. 직접 길게 눌러 복사하십시오.";
+    });
+    addButton("이 화면에서 열기", () => { sheet.close(); openPdfWindow(url); });
+    addButton("닫기", () => sheet.close());
+    sheet.append(status);
+    sheet.addEventListener("close", () => sheet.remove());
+    document.body.append(sheet);
+    sheet.showModal();
+  }
+  async function downloadPdfBlob(contractId) {
+    const response = await fetch(`/api/v1/yeoljeong-finance/contracts/${encodeURIComponent(contractId)}/signed-pdf`, { credentials: "same-origin", headers: { ...(S.ctx?.headers?.() || {}) } });
+    const type = response.headers.get("content-type") || "";
+    if (!response.ok || !type.includes("application/pdf")) throw await readPdfError(response, "서명본 PDF를 받을 수 없습니다");
+    const blob = await response.blob();
+    const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(response.headers.get("content-disposition") || "");
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = match ? decodeURIComponent(match[1]) : `contract-${contractId}.pdf`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    S.ctx?.toast?.(`서명본 PDF를 내려받았습니다 (${Math.round(blob.size / 1024)}KB).`);
+  }
   async function downloadPdf(contractId, button) {
     if (button) button.disabled = true;
     if (E) { E.busy = "pdf"; }
     try {
-      const response = await fetch(`/api/v1/yeoljeong-finance/contracts/${encodeURIComponent(contractId)}/signed-pdf`, { credentials: "same-origin", headers: { ...(S.ctx?.headers?.() || {}) } });
-      const type = response.headers.get("content-type") || "";
-      if (!response.ok || !type.includes("application/pdf")) {
-        let detail = "";
-        try { detail = (await response.json()).detail || ""; } catch (_error) {}
-        const error = new Error(detail || `서명본 PDF를 받을 수 없습니다 (HTTP ${response.status})`);
-        error.status = response.status;
-        throw error;
+      const kind = pdfClientKind();
+      if (!kind.mobile && !kind.inApp) {
+        await downloadPdfBlob(contractId);
+      } else {
+        let url = "";
+        try {
+          url = await requestPdfLink(contractId);
+        } catch (error) {
+          // 링크 기능이 아직 없는 서버(404/405/503)에서는 종전 방식으로 되돌아간다. 권한·세션 오류는 그대로 올린다.
+          if (![404, 405, 503].includes(Number(error.status))) throw error;
+          await downloadPdfBlob(contractId);
+          return;
+        }
+        if (kind.inApp) {
+          showInAppPdfGuide(url, kind);
+        } else {
+          openPdfWindow(url);
+          S.ctx?.toast?.("서명본 PDF를 열었습니다. 저장은 PDF 화면의 공유·저장 버튼을 쓰십시오.");
+        }
       }
-      const blob = await response.blob();
-      const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(response.headers.get("content-disposition") || "");
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = match ? decodeURIComponent(match[1]) : `contract-${contractId}.pdf`;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-      S.ctx?.toast?.(`서명본 PDF를 내려받았습니다 (${Math.round(blob.size / 1024)}KB).`);
     } catch (error) {
       const text = errorText(error, "서명본 PDF 다운로드");
       if (E) { E.error = `${text} 서명본이 아직 없으면 ‘PDF 다시 만들기’를 누르십시오.`; if (Number(error.status) === 401) E.sessionLost = true; }

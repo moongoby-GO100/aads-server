@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 from decimal import Decimal
 from functools import partial
 from typing import Annotated, Any
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import (
@@ -24,10 +26,12 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
+from app.core.access_log_redact import install_access_log_redaction
 from app.core.obys_tenant import is_legacy_obys_tenant, require_legacy_obys_access
 from app.services import obys_registration_ocr as registration_ocr
 from app.services import obys_upload_service as upload_svc
 from app.services import yeoljeong_finance_service as svc
+from app.services.obys_client_summary import summarize_client
 from app.services.yeoljeong_bank_collector_harness import (
     run_shinhan_windows_collector_harness,
 )
@@ -38,9 +42,13 @@ router = APIRouter(
     dependencies=[Depends(require_legacy_obys_access)],
 )
 logger = logging.getLogger(__name__)
+install_access_log_redaction()
 
 # 로그인 전 가입 화면용 읽기 전용 목록. 사업자명·근무지명만 내보내므로 인증 의존성을 걸지 않는다.
 public_router = APIRouter(prefix="/yeoljeong-finance/public", tags=["yeoljeong-finance-public"])
+
+# 1회용 서명본 PDF 링크. 쿠키·헤더 없이 열려야 하므로 로그인 의존성이 없다 — 토큰 자체가 인증이다.
+signed_pdf_link_router = APIRouter(prefix="/yeoljeong-finance", tags=["yeoljeong-finance-signed-pdf-link"])
 
 
 @public_router.get("/join-workplaces")
@@ -831,9 +839,46 @@ async def resend_contract_signature_notice(contract_id: str, current_user: dict 
 
 
 @router.get("/contracts/{contract_id}/signed-pdf")
-async def download_signed_contract_pdf(contract_id: str, current_user: dict = Depends(get_current_user)) -> FileResponse:
-    path, filename = await run_in_threadpool(svc.signed_contract_pdf_for_download, contract_id, current_user)
+async def download_signed_contract_pdf(
+    contract_id: str, request: Request, current_user: dict = Depends(get_current_user)
+) -> FileResponse:
+    client = summarize_client(request.headers.get("user-agent"))
+    path, filename = await run_in_threadpool(svc.signed_contract_pdf_for_download, contract_id, current_user, client)
     return FileResponse(path, media_type="application/pdf", filename=filename, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/contracts/{contract_id}/signed-pdf/link")
+async def create_signed_contract_pdf_link(
+    contract_id: str, request: Request, current_user: dict = Depends(get_current_user)
+) -> Response:
+    client = summarize_client(request.headers.get("user-agent"))
+    link = await run_in_threadpool(svc.issue_signed_pdf_link, contract_id, current_user, client)
+    return Response(
+        content=json.dumps(link, ensure_ascii=False),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@signed_pdf_link_router.get("/contracts/signed-pdf/t/{token}")
+async def open_signed_contract_pdf_by_link(token: str, request: Request) -> FileResponse:
+    client = summarize_client(request.headers.get("user-agent"))
+    # X-Forwarded-For 의 마지막 항목은 앞단 Apache 가 붙인 실제 접속 주소다 — 첫 항목은 요청자가 쓸 수 있다.
+    forwarded_for = str(request.headers.get("x-forwarded-for") or "").rsplit(",", 1)[-1].strip()
+    client_ip = forwarded_for or (request.client.host if request.client else "")
+    path, filename = await run_in_threadpool(
+        svc.redeem_signed_pdf_link, token, client, "range" in request.headers, client_ip
+    )
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(filename, safe='')}",
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/contracts/{contract_id}/signed-pdf/regenerate")

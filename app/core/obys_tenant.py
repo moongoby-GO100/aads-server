@@ -105,6 +105,7 @@ _OWNER_CONTRACT_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(re.escape(_CONTRACTS_PATH) + "/" + _CONTRACT_ID_PATTERN + "/request-signature")),
     ("POST", re.compile(re.escape(_CONTRACTS_PATH) + "/" + _CONTRACT_ID_PATTERN + "/resend-signature-notice")),
     ("GET", re.compile(re.escape(_CONTRACTS_PATH) + "/" + _CONTRACT_ID_PATTERN + "/signed-pdf")),
+    ("POST", re.compile(re.escape(_CONTRACTS_PATH) + "/" + _CONTRACT_ID_PATTERN + "/signed-pdf/link")),
     ("POST", re.compile(re.escape(_CONTRACTS_PATH) + "/" + _CONTRACT_ID_PATTERN + "/signed-pdf/regenerate")),
     ("GET", re.compile(re.escape(_ONBOARDING_PATH) + "/document-types")),
     ("GET", re.compile(re.escape(_ONBOARDING_PATH) + "/documents")),

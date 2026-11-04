@@ -8595,8 +8595,8 @@ def regenerate_signed_contract_pdf(contract_id: str, user: dict[str, Any]) -> di
     }
 
 
-def signed_contract_pdf_for_download(contract_id: str, user: dict[str, Any]) -> tuple[Path, str]:
-    """관리자와 계약 당사자 본인만. 다른 테넌트·제3자는 존재 여부와 무관하게 403."""
+def _authorize_signed_pdf(contract_id: str, user: dict[str, Any]) -> tuple[dict[str, Any], Path, str, bool]:
+    """서명본 PDF 접근 권한 검사. (계약, 파일, 파일명, 당사자 본인 교부 여부) 를 돌려준다. 교부 기록은 남기지 않는다."""
     denied = HTTPException(status_code=403, detail="이 계약서 PDF 에 접근할 권한이 없습니다")
     _tenant_id(user)
     _require_owner_path_admin(user, "이 계약서 PDF 에 접근할 권한이 없습니다")
@@ -8620,26 +8620,334 @@ def signed_contract_pdf_for_download(contract_id: str, user: dict[str, Any]) -> 
         path = _verified_signed_pdf_path(contract) if stored.get("status") == "stored" else None
         if path is None:
             raise HTTPException(status_code=503, detail="서명본 PDF 를 준비하지 못했습니다. 관리자에게 재생성을 요청하십시오")
-    if is_party and not admin:
-        # 교부 기록: 최초 교부 시각은 덮어쓰지 않고, 매 다운로드는 이력에 남긴다.
-        if not contract.get("delivered_at"):
-            contract["delivered_at"] = _now()
-            contract["delivery_channel"] = "download"
-            try:
-                _persist_contract_delivery(contract, user)
-            except Exception as exc:  # noqa: BLE001
-                logger.error("contract delivery not recorded: contract=%s err=%s", contract.get("id"), exc)
-        try:
-            from app.services.yeoljeong_contract_notify import mask_email
+    return contract, path, _signed_pdf_filename(contract), is_party and not admin
 
-            _append_contract_notification_logs(
-                contract, "delivered", [{"channel": "download", "status": "sent", "target_masked": mask_email(email)}]
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("contract delivery log failed: contract=%s err=%s", contract.get("id"), exc)
+
+def _signed_pdf_filename(contract: dict[str, Any]) -> str:
     title = str(contract.get("print_title") or "계약서")
     filename = f"{_safe_filename(title)}_{str(contract.get('employee_name') or '').strip() or 'signed'}_서명본.pdf"
-    return path, _safe_filename(filename)
+    return _safe_filename(filename)
+
+
+def _record_signed_pdf_delivery(contract: dict[str, Any], user: dict[str, Any], email: str) -> None:
+    """교부 기록: 최초 교부 시각은 덮어쓰지 않고, 매 다운로드는 이력에 남긴다."""
+    if not contract.get("delivered_at"):
+        contract["delivered_at"] = _now()
+        contract["delivery_channel"] = "download"
+        try:
+            _persist_contract_delivery(contract, user)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("contract delivery not recorded: contract=%s err=%s", contract.get("id"), exc)
+    try:
+        from app.services.yeoljeong_contract_notify import mask_email
+
+        _append_contract_notification_logs(
+            contract, "delivered", [{"channel": "download", "status": "sent", "target_masked": mask_email(email)}]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("contract delivery log failed: contract=%s err=%s", contract.get("id"), exc)
+
+
+def signed_contract_pdf_for_download(
+    contract_id: str, user: dict[str, Any], client: dict[str, Any] | None = None
+) -> tuple[Path, str]:
+    """관리자와 계약 당사자 본인만. 다른 테넌트·제3자는 존재 여부와 무관하게 403."""
+    contract, path, filename, party_only = _authorize_signed_pdf(contract_id, user)
+    if party_only:
+        _record_signed_pdf_delivery(contract, user, _email(user))
+    _append_contract_audit(contract, user, "contract.signed_pdf_access", {"channel": "direct", "client": client or {}})
+    return path, filename
+
+
+# ---------------------------------------------------------------------------
+# 서명본 PDF 1회용 다운로드 링크
+#
+# 카카오톡·네이버 앱 안 브라우저(WebView)와 일부 iOS Safari 는 blob URL + download 속성 저장이
+# 동작하지 않는다. 화면은 이 링크를 새 창으로 열어 휴대폰 PDF 보기로 넘긴다.
+# 토큰은 서버에 sha256 해시만 두고, 5분 안에 한 번만 열린다. 권한 검사는 발급 시점에
+# signed_contract_pdf_for_download 와 같은 _authorize_signed_pdf 로 한다.
+# ---------------------------------------------------------------------------
+SIGNED_PDF_LINK_LOG = "contract_pdf_links"
+SIGNED_PDF_LINK_TABLE = "yeoljeong_contract_pdf_links"
+SIGNED_PDF_LINK_TTL_SECONDS = 300
+SIGNED_PDF_LINK_RANGE_GRACE_SECONDS = 60
+SIGNED_PDF_LINK_RANGE_MAX_HITS = 16
+SIGNED_PDF_LINK_PATH = "/api/v1/yeoljeong-finance/contracts/signed-pdf/t/"
+_SIGNED_PDF_LINK_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}")
+_SIGNED_PDF_LINK_LOCK = threading.Lock()
+
+
+def _signed_pdf_link_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+async def _db_insert_signed_pdf_link(row: dict[str, Any]) -> bool:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{SIGNED_PDF_LINK_TABLE}"):
+            return False
+        await conn.execute(
+            "DELETE FROM yeoljeong_contract_pdf_links WHERE expires_at < $1::timestamptz",
+            row["created_at"] - timedelta(days=1),
+        )
+        await conn.execute(
+            """
+            INSERT INTO yeoljeong_contract_pdf_links
+                (token_hash, tenant_id, contract_id, record_delivery, expires_at, created_at)
+            VALUES ($1, $2::uuid, $3, $4, $5::timestamptz, $6::timestamptz)
+            """,
+            row["token_hash"], UUID(row["tenant_id"]), row["contract_id"], row["record_delivery"],
+            row["expires_at"], row["created_at"],
+        )
+        return True
+    finally:
+        await conn.close()
+
+
+def _classify_signed_pdf_link(used_at: Any, expires_at: Any, now: datetime) -> str:
+    """ok(미사용) / used_recent(사용 직후 Range 이어받기 유예 안) / gone(만료·재사용)."""
+    expires = _pg_ts(expires_at)
+    if expires is None or expires <= now:
+        return "gone"
+    if not used_at:
+        return "ok"
+    used = _pg_ts(used_at)
+    if used is not None and used + timedelta(seconds=SIGNED_PDF_LINK_RANGE_GRACE_SECONDS) > now:
+        return "used_recent"
+    return "gone"
+
+
+async def _db_peek_signed_pdf_link(token_hash: str, now: datetime) -> tuple[str, dict[str, Any] | None]:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"public.{SIGNED_PDF_LINK_TABLE}"):
+            return "missing", None
+        row = await conn.fetchrow(
+            "SELECT tenant_id, contract_id, record_delivery, used_at, expires_at "
+            "FROM yeoljeong_contract_pdf_links WHERE token_hash = $1",
+            token_hash,
+        )
+        if row is None:
+            return "missing", None
+        status = _classify_signed_pdf_link(row["used_at"], row["expires_at"], now)
+        return status, {
+            "tenant_id": str(row["tenant_id"]),
+            "contract_id": str(row["contract_id"]),
+            "record_delivery": bool(row["record_delivery"]),
+        }
+    finally:
+        await conn.close()
+
+
+async def _db_consume_signed_pdf_link(token_hash: str, now: datetime, client_key: str) -> bool:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        row = await conn.fetchrow(
+            """
+            UPDATE yeoljeong_contract_pdf_links
+               SET used_at = $2::timestamptz, used_by = $3
+             WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2::timestamptz
+            RETURNING 1
+            """,
+            token_hash, now, client_key,
+        )
+        return row is not None
+    finally:
+        await conn.close()
+
+
+async def _db_grant_signed_pdf_link_range(token_hash: str, now: datetime, client_key: str) -> int:
+    """사용 직후 유예 안에서, 같은 요청자에게, 상한 안에서만 허용하고 허용 횟수(1부터)를 돌려준다. 거절은 0."""
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        hits = await conn.fetchval(
+            """
+            UPDATE yeoljeong_contract_pdf_links
+               SET range_hits = range_hits + 1
+             WHERE token_hash = $1
+               AND used_at IS NOT NULL
+               AND expires_at > $2::timestamptz
+               AND used_at > $2::timestamptz - make_interval(secs => $5::double precision)
+               AND used_by = $3 AND used_by <> ''
+               AND range_hits < $4
+            RETURNING range_hits
+            """,
+            token_hash, now, client_key, SIGNED_PDF_LINK_RANGE_MAX_HITS, float(SIGNED_PDF_LINK_RANGE_GRACE_SECONDS),
+        )
+        return int(hits or 0)
+    finally:
+        await conn.close()
+
+
+def _peek_signed_pdf_link(token_hash: str) -> tuple[str, dict[str, Any] | None]:
+    """소모하지 않고 상태만 본다. ok / used_recent / gone / missing."""
+    now = _now_dt()
+    if _db_available():
+        try:
+            return _run_coroutine(_db_peek_signed_pdf_link(token_hash, now))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("signed pdf link lookup failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="다운로드 링크를 확인하지 못했습니다. 잠시 뒤 다시 시도하십시오") from None
+    with _SIGNED_PDF_LINK_LOCK:
+        row = next((item for item in _read_file_rows(SIGNED_PDF_LINK_LOG) if item.get("token_hash") == token_hash), None)
+    if row is None:
+        return "missing", None
+    return _classify_signed_pdf_link(row.get("used_at"), row.get("expires_at"), now), {
+        "tenant_id": str(row.get("tenant_id") or ""),
+        "contract_id": str(row.get("contract_id") or ""),
+        "record_delivery": bool(row.get("record_delivery")),
+    }
+
+
+def _consume_signed_pdf_link(token_hash: str, client_key: str) -> bool:
+    """원자적으로 한 번만 True. 파일·계약 검증이 모두 끝난 뒤에만 부른다."""
+    now = _now_dt()
+    if _db_available():
+        try:
+            return _run_coroutine(_db_consume_signed_pdf_link(token_hash, now, client_key))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("signed pdf link consume failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="다운로드 링크를 확인하지 못했습니다. 잠시 뒤 다시 시도하십시오") from None
+    with _SIGNED_PDF_LINK_LOCK:
+        rows = _read_file_rows(SIGNED_PDF_LINK_LOG)
+        row = next((item for item in rows if item.get("token_hash") == token_hash), None)
+        if row is None or row.get("used_at") or _classify_signed_pdf_link(None, row.get("expires_at"), now) != "ok":
+            return False
+        row["used_at"] = now.isoformat(timespec="seconds")
+        row["used_by"] = client_key
+        _write_file_rows(SIGNED_PDF_LINK_LOG, rows)
+        return True
+
+
+def _grant_signed_pdf_link_range(token_hash: str, client_key: str) -> int:
+    """사용 뒤 Range 이어받기 허용. 만료·유예·요청자·횟수를 원자적으로 다시 검사한다. 거절은 0."""
+    now = _now_dt()
+    if not client_key:
+        return 0
+    if _db_available():
+        try:
+            return _run_coroutine(_db_grant_signed_pdf_link_range(token_hash, now, client_key))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("signed pdf link range grant failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="다운로드 링크를 확인하지 못했습니다. 잠시 뒤 다시 시도하십시오") from None
+    with _SIGNED_PDF_LINK_LOCK:
+        rows = _read_file_rows(SIGNED_PDF_LINK_LOG)
+        row = next((item for item in rows if item.get("token_hash") == token_hash), None)
+        if (
+            row is None
+            or _classify_signed_pdf_link(row.get("used_at"), row.get("expires_at"), now) != "used_recent"
+            or row.get("used_by") != client_key
+            or int(row.get("range_hits") or 0) >= SIGNED_PDF_LINK_RANGE_MAX_HITS
+        ):
+            return 0
+        row["range_hits"] = int(row.get("range_hits") or 0) + 1
+        _write_file_rows(SIGNED_PDF_LINK_LOG, rows)
+        return row["range_hits"]
+
+
+def signed_pdf_link_client_key(client_ip: str | None) -> str:
+    """요청자 식별은 네트워크 주소의 sha256 하나 — 원문 주소는 어디에도 저장하지 않는다."""
+    ip = str(client_ip or "").strip()[:64]
+    return hashlib.sha256(ip.encode("utf-8")).hexdigest() if ip else ""
+
+
+def issue_signed_pdf_link(contract_id: str, user: dict[str, Any], client: dict[str, Any] | None = None) -> dict[str, Any]:
+    contract, _path, filename, party_only = _authorize_signed_pdf(contract_id, user)
+    token = secrets.token_urlsafe(32)
+    now = _now_dt()
+    expires = now + timedelta(seconds=SIGNED_PDF_LINK_TTL_SECONDS)
+    row = {
+        "token_hash": _signed_pdf_link_hash(token),
+        "tenant_id": str(contract.get("tenant_id") or ""),
+        "contract_id": str(contract.get("id") or ""),
+        "record_delivery": party_only,
+        "expires_at": expires,
+        "created_at": now,
+    }
+    unavailable = HTTPException(status_code=503, detail="다운로드 링크를 만들지 못했습니다. 잠시 뒤 다시 시도하십시오")
+    if _db_available():
+        try:
+            stored = _run_coroutine(_db_insert_signed_pdf_link(row))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("signed pdf link not stored: %s", type(exc).__name__)
+            raise unavailable from None
+        if not stored:
+            logger.error("signed pdf link table missing: %s", SIGNED_PDF_LINK_TABLE)
+            raise unavailable
+    else:
+        file_row = {**row, "expires_at": expires.isoformat(timespec="seconds"), "created_at": now.isoformat(timespec="seconds"), "used_at": "", "used_by": "", "range_hits": 0}
+        with _SIGNED_PDF_LINK_LOCK:
+            kept = [item for item in _read_file_rows(SIGNED_PDF_LINK_LOG) if (_pg_ts(item.get("expires_at")) or now) > now - timedelta(days=1)]
+            _write_file_rows(SIGNED_PDF_LINK_LOG, kept + [file_row])
+    _append_contract_audit(
+        contract, user, "contract.signed_pdf_link_issued",
+        {"client": client or {}, "expires_at": expires.isoformat(timespec="seconds")},
+    )
+    return {
+        "url": SIGNED_PDF_LINK_PATH + token,
+        "expires_at": expires.isoformat(timespec="seconds"),
+        "expires_in": SIGNED_PDF_LINK_TTL_SECONDS,
+        "filename": filename,
+    }
+
+
+def redeem_signed_pdf_link(
+    token: str, client: dict[str, Any] | None = None, range_request: bool = False, client_ip: str | None = None
+) -> tuple[Path, str]:
+    """로그인 없이 열리는 유일한 서명본 PDF 경로. 위조 404 · 만료/재사용 410 · 1회 사용 시 교부 기록 1건.
+
+    토큰은 계약·파일 검증이 끝난 뒤에 소모한다 — 검증 실패(409/503)로 링크를 잃지 않게 한다.
+    PDF 뷰어는 첫 요청 뒤 Range 로 나머지를 이어받으므로, 사용 직후 짧은 유예 안에서 최초 사용자와
+    같은 요청자의 Range 요청만 횟수 상한까지 허용한다. 허용마다 감사 기록을 남기고, 유예·만료·요청자·횟수는
+    허용 시점에 DB 에서 원자적으로 다시 검사한다. Range 없는 재요청은 항상 410 이다.
+    """
+    token = str(token or "")
+    if not _SIGNED_PDF_LINK_TOKEN.fullmatch(token):
+        raise HTTPException(status_code=404, detail="다운로드 링크를 찾을 수 없습니다")
+    token_hash = _signed_pdf_link_hash(token)
+    status, record = _peek_signed_pdf_link(token_hash)
+    if status == "missing" or record is None:
+        raise HTTPException(status_code=404, detail="다운로드 링크를 찾을 수 없습니다")
+    gone = HTTPException(status_code=410, detail="다운로드 링크가 만료되었거나 이미 사용되었습니다. 앱 화면에서 다시 받으십시오")
+    if status == "gone" or (status == "used_recent" and not range_request):
+        raise gone
+    tenant_id = record["tenant_id"]
+    link_user = {"tenant_id": tenant_id, "current_membership": {"tenant_id": tenant_id, "status": "active"}}
+    contract = _find(_read_hr("contracts", link_user), record["contract_id"])
+    if not contract or str(contract.get("tenant_id") or "").strip() != tenant_id:
+        raise HTTPException(status_code=404, detail="다운로드 링크를 찾을 수 없습니다")
+    if str(contract.get("status") or "") != "signed":
+        raise HTTPException(status_code=409, detail="서명 완료 계약서만 PDF 를 내려받을 수 있습니다")
+    _enforce_contract_integrity(contract, link_user, action="download")
+    path = _verified_signed_pdf_path(contract)
+    if path is None:
+        raise HTTPException(status_code=503, detail="서명본 PDF 를 준비하지 못했습니다. 관리자에게 재생성을 요청하십시오")
+    client_key = signed_pdf_link_client_key(client_ip)
+    if status == "ok" and _consume_signed_pdf_link(token_hash, client_key):
+        if record["record_delivery"]:
+            _record_signed_pdf_delivery(contract, link_user, str(contract.get("employee_email") or "").strip().lower())
+        _append_contract_audit(
+            contract, link_user, "contract.signed_pdf_access",
+            {"channel": "link", "client": client or {}, "delivery_recorded": bool(record["record_delivery"])},
+        )
+        return path, _signed_pdf_filename(contract)
+    # 이미 사용됐거나, 동시에 들어온 다른 요청이 먼저 소모했다. Range 만 같은 요청자에게 이어받기를 허용한다.
+    hits = _grant_signed_pdf_link_range(token_hash, client_key) if range_request else 0
+    if not hits:
+        raise gone
+    _append_contract_audit(
+        contract, link_user, "contract.signed_pdf_range_access",
+        {"channel": "link", "client": client or {}, "range_hit": hits},
+    )
+    return path, _signed_pdf_filename(contract)
 
 
 # ---------------------------------------------------------------------------

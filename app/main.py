@@ -3935,6 +3935,9 @@ _AUTH_EXEMPT_PREFIXES = (
     "/api/v1/unni-naengmyeon/inquiries",
     "/api/v1/ops/locks",        # 내부 서비스 잠금 API (pipeline-runner.sh 전용)
     "/api/v1/ops/active-work",  # 내부 활성 작업 조회
+    # 오비서 서명본 PDF 1회용 링크(앱 안 브라우저는 새 창에서 세션을 잃는다). 토큰이 인증이며 라우터가
+    # 해시 대조·5분 만료·1회 사용을 강제한다. 이 접두 아래 라우트는 그 하나뿐이다.
+    "/api/v1/yeoljeong-finance/contracts/signed-pdf/t/",
     "/static",  # 정적 파일 (기술문서/보고서/갤러리)
 )
 # 내부 모니터링 (verify_monitor_key로 별도 인증)
@@ -4128,6 +4131,7 @@ app.include_router(design_intake.router, prefix="/api/v1")
 app.include_router(design_modifications.router, prefix="/api/v1", tags=["design-modifications"])
 app.include_router(obys_finance.router, prefix="/api/v1", tags=["yeoljeong-finance"])
 app.include_router(obys_finance.public_router, prefix="/api/v1", tags=["yeoljeong-finance-public"])
+app.include_router(obys_finance.signed_pdf_link_router, prefix="/api/v1", tags=["yeoljeong-finance-signed-pdf-link"])
 app.include_router(unni_naengmyeon.router, prefix="/api/v1", tags=["unni-naengmyeon"])
 app.include_router(obys_dashboard.router, prefix="/api/v1", tags=["yeoljeong-dashboard"])
 app.include_router(obys_inventory.router, prefix="/api/v1", tags=["yeoljeong-inventory"])
