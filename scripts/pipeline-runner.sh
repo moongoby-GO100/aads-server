@@ -9784,6 +9784,149 @@ _current_session_id=""
 SHUTDOWN_REQUEUE_MARK='[RUNNER_SHUTDOWN_REQUEUE]'
 SHUTDOWN_REQUEUE_MAX="${SHUTDOWN_REQUEUE_MAX:-2}"
 
+# ── M2 체크포인트 저장 (CKPT-BEGIN) ─────────────────────────────────
+# 러너 종료로 재대기하는 작업의 작업 폴더 진행분(추적+미추적 diff)을 pipeline_job_checkpoints 에
+# 저장한다. 기준: docs/design/20261104_AADS_러너 재시작 시 작업 이어가기 기획.md 3.1.
+# 저장은 부가 기능이다 — 어떤 실패·시간 초과도 재대기 UPDATE 를 막으면 안 되므로 모든 DB·git 작업(이벤트
+# 기록 포함)은 _ckpt_bounded 의 시간 상한 안에서만 돌고, 이 블록의 함수는 항상 0 으로 끝난다.
+CHECKPOINT_MAX_BYTES="${CHECKPOINT_MAX_BYTES:-2097152}"
+CHECKPOINT_SAVE_TIMEOUT="${CHECKPOINT_SAVE_TIMEOUT:-10}"
+CHECKPOINT_SAVE_TOTAL_BUDGET="${CHECKPOINT_SAVE_TOTAL_BUDGET:-20}"
+CHECKPOINT_EVENT_TIMEOUT="${CHECKPOINT_EVENT_TIMEOUT:-2}"
+_CKPT_SPENT_MS=0
+_CKPT_LAST_ID=""
+
+_ckpt_now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
+
+# psql -t -A 의 boolean 은 t/f 이지만 ::text 캐스트는 true/false 다 — 둘 다 참으로 읽는다.
+_ckpt_is_true() { [[ "${1:-}" == "t" || "${1:-}" == "true" ]]; }
+
+_ckpt_pos_int() { if [[ "${1:-}" =~ ^[0-9]+$ ]]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
+
+_ckpt_kill_tree() {
+    local _p="$1" _c
+    for _c in $(pgrep -P "$_p" 2>/dev/null); do _ckpt_kill_tree "$_c"; done
+    kill -9 "$_p" 2>/dev/null || true
+}
+
+# _ckpt_bounded <밀리초> <출력파일> <함수> [인자...]  — 함수를 하위 셸에서 돌리고 초과하면 프로세스 트리를 죽인다.
+# 반환: 0=정상 종료, 124=시간 초과, 그 외=함수 종료코드. 쓴 시간은 _CKPT_SPENT_MS 에 합산한다.
+_ckpt_bounded() {
+    local _ms="$1" _out="$2" _t0 _deadline _pid _rc=0
+    shift 2
+    _t0=$(_ckpt_now_ms)
+    _deadline=$(( _t0 + _ms ))
+    (( _ms > 0 )) || return 124
+    ( "$@" ) >"$_out" 2>/dev/null &
+    _pid=$!
+    while kill -0 "$_pid" 2>/dev/null; do
+        if (( $(_ckpt_now_ms) >= _deadline )); then
+            _ckpt_kill_tree "$_pid"
+            wait "$_pid" 2>/dev/null || true
+            _rc=124
+            break
+        fi
+        sleep 0.05
+    done
+    if (( _rc != 124 )); then
+        if wait "$_pid" 2>/dev/null; then _rc=0; else _rc=$?; fi
+    fi
+    _CKPT_SPENT_MS=$(( _CKPT_SPENT_MS + $(_ckpt_now_ms) - _t0 ))
+    return "$_rc"
+}
+
+# 하위 셸 안에서 실행. stdout 한 줄: saved|<id>|<files>|<bytes>  또는  skipped|<reason>
+_ckpt_build_and_store() {
+    local jid="$1" attempt="$2" tmpd="$3"
+    local wt="/tmp/aads-wt-${jid}" out base idx patch bytes sha files_json nfiles b64 meta ihash model id
+    out=$(db_exec "SELECT to_regclass('public.pipeline_job_checkpoints') IS NOT NULL;" 2>/dev/null | tr -d '[:space:]') \
+        || { echo "skipped|db_error"; return 0; }
+    _ckpt_is_true "$out" || { echo "skipped|table_missing"; return 0; }
+    git -C "$wt" rev-parse --git-dir >/dev/null 2>&1 || { echo "skipped|no_changes"; return 0; }
+    base=$(resolve_job_base_sha "$wt")
+    [[ "$base" =~ ^[0-9a-f]{40}$ ]] || base=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || base=""
+    [[ "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "skipped|no_changes"; return 0; }
+    # 실제 작업 폴더의 index 를 건드리지 않도록 복사본에서 git add -A 한다.
+    idx="$tmpd/index"; patch="$tmpd/patch"
+    cp "$(git -C "$wt" rev-parse --path-format=absolute --git-path index)" "$idx" 2>/dev/null || : >"$idx"
+    GIT_INDEX_FILE="$idx" git -C "$wt" add --all -- . >/dev/null 2>&1 || { echo "skipped|db_error"; return 0; }
+    { GIT_INDEX_FILE="$idx" git -C "$wt" diff --cached --binary --no-renames "$base" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null \
+        | head -c $(( CHECKPOINT_MAX_BYTES + 1 )) >"$patch"; } || true
+    bytes=$(wc -c <"$patch" | tr -d '[:space:]')
+    (( bytes > 0 )) || { echo "skipped|no_changes"; return 0; }
+    (( bytes <= CHECKPOINT_MAX_BYTES )) || { echo "skipped|too_large"; return 0; }
+    sha=$(sha256sum "$patch" | cut -d' ' -f1)
+    files_json=$(GIT_INDEX_FILE="$idx" git -C "$wt" diff --cached --name-only -z --no-renames "$base" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null \
+        | python3 -c 'import sys,json; print(json.dumps([p for p in sys.stdin.buffer.read().decode("utf-8","replace").split("\0") if p]))') || files_json='[]'
+    nfiles=$(python3 -c 'import sys,json; print(len(json.loads(sys.argv[1])))' "$files_json" 2>/dev/null) || nfiles=0
+    meta=$(db_exec "SELECT COALESCE(instruction_hash,''), COALESCE(NULLIF(actual_model,''), NULLIF(model,''), '') FROM pipeline_jobs WHERE job_id=$(sql_escape "$jid");" 2>/dev/null) \
+        || { echo "skipped|db_error"; return 0; }
+    IFS=$'\x1e' read -r ihash model <<< "$meta"
+    [[ -n "$ihash" ]] || { echo "skipped|db_error"; return 0; }
+    b64=$(base64 -w0 "$patch")
+    # SQL 은 stdin 으로 넘긴다(db_exec). base64 알파벳은 따옴표 안전하므로 sql_escape 를 거치지 않는다.
+    id=$(db_exec "INSERT INTO pipeline_job_checkpoints (job_id, base_sha, patch, patch_sha256, files, bytes, model, attempt, host, instruction_hash)
+        VALUES ($(sql_escape "$jid"), '${base}', decode('${b64}','base64'), '${sha}', $(sql_escape "$files_json")::jsonb, ${bytes},
+                NULLIF($(sql_escape "$model"),''), ${attempt}, $(sql_escape "$RUNNER_HOSTNAME"), $(sql_escape "$ihash"))
+        RETURNING id;" 2>/dev/null | tr -d '[:space:]') || { echo "skipped|db_error"; return 0; }
+    [[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { echo "skipped|db_error"; return 0; }
+    echo "saved|${id}|${nfiles}|${bytes}"
+}
+
+# 이벤트 기록(record_runner_event)도 DB 를 쓰므로 같은 예산 안에서 상한을 두고 돌린다.
+_ckpt_record_event() {
+    local jid="$1" etype="$2" meta="$3" remain_ms ev_secs tmpf
+    remain_ms=$(( $(_ckpt_pos_int "$CHECKPOINT_SAVE_TOTAL_BUDGET" 20) * 1000 - _CKPT_SPENT_MS ))
+    if [[ -n "${_CKPT_EVENT_REMAIN_MS:-}" ]] && (( remain_ms > _CKPT_EVENT_REMAIN_MS )); then
+        remain_ms=$_CKPT_EVENT_REMAIN_MS
+    fi
+    if (( remain_ms <= 0 )); then
+        log "  checkpoint event $etype 생략(예산 소진) job=$jid $meta"
+        return 0
+    fi
+    ev_secs=$(( $(_ckpt_pos_int "$CHECKPOINT_EVENT_TIMEOUT" 2) * 1000 ))
+    if (( ev_secs > remain_ms )); then ev_secs=$remain_ms; fi
+    tmpf=$(mktemp 2>/dev/null) || return 0
+    _ckpt_bounded "$ev_secs" "$tmpf" record_runner_event "$jid" "$etype" "" "" "" "" "" "" "$meta" || true
+    rm -f "$tmpf"
+    return 0
+}
+
+# 저장 시도. 항상 0. 성공하면 _CKPT_LAST_ID 에 id, 아니면 빈 문자열. 호출 전 attempt(재대기 횟수+1)를 넘긴다.
+_shutdown_save_checkpoint() {
+    local jid="$1" attempt="${2:-1}" total_ms job_secs remain_ms tmpd res rc=0 kind="" a="" b="" c=""
+    local _CKPT_EVENT_REMAIN_MS _ckpt_job_start
+    _ckpt_job_start=$(_ckpt_now_ms)
+    _CKPT_LAST_ID=""
+    total_ms=$(( $(_ckpt_pos_int "$CHECKPOINT_SAVE_TOTAL_BUDGET" 20) * 1000 ))
+    job_secs=$(( $(_ckpt_pos_int "$CHECKPOINT_SAVE_TIMEOUT" 10) * 1000 ))
+    remain_ms=$(( total_ms - _CKPT_SPENT_MS ))
+    if (( remain_ms <= 0 )); then
+        log "  checkpoint 건너뜀(합계 예산 소진) job=$jid"
+        return 0
+    fi
+    if (( job_secs > remain_ms )); then job_secs=$remain_ms; fi
+    tmpd=$(mktemp -d 2>/dev/null) || return 0
+    _ckpt_bounded "$job_secs" "$tmpd/result" _ckpt_build_and_store "$jid" "$attempt" "$tmpd" || rc=$?
+    res=""
+    if (( rc == 124 )); then res="skipped|timeout"; fi
+    if [[ -z "$res" ]]; then res=$(head -n1 "$tmpd/result" 2>/dev/null) || res=""; fi
+    rm -rf "$tmpd"
+    _CKPT_EVENT_REMAIN_MS=$(( job_secs - $(_ckpt_now_ms) + _ckpt_job_start ))
+    IFS='|' read -r kind a b c <<< "$res"
+    if [[ "$kind" == "saved" && -n "$a" ]]; then
+        _CKPT_LAST_ID="$a"
+        log "  checkpoint 저장 job=$jid id=$a files=$b bytes=$c"
+        _ckpt_record_event "$jid" "checkpoint_saved" "{\"checkpoint_id\":\"$a\",\"files\":${b:-0},\"bytes\":${c:-0}}"
+    else
+        [[ "$kind" == "skipped" && "$a" =~ ^(no_changes|too_large|timeout|table_missing|db_error)$ ]] || a="db_error"
+        log "  checkpoint 건너뜀 job=$jid reason=$a"
+        _ckpt_record_event "$jid" "checkpoint_skipped" "{\"reason\":\"$a\"}"
+    fi
+    return 0
+}
+# ── M2 체크포인트 저장 (CKPT-END) ───────────────────────────────────
+
 # RUNNER_RESTART_REQUEUE_APPLIED
 _shutdown_finalize_job() {
     local _jid="$1" _sid="${2:-}" _quiet="${3:-}"
@@ -9807,9 +9950,13 @@ _shutdown_finalize_job() {
         _notify_ai "$_jid"
         return 0
     fi
+    # 재대기 직전 작업 폴더 진행분을 저장한다(실패·시간 초과여도 재대기는 그대로 진행).
+    _shutdown_save_checkpoint "$_jid" "$(( _marks + 1 ))" || true
+    local _ckpt_note=""
+    [[ -n "$_CKPT_LAST_ID" ]] && _ckpt_note=" checkpoint=${_CKPT_LAST_ID}"
     db_update "UPDATE pipeline_jobs SET status='queued', phase='queued',
                started_at=NULL, completed_at=NULL, error_detail=NULL,
-               review_feedback=COALESCE(review_feedback,'') || E'\n${SHUTDOWN_REQUEUE_MARK} 러너 종료로 중단되어 자동 재큐잉',
+               review_feedback=COALESCE(review_feedback,'') || E'\n${SHUTDOWN_REQUEUE_MARK}${_ckpt_note} 러너 종료로 중단되어 자동 재큐잉',
                updated_at=NOW() WHERE job_id=$(sql_escape "$_jid") AND status IN ('running','claimed');" || true
     record_runner_event "$_jid" "job_requeued" "queued" "queued" "" "" "" "" "{\"error_detail\":\"runner_shutdown_requeued\"}"
     log "  Requeued $_jid (runner shutdown)"
