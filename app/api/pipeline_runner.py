@@ -2853,6 +2853,7 @@ _PROJECT_HOST_FALLBACK = {
     "SF": "cafe24_114",
     "NTV2": "cafe24_114",
     "NAS": "cafe24_114",
+    "ACCT": "cafe24_114",
 }
 
 

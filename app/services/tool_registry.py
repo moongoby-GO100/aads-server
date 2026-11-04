@@ -2772,7 +2772,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     # ── Pipeline Runner: 호스트 독립 실행 (권장) ────────────────────────────
     "pipeline_runner_submit": {
         "name": "pipeline_runner_submit",
-        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출. 각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향. 서버매핑: AADS→contabo116, KIS/GO100→contabo14, SF/NTV2→cafe24_114.",
+        "description": "코드 수정/배포 작업을 Pipeline Runner로 제출. 각 서버의 Runner가 독립적으로 Claude Code를 실행. 서버 재시작 무영향. 서버매핑: AADS→contabo116, KIS/GO100→contabo14, SF/NTV2→cafe24_114, ACCT→cafe24_114 (aads-server 저장소, AADS_ACCT_REPO_DIR).",
         "input_schema": {
             "type": "object",
             "properties": {

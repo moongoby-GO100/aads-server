@@ -88,10 +88,9 @@ declare -A PROJECT_WORKDIR=(
     ["GO100"]="/root/kis-autotrade-v4"
     ["SF"]="/data/shortflow"
     ["NTV2"]="/srv/newtalk-v2"
-    # ACCT(회계) 는 jinah244(5.104.85.244) 에만 있다. /srv/biseo 는 회계 원본 자료
-    # 5.4G 가 섞인 상위 디렉터리이고, 실제 git 저장소는 그 두 단계 아래다.
-    # (origin: github.com/dossau2018-oss/biseo, .git 48M)
-    ["ACCT"]="/srv/biseo/회계비서/회계비서"
+    # ACCT(회계) 저장소 경로는 호스트마다 다르므로 러너 환경변수로 받는다.
+    # 비어 있거나 git 저장소가 아니면 run_job 이 acct_repo_not_configured 로 종결한다.
+    ["ACCT"]="${AADS_ACCT_REPO_DIR:-}"
 )
 
 AADS_DASHBOARD_WORKDIR="${AADS_DASHBOARD_WORKDIR:-/root/aads/aads-dashboard}"
@@ -166,8 +165,9 @@ get_job_instruction() {
 }
 
 # 프로젝트별 허용 목록 (M4: 화이트리스트 검증)
-# ACCT 는 jinah244 전용이다. 여기에 없으면 러너가 job 을 집고도 invalid_project 로
-# 즉시 죽는다 — 2026-09-14 편입 스모크에서 실제로 그렇게 실패했다.
+# ACCT 는 AADS_ACCT_REPO_DIR 이 설정된 러너(현재 cafe24_114)에서만 실행된다.
+# 여기에 없으면 러너가 job 을 집고도 invalid_project 로 즉시 죽는다 —
+# 2026-09-14 편입 스모크에서 실제로 그렇게 실패했다.
 VALID_PROJECTS="AADS KIS GO100 SF NTV2 ACCT"
 
 # 실행 서버 이름. pipeline_jobs.runner_host 와 하트비트에 쓴다.
@@ -2236,7 +2236,7 @@ normalize_runner_model() {
             # runner_model_config 의 AI_REVIEW 목록은 provider 정보 없이 원시 id 를
             # 담는다("groq-gpt-oss-120b"). 접두사가 없으면 러너가 이를 Claude CLI
             # 모델로 해석해 MODEL_CONTRACT_REJECTED 로 통째로 건너뛴다.
-            # 2026-09-17 실측: ACCT 러너(jinah244)에서 Claude 주간한도·Gemini 키
+            # 2026-09-17 실측: ACCT 러너에서 Claude 주간한도·Gemini 키
             # 정지·kimi/minimax 한도·deepseek 잔액부족으로 20개 사다리가 전멸했는데,
             # 유일하게 200 을 돌려주던 groq 두 개가 바로 이 이유로 시도조차 되지 않았다.
             echo "litellm:${model}"
@@ -5637,6 +5637,14 @@ _mockup_gate_on_script_error() {
 }
 
 # ── 작업 실행 ─────────────────────────────────────────────────────────
+# ACCT 저장소가 이 러너에 설정되어 있는지 검사한다. ACCT 가 아니면 항상 통과.
+acct_repo_ready() {
+    local project="$1" workdir="${2:-}"
+    [[ "$project" == "ACCT" ]] || return 0
+    [[ -n "$workdir" ]] || return 1
+    git -C "$workdir" rev-parse --git-dir >/dev/null 2>&1 || return 1
+}
+
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}" parallel_group="${8:-}"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
@@ -5660,6 +5668,13 @@ run_job() {
     # M4: 프로젝트 화이트리스트 검증
     if [[ ! " $VALID_PROJECTS " =~ " $project " ]]; then
         _fail_job "$job_id" "$session_id" "invalid_project" "허용되지 않은 프로젝트: $project"
+        return 1
+    fi
+
+    # ACCT 저장소 미설정: 잠금·모델 시작 전에 종결한다.
+    if ! acct_repo_ready "$project" "$workdir"; then
+        _fail_job "$job_id" "$session_id" "acct_repo_not_configured" \
+            "ACCT 저장소가 이 러너에 설정되지 않았습니다 — AADS_ACCT_REPO_DIR" "acct_repo_not_configured"
         return 1
     fi
 
