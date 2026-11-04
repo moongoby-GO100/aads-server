@@ -269,6 +269,17 @@ async def decide_change_set(
         )
         if not lead:
             raise _error(403, "project_lead_approval_required")
+        # The requester must not be able to appoint the very lead who approves
+        # their change set; NULL assigned_by (system/CEO seed) stays allowed.
+        independent_lead = await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM project_role_assignments
+                 WHERE tenant_id=$1::uuid AND project=$2 AND session_id=$3::uuid AND active
+                   AND lower(role_key) IN ('project_lead','project lead')
+                   AND assigned_by IS DISTINCT FROM $4::uuid)""",
+            tenant_id, row["project"], actor.session_id, str(row["requested_by"]),
+        )
+        if not independent_lead:
+            raise _error(403, "project_lead_self_assigned_denied")
     elif required_role == "independent_reviewer" and actor.role_key.strip().lower() not in {
         "independent_reviewer", "independent reviewer", "reviewer", "qa",
     }:

@@ -246,6 +246,53 @@ def test_t10_a2_member_without_active_lead_assignment_is_rejected():
     assert exc.value.detail["code"] == "project_lead_approval_required"
 
 
+class LeadConn(DecisionConn):
+    """Active project_lead assignment whose assigned_by is configurable."""
+
+    def __init__(self, *, assigned_by, **kw):
+        super().__init__(**kw)
+        self.assigned_by = assigned_by
+
+    async def fetchval(self, sql, *args):
+        if "project_role_assignments" in sql:
+            if "IS DISTINCT FROM" in sql:
+                return self.assigned_by != args[3]
+            return True
+        return False
+
+
+def _decide_as_lead(conn):
+    return asyncio.run(decide_change_set(conn, tenant_id=TENANT, change_set_id=CHANGE,
+                                         actor=actor(), approve=True, reason="ok"))
+
+
+def test_lead_assigned_by_requester_is_denied():
+    with pytest.raises(HTTPException) as exc:
+        _decide_as_lead(LeadConn(assigned_by=SESSION))
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "project_lead_self_assigned_denied"
+
+
+def test_lead_assigned_by_other_session_is_approved():
+    conn = LeadConn(assigned_by="00000000-0000-0000-0000-000000000009")
+    assert _decide_as_lead(conn)["state"] == "approved"
+    assert conn.updates == 1
+
+
+def test_lead_with_null_assigned_by_is_approved():
+    conn = LeadConn(assigned_by=None)
+    assert _decide_as_lead(conn)["state"] == "approved"
+    assert conn.updates == 1
+
+
+def test_lead_guard_keeps_requester_self_approval_denied():
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(decide_change_set(LeadConn(assigned_by=SESSION), tenant_id=TENANT,
+                                      change_set_id=CHANGE, actor=actor(SESSION),
+                                      approve=True, reason=""))
+    assert exc.value.detail["code"] == "self_approval_denied"
+
+
 def test_t06_t12_t13_t14_change_set_guards_are_present():
     for contract in ("approval_superseded", "execution_key_conflict", "owner_instance", "owner_epoch",
                      "approval_revoked"):
