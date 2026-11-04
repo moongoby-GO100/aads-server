@@ -72,6 +72,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "report_milestone_done": True,         # 마일스톤 완료 신고 (2026-09-14)
     "confirm_milestone": True,             # 마일스톤 완료 판정 — 주도 (2026-09-14)
     "work_item_review": True,              # 업무 카드 인수/보완요청 — 담당 본인 제외 (2026-11-04)
+    "work_item_change_set_execute": True,  # 승인된 변경안 실행 — 현재 턴 lease 로 execute_change_set (2026-11-04)
     "save_note": True,
     "recall_notes": True,
     "delete_note": True,
@@ -597,6 +598,22 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
             },
             "required": ["item_id", "decision"],
+        },
+    },
+    "work_item_change_set_execute": {
+        "name": "work_item_change_set_execute",
+        "description": (
+            "승인(approved)된 업무 변경안(work_item_change_sets)을 실행합니다. "
+            "현재 채팅 턴의 owner lease 로 execute_change_set 을 호출하며, 승인·patch_hash·정책 판정 검증과 "
+            "outbox 기록은 기존 실행 로직이 그대로 수행합니다. approved 가 아닌 변경안, 다른 테넌트의 변경안은 "
+            "실행하지 않고 이유를 반환합니다. 살아 있는 채팅 턴이 아니면 execution_owner_lease_invalid 가 그대로 반환됩니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "change_set_id": {"type": "string", "description": "업무 변경안(work_item_change_sets) id (UUID)"},
+            },
+            "required": ["change_set_id"],
         },
     },
     "ask_session": {
@@ -4005,7 +4022,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "canonical_document_review", "mockup_review_submit", "skill_find", "skill_load", "skill_execute", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status"],
+    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "canonical_document_review", "mockup_review_submit", "skill_find", "skill_load", "skill_execute", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status", "work_item_change_set_execute"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)

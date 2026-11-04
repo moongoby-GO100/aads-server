@@ -9,7 +9,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Optional
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -474,8 +474,12 @@ async def _apply_internal_patch(
 async def execute_change_set(
     conn: Any, *, tenant_id: str, change_set_id: str, execution_key: str,
     owner_instance: str, owner_epoch: int, actor: ActorScope,
+    execution_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Validate immutable approval and enqueue one execution outbox event."""
+    """Validate immutable approval and enqueue one execution outbox event.
+
+    execution_id 가 있으면 lease 검사를 그 실행 행(chat_turn_executions.id)에 묶는다.
+    """
     _require_enabled()
     row = await conn.fetchrow(
         """SELECT c.*,w.version AS current_target_version,w.project AS target_project,w.goal_id AS target_goal_id
@@ -488,12 +492,14 @@ async def execute_change_set(
         raise _error(404, "change_set_not_found")
     if not actor.may_access(str(row["project"])) or str(row["target_project"]).upper() != str(row["project"]).upper():
         raise _error(403, "project_scope_denied")
-    lease_owner = await conn.fetchval(
-        """SELECT EXISTS(SELECT 1 FROM chat_turn_executions
+    lease_sql = """SELECT EXISTS(SELECT 1 FROM chat_turn_executions
              WHERE session_id=$1::uuid AND owner_instance=$2 AND owner_epoch=$3
-               AND status IN ('running','retrying') AND lease_expires_at > clock_timestamp())""",
-        actor.session_id, owner_instance, owner_epoch,
-    )
+               AND status IN ('running','retrying') AND lease_expires_at > clock_timestamp()"""
+    lease_args: list[Any] = [actor.session_id, owner_instance, owner_epoch]
+    if execution_id is not None:
+        lease_sql += "\n               AND id=$4::uuid"
+        lease_args.append(str(execution_id))
+    lease_owner = await conn.fetchval(lease_sql + ")", *lease_args)
     if not lease_owner:
         raise _error(409, "execution_owner_lease_invalid")
     if row["execution_key"]:

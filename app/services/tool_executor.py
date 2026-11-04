@@ -1214,6 +1214,7 @@ class ToolExecutor:
             "report_milestone_done":  self._report_milestone_done,
             "confirm_milestone":      self._confirm_milestone,
             "work_item_review":       self._work_item_review,
+            "work_item_change_set_execute": self._work_item_change_set_execute,
             # AADS-190: 내보내기 + 스케줄러
             "export_data":            self._export_data,
             "schedule_task":          self._schedule_task,
@@ -5662,6 +5663,119 @@ class ToolExecutor:
             "decision": decision,
             "status": row.get("status") if isinstance(row, dict) else None,
             "reason": reason,
+        }
+
+    async def _work_item_change_set_execute(self, inp: Dict[str, Any]) -> Any:
+        """승인된 변경안을 현재 채팅 턴의 lease 로 실행한다. 승인·해시·outbox 검증은 execute_change_set 에 위임한다."""
+        from fastapi import HTTPException
+
+        from app.core.db_pool import get_pool
+        from app.core.goal_work_hierarchy_policy import (
+            goal_work_hierarchy_enabled,
+            workflow_approval_enabled,
+        )
+        from app.services.goal_work_hierarchy import resolve_actor_scope
+        from app.services.goal_workflow_approval import execute_change_set
+
+        messages = {
+            "execute_session_required": "실행 세션을 확인할 수 없어 처리할 수 없다",
+            "change_set_id_required": "change_set_id 가 필요하다",
+            "invalid_change_set_id": "change_set_id 형식이 올바르지 않다 (UUID 여야 한다)",
+            "execute_session_owner_required": "소유자가 확인되지 않는 세션은 변경안을 실행할 수 없다",
+            "work_item_change_set_execute_failed": "변경안 실행 중 오류가 발생했다 (변경 없음)",
+            "goal_workflow_approval_disabled": "업무 카드 승인 기능이 꺼져 있다",
+            "change_set_not_found": "변경안을 찾을 수 없다",
+            "cannot_execute_foreign_tenant": "다른 테넌트의 변경안은 실행할 수 없다",
+            "change_set_not_approved": "승인(approved) 상태의 변경안만 실행할 수 있다",
+            "project_scope_denied": "이 세션이 접근할 수 없는 프로젝트의 변경안이다",
+            "execution_owner_lease_invalid": "살아 있는 채팅 턴의 실행 권한(owner lease)이 없어 실행할 수 없다",
+        }
+
+        def _fail(code: str, **extra: Any) -> Dict[str, Any]:
+            return {"error": code, "message": messages.get(code, code), **extra}
+
+        change_set_id = str(inp.get("change_set_id") or "").strip()
+        # 세션은 contextvar 로 바인딩된 것만 인정한다 (work_item_review 와 같은 규칙).
+        sid = str(current_chat_session_id.get("") or "").strip()
+        try:
+            sid = str(uuid.UUID(sid)) if sid else ""
+        except (ValueError, AttributeError):
+            sid = ""
+        if not sid:
+            return _fail("execute_session_required")
+        if not change_set_id:
+            return _fail("change_set_id_required")
+        try:
+            change_set_id = str(uuid.UUID(change_set_id))
+        except (ValueError, AttributeError):
+            return _fail("invalid_change_set_id")
+        if not goal_work_hierarchy_enabled() or not workflow_approval_enabled():
+            return _fail("goal_workflow_approval_disabled")
+
+        from app.services.chat_service import (
+            _EXECUTION_OWNER_INSTANCE,
+            _current_execution_id,
+            _current_execution_owner_epoch,
+        )
+
+        owner_instance = _EXECUTION_OWNER_INSTANCE
+        # 턴 컨텍스트가 없으면 어떤 lease 와도 일치하지 않는 epoch 를 넘겨
+        # execute_change_set 이 execution_owner_lease_invalid 를 직접 내게 한다.
+        # 같은 세션·프로세스의 종료된 턴이 epoch 만 같아도 통과하지 못하도록
+        # 현재 턴의 execution_id 를 lease 행(id)에 묶는다.
+        epoch = _current_execution_owner_epoch.get(None)
+        try:
+            execution_id: Optional[str] = str(uuid.UUID(str(_current_execution_id.get(None) or "")))
+        except (ValueError, AttributeError):
+            execution_id = None
+        owner_epoch = int(epoch) if epoch is not None and execution_id else -1
+        execution_key = f"chat-tool:{change_set_id}"
+
+        try:
+            async with get_pool().acquire() as conn, conn.transaction():
+                session = await conn.fetchrow(
+                    "SELECT tenant_id::text AS tenant_id, user_id FROM chat_sessions WHERE id = $1::uuid",
+                    sid,
+                )
+                if not session:
+                    return _fail("project_scope_denied")
+                session_user_id = str(session["user_id"] or "").strip()
+                if not session_user_id:
+                    return _fail("execute_session_owner_required")
+                tenant_id = str(session["tenant_id"])
+                change_set = await conn.fetchrow(
+                    "SELECT tenant_id::text AS tenant_id, state FROM work_item_change_sets WHERE id = $1::uuid",
+                    change_set_id,
+                )
+                if not change_set:
+                    return _fail("change_set_not_found")
+                if str(change_set["tenant_id"]) != tenant_id:
+                    return _fail("cannot_execute_foreign_tenant")
+                if change_set["state"] != "approved":
+                    return _fail("change_set_not_approved", state=str(change_set["state"]))
+                actor = await resolve_actor_scope(
+                    conn, tenant_id=tenant_id, user_id=session_user_id,
+                    actor_session_id=sid,
+                )
+                result = await execute_change_set(
+                    conn, tenant_id=tenant_id, change_set_id=change_set_id,
+                    execution_key=execution_key, owner_instance=owner_instance,
+                    owner_epoch=owner_epoch, actor=actor, execution_id=execution_id,
+                )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            return _fail(str(detail.get("code") or "work_item_change_set_execute_failed"))
+        except Exception as exc:
+            logger.error(
+                "work_item_change_set_execute failed change_set=%s: %s",
+                change_set_id, type(exc).__name__, exc_info=True,
+            )
+            return _fail("work_item_change_set_execute_failed")
+        return {
+            "ok": True,
+            "change_set_id": change_set_id,
+            "state": result.get("state") if isinstance(result, dict) else None,
+            "execution_key": execution_key,
         }
 
     async def _ask_session(self, inp: Dict[str, Any]) -> Any:
