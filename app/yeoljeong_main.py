@@ -128,6 +128,8 @@ _AUTH_EXEMPT_EXACT_PATHS = frozenset(
         "/api/v1/integrations/clobe/oauth/callback",
         # 직원 가입 화면(로그인 전)의 사업자·근무지 목록. 이름만 내보내는 읽기 전용 경로 하나만 면제한다.
         "/api/v1/yeoljeong-finance/public/join-workplaces",
+        # 로그인 전 가입 화면의 이메일 오타 확인. 부수효과 없는 조회이며, 이메일을 URL·로그에 남기지 않으려고 POST 를 쓴다.
+        "/api/v1/yeoljeong-finance/public/join-email-check",
     }
 )
 

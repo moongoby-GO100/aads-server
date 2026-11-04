@@ -848,3 +848,92 @@ def test_contract_editor_checks_duplicates_before_sending_and_shows_the_warning(
     assert "confirm(" in body
     assert "warningsOf(response)" in body
     assert "E.dupWarnings" in source and "dupWarningHtml()" in source
+
+
+# --- 이메일 오타 '확인' 흐름 (차단 대신 되묻기) ----------------------------------------------------
+def test_confirmed_near_real_domain_signs_up_and_unconfirmed_gets_a_suggestion(db):
+    user = _user(NEW_EMP_TENANT, "owner", email="kim@naver.comc", user_id="user-typo2")
+    body = {"name": "김테스트", "email": "kim@naver.comc", "branch": "성신여대점", "business_id": "biz-sungshin", "phone": PHONE_A}
+    with pytest.raises(HTTPException) as excinfo:
+        svc.upsert_join_request(dict(body), user)
+    assert "혹시 naver.com 인가요?" in excinfo.value.detail
+    record = svc.upsert_join_request({**body, "email_domain_confirmed": True}, user)
+    assert record["status"] == "pending"
+
+
+def test_confirmation_does_not_skip_format_or_phone_checks(db):
+    assert svc.validate_join_email("kim@naver.comc", domain_confirmed=True) == "kim@naver.comc"
+    with pytest.raises(HTTPException):
+        svc.validate_join_email("kim@naver", domain_confirmed=True)
+    with pytest.raises(HTTPException) as excinfo:
+        _join(phone=None, email_domain_confirmed=True)
+    assert excinfo.value.status_code == 400
+
+
+def test_extra_trusted_domains_from_env_pass(monkeypatch):
+    assert svc.suggest_email_domain("naver.co") == "naver.com"
+    monkeypatch.setenv("OBYS_JOIN_EXTRA_EMAIL_DOMAINS", "Naver.co, corp.kr")
+    assert svc.suggest_email_domain("naver.co") == ""
+    assert svc.validate_join_email("kim@naver.co") == "kim@naver.co"
+
+
+@pytest.mark.parametrize("domain", ["naver.co", "gmial.com", "naver.comc", "kakao.con"])
+def test_obvious_typos_stay_candidates(domain):
+    assert svc.suggest_email_domain(domain)
+
+
+@pytest.mark.parametrize("domain", ["navar.net", "daum.nt", "nates.kr", "kaka.com"])
+def test_short_domains_need_edit_distance_one(domain):
+    expected = {"navar.net": "", "daum.nt": "daum.net", "nates.kr": "", "kaka.com": "kakao.com"}[domain]
+    assert svc.suggest_email_domain(domain) == expected
+
+
+def test_join_models_carry_email_domain_confirmed_flag():
+    for model, base in ((api.InviteCreate, {}), (api.InviteAccept, {"token": "t"}), (api.JoinRequestCreate, {"name": "n"})):
+        assert model(**base).email_domain_confirmed is False
+        assert model(**base, email_domain_confirmed=True).model_dump()["email_domain_confirmed"] is True
+
+
+def test_invite_creation_accepts_a_confirmed_domain(db):
+    invite = svc.create_invite(
+        {"name": "김테스트", "email": "kim@gmail.con", "email_domain_confirmed": True,
+         "targets": [{"business_id": "biz-sungshin", "branch": "성신여대점"}]}, ADMIN)
+    assert invite["status"] == "pending"
+
+
+# --- 실제 인증 미들웨어를 거치는 공개 경로 ----------------------------------------------------------
+_CHECK = "/api/v1/yeoljeong-finance/public/join-email-check"
+
+
+@pytest.fixture(params=["main", "yeoljeong_main"])
+def real_app_client(request, monkeypatch):
+    import importlib
+
+    module = importlib.import_module(f"app.{request.param}")
+    monkeypatch.setattr(svc, "_db_available", lambda: False)
+    return TestClient(module.app, raise_server_exceptions=False)
+
+
+def test_join_email_check_needs_no_login_through_real_middleware(real_app_client):
+    response = real_app_client.post(_CHECK, json={"email": "kim@naver.co"})
+    assert response.status_code == 200
+    assert response.json() == {"suggestion": "naver.com"}
+    assert real_app_client.post(_CHECK, json={"email": "kim@naver.com"}).json() == {"suggestion": ""}
+
+
+def test_join_email_check_response_is_identical_for_any_account(real_app_client):
+    known = real_app_client.post(_CHECK, json={"email": "owner@example.com"})
+    unknown = real_app_client.post(_CHECK, json={"email": "nobody-here@example.com"})
+    assert known.status_code == unknown.status_code == 200
+    assert known.json() == unknown.json()
+    assert set(known.json()) == {"suggestion"}
+
+
+def test_join_email_check_rejects_overlong_input(real_app_client):
+    assert real_app_client.post(_CHECK, json={"email": "a" * 250 + "@naver.co"}).status_code == 400
+
+
+def test_other_routes_and_nearby_paths_still_need_login(real_app_client):
+    assert real_app_client.get("/api/v1/yeoljeong-finance/employees/join-requests").status_code == 401
+    assert real_app_client.post(_CHECK + "/").status_code in (401, 404, 405, 307)
+    assert real_app_client.post(_CHECK + "/x", json={}).status_code == 401

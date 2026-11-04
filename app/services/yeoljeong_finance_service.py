@@ -2787,19 +2787,30 @@ JOIN_PHONE_FORMAT_ERROR = "휴대폰 번호 형식이 올바르지 않습니다 
 
 def _edit_distance(left: str, right: str) -> int:
     previous = list(range(len(right) + 1))
+    before_previous = previous
     for i, a in enumerate(left, 1):
         current = [i]
         for j, b in enumerate(right, 1):
             current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a != b)))
-        previous = current
+            # 인접 글자 맞바꿈(gmial↔gmail)은 한 번의 실수로 센다.
+            if i > 1 and j > 1 and a == right[j - 2] and left[i - 2] == b:
+                current[j] = min(current[j], before_previous[j - 2] + 1)
+        before_previous, previous = previous, current
     return previous[-1]
 
 
+def _extra_email_domains() -> frozenset[str]:
+    """OBYS_JOIN_EXTRA_EMAIL_DOMAINS(쉼표 구분)로 운영자가 추가한 신뢰 도메인."""
+    raw = os.environ.get("OBYS_JOIN_EXTRA_EMAIL_DOMAINS", "")
+    return frozenset(item.strip().lower() for item in raw.split(",") if item.strip())
+
+
 def suggest_email_domain(domain: str) -> str:
-    """주요 도메인의 오타로 보이면 맞는 도메인을, 아니면 ''. 신뢰·실재·시험 도메인은 항상 ''."""
+    """주요 도메인의 오타로 보이면 맞는 도메인을, 아니면 ''. 신뢰·실재·시험·추가 도메인은 항상 ''."""
     domain = str(domain or "").strip().lower()
     if (
         not domain
+        or domain in _extra_email_domains()
         or domain in JOIN_TRUSTED_EMAIL_DOMAINS
         or domain in JOIN_KNOWN_EMAIL_DOMAINS
         or domain in JOIN_TEST_EMAIL_DOMAINS
@@ -2812,15 +2823,25 @@ def suggest_email_domain(domain: str) -> str:
         if domain.startswith(trusted) and domain[len(trusted)] != ".":
             return trusted
         distance = _edit_distance(domain, trusted)
+        # 점 앞이 5글자 이하인 짧은 도메인은 편집거리 1 이내만 후보 — 실재 도메인을 오타로 오인하지 않는다.
+        if len(domain.split(".", 1)[0]) <= 5 and distance > 1:
+            continue
         if distance < best_distance:
             best, best_distance = trusted, distance
     return best
 
 
-def validate_join_email(raw: Any, *, required: bool = True, format_error: str = "이메일 형식이 올바르지 않습니다") -> str:
+def validate_join_email(
+    raw: Any,
+    *,
+    required: bool = True,
+    format_error: str = "이메일 형식이 올바르지 않습니다",
+    domain_confirmed: bool = False,
+) -> str:
     """가입·초대·가입요청 공통 이메일 검증. 소문자 정규화한 값을 돌려준다.
 
     required=False 이고 비어 있으면 ''. 형식 오류·주요 도메인 오타는 400(오타면 "혹시 naver.com 인가요?").
+    domain_confirmed=True 이면 사용자가 도메인을 확인했으므로 오타 후보로는 막지 않는다(형식 검사는 그대로).
     """
     email = str(raw or "").strip().lower()
     if not email:
@@ -2833,7 +2854,7 @@ def validate_join_email(raw: Any, *, required: bool = True, format_error: str = 
     tld = domain.rsplit(".", 1)[1]
     if len(tld) < 2 or not tld.isalpha():
         raise HTTPException(status_code=400, detail=format_error)
-    suggestion = suggest_email_domain(domain)
+    suggestion = "" if domain_confirmed else suggest_email_domain(domain)
     if suggestion:
         raise HTTPException(
             status_code=400,
@@ -2862,9 +2883,11 @@ def validate_join_phone(raw: Any, *, required: bool = True) -> str:
     return normalized
 
 
-def _normalize_invite_email(raw: Any) -> str:
+def _normalize_invite_email(raw: Any, *, domain_confirmed: bool = False) -> str:
     """초대 이메일 검증·소문자 정규화. 비어 있으면 ''(이메일 없는 예전 방식 초대)."""
-    return validate_join_email(raw, required=False, format_error="초대 이메일 형식이 올바르지 않습니다")
+    return validate_join_email(
+        raw, required=False, format_error="초대 이메일 형식이 올바르지 않습니다", domain_confirmed=domain_confirmed
+    )
 
 
 def _join_phone_key(row: dict[str, Any]) -> str:
@@ -2966,7 +2989,9 @@ def join_request_warnings(record: dict[str, Any]) -> list[dict[str, Any]]:
 def create_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="직원 초대 권한이 없습니다")
-    invite_email = _normalize_invite_email(payload.get("email"))
+    invite_email = _normalize_invite_email(
+        payload.get("email"), domain_confirmed=bool(payload.get("email_domain_confirmed"))
+    )
     targets = _validated_invite_targets(payload, user)
     rows = _read("employee_invites")
     now = _now()
@@ -3132,6 +3157,7 @@ def accept_invite(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, An
             "phone": payload.get("phone") or invite.get("phone") or "",
             "memo": payload.get("memo") or "전화번호 초대 링크로 회원가입",
             "invite_id": invite.get("id"),
+            "email_domain_confirmed": bool(payload.get("email_domain_confirmed")),
         }
         if target["business_id"]:
             item["business_id"] = target["business_id"]
@@ -3295,7 +3321,7 @@ def _prepare_join_request(
     email = str(payload.get("email") or _email(user)).strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="직원 이메일이 필요합니다")
-    email = validate_join_email(email)
+    email = validate_join_email(email, domain_confirmed=bool(payload.get("email_domain_confirmed")))
     # 겸직: 가입요청의 식별 키는 (email, business_id) 다. 사업자가 다르면 별개 고용주라 별개 요청이다.
     payload_branch = str(payload.get("branch") or "").strip()
     payload_branch = BRANCH_ALIASES.get(payload_branch, payload_branch)

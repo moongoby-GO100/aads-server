@@ -5,6 +5,9 @@
  *
  * 서버 API 는 기존 것을 그대로 쓴다(새 API·DB 변경 없음):
  *   GET  /employees/approved                      승인 직원(회사·점포 연결)
+ *   GET  /employees/archived                      보관(삭제)된 직원 목록
+ *   DELETE /employees/approved/{id}, POST …/{id}/restore  직원 보관·복구
+ *   GET  /tenant-registry/businesses              회사(사업자) 목록 — 실패해도 편집기는 열린다
  *   GET  /contracts, POST /contracts              목록·저장(서버 validator 가 최종 판정)
  *   GET  /contracts/{id}/signature-duplicate-check 발송 전 같은 사업장 중복 계정 경고(차단 아님)
  *   POST /contracts/{id}/request-signature        서명요청 — 계약 결과와 notify.status 가 따로 온다

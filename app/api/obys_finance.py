@@ -51,6 +51,20 @@ public_router = APIRouter(prefix="/yeoljeong-finance/public", tags=["yeoljeong-f
 signed_pdf_link_router = APIRouter(prefix="/yeoljeong-finance", tags=["yeoljeong-finance-signed-pdf-link"])
 
 
+class JoinEmailCheck(BaseModel):
+    email: str = ""
+
+
+@public_router.post("/join-email-check")
+async def public_join_email_check(payload: JoinEmailCheck) -> dict[str, str]:
+    """가입 전 이메일 도메인 오타 후보만 돌려준다. 계정 존재 여부·DB 조회 없음, 응답은 suggestion 하나."""
+    email = str(payload.email or "").strip().lower()
+    if len(email) > 254:
+        raise HTTPException(status_code=400, detail="이메일이 너무 깁니다")
+    domain = email.rsplit("@", 1)[1] if "@" in email else ""
+    return {"suggestion": svc.suggest_email_domain(domain)}
+
+
 @public_router.get("/join-workplaces")
 async def public_join_workplaces() -> dict[str, Any]:
     return await svc.list_join_workplaces()
@@ -197,6 +211,7 @@ class InviteCreate(BaseModel):
     role: str = "member"
     expires_in_hours: int = 72
     memo: str = ""
+    email_domain_confirmed: bool = False
 
 
 class InviteAccept(BaseModel):
@@ -205,6 +220,7 @@ class InviteAccept(BaseModel):
     phone: str = ""
     branch: str = ""
     memo: str = ""
+    email_domain_confirmed: bool = False
 
 
 class JoinRequestCreate(BaseModel):
@@ -217,6 +233,7 @@ class JoinRequestCreate(BaseModel):
     birth_date: str = ""
     nationality: str = "대한민국"
     memo: str = ""
+    email_domain_confirmed: bool = False
 
 
 class ReviewPayload(BaseModel):

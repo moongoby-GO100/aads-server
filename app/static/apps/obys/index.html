@@ -3147,7 +3147,8 @@
               <select name="branch"></select>
             </label>
             <label>연락처
-              <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000">
+              <input name="phone" inputmode="tel" autocomplete="tel" placeholder="010-0000-0000" required>
+              <small class="auth-help">필수, 같은 번호로 두 번 가입할 수 없습니다.</small>
             </label>
             <input name="birthDate" type="hidden">
             <input name="address" type="hidden">
@@ -14634,7 +14635,7 @@
       return pendingPhoneInvite;
     }
 
-    async function acceptPendingPhoneInvite(preferredName = "") {
+    async function acceptPendingPhoneInvite(preferredName = "", { emailDomainConfirmed = false } = {}) {
       if (!pendingPhoneInviteToken || !hasServerAuth()) return false;
       const invite = pendingPhoneInvite || {};
       const inviteName = String(preferredName || invite.name || "").trim();
@@ -14646,7 +14647,8 @@
           name: inviteName,
           phone: invite.phone || "",
           branch: invite.branch || "",
-          memo: "전화번호 초대 링크로 회원가입"
+          memo: "전화번호 초대 링크로 회원가입",
+          email_domain_confirmed: Boolean(emailDomainConfirmed)
         })
       });
       pendingPhoneInviteToken = "";
@@ -14690,7 +14692,10 @@
         showToast("이메일 형식이 올바르지 않습니다.");
         return;
       }
+      const inviteEmailCheck = await confirmEmailDomain(inviteEmail, { onFix: () => form.email?.focus() });
+      if (!inviteEmailCheck.proceed) return;
       const body = {
+        email_domain_confirmed: inviteEmailCheck.confirmed,
         phone: form.phone.value.trim(),
         name: form.name.value.trim(),
         email: inviteEmail,
@@ -15272,6 +15277,74 @@
       }
     }
 
+    // 이메일 도메인 오타 확인 — 차단하지 않고 '혹시 OO 인가요?' 로 되묻는다. 서버는 로그인 전에도 이 확인만 열어 둔다.
+    async function fetchJoinEmailSuggestion(email) {
+      // 확인 호출이 실패(네트워크·401 등)하면 빈 후보로 취급한다. 서버 가입요청 단계의 기존 검증이 그대로 막는다.
+      try {
+        const response = await fetch("/api/v1/yeoljeong-finance/public/join-email-check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email })
+        });
+        if (!response.ok) return "";
+        const data = await response.json().catch(() => ({}));
+        return String(data?.suggestion || "");
+      } catch (err) {
+        return "";
+      }
+    }
+
+    function askEmailDomainChoice({ email, suggestion, allowFix, note }) {
+      return new Promise(resolve => {
+        const local = String(email).split("@")[0];
+        const overlay = document.createElement("div");
+        overlay.setAttribute("role", "alertdialog");
+        overlay.setAttribute("aria-modal", "true");
+        overlay.style.cssText = "position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px";
+        const box = document.createElement("div");
+        box.style.cssText = "background:#fff;border-radius:12px;padding:20px;max-width:420px;width:100%;display:grid;gap:12px;font-size:15px";
+        const question = document.createElement("strong");
+        question.textContent = `혹시 ${local}@${suggestion} 인가요?`;
+        const typed = document.createElement("span");
+        typed.textContent = `입력하신 이메일: ${email}`;
+        box.append(question, typed);
+        if (note) {
+          const noteEl = document.createElement("small");
+          noteEl.textContent = note;
+          box.append(noteEl);
+        }
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
+        const finish = value => { overlay.remove(); resolve(value); };
+        const makeButton = (label, value, primary) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = label;
+          button.style.cssText = `min-height:44px;min-width:44px;padding:0 16px;flex:1 1 140px;${primary ? "" : "background:#fff;border:1px solid #9aa5b1;border-radius:8px"}`;
+          button.addEventListener("click", () => finish(value));
+          return button;
+        };
+        if (allowFix) row.append(makeButton("고침", "fix", true));
+        row.append(makeButton(allowFix ? "그대로 가입" : "그대로 진행", "keep", !allowFix));
+        box.append(row);
+        overlay.append(box);
+        document.body.append(overlay);
+        row.querySelector("button")?.focus();
+      });
+    }
+
+    // 반환: { proceed, confirmed }. proceed=false 는 사용자가 '고침'을 골라 흐름을 멈춘 것이다(오류가 아니다).
+    async function confirmEmailDomain(email, { allowFix = true, onFix = null, note = "" } = {}) {
+      const suggestion = await fetchJoinEmailSuggestion(email);
+      if (!suggestion) return { proceed: true, confirmed: false };
+      const choice = await askEmailDomainChoice({ email, suggestion, allowFix: allowFix && typeof onFix === "function", note });
+      if (choice === "fix") {
+        if (typeof onFix === "function") onFix();
+        return { proceed: false, confirmed: false };
+      }
+      return { proceed: true, confirmed: true };
+    }
+
     async function signupToServer(formData) {
       const email = String(formData.email || "").trim();
       const name = String(formData.name || "").trim();
@@ -15302,6 +15375,17 @@
         if (!businessId) throw new Error("회사(사업자)를 선택해 주십시오.");
         if (!branch) throw new Error("근무 점포를 선택해 주십시오.");
       }
+      const inviteSignup = Boolean(pendingPhoneInviteToken);
+      const emailCheck = await confirmEmailDomain(email, {
+        allowFix: !inviteSignup,
+        onFix: inviteSignup ? null : () => {
+          const visibleForm = [els.gateSignupForm, els.signupForm].find(f => f && f.offsetParent);
+          visibleForm?.email?.focus();
+        },
+        note: inviteSignup ? "이메일이 틀렸으면 초대한 관리자에게 다시 요청해 주십시오." : ""
+      });
+      if (!emailCheck.proceed) return;
+      const emailDomainConfirmed = emailCheck.confirmed;
       const selectedBusinessName = businessId ? (joinBusinessName(businessId) || businessName(businessId)) : "";
       let payload;
       try {
@@ -15330,10 +15414,10 @@
 	        let joinRequest = null;
 	        try {
 	          if (pendingPhoneInviteToken) {
-	            const accepted = await acceptPendingPhoneInvite(name);
+	            const accepted = await acceptPendingPhoneInvite(name, { emailDomainConfirmed });
 	            joinRequest = accepted?.request || null;
 	          } else {
-	            joinRequest = await submitEmployeeSignupJoinRequest({ name, email, businessId, branch, phone, address, birthDate, nationality });
+	            joinRequest = await submitEmployeeSignupJoinRequest({ name, email, businessId, branch, phone, address, birthDate, nationality, emailDomainConfirmed });
 	          }
 	        } catch (joinError) {
 	          // 계정은 이미 만들어졌다 — 같은 폼을 다시 제출하면 "이미 등록된 이메일"로 막히므로, 로그인 상태로 가입요청 화면에 남겨 거기서 다시 보내게 한다.
@@ -15366,7 +15450,7 @@
 	      } else {
 	        await refreshFinanceSession();
 	        if (pendingPhoneInviteToken) {
-	          await acceptPendingPhoneInvite(name);
+	          await acceptPendingPhoneInvite(name, { emailDomainConfirmed });
 	        }
 	        if (followPostLoginRedirect()) return;
 	        showToast("회원가입이 완료되어 로그인되었습니다.");
@@ -15392,7 +15476,7 @@
       loadDeliveryLedgers({ silent: true }).catch(() => {});
     }
 
-    async function submitEmployeeSignupJoinRequest({ name, email, businessId, branch, phone, address, birthDate, nationality }) {
+    async function submitEmployeeSignupJoinRequest({ name, email, businessId, branch, phone, address, birthDate, nationality, emailDomainConfirmed = false }) {
       if (!hasServerAuth()) return null;
       const payload = await financeApi("/employees/join-requests", {
         method: "POST",
@@ -15405,7 +15489,8 @@
           address,
           birth_date: birthDate,
           nationality: nationality || "대한민국",
-          memo: "회원가입 화면에서 직원으로 직접 가입"
+          memo: "회원가입 화면에서 직원으로 직접 가입",
+          email_domain_confirmed: Boolean(emailDomainConfirmed)
         })
       });
       employeeJoinRequests = [payload.request, ...employeeJoinRequests.filter(item => item.id !== payload.request?.id)];
