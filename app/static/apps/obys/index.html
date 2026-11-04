@@ -3008,7 +3008,7 @@
     </style>
   <link rel="stylesheet" href="/static/apps/obys/modules/store-assistant-v2.css">
   <link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20261014-r1">
-  <link rel="stylesheet" href="/static/apps/obys/modules/clobe-collection.css?v=20261014-r1">
+  <link rel="stylesheet" href="/static/apps/obys/modules/clobe-collection.css?v=20261104-r1">
   <link rel="stylesheet" href="/static/apps/obys/modules/data-overview.css?v=20261014-r1">
   <link rel="stylesheet" href="/static/apps/obys/modules/employee-portal.css?v=20261015-r1">
   <style>
@@ -12856,6 +12856,7 @@
       if (["clobeOverview", "clobeReview", "clobeSummary", "clobeSettings"].includes(currentView)) {
         window.obysClobe?.open(currentView);
       }
+      syncLedgerUploadTargets();
       saveUiState();
       syncBottomTabs();
       queueEmployeePortalSync();
@@ -14070,14 +14071,71 @@
       return `불러오지 못했습니다: ${error?.message || "알 수 없는 오류"}`;
     }
 
+    // 자료 수집 화면에서 CSV 대체 업로드로 넘어온 경우(pinned)는 넘겨받은 사업자로만 올린다. 그 밖의 경로는 설정 화면 선택값을 쓴다.
+    function ledgerUploadScope(panel) {
+      const view = panel?.closest("[id$='View']")?.id.replace(/View$/, "") || "";
+      const pin = window.obysClobe?.uploadTargetFor?.(view) || null;
+      if (!pin) return { pinned: false, businessId: selectedSettingsBusinessId(), name: "" };
+      return { pinned: true, businessId: pin.businessId, name: pin.companyName || (pin.businessId ? businessName(pin.businessId) : "") };
+    }
+
+    function renderLedgerUploadTarget(panel) {
+      const scope = ledgerUploadScope(panel);
+      const submit = panel.querySelector("[data-upload-submit]");
+      const file = panel.querySelector("[data-upload-file]");
+      let note = panel.querySelector("[data-upload-target]");
+      if (!scope.pinned) {
+        note?.remove();
+        if (panel.dataset.uploadPinned) {
+          delete panel.dataset.uploadPinned;
+          if (submit) submit.disabled = false;
+          if (file) { file.disabled = false; file.value = ""; }
+          const rows = panel.querySelector("[data-upload-rows]");
+          if (rows) rows.innerHTML = "";
+          loadLedgerUploads(panel.dataset.ledgerUpload).catch(() => {});
+        }
+        return;
+      }
+      if (!note) {
+        note = document.createElement("p");
+        note.className = "upload-target-note";
+        note.dataset.uploadTarget = "";
+        note.setAttribute("role", "status");
+        panel.querySelector(".v2-actions")?.insertAdjacentElement("beforebegin", note);
+      }
+      const blocked = !scope.businessId;
+      note.textContent = blocked ? "대상 회사를 먼저 선택하세요" : `대상 회사: ${scope.name}`;
+      note.classList.toggle("blocked", blocked);
+      if (submit) submit.disabled = blocked;
+      if (file) file.disabled = blocked;
+      const pinKey = `pin:${scope.businessId}`;
+      if (panel.dataset.uploadPinned !== pinKey) {
+        // 다른 대상 회사로 고른 파일이 남아 엉뚱한 원장으로 올라가지 않도록 대상이 바뀔 때마다 파일 선택을 비운다.
+        panel.dataset.uploadPinned = pinKey;
+        if (file) file.value = "";
+        const rows = panel.querySelector("[data-upload-rows]");
+        if (rows) rows.innerHTML = "";
+      }
+      if (!blocked) loadLedgerUploads(panel.dataset.ledgerUpload).catch(error => showToast(error.message));
+    }
+
+    function syncLedgerUploadTargets() {
+      window.obysClobe?.releaseUploadTarget?.(currentView);
+      document.querySelectorAll("[data-ledger-upload]").forEach(renderLedgerUploadTarget);
+    }
+
     async function loadLedgerUploads(category) {
       const panel = document.querySelector(`[data-ledger-upload="${category}"]`);
-      const businessId = selectedSettingsBusinessId();
+      const scope = panel ? ledgerUploadScope(panel) : null;
+      const businessId = scope?.businessId || "";
       if (!panel || !ownerBusinessApisAllowed() || !businessId) return;
       const [payload, ledger] = await Promise.all([
         financeApi(`/uploads?business_id=${encodeURIComponent(businessId)}&category=${encodeURIComponent(category)}`),
         financeApi(`/uploaded-ledger?business_id=${encodeURIComponent(businessId)}&category=${encodeURIComponent(category)}&limit=20`)
       ]);
+      // 응답을 기다리는 사이 대상 회사가 고정·해제·변경됐다면 이전 회사의 목록을 그리지 않는다.
+      const latest = ledgerUploadScope(panel);
+      if ((scope.pinned || latest.pinned) && (latest.pinned !== scope.pinned || latest.businessId !== businessId)) return;
       const uploads = payload.uploads || [];
       const canonicalRows = ledger.rows || [];
       panel.querySelector("[data-upload-state]").textContent = `최근 업로드 ${uploads.length}건 · 반영 ${canonicalRows.length}행`;
@@ -14098,7 +14156,9 @@
 
     async function submitLedgerUpload(panel) {
       const file = panel.querySelector("[data-upload-file]")?.files?.[0];
-      const businessId = selectedSettingsBusinessId();
+      const scope = ledgerUploadScope(panel);
+      const businessId = scope.businessId;
+      if (scope.pinned && !businessId) return showToast("대상 회사를 먼저 선택하세요.");
       if (!file || !businessId) return showToast("사업자와 원장 파일을 선택하십시오.");
       const form = new FormData();
       form.append("business_id", businessId);
@@ -17888,7 +17948,7 @@
     });
   </script>
   <script src="/static/apps/obys/modules/ledger-details.js?v=20261014-r1"></script>
-  <script type="application/obys-deferred" data-legacy-module src="/static/apps/obys/modules/clobe-collection.js?v=20261014-r1"></script>
+  <script type="application/obys-deferred" data-legacy-module src="/static/apps/obys/modules/clobe-collection.js?v=20261104-r1"></script>
   <script type="application/obys-deferred" data-legacy-module src="/static/apps/obys/modules/data-overview.js?v=20261014-r1"></script>
   <script src="/static/apps/obys/modules/account-recovery.js?v=20261014-r2"></script>
   <script src="/static/apps/obys/modules/store-assistant-v2.js"></script>

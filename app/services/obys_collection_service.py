@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -1312,11 +1313,37 @@ def _iso(value: Any) -> str | None:
     return value.isoformat() if value else None
 
 
+async def _clobe_reauth_required() -> bool:
+    """클로브 연결이 끊겼는지. 세션 열기 단계의 재인증은 종류별 상태에 남지 않아 연결 상태를 직접 본다.
+
+    조회가 안 되면 False — 상태 화면이 이 확인 때문에 실패하면 안 된다(수집 쪽이 실제 실패를 다시 알려준다).
+    """
+    try:
+        return bool((await asyncio.wait_for(clobe.get_status(), timeout=3)).get("reauth_required"))
+    except Exception as exc:  # noqa: BLE001 - 보조 신호라 실패해도 상태 조회는 계속한다
+        logger.warning("clobe_status_unavailable type=%s", type(exc).__name__)
+        return False
+
+
+async def _scrape_failure_categories(conn: Any, run_ids: list[Any]) -> dict[Any, list[str]]:
+    """원천 기관 수집 실패 분류(failureCategory)는 상태 행이 아니라 실행 기록의 counts.scrape 에 있다."""
+    if not run_ids:
+        return {}
+    out: dict[Any, list[str]] = {}
+    for r in await conn.fetch(
+        "SELECT run_id, counts FROM obys_clobe_collection_run WHERE run_id = ANY($1::uuid[])", run_ids):
+        scrape = _load(r["counts"]).get("scrape")
+        cats = scrape.get("failure_categories") if isinstance(scrape, dict) else None
+        out[r["run_id"]] = [str(c) for c in cats] if isinstance(cats, list) else []
+    return out
+
+
 async def company_status(tenant_id: Any, *, internal_admin: bool = False) -> dict[str, Any]:
     """회사별 수집 상태. 일반 사용자는 자기 테넌트에 연결된 회사만 본다(미연결·차단 회사는 관리자 전용)."""
     tenant = _scope(tenant_id) if not internal_admin else None
     conn = await _connect()
     try:
+        reauth = await _clobe_reauth_required()
         if internal_admin:
             links = await conn.fetch("SELECT * FROM obys_clobe_company_link ORDER BY company_name, clobe_company_id")
         else:
@@ -1335,6 +1362,10 @@ async def company_status(tenant_id: Any, *, internal_admin: bool = False) -> dic
                     "AND data_kind = ANY($3::text[]) GROUP BY stage",
                     link["tenant_id"], link["business_id"], list(core.DATA_KINDS)):
                     stage_counts[r["stage"]] = int(r["n"])
+            block = core.company_block_action(link.get("permission_ok"), reauth) if link["link_status"] == "linked" else None
+            scrape_runs = [st["last_run_id"] for st in states
+                           if st.get("last_error_code") == core.SCRAPE_ERROR_CODE and st.get("last_run_id")]
+            categories = await _scrape_failure_categories(conn, scrape_runs)
             kinds = {}
             for kind in core.COLLECTION_KINDS:
                 s = by_kind.get(kind)
@@ -1349,6 +1380,9 @@ async def company_status(tenant_id: Any, *, internal_admin: bool = False) -> dic
                     "covered_to": _iso(s["covered_to"]) if s else None,
                     "source_as_of": _iso(s["source_as_of"]) if s else None,
                 }
+                kinds[kind]["next_action"] = block or core.next_action(
+                    kinds[kind]["status"], kinds[kind]["last_error_code"], kinds[kind]["consecutive_failures"],
+                    categories.get(s.get("last_run_id")) if s else (), kind)
                 if kind == core.KIND_CHANNEL:
                     kinds[kind]["connect_required"] = bool(s and s["status"] == "not_connected")
             companies.append({**_link_view(link), "kinds": kinds, "item_stage_counts": stage_counts})

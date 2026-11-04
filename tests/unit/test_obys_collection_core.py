@@ -317,3 +317,119 @@ def test_cash_receipt_cancellations_are_signed_negative_for_sum_reconciliation()
     assert not core.is_cancellation(core.KIND_CASH, {"transactionType": "승인거래"})
     assert not core.is_cancellation(core.KIND_TAX, {"transactionType": "취소거래"})
     assert "취소" in core.CANCEL_SIGN_SQL[core.KIND_CASH]
+
+
+# ── 수집 실패 시 사용자 다음 행동 ─────────────────────────
+
+@pytest.mark.parametrize("status,code,fails,key,button", [
+    ("succeeded", None, 0, "none", ""),
+    ("never_run", None, 0, "start_collection", ""),
+    ("needs_reauth", "reauth_required", 1, "reconnect_clobe", "view_connection"),
+    ("failed", "reauth_required", 1, "reconnect_clobe", "view_connection"),
+    ("not_connected", core.CHANNEL_NOT_CONNECTED, 0, "connect_channel", "retry"),
+    ("succeeded", core.CHANNEL_NOT_CONNECTED, 0, "none", ""),
+    ("failed", core.CHANNEL_NOT_CONNECTED, 1, "connect_channel", "retry"),
+    ("needs_reauth", "reauth_required", 9, "reconnect_clobe", "view_connection"),
+    ("partial", "permission_denied", 1, "request_permission", "retry"),
+    ("failed", "clobe:permission_denied", 1, "request_permission", "retry"),
+    ("failed", "clobe:permission_denied", 5, "request_permission", "retry"),
+    ("failed", "permission_denied:no scope", 5, "request_permission", "retry"),
+    ("failed", "clobe:tool_error", 1, "wait_auto_retry", "retry"),
+    ("failed", "permissions_ok_but_other", 1, "wait_auto_retry", "retry"),
+    ("partial", "transient:timeout", 1, "wait_auto_retry", "retry"),
+    ("failed", "clobe:502", 2, "wait_auto_retry", "retry"),
+    ("partial", "source_scrape_error", 1, "wait_auto_retry", "retry"),
+    ("partial", "count_mismatch", 2, "wait_auto_retry", "retry"),
+    ("partial", "sum_mismatch:amount", 1, "wait_auto_retry", "retry"),
+    ("partial", "page_limit", 1, "wait_auto_retry", "retry"),
+    ("failed", "clobe:502", 3, "contact_admin", "retry"),
+    ("partial", "transient:timeout", 7, "contact_admin", "retry"),
+    ("partial", "channel_unexpected_shape", 1, "contact_admin", ""),
+    ("running", None, 0, "wait_in_progress", ""),
+    ("lease_lost", "lease_lost", 1, "wait_in_progress", ""),
+    ("failed", "collection_in_progress", 1, "wait_in_progress", ""),
+    ("failed", None, 1, "wait_auto_retry", "retry"),
+])
+def test_next_action_maps_every_error_class(status, code, fails, key, button):
+    action = core.next_action(status, code, fails)
+    assert action["key"] == key and action["button"] == button
+    assert set(action) == {"key", "text", "button", "buttons", "view"} and action["view"] == ""
+    assert action["buttons"] == ([button] if button else [])
+    assert bool(action["text"]) == (key != "none")
+
+
+def test_permission_denied_is_mapped_from_the_code_the_collector_really_stores():
+    from app.services import clobe_mcp_client as clobe
+
+    exc = clobe.ClobePermissionDenied("forbidden")
+    stored = f"clobe:{str(exc)[:40]}"  # obys_collection_service._run_kind 가 ClobeError 를 저장하는 방식
+    assert stored == "clobe:permission_denied"
+    assert core.next_action("failed", stored, 1)["key"] == "request_permission"
+    assert core.next_action("failed", "permission_denied", 1)["key"] == "request_permission"  # _preflight 의 CollectionError 코드
+
+
+@pytest.mark.parametrize("categories,fails,key,buttons", [
+    (["CAPTCHA"], 1, "solve_captcha", ["retry"]),
+    (["captcha_required"], 5, "solve_captcha", ["retry"]),
+    (["AUTH", "OTP"], 2, "solve_captcha", ["retry"]),
+    (["AUTH"], 1, "wait_auto_retry", ["retry"]),
+    (["AUTH"], 2, "upload_file", ["upload_file", "retry"]),
+    ([], 4, "upload_file", ["upload_file", "retry"]),
+    (None, 1, "wait_auto_retry", ["retry"]),
+])
+def test_source_scrape_error_routes_captcha_and_file_fallback(categories, fails, key, buttons):
+    action = core.next_action("partial", "source_scrape_error", fails, categories, core.KIND_BANK)
+    assert action["key"] == key and action["buttons"] == buttons and action["button"] == buttons[0]
+    assert action["view"] == ("accounts" if key == "upload_file" else "")
+    assert "CSV" in action["text"] or key != "upload_file"
+    assert not any(t in action["text"] for t in ("source_scrape_error", "CAPTCHA", "AUTH", "_"))
+
+
+def test_captcha_categories_do_not_change_other_error_codes():
+    assert core.next_action("failed", "clobe:502", 1, ["CAPTCHA"])["key"] == "wait_auto_retry"
+
+
+def test_company_block_action_covers_failures_that_never_reach_collection_state():
+    assert core.company_block_action(None, False) is None
+    assert core.company_block_action(True, False) is None
+    assert core.company_block_action(False, False)["key"] == "request_permission"
+    assert core.company_block_action(True, True)["key"] == "reconnect_clobe"
+    assert core.company_block_action(False, True)["key"] == "reconnect_clobe"
+
+
+def test_next_action_text_is_korean_and_hides_internal_codes():
+    for status, code, fails in (("failed", "reauth_required", 1), ("partial", "permission_denied", 1),
+                                ("partial", "transient:x", 1), ("failed", "clobe:502", 4), ("running", None, 0)):
+        text = core.next_action(status, code, fails)["text"]
+        assert any("가" <= ch <= "힣" for ch in text)
+        for token in ("reauth_required", "permission_denied", "transient", "clobe:", "_"):
+            assert token not in text
+    assert "4회" in core.next_action("failed", "clobe:502", 4)["text"]
+
+
+def test_next_action_tolerates_bad_inputs():
+    assert core.next_action(None, None, None)["key"] == "start_collection"
+    assert core.next_action("failed", None, "abc")["key"] == "wait_auto_retry"
+    assert core.next_action("failed", None, -2)["key"] == "wait_auto_retry"
+    assert core.next_action("failed", None, core.ADMIN_CHECK_FAILURES)["key"] == "contact_admin"
+
+
+def test_channel_not_connected_is_not_a_reauth_and_has_no_connection_settings_button():
+    action = core.next_action("not_connected", core.CHANNEL_NOT_CONNECTED, 0)
+    assert action["key"] == "connect_channel" and "view_connection" not in action["buttons"]
+    assert "판매채널" in action["text"]
+    assert core.next_action("needs_reauth", "reauth_required", 1)["key"] == "reconnect_clobe"
+
+
+@pytest.mark.parametrize("kind,view", [(core.KIND_BANK, "accounts"), (core.KIND_CHANNEL, "sales")])
+def test_file_fallback_only_for_kinds_with_a_csv_upload_screen(kind, view):
+    action = core.next_action("partial", "source_scrape_error", 2, ["AUTH"], kind)
+    assert action["key"] == "upload_file" and action["view"] == view
+
+
+@pytest.mark.parametrize("kind", [core.KIND_TAX, core.KIND_CASH, core.KIND_CARD, "", None])
+def test_no_file_fallback_when_kind_has_no_csv_upload_screen(kind):
+    for fails, key in ((2, "wait_auto_retry"), (3, "contact_admin")):
+        action = core.next_action("partial", "source_scrape_error", fails, ["AUTH"], kind)
+        assert action["key"] == key and "upload_file" not in action["buttons"] and action["view"] == ""
+        assert "CSV" not in action["text"]

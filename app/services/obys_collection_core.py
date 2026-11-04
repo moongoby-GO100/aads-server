@@ -465,6 +465,113 @@ def retry_delay_seconds(consecutive_failures: int) -> int:
     return min(3600, 60 * (2 ** max(0, min(consecutive_failures, 6) - 1)))
 
 
+# ── 수집 실패 시 사용자 다음 행동 ─────────────────────────
+#: 연속 실패가 이 횟수 이상이면 자동 재시도로 풀릴 문제가 아니라고 보고 관리자 확인으로 돌린다.
+ADMIN_CHECK_FAILURES = 3
+#: 클로브가 같은 기관 수집을 이 횟수 이상 못 하면 자동 재시도를 기다리지 말고 파일(CSV)로 올리게 안내한다.
+FILE_FALLBACK_FAILURES = 2
+#: next_action 의 buttons 값. 화면이 이 키로 버튼을 고른다(문구는 화면이 정한다).
+ACTION_BUTTON_VIEW_CONNECTION = "view_connection"
+ACTION_BUTTON_RETRY = "retry"
+ACTION_BUTTON_UPLOAD_FILE = "upload_file"
+#: CSV 를 직접 올릴 수 있는 원장 화면이 실제로 있는 종류만 파일 대체 안내를 한다(종류 → 화면 키).
+#: 거래내역 원장 업로드(accounts)·매출 원장 업로드(sales)에만 CSV 입력란이 있고, 세금계산서·현금영수증·카드는 없다.
+UPLOAD_VIEW_BY_KIND = {KIND_BANK: "accounts", KIND_CHANNEL: "sales"}
+#: 다시 시도해도 같은 결과가 나는 오류 — 응답 형식 변경은 관리자가 봐야 한다.
+_ADMIN_ONLY_ERRORS = frozenset({"channel_unexpected_shape"})
+#: OAuth 연결이 끊긴 경우만 재연결이다. not_connected/channel_not_connected 는 연결은 정상인데 클로브에
+#: 판매채널(배달앱)이 안 붙어 있다는 뜻이라 연결 설정 화면에서 풀 수 없다.
+_REAUTH_STATUSES = frozenset({"needs_reauth"})
+_REAUTH_ERRORS = frozenset({"reauth_required"})
+_CHANNEL_NOT_CONNECTED_STATUSES = frozenset({"not_connected"})
+_IN_PROGRESS_STATUSES = frozenset({"running", "lease_lost"})
+_IN_PROGRESS_ERRORS = frozenset({"collection_in_progress", "lease_lost"})
+#: 실제로 저장되는 권한 오류 형태: _run_kind 는 "clobe:permission_denied", _preflight 는 "permission_denied",
+#: 연결 행의 permission_error 는 "permission_denied:<상세>" 로 적는다.
+_PERMISSION_ERROR_RE = re.compile(r"^(?:clobe:)?permission_denied(?::|$)")
+SCRAPE_ERROR_CODE = "source_scrape_error"
+#: 클로브가 원천 기관 수집 실패 분류(failureCategory)로 내려주는 값 중 사람이 풀어야 하는 것(보안문자·추가 인증).
+#: 저장소에서 실측한 값은 "AUTH" 뿐이라 부분 일치로 읽는다.
+_CAPTCHA_CATEGORY_MARKERS = ("CAPTCHA", "OTP")
+
+
+def _next_action(key: str, text: str, buttons: tuple[str, ...] = (), view: str = "") -> dict[str, Any]:
+    return {"key": key, "text": text, "button": buttons[0] if buttons else "", "buttons": list(buttons), "view": view}
+
+
+def _needs_captcha(categories: Any) -> bool:
+    return any(m in str(c).upper() for c in (categories or ()) for m in _CAPTCHA_CATEGORY_MARKERS)
+
+
+def reconnect_action() -> dict[str, Any]:
+    return _next_action("reconnect_clobe", "클로브를 다시 연결한 뒤 수집을 실행하세요.", (ACTION_BUTTON_VIEW_CONNECTION,))
+
+
+def permission_action() -> dict[str, Any]:
+    return _next_action(
+        "request_permission", "클로브 조회 권한이 없습니다. 권한을 요청하고 관리자에게 확인을 부탁하세요.", (ACTION_BUTTON_RETRY,))
+
+
+def company_block_action(permission_ok: Any, reauth_required: Any) -> dict[str, Any] | None:
+    """회사 단위로 수집 자체를 막는 원인. 종류별 상태에는 남지 않는다(세션 열기·사전 점검에서 중단되므로).
+
+    재연결이 권한보다 먼저다 — 연결이 끊긴 동안은 권한 상태를 다시 확인할 수 없다. 막는 원인이 없으면 None.
+    """
+    if reauth_required:
+        return reconnect_action()
+    if permission_ok is False:
+        return permission_action()
+    return None
+
+
+def next_action(status: Any, error_code: Any, consecutive_failures: Any = 0,
+                failure_categories: Any = (), kind: Any = "") -> dict[str, Any]:
+    """수집 상태·오류코드 → 사용자가 다음에 할 일. key(영문)·text(화면 문구)·button/buttons(버튼 종류, 없으면 비움).
+
+    view 는 upload_file 버튼이 이동할 화면 키다. kind 에 CSV 업로드 화면이 없으면 파일 대체 안내 자체를 하지 않는다.
+
+    순서가 곧 우선순위다: 재연결·권한·보안문자처럼 사람이 풀어야 하는 원인이 연속 실패 횟수보다 먼저 보인다.
+    failure_categories 는 클로브가 알려준 원천 기관 실패 분류(실행 기록의 scrape.failure_categories).
+    """
+    st = str(status or "never_run")
+    code = str(error_code or "")
+    try:
+        fails = max(0, int(consecutive_failures or 0))
+    except (TypeError, ValueError):
+        fails = 0
+    if st == "succeeded":
+        return _next_action("none", "")
+    if st == "never_run":
+        return _next_action("start_collection", "아직 수집 전입니다. 수집을 실행하세요.")
+    if st in _IN_PROGRESS_STATUSES or code in _IN_PROGRESS_ERRORS:
+        return _next_action("wait_in_progress", "다른 수집이 진행 중입니다. 잠시 후 다시 확인하세요.")
+    if st in _REAUTH_STATUSES or code in _REAUTH_ERRORS:
+        return reconnect_action()
+    if st in _CHANNEL_NOT_CONNECTED_STATUSES or code == CHANNEL_NOT_CONNECTED:
+        return _next_action(
+            "connect_channel",
+            "클로브에 배달앱(판매채널)이 연결되어 있지 않습니다. 클로브에서 판매채널을 연결한 뒤 다시 시도하세요.",
+            (ACTION_BUTTON_RETRY,))
+    if _PERMISSION_ERROR_RE.match(code):
+        return permission_action()
+    if code == SCRAPE_ERROR_CODE and _needs_captcha(failure_categories):
+        return _next_action(
+            "solve_captcha", "클로브에서 보안문자나 추가 인증을 완료한 뒤 다시 시도하세요.", (ACTION_BUTTON_RETRY,))
+    upload_view = UPLOAD_VIEW_BY_KIND.get(str(kind or ""))
+    if code == SCRAPE_ERROR_CODE and fails >= FILE_FALLBACK_FAILURES and upload_view:
+        return _next_action(
+            "upload_file",
+            f"{fails}회 연속으로 자동 수집이 막혔습니다. 원장 업로드에서 CSV 파일을 직접 올리거나 관리자에게 확인을 요청하세요.",
+            (ACTION_BUTTON_UPLOAD_FILE, ACTION_BUTTON_RETRY), upload_view)
+    if fails >= ADMIN_CHECK_FAILURES:
+        return _next_action(
+            "contact_admin", f"{fails}회 연속 실패했습니다. 관리자에게 확인을 요청하세요.", (ACTION_BUTTON_RETRY,))
+    if code in _ADMIN_ONLY_ERRORS:
+        return _next_action("contact_admin", "받은 자료의 형식이 달라졌습니다. 관리자에게 확인을 요청하세요.")
+    return _next_action(
+        "wait_auto_retry", "일시적인 오류입니다. 자동으로 다시 시도하며, 지금 바로 다시 시도할 수도 있습니다.", (ACTION_BUTTON_RETRY,))
+
+
 # ── 판매채널 매출(get_monthly_revenue) ───────────────────
 # 입력 스키마·응답 필드는 클로브 tools/list 가 정본이고 아직 운영에서 실측하지 못했다. 그래서 입력은 DB 에 저장된
 # input_schema 를 읽어 맞추고(build_channel_calls), 응답은 필드명 별칭 표로 읽는다(parse_channel_payload).

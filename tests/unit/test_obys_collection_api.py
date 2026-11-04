@@ -305,3 +305,125 @@ def test_discover_summary_counter_tolerates_unknown_status():
     svc._bump(summary, "linked")
     svc._bump(summary, "something_new")
     assert summary == {"linked": 2, "something_new": 1}
+
+
+class _StatusConn:
+    def __init__(self, states, permission_ok=None, runs=None):
+        self.states = states
+        self.permission_ok = permission_ok
+        self.runs = runs or []
+
+    async def fetch(self, sql, *args):
+        if "obys_clobe_company_link" in sql:
+            return [{"clobe_company_id": "c1", "company_name": "단하루", "reg_no": "1234567890", "link_status": "linked",
+                     "link_basis": "reg_no", "tenant_id": TENANT, "business_id": "biz-1",
+                     "permission_ok": self.permission_ok}]
+        if "obys_clobe_collection_state" in sql:
+            return self.states
+        if "obys_clobe_collection_run" in sql:
+            return self.runs
+        return []
+
+    async def close(self):
+        pass
+
+
+def _state(kind, status, code, fails, run_id=None):
+    from datetime import datetime, timezone
+
+    return {"data_kind": kind, "status": status, "last_success_at": None,
+            "last_failure_at": datetime(2026, 11, 4, tzinfo=timezone.utc), "last_error_code": code,
+            "consecutive_failures": fails, "next_retry_at": None, "covered_from": None, "covered_to": None,
+            "source_as_of": None, "last_run_id": run_id}
+
+
+def _patch_status(monkeypatch, conn, reauth=False):
+    async def connect():
+        return conn
+
+    async def reauth_required():
+        return reauth
+
+    monkeypatch.setattr(svc, "_connect", connect)
+    monkeypatch.setattr(svc, "_clobe_reauth_required", reauth_required)
+
+
+@pytest.mark.asyncio
+async def test_company_status_keeps_existing_fields_and_adds_next_action(monkeypatch):
+    states = [_state("bank_transaction", "needs_reauth", "reauth_required", 1),
+              _state("tax_invoice", "failed", "clobe:502", 3),
+              _state("cash_receipt", "partial", "transient:timeout", 1),
+              _state("card_approval", "failed", "clobe:permission_denied", 1)]
+    _patch_status(monkeypatch, _StatusConn(states))
+    out = await svc.company_status(TENANT)
+    kinds = out["companies"][0]["kinds"]
+    legacy = {"status", "last_success_at", "last_failure_at", "last_error_code", "consecutive_failures",
+              "next_retry_at", "covered_from", "covered_to", "source_as_of"}
+    assert all(legacy <= set(v) and "next_action" in v for v in kinds.values())
+    assert kinds["bank_transaction"]["status"] == "needs_reauth" and kinds["bank_transaction"]["last_error_code"] == "reauth_required"
+    assert kinds["bank_transaction"]["next_action"]["key"] == "reconnect_clobe"
+    assert kinds["tax_invoice"]["next_action"]["key"] == "contact_admin"
+    assert kinds["cash_receipt"]["next_action"]["key"] == "wait_auto_retry"
+    assert kinds["card_approval"]["next_action"]["key"] == "request_permission"
+    assert kinds["channel_revenue"]["status"] == "never_run" and kinds["channel_revenue"]["next_action"]["key"] == "start_collection"
+    assert set(out) == {"companies", "unsupported_sources"}
+
+
+@pytest.mark.asyncio
+async def test_company_status_shows_reconnect_when_session_open_fails_before_any_state_is_written(monkeypatch):
+    succeeded = _state("bank_transaction", "succeeded", None, 0)
+    _patch_status(monkeypatch, _StatusConn([succeeded]), reauth=True)
+    kinds = (await svc.company_status(TENANT))["companies"][0]["kinds"]
+    assert all(v["next_action"]["key"] == "reconnect_clobe" for v in kinds.values())
+    assert kinds["bank_transaction"]["status"] == "succeeded" and kinds["card_approval"]["status"] == "never_run"
+
+
+@pytest.mark.asyncio
+async def test_company_status_shows_permission_request_when_preflight_denied(monkeypatch):
+    _patch_status(monkeypatch, _StatusConn([_state("bank_transaction", "succeeded", None, 0)], permission_ok=False))
+    kinds = (await svc.company_status(TENANT))["companies"][0]["kinds"]
+    assert all(v["next_action"]["key"] == "request_permission" for v in kinds.values())
+    assert kinds["bank_transaction"]["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_company_status_reads_scrape_failure_categories_for_captcha_and_file_fallback(monkeypatch):
+    runs = [{"run_id": "r-captcha", "counts": '{"scrape": {"failure_categories": ["CAPTCHA"]}}'},
+            {"run_id": "r-auth", "counts": {"scrape": {"failure_categories": ["AUTH"]}}},
+            {"run_id": "r-bad", "counts": "not json"}]
+    states = [_state("bank_transaction", "partial", "source_scrape_error", 1, "r-captcha"),
+              _state("channel_revenue", "partial", "source_scrape_error", 2, "r-auth"),
+              _state("tax_invoice", "partial", "source_scrape_error", 1, "r-bad"),
+              _state("card_approval", "partial", "source_scrape_error", 2, "r-auth")]
+    _patch_status(monkeypatch, _StatusConn(states, runs=runs))
+    kinds = (await svc.company_status(TENANT))["companies"][0]["kinds"]
+    assert kinds["bank_transaction"]["next_action"]["key"] == "solve_captcha"
+    assert kinds["channel_revenue"]["next_action"]["key"] == "upload_file"
+    assert kinds["channel_revenue"]["next_action"]["buttons"] == ["upload_file", "retry"]
+    assert kinds["channel_revenue"]["next_action"]["view"] == "sales"
+    assert kinds["card_approval"]["next_action"]["key"] == "wait_auto_retry"  # 카드는 CSV 업로드 화면이 없다
+    assert kinds["tax_invoice"]["next_action"]["key"] == "wait_auto_retry"
+
+
+@pytest.mark.asyncio
+async def test_clobe_reauth_check_failure_does_not_break_status(monkeypatch):
+    async def boom():
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(svc.clobe, "get_status", boom)
+    assert await svc._clobe_reauth_required() is False
+
+    async def reauth():
+        return {"reauth_required": True}
+
+    monkeypatch.setattr(svc.clobe, "get_status", reauth)
+    assert await svc._clobe_reauth_required() is True
+
+
+@pytest.mark.asyncio
+async def test_company_status_channel_not_connected_is_not_reconnect(monkeypatch):
+    states = [_state("channel_revenue", "not_connected", "channel_not_connected", 0)]
+    _patch_status(monkeypatch, _StatusConn(states))
+    kinds = (await svc.company_status(TENANT))["companies"][0]["kinds"]
+    assert kinds["channel_revenue"]["next_action"]["key"] == "connect_channel"
+    assert kinds["channel_revenue"]["connect_required"] is True

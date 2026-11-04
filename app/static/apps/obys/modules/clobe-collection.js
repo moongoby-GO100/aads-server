@@ -472,8 +472,30 @@
       </dl>
       ${k.last_error_code && k.status !== "succeeded" ? `<p class="clobe-kind-error">${esc(codeText(k.last_error_code))}${k.last_failure_at ? ` (${esc(fmtDateTime(k.last_failure_at))})` : ""}</p>` : ""}
       ${k.next_retry_at && k.status !== "succeeded" && k.status !== "needs_reauth" ? `<p class="clobe-kind-retry">다음 자동 재시도 ${esc(fmtDateTime(k.next_retry_at))}${k.consecutive_failures ? ` · 연속 실패 ${Number(k.consecutive_failures)}회` : ""}</p>` : ""}
-      ${manage && k.status !== "succeeded" && k.status !== "never_run" && k.status !== "needs_reauth" ? `<button type="button" data-clobe-action="run-kind" data-kind="${esc(k.kind)}"${state.runBusy ? " disabled" : ""}>이 종류 다시 수집</button>` : ""}
+      ${nextActionHtml(k, manage)}
     </article>`;
+  }
+
+  // 서버가 준 next_action(문구+버튼 종류)을 그린다. 구버전 응답(next_action 없음)이면 예전 재수집 버튼만 둔다.
+  function nextActionHtml(k, manage) {
+    const na = k.next_action;
+    const retryButton = label => `<button type="button" data-clobe-action="run-kind" data-kind="${esc(k.kind)}"${state.runBusy ? " disabled" : ""}>${label}</button>`;
+    if (!na) {
+      return manage && k.status !== "succeeded" && k.status !== "never_run" && k.status !== "needs_reauth" ? retryButton("이 종류 다시 수집") : "";
+    }
+    if (!na.text || na.key === "none") return "";
+    const kinds = Array.isArray(na.buttons) ? na.buttons : (na.button ? [na.button] : []);
+    const buttons = kinds.map(name => {
+      if (name === "retry") return manage ? retryButton("다시 시도") : "";
+      if (name === "view_connection") return state.internalAdmin ? `<button type="button" class="primary" data-clobe-action="go" data-view="clobeSettings">다시 연결 보기</button>` : "";
+      if (name === "upload_file") {
+        if (!na.view) return "";
+        const company = selectedCompany();
+        return `<button type="button" class="primary" data-clobe-action="go-upload" data-view="${esc(na.view)}" data-business-id="${esc(company?.business_id || "")}" data-company-name="${esc(company?.company_name || "")}">원장 업로드로 이동</button>`;
+      }
+      return "";
+    }).join("");
+    return `<div class="clobe-next-action" data-next-action="${esc(na.key)}"><p>${esc(na.text)}</p>${buttons}</div>`;
   }
 
   function runPanel(company) {
@@ -1179,6 +1201,24 @@
   function goView(view) {
     const tab = document.querySelector(`.side-nav .tab[data-view="${view}"]`) || document.querySelector(`.tab[data-view="${view}"]`);
     if (tab) tab.click();
+    return Boolean(tab);
+  }
+
+  // 수집 화면에서 CSV 대체 업로드로 넘어갈 때의 대상 회사. 설정 화면의 사업자 선택값과 무관하게 이 값으로만 올린다.
+  // businessId 가 비어 있으면(대상 미확정) 업로드 화면은 전송을 막는다. 다른 화면으로 이동하면 해제된다.
+  const uploadPin = { view: "", businessId: "", companyName: "" };
+
+  function pinUploadTarget(view, businessId, companyName) {
+    Object.assign(uploadPin, { view: String(view || ""), businessId: String(businessId || "").trim(), companyName: String(companyName || "").trim() });
+  }
+
+  function uploadTargetFor(view) {
+    if (!uploadPin.view || uploadPin.view !== view) return null;
+    return { businessId: uploadPin.businessId, companyName: uploadPin.companyName };
+  }
+
+  function releaseUploadTarget(currentView) {
+    if (uploadPin.view && uploadPin.view !== currentView) pinUploadTarget("", "", "");
   }
 
   async function runCollection(kinds) {
@@ -1226,6 +1266,10 @@
         break;
       case "reload-summary": loadSummary(true); break;
       case "go": goView(target.dataset.view); break;
+      case "go-upload":
+        pinUploadTarget(target.dataset.view, target.dataset.businessId, target.dataset.companyName);
+        if (!goView(target.dataset.view)) pinUploadTarget("", "", "");
+        break;
       case "dismiss-notice": state.notice = null; renderCurrent(); break;
       case "open-review":
         state.ui.stage = target.dataset.stage || "review_box";
@@ -1404,7 +1448,7 @@
     setTimeout(probeLanding, 600);
   }
 
-  window.obysClobe = { open, landingView, explain, codeText, summarize };
+  window.obysClobe = { open, landingView, explain, codeText, summarize, uploadTargetFor, releaseUploadTarget };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();
