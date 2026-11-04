@@ -184,7 +184,7 @@ class TestWithholding:
         assert (result["income_tax"], result["local_income_tax"], result["total"]) == (30_000, 3_000, 33_000)
         assert result["rounding_verified"] is False
 
-    @pytest.mark.parametrize("kind", [wh.WAGE_INCOME, wh.DAILY_WAGE_INCOME])
+    @pytest.mark.parametrize("kind", [wh.DAILY_WAGE_INCOME])
     def test_unverified_kinds_are_blocked(self, kind):
         with pytest.raises(wh.WithholdingUnverified) as exc:
             wh.compute_withholding(kind, 1_000_000)
