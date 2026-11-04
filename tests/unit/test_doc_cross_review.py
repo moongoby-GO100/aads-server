@@ -436,3 +436,180 @@ def test_d3_failure_exhaustion_releases_daily_reservation(monkeypatch):
     call = AsyncMock(side_effect=RuntimeError('unavailable'))
     assert run_review(monkeypatch, db, call, 'D3')['review_state'] == 'blocked'
     assert any(c.args[0].startswith('DELETE FROM document_cross_review_budget') for c in db.execute.await_args_list)
+
+
+def _spawn_args():
+    return ('t1', 'AADS', {'id': 'h1', 'document_key': 'doc-key'}, {'id': 'r1'})
+
+
+def test_bridge_flag_detaches_subprocess_without_create_task(monkeypatch, tmp_path):
+    import subprocess
+    import sys
+    from unittest.mock import Mock
+    monkeypatch.setenv('AADS_MCP_BRIDGE', '1')
+    monkeypatch.setenv('DOC_CROSS_REVIEW_WORKER_LOG_DIR', str(tmp_path))
+    popen, create_task = Mock(), Mock()
+    popen.return_value.wait.return_value = 0
+    monkeypatch.setattr(subprocess, 'Popen', popen)
+    monkeypatch.setattr(asyncio, 'create_task', create_task)
+    cross.schedule(*_spawn_args())
+    create_task.assert_not_called()
+    popen.assert_called_once()
+    cmd = popen.call_args.args[0]
+    kwargs = popen.call_args.kwargs
+    assert cmd[:3] == ['timeout', '1500', sys.executable]
+    assert cmd[3:5] == ['-m', 'app.services.doc_cross_review_worker']
+    assert cmd[cmd.index('--document-key') + 1] == 'doc-key' and cmd[cmd.index('--revision-id') + 1] == 'r1'
+    assert kwargs['start_new_session'] is True
+    assert kwargs['cwd'] == cross._app_root()
+    assert kwargs['env']['PYTHONPATH'].split(':')[0] == cross._app_root()
+    assert 'AADS_MCP_BRIDGE' not in kwargs['env']
+    assert kwargs['stdout'] is not subprocess.DEVNULL and kwargs['stderr'] == subprocess.STDOUT
+    assert (tmp_path / 'doc_cross_review_worker.log').exists()
+
+
+def test_without_bridge_flag_keeps_create_task(monkeypatch):
+    import subprocess
+    from unittest.mock import Mock
+    monkeypatch.delenv('AADS_MCP_BRIDGE', raising=False)
+    popen = Mock()
+    monkeypatch.setattr(subprocess, 'Popen', popen)
+
+    async def go():
+        cross.schedule(*_spawn_args())
+        await asyncio.gather(*list(cross._TASKS), return_exceptions=True)
+    monkeypatch.setattr(cross, 'execute_review', AsyncMock(return_value={}))
+    asyncio.run(go())
+    popen.assert_not_called()
+    cross.execute_review.assert_awaited_once()
+
+
+def test_run_logs_cancellation_and_reraises(monkeypatch, caplog):
+    import logging
+    monkeypatch.delenv('AADS_MCP_BRIDGE', raising=False)
+
+    async def hang(*_a):
+        await asyncio.sleep(60)
+    monkeypatch.setattr(cross, 'execute_review', hang)
+
+    async def go():
+        cross.schedule(*_spawn_args())
+        task = next(iter(cross._TASKS))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    with caplog.at_level(logging.WARNING, logger=cross.logger.name):
+        asyncio.run(go())
+    assert [r.getMessage() for r in caplog.records].count('doc_cross_review_auto_cancelled') == 1
+
+
+def _worker_pool(monkeypatch, head, revision):
+    from unittest.mock import MagicMock
+    from app.services import doc_cross_review_worker as worker
+    conn = AsyncMock()
+    conn.fetchrow.side_effect = [head, revision]
+    acquire = MagicMock()
+    acquire.__aenter__ = AsyncMock(return_value=conn)
+    acquire.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = acquire
+    monkeypatch.setattr(worker, 'init_pool', AsyncMock())
+    monkeypatch.setattr(worker, 'close_pool', AsyncMock())
+    monkeypatch.setattr(worker, 'get_pool', lambda: pool)
+    execute = AsyncMock()
+    monkeypatch.setattr(worker.doc_cross_review, 'execute_review', execute)
+    return worker, execute
+
+
+def test_worker_skips_when_revision_is_not_latest(monkeypatch):
+    worker, execute = _worker_pool(monkeypatch, {'id': 'h', 'latest_revision_id': 'newer'}, {'id': 'old'})
+    assert asyncio.run(worker.run_worker('t', 'AADS', 'doc', 'old')) == 'not_latest'
+    execute.assert_not_called()
+
+
+def test_worker_executes_latest_revision(monkeypatch):
+    worker, execute = _worker_pool(monkeypatch, {'id': 'h', 'latest_revision_id': 'rev'}, {'id': 'rev'})
+    assert asyncio.run(worker.run_worker('t', 'AADS', 'doc', 'rev')) == 'executed'
+    execute.assert_awaited_once()
+
+
+def test_spawn_failure_is_logged_and_falls_back_to_in_process_task(monkeypatch, tmp_path, caplog):
+    import logging
+    import subprocess
+    from unittest.mock import Mock
+    monkeypatch.setenv('AADS_MCP_BRIDGE', '1')
+    monkeypatch.setenv('DOC_CROSS_REVIEW_WORKER_LOG_DIR', str(tmp_path))
+    monkeypatch.setattr(subprocess, 'Popen', Mock(side_effect=OSError('no timeout binary')))
+    monkeypatch.setattr(cross, 'execute_review', AsyncMock(return_value={}))
+
+    async def go():
+        cross.schedule(*_spawn_args())
+        await asyncio.gather(*list(cross._TASKS), return_exceptions=True)
+    with caplog.at_level(logging.ERROR, logger=cross.logger.name):
+        asyncio.run(go())
+    assert any(r.getMessage().startswith('doc_cross_review_detach_failed') for r in caplog.records)
+    cross.execute_review.assert_awaited_once()
+
+
+@pytest.mark.parametrize('code,expected', [(0, 'doc_cross_review_worker_exit_ok'), (124, 'doc_cross_review_worker_timeout'),
+                                           (1, 'doc_cross_review_worker_exit_nonzero')])
+def test_watcher_records_worker_exit_code(caplog, code, expected):
+    import logging
+    from unittest.mock import Mock
+    proc = Mock()
+    proc.wait.return_value = code
+    with caplog.at_level(logging.INFO, logger=cross.logger.name):
+        cross._watch_worker(proc, 'r1', '/tmp/x.log')
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 1 and messages[0].startswith(expected)
+    assert (code == 0) == (messages[0].startswith('doc_cross_review_worker_exit_ok'))
+
+
+def _worker_args():
+    import argparse
+    return argparse.Namespace(tenant='t', project='AADS', document_key='doc', revision_id='rev')
+
+
+def test_worker_records_sigterm_as_cancelled(monkeypatch, caplog):
+    import logging
+    import os
+    import signal
+    from app.services import doc_cross_review_worker as worker
+
+    async def hang(*_a):
+        await asyncio.sleep(60)
+    monkeypatch.setattr(worker, 'run_worker', hang)
+
+    async def go():
+        asyncio.get_running_loop().call_later(0.05, os.kill, os.getpid(), signal.SIGTERM)
+        return await worker._guarded(_worker_args())
+    previous = signal.signal(signal.SIGTERM, lambda *_a: None)
+    try:
+        with caplog.at_level(logging.WARNING, logger=worker.logger.name):
+            assert asyncio.run(go()) == 143
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert [r.getMessage().split()[0] for r in caplog.records].count('doc_cross_review_worker_cancelled') == 1
+
+
+def test_worker_records_own_deadline(monkeypatch, caplog):
+    import logging
+    from app.services import doc_cross_review_worker as worker
+
+    async def hang(*_a):
+        await asyncio.sleep(60)
+    monkeypatch.setattr(worker, 'run_worker', hang)
+    monkeypatch.setattr(worker, '_DEADLINE_SECONDS', 0.05)
+    with caplog.at_level(logging.WARNING, logger=worker.logger.name):
+        assert asyncio.run(worker._guarded(_worker_args())) == 124
+    assert any(r.getMessage().startswith('doc_cross_review_worker_timeout') for r in caplog.records)
+
+
+def test_worker_failure_returns_nonzero_and_logs(monkeypatch, caplog):
+    import logging
+    from app.services import doc_cross_review_worker as worker
+    monkeypatch.setattr(worker, 'run_worker', AsyncMock(side_effect=RuntimeError('db down')))
+    with caplog.at_level(logging.WARNING, logger=worker.logger.name):
+        assert asyncio.run(worker._guarded(_worker_args())) == 1
+    assert any(r.getMessage().startswith('doc_cross_review_worker_failed') for r in caplog.records)

@@ -438,6 +438,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 async def main():
     """stdio 모드로 MCP 서버 실행. 끊김 시 자동 재시작 (최대 5회)."""
     global _db_initialized
+    os.environ["AADS_MCP_BRIDGE"] = "1"
 
     max_retries = 5
     retry_delay = 1.0

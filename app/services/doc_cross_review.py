@@ -4,7 +4,12 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
+import sys
+import tempfile
+import threading
 import uuid
+from pathlib import Path
 
 from fastapi import HTTPException
 from app.core.db_pool import get_pool
@@ -186,10 +191,76 @@ async def execute_review(tenant, project, head, revision):
             await conn.execute('DELETE FROM document_cross_review_leases WHERE revision_id=$1 AND owner=$2', revision['id'], token)
 
 
+_DETACHED_TIMEOUT_SECONDS = 1500
+
+
+def _is_short_lived_bridge():
+    return os.getenv('AADS_MCP_BRIDGE', '').strip().lower() in ('1', 'true', 'yes')
+
+
+def _app_root():
+    return '/app' if os.path.isdir('/app') else str(Path(__file__).resolve().parents[2])
+
+
+def _open_worker_log(root):
+    """Append-mode log file for the detached worker's stdout/stderr; None if no writable location exists."""
+    for base in (os.getenv('DOC_CROSS_REVIEW_WORKER_LOG_DIR') or os.path.join(root, 'logs'), tempfile.gettempdir()):
+        try:
+            os.makedirs(base, exist_ok=True)
+            path = os.path.join(base, 'doc_cross_review_worker.log')
+            return path, open(path, 'ab')
+        except OSError:
+            continue
+    return None, None
+
+
+def _watch_worker(proc, revision_id, log_path):
+    code = proc.wait()
+    if code == 0:
+        logger.info('doc_cross_review_worker_exit_ok revision_id=%s', revision_id)
+    elif code == 124:
+        logger.error('doc_cross_review_worker_timeout revision_id=%s limit=%ss log=%s', revision_id, _DETACHED_TIMEOUT_SECONDS, log_path)
+    else:
+        logger.error('doc_cross_review_worker_exit_nonzero revision_id=%s code=%s log=%s', revision_id, code, log_path)
+
+
+def _spawn_detached(tenant, project, head, revision):
+    """Start the review worker detached from this process; returns False when it could not be started."""
+    root = _app_root()
+    env = dict(os.environ)
+    env.pop('AADS_MCP_BRIDGE', None)
+    env['PYTHONPATH'] = root + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+    cmd = ['timeout', str(_DETACHED_TIMEOUT_SECONDS), sys.executable, '-m', 'app.services.doc_cross_review_worker',
+           '--tenant', str(tenant), '--project', str(project),
+           '--document-key', str(head['document_key']), '--revision-id', str(revision['id'])]
+    log_path, log_file = _open_worker_log(root)
+    if log_file is None:
+        logger.warning('doc_cross_review_worker_log_unavailable revision_id=%s', revision['id'])
+    out = log_file or subprocess.DEVNULL
+    try:
+        proc = subprocess.Popen(cmd, cwd=root, env=env, start_new_session=True,
+                                stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT if log_file else subprocess.DEVNULL)
+    except Exception:
+        logger.exception('doc_cross_review_detach_failed revision_id=%s', revision['id'])
+        return False
+    finally:
+        if log_file:
+            log_file.close()
+    logger.warning('doc_cross_review_worker_spawned revision_id=%s pid=%s log=%s', revision['id'], proc.pid, log_path)
+    threading.Thread(target=_watch_worker, args=(proc, revision['id'], log_path), daemon=True).start()
+    return True
+
+
 def schedule(tenant, project, head, revision):
+    if _is_short_lived_bridge() and _spawn_detached(tenant, project, head, revision):
+        return
+
     async def run():
         try:
             await execute_review(tenant, project, dict(head), dict(revision))
+        except asyncio.CancelledError:
+            logger.warning('doc_cross_review_auto_cancelled', extra={'revision_id': str(revision['id'])})
+            raise
         except Exception:
             logger.exception('doc_cross_review_auto_failed')
     task = asyncio.create_task(run())
