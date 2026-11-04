@@ -15,6 +15,8 @@ import re
 from typing import Any
 from xml.sax.saxutils import escape
 
+from app.services.yeoljeong_payroll_deductions import four_insurance_deduction_errors
+
 TOTAL_FIELDS = ("gross_pay", "taxable_pay", "non_tax_meal_allowance", "tax_withholding", "insurance_deduction", "other_deduction")
 
 FREELANCER_TAX_TYPE = "freelancer_33"
@@ -80,7 +82,16 @@ def _strict_amount(value: Any, where: str) -> int:
     return parsed
 
 
-def _clean_item_list(raw: Any, codes: dict[str, str], kind: str, *, with_note: bool) -> list[dict[str, Any]] | None:
+def _flag(value: Any) -> bool:
+    """명시적 참(True/'true'/1)만 참. 거짓·빈 값은 키 자체를 남기지 않기 위해 호출부가 False 를 버린다."""
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "y", "yes"}
+    return value is True or (isinstance(value, int) and not isinstance(value, bool) and value == 1)
+
+
+def _clean_item_list(
+    raw: Any, codes: dict[str, str], kind: str, *, with_note: bool, with_flags: bool = False
+) -> list[dict[str, Any]] | None:
     if raw is None or raw == [] or raw == "":
         return None
     if not isinstance(raw, list):
@@ -108,6 +119,22 @@ def _clean_item_list(raw: Any, codes: dict[str, str], kind: str, *, with_note: b
             if len(note) > 200:
                 raise PayrollItemError(f"{where} 계산방법은 200자 이내로 입력하십시오")
             entry["calc_note"] = note
+        if with_flags:
+            # 자동 산정 출처·입력 대기·0원 확인 표시. 이 값이 정규화에서 버려지면 관리자가 확인한 항목이
+            # 다음 저장에서 다시 입력 대기로 돌아간다. 거짓 값은 키를 남기지 않는다.
+            note = str(item.get("calc_note") or "").strip()
+            if _RRN_PATTERN.search(note):
+                raise PayrollItemError(f"{where} 계산방법에 주민등록번호 형식의 값을 입력할 수 없습니다")
+            if note:
+                entry["calc_note"] = note[:200]
+            source = str(item.get("source") or "").strip().lower()
+            if source in {"auto", "manual"}:
+                entry["source"] = source
+            confirmed = _flag(item.get("confirmed"))
+            if confirmed:
+                entry["confirmed"] = True
+            if _flag(item.get("needs_input")) and not confirmed:
+                entry["needs_input"] = True
         cleaned.append(entry)
     return cleaned
 
@@ -143,7 +170,7 @@ def normalize_payroll_items(statement: dict[str, Any]) -> dict[str, Any]:
     """pay_items·deduction_items·work_summary 를 검증해 정리한 사본. 비어 있거나 없는 항목은 결과에서 빠진다."""
     result: dict[str, Any] = {}
     pay = _clean_item_list(statement.get("pay_items"), PAY_ITEM_CODES, "지급 항목", with_note=True)
-    deduction = _clean_item_list(statement.get("deduction_items"), DEDUCTION_ITEM_CODES, "공제 항목", with_note=False)
+    deduction = _clean_item_list(statement.get("deduction_items"), DEDUCTION_ITEM_CODES, "공제 항목", with_note=False, with_flags=True)
     work = _clean_work_summary(statement.get("work_summary"))
     if pay:
         result["pay_items"] = pay
@@ -220,6 +247,9 @@ def wage_statement_required_errors(statement: dict[str, Any]) -> list[str]:
             errors.append(f"임금명세서 필수 기재사항({label}수당 계산방법)이 비어 있습니다")
     if not _text(statement.get("pay_date"), ""):
         errors.append("임금명세서 필수 기재사항(임금지급일)이 비어 있습니다")
+    # 4대보험 근로자: 6개 공제 code 가 모두 있고 입력 대기가 없어야 한다. 다른 필수 기재사항 사유보다 뒤에 둔다.
+    if str(statement.get("employment_tax_type") or "").strip() == "four_insurance":
+        errors.extend(four_insurance_deduction_errors(items.get("deduction_items")))
     return errors
 
 

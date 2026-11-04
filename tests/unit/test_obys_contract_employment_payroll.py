@@ -399,7 +399,8 @@ def test_save_payroll_fills_only_missing_values_from_contract():
     assert saved["gross_pay"] == 2800000
     assert saved["taxable_pay"] == 2600000
     assert saved["non_tax_meal_allowance"] == 200000
-    assert saved["net_pay"] == 2750000
+    # 과세 2,600,000원 기준 4대보험 자동 산정: 연금 123,500 + 건강 93,470 + 장기요양 12,280 + 고용 23,400 = 252,650
+    assert saved["net_pay"] == 2800000 - 50000 - 252650
     assert saved["pay_date"] == "매월 10일"  # 임금지급일은 비어 있을 때만 계약서 값으로 채운다
     assert saved["status"] == "draft"  # 자동 확정하지 않는다 — 저장은 항상 draft, 확정은 별도 전이다
     assert saved["source_contract_id"] == contract["id"]
