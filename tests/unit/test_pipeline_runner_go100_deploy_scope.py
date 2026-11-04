@@ -252,6 +252,7 @@ def _decision_harness(tmp_path, wt: Path, pre: str, cur: str, hhmm: str, project
 
     sysl = tmp_path / "systemctl.log"
     dbl = tmp_path / "db.log"
+    sync_log = tmp_path / "sync.log"
     body = f"""{helpers}
 log() {{ echo "LOG $*" >> "{tmp_path}/run.log"; }}
 db_update() {{ echo "$*" >> "{dbl}"; }}
@@ -262,6 +263,7 @@ _release_deploy_lock() {{ :; }}
 _notify_ai() {{ :; }}
 promote_next_queued() {{ :; }}
 systemctl() {{ echo "$*" >> "{sysl}"; }}
+runner_sync_live_workdir() {{ echo "SYNC_CALLED $1 $2 $3" >> "{sync_log}"; return 0; }}
 scope() {{
     local project={project} job_id=runner-t session_id=s worktree_dir="{wt}" _pre_sha="{pre}" current_sha="{cur}"
 {docs_block}
