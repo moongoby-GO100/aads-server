@@ -1116,6 +1116,7 @@ class ToolExecutor:
             "my_milestones":          self._my_milestones,
             "report_milestone_done":  self._report_milestone_done,
             "confirm_milestone":      self._confirm_milestone,
+            "work_item_review":       self._work_item_review,
             # AADS-190: 내보내기 + 스케줄러
             "export_data":            self._export_data,
             "schedule_task":          self._schedule_task,
@@ -5437,6 +5438,119 @@ class ToolExecutor:
             confirmer=confirmer,
             tenant_id=tenant_id,
         )
+
+    async def _work_item_review(self, inp: Dict[str, Any]) -> Any:
+        """업무 카드를 현재 세션 이름으로 인수/보완요청한다. 상태 변경은 review_item 에 위임한다."""
+        from fastapi import HTTPException
+
+        from app.core.db_pool import get_pool
+        from app.core.goal_work_hierarchy_policy import (
+            goal_work_hierarchy_enabled,
+            workflow_approval_enabled,
+        )
+        from app.services.goal_work_hierarchy import resolve_actor_scope
+        from app.services.goal_workflow_approval import _target, review_item
+
+        messages = {
+            "review_session_required": "검토 세션을 확인할 수 없어 처리할 수 없다",
+            "item_id_required": "item_id 가 필요하다",
+            "invalid_item_id": "item_id 형식이 올바르지 않다 (UUID 여야 한다)",
+            "review_session_owner_required": "소유자가 확인되지 않는 세션은 검토할 수 없다",
+            "work_item_review_failed": "업무 카드 검토 처리 중 오류가 발생했다 (변경 없음)",
+            "invalid_decision": "decision 은 accept 또는 request_changes 여야 한다",
+            "reason_required": "보완 요청에는 reason 이 필요하다",
+            "goal_workflow_approval_disabled": "업무 카드 승인 기능이 꺼져 있다",
+            "work_item_not_found": "업무 카드를 찾을 수 없다",
+            "cannot_review_foreign_tenant": "다른 테넌트의 업무 카드는 검토할 수 없다",
+            "project_scope_denied": "이 세션이 접근할 수 없는 프로젝트의 업무 카드다",
+            "invalid_review_transition": "검토 대기(in_review) 상태의 카드만 인수하거나 보완 요청할 수 있다",
+            "evidence_required": "증거가 없는 카드는 인수할 수 없다",
+            "separation_of_duties": "자기가 담당한 카드는 직접 인수할 수 없다 — 다른 세션이 검토해야 한다",
+        }
+
+        def _fail(code: str) -> Dict[str, Any]:
+            return {"error": code, "message": messages.get(code, code)}
+
+        item_id = str(inp.get("item_id") or "").strip()
+        decision = str(inp.get("decision") or "").strip()
+        reason = str(inp.get("reason") or "").strip()
+        # 입력 session_id 와 SDK 프로세스 전역 세션 fallback 은 쓰지 않는다 —
+        # 이 실행에 바인딩된 contextvar 세션만 검토자로 인정(세션 위장·타 실행 세션 차단).
+        sid = str(current_chat_session_id.get("") or "").strip()
+        try:
+            sid = str(uuid.UUID(sid)) if sid else ""
+        except (ValueError, AttributeError):
+            sid = ""
+        if not sid:
+            return _fail("review_session_required")
+        if not item_id:
+            return _fail("item_id_required")
+        try:
+            item_id = str(uuid.UUID(item_id))
+        except (ValueError, AttributeError):
+            return _fail("invalid_item_id")
+        if decision not in {"accept", "request_changes"}:
+            return _fail("invalid_decision")
+        accept = decision == "accept"
+        if not accept and not reason:
+            return _fail("reason_required")
+        if not goal_work_hierarchy_enabled() or not workflow_approval_enabled():
+            return _fail("goal_workflow_approval_disabled")
+
+        try:
+            async with get_pool().acquire() as conn, conn.transaction():
+                session = await conn.fetchrow(
+                    "SELECT tenant_id::text AS tenant_id, user_id FROM chat_sessions WHERE id = $1::uuid",
+                    sid,
+                )
+                if not session:
+                    return _fail("project_scope_denied")
+                session_user_id = str(session["user_id"] or "").strip()
+                if not session_user_id:
+                    return _fail("review_session_owner_required")
+                owner = await conn.fetchrow(
+                    "SELECT tenant_id::text AS tenant_id FROM work_items WHERE id = $1::uuid",
+                    item_id,
+                )
+                if not owner:
+                    return _fail("work_item_not_found")
+                tenant_id = str(session["tenant_id"])
+                if str(owner["tenant_id"]) != tenant_id:
+                    return _fail("cannot_review_foreign_tenant")
+                actor = await resolve_actor_scope(
+                    conn, tenant_id=tenant_id, user_id=session_user_id,
+                    actor_session_id=sid,
+                )
+                item = await _target(conn, tenant_id, item_id)
+                if not actor.may_access(str(item["project"])):
+                    return _fail("project_scope_denied")
+                if item["status"] != "in_review":
+                    return _fail("invalid_review_transition")
+                if accept:
+                    has_evidence = await conn.fetchval(
+                        "SELECT EXISTS(SELECT 1 FROM work_item_evidence "
+                        "WHERE work_item_id = $1::uuid AND tenant_id = $2::uuid)",
+                        item_id, tenant_id,
+                    )
+                    if not has_evidence:
+                        return _fail("evidence_required")
+                row = await review_item(
+                    conn, tenant_id=tenant_id, item_id=item_id, actor=actor,
+                    accept=accept, reason=reason,
+                )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            return _fail(str(detail.get("code") or "work_item_review_failed"))
+        except Exception as exc:
+            logger.error("work_item_review failed item=%s: %s", item_id, type(exc).__name__, exc_info=True)
+            return _fail("work_item_review_failed")
+        return {
+            "ok": True,
+            "item_id": item_id,
+            "decision": decision,
+            "status": row.get("status") if isinstance(row, dict) else None,
+            "reason": reason,
+        }
 
     async def _ask_session(self, inp: Dict[str, Any]) -> Any:
         """다른 담당에게 묻는다. 답은 나중에 이 대화로 돌아온다.

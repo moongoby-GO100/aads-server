@@ -1086,6 +1086,8 @@ async def submit_review(conn: Any, *, tenant_id: str, item_id: str, actor: Actor
 async def review_item(conn: Any, *, tenant_id: str, item_id: str, actor: ActorScope,
                       accept: bool, reason: str = "") -> dict[str, Any]:
     item = await _target(conn, tenant_id, item_id)
+    if not actor.may_access(str(item["project"])):
+        raise _error(403, "project_scope_denied")
     assignment_session = await conn.fetchval(
         "SELECT session_id::text FROM project_role_assignments WHERE id=$1::uuid", item["assignment_id"],
     ) if item["assignment_id"] else None
@@ -1097,6 +1099,21 @@ async def review_item(conn: Any, *, tenant_id: str, item_id: str, actor: ActorSc
            completed_at=CASE WHEN $2='completed' THEN clock_timestamp() ELSE NULL END,
            version=version+1,updated_at=clock_timestamp() WHERE id=$1::uuid RETURNING *""",
         item_id, status,
+    )
+    # 이벤트 INSERT 실패는 전파한다 — 호출자 트랜잭션이 상태 변경까지 롤백한다.
+    await append_event(
+        conn, tenant_id=tenant_id, project=str(item["project"]), aggregate_type="work_item",
+        aggregate_id=item_id,
+        event_type="work_item_accepted" if accept else "work_item_changes_requested",
+        actor=actor,
+        payload={
+            "decision": "accept" if accept else "request_changes",
+            "reason": reason,
+            "from_status": item["status"],
+            "to_status": status,
+            "work_item_version": row["version"],
+        },
+        correlation_id=str(uuid4()),
     )
     await rollup_ancestors(conn, tenant_id=tenant_id, item_id=item_id)
     return _row_dict(row)

@@ -71,6 +71,7 @@ _DEFER_LOADING: Dict[str, bool] = {
     "my_milestones": True,                 # 내 목표·마일스톤 조회 (2026-09-17)
     "report_milestone_done": True,         # 마일스톤 완료 신고 (2026-09-14)
     "confirm_milestone": True,             # 마일스톤 완료 판정 — 주도 (2026-09-14)
+    "work_item_review": True,              # 업무 카드 인수/보완요청 — 담당 본인 제외 (2026-11-04)
     "save_note": True,
     "recall_notes": True,
     "delete_note": True,
@@ -571,6 +572,31 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 },
             },
             "required": ["milestone_id", "ok"],
+        },
+    },
+    "work_item_review": {
+        "name": "work_item_review",
+        "description": (
+            "검토 대기(in_review) 중인 업무 카드를 인수(accept)하거나 보완 요청(request_changes)합니다. "
+            "현재 채팅 세션이 검토자로 기록됩니다. **자기가 담당한 카드는 인수할 수 없고**"
+            "(separation_of_duties), 다른 테넌트·접근 권한 밖 프로젝트의 카드도 안 됩니다. "
+            "인수(accept)는 증거(work_item_evidence)가 1건 이상 있어야 합니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "item_id": {"type": "string", "description": "업무 카드(work_items) id"},
+                "decision": {
+                    "type": "string",
+                    "enum": ["accept", "request_changes"],
+                    "description": "accept=인수(완료), request_changes=보완 요청",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "request_changes 일 때 필수. 보완할 내용.",
+                },
+            },
+            "required": ["item_id", "decision"],
         },
     },
     "ask_session": {
