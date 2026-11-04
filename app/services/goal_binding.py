@@ -178,42 +178,76 @@ class GoalBinding(NamedTuple):
 EMPTY_BINDING = GoalBinding(None, None, None)
 
 
+class DeclaredIds(NamedTuple):
+    """제출자가 선언한 id 쌍과 각 값의 출처. 한쪽만 있어도 값을 돌려준다(검증은 호출부가 DB 로 한다).
+
+    ``conflict`` 가 있으면 인자와 지시서가 서로 다른 값을 가리킨 것이다 — 어느 쪽도 고르지 않는다.
+    """
+
+    goal_id: Optional[str]
+    milestone_id: Optional[str]
+    goal_source: Optional[str] = None
+    milestone_source: Optional[str] = None
+    conflict: Optional[str] = None
+    conflict_values: Optional[tuple[str, str]] = None
+
+
+def _pick_declared(
+    arg: Optional[str], pattern: "re.Pattern[str]", text: str,
+) -> tuple[Optional[str], Optional[str], Optional[tuple[str, str]]]:
+    """(값, 출처, 충돌 시 (인자값, 지시서값)). 인자·지시서 줄이 모두 유효한 UUID 이고 서로 다르면 충돌이다."""
+    arg_value = (arg or "").strip().lower()
+    arg_value = arg_value if is_uuid(arg_value) else None
+    match = pattern.search(text)
+    line_value = match.group(1).strip().lower() if match and is_uuid(match.group(1)) else None
+    if arg_value and line_value and arg_value != line_value:
+        return None, None, (arg_value, line_value)
+    if arg_value:
+        return arg_value, BIND_SOURCE_EXPLICIT_API, None
+    if line_value:
+        return line_value, BIND_SOURCE_EXPLICIT_DIRECTIVE, None
+    return None, None, None
+
+
+def resolve_declared_ids(
+    instruction: Optional[str] = None,
+    *,
+    goal_id: Optional[str] = None,
+    milestone_id: Optional[str] = None,
+) -> DeclaredIds:
+    """제출 인자와 지시서 `GOAL_ID:`/`MILESTONE_ID:` 줄을 읽는 **유일한** 해석 함수.
+
+    제출 게이트(goal_submit_gate)·연결기(parse_goal_binding)·마일스톤 순서 검사가 모두 이
+    함수를 거치므로 서로 다른 쌍을 읽을 수 없다. 목표와 마일스톤은 각각 독립해서 읽는다
+    (인자 > 지시서 줄). UUID 형식이 아닌 값은 없는 것으로 본다. 인자와 지시서 줄이 서로 다른
+    값을 가리키면 어느 쪽도 고르지 않고 ``conflict`` ("goal"/"milestone") 를 표시한다.
+    """
+    text = instruction or ""
+    goal_value, goal_source, goal_conflict = _pick_declared(goal_id, _GOAL_ID_PATTERN, text)
+    ms_value, ms_source, ms_conflict = _pick_declared(milestone_id, _MILESTONE_ID_PATTERN, text)
+    if goal_conflict:
+        return DeclaredIds(None, None, None, None, "goal", goal_conflict)
+    if ms_conflict:
+        return DeclaredIds(goal_value, None, goal_source, None, "milestone", ms_conflict)
+    return DeclaredIds(goal_value, ms_value, goal_source, ms_source)
+
+
 def parse_goal_binding(
     instruction: Optional[str] = None,
     *,
     goal_id: Optional[str] = None,
     milestone_id: Optional[str] = None,
 ) -> GoalBinding:
-    """명시적 목표 컨텍스트를 해석한다.
+    """명시적 목표 컨텍스트를 해석한다 (`resolve_declared_ids` 위의 얇은 래퍼).
 
-    우선순위: 호출자가 넘긴 goal_id/milestone_id(=제출 API 필드) → 지시서
-    메타데이터(GOAL_ID/MILESTONE_ID). 둘 다 없으면 EMPTY_BINDING 을 돌려주고,
-    호출부는 **아무 목표에도 연결하지 않는다**.
+    목표가 없으면 EMPTY_BINDING 을 돌려주고 호출부는 **아무 목표에도 연결하지 않는다**.
+    인자와 지시서가 충돌해도 EMPTY_BINDING 이다 — 제출 단계는 게이트가 먼저 422 로 거부하고,
+    그 밖의 경로는 어느 쪽인지 모르는 채 붙이지 않는다.
     """
-    explicit_goal = (goal_id or "").strip()
-    explicit_milestone = (milestone_id or "").strip()
-    if explicit_goal:
-        if not is_uuid(explicit_goal):
-            return EMPTY_BINDING
-        return GoalBinding(
-            explicit_goal.lower(),
-            explicit_milestone.lower() if is_uuid(explicit_milestone) else None,
-            BIND_SOURCE_EXPLICIT_API,
-        )
-
-    text = instruction or ""
-    if not text:
+    declared = resolve_declared_ids(instruction, goal_id=goal_id, milestone_id=milestone_id)
+    if declared.conflict or not declared.goal_id:
         return EMPTY_BINDING
-    goal_match = _GOAL_ID_PATTERN.search(text)
-    if not goal_match or not is_uuid(goal_match.group(1)):
-        return EMPTY_BINDING
-    milestone_match = _MILESTONE_ID_PATTERN.search(text)
-    milestone_value = milestone_match.group(1) if milestone_match else None
-    return GoalBinding(
-        goal_match.group(1).strip().lower(),
-        milestone_value.strip().lower() if is_uuid(milestone_value) else None,
-        BIND_SOURCE_EXPLICIT_DIRECTIVE,
-    )
+    return GoalBinding(declared.goal_id, declared.milestone_id, declared.goal_source)
 
 
 # ─── 재시도 승계(supersession) 판정 ─────────────────────────────────────────

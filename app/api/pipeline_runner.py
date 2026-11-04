@@ -2132,6 +2132,15 @@ async def _persist_job_goal_context(
         logger.debug("pipeline_runner.goal_context_persist_skipped", job_id=job_id, error=str(exc))
 
 
+def _raise_goal_pair_denial(verdict, *, key: str = "") -> None:
+    """GOAL_ID/MILESTONE_ID 짝 검증 거부를 422 로 낸다 (작업 행을 만들기 전)."""
+    detail = verdict.as_detail()
+    if key:
+        detail["message"] = f"[{key}] {detail['message']}"
+    headers = {"Retry-After": "5"} if verdict.status_code == 503 else None
+    raise HTTPException(status_code=verdict.status_code, detail=detail, headers=headers)
+
+
 def _enforce_owner_resolved_gate(instruction: str, project: str) -> None:
     """Reject implementation submission before a roadmap slice has converged."""
     from app.services.pipeline_runner_service import _unresolved_owner_slices
@@ -2221,7 +2230,10 @@ def _mockup_denial(result: dict) -> HTTPException:
     return HTTPException(status_code=409, detail={"code": "mockup_approval_required", **result})
 
 
-async def _run_batch_mockup_gate(context: TenantContext, *, project: str, jobs: list, key_to_job_id: dict) -> None:
+async def _run_batch_mockup_gate(
+    context: TenantContext, *, project: str, jobs: list, key_to_job_id: dict,
+    goal_ids: dict[str, str | None] | None = None,
+) -> None:
     """Submit-phase gate for every job of a batch; one denial rejects the whole batch with every denied key."""
     from app.services import mockup_gate_rules as rules
 
@@ -2229,7 +2241,7 @@ async def _run_batch_mockup_gate(context: TenantContext, *, project: str, jobs: 
     for item in jobs:
         result = await _run_mockup_gate(
             context, phase="submit", project=project, task_id=key_to_job_id[item.key], instruction=item.instruction,
-            goal_id=rules.declared_goal_id(item.instruction))
+            goal_id=(goal_ids or {}).get(item.key) or rules.declared_goal_id(item.instruction))
         checked.append({"key": item.key, "job_id": key_to_job_id[item.key], **result})
     rejected = [
         {"key": r["key"], "job_id": r["job_id"], "reasons": r.get("reasons", [])} for r in checked if not r["allowed"]
@@ -2307,10 +2319,17 @@ async def submit_job(
 
     job_id = f"runner-{uuid.uuid4().hex[:8]}"
     session_id = req.session_id  # 필수 필드 — validator에서 이미 검증됨
+    from app.services.goal_submit_gate import evaluate_submit_goal_pair
+    goal_pair = await evaluate_submit_goal_pair(
+        instruction=req.instruction, goal_id=req.goal_id, milestone_id=req.milestone_id,
+        tenant_id=_tenant_id(context), session_id=session_id, project=req.project,
+    )
+    if not goal_pair.allowed:
+        _raise_goal_pair_denial(goal_pair)
     from app.services import mockup_gate_rules as _mockup_rules
     mockup_gate = await _run_mockup_gate(
         context, phase="submit", project=req.project, task_id=job_id, instruction=req.instruction,
-        goal_id=req.goal_id or _mockup_rules.declared_goal_id(req.instruction))
+        goal_id=goal_pair.goal_id or _mockup_rules.declared_goal_id(req.instruction))
     if not mockup_gate["allowed"]:
         raise _mockup_denial(mockup_gate)
     instruction_hash = _compute_instruction_hash(req.project, req.instruction)
@@ -2443,8 +2462,8 @@ async def submit_job(
                         project=req.project,
                         tenant_id=tenant_id,
                         instruction=req.instruction,
-                        goal_id=req.goal_id,
-                        milestone_id=req.milestone_id,
+                        goal_id=goal_pair.goal_id or "",
+                        milestone_id=goal_pair.milestone_id or "",
                     )
                     parent_order = await _resolve_milestone_order(
                         conn,
@@ -2475,8 +2494,8 @@ async def submit_job(
                         target_files=target_files,
                         tenant_id=tenant_id,
                         incoming_instruction=req.instruction,
-                        incoming_goal_id=req.goal_id,
-                        incoming_milestone_id=req.milestone_id,
+                        incoming_goal_id=goal_pair.goal_id or "",
+                        incoming_milestone_id=goal_pair.milestone_id or "",
                         incoming_basis=write_scope.basis,
                     )
                     if conflict:
@@ -2563,6 +2582,9 @@ async def submit_job(
     if req.worker_model and not req.worker_model_reason:
         msg += " 직접 모델 지정은 사유가 없어 저장하지 않았고, 어드민 러너 모델 설정값을 사용합니다."
 
+    if goal_pair.warning:
+        msg += f" {goal_pair.warning}"
+
     # Goal link (best-effort, I-3): (a) 제출 인자 > (b) 지시서 GOAL_ID/MILESTONE_ID >
     # (c) 제출 세션의 단일 in_progress 마일스톤 > (d) 비움. 추정 연결은 하지 않는다.
     try:
@@ -2570,10 +2592,11 @@ async def submit_job(
         autolink = await autolink_job(
             job_id, req.project,
             instruction=req.instruction,
-            goal_id=req.goal_id or None,
-            milestone_id=req.milestone_id or None,
+            goal_id=goal_pair.goal_id,
+            milestone_id=goal_pair.milestone_id,
             session_id=session_id,
             tenant_id=_tenant_id(context),
+            bind_source=goal_pair.bind_source,
         )
         goal_link = autolink if autolink.linked else None
         if goal_link:
@@ -2585,7 +2608,7 @@ async def submit_job(
 
     from app.services.spec_ref import bind_runner_specs, merge_spec_warning
     spec_warning = await bind_runner_specs(
-        instruction=req.instruction, goal_id=goal_link.goal_id if goal_link else req.goal_id,
+        instruction=req.instruction, goal_id=goal_link.goal_id if goal_link else goal_pair.goal_id,
         tenant_id=_tenant_id(context), project=req.project, job_id=job_id,
     )
     # 정본 게이트(그림자): 목표가 확정된 제출만 판정·기록한다. 제출 결과는 바꾸지 않는다.
@@ -4527,9 +4550,24 @@ async def submit_batch(
     for item in req.jobs:
         key_to_job_id[item.key] = f"runner-{uuid.uuid4().hex[:8]}"
 
+    # GOAL_ID/MILESTONE_ID 짝 검증: 하나라도 거절되면 배치 전체를 거절한다(부분 제출 금지).
+    from app.services.goal_submit_gate import evaluate_submit_goal_pair
+    goal_pairs = {}
+    for item in req.jobs:
+        verdict = await evaluate_submit_goal_pair(
+            instruction=item.instruction, goal_id=item.goal_id, milestone_id=item.milestone_id,
+            tenant_id=_tenant_id(context), session_id=req.session_id, project=req.project,
+        )
+        if not verdict.allowed:
+            _raise_goal_pair_denial(verdict, key=item.key)
+        goal_pairs[item.key] = verdict
+
     # 목업 승인 게이트: submit_job 과 같은 submit 단계 검증을 job 마다 태운다. 하나라도 거절되면
     # 배치 전체를 거절한다(부분 제출 금지) — 아래 INSERT 트랜잭션에 들어가기 전이라 job 행은 생기지 않는다.
-    await _run_batch_mockup_gate(context, project=req.project, jobs=req.jobs, key_to_job_id=key_to_job_id)
+    await _run_batch_mockup_gate(
+        context, project=req.project, jobs=req.jobs, key_to_job_id=key_to_job_id,
+        goal_ids={key: pair.goal_id for key, pair in goal_pairs.items()},
+    )
 
     results = []
     gate_targets: list[tuple[str, str]] = []
@@ -4552,6 +4590,8 @@ async def submit_batch(
                         project=req.project,
                         tenant_id=tenant_id,
                         instruction=item.instruction,
+                        goal_id=goal_pairs[item.key].goal_id or "",
+                        milestone_id=goal_pairs[item.key].milestone_id or "",
                     )
                     for item in req.jobs
                 }
@@ -4719,6 +4759,8 @@ async def submit_batch(
                                 target_files=item_target_files,
                                 tenant_id=tenant_id,
                                 incoming_instruction=item.instruction,
+                                incoming_goal_id=goal_pairs[item.key].goal_id or "",
+                                incoming_milestone_id=goal_pairs[item.key].milestone_id or "",
                                 ignore_job_ids=set(key_to_job_id.values()),
                                 incoming_basis=item_scope.basis,
                             )
@@ -4791,15 +4833,19 @@ async def submit_batch(
     for item, result in pending_links:
         try:
             from app.services.goal_autolink import autolink_job
+            pair = goal_pairs[item.key]
             autolink = await autolink_job(
                 result["job_id"], req.project,
                 instruction=item.instruction,
-                goal_id=item.goal_id or None,
-                milestone_id=item.milestone_id or None,
+                goal_id=pair.goal_id,
+                milestone_id=pair.milestone_id,
                 session_id=req.session_id,
                 tenant_id=tenant_id,
+                bind_source=pair.bind_source,
             )
             result["goal_link"] = autolink.as_dict()
+            if pair.warning:
+                result["goal_link_warning"] = pair.warning
             if autolink.linked:
                 await _persist_job_goal_context(
                     pool, result["job_id"], autolink.goal_id, autolink.milestone_id,
@@ -4832,7 +4878,7 @@ async def submit_batch(
     spec_warnings = await asyncio.gather(*(
         bind_runner_specs(
             instruction=item.instruction,
-            goal_id=linked_goals.get(result["job_id"]) or item.goal_id,
+            goal_id=linked_goals.get(result["job_id"]) or goal_pairs[item.key].goal_id,
             tenant_id=tenant_id, project=req.project, job_id=result["job_id"],
         ) for item, result in pending_links
     ))

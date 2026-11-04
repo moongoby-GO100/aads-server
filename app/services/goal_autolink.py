@@ -176,6 +176,7 @@ async def autolink_job(
     milestone_id: Optional[str] = None,
     session_id: Optional[str] = None,
     tenant_id: Optional[str] = None,
+    bind_source: Optional[str] = None,
 ) -> AutolinkResult:
     """이미 INSERT 되어 **커밋된** 작업을 (a)>(b)>(c) 순서로 목표에 연결한다.
 
@@ -189,6 +190,7 @@ async def autolink_job(
         result = await _resolve_and_link(
             prs, job_id, project, instruction=instruction, goal_id=goal_id,
             milestone_id=milestone_id, session_id=session_id, tenant_id=tenant_id,
+            bind_source=bind_source,
         )
     except Exception as exc:  # noqa: BLE001 — 연결 실패는 제출 실패가 아니다
         logger.warning("goal_autolink_failed job=%s: %s", job_id, str(exc)[:200])
@@ -214,17 +216,22 @@ async def autolink_job(
 async def _resolve_and_link(
     prs: Any, job_id: str, project: str, *, instruction: Optional[str],
     goal_id: Optional[str], milestone_id: Optional[str],
-    session_id: Optional[str], tenant_id: Optional[str],
+    session_id: Optional[str], tenant_id: Optional[str], bind_source: Optional[str] = None,
 ) -> AutolinkResult:
-    # (a) 제출 인자
+    # (a) 제출 인자 — 제출 게이트가 검증한 (goal_id, milestone_id) 쌍이 여기로 온다.
+    # bind_source 는 그 쌍이 원래 인자였는지 지시서였는지(출처)만 알려 준다.
     arg_binding = parse_goal_binding(None, goal_id=goal_id, milestone_id=milestone_id)
     if arg_binding.is_explicit:
         link = await prs._link_job_to_goal_explicit(
             job_id, project, instruction=instruction,
             goal_id=goal_id or None, milestone_id=milestone_id or None,
+            bind_source=bind_source,
         )
         if link:
-            return AutolinkResult(link.goal_id, link.milestone_id, SOURCE_EXPLICIT)
+            return AutolinkResult(
+                link.goal_id, link.milestone_id,
+                _SOURCE_BY_BIND_SOURCE.get(bind_source or "", SOURCE_EXPLICIT),
+            )
         if await _goal_exists(arg_binding.goal_id, tenant_id):
             return _none(REASON_EXPLICIT_REJECTED)
 

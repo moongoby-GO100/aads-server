@@ -122,10 +122,17 @@ def test_directive_metadata_binds_goal_and_milestone():
 
 
 def test_explicit_api_fields_take_priority_over_directive_metadata():
-    instruction = f"GOAL_ID: {GOAL_B}\n"
+    instruction = f"MILESTONE_ID: {MILESTONE_A}\n"
     binding = parse_goal_binding(instruction, goal_id=GOAL_A)
     assert binding.goal_id == GOAL_A
+    assert binding.milestone_id == MILESTONE_A
     assert binding.source == BIND_SOURCE_EXPLICIT_API
+
+
+def test_api_goal_conflicting_with_directive_goal_binds_nothing():
+    """인자와 지시서의 GOAL_ID 가 다르면 어느 쪽도 고르지 않는다 (제출 게이트가 먼저 422)."""
+    binding = parse_goal_binding(f"GOAL_ID: {GOAL_B}\n", goal_id=GOAL_A)
+    assert binding.is_explicit is False and binding.milestone_id is None
 
 
 def test_malformed_goal_id_is_ignored_rather_than_guessed():

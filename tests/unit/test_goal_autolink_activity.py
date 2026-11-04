@@ -46,14 +46,20 @@ class World:
         self.activity_rows: list[dict] = []
         self.unlinked = 0
         self.fail_activity = False
+        self.fail_milestones = False
+        self.dep_jobs: dict[str, dict] = {}
+        self.active_jobs: list[dict] = []
+        self.inserts: list[tuple] = []
 
     def add_goal(self, goal_id, *, project="AADS", status="active", tenant=TENANT):
         self.goals[goal_id] = {
             "id": goal_id, "tenant_id": tenant, "project": project, "status": status,
         }
 
-    def add_milestone(self, ms_id, goal_id, *, status="in_progress", project="AADS"):
-        self.milestones[ms_id] = {"goal_id": goal_id, "status": status, "project": project}
+    def add_milestone(self, ms_id, goal_id, *, status="in_progress", project="AADS", seq=1):
+        self.milestones[ms_id] = {
+            "goal_id": goal_id, "status": status, "project": project, "seq": seq,
+        }
 
     # pool / conn
     def acquire(self):
@@ -74,6 +80,18 @@ class World:
     async def fetchrow(self, query, *args):
         if "FROM goals WHERE id" in query:
             return self.goals.get(args[0])
+        if "FROM milestones WHERE id" in query:
+            if self.fail_milestones:
+                raise RuntimeError("milestones lookup down")
+            ms = self.milestones.get(args[0])
+            return {"milestone_id": args[0], "goal_id": ms["goal_id"]} if ms else None
+        if "sequence_order" in query:
+            ms = self.milestones.get(args[0])
+            if not ms or ms["goal_id"] != args[1]:
+                return None
+            return {"goal_id": args[1], "milestone_id": args[0], "sequence_order": ms["seq"]}
+        if "SELECT job_id, status, instruction FROM pipeline_jobs" in query:
+            return self.dep_jobs.get(args[0])
         return None
 
     async def fetchval(self, query, *args):
@@ -93,6 +111,8 @@ class World:
     async def fetch(self, query, *args):
         if "SELECT DISTINCT ON (ms.id)" in query:
             return self.candidates
+        if "actual_changed_files" in query and "status = ANY($3::text[])" in query:
+            return self.active_jobs
         if self.fail_activity and ("pipeline_jobs" in query or "chat_messages" in query):
             raise RuntimeError("activity down")
         if "ANY($2::text[])" in query and "pipeline_jobs j" in query:
@@ -111,6 +131,9 @@ class World:
             return "UPDATE 1"
         if "INSERT INTO goal_task_links" in query:
             self.links.append(args)
+            return "INSERT 0 1"
+        if "INSERT INTO pipeline_jobs" in query:
+            self.inserts.append(args)
             return "INSERT 0 1"
         if "goal_autolink" in query:
             self.log_events.append(args)
@@ -149,13 +172,23 @@ def test_directive_submission_fills_goal_and_milestone(world):
     assert world.log_events and world.log_events[0][:2] == (JOB, "directive")
 
 
-def test_explicit_argument_beats_directive_and_session(world):
+def test_explicit_argument_beats_session(world):
+    world.add_goal(GOAL_A)
+    world.add_goal(GOAL_B)
+    world.candidates = [_cand(GOAL_B, MS_B)]
+    result = _autolink(goal_id=GOAL_A, instruction="x")
+    assert (result.goal_id, result.source) == (GOAL_A, "explicit")
+    assert world.job_updates[0][1] == GOAL_A
+
+
+def test_argument_conflicting_with_directive_goal_is_not_linked_and_not_guessed(world):
+    """인자와 지시서가 다른 목표를 가리키면 어느 쪽에도, 세션 후보에도 붙이지 않는다."""
     world.add_goal(GOAL_A)
     world.add_goal(GOAL_B)
     world.candidates = [_cand(GOAL_B, MS_B)]
     result = _autolink(goal_id=GOAL_A, instruction=f"GOAL_ID: {GOAL_B}\n")
-    assert (result.goal_id, result.source) == (GOAL_A, "explicit")
-    assert world.job_updates[0][1] == GOAL_A
+    assert (result.source, result.reason) == ("none", gal.REASON_EXPLICIT_REJECTED)
+    assert world.job_updates == [] and world.links == []
 
 
 def test_directive_beats_session_single(world):
@@ -293,7 +326,7 @@ def test_session_candidate_sql_encodes_the_lead_vs_assignee_rule():
 
 
 # ── 제출 진입점: submit_job / submit_batch 가 실제로 연결한다 ────────────────
-def _runner_env(monkeypatch, world):
+def _runner_env(monkeypatch, world, real_order=False):
     import app.api.pipeline_runner as pr
 
     async def noop(*_a, **_k):
@@ -311,14 +344,17 @@ def _runner_env(monkeypatch, world):
     async def order(*_a, **_k):
         return (0, 0, 0)
 
-    for name in ("_lock_instruction_hash", "_cleanup_dead_local_runner_processes",
-                 "_find_active_duplicate", "_find_active_file_conflict"):
+    stubbed = ["_lock_instruction_hash", "_cleanup_dead_local_runner_processes", "_find_active_duplicate"]
+    if not real_order:
+        stubbed.append("_find_active_file_conflict")
+    for name in stubbed:
         monkeypatch.setattr(pr, name, noop)
     monkeypatch.setattr(pr, "_enforce_owner_resolved_gate", lambda *_a, **_k: None)
     monkeypatch.setattr(pr, "check_project_lock", not_locked)
     monkeypatch.setattr(pr, "_get_model_for_size", model)
     monkeypatch.setattr(pr, "_relink_superseded_orphans", no_orphans)
-    monkeypatch.setattr(pr, "_resolve_milestone_order", order)
+    if not real_order:
+        monkeypatch.setattr(pr, "_resolve_milestone_order", order)
 
     async def no_gate(*_a, **_k):
         return None
@@ -343,6 +379,275 @@ def test_submit_job_with_directive_persists_goal_and_milestone(world, monkeypatc
     resp = asyncio.run(pr.submit_job(req, context=_CTX))
     assert resp.status == "queued" and GOAL_A in resp.message
     assert any(u[1] == GOAL_A and u[2] == MS_A for u in world.job_updates)
+
+
+# ── 제출 게이트 ↔ 연결 ↔ 순서 검사: 검증한 (goal_id, milestone_id) 가 끝까지 같다 ──────────
+MS_A2 = "55555555-5555-4555-8555-555555555553"  # 목표 A 의 후순위(sequence 2) 마일스톤
+MODES = ("single", "batch")
+BIND_API = "explicit_api"
+BIND_DIRECTIVE = BIND_SOURCE_EXPLICIT_DIRECTIVE
+
+
+def _seed_goals(world):
+    world.add_goal(GOAL_A)
+    world.add_goal(GOAL_B)
+    world.add_milestone(MS_A, GOAL_A, seq=1)
+    world.add_milestone(MS_A2, GOAL_A, seq=2)
+    world.add_milestone(MS_B, GOAL_B, seq=1)
+
+
+def _shapes(goal, ms):
+    """같은 (goal, ms) 를 인자/지시서/보충으로 다르게 표기한 제출 입력. 값: (지시서, goal 인자, ms 인자, 기대 bind_source)."""
+    return {
+        "api_milestone+directive_goal": (f"작업\nGOAL_ID: {goal}\n", "", ms, BIND_DIRECTIVE),
+        "milestone_only_directive": (f"작업\nMILESTONE_ID: {ms}\n", "", "", BIND_DIRECTIVE),
+        "milestone_only_api": ("작업", "", ms, BIND_API),
+        "api_pair": ("작업", goal, ms, BIND_API),
+        "api_goal+directive_milestone": (f"작업\nMILESTONE_ID: {ms}\n", goal, "", BIND_API),
+        "directive_pair": (f"작업\nGOAL_ID: {goal}\nMILESTONE_ID: {ms}\n", "", "", BIND_DIRECTIVE),
+    }
+
+
+def _shape_params(goal, ms):
+    return [pytest.param(*v, id=k) for k, v in _shapes(goal, ms).items()]
+
+
+def _submit(pr, mode, instruction, *, goal_id="", milestone_id="", **extra):
+    """같은 입력을 단건(submit_job) 또는 배치(submit_batch, 1건) 로 낸다."""
+    if mode == "single":
+        req = pr.JobSubmitRequest(
+            project="AADS", session_id=SESSION, instruction=instruction,
+            goal_id=goal_id, milestone_id=milestone_id, **extra,
+        )
+        return asyncio.run(pr.submit_job(req, context=_CTX))
+    item = pr.BatchJobItem(key="A", instruction=instruction, goal_id=goal_id, milestone_id=milestone_id)
+    req = pr.BatchSubmitRequest(project="AADS", session_id=SESSION, jobs=[item])
+    return asyncio.run(pr.submit_batch(req, context=_CTX))
+
+
+def _denied(pr, mode, instruction, status, code, **kwargs):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        _submit(pr, mode, instruction, **kwargs)
+    assert exc.value.status_code == status
+    detail = exc.value.detail
+    assert code in (detail["code"] if isinstance(detail, dict) else detail)
+    return exc.value
+
+
+def _assert_nothing_written(world):
+    assert world.inserts == [] and world.job_updates == [] and world.links == []
+
+
+def _assert_linked(world, goal, milestone, bind_source=None):
+    """pipeline_jobs(goal_id, milestone_id) 와 goal_task_links 양쪽에 같은 검증 쌍이 저장됐다."""
+    assert world.job_updates and all(u[1:3] == (goal, milestone) for u in world.job_updates)
+    assert world.links and world.links[-1][1:3] == (goal, milestone)
+    if bind_source:
+        assert world.links[-1][4] == bind_source
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("instruction,goal_id,milestone_id,bind_source", _shape_params(GOAL_A, MS_A))
+def test_verified_pair_is_stored_in_job_and_link_for_every_input_shape(
+    world, monkeypatch, mode, instruction, goal_id, milestone_id, bind_source,
+):
+    """리뷰 지적 1·2: 인자/지시서 혼합 입력이어도 milestone_id 가 NULL 로 떨어지지 않는다."""
+    pr = _runner_env(monkeypatch, world)
+    _seed_goals(world)
+    _submit(pr, mode, instruction, goal_id=goal_id, milestone_id=milestone_id)
+    _assert_linked(world, GOAL_A, MS_A, bind_source)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("instruction,goal_id,milestone_id", [
+    pytest.param(f"작업\nGOAL_ID: {GOAL_B}\nMILESTONE_ID: {MS_A}\n", GOAL_A, "", id="goal_conflict_ms_of_api_goal"),
+    pytest.param(f"작업\nGOAL_ID: {GOAL_B}\n", GOAL_A, MS_A, id="goal_conflict"),
+    pytest.param(f"작업\nMILESTONE_ID: {MS_A2}\n", GOAL_A, MS_A, id="milestone_conflict"),
+])
+def test_conflicting_argument_and_directive_ids_are_rejected_before_any_write(
+    world, monkeypatch, mode, instruction, goal_id, milestone_id,
+):
+    pr = _runner_env(monkeypatch, world)
+    _seed_goals(world)
+    err = _denied(pr, mode, instruction, 422, "goal.id_conflict_on_submit",
+                  goal_id=goal_id, milestone_id=milestone_id)
+    assert "서로 다릅니다" in err.detail["message"]
+    _assert_nothing_written(world)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_goal_without_milestone_is_rejected_before_any_job_row(world, monkeypatch, mode):
+    pr = _runner_env(monkeypatch, world)
+    _seed_goals(world)
+    err = _denied(pr, mode, f"작업\nGOAL_ID: {GOAL_A}\n", 422, "goal.milestone_id_missing_on_submit")
+    assert "MILESTONE_ID 가 없습니다" in err.detail["message"]
+    _assert_nothing_written(world)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_milestone_of_other_goal_is_rejected_before_any_job_row(world, monkeypatch, mode):
+    pr = _runner_env(monkeypatch, world)
+    _seed_goals(world)
+    _denied(pr, mode, f"작업\nGOAL_ID: {GOAL_A}\nMILESTONE_ID: {MS_B}\n", 422,
+            "goal.milestone_goal_mismatch_on_submit")
+    _assert_nothing_written(world)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_milestone_lookup_failure_aborts_before_any_write_then_resubmit_succeeds(world, monkeypatch, mode):
+    """명시 ID 의 마일스톤 조회 예외는 통과가 아니다 — 503 으로 중단하고, DB 복구 뒤 같은 요청이 성공한다."""
+    pr = _runner_env(monkeypatch, world)
+    _seed_goals(world)
+    wrong_pair = f"작업\nGOAL_ID: {GOAL_A}\nMILESTONE_ID: {MS_B}\n"
+    good_pair = f"작업\nGOAL_ID: {GOAL_A}\nMILESTONE_ID: {MS_A}\n"
+    world.fail_milestones = True
+    for instruction in (wrong_pair, good_pair):
+        err = _denied(pr, mode, instruction, 503, "goal.milestone_lookup_failed_on_submit")
+        assert err.headers and err.headers.get("Retry-After")
+        _assert_nothing_written(world)
+    world.fail_milestones = False
+    _denied(pr, mode, wrong_pair, 422, "goal.milestone_goal_mismatch_on_submit")
+    _assert_nothing_written(world)
+    _submit(pr, mode, good_pair)
+    _assert_linked(world, GOAL_A, MS_A)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_milestone_only_submission_reaches_mockup_gate_with_filled_goal(world, monkeypatch, mode):
+    pr = _runner_env(monkeypatch, world)
+    _seed_goals(world)
+    seen = []
+
+    async def record(*_a, **kwargs):
+        seen.append(kwargs.get("goal_id"))
+        return {"applicable": False, "allowed": True, "reasons": []}
+
+    monkeypatch.setattr(pr, "_run_mockup_gate", record)
+    _submit(pr, mode, "작업", milestone_id=MS_A)
+    assert seen == [GOAL_A]
+
+
+def _parent_job(ms):
+    return {"job_id": "runner-parent01", "status": "running",
+            "instruction": f"부모\nGOAL_ID: {GOAL_A}\nMILESTONE_ID: {ms}\n"}
+
+
+@pytest.mark.parametrize("instruction,goal_id,milestone_id,_src", _shape_params(GOAL_A, MS_A))
+def test_single_explicit_dependency_on_later_milestone_is_409_for_every_input_shape(
+    world, monkeypatch, instruction, goal_id, milestone_id, _src,
+):
+    pr = _runner_env(monkeypatch, world, real_order=True)
+    _seed_goals(world)
+    world.dep_jobs["runner-parent01"] = _parent_job(MS_A2)
+    err = _denied(pr, "single", instruction, 409, "dependency_inversion",
+                  goal_id=goal_id, milestone_id=milestone_id, depends_on="runner-parent01")
+    assert "sequence=2" in err.detail
+    _assert_nothing_written(world)
+
+
+@pytest.mark.parametrize("instruction,goal_id,milestone_id,bind_source", _shape_params(GOAL_A, MS_A2))
+def test_single_explicit_dependency_in_order_keeps_milestone(
+    world, monkeypatch, instruction, goal_id, milestone_id, bind_source,
+):
+    pr = _runner_env(monkeypatch, world, real_order=True)
+    _seed_goals(world)
+    world.dep_jobs["runner-parent01"] = _parent_job(MS_A)
+    _submit(pr, "single", instruction, goal_id=goal_id, milestone_id=milestone_id,
+            depends_on="runner-parent01")
+    _assert_linked(world, GOAL_A, MS_A2, bind_source)
+
+
+def _batch_with_parent(pr, parent_ms, child):
+    instruction, goal_id, milestone_id, _src = child
+    return pr.BatchSubmitRequest(project="AADS", session_id=SESSION, jobs=[
+        pr.BatchJobItem(key="P", instruction="부모", milestone_id=parent_ms),
+        pr.BatchJobItem(key="C", instruction=instruction, goal_id=goal_id,
+                        milestone_id=milestone_id, depends_on_key="P"),
+    ])
+
+
+@pytest.mark.parametrize("instruction,goal_id,milestone_id,_src", _shape_params(GOAL_A, MS_A))
+def test_batch_dependency_on_later_milestone_is_409_for_every_input_shape(
+    world, monkeypatch, instruction, goal_id, milestone_id, _src,
+):
+    from fastapi import HTTPException
+
+    pr = _runner_env(monkeypatch, world, real_order=True)
+    _seed_goals(world)
+    req = _batch_with_parent(pr, MS_A2, (instruction, goal_id, milestone_id, _src))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(pr.submit_batch(req, context=_CTX))
+    assert exc.value.status_code == 409 and "dependency_inversion" in exc.value.detail
+    assert world.links == [] and world.job_updates == []
+
+
+@pytest.mark.parametrize("instruction,goal_id,milestone_id,bind_source", _shape_params(GOAL_A, MS_A2))
+def test_batch_dependency_in_order_keeps_both_milestones(
+    world, monkeypatch, instruction, goal_id, milestone_id, bind_source,
+):
+    pr = _runner_env(monkeypatch, world, real_order=True)
+    _seed_goals(world)
+    asyncio.run(pr.submit_batch(
+        _batch_with_parent(pr, MS_A, (instruction, goal_id, milestone_id, bind_source)), context=_CTX,
+    ))
+    assert {link[2] for link in world.links} == {MS_A, MS_A2}
+    assert all(link[1] == GOAL_A for link in world.links)
+    assert all(u[1] == GOAL_A and u[2] in (MS_A, MS_A2) for u in world.job_updates)
+
+
+def _active_job(ms):
+    return {
+        "job_id": "runner-active01", "status": "running", "phase": "coding",
+        "actual_changed_files": None,
+        "instruction": f"기존\nGOAL_ID: {GOAL_A}\nMILESTONE_ID: {ms}\nTARGET_FILES: app/shared_x.py\n",
+    }
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("instruction,goal_id,milestone_id,_src", _shape_params(GOAL_A, MS_A))
+def test_auto_file_conflict_with_later_milestone_is_409_for_every_input_shape(
+    world, monkeypatch, mode, instruction, goal_id, milestone_id, _src,
+):
+    pr = _runner_env(monkeypatch, world, real_order=True)
+    _seed_goals(world)
+    world.active_jobs = [_active_job(MS_A2)]
+    _denied(pr, mode, instruction + "TARGET_FILES: app/shared_x.py\n", 409, "dependency_inversion",
+            goal_id=goal_id, milestone_id=milestone_id)
+    assert world.links == [] and world.job_updates == []
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("instruction,goal_id,milestone_id,bind_source", _shape_params(GOAL_A, MS_A2))
+def test_auto_file_conflict_in_order_serializes_and_keeps_milestone(
+    world, monkeypatch, mode, instruction, goal_id, milestone_id, bind_source,
+):
+    pr = _runner_env(monkeypatch, world, real_order=True)
+    _seed_goals(world)
+    world.active_jobs = [_active_job(MS_A)]
+    _submit(pr, mode, instruction + "TARGET_FILES: app/shared_x.py\n",
+            goal_id=goal_id, milestone_id=milestone_id)
+    assert any("runner-active01" in args for args in world.inserts)
+    _assert_linked(world, GOAL_A, MS_A2, bind_source)
+
+
+def test_submit_batch_rejects_whole_batch_when_one_item_lacks_milestone(world, monkeypatch):
+    pr = _runner_env(monkeypatch, world)
+    _seed_goals(world)
+    req = pr.BatchSubmitRequest(
+        project="AADS", session_id=SESSION,
+        jobs=[
+            pr.BatchJobItem(key="A", instruction=f"지시\nGOAL_ID: {GOAL_A}\nMILESTONE_ID: {MS_A}\n"),
+            pr.BatchJobItem(key="B", instruction=f"지시\nGOAL_ID: {GOAL_A}\n"),
+        ],
+    )
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(pr.submit_batch(req, context=_CTX))
+    assert exc.value.status_code == 422 and "[B]" in exc.value.detail["message"]
+    _assert_nothing_written(world)
 
 
 def test_submit_job_without_any_basis_stays_unlinked(world, monkeypatch):

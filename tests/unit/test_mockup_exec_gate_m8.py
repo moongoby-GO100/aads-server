@@ -333,6 +333,12 @@ def test_batch_with_the_real_gate_enforce_rejects_shadow_lets_it_through(monkeyp
 
     # The gate's second-chance recorder would take another connection; keep the acquire count about the batch.
     monkeypatch.setattr(pipeline_runner, "_record_gate_decision_fresh", no_record)
+
+    async def no_owned_milestones(*a, **k):
+        return []
+
+    # The submit goal gate's owner-warning lookup also takes a connection per item; keep the count about the mockup gate.
+    monkeypatch.setattr("app.services.goal_submit_gate._owned_open_milestones", no_owned_milestones)
     req = batch_request(("A", BACKEND_TASK), ("B", TSX_ONLY_TASK))
     monkeypatch.setenv("MOCKUP_GATE_MODE", "enforce")
     monkeypatch.setattr("app.core.db_pool.get_pool", lambda: GatePoolDown())
