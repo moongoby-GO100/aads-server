@@ -10023,10 +10023,197 @@ _ckpt_bounded() {
     return "$_rc"
 }
 
+# 저장할 patch 원문 바이트 전체를 검사한다. 바이너리 patch(literal/delta/Binary files)는 해독하지 않고 거부한다 —
+# 해독은 끝까지 완전해질 수 없기 때문이다. 값 마스킹도 하지 않는다: 치환한 patch 는 git apply 가 적용할 수 없다.
+# stdout: OK | FOUND | BINARY (한 단어). 비정상 종료·다른 출력은 호출자가 검사 실패로 읽는다. findings 에는 패턴 이름과 경로만 쓴다.
+_ckpt_scan_py() {
+    cat <<'PY'
+import fnmatch, json, re, sys
+
+PATS = [(n, re.compile(p.encode())) for n, p in (
+    ("google_api_key", r"AIzaSy[a-zA-Z0-9_-]{20,}"),
+    ("anthropic_api_key", r"sk-ant-api[a-zA-Z0-9_-]{20,}"),
+    ("openai_project_key", r"sk-proj-[a-zA-Z0-9_-]{20,}"),
+    ("groq_key", r"gsk_[a-zA-Z0-9]{20,}"),
+    ("hex_sk_key", r"sk-[a-f0-9]{28,}"),
+    ("slack_bot_token", r"xoxb-[0-9]{10,}-[a-zA-Z0-9]+"),
+    ("github_token", r"ghp_[a-zA-Z0-9]{30,}"),
+    ("aws_access_key", r"AKIA[0-9A-Z]{16}"),
+    ("api_key_assignment", r"API_KEY=[A-Za-z0-9][A-Za-z0-9_-]{15,}"),
+    ("anthropic_oauth_token", r"sk-ant-oat[0-9]{2}-[A-Za-z0-9_-]{20,}"),
+    ("private_key_block", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+)]
+BINARY = [re.compile(x) for x in (
+    rb"(?m)^GIT binary patch\r?$",
+    rb"(?m)^(?:literal|delta) [0-9]+\r?$",
+    rb"(?m)^Binary files .* differ\r?$",
+)]
+NAME_GLOBS = (".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*credentials*.json", "*.p12")
+ESC = {ord("n"): b"\n", ord("t"): b"\t", ord("r"): b"\r", ord("a"): b"\a", ord("b"): b"\b",
+       ord("f"): b"\f", ord("v"): b"\v"}
+MAX_FINDINGS = 50
+
+
+def unquote(raw):
+    raw = raw.rstrip(b"\t\r")
+    if len(raw) >= 2 and raw[:1] == b'"' and raw[-1:] == b'"':
+        body, out, i = raw[1:-1], bytearray(), 0
+        while i < len(body):
+            c = body[i]
+            if c == 0x5C and i + 1 < len(body):
+                m = re.match(rb"[0-7]{1,3}", body[i + 1:])
+                if m:
+                    out.append(int(m.group(0), 8) & 255)
+                    i += 1 + len(m.group(0))
+                else:
+                    out += ESC.get(body[i + 1], body[i + 1:i + 2])
+                    i += 2
+                continue
+            out.append(c)
+            i += 1
+        raw = bytes(out)
+    return raw.decode("utf-8", "replace")
+
+
+def strip_ab(p):
+    return p[2:] if p[:2] in ("a/", "b/") else p
+
+
+def header_paths(sec):
+    head = sec.split(b"\n@@", 1)[0]
+    found = []
+    for line in head.split(b"\n"):
+        if line.startswith(b"diff --git "):
+            rest = line[11:].rstrip(b"\r")
+            if rest[:1] == b'"':
+                found += [strip_ab(unquote(t)) for t in re.findall(rb'"(?:[^"\\]|\\.)*"', rest)]
+            else:
+                n = (len(rest) - 5) // 2
+                if n > 0 and rest[:2] == b"a/" and rest[2 + n:5 + n] == b" b/" and rest[2:2 + n] == rest[5 + n:]:
+                    found.append(rest[2:2 + n].decode("utf-8", "replace"))
+                else:
+                    found += [strip_ab(x.decode("utf-8", "replace")) for x in rest.split(b" b/")]
+        else:
+            for pre in (b"--- ", b"+++ ", b"rename from ", b"rename to ", b"copy from ", b"copy to "):
+                if line.startswith(pre):
+                    p = unquote(line[len(pre):])
+                    if p != "/dev/null":
+                        found.append(strip_ab(p) if pre[:1] in b"-+" else p)
+    return [p for p in found if p]
+
+
+def is_secret_name(path):
+    base = path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if base == ".env.example":
+        return False
+    return any(fnmatch.fnmatchcase(base, g) for g in NAME_GLOBS)
+
+
+def safe_path(path):
+    pb = path.encode("utf-8", "replace")
+    for name, rx in PATS:
+        if rx.search(pb):
+            return "<redacted:%s>" % name
+    return path[:160]
+
+
+patch = open(sys.argv[1], "rb").read()
+files = json.load(open(sys.argv[2], encoding="utf-8"))
+if not isinstance(files, list) or not all(isinstance(x, str) for x in files):
+    sys.exit(3)
+
+starts = [m.start() for m in re.finditer(rb"(?m)^diff --git ", patch)]
+bounds = ([0] if not starts or starts[0] > 0 else []) + starts + [len(patch)]
+sections = []
+for a, b in zip(bounds, bounds[1:]):
+    sec = patch[a:b]
+    hp = header_paths(sec) if sec.startswith(b"diff --git ") else []
+    sections.append((hp, sec))
+
+hits = []
+
+
+def add(pattern, path):
+    item = (pattern, safe_path(path))
+    if item not in hits:
+        hits.append(item)
+
+
+for name, rx in PATS:
+    if not rx.search(patch):
+        continue
+    attributed = False
+    for hp, sec in sections:
+        if rx.search(sec):
+            add(name, hp[0] if hp else "(patch)")
+            attributed = True
+    if not attributed:
+        add(name, "(patch)")
+
+names = set(files)
+for hp, _ in sections:
+    names.update(hp)
+for p in sorted(names):
+    if is_secret_name(p):
+        add("secret_filename", p)
+
+verdict = "FOUND" if hits else "OK"
+if not hits:
+    for hp, sec in sections:
+        if any(rx.search(sec) for rx in BINARY):
+            add("binary_patch", hp[0] if hp else "(patch)")
+    if not hits and any(rx.search(patch) for rx in BINARY):
+        add("binary_patch", "(patch)")
+    if hits:
+        verdict = "BINARY"
+
+if hits:
+    out = {"findings": [{"pattern": n, "path": p} for n, p in hits[:MAX_FINDINGS]],
+           "count": len(hits), "truncated": len(hits) > MAX_FINDINGS}
+    with open(sys.argv[3], "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(out, separators=(",", ":")))
+sys.stdout.write(verdict + "\n")
+PY
+}
+
+# 반환: 0=검사 통과(시크릿·바이너리 없음) 10=시크릿 발견 11=바이너리 patch(검사 불가) 그 외=검사 실패(fail-closed).
+# 인자: <patch 파일> <files_json 파일> <findings 출력 파일> <임시 디렉터리>
+_ckpt_secret_scan() {
+    local patch="$1" files="$2" out="$3" tmpd="$4" verdict gl glrc=0
+    verdict=$(python3 -c "$(_ckpt_scan_py)" "$patch" "$files" "$out" 2>/dev/null) || return 3
+    case "$verdict" in
+        OK) ;;
+        FOUND) return 10 ;;
+        BINARY) return 11 ;;
+        *) return 3 ;;
+    esac
+    gl="${CHECKPOINT_GITLEAKS_BIN:-gitleaks}"
+    if command -v "$gl" >/dev/null 2>&1; then
+        ( cd "$tmpd" && timeout "$(_ckpt_pos_int "${CHECKPOINT_GITLEAKS_TIMEOUT:-}" 5)" "$gl" stdin --no-banner --redact \
+            --ignore-gitleaks-allow --exit-code 2 <"$patch" >/dev/null 2>&1 ) || glrc=$?
+        case "$glrc" in
+            0) ;;
+            2) printf '%s' '{"findings":[{"pattern":"gitleaks","path":"(patch)"}],"count":1,"truncated":false}' >"$out" || return 3
+               return 10 ;;
+            *) return 3 ;;
+        esac
+    fi
+    return 0
+}
+
+# findings 파일을 그대로(자르지 않고) 검증해 한 줄 JSON 으로 낸다. 형식이 틀리면 실패 — 호출자는 scan 필드를 생략한다.
+_ckpt_read_findings() {
+    [[ -s "$1" ]] || return 1
+    python3 -c 'import json,sys
+d=json.load(open(sys.argv[1],encoding="utf-8"))
+assert isinstance(d,dict) and isinstance(d.get("findings"),list)
+sys.stdout.write(json.dumps(d,separators=(",",":")))' "$1" 2>/dev/null
+}
+
 # 하위 셸 안에서 실행. stdout 한 줄: saved|<id>|<files>|<bytes>  또는  skipped|<reason>
 _ckpt_build_and_store() {
     local jid="$1" attempt="$2" tmpd="$3"
-    local wt="/tmp/aads-wt-${jid}" out base idx patch bytes sha files_json nfiles b64 meta ihash model id
+    local wt="/tmp/aads-wt-${jid}" out base idx patch bytes sha files files_json nfiles scan_rc b64 meta ihash model id
     out=$(db_exec "SELECT to_regclass('public.pipeline_job_checkpoints') IS NOT NULL;" 2>/dev/null | tr -d '[:space:]') \
         || { echo "skipped|db_error"; return 0; }
     _ckpt_is_true "$out" || { echo "skipped|table_missing"; return 0; }
@@ -10038,15 +10225,35 @@ _ckpt_build_and_store() {
     idx="$tmpd/index"; patch="$tmpd/patch"
     cp "$(git -C "$wt" rev-parse --path-format=absolute --git-path index)" "$idx" 2>/dev/null || : >"$idx"
     GIT_INDEX_FILE="$idx" git -C "$wt" add --all -- . >/dev/null 2>&1 || { echo "skipped|db_error"; return 0; }
-    { GIT_INDEX_FILE="$idx" git -C "$wt" diff --cached --binary --no-renames "$base" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null \
-        | head -c $(( CHECKPOINT_MAX_BYTES + 1 )) >"$patch"; } || true
+    # 실패를 삼키지 않는다: git 종료코드를 PIPESTATUS 로 읽고, 비정상이면 저장하지 않는다(head 가 먼저 닫은 SIGPIPE 141 은 too_large 일 때만 정상).
+    local -a rcs=()
+    GIT_INDEX_FILE="$idx" git -C "$wt" diff --cached --binary --no-renames "$base" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null \
+        | head -c $(( CHECKPOINT_MAX_BYTES + 1 )) >"$patch" && rcs=("${PIPESTATUS[@]}") || rcs=("${PIPESTATUS[@]}")
     bytes=$(wc -c <"$patch" | tr -d '[:space:]')
+    [[ "$bytes" =~ ^[0-9]+$ && "${rcs[1]:-1}" == 0 ]] || { echo "skipped|secret_scan_failed"; return 0; }
+    [[ "${rcs[0]:-1}" == 0 ]] || { [[ "${rcs[0]}" == 141 ]] && (( bytes > CHECKPOINT_MAX_BYTES )); } || { echo "skipped|secret_scan_failed"; return 0; }
     (( bytes > 0 )) || { echo "skipped|no_changes"; return 0; }
     (( bytes <= CHECKPOINT_MAX_BYTES )) || { echo "skipped|too_large"; return 0; }
+    files="$tmpd/files.json"
+    GIT_INDEX_FILE="$idx" git -C "$wt" diff --cached --name-only -z --no-renames "$base" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null \
+        | python3 -c 'import sys,json; print(json.dumps([p for p in sys.stdin.buffer.read().decode("utf-8","replace").split("\0") if p]))' >"$files" \
+        && rcs=("${PIPESTATUS[@]}") || rcs=("${PIPESTATUS[@]}")
+    [[ "${rcs[0]:-1}" == 0 && "${rcs[1]:-1}" == 0 && -s "$files" ]] || { echo "skipped|secret_scan_failed"; return 0; }
+    files_json=$(<"$files")
+    nfiles=$(python3 -c 'import sys,json; print(len(json.load(open(sys.argv[1],encoding="utf-8"))))' "$files" 2>/dev/null) \
+        && [[ "$nfiles" =~ ^[0-9]+$ ]] || { echo "skipped|secret_scan_failed"; return 0; }
+    scan_rc=0
+    _ckpt_secret_scan "$patch" "$files" "$tmpd/findings.json" "$tmpd" || scan_rc=$?
+    if (( scan_rc != 0 )); then
+        rm -f "$patch"
+        case "$scan_rc" in
+            10) echo "skipped|secret_detected" ;;
+            11) echo "skipped|secret_unscannable" ;;
+            *) echo "skipped|secret_scan_failed" ;;
+        esac
+        return 0
+    fi
     sha=$(sha256sum "$patch" | cut -d' ' -f1)
-    files_json=$(GIT_INDEX_FILE="$idx" git -C "$wt" diff --cached --name-only -z --no-renames "$base" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null \
-        | python3 -c 'import sys,json; print(json.dumps([p for p in sys.stdin.buffer.read().decode("utf-8","replace").split("\0") if p]))') || files_json='[]'
-    nfiles=$(python3 -c 'import sys,json; print(len(json.loads(sys.argv[1])))' "$files_json" 2>/dev/null) || nfiles=0
     meta=$(db_exec "SELECT COALESCE(instruction_hash,''), COALESCE(NULLIF(actual_model,''), NULLIF(model,''), '') FROM pipeline_jobs WHERE job_id=$(sql_escape "$jid");" 2>/dev/null) \
         || { echo "skipped|db_error"; return 0; }
     IFS=$'\x1e' read -r ihash model <<< "$meta"
@@ -10087,7 +10294,7 @@ _ckpt_record_event() {
 
 # 저장 시도. 항상 0. 성공하면 _CKPT_LAST_ID 에 id, 아니면 빈 문자열. 호출 전 attempt(재대기 횟수+1)를 넘긴다.
 _shutdown_save_checkpoint() {
-    local jid="$1" attempt="${2:-1}" total_ms job_secs remain_ms tmpd res rc=0 kind="" a="" b="" c=""
+    local jid="$1" attempt="${2:-1}" total_ms job_secs remain_ms tmpd res rc=0 kind="" a="" b="" c="" scan_json="" skip_meta
     local _CKPT_EVENT_REMAIN_MS _ckpt_job_start
     _ckpt_job_start=$(_ckpt_now_ms)
     _CKPT_LAST_ID=""
@@ -10105,6 +10312,10 @@ _shutdown_save_checkpoint() {
     # 저장 뒤 정리 단계에서 시간 초과가 나도 saved 줄이 이미 있으면 저장 결과를 유지한다.
     if (( rc == 124 )) && [[ "$(head -n1 "$tmpd/result" 2>/dev/null)" != saved\|* ]]; then res="skipped|timeout"; fi
     if [[ -z "$res" ]]; then res=$(head -n1 "$tmpd/result" 2>/dev/null) || res=""; fi
+    # findings 는 자르지 않고 통째로 읽는다(스캐너가 항목 수·경로 길이를 스스로 제한한다). 읽기 실패면 scan 필드만 생략한다.
+    if [[ "$res" == skipped\|secret_detected || "$res" == skipped\|secret_unscannable ]]; then
+        scan_json=$(_ckpt_read_findings "$tmpd/findings.json") || scan_json=""
+    fi
     rm -rf "$tmpd"
     _CKPT_EVENT_REMAIN_MS=$(( job_secs - $(_ckpt_now_ms) + _ckpt_job_start ))
     IFS='|' read -r kind a b c <<< "$res"
@@ -10113,9 +10324,11 @@ _shutdown_save_checkpoint() {
         log "  checkpoint 저장 job=$jid id=$a files=$b bytes=$c"
         _ckpt_record_event "$jid" "checkpoint_saved" "{\"checkpoint_id\":\"$a\",\"files\":${b:-0},\"bytes\":${c:-0}}"
     else
-        [[ "$kind" == "skipped" && "$a" =~ ^(no_changes|too_large|timeout|table_missing|db_error)$ ]] || a="db_error"
+        [[ "$kind" == "skipped" && "$a" =~ ^(no_changes|too_large|timeout|table_missing|db_error|secret_detected|secret_unscannable|secret_scan_failed)$ ]] || a="db_error"
         log "  checkpoint 건너뜀 job=$jid reason=$a"
-        _ckpt_record_event "$jid" "checkpoint_skipped" "{\"reason\":\"$a\"}"
+        skip_meta="{\"reason\":\"$a\"}"
+        [[ -z "$scan_json" ]] || skip_meta="{\"reason\":\"$a\",\"scan\":${scan_json}}"
+        _ckpt_record_event "$jid" "checkpoint_skipped" "$skip_meta"
     fi
     return 0
 }

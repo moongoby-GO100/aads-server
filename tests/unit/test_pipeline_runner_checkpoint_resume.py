@@ -126,13 +126,13 @@ class World:
         self.new_bin = bytes(reversed(range(256))) * 3
         (wt_a / "new.bin").write_bytes(self.new_bin)
         (wt_a / "bin.dat").write_bytes(bytes(range(255, -1, -1)))
-        ha = tmp_path / "hA"
-        ha.mkdir()
-        r = _bash(ha, f"_ckpt_build_and_store {self.jid} 1 $(mktemp -d)")
-        assert r.returncode == 0 and r.stdout.startswith("saved|"), r.stdout + r.stderr
-        sql = _read(ha / "insert.sql")
-        m = re.search(r"decode\('([A-Za-z0-9+/=]+)','base64'\)", sql)
-        self.patch = base64.b64decode(m.group(1))
+        # 저장 함수는 바이너리 patch 를 거부한다(secret_unscannable). 이 테스트는 "이어받기(적용)" 쪽이 대상이므로
+        # 저장기가 만들던 것과 같은 patch(임시 index + add -A + diff --cached --binary --no-renames)를 git 으로 직접 만든다.
+        idx = tmp_path / "ckpt.index"
+        env = {**os.environ, "GIT_INDEX_FILE": str(idx)}
+        subprocess.run(["git", "-C", str(wt_a), "add", "--all", "--", "."], check=True, capture_output=True, env=env)
+        self.patch = subprocess.run(["git", "-C", str(wt_a), "diff", "--cached", "--binary", "--no-renames", self.base],
+                                    check=True, capture_output=True, env=env).stdout
         self.sha = hashlib.sha256(self.patch).hexdigest()
         self.files = ["a.txt", "bin.dat", "new.bin", "new.txt"]
         shutil.rmtree(wt_a, ignore_errors=True)
