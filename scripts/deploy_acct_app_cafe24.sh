@@ -101,6 +101,8 @@ ACCT_MIGRATION_ALLOWLIST=(
     20261003_obys_clobe_collection.sql
     20261008_obys_clobe_mcp_store.sql
     20261014_obys_journal_source_clobe.sql
+    20261105_obys_attendance_self_entry.sql
+    20261105_obys_app_install_status.sql
 )
 # 인증 DB(AUTH_PG_DB)에만 적용하는 마이그레이션. 업무 DB 목록과 섞지 않는다 — 대상 DB 가 다르기 때문이다.
 ACCT_AUTH_MIGRATION_ALLOWLIST=(
@@ -324,13 +326,14 @@ migration_db() { # migration_db <name>: 마이그레이션이 적용되는 DB �
     printf '%s' "$PG_DB"
 }
 
-migration_scan() { # fail-closed: transaction wrapper required, no DROP/TRUNCATE/DELETE (comments stripped; DROP CONSTRAINT is data-neutral and allowed)
+migration_scan() { # fail-closed: transaction wrapper required, no DROP/TRUNCATE/DELETE (comments stripped; DROP CONSTRAINT and ALTER COLUMN .. DROP NOT NULL are data-neutral and allowed)
     python3 - "$1" <<'PY'
 import re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
 text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
 text = re.sub(r"--[^\n]*", " ", text)
 text = re.sub(r"\bDROP\s+CONSTRAINT\b", " ", text, flags=re.I)
+text = re.sub(r"\bALTER\s+COLUMN\s+\w+\s+DROP\s+NOT\s+NULL\b", " ", text, flags=re.I)
 bad = []
 if re.search(r"\bDROP\b", text, re.I):
     bad.append("DROP")
@@ -1018,6 +1021,14 @@ migration_probe_sql() { # prints SQL returning t when the migration is already a
         20261030_obys_work_schedules.sql)
             # 근무 일정 테이블 + 활성 일정 유일 인덱스 + (역할이 있으면) 런타임 역할의 읽기·쓰기 권한.
             echo "/*probe*/ SELECT to_regclass('public.yeoljeong_work_schedules') IS NOT NULL AND to_regclass('public.idx_obys_work_schedules_active') IS NOT NULL AND (NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='acct_business_runtime_r5') OR has_table_privilege('acct_business_runtime_r5','public.yeoljeong_work_schedules','SELECT,INSERT,UPDATE'));"
+            ;;
+        20261105_obys_attendance_self_entry.sql)
+            # 정정 신청 kind 컬럼 + 두 CHECK 제약 + record_id NULL 허용 + 대기 중 신규 신청 유일 인덱스.
+            echo "/*probe*/ SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='obys_attendance_corrections' AND column_name='kind') AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='obys_attendance_corrections' AND column_name='record_id' AND is_nullable='YES') AND (SELECT count(*) FROM pg_constraint WHERE conname IN ('obys_attendance_corrections_kind_check','obys_attendance_corrections_record_kind_check')) = 2 AND to_regclass('public.idx_obys_correction_new_entry_pending') IS NOT NULL;"
+            ;;
+        20261105_obys_app_install_status.sql)
+            # 앱 설치 현황 테이블 + 테넌트 인덱스 + (역할이 있으면) 런타임 역할 읽기·쓰기 권한.
+            echo "/*probe*/ SELECT to_regclass('public.obys_app_install_status') IS NOT NULL AND to_regclass('public.idx_obys_app_install_tenant') IS NOT NULL AND (NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='acct_business_runtime_r5') OR has_table_privilege('acct_business_runtime_r5','public.obys_app_install_status','SELECT,INSERT,UPDATE'));"
             ;;
         *) return 1 ;;
     esac

@@ -29,6 +29,8 @@ MIG_JOURNAL = "20261014_obys_journal_source_clobe.sql"
 MIG_AUTH = "20261014_obys_auth_password_recovery.sql"
 MIG_CORRECTIONS = "20261102_obys_attendance_corrections.sql"
 MIG_SCHEDULES = "20261030_obys_work_schedules.sql"
+MIG_SELF_ENTRY = "20261105_obys_attendance_self_entry.sql"
+MIG_APP_INSTALL = "20261105_obys_app_install_status.sql"
 
 HARNESS = r'''#!/bin/bash
 set -euo pipefail
@@ -155,10 +157,10 @@ fake_cmd() {
       sql="$(cat)"
       if [[ $sql == */\*identity\*/* ]]; then echo t
       elif [[ $sql == */\*probe\*/* ]]; then
-        if [[ $sql == *obys_attendance_corrections* ]]; then key=corrections; elif [[ $sql == *yeoljeong_work_schedules* ]]; then key=schedules; elif [[ $sql == *yeoljeong_journal_vouchers_source_type_check* ]]; then key=journal; elif [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *idx_yeoljeong_attendance_pwa_open* ]]; then key=gps; elif [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *idx_obys_correction_new_entry_pending* ]]; then key=selfentry; elif [[ $sql == *obys_app_install_status* ]]; then key=appinstall; elif [[ $sql == *obys_attendance_corrections* ]]; then key=corrections; elif [[ $sql == *yeoljeong_work_schedules* ]]; then key=schedules; elif [[ $sql == *yeoljeong_journal_vouchers_source_type_check* ]]; then key=journal; elif [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *idx_yeoljeong_attendance_pwa_open* ]]; then key=gps; elif [[ $sql == *clobe_mcp_connection* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe_company_link* ]]; then key=clobe; else key=hrdoc; fi
         if [[ -f "$D/applied.$key" ]]; then echo t; else echo f; fi
       else
-        if [[ $sql == *corrections_t* ]]; then key=corrections; elif [[ $sql == *schedules_t* ]]; then key=schedules; elif [[ $sql == *journal_t* ]]; then key=journal; elif [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *attendance_t* ]]; then key=gps; elif [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
+        if [[ $sql == *selfentry_t* ]]; then key=selfentry; elif [[ $sql == *appinstall_t* ]]; then key=appinstall; elif [[ $sql == *corrections_t* ]]; then key=corrections; elif [[ $sql == *schedules_t* ]]; then key=schedules; elif [[ $sql == *journal_t* ]]; then key=journal; elif [[ $sql == *obys_password_reset_requests* ]]; then key=auth; elif [[ $sql == *attendance_t* ]]; then key=gps; elif [[ $sql == *clobe_mcp_t* ]]; then key=clobe_store; elif [[ $sql == *obys_clobe* ]]; then key=clobe; else key=hrdoc; fi
         echo "MIGAPPLY $key" >> "$D/ssh.log"
         if [[ ${FAKE_MIG_FAIL:-} == "$key" ]]; then return 1; fi
         touch "$D/applied.$key"
@@ -266,6 +268,8 @@ class Box:
             f"migrations/{MIG_AUTH}": MIG_BODY.format(t="obys_password_reset_requests"),
             f"migrations/{MIG_CORRECTIONS}": MIG_BODY.format(t="corrections_t"),
             f"migrations/{MIG_SCHEDULES}": MIG_BODY.format(t="schedules_t"),
+            f"migrations/{MIG_SELF_ENTRY}": MIG_BODY.format(t="selfentry_t"),
+            f"migrations/{MIG_APP_INSTALL}": MIG_BODY.format(t="appinstall_t"),
             "migrations/20260901_unrelated_aads.sql": "DROP TABLE aads_thing;\n",
             "deploy/obys/requirements.obys.lock": "fastapi==0.115\n",
         }.items():
@@ -357,7 +361,7 @@ def test_happy_path_builds_once_migrates_with_backup_first_and_switches_port(box
     assert res["new"]["image_reused"] is False
     assert res["backups"]["pg_dump"] == "/root/acct-release-backups/obys_pre_x.dump,/root/acct-release-backups/obys_auth_pre_x.dump"
     assert res["backups"]["apache_vhost"].startswith("/root/fb-cutover-backups/")
-    assert res["migrations"]["applied"] == [MIG_CORRECTIONS, MIG_SCHEDULES, MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
+    assert res["migrations"]["applied"] == [MIG_CORRECTIONS, MIG_SCHEDULES, MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_SELF_ENTRY, MIG_APP_INSTALL, MIG_AUTH]
     assert res["cutover_kst"].endswith("KST")
     assert res["rollback_command"].endswith("rollback acct-app-candidate-r8 77")
     assert "/root/acct-release-backups/obys_pre_x.dump" in proc.stdout and "/root/acct-release-backups/obys_auth_pre_x.dump" in proc.stdout
@@ -946,11 +950,13 @@ def test_already_applied_migrations_are_skipped_without_backup(box):
     (box.fake / "applied.clobe").touch()
     (box.fake / "applied.clobe_store").touch()
     (box.fake / "applied.journal").touch()
+    (box.fake / "applied.selfentry").touch()
+    (box.fake / "applied.appinstall").touch()
     (box.fake / "applied.auth").touch()
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     res = box.result(proc)
-    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_CORRECTIONS, MIG_SCHEDULES, MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
+    assert res["migrations"]["applied"] == [] and res["migrations"]["already_applied"] == [MIG_CORRECTIONS, MIG_SCHEDULES, MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_SELF_ENTRY, MIG_APP_INSTALL, MIG_AUTH]
     assert "OP pg_backup" not in box.log() and "MIGAPPLY hrdoc" not in box.log()
     assert res["backups"]["pg_dump"] == ""
 
@@ -964,13 +970,13 @@ def test_only_the_pending_migration_is_applied(box):
 
 def test_gps_migration_is_in_the_allowlist_and_applied_alone_when_it_is_the_only_pending_one(box):
     assert box.run("--call", "migration_allowed", MIG_GPS).returncode == 0
-    for key in ("corrections", "schedules", "hrdoc", "clobe", "clobe_store", "journal", "auth"):
+    for key in ("corrections", "schedules", "hrdoc", "clobe", "clobe_store", "journal", "selfentry", "appinstall", "auth"):
         (box.fake / f"applied.{key}").touch()
     proc = box.run()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     res = box.result(proc)
     assert res["migrations"]["applied"] == [MIG_GPS]
-    assert res["migrations"]["already_applied"] == [MIG_CORRECTIONS, MIG_SCHEDULES, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_AUTH]
+    assert res["migrations"]["already_applied"] == [MIG_CORRECTIONS, MIG_SCHEDULES, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_SELF_ENTRY, MIG_APP_INSTALL, MIG_AUTH]
     log = box.log()
     assert log.index("OP pg_backup") < log.index("MIGAPPLY gps") < log.index("OP start_candidate")
 
@@ -2020,3 +2026,41 @@ migration_probe_sql "$1"
     assert result.returncode == 0, result.stderr
     assert 'idx_obys_correction_pending' in result.stdout
     assert 'has_table_privilege' in result.stdout
+
+
+def _pure_migration_check(name):
+    script = SCRIPT.read_text()
+    functions = '\n'.join(re.search(r'^' + fn + r'\(\).*?^}', script, re.M | re.S).group(0)
+                          for fn in ('migration_allowed', 'migration_db', 'migration_scan', 'migration_probe_sql'))
+    arrays = '\n'.join(re.search(r'^' + arr + r'=\(.*?^\)', script, re.M | re.S).group(0)
+                       for arr in ('ACCT_MIGRATION_ALLOWLIST', 'ACCT_AUTH_MIGRATION_ALLOWLIST'))
+    command = arrays + '\n' + functions + '\nPG_DB=obys\nAUTH_PG_DB=obys_auth\n' + """
+set -e
+migration_allowed "$1"
+[[ $(migration_db "$1") == obys ]]
+migration_scan "$2"
+migration_probe_sql "$1"
+"""
+    return subprocess.run(['bash', '-c', command, 'test', name, str(ROOT / 'migrations' / name)],
+                          capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("name,needle", [
+    (MIG_SELF_ENTRY, "idx_obys_correction_new_entry_pending"),
+    (MIG_APP_INSTALL, "has_table_privilege('acct_business_runtime_r5','public.obys_app_install_status'"),
+])
+def test_20261105_obys_migrations_are_allowlisted_scanned_and_probed_on_business_db(name, needle):
+    result = _pure_migration_check(name)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.startswith("/*probe*/") and needle in result.stdout
+
+
+def test_scan_allows_drop_not_null_but_still_rejects_other_drops(tmp_path):
+    scan = re.search(r'^migration_scan\(\).*?^}', SCRIPT.read_text(), re.M | re.S).group(0)
+    ok = tmp_path / "ok.sql"
+    ok.write_text("BEGIN;\nALTER TABLE t ALTER COLUMN record_id DROP NOT NULL;\nCOMMIT;\n")
+    bad = tmp_path / "bad.sql"
+    bad.write_text("BEGIN;\nALTER TABLE t ALTER COLUMN record_id DROP NOT NULL;\nALTER TABLE t DROP COLUMN x;\nCOMMIT;\n")
+    assert subprocess.run(['bash', '-c', scan + '\nmigration_scan "$1"', 'x', str(ok)]).returncode == 0
+    res = subprocess.run(['bash', '-c', scan + '\nmigration_scan "$1"', 'x', str(bad)], capture_output=True, text=True)
+    assert res.returncode != 0 and "DROP" in res.stdout

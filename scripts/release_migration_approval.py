@@ -51,6 +51,8 @@ def literal(s):
 MIGRATION_TARGETS = {
     'migrations/20261030_obys_work_schedules.sql': 'acct_business',
     'migrations/20261102_obys_attendance_corrections.sql': 'acct_business',
+    'migrations/20261105_obys_attendance_self_entry.sql': 'acct_business',
+    'migrations/20261105_obys_app_install_status.sql': 'acct_business',
 }
 VALID_TARGETS = {'aads', 'acct_business'}
 
