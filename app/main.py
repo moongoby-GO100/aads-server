@@ -724,6 +724,16 @@ async def lifespan(app: FastAPI):
                 except Exception as e_tri:
                     logger.warning("goal_lead_triage_failed", error=str(e_tri)[:200])
 
+                # 재작업 소진 요청의 발송·무응답 판정·대표님 상신은 기록과 분리해 여기서 처리한다.
+                try:
+                    from app.services.goal_retry_exhaust_triage import sweep_exhaust_requests
+
+                    await asyncio.wait_for(sweep_exhaust_requests(), _GOAL_STAGE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning("goal_retry_exhaust_sweep_timeout", limit=_GOAL_STAGE_TIMEOUT)
+                except Exception as e_exh:
+                    logger.warning("goal_retry_exhaust_sweep_failed", error=str(e_exh)[:200])
+
                 # 담당이 신고한 완료를 주도에게 확인받는다.
                 #
                 # 이것이 없으면 마일스톤이 `review` 에서 영원히 멈춘다 —

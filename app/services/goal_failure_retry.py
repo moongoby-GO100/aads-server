@@ -14,6 +14,7 @@ from app.services.goal_binding import (
     normalize_job_state_for_project,
     release_gate_withheld,
 )
+from app.services.goal_retry_exhaust_triage import record_exhaustion_request
 from app.services.release_evidence import is_certified_deploy_row
 
 logger = logging.getLogger(__name__)
@@ -467,8 +468,11 @@ async def ensure_retry_candidate(
                         f"재작업 실제 실행 {used}/{_MAX_RETRY} 소진 — 사람이 확인해야 한다",
                         tenant_id,
                     )
+                triage = await record_exhaustion_request(
+                    conn, tenant_id=tenant_id, goal_id=goal_id, milestone_id=milestone_id,
+                    lineage=lineage, milestone_status=row.get("milestone_status"), executions=used)
                 return {"created": False, "why": "retry_exhausted",
-                        "executions": used, "lineage": lineage}
+                        "executions": used, "lineage": lineage, "triage_request": triage}
             failed = [item for item in matching if item.get("failed")]
             last_failed = max((datetime.fromisoformat(item["failed_at"])
                                for item in failed if item.get("failed_at")),
