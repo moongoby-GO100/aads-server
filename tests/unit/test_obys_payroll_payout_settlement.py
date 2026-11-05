@@ -361,29 +361,43 @@ def test_attendance_draft_path_is_covered_by_helper_and_defaults_only_for_locked
     assert svc._settlement_pay_total({"pay_items": pay}) == 80880
 
 
-def test_simple_total_entry_gets_items_instead_of_being_blocked():
+def _simple(payload):
+    return {key: value for key, value in payload.items() if key not in ("pay_items", "deduction_items")}
+
+
+def test_simple_total_entry_with_pending_settlement_is_rejected_without_saving(monkeypatch):
     under = _resolved()
-    simple = {key: value for key, value in _next_payload().items() if key not in ("pay_items", "deduction_items")}
-    saved = svc.save_payroll(simple, ADMIN)
-    assert [(i["code"], i["amount"]) for i in saved["pay_items"]] == [("base", 3000000), ("prior_month_unpaid_pay", 80880)]
-    assert saved["gross_pay"] == 3080880 and _left(under["id"]) == 0
-
-
-def test_simple_other_deduction_is_kept_beside_recover_item():
-    _resolved("next_month_recover", 2800000)
-    simple = {key: value for key, value in _next_payload(other_deduction=5000).items() if key != "deduction_items"}
-    saved = svc.save_payroll(simple, ADMIN)
-    assert [(i["code"], i["amount"]) for i in saved["deduction_items"]] == [("other", 5000), ("prior_month_overpaid_recover", 100000)]
-    assert saved["other_deduction"] == 105000 and saved["net_pay"] == 2895000
-
-
-def test_simple_tax_total_with_recover_is_rejected_with_way_out():
-    under = _resolved("next_month_recover", 2800000)
-    simple = {key: value for key, value in _next_payload(tax_withholding=30000).items() if key != "deduction_items"}
+    writes = []
+    real = svc._write_hr_record
+    monkeypatch.setattr(svc, "_write_hr_record", lambda *args, **kw: writes.append(args) or real(*args, **kw))
     with pytest.raises(HTTPException) as exc:
-        svc.save_payroll(simple, ADMIN)
-    assert exc.value.status_code == 400 and "이번 달 제외" in exc.value.detail
-    assert svc.save_payroll({**simple, "settlement_opt_out": [under["root_id"]]}, ADMIN)["net_pay"] == 2970000
+        svc.save_payroll(_simple(_next_payload()), ADMIN)
+    assert exc.value.status_code == 400 and "지급·공제 항목을 함께 보내야" in exc.value.detail
+    assert writes == [] and _left(under["id"]) == -80880
+    # 이번 달 제외를 고르면 서버가 줄을 붙이지 않으므로 합계만으로도 저장된다.
+    assert svc.save_payroll({**_simple(_next_payload()), "settlement_opt_out": [under["root_id"]]}, ADMIN)["gross_pay"] == 3000000
+
+
+def test_simple_other_deduction_with_recover_is_rejected():
+    _resolved("next_month_recover", 2800000)
+    with pytest.raises(HTTPException) as exc:
+        svc.save_payroll(_simple(_next_payload(other_deduction=5000)), ADMIN)
+    assert exc.value.status_code == 400 and "지급·공제 항목을 함께 보내야" in exc.value.detail
+
+
+def test_totals_only_correction_of_paid_statement_with_fact_lines_is_rejected_without_saving(monkeypatch):
+    under, items, done = _paid_next_with_settlement()
+    writes = []
+    monkeypatch.setattr(svc, "_write_hr_record", lambda *args, **kw: writes.append(args))
+    with pytest.raises(HTTPException) as exc:
+        svc.save_payroll({**_simple(_next_payload(items)), "id": done["id"], "gross_pay": done["gross_pay"], "taxable_pay": done["gross_pay"], "memo": "정정"}, ADMIN)
+    assert exc.value.status_code == 400 and "지급·공제 항목을 함께 보내야" in exc.value.detail
+    assert writes == []
+
+
+def test_totals_only_save_without_any_settlement_still_works():
+    saved = svc.save_payroll(_simple(_next_payload()), ADMIN)
+    assert saved["gross_pay"] == 3000000 and not _settlement_items(saved)
 
 
 def test_opt_out_keeps_only_existing_chains():

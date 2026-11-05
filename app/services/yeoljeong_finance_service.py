@@ -10096,6 +10096,9 @@ def _save_payroll_record(
     # 내용이 같은지는 사실 줄까지만 보고 판단한다. 남은 차액의 청구 줄만으로 지급된 명세에 정정 초안이 생기면 안 된다.
     baseline = copy.deepcopy(statement) if mode == "new_version" and not server_fields else None
     has_settlement = _attach_settlement_items(statement, rows, requested=requested_settlements, opt_out=settlement_opt_out)
+    if has_settlement and not (raw_payload.get("pay_items") or raw_payload.get("deduction_items")):
+        # 합계에는 이미 사실 금액이 들어 있을 수 있다. 항목 없이 서버가 줄을 다시 붙이면 이중 합산되므로 거부한다(저장 전).
+        raise HTTPException(status_code=400, detail="정산 항목이 있는 명세는 지급·공제 항목을 함께 보내야 합니다")
 
     if baseline is not None:
         _attach_settlement_items(baseline, rows, requested={}, opt_out=settlement_opt_out, claims=False)
