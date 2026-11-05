@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, field_validator, model_serializer, model_
 from app.auth import TenantRole, get_current_user, tenant_role_allows
 from app.core.project_config import PROJECT_MAP
 from app.services.document_refs import with_rdoc_block
+from app.services.design_agent.handoff import DesignHandoffRejected, apply_design_gate
 from app.services.goal_binding import parse_goal_binding
 from app.services.runner_approval_precheck import (
     AWAITING_APPROVAL,
@@ -2352,6 +2353,10 @@ async def submit_job(
                 )
                 if not session_tenant:
                     raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+                try:
+                    gated_instruction, _design_handoff = await apply_design_gate(conn, tenant_id, req.instruction)
+                except DesignHandoffRejected as exc:
+                    raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message}) from exc
                 await _lock_instruction_hash(conn, instruction_hash)
                 await _cleanup_dead_local_runner_processes(conn, req.project)
                 # AADS-239: 중복 재사용 — 기존 작업 활용 (죽이기 → 재사용)
@@ -2394,10 +2399,11 @@ async def submit_job(
                 if failed:
                     await conn.execute(
                         "UPDATE pipeline_jobs SET status = 'queued', phase = 'queued', "
-                        "error_detail = NULL, runner_pid = NULL, updated_at = NOW() "
+                        "error_detail = NULL, runner_pid = NULL, updated_at = NOW(), instruction = COALESCE($3, instruction) "
                         "WHERE job_id = $1 AND tenant_id = $2::uuid",
                         failed["job_id"],
                         tenant_id,
+                        with_rdoc_block(gated_instruction, failed["job_id"]) if _design_handoff else None,
                     )
                     await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", failed["job_id"])
                     return JobSubmitResponse(
@@ -2543,7 +2549,7 @@ async def submit_job(
                             )) END,
                             NOW(), NOW(), $14::uuid)
                     """,
-                    job_id, req.project, with_rdoc_block(req.instruction, job_id), instruction_hash,
+                    job_id, req.project, with_rdoc_block(gated_instruction, job_id), instruction_hash,
                     session_id, req.max_cycles, model, size,
                     worker_model or None, worker_model_reason or None,
                     req.parallel_group or None, effective_depends_on,
@@ -4585,6 +4591,13 @@ async def submit_batch(
                 )
                 if not session_tenant:
                     raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+                gated_instructions = {}
+                for item in req.jobs:
+                    try:
+                        gated_instructions[item.key], _design_handoff = await apply_design_gate(
+                            conn, tenant_id, item.instruction)
+                    except DesignHandoffRejected as exc:
+                        raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message}) from exc
                 batch_orders = {
                     item.key: await _resolve_milestone_order(
                         conn,
@@ -4795,7 +4808,7 @@ async def submit_batch(
                                 )) END,
                                 NOW(), NOW(), $14::uuid)
                         """,
-                        job_id, req.project, with_rdoc_block(item.instruction, job_id), instruction_hash,
+                        job_id, req.project, with_rdoc_block(gated_instructions[item.key], job_id), instruction_hash,
                         req.session_id, req.max_cycles, model, size,
                         worker_model or None, worker_model_reason or None, pg, depends_on,
                         auto_dependency_reason,
