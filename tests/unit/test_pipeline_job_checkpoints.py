@@ -15,6 +15,25 @@ MIG = ROOT / "migrations" / "20261104_pipeline_job_checkpoints.sql"
 SH = ROOT / "scripts" / "prune_pipeline_job_checkpoints.sh"
 
 
+def _remove_sql_comments(sql: str) -> str:
+    """Remove SQL line comments (-- to end of line)."""
+    lines = sql.splitlines()
+    result = [line.split("--")[0].rstrip() for line in lines]
+    assert "\n--" not in "\n".join(result), "함수 본문 안에 주석이 있으면 이 헬퍼가 틀림"
+    return "\n".join(result)
+
+
+def _extract_function_body(sql: str, func_name: str) -> str:
+    """Extract function body from SQL: CREATE OR REPLACE FUNCTION ... to COMMENT ON FUNCTION."""
+    start_marker = f"CREATE OR REPLACE FUNCTION {func_name}"
+    comment_marker = f"COMMENT ON FUNCTION {func_name}"
+    start_idx = sql.find(start_marker)
+    comment_idx = sql.find(comment_marker, start_idx)
+    assert start_idx >= 0, f"{func_name} 함수를 찾을 수 없음"
+    assert comment_idx >= 0, f"{func_name}의 COMMENT 블록을 찾을 수 없음"
+    return sql[start_idx:comment_idx]
+
+
 @pytest.fixture(scope="module")
 def sql():
     return MIG.read_text(encoding="utf-8")
@@ -37,14 +56,15 @@ def test_header_and_rollback(sql):
 
 
 def test_idempotent(sql):
-    assert not re.search(r"CREATE (TABLE|INDEX)(?! IF NOT EXISTS)", sql)
+    sql_no_comments = _remove_sql_comments(sql)
+    assert not re.search(r"CREATE (TABLE|INDEX)(?! IF NOT EXISTS)", sql_no_comments)
     assert "CREATE OR REPLACE FUNCTION aads_pipeline_job_checkpoints_prune" in sql
     assert "interval '7 days'" in sql
     assert "created_at < now() - retention" in sql
 
 
 def test_terminal_statuses(sql):
-    body = sql.split("purge_terminal()", 2)[-1]
+    body = _extract_function_body(sql, "aads_pipeline_job_checkpoints_purge_terminal")
     for st in ("done", "error", "rejected_done", "cancelled", "rejected"):
         assert f"'{st}'" in body
     assert "'running'" not in body and "'queued'" not in body
@@ -63,9 +83,13 @@ def test_terminal_statuses_match_cleanup_module(sql):
     src = (ROOT / "app" / "services" / "pipeline_cleanup.py").read_text(encoding="utf-8")
     m = re.search(r"_TERMINAL_STATUSES\s*=\s*\(([^)]*)\)", src)
     expected = set(re.findall(r'"(\w+)"', m.group(1)))
-    body = sql.split("purge_terminal()", 2)[-1]
-    got = set(re.findall(r"IN \(([^)]*)\)", body)[0].replace("'", "").replace(" ", "").split(","))
-    assert got == expected and "rejected" in got
+    body = _extract_function_body(sql, "aads_pipeline_job_checkpoints_purge_terminal")
+    status_in_clauses = re.findall(r"status IN \(([^)]*)\)", body)
+    assert status_in_clauses, "함수 본문에서 'status IN (...)' 를 찾을 수 없음 (0곳)"
+    for clause in status_in_clauses:
+        got = set(clause.replace("'", "").replace(" ", "").split(","))
+        assert got == expected, f"status IN (...) 가 _TERMINAL_STATUSES 와 다름: {got} != {expected}"
+    assert "rejected" in expected
 
 
 def _fake_docker(tmp_path, body):
