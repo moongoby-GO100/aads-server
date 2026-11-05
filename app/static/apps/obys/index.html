@@ -4015,7 +4015,7 @@
         </div>
         <div class="grid content-grid">
           <section class="panel">
-            <div class="panel-head"><h2 class="panel-title">신규 직원 서류 업로드</h2></div>
+            <div class="panel-head"><h2 class="panel-title" id="onboardingUploadTitle">신규 직원 서류 업로드</h2></div>
             <div class="panel-body grid">
               <form id="onboardingUploadForm" class="form-grid">
                 <label>직원명
@@ -8719,6 +8719,7 @@
 
     function renderOnboarding() {
       queueEmployeePortalSync();
+      prefillOnboardingForm();
       const docs = visibleOnboardingDocuments().slice().sort((a, b) => String(b.uploaded_at).localeCompare(String(a.uploaded_at)));
       if (!hasServerAuth()) {
         els.onboardingSummary.textContent = "로그인 필요";
@@ -13126,6 +13127,8 @@
       const joinForms = joinWorkplaceForms();
       document.querySelectorAll('select[name="branch"]').forEach(select => {
         if (joinForms.includes(select.form)) return;
+        // 직원 화면의 서류 업로드 지점은 승인된 근무 점포로만 고른다(prefillOnboardingForm).
+        if (select.form === els.onboardingUploadForm && currentEmployeeBranches().length) return;
         const current = select.value;
         const hasOfficeBusiness = select.form === els.contractForm && settings().businesses.some(item => effectiveWorkplaceMode(item) === "office");
         const options = hasOfficeBusiness ? [...branchNames, OFFICE_WORKPLACE] : branchNames;
@@ -15347,14 +15350,51 @@
       }
     }
 
+    // 직원 화면(실제 직원·관리자 미리보기)의 승인된 근무 점포. 미리보기는 고른 가입요청을 먼저 쓴다.
+    function currentEmployeeBranches() {
+      if (!isEmployeeExperience()) return [];
+      const clean = value => String(value || "").trim();
+      const email = currentEmployeeEmail();
+      const requestId = employeePreview ? clean(employeePreview.requestId) : clean(authPermissions().employee_request_id);
+      const approved = (typeof employeeJoinRequests === "undefined" ? [] : employeeJoinRequests)
+        .filter(item => String(item.status).toLowerCase() === "approved");
+      const byRequest = requestId ? approved.filter(item => clean(item.id) === requestId) : [];
+      const rows = byRequest.length ? byRequest
+        : approved.filter(item => email && clean(item.email || item.employee_email).toLowerCase() === email);
+      return [...new Set(rows.map(item => clean(item.branch)).filter(Boolean))];
+    }
+
+    // 직원 화면에서는 로그인 계정이 아니라 화면 대상 직원으로 채운다. 관리자 미리보기에서
+    // 관리자 이메일과 첫 지점(중화점)이 직원 칸에 들어가던 결함(2026-11-05, 김기훈 미아점).
     function prefillOnboardingForm() {
-      if (!els.onboardingUploadForm) return;
-      const user = authSession?.user || {};
-      if (!els.onboardingUploadForm.employeeEmail.value && user.email) {
-        els.onboardingUploadForm.employeeEmail.value = user.email;
+      const form = els.onboardingUploadForm;
+      if (!form) return;
+      const title = document.getElementById("onboardingUploadTitle");
+      if (isEmployeeExperience()) {
+        if (title) title.textContent = "내 입사서류 올리기";
+        const name = currentEmployeeName();
+        form.employeeEmail.value = currentEmployeeEmail();
+        form.employeeName.value = name === "직원" ? form.employeeName.value : name;
+        form.employeeEmail.readOnly = Boolean(form.employeeEmail.value);
+        form.employeeName.readOnly = Boolean(form.employeeName.value);
+        const branches = currentEmployeeBranches();
+        if (branches.length) {
+          const current = form.branch.value;
+          form.branch.innerHTML = branches.map(item => `<option>${escapeHtml(item)}</option>`).join("");
+          form.branch.value = branches.includes(current) ? current : branches[0];
+        }
+        form.dataset.employeePrefill = "1";
+        return;
       }
-      if (!els.onboardingUploadForm.employeeName.value && user.name) {
-        els.onboardingUploadForm.employeeName.value = user.name;
+      // 관리자 화면은 다른 직원 대신 올리는 입력이므로 관리자 자신의 이메일·이름을 채우지 않는다.
+      if (title) title.textContent = "신규 직원 서류 업로드";
+      if (form.dataset.employeePrefill) {
+        // 미리보기를 마치면 직원 값과 잠금을 풀고 관리자 입력 상태로 돌린다.
+        delete form.dataset.employeePrefill;
+        form.employeeEmail.readOnly = false;
+        form.employeeName.readOnly = false;
+        form.employeeEmail.value = "";
+        form.employeeName.value = "";
       }
     }
 
