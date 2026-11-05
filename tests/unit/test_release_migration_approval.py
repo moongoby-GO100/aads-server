@@ -387,3 +387,60 @@ def test_draft_without_header_keeps_fallback():
     out = a.describe_migration({'file': 'migrations/x.sql'}, 'SELECT 1;')
     assert 'SQL 본문을 직접 검토하세요' in out
     assert '만드는 객체' not in out
+
+
+def run_draft(approved, monkeypatch, capsys, *extra):
+    root, state, _, _ = approved
+    monkeypatch.setattr(a, 'lookup', lambda sha, root: state)
+    monkeypatch.setattr(a, 'register', lambda *args: pytest.fail('unexpected registration'))
+    monkeypatch.setattr(a.sys, 'argv', ['approval', 'draft', '--root', str(root), '--release-sha', SHA, *extra])
+    rc = a.main()
+    return rc, capsys.readouterr().out
+
+
+def normalize(out):
+    import re
+    return re.sub(r'"expires_at": "[^"]*"', '"expires_at": "X"', out)
+
+
+def test_notes_inserted_between_description_and_block_without_changing_manifest(approved, monkeypatch, capsys, tmp_path):
+    notes = tmp_path / 'notes.md'
+    notes.write_text('- 정리 함수는 매시 호출\n- 이전 API 와 공존\n', encoding='utf-8')
+    rc0, base = run_draft(approved, monkeypatch, capsys)
+    rc1, out = run_draft(approved, monkeypatch, capsys, '--notes-file', str(notes))
+    assert rc0 == rc1 == 0
+    head, fence = out.split('\n```aads-migration-approval\n', 1)
+    assert head.endswith('\n## 검토 메모\n\n- 정리 함수는 매시 호출\n- 이전 API 와 공존\n')
+    assert head.index('SELECT 1') < head.index('## 검토 메모') if 'SELECT 1' in head else True
+    block = lambda t: json.loads(t.split('```aads-migration-approval\n')[1].split('\n```')[0])
+    assert block(out)['manifest_sha256'] == block(base)['manifest_sha256']
+    assert set(block(out)) == set(block(base))
+    assert '검토 메모' not in fence
+
+
+def test_without_notes_output_is_unchanged(approved, monkeypatch, capsys, tmp_path):
+    notes = tmp_path / 'notes.md'
+    notes.write_text('메모\n', encoding='utf-8')
+    _, base = run_draft(approved, monkeypatch, capsys)
+    _, out = run_draft(approved, monkeypatch, capsys, '--notes-file', str(notes))
+    assert '검토 메모' not in base
+    removed = normalize(out).replace('\n## 검토 메모\n\n메모\n', '', 1)
+    assert removed == normalize(base)
+
+
+@pytest.mark.parametrize('kind', ['missing', 'empty', 'blank', 'large', 'fence', 'binary'])
+def test_invalid_notes_rejected(approved, monkeypatch, capsys, tmp_path, kind):
+    path = tmp_path / 'n.md'
+    if kind == 'empty':
+        path.write_bytes(b'')
+    elif kind == 'blank':
+        path.write_text(' \n\n')
+    elif kind == 'large':
+        path.write_bytes(b'a' * (64 * 1024 + 1))
+    elif kind == 'fence':
+        path.write_text('x\n```aads-migration-approval\n{}\n```\n')
+    elif kind == 'binary':
+        path.write_bytes(b'\xff\xfe\x00')
+    rc, out = run_draft(approved, monkeypatch, capsys, '--notes-file', str(path))
+    assert rc == 1
+    assert out.strip() == 'notes_file_invalid'

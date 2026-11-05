@@ -259,6 +259,21 @@ def register(content, sha, binding='release', manifest_sha256=None, source_task_
     return post(base + '/' + key + '/review', dict(revision_id=result['revision_id'], expected_generation=result['generation']))
 
 
+NOTES_MAX_BYTES = 64 * 1024
+
+
+def read_notes(path):
+    """검토 메모 파일을 읽는다. 승인 JSON/manifest 에는 영향을 주지 않는다."""
+    try:
+        raw = Path(path).read_bytes()
+        text = raw.decode('utf-8')
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Rejected('notes_file_invalid') from exc
+    if not text.strip() or len(raw) > NOTES_MAX_BYTES or '```aads-migration-approval' in text:
+        raise Rejected('notes_file_invalid')
+    return text
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['draft', 'verify', 'targets'])
@@ -268,8 +283,10 @@ def main():
     parser.add_argument('--register', action='store_true')
     parser.add_argument('--source-task-id', help='정본 등록을 요청한 실제 작업 ID')
     parser.add_argument('--binding', choices=['manifest', 'release'], default='manifest')
+    parser.add_argument('--notes-file', type=Path, help='draft 본문에 넣을 검토 메모(UTF-8 Markdown, 64KiB 이하)')
     args = parser.parse_args()
     try:
+        notes = read_notes(args.notes_file) if args.notes_file is not None else None
         if args.register and not (args.source_task_id and args.source_task_id.strip()):
             raise Rejected('source_task_id_required')
         if args.command == 'targets':
@@ -296,6 +313,8 @@ def main():
             content = '# 릴리스 마이그레이션 적용 승인\n\nAPI 롤백은 적용된 SQL을 되돌리지 않음\n\n'
             for item in items:
                 content += describe_migration(item, (args.root / item['file']).read_text())
+            if notes is not None:
+                content += '\n## 검토 메모\n\n' + notes.rstrip('\n') + '\n'
             content += '\n```aads-migration-approval\n' + json.dumps(data, ensure_ascii=False, indent=2) + '\n```\n'
             print(content)
             if args.register:
