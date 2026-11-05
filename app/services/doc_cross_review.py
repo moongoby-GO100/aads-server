@@ -258,6 +258,12 @@ async def execute_review(tenant, project, head, revision, *, follow_up=False):
                 if not needed and not rerun:
                     return current
             approved = await _approved_titles(conn, tenant, project, head)
+            prior_findings = []
+            try:
+                from app.services import doc_auto_fix
+                prior_findings = await doc_auto_fix.previous_findings(conn, tenant, project, head, revision)
+            except Exception:
+                logger.warning('doc_cross_review_prior_findings_failed', exc_info=True)
             sizes = ['AI_REVIEW_LIGHT', 'AI_REVIEW_STD', 'AI_REVIEW_HEAVY']
             lists = []
             for size in sizes[{'D1': 0, 'D2': 1, 'D3': 2}[tier]:]:
@@ -273,7 +279,8 @@ async def execute_review(tenant, project, head, revision, *, follow_up=False):
         except Exception:
             logger.warning('doc_cross_review_checks_failed', exc_info=True)
             checks = [{'id': 'checks_unavailable', 'ok': False, 'detail': '결정적 검사를 실행하지 못함'}]
-        system, prompt = rubric.build_review_request(kind, tier, revision.get('title'), revision.get('content'), checks, approved)
+        system, prompt = rubric.build_review_request(kind, tier, revision.get('title'), revision.get('content'), checks, approved,
+                                                     prior_findings=prior_findings)
         available = {m for ls in lists for m in ls if cli._is_cli_review_model(m)}
         excluded, completed = set(), set()
         while True:
@@ -345,15 +352,27 @@ async def execute_review(tenant, project, head, revision, *, follow_up=False):
 
 
 async def _auto_approve_after_review(tenant, project, head, revision, outcome, *, allow_follow_up):
-    """리뷰 기록 직후 자동승인 판정. 임대(lease)를 놓은 뒤에 불러야 후속 검토가 임대에 막히지 않는다. 실패는 로그만."""
-    if outcome.get('review_state') != 'passed':
-        return
+    """리뷰 기록 직후 자동승인 판정. 임대(lease)를 놓은 뒤에 불러야 후속 검토가 임대에 막히지 않는다. 실패는 로그만.
+
+    리뷰 기록이 끝난 모든 상태(반려·차단 포함)를 판정한다 — 승인은 evaluate 가 review_state=='passed' 일 때만 내므로
+    기존과 같고, 반려·차단 지적으로 보류된 문서는 hold 로 자동 보완(doc_auto_fix) 계획을 탄다.
+    """
+    passed = outcome.get('review_state') == 'passed'
     try:
         from app.services import doc_auto_approval
         async with get_pool().acquire() as conn:
             decision = await doc_auto_approval.maybe_auto_approve(conn, tenant, project, head['id'], revision['id'])
-            if allow_follow_up and decision.action == 'hold' and 'needs_second_company' in decision.reasons:
+            if passed and allow_follow_up and decision.action == 'hold' and 'needs_second_company' in decision.reasons:
                 await doc_auto_approval.request_follow_up_review(conn, tenant, project, head, revision)
+            from app.services import doc_auto_fix
+            if doc_auto_fix._plannable(decision):
+                try:
+                    # hold 는 보완, 마이그레이션 skip 은 상신, 자동승인 off(skip mode_off) 는 계획 로그만 남긴다.
+                    await doc_auto_fix.maybe_schedule_auto_fix(
+                        conn, tenant, project, head['id'], revision['id'],
+                        None if decision.reasons == ['mode_off'] else decision)
+                except Exception:
+                    logger.exception('doc_auto_fix_failed revision_id=%s', revision.get('id'))
     except Exception:
         logger.exception('doc_auto_approval_failed revision_id=%s', revision.get('id'))
 

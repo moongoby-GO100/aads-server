@@ -1627,6 +1627,25 @@ async def lifespan(app: FastAPI):
             misfire_grace_time=3600,
         )
 
+        # 정본 문서 자동 보완 주기 재시도 (30분) — 진행 중 작업 때문에 미뤄졌거나 판본 없이 끝나 멈춘 보완 순환을 다시 판정
+        async def _run_doc_auto_fix_retry():
+            try:
+                from app.core.db_pool import get_pool
+                from app.services.doc_auto_fix import retry_stalled_auto_fixes
+                await retry_stalled_auto_fixes(get_pool())
+            except Exception as e:
+                logger.warning(f"doc_auto_fix_retry failed: {e}")
+
+        scheduler.add_job(
+            _run_doc_auto_fix_retry,
+            "interval",
+            minutes=30,
+            id="doc_auto_fix_retry",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
         # AADS-191: Pipeline Jobs 자동 정리 (1시간 주기)
         async def _run_pipeline_cleanup():
             try:

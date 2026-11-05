@@ -44,6 +44,8 @@ class AutoConn:
     async def fetch(self, sql, *args):
         if sql.startswith("SELECT h.tenant_id::text AS tenant_id, h.project_key, h.document_key, h.kind, h.generation"):
             return self.approved
+        if "migration-apply-%" in sql and "contract" in sql:
+            return getattr(self, "migrations", [])
         if "AS head_id" in sql:
             return self.candidates
         raise AssertionError(sql)

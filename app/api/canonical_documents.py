@@ -619,6 +619,7 @@ async def auto_approval_digest(project_key: str, since_hours: int = Query(24, ge
     return {"project_key": project, "mode": data["mode"], "since_hours": since_hours,
             "auto_approved": strip(data["auto_approved"]), "held": strip(data["held"]),
             "would_approve": strip(data["would_approve"]),
+            "needs_ceo": data.get("needs_ceo", []), "auto_fixing": data.get("auto_fixing", []),
             "counts": {"auto_approved": len(data["auto_approved"]), "held": len(data["held"])}}
 
 

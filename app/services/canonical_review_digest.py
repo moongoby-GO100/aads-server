@@ -193,7 +193,8 @@ async def fetch_auto_approval_digest(conn: Any, tenant_id: str | None, project_k
 
     mode = auto.auto_approve_mode()
     result: dict = {"mode": mode, "since_hours": since_hours, "auto_approved": [], "held": [], "would_approve": [],
-                    "truncated": {"auto_approved": False, "held": False}}
+                    "truncated": {"auto_approved": False, "held": False},
+                    "needs_ceo": [], "auto_fixing": []}
     rows = list(await conn.fetch(_AUTO_SQL, tenant_id, project_key, auto.ACTOR, since_hours))
     if len(rows) > _MAX_AUTO_ROWS:
         rows, result["truncated"]["auto_approved"] = rows[:_MAX_AUTO_ROWS], True
@@ -223,11 +224,97 @@ async def fetch_auto_approval_digest(conn: Any, tenant_id: str | None, project_k
             item = _auto_item(row, risk=decision.risk, mode=mode, reasons=decision.reasons,
                               score=decision.score, review_rows=rows_json)
             (result["held"] if decision.action == "hold" else result["would_approve"]).append(item)
+            if decision.action == "hold":
+                await _classify_held(conn, result, item, cand["tenant_id"], decision, head, revision, ctx["rows"])
+    await _classify_migration_docs(conn, result, tenant_id, project_key, since_hours, mode)
     return result
 
 
+# 마이그레이션 승인 문서: evaluate 는 skip(migration_document)이라 held 에 없다. 자동 보완도 하지 않으므로
+# 최근 리뷰된 미승인 문서를 '대표님 판단 필요'로만 올린다(읽기 전용). 승인 자체는 마이그레이션 자동화 경로 소관이다.
+_MIGRATION_SQL = (
+    "SELECT h.id AS head_id, h.tenant_id::text AS tenant_id, h.project_key, r.id AS revision_id "
+    "FROM project_document_heads h "
+    "JOIN project_document_revisions r ON r.id=h.latest_revision_id AND r.head_id=h.id "
+    "WHERE ($1::uuid IS NULL OR h.tenant_id=$1::uuid) AND ($2::text IS NULL OR h.project_key=$2) "
+    "AND r.doc_tier IN ('D2','D3') AND h.approved_revision_id IS DISTINCT FROM h.latest_revision_id "
+    "AND (h.document_key LIKE 'migration-apply-%' OR (lower(COALESCE(h.kind,''))='contract' "
+    "AND (h.document_key ILIKE '%migration%' OR r.title ILIKE '%migration%' OR r.title LIKE '%마이그레이션%'))) "
+    "AND EXISTS(SELECT 1 FROM project_document_reviews rv WHERE rv.revision_id=r.id "
+    "AND rv.created_at > now() - make_interval(hours => $3::int)) "
+    "ORDER BY h.updated_at DESC LIMIT 51"
+)
+
+
+async def _classify_migration_docs(conn: Any, result: dict, tenant_id: Any, project_key: Any, since_hours: int,
+                                   mode: str) -> None:
+    from app.services import doc_auto_approval as auto
+    from app.services import doc_auto_fix as fix
+
+    if fix.auto_fix_mode() != "on":
+        return
+    try:
+        rows = list(await conn.fetch(_MIGRATION_SQL, tenant_id, project_key, since_hours))
+    except Exception:
+        logger.warning("canonical_review_digest_migration_failed", exc_info=True)
+        return
+    if len(rows) > 50:
+        rows = rows[:50]
+        result.setdefault("truncated", {})["needs_ceo"] = True
+    for cand in rows:
+        ctx = await auto.assess(conn, cand["tenant_id"], cand["project_key"], cand["head_id"], cand["revision_id"])
+        if not ctx or "migration_document" not in (ctx["decision"].reasons or []):
+            continue
+        decision, head, revision = ctx["decision"], ctx["head"], ctx["revision"]
+        row = {"tenant_id": cand["tenant_id"], "project_key": head["project_key"], "document_key": head["document_key"],
+               "title": revision["title"], "kind": head["kind"], "doc_tier": revision.get("doc_tier"),
+               "revision_id": revision["id"], "version": revision.get("version"), "generation": head["generation"]}
+        item = _auto_item(row, risk=decision.risk, mode=mode, reasons=decision.reasons,
+                          score=decision.score, review_rows=[dict(r) for r in ctx["rows"]])
+        await _classify_held(conn, result, item, cand["tenant_id"], decision, head, revision, ctx["rows"])
+
+
+async def _classify_held(conn: Any, result: dict, item: dict, tenant_id: Any, decision: Any, head: Any,
+                         revision: Any, rows: Any) -> None:
+    """보류 문서를 자동 보완 계획으로 나눈다(읽기 전용): 한도 초과 등은 needs_ceo, 보완 중·예정은 auto_fixing. 실패는 무시."""
+    from app.services import doc_auto_fix as fix
+
+    if fix.auto_fix_mode() != "on":
+        return
+    try:
+        history = await fix.load_history(conn, tenant_id, head["project_key"], head["document_key"])
+        state, mark = fix.round_state(history, revision)
+        if state in ("busy", "submitted"):
+            # 이미 보완 작업이 있다 — 결과가 나오기 전에 같은 지적으로 '반복 실패' 상신하지 않는다.
+            result["auto_fixing"].append({"project_key": item["project_key"], "document_key": item["document_key"],
+                                          "title": item["title"], "round": mark.get("round", 0),
+                                          "max_rounds": fix.DOC_AUTO_FIX_MAX_ROUNDS, "job_id": mark.get("job_id")})
+            return
+        if state == "failed":
+            plan = fix.FixPlan("escalate", ["fix_job_failed"], mark.get("round", 0), mark.get("fingerprint", ""))
+        else:
+            plan = fix.plan_auto_fix(decision, head, revision, rows, history)
+    except Exception:
+        logger.warning("canonical_review_digest_fix_plan_failed", exc_info=True)
+        return
+    if plan.action == "fix":
+        result["auto_fixing"].append({"project_key": item["project_key"], "document_key": item["document_key"],
+                                      "title": item["title"], "round": plan.round, "max_rounds": fix.DOC_AUTO_FIX_MAX_ROUNDS})
+    elif plan.action == "escalate":
+        remaining = [f for f in fix.extract_findings(rows) if f["severity"] in ("blocker", "major")][:3]
+        result["needs_ceo"].append({
+            "project_key": item["project_key"], "document_key": item["document_key"], "title": item["title"],
+            "risk": item["risk"], "round": plan.round, "max_rounds": fix.DOC_AUTO_FIX_MAX_ROUNDS,
+            "reason": " / ".join(fix.ESCALATE_REASON_KO.get(r, r) for r in plan.reasons),
+            "ceo_brief": item.get("ceo_brief"),
+            "remaining_issues": [{"severity": f["severity"], "location": f["location"][:40], "problem": f["problem"][:200]}
+                                 for f in remaining],
+            "decision_needed": fix.DECISION_REQUEST_KO})
+
+
 def auto_digest_is_empty(auto: dict | None) -> bool:
-    return not auto or not (auto.get("auto_approved") or auto.get("held") or auto.get("would_approve"))
+    return not auto or not (auto.get("auto_approved") or auto.get("held") or auto.get("would_approve")
+                            or auto.get("needs_ceo") or auto.get("auto_fixing"))
 
 
 def _short(title: str) -> str:
@@ -265,11 +352,38 @@ def _auto_section(auto: dict | None, auto_limit: int) -> list[str]:
     return lines
 
 
+_CEO_DETAIL_LIMIT = 5
+
+
+def _ceo_head(auto: dict | None) -> list[str]:
+    """요약 맨 앞: 대표님 판단 필요 건수와 상세, 자동 보완 중 건수. 3900자 안에서도 항상 맨 위에 남는다."""
+    needs = (auto or {}).get("needs_ceo") or []
+    fixing = (auto or {}).get("auto_fixing") or []
+    lines: list[str] = []
+    if needs:
+        lines.append(f"🚨 <b>대표님 판단 필요 {len(needs)}건</b>")
+        for item in needs[:_CEO_DETAIL_LIMIT]:
+            lines.append(f"  • {html.escape(_short(item['title']))} ({html.escape(item['project_key'])}/"
+                         f"{html.escape(item['document_key'])}) · 자동 보완 {item['round']}/{item['max_rounds']}회")
+            lines.append(f"    사유: {html.escape(item['reason'][:120])}")
+            if item.get("ceo_brief"):
+                lines.append(f"    요약: {html.escape(str(item['ceo_brief'])[:100])}")
+            for issue in item["remaining_issues"]:
+                lines.append(f"    - [{issue['severity']}] {html.escape(issue['problem'][:60])}")
+            lines.append(f"    결정하실 것: {html.escape(item['decision_needed'])}")
+        if len(needs) > _CEO_DETAIL_LIMIT:
+            lines.append(f"  … 외 {len(needs) - _CEO_DETAIL_LIMIT}건")
+    if fixing:
+        lines.append(f"🔧 자동 보완 중 {len(fixing)}건")
+    return lines + [""] if lines else lines
+
+
 def format_digest(items: list[dict], auto: dict | None = None) -> str:
     by_project: dict[str, list[dict]] = defaultdict(list)
     for item in items:
         by_project[item["project_key"]].append(item)
-    lines = [f"📋 <b>검토 대기 정본 문서 {len(items)}건</b>"] if items else ["📋 <b>정본 문서 자동승인 참고검토</b>"]
+    lines = _ceo_head(auto) + (
+        [f"📋 <b>검토 대기 정본 문서 {len(items)}건</b>"] if items else ["📋 <b>정본 문서 자동승인 참고검토</b>"])
     for project in sorted(by_project):
         docs = sorted(by_project[project], key=lambda d: (-d["waiting_days"], d["document_key"]))
         lines.append(f"\n<b>{html.escape(project)}</b> ({len(docs)}건)")
@@ -307,6 +421,8 @@ def format_push_payload(items: list[dict], digest_date: date, auto: dict | None 
     extra = ""
     if not auto_digest_is_empty(auto):
         extra = f"\n자동승인 {len(auto['auto_approved'])}건 · 보류 {len(auto['held'])}건"
+        if auto.get("needs_ceo"):
+            extra = f"\n대표님 판단 필요 {len(auto['needs_ceo'])}건" + extra
     title = f"검토 대기 정본 {len(items)}건" if items else "정본 자동승인 참고검토"
     return {"title": title, "body": f"{projects}\n{titles}{extra}".strip()[:240],
             "url": "/docs", "tag": f"canonical-review-digest-{digest_date:%Y%m%d}"}
