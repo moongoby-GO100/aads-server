@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 _JOB_ID_RE = re.compile(r"runner-[0-9a-f]{6,}")
 _TERMINAL = {"done", "error", "rejected_done", "cancelled"}
 _KST = ZoneInfo("Asia/Seoul")
+# 반영·배포 성격 단계는 대상 러너가 done 인 것이 실행 조건이다. 소문자 비교.
+RELEASE_STEP_KEYWORDS = (
+    "배포", "deploy", "bluegreen", "릴리스", "릴리즈", "release",
+    "반영", "push 된", "push된", "체리픽", "cherry-pick",
+)
+# next_step_proposals._summary_of 가 만드는 제목 줄. propose() 는 이 앞에 [시스템] 안내문을 붙이므로
+# 첫 줄이 아니라 줄 단위로 찾는다.
+_STEP_TITLE_RE = re.compile(r"^[ \t]*\[다음단계[ \t]*\d+\][ \t]*(.+?)[ \t\r]*$", re.MULTILINE)
 _RETRY_PURPOSE_RE = re.compile(r"^REMEDIATION_PURPOSE: failed_link_retry[ \t\r]*$", re.MULTILINE)
 _RETRY_TARGET_RE = re.compile(r"^RETRY_OF_LINK: (runner-[0-9a-f]{6,})[ \t\r]*$", re.MULTILINE)
 
@@ -38,6 +46,18 @@ def retry_target_ids(message: str) -> set[str]:
     return set(_RETRY_TARGET_RE.findall(text))
 
 
+def step_title(message: str) -> str:
+    """본문에서 `[다음단계 N] 제목` 줄의 제목을 돌려준다. 없으면 빈 문자열."""
+    m = _STEP_TITLE_RE.search(message or "")
+    return m.group(1) if m else ""
+
+
+def is_release_step(message: str) -> bool:
+    """제목이 반영/배포/릴리스 후속 성격이면 True. 본문(detail)은 보지 않는다."""
+    title = step_title(message).lower()
+    return any(k in title for k in RELEASE_STEP_KEYWORDS)
+
+
 def _format_kst(value: Optional[datetime]) -> str:
     if not isinstance(value, datetime):
         return "시각 미상"
@@ -51,6 +71,7 @@ async def annotate_or_skip(conn, message: str) -> tuple[str, Optional[str]]:
 
     - job id 없음 / 조회 실패: (원본, None)
     - 가리키는 job 이 전부 종결: (원본, "stale_jobs: ...")
+      단, 반영·배포 단계이고 job 이 전부 done 이면 stale 이 아니다(갱신 블록 덧붙여 배달)
     - 그 외: (상태 갱신 블록을 덧붙인 본문, None)
     """
     try:
@@ -70,7 +91,12 @@ async def annotate_or_skip(conn, message: str) -> tuple[str, Optional[str]]:
             for jid in job_ids
         }
 
-        if all(s in _TERMINAL for s in statuses.values()):
+        # 반영·배포 단계는 대상이 전부 done 일 때만 stale 이 아니다. error/cancelled/rejected_done
+        # 이 하나라도 있으면 기존대로 건너뛴다.
+        release_ready = is_release_step(message) and all(
+            s == "done" for s in statuses.values()
+        )
+        if all(s in _TERMINAL for s in statuses.values()) and not release_ready:
             reason = "stale_jobs: " + ", ".join(
                 f"{jid}={statuses[jid]}" for jid in job_ids
             )
