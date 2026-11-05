@@ -315,6 +315,8 @@ def test_admin_editor_has_amendment_button_and_labels():
     assert '"amendsContractId"]' in editor
     assert "data-cv41-amend>" in editor or "data-cv41-amend " in editor
     assert "변경 계약 작성" in editor
-    assert 'amendsContractId: String(original.id), contractDate: "", startDate: "", endDate: ""' in editor
+    # 변경계약은 원계약 입사일·종료일을 이어받고 계약일자(적용일)는 오늘로 채운다(2026-11-05, 김정환 입사일 오기재).
+    assert 'amendsContractId: String(original.id), contractDate: C.today(),' in editor
+    assert 'startDate: String(pick(original, "startDate")), endDate: String(pick(original, "endDate"))' in editor
     assert "변경 계약(원계약" in editor and "이전 계약" in editor
     assert "modules/contract-editor-v41.js?v=20261016-r1" in (root / "admin.html").read_text(encoding="utf-8")

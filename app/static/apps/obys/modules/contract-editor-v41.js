@@ -1088,9 +1088,10 @@
     if (!originalId) return "";
     const original = contractById(originalId);
     const day = original ? (pick(original, "contractDate") || pick(original, "startDate")) : "";
-    return `<p class="cv41-alert warn" role="status"><b>변경 계약입니다.</b> 원계약(${esc(day || String(originalId).slice(0, 8))})의 서명본은 바뀌지 않고 ‘이전 계약’으로 표시됩니다. 변경 계약의 입사일(시작일)과 계약 작성일을 입력하십시오. 현재 조건은 서명 순서가 아니라 시작일로 정해집니다.</p>`;
+    return `<p class="cv41-alert warn" role="status"><b>변경 계약입니다.</b> 원계약(${esc(day || String(originalId).slice(0, 8))})의 서명본은 바뀌지 않고 ‘이전 계약’으로 표시됩니다. 입사일(시작일)·종료일과 임금·근무 조건은 원계약 값으로 채웠습니다. 계약일자는 오늘로 채웠으니 변경 조건을 적용할 날짜로 고쳐 쓰십시오 — 이 날짜부터 바뀐 조건이 적용됩니다. 입사일은 바꾸지 마십시오.</p>`;
   }
-  /** 서명 완료 계약을 복사해 새 draft 로 연다. 시작일·종료일·계약 작성일은 비워 직접 입력하게 한다. */
+  /** 서명 완료 계약을 복사해 새 draft 로 연다. 입사일(시작일)·종료일은 원계약 값을 그대로 쓰고, 계약일자(변경 조건 적용일)는 오늘로 채운다.
+   *  예전에는 세 날짜를 비워 직접 입력하게 했고, 입사일 칸에 작성일이 들어가는 오기재가 생겼다(2026-11-03 김정환 170bf607). */
   function startAmendment() {
     const original = E?.contract;
     if (!original || statusOf(original)[0] !== "signed" || E.busy) return;
@@ -1100,7 +1101,8 @@
       employee,
       target: { employee_request_id: pick(original, "employeeRequestId"), business_id: pick(original, "businessId"), branch: pick(original, "branch") },
       contract: null,
-      values: { ...valuesFromContract(original), amendsContractId: String(original.id), contractDate: "", startDate: "", endDate: "" },
+      values: { ...valuesFromContract(original), amendsContractId: String(original.id), contractDate: C.today(),
+        startDate: String(pick(original, "startDate")), endDate: String(pick(original, "endDate")) },
       step: 1,
       dirty: true
     };
@@ -1268,7 +1270,12 @@
     const from = (value, note) => (String(value ?? "").trim() ? { value: String(value), note } : null);
     switch (name) {
       case "contractDate": return from(C.today(), "오늘");
-      case "startDate": return from(E.values.contractDate || C.today(), "계약 작성일");
+      case "startDate": {
+        // 변경 계약의 입사일은 원계약 입사일이다. 계약일자(적용일)를 입사일로 추천하지 않는다.
+        const original = E.values.amendsContractId ? contractById(E.values.amendsContractId) : null;
+        if (original) return from(pick(original, "startDate"), "원계약 입사일");
+        return from(E.values.contractDate || C.today(), "계약 작성일");
+      }
       case "workplace": return E.target?.branch ? from(`${businessName(E.target.business_id)} ${E.target.branch}`, "근무 지점") : null;
       case "employeeName": return from(employee.name, "가입 정보");
       case "employeePhone": return from(employee.phone, "가입 정보");
