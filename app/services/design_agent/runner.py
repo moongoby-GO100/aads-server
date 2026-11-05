@@ -4,6 +4,8 @@ import json
 
 from .budget import BudgetExceeded, RunBudget, check_run
 from .config import Config
+from .generate import handle_generate
+from .importer import handle_import
 from .queue import claim_next, mark_done, mark_failed
 from .skills import load_skill, required_skills, resolve_situation
 from .writer import DesignAgentWriter
@@ -13,8 +15,18 @@ async def noop(trigger, writer, budget):
     """D1 placeholder: no model calls and no design writes."""
 
 
-HANDLERS = {'project_created': noop, 'deploy_succeeded': noop, 'manual': noop,
-            'screen_change_requested': noop, 'new_screen_requested': noop}
+async def handle_manual(trigger, writer, budget):
+    payload = trigger['payload']
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if (payload or {}).get('kind') == 'genspark_import':
+        return await handle_import(trigger, writer, budget)
+    return await noop(trigger, writer, budget)
+
+
+HANDLERS = {'project_created': handle_generate, 'deploy_succeeded': noop,
+            'manual': handle_manual, 'screen_change_requested': noop,
+            'new_screen_requested': handle_generate}
 
 
 async def process_one(pool, tenant_id, config=None):
