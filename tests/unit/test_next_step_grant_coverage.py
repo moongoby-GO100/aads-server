@@ -208,3 +208,82 @@ def test_프로젝트를_못_읽으면_빈_문자열():
     assert asyncio.run(_session_project(_Conn(val=None), "sess-1")) == ""
     conn = _Conn(raises=RuntimeError("no such column"))
     assert asyncio.run(_session_project(conn, "sess-1")) == ""
+
+
+# ─── require_card ─────────────────────────────────────────────────────
+
+
+class _CardConn:
+    async def fetchval(self, sql, *args):
+        if "INSERT INTO agent_permission_requests" in sql:
+            return "22222222-2222-4222-8222-222222222222"
+        return None  # 기존 pending 카드 없음
+
+
+class _Acq:
+    async def __aenter__(self):
+        return _CardConn()
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _CardPool:
+    def acquire(self):
+        return _Acq()
+
+
+def _setup_propose(monkeypatch, *, grant=None, goal=None):
+    from app.core import db_pool
+    from app.services import next_step_proposals as nsp
+
+    calls = {"grant": 0, "goal": 0}
+    monkeypatch.setattr(db_pool, "get_pool", lambda: _CardPool())
+
+    async def bubble(*_):
+        return ""
+
+    async def project(*_):
+        return "AADS"
+
+    async def fake_grant(*_):
+        calls["grant"] += 1
+        return grant
+
+    async def fake_goal(*_):
+        calls["goal"] += 1
+        return goal
+
+    async def fake_enqueue(*_, **__):
+        return {"queue_id": "q", "queue_status": "pending", "created": True}
+
+    monkeypatch.setattr(nsp, "_current_bubble_id", bubble)
+    monkeypatch.setattr(nsp, "_session_project", project)
+    monkeypatch.setattr(nsp, "_covered_by_existing_grant", fake_grant)
+    monkeypatch.setattr(nsp, "_goal_policy_covers", fake_goal)
+    monkeypatch.setattr("app.services.chat_service.enqueue_next_step_reaction", fake_enqueue)
+    return nsp, calls
+
+
+_STEP = {"title": "정본 문서 결정", "detail": "결정 필요", "tool": "doc_decision"}
+
+
+def test_require_card_grant가_덮어도_카드를_만든다(monkeypatch):
+    nsp, calls = _setup_propose(monkeypatch, grant="grant-abcdef123")
+    out = asyncio.run(nsp.propose("sess", [_STEP], tenant_id="t", require_card=True))
+    assert len(out["cards"]) == 1 and not out["auto"]
+    assert calls["grant"] == 0
+
+
+def test_require_card_목표_정책이_덮어도_카드를_만든다(monkeypatch):
+    nsp, calls = _setup_propose(monkeypatch, goal="goal-abcdef123")
+    out = asyncio.run(nsp.propose("sess", [_STEP], tenant_id="t", require_card=True))
+    assert len(out["cards"]) == 1 and not out["auto"]
+    assert calls["goal"] == 0
+
+
+def test_기본값은_기존처럼_grant가_덮으면_auto(monkeypatch):
+    nsp, calls = _setup_propose(monkeypatch, grant="grant-abcdef123")
+    out = asyncio.run(nsp.propose("sess", [_STEP], tenant_id="t"))
+    assert len(out["auto"]) == 1 and not out["cards"]
+    assert calls["grant"] == 1

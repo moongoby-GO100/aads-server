@@ -371,8 +371,8 @@ def world(monkeypatch):
 
     cards = []
 
-    async def fake_propose(session_id, steps, context="", tenant_id=""):
-        cards.append({"session_id": session_id, "steps": steps, "tenant_id": tenant_id})
+    async def fake_propose(session_id, steps, context="", tenant_id="", *, require_card=False):
+        cards.append({"session_id": session_id, "steps": steps, "tenant_id": tenant_id, "require_card": require_card})
         return {"cards": [{"id": f"card-{len(cards)}-{i}", "title": s["title"]} for i, s in enumerate(steps)]}
     monkeypatch.setattr(next_step_proposals, "propose", fake_propose)
     found = {"card": None}
@@ -634,6 +634,13 @@ def test_single_card_per_document_revision_title_has_key_and_revision(world):
     assert other[0]["title"] != steps[0]["title"]
 
 
+def test_create_card_calls_propose_with_require_card(world):
+    # 결정 카드는 기존 grant·목표 정책에 덮여 사라지면 안 되므로 require_card=True 로 올린다.
+    world.state["rows"] = [rrow([issue(problem="정책 결정 필요")])]
+    resolve(world)
+    assert world.cards and all(c["require_card"] is True for c in world.cards)
+
+
 def test_protected_document_card_is_high_risk():
     steps = res.build_card_steps("AADS", HEAD, REVISION, res.Resolution("ceo_card", ["protected_document"], protected=True))
     assert steps[0]["risk"] == "high" and "사람이 승인해야" in steps[0]["detail"]
@@ -643,7 +650,7 @@ def test_card_routed_to_auto_is_reported_not_treated_as_card(world, monkeypatch)
     # [P1] 기존 grant·목표 정책이 덮어 카드 대신 auto 로 돌아오면 카드가 있다고 보지 않는다.
     from app.services import next_step_proposals
 
-    async def auto_only(session_id, steps, context="", tenant_id=""):
+    async def auto_only(session_id, steps, context="", tenant_id="", *, require_card=False):
         return {"cards": [], "auto": [{"title": steps[0]["title"], "grant_id": "g1"}]}
     monkeypatch.setattr(next_step_proposals, "propose", auto_only)
     world.state["rows"] = [rrow([issue(problem="정책 결정 필요")])]

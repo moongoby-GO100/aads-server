@@ -315,8 +315,10 @@ async def propose(
     steps: List[Any],
     context: str = "",
     tenant_id: str = "",
+    *,
+    require_card: bool = False,
 ) -> Dict[str, Any]:
-    """제안을 카드로 올린다.
+    """제안을 카드로 올린다. require_card=True 면 기존 grant·목표 정책을 보지 않고 반드시 카드로 올린다.
 
     돌려주는 것:
         proposed  올린 제안 수
@@ -368,7 +370,8 @@ async def propose(
                 "\n".join((step["title"], step["detail"], step["tool"]))
             )
             # 승인 게이트 구현 변경은 기존 grant나 목표 설정으로 자동통과하지 않는다.
-            grant_id = None if approval_code_change else await _covered_by_existing_grant(
+            skip_policy = approval_code_change or require_card
+            grant_id = None if skip_policy else await _covered_by_existing_grant(
                 conn, session_id, step["tool"], project,
             )
             if grant_id:
@@ -376,7 +379,7 @@ async def propose(
                 continue
 
             risk = step["risk"]
-            if approval_code_change:
+            if skip_policy:
                 goal_id = None
             elif risk not in goal_cache:
                 goal_cache[risk] = await _goal_policy_covers(

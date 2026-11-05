@@ -506,7 +506,8 @@ async def create_card(conn: Any, tenant: str, project: str, head: Mapping, revis
     from app.services import next_step_proposals
     out = await next_step_proposals.propose(
         session_id, build_card_steps(project, head, revision, res),
-        context=f"정본 문서 {head['document_key']} 자동 처리 후에도 남은 결정", tenant_id=tenant)
+        context=f"정본 문서 {head['document_key']} 자동 처리 후에도 남은 결정", tenant_id=tenant,
+        require_card=True)
     if out.get('auto') and not out.get('cards'):
         # 기존 grant·목표 정책이 이 제안을 덮으면 카드 대신 auto 로 돌아온다. 카드 본문이 '채팅 에이전트는 실행하지 말라'고
         # 하므로 실행은 일어나지 않지만 대표님 화면에도 카드가 없다 — 오류로 남기고 card_id 없이 돌려준다.
