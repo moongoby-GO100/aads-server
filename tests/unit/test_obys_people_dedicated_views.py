@@ -157,8 +157,12 @@ def test_people_renderer_executes_payroll_and_all_attendance_tabs(tmp_path):
                 "function payrollDisplayV41(", "function attendanceStatusV41(",
                 "function attendanceReviewV41(", "function attendanceMinutesV41(",
                 "function displayDateV41(", "function attendanceTimeV41(", "function attendanceDisplayV41(", "function liveRow(", "function filteredRows(c)",
-                "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(",
-                "function workSchedulePanelV41(")
+                "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(", "function activeMonthV41(",
+                "function workSchedulePanelV41(", "function payrollLatestMonthV41(", "function payrollMonthRowsV41(",
+                "function payrollDetailRowV41(", "function payrollPayloadV41(", "function payrollNumV41(",
+                "function payrollDeductionTotalV41(", "function payrollContractIdV41(", "function payrollUnsplitV41(",
+                "function payrollFlagsV41(", "function payrollSummaryV41(", "function payrollSummaryHtmlV41(",
+                "function payrollBasisHtmlV41(", "function payrollRowNoteV41(", "function payrollLinkCacheV41(")
     helpers = "\n".join(next(line.strip() for line in html.splitlines() if line.strip().startswith(prefix)) for prefix in prefixes)
     renderer = "function renderPeopleV41(c){" + html.split("function renderPeopleV41(c){", 1)[1].split("function renderPageV41(){", 1)[0]
     script = tmp_path / "people-render.cjs"
@@ -172,8 +176,8 @@ const kstDateV41=()=>'2026-09-30';function renderPageV41(){};function loadLiveRo
 ''' + helpers + renderer + '''
 configs.payroll.data=[liveRow({id:'p1',raw:{payroll_month:'2026-09',gross_pay:3000000,total_deductions:300000,net_pay:2700000,status:'draft'},display:{직원:'직원A'}},configs.payroll)];
 renderPeopleV41(configs.payroll);
-for(const value of ['3,000,000원','300,000원','2,700,000원','확정 전'])assert(page.innerHTML.includes(value),value);
-state.peoplePerson='p1';renderPeopleV41(configs.payroll);assert(page.innerHTML.includes('급여명세 상세'));
+for(const value of ['3,000,000원','300,000원','2,700,000원','초안','id="payrollSummary"','총지급 합계'])assert(page.innerHTML.includes(value),value);
+state.payrollDetailKey='record:p1';renderPeopleV41(configs.payroll);assert(page.innerHTML.includes('급여명세 상세'));assert(page.innerHTML.includes('id="payrollBasis"'));assert(page.innerHTML.includes('계약 미연결'));
 state.route='attendance';configs.attendance.data=[liveRow({id:'a1',raw:{work_date:'2026-09-30',start_at:'09:00',end_at:'18:00',worked_minutes:480,status:'approved'},display:{직원:'직원A',일자:'2026-09-30'}},configs.attendance)];
 for(const tab of ['today','employees','detail','schedule','stats']){
  state.peopleTab=tab;renderPeopleV41(configs.attendance);
@@ -195,11 +199,11 @@ assert(!page.innerHTML.includes('직원A'));
 state.search='';state.peopleTab='detail';state.peoplePerson='one@example.test';
 configs.attendance.data=[liveRow({id:'same1',employee_key:'one@example.test',raw:{employee_email:'one@example.test',work_date:'2026-09-01',status:'approved'},display:{직원:'동명'}},configs.attendance),liveRow({id:'same2',employee_key:'two@example.test',raw:{employee_email:'two@example.test',work_date:'2026-09-02',status:'rejected'},display:{직원:'동명'}},configs.attendance)];
 renderPeopleV41(configs.attendance);assert(!page.innerHTML.includes('반려'));
-state.route='payroll';state.peoplePerson='p2';
+state.route='payroll';state.payrollDetailKey='record:p2';
 configs.payroll.data.push(liveRow({id:'p2',raw:{payroll_month:'2026-09',gross_pay:777,status:'draft'},display:{직원:'직원A'}},configs.payroll));
 renderPeopleV41(configs.payroll);assert(page.innerHTML.split('급여명세 상세')[1].includes('777원'));
 // Month changes trigger a fresh request.
-elements.peopleMonth.onchange({target:{value:'2025-12'}});assert.equal(state.peopleMonth,'2025-12');
+elements.peopleMonth.onchange({target:{value:'2025-12'}});assert.equal(state.payrollMonth,'2025-12');assert.equal(state.payrollMonthSelected,true);
 
 ''')
     result = subprocess.run(["node", str(script)], capture_output=True, text=True)
@@ -254,7 +258,7 @@ def test_month_loader_requests_selected_month_and_every_page(tmp_path):
     if not shutil.which("node"):
         pytest.skip("node unavailable")
     html = Path("app/static/apps/obys/admin.html").read_text()
-    helpers = "\n".join(line.strip() for line in html.splitlines() if line.strip().startswith(("function peopleMonthBoundsV41(", "async function peopleLoadV41(")))
+    helpers = "\n".join(line.strip() for line in html.splitlines() if line.strip().startswith(("function peopleMonthBoundsV41(", "function activeMonthV41(", "async function peopleLoadV41(")))
     script = tmp_path / "month.cjs"
     script.write_text("""const assert=require('node:assert/strict');
 const state={route:'attendance',businessId:'biz',peopleMonth:'2025-12',peopleMonthSelected:true};
@@ -264,7 +268,7 @@ async function workspaceApi(path){calls.push(path);return {records:[{id:calls.le
 """ + helpers + """
 (async()=>{let result=await peopleLoadV41();assert.equal(result[1].records.length,2);
 assert(calls[0].includes('from=2025-12-01'));assert(calls[0].includes('to=2025-12-31'));assert(calls[1].includes('offset=500'));
-state.route='payroll';result=await peopleLoadV41();assert.equal(result[1].records.length,2);assert(calls[2].includes('date_from=2025-12-01'));assert(calls[2].includes('date_to=2025-12-31'));
+state.route='payroll';state.payrollMonth='2025-12';state.payrollMonthSelected=true;result=await peopleLoadV41();assert.equal(result[1].records.length,2);assert(calls[2].includes('date_from=2025-12-01'));assert(calls[2].includes('date_to=2025-12-31'));
 })().catch(e=>{console.error(e);process.exitCode=1});
 """)
     result = subprocess.run(["node", str(script)], capture_output=True, text=True)

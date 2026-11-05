@@ -211,14 +211,14 @@ def test_v41_people_filters_and_server_payroll_amounts(tmp_path):
                               if line.strip().startswith(f'function {name}(')) for name in names)
     script = tmp_path / 'people-v41.cjs'
     script.write_text('''const assert=require('node:assert/strict');
-const state={route:'payroll',peopleMonth:'2026-10',peopleEmployee:'직원 가',peopleBranch:'매장 가',selected:{},status:'전체 상태',search:''};
+const state={route:'payroll',peopleMonth:'2026-10',payrollMonth:'2026-10',peopleEmployee:'직원 가',peopleBranch:'매장 가',selected:{},status:'전체 상태',search:''};
 ''' + functions + '''
 const row=(month,name,branch)=>({'직원':name,'지점':branch,__live:{raw:{payroll_month:month}}});
 const c={data:[row('2026-10','직원 가','매장 가'),row('2026-09','직원 가','매장 가'),row('2026-10','직원 나','매장 가'),row('2026-10','직원 가','매장 나')]};
 assert.equal(filteredRows(c).length,1);
 state.route='home';assert.equal(filteredRows(c).length,4);
 const display=payrollDisplayV41({raw:{gross_pay:3000000,net_pay:2700000,tax_withholding:100000,insurance_deduction:200000,status:'draft'}});
-assert.equal(display.공제,'미집계');assert.equal(display.상태,'확정 전');
+assert.equal(display.공제,'미집계');assert.equal(display.상태,'초안');assert.equal(display.지점,'지점 미등록');
 assert.equal(display.총지급액,'3,000,000원');assert.equal(display.실수령,'2,700,000원');
 assert.equal(payrollDisplayV41({raw:{totals:{total_deductions:123456},status:'paid'}}).공제,'123,456원');
 assert.equal(payrollDisplayV41({raw:{status:'confirmed'}}).상태,'확정');
