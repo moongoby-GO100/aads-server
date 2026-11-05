@@ -195,3 +195,11 @@ body.employee-preview .ep-side-sum { top: 118px; }
 }
 
 .ep-clock-link { display:inline-flex; min-height:44px; align-items:center; margin:8px 0; text-decoration:none; }
+
+/* 직원 근태 탭: 관리자용 '근태 입력' 폼·인건비 열은 숨기고 '근무 직접 입력'(관리자 확인 후 반영)을 둔다. */
+body.employee-view .ep-admin-only,
+body.employee-view .ep-labor-col { display: none !important; }
+body:not(.employee-view) .ep-self-entry { display: none; }
+.ep-self-entry input,
+.ep-self-entry textarea,
+.ep-self-entry button { min-height: 44px; box-sizing: border-box; max-width: 100%; }

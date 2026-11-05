@@ -29,6 +29,26 @@ class CorrectionIn(BaseModel):
         return self
 
 
+class NewEntryIn(BaseModel):
+    """직원 본인 신규 근무 신청. 직원 식별 값은 받지 않고 서버가 로그인 계정으로 채운다."""
+    model_config = {"extra": "forbid"}
+    work_date: date
+    start_at: time
+    end_at: time
+    break_minutes: int = Field(ge=0, lt=1440)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_values(self):
+        self.reason = self.reason.strip()
+        if not self.reason:
+            raise ValueError("신청 사유가 필요합니다")
+        if self.start_at.second or self.end_at.second or self.start_at.microsecond or self.end_at.microsecond:
+            raise ValueError("시각은 분 단위여야 합니다")
+        ws.attendance_worked_minutes(self.start_at, self.end_at, self.break_minutes)
+        return self
+
+
 class DecisionIn(BaseModel):
     model_config = {"extra": "forbid"}
     version: int = Field(ge=1)
@@ -92,7 +112,7 @@ async def run(user, business_id, operation, *, record_id=None, correction_id=Non
     tenant = ws.upload_svc._tenant(user)
     manager = ws.upload_svc.tenant_session_for_user(user)["permissions"]["can_manage_settings"]
     if operation in {"approve", "reject"}:
-        ws._require_attendance_admin(user)
+        ws._require_attendance_admin(user)  # 직원은 신규 신청 건도 승인·반려할 수 없다
     conn = await ws.upload_svc._connect()
     try:
         async with conn.transaction():
@@ -106,6 +126,11 @@ async def run(user, business_id, operation, *, record_id=None, correction_id=Non
             # Serialize requests/decisions within the business, including weekly totals.
             await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "correction:" + business_id)
             request = None
+            if operation == "create_new":
+                request = await create_new_entry(conn, tenant, business_id, identity, payload)
+                await ws._attendance_audit(conn, business_id, user, "attendance.correction.create_new", request["id"],
+                                           {"before": None, "after": None, "request": dict(request)})
+                return ws._json_value(dict(request))
             if correction_id:
                 request = await conn.fetchrow(
                     "SELECT * FROM obys_attendance_corrections WHERE id=$1 AND tenant_id=$2 AND business_id=$3 FOR UPDATE",
@@ -114,6 +139,11 @@ async def run(user, business_id, operation, *, record_id=None, correction_id=Non
                     raise HTTPException(404, "정정 요청을 찾을 수 없습니다")
                 record_id = request["record_id"]
                 if not transition(request, operation, payload.version, actor=identity["email"], reason=payload.reason):
+                    return ws._json_value(dict(request))
+                if request.get("kind") == "new_entry":
+                    request, created = await decide_new_entry(conn, tenant, business_id, operation, request, identity, payload)
+                    await ws._attendance_audit(conn, business_id, user, "attendance.correction." + operation, request["id"],
+                                               {"before": None, "after": created, "request": dict(request)})
                     return ws._json_value(dict(request))
             record = await conn.fetchrow(
                 "SELECT * FROM yeoljeong_attendance_records WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL FOR UPDATE",
@@ -187,3 +217,88 @@ async def create_request(conn, tenant, business_id, record_id, identity, payload
         str(uuid4()), tenant, business_id, record_id, identity["email"], json.dumps(before),
         payload.model_dump_json(exclude={"reason", "supersedes_id"}), payload.reason, payload.supersedes_id)
     return request
+
+
+NEW_ENTRY_STATUS = {"approve": "approved", "reject": "rejected", "withdraw": "withdrawn"}
+
+
+async def create_new_entry(conn, tenant, business_id, identity, payload):
+    """원본 근태 없는 신규 근무 신청. 신청자는 항상 로그인 직원 본인이다."""
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM yeoljeong_attendance_records WHERE business_id=$1 "
+        "AND lower(employee_email)=$2 AND work_date=$3 AND start_at=$4 AND deleted_at IS NULL)",
+        business_id, identity["email"], payload.work_date, payload.start_at):
+        raise HTTPException(409, "같은 근무일·시작시각의 근태가 이미 있습니다")
+    if await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM obys_attendance_corrections WHERE business_id=$1 AND kind='new_entry' "
+        "AND status='pending' AND lower(employee_email)=$2 AND requested->>'work_date'=$3 AND requested->>'start_at'=$4)",
+        business_id, identity["email"], payload.work_date.isoformat(), payload.start_at.isoformat()):
+        raise HTTPException(409, "같은 근무일·시작시각의 처리 대기 신청이 있습니다")
+    context = {"employee_name": identity.get("name") or "", "masked": identity.get("masked") or ""}
+    return await conn.fetchrow(
+        "INSERT INTO obys_attendance_corrections (id,tenant_id,business_id,record_id,employee_email,original,requested,reason,kind) "
+        "VALUES ($1,$2,$3,NULL,$4,$5::jsonb,$6::jsonb,$7,'new_entry') RETURNING *",
+        str(uuid4()), tenant, business_id, identity["email"], json.dumps(context),
+        payload.model_dump_json(exclude={"reason"}), payload.reason)
+
+
+async def decide_new_entry(conn, tenant, business_id, operation, request, identity, payload):
+    """승인은 manual 근태 1건을 만들고 주간을 재계산한다. 반려·철회는 근태를 만들지 않는다."""
+    created_id, created = None, None
+    if operation == "approve":
+        created = await approve_new_entry(conn, tenant, business_id, request, identity["email"])
+        created_id = str(created["id"])
+        created = ws._json_value(dict(created))
+    updated = await conn.fetchrow(
+        "UPDATE obys_attendance_corrections SET status=$4,version=version+1,decided_by=$5,decided_at=now(),"
+        "decision_reason=$6,record_id=COALESCE($7,record_id) WHERE id=$1 AND tenant_id=$2 AND business_id=$3 RETURNING *",
+        request["id"], tenant, business_id, NEW_ENTRY_STATUS[operation], identity["email"], payload.reason, created_id)
+    return updated, created
+
+
+async def approve_new_entry(conn, tenant, business_id, request, approver):
+    requested = NewEntryIn(**decoded(request["requested"]), reason=request["reason"])
+    applicant = email(request["employee_email"])
+    month = requested.work_date.strftime("%Y-%m")
+    locked = await conn.fetch(
+        "SELECT id,payroll_month,status FROM yeoljeong_payroll_statements WHERE tenant_id=$1 AND business_id=$2 "
+        "AND lower(employee_email)=$3 AND left(payroll_month,7)=ANY($4::text[]) "
+        "AND status IN ('confirmed','paid') AND deleted_at IS NULL FOR UPDATE",
+        tenant, business_id, applicant, [month])
+    if locked:
+        raise HTTPException(409, {"reason": "마감 근태 변경은 급여 정정 버전이 필요합니다", "payroll_impact": ws._json_value([dict(r) for r in locked]), "months": [month]})
+    profile = await conn.fetchrow(
+        "SELECT employee_name,branch,hourly_wage FROM yeoljeong_attendance_records WHERE business_id=$1 "
+        "AND lower(employee_email)=$2 ORDER BY created_at DESC LIMIT 1", business_id, applicant)
+    context = decoded(request["original"])
+    name = (profile and profile["employee_name"]) or context.get("employee_name") or applicant.split("@")[0]
+    local, _, domain = applicant.partition("@")
+    row = await conn.fetchrow(
+        f"""INSERT INTO yeoljeong_attendance_records
+              (business_id,employee_email,employee_email_masked,employee_name,branch,
+               work_date,start_at,end_at,break_minutes,worked_minutes,hourly_wage,
+               source,status,memo,created_by,night_minutes)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'manual','approved',$12,$13,$14)
+            ON CONFLICT (employee_email,business_id,work_date,start_at) DO UPDATE SET
+              employee_email_masked=EXCLUDED.employee_email_masked, employee_name=EXCLUDED.employee_name,
+              branch=EXCLUDED.branch, end_at=EXCLUDED.end_at, break_minutes=EXCLUDED.break_minutes,
+              worked_minutes=EXCLUDED.worked_minutes, night_minutes=EXCLUDED.night_minutes,
+              hourly_wage=EXCLUDED.hourly_wage, source='manual', status='approved', memo=EXCLUDED.memo,
+              created_by=EXCLUDED.created_by, confirmed_by='', confirmed_at=NULL,
+              check_in_at=NULL, check_out_at=NULL, check_in_lat=NULL, check_in_lng=NULL,
+              check_in_accuracy_m=NULL, check_out_lat=NULL, check_out_lng=NULL, check_out_accuracy_m=NULL,
+              check_in_distance_m=NULL, check_out_distance_m=NULL, geofence_result=NULL,
+              device_info=NULL, location_consent_at=NULL,
+              created_at=now(), updated_at=now(), deleted_at=NULL
+            WHERE yeoljeong_attendance_records.deleted_at IS NOT NULL
+              AND yeoljeong_attendance_records.business_id=EXCLUDED.business_id
+            RETURNING *""",
+        business_id, applicant, f"{local[:1]}***@{domain}", name, (profile and profile["branch"]) or "",
+        requested.work_date, requested.start_at, requested.end_at, requested.break_minutes,
+        ws.attendance_worked_minutes(requested.start_at, requested.end_at, requested.break_minutes),
+        (profile and profile["hourly_wage"]) or 0, "직원 직접 입력 승인: " + request["reason"][:400],
+        approver, ws.attendance_night_minutes(requested.start_at, requested.end_at, requested.break_minutes))
+    if row is None:
+        raise HTTPException(409, "같은 직원·근무일·시작시각 근태가 이미 있습니다")
+    await ws._recompute_attendance_week(conn, business_id, applicant, requested.work_date)
+    return row

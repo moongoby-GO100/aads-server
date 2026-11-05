@@ -3010,7 +3010,7 @@
   <link rel="stylesheet" href="/static/apps/obys/modules/ledger-details.css?v=20261014-r1">
   <link rel="stylesheet" href="/static/apps/obys/modules/clobe-collection.css?v=20261104-r1">
   <link rel="stylesheet" href="/static/apps/obys/modules/data-overview.css?v=20261014-r1">
-  <link rel="stylesheet" href="/static/apps/obys/modules/employee-portal.css?v=20261015-r1">
+  <link rel="stylesheet" href="/static/apps/obys/modules/employee-portal.css?v=20261105-r1">
   <style>
     /* 사업자(대표) 회원가입 진입 — 로그인 전에만 보인다. 헤더의 로그인/회원가입 버튼은
        renderAuthState 가 항상 hidden 으로 두므로 별도 앵커로 노출한다. */
@@ -3731,7 +3731,11 @@
       <section id="attendanceView" class="hidden">
         <section class="panel"><div class="panel-head"><h2 class="panel-title">내 오늘·이번 주 근무 일정</h2></div><div class="panel-body" id="employeeWorkSchedules" aria-live="polite">근무 일정을 조회하면 여기에 표시됩니다.</div></section>
         <div class="grid content-grid">
-          <section class="panel">
+          <section class="panel ep-self-entry" id="employeeSelfEntryPanel">
+            <div class="panel-head"><h2 class="panel-title">근무 직접 입력(관리자 확인 후 반영)</h2></div>
+            <div class="panel-body" id="employeeSelfEntryHost"></div>
+          </section>
+          <section class="panel ep-admin-only" id="shiftAdminPanel">
             <div class="panel-head"><h2 class="panel-title">근태 입력</h2></div>
             <div class="panel-body">
               <form id="shiftForm" class="form-grid">
@@ -3790,7 +3794,7 @@
                       <th>직원</th>
                       <th>시간</th>
                       <th class="num">근무</th>
-                      <th class="num">인건비</th>
+                      <th class="num ep-labor-col">인건비</th>
                       <th>상태</th>
                       <th></th>
                     </tr>
@@ -5665,6 +5669,7 @@
 
   <script src="/static/apps/obys/modules/app-config.js"></script>
   <script src="/static/apps/obys/modules/company-seal.js"></script>
+  <script src="/static/apps/obys/modules/attendance-corrections.js?v=20261105-r1"></script>
   <script src="/static/apps/obys/modules/employee-portal.js?v=20261015-r1"></script>
   <script>
     const STORE_KEY = "yeoljeong-finance-v1";
@@ -8557,7 +8562,7 @@
             <td>${escapeHtml(row.staff)}</td>
             <td>${escapeHtml(row.start)}-${escapeHtml(row.end)}</td>
             <td class="num">${formatHour(shiftHours(row))}</td>
-            <td class="num">${employeeMode ? "-" : formatMoney(shiftCost(row))}</td>
+            <td class="num ep-labor-col">${employeeMode ? "-" : formatMoney(shiftCost(row))}</td>
             <td>${statusCell}</td>
             <td class="num">${actions}</td>
           </tr>`;
@@ -13981,8 +13986,41 @@
       } catch(error) { target.textContent = error?.message || "근무 일정을 조회하지 못했습니다."; }
     }
 
+    // 위치 확인이 안 되는 매장용 — 직원이 본인 근무를 신청하고 관리자 승인으로 반영한다.
+    // 마운트 키는 로그인 직원+사업자 구성이다. 같은 키면 재마운트 대신 목록만 다시 조회해 승인·반려 결과를 반영한다.
+    function clearEmployeeSelfEntry() {
+      const host = document.getElementById("employeeSelfEntryHost");
+      if (!host) return;
+      delete host.dataset.mountedFor;
+      host.innerHTML = "";
+    }
+
+    function mountEmployeeSelfEntry(businesses) {
+      const host = document.getElementById("employeeSelfEntryHost");
+      const corrections = window.ObysAttendanceCorrections;
+      if (!host || !corrections?.mountSelfEntry) return;
+      const key = String(currentEmployeeEmail() || "").toLowerCase() + "#" + businesses.map(item => item.id).join("|");
+      if (host.dataset.mountedFor === key) {
+        host.querySelectorAll("[data-self-entry-slot]").forEach(slot => slot.obysRefresh?.());
+        return;
+      }
+      host.dataset.mountedFor = key;
+      host.innerHTML = "";
+      businesses.forEach(business => {
+        const slot = document.createElement("div");
+        slot.setAttribute("data-self-entry-slot", "");
+        host.appendChild(slot);
+        corrections.mountSelfEntry(slot, {
+          api: workspaceApi, businessId: business.id,
+          businessName: businesses.length > 1 ? business.name : "",
+          onSaved: () => loadAttendanceRecords().catch(() => {})
+        });
+      });
+    }
+
     async function loadAttendanceRecords() {
       if (!hasServerAuth()) {
+        clearEmployeeSelfEntry();
         serverShifts = [];
         serverShiftsError = "";
         renderShiftRows();
@@ -13996,6 +14034,7 @@
           (payload.records || []).forEach(record => next.push(shiftFromServerRecord(record, business.id)));
         }
         if(isEmployeeExperience()) await loadEmployeeWorkSchedules(businesses);
+        if(isEmployeeExperience() && !employeePreview) mountEmployeeSelfEntry(businesses);
         serverShifts = next;
         serverShiftsError = "";
         setViewError("attendance", "server", null);
@@ -15681,6 +15720,7 @@
       }
       clearServerAuthToken();
       saveAuthSession(null);
+      clearEmployeeSelfEntry();
       onboardingDocuments = [];
       employeeJoinRequests = [];
       approvedEmployees = [];

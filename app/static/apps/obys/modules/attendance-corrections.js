@@ -27,7 +27,7 @@
     let items = [], records = [], busy = false, blocked = true, supersedes = null;
     host.innerHTML = `<h2>${manager ? '정정 신청 관리자 확인' : '내 출퇴근 정정 신청'}</h2>
       <p>신청 자체는 실근태 변경이 아닙니다. 관리자 승인 후 반영됩니다. GPS 권한 없이 신청할 수 있습니다.</p>
-      <p>원본 기록 없는 신규 누락은 신청할 수 없습니다. 관리자에게 직원별 상세의 ‘출근 기록 수동 등록’을 요청하세요.</p>
+      <p>원본 기록 없는 신규 누락은 근태 화면의 ‘근무 직접 입력’으로 신청하세요. 관리자 확인 후 반영됩니다.</p>
       <button type="button" class="btn" data-refresh>최신 상태 다시 조회</button>
       <a href="/static/apps/obys/index.html#login" data-login hidden>다시 로그인</a>
       <p role="status" aria-live="polite" data-message></p>
@@ -60,9 +60,9 @@
     }
     function renderList() {
       list.innerHTML = `<h3>${manager ? '확인대기 목록 · 처리 이력' : '신청 상태 · 처리 사유'}</h3><p>최신 최대 500건${manager?' · 확인대기 우선':''}</p>` + [...items].sort((a,b)=>Number(b.status==='pending')-Number(a.status==='pending')).map(row=>{
-        const original=decoded(row.original), requested=decoded(row.requested);
-        const actions = row.status==='pending' ? (manager ? [['approve','승인'],['reject','반려']] : [['withdraw','철회']]) : (!manager && ['rejected','withdrawn'].includes(row.status) && !items.some(next=>next.supersedes_id===row.id) ? [['reapply','재신청']] : []);
-        return `<article data-id="${esc(row.id)}" style="border:1px solid #ccd3db;border-radius:12px;padding:12px;margin-top:12px"><b>${esc(labels[row.status] || row.status)} · ${esc(row.employee_email)}</b><p>원본: ${esc(summary(original))}</p><p>요청: ${esc(summary(requested))}</p><p>변경 항목: ${esc(['work_date','start_at','end_at','break_minutes'].filter(key=>String(original[key])!==String(requested[key])).map(key=>({work_date:'날짜',start_at:'출근',end_at:'퇴근',break_minutes:'휴게'}[key])).join(', ') || '사유 확인')}</p><p>신청 사유: ${esc(row.reason)}</p><p>처리 사유: ${esc(row.decision_reason || '아직 처리되지 않았습니다')}</p>${actions.some(([action])=>action!=='reapply') ? '<label>처리 사유<textarea data-reason maxlength="1000" aria-label="처리 사유"></textarea></label>' : ''}<div>${actions.map(([action,label])=>`<button type="button" class="btn" data-action="${action}">${label}</button>`).join(' ')}</div></article>`;
+        const original=decoded(row.original), requested=decoded(row.requested), isNew=row.kind==='new_entry';
+        const actions = row.status==='pending' ? (manager ? [['approve','승인'],['reject','반려']] : [['withdraw','철회']]) : (!manager && !isNew && ['rejected','withdrawn'].includes(row.status) && !items.some(next=>next.supersedes_id===row.id) ? [['reapply','재신청']] : []);
+        return `<article data-id="${esc(row.id)}" style="border:1px solid #ccd3db;border-radius:12px;padding:12px;margin-top:12px"><b>${isNew ? '신규 근무 신청 · ' : ''}${esc(labels[row.status] || row.status)} · ${esc(row.employee_email)}</b>${isNew ? '<p>원본 기록 없음 · 승인하면 수동 근태 1건이 생성됩니다.</p>' : `<p>원본: ${esc(summary(original))}</p>`}<p>요청: ${esc(summary(requested))}</p>${isNew ? '' : `<p>변경 항목: ${esc(['work_date','start_at','end_at','break_minutes'].filter(key=>String(original[key])!==String(requested[key])).map(key=>({work_date:'날짜',start_at:'출근',end_at:'퇴근',break_minutes:'휴게'}[key])).join(', ') || '사유 확인')}</p>`}<p>신청 사유: ${esc(row.reason)}</p><p>처리 사유: ${esc(row.decision_reason || '아직 처리되지 않았습니다')}</p>${actions.some(([action])=>action!=='reapply') ? '<label>처리 사유<textarea data-reason maxlength="1000" aria-label="처리 사유"></textarea></label>' : ''}<div>${actions.map(([action,label])=>`<button type="button" class="btn" data-action="${action}">${label}</button>`).join(' ')}</div></article>`;
       }).join('');
     }
     async function refresh() {
@@ -130,5 +130,71 @@
     };
     await refresh();
   }
-  window.ObysAttendanceCorrections={mount};
+  /* 직원 본인 '근무 직접 입력' — 위치 확인 불가 매장용. 신청자는 서버가 로그인 계정으로 정한다. */
+  async function mountSelfEntry(host, {api, businessId, businessName = '', onSaved = () => {}}) {
+    const identity = {};
+    mounts.set(host, identity);
+    const current = () => host.isConnected && mounts.get(host) === identity;
+    const base = `/${encodeURIComponent(businessId)}/attendance/corrections`;
+    let items = [], busy = false;
+    host.innerHTML = `<h3>${esc(businessName ? businessName + ' · ' : '')}근무 직접 입력(관리자 확인 후 반영)</h3>
+      <p>매장 위치 확인이 아직 설정되지 않아 직접 입력은 관리자 확인 후 반영됩니다. 본인 근무만 입력할 수 있습니다.</p>
+      <form data-self-entry style="display:grid;gap:12px">
+      ${[['work_date','근무일','date'],['start_at','출근','time'],['end_at','퇴근','time'],['break_minutes','휴게(분)','number']].map(([name,label,type])=>`<label>${label}<input name="${name}" aria-label="${label}" type="${type}" ${type==='number'?'min="0" max="1439" step="1" value="0"':''} required></label>`).join('')}
+      <label>사유<textarea name="reason" maxlength="1000" aria-label="사유" placeholder="예: 위치 확인이 안 되어 직접 입력" required></textarea></label>
+      <button class="btn" type="submit">관리자에게 신청</button></form>
+      <button type="button" class="btn" data-self-refresh>신청 상태 새로고침</button>
+      <p role="status" aria-live="polite" data-message></p><div data-list></div>`;
+    host.style.overflowWrap = 'anywhere';
+    const form = host.querySelector('form'), list = host.querySelector('[data-list]'), message = host.querySelector('[data-message]');
+    const controls = () => host.querySelectorAll('input,textarea,button').forEach(el => {el.style.minHeight='44px';el.style.maxWidth='100%';el.style.boxSizing='border-box';if(el.type==='submit'||el.dataset?.withdraw!==undefined)el.disabled=busy;});
+    const render = () => {
+      list.innerHTML = items.length ? '<h4>내 직접 입력 신청</h4>' + items.map(row => `<article data-id="${esc(row.id)}" style="border:1px solid #ccd3db;border-radius:12px;padding:12px;margin-top:8px"><b>${esc(labels[row.status] || row.status)}</b><p>${esc(summary(decoded(row.requested)))}</p><p>사유: ${esc(row.reason)}</p><p>처리 사유: ${esc(row.decision_reason || '아직 처리되지 않았습니다')}</p>${row.status==='pending' ? `<label>철회 사유<input data-withdraw-reason maxlength="1000" aria-label="철회 사유"></label><button type="button" class="btn" data-withdraw>철회</button>` : ''}</article>`).join('') : '';
+      controls();
+    };
+    async function refresh() {
+      try {
+        const result = await api(base);
+        if(!current()) return;
+        items = (Array.isArray(result.items) ? result.items : []).filter(row => row.kind === 'new_entry');
+        render();
+      } catch(error) {if(current()) message.textContent = '신청 내역을 조회하지 못했습니다. ' + (error.message || '');}
+    }
+    host.obysRefresh = refresh;
+    host.querySelector('[data-self-refresh]').onclick = () => refresh();
+    async function send(path, payload) {
+      if(busy) return;
+      busy = true; controls(); message.textContent = '처리 중입니다. 중복 클릭하지 마세요.';
+      try {
+        const result = await api(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+        if(!result?.id) throw new Error('처리 응답이 유실되었습니다. 최신 상태를 조회하세요.');
+        if(!current()) return;
+        message.textContent = '신청했습니다. 관리자 확인 후 근태에 반영됩니다.';
+        busy = false; await refresh(); await onSaved();
+      } catch(error) {
+        if(current() && Number(error.status)===409) await refresh();
+        if(current()) message.textContent = Number(error.status)===409 ? `이미 같은 근무가 있거나 신청 대기 중입니다. ${error.message || ''}` : Number(error.status)===403 ? '권한이 없습니다. 계정·사업자를 확인하세요.' : `처리 결과를 확인할 수 없습니다. 최신 상태를 조회하세요. ${error.message || ''}`;
+      } finally {busy = false; if(current()) controls();}
+    }
+    form.onsubmit = event => {
+      event.preventDefault();
+      if(busy || !form.reportValidity()) return;
+      const payload = Object.fromEntries(new FormData(form));
+      payload.break_minutes = Number(payload.break_minutes);
+      if(!String(payload.reason||'').trim()) {message.textContent = '사유를 입력하세요.'; return;}
+      send(base, payload);
+    };
+    list.onclick = event => {
+      const button = event.target.closest('[data-withdraw]');
+      if(!button || busy) return;
+      const article = button.closest('[data-id]'), row = items.find(item => item.id === article.dataset.id);
+      const reason = article.querySelector('[data-withdraw-reason]').value.trim();
+      if(!row) return;
+      if(!reason) {message.textContent = '철회 사유를 입력하세요.'; return;}
+      send(`${base}/${encodeURIComponent(row.id)}/withdraw`, {version:row.version, reason});
+    };
+    controls();
+    await refresh();
+  }
+  window.ObysAttendanceCorrections={mount, mountSelfEntry};
 })();

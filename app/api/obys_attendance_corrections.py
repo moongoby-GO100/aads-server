@@ -11,6 +11,12 @@ async def list_corrections(business_id: str, user=Depends(get_current_user)):
     return await svc.run(user, business_id, "list")
 
 
+@router.post("/corrections", status_code=201)
+async def create_new_entry(business_id: str, payload: svc.NewEntryIn, user=Depends(get_current_user)):
+    """직원 본인의 신규 근무 신청. 신청자는 본문이 아니라 로그인 계정으로만 정해진다."""
+    return await svc.run(user, business_id, "create_new", payload=payload)
+
+
 @router.post("/records/{record_id}/corrections", status_code=201)
 async def create_correction(business_id: str, record_id: str, payload: svc.CorrectionIn, user=Depends(get_current_user)):
     return await svc.run(user, business_id, "create", record_id=record_id, payload=payload)

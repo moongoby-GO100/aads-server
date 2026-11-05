@@ -24,7 +24,7 @@ def test_inline_scripts_and_correction_mount(filename):
     import re
 
     html = (ROOT / "app/static/apps/obys" / filename).read_text()
-    assert "modules/attendance-corrections.js?v=20261102-r1" in html
+    assert "modules/attendance-corrections.js?v=20261105-r1" in html
     assert "ObysAttendanceCorrections.mount" in html
     scripts = re.findall(r"<script>([\s\S]*?)</script>", html)
     assert scripts
