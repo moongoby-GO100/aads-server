@@ -158,6 +158,15 @@ def prepare_release_target(target: ExecutionTarget, release_sha: str, run_id: in
     if release.is_symlink():
         raise RuntimeError("release worktree must not be a symlink")
     if not release.exists():
+        # The commit may have been pushed from another clone; fetch refs only
+        # (never checkout/reset/pull) when the object is missing locally.
+        have = ("git", "-C", target.repo_path, "cat-file", "-e", f"{release_sha}^{{commit}}")
+        if run_command(target, have).returncode:
+            fetched = run_command(target, ("git", "-C", target.repo_path, "fetch", "--no-tags", "origin"), timeout=120)
+            if fetched.returncode:
+                raise RuntimeError(f"release worktree creation failed: fetch 실패: {fetched.stderr.strip()[:500]}")
+            if run_command(target, have).returncode:
+                raise RuntimeError("release worktree creation failed: fetch 후에도 SHA 없음")
         result = run_command(target, ("git", "-C", target.repo_path, "worktree", "add", "--detach", str(release), release_sha))
         if result.returncode:
             raise RuntimeError(f"release worktree creation failed: {result.stderr.strip()[:500]}")
