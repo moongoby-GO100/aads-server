@@ -13,6 +13,7 @@
 # ═══════════════════════════════════════════════════════════════════════
 set -eo pipefail
 CLAUDE_MODEL_CONTRACT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude_model_contract.py"
+RUNNER_ANTIGRAVITY_EXEC="${RUNNER_ANTIGRAVITY_EXEC:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_antigravity_exec.py}"
 
 # general: normal Claude/Codex runner. litellm: claims only LiteLLM jobs.
 RUNNER_ENGINE_MODE="${RUNNER_ENGINE_MODE:-general}"
@@ -2226,6 +2227,20 @@ dedupe_model_cycle_for_attempt_caps() {
 normalize_runner_model() {
     local model="${1:-}"
     case "$model" in
+        antigravity:*)
+            echo "$model"
+            ;;
+        # Antigravity(agy) 모델 id 는 정확 일치로만 고른다(app/services/model_selector.py _ANTIGRAVITY_MODELS 와 같은 집합).
+        # gemini-* 일반 규칙보다 먼저 와야 LiteLLM 으로 새지 않는다. claude-*-high/medium/low 는 Claude 계약이 어차피 거절하는 id 라 Antigravity 로 보낸다. 운영 `agy models` 에서 사라진 id 도 여기로 보내 relay 가 명시 오류로 거절하게 한다.
+        antigravity|antigravity-pro|antigravity-flash|gemini-4-argon-high|gemini-4-argon-medium|gemini-4-argon-low|\
+        gemini-3.8-flash-high|gemini-3.8-flash-medium|gemini-3.8-flash-low|gpt-oss-120b-medium|\
+        claude-opus-5-5-high|claude-opus-5-5-medium|claude-opus-5-5-low|\
+        claude-sonnet-5-5-high|claude-sonnet-5-5-medium|claude-sonnet-5-5-low|\
+        gemini-3.7-flash-high|gemini-3.7-flash-medium|gemini-3.7-flash-low|\
+        gemini-3.6-flash-high|gemini-3.6-flash-medium|gemini-3.6-flash-low|\
+        gemini-3.1-pro-high|gemini-3.1-pro-low)
+            echo "antigravity:${model}"
+            ;;
         claude-*|opus|sonnet|haiku)
             # Keep invalid IDs unchanged for explicit launch rejection below;
             # do not crash the polling runner while building its model cycle.
@@ -2252,6 +2267,17 @@ normalize_runner_model() {
 
 normalize_claude_cli_model() {
     python3 "$CLAUDE_MODEL_CONTRACT" "${1:-}"
+}
+
+# 모델 사이클이 전부 antigravity:* 이면 Anthropic 자격증명이 필요 없다(Google OAuth·relay 인증만 쓴다).
+# 하나라도 다른 모델이 있으면 필요하다. 빈 사이클도 필요한 쪽으로 본다.
+model_cycle_requires_anthropic_auth() {
+    local candidate
+    [[ $# -gt 0 ]] || return 0
+    for candidate in "$@"; do
+        [[ "$candidate" == antigravity:* ]] || return 0
+    done
+    return 1
 }
 
 # 슬롯 자격증명 경로를 stdout 으로 돌려준다.
@@ -6165,6 +6191,10 @@ run_job() {
             claude_fb="claude-sonnet-5-5"
             MODEL_CYCLE=("litellm:minimax-m2.7" "litellm:minimax-m2.7" "$claude_fb" "$claude_fb")
         fi
+    elif [[ "$job_model" == antigravity:* ]]; then
+        # Antigravity 명시 지정은 고정이다 — 실패해도 Claude/Codex/LiteLLM 으로 바꾸지 않고 작업을 오류로 끝낸다.
+        MODEL_CYCLE=("$job_model")
+        log "  ANTIGRAVITY_PINNED job=$job_id model=$job_model fallback=none"
     else
         # worker_model 명시 지정 → 지정 모델 우선, 이후에도 CEO 설정/리뷰 라우팅 순서로 폴백
         local db_models
@@ -6248,7 +6278,8 @@ run_job() {
     # 단, 슬롯 자격증명이 살아 있으면 고정 토큰이 없어도 실행 가능하므로 차단하지 않는다.
     local _slot_auth_available=""
     _slot_auth_available="$(slot_credentials_file 1 || slot_credentials_file 2 || slot_credentials_file 3 || slot_credentials_file 4 || leased_slot_token 1 || leased_slot_token 2 || leased_slot_token 3 || leased_slot_token 4 || true)"
-    if [[ -z "$TOKEN_1" && -z "$TOKEN_2" && -z "$_slot_auth_available" ]]; then
+    if [[ -z "$TOKEN_1" && -z "$TOKEN_2" && -z "$_slot_auth_available" ]] \
+        && model_cycle_requires_anthropic_auth "${MODEL_CYCLE[@]}"; then
         log "FATAL: ANTHROPIC_AUTH_TOKEN / _2 모두 비어있음 — job=$job_id 실패 처리"
         db_update "UPDATE pipeline_jobs SET status='error', phase='token_missing',
                    error_detail='token_missing',
@@ -6257,6 +6288,9 @@ run_job() {
         record_runner_event "$job_id" "job_terminal" "error" "token_missing" "$job_model" "" "$job_size" "" "{\"error_detail\":\"token_missing\"}"
         post_to_chat "$session_id" "🔴 [러너 토큰 없음] ANTHROPIC_AUTH_TOKEN 확인 필요 — job=$job_id"
         return 1
+    fi
+    if [[ -z "$TOKEN_1" && -z "$TOKEN_2" && -z "$_slot_auth_available" ]]; then
+        log "  ANTIGRAVITY_NO_ANTHROPIC_AUTH job=$job_id Anthropic 자격증명 없이 진행 (모델 사이클 전부 antigravity)"
     fi
     # TOKEN_1이 비면 TOKEN_2로 대체
     [[ -z "$TOKEN_1" ]] && TOKEN_1="$TOKEN_2" && log "  WARN: TOKEN_1 비어있음 → TOKEN_2로 대체"
@@ -6286,10 +6320,21 @@ run_job() {
         # 2순위 — .env 고정 oat 토큰 (슬롯이 없는 서버의 기존 경로).
         # Claude Code CLI는 OAuth 토큰을 CLAUDE_CODE_OAUTH_TOKEN으로 받아야 한다.
         # oat 토큰을 ANTHROPIC_API_KEY에 넣으면 x-api-key 경로로 전송되어 Invalid API key가 발생한다.
+        # Antigravity 후보는 이 토큰 전환 전체를 우회한다 — Google OAuth·relay 인증만 쓰므로
+        # Anthropic 자격증명이 하나도 없어도 TOKEN_SWITCH_SKIP/continue 로 시도를 건너뛰지 않는다.
         local slot_cred_file="" leased_token=""
-        slot_cred_file="$(slot_credentials_file "$token_slot" || true)"
-        [[ -z "$slot_cred_file" ]] && leased_token="$(leased_slot_token "$token_slot" || true)"
-        if [[ -n "$slot_cred_file" ]]; then
+        if [[ "$current_model" != antigravity:* ]]; then
+            slot_cred_file="$(slot_credentials_file "$token_slot" || true)"
+            if [[ -z "$slot_cred_file" ]]; then
+                leased_token="$(leased_slot_token "$token_slot" || true)"
+            fi
+        fi
+        if [[ "$current_model" == antigravity:* ]]; then
+            unset CLAUDE_CODE_OAUTH_TOKEN 2>/dev/null || true
+            unset ANTHROPIC_API_KEY 2>/dev/null || true
+            unset ANTHROPIC_BASE_URL 2>/dev/null || true
+            log "  TOKEN_SWITCH_NOT_NEEDED job=$job_id model=$current_model Anthropic 자격증명 불필요"
+        elif [[ -n "$slot_cred_file" ]]; then
             # 래퍼가 격리 HOME 에 자격증명을 staging 하고 CLAUDE_CODE_OAUTH_TOKEN 을 unset 한다.
             # 여기서 고정 토큰을 export 하면 래퍼가 지우기 전까지 우선순위가 뒤집히므로 지운다.
             unset CLAUDE_CODE_OAUTH_TOKEN 2>/dev/null || true
@@ -6501,6 +6546,20 @@ ${resume_brief}${safe_instruction}"
             ${_worker_nice_cmd[@]+"${_worker_nice_cmd[@]}"} timeout "$MAX_RUNTIME" codex "${codex_args[@]}" "$safe_instruction" \
                 < /dev/null > "$output_file" 2> "$err_file" &
             local claude_pid=$!
+        # Antigravity Runner 분기 (antigravity: 접두사) — job worktree 를 workspace 로 relay /antigravity-stream 호출.
+        # Claude 모델 검증(MODEL_CONTRACT)을 거치지 않는다. 결과는 codex/litellm 과 같이 stdout/종료코드로 수집한다.
+        elif [[ "$current_model" == antigravity:* ]]; then
+            local agy_model_name="${current_model#antigravity:}"
+            runner_kind="antigravity_relay"
+            log "  ANTIGRAVITY_RUNNER job=$job_id model=$agy_model_name workspace=$workdir"
+            retry_execution_charge_or_abort "$job_id" "$session_id" "$project" "$parallel_group" "$instruction" "$current_model" || return 1
+            local agy_instr_file="${ARTIFACT_DIR}/.agy_instr_${job_id}.txt"
+            printf '%s' "$safe_instruction" > "$agy_instr_file"
+            ${_worker_nice_cmd[@]+"${_worker_nice_cmd[@]}"} timeout "$MAX_RUNTIME" python3 "$RUNNER_ANTIGRAVITY_EXEC" \
+                --model "$agy_model_name" --workspace "$workdir" \
+                --instruction-file "$agy_instr_file" --session-id "$job_id" \
+                < /dev/null > "$output_file" 2> "$err_file" &
+            local claude_pid=$!
         # LiteLLM Runner 분기 (litellm: 접두사)
         elif [[ "$current_model" == litellm:* ]]; then
             local llm_model_name="${current_model#litellm:}"
@@ -6694,6 +6753,8 @@ ${resume_brief}${safe_instruction}"
             fi
         fi
 
+        # Antigravity instruction temp file 정리
+        [[ -f "${ARTIFACT_DIR}/.agy_instr_${job_id}.txt" ]] && rm -f "${ARTIFACT_DIR}/.agy_instr_${job_id}.txt"
         # LiteLLM instruction temp file 정리
         [[ -f "${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt" ]] && rm -f "${ARTIFACT_DIR}/.litellm_instr_${job_id}.txt"
         [[ -f "/root/aads/aads-server/app/data/.litellm_instr_${job_id}.txt" ]] && rm -f "/root/aads/aads-server/app/data/.litellm_instr_${job_id}.txt"
@@ -6711,6 +6772,14 @@ ${resume_brief}${safe_instruction}"
             if grep -qE "^(FAILED|ERROR):" "$output_file" 2>/dev/null; then
                 exit_code=1
                 log "  LITELLM_CONTENT_FAIL job=$job_id: output contains failure marker"
+            fi
+        fi
+
+        # 방어: Antigravity 출력에 FAILED:/ERROR: 포함 시 강제 실패 처리
+        if [[ $exit_code -eq 0 && "$current_model" == antigravity:* ]]; then
+            if grep -qE "^(FAILED|ERROR):" "$output_file" 2>/dev/null; then
+                exit_code=1
+                log "  ANTIGRAVITY_CONTENT_FAIL job=$job_id: output contains failure marker"
             fi
         fi
 

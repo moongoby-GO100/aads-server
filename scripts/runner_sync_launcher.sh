@@ -43,6 +43,7 @@ REQUIRED_FILES=(
     scripts/runner_busy_lib.sh
     scripts/runner_cli_usage.py
     scripts/runner_handover_write.py
+    scripts/runner_antigravity_exec.py
     scripts/reclaim_runner_worktrees.sh
     tools/aag/brief.py
 )

@@ -101,6 +101,7 @@ def test_launcher_exports_every_file_the_sync_installs_or_sources():
         "scripts/runner_busy_lib.sh",
         "scripts/runner_cli_usage.py",
         "scripts/runner_handover_write.py",
+        "scripts/runner_antigravity_exec.py",
         "tools/aag/brief.py",
     ):
         assert needed in required
@@ -290,6 +291,7 @@ case "$cmd" in
             aag-brief.py) f="$FAKE_REPO/tools/aag/brief.py" ;;
             runner_cli_usage.py) f="$FAKE_REPO/scripts/runner_cli_usage.py" ;;
             runner_handover_write.py) f="$FAKE_REPO/scripts/runner_handover_write.py" ;;
+            runner_antigravity_exec.py) f="$FAKE_REPO/scripts/runner_antigravity_exec.py" ;;
             runner_busy_lib.sh) f="$FAKE_REPO/scripts/runner_busy_lib.sh" ;;
             reclaim_runner_worktrees.sh) f="$FAKE_REPO/scripts/reclaim_runner_worktrees.sh" ;;
             *) exit 0 ;;
@@ -427,3 +429,20 @@ def test_sync_ships_runner_handover_helper():
     assert "(script_dir / 'runner_handover_write.py', directory / 'runner_handover_write.py', 0o644, False)" in script
     assert "'runner_handover_write.py'" in script[script.index("allowed = {"):script.index("/etc/systemd/system/' + service}")]
     assert "scripts/runner_handover_write.py" in _launcher()
+
+
+def test_sync_ships_runner_antigravity_exec_helper():
+    """pipeline-runner.sh 의 RUNNER_ANTIGRAVITY_EXEC 는 설치 디렉터리의 runner_antigravity_exec.py 를 실행한다.
+
+    export·번들·설치 허용 세 곳 중 하나라도 빠지면 공식 동기화로 배포된 원격 러너에서 새 분기가 파일 없음으로 실패한다.
+    """
+    script = (ROOT / "scripts" / "sync_pipeline_runner_remote.sh").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts" / "pipeline-runner.sh").read_text(encoding="utf-8")
+
+    assert "runner_antigravity_exec.py" in runner
+    assert "(script_dir / 'runner_antigravity_exec.py', directory / 'runner_antigravity_exec.py', 0o644, False)" in script
+    assert "'runner_antigravity_exec.py'" in script[script.index("allowed = {"):script.index("/etc/systemd/system/' + service}")]
+    launcher = _launcher()
+    required = launcher[launcher.index("REQUIRED_FILES=("):launcher.index(")", launcher.index("REQUIRED_FILES=("))]
+    assert "scripts/runner_antigravity_exec.py" in required
+    assert (ROOT / "scripts" / "runner_antigravity_exec.py").is_file()
