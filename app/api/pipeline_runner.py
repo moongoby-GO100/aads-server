@@ -3692,6 +3692,7 @@ async def notify_completion(job_id: str):
                     instruction=rework["instruction"],
                     goal_id=str(rework["goal_id"]) if rework.get("goal_id") else None,
                     milestone_id=str(rework["milestone_id"]) if rework.get("milestone_id") else None,
+                    bound_by=f"auto_rework_of:{rework['parent']}",
                 )
                 if linked:
                     await _persist_job_goal_context(

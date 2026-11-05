@@ -82,6 +82,8 @@ class FakeConn:
     async def fetchrow(self, sql, *args):
         if "FROM code_reviews" in sql:
             return self.gate_review
+        if "FROM goal_task_links" in sql:
+            return None
         return self.row
 
     async def fetchval(self, sql, *args):
