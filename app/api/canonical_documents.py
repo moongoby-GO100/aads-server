@@ -699,6 +699,23 @@ class DecisionInput(BaseModel):
     expected_generation: int = Field(ge=1)
 
 
+async def approve_revision_in_tx(conn: Any, tenant: str, project: str, head: Any, revision_id: Any, actor: str) -> dict:
+    """승인 핵심(HTTP·자동승인 공용). 호출자가 head 를 FOR UPDATE 로 잠근 트랜잭션 안에서 부른다. 인증·generation 검사는 호출자 몫."""
+    if str(head["approved_revision_id"]) == str(revision_id):
+        return {"approved_revision_id": revision_id, "idempotent": True}
+    from app.services.doc_cross_review import enforce
+    await enforce(conn, tenant, project, head, revision_id, approve=True)
+    last = await conn.fetchval("SELECT action FROM project_document_events WHERE head_id=$1 AND revision_id=$2 "
+                               "AND action IN ('review','approved','archived') ORDER BY id DESC LIMIT 1",
+                               head["id"], revision_id)
+    if last != "review":
+        raise HTTPException(409, "revision_not_in_review")
+    await conn.execute("UPDATE project_document_heads SET approved_revision_id=$2,generation=generation+1,updated_at=now() WHERE id=$1", head["id"], revision_id)
+    await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
+                       "VALUES($1::uuid,$2,$3,$4,'approved',$5)", tenant, project, head["id"], revision_id, actor)
+    return {"approved_revision_id": revision_id, "idempotent": False}
+
+
 @router.post("/{document_key}/approve")
 async def approve_document(project_key: str, document_key: str, body: DecisionInput, context: dict = WRITE):
     project = _project(project_key)
@@ -712,17 +729,7 @@ async def approve_document(project_key: str, document_key: str, body: DecisionIn
             return {"approved_revision_id": body.revision_id, "idempotent": True}
         if head["generation"] != body.expected_generation or head["latest_revision_id"] != body.revision_id:
             raise HTTPException(409, "generation_conflict")
-        from app.services.doc_cross_review import enforce
-        await enforce(conn, tenant, project, head, body.revision_id, approve=True)
-        last = await conn.fetchval("SELECT action FROM project_document_events WHERE head_id=$1 AND revision_id=$2 "
-                                   "AND action IN ('review','approved','archived') ORDER BY id DESC LIMIT 1",
-                                   head["id"], body.revision_id)
-        if last != "review":
-            raise HTTPException(409, "revision_not_in_review")
-        await conn.execute("UPDATE project_document_heads SET approved_revision_id=$2,generation=generation+1,updated_at=now() WHERE id=$1", head["id"], body.revision_id)
-        await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
-                           "VALUES($1::uuid,$2,$3,$4,'approved',$5)", tenant, project, head["id"], body.revision_id, actor)
-        return {"approved_revision_id": body.revision_id, "idempotent": False}
+        return await approve_revision_in_tx(conn, tenant, project, head, body.revision_id, actor)
 
 
 async def _archive_approved(conn: Any, tenant: str, project: str, head_id: Any, revision_id: Any, actor: str) -> None:

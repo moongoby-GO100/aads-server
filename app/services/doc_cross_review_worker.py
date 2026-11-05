@@ -16,7 +16,7 @@ _HEAD_SQL = (
 )
 
 
-async def run_worker(tenant, project, document_key, revision_id):
+async def run_worker(tenant, project, document_key, revision_id, follow_up=False):
     await init_pool()
     try:
         async with get_pool().acquire() as conn:
@@ -32,7 +32,10 @@ async def run_worker(tenant, project, document_key, revision_id):
             if not revision:
                 logger.warning('doc_cross_review_worker_revision_missing revision_id=%s', revision_id)
                 return 'revision_missing'
-        await doc_cross_review.execute_review(tenant, project, dict(head), dict(revision))
+        if follow_up:
+            await doc_cross_review.execute_review(tenant, project, dict(head), dict(revision), follow_up=True)
+        else:
+            await doc_cross_review.execute_review(tenant, project, dict(head), dict(revision))
         return 'executed'
     finally:
         await close_pool()
@@ -51,8 +54,9 @@ async def _guarded(args):
         logger.warning('doc_cross_review_worker_sigterm_handler_unavailable')
     logger.warning('doc_cross_review_worker_started document_key=%s revision_id=%s', args.document_key, args.revision_id)
     try:
+        extra = {'follow_up': True} if getattr(args, 'follow_up', False) else {}
         result = await asyncio.wait_for(
-            run_worker(args.tenant, args.project, args.document_key, args.revision_id), timeout=_DEADLINE_SECONDS)
+            run_worker(args.tenant, args.project, args.document_key, args.revision_id, **extra), timeout=_DEADLINE_SECONDS)
     except asyncio.TimeoutError:
         logger.error('doc_cross_review_worker_timeout document_key=%s revision_id=%s limit=%ss',
                      args.document_key, args.revision_id, _DEADLINE_SECONDS)
@@ -81,6 +85,7 @@ def main(argv=None):
     parser.add_argument('--project', required=True)
     parser.add_argument('--document-key', required=True)
     parser.add_argument('--revision-id', required=True)
+    parser.add_argument('--follow-up', action='store_true')
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr,
                         format='%(asctime)s pid=%(process)d %(levelname)s %(name)s %(message)s')

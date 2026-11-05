@@ -211,7 +211,7 @@ async def _approved_titles(conn, tenant, project, head):
             for r in rows if r.get('document_key') != own][:8]
 
 
-async def execute_review(tenant, project, head, revision):
+async def execute_review(tenant, project, head, revision, *, follow_up=False):
     from app.services import code_reviewer as cli
     tier = tier_of(revision, head)
     if tier == 'SPLIT':
@@ -227,8 +227,15 @@ async def execute_review(tenant, project, head, revision):
     try:
         async with get_pool().acquire() as conn:
             current = await summary(conn, head, revision)
-            if current['review_state'] == 'passed':
+            if current['review_state'] == 'passed' and not follow_up:
                 return current
+            needed = set()
+            if follow_up:
+                from app.services import doc_auto_approval
+                prior = await conn.fetch('SELECT * FROM project_document_reviews WHERE revision_id=$1 ORDER BY id', revision['id'])
+                needed = doc_auto_approval.providers_needing_review(prior)
+                if not needed:
+                    return current
             approved = await _approved_titles(conn, tenant, project, head)
             sizes = ['AI_REVIEW_LIGHT', 'AI_REVIEW_STD', 'AI_REVIEW_HEAVY']
             lists = []
@@ -249,10 +256,18 @@ async def execute_review(tenant, project, head, revision):
         available = {m for ls in lists for m in ls if cli._is_cli_review_model(m)}
         excluded, completed = set(), set()
         while True:
-            picks, status = pick_reviewers(tier, revision.get('author_model'), lists[0], available=available,
-                                          extra_lists=lists[1:], exclude=excluded)
+            picks, status = pick_reviewers('D3' if follow_up else tier, revision.get('author_model'), lists[0],
+                                          available=available, extra_lists=lists[1:], exclude=excluded)
+            if follow_up:
+                # 후속 검토는 아직 채워지지 않은 회사의 리뷰어만 부른다. 못 구하면 기록·알림 없이 멈춘다.
+                if status == 'blocked_no_second':
+                    status = 'ok'
+                picks = [p for p in picks if provider_of(p.model) in needed]
+                if status != 'ok' or not picks:
+                    logger.warning('doc_cross_review_follow_up_unavailable revision_id=%s status=%s', revision['id'], status)
+                    break
             async with get_pool().acquire() as conn:
-                if status == 'ok' and tier == 'D3':
+                if status == 'ok' and (tier == 'D3' or follow_up):
                     async with conn.transaction():
                         await conn.execute('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', 'doc-d3:' + tenant)
                         count = await conn.fetchval("SELECT count(*) FROM document_cross_review_budget WHERE tenant_id=$1::uuid AND review_day=CURRENT_DATE", tenant)
@@ -262,10 +277,14 @@ async def execute_review(tenant, project, head, revision):
                         elif not reserved:
                             await conn.execute('INSERT INTO document_cross_review_budget(tenant_id,revision_id,review_day) VALUES($1::uuid,$2,CURRENT_DATE)', tenant, revision['id'])
                 if status != 'ok':
-                    await _record(conn, tenant, project, head, revision, ReviewerPick('unconfigured'), 'blocked', status)
+                    if not follow_up:
+                        await _record(conn, tenant, project, head, revision, ReviewerPick('unconfigured'), 'blocked', status)
                     await conn.execute('DELETE FROM document_cross_review_budget WHERE revision_id=$1 AND review_day=CURRENT_DATE', revision['id'])
             if status != 'ok':
-                await notify_blocked(tenant, project, status)
+                if follow_up:
+                    logger.warning('doc_cross_review_follow_up_blocked revision_id=%s status=%s', revision['id'], status)
+                else:
+                    await notify_blocked(tenant, project, status)
                 break
             failed = False
             for pick in picks:
@@ -295,10 +314,26 @@ async def execute_review(tenant, project, head, revision):
             if not failed:
                 break
         async with get_pool().acquire() as conn:
-            return await summary(conn, head, revision)
+            outcome = await summary(conn, head, revision)
     finally:
         async with get_pool().acquire() as conn:
             await conn.execute('DELETE FROM document_cross_review_leases WHERE revision_id=$1 AND owner=$2', revision['id'], token)
+    await _auto_approve_after_review(tenant, project, head, revision, outcome, allow_follow_up=not follow_up)
+    return outcome
+
+
+async def _auto_approve_after_review(tenant, project, head, revision, outcome, *, allow_follow_up):
+    """리뷰 기록 직후 자동승인 판정. 임대(lease)를 놓은 뒤에 불러야 후속 검토가 임대에 막히지 않는다. 실패는 로그만."""
+    if outcome.get('review_state') != 'passed':
+        return
+    try:
+        from app.services import doc_auto_approval
+        async with get_pool().acquire() as conn:
+            decision = await doc_auto_approval.maybe_auto_approve(conn, tenant, project, head['id'], revision['id'])
+            if allow_follow_up and decision.action == 'hold' and 'needs_second_company' in decision.reasons:
+                await doc_auto_approval.request_follow_up_review(conn, tenant, project, head, revision)
+    except Exception:
+        logger.exception('doc_auto_approval_failed revision_id=%s', revision.get('id'))
 
 
 _DETACHED_TIMEOUT_SECONDS = 1500
@@ -334,7 +369,7 @@ def _watch_worker(proc, revision_id, log_path):
         logger.error('doc_cross_review_worker_exit_nonzero revision_id=%s code=%s log=%s', revision_id, code, log_path)
 
 
-def _spawn_detached(tenant, project, head, revision):
+def _spawn_detached(tenant, project, head, revision, follow_up=False):
     """Start the review worker detached from this process; returns False when it could not be started."""
     root = _app_root()
     env = dict(os.environ)
@@ -343,6 +378,8 @@ def _spawn_detached(tenant, project, head, revision):
     cmd = ['timeout', str(_DETACHED_TIMEOUT_SECONDS), sys.executable, '-m', 'app.services.doc_cross_review_worker',
            '--tenant', str(tenant), '--project', str(project),
            '--document-key', str(head['document_key']), '--revision-id', str(revision['id'])]
+    if follow_up:
+        cmd.append('--follow-up')
     log_path, log_file = _open_worker_log(root)
     if log_file is None:
         logger.warning('doc_cross_review_worker_log_unavailable revision_id=%s', revision['id'])
@@ -361,13 +398,18 @@ def _spawn_detached(tenant, project, head, revision):
     return True
 
 
-def schedule(tenant, project, head, revision):
-    if _is_short_lived_bridge() and _spawn_detached(tenant, project, head, revision):
+def schedule(tenant, project, head, revision, follow_up=False):
+    if _is_short_lived_bridge() and (
+            _spawn_detached(tenant, project, head, revision, follow_up=True) if follow_up
+            else _spawn_detached(tenant, project, head, revision)):
         return
 
     async def run():
         try:
-            await execute_review(tenant, project, dict(head), dict(revision))
+            if follow_up:
+                await execute_review(tenant, project, dict(head), dict(revision), follow_up=True)
+            else:
+                await execute_review(tenant, project, dict(head), dict(revision))
         except asyncio.CancelledError:
             logger.warning('doc_cross_review_auto_cancelled', extra={'revision_id': str(revision['id'])})
             raise
