@@ -137,6 +137,9 @@ prune_project_images() {
 docker image prune -f --filter "dangling=true" >> "$LOG" 2>&1 || true
 # 2026-11-04: 168h → 72h. 회수 가능 빌드 캐시가 4GB 쌓인 채 디스크가 98% 까지 갔다.
 docker builder prune -af --filter "until=72h" >> "$LOG" 2>&1 || true
+# 2026-11-05: 72시간 기준만으로는 최근 캐시가 28.5GB 까지 쌓여 회수 0 이었다(116 98%).
+# 최근 8GB 만 남기는 상한을 함께 건다. 빌드는 다음 번에 다시 채운다.
+docker builder prune -f --keep-storage "${AADS_BUILD_CACHE_KEEP:-8GB}" >> "$LOG" 2>&1 || true
 docker container prune -f >> "$LOG" 2>&1 || true
 prune_project_images
 docker pull node:20-slim >> "$LOG" 2>&1 || true
