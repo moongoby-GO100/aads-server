@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -31,7 +32,10 @@ _DISCOVERY_STALE_AFTER_SECONDS = max(
 )
 
 _GLOBAL_DISCOVERY_PROVIDER = "all"
-_DISCOVERY_PROVIDERS = ("openai", "anthropic", "gemini", "litellm", "kimi", "deepseek", "codex")
+_DISCOVERY_PROVIDERS = (
+    "openai", "anthropic", "gemini", "litellm", "kimi", "deepseek", "codex",
+    "groq", "mistral", "openrouter", "minimax", "together", "cerebras", "sambanova",
+)
 
 _PROVIDER_ALIASES = {
     "anthropic": "anthropic",
@@ -563,6 +567,13 @@ _DISCOVERY_REQUIREMENTS = {
     "litellm": "LiteLLM master key and /model/info endpoint required",
     "kimi": "Moonshot provider key required for GET /v1/models",
     "deepseek": "DeepSeek provider key (central key store) required for official GET /models",
+    "groq": "Groq provider key required for GET /openai/v1/models",
+    "mistral": "Mistral provider key required for GET /v1/models",
+    "openrouter": "OpenRouter provider key required for GET /api/v1/models",
+    "minimax": "MiniMax provider key required for GET /v1/models",
+    "together": "Together provider key required for GET /v1/models",
+    "cerebras": "Cerebras provider key required for GET /v1/models",
+    "sambanova": "SambaNova provider key required for GET /v1/models",
 }
 
 _PROVIDER_META = {
@@ -588,6 +599,20 @@ _DIRECT_PROVIDER_BASE_URLS = {
     "kimi": "https://api.moonshot.ai/v1",
     "minimax": "https://api.minimax.chat/v1",
     "mistral": "https://api.mistral.ai/v1",
+}
+
+# OpenAI 호환 GET <base>/models 로 목록을 받는 회사 — 회사마다 함수를 복사하지 않고 이 표 하나로 수집한다.
+# 실행 경로(_DIRECT_PROVIDER_BASE_URLS)가 있는 회사는 같은 값을 쓴다. 공식 문서로 확인한 값만 둔다(2026-11-05).
+# 미확인이라 아직 넣지 않은 회사: qwen(DashScope /models 문서 없음), nvidia(공식 문서에 /v1/models 없음).
+_OPENAI_COMPAT_DISCOVERY_BASE_URLS: dict[str, str] = {
+    "groq": _DIRECT_PROVIDER_BASE_URLS["groq"],
+    "mistral": _DIRECT_PROVIDER_BASE_URLS["mistral"],
+    "openrouter": _DIRECT_PROVIDER_BASE_URLS["openrouter"],
+    # 공식 List Models 는 api.minimax.io 이고 실행 경로(api.minimax.chat)와 다르다 — 실행 경로는 이 작업에서 바꾸지 않는다.
+    "minimax": "https://api.minimax.io/v1",
+    "together": "https://api.together.ai/v1",
+    "cerebras": "https://api.cerebras.ai/v1",
+    "sambanova": "https://api.sambanova.ai/v1",
 }
 
 
@@ -835,7 +860,8 @@ def _provider_auto_discovery_supported(provider: str, provider_state: dict[str, 
             key.get("is_available") and _anthropic_key_supports_models_api(str(key.get("key_name") or ""))
             for key in provider_state.get("keys", [])
         )
-    return provider in {"openai", "gemini", "litellm", "kimi", "deepseek"} and int(provider_state.get("available_key_count", 0)) > 0
+    supported = {"openai", "gemini", "litellm", "kimi", "deepseek", *_OPENAI_COMPAT_DISCOVERY_BASE_URLS}
+    return provider in supported and int(provider_state.get("available_key_count", 0)) > 0
 
 
 def _provider_discovery_requirement(provider: str) -> str:
@@ -1328,6 +1354,53 @@ async def _fetch_deepseek_models() -> tuple[list[dict[str, Any]], dict[str, Any]
     }
 
 
+async def _fetch_openai_compatible_models(provider: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """표(_OPENAI_COMPAT_DISCOVERY_BASE_URLS)의 회사 공통 수집기. 키는 중앙 키 조회로만 읽고 결과·로그에 남기지 않는다."""
+    source = f"{provider}_api"
+    api_key = await _get_first_provider_key(provider)
+    if not api_key:
+        return [], {
+            "status": "skipped",
+            "error": "missing_key",
+            "count": 0,
+            "discovery_source": source,
+            "auto_discovery_supported": False,
+            "model_source": "template",
+        }
+    url = f"{_OPENAI_COMPAT_DISCOVERY_BASE_URLS[provider]}/models"
+    failed = {"status": "failed", "count": 0, "discovery_source": source, "model_source": "template"}
+    try:
+        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.HTTPError as exc:
+        return [], {**failed, "error": _discovery_error_code(exc)}
+    except ValueError:
+        return [], {**failed, "error": "schema_invalid"}
+    # Together 는 최상위 배열, 나머지는 {"data": [...]} 로 응답한다.
+    items = payload if isinstance(payload, list) else payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(items, list) or (isinstance(payload, dict) and payload.get("error")):
+        return [], {**failed, "error": "schema_invalid"}
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    for item in items:
+        model_id = str(item.get("id") or "").strip() if isinstance(item, dict) else ""
+        if model_id and model_id not in rows_by_id:
+            rows_by_id[model_id] = {
+                "model_id": model_id,
+                "display_name": _display_name_for_provider(provider, model_id),
+                "raw": item,
+            }
+    rows = list(rows_by_id.values())
+    return rows, {
+        "status": "ok",
+        "count": len(rows),
+        "discovery_source": source,
+        "auto_discovery_supported": True,
+        "model_source": "discovery",
+    }
+
+
 def _parse_timestamp(value: Any) -> datetime | None:
     if value in (None, ""):
         return None
@@ -1453,6 +1526,10 @@ async def discover_provider_model_rows(
         "kimi": _fetch_kimi_models,
         "deepseek": _fetch_deepseek_models,
         "codex": _fetch_codex_cli_models,
+        **{
+            name: functools.partial(_fetch_openai_compatible_models, name)
+            for name in _OPENAI_COMPAT_DISCOVERY_BASE_URLS
+        },
     }
     all_rows: list[dict[str, Any]] = []
     run_results: list[dict[str, Any]] = []
@@ -1741,7 +1818,7 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                 "discovery_active_model_count": 0,
                 "active_model_source": "none",
                 "runtime_executable": int(state.get("available_key_count", 0)) > 0,
-                "auto_discovery_supported": False,
+                "auto_discovery_supported": _provider_auto_discovery_supported(provider, state),
                 "discovery_requirement": _provider_discovery_requirement(provider),
                 "discovery_mode": "manual_review",
                 "last_used_at": _iso(state.get("last_used_at")),
