@@ -7700,14 +7700,16 @@ ensure_rework_base_or_fail() {
     rework_parent=$(printf '%s\n' "$instruction" | sed -nE 's/^AUTO_REWORK_OF:[[:space:]]*(runner-[0-9a-zA-Z_-]+)[[:space:]]*$/\1/p' | head -1)
     [[ -n "$rework_parent" ]] || rework_parent=$(printf '%s\n' "$parents" | head -1)
     for parent in $parents; do
-        row=$(db_exec "SELECT COALESCE(commit_hash,''), COALESCE(runner_host,'') FROM pipeline_jobs WHERE job_id=$(sql_escape "$parent");" 2>/dev/null) || row="__dberr__"
+        row=$(db_exec "SELECT COALESCE(commit_hash,''), COALESCE(runner_host,''), CAST(started_at IS NULL as int) FROM pipeline_jobs WHERE job_id=$(sql_escape "$parent");" 2>/dev/null) || row="__dberr__"
         if [[ "$row" == "__dberr__" ]]; then
             _fail_job "$job_id" "$session_id" "rework_base_unavailable" \
                 "재작업 출발 커밋 조회 실패(DB): parent=${parent}" "rework_base_unavailable: ${parent} on unknown"
             return 1
         fi
-        db_sha="${row%%$'\x1e'*}"; host="${row#*$'\x1e'}"
+        db_sha="${row%%$'\x1e'*}"; remainder="${row#*$'\x1e'}"
+        host="${remainder%%$'\x1e'*}"; started_at_null="${remainder#*$'\x1e'}"
         [[ "$row" == *$'\x1e'* ]] || host=""
+        started_at_null="${started_at_null//[[:space:]]/}"
         db_sha="${db_sha//[[:space:]]/}"; host="${host//[[:space:]]/}"
         [[ "$db_sha" =~ ^[0-9a-f]{40}$ ]] || db_sha=""
         want=""
@@ -7729,7 +7731,11 @@ ensure_rework_base_or_fail() {
         if [[ -z "$want" ]]; then
             # 출발 SHA 를 모를 때 건너뛰기는 "부모 산출물이 없다"가 확인된 경우에만 허용한다. 확인 못 하면 fail-closed.
             local why=""
-            if [[ -z "$host" ]]; then
+            # started_at IS NULL 이면 작업이 시작되지 않았으므로 산출물이 없음은 확정.
+            if [[ "$started_at_null" == "1" && -z "$host" ]]; then
+                log "  REWORK_BASE_SKIP job=$job_id parent=$parent — 부모가 시작되지 않음(산출물 없음 확정)" >&2
+                continue
+            elif [[ -z "$host" ]]; then
                 why="부모 러너 서버 미상 — 산출물 유무를 확인할 수 없음"
             elif (( is_local )); then
                 if git -C "$repo" rev-parse --verify -q "${RUNNER_ARTIFACT_NS}/${parent}^{commit}" >/dev/null 2>&1; then

@@ -139,7 +139,7 @@ def test_ensure_fail_closed_when_base_missing(tmp_path, sh):
     sha = "d" * 40
     cfg = tmp_path / "ssh_config"
     cfg.write_text("Host unrelated\n    HostName 1.2.3.4\n")
-    db = f"printf '%s\\x1e%s' {sha} vmi3725547"
+    db = f"printf '%s\\x1e%s\\x1e%s' {sha} vmi3725547 0"
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} $'AUTO_REWORK_OF: runner-aaaaaaaa\\nTARGET: x'",
                 env={"RUNNER_ARTIFACT_SSH_CONFIG": str(cfg)}, db=db)
     assert r.returncode == 1
@@ -212,7 +212,7 @@ def test_ensure_fetches_from_peer_via_real_ssh_args(peer_env, sh):
     _git(peer, "update-ref", "refs/runner-artifacts/runner-aaaaaaaa", sha)
     assert not _has(local, sha)
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {local} $'RETRY_OF_LINK: runner-aaaaaaaa'",
-                env=env, db=f"printf '%s\\x1e%s' {sha} vmi3725547")
+                env=env, db=f"printf '%s\\x1e%s\\x1e%s' {sha} vmi3725547 0")
     assert r.returncode == 0, log
     assert "REWORK_BASE_HOST_MAP host=vmi3725547 alias=mesh-42 via=remote_hostname" in log
     assert "REWORK_BASE_FETCHED" in log and "FAIL" not in log
@@ -230,7 +230,7 @@ def test_ensure_fetches_when_db_commit_hash_empty_using_instruction_sha(peer_env
     sha = _peer_commit(peer)
     _git(peer, "update-ref", "refs/runner-artifacts/runner-aaaaaaaa", sha)
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {local} $'{_instr(sha[:12])}'",
-                env=env, db="printf '%s\\x1e%s' '' vmi3725547")
+                env=env, db="printf '%s\\x1e%s\\x1e%s' '' vmi3725547 0")
     assert r.returncode == 0, log
     assert "REWORK_BASE_FETCHED" in log and "FAIL" not in log
     assert _git(local, "rev-parse", "refs/runner-artifacts/runner-aaaaaaaa") == sha
@@ -243,7 +243,7 @@ def test_ensure_instruction_sha_beats_db_sha_when_db_is_local_but_wrong(peer_env
     b = _peer_commit(peer)
     _git(peer, "update-ref", "refs/runner-artifacts/runner-aaaaaaaa", b)
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {local} $'{_instr(b[:12])}'",
-                env=env, db=f"printf '%s\\x1e%s' {a} vmi3725547")
+                env=env, db=f"printf '%s\\x1e%s\\x1e%s' {a} vmi3725547 0")
     assert r.returncode == 0, log
     assert "REWORK_BASE_DB_MISMATCH" in log
     assert _git(local, "rev-parse", "refs/runner-artifacts/runner-aaaaaaaa") == b
@@ -257,7 +257,7 @@ def test_ensure_fails_when_instruction_sha_absent_though_db_and_ref_point_elsewh
     b = "b" * 40
     _git(peer, "update-ref", "refs/runner-artifacts/runner-aaaaaaaa", _git(peer, "rev-parse", "HEAD"))
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {local} $'{_instr(b)}'",
-                env=env, db=f"printf '%s\\x1e%s' {a} vmi3725547")
+                env=env, db=f"printf '%s\\x1e%s\\x1e%s' {a} vmi3725547 0")
     assert r.returncode == 1
     assert f"FAIL rework_base_unavailable | rework_base_unavailable: {b} on vmi3725547" in log
     assert _git(local, "rev-parse", "refs/runner-artifacts/runner-aaaaaaaa") == a  # 기존 ref 를 덮어쓰지 않았다
@@ -270,7 +270,7 @@ def test_ensure_fail_closed_when_ssh_alias_unresolvable(tmp_path, sh):
     cfg.write_text("Host unrelated\n    HostName 1.2.3.4\n")
     sha = "c" * 40
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} $'{_instr(sha)}'",
-                env={"RUNNER_ARTIFACT_SSH_CONFIG": str(cfg)}, db="printf '%s\\x1e%s' '' vmi3725547")
+                env={"RUNNER_ARTIFACT_SSH_CONFIG": str(cfg)}, db="printf '%s\\x1e%s\\x1e%s' '' vmi3725547 0")
     assert r.returncode == 1
     assert f"rework_base_unavailable: {sha} on vmi3725547" in log
 
@@ -279,18 +279,46 @@ _NO_SHA_INSTR = "$'AUTO_REWORK_OF: runner-aaaaaaaa\\nTARGET: x'"
 
 
 def test_ensure_fails_when_no_sha_and_host_unknown(tmp_path, sh):
-    """(구 test_ensure_skips_when_no_sha_anywhere_and_remote_unreachable) fail-open 이 아니라 fail-closed."""
+    """(구 test_ensure_skips_when_no_sha_anywhere_and_remote_unreachable) fail-open 이 아니라 fail-closed. started_at이 있을 때."""
     repo = _mkrepo(tmp_path / "r")
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} {_NO_SHA_INSTR}",
-                db="printf '%s\\x1e%s' '' ''")
+                db="printf '%s\\x1e%s\\x1e%s' '' '' 0")
     assert r.returncode == 1 and "REWORK_BASE_SKIP" not in log
+    assert "FAIL rework_base_unavailable | rework_base_unavailable: runner-aaaaaaaa on unknown" in log
+
+
+def test_ensure_skips_when_parent_never_started(tmp_path, sh):
+    """부모가 시작되지 않음(started_at IS NULL) + host 빈 값 + sha 빈 값 → 산출물 없음 확정, 건너뛰기."""
+    repo = _mkrepo(tmp_path / "r")
+    r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} {_NO_SHA_INSTR}",
+                db="printf '%s\\x1e%s\\x1e%s' '' '' 1")
+    assert r.returncode == 0, log
+    assert "REWORK_BASE_SKIP" in log and "부모가 시작되지 않음(산출물 없음 확정)" in log and "FAIL" not in log
+
+
+def test_ensure_fails_when_parent_started_but_host_missing(tmp_path, sh):
+    """부모가 시작됨(started_at IS NOT NULL) + host 빈 값 + sha 빈 값 → 산출물 유무를 모르므로 fail-closed."""
+    repo = _mkrepo(tmp_path / "r")
+    r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} {_NO_SHA_INSTR}",
+                db="printf '%s\\x1e%s\\x1e%s' '' '' 0")
+    assert r.returncode == 1
+    assert "FAIL rework_base_unavailable | rework_base_unavailable: runner-aaaaaaaa on unknown" in log
+    assert "REWORK_BASE_SKIP" not in log
+
+
+def test_ensure_fails_when_parent_row_missing(tmp_path, sh):
+    """DB 쿼리가 행을 반환하지 못함 → rework_base_unavailable."""
+    repo = _mkrepo(tmp_path / "r")
+    r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} {_NO_SHA_INSTR}",
+                db="echo ''")
+    assert r.returncode == 1
     assert "FAIL rework_base_unavailable | rework_base_unavailable: runner-aaaaaaaa on unknown" in log
 
 
 def test_ensure_skips_when_remote_reachable_and_no_artifact_ref(peer_env, sh):
     peer, local, env, sshlog = peer_env
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {local} {_NO_SHA_INSTR}",
-                env=env, db="printf '%s\\x1e%s' '' vmi3725547")
+                env=env, db="printf '%s\\x1e%s\\x1e%s' '' vmi3725547 0")
     assert r.returncode == 0, log
     assert "REWORK_BASE_SKIP" in log and "원격 ls-remote 성공" in log and "FAIL" not in log
     assert f"git-upload-pack '{local}'" in sshlog.read_text()  # 실제로 원격에 물어보고 건너뛰었다
@@ -301,7 +329,7 @@ def test_ensure_fetches_when_remote_reachable_and_artifact_ref_present(peer_env,
     sha = _peer_commit(peer)
     _git(peer, "update-ref", "refs/runner-artifacts/runner-aaaaaaaa", sha)
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {local} {_NO_SHA_INSTR}",
-                env=env, db="printf '%s\\x1e%s' '' vmi3725547")
+                env=env, db="printf '%s\\x1e%s\\x1e%s' '' vmi3725547 0")
     assert r.returncode == 0, log
     assert "REWORK_BASE_FETCHED" in log and "REWORK_BASE_SKIP" not in log and "FAIL" not in log
     assert _git(local, "rev-parse", "refs/runner-artifacts/runner-aaaaaaaa") == sha
@@ -313,7 +341,7 @@ def test_ensure_fails_when_remote_unreachable_and_no_sha(peer_env, sh):
     sha = _peer_commit(peer)
     _git(peer, "update-ref", "refs/runner-artifacts/runner-aaaaaaaa", sha)
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {local} {_NO_SHA_INSTR}",
-                env=env | {"FAKE_SSH_DOWN": "1"}, db="printf '%s\\x1e%s' '' vmi3725547")
+                env=env | {"FAKE_SSH_DOWN": "1"}, db="printf '%s\\x1e%s\\x1e%s' '' vmi3725547 0")
     assert r.returncode == 1 and "REWORK_BASE_SKIP" not in log
     assert "FAIL rework_base_unavailable | rework_base_unavailable: runner-aaaaaaaa on vmi3725547" in log
     assert "ls-remote 실패" in log
@@ -324,14 +352,14 @@ def test_ensure_fails_when_no_sha_and_alias_unresolvable(tmp_path, sh):
     cfg = tmp_path / "ssh_config"
     cfg.write_text("Host unrelated\n    HostName 1.2.3.4\n")
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} {_NO_SHA_INSTR}",
-                env={"RUNNER_ARTIFACT_SSH_CONFIG": str(cfg)}, db="printf '%s\\x1e%s' '' vmi3725547")
+                env={"RUNNER_ARTIFACT_SSH_CONFIG": str(cfg)}, db="printf '%s\\x1e%s\\x1e%s' '' vmi3725547 0")
     assert r.returncode == 1 and "REWORK_BASE_SKIP" not in log
     assert "FAIL rework_base_unavailable" in log and "별칭을 찾지 못함" in log
 
 
 def test_ensure_same_host_skips_only_when_local_ref_absent(tmp_path, sh):
     repo = _mkrepo(tmp_path / "r")
-    db = "printf '%s\\x1e%s' '' localhost-x"
+    db = "printf '%s\\x1e%s\\x1e%s' '' localhost-x 0"
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} {_NO_SHA_INSTR}", db=db)
     assert r.returncode == 0 and "REWORK_BASE_SKIP" in log and "FAIL" not in log
 
@@ -340,7 +368,7 @@ def test_ensure_same_host_uses_local_ref_when_present(tmp_path, sh):
     repo = _mkrepo(tmp_path / "r")
     _git(repo, "update-ref", "refs/runner-artifacts/runner-aaaaaaaa", _git(repo, "rev-parse", "HEAD"))
     r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} {_NO_SHA_INSTR}",
-                db="printf '%s\\x1e%s' '' localhost-x")
+                db="printf '%s\\x1e%s\\x1e%s' '' localhost-x 0")
     assert r.returncode == 0 and "REWORK_BASE_LOCAL" in log and "REWORK_BASE_SKIP" not in log
 
 
