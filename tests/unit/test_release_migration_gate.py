@@ -105,3 +105,37 @@ def test_catalog_failure_does_not_report_clean_plan(gated, monkeypatch):
     fake_catalog(gated, monkeypatch, 'exit 1\n')
     assert gated.run('--plan').returncode == 8
     assert not gated.applied()
+
+
+def _stub_verifier(gated, verify_rc, postcheck_rc=0):
+    gated.write('001.sql', 'SELECT 1;')
+    stub = gated.root / 'scripts/release_migration_autoverify.py'
+    stub.write_text(
+        'import sys\n'
+        f'cmd = sys.argv[1]\nprint("STUB", cmd)\nsys.exit({verify_rc} if cmd == "verify" else {postcheck_rc})\n')
+
+
+def test_auto_verify_pass_applies_without_human_approval(gated):
+    # 2026-11-05 대표님 결정: 사람 승인 근거가 없어도 자동 검증을 통과하면 적용한다.
+    _stub_verifier(gated, 0)
+    result = gated.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'AUTO-APPROVED' in result.stdout and 'STUB postcheck' in result.stdout
+
+
+def test_auto_verify_fail_still_requires_human_approval(gated):
+    _stub_verifier(gated, 1)
+    result = gated.run()
+    assert result.returncode == 7
+    assert 'BLOCK-CEO-APPROVAL' in result.stdout
+
+
+def test_auto_verify_can_be_disabled(gated, monkeypatch):
+    _stub_verifier(gated, 0)
+    monkeypatch.setenv('AADS_MIGRATION_AUTOVERIFY', '0')
+    assert gated.run().returncode == 7
+
+
+def test_postcheck_failure_fails_release(gated):
+    _stub_verifier(gated, 0, postcheck_rc=1)
+    assert gated.run().returncode == 5

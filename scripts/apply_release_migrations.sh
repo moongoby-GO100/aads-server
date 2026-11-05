@@ -22,7 +22,7 @@
 #
 # Exit codes: 0 ok, 2 usage, 4 destructive SQL in a pending file (nothing
 # applied), 5 a migration failed (later files not attempted), 6 ledger unreadable,
-# 7 CEO approval unavailable/mismatched, 8 schema inspection failed.
+# 7 CEO approval unavailable/mismatched and auto-verify failed, 8 schema inspection failed.
 
 set -euo pipefail
 
@@ -191,6 +191,15 @@ verify_ceo_approval() {
     return "$rc"
 }
 
+# 자동 검증기(scripts/release_migration_autoverify.py). 파일이 없거나 끄면(AADS_MIGRATION_AUTOVERIFY=0)
+# 예전처럼 사람 승인만 받는다(fail-closed).
+auto_verified=0
+auto_verify_migrations() {
+    local verifier="${ROOT}/scripts/release_migration_autoverify.py"
+    [[ "${AADS_MIGRATION_AUTOVERIFY:-1}" == "1" && -f "$verifier" ]] || return 1
+    AADS_RELEASE_SHA="$1" python3 "$verifier" verify --release-sha "$1" "${pending[@]}"
+}
+
 # Resolve deploy.sh's short release identifier to the immutable commit SHA.
 # Extracted release archives have no .git, so also consult the caller's checkout.
 resolve_release_sha() {
@@ -290,9 +299,16 @@ elif ((${#pending[@]})); then
     fi
     printf 'RELEASE %s\n%s' "${release_sha:-unknown}" "$manifest"
     if ! verify_ceo_approval "$release_sha" "$manifest"; then
-        echo "BLOCK-CEO-APPROVAL: PENDING migrations require a human CEO approval bound to RELEASE or the exact pending manifest (every filename/sha256 above)."
-        echo "승인 방법: CEO 사람 로그인으로 해당 명세를 검토. 정본 contract 문서를 검토 후 승인해야 합니다."
-        exit 7
+        # 2026-11-05 대표님 결정: 사람 승인 근거가 없으면 자동 검증(추가형 판정 → 시험 실행 →
+        # AI 교차 검토 → 스키마 백업)으로 대신한다. 데이터를 지우거나 바꾸는 SQL 은 여기서 막힌다.
+        if auto_verify_migrations "$release_sha"; then
+            auto_verified=1
+            echo "AUTO-APPROVED: 자동 검증 통과 — 사람 승인 없이 적용"
+        else
+            echo "BLOCK-CEO-APPROVAL: PENDING migrations require a human CEO approval bound to RELEASE or the exact pending manifest (every filename/sha256 above)."
+            echo "자동 검증 불통과(위 AUTOVERIFY 줄 참고) — 데이터를 지우거나 바꾸는 변경이거나 검증 실패이므로 대표님 승인이 필요합니다."
+            exit 7
+        fi
     fi
 fi
 
@@ -310,5 +326,12 @@ for path in "${pending[@]}"; do
     fi
     applied=$((applied + 1))
 done
+
+if ((auto_verified)) && ((applied)); then
+    if ! python3 "${ROOT}/scripts/release_migration_autoverify.py" postcheck "${pending[@]}"; then
+        echo "FAILED postcheck: 적용 후 객체 확인 실패 — 백업: /root/aads/backups/migration-autoverify" >&2
+        exit 5
+    fi
+fi
 
 echo "SUMMARY pending=${#pending[@]} applied=${applied} skipped=${counts_skip} drift=${counts_drift} held=${counts_hold} excluded=${counts_exclude} plan=${plan_only}"

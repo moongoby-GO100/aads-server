@@ -635,14 +635,15 @@ run_release_migrations() {
     local migration_root rc=0 output
     migration_root="$(mktemp -d /tmp/aads-server-migrations.XXXXXX)"
     if ! git -C "$COMPOSE_DIR" archive --format=tar HEAD migrations scripts/apply_migration.sh \
-            scripts/apply_release_migrations.sh scripts/release_migration_approval.py scripts/migrations_auto_apply_baseline.txt \
+            scripts/apply_release_migrations.sh scripts/release_migration_approval.py scripts/release_migration_autoverify.py \
+            scripts/migrations_auto_apply_baseline.txt \
             | tar -xf - -C "$migration_root"; then
         rm -rf -- "$migration_root"
         DEPLOY_MIGRATION_ERROR="cannot extract migrations from HEAD=${AADS_RELEASE_SHA}"
         echo "[deploy.sh] ❌ ${DEPLOY_MIGRATION_ERROR}"
         return 1
     fi
-    output="$(bash "${migration_root}/scripts/apply_release_migrations.sh" --root "$migration_root" "$@" 2>&1)" || rc=$?
+    output="$(AADS_MIGRATION_SOURCE_REPO="$COMPOSE_DIR" bash "${migration_root}/scripts/apply_release_migrations.sh" --root "$migration_root" "$@" 2>&1)" || rc=$?
     rm -rf -- "$migration_root"
     printf '%s\n' "$output" | grep -v '^SKIP ' | sed 's/^/[deploy.sh]   migration: /' || true
     DEPLOY_MIGRATION_ERROR=""
