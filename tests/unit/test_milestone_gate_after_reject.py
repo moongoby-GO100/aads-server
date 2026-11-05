@@ -293,7 +293,8 @@ def test_migration_stamps_milestone_linked_at_on_relink():
 
 def test_migration_never_overwrites_existing_function_or_trigger():
     code = _code_only(_migration_sql()).upper()
-    assert "CREATE OR REPLACE FUNCTION" not in code  # FUNCTION은 쓰지 않지만 최상위 TRIGGER는 사용
+    assert "CREATE OR REPLACE FUNCTION" not in code
+    assert code.count("OR REPLACE") == 1
     assert "DROP TRIGGER" not in code and "DROP FUNCTION" not in code
     assert "CREATE FUNCTION goal_task_links_stamp_milestone_linked_at()".upper() in code
     assert code.count("RAISE EXCEPTION") >= 3
@@ -341,3 +342,41 @@ def test_migration_passes_autoverify_additive_classifier():
         sys.path.remove(scripts)
     path = Path(__file__).resolve().parents[2] / "migrations" / "20261104_milestone_review_rejected_at.sql"
     assert av.classify_files([path]) == []
+
+
+def test_migration_has_no_dynamic_sql_or_replace_tokens():
+    import re
+
+    sql = _migration_sql()
+    assert sql.count("OR REPLACE") == 1 and "CREATE OR REPLACE FUNCTION" not in sql
+    for tok in ("EXECUTE '", "EXECUTE format", "quote_literal", "quote_ident", "format("):
+        assert tok not in sql, tok
+    code = _code_only(sql)
+    assert "IF NOT EXISTS CREATE" not in code.upper()
+    assert not re.search(r"CREATE\s+(FUNCTION|TRIGGER)\s+IF\s+NOT\s+EXISTS", code, re.I)
+    assert len(re.findall(r"EXECUTE", code)) == len(re.findall(r"EXECUTE FUNCTION", code)) == 1
+
+
+def test_migration_v_body_equals_create_function_body_raw():
+    """가드 비교용 v_body 리터럴과 CREATE FUNCTION 본문은 정규화 없이 원문 그대로 같아야 한다."""
+    import re
+
+    code = _migration_sql()
+    v_body = re.search(r"v_body CONSTANT text := \$body\$(.*?)\$body\$;", code, re.S).group(1)
+    created = re.search(r"LANGUAGE plpgsql AS \$body\$(.*?)\$body\$;", code, re.S).group(1)
+    assert v_body == created and v_body.strip()
+
+
+def test_migration_statement_order_function_guard_then_toplevel_trigger():
+    """DO 블록(함수 생성·가드) 다음에 최상위 CREATE OR REPLACE TRIGGER 가 온다. 트리거 생성은 DO 블록 안에 없다."""
+    code = _code_only(_migration_sql())
+    do_start = code.index("DO $do$")
+    do_end = code.index("$do$;", do_start + 6)
+    do_block = code[do_start:do_end]
+    trig = code.index("CREATE OR REPLACE TRIGGER trg_goal_task_links_milestone_linked_at")
+    assert "CREATE FUNCTION goal_task_links_stamp_milestone_linked_at()" in do_block
+    assert "RAISE EXCEPTION" in do_block
+    assert "CREATE TRIGGER" not in do_block
+    assert "OR REPLACE" not in do_block and "ELSIF NOT FOUND" not in do_block
+    assert do_end < trig
+    assert code.count("CREATE OR REPLACE TRIGGER") == 1

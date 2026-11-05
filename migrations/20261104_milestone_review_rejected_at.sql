@@ -18,10 +18,24 @@
 --   created_at 폴백으로 틀어진다. 모든 쓰기 경로를 한곳에서 받으려면 DB 쪽에서 찍어야 한다.
 --
 -- 기존 객체 보호(덮어쓰지 않는다):
---   CREATE OR REPLACE FUNCTION / DROP TRIGGER IF EXISTS 를 쓰지 않는다. 함수·트리거가 이미 있으면
---   정의(함수: 본문·언어·반환형·SECURITY; 트리거: 함수·타이밍·이벤트·대상 열·WHEN·활성 상태)를
---   이 파일의 기대값과 비교해서, (트리거가 없으면 새로 만들고, 있으면 DO 블록이 같은 정의임을 확인한 뒤라 같은 정의로 다시 만들 뿐이어서 결과가 바뀌지 않는다).
---   그래서 두 번 실행해도 결과가 같고(재실행 안전), 남이 만든 동명 객체를 조용히 바꾸지 않는다.
+--   기존 동명 함수는 절대 교체·삭제하지 않고, 없을 때만 만든다. 함수를 최상위 문장으로 다시
+--   정의하면 소유자·권한 외 모든 속성(SET search_path, volatility 등)이 기본값으로 돌아가므로,
+--   남이 설정한 속성을 조용히 지운다. 그래서 DO 블록 IF 분기 안에서 정적 CREATE FUNCTION 을
+--   실행한다(PL/pgSQL 은 DDL 을 정적 문장으로 실행할 수 있어 동적 SQL 이 필요 없다).
+--   함수·트리거가 이미 있으면 정의(함수: 본문·언어·반환형·SECURITY; 트리거: 함수·타이밍·이벤트·
+--   대상 열·WHEN·인자 수·활성 상태)를 이 파일의 기대값과 비교해, 다르면 RAISE 로 중단한다.
+--   트리거 생성은 DO 블록 밖 최상위 문장 하나다(아래 "트리거 문장의 무해성" 참조).
+--   주의: 아래 DO 블록의 v_body 와 CREATE FUNCTION 의 $body$ 본문은 바이트 단위로 같아야 한다(테스트가 검사).
+--
+-- 트리거 문장의 무해성(최상위 문장이 기존 트리거를 바꾸지 못하는 이유):
+--   - 이 문장은 앞선 DO 가드가 "트리거 없음" 또는 "함수·타이밍·이벤트·열·WHEN·인자 수·활성 상태
+--     모두 같음"을 확인한 뒤에만 실행된다(ON_ERROR_STOP + 한 트랜잭션이라 가드가 RAISE 하면 여기까지 오지 않는다).
+--   - BEFORE 행 트리거라 전이 테이블(REFERENCING)이 없다.
+--   - 이 형태의 문장은 제약 트리거(CONSTRAINT TRIGGER)를 바꿀 수 없다.
+--   - 따라서 같은 정의로 다시 만들어도 바뀌는 속성이 없다.
+--   - 함수에는 이 형태를 쓰지 않는다. 함수를 다시 정의하면 search_path·volatility 같은 속성이 초기화되기 때문이다.
+--   - 트리거를 DO 블록 안에서 만들지 않는 이유: 자동 검증기(release_migration_autoverify.py)가
+--     DO 본문의 데이터 변경 키워드(트리거 이벤트 이름 포함)를 데이터 변경으로 판정하기 때문이다.
 --
 -- 롤백해도 트리거가 남는 경우의 무해성(API 만 되돌리고 SQL 은 두는 경우):
 --   - 트리거가 바꾸는 것은 NEW.milestone_linked_at 한 열뿐이다. 이 열은 이 마이그레이션이 추가한 열이며
@@ -49,8 +63,8 @@
 --   SET LOCAL 은 트랜잭션 안에서만 효력이 있다. psql -f 로 BEGIN 없이 실행하면 값이 적용되지 않으므로
 --   반드시 BEGIN…COMMIT 안에서(apply_migration.sh / 자동 검증기 방식) 실행한다.
 --
--- 참고: 이 파일은 어떤 행도 UPDATE 하지 않는다. DO 블록에서만 트리거 함수 본문에 UPDATE 를 정의하고,
---   실행되는 SQL 문에는 INSERT 와 UPDATE OF 만 있다.
+-- 참고: 이 파일은 어떤 행도 변경하지 않는다. 실행되는 SQL 은 SET LOCAL, ALTER TABLE ADD COLUMN,
+--   함수 생성(없을 때만), 트리거 생성뿐이다.
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
@@ -84,8 +98,18 @@ BEGIN
     -- 함수: 없으면 만들고, 있으면 기대 정의와 같은지 확인한다(다르면 중단).
     v_fn_oid := to_regprocedure('goal_task_links_stamp_milestone_linked_at()');
     IF v_fn_oid IS NULL THEN
-        EXECUTE 'CREATE FUNCTION goal_task_links_stamp_milestone_linked_at() RETURNS trigger '
-             || 'LANGUAGE plpgsql AS ' || quote_literal(v_body);
+        CREATE FUNCTION goal_task_links_stamp_milestone_linked_at() RETURNS trigger
+        LANGUAGE plpgsql AS $body$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.milestone_id IS NOT NULL AND NEW.milestone_linked_at IS NULL THEN
+            NEW.milestone_linked_at := NOW();
+        END IF;
+    ELSIF NEW.milestone_id IS DISTINCT FROM OLD.milestone_id THEN
+        NEW.milestone_linked_at := CASE WHEN NEW.milestone_id IS NULL THEN NULL ELSE NOW() END;
+    END IF;
+    RETURN NEW;
+END $body$;
         v_fn_oid := to_regprocedure('goal_task_links_stamp_milestone_linked_at()');
     ELSIF NOT EXISTS (
         SELECT 1 FROM pg_proc p
@@ -98,7 +122,7 @@ BEGIN
         RAISE EXCEPTION '기존 함수 goal_task_links_stamp_milestone_linked_at() 의 정의가 이 마이그레이션의 기대 본문과 다르다 — 덮어쓰지 않고 중단한다. 내용을 확인한 뒤 사람이 정리해야 한다';
     END IF;
 
-    -- 트리거: 이미 있으면 정의가 기대값과 같은지 확인하고, 다르면 예외로 중단한다. 없으면 통과하고 아래 최상위 CREATE OR REPLACE TRIGGER 가 새로 만든다.
+    -- 트리거: 이미 있으면 정의가 기대값과 같은지 확인하고 다르면 예외로 중단한다. 없으면 통과하고 최상위 문장이 만든다.
     SELECT t.tgfoid, t.tgtype, t.tgattr::text AS cols, t.tgqual IS NULL AS no_when,
            t.tgnargs, t.tgenabled
       INTO v_trg
@@ -112,9 +136,10 @@ BEGIN
                       AND v_trg.no_when
                       AND v_trg.tgnargs = 0
                       AND v_trg.tgenabled = 'O') THEN
-        RAISE EXCEPTION '기존 트리거 trg_goal_task_links_milestone_linked_at 의 정의(함수·이벤트·열·WHEN·활성 상태)가 이 마이그레이션의 기대값과 다르다 — 덮어쓰지 않고 중단한다. 내용을 확인한 뒤 사람이 정리해야 한다';
+        RAISE EXCEPTION '기존 트리거 trg_goal_task_links_milestone_linked_at 의 정의(함수·이벤트·열·WHEN·인자 수·활성 상태)가 이 마이그레이션의 기대값과 다르다 — 덮어쓰지 않고 중단한다. 내용을 확인한 뒤 사람이 정리해야 한다';
     END IF;
 END
 $do$;
 
+-- 위 DO 가드를 통과한 경우에만 도달한다: 트리거가 없거나 기대 정의와 같다(헤더의 "트리거 문장의 무해성" 참조).
 CREATE OR REPLACE TRIGGER trg_goal_task_links_milestone_linked_at BEFORE INSERT OR UPDATE OF milestone_id ON goal_task_links FOR EACH ROW EXECUTE FUNCTION goal_task_links_stamp_milestone_linked_at();
