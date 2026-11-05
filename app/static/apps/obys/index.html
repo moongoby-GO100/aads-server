@@ -4442,6 +4442,7 @@
                     </tr>
                   </thead>
                   <tbody id="payrollRows"></tbody>
+                  <tfoot id="payrollTotals"></tfoot>
                 </table>
               </div>
             </div>
@@ -8832,6 +8833,8 @@
         els.payrollSummary.className = `badge ${pending ? "warn" : (rows.length ? "good" : "info")}`;
       }
       if (!els.payrollRows) return;
+      const payrollTotals = document.getElementById("payrollTotals");
+      if (payrollTotals) payrollTotals.innerHTML = managerMode && !employeeMode && rows.length ? payrollTotalsRowHtml(rows) : "";
       if (!rows.length) {
         fillViewState(els.payrollRows, 6, "payroll", {
           error: hasServerAuth() ? viewError("payroll") : null,
@@ -8867,9 +8870,99 @@
             <td>${escapeHtml(item.branch || "-")}<br><span class="muted">${escapeHtml(employmentTaxTypeLabels[employmentTaxType] || item.employment_tax_label || "-")}</span></td>
             <td class="num">${item.gross_pay == null && item.grossPay == null ? "미집계" : formatMoney(item.gross_pay ?? item.grossPay)}<br><span class="muted">과세 ${item.taxable_pay == null && item.taxablePay == null ? "미집계" : formatMoney(item.taxable_pay ?? item.taxablePay)} · 비과세 식대 ${item.non_tax_meal_allowance == null && item.nonTaxMealAllowance == null ? "미집계" : formatMoney(item.non_tax_meal_allowance ?? item.nonTaxMealAllowance)}</span><br><span class="muted">실지급 ${item.net_pay == null && item.netPay == null ? "미집계" : formatMoney(item.net_pay ?? item.netPay)}</span></td>
             <td><span class="badge ${status[1]}">${escapeHtml(status[0])}</span></td>
-            <td class="num" style="display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap">${actions}${pdfAction}<details><summary>지급·공제 상세</summary>${[["총지급액","gross_pay","grossPay"],["과세급여","taxable_pay","taxablePay"],["비과세 식대","non_tax_meal_allowance","nonTaxMealAllowance"],["원천세","tax_withholding","taxWithholding"],["보험 공제","insurance_deduction","insuranceDeduction"],["기타 공제","other_deduction","otherDeduction"],["실지급액","net_pay","netPay"]].map(([label,snake,camel])=>`<p>${label}: ${item[snake] == null && item[camel] == null ? "미집계" : formatMoney(item[snake] ?? item[camel])}</p>`).join("")}</details></td>
+            <td class="num" style="display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap">${actions}${pdfAction}<details><summary>지급·공제 상세</summary>${payrollDeductionDetailHtml(item)}</details></td>
           </tr>`;
       }).join("");
+    }
+
+    // 급여내역서 지급·공제 상세 — 표시 전용. 저장된 값만 쓰고 임의로 계산해 나누지 않는다.
+    function payrollAmount(item, ...keys) {
+      const sources = [item, item && item.statement_payload];
+      for (const src of sources) {
+        if (!src || typeof src !== "object") continue;
+        for (const key of keys) {
+          const value = src[key];
+          if (value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) return Number(value);
+        }
+      }
+      return null;
+    }
+
+    function payrollDeductionDetailHtml(item) {
+      const rawBreakdown = (item && (item.insurance_breakdown || (item.statement_payload && item.statement_payload.insurance_breakdown))) || {};
+      const breakdown = rawBreakdown && typeof rawBreakdown === "object" ? rawBreakdown : {};
+      const taxType = String((item && (item.employmentTaxType || item.employment_tax_type)) || "");
+      const isBusinessIncome = taxType === "freelancer_33";
+      const line = (label, value, badge) => value == null ? "" : `<p>${label}: ${formatMoney(value)}${badge || ""}</p>`;
+      // 총지급·공제·실지급은 누락 여부를 확인할 수 있어야 하므로 값이 없어도 '미집계'로 남긴다.
+      const keyLine = (label, value, badge) => value == null ? `<p>${label}: <span class="muted">미집계</span></p>` : line(label, value, badge);
+      const mismatch = (parts, stored) => {
+        const known = parts.filter(v => v != null);
+        if (stored == null || known.length !== parts.length || !known.length) return "";
+        return known.reduce((a, b) => a + b, 0) === stored ? "" : ` <span class="badge warn">⚠ 합계 불일치</span>`;
+      };
+      const group = title => `<p><strong>${title}</strong></p>`;
+      const gross = payrollAmount(item, "gross_pay", "grossPay");
+      const taxable = payrollAmount(item, "taxable_pay", "taxablePay");
+      const meal = payrollAmount(item, "non_tax_meal_allowance", "nonTaxMealAllowance");
+      const insSub = payrollAmount(item, "insurance_deduction", "insuranceDeduction");
+      const taxSub = payrollAmount(item, "tax_withholding", "taxWithholding");
+      const other = payrollAmount(item, "other_deduction", "otherDeduction");
+      const net = payrollAmount(item, "net_pay", "netPay");
+      const pension = payrollAmount(breakdown, "national_pension");
+      const health = payrollAmount(breakdown, "health");
+      const care = payrollAmount(breakdown, "long_term_care");
+      const employment = payrollAmount(breakdown, "employment");
+      const insParts = [pension, health, care, employment];
+      const incomeTax = isBusinessIncome
+        ? payrollAmount(item, "business_income_tax", "income_tax")
+        : payrollAmount(item, "income_tax");
+      const localTax = payrollAmount(item, "local_income_tax");
+      const hasTaxParts = incomeTax != null || localTax != null;
+      const taxParts = [incomeTax, localTax];
+      let html = group("지급");
+      html += keyLine("총지급액", gross) + keyLine("과세급여", taxable) + keyLine("비과세 식대", meal);
+      if (insParts.some(v => v != null) || insSub != null) {
+        html += group("4대보험");
+        html += line("국민연금", pension) + line("건강보험", health) + line("장기요양보험", care) + line("고용보험", employment);
+        const insNoDetail = insSub != null && !insParts.some(v => v != null) ? ` <span class="muted">(세부 미저장)</span>` : "";
+        html += line("4대보험 소계", insSub, insNoDetail || mismatch(insParts, insSub));
+      }
+      if (hasTaxParts || taxSub != null) {
+        html += group("세금");
+        if (hasTaxParts) {
+          html += line(isBusinessIncome ? "사업소득세" : "소득세", incomeTax) + line("지방소득세", localTax);
+          html += line("세금 소계", taxSub, mismatch(taxParts, taxSub));
+        } else {
+          html += line("세금 합계", taxSub, ` <span class="muted">(세부 미저장)</span>`);
+        }
+      }
+      const deductionTotal = [insSub, taxSub, other].every(v => v != null) ? insSub + taxSub + other : null;
+      html += group("공제·실지급");
+      html += keyLine("기타 공제", other);
+      html += keyLine("공제 합계", deductionTotal);
+      html += keyLine("실지급액", net);
+      return html;
+    }
+
+    function payrollTotalsRowHtml(rows) {
+      // 정정 초안이 확정되기 전에는 서버가 원본도 함께 돌려준다. 같은 직원·월이 두 번 합산되지 않도록
+      // 대체된 행(superseded_by)과, 목록 안에 원본이 있는 정정 초안(supersedes_id)은 제외한다.
+      const ids = new Set(rows.map(item => String(item.id)));
+      const counted = rows.filter(item => !item.superseded_by && !(item.supersedes_id && ids.has(String(item.supersedes_id))));
+      const excluded = rows.length - counted.length;
+      // 값이 없는 명세는 0원으로 치지 않는다. 합계는 값이 있는 명세만 더하고 누락 인원을 따로 표시한다.
+      const total = (...keys) => {
+        let sum = 0, known = 0;
+        counted.forEach(item => { const v = payrollAmount(item, ...keys); if (v != null) { sum += v; known += 1; } });
+        const missing = counted.length - known;
+        const text = known ? formatMoney(sum) : "미집계";
+        return missing && known ? `${text} <span class="muted">(미집계 ${missing}명 제외)</span>` : text;
+      };
+      return `<tr class="payroll-totals-row"><td colspan="3"><strong>합계</strong> <span class="muted">${counted.length}명${excluded ? ` · 정정 중복 ${excluded}건 제외` : ""}</span></td>`
+        + `<td class="num">총지급 ${total("gross_pay", "grossPay")}<br><span class="muted">실지급 ${total("net_pay", "netPay")}</span></td>`
+        + `<td class="muted">4대보험 ${total("insurance_deduction", "insuranceDeduction")}<br>원천세 ${total("tax_withholding", "taxWithholding")}<br>기타 공제 ${total("other_deduction", "otherDeduction")}</td>`
+        + `<td></td></tr>`;
     }
 
     function approvedEmployeesForForm(form) {
