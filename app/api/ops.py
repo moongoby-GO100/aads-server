@@ -1953,12 +1953,46 @@ def _collect_server_health_fallback(cfg: dict[str, Any]) -> dict[str, Any]:
         **metrics,
     }
 
+# 2026-11-05 실측: 이 엔드포인트는 async 인데 SSH 프로브(_run_server_probe = subprocess)를
+# 이벤트 루프에서 직접 돌렸다. health 서버가 없는 contabo42·92 는 폴백 프로브 4~5회가
+# 차례로 돌아 한 번에 수 초~18초 동안 API 전체가 멈췄고(live 확인 9·18초, 채팅 로딩 지연),
+# 대시보드가 탭마다 서버별로 1분마다 부르므로 매분 반복됐다.
+# 프로브는 스레드에서 돌리고, 같은 서버 결과는 짧게 공유해 탭 수만큼 SSH 가 늘지 않게 한다.
+_SERVER_HEALTH_CACHE_TTL_S = float(os.getenv("AADS_SERVER_HEALTH_CACHE_TTL_S", "20"))
+_server_health_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_server_health_inflight: dict[str, "asyncio.Future[dict[str, Any]]"] = {}
+
+
 @router.get("/ops/server-health/{server_id}")
 async def remote_server_health(server_id: str):
-    """원격 서버 헬스체크 프록시 — 브라우저 CORS/방화벽 우회."""
+    """원격 서버 헬스체크 프록시 — 브라우저 CORS/방화벽 우회. SSH 는 스레드에서 돈다."""
     cfg = _remote_health_config(server_id)
     if not cfg:
         raise HTTPException(404, f"Unknown server: {server_id}")
+    now = _time.monotonic()
+    cached = _server_health_cache.get(server_id)
+    if cached and now - cached[0] < _SERVER_HEALTH_CACHE_TTL_S:
+        return dict(cached[1])
+    inflight = _server_health_inflight.get(server_id)
+    if inflight is not None:
+        return dict(await asyncio.shield(inflight))
+    fut: "asyncio.Future[dict[str, Any]]" = asyncio.get_running_loop().create_future()
+    _server_health_inflight[server_id] = fut
+    try:
+        payload = await asyncio.to_thread(_remote_server_health_sync, cfg)
+        _server_health_cache[server_id] = (_time.monotonic(), payload)
+        fut.set_result(payload)
+        return dict(payload)
+    except BaseException as exc:
+        fut.set_exception(exc)
+        fut.exception()  # 대기자가 없을 때 'never retrieved' 경고 방지
+        raise
+    finally:
+        _server_health_inflight.pop(server_id, None)
+
+
+def _remote_server_health_sync(cfg: dict[str, Any]) -> dict[str, Any]:
+    """remote_server_health 의 동기 본체 — 이벤트 루프 밖(스레드)에서만 부른다."""
     try:
         r = _run_server_probe(cfg, f"curl -sf --max-time 3 http://localhost:{cfg['port']}/health", timeout=8)
         if r.returncode == 0 and r.stdout.strip():
