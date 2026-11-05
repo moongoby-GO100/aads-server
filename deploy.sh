@@ -128,6 +128,10 @@ prepare_release_context() {
     cleanup_release_context
     RELEASE_CONTEXT_DIR="$(mktemp -d /tmp/aads-server-release.XXXXXX)"
     git -C "$COMPOSE_DIR" archive --format=tar HEAD | tar -xf - -C "$RELEASE_CONTEXT_DIR"
+    # 배포 SHA 를 이미지에 굽는다 — /ops/version 이 슬롯과 무관하게 같은 값을 돌려주게 한다.
+    if [[ -n "${AADS_RELEASE_SHA:-}" && "$AADS_RELEASE_SHA" != "unknown" ]]; then
+        printf '%s\n' "$AADS_RELEASE_SHA" > "${RELEASE_CONTEXT_DIR}/.release_sha"
+    fi
     echo "[deploy.sh] clean release context: ${RELEASE_CONTEXT_DIR} (HEAD=${AADS_RELEASE_SHA})"
     emit_release_context_manifest
     require_release_context_within_limit

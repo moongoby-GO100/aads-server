@@ -27,8 +27,55 @@ from app.services.server_registry import get_server_config, get_server_host, res
 logger = structlog.get_logger()
 router = APIRouter()
 
-# 서버 시작 시 고유 빌드 해시 생성 (컨테이너 재시작 = 새 해시)
-_BUILD_HASH = hashlib.md5(f"{os.getpid()}-{_time.time()}".encode()).hexdigest()[:12]
+# 배포 버전 기준 빌드 해시 — pid/time 을 쓰지 않아 재시작·블루/그린 슬롯과 무관하게 같은 이미지면 같은 값.
+# deploy.sh prepare_release_context() 가 릴리스 컨텍스트에 .release_sha 를 써서 이미지(/app)에 굽는다.
+_RELEASE_SHA_FILE = os.environ.get("AADS_RELEASE_SHA_FILE") or "/app/.release_sha"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_APP_DIR = Path(__file__).resolve().parents[1]
+
+
+def _resolve_build_hash() -> "tuple[str, str]":
+    """(hash12, source) 반환. 순서: env → file → git → content(마지막 대체) → unknown."""
+    env = (os.environ.get("AADS_RELEASE_SHA") or "").strip()
+    if env and env.lower() not in ("unknown", "local"):
+        return env[:12], "env"
+    try:
+        txt = Path(_RELEASE_SHA_FILE).read_text().strip()
+        if txt and txt.lower() not in ("unknown", "local"):
+            return txt[:12], "file"
+    except Exception:
+        pass
+    try:
+        import subprocess as _sp
+        out = _sp.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=str(_REPO_ROOT), capture_output=True, timeout=2, check=True,
+        ).stdout.decode().strip()
+        if out:
+            return out[:12], "git"
+    except Exception:
+        pass
+    try:
+        h = hashlib.sha256()
+        found = False
+        for f in sorted(_APP_DIR.rglob("*.py"), key=lambda x: x.relative_to(_APP_DIR).as_posix()):
+            try:
+                data = f.read_bytes()
+            except Exception:
+                continue
+            h.update(f.relative_to(_APP_DIR).as_posix().encode())
+            h.update(b"\0")
+            h.update(data)
+            h.update(b"\0")
+            found = True
+        if found:
+            return h.hexdigest()[:12], "content"
+    except Exception:
+        pass
+    return "unknown", "unknown"
+
+
+_BUILD_HASH, _BUILD_SOURCE = _resolve_build_hash()
 
 _CLAUDE_RELAY_URL = os.getenv("CLAUDE_RELAY_URL", "http://host.docker.internal:8199").rstrip("/")
 _RELAY_SECRET_PATHS = (
@@ -379,7 +426,7 @@ async def get_version():
         ).decode().strip()
     except Exception:
         _git_sha = "unknown"
-    return {"build_hash": _BUILD_HASH, "git_sha": _git_sha, "timestamp": _time.time()}
+    return {"build_hash": _BUILD_HASH, "git_sha": _git_sha, "build_source": _BUILD_SOURCE, "timestamp": _time.time()}
 
 
 def _normalize_etag(value: str) -> str:
