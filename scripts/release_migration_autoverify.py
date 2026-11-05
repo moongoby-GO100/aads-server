@@ -299,17 +299,47 @@ def _reviews(key: str) -> tuple[str | None, list[dict]]:
     return d.get("rev"), d.get("rows") or []
 
 
+def _head_generation(key: str) -> tuple[str | None, int | None]:
+    r = _psql("SELECT latest_revision_id::text || '|' || generation FROM project_document_heads "
+              f"WHERE project_key='AADS' AND document_key='{key}';", read_only=True, timeout=60)
+    if r.returncode != 0 or "|" not in r.stdout:
+        return None, None
+    rev, gen = r.stdout.strip().split("|", 1)
+    return rev, int(gen)
+
+
+def _kick_review(token: str, key: str) -> str | None:
+    """검토 요청(POST /review)이 교차 검토를 예약한다. 문서 생성만으로는 검토가 돌지 않는다
+    (2026-11-05 deploy_runs#5979: 생성 후 300초 동안 검토 0건)."""
+    rev, gen = _head_generation(key)
+    if rev is None:
+        return "AI 검토 문서를 찾지 못함"
+    req = urllib.request.Request(_api_base() + f"/api/v1/projects/AADS/documents/{key}/review",
+                                 json.dumps({"revision_id": rev, "expected_generation": gen}).encode(),
+                                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
+    try:
+        urllib.request.urlopen(req, timeout=120).read()
+    except urllib.error.HTTPError as e:
+        if e.code != 409:  # 409 cross_review_required = 검토 예약됨(대기 중)
+            return f"AI 검토 요청 실패 HTTP {e.code}"
+    except Exception as e:  # noqa: BLE001
+        return f"AI 검토 요청 실패 {type(e).__name__}"
+    return None
+
+
 def review(paths: list[Path], release_sha: str) -> str | None:
     items = manifest_items(paths)
     key = "migration-autoverify-m-" + manifest_sha(items)[:12]
     rev, rows = _reviews(key)
+    token = ""
+    if rev is None or not rows:
+        token = _token()
+        if not token:
+            return "API 토큰 발급 실패"
     if rev is None:
         task = source_task_for(paths)
         if not task:
             return "AI 검토 문서의 작성 출처(러너 잡 ID)를 찾지 못함"
-        token = _token()
-        if not token:
-            return "API 토큰 발급 실패"
         body = dict(document_key=key, kind="contract", title="릴리스 마이그레이션 자동 검증 교차 검토",
                     version="1.0.0", content=review_content(paths, items, release_sha), expected_generation=0,
                     source_task_id=task, change_summary="자동 검증(추가형·시험 실행 통과) 마이그레이션의 AI 교차 검토")
@@ -322,6 +352,10 @@ def review(paths: list[Path], release_sha: str) -> str | None:
                 return f"AI 검토 문서 등록 실패 HTTP {e.code}"
         except Exception as e:  # noqa: BLE001
             return f"AI 검토 문서 등록 실패 {type(e).__name__}"
+    if token:
+        err = _kick_review(token, key)
+        if err:
+            return err
     deadline = time.monotonic() + float(os.environ.get("AADS_MIGRATION_AI_REVIEW_WAIT_S", "300"))
     while True:
         rev, rows = _reviews(key)
