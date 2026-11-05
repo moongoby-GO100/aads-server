@@ -48,6 +48,27 @@ def pick_reviewers(tier, author_model, tier_list, *, available, extra_lists=(), 
     return picks, 'ok'
 
 
+def pick_follow_up(author_model, lists, *, available, needed, rerun=(), exclude=()):
+    """후속 검토 리뷰어. 다시 돌릴 모델을 먼저 넣고, 그래도 빈 회사는 모든 크기 목록에서 그 회사 모델을 찾는다.
+
+    pick_reviewers 의 D3 규칙(같은 회사 후보를 첫 목록에서만 찾음)을 쓰지 않는다 — 필요한 회사 모델이 다른 크기
+    목록에만 있어도 채울 수 있어야 한다. 작성 모델은 고르지 않는다.
+    """
+    ordered = [m for m in dict.fromkeys(m for ls in lists for m in ls)
+               if m in available and m not in exclude and m != author_model
+               and provider_of(m) in ('anthropic', 'openai')]
+    picks, covered = [], set()
+    for model in ordered:
+        if model in rerun:
+            picks.append(ReviewerPick(model, 'follow_up_rerun'))
+            covered.add(provider_of(model))
+    for provider in sorted(set(needed) - covered):
+        model = next((m for m in ordered if provider_of(m) == provider and m not in rerun), None)
+        if model:
+            picks.append(ReviewerPick(model, 'follow_up'))
+    return picks
+
+
 def tier_of(revision, head):
     return revision.get('doc_tier') or compute_doc_tier(head.get('kind', ''), len(revision.get('content') or ''), bool(head.get('goal_linked')))
 
@@ -229,12 +250,12 @@ async def execute_review(tenant, project, head, revision, *, follow_up=False):
             current = await summary(conn, head, revision)
             if current['review_state'] == 'passed' and not follow_up:
                 return current
-            needed = set()
+            needed, rerun = set(), set()
             if follow_up:
                 from app.services import doc_auto_approval
                 prior = await conn.fetch('SELECT * FROM project_document_reviews WHERE revision_id=$1 ORDER BY id', revision['id'])
-                needed = doc_auto_approval.providers_needing_review(prior)
-                if not needed:
+                needed, rerun = doc_auto_approval.follow_up_targets(prior)
+                if not needed and not rerun:
                     return current
             approved = await _approved_titles(conn, tenant, project, head)
             sizes = ['AI_REVIEW_LIGHT', 'AI_REVIEW_STD', 'AI_REVIEW_HEAVY']
@@ -256,16 +277,17 @@ async def execute_review(tenant, project, head, revision, *, follow_up=False):
         available = {m for ls in lists for m in ls if cli._is_cli_review_model(m)}
         excluded, completed = set(), set()
         while True:
-            picks, status = pick_reviewers('D3' if follow_up else tier, revision.get('author_model'), lists[0],
-                                          available=available, extra_lists=lists[1:], exclude=excluded)
             if follow_up:
-                # 후속 검토는 아직 채워지지 않은 회사의 리뷰어만 부른다. 못 구하면 기록·알림 없이 멈춘다.
-                if status == 'blocked_no_second':
-                    status = 'ok'
-                picks = [p for p in picks if provider_of(p.model) in needed]
-                if status != 'ok' or not picks:
+                # 후속 검토는 아직 채워지지 않은 회사·다시 돌릴 모델만 부른다. 못 구하면 기록·알림 없이 멈춘다.
+                picks = pick_follow_up(revision.get('author_model'), lists, available=available,
+                                       needed=needed, rerun=rerun, exclude=excluded)
+                status = 'ok'
+                if not picks:
                     logger.warning('doc_cross_review_follow_up_unavailable revision_id=%s status=%s', revision['id'], status)
                     break
+            else:
+                picks, status = pick_reviewers(tier, revision.get('author_model'), lists[0], available=available,
+                                              extra_lists=lists[1:], exclude=excluded)
             async with get_pool().acquire() as conn:
                 if status == 'ok' and (tier == 'D3' or follow_up):
                     async with conn.transaction():

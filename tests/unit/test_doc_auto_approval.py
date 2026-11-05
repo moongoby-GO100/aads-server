@@ -768,3 +768,75 @@ def test_sweep_apply_is_ignored_unless_mode_on(monkeypatch, capsys):
     assert report['apply'] is False and 'note' in report
     maybe.assert_not_awaited()
     assert conn.executed == []
+
+
+# ── runner-e2f0c41e 반려 지적 4건 회귀 ──
+
+def test_high_risk_still_requires_base_min_score(monkeypatch):
+    # [P1] MIN_SCORE 가 HIGH_RISK_MIN_SCORE 보다 높으면 고위험 문서도 기본 최소점수를 지켜야 한다.
+    monkeypatch.setenv('DOC_AUTO_APPROVE_MIN_SCORE', '0.95')
+    monkeypatch.setenv('DOC_AUTO_APPROVE_HIGH_RISK_MIN_SCORE', '0.90')
+    decision = decide([row(CODEX, score=0.92), row(OPUS, score=0.96)], r=revision(title='인증 흐름 설계'))
+    assert decision.risk == 'high' and decision.action == 'hold'
+    assert 'score_below_min' in decision.reasons
+    normal = decide([row(CODEX, score=0.92), row(OPUS, score=0.96)])
+    assert normal.action == 'hold' and 'score_below_min' in normal.reasons
+
+
+@pytest.mark.parametrize('key', ['order_execution', 'account_balance', 'fund_transfer', 'trade-log', 'kis_orders_v2'])
+def test_trading_keywords_split_on_underscore_and_hyphen(key):
+    # [P1] 밑줄·하이픈으로 이어진 영어 거래 키워드도 고위험이다.
+    assert auto.classify_risk(head(project_key='KIS', document_key=key), revision(title='plan')) == 'high'
+
+
+@pytest.mark.parametrize('key', ['reorder-sections', 'tradeoff-notes', 'refunds-policy-draft'])
+def test_trading_keywords_do_not_match_inside_other_words(key):
+    assert auto.classify_risk(head(project_key='KIS', document_key=key), revision(title='plan')) == 'normal'
+
+
+class SizedReviewDB(ReviewDB):
+    def __init__(self, by_size, rows):
+        super().__init__([], rows)
+        self.by_size = by_size
+
+    async def fetchval(self, sql, *args):
+        if 'runner_model_config' in sql:
+            return self.by_size.get(args[0] if args else 'AI_REVIEW', [])
+        return await super().fetchval(sql, *args)
+
+
+def test_follow_up_finds_needed_company_in_other_size_list(monkeypatch):
+    # [P1] STD 에 작성 모델+OpenAI, HEAVY 에만 다른 Anthropic 모델이 있어도 Anthropic 리뷰를 채운다.
+    db = SizedReviewDB({'AI_REVIEW_STD': [CLAUDE, CODEX], 'AI_REVIEW_HEAVY': [OPUS]}, [row(CODEX)])
+    db.by_size['AI_REVIEW_STD'] = [CLAUDE, CODEX]
+    call = AsyncMock(return_value=json.dumps(payload(), ensure_ascii=False))
+    monkeypatch.setattr(cross, 'tier_of', lambda r, h: 'D2')
+    _follow_up(monkeypatch, db, call)
+    assert [c.kwargs['model'] for c in call.await_args_list] == [OPUS]
+
+
+def test_pick_follow_up_never_picks_author_and_covers_rerun_first():
+    picks = cross.pick_follow_up(CLAUDE, [[CLAUDE, CODEX], [OPUS, ASTRA]], available={CLAUDE, CODEX, OPUS, ASTRA},
+                                 needed={'anthropic', 'openai'}, rerun={ASTRA})
+    assert [p.model for p in picks] == [ASTRA, OPUS]
+    assert all(p.model != CLAUDE for p in picks)
+
+
+def test_legacy_pass_beside_valid_same_company_review_still_needs_follow_up():
+    # [P2] 같은 회사의 유효 리뷰가 있어도 다른 모델의 legacy pass 가 남으면 evaluate 는 보류하므로,
+    # 후속 검토도 그 회사를 '필요' 로 보고 legacy 모델을 다시 돌려야 한다.
+    rows = [row(CODEX), legacy_row(ASTRA), row(OPUS)]
+    assert decide(rows).action == 'hold'
+    assert auto.providers_needing_review(rows) == {'openai'}
+    assert auto.follow_up_targets(rows) == ({'openai'}, {ASTRA})
+
+
+def test_sweep_style_legacy_rereview_schedules_when_valid_same_company_exists(monkeypatch):
+    monkeypatch.setenv('DOC_AUTO_APPROVE', 'on')
+    auto._FOLLOW_UP_REQUESTED.clear()
+    schedule = Mock()
+    monkeypatch.setattr(cross, 'schedule', schedule)
+    rows = [row(CODEX), legacy_row(ASTRA), row(OPUS)]
+    conn = FakeConn(head(), revision(), rows)
+    assert run(auto.request_follow_up_review(conn, 't', 'AADS', head(), revision(), rereview_legacy=True)) == 'scheduled'
+    schedule.assert_called_once()

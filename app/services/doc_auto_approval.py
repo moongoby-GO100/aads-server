@@ -39,7 +39,8 @@ MIGRATION_WORDS = ('migration', '마이그레이션')
 # 애매하면 high. 키워드를 넓게 잡는 쪽이 안전하다(high 는 더 높은 점수와 minor 상한을 요구할 뿐 승인을 막지는 않는다).
 HIGH_RISK_PROJECTS = frozenset({'GO100', 'KIS'})
 TRADING_WORDS_KO = ('주문', '매매', '체결', '자금', '계좌', '입출금')
-TRADING_WORDS_EN = re.compile(r'\b(?:orders?|trad(?:e|es|ed|ing)|funds?|accounts?)\b', re.IGNORECASE)
+# 밑줄·하이픈도 단어 구분자로 본다(order_execution, fund-transfer). \b 는 밑줄을 단어 문자로 취급해 놓친다.
+TRADING_WORDS_EN = re.compile(r'(?<![a-z0-9])(?:orders?|trad(?:e|es|ed|ing)|funds?|accounts?)(?![a-z0-9])', re.IGNORECASE)
 SECURITY_WORDS = ('보안', '인증', '권한', '시크릿', '토큰', 'security', 'auth', 'oauth', 'secret', 'token',
                   'credential', 'permission', 'r-auth', 'r-key')
 PROTECTED_FILES = ('auth_provider.py', 'model_selector.py', 'claude_relay_server.py', 'docker-compose.yml', '.env')
@@ -151,11 +152,28 @@ def _count_positive(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def follow_up_targets(rows: Iterable[Mapping]) -> tuple[set[str], set[str]]:
+    """후속 검토 대상 -> (리뷰가 없는 회사, 다시 돌려야 할 모델).
+
+    evaluate 는 통과 리뷰 하나라도 옛 형식·형식 오류·잘림이면 보류하므로, 그런 리뷰를 남긴 모델은 같은 모델로
+    다시 검토해야 최신 리뷰가 교체된다(_latest_by_model). 그 회사는 유효 리뷰가 따로 있어도 충족으로 보지 않는다.
+    """
+    satisfied, tainted, rerun = set(), set(), set()
+    for model, row in cross._latest_by_model(list(rows)).items():
+        if row.get('verdict') != 'pass':
+            continue
+        problem = review_problem(row)[1]
+        if problem is None:
+            satisfied.add(row.get('reviewer_provider'))
+        elif problem in ('legacy', 'invalid', 'truncated'):
+            tainted.add(row.get('reviewer_provider'))
+            rerun.add(model)
+    return set(REQUIRED_PROVIDERS) - (satisfied - tainted), rerun
+
+
 def providers_needing_review(rows: Iterable[Mapping]) -> set[str]:
-    """유효한 구조화 통과 리뷰가 아직 없는 회사. 후속 검토가 채워야 할 대상."""
-    satisfied = {r.get('reviewer_provider') for r in cross._latest_by_model(list(rows)).values()
-                 if r.get('verdict') == 'pass' and review_problem(r)[1] is None}
-    return set(REQUIRED_PROVIDERS) - satisfied
+    """유효한 구조화 통과 리뷰가 아직 없거나, 보류 사유가 되는 통과 리뷰가 남아 있는 회사."""
+    return follow_up_targets(rows)[0]
 
 
 def issue_id(model: str, index: int) -> str:
@@ -236,9 +254,11 @@ def evaluate(head: Mapping, revision: Mapping, reviews: Iterable[Mapping], revie
 
     scores = [d['score'] for d in valid]
     lowest = min(scores) if scores else None
-    threshold = high_risk_min_score() if risk == 'high' else min_score()
-    if lowest is not None and lowest < threshold:
-        holds.append('high_risk_score_below_min' if risk == 'high' else 'score_below_min')
+    # 기본 최소점수는 모든 문서에 적용하고, 고위험은 그 위에 고위험 기준을 더한다(둘 중 높은 쪽이 실효 기준).
+    if lowest is not None and lowest < min_score():
+        holds.append('score_below_min')
+    if risk == 'high' and lowest is not None and lowest < high_risk_min_score():
+        holds.append('high_risk_score_below_min')
     if any(v < min_criterion() for d in valid for v in d['scores'].values()):
         holds.append('criterion_below_min')
     if risk == 'high' and counts['minor'] > HIGH_RISK_MAX_MINOR:
