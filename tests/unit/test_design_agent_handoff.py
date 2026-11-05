@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.services.design_agent.handoff import DesignHandoffRejected, apply_design_gate
+from app.services.design_agent.handoff import DesignHandoffRejected, apply_design_gate, _project_header
 
 TENANT = '11111111-1111-1111-1111-111111111111'
 SESSION = '22222222-2222-2222-2222-222222222222'
@@ -44,6 +44,32 @@ class FakeConn:
 def approved(**overrides):
     return dict(tenant_id=TENANT, project_key='obys', status='approved', version='v2',
                 tokens={'spacing': {'small': 4}, 'color': {'primary': 'blue'}}, **overrides)
+
+
+def test_project_header_with_flag_lines():
+    # Flag lines without colons should be skipped, continuing to search for DESIGN_PROJECT
+    assert _project_header('ALLOW_DUP_JOB\nAUTO_REWORK_OF: runner-1\nDESIGN_PROJECT: obys') == 'obys'
+    assert _project_header('PUSH_ONLY:true\nNO_AUTO_REWORK\nDESIGN_PROJECT: obys') == 'obys'
+    assert _project_header('NO_AUTO_REWORK\nDESIGN_PROJECT: obys') == 'obys'
+
+
+def test_project_header_with_blank_lines():
+    # Blank lines should be skipped in the header section
+    assert _project_header('\nDESIGN_PROJECT: obys') == 'obys'
+    assert _project_header('ALLOW_DUP_JOB\n\nDESIGN_PROJECT: obys') == 'obys'
+    assert _project_header('AUTO_REWORK_ROUND: 1/2\n\nDESIGN_PROJECT: obys') == 'obys'
+
+
+def test_project_header_with_crlf():
+    # CRLF line endings should work correctly
+    assert _project_header('ALLOW_DUP_JOB\r\nAUTO_REWORK_OF: runner-1\r\nDESIGN_PROJECT: obys') == 'obys'
+    assert _project_header('\r\nDESIGN_PROJECT: obys') == 'obys'
+
+
+def test_project_header_body_ignored():
+    # DESIGN_PROJECT in body (after blank line or prose) should be ignored
+    assert _project_header('\n## Body\nDESIGN_PROJECT: obys') is None
+    assert _project_header('prose line\nDESIGN_PROJECT: obys') is None
 
 
 @pytest.mark.asyncio

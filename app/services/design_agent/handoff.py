@@ -19,6 +19,9 @@ def _project_header(instruction: str) -> str | None:
     for line in instruction.splitlines():
         if not line.strip():
             continue
+        # Skip flag lines without colons (e.g., ALLOW_DUP_JOB, NO_AUTO_REWORK)
+        if re.fullmatch(r'[ \t]*[A-Z][A-Z0-9_]*[ \t]*', line):
+            continue
         field = re.fullmatch(r'[ \t]*([A-Z][A-Z0-9_]*)[ \t]*:[ \t]*(.*?)[ \t]*', line)
         if not field:
             break
