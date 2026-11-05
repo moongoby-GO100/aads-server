@@ -10059,6 +10059,11 @@ _ckpt_build_and_store() {
         RETURNING id;" 2>/dev/null | tr -d '[:space:]') || { echo "skipped|db_error"; return 0; }
     [[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { echo "skipped|db_error"; return 0; }
     echo "saved|${id}|${nfiles}|${bytes}"
+    # 행이 생기는 경로는 위 INSERT 하나뿐이므로 저장 직후 정리하면 cron 없이도 표 크기가 제한된다.
+    # saved 줄을 먼저 내보낸 뒤 돌리므로 정리가 느리거나 실패해도(시간 초과 포함) 저장 결과는 유지된다.
+    db_exec "SELECT aads_pipeline_job_checkpoints_purge_terminal(), aads_pipeline_job_checkpoints_prune(interval '7 days');" >/dev/null 2>&1 \
+        || log "  checkpoint 정리 실패(무시) job=$jid"
+    return 0
 }
 
 # 이벤트 기록(record_runner_event)도 DB 를 쓰므로 같은 예산 안에서 상한을 두고 돌린다.
@@ -10097,7 +10102,8 @@ _shutdown_save_checkpoint() {
     tmpd=$(mktemp -d 2>/dev/null) || return 0
     _ckpt_bounded "$job_secs" "$tmpd/result" _ckpt_build_and_store "$jid" "$attempt" "$tmpd" || rc=$?
     res=""
-    if (( rc == 124 )); then res="skipped|timeout"; fi
+    # 저장 뒤 정리 단계에서 시간 초과가 나도 saved 줄이 이미 있으면 저장 결과를 유지한다.
+    if (( rc == 124 )) && [[ "$(head -n1 "$tmpd/result" 2>/dev/null)" != saved\|* ]]; then res="skipped|timeout"; fi
     if [[ -z "$res" ]]; then res=$(head -n1 "$tmpd/result" 2>/dev/null) || res=""; fi
     rm -rf "$tmpd"
     _CKPT_EVENT_REMAIN_MS=$(( job_secs - $(_ckpt_now_ms) + _ckpt_job_start ))
