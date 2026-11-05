@@ -6733,8 +6733,8 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
     elif contract_type == "freelancer":
         if employment_tax_type != "freelancer_33":
             raise HTTPException(status_code=400, detail="프리랜서 용역계약서는 3.3% 원천징수 구분으로 작성해야 합니다")
-        if wage_type != "case_fee":
-            raise HTTPException(status_code=400, detail="프리랜서 용역계약서는 건별/용역비 방식으로 작성해야 합니다")
+        if wage_type not in {"case_fee", "hourly"}:
+            raise HTTPException(status_code=400, detail="프리랜서 용역계약서는 시급 또는 건별/용역비 방식으로 작성해야 합니다")
         for label, key, camel in (
             ("용역 시작일", "start_date", "startDate"),
             ("용역 업무범위/산출물", "freelancer_scope", "freelancerScope"),
@@ -6743,7 +6743,7 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if _missing_contract_value(_contract_payload_value(result, key, camel)):
                 missing.append(label)
         if wage <= 0:
-            missing.append("확정 용역비")
+            missing.append("확정 시급" if wage_type == "hourly" else "확정 용역비")
 
     if missing:
         unique_missing = list(dict.fromkeys(missing))
@@ -9472,14 +9472,18 @@ def _payroll_defaults_from_employment(derived: dict[str, Any] | None) -> dict[st
         "reason": "",
     }
     defaults: dict[str, Any] = result["defaults"]
-    if contract_type == "freelancer" or wage_type == "case_fee":
+    freelancer_hourly = contract_type == "freelancer" and wage_type == "hourly"
+    if freelancer_hourly:
+        # 3.3% 프리랜서 시급제 — 4대보험 없이 근태 확정 후 시급×분으로 산정한다(월급 분기로 가지 않는다).
+        defaults["employment_tax_type"] = "freelancer_33"
+    elif contract_type == "freelancer" or wage_type == "case_fee":
         defaults["employment_tax_type"] = "freelancer_33"
         result["basis"] = f"프리랜서 용역계약({derived['contract_id']}) — 3.3% 원천징수 구분만 채움"
         result["reason"] = "용역비는 건별로 확정되므로 총지급액 기본값이 없습니다"
         return result
-    if terms.get("employment_tax_type"):
+    if not freelancer_hourly and terms.get("employment_tax_type"):
         defaults["employment_tax_type"] = terms["employment_tax_type"]
-    if terms.get("meal_provision"):
+    if terms.get("meal_provision") and not freelancer_hourly:
         defaults["meal_provision"] = terms["meal_provision"]
     if wage_type == "monthly" and wage:
         non_tax = terms.get("non_tax_meal_allowance") or 0
@@ -10167,6 +10171,7 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
     if any(_payroll_state(row) in PAYROLL_LOCKED_STATUSES for row in existing):
         raise HTTPException(status_code=409, detail="이미 확정된 급여명세가 있습니다. 정정은 해당 명세를 수정해 새 버전으로 작성하십시오")
     draft = next((row for row in existing if _payroll_state(row) in PAYROLL_EDITABLE_STATUSES), None)
+    freelancer_hourly = str(terms.get("contract_type") or "") == "freelancer" and wage_type == "hourly"
     request = {
         "id": draft["id"] if draft else "",
         "employee_request_id": str(employee.get("id") or ""),
@@ -10190,7 +10195,31 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         }],
         "work_summary": {"work_days": days, "work_minutes": minutes},
     }
-    if (draft or {}).get("deduction_items"):
+    if freelancer_hourly:
+        # 3.3% 프리랜서: 소득세 3% + 지방소득세 0.3%(각 10원 미만 절사), 4대보험 0. 총지급액이 바뀌므로 항상 재계산한다.
+        from app.services.yeoljeong_payroll_pdf import freelancer_withholding
+
+        tax = freelancer_withholding(gross)
+        request["employment_tax_type"] = "freelancer_33"
+        request["non_tax_meal_allowance"] = 0
+        request["tax_withholding"] = tax["total"]
+        request["insurance_deduction"] = 0
+        request["pay_items"] = [{
+            "code": "other", "label": "용역비(시급)", "amount": gross,
+            "calc_note": f"시급 {rate:,}원 × 승인 근무 {minutes}분(분 단위 환산, 원 미만 반올림)",
+        }]
+        # 기존 초안의 기타 공제(code=other)는 금액·항목 모두 유지해야 항목 합계와 other_deduction 이 일치한다.
+        other_items = [dict(item) for item in ((draft or {}).get("deduction_items") or [])
+                       if isinstance(item, dict) and str(item.get("code") or "") == "other"]
+        other_total = int((draft or {}).get("other_deduction") or 0)
+        if not other_items and other_total > 0:
+            other_items = [{"code": "other", "label": "기타 공제", "amount": other_total}]
+        request["deduction_items"] = [
+            {"code": "income_tax", "label": "사업소득세(3%)", "amount": tax["income_tax"]},
+            {"code": "local_income_tax", "label": "지방소득세(0.3%)", "amount": tax["local_income_tax"]},
+            *other_items,
+        ]
+    elif (draft or {}).get("deduction_items"):
         request["deduction_items"] = draft["deduction_items"]
     saved, _ = _save_payroll_record(request, user, server_fields={"attendance_basis": basis})
     _audit_payroll(user, saved, "payroll.draft_from_attendance", {
