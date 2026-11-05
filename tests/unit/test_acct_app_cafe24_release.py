@@ -1591,7 +1591,7 @@ def test_journal_source_clobe_migration_is_allowlisted_last_among_business_migra
     assert box.run("--call", "migration_db", MIG_JOURNAL).stdout.strip() == "obys"
     script = SCRIPT.read_text(encoding="utf-8")
     block = re.search(r"ACCT_MIGRATION_ALLOWLIST=\(\n(.*?)\n\)", script, re.S).group(1).split()
-    assert block == [MIG_CORRECTIONS, MIG_SCHEDULES, MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL]
+    assert block == [MIG_CORRECTIONS, MIG_SCHEDULES, MIG_GPS, MIG_HRDOC, MIG_CLOBE, MIG_CLOBE_STORE, MIG_JOURNAL, MIG_SELF_ENTRY, MIG_APP_INSTALL]
 
 
 def test_journal_source_clobe_probe_requires_the_validated_clobe_constraint():
