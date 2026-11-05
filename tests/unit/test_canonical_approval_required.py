@@ -86,6 +86,7 @@ def test_filter_sql_and_binding_before_limit(monkeypatch):
     assert sql.index("$7::bool OR") < sql.index("LIMIT $6")  # WHERE 가 LIMIT 보다 앞
     assert conn.args == (TENANT, "AADS", None, None, False, 5, True)
     assert "AS approval_required" in sql
+    assert "COALESCE(" + docs.APPROVAL_REQUIRED_SQL + ", false) AS approval_required" in sql
 
 
 def test_conflict_with_approved_only():

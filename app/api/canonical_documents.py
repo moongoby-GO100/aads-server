@@ -540,7 +540,7 @@ async def list_documents(project_key: str, q: str | None = Query(None, max_lengt
             "SELECT h.id,h.document_key,h.kind,selected.title,h.generation,h.latest_revision_id,h.approved_revision_id,h.updated_at, "
             "selected.doc_tier,selected.author_model,selected.author_provider,char_length(selected.content) AS char_count, "
             "EXISTS(SELECT 1 FROM project_document_goal_links gl WHERE gl.head_id=h.id) AS goal_linked, "
-            + APPROVAL_REQUIRED_SQL + " AS approval_required, "
+            "COALESCE(" + APPROVAL_REQUIRED_SQL + ", false) AS approval_required, "
             "COALESCE((SELECT e.action FROM project_document_events e WHERE e.revision_id=selected.id "
             "AND e.action IN ('review','approved','archived') ORDER BY e.id DESC LIMIT 1),'draft') AS status "
             "FROM project_document_heads h LEFT JOIN project_document_revisions selected "
