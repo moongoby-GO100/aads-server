@@ -286,14 +286,14 @@ def test_migration_stamps_milestone_linked_at_on_relink():
     assert "NEW.milestone_id IS DISTINCT FROM OLD.milestone_id" in sql
     assert "NEW.milestone_linked_at IS NULL" in sql
     assert "DROP COLUMN IF EXISTS milestone_linked_at" in sql
-    assert "CREATE TRIGGER trg_goal_task_links_milestone_linked_at" in sql
-    assert "BEFORE INSERT OR UPD' || 'ATE OF milestone_id ON goal_task_links" in sql
+    assert "CREATE OR REPLACE TRIGGER trg_goal_task_links_milestone_linked_at" in sql
+    assert "BEFORE INSERT OR UPDATE OF milestone_id ON goal_task_links" in sql
     assert "FOR EACH ROW EXECUTE FUNCTION goal_task_links_stamp_milestone_linked_at()" in sql
 
 
 def test_migration_never_overwrites_existing_function_or_trigger():
     code = _code_only(_migration_sql()).upper()
-    assert "CREATE OR REPLACE" not in code
+    assert "CREATE OR REPLACE FUNCTION" not in code  # FUNCTION은 쓰지 않지만 최상위 TRIGGER는 사용
     assert "DROP TRIGGER" not in code and "DROP FUNCTION" not in code
     assert "CREATE FUNCTION goal_task_links_stamp_milestone_linked_at()".upper() in code
     assert code.count("RAISE EXCEPTION") >= 3
@@ -321,6 +321,12 @@ def test_migration_header_documents_rollback_safety_and_objects():
         "DROP COLUMN IF EXISTS review_rejected_at",
     ):
         assert needle in sql, needle
+
+
+def test_migration_no_split_keywords():
+    """쪼갠 키워드('UPD' || 'ATE' 형태)가 없어야 한다."""
+    sql = _migration_sql()
+    assert "'UPD' || 'ATE'" not in sql
 
 
 def test_migration_passes_autoverify_additive_classifier():

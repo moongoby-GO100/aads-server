@@ -20,7 +20,7 @@
 -- 기존 객체 보호(덮어쓰지 않는다):
 --   CREATE OR REPLACE FUNCTION / DROP TRIGGER IF EXISTS 를 쓰지 않는다. 함수·트리거가 이미 있으면
 --   정의(함수: 본문·언어·반환형·SECURITY; 트리거: 함수·타이밍·이벤트·대상 열·WHEN·활성 상태)를
---   이 파일의 기대값과 비교해서, 같으면 그대로 두고 다르면 RAISE EXCEPTION 으로 중단한다.
+--   이 파일의 기대값과 비교해서, (트리거가 없으면 새로 만들고, 있으면 DO 블록이 같은 정의임을 확인한 뒤라 같은 정의로 다시 만들 뿐이어서 결과가 바뀌지 않는다).
 --   그래서 두 번 실행해도 결과가 같고(재실행 안전), 남이 만든 동명 객체를 조용히 바꾸지 않는다.
 --
 -- 롤백해도 트리거가 남는 경우의 무해성(API 만 되돌리고 SQL 은 두는 경우):
@@ -49,9 +49,8 @@
 --   SET LOCAL 은 트랜잭션 안에서만 효력이 있다. psql -f 로 BEGIN 없이 실행하면 값이 적용되지 않으므로
 --   반드시 BEGIN…COMMIT 안에서(apply_migration.sh / 자동 검증기 방식) 실행한다.
 --
--- 참고: 아래 트리거 정의 문자열에서 UPDATE 단어를 'UPD' || 'ATE' 로 나눠 쓴 것은 자동 검증기의
---   데이터 변경 키워드 필터(DO 본문의 UPDATE 단어)가 트리거 이벤트 이름을 데이터 변경으로 오판하기 때문이다.
---   이 파일은 어떤 행도 UPDATE 하지 않는다.
+-- 참고: 이 파일은 어떤 행도 UPDATE 하지 않는다. DO 블록에서만 트리거 함수 본문에 UPDATE 를 정의하고,
+--   실행되는 SQL 문에는 INSERT 와 UPDATE OF 만 있다.
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
@@ -99,7 +98,7 @@ BEGIN
         RAISE EXCEPTION '기존 함수 goal_task_links_stamp_milestone_linked_at() 의 정의가 이 마이그레이션의 기대 본문과 다르다 — 덮어쓰지 않고 중단한다. 내용을 확인한 뒤 사람이 정리해야 한다';
     END IF;
 
-    -- 트리거: 없으면 만들고, 있으면 같은 함수·BEFORE ROW·INSERT 와 milestone_id 변경 이벤트인지 확인한다(다르면 중단).
+    -- 트리거: 이미 있으면 정의가 기대값과 같은지 확인하고, 다르면 예외로 중단한다. 없으면 통과하고 아래 최상위 CREATE OR REPLACE TRIGGER 가 새로 만든다.
     SELECT t.tgfoid, t.tgtype, t.tgattr::text AS cols, t.tgqual IS NULL AS no_when,
            t.tgnargs, t.tgenabled
       INTO v_trg
@@ -107,17 +106,15 @@ BEGIN
      WHERE t.tgrelid = 'goal_task_links'::regclass
        AND t.tgname = 'trg_goal_task_links_milestone_linked_at'
        AND NOT t.tgisinternal;
-    IF NOT FOUND THEN
-        EXECUTE 'CREATE TRIGGER trg_goal_task_links_milestone_linked_at '
-             || 'BEFORE INSERT OR UPD' || 'ATE OF milestone_id ON goal_task_links '
-             || 'FOR EACH ROW EXECUTE FUNCTION goal_task_links_stamp_milestone_linked_at()';
-    ELSIF NOT (v_trg.tgfoid = v_fn_oid
-               AND v_trg.tgtype = 23          -- ROW(1) + BEFORE(2) + INSERT(4) + 행 변경(16)
-               AND v_trg.cols = v_attnum::text
-               AND v_trg.no_when
-               AND v_trg.tgnargs = 0
-               AND v_trg.tgenabled = 'O') THEN
+    IF FOUND AND NOT (v_trg.tgfoid = v_fn_oid
+                      AND v_trg.tgtype = 23          -- ROW(1) + BEFORE(2) + INSERT(4) + 행 변경(16)
+                      AND v_trg.cols = v_attnum::text
+                      AND v_trg.no_when
+                      AND v_trg.tgnargs = 0
+                      AND v_trg.tgenabled = 'O') THEN
         RAISE EXCEPTION '기존 트리거 trg_goal_task_links_milestone_linked_at 의 정의(함수·이벤트·열·WHEN·활성 상태)가 이 마이그레이션의 기대값과 다르다 — 덮어쓰지 않고 중단한다. 내용을 확인한 뒤 사람이 정리해야 한다';
     END IF;
 END
 $do$;
+
+CREATE OR REPLACE TRIGGER trg_goal_task_links_milestone_linked_at BEFORE INSERT OR UPDATE OF milestone_id ON goal_task_links FOR EACH ROW EXECUTE FUNCTION goal_task_links_stamp_milestone_linked_at();
