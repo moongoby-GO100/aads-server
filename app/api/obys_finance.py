@@ -991,8 +991,37 @@ async def confirm_payroll(statement_id: str, current_user: dict = Depends(get_cu
 
 
 @router.post("/payroll/{statement_id}/pay")
-async def pay_payroll(statement_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    return {"statement": await run_in_threadpool(svc.pay_payroll, statement_id, current_user)}
+async def pay_payroll(
+    statement_id: str, payload: GenericPayload | None = None, current_user: dict = Depends(get_current_user)
+) -> dict[str, Any]:
+    body = payload.model_dump() if payload else {}
+    return {"statement": await run_in_threadpool(
+        svc.pay_payroll, statement_id, current_user, body.get("paid_amount"), body.get("paid_date"), body.get("paid_source"),
+    )}
+
+
+@router.post("/payroll/{statement_id}/payout")
+async def record_payroll_payout(statement_id: str, payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    body = payload.model_dump()
+    return {"statement": await run_in_threadpool(
+        svc.record_payroll_payout, statement_id, current_user, body.get("paid_amount"), body.get("paid_date"), body.get("paid_source"),
+    )}
+
+
+@router.post("/payroll/{statement_id}/payout-diff-resolution")
+async def set_payroll_payout_diff_resolution(statement_id: str, payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"statement": await run_in_threadpool(svc.set_payroll_payout_diff_resolution, statement_id, current_user, payload.model_dump())}
+
+
+@router.delete("/payroll/{statement_id}/payout-diff-resolution")
+async def cancel_payroll_payout_diff_resolution(statement_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"statement": await run_in_threadpool(svc.cancel_payroll_payout_diff_resolution, statement_id, current_user)}
+
+
+@router.post("/payroll/{statement_id}/payout-diff-resolution/complete")
+async def complete_payroll_payout_diff_resolution(statement_id: str, payload: GenericPayload | None = None, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    body = payload.model_dump() if payload else {}
+    return {"statement": await run_in_threadpool(svc.complete_payroll_payout_diff_resolution, statement_id, current_user, body.get("date"))}
 
 
 @router.get("/payroll/{statement_id}/versions")

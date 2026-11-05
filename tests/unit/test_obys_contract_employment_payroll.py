@@ -555,6 +555,19 @@ def test_backfill_script_defaults_to_dry_run(monkeypatch, capsys):
 # --- 프리랜서 정산 초안: 3.3% 분리 (소득세 3% + 지방소득세 소득세의 10%, 각 10원 미만 절사) --------------
 
 
+def test_freelancer_settlement_draft_adds_prior_month_pay_outside_withholding():
+    sign(freelancer_contract())
+    request = {"employee_email": EMPLOYEE["email"], "business_id": "biz-mia", "gross_pay": 1000000, "amount_confirmed": True}
+    prior = svc.payroll_draft_from_contract({**request, "payroll_month": "2026-10"}, ADMIN)
+    done = svc.pay_payroll(svc.confirm_payroll(prior["id"], ADMIN)["id"], ADMIN, paid_amount=prior["net_pay"] - 1000)
+    svc.set_payroll_payout_diff_resolution(done["id"], ADMIN, {"method": "next_month_pay"})
+    draft = svc.payroll_draft_from_contract({**request, "payroll_month": "2026-11"}, ADMIN)
+    assert draft["gross_pay"] == 1001000 and draft["taxable_pay"] == 1000000
+    assert draft["tax_withholding"] == 33000 and draft["totals"]["consistent"] is True
+    assert [item["code"] for item in draft["pay_items"]] == ["other", "prior_month_unpaid_pay"]
+    assert svc.payroll_draft_from_contract({**request, "payroll_month": "2026-11"}, ADMIN)["id"] == draft["id"]
+
+
 @pytest.mark.parametrize("gross,income,local", [(1000000, 30000, 3000), (1234567, 37030, 3700)])
 def test_freelancer_settlement_draft_splits_withholding(gross, income, local):
     contract = sign(freelancer_contract())["contract"]

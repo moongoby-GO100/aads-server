@@ -24,13 +24,21 @@ FREELANCER_TAX_TYPE = "freelancer_33"
 PAY_ITEM_CODES = {
     "base": "기본급", "overtime": "연장근로수당", "night": "야간근로수당", "holiday": "휴일근로수당",
     "weekly_holiday": "주휴수당", "meal": "식대", "bonus": "상여금", "other": "기타수당",
+    "prior_month_unpaid_pay": "전월 미지급분 지급",
 }
 INSURANCE_DEDUCTION_CODES = ("national_pension", "health_insurance", "long_term_care", "employment_insurance")
 TAX_DEDUCTION_CODES = ("income_tax", "local_income_tax")
 DEDUCTION_ITEM_CODES = {
     "national_pension": "국민연금", "health_insurance": "건강보험", "long_term_care": "노인장기요양보험",
     "employment_insurance": "고용보험", "income_tax": "소득세", "local_income_tax": "지방소득세", "other": "기타 공제",
+    "prior_month_overpaid_recover": "전월 초과지급분 회수",
 }
+# 전월 차액 정산 항목. 서버만 만들고(source=settlement) 과세 기준에 들어가지 않는다.
+SETTLEMENT_PAY_CODE = "prior_month_unpaid_pay"
+SETTLEMENT_RECOVER_CODE = "prior_month_overpaid_recover"
+SETTLEMENT_ITEM_CODES = (SETTLEMENT_PAY_CODE, SETTLEMENT_RECOVER_CODE)
+SETTLEMENT_SOURCE = "settlement"
+OTHER_DEDUCTION_CODES = ("other", SETTLEMENT_RECOVER_CODE)
 WORK_SUMMARY_FIELDS = ("work_days", "work_minutes", "overtime_minutes", "night_minutes", "holiday_minutes")
 _MINUTE_FIELDS = WORK_SUMMARY_FIELDS[1:]
 _ITEM_AMOUNT_LIMIT = 10**12
@@ -135,6 +143,13 @@ def _clean_item_list(
                 entry["confirmed"] = True
             if _flag(item.get("needs_input")) and not confirmed:
                 entry["needs_input"] = True
+        if code in SETTLEMENT_ITEM_CODES:
+            # 정산 참조는 이 두 code 에만 남는다. 다른 code 에 붙은 정산 키는 여기서 사라진다.
+            settlement_root = str(item.get("settlement_of_root_id") or "").strip()
+            if not settlement_root:
+                raise PayrollItemError(f"{where} 전월 차액 정산 항목에 대상 명세가 없습니다")
+            entry["source"] = SETTLEMENT_SOURCE
+            entry["settlement_of_root_id"] = settlement_root
         cleaned.append(entry)
     return cleaned
 
@@ -203,7 +218,7 @@ def payroll_items_errors(statement: dict[str, Any]) -> list[str]:
         for label, codes, field in (
             ("소득세·지방소득세", TAX_DEDUCTION_CODES, "tax_withholding"),
             ("4대보험", INSURANCE_DEDUCTION_CODES, "insurance_deduction"),
-            ("기타 공제", ("other",), "other_deduction"),
+            ("기타 공제", OTHER_DEDUCTION_CODES, "other_deduction"),
         ):
             total, expected = _group_sum(deduction, codes), _int(statement.get(field))
             if total != expected:
@@ -358,7 +373,7 @@ def _freelancer_sections(statement: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         tax_rows = [("사업소득세(3%)", _won(income_tax)), ("지방소득세(0.3%)", _won(local_tax or 0))]
     other_items = [
-        item for item in normalize_payroll_items(statement).get("deduction_items") or [] if item["code"] == "other"
+        item for item in normalize_payroll_items(statement).get("deduction_items") or [] if item["code"] in OTHER_DEDUCTION_CODES
     ]
     if other_items:
         tax_rows += [(_text(item["label"]), _won(item["amount"])) for item in other_items]

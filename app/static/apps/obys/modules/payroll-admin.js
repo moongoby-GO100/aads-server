@@ -58,8 +58,50 @@
   const AMBIGUOUS_LINK_TEXT = "같은 이메일의 승인 직원이 여럿입니다. " + BLOCKED_TEXT;
   const OUT_OF_BRANCH_TEXT = "선택한 직원이 이 지점 목록에 없습니다. 지점 필터를 바꾸거나 아래에서 직원을 다시 선택하세요.";
   const AMBIGUOUS_STATEMENT_TEXT = "같은 이메일 직원이 여럿이라 명세를 자동 연결하지 않았습니다.";
+  // 전월 차액 정산 항목: 서버가 금액을 계산한다. 화면에서는 읽기 전용이고 '이번 달 제외'만 할 수 있다.
+  // 확정·지급된 명세에 이미 들어간 줄(사실)은 정정 초안에서도 서버가 그대로 복사하므로 제외할 수 없다.
+  const TOPUP_LABEL = "전월 차액 추가 정산";
+  const RECOVER_CODE = "prior_month_overpaid_recover";
+  const isSettlement = row => Boolean(row?.settlement_of_root_id);
+  const settlementRowHtml = (kind, row, fact = false) => `<tr data-settlement-row>
+      <td>전월 차액 정산</td><td>${esc(row.label)}</td><td>${esc(Number(row.amount).toLocaleString("ko-KR"))}</td>${kind === "pay" ? `<td>${esc(row.calc_note || "")}</td>` : ""}
+      <td>${fact ? "<small>지급 완료 사실</small>" : `<button type="button" class="btn" style="min-height:44px" data-settle-off="${esc(row.settlement_of_root_id)}">이번 달 제외</button>`}</td></tr>`;
   const statusName = value => ({draft:"초안",needs_review:"검토 필요",confirmed:"확정",paid:"지급 완료"}[value] || "상태 확인 필요");
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+  // 지급 처리 대화상자: 지급액(기본 실수령)·지급일(기본 오늘)·출처. 명세 금액은 바꾸지 않고 실제 지급 기록만 받는다.
+  const isoToday = () => { const d = new Date(Date.now() + 9 * 3600 * 1000); return d.toISOString().slice(0, 10); };
+  const payoutDialogHtml = (statement, today = isoToday()) => `<form method="dialog" data-payout-form>
+    <h3 style="margin:0 0 8px">지급 처리</h3>
+    <p style="margin:0 0 8px">기준명세 실수령 ${Number(statement?.net_pay || 0).toLocaleString("ko-KR")}원 · 실제 지급한 금액을 입력하세요.</p>
+    <label style="display:block;margin-bottom:8px">지급액(원)<input class="field" style="min-height:44px;width:100%" inputmode="numeric" data-payout-amount value="${esc(statement?.payout?.amount ?? statement?.net_pay ?? 0)}"></label>
+    <label style="display:block;margin-bottom:8px">지급일<input class="field" type="date" style="min-height:44px;width:100%" data-payout-date value="${esc(today)}"></label>
+    <label style="display:block;margin-bottom:8px">지급액 출처<select class="field" style="min-height:44px;width:100%" data-payout-source><option value="manual">직접 입력</option><option value="bank">계좌 내역</option><option value="sheet">급여 시트</option></select></label>
+    <p role="alert" data-payout-error></p>
+    <div style="display:flex;flex-wrap:wrap;gap:8px"><button type="button" class="btn" style="min-height:44px" data-payout-cancel>취소</button><button type="button" class="btn" style="min-height:44px" data-payout-ok>지급 완료로 기록</button></div></form>`;
+  const parsePayoutInput = ({amount, date, source}) => {
+    const text = String(amount ?? "").trim().replace(/,/g, "");
+    if (!/^\d+$/.test(text) || !Number.isSafeInteger(Number(text))) return {error:"지급액은 원 단위 정수로 입력하세요."};
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return {error:"지급일을 선택하세요."};
+    return {body:{paid_amount:Number(text), paid_date:date, paid_source:source || "manual"}};
+  };
+  // 브라우저에서는 대화상자, DOM 이 없는 환경(합성 테스트)에서는 null 을 돌려 기존 확인창 흐름을 쓴다.
+  const askPayout = statement => new Promise(resolve => {
+    if (typeof document === "undefined" || !document.createElement || !document.body) {resolve(null); return;}
+    const dialog = document.createElement("dialog");
+    dialog.style.cssText = "width:min(420px,calc(100vw - 28px));padding:16px;border:1px solid var(--line);border-radius:12px";
+    dialog.innerHTML = payoutDialogHtml(statement);
+    const close = value => {dialog.close ? dialog.close() : null; dialog.remove(); resolve(value);};
+    dialog.querySelector("[data-payout-cancel]").onclick = () => close(undefined);
+    dialog.querySelector("[data-payout-ok]").onclick = () => {
+      const parsed = parsePayoutInput({amount:dialog.querySelector("[data-payout-amount]").value, date:dialog.querySelector("[data-payout-date]").value, source:dialog.querySelector("[data-payout-source]").value});
+      if (parsed.error) {dialog.querySelector("[data-payout-error]").textContent = parsed.error; return;}
+      close(parsed.body);
+    };
+    dialog.addEventListener("cancel", () => close(undefined));
+    document.body.appendChild(dialog);
+    dialog.showModal ? dialog.showModal() : dialog.setAttribute("open", "");
+  });
 
   async function mount(host, options) {
     const {api, businessId, month, onSaved, downloadPdf} = options;
@@ -93,7 +135,7 @@
     const initialNotice = options.linkStatus === "ambiguous" ? AMBIGUOUS_LINK_TEXT : BLOCKED_TEXT;
     let selected = mustChoose ? "" : wantedId || idOf(employees[0]);
     let active = null, busy = false, generation = 0;
-    let pay = [], ded = [], work = {}, planTaxType = "";
+    let pay = [], ded = [], work = {}, optOut = [], planTaxType = "";
     const sessionOwner = new Map();
     const key = () => `${businessId}|${month}|${selected}`;
     const employee = () => employees.find(row => idOf(row) === selected);
@@ -130,13 +172,16 @@
     const inputValues = () => Object.fromEntries(amounts.map(([name]) => [name, form.elements[name].value]));
     const snapshot = (p, d, w) => JSON.stringify({p:p.map(row => [row.code, row.label, Number(row.amount), row.calc_note || ""]), d:d.map(row => [row.code, row.label, Number(row.amount)]),
       w:workFields.map(([name]) => w[name] === undefined || w[name] === "" ? null : Number(w[name]))});
-    const remember = () => employee() && drafts.set(key(), {id:active?.id || "", ...inputValues(), pay_date:payDateInput.value, items:clone({pay, ded, work})});
+    const remember = () => employee() && drafts.set(key(), {id:active?.id || "", ...inputValues(), pay_date:payDateInput.value, items:clone({pay, ded, work, optOut})});
     const dirty = () => amounts.some(([name]) => form.elements[name].value !== String(active?.[name] ?? ""))
       || payDateInput.value !== String(active?.pay_date ?? "")
-      || snapshot(pay, ded, work) !== snapshot(active?.pay_items || [], active?.deduction_items || [], active?.work_summary || {});
+      || snapshot(pay, ded, work) !== snapshot(active?.pay_items || [], active?.deduction_items || [], active?.work_summary || {})
+      || JSON.stringify(optOut) !== JSON.stringify(active?.settlement_opt_out || []);
     const itemPayload = () => ({
-      pay_items:pay.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), calc_note:row.calc_note || ""})),
-      deduction_items:ded.map(row => ({code:row.code, label:row.label, amount:Number(row.amount)})),
+      // 정산 항목은 서버가 버리고 다시 계산한다. 그래도 보내는 이유는 총지급액 칸에 포함된 금액을 서버가 빼기 위해서다.
+      pay_items:pay.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), calc_note:row.calc_note || "", ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
+      deduction_items:ded.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
+      settlement_opt_out:optOut,
       work_summary:Object.fromEntries(workFields.filter(([name]) => work[name] !== undefined && work[name] !== "").map(([name]) => [name, Number(work[name])]))
     });
     const itemsComplete = () => [...pay, ...ded].every(row => row.amount !== "" && row.amount !== undefined && Number.isSafeInteger(Number(row.amount)) && Number(row.amount) >= 0);
@@ -144,15 +189,16 @@
     const syncDerived = () => {
       const lock = (name, on, value) => {const control = form.elements[name]; control.readOnly = on; if (on) control.value = String(value);};
       lock("gross_pay", pay.length > 0, sumItems(pay));
-      lock("taxable_pay", pay.length > 0, Math.max(sumItems(pay) - (Number(form.elements.non_tax_meal_allowance.value) || 0), 0));
+      lock("taxable_pay", pay.length > 0, Math.max(sumItems(pay) - sumItems(pay.filter(isSettlement)) - (Number(form.elements.non_tax_meal_allowance.value) || 0), 0));  // 전월 정산 지급분은 과세 기준 제외
       lock("tax_withholding", ded.length > 0, sumItems(ded, taxCodes));
       lock("insurance_deduction", ded.length > 0, sumItems(ded, insuranceCodes));
-      lock("other_deduction", ded.length > 0, sumItems(ded, ["other"]));
+      lock("other_deduction", ded.length > 0, sumItems(ded, ["other", RECOVER_CODE]));
       const insurance = host.querySelector('[data-wrap="insurance_deduction"]');
       if (insurance) insurance.style.display = isFreelancer() && !Number(form.elements.insurance_deduction.value) ? "none" : "";
       if (isFreelancer() && form.elements.insurance_deduction.value === "") form.elements.insurance_deduction.value = "0";
     };
-    const itemTable = (kind, rows, codes, title) => `<h3>${title}</h3>${rows.length ? `<table><thead><tr><th>구분</th><th>항목명</th><th>금액(원)</th>${kind === "pay" ? "<th>계산방법</th>" : ""}<th></th></tr></thead><tbody>${rows.map((row, index) => `<tr>
+    const isFactRow = row => Boolean(active?.supersedes_id || ["confirmed", "paid"].includes(active?.status)) && row.label !== TOPUP_LABEL;
+    const itemTable = (kind, rows, codes, title) => `<h3>${title}</h3>${rows.length ? `<table><thead><tr><th>구분</th><th>항목명</th><th>금액(원)</th>${kind === "pay" ? "<th>계산방법</th>" : ""}<th></th></tr></thead><tbody>${rows.map((row, index) => isSettlement(row) ? settlementRowHtml(kind, row, isFactRow(row)) : `<tr>
       <td><select class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="code">${codes.map(([code, label]) => `<option value="${code}"${code === row.code ? " selected" : ""}>${label}</option>`).join("")}</select></td>
       <td><input class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="label" maxlength="40" value="${esc(row.label)}"></td>
       <td><input class="field" style="min-height:44px" type="number" min="0" step="1" data-item="${kind}" data-i="${index}" data-k="amount" value="${esc(row.amount)}"></td>
@@ -162,6 +208,7 @@
     const renderItems = () => {
       const freelancer = isFreelancer();
       itemsHost.innerHTML = itemTable("pay", pay, payCodes, "지급 항목") + itemTable("ded", ded, freelancer ? dedCodes.filter(([code]) => !insuranceCodes.includes(code)) : dedCodes, freelancer ? "원천징수 항목" : "공제 항목")
+        + (optOut.length ? `<p role="status">이번 달 제외한 전월 차액 ${optOut.length}건 · 다음 명세에 다시 반영됩니다. <button type="button" class="btn" style="min-height:44px" data-settle-restore="1">제외 해제</button></p>` : "")
         + (freelancer ? '<button type="button" class="btn" style="min-height:44px" data-item-tax="1">3.3% 자동 계산(소득세 3% · 지방소득세 0.3%)</button>' : "")
         + `<h3>근로일수 및 근로시간</h3><div class="toolbar">${workFields.map(([name, label]) => `<label>${label}<input class="field" style="min-height:44px" type="number" min="0" step="1" data-work-field="${name}" value="${esc(work[name] ?? "")}"></label>`).join("")}</div>`;
     };
@@ -227,10 +274,18 @@
         if (data.itemAdd === "ded" && !seedDeductions()) return;
         if (data.itemAdd === "pay") {const [code, label] = nextPayCode(); pay.push({code, label, amount:"", calc_note:""});}
         else ded.push({code:isFreelancer() ? "income_tax" : "national_pension", label:isFreelancer() ? "소득세" : "국민연금", amount:""});
+      } else if (data.settleOff) {
+        // 금액은 고칠 수 없고 끄기만 한다. 합계에서 빠지도록 목록에서 내리고 제외 대상만 서버에 알린다.
+        pay = pay.filter(row => row.settlement_of_root_id !== data.settleOff);
+        ded = ded.filter(row => row.settlement_of_root_id !== data.settleOff);
+        if (!optOut.includes(data.settleOff)) optOut = [...optOut, data.settleOff].sort();
+      } else if (data.settleRestore) {
+        optOut = [];
+        message.textContent = "제외를 해제했습니다. 저장하면 남은 전월 차액이 다시 반영됩니다.";
       } else if (data.itemDel) {
         (data.itemDel === "pay" ? pay : ded).splice(Number(data.i), 1);
       } else if (data.itemTax) {
-        const gross = Number(form.elements.gross_pay.value);
+        const gross = Number(form.elements.gross_pay.value) - sumItems(pay.filter(isSettlement));  // 전월 정산 지급분은 3.3% 기준 제외
         if (!Number.isSafeInteger(gross) || gross < 0 || form.elements.gross_pay.value === "") {message.textContent = "총지급액(용역비)을 먼저 입력하세요."; return;}
         if (!seedDeductions(true)) return;
         const tax = withholding(gross);
@@ -262,8 +317,8 @@
       const values = draft && draft.id === (active?.id || "") ? draft : active || {};
       amounts.forEach(([name]) => {form.elements[name].value = values[name] ?? "";});
       payDateInput.value = values.pay_date ?? "";
-      const source = values.items || {pay:clone(active?.pay_items) || [], ded:clone(active?.deduction_items) || [], work:clone(active?.work_summary) || {}};
-      pay = source.pay || []; ded = source.ded || []; work = source.work || {};
+      const source = values.items || {pay:clone(active?.pay_items) || [], ded:clone(active?.deduction_items) || [], work:clone(active?.work_summary) || {}, optOut:clone(active?.settlement_opt_out) || []};
+      pay = source.pay || []; ded = source.ded || []; work = source.work || {}; optOut = source.optOut || [];
       renderItems(); syncDerived();
       host.querySelector("[data-payroll-state]").textContent = active
         ? `${month} · ${statusName(active.status)} · 버전 ${active.version || 1}${["confirmed", "paid"].includes(active.status) ? " · 수정 저장 시 새 초안 생성" : ""}`
@@ -287,7 +342,7 @@
       picker.value = employee() ? selected : "";
       showNotices();
       if (!employee()) {
-        active = null; pay = []; ded = []; work = {};
+        active = null; pay = []; ded = []; work = {}; optOut = [];
         statementPicker.innerHTML = '<option value="">새 초안 작성</option>';
         message.textContent = "";
         host.querySelector("[data-payroll-versions]").textContent = "";
@@ -342,7 +397,7 @@
       statementPicker.innerHTML = '<option value="">새 초안 작성</option>' + ownStatements().map(row => `<option value="${esc(row.id)}">${esc(month)} · ${statusName(row.status)} · 버전 ${row.version || 1}</option>`).join("");
       statementPicker.value = statement.id;
       fill(statement);
-      message.textContent = `저장 완료 · 총지급 ${money(statement.gross_pay)} · 공제 ${money(statement.totals?.total_deductions)} · 실수령 ${money(statement.net_pay)}`;
+      message.textContent = `저장 완료 · 총지급 ${money(statement.gross_pay)} · 공제 ${money(statement.totals?.total_deductions)} · 실수령 ${money(statement.net_pay)}${(statement.settlement_warnings || []).length ? " · 주의: " + statement.settlement_warnings.join(" ") : ""}`;
       await onSaved?.();
     };
     form.onsubmit = event => {
@@ -366,6 +421,12 @@
         for (const [name] of amounts) if (result.defaults?.[name] !== undefined) form.elements[name].value = result.defaults[name] ?? "";
         planTaxType = result.defaults?.employment_tax_type || "";
         if (!payDateInput.value.trim() && result.contract_terms?.pay_date) payDateInput.value = result.contract_terms.pay_date;
+        {const found = result.settlement_items || {};
+          const wanted = [["pay", found.pay_items], ["ded", found.deduction_items]].filter(([, rows]) => (rows || []).length);
+          if (wanted.some(([kind]) => kind === "pay") && !seedPay()) return;
+          if (wanted.some(([kind]) => kind === "ded") && !seedDeductions()) return;
+          for (const [kind, rows] of wanted) {const list = kind === "pay" ? pay : ded;
+            for (const item of rows) if (!optOut.includes(item.settlement_of_root_id) && !list.some(row => row.settlement_of_root_id === item.settlement_of_root_id)) list.push({...item});}}
         renderItems();syncDerived();
         host.querySelector("[data-payroll-basis]").textContent = [result.basis,result.reason,result.period_note].filter(Boolean).join(" · ");
         remember();totals();return;
@@ -398,12 +459,18 @@
         message.textContent="변경 이력을 조회했습니다.";return;
       }
       const label = {confirm:"명세 확정",pay:"지급 완료로 기록",deliver:"명세서 발송"}[action];
-      if (!label || !confirm(`${month} ${employee().name || employee().employee_name} · ${label}하시겠습니까?`)) return;
-      const result = await api(path+"/"+action,{method:"POST"});
+      let payBody = null;
+      if (action === "pay") {
+        const asked = await askPayout(active);
+        if (asked === undefined) return;  // 대화상자에서 취소
+        payBody = asked;
+      }
+      if (!label || (!payBody && !confirm(`${month} ${employee().name || employee().employee_name} · ${label}하시겠습니까?`))) return;
+      const result = await api(path+"/"+action,payBody ? {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payBody)} : {method:"POST"});
       if(result.statement)await saved(result.statement);else message.textContent="요청을 처리했습니다.";
     });});
     selectEmployee();
   }
-  window.ObysPayrollAdmin = {mount, resolvePayrollEmployee, statementOwnership, ownsStatement, employeeKeyFor, sha256Hex};
+  window.ObysPayrollAdmin = {mount, payoutDialogHtml, parsePayoutInput, settlementRowHtml, resolvePayrollEmployee, statementOwnership, ownsStatement, employeeKeyFor, sha256Hex};
   if (typeof module !== "undefined" && module.exports) module.exports = window.ObysPayrollAdmin;
 })();

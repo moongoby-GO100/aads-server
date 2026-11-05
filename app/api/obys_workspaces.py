@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from decimal import Decimal
 import json
 import hashlib
+import logging
 import math
 import re
 from typing import Any, Annotated, Literal
@@ -18,6 +19,7 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from app.api import acct_purchase, acct_source_ledger, acct_source_documents
@@ -25,6 +27,7 @@ from app.auth import get_current_user
 from app.services import obys_upload_service as upload_svc
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/workspaces", tags=["obys-workspaces"])
 
 
@@ -650,6 +653,21 @@ async def _legacy_people_rows(user, business_id, route, start=None, end=None, em
     return [{**row, "legacy_source": True} for row in rows]
 
 
+async def _with_payroll_settlement_state(user: dict[str, Any], rows: list[Any]) -> list[dict[str, Any]]:
+    """지급 차액의 남은 금액·정산 내역은 저장값이 아니라 계산값이다. 목록 행에 얹어 준다.
+
+    계산에는 다른 달·이전 버전이 필요해 이 조회의 월 필터 안에서는 구할 수 없다. 실패해도 목록은 보여 주고,
+    화면은 계산값이 없으면 지급액과 실수령의 차이로 표시한다."""
+    from app.services.yeoljeong_finance_service import payroll_settlement_states
+
+    try:
+        states = await run_in_threadpool(payroll_settlement_states, user)
+    except Exception as exc:
+        logger.warning("payroll settlement state skipped: %s", exc)
+        states = {}
+    return [{**dict(row), **states.get(str(row["id"]), {})} for row in rows]
+
+
 async def _source_rows(
     *, route: str, user: dict[str, Any], business_id: str,
     date_from: str | None, date_to: str | None,
@@ -768,6 +786,8 @@ async def _source_rows(
                 rows = _merge_people_rows(rows, legacy, route, None)
                 if legacy:
                     source += "+acct_legacy"
+            if route == "payroll":
+                rows = await _with_payroll_settlement_state(user, rows)
             kind = "bank-account" if source == "yeoljeong_bank_accounts" else "generic"
             return [(kind, dict(row)) for row in rows], source
         finally:
