@@ -3606,6 +3606,8 @@ verify_worker_commit_provenance() {
 commit_job_worktree_for_approval() {
     local job_id="$1" session_id="$2" worktree_dir="$3" main_workdir="$4" instruction="$5"
     local pre_exec_sha="${6:-}"
+    # 검증(격리·provenance·scope·stage)이 어디서 실패해도 워커가 만든 커밋은 ref 로 남긴다.
+    runner_artifact_pin "$job_id" "$worktree_dir" "$pre_exec_sha" || true
     if ! verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir"; then
         _fail_job "$job_id" "$session_id" "approval_worktree_not_isolated" "BLOCK: awaiting_approval 거부 — runner isolated worktree 검증 실패 (${worktree_dir})"
         return 1
@@ -3812,6 +3814,7 @@ print("fix(pipeline-runner): " + clean(sys.argv[1]) + " — " + summary)
                        'commit_sha', $(sql_escape "$commit_sha"), 'worktree_path', $(sql_escape "$worktree_dir")
                    )), updated_at=NOW()
                WHERE job_id='${job_id}';"
+    runner_artifact_pin "$job_id" "$worktree_dir" "$pre_exec_sha" || true
     printf '%s' "$commit_sha"
 }
 
@@ -5062,7 +5065,7 @@ _fail_job() {
     safe_detail=$(sql_escape "$detail")
     safe_error=$(sql_escape "$recorded_error")
     db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-               error_detail=${safe_error},
+               $(runner_artifact_commit_sql "$job_id")error_detail=${safe_error},
                result_output=${safe_detail},
                completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
     record_runner_event "$job_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"${error_type}\"}"
@@ -6127,6 +6130,14 @@ run_job() {
             rm -f /tmp/.pipeline_current_job
             return 1
         fi
+        ensure_rework_base_or_fail "$job_id" "$session_id" "$workdir" "$instruction" || {
+            _release_work_lock "$project" "$job_id" "$parallel_group"
+            promote_next_queued "$project"
+            _current_job_id=""
+            _current_session_id=""
+            rm -f /tmp/.pipeline_current_job
+            return 1
+        }
         prepare_clean_job_worktree "$job_id" "$project" "$session_id" "$workdir" "$worktree_dir" resume_brief || {
             _release_work_lock "$project" "$job_id" "$parallel_group"
             # 이전 시도가 아직 .out/.err를 쓰고 있을 수 있어 산출물은 보존한다.
@@ -6887,8 +6898,11 @@ $out_tail")
         fi
         safe_error_detail=$(sql_escape "$error_detail_msg")
 
+        # DB UPDATE 보다 먼저 산출물 ref 를 고정한다. 순서가 반대면 runner_artifact_commit_sql 이 빈 조각을 내서
+        # commit_hash 가 비고, 이후 _preserve_worktree_patch 는 ref 만 고정해 원격 ref 와 DB 가 어긋난다.
+        runner_artifact_pin "$job_id" "${worktree_dir:-/tmp/aads-wt-${job_id}}" "${pre_exec_sha:-}" || true
         db_update "UPDATE pipeline_jobs SET status='error', phase='error',
-                   error_detail=${safe_error_detail},
+                   $(runner_artifact_commit_sql "$job_id")error_detail=${safe_error_detail},
                    result_output=${safe_output},
                    review_feedback=COALESCE(review_feedback,'') || E'\n' || ${safe_feedback},
                    completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
@@ -6901,7 +6915,7 @@ $out_tail")
         _reap_job_temp_pg "$job_id" || true
         _reap_job_test_containers "$job_id" || true
         if [[ -d "/tmp/aads-wt-${job_id}" ]]; then
-            _preserve_worktree_patch "$job_id" "/tmp/aads-wt-${job_id}"
+            _preserve_worktree_patch "$job_id" "/tmp/aads-wt-${job_id}" "${pre_exec_sha:-}"
             cd "${main_workdir:-/tmp}"
             git worktree remove "/tmp/aads-wt-${job_id}" --force 2>/dev/null || rm -rf "/tmp/aads-wt-${job_id}" 2>/dev/null || true
             log "  WORKTREE_CLEANUP: /tmp/aads-wt-${job_id}"
@@ -6982,6 +6996,7 @@ $out_tail")
     local git_diff=""
     local _current_head=""
     _current_head=$(git rev-parse HEAD 2>/dev/null) || _current_head=""
+    runner_artifact_pin "$job_id" "$worktree_dir" "$pre_exec_sha" || true
     # git_diff 캡처 규칙은 SHARED-BLOCK(job_diff_contract)에만 둔다. 스위퍼가
     # review_hold 워크트리를 다시 읽어 같은 diff 인지 판정할 때 여기와 한 글자도
     # 다르면 멀쩡한 산출물이 drift 로 폐기된다.
@@ -7111,7 +7126,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
 \`\`\`"
                 _release_work_lock "$project" "$job_id" "$parallel_group"
                 _cleanup_artifacts "$job_id"
-                _preserve_worktree_patch "$job_id" "$worktree_dir"
+                _preserve_worktree_patch "$job_id" "$worktree_dir" "${pre_exec_sha:-}"
                 _notify_ai "$job_id"
                 promote_next_queued "$project"
                 _current_job_id=""
@@ -7408,7 +7423,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             if [[ "$review_infra_failure" == "true" ]]; then
                 log "  WORKTREE_PRESERVED_FOR_REREVIEW: $worktree_dir"
             else
-                _preserve_worktree_patch "$job_id" "$worktree_dir"
+                _preserve_worktree_patch "$job_id" "$worktree_dir" "${pre_exec_sha:-}"
                 log "  WORKTREE_PRESERVED_REJECTED: $worktree_dir (retention=${ARTIFACT_MAX_AGE_HOURS}h, 자동회수: _cleanup_old_artifacts)"
             fi
         fi
@@ -7543,13 +7558,238 @@ _notify_ai() {
     log "  NOTIFY_AI job=$job_id http=$notify_http_code"
 }
 
+# ── 러너 산출물 ref 고정 + 재작업 출발 커밋 확보 (AADS-RUNNER-REWORK-CROSS-HOST-BASE-20261106) ──
+# 러너 커밋은 승인 전까지 실행 서버의 로컬 저장소와 /tmp/aads-wt-<job> 에만 있다. worktree 회수·gc 로 사라지지
+# 않게 refs/runner-artifacts/<job_id> 에 고정하고, 다른 서버의 재작업이 그 ref 를 ssh 로 가져간다.
+# origin 에는 올리지 않는다. 원격 저장소는 읽기만 하고(fetch) 브랜치·체크아웃을 건드리지 않는다.
+RUNNER_ARTIFACT_NS="refs/runner-artifacts"
+RUNNER_ARTIFACT_RETENTION_DAYS="${RUNNER_ARTIFACT_RETENTION_DAYS:-7}"
+RUNNER_ARTIFACT_FETCH_TIMEOUT="${RUNNER_ARTIFACT_FETCH_TIMEOUT:-90}"
+RUNNER_ARTIFACT_SSH_CONFIG="${RUNNER_ARTIFACT_SSH_CONFIG:-$HOME/.ssh/config}"
+
+# 7일(RUNNER_ARTIFACT_RETENTION_DAYS) 지난 ref 삭제. 기준은 커밋 시각이다. 실패해도 작업을 막지 않는다.
+runner_artifact_prune() {
+    local repo="$1" now cutoff ref ts n=0
+    [[ "$RUNNER_ARTIFACT_RETENTION_DAYS" =~ ^[0-9]+$ ]] || return 0
+    now=$(date +%s); cutoff=$(( now - RUNNER_ARTIFACT_RETENTION_DAYS * 86400 ))
+    while read -r ref ts; do
+        [[ "$ref" == "${RUNNER_ARTIFACT_NS}/"* && "$ts" =~ ^[0-9]+$ ]] || continue
+        if (( ts < cutoff )); then
+            git -C "$repo" update-ref -d "$ref" >/dev/null 2>&1 && n=$((n+1))
+        fi
+    done < <(git -C "$repo" for-each-ref --format='%(refname) %(committerdate:unix)' "$RUNNER_ARTIFACT_NS" 2>/dev/null)
+    (( n > 0 )) && log "  ARTIFACT_REF_PRUNED count=$n retention_days=$RUNNER_ARTIFACT_RETENTION_DAYS" >&2
+    return 0
+}
+
+# worktree HEAD 를 refs/runner-artifacts/<job_id> 로 고정한다(승인 대기·review_failed·error 무관).
+# 작업 시작 SHA 와 같으면(커밋 없음) 고정하지 않는다. stdout 에는 아무것도 쓰지 않는다.
+runner_artifact_pin() {
+    local job_id="$1" worktree_dir="$2" base_sha="${3:-}" sha
+    [[ "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ && -d "$worktree_dir" ]] || return 0
+    sha=$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null) || return 0
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 0
+    [[ -n "$base_sha" && "$sha" == "$base_sha" ]] && return 0
+    if git -C "$worktree_dir" update-ref "${RUNNER_ARTIFACT_NS}/${job_id}" "$sha" >/dev/null 2>&1; then
+        log "  ARTIFACT_REF_PINNED job=$job_id ref=${RUNNER_ARTIFACT_NS}/${job_id} sha=${sha:0:12}" >&2
+        RUNNER_ARTIFACT_PINNED_JOB="$job_id"; RUNNER_ARTIFACT_PINNED_SHA="$sha"
+        runner_artifact_prune "$worktree_dir"
+    else
+        log "  WARN: ARTIFACT_REF_PIN_FAILED job=$job_id sha=${sha:0:12}" >&2
+    fi
+    return 0
+}
+
+# 방금 고정한 산출물 SHA 를 오류 종료 UPDATE 에 실어 pipeline_jobs.commit_hash 가 비어 있을 때만 채운다.
+# 원격 ref 와 DB 가 어긋나면 다른 서버의 재작업이 출발 커밋을 DB 에서 못 찾는다. 이미 값이 있으면 건드리지 않는다.
+# 고정한 적 없거나 다른 job 이면 아무것도 출력하지 않는다. 출력은 `SET ... ,` 뒤에 그대로 붙이는 조각이다.
+runner_artifact_commit_sql() {
+    local job_id="$1"
+    [[ "${RUNNER_ARTIFACT_PINNED_JOB:-}" == "$job_id" && "${RUNNER_ARTIFACT_PINNED_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || return 0
+    printf "commit_hash=COALESCE(NULLIF(commit_hash,''),'%s'), " "$RUNNER_ARTIFACT_PINNED_SHA"
+}
+
+# git/ssh 가 쓸 ssh 명령. 별칭의 HostName·IdentityFile 이 $RUNNER_ARTIFACT_SSH_CONFIG 에만 있어도 읽도록 -F 를 항상 넘긴다.
+runner_artifact_ssh_cmd() {
+    local timeout_s="${1:-10}"
+    printf 'ssh -F %q -o BatchMode=yes -o ConnectTimeout=%s' "$RUNNER_ARTIFACT_SSH_CONFIG" "$timeout_s"
+}
+
+# runner_host(hostname -s) → ssh 별칭. 하드코딩 표 없이 ~/.ssh/config 의 mesh-*/contaboNN 별칭을 훑어
+# 원격 `hostname -s` 가 일치하는 것을 쓴다. host 이름이 그대로 별칭이면 그것을 쓴다. 쓴 매핑은 로그에 남긴다.
+runner_artifact_ssh_alias() {
+    local host="$1" alias remote cfg="$RUNNER_ARTIFACT_SSH_CONFIG" aliases
+    [[ "$host" =~ ^[0-9a-zA-Z._-]+$ ]] || return 1
+    [[ -r "$cfg" ]] || return 1
+    aliases=$(awk '$1=="Host"{for(i=2;i<=NF;i++) if($i ~ /^(mesh-|contabo)[0-9A-Za-z-]*$/) print $i}' "$cfg" | sort -u)
+    for alias in $aliases; do
+        [[ "$alias" == "$host" ]] && { log "  REWORK_BASE_HOST_MAP host=$host alias=$alias via=config_name" >&2; echo "$alias"; return 0; }
+    done
+    for alias in $aliases; do
+        remote=$(timeout 15 ssh -F "$cfg" -o BatchMode=yes -o ConnectTimeout=8 "$alias" 'hostname -s' </dev/null 2>/dev/null | tr -d '[:space:]') || continue
+        if [[ "$remote" == "$host" ]]; then
+            log "  REWORK_BASE_HOST_MAP host=$host alias=$alias via=remote_hostname" >&2
+            echo "$alias"; return 0
+        fi
+    done
+    return 1
+}
+
+# 지시서가 적은 출발 커밋 SHA(7~40자 hex). 자동 재작업 머리말의 "출발점: ... (커밋 `<sha>`)" 또는 "출발 커밋: <sha>" 줄.
+# 없으면 빈 문자열. 이 SHA 가 재작업의 기준이므로 DB commit_hash·로컬 ref 보다 우선한다.
+rework_instruction_start_sha() {
+    printf '%s\n' "$1" | sed -nE \
+        -e 's/^- 출발점:.*커밋 `([0-9a-f]{7,40})`.*$/\1/p' \
+        -e 's/^출발 커밋:[[:space:]]*`?([0-9a-f]{7,40})`?[[:space:]]*$/\1/p' | head -1
+}
+
+# 원격 서버 $alias 에서 부모 산출물을 가져와 로컬 refs/runner-artifacts/<parent> 에 둔다. 성공 0.
+# want 가 있으면(7~40자 SHA) 그 커밋이 가져온 뒤 로컬에 있어야 성공이다 — 다른 커밋을 가리키는 ref 는 통과시키지 않는다.
+# want 가 비면 ref 가 가져와지는 것만 확인한다. 가져온 것은 임시 ref 로 받아 검증한 뒤에만 부모 ref 로 옮긴다.
+runner_artifact_fetch_from() {
+    local repo="$1" alias="$2" parent="$3" want="${4:-}" ref="${RUNNER_ARTIFACT_NS}/${parent}" src tmp tip full
+    local ssh_cmd
+    ssh_cmd=$(runner_artifact_ssh_cmd 10)
+    tmp="${RUNNER_ARTIFACT_NS}/incoming-${parent}-$$"
+    for src in "$ref" "HEAD@/tmp/aads-wt-${parent}"; do
+        git -C "$repo" update-ref -d "$tmp" >/dev/null 2>&1 || true
+        if [[ "$src" == HEAD@* ]]; then
+            GIT_SSH_COMMAND="$ssh_cmd" timeout "$RUNNER_ARTIFACT_FETCH_TIMEOUT" \
+                git -C "$repo" fetch --no-tags -q "${alias}:${src#HEAD@}" "+HEAD:${tmp}" </dev/null >/dev/null 2>&1 || continue
+        else
+            GIT_SSH_COMMAND="$ssh_cmd" timeout "$RUNNER_ARTIFACT_FETCH_TIMEOUT" \
+                git -C "$repo" fetch --no-tags -q "${alias}:${repo}" "+${ref}:${tmp}" </dev/null >/dev/null 2>&1 || continue
+        fi
+        tip=$(git -C "$repo" rev-parse --verify -q "${tmp}^{commit}" 2>/dev/null) || tip=""
+        if [[ -n "$want" ]]; then
+            full=$(git -C "$repo" rev-parse --verify -q "${want}^{commit}" 2>/dev/null) || full=""
+        else
+            full="$tip"
+        fi
+        git -C "$repo" update-ref -d "$tmp" >/dev/null 2>&1 || true
+        [[ "$full" =~ ^[0-9a-f]{40}$ ]] || { log "  REWORK_BASE_FETCH_MISMATCH parent=$parent alias=$alias source=${src#HEAD@} tip=${tip:0:12} want=${want:0:12}" >&2; continue; }
+        git -C "$repo" update-ref "$ref" "$full" >/dev/null 2>&1 || continue
+        log "  REWORK_BASE_FETCHED parent=$parent alias=$alias source=${src#HEAD@} sha=${full:0:12}" >&2
+        return 0
+    done
+    git -C "$repo" update-ref -d "$tmp" >/dev/null 2>&1 || true
+    return 1
+}
+
+# 원격 서버 $alias 의 $repo 에 refs/runner-artifacts/<parent> 가 있는지 묻는다.
+# 0 = ls-remote 성공(stdout: 있으면 "<sha>\t<ref>", 없으면 빈 출력), 1 = ssh/ls-remote 실패(알 수 없음).
+runner_artifact_remote_ref() {
+    local repo="$1" alias="$2" parent="$3" out
+    out=$(GIT_SSH_COMMAND="$(runner_artifact_ssh_cmd 10)" timeout "$RUNNER_ARTIFACT_FETCH_TIMEOUT" \
+        git -C "$repo" ls-remote "${alias}:${repo}" "${RUNNER_ARTIFACT_NS}/${parent}" </dev/null 2>/dev/null) || return 1
+    printf '%s' "$out"
+}
+
+# 지시서의 AUTO_REWORK_OF/RETRY_OF/RETRY_OF_LINK 부모 커밋이 로컬에 없으면 부모의 러너 서버에서 가져온다.
+# 기준 SHA = 지시서의 출발 SHA(있으면) > 부모의 DB commit_hash. DB 에 commit_hash 가 없어도(error 종료) 지시서 SHA 가 있으면
+# 원격 ref 를 가져온다. 기준 SHA 가 로컬에 실재해야 통과한다 — DB/ref 가 다른 커밋을 가리키는 것은 통과 사유가 아니다.
+# 못 가져오면 Claude 를 띄우지 않고 error_detail='rework_base_unavailable: <sha> on <host>' 로 종료한다(fail-closed).
+ensure_rework_base_or_fail() {
+    local job_id="$1" session_id="$2" repo="$3" instruction="$4" parent row db_sha host alias want full instr_sha
+    local parents
+    parents=$(printf '%s\n' "$instruction" \
+        | sed -nE 's/^(AUTO_REWORK_OF|RETRY_OF|RETRY_OF_LINK):[[:space:]]*(runner-[0-9a-zA-Z_-]+)[[:space:]]*$/\2/p' | awk '!s[$0]++')
+    [[ -n "$parents" ]] || return 0
+    instr_sha=$(rework_instruction_start_sha "$instruction")
+    local rework_parent
+    rework_parent=$(printf '%s\n' "$instruction" | sed -nE 's/^AUTO_REWORK_OF:[[:space:]]*(runner-[0-9a-zA-Z_-]+)[[:space:]]*$/\1/p' | head -1)
+    [[ -n "$rework_parent" ]] || rework_parent=$(printf '%s\n' "$parents" | head -1)
+    for parent in $parents; do
+        row=$(db_exec "SELECT COALESCE(commit_hash,''), COALESCE(runner_host,'') FROM pipeline_jobs WHERE job_id=$(sql_escape "$parent");" 2>/dev/null) || row="__dberr__"
+        if [[ "$row" == "__dberr__" ]]; then
+            _fail_job "$job_id" "$session_id" "rework_base_unavailable" \
+                "재작업 출발 커밋 조회 실패(DB): parent=${parent}" "rework_base_unavailable: ${parent} on unknown"
+            return 1
+        fi
+        db_sha="${row%%$'\x1e'*}"; host="${row#*$'\x1e'}"
+        [[ "$row" == *$'\x1e'* ]] || host=""
+        db_sha="${db_sha//[[:space:]]/}"; host="${host//[[:space:]]/}"
+        [[ "$db_sha" =~ ^[0-9a-f]{40}$ ]] || db_sha=""
+        want=""
+        [[ "$parent" == "$rework_parent" && -n "$instr_sha" ]] && want="$instr_sha"
+        [[ -n "$want" ]] || want="$db_sha"
+        if [[ -n "$want" && -n "$db_sha" && "$want" != "$db_sha" && "$db_sha" != "$want"* ]]; then
+            log "  REWORK_BASE_DB_MISMATCH job=$job_id parent=$parent instruction=${want:0:12} db=${db_sha:0:12} — 지시서 SHA 를 기준으로 확보" >&2
+        fi
+        if [[ -n "$want" ]]; then
+            full=$(git -C "$repo" rev-parse --verify -q "${want}^{commit}" 2>/dev/null) || full=""
+            if [[ "$full" =~ ^[0-9a-f]{40}$ ]]; then
+                log "  REWORK_BASE_LOCAL job=$job_id parent=$parent sha=${full:0:12}" >&2
+                git -C "$repo" update-ref "${RUNNER_ARTIFACT_NS}/${parent}" "$full" >/dev/null 2>&1 || true
+                continue
+            fi
+        fi
+        local is_local=0 remote_ref="" ref_rc=0
+        [[ -n "$host" && ( "$host" == "$RUNNER_HOST_NAME" || "$host" == "$RUNNER_HOSTNAME" ) ]] && is_local=1
+        if [[ -z "$want" ]]; then
+            # 출발 SHA 를 모를 때 건너뛰기는 "부모 산출물이 없다"가 확인된 경우에만 허용한다. 확인 못 하면 fail-closed.
+            local why=""
+            if [[ -z "$host" ]]; then
+                why="부모 러너 서버 미상 — 산출물 유무를 확인할 수 없음"
+            elif (( is_local )); then
+                if git -C "$repo" rev-parse --verify -q "${RUNNER_ARTIFACT_NS}/${parent}^{commit}" >/dev/null 2>&1; then
+                    log "  REWORK_BASE_LOCAL job=$job_id parent=$parent via=local_ref" >&2
+                    continue
+                fi
+                log "  REWORK_BASE_SKIP job=$job_id parent=$parent host=$host — 로컬에 산출물 ref 없음(산출물 없는 부모로 확인)" >&2
+                continue
+            else
+                alias=$(runner_artifact_ssh_alias "$host") || alias=""
+                if [[ -z "$alias" ]]; then
+                    why="ssh 별칭을 찾지 못함 — 산출물 유무를 확인할 수 없음"
+                else
+                    remote_ref=$(runner_artifact_remote_ref "$repo" "$alias" "$parent") || ref_rc=1
+                    if (( ref_rc )); then
+                        why="원격 ls-remote 실패(alias=${alias}) — 산출물 유무를 확인할 수 없음"
+                    elif [[ -z "${remote_ref//[[:space:]]/}" ]]; then
+                        log "  REWORK_BASE_SKIP job=$job_id parent=$parent host=$host alias=$alias — 원격 ls-remote 성공, 산출물 ref 없음(산출물 없는 부모로 확인)" >&2
+                        continue
+                    elif runner_artifact_fetch_from "$repo" "$alias" "$parent" ""; then
+                        continue
+                    else
+                        why="원격 산출물 ref 는 있으나 fetch 실패(alias=${alias})"
+                    fi
+                fi
+            fi
+            _fail_job "$job_id" "$session_id" "rework_base_unavailable" \
+                "재작업 출발 커밋을 확보하지 못했다(parent=${parent} host=${host:-unknown}): ${why} — 구현하지 않고 종료. 처음부터 재구현은 사람이 다시 제출할 때만 한다." \
+                "rework_base_unavailable: ${parent} on ${host:-unknown}"
+            return 1
+        fi
+        alias=""
+        if (( ! is_local )) && [[ -n "$host" ]]; then
+            alias=$(runner_artifact_ssh_alias "$host") || alias=""
+        fi
+        if [[ -n "$alias" ]] && runner_artifact_fetch_from "$repo" "$alias" "$parent" "$want"; then
+            continue
+        fi
+        _fail_job "$job_id" "$session_id" "rework_base_unavailable" \
+            "재작업 출발 커밋 ${want} 을 확보하지 못했다(parent=${parent} host=${host:-unknown} alias=${alias:-none}) — 구현하지 않고 종료. 처음부터 재구현은 사람이 다시 제출할 때만 한다." \
+            "rework_base_unavailable: ${want} on ${host:-unknown}"
+        return 1
+    done
+    return 0
+}
+
 # AADS-RUNNER-ARTIFACT-PRESERVE: 실패/반려로 워크트리를 force 삭제하기 전
 # untracked 포함 전체 diff를 용량 제한 없이 보존한다. 기존 git_diff 컬럼은
 # `git diff HEAD | head -c 50000`(staged diff만, 50KB 상한)이라 신규 untracked
 # 파일과 초과분이 워크트리 삭제 후 복구 불가능하게 사라졌다.
 _preserve_worktree_patch() {
-    local job_id="$1" worktree_dir="$2"
+    local job_id="$1" worktree_dir="$2" base_sha="${3:-}"
     [[ -d "$worktree_dir" ]] || return 0
+    # 산출물이 없는 실패에 시작 HEAD 를 산출물 ref 로 고정하지 않는다. 작업 시작 SHA(base_sha)를 모르는 호출(reject_job 등)은
+    # origin/main·main 과의 merge-base 를 기준으로 삼는다 — HEAD 가 그 기준과 같으면 새 커밋이 없다.
+    # DB commit_hash 는 이 함수가 아니라 호출부가 DB UPDATE 전에 고정한 SHA(runner_artifact_commit_sql)로만 채운다.
+    if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+        base_sha=$(git -C "$worktree_dir" merge-base HEAD origin/main 2>/dev/null || git -C "$worktree_dir" merge-base HEAD main 2>/dev/null || true)
+    fi
+    runner_artifact_pin "$job_id" "$worktree_dir" "$base_sha" || true
     mkdir -p /root/aads/runner-artifacts
     local patch_file="/root/aads/runner-artifacts/${job_id}.patch"
     (

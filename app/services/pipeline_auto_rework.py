@@ -156,6 +156,7 @@ def build_rework_instruction(
     commit_hash: str = "",
     score: Any = None,
     failure_phase: str = "review_failed",
+    runner_host: str = "",
 ) -> str:
     base = strip_rework_scaffold(original)
     header = (
@@ -166,6 +167,8 @@ def build_rework_instruction(
     start = f"`/tmp/aads-wt-{parent_job_id}`"
     if commit_hash:
         start += f" (커밋 `{commit_hash[:12]}`)"
+    host_txt = f"러너 서버 `{runner_host}`" if runner_host else "러너 서버 미기록"
+    start += f", {host_txt}, `refs/runner-artifacts/{parent_job_id}`"
     issue_lines = "\n".join(f"{i}. {text}" for i, text in enumerate(issues, 1))
     if not issue_lines:
         issue_lines = "1. (종료 사유와 최신 origin/main 기준을 확인하라)"
@@ -175,7 +178,9 @@ def build_rework_instruction(
         f"\n{_SECTION_MARK} (라운드 {round_no}/{rounds_max})\n"
         f"직전 작업 {parent_job_id} 이 {reason}로 중단돼 자동으로 다시 제출됐다{score_txt}.\n"
         f"- 출발점: 반려된 산출물 {start}. 처음부터 다시 쓰지 말고, 그 변경을 origin/main 기준 "
-        "깨끗한 worktree 로 가져와 이어서 고쳐라. 산출물이 없으면 위 원 지시대로 구현하라.\n"
+        "깨끗한 worktree 로 가져와 이어서 고쳐라. "
+        "출발 커밋이 없으면 구현하지 말고 rework_base_unavailable 로 종료하라 "
+        "(처음부터 재구현은 사람이 다시 제출할 때만 한다).\n"
         "- 아래 지적을 **전부** 고치고, 각 지적을 어떻게 처리했는지 RESULT 에 번호별로 적어라. "
         "지적이 틀렸다고 판단하면 고치지 말고 근거(코드 위치·테스트)를 적어라.\n"
         "- 원 지시의 범위·금지사항·검증 명령은 그대로다. 지적과 무관한 변경은 하지 마라.\n\n"
@@ -253,7 +258,7 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
         """
         SELECT job_id, project, instruction, chat_session_id, status, phase, error_detail,
                max_cycles, model, size, worker_model, model_override_reason, parallel_group,
-               tenant_id::text AS tenant_id, commit_hash, review_score, goal_id, milestone_id
+               tenant_id::text AS tenant_id, commit_hash, runner_host, review_score, goal_id, milestone_id
         FROM pipeline_jobs WHERE job_id = $1
         """,
         job_id,
@@ -306,6 +311,7 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
             commit_hash=row["commit_hash"] or "",
             score=row["review_score"],
             failure_phase=row["phase"],
+            runner_host=(row["runner_host"] if "runner_host" in row.keys() else "") or "",
         )
         binding = await resolve_parent_goal_binding(conn, row)
         new_job_id = f"runner-{uuid.uuid4().hex[:8]}"
