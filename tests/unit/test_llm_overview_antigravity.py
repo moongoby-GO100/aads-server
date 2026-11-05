@@ -184,13 +184,13 @@ def test_bindings_uses_agy_identity_and_never_leaks_values(monkeypatch, tmp_path
 
 def test_bindings_unbound_when_token_or_binary_missing(monkeypatch, tmp_path):
     root = _patch_agy(monkeypatch, tmp_path)
-    (agy,) = account_login.bindings()
+    (agy,) = [b for b in account_login.bindings() if b["kind"] == "antigravity"]
     assert agy["bound"] is False and agy["needs_login"] is True and agy["account"] is None
 
     (root / "antigravity-cli").mkdir(parents=True)
     (root / "antigravity-cli" / "antigravity-oauth-token").write_text("{}")
     monkeypatch.setattr(account_login, "ANTIGRAVITY_BIN", tmp_path / "missing-agy")
-    (agy,) = account_login.bindings()
+    (agy,) = [b for b in account_login.bindings() if b["kind"] == "antigravity"]
     assert agy["bound"] is False and agy["needs_login"] is True
 
 

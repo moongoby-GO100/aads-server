@@ -21,13 +21,23 @@ STATE_DIR="/root/aads/aads-server"
 # 만료됐거나 임박했을 때만 refreshToken 을 쓴다. 그래서 임계값을 크게 잡으면
 # 매번 "갱신 안 됨" 경고만 나온다. 크론 주기(10분)보다 넉넉하되 짧게 둔다.
 RENEW_BEFORE_MIN="${CLAUDE_TOKEN_RENEW_BEFORE_MIN:-45}"
+# 순회할 슬롯. 정의는 app/core/claude_slots.py(CLAUDE_SLOTS)이고, 이 목록과 어긋나면
+# tests/unit/test_claude_slot_registry.py 가 실패한다.
+CLAUDE_SLOTS="${CLAUDE_TOKEN_KEEPER_SLOTS:-1 2 3 4 5}"
+# 한 슬롯만 돌리는 필터. 비우면 전부 돈다.
+REQUESTED_SLOT="${CLAUDE_TOKEN_KEEPER_SLOT:-}"
+# 로그인 직후 동기화 모드(account_login 이 켠다). 필터와 달리 비활성 슬롯도 처리하고,
+# 락을 기다리며, 동기화가 안 되면 비정상 종료한다 — 로그인 검증이 이 결과에 달려 있다.
+LOGIN_SYNC="${CLAUDE_TOKEN_KEEPER_LOGIN_SYNC:-}"
 
 # 겹쳐 돌지 않게 잠근다. 임박 재시도가 들어가면서 한 번 실행이 길어졌고,
 # 크론 주기를 넘으면 두 실행이 **같은 자격증명 파일을 동시에** 건드린다.
 # 2026-09-14 사고가 그 파일이 망가진 것이었다.
 _KEEPER_LOCK="${CLAUDE_TOKEN_KEEPER_LOCK:-/tmp/aads-claude-token-keeper.lock}"
 exec 9>"$_KEEPER_LOCK"
-if ! flock -n 9; then
+if [ -n "$LOGIN_SYNC" ]; then
+    flock -w 180 9 || { echo "$(date '+%F %T') 잠금 대기 초과 — 동기화 실패" >&2; exit 1; }
+elif ! flock -n 9; then
     echo "$(date '+%F %T') 이전 실행이 아직 돌고 있다 — 건너뜀" >&2
     exit 0
 fi
@@ -116,7 +126,7 @@ refresh_ok() {
 key_for_slot() {
     case "$1" in
         1) printf '%s' "ANTHROPIC_AUTH_TOKEN" ;;
-        2|3|4) printf 'ANTHROPIC_AUTH_TOKEN_%s' "$1" ;;
+        2|3|4|5) printf 'ANTHROPIC_AUTH_TOKEN_%s' "$1" ;;
         *) return 1 ;;
     esac
 }
@@ -156,7 +166,8 @@ print(int((exp/1000 - time.time()) / 60))
 }
 
 resync_to_db() {
-    local slot="$1" key="$2" cred="$3" container expires_iso
+    local slot="$1" key="$2" cred="$3" container expires_iso create_row=0
+    [ -n "$LOGIN_SYNC" ] && [ "$REQUESTED_SLOT" = "$slot" ] && create_row=1
     # 토큰은 불투명 문자열이라 앱이 만료를 읽을 수 없다. 자격증명 파일에만 있으므로
     # 여기서 함께 넘겨 DB 에 남긴다. 러너가 긴 작업 전에 남은 수명을 볼 수 있게 된다.
     expires_iso="$(python3 -c "
@@ -185,7 +196,26 @@ async def main():
         row = await c.fetchrow(
             "SELECT encrypted_value FROM llm_api_keys WHERE provider='anthropic' AND key_name=$1", KEY)
         if not row:
-            print("reject:nokey"); return
+            # 행 생성은 로그인 직후 동기화 모드에서, 라벨이 등록된 슬롯만 허용한다.
+            # 비활성으로 만든다 — 활성화는 API 가 신원·지문을 확인한 뒤에만 한다.
+            label = ""
+            if os.getenv("AADS_KEEPER_CREATE_ROW") == "1":
+                try:
+                    from app.core.claude_slots import KEY_NAME_TO_SLOT, SLOT_REGISTER_LABELS
+                    label = SLOT_REGISTER_LABELS.get(KEY_NAME_TO_SLOT.get(KEY, ""), "")
+                except Exception:
+                    label = ""
+            if not label:
+                print("reject:nokey"); return
+            created = await c.execute(
+                "INSERT INTO llm_api_keys (provider, key_name, encrypted_value, label, priority, notes, "
+                "is_active, last_verified_at, oauth_expires_at, updated_at) "
+                "SELECT 'anthropic', $1, $2, $3, COALESCE(MAX(priority), 0) + 1, "
+                "'로그인 검증 전 등록 — API 신원 확인 후 활성화', FALSE, NOW(), NULLIF($4,'')::timestamptz, NOW() "
+                "FROM llm_api_keys WHERE provider='anthropic' "
+                "ON CONFLICT (key_name) DO NOTHING",
+                KEY, encrypt_value(token), label, os.getenv("AADS_TOKEN_EXPIRES_ISO", ""))
+            print("ok:created" if created.endswith(" 1") else "reject:conflict"); return
         try:
             if decrypt_value(row["encrypted_value"]) == token:
                 # 토큰이 같아도 만료 기록은 최신으로 맞춘다.
@@ -213,7 +243,7 @@ import json
 d = json.load(open('$cred'))
 o = d.get('claudeAiOauth', d)
 print(o.get('accessToken',''), end='')
-" 2>/dev/null | docker exec -i -e AADS_TOKEN_EXPIRES_ISO="$expires_iso" "$container" python3 /tmp/_tk.py "$key" 2>&1 | grep -oE '^(ok|skip|reject):[a-z]+' | tail -1)"
+" 2>/dev/null | docker exec -i -e AADS_TOKEN_EXPIRES_ISO="$expires_iso" -e AADS_KEEPER_CREATE_ROW="$create_row" "$container" python3 /tmp/_tk.py "$key" 2>&1 | grep -oE '^(ok|skip|reject):[a-z]+' | tail -1)"
     docker exec "$container" rm -f /tmp/_tk.py >/dev/null 2>&1
     rm -f "$tmp"
     log "  DB 동기화: ${out:-unknown}"
@@ -269,10 +299,12 @@ slot_inactive() {
 }
 
 renewed=0
-for slot in 1 2 3 4; do
-    requested_slot="${CLAUDE_TOKEN_KEEPER_SLOT:-}"
+sync_failed=0
+for slot in $CLAUDE_SLOTS; do
+    requested_slot="$REQUESTED_SLOT"
     [ -z "$requested_slot" ] || [ "$slot" = "$requested_slot" ] || continue
-    if slot_inactive "$slot"; then
+    # 로그인 동기화는 비활성 슬롯도 처리한다 — 격리 중인 슬롯의 재로그인이 바로 이 경우다.
+    if [ -z "$LOGIN_SYNC" ] && slot_inactive "$slot"; then
         log "slot${slot}: 비활성(DB) — 건너뜀"
         # 다시 켰을 때 묵은 연속 실패 횟수로 곧바로 경보가 나지 않게 비운다.
         rm -f "${ALERT_STATE_DIR}/slot${slot}.fails" "${ALERT_STATE_DIR}/slot${slot}.alerted"
@@ -286,7 +318,7 @@ for slot in 1 2 3 4; do
     # 원인이었다(2026-09-21 슬롯2 소실). 이제 CLI 를 돌리는 순간에는
     # 이 락을 같이 쓴다.
     lock="${home}/.claude/.credentials.lock"
-    [ -f "$cred" ] || { log "slot${slot}: 자격증명 없음 — 건너뜀"; continue; }
+    [ -f "$cred" ] || { log "slot${slot}: 자격증명 없음 — 건너뜀"; [ -z "$LOGIN_SYNC" ] || sync_failed=1; continue; }
 
     left="$(remaining_min "$cred")"
     if [[ ! "$left" =~ ^-?[0-9]+$ ]]; then
@@ -301,7 +333,9 @@ for slot in 1 2 3 4; do
         # 있는데 DB 는 8시간 전 만료 시각을 들고 있어 러너가 쓸 수 있는 슬롯을
         # 찾지 못했다. 10분마다 도는 작업이라 비용은 무시할 수 있다.
         key="$(key_for_slot "$slot")"
-        resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1 || true
+        if ! resync_to_db "$slot" "$key" "$cred" >/dev/null 2>&1; then
+            [ -z "$LOGIN_SYNC" ] || sync_failed=1
+        fi
         refresh_ok "$slot"
         continue
     fi
@@ -428,8 +462,12 @@ for slot in 1 2 3 4; do
     fi
 
     key="$(key_for_slot "$slot")"
-    resync_to_db "$slot" "$key" "$cred" || log "  ⚠️ DB 동기화 실패 — 릴레이는 옛 토큰을 계속 쓴다"
+    if ! resync_to_db "$slot" "$key" "$cred"; then
+        log "  ⚠️ DB 동기화 실패 — 릴레이는 옛 토큰을 계속 쓴다"
+        [ -z "$LOGIN_SYNC" ] || sync_failed=1
+    fi
 done
 
 [ "$renewed" -gt 0 ] && log "갱신 완료: ${renewed}개 슬롯"
+[ "$sync_failed" = 0 ] || exit 1
 exit 0

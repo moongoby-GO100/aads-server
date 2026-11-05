@@ -26,7 +26,8 @@ def test_claude_binding_exposes_identity_without_oauth_secrets(tmp_path, monkeyp
     monkeypatch.setattr(account_login, "CLAUDE_SLOT_ROOT", root)
     monkeypatch.setattr(account_login, "CODEX_ACCOUNTS_ROOT", tmp_path / "codex")
 
-    result = [b for b in account_login.bindings() if b["kind"] != "antigravity"]
+    result = [b for b in account_login.bindings()
+              if b["kind"] != "antigravity" and b["target"] != "claude:5"]
 
     assert result == [{
         "target": "claude:2",
@@ -86,7 +87,7 @@ def test_claude_login_requires_fresh_access_and_hides_token(tmp_path):
     assert account_login._fresh_claude_credential(plan) is False
 
 
-def test_claude_cli_probe_and_slot4_keeper_are_invoked_without_output(monkeypatch):
+def test_claude_cli_probe_and_slot_keeper_are_invoked_without_output(monkeypatch):
     calls = []
 
     class Proc:
@@ -106,6 +107,7 @@ def test_claude_cli_probe_and_slot4_keeper_are_invoked_without_output(monkeypatc
     plan = {"env": {"HOME": "/isolated/slot4"}}
     assert asyncio.run(account_login._verify_claude_call(plan)) is True
     monkeypatch.setattr(account_login.Path, "is_file", lambda _path: True)
+    assert asyncio.run(account_login._sync_slot_token_to_db("4")) is True
     assert asyncio.run(account_login._sync_slot4_token_to_db()) is True
     assert calls[0][0][0:3] == (account_login.CLAUDE_BIN, "-p", "Reply OK")
     assert calls[0][1]["stderr"] == asyncio.subprocess.DEVNULL
@@ -113,3 +115,4 @@ def test_claude_cli_probe_and_slot4_keeper_are_invoked_without_output(monkeypatc
         "bash", str(account_login.Path(account_login.__file__).with_name("claude_token_keeper.sh"))
     )
     assert calls[1][1]["env"]["CLAUDE_TOKEN_KEEPER_SLOT"] == "4"
+    assert calls[1][1]["env"]["CLAUDE_TOKEN_KEEPER_LOGIN_SYNC"] == "1"

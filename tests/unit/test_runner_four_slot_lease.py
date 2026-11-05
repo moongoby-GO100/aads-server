@@ -26,10 +26,11 @@ def test_refresh_and_distribution_cover_all_four_slots() -> None:
     service = _read("aads-claude-lease-push.service")
     binding = _read("check_account_binding.py")
 
-    assert "for slot in 1 2 3 4; do" in keeper
-    assert 'SLOTS="${CLAUDE_LEASE_SLOTS:-1 2 3 4}"' in lease_push
-    assert 'Environment="CLAUDE_LEASE_SLOTS=1 2 3 4"' in service
-    assert '"ANTHROPIC_AUTH_TOKEN_4": "4"' in binding
+    assert "for slot in $CLAUDE_SLOTS; do" in keeper
+    assert 'CLAUDE_SLOTS="${CLAUDE_TOKEN_KEEPER_SLOTS:-1 2 3 4 5}"' in keeper
+    assert 'SLOTS="${CLAUDE_LEASE_SLOTS:-1 2 3 4 5}"' in lease_push
+    assert 'Environment="CLAUDE_LEASE_SLOTS=1 2 3 4 5"' in service
+    assert "KEY_NAME_TO_SLOT as SLOT_OF" in binding
 
 
 def test_remote_lease_never_copies_refresh_tokens() -> None:

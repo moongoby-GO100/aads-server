@@ -38,10 +38,17 @@ import os
 import pty
 import re
 import secrets
+import sys
 import time
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+# 단독 실행(--export-antigravity-identity)에서도 app 패키지를 찾게 한다.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+from app.core.claude_slots import CLAUDE_SLOTS, SLOT_EXPECTED_ACCOUNTS, SLOT_REGISTER_LABELS  # noqa: E402
 
 CODEX_ACCOUNTS_ROOT = Path(os.getenv("CODEX_ACCOUNTS_ROOT", "/root/.codex-accounts"))
 CLAUDE_SLOT_ROOT = Path(os.getenv("CLAUDE_RELAY_SLOT_HOME_ROOT", "/root/.claude-relay-slots"))
@@ -102,8 +109,8 @@ def resolve_target(target: str) -> dict:
         }
 
     if kind == "claude":
-        if not re.fullmatch(r"[0-9]{1,3}", name):
-            raise LoginError("클로드 슬롯 번호가 올바르지 않다")
+        if name not in CLAUDE_SLOTS:
+            raise LoginError("등록되지 않은 클로드 슬롯이다 (%s)" % ", ".join(CLAUDE_SLOTS))
         home = CLAUDE_SLOT_ROOT / f"slot{name}"
         return {
             "kind": "claude", "name": f"slot{name}",
@@ -292,12 +299,16 @@ async def _verify_claude_call(plan: dict) -> bool:
         return False
 
 
-async def _sync_slot4_token_to_db() -> bool:
-    """Run the existing keeper's slot-4 sync after a verified relogin."""
+async def _sync_slot_token_to_db(slot: str) -> bool:
+    """검증된 재로그인 뒤 keeper 로 그 슬롯의 토큰을 DB 에 동기화한다.
+
+    keeper 는 로그인 동기화 모드에서만 (1) 비활성 슬롯도 처리하고 (2) 행이 없으면
+    비활성 행을 만든다. 활성화는 여기가 아니라 API 의 신원·지문 검증 뒤에만 일어난다.
+    """
     keeper = Path(__file__).with_name("claude_token_keeper.sh")
     if not keeper.is_file():
         return False
-    env = dict(os.environ, CLAUDE_TOKEN_KEEPER_SLOT="4")
+    env = dict(os.environ, CLAUDE_TOKEN_KEEPER_SLOT=str(slot), CLAUDE_TOKEN_KEEPER_LOGIN_SYNC="1")
     try:
         proc = await asyncio.create_subprocess_exec(
             "bash", str(keeper), stdout=asyncio.subprocess.DEVNULL,
@@ -309,6 +320,29 @@ async def _sync_slot4_token_to_db() -> bool:
             proc.kill()
             await proc.wait()
         return False
+
+
+async def _sync_slot4_token_to_db() -> bool:
+    """슬롯 4 전용이던 옛 이름. 기존 호출부·테스트 호환용으로 남긴다(보존 게이트 대상)."""
+    return await _sync_slot_token_to_db("4")
+
+
+def _claude_actual_account(home: Path) -> str | None:
+    """Claude CLI 가 HOME/.claude.json 에 남긴 비밀 아닌 계정 신원(이메일)."""
+    try:
+        profile = json.loads((home / ".claude.json").read_text())
+        return (profile.get("oauthAccount") or {}).get("emailAddress") or None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _claude_identity_ok(sess: dict) -> bool:
+    """엄격 슬롯은 기대 계정으로 로그인됐을 때만 통과한다. 그 외 슬롯은 검사하지 않는다."""
+    expected = SLOT_EXPECTED_ACCOUNTS.get(str(sess["target"]).partition(":")[2])
+    if not expected:
+        return True
+    actual = _claude_actual_account(sess["plan"]["home"])
+    return bool(actual) and actual.strip().lower() == expected
 
 
 async def _pump(sess: dict) -> None:
@@ -343,10 +377,16 @@ async def _pump(sess: dict) -> None:
                         sess["state"] = "verification_pending"
                         sess["message"] = "실사용 검증을 마치지 못했다. 격리를 유지한다. 재로그인으로 다시 시도해라."
                         break
-                    if sess["target"] == "claude:4" and not await _sync_slot4_token_to_db():
-                        sess["state"] = "verification_pending"
-                        sess["message"] = "실호출은 성공했지만 토큰 DB 동기화를 확인하지 못했다. 슬롯 격리를 유지한다."
-                        break
+                    slot = str(sess["target"]).partition(":")[2]
+                    if slot in SLOT_EXPECTED_ACCOUNTS:
+                        if not _claude_identity_ok(sess):
+                            sess["state"] = "verification_pending"
+                            sess["message"] = "이 슬롯에 지정된 계정이 아닌 계정으로 로그인됐다. 슬롯 격리를 유지한다. 지정 계정으로 다시 로그인해라."
+                            break
+                        if not await _sync_slot_token_to_db(slot):
+                            sess["state"] = "verification_pending"
+                            sess["message"] = "실호출은 성공했지만 토큰 DB 동기화를 확인하지 못했다. 슬롯 격리를 유지한다."
+                            break
                 sess["state"] = "success"
                 sess["message"] = "새 자격증명의 실호출을 확인했다." if sess["kind"] == "claude" else "자격증명이 기록됐다."
                 break
@@ -396,7 +436,10 @@ async def start(target: str) -> dict:
         if existing:
             return public(existing)
 
+        home_existed = plan["home"].exists()
         plan["home"].mkdir(parents=True, exist_ok=True)
+        if plan["kind"] == "claude" and not home_existed:
+            plan["home"].chmod(0o700)
         credential_before = _credential_signature(plan)
         master, slave = pty.openpty()
         env = dict(os.environ)
@@ -553,10 +596,13 @@ def bindings() -> list[dict]:
             "needs_login": not _credential_ok(plan),
         })
 
-    for home in sorted(CLAUDE_SLOT_ROOT.glob("slot*")) if CLAUDE_SLOT_ROOT.is_dir() else []:
-        if not home.is_dir():
-            continue
-        num = home.name.replace("slot", "")
+    # 등록된 슬롯은 홈 디렉터리가 아직 없어도(로그인 전) 로그인 대상으로 보여야 한다.
+    slot_names = {h.name for h in CLAUDE_SLOT_ROOT.glob("slot*") if h.is_dir()} \
+        if CLAUDE_SLOT_ROOT.is_dir() else set()
+    slot_names |= {f"slot{n}" for n in SLOT_REGISTER_LABELS}
+    for slot_name in sorted(slot_names):
+        home = CLAUDE_SLOT_ROOT / slot_name
+        num = slot_name.replace("slot", "")
         plan = {"kind": "claude", "credential": home / ".claude" / ".credentials.json"}
         ok = _credential_ok(plan)
         cred = claude_credential_status(plan["credential"])
@@ -572,15 +618,9 @@ def bindings() -> list[dict]:
         # logged into the slot, which previously made another account's quota appear
         # under the configured label.  Expose only identity metadata so the API can
         # fail closed on a binding mismatch without exposing OAuth tokens.
-        actual_account = None
-        try:
-            profile = json.loads((home / ".claude.json").read_text())
-            oauth_account = profile.get("oauthAccount") or {}
-            actual_account = oauth_account.get("emailAddress") or None
-        except (OSError, ValueError):
-            pass
+        actual_account = _claude_actual_account(home)
         out.append({
-            "target": f"claude:{num}", "kind": "claude", "account": home.name,
+            "target": f"claude:{num}", "kind": "claude", "account": slot_name,
             "bound": ok, "needs_login": not cred["ok"], "subscription": sub,
             "actual_account": actual_account,
             "reason": cred["reason"], "expires_at": cred["expires_at"],

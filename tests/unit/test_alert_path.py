@@ -369,4 +369,27 @@ def test_keeper_failopen_when_key_row_missing(tmp_path):
 def test_keeper_slot_key_mapping_matches_db_key_names():
     src = KEEPER.read_text()
     assert '1) printf \'%s\' "ANTHROPIC_AUTH_TOKEN"' in src
-    assert "2|3|4) printf 'ANTHROPIC_AUTH_TOKEN_%s'" in src
+    assert "2|3|4|5) printf 'ANTHROPIC_AUTH_TOKEN_%s'" in src
+
+
+# ── claude_token_keeper: 로그인 직후 동기화 모드(CLAUDE_TOKEN_KEEPER_LOGIN_SYNC) ──
+
+def test_keeper_login_sync_processes_inactive_slot_filter_mode_does_not(tmp_path):
+    env, cred, sent = _keeper_env(tmp_path)
+    _write_cred(cred, 300)  # 수명 충분 → 갱신 없이 DB 동기화 경로로 간다
+    _set_active_rows(tmp_path, ANTHROPIC_AUTH_TOKEN="inactive")
+    assert "slot1: 비활성(DB) — 건너뜀" in _keeper(env)  # 필터만 건 일반 실행은 그대로 건너뛴다
+
+    env["CLAUDE_TOKEN_KEEPER_LOGIN_SYNC"] = "1"
+    r = _run(["bash", str(KEEPER)], env)  # 가짜 docker 라 DB 동기화는 실패 → 비정상 종료가 맞다
+    # 일반 실행은 건너뛰고 0 이었다. 여기서 1 이면 비활성 슬롯인데도 동기화를 시도했다는 뜻이다.
+    assert "비활성(DB)" not in r.stdout and r.returncode == 1
+
+
+def test_keeper_login_sync_fails_when_credential_missing_but_cron_run_does_not(tmp_path):
+    env, cred, sent = _keeper_env(tmp_path)  # slot1 자격증명 파일 없음
+    assert "자격증명 없음" in _keeper(env)  # 일반 실행: 건너뛰고 0
+
+    env["CLAUDE_TOKEN_KEEPER_LOGIN_SYNC"] = "1"
+    r = _run(["bash", str(KEEPER)], env)
+    assert r.returncode == 1, r.stdout + r.stderr

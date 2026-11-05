@@ -273,6 +273,7 @@ def _is_slot_available(slot: str) -> bool:
     return False
 
 # Agent SDK OAuth 토큰 — auth_provider 경유 (R-AUTH)
+from app.core.claude_slots import CLAUDE_SLOTS as _CLAUDE_SLOTS  # noqa: E402
 from app.core.auth_provider import (  # noqa: E402
     LAST_RESORT_SLOTS as _AP_LAST_RESORT_SLOTS,
     get_disabled_anthropic_slots as _ap_get_disabled_slots,
@@ -296,8 +297,8 @@ def set_key_order(primary: str) -> bool:
     return _ap_set_order(primary)
 
 
-# 알려진 릴레이 슬롯. 여기에 없는 슬롯은 주소 지정이 불가능하므로 버린다.
-_KNOWN_SLOTS = ("1", "2", "3", "4")
+# 알려진 릴레이 슬롯(app/core/claude_slots.py). 여기에 없는 슬롯은 주소 지정이 불가능하므로 버린다.
+_KNOWN_SLOTS = _CLAUDE_SLOTS
 
 # 최후 수단 슬롯 — 1·2 가 모두 불가능할 때만 집는다.
 #

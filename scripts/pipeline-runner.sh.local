@@ -2363,6 +2363,7 @@ get_db_anthropic_slots() {
                              WHEN 'ANTHROPIC_AUTH_TOKEN_2' THEN '2'
                              WHEN 'ANTHROPIC_AUTH_TOKEN_3' THEN '3'
                              WHEN 'ANTHROPIC_AUTH_TOKEN_4' THEN '4'
+                             WHEN 'ANTHROPIC_AUTH_TOKEN_5' THEN '5'
                              ELSE '' END AS slot
                     FROM llm_api_keys
                     WHERE provider='anthropic'
@@ -6277,7 +6278,7 @@ run_job() {
     # C-4: 빈 토큰 가드 — 둘 다 비어있으면 즉시 실패 처리
     # 단, 슬롯 자격증명이 살아 있으면 고정 토큰이 없어도 실행 가능하므로 차단하지 않는다.
     local _slot_auth_available=""
-    _slot_auth_available="$(slot_credentials_file 1 || slot_credentials_file 2 || slot_credentials_file 3 || slot_credentials_file 4 || leased_slot_token 1 || leased_slot_token 2 || leased_slot_token 3 || leased_slot_token 4 || true)"
+    _slot_auth_available="$(slot_credentials_file 1 || slot_credentials_file 2 || slot_credentials_file 3 || slot_credentials_file 4 || slot_credentials_file 5 || leased_slot_token 1 || leased_slot_token 2 || leased_slot_token 3 || leased_slot_token 4 || leased_slot_token 5 || true)"
     if [[ -z "$TOKEN_1" && -z "$TOKEN_2" && -z "$_slot_auth_available" ]] \
         && model_cycle_requires_anthropic_auth "${MODEL_CYCLE[@]}"; then
         log "FATAL: ANTHROPIC_AUTH_TOKEN / _2 모두 비어있음 — job=$job_id 실패 처리"

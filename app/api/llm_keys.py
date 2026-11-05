@@ -13,6 +13,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.auth import require_internal_admin
+from app.core.claude_slots import (
+    KEY_NAME_TO_SLOT,
+    SLOT_EXPECTED_ACCOUNTS,
+    STRICT_LOGIN_SLOTS,
+    key_name_for_slot,
+)
 from app.core.credential_vault import decrypt_value, encrypt_value
 from app.core.db_pool import get_pool
 from app.core.llm_key_provider import invalidate_key_cache
@@ -602,10 +608,12 @@ async def llm_overview() -> dict[str, Any]:
         )
     except Exception:
         logger.warning("llm_keys.overview.anthropic_slot_map_unavailable")
-    # Disabled keys are omitted by get_oauth_key_records_async. Keep the fixed
-    # slot-4 login target addressable while its 2100 hold is in force.
-    if any(row["key_name"] == "ANTHROPIC_AUTH_TOKEN_4" for row in rows):
-        slot_of["ANTHROPIC_AUTH_TOKEN_4"] = "slot4"
+    # Disabled keys are omitted by get_oauth_key_records_async. Keep the strict
+    # login slots (4, 5) addressable while they are quarantined (inactive).
+    for row in rows:
+        strict_slot = KEY_NAME_TO_SLOT.get(row["key_name"])
+        if strict_slot in STRICT_LOGIN_SLOTS:
+            slot_of[row["key_name"]] = f"slot{strict_slot}"
 
     # 슬롯별 구독 상태(active/canceled/free)와 마지막 확인 시각. 릴레이만 안다.
     # 못 읽으면 필드만 비운다 — 화면 전체를 죽이지 않는다.
@@ -632,8 +640,12 @@ async def llm_overview() -> dict[str, Any]:
             continue
         if provider in SUBSCRIPTION_PROVIDERS:
             slot = slot_of.get(row["key_name"])
-            quarantined_slot4 = (
-                slot == "slot4" and not row["is_active"] and not row["manual_disabled"]
+            quarantined_slot = (
+                provider == "anthropic"
+                and bool(slot)
+                and slot[4:] in STRICT_LOGIN_SLOTS
+                and not row["is_active"]
+                and not row["manual_disabled"]
             )
             bkey = (
                 slot if provider == "anthropic"
@@ -665,12 +677,12 @@ async def llm_overview() -> dict[str, Any]:
                 ),
                 "kind": "subscription", "masked_value": masked,
                 "slot": slot,
-                "state": "needs_login" if quarantined_slot4 else _account_state(row, binding, now),
+                "state": "needs_login" if quarantined_slot else _account_state(row, binding, now),
                 "bound": bool(binding and binding.get("bound")),
-                "needs_login": quarantined_slot4 or bool(binding and binding.get("needs_login")),
+                "needs_login": quarantined_slot or bool(binding and binding.get("needs_login")),
                 **_needs_login_detail(
                     {**(binding or {}), "needs_login": True, "reason": "quarantined"}
-                    if quarantined_slot4 and not (binding and binding.get("needs_login"))
+                    if quarantined_slot and not (binding and binding.get("needs_login"))
                     else binding
                 ),
                 "binding_mismatch": binding_mismatch,
@@ -683,7 +695,7 @@ async def llm_overview() -> dict[str, Any]:
                 "subscription": (binding or {}).get("subscription"),
                 "rate_limited_until": (
                     row["rate_limited_until"].isoformat()
-                    if row["rate_limited_until"] and not binding_mismatch and not quarantined_slot4 else None
+                    if row["rate_limited_until"] and not binding_mismatch and not quarantined_slot else None
                 ),
                 "windows": (
                     [] if binding_mismatch
@@ -878,15 +890,16 @@ async def get_account_login(login_id: str) -> dict[str, Any]:
 async def _reconcile_successful_account_login(
     login_id: str, result: dict[str, Any]
 ) -> bool:
-    """Release slot 4 only after relay proof, identity and DB token all agree."""
+    """Release a strict slot (4, 5) only after relay proof, identity and DB token all agree."""
     target = str(result.get("target") or "")
     kind, _, name = target.partition(":")
     if kind != "claude" or not name.isdigit():
         return True
 
-    if name != "4":
-        # Keep the established reconciliation for numeric Claude slots. Slot 4
-        # alone needs the stricter identity and credential proof below.
+    expected_account = SLOT_EXPECTED_ACCOUNTS.get(name)
+    if expected_account is None:
+        # Keep the established reconciliation for the other numeric Claude slots.
+        # Strict slots (4, 5) need the stricter identity and credential proof below.
         from app.core.auth_provider import get_oauth_key_records_async
 
         records = await get_oauth_key_records_async(include_rate_limited=True)
@@ -929,7 +942,7 @@ async def _reconcile_successful_account_login(
         return False
     if not binding or not binding.get("bound") or binding.get("needs_login"):
         return False
-    if str(binding.get("actual_account") or "").lower() != "thelylon14@gmail.com":
+    if str(binding.get("actual_account") or "").lower() != expected_account:
         return False
 
     pool = get_pool()
@@ -938,7 +951,8 @@ async def _reconcile_successful_account_login(
             record = await conn.fetchrow(
                 """SELECT key_name, label, encrypted_value, oauth_expires_at
                    FROM llm_api_keys WHERE provider = 'anthropic'
-                     AND key_name = 'ANTHROPIC_AUTH_TOKEN_4' FOR UPDATE"""
+                     AND key_name = $1 FOR UPDATE""",
+                key_name_for_slot(name),
             )
             if not record:
                 return False
