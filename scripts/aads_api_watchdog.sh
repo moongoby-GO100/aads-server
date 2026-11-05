@@ -2,9 +2,17 @@
 set -euo pipefail
 
 # Host-level AADS API watchdog. This must run outside the application containers.
-# It never restarts a running API process. On two consecutive failures it first
-# fails over to the healthy standby; only a Supervisor STOPPED process may be
-# started in-place when no healthy standby exists.
+# It never restarts a running API process. It fails over to the healthy standby
+# when either rule fires; only a Supervisor STOPPED process may be started
+# in-place when no healthy standby exists.
+#   hard failure: container not running, or supervisor state is not RUNNING.
+#   soft failure: anything else (running + RUNNING but /health/live slow or
+#                 non-200). Docker health=unhealthy is NOT used to classify:
+#                 the container healthcheck hits the same /health/live, so it
+#                 only echoes a soft failure.
+#   rule hard_streak: FAIL_THRESHOLD consecutive hard failures (ignores cooldown).
+#   rule soft_streak: SOFT_FAIL_THRESHOLD consecutive failures of any kind, and
+#                     FAILOVER_COOLDOWN_SEC elapsed since the last failover.
 
 COMPOSE_DIR="${AADS_COMPOSE_DIR:-/root/aads/aads-server}"
 UPSTREAM_CONF="${AADS_UPSTREAM_CONF:-/etc/nginx/conf.d/aads-upstream.conf}"
@@ -13,11 +21,15 @@ ACTIVE_CONTAINER_FILE="${AADS_ACTIVE_CONTAINER_FILE:-${COMPOSE_DIR}/.active_cont
 ACTIVE_SLOT_STATE_WRITER="${AADS_ACTIVE_SLOT_STATE_WRITER:-${COMPOSE_DIR}/scripts/aads_active_slot_state.sh}"
 STATE_DIR="${AADS_WATCHDOG_STATE_DIR:-/run/aads-api-watchdog}"
 FAIL_FILE="${STATE_DIR}/consecutive_failures"
+HARD_FAIL_FILE="${STATE_DIR}/consecutive_hard_failures"
+LAST_FAILOVER_FILE="${STATE_DIR}/last_failover_epoch"
 LOCK_FILE="${STATE_DIR}/watchdog.lock"
 DEPLOY_LOCK="${AADS_DEPLOY_LOCK:-/tmp/aads-deploy.lock}"
 NGINX_LOCK="${AADS_NGINX_LOCK:-/tmp/aads-nginx-upstream.lock}"
 AUDIT_LOG="${AADS_CONTROL_AUDIT_LOG:-/var/log/aads-control-audit.jsonl}"
 FAIL_THRESHOLD="${AADS_WATCHDOG_FAIL_THRESHOLD:-2}"
+SOFT_FAIL_THRESHOLD="${AADS_WATCHDOG_SOFT_FAIL_THRESHOLD:-5}"
+FAILOVER_COOLDOWN_SEC="${AADS_WATCHDOG_FAILOVER_COOLDOWN_SEC:-600}"
 MEMORY_WARN_PCT="${AADS_WATCHDOG_MEMORY_WARN_PCT:-85}"
 MEMORY_CLEAR_PCT="${AADS_WATCHDOG_MEMORY_CLEAR_PCT:-75}"
 DRY_RUN=false
@@ -113,6 +125,46 @@ slot_healthy() {
     [[ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" == "true" ]] || return 1
     [[ "$(supervisor_state "$container" || true)" == "RUNNING" ]] || return 1
     curl -fsS --max-time 4 "http://127.0.0.1:${port}/health/live" >/dev/null 2>&1 || return 1
+}
+
+read_counter() {
+    local value=""
+    [[ -f "$1" ]] && value="$(tr -cd '0-9' < "$1" 2>/dev/null || true)"
+    echo "${value:-0}"
+}
+
+reset_fail_counters() {
+    printf '0\n' > "$FAIL_FILE"
+    printf '0\n' > "$HARD_FAIL_FILE"
+}
+
+# hard: container not running, or supervisor not RUNNING (STOPPED/FATAL/EXITED/
+# BACKOFF/unknown). soft: everything else. Docker health is deliberately unused.
+slot_failure_kind() {
+    local container="$1"
+    local running supervisor
+    running="$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)"
+    [[ "$running" == "true" ]] || { echo hard; return 0; }
+    supervisor="$(supervisor_state "$container" || true)"
+    [[ "$supervisor" == "RUNNING" ]] || { echo hard; return 0; }
+    echo soft
+}
+
+failover_cooldown_remaining() {
+    local last now elapsed
+    last="$(read_counter "$LAST_FAILOVER_FILE")"
+    if (( last == 0 )); then
+        echo 0
+        return 0
+    fi
+    now="$(date +%s)"
+    elapsed=$((now - last))
+    (( elapsed >= 0 )) || elapsed=0
+    if (( elapsed >= FAILOVER_COOLDOWN_SEC )); then
+        echo 0
+    else
+        echo $((FAILOVER_COOLDOWN_SEC - elapsed))
+    fi
 }
 
 container_memory_percent() {
@@ -241,7 +293,8 @@ switch_to_peer() {
     fi
     docker exec "$new_container" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
-    audit "failover" "${old_container}:${old_port}->${new_container}:${new_port}" "success" "two consecutive active-slot failures"
+    printf '%s\n' "$(date +%s)" > "$LAST_FAILOVER_FILE"
+    audit "failover" "${old_container}:${old_port}->${new_container}:${new_port}" "success" "consecutive active-slot failures ${decision_detail:-}"
     log "FAILOVER complete ${old_container}:${old_port} -> ${new_container}:${new_port}"
 }
 
@@ -259,7 +312,7 @@ audit_slot_memory "$active_container"
 audit_slot_memory "$peer_container"
 
 if slot_healthy "$active_port" "$active_container"; then
-    printf '0\n' > "$FAIL_FILE"
+    reset_fail_counters
     # Keep state files aligned with the authoritative nginx upstream.
     if ! $DRY_RUN; then
         exec 9>"$NGINX_LOCK"
@@ -280,24 +333,44 @@ if deploy_in_progress; then
     exit 0
 fi
 
-fail_count="0"
-if [[ -f "$FAIL_FILE" ]]; then
-    fail_count="$(tr -cd '0-9' < "$FAIL_FILE" 2>/dev/null || true)"
-fi
-fail_count="${fail_count:-0}"
-fail_count=$((fail_count + 1))
+fail_count=$(( $(read_counter "$FAIL_FILE") + 1 ))
 printf '%s\n' "$fail_count" > "$FAIL_FILE"
-active_detail="$(slot_detail "$active_port" "$active_container")"
-audit "check" "${active_container}:${active_port}" "failed" "attempt=${fail_count}/${FAIL_THRESHOLD} ${active_detail}"
-log "WARN active unhealthy attempt=${fail_count}/${FAIL_THRESHOLD} ${active_container}:${active_port} ${active_detail}"
+fail_kind="$(slot_failure_kind "$active_container")"
+if [[ "$fail_kind" == "hard" ]]; then
+    hard_count=$(( $(read_counter "$HARD_FAIL_FILE") + 1 ))
+else
+    hard_count=0
+fi
+printf '%s\n' "$hard_count" > "$HARD_FAIL_FILE"
 
-if (( fail_count < FAIL_THRESHOLD )); then
+rule="none"
+if [[ "$fail_kind" == "hard" ]] && (( hard_count >= FAIL_THRESHOLD )); then
+    rule="hard_streak"
+elif (( fail_count >= SOFT_FAIL_THRESHOLD )); then
+    rule="soft_streak"
+fi
+decision_detail="kind=${fail_kind} fail=${fail_count}/${SOFT_FAIL_THRESHOLD} hard=${hard_count}/${FAIL_THRESHOLD} rule=${rule}"
+
+active_detail="$(slot_detail "$active_port" "$active_container")"
+audit "check" "${active_container}:${active_port}" "failed" "${decision_detail} ${active_detail}"
+log "WARN active unhealthy ${decision_detail} ${active_container}:${active_port} ${active_detail}"
+
+if [[ "$rule" == "none" ]]; then
     exit 0
+fi
+
+if [[ "$rule" == "soft_streak" ]]; then
+    cooldown_remaining="$(failover_cooldown_remaining)"
+    if (( cooldown_remaining > 0 )); then
+        audit "failover" "${peer_container}:${peer_port}" "blocked" "cooldown remaining=${cooldown_remaining}s ${decision_detail}"
+        log "WARN failover blocked by cooldown remaining=${cooldown_remaining}s ${decision_detail}"
+        exit 0
+    fi
 fi
 
 if slot_healthy "$peer_port" "$peer_container"; then
     switch_to_peer "$active_port" "$peer_port" "$active_container" "$peer_container"
-    printf '0\n' > "$FAIL_FILE"
+    reset_fail_counters
     exit 0
 fi
 
@@ -312,7 +385,7 @@ if [[ "$active_supervisor" == "STOPPED" ]]; then
     for _ in $(seq 1 10); do
         sleep 2
         if slot_healthy "$active_port" "$active_container"; then
-            printf '0\n' > "$FAIL_FILE"
+            reset_fail_counters
             audit "supervisor-start" "${active_container}:aads-api" "success" "health restored"
             log "RECOVERED stopped API child on ${active_container}:${active_port}"
             exit 0
