@@ -661,7 +661,7 @@ def test_card_routed_to_auto_is_reported_not_treated_as_card(world, monkeypatch)
 def test_daily_limit_counts_fix_and_resolve_markers_together():
     # [P1] 자동 보완 경로의 하루 상한 SQL 도 후속 처리 마커를 함께 센다.
     sql = fix._DAILY_SQL
-    assert "strpos(instruction,$2)>0 OR strpos(instruction,$4)>0" in sql
+    assert "instruction ~ $2 OR instruction ~ $4" in sql
     assert fix.RESOLVE_MARKER_PREFIX == res.MARKER_PREFIX
 
 
@@ -676,7 +676,35 @@ def test_load_history_daily_query_passes_both_markers():
             seen["args"] = a
             return 7
     out = asyncio.run(fix.load_history(C(), TENANT, "AADS", "doc-a", now=NOW))
-    assert out["daily"] == 7 and seen["args"][1] == fix.MARKER_PREFIX and seen["args"][3] == res.MARKER_PREFIX
+    assert out["daily"] == 7
+    assert seen["args"][1] == fix.DAILY_FIX_MARKER_PATTERN and seen["args"][3] == fix.DAILY_RESOLVE_MARKER_PATTERN
+
+
+def test_resolve_daily_query_passes_line_anchored_pattern():
+    seen = {}
+
+    class C:
+        async def fetch(self, sql, *a):
+            return []
+
+        async def fetchval(self, sql, *a):
+            seen["sql"], seen["args"] = sql, a
+            return 3
+    out = asyncio.run(res.load_resolve_history(C(), TENANT, "AADS", "doc-a", now=NOW))
+    assert out["daily"] == 3 and seen["sql"] == res._RESOLVE_DAILY_SQL and "instruction ~ $2" in seen["sql"]
+    assert seen["args"][1] == fix.DAILY_RESOLVE_MARKER_PATTERN
+
+
+def test_daily_pattern_counts_real_resolve_instructions_not_dev_examples():
+    import re
+    pat = re.compile(fix.DAILY_RESOLVE_MARKER_PATTERN)
+    real = [res.build_investigate_instruction("AADS", HEAD, REVISION, "fb"),
+            res.build_split_instruction("AADS", HEAD, REVISION, "fb"),
+            res.build_revise_instruction("AADS", HEAD, REVISION, "fb")]
+    assert all(pat.search(t) for t in real)
+    dev = ("TASK_ID: dev\n마커는 다음 형식이다: DOC_AUTO_RESOLVE_OF: <key> rev=<id> path=investigate.\n"
+           "예: `DOC_AUTO_RESOLVE_OF: doc-a rev=abc path=split` 를 센다.\n")
+    assert pat.search(dev) is None
 
 
 def test_secret_document_never_goes_to_adjudication():

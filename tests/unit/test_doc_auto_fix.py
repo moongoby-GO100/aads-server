@@ -144,6 +144,34 @@ def test_instruction_contents():
     assert fix.marker_line("doc-a", REV, 1, p.fingerprint) in text
 
 
+def test_daily_pattern_counts_real_instruction_not_dev_examples():
+    import re
+    fix_pat = re.compile(fix.DAILY_FIX_MARKER_PATTERN)
+    resolve_pat = re.compile(fix.DAILY_RESOLVE_MARKER_PATTERN)
+    p = plan()
+    assert fix_pat.search(fix.build_instruction("AADS", HEAD, REVISION, p))
+    assert resolve_pat.search("x\n" + f"{fix.RESOLVE_MARKER_PREFIX}doc-a rev={REV} path=investigate" + "\n")
+    dev = ("TASK_ID: dev\n마커 예시 DOC_AUTO_FIX_OF: <key> rev=<id> round=1/2 fp=0123456789abcdef 와 "
+           "DOC_AUTO_RESOLVE_OF: <key> rev=<id> path=investigate. 를 본문에서 설명한다.\n"
+           "  - DOC_AUTO_FIX_OF: doc-a rev=abc round=1/2 fp=0123456789abcdef\n")
+    assert fix_pat.search(dev) is None and resolve_pat.search(dev) is None
+
+
+def test_load_history_daily_query_passes_regex_patterns():
+    seen = {}
+
+    class C:
+        async def fetch(self, sql, *a):
+            return []
+
+        async def fetchval(self, sql, *a):
+            seen["sql"], seen["args"] = sql, a
+            return 4
+    out = asyncio.run(fix.load_history(C(), TENANT, "AADS", "doc-a", now=NOW))
+    assert out["daily"] == 4 and seen["sql"] == fix._DAILY_SQL and "strpos" not in seen["sql"]
+    assert seen["args"][1] == fix.DAILY_FIX_MARKER_PATTERN and seen["args"][3] == fix.DAILY_RESOLVE_MARKER_PATTERN
+
+
 class FakeConn:
     def __init__(self, jobs=(), daily=0):
         self.jobs, self.daily, self.writes = list(jobs), daily, []

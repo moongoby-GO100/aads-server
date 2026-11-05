@@ -234,10 +234,14 @@ _HISTORY_SQL = (
     "WHERE tenant_id=$1::uuid AND upper(project)=$2 AND strpos(instruction,$3)>0 ORDER BY created_at, job_id"
 )
 # 테넌트 하루 상한은 자동 보완(DOC_AUTO_FIX_OF)과 후속 처리(DOC_AUTO_RESOLVE_OF) 제출을 합쳐 센다.
+# 마커 예시를 본문에 담은 개발 지시서까지 세지 않도록 줄 맨앞 + 전체 마커 형식으로 고정한다.
+# MARKER_RE 와 같은 형식이며 Postgres ARE 와 Python re 에서 뜻이 같은 문법(\S \d \w {16} (^|\n))만 쓴다.
 RESOLVE_MARKER_PREFIX = 'DOC_AUTO_RESOLVE_OF: '
+DAILY_FIX_MARKER_PATTERN = r'(^|\n)DOC_AUTO_FIX_OF: \S+ rev=\S+ round=\d+/\d+ fp=[0-9a-f]{16}'
+DAILY_RESOLVE_MARKER_PATTERN = r'(^|\n)DOC_AUTO_RESOLVE_OF: \S+ rev=\S+ path=\w+'
 _DAILY_SQL = (
     "SELECT count(*) FROM pipeline_jobs WHERE tenant_id=$1::uuid "
-    "AND (strpos(instruction,$2)>0 OR strpos(instruction,$4)>0) AND created_at>=$3"
+    "AND (instruction ~ $2 OR instruction ~ $4) AND created_at>=$3"
 )
 
 
@@ -256,7 +260,8 @@ async def load_history(conn: Any, tenant: str, project: str, document_key: str, 
                 rounds.append({**mark, 'job_id': row['job_id'], 'status': row['status'],
                                'active': row['status'] in ACTIVE_STATUSES})
                 break
-    daily = await conn.fetchval(_DAILY_SQL, tenant, MARKER_PREFIX, _kst_day_start(now), RESOLVE_MARKER_PREFIX)
+    daily = await conn.fetchval(_DAILY_SQL, tenant, DAILY_FIX_MARKER_PATTERN, _kst_day_start(now),
+                                 DAILY_RESOLVE_MARKER_PATTERN)
     return {'rounds': rounds, 'daily': int(daily or 0)}
 
 

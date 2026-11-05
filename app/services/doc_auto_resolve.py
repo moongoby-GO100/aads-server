@@ -91,7 +91,7 @@ _RESOLVE_SQL = (
     "WHERE tenant_id=$1::uuid AND upper(project)=$2 AND strpos(instruction,$3)>0 ORDER BY created_at, job_id"
 )
 _RESOLVE_DAILY_SQL = (
-    "SELECT count(*) FROM pipeline_jobs WHERE tenant_id=$1::uuid AND strpos(instruction,$2)>0 AND created_at>=$3"
+    "SELECT count(*) FROM pipeline_jobs WHERE tenant_id=$1::uuid AND instruction ~ $2 AND created_at>=$3"
 )
 
 
@@ -107,7 +107,8 @@ async def load_resolve_history(conn: Any, tenant: str, project: str, document_ke
                 jobs.append({**mark, 'job_id': row['job_id'], 'status': row['status'],
                              'active': row['status'] in ACTIVE_STATUSES})
                 break
-    daily = await conn.fetchval(_RESOLVE_DAILY_SQL, tenant, MARKER_PREFIX, fix._kst_day_start(now))
+    daily = await conn.fetchval(_RESOLVE_DAILY_SQL, tenant, fix.DAILY_RESOLVE_MARKER_PATTERN,
+                                 fix._kst_day_start(now))
     return {'jobs': jobs, 'daily': int(daily or 0)}
 
 
