@@ -66,6 +66,20 @@ def is_request_changes_failure(status: str, phase: str, error_detail: str) -> bo
     return False
 
 
+REVIEW_DIFF_TOO_LARGE_PREFIX = "review_diff_too_large"
+# 리뷰 feedback 의 ``issue_categories``(issues 와 같은 길이·같은 순서) 값 중 "입력 절단" 범주.
+_TRUNCATION_ISSUE_CATEGORIES = frozenset({"diff_truncated", "diff_omitted", "local_absent"})
+
+
+def is_review_diff_too_large(error_detail: str) -> bool:
+    """러너가 리뷰 입력 상한 초과로 LLM 호출 없이 종결한 건인가.
+
+    diff 크기는 같은 지시를 다시 돌려도 그대로라 재작업이 같은 종결을 반복한다. 사람이 작업을 나눠
+    다시 제출해야 한다.
+    """
+    return (error_detail or "").startswith(REVIEW_DIFF_TOO_LARGE_PREFIX)
+
+
 _GATE_STAGE = "pre_llm_preservation_gate"
 _LINE_RATIO_MARKERS = ("50%를 초과하고 순삭제", "추가 없이 삭제 라인")
 
@@ -96,6 +110,38 @@ def is_deterministic_line_gate_rejection(review: Any) -> bool:
         return False
     issues = _raw_issues(review["feedback"])
     return bool(issues) and all(any(m in i for m in _LINE_RATIO_MARKERS) for i in issues)
+
+
+def is_truncation_only_rejection(review: Any) -> bool:
+    """리뷰가 "diff 가 잘려 판정 불가" 만 지적한 반려인가 — 구조화 필드로만 판정한다.
+
+    조건 전부: needs_retry=true, ``measurement.diff_truncated`` 가 true, ``issue_categories`` 가
+    issues 와 길이가 같고 모든 값이 절단·생략·로컬 부재 범주. 지적 문구는 읽지 않는다. 범주 필드가
+    없거나 길이가 안 맞거나 범주 밖 값이 하나라도 있으면 분류 불가 또는 별개 결함이므로 False(재작업 생성).
+    """
+    if not review or review["needs_retry"] is not True:
+        return False
+    feedback = review["feedback"]
+    if isinstance(feedback, (bytes, bytearray)):
+        feedback = feedback.decode("utf-8", "replace")
+    if isinstance(feedback, str):
+        try:
+            feedback = json.loads(feedback)
+        except ValueError:
+            return False
+    if not isinstance(feedback, dict):
+        return False
+    measurement = feedback.get("measurement")
+    if not isinstance(measurement, dict) or measurement.get("diff_truncated") is not True:
+        return False
+    issues = _raw_issues(feedback)
+    raw = feedback.get("issues")
+    categories = feedback.get("issue_categories")
+    if not issues or not isinstance(raw, list) or len(issues) != len(raw):
+        return False
+    if not isinstance(categories, list) or len(categories) != len(raw):
+        return False
+    return all(isinstance(c, str) and c in _TRUNCATION_ISSUE_CATEGORIES for c in categories)
 
 
 def max_rounds(max_cycles: Any) -> int:
@@ -265,6 +311,9 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
     )
     if not row:
         return None
+    if is_review_diff_too_large(row["error_detail"] or ""):
+        logger.info("pipeline_auto_rework.review_diff_too_large", job_id=job_id)
+        return {"skipped": "review_diff_too_large", "parent": job_id}
     if not is_request_changes_failure(row["status"] or "", row["phase"] or "", row["error_detail"] or ""):
         return None
     instruction = row["instruction"] or ""
@@ -279,6 +328,9 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
         if is_deterministic_line_gate_rejection(gate_review):
             logger.info("pipeline_auto_rework.deterministic_gate", job_id=job_id)
             return {"skipped": "deterministic_gate", "parent": job_id, "category": "PRESERVATION_HARD_GATE"}
+        if is_truncation_only_rejection(gate_review):
+            logger.info("pipeline_auto_rework.truncation_only", job_id=job_id)
+            return {"skipped": "diff_truncated", "parent": job_id}
     rounds_max = max_rounds(row["max_cycles"])
     next_round = current_round(instruction) + 1
     if next_round > rounds_max:

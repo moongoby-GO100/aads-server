@@ -74,13 +74,17 @@ def test_exclude_specs_defined_once_in_shared_block_and_used_by_all_diff_readers
     assert "JOB_DIFF_EXCLUDE_SPECS[@]" in _func(script, "review_diff_stat_section")
 
 
-def test_review_request_uses_prefixed_diff_but_stores_raw_git_diff():
+def test_review_request_uses_review_full_diff_but_stores_raw_git_diff():
+    # AADS-RUNNER-REVIEW-FULL-DIFF-20261106: 리뷰 입력은 DB 저장용 git_diff 가 아니라 리뷰용 전체 diff 이고,
+    # 본문은 인자가 아니라 파일(--rawfile / --data-binary @파일)로 넘어간다. 절단 고지 앞머리는 그대로 지원한다.
     script = _runner()
-    start = script.index('local review_diff="$git_diff"')
+    start = script.index('local review_body_file="$ARTIFACT_DIR/${job_id}.review_body.json"')
     end = script.index("while [[ $review_attempt -lt $review_max_attempts ]]", start)
     region = script[start:end]
-    assert region.count('--arg diff "$review_diff"') == 2
-    assert '--arg diff "$git_diff"' not in region
+    assert '"$review_full_diff" "$review_diff_prefix"' in region
+    assert '"$git_diff"' not in region
+    assert "--arg diff" not in script
+    assert "--rawfile diff" in _func(script, "write_review_request_body")
     # DB 저장값·스위퍼 비교 기준은 앞머리 없는 원본 그대로여야 한다.
     assert 'git_diff=$(sql_escape "$git_diff")' in script
     assert "review_diff_prefix" not in script[script.index(SHARED_BLOCK_BEGIN):script.index(SHARED_BLOCK_END)]

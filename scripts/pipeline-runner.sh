@@ -3520,6 +3520,155 @@ $(review_diff_stat_section "$repo" "미커밋 변경 — git diff HEAD --stat" H
     return 0
 }
 
+# AADS-RUNNER-REVIEW-FULL-DIFF (2026-11-06): DB 저장용 git_diff(45000/5000/50000B)는 리뷰 입력이
+# 아니다. runner-0b708b0a 의 diff 263,459자가 그 상한에 잘린 채 리뷰돼 "절단으로 판정 불가"
+# 반려가 연속 5건 났다. 리뷰 직전에 같은 base..head(+미커밋+untracked 폴백)로 리뷰용 전체 diff 를
+# 따로 만든다. 공유 블록(capture_job_diff_text)과 DB git_diff 는 건드리지 않는다.
+# 상한은 서버 code_reviewer.REVIEW_DIFF_MAX_CHARS 와 같은 값(기본 200000자)이다.
+review_diff_max_chars() {
+    local v="${RUNNER_REVIEW_DIFF_MAX_CHARS:-200000}"
+    if ! [[ "$v" =~ ^[0-9]{1,9}$ ]] || (( 10#$v <= 0 )); then
+        v=200000
+    fi
+    printf '%s' "$((10#$v))"
+}
+
+# stdin → stdout: 앞 $1 "문자"만 남긴다(바이트 아님). 경계에서 깨진 UTF-8 은 버린다.
+# 바이트로 자르면 한글 중간에서 깨져 DB 쓰기가 통째로 실패한다(sql_escape 주석, runner-a6626b7f).
+review_diff_cut_chars() {
+    local max="$1" text="" cleaned=""
+    text=$(cat; printf x)
+    text="${text%x}"
+    local LC_ALL=C.UTF-8
+    if (( ${#text} > max )); then
+        text="${text:0:max}"
+    fi
+    cleaned=$(printf '%s' "$text" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
+    if [[ -n "$cleaned" ]]; then
+        text="$cleaned"
+    fi
+    printf '%s' "$text"
+    return 0
+}
+
+_review_diff_char_len() {
+    local LC_ALL=C.UTF-8
+    printf '%s' "${#1}"
+}
+
+# stdin: diff → stdout: "- 경로 (N자)" 를 diff 문자 수 큰 순으로 상위 $1개.
+review_diff_top_files() {
+    local n="${1:-10}"
+    LC_ALL=C.UTF-8 awk '
+        /^diff --git a\// { f = $0; sub(/^diff --git a\//, "", f); sub(/ b\/.*$/, "", f); cur = f }
+        /^# \[untracked-fallback\] / { f = $0; sub(/^# \[untracked-fallback\] /, "", f); cur = f }
+        { if (cur == "") cur = "(파일 헤더 없음)"; n[cur] += length($0) + 1 }
+        END { for (k in n) printf "%d\t%s\n", n[k], k }
+    ' | LC_ALL=C sort -t $'\t' -k1,1nr | head -n "$n" | awk -F'\t' '{ printf "- %s (%s자)\n", $2, $1 }' || true
+    return 0
+}
+
+# 리뷰용 diff 원문. _job_diff_render 의 순삭제 stat-only 축약·요약 경로를 쓰지 않는다 — 축약하면
+# 274,528자 삭제 diff 가 60자로 줄어 상한 판정을 우회한다. 메모리 보호용으로 $2 바이트까지만 읽는다.
+_review_diff_raw() {
+    local repo="$1" cap="$2"
+    shift 2
+    git -C "$repo" -c core.quotePath=false diff --no-color --no-ext-diff --no-renames "$@" -- . "${JOB_DIFF_EXCLUDE_SPECS[@]}" 2>/dev/null | head -c "$((cap + 1))" || true
+    return 0
+}
+
+# 바이트 길이(LC_ALL=C). 측정 상한 도달 판정용 — 문자 수와 다르다.
+_review_diff_byte_len() {
+    local LC_ALL=C
+    printf '%s' "${#1}"
+}
+
+REVIEW_FULL_DIFF_CAPPED=0
+REVIEW_FULL_DIFF_TEXT=""
+REVIEW_FULL_DIFF_CHARS=0
+REVIEW_FULL_DIFF_TOP_FILES=""
+
+# 리뷰용 전체 diff 를 만든다. 결과는 전역(REVIEW_FULL_DIFF_*)에 둔다 — 명령 치환은 전역을 못 돌려준다.
+# 반환 0=상한 이하(리뷰 진행), 3=상한 초과(리뷰 호출 금지, TEXT 는 앞 상한 문자만).
+# 측정 상한(RUNNER_REVIEW_DIFF_MEASURE_MAX_BYTES, 기본 4,000,000B)은 메모리 보호용이고 리뷰 상한이 아니다.
+# 각 구간을 상한+1 바이트까지 읽어, 상한을 넘겨 읽혔으면(= 전체를 못 봤으면) REVIEW_FULL_DIFF_CAPPED=1 로
+# 두고 리뷰 상한과 무관하게 3 을 돌려준다(fail-closed: 불완전한 diff 를 전체 입력처럼 넘기지 않는다).
+# 이때 CHARS 와 파일별 집계는 측정 상한까지만 센 하한값이다.
+capture_review_full_diff() {
+    local repo="$1" base_sha="${2:-}"
+    local max="" cap="" head_sha="" text="" uncommitted="" fallback="" total=0
+    max=$(review_diff_max_chars)
+    # 신규 파일 안전망(_job_diff_untracked_fallback)은 예산을 넘기면 조각을 잘라 예산-1 바이트까지만 돌려준다.
+    # 예산을 cap+2 로 주면 잘렸을 때 cap+1 바이트가 되어 아래 상한 도달 판정에 걸린다.
+    cap="${RUNNER_REVIEW_DIFF_MEASURE_MAX_BYTES:-4000000}"
+    [[ "$cap" =~ ^[0-9]{1,9}$ ]] || cap=4000000
+    REVIEW_FULL_DIFF_TEXT=""
+    REVIEW_FULL_DIFF_CHARS=0
+    REVIEW_FULL_DIFF_TOP_FILES=""
+    REVIEW_FULL_DIFF_CAPPED=0
+    head_sha=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head_sha=""
+    if [[ -n "$base_sha" && -n "$head_sha" && "$base_sha" != "$head_sha" ]]; then
+        text=$(_review_diff_raw "$repo" "$cap" "${base_sha}..${head_sha}") || true
+        uncommitted=$(_review_diff_raw "$repo" "$cap" HEAD) || true
+        fallback=$(_job_diff_untracked_fallback "$repo" "$((cap + 2))" "$uncommitted") || true
+        if [[ -n "$fallback" ]]; then
+            uncommitted="${uncommitted}${uncommitted:+
+}${fallback}"
+        fi
+        if [[ "$uncommitted" =~ [^[:space:]] ]]; then
+            text="${text}
+${uncommitted}"
+        fi
+    else
+        text=$(_review_diff_raw "$repo" "$cap" HEAD) || true
+        fallback=$(_job_diff_untracked_fallback "$repo" "$((cap + 2))" "$text") || true
+        if [[ -n "$fallback" ]]; then
+            text="${text}${text:+
+}${fallback}"
+        fi
+    fi
+    if (( $(_review_diff_byte_len "$text") > cap )); then
+        REVIEW_FULL_DIFF_CAPPED=1
+        text=$(printf '%s' "$text" | head -c "$cap" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
+    fi
+    total=$(_review_diff_char_len "$text")
+    REVIEW_FULL_DIFF_CHARS="$total"
+    REVIEW_FULL_DIFF_TEXT=$(printf '%s' "$text" | review_diff_cut_chars "$max")
+    if (( total > max || REVIEW_FULL_DIFF_CAPPED == 1 )); then
+        REVIEW_FULL_DIFF_TOP_FILES=$(printf '%s\n' "$text" | review_diff_top_files 10) || true
+        return 3
+    fi
+    return 0
+}
+
+# 리뷰 요청 본문(JSON)을 파일로 만든다. 200KB diff 는 jq --arg 단일 인자 상한(128KiB)을 넘어
+# "Argument list too long" 이 되므로 임시 파일에 써서 --rawfile 로 읽는다. 호출자는 curl 에
+# --data-binary @파일 로 보낸다. 반환 0=본문 생성됨.
+write_review_request_body() {
+    local body_file="$1" rid="$2" jid="$3" proj="$4" inst="$5" files="$6" diff_text="$7" prefix="${8:-}"
+    local diff_file="${body_file}.diff"
+    rm -f "$body_file" "$diff_file"
+    if [[ -n "$prefix" ]]; then
+        printf '%s\n%s' "$prefix" "$diff_text" > "$diff_file" || { rm -f "$diff_file"; return 1; }
+    else
+        printf '%s' "$diff_text" > "$diff_file" || { rm -f "$diff_file"; return 1; }
+    fi
+    if ! jq -n \
+        --arg rid "$rid" \
+        --arg jid "$jid" \
+        --arg proj "$proj" \
+        --rawfile diff "$diff_file" \
+        --arg inst "$inst" \
+        --arg files "$files" \
+        '{request_id: $rid, job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}' \
+        > "$body_file" 2>/dev/null; then
+        rm -f "$body_file" "$diff_file"
+        return 1
+    fi
+    rm -f "$diff_file"
+    return 0
+}
+
 # git_diff 텍스트에서 변경 파일 목록(쉼표 구분)을 뽑는다. diff 헤더 외에
 # 본문이 생략된 파일(# [stat-only])과 상한으로 잘린 파일(# [TRUNCATED] 목록)도 넣는다.
 job_diff_changed_files() {
@@ -7187,10 +7336,40 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     # 파일로 남긴다.
     # 리뷰어에게 "잘렸다"는 사실을 알리는 앞머리 — 캡처와 같은 워크트리 상태에서(검수 전
     # 커밋·.runner_full_diff.patch 생성 이전) 계산한다. DB git_diff 에는 섞지 않는다.
+    # AADS-RUNNER-REVIEW-FULL-DIFF: 리뷰 입력은 DB 저장용 git_diff 가 아니라 같은 상태에서 따로 만든
+    # 리뷰용 전체 diff(상한 RUNNER_REVIEW_DIFF_MAX_CHARS)다. 상한을 넘으면 리뷰 LLM 을 부르지 않고
+    # 아래 리뷰 단계에서 review_diff_too_large 로 종결한다. 그래서 리뷰가 진행될 때 diff 는 잘리지
+    # 않았고 절단 고지(앞머리)도 붙지 않는다.
     local review_diff_prefix=""
-    review_diff_prefix=$(build_review_diff_prefix "$workdir" "$pre_exec_sha" "$git_diff") || review_diff_prefix=""
-    if [[ -n "$review_diff_prefix" ]]; then
-        log "  REVIEW_DIFF_TRUNCATED_NOTICE job=$job_id — 리뷰 입력에 절단 고지 + DIFFSTAT 동봉"
+    local review_full_diff=""
+    local review_diff_too_large=0
+    local review_full_diff_chars=0
+    local review_full_diff_top_files=""
+    local review_full_diff_capped=0
+    local review_diff_limit=""
+    local _review_diff_rc=0
+    review_diff_limit=$(review_diff_max_chars)
+    if capture_review_full_diff "$workdir" "$pre_exec_sha"; then
+        _review_diff_rc=0
+    else
+        _review_diff_rc=$?
+    fi
+    review_full_diff_chars="$REVIEW_FULL_DIFF_CHARS"
+    review_full_diff_capped="$REVIEW_FULL_DIFF_CAPPED"
+    if [[ "$_review_diff_rc" -eq 3 ]]; then
+        review_diff_too_large=1
+        review_full_diff_top_files="$REVIEW_FULL_DIFF_TOP_FILES"
+        log "  REVIEW_DIFF_TOO_LARGE job=$job_id chars=${review_full_diff_chars} limit=${review_diff_limit} — 리뷰 LLM 호출 없이 종결 예정"
+    else
+        review_full_diff="$REVIEW_FULL_DIFF_TEXT"
+        if [[ ! "$review_full_diff" =~ [^[:space:]] ]]; then
+            log "  REVIEW_FULL_DIFF_EMPTY job=$job_id — 리뷰용 diff 생성 실패, DB git_diff 로 대체"
+            review_full_diff="$git_diff"
+        fi
+        review_diff_prefix=$(build_review_diff_prefix "$workdir" "$pre_exec_sha" "$review_full_diff") || review_diff_prefix=""
+        if [[ -n "$review_diff_prefix" ]]; then
+            log "  REVIEW_DIFF_TRUNCATED_NOTICE job=$job_id — 리뷰 입력에 절단 고지 + DIFFSTAT 동봉"
+        fi
     fi
     _persist_full_diff_if_truncated "$job_id" "$worktree_dir" "$pre_exec_sha" "$_current_head" "$git_diff"
 
@@ -7226,7 +7405,13 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     local review_needs_retry="false"
     local review_issues=""
     if [[ -n "$git_diff" && ${#git_diff} -gt 10 ]]; then
-        if looks_like_git_diff "$git_diff"; then
+        if [[ "$review_diff_too_large" == "1" ]]; then
+            review_verdict="FLAG"
+            review_score="0.0"
+            review_flag_category="REVIEW_DIFF_TOO_LARGE"
+            review_needs_retry="false"
+            log "  AI_REVIEW_SKIPPED_DIFF_TOO_LARGE job=$job_id chars=${review_full_diff_chars} limit=${review_diff_limit}"
+        elif looks_like_git_diff "$git_diff"; then
             log "  AI_REVIEW job=$job_id"
             db_update "UPDATE pipeline_jobs SET phase='ai_review', runner_pid=${BASHPID}, updated_at=NOW() WHERE job_id='${job_id}' AND status='running';"
             if [[ "$(get_job_status "$job_id")" != "running" ]]; then
@@ -7239,22 +7424,6 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             local changed_files=""
             changed_files=$(job_diff_changed_files "$git_diff")
 
-            # 리뷰 입력 = (잘렸을 때만) 절단 고지 앞머리 + git_diff. git_diff 자체는 그대로 저장된다.
-            local review_diff="$git_diff"
-            if [[ -n "$review_diff_prefix" ]]; then
-                review_diff="${review_diff_prefix}"$'\n'"${git_diff}"
-            fi
-
-            # JSON body 생성 (jq 사용)
-            local review_body=""
-            review_body=$(jq -n \
-                --arg jid "$job_id" \
-                --arg proj "$project" \
-                --arg diff "$review_diff" \
-                --arg inst "$instruction" \
-                --arg files "$changed_files" \
-                '{job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
-
             # 최초 검수도 스위퍼와 같은 durable async 경로를 쓴다. 요청 ID를
             # pipeline_jobs에 먼저 남기므로 슬롯 전환/응답 유실 뒤에도 같은 DB
             # 요청을 다시 폴링하거나 재개할 수 있다. 후보별 timeout과 전체 후보
@@ -7266,19 +7435,19 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             review_request_id=$(cat /proc/sys/kernel/random/uuid)
             db_update "UPDATE pipeline_jobs SET review_request_id='${review_request_id}'::uuid, updated_at=NOW()
                        WHERE job_id='${job_id}' AND status='running';"
-            review_body=$(jq -n \
-                --arg rid "$review_request_id" \
-                --arg jid "$job_id" \
-                --arg proj "$project" \
-                --arg diff "$review_diff" \
-                --arg inst "$instruction" \
-                --arg files "$changed_files" \
-                '{request_id: $rid, job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
+            # 본문은 파일로 만들어 --data-binary @파일 로 보낸다 — 200KB diff 를 jq --arg/curl -d 인자로
+            # 넘기면 MAX_ARG_STRLEN(128KiB) 때문에 "Argument list too long" 이 된다.
+            local review_body_file="$ARTIFACT_DIR/${job_id}.review_body.json"
+            if ! write_review_request_body "$review_body_file" "$review_request_id" "$job_id" "$project" \
+                    "$instruction" "$changed_files" "$review_full_diff" "$review_diff_prefix"; then
+                log "  AI_REVIEW_BODY_BUILD_FAIL job=$job_id chars=${review_full_diff_chars} — 요청 본문 생성 실패, 전송 생략"
+                review_attempt=$review_max_attempts
+            fi
             while [[ $review_attempt -lt $review_max_attempts ]]; do
                 review_attempt=$((review_attempt + 1))
                 review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests" \
                     -H "Content-Type: application/json" \
-                    -d "$review_body" \
+                    --data-binary @"$review_body_file" \
                     --connect-timeout 10 --max-time 20 2>/dev/null) || true
                 review_http_code=$(echo "$review_response" | tail -1)
                 review_response=$(echo "$review_response" | sed '$d')
@@ -7292,11 +7461,14 @@ $(printf '%s\n' "$_dirty_status" | head -20)
                 record_runner_event "$job_id" "ai_review_transport_fail" "running" "ai_review" "$job_model" "" "$job_size" "" "{\"attempt\":${review_attempt},\"max_attempts\":${review_max_attempts},\"http\":\"${review_http_code:-000}\"}"
                 if [[ "$(get_job_status "$job_id")" != "running" ]]; then
                     log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id attempt=${review_attempt}"
+                    rm -f "$review_body_file" "${review_body_file}.diff" 2>/dev/null || true
                     _release_work_lock "$project" "$job_id" "$parallel_group"
                     return 1
                 fi
                 sleep $((review_attempt * 2))
             done
+
+            rm -f "$review_body_file" "${review_body_file}.diff" 2>/dev/null || true
 
             local review_request_status=""
             if [[ "$review_http_code" == "202" ]]; then
@@ -7383,6 +7555,11 @@ $(printf '%s\n' "$_dirty_status" | head -20)
         fi
         [[ -n "$review_flag_category" ]] && review_error_detail="${review_error_detail} category=${review_flag_category}"
         [[ "$review_needs_retry" == "true" ]] && review_error_detail="${review_error_detail} needs_retry=true"
+        if [[ "$review_diff_too_large" == "1" ]]; then
+            # pipeline_auto_rework 가 이 접두로 자동 재작업을 막는다. 문구를 바꾸면 그쪽도 같이 고쳐라.
+            review_error_detail="review_diff_too_large: chars=${review_full_diff_chars} limit=${review_diff_limit}"
+            [[ "$review_full_diff_capped" == "1" ]] && review_error_detail="${review_error_detail} measure_capped=true"
+        fi
         local review_hold_status="error"
         local review_hold_phase="review_failed"
         local review_hold_note="승인 대기 차단"
@@ -7395,6 +7572,9 @@ $(printf '%s\n' "$_dirty_status" | head -20)
         local _ai_reviewer_note="${review_hold_note} — ${review_error_detail}"
         if [[ -n "$review_issues" ]]; then
             _ai_reviewer_note="${_ai_reviewer_note}"$'\n'"[AI Reviewer] issues: ${review_issues:0:1500}"
+        fi
+        if [[ "$review_diff_too_large" == "1" ]]; then
+            _ai_reviewer_note="${_ai_reviewer_note}"$'\n'"파일별 diff 문자 수 상위$([[ "$review_full_diff_capped" == "1" ]] && printf ' (측정 상한까지만 집계한 하한값)'):"$'\n'"${review_full_diff_top_files}"
         fi
         db_update "UPDATE pipeline_jobs SET status='${review_hold_status}', phase='${review_hold_phase}',
                    error_detail=$(sql_escape "$review_error_detail"),
@@ -7418,7 +7598,12 @@ $(printf '%s\n' "$_dirty_status" | head -20)
                        completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
         fi
         record_runner_event "$job_id" "job_terminal" "$review_hold_status" "$review_hold_phase" "$job_model" "" "$job_size" "" "{\"error_detail\":\"${review_hold_phase}\",\"verdict\":\"${review_verdict}\",\"flag_category\":\"${review_flag_category}\",\"policy\":\"FLAG+hold\"}"
-        if [[ "$review_infra_failure" == "true" ]]; then
+        if [[ "$review_diff_too_large" == "1" ]]; then
+            post_to_chat "$session_id" "🔴 [Pipeline Runner] 리뷰 입력 상한 초과로 AI 리뷰 없이 종결: $job_id — ${review_error_detail}
+파일별 diff 문자 수 상위:
+${review_full_diff_top_files}
+작업을 상한 이하로 나눠 다시 제출해야 합니다. (산출물은 보존됨: ${worktree_dir})"
+        elif [[ "$review_infra_failure" == "true" ]]; then
             post_to_chat "$session_id" "🟠 [Pipeline Runner] AI 리뷰 인프라 장애로 승인 보류: $job_id — ${review_error_detail}
 코드 반려가 아니라 리뷰 시스템 장애입니다. 지금은 CEO 승인 단계가 아니므로 승인 버튼이 표시되지 않습니다. 자동 재검수 통과 후 승인 대기로 전환되면 버튼이 생성됩니다. 작업 산출물(worktree)은 재검수를 위해 보존했습니다: ${worktree_dir}"
         else
@@ -7865,6 +8050,7 @@ ${_uncommitted}"
 _cleanup_artifacts() {
     local job_id="$1"
     rm -f "$ARTIFACT_DIR/${job_id}.out" "$ARTIFACT_DIR/${job_id}.err" 2>/dev/null || true
+    rm -f "$ARTIFACT_DIR/${job_id}.review_body.json" "$ARTIFACT_DIR/${job_id}.review_body.json.diff" 2>/dev/null || true
     rm -f "/tmp/runner_alert_${job_id}_60" "/tmp/runner_alert_${job_id}_120" 2>/dev/null || true
     # FIX-2: _notify_ai 중복 카운트 파일 정리
     rm -f "/tmp/pipeline-notify-count-${job_id}" 2>/dev/null || true
