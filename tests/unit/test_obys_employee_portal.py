@@ -83,6 +83,15 @@ class TestStaticWiring:
         widths = {int(w) for w in re.findall(r"@media[^{]*?\(max-width:\s*(\d+)px\)", PORTAL_CSS)}
         assert widths == {760}
 
+    def test_legacy_views_do_not_reserve_full_screen_height(self):
+        # 급여명세·근태·입사서류(ep-legacy)는 포털 머리줄 아래에 기존 화면을 쓴다. .ep-root 의 100vh 가 남으면 첫 화면이 통째로 빈칸이 된다.
+        body = re.sub(r"/\*.*?\*/", "", PORTAL_CSS, flags=re.S)
+        rule = re.search(r"body\.ep-on\.ep-legacy \.ep-root\s*\{([^}]*)\}", body)
+        assert rule, "legacy 화면용 .ep-root 규칙이 없다"
+        assert "min-height: 0" in rule.group(1)
+        assert "position: sticky" in rule.group(1)
+        assert re.search(r"body\.employee-preview\.ep-on\.ep-legacy \.ep-root\s*\{[^}]*top: 44px", body)
+
     def test_portal_uses_only_existing_api_paths(self):
         assert "fetch(" not in PORTAL_JS
         paths = set(re.findall(r'financeApi\(\s*[`"]([^`"]+)[`"]', PORTAL_JS))
