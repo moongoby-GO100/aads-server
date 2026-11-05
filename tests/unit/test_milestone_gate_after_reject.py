@@ -304,6 +304,7 @@ def test_migration_sets_local_lock_timeout_and_has_no_index_or_reset():
     sql = _migration_sql()
     code = _code_only(sql).upper()
     assert "SET LOCAL lock_timeout = '5s';" in sql
+    assert "SET LOCAL statement_timeout = '60s';" in sql
     assert "RESET " not in code and "CREATE INDEX" not in code
 
 

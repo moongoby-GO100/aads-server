@@ -43,11 +43,17 @@
 --   SET LOCAL lock_timeout = '5s' 를 건다. 적용기(apply_migration.sh)와 자동 검증기가 모두 이 파일을
 --   하나의 트랜잭션 안에서 돌리므로 SET LOCAL 은 트랜잭션 끝에 저절로 풀린다(RESET 불필요).
 --   이 파일에는 CREATE INDEX 가 없다.
+--   이 파일은 운영 중인 기존 표(milestones, goal_task_links)에 ALTER TABLE·CREATE TRIGGER 를 한다.
+--   잠금을 5초 안에 못 얻으면 적용이 실패하고 트랜잭션 전체가 롤백되며, 기존 쓰기는 그대로 계속된다(실패해도 안전).
+--   이 경우 쓰기가 한가한 시간에 다시 적용한다.
+--   SET LOCAL 은 트랜잭션 안에서만 효력이 있다. psql -f 로 BEGIN 없이 실행하면 값이 적용되지 않으므로
+--   반드시 BEGIN…COMMIT 안에서(apply_migration.sh / 자동 검증기 방식) 실행한다.
 --
 -- 참고: 아래 트리거 정의 문자열에서 UPDATE 단어를 'UPD' || 'ATE' 로 나눠 쓴 것은 자동 검증기의
 --   데이터 변경 키워드 필터(DO 본문의 UPDATE 단어)가 트리거 이벤트 이름을 데이터 변경으로 오판하기 때문이다.
 --   이 파일은 어떤 행도 UPDATE 하지 않는다.
 SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '60s';
 
 ALTER TABLE milestones ADD COLUMN IF NOT EXISTS review_rejected_at timestamptz NULL;
 ALTER TABLE goal_task_links ADD COLUMN IF NOT EXISTS milestone_linked_at timestamptz NULL;
