@@ -23,13 +23,14 @@ CLAUDE_SLOTS = tuple(SLOT_KEY_NAMES)
 # 로그인 성공 뒤 "이 계정이 맞는가" 를 엄격히 확인하는 슬롯. 신원이 다르면 활성화하지 않는다.
 SLOT_EXPECTED_ACCOUNTS: Dict[str, str] = {
     "4": "thelylon14@gmail.com",
-    "5": "obys.aads@gmail.com",
 }
 STRICT_LOGIN_SLOTS = frozenset(SLOT_EXPECTED_ACCOUNTS)
 
 # DB 행이 로그인 전에는 없을 수 있는 슬롯(키퍼가 로그인 검증 뒤 비활성 행으로 만든다).
 # 라벨은 _binding_account_mismatch 가 이메일 전체로 비교하므로 계정 이메일이어야 한다.
-SLOT_REGISTER_LABELS: Dict[str, str] = {"5": SLOT_EXPECTED_ACCOUNTS["5"]}
+# 슬롯 5 는 비활성이다(CEO 2026-11-05): obys.aads@gmail.com 이 slot2 로 로그인돼 같은 계정을 두 칸에 넣지 않는다.
+# 번호·키 이름은 남겨 두어 다시 쓸 때 이 dict 에 "5": "<계정 이메일>" 한 줄만 넣으면 된다.
+SLOT_REGISTER_LABELS: Dict[str, str] = {}
 
 KEY_NAME_TO_SLOT: Dict[str, str] = {name: slot for slot, name in SLOT_KEY_NAMES.items()}
 

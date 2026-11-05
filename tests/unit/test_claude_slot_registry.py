@@ -66,7 +66,23 @@ def test_resolve_target_accepts_registered_slot_and_rejects_unknown(tmp_path, mo
             account_login.resolve_target(bad)
 
 
-def test_bindings_list_slot5_before_its_home_exists(tmp_path, monkeypatch):
+@pytest.fixture
+def slot5_registered(monkeypatch):
+    """슬롯 5 는 비활성(CEO 2026-11-05)이지만, 계정 고정 슬롯의 등록·신원 검증 경로는 그대로 검증한다."""
+    expected = {"4": "thelylon14@gmail.com", "5": "obys.aads@gmail.com"}
+    monkeypatch.setattr(account_login, "SLOT_EXPECTED_ACCOUNTS", expected)
+    monkeypatch.setattr(account_login, "SLOT_REGISTER_LABELS", {"5": expected["5"]})
+    monkeypatch.setattr(llm_keys, "SLOT_EXPECTED_ACCOUNTS", expected)
+    monkeypatch.setattr(llm_keys, "STRICT_LOGIN_SLOTS", frozenset(expected))
+
+
+def test_disabled_slot5_is_not_listed_until_its_home_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(account_login, "CLAUDE_SLOT_ROOT", tmp_path)
+    monkeypatch.setattr(account_login, "KEEPER_LOG", tmp_path / "none.log")
+    assert all(b["target"] != "claude:5" for b in account_login.bindings())
+
+
+def test_bindings_list_slot5_before_its_home_exists(tmp_path, monkeypatch, slot5_registered):
     monkeypatch.setattr(account_login, "CLAUDE_SLOT_ROOT", tmp_path)
     monkeypatch.setattr(account_login, "KEEPER_LOG", tmp_path / "none.log")
     row = next(b for b in account_login.bindings() if b["target"] == "claude:5")
@@ -93,7 +109,7 @@ def _sess(tmp_path, slot, email):
     return {"target": f"claude:{slot}", "plan": {"home": home}}
 
 
-def test_host_identity_gate_for_slot5(tmp_path):
+def test_host_identity_gate_for_slot5(tmp_path, slot5_registered):
     assert account_login._claude_identity_ok(_sess(tmp_path / "a", "5", "OBYS.aads@gmail.com")) is True
     assert account_login._claude_identity_ok(_sess(tmp_path / "b", "5", "other@example.com")) is False
     assert account_login._claude_identity_ok(_sess(tmp_path / "c", "5", None)) is False
@@ -183,7 +199,7 @@ def _login(fingerprint=None):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["identity", "fingerprint", "expiry", "missing_row"])
-async def test_slot5_failed_proof_never_activates(monkeypatch, failure):
+async def test_slot5_failed_proof_never_activates(monkeypatch, slot5_registered, failure):
     conn = _Conn(None if failure == "missing_row" else _row(
         timedelta(minutes=2) if failure == "expiry" else timedelta(hours=1)))
     _wire(monkeypatch, conn, "wrong@example.com" if failure == "identity" else "obys.aads@gmail.com")
@@ -194,7 +210,7 @@ async def test_slot5_failed_proof_never_activates(monkeypatch, failure):
 
 
 @pytest.mark.asyncio
-async def test_slot5_verified_proof_activates_only_slot5_row(monkeypatch):
+async def test_slot5_verified_proof_activates_only_slot5_row(monkeypatch, slot5_registered):
     conn = _Conn(_row())
     _wire(monkeypatch, conn, "obys.aads@gmail.com")
     assert await llm_keys._reconcile_successful_account_login("login-id", _login()) is True
@@ -238,6 +254,7 @@ def test_keeper_creates_missing_row_only_for_explicit_registered_slot():
     assert 'os.getenv("AADS_KEEPER_CREATE_ROW") == "1"' in keeper
     assert '[ -n "$LOGIN_SYNC" ] && [ "$REQUESTED_SLOT" = "$slot" ] && create_row=1' in keeper
     assert "FALSE, NOW()" in keeper  # 행은 비활성으로 만든다
-    assert claude_slots.SLOT_REGISTER_LABELS == {"5": "obys.aads@gmail.com"}
-    assert claude_slots.SLOT_EXPECTED_ACCOUNTS["5"] == "obys.aads@gmail.com"
+    # 슬롯 5 비활성(CEO 2026-11-05): obys 는 slot2 로 옮겨 갔으므로 슬롯 5 는 등록·계정 고정 대상이 아니다.
+    assert claude_slots.SLOT_REGISTER_LABELS == {}
+    assert "5" not in claude_slots.SLOT_EXPECTED_ACCOUNTS
     assert "5" not in LAST_RESORT_SLOTS

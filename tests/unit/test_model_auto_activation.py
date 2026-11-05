@@ -899,3 +899,89 @@ async def test_sync_twice_with_auto_activate_off_keeps_active_state_and_probe_hi
         assert saved["is_active"] is True and saved["is_executable"] is True
         assert saved["activation_source"] == "db"
         assert saved["metadata"]["activation_probe"] == _OK_PROBE
+
+
+# ── 검수 지적(runner-b6dd5254) 회귀: 자동 활성화 끔은 codex 신규 활성화도 막는다 ─────────────
+
+@pytest.mark.asyncio
+async def test_codex_verified_new_row_stays_off_when_auto_activation_disabled():
+    new = _discovered("codex", "gpt-9-new", key_providers=[])
+    kept = _discovered("codex", "gpt-9-kept", key_providers=[])
+    prior = _prior("gpt-9-kept", "codex", is_active=True, is_executable=True, activation_source="db",
+                   verification_status="verified")
+
+    summary = await model_registry.apply_activation_probes(
+        [new, kept], prior, now=NOW, prober=_prober({}),
+        verified_codex_ids=["gpt-9-new", "gpt-9-kept"], activation_enabled=False,
+    )
+
+    assert new["is_active"] is False
+    assert new["metadata"]["activation_review_reason"] == "auto_activation_disabled"
+    assert kept["is_active"] is True
+    assert summary["activated"] == []
+    assert summary["carried_active"] == ["codex:gpt-9-kept"]
+
+
+# ── 검수 지적(runner-b6dd5254) 회귀: 수동 활성 Gemini 별칭도 Google 정책을 넘지 못한다 ────────
+
+class _ManualSyncConn(_SyncConn):
+    async def fetch(self, query, *args):
+        if "activation_source = 'manual'" in query:
+            return [
+                {"provider": p, "model_id": m}
+                for (p, m), v in self.models.items()
+                if v["activation_source"] == "manual"
+                and (v["is_active"] or v["metadata"].get("deactivation_source") == "policy_manual")
+            ]
+        return await super().fetch(query, *args)
+
+
+async def _sync_manual_alias(monkeypatch, conn, row_template, google_enabled):
+    class _Acq:
+        async def __aenter__(self_inner):
+            return conn
+
+        async def __aexit__(self_inner, *exc):
+            return False
+
+    class _P:
+        def acquire(self_inner):
+            return _Acq()
+
+    async def fake_discover(key_rows, **kwargs):
+        run = {"provider": "litellm", "status": "ok", "state": "ok", "count": 1, "model_source": "discovery",
+               "last_success_at": NOW.isoformat()}
+        return [dict(row_template, metadata=dict(row_template["metadata"]))], [run]
+
+    monkeypatch.setattr(model_registry, "get_pool", lambda: _P())
+    monkeypatch.setattr(model_registry, "_fetch_key_rows", AsyncMock(return_value=_key_rows("litellm")))
+    monkeypatch.setattr(model_registry, "append_key_audit_log", AsyncMock())
+    monkeypatch.setattr(model_registry, "discover_provider_model_rows", fake_discover)
+    monkeypatch.setattr(model_registry, "_google_commercial_routes_enabled", AsyncMock(return_value=google_enabled))
+    monkeypatch.setattr("app.services.ohvis_alert.notify", AsyncMock(return_value=True))
+    result = await model_registry.sync_model_registry(triggered_by="test", reason="unit")
+    assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_manual_active_gemini_alias_is_blocked_by_google_policy_and_restored_when_enabled(monkeypatch):
+    conn = _ManualSyncConn()
+    key = ("litellm", "alias-g-manual")
+    row_template = _discovered("litellm", "alias-g-manual", raw={"litellm_params": {"model": "gemini/gemini-3-flash"}})
+    conn.models[key] = {
+        "is_active": True, "activation_source": "manual", "metadata": {},
+        "discovery_source": "litellm_api", "verification_status": "verified", "is_executable": True,
+    }
+
+    await _sync_manual_alias(monkeypatch, conn, row_template, google_enabled=False)
+    saved = conn.models[key]
+    assert saved["is_active"] is False and saved["is_executable"] is False
+    assert saved["activation_source"] == "manual"
+    assert saved["metadata"]["deactivation_source"] == "policy_manual"
+    assert saved["metadata"]["activation_review_reason"] == "google_routes_disabled"
+
+    await _sync_manual_alias(monkeypatch, conn, row_template, google_enabled=True)
+    saved = conn.models[key]
+    assert saved["is_active"] is True and saved["is_executable"] is True
+    assert saved["activation_source"] == "manual"
+    assert saved["metadata"].get("deactivation_source") is None

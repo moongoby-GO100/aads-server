@@ -1896,6 +1896,22 @@ def _mark_manual_disabled(row: dict[str, Any], reason: str) -> None:
     )
 
 
+def _mark_manual_policy_blocked(row: dict[str, Any]) -> None:
+    """관리자가 켠 행이라도 Google 정책이 꺼져 있으면 실행하지 않는다.
+
+    activation_source='manual' 은 남겨 둔다. 정책이 다시 켜지면 sync 가 관리자 활성 상태로 되돌린다
+    (deactivation_source='policy_manual' 이 그 표식이다 — 관리자 비활성화와 구분한다).
+    """
+    meta = _row_meta(row)
+    meta["requires_admin_review"] = True
+    meta["activation_review_reason"] = "google_routes_disabled"
+    meta["deactivation_source"] = "policy_manual"
+    row.update(
+        is_active=False, is_selectable=False, is_executable=False, activation_source="manual",
+        verification_status="review_required",
+    )
+
+
 def _is_manual_disabled(prior: Mapping[str, Any]) -> bool:
     return str(prior.get("activation_source") or "") == "manual" and not prior.get("is_active")
 
@@ -1970,11 +1986,18 @@ async def apply_activation_probes(
                 _mark_review_required(row, "google_routes_disabled")
                 continue
         if provider == "codex":
-            if model_id in codex_verified:
+            if model_id not in codex_verified:
+                _mark_review_required(row, "awaiting_host_cli_probe")
+            elif activation_enabled:
                 _mark_activated(row, verified_at=now)
                 summary["activated"].append(label)
+            elif prior and prior.get("is_active") and prior.get("is_executable"):
+                # 자동 활성화를 꺼도 이미 켜진 행은 그대로 둔다 — 새로 켜는 것만 막는다.
+                _mark_activated(row, verification_status=str(prior.get("verification_status") or "verified"))
+                row["activation_source"] = str(prior.get("activation_source") or "db")
+                summary["carried_active"].append(label)
             else:
-                _mark_review_required(row, "awaiting_host_cli_probe")
+                _mark_review_required(row, "auto_activation_disabled")
             continue
         if not meta.get("activation_candidate"):
             _mark_review_required(row, "not_text_model" if meta.get("runtime_executable") else "no_runtime_key")
@@ -2907,7 +2930,8 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
     async with pool.acquire() as conn:
         key_rows = await _fetch_key_rows(conn)
         manual_rows = await conn.fetch(
-            "SELECT provider, model_id FROM llm_models WHERE activation_source = 'manual' AND is_active = TRUE"
+            "SELECT provider, model_id FROM llm_models WHERE activation_source = 'manual' "
+            "AND (is_active = TRUE OR metadata->>'deactivation_source' = 'policy_manual')"
         )
         # sync 이전에 이미 있던 행 — 이번 sync 에서 "새로 발견" 된 모델을 가려내는 기준.
         existing_keys = {
@@ -2962,13 +2986,35 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
             and row.get("is_active")
             and str(row.get("discovery_source") or "") not in _NON_DISCOVERY_SOURCES
         )
+    # 관리자 활성 복원도 Google 정책 검사를 먼저 거친다 — 수동 활성 Gemini 별칭이 정책을 우회하지 않게 한다.
+    manual_google_enabled: bool | None = None
     for row in model_rows:
-        if (row["provider"], row["model_id"]) in manual_active_keys:
-            row["is_active"] = True
-            row["is_selectable"] = True
-            row["is_executable"] = True
-            row["activation_source"] = "manual"
-    cli_model_autoreg.apply_verified_codex(model_rows, verified_codex_ids)
+        if (row["provider"], row["model_id"]) not in manual_active_keys:
+            continue
+        if _is_google_route(row):
+            if manual_google_enabled is None:
+                manual_google_enabled = await _google_commercial_routes_enabled()
+            if not manual_google_enabled:
+                _mark_manual_policy_blocked(row)
+                continue
+        meta = _row_meta(row)
+        if meta.get("deactivation_source") == "policy_manual":
+            meta["deactivation_source"] = None  # UPSERT 가 metadata 를 병합해도 표식이 남지 않게 null 로 덮는다.
+            meta.pop("activation_review_reason", None)
+            meta["requires_admin_review"] = False
+            row["verification_status"] = "verified"
+        row["is_active"] = True
+        row["is_selectable"] = True
+        row["is_executable"] = True
+        row["activation_source"] = "manual"
+    # 자동 활성화가 꺼져 보류된 codex 행은 실행 가능 표시도 올리지 않는다.
+    held_codex_ids = {
+        str(row["model_id"])
+        for row in model_rows
+        if row["provider"] == "codex"
+        and _row_meta(row).get("activation_review_reason") == "auto_activation_disabled"
+    }
+    cli_model_autoreg.apply_verified_codex(model_rows, set(verified_codex_ids) - held_codex_ids)
     # 캐시를 못 읽은 회차에는 codex_cli_cache 행을 은퇴시키지 않는다 — probe 가 세운 is_executable 을 지킨다.
     preserve_codex_cli_rows = not any(
         run.get("provider") == "codex" and run.get("status") == "ok" for run in discovery_runs
