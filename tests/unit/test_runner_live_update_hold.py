@@ -111,7 +111,9 @@ def test_untrusted_companion_is_never_executed(host, change):
 
 
 def test_legacy_without_protocol_metadata_defers(host):
-    assert hashlib.sha256(LIBRARY.read_bytes()).hexdigest() == PINNED
+    pins = SCRIPT.read_text().split("RUNNER_LIVE_COMPANION_PINS='", 1)[1].split("'", 1)[0].split()
+    assert PINNED in pins
+    assert hashlib.sha256(LIBRARY.read_bytes()).hexdigest() in pins
     assert_deferred(gate(host), 'BOOTSTRAP_REQUIRED')
     assert not host.state.exists(), 'diagnostic must not initialize enrollment'
     assert not (host.path / 'systemctl-mutations').exists()

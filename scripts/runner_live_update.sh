@@ -28,7 +28,7 @@ RUNNER_LIVE_CONTROLLER_PATH="${BASH_SOURCE[0]}"
 # changes the companion must ship a controller whose list already contains the
 # new hash (old + new during the transition), or the swapped companion would be
 # untrusted by the very next run. See the design doc "companion 핀 갱신".
-RUNNER_LIVE_COMPANION_PINS='78e55d7ad9dc00395ae3689f9ba374a21d7060cd7e6453bd7e8e1be62c3108ee'
+RUNNER_LIVE_COMPANION_PINS='78e55d7ad9dc00395ae3689f9ba374a21d7060cd7e6453bd7e8e1be62c3108ee f5969a1302c472966e997ffb01ccb4b397d1b3c68e6202c0fa48bceb7473e04b'
 
 # Bounded waits (seconds). Plain assignments: the entrypoint reads no environment.
 RUNNER_LIVE_LEASE_WAIT=20

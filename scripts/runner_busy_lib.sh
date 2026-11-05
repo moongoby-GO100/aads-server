@@ -275,6 +275,24 @@ class Deferred(Exception):
     pass
 
 
+SYSTEM_CGROUP_ROOT = Path('/sys/fs/cgroup')
+
+
+def resolve_cgroup_root(base=SYSTEM_CGROUP_ROOT):
+    # cgroup v2 mounts the service tree at the root. cgroup v1/hybrid hosts keep
+    # the same relative paths under unified/ (the v2 view). A caller-injected
+    # root (fixtures) other than the real system root is used as given.
+    base = Path(base)
+    if (base / 'cgroup.controllers').is_file():
+        return base
+    unified = base / 'unified'
+    if (unified / 'cgroup.controllers').is_file() or unified.is_dir():
+        return unified
+    if base != SYSTEM_CGROUP_ROOT and base.is_dir():
+        return base
+    raise Deferred(f'cgroup root unresolved: no {base}/cgroup.controllers and no {unified}')
+
+
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -444,11 +462,14 @@ def inventory(root, service, quiescent=False, proc=Path('/proc'), cgroups=Path('
             if not group.startswith('/') or '..' in relative.parts:
                 raise Deferred('invalid cgroup')
             def collect(path):
-                members.update(int(item) for item in (path / 'cgroup.procs').read_text().split())
+                try:
+                    members.update(int(item) for item in (path / 'cgroup.procs').read_text().split())
+                except FileNotFoundError:
+                    raise Deferred(f'cgroup path missing: {path / "cgroup.procs"}') from None
                 for child in path.iterdir():
                     if child.is_dir():
                         collect(child)
-            collect(cgroups / relative)
+            collect(resolve_cgroup_root(cgroups) / relative)
         elif pid:
             raise Deferred('missing cgroup')
         if pid and pid not in members:
@@ -473,7 +494,7 @@ def inventory(root, service, quiescent=False, proc=Path('/proc'), cgroups=Path('
         # Kernel threads have no user cmdline/cwd.
         if not command or command == [b'']:
             continue
-        processes[pid] = (parent, command, cwd.removesuffix(' (deleted)'))
+        processes[pid] = (parent, command, cwd[:-len(' (deleted)')] if cwd.endswith(' (deleted)') else cwd)
     descendants = set(mains)
     while True:
         next_set = descendants | {p for p, row in processes.items() if row[0] in descendants}
@@ -555,7 +576,13 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as exc:
-        print('maintenance defer: ' + (str(exc) if isinstance(exc, Deferred) else type(exc).__name__), file=sys.stderr)
+        if isinstance(exc, Deferred):
+            reason = str(exc)
+        elif isinstance(exc, OSError) and exc.filename:
+            reason = f'{type(exc).__name__}: {exc.filename}'
+        else:
+            reason = type(exc).__name__
+        print('maintenance defer: ' + reason, file=sys.stderr)
         print('BOOTSTRAP_REQUIRED' if isinstance(exc, (FileNotFoundError, Deferred)) else 'UNKNOWN')
         sys.exit(3)
 PY_RUNNER_MAINTENANCE
