@@ -141,6 +141,8 @@ async def register_document(
                 "message": "등록 실패 — 같은 내용·버전이 이미 있으면 version 을 지정하거나 내용을 바꾸세요"
                 if exc.status_code == 409 else reason}
 
+    # 커밋 뒤 교차검토 예약(HTTP 등록과 같은 함수). 재검수 → 자동승인 판정으로 이어진다. 실패해도 등록 결과는 그대로.
+    await docs._schedule_cross_review_after_commit(tenant_id, project, result)
     out: dict[str, Any] = {
         "registered": True,
         "project": project,

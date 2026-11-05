@@ -654,8 +654,9 @@ def test_approve_revision_in_tx_is_idempotent(monkeypatch):
 
 
 def test_approval_endpoint_is_not_exposed_for_auto_approver():
-    paths = {getattr(route, 'path', '') for route in canonical.router.routes}
-    assert not any('auto' in p for p in paths)
+    # 승인 실행 경로는 노출하지 않는다. 읽기 전용 참고검토 조회(GET /auto-approval-digest)만 예외다.
+    routes = [route for route in canonical.router.routes if 'auto' in getattr(route, 'path', '')]
+    assert all(route.path.endswith('/auto-approval-digest') and route.methods == {'GET'} for route in routes)
     assert not hasattr(canonical, 'maybe_auto_approve')
 
 

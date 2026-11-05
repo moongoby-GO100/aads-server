@@ -68,9 +68,12 @@ async def register_spec_drift(instruction, job_id, project, details):
                     content=latest['content'] + f'\n\n## 구현 중 변경 ({job_id}, {date})\n\n' + delta,
                     source_task_id=job_id, change_summary=f'구현 문서 대조 {job_id}: {delta}'[:1000],
                     idempotency_key=idem, expected_generation=head['generation'])
-                await create_revision_in_tx(conn, tenant, 'system:spec-drift', project.upper(), body)
+                created = await create_revision_in_tx(conn, tenant, 'system:spec-drift', project.upper(), body)
                 revision = await conn.fetchval('SELECT revision FROM project_document_revisions '
                                                'WHERE head_id=$1 AND idempotency_key=$2', head['id'], idem)
+            # 커밋 뒤 교차검토 예약 — 구현 중 바뀐 문서도 재검수·자동승인 판정을 거친다.
+            from app.api.canonical_documents import _schedule_cross_review_after_commit
+            await _schedule_cross_review_after_commit(str(tenant), project.upper(), created)
             results.append({'document_key': key, 'revision': revision})
         except Exception:
             logger.warning('spec_drift_failed_open job_id=%s key=%s', job_id, key, exc_info=True)

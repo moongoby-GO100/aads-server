@@ -78,11 +78,198 @@ async def fetch_review_queue(conn: Any, tenant_id: str | None, project_key: str 
     return items
 
 
-def format_digest(items: list[dict]) -> str:
+_MAX_HELD_CANDIDATES = 200
+_MAX_AUTO_ROWS = 200
+_AUTO_SQL = (
+    "SELECT h.tenant_id::text AS tenant_id, h.project_key, h.document_key, h.kind, h.generation, h.title AS head_title, "
+    "r.id AS revision_id, r.title, r.version, r.doc_tier, r.content, e.created_at AS approved_at, "
+    "(h.approved_revision_id IS NOT DISTINCT FROM e.revision_id) AS currently_approved, "
+    "COALESCE((SELECT jsonb_agg(jsonb_build_object('reviewer_model', rv.reviewer_model, "
+    "'reviewer_provider', rv.reviewer_provider, 'verdict', rv.verdict, 'reason', rv.reason, "
+    "'cross_company', rv.cross_company, 'created_at', rv.created_at) ORDER BY rv.id) "
+    "FROM project_document_reviews rv WHERE rv.revision_id=r.id), '[]'::jsonb) AS review_rows "
+    "FROM project_document_events e "
+    "JOIN project_document_heads h ON h.id=e.head_id "
+    "JOIN project_document_revisions r ON r.id=e.revision_id "
+    "WHERE e.action='approved' AND e.actor_id=$3 AND e.created_at > now() - make_interval(hours => $4::int) "
+    "AND ($1::uuid IS NULL OR h.tenant_id=$1::uuid) AND ($2::text IS NULL OR h.project_key=$2) "
+    "ORDER BY e.created_at DESC, h.project_key, h.document_key LIMIT " + str(_MAX_AUTO_ROWS + 1)
+)
+# 최근 since_hours 안에 리뷰(교차검토 결과)가 기록된 승인 필요 판본: 최신 판본이고 아직 승인되지 않은 D2/D3.
+_HELD_SQL = (
+    "SELECT h.id AS head_id, h.tenant_id::text AS tenant_id, h.project_key, r.id AS revision_id "
+    "FROM project_document_heads h "
+    "JOIN project_document_revisions r ON r.id=h.latest_revision_id AND r.head_id=h.id "
+    "WHERE ($1::uuid IS NULL OR h.tenant_id=$1::uuid) AND ($2::text IS NULL OR h.project_key=$2) "
+    "AND r.doc_tier IN ('D2','D3') AND h.approved_revision_id IS DISTINCT FROM h.latest_revision_id "
+    # evaluate 의 skip 대상(목표 미연결·report·마이그레이션 승인 문서)은 상한을 차지하지 않게 미리 뺀다.
+    "AND EXISTS(SELECT 1 FROM project_document_goal_links gl WHERE gl.head_id=h.id) "
+    "AND lower(COALESCE(h.kind,''))<>'report' AND h.document_key NOT LIKE 'migration-apply-%' "
+    "AND EXISTS(SELECT 1 FROM project_document_reviews rv WHERE rv.revision_id=r.id "
+    "AND rv.created_at > now() - make_interval(hours => $3::int)) "
+    "ORDER BY h.updated_at DESC LIMIT " + str(_MAX_HELD_CANDIDATES + 1)
+)
+
+# 일일 요약 대상 테넌트: 최근 자동승인 이벤트 또는 최근 리뷰가 있는 테넌트. 테넌트마다 따로 조회한다.
+_AUTO_TENANTS_SQL = (
+    "SELECT DISTINCT h.tenant_id::text AS tenant_id FROM project_document_heads h "
+    "WHERE EXISTS(SELECT 1 FROM project_document_events e WHERE e.head_id=h.id AND e.action='approved' "
+    "AND e.actor_id=$1 AND e.created_at > now() - make_interval(hours => $2::int)) "
+    "OR EXISTS(SELECT 1 FROM project_document_reviews rv JOIN project_document_revisions r ON r.id=rv.revision_id "
+    "WHERE r.head_id=h.id AND rv.created_at > now() - make_interval(hours => $2::int))"
+)
+
+# 보류 사유 코드 -> 쉬운 한국어. 모르는 코드는 그대로 두지 않고 일반 문구로 바꾼다(내부 코드 노출 방지).
+_HOLD_REASON_KO = {
+    "checks_missing": "자동 점검 결과가 없습니다",
+    "checks_failed": "자동 점검에서 문제가 발견됐습니다",
+    "review_state_pending": "교차검토가 아직 끝나지 않았습니다",
+    "review_state_blocked": "교차검토가 막혀 있습니다",
+    "review_state_rejected": "검토자가 반려했습니다",
+    "reject_present": "검토자가 반려했습니다",
+    "legacy_review_no_score": "점수가 없는 예전 방식 검토입니다(재검토 필요)",
+    "review_json_invalid": "검토 결과 형식이 올바르지 않습니다",
+    "review_issues_truncated": "지적 사항이 너무 많아 일부가 잘렸습니다",
+    "non_finite_score": "검토 점수가 올바르지 않습니다",
+    "needs_second_company": "서로 다른 두 회사의 통과 검토가 더 필요합니다",
+    "blocker_present": "반드시 고쳐야 할 지적이 남아 있습니다",
+    "major_present": "중요한 지적이 남아 있습니다",
+    "score_below_min": "검토 점수가 기준에 못 미칩니다",
+    "high_risk_score_below_min": "고위험 문서라 더 높은 검토 점수가 필요합니다",
+    "criterion_below_min": "세부 평가 항목 중 기준 미달이 있습니다",
+    "high_risk_minor_exceeded": "고위험 문서인데 사소한 지적이 너무 많습니다",
+}
+
+
+def hold_reason_ko(code: str) -> str:
+    code = str(code)
+    key = code.split(":", 1)[0]
+    if key == "review_state_None":
+        return "교차검토 결과가 아직 없습니다"
+    if key.startswith("review_state_"):
+        return _HOLD_REASON_KO.get(key, "교차검토가 통과 상태가 아닙니다")
+    return _HOLD_REASON_KO.get(key, "자동승인 기준을 충족하지 못했습니다")
+
+
+def _review_fields(review_rows: Any) -> dict:
+    if isinstance(review_rows, str):
+        review_rows = json.loads(review_rows)
+    detail = build_review_detail(review_rows or [])
+    minors = []
+    for review in detail["reviews"]:
+        for issue in review["issues"]:
+            if issue.get("severity") == "minor":
+                text = issue.get("problem") or issue.get("criterion")
+                if isinstance(text, str) and text.strip():
+                    minors.append(text.strip()[:200])
+    return {"ceo_brief": detail["ceo_brief"], "score": detail["min_score"],
+            "minor_issues": list(dict.fromkeys(minors))[:3],
+            "reviewer_models": [r["model"] for r in detail["reviews"]]}
+
+
+def _auto_item(row: Any, *, risk: str, mode: str, reasons: list | None = None, score: Any = None,
+               review_rows: Any = None, head: Any = None) -> dict:
+    fields = _review_fields(review_rows)
+    if score is not None:
+        fields["score"] = score
+    return {"tenant_id": row.get("tenant_id"), "project_key": row["project_key"], "document_key": row["document_key"],
+            "title": row["title"], "kind": row["kind"], "doc_tier": row["doc_tier"],
+            "revision_id": str(row["revision_id"]), "version": row["version"],
+            "generation": row["generation"], "mode": mode, "risk": risk, **fields,
+            "hold_reasons": [hold_reason_ko(c) for c in (reasons or [])],
+            "hold_codes": list(reasons or [])}
+
+
+async def fetch_auto_approval_digest(conn: Any, tenant_id: str | None, project_key: str | None = None,
+                                     *, since_hours: int = 24) -> dict:
+    """자동승인 참고검토용 요약. DB 쓰기 없음(판정은 doc_auto_approval.assess, lock 없이 읽기만).
+
+    auto_approved: 자동승인 주체가 최근 since_hours 안에 승인해 현재도 승인 상태인 판본.
+    held: 최근 리뷰가 기록된 승인 필요 판본 중 판정이 hold 인 것(사유 포함).
+    would_approve: shadow 모드에서만 채워진다(켜면 승인될 판본).
+    본문(content)은 위험 분류에만 쓰고 결과에 담지 않는다.
+    """
+    from app.services import doc_auto_approval as auto
+
+    mode = auto.auto_approve_mode()
+    result: dict = {"mode": mode, "since_hours": since_hours, "auto_approved": [], "held": [], "would_approve": [],
+                    "truncated": {"auto_approved": False, "held": False}}
+    rows = list(await conn.fetch(_AUTO_SQL, tenant_id, project_key, auto.ACTOR, since_hours))
+    if len(rows) > _MAX_AUTO_ROWS:
+        rows, result["truncated"]["auto_approved"] = rows[:_MAX_AUTO_ROWS], True
+    for row in rows:
+        risk = auto.classify_risk({"project_key": row["project_key"], "document_key": row["document_key"]},
+                                  {"title": row["title"], "content": row["content"]})
+        item = _auto_item(row, risk=risk, mode=mode, review_rows=row.get("review_rows"))
+        item["approved_at"] = row["approved_at"].astimezone(KST).isoformat()
+        # 자동승인 뒤 사람이 취소했거나 새 판본이 승인된 이력도 보여 준다. 승인 취소 버튼은 currently_approved 일 때만.
+        item["currently_approved"] = bool(row.get("currently_approved", True))
+        result["auto_approved"].append(item)
+    # off 여도 보류 문서와 사유는 보여 준다(판정은 읽기 전용). would_approve 만 shadow 전용이다.
+    candidates = list(await conn.fetch(_HELD_SQL, tenant_id, project_key, since_hours))
+    if len(candidates) > _MAX_HELD_CANDIDATES:
+        candidates, result["truncated"]["held"] = candidates[:_MAX_HELD_CANDIDATES], True
+    for cand in candidates:
+        ctx = await auto.assess(conn, cand["tenant_id"], cand["project_key"], cand["head_id"], cand["revision_id"])
+        if not ctx:
+            continue
+        decision, head, revision = ctx["decision"], ctx["head"], ctx["revision"]
+        if decision.action == "hold" or (mode == "shadow" and decision.action == "approve"):
+            row = {"tenant_id": cand["tenant_id"], "project_key": head["project_key"], "document_key": head["document_key"],
+                   "title": revision["title"], "kind": head["kind"], "doc_tier": revision.get("doc_tier"),
+                   "revision_id": revision["id"], "version": revision.get("version"),
+                   "generation": head["generation"]}
+            rows_json = [dict(r) for r in ctx["rows"]]
+            item = _auto_item(row, risk=decision.risk, mode=mode, reasons=decision.reasons,
+                              score=decision.score, review_rows=rows_json)
+            (result["held"] if decision.action == "hold" else result["would_approve"]).append(item)
+    return result
+
+
+def auto_digest_is_empty(auto: dict | None) -> bool:
+    return not auto or not (auto.get("auto_approved") or auto.get("held") or auto.get("would_approve"))
+
+
+def _short(title: str) -> str:
+    return title if len(title) <= _TITLE_CHARS else title[:_TITLE_CHARS] + "…"
+
+
+def _auto_section(auto: dict | None, auto_limit: int) -> list[str]:
+    if auto_digest_is_empty(auto):
+        return []
+    lines: list[str] = []
+    approved, held, would = auto["auto_approved"], auto["held"], auto.get("would_approve") or []
+    if approved:
+        lines.append(f"\n✅ <b>자동승인 {len(approved)}건</b> (참고용 — 필요하면 수정 요청)")
+        for item in approved[:auto_limit]:
+            flag = " 🔴고위험" if item["risk"] == "high" else ""
+            score = f" · 점수 {item['score']:.2f}" if isinstance(item.get("score"), (int, float)) else ""
+            lines.append(f"  • {html.escape(_short(item['title']))} ({html.escape(item['project_key'])}/"
+                         f"{html.escape(item['document_key'])}){flag}{score}")
+        if len(approved) > auto_limit:
+            lines.append(f"  … 외 {len(approved) - auto_limit}건")
+    if held:
+        lines.append(f"\n⏸ <b>보류 {len(held)}건(수정 필요)</b>")
+        for item in held[:PER_PROJECT_LIMIT]:
+            reason = item["hold_reasons"][0] if item["hold_reasons"] else "자동승인 기준 미충족"
+            flag = " 🔴고위험" if item["risk"] == "high" else ""
+            lines.append(f"  • {html.escape(_short(item['title']))} ({html.escape(item['project_key'])}/"
+                         f"{html.escape(item['document_key'])}){flag} — {html.escape(reason)}")
+        if len(held) > PER_PROJECT_LIMIT:
+            lines.append(f"  … 외 {len(held) - PER_PROJECT_LIMIT}건")
+    if would:
+        lines.append(f"\n🧪 (시험 모드) 켜면 자동승인될 문서 {len(would)}건")
+    truncated = auto.get("truncated") or {}
+    if truncated.get("auto_approved") or truncated.get("held"):
+        lines.append("  ⚠️ 목록 상한을 넘어 일부만 표시했습니다 — 전체는 /docs 에서 확인")
+    return lines
+
+
+def format_digest(items: list[dict], auto: dict | None = None) -> str:
     by_project: dict[str, list[dict]] = defaultdict(list)
     for item in items:
         by_project[item["project_key"]].append(item)
-    lines = [f"📋 <b>검토 대기 정본 문서 {len(items)}건</b>"]
+    lines = [f"📋 <b>검토 대기 정본 문서 {len(items)}건</b>"] if items else ["📋 <b>정본 문서 자동승인 참고검토</b>"]
     for project in sorted(by_project):
         docs = sorted(by_project[project], key=lambda d: (-d["waiting_days"], d["document_key"]))
         lines.append(f"\n<b>{html.escape(project)}</b> ({len(docs)}건)")
@@ -91,14 +278,23 @@ def format_digest(items: list[dict]) -> str:
             lines.append(f"  • {html.escape(title)} ({html.escape(doc['document_key'])}) — {doc['waiting_days']}일 대기")
         if len(docs) > PER_PROJECT_LIMIT:
             lines.append(f"  … 외 {len(docs) - PER_PROJECT_LIMIT}건")
-    lines.append("\n대시보드 '문서 &gt; 정본 문서'에서 검토 후 승인해 주세요.")
-    text = "\n".join(lines)
+    footer = "\n대시보드 '문서 &gt; 정본 문서'(/docs)에서 검토 후 승인해 주세요." if items else "\n자세히: /docs"
+    # 3900자를 넘으면 자동승인 절부터 줄인다(검토 대기 절은 마지막까지 유지).
+    base_len = len("\n".join(lines + [footer]))
+    text = ""
+    for limit in range(len((auto or {}).get("auto_approved") or []), -1, -1):
+        section = _auto_section(auto, limit)
+        text = "\n".join(lines + section + [footer])
+        if len(text) <= MAX_MESSAGE_CHARS:
+            break
+    if not auto_digest_is_empty(auto) and base_len > MAX_MESSAGE_CHARS:
+        text = "\n".join(lines + [footer])
     if len(text) > MAX_MESSAGE_CHARS:
         text = text[:MAX_MESSAGE_CHARS].rsplit("\n", 1)[0] + "\n  … (이하 생략)"
     return text
 
 
-def format_push_payload(items: list[dict], digest_date: date) -> dict:
+def format_push_payload(items: list[dict], digest_date: date, auto: dict | None = None) -> dict:
     def plain(value: str) -> str:
         return " ".join(re.sub(r"<[^>]*>", "", html.unescape(value)).split())
 
@@ -108,12 +304,16 @@ def format_push_payload(items: list[dict], digest_date: date) -> dict:
     projects = ", ".join(f"{key} {count}건" for key, count in sorted(counts.items()))
     oldest = sorted(items, key=lambda item: (item["review_at"], item["document_key"]))[:3]
     titles = "; ".join(f"{plain(item['title'])[:40]} ({item['waiting_days']}일)" for item in oldest)
-    return {"title": f"검토 대기 정본 {len(items)}건", "body": f"{projects}\n{titles}"[:240],
+    extra = ""
+    if not auto_digest_is_empty(auto):
+        extra = f"\n자동승인 {len(auto['auto_approved'])}건 · 보류 {len(auto['held'])}건"
+    title = f"검토 대기 정본 {len(items)}건" if items else "정본 자동승인 참고검토"
+    return {"title": title, "body": f"{projects}\n{titles}{extra}".strip()[:240],
             "url": "/docs", "tag": f"canonical-review-digest-{digest_date:%Y%m%d}"}
 
 
 async def _default_sender(tenant_id: str, items: list[dict], *, conn: Any,
-                          digest_date: date) -> str:
+                          digest_date: date, auto: dict | None = None) -> str:
     from app.services.ceo_notify import send_ceo_text
     from app.services.push_notifications import is_web_push_configured, send_web_push_to_user
 
@@ -137,7 +337,7 @@ async def _default_sender(tenant_id: str, items: list[dict], *, conn: Any,
         return "skipped"
 
     sent = 0
-    payload = format_push_payload(items, digest_date)
+    payload = format_push_payload(items, digest_date, auto)
     for recipient in recipients:
         try:
             response = await send_web_push_to_user(
@@ -148,7 +348,7 @@ async def _default_sender(tenant_id: str, items: list[dict], *, conn: Any,
             logger.warning("canonical_review_digest_send_failed", tenant_id=tenant_id, reason="push_failed")
     # Telegram is supplementary; neither its return value nor exception determines success.
     try:
-        await send_ceo_text(format_digest(items))
+        await send_ceo_text(format_digest(items, auto))
     except Exception:
         logger.warning("canonical_review_digest_telegram_failed", tenant_id=tenant_id)
     if sent < 1:
@@ -168,7 +368,23 @@ async def send_daily_digest(pool: Any, *, now: datetime | None = None,
         by_tenant: dict[str, list[dict]] = defaultdict(list)
         for item in items:
             by_tenant[item["tenant_id"]].append(item)
+        auto_by_tenant: dict[str, dict] = {}
+        try:
+            # 자동승인 참고절은 보조 정보다. 실패해도 기존 검토 대기 요약은 그대로 나간다.
+            from app.services import doc_auto_approval as _auto
+            tenant_rows = await conn.fetch(_AUTO_TENANTS_SQL, _auto.ACTOR, 24)
+            for tenant_row in tenant_rows:
+                tid = tenant_row["tenant_id"]
+                async with conn.transaction():
+                    tenant_auto = await fetch_auto_approval_digest(conn, tid)
+                if not auto_digest_is_empty(tenant_auto):
+                    auto_by_tenant[tid] = tenant_auto
+        except Exception:
+            logger.warning("canonical_review_digest_auto_section_failed")
+        for tenant_id in auto_by_tenant:
+            by_tenant.setdefault(tenant_id, [])
         for tenant_id, tenant_items in by_tenant.items():
+            auto = auto_by_tenant.get(tenant_id)
             if await conn.fetchval(
                 "SELECT 1 FROM canonical_review_digest_log WHERE digest_date=$1 AND tenant_id=$2::uuid",
                 digest_date, tenant_id,
@@ -177,11 +393,11 @@ async def send_daily_digest(pool: Any, *, now: datetime | None = None,
                 continue
             if sender is not None:
                 # Preserve the existing text/bool injection interface.
-                outcome = "sent" if await sender(format_digest(tenant_items)) else "failed"
+                outcome = "sent" if await sender(format_digest(tenant_items, auto)) else "failed"
                 if outcome == "failed":
                     logger.warning("canonical_review_digest_send_failed", tenant_id=tenant_id, reason="push_failed")
             else:
-                outcome = await _default_sender(tenant_id, tenant_items, conn=conn, digest_date=digest_date)
+                outcome = await _default_sender(tenant_id, tenant_items, conn=conn, digest_date=digest_date, auto=auto)
             if outcome != "sent":
                 result[outcome] += 1
                 continue
