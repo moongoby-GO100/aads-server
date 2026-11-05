@@ -119,12 +119,32 @@ slot_detail() {
     printf 'running=%s health=%s supervisor=%s live=%s api=%s' "$running" "$health" "${supervisor:-unknown}" "$live" "$api"
 }
 
+# 판정(slot_healthy)이 실제로 쓴 측정값. 판정 후 재측정(slot_detail)과 달라질 수 있어 따로 남긴다.
+LAST_PROBE_DETAIL=""
+ACTIVE_PROBE_DETAIL=""
+PEER_PROBE_DETAIL=""
+
 slot_healthy() {
     local port="$1"
     local container="$2"
-    [[ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" == "true" ]] || return 1
-    [[ "$(supervisor_state "$container" || true)" == "RUNNING" ]] || return 1
-    curl -fsS --max-time 4 "http://127.0.0.1:${port}/health/live" >/dev/null 2>&1 || return 1
+    local running supervisor out rc=0 code="" secs=""
+    running="$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)"
+    if [[ "$running" != "true" ]]; then
+        LAST_PROBE_DETAIL="probe_fail=running running=${running:-unknown}"
+        return 1
+    fi
+    supervisor="$(supervisor_state "$container" || true)"
+    if [[ "$supervisor" != "RUNNING" ]]; then
+        LAST_PROBE_DETAIL="probe_fail=supervisor running=${running} supervisor=${supervisor:-unknown}"
+        return 1
+    fi
+    out="$(curl -fsS --max-time 4 -o /dev/null -w '%{http_code} %{time_total}' "http://127.0.0.1:${port}/health/live" 2>/dev/null)" || rc=$?
+    read -r code secs <<< "$out" || true
+    if (( rc != 0 )); then
+        LAST_PROBE_DETAIL="probe_fail=live live_code=${code:-000} live_s=${secs:-na} curl_rc=${rc} running=${running} supervisor=${supervisor}"
+        return 1
+    fi
+    LAST_PROBE_DETAIL="probe_fail=none live_code=${code:-000} live_s=${secs:-na} curl_rc=0 running=${running} supervisor=${supervisor}"
 }
 
 read_counter() {
@@ -258,7 +278,7 @@ switch_to_peer() {
 
     # Re-check after acquiring the shared deploy/nginx lock.
     if deploy_in_progress || ! slot_healthy "$new_port" "$new_container"; then
-        audit "failover" "${new_container}:${new_port}" "blocked" "deployment active or peer became unhealthy"
+        audit "failover" "${new_container}:${new_port}" "blocked" "deployment active or peer became unhealthy peer_probe: ${LAST_PROBE_DETAIL}"
         return 1
     fi
 
@@ -294,7 +314,7 @@ switch_to_peer() {
     docker exec "$new_container" sh -c 'printf true > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     docker exec "$old_container" sh -c 'printf false > /tmp/aads_execution_resume_owner' 2>/dev/null || true
     printf '%s\n' "$(date +%s)" > "$LAST_FAILOVER_FILE"
-    audit "failover" "${old_container}:${old_port}->${new_container}:${new_port}" "success" "consecutive active-slot failures ${decision_detail:-}"
+    audit "failover" "${old_container}:${old_port}->${new_container}:${new_port}" "success" "consecutive active-slot failures ${decision_detail:-} active_probe: ${ACTIVE_PROBE_DETAIL} peer_probe: ${PEER_PROBE_DETAIL}"
     log "FAILOVER complete ${old_container}:${old_port} -> ${new_container}:${new_port}"
 }
 
@@ -312,6 +332,7 @@ audit_slot_memory "$active_container"
 audit_slot_memory "$peer_container"
 
 if slot_healthy "$active_port" "$active_container"; then
+    ACTIVE_PROBE_DETAIL="$LAST_PROBE_DETAIL"
     reset_fail_counters
     # Keep state files aligned with the authoritative nginx upstream.
     if ! $DRY_RUN; then
@@ -326,6 +347,8 @@ if slot_healthy "$active_port" "$active_container"; then
     log "OK active=${active_container}:${active_port}"
     exit 0
 fi
+
+ACTIVE_PROBE_DETAIL="$LAST_PROBE_DETAIL"
 
 if deploy_in_progress; then
     audit "check" "${active_container}:${active_port}" "deferred" "deployment lock is active"
@@ -352,8 +375,8 @@ fi
 decision_detail="kind=${fail_kind} fail=${fail_count}/${SOFT_FAIL_THRESHOLD} hard=${hard_count}/${FAIL_THRESHOLD} rule=${rule}"
 
 active_detail="$(slot_detail "$active_port" "$active_container")"
-audit "check" "${active_container}:${active_port}" "failed" "${decision_detail} ${active_detail}"
-log "WARN active unhealthy ${decision_detail} ${active_container}:${active_port} ${active_detail}"
+audit "check" "${active_container}:${active_port}" "failed" "${decision_detail} ${ACTIVE_PROBE_DETAIL} recheck: ${active_detail}"
+log "WARN active unhealthy ${decision_detail} ${ACTIVE_PROBE_DETAIL} ${active_container}:${active_port} recheck: ${active_detail}"
 
 if [[ "$rule" == "none" ]]; then
     exit 0
@@ -362,18 +385,20 @@ fi
 if [[ "$rule" == "soft_streak" ]]; then
     cooldown_remaining="$(failover_cooldown_remaining)"
     if (( cooldown_remaining > 0 )); then
-        audit "failover" "${peer_container}:${peer_port}" "blocked" "cooldown remaining=${cooldown_remaining}s ${decision_detail}"
+        audit "failover" "${peer_container}:${peer_port}" "blocked" "cooldown remaining=${cooldown_remaining}s ${decision_detail} active_probe: ${ACTIVE_PROBE_DETAIL}"
         log "WARN failover blocked by cooldown remaining=${cooldown_remaining}s ${decision_detail}"
         exit 0
     fi
 fi
 
 if slot_healthy "$peer_port" "$peer_container"; then
+    PEER_PROBE_DETAIL="$LAST_PROBE_DETAIL"
     switch_to_peer "$active_port" "$peer_port" "$active_container" "$peer_container"
     reset_fail_counters
     exit 0
 fi
 
+PEER_PROBE_DETAIL="$LAST_PROBE_DETAIL"
 active_supervisor="$(supervisor_state "$active_container" || true)"
 if [[ "$active_supervisor" == "STOPPED" ]]; then
     if $DRY_RUN; then
@@ -394,6 +419,6 @@ if [[ "$active_supervisor" == "STOPPED" ]]; then
     audit "supervisor-start" "${active_container}:aads-api" "failed" "health not restored within 20 seconds"
 fi
 
-audit "recovery" "aads-api" "failed" "both slots unhealthy; no restart loop performed"
+audit "recovery" "aads-api" "failed" "both slots unhealthy; no restart loop performed active_probe: ${ACTIVE_PROBE_DETAIL} peer_probe: ${PEER_PROBE_DETAIL}"
 log "ERROR both API slots unhealthy; manual intervention required"
 exit 1

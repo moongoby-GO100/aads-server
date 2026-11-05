@@ -40,14 +40,26 @@ esac
 exit 0
 """
 
+# STUB_LIVE_FAIL_FIRST_N=N 이면 /health/live 호출 중 처음 N번(포트 무관, 호출 횟수 기준)만 시간 초과(28)로 실패한다.
+# -w 에 time_total 이 있으면 "<code> <초>" 로 출력한다.
 CURL_STUB = r"""#!/usr/bin/env bash
+if [[ "$*" == *time_total* ]]; then ok='200 0.01'; bad='000 4.00'; else ok='200'; bad='000'; fi
+if [[ "$*" == *"/health/live"* && -n "${STUB_LIVE_FAIL_FIRST_N:-}" ]]; then
+  cf="$(dirname "${STUB_CALL_LOG}")/curl_live_count"
+  n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$cf"
+  if (( n <= STUB_LIVE_FAIL_FIRST_N )); then
+    printf '%s' "$bad"
+    exit 28
+  fi
+fi
 for port in ${STUB_LIVE_FAIL_PORTS:-}; do
   if [[ "$*" == *":${port}/health/live"* ]]; then
-    printf '000'
+    printf '%s' "$bad"
     exit 28
   fi
 done
-printf '200'
+printf '%s' "$ok"
 exit 0
 """
 
@@ -390,3 +402,49 @@ def test_custom_thresholds_via_env(env):
     third = _run(senv)
     assert "kind=soft fail=3/3 hard=0/2 rule=soft_streak" in third.stdout
     assert FAILOVER_DRY in third.stdout
+
+
+def test_probe_evidence_precedes_recheck_when_live_times_out_once(env):
+    result = _run({**env, "STUB_LIVE_FAIL_FIRST_N": "1"})
+    assert result.returncode == 0, result.stderr
+    check = [a for a in _audit(env) if a["action"] == "check"][0]
+    detail = check["detail"]
+    assert detail.startswith("kind=soft fail=1/5 hard=0/2 rule=none probe_fail=live live_code=000 live_s=4.00 curl_rc=28 running=true supervisor=RUNNING recheck: ")
+    head, recheck = detail.split(" recheck: ")
+    assert "probe_fail=live" in head and "curl_rc=28" in head
+    assert "live=200 api=200" in recheck
+    assert "probe_fail=live" in result.stdout and "recheck: running=true" in result.stdout
+
+
+def test_probe_evidence_supervisor_failure(env):
+    result = _run(_hard(env))
+    assert result.returncode == 0, result.stderr
+    detail = [a for a in _audit(env) if a["action"] == "check"][0]["detail"]
+    head, _, recheck = detail.partition(" recheck: ")
+    assert "probe_fail=supervisor running=true supervisor=STOPPED" in head
+    assert "live_code" not in head
+    assert "supervisor=STOPPED" in recheck
+
+
+def test_probe_evidence_container_not_running(env):
+    result = _run(_soft(env, STUB_RUNNING_aads_server="false"))
+    detail = [a for a in _audit(env) if a["action"] == "check"][0]["detail"]
+    assert "probe_fail=running running=false recheck: " in detail
+    assert result.returncode == 0, result.stderr
+
+
+def test_failover_success_audit_keeps_prefix_and_adds_probe_fields(env):
+    henv = _hard(env)
+    _run(henv, dry=False)
+    _run(henv, dry=False)
+    success = [a for a in _audit(env) if a["action"] == "failover" and a["result"] == "success"]
+    assert len(success) == 1
+    detail = success[0]["detail"]
+    assert detail.startswith("consecutive active-slot failures kind=hard fail=2/5 hard=2/2 rule=hard_streak")
+    assert "active_probe: probe_fail=supervisor" in detail
+    assert "peer_probe: probe_fail=none live_code=200" in detail
+
+
+def test_healthy_run_has_no_failed_check(env):
+    assert _run(env).returncode == 0
+    assert not [a for a in _audit(env) if a["action"] == "check"]
