@@ -21,7 +21,7 @@ import json
 import os
 import re
 import uuid
-from typing import Any
+from typing import Any, NamedTuple
 
 import structlog
 
@@ -189,6 +189,58 @@ def _hash(project: str, instruction: str) -> str:
     return hashlib.sha256(f"{project}:{instruction}".encode()).hexdigest()[:16]
 
 
+GOAL_SOURCE_PARENT_ACTIVE_LINK = "parent_active_link"
+GOAL_SOURCE_PARENT_COLUMN = "parent_column"
+
+_ACTIVE_LINK_SQL = """
+    SELECT l.goal_id, l.milestone_id
+    FROM goal_task_links l
+    WHERE l.task_type = 'pipeline_job' AND l.task_id = $1
+      AND l.tenant_id = $2::uuid
+      AND l.goal_id IS NOT NULL
+      AND l.link_state = 'active' AND l.superseded_by IS NULL
+    ORDER BY l.updated_at DESC NULLS LAST, l.created_at DESC NULLS LAST
+    LIMIT 1
+"""
+
+
+class ParentGoalBinding(NamedTuple):
+    goal_id: Any
+    milestone_id: Any
+    source: str
+
+
+async def resolve_parent_goal_binding(conn, parent: Any) -> ParentGoalBinding:
+    """재작업이 상속할 (goal_id, milestone_id) 를 정한다.
+
+    부모의 활성 goal_task_links 가 먼저다. 링크를 재연결해도 pipeline_jobs.goal_id/
+    milestone_id 컬럼은 갱신되지 않아서, 컬럼만 복사하면 옛 목표에 다시 묶인다.
+    활성 링크가 없거나 조회가 실패하면 컬럼값을 쓴다.
+
+    이 함수는 호출자의 트랜잭션 안에서 불린다. 조회가 PostgreSQL 오류로 실패하면
+    그 트랜잭션이 aborted 가 되어 뒤따르는 INSERT 까지 실패하므로, 조회만 SAVEPOINT
+    (중첩 ``conn.transaction()``) 로 감싸 실패를 이 안에 가둔다.
+    """
+    column_binding = ParentGoalBinding(
+        parent["goal_id"], parent["milestone_id"], GOAL_SOURCE_PARENT_COLUMN,
+    )
+    tenant_id = parent["tenant_id"]
+    if not tenant_id:
+        return column_binding
+    try:
+        async with conn.transaction():
+            link = await conn.fetchrow(_ACTIVE_LINK_SQL, parent["job_id"], tenant_id)
+    except Exception as exc:  # noqa: BLE001 — 조회 실패가 재작업 제출을 막으면 안 된다
+        logger.warning(
+            "pipeline_auto_rework.parent_link_lookup_failed",
+            job_id=parent["job_id"], error=str(exc)[:200],
+        )
+        return column_binding
+    if not link:
+        return column_binding
+    return ParentGoalBinding(link["goal_id"], link["milestone_id"], GOAL_SOURCE_PARENT_ACTIVE_LINK)
+
+
 async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
     """반려된 job 에 대한 재작업을 최대 1건 만든다. 만들었으면 새 job 정보를 돌려준다.
 
@@ -255,6 +307,7 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
             score=row["review_score"],
             failure_phase=row["phase"],
         )
+        binding = await resolve_parent_goal_binding(conn, row)
         new_job_id = f"runner-{uuid.uuid4().hex[:8]}"
         await conn.execute(
             """
@@ -265,14 +318,15 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
                created_at, updated_at, tenant_id)
             VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8, $9, $10, $11, $12,
                     jsonb_build_array(jsonb_build_object('ts', NOW()::text,
-                        'event', 'auto_rework_submitted', 'parent', $13::text)),
+                        'event', 'auto_rework_submitted', 'parent', $13::text,
+                        'goal_source', $17::text)),
                     $14, $15, NOW(), NOW(), $16::uuid)
             """,
             new_job_id, row["project"], new_instruction, _hash(row["project"], new_instruction),
             row["chat_session_id"], row["max_cycles"], row["model"], row["size"],
             row["worker_model"], row["model_override_reason"], row["parallel_group"],
             f"[Auto Rework] {job_id} 반려 지적 {len(issues)}건 교정 라운드 {next_round}/{rounds_max}",
-            job_id, row["goal_id"], row["milestone_id"], row["tenant_id"],
+            job_id, binding.goal_id, binding.milestone_id, row["tenant_id"], binding.source,
         )
         await conn.execute("SELECT pg_notify('pipeline_new_job', $1)", new_job_id)
         if row["chat_session_id"]:
@@ -295,6 +349,7 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
         "rounds_max": rounds_max,
         "project": row["project"],
         "instruction": new_instruction,
-        "goal_id": row["goal_id"],
-        "milestone_id": row["milestone_id"],
+        "goal_id": binding.goal_id,
+        "milestone_id": binding.milestone_id,
+        "goal_source": binding.source,
     }

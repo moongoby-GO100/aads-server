@@ -258,6 +258,7 @@ async def _link_job_to_goal_explicit(
     goal_id: Optional[str] = None,
     milestone_id: Optional[str] = None,
     bind_source: Optional[str] = None,
+    bound_by: Optional[str] = None,
 ) -> Optional[GoalLink]:
     """작업을 **명시적으로 지정된** 목표에만 연결한다.
 
@@ -279,6 +280,7 @@ async def _link_job_to_goal_explicit(
 
     `bind_source` 는 goal_task_links.bind_source 에 남길 출처 이름을 덮어쓴다. 세션 단일 후보
     자동 연결(goal_autolink)이 같은 검증을 거치면서 출처만 구분하려고 쓴다.
+    `bound_by` 는 goal_task_links.bound_by 를 덮어쓴다(기본 ``pipeline_job:<job_id>``).
     """
     binding = parse_goal_binding(instruction, goal_id=goal_id, milestone_id=milestone_id)
     if bind_source:
@@ -374,7 +376,7 @@ async def _link_job_to_goal_explicit(
                        bind_source=EXCLUDED.bind_source,bound_by=EXCLUDED.bound_by,
                        link_state='active',detach_reason=NULL,updated_at=NOW()""",
                 job_tenant, binding.goal_id, resolved_milestone, job_id, binding.source,
-                f"pipeline_job:{job_id}",
+                bound_by or f"pipeline_job:{job_id}",
             )
         if goal_blocked and not blocked_remediation:
             logger.info(
