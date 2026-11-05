@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
+from app.services.doc_cross_review import build_review_detail
 from app.services.doc_tier import revision_metadata
 
 import structlog
@@ -28,7 +30,11 @@ _QUEUE_SQL = (
     "SELECT h.tenant_id::text AS tenant_id, h.project_key, h.document_key, h.kind, r.title, "
     "r.doc_tier,r.author_model,r.author_provider,char_length(r.content) AS char_count, "
     "EXISTS(SELECT 1 FROM project_document_goal_links gl WHERE gl.head_id=h.id) AS goal_linked, "
-    "ev.created_at AS review_at "
+    "ev.created_at AS review_at, "
+    "COALESCE((SELECT jsonb_agg(jsonb_build_object('reviewer_model', rv.reviewer_model, "
+    "'reviewer_provider', rv.reviewer_provider, 'verdict', rv.verdict, 'reason', rv.reason, "
+    "'cross_company', rv.cross_company, 'created_at', rv.created_at) ORDER BY rv.id) "
+    "FROM project_document_reviews rv WHERE rv.revision_id=r.id), '[]'::jsonb) AS review_rows "
     "FROM project_document_heads h "
     "JOIN project_document_revisions r ON r.id=h.latest_revision_id AND r.head_id=h.id "
     "JOIN LATERAL (SELECT e.action, e.created_at FROM project_document_events e "
@@ -55,6 +61,9 @@ async def fetch_review_queue(conn: Any, tenant_id: str | None, project_key: str 
         if (metadata["doc_tier"] or metadata.get("doc_tier_computed")) in ("D1", "SPLIT"):
             continue
         review_kst = row["review_at"].astimezone(KST)
+        review_rows = row.get("review_rows") or []
+        if isinstance(review_rows, str):
+            review_rows = json.loads(review_rows)
         items.append({
             **metadata,
             "tenant_id": row["tenant_id"],
@@ -62,6 +71,7 @@ async def fetch_review_queue(conn: Any, tenant_id: str | None, project_key: str 
             "document_key": row["document_key"],
             "title": row["title"],
             "kind": row["kind"],
+            "review_detail": build_review_detail(review_rows),
             "review_at": review_kst.isoformat(),
             "waiting_days": max((today - review_kst.date()).days, 0),
         })
