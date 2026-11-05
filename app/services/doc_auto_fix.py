@@ -233,8 +233,11 @@ _HISTORY_SQL = (
     "SELECT job_id, status, instruction, created_at FROM pipeline_jobs "
     "WHERE tenant_id=$1::uuid AND upper(project)=$2 AND strpos(instruction,$3)>0 ORDER BY created_at, job_id"
 )
+# 테넌트 하루 상한은 자동 보완(DOC_AUTO_FIX_OF)과 후속 처리(DOC_AUTO_RESOLVE_OF) 제출을 합쳐 센다.
+RESOLVE_MARKER_PREFIX = 'DOC_AUTO_RESOLVE_OF: '
 _DAILY_SQL = (
-    "SELECT count(*) FROM pipeline_jobs WHERE tenant_id=$1::uuid AND strpos(instruction,$2)>0 AND created_at>=$3"
+    "SELECT count(*) FROM pipeline_jobs WHERE tenant_id=$1::uuid "
+    "AND (strpos(instruction,$2)>0 OR strpos(instruction,$4)>0) AND created_at>=$3"
 )
 
 
@@ -253,7 +256,7 @@ async def load_history(conn: Any, tenant: str, project: str, document_key: str, 
                 rounds.append({**mark, 'job_id': row['job_id'], 'status': row['status'],
                                'active': row['status'] in ACTIVE_STATUSES})
                 break
-    daily = await conn.fetchval(_DAILY_SQL, tenant, MARKER_PREFIX, _kst_day_start(now))
+    daily = await conn.fetchval(_DAILY_SQL, tenant, MARKER_PREFIX, _kst_day_start(now), RESOLVE_MARKER_PREFIX)
     return {'rounds': rounds, 'daily': int(daily or 0)}
 
 
@@ -323,6 +326,17 @@ def _log(event: str, mode: str, head: Mapping, plan: FixPlan, level: int = loggi
     logger.log(level, '%s %s', event, json.dumps(payload, ensure_ascii=False, default=str))
 
 
+def _kick_auto_resolve(tenant: str, project: str, head: Mapping, revision: Mapping, enabled: bool) -> None:
+    """escalate 직후 후속 자동 처리(doc_auto_resolve)를 별도 작업으로 띄운다. off·미사용이면 기존 escalate 그대로. 예외는 로그만."""
+    if not enabled:
+        return
+    try:
+        from app.services import doc_auto_resolve
+        doc_auto_resolve.schedule(tenant, project, head['id'], revision['id'])
+    except Exception:
+        logger.warning('doc_auto_resolve_schedule_failed', exc_info=True)
+
+
 async def maybe_schedule_auto_fix(conn: Any, tenant: str, project: str, head_id: Any, revision_id: Any,
                                   decision: Any = None, *, now: Optional[datetime] = None) -> Optional[dict]:
     """hold 판정 뒤에 부른다. head 를 잠그고 다시 읽어 계획을 세우고, DOC_AUTO_APPROVE·DOC_AUTO_FIX 가 모두 on 일 때만 제출한다.
@@ -355,6 +369,7 @@ async def maybe_schedule_auto_fix(conn: Any, tenant: str, project: str, head_id:
             plan = FixPlan('escalate', ['fix_job_failed'], mark.get('round', 0), mark.get('fingerprint', ''))
             _log('doc_auto_fix_decision', fix_mode, head, plan, job_id=mark['job_id'])
             _log('doc_auto_fix_escalated', fix_mode, head, plan, ceo_reasons=[ESCALATE_REASON_KO['fix_job_failed']])
+            _kick_auto_resolve(tenant, project, head, revision, submit_enabled)
             return {'action': 'escalate', 'job_id': mark['job_id'], 'idempotent': False, 'reasons': ['fix_job_failed']}
         busy = mark if state == 'busy' else None
         if busy:
@@ -371,6 +386,7 @@ async def maybe_schedule_auto_fix(conn: Any, tenant: str, project: str, head_id:
         if plan.action == 'escalate':
             _log('doc_auto_fix_decision', fix_mode, head, plan)
             _log('doc_auto_fix_escalated', fix_mode, head, plan, ceo_reasons=[ESCALATE_REASON_KO.get(r, r) for r in plan.reasons])
+            _kick_auto_resolve(tenant, project, head, revision, submit_enabled)
             return out
         if not submit_enabled:
             _log('doc_auto_fix_decision', fix_mode, head, plan, outcome='mode_off' if fix_mode == 'off' else 'not_submitted',

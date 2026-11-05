@@ -8,6 +8,7 @@ shadow 는 판정만 구조화 로그(doc_auto_approval_decision)로 남긴다.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -180,6 +181,40 @@ def issue_id(model: str, index: int) -> str:
     return f'{model}:{index}'
 
 
+def issue_digest(issue: Mapping) -> str:
+    """지적 내용의 짧은 지문. 심판 제외 기록이 같은 지적을 가리키는지 확인하는 데만 쓴다."""
+    raw = '|'.join(str(issue.get(k) or '') for k in ('severity', 'criterion', 'location', 'problem'))
+    return hashlib.sha256(raw.encode()).hexdigest()[:12]
+
+
+def indexed_issues(reviews: Iterable[Mapping]) -> list[dict]:
+    """모델별 최신 리뷰의 dict 지적을 evaluate 와 같은 issue_id(모델, 원래 순번)로 나열한다. 읽기 전용."""
+    out = []
+    for model, row in cross._latest_by_model(list(reviews or [])).items():
+        _, data = rubric.parse_review_reason(row.get('reason'))
+        issues = data.get('issues') if isinstance(data, dict) else None
+        for index, issue in enumerate(issues if isinstance(issues, list) else []):
+            if isinstance(issue, dict) and issue.get('severity') in ('blocker', 'major', 'minor'):
+                out.append({**issue, 'issue_id': issue_id(model, index), 'digest': issue_digest(issue)})
+    return out
+
+
+def adjudication_excluded_ids(reviews: Iterable[Mapping]) -> frozenset:
+    """독립 심판(doc_auto_resolve)이 근거와 함께 invalid 로 기록한 지적 id. 지적 내용이 그대로일 때만 인정한다."""
+    rows = list(reviews or [])
+    claimed: dict = {}
+    for row in rows:
+        _, data = rubric.parse_review_reason(row.get('reason'))
+        adj = data.get('adjudication') if isinstance(data, dict) else None
+        ids = adj.get('excluded_issue_ids') if isinstance(adj, dict) else None
+        if isinstance(ids, dict):
+            claimed.update({str(k): str(v) for k, v in ids.items()})
+    if not claimed:
+        return frozenset()
+    current = {i['issue_id']: i['digest'] for i in indexed_issues(rows)}
+    return frozenset(k for k, v in claimed.items() if current.get(k) == v)
+
+
 def _issue_counts(latest: Mapping[str, Mapping], excluded: frozenset) -> dict:
     counts = {'blocker': 0, 'major': 0, 'minor': 0}
     for model, row in latest.items():
@@ -287,7 +322,9 @@ async def assess(conn: Any, tenant: str, project: str, head_id: Any, revision_id
     except Exception:
         logger.warning('doc_auto_approval_checks_failed', exc_info=True)
         checks = [{'id': 'checks_unavailable', 'ok': False, 'detail': '결정적 검사를 실행하지 못함'}]
-    decision = evaluate(head, revision, rows, summary, checks)
+    # 독립 심판이 invalid 로 기록한 지적은 집계에서만 뺀다. 승인 기준값은 그대로이고 고위험 문서에는 적용하지 않는다.
+    excluded = () if classify_risk(head, revision) == 'high' else adjudication_excluded_ids(rows)
+    decision = evaluate(head, revision, rows, summary, checks, excluded_issue_ids=excluded)
     return {'head': head, 'revision': revision, 'rows': rows, 'summary': summary, 'checks': checks, 'decision': decision}
 
 

@@ -1957,6 +1957,17 @@ async def approvals_decide(
                 request_id[:8], type(exc).__name__,
             )
 
+    # 정본 문서 결정 카드(doc_auto_resolve): 승인되면 서버가 고른 안을 새 판본 작업으로 제출한다. 거절·무응답은 아무 일도 하지 않는다.
+    # 실패해도 결정은 되돌리지 않는다.
+    if decision == "approved" and row["action_type"] == "next_step" and "DOC_AUTO_RESOLVE_CARD:" in (row["action_summary"] or ""):
+        try:
+            from app.services import doc_auto_resolve
+
+            async with get_pool().acquire() as _conn:
+                await doc_auto_resolve.on_card_approved(_conn, str(row["tenant_id"] or ""), row["action_summary"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("doc_auto_resolve_card_submit_failed request=%s error=%s", request_id[:8], str(exc)[:200])
+
     # 결정은 대화로 돌아간다 — 누른 결과가 화면에 보이고, 막힌 작업이 이어진다.
     reaction_dispatch = await _notify_chat_of_approval_decision(
         session_id=row["requested_by"],

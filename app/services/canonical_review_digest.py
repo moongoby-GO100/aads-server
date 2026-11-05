@@ -284,6 +284,15 @@ async def _classify_held(conn: Any, result: dict, item: dict, tenant_id: Any, de
     try:
         history = await fix.load_history(conn, tenant_id, head["project_key"], head["document_key"])
         state, mark = fix.round_state(history, revision)
+        resolve = await _resolve_status(conn, tenant_id, head, revision)
+        if resolve and resolve.get("active"):
+            # 후속 자동 처리(독립 심판 뒤 조사·분할 작업)가 돌고 있다 — 대표님 판단 필요가 아니라 자동 보완 중이다.
+            active = resolve["active"]
+            result["auto_fixing"].append({"project_key": item["project_key"], "document_key": item["document_key"],
+                                          "title": item["title"], "round": fix.DOC_AUTO_FIX_MAX_ROUNDS,
+                                          "max_rounds": fix.DOC_AUTO_FIX_MAX_ROUNDS, "job_id": active.get("job_id"),
+                                          "resolve_path": active.get("path")})
+            return
         if state in ("busy", "submitted"):
             # 이미 보완 작업이 있다 — 결과가 나오기 전에 같은 지적으로 '반복 실패' 상신하지 않는다.
             result["auto_fixing"].append({"project_key": item["project_key"], "document_key": item["document_key"],
@@ -309,7 +318,23 @@ async def _classify_held(conn: Any, result: dict, item: dict, tenant_id: Any, de
             "ceo_brief": item.get("ceo_brief"),
             "remaining_issues": [{"severity": f["severity"], "location": f["location"][:40], "problem": f["problem"][:200]}
                                  for f in remaining],
-            "decision_needed": fix.DECISION_REQUEST_KO})
+            "decision_needed": fix.DECISION_REQUEST_KO,
+            "resolve_path": (resolve or {}).get("resolve_path", "none"),
+            "card_id": (resolve or {}).get("card_id"),
+            "pending_days": (resolve or {}).get("pending_days", 0)})
+
+
+async def _resolve_status(conn: Any, tenant_id: Any, head: Any, revision: Any) -> dict | None:
+    """후속 자동 처리(doc_auto_resolve) 상태 — 읽기 전용. off 이거나 실패하면 None."""
+    try:
+        from app.services import doc_auto_resolve as resolve
+
+        if resolve.auto_resolve_mode() != "on":
+            return None
+        return await resolve.resolve_status(conn, tenant_id, head["project_key"], head["document_key"], revision["id"])
+    except Exception:
+        logger.warning("canonical_review_digest_resolve_status_failed", exc_info=True)
+        return None
 
 
 def auto_digest_is_empty(auto: dict | None) -> bool:
@@ -371,6 +396,8 @@ def _ceo_head(auto: dict | None) -> list[str]:
             for issue in item["remaining_issues"]:
                 lines.append(f"    - [{issue['severity']}] {html.escape(issue['problem'][:60])}")
             lines.append(f"    결정하실 것: {html.escape(item['decision_needed'])}")
+            if item.get("card_id"):
+                lines.append(f"    👉 버튼으로 결정 (승인 카드의 권장안) · 미결 {int(item.get('pending_days') or 0)}일")
         if len(needs) > _CEO_DETAIL_LIMIT:
             lines.append(f"  … 외 {len(needs) - _CEO_DETAIL_LIMIT}건")
     if fixing:
