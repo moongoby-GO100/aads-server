@@ -41,8 +41,17 @@ def test_boot_entry_employee_admin_expired_and_token_preservation():
     const hasServerAuth=()=>true, financeApi=async()=>{if(failed)throw Object.assign(Error('401'),{status:401});return payload};
     const isEmployeeAccount=()=>employee, shouldOpenV41App=()=>!employee;
     const openV41App=()=>{redirected=true;return true},clearServerAuthToken=()=>{cleared=true};
-    ''' + _function_source(HTML, 'verifyLegacyEntry') + '''
+    let switched=null, stored=null, reloaded=false;
+    const authApi=async(path,options)=>{switched=[path,options.method];return {token:'employer-token'}};
+    const persistServerAuthToken=token=>{stored=token}, window={location:{reload(){reloaded=true}}};
+    ''' + _function_source(HTML, 'followEntryTenantRedirect') + _function_source(HTML, 'verifyLegacyEntry') + '''
     (async()=>{
+      // 개인 워크스페이스 토큰의 직원: 서버가 준 시작 조직으로 토큰을 바꾸고 V4.1 을 열지 않는다.
+      employee=false;payload={legacy_access:false,entry_tenant_redirect:{tenant_id:'t-employer'}};
+      assert.equal(await verifyLegacyEntry(),false);
+      assert.deepEqual(switched,['/tenants/t-employer/switch','POST']);
+      assert.equal(stored,'employer-token');assert.equal(reloaded,true);assert.equal(redirected,false);
+      employee=true;
       payload={legacy_access:false};assert.equal(await verifyLegacyEntry(),true);
       employee=false;assert.equal(await verifyLegacyEntry(),false);assert.equal(redirected,true);
       failed=true;assert.equal(await verifyLegacyEntry(),true);assert.equal(cleared,true);assert.equal(authSession,null);

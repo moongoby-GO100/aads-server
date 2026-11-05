@@ -1031,7 +1031,10 @@ async def test_internal_principal_without_default_still_starts_internal(monkeypa
 
 
 def test_default_move_sql_only_targets_sole_owner_personal_workspace():
-    source = inspect.getsource(auth_module._move_default_off_personal_workspace)
+    move_source = inspect.getsource(auth_module._move_default_off_personal_workspace)
+    # 개인 워크스페이스 기준은 진입 판정(personal_workspace_entry)과 같은 상수를 쓴다.
+    assert "_PERSONAL_WORKSPACE_SQL" in move_source
+    source = auth_module._PERSONAL_WORKSPACE_SQL
     assert "t.created_by = $2::text" in source
     assert "tm.role = 'owner'" in source
     # 리뷰 지적 7: 본인 owner 멤버십이 회수·삭제된 곳은 개인 워크스페이스가 아니다.

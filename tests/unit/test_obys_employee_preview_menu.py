@@ -496,6 +496,7 @@ def test_v41_handoff_and_permission_execute_in_node(tmp_path):
             'const EMPLOYEE_PREVIEW_REQUEST_KEY_V41="obys.employeePreviewRequest";',
             _line_starting(V41, "function openEmployeePreviewV41"),
             _line_starting(V41, "window.obysEmployeePreviewV41="),
+            _function_source(V41, "leaveForEmployeeEntryV41"),
             _line_starting(V41, "async function loadEmployeePreviewPermissionV41"),
         ]
     )

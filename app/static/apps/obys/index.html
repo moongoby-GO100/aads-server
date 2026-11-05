@@ -18097,6 +18097,23 @@
     }
 
     // Check once before rendering defaults or starting any legacy data requests.
+    // 개인 워크스페이스 토큰으로 들어온 직원은 서버(/session entry_tenant_redirect)가 알려 준
+    // 시작 조직으로 토큰을 바꾼다. 실패하면 기존 판정으로 진행한다.
+    async function followEntryTenantRedirect(session) {
+      const tenantId = String(session?.entry_tenant_redirect?.tenant_id || "").trim();
+      if (!tenantId) return false;
+      try {
+        const payload = await authApi(`/tenants/${encodeURIComponent(tenantId)}/switch`, { method: "POST" });
+        if (!payload?.token) return false;
+        persistServerAuthToken(payload.token);
+        window.location.reload();
+        return true;
+      } catch (error) {
+        console.warn("entry tenant switch failed", error);
+        return false;
+      }
+    }
+
     async function verifyLegacyEntry() {
       if (!hasServerAuth()) return true;
       try {
@@ -18104,6 +18121,7 @@
         // Verify identity before selecting employee or administrator experience.
         authSession = {...session, permissions_verified: true};
         localStorage.setItem(AUTH_USER_KEY, JSON.stringify(authSession));
+        if (await followEntryTenantRedirect(session)) return false;
         if (session.legacy_access === true || isEmployeeAccount()) return true;
         if (shouldOpenV41App()) return !openV41App();
         return true; // Invitation/signature/approved redirect stays on this entry.

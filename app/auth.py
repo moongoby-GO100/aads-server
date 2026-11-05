@@ -761,24 +761,10 @@ async def _active_user_email_by_id(conn, user_id: str) -> Optional[str]:
     return _normalize_email(email) if email else None
 
 
-async def _move_default_off_personal_workspace(conn, user_id: str, tenant_id: str) -> Optional[dict]:
-    """default 가 비어 있거나 본인 혼자인 개인 워크스페이스면 고용주 테넌트로 옮긴다.
-
-    직원 승인이 멤버십을 새로 만들거나 되살린 그 한 번만 부른다 — 로그인마다
-    판정하지 않으므로 일반 초대 member·다른 고객 테넌트 member 의 시작 테넌트는
-    바뀌지 않고, 이후 사용자가 /auth/tenants/{id}/switch 로 고른 값이 그대로 남는다.
-    개인 워크스페이스 = 본인이 만든 customer 테넌트에서 본인이 **활성** owner 이고
-    본인 외 활성 멤버가 없음(owner 멤버십이 회수된 곳은 개인 워크스페이스가 아니다).
-    """
-    current = await conn.fetchval(
-        "SELECT default_tenant_id::text FROM saas_users WHERE id = $1::text FOR UPDATE",
-        user_id,
-    )
-    if current == tenant_id:
-        return None
-    if current:
-        personal = await conn.fetchval(
-            """
+# 개인 워크스페이스 = 본인이 만든 customer 테넌트에서 본인이 활성 owner 이고 본인 외 활성 멤버가 없음.
+# $1 = tenant_id, $2 = user_id.  default 이동(_move_default_off_personal_workspace)과
+# 진입 판정(personal_workspace_entry)이 같은 기준을 쓰도록 한 곳에 둔다.
+_PERSONAL_WORKSPACE_SQL = """
             SELECT EXISTS (
                 SELECT 1
                   FROM tenants t
@@ -800,10 +786,62 @@ async def _move_default_off_personal_workspace(conn, user_id: str, tenant_id: st
                           AND o.deleted_at IS NULL
                    )
             )
+            """
+
+
+async def personal_workspace_entry(user_id: str, tenant_id: str) -> dict:
+    """현재 토큰 테넌트가 본인 개인 워크스페이스인지, 저장된 시작 테넌트가 다른 곳인지 돌려준다.
+
+    직원 가입은 개인 워크스페이스 owner 토큰을 먼저 받고, 가입 승인 때
+    _move_default_off_personal_workspace 가 default 만 고용주로 옮긴다.  브라우저는 그 뒤에도
+    가입 때 받은 토큰을 써서 /session 이 owner 로 응답했고 사장 화면이 열렸다(2026-11-05).
+    판정은 조직명·멤버 수 추정이 아니라 저장된 사실과 사용자가 고른 default 로만 한다 —
+    사용자가 /switch 로 자기 조직을 고르면 default 가 그 조직이 되므로 redirect 가 생기지 않는다.
+    """
+    pool = await _ensure_pool()
+    async with pool.acquire() as conn:
+        personal = bool(await conn.fetchval(_PERSONAL_WORKSPACE_SQL, tenant_id, user_id))
+        if not personal:
+            return {"personal_workspace": False, "redirect_tenant_id": None}
+        redirect_tenant_id = await conn.fetchval(
+            """
+            SELECT u.default_tenant_id::text
+              FROM saas_users u
+              JOIN tenants t
+                ON t.id = u.default_tenant_id
+               AND t.status = 'active'
+              JOIN tenant_memberships tm
+                ON tm.tenant_id = u.default_tenant_id
+               AND tm.user_id = u.id
+               AND tm.status = 'active'
+               AND tm.deleted_at IS NULL
+             WHERE u.id = $1::text
+               AND u.default_tenant_id IS NOT NULL
+               AND u.default_tenant_id <> $2::uuid
             """,
-            current,
             user_id,
+            tenant_id,
         )
+    return {"personal_workspace": True, "redirect_tenant_id": redirect_tenant_id or None}
+
+
+async def _move_default_off_personal_workspace(conn, user_id: str, tenant_id: str) -> Optional[dict]:
+    """default 가 비어 있거나 본인 혼자인 개인 워크스페이스면 고용주 테넌트로 옮긴다.
+
+    직원 승인이 멤버십을 새로 만들거나 되살린 그 한 번만 부른다 — 로그인마다
+    판정하지 않으므로 일반 초대 member·다른 고객 테넌트 member 의 시작 테넌트는
+    바뀌지 않고, 이후 사용자가 /auth/tenants/{id}/switch 로 고른 값이 그대로 남는다.
+    개인 워크스페이스 = 본인이 만든 customer 테넌트에서 본인이 **활성** owner 이고
+    본인 외 활성 멤버가 없음(owner 멤버십이 회수된 곳은 개인 워크스페이스가 아니다).
+    """
+    current = await conn.fetchval(
+        "SELECT default_tenant_id::text FROM saas_users WHERE id = $1::text FOR UPDATE",
+        user_id,
+    )
+    if current == tenant_id:
+        return None
+    if current:
+        personal = await conn.fetchval(_PERSONAL_WORKSPACE_SQL, current, user_id)
         if not personal:
             return None
     await conn.execute(

@@ -110,6 +110,15 @@ OWN_EMPLOYEE_REQUEST_SQL = (
 )
 
 
+# 개인 워크스페이스 토큰에는 고용주 테넌트가 없으므로 테넌트 조건 없이 본인 요청 최신 1건을 본다.
+OWN_EMPLOYEE_REQUEST_ANY_TENANT_SQL = (
+    "SELECT * FROM yeoljeong_employee_join_requests h "
+    "WHERE h.deleted_at IS NULL AND lower(h.employee_email) = $1 "
+    "AND EXISTS (SELECT 1 FROM yeoljeong_business_tenant_mapping m "
+    "WHERE m.business_id = h.business_id AND m.tenant_id = h.tenant_id) "
+    "ORDER BY h.updated_at DESC NULLS LAST, h.created_at DESC NULLS LAST, h.id DESC LIMIT 1"
+)
+
 def _employee_lookup_applies(user: dict[str, Any], session: dict[str, Any]) -> bool:
     user_role = str(user.get("user_role") or "").strip().lower()
     if user.get("is_internal_admin") or user_role in {"ceo", "admin", "system"}:
@@ -130,12 +139,73 @@ async def _own_employee_request(user: dict[str, Any], tenant_id: UUID) -> dict[s
         await conn.close()
 
 
+def _personal_workspace_check_applies(user: dict[str, Any], session: dict[str, Any]) -> bool:
+    user_role = str(user.get("user_role") or "").strip().lower()
+    if user.get("is_internal_admin") or user_role in {"ceo", "admin", "system"}:
+        return False
+    if str(user.get("email") or "").strip() == "":
+        return False
+    return session["permissions"]["role"] == "owner"
+
+
+async def _own_employee_request_any_tenant(user: dict[str, Any]) -> dict[str, Any] | None:
+    from app.services.yeoljeong_finance_service import _db_row_to_record
+
+    conn = await _connect()
+    try:
+        row = await conn.fetchrow(OWN_EMPLOYEE_REQUEST_ANY_TENANT_SQL, str(user.get("email") or "").strip().lower())
+        return _db_row_to_record("employee_join_requests", row) if row else None
+    finally:
+        await conn.close()
+
+
+async def _apply_personal_workspace_entry(user: dict[str, Any], session: dict[str, Any]) -> None:
+    """owner 세션이 본인 개인 워크스페이스면 직원이 실제로 들어가야 할 곳을 세션에 붙인다.
+
+    - 저장된 시작 테넌트(default)가 다른 활성 조직이면 entry_tenant_redirect 로 알린다(가입 승인 후).
+    - 그렇지 않고 본인 직원 가입요청이 대기·반려면 직원 권한으로 응답한다(승인 전).
+    판정 실패는 숨기지 않고 entry_check=failed 로 응답에 남긴다.
+    """
+    from app import auth as auth_module
+
+    try:
+        entry = await auth_module.personal_workspace_entry(str(user.get("user_id") or ""), str(_tenant(user)))
+    except Exception:
+        logger.warning("obys /session 개인 워크스페이스 판정 실패", exc_info=True)
+        session["entry_check"] = "failed"
+        return
+    if not entry.get("personal_workspace"):
+        return
+    if entry.get("redirect_tenant_id"):
+        session["entry_tenant_redirect"] = {
+            "tenant_id": entry["redirect_tenant_id"],
+            "reason": "personal_workspace_default_elsewhere",
+        }
+        return
+    try:
+        own = await _own_employee_request_any_tenant(user)
+    except Exception:
+        logger.warning("obys /session 개인 워크스페이스 직원 가입요청 조회 실패", exc_info=True)
+        session["entry_check"] = "failed"
+        return
+    if not own or str(own.get("status") or "pending").strip().lower() not in {"pending", "rejected"}:
+        return
+    from app.services.yeoljeong_finance_service import employee_request_permissions
+
+    session["permissions"].update(employee_request_permissions(own))
+    session["employee_request_tenant_id"] = str(own.get("tenant_id") or "")
+
+
 async def session_for_current_user(user: dict[str, Any]) -> dict[str, Any]:
     """비레거시 테넌트 /session: 멤버십 세션에 본인 직원 가입요청(현재 테넌트 한정)을 덧입힌다.
 
     가입요청이 없거나 조회에 실패하면 tenant_session_for_user 응답을 그대로 돌려준다.
+    현재 테넌트가 본인 개인 워크스페이스인 owner 세션은 _apply_personal_workspace_entry 가 판정한다.
     """
     session = tenant_session_for_user(user)
+    if _personal_workspace_check_applies(user, session):
+        await _apply_personal_workspace_entry(user, session)
+        return session
     if not _employee_lookup_applies(user, session):
         return session
     try:
@@ -149,7 +219,6 @@ async def session_for_current_user(user: dict[str, Any]) -> dict[str, Any]:
 
     session["permissions"].update(employee_request_permissions(own))
     return session
-
 
 def _require_write(user: dict[str, Any]) -> None:
     membership = user.get("current_membership") or {}

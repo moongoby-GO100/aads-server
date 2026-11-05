@@ -572,8 +572,31 @@
     function openEmployeePreviewV41(request){try{sessionStorage.setItem(EMPLOYEE_PREVIEW_REQUEST_KEY_V41,JSON.stringify({...request,returnTo:"v41",returnHash:window.location.hash||"#employees",createdAt:Date.now()}))}catch(_error){showToast("이 브라우저에서는 직원 화면 보기를 열 수 없습니다.");return false}window.location.href="/static/apps/obys/index.html?employee_preview=1";return true}
     window.obysEmployeePreviewV41={open:openEmployeePreviewV41,canManage:()=>state.canManageOnboarding===true};
     nav.addEventListener("click",e=>{if(e.target.closest("[data-employee-preview-entry]")&&state.canManageOnboarding===true)openEmployeePreviewV41({open:"picker"})});
-    async function loadEmployeePreviewPermissionV41(){try{const payload=await financeApiV41("/session");state.legacyAccess=payload.legacy_access===true;state.canManageOnboarding=payload?.permissions?.can_manage_onboarding===true}catch(_error){state.canManageOnboarding=false}renderNav();document.getElementById("legacyBtn").hidden=true;document.querySelectorAll("[data-employee-preview-entry]").forEach(button=>{button.hidden=state.canManageOnboarding!==true});window.obysContractV41?.rerender?.()}
+    async function loadEmployeePreviewPermissionV41(){try{const payload=await financeApiV41("/session");if(await leaveForEmployeeEntryV41(payload))return;state.legacyAccess=payload.legacy_access===true;state.canManageOnboarding=payload?.permissions?.can_manage_onboarding===true}catch(_error){state.canManageOnboarding=false}renderNav();document.getElementById("legacyBtn").hidden=true;document.querySelectorAll("[data-employee-preview-entry]").forEach(button=>{button.hidden=state.canManageOnboarding!==true});window.obysContractV41?.rerender?.()}
     async function loadReadPermissionV41(){state.readRole=null;renderNav();const payload=await organizationApi("/me"),membership=payload.membership||{},role=String(membership.role||"").trim().toLowerCase();if(String(membership.tenant_id||"").trim()!==String(payload.tenant_id||"").trim()||!payload.tenant_id||String(membership.status||"").trim().toLowerCase()!=="active"||!["owner","admin","member","viewer"].includes(role))throw new Error("현재 회사의 활성 멤버십을 확인할 수 없습니다. 다시 시도해 주세요.");state.readRole=role;renderNav()}
+    // 직원 계정이 사장 화면으로 들어오면 직원 화면으로 돌려보낸다. 판정은 서버 /session 이 한다.
+    // loadEmployeePreviewPermissionV41 이 이미 받은 /session 응답을 그대로 쓴다(추가 요청·사업자 조회 지연 없음).
+    async function leaveForEmployeeEntryV41(session) {
+      const redirectTenantId=String(session?.entry_tenant_redirect?.tenant_id||"").trim();
+      if(redirectTenantId){
+        try{
+          const result=await organizationApi(`/tenants/${encodeURIComponent(redirectTenantId)}/switch`,{method:"POST"});
+          localStorage.setItem("aads_token",result.token);
+          localStorage.setItem("fb_access_token",result.token);
+          document.cookie=`aads_token=${encodeURIComponent(result.token)}; path=/; SameSite=Lax; Secure`;
+        }catch(_error){return false}
+        location.replace("/static/apps/obys/index.html");
+        return true;
+      }
+      const permissions=session?.permissions||{};
+      const role=String(permissions.role||"").trim().toLowerCase();
+      const employee=["employee","employee_pending","employee_rejected"].includes(role)||Boolean(permissions.employee_request_status);
+      if(session?.legacy_access!==true&&employee&&permissions.can_manage_onboarding!==true){
+        location.replace("/static/apps/obys/index.html");
+        return true;
+      }
+      return false;
+    }
     async function startWorkspaceV41(){
       state.workspaceReady=false;state.businessesLoaded=false;renderPageV41();
       await loadReadPermissionV41();

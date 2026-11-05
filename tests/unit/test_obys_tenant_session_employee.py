@@ -73,7 +73,14 @@ class TestSessionForCurrentUser:
         assert fake_request["calls"] == [("Staff2@newtalk.kr", UUID(user["tenant_id"]))]
 
     @pytest.mark.parametrize("role", ["owner", "admin"])
-    def test_owner_and_admin_are_unchanged_and_skip_lookup(self, fake_request, role):
+    def test_owner_and_admin_are_unchanged_and_skip_lookup(self, fake_request, role, monkeypatch):
+        # owner 는 개인 워크스페이스 판정을 거친다(2026-11-05). 개인 워크스페이스가 아니면 그대로다.
+        from app import auth as auth_module
+
+        async def not_personal(user_id, tenant_id):
+            return {"personal_workspace": False, "redirect_tenant_id": None}
+
+        monkeypatch.setattr(auth_module, "personal_workspace_entry", not_personal)
         fake_request["row"] = _request("approved")
         user = _user(role)
         assert _session(user) == upload.tenant_session_for_user(user)
