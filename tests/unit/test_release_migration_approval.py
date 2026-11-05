@@ -361,3 +361,29 @@ def test_registration_preserves_current_task(monkeypatch):
     assert bodies[1] == {'revision_id': 'rev', 'expected_generation': 1}
     with pytest.raises(a.Rejected, match='source_task_id_required'):
         a.register('draft', SHA)
+
+
+def test_draft_body_includes_full_header_and_objects(monkeypatch, capsys):
+    root = ROOT
+    names = ['20261104_milestone_review_rejected_at.sql', '20261104_pipeline_job_checkpoints.sql']
+    items = [{'file': 'migrations/' + n, 'sha256': a.digest((root / 'migrations' / n).read_bytes())}
+             for n in names]
+    state = dict(tenant_id='tenant', target_db='aads', ledger={}, document=None)
+    monkeypatch.setattr(a, 'lookup', lambda sha, root: state)
+    monkeypatch.setattr(a, 'inventory', lambda r, ledger, target='aads': items)
+    monkeypatch.setattr(a, 'register', lambda *args: pytest.fail('unexpected registration'))
+    monkeypatch.setattr(a.sys, 'argv', ['approval', 'draft', '--root', str(root), '--release-sha', SHA])
+    assert a.main() == 0
+    out = capsys.readouterr().out
+    for needle in ('milestones.review_rejected_at', 'goal_task_links.milestone_linked_at',
+                   'trg_goal_task_links_milestone_linked_at', 'aads_pipeline_job_checkpoints_prune',
+                   'aads_pipeline_job_checkpoints_purge_terminal', '롤백', '이 파일이 만드는 객체:'):
+        assert needle in out, needle
+    block = out.split('```aads-migration-approval\n')[1].split('\n```')[0]
+    assert json.loads(block)['manifest_sha256'] == a.manifest_hash(items)
+
+
+def test_draft_without_header_keeps_fallback():
+    out = a.describe_migration({'file': 'migrations/x.sql'}, 'SELECT 1;')
+    assert 'SQL 본문을 직접 검토하세요' in out
+    assert '만드는 객체' not in out

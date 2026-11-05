@@ -62,6 +62,50 @@ def migration_target(name):
     return target
 
 
+def header_comments(text):
+    """파일 맨 앞의 연속된 `--` 주석 블록. 빈 주석 줄은 ''(문단 구분)로 남긴다."""
+    lines = []
+    for line in text.splitlines():
+        if not line.startswith('--'):
+            break
+        lines.append(line[2:].strip())
+    while lines and not lines[-1]:
+        lines.pop()
+    return lines
+
+
+_IDENT = r'((?:"[^"]+"|[A-Za-z_][\w$]*)(?:\.(?:"[^"]+"|[A-Za-z_][\w$]*))?)'
+
+
+def sql_objects(text):
+    """SQL 본문(주석 제외)에서 만드는 열·표·함수·트리거를 뽑는다."""
+    body = '\n'.join(x for x in text.splitlines() if not x.lstrip().startswith('--'))
+    found = []
+    for m in re.finditer(r'ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?' + _IDENT + r'([^;]*)', body, re.I):
+        for c in re.finditer(r'ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?' + _IDENT, m.group(2), re.I):
+            found.append(f'열 {m.group(1)}.{c.group(1)}')
+    for m in re.finditer(r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?' + _IDENT, body, re.I):
+        found.append(f'표 {m.group(1)}')
+    for m in re.finditer(r'CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+' + _IDENT, body, re.I):
+        found.append(f'함수 {m.group(1)}')
+    for m in re.finditer(r'CREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\s+' + _IDENT, body, re.I):
+        found.append(f'트리거 {m.group(1)}')
+    return list(dict.fromkeys(found))
+
+
+def describe_migration(item, text):
+    out = f"- {item['file']}:\n"
+    head = header_comments(text)
+    if any(head):
+        out += ''.join(('  ' + x if x else '') + '\n' for x in head)
+    else:
+        out += '  SQL 본문을 직접 검토하세요\n'
+    objs = sql_objects(text)
+    if objs:
+        out += '  이 파일이 만드는 객체:\n' + ''.join(f'  - {o}\n' for o in objs)
+    return out
+
+
 def lookup(release_sha, root=None):
     # One SELECT, one statement snapshot; no approval files or environment decisions.
     query = f"""SELECT json_build_object(
@@ -251,8 +295,7 @@ def main():
                 manifest_sha256=manifest_hash(items), expires_at=(datetime.now(timezone.utc)+timedelta(hours=24)).isoformat())
             content = '# 릴리스 마이그레이션 적용 승인\n\nAPI 롤백은 적용된 SQL을 되돌리지 않음\n\n'
             for item in items:
-                comments = [s.strip('- ').strip() for s in (args.root / item['file']).read_text().splitlines() if s.startswith('--')]
-                content += f"- {item['file']}: " + (' '.join(comments[:3]) or 'SQL 본문을 직접 검토하세요') + '\n'
+                content += describe_migration(item, (args.root / item['file']).read_text())
             content += '\n```aads-migration-approval\n' + json.dumps(data, ensure_ascii=False, indent=2) + '\n```\n'
             print(content)
             if args.register:
