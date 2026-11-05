@@ -1246,18 +1246,30 @@ class JobSubmitRequest(BaseModel):
         return v
 
 
+def _work_item_binding_needs_warning(binding: Optional[dict]) -> bool:
+    """카드가 없는 마일스톤처럼 알릴 후보도 없는 미연결은 조용히 두고, 사람이 볼 만한 미연결만 경고한다."""
+    if not binding or binding.get("bound"):
+        return False
+    reason = str(binding.get("reason") or "")
+    return bool(binding.get("candidates") or binding.get("ignored")
+                or reason.startswith("bind_error") or reason == "directive_ids_not_found")
+
+
 class JobSubmitResponse(BaseModel):
     job_id: str
     status: str
     message: str
     canonical_gate: Optional[dict] = Field(None, description="정본 미등록 경고(그림자 모드, 선택)")
+    work_item_binding: Optional[dict] = Field(
+        None, description="목표에 연결된 제출의 업무 카드 연결 결과(bound/source/reason/candidates)")
 
     @model_serializer(mode="wrap")
     def _omit_empty_canonical_gate(self, handler):
         # 데코레이터를 건드리지 않고 기존 응답 shape 를 유지한다: 경고가 없으면 키 자체를 뺀다.
         data = handler(self)
-        if data.get("canonical_gate") is None:
-            data.pop("canonical_gate", None)
+        for key in ("canonical_gate", "work_item_binding"):
+            if data.get(key) is None:
+                data.pop(key, None)
         return data
 
 
@@ -2593,6 +2605,7 @@ async def submit_job(
 
     # Goal link (best-effort, I-3): (a) 제출 인자 > (b) 지시서 GOAL_ID/MILESTONE_ID >
     # (c) 제출 세션의 단일 in_progress 마일스톤 > (d) 비움. 추정 연결은 하지 않는다.
+    work_item_binding = None
     try:
         from app.services.goal_autolink import autolink_job
         autolink = await autolink_job(
@@ -2608,6 +2621,10 @@ async def submit_job(
         if goal_link:
             await _persist_job_goal_context(pool, job_id, goal_link.goal_id, goal_link.milestone_id)
             msg += f" 목표 {goal_link.goal_id} 에 연결되었습니다."
+            work_item_binding = autolink.work_item_binding
+            if _work_item_binding_needs_warning(work_item_binding):
+                msg += (f" 업무 카드는 연결되지 않았습니다({work_item_binding.get('reason')}) — "
+                        "지시서에 WORK_ITEM_ID: <uuid> 줄을 넣어 다시 제출하거나 후보를 확인하세요.")
     except Exception as exc:
         goal_link = None
         logger.warning("pipeline_runner.goal_link_fail", job_id=job_id, error=str(exc))
@@ -2626,7 +2643,8 @@ async def submit_job(
             project=req.project, job_id=job_id,
         )
     gate = merge_spec_warning(gate, spec_warning)
-    return JobSubmitResponse(job_id=job_id, status="queued", message=msg, canonical_gate=gate)
+    return JobSubmitResponse(job_id=job_id, status="queued", message=msg, canonical_gate=gate,
+                             work_item_binding=work_item_binding)
 
 
 # ── 끝난 작업은 큐 테이블에 남지 않는다 (AADS-RUNNER-ARCHIVE-VISIBILITY) ──
@@ -4858,6 +4876,8 @@ async def submit_batch(
                 bind_source=pair.bind_source,
             )
             result["goal_link"] = autolink.as_dict()
+            if autolink.work_item_binding is not None:
+                result["work_item_binding"] = autolink.work_item_binding
             if pair.warning:
                 result["goal_link_warning"] = pair.warning
             if autolink.linked:

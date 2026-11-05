@@ -61,6 +61,7 @@ class AutolinkResult(NamedTuple):
     milestone_id: Optional[str]
     source: str
     reason: Optional[str] = None
+    work_item_binding: Optional[dict[str, Any]] = None
 
     @property
     def linked(self) -> bool:
@@ -167,6 +168,32 @@ async def _record(job_id: str, result: AutolinkResult) -> None:
         logger.debug("goal_autolink_record_failed job=%s: %s", job_id, str(exc)[:200])
 
 
+async def _record_work_item_binding(job_id: str, binding: dict[str, Any]) -> None:
+    """업무 카드 연결 출처(directive/auto_match)·미연결 사유를 logs 에 남긴다 (best-effort).
+
+    goal_task_links.bind_source 는 목표 연결의 출처라 덮지 않는다 — 카드 연결 출처는 여기에 따로 둔다.
+    """
+    try:
+        from app.core.db_pool import get_pool
+
+        async with get_pool().acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE pipeline_jobs
+                   SET logs = COALESCE(logs, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+                         'ts', NOW()::text, 'event', 'work_item_bind',
+                         'bound', $2::boolean, 'source', $3::text, 'reason', $4::text,
+                         'work_item_ids', $5::text))
+                 WHERE job_id = $1
+                   AND (logs IS NULL OR jsonb_typeof(logs) = 'array')
+                """,
+                job_id, bool(binding.get("bound")), binding.get("source") or "",
+                binding.get("reason") or "", ",".join(binding.get("work_item_ids") or []),
+            )
+    except Exception as exc:  # noqa: BLE001 — 기록 실패가 제출을 막지 않는다
+        logger.debug("work_item_bind_record_failed job=%s: %s", job_id, str(exc)[:200])
+
+
 async def autolink_job(
     job_id: str,
     project: str,
@@ -195,16 +222,22 @@ async def autolink_job(
     except Exception as exc:  # noqa: BLE001 — 연결 실패는 제출 실패가 아니다
         logger.warning("goal_autolink_failed job=%s: %s", job_id, str(exc)[:200])
         result = _none(REASON_ERROR)
-    try:
-        if result.linked:
+    if result.linked:
+        binding: Optional[dict[str, Any]]
+        try:
             from app.core.db_pool import get_pool
             from app.services.goal_work_item_sync import bind_work_items
 
             async with get_pool().acquire() as conn:
                 async with conn.transaction():
-                    await bind_work_items(conn, job_id, instruction)
-    except Exception as exc:
-        logger.warning("work_item_bind_failed job=%s: %s", job_id, str(exc)[:200])
+                    binding = await bind_work_items(conn, job_id, instruction)
+        except Exception as exc:
+            logger.warning("work_item_bind_failed job=%s: %s", job_id, str(exc)[:200])
+            binding = {"bound": False, "reason": f"bind_error:{type(exc).__name__}",
+                       "detail": "업무 카드 연결 중 오류", "candidates": []}
+        if binding is not None:
+            result = result._replace(work_item_binding=binding)
+            await _record_work_item_binding(job_id, binding)
     await _record(job_id, result)
     logger.info(
         "goal_autolink job=%s source=%s goal=%s milestone=%s reason=%s",

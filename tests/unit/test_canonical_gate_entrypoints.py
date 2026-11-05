@@ -155,6 +155,13 @@ def runner_env(monkeypatch):
     monkeypatch.setattr(pr, "_relink_superseded_orphans", no_orphans)
     monkeypatch.setattr(pr, "_resolve_milestone_order", order)
     monkeypatch.setattr(prs, "_link_job_to_goal_explicit", link)
+
+    async def bound(*_a, **_k):
+        return None  # 연결 결과 없음 — 응답 shape 는 기존과 같다
+
+    # 업무 카드 연결은 DB 가 필요하다 — 게이트 응답 shape 검증과 무관하므로 고정 결과로 대체한다.
+    monkeypatch.setattr("app.services.goal_work_item_sync.bind_work_items", bound)
+    monkeypatch.setattr("app.services.goal_autolink._record_work_item_binding", noop)
     monkeypatch.setattr(db_pool, "get_pool", lambda: env.pool)
     return env
 

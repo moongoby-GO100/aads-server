@@ -57,6 +57,38 @@ def test_pre_push_done_is_ignored():
     conn.fetch.assert_not_called()
 
 
+def leaf_story_tree(story='draft', other='draft'):
+    return [dict(id='e', parent_id=None, type='epic', status='draft'),
+            dict(id='s', parent_id='e', type='story', status=story),
+            dict(id='t', parent_id='e', type='task', status=other)]
+
+
+@pytest.mark.parametrize('state', ['draft', 'ready', 'changes_requested'])
+def test_linked_childless_story_starts_like_task(state):
+    assert transition_plan(leaf_story_tree(story=state), 'running', ['s']) == {'s': 'in_progress'}
+
+
+@pytest.mark.parametrize('state', ['draft', 'ready', 'in_progress'])
+def test_linked_childless_story_done_goes_to_review(state):
+    plan = transition_plan(leaf_story_tree(story=state), 'done', ['s'])
+    assert plan['s'] == 'in_review'
+
+
+def test_unlinked_childless_story_is_not_moved():
+    assert transition_plan(leaf_story_tree(), 'running', []) == {}
+    assert transition_plan(leaf_story_tree(), 'done', ['t']) == {'t': 'in_review'}
+
+
+def test_story_with_children_is_rolled_up_only():
+    # 자식 있는 story 는 연결돼도 직접 전이하지 않는다
+    assert transition_plan(tree(), 'running', ['s']) == {}
+    assert transition_plan(tree(), 'done', ['s']) == {}
+    assert transition_plan(tree('in_review', 'draft'), 'done', ['s']) == {}
+    # 자식이 모두 in_review/completed 일 때만 롤업한다
+    assert transition_plan(tree('in_review', 'completed'), 'done', ['s']) == {'s': 'in_review', 'e': 'in_review'}
+    assert transition_plan(tree('completed', 'completed'), 'done', ['s']) == {'s': 'completed', 'e': 'completed'}
+
+
 def test_binding_scope_and_no_implicit_binding():
     conn = AsyncMock()
     asyncio.run(bind_work_items(conn, 'j', 'nothing'))
@@ -167,14 +199,14 @@ def test_running_does_not_update_goal_link():
 
 
 def test_bind_failure_still_records(monkeypatch):
-    from types import SimpleNamespace
     from unittest.mock import MagicMock
     from app.services import goal_autolink
 
-    result = SimpleNamespace(linked=True, source='test', goal_id='g', milestone_id='m', reason='test')
+    result = goal_autolink.AutolinkResult('g', 'm', 'test', 'test')
     monkeypatch.setattr(goal_autolink, '_resolve_and_link', AsyncMock(return_value=result))
     record = AsyncMock()
     monkeypatch.setattr(goal_autolink, '_record', record)
+    monkeypatch.setattr(goal_autolink, '_record_work_item_binding', AsyncMock())
     pool = MagicMock()
     conn = FakeConnection()
     class Acquire(Transaction):
@@ -183,8 +215,9 @@ def test_bind_failure_still_records(monkeypatch):
     pool.acquire.return_value = Acquire()
     monkeypatch.setattr('app.core.db_pool.get_pool', lambda: pool)
     monkeypatch.setattr('app.services.goal_work_item_sync.bind_work_items', AsyncMock(side_effect=RuntimeError('bind failed')))
-    asyncio.run(goal_autolink.autolink_job('j', 'AADS', instruction='test'))
-    record.assert_awaited_once_with('j', result)
+    out = asyncio.run(goal_autolink.autolink_job('j', 'AADS', instruction='test'))
+    assert out.work_item_binding['bound'] is False and out.work_item_binding['reason'] == 'bind_error:RuntimeError'
+    record.assert_awaited_once_with('j', out)
 
 
 def test_schema_probe_requires_both_columns(monkeypatch):
