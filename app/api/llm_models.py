@@ -14,6 +14,7 @@ from app.core.db_pool import get_pool
 from app.services import cli_model_autoreg
 from app.services.model_registry import (
     classify_stored_discovery_run,
+    get_model_freshness_report,
     list_provider_discovery_freshness,
     list_provider_summaries,
     list_registered_models,
@@ -485,10 +486,27 @@ async def get_provider_summary() -> dict[str, Any]:
     except Exception:
         logger.exception("llm_models.discovery_freshness_failed")
         freshness = {}
+    try:
+        model_freshness = await get_model_freshness_report()
+    except Exception:
+        logger.exception("llm_models.model_freshness_failed")
+        model_freshness = {}
+    per_provider = model_freshness.get("providers") or {}
     # 요약 캐시를 오염시키지 않도록 복사본에 붙인다.
-    summaries = [{**row, "discovery_freshness": freshness.get(row["provider"])} for row in summaries]
+    summaries = [
+        {
+            **row,
+            "discovery_freshness": freshness.get(row["provider"]),
+            "model_freshness": per_provider.get(row["provider"]),
+        }
+        for row in summaries
+    ]
     return {
         "providers": summaries,
+        "keyed_providers_without_collector": model_freshness.get("keyed_providers_without_collector", []),
+        "skipped_or_failed_24h_providers": model_freshness.get("skipped_or_failed_24h_providers", []),
+        "skipped_or_failed_24h": model_freshness.get("skipped_or_failed_24h", []),
+        "model_freshness_window_days": model_freshness.get("window_days"),
         "latest_confirmed_providers": sorted(p for p, f in freshness.items() if f["latest_confirmed"]),
         "not_latest_confirmed_providers": sorted(p for p, f in freshness.items() if not f["latest_confirmed"]),
         "stale_providers": sorted(p for p, f in freshness.items() if f["state"] == "stale"),
@@ -508,6 +526,11 @@ async def get_provider_summary() -> dict[str, Any]:
         "last_sync_actor": (last_sync["actor"] if last_sync else None),
         "normalized_providers": (last_sync["details"].get("normalized_providers") if last_sync else {}) or {},
     }
+
+
+@router.get("/freshness")
+async def get_model_freshness() -> dict[str, Any]:
+    return await get_model_freshness_report()
 
 
 @router.get("/discovery-runs")

@@ -5,12 +5,13 @@ import functools
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Iterable, Sequence
+from typing import Any, Awaitable, Callable, Iterable, Mapping, NamedTuple, Sequence
 
 import asyncpg
 import httpx
@@ -851,16 +852,14 @@ def _pricing_for(model_id: str) -> dict[str, str]:
 
 
 def _anthropic_key_supports_models_api(key_name: str) -> bool:
-    return not str(key_name or "").upper().startswith("ANTHROPIC_AUTH_TOKEN")
+    """호환용. 예전에는 OAuth 키 이름을 제외했지만 지금은 OAuth/문서 수집이 있어 키 이름이 있으면 수집 가능이다."""
+    return _provider_auto_discovery_supported(
+        "anthropic", {"available_key_count": 1 if str(key_name or "").strip() else 0}
+    )
 
 
 def _provider_auto_discovery_supported(provider: str, provider_state: dict[str, Any]) -> bool:
-    if provider == "anthropic":
-        return any(
-            key.get("is_available") and _anthropic_key_supports_models_api(str(key.get("key_name") or ""))
-            for key in provider_state.get("keys", [])
-        )
-    supported = {"openai", "gemini", "litellm", "kimi", "deepseek", *_OPENAI_COMPAT_DISCOVERY_BASE_URLS}
+    supported = {"openai", "anthropic", "gemini", "litellm", "kimi", "deepseek", *_OPENAI_COMPAT_DISCOVERY_BASE_URLS}
     return provider in supported and int(provider_state.get("available_key_count", 0)) > 0
 
 
@@ -975,31 +974,43 @@ def _collect_provider_normalizations(key_state: dict[str, dict[str, Any]]) -> di
     return normalized_counts
 
 
-def _is_auto_executable_discovered(provider: str, model_id: str, raw: dict[str, Any] | None = None) -> bool:
+_NON_TEXT_MODEL_TOKENS = (
+    "audio",
+    "dall-e",
+    "embedding",
+    "image",
+    "moderation",
+    "realtime",
+    "rerank",
+    "search",
+    "transcribe",
+    "tts",
+    "whisper",
+)
+_OPENAI_TEXT_PREFIXES = ("gpt-", "chatgpt-", "o1", "o3", "o4", "o5")
+
+
+def _is_text_model_candidate(provider: str, model_id: str, raw: dict[str, Any] | None = None) -> bool:
+    """자동 활성화 심사 대상(텍스트 생성 모델)인가. 활성화 여부는 이 함수가 아니라 호출 검증이 정한다."""
     lowered = model_id.lower()
-    excluded = (
-        "audio",
-        "embedding",
-        "image",
-        "moderation",
-        "realtime",
-        "search",
-        "transcribe",
-        "tts",
-        "whisper",
-    )
-    if any(token in lowered for token in excluded):
+    if not lowered or any(token in lowered for token in _NON_TEXT_MODEL_TOKENS):
         return False
     if provider == "anthropic":
         return lowered.startswith("claude-")
-    if provider == "anthropic":
-        return lowered.startswith("claude-")
     if provider == "openai":
-        return lowered.startswith(("gpt-", "o"))
+        return lowered.startswith(_OPENAI_TEXT_PREFIXES)
     if provider == "gemini":
         methods = set((raw or {}).get("supportedGenerationMethods") or [])
         return lowered.startswith("gemini-") and (not methods or "generateContent" in methods)
-    return False
+    return True
+
+
+def _is_auto_executable_discovered(provider: str, model_id: str, raw: dict[str, Any] | None = None) -> bool:
+    """호환용. 'image' 등 비텍스트 id 제외 동작은 유지하고 판정은 _is_text_model_candidate 에 위임한다.
+
+    발견만으로 실행 가능이 되지는 않는다(호출 검증 apply_activation_probes 가 켠다).
+    """
+    return _is_text_model_candidate(provider, model_id, raw)
 
 
 def _discovered_model_row(
@@ -1017,7 +1028,9 @@ def _discovered_model_row(
     keyless = provider in _KEYLESS_PROVIDERS
     has_runtime_models = keyless or available_key_count > 0
     auto_discovery_supported = _provider_auto_discovery_supported(provider, provider_state)
-    executable = has_runtime_models and _is_auto_executable_discovered(provider, model_id, raw)
+    # 발견만으로는 활성화하지 않는다. 호출 검증(apply_activation_probes)을 통과해야 켜진다.
+    executable = False
+    activation_candidate = has_runtime_models and _is_text_model_candidate(provider, model_id, raw)
     template = _build_template(provider, model_id)
     metadata = {
         "template_provider": provider,
@@ -1035,7 +1048,8 @@ def _discovered_model_row(
         "raw_provider_aliases": sorted(provider_state.get("raw_providers", set())),
         "active_key_count": active_key_count,
         "available_key_count": available_key_count,
-        "requires_admin_review": not executable,
+        "requires_admin_review": True,
+        "activation_candidate": activation_candidate,
         "execution_backend": template.execution_backend,
         "execution_model_id": template.execution_model_id,
         "execution_base_url": template.execution_base_url,
@@ -1146,36 +1160,136 @@ async def _fetch_openai_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     return rows, {"status": "ok", "count": len(rows), "key_source": key_source}
 
 
+_ANTHROPIC_DOCS_URL = (
+    os.getenv("ANTHROPIC_MODELS_DOCS_URL") or "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+).strip()
+_ANTHROPIC_DOCS_CACHE_SECONDS = 24 * 3600.0
+_ANTHROPIC_DOCS_MAX_IDS = 60
+_ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20"
+_ANTHROPIC_DOC_ID_RE = re.compile(r"(?<![\w.@/:-])claude-[a-z0-9]+(?:-[a-z0-9.]+)*(?![\w@:/])")
+_anthropic_docs_cache: dict[str, Any] = {"at": 0.0, "ids": []}
+
+
+def extract_claude_model_ids(text: str) -> list[str]:
+    """공식 모델 문서 본문에서 claude-* 모델 id 후보를 뽑는다. 숫자가 없는 토큰(claude-code 등)과 Bedrock/Vertex 표기는 버린다."""
+    found: list[str] = []
+    for match in _ANTHROPIC_DOC_ID_RE.finditer(str(text or "").lower()):
+        candidate = match.group(0).rstrip(".-")
+        if not any(ch.isdigit() for ch in candidate) or candidate in found:
+            continue
+        found.append(candidate)
+    return sorted(found)[:_ANTHROPIC_DOCS_MAX_IDS]
+
+
+async def _list_anthropic_models_via_oauth() -> list[dict[str, Any]]:
+    """OAuth 토큰(R-AUTH: anthropic_client/auth_provider 경유)으로 GET /v1/models. 거부되면 예외를 올린다."""
+    from app.core.auth_provider import create_anthropic_client, get_oauth_tokens_async
+
+    tokens = await get_oauth_tokens_async()
+    if not tokens:
+        raise RuntimeError("no_oauth_token")
+    client = create_anthropic_client(token=tokens[0]).with_options(
+        default_headers={"anthropic-beta": _ANTHROPIC_OAUTH_BETA},
+        timeout=_DISCOVERY_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
+    page = await client.models.list(limit=100)
+    rows: list[dict[str, Any]] = []
+    for item in getattr(page, "data", None) or []:
+        model_id = str(getattr(item, "id", "") or "").strip()
+        if model_id:
+            rows.append({
+                "model_id": model_id,
+                "display_name": getattr(item, "display_name", None) or _display_name_for(model_id),
+                "raw": {"id": model_id, "created_at": str(getattr(item, "created_at", "") or "")},
+            })
+    return rows
+
+
+async def _read_anthropic_docs_model_ids() -> tuple[list[str], float]:
+    """공식 모델 문서를 하루 1회 읽는다(프로세스 캐시). (id 목록, 읽은 시각 epoch)."""
+    now_ts = time.time()
+    cached_ids = _anthropic_docs_cache.get("ids") or []
+    if cached_ids and now_ts - float(_anthropic_docs_cache.get("at") or 0.0) < _ANTHROPIC_DOCS_CACHE_SECONDS:
+        return list(cached_ids), float(_anthropic_docs_cache["at"])
+    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS, follow_redirects=True) as client:
+        response = await client.get(_ANTHROPIC_DOCS_URL)
+        response.raise_for_status()
+        ids = extract_claude_model_ids(response.text)
+    if not ids:
+        raise ValueError("docs_no_model_ids")
+    _anthropic_docs_cache.update({"at": now_ts, "ids": ids})
+    return ids, now_ts
+
+
 async def _fetch_anthropic_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """수집 순서: ① API 키 /v1/models ② OAuth /v1/models ③ 공식 모델 문서(claude-* id 후보).
+
+    ③ 의 후보는 발견일 뿐이다. 활성화는 호출 검증(apply_activation_probes)을 통과해야 한다.
+    """
     api_key, oauth_runtime_executable = await _get_anthropic_models_api_key_and_runtime_state()
-    if not api_key:
+    base_meta = {
+        "runtime_executable": oauth_runtime_executable or bool(api_key),
+        "auto_discovery_supported": True,
+        "discovery_requirement": _provider_discovery_requirement("anthropic"),
+    }
+    if api_key:
+        async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
+            response = await client.get(
+                "https://api.anthropic.com/v1/models?limit=100",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        rows = []
+        for item in payload.get("data", []):
+            model_id = str(item.get("id") or "").strip()
+            if model_id:
+                rows.append({"model_id": model_id, "display_name": item.get("display_name") or _display_name_for(model_id), "raw": item})
+        return rows, {"status": "ok", "count": len(rows), "model_source": "discovery", "discovery_source": "anthropic_api", **base_meta}
+    if not oauth_runtime_executable:
         return [], {
             "status": "skipped",
-            "error": "oauth_runtime_only_models_api_unavailable",
-            "runtime_executable": oauth_runtime_executable,
+            "error": "missing_key",
+            "runtime_executable": False,
             "auto_discovery_supported": False,
             "discovery_requirement": _provider_discovery_requirement("anthropic"),
             "model_source": "template",
         }
-    async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS) as client:
-        response = await client.get(
-            "https://api.anthropic.com/v1/models?limit=100",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-        )
-        response.raise_for_status()
-        payload = response.json()
-    rows = []
-    for item in payload.get("data", []):
-        model_id = str(item.get("id") or "").strip()
-        if model_id:
-            rows.append({"model_id": model_id, "display_name": item.get("display_name") or _display_name_for(model_id), "raw": item})
+    oauth_models_error = ""
+    try:
+        rows = await _list_anthropic_models_via_oauth()
+        if rows:
+            return rows, {
+                "status": "ok", "count": len(rows), "model_source": "discovery",
+                "discovery_source": "anthropic_oauth_api", **base_meta,
+            }
+        oauth_models_error = "empty_list"
+    except Exception as exc:
+        oauth_models_error = getattr(exc, "status_code", None) and f"http_{exc.status_code}" or type(exc).__name__
+    try:
+        ids, fetched_ts = await _read_anthropic_docs_model_ids()
+    except Exception as exc:
+        return [], {
+            "status": "skipped",
+            "error": "oauth_runtime_only_models_api_unavailable",
+            "docs_error": _discovery_error_code(exc, 120),
+            "oauth_models_api": oauth_models_error,
+            **{**base_meta, "auto_discovery_supported": False},
+            "model_source": "template",
+        }
+    rows = [
+        {"model_id": model_id, "display_name": _display_name_for(model_id), "raw": {"id": model_id, "source": "anthropic_models_docs"}}
+        for model_id in ids
+    ]
     return rows, {
         "status": "ok",
         "count": len(rows),
-        "runtime_executable": True,
-        "auto_discovery_supported": True,
-        "discovery_requirement": _provider_discovery_requirement("anthropic"),
         "model_source": "discovery",
+        "discovery_source": "anthropic_docs",
+        "fetched_at": datetime.fromtimestamp(fetched_ts, tz=timezone.utc).isoformat(),
+        "oauth_models_api": oauth_models_error,
+        **base_meta,
     }
 
 
@@ -1577,7 +1691,7 @@ async def discover_provider_model_rows(
                     key: result[key]
                     for key in (
                         "discovery_source", "source_path", "fetched_at", "hidden_count",
-                        "canonical_ids", "alias_ids", "unverified_new_ids", "missing_canonical_ids", "absence_policy",
+                        "oauth_models_api", "docs_error", "canonical_ids", "alias_ids", "unverified_new_ids", "missing_canonical_ids", "absence_policy",
                     )
                     if key in result
                 },
@@ -1609,6 +1723,341 @@ async def discover_provider_model_rows(
         if row["provider"] in confirmed_providers:
             row["metadata"]["catalog_confirmed_at"] = observed_at
     return all_rows, run_results
+
+
+# ── 발견 모델 자동 활성화: 실행 가능성 판정 ─────────────────────────────────
+# provider 목록으로 켜고 끄지 않는다. 키가 있거나 keyless 인 텍스트 모델이 실제 호출(max_tokens<=16) 1회를
+# 통과하면 켠다. 판정 결과는 llm_models.metadata.activation_probe 에 남기고, 이미 판정한 모델은 다시 부르지 않는다.
+_ACTIVATION_ENABLED_ENV = "LLM_MODEL_AUTO_ACTIVATE"
+_ACTIVATION_MAX_PER_PROVIDER = max(0, int(os.getenv("LLM_MODEL_AUTO_ACTIVATE_MAX_PER_PROVIDER", "5")))
+_ACTIVATION_RETRY_AFTER = timedelta(hours=24)
+_ACTIVATION_TRANSIENT_RETRY_AFTER = timedelta(hours=1)
+_ACTIVATION_PROBE_TIMEOUT_SECONDS = 20.0
+_ACTIVATION_PROBE_MAX_TOKENS = 16
+_ACTIVATION_PROBE_PROMPT = "Reply with exactly: OK"
+_NON_DISCOVERY_SOURCES = frozenset({"", "template", "accepted_alias", "manual_seed"})
+_PROBE_ERROR_CODE_RE = re.compile(r"[A-Za-z0-9_.-]{1,60}")
+
+
+class ProbeOutcome(NamedTuple):
+    ok: bool
+    error: str = ""
+    transient: bool = False
+
+
+Prober = Callable[[Mapping[str, Any]], Awaitable[ProbeOutcome]]
+
+
+def _probe_outcome_from_chat_response(response: httpx.Response) -> ProbeOutcome:
+    """OpenAI 호환 chat/completions 응답을 판정한다. 오류 본문 원문은 남기지 않는다(키·URL 유출 방지)."""
+    status = response.status_code
+    if status == 200:
+        try:
+            choices = response.json().get("choices")
+        except Exception:
+            return ProbeOutcome(False, "schema_invalid", False)
+        if isinstance(choices, list) and choices:
+            return ProbeOutcome(True)
+        return ProbeOutcome(False, "schema_invalid", False)
+    code = ""
+    try:
+        body = response.json()
+        err = body.get("error") if isinstance(body, dict) else None
+        if isinstance(err, dict):
+            code = str(err.get("code") or err.get("type") or "")
+    except Exception:
+        pass
+    label = f"http_{status}" + (f":{code}" if _PROBE_ERROR_CODE_RE.fullmatch(code) else "")
+    return ProbeOutcome(False, label, status in {408, 409, 425, 429} or status >= 500)
+
+
+async def _probe_chat_completions(url: str, api_key: str, body: dict[str, Any]) -> ProbeOutcome:
+    try:
+        async with httpx.AsyncClient(timeout=_ACTIVATION_PROBE_TIMEOUT_SECONDS) as client:
+            response = await client.post(url, json=body, headers={"Authorization": f"Bearer {api_key}"})
+    except httpx.HTTPError as exc:
+        return ProbeOutcome(False, f"fetch_error:{type(exc).__name__}", True)
+    return _probe_outcome_from_chat_response(response)
+
+
+async def _probe_anthropic_oauth(model: str) -> ProbeOutcome:
+    """Claude 는 OAuth 토큰(R-AUTH)으로 messages 1회. anthropic_client 폴백 체인(타 모델로 성공 위장)을 타지 않는다."""
+    import anthropic
+
+    from app.core.auth_provider import create_anthropic_client, get_oauth_tokens_async
+
+    tokens = await get_oauth_tokens_async()
+    if not tokens:
+        return ProbeOutcome(False, "no_oauth_token", False)
+    client = create_anthropic_client(token=tokens[0]).with_options(
+        timeout=_ACTIVATION_PROBE_TIMEOUT_SECONDS, max_retries=0
+    )
+    try:
+        await client.messages.create(
+            model=model,
+            max_tokens=_ACTIVATION_PROBE_MAX_TOKENS,
+            messages=[{"role": "user", "content": _ACTIVATION_PROBE_PROMPT}],
+        )
+    except anthropic.APIStatusError as exc:
+        status = int(getattr(exc, "status_code", 0) or 0)
+        return ProbeOutcome(False, f"http_{status}", status in {408, 409, 425, 429} or status >= 500)
+    except anthropic.APIConnectionError as exc:
+        return ProbeOutcome(False, f"fetch_error:{type(exc).__name__}", True)
+    return ProbeOutcome(True)
+
+
+def _is_google_route(row: Mapping[str, Any]) -> bool:
+    """Google/Gemini 로 나가는 행인가. litellm 별칭은 litellm_params.model 로도 본다."""
+    provider = str(row.get("provider") or "")
+    if provider == "antigravity":
+        return False  # AGY 는 Google API 가 아니라 CLI 경로다. model_id 가 gemini-* 여도 API 정책 게이트 대상이 아니다.
+    if provider == "gemini":
+        return True
+    meta = _coerce_json_object(row.get("metadata"))
+    raw = _coerce_json_object(meta.get("raw"))
+    upstream = str(_coerce_json_object(raw.get("litellm_params")).get("model") or "").lower()
+    model_id = str(row.get("model_id") or "").lower()
+    return (
+        model_id.startswith(("gemini", "google"))
+        or upstream.startswith(("gemini", "google", "vertex_ai"))
+        or "gemini" in upstream
+    )
+
+
+async def probe_model_execution(row: Mapping[str, Any]) -> ProbeOutcome:
+    """기존 실행 경로(anthropic OAuth / openai 호환 직접 / LiteLLM 프록시)로 짧은 호출 1회."""
+    provider = str(row.get("provider") or "")
+    meta = _coerce_json_object(row.get("metadata"))
+    backend = str(meta.get("execution_backend") or "")
+    model = str(row.get("execution_model_id") or row.get("model_id") or "")
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": _ACTIVATION_PROBE_PROMPT}],
+    }
+    if provider == "anthropic":
+        return await _probe_anthropic_oauth(model)
+    if backend == "openai_compatible_direct":
+        base_url = str(meta.get("execution_base_url") or _DIRECT_PROVIDER_BASE_URLS.get(provider) or "")
+        api_key = await _get_first_provider_key(provider)
+        if not api_key and provider == "openai":
+            api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        if not base_url or not api_key:
+            return ProbeOutcome(False, "missing_key", False)
+        token_field = "max_completion_tokens" if provider == "openai" else "max_tokens"
+        body[token_field] = _ACTIVATION_PROBE_MAX_TOKENS
+        return await _probe_chat_completions(f"{base_url.rstrip('/')}/chat/completions", api_key, body)
+    if backend == "litellm_proxy" or provider == "litellm":
+        from app.core.auth_provider import get_litellm_config
+
+        config = get_litellm_config()
+        if not config.get("url") or not config.get("key"):
+            return ProbeOutcome(False, "litellm_unconfigured", False)
+        body["max_tokens"] = _ACTIVATION_PROBE_MAX_TOKENS
+        return await _probe_chat_completions(f"{config['url'].rstrip('/')}/v1/chat/completions", config["key"], body)
+    return ProbeOutcome(False, "no_execution_path", False)
+
+
+def _row_meta(row: dict[str, Any]) -> dict[str, Any]:
+    meta = _coerce_json_object(row.get("metadata"))
+    row["metadata"] = meta
+    return meta
+
+
+def _mark_activated(row: dict[str, Any], *, verification_status: str = "verified", verified_at: datetime | None = None) -> None:
+    meta = _row_meta(row)
+    meta["requires_admin_review"] = False
+    meta.pop("activation_review_reason", None)
+    meta.pop("deactivation_source", None)
+    row.update(
+        is_active=True, is_selectable=True, is_executable=True, activation_source="db",
+        verification_status=verification_status,
+    )
+    if verified_at is not None:
+        row["last_verified_at"] = verified_at
+
+
+def _mark_review_required(row: dict[str, Any], reason: str) -> None:
+    meta = _row_meta(row)
+    meta["requires_admin_review"] = True
+    meta["activation_review_reason"] = reason
+    meta["deactivation_source"] = "system"  # 시스템이 끈 행 — 관리자 비활성화와 구분해 키 복구·정책 변경 후 재판정한다.
+    row.update(is_active=False, is_selectable=False, is_executable=False, verification_status="review_required")
+
+
+def _mark_manual_disabled(row: dict[str, Any], reason: str) -> None:
+    meta = _row_meta(row)
+    meta["requires_admin_review"] = False
+    meta["manual_disabled"] = True
+    meta["activation_review_reason"] = reason
+    meta["deactivation_source"] = "admin"
+    row.update(
+        is_active=False, is_selectable=False, is_executable=False, activation_source="manual",
+        verification_status=row.get("verification_status") or "review_required",
+    )
+
+
+def _is_manual_disabled(prior: Mapping[str, Any]) -> bool:
+    return str(prior.get("activation_source") or "") == "manual" and not prior.get("is_active")
+
+
+def _is_system_disabled(prior: Mapping[str, Any]) -> bool:
+    """시스템(키 불가·정책·probe 실패·은퇴)이 끈 행. 관리자 비활성화는 여기에 해당하지 않는다."""
+    if prior.get("is_active") or _is_manual_disabled(prior):
+        return False
+    return prior.get("retired_at") is not None or str(prior.get("deactivation_source") or "") == "system"
+
+
+def _snapshot_rank(model_id: str) -> int:
+    """날짜 스냅샷(-YYYY-MM-DD, -YYYYMMDD)은 뒤로 미뤄 호출 상한 안에서 대표 id 가 먼저 검증되게 한다."""
+    return 1 if re.search(r"-\d{4}-?\d{2}-?\d{2}$", model_id) else 0
+
+
+async def apply_activation_probes(
+    model_rows: list[dict[str, Any]],
+    prior_state: Mapping[tuple[str, str], Mapping[str, Any]],
+    *,
+    now: datetime | None = None,
+    prober: Prober | None = None,
+    verified_codex_ids: Iterable[str] = (),
+    skip_keys: Iterable[tuple[str, str]] = (),
+    max_per_provider: int | None = None,
+    google_routes_enabled: bool | None = None,
+    activation_enabled: bool = True,
+) -> dict[str, Any]:
+    """발견 행을 실행 가능성 판정으로 켠다. model_rows 를 제자리에서 고친다.
+
+    - 판정 대상은 metadata.model_source == 'discovery' 인 행뿐이다(템플릿·병합 행은 기존 규칙).
+    - 관리자가 끈 행(activation_source='manual', 또는 probe 성공 뒤 시스템 표식 없이 꺼진 행)은 되살리지 않는다.
+    - 시스템이 끈 행(metadata.deactivation_source='system', 은퇴)은 키 복구·정책 해제 뒤 재-probe 해서 다시 켠다.
+    - Google 정책 검사는 모든 활성화 분기보다 앞이다(provider=antigravity 는 Google API 경로가 아니라 예외).
+    - activation_enabled=False 는 새 활성화·probe 호출만 끈다. 이미 켜진 행의 상태와 probe 이력은 보존한다.
+    - 판정 완료 행은 재호출하지 않는다. 실패는 24시간(일시 오류는 1시간) 뒤 재시도한다.
+    - provider 당 호출은 max_per_provider(기본 5)건. 넘는 행은 다음 실행으로 미룬다.
+    """
+    now = now or datetime.now(timezone.utc)
+    cap = _ACTIVATION_MAX_PER_PROVIDER if max_per_provider is None else max(0, int(max_per_provider))
+    prober = prober or probe_model_execution
+    skip = set(skip_keys)
+    codex_verified = set(verified_codex_ids)
+    summary: dict[str, Any] = {
+        "probed": {}, "activated": [], "failed": [], "deferred": [], "manual_kept": [], "carried_active": [],
+    }
+    queues: dict[str, list[tuple[dict[str, Any], bool]]] = {}
+    google_enabled = google_routes_enabled
+
+    for row in model_rows:
+        meta = _row_meta(row)
+        if meta.get("model_source") != "discovery":
+            continue
+        provider, model_id = str(row["provider"]), str(row["model_id"])
+        key = (provider, model_id)
+        label = f"{provider}:{model_id}"
+        prior = prior_state.get(key)
+        prior_probe = _coerce_json_object(prior.get("activation_probe")) if prior else {}
+        if prior_probe:
+            meta["activation_probe"] = prior_probe
+        if key in skip:
+            continue
+
+        if prior and _is_manual_disabled(prior):
+            _mark_manual_disabled(row, "manual_disabled")
+            summary["manual_kept"].append(label)
+            continue
+        if _is_google_route(row):
+            if google_enabled is None:
+                google_enabled = await _google_commercial_routes_enabled()
+            if not google_enabled:
+                _mark_review_required(row, "google_routes_disabled")
+                continue
+        if provider == "codex":
+            if model_id in codex_verified:
+                _mark_activated(row, verified_at=now)
+                summary["activated"].append(label)
+            else:
+                _mark_review_required(row, "awaiting_host_cli_probe")
+            continue
+        if not meta.get("activation_candidate"):
+            _mark_review_required(row, "not_text_model" if meta.get("runtime_executable") else "no_runtime_key")
+            continue
+        if not activation_enabled:
+            if prior and prior.get("is_active") and prior.get("is_executable"):
+                _mark_activated(row, verification_status=str(prior.get("verification_status") or "verified"))
+                row["activation_source"] = str(prior.get("activation_source") or "db")
+                summary["carried_active"].append(label)
+            else:
+                _mark_review_required(row, "auto_activation_disabled")
+            continue
+        if (
+            prior and prior.get("is_active") and prior.get("is_executable") and not prior_probe
+            and str(prior.get("discovery_source") or "") not in _NON_DISCOVERY_SOURCES
+        ):
+            _mark_activated(row, verification_status=str(prior.get("verification_status") or "verified"))
+            summary["carried_active"].append(label)
+            continue
+        status = str(prior_probe.get("status") or "")
+        if status == "ok":
+            if prior and _is_system_disabled(prior):
+                pass  # 시스템이 끈 행: 과거 성공 이력만으로 켜지 않고 아래에서 다시 판정한다.
+            elif prior and not prior.get("is_active"):
+                _mark_manual_disabled(row, "manual_disabled")
+                summary["manual_kept"].append(label)
+                continue
+            else:
+                _mark_activated(row)
+                continue
+        if status == "failed":
+            wait = _ACTIVATION_TRANSIENT_RETRY_AFTER if prior_probe.get("transient") else _ACTIVATION_RETRY_AFTER
+            failed_at = _parse_timestamp(prior_probe.get("at"))
+            if failed_at is not None and now - failed_at < wait:
+                _mark_review_required(row, str(prior_probe.get("error") or "probe_failed"))
+                continue
+        if not meta.get("execution_backend") and provider not in {"anthropic", "litellm"}:
+            _mark_review_required(row, "no_execution_path")
+            continue
+        _mark_review_required(row, "probe_pending")
+        queues.setdefault(provider, []).append((row, status == "failed"))
+
+    async def run_provider(provider: str, items: list[tuple[dict[str, Any], bool]]) -> None:
+        items.sort(key=lambda it: (it[1], _snapshot_rank(str(it[0]["model_id"])), str(it[0]["model_id"])))
+        calls = 0
+        provider_down = False
+        for row, _retry in items:
+            label = f"{provider}:{row['model_id']}"
+            if calls >= cap or provider_down:
+                _row_meta(row)["activation_review_reason"] = "probe_deferred"
+                summary["deferred"].append(label)
+                continue
+            calls += 1
+            try:
+                outcome = await asyncio.wait_for(prober(row), timeout=_ACTIVATION_PROBE_TIMEOUT_SECONDS + 5)
+            except asyncio.TimeoutError:
+                outcome = ProbeOutcome(False, "probe_timeout", True)
+            except Exception as exc:
+                outcome = ProbeOutcome(False, f"probe_error:{type(exc).__name__}", True)
+            meta = _row_meta(row)
+            meta["activation_probe"] = {
+                "status": "ok" if outcome.ok else "failed",
+                "at": now.isoformat(),
+                "error": outcome.error,
+                "transient": bool(outcome.transient),
+                "max_tokens": _ACTIVATION_PROBE_MAX_TOKENS,
+            }
+            if outcome.ok:
+                _mark_activated(row, verified_at=now)
+                summary["activated"].append(label)
+            else:
+                _mark_review_required(row, outcome.error or "probe_failed")
+                summary["failed"].append(f"{label}={outcome.error}")
+                provider_down = outcome.transient
+        summary["probed"][provider] = calls
+
+    if cap > 0:
+        await asyncio.gather(*(run_provider(provider, items) for provider, items in queues.items()))
+    else:
+        for items in queues.values():
+            for row, _retry in items:
+                summary["deferred"].append(f"{row['provider']}:{row['model_id']}")
+    return summary
 
 
 def _merge_model_rows(template_rows: list[dict[str, Any]], discovered_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2303,6 +2752,155 @@ async def list_provider_discovery_freshness() -> dict[str, dict[str, Any]]:
     return result
 
 
+_FRESHNESS_WINDOW = timedelta(days=7)
+_SKIPPED_ALERT_AFTER = timedelta(hours=24)
+
+
+def summarize_model_freshness(
+    *,
+    model_rows: Iterable[Mapping[str, Any]],
+    freshness: Mapping[str, Mapping[str, Any]],
+    keyed_providers: Iterable[str],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """회사별 최신화 현황. 마지막 성공 수집, 최근 7일 신규·자동활성·검토대기, 수집기 없는 키, 24시간 넘은 skipped/failed."""
+    now = now or datetime.now(timezone.utc)
+    since = now - _FRESHNESS_WINDOW
+    collectors = set(_DISCOVERY_PROVIDERS)
+    providers: dict[str, dict[str, Any]] = {}
+
+    def bucket(provider: str) -> dict[str, Any]:
+        return providers.setdefault(
+            provider,
+            {
+                "has_collector": provider in collectors,
+                "state": None, "reason_class": None, "last_attempt_at": None, "last_success_at": None,
+                "new_models_7d": 0, "auto_activated_7d": 0, "review_pending_7d": 0, "review_pending_total": 0,
+            },
+        )
+
+    for provider in collectors:
+        bucket(provider)
+    for provider, item in freshness.items():
+        entry = bucket(provider)
+        entry.update(
+            state=item.get("state"), reason_class=item.get("reason_class") or None,
+            last_attempt_at=item.get("last_attempt_at"), last_success_at=item.get("last_success_at"),
+        )
+    for row in model_rows:
+        if row.get("retired_at") is not None:
+            continue
+        provider = str(row.get("provider") or "")
+        if not provider:
+            continue
+        entry = bucket(provider)
+        probe = _coerce_json_object(row.get("activation_probe"))
+        probed_at = _parse_timestamp(probe.get("at"))
+        if probe.get("status") == "ok" and probed_at is not None and probed_at >= since:
+            entry["auto_activated_7d"] += 1
+        if str(row.get("discovery_source") or "") in _NON_DISCOVERY_SOURCES:
+            continue
+        first_seen = _parse_timestamp(row.get("first_seen_at"))
+        is_new = first_seen is not None and first_seen >= since
+        review = str(row.get("verification_status") or "") == "review_required"
+        if is_new:
+            entry["new_models_7d"] += 1
+        if review:
+            entry["review_pending_total"] += 1
+            if is_new:
+                entry["review_pending_7d"] += 1
+
+    stuck: list[dict[str, Any]] = []
+    for provider, item in sorted(freshness.items()):
+        if item.get("state") not in {"skipped", "error"}:
+            continue
+        last_success = _parse_timestamp(item.get("last_success_at"))
+        if last_success is not None and now - last_success < _SKIPPED_ALERT_AFTER:
+            continue
+        stuck.append({
+            "provider": provider,
+            "state": item.get("state"),
+            "reason_class": item.get("reason_class") or None,
+            "last_attempt_at": item.get("last_attempt_at"),
+            "last_success_at": item.get("last_success_at"),
+            "hours_since_success": round((now - last_success).total_seconds() / 3600, 1) if last_success else None,
+        })
+    keyed = {normalize_provider(p) for p in keyed_providers if p}
+    return {
+        "window_days": _FRESHNESS_WINDOW.days,
+        "generated_at": now.isoformat(),
+        "providers": dict(sorted(providers.items())),
+        "keyed_providers_without_collector": sorted(p for p in keyed if p and p not in collectors),
+        "skipped_or_failed_24h": stuck,
+        "skipped_or_failed_24h_providers": [item["provider"] for item in stuck],
+    }
+
+
+async def _build_model_freshness_report() -> dict[str, Any]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        key_rows = await _fetch_key_rows(conn)
+        try:
+            model_rows = await conn.fetch(
+                """
+                SELECT provider, first_seen_at, verification_status, discovery_source, retired_at,
+                       metadata->'activation_probe' AS activation_probe
+                FROM llm_models
+                WHERE retired_at IS NULL
+                """
+            )
+        except asyncpg.UndefinedTableError:
+            model_rows = []
+    freshness = await list_provider_discovery_freshness()
+    key_state = _build_key_state(key_rows)
+    keyed = [provider for provider, state in key_state.items() if int(state.get("active_key_count", 0)) > 0]
+    return summarize_model_freshness(
+        model_rows=[dict(row) for row in model_rows or []], freshness=freshness, keyed_providers=keyed,
+    )
+
+
+async def get_model_freshness_report() -> dict[str, Any]:
+    cached = _cache_get("model_freshness_report")
+    if cached is not None:
+        return cached
+    return _cache_set("model_freshness_report", await _build_model_freshness_report())
+
+
+# health-check 는 DB 를 치지 않고 이 스냅샷만 읽는다(상태 점검이 서버를 멈춘 사고 대응). 채우는 곳은 sync_model_registry 끝이다.
+_NOT_READY_FRESHNESS: dict[str, Any] = {"status": "not_ready"}
+_freshness_snapshot: dict[str, Any] | None = None
+
+
+def get_cached_model_freshness() -> dict[str, Any]:
+    """캐시된 회사별 신선도. DB·네트워크 접근 없음. 아직 채워지지 않았으면 {"status": "not_ready"}."""
+    return _freshness_snapshot if _freshness_snapshot is not None else dict(_NOT_READY_FRESHNESS)
+
+
+async def refresh_model_freshness_cache() -> None:
+    """모델 발견 주기 작업 끝에서 스냅샷을 채운다. 실패해도 sync 를 깨지 않는다."""
+    global _freshness_snapshot
+    try:
+        report = await _build_model_freshness_report()
+    except Exception as exc:
+        logger.warning("model_registry.freshness_cache_refresh_failed: %s", type(exc).__name__)
+        return
+    _freshness_snapshot = report
+    _cache_set("model_freshness_report", report)
+
+
+async def _fetch_activation_state(conn: asyncpg.Connection) -> dict[tuple[str, str], dict[str, Any]]:
+    """자동 활성화 판정이 참고하는 기존 행 상태(수동 비활성화·이전 판정 기록)."""
+    rows = await conn.fetch(
+        """
+        SELECT provider, model_id, is_active, is_executable, activation_source, verification_status,
+               discovery_source, retired_at, metadata->'activation_probe' AS activation_probe,
+               metadata->>'deactivation_source' AS deactivation_source
+        FROM llm_models
+        """
+    )
+    return {(str(r["provider"]), str(r["model_id"])): dict(r) for r in rows or []}
+
+
 async def sync_model_registry(*, triggered_by: str = "system", reason: str = "") -> dict[str, Any]:
     sync_token = uuid.uuid4().hex
     pool = get_pool()
@@ -2318,7 +2916,9 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
         }
         verified_codex_ids = await cli_model_autoreg.fetch_verified_codex_ids(conn)
         prior_success = await _fetch_last_discovery_success(conn)
+        activation_state = await _fetch_activation_state(conn)
     manual_active_keys = {(r["provider"], r["model_id"]) for r in manual_rows}
+    newly_activated_keys: set[tuple[str, str]] = set()
     template_rows, provider_rows = build_registry_snapshots(key_rows)
     key_state = _build_key_state(key_rows)
     normalized_providers = _collect_provider_normalizations(key_state)
@@ -2339,6 +2939,29 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
         for run in discovery_runs
     ]
     model_rows = _merge_model_rows(template_rows, discovered_rows)
+    activation: dict[str, Any] = {}
+    # 플래그는 새 활성화·probe 호출만 끈다. 발견 행은 항상 이 단계를 거쳐야 기존 활성 상태·probe 이력이 UPSERT 에서 보존된다.
+    activation = await apply_activation_probes(
+        model_rows,
+        activation_state,
+        verified_codex_ids=verified_codex_ids,
+        skip_keys=manual_active_keys,
+        activation_enabled=os.getenv(_ACTIVATION_ENABLED_ENV, "1").strip().lower() not in {"0", "false", "no"},
+    )
+    # 호출 검증을 이번 회차에 처음 통과한 모델은 이전 sync 에 행이 있었어도 실행 후보로 처음 올린다.
+    newly_activated_keys = {
+        tuple(label.split(":", 1))
+        for label in activation.get("activated", [])
+        if ":" in label
+    }
+    for run in discovery_runs:
+        run["active_count"] = sum(
+            1
+            for row in model_rows
+            if row["provider"] == run.get("provider")
+            and row.get("is_active")
+            and str(row.get("discovery_source") or "") not in _NON_DISCOVERY_SOURCES
+        )
     for row in model_rows:
         if (row["provider"], row["model_id"]) in manual_active_keys:
             row["is_active"] = True
@@ -2494,6 +3117,7 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                         "discovery": discovery_runs,
                         "provider_status": provider_status,
                         "discovery_summary": discovery_summary,
+                        "activation": activation,
                     },
                 )
                 for run in discovery_runs:
@@ -2531,7 +3155,7 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
             cli_autoreg = await cli_model_autoreg.autoregister_after_sync(
                 conn,
                 model_rows=model_rows,
-                existing_keys=existing_keys,
+                existing_keys=existing_keys - newly_activated_keys,
                 template_codex_ids=_PROVIDER_MODELS.get("codex", ()),
                 verified_codex_ids=verified_codex_ids,
             )
@@ -2540,6 +3164,7 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
         cli_autoreg = {"error": str(exc)[:200]}
 
     invalidate_registry_cache()
+    await refresh_model_freshness_cache()
     # ok 는 '레지스트리 저장 성공' 이다. 회사별 최신 확인 여부는 discovery_status/provider_status 로 따로 본다.
     log_fn = logger.info if discovery_summary["discovery_complete"] else logger.warning
     log_fn(
@@ -2560,6 +3185,7 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
         "discovery_summary": discovery_summary,
         "provider_status": provider_status,
         "cli_autoreg": cli_autoreg,
+        "activation": activation,
         "normalized_providers": normalized_providers,
         "review_required_providers": review_required_providers,
     }

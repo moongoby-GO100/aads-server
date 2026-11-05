@@ -127,6 +127,8 @@ class DbConn:
                 return []
             self.candidates[key] = {"status": "discovered", "product_name": args[1], "source": args[2]}
             return [{"model_id": args[0]}]
+        if "activation_probe" in query:
+            return []  # 호출 검증 이력 — 이 fake 는 이력이 없다.
         if "MAX(created_at) AS last_success_at" in query:
             return []  # 회사별 마지막 발견 성공 시각 — 이 fake 는 이력이 없다.
         if "SELECT provider, model_id, execution_model_id" in query:
@@ -403,7 +405,11 @@ async def test_runner_candidates_idempotent_and_existing_rows_untouched():
 
 @pytest.mark.asyncio
 async def test_claude_api_discovery_gets_runner_candidate(monkeypatch, no_cache, api_fetchers_off):
-    """F: Claude 는 별도 CLI 카탈로그가 없다 — anthropic_api discovery 가 D 경로를 그대로 탄다."""
+    """F: Claude 는 별도 CLI 카탈로그가 없다 — anthropic_api discovery 가 D 경로를 그대로 탄다. 호출 검증을 통과해야 실행 후보가 된다."""
+    async def _probe_ok(_row):
+        return model_registry.ProbeOutcome(True)
+
+    monkeypatch.setattr(model_registry, "probe_model_execution", _probe_ok)
     monkeypatch.setattr(model_registry, "_fetch_anthropic_models", AsyncMock(return_value=(
         [{"model_id": "claude-nova-6", "display_name": "Claude Nova 6", "raw": {}}], {"status": "ok"},
     )))
@@ -419,10 +425,20 @@ async def test_claude_api_discovery_gets_runner_candidate(monkeypatch, no_cache,
     # 템플릿 모델은 "새로 발견" 이 아니다.
     assert ("runner_llm", "anthropic", "claude-opus-5-5") not in conn.routing
 
-    # 이미 llm_models 에 있던 모델은 다시 후보로 올리지 않는다.
+    # 이미 llm_models 에 있던 모델은 (이번 회차에 호출 검증을 처음 통과한 경우가 아니면) 다시 후보로 올리지 않는다.
+    async def _probe_fail(_row):
+        return model_registry.ProbeOutcome(False, "http_404")
+
+    monkeypatch.setattr(model_registry, "probe_model_execution", _probe_fail)
     conn2 = DbConn(existing={("anthropic", "claude-nova-6")})
     await _sync(monkeypatch, conn2, key_rows=key_rows)
     assert conn2.routing == {}
+
+    # 이전 회차에 행만 생기고 검증이 늦어진 모델은, 이번 회차에 통과하면 그때 후보로 오른다.
+    monkeypatch.setattr(model_registry, "probe_model_execution", _probe_ok)
+    conn3 = DbConn(existing={("anthropic", "claude-nova-6")})
+    await _sync(monkeypatch, conn3, key_rows=key_rows)
+    assert ("runner_llm", "anthropic", "claude-nova-6") in conn3.routing
 
 
 # ---------------------------------------------------------------------------

@@ -1644,6 +1644,13 @@ async def health_check():
         )
         all_containers_ok = _pair_ok_server and _pair_ok_dashboard and _singleton_ok
 
+        try:
+            from app.services.model_registry import get_cached_model_freshness
+
+            model_freshness = get_cached_model_freshness()
+        except Exception:
+            model_freshness = {"status": "not_ready"}
+
         return {
             "pipeline_healthy": pipeline_healthy and all_containers_ok,
             "stalled_count": stalled_count,
@@ -1665,6 +1672,7 @@ async def health_check():
             "maintenance_reason": maintenance_row["reason"] if maintenance_active else None,
             "issues": issues_list,
             "infra": infra,
+            "model_freshness": model_freshness,
             "checked_at": datetime.now(KST).isoformat(),
         }
     except Exception as e:

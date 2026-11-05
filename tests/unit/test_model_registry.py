@@ -272,14 +272,13 @@ def test_build_registry_snapshots_marks_anthropic_oauth_as_runtime_only_discover
 
     anthropic_summary = next(row for row in provider_rows if row["provider"] == "anthropic")
     assert anthropic_summary["runtime_executable"] is True
-    assert anthropic_summary["auto_discovery_supported"] is False
-    assert anthropic_summary["discovery_mode"] == "template_runtime_only"
-    assert "x-api-key required" in anthropic_summary["discovery_requirement"]
+    assert anthropic_summary["auto_discovery_supported"] is True
+    assert anthropic_summary["discovery_mode"] != "template_runtime_only"
 
     claude_row = next(row for row in model_rows if row["provider"] == "anthropic" and row["model_id"] == "claude-sonnet")
     assert claude_row["metadata"]["model_source"] == "template"
     assert claude_row["metadata"]["runtime_executable"] is True
-    assert claude_row["metadata"]["auto_discovery_supported"] is False
+    assert claude_row["metadata"]["auto_discovery_supported"] is True
     assert claude_row["metadata"]["accepted_aliases"] == [
         "claude-sonnet-4-6",
     ]
@@ -444,7 +443,15 @@ async def test_fetch_anthropic_models_reports_oauth_runtime_only(monkeypatch):
 
     from app.core import llm_key_provider
 
+    async def _oauth_unavailable():
+        raise RuntimeError("oauth models api unavailable")
+
+    async def _docs_unavailable():
+        raise RuntimeError("docs unavailable")
+
     monkeypatch.setattr(llm_key_provider, "get_provider_key_records", _fake_key_records)
+    monkeypatch.setattr(model_registry, "_list_anthropic_models_via_oauth", _oauth_unavailable)
+    monkeypatch.setattr(model_registry, "_read_anthropic_docs_model_ids", _docs_unavailable)
 
     rows, result = await model_registry._fetch_anthropic_models()
 
@@ -453,7 +460,6 @@ async def test_fetch_anthropic_models_reports_oauth_runtime_only(monkeypatch):
     assert result["error"] == "oauth_runtime_only_models_api_unavailable"
     assert result["runtime_executable"] is True
     assert result["auto_discovery_supported"] is False
-    assert "x-api-key required" in result["discovery_requirement"]
 
 
 @pytest.mark.asyncio
