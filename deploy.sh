@@ -137,6 +137,157 @@ prepare_release_context() {
     require_release_context_within_limit
 }
 
+
+# ── 원격 빌드 (AADS-IMAGE-BUILD-42-C) ─────────────────────────────────────────
+# 116 에 빌드 캐시·후보 이미지가 쌓이는 것을 막기 위해 이미지를 contabo42 에서
+# 빌드하고 116 은 digest 로 받기만 한다. 스위치가 42 가 아니면 이 함수들은 한 번도
+# 호출되지 않고 기존 116 로컬 빌드 경로가 그대로 쓰인다.
+# 전제: 42 docker(-H ssh://mesh-42)가 push 하는 localhost:5000 과 116 이 pull 하는
+# localhost:5000 은 aads-registry42-tunnel 로 같은 레지스트리다.
+REMOTE_BUILD_REGISTRY="${AADS_REMOTE_BUILD_REGISTRY:-localhost:5000}"
+REMOTE_BUILD_DOCKER_HOST="${AADS_REMOTE_BUILD_DOCKER_HOST:-ssh://mesh-42}"
+REMOTE_BUILD_REGISTRY_PROBE="${AADS_REMOTE_BUILD_REGISTRY_PROBE:-http://127.0.0.1:5000/v2/}"
+REMOTE_FAIL_REASON=""
+REMOTE_BUILD_DIGEST=""
+
+remote_build_mode() {
+    local value="${AADS_REMOTE_BUILD:-}" flag_file
+    if [[ -z "$value" ]]; then
+        flag_file="${AADS_REMOTE_BUILD_FLAG_FILE:-/root/aads/state/aads-server.remote-build}"
+        if [[ -r "$flag_file" ]]; then
+            IFS= read -r value < "$flag_file" || true
+        fi
+    fi
+    value="${value//[[:space:]]/}"
+    if [[ "$value" == "42" ]]; then
+        echo 42
+    else
+        echo off
+    fi
+}
+
+remote_build_fail() {
+    REMOTE_FAIL_REASON="${1}: ${2}"
+    echo "[deploy.sh] ⚠️ remote build step failed — ${REMOTE_FAIL_REASON}" >&2
+    return 1
+}
+
+# 빌드 경로와 폴백 사유를 deploy_runs.request_payload 에 남긴다. build_path 는 remote42|local.
+record_build_path() {
+    local build_path="$1" digest="${2:-}" reason="${3:-}"
+    audit_control "remote-build" "${AADS_RELEASE_SHA:-unknown}" "$build_path" \
+        "digest=${digest}; fallback_reason=${reason}"
+    [[ -z "${DEPLOY_RUN_ID:-}" ]] && return 0
+    deploy_db_exec "
+        UPDATE deploy_runs
+        SET request_payload = COALESCE(request_payload, '{}'::jsonb) || jsonb_build_object(
+                'build_path', '$(sql_escape "$build_path")',
+                'remote_digest', '$(sql_escape "$digest")',
+                'fallback_reason', '$(sql_escape "$reason")'),
+            updated_at = NOW()
+        WHERE id=${DEPLOY_RUN_ID};
+    " >/dev/null
+}
+
+# 원격 빌드 → push → 116 에서 digest 로 pull → 검증 → 기존 이름으로 tag.
+# 인자: 로컬태그 레지스트리repo 레지스트리태그 라벨키 라벨값 빌드제한초 컨텍스트 [빌드 인자...]
+# 하나라도 실패하면 REMOTE_FAIL_REASON 을 채우고 1 을 돌려준다(호출자가 로컬 빌드로 폴백).
+remote_build_fetch_image() {
+    local local_tag="$1" repo_ref="$2" reg_tag="$3" label_key="$4" label_value="$5"
+    local max_wait="$6" context="$7"
+    shift 7
+    local step_wait="${AADS_REMOTE_BUILD_STEP_TIMEOUT:-900}" ssh_host push_out digest pulled label
+    REMOTE_BUILD_DIGEST=""
+
+    # ① 레지스트리(터널) 응답
+    if ! timeout 10 curl -fsS -m 5 -o /dev/null "$REMOTE_BUILD_REGISTRY_PROBE" 2>/dev/null; then
+        remote_build_fail "registry" "no response from ${REMOTE_BUILD_REGISTRY_PROBE}"; return 1
+    fi
+    # ② 원격 docker 접속
+    ssh_host="${REMOTE_BUILD_DOCKER_HOST#ssh://}"
+    if ! timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=8 "$ssh_host" true >/dev/null 2>&1 \
+        || ! timeout 30 docker -H "$REMOTE_BUILD_DOCKER_HOST" info >/dev/null 2>&1; then
+        remote_build_fail "remote_info" "cannot reach ${REMOTE_BUILD_DOCKER_HOST}"; return 1
+    fi
+    # ③ 원격 build — 컨텍스트·build-arg·label 은 로컬 빌드와 같다.
+    if ! timeout --kill-after=30s "$max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" \
+        docker -H "$REMOTE_BUILD_DOCKER_HOST" build "$@" \
+        --label "${label_key}=${label_value}" --tag "$reg_tag" "$context"; then
+        remote_build_fail "remote_build" "docker build on ${REMOTE_BUILD_DOCKER_HOST} failed"; return 1
+    fi
+    # ④ 레지스트리 push (원격 호스트에서) + digest 추출
+    if ! push_out="$(timeout "$step_wait" docker -H "$REMOTE_BUILD_DOCKER_HOST" push "$reg_tag" 2>&1)"; then
+        remote_build_fail "push" "docker push ${reg_tag} failed"; return 1
+    fi
+    digest="$(grep -oE 'digest: sha256:[0-9a-f]{64}' <<< "$push_out" | tail -1 | cut -d' ' -f2)"
+    if [[ -z "$digest" ]]; then
+        remote_build_fail "push_digest" "no digest in push output"; return 1
+    fi
+    # ⑤ 116 에서 digest 로 pull
+    if ! timeout "$step_wait" docker pull "${repo_ref}@${digest}" >/dev/null 2>&1; then
+        remote_build_fail "pull" "docker pull ${repo_ref}@${digest} failed"; return 1
+    fi
+    # ⑥ pull 한 이미지의 RepoDigests 가 push 한 digest 와 같은가
+    pulled="$(docker image inspect "${repo_ref}@${digest}" \
+        --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null || true)"
+    if ! grep -Fxq "${repo_ref}@${digest}" <<< "$pulled"; then
+        docker rmi "${repo_ref}@${digest}" >/dev/null 2>&1 || true
+        remote_build_fail "digest_mismatch" "pulled RepoDigests do not contain ${digest}"; return 1
+    fi
+    label="$(docker image inspect "${repo_ref}@${digest}" \
+        --format "{{index .Config.Labels \"${label_key}\"}}" 2>/dev/null || true)"
+    if [[ "$label" != "$label_value" ]]; then
+        docker rmi "${repo_ref}@${digest}" >/dev/null 2>&1 || true
+        remote_build_fail "label" "${label_key} expected=${label_value} actual=${label:-missing}"; return 1
+    fi
+    # ⑦ 기존 이름으로 tag, 임시 레지스트리 참조 제거
+    if ! docker tag "${repo_ref}@${digest}" "$local_tag"; then
+        docker rmi "${repo_ref}@${digest}" >/dev/null 2>&1 || true
+        remote_build_fail "tag" "docker tag ${local_tag} failed"; return 1
+    fi
+    docker rmi "${repo_ref}@${digest}" >/dev/null 2>&1 || true
+    REMOTE_BUILD_DIGEST="$digest"
+}
+
+remote_deps_label_on_42() {
+    timeout 30 docker -H "$REMOTE_BUILD_DOCKER_HOST" image inspect "$1" \
+        --format '{{index .Config.Labels "io.aads.dependency-key"}}' 2>/dev/null || true
+}
+
+# 원격 릴리스 빌드는 42 docker 에 deps 이미지가 있어야 한다(AADS_RUNTIME_BASE).
+# deps 는 지금까지 116 에만 있었으므로: 42 에 있으면 그대로 → 레지스트리에서 pull →
+# 없으면 42 에서 deps 를 먼저 빌드한다. 라벨이 다르면 실패(= 로컬 폴백).
+remote_ensure_deps_on_42() {
+    local deps_reg="$1" dependency_key="$2" max_wait="$3" context="$4" label
+    label="$(remote_deps_label_on_42 "$deps_reg")"
+    if [[ -z "$label" ]]; then
+        timeout "${AADS_REMOTE_BUILD_STEP_TIMEOUT:-900}" docker -H "$REMOTE_BUILD_DOCKER_HOST" pull "$deps_reg" >/dev/null 2>&1 || true
+        label="$(remote_deps_label_on_42 "$deps_reg")"
+    fi
+    if [[ -z "$label" ]]; then
+        if ! timeout --kill-after=30s "$max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" \
+            docker -H "$REMOTE_BUILD_DOCKER_HOST" build \
+            --target runtime-deps \
+            --build-arg "AADS_IMAGE_PROFILE=${AADS_IMAGE_PROFILE}" \
+            --build-arg "INSTALL_PLAYWRIGHT=${AADS_INSTALL_PLAYWRIGHT}" \
+            --label "io.aads.dependency-key=${dependency_key}" \
+            --tag "$deps_reg" "$context"; then
+            remote_build_fail "deps_base" "deps build on 42 failed: ${deps_reg}"; return 1
+        fi
+        label="$(remote_deps_label_on_42 "$deps_reg")"
+    fi
+    if [[ "$label" != "$dependency_key" ]]; then
+        remote_build_fail "deps_base" "dependency-key on 42 expected=${dependency_key} actual=${label:-missing}"; return 1
+    fi
+}
+
+# 폴백 직전 관문: 원격 경로에서 디스크 가드를 약화시키지 않는다.
+remote_build_fallback_gate() {
+    record_build_path "local" "" "$REMOTE_FAIL_REASON"
+    echo "[deploy.sh] ↩️ falling back to local build on 116 (${REMOTE_FAIL_REASON})"
+    require_build_disk_free
+}
+
 build_dependency_image() {
     local build_max_wait dependency_key dependency_image dependency_label
     build_max_wait="${AADS_DEPLOY_BUILD_MAX_WAIT:-2400}"
@@ -164,7 +315,21 @@ build_dependency_image() {
     dependency_key="$(release_dependency_key "$RELEASE_CONTEXT_DIR")"
     dependency_image="$(release_dependency_image "$RELEASE_CONTEXT_DIR")"
     echo "[deploy.sh] dependency image warm-up: ${dependency_image}"
-    timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
+    local remote_ok=0
+    if [[ "$(remote_build_mode)" == "42" ]]; then
+        if remote_build_fetch_image "$dependency_image" "${REMOTE_BUILD_REGISTRY}/aads-server-deps" \
+            "${REMOTE_BUILD_REGISTRY}/${dependency_image}" "io.aads.dependency-key" "$dependency_key" \
+            "$build_max_wait" "$RELEASE_CONTEXT_DIR" \
+            --target runtime-deps \
+            --build-arg "AADS_IMAGE_PROFILE=${AADS_IMAGE_PROFILE}" \
+            --build-arg "INSTALL_PLAYWRIGHT=${AADS_INSTALL_PLAYWRIGHT}"; then
+            remote_ok=1
+            record_build_path "remote42" "$REMOTE_BUILD_DIGEST" ""
+        else
+            remote_build_fallback_gate
+        fi
+    fi
+    [[ "$remote_ok" == "1" ]] || timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
         --target runtime-deps \
         --build-arg "AADS_IMAGE_PROFILE=${AADS_IMAGE_PROFILE}" \
         --build-arg "INSTALL_PLAYWRIGHT=${AADS_INSTALL_PLAYWRIGHT}" \
@@ -480,7 +645,27 @@ build_release_image() {
     echo "[deploy.sh] ✅ dependency image reuse: ${dependency_image}"
     audit_control "dependency-image-reuse" "$dependency_image" "success" "dependency_key=${dependency_key}"
 
-    timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
+    local remote_ok=0
+    if [[ "$(remote_build_mode)" == "42" ]]; then
+        local deps_reg="${REMOTE_BUILD_REGISTRY}/${dependency_image}"
+        if remote_ensure_deps_on_42 "$deps_reg" "$dependency_key" "$build_max_wait" "$RELEASE_CONTEXT_DIR" \
+            && remote_build_fetch_image "aads-server:${AADS_RELEASE_SHA}" "${REMOTE_BUILD_REGISTRY}/aads-server" \
+                "${REMOTE_BUILD_REGISTRY}/aads-server:${AADS_RELEASE_SHA}" \
+                "org.opencontainers.image.revision" "$AADS_RELEASE_SHA" \
+                "$build_max_wait" "$RELEASE_CONTEXT_DIR" \
+                --target "${AADS_DOCKER_TARGET}" \
+                --build-arg "AADS_RUNTIME_BASE=${deps_reg}" \
+                --build-arg "AADS_IMAGE_PROFILE=${AADS_IMAGE_PROFILE}" \
+                --build-arg "INSTALL_PLAYWRIGHT=${AADS_INSTALL_PLAYWRIGHT}" \
+                --build-arg BUILDKIT_INLINE_CACHE=1 \
+                "${cache_from_args[@]}"; then
+            remote_ok=1
+            record_build_path "remote42" "$REMOTE_BUILD_DIGEST" ""
+        else
+            remote_build_fallback_gate
+        fi
+    fi
+    [[ "$remote_ok" == "1" ]] || timeout --kill-after=30s "$build_max_wait" env DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}" docker build \
         --target "${AADS_DOCKER_TARGET}" \
         --build-arg "AADS_RUNTIME_BASE=${dependency_image}" \
         --build-arg "AADS_IMAGE_PROFILE=${AADS_IMAGE_PROFILE}" \
