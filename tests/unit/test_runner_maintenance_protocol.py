@@ -129,7 +129,7 @@ printf '%s' "$!" > "$FIXTURE/worker.pid"
                 code += '_bg_jobs[$!]=job\n'
         if fault_metadata:
             code += 'runner_maintenance_record() { return 3; }\n'
-        code += '''while [[ ! -f "$FIXTURE/stop" ]]; do
+        code += '''while [[ ! -f "$FIXTURE/stop" ]] && (( SECONDS < 300 )); do
  runner_maintenance_checkpoint_or_hold
  printf '.\n' >> "$FIXTURE/claims"
  sleep .02
@@ -368,7 +368,7 @@ def test_production_entry_and_every_business_loop_are_inside_lifetime_lease():
 def test_unlocked_forged_capability_descriptor_is_rejected(module,host):
     module.initialize(host.state)
     path=host.path/'pretender.sh'
-    path.write_text(f'exec 200>{shlex.quote(str(host.state/"lifetime.lock"))}\necho $$ > "$FIXTURE/fake.pid"\nwhile [[ ! -f "$FIXTURE/stop" ]]; do sleep .02; done\n')
+    path.write_text(f'exec 200>{shlex.quote(str(host.state/"lifetime.lock"))}\necho $$ > "$FIXTURE/fake.pid"\nwhile [[ ! -f "$FIXTURE/stop" ]] && (( SECONDS < 300 )); do sleep .02; done\n')
     process=subprocess.Popen(['bash',str(path)],env=host.env)
     host.pids.append((process,None))
     wait_for(lambda:(host.path/'fake.pid').exists())

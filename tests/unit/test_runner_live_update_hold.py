@@ -57,7 +57,7 @@ printf '%s' "$$" > "$FIXTURE/main.pid"
 printf '%s' "$!" > "$FIXTURE/worker.pid"
 '''
     code += '''printf ready > "$FIXTURE/ready"
-while [[ ! -f "$FIXTURE/stop" ]]; do
+while [[ ! -f "$FIXTURE/stop" ]] && (( SECONDS < 300 )); do
  printf '.\\n' >> "$FIXTURE/claims"
  read -r -t .02 -u 199 value || :
 done
