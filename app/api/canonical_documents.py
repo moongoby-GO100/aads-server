@@ -517,27 +517,43 @@ async def create_revision(project_key: str, body: RevisionInput, context: dict =
         return await create_revision_in_tx(conn, tenant, actor, project, body)
 
 
+# "승인 필요": 최신 판본이 D2/D3 이고 목표에 연결됐으며 최신 판본이 승인되지 않은 문서.
+# 과거 판본만 승인된 경우도 포함한다. 별칭: h=heads, latest=최신 판본.
+APPROVAL_REQUIRED_SQL = (
+    "(latest.doc_tier IN ('D2','D3') "
+    "AND EXISTS(SELECT 1 FROM project_document_goal_links gl2 WHERE gl2.head_id=h.id) "
+    "AND h.approved_revision_id IS DISTINCT FROM h.latest_revision_id)"
+)
+
+
 @router.get("")
 async def list_documents(project_key: str, q: str | None = Query(None, max_length=100),
                          kind: str | None = None, approved_only: bool = False,
+                         approval_required: bool = False,
                          limit: int = Query(50, ge=1, le=100), context: dict = VIEW):
     project = _project(project_key)
+    if approval_required and approved_only:
+        raise HTTPException(400, "approval_required_conflicts_approved_only")
     async with get_pool().acquire() as conn:
         tenant, _ = await _authorize(conn, context, project, "read")
         rows = await conn.fetch(
             "SELECT h.id,h.document_key,h.kind,selected.title,h.generation,h.latest_revision_id,h.approved_revision_id,h.updated_at, "
             "selected.doc_tier,selected.author_model,selected.author_provider,char_length(selected.content) AS char_count, "
             "EXISTS(SELECT 1 FROM project_document_goal_links gl WHERE gl.head_id=h.id) AS goal_linked, "
+            + APPROVAL_REQUIRED_SQL + " AS approval_required, "
             "COALESCE((SELECT e.action FROM project_document_events e WHERE e.revision_id=selected.id "
             "AND e.action IN ('review','approved','archived') ORDER BY e.id DESC LIMIT 1),'draft') AS status "
             "FROM project_document_heads h LEFT JOIN project_document_revisions selected "
             "ON selected.id=CASE WHEN $5::bool THEN h.approved_revision_id ELSE h.latest_revision_id END "
+            "LEFT JOIN project_document_revisions latest ON latest.id=h.latest_revision_id "
             "WHERE h.tenant_id=$1::uuid AND h.project_key=$2 "
             "AND ($3::text IS NULL OR h.kind=$3) "
             "AND ($4::text IS NULL OR selected.title ILIKE '%' || $4 || '%' OR h.document_key ILIKE '%' || $4 || '%' "
             "OR selected.content ILIKE '%' || $4 || '%') "
             "AND (NOT $5::bool OR selected.id IS NOT NULL) "
+            "AND (NOT $7::bool OR " + APPROVAL_REQUIRED_SQL + ") "
             "ORDER BY h.updated_at DESC,h.id LIMIT $6", tenant, project, kind, q, approved_only, limit,
+            approval_required,
         )
         from app.services.doc_cross_review import summarize
         ids = [r['approved_revision_id'] if approved_only else r['latest_revision_id'] for r in rows]
