@@ -22,7 +22,7 @@ def test_absence_labels_and_status_wiring_are_static():
     assert '"결근(대표 확인)"' in html and '"출근(수기 확인)"' in html
     assert 'method:rec?"PUT":"POST"' in html
     assert "data-absence-action" in html and "min-height:44px" in html
-    assert 'section("근무일정 · 출근/결근 수동 처리"' in html
+    assert 'section("근무일정 · 출근/결근 수동 처리 — 달력에서도 처리할 수 있습니다"' in html
 
 
 def test_browser_script_syntax(tmp_path):
@@ -171,3 +171,20 @@ async def test_schedule_list_counts_manual_absence_without_check_in(monkeypatch)
     assert result["schedules"][0]["judgment"]["status"] == "결근"
     assert result["schedules"][0]["has_check_in"] is False
     assert result["counts"] == {"결근": 1}
+
+
+def test_calendar_cell_inline_action_static(tmp_path):
+    """출근 달력 칸에서 바로 처리: 칸에 처리 버튼 템플릿, 중첩 button 없음, 핸들러 1곳."""
+    html = ADMIN.read_text()
+    assert 'absenceBtnV41(day," calendar-day-act")' in html
+    assert '<div class="calendar-day"><button class="btn calendar-day-open" data-day=' in html
+    assert '<button class="btn calendar-day"' not in html
+    assert len(re.findall(r'querySelectorAll\("\[data-absence-action\]"\)', html)) == 1
+    assert '<details class="absence-cards">' in html
+    # 달력 칸 템플릿 안에 button 이 중첩되지 않는다: 칸 시작~끝 사이 열린 button 은 항상 닫힌 뒤 다음 button
+    start = html.index('<div class="calendar-day"><button')
+    cell = html[start:html.index("}).join(", start)] if False else html[start:html.index("`}).join(\"\")}</div>`)", start)]
+    depth = 0
+    for tok in re.findall(r"</?button\b", cell):
+        depth += -1 if tok.startswith("</") else 1
+        assert 0 <= depth <= 1
