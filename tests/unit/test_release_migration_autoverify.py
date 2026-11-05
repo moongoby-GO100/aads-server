@@ -76,6 +76,6 @@ def test_expected_objects_for_postcheck(tmp_path):
 
 def test_current_pending_migrations_are_additive():
     files = [ROOT / "migrations/20261104_milestone_review_rejected_at.sql",
-             ROOT / "migrations/20261104_pipeline_job_checkpoints.sql"]
+             ROOT / "migrations/deferred/20261104_pipeline_job_checkpoints.sql"]
     files = [f for f in files if f.exists()]
     assert av.classify_files(files) == []

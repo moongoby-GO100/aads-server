@@ -365,9 +365,10 @@ def test_registration_preserves_current_task(monkeypatch):
 
 def test_draft_body_includes_full_header_and_objects(monkeypatch, capsys):
     root = ROOT
-    names = ['20261104_milestone_review_rejected_at.sql', '20261104_pipeline_job_checkpoints.sql']
-    items = [{'file': 'migrations/' + n, 'sha256': a.digest((root / 'migrations' / n).read_bytes())}
-             for n in names]
+    # 체크포인트 SQL 은 2026-11-05 교차 검토 반려로 migrations/deferred/ 에 보류 중이다(본문 fixture 로만 쓴다).
+    names = ['migrations/20261104_milestone_review_rejected_at.sql',
+             'migrations/deferred/20261104_pipeline_job_checkpoints.sql']
+    items = [{'file': n, 'sha256': a.digest((root / n).read_bytes())} for n in names]
     state = dict(tenant_id='tenant', target_db='aads', ledger={}, document=None)
     monkeypatch.setattr(a, 'lookup', lambda sha, root: state)
     monkeypatch.setattr(a, 'inventory', lambda r, ledger, target='aads': items)

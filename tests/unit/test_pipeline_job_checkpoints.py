@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-MIG = ROOT / "migrations" / "20261104_pipeline_job_checkpoints.sql"
+MIG = ROOT / "migrations" / "deferred" / "20261104_pipeline_job_checkpoints.sql"
 SH = ROOT / "scripts" / "prune_pipeline_job_checkpoints.sh"
 
 

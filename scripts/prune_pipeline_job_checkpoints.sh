@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pipeline_job_checkpoints 정리 (migrations/20261104_pipeline_job_checkpoints.sql)
+# pipeline_job_checkpoints 정리 (migrations/deferred/20261104_pipeline_job_checkpoints.sql — 2026-11-05 교차 검토 반려로 릴리스 보류, 적용 전 루트로 되돌림)
 #   1) 종료(done/error/cancelled/rejected/rejected_done) 작업의 체크포인트 삭제
 #   2) 보존 기간(기본 7일) 지난 체크포인트 삭제
 # 종료 작업 삭제만 필요하면 MODE=terminal, 보존 기간 삭제만이면 MODE=age (M2/M3 에서 호출).

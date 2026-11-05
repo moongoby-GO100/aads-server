@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = ROOT / "migrations/20261104_pipeline_job_checkpoints.sql"
+MIGRATION = ROOT / "migrations/deferred/20261104_pipeline_job_checkpoints.sql"
 SQL = MIGRATION.read_text(encoding="utf-8")
 
 spec = importlib.util.spec_from_file_location("autoverify", ROOT / "scripts/release_migration_autoverify.py")
