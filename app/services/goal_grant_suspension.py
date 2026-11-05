@@ -64,6 +64,23 @@ WITH blocking AS (
 SELECT id::text FROM changed
 """
 
+# 정지된 grant(별칭 gr)가 "다시 쓸 수 있는 상태" 인 조건 한 벌. RESTORE_SQL(복원)·REWORK_GRANT_ELIGIBLE_SQL(판정 표시)·
+# goal_auto_approval.consume(재작업 차감)이 이 문자열을 그대로 끼워 쓴다 — 조건을 두 벌 두면 한쪽만 낡는다(R-RELEASE).
+# 사람의 회수(revoked)·stale·superseded 는 revoke_reason 으로 걸러지고, 정지 중에는 stale 트리거가 돌지 않으므로
+# 배정 종료·정책 교체는 여기서 다시 본다.
+REWORK_GRANT_ELIGIBLE_PREDICATE = """(
+           (gr.revoke_reason IN ('goal_not_active', 'goal_paused')
+            OR gr.revoke_reason LIKE 'goal\\_not\\_active:%')
+       AND gr.expires_at > clock_timestamp()
+       AND EXISTS (SELECT 1 FROM project_role_assignments a
+                    WHERE a.id = gr.assignment_id AND a.tenant_id = gr.tenant_id AND a.active)
+       AND NOT EXISTS (SELECT 1 FROM goal_approval_policy_versions cur
+                        WHERE cur.tenant_id = gr.tenant_id AND cur.id <> gr.policy_version
+                          AND cur.mode IN ('canary', 'enabled')
+                          AND (cur.project IS NULL OR cur.project = gr.project)
+                          AND GREATEST(cur.created_at, COALESCE(cur.effective_at, cur.created_at)) > gr.issued_at)
+       )"""
+
 # $1 goal_id · $2 tenant_id · $3 호출 경로. 목표가 지금 active 이고 일시정지가 아닐 때만 움직인다.
 # paused + 정지 사유가 목표 비활성인 행만 되살린다. revoked(사람 회수)·stale·expired·superseded 는 대상 밖이다.
 # 정지 동안 놓친 stale 처리(배정 종료·정책 교체)는 여기서 다시 판정해 되살리지 않는다.
@@ -79,16 +96,7 @@ WITH live AS (
        SET status = 'active', revoked_at = NULL, revoke_reason = NULL
       FROM live l
      WHERE gr.goal_id = l.id AND gr.tenant_id = l.tenant_id AND gr.status = 'paused'
-       AND (gr.revoke_reason IN ('goal_not_active', 'goal_paused')
-            OR gr.revoke_reason LIKE 'goal\\_not\\_active:%')
-       AND gr.expires_at > clock_timestamp()
-       AND EXISTS (SELECT 1 FROM project_role_assignments a
-                    WHERE a.id = gr.assignment_id AND a.tenant_id = gr.tenant_id AND a.active)
-       AND NOT EXISTS (SELECT 1 FROM goal_approval_policy_versions cur
-                        WHERE cur.tenant_id = gr.tenant_id AND cur.id <> gr.policy_version
-                          AND cur.mode IN ('canary', 'enabled')
-                          AND (cur.project IS NULL OR cur.project = gr.project)
-                          AND GREATEST(cur.created_at, COALESCE(cur.effective_at, cur.created_at)) > gr.issued_at)
+       AND """ + REWORK_GRANT_ELIGIBLE_PREDICATE + """
     RETURNING gr.id, gr.tenant_id, gr.goal_id, gr.policy_version, gr.grant_version
 ), logged AS (
     INSERT INTO goal_approval_decision_logs
@@ -102,6 +110,17 @@ WITH live AS (
     RETURNING matched_grant_id
 )
 SELECT id::text FROM changed
+"""
+
+# 막힌 목표의 재작업 판정 때 "이 정지 grant 는 차감해도 되는가" 를 한 번 묻는다(표시용 — 차감은 consume 이 같은 조건을
+# UPDATE 안에서 다시 건다). $1 grant id · $2 goal_id · $3 tenant_id.
+REWORK_GRANT_ELIGIBLE_SQL = """
+SELECT 1
+  FROM goal_auto_approval_grants gr
+ WHERE gr.id = $1::uuid AND gr.goal_id = $2::uuid AND gr.tenant_id = $3::uuid
+   AND gr.status = 'paused'
+   AND """ + REWORK_GRANT_ELIGIBLE_PREDICATE + """
+ LIMIT 1
 """
 
 

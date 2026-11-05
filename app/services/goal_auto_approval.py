@@ -10,21 +10,29 @@
     grant status = active · 유효기간 안 · used < max      (AA-3·AA-4)
     위험 등급 ≤ grant 상한 (high=A1, critical=A2)
 
+예외: 막힌 목표의 실패 마일스톤 재작업은 goal_status_blocked·blocked_without_reason 휴면·그 때문에 정지된
+grant 만 면제한다. 면제는 **러너 job 자신이 낸 요청**에만 준다(detect_rework) — job_id 는 서버가 세운 컨텍스트
+(current_runner_job_id)에서만 받는다. 같은 채팅 세션의 일반 도구 호출이나 LLM 이 tool_input 에 적은 값은 믿지 않는다.
+위험 등급·소진·만료·일시정지·회수는 면제하지 않는다.
+
 통과하면 그 자리에서 used 를 +1 한다(AA-7). 조건부 UPDATE 한 문장으로 세므로
 동시 호출이 상한을 넘겨 쓰지 못한다. 판정은 통과·거부 모두 goal_policy_decisions
 에 남긴다(AA-5).
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional
 
 import structlog
 
+from app.services import goal_grant_suspension as suspension
 from app.services import goal_signals as signals
 
 logger = structlog.get_logger(__name__)
@@ -37,6 +45,16 @@ SOURCE_POLICY = "approval_policy"
 BRIDGE_POLICY_PROJECT = "LEGACY_APPROVAL_POLICY"
 
 _RISK_TIER_ORDER = {"A0": 0, "A1": 1, "A2": 2, "A3": 3}
+
+# 판정 기록에 재작업 면제 사실을 남기는 코드.
+REASON_REWORK = "rework_of_blocked_milestone"
+
+# 지금 도구를 호출하는 러너 job. **서버 코드만** 설정한다. tool_input 의 값은 LLM 이 적을 수 있어 믿지 않는다.
+# 설정하는 곳이 없으면 비어 있고, 비면 면제하지 않는다(fail closed).
+current_runner_job_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_runner_job_id", default=""
+)
+_JOB_ID = re.compile(r"runner-[0-9a-f]{8}")
 
 
 def risk_tier(risk_level: str) -> str:
@@ -57,6 +75,9 @@ class Candidate:
     last_activity_at: Any = None
     dormant: bool = False
     dormant_reason: Optional[str] = None
+    rework: bool = False
+    rework_grant_eligible: bool = False
+    rework_job_id: Optional[str] = None
 
     @property
     def source(self) -> str:
@@ -70,6 +91,7 @@ class Verdict:
     reasons: list[str] = field(default_factory=list)
     used: int = 0
     max: int = 0
+    rework_exempted: bool = False
 
 
 def _int(value: Any) -> int:
@@ -84,23 +106,43 @@ def has_gate_policy(candidate: Candidate) -> bool:
 
 
 def evaluate(candidate: Candidate, risk_level: str, *, now: Optional[datetime] = None) -> Verdict:
-    """순수 판정. 거부 사유를 모두 모은다(첫 사유만 남기면 정리할 때 다시 조사해야 한다)."""
+    """순수 판정. 거부 사유를 모두 모은다(첫 사유만 남기면 정리할 때 다시 조사해야 한다).
+
+    candidate.rework 가 참이면(러너 job 이 낸 막힌 목표의 실패 마일스톤 재작업) 목표가 blocked 라서 생기는 사유
+    — goal_status_blocked, goal_dormant_blocked_without_reason, 그리고 그 때문에 정지된 grant 의 grant_paused
+    (rework_grant_eligible) — 만 면제한다. 나머지 사유는 그대로 거부한다.
+    """
     current = now or datetime.now(timezone.utc)
     reasons: list[str] = []
+    exempted = False
     status = str(candidate.status or "").lower()
     if status != "active":
-        reasons.append(f"goal_status_{status or 'unknown'}")
+        if candidate.rework and status == "blocked":
+            exempted = True
+        else:
+            reasons.append(f"goal_status_{status or 'unknown'}")
     if candidate.paused_at is not None:
         reasons.append("goal_paused")
     if candidate.dormant:
-        reasons.append(f"goal_dormant_{candidate.dormant_reason or 'unknown'}")
+        if candidate.rework and candidate.dormant_reason == signals.DORMANT_BLOCKED_WITHOUT_REASON:
+            # derive_dormancy 는 사유 없는 blocked 를 먼저 돌려줘 14일 비활동을 가린다. 여기서 다시 본다.
+            last = signals._aware(candidate.last_activity_at)
+            if last is None or current - last > timedelta(days=signals.DORMANT_DAYS):
+                reasons.append(f"goal_dormant_{signals.DORMANT_INACTIVE}")
+            exempted = True
+        else:
+            reasons.append(f"goal_dormant_{candidate.dormant_reason or 'unknown'}")
 
     if candidate.grant:
         grant = candidate.grant
         used, max_exec = _int(grant.get("used_executions")), _int(grant.get("max_executions"))
         grant_status = str(grant.get("status") or "").lower()
         if grant_status != "active":
-            reasons.append(f"grant_{grant_status or 'unknown'}")
+            if (candidate.rework and candidate.rework_grant_eligible
+                    and grant_status == suspension.SUSPENDED_STATUS):
+                exempted = True
+            else:
+                reasons.append(f"grant_{grant_status or 'unknown'}")
         valid_from = signals._aware(grant.get("valid_from"))
         expires_at = signals._aware(grant.get("expires_at"))
         if valid_from is not None and current < valid_from:
@@ -112,7 +154,8 @@ def evaluate(candidate: Candidate, risk_level: str, *, now: Optional[datetime] =
             reasons.append("risk_tier_exceeds_grant")
         if used >= max_exec:
             reasons.append("grant_exhausted")
-        return Verdict(not reasons, SOURCE_GRANT, reasons, used, max_exec)
+        return Verdict(not reasons, SOURCE_GRANT, reasons, used, max_exec,
+                       rework_exempted=exempted and not reasons)
 
     policy = candidate.policy
     field_name = "auto_approve_critical" if risk_level == "critical" else "auto_approve_high"
@@ -124,7 +167,99 @@ def evaluate(candidate: Candidate, risk_level: str, *, now: Optional[datetime] =
         reasons.append("policy_expired")
     if used >= max_exec:
         reasons.append("policy_exhausted")
-    return Verdict(not reasons, SOURCE_POLICY, reasons, used, max_exec)
+    return Verdict(not reasons, SOURCE_POLICY, reasons, used, max_exec,
+                   rework_exempted=exempted and not reasons)
+
+
+def trusted_runner_job_id() -> str:
+    """서버가 세운 컨텍스트의 러너 job id. 형식이 맞지 않거나 없으면 빈 문자열(= 재작업으로 보지 않는다)."""
+    job_id = str(current_runner_job_id.get("") or "").strip()
+    return job_id if _JOB_ID.fullmatch(job_id) else ""
+
+
+async def _strict_lineage_executions(conn: Any, tenant_id: str, milestone_id: str, lineage: str) -> int:
+    """장부의 계보 실행 수. goal_failure_retry.count_lineage_executions 와 달리 예외를 삼키지 않는다 —
+    장부를 못 읽었는데 0 으로 보면 상한 검사가 열린다."""
+    return int(await conn.fetchval(
+        "SELECT count(*) FROM goal_retry_executions "
+        "WHERE tenant_id = $1::uuid AND milestone_id = $2::uuid AND lineage = $3",
+        tenant_id, milestone_id, lineage,
+    ) or 0)
+
+
+async def fetch_running_instruction(conn: Any, tenant_id: str, job_id: str) -> Optional[str]:
+    """실행 중인 그 job 의 지시서. job_id 로만 찾는다 — 채팅 세션으로 찾으면 다른 job 의 지시서가 섞인다."""
+    row = await conn.fetchrow(
+        "SELECT instruction FROM pipeline_jobs "
+        "WHERE job_id = $1 AND tenant_id = $2::uuid AND status = 'running'",
+        job_id, tenant_id,
+    )
+    return row["instruction"] if row else None
+
+
+async def detect_rework(conn: Any, candidate: Candidate, job_id: str) -> bool:
+    """이 요청이 candidate 목표의 실패(blocked) 마일스톤을 **job_id 가 직접** 재작업하는 것인가. 확신이 없으면 False.
+
+    1. job_id 는 서버가 세운 러너 job 이고 지금 running 이며, 지시서에 RETRY_OF_LINK + MILESTONE_ID 가 있다.
+    2. 마일스톤은 이 목표 소속·blocked 이고, RETRY_OF_LINK 가 가리키는 job 이 그 마일스톤에 묶여 있다.
+    3. 장부(goal_retry_executions)에 **이 job 자신이** 차감된 행이 있고, 그 계보가 RETRY_OF_LINK 부모의 계보와 같다.
+    4. 계보 총 실행 수가 1..상한이다.
+    장부·DB 조회가 하나라도 실패하면 재작업이 아니다.
+    """
+    if not job_id or str(candidate.status or "").lower() != "blocked":
+        return False
+    from app.services import goal_failure_retry as retry
+
+    try:
+        instruction = await fetch_running_instruction(conn, candidate.tenant_id, job_id)
+        parent = retry.parse_retry_link(instruction)
+        match = retry._MILESTONE_LINE.search(instruction or "")
+        if not parent or not match or not _is_uuid(match.group(1)):
+            return False
+        milestone_id = match.group(1).lower()
+        linked = await conn.fetchval(
+            """SELECT 1 FROM milestones m
+               JOIN goals g ON g.id = m.goal_id
+               JOIN goal_task_links l ON l.milestone_id = m.id AND l.tenant_id = g.tenant_id
+                AND l.task_type = 'pipeline_job' AND l.task_id = $3
+               WHERE m.id = $1::uuid AND m.goal_id = $2::uuid AND m.status = 'blocked'
+                 AND g.tenant_id = $4::uuid
+               LIMIT 1""",
+            milestone_id, candidate.goal_id, parent, candidate.tenant_id,
+        )
+        if not linked:
+            return False
+        own_lineage = await conn.fetchval(
+            "SELECT lineage FROM goal_retry_executions "
+            "WHERE tenant_id = $1::uuid AND milestone_id = $2::uuid AND job_id = $3",
+            candidate.tenant_id, milestone_id, job_id,
+        )
+        if not own_lineage:
+            return False
+        if own_lineage != await retry.lineage_root(conn, candidate.tenant_id, parent):
+            return False
+        executed = await _strict_lineage_executions(conn, candidate.tenant_id, milestone_id, own_lineage)
+    except Exception as exc:  # noqa: BLE001 — 근거를 못 읽으면 재작업으로 보지 않는다
+        logger.warning("goal_rework_detect_failed", goal=candidate.goal_id[:8], error=str(exc)[:140])
+        return False
+    return 1 <= executed <= retry._MAX_RETRY
+
+
+async def mark_rework(conn: Any, candidate: Candidate, job_id: str) -> None:
+    """재작업이면 candidate.rework 와, 정지 grant 가 차감 가능한지(rework_grant_eligible)를 채운다."""
+    candidate.rework = await detect_rework(conn, candidate, job_id)
+    if not candidate.rework:
+        return
+    candidate.rework_job_id = job_id
+    grant = candidate.grant or {}
+    if str(grant.get("status") or "").lower() != suspension.SUSPENDED_STATUS:
+        return
+    try:
+        candidate.rework_grant_eligible = bool(await conn.fetchval(
+            suspension.REWORK_GRANT_ELIGIBLE_SQL, grant["id"], candidate.goal_id, candidate.tenant_id,
+        ))
+    except Exception as exc:  # noqa: BLE001 — 못 읽으면 정지 grant 는 열지 않는다
+        logger.warning("goal_rework_grant_check_failed", goal=candidate.goal_id[:8], error=str(exc)[:140])
 
 
 async def attach_signals(conn: Any, candidates: list[Candidate]) -> None:
@@ -149,19 +284,28 @@ async def consume(conn: Any, candidate: Candidate) -> Optional[tuple[int, int]]:
 
     AA-7. 조건(상태·기간·상한)을 UPDATE 의 WHERE 에 같이 건다. 읽고 나서 따로 쓰면
     그 사이 다른 호출이 마지막 1회를 가져가도 둘 다 통과한다.
+
+    정지(paused) grant 는 재작업 면제로 통과한 판정에서만 센다. 판정 때 읽은 값을 믿지 않고
+    "정지 사유가 목표 비활성 · 배정 active · 더 새 정책 버전 없음 · 만료 전" 을 같은 문장 안에서 다시 건다
+    (suspension.REWORK_GRANT_ELIGIBLE_PREDICATE — 복원 SQL 과 같은 문자열). 센 뒤에도 status 는 paused 로 둔다.
     """
     if candidate.grant:
+        allow_paused = bool(candidate.rework and candidate.rework_grant_eligible)
         row = await conn.fetchrow(
             """
-            UPDATE goal_auto_approval_grants
+            UPDATE goal_auto_approval_grants gr
                SET used_executions = used_executions + 1,
                    last_used_at = clock_timestamp()
-             WHERE id = $1::uuid AND status = 'active'
-               AND used_executions < max_executions
-               AND clock_timestamp() >= valid_from AND clock_timestamp() < expires_at
-            RETURNING used_executions, max_executions
+             WHERE gr.id = $1::uuid
+               AND gr.used_executions < gr.max_executions
+               AND clock_timestamp() >= gr.valid_from AND clock_timestamp() < gr.expires_at
+               AND (gr.status = 'active'
+                    OR (gr.status = 'paused' AND $2::boolean
+                        AND gr.goal_id = $3::uuid AND gr.tenant_id = $4::uuid
+                        AND """ + suspension.REWORK_GRANT_ELIGIBLE_PREDICATE + """))
+            RETURNING gr.used_executions, gr.max_executions
             """,
-            candidate.grant["id"],
+            candidate.grant["id"], allow_paused, candidate.goal_id, candidate.tenant_id or None,
         )
         if not row:
             return None
@@ -289,7 +433,9 @@ def build_decision(
         "automation_eligibility": "GRANT_REQUIRED",
         "risk_tier": risk_tier(risk_level),
         "result": result,
-        "reason_codes": (["auto_approved"] if verdict.allowed else []) + list(verdict.reasons),
+        "reason_codes": (["auto_approved"] if verdict.allowed else [])
+        + ([REASON_REWORK] if verdict.allowed and verdict.rework_exempted else [])
+        + list(verdict.reasons),
         "policy_version": policy_version,
         "matched_grant_id": matched_grant_id,
         "grant_version": grant_version,
@@ -313,6 +459,8 @@ def build_decision(
             "gate": "live_trading_guard", "tool": tool_name, "risk_level": risk_level,
             "target_project": target_project, "source": verdict.source,
             "goal_title": (candidate.title or "")[:80], **snapshot,
+            "rework_exempted": bool(verdict.allowed and verdict.rework_exempted),
+            "rework_job_id": candidate.rework_job_id if verdict.rework_exempted else None,
         },
     }
     if signing_key is not None:

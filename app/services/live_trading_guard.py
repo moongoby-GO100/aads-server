@@ -779,6 +779,14 @@ async def goal_policy_allows(
             async with pool.acquire() as conn:
                 await gaa.attach_signals(conn, candidates)
         candidates = [c for c in candidates if gaa.has_gate_policy(c)]
+        # 막힌 목표의 재작업 면제는 **러너 job 자신이 낸 요청**에만 준다. job_id 는 서버가 세운 컨텍스트에서만
+        # 받는다(tool_input·채팅 session_id 는 LLM/같은 세션의 다른 호출이 만들 수 있다). 없으면 면제 없음.
+        rework_job = gaa.trusted_runner_job_id()
+        blocked = [c for c in candidates if str(c.status or "").lower() == "blocked"]
+        if rework_job and blocked:
+            async with pool.acquire() as conn:
+                for cand in blocked:
+                    await gaa.mark_rework(conn, cand, rework_job)
     except Exception as exc:
         logger.warning("goal_policy_lookup_failed session=%s error=%s",
                        session_id[:8], str(exc)[:140])
