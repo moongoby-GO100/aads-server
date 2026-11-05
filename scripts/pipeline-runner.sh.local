@@ -5991,6 +5991,15 @@ acct_repo_ready() {
     git -C "$workdir" rev-parse --git-dir >/dev/null 2>&1 || return 1
 }
 
+# ACCT 작업이 aads-server 저장소(AADS_ACCT_REPO_DIR 의 origin)에서 도는지 판별한다. 정규식은 테스트용으로만 덮어쓴다.
+acct_repo_is_aads_server() {
+    local project="$1" workdir="${2:-}" origin_url=""
+    [[ "$project" == "ACCT" && -n "$workdir" ]] || return 1
+    origin_url=$(git -C "$workdir" config --get remote.origin.url 2>/dev/null) || return 1
+    origin_url="${origin_url,,}"
+    [[ "$origin_url" =~ ${AADS_SERVER_ORIGIN_RE:-[:/]moongoby-go100/aads-server(\.git)?/?$} ]]
+}
+
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}" parallel_group="${8:-}"
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
@@ -6874,7 +6883,9 @@ $out_tail")
     if printf '%s\n' "__aads_ignore_probe_$$" | git check-ignore --stdin -q 2>/dev/null; then
         _whitelist_ignore_repo=1
     fi
-    if [[ -z "${_new_untracked//[[:space:]]/}" && -n "${worktree_dir:-}" && -e "${worktree_dir}/.git" && $_whitelist_ignore_repo -eq 1 ]]; then
+    # ACCT 가 aads-server 저장소(일반 .gitignore)로 옮겨 오면 '*' 화이트리스트 전제가 없으므로 rescue 를 건너뛴다.
+    if [[ -z "${_new_untracked//[[:space:]]/}" && -n "${worktree_dir:-}" && -e "${worktree_dir}/.git" && $_whitelist_ignore_repo -eq 1 ]] \
+        && ! acct_repo_is_aads_server "${project:-}" "${main_workdir:-}" 2>/dev/null; then
         # --exclude-standard 를 뺀 untracked 목록에서 시작한다. 갓 만든 워크트리에는
         # 추적 파일만 체크아웃돼 있으므로 여기 남는 것은 이번 작업이 만든 파일뿐이다.
         # 그래도 안전하게 워크트리 생성시각(.git mtime)보다 새 것만 통과시킨다.
@@ -8213,6 +8224,45 @@ acquire_deploy_lock_with_requeue() {
 }
 
 # ── 승인된 작업 배포 ──────────────────────────────────────────────────
+# ACCT 작업이 aads-server 저장소에 push 된 뒤 여기서 끝낸다. 빌드·배포는 하지 않고 116 의 AADS bluegreen 릴리스가 반영한다.
+# 완료 UPDATE 의 commit_hash 는 current_sha 다: 자동 rebase 가 DB commit_hash 와 current_sha 만 새 SHA 로 옮기고
+# expected_sha(승인 원본)는 그대로 두므로 expected_sha 로 걸면 정상 push 가 persist 실패로 끝난다.
+# 실패 UPDATE 도 status='deploying' 조건을 걸어 취소·종료된 작업을 error 로 덮지 않는다(_fail_job 은 무조건 UPDATE 라 쓰지 않는다).
+acct_release_via_aads() {
+    local job_id="$1" session_id="$2" project="$3" sha="$4"
+    local reason="acct_release_via_aads_bluegreen" done_row="" fail_row=""
+    done_row=$(db_exec "UPDATE pipeline_jobs SET status='done', phase='acct_release_via_aads',
+               review_feedback=COALESCE(review_feedback,'') || E'\n[게이트] ACCT 작업은 aads-server 저장소에 push 까지만 수행 — 운영 반영은 AADS bluegreen 릴리스가 맡음',
+               error_detail=NULL, deployed_at=NULL, completed_at=NOW(), updated_at=NOW()
+               WHERE job_id='${job_id}' AND status='deploying' AND commit_hash='${sha}' RETURNING job_id;" 2>/dev/null) || done_row=""
+    if [[ -n "${done_row//[[:space:]]/}" && "$(get_job_status "$job_id")" == "done" ]]; then
+        log "  ACCT_RELEASE_VIA_AADS job=$job_id sha=${sha:0:12} — push 까지만 수행, 운영 반영은 AADS bluegreen"
+        record_runner_event "$job_id" "job_terminal" "done" "acct_release_via_aads" "" "" "" "" "{\"reason\":\"${reason}\",\"sha\":\"${sha}\"}"
+        runner_handover_record "$job_id" "done"
+        post_to_chat "$session_id" "✅ [Pipeline Runner] ACCT 작업을 aads-server 저장소에 push 했습니다 (빌드·배포 건너뜀, 운영 반영은 AADS bluegreen 릴리스): $job_id"
+        _release_deploy_lock "$project" "$job_id"
+        _notify_ai "$job_id"
+        promote_next_queued "$project"
+        return 0
+    fi
+    fail_row=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
+               error_detail='acct_release_persist_failed',
+               result_output='ACCT 작업 완료 기록 실패 (push 는 완료됨, sha=${sha})',
+               completed_at=NOW(), updated_at=NOW()
+               WHERE job_id='${job_id}' AND status='deploying' RETURNING job_id;" 2>/dev/null) || fail_row=""
+    if [[ -n "${fail_row//[[:space:]]/}" ]]; then
+        log "  FAIL_FAST job=$job_id type=acct_release_persist_failed: ACCT 작업 완료 기록 실패"
+        record_runner_event "$job_id" "job_terminal" "error" "error" "" "" "" "" "{\"error_detail\":\"acct_release_persist_failed\"}"
+        post_to_chat "$session_id" "❌ [Pipeline Runner] 사전 검증 실패 (acct_release_persist_failed): ACCT 작업 완료 기록 실패 — push 는 완료됨"
+        _notify_ai "$job_id"
+    else
+        log "  ACCT_RELEASE_VIA_AADS_SKIPPED job=$job_id — 상태가 deploying 이 아니어서 덮어쓰지 않음"
+    fi
+    _release_deploy_lock "$project" "$job_id"
+    promote_next_queued "$project"
+    return 1
+}
+
 deploy_job() {
     local job_id="$1" project="$2" session_id="$3"
     local _job_instruction=""
@@ -8502,6 +8552,11 @@ deploy_job() {
         return 0
     fi
     _deploy_directive_state="allowed:${job_id}"
+
+    if acct_repo_is_aads_server "$project" "$main_workdir"; then
+        acct_release_via_aads "$job_id" "$session_id" "$project" "$current_sha" && return 0
+        return 1
+    fi
 
     # ═══ 무중단 배포 v3.0 — build→swap→healthcheck→rollback ═══
     # 원칙: 빌드 중 기존 서비스 유지, 빌드 성공 후에만 교체, 실패 시 롤백
