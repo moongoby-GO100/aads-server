@@ -12,7 +12,7 @@ HTML = Path(__file__).resolve().parents[2] / "app" / "static" / "apps" / "obys" 
 SRC = HTML.read_text(encoding="utf-8")
 NAMES = (
     "payrollPayloadV41", "payrollNumV41", "payrollDeductionTotalV41", "payrollContractIdV41",
-    "payrollUnsplitV41", "payrollFlagsV41", "payrollSummaryV41", "payrollSummaryHtmlV41", "payrollBasisHtmlV41",
+    "payrollUnsplitV41", "payrollPaymentCheckV41", "payrollFlagsV41", "payrollSummaryV41", "payrollSummaryHtmlV41", "payrollBasisHtmlV41",
 )
 
 
@@ -80,3 +80,37 @@ def test_render_wires_summary_branch_column_and_filter():
     assert 'id="payrollBranch"' in SRC and 'getElementById("payrollBranch")?.addEventListener("change"' in SRC
     assert '["급여번호","직원","지점","총지급액"' in SRC
     assert '"지점":String(raw.branch||"").trim()||"지점 미등록"' in SRC
+
+
+PAY = """
+const mk=(raw)=>({__live:{raw}});
+const sheetOnly=mk({status:'draft',net_pay:2746320,statement_payload:{contract_id:'c',raw_net:2665440,deduction_items:[{code:'national_pension',amount:137750}]}});
+const same=mk({status:'draft',net_pay:2826700,statement_payload:{contract_id:'c',raw_net:2826700,deduction_items:[{code:'national_pension',amount:1}]}});
+const bank=mk({status:'draft',net_pay:2746320,statement_payload:{contract_id:'c',raw_net:2665440,bank_paid_amount:2700000,deduction_items:[{code:'national_pension',amount:1}]}});
+const bankSame=mk({status:'draft',net_pay:2746320,statement_payload:{contract_id:'c',raw_net:2665440,bank_paid_amount:2746320,deduction_items:[{code:'national_pension',amount:1}]}});
+const none=mk({status:'draft',net_pay:100,statement_payload:{contract_id:'c'}});
+"""
+
+
+def test_payment_check_prefers_bank_then_sheet():
+    got = _run(PAY + "console.log(JSON.stringify([sheetOnly,same,bank,bankSame,none].map(payrollPaymentCheckV41)))")
+    assert got[0] == {"net": 2746320, "sheet": 2665440, "bank": None, "sheetDiff": 80880, "bankDiff": None}
+    assert got[1]["sheetDiff"] == 0
+    assert got[2]["bankDiff"] == 46320
+    assert got[3]["bankDiff"] == 0
+    assert got[4] == {"net": 100, "sheet": None, "bank": None, "sheetDiff": None, "bankDiff": None}
+
+
+def test_flags_show_payment_difference_only_when_it_exists():
+    got = _run(PAY + "console.log(JSON.stringify([sheetOnly,same,bank,bankSame,none].map(payrollFlagsV41)))")
+    assert "시트 지급 차액 +80,880원" in got[0] and 'data-flag="bank-diff"' not in got[0]
+    assert got[1] == ""
+    assert "계좌 지급 차액 +46,320원" in got[2] and "시트 지급" not in got[2]
+    assert got[3] == ""  # 계좌 금액이 일치하면 시트 차이는 표시하지 않는다
+    assert got[4] == ""
+
+
+def test_basis_explains_bank_reconciliation_state():
+    html = _run(PAY + "console.log(JSON.stringify([payrollBasisHtmlV41(sheetOnly),payrollBasisHtmlV41(bank)]))")
+    assert "계좌 출금 내역이 아직 수집되지 않아" in html[0] and "2,665,440원 대비 차액 +80,880원" in html[0]
+    assert "계좌 출금 2,700,000원 · 차액 +46,320원" in html[1]

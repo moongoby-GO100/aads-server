@@ -160,7 +160,7 @@ def test_people_renderer_executes_payroll_and_all_attendance_tabs(tmp_path):
                 "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(", "function activeMonthV41(",
                 "function workSchedulePanelV41(", "function payrollLatestMonthV41(", "function payrollMonthRowsV41(",
                 "function payrollDetailRowV41(", "function payrollPayloadV41(", "function payrollNumV41(",
-                "function payrollDeductionTotalV41(", "function payrollContractIdV41(", "function payrollUnsplitV41(",
+                "function payrollDeductionTotalV41(", "function payrollContractIdV41(", "function payrollUnsplitV41(", "function payrollPaymentCheckV41(",
                 "function payrollFlagsV41(", "function payrollSummaryV41(", "function payrollSummaryHtmlV41(",
                 "function payrollBasisHtmlV41(", "function payrollRowNoteV41(", "function payrollLinkCacheV41(")
     helpers = "\n".join(next(line.strip() for line in html.splitlines() if line.strip().startswith(prefix)) for prefix in prefixes)
