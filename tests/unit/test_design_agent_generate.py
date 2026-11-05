@@ -268,7 +268,7 @@ async def test_genspark_size_limit_and_required_keys():
 
 def test_handlers_mapping():
     assert runner.HANDLERS['project_created'] is generate.handle_generate
-    assert runner.HANDLERS['new_screen_requested'] is generate.handle_generate
+    assert runner.HANDLERS['new_screen_requested'] is runner.handle_new_screen
     assert runner.HANDLERS['manual'] is runner.handle_manual
     assert runner.HANDLERS['deploy_succeeded'] is audit.handle_deploy_audit
     assert runner.HANDLERS['screen_change_requested'] is runner.noop
@@ -284,3 +284,153 @@ async def test_manual_dispatch(monkeypatch):
         trigger('t-2', 'manual', kind='genspark_import', raw='{"colors": {"a": "#000"}}'),
         writer_for(conn), RunBudget())
     assert len(conn.rows) == 1
+
+
+class GateConn(FakeConn):
+    """FakeConn plus design_intake_sessions: {id: (project_key, screen_ref, confirmed)}."""
+
+    def __init__(self, sessions):
+        super().__init__()
+        self.sessions = sessions
+        self.order = []
+
+    async def fetchval(self, sql, *args):
+        if 'brief_confirmed_at FROM design_intake_sessions' in sql:
+            self.order.append('confirm')
+            row = self.sessions.get(args[0])
+            return row[2] if row else None
+        return await super().fetchval(sql, *args)
+
+    async def fetchrow(self, sql, *args):
+        if 'FOR SHARE' in sql:
+            self.order.append('lock')
+        row = self.sessions.get(args[0])
+        return {'project_key': row[0], 'screen_ref': row[1]} if row else None
+
+
+def new_screen(trigger_id='t-9', **payload):
+    return trigger(trigger_id, 'new_screen_requested', project_root='.', **payload)
+
+
+@pytest.mark.asyncio
+async def test_new_screen_confirmed_brief_writes_same_draft(project):
+    write(project, 'a.css', ':root { --color-primary: #fff; }\n')
+    conn = GateConn({'s1': (PROJECT, 'login', 'ts')})
+    budget = RunBudget()
+    await runner.handle_new_screen(new_screen(intake_session_id='s1', screen_ref='login'),
+                                   writer_for(conn), budget)
+    plain = FakeConn()
+    await generate.handle_generate(new_screen(), writer_for(plain), RunBudget())
+    (row,) = conn.rows
+    assert row == plain.rows[0] and budget.llm_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_new_screen_locks_session_before_confirm_check(project):
+    write(project, 'a.css', ':root { --color-primary: #fff; }\n')
+    conn = GateConn({'s1': (PROJECT, None, 'ts')})
+    await runner.handle_new_screen(new_screen(intake_session_id='s1'), writer_for(conn),
+                                   RunBudget())
+    assert conn.order == ['lock', 'confirm']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('payload,sessions', [
+    ({}, {'s1': (PROJECT, None, 'ts')}),
+    ({'intake_session_id': 's1'}, {'s1': (PROJECT, None, None)}),
+    ({'intake_session_id': 'missing'}, {}),
+    ({'intake_session_id': 's1'}, {'s1': ('OTHER', None, 'ts')}),
+    ({'intake_session_id': 's1', 'screen_ref': 'login'}, {'s1': (PROJECT, 'cart', 'ts')}),
+    ({'intake_session_id': 's1', 'screen_ref': 'login'}, {'s1': (PROJECT, None, 'ts')}),
+    ({'intake_session_id': 's1'}, {'s1': (PROJECT, 'cart', 'ts')}),
+])
+async def test_new_screen_blocked_without_writes(project, payload, sessions):
+    write(project, 'a.css', ':root { --color-primary: #fff; }\n')
+    conn = GateConn(sessions)
+    with pytest.raises(runner.BriefBlocked) as info:
+        await runner.handle_new_screen(new_screen(**payload), writer_for(conn), RunBudget())
+    assert info.value.reason == 'design_brief_unconfirmed'
+    assert conn.rows == [] and conn.audits == []
+
+
+@pytest.mark.asyncio
+async def test_project_created_has_no_gate(project):
+    write(project, 'a.css', ':root { --color-primary: #fff; }\n')
+    conn = GateConn({})
+    await runner.HANDLERS['project_created'](trigger('t-1', project_root='.'),
+                                             writer_for(conn), RunBudget())
+    assert len(conn.rows) == 1
+
+
+class RunConn(GateConn):
+    def __init__(self, sessions, trigger_row):
+        super().__init__(sessions)
+        self.trigger_row, self.runs, self.done = trigger_row, [], []
+
+    def transaction(self):
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def cm():
+            yield
+        return cm()
+
+    async def fetchrow(self, sql, *args):
+        if 'design_agent_triggers' in sql:
+            row, self.trigger_row = self.trigger_row, None
+            return row
+        return await super().fetchrow(sql, *args)
+
+    async def fetchval(self, sql, *args):
+        if 'FROM design_agent_runs' in sql and 'EXISTS' in sql:
+            return any(r['status'] == 'succeeded' and r['hash'] == args[3] for r in self.runs)
+        if 'COALESCE(SUM(cost_usd)' in sql:
+            return 0
+        if sql.lstrip().startswith('INSERT INTO design_agent_runs'):
+            self.runs.append({'hash': args[4], 'status': args[5]})
+            return 'run-1'
+        return await super().fetchval(sql, *args)
+
+    async def execute(self, sql, *args):
+        if 'SET status=$3,\n                llm_calls' in sql or 'llm_calls=$4' in sql:
+            self.runs[-1]['status'] = args[2]
+        elif 'design_agent_triggers' in sql:
+            self.done.append(args[2] if len(args) > 2 else 'failed')
+
+
+@pytest.mark.asyncio
+async def test_blocked_run_is_not_a_duplicate_after_confirmation(project, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services.design_agent.config import Config
+    write(project, 'a.css', ':root { --color-primary: #fff; }\n')
+    monkeypatch.setattr(runner, 'required_skills', lambda conn, situation: _no_skills())
+    payload = {'project_root': '.', 'intake_session_id': 's1'}
+
+    def row():
+        return {'id': 't-1', 'event_type': 'new_screen_requested', 'project_key': PROJECT,
+                'payload': payload}
+    conn = RunConn({'s1': (PROJECT, None, None)}, row())
+    pool = SimpleNamespace(acquire=lambda: _Acquire(conn))
+    first = await runner.process_one(pool, TENANT, Config(enabled=True))
+    assert (first['status'], first['reason']) == ('blocked', 'design_brief_unconfirmed')
+    assert conn.runs[-1]['status'] != 'succeeded' and conn.rows == []
+    conn.sessions['s1'] = (PROJECT, None, 'ts')
+    conn.trigger_row = row()
+    second = await runner.process_one(pool, TENANT, Config(enabled=True))
+    assert second['status'] == 'succeeded' and len(conn.rows) == 1
+
+
+async def _no_skills():
+    return []
+
+
+class _Acquire:
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, *exc):
+        return False

@@ -7,6 +7,7 @@ from .budget import BudgetExceeded, RunBudget, check_run
 from .config import Config
 from .generate import handle_generate
 from .importer import handle_import
+from .intake import assert_brief_confirmed
 from .queue import claim_next, mark_done, mark_failed
 from .skills import load_skill, required_skills, resolve_situation
 from .writer import DesignAgentWriter
@@ -25,9 +26,52 @@ async def handle_manual(trigger, writer, budget):
     return await noop(trigger, writer, budget)
 
 
+BRIEF_UNCONFIRMED = 'design_brief_unconfirmed'
+
+
+class BriefBlocked(Exception):
+    """New-screen generation refused before any write; not a successful run."""
+
+    def __init__(self, reason=BRIEF_UNCONFIRMED):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _norm(value):
+    value = value.strip() if isinstance(value, str) else value
+    return value or None
+
+
+async def handle_new_screen(trigger, writer, budget):
+    """Brief gate (D1.6) in front of generation: confirmed AND scoped to this project/screen."""
+    payload = trigger['payload']
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    payload = payload or {}
+    session_id = payload.get('intake_session_id')
+    if not session_id:
+        raise BriefBlocked()
+    conn = writer._conn
+    # Share-lock the session row first: record_answer/save_question take FOR UPDATE and
+    # would reset brief_confirmed_at, so they must wait until this transaction ends.
+    session = await conn.fetchrow("""SELECT project_key, screen_ref FROM design_intake_sessions
+        WHERE id=$1 AND tenant_id=$2 FOR SHARE""", session_id, writer.tenant_id)
+    if session is None:
+        raise BriefBlocked()
+    try:
+        await assert_brief_confirmed(conn, writer.tenant_id, session_id)
+    except ValueError as exc:
+        raise BriefBlocked() from exc
+    screen = _norm(payload.get('screen_ref') or payload.get('screen_id'))
+    if (_norm(session['project_key']) != writer.project_key
+            or _norm(session['screen_ref']) != screen):
+        raise BriefBlocked()
+    return await handle_generate(trigger, writer, budget)
+
+
 HANDLERS = {'project_created': handle_generate, 'deploy_succeeded': handle_deploy_audit,
             'manual': handle_manual, 'screen_change_requested': noop,
-            'new_screen_requested': handle_generate}
+            'new_screen_requested': handle_new_screen}
 
 
 async def process_one(pool, tenant_id, config=None):
@@ -58,6 +102,7 @@ async def process_one(pool, tenant_id, config=None):
                 trigger['project_key'], handler, input_hash, status or 'running')
             budget = RunBudget(config.max_llm_calls)
             error = None
+            blocked_reason = None
             if not status:
                 writer = DesignAgentWriter(conn, tenant_id, trigger['project_key'], run_id)
                 try:
@@ -77,6 +122,10 @@ async def process_one(pool, tenant_id, config=None):
                     async with conn.transaction():
                         await HANDLERS[handler](trigger, writer, budget)
                     status = 'succeeded'
+                except BriefBlocked as exc:
+                    # The runs CHECK has no 'blocked' status; 'failed' is never a duplicate
+                    # source, so the same payload can be resubmitted once the brief is confirmed.
+                    status, error, blocked_reason = 'failed', exc.reason, exc.reason
                 except Exception as exc:
                     status = 'blocked_budget' if isinstance(exc, BudgetExceeded) else 'failed'
                     error = str(exc)
@@ -87,6 +136,9 @@ async def process_one(pool, tenant_id, config=None):
                 llm_calls=$4,cost_usd=$5,error=COALESCE($6,error),finished_at=now()
                 WHERE id=$1 AND tenant_id=$2""", run_id, tenant_id, status,
                 budget.llm_calls, budget.cost_usd, error)
+            if blocked_reason:
+                await mark_done(conn, tenant_id, trigger['id'], True)
+                return {'id': run_id, 'status': 'blocked', 'reason': blocked_reason}
             if status == 'failed':
                 await mark_failed(conn, tenant_id, trigger['id'])
             else:
