@@ -31,6 +31,8 @@ def isolated(tmp_path, monkeypatch):
     for name in ("OBYS_DATABASE_URL", "YEOLJEONG_FINANCE_DATABASE_URL", "OBYS_CONTRACT_NOTIFY_CHANNELS"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OBYS_UPLOAD_ROOT", str(tmp_path / "upload-root"))
+    # 이 파일은 간이세액표가 없는 급여월의 입력 대기·확정 차단 경로를 검증한다. 표 자동 산정은 test_obys_income_tax_table.py.
+    monkeypatch.setattr(ded, "_INCOME_TAX_TABLES", ())
     monkeypatch.setattr(svc, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(svc, "UPLOAD_DIR", tmp_path / "data" / "uploads" / "onboarding")
 

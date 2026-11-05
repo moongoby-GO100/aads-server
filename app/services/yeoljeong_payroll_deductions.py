@@ -1,8 +1,9 @@
 """급여명세 초안의 법정 공제(4대보험) 자동 산정과 소득세 간이세액표 로더 (오비서/열정국밥).
 
 범위: 근로자(four_insurance) 명세의 국민연금·건강보험·장기요양·고용보험 4항목을 급여월 기준 요율로 계산한다.
-소득세·지방소득세는 간이세액표 데이터가 아직 없어 '입력 필요'(needs_input) 항목으로만 만든다.
-표가 들어오면 load_income_tax_table 로 읽을 수 있게 로더 인터페이스만 먼저 둔다(자동 산정은 후속).
+소득세는 급여월에 시행 중인 근로소득 간이세액표(app/data/yeoljeong_payroll/*.csv)에서 찾고,
+지방소득세는 소득세의 10%(10원 미만 절사)로 계산한다. 공제대상가족 수는 명세의 tax_family_count, 없으면 본인 1명이다.
+표가 없는 급여월(2026-03 이전)·표 범위 밖(월 1,000만원 이상)·표 파일 오류는 '입력 필요'(needs_input)로 남긴다.
 
 요율·상하한은 급여월 단위 표다. 표에 없는 급여월은 항목을 빼거나 제한 없이 계산하지 않고,
 needs_input 항목(calc_note '요율 미등록' / '상하한 미등록')으로 만들어 확정을 막는다.
@@ -14,9 +15,13 @@ needs_input 항목(calc_note '요율 미등록' / '상하한 미등록')으로 �
 from __future__ import annotations
 
 import csv
+import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 SOURCE_AUTO = "auto"
 SOURCE_MANUAL = "manual"
@@ -50,6 +55,14 @@ _HEALTH_BOUNDS = (
     ("2026-01", "2026-12", 10_080, 4_591_740),
 )
 _MONTH_RE = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
+
+# (시행 급여월, 표 이름, 파일). 급여월이 시행월 이상인 표 중 가장 최근 것을 쓴다. 다음 개정표는 아래에 한 줄 추가한다.
+# 출처: 대표가 2026-11-05 채팅에 첨부한 「근로소득 간이세액표_2026.03.01.xlsx」(소득세법 시행령 별표2), 천원 → 원 단위로 변환.
+_TAX_TABLE_DIR = Path(__file__).resolve().parent.parent / "data" / "yeoljeong_payroll"
+_INCOME_TAX_TABLES: tuple[tuple[str, str, str], ...] = (
+    ("2026-03", "2026.03.01", "income_tax_simple_table_20260301.csv"),
+)
+_DEFAULT_TAX_FAMILY = 1  # 공제대상가족 수 미입력이면 본인 1명
 
 
 def _int(value: Any) -> int:
@@ -105,8 +118,8 @@ def long_term_care_item(month: str, health_amount: int | None) -> dict[str, Any]
     )
 
 
-def compute_statutory_items(month: str, taxable_pay: Any) -> dict[str, dict[str, Any]]:
-    """급여월·과세급여로 4대보험 4항목 + 소득세 2항목(입력 필요)을 계산해 code → 항목으로 낸다."""
+def compute_statutory_items(month: str, taxable_pay: Any, family: Any = None) -> dict[str, dict[str, Any]]:
+    """급여월·과세급여·공제대상가족 수로 4대보험 4항목 + 소득세 2항목을 계산해 code → 항목으로 낸다."""
     month = str(month or "").strip()
     taxable = max(_int(taxable_pay), 0)
     valid_month = bool(_MONTH_RE.fullmatch(month))
@@ -153,22 +166,66 @@ def compute_statutory_items(month: str, taxable_pay: Any) -> dict[str, dict[str,
             "employment_insurance", _floor10(taxable * ppm // _PPM), f"과세급여 {taxable:,}원 × {ppm / 10_000:g}%, 10원 미만 절사",
         )
 
-    for code in TAX_CODES:
-        result[code] = _item(code, 0, "근로소득 간이세액표 미등록 — 관리자 입력 필요", needs_input=True)
+    result.update(income_tax_items(month, taxable, family))
     return result
 
 
-def build_deduction_basis(month: str, taxable_pay: Any) -> dict[str, Any]:
+def _family_count(value: Any) -> int | None:
+    """공제대상가족 수. 비었으면 본인 1명, 1~11 밖이거나 숫자가 아니면 None(자동 산정하지 않는다)."""
+    if value is None or str(value).strip() == "":
+        return _DEFAULT_TAX_FAMILY
+    text = str(value).strip()
+    if not text.isdigit() or not 1 <= int(text) <= _MAX_FAMILY:
+        return None
+    return int(text)
+
+
+def income_tax_items(month: str, taxable_pay: Any, family: Any = None) -> dict[str, dict[str, Any]]:
+    """소득세·지방소득세 자동 항목. 표가 없거나 표 범위 밖이면 needs_input 으로 남긴다(추정하지 않는다)."""
+    month = str(month or "").strip()
+    taxable = max(_int(taxable_pay), 0)
+    count = _family_count(family)
+    found = income_tax_table_for(month) if _MONTH_RE.fullmatch(month) else None
+
+    def pending(note: str) -> dict[str, dict[str, Any]]:
+        return {code: _item(code, 0, note, needs_input=True) for code in TAX_CODES}
+
+    if found is None:
+        return pending(f"{month or '급여월 미상'} 근로소득 간이세액표 미등록 — 관리자 입력 필요")
+    if count is None:
+        return pending(f"공제대상가족 수({family!r})를 1~{_MAX_FAMILY}명으로 확인해야 합니다 — 관리자 입력 필요")
+    name, table = found
+    family_note = f"공제대상가족 {count}명" + ("(미입력 — 본인 1명 기준)" if family is None or str(family).strip() == "" else "")
+    if taxable < table[0].salary_from:
+        tax = 0
+        basis = f"월 과세급여 {taxable:,}원 — 간이세액표({name}) 최저 구간 {table[0].salary_from:,}원 미만이라 세액 없음"
+    else:
+        tax = lookup_income_tax(table, taxable, count)
+        if tax is None:
+            return pending(f"월 과세급여 {taxable:,}원은 간이세액표({name}) 구간 밖(표 하단 산식 대상) — 관리자 입력 필요")
+        basis = f"간이세액표({name}) 월 과세급여 {taxable:,}원, {family_note}"
+    local = _floor10(tax // 10)
+    income = _item("income_tax", tax, basis)
+    local_item = _item("local_income_tax", local, f"소득세 {tax:,}원 × 10%, 10원 미만 절사")
+    for item in (income, local_item):
+        item["tax_table"] = name
+    return {"income_tax": income, "local_income_tax": local_item}
+
+
+def build_deduction_basis(month: str, taxable_pay: Any, family: Any = None) -> dict[str, Any]:
     """자동 산정에 쓴 입력값. 과세급여가 바뀌었는지, 어떤 요율이었는지 나중에 대조할 수 있게 명세에 남긴다."""
     month = str(month or "").strip()
     bounds = pension_bounds(month)
     health_limits = health_bounds(month)
+    found = income_tax_table_for(month) if _MONTH_RE.fullmatch(month) else None
     return {
         "payroll_month": month,
         "taxable_pay": max(_int(taxable_pay), 0),
         "rates_ppm": {code: _lookup_rate(code, month) for code in _RATES},
         "pension_bounds": {"lower": bounds[0], "upper": bounds[1]} if bounds else None,
         "health_bounds": {"lower": health_limits[0], "upper": health_limits[1]} if health_limits else None,
+        "income_tax_table": found[0] if found else None,
+        "tax_family_count": _family_count(family),
     }
 
 
@@ -209,6 +266,7 @@ def apply_statutory_deductions(
     taxable_pay: Any,
     previous_basis: dict[str, Any] | None = None,
     totals: dict[str, Any] | None = None,
+    tax_family_count: Any = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """공제 항목에 4대보험·소득세를 항목 단위로 채운다. (새 항목 목록, deduction_basis).
 
@@ -223,10 +281,11 @@ def apply_statutory_deductions(
       보험 합계만 있으면 나눌 근거가 없어 자동 산정이 대체하고 대체한 값을 deduction_basis.replaced_totals 에 남긴다.
     """
     items = [dict(item) for item in (deduction_items or [])]
-    fresh = compute_statutory_items(month, taxable_pay)
+    fresh = compute_statutory_items(month, taxable_pay, tax_family_count)
     legacy: dict[str, dict[str, Any]] = {}
     if previous_basis and previous_basis.get("payroll_month") and not isinstance(previous_basis.get("auto_amounts"), dict):
-        legacy = compute_statutory_items(previous_basis["payroll_month"], previous_basis.get("taxable_pay"))
+        legacy = compute_statutory_items(previous_basis["payroll_month"], previous_basis.get("taxable_pay"),
+                                         previous_basis.get("tax_family_count"))
     pending_before = (previous_basis or {}).get("pending_tax_amounts")
     pending_before = pending_before if isinstance(pending_before, dict) else {}
 
@@ -278,6 +337,11 @@ def apply_statutory_deductions(
             "code": "income_tax", "label": _LABELS["income_tax"], "amount": tax_total, "source": SOURCE_MANUAL,
             "needs_input": True, "calc_note": "소득세·지방소득세 합계 입력값을 옮김 — 구분 확인 필요",
         }
+        # 합계에 지방소득세가 이미 들어 있으므로 간이세액표 값을 덧붙이지 않는다(이중 계상 방지).
+        kept["local_income_tax"] = {
+            "code": "local_income_tax", "label": _LABELS["local_income_tax"], "amount": 0, "source": SOURCE_MANUAL,
+            "needs_input": True, "calc_note": "소득세 항목에 옮긴 합계에 포함 — 구분 확인 필요",
+        }
     insurance_total = _int(totals.get("insurance_deduction"))
     if insurance_total and not given_codes & set(INSURANCE_CODES):
         replaced["insurance_deduction"] = insurance_total  # 4개 보험으로 나눌 근거가 없어 자동 산정이 대체한다
@@ -293,7 +357,7 @@ def apply_statutory_deductions(
         fresh["long_term_care"] = long_term_care_item(month, _int(health.get("amount")) if health else (
             None if fresh["health_insurance"].get("needs_input") else fresh["health_insurance"]["amount"]))
     merged = [kept.get(code) or fresh[code] for code in REQUIRED_FOUR_INSURANCE_CODES]
-    basis = build_deduction_basis(month, taxable_pay)
+    basis = build_deduction_basis(month, taxable_pay, tax_family_count)
     basis["auto_amounts"] = {item["code"]: _int(item.get("amount")) for item in merged if item.get("source") == SOURCE_AUTO}
     pending_tax = {item["code"]: _int(item.get("amount")) for item in merged
                    if item["code"] in TAX_CODES and item.get("needs_input") and _int(item.get("amount")) != 0}
@@ -311,8 +375,10 @@ def pending_input_codes(deduction_items: list[dict[str, Any]] | None) -> list[st
         if item.get("confirmed"):
             continue
         zero = _int(item.get("amount")) == 0
+        # 간이세액표에서 찾은 0원(최저 구간 미만 등)은 표가 근거라 대기가 아니다.
+        table_zero = item.get("source") == SOURCE_AUTO and bool(item.get("tax_table"))
         # 세금 0원, 그리고 관리자 입력(source!=auto)인 보험 0원은 confirmed 가 아니면 플래그가 없어도 대기다.
-        if item.get("needs_input") or (zero and (item.get("code") in TAX_CODES or (
+        if item.get("needs_input") or (zero and ((item.get("code") in TAX_CODES and not table_zero) or (
                 item.get("code") in INSURANCE_CODES and item.get("source") != SOURCE_AUTO))):
             pending.append(item["code"])
     return pending
@@ -330,7 +396,7 @@ def four_insurance_deduction_errors(deduction_items: list[dict[str, Any]] | None
     return []
 
 
-# ---- 근로소득 간이세액표 로더 (데이터 등록·자동 산정은 후속 작업) ----------------------------------
+# ---- 근로소득 간이세액표 로더 ------------------------------------------------------------------
 
 class IncomeTaxTableError(ValueError):
     """간이세액표 파일 형식이 올바르지 않을 때. 메시지는 한글 사유다."""
@@ -397,3 +463,25 @@ def lookup_income_tax(table: list[IncomeTaxBracket], monthly_salary: int, family
         if bracket.salary_from <= monthly_salary < bracket.salary_to:
             return bracket.tax_by_family.get(family)
     return None
+
+
+_loaded_tables: dict[str, list[IncomeTaxBracket]] = {}
+
+
+def income_tax_table_for(month: str) -> tuple[str, list[IncomeTaxBracket]] | None:
+    """급여월에 시행 중인 간이세액표 (표 이름, 구간표). 없거나 파일이 깨졌으면 None.
+
+    성공한 표만 메모리에 둔다 — 읽기에 실패해도 실패를 저장하지 않으므로 파일을 고치면 다음 호출에서 다시 읽는다."""
+    candidates = [entry for entry in _INCOME_TAX_TABLES if entry[0] <= month]
+    if not candidates:
+        return None
+    _, name, filename = max(candidates)
+    table = _loaded_tables.get(filename)
+    if table is None:
+        try:
+            table = load_income_tax_table(str(_TAX_TABLE_DIR / filename))
+        except IncomeTaxTableError as exc:
+            logger.error("income_tax_table_load_failed file=%s reason=%s", filename, exc)
+            return None
+        _loaded_tables[filename] = table
+    return name, table

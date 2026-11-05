@@ -9798,6 +9798,7 @@ def _apply_statutory_payroll_deductions(statement: dict[str, Any], target: dict[
         taxable_pay=taxable,
         previous_basis=(target or {}).get("deduction_basis") or None,
         totals={field: statement.get(field) for field in ("tax_withholding", "insurance_deduction", "other_deduction")},
+        tax_family_count=statement.get("tax_family_count"),
     )
     try:
         items = normalize_payroll_items({"deduction_items": items})["deduction_items"]
