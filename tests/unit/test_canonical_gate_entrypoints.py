@@ -27,6 +27,8 @@ _REPO = Path(__file__).resolve().parents[2]
 _COMMIT_SCRIPT = _REPO / "scripts" / "canonical_gate_commit.py"
 _SESSION = "11111111-2222-4333-8444-555555555555"
 _GOAL = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+_MILESTONE = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
+_DECLARED = f"GOAL_ID: {_GOAL}\nMILESTONE_ID: {_MILESTONE}"
 _CTX = {"tenant": {"id": "tenant-1"}, "user": {"user_id": "u1"}}
 
 
@@ -112,6 +114,7 @@ def runner_env(monkeypatch):
     """submit_job/submit_batch 본문은 그대로 두고, 게이트와 무관한 주변 DB 헬퍼만 대체한다."""
     import app.api.pipeline_runner as pr
     import app.core.db_pool as db_pool
+    import app.services.goal_submit_gate as gate_mod
     import app.services.pipeline_runner_service as prs
 
     env = SimpleNamespace(
@@ -138,6 +141,11 @@ def runner_env(monkeypatch):
             raise env.link
         return env.link
 
+    async def milestone_row(milestone_id, tenant_id):
+        # goal_submit_gate 는 그대로 돌리고, 마일스톤 조회만 "_GOAL 소속 마일스톤" 으로 대체한다
+        return {"milestone_id": milestone_id, "goal_id": _GOAL}
+
+    monkeypatch.setattr(gate_mod, "_fetch_milestone", milestone_row)
     for name in ("_lock_instruction_hash", "_cleanup_dead_local_runner_processes",
                  "_find_active_duplicate", "_find_active_file_conflict",
                  "_persist_job_goal_context", "_enforce_owner_resolved_gate"):
@@ -153,14 +161,14 @@ def runner_env(monkeypatch):
 
 def _job_req(pr):
     return pr.JobSubmitRequest(
-        project="AADS", instruction=f"간단한 지시\nGOAL_ID: {_GOAL}", session_id=_SESSION,
+        project="AADS", instruction=f"간단한 지시\n{_DECLARED}", session_id=_SESSION,
     )
 
 
 def _batch_req(pr, n=3):
     return pr.BatchSubmitRequest(
         project="AADS", session_id=_SESSION,
-        jobs=[pr.BatchJobItem(key=f"K{i}", instruction=f"지시 {i}\nGOAL_ID: {_GOAL}") for i in range(n)],
+        jobs=[pr.BatchJobItem(key=f"K{i}", instruction=f"지시 {i}\n{_DECLARED}") for i in range(n)],
     )
 
 
@@ -310,7 +318,7 @@ def _runner_client(env):
 
 def _post_job(client):
     return client.post("/api/v1/pipeline/jobs", json={
-        "project": "AADS", "instruction": f"간단한 지시\nGOAL_ID: {_GOAL}", "session_id": _SESSION,
+        "project": "AADS", "instruction": f"간단한 지시\n{_DECLARED}", "session_id": _SESSION,
     })
 
 
