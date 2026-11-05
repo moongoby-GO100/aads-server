@@ -5146,8 +5146,16 @@ cleanup_blocked_dependencies() {
     # 위 규칙이 그 취소를 "실패 아님"으로 읽어 1fc518dc 의 의존성을 풀었고 선행 결과 없이 시작됐다.
     # 그래서 cancelled 면제는 phase<>'blocked_dependency' 일 때만 적용하고, 그 경우는 아래
     # blocked_existing 가 자식도 blocked_dependency 로 연쇄 차단한다(원 상류를 error_detail 에 남김).
+    #
+    # 2026-11-06 예외 — no_changes 로 취소된 부모도 "취소"가 아니라 산출물 없음이다.
+    # runner-2602a50f 가 no_changes(기반 커밋 없음)로 cancelled 되자 위 규칙이 명시 depends_on 후속
+    # runner-86430d62·8a3b6504·f92de71a·bbd01643 의 의존성을 풀었다. 4건이 선행 결과 없이 시작돼
+    # 3건은 no_changes, 1건은 API 없이 화면만 만들어 반려됐다. no_changes 는 중복·대체·수동 회수가
+    # 아니라 "선행이 산출물을 못 냈다"는 뜻이므로 blocked_dependency 와 같이 취급한다.
+    # 판정은 error_detail 접두 'no_changes' (기록 지점이 'no_changes' 또는 'no_changes: <첫 줄>' 을 쓴다).
+    # 자동 부여(file_conflict_auto_dependency) 의존성은 종전대로 풀리고 DEPLOY_ONLY 예외도 그대로다.
     released=$(db_exec "UPDATE pipeline_jobs p SET depends_on=NULL,
-                        review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 ' || dep.status || CASE WHEN dep.status='cancelled' AND COALESCE(dep.phase,'') <> 'blocked_dependency' THEN ' 로 끝났다 — 취소는 실패가 아니므로 의존성만 풀고 단독 실행한다' ELSE ' 로 끝나 같은 파일을 더 건드리지 않는다 — 자동 부여된 의존성을 풀고 단독 실행한다' END,
+                        review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 이 ' || dep.status || CASE WHEN dep.status='cancelled' AND COALESCE(dep.phase,'') <> 'blocked_dependency' AND COALESCE(dep.error_detail,'') NOT LIKE 'no_changes%' THEN ' 로 끝났다 — 취소는 실패가 아니므로 의존성만 풀고 단독 실행한다' ELSE ' 로 끝나 같은 파일을 더 건드리지 않는다 — 자동 부여된 의존성을 풀고 단독 실행한다' END,
                         updated_at=NOW()
                         FROM pipeline_jobs dep
                         WHERE p.depends_on = dep.job_id
@@ -5155,7 +5163,8 @@ cleanup_blocked_dependencies() {
                           AND p.phase IN ('queued','coding')
                           AND dep.status IN ('error','rejected','rejected_done','cancelled')
                           AND (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb
-                               OR (dep.status = 'cancelled' AND COALESCE(dep.phase,'') <> 'blocked_dependency'))
+                               OR (dep.status = 'cancelled' AND COALESCE(dep.phase,'') <> 'blocked_dependency'
+                                   AND COALESCE(dep.error_detail,'') NOT LIKE 'no_changes%'))
                         RETURNING p.job_id;" 2>/dev/null) || true
 
     blocked_existing=$(db_exec "UPDATE pipeline_jobs p SET status='cancelled',
@@ -5165,6 +5174,8 @@ cleanup_blocked_dependencies() {
                                             THEN ' (root ' || COALESCE(substring(dep.error_detail from 'root ([A-Za-z0-9_-]+)'),
                                                                        substring(dep.error_detail from 'parent ([A-Za-z0-9_-]+) is'),
                                                                        dep.job_id) || ')'
+                                            WHEN dep.status='cancelled' AND COALESCE(dep.error_detail,'') LIKE 'no_changes%'
+                                            THEN '(no_changes)'
                                             ELSE '' END,
                                 review_feedback=COALESCE(p.review_feedback,'') || E'\n[Runner Guard] 선행 작업 ' || p.depends_on || ' 상태가 ' || dep.status || '라 자동 진행 불가 — blocked_dependency로 종결',
                                 completed_at=NOW(), updated_at=NOW()
@@ -5173,7 +5184,8 @@ cleanup_blocked_dependencies() {
                                   AND p.status='queued'
                                   AND p.phase IN ('queued','coding')
                                   AND (dep.status IN ('error','rejected','rejected_done')
-                                       OR (dep.status='cancelled' AND dep.phase='blocked_dependency'))
+                                       OR (dep.status='cancelled' AND (dep.phase='blocked_dependency'
+                                                                 OR COALESCE(dep.error_detail,'') LIKE 'no_changes%')))
                                   AND NOT (p.logs @> '[{\"event\": \"file_conflict_auto_dependency\"}]'::jsonb)
                                   -- 릴리스 잡(DEPLOY_ONLY)은 앞 잡이 실패해도 죽이지 않는다.
                                   -- 2026-09-19 실측: runner-30757edd 가 선행 runner-e345161d

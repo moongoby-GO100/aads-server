@@ -149,6 +149,7 @@ def test_p0_instruction_is_promoted_ahead_of_implicit_file_lock_queue():
 # 선행 결과 없이 실행됐다.
 
 _BLOCKED = "COALESCE(dep.phase,'') <> 'blocked_dependency'"
+_NOT_NC = "COALESCE(dep.error_detail,'') NOT LIKE 'no_changes%'"
 
 
 def _flat(sql: str) -> str:
@@ -160,9 +161,9 @@ def test_cancelled_exemption_excludes_blocked_dependency_parent():
     for name in SCRIPTS:
         released = _flat(_sql_blocks(_cleanup_fn(_read(name)))["released"])
         # WHERE 의 cancelled 분기: 자동 의존성 마커 OR (cancelled AND phase<>blocked_dependency)
-        assert f"OR (dep.status = 'cancelled' AND {_BLOCKED})" in released, name
+        assert f"OR (dep.status = 'cancelled' AND {_BLOCKED} AND {_NOT_NC})" in released, name
         # 면제 문구(CASE)도 같은 조건에만 붙는다
-        assert f"CASE WHEN dep.status='cancelled' AND {_BLOCKED} THEN" in released, name
+        assert f"CASE WHEN dep.status='cancelled' AND {_BLOCKED} AND {_NOT_NC} THEN" in released, name
         # 이전의 무조건 cancelled 분기가 남아 있으면 안 된다
         assert "OR dep.status = 'cancelled')" not in released, name
 
@@ -172,7 +173,7 @@ def test_blocked_dependency_parent_cascades_to_explicit_child():
     for name in SCRIPTS:
         sql = _flat(_sql_blocks(_cleanup_fn(_read(name)))["blocked_existing"])
         assert "dep.status IN ('error','rejected','rejected_done')" in sql, f"{name}: (c) error 차단 유지"
-        assert "(dep.status='cancelled' AND dep.phase='blocked_dependency')" in sql, name
+        assert "(dep.status='cancelled' AND (dep.phase='blocked_dependency'" in sql, name
         assert "phase='blocked_dependency'" in sql
         assert "status='cancelled'" in sql
         # 원 상류 추적: 부모가 blocked_dependency 면 부모 error_detail 의 root/parent 를 승계
@@ -187,10 +188,54 @@ def test_plain_cancelled_parent_is_not_cascaded():
     """(a) 일반 cancelled 부모는 연쇄 차단 대상이 아니다(plain cancelled 는 released 경로)."""
     sql = _flat(_sql_blocks(_cleanup_fn(_read("pipeline-runner.sh")))["blocked_existing"])
     assert "dep.status IN ('error','rejected','rejected_done','cancelled')" not in sql
-    assert re.search(r"dep\.status\s*=\s*'cancelled'\s+AND\s+dep\.phase='blocked_dependency'", sql)
+    assert re.search(r"dep\.status\s*=\s*'cancelled'\s+AND\s+\(dep\.phase='blocked_dependency'", sql)
 
 
 def test_2026_10_06_case_documented_in_comment():
     fn = _cleanup_fn(_read("pipeline-runner.sh"))
     for job in ("runner-1d168a6d", "runner-f3378426", "runner-1fc518dc"):
+        assert job in fn
+
+
+# ── 2026-11-06: no_changes 로 취소된 부모도 산출물 없음이다 ─────────────────────────
+# runner-2602a50f(no_changes) → 명시 depends_on 후속 4건이 의존성이 풀려 선행 결과 없이 시작됐다.
+
+
+def test_no_changes_cancel_record_uses_no_changes_prefix():
+    """취소 기록 지점이 error_detail 을 'no_changes' 로 시작하게 쓰는지(LIKE 'no_changes%' 의 근거)."""
+    s = _read("pipeline-runner.sh")
+    assert 'no_change_reason="no_changes"' in s
+    assert 'no_change_reason="no_changes: ${out_first}"' in s
+    assert "phase='no_changes'" in s
+
+
+def test_no_changes_parent_is_not_released_for_explicit_child():
+    """부모 cancelled+no_changes → 명시 의존 자식은 풀리지 않는다(released 제외)."""
+    for name in SCRIPTS:
+        released = _flat(_sql_blocks(_cleanup_fn(_read(name)))["released"])
+        assert _NOT_NC in released, name
+        assert released.count(_NOT_NC) == 2, f"{name}: WHERE 와 CASE 메시지 둘 다 필요"
+
+
+def test_no_changes_parent_cascades_blocked_dependency_with_reason():
+    for name in SCRIPTS:
+        sql = _flat(_sql_blocks(_cleanup_fn(_read(name)))["blocked_existing"])
+        assert "OR COALESCE(dep.error_detail,'') LIKE 'no_changes%'" in sql, name
+        assert "'(no_changes)'" in sql, name
+
+
+def test_no_changes_parent_still_releases_auto_dependency_and_keeps_deploy_only():
+    for name in SCRIPTS:
+        blocks = _sql_blocks(_cleanup_fn(_read(name)))
+        released = _flat(blocks["released"])
+        # 자동 의존성 분기는 no_changes 조건 앞에 독립적으로 남아 있다(OR 의 첫 항)
+        assert released.index(AUTO_MARKER) < released.index("OR (dep.status = 'cancelled'"), name
+        assert _NOT_NC not in released.split("OR (dep.status = 'cancelled'")[0].split("WHERE")[-1], name
+        existing = _flat(blocks["blocked_existing"])
+        assert AUTO_MARKER in existing and "AND NOT (${DEPLOY_ONLY_HEADER_SQL})" in existing, name
+
+
+def test_2026_11_06_case_documented_in_comment():
+    fn = _cleanup_fn(_read("pipeline-runner.sh"))
+    for job in ("runner-2602a50f", "runner-86430d62", "bbd01643"):
         assert job in fn
