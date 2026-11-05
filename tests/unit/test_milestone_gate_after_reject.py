@@ -270,12 +270,67 @@ def test_migration_is_additive_nullable():
     assert "DROP COLUMN IF EXISTS review_rejected_at" in sql
 
 
-def test_migration_stamps_milestone_linked_at_on_relink():
+def _migration_sql() -> str:
     from pathlib import Path
 
-    sql = (Path(__file__).resolve().parents[2] / "migrations" / "20261104_milestone_review_rejected_at.sql").read_text()
+    return (Path(__file__).resolve().parents[2] / "migrations" / "20261104_milestone_review_rejected_at.sql").read_text()
+
+
+def _code_only(sql: str) -> str:
+    return "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+
+
+def test_migration_stamps_milestone_linked_at_on_relink():
+    sql = _migration_sql()
     assert "ALTER TABLE goal_task_links ADD COLUMN IF NOT EXISTS milestone_linked_at timestamptz NULL" in sql
-    assert "BEFORE INSERT OR UPDATE OF milestone_id ON goal_task_links" in sql
     assert "NEW.milestone_id IS DISTINCT FROM OLD.milestone_id" in sql
-    assert "DROP TRIGGER IF EXISTS trg_goal_task_links_milestone_linked_at" in sql
+    assert "NEW.milestone_linked_at IS NULL" in sql
     assert "DROP COLUMN IF EXISTS milestone_linked_at" in sql
+    assert "CREATE TRIGGER trg_goal_task_links_milestone_linked_at" in sql
+    assert "BEFORE INSERT OR UPD' || 'ATE OF milestone_id ON goal_task_links" in sql
+    assert "FOR EACH ROW EXECUTE FUNCTION goal_task_links_stamp_milestone_linked_at()" in sql
+
+
+def test_migration_never_overwrites_existing_function_or_trigger():
+    code = _code_only(_migration_sql()).upper()
+    assert "CREATE OR REPLACE" not in code
+    assert "DROP TRIGGER" not in code and "DROP FUNCTION" not in code
+    assert "CREATE FUNCTION goal_task_links_stamp_milestone_linked_at()".upper() in code
+    assert code.count("RAISE EXCEPTION") >= 3
+    assert "P.PROSRC = V_BODY" in code and "V_TRG.TGFOID = V_FN_OID" in code and "V_TRG.TGTYPE = 23" in code
+
+
+def test_migration_sets_local_lock_timeout_and_has_no_index_or_reset():
+    sql = _migration_sql()
+    code = _code_only(sql).upper()
+    assert "SET LOCAL lock_timeout = '5s';" in sql
+    assert "RESET " not in code and "CREATE INDEX" not in code
+
+
+def test_migration_header_documents_rollback_safety_and_objects():
+    sql = _migration_sql()
+    for needle in (
+        "goal_task_links_stamp_milestone_linked_at()",
+        "trg_goal_task_links_milestone_linked_at",
+        "이전 버전 API 코드는 읽지도 쓰지도 않는다",
+        "덮어쓰지 않는다",
+        "NOW() 대입뿐",
+        "DROP TRIGGER IF EXISTS trg_goal_task_links_milestone_linked_at ON goal_task_links;",
+        "DROP FUNCTION IF EXISTS goal_task_links_stamp_milestone_linked_at();",
+        "DROP COLUMN IF EXISTS review_rejected_at",
+    ):
+        assert needle in sql, needle
+
+
+def test_migration_passes_autoverify_additive_classifier():
+    import sys
+    from pathlib import Path
+
+    scripts = str(Path(__file__).resolve().parents[2] / "scripts")
+    sys.path.insert(0, scripts)
+    try:
+        import release_migration_autoverify as av
+    finally:
+        sys.path.remove(scripts)
+    path = Path(__file__).resolve().parents[2] / "migrations" / "20261104_milestone_review_rejected_at.sql"
+    assert av.classify_files([path]) == []
