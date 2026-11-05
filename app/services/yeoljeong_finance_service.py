@@ -6826,10 +6826,10 @@ CONTRACT_SUPERSEDED_LABEL = "이전 계약"
 CONTRACT_COMPUTED_AMENDMENT_FIELDS = ("superseded_by", "supersededBy", "superseded_label", "supersededLabel")
 
 
-def _superseded_by_map(contracts: list[dict[str, Any]]) -> dict[str, str]:
-    """원계약 id -> 그 원계약을 변경한 '서명 완료' 계약 id. 여럿이면 시작일·서명이 늦은 쪽."""
+def _amendments_by_original(contracts: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """원계약 id -> 그 원계약을 변경한 '서명 완료' 계약 전부(같은 직원 것만)."""
     by_id = {str(row.get("id") or ""): row for row in contracts}
-    best: dict[str, dict[str, Any]] = {}
+    found: dict[str, list[dict[str, Any]]] = {}
     for row in contracts:
         original_id = str(row.get("amends_contract_id") or "").strip()
         original = by_id.get(original_id)
@@ -6841,10 +6841,16 @@ def _superseded_by_map(contracts: list[dict[str, Any]]) -> dict[str, str]:
             employee_request_id=str(_contract_payload_value(original, "employee_request_id", "employeeRequestId") or ""),
         ):
             continue
-        current = best.get(original_id)
-        if current is None or _effective_contract_sort_key(row) > _effective_contract_sort_key(current):
-            best[original_id] = row
-    return {original_id: str(row.get("id") or "") for original_id, row in best.items()}
+        found.setdefault(original_id, []).append(row)
+    return found
+
+
+def _superseded_by_map(contracts: list[dict[str, Any]]) -> dict[str, str]:
+    """원계약 id -> 그 원계약을 변경한 '서명 완료' 계약 id. 여럿이면 시작일·서명이 늦은 쪽(표시용)."""
+    return {
+        original_id: str(max(rows, key=_effective_contract_sort_key).get("id") or "")
+        for original_id, rows in _amendments_by_original(contracts).items()
+    }
 
 
 def _with_amendment_marks(contracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -9097,6 +9103,60 @@ def _effective_contract_sort_key(contract: dict[str, Any]) -> tuple[date, dateti
     return _contract_start_day(contract), stamp, contract_id
 
 
+def _contract_apply_day(contract: dict[str, Any]) -> date:
+    """계약조건 적용일 = 계약서의 계약일자(contract_date). CEO 규칙: 별도 '변경 적용일'은 없다.
+
+    계약일자가 비었거나 읽을 수 없으면 시작일, 그것도 없으면 서명일(KST), 없으면 가장 이른 날로 본다.
+    """
+    source = contract.get("signed_snapshot") if isinstance(contract.get("signed_snapshot"), dict) else contract
+    raw = str(_contract_payload_value(source, "contract_date", "contractDate") or "").strip()[:10]
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return _contract_start_day(contract)
+
+
+def _applied_contract_sort_key(contract: dict[str, Any]) -> tuple[date, datetime, str]:
+    stamp, contract_id = _signed_contract_sort_key(contract)
+    return _contract_apply_day(contract), stamp, contract_id
+
+
+def _month_bounds(month: str) -> tuple[date, date]:
+    first = date.fromisoformat(f"{month}-01")
+    return first, (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+
+
+def _contract_effective_periods(
+    sources: list[dict[str, Any]], day_of: Any = None
+) -> dict[str, dict[str, Any]]:
+    """계약 id -> {applies_from, applies_to, superseded_by}. 같은 사업자·같은 직원의 서명 계약(sources)만 넣는다.
+
+    CEO 규칙: 계약서의 계약일자가 계약조건 적용일이고, 나중 계약이 현재 계약이다. 그래서 변경 이력
+    (amends_contract_id)을 따라가지 않고 적용일 순으로 줄 세운다. 각 계약은 다음 계약 적용일 전날에 끝난다.
+    같은 날 계약이 둘이면 나중에 서명한 쪽만 남는다(앞 계약은 applies_to < applies_from 이 되어 적용되지 않는다).
+    분기·형제 변경계약이 있어도 이전 계약이 되살아나지 않는다. 계약 자체의 종료일은 여기 섞지 않는다.
+    """
+    day_of = day_of or _contract_apply_day
+
+    def key(row: dict[str, Any]) -> tuple[date, datetime, str]:
+        stamp, contract_id = _signed_contract_sort_key(row)
+        return day_of(row), stamp, contract_id
+
+    ordered = sorted(sources, key=key)
+    periods: dict[str, dict[str, Any]] = {}
+    for index, row in enumerate(ordered):
+        following = ordered[index + 1] if index + 1 < len(ordered) else None
+        applies_to = None
+        if following is not None and day_of(following) > date.min:
+            applies_to = day_of(following) - timedelta(days=1)
+        periods[str(row.get("id") or "")] = {
+            "applies_from": day_of(row),
+            "applies_to": applies_to,
+            "superseded_by": str(following.get("id") or "") if following is not None else "",
+        }
+    return periods
+
+
 def _derive_current_employment(
     contracts: list[dict[str, Any]],
     *,
@@ -9104,12 +9164,16 @@ def _derive_current_employment(
     employee_request_id: str,
     business_id: str = "",
     today: date | None = None,
+    payroll_month: str = "",
 ) -> dict[str, Any] | None:
-    """오늘(KST) 효력이 있는 서명 근로·용역 계약 1건에서 고용조건을 만든다. 비밀유지 서약은 원본이 아니다.
+    """효력이 있는 서명 근로·용역 계약 1건에서 고용조건을 만든다. 비밀유지 서약은 원본이 아니다.
 
-    시작일 <= 오늘 이고 종료일이 없거나 >= 오늘 인 계약 중 시작일이 가장 늦은 것(같으면 서명이 늦은 것).
-    해당 계약이 없으면 시작일이 가장 늦은 서명 계약으로 폴백한다. 서명 순서는 판정에 쓰지 않는다 —
-    변경 계약을 원계약보다 먼저 서명해도 시작일이 늦은 쪽이 현재 조건이다.
+    적용일은 계약일자(contract_date)다. 변경계약이 원계약을 대체하면 원계약은 변경계약 계약일자 전날까지만 적용된다.
+    payroll_month(YYYY-MM)가 있으면 그 달 말일 기준: 계약일자 <= 말일 이고 대체되지 않은 계약 중 가장 늦은 것.
+      그 달에 적용할 계약이 하나도 없으면(첫 계약 이전 달) None — 엉뚱한 계약 조건을 채우지 않는다.
+      종료일이 지난 계약뿐이면 가장 늦은 계약으로 폴백한다(period_note 로 알린다).
+    없으면 오늘(today) 기준(기존 의미 유지): 시작일 <= 오늘 이고 종료일이 없거나 >= 오늘 인 계약 중 적용일이 가장 늦은 것.
+      해당 계약이 없으면 대체되지 않은 계약 중 적용일이 가장 늦은 것으로 폴백한다. 서명 순서는 판정에 쓰지 않는다.
     business_id 가 있으면 그 사업자의 서명계약만(겸직 직원의 매장별 고용조건), 없으면 전체.
     """
     sources = [
@@ -9124,18 +9188,41 @@ def _derive_current_employment(
     ]
     if not sources:
         return None
-    day = today or datetime.now(KST).date()
-    active = [
-        row
-        for row in sources
-        if _contract_start_day(row) <= day and (_contract_end_day(row) is None or _contract_end_day(row) >= day)
-    ]
-    latest = max(active or sources, key=_effective_contract_sort_key)
+    # 급여월 모드는 계약일자(contract_date), 오늘 기준 모드는 기존대로 시작일이 적용일이다.
+    periods = _contract_effective_periods(sources, _contract_apply_day if payroll_month else _contract_start_day)
+
+    def period(row: dict[str, Any]) -> dict[str, Any]:
+        return periods[str(row.get("id") or "")]
+
+    if payroll_month:
+        first, day = _month_bounds(payroll_month)
+        # 대체는 변경계약 계약일자가 말일 이전일 때만 그 달에 영향을 준다.
+        applicable = [
+            row for row in sources
+            if period(row)["applies_from"] <= day and (period(row)["applies_to"] is None or period(row)["applies_to"] >= day)
+        ]
+        if not applicable:
+            return None
+        active = [row for row in applicable if _contract_end_day(row) is None or _contract_end_day(row) >= first]
+        latest = max(active or applicable, key=_applied_contract_sort_key)
+    else:
+        day = today or datetime.now(KST).date()
+        live = [row for row in sources if period(row)["applies_to"] is None or period(row)["applies_to"] >= day] or sources
+        active = [
+            row
+            for row in live
+            if period(row)["applies_from"] <= day and (_contract_end_day(row) is None or _contract_end_day(row) >= day)
+        ]
+        latest = max(active or live, key=_effective_contract_sort_key)
     employment = _employment_terms_from_contract(latest)
+    chosen = period(latest)
     return {
         "contract_id": str(latest.get("id") or ""),
         "signed_at": str(latest.get("signed_at") or ""),
         "effective_from": employment.get("start_date") or str(latest.get("signed_at") or ""),
+        "applies_from": chosen["applies_from"].isoformat() if chosen["applies_from"] != date.min else "",
+        "effective_to": chosen["applies_to"].isoformat() if chosen["applies_to"] else "",
+        "superseded_by": chosen["superseded_by"],
         "employment": employment,
     }
 
@@ -9506,6 +9593,23 @@ def _payroll_defaults_from_employment(derived: dict[str, Any] | None) -> dict[st
     return result
 
 
+def _payroll_contract_link(derived: dict[str, Any] | None, month: str = "") -> dict[str, Any]:
+    """급여 초안이 어느 계약의 어떤 적용 기간에 연결됐는지. 계약이 없으면 빈 dict(기존 연결을 지우지 않는다).
+
+    non_tax_meal_allowance_basis 는 계약서에 비과세 식대가 있을 때만 정수, 없거나 해석 불가하면 None 이다.
+    None 을 0 으로 바꾸지 않는다 — '비과세 근거가 없으면 재계산하지 않는다' 보호 분기가 이 값으로 판단한다.
+    """
+    if not derived:
+        return {}
+    return {
+        "contract_id": derived["contract_id"],
+        "contract_applies_from": derived.get("applies_from") or "",
+        "contract_applies_to": derived.get("effective_to") or "",
+        "contract_payroll_month": month,
+        "non_tax_meal_allowance_basis": _employment_amount(derived["employment"].get("non_tax_meal_allowance")),
+    }
+
+
 def payroll_defaults(employee_email: str, payroll_month: str, user: dict[str, Any], employee_request_id: str = "") -> dict[str, Any]:
     denied = HTTPException(status_code=403, detail="급여 기준값 조회 권한이 없습니다")
     _tenant_id(user)
@@ -9522,6 +9626,7 @@ def payroll_defaults(employee_email: str, payroll_month: str, user: dict[str, An
         employee_email=str(employee.get("email") or ""),
         employee_request_id=str(employee.get("id") or ""),
         business_id=_record_business_id(employee),
+        payroll_month=month,
     )
     result = _payroll_defaults_from_employment(derived)
     result["employee_email"] = str(employee.get("email") or "")
@@ -9635,6 +9740,7 @@ PAYROLL_SERVER_FIELDS = frozenset({
     "net_pay", "email_pending", "employee_email_masked", "source_contract_id", "contract_defaults_applied",
     "contract_deviation", "settlement_basis", "deleted_at", "tenant_id", "totals", "payroll_validation_errors",
     "employee_no", "employee_birth_date", "source_kind", "import_task", "statement_payload", "deduction_basis",
+    "contract_id", "contract_applies_from", "contract_applies_to", "contract_payroll_month", "non_tax_meal_allowance_basis",
 })
 PAYROLL_CONTENT_FIELDS = (
     "employee_name", "business_id", "branch", "payroll_month", "pay_date", "employment_tax_type", "meal_provision",
@@ -9770,10 +9876,30 @@ def save_payroll(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="급여내역서 작성 권한이 없습니다")
     wants_confirm = str(payload.get("status") or "").strip().lower() == "confirmed"
-    saved, changed = _save_payroll_record(payload, user)
-    if wants_confirm and changed and _payroll_state(saved) in PAYROLL_EDITABLE_STATUSES:
-        return confirm_payroll(str(saved["id"]), user)
-    return saved
+    email = str(payload.get("employee_email") or "").strip().lower()
+    request_id = str(payload.get("employee_request_id") or "").strip()
+    if not email and request_id:
+        employee = _find_employee_record(user, employee_email="", employee_request_id=request_id)
+        email = str((employee or {}).get("email") or "").strip().lower()
+
+    def write() -> dict[str, Any]:
+        saved, changed = _save_payroll_record(payload, user)
+        if wants_confirm and changed and _payroll_state(saved) in PAYROLL_EDITABLE_STATUSES:
+            return _confirm_payroll_unlocked(str(saved["id"]), user)
+        return saved
+    return _payroll_locked(email, write)
+
+
+def _payroll_locked(email: str, operation):
+    """급여 명세 쓰기를 직원 쓰기 잠금 안에서 수행한다. 계약 연결 백필·초안 생성과 같은 잠금이다.
+
+    이메일이 없으면(이름만으로 저장) 잠글 직원 키가 없어 그대로 실행한다. 중첩 호출 금지(같은 잠금을 두 번 잡지 않는다).
+    """
+    return _serialized_employee_write(email, operation) if email else operation()
+
+
+def _payroll_lock_email(row: dict[str, Any]) -> str:
+    return str(row.get("employee_email") or "").strip().lower()
 
 
 def _apply_statutory_payroll_deductions(statement: dict[str, Any], target: dict[str, Any] | None) -> None:
@@ -9839,6 +9965,7 @@ def _save_payroll_record(
             employee_email=str(employee.get("email") or ""),
             employee_request_id=str(employee.get("id") or ""),
             business_id=_record_business_id(employee),
+            payroll_month=month,
         )
         if employee
         else None
@@ -9886,6 +10013,7 @@ def _save_payroll_record(
         **amounts,
         "net_pay": net_pay,
         "payroll_month": month,
+        **_payroll_contract_link(derived, month),
         "source_contract_id": plan["source_contract_id"],
         "contract_defaults_applied": defaults_applied,
         "contract_deviation": deviation,
@@ -9959,6 +10087,11 @@ def _save_payroll_record(
 
 def confirm_payroll(statement_id: str, user: dict[str, Any]) -> dict[str, Any]:
     """draft → confirmed. 확정자·시각은 서버가 채운다. 이전 버전이 있으면 그 버전을 대체 표시한다."""
+    _, row = _admin_payroll_row(statement_id, user, action_label="확정")
+    return _payroll_locked(_payroll_lock_email(row), lambda: _confirm_payroll_unlocked(statement_id, user))
+
+
+def _confirm_payroll_unlocked(statement_id: str, user: dict[str, Any]) -> dict[str, Any]:
     rows, row = _admin_payroll_row(statement_id, user, action_label="확정")
     state = _payroll_state(row)
     if state not in PAYROLL_EDITABLE_STATUSES:
@@ -9989,6 +10122,11 @@ def confirm_payroll(statement_id: str, user: dict[str, Any]) -> dict[str, Any]:
 def pay_payroll(statement_id: str, user: dict[str, Any]) -> dict[str, Any]:
     """confirmed → paid. 금액은 건드리지 않는다."""
     _, row = _admin_payroll_row(statement_id, user, action_label="지급 처리")
+    return _payroll_locked(_payroll_lock_email(row), lambda: _pay_payroll_unlocked(statement_id, user))
+
+
+def _pay_payroll_unlocked(statement_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    _, row = _admin_payroll_row(statement_id, user, action_label="지급 처리")
     if _payroll_state(row) != "confirmed" or row.get("superseded_by"):
         raise HTTPException(status_code=409, detail="확정(confirmed)된 최신 명세만 지급 처리할 수 있습니다")
     now = _now()
@@ -9999,6 +10137,11 @@ def pay_payroll(statement_id: str, user: dict[str, Any]) -> dict[str, Any]:
 
 
 def delete_payroll(statement_id: str, user: dict[str, Any]) -> None:
+    _, row = _admin_payroll_row(statement_id, user, action_label="삭제")
+    _payroll_locked(_payroll_lock_email(row), lambda: _delete_payroll_unlocked(statement_id, user))
+
+
+def _delete_payroll_unlocked(statement_id: str, user: dict[str, Any]) -> None:
     _, row = _admin_payroll_row(statement_id, user, action_label="삭제")
     if _payroll_state(row) not in PAYROLL_EDITABLE_STATUSES:
         _audit_payroll(user, row, "payroll.delete_rejected", {"reason": "locked"})
@@ -10060,7 +10203,7 @@ def payroll_draft_from_contract(payload: dict[str, Any], user: dict[str, Any]) -
         first = date.fromisoformat(month + "-01")
         last = (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
         derived = _derive_current_employment(_read_hr("contracts", user), employee_email=email,
-                    employee_request_id=str(employee["id"]), business_id=business_id, today=last)
+                    employee_request_id=str(employee["id"]), business_id=business_id, payroll_month=month)
         if not derived or derived["employment"].get("contract_type") != "freelancer":
             raise HTTPException(status_code=409, detail="서명 완료된 프리랜서 용역계약서가 필요합니다")
         terms = derived["employment"]
@@ -10124,7 +10267,8 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
     email = str(employee.get("email") or "").strip().lower()
     business_id = _require_business_for_tenant(_record_business_id(employee), user)
     derived = _derive_current_employment(
-        _read_hr("contracts", user), employee_email=email, employee_request_id=str(employee.get("id") or ""), business_id=business_id
+        _read_hr("contracts", user), employee_email=email, employee_request_id=str(employee.get("id") or ""), business_id=business_id,
+        payroll_month=month,
     )
     if derived is None:
         raise HTTPException(status_code=409, detail="서명 완료된 계약서가 없어 급여 초안을 만들 수 없습니다")
@@ -10222,7 +10366,7 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         ]
     elif (draft or {}).get("deduction_items"):
         request["deduction_items"] = draft["deduction_items"]
-    saved, _ = _save_payroll_record(request, user, server_fields={"attendance_basis": basis})
+    saved, _ = _payroll_locked(email, lambda: _save_payroll_record(request, user, server_fields={"attendance_basis": basis}))
     _audit_payroll(user, saved, "payroll.draft_from_attendance", {
         "approved_minutes": minutes, "approved_days": days, "rate": rate, "gross_pay": gross, "wage_type": wage_type,
     })
