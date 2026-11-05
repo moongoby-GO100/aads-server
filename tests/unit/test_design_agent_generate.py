@@ -5,7 +5,7 @@ import os
 import pytest
 
 from app.services import design_audit_service
-from app.services.design_agent import generate, importer, runner
+from app.services.design_agent import audit, generate, importer, runner
 from app.services.design_agent.budget import RunBudget
 from app.services.design_agent.writer import DesignAgentPermissionError, DesignAgentWriter
 
@@ -270,7 +270,7 @@ def test_handlers_mapping():
     assert runner.HANDLERS['project_created'] is generate.handle_generate
     assert runner.HANDLERS['new_screen_requested'] is generate.handle_generate
     assert runner.HANDLERS['manual'] is runner.handle_manual
-    assert runner.HANDLERS['deploy_succeeded'] is runner.noop
+    assert runner.HANDLERS['deploy_succeeded'] is audit.handle_deploy_audit
     assert runner.HANDLERS['screen_change_requested'] is runner.noop
 
 

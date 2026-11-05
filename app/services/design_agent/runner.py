@@ -2,6 +2,7 @@
 import hashlib
 import json
 
+from .audit import handle_deploy_audit
 from .budget import BudgetExceeded, RunBudget, check_run
 from .config import Config
 from .generate import handle_generate
@@ -24,7 +25,7 @@ async def handle_manual(trigger, writer, budget):
     return await noop(trigger, writer, budget)
 
 
-HANDLERS = {'project_created': handle_generate, 'deploy_succeeded': noop,
+HANDLERS = {'project_created': handle_generate, 'deploy_succeeded': handle_deploy_audit,
             'manual': handle_manual, 'screen_change_requested': noop,
             'new_screen_requested': handle_generate}
 
