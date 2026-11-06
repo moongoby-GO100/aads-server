@@ -205,8 +205,9 @@
           if (conservativeHourly < MINIMUM_HOURLY_WAGE_2026) throw new Error(`과세 기본급 기준 환산시급 ${formatMoney(Math.floor(conservativeHourly))}은 2026년 최저임금 ${formatMoney(MINIMUM_HOURLY_WAGE_2026)}보다 낮습니다.`);
         }
       } else if (draft.contractType === "freelancer") {
-        if (draft.employmentTaxType !== "freelancer_33" || draft.wageType !== "case_fee") {
-          throw new Error("프리랜서 용역계약서는 3.3% 원천징수·건별/용역비 방식으로 작성해야 합니다.");
+        // 서버(_validate_contract_payload)와 같은 기준: 3.3% 용역계약은 시급 또는 건별/용역비.
+        if (draft.employmentTaxType !== "freelancer_33" || !FREELANCER_WAGE_TYPES.includes(draft.wageType)) {
+          throw new Error("프리랜서 용역계약서는 3.3% 원천징수·시급 또는 건별/용역비 방식으로 작성해야 합니다.");
         }
         const fixedWorkSignals = [draft.workTime, draft.weeklyHours, draft.workDays].join(" ");
         if (/(출퇴근|근무표|주\s*\d+\s*시간|월\/화|화\/수|수\/목|목\/금|금\/토|토\/일|상시|교대)/.test(fixedWorkSignals)) {
@@ -477,6 +478,7 @@
     }
 
     /** 계약 유형이 정하는 신고 구분·임금 방식(기존 syncContractClassification). */
+    const FREELANCER_WAGE_TYPES = ["case_fee", "hourly"];
     function classificationFor(contractType) {
       if (contractType === "freelancer") return { employmentTaxType: "freelancer_33", wageType: "case_fee" };
       if (EMPLOYMENT_TYPES.includes(contractType)) return { employmentTaxType: "four_insurance", wageType: contractType === "part_time" ? "hourly" : contractType === "daily" ? "daily" : "monthly" };
@@ -524,7 +526,7 @@
     const api = {
       contractTypeLabels, employmentTaxTypeLabels, wageTypeLabels, standardContractDefaults,
       MINIMUM_HOURLY_WAGE_2026, CONTRACT_STATUS, EMPLOYMENT_TYPES,
-      defaultsFor, classificationFor, splitMonthlyWage, NON_TAX_MEAL_LIMIT, validateContractDraft, checkDraft, contractPreviewHtml, contractDraftGuidanceHtml, setBusinessResolver,
+      defaultsFor, classificationFor, FREELANCER_WAGE_TYPES, splitMonthlyWage, NON_TAX_MEAL_LIMIT, validateContractDraft, checkDraft, contractPreviewHtml, contractDraftGuidanceHtml, setBusinessResolver,
       escapeHtml, formatMoney, today
     };
     root.ObysContractCore = api;

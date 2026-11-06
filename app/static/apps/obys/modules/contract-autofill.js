@@ -330,10 +330,12 @@ const hoursLabel = v => `${Number.isInteger(v) ? v : round2(v)}시간`;
     if (payMethod !== undefined) texts.payMethod = payMethod;
     const scope = String(input.jobDescription || "").trim();
     if (scope) texts.freelancerScope = scope;
+    const hourly = input.wageType === "hourly";
+    const feeText = hourly ? `시급 ${won(fee)}(수행시간 × 시급으로 정산)` : `합의 용역비 ${won(fee)}`;
     if (known) {
-      texts.wageComposition = `합의 용역비 ${won(fee)}. 사업소득 원천징수 후 지급하며, 추가 용역비는 별도 합의한다.`;
+      texts.wageComposition = `${feeText}. 사업소득 원천징수 후 지급하며, 추가 용역비는 별도 합의한다.`;
       const period = input.startDate ? `${input.startDate}부터 ${endDate || "별도 합의한 종료일까지"}` : "용역기간 확인 필요";
-      texts.freelancerSettlementTerms = `용역기간: ${period}. 합의 용역비 ${won(fee)}. 지급일: ${payDate || input.savedPayDate || "별도 합의 필요"}. 지급방법: ${payMethod || input.savedPayMethod || "별도 합의 필요"}. 분할 지급·검수·해지 시 기성정산 기준은 직접 확인하여 추가한다.`;
+      texts.freelancerSettlementTerms = `용역기간: ${period}. ${feeText}. 지급일: ${payDate || input.savedPayDate || "별도 합의 필요"}. 지급방법: ${payMethod || input.savedPayMethod || "별도 합의 필요"}. 분할 지급·검수·해지 시 기성정산 기준은 직접 확인하여 추가한다.`;
     } else warnings.push("확정 용역비를 입력하십시오. 미확인 금액은 자동으로 정하지 않습니다.");
     return { applies: true, hideWork: true, freelancer: true,
       period: { termKey, endDate }, texts, warnings, blockers,

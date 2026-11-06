@@ -1309,13 +1309,13 @@
     const v = E?.values || {};
     if (String(v.contractType || "") !== "freelancer") return [];
     const out = [];
-    if (v.employmentTaxType !== "freelancer_33" || v.wageType !== "case_fee") out.push("wage");
+    if (v.employmentTaxType !== "freelancer_33" || !C.FREELANCER_WAGE_TYPES.includes(v.wageType)) out.push("wage");
     if (FIXED_WORK_RE.test([v.workTime, v.weeklyHours, v.workDays].join(" "))) out.push("schedule");
     return out;
   }
   function freelancerBlockerHtml(conflicts) {
     const reasons = [];
-    if (conflicts.includes("wage")) reasons.push(`임금 방식이 '${esc(C.wageTypeLabels[E.values.wageType] || E.values.wageType || "미지정")}'입니다. 3.3% 용역계약은 건별/용역비만 쓸 수 있습니다. 바꾸면 기존 금액은 1회 용역비가 아니므로 [확정 용역비]를 비웁니다.`);
+    if (conflicts.includes("wage")) reasons.push(`임금 방식이 '${esc(C.wageTypeLabels[E.values.wageType] || E.values.wageType || "미지정")}'입니다. 3.3% 용역계약은 시급 또는 건별/용역비로 작성합니다. 건별/용역비로 바꾸면 기존 금액은 1회 용역비가 아니므로 [확정 용역비]를 비웁니다.`);
     if (conflicts.includes("schedule")) reasons.push("근무일·근무시간·주 소정근로시간에 고정 요일·시간 표현이 있습니다. 정해진 요일·시간에 일하면 근로자로 판정될 수 있습니다.");
     const fixes = conflicts.length > 1
       ? [["freelancer_all", "3.3% 조건으로 모두 고치기"]]
@@ -1338,7 +1338,7 @@
     }
     if (message.includes("4대보험 가입 근로자")) fixes.push(['four_insurance', "신고 구분을 4대보험 근로자로 바꾸기"]);
     const hint = message.includes("건별/용역비")
-      ? "3.3% 용역계약은 시급을 쓸 수 없습니다. 바꾼 뒤 [확정 용역비]에 1회 금액(예: 시급 × 근무시간)을 넣으십시오."
+      ? "3.3% 용역계약은 임금 방식을 시급 또는 건별/용역비로 고르십시오. 건별/용역비로 바꾸면 [확정 용역비]에 1회 금액을 넣으십시오."
       : message.includes("고정 근무표")
         ? "정해진 요일·시간에 매장에서 일하면 계약 이름과 관계없이 근로자로 판정될 수 있습니다. 실제 운영이 그렇다면 근로계약이 맞습니다."
         : "";
@@ -1417,7 +1417,9 @@
   /** 계약 유형 변경 — 이전 유형의 표준 문구를 그대로 둔 칸만 새 유형 문구로 바꾼다(직접 고친 칸은 유지).
    *  예: 단시간 근로계약 근무일 기본값 "월/화/…" 이 3.3% 용역계약에 남아 고정 근무표 검사에 걸리던 문제. */
   function switchContractType(newType, prevType, prevTax) {
-    const cls = C.classificationFor(newType);
+    const cls = { ...C.classificationFor(newType) };
+    // 시급으로 쓰던 계약을 3.3% 용역계약으로 바꿔도 시급은 그대로 둔다(서버도 시급 용역계약을 받는다).
+    if (newType === "freelancer" && E.values.wageType === "hourly") cls.wageType = "hourly";
     const before = C.defaultsFor(prevType, prevTax);
     const after = C.defaultsFor(newType, cls.employmentTaxType || prevTax);
     Object.entries(before).forEach(([key, value]) => {
