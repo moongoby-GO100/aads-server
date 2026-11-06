@@ -119,3 +119,11 @@ async def test_partial_fields_kept_when_confident_but_not_marked_extracted():
     assert record['extracted_fields'] == {'birth_date': '1990-01-01'}
     low = await identity.extract_identity_bounded(_png(), document_type='id_card', ocr=_scripted_ocr({'text': text, 'confidence': 0.2}))
     assert not low['birth_date']
+
+
+def test_ocr_spaced_hangul_and_dot_separator():
+    # 운영 서류 OCR 실측 형태(가림 처리): "가 가 특별시 …", "999999. 9999999"
+    assert identity.parse_identity_text('성명 김민우\n900101. 2234567', 'id_card')['birth_date'] == '1990-01-01'
+    address = identity.parse_identity_text('서 울 특별시 성북구 동소문로 20', 'id_card')['address']
+    assert address.startswith('서울특별시') and '동소문로 20' in address
+    assert identity._join_spaced_hangul('서 울 특별시 성북구') == '서울 특별시 성북구'

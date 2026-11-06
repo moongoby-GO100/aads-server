@@ -9,12 +9,27 @@ from typing import Any
 from app.services import obys_bankbook_extract as bb
 
 DOCUMENT_TYPES = {"id_card", "resident_register"}
-_RRN = re.compile(r"(?<!\d)(\d{6})\s*[-–]?\s*([1-8])[\d*]{6}(?!\d)")
+# OCR 은 주민번호 구분자 "-" 를 "." "·" "," 로 읽기도 한다(운영 서류 실측 2026-11-06).
+_RRN = re.compile(r"(?<!\d)(\d{6})\s*[-–.·,]?\s*([1-8])[\d*]{6}(?!\d)")
 _ADDRESS = re.compile(r"(?:(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|전라|경상|전북|제주)[가-힣]*"
-                      r"|[가-힣]{1,3}(?:특별시|광역시|특별자치시|특별자치도))(?:\s+[^\n]+)")
+                      r"|[가-힣]{1,3}\s?(?:특별시|광역시|특별자치시|특별자치도))(?:\s+[^\n]+)")
 # 특별시는 서울 하나뿐이다. OCR 이 "서울"을 다른 글자로 읽어도(예: 서올특별시) 서울특별시로 바로잡는다.
-_SPECIAL_CITY = re.compile(r"^[가-힣]{1,3}특별시")
+_SPECIAL_CITY = re.compile(r"^[가-힣]{1,3}\s?특별시")
 _RELATION_WORDS = {"본인", "세대주", "배우자", "자녀", "남편", "아들", "관계", "주민등록번호", "성명", "전입일", "변동사유"}
+
+
+def _join_spaced_hangul(line: str) -> str:
+    """OCR 이 한글을 한 글자씩 띄워 읽은 줄("서 울 특별시 성 북 구")에서 연달은 한 글자 토큰끼리만 붙인다."""
+    out: list[str] = []
+    prev_single = False
+    for token in line.split():
+        single = bool(re.fullmatch(r"[가-힣]", token))
+        if single and prev_single:
+            out[-1] += token
+        else:
+            out.append(token)
+        prev_single = single
+    return " ".join(out)
 
 
 def parse_identity_text(text: str, document_type: str, employee_name: str = "") -> dict[str, str]:
@@ -49,7 +64,7 @@ def parse_identity_text(text: str, document_type: str, employee_name: str = "") 
     safe = _RRN.sub("", text)
     addresses = []
     for line in safe.splitlines():
-        match = _ADDRESS.search(line)
+        match = _ADDRESS.search(_join_spaced_hangul(line))
         if match:
             address = _SPECIAL_CITY.sub("서울특별시", match.group().strip())
             if not re.search(r"\d{6,}|주민등록|발급|성명", address):
