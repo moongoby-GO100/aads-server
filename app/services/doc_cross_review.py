@@ -8,7 +8,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import threading
 import uuid
 from pathlib import Path
 
@@ -427,11 +426,20 @@ def _watch_worker(proc, revision_id, log_path):
         logger.error('doc_cross_review_worker_exit_nonzero revision_id=%s code=%s log=%s', revision_id, code, log_path)
 
 
+# claude-docker-wrapper.sh / claude-slot-credentials-wrapper.sh 는 호출마다 이 태그를 환경변수로 심고, 호출이 끝나면
+# scripts/claude_slot_credential.py reap 이 /proc/*/environ 에 태그가 있는 프로세스와 그 자손을 SIGTERM → SIGKILL 한다.
+# 워커가 태그를 물려받거나 태그를 가진 브리지의 자손으로 남으면 그 호출이 끝나는 순간 함께 죽는다.
+_CALL_TAG_ENV = 'AADS_CLAUDE_CALL_ID'
+# 중간 sh 가 워커를 백그라운드로 띄우고 곧바로 종료하므로 워커는 브리지의 자손이 아니라 init 의 자식이 된다.
+_DETACH_SCRIPT = 'command -v "$1" >/dev/null 2>&1 || exit 127; "$@" </dev/null >&2 & echo $!'
+
+
 def _spawn_detached(tenant, project, head, revision, follow_up=False):
     """Start the review worker detached from this process; returns False when it could not be started."""
     root = _app_root()
     env = dict(os.environ)
     env.pop('AADS_MCP_BRIDGE', None)
+    env.pop(_CALL_TAG_ENV, None)
     env['PYTHONPATH'] = root + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
     cmd = ['timeout', str(_DETACHED_TIMEOUT_SECONDS), sys.executable, '-m', 'app.services.doc_cross_review_worker',
            '--tenant', str(tenant), '--project', str(project),
@@ -441,18 +449,21 @@ def _spawn_detached(tenant, project, head, revision, follow_up=False):
     log_path, log_file = _open_worker_log(root)
     if log_file is None:
         logger.warning('doc_cross_review_worker_log_unavailable revision_id=%s', revision['id'])
-    out = log_file or subprocess.DEVNULL
     try:
-        proc = subprocess.Popen(cmd, cwd=root, env=env, start_new_session=True,
-                                stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT if log_file else subprocess.DEVNULL)
+        proc = subprocess.Popen(['sh', '-c', _DETACH_SCRIPT, 'sh'] + cmd, cwd=root, env=env, start_new_session=True,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=log_file or subprocess.DEVNULL)
+        out, _ = proc.communicate(timeout=10)
     except Exception:
         logger.exception('doc_cross_review_detach_failed revision_id=%s', revision['id'])
         return False
     finally:
         if log_file:
             log_file.close()
-    logger.warning('doc_cross_review_worker_spawned revision_id=%s pid=%s log=%s', revision['id'], proc.pid, log_path)
-    threading.Thread(target=_watch_worker, args=(proc, revision['id'], log_path), daemon=True).start()
+    if proc.returncode != 0:
+        logger.error('doc_cross_review_detach_failed revision_id=%s code=%s', revision['id'], proc.returncode)
+        return False
+    logger.warning('doc_cross_review_worker_spawned revision_id=%s pid=%s log=%s',
+                   revision['id'], (out or b'').decode(errors='replace').strip(), log_path)
     return True
 
 

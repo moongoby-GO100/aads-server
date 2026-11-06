@@ -569,7 +569,8 @@ def test_detached_worker_gets_follow_up_flag(monkeypatch, tmp_path):
     monkeypatch.setenv('AADS_MCP_BRIDGE', '1')
     monkeypatch.setenv('DOC_CROSS_REVIEW_WORKER_LOG_DIR', str(tmp_path))
     popen = Mock()
-    popen.return_value.wait.return_value = 0
+    popen.return_value.communicate.return_value = (b'4242\n', None)
+    popen.return_value.returncode = 0
     monkeypatch.setattr(subprocess, 'Popen', popen)
     cross.schedule('t', 'AADS', {'id': 'h', 'document_key': 'k'}, {'id': 'r'}, follow_up=True)
     assert '--follow-up' in popen.call_args.args[0]

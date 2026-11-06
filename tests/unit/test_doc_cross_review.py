@@ -466,13 +466,16 @@ def test_bridge_flag_detaches_subprocess_without_create_task(monkeypatch, tmp_pa
     monkeypatch.setenv('AADS_MCP_BRIDGE', '1')
     monkeypatch.setenv('DOC_CROSS_REVIEW_WORKER_LOG_DIR', str(tmp_path))
     popen, create_task = Mock(), Mock()
-    popen.return_value.wait.return_value = 0
+    popen.return_value.communicate.return_value = (b'4242\n', None)
+    popen.return_value.returncode = 0
     monkeypatch.setattr(subprocess, 'Popen', popen)
     monkeypatch.setattr(asyncio, 'create_task', create_task)
     cross.schedule(*_spawn_args())
     create_task.assert_not_called()
     popen.assert_called_once()
-    cmd = popen.call_args.args[0]
+    launcher = popen.call_args.args[0]
+    assert launcher[:2] == ['sh', '-c'] and launcher[3] == 'sh'
+    cmd = launcher[4:]
     kwargs = popen.call_args.kwargs
     assert cmd[:3] == ['timeout', '1500', sys.executable]
     assert cmd[3:5] == ['-m', 'app.services.doc_cross_review_worker']
@@ -481,7 +484,7 @@ def test_bridge_flag_detaches_subprocess_without_create_task(monkeypatch, tmp_pa
     assert kwargs['cwd'] == cross._app_root()
     assert kwargs['env']['PYTHONPATH'].split(':')[0] == cross._app_root()
     assert 'AADS_MCP_BRIDGE' not in kwargs['env']
-    assert kwargs['stdout'] is not subprocess.DEVNULL and kwargs['stderr'] == subprocess.STDOUT
+    assert kwargs['stdout'] == subprocess.PIPE and kwargs['stderr'] not in (subprocess.DEVNULL, subprocess.STDOUT)
     assert (tmp_path / 'doc_cross_review_worker.log').exists()
 
 
@@ -630,3 +633,89 @@ def test_worker_failure_returns_nonzero_and_logs(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger=worker.logger.name):
         assert asyncio.run(worker._guarded(_worker_args())) == 1
     assert any(r.getMessage().startswith('doc_cross_review_worker_failed') for r in caplog.records)
+
+
+def test_detached_spawn_drops_call_reap_tag(monkeypatch, tmp_path):
+    import subprocess
+    from unittest.mock import Mock
+    monkeypatch.setenv('AADS_MCP_BRIDGE', '1')
+    monkeypatch.setenv('AADS_CLAUDE_CALL_ID', 'a' * 32)
+    monkeypatch.setenv('DOC_CROSS_REVIEW_WORKER_LOG_DIR', str(tmp_path))
+    popen = Mock()
+    popen.return_value.communicate.return_value = (b'4242\n', None)
+    popen.return_value.returncode = 0
+    monkeypatch.setattr(subprocess, 'Popen', popen)
+    cross.schedule(*_spawn_args())
+    assert 'AADS_CLAUDE_CALL_ID' not in popen.call_args.kwargs['env']
+
+
+def test_detached_spawn_reports_launcher_failure(monkeypatch, tmp_path, caplog):
+    import logging
+    import subprocess
+    from unittest.mock import Mock
+    monkeypatch.setenv('AADS_MCP_BRIDGE', '1')
+    monkeypatch.setenv('DOC_CROSS_REVIEW_WORKER_LOG_DIR', str(tmp_path))
+    popen = Mock()
+    popen.return_value.communicate.return_value = (b'', None)
+    popen.return_value.returncode = 127
+    monkeypatch.setattr(subprocess, 'Popen', popen)
+    monkeypatch.setattr(cross, 'execute_review', AsyncMock(return_value={}))
+
+    async def go():
+        cross.schedule(*_spawn_args())
+        await asyncio.gather(*list(cross._TASKS), return_exceptions=True)
+    with caplog.at_level(logging.ERROR, logger=cross.logger.name):
+        asyncio.run(go())
+    assert any(r.getMessage().startswith('doc_cross_review_detach_failed') and 'code=127' in r.getMessage() for r in caplog.records)
+    cross.execute_review.assert_awaited_once()
+
+
+def test_detached_worker_survives_call_reap(tmp_path):
+    """The per-call reaper (claude_slot_credential.py reap) must not take the detached worker down with the bridge."""
+    import importlib.util
+    import os
+    import subprocess
+    import sys
+    import time
+    import uuid
+    from pathlib import Path
+    root = Path(cross.__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location('claude_slot_credential_under_test', root / 'scripts' / 'claude_slot_credential.py')
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    fake_python = tmp_path / 'fake_python'
+    fake_python.write_text('#!/bin/sh\necho $$ > "$FAKE_WORKER_PID_FILE"\nexec sleep 30\n')
+    fake_python.chmod(0o755)
+    pid_file = tmp_path / 'worker.pid'
+    tag = uuid.uuid4().hex
+    bridge_code = (
+        'import sys, time\n'
+        'from app.services import doc_cross_review as c\n'
+        'c.sys.executable = sys.argv[1]\n'
+        "assert c._spawn_detached('t1', 'AADS', {'id': 'h1', 'document_key': 'doc'}, {'id': 'r1'})\n"
+        'time.sleep(20)\n')
+    env = dict(os.environ, AADS_CLAUDE_CALL_ID=tag, AADS_MCP_BRIDGE='1', FAKE_WORKER_PID_FILE=str(pid_file),
+               DOC_CROSS_REVIEW_WORKER_LOG_DIR=str(tmp_path), PYTHONPATH=str(root))
+    bridge = subprocess.Popen([sys.executable, '-c', bridge_code, str(fake_python)], cwd=str(root), env=env)
+    worker_pid = None
+    try:
+        for _ in range(100):
+            if pid_file.exists() and pid_file.read_text().strip():
+                worker_pid = int(pid_file.read_text())
+                break
+            time.sleep(0.1)
+        assert worker_pid, 'worker was never started'
+        assert bridge.poll() is None, 'bridge must still be alive (and tagged) while the call is reaped'
+        helper.reap_tag(tag, grace=0.5, kill_wait=0.5)
+        time.sleep(0.3)
+        assert bridge.poll() is not None, 'sanity: the reaper did take the tagged bridge down'
+        os.kill(worker_pid, 0)
+    finally:
+        if bridge.poll() is None:
+            bridge.kill()
+        bridge.wait()
+        if worker_pid:
+            try:
+                os.kill(worker_pid, 9)
+            except ProcessLookupError:
+                pass
