@@ -2934,6 +2934,7 @@ async def runner_status(
                        FILTER (WHERE status IN ('running', 'claimed')) AS oldest_sec
             FROM pipeline_jobs
             WHERE tenant_id = $1::uuid
+              AND status <> 'queued'
               AND (status IN ('running', 'claimed')
                    OR updated_at > NOW() - ($2::int * INTERVAL '1 hour'))
             GROUP BY 1, 2, 3
@@ -2941,12 +2942,26 @@ async def runner_status(
             tenant,
             window_hours,
         )
+        queued_rows = await conn.fetch(
+            "SELECT project, COUNT(*)::int AS cnt FROM pipeline_jobs "
+            "WHERE tenant_id = $1::uuid AND status = 'queued' GROUP BY project",
+            tenant,
+        )
         hosts = await conn.fetch(
             "SELECT host, projects, engine_mode, max_concurrent, "
             "EXTRACT(EPOCH FROM (NOW() - last_seen_at))::int AS seen_ago "
             "FROM pipeline_runner_hosts"
         )
 
+    queued_by_project = {row["project"]: int(row["cnt"]) for row in queued_rows}
+    host_projects = {
+        row["host"]: {p.strip() for p in str(row["projects"] or "").split(",") if p.strip()}
+        for row in hosts
+    }
+    project_host_counts: dict[str, int] = {}
+    for projects in host_projects.values():
+        for project in projects:
+            project_host_counts[project] = project_host_counts.get(project, 0) + 1
     agg: dict = {}
 
     def _bucket(host: str) -> dict:
@@ -2954,6 +2969,7 @@ async def runner_status(
             "host": host, "running": 0, "done": 0, "error": 0,
             "cancelled": 0, "other": 0, "oldest_running_sec": 0,
             "projects": set(), "alive": None, "seen_ago_sec": None,
+            "queued": 0, "queued_shared": False, "max_concurrent": None,
         })
 
     for row in rows:
@@ -2986,6 +3002,9 @@ async def runner_status(
                 p.strip() for p in str(row["projects"]).split(",") if p.strip())
         bucket["engine_mode"] = row["engine_mode"] or ""
         bucket["max_concurrent"] = row["max_concurrent"]
+        projects = host_projects[row["host"]]
+        bucket["queued"] = sum(queued_by_project.get(p, 0) for p in projects)
+        bucket["queued_shared"] = any(project_host_counts[p] > 1 for p in projects)
 
     servers = []
     for bucket in agg.values():
@@ -2996,8 +3015,10 @@ async def runner_status(
     return {
         "window_hours": window_hours,
         "servers": servers,
+        "queued_by_project": queued_by_project,
         "totals": {
             "hosts": len(servers),
+            "queued": sum(queued_by_project.values()),
             "running": sum(b["running"] for b in servers),
             "error": sum(b["error"] for b in servers),
             "done": sum(b["done"] for b in servers),
