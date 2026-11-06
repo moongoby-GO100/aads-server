@@ -329,7 +329,8 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
                     $14, $15, NOW(), NOW(), $16::uuid)
             """,
             new_job_id, row["project"], new_instruction, _hash(row["project"], new_instruction),
-            row["chat_session_id"], row["max_cycles"], row["model"], row["size"],
+            row["chat_session_id"], row["max_cycles"],
+            row["model"] if row["worker_model"] else None, row["size"],
             row["worker_model"], row["model_override_reason"], row["parallel_group"],
             f"[Auto Rework] {job_id} 반려 지적 {len(issues)}건 교정 라운드 {next_round}/{rounds_max}",
             job_id, binding.goal_id, binding.milestone_id, row["tenant_id"], binding.source,
