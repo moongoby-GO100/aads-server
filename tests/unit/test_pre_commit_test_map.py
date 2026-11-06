@@ -26,6 +26,7 @@ _spec.loader.exec_module(gate)
 
 DEPLOY_TESTS = [
     "tests/unit/test_deploy_build_guards.py",
+    "tests/unit/test_deploy_script_freshness.py",
     "tests/unit/test_deploy_dependency_image_contract.py",
     "tests/unit/test_deploy_autoheal.py",
     "tests/unit/test_deploy_stream_reconcile.py",

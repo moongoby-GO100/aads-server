@@ -71,10 +71,50 @@ DEPLOY_PHASE_METADATA_JSON=""
 LAST_STREAM_RECONCILE_JSON=""
 mkdir -p "${STATE_DIR}/logs"
 
+# Keep the migration archive and preflight inventory in sync.
+RELEASE_MIGRATION_HELPERS=(
+    scripts/apply_migration.sh
+    scripts/apply_release_migrations.sh
+    scripts/release_migration_approval.py
+    scripts/release_migration_autoverify.py
+    scripts/migrations_auto_apply_baseline.txt
+)
+DEPLOY_STALE_SCRIPT_FOREGROUND=false
+DEPLOY_SCRIPT_FRESHNESS_ERROR=""
+deploy_script_freshness_check() {
+    local expected actual helper
+    [[ "${AADS_DEPLOY_ALLOW_STALE_SCRIPT:-}" == "1" ]] && return 0
+    expected="$(git -C "$COMPOSE_DIR" rev-parse HEAD:deploy.sh 2>/dev/null || true)"
+    actual="$(git hash-object "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+    if [[ -z "$expected" || "$actual" != "$expected" ]]; then
+        DEPLOY_SCRIPT_FRESHNESS_ERROR="stale deploy.sh: executing script differs from release HEAD; run the release deploy.sh"
+    else
+        for helper in "${RELEASE_MIGRATION_HELPERS[@]}"; do
+            if ! git -C "$COMPOSE_DIR" cat-file -e "HEAD:${helper}" 2>/dev/null; then
+                DEPLOY_SCRIPT_FRESHNESS_ERROR="stale deploy.sh: missing migration helper ${helper} in release HEAD"
+                break
+            fi
+        done
+    fi
+    [[ -z "$DEPLOY_SCRIPT_FRESHNESS_ERROR" ]] || DEPLOY_STALE_SCRIPT_FOREGROUND=true
+    return 0
+}
+
+enforce_deploy_script_freshness() {
+    [[ "$DEPLOY_STALE_SCRIPT_FOREGROUND" == true ]] || return 0
+    echo "[deploy.sh] $DEPLOY_SCRIPT_FRESHNESS_ERROR" >&2
+    audit_control "deploy-script-freshness" "$COMPOSE_DIR" "blocked" "$DEPLOY_SCRIPT_FRESHNESS_ERROR"
+    # Best effort only: unavailable observability must never mask exit 78.
+    (deploy_observe_update blocked script_freshness "$DEPLOY_SCRIPT_FRESHNESS_ERROR") || true
+    exit 78
+}
+
+deploy_script_freshness_check
+
 # RC5: Auto-detach ALL invocations — prevents TERM/HUP from killing deploy
 # when parent process (SSH, chat tool, pipeline, cron) terminates.
 # Opt out: AADS_DEPLOY_FOREGROUND=1 for interactive manual watching.
-if [[ -z "${AADS_DEPLOY_DETACHED:-}" && "${AADS_DEPLOY_FOREGROUND:-}" != "1" ]]; then
+if [[ "$DEPLOY_STALE_SCRIPT_FOREGROUND" != true && -z "${AADS_DEPLOY_DETACHED:-}" && "${AADS_DEPLOY_FOREGROUND:-}" != "1" ]]; then
     export AADS_DEPLOY_DETACHED=1
     _detach_log="${STATE_DIR}/logs/deploy-detach-$(date +%Y%m%d-%H%M%S)-$$.log"
     if command -v setsid >/dev/null 2>&1; then
@@ -679,9 +719,12 @@ build_release_image() {
     cleanup_release_context
 }
 
+# Stale scripts go directly to enforcement after recorder definitions.
 if [[ -x "${COMPOSE_DIR}/scripts/verify-bluegreen-release-contract.sh" ]]; then
-    "${COMPOSE_DIR}/scripts/verify-bluegreen-release-contract.sh" "$COMPOSE_DIR"
-else
+    if [[ "$DEPLOY_STALE_SCRIPT_FOREGROUND" != true ]]; then
+        "${COMPOSE_DIR}/scripts/verify-bluegreen-release-contract.sh" "$COMPOSE_DIR"
+    fi
+elif [[ "$DEPLOY_STALE_SCRIPT_FOREGROUND" != true ]]; then
     echo "[deploy.sh] ❌ release contract verifier missing or not executable"
     exit 1
 fi
@@ -817,11 +860,16 @@ reconcile_stale_deploy_runs() {
 # with "column paused_at does not exist" (deploy.new_migration_not_applied).
 # The SQL comes from committed HEAD, the same tree the release image is built from.
 run_release_migrations() {
-    local migration_root rc=0 output
+    local migration_root rc=0 output helper
+    for helper in "${RELEASE_MIGRATION_HELPERS[@]}"; do
+        if ! git -C "$COMPOSE_DIR" cat-file -e "HEAD:${helper}" 2>/dev/null; then
+            DEPLOY_MIGRATION_ERROR="missing migration helper ${helper} in HEAD=${AADS_RELEASE_SHA}"
+            echo "[deploy.sh] ${DEPLOY_MIGRATION_ERROR}" >&2
+            return 1
+        fi
+    done
     migration_root="$(mktemp -d /tmp/aads-server-migrations.XXXXXX)"
-    if ! git -C "$COMPOSE_DIR" archive --format=tar HEAD migrations scripts/apply_migration.sh \
-            scripts/apply_release_migrations.sh scripts/release_migration_approval.py scripts/release_migration_autoverify.py \
-            scripts/migrations_auto_apply_baseline.txt \
+    if ! git -C "$COMPOSE_DIR" archive --format=tar HEAD migrations "${RELEASE_MIGRATION_HELPERS[@]}" \
             | tar -xf - -C "$migration_root"; then
         rm -rf -- "$migration_root"
         DEPLOY_MIGRATION_ERROR="cannot extract migrations from HEAD=${AADS_RELEASE_SHA}"
@@ -2126,6 +2174,8 @@ verify_active_slot() {
     fi
     echo "[deploy.sh] ✅ ACTIVE 슬롯 일관성 확인: :${active_port} (${target_container})"
 }
+
+enforce_deploy_script_freshness
 
 if [[ "$MODE" == "warm-deps" ]]; then
     trap cleanup_release_context EXIT
