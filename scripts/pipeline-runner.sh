@@ -5622,7 +5622,11 @@ claim_queued_job() (
 
 _claim_queued_job() {
     local filter="$1"
-    local engine_predicate model_return_expr
+    local engine_predicate model_return_expr overflow_alias="" overflow_return=""
+    if [[ -n "${RUNNER_OVERFLOW_OF:-}" ]]; then
+        overflow_alias=" AS p"
+        overflow_return=", (SELECT COALESCE(($(runner_overflow_reason_sql)), 'unknown') FROM ($(runner_overflow_primary_sql)) o)"
+    fi
     if [[ "$RUNNER_ENGINE_MODE" == "litellm" ]]; then
         engine_predicate="AND COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') LIKE 'litellm:%'"
         model_return_expr="COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), 'auto')"
@@ -5634,10 +5638,10 @@ _claim_queued_job() {
     # AADS-211: depends_on 체크 — 의존 작업이 done이 아니면 스킵
     # RUNNER_ENGINE_MODE=litellm: litellm:* 작업만 claim. general은 원격 litellm 작업을 전용 러너에 넘김.
     # 어느 서버가 집었는지 남긴다. runner_pid 는 숫자라 호스트를 구분하지 못한다.
-    db_exec "UPDATE pipeline_jobs SET status='claimed', runner_host='${RUNNER_HOST_NAME}', updated_at=NOW()
+    runner_overflow_db_claim "UPDATE pipeline_jobs${overflow_alias} SET status='claimed', runner_host='${RUNNER_HOST_NAME}', updated_at=NOW()
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
-                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter ${RUNNER_MH_CLAIM_EXTRA:-} $(runner_pool_claim_extra_sql)
+                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter ${RUNNER_MH_CLAIM_EXTRA:-} $(runner_pool_claim_extra_sql)$(runner_overflow_claim_sql)
                   AND (p.depends_on IS NULL OR EXISTS (
                        SELECT 1 FROM pipeline_jobs dep
                        WHERE dep.job_id = p.depends_on AND dep.status = 'done'))
@@ -5651,7 +5655,7 @@ _claim_queued_job() {
                          COALESCE(p.priority, 0) DESC, p.created_at ASC LIMIT 1
                 FOR UPDATE SKIP LOCKED
              )
-             RETURNING job_id, project, encode(convert_to(instruction, 'UTF8'), 'hex'), chat_session_id, max_cycles, ${model_return_expr}, COALESCE(size,'M'), COALESCE(parallel_group,'');"
+             RETURNING job_id, project, encode(convert_to(instruction, 'UTF8'), 'hex'), chat_session_id, max_cycles, ${model_return_expr}, COALESCE(size,'M'), COALESCE(parallel_group,'')${overflow_return};"
 }
 
 # 러너 재기동 직후 status=claimed / started_at NULL 로 고착된 작업을 되돌린다
@@ -5760,6 +5764,105 @@ runner_pool_host_scope_sql() {
 runner_pool_claim_extra_sql() {
     runner_is_deploy_delegate || return 0
     printf 'AND NOT (%s)' "$DEPLOY_ONLY_HEADER_SQL"
+}
+
+# 보조 호스트의 신규 queued claim만 제한한다. 빈 설정은 SQL 바이트도 바꾸지 않는다.
+RUNNER_OVERFLOW_OF="${RUNNER_OVERFLOW_OF:-}"
+RUNNER_OVERFLOW_STALE_SEC="${RUNNER_OVERFLOW_STALE_SEC:-180}"
+RUNNER_OVERFLOW_GRACE_SEC="${RUNNER_OVERFLOW_GRACE_SEC:-120}"
+RUNNER_OVERFLOW_YIELD_STATE=""
+
+runner_overflow_primary_sql() {
+    local host stale="${RUNNER_OVERFLOW_STALE_SEC:-180}"
+    host=$(sql_escape "$RUNNER_OVERFLOW_OF")
+    [[ "$stale" =~ ^[0-9]{1,6}$ ]] || stale=180
+    printf '%s' "SELECT
+      (SELECT count(*) FROM pipeline_jobs WHERE status IN ('running','claimed') AND runner_host=$host) AS running,
+      COALESCE((SELECT max_concurrent FROM runner_host_policy WHERE host=$host),
+               (SELECT max_concurrent FROM pipeline_runner_hosts WHERE host=$host)) AS capacity,
+      NOT EXISTS (SELECT 1 FROM pipeline_runner_hosts WHERE host=$host
+                  AND last_seen_at >= NOW() - ($stale * INTERVAL '1 second')) AS stale"
+}
+
+runner_overflow_condition_sql() {
+    local grace="${RUNNER_OVERFLOW_GRACE_SEC:-120}"
+    [[ "$grace" =~ ^[0-9]{1,6}$ ]] || grace=120
+    case "$1" in
+        full) printf '%s' 'o.running >= o.capacity' ;;
+        stale) printf '%s' 'o.stale' ;;
+        deploy_only) printf '(%s)' "$DEPLOY_ONLY_HEADER_SQL" ;;
+        grace)
+            # queued.updated_at은 의존성 해제·피드백에서도 바뀐다. 부모 완료 후부터 유예한다.
+            printf '%s' "GREATEST(p.created_at, (SELECT COALESCE(dep.completed_at, dep.updated_at)
+                FROM pipeline_jobs dep WHERE dep.job_id=p.depends_on AND dep.status='done'))
+                < NOW() - ($grace * INTERVAL '1 second')" ;;
+    esac
+}
+
+runner_overflow_reason_sql() {
+    local reason
+    printf 'CASE'
+    for reason in full stale deploy_only grace; do
+        printf " WHEN (%s) THEN '%s'" "$(runner_overflow_condition_sql "$reason")" "$reason"
+    done
+    printf ' ELSE NULL END'
+}
+
+runner_overflow_claim_sql() {
+    [[ -n "${RUNNER_OVERFLOW_OF:-}" ]] || return 0
+    local reason separator=""
+    printf ' AND EXISTS (SELECT 1 FROM (%s) o WHERE (' "$(runner_overflow_primary_sql)"
+    for reason in full stale deploy_only grace; do
+        printf '%s(%s)' "$separator" "$(runner_overflow_condition_sql "$reason")"
+        separator=' OR '
+    done
+    printf '))'
+}
+
+# 수락 사유는 UPDATE와 같은 DB 스냅샷에서 RETURNING한다. 호출자에게는 기존 8열만 반환한다.
+runner_overflow_db_claim() {
+    [[ -n "${RUNNER_OVERFLOW_OF:-}" ]] || { db_exec "$1"; return $?; }
+    local result reason
+    result=$(db_exec "$1") || return $?
+    [[ -n "$result" ]] || return 0
+    reason="${result##*$'\x1e'}"
+    result="${result%$'\x1e'*}"
+    case "$reason" in
+        full|stale|deploy_only|grace)
+            log "  CLAIM_OVERFLOW reason=$reason primary=$RUNNER_OVERFLOW_OF" >&2 ;;
+    esac
+    printf '%s\n' "$result"
+}
+
+# 메인 루프에서 호출해 서브셸 밖에 양보 상태를 보존한다. 진단은 입장 판정에 쓰지 않는다.
+runner_overflow_log_claim() {
+    [[ -n "${RUNNER_OVERFLOW_OF:-}" ]] || return 0
+    if [[ -n "${1:-}" ]]; then
+        RUNNER_OVERFLOW_YIELD_STATE=""
+        return 0
+    fi
+    local row running capacity reason state filter="${2:-}"
+    row=$(db_exec "SELECT running, COALESCE(capacity::text,'?'), CASE
+        WHEN running >= capacity THEN 'full' WHEN stale THEN 'stale'
+        WHEN EXISTS (SELECT 1 FROM pipeline_jobs p WHERE p.status='queued'
+            AND p.phase IN ('queued','coding') $filter ${RUNNER_MH_CLAIM_EXTRA:-}
+            $(runner_pool_claim_extra_sql)
+            AND (p.depends_on IS NULL OR EXISTS (SELECT 1 FROM pipeline_jobs dep
+                WHERE dep.job_id=p.depends_on AND dep.status='done'))
+            AND ($(runner_overflow_reason_sql)) IS NULL) THEN 'yield'
+        ELSE 'idle' END
+        FROM ($(runner_overflow_primary_sql)) o;" 2>/dev/null) || return 0
+    IFS=$'\x1e' read -r running capacity reason <<< "$row"
+    [[ "$running" =~ ^[0-9]+$ ]] || return 0
+    if [[ "$reason" == "yield" ]]; then
+        state="$RUNNER_OVERFLOW_OF:$running/$capacity"
+        if [[ "$RUNNER_OVERFLOW_YIELD_STATE" != "$state" ]]; then
+            log "  CLAIM_YIELD_TO_PRIMARY primary=$RUNNER_OVERFLOW_OF primary_running=$running/$capacity"
+            RUNNER_OVERFLOW_YIELD_STATE="$state"
+        fi
+    else
+        RUNNER_OVERFLOW_YIELD_STATE=""
+    fi
 }
 
 runner_cpu_psi_avg60() {
@@ -10332,6 +10435,7 @@ main() {
         local pending
         if runner_claim_psi_ok; then
             pending=$(claim_queued_job "$project_filter" 2>/dev/null) || true
+            runner_overflow_log_claim "$pending" "$project_filter"
         else
             pending=""
         fi
