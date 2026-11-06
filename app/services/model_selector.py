@@ -2344,6 +2344,101 @@ def _build_active_project_context(project: str) -> str:
     )
 
 
+_CODEX_AGY_FALLBACK_MODEL = "antigravity"  # Pro relay 별칭이 수정되기 전까지 Flash만 사용한다.
+
+
+def _codex_error_is_quota(text: str) -> bool:
+    """고정 Codex 세션에서 전환을 허용하는 한도 표지만 판정한다."""
+    return any(marker in str(text or "").lower() for marker in (
+        "quota", "usage limit", "rate limit", "429", "limit reached", "=100%",
+    ))
+
+
+def _codex_fallback_plan(
+    model: str, *, pinned: bool, configured: list[str], defaults: list[str],
+) -> list[str]:
+    candidates = [_CODEX_AGY_FALLBACK_MODEL]
+    if not pinned:
+        candidates.extend(configured or defaults)
+    if pinned or not any(
+        _to_anthropic_runtime_alias(candidate) in _ANTHROPIC_MODEL_ID
+        for candidate in candidates
+    ):
+        candidates.append(_codex_to_claude_equivalent(model))
+    seen = {_to_anthropic_runtime_alias(_canonical_codex_model_id(model))}
+    plan: list[str] = []
+    for candidate in candidates:
+        alias = _to_anthropic_runtime_alias(_canonical_codex_model_id(candidate))
+        if alias not in seen:
+            seen.add(alias)
+            plan.append(candidate)
+    return plan
+
+
+async def _stream_codex_fallback_chain(
+    model: str,
+    reason: str,
+    plan: list[str],
+    system_prompt: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    errors: list[dict[str, Any]] = []
+    for candidate in plan:
+        yield {
+            "type": "model_fallback",
+            "content": f"⚠️ {model} {reason} — {candidate}로 전환합니다.",
+            "from_model": model, "to_model": candidate,
+        }
+        buffered = candidate == _CODEX_AGY_FALLBACK_MODEL
+        events: list[dict[str, Any]] = []
+        emitted = False
+        done = False
+        error = None
+        try:
+            alias = _to_anthropic_runtime_alias(candidate)
+            if buffered:
+                stream = _stream_antigravity_relay(
+                    candidate, system_prompt, messages, tools=tools, session_id=session_id,
+                )
+            elif alias in _ANTHROPIC_MODEL_ID:
+                stream = _stream_cli_relay(
+                    alias, system_prompt, messages, tools=tools, session_id=session_id,
+                )
+            else:
+                stream = _stream_litellm(
+                    candidate, system_prompt, messages, tools=tools, session_id=session_id,
+                )
+            async for event in stream:
+                if event.get("type") == "error":
+                    error = event
+                    break
+                if event.get("type") in ("tool_use", "tool_result") or (
+                    event.get("type") in ("delta", "text", "content") and event.get("content")
+                ):
+                    emitted = True
+                if event.get("type") == "done":
+                    done = True
+                if buffered:
+                    events.append(event)
+                else:
+                    yield event
+        except Exception as exc:
+            error = {"type": "error", "content": str(exc)}
+        if error is None and (emitted or (done and not buffered)):
+            for event in events:
+                yield event
+            return
+        error = error or {"type": "error", "content": "empty_response"}
+        stage = "agy" if buffered else "claude" if alias in _ANTHROPIC_MODEL_ID else "litellm"
+        errors.append({**error, "stage": stage, "model": candidate})
+        if emitted and not buffered:
+            yield {**error, "fallback_errors": errors}
+            return
+    yield {"type": "_chain_failed", "errors": errors}
+
+
 async def call_stream(
     intent_result: IntentResult,
     system_prompt: str,
@@ -2694,17 +2789,9 @@ async def call_stream(
             return
         elif backend == "codex_cli":
             _cx_blocked, _cx_detail = await _codex_quota_exhausted()
-            if _cx_blocked:
-                if _provider_pinned or _pinned_no_switch:
-                    yield {"type": "error", "content": f"provider=codex model={model}: quota unavailable: {_cx_detail}"}
-                    return
-                logger.warning("codex_preflight_skip: 주간 한도 소진(%s) — Claude 경로로 우회", _cx_detail)
-                async for event in _stream_cli_relay(
-                    _codex_to_claude_equivalent(model), system_prompt, messages,
-                    tools=tools, session_id=session_id,
-                ):
-                    yield event
-                return
+            _codex_pinned = bool(_provider_pinned or _pinned_no_switch)
+            _codex_switch_allowed = not _codex_pinned or os.getenv("AADS_CODEX_PINNED_FALLBACK", "1") != "0"
+            _codex_original_error: dict[str, Any] = {}
             _codex_had_error = False
             _codex_error_content = ""
             _codex_is_tool_error = False
@@ -2712,17 +2799,29 @@ async def call_stream(
             # 없으면 성공으로 보지 말고 실패로 승격해, 아래 폴백 체계를 그대로 태운다.
             # (기존에는 output_validator 가 사후에 잡을 때까지 재시도를 낭비했다.)
             _codex_emitted_chars = 0
-            async for event in _stream_codex_relay(
-                model, system_prompt, messages, tools=tools, session_id=session_id,
-            ):
+
+            async def _codex_source() -> AsyncGenerator[Dict[str, Any], None]:
+                if _cx_blocked:
+                    yield {"type": "error", "content": f"provider=codex model={model}: quota unavailable: {_cx_detail}"}
+                    return
+                async for item in _stream_codex_relay(
+                    model, system_prompt, messages, tools=tools, session_id=session_id,
+                ):
+                    yield item
+
+            async for event in _codex_source():
                 if event.get("type") == "error":
                     _codex_had_error = True
+                    _codex_original_error = dict(event)
                     _codex_error_content = event.get("content", "")
                     _err_lower = _codex_error_content.lower()
-                    _codex_is_tool_error = any(k in _err_lower for k in (
-                        "transport closed", "transport_closed", "mcp",
-                        "tool_error", "tool error", "connection reset",
-                    ))
+                    _codex_is_tool_error = (
+                        event.get("error_category") == "tool_transport_error"
+                        or any(k in _err_lower for k in (
+                            "transport closed", "transport_closed", "mcp",
+                            "tool_error", "tool error", "connection reset",
+                        ))
+                    )
                     break
                 if event.get("type") in ("delta", "text", "content"):
                     _codex_emitted_chars += len(str(event.get("content") or ""))
@@ -2738,13 +2837,17 @@ async def call_stream(
                 logger.warning("codex_empty_response model=%s — 폴백으로 전환", model)
             if not _codex_had_error:
                 return
-            if _provider_pinned or _pinned_no_switch:
-                logger.warning("codex_pinned_no_switch: %s failed — user pinned, no fallback", model)
-                yield {"type": "error", "content": f"provider=codex model={model}: {_codex_error_content}"}
-                return
             if _codex_is_tool_error:
-                logger.warning(f"codex_tool_error_no_model_fallback: {model} — {_codex_error_content[:120]}")
-                yield {"type": "error", "content": _codex_error_content, "error_category": "tool_transport_error"}
+                yield {**_codex_original_error, "type": "error", "content": _codex_error_content,
+                       "error_category": "tool_transport_error"}
+                return
+            _codex_quota_failure = (
+                _cx_blocked or _codex_error_content.startswith("codex_empty_response:")
+                or _codex_error_is_quota(_codex_error_content)
+            )
+            if not _codex_switch_allowed or (_codex_pinned and not _codex_quota_failure):
+                content = _codex_error_content if _cx_blocked else f"provider=codex model={model}: {_codex_error_content}"
+                yield {**_codex_original_error, "type": "error", "content": content}
                 return
             _CODEX_FB = {
                 "gpt-5.6-sol": [
@@ -2760,64 +2863,58 @@ async def call_stream(
                 await get_available_model_ids(),
                 excluded_providers={"codex", "deepseek", "gemini", "google"},
             )
-            _codex_fb_candidates = _configured_cfb or _CODEX_FB.get(model, [])
-            for _cfb in _codex_fb_candidates:
-                try:
-                    yield {
-                        "type": "model_fallback",
-                        "content": f"⚠️ {model} 장애 — {_cfb}로 전환합니다.",
-                        "from_model": model,
-                        "to_model": _cfb,
-                    }
-                    _cfb_err = False
-                    _cfb_anthropic_alias = _to_anthropic_runtime_alias(_cfb)
-                    if _cfb_anthropic_alias in _ANTHROPIC_MODEL_ID:
-                        _cfb_stream = _stream_cli_relay(
-                            _cfb_anthropic_alias,
-                            system_prompt,
-                            messages,
-                            tools=tools,
-                            session_id=session_id,
-                        )
-                    else:
-                        _cfb_stream = _stream_litellm(_cfb, system_prompt, messages, tools=tools, session_id=session_id)
-                    async for ev in _cfb_stream:
-                        if isinstance(ev, dict) and ev.get("type") == "error":
-                            _cfb_err = True
-                            logger.warning(f"codex_fb_failed: {model}→{_cfb}: {ev.get('content', '')[:80]}")
-                            break
-                        yield ev
-                    if not _cfb_err:
-                        return
-                except Exception as _cfb_exc:
-                    logger.warning(f"codex_fb_exc: {model}→{_cfb}: {_cfb_exc}")
-            _secondary_available = await get_available_model_ids()
-            # CEO 지시(2026-09-11): 유료 LiteLLM 폴백 비활성화 — Groq(무료)만 허용
-            _secondary_candidates = await _configured_llm_fallback_candidates(
-                model,
-                _secondary_available,
-                excluded_providers={"codex", "anthropic", "openrouter", "qwen", "alibaba", "kimi", "minimax", "openai"},
+            _plan = _codex_fallback_plan(
+                model, pinned=_codex_pinned, configured=_configured_cfb,
+                defaults=_CODEX_FB.get(model, []),
             )
-            for _sfb in _secondary_candidates:
-                try:
-                    yield {
-                        "type": "model_fallback",
-                        "content": f"⚠️ {model} 장애 — {_sfb}로 전환합니다.",
-                        "from_model": model,
-                        "to_model": _sfb,
-                    }
-                    _sfb_err = False
-                    async for ev in _stream_litellm(_sfb, system_prompt, messages, tools=tools, session_id=session_id):
-                        if isinstance(ev, dict) and ev.get("type") == "error":
-                            _sfb_err = True
-                            logger.warning(f"codex_secondary_fb_failed: {model}→{_sfb}: {ev.get('content', '')[:80]}")
-                            break
-                        yield ev
-                    if not _sfb_err:
+            def _codex_final_error(errors: list[dict[str, Any]]) -> dict[str, Any]:
+                content = _codex_error_content
+                if _codex_pinned and not _cx_blocked:
+                    content = f"provider=codex model={model}: {content}"
+                suffix = "".join(f" | {item['stage']}: {item.get('content', '')}" for item in errors)
+                return {**_codex_original_error, "type": "error",
+                        "content": content + suffix, "fallback_errors": errors}
+
+            _fallback_errors: list[dict[str, Any]] = []
+            _chain_failed = False
+            async for event in _stream_codex_fallback_chain(
+                model, "한도 소진" if _cx_blocked else "장애", _plan,
+                system_prompt, messages, tools=tools, session_id=session_id,
+            ):
+                if event.get("type") == "_chain_failed":
+                    _chain_failed = True
+                    _fallback_errors.extend(event["errors"])
+                elif event.get("type") == "error":
+                    yield _codex_final_error(event["fallback_errors"])
+                    return
+                else:
+                    yield event
+            if not _chain_failed:
+                return
+            if not _codex_pinned:
+                _secondary_available = await get_available_model_ids()
+                # CEO 지시(2026-09-11): 유료 LiteLLM 폴백 비활성화 — Groq(무료)만 허용
+                _secondary_candidates = await _configured_llm_fallback_candidates(
+                    model,
+                    _secondary_available,
+                    excluded_providers={"codex", "anthropic", "openrouter", "qwen", "alibaba", "kimi", "minimax", "openai"},
+                )
+                _secondary_failed = False
+                async for event in _stream_codex_fallback_chain(
+                    model, "장애", _secondary_candidates, system_prompt, messages,
+                    tools=tools, session_id=session_id,
+                ):
+                    if event.get("type") == "_chain_failed":
+                        _secondary_failed = True
+                        _fallback_errors.extend(event["errors"])
+                    elif event.get("type") == "error":
+                        yield _codex_final_error(_fallback_errors + event["fallback_errors"])
                         return
-                except Exception as _sfb_exc:
-                    logger.warning(f"codex_secondary_fb_exc: {model}→{_sfb}: {_sfb_exc}")
-            yield {"type": "error", "content": _codex_error_content}
+                    else:
+                        yield event
+                if not _secondary_failed:
+                    return
+            yield _codex_final_error(_fallback_errors)
             return
 
     route_backend = str(route_metadata.get("execution_backend") or "").strip()

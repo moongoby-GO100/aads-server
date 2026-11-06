@@ -296,7 +296,14 @@ async def test_explicit_openai_sol_with_older_registry_row_uses_api_route(monkey
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata", [{}, {"execution_backend": "codex_cli"}])
-async def test_explicit_codex_sol_quota_error_stays_on_codex(monkeypatch, metadata):
+@pytest.mark.parametrize("fallback", ["0", "1"])
+async def test_explicit_codex_sol_quota_error_stays_on_codex(monkeypatch, metadata, fallback):
+    monkeypatch.setenv("AADS_CODEX_PINNED_FALLBACK", fallback)
+
+    async def agy(*args, **kwargs):
+        yield {"type": "delta", "content": "agy"}
+
+    monkeypatch.setattr(model_selector, "_stream_antigravity_relay", agy)
     async def registered(active_only=False):
         return [{"provider": "codex", "model_id": "gpt-6-sol", "is_active": True,
                  "metadata": metadata}]
@@ -310,7 +317,12 @@ async def test_explicit_codex_sol_quota_error_stays_on_codex(monkeypatch, metada
         IntentResult(intent="code_modify", model="codex:gpt-6-sol", use_tools=False, tool_group=""),
         "system", [{"role": "user", "content": "hello"}], model_override="codex:gpt-6-sol",
     )]
-    assert events == [{"type": "error", "content": "provider=codex model=gpt-6-sol: quota unavailable: exhausted"}]
+    if fallback == "0":
+        assert events == [{"type": "error", "content": "provider=codex model=gpt-6-sol: quota unavailable: exhausted"}]
+    else:
+        assert events[0]["type"] == "model_fallback"
+        assert events[0]["to_model"] == "antigravity"
+        assert events[-1] == {"type": "delta", "content": "agy"}
 
 
 @pytest.mark.asyncio
@@ -320,7 +332,9 @@ async def test_explicit_codex_sol_quota_error_stays_on_codex(monkeypatch, metada
     ("openai", "litellm_proxy", "error"),
     ("openai", "litellm_proxy", "success"),
 ])
-async def test_pinned_sol_preserves_configured_backend_and_errors(monkeypatch, provider, backend, outcome):
+@pytest.mark.parametrize("fallback", ["0", "1"])
+async def test_pinned_sol_preserves_configured_backend_and_errors(monkeypatch, provider, backend, outcome, fallback):
+    monkeypatch.setenv("AADS_CODEX_PINNED_FALLBACK", fallback)
     calls = []
 
     async def registered(active_only=False):
@@ -1347,6 +1361,8 @@ async def test_call_stream_falls_back_immediately_when_gpt_56_relay_is_busy(monk
     monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
     monkeypatch.setattr(model_selector, "_list_registered_models", _fake_registered_models)
     monkeypatch.setattr(model_selector, "_stream_codex_relay", _fake_codex_stream)
+    # Gemini/DeepSeek 금지는 LiteLLM 경로에 적용하며 AGY CLI는 별도다.
+    monkeypatch.setattr(model_selector, "_stream_antigravity_relay", lambda *a, **k: _agy_failure())
     monkeypatch.setattr(model_selector, "_stream_cli_relay", _fake_cli_stream)
 
     events = [
@@ -1419,6 +1435,8 @@ async def test_call_stream_stops_before_gemini_deepseek_when_gpt_56_and_claude_f
     monkeypatch.setattr(model_selector, "get_available_model_ids", _fake_available_models)
     monkeypatch.setattr(model_selector, "_list_registered_models", _fake_registered_models)
     monkeypatch.setattr(model_selector, "_stream_codex_relay", _fake_codex_stream)
+    # Gemini/DeepSeek 금지는 LiteLLM 경로에 적용하며 AGY CLI는 별도다.
+    monkeypatch.setattr(model_selector, "_stream_antigravity_relay", lambda *a, **k: _agy_failure())
     monkeypatch.setattr(model_selector, "_stream_cli_relay", _fake_cli_stream)
     monkeypatch.setattr(model_selector, "_stream_litellm", _fake_litellm_stream)
 
@@ -1601,3 +1619,7 @@ async def test_stream_cli_relay_retries_same_model_before_returning_done(monkeyp
     assert len(attempts) == 2
     assert attempts[1][-1]["role"] == "user"
     assert "직전 Claude CLI 응답이 연결 문제로 중단되었습니다" in attempts[1][-1]["content"]
+
+
+async def _agy_failure():
+    yield {"type": "error", "content": "AGY unavailable"}
