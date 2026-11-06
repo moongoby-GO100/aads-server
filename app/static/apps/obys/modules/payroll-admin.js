@@ -406,6 +406,7 @@
         ? `${{monthly:"월정액 · 계약 금액",lump:"건별 · 확인한 지급액"}[active.settlement_basis.fee_basis] || "확인한 지급액"} ${money(active.settlement_basis.confirmed_amount)} · 용역기간 ${active.settlement_basis.period_start} ~ ${active.settlement_basis.period_end} · ${active.settlement_basis.scope || "업무범위는 계약 확인"}`
         : active?.attendance_basis
         ? `승인 근태 ${active.attendance_basis.approved_days}일 · ${active.attendance_basis.approved_minutes}분 기준`
+          + (Number(active.attendance_basis.default_present_days) > 0 ? ` · 출근(기본) ${active.attendance_basis.default_present_days}일(${(active.attendance_basis.default_present_dates || []).join(", ")})` : "")
         : active?.source_contract_id ? "서명 계약서 기준값 적용" : "계약·근태 기준값을 조회하거나 금액을 확인해 입력하세요.";
       showLaborRisk();
       totals();restoreButtons();

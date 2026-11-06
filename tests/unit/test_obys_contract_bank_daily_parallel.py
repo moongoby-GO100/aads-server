@@ -33,6 +33,7 @@ def test_attendance_daily_unique_dates_and_hourly_regression(monkeypatch, wage_t
         {"id": "next-day", "work_date": "2026-11-02", "worked_minutes": 360, "status": "approved"},
     ]
     monkeypatch.setattr(svc, "_payroll_attendance_rows", lambda *args: rows)
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", lambda *a: [])
     monkeypatch.setattr(svc, "_save_payroll_record", lambda request, user, server_fields: ({**request, **server_fields}, True))
     monkeypatch.setattr(svc, "_audit_payroll", lambda *args: True)
     result = svc.payroll_draft_from_attendance({"payroll_month": "2026-11", "employee_request_id": "join-fixture"}, user)

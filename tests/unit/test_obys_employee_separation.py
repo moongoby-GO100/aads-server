@@ -240,6 +240,7 @@ def test_post_separation_attendance_rows_excluded(monkeypatch, kind):
     monkeypatch.setattr(svc, "_payroll_attendance_rows", lambda *args: [
         {"id": "before", "work_date": "2026-11-05", "status": "approved", "worked_minutes": 60},
         {"id": "after", "work_date": "2026-11-06", "status": "pending", "worked_minutes": 120}])
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", lambda *a: [])
     captured = {}
     def save(payload, user, **kwargs):
         captured.update(payload=payload, **kwargs)
@@ -309,3 +310,86 @@ def test_separation_gate_exact_methods_and_paths():
         assert _is_tenant_scoped_path(base + suffix, method)
         assert not _is_tenant_scoped_path(base + suffix + "/extra", method)
         assert not _is_tenant_scoped_path(base + suffix, "DELETE")
+
+
+# ── 근무표 기본 출근(출근(기본))이 급여 초안·퇴사 규칙과 맞물리는지 ──
+from datetime import time as _time
+
+
+def _sched(day, start=(9, 0), end=(18, 0), brk=60):
+    return {"work_date": date.fromisoformat(day), "start_time": _time(*start), "end_time": _time(*end),
+            "break_minutes": brk, "kind": "work"}
+
+
+def _use_default_schedules(monkeypatch, schedules, attendance):
+    real = svc._payroll_default_present_rows
+
+    def default_rows(*args):
+        # 근무표 조회 구간에서만 DB 가 열려 있는 것처럼 둔다(직원 조회 등 다른 경로는 파일 원장 유지).
+        with monkeypatch.context() as scope:
+            scope.setattr(svc, "_db_available", lambda: True)
+            scope.setattr(svc, "_db_fetch_payroll_schedules", lambda *a: None)
+            scope.setattr(svc, "_run_db", lambda coro: schedules)
+            return real(*args)
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", default_rows)
+    monkeypatch.setattr(svc, "_payroll_attendance_rows", lambda *a: attendance)
+    captured = {}
+
+    def save(payload, user, **kwargs):
+        captured.update(payload=payload, **kwargs)
+        return {"id": "payroll"}, None
+    monkeypatch.setattr(svc, "_save_payroll_record", save)
+    monkeypatch.setattr(svc, "_audit_payroll", lambda *args: None)
+    return captured
+
+
+@pytest.mark.parametrize("kind", ["regular", "freelancer"])
+def test_default_present_after_last_work_date_excluded(monkeypatch, kind):
+    svc._write("contracts", [contract(contract_type=kind, wage_type="hourly", fee_basis="hourly" if kind == "freelancer" else "")])
+    separate()  # 마지막 근무일 2026-11-05
+    captured = _use_default_schedules(monkeypatch, [_sched("2026-11-04"), _sched("2026-11-05"), _sched("2026-11-06")], [])
+    svc.payroll_draft_from_attendance({"employee_request_id": "join", "payroll_month": "2026-11"}, ADMIN)
+    basis = captured["server_fields"]["attendance_basis"]
+    assert basis["default_present_days"] == 2
+    assert basis["default_present_dates"] == ["2026-11-04", "2026-11-05"]
+    assert basis["approved_minutes"] == 960 and captured["payload"]["gross_pay"] == 192000
+    assert basis["record_ids"] == []
+
+
+def test_manual_absence_excludes_whole_day_and_real_rows_block_default(monkeypatch):
+    captured = _use_default_schedules(
+        monkeypatch, [_sched("2026-11-02"), _sched("2026-11-03"), _sched("2026-11-04")],
+        [{"id": "abs", "work_date": "2026-11-03", "status": "rejected", "memo": "결근(대표 확인)", "worked_minutes": 0},
+         {"id": "same-day", "work_date": "2026-11-03", "status": "approved", "worked_minutes": 60},
+         {"id": "real", "work_date": "2026-11-04", "status": "approved", "worked_minutes": 120}])
+    svc.payroll_draft_from_attendance({"employee_request_id": "join", "payroll_month": "2026-11"}, ADMIN)
+    basis = captured["server_fields"]["attendance_basis"]
+    assert basis["default_present_dates"] == ["2026-11-02"]  # 11-03 결근 지정, 11-04 는 실제 기록
+    assert basis["approved_minutes"] == 480 + 120 and basis["record_ids"] == ["real"]
+    assert basis["approved_days"] == 2
+
+
+def test_month_of_only_absences_still_refuses_zero_draft(monkeypatch):
+    _use_default_schedules(monkeypatch, [_sched("2026-11-02")],
+                           [{"id": "abs", "work_date": "2026-11-02", "status": "rejected", "memo": "결근(대표 확인)"}])
+    with pytest.raises(HTTPException) as exc:
+        svc.payroll_draft_from_attendance({"employee_request_id": "join", "payroll_month": "2026-11"}, ADMIN)
+    assert exc.value.status_code == 409 and "확정된 근태가 없어" in exc.value.detail
+
+
+def test_payroll_default_dates_match_schedule_judgment(monkeypatch):
+    separate()
+    schedules = [_sched("2026-11-02"), _sched("2026-11-03"), _sched("2026-11-04"), _sched("2026-11-06")]
+    captured = _use_default_schedules(
+        monkeypatch, schedules,
+        [{"id": "abs", "work_date": "2026-11-03", "status": "rejected", "memo": "결근(대표 확인)"}])
+    svc.payroll_draft_from_attendance({"employee_request_id": "join", "payroll_month": "2026-11"}, ADMIN)
+    basis = captured["server_fields"]["attendance_basis"]
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, 11, 7, 12, tzinfo=ZoneInfo("Asia/Seoul"))
+    shown = [s["work_date"].isoformat() for s in schedules if workspace.attendance_schedule_judgment(
+        {**s, "actual_records": [{"status": "rejected", "memo": "결근(대표 확인)", "work_date": "2026-11-03"}]
+         if s["work_date"].isoformat() == "2026-11-03" else []},
+        now=now, last_work_date="2026-11-05")["labels"] == ["출근(기본)"]]
+    assert shown == basis["default_present_dates"] == ["2026-11-02", "2026-11-04"]

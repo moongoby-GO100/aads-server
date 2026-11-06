@@ -18,9 +18,8 @@ def test_absence_labels_and_status_wiring_are_static():
     for label in ("결근으로 변경", "출근으로 되돌리기", "출근으로 처리"):
         assert label in html
     assert "위치기반 출퇴근이 안정화될 때까지 결근은 수기로 확인·수정합니다." in html
-    assert 'status=act==="mark-absent"?"rejected":"approved"' in html
-    assert '"결근(대표 확인)"' in html and '"출근(수기 확인)"' in html
-    assert 'method:rec?"PUT":"POST"' in html
+    # 정책 변경(재제출 5): 결근·복원 판정은 서버가 한다. 화면은 이메일·날짜·동작만 /attendance/absence 로 보낸다.
+    assert "/attendance/absence" in html and "employee_email:email,work_date:day,action:act" in html
     assert "data-absence-action" in html and "min-height:44px" in html
     assert 'section("근무일정 · 출근/결근 수동 처리 — 달력에서도 처리할 수 있습니다"' in html
 
@@ -42,7 +41,7 @@ def test_absence_buttons_render_and_call_api(tmp_path):
                 "function payrollDisplayV41(", "function attendanceStatusV41(",
                 "function attendanceReviewV41(", "function attendanceMinutesV41(",
                 "function displayDateV41(", "function attendanceTimeV41(", "function attendanceDisplayV41(", "function liveRow(", "function filteredRows(c)",
-                "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(",
+                "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(", "function employmentMatchV41(",
                 "function workSchedulePanelV41(")
     helpers = "\n".join(next(line.strip() for line in html.splitlines() if line.strip().startswith(p)) for p in prefixes)
     renderer = "function renderPeopleV41(c){" + html.split("function renderPeopleV41(c){", 1)[1].split("function renderPageV41(){", 1)[0]
@@ -61,7 +60,7 @@ async function workspaceApi(path,opt){calls.push([path,opt]);}
 function showToast(m){toasts.push(m)};let confirms=[];global.confirm=m=>{confirms.push(m);return true};
 ''' + helpers + renderer + '''
 const sch=(d,extra={})=>({employee_key:'k@x.test',employee_email:'k@x.test',employee_name:'김직원',work_date:d,kind:'work',start_time:'09:00:00',end_time:'18:00:00',break_minutes:60,judgment:{status:'정상'},...extra});
-state.workSchedules={month:{rows:[sch('2026-10-01'),sch('2026-10-02',{judgment:{status:'결근'}}),sch('2026-10-03',{judgment:{status:'결근'}}),sch('2026-10-31'),sch('2026-10-05',{kind:'off'})],counts:{}},today:{rows:[],counts:{}}};
+state.workSchedules={month:{rows:[sch('2026-10-01'),sch('2026-10-02',{judgment:{status:'결근'}}),sch('2026-10-03',{judgment:{status:'결근'}}),sch('2026-10-31'),sch('2026-10-05',{kind:'off'}),sch('2026-10-06',{judgment:{status:'출근(기본)',labels:['출근(기본)'],default_present:true},default_present:true,action_record:null}),sch('2026-10-07',{judgment:{status:'결근',labels:['결근']},action_record:{id:'m1',status:'rejected',memo:'결근(대표 확인)',start_at:'09:00:00',end_at:'18:00:00',break_minutes:60,hourly_wage:0,employee_name:'김직원'}})],counts:{'출근(기본)':1}},today:{rows:[sch('2026-10-30',{judgment:{status:'출근(기본)',labels:['출근(기본)'],default_present:true},default_present:true,action_record:null})],counts:{'출근':1}}};
 const rec=(id,d,status)=>liveRow({id,employee_key:'k@x.test',raw:{id,employee_name:'김직원',employee_email:'k@x.test',work_date:d,start_at:'09:00:00',end_at:'18:00:00',break_minutes:60,hourly_wage:10000,status,branch:'본점'},display:{직원:'김직원',일자:d}},configs.attendance);
 configs.attendance.data=[rec('r1','2026-10-01','approved'),rec('r2','2026-10-02','rejected')];
 renderPeopleV41(configs.attendance);
@@ -77,8 +76,12 @@ assert.equal(attendanceTimeV41('2027-01-01T00:30:00'),'2027-01-01 (금) 00:30');
 assert(html.includes('결근으로 변경'));assert(html.includes('출근으로 되돌리기'));assert(html.includes('출근으로 처리'));
 assert(html.includes('위치기반 출퇴근이 안정화될 때까지'));
 assert(!html.includes('data-absence-day="2026-10-31"'));assert(!html.includes('data-absence-day="2026-10-05"'));
-const mk=(action,day,id)=>({dataset:{absenceAction:action,absenceDay:day,recordId:id},disabled:false});
-buttons=[mk('mark-absent','2026-10-01','r1'),mk('restore-present','2026-10-02','r2'),mk('mark-present','2026-10-03','')];
+assert(/data-absence-action="mark-absent"[^>]*data-absence-day="2026-10-06"/.test(html));
+assert(/data-absence-action="restore-present"[^>]*data-absence-day="2026-10-07"[^>]*data-employee-email="k@x.test"/.test(html));
+assert(!html.includes('data-record-id'));
+assert(html.includes('data-business="b1"'));
+const mk=(action,day)=>({dataset:{absenceAction:action,absenceDay:day,employeeEmail:'k@x.test',business:'b1'},disabled:false});
+buttons=[mk('mark-absent','2026-10-01'),mk('restore-present','2026-10-02'),mk('mark-present','2026-10-03')];
 renderPeopleV41(configs.attendance);
 (async()=>{
  assert.equal(mounts.length,2);assert.equal(hosts.length,2);
@@ -86,12 +89,22 @@ renderPeopleV41(configs.attendance);
  assert.equal(calls.length,3);assert.equal(reloads,3);assert.equal(toasts.length,0);
  assert(confirms[0].includes('2026-10-01')&&confirms[0].includes('김직원'));
  const body=i=>JSON.parse(calls[i][1].body);
- assert.equal(calls[0][1].method,'PUT');assert(calls[0][0].endsWith('/attendance/records/r1'));
- assert.equal(body(0).status,'rejected');assert.equal(body(0).memo,'결근(대표 확인)');assert.equal(body(0).start_at,'09:00');assert.equal(body(0).hourly_wage,10000);
- assert.equal(calls[1][1].method,'PUT');assert.equal(body(1).status,'approved');
- assert.equal(calls[2][1].method,'POST');assert(calls[2][0].endsWith('/attendance/records'));
- assert.equal(body(2).status,'approved');assert.equal(body(2).memo,'출근(수기 확인)');assert.equal(body(2).end_at,'18:00');assert.equal(body(2).break_minutes,60);assert.equal(body(2).employee_email,'k@x.test');
- state.readRole='member';renderPeopleV41(configs.attendance);assert(!page.innerHTML.includes('결근으로 변경'));assert.equal(mounts.length,2);assert.equal(hosts.length,2);
+ // 화면은 기록 ID 를 판정하지 않는다 — 세 동작 모두 서버 한 엔드포인트로 (이메일, 날짜, 동작)만 보낸다
+ for(let i=0;i<3;i++){assert.equal(calls[i][1].method,'POST');assert(calls[i][0].endsWith('/attendance/absence'),calls[i][0]);assert.deepEqual(Object.keys(body(i)).sort(),['action','employee_email','work_date']);assert.equal(body(i).employee_email,'k@x.test')}
+ assert.deepEqual([0,1,2].map(i=>body(i).action),['mark-absent','restore-present','mark-present']);
+ assert.deepEqual([0,1,2].map(i=>body(i).work_date),['2026-10-01','2026-10-02','2026-10-03']);
+ calls.length=0;reloads=0;
+ const dm=(action,day,extra={})=>({dataset:{absenceAction:action,absenceDay:day,employeeEmail:'k@x.test',business:'b1',...extra},disabled:false});
+ // 그린 시점과 다른 사업자면 API 를 부르지 않는다
+ calls.length=0;const stale=dm('mark-absent','2026-10-06',{business:'other'});buttons=[stale];renderPeopleV41(configs.attendance);await stale.onclick();
+ assert.equal(calls.length,0);assert(toasts.at(-1).includes('사업자가 바뀌어'));
+ // 오늘 현황판 · 직원별 현황 에서도 같은 버튼이 보인다
+ state.peopleTab='today';renderPeopleV41(configs.attendance);
+ assert(/data-absence-action="mark-absent"[^>]*data-absence-day="2026-10-30"/.test(page.innerHTML));
+ state.peopleTab='employees';renderPeopleV41(configs.attendance);
+ assert(/data-absence-action="restore-present"[^>]*data-absence-day="2026-10-07"/.test(page.innerHTML));
+ state.peopleTab='detail';toasts.length=0;
+ const m0=mounts.length,h0=hosts.length;state.readRole='member';renderPeopleV41(configs.attendance);assert(!page.innerHTML.includes('결근으로 변경'));assert.equal(mounts.length,m0);assert.equal(hosts.length,h0);
 })().catch(e=>{console.error(e);process.exit(1)});
 ''')
     result = subprocess.run(["node", str(script)], capture_output=True, text=True)
@@ -128,11 +141,13 @@ def test_restoring_manual_absence_and_mixed_records():
     absence = {**_record("rejected"), "memo": "결근(대표 확인)"}
     restored = {**absence, "status": "approved", "memo": "출근(수기 확인)"}
     assert api.attendance_schedule_judgment(_schedule(), restored, now=NOW)["status"] == "정상"
+    # 복원은 같은 기록을 갱신하므로 결근 기록이 남은 채 정상 기록이 함께 있으면 수동 결근이 그날 전체에 적용된다
+    # (급여 초안이 absent_days 로 날짜 전체를 빼는 것과 같은 규칙 — 리뷰 지적 1).
     for records in ([absence, restored], [restored, absence]):
-        assert api.attendance_schedule_judgment(_schedule(), records, now=NOW)["status"] == "정상"
+        assert api.attendance_schedule_judgment(_schedule(), records, now=NOW)["status"] == "결근"
 
 
-@pytest.mark.parametrize("day,status", [("2026-10-10", "확인필요"), ("2026-10-30", "미출근"), ("2026-10-31", "예정")])
+@pytest.mark.parametrize("day,status", [("2026-10-10", "출근(기본)"), ("2026-10-30", "출근(기본)"), ("2026-10-31", "예정")])
 def test_no_record_does_not_automatically_become_absent(day, status):
     assert api.attendance_schedule_judgment({**_schedule(), "work_date": day}, now=NOW)["status"] == status
 
@@ -148,7 +163,8 @@ async def test_schedule_query_keeps_explicit_absence():
     connection.fetch.return_value = [record]
     grouped = await api._schedule_actual_records(connection, "b1", [record])
     sql = connection.fetch.call_args.args[0]
-    assert "a.status <> 'rejected' OR a.memo = '결근(대표 확인)'" in sql
+    # 수동 결근뿐 아니라 일반 반려도 판정 입력에 남긴다(runner-be4aa6f8 지적 P2) — 상태 필터 없음
+    assert "a.status <> 'rejected'" not in sql
     assert "a.business_id=$1 AND a.deleted_at IS NULL" in sql
     assert api.attendance_schedule_judgment(_schedule(), next(iter(grouped.values())), now=NOW)["status"] == "결근"
 
@@ -166,6 +182,7 @@ async def test_schedule_list_counts_manual_absence_without_check_in(monkeypatch)
     monkeypatch.setattr(api.upload_svc, "_tenant", lambda user: "tenant")
     monkeypatch.setattr(api.upload_svc, "_connect", AsyncMock(return_value=connection))
     monkeypatch.setattr(api, "_legacy_people_rows", AsyncMock(return_value=[]))
+    monkeypatch.setattr(api.finance_svc, "separated_last_work_dates", lambda *a: {})
     result = await api.list_work_schedules("b1", date_from="2026-10-10", date_to="2026-10-10",
                                            employee_email=None, offset=0, current_user={})
     assert result["schedules"][0]["judgment"]["status"] == "결근"

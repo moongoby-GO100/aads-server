@@ -6,6 +6,10 @@ from app.services import obys_contract_clauses  # noqa: F401
 from app.services import yeoljeong_contract_pdf as pdf
 from app.services import yeoljeong_finance_service as svc
 
+
+def _no_default_rows(*_args, **_kwargs):
+    return []
+
 BASE = dict(
     contract_type="freelancer", employment_tax_type="freelancer_33", wage_type="hourly", wage=13000,
     employee_request_id="req", business_id="biz", branch="시험점", employee_name="가상직원",
@@ -63,6 +67,7 @@ def test_attendance_draft_withholding_600_minutes(monkeypatch):
         "contract_id": "c1", "employment": {"contract_type": "freelancer", "wage_type": "hourly", "wage": 13000}})
     monkeypatch.setattr(svc, "_payroll_attendance_rows", lambda *a: [
         {"id": "a1", "work_date": "2026-11-02", "worked_minutes": 600, "status": "approved"}])
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", lambda *a: [])
     captured = {}
 
     def fake_save(request, user, server_fields):
@@ -102,6 +107,7 @@ def _run_draft(monkeypatch, existing):
         "contract_id": "c1", "employment": {"contract_type": "freelancer", "wage_type": "hourly", "wage": 13000}})
     monkeypatch.setattr(svc, "_payroll_attendance_rows", lambda *a: [
         {"id": "a1", "work_date": "2026-11-02", "worked_minutes": 600, "status": "approved"}])
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", _no_default_rows)
     captured = {}
 
     def fake_save(request, user, server_fields):

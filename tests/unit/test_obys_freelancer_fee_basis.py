@@ -255,6 +255,7 @@ def _rows(*items):
 def test_hourly_uses_attendance_minutes_with_33_withholding_only(monkeypatch):
     sign(freelancer("hourly", 12500))
     monkeypatch.setattr(svc, "_payroll_attendance_rows", _rows({"work_date": "2026-11-02", "worked_minutes": 600}))
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", lambda *a: [])
     draft = svc.payroll_draft_from_attendance(
         {"payroll_month": "2026-11", "employee_request_id": "join-mia", "business_id": "biz-mia"}, ADMIN)
     assert draft["gross_pay"] == 125000
@@ -271,6 +272,7 @@ def test_daily_uses_distinct_approved_days(monkeypatch):
     monkeypatch.setattr(svc, "_payroll_attendance_rows", _rows(
         {"work_date": "2026-11-02", "worked_minutes": 300}, {"work_date": "2026-11-02", "worked_minutes": 120},
         {"work_date": "2026-11-03", "worked_minutes": 480}))
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", lambda *a: [])
     draft = svc.payroll_draft_from_attendance(
         {"payroll_month": "2026-11", "employee_request_id": "join-mia", "business_id": "biz-mia"}, ADMIN)
     assert draft["gross_pay"] == 160000
@@ -281,6 +283,7 @@ def test_daily_uses_distinct_approved_days(monkeypatch):
 def test_legacy_hourly_signed_contract_still_computes_from_attendance(monkeypatch):
     make_legacy(sign(freelancer("hourly", 13000))["contract"]["id"])
     monkeypatch.setattr(svc, "_payroll_attendance_rows", _rows({"work_date": "2026-11-02", "worked_minutes": 600}))
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", lambda *a: [])
     draft = svc.payroll_draft_from_attendance(
         {"payroll_month": "2026-11", "employee_request_id": "join-mia", "business_id": "biz-mia"}, ADMIN)
     assert draft["gross_pay"] == 130000 and draft["tax_withholding"] == 4290
@@ -319,6 +322,7 @@ def test_attendance_bases_do_not_take_contract_amount(basis):
 def test_attendance_draft_refuses_monthly_and_lump(monkeypatch):
     sign(freelancer("monthly", 2000000))
     monkeypatch.setattr(svc, "_payroll_attendance_rows", _rows({"work_date": "2026-11-02", "worked_minutes": 600}))
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", lambda *a: [])
     with pytest.raises(HTTPException) as exc:
         svc.payroll_draft_from_attendance(
             {"payroll_month": "2026-11", "employee_request_id": "join-mia", "business_id": "biz-mia"}, ADMIN)

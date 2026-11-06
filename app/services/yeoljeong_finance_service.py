@@ -11504,7 +11504,7 @@ async def _db_fetch_payroll_attendance(business_id: str, employee_email: str, fi
     conn = await asyncpg.connect(_db_url(), timeout=5)
     try:
         rows = await conn.fetch(
-            "SELECT id, work_date, worked_minutes, hourly_wage, status, check_in_at, check_out_at FROM yeoljeong_attendance_records "
+            "SELECT id, work_date, worked_minutes, hourly_wage, status, memo, check_in_at, check_out_at FROM yeoljeong_attendance_records "
             "WHERE business_id = $1 AND employee_email = $2 AND work_date >= $3 AND work_date < $4 AND deleted_at IS NULL "
             "ORDER BY work_date, start_at",
             business_id, employee_email, first_day, next_first_day,
@@ -11512,6 +11512,61 @@ async def _db_fetch_payroll_attendance(business_id: str, employee_email: str, fi
         return [dict(row) for row in rows]
     finally:
         await conn.close()
+
+
+async def _db_fetch_payroll_schedules(business_id: str, employee_email: str, first_day: date, next_first_day: date) -> list[dict[str, Any]]:
+    import asyncpg
+
+    conn = await asyncpg.connect(_db_url(), timeout=5)
+    try:
+        rows = await conn.fetch(
+            "SELECT work_date, start_time, end_time, break_minutes, kind FROM yeoljeong_work_schedules "
+            "WHERE business_id = $1 AND employee_email = $2 AND work_date >= $3 AND work_date < $4 "
+            "AND deleted_at IS NULL AND kind = 'work' ORDER BY work_date",
+            business_id, employee_email, first_day, next_first_day,
+        )
+        return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+def separated_last_work_dates(user: dict[str, Any], business_id: str) -> dict[str, str]:
+    """사업자의 퇴사 처리된 승인 직원의 {이메일(소문자): 마지막 근무일}. 읽지 못하면 예외를 그대로 올린다."""
+    result: dict[str, str] = {}
+    if _db_available():
+        # _read_hr 는 DB 실패를 빈 목록으로 삼키므로 직접 조회해 실패를 드러낸다.
+        fetched = _run_db(_db_fetch_ledger("employee_join_requests", _tenant_id(user)))
+        if not isinstance(fetched, list):
+            raise RuntimeError("직원 퇴사 정보를 읽을 수 없습니다")
+        hr_rows = fetched
+    else:
+        hr_rows = _read_hr("employee_join_requests", user)
+    for row in hr_rows:
+        if (row.get("status") == "approved" and row.get("employment_status") == "separated"
+                and not row.get("deleted_at") and row.get("last_work_date") and _row_in_business(row, business_id)):
+            result[str(row.get("email") or "").strip().lower()] = str(row["last_work_date"])[:10]
+    return result
+
+
+def _payroll_default_present_rows(business_id: str, employee_email: str, month: str, employee: dict[str, Any],
+                                  attendance: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """근무표만 있고 기록이 없는 지난 근무일을 '출근(기본)' 행으로 만든다(결근 지정일·퇴사 이후 제외)."""
+    from app.services import obys_attendance_default as default_present
+
+    year, mon = int(month[:4]), int(month[5:7])
+    first_day = date(year, mon, 1)
+    next_first_day = date(year + (mon == 12), mon % 12 + 1, 1)
+    schedules = _run_db(_db_fetch_payroll_schedules(business_id, employee_email, first_day, next_first_day)) if _db_available() else None
+    if not isinstance(schedules, list):
+        raise HTTPException(status_code=503, detail="근무표 저장소를 읽을 수 없어 급여 초안을 만들 수 없습니다")
+    taken = {str(row.get("work_date"))[:10] for row in attendance}
+    last_work_date = employee.get("last_work_date") if employee.get("employment_status") == "separated" else None
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    return [default_present.default_present_record(schedule) for schedule in schedules
+            if str(schedule.get("work_date"))[:10] not in taken
+            and default_present.default_present_applies(schedule, now, last_work_date)]
 
 
 def _payroll_attendance_rows(business_id: str, employee_email: str, month: str) -> list[dict[str, Any]]:
@@ -11655,6 +11710,11 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
 
     attendance = [row for row in _payroll_attendance_rows(business_id, email, month)
                   if employee_work_date_allowed(employee, row.get("work_date", ""))]
+    # 대표가 결근으로 지정한 날은 그날의 모든 기록을 급여에서 뺀다.
+    absent_days = {str(row.get("work_date"))[:10] for row in attendance
+                   if str(row.get("status") or "").strip().lower() == "rejected" and row.get("memo") == "결근(대표 확인)"}
+    attendance_all = attendance
+    attendance = [row for row in attendance if str(row.get("work_date"))[:10] not in absent_days]
     incomplete = [row for row in attendance if row.get("check_in_at") and not row.get("check_out_at")
                   and str(row.get("status") or "").strip().lower() != "rejected"]
     if incomplete:
@@ -11663,9 +11723,12 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
     unconfirmed = [row for row in attendance if str(row.get("status") or "").strip().lower() not in {"approved", "rejected"}]
     if unconfirmed:
         raise HTTPException(status_code=409, detail=f"확정되지 않은 근태 {len(unconfirmed)}건이 남아 있어 급여 초안을 만들 수 없습니다")
-    worked = [row for row in approved if int(row.get("worked_minutes") or 0) > 0]
+    default_rows = _payroll_default_present_rows(business_id, email, month, employee, attendance_all)
+    worked = [row for row in approved if int(row.get("worked_minutes") or 0) > 0] + \
+        [row for row in default_rows if int(row.get("worked_minutes") or 0) > 0]
     if not worked:
         raise HTTPException(status_code=409, detail="확정된 근태가 없어 급여 초안을 만들 수 없습니다")
+    real_worked = [row for row in worked if not row.get("default_present")]
 
     minutes = sum(int(row["worked_minutes"]) for row in worked)
     days = len({str(row.get("work_date")) for row in worked})
@@ -11676,8 +11739,10 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         "rate": rate,
         "approved_minutes": minutes,
         "approved_days": days,
-        "record_ids": [str(row.get("id")) for row in worked],
-        "rate_mismatch_records": sum(1 for row in worked if wage_type == "hourly" and int(row.get("hourly_wage") or 0) not in (0, rate)),
+        "record_ids": [str(row.get("id")) for row in real_worked],
+        "default_present_days": len(default_rows),
+        "default_present_dates": sorted(str(row["work_date"]) for row in default_rows),
+        "rate_mismatch_records": sum(1 for row in real_worked if wage_type == "hourly" and int(row.get("hourly_wage") or 0) not in (0, rate)),
         "generated_at": _now(),
     }
     existing = [

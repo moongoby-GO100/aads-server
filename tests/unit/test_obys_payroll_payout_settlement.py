@@ -417,6 +417,7 @@ def test_attendance_draft_gets_settlement_once_and_tax_ignores_it(monkeypatch, c
     monkeypatch.setattr(svc, "_require_business_for_tenant", lambda business, user: business)
     monkeypatch.setattr(svc, "_payroll_attendance_rows", lambda *a: [
         {"id": "a1", "work_date": "2026-11-02", "worked_minutes": 30000, "status": "approved"}])
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", lambda *a: [])
     request = {"payroll_month": NEXT, "employee_request_id": "join-1", "business_id": "biz-1"}
     first = svc.payroll_draft_from_attendance(request, ADMIN)
     second = svc.payroll_draft_from_attendance(request, ADMIN)  # 재생성해도 회수 항목과 기타 공제가 불어나지 않는다

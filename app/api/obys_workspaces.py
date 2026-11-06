@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from app.api import acct_purchase, acct_source_ledger, acct_source_documents
 from app.auth import get_current_user
+from app.services import obys_attendance_default as attendance_default
 from app.services import obys_upload_service as upload_svc
 from app.services import yeoljeong_finance_service as finance_svc
 
@@ -1244,17 +1245,24 @@ async def _attendance_schedule_matches(business_id, records):
         await connection.close()
 
 
+# 근무일 판정(attendance_schedule_judgment)이 읽는 근태 컬럼. 목록 API 와 결근 API 가 같은 상수를 쓴다.
+# check_in_at·check_out_at 을 빠뜨리면 퇴근까지 끝난 PWA 기록이 '퇴근누락'으로 오판된다.
+ATTENDANCE_JUDGMENT_COLUMNS = "a.*"
+
+
 async def _schedule_actual_records(connection, business_id, schedules):
+    # 일반 반려 행도 돌려준다. 판정(attendance_schedule_judgment)은 blocks_default_present 로 '확인필요'를 주고,
+    # _schedule_day_record 는 일반 반려를 실근무로 세지 않는다. 빼면 급여 초안(기본 출근 차단)과 화면이 어긋난다.
     keys = set(_schedule_record_key(r) for r in schedules)
     if not keys:
         return {}
-    rows = await connection.fetch("""WITH ranked AS (
-        SELECT a.*, row_number() OVER (PARTITION BY lower(a.employee_email), a.work_date
+    rows = await connection.fetch(f"""WITH ranked AS (
+        SELECT {ATTENDANCE_JUDGMENT_COLUMNS}, row_number() OVER (PARTITION BY lower(a.employee_email), a.work_date
           ORDER BY a.start_at) AS schedule_rank
         FROM yeoljeong_attendance_records a
         JOIN jsonb_to_recordset($2::jsonb) AS k(email text, day date)
           ON a.work_date=k.day AND lower(a.employee_email)=k.email
-        WHERE a.business_id=$1 AND a.deleted_at IS NULL AND (a.status <> 'rejected' OR a.memo = '결근(대표 확인)')
+        WHERE a.business_id=$1 AND a.deleted_at IS NULL
     ) SELECT * FROM ranked WHERE schedule_rank<=500""", business_id,
         json.dumps([{"email": email, "day": day} for email, day in keys]))
     grouped = {}
@@ -1366,8 +1374,9 @@ def _schedule_day_record(records):
     return result
 
 
-def attendance_schedule_judgment(schedule, record=None, *, now=None):
+def attendance_schedule_judgment(schedule, record=None, *, now=None, last_work_date=None):
     source = (schedule or {}).get("actual_records") or record
+    source_rows = source if isinstance(source, list) else [source] if source else []
     record = _schedule_day_record(source if isinstance(source, list) else [source] if source else [])
     now = now or datetime.now(ZoneInfo("Asia/Seoul"))
     today = now.astimezone(ZoneInfo("Asia/Seoul")).date()
@@ -1376,11 +1385,20 @@ def attendance_schedule_judgment(schedule, record=None, *, now=None):
         result["labels"] = ["일정없음"]
     elif schedule["kind"] != "work":
         result["labels"] = ["휴무"]
-    elif record.get("status") == "rejected" and record.get("memo") == "결근(대표 확인)":
+    elif (record.get("status") == "rejected" and record.get("memo") == "결근(대표 확인)") or \
+            any(attendance_default.is_manual_absence(row) for row in source_rows):
+        # 수동 결근은 같은 날의 정상 기록이 있어도 그날 전체에 적용한다(급여와 같은 규칙).
         result["labels"] = ["결근"]
     elif not record or not record.get("start_at"):
         day = date.fromisoformat(str(schedule["work_date"])[:10])
-        result["labels"] = ["확인필요" if day < today else "미출근" if day == today else "예정"]
+        if any(attendance_default.blocks_default_present(row) for row in source_rows):
+            result["labels"] = ["확인필요" if day < today else "미출근" if day == today else "예정"]
+        elif attendance_default.default_present_applies(schedule, now, last_work_date):
+            # 근무표만 있고 기록이 없으면 출근이 기본값이다. 결근은 대표가 바꾼 날만이다.
+            result["labels"] = [attendance_default.DEFAULT_PRESENT_LABEL]
+            result["default_present"] = True
+        else:
+            result["labels"] = ["예정"]
     elif record.get("check_in_at") and not record.get("check_out_at"):
         # start_at=end_at is the open-clock placeholder, never evidence of a completed shift.
         result["labels"] = ["확인필요", "퇴근누락"]
@@ -1491,6 +1509,19 @@ def _contract_schedule_difference(schedule, payload):
     return {"different": True, "contract": text, "message": "계약서 근로일과 근무표가 다릅니다"} if schedule["kind"] == "work" else None
 
 
+def _schedule_action_record(actual):
+    """결근 변경·복원 버튼이 갱신할 그날의 기록. 수동 결근 > 정상 기록 순서로 하나만 고른다."""
+    rows = [dict(r) for r in (actual if isinstance(actual, list) else [actual] if actual else []) if r]
+    # 수동 결근이 있으면 그날 전체가 결근이므로 복원 대상은 결근 기록이다.
+    pick = next((r for r in rows if attendance_default.is_manual_absence(r) and r.get("id")), None) or \
+        next((r for r in rows if r.get("status") != "rejected" and r.get("id")), None)
+    if not pick:
+        return None
+    return {key: _json_value(pick.get(key)) for key in
+            ("id", "status", "memo", "start_at", "end_at", "break_minutes", "hourly_wage", "employee_name",
+             "employee_email", "branch") if key in pick}
+
+
 @router.get("/{business_id}/attendance/schedules")
 async def list_work_schedules(
     business_id: str,
@@ -1528,6 +1559,13 @@ async def list_work_schedules(
     legacy_by_key = {}
     for record in legacy:
         legacy_by_key.setdefault(_schedule_record_key(record), []).append(record)
+    last_work_dates = {}
+    try:
+        if rows:
+            last_work_dates = await run_in_threadpool(finance_svc.separated_last_work_dates, current_user, business_id)
+    except Exception as exc:
+        # 퇴사일을 모르면 퇴사 이후 날짜에 기본 출근을 잘못 줄 수 있어 판정하지 않는다.
+        raise HTTPException(503, "직원 퇴사 정보를 읽을 수 없어 근태를 판정하지 못했습니다. 다시 시도하세요") from exc
     schedules = []
     counts = {}
     for row in rows[:1000]:
@@ -1536,10 +1574,14 @@ async def list_work_schedules(
         contract = _schedule_json(item.pop("contract_payload", None))
         day_record = _schedule_day_record(actual)
         item["employee_key"] = _employee_key(business["name"], day_record.get("employee_id"), item["employee_email"])
-        item["judgment"] = attendance_schedule_judgment(item, actual)
+        item["judgment"] = attendance_schedule_judgment(
+            item, actual, last_work_date=last_work_dates.get(str(item.get("employee_email") or "").strip().lower()))
         item["contract_difference"] = _contract_schedule_difference(item, contract)
-        item["has_check_in"] = bool(day_record.get("start_at")) and day_record.get("status") != "rejected"
-        if item["has_check_in"]:
+        item["has_check_in"] = bool(day_record.get("start_at")) and day_record.get("status") != "rejected" \
+            and "결근" not in item["judgment"]["labels"]
+        item["default_present"] = bool(item["judgment"].get("default_present"))
+        item["action_record"] = _schedule_action_record(actual)
+        if item["has_check_in"] or item["default_present"]:
             counts["출근"] = counts.get("출근", 0) + 1
         for label in item["judgment"]["labels"]:
             counts[label] = counts.get(label, 0) + 1
@@ -2104,6 +2146,211 @@ async def delete_attendance_record(
     finally:
         await connection.close()
     return {"deleted": True, "id": record_id}
+
+
+# ── 결근·복원 (서버 판정) ───────────────────────────────────────────────────
+# 화면은 기록 ID·동료 기록을 판정하지 않는다. (business_id, employee_email, work_date) 로
+# 이 함수가 DB 를 직접 읽어 한 트랜잭션에서 판정한다. 다른 직원 기록은 SQL 조건에서 배제된다.
+ABSENCE_DAY_ROWS_SQL = (
+    f"SELECT {ATTENDANCE_JUDGMENT_COLUMNS} FROM yeoljeong_attendance_records a"
+    " WHERE a.business_id=$1 AND lower(a.employee_email)=$2 AND a.work_date=$3 AND a.deleted_at IS NULL"
+    " ORDER BY a.start_at,a.id FOR UPDATE"
+)
+ABSENCE_SCHEDULE_DAY_SQL = (
+    "SELECT * FROM yeoljeong_work_schedules WHERE business_id=$1 AND lower(employee_email)=$2"
+    " AND work_date=$3 AND deleted_at IS NULL LIMIT 1"
+)
+ABSENCE_EMPLOYEE_SQL = (
+    "SELECT employee_email,employee_name,branch FROM yeoljeong_work_schedules"
+    " WHERE business_id=$1 AND lower(employee_email)=$2 AND deleted_at IS NULL"
+    " ORDER BY work_date DESC LIMIT 1"
+)
+# 근무표에 없는 직원은 직원 목록(승인된 합류 요청)에서 확인한다. 과거 근태 기록은 직원 증거로 쓰지 않는다.
+ABSENCE_EMPLOYEE_ROSTER_SQL = (
+    "SELECT employee_email,employee_name,branch FROM yeoljeong_employee_join_requests"
+    " WHERE business_id=$1 AND lower(employee_email)=$2 AND status='approved' AND deleted_at IS NULL"
+    " ORDER BY requested_at DESC LIMIT 1"
+)
+# 같은 (사업자, 직원, 날짜) 요청을 트랜잭션 끝까지 직렬화한다. 행이 없는 날은 FOR UPDATE 가 잠글 대상이 없어서 필요하다.
+ABSENCE_DAY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))"
+ABSENCE_SLOTS_SQL = (
+    "SELECT start_at FROM yeoljeong_attendance_records WHERE lower(employee_email)=$1 AND work_date=$2"
+)
+# $3 = 행의 created_at. 같은 ID 는 soft delete 후 되살아날 수 있어(created_at 이 갱신된다)
+# 현재 수명주기(created_at 이후)의 감사만 판정에 쓴다.
+ABSENCE_AUDITS_SQL = (
+    "SELECT action,details,created_at FROM yeoljeong_audit_logs WHERE business_id=$1 AND resource_type='attendance'"
+    " AND resource_id=$2 AND created_at>=$3"
+    " AND action IN (" + ",".join(f"'{a}'" for a in (*attendance_default.RESTORE_SOURCE_ACTIONS, "attendance.absence.mark")) + ")"
+    " ORDER BY created_at,id"
+)
+_ABSENCE_INSERT_SQL = (
+    "INSERT INTO yeoljeong_attendance_records"
+    " (business_id,employee_email,employee_email_masked,employee_name,branch,work_date,start_at,end_at,"
+    "break_minutes,worked_minutes,hourly_wage,source,status,memo,created_by,night_minutes)"
+    " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,'manual',$11,$12,$13,0)"
+    " RETURNING id"
+)
+# '출근으로 처리' 는 근무표 시각에 실제 기록을 둔다. 같은 키(이메일·사업자·날짜·시작시각)에 soft delete 행이
+# 있으면 기존 POST 처럼 되살리고(created_at=now() — 새 수명주기), 살아 있는 행과 겹치면 행을 돌려주지 않는다.
+# 지워진 행에 출퇴근 타각 증거(check_in_at·check_out_at·source='pwa')가 있으면 되살리지 않는다 — 위치 증거를
+# 덮어쓰지 않고, 남은 타각이 '퇴근누락' 판정·급여 초안 incomplete 를 만들지 않게 409 로 멈춘다.
+_ABSENCE_PRESENT_UPSERT_SQL = (
+    "INSERT INTO yeoljeong_attendance_records"
+    " (business_id,employee_email,employee_email_masked,employee_name,branch,work_date,start_at,end_at,"
+    "break_minutes,worked_minutes,hourly_wage,source,status,memo,created_by,night_minutes)"
+    " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,'manual',$11,$12,$13,0)"
+    " ON CONFLICT (employee_email,business_id,work_date,start_at) DO UPDATE SET"
+    " employee_email_masked=EXCLUDED.employee_email_masked, employee_name=EXCLUDED.employee_name,"
+    " branch=EXCLUDED.branch, end_at=EXCLUDED.end_at, break_minutes=EXCLUDED.break_minutes,"
+    " worked_minutes=EXCLUDED.worked_minutes, night_minutes=0, hourly_wage=0, source='manual',"
+    " status=EXCLUDED.status, memo=EXCLUDED.memo, created_by=EXCLUDED.created_by, confirmed_by='',"
+    " confirmed_at=NULL, created_at=now(), updated_at=now(), deleted_at=NULL"
+    " WHERE yeoljeong_attendance_records.deleted_at IS NOT NULL"
+    " AND yeoljeong_attendance_records.business_id=EXCLUDED.business_id"
+    " AND yeoljeong_attendance_records.check_in_at IS NULL AND yeoljeong_attendance_records.check_out_at IS NULL"
+    " AND yeoljeong_attendance_records.source IS DISTINCT FROM 'pwa'"
+    " RETURNING id"
+)
+ABSENCE_PRESENT_SLOT_TAKEN_DETAIL = "같은 시각에 다른 근태 기록이 있습니다. 근태 기록 수정에서 처리하세요"
+ABSENCE_ACTIONS = ("mark-absent", "restore-present", "mark-present")
+
+
+class AttendanceAbsenceIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    employee_email: str = Field(min_length=3, max_length=320)
+    work_date: str
+    action: Literal["mark-absent", "restore-present", "mark-present"]
+
+
+def _absence_judgment(schedule, rows, last_work_date):
+    """처리 후 그날의 judgment·action_record. 목록 API 와 같은 함수를 쓴다."""
+    # 일반 반려도 판정 입력에 넣는다 — blocks_default_present 가 '확인필요'로 막아야 급여 초안과 화면이 같다.
+    visible = [dict(r) for r in rows]
+    judgment = None
+    if schedule is not None:  # list_work_schedules 와 같은 호출 형태(스케줄, 실제 기록 목록)
+        judgment = attendance_schedule_judgment(dict(schedule), visible, last_work_date=last_work_date)
+    return {"judgment": judgment, "action_record": _schedule_action_record(visible)}
+
+
+async def apply_attendance_absence(connection, business_id: str, user: dict[str, Any], email: str,
+                                   day: date, action: str, last_work_date=None) -> dict[str, Any]:
+    """결근·복원 판정과 반영. 호출자가 트랜잭션을 연다."""
+    email = email.strip().lower()
+    employee = await connection.fetchrow(ABSENCE_EMPLOYEE_SQL, business_id, email) \
+        or await connection.fetchrow(ABSENCE_EMPLOYEE_ROSTER_SQL, business_id, email)
+    if employee is None:
+        raise HTTPException(status_code=404, detail="근무표·직원 목록에 없는 직원입니다")
+    stored_email = str(employee["employee_email"]).strip().lower()
+    await connection.execute(ABSENCE_DAY_LOCK_SQL, f"absence|{business_id}|{stored_email}|{day}")
+    schedule = await connection.fetchrow(ABSENCE_SCHEDULE_DAY_SQL, business_id, stored_email, day)
+    rows = [dict(r) for r in await connection.fetch(ABSENCE_DAY_ROWS_SQL, business_id, stored_email, day)]
+    absence_rows = [r for r in rows if attendance_default.is_manual_absence(r)]
+    changes: list[dict[str, Any]] = []
+    actor = upload_svc._actor(user)
+
+    async def classify(row):
+        # 현재 수명주기(행 created_at 이후)의 감사만 쓴다.
+        audits = [dict(a) for a in await connection.fetch(
+            ABSENCE_AUDITS_SQL, business_id, str(row["id"]), row.get("created_at"))]
+        return attendance_default.classify_absence_row(row, audits), audits
+
+    if action == "mark-absent":
+        if not absence_rows:  # 멱등 — 이미 표지가 있으면 만들지 않는다
+            taken = {str(r["start_at"])[:5] for r in await connection.fetch(ABSENCE_SLOTS_SQL, stored_email, day)}
+            base = (schedule["start_time"] if schedule is not None else time(9, 0))
+            minute = base.hour * 60 + base.minute
+            for step in range(1440):
+                slot = time(((minute + step) % 1440) // 60, ((minute + step) % 1440) % 60)
+                if slot.strftime("%H:%M") not in taken:
+                    break
+            else:
+                raise HTTPException(status_code=409, detail="결근 표지를 둘 시각이 없습니다")
+            local, _, domain = stored_email.partition("@")
+            new_id = await connection.fetchval(
+                _ABSENCE_INSERT_SQL, business_id, stored_email, f"{local[:1]}***@{domain}",
+                employee["employee_name"], employee["branch"] or "", day, slot, slot, 0,
+                0, "rejected", attendance_default.MANUAL_ABSENCE_MEMO, actor)
+            changes.append({"id": str(new_id), "kind": attendance_default.MARKER_KIND, "result": "inserted"})
+            await _attendance_audit(connection, business_id, user, "attendance.absence.mark", str(new_id),
+                                    {"kind": "absence_marker", "work_date": str(day), "employee_email": stored_email})
+    elif action == "restore-present" or (action == "mark-present" and absence_rows):
+        plans = []
+        for row in absence_rows:  # 먼저 전부 판정한다 — 하나라도 복원할 수 없으면 아무것도 바꾸지 않는다
+            kind, audits = await classify(row)
+            prev = None
+            if kind != attendance_default.MARKER_KIND:
+                prev = attendance_default.previous_values_before_absence(audits)
+                if prev is None:  # 직전 상태를 추측하지 않는다 (트랜잭션 롤백 → 행 불변)
+                    raise HTTPException(status_code=409, detail=attendance_default.PREVIOUS_UNKNOWN_DETAIL)
+            plans.append((row, kind, prev))
+        for row, kind, prev in plans:
+            if kind == attendance_default.MARKER_KIND:  # 표지: approved 로 바꾸지 않고 지운다
+                await connection.execute(
+                    "UPDATE yeoljeong_attendance_records SET deleted_at=now(),updated_at=now()"
+                    " WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL", row["id"], business_id)
+                changes.append({"id": str(row["id"]), "kind": kind, "result": "soft_deleted"})
+            else:  # 실제 기록: 삭제하지 않고 결근 직전 값으로 되돌린다
+                await connection.execute(
+                    "UPDATE yeoljeong_attendance_records SET status=$3,memo=$4,updated_at=now()"
+                    " WHERE id=$1 AND business_id=$2 AND deleted_at IS NULL",
+                    row["id"], business_id, prev["status"], prev["memo"])
+                changes.append({"id": str(row["id"]), "kind": kind, "result": "restored", **prev})
+    elif action == "mark-present":
+        if not any(r["status"] != "rejected" for r in rows):  # 이미 정상 기록이 있으면 그대로(멱등)
+            start = schedule["start_time"] if schedule is not None else time(9, 0)
+            end = schedule["end_time"] if schedule is not None else time(18, 0)
+            brk = int(schedule["break_minutes"] or 0) if schedule is not None else 0
+            local, _, domain = stored_email.partition("@")
+            new_id = await connection.fetchval(
+                _ABSENCE_PRESENT_UPSERT_SQL, business_id, stored_email, f"{local[:1]}***@{domain}", employee["employee_name"],
+                employee["branch"] or "", day, start, end, brk,
+                attendance_worked_minutes(start, end, brk), "approved", attendance_default.PRESENT_MEMO, actor)
+            if new_id is None:  # 같은 시각에 살아 있는 다른 기록(예: 일반 반려) — 덮어쓰지 않는다
+                raise HTTPException(status_code=409, detail=ABSENCE_PRESENT_SLOT_TAKEN_DETAIL)
+            changes.append({"id": str(new_id), "kind": attendance_default.REAL_KIND, "result": "inserted"})
+    # 요청마다 attendance.absence.* 감사 1건. 변경이 없던 요청(멱등 재시도·복원할 결근 없음)도 남긴다.
+    # 표지를 새로 만든 mark-absent 는 위에서 남긴 attendance.absence.mark 한 건이 그 감사다.
+    if not (action == "mark-absent" and changes):
+        if action == "mark-absent":
+            audit_action = "attendance.absence.noop"
+        else:
+            audit_action = "attendance.absence.restore" if absence_rows else "attendance.absence.present"
+        target = str(changes[0]["id"]) if changes else (str(absence_rows[0]["id"]) if absence_rows else f"{stored_email}:{day}")
+        details = {"action": action, "employee_email": stored_email, "work_date": str(day), "changes": changes}
+        if action == "mark-present" and audit_action == "attendance.absence.present" and changes:
+            # 서버가 만든 기록의 첫 상태 — 나중에 결근으로 바꿨다가 복원할 때 직전 상태로 쓰인다
+            details.update(status="approved", memo=attendance_default.PRESENT_MEMO)
+        await _attendance_audit(connection, business_id, user, audit_action, target, details)
+    await _recompute_attendance_week(connection, business_id, stored_email, day)
+    after = [dict(r) for r in await connection.fetch(ABSENCE_DAY_ROWS_SQL, business_id, stored_email, day)]
+    return {"changes": changes, **_absence_judgment(schedule, after, last_work_date)}
+
+
+@router.post("/{business_id}/attendance/absence")
+async def set_attendance_absence(
+    business_id: str,
+    payload: AttendanceAbsenceIn,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    _require_attendance_admin(current_user)
+    await _business(current_user, business_id)
+    day = _attendance_filter_date(payload.work_date, "work_date")
+    if day is None:
+        raise HTTPException(status_code=400, detail="근무일이 필요합니다")
+    email = payload.employee_email.strip().lower()
+    try:
+        last_dates = await run_in_threadpool(finance_svc.separated_last_work_dates, current_user, business_id)
+    except Exception as exc:
+        raise HTTPException(503, "직원 퇴사 정보를 읽을 수 없어 근태를 판정하지 못했습니다. 다시 시도하세요") from exc
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction():
+            result = await apply_attendance_absence(connection, business_id, current_user, email, day,
+                                                    payload.action, last_dates.get(email))
+    finally:
+        await connection.close()
+    return _json_value(result)
 
 
 # ── PWA 출퇴근 (직원 본인) ──────────────────────────────────────────────────

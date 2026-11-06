@@ -341,6 +341,7 @@ def fake_attendance(monkeypatch, rows):
         return rows
 
     monkeypatch.setattr(svc, "_payroll_attendance_rows", fake)
+    monkeypatch.setattr(svc, "_payroll_default_present_rows", lambda *a: [])
     return seen
 
 

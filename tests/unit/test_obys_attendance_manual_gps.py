@@ -21,7 +21,8 @@ def policy():
     module = ast.Module(body=[node for node in tree.body
                              if isinstance(node, ast.FunctionDef) and node.name in names],
                         type_ignores=[])
-    namespace = dict(math=math, date=date, datetime=datetime, time=time, Any=Any,
+    from app.services import obys_attendance_default
+    namespace = dict(math=math, attendance_default=obys_attendance_default, date=date, datetime=datetime, time=time, Any=Any,
                      ZoneInfo=ZoneInfo, GEOFENCE_DEFAULT_RADIUS_M=50,
                      GEOFENCE_MAX_RADIUS_M=50, _EARTH_RADIUS_M=6_371_000)
     exec(compile(module, "app/api/obys_workspaces.py", "exec"), namespace)
@@ -42,12 +43,21 @@ def test_location_evidence_never_approves_attendance(policy, consent, latitude, 
         assert result["result"] == "inside"
 
 
-@pytest.mark.parametrize("day,label", [(1, "확인필요"), (2, "미출근"), (3, "예정")])
+@pytest.mark.parametrize("day,label", [(1, "출근(기본)"), (2, "출근(기본)"), (3, "예정")])
 def test_schedule_without_record_is_never_absence(policy, day, label):
-    schedule = {"kind": "work", "work_date": date(2026, 11, day)}
+    # 2026-11-02 12:00 KST 기준: 지난날과 시작시각이 지난 당일은 기본 출근, 미래는 예정. 결근은 되지 않는다.
+    schedule = {"kind": "work", "work_date": date(2026, 11, day), "start_time": "09:00", "end_time": "18:00"}
     result = policy["attendance_schedule_judgment"](
         schedule, now=datetime(2026, 11, 2, 12, tzinfo=ZoneInfo("Asia/Seoul")))
     assert result["labels"] == [label]
+    assert "결근" not in result["labels"]
+
+
+def test_schedule_today_before_start_is_scheduled(policy):
+    schedule = {"kind": "work", "work_date": date(2026, 11, 2), "start_time": "13:00", "end_time": "18:00"}
+    result = policy["attendance_schedule_judgment"](
+        schedule, now=datetime(2026, 11, 2, 12, tzinfo=ZoneInfo("Asia/Seoul")))
+    assert result["labels"] == ["예정"]
 
 
 def test_open_clock_placeholder_does_not_imply_completed_work(policy):

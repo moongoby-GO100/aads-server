@@ -47,7 +47,7 @@ SCHEDULE = {
             "조퇴",
             (0, 10, 0),
         ),
-        (SCHEDULE, None, "확인필요", (0, 0, 0)),
+        (SCHEDULE, None, "출근(기본)", (0, 0, 0)),  # 지난 근무일 기록 없음 = 기본 출근
         (
             SCHEDULE,
             {"start_at": "09:00", "end_at": "19:00", "break_minutes": 60},
@@ -57,7 +57,8 @@ SCHEDULE = {
         (None, {"start_at": "09:00"}, "일정없음", (0, 0, 0)),
         ({**SCHEDULE, "kind": "off"}, None, "휴무", (0, 0, 0)),
         ({**SCHEDULE, "kind": "leave"}, None, "휴무", (0, 0, 0)),
-        ({**SCHEDULE, "work_date": date(2026, 10, 30)}, None, "미출근", (0, 0, 0)),
+        ({**SCHEDULE, "work_date": date(2026, 10, 30)}, None, "출근(기본)", (0, 0, 0)),  # 당일 시작시각 경과
+        ({**SCHEDULE, "work_date": date(2026, 10, 31)}, None, "예정", (0, 0, 0)),
     ],
 )
 def test_judgment_table(schedule, record, label, minutes):
@@ -75,11 +76,11 @@ def test_kst_midnight_and_overnight():
         api.attendance_schedule_judgment(s, now=datetime(2026, 10, 30, 14, 59, tzinfo=UTC))[
             "status"
         ]
-        == "미출근"
+        == "출근(기본)"
     )
     assert (
         api.attendance_schedule_judgment(s, now=datetime(2026, 10, 30, 15, 0, tzinfo=UTC))["status"]
-        == "확인필요"
+        == "출근(기본)"
     )
     s.update(start_time="22:00", end_time="06:00")
     r = {"start_at": "22:00", "end_at": "06:00", "break_minutes": 60}
@@ -444,6 +445,7 @@ async def test_legacy_enrichment_is_one_read(monkeypatch):
     monkeypatch.setattr(api.upload_svc, '_tenant', lambda user: 'tenant')
     monkeypatch.setattr(api.upload_svc, '_connect', AsyncMock(return_value=db))
     monkeypatch.setattr(api, '_legacy_people_rows', legacy)
+    monkeypatch.setattr(api.finance_svc, 'separated_last_work_dates', lambda *a: {})
     result = await api.list_work_schedules('biz-a', date_from='2026-10-29', date_to='2026-10-29',
         employee_email=None, offset=0, current_user={})
     assert len(result['schedules']) == 1000
