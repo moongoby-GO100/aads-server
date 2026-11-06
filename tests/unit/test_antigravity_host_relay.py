@@ -3,6 +3,7 @@
 2026-10-12: relay 가 존재하지 않는 antigravity-test 컨테이너로 docker exec 하고 있었고,
 모델 매핑은 낡은 gemini-3.5 계열이었다. 호스트 agy 직접 실행 + 최신 11종 id 로 수리했다.
 2026-10-13: 프롬프트를 argv(-p) 대신 stdin(stream-json NDJSON)으로 넘겨 120KB 413 한도를 없앴다.
+2026-11-06: `agy models` 실측 13종으로 교체하고 사라진 id 는 명시 거절, antigravity-pro → gemini-4-argon-high.
 """
 from __future__ import annotations
 
@@ -20,7 +21,13 @@ from app.services.intent_router import IntentResult
 from tests.unit.test_relay_diagnostics import _load_claude_relay_module
 
 NATIVE_MODELS = [
+    "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
     "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+    "claude-opus-5-5-high", "claude-opus-5-5-medium", "claude-opus-5-5-low",
+    "claude-sonnet-5-5-high", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-low",
+    "gpt-oss-120b-medium",
+]
+RETIRED_MODELS = [
     "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
     "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
     "gemini-3.1-pro-high", "gemini-3.1-pro-low",
@@ -28,8 +35,10 @@ NATIVE_MODELS = [
 ALIASES = {
     "antigravity": "gemini-3.8-flash-medium",
     "antigravity-flash": "gemini-3.8-flash-medium",
-    "antigravity-pro": "gemini-3.1-pro-high",
+    "antigravity-pro": "gemini-4-argon-high",
 }
+# 채팅 라우팅 검증은 model_selector 가 아는 id 로 한다(그 목록 갱신은 model_selector 작업 범위).
+SELECTOR_CLI_MODELS = sorted(model_selector._ANTIGRAVITY_CLI_MODEL_LABELS)
 
 
 @pytest.fixture(scope="module")
@@ -53,8 +62,17 @@ def test_unknown_model_is_not_silently_defaulted(relay, bad):
     assert relay._resolve_antigravity_model(bad) is None
 
 
+@pytest.mark.parametrize("model_id", RETIRED_MODELS)
+def test_retired_models_are_rejected_explicitly(relay, model_id):
+    assert relay._resolve_antigravity_model(model_id) is None
+    error, detail = relay._antigravity_model_rejection(model_id)
+    assert error == "retired_antigravity_model" and model_id in detail
+
+
 def test_map_has_exactly_native_plus_aliases(relay):
     assert set(relay._ANTIGRAVITY_MODEL_MAP) == set(NATIVE_MODELS) | set(ALIASES)
+    assert set(relay._ANTIGRAVITY_RETIRED_MODELS) == set(RETIRED_MODELS)
+    assert not set(RETIRED_MODELS) & set(relay._ANTIGRAVITY_MODEL_MAP)
 
 
 # ── relay: 명령 구성 ───────────────────────────────────────────────────────
@@ -594,8 +612,10 @@ async def test_large_prompt_with_slow_reader_does_not_deadlock(relay, monkeypatc
 
 # ── model_selector: 집합·표시명 ────────────────────────────────────────────
 def test_selector_set_has_all_native_ids_and_aliases():
-    assert set(NATIVE_MODELS) | set(ALIASES) <= model_selector._ANTIGRAVITY_MODELS
-    for model_id in NATIVE_MODELS:
+    # relay 실측 목록(NATIVE_MODELS)과 selector 목록의 일치는 model_selector 갱신 작업이 맞춘다.
+    # 여기서는 selector 자신의 id·별칭·표시명이 빠짐없는지만 본다.
+    assert set(SELECTOR_CLI_MODELS) | set(ALIASES) <= model_selector._ANTIGRAVITY_MODELS
+    for model_id in SELECTOR_CLI_MODELS:
         assert model_selector._ANTIGRAVITY_MODEL_DISPLAY[model_id]
 
 
@@ -606,8 +626,12 @@ def test_antigravity_ids_never_collide_with_litellm_gemini_ids():
         assert plain not in model_selector._ANTIGRAVITY_MODELS
 
 
-def test_relay_map_and_selector_set_agree(relay):
-    assert set(relay._ANTIGRAVITY_MODEL_MAP) == model_selector._ANTIGRAVITY_MODELS
+def test_relay_knows_every_selector_id(relay):
+    # model_selector 가 relay 로 보내는 id 는 relay 가 실행하거나(map) 명시 거절(retired)해야 한다.
+    # 정확 일치였던 검사를 완화한 이유: 2026-11-06 relay 는 agy 실측 목록으로 바꿨고 model_selector 목록
+    # 갱신은 별도 작업(runner-1f42c94d)이다. 어느 쪽이 먼저 반영돼도 "모르는 id" 가 생기지 않으면 된다.
+    known = set(relay._ANTIGRAVITY_MODEL_MAP) | set(relay._ANTIGRAVITY_RETIRED_MODELS)
+    assert model_selector._ANTIGRAVITY_MODELS <= known
 
 
 # ── model_selector: 라우팅 순서 ────────────────────────────────────────────
@@ -669,7 +693,7 @@ async def _run(selected):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model_id", NATIVE_MODELS)
+@pytest.mark.parametrize("model_id", SELECTOR_CLI_MODELS)
 async def test_native_ids_route_to_antigravity_relay(monkeypatch, model_id):
     calls = []
     _patch_routing(monkeypatch, [_row("antigravity", model_id)], calls)

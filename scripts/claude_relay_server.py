@@ -2326,9 +2326,17 @@ _CODEX_MODEL_MAP = {
     "gpt-5.3-codex": "gpt-5.3-codex",
 }
 
-# `agy models` 실측(2026-10-12) 11종은 id 를 그대로 --model 로 넘긴다.
+# `agy models` 실측(2026-11-06) 13종은 id 를 그대로 --model 로 넘긴다.
 _ANTIGRAVITY_NATIVE_MODELS = (
+    "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
     "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+    "claude-opus-5-5-high", "claude-opus-5-5-medium", "claude-opus-5-5-low",
+    "claude-sonnet-5-5-high", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-low",
+    "gpt-oss-120b-medium",
+)
+# 2026-10-12 목록에 있었으나 2026-11-06 `agy models` 에서 사라진 id. agy 에 넘기면 모델 목록만 찍고
+# 끝나므로 relay 가 retired_antigravity_model 로 명시 거절한다(다른 모델로 조용히 바꾸지 않는다).
+_ANTIGRAVITY_RETIRED_MODELS = (
     "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
     "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
     "gemini-3.1-pro-high", "gemini-3.1-pro-low",
@@ -2337,11 +2345,21 @@ _ANTIGRAVITY_MODEL_MAP = {
     **{model_id: model_id for model_id in _ANTIGRAVITY_NATIVE_MODELS},
     "antigravity": "gemini-3.8-flash-medium",
     "antigravity-flash": "gemini-3.8-flash-medium",
-    "antigravity-pro": "gemini-3.1-pro-high",
+    # gemini-3.1-pro-high 가 목록에서 사라져 교체(2026-11-06 실측: argon-high 11초 정답 응답).
+    "antigravity-pro": "gemini-4-argon-high",
 }
 _ANTIGRAVITY_MAX_CONCURRENT = max(1, int(os.getenv("AGY_RELAY_MAX_CONCURRENT", "2")))
 _ANTIGRAVITY_PRINT_TIMEOUT = os.getenv("AGY_RELAY_PRINT_TIMEOUT", "4m")
 _ANTIGRAVITY_HARD_TIMEOUT_SEC = float(os.getenv("AGY_RELAY_HARD_TIMEOUT_SEC", "270"))
+# 텍스트 채팅(270초)과 분리한다. 도구 모드는 MCP 호출이 여러 번 이어져 270초를 넘기기 쉽고,
+# 러너 모드는 파일 수정·테스트까지 하므로 codex/claude 러너처럼 길게 둔다(lease 상한 5400초보다 짧게).
+_ANTIGRAVITY_TOOLS_HARD_TIMEOUT_SEC = float(os.getenv("AGY_RELAY_TOOLS_HARD_TIMEOUT_SEC", "600"))
+_ANTIGRAVITY_RUNNER_HARD_TIMEOUT_SEC = float(os.getenv("AGY_RELAY_RUNNER_HARD_TIMEOUT_SEC", "3600"))
+# 세션 id 만으로 도구 모드를 켜는 운영 스위치. 기본은 꺼짐 — 호출자가 tools/allow_tools 로 명시해야 켠다.
+_ANTIGRAVITY_TOOLS_BY_SESSION = os.getenv("AGY_RELAY_TOOLS_BY_SESSION", "0") == "1"
+# 러너 작업 폴더 허용 루트. 워크트리 루트(/tmp/aads-wt-<job>) 또는 그 아래만 받는다.
+_ANTIGRAVITY_WORKSPACE_PREFIX = os.getenv("AGY_RELAY_WORKSPACE_PREFIX", "/tmp/aads-wt-")
+_ANTIGRAVITY_TOOL_RESULT_MAX_CHARS = 100_000
 # 프롬프트는 stdin(stream-json)으로 넘기므로 argv 한도(128KiB)와 무관하다. 이 값은 폭주 방지용 안전 상한이다.
 _ANTIGRAVITY_MAX_PROMPT_BYTES = int(os.getenv("ANTIGRAVITY_MAX_PROMPT_BYTES", "2000000"))
 _ANTIGRAVITY_AUTH_MARKERS = ("Authentication required. Please visit", "authentication failed or timed out")
@@ -2828,6 +2846,17 @@ def _resolve_antigravity_model(model):
     return _ANTIGRAVITY_MODEL_MAP.get(str(model or "").strip())
 
 
+def _antigravity_model_rejection(model):
+    """--model 로 넘길 수 없는 요청 모델의 (error, detail). 받을 수 있으면 None."""
+    name = str(model or "").strip()
+    if name in _ANTIGRAVITY_RETIRED_MODELS:
+        return ("retired_antigravity_model",
+                "antigravity model %s is no longer in `agy models` (checked 2026-11-06)" % name[:80])
+    if _resolve_antigravity_model(name) is None:
+        return "unknown_antigravity_model", "unsupported antigravity model: %s" % str(model)[:80]
+    return None
+
+
 # 채팅 답변은 텍스트만 만든다. agy 기본 에이전트는 셸(command) 도구를 쓰려다 headless 에서
 # 권한 프롬프트를 못 띄워 자동 거부되고, 그 턴은 무출력으로 끝난다(실측 2026-10-14).
 # permissions.allow 를 넓히는 대신 도구 목록이 빈 커스텀 에이전트로 도구 자체를 없앤다.
@@ -2843,6 +2872,38 @@ You answer in plain text only. You have no tools and cannot run commands or read
 Answer directly from the conversation provided.
 """
 
+# 채팅 도구 모드(2026-11-06 실측):
+# - `tools: []` 는 agy 내장 도구(셸·파일 쓰기·브라우저)를 없애도 MCP 서버 도구는 남긴다.
+#   MCP 는 `tools:` 항목이 아니다(call_mcp_tool 을 적으면 "not found in registry" 로 실행 거부).
+# - MCP 설정은 전역(~/.gemini/config/mcp_config.json) 아니면 플러그인 단위다. 호스트 전역을 건드리지
+#   않도록 요청마다 임시 workdir/.agents/plugins/<플러그인>/mcp_config.json 에 쓴다. 서버 이름은
+#   "<플러그인>_<서버>" 로 namespacing 된다.
+# - headless 는 mcp 권한 프롬프트를 못 띄워 자동 거부하므로, 호출 단위 --settings(저장 안 됨)로
+#   그 플러그인 서버만 허용하고 셸은 거부한다. 전역 MCP 서버(있다면)는 허용 규칙이 없어 자동 거부된다.
+# - `inheritMcp: false` 는 쓰지 않는다: 워크스페이스 플러그인 MCP 까지 끊긴다(실측: "도구가 연결되어
+#   있지 않다" 응답, 빼면 health_check 정상 호출).
+_ANTIGRAVITY_TOOLS_AGENT = "aads-chat-tools"
+_ANTIGRAVITY_TOOLS_AGENT_MD = """---
+name: aads-chat-tools
+description: AADS chat responder limited to AADS MCP server tools
+mainAgent: true
+tools: []
+---
+# System
+You answer the user's chat. Your only tools are the AADS MCP server tools; use them when the
+request needs live data or server actions. You cannot run shell commands or edit files directly.
+After using tools, answer in plain text.
+"""
+_ANTIGRAVITY_MCP_PLUGIN = "aads-tools"
+# 러너 모드에서도 셸로 하면 안 되는 일(커밋·푸시·빌드·배포·프로세스 종료)은 러너가 대신한다.
+# agy 의 deny 규칙은 명령 접두사 일치다(2026-11-06 실측: "echo x" deny 가 "echo x y" 도 막음).
+_ANTIGRAVITY_RUNNER_DENIED_COMMANDS = (
+    "git add", "git commit", "git push", "git worktree", "git reset", "git checkout", "git stash",
+    "docker build", "docker compose", "docker restart", "docker-compose",
+    "npm run build", "npm start", "next build",
+    "supervisorctl", "systemctl", "service", "kill", "pkill",
+)
+
 
 def _write_antigravity_text_agent(workdir):
     """workdir/.agents/agents/ 에 도구 없는 채팅 에이전트 정의를 쓴다."""
@@ -2852,21 +2913,104 @@ def _write_antigravity_text_agent(workdir):
         _ANTIGRAVITY_TEXT_AGENT_MD, encoding="utf-8")
 
 
-def _build_antigravity_command(agy_bin, agy_model, agent=None):
+def _write_antigravity_tools_workspace(workdir, template):
+    """도구 에이전트 + AADS MCP 플러그인을 workdir/.agents/ 아래에 쓰고 서버 이름 목록을 돌려준다.
+
+    template 은 Claude 경로와 같은 `_load_mcp_template(session_id)` 결과(세션 id 주입 완료)다.
+    """
+    servers = (template or {}).get("mcpServers") or {}
+    if not isinstance(servers, dict) or not servers:
+        raise ValueError("MCP template has no servers")
+    root = Path(workdir) / ".agents"
+    agents_dir = root / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / (_ANTIGRAVITY_TOOLS_AGENT + ".md")).write_text(
+        _ANTIGRAVITY_TOOLS_AGENT_MD, encoding="utf-8")
+    plugin_dir = root / "plugins" / _ANTIGRAVITY_MCP_PLUGIN
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps({"name": _ANTIGRAVITY_MCP_PLUGIN}), encoding="utf-8")
+    (plugin_dir / "mcp_config.json").write_text(
+        json.dumps({"mcpServers": servers}), encoding="utf-8")
+    return sorted(servers)
+
+
+def _build_antigravity_tools_settings(server_names):
+    """채팅 도구 모드 호출 단위 권한: AADS 플러그인 MCP 서버만 허용, 셸은 거부."""
+    return {"permissions": {
+        "allow": ["mcp(%s_%s/*)" % (_ANTIGRAVITY_MCP_PLUGIN, name) for name in server_names],
+        "deny": ["command(*)"],
+    }}
+
+
+def _build_antigravity_runner_settings():
+    """러너 모드 호출 단위 권한: 작업 폴더 안 셸 허용, 커밋·빌드·배포·kill 은 거부."""
+    return {"permissions": {
+        "allow": ["command(*)"],
+        "deny": ["command(%s)" % prefix for prefix in _ANTIGRAVITY_RUNNER_DENIED_COMMANDS],
+    }}
+
+
+def _resolve_antigravity_workspace(raw):
+    """러너 작업 폴더 검증. 허용 루트(/tmp/aads-wt-<이름>) 안의 실제 디렉터리면 정규 경로, 아니면 None.
+
+    realpath 로 심볼릭 링크·`..` 를 풀어 본 뒤 판정한다.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    prefix = _ANTIGRAVITY_WORKSPACE_PREFIX
+    parent = os.path.realpath(os.path.dirname(prefix))
+    name_prefix = os.path.basename(prefix)
+    resolved = os.path.realpath(raw.strip())
+    rel = os.path.relpath(resolved, parent)
+    if rel == "." or rel.startswith(".."):
+        return None
+    first = rel.split(os.sep, 1)[0]
+    if not name_prefix or not first.startswith(name_prefix) or len(first) <= len(name_prefix):
+        return None
+    if not os.path.isdir(resolved):
+        return None
+    return resolved
+
+
+def _antigravity_tools_requested(body, session_id):
+    """채팅 도구 모드 여부: tools 목록 또는 allow_tools 가 명시되면 켠다. allow_tools=false 는 항상 끈다."""
+    flag = body.get("allow_tools")
+    if flag is False:
+        return False
+    if flag is True:
+        return True
+    tools = body.get("tools")
+    if isinstance(tools, list) and tools:
+        return True
+    return bool(_ANTIGRAVITY_TOOLS_BY_SESSION and session_id)
+
+
+def _antigravity_print_timeout(hard_timeout_sec):
+    """agy 자체 제한은 relay 하드 타임아웃보다 30초 짧게 둬서 agy 가 먼저 결과를 닫게 한다."""
+    return "%ds" % max(30, int(hard_timeout_sec) - 30)
+
+
+def _build_antigravity_command(agy_bin, agy_model, agent=None, mode=None, settings=None,
+                               print_timeout=None):
     """프롬프트는 argv 에 싣지 않는다(stdin 으로 전달).
 
     `-p` 는 값을 받는 플래그라 뒤에 다른 플래그를 두면 그것을 프롬프트로 먹는다.
-    그래서 `-p=""` 를 반드시 맨 끝에 둔다.
+    그래서 `-p=""` 를 반드시 맨 끝에 둔다. settings 는 이번 호출에만 쓰이고 저장되지 않는다.
     """
     cmd = [
         agy_bin,
         "--input-format", "stream-json",
         "--output-format", "stream-json",
         "--model", agy_model,
-        "--print-timeout", _ANTIGRAVITY_PRINT_TIMEOUT,
+        "--print-timeout", print_timeout or _ANTIGRAVITY_PRINT_TIMEOUT,
     ]
     if agent:
         cmd += ["--agent", agent]
+    if mode:
+        cmd += ["--mode", mode]
+    if settings is not None:
+        cmd += ["--settings", json.dumps(settings, separators=(",", ":"))]
     return cmd + ["--sandbox", "-p="]
 
 
@@ -2889,11 +3033,33 @@ async def _antigravity_write_stdin(proc, payload):
             pass
 
 
-def _antigravity_interpret_line(line_text):
-    """stream-json 한 줄을 ("text", str) / ("result", dict) / ("meta", None) 로 분류한다.
+def _antigravity_tool_call(step):
+    """tool 단계 → (이름, 입력). MCP 호출은 Claude 경로와 같은 mcp__<서버>__<도구> 이름으로 바꾼다."""
+    info = step.get("tool_info") if isinstance(step.get("tool_info"), dict) else {}
+    name = str(step.get("tool_name") or info.get("name") or "")
+    params = info.get("parameters") if isinstance(info.get("parameters"), dict) else {}
+    if name == "call_mcp_tool":
+        server = str(params.get("ServerName") or "")
+        plugin_prefix = _ANTIGRAVITY_MCP_PLUGIN + "_"
+        if server.startswith(plugin_prefix):
+            server = server[len(plugin_prefix):]
+        args = params.get("Arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {"raw": args}
+        return "mcp__%s__%s" % (server, params.get("ToolName") or ""), args if isinstance(args, dict) else {}
+    return name, params
 
-    채팅 본문이 되는 것은 agent_response 단계의 text_delta 뿐이다.
-    init(tools 목록)·user_input·tool·JSON 이 아닌 줄은 meta 로 버린다.
+
+def _antigravity_interpret_line(line_text):
+    """stream-json 한 줄을 ("text", str) / ("result", dict) / ("tool_use", dict) /
+    ("tool_result", dict) / ("meta", None) 로 분류한다.
+
+    채팅 본문이 되는 것은 agent_response 단계의 text_delta 뿐이다. tool 단계는 ACTIVE 가 호출,
+    DONE/ERROR 가 결과다(출력은 tool_info.output, 실패는 tool_info.error.message).
+    도구 이벤트를 내보낼지는 호출자(모드)가 정한다. init·user_input·JSON 이 아닌 줄은 meta.
     """
     try:
         event = json.loads(line_text)
@@ -2904,15 +3070,48 @@ def _antigravity_interpret_line(line_text):
     kind = event.get("event")
     if kind == "step_update":
         step = event.get("step_update")
-        if isinstance(step, dict) and step.get("step_type") == "agent_response":
+        if not isinstance(step, dict):
+            return "meta", None
+        if step.get("step_type") == "agent_response":
             delta = step.get("text_delta")
             if isinstance(delta, str) and delta:
                 return "text", delta
+            return "meta", None
+        if step.get("step_type") == "tool":
+            state = str(step.get("state") or "").upper()
+            tool_id = "agy_%s_%s" % (str(step.get("conversation_id") or "")[:8], step.get("step_index"))
+            name, tool_input = _antigravity_tool_call(step)
+            if state == "ACTIVE":
+                return "tool_use", {"id": tool_id, "name": name, "input": tool_input}
+            if state in ("DONE", "ERROR"):
+                info = step.get("tool_info") if isinstance(step.get("tool_info"), dict) else {}
+                error = info.get("error") if isinstance(info.get("error"), dict) else {}
+                content = info.get("output")
+                if not isinstance(content, str):
+                    content = str(error.get("message") or "")
+                return "tool_result", {
+                    "tool_use_id": tool_id, "name": name, "input": tool_input,
+                    "content": content[:_ANTIGRAVITY_TOOL_RESULT_MAX_CHARS],
+                    "is_error": state == "ERROR" or bool(error),
+                }
         return "meta", None
     if kind == "result":
         result = event.get("result")
         return "result", result if isinstance(result, dict) else {}
     return "meta", None
+
+
+def _antigravity_tool_use_event(item):
+    """Claude CLI stream-json 과 같은 모양의 tool_use(assistant) 이벤트."""
+    return {"type": "assistant", "message": {"role": "assistant", "content": [{
+        "type": "tool_use", "id": item["id"], "name": item["name"], "input": item.get("input") or {}}]}}
+
+
+def _antigravity_tool_result_event(item):
+    """Claude CLI stream-json 과 같은 모양의 tool_result(user) 이벤트."""
+    return {"type": "user", "message": {"role": "user", "content": [{
+        "type": "tool_result", "tool_use_id": item["tool_use_id"],
+        "content": item.get("content") or "", "is_error": bool(item.get("is_error"))}]}}
 
 
 def _antigravity_mask_sensitive(text):
@@ -2956,12 +3155,25 @@ async def handle_antigravity_stream(request):
     session_id = body.get("session_id", "")
     if not messages_text:
         return web.json_response({"error": "messages_text required"}, status=400)
+    rejection = _antigravity_model_rejection(model)
+    if rejection:
+        return web.json_response({"error": rejection[0], "detail": rejection[1]}, status=400)
     agy_model = _resolve_antigravity_model(model)
-    if not agy_model:
-        return web.json_response({
-            "error": "unknown_antigravity_model",
-            "detail": "unsupported antigravity model: %s" % str(model)[:80],
-        }, status=400)
+    # 모드: runner(작업 폴더 지정) > tools(채팅 MCP 도구) > text(기존 텍스트 전용).
+    workspace_raw = body.get("workspace")
+    runner_workspace = None
+    if workspace_raw not in (None, ""):
+        runner_workspace = _resolve_antigravity_workspace(workspace_raw)
+        if not runner_workspace:
+            return web.json_response({
+                "error": "invalid_antigravity_workspace",
+                "detail": "workspace must be an existing directory under %s*" % _ANTIGRAVITY_WORKSPACE_PREFIX,
+            }, status=400)
+        agy_mode = "runner"
+    elif _antigravity_tools_requested(body, session_id):
+        agy_mode = "tools"
+    else:
+        agy_mode = "text"
     prompt = messages_text
     if system_prompt:
         prompt = "[SYSTEM]\n" + system_prompt + "\n\n[USER]\n" + messages_text
@@ -3015,7 +3227,9 @@ async def handle_antigravity_stream(request):
                 await _emit_error("Antigravity CLI(agy) not installed on relay host")
                 return await _finish()
 
-            workdir = tempfile.mkdtemp(prefix="agy-relay-")
+            # 러너 작업 폴더는 러너 소유다 — 여기서 만들거나 지우지 않고 .agents 도 쓰지 않는다.
+            owns_workdir = agy_mode != "runner"
+            workdir = runner_workspace if not owns_workdir else tempfile.mkdtemp(prefix="agy-relay-")
             proc = None
             full_text = ""
             stderr_text = ""
@@ -3024,13 +3238,49 @@ async def handle_antigravity_stream(request):
             stdin_task = None
             stdin_error = None
             result_seen = False
+            tool_calls = 0
+            tool_errors = 0
+            seen_tool_ids = set()
             try:
-                _write_antigravity_text_agent(workdir)
-                cmd = _build_antigravity_command(agy_bin, agy_model, agent=_ANTIGRAVITY_TEXT_AGENT)
+                cmd = None
+                if agy_mode == "tools":
+                    try:
+                        server_names = _write_antigravity_tools_workspace(
+                            workdir, _load_mcp_template(session_id))
+                        hard_timeout = _ANTIGRAVITY_TOOLS_HARD_TIMEOUT_SEC
+                        cmd = _build_antigravity_command(
+                            agy_bin, agy_model, agent=_ANTIGRAVITY_TOOLS_AGENT,
+                            settings=_build_antigravity_tools_settings(server_names),
+                            print_timeout=_antigravity_print_timeout(hard_timeout))
+                    except Exception as exc:
+                        # 조용히 바꾸지 않는다: 로그와 경고 이벤트를 남기고 텍스트 모드로 내려간다.
+                        reason = _antigravity_mask_sensitive(exc)[:200]
+                        logger.warning("Antigravity tools mode unavailable, falling back to text: session=%s reason=%s",
+                                       sid, reason)
+                        try:
+                            await _stream_write(response, json.dumps({
+                                "type": "system", "subtype": "warning", "code": "antigravity_tools_fallback_text",
+                                "content": "Antigravity 도구 모드 설정 실패로 텍스트 전용으로 실행합니다: %s" % reason,
+                            }, ensure_ascii=False).encode() + b"\n")
+                        except ConnectionResetError:
+                            logger.info("Antigravity fallback warning write skipped: session=%s", sid)
+                        # 반쯤 쓴 플러그인이 남으면 텍스트 모드에도 MCP 가 붙는다.
+                        shutil.rmtree(Path(workdir) / ".agents" / "plugins", ignore_errors=True)
+                        agy_mode = "text"
+                if agy_mode == "runner":
+                    hard_timeout = _ANTIGRAVITY_RUNNER_HARD_TIMEOUT_SEC
+                    cmd = _build_antigravity_command(
+                        agy_bin, agy_model, mode="accept-edits",
+                        settings=_build_antigravity_runner_settings(),
+                        print_timeout=_antigravity_print_timeout(hard_timeout))
+                elif agy_mode == "text":
+                    hard_timeout = _ANTIGRAVITY_HARD_TIMEOUT_SEC
+                    _write_antigravity_text_agent(workdir)
+                    cmd = _build_antigravity_command(agy_bin, agy_model, agent=_ANTIGRAVITY_TEXT_AGENT)
                 stdin_payload = _build_antigravity_stdin_payload(prompt)
                 logger.info(
-                    "Antigravity: model=%s agy_model=%s prompt_len=%d session=%s",
-                    model, agy_model, len(prompt), sid,
+                    "Antigravity: model=%s agy_model=%s mode=%s prompt_len=%d session=%s",
+                    model, agy_model, agy_mode, len(prompt), sid,
                 )
                 proc = await asyncio.create_subprocess_exec(
                     *cmd, cwd=workdir, env=_antigravity_clean_env(),
@@ -3059,10 +3309,13 @@ async def handle_antigravity_stream(request):
                             "text": text[i:i + 40]}).encode() + b"\n")
                         await asyncio.sleep(0.015)
 
+                async def _emit_event(event):
+                    await _stream_write(response, json.dumps(event, ensure_ascii=False).encode() + b"\n")
+
                 async def _pump():
-                    nonlocal full_text, result_seen
+                    nonlocal full_text, result_seen, tool_calls, tool_errors
                     async for raw_line in _iter_ndjson_lines(
-                            proc.stdout, timeout_sec=_ANTIGRAVITY_HARD_TIMEOUT_SEC):
+                            proc.stdout, timeout_sec=hard_timeout):
                         line_text = raw_line.decode("utf-8", errors="replace").rstrip("\n")
                         if not line_text:
                             continue
@@ -3072,8 +3325,29 @@ async def handle_antigravity_stream(request):
                         if kind == "text":
                             await _emit_text(value)
                             full_text += value
+                        elif kind in ("tool_use", "tool_result"):
+                            if agy_mode == "text":
+                                continue  # 텍스트 모드는 도구가 없다 — 진단 줄을 본문으로 흘리지 않는다.
+                            if value.get("id", value.get("tool_use_id")) not in seen_tool_ids:
+                                use = value if kind == "tool_use" else {
+                                    "id": value["tool_use_id"], "name": value["name"], "input": value["input"]}
+                                seen_tool_ids.add(use["id"])
+                                tool_calls += 1
+                                await _emit_event(_antigravity_tool_use_event(use))
+                            if kind == "tool_result":
+                                tool_errors += 1 if value.get("is_error") else 0
+                                await _emit_event(_antigravity_tool_result_event(value))
                         elif kind == "result":
                             result_seen = True
+                            denied = value.get("denied_actions")
+                            if denied:
+                                logger.warning("Antigravity denied actions: mode=%s session=%s denied=%s",
+                                               agy_mode, sid, _antigravity_mask_sensitive(denied)[:300])
+                                if agy_mode != "text":
+                                    await _emit_event({
+                                        "type": "system", "subtype": "warning", "code": "antigravity_denied_actions",
+                                        "content": "Antigravity 권한 거부: %s" % _antigravity_mask_sensitive(denied)[:300],
+                                    })
                             if str(value.get("status") or "").upper() == "ERROR":
                                 detail = _antigravity_mask_sensitive(value.get("error") or "").strip()
                                 raise RuntimeError(
@@ -3085,13 +3359,13 @@ async def handle_antigravity_stream(request):
                     await proc.wait()
 
                 try:
-                    await asyncio.wait_for(_pump(), timeout=_ANTIGRAVITY_HARD_TIMEOUT_SEC)
+                    await asyncio.wait_for(_pump(), timeout=hard_timeout)
                 except ConnectionResetError:
                     logger.info("Antigravity relay client disconnected: session=%s", sid)
                     failed = True
                 except asyncio.TimeoutError:
-                    logger.error("Antigravity timeout (%.0fs): agy_model=%s",
-                                 _ANTIGRAVITY_HARD_TIMEOUT_SEC, agy_model)
+                    logger.error("Antigravity timeout (%.0fs): agy_model=%s mode=%s",
+                                 hard_timeout, agy_model, agy_mode)
                     failed = True
                     error_message = "Antigravity CLI timeout"
                 except PermissionError as exc:
@@ -3110,7 +3384,7 @@ async def handle_antigravity_stream(request):
                         await asyncio.wait_for(proc.wait(), timeout=5)
                     except (asyncio.TimeoutError, ProcessLookupError):
                         pass
-                    if not stdin_task.done():
+                    if stdin_task is not None and not stdin_task.done():
                         stdin_task.cancel()
                     try:
                         await stdin_task
@@ -3142,7 +3416,8 @@ async def handle_antigravity_stream(request):
                     logger.error("Antigravity stdin write failed: %s", type(stdin_error).__name__)
                     error_message = _ANTIGRAVITY_AUTH_ERROR if stderr_auth else (
                         "Antigravity CLI stdin write failed: %s" % type(stdin_error).__name__)
-                elif not full_text.strip():
+                elif not full_text.strip() and not (agy_mode == "runner" and tool_calls):
+                    # 러너는 파일 수정만 하고 말이 없을 수 있다 — 판정은 러너(diff·테스트)가 한다.
                     failed = True
                     error_message = _ANTIGRAVITY_AUTH_ERROR if stderr_auth else "Antigravity CLI returned empty response"
                 if error_message:
@@ -3154,16 +3429,22 @@ async def handle_antigravity_stream(request):
             finally:
                 if proc is not None:
                     _antigravity_kill_group(proc)
-                shutil.rmtree(workdir, ignore_errors=True)
+                if owns_workdir:
+                    # 도구 모드의 MCP 설정(.agents/plugins/*/mcp_config.json)도 이 폴더 안에 있다.
+                    shutil.rmtree(workdir, ignore_errors=True)
             if not failed:
                 full_text = full_text.rstrip("\n")
+                result_event = {
+                    "type": "result", "result": full_text,
+                    "input_tokens": 0,
+                    "output_tokens": len(full_text) // 4,
+                    "model": model,
+                }
+                if agy_mode != "text":
+                    result_event.update({"agy_model": agy_model, "mode": agy_mode,
+                                         "tool_calls": tool_calls, "tool_errors": tool_errors})
                 try:
-                    await _stream_write(response, json.dumps({
-                        "type": "result", "result": full_text,
-                        "input_tokens": 0,
-                        "output_tokens": len(full_text) // 4,
-                        "model": model,
-                    }).encode() + b"\n")
+                    await _stream_write(response, json.dumps(result_event).encode() + b"\n")
                 except ConnectionResetError:
                     logger.info("Antigravity result write skipped: session=%s", sid)
             return await _finish()
