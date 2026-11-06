@@ -152,3 +152,267 @@ def test_collect_skips_approved_without_release_dir(monkeypatch):
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+class PipelineCursor:
+    def __init__(self, records):
+        self.records = records
+
+    def execute(self, query, params):
+        self.query, self.params = query, params
+
+    def fetchall(self):
+        return self.records
+
+
+def test_collect_pipeline_deployed_jobs():
+    at = sync.datetime(2026, 11, 6, tzinfo=sync.timezone.utc)
+    cur = PipelineCursor([("GO100", "runner-new", "abc1234", at),
+                          ("NTV2", "runner-nt", "def1234", at)])
+    rows = sync.collect_pipeline_deployments(cur, sync.SOURCES, at)
+    assert cur.params == (list(sync.SOURCES), at)
+    assert "status = 'done'" in cur.query
+    assert "deployed_at IS NOT NULL" in cur.query
+    assert "deployed_at >= %s" in cur.query
+    assert [row["runner_job_id"] for row in rows] == ["runner-new", "runner-nt"]
+    assert rows[0]["release_sha"] == "abc1234"
+    assert rows[0]["completed_at"] == at
+    assert rows[0]["request_source"] == "pipeline_runner_deployed"
+    assert (rows[0]["status"], rows[0]["phase"]) == ("success", "completed")
+    assert rows[0]["current_slot"] is None
+
+
+@pytest.mark.parametrize("sha", [None, "", "  "])
+def test_collect_pipeline_skips_missing_commit_hash(sha):
+    at = sync.datetime(2026, 11, 6, tzinfo=sync.timezone.utc)
+    cur = PipelineCursor([("GO100", "runner-no-sha", sha, at)])
+    assert sync.collect_pipeline_deployments(cur, sync.SOURCES, at) == []
+
+
+def test_collect_hotfix_state_and_idempotency(monkeypatch):
+    note = "/opt/go100/backend-releases/a7eb5e8a8-hf-1b6551392 (1b6551392, OpsInfraOwner manual, both slots)"
+    state = (
+        "release_sha=a7eb5e8a8\nphase=deployed\n"
+        "updated_at=2026-11-06T07:30:00+09:00\n"
+        f"hotfix_release_dir={note}\n"
+    )
+    rows = _collect_with_fake_ssh(monkeypatch, NTV2_CFG, "", state)
+    again = _collect_with_fake_ssh(monkeypatch, NTV2_CFG, "", state)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["release_sha"] == "1b6551392"
+    assert row["runner_job_id"] == "state-a7eb5e8a8-hf-1b6551392"
+    assert row["phase"] == "deployed"
+    assert row["completed_at"] == sync.to_dt("2026-11-06T07:30:00+09:00")
+    assert row["payload"]["base_release_sha"] == "a7eb5e8a8"
+    assert row["payload"]["release_dir"] == note.split()[0]
+    assert row["payload"]["note"] == note
+    existing = tuple(row.get(sync._ROW_KEYS.get(col, col)) for col in sync._COMPARE_COLUMNS)
+    assert existing == sync._comparable(again[0])
+
+
+@pytest.mark.parametrize("suffix", ["-hf-1b6551392", "-memory-live"])
+def test_collect_matches_suffixed_release_dir(monkeypatch, suffix):
+    cfg = sync.SOURCES["GO100"]
+    at = sync.datetime(2026, 11, 6, tzinfo=sync.timezone.utc)
+    raw = f"a7eb5e8a8{suffix}\t{at.timestamp()}\n"
+    queue = "id1\ta7eb5e8a8\tapproved\towner\tsess\tTASK\t2026-11-05T00:00:00+00:00\tok"
+    def fake_ssh(host, command):
+        if "find " in command:
+            return raw
+        if cfg["queue_file"] in command:
+            return queue
+        return ""
+    monkeypatch.setattr(sync, "ssh_read", fake_ssh)
+    rows = sync.collect("GO100", cfg, at - sync.timedelta(days=1))
+    assert len(rows) == 1
+    assert rows[0]["release_sha"] == "a7eb5e8a8"
+    assert rows[0]["completed_at"] == at
+    assert rows[0]["phase"] == "released"
+    queue = ""
+    assert sync.collect("GO100", cfg, at - sync.timedelta(days=1)) == []
+
+
+def test_release_dirs_use_latest_mtime_independent_of_order():
+    assert sync.parse_release_dirs(
+        "abc1234-hf-def1234\t200\nabc1234\t100\n"
+    )["abc1234"] == sync.datetime.fromtimestamp(200, sync.timezone.utc)
+
+
+@pytest.mark.parametrize("extra", [
+    "hotfix_release_dir=/opt/release (invalid, note)\n",
+    "hotfix_release_dir=/opt/release (abc1234, note)\nupdated_at=invalid\n",
+    "hotfix_release_dir=/opt/release (abc1234, note)\nupdated_at=2025-01-01\n",
+])
+def test_hotfix_requires_sha_and_recent_timestamp(monkeypatch, extra):
+    state = "release_sha=def1234\nphase=deployed\n" + extra
+    assert _collect_with_fake_ssh(monkeypatch, NTV2_CFG, "", state) == []
+
+
+def test_main_skips_upsert_for_unchanged_runner_and_hotfix(monkeypatch, capsys):
+    at = sync.datetime.now(sync.timezone.utc)
+    pipeline = ("GO100", "runner-new", "abc1234", at)
+    row = sync.collect_pipeline_deployments(PipelineCursor([pipeline]), sync.SOURCES, at)[0]
+    hotfix = dict(row, runner_job_id="state-abc1234-hf-def1234",
+                  release_sha="def1234", request_source="external_release_sync")
+    existing = [
+        (r["project"], r["runner_job_id"], *sync._comparable(r))
+        for r in (row, hotfix)
+    ]
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, query, params):
+            assert "INSERT" not in query, "unchanged rows must not consume a sequence id"
+            self.query = query
+
+        def fetchall(self):
+            return ([pipeline] if "FROM pipeline_jobs" in self.query else
+                    [] if "IS DISTINCT FROM" in self.query else existing)
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def cursor(self):
+            return Cursor()
+
+        def set_session(self, **kwargs):
+            assert kwargs == {"readonly": True}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(sync, "connect_db", Connection)
+    monkeypatch.setattr(sync, "collect", lambda project, cfg, cutoff: [hotfix])
+    monkeypatch.setattr(sync.sys, "argv", ["sync", "--project", "GO100"])
+    assert sync.main() == 0
+    assert "변화없음 2건" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('queue_id,queue_sha,existing', [
+    ('runner-X', 'def1234', set()),
+    ('runner-X-abc123456', 'def1234', set()),
+    ('queue-other', 'def1234', {('GO100', 'runner-X')}),
+    ('queue-other', 'abc123456', set()),
+])
+def test_runner_duplicates_prefer_queue(queue_id, queue_sha, existing):
+    runner = dict(project='GO100', runner_job_id='runner-X', release_sha='abc123456789')
+    queue = dict(project='GO100', runner_job_id=queue_id, release_sha=queue_sha)
+    assert sync.filter_runner_deployments([runner], [queue], existing) == []
+
+
+def test_runner_filter_keeps_other_project_and_short_sha():
+    runner = dict(project='GO100', runner_job_id='runner-X', release_sha='abc123456789')
+    queues = [dict(project='NTV2', runner_job_id='runner-X', release_sha='abc123456'),
+              dict(project='GO100', runner_job_id='other', release_sha='abc123')]
+    assert sync.filter_runner_deployments([runner], queues, set()) == [runner]
+
+
+def _mock_ledger(monkeypatch, rows, fail_read=False):
+    stored = {}
+    attempts = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, query, params):
+            self.query = query
+            if query == sync.UPSERT_SQL:
+                key = (params['project'], params['runner_job_id'])
+                self.is_new = key not in stored
+                stored[key] = sync._comparable(params)
+                attempts.append(key)
+
+        def fetchall(self):
+            if 'FROM pipeline_jobs' in self.query:
+                return []
+            if 'IS DISTINCT FROM' in self.query:
+                return list(stored)
+            return [(project, job, *values) for (project, job), values in stored.items()]
+
+        def fetchone(self):
+            return 1, self.is_new
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def cursor(self):
+            return Cursor()
+
+        def set_session(self, **kwargs):
+            assert kwargs == {'readonly': True}
+
+        def close(self):
+            pass
+
+    calls = 0
+
+    def connect():
+        nonlocal calls
+        calls += 1
+        if fail_read and calls == 1:
+            raise RuntimeError('read unavailable')
+        return Connection()
+
+    monkeypatch.setattr(sync, 'connect_db', connect)
+    monkeypatch.setattr(sync, 'collect', lambda *args: rows)
+    monkeypatch.setattr(sync.sys, 'argv', ['sync', '--project', 'GO100'])
+    return stored, attempts
+
+
+def _queue_row():
+    at = sync.datetime.now(sync.timezone.utc)
+    row = sync.collect_pipeline_deployments(
+        PipelineCursor([('GO100', 'queue-X', 'abc123456', at)]), sync.SOURCES, at)[0]
+    return dict(row, request_source='external_release_sync')
+
+
+def test_main_second_identical_run_has_zero_updates(monkeypatch, capsys):
+    stored, attempts = _mock_ledger(monkeypatch, [_queue_row()])
+    assert sync.main() == 0
+    assert sync.main() == 0
+    assert len(stored) == len(attempts) == 1
+    assert '신규 0건 / 갱신 0건 / 변화없음 1건' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_connect_failure_keeps_queue_processing(monkeypatch, capsys, dry_run):
+    stored, attempts = _mock_ledger(monkeypatch, [_queue_row()], fail_read=True)
+    if dry_run:
+        monkeypatch.setattr(sync.sys, 'argv', ['sync', '--project', 'GO100', '--dry-run'])
+    assert sync.main() == 0
+    assert len(attempts) == (0 if dry_run else 1)
+    output = capsys.readouterr()
+    assert '[warn] pipeline_jobs 읽기 실패: RuntimeError' in output.err
+    assert ('[dry-run] 1건' if dry_run else '[apply] 신규 1건') in output.out
+
+
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_existing_queue_source_blocks_runner_in_main(monkeypatch, capsys, dry_run):
+    row = _queue_row()
+    stored, attempts = _mock_ledger(monkeypatch, [])
+    stored[(row['project'], row['runner_job_id'])] = sync._comparable(row)
+    monkeypatch.setattr(sync, 'collect_pipeline_deployments', lambda *args: [
+        dict(row, request_source='pipeline_runner_deployed')])
+    if dry_run:
+        monkeypatch.setattr(sync.sys, 'argv', ['sync', '--project', 'GO100', '--dry-run'])
+    assert sync.main() == 0
+    assert attempts == []
+    assert '[collect-runner] GO100: 0건 (중복 제외 1건)' in capsys.readouterr().out

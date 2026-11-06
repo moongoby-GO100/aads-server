@@ -11,13 +11,14 @@ GO100(contabo14) 은 자체 blue/green 컨트롤러(`deploy-go100.sh`)로 릴리
 
 무엇을 사실로 취급하는가 (추측 금지, R-CRITICAL)
 ------------------------------------------------
-세 파일이 말하는 것만 기록한다.
+외부 파일과 pipeline_jobs 에 명시된 배포 사실만 기록한다.
   1. `/var/lib/aads-release-control/GO100/release-queue.tsv`
      릴리스 큐. 한 줄 = id, sha, status, owner, session, task_id, updated_at, note.
   2. `/opt/go100/backend-releases/<sha>`
      릴리스 디렉터리. 존재 + mtime = 그 SHA 가 그 시각에 슬롯에 설치됐다는 뜻.
   3. `/etc/go100/backend-release-state`
-     지금 활성 릴리스와 phase(deployed/rollback 등).
+     지금 활성 릴리스와 phase(deployed/rollback 등), 명시된 핫픽스 전환.
+  4. pipeline_jobs 의 done + deployed_at + commit_hash 가 있는 행.
 
 상태 매핑:
   queue=deployed                      -> status=success,  phase=completed
@@ -33,13 +34,14 @@ GO100(contabo14) 은 자체 blue/green 컨트롤러(`deploy-go100.sh`)로 릴리
   python3 scripts/sync_external_deploy_ledger.py --dry-run          # 확인만
   python3 scripts/sync_external_deploy_ledger.py --days 14          # 기본 적용
   python3 scripts/sync_external_deploy_ledger.py --days 400         # 전체 백필
-멱등하다. runner_job_id = 큐 id 로 UNIQUE(project, runner_job_id) 에 UPSERT 한다.
+멱등하다. runner_job_id = 큐 id / 러너 job_id / 핫픽스 상태 키로 UNIQUE(project, runner_job_id) 에 UPSERT 한다.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -141,7 +143,11 @@ def parse_release_dirs(raw: str) -> dict[str, datetime]:
             continue
         name, epoch = line.split("\t", 1)
         try:
-            out[name.strip()] = datetime.fromtimestamp(float(epoch), tz=timezone.utc)
+            stamp = datetime.fromtimestamp(float(epoch), tz=timezone.utc)
+            name = name.strip()
+            match = re.fullmatch(r"([0-9a-fA-F]{7,40})-.+", name)
+            sha = match.group(1) if match else name
+            out[sha] = max(stamp, out.get(sha, stamp))
         except ValueError:
             continue
     return out
@@ -218,7 +224,7 @@ def collect(project: str, cfg: dict[str, str], cutoff: datetime) -> list[dict[st
     if releases_root:
         dirs = parse_release_dirs(ssh_read(
             host,
-            f"find {releases_root} -mindepth 1 -maxdepth 1 -printf '%f\\t%T@\\n' 2>/dev/null || true",
+            f"timeout 30 find {releases_root} -mindepth 1 -maxdepth 1 -printf '%f\\t%T@\\n' 2>/dev/null || true",
         ))
     state = parse_state(ssh_read(host, f"cat {cfg['state_file']} 2>/dev/null || true"))
     active_sha = state.get("release_sha", "")
@@ -309,8 +315,111 @@ def collect(project: str, cfg: dict[str, str], cutoff: datetime) -> list[dict[st
                 "slot_mismatch": slot_note or None,
             },
         })
+    hotfix_note = state.get("hotfix_release_dir", "")
+    hotfix = re.fullmatch(r"(.+?)\s+\(([0-9a-fA-F]{7,40})(?:,|\s|\)).*", hotfix_note)
+    state_at = to_dt(state.get("updated_at", ""))
+    if hotfix and active_sha and active_phase and state_at and state_at >= cutoff:
+        release_dir, hotfix_sha = hotfix.groups()
+        rows.append({
+            "project": project, "component": cfg["component"],
+            "deploy_type": cfg["deploy_type"], "release_sha": hotfix_sha,
+            "runner_job_id": f"state-{active_sha}-hf-{hotfix_sha}",
+            "status": "success", "phase": active_phase,
+            "current_slot": current_slot or None,
+            "candidate_slot": candidate_slot or None,
+            "started_at": state_at, "completed_at": state_at,
+            "requested_by": "external_release_state",
+            "request_source": "external_release_sync",
+            "release_title": f"{project} hotfix {hotfix_sha}"[:180],
+            "release_summary": hotfix_note[:240], "error_summary": None,
+            "payload": {
+                "source": "sync_external_deploy_ledger", "host": host,
+                "base_release_sha": active_sha, "release_dir": release_dir,
+                "note": hotfix_note, "slot_truth_source": "nginx_upstream",
+                "slot_mismatch": slot_note or None,
+            },
+        })
     rows.sort(key=lambda r: r["completed_at"])
     return rows
+
+
+def connect_db():
+    import psycopg2
+
+    env = load_db_env()
+    return psycopg2.connect(
+        host=os.getenv("SYNC_DB_HOST", "127.0.0.1"),
+        port=int(os.getenv("SYNC_DB_PORT", "5433")),
+        dbname=env.get("AADS_DB_NAME", "aads"),
+        user=env.get("AADS_DB_USER", "aads"),
+        password=env.get("AADS_DB_PASSWORD", ""),
+        connect_timeout=10,
+    )
+
+
+def collect_pipeline_deployments(cur, targets, cutoff):
+    """DB 에 명시된 완료 배포만 읽는다. SHA 없는 행은 추측하지 않는다."""
+    cur.execute(
+        """
+        SELECT upper(project), job_id, commit_hash, deployed_at
+          FROM pipeline_jobs
+         WHERE upper(project) = ANY(%s)
+           AND status = 'done' AND deployed_at IS NOT NULL
+           AND deployed_at >= %s
+         ORDER BY deployed_at, job_id
+        """,
+        (list(targets), cutoff),
+    )
+    rows = []
+    for project, job_id, commit_hash, deployed_at in cur.fetchall():
+        sha = (commit_hash or "").strip()
+        if not sha:
+            continue
+        cfg = targets[project]
+        rows.append({
+            "project": project, "component": cfg["component"],
+            "deploy_type": cfg["deploy_type"], "release_sha": sha,
+            "runner_job_id": job_id, "status": "success", "phase": "completed",
+            "current_slot": None, "candidate_slot": None, "error_summary": None,
+            "started_at": deployed_at, "completed_at": deployed_at,
+            "requested_by": "pipeline_runner",
+            "request_source": "pipeline_runner_deployed",
+            "release_title": f"{project} runner deploy {job_id}"[:180],
+            "release_summary": f"pipeline_jobs deployed_at={deployed_at.isoformat()}"[:240],
+            "payload": {"source": "pipeline_jobs", "runner_job_id": job_id},
+        })
+    return rows
+
+
+def filter_runner_deployments(runner_rows, queue_rows, existing_keys):
+    """큐/상태 정본과 겹치는 러너 배포는 원장에 합치지 않는다."""
+    kept = []
+    for row in runner_rows:
+        project, job_id = row["project"], row["runner_job_id"]
+        sha = row["release_sha"]
+        duplicate = (project, job_id) in existing_keys
+        for queue in queue_rows:
+            if queue["project"] != project:
+                continue
+            queue_id = queue["runner_job_id"]
+            queue_sha = queue["release_sha"]
+            if (queue_id == job_id or queue_id.startswith(job_id + "-")
+                    or (len(queue_sha) >= 7 and sha.startswith(queue_sha))):
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(row)
+    return kept
+
+
+def existing_non_runner_keys(cur, projects):
+    cur.execute(
+        "SELECT project, runner_job_id FROM deploy_runs "
+        "WHERE project = ANY(%s) AND runner_job_id IS NOT NULL "
+        "AND request_source IS DISTINCT FROM 'pipeline_runner_deployed'",
+        (list(projects),),
+    )
+    return set(cur.fetchall())
 
 
 UPSERT_SQL = """
@@ -397,6 +506,27 @@ def main() -> int:
         print(f"[collect] {project}: {len(rows)}건 (cutoff={cutoff.date()}, host={cfg['host']})")
         all_rows.extend(rows)
 
+    # dry-run 도 동일한 DB 수집 경로를 쓰되 읽기 전용 트랜잭션을 강제한다.
+    try:
+        read_conn = connect_db()
+        try:
+            read_conn.set_session(readonly=True)
+            with read_conn, read_conn.cursor() as cur:
+                runner_rows = collect_pipeline_deployments(cur, targets, cutoff)
+                existing_keys = existing_non_runner_keys(cur, targets)
+            candidates = runner_rows
+            runner_rows = filter_runner_deployments(candidates, all_rows, existing_keys)
+            for project in targets:
+                count = sum(row["project"] == project for row in runner_rows)
+                excluded = sum(row["project"] == project for row in candidates) - count
+                print(f"[collect-runner] {project}: {count}건 (중복 제외 {excluded}건)")
+            all_rows.extend(runner_rows)
+        finally:
+            read_conn.close()
+    except Exception as exc:
+        print(f"[warn] pipeline_jobs 읽기 실패: {type(exc).__name__}", file=sys.stderr)
+    all_rows.sort(key=lambda row: row["completed_at"])
+
     if args.dry_run:
         for row in all_rows:
             print(f"  {row['completed_at'].astimezone().isoformat(timespec='minutes')} "
@@ -409,17 +539,7 @@ def main() -> int:
         print("[apply] 대상 없음")
         return 0
 
-    import psycopg2  # 호스트 실행 전제. 컨테이너 내부에서는 asyncpg 경로를 쓴다.
-
-    env = load_db_env()
-    conn = psycopg2.connect(
-        host=os.getenv("SYNC_DB_HOST", "127.0.0.1"),
-        port=int(os.getenv("SYNC_DB_PORT", "5433")),
-        dbname=env.get("AADS_DB_NAME", "aads"),
-        user=env.get("AADS_DB_USER", "aads"),
-        password=env.get("AADS_DB_PASSWORD", ""),
-        connect_timeout=10,
-    )
+    conn = connect_db()
     inserted = updated = skipped = 0
     try:
         with conn, conn.cursor() as cur:
