@@ -276,7 +276,7 @@ async def test_unreadable_bankbook_upload_succeeds_with_needs_review_label(hr, m
 async def test_other_document_types_are_not_run_through_ocr(hr, monkeypatch):
     ocr = _scripted_ocr({"text": WOORI_TEXT, "confidence": 0.9})
     monkeypatch.setattr(bb, "_default_ocr", ocr)
-    document = await _upload(document_type="id_card")
+    document = await _upload(document_type="other")
     assert ocr.calls == [] and "extract_status" not in document
 
 
@@ -306,7 +306,7 @@ async def test_reextract_is_admin_only_idempotent_and_bankbook_only(hr, monkeypa
 @pytest.mark.asyncio
 async def test_reextract_rejects_non_bankbook_and_superseded(hr, monkeypatch):
     monkeypatch.setattr(bb, "_default_ocr", _scripted_ocr({"text": "", "confidence": 0}))
-    other = await _upload(document_type="id_card")
+    other = await _upload(document_type="other")
     with pytest.raises(HTTPException) as wrong_type:
         await service.reextract_bankbook_document(other["id"], OWNER)
     assert wrong_type.value.status_code == 400

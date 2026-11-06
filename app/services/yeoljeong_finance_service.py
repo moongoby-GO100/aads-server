@@ -40,6 +40,7 @@ from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 from PIL import Image, ImageChops
 from app.services import obys_bankbook_extract as bankbook_extract
+from app.services import obys_identity_extract as identity_extract
 from app.services import yeoljeong_company_seal
 from app.services.auth_challenge_orchestrator import approved_operator_input, classify_portal_state, make_resume_token
 from app.services.browser_collection_audit import SITE_STAGE_LOG_SCHEMA, append_site_stage_log
@@ -5076,6 +5077,9 @@ def _employee_onboarding_profile(
                 profile[field] = value
         summaries.append(
             {
+                "id": str(row.get("id") or ""),
+                "extract_status": str(row.get("extract_status") or ""),
+                "extract_reason": str(row.get("extract_reason") or ""),
                 "document_type": str(row.get("document_type") or ""),
                 "document_label": str(row.get("document_label") or ""),
                 "status": str(row.get("status") or "uploaded"),
@@ -5570,6 +5574,10 @@ async def save_onboarding_document(
             record,
             await bankbook_extract.extract_bankbook_bounded(await asyncio.to_thread(destination.read_bytes)),
         )
+    if document_type in identity_extract.DOCUMENT_TYPES:
+        identity_extract.apply_to_record(record, await identity_extract.extract_identity_bounded(
+            await asyncio.to_thread(destination.read_bytes), document_type=document_type,
+            employee_name=record.get("employee_name", "")))
     try:
         if _db_available():
             if not await _db_upsert_ledger("onboarding_documents", record):
@@ -5839,6 +5847,24 @@ async def reextract_bankbook_document(document_id: str, user: dict[str, Any]) ->
     record["updated_at"] = _now()
     await asyncio.to_thread(_write_hr_record, "onboarding_documents", record, user)
     await _autofill_contracts_from_bankbook(record, _tenant_id(user), source="bankbook_reextract")
+    return _onboarding_document_view(record)
+
+
+async def reextract_identity_document(document_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="신분증 재판독 권한이 없습니다")
+    record, path = await asyncio.to_thread(get_onboarding_document, document_id, user)
+    if record.get("document_type") not in identity_extract.DOCUMENT_TYPES:
+        raise HTTPException(status_code=400, detail="신분증·등본만 재판독할 수 있습니다")
+    if record.get("deleted_at") or record.get("status") in {"superseded", "deleted", "rejected", "missing"}:
+        raise HTTPException(status_code=409, detail="현재본만 재판독할 수 있습니다")
+    result = await identity_extract.extract_identity_bounded(
+        await asyncio.to_thread(path.read_bytes), document_type=record["document_type"],
+        employee_name=record.get("employee_name", ""))
+    identity_extract.apply_to_record(record, result)
+    record["updated_at"] = _now()
+    await asyncio.to_thread(_write_hr_record, "onboarding_documents", record, user)
     return _onboarding_document_view(record)
 
 

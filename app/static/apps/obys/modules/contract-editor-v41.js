@@ -1023,6 +1023,8 @@
     }).join("");
     const employee = E.employee;
     const latest = employee ? contractsOf(employee)[0] : null;
+    const extractionGaps = (employee?.onboarding_documents || []).filter(item => item.extract_status === "needs_review" && ["bankbook", "id_card", "resident_register"].includes(item.document_type));
+    const extractionHints = extractionGaps.map(item => `${item.document_type === "bankbook" ? "통장사본 계좌 확인 필요" : "신분증 판독 실패"} — <button class="btn" type="button" data-cv41-reextract="${esc(item.id)}" data-extract-kind="${item.document_type === "bankbook" ? "bankbook" : "identity"}">재판독</button> 또는 직접 입력`).join("<br>");
     const gaps = employee ? [["연락처", employee.phone], ["생년월일", employee.birth_date], ["주소", employee.address]].filter(([, v]) => !v).map(([k]) => k) : [];
     return `
       <p class="notice">승인된 입사요청만 계약 대상이 됩니다. 한 직원이 여러 점포에서 일하면 점포(사업자)마다 따로 계약합니다.</p>
@@ -1032,7 +1034,7 @@
         <div class="detail-cell"><small>직원</small><b>${esc(employee.name || "-")}</b><small>${esc(employee.email_masked || "")}</small></div>
         <div class="detail-cell"><small>사업자(사용자)</small><b>${esc(businessName(employee.business_id))}</b></div>
         <div class="detail-cell"><small>근무 지점</small><b>${esc(employee.branch || "지점 미정")}</b></div>
-        <div class="detail-cell"><small>입사서류</small><b>${Number(employee.onboarding_document_count || 0)}건</b><small>${gaps.length ? `비어 있는 정보: ${esc(gaps.join(", "))} — 계약조건 단계에서 입력합니다.` : "인적사항 확인됨"}</small><button class="btn" type="button" data-cv41-docs-open>서류 등록·확인</button></div>
+        <div class="detail-cell"><small>입사서류</small><b>${Number(employee.onboarding_document_count || 0)}건</b><small>${extractionHints}<br>${gaps.length ? `비어 있는 정보: ${esc(gaps.join(", "))} — 계약조건 단계에서 입력합니다.` : "인적사항 확인됨"}</small><button class="btn" type="button" data-cv41-docs-open>서류 등록·확인</button></div>
       </div>${latest ? `<p class="cv41-alert warn">이 직원에게 이미 ${esc(statusOf(latest)[1])} 계약서가 있습니다. <button class="btn" type="button" data-cv41-contract-open="${esc(latest.id)}">기존 계약 열기</button> 새로 작성하면 별도 계약서가 됩니다.</p>` : ""}` : ""}`;
   }
   function fieldControl(field) {
@@ -1385,6 +1387,14 @@
   }
   function wireMissing(root) {
     if (!root) return;
+    root.querySelectorAll("[data-cv41-reextract]").forEach(button => button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await api(`/onboarding/documents/${encodeURIComponent(button.dataset.cv41Reextract)}/${button.dataset.extractKind}-extract`, { method: "POST" });
+        button.textContent = "판독 완료 — 직원을 다시 불러와 확인";
+      } catch (_error) { button.textContent = "재판독 실패 — 직접 입력"; }
+      finally { button.disabled = false; }
+    }));
     root.querySelectorAll("[data-cv41-suggest]").forEach(button => button.addEventListener("click", () => { applySuggestion(button.dataset.cv41Suggest); render(); }));
     root.querySelector("[data-cv41-suggest-all]")?.addEventListener("click", () => {
       liveMissing().forEach(label => { const name = FIELD_BY_LABEL.get(label); if (name) applySuggestion(name); });

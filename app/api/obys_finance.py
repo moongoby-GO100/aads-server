@@ -1804,3 +1804,8 @@ async def get_bank_summary(
             date_to=date_to,
         )
     )
+
+
+@router.post("/onboarding/documents/{document_id}/identity-extract")
+async def reextract_identity_document(document_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"document": await svc.reextract_identity_document(document_id, current_user)}
