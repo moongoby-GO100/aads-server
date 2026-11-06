@@ -128,7 +128,7 @@ def http_fallback_write(payload: dict, opener=urllib.request.urlopen, timeout: f
         body = json.dumps({"project_key": str(payload["project"]), **entry}, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
             f"{base}/api/v1/handovers", data=body, method="POST",
-            headers={"Content-Type": "application/json", auth[0]: auth[1]},
+            headers={"Content-Type": "application/json", "User-Agent": "aads-runner-handover/1", auth[0]: auth[1]},
         )
         with opener(req, timeout=timeout) as resp:
             status = int(getattr(resp, "status", 0) or resp.getcode())
