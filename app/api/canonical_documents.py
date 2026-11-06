@@ -881,7 +881,7 @@ async def approved_brief(conn: Any, tenant_id: str, project_key: str, limit: int
     if not 1 <= limit <= 20:
         raise ValueError("limit out of range")
     rows = await conn.fetch(
-        "SELECT h.document_key,h.kind,r.title,r.version,r.content AS excerpt,r.content_hash, "
+        "SELECT h.document_key,h.kind,r.title,r.version,r.id AS revision_id,r.content AS excerpt,r.content_hash, "
         "CASE WHEN EXISTS (SELECT 1 FROM project_document_goal_links l "
         "WHERE l.head_id=h.id AND l.goal_id=ANY($4::uuid[])) "
         "OR EXISTS (SELECT 1 FROM project_document_revisions linked "

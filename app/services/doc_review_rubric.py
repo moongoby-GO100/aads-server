@@ -17,7 +17,7 @@ ISSUE_KEYS = ("severity", "criterion", "location", "problem", "fix")
 STRUCTURED_KEYS = ("verdict", "summary", "ceo_brief", "scores", "score", "issues")
 LEGACY_KEYS = frozenset({"verdict", "reason"})
 MAX_ISSUES = 30
-_FIELD_LIMITS = {"summary": 600, "ceo_brief": 800, "criterion": 100, "problem": 600, "fix": 600}
+_FIELD_LIMITS = {"summary": 600, "ceo_brief": 800, "criterion": 100, "problem": 600, "fix": 600, "needed": 600}
 _LOCATION_LIMIT = 40
 MAX_MISSING_PATHS = 20
 
@@ -103,6 +103,35 @@ def _section_body(content, headings, words):
     return None
 
 
+def approved_excerpt(content, limit=600):
+    """우선 절에 최소 몫을 나누고 남는 자리는 앞 절부터 채운다."""
+    if limit <= 0:
+        return ""
+    text = _sanitize(content or "")
+    if _secret_count(text):
+        return ""
+    headings = _headings(text)
+    lines = text.splitlines()
+    parts = []
+    for words in (_GOAL, _SCOPE, _CRITERIA, ("결정", "decision")):
+        for pos, (level, title, index) in enumerate(headings):
+            if any(word in title for word in words):
+                end = next((i for lev, _, i in headings[pos + 1:] if lev <= level), len(lines))
+                parts.append("\n".join(lines[index:end]).strip())
+                break
+    if not parts:
+        return text[:limit]
+    budget = max(0, limit - (len(parts) - 1))
+    share = budget // len(parts)
+    sizes = [min(len(part), share) for part in parts]
+    remaining = budget - sum(sizes)
+    for i, part in enumerate(parts):
+        extra = min(remaining, len(part) - sizes[i])
+        sizes[i] += extra
+        remaining -= extra
+    return "\n".join(part[:size] for part, size in zip(parts, sizes))[:limit]
+
+
 def _check_paths(content, root):
     seen, missing, redacted, unverifiable = set(), [], 0, 0
     for match in _PATH.finditer(content):
@@ -182,12 +211,13 @@ def build_review_request(kind, doc_tier, title, content, checks, approved, prior
         f"이 종류의 평가 기준: {criteria}\n"
         "문서에 적힌 파일·함수·수치가 실제와 맞는지, 내부 모순이 없는지, 빠진 롤백이 없는지 꼼꼼히 보세요. "
         "결정적 검사 결과(deterministic_checks)와 같은 프로젝트 승인 문서 목록(approved_documents)을 참고해 기존 문서와의 충돌도 확인하세요.\n"
-        "아래 JSON 한 개만 반환하세요. 모든 키가 필수이고 다른 키는 넣지 마세요.\n"
+        "발췌로 확인할 수 없는 정합성 의문은 issues가 아니라 unverified에 기록하세요.\n"
+        "아래 JSON 한 개만 반환하세요. unverified는 선택 키이며 없으면 빈 배열 또는 생략합니다. 나머지 키는 필수입니다.\n"
         '{"verdict":"pass 또는 reject","summary":"한글 3문장 이내",'
         '"ceo_brief":"비전문가인 대표님이 읽는 쉬운 한국어 2~3문장: 이 문서가 무엇을 정하는지, 승인되면 무엇이 바뀌는지, 주의할 점",'
         '"scores":{"completeness":0~1,"measurable_criteria":0~1,"factual_consistency":0~1,"risk_rollback":0~1,"conflict_free":0~1},'
         '"score":0~1,'
-        '"issues":[{"severity":"blocker 또는 major 또는 minor","criterion":"기준 이름","location":"40자 이내 위치","problem":"문제","fix":"고치는 방법"}]}\n'
+        '"issues":[{"severity":"blocker 또는 major 또는 minor","criterion":"기준 이름","location":"40자 이내 위치","problem":"문제","fix":"고치는 방법"}],"unverified":[{"criterion":"기준 이름","location":"위치","problem":"확인 못한 의문","needed":"확인에 필요한 근거"}]}\n'
         "blocker 가 하나라도 있으면 verdict 는 reject 여야 합니다. 지적이 없으면 issues 는 빈 배열입니다."
     )
     payload = {
@@ -226,7 +256,7 @@ def validate_structured(obj):
     missing = [k for k in STRUCTURED_KEYS if k not in obj]
     if missing:
         return False, "필수 키 없음: " + ",".join(missing)
-    extra = [k for k in obj if k not in STRUCTURED_KEYS]
+    extra = [k for k in obj if k not in (*STRUCTURED_KEYS, "unverified")]
     if extra:
         return False, "허용되지 않은 키: " + ",".join(str(k)[:30] for k in extra[:5])
     if obj["verdict"] not in ("pass", "reject"):
@@ -263,6 +293,17 @@ def validate_structured(obj):
         error = _text(issue["location"], f"{label}.location", _LOCATION_LIMIT)
         if error:
             return False, error
+    unverified = obj.get("unverified", [])
+    if not isinstance(unverified, list) or len(unverified) > MAX_ISSUES:
+        return False, "unverified 는 30건 이하 배열"
+    for index, item in enumerate(unverified):
+        if not isinstance(item, dict) or set(item) != {"criterion", "location", "problem", "needed"}:
+            return False, "unverified 키 오류"
+        for name in ("criterion", "location", "problem", "needed"):
+            error = _text(item[name], f"unverified[{index}].{name}",
+                          _LOCATION_LIMIT if name == "location" else _FIELD_LIMITS[name])
+            if error:
+                return False, error
     return True, ""
 
 
@@ -328,6 +369,10 @@ def _fit(head, data, limit):
         return len(head) + len(REVIEW_MARKER) + len(_safe_dump(d))
 
     data = dict(data, issues=list(data["issues"]))
+    if data.get("unverified"):
+        data["unverified_count"] = len(data["unverified"])
+        while size(data) > limit and data["unverified"]:
+            data["unverified"] = data["unverified"][:-1]
     total_blockers = sum(1 for i in data["issues"] if i["severity"] == "blocker")
     dropped = 0
     for severity in ("minor", "major"):
@@ -370,9 +415,11 @@ def compose_reason(data, checks, limit=REASON_LIMIT):
         lines.append("[자동 반려] blocker 지적이 있어 반려로 확정했습니다.")
     lines.append(_one_line(_sanitize(data["summary"]), 600))
     lines.append(f"점수 {data['score']:.2f} · 지적 blocker {counts['blocker']} / major {counts['major']} / minor {counts['minor']}")
+    lines.append(f"미검증 {len(data.get('unverified', []))}건")
     head = "\n".join(lines)
     body = {"checks": checks, "scores": data["scores"], "score": data["score"],
-            "issues": data["issues"], "ceo_brief": data["ceo_brief"]}
+            "issues": data["issues"], "ceo_brief": data["ceo_brief"],
+            "unverified": data.get("unverified", [])}
     return head + REVIEW_MARKER + _fit(head, body, limit)
 
 
@@ -411,4 +458,10 @@ def parse_review_reason(reason):
         data = json.loads(tail)
     except ValueError:
         return head, None
+    if isinstance(data, dict):
+        data.setdefault("unverified", [])
+        items = data["unverified"]
+        count = data.get("unverified_count", len(items) if isinstance(items, list) else 0)
+        if "미검증 " not in head:
+            head += f"\n미검증 {count}건"
     return head, data if isinstance(data, dict) else None

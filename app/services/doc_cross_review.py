@@ -138,6 +138,7 @@ def build_review_detail(rows):
                   'summary': text, 'structured': bool(data),
                   'ceo_brief': brief if isinstance(brief, str) else None, 'score': score,
                   'scores': scores if isinstance(scores, dict) else None, 'issues': issues,
+                  'unverified_count': _count(data.get('unverified_count', len(data.get('unverified') or []))),
                   'invalid_issue_count': len(raw_issues) - len(issues), 'checks': checks,
                   'dropped_blockers': _count(data.get('dropped_blockers'))}
         if nonfinite:
@@ -236,7 +237,7 @@ async def _record(conn, tenant, project, head, revision, pick, verdict, reason):
 
 
 async def _approved_titles(conn, tenant, project, head):
-    """같은 프로젝트 승인 문서의 제목·key 만(본문 제외). 조회 실패는 검토를 막지 않는다."""
+    """같은 프로젝트 승인 문서의 식별 정보와 정제된 발췌. 조회 실패는 검토를 막지 않는다."""
     try:
         from app.api.canonical_documents import approved_brief
         rows = await approved_brief(conn, tenant, project, limit=8)
@@ -244,8 +245,18 @@ async def _approved_titles(conn, tenant, project, head):
         logger.warning('doc_cross_review_approved_titles_failed', exc_info=True)
         return []
     own = head.get('document_key')
-    return [{'title': str(r.get('title') or '')[:120], 'document_key': str(r.get('document_key') or '')[:128]}
-            for r in rows if r.get('document_key') != own][:8]
+    result, remaining = [], 3000
+    for row in rows:
+        if row.get('document_key') == own:
+            continue
+        item = {key: rubric._sanitize(str(row.get(key) or '')) for key in
+                ('document_key', 'kind', 'title', 'version', 'revision_id', 'content_hash')}
+        item['excerpt'] = rubric.approved_excerpt(row.get('excerpt'), min(600, remaining))
+        remaining -= len(item['excerpt'])
+        result.append(item)
+        if len(result) == 8:
+            break
+    return result
 
 
 async def execute_review(tenant, project, head, revision, *, follow_up=False):

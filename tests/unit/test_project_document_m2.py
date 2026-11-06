@@ -52,6 +52,7 @@ def test_approved_brief_uses_only_scoped_approved_revision():
     assert "r.id=h.approved_revision_id" in sql
     assert "r.head_id=h.id AND r.tenant_id=h.tenant_id AND r.project_key=h.project_key" in sql
     assert "h.tenant_id=$1::uuid AND h.project_key=$2" in sql
+    assert "r.id AS revision_id" in sql
     assert args == (TENANT, "AADS", 8)
 
 

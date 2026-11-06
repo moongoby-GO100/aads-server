@@ -164,6 +164,7 @@ def _review_fields(review_rows: Any) -> dict:
                     minors.append(text.strip()[:200])
     return {"ceo_brief": detail["ceo_brief"], "score": detail["min_score"],
             "minor_issues": list(dict.fromkeys(minors))[:3],
+            "unverified_count": sum(r.get("unverified_count", 0) for r in detail["reviews"]),
             "reviewer_models": [r["model"] for r in detail["reviews"]]}
 
 
@@ -361,7 +362,7 @@ def _auto_section(auto: dict | None, auto_limit: int) -> list[str]:
             flag = " 🔴고위험" if item["risk"] == "high" else ""
             score = f" · 점수 {item['score']:.2f}" if isinstance(item.get("score"), (int, float)) else ""
             lines.append(f"  • {html.escape(_short(item['title']))} ({html.escape(item['project_key'])}/"
-                         f"{html.escape(item['document_key'])}){flag}{score}")
+                         f"{html.escape(item['document_key'])}){flag}{score} · 미검증 {item.get('unverified_count', 0)}건")
         if len(approved) > auto_limit:
             lines.append(f"  … 외 {len(approved) - auto_limit}건")
     if held:
@@ -370,7 +371,7 @@ def _auto_section(auto: dict | None, auto_limit: int) -> list[str]:
             reason = item["hold_reasons"][0] if item["hold_reasons"] else "자동승인 기준 미충족"
             flag = " 🔴고위험" if item["risk"] == "high" else ""
             lines.append(f"  • {html.escape(_short(item['title']))} ({html.escape(item['project_key'])}/"
-                         f"{html.escape(item['document_key'])}){flag} — {html.escape(reason)}")
+                         f"{html.escape(item['document_key'])}){flag} — {html.escape(reason)} · 미검증 {item.get('unverified_count', 0)}건")
         if len(held) > PER_PROJECT_LIMIT:
             lines.append(f"  … 외 {len(held) - PER_PROJECT_LIMIT}건")
     if would:
