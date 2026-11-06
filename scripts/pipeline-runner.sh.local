@@ -3952,7 +3952,14 @@ _ckpt_resume_apply() {
     # 큰 SQL 결과는 변수에 담지 않고 파일로 받는다(patch 는 최대 2MiB).
     db_exec "SELECT encode(patch,'base64') FROM pipeline_job_checkpoints WHERE id = ${q_id} AND job_id = ${q_job};" \
         >"$tmpd/patch.b64" 2>/dev/null || { echo "skipped|db_error"; return 0; }
-    base64 -d "$tmpd/patch.b64" >"$tmpd/patch" 2>/dev/null || { echo "skipped|sha_mismatch"; return 0; }
+    base64 -d "$tmpd/patch.b64" >"$tmpd/patch.enc" 2>/dev/null || { echo "skipped|decrypt_failed"; return 0; }
+    # 암호문(v1)만 신뢰한다. 평문 행·버전 불일치·MAC 불일치·키 없음은 모두 이어받지 않고 폴백한다.
+    local dec_rc=0
+    _ckpt_crypt dec "$jid" "$base" "$tmpd/patch.enc" "$tmpd/patch" || dec_rc=$?
+    if (( dec_rc != 0 )); then
+        if (( dec_rc == 3 )); then echo "skipped|key_unavailable"; else echo "skipped|decrypt_failed"; fi
+        return 0
+    fi
     got=$(sha256sum "$tmpd/patch" | cut -d' ' -f1)
     [[ "$got" == "$sha" ]] || { echo "skipped|sha_mismatch"; return 0; }
     git -C "$main" worktree add --detach "$wt" "$base" >/dev/null 2>&1 || { echo "skipped|base_missing"; return 0; }
@@ -4019,7 +4026,7 @@ _ckpt_resume_try() {
     fi
 
     rm -rf "$tmpd"
-    [[ "$kind" == "skipped" && "$a" =~ ^(none|expired|hash_mismatch|base_missing|sha_mismatch|apply_failed|table_missing|db_error|timeout)$ ]] || a="db_error"
+    [[ "$kind" == "skipped" && "$a" =~ ^(none|expired|hash_mismatch|base_missing|sha_mismatch|apply_failed|table_missing|db_error|timeout|key_unavailable|decrypt_failed)$ ]] || a="db_error"
     _ckpt_resume_remove_worktree "$main" "$wt"
     log "  checkpoint 이어받기 건너뜀 job=$jid checkpoint=$cid reason=$a"
     record_runner_event "$jid" "checkpoint_resume_skipped" "" "" "" "" "" "" "{\"reason\":\"${a}\",\"checkpoint_id\":\"${cid}\"}" || true
@@ -10561,6 +10568,107 @@ assert isinstance(d,dict) and isinstance(d.get("findings"),list)
 sys.stdout.write(json.dumps(d,separators=(",",":")))' "$1" 2>/dev/null
 }
 
+# ── patch 열 암호화 (v1) ──────────────────────────────────────────────
+# 채팅 SELECT 도구가 superuser 로 접속해 patch 원문을 읽을 수 있으므로(필터·역할 방식은 우회됨) 내용 자체를 암호화한다.
+# 형식: "v1:" + nonce(16) + 암호문 + tag(32).  tag = HMAC-SHA256(mac키, "v1:" + job_id + "\n" + base_sha + "\0" + nonce + 암호문)
+#   → 버전·행(job/base)에 묶인 encrypt-then-MAC(변조·행 바꿔치기 모두 복호화 전에 거부).
+# 도구 선택: 러너 호스트에서 확인한 것은 python3 표준 라이브러리(hmac/hashlib/secrets: AES 없음)와 openssl 3 CLI 다.
+#   `openssl enc` 는 GCM 을 지원하지 않아 AES-256-GCM 은 쓸 수 없으므로 AES-256-CTR(openssl) + HMAC-SHA256(python) 로 한다.
+#   키 분리: 마스터 키에서 HMAC 으로 mac키·메시지별 암호화 비밀번호를 따로 파생한다(같은 키를 두 용도로 쓰지 않는다).
+#   openssl 의 -K(키 인자)는 ps 에 보이므로 쓰지 않는다. 파생값은 파이프 fd 로 `-pass fd:N` 에 넘긴다(명령줄·환경변수·임시 파일에 없음).
+#   마스터 키는 python 이 파일에서 직접 읽는다 — bash 변수·인자·로그에 오지 않는다. 평문 입출력도 파일이다(호출자의 mktemp -d 0700 아래).
+# 키 파일: 기본 /root/.config/aads-runner/checkpoint.key (RUNNER_CHECKPOINT_KEY_FILE 로 경로만 변경). 일반 파일·0600·호출자 소유·
+#   hex 64자(=32바이트) 가 아니면 쓰지 않는다(fail-closed). 키를 만들거나 커밋하는 코드는 여기에 없다.
+# 종료코드: 0=성공  3=키 사용 불가(없음·권한·길이)  그 외=암호/형식 실패.
+_ckpt_crypt_py() {
+    cat <<'PY'
+import hashlib, hmac, os, re, secrets, shutil, stat, subprocess, sys
+
+DEFAULT_KEY = "/root/.config/aads-runner/checkpoint.key"
+VER = b"v1:"
+NONCE, TAG = 16, 32
+
+def key_or_exit():
+    path = os.environ.get("RUNNER_CHECKPOINT_KEY_FILE") or DEFAULT_KEY
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        sys.exit(3)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o600 or st.st_uid != os.geteuid():
+            sys.exit(3)
+        raw = os.read(fd, 129)
+    finally:
+        os.close(fd)
+    txt = raw.strip()
+    if len(raw) > 128 or not re.fullmatch(rb"[0-9a-fA-F]{64}", txt):
+        sys.exit(3)
+    return bytes.fromhex(txt.decode())
+
+def openssl_ctr(passphrase, data, decrypt):
+    exe = shutil.which("openssl")
+    if not exe:
+        sys.exit(4)
+    r, w = os.pipe()
+    try:
+        os.write(w, passphrase)
+        os.close(w)
+        cmd = [exe, "enc"] + (["-d"] if decrypt else []) + ["-aes-256-ctr", "-pbkdf2", "-iter", "1",
+                                                            "-md", "sha256", "-nosalt", "-pass", "fd:%d" % r]
+        p = subprocess.run(cmd, input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           pass_fds=(r,), timeout=20)
+    finally:
+        os.close(r)
+    if p.returncode != 0 or len(p.stdout) != len(data):
+        sys.exit(4)
+    return p.stdout
+
+def derive(master, nonce):
+    mac_key = hmac.new(master, b"aads-ckpt-v1|mac", hashlib.sha256).digest()
+    enc_pass = hmac.new(master, b"aads-ckpt-v1|enc|" + nonce, hashlib.sha256).hexdigest().encode()
+    return mac_key, enc_pass
+
+def tag_of(mac_key, aad, nonce, ct):
+    return hmac.new(mac_key, VER + aad + b"\0" + nonce + ct, hashlib.sha256).digest()
+
+def write_private(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+
+mode, aad, src, dst = sys.argv[1], sys.argv[2].encode(), sys.argv[3], sys.argv[4]
+master = key_or_exit()
+with open(src, "rb") as fh:
+    blob = fh.read()
+if mode == "enc":
+    nonce = secrets.token_bytes(NONCE)
+    mac_key, enc_pass = derive(master, nonce)
+    ct = openssl_ctr(enc_pass, blob, False)
+    write_private(dst, VER + nonce + ct + tag_of(mac_key, aad, nonce, ct))
+elif mode == "dec":
+    if not blob.startswith(VER) or len(blob) < len(VER) + NONCE + TAG:
+        sys.exit(4)
+    nonce = blob[len(VER):len(VER) + NONCE]
+    ct = blob[len(VER) + NONCE:-TAG]
+    mac_key, enc_pass = derive(master, nonce)
+    if not hmac.compare_digest(blob[-TAG:], tag_of(mac_key, aad, nonce, ct)):
+        sys.exit(4)
+    write_private(dst, openssl_ctr(enc_pass, ct, True))
+else:
+    sys.exit(4)
+PY
+}
+
+# <enc|dec> <job_id> <base_sha> <입력 파일> <출력 파일>.  실패하면 출력 파일을 남기지 않는다. 키·평문은 stdout/stderr 로 내지 않는다.
+_ckpt_crypt() {
+    local mode="$1" jid="$2" base="$3" src="$4" dst="$5" rc=0
+    python3 -c "$(_ckpt_crypt_py)" "$mode" "${jid}"$'\n'"${base}" "$src" "$dst" >/dev/null 2>&1 || rc=$?
+    (( rc == 0 )) || rm -f "$dst"
+    return "$rc"
+}
+# ── patch 열 암호화 끝 ────────────────────────────────────────────────
+
 # 하위 셸 안에서 실행. stdout 한 줄: saved|<id>|<files>|<bytes>  또는  skipped|<reason>
 _ckpt_build_and_store() {
     local jid="$1" attempt="$2" tmpd="$3"
@@ -10605,11 +10713,19 @@ _ckpt_build_and_store() {
         return 0
     fi
     sha=$(sha256sum "$patch" | cut -d' ' -f1)
+    # 시크릿·바이너리 검사를 통과한 patch 만 암호화한다. 키 사용 불가·암호화 실패면 저장하지 않는다(fail-closed).
+    local enc_rc=0
+    _ckpt_crypt enc "$jid" "$base" "$patch" "$tmpd/patch.enc" || enc_rc=$?
+    rm -f "$patch"
+    if (( enc_rc != 0 )); then
+        if (( enc_rc == 3 )); then echo "skipped|key_unavailable"; else echo "skipped|encrypt_failed"; fi
+        return 0
+    fi
     meta=$(db_exec "SELECT COALESCE(instruction_hash,''), COALESCE(NULLIF(actual_model,''), NULLIF(model,''), '') FROM pipeline_jobs WHERE job_id=$(sql_escape "$jid");" 2>/dev/null) \
         || { echo "skipped|db_error"; return 0; }
     IFS=$'\x1e' read -r ihash model <<< "$meta"
     [[ -n "$ihash" ]] || { echo "skipped|db_error"; return 0; }
-    b64=$(base64 -w0 "$patch")
+    b64=$(base64 -w0 "$tmpd/patch.enc")
     # SQL 은 stdin 으로 넘긴다(db_exec). base64 알파벳은 따옴표 안전하므로 sql_escape 를 거치지 않는다.
     id=$(db_exec "INSERT INTO pipeline_job_checkpoints (job_id, base_sha, patch, patch_sha256, files, bytes, model, attempt, host, instruction_hash)
         VALUES ($(sql_escape "$jid"), '${base}', decode('${b64}','base64'), '${sha}', $(sql_escape "$files_json")::jsonb, ${bytes},
@@ -10675,7 +10791,7 @@ _shutdown_save_checkpoint() {
         log "  checkpoint 저장 job=$jid id=$a files=$b bytes=$c"
         _ckpt_record_event "$jid" "checkpoint_saved" "{\"checkpoint_id\":\"$a\",\"files\":${b:-0},\"bytes\":${c:-0}}"
     else
-        [[ "$kind" == "skipped" && "$a" =~ ^(no_changes|too_large|timeout|table_missing|db_error|secret_detected|secret_unscannable|secret_scan_failed)$ ]] || a="db_error"
+        [[ "$kind" == "skipped" && "$a" =~ ^(no_changes|too_large|timeout|table_missing|db_error|secret_detected|secret_unscannable|secret_scan_failed|key_unavailable|encrypt_failed)$ ]] || a="db_error"
         log "  checkpoint 건너뜀 job=$jid reason=$a"
         skip_meta="{\"reason\":\"$a\"}"
         [[ -z "$scan_json" ]] || skip_meta="{\"reason\":\"$a\",\"scan\":${scan_json}}"

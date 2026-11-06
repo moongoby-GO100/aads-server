@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit import ckpt_crypto_helper as cc
+
 ROOT = Path(__file__).resolve().parents[2]
 SH = ROOT / "scripts" / "pipeline-runner.sh"
 LOCAL = ROOT / "scripts" / "pipeline-runner.sh.local"
@@ -94,7 +96,7 @@ def _bash(h: Path, body: str, env=None, preamble="", timeout=120):
     script = f"H={h}\nFAKE_ID={FAKE_ID}\n{HARNESS_HEAD}\n{_extract(SH.read_text(encoding='utf-8'))}\n{preamble}\n{body}\n"
     (h / "run.sh").write_text(script, encoding="utf-8")
     return subprocess.run(["bash", str(h / "run.sh")], capture_output=True, text=True,
-                          env={**os.environ, **(env or {})}, timeout=timeout)
+                          env={**os.environ, **cc.key_env(h.parent), **(env or {})}, timeout=timeout)
 
 
 class World:
@@ -148,7 +150,11 @@ class World:
         assert self.head_new != self.base
         self.wt = tmp_path / "wtB"
 
-    def run(self, *, mark=True, row=None, patch=None, files=None, env=None, body_extra=""):
+    def stored(self, patch=None) -> bytes:
+        """DB patch 열에 들어 있는 암호문(v1). patch 를 생략하면 World 의 정상 patch."""
+        return cc.encrypt(cc.make_key_file(self.tmp), self.jid, self.base, self.patch if patch is None else patch)
+
+    def run(self, *, mark=True, row=None, patch=None, raw_stored=None, files=None, env=None, body_extra=""):
         h = self.tmp / f"hB{uuid.uuid4().hex[:6]}"
         h.mkdir()
         if mark is True:
@@ -161,7 +167,7 @@ class World:
         if row != "none":
             (h / "row").write_text(RS.join(str(fields[k]) for k in
                                            ("base", "sha", "bytes", "host", "nfiles", "age_ok", "hash_ok")) + "\n")
-        (h / "stored_patch").write_bytes(self.patch if patch is None else patch)
+        (h / "stored_patch").write_bytes(self.stored(patch) if raw_stored is None else raw_stored)
         (h / "files_out").write_text("\n".join(self.files if files is None else files) + "\n")
         body = (f'resume_brief=""\n'
                 f'prepare_clean_job_worktree {self.jid} AADS sid "{self.main_b}" "{self.wt}" resume_brief && echo RC=0 || echo RC=$?\n'
@@ -345,7 +351,7 @@ def test_real_pg_queries_in_isolated_schema(world):
         return subprocess.run(["psql", dsn, "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A", "-c", sql],
                               capture_output=True, text=True, check=True).stdout
 
-    b64 = base64.b64encode(world.patch).decode()
+    b64 = base64.b64encode(world.stored()).decode()
     try:
         psql(f"CREATE SCHEMA {schema}")
         psql(f"""CREATE TABLE {schema}.pipeline_jobs (job_id text, review_feedback text, instruction_hash text);

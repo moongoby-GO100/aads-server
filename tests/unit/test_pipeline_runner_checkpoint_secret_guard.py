@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit import ckpt_crypto_helper as cc
+
 ROOT = Path(__file__).resolve().parents[2]
 SH = ROOT / "scripts" / "pipeline-runner.sh"
 LOCAL = ROOT / "scripts" / "pipeline-runner.sh.local"
@@ -80,7 +82,7 @@ def _run(tmp_path, body, env=None, text=None):
     (h / "run.sh").write_text(script, encoding="utf-8")
     tdir = tmp_path / "tmp"
     tdir.mkdir(exist_ok=True)
-    e = {**os.environ, "TMPDIR": str(tdir), **(env or {})}
+    e = {**os.environ, "TMPDIR": str(tdir), **cc.key_env(tmp_path), **(env or {})}
     r = subprocess.run(["bash", str(h / "run.sh")], capture_output=True, text=True, env=e, timeout=120)
     return r, h
 

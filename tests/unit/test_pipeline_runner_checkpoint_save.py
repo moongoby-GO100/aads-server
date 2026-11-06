@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit import ckpt_crypto_helper as cc
+
 ROOT = Path(__file__).resolve().parents[2]
 SH = ROOT / "scripts" / "pipeline-runner.sh"
 LOCAL = ROOT / "scripts" / "pipeline-runner.sh.local"
@@ -78,7 +80,7 @@ def _run(tmp_path, body, env=None, preamble=""):
     h.mkdir(exist_ok=True)
     script = f"H={h}\nFAKE_ID={FAKE_ID}\n{HARNESS_HEAD}\n{_extract(text)}\n{preamble}\n{body}\n"
     (h / "run.sh").write_text(script, encoding="utf-8")
-    e = {**os.environ, **(env or {})}
+    e = {**os.environ, **cc.key_env(tmp_path), **(env or {})}
     r = subprocess.run(["bash", str(h / "run.sh")], capture_output=True, text=True, env=e, timeout=120)
     return r, h
 
@@ -113,10 +115,13 @@ def _dirty(wt):
     (wt / "RESULT-x.md").write_text("result\n")
 
 
-def _insert_patch(h):
+def _insert_patch(h, tmp_path, jid, base):
+    """INSERT 의 patch 열은 암호문(v1)이다. 시험용 독립 구현으로 풀어 평문 patch 를 돌려준다."""
     sql = _read(h / "insert.sql")
     m = re.search(r"decode\('([A-Za-z0-9+/=]+)','base64'\)", sql)
-    return base64.b64decode(m.group(1)), sql
+    blob = base64.b64decode(m.group(1))
+    assert blob.startswith(b"v1:")
+    return cc.decrypt(cc.make_key_file(tmp_path), jid, base, blob), sql
 
 
 def test_save_apply_sha_and_exclusions(tmp_path, job):
@@ -126,7 +131,7 @@ def test_save_apply_sha_and_exclusions(tmp_path, job):
     r, h = _run(tmp_path, f'_shutdown_save_checkpoint {jid} 2; echo "ID=$_CKPT_LAST_ID"')
     assert r.returncode == 0, r.stderr
     assert f"ID={FAKE_ID}" in r.stdout
-    patch, sql = _insert_patch(h)
+    patch, sql = _insert_patch(h, tmp_path, jid, base)
     assert f"'{base}'" in sql and hashlib.sha256(patch).hexdigest() in sql
     assert "$esc$ihash123$esc$" in sql and "$esc$testhost$esc$" in sql and "model-x" in sql
     assert re.search(r",\s*2,\s*\$esc\$testhost", sql)  # attempt=2
