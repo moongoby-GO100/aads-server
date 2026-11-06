@@ -452,6 +452,26 @@ def _in_prohibit_context(line: str, col: int, end_col: int) -> bool:
     )
 
 
+def _is_exec_only_script(line: str, col: int, end_col: int, path: str) -> bool:
+    """본문의 같은 구절에서 실행만 요청한 스크립트는 쓰기 추정에서 제외한다."""
+    start, end = 0, len(line)
+    for brk in _CLAUSE_BREAK_RE.finditer(line):
+        if brk.end() <= col:
+            start = brk.end()
+        elif brk.start() >= end_col:
+            end = brk.start()
+            break
+    clause = line[start:end]
+    if re.search(r"수정|고친다|추가|변경|\b(?:edit|modify)\b", clause, re.IGNORECASE):
+        return False
+    if re.search(r"\b(?:bash|sh|python3|python)\s+[`\"']?$", line[start:col]):
+        return True
+    return bool(
+        re.search(r"(?:^|/)scripts/.*\.(?:sh|py)$", path, re.IGNORECASE)
+        and re.search(r"실행|\brun\b", clause, re.IGNORECASE)
+    )
+
+
 def _scan_instruction_paths(
     text: str,
     skip_lines: frozenset[int] = frozenset(),
@@ -479,6 +499,10 @@ def _scan_instruction_paths(
         if _line_is_exec_command(line):
             continue
         line_start = text.rfind("\n", 0, match.start()) + 1
+        if _is_exec_only_script(
+            line, match.start() - line_start, match.end() - line_start, match.group(0),
+        ):
+            continue
         prefix_on_line = text[line_start:match.start()]
         if _line_prefix_has_exec_command(prefix_on_line):
             continue
@@ -615,7 +639,16 @@ def _parse_scope_token(token: str) -> str | None:
     return normalized
 
 
-def _scope_marker_tokens(value: str, *, block: bool) -> list[str]:
+def _scope_marker_tokens(value: str, *, block: bool, prose_write: bool = False) -> list[str]:
+    # 디렉터리 뒤에 산문 설명이 이어지면 디렉터리 전체의 소유 선언이 아니다.
+    # 경로만 단독 선언하거나 파일명 뒤에 설명을 붙인 기존 선언은 유지한다.
+    prose_dir = re.match(r"^\s*[`\"']?([^\s`\"']+/)[`\"']?\s+(?:의\s|내\s|.*테스트)", value)
+    if (
+        prose_write and prose_dir
+        and _parse_scope_token(prose_dir.group(1)) is not None
+        and not _TARGET_FILE_RE.search(value)
+    ):
+        return []
     value = re.sub(r"\([^)]*\)", " ", value)
     if block:
         value = value.strip().strip("`").split(None, 1)[0] if value.strip() else ""
@@ -650,7 +683,7 @@ def _parse_write_scope(instruction: str) -> _WriteScope:
         inline = m.group(2).strip()
         raw_tokens: list[str] = []
         if inline:
-            raw_tokens = _scope_marker_tokens(inline, block=False)
+            raw_tokens = _scope_marker_tokens(inline, block=False, prose_write=kind == "write")
         else:
             while idx + 1 < len(lines):
                 b = _SCOPE_BULLET_RE.match(lines[idx + 1])
@@ -658,7 +691,7 @@ def _parse_write_scope(instruction: str) -> _WriteScope:
                     break
                 idx += 1
                 marker_lines.add(idx)
-                raw_tokens.extend(_scope_marker_tokens(b.group(1), block=True))
+                raw_tokens.extend(_scope_marker_tokens(b.group(1), block=True, prose_write=kind == "write"))
         idx += 1
         for raw in raw_tokens:
             if raw.strip("`'\"").lower() in _SCOPE_NONE_TOKENS:
