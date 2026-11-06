@@ -753,3 +753,11 @@ def test_card_and_followup_use_goal_session(world, monkeypatch):
         res.card_marker("AADS", HEAD["document_key"], REV, "revise"), now=NOW))
     assert out["job_id"] and world.db.jobs[0]["session_id"] == SESSION
     assert resolver.await_count == 2
+
+
+def test_oversized_canonical_body_goes_to_human_without_automatic_work():
+    out = res.classify_block(hold(), [rrow([issue()])], {'rounds': [], 'daily': 0}, HEAD,
+                             {**REVISION, 'content': '가' * (fix.CANONICAL_BODY_LIMIT + 1)},
+                             resolve_history={'jobs': []}, mode='on')
+    assert out.path == 'ceo_card'
+    assert out.reasons == ['canonical_body_too_large']

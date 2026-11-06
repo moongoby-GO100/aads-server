@@ -217,6 +217,8 @@ def classify_block(decision: Any, reviews: Iterable[Mapping], fix_history: Optio
     # 시크릿이 탐지된 문서는 원문을 다른 제공자(심판·러너)에 더 보내지 않는다 — 어떤 자동 경로보다 먼저 카드로만.
     if 'secret_detected' in escalate or rubric._secret_count(_s(revision.get('content')) + '\n' + _s(revision.get('title'))):
         return Resolution('ceo_card', ['secret_detected'], **base)
+    if 'canonical_body_too_large' in escalate:
+        return Resolution('ceo_card', ['canonical_body_too_large'], **base)
     if set(escalate) & {'fix_job_failed', 'daily_limit'}:
         return Resolution('ceo_card', [r for r in escalate if r in ('fix_job_failed', 'daily_limit')], **base)
     if findings and any(_is_policy(f) for f in findings):
