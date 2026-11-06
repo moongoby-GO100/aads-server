@@ -68,8 +68,11 @@ def test_pipeline_runner_does_not_deploy_dashboard_by_recent_commit_age():
 def test_pipeline_runner_deploys_dashboard_from_approved_commit_sha():
     script = _runner_script()
 
-    assert 'AADS_RELEASE_SHA="${current_sha:0:12}"' in script
-    assert 'bash /root/aads/aads-dashboard/deploy.sh' in script
+    # f6a3f491(runner-ecd33d29): 승인 SHA 를 릴리스 실행기(dashboard_deploy_release)로 넘긴다.
+    assert 'dashboard_deploy_release "$current_sha"' in script
+    assert 'AADS_RELEASE_SHA="$release_sha" "$launcher"' in script
+    # 실행기가 없을 때만 공용 체크아웃 deploy.sh 로 내려가며, 그때도 승인 SHA 를 넘긴다.
+    assert 'AADS_RELEASE_SHA="$release_sha" bash /root/aads/aads-dashboard/deploy.sh' in script
 
 
 def test_pipeline_runner_records_masked_push_diagnostics():
