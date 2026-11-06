@@ -239,9 +239,13 @@ warn_stale_runner_processes() {
 }
 
 default_targets() {
+    # contabo92: RUNNER_DEPLOY_DELEGATE_HOST=contabo14, RUNNER_CAPACITY_SCOPE=host 는
+    # systemd drop-in 에 있다. 유닛 칸을 비우고 AADS_RUNNER_SYNC_UNITS 기본 0 을 유지해
+    # 스크립트 번들 동기화가 이 호스트 설정을 덮어쓰지 않는다(92 에는 litellm 러너 없음).
     cat <<EOF
 contabo14|contabo14|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service|${SCRIPT_DIR}/aads-pipeline-litellm-runner.211.service
 cafe24_114|server-114|/root/scripts/pipeline-runner.sh|aads-pipeline-litellm-runner.service|${SCRIPT_DIR}/aads-pipeline-litellm-runner.114.service
+contabo92|mesh-92|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service
 EOF
     # jinah244 는 2026-10-02 CEO 결정("진아서버는 앞으로 이용 안 한다")으로 기본 동기화 대상에서 뺐다.
     # 되살리려면 AADS_RUNNER_SYNC_TARGETS 에 아래 레코드를 넘기거나 위 heredoc 에 행으로 복원한다.

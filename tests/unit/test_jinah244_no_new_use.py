@@ -44,7 +44,7 @@ def test_runner_sync_default_targets_exclude_jinah244():
         capture_output=True, text=True, check=True,
     ).stdout
     names = [ln.split("|", 1)[0] for ln in out.splitlines() if ln.strip()]
-    assert names == ["contabo14", "cafe24_114"]
+    assert names == ["contabo14", "cafe24_114", "contabo92"]
     assert "jinah244" not in out
 
 

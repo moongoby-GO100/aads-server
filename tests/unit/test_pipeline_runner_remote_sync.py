@@ -51,6 +51,34 @@ def test_remote_runner_sync_timer_runs_periodically():
     assert not (ROOT / "scripts" / "aads-pipeline-runner-sync.service").exists()
 
 
+def test_default_targets_add_contabo92_without_changing_existing_records():
+    function = _extract_function(_sync_script(), "default_targets")
+    result = subprocess.run(
+        ["bash", "-c", f'SCRIPT_DIR=/s\n{function}\ndefault_targets'],
+        capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.splitlines() == [
+        "contabo14|contabo14|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service|/s/aads-pipeline-litellm-runner.211.service",
+        "cafe24_114|server-114|/root/scripts/pipeline-runner.sh|aads-pipeline-litellm-runner.service|/s/aads-pipeline-litellm-runner.114.service",
+        "contabo92|mesh-92|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service",
+    ]
+    # Exercise the production parser without invoking sync or contacting any host.
+    parser = next(
+        line.strip() for line in _extract_function(_sync_script(), "sync_one_target").splitlines()
+        if "IFS='|' read -r" in line
+    )
+    parsed = subprocess.run(
+        ["bash", "-c", 'record="$1"\n' + parser +
+         '\nprintf "%s\\n" "$name" "$host" "$remote_runner" "$service" "$service_unit"',
+         "parse-target", result.stdout.splitlines()[-1]],
+        capture_output=True, text=True, check=True,
+    )
+    assert parsed.stdout.splitlines() == [
+        "contabo92", "mesh-92", "/root/scripts/pipeline-runner.sh",
+        "aads-pipeline-runner.service", "",
+    ]
+
+
 # ── 실행중 러너 보호 (AADS-RUNNER-SYNC-BUSY-DEFER, 2026-09-16) ──────────
 # 배경: 10:28:51 KST 동기화 재시작이 GO100 runner-1791da41(P0-CRITICAL) 을
 # runner_shutdown_requeued 로 되돌렸고, 작업은 10:29:33 에 처음부터 다시 시작했다.
