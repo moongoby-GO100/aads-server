@@ -5145,6 +5145,123 @@ pre_validate() {
     return 0
 }
 
+# Submission gate: instruction text is data, never shell source.
+self_verify_extract() {
+    python3 -c '
+import re, shlex, sys
+seen = set()
+count = 0
+prefix = re.compile(r"^(?:bash scripts/run_unit_tests\.sh|scripts/run_unit_tests\.sh|pytest|python3 -m pytest|npx vitest run|npm test|npm run test|npx tsc --noEmit|ruff check)(?:\s|$)")
+for line in sys.stdin:
+    line = line.rstrip("\r\n")
+    chunks = re.findall(r"`([^`\n]+)`", line)
+    backticked = bool(chunks)
+    if not chunks:
+        chunks = [line.strip()]
+    for candidate in chunks:
+        candidate = candidate.strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        unsafe = any(c in candidate for c in ";&|><$`\\")
+        try:
+            args = shlex.split(candidate)
+        except ValueError:
+            args = []
+        if unsafe or not args or not prefix.match(candidate):
+            if backticked and re.match(r"^(?:bash|scripts/run_unit_tests\.sh|pytest|python3|npx|npm|ruff)(?:\s|$)", candidate):
+                print("skipped_unsafe\t" + candidate.replace("\t", " "))
+        elif count < 3:
+            count += 1
+            print("command\t" + shlex.join(args))
+'
+}
+
+self_verify_classify() {
+    case "$2" in
+        0) printf pass ;;
+        127) printf unavailable ;;
+        2) case "$1" in 'bash scripts/run_unit_tests.sh'*|'scripts/run_unit_tests.sh'*) printf unavailable ;; *) printf fail ;; esac ;;
+        *) printf fail ;;
+    esac
+}
+
+pre_review_self_verify() {
+    local jid="$1" sid="$2" dir="$3" inst="$4"
+    local kind cmd rc verdict count=0 summary="" out feedback secs lock_wait unsafe_count=0 unsafe_examples="" metadata
+    SELF_VERIFY_PREFIX=""
+    case "${PIPELINE_SELF_VERIFY:-1}" in 0|[Ff][Aa][Ll][Ss][Ee]|[Oo][Ff][Ff]|[Nn][Oo]) return 0 ;; esac
+    if printf '%s\n' "$inst" | grep -Eq '^[[:space:]]*NO_SELF_VERIFY[[:space:]]*$'; then return 0; fi
+    secs="${PIPELINE_SELF_VERIFY_TIMEOUT_SEC:-900}"
+    [[ "$secs" =~ ^[1-9][0-9]{0,5}$ ]] || secs=900
+    lock_wait="${PIPELINE_SELF_VERIFY_LOCK_WAIT_SEC:-180}"
+    [[ "$lock_wait" =~ ^[0-9]{1,6}$ ]] || lock_wait=180
+    local -a argv=()
+    while IFS=$'\t' read -r kind cmd; do
+        [[ -n "$kind" ]] || continue
+        if [[ "$kind" != command ]]; then
+            unsafe_count=$((unsafe_count + 1))
+            if (( unsafe_count <= 3 )); then unsafe_examples+="$cmd"$'\n'; fi
+            continue
+        fi
+        count=$((count + 1))
+        mapfile -d '' -t argv < <(python3 -c 'import shlex,sys; sys.stdout.buffer.write(b"".join(x.encode()+b"\0" for x in shlex.split(sys.argv[1])))' "$cmd")
+        out=$(mktemp)
+        local acquired="${out}.acquired" dir_ready="${out}.dir-ready"
+        rc=0
+        # Use the same slot files as heavy-lane shims. Holding slot zero
+        # serializes this gate with workers; nested shims must not reacquire it.
+        (
+            cd "$dir" || exit 1
+            lane="${RUNNER_HEAVY_DIR:-/run/aads-runner-heavy}"
+            mkdir -p "$lane" || exit 125
+            : >"$dir_ready"
+            exec 200>>"$lane/slot-0" || exit 125
+            flock -w "$lock_wait" 200 || exit 125
+            : >"$acquired"
+            export AADS_HEAVY_HELD=slot-0
+            timeout "$secs" "${argv[@]}"
+        ) >"$out" 2>&1 || rc=$?
+        if [[ ! -f "$dir_ready" ]]; then
+            record_runner_event "$jid" "self_verify_skipped_bad_dir" || true
+            summary+="[Runner self-verify] skipped: bad directory; AI 검수 진행"$'\n'
+            rm -f "$out" "$acquired"
+            break
+        fi
+        rm -f "$dir_ready"
+        if [[ ! -f "$acquired" ]]; then
+            record_runner_event "$jid" "self_verify_lock_unavailable" || true
+            summary+="[Runner self-verify] skipped: lock unavailable (wait=${lock_wait}s); AI 검수 진행"$'\n'
+            rm -f "$out"
+            break
+        fi
+        rm -f "$acquired"
+        verdict=$(self_verify_classify "$cmd" "$rc")
+        feedback="[Runner self-verify] $cmd rc=$rc"$'\n'"$(tail -n 80 "$out")"
+        rm -f "$out"
+        summary+="[Runner self-verify] $cmd rc=$rc"$'\n'
+        if [[ "$verdict" == fail ]]; then
+            feedback+=$'\n''수정 재호출 생략: 워커 실행은 run_job 내부의 모델/토큰/재시도 장부에 결합되어 독립 재호출 함수가 없음.'
+            summary+="[Runner self-verify] 수정 재호출 생략: 워커 실행은 run_job 내부의 모델/토큰/재시도 장부에 결합되어 독립 재호출 함수가 없음."$'\n'
+            SELF_VERIFY_PREFIX="$summary"
+            db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || $(sql_escape "$feedback"), updated_at=NOW() WHERE job_id=$(sql_escape "$jid");"
+            _fail_job "$jid" "$sid" "self_verify_failed" "$cmd rc=$rc — $(printf '%s\n' "$feedback" | tail -n 20)"
+            return 1
+        fi
+        record_runner_event "$jid" "self_verify_${verdict}" || true
+        if [[ "$verdict" == unavailable ]]; then
+            db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || $(sql_escape "$feedback"), updated_at=NOW() WHERE job_id=$(sql_escape "$jid");"
+        fi
+    done < <(printf '%s\n' "$inst" | self_verify_extract)
+    if (( unsafe_count > 0 )); then
+        metadata=$(python3 -c 'import json,sys; print(json.dumps({"count":int(sys.argv[1]), "examples":sys.argv[2].splitlines()[:3]}))' "$unsafe_count" "$unsafe_examples")
+        record_runner_event "$jid" "skipped_unsafe" "" "" "" "" "" "" "$metadata" || true
+    fi
+    if [[ "$count" == 0 ]]; then record_runner_event "$jid" "self_verify_skipped_no_cmd" || true; fi
+    SELF_VERIFY_PREFIX="$summary"
+    return 0
+}
+
 # 빠른 실패 헬퍼 — 에러 상태 전환 + error_detail 기록
 _fail_job() {
     local job_id="$1" session_id="$2" error_type="$3" detail="$4"
@@ -7420,6 +7537,11 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     if [[ -n "$git_diff" && ${#git_diff} -gt 10 ]]; then
         if looks_like_git_diff "$git_diff"; then
             log "  AI_REVIEW job=$job_id"
+            if ! pre_review_self_verify "$job_id" "$session_id" "$worktree_dir" "$instruction"; then
+                _release_work_lock "$project" "$job_id" "$parallel_group"
+                promote_next_queued "$project"
+                return 1
+            fi
             db_update "UPDATE pipeline_jobs SET phase='ai_review', runner_pid=${BASHPID}, updated_at=NOW() WHERE job_id='${job_id}' AND status='running';"
             if [[ "$(get_job_status "$job_id")" != "running" ]]; then
                 log "  AI_REVIEW_ABORTED_TERMINAL job=$job_id"
@@ -7435,6 +7557,10 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             local review_diff="$git_diff"
             if [[ -n "$review_diff_prefix" ]]; then
                 review_diff="${review_diff_prefix}"$'\n'"${git_diff}"
+            fi
+
+            if [[ -n "$SELF_VERIFY_PREFIX" ]]; then
+                review_diff+=$'\n\n'"${SELF_VERIFY_PREFIX}"
             fi
 
             # JSON body 생성 (jq 사용)
