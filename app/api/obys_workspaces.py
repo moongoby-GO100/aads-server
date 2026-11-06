@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from app.api import acct_purchase, acct_source_ledger, acct_source_documents
 from app.auth import get_current_user
 from app.services import obys_upload_service as upload_svc
+from app.services import yeoljeong_finance_service as finance_svc
 
 
 logger = logging.getLogger(__name__)
@@ -1856,9 +1857,14 @@ async def _contract_schedules(business_id, payload, user, *, apply=False):
                 business_id, payload.date_from, payload.date_to)
             keys = {_schedule_record_key(dict(row)) for row in existing}
             results, total = [], 0
+            employees = await run_in_threadpool(finance_svc._read_hr, "employee_join_requests", user)
             for row in contracts:
                 contract = dict(row)
                 terms = _schedule_json(contract.get("contract_payload"))
+                matches = [employee for employee in employees
+                           if finance_svc._row_in_business(employee, business_id)
+                           and finance_svc._contract_belongs_to({**terms, **contract}, employee_email=str(employee.get("email") or "").lower(),
+                                                               employee_request_id=str(employee.get("id") or ""))]
                 pattern = contract_schedule_pattern(terms)
                 suggested, missing, filled = contract_schedule_suggestion(terms, pattern)
                 result = {"employee_email": contract["employee_email"], "employee_name": contract.get("employee_name", ""),
@@ -1877,6 +1883,9 @@ async def _contract_schedules(business_id, payload, user, *, apply=False):
                 if pattern:
                     for offset in range(max(0, (end-start).days+1)):
                         day = start + timedelta(days=offset)
+                        if matches and not any(finance_svc.employee_work_date_allowed(employee, day) for employee in matches):
+                            result["skipped"] += 1
+                            continue
                         if day.weekday() not in pattern:
                             continue
                         value = pattern[day.weekday()]
@@ -2350,6 +2359,7 @@ async def attendance_clock_state(
             for item in branches
         ],
         "policy": {"default_radius_m": GEOFENCE_DEFAULT_RADIUS_M, "max_radius_m": GEOFENCE_MAX_RADIUS_M},
+        "can_check_in": await run_in_threadpool(finance_svc.attendance_employee_allowed, current_user, business_id, now.date()),
         "server_time": now.isoformat(),
     }
 
@@ -2384,6 +2394,8 @@ async def attendance_check_in(
     identity = _clock_identity(current_user)
     business = await _clock_business(current_user, business_id)
     now = _clock_now()
+    if not await run_in_threadpool(finance_svc.attendance_employee_allowed, current_user, business_id, now.date()):
+        raise HTTPException(403, "마지막 근무일 이후에는 출근할 수 없습니다")
     start_at = time(now.hour, now.minute)
     connection = await upload_svc._connect()
     try:

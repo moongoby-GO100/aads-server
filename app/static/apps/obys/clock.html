@@ -294,13 +294,13 @@
     const btn = $("clockBtn");
     btn.textContent = open ? "퇴근" : "출근";
     btn.classList.toggle("out", Boolean(open));
-    btn.disabled = clockSaving || state.loading;
+    btn.disabled = clockSaving || state.loading || (!open && clock.can_check_in === false);
     $("manualClockBtn").textContent = open ? "위치 없이 퇴근 기록" : "위치 없이 출근 기록";
     for (const id of ["manualClockBtn", "businessSelect", "branchSelect", "refreshBtn", "consentToggleBtn",
                       "consentAgreeBtn", "consentDeclineBtn", "retryLocationBtn", "withoutLocationBtn", "retryBtn"]) {
       $(id).disabled = clockSaving;
     }
-    $("manualClockBtn").disabled = clockSaving || state.loading;
+    $("manualClockBtn").disabled = clockSaving || state.loading || (!open && clock.can_check_in === false);
 
     const branches = clock.branches || [];
     show("branchView", !open && branches.length > 1);

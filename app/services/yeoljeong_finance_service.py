@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import calendar
 import copy
 import csv
 import fcntl
@@ -416,6 +417,8 @@ CONTRACT_SNAPSHOT_EXCLUDED_FIELDS = {
     "signed_pdf_seal",
     "delivered_at",
     "delivery_channel",
+        "terminated_at", "termination_reason", "effective_end_date", "termination_history",
+        "separation_processed_at", "separation_original_end_date",
 }
 
 # 서명 뒤에도 바뀔 수 있는 키. 해시 제외 목록의 진부분집합이어야 한다(나머지 6개는 서명 원본이라 불변).
@@ -430,6 +433,8 @@ CONTRACT_POST_SIGN_MUTABLE_FIELDS = frozenset(
         "signed_pdf_history",
         "delivered_at",
         "delivery_channel",
+        "terminated_at", "termination_reason", "effective_end_date", "termination_history",
+        "separation_processed_at", "separation_original_end_date",
     }
 )
 
@@ -7246,7 +7251,7 @@ def _require_employee_still_approved(contract: dict[str, Any], user: dict[str, A
     if not request_id:
         return
     join = _find(_read_hr("employee_join_requests", user), request_id)
-    if not join or str(join.get("status") or "").strip().lower() != "approved":
+    if not join or join.get("employment_status") == "separated" or str(join.get("status") or "").strip().lower() != "approved":
         raise HTTPException(status_code=403, detail="직원 가입 승인이 확인되지 않아 계약서에 서명할 수 없습니다")
 
 
@@ -9603,6 +9608,208 @@ def _employee_for_admin_or_403(request_id: str, user: dict[str, Any], *, detail:
     return employee
 
 
+def employee_work_date_allowed(employee: dict[str, Any], work_date: date | str) -> bool:
+    if employee.get("employment_status") != "separated":
+        return True
+    return bool(employee.get("last_work_date")) and str(work_date)[:10] <= employee["last_work_date"]
+
+
+def attendance_employee_allowed(user: dict[str, Any], business_id: str, work_date: date | str) -> bool:
+    employees = [row for row in _read_hr("employee_join_requests", user)
+                 if str(row.get("email") or "").lower() == _email(user)
+                 and row.get("status") == "approved" and not row.get("deleted_at")
+                 and _row_in_business(row, business_id)]
+    # Legacy attendance accounts without a join request retain their existing access.
+    return not employees or any(employee_work_date_allowed(row, work_date) for row in employees)
+
+
+def _separation_day(value: Any) -> str:
+    try:
+        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise HTTPException(status_code=422, detail="마지막 근무일(YYYY-MM-DD)이 필요합니다")
+
+
+def _separation_contracts(employee: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    return [row for row in _read_hr("contracts", user)
+            if _row_in_business(row, _record_business_id(employee))
+            and _contract_belongs_to(row, employee_email=str(employee.get("email") or "").lower(),
+                                    employee_request_id=str(employee["id"]))]
+
+
+def _final_separation_settlement(employee: dict[str, Any], contracts: list[dict[str, Any]], user: dict[str, Any]) -> dict[str, Any]:
+    last = date.fromisoformat(employee["last_work_date"])
+    signed = sorted([c for c in contracts if _contract_is_live_signed(c)
+                     and c.get("contract_type") in EMPLOYMENT_SOURCE_CONTRACT_TYPES], key=_signed_contract_sort_key)
+    freelancer = bool(signed and signed[-1].get("contract_type") == "freelancer")
+    if not signed:
+        freelancer = employee.get("separation_type") == "freelancer_termination"
+    intervals = []
+    for contract in signed:
+        terms = _employment_terms_from_contract(contract)
+        if terms.get("contract_type") == "freelancer":
+            continue
+        try:
+            start = date.fromisoformat(str(terms.get("start_date") or ""))
+            end = date.fromisoformat(str(terms.get("end_date"))) if terms.get("end_date") else last
+            intervals.append((start, min(end, last)))
+        except ValueError:
+            continue
+    continuous_start = continuous_end = None
+    for start, end in sorted(intervals):
+        if end < start:
+            continue
+        if continuous_end is None or start > continuous_end + timedelta(days=1):
+            continuous_start = start
+        continuous_end = max(continuous_end, end) if continuous_end and start <= continuous_end + timedelta(days=1) else end
+    eligible = False
+    if not freelancer and continuous_start and continuous_end == last:
+        try:
+            anniversary = continuous_start.replace(year=continuous_start.year + 1)
+        except ValueError:
+            anniversary = continuous_start.replace(year=continuous_start.year + 1, day=28)
+        eligible = last + timedelta(days=1) >= anniversary
+    held = sum(amount for _, amount in _held_ledger(_read_hr("payroll_statements", user), None,
+               owner={"employee_email": employee.get("email"), "business_id": _record_business_id(employee)}))
+    checklist = (["사업소득 3.3% 원천징수 신고 확인", "용역 대금 정산"] if freelancer else
+                 ["4대보험 상실신고", "원천징수 퇴직소득·중도퇴사 연말정산", "사직서·해고 서면통지 보관"])
+    if eligible:
+        checklist.append("퇴직금 지급")
+    return {"proration_review_required": last.day != calendar.monthrange(last.year, last.month)[1],
+            "held_balance": held, "warning": "보류금 잔액을 확인하고 최종 정산하십시오" if held else "",
+            "severance_eligible": eligible, "checklist": checklist}
+
+
+async def separate_employee(request_id: str, payload: dict[str, Any], user: dict[str, Any], *, cancel: bool = False) -> dict[str, Any]:
+    from app import auth as auth_module
+
+    _require_owner_path_admin(user, "퇴사·계약해지 처리 권한이 없습니다")
+    employee = await asyncio.to_thread(_employee_for_admin_or_403, request_id, user, detail="퇴사·계약해지 처리 권한이 없습니다")
+    email = str(employee.get("email") or "").strip().lower()
+    async with _employee_write_lock(email):
+        original = None
+        originals = []
+        hr_changed = False
+        try:
+            async with auth_module.employee_membership_lock(_tenant_id(user), email) as conn:
+                employee = await asyncio.to_thread(_employee_for_admin_or_403, request_id, user, detail="퇴사·계약해지 처리 권한이 없습니다")
+                original = copy.deepcopy(employee)
+                separated = employee.get("employment_status") == "separated"
+                if cancel:
+                    if not separated:
+                        return employee.get("separation_cancel_result") or {"request": employee, "membership": {"status": "preserved"}}
+                    employee["employment_status"] = "active"
+                else:
+                    day = _separation_day(payload.get("last_work_date"))
+                    kind = payload.get("separation_type", employee.get("separation_type"))
+                    if kind not in {"resignation", "dismissal", "contract_end", "freelancer_termination"}:
+                        raise HTTPException(422, "퇴사·계약해지 유형을 확인하십시오")
+                    if separated:
+                        for key, value in payload.items():
+                            if key != "last_work_date" and value != employee.get(key):
+                                raise HTTPException(409, "퇴사 처리 후에는 마지막 근무일만 변경할 수 있습니다")
+                        if day == employee.get("last_work_date"):
+                            return employee["separation_result"]
+                    letter = payload.get("resignation_letter")
+                    if letter is not None and (not isinstance(letter, dict) or set(letter) - {"submitted_at", "document_id"}):
+                        raise HTTPException(422, "사직서 접수 정보를 확인하십시오")
+                    employee.update(employment_status="separated", separated_at=employee.get("separated_at") if separated else _now(),
+                                    separation_type=kind, last_work_date=day, reason=payload.get("reason", employee.get("reason", "")),
+                                    processed_by=_email(user))
+                    if letter is not None:
+                        employee["resignation_letter"] = letter
+                    if employee.get("resignation_submission"):
+                        employee["resignation_submission"] = {**employee["resignation_submission"], "status": "processed"}
+                contracts = await asyncio.to_thread(_separation_contracts, employee, user)
+                originals = copy.deepcopy(contracts)
+                try:
+                    hr_changed = True
+                    for contract in contracts:
+                        history = list(contract.get("termination_history") or [])
+                        history.append({"action": "cancel" if cancel else "separation", "at": _now(),
+                                        "last_work_date": employee.get("last_work_date"), "processed_by": _email(user),
+                                        "separation_type": employee.get("separation_type"),
+                                        "termination_reason": contract.get("termination_reason") if cancel else employee.get("reason"),
+                                        "terminated_at": contract.get("terminated_at") if cancel else employee.get("separated_at"),
+                                        "effective_end_date": employee.get("last_work_date"),
+                                        "separation_original_end_date": contract.get("separation_original_end_date",
+                                            _contract_payload_value(contract, "end_date", "endDate"))})
+                        contract["termination_history"] = history
+                        if cancel:
+                            for key in ("terminated_at", "termination_reason", "effective_end_date", "separation_processed_at"):
+                                contract.pop(key, None)
+                        else:
+                            contract.setdefault("separation_original_end_date", _contract_payload_value(contract, "end_date", "endDate"))
+                            contract.update(terminated_at=employee["separated_at"], termination_reason=employee["reason"],
+                                            effective_end_date=employee["last_work_date"], separation_processed_at=_now())
+                            if contract.get("status") == "requested":
+                                _revoke_contract_signature_request(contract)
+                                contract["status"] = "draft"
+                        await asyncio.to_thread(_write_hr_record, "contracts", contract, user)
+                    await asyncio.to_thread(_write_hr_record, "employee_join_requests", employee, user)
+                    others = await asyncio.to_thread(_read_hr, "employee_join_requests", user)
+                    preserve = any(row.get("id") != request_id and row.get("status") == "approved"
+                                   and row.get("employment_status") != "separated" and not row.get("deleted_at")
+                                   and str(row.get("email") or "").strip().lower() == email for row in others)
+                    if not cancel and (preserve or separated):
+                        membership = {"status": "preserved"} if preserve else original["separation_result"]["membership"]
+                    elif cancel and original.get("separation_result", {}).get("membership", {}).get("status") in {"preserved", "skipped"}:
+                        membership = {"status": "preserved"}
+                    else:
+                        membership = await sync_employee_tenant_membership(employee, "approved" if cancel else "rejected", user,
+                                     previous_status="approved", source="employee_separation_cancel" if cancel else "employee_separation", conn=conn)
+                    if membership.get("status") == "error" or (cancel and membership.get("status") not in {"linked", "unchanged", "preserved"}):
+                        raise HTTPException(503, "접근 권한 변경에 실패하여 퇴사 처리를 되돌렸습니다")
+                    result = {"request": {k: v for k, v in employee.items() if k not in {"separation_result", "separation_cancel_result"}},
+                              "membership": membership}
+                    if not cancel:
+                        result["final_settlement"] = await asyncio.to_thread(_final_separation_settlement, employee, contracts, user)
+                    employee["separation_cancel_result" if cancel else "separation_result"] = copy.deepcopy(result)
+                    await asyncio.to_thread(_write_hr_record, "employee_join_requests", employee, user)
+                    return result
+                except Exception:
+                    for contract in originals:
+                        await asyncio.to_thread(_write_hr_record, "contracts", contract, user)
+                    await asyncio.to_thread(_write_hr_record, "employee_join_requests", original, user)
+                    hr_changed = False
+                    raise
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # The auth transaction can also fail while committing on context exit.
+            if hr_changed:
+                for contract in originals:
+                    await asyncio.to_thread(_write_hr_record, "contracts", contract, user)
+                await asyncio.to_thread(_write_hr_record, "employee_join_requests", original, user)
+            raise HTTPException(503, "퇴사 처리 중 접근 권한 저장소에 연결할 수 없습니다") from exc
+
+
+def submit_resignation(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    if _is_admin(user):
+        raise HTTPException(403, "직원 본인만 사직서를 제출할 수 있습니다")
+    def save():
+        employee = _approved_own_employee_request(user)
+        if not employee or employee.get("employment_status") == "separated":
+            raise HTTPException(403, "재직 중인 직원 본인만 사직서를 제출할 수 있습니다")
+        submission = {"last_work_date": _separation_day(payload.get("last_work_date")),
+                      "reason": str(payload.get("reason") or ""), "submitted_at": _now(),
+                      "submitted_by": _email(user), "status": "received"}
+        employee["resignation_submission"] = submission
+        _write_hr_record("employee_join_requests", employee, user)
+        return submission
+    return _serialized_employee_write(_email(user), save)
+
+
+def list_resignations(user: dict[str, Any]) -> list[dict[str, Any]]:
+    _require_owner_path_admin(user, "사직서 조회 권한이 없습니다")
+    if not _is_admin(user):
+        raise HTTPException(403, "사직서 조회 권한이 없습니다")
+    return [{"employee_request_id": row["id"], "employee_name": row.get("name"), **row["resignation_submission"]}
+            for row in _read_hr("employee_join_requests", user) if row.get("resignation_submission")]
+
+
 def resync_employee_employment(request_id: str, user: dict[str, Any]) -> dict[str, Any]:
     employee = _employee_for_admin_or_403(request_id, user, detail="고용조건 재동기화 권한이 없습니다")
     result = _sync_employee_employment(employee, user, actor=_email(user), trigger="resync")
@@ -11332,6 +11539,8 @@ def payroll_draft_from_contract(payload: dict[str, Any], user: dict[str, Any]) -
     month = _normalize_payroll_month(payload)
     if not month:
         raise HTTPException(status_code=400, detail="정산월이 필요합니다")
+    if not employee_work_date_allowed(employee, month + "-01"):
+        raise HTTPException(409, "퇴사일 이후 정산월의 초안은 만들 수 없습니다")
     raw = payload.get("gross_pay")
     # 금액을 보내지 않으면 월정액 계약의 계약 금액을 쓴다(건별·시급·일급은 아래에서 안내와 함께 거절한다).
     use_contract_amount = raw is None or (isinstance(raw, str) and not raw.strip())
@@ -11354,6 +11563,8 @@ def payroll_draft_from_contract(payload: dict[str, Any], user: dict[str, Any]) -
             contract_end = date.fromisoformat(str(terms["end_date"])) if terms.get("end_date") else last
         except ValueError:
             raise HTTPException(status_code=409, detail="용역계약 기간을 확인하십시오")
+        if employee.get("employment_status") == "separated":
+            contract_end = min(contract_end, date.fromisoformat(employee["last_work_date"]))
         period_start, period_end = max(first, contract_start), min(last, contract_end)
         if period_end < period_start:
             raise HTTPException(status_code=409, detail="정산월이 용역기간과 겹치지 않습니다")
@@ -11420,6 +11631,8 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
     )
     if not employee:
         raise HTTPException(status_code=404, detail="승인된 직원을 찾을 수 없습니다")
+    if not employee_work_date_allowed(employee, month + "-01"):
+        raise HTTPException(409, "퇴사일 이후 급여월의 초안은 만들 수 없습니다")
     email = str(employee.get("email") or "").strip().lower()
     business_id = _require_business_for_tenant(_record_business_id(employee), user)
     derived = _derive_current_employment(
@@ -11440,7 +11653,8 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
     if rate <= 0:
         raise HTTPException(status_code=409, detail="계약서에 단가가 없어 급여 초안을 만들 수 없습니다")
 
-    attendance = _payroll_attendance_rows(business_id, email, month)
+    attendance = [row for row in _payroll_attendance_rows(business_id, email, month)
+                  if employee_work_date_allowed(employee, row.get("work_date", ""))]
     incomplete = [row for row in attendance if row.get("check_in_at") and not row.get("check_out_at")
                   and str(row.get("status") or "").strip().lower() != "rejected"]
     if incomplete:

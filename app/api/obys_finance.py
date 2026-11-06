@@ -557,6 +557,26 @@ async def list_document_types(current_user: dict = Depends(get_current_user)) ->
     return {"document_types": await run_in_threadpool(svc.list_document_types)}
 
 
+@router.get("/employees/resignations")
+async def list_resignations(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"resignations": await run_in_threadpool(svc.list_resignations, current_user)}
+
+
+@router.post("/employees/{request_id}/separation")
+async def separate_employee(request_id: str, payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await svc.separate_employee(request_id, payload.model_dump(), current_user)
+
+
+@router.post("/employees/{request_id}/separation/cancel")
+async def cancel_employee_separation(request_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await svc.separate_employee(request_id, {}, current_user, cancel=True)
+
+
+@router.post("/me/resignation")
+async def submit_resignation(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return {"resignation": await run_in_threadpool(svc.submit_resignation, payload.model_dump(), current_user)}
+
+
 @router.get("/employees/invites")
 async def list_employee_invites(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"invites": await run_in_threadpool(svc.list_invites, current_user)}

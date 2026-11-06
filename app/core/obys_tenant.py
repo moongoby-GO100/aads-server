@@ -118,6 +118,16 @@ _OWNER_CONTRACT_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(re.escape(_BUSINESS_DOCUMENTS_PATH))),
 )
 
+# These four operations enforce tenant HR scope and actor permissions in the service.
+# Keep exact paths; never open the entire employees or me prefix.
+_EMPLOYEE_SEPARATION_WHITELIST: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("POST", re.compile(r"/api/v1/yeoljeong-finance/employees/" + _DOCUMENT_ID_PATTERN + r"/separation")),
+    ("POST", re.compile(r"/api/v1/yeoljeong-finance/employees/" + _DOCUMENT_ID_PATTERN + r"/separation/cancel")),
+    ("POST", re.compile(r"/api/v1/yeoljeong-finance/me/resignation")),
+    ("GET", re.compile(r"/api/v1/yeoljeong-finance/employees/resignations")),
+)
+
+
 # Payroll uses _read_hr(..., user)'s SQL tenant predicate and
 # _write_hr_record's tenant ownership check. Mutations/versions also require
 # the administrator role in the service; employee reads retain own-row and
@@ -161,6 +171,7 @@ def _is_tenant_scoped_path(path: str, method: str = "GET") -> bool:
         or _matches_whitelist(_INVITE_ADMIN_WHITELIST, method, path)
         or _matches_whitelist(_OWNER_CONTRACT_WHITELIST, method, path)
         or _matches_whitelist(_PAYROLL_WHITELIST, method, path)
+        or _matches_whitelist(_EMPLOYEE_SEPARATION_WHITELIST, method, path)
     )
 
 

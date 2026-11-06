@@ -5269,6 +5269,7 @@
             <div class="panel-head"><h2 class="panel-title">가입 직원 권한설정</h2><span id="memberPermissionBadge" class="badge info">직원 리스트</span></div>
             <div class="panel-body">
               <div class="table-wrap">
+                <label>재직 상태 <select id="employeeEmploymentFilter"><option value="all">전체 직원</option><option value="active">재직자</option><option value="separated">퇴사자</option></select></label>
                 <table><thead><tr><th>직원</th><th>지점</th><th>현재 권한</th><th>바로 변경</th><th>상태</th></tr></thead><tbody id="memberPermissionGrantRows"></tbody></table>
               </div>
               <div class="settings-note" style="margin-top:12px">
@@ -6350,6 +6351,7 @@
     let employeeInvites = [];
     let employeeJoinRequests = [];
     let approvedEmployees = [];
+    let employeeEmploymentFilter = "all";
     let payrollStatements = Array.isArray(state.payrollStatements) ? state.payrollStatements : [];
     // 서버(yeoljeong_attendance_records) 근태. state.shifts 는 서버에 올리지 못한 로컬 전용 근태만 담는다.
     let serverShifts = [];
@@ -8491,7 +8493,7 @@
           if (!hasServerAuth()) {
             els.memberPermissionGrantRows.innerHTML = tableEmpty(5, "로그인 후 가입 직원 권한을 확인할 수 있습니다.");
           } else {
-            const employees = approvedEmployees.length ? approvedEmployees : approvedRequests;
+            const employees = (approvedEmployees.length ? approvedEmployees : approvedRequests).filter(item => employeeEmploymentFilter === "all" || (item.employment_status || "active") === employeeEmploymentFilter);
             els.memberPermissionGrantRows.innerHTML = employees.length ? employees.map(item => {
               const role = String(item.role || "employee").toLowerCase();
               const requestId = String(item.id || item.employee_request_id || "");
@@ -8511,10 +8513,12 @@
                     </select>
                     <button type="button" class="primary" data-save-employee-role="${escapeHtml(requestId)}" ${disabled}>저장</button>
                     <button type="button" data-assign-employee="${escapeHtml(requestId)}" ${disabled}>사업자·지점 변경</button>
+                    <button type="button" data-separate-employee="${escapeHtml(requestId)}" ${disabled}>퇴사·계약해지 처리</button>
+                    ${item.employment_status === "separated" ? `<button type="button" data-cancel-separation="${escapeHtml(requestId)}" ${disabled}>복직 처리</button>` : ""}
                     ${employeePreviewButtonHtml(item.email || item.employee_email, item.name || item.employee_name)}
                   </div>
                 </td>
-                <td>${escapeHtml(item.access_updated_at ? `변경 ${String(item.access_updated_at).slice(0, 10)}` : "승인 완료")}</td>
+                <td>${item.employment_status === "separated" ? "퇴사 · " + escapeHtml(item.last_work_date || "") : "재직"}</td>
               </tr>`;
             }).join("") : tableEmpty(5, "승인 완료 직원이 없습니다.");
           }
@@ -15076,6 +15080,48 @@
       showToast(action === "approved" ? "가입요청을 승인했습니다." : "가입요청을 반려했습니다.");
     }
 
+    async function openEmployeeSeparation(requestId, cancel = false) {
+      if (!canManageOnboarding()) return;
+      const employee = approvedEmployees.find(item => String(item.id) === requestId);
+      if (!employee) return;
+      const dialog = document.createElement("dialog");
+      dialog.innerHTML = `<form><h2>${escapeHtml(employee.name || "직원")} · ${cancel ? "복직 처리" : "퇴사·계약해지 처리"}</h2>
+        ${cancel ? "<p>재직 상태와 회수한 접근 권한을 복구합니다.</p>" : `<label>처리 유형 <select name="separation_type"><option value="resignation">자진퇴사</option><option value="dismissal">해고</option><option value="contract_end">계약기간 만료</option><option value="freelancer_termination">용역계약 해지</option></select></label><br>
+        <label>마지막 근무일 <input type="date" name="last_work_date" required></label><br><label>사유 <textarea name="reason"></textarea></label>`}
+        <p role="status" data-result></p><button type="submit">${cancel ? "복직 처리" : "처리 저장"}</button><button type="button" data-close>닫기</button></form>`;
+      document.body.append(dialog);
+      if (!cancel) {
+        dialog.querySelector('[name="last_work_date"]').value = employee.last_work_date || "";
+        dialog.querySelector('[name="separation_type"]').value = employee.separation_type || "resignation";
+        dialog.querySelector('[name="reason"]').value = employee.reason || "";
+      }
+      dialog.querySelector('[data-close]').onclick = () => dialog.close();
+      dialog.addEventListener("close", () => dialog.remove());
+      dialog.querySelector("form").onsubmit = async event => {
+        event.preventDefault();
+        const button = dialog.querySelector('[type="submit"]');
+        button.disabled = true;
+        try {
+          const body = cancel ? {} : Object.fromEntries(new FormData(event.target));
+          const result = await financeApi(`/employees/${encodeURIComponent(requestId)}/separation${cancel ? "/cancel" : ""}`, {method: "POST", body: JSON.stringify(body)});
+          const final = result.final_settlement;
+          dialog.querySelector('[data-result]').textContent = final ? ["최종정산 안내", final.proration_review_required ? "퇴사월 일할 검토 필요" : "일할 검토 대상 아님", `보류금 잔액: ${Number(final.held_balance).toLocaleString()}원`, final.warning, ...final.checklist].filter(Boolean).join(" · ") : "복직 처리가 완료되었습니다.";
+          await loadApprovedEmployees();
+          renderOperationalPages();
+        } catch (err) { dialog.querySelector('[data-result]').textContent = err.message; }
+        finally { button.disabled = false; }
+      };
+      dialog.showModal();
+    }
+
+    document.addEventListener("change", event => {
+      if (event.target.id === "employeeEmploymentFilter") {
+        employeeEmploymentFilter = event.target.value;
+        renderOperationalPages();
+        document.getElementById("employeeEmploymentFilter").value = employeeEmploymentFilter;
+      }
+    });
+
     async function updateApprovedEmployeeRole(requestId, role) {
       if (!canManageOnboarding()) {
         showToast("직원 권한 변경은 총괄 운영관리자 또는 운영관리자 권한이 필요합니다.");
@@ -18157,6 +18203,9 @@
         if (joinReviewId && joinReviewAction) {
           reviewEmployeeJoinRequest(joinReviewId, joinReviewAction).catch(err => showToast(`가입요청 처리 실패: ${err.message}`));
         }
+        const separationId = event.target.closest("[data-separate-employee]")?.dataset.separateEmployee;
+        const cancelSeparationId = event.target.closest("[data-cancel-separation]")?.dataset.cancelSeparation;
+        if (separationId || cancelSeparationId) openEmployeeSeparation(separationId || cancelSeparationId, Boolean(cancelSeparationId));
         const assignEmployeeId = event.target.closest("[data-assign-employee]")?.dataset.assignEmployee;
         if (assignEmployeeId) {
           openEmployeeAssignSheet(assignEmployeeId).catch(err => showToast(`사업자·지점 변경 준비 실패: ${err.message}`));

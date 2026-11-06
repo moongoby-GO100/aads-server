@@ -788,7 +788,7 @@
         host.innerHTML = "";
         return;
       }
-      host.innerHTML = screenHtml(model());
+      host.innerHTML = screenHtml(model()) + (!state.readOnly && state.screen === "home" ? `<section class="ep-card"><h3>사직서 제출</h3><form data-ep-resignation><label>희망 퇴사일 <input type="date" name="last_work_date" required></label><label>사유 <textarea name="reason"></textarea></label><button type="submit" class="ep-btn">사직서 제출</button><p role="status" data-ep-resignation-result></p></form></section>` : "");
       wire(host);
       if (state.screen === "read") measure();
       if (state.screen === "sign") setupPad(host);
@@ -931,6 +931,19 @@
         return;
       }
       wired = { host, fitPad: null, clearPad: null };
+      host.addEventListener("submit", async event => {
+        if (!event.target.matches("[data-ep-resignation]")) return;
+        event.preventDefault();
+        if (state.readOnly) return;
+        const form = event.target;
+        const button = form.querySelector("button");
+        button.disabled = true;
+        try {
+          await bridge.financeApi("/me/resignation", {method: "POST", body: JSON.stringify(Object.fromEntries(new FormData(form)))});
+          form.querySelector("[data-ep-resignation-result]").textContent = "사직서가 접수되었습니다. 관리자 처리 후 퇴사 상태가 반영됩니다.";
+        } catch (err) { form.querySelector("[data-ep-resignation-result]").textContent = err.message; }
+        finally { button.disabled = false; }
+      });
       host.addEventListener("click", event => {
         const target = event.target?.closest?.("[data-ep-nav],[data-ep-open],[data-ep-filter],[data-ep-go-sign],[data-ep-back-read],[data-ep-submit],[data-ep-clear],[data-ep-pdf],[data-ep-refresh],[data-ep-logout]");
         if (!target || target.disabled) return;
