@@ -745,6 +745,7 @@ def test_sweep_apply_respects_limit_and_budget(monkeypatch):
     execute.assert_awaited_once()
     assert execute.await_args.kwargs == {'follow_up': True}
 
+    monkeypatch.setenv('AADS_DOC_TIER_D3_DAILY_LIMIT', '20')
     class Spent(SweepConn):
         async def fetchval(self, sql, *args):
             return 99
