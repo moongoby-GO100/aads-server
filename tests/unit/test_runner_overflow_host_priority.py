@@ -120,7 +120,7 @@ def test_host_is_escaped_and_seconds_validated():
               RUNNER_OVERFLOW_GRACE_SEC='1);BAD')
     assert "host='host''42'" in sql and "runner_host='host''42'" in sql
     assert 'BAD' not in sql
-    assert '(180 *' in sql and '(120 *' in sql
+    assert '(600 *' in sql and '(120 *' in sql
     assert '(9 *' in run('runner_overflow_claim_sql', 'primary', RUNNER_OVERFLOW_GRACE_SEC='9')
 
 
@@ -177,3 +177,59 @@ runner_overflow_log_claim ''
 printf '[%s]' "$RUNNER_OVERFLOW_YIELD_STATE"
 ''', 'primary')
     assert output == '[]'
+
+
+@pytest.fixture
+def heartbeat_shell():
+    definitions = '\n'.join(
+        line for line in SRC.splitlines()
+        if line.startswith(('RUNNER_HEARTBEAT_SEC=', 'RUNNER_OVERFLOW_STALE_SEC='))
+    )
+
+    def execute(body, **overrides):
+        env = {key: value for key, value in os.environ.items()
+               if key not in ('RUNNER_HEARTBEAT_SEC', 'RUNNER_OVERFLOW_STALE_SEC')}
+        result = subprocess.run(
+            ['bash', '-uc', definitions + '\n' +
+             function(SRC, 'runner_heartbeat_if_due') + '\n' + body],
+            env={**env, **overrides}, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    return execute
+
+
+def test_default_stale_covers_at_least_three_heartbeats(heartbeat_shell):
+    heartbeat, stale = map(int, heartbeat_shell(
+        'echo "$RUNNER_HEARTBEAT_SEC $RUNNER_OVERFLOW_STALE_SEC"').split())
+    assert heartbeat == 60
+    assert stale == 600
+    assert stale >= heartbeat * 3
+    assert heartbeat_shell('echo "$RUNNER_OVERFLOW_STALE_SEC"',
+                           RUNNER_HEARTBEAT_SEC='300') == '900\n'
+    assert heartbeat_shell('echo "$RUNNER_OVERFLOW_STALE_SEC"',
+                           RUNNER_OVERFLOW_STALE_SEC='180') == '180\n'
+
+
+def test_heartbeat_uses_elapsed_time_despite_slow_poll_cycles(heartbeat_shell):
+    assert heartbeat_shell(r'''
+runner_heartbeat() { echo heartbeat; }
+SECONDS=0
+_last_heartbeat_at=$SECONDS
+POLL_INTERVAL=10
+# 한 루프가 poll 10초보다 오래 걸린 상황을 실제 Bash 시계로 모사한다.
+SECONDS=59
+runner_heartbeat_if_due
+SECONDS=60
+runner_heartbeat_if_due
+printf 'last=%s\n' "$_last_heartbeat_at"
+SECONDS=119
+runner_heartbeat_if_due
+SECONDS=145
+runner_heartbeat_if_due
+printf 'last=%s\n' "$_last_heartbeat_at"
+''') == 'heartbeat\nlast=60\nheartbeat\nlast=145\n'
+    main = function(SRC, 'main')
+    assert 'while true; do\n        runner_heartbeat_if_due' in main
+    assert 'local _last_heartbeat_at=$SECONDS' in main

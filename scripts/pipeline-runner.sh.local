@@ -174,6 +174,8 @@ VALID_PROJECTS="AADS KIS GO100 SF NTV2 ACCT"
 # 실행 서버 이름. pipeline_jobs.runner_host 와 하트비트에 쓴다.
 RUNNER_HOST_NAME="${AADS_RUNNER_HOST_NAME:-$(hostname -s 2>/dev/null || hostname)}"
 
+RUNNER_HEARTBEAT_SEC="${RUNNER_HEARTBEAT_SEC:-60}"
+
 # 이 러너가 살아 있음을 DB 에 남긴다. 조회 측이 원격 systemctl 을 호출하지 않고
 # DB 만 읽어 서버 가동 여부를 판단할 수 있게 한다.
 runner_heartbeat() {
@@ -185,6 +187,15 @@ runner_heartbeat() {
                  engine_mode=EXCLUDED.engine_mode,
                  max_concurrent=EXCLUDED.max_concurrent,
                  last_seen_at=NOW();" 2>/dev/null || true
+}
+
+# 루프 작업 시간이 poll 간격보다 길어져도 실제 경과 시간으로 갱신한다.
+runner_heartbeat_if_due() {
+    if (( SECONDS - _last_heartbeat_at >= RUNNER_HEARTBEAT_SEC )); then
+        runner_heartbeat
+        _last_heartbeat_at=$SECONDS
+    fi
+    return 0
 }
 
 MAX_JOB_RUNTIME="${MAX_JOB_RUNTIME:-$MAX_RUNTIME}"  # CLI 상한보다 먼저 작업을 종료하지 않음
@@ -5768,14 +5779,14 @@ runner_pool_claim_extra_sql() {
 
 # 보조 호스트의 신규 queued claim만 제한한다. 빈 설정은 SQL 바이트도 바꾸지 않는다.
 RUNNER_OVERFLOW_OF="${RUNNER_OVERFLOW_OF:-}"
-RUNNER_OVERFLOW_STALE_SEC="${RUNNER_OVERFLOW_STALE_SEC:-180}"
+RUNNER_OVERFLOW_STALE_SEC="${RUNNER_OVERFLOW_STALE_SEC:-$(( ${RUNNER_HEARTBEAT_SEC:-60} * 3 > 600 ? ${RUNNER_HEARTBEAT_SEC:-60} * 3 : 600 ))}"
 RUNNER_OVERFLOW_GRACE_SEC="${RUNNER_OVERFLOW_GRACE_SEC:-120}"
 RUNNER_OVERFLOW_YIELD_STATE=""
 
 runner_overflow_primary_sql() {
-    local host stale="${RUNNER_OVERFLOW_STALE_SEC:-180}"
+    local host stale="${RUNNER_OVERFLOW_STALE_SEC:-$(( ${RUNNER_HEARTBEAT_SEC:-60} * 3 > 600 ? ${RUNNER_HEARTBEAT_SEC:-60} * 3 : 600 ))}"
     host=$(sql_escape "$RUNNER_OVERFLOW_OF")
-    [[ "$stale" =~ ^[0-9]{1,6}$ ]] || stale=180
+    [[ "$stale" =~ ^[0-9]{1,6}$ ]] || stale="$(( ${RUNNER_HEARTBEAT_SEC:-60} * 3 > 600 ? ${RUNNER_HEARTBEAT_SEC:-60} * 3 : 600 ))"
     printf '%s' "SELECT
       (SELECT count(*) FROM pipeline_jobs WHERE status IN ('running','claimed') AND runner_host=$host) AS running,
       COALESCE((SELECT max_concurrent FROM runner_host_policy WHERE host=$host),
@@ -10345,6 +10356,7 @@ main() {
     fi
 
     runner_heartbeat
+    local _last_heartbeat_at=$SECONDS
     log "RUNNER_HOST=${RUNNER_HOST_NAME}"
     RUNNER_SELF_FINGERPRINT=$(_runner_self_fingerprint) || RUNNER_SELF_FINGERPRINT=""
     log "RUNNER_SELF=${RUNNER_SELF_PATH} fingerprint=${RUNNER_SELF_FINGERPRINT:0:12} self_reload=${RUNNER_SELF_RELOAD:-1}"
@@ -10386,6 +10398,7 @@ main() {
     [[ "$_stuck_check_cycles" -lt 1 ]] && _stuck_check_cycles=1
     log "STUCK_CHECK_INTERVAL=${STUCK_CHECK_INTERVAL}s → 매 ${_stuck_check_cycles} cycle마다 감지"
     while true; do
+        runner_heartbeat_if_due
         # Poll admission before throttle, claims, recovery, or self reload. A
         # maintenance controller keeps us alive in QUIESCENT; no SIGTERM/requeue.
         runner_maintenance_checkpoint_or_hold
@@ -10497,7 +10510,6 @@ main() {
         # 주기적 정리 (STUCK_CHECK_INTERVAL 초마다 — BUG-7: 동적 주기)
         _cycle=$((_cycle + 1))
         if (( _cycle % _stuck_check_cycles == 0 )); then
-            runner_heartbeat
             _recover_stuck_jobs "$project_filter"
             reclaim_orphan_claims
             _watchdog_check "$project_filter"
