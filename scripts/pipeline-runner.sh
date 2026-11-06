@@ -10469,6 +10469,100 @@ maybe_reexec_on_self_change() {
     exec bash "$RUNNER_SELF_PATH" "${RUNNER_SELF_ARGV[@]+"${RUNNER_SELF_ARGV[@]}"}"
 }
 
+# Main-shell state: command substitutions would discard the five-minute throttle.
+declare -A _runner_slot_wait_at=()
+runner_record_slot_wait() {
+    local filter="$1" rows jid project queued running limit holders meta now="$SECONDS"
+    local scope engine holder separator
+    local -a holder_tokens=()
+    local server_limit="${MAX_CONCURRENT_SERVER:-${MAX_CONCURRENT_GLOBAL:-10}}"
+    scope="$(runner_pool_host_scope_sql r)"
+    if [[ -z "${MAX_CONCURRENT_SERVER:-}" ]]; then
+        scope="AND r.runner_host=$(sql_escape "$RUNNER_HOST_NAME")"
+        [[ "${RUNNER_THROTTLE_SCOPE:-host}" == global ]] && scope=""
+    fi
+    if [[ "${RUNNER_ENGINE_MODE:-general}" == litellm ]]; then
+        engine="AND COALESCE(NULLIF(p.worker_model,''),NULLIF(p.model,''),'') LIKE 'litellm:%'"
+    else
+        engine="AND NOT (COALESCE(NULLIF(p.worker_model,''),NULLIF(p.model,''),'') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))"
+    fi
+    rows=$(db_exec "WITH eligible AS (
+        SELECT p.job_id, p.project, count(*) OVER (PARTITION BY p.project) AS queued
+        FROM pipeline_jobs p WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter $engine
+        AND (p.depends_on IS NULL OR EXISTS (SELECT 1 FROM pipeline_jobs dep WHERE dep.job_id=p.depends_on AND dep.status='done'))
+    ) SELECT p.job_id, p.project, p.queued, h.running, h.lim, h.holders
+      FROM eligible p CROSS JOIN LATERAL (
+        SELECT count(*) AS running, ${server_limit} AS lim,
+          COALESCE(string_agg(r.job_id || ':' || floor(EXTRACT(EPOCH FROM
+            (NOW()-COALESCE(r.started_at,r.updated_at)))/60)::text, ',' ORDER BY r.job_id),'') AS holders
+        FROM pipeline_jobs r WHERE r.status IN ('running','claimed') $scope
+          $([[ -n "${MAX_CONCURRENT_SERVER:-}" ]] && printf '%s' "$filter")
+      ) h WHERE h.running >= h.lim
+      UNION ALL
+      SELECT p.job_id, p.project, p.queued, count(*), ${MAX_CONCURRENT_PER_PROJECT:-6},
+        string_agg(r.job_id || ':' || floor(EXTRACT(EPOCH FROM
+          (NOW()-COALESCE(r.started_at,r.updated_at)))/60)::text, ',' ORDER BY r.job_id)
+      FROM eligible p JOIN pipeline_jobs r ON r.project=p.project
+      WHERE r.status IN ('running','claimed') $(runner_pool_host_scope_sql r)
+      GROUP BY p.job_id,p.project,p.queued HAVING count(*) >= ${MAX_CONCURRENT_PER_PROJECT:-6};" 2>/dev/null) || return 0
+    while IFS=$'\x1e' read -r jid project queued running limit holders; do
+        [[ -n "$jid" ]] || continue
+        if [[ -n "${_runner_slot_wait_at[$jid]+set}" ]] && (( now - _runner_slot_wait_at[$jid] < 300 )); then continue; fi
+        # Only this restricted alphabet is interpolated into JSON (no escaping needed).
+        meta='{"reason":"slot_full","holders":['
+        separator=""
+        IFS=',' read -r -a holder_tokens <<< "$holders"
+        for holder in "${holder_tokens[@]}"; do
+            [[ "$holder" =~ ^[A-Za-z0-9_-]+:[0-9]+$ ]] || continue
+            meta+="${separator}\"${holder}\""
+            separator=','
+        done
+        meta+=']}'
+        record_runner_event "$jid" queue_wait queued queued "" "" "" "" "$meta" || continue
+        _runner_slot_wait_at[$jid]=$now
+        log "SLOT_WAIT project=$project queued=$queued running=$running/$limit holders=$holders"
+    done <<< "$rows"
+}
+
+# A failed probe alone is not proof of death (EPERM/proc unavailable => skip).
+runner_worker_dead() {
+    [[ "$1" =~ ^[1-9][0-9]*$ ]] || return 1
+    if kill -0 "$1" 2>/dev/null; then return 1; fi
+    [[ -r /proc/self/stat && ! -d "/proc/$1" ]]
+}
+
+runner_recover_dead_workers() {
+    local filter="$1" rows jid pid host project session status unstarted hit reason
+    rows=$(db_exec "SELECT job_id, COALESCE(runner_pid::text,''), runner_host, project,
+        COALESCE(chat_session_id::text,''), status,
+        (status='claimed' AND started_at IS NULL AND updated_at < NOW()-INTERVAL '10 minutes')::text
+        FROM pipeline_jobs WHERE status IN ('running','claimed')
+          AND runner_host=$(sql_escape "$RUNNER_HOSTNAME") $filter;" 2>/dev/null) || return 0
+    while IFS=$'\x1e' read -r jid pid host project session status unstarted; do
+        [[ "$jid" =~ ^[A-Za-z0-9_-]+$ && "$host" == "$RUNNER_HOSTNAME" ]] || continue
+        [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+        # A live PID wins even for an old, unstarted claim.
+        runner_worker_dead "$pid" || continue
+        reason=worker_pid_dead
+        # This label applies only to an existing, dead PID. NULL-PID orphan
+        # claims remain the responsibility of reclaim_orphan_claims (2 minutes).
+        [[ "$unstarted" == true || "$unstarted" == t ]] && reason=claimed_unstarted_10m
+        hit=$(db_exec "UPDATE pipeline_jobs SET status='error', phase='error',
+            error_detail='stale_recovered', runner_pid=NULL,
+            review_feedback=COALESCE(review_feedback,'') || E'\n[Runner 워커 소멸 복구] ${reason}',
+            completed_at=NOW(), updated_at=NOW()
+            WHERE job_id='${jid}' AND status='${status}'
+              AND runner_host=$(sql_escape "$RUNNER_HOSTNAME") AND runner_pid=${pid}
+            RETURNING job_id;" 2>/dev/null) || continue
+        [[ -n "$hit" ]] || continue
+        log "RECOVERED dead worker job=$jid pid=$pid reason=$reason"
+        post_to_chat "$session" "🔄 [Runner 워커 소멸 복구] $jid"
+        record_runner_event "$jid" job_terminal error error "" "" "" "" "{\"error_detail\":\"stale_recovered\",\"reason\":\"${reason}\"}" || true
+        _notify_ai "$jid"
+        promote_next_queued "$project"
+    done <<< "$rows"
+}
+
 main() {
     RUNNER_SELF_ARGV=("$@")
     _init_db_mode
@@ -10513,6 +10607,7 @@ main() {
         rm -f /tmp/.pipeline_current_job
     fi
 
+    runner_recover_dead_workers "$project_filter"
     # C3: 시작 시 stuck 작업 복구
     _recover_stuck_jobs "$project_filter"
     reclaim_orphan_claims
@@ -10531,6 +10626,8 @@ main() {
         # LR04: 서버별 정책(max_concurrent·heavy 슬롯)을 재기동 없이 반영하고 shim 대기 이벤트를 옮긴다.
         runner_host_policy_refresh || true
         runner_heavy_flush_events || true
+        runner_recover_dead_workers "$project_filter"
+        runner_record_slot_wait "$project_filter"
         # Legacy hosts retain the global limit. Hosts with an explicit server
         # budget enforce it atomically at claim time and keep servicing reviews.
         if [[ -z "${MAX_CONCURRENT_SERVER:-}" ]]; then
