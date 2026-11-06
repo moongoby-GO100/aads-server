@@ -4642,7 +4642,7 @@ GO100_DEPLOY_ENV_PASS_RE='^(GO100_INTRADAY_[A-Z0-9_]+|GO100_ALLOW_INTRADAY_DEPLO
 GO100_DEPLOY_REMOTE_FUNCS=(
     _go100_path_in_use _go100_remove_release_worktree go100_prune_release_worktrees
     go100_create_frontend_release_worktree go100_active_frontend_color verify_go100_bundle_fresh
-    go100_runtime_has_sha
+    go100_runtime_has_sha go100_remote_queue_release
 )
 GO100_DEPLOY_REMOTE_VARS=(
     GO100_REPO_DIR GO100_NGINX_CONF GO100_RELEASE_WORKTREE_ROOT GO100_RELEASE_WORKTREE_KEEP
@@ -4856,6 +4856,43 @@ go100_remote_api_restart() {
         log "  GO100_REMOTE_RESTART_UNVERIFIED host=${GO100_DEPLOY_SSH_HOST} sha=${_sha:0:9} verify_rc=${_rc} label=${GO100_REMOTE_FAIL_LABEL} — 재기동 후 SHA 재검증 실패"
         return 1
     fi
+    return 0
+}
+
+# 운영 작업트리는 읽기만 한다. 기대 blob 은 작업 호스트의 릴리스 SHA 객체에서 구한다.
+# queue-release 이외 모드 실행이나 스크립트 교체는 허용하지 않는다.
+go100_remote_queue_release() {
+    local _repo="$1" _sha="$2" _expected="$3" _actual="" _script="$1/deploy-go100.sh"
+    [[ "$_sha" =~ ^[0-9a-f]{40}$ && "$_expected" =~ ^[0-9a-f]{40}$ ]] || return 3
+    [[ -f "$_script" && ! -L "$_script" && -x "$_script" ]] || return 4
+    _actual=$(git -C "$_repo" hash-object --no-filters -- "$_script") || return 4
+    [[ "$_actual" == "$_expected" ]] || return 5
+    grep -Eq '^[[:space:]]*queue-release[[:space:]]*\)' "$_script" || return 6
+    (cd "$_repo" && GO100_RELEASE_SHA="$_sha" "$_script" queue-release)
+}
+
+# 결과는 항상 deferred 이다. 등록 성공도 실제 슬롯 반영/재기동 성공을 뜻하지 않는다.
+go100_queue_backend_release() {
+    local _sha="$1" _source_repo="$2" _expected="" _rc=0 _reason=""
+    GO100_RELEASE_QUEUE_LABEL="go100-api:release_queue_unavailable"
+    if [[ "$_sha" =~ ^[0-9a-f]{40}$ ]]; then
+        _expected=$(git -C "$_source_repo" rev-parse "${_sha}:deploy-go100.sh" 2>/dev/null) || _rc=$?
+    else
+        _rc=3
+    fi
+    if (( _rc == 0 )) && [[ "$_expected" =~ ^[0-9a-f]{40}$ ]]; then
+        GO100_DEPLOY_CALL_TIMEOUT=60 go100_deploy_call go100_remote_queue_release "$GO100_REPO_DIR" "$_sha" "$_expected" || _rc=$?
+    else
+        _rc=4
+    fi
+    if (( _rc == 0 )); then
+        GO100_RELEASE_QUEUE_LABEL="go100-api:release_queued(${_sha})"
+        _reason="pending 등록, 실제 슬롯 미반영"
+    else
+        _reason="release_queue_unavailable rc=${_rc} (스크립트 blob/모드 확인 또는 통신/등록 실패)"
+    fi
+    log "  GO100_BACKEND_RELEASE_DEFERRED sha=${_sha} label=${GO100_RELEASE_QUEUE_LABEL} reason=${_reason}"
+    post_to_chat "$session_id" "[Pipeline Runner] GO100 백엔드는 릴리스 대기열/수동 blue-green 으로 반영 필요(sha=${_sha}, 사유=${_reason}): $job_id"
     return 0
 }
 
@@ -9149,22 +9186,13 @@ deploy_job() {
             fi
             if [[ "$_go100_be_changed" != "true" ]]; then
                 log "  SKIP go100 api restart (no backend/ changes ${_pre_sha:0:9}..${current_sha:0:9})"
+            elif go100_deploy_is_remote; then
+                go100_queue_backend_release "$current_sha" "$worktree_dir"
+                _deploy_deferred="${_deploy_deferred:+${_deploy_deferred};}${GO100_RELEASE_QUEUE_LABEL}"
             elif _go100_freeze=$(go100_restart_freeze_window); then
                 log "  DEPLOY_DEFER go100 api restart — 재기동 금지 구간 ${_go100_freeze} KST (강제 재기동 안 함, sha=${current_sha})"
                 post_to_chat "$session_id" "⏸ [Pipeline Runner] GO100 API 재기동 보류 — 재기동 금지 구간(${_go100_freeze} KST). push 는 완료됐고 재기동은 구간 종료 후 별도로 필요합니다: $job_id"
                 _deploy_deferred="${_deploy_deferred:+${_deploy_deferred};}go100-api:restart_window_${_go100_freeze}"
-            elif go100_deploy_is_remote; then
-                # 원격 모드: 운영 호스트 코드에 current_sha 가 있는지 확인한 뒤에만 재기동하고, 통신·재기동·검증 실패는 배포 실패로 기록한다.
-                # 로컬 모드의 아래 else 분기(재기동 실패 무시)는 바꾸지 않는다.
-                local -a _be_verify_paths=()
-                mapfile -t _be_verify_paths < <(go100_backend_verify_paths "$_deploy_files_ok" "$_deploy_files")
-                if go100_remote_api_restart "$current_sha" go100-api "${_be_verify_paths[@]}"; then
-                    log "  RESTART go100 api (host=${GO100_DEPLOY_SSH_HOST}) sha=${current_sha:0:9} 운영 호스트 코드 포함 확인"
-                else
-                    log "  ERROR: go100 api 원격 배포 실패 (host=${GO100_DEPLOY_SSH_HOST} label=${GO100_REMOTE_FAIL_LABEL} sha=${current_sha})"
-                    post_to_chat "$session_id" "🔴 [Pipeline Runner] GO100 API 원격 배포 실패 — ${GO100_REMOTE_FAIL_LABEL} (host=${GO100_DEPLOY_SSH_HOST}, sha=${current_sha:0:9}). 운영 호스트 코드 미반영/통신 실패라 성공으로 처리하지 않습니다: $job_id"
-                    _build_fail="${_build_fail:+${_build_fail};}${GO100_REMOTE_FAIL_LABEL}"
-                fi
             else
                 GO100_DEPLOY_CALL_TIMEOUT=180 go100_deploy_call systemctl restart go100 2>/dev/null || true
                 log "  RESTART go100 api${GO100_DEPLOY_SSH_HOST:+ (host=${GO100_DEPLOY_SSH_HOST})}"
@@ -9499,14 +9527,9 @@ deploy_job() {
                     ;;
                 GO100)
                     if go100_deploy_is_remote; then
-                        # 원격 모드: 운영 호스트 코드에 rollback_sha 가 있어야만 재기동한다(fail-closed). 없으면 재기동하지 않고 사유를 남긴다.
-                        local -a _rb_verify_paths=()
-                        mapfile -t _rb_verify_paths < <(go100_backend_verify_paths "$_deploy_files_ok" "$_deploy_files")
-                        if ! go100_remote_api_restart "$rollback_sha" rollback "${_rb_verify_paths[@]}"; then
-                            _rollback_remote_note="${GO100_REMOTE_FAIL_LABEL}"
-                            log "  ROLLBACK_REMOTE_RESTART_NOT_DONE job=$job_id label=${_rollback_remote_note} — 롤백 SHA 가 운영 호스트에 반영되지 않았거나 통신 실패, 수동 복구 필요"
-                            post_to_chat "$session_id" "🔴 [Pipeline Runner] GO100 롤백 재기동 미수행 (${_rollback_remote_note}) — 운영 호스트 코드에 롤백 SHA(${rollback_sha:0:9}) 반영을 확인하지 못했습니다. 수동 복구 필요: $job_id"
-                        fi
+                        go100_queue_backend_release "$rollback_sha" "$worktree_dir"
+                        _rollback_remote_note="${GO100_RELEASE_QUEUE_LABEL}"
+                        log "  ROLLBACK_REMOTE_RESTART_NOT_DONE job=$job_id sha=${rollback_sha} label=${_rollback_remote_note} — 실제 슬롯 미반영, 수동 blue/green 승인 필요"
                     else
                         GO100_DEPLOY_CALL_TIMEOUT=180 go100_deploy_call systemctl restart go100 2>/dev/null || true
                     fi

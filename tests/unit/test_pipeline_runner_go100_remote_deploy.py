@@ -387,90 +387,16 @@ def test_r2_test_d_124_is_timeout_and_rc1_is_plain_absent(fake):
         assert _build_fail(r) == ""
 
 
-@pytest.mark.parametrize("rc,label", [("255", "ssh_failed"), ("124", "timeout"), ("137", "timeout")])
-def test_r2_remote_restart_comm_failure_is_recorded_as_failure(fake, runtime_repo, rc, label):
-    repo, sha = runtime_repo
+@pytest.mark.parametrize("rc", ["255", "124", "137"])
+def test_remote_queue_comm_failure_is_deferred(fake, rc):
     r, chat = _run_block(
-        fake,
-        "backend/app.py",
-        {
-            "GO100_DEPLOY_SSH_HOST": "contabo14",
-            "GO100_REPO_DIR": str(repo),
-            "FAKE_FAIL_ON": r"^systemctl restart go100",
-            "FAKE_FAIL_RC": rc,
-        },
-        sha,
+        fake, "backend/app.py",
+        {"GO100_DEPLOY_SSH_HOST": "contabo14", "FAKE_FAIL_RC": rc}, "a" * 40,
     )
     assert r.returncode == 0, r.stderr
-    assert f"go100-api:{label}" in _build_fail(r).split(";")
-    assert "성공으로 처리하지 않습니다" in chat
-    assert not fake["sysl"].exists(), "통신 실패면 원격 systemctl 은 실행되지 않았다"
-
-
-def test_r2_remote_restart_nonzero_rc_is_restart_failed(fake, runtime_repo):
-    repo, sha = runtime_repo
-    r, _ = _run_block(
-        fake,
-        "backend/app.py",
-        {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo), "FAKE_SYSTEMCTL_RC": "5"},
-        sha,
-    )
-    assert "go100-api:restart_failed" in _build_fail(r).split(";")
-
-
-def test_r2_remote_restart_success_when_runtime_contains_sha(fake, runtime_repo):
-    repo, sha = runtime_repo
-    r, _ = _run_block(
-        fake, "backend/app.py", {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, sha
-    )
-    assert r.returncode == 0, r.stderr
-    assert "go100-api" not in _build_fail(r)
-    assert fake["sysl"].read_text().strip() == "restart go100"
-    # 재기동 전후 두 번 검증한다.
-    assert _scripts_text(fake).count("go100_runtime_has_sha") >= 4  # 함수 정의 2회 + 호출 2회
-
-
-def test_r2_sha_mismatch_blocks_restart_command_fail_closed(fake, runtime_repo):
-    repo, _ = runtime_repo
-    r, chat = _run_block(
-        fake, "backend/app.py", {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, "b" * 40
-    )
-    assert r.returncode == 0, r.stderr
-    assert "go100-api:remote_sha_not_applied" in _build_fail(r).split(";")
-    assert not _restart_sent(fake), "SHA 가 반영되지 않았으면 재기동 명령을 보내지 않는다"
-    assert not fake["sysl"].exists()
-    assert "미반영" in chat
-
-
-def test_r2_sha_on_other_branch_not_ancestor_of_head_is_not_applied(fake, runtime_repo):
-    repo, base = runtime_repo
-    _git(repo, "checkout", "-q", "-b", "side")
-    (repo / "b.txt").write_text("b\n")
-    _git(repo, "add", "b.txt")
-    _git(repo, "commit", "-q", "-m", "side")
-    side = _git(repo, "rev-parse", "HEAD")
-    _git(repo, "checkout", "-q", "main")  # 객체는 있지만 HEAD(main)의 조상이 아니다
-    r, _ = _run_block(
-        fake, "backend/app.py", {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, side
-    )
-    assert "go100-api:remote_sha_not_applied" in _build_fail(r).split(";")
-    assert not _restart_sent(fake)
-
-
-def test_r2_sha_verification_comm_failure_blocks_restart(fake, runtime_repo):
-    repo, sha = runtime_repo
-    r, _ = _run_block(
-        fake,
-        "backend/app.py",
-        {
-            "GO100_DEPLOY_SSH_HOST": "contabo14",
-            "GO100_REPO_DIR": str(repo),
-            "FAKE_FAIL_ON": r"go100_runtime_has_sha ",
-            "FAKE_FAIL_RC": "255",
-        },
-        sha,
-    )
-    assert "go100-api:ssh_failed" in _build_fail(r).split(";")
+    assert _build_fail(r) == ""
+    assert "DEFERRED=go100-api:release_queue_unavailable" in r.stdout
+    assert "릴리스 대기열/수동 blue-green" in chat
     assert not _restart_sent(fake)
 
 
@@ -645,55 +571,16 @@ def test_r3_no_paths_is_fail_closed(runtime_repo):
     assert _has_sha(repo, sha) == 4
 
 
-def test_r3_restart_blocked_when_runtime_file_is_old_version(fake, runtime_repo):
+def test_remote_dispatch_does_not_restart_runtime(fake, runtime_repo):
     repo, sha = runtime_repo
-    (repo / "backend" / "app.py").write_text("old\n")
     r, chat = _run_block(
-        fake, "backend/app.py", {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, sha
+        fake, "backend/app.py",
+        {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, sha,
     )
-    assert r.returncode == 0, r.stderr
-    assert "go100-api:remote_code_mismatch" in _build_fail(r).split(";")
-    assert not _restart_sent(fake), "실행 파일이 구버전이면 재기동 명령을 보내지 않는다"
-    assert not fake["sysl"].exists()
-    assert "미반영" in chat
-
-
-def test_r3_restart_passes_only_backend_paths_and_defaults_to_backend_dir(fake, runtime_repo):
-    repo, sha = runtime_repo
-    # 변경 파일에 frontend/ 와 backend/ 가 섞여 있어도 검증 경로는 backend/ 파일만이다.
-    (repo / "frontend").mkdir()
-    (repo / "frontend" / "x.ts").write_text("dirty\n")  # 경로 밖 변경은 영향 없음
-    r, _ = _run_block(
-        fake,
-        "frontend/x.ts\nbackend/app.py",
-        {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)},
-        sha,
-    )
-    assert "go100-api" not in _build_fail(r), (r.stdout, r.stderr)
-    assert _restart_sent(fake)
-    calls = [ln for ln in _scripts_text(fake).splitlines() if ln.startswith("go100_runtime_has_sha /")]
-    assert len(calls) == 2 and all("backend/app.py" in ln and "frontend" not in ln for ln in calls), calls
-    body = (
-        f'source "{fake["lib"]}"\nset +e\n'
-        'go100_backend_verify_paths false "x"; go100_backend_verify_paths true "docs/a.md"; '
-        'go100_backend_verify_paths true $\'backend/a.py\\nbackend/b.py\''
-    )
-    out = subprocess.run(["bash", "-c", body], env=fake["base"], capture_output=True, text=True).stdout.split()
-    assert out == ["backend/", "backend/", "backend/a.py", "backend/b.py"]
-
-
-def test_r3_post_restart_code_change_is_recorded_as_failure(fake, runtime_repo):
-    # 재기동 직후 실행 파일이 바뀌면(구버전 복귀) 재검증에서 실패로 기록한다.
-    repo, sha = runtime_repo
-    bindir = Path(fake["base"]["FAKE_BIN"])
-    (bindir / "systemctl").write_text(
-        f'#!/bin/bash\necho "$*" >> "$FAKE_SYSTEMCTL_LOG"\nprintf "old\\n" > "{repo}/backend/app.py"\nexit 0\n',
-        encoding="utf-8",
-    )
-    r, _ = _run_block(
-        fake, "backend/app.py", {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, sha
-    )
-    assert "go100-api:remote_sha_lost" in _build_fail(r).split(";")
+    assert _build_fail(r) == ""
+    assert "release_queue_unavailable" in r.stdout
+    assert not _restart_sent(fake)
+    assert "릴리스 대기열/수동 blue-green" in chat
 
 
 def test_r2_rollback_requires_rollback_sha_on_runtime_host(fake, runtime_repo):
@@ -710,7 +597,7 @@ def test_r2_rollback_requires_rollback_sha_on_runtime_host(fake, runtime_repo):
     assert "rc=0 label=" in r.stdout, (r.stdout, r.stderr)
     assert _restart_sent(fake)
     text = SCRIPT.read_text(encoding="utf-8")
-    assert 'go100_remote_api_restart "$rollback_sha" rollback' in text
+    assert 'go100_queue_backend_release "$rollback_sha" "$worktree_dir"' in text
     # 롤백 SHA 확인 없이 원격 재기동을 부르는 줄이 없다(원격 모드 재기동은 래퍼 한 곳을 지난다).
     for ln in text.splitlines():
         if "go100_deploy_call systemctl restart go100" in ln and not ln.strip().startswith("#"):
@@ -753,3 +640,164 @@ def test_r2_runtime_has_sha_is_shipped_to_remote():
 
 def test_r2_runner_local_copy_identical_after_r2():
     assert SCRIPT.read_bytes() == (ROOT / "scripts" / "pipeline-runner.sh.local").read_bytes()
+
+
+# 보존된 4단계 재기동 함수 자체의 회귀 검사. 배포 dispatcher 는 이 함수를 더 이상 부르지 않는다.
+def _run_restart_helper(fake, files, extra, project_sha):
+    chat = fake["tmp"] / "retained-chat.log"
+    body = f'''source "{fake['lib']}"
+set +e
+post_to_chat() {{ echo "$2" >> "{chat}"; }}
+runit() {{
+local _build_fail="" _deploy_files_ok=true _deploy_files="{files}" session_id=s job_id=j
+local -a paths=()
+mapfile -t paths < <(go100_backend_verify_paths "$_deploy_files_ok" "$_deploy_files")
+if ! go100_remote_api_restart "{project_sha}" go100-api "${{paths[@]}}"; then
+    _build_fail="$GO100_REMOTE_FAIL_LABEL"
+    post_to_chat "$session_id" "미반영: 성공으로 처리하지 않습니다"
+fi
+echo "BUILD_FAIL=$_build_fail"
+}}
+runit
+'''
+    result = subprocess.run(["bash", "-c", body], env={**fake["base"], **extra},
+                            capture_output=True, text=True, timeout=60)
+    return result, chat.read_text() if chat.exists() else ""
+
+
+@pytest.mark.parametrize("rc,label", [("255", "ssh_failed"), ("124", "timeout"), ("137", "timeout")])
+def test_retained_r2_remote_restart_comm_failure_is_recorded_as_failure(fake, runtime_repo, rc, label):
+    repo, sha = runtime_repo
+    r, chat = _run_restart_helper(
+        fake,
+        "backend/app.py",
+        {
+            "GO100_DEPLOY_SSH_HOST": "contabo14",
+            "GO100_REPO_DIR": str(repo),
+            "FAKE_FAIL_ON": r"^systemctl restart go100",
+            "FAKE_FAIL_RC": rc,
+        },
+        sha,
+    )
+    assert r.returncode == 0, r.stderr
+    assert f"go100-api:{label}" in _build_fail(r).split(";")
+    assert "성공으로 처리하지 않습니다" in chat
+    assert not fake["sysl"].exists(), "통신 실패면 원격 systemctl 은 실행되지 않았다"
+
+
+def test_retained_r2_remote_restart_nonzero_rc_is_restart_failed(fake, runtime_repo):
+    repo, sha = runtime_repo
+    r, _ = _run_restart_helper(
+        fake,
+        "backend/app.py",
+        {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo), "FAKE_SYSTEMCTL_RC": "5"},
+        sha,
+    )
+    assert "go100-api:restart_failed" in _build_fail(r).split(";")
+
+
+def test_retained_r2_remote_restart_success_when_runtime_contains_sha(fake, runtime_repo):
+    repo, sha = runtime_repo
+    r, _ = _run_restart_helper(
+        fake, "backend/app.py", {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, sha
+    )
+    assert r.returncode == 0, r.stderr
+    assert "go100-api" not in _build_fail(r)
+    assert fake["sysl"].read_text().strip() == "restart go100"
+    # 재기동 전후 두 번 검증한다.
+    assert _scripts_text(fake).count("go100_runtime_has_sha") >= 4  # 함수 정의 2회 + 호출 2회
+
+
+def test_retained_r2_sha_mismatch_blocks_restart_command_fail_closed(fake, runtime_repo):
+    repo, _ = runtime_repo
+    r, chat = _run_restart_helper(
+        fake, "backend/app.py", {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, "b" * 40
+    )
+    assert r.returncode == 0, r.stderr
+    assert "go100-api:remote_sha_not_applied" in _build_fail(r).split(";")
+    assert not _restart_sent(fake), "SHA 가 반영되지 않았으면 재기동 명령을 보내지 않는다"
+    assert not fake["sysl"].exists()
+    assert "미반영" in chat
+
+
+def test_retained_r2_sha_on_other_branch_not_ancestor_of_head_is_not_applied(fake, runtime_repo):
+    repo, base = runtime_repo
+    _git(repo, "checkout", "-q", "-b", "side")
+    (repo / "b.txt").write_text("b\n")
+    _git(repo, "add", "b.txt")
+    _git(repo, "commit", "-q", "-m", "side")
+    side = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")  # 객체는 있지만 HEAD(main)의 조상이 아니다
+    r, _ = _run_restart_helper(
+        fake, "backend/app.py", {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, side
+    )
+    assert "go100-api:remote_sha_not_applied" in _build_fail(r).split(";")
+    assert not _restart_sent(fake)
+
+
+def test_retained_r2_sha_verification_comm_failure_blocks_restart(fake, runtime_repo):
+    repo, sha = runtime_repo
+    r, _ = _run_restart_helper(
+        fake,
+        "backend/app.py",
+        {
+            "GO100_DEPLOY_SSH_HOST": "contabo14",
+            "GO100_REPO_DIR": str(repo),
+            "FAKE_FAIL_ON": r"go100_runtime_has_sha ",
+            "FAKE_FAIL_RC": "255",
+        },
+        sha,
+    )
+    assert "go100-api:ssh_failed" in _build_fail(r).split(";")
+    assert not _restart_sent(fake)
+
+
+def test_retained_r3_restart_blocked_when_runtime_file_is_old_version(fake, runtime_repo):
+    repo, sha = runtime_repo
+    (repo / "backend" / "app.py").write_text("old\n")
+    r, chat = _run_restart_helper(
+        fake, "backend/app.py", {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, sha
+    )
+    assert r.returncode == 0, r.stderr
+    assert "go100-api:remote_code_mismatch" in _build_fail(r).split(";")
+    assert not _restart_sent(fake), "실행 파일이 구버전이면 재기동 명령을 보내지 않는다"
+    assert not fake["sysl"].exists()
+    assert "미반영" in chat
+
+
+def test_retained_r3_restart_passes_only_backend_paths_and_defaults_to_backend_dir(fake, runtime_repo):
+    repo, sha = runtime_repo
+    # 변경 파일에 frontend/ 와 backend/ 가 섞여 있어도 검증 경로는 backend/ 파일만이다.
+    (repo / "frontend").mkdir()
+    (repo / "frontend" / "x.ts").write_text("dirty\n")  # 경로 밖 변경은 영향 없음
+    r, _ = _run_restart_helper(
+        fake,
+        "frontend/x.ts\nbackend/app.py",
+        {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)},
+        sha,
+    )
+    assert "go100-api" not in _build_fail(r), (r.stdout, r.stderr)
+    assert _restart_sent(fake)
+    calls = [ln for ln in _scripts_text(fake).splitlines() if ln.startswith("go100_runtime_has_sha /")]
+    assert len(calls) == 2 and all("backend/app.py" in ln and "frontend" not in ln for ln in calls), calls
+    body = (
+        f'source "{fake["lib"]}"\nset +e\n'
+        'go100_backend_verify_paths false "x"; go100_backend_verify_paths true "docs/a.md"; '
+        'go100_backend_verify_paths true $\'backend/a.py\\nbackend/b.py\''
+    )
+    out = subprocess.run(["bash", "-c", body], env=fake["base"], capture_output=True, text=True).stdout.split()
+    assert out == ["backend/", "backend/", "backend/a.py", "backend/b.py"]
+
+
+def test_retained_r3_post_restart_code_change_is_recorded_as_failure(fake, runtime_repo):
+    # 재기동 직후 실행 파일이 바뀌면(구버전 복귀) 재검증에서 실패로 기록한다.
+    repo, sha = runtime_repo
+    bindir = Path(fake["base"]["FAKE_BIN"])
+    (bindir / "systemctl").write_text(
+        f'#!/bin/bash\necho "$*" >> "$FAKE_SYSTEMCTL_LOG"\nprintf "old\\n" > "{repo}/backend/app.py"\nexit 0\n',
+        encoding="utf-8",
+    )
+    r, _ = _run_restart_helper(
+        fake, "backend/app.py", {"GO100_DEPLOY_SSH_HOST": "contabo14", "GO100_REPO_DIR": str(repo)}, sha
+    )
+    assert "go100-api:remote_sha_lost" in _build_fail(r).split(";")
