@@ -1,5 +1,24 @@
 """Server-owned document classification; settings are read at call time."""
+import logging
 import os
+
+logger = logging.getLogger(__name__)
+
+# 2026-11-06 CEO 지시 "검토한도 일단 무제한": 미설정·0 이하·숫자 아님은 무제한.
+# 양의 정수를 AADS_DOC_TIER_D3_DAILY_LIMIT 에 넣으면 다시 상한이 걸린다.
+D3_UNLIMITED = 10**9
+
+
+def _d3_daily_limit() -> int:
+    raw = (os.getenv("AADS_DOC_TIER_D3_DAILY_LIMIT") or "").strip()
+    if not raw:
+        return D3_UNLIMITED
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("doc_tier_d3_daily_limit_invalid value=%r — 무제한으로 처리", raw)
+        return D3_UNLIMITED
+    return value if value > 0 else D3_UNLIMITED
 
 
 def settings() -> dict:
@@ -7,7 +26,7 @@ def settings() -> dict:
         "long_chars": int(os.getenv("AADS_DOC_TIER_LONG_CHARS", "15000")),
         "split_chars": int(os.getenv("AADS_DOC_TIER_SPLIT_CHARS", "50000")),
         "goal_link_enabled": os.getenv("AADS_DOC_TIER_GOAL_LINK_ENABLED", "false").lower() in ("1", "true", "yes"),
-        "d3_daily_limit": int(os.getenv("AADS_DOC_TIER_D3_DAILY_LIMIT", "20")),
+        "d3_daily_limit": _d3_daily_limit(),
     }
 
 
