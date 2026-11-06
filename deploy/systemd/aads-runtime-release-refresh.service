@@ -1,0 +1,24 @@
+# 정본: 저장소 deploy/systemd/. 설치·enable 은 채팅 Ops 가 한다 (이 저장소는 설치하지 않는다).
+#
+# 설치 순서
+#   1. 이 스크립트가 릴리스 사본에 들어올 때까지 1회 수동 부트스트랩:
+#        RUNTIME_RELEASE_SHA=<이 파일을 포함한 push 된 SHA> bash <push 된 SHA 의 scripts/runtime_release_refresh.sh>
+#   2. 이 유닛과 .timer 를 /etc/systemd/system/ 에 복사 → systemctl daemon-reload → enable --now .timer
+# 사본에 스크립트가 아직 없으면 ConditionPathExists 로 조용히 건너뛴다.
+[Unit]
+Description=AADS aads-server 릴리스 사본 갱신 (origin/main -> /root/aads/runtime/aads-server-release)
+ConditionPathExists=/root/aads/runtime/aads-server-release/scripts/runtime_release_refresh.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/aads/runtime
+Environment=HOME=/root
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/bash /root/aads/runtime/aads-server-release/scripts/runtime_release_refresh.sh
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aads-runtime-release-refresh

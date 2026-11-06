@@ -1,0 +1,11 @@
+[Unit]
+Description=AADS aads-server 릴리스 사본 갱신 5분 주기 실행
+
+[Timer]
+OnCalendar=*:0/5
+AccuracySec=30s
+Persistent=true
+Unit=aads-runtime-release-refresh.service
+
+[Install]
+WantedBy=timers.target
