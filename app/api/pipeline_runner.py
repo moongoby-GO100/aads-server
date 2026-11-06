@@ -3780,6 +3780,13 @@ async def notify_completion(job_id: str):
     status = row["status"]
     project = row["project"]
 
+    if status == "done":
+        from app.services.doc_auto_resolve import register_revision_from_job
+        try:
+            await register_revision_from_job(pool, job_id)
+        except Exception as exc:
+            logger.warning("pipeline_runner.doc_register_fail", job_id=job_id, error=type(exc).__name__)
+
     await _record_terminal_failure_candidate(row)
 
     # 작업 완료/에러 시 같은 프로젝트의 다음 queued 작업을 자동 승격
