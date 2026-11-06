@@ -61,7 +61,7 @@ async def upload():
 
 
 @pytest.mark.asyncio
-async def test_upload_failure_not_propagated(hr, monkeypatch):
+async def test_upload_failure_not_propagated(hr, monkeypatch):  # noqa: F811 (pytest 픽스처 hr 를 import 해 인자로 받는다)
     monkeypatch.setattr(identity.bb, '_default_ocr', _scripted_ocr(RuntimeError('private OCR failure')))
     document = await upload()
     assert document['extract_status'] == 'needs_review'
@@ -69,7 +69,7 @@ async def test_upload_failure_not_propagated(hr, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_profile_merge_and_direct_input_not_overwritten(hr, monkeypatch):
+async def test_profile_merge_and_direct_input_not_overwritten(hr, monkeypatch):  # noqa: F811 (pytest 픽스처 hr 를 import 해 인자로 받는다)
     monkeypatch.setattr(identity.bb, '_default_ocr', _scripted_ocr({'text':'900101-1234567\n서울특별시 성북구 동소문로 20','confidence':0.9}))
     document = await upload()
     profile = svc._employee_onboarding_profile(svc._read_hr('onboarding_documents',OWNER), employee_email=EMP, employee_request_id='join-emp-mia')
@@ -88,3 +88,34 @@ async def test_profile_merge_and_direct_input_not_overwritten(hr, monkeypatch):
     with pytest.raises(HTTPException) as old:
         await svc.reextract_identity_document(document['id'],OWNER)
     assert old.value.status_code == 409
+
+
+def test_ocr_misread_special_city_is_seoul():
+    # 운영 서류 14건 실측(2026-11-06): OCR 이 "특별시"는 읽었지만 앞의 "서울"을 다른 글자로 읽어 주소 0건이었다.
+    text = '성명 김민우\n서올특별시 성북구 동소문로 20'
+    assert identity.parse_identity_text(text, 'id_card')['address'] == '서울특별시 성북구 동소문로 20'
+    assert identity.parse_identity_text('경기도 고양시 덕양구 화정로 1', 'id_card')['address'] == '경기도 고양시 덕양구 화정로 1'
+
+
+def test_register_number_on_next_line_only_when_no_other_person():
+    split = '본인 김민우\n010203-3234567\n주소 서울특별시 성북구 동소문로 20'
+    assert identity.parse_identity_text(split, 'resident_register', '김민우')['birth_date'] == '2001-02-03'
+    # 다음 줄이 다른 세대원이면 그 번호를 쓰지 않는다
+    other = '자녀 김민우\n배우자 박영희 800101-2234567'
+    assert not identity.parse_identity_text(other, 'resident_register', '김민우')['birth_date']
+    # 이름 줄에 이미 번호가 있으면 다음 줄을 보지 않는다
+    own = '김민우 010203-3234567\n800101-2234567'
+    assert identity.parse_identity_text(own, 'resident_register', '김민우')['birth_date'] == '2001-02-03'
+
+
+@pytest.mark.asyncio
+async def test_partial_fields_kept_when_confident_but_not_marked_extracted():
+    text = '김민우 900101-1234567\n주소 판독 불가'
+    result = await identity.extract_identity_bounded(_png(), document_type='id_card', ocr=_scripted_ocr({'text': text, 'confidence': 0.9}))
+    assert result['extract_status'] == 'needs_review'
+    assert result['birth_date'] == '1990-01-01' and not result['address']
+    record = {}
+    identity.apply_to_record(record, result)
+    assert record['extracted_fields'] == {'birth_date': '1990-01-01'}
+    low = await identity.extract_identity_bounded(_png(), document_type='id_card', ocr=_scripted_ocr({'text': text, 'confidence': 0.2}))
+    assert not low['birth_date']

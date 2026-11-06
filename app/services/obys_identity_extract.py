@@ -10,7 +10,11 @@ from app.services import obys_bankbook_extract as bb
 
 DOCUMENT_TYPES = {"id_card", "resident_register"}
 _RRN = re.compile(r"(?<!\d)(\d{6})\s*[-–]?\s*([1-8])[\d*]{6}(?!\d)")
-_ADDRESS = re.compile(r"(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|전라|경상|제주)[가-힣]*(?:\s+[^\n]+)")
+_ADDRESS = re.compile(r"(?:(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|전라|경상|전북|제주)[가-힣]*"
+                      r"|[가-힣]{1,3}(?:특별시|광역시|특별자치시|특별자치도))(?:\s+[^\n]+)")
+# 특별시는 서울 하나뿐이다. OCR 이 "서울"을 다른 글자로 읽어도(예: 서올특별시) 서울특별시로 바로잡는다.
+_SPECIAL_CITY = re.compile(r"^[가-힣]{1,3}특별시")
+_RELATION_WORDS = {"본인", "세대주", "배우자", "자녀", "남편", "아들", "관계", "주민등록번호", "성명", "전입일", "변동사유"}
 
 
 def parse_identity_text(text: str, document_type: str, employee_name: str = "") -> dict[str, str]:
@@ -18,8 +22,18 @@ def parse_identity_text(text: str, document_type: str, employee_name: str = "") 
     lines = text.splitlines()
     if document_type == "resident_register":
         name = re.sub(r"\s+", "", employee_name)
-        lines = [line for line in lines if name and re.search(
-            r"(?<![가-힣])" + r"\s*".join(map(re.escape, name)) + r"(?![가-힣])", line)]
+        pattern = re.compile(r"(?<![가-힣])" + r"\s*".join(map(re.escape, name)) + r"(?![가-힣])") if name else None
+        hits = [i for i, line in enumerate(lines) if pattern and pattern.search(line)]
+        picked = []
+        for i in hits:
+            picked.append(lines[i])
+            # 등본 표는 이름과 주민번호가 다른 줄로 읽히기도 한다. 이름 줄에 번호가 없고, 바로 다음 줄에
+            # 다른 사람 이름이 없을 때만 그 줄의 번호를 쓴다(다른 세대원 번호를 가져오지 않는다).
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            words = set(re.findall(r"[가-힣]{2,4}", _RRN.sub("", nxt)))
+            if not _RRN.search(lines[i]) and _RRN.search(nxt) and words <= _RELATION_WORDS:
+                picked.append(nxt)
+        lines = picked
     candidates = set()
     for line in lines:
         for match in _RRN.finditer(line):
@@ -37,7 +51,7 @@ def parse_identity_text(text: str, document_type: str, employee_name: str = "") 
     for line in safe.splitlines():
         match = _ADDRESS.search(line)
         if match:
-            address = match.group().strip()
+            address = _SPECIAL_CITY.sub("서울특별시", match.group().strip())
             if not re.search(r"\d{6,}|주민등록|발급|성명", address):
                 addresses.append(address)
     return {"birth_date": birth, "address": addresses[0] if addresses else ""}
@@ -70,6 +84,9 @@ async def extract_identity(data: bytes, *, document_type: str, employee_name: st
                       "extract_attempts": count, "extract_rotation": 0 if count == 1 else 180}
             if not reasons:
                 result.update(fields, extract_status="extracted")
+            elif confidence >= limit:
+                # 신뢰도가 기준 이상이면 찾은 값만이라도 남긴다(주소를 못 읽었다고 생년월일까지 버리지 않는다).
+                result.update({key: value for key, value in fields.items() if value})
             if score > best_score:
                 best, best_score = result, score
             best["extract_attempts"] = count
