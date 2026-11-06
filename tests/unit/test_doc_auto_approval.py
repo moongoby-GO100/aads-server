@@ -905,3 +905,31 @@ def test_sweep_style_legacy_rereview_schedules_when_valid_same_company_exists(mo
     conn = FakeConn(head(), revision(), rows)
     assert run(auto.request_follow_up_review(conn, 't', 'AADS', head(), revision(), rereview_legacy=True)) == 'scheduled'
     schedule.assert_called_once()
+
+
+@pytest.mark.parametrize('risk,total,stored_count,expected', [
+    ('high', 3, False, 'hold'), ('high', 3, True, 'hold'),
+    ('high', 2, False, 'approve'), ('normal', 5, False, 'approve'),
+])
+def test_unverified_high_risk_limit(risk, total, stored_count, expected):
+    rows = [row(CODEX), row(OPUS)]
+    for review, count in zip(rows, [1, total - 1]):
+        text, data = rubric.parse_review_reason(review['reason'])
+        data['unverified'] = [] if stored_count else [
+            {'criterion': '정합성', 'location': '본문', 'problem': '확인 못함', 'needed': '근거'}
+            for _ in range(count)]
+        if stored_count:
+            data['unverified_count'] = count
+        review['reason'] = text + rubric.REVIEW_MARKER + json.dumps(data, ensure_ascii=False)
+    decision = decide(rows, r=revision(title='인증 계획' if risk == 'high' else '일반 계획'))
+    assert decision.action == expected
+    assert ('high_risk_unverified_exceeded' in decision.reasons) == (expected == 'hold')
+    assert 'blocker_present' not in decision.reasons and 'major_present' not in decision.reasons
+
+
+def test_unverified_uses_latest_model_review_only():
+    old = row(CODEX)
+    text, data = rubric.parse_review_reason(old['reason'])
+    data['unverified_count'] = 5
+    old['reason'] = text + rubric.REVIEW_MARKER + json.dumps(data)
+    assert decide([old, row(CODEX), row(OPUS)], r=revision(title='인증 계획')).action == 'approve'

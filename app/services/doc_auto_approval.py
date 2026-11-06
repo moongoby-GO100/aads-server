@@ -255,6 +255,18 @@ def evaluate(head: Mapping, revision: Mapping, reviews: Iterable[Mapping], revie
         holds.append(f'review_state_{state}')
 
     latest = cross._latest_by_model(list(reviews or []))
+    unverified_count = 0
+    for row in latest.values():
+        _, data = rubric.parse_review_reason(row.get('reason'))
+        if not isinstance(data, dict):
+            continue
+        items = data.get('unverified')
+        count = data.get('unverified_count')
+        # 잘림 전 전체 건수가 있으면 보존하고, 없으면 파싱된 배열을 센다.
+        unverified_count += count if _count_positive(count) else len(items) if isinstance(items, list) else 0
+    if risk == 'high' and unverified_count > HIGH_RISK_MAX_MINOR:
+        holds.append('high_risk_unverified_exceeded')
+
     if any(r.get('verdict') == 'reject' for r in latest.values()):
         holds.append('reject_present')
 

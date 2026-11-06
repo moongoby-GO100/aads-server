@@ -638,3 +638,9 @@ def test_finite_score_pass_from_other_company_still_passes():
     """정상 점수 pass 는 기존대로 통과 집계된다(회귀 방지)."""
     rows = [verdict_row(CODEX, 'pass', '요약\n\n[REVIEW_JSON]{"score":0.9}')]
     assert cross.summarize('D2', CLAUDE, rows)['review_state'] == 'passed'
+
+
+def test_prompt_excludes_unverified_from_penalties():
+    system, _ = rubric.build_review_request('plan', 'D2', '계획', '본문', [], [])
+    guidance = 'unverified 에 넣은 항목은 scores·score 감점과 verdict=reject 의 근거로 쓰지 않는다. 제공된 본문·발췌·검사 결과 안에서 확인되는 결함만 issues 와 감점에 반영한다.'
+    assert '발췌로 확인할 수 없는 정합성 의문은 issues가 아니라 unverified에 기록하세요.\n' + guidance in system

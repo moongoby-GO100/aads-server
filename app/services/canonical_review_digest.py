@@ -137,6 +137,7 @@ _HOLD_REASON_KO = {
     "score_below_min": "검토 점수가 기준에 못 미칩니다",
     "high_risk_score_below_min": "고위험 문서라 더 높은 검토 점수가 필요합니다",
     "criterion_below_min": "세부 평가 항목 중 기준 미달이 있습니다",
+    "high_risk_unverified_exceeded": "고위험 문서 미검증 3건 이상",
     "high_risk_minor_exceeded": "고위험 문서인데 사소한 지적이 너무 많습니다",
 }
 

@@ -212,6 +212,7 @@ def build_review_request(kind, doc_tier, title, content, checks, approved, prior
         "문서에 적힌 파일·함수·수치가 실제와 맞는지, 내부 모순이 없는지, 빠진 롤백이 없는지 꼼꼼히 보세요. "
         "결정적 검사 결과(deterministic_checks)와 같은 프로젝트 승인 문서 목록(approved_documents)을 참고해 기존 문서와의 충돌도 확인하세요.\n"
         "발췌로 확인할 수 없는 정합성 의문은 issues가 아니라 unverified에 기록하세요.\n"
+        "unverified 에 넣은 항목은 scores·score 감점과 verdict=reject 의 근거로 쓰지 않는다. 제공된 본문·발췌·검사 결과 안에서 확인되는 결함만 issues 와 감점에 반영한다.\n"
         "아래 JSON 한 개만 반환하세요. unverified는 선택 키이며 없으면 빈 배열 또는 생략합니다. 나머지 키는 필수입니다.\n"
         '{"verdict":"pass 또는 reject","summary":"한글 3문장 이내",'
         '"ceo_brief":"비전문가인 대표님이 읽는 쉬운 한국어 2~3문장: 이 문서가 무엇을 정하는지, 승인되면 무엇이 바뀌는지, 주의할 점",'
