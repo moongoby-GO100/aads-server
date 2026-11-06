@@ -4367,10 +4367,10 @@ class ToolExecutor:
                     # 러너가 get_job_status 폴링(≤15초)에서 status != running 을 보고 스스로 종료한다.
                     is_remote_runner = row["project"] != "AADS"
                     await conn.execute(
-                        "UPDATE pipeline_jobs SET status='error', phase='error', "
+                        "UPDATE pipeline_jobs SET status='cancelled', phase='cancelled', error_detail=$3, "
                         + ("" if is_remote_runner else "runner_pid=NULL, ")
                         + "review_feedback=COALESCE(review_feedback,'')||$2, updated_at=now() WHERE job_id=$1",
-                        task_id, f" | 강제종료: {reason}",
+                        task_id, f" | 강제종료: {reason}", f"terminated: {str(reason)[:200]}",
                     )
                     # 강제 종료도 durable 종료 write 다 — 목표 링크를 함께 재조정한다.
                     # (이전에는 terminate 후에도 goal_task_links 가 queued 로 남았다)
@@ -4381,7 +4381,7 @@ class ToolExecutor:
                         logger.warning("terminate_goal_reconcile_failed task=%s: %s", task_id, _gerr)
                     from app.services.task_logger import emit_task_log, emit_task_completed
                     asyncio.create_task(emit_task_log(task_id, "error", f"강제 종료: {reason}", phase="terminated"))
-                    asyncio.create_task(emit_task_completed(task_id, "error"))
+                    asyncio.create_task(emit_task_completed(task_id, "cancelled"))
                     if is_remote_runner:
                         result = {
                             "task_id": task_id,

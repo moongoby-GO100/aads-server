@@ -3132,7 +3132,7 @@ async def cancel_pipeline(job_id: str) -> dict:
             )
             if not row:
                 return {"error": f"작업을 찾을 수 없음: {job_id}"}
-            if row["status"] in ("done", "error") and row["phase"] == "cancelled":
+            if row["status"] == "cancelled" or (row["status"] in ("done", "error") and row["phase"] == "cancelled"):
                 return {"error": f"이미 취소된 작업: {job_id}"}
 
             await conn.execute(
@@ -3161,7 +3161,7 @@ async def retry_pipeline(job_id: str) -> dict:
     # 먼저 메모리에서 찾기
     job = get_job(job_id)
     if job:
-        if job.status not in ("error", "done"):
+        if job.status not in ("error", "done", "cancelled"):
             return {"error": f"재실행 불가 — 현재 상태: {job.status}/{job.phase}. 먼저 cancel 필요."}
         project = job.project
         instruction = job.instruction
@@ -3183,7 +3183,7 @@ async def retry_pipeline(job_id: str) -> dict:
                 )
                 if not row:
                     return {"error": f"작업을 찾을 수 없음: {job_id}"}
-                if row["status"] not in ("error", "done"):
+                if row["status"] not in ("error", "done", "cancelled"):
                     return {"error": f"재실행 불가 — 현재 상태: {row['status']}/{row['phase']}. 먼저 cancel 필요."}
                 project = row["project"]
                 instruction = row["instruction"]

@@ -369,7 +369,7 @@ def _run_terminate(monkeypatch, row):
 
 
 def _status_update(conn):
-    return [e for e in conn.executed if "SET status='error'" in e[0]][0]
+    return [e for e in conn.executed if "SET status='cancelled'" in e[0]][0]
 
 
 def test_terminate_remote_keeps_runner_pid_and_reports_honestly(monkeypatch):
