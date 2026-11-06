@@ -2,7 +2,7 @@
 
 고정하는 계약
   1. 두 도구가 registry·executor dispatch·action 그룹에 있고 일관성 스크립트를 통과한다.
-  2. 필수 인자/키 형식(소문자 kebab, 슬래시·날짜·버전 금지)을 DB 접근 전에 거부한다.
+  2. 키 기본 형식은 DB 접근 전, 신규 키의 kebab·날짜·버전 규칙은 head 조회 후 거부한다.
   3. register 는 라우트와 같은 create_revision_in_tx 와 canonical_gate 를 호출한다.
   4. approve 는 어떤 경로로도 호출되지 않고 approved_revision_id 는 갱신되지 않는다.
   5. lookup 은 SELECT 만 한다.
@@ -38,6 +38,7 @@ class FakeConn:
         self.rows = rows or []
         self.sql: list[str] = []
         self.in_tx = False
+        self.rolled_back = False
 
     def transaction(self):
         conn = self
@@ -48,6 +49,7 @@ class FakeConn:
 
             async def __aexit__(self_inner, *exc):
                 conn.in_tx = False
+                conn.rolled_back = exc[0] is not None
                 return False
 
         return _Tx()
@@ -169,11 +171,19 @@ def test_tool_consistency_script_passes():
     "ovis-spec-202610", "ovis-spec-v2", "v1-ovis", "ovis spec", "-ovis", "ovis-", "ovis--spec", "",
     "ovis.spec", "a" * 129,
 ])
-def test_bad_document_keys_rejected_before_any_query(key):
+def test_bad_document_keys_rejected_before_any_query(key, monkeypatch):
+    # head 조회 이후에도 기존 신규 키 거부 계약과 쓰기 0회를 유지한다.
+    head_lookup = AsyncMock(return_value=None)
+    monkeypatch.setattr(docs, "_head", head_lookup)
     conn = FakeConn()
     out = _register(conn, _inp(document_key=key))
     assert out["error"] == "invalid_input"
     assert conn.sql == []
+    if docs.KEY.fullmatch(key):
+        head_lookup.assert_awaited_once_with(conn, TENANT, "AADS", key, lock=True)
+        assert conn.rolled_back
+    else:
+        head_lookup.assert_not_awaited()
 
 
 @pytest.mark.parametrize("key", ["ovis-spec", "prd", "phase-2-plan", "go100-recipe-design", "kis-order-v-model"])
@@ -224,6 +234,37 @@ def test_existing_key_creates_next_revision_with_current_generation(monkeypatch)
     body = created.await_args.args[4]
     assert (body.version, body.expected_generation) == ("1.0.2", 3)
     assert any("FOR UPDATE" in s for s in conn.sql)
+
+
+@pytest.mark.parametrize("key", ["spec:304b66102a6f", "Legacy.Spec_1", "spec-2026-10-03-v2"])
+def test_existing_legacy_key_creates_next_revision(monkeypatch, key):
+    created = AsyncMock(return_value={"document_id": HEAD_ID, "revision_id": REV_ID,
+                                      "generation": 7, "idempotent": False})
+    monkeypatch.setattr(docs, "create_revision_in_tx", created)
+    head = {**_head(generation=6, approved=REV_ID), "document_key": key}
+    conn = FakeConn(head=head, revisions=6)
+    out = _register(conn, _inp(document_key=key))
+    created.assert_awaited_once()
+    body = created.await_args.args[4]
+    assert (body.document_key, body.version, body.expected_generation) == (key, "1.0.6", 6)
+    assert any("FOR UPDATE" in sql for sql in conn.sql)
+    assert out["registered"] is True and out["approved"] is False
+    assert head["approved_revision_id"] == REV_ID
+    assert not conn.in_tx and not conn.rolled_back
+
+
+def test_new_legacy_key_is_rejected_and_transaction_rolled_back(monkeypatch, _stub_gate):
+    created = AsyncMock()
+    monkeypatch.setattr(docs, "create_revision_in_tx", created)
+    conn = FakeConn(head=None)
+    out = _register(conn, _inp(document_key="spec:abc"))
+    assert out == {"error": "invalid_input",
+                   "message": "document_key 는 소문자 kebab(a-z, 0-9, '-')여야 합니다"}
+    created.assert_not_awaited()
+    _stub_gate.assert_not_awaited()
+    assert len(conn.sql) == 1 and "FOR UPDATE" in conn.sql[0]
+    assert conn.sql[0].lstrip().upper().startswith("SELECT")
+    assert conn.rolled_back and not conn.in_tx
 
 
 def test_gate_warning_is_attached_but_never_blocks(monkeypatch, _stub_gate):

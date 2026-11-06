@@ -3650,6 +3650,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "description": (
             "프로젝트 문서를 정본(project_document_heads)에 **초안 리비전**으로 등록합니다. "
             "기존 document_key 면 새 리비전이 추가되고 승인본(approved_revision_id)은 바뀌지 않습니다. "
+            "이미 등록된 문서의 새 판본은 기존 키를 그대로 쓴다(레거시 키 포함). "
             "승인은 이 도구로 할 수 없습니다(기존 승인 경로로만). "
             "document_key 는 소문자 kebab(예: ovis-recipe-spec), 슬래시·날짜·버전 금지. "
             "content 또는 file_path(서버 저장소 기준 docs/·reports/ 상대경로) 중 하나가 필요합니다. "

@@ -54,6 +54,10 @@ def validate_document_key(key: str) -> Optional[str]:
     return None
 
 
+class _InvalidDocumentKey(ValueError):
+    """신규 키 거부 시 쓰기 없이 트랜잭션을 롤백한다."""
+
+
 def _invalid(message: str) -> dict[str, Any]:
     return {"error": "invalid_input", "message": message}
 
@@ -72,9 +76,8 @@ async def register_document(
     except HTTPException:
         return _invalid("project 가 올바르지 않습니다")
     key = str(inp.get("document_key") or "")
-    problem = validate_document_key(key)
-    if problem:
-        return _invalid(problem)
+    if not docs.KEY.fullmatch(key):
+        return _invalid(validate_document_key(key) or "document_key 가 올바르지 않습니다")
     content = str(inp.get("content") or "")
     file_path = str(inp.get("file_path") or "") or None
     if not content and not file_path:
@@ -97,6 +100,10 @@ async def register_document(
         async with pool.acquire() as conn, conn.transaction():
             head = await docs._head(conn, tenant_id, project, key, lock=True)
             is_new_document = head is None
+            if is_new_document:
+                problem = validate_document_key(key)
+                if problem:
+                    raise _InvalidDocumentKey(problem)
             existing = 0
             if head:
                 existing = int(await conn.fetchval(
@@ -133,6 +140,8 @@ async def register_document(
             if result.get("matched_by"):
                 matched_status = "approved" if result.get("approved") else (
                     await conn.fetchval(_STATUS_SQL, result["revision_id"]) or "draft")
+    except _InvalidDocumentKey as exc:
+        return _invalid(str(exc))
     except HTTPException as exc:
         detail = exc.detail
         code = str(detail.get("code")) if isinstance(detail, dict) else str(detail)
