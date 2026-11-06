@@ -2873,7 +2873,9 @@ async def _fetch_archived_jobs(
             data = _json.loads(data)
         if data.get("job_id") in exclude_ids:
             continue
-        out.append(_archived_job_item(data, detail=False))
+        item = _archived_job_item(data, detail=False)
+        item["runner_host"] = data.get("runner_host")
+        out.append(item)
         if len(out) >= limit:
             break
     return out
@@ -2922,7 +2924,7 @@ async def list_jobs(
             SELECT job_id, project, instruction, status, phase, cycle,
                    error_detail, created_at, updated_at,
                    started_at, depends_on, chat_session_id, model, worker_model,
-                   actual_model, size, runner_pid,
+                   actual_model, size, runner_pid, runner_host,
                    {auth_state_expr} AS auth_recovery_state,
                    {auth_metadata_expr} AS auth_recovery_metadata
             FROM pipeline_jobs
@@ -2934,10 +2936,12 @@ async def list_jobs(
         )
 
     results = []
+    job_sessions = {r["job_id"]: _record_get(r, "chat_session_id") for r in rows}
     async with pool.acquire() as conn:
         for r in rows:
             item = {
                 "job_id": r["job_id"],
+                "runner_host": _record_get(r, "runner_host"),
                 "project": r["project"],
                 "instruction": r["instruction"][:200],
                 "status": r["status"],
@@ -2977,6 +2981,56 @@ async def list_jobs(
                 limit=limit - len(results),
                 exclude_ids={item["job_id"] for item in results},
             ))
+        session_ids = sorted({
+            str(job_sessions.get(item["job_id"]) or item.get("chat_session_id"))
+            for item in results
+            if job_sessions.get(item["job_id"]) or item.get("chat_session_id")
+        })
+        sessions = {}
+        if session_ids:
+            session_rows = await conn.fetch(
+                """
+                SELECT s.id::text AS session_id, s.title, w.name AS workspace_name
+                FROM chat_sessions s
+                LEFT JOIN chat_workspaces w ON w.id = s.workspace_id
+                    AND w.tenant_id = s.tenant_id
+                WHERE s.tenant_id = $1::uuid AND s.id::text = ANY($2::text[])
+                """,
+                _tenant_id(context), session_ids,
+            )
+            sessions = {r["session_id"]: r for r in session_rows}
+
+        dependency_ids = sorted({
+            item["depends_on"] for item in results
+            if item["status"] == "queued" and item.get("depends_on")
+        })
+        dependencies = {}
+        if dependency_ids:
+            dependency_rows = await conn.fetch(
+                """
+                SELECT job_id, status FROM pipeline_jobs
+                WHERE tenant_id = $1::uuid AND job_id = ANY($2::text[])
+                """,
+                _tenant_id(context), dependency_ids,
+            )
+            dependencies = {r["job_id"]: r["status"] for r in dependency_rows}
+
+        for item in results:
+            session = sessions.get(str(
+                job_sessions.get(item["job_id"]) or item.get("chat_session_id")
+            ))
+            item["chat_session_title"] = session["title"] if session else None
+            item["workspace_name"] = session["workspace_name"] if session else None
+            item["wait_reason"] = None
+            if item["status"] == "queued":
+                parent = item.get("depends_on")
+                parent_status = dependencies.get(parent)
+                if parent_status in {"queued", "running", "awaiting_approval"}:
+                    item["wait_reason"] = f"선행 작업 대기: {parent}({parent_status})"
+                elif parent_status in {"error", "cancelled"}:
+                    item["wait_reason"] = f"선행 작업 실패로 막힘: {parent}({parent_status})"
+                else:
+                    item["wait_reason"] = "서버 빈자리 대기"
     return results
 
 
