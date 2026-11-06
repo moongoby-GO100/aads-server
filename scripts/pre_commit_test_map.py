@@ -53,6 +53,7 @@ class Group:
 
 # ── 대응표 ────────────────────────────────────────────────────────────
 GROUPS: tuple[Group, ...] = (
+    Group(name="migration_direct_gate", tests=("tests/unit/test_apply_migration_direct_gate.py", "tests/unit/test_release_migration_autoverify.py"), globs=("scripts/apply_migration.sh", "scripts/apply_release_migrations.sh")),
     Group(
         name="tools",
         tests=("tests/unit/test_tools_and_pipeline.py",),

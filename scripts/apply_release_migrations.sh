@@ -320,7 +320,11 @@ for path in "${pending[@]}"; do
         continue
     fi
     echo "APPLY $name"
-    if ! "$APPLY_BIN" "$path"; then
+    # Approval above covers every pending file. Bind each invocation to exactly
+    # the file passed to apply_migration.sh, including its current content hash.
+    absolute="$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
+    gate_manifest="$(printf '%s:%s\n' "$absolute" "$(sha256sum "$path" | awk '{print $1}')" | sha256sum | awk '{print $1}')"
+    if ! AADS_MIGRATION_GATE_MANIFEST="$gate_manifest" "$APPLY_BIN" "$path"; then
         echo "FAILED $name; later migrations not attempted" >&2
         exit 5
     fi

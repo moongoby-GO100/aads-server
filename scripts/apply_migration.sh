@@ -46,6 +46,44 @@ if ((${#files[@]} == 0)); then
     exit 2
 fi
 
+# Validate the entire invocation before the first DB call (also with --force).
+# Ordered absolute filename:content-sha256 lines bind the marker to these files.
+gate_manifest() {
+    local input absolute
+    for input in "$@"; do
+        [[ -f "$input" ]] || { echo "SQL file not found: $input" >&2; return 2; }
+        absolute="$(cd "$(dirname "$input")" && pwd)/$(basename "$input")"
+        printf '%s:%s\n' "$absolute" "$(sha256sum "$absolute" | awk '{print $1}')"
+    done
+}
+
+if ! $dry_run; then
+    manifest_rows="$(gate_manifest "${files[@]}")" || exit 2
+    expected_gate="$(printf '%s\n' "$manifest_rows" | sha256sum | awk '{print $1}')"
+    if [[ "${AADS_MIGRATION_GATE_MANIFEST:-}" != "$expected_gate" ]]; then
+        if ! python3 - "$REPO_ROOT/scripts" "${files[@]}" <<'PYGATE'
+import sys
+from pathlib import Path
+
+message = "BLOCK-CEO-APPROVAL: direct apply_migration.sh 는 자동 검증 통과 또는 apply_release_migrations.sh 경유가 필요합니다"
+try:
+    sys.path.insert(0, sys.argv[1])
+    from release_migration_autoverify import classify_files
+    reasons = classify_files([Path(name) for name in sys.argv[2:]])
+except Exception as exc:
+    reasons = [f"자동 검증 판정 실패: {exc}"]
+if reasons:
+    print(message, file=sys.stderr)
+    for reason in reasons:
+        print(reason, file=sys.stderr)
+    sys.exit(7)
+PYGATE
+        then
+            exit 7
+        fi
+    fi
+fi
+
 for input_file in "${files[@]}"; do
     if [[ ! -f "$input_file" ]]; then
         echo "SQL file not found: $input_file" >&2
