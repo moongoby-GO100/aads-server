@@ -59,6 +59,24 @@
     };
     const MINIMUM_HOURLY_WAGE_2026 = 10320;
 
+    const DELIVERY_RESTAURANT_BUSINESS_IDS = Object.freeze([
+      "biz-junghwa", "biz-mia", "biz-sungshin", "biz-eonni-naengmyeon"
+    ]);
+    const DELIVERY_RESTAURANT_PRESET = Object.freeze({
+      jobDescription: "배달식당 운영관리 용역",
+      freelancerScope: "계약 목적: 위탁자({사업자명})가 운영하는 배달 전문 음식점 {점포명}의 운영관리 용역.\n① 배달앱(배달의민족·쿠팡이츠·요기요·땡겨요) 주문 접수 상태·메뉴·가격·영업시간 설정 관리\n② 조리·포장 품질과 식품위생 기준 관리\n③ 식자재 발주·재고·원가 관리\n④ 매출·정산 자료 정리\n⑤ 고객 리뷰·클레임 대응\n⑥ 매장 시설·장비 점검과 수리 요청.\n산출물·검수: 매월 말일 기준 월간 운영보고서(매출, 주문 수, 원가율, 리뷰·클레임 처리 내역)를 다음 달 5일까지 제출하고 위탁자가 검수한다.\n독립성: 수급인은 업무 수행 시간·장소·방법·보조인력 운용을 독립적으로 정하며 위탁자는 결과물 기준으로만 검수한다."
+    });
+    function isDeliveryRestaurant(business = {}) {
+      return DELIVERY_RESTAURANT_BUSINESS_IDS.includes(String(business.id || business.business_id || ""))
+        || [business.industry, business.business_type, business.business_category, business.business_item].some(value => /음식점|배달/.test(String(value || "")));
+    }
+    function deliveryRestaurantDefaults(business = {}, values = {}) {
+      const employer = values.employerName || business.trade_name || business.tradeName || business.name || "위탁자";
+      const branch = values.branch || business.branch || business.name || employer;
+      return { jobDescription: DELIVERY_RESTAURANT_PRESET.jobDescription,
+        freelancerScope: DELIVERY_RESTAURANT_PRESET.freelancerScope.replace("{사업자명}", () => employer).replace("{점포명}", () => branch) };
+    }
+
     const standardContractDefaults = {
       common: {
         workplace: "해당 지점 영업장 및 사용자가 지정한 관련 업무 장소",
@@ -358,7 +376,7 @@
       let clauses = [];
       if (contractType === "freelancer") {
         clauses = [
-          contractClause("계약 목적", `${employerName || "위탁자"}는 ${employeeName || "수급인"}에게 독립 용역을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.`),
+          contractClause("계약 목적", `${employerName || "위탁자"}는 ${employeeName || "수급인"}에게 ${/용역$/.test(String(jobDescription || "").trim()) ? String(jobDescription).trim() : "독립 용역"}을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.`),
           contractClause("용역 기간 및 장소", `${startDate || "용역 시작일 미입력"}부터 ${endDate || "종료일 별도 합의"}까지 수행한다. 수행 장소·일정은 산출물 납품과 검수에 필요한 범위에서 협의하며 고정 출퇴근, 매장 상시 근무표, 교대조 편입으로 운영하지 않는다.`),
           contractClause("업무범위, 산출물, 검수", freelancerScope || `${jobDescription || "업무 범위 미입력"}`),
           contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || "검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다."}`),
@@ -471,6 +489,7 @@
         ...(standardContractDefaults[contractType] || {}),
         ...(standardContractDefaults[taxType] || {}),
         ...(contractType === "daily" ? { insuranceTerms: standardContractDefaults.daily.insuranceTerms } : {}),
+        ...(contractType === "freelancer" && isDeliveryRestaurant(business) ? deliveryRestaurantDefaults(business) : {}),
         ...sizeTerms(business.workplaceSizeCategory || business.workplace_size_category || "under_5"),
         workplaceSizeCategory: business.workplaceSizeCategory || business.workplace_size_category || "under_5"
 
@@ -526,7 +545,7 @@
     const api = {
       contractTypeLabels, employmentTaxTypeLabels, wageTypeLabels, standardContractDefaults,
       MINIMUM_HOURLY_WAGE_2026, CONTRACT_STATUS, EMPLOYMENT_TYPES,
-      defaultsFor, classificationFor, FREELANCER_WAGE_TYPES, splitMonthlyWage, NON_TAX_MEAL_LIMIT, validateContractDraft, checkDraft, contractPreviewHtml, contractDraftGuidanceHtml, setBusinessResolver,
+      DELIVERY_RESTAURANT_BUSINESS_IDS, DELIVERY_RESTAURANT_PRESET, isDeliveryRestaurant, deliveryRestaurantDefaults, defaultsFor, classificationFor, FREELANCER_WAGE_TYPES, splitMonthlyWage, NON_TAX_MEAL_LIMIT, validateContractDraft, checkDraft, contractPreviewHtml, contractDraftGuidanceHtml, setBusinessResolver,
       escapeHtml, formatMoney, today
     };
     root.ObysContractCore = api;

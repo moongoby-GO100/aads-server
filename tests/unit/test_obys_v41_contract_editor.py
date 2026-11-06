@@ -222,7 +222,8 @@ def test_blocking_validation_error_is_shown_not_hidden_as_all_filled():
 
 def test_contract_type_switch_replaces_previous_type_defaults():
     block = _block(EDITOR, "function switchContractType(", "function applyDefaults(")
-    assert "C.defaultsFor(prevType, prevTax)" in block
+    assert "C.defaultsFor(prevType, prevTax, business)" in block
+    assert "C.defaultsFor(newType, cls.employmentTaxType || prevTax, business)" in block
     assert "String(E.values[key] ?? \"\").trim() === String(value ?? \"\").trim()" in block
 
 

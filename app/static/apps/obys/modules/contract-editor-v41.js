@@ -1057,8 +1057,10 @@
       const type = field.type === "number" ? 'type="number" inputmode="numeric" min="0" step="1"' : `type="${field.type}"`;
       control = `<input class="field" ${type} ${common} value="${esc(value)}" ${disabled}>`;
     }
+    const scopeButton = field.name === "freelancerScope" && scopePresetEditable()
+      ? '<button class="btn primary" type="button" data-cv41-restaurant-scope>배달식당 운영관리 기본안 넣기</button>' : "";
     const suggestHtml = suggestion ? `<button class="btn cv41-suggest" type="button" data-cv41-suggest="${esc(field.name)}">추천값 넣기: ${esc(shortText(suggestion.value))}</button>` : "";
-    return `<div class="form-field ${invalid ? "invalid" : ""} ${field.type === "textarea" ? "wide" : ""}"><label for="${id}">${esc(wageLabelOf(field))}${invalid ? ' <span class="cv41-req">필수·비어 있음</span>' : ""}${schedBadge(field.name)}</label>${control}${autoToggleHtml(field.name)}${suggestHtml}${hint ? `<small id="${id}_hint">${esc(hint)}</small>` : ""}${field.name === "baseSalary" ? `<div id="cv41WageNote" aria-live="polite">${wageNoteHtml()}</div>` : ""}</div>`;
+    return `<div class="form-field ${invalid ? "invalid" : ""} ${field.type === "textarea" ? "wide" : ""}"><label for="${id}">${esc(wageLabelOf(field))}${invalid ? ' <span class="cv41-req">필수·비어 있음</span>' : ""}${schedBadge(field.name)}</label>${control}${scopeButton}${autoToggleHtml(field.name)}${suggestHtml}${hint ? `<small id="${id}_hint">${esc(hint)}</small>` : ""}${field.name === "baseSalary" ? `<div id="cv41WageNote" aria-live="polite">${wageNoteHtml()}</div>` : ""}</div>`;
   }
   function stepConditions() {
     const type = E.values.contractType || "part_time";
@@ -1174,7 +1176,18 @@
     parts.push(`<button class="btn" type="button" data-cv41-close>닫기</button>`);
     return parts.join("");
   }
+  function scopePresetEditable() {
+    return !readOnly() && E.values.contractType === "freelancer" && (!E.contract || E.contract.status === "draft");
+  }
   function wire() {
+    dialog.querySelector("[data-cv41-restaurant-scope]")?.addEventListener("click", () => {
+      if (!scopePresetEditable()) return;
+      if (String(E.values.freelancerScope || "").trim() && !confirm("기존 업무범위를 배달식당 운영관리 기본안으로 교체하시겠습니까?")) return;
+      Object.assign(E.values, C.deliveryRestaurantDefaults(businessRecord(E.target?.business_id), { ...E.values, branch: E.target?.branch }));
+      E.autoManual.add("freelancerScope");
+      E.dirty = true; E.previewed = false;
+      render();
+    });
     dialog.querySelectorAll("[data-cv41-close]").forEach(button => button.addEventListener("click", closeEditor));
     dialog.querySelector("#cv41Employee")?.addEventListener("change", event => {
       const employee = S.employees.find(item => employeeKey(item) === event.target.value) || null;
@@ -1293,7 +1306,7 @@
       default: break;
     }
     if (NO_DEFAULT.has(name)) return null;
-    const defaults = C.defaultsFor(E.values.contractType || "part_time", E.values.employmentTaxType || "four_insurance");
+    const defaults = C.defaultsFor(E.values.contractType || "part_time", E.values.employmentTaxType || "four_insurance", { ...businessRecord(E.target?.business_id), id: E.target?.business_id, branch: E.target?.branch });
     return from(defaults[name], "표준 조항");
   }
   function liveCheck() {
@@ -1430,8 +1443,9 @@
     const cls = { ...C.classificationFor(newType) };
     // 시급으로 쓰던 계약을 3.3% 용역계약으로 바꿔도 시급은 그대로 둔다(서버도 시급 용역계약을 받는다).
     if (newType === "freelancer" && E.values.wageType === "hourly") cls.wageType = "hourly";
-    const before = C.defaultsFor(prevType, prevTax);
-    const after = C.defaultsFor(newType, cls.employmentTaxType || prevTax);
+    const business = { ...businessRecord(E.target?.business_id), id: E.target?.business_id, branch: E.target?.branch };
+    const before = C.defaultsFor(prevType, prevTax, business);
+    const after = C.defaultsFor(newType, cls.employmentTaxType || prevTax, business);
     Object.entries(before).forEach(([key, value]) => {
       if (NO_DEFAULT.has(key)) return;
       if (String(E.values[key] ?? "").trim() === String(value ?? "").trim()) E.values[key] = after[key] !== undefined ? String(after[key]) : "";
@@ -1439,9 +1453,10 @@
     Object.assign(E.values, cls, { contractType: newType });
     if (E.auto && ["fixed_term", "daily"].includes(newType) && !E.values.endDate) E.auto.term = "custom";
     applyDefaults(false);
+    if (newType === "freelancer" && C.isDeliveryRestaurant(business)) E.autoManual.add("freelancerScope");
   }
   function applyDefaults(overwrite) {
-    const defaults = C.defaultsFor(E.values.contractType || "part_time", E.values.employmentTaxType || "four_insurance");
+    const defaults = C.defaultsFor(E.values.contractType || "part_time", E.values.employmentTaxType || "four_insurance", { ...businessRecord(E.target?.business_id), id: E.target?.business_id, branch: E.target?.branch });
     Object.entries(defaults).forEach(([key, value]) => {
       if (NO_DEFAULT.has(key)) return;
       const current = String(E.values[key] ?? "").trim();
@@ -1880,6 +1895,6 @@
       if (box && ROUTES.has(route)) renderSection(route, box);
     },
     // 단위 검증용(브라우저 밖 node 테스트)
-    _test: { schedAvailable, schedInitState, schedPatch, wageSplitPatch, wageManualFor, draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee, autoInput, initAuto, autoBlockMessage, autoRun, openState: next => (E = { ...freshEditorState(), ...next }) }
+    _test: { switchContractType, scopePresetEditable, fieldControl, schedAvailable, schedInitState, schedPatch, wageSplitPatch, wageManualFor, draftFromValues, payloadFromDraft, checkLocally, missingFromMessage, valuesFromContract, FIELD_BY_LABEL, docsOfEmployee, autoInput, initAuto, autoBlockMessage, autoRun, openState: next => (E = { ...freshEditorState(), ...next }) }
   };
 })();

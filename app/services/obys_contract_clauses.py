@@ -13,6 +13,12 @@ CONTRACT_TITLES = {
 }
 
 
+def _contract_purpose_service(job_description) -> str:
+    """계약 목적 조항의 용역 이름. 업무 내용이 '…용역'(예: 배달식당 운영관리 용역)이면 그 이름, 아니면 '독립 용역'."""
+    text = str(job_description or '').strip()
+    return text if text.endswith('용역') else '독립 용역'
+
+
 def value(contract: dict[str, Any], key: str) -> Any:
     """contractValue와 같은 null 병합 (camelCase 우선)."""
     camel = re.sub(r'_([a-z])', lambda m: m[1].upper(), key)
@@ -78,7 +84,7 @@ def contract_clauses(contract: dict[str, Any]) -> list[tuple[str, str]]:
         insurance = '고용·산재보험 일용근로 신고 및 근로내용 확인신고를 법정 기준에 따라 처리한다.'
     if kind == 'freelancer':
         clauses = [
-            ('계약 목적', f'{employer or "위탁자"}는 {employee or "수급인"}에게 독립 용역을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.'),
+            ('계약 목적', f'{employer or "위탁자"}는 {employee or "수급인"}에게 {_contract_purpose_service(v("job_description"))}을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.'),
             ('용역 기간 및 장소', f'{start or "용역 시작일 미입력"}부터 {end or "종료일 별도 합의"}까지 수행한다. 수행 장소·일정은 산출물 납품과 검수에 필요한 범위에서 협의하며 고정 출퇴근, 매장 상시 근무표, 교대조 편입으로 운영하지 않는다.'),
             ('업무범위, 산출물, 검수', v('freelancer_scope') or v('job_description', '업무 범위 미입력')),
             ('용역비 및 정산', f"{wage_line}. {v('freelancer_settlement_terms', '시급 × 승인된 근태 시간(분 단위 환산)을 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.' if freelancer_hourly else '검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다.')}"),
