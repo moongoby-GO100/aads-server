@@ -718,12 +718,14 @@ async def _read_job_revision(project: str, source: str, commit: str) -> str:
     """Reuse canonical remote blob reading policy, pinned to a pushed commit."""
     import shlex
     from app.api import canonical_documents as docs
-    from app.core.project_config import PROJECT_MAP
+    from app.core.project_config import PROJECT_MAP, DISPLAY_ONLY_PROJECTS
 
     if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('commit_missing')
     source = docs._source_syntax(source)
-    target = PROJECT_MAP[project]
+    if project not in PROJECT_MAP and project not in DISPLAY_ONLY_PROJECTS:
+        raise ValueError('project_unmapped')
+    target = docs._remote_target(project) or PROJECT_MAP['AADS']
     # The canonical reader fetches origin/main first. Fail closed on fetch failure,
     # then prove this exact commit is reachable from the pushed main branch.
     script = docs._REMOTE_READ_SCRIPT.replace('2>&1; ', '2>&1 || exit 4; ', 1)

@@ -139,3 +139,44 @@ def test_remote_reader_pins_commit_and_checks_pushed_ancestry(monkeypatch):
     assert 'ls-tree -z ' + 'a' * 40 in command
     assert '/root/kis-autotrade-v4' in command
     assert '|| exit 4' in command
+
+
+@pytest.mark.parametrize('project', ['ACCT', 'AADS'])
+def test_local_project_job_reads_pinned_aads_repository(monkeypatch, project):
+    conn = Conn()
+    conn.job['project'] = project
+    process = AsyncMock()
+    process.communicate.return_value = ('# 한글 본문'.encode(), b'')
+    process.returncode = 0
+    spawn = AsyncMock(return_value=process)
+    create = AsyncMock()
+    monkeypatch.setattr(res.asyncio, 'create_subprocess_exec', spawn)
+    monkeypatch.setattr(docs, '_body_for_project', AsyncMock(return_value=('# 한글 본문', None, 'hash')))
+    monkeypatch.setattr(docs, 'create_revision_in_tx', create)
+
+    asyncio.run(res.register_revision_from_job(conn, 'runner-test'))
+
+    create.assert_awaited_once()
+    assert not conn.notes
+    args = spawn.await_args.args
+    assert 'root@host.docker.internal' in args
+    command = args[-1]
+    assert '/root/aads/aads-server' in command
+    assert 'merge-base --is-ancestor ' + 'a' * 40 + ' origin/main' in command
+    assert 'ls-tree -z ' + 'a' * 40 in command
+    assert '|| exit 4' in command
+
+
+def test_unmapped_project_job_records_reason(monkeypatch):
+    conn = Conn()
+    conn.job['project'] = 'UNMAPPED_PROJECT'
+    spawn = AsyncMock()
+    create = AsyncMock()
+    monkeypatch.setattr(res.asyncio, 'create_subprocess_exec', spawn)
+    monkeypatch.setattr(docs, 'create_revision_in_tx', create)
+
+    asyncio.run(res.register_revision_from_job(conn, 'runner-test'))
+
+    assert conn.notes == ['doc_register_skipped:project_unmapped']
+    spawn.assert_not_awaited()
+    create.assert_not_awaited()
