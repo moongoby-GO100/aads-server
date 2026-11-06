@@ -79,3 +79,54 @@ def test_current_pending_migrations_are_additive():
              ROOT / "migrations/deferred/20261104_pipeline_job_checkpoints.sql"]
     files = [f for f in files if f.exists()]
     assert av.classify_files(files) == []
+
+
+@pytest.mark.parametrize("action", [
+    "ALTER COLUMN model SET DEFAULT NULL",
+    "ALTER COLUMN model SET DEFAULT 0",
+    "ALTER COLUMN model SET DEFAULT -1.25e+2",
+    "ALTER COLUMN model SET DEFAULT TRUE",
+    "ALTER COLUMN model SET DEFAULT FALSE",
+    "ALTER COLUMN model SET DEFAULT now()",
+    "ALTER COLUMN model SET DEFAULT CURRENT_TIMESTAMP",
+    "ALTER COLUMN model SET DEFAULT 'x'::character varying",
+    "ALTER COLUMN model SET DEFAULT 'it''s, (fine)'::text",
+    "ALTER COLUMN model DROP DEFAULT",
+    'ALTER COLUMN "model" DROP DEFAULT',
+    "ALTER COLUMN model SET DEFAULT NULL, ALTER COLUMN b DROP DEFAULT",
+    "ADD COLUMN b text, ALTER COLUMN model SET DEFAULT NULL",
+])
+def test_default_only_changes_are_safe(tmp_path, action):
+    assert _classify(tmp_path, f"ALTER TABLE pipeline_jobs {action};") == []
+
+
+@pytest.mark.parametrize("action", [
+    "ADD COLUMN x text DEFAULT $$a, ALTER COLUMN b DROP DEFAULT,$$, DROP COLUMN c",
+    "ADD COLUMN x text DEFAULT $t$a, ALTER COLUMN b SET DEFAULT NULL,$t$, DROP COLUMN c",
+    "ADD COLUMN x text DEFAULT 'a', ALTER COLUMN b DROP DEFAULT, DROP COLUMN c",
+    "ALTER COLUMN model SET NOT NULL",
+    "ALTER COLUMN model TYPE text",
+    "ALTER COLUMN model SET DATA TYPE text",
+    "ALTER COLUMN model DROP NOT NULL",
+    "ALTER COLUMN model TYPE text USING model::text",
+    "ALTER COLUMN model SET DEFAULT (SELECT 1)",
+    "ALTER COLUMN model SET DEFAULT gen_x()",
+    "ALTER COLUMN model SET DEFAULT NULL, DROP COLUMN b",
+    "ALTER model SET DEFAULT NULL",
+    "ALTER COLUMN model SET DEFAULT NULL::text",
+    "ALTER COLUMN model SET DEFAULT 0 + 1",
+    "ALTER COLUMN model SET DEFAULT CURRENT_TIMESTAMP AT TIME ZONE 'UTC'",
+    "ALTER COLUMN model SET DEFAULT 'a;b'",
+    "ALTER COLUMN model SET DEFAULT 'unterminated",
+    "ALTER COLUMN model SET DEFAULT $$x$$",
+    "ALTER COLUMN model SET DEFAULT NULL; DELETE FROM pipeline_jobs",
+    "ALTER COLUMN model SET DEFAULT 'a'::text USING model",
+    "ALTER COLUMN model SET DEFAULT 'a'::using",
+    "ALTER COLUMN model SET DEFAULT 'a\\b'",
+])
+def test_unsafe_default_or_column_changes_are_blocked(tmp_path, action):
+    assert _classify(tmp_path, f"ALTER TABLE pipeline_jobs {action};")
+
+
+def test_model_default_null_migration_is_safe():
+    assert av.classify_files([ROOT / "migrations/20261106_pipeline_jobs_model_default_null.sql"]) == []

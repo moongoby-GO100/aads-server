@@ -11,7 +11,7 @@
   4. backup    적용 직전 DB 스키마 전체 백업(pg_dump --schema-only)
   5. postcheck 적용 후 SQL 이 만든다고 한 표·열·함수·색인이 실제로 있는지 확인
 
-데이터를 지우거나 바꾸는 문장(DROP·DELETE·UPDATE·TRUNCATE·ALTER COLUMN·RENAME 등)이 하나라도 있으면
+데이터를 지우거나 바꾸는 문장(DROP·DELETE·UPDATE·TRUNCATE·기본값 외 ALTER COLUMN·RENAME 등)이 하나라도 있으면
 자동 적용하지 않고 사람 승인을 요구한다. 판정 불가·검토 미응답은 모두 차단(fail-closed)이다.
 """
 from __future__ import annotations
@@ -112,7 +112,18 @@ def _norm(s: str) -> str:
 
 def _top_level_commas(s: str) -> list[str]:
     parts, depth, cur = [], 0, []
+    # 원문 기본값의 문자열·따옴표 식별자 안 쉼표와 괄호는 구분자가 아니다.
+    quote = None
     for ch in s:
+        if quote:
+            cur.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            cur.append(ch)
+            continue
         if ch == "(":
             depth += 1
         elif ch == ")":
@@ -157,7 +168,24 @@ def classify_statement(st: dict) -> str | None:
             return None
     m = re.match(r"^ALTER TABLE (IF EXISTS )?(ONLY )?(\S+) (.*)$", s)
     if m:
-        for action in _top_level_commas(m.group(4)):
+        # shape 는 문자열을 가리므로 기본값 허용 목록은 반드시 원문에 fullmatch 한다.
+        raw = re.match(r"^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?\S+\s+(.*)$",
+                       st["text"], re.IGNORECASE | re.DOTALL)
+        raw_actions = _top_level_commas(raw.group(1)) if raw else []
+        ident = r'(?:[A-Z_][A-Z0-9_$]*|"(?:[^"\\]|"")+")'
+        literal = r"'(?:[^'\\;]|'')*'"
+        cast = rf"(?:\s*::\s*(?!USING\b){ident}(?:\s*\.\s*(?!USING\b){ident})?(?:\s+(?:VARYING|PRECISION))?)?"
+        value = rf"(?:NULL|TRUE|FALSE|[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:E[+-]?[0-9]+)?|NOW\(\)|CURRENT_TIMESTAMP|{literal}{cast})"
+        default_change = rf"ALTER\s+COLUMN\s+{ident}\s+(?:DROP\s+DEFAULT|SET\s+DEFAULT\s+{value})"
+        actions = _top_level_commas(m.group(4))
+        # 원문과 shape 의 분할이 다르면 기본값 예외를 전부 차단한다.
+        # dollar-quoted 본문은 원문 분할기가 보호하지 않으므로 예외에서 제외한다.
+        defaults_aligned = "$" not in st["text"] and len(raw_actions) == len(actions)
+        for i, action in enumerate(actions):
+            if (defaults_aligned
+                    and re.fullmatch(default_change, raw_actions[i], re.IGNORECASE)
+                    and re.match(r"^ALTER COLUMN \S+ (DROP DEFAULT|SET DEFAULT )", action)):
+                continue
             if not re.match(r"^ADD (COLUMN |CONSTRAINT )?", action) or BANNED_WORDS.search(action):
                 return f"ALTER TABLE 동작 '{action[:60]}'"
             if action.startswith("ADD CONSTRAINT") or re.match(r"^ADD (PRIMARY KEY|UNIQUE|CHECK|FOREIGN KEY)", action):
