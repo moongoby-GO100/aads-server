@@ -3865,6 +3865,40 @@ worktree_busy_pids() {
 # origin fetch 일시 실패(네트워크·SSH 거부)에 대한 제한 재시도.
 # stderr 원문은 어디에도 싣지 않는다(URL 사용자명 자리 토큰 유출 방지) — 종류 분류값만 남긴다.
 # 결과: GIT_FETCH_LAST_KIND, GIT_FETCH_ATTEMPTS 전역 설정. 0=성공 1=실패.
+# Dashboard release launcher; retain legacy behavior only when unavailable or SHA unknown.
+dashboard_deploy_release() {
+    local release_sha="$1" attempt rc
+    shift
+    local launcher="/usr/local/sbin/aads-dashboard-deploy"
+    if [[ -z "$release_sha" || ! -x "$launcher" ]]; then
+        log "  DASHBOARD_DEPLOY_FALLBACK sha=${release_sha:-unknown} — release SHA unknown or launcher missing/not executable"
+        if [[ -n "$release_sha" ]]; then
+            AADS_RELEASE_SHA="$release_sha" bash /root/aads/aads-dashboard/deploy.sh "$@"
+        else
+            bash /root/aads/aads-dashboard/deploy.sh "$@"
+        fi
+        return $?
+    fi
+    # Reuse the frontend health retry convention: three attempts, five-second interval.
+    for attempt in 1 2 3; do
+        rc=0
+        AADS_RELEASE_SHA="$release_sha" "$launcher" "$@" || rc=$?
+        case "$rc" in
+            75)
+                log "  DASHBOARD_DEPLOY_LOCKED sha=$release_sha attempt=$attempt/3 — waiting/retry"
+                if [[ "$attempt" -lt 3 ]]; then sleep 5; fi
+                ;;
+            2)
+                log "  DASHBOARD_DEPLOY_FAILED: release sha not pushed sha=$release_sha"
+                return 2
+                ;;
+            *) return "$rc" ;;
+        esac
+    done
+    log "  DASHBOARD_DEPLOY_DEFERRED sha=$release_sha — launcher lock retry exhausted"
+    return 75
+}
+
 git_fetch_origin_with_retry() {
     local workdir="$1"
     local max_attempts=3
@@ -9104,63 +9138,71 @@ deploy_job() {
             fi
 
             if [ "$DASHBOARD_CHANGED" = true ]; then
-                log "  BLUEGREEN aads-dashboard — deploy.sh 호출 (헬스체크+롤백)"
+                log "  BLUEGREEN aads-dashboard — release launcher 호출 (헬스체크+롤백)"
                 local _dash_deploy_log="/tmp/pipeline-deploy-dashboard-${job_id}.log"
-                if AADS_RELEASE_SHA="${current_sha:0:12}" \
-                   bash /root/aads/aads-dashboard/deploy.sh >"$_dash_deploy_log" 2>&1; then
+                local _dash_deploy_rc=0
+                dashboard_deploy_release "$current_sha" >"$_dash_deploy_log" 2>&1 || _dash_deploy_rc=$?
+                if [[ "$_dash_deploy_rc" -eq 0 ]]; then
                     tail -10 "$_dash_deploy_log" 2>/dev/null || true
                     log "  DASHBOARD DEPLOY: 완료 (무중단, 헬스체크+롤백 포함)"
+                elif [[ "$_dash_deploy_rc" -eq 75 ]]; then
+                    tail -10 "$_dash_deploy_log" 2>/dev/null || true
+                    _deploy_deferred="${_deploy_deferred:+${_deploy_deferred};}aads-dashboard:launcher_locked"
                 else
                     local _dash_tail
                     _dash_tail=$(tail -20 "$_dash_deploy_log" 2>/dev/null | head -c 1500)
                     log "  ERROR: dashboard blue-green deploy 실패 — 직접 docker fallback 차단: ${_dash_tail//$'\n'/ }"
                     post_to_chat "$session_id" "🔴 [Runner] AADS dashboard blue-green 배포 실패: ${_dash_tail:0:500}"
-                    _build_fail="${_build_fail:+${_build_fail};}aads-dashboard:deploy_failed"
+                    local _dash_reason="deploy_failed"
+                    [[ "$_dash_deploy_rc" -eq 2 ]] && _dash_reason="release sha not pushed"
+                    _build_fail="${_build_fail:+${_build_fail};}aads-dashboard:${_dash_reason}"
                     db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n[배포실패:aads-dashboard] ' || $(sql_escape "${_dash_tail}") WHERE job_id='${job_id}';"
                 fi
                 rm -f "$_dash_deploy_log" 2>/dev/null || true
 
-                # ── QA 자동 실행: 대시보드 배포 후 프론트엔드 검증 ──
-                log "  QA: 30초 대기 후 Visual QA 실행..."
-                sleep 30
-                local _qa_response=""
-                _qa_response=$(curl -s -m 60 -X POST \
-                    -H "Content-Type: application/json" \
-                    -d '{"pages": ["/", "/chat", "/ops"]}' \
-                    "${AADS_API_URL}/api/v1/visual-qa/full-qa" 2>/dev/null) || true
+                if [[ "$_dash_deploy_rc" -eq 0 ]]; then
+                    # ── QA 자동 실행: 대시보드 배포 후 프론트엔드 검증 ──
+                    log "  QA: 30초 대기 후 Visual QA 실행..."
+                    sleep 30
+                    local _qa_response=""
+                    _qa_response=$(curl -s -m 60 -X POST \
+                        -H "Content-Type: application/json" \
+                        -d '{"pages": ["/", "/chat", "/ops"]}' \
+                        "${AADS_API_URL}/api/v1/visual-qa/full-qa" 2>/dev/null) || true
 
-                if [ -z "$_qa_response" ]; then
-                    log "  QA: WARN — QA API 호출 실패 (응답 없음), 배포는 계속 진행"
-                    post_to_chat "$session_id" "⚠️ [Runner] QA API 호출 실패 — 배포는 정상 완료, QA 수동 확인 필요"
-                else
-                    local _qa_verdict=""
-                    _qa_verdict=$(echo "$_qa_response" | jq -r '.verdict // empty' 2>/dev/null) || true
-
-                    if echo "$_qa_verdict" | grep -qi "FAIL"; then
-                        local _qa_summary=""
-                        _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
-                        log "  QA: FAIL — $_qa_verdict: $_qa_summary"
-                        post_to_chat "$session_id" "🔴 [Runner] 프론트엔드 QA FAIL [$_qa_verdict]: $_qa_summary (롤백 없음, 수동 확인 필요)"
-
-                        # 텔레그램 긴급 알림
-                        if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
-                            curl -s -m 10 -X POST \
-                                "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-                                -d "chat_id=${TELEGRAM_CHAT_ID}" \
-                                -d "text=🔴 [AADS Runner] 프론트엔드 QA FAIL [$_qa_verdict]: ${_qa_summary}" \
-                                -d "parse_mode=HTML" 2>/dev/null || true
-                        fi
-                    elif echo "$_qa_verdict" | grep -qi "PASS"; then
-                        log "  QA: PASS ✅ [$_qa_verdict]"
-                        post_to_chat "$session_id" "✅ [Runner] 프론트엔드 QA PASS [$_qa_verdict] — 대시보드 배포 검증 완료"
-                    elif echo "$_qa_verdict" | grep -qi "CEO\|CONDITIONAL"; then
-                        local _qa_summary=""
-                        _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
-                        log "  QA: CONDITIONAL — $_qa_verdict: $_qa_summary"
-                        post_to_chat "$session_id" "⚠️ [Runner] 프론트엔드 QA 조건부 [$_qa_verdict]: $_qa_summary — CEO 확인 필요"
+                    if [ -z "$_qa_response" ]; then
+                        log "  QA: WARN — QA API 호출 실패 (응답 없음), 배포는 계속 진행"
+                        post_to_chat "$session_id" "⚠️ [Runner] QA API 호출 실패 — 배포는 정상 완료, QA 수동 확인 필요"
                     else
-                        log "  QA: WARN — verdict 파싱 불가 ($_qa_verdict), 배포는 계속 진행"
-                        post_to_chat "$session_id" "⚠️ [Runner] QA 결과 불명확 [$_qa_verdict] — 배포는 정상 완료, 수동 확인 필요"
+                        local _qa_verdict=""
+                        _qa_verdict=$(echo "$_qa_response" | jq -r '.verdict // empty' 2>/dev/null) || true
+
+                        if echo "$_qa_verdict" | grep -qi "FAIL"; then
+                            local _qa_summary=""
+                            _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
+                            log "  QA: FAIL — $_qa_verdict: $_qa_summary"
+                            post_to_chat "$session_id" "🔴 [Runner] 프론트엔드 QA FAIL [$_qa_verdict]: $_qa_summary (롤백 없음, 수동 확인 필요)"
+
+                            # 텔레그램 긴급 알림
+                            if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+                                curl -s -m 10 -X POST \
+                                    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                                    -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                                    -d "text=🔴 [AADS Runner] 프론트엔드 QA FAIL [$_qa_verdict]: ${_qa_summary}" \
+                                    -d "parse_mode=HTML" 2>/dev/null || true
+                            fi
+                        elif echo "$_qa_verdict" | grep -qi "PASS"; then
+                            log "  QA: PASS ✅ [$_qa_verdict]"
+                            post_to_chat "$session_id" "✅ [Runner] 프론트엔드 QA PASS [$_qa_verdict] — 대시보드 배포 검증 완료"
+                        elif echo "$_qa_verdict" | grep -qi "CEO\|CONDITIONAL"; then
+                            local _qa_summary=""
+                            _qa_summary=$(echo "$_qa_response" | jq -r '.summary // "상세 정보 없음"' 2>/dev/null) || true
+                            log "  QA: CONDITIONAL — $_qa_verdict: $_qa_summary"
+                            post_to_chat "$session_id" "⚠️ [Runner] 프론트엔드 QA 조건부 [$_qa_verdict]: $_qa_summary — CEO 확인 필요"
+                        else
+                            log "  QA: WARN — verdict 파싱 불가 ($_qa_verdict), 배포는 계속 진행"
+                            post_to_chat "$session_id" "⚠️ [Runner] QA 결과 불명확 [$_qa_verdict] — 배포는 정상 완료, 수동 확인 필요"
+                        fi
                     fi
                 fi
             else
@@ -9512,11 +9554,20 @@ deploy_job() {
             case "$project" in
                 AADS)
                     if [[ "$target_repo" == "aads-dashboard" ]]; then
-                        if bash /root/aads/aads-dashboard/deploy.sh 2>&1 | tail -10; then
-                            log "  ROLLBACK_DEPLOY: dashboard deploy 성공"
-                        else
-                            log "  ROLLBACK_DEPLOY: dashboard deploy 실패 — 기존 서비스 유지"
-                        fi
+                        local _dash_rollback_rc=0
+                        dashboard_deploy_release "$rollback_sha" 2>&1 | tail -10 || _dash_rollback_rc=$?
+                        case "$_dash_rollback_rc" in
+                            0) log "  ROLLBACK_DEPLOY: dashboard deploy 성공" ;;
+                            75)
+                                _rollback_remote_note="aads-dashboard:launcher_locked"
+                                log "  ROLLBACK_DEPLOY: dashboard 보류 — launcher lock retry exhausted"
+                                ;;
+                            2)
+                                _rollback_remote_note="aads-dashboard:release sha not pushed"
+                                log "  ROLLBACK_DEPLOY: dashboard 실패 — release sha not pushed"
+                                ;;
+                            *) log "  ROLLBACK_DEPLOY: dashboard deploy 실패 — 기존 서비스 유지" ;;
+                        esac
                     else
                         # 롤백/revert 커밋도 격리 worktree에서 동일한 인증 경로로 배포한다.
                         if AADS_DEPLOY_FOREGROUND=1 \
