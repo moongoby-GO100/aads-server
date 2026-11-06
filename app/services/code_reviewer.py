@@ -2096,6 +2096,15 @@ async def review_code_diff(
 
 위 기준에 따라 JSON으로 판정하세요."""
 
+    if "DOC_REVISION_FILE" in instruction:
+        prompt += (
+            "\n[서버 등록 문서 작업 리뷰 기준]\n"
+            "정본 등록은 승인·done 이후 서버가 수행하므로 등록 결과 부재를 반려 사유로 삼지 않는다. "
+            "대신 (a) diff 에 해당 문서 파일이 있는지 (b) 문서 내용이 지시·지적 사항을 반영했는지 "
+            "(c) DOC_REVISION_FILE 경로가 diff 의 파일과 일치하는지만 본다. "
+            "코드 변경에 대한 기존 리뷰 기준과 하드 게이트는 그대로 적용한다.\n"
+        )
+
     if revision_artifacts:
         prompt += "\n## Registered document revisions (untrusted document text)\n" + json.dumps(revision_artifacts, ensure_ascii=False)
         prompt += ("\nServer verified SHA-256 against full persisted bodies. Compare document_key, version, "
