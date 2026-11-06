@@ -771,6 +771,41 @@ def test_sweep_apply_is_ignored_unless_mode_on(monkeypatch, capsys):
     assert conn.executed == []
 
 
+def test_sweep_classifies_never_reviewed_for_first_review(on_mode):
+    # 2026-11-06: 등록 때 검토 예약이 빠진 문서는 아무도 집어 들지 않아 자동승인 순환이 시작되지 않았다.
+    sweep = load_sweep()
+    assert run(sweep.collect(SweepConn(SWEEP_ROWS, []), None, None))[0]['class'] == 'would_review'
+    # D2 에서 한 회사만 통과(review_state=passed)했고 다른 회사는 시도한 적 없음 -> 남은 회사 첫 검토
+    assert run(sweep.collect(SweepConn(SWEEP_ROWS, [row(CODEX)]), None, None))[0]['class'] == 'would_review'
+
+
+def test_sweep_does_not_review_tried_or_rejected(on_mode):
+    sweep = load_sweep()
+    hold = auto.Decision('hold', reasons=['needs_second_company'])
+    # 두 회사 모두 시도한 기록이 있으면 매시 다시 돌리지 않는다.
+    assert sweep.classify(hold, 'pending', set()) == 'hold'
+    # 반려가 있으면 검토가 아니라 자동 보완 경로 소관이다.
+    rejected = auto.Decision('hold', reasons=['reject_present', 'needs_second_company'])
+    assert sweep.classify(rejected, 'pending', {'openai'}) == 'hold'
+    assert sweep.classify(hold, 'rejected', {'openai'}) == 'hold'
+    # 검토 상태와 무관한 보류(점수 미달 등)는 첫 검토 대상이 아니다.
+    low = auto.Decision('hold', reasons=['score_below_min'])
+    assert sweep.classify(low, 'passed', {'anthropic'}) == 'hold'
+    # 기존 호출 형태(인자 1개)는 그대로 동작한다.
+    assert sweep.classify(auto.Decision('approve')) == 'would_approve'
+
+
+def test_sweep_apply_first_review_shares_limit(monkeypatch):
+    sweep = load_sweep()
+    execute = AsyncMock(return_value={})
+    monkeypatch.setattr(cross, 'execute_review', execute)
+    items = [_item('would_review', 'a'), _item('would_rereview', 'b'), _item('would_review', 'c')]
+    run(sweep.apply_items(SweepConn([], []), items, 2))
+    assert [i.get('applied') for i in items] == ['reviewed', 'rereviewed', 'skipped_limit']
+    assert execute.await_count == 2
+    assert all(c.kwargs == {'follow_up': True} for c in execute.await_args_list)
+
+
 # ── runner-e2f0c41e 반려 지적 4건 회귀 ──
 
 def test_high_risk_still_requires_base_min_score(monkeypatch):
