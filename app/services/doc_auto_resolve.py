@@ -24,7 +24,6 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Iterable, Mapping, Optional
-from uuid import UUID
 
 from app.services import doc_auto_fix as fix
 from app.services import doc_cross_review as cross
@@ -421,7 +420,7 @@ def parse_card_marker(summary: str) -> Optional[dict]:
 
 
 def _plain_reason(res: Resolution) -> str:
-    parts = [fix.ESCALATE_REASON_KO.get(r, r) for r in res.escalate_reasons]
+    parts = [fix.reason_ko(r) for r in res.escalate_reasons]
     if 'policy_decision' in res.reasons:
         parts.append('정책·비용·우선순위처럼 사람이 정해야 할 쟁점이 남았습니다')
     if res.findings:
@@ -498,12 +497,11 @@ async def create_card(conn: Any, tenant: str, project: str, head: Mapping, revis
     if existing:
         return {'card_id': existing['id'] if existing['decision'] == 'pending' else None, 'created': False,
                 'decision': existing['decision']}
-    try:
-        session_id = str(UUID(str(revision.get('source_session_id'))))
-    except (ValueError, TypeError):
-        logger.warning('doc_auto_resolve_card_no_session %s', json.dumps(
+    session_id, why = await fix.resolve_session_id(conn, tenant, head, revision)
+    if session_id is None:
+        logger.warning('doc_auto_resolve_card_%s %s', why, json.dumps(
             {'project': project, 'document_key': head.get('document_key')}, ensure_ascii=False))
-        return {'card_id': None, 'created': False, 'decision': 'no_session'}
+        return {'card_id': None, 'created': False, 'decision': why}
     from app.services import next_step_proposals
     out = await next_step_proposals.propose(
         session_id, build_card_steps(project, head, revision, res),
@@ -587,10 +585,9 @@ async def _submit_locked(conn: Any, tenant: str, project: str, head_id: Any, rev
             instruction = build_split_instruction(project, head, revision, text, path='card' if want == 'card' else 'split')
         else:
             instruction = build_revise_instruction(project, head, revision, text)
-        try:
-            session_id = str(UUID(str(revision.get('source_session_id'))))
-        except (ValueError, TypeError):
-            session_id = None
+        session_id, why = await fix.resolve_session_id(conn, tenant, head, revision)
+        if session_id is None:
+            return {'path': 'none', 'reasons': [why], 'job_id': None, 'idempotent': False}
         try:
             job = await submit_runner_job_internal(conn, tenant_id=tenant, project=project, instruction=instruction,
                                                    session_id=session_id, origin=ORIGIN)

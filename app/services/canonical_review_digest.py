@@ -303,6 +303,10 @@ async def _classify_held(conn: Any, result: dict, item: dict, tenant_id: Any, de
             plan = fix.FixPlan("escalate", ["fix_job_failed"], mark.get("round", 0), mark.get("fingerprint", ""))
         else:
             plan = fix.plan_auto_fix(decision, head, revision, rows, history)
+        if plan.action in ('fix', 'escalate'):
+            session_id, why = await fix.resolve_session_id(conn, tenant_id, head, revision)
+            if session_id is None:
+                plan = fix.without_session_plan(plan, why)
     except Exception:
         logger.warning("canonical_review_digest_fix_plan_failed", exc_info=True)
         return
@@ -314,7 +318,7 @@ async def _classify_held(conn: Any, result: dict, item: dict, tenant_id: Any, de
         result["needs_ceo"].append({
             "project_key": item["project_key"], "document_key": item["document_key"], "title": item["title"],
             "risk": item["risk"], "round": plan.round, "max_rounds": fix.DOC_AUTO_FIX_MAX_ROUNDS,
-            "reason": " / ".join(fix.ESCALATE_REASON_KO.get(r, r) for r in plan.reasons),
+            "reason": " / ".join(fix.reason_ko(r) for r in plan.reasons),
             "ceo_brief": item.get("ceo_brief"),
             "remaining_issues": [{"severity": f["severity"], "location": f["location"][:40], "problem": f["problem"][:200]}
                                  for f in remaining],

@@ -46,6 +46,8 @@ NON_DEFECT_REASONS = frozenset({'needs_second_company', 'legacy_review_no_score'
                                 'review_state_pending', 'review_state_blocked', 'review_state_None'})
 
 ESCALATE_REASON_KO = {
+    'no_session': '세션 없음 — 이 문서에 연결된 채팅 세션(작성 세션·목표 주도 세션)이 없어 자동 처리를 제출·카드로 올릴 수 없습니다',
+    'ambiguous_session': '세션 모호 — 연결된 목표들의 주도 세션이 서로 달라 자동으로 고를 수 없습니다',
     'risk_high': '고위험 문서(보안·인증·매매·자금 등)라 사람이 직접 확인해야 합니다',
     'migration_document': '마이그레이션 문서라 자동 보완 대상이 아닙니다',
     'secret_detected': '시크릿으로 보이는 값이 들어 있어 자동 보완을 멈췄습니다',
@@ -69,6 +71,38 @@ class FixPlan:
     round: int = 0
     fingerprint: str = ''
     feedback: str = ''
+
+
+def without_session_plan(plan: FixPlan, why: str) -> FixPlan:
+    """미제출 회차를 되돌리고 기존 보류 사유를 순서대로 보존한다."""
+    return FixPlan('escalate', list(dict.fromkeys([*plan.reasons, why])),
+                   max(plan.round - 1, 0) if plan.action == 'fix' else plan.round,
+                   plan.fingerprint, plan.feedback)
+
+
+def reason_ko(code: str) -> str:
+    if code in ESCALATE_REASON_KO:
+        return ESCALATE_REASON_KO[code]
+    from app.services.canonical_review_digest import hold_reason_ko
+    return hold_reason_ko(code)
+
+
+async def resolve_session_id(conn: Any, tenant: str, head: Mapping, revision: Mapping) -> tuple[Optional[str], Optional[str]]:
+    """작성 세션 우선, 없으면 연결된 모든 목표의 보고 대상 세션이 일치해야 한다(읽기 전용)."""
+    try:
+        return str(UUID(str(revision.get('source_session_id')))), None
+    except (ValueError, TypeError):
+        pass
+    from app.services.goal_report import GOAL_TARGET_SESSION_SQL
+    rows = await conn.fetch(
+        f"SELECT DISTINCT ({GOAL_TARGET_SESSION_SQL})::text AS session_id "
+        "FROM project_document_goal_links gl JOIN goals g ON g.id=gl.goal_id "
+        "WHERE gl.head_id=$1::uuid AND gl.tenant_id=$2::uuid AND g.tenant_id=$2::uuid",
+        head['id'], tenant)
+    candidates = {str(row['session_id']) for row in rows if row['session_id'] is not None}
+    if len(candidates) == 1:
+        return candidates.pop(), None
+    return None, 'ambiguous_session' if candidates else 'no_session'
 
 
 # ---------------------------------------------------------------- 지적 추출·지문·피드백
@@ -390,7 +424,7 @@ async def maybe_schedule_auto_fix(conn: Any, tenant: str, project: str, head_id:
             return out
         if plan.action == 'escalate':
             _log('doc_auto_fix_decision', fix_mode, head, plan)
-            _log('doc_auto_fix_escalated', fix_mode, head, plan, ceo_reasons=[ESCALATE_REASON_KO.get(r, r) for r in plan.reasons])
+            _log('doc_auto_fix_escalated', fix_mode, head, plan, ceo_reasons=[reason_ko(r) for r in plan.reasons])
             _kick_auto_resolve(tenant, project, head, revision, submit_enabled)
             return out
         if not submit_enabled:
@@ -398,11 +432,15 @@ async def maybe_schedule_auto_fix(conn: Any, tenant: str, project: str, head_id:
                  approve_mode=approve_mode)
             return out
         from app.services.runner_job_submit import UnsupportedProject, submit_runner_job_internal
-        session_id = None
-        try:
-            session_id = str(UUID(str(revision.get('source_session_id'))))
-        except (ValueError, TypeError):
-            pass
+        session_id, why = await resolve_session_id(conn, tenant, head, revision)
+        if session_id is None:
+            plan = without_session_plan(plan, why)
+            out.update(action='escalate', reasons=plan.reasons)
+            _log('doc_auto_fix_decision', fix_mode, head, plan, outcome=why)
+            _log('doc_auto_fix_escalated', fix_mode, head, plan,
+                 ceo_reasons=[reason_ko(r) for r in plan.reasons])
+            _kick_auto_resolve(tenant, project, head, revision, submit_enabled)
+            return out
         try:
             job = await submit_runner_job_internal(
                 conn, tenant_id=tenant, project=project, instruction=build_instruction(project, head, revision, plan),

@@ -48,6 +48,21 @@ _MAX_PER_CYCLE = int(os.getenv("GOAL_REPORT_MAX_PER_CYCLE", "3"))
 _KST = ZoneInfo("Asia/Seoul")
 
 
+GOAL_TARGET_SESSION_SQL = """COALESCE(
+                       g.owner_session_id,
+                       (
+                           SELECT s.id
+                           FROM goal_task_links l
+                           JOIN chat_sessions s ON s.id = l.task_id::uuid
+                           WHERE l.goal_id = g.id
+                             AND l.task_type = 'chat_session'
+                             AND l.link_state = 'active'
+                           ORDER BY (s.role_key LIKE '%Lead') DESC, l.created_at
+                           LIMIT 1
+                       )
+                   )"""
+
+
 def _weekly_event_key(now: datetime | None = None) -> str:
     """Return the idempotency key for the current KST reporting week."""
     observed = now or datetime.now(_KST)
@@ -361,22 +376,10 @@ async def report_weekly_goal_progress(
             """
         )
         rows = await conn.fetch(
-            """
+            f"""
             SELECT g.id::text AS goal_id, g.title, g.project, g.status AS goal_status, g.paused_at,
                    g.tenant_id::text AS tenant_id, g.owner_session_id::text AS lead_session_id,
-                   COALESCE(
-                       g.owner_session_id,
-                       (
-                           SELECT s.id
-                           FROM goal_task_links l
-                           JOIN chat_sessions s ON s.id = l.task_id::uuid
-                           WHERE l.goal_id = g.id
-                             AND l.task_type = 'chat_session'
-                             AND l.link_state = 'active'
-                           ORDER BY (s.role_key LIKE '%Lead') DESC, l.created_at
-                           LIMIT 1
-                       )
-                   )::text AS target_session_id,
+                   {GOAL_TARGET_SESSION_SQL}::text AS target_session_id,
                    count(m.id) FILTER (WHERE m.status <> 'cancelled') AS milestone_total,
                    count(m.id) FILTER (WHERE m.status = 'completed') AS milestone_completed
             FROM goals g

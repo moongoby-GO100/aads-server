@@ -336,6 +336,9 @@ class Db:
     async def fetchrow(self, sql, *args):
         return None
 
+    async def fetch(self, sql, *args):
+        return []
+
 
 @pytest.fixture
 def world(monkeypatch):
@@ -722,3 +725,31 @@ def test_adjudication_request_masks_secret_like_text():
                  "problem": "키 sk-proj-" + "B" * 40 + " 노출", "fix": "f"}]
     _, payload = res.build_adjudication_request(HEAD, rev, findings)
     assert "abcdefghijklmnopqrstuvwxyz0123456789" not in payload and "B" * 40 not in payload
+
+
+@pytest.mark.parametrize("why", ["no_session", "ambiguous_session"])
+def test_card_and_followup_share_session_resolution(world, monkeypatch, why):
+    resolver = AsyncMock(return_value=(None, why))
+    monkeypatch.setattr(fix, "resolve_session_id", resolver)
+    world.state["rows"] = [rrow([issue(problem="정책 결정 필요")])]
+    out = resolve(world)
+    assert out["outcome"] == "card_" + why and world.cards == [] and world.db.jobs == []
+    mark = res.card_marker("AADS", HEAD["document_key"], REV, "revise")
+    world.db.fetchval = AsyncMock(return_value=HEAD["id"])
+    out = asyncio.run(res.on_card_approved(world.db, TENANT, mark, now=NOW))
+    assert out["reasons"] == [why] and out["job_id"] is None and world.db.jobs == []
+    assert resolver.await_count == 2
+
+
+def test_card_and_followup_use_goal_session(world, monkeypatch):
+    resolver = AsyncMock(return_value=(SESSION, None))
+    monkeypatch.setattr(fix, "resolve_session_id", resolver)
+    world.state["revision"] = {**REVISION, "source_session_id": None}
+    world.state["rows"] = [rrow([issue(problem="정책 결정 필요")])]
+    resolve(world)
+    assert world.cards[0]["session_id"] == SESSION
+    world.db.fetchval = AsyncMock(return_value=HEAD["id"])
+    out = asyncio.run(res.on_card_approved(world.db, TENANT,
+        res.card_marker("AADS", HEAD["document_key"], REV, "revise"), now=NOW))
+    assert out["job_id"] and world.db.jobs[0]["session_id"] == SESSION
+    assert resolver.await_count == 2

@@ -36,7 +36,7 @@ def review(issues=(), model="claude-x", provider="anthropic", verdict="reject"):
 
 HEAD = {"id": 1, "project_key": "AADS", "document_key": "doc-a", "kind": "prd", "generation": 2}
 REVISION = {"id": REV, "title": "일반 문서", "version": "1.0.0", "content": "# 본문", "doc_tier": "D2",
-            "source_session_id": None}
+            "source_session_id": TENANT}
 
 
 def hold(reasons=("major_present",), risk="normal"):
@@ -582,3 +582,90 @@ def test_approve_off_hook_still_logs_fix_plan(monkeypatch):
     asyncio.run(cross._auto_approve_after_review(TENANT, "AADS", {"id": 1}, {"id": REV}, {"review_state": "passed"},
                                                  allow_follow_up=True))
     assert sched.await_count == 1 and sched.await_args.args[5] is None
+
+
+@pytest.mark.parametrize("action,reasons,why,expected_round", [
+    ("fix", ["major_present"], "ambiguous_session", 1),
+    ("escalate", ["risk_high", "no_session"], "no_session", 2),
+])
+def test_without_session_preserves_reasons(action, reasons, why, expected_round):
+    p = fix.without_session_plan(fix.FixPlan(action, reasons, 2, "fp", "feedback"), why)
+    assert p.action == "escalate" and p.reasons == list(dict.fromkeys(reasons + [why]))
+    assert p.round == expected_round and p.fingerprint == "fp" and p.feedback == "feedback"
+
+
+@pytest.mark.parametrize("candidates,expected", [([], (None, "no_session")),
+    ([TENANT], (TENANT, None)), ([TENANT, TENANT], (TENANT, None)),
+    ([TENANT, REV], (None, "ambiguous_session"))])
+def test_resolve_session_candidates(candidates, expected):
+    from app.services.goal_report import GOAL_TARGET_SESSION_SQL
+    conn = SimpleNamespace(fetch=AsyncMock(return_value=[{"session_id": x} for x in candidates]))
+    assert asyncio.run(fix.resolve_session_id(conn, TENANT, HEAD, {**REVISION, "source_session_id": "invalid"})) == expected
+    sql = conn.fetch.call_args.args[0]
+    assert GOAL_TARGET_SESSION_SQL in sql and "DISTINCT" in sql
+    assert "gl.tenant_id=$2::uuid" in sql and "g.tenant_id=$2::uuid" in sql
+
+
+def test_resolve_revision_session_first():
+    conn = SimpleNamespace(fetch=AsyncMock())
+    assert asyncio.run(fix.resolve_session_id(conn, TENANT, HEAD, REVISION)) == (TENANT, None)
+    conn.fetch.assert_not_called()
+
+
+@pytest.mark.parametrize("why", ["no_session", "ambiguous_session"])
+def test_auto_fix_without_session_escalates(env, monkeypatch, why):
+    monkeypatch.setattr(fix, "resolve_session_id", AsyncMock(return_value=(None, why)))
+    monkeypatch.setattr(fix, "_kick_auto_resolve", lambda *a: None)
+    out = run(FakeConn())
+    assert out["action"] == "escalate" and out["reasons"] == ["major_present", why]
+    assert env.calls == []
+
+
+@pytest.mark.parametrize("why,word", [("no_session", "세션 없음"), ("ambiguous_session", "세션 모호")])
+def test_digest_preserves_hold_reason_without_session(monkeypatch, why, word):
+    monkeypatch.setattr(fix, "load_history", AsyncMock(return_value={"rounds": [], "daily": 0}))
+    monkeypatch.setattr(fix, "resolve_session_id", AsyncMock(return_value=(None, why)))
+    monkeypatch.setattr(digest, "_resolve_status", AsyncMock(return_value=None))
+    result = {"auto_fixing": [], "needs_ceo": []}
+    item = {"project_key": "AADS", "document_key": "doc-a", "title": "문서", "risk": "normal"}
+    asyncio.run(digest._classify_held(None, result, item, TENANT, hold(["checks_failed:paths_exist"]), HEAD, REVISION, []))
+    reason = result["needs_ceo"][0]["reason"]
+    assert "자동 점검에서 문제가 발견됐습니다" in reason and word in reason and "checks_failed" not in reason
+
+
+def test_goal_session_sql_retains_owner_and_lead_priority():
+    import inspect
+    from app.services import goal_report
+    sql = " ".join(goal_report.GOAL_TARGET_SESSION_SQL.split())
+    assert sql.startswith("COALESCE( g.owner_session_id,")
+    assert "JOIN chat_sessions s ON s.id = l.task_id::uuid" in sql
+    assert "l.task_type = 'chat_session'" in sql and "l.link_state = 'active'" in sql
+    assert "ORDER BY (s.role_key LIKE '%Lead') DESC, l.created_at LIMIT 1" in sql
+    assert "{GOAL_TARGET_SESSION_SQL}" in inspect.getsource(goal_report.report_weekly_goal_progress)
+
+
+@pytest.mark.parametrize("owner,expected", [(TENANT, TENANT), (None, PREV)])
+def test_resolve_goal_owner_or_active_lead(owner, expected):
+    """CTE fixture로 실제 공유 선택식을 실행한다(외부 DB·쓰기 없음)."""
+    import re
+    import sqlite3
+
+    class ReadOnlyConn:
+        async def fetch(self, sql, head_id, tenant):
+            fixture = """
+                WITH goals(id, tenant_id, owner_session_id) AS (VALUES (:goal, :tenant, :owner)),
+                project_document_goal_links(head_id, tenant_id, goal_id) AS (VALUES (:head, :tenant, :goal)),
+                chat_sessions(id, role_key) AS (VALUES (:member, 'Member'), (:lead, 'TechLead')),
+                goal_task_links(goal_id, task_id, task_type, link_state, created_at) AS (
+                    VALUES (:goal, :member, 'chat_session', 'active', 1),
+                           (:goal, :lead, 'chat_session', 'active', 2))
+            """
+            # SQLite에서는 UUID/text 캐스트만 생략하고 선택식·정렬·필터는 그대로 실행한다.
+            query = re.sub(r"::(?:uuid|text)", "", sql).replace("$1", ":head").replace("$2", ":tenant")
+            with sqlite3.connect(":memory:") as db:
+                db.row_factory = sqlite3.Row
+                return db.execute(fixture + query, {"goal": REV, "tenant": tenant, "owner": owner,
+                    "head": head_id, "member": TENANT, "lead": PREV}).fetchall()
+
+    assert asyncio.run(fix.resolve_session_id(ReadOnlyConn(), TENANT, HEAD,
+        {**REVISION, "source_session_id": None})) == (expected, None)
