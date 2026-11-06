@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import structlog
@@ -206,7 +207,7 @@ async def confirm(
         # 지우기 전 값을 로그에 남기려면 여기서 받아 둬야 한다.
         row = await conn.fetchrow(
             "SELECT status, title, goal_id::text AS goal_id, "
-            "dispatched_at, dispatch_count FROM milestones "
+            "dispatched_at, dispatch_count, evidence FROM milestones "
             "WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid)",
             milestone_id, tenant_id,
         )
@@ -265,7 +266,20 @@ async def confirm(
             from app.services.goal_work_item_sync import sync_milestone
 
             async with pool.acquire() as conn, conn.transaction():
+                if ok:
+                    # sync_milestone과 같은 순서로 잠그고 변경 대상 카드만 기록한다.
+                    await conn.fetchval(
+                        "SELECT id FROM milestones WHERE id=$1::uuid FOR UPDATE", milestone_id,
+                    )
+                    cards = await conn.fetch(
+                        "SELECT id FROM work_items WHERE milestone_id=$1::uuid "
+                        "AND status = 'in_review' ORDER BY id FOR UPDATE", milestone_id,
+                    )
                 await sync_milestone(conn, milestone_id, "completed" if ok else "rejected")
+                if ok:
+                    await _record_confirmation_evidence(
+                        conn, milestone_id, cards, row["evidence"], confirmer,
+                    )
         except Exception as exc:
             logger.warning("work_item_sync_failed", error=str(exc)[:200])
     logger.info(
@@ -281,6 +295,46 @@ async def confirm(
 
     await goal_state_machine._update_goal_progress(row["goal_id"])
     return {"status": new, "milestone": row["title"], "goal_id": row["goal_id"]}
+
+
+async def _record_confirmation_evidence(
+    conn: Any, milestone_id: str, cards: list, evidence: Any, confirmer: str,
+) -> None:
+    """카드 동기화 트랜잭션 안에서 승인 근거를 보존한다."""
+    if isinstance(evidence, str):
+        evidence = json.loads(evidence)
+    evidence = evidence or {}
+    jobs = sorted(set(re.findall(r"\brunner-[0-9a-f]{8}\b", json.dumps(evidence))))
+    payload = json.dumps({
+        "milestone_id": milestone_id, "confirmer": confirmer,
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+        "summary": evidence.get("summary", ""),
+    }, ensure_ascii=False)
+    for card in cards:
+        for uri in jobs or [None]:
+            # verified=true: 확인자가 마일스톤 근거를 검토하고 명시적으로 승인했다.
+            # confirmer는 lead/CEO 문자열도 허용되므로 UUID verified_by 대신 payload에 보존한다.
+            await conn.execute(
+                """
+                INSERT INTO work_item_evidence (
+                    tenant_id, project, goal_id, work_item_id, evidence_type, uri,
+                    payload, verified, work_item_version, criterion_key, content_hash,
+                    verification_state, verified_at, retention_class
+                )
+                SELECT w.tenant_id, w.project, w.goal_id, w.id, $3, $4::text,
+                       $5::jsonb, true, w.version, 'milestone:' || $2::text,
+                       'sha256:' || encode(sha256(convert_to($5::text, 'UTF8')), 'hex'),
+                       'verified', NOW(), 'audit'
+                FROM work_items w
+                WHERE w.id=$1::uuid AND w.milestone_id=$2::uuid AND w.status='completed'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM work_item_evidence e
+                      WHERE e.work_item_id=w.id AND e.payload->>'milestone_id'=$2::text
+                        AND e.uri IS NOT DISTINCT FROM $4::text
+                  )
+                """,
+                str(card["id"]), milestone_id, "job" if uri else "rollup", uri, payload,
+            )
 
 
 async def _lead_session(conn: Any, goal_id: str) -> Optional[str]:

@@ -1219,7 +1219,8 @@ SELECT r.* FROM (
                g.priority_order,
                (SELECT count(*) FROM work_items w
                  WHERE w.milestone_id = m.id AND w.assignment_id IS NULL
-                   AND w.status NOT IN ('completed', 'cancelled')) AS unassigned_count
+                   AND w.status NOT IN ('completed', 'cancelled')
+                   AND NOT (m.status = 'review' AND w.status = 'in_review')) AS unassigned_count
         FROM milestones m
         JOIN goals g ON g.id = m.goal_id
         LEFT JOIN LATERAL (
@@ -1247,6 +1248,9 @@ _TRIAGE_ITEMS_SQL = """
 SELECT w.type, w.title, w.status FROM work_items w
  WHERE w.milestone_id = $1::uuid AND w.assignment_id IS NULL
    AND w.status NOT IN ('completed', 'cancelled')
+   AND NOT (w.status = 'in_review' AND EXISTS (
+       SELECT 1 FROM milestones m WHERE m.id = w.milestone_id AND m.status = 'review'
+   ))
  ORDER BY CASE w.type WHEN 'epic' THEN 0 WHEN 'story' THEN 1 ELSE 2 END,
           w.created_at, w.id
 """
