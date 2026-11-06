@@ -3890,6 +3890,29 @@ async def notify_completion(job_id: str):
                 logger.info("pipeline_runner.auto_rework_skipped", job_id=job_id, **{
                     k: v for k, v in rework.items() if k in ("skipped", "rounds_max")
                 })
+                if rework.get("skipped") == "no_progress" and row["chat_session_id"]:
+                    try:
+                        from app.services.session_reporter import post_session_report
+
+                        await post_session_report(
+                            session_id=row["chat_session_id"],
+                            title="자동 재작업 중단 · 검토 요청",
+                            body=(
+                                f"작업 {job_id}: 자동 재작업에 진전이 없어 추가 재작업을 중단했습니다. "
+                                "CEO 검토가 필요합니다.\n"
+                                f"사유: {rework.get('reason') or '진전 없음'}"
+                            ),
+                            status="warning",
+                            source="pipeline_auto_rework",
+                            project=project,
+                            idempotency_key=f"{job_id}:no_progress",
+                            plain_body=True,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "pipeline_runner.no_progress_alert_fail",
+                            job_id=job_id, error=str(exc)[:200],
+                        )
         except Exception as exc:  # 재작업 실패가 종료 처리를 되돌리면 안 된다
             logger.warning("pipeline_runner.auto_rework_fail", job_id=job_id, error=str(exc)[:200])
 
