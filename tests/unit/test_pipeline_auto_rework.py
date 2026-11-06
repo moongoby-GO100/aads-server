@@ -72,8 +72,9 @@ def test_second_round_does_not_stack_previous_section():
 
 
 class FakeConn:
-    def __init__(self, row, existing=None, feedback=None, gate_review=None):
+    def __init__(self, row, existing=None, feedback=None, gate_review=None, previous_score=None):
         self.row = row
+        self.previous_score = previous_score
         self.gate_review = gate_review
         self.existing = existing
         self.feedback = feedback
@@ -89,6 +90,8 @@ class FakeConn:
     async def fetchval(self, sql, *args):
         if "AUTO_REWORK_OF" in (args[0] if args else "") or "instruction LIKE" in sql:
             return self.existing
+        if "SELECT review_score" in sql:
+            return self.previous_score
         if "code_reviews" in sql:
             return self.feedback
         return None
@@ -112,7 +115,7 @@ def _row(**kw):
         phase="review_failed", error_detail="review_failed: verdict=REQUEST_CHANGES score=0.68",
         max_cycles=3, model="m", size="S", worker_model=None, model_override_reason=None,
         parallel_group=None, tenant_id="00000000-0000-0000-0000-000000000001",
-        commit_hash="abc", review_score=0.68, goal_id=None, milestone_id=None,
+        commit_hash="abc", review_score=0.68, review_feedback=None, goal_id=None, milestone_id=None,
     )
     base.update(kw)
     return base
@@ -224,3 +227,59 @@ def test_no_code_reviews_row_keeps_existing_behavior():
 ])
 def test_gate_check_requires_full_evidence(review):
     assert not ar.is_deterministic_line_gate_rejection(review)
+
+
+@pytest.mark.parametrize("round_no,feedback,score,previous_score,enabled,skipped", [
+    (0, "여전히 결함", 0.68, None, "1", False),
+    (1, "해결되지 않았다", 0.68, None, "1", True),
+    (1, "결함 교정 필요", 0.67, 0.66, "1", True),
+    (1, "결함 교정 필요", 0.68, 0.60, "1", False),
+    (1, "미해결", 0.68, None, "0", False),
+    (1, "STILL UNRESOLVED", 0.68, None, "1", True),
+    (1, "결함 교정 필요", 0.68, 0.66, "1", False),
+    (1, "결함 교정 필요", None, 0.66, "1", False),
+])
+def test_progress_gate(monkeypatch, round_no, feedback, score, previous_score, enabled, skipped):
+    monkeypatch.setenv("AUTO_REWORK_REQUIRE_PROGRESS", enabled)
+    instruction = ORIGINAL
+    if round_no:
+        instruction = ar.build_rework_instruction(
+            original=ORIGINAL, parent_job_id="runner-bbbbbbbb", round_no=1,
+            rounds_max=2, issues=["옛 지적"],
+        )
+    conn = FakeConn(
+        _row(instruction=instruction, review_score=score),
+        feedback=json.dumps({"issues": [feedback]}), previous_score=previous_score,
+    )
+    result = asyncio.run(ar.maybe_submit_auto_rework(conn, "runner-aaaaaaaa"))
+    updates = [(sql, args) for sql, args in conn.executed if "UPDATE pipeline_jobs" in sql]
+    if skipped:
+        assert result["skipped"] == "no_progress"
+        assert result["parent"] == "runner-aaaaaaaa" and result["reason"]
+        assert _inserts(conn) == []
+        assert len(updates) == 1
+        sql, args = updates[0]
+        assert "status" not in sql and "phase" not in sql
+        assert args[0] == "runner-aaaaaaaa"
+        assert "2라운드 생략, CEO 검토 필요" in args[1]
+    else:
+        assert result["round"] == round_no + 1
+        assert len(_inserts(conn)) == 1
+        assert updates == []
+
+
+def test_progress_uses_job_feedback_when_latest_review_missing():
+    instruction = ar.build_rework_instruction(
+        original=ORIGINAL, parent_job_id="runner-bbbbbbbb", round_no=1,
+        rounds_max=2, issues=["옛 지적"],
+    )
+    conn = FakeConn(_row(instruction=instruction, review_feedback="그대로 남아 있음"))
+    result = asyncio.run(ar.maybe_submit_auto_rework(conn, "runner-aaaaaaaa"))
+    assert result["skipped"] == "no_progress"
+    assert _inserts(conn) == []
+
+
+@pytest.mark.parametrize("value", ["0", "false", "off", "no", " FALSE "])
+def test_progress_env_false_values(monkeypatch, value):
+    monkeypatch.setenv("AUTO_REWORK_REQUIRE_PROGRESS", value)
+    assert not ar.auto_rework_require_progress()

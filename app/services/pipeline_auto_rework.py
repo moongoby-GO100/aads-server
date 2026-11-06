@@ -21,6 +21,7 @@ import json
 import os
 import re
 import uuid
+from decimal import Decimal
 from typing import Any, NamedTuple
 
 import structlog
@@ -28,6 +29,8 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 AUTO_REWORK_ROUND_RE = re.compile(r"^AUTO_REWORK_ROUND:\s*(\d+)\s*/\s*(\d+)\s*$", re.M)
+_UNRESOLVED_RE = re.compile(r"해결되지 않|여전히|미해결|그대로 남|still unresolved", re.I)
+_REWORK_PARENT_RE = re.compile(r"^AUTO_REWORK_OF:\s*(\S+)\s*$", re.M)
 _OPT_OUT_RE = re.compile(r"^\s*NO_AUTO_REWORK\s*$", re.M)
 _SECTION_MARK = "## 자동 재작업 — AI 리뷰 반려 지적 교정"
 _HEADER_KEYS = ("ALLOW_DUP_JOB", "AUTO_REWORK_OF:", "AUTO_REWORK_ROUND:")
@@ -42,6 +45,10 @@ AUTO_REWORK_FAILURE_PHASES = frozenset({
 
 def auto_rework_enabled() -> bool:
     return os.getenv("PIPELINE_AUTO_REWORK", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def auto_rework_require_progress() -> bool:
+    return os.getenv("AUTO_REWORK_REQUIRE_PROGRESS", "1").strip().lower() not in {"0", "false", "off", "no"}
 
 
 def is_request_changes_failure(status: str, phase: str, error_detail: str) -> bool:
@@ -258,7 +265,7 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
         """
         SELECT job_id, project, instruction, chat_session_id, status, phase, error_detail,
                max_cycles, model, size, worker_model, model_override_reason, parallel_group,
-               tenant_id::text AS tenant_id, commit_hash, runner_host, review_score, goal_id, milestone_id
+               tenant_id::text AS tenant_id, commit_hash, runner_host, review_score, review_feedback, goal_id, milestone_id
         FROM pipeline_jobs WHERE job_id = $1
         """,
         job_id,
@@ -299,6 +306,36 @@ async def maybe_submit_auto_rework(conn, job_id: str) -> dict | None:
             "SELECT feedback FROM code_reviews WHERE job_id = $1 ORDER BY created_at DESC LIMIT 1",
             job_id,
         )
+        if current_round(instruction) >= 1 and auto_rework_require_progress():
+            progress_feedback = feedback or row["review_feedback"] or ""
+            if isinstance(progress_feedback, (bytes, bytearray)):
+                progress_feedback = progress_feedback.decode("utf-8", "replace")
+            if isinstance(progress_feedback, str):
+                try:
+                    progress_feedback = json.loads(progress_feedback)
+                except ValueError:
+                    pass
+            if not isinstance(progress_feedback, str):
+                progress_feedback = json.dumps(progress_feedback, ensure_ascii=False)
+            reason = "unresolved_feedback" if _UNRESOLVED_RE.search(progress_feedback) else None
+            ancestor = _REWORK_PARENT_RE.search(instruction)
+            if reason is None and ancestor and row["review_score"] is not None:
+                previous_score = await conn.fetchval(
+                    "SELECT review_score FROM pipeline_jobs WHERE job_id = $1", ancestor.group(1),
+                )
+                if previous_score is not None and (
+                    Decimal(str(row["review_score"])) - Decimal(str(previous_score)) < Decimal("0.02")
+                ):
+                    reason = "score_improvement_below_0.02"
+            if reason:
+                await conn.execute(
+                    "UPDATE pipeline_jobs SET review_feedback = COALESCE(review_feedback, '') || $2 "
+                    "WHERE job_id = $1",
+                    job_id,
+                    f"\n[Auto Rework] 진전 없음({reason}) — 2라운드 생략, CEO 검토 필요",
+                )
+                logger.info("pipeline_auto_rework.no_progress", job_id=job_id, reason=reason)
+                return {"skipped": "no_progress", "parent": job_id, "reason": reason}
         issues = extract_issues(feedback)
         if row["phase"] != "review_failed":
             issues = [f"배포 게이트 원인: {(row['error_detail'] or row['phase'])[:_MAX_ISSUE_CHARS]}"]
