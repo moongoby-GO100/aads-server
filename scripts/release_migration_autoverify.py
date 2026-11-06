@@ -55,9 +55,14 @@ def split_statements(sql: str) -> list[dict]:
             i = n if j < 0 else j + 2
             shape.append(" ")
             continue
-        if c == "'":
-            j = i + 1
+        escape_string = (c in "Ee" and sql.startswith("'", i + 1)
+                         and (i == 0 or not (sql[i - 1].isalnum() or sql[i - 1] in "_$")))
+        if c == "'" or escape_string:
+            j = i + (2 if escape_string else 1)
             while j < n:
+                if escape_string and sql[j] == "\\":
+                    j += 2
+                    continue
                 if sql[j] == "'" and j + 1 < n and sql[j + 1] == "'":
                     j += 2
                     continue
@@ -66,6 +71,8 @@ def split_statements(sql: str) -> list[dict]:
                 j += 1
             buf.append(sql[i:j + 1])
             shape.append("'S'")
+            if escape_string and j >= n:
+                shape.append(" $UNTERMINATED_ESCAPE_STRING$ ")
             i = j + 1
             continue
         if c == '"':
@@ -159,6 +166,8 @@ BANNED_WORDS = re.compile(
 def classify_statement(st: dict) -> str | None:
     """None 이면 안전, 아니면 사유."""
     s = st["shape"]
+    if "$UNTERMINATED_ESCAPE_STRING$" in s:
+        return "판정 불가: 미종결 이스케이프 문자열"
     if TXN.match(s):
         return None
     if "CONCURRENTLY" in s:

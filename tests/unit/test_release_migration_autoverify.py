@@ -130,3 +130,59 @@ def test_unsafe_default_or_column_changes_are_blocked(tmp_path, action):
 
 def test_model_default_null_migration_is_safe():
     assert av.classify_files([ROOT / "migrations/20261106_pipeline_jobs_model_default_null.sql"]) == []
+
+
+@pytest.mark.parametrize("prefix", ["E", "e"])
+def test_escape_string_does_not_hide_drop_column(tmp_path, prefix):
+    sql = rf"ALTER TABLE t ADD COLUMN x text DEFAULT {prefix}'\'', DROP COLUMN c, ADD COLUMN y text DEFAULT '';"
+    statements = av.split_statements(sql)
+    assert len(statements) == 1
+    assert "DROP COLUMN C" in statements[0]["shape"]
+    assert "DROP COLUMN" in _classify(tmp_path, sql)[0]
+
+
+@pytest.mark.parametrize("sql", [
+    "ALTER TABLE t ADD COLUMN x text DEFAULT E'unterminated",
+    "INSERT INTO t (a) VALUES (e'unterminated",
+    "CREATE TABLE IF NOT EXISTS t (a text DEFAULT E'unterminated",
+    "INSERT INTO t VALUES (E'trailing\\",
+])
+def test_unterminated_escape_string_fails_closed(tmp_path, sql):
+    assert "판정 불가: 미종결 이스케이프 문자열" in _classify(tmp_path, sql)[0]
+
+
+@pytest.mark.parametrize("sql", [
+    r"INSERT INTO t (a) VALUES (E'line1\nline2');",
+    r"INSERT INTO t (a) VALUES ('a\b');",
+    "ALTER TABLE t ADD COLUMN name text;",
+    "CREATE TABLE IF NOT EXISTS e (id int);",
+    "ALTER TABLE pipeline_jobs ALTER COLUMN model SET DEFAULT NULL;",
+    r"INSERT INTO t VALUES (e'it''s; fine', E'a\\');",
+    r"CREATE FUNCTION f() RETURNS text AS $tag$ SELECT E'\''; $tag$ LANGUAGE sql;",
+])
+def test_escape_string_safe_cases(tmp_path, sql):
+    assert _classify(tmp_path, sql) == []
+
+
+def test_escape_strings_preserve_text_and_statement_boundaries():
+    first = r"INSERT INTO t VALUES (E'it\'s; fine', e'it''s; fine')"
+    statements = av.split_statements(first + "; DELETE FROM t;")
+    assert len(statements) == 2
+    assert statements[0]["text"] == first
+    assert statements[0]["shape"] == "INSERT INTO T VALUES ('S', 'S')"
+    assert av.classify_statement(statements[1])
+
+
+@pytest.mark.parametrize("identifier", ["name", "name$", "name_", "name1", "이름"])
+def test_identifier_suffix_is_not_escape_prefix(identifier):
+    statement = av.split_statements(f"INSERT INTO t VALUES ({identifier}E'x');")[0]
+    assert f"{identifier.upper()}E'S'" in statement["shape"]
+
+
+def test_pending_migrations_remain_safe_with_escape_string_scanner():
+    # 승인된 회귀 대체 기준: 저장소의 대기 마이그레이션과 위 안전/위험 사례.
+    files = [ROOT / "migrations/20261104_milestone_review_rejected_at.sql",
+             ROOT / "migrations/deferred/20261104_pipeline_job_checkpoints.sql",
+             ROOT / "migrations/20261106_pipeline_jobs_model_default_null.sql"]
+    assert all(path.is_file() for path in files)
+    assert av.classify_files(files) == []
