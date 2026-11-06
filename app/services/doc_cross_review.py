@@ -430,8 +430,13 @@ def _watch_worker(proc, revision_id, log_path):
 # scripts/claude_slot_credential.py reap 이 /proc/*/environ 에 태그가 있는 프로세스와 그 자손을 SIGTERM → SIGKILL 한다.
 # 워커가 태그를 물려받거나 태그를 가진 브리지의 자손으로 남으면 그 호출이 끝나는 순간 함께 죽는다.
 _CALL_TAG_ENV = 'AADS_CLAUDE_CALL_ID'
-# 중간 sh 가 워커를 백그라운드로 띄우고 곧바로 종료하므로 워커는 브리지의 자손이 아니라 init 의 자식이 된다.
-_DETACH_SCRIPT = 'command -v "$1" >/dev/null 2>&1 || exit 127; "$@" </dev/null >&2 & echo $!'
+# 중간 sh 가 워커를 백그라운드 서브셸로 띄우고 곧바로 종료하므로 워커는 브리지의 자손이 아니라 init 의 자식이 된다.
+# 고아가 된 워커는 브리지가 wait 할 수 없으니, 서브셸이 timeout 래퍼 종료코드를 워커 로그에 직접 남긴다
+# (키는 _watch_worker 와 같다: 0=exit_ok, 124=timeout, 그 밖=exit_nonzero). $1=revision_id, 나머지=워커 명령.
+_DETACH_SCRIPT = (
+    'rev=$1; shift; command -v "$1" >/dev/null 2>&1 || exit 127; '
+    '( "$@"; c=$?; case $c in 0) k=exit_ok;; 124) k=timeout;; *) k=exit_nonzero;; esac; '
+    'echo "doc_cross_review_worker_$k revision_id=$rev code=$c" >&2 ) </dev/null >&2 & echo $!')
 
 
 def _spawn_detached(tenant, project, head, revision, follow_up=False):
@@ -450,7 +455,7 @@ def _spawn_detached(tenant, project, head, revision, follow_up=False):
     if log_file is None:
         logger.warning('doc_cross_review_worker_log_unavailable revision_id=%s', revision['id'])
     try:
-        proc = subprocess.Popen(['sh', '-c', _DETACH_SCRIPT, 'sh'] + cmd, cwd=root, env=env, start_new_session=True,
+        proc = subprocess.Popen(['sh', '-c', _DETACH_SCRIPT, 'sh', str(revision['id'])] + cmd, cwd=root, env=env, start_new_session=True,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=log_file or subprocess.DEVNULL)
         out, _ = proc.communicate(timeout=10)
     except Exception:

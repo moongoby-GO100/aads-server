@@ -474,8 +474,8 @@ def test_bridge_flag_detaches_subprocess_without_create_task(monkeypatch, tmp_pa
     create_task.assert_not_called()
     popen.assert_called_once()
     launcher = popen.call_args.args[0]
-    assert launcher[:2] == ['sh', '-c'] and launcher[3] == 'sh'
-    cmd = launcher[4:]
+    assert launcher[:2] == ['sh', '-c'] and launcher[3] == 'sh' and launcher[4] == 'r1'
+    cmd = launcher[5:]
     kwargs = popen.call_args.kwargs
     assert cmd[:3] == ['timeout', '1500', sys.executable]
     assert cmd[3:5] == ['-m', 'app.services.doc_cross_review_worker']
@@ -670,6 +670,25 @@ def test_detached_spawn_reports_launcher_failure(monkeypatch, tmp_path, caplog):
     cross.execute_review.assert_awaited_once()
 
 
+def _proc_state(pid):
+    """Third field of /proc/<pid>/stat ('Z' = zombie); None when the process is gone."""
+    try:
+        stat = open('/proc/%d/stat' % pid).read()
+    except OSError:
+        return None
+    return stat.rsplit(')', 1)[1].split()[0]
+
+
+def _wait_for(predicate, seconds=10):
+    import time
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return predicate()
+
+
 def test_detached_worker_survives_call_reap(tmp_path):
     """The per-call reaper (claude_slot_credential.py reap) must not take the detached worker down with the bridge."""
     import importlib.util
@@ -684,9 +703,10 @@ def test_detached_worker_survives_call_reap(tmp_path):
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
     fake_python = tmp_path / 'fake_python'
-    fake_python.write_text('#!/bin/sh\necho $$ > "$FAKE_WORKER_PID_FILE"\nexec sleep 30\n')
+    fake_python.write_text('#!/bin/sh\necho $$ > "$FAKE_WORKER_PID_FILE"\nsleep 3\necho finished > "$FAKE_WORKER_MARKER"\nexit 0\n')
     fake_python.chmod(0o755)
     pid_file = tmp_path / 'worker.pid'
+    marker = tmp_path / 'worker.done'
     tag = uuid.uuid4().hex
     bridge_code = (
         'import sys, time\n'
@@ -695,27 +715,43 @@ def test_detached_worker_survives_call_reap(tmp_path):
         "assert c._spawn_detached('t1', 'AADS', {'id': 'h1', 'document_key': 'doc'}, {'id': 'r1'})\n"
         'time.sleep(20)\n')
     env = dict(os.environ, AADS_CLAUDE_CALL_ID=tag, AADS_MCP_BRIDGE='1', FAKE_WORKER_PID_FILE=str(pid_file),
-               DOC_CROSS_REVIEW_WORKER_LOG_DIR=str(tmp_path), PYTHONPATH=str(root))
+               FAKE_WORKER_MARKER=str(marker), DOC_CROSS_REVIEW_WORKER_LOG_DIR=str(tmp_path), PYTHONPATH=str(root))
     bridge = subprocess.Popen([sys.executable, '-c', bridge_code, str(fake_python)], cwd=str(root), env=env)
     worker_pid = None
     try:
-        for _ in range(100):
-            if pid_file.exists() and pid_file.read_text().strip():
-                worker_pid = int(pid_file.read_text())
-                break
-            time.sleep(0.1)
-        assert worker_pid, 'worker was never started'
+        assert _wait_for(lambda: pid_file.exists() and pid_file.read_text().strip()), 'worker was never started'
+        worker_pid = int(pid_file.read_text())
         assert bridge.poll() is None, 'bridge must still be alive (and tagged) while the call is reaped'
         helper.reap_tag(tag, grace=0.5, kill_wait=0.5)
         time.sleep(0.3)
         assert bridge.poll() is not None, 'sanity: the reaper did take the tagged bridge down'
-        os.kill(worker_pid, 0)
+        assert _proc_state(worker_pid) not in (None, 'Z'), 'worker must still be running after the call was reaped'
+        assert _wait_for(marker.exists), 'worker was killed before it finished its work'
+        log = tmp_path / 'doc_cross_review_worker.log'
+        assert _wait_for(lambda: log.exists() and 'doc_cross_review_worker_exit_ok revision_id=r1 code=0' in log.read_text())
     finally:
         if bridge.poll() is None:
             bridge.kill()
         bridge.wait()
-        if worker_pid:
+        if worker_pid and _proc_state(worker_pid) not in (None, 'Z'):
             try:
                 os.kill(worker_pid, 9)
             except ProcessLookupError:
                 pass
+
+
+@pytest.mark.parametrize('code,expected', [(0, 'doc_cross_review_worker_exit_ok'), (124, 'doc_cross_review_worker_timeout'),
+                                           (3, 'doc_cross_review_worker_exit_nonzero')])
+def test_detached_worker_exit_code_is_logged_by_launcher(monkeypatch, tmp_path, code, expected):
+    """The worker is an orphan, so the launcher subshell (not the bridge) records how it ended — same keys as _watch_worker."""
+    monkeypatch.setenv('DOC_CROSS_REVIEW_WORKER_LOG_DIR', str(tmp_path))
+    fake_python = tmp_path / 'fake_python'
+    fake_python.write_text('#!/bin/sh\nexit %d\n' % code)
+    fake_python.chmod(0o755)
+    monkeypatch.setattr(cross.sys, 'executable', str(fake_python))
+    assert cross._spawn_detached('t1', 'AADS', {'id': 'h1', 'document_key': 'doc'}, {'id': 'r7'})
+    log = tmp_path / 'doc_cross_review_worker.log'
+    line = 'revision_id=r7 code=%d' % code
+    assert _wait_for(lambda: log.exists() and line in log.read_text()), 'exit code was never recorded'
+    recorded = [ln for ln in log.read_text().splitlines() if line in ln]
+    assert recorded == ['%s %s' % (expected, line)]
