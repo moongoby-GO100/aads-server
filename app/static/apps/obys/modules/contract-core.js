@@ -58,6 +58,16 @@
       cancelled: ["취소", "bad"]
     };
     const MINIMUM_HOURLY_WAGE_2026 = 10320;
+    const FREELANCER_WAGE_TYPES = ["hourly", "daily", "monthly", "case_fee"];
+    const freelancerWageLabels = { hourly: "시급", daily: "일급", monthly: "월정액 용역비", case_fee: "건별 용역비" };
+    const FREELANCER_BASIS_NAMES = { hourly: "시급", daily: "일급", monthly: "월정액" };
+    const freelancerMissingLabels = { hourly: "확정 시급", daily: "확정 일급", monthly: "월 용역비", case_fee: "확정 용역비" };
+    const freelancerSettlementDefaults = {
+      hourly: "시급 × 승인된 근태 시간(분 단위 환산)을 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.",
+      daily: "일급 × 승인된 근태 일수를 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.",
+      monthly: "월 용역비를 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.",
+      case_fee: "검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다."
+    };
 
     const standardContractDefaults = {
       common: {
@@ -205,9 +215,8 @@
           if (conservativeHourly < MINIMUM_HOURLY_WAGE_2026) throw new Error(`과세 기본급 기준 환산시급 ${formatMoney(Math.floor(conservativeHourly))}은 2026년 최저임금 ${formatMoney(MINIMUM_HOURLY_WAGE_2026)}보다 낮습니다.`);
         }
       } else if (draft.contractType === "freelancer") {
-        // 서버(_validate_contract_payload)와 같은 기준: 3.3% 용역계약은 시급 또는 건별/용역비.
         if (draft.employmentTaxType !== "freelancer_33" || !FREELANCER_WAGE_TYPES.includes(draft.wageType)) {
-          throw new Error("프리랜서 용역계약서는 3.3% 원천징수·시급 또는 건별/용역비 방식으로 작성해야 합니다.");
+          throw new Error("프리랜서 용역계약서는 3.3% 원천징수·시급·일급·월정액·건별/용역비 중 하나의 지급 기준으로 작성해야 합니다.");
         }
         const fixedWorkSignals = [draft.workTime, draft.weeklyHours, draft.workDays].join(" ");
         if (/(출퇴근|근무표|주\s*\d+\s*시간|월\/화|화\/수|수\/목|목\/금|금\/토|토\/일|상시|교대)/.test(fixedWorkSignals)) {
@@ -220,7 +229,7 @@
         requireValue("용역비 정산/해지", draft.freelancerSettlementTerms);
         requireValue("계약 해지/기성정산 기준", draft.terminationTerms);
         requireValue("비밀유지/자료보호", draft.confidentialityTerms);
-        if (!draft.wage || draft.wage <= 0) missing.push("확정 용역비");
+        if (!draft.wage || draft.wage <= 0) missing.push(freelancerMissingLabels[draft.wageType] || "확정 용역비");
       }
       if (missing.length) throw new Error(`필수 입력값을 확인하십시오: ${[...new Set(missing)].join(", ")}`);
     }
@@ -354,14 +363,15 @@
           </tbody>
         </table>
       `;
-      const wageLine = `${wageTypeLabels[wageType] || wageType} ${formatMoney(wage)} / 지급일: ${payDate || "미입력"} / 지급방법: ${payMethod}`;
+      const freelancerBasis = contractType === "freelancer" && Boolean(contractValue(contract, "wageType", "wage_type")) ? FREELANCER_BASIS_NAMES[wageType] : "";
+      const wageLine = `${freelancerBasis ? `3.3% 프리랜서 원천징수 · ${freelancerBasis}` : (wageTypeLabels[wageType] || wageType)} ${formatMoney(wage)} / 지급일: ${payDate || "미입력"} / 지급방법: ${payMethod}`;
       let clauses = [];
       if (contractType === "freelancer") {
         clauses = [
           contractClause("계약 목적", `${employerName || "위탁자"}는 ${employeeName || "수급인"}에게 독립 용역을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.`),
           contractClause("용역 기간 및 장소", `${startDate || "용역 시작일 미입력"}부터 ${endDate || "종료일 별도 합의"}까지 수행한다. 수행 장소·일정은 산출물 납품과 검수에 필요한 범위에서 협의하며 고정 출퇴근, 매장 상시 근무표, 교대조 편입으로 운영하지 않는다.`),
           contractClause("업무범위, 산출물, 검수", freelancerScope || `${jobDescription || "업무 범위 미입력"}`),
-          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || "검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다."}`),
+          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || freelancerSettlementDefaults[freelancerBasis ? wageType : "case_fee"]}`),
           contractClause("독립적 업무수행", "수급인은 독립 사업자로서 업무수행방법을 스스로 정한다. 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성 징표가 생기면 계약 명칭과 무관하게 근로계약 전환을 검토한다."),
           contractClause("안전보건 및 협조", "위탁자는 용역 수행에 필요한 자료와 안전·보건상 유의사항을 안내하고, 수급인은 관련 법령과 사업장 안전·위생 기준을 준수한다."),
           contractClause("비밀유지 및 자료보호", confidentialityTerms || "매출자료, 고객정보, 레시피, 정산자료, 계정정보를 외부에 공개하지 않는다."),
@@ -478,7 +488,6 @@
     }
 
     /** 계약 유형이 정하는 신고 구분·임금 방식(기존 syncContractClassification). */
-    const FREELANCER_WAGE_TYPES = ["case_fee", "hourly"];
     function classificationFor(contractType) {
       if (contractType === "freelancer") return { employmentTaxType: "freelancer_33", wageType: "case_fee" };
       if (EMPLOYMENT_TYPES.includes(contractType)) return { employmentTaxType: "four_insurance", wageType: contractType === "part_time" ? "hourly" : contractType === "daily" ? "daily" : "monthly" };
@@ -524,9 +533,9 @@
     }
 
     const api = {
-      contractTypeLabels, employmentTaxTypeLabels, wageTypeLabels, standardContractDefaults,
+      contractTypeLabels, employmentTaxTypeLabels, wageTypeLabels, FREELANCER_WAGE_TYPES, freelancerWageLabels, freelancerMissingLabels, standardContractDefaults,
       MINIMUM_HOURLY_WAGE_2026, CONTRACT_STATUS, EMPLOYMENT_TYPES,
-      defaultsFor, classificationFor, FREELANCER_WAGE_TYPES, splitMonthlyWage, NON_TAX_MEAL_LIMIT, validateContractDraft, checkDraft, contractPreviewHtml, contractDraftGuidanceHtml, setBusinessResolver,
+      defaultsFor, classificationFor, splitMonthlyWage, NON_TAX_MEAL_LIMIT, validateContractDraft, checkDraft, contractPreviewHtml, contractDraftGuidanceHtml, setBusinessResolver,
       escapeHtml, formatMoney, today
     };
     root.ObysContractCore = api;

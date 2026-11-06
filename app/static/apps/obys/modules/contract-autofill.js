@@ -315,6 +315,13 @@ const hoursLabel = v => `${Number.isInteger(v) ? v : round2(v)}시간`;
    *          jobDescription, birthDate, healthCertificateValidUntil, splitMonthlyWage(fn, 선택) }
    * 반환: { applies, period, time, holiday, hours, wage, texts, age, warnings, notes, blockers }
    */
+  const FREELANCER_LABOR_RISK_NOTICE = "정해진 요일·시간에 지시를 받고 일하면 근로자로 판정될 수 있습니다 — 노무 확인 권장";
+  const FREELANCER_BASIS = {
+    hourly: { fee: "합의 시급", missing: "확정 시급", calc: "승인된 근태 시간 × 시급, 분 단위 환산" },
+    daily: { fee: "합의 일급", missing: "확정 일급", calc: "승인된 근태 일수 × 일급" },
+    monthly: { fee: "월 용역비", missing: "월 용역비", calc: "매월 같은 금액" },
+    case_fee: { fee: "합의 용역비", missing: "확정 용역비", calc: "" }
+  };
   function computeFreelancer(input) {
     const termKey = input.term || "none";
     const endDate = termKey === "custom" ? String(input.endDate || "")
@@ -324,6 +331,9 @@ const hoursLabel = v => `${Number.isInteger(v) ? v : round2(v)}시간`;
       blockers.push("용역 종료일이 시작일보다 빠릅니다.");
     const fee = Number(input.wage);
     const known = Number.isSafeInteger(fee) && fee > 0;
+    // 지급 기준: 시급·일급·월정액·건별(기본). 건별은 종전 문구를 그대로 쓴다.
+    const basis = FREELANCER_BASIS[input.wageType] ? input.wageType : "case_fee";
+    const feeName = FREELANCER_BASIS[basis].fee;
     const payDate = payDateText(input.payPeriod, input.payDay);
     const payMethod = payMethodText(input.payMethod);
     if (payDate !== undefined) texts.payDate = payDate;
@@ -333,10 +343,15 @@ const hoursLabel = v => `${Number.isInteger(v) ? v : round2(v)}시간`;
     const hourly = input.wageType === "hourly";
     const feeText = hourly ? `시급 ${won(fee)}(수행시간 × 시급으로 정산)` : `합의 용역비 ${won(fee)}`;
     if (known) {
-      texts.wageComposition = `${feeText}. 사업소득 원천징수 후 지급하며, 추가 용역비는 별도 합의한다.`;
+      const calc = FREELANCER_BASIS[basis].calc;
+      texts.wageComposition = `${feeName} ${won(fee)}${calc ? `(${calc})` : ""}. 사업소득 원천징수 후 지급하며, 추가 용역비는 별도 합의한다.`;
       const period = input.startDate ? `${input.startDate}부터 ${endDate || "별도 합의한 종료일까지"}` : "용역기간 확인 필요";
-      texts.freelancerSettlementTerms = `용역기간: ${period}. ${feeText}. 지급일: ${payDate || input.savedPayDate || "별도 합의 필요"}. 지급방법: ${payMethod || input.savedPayMethod || "별도 합의 필요"}. 분할 지급·검수·해지 시 기성정산 기준은 직접 확인하여 추가한다.`;
-    } else warnings.push("확정 용역비를 입력하십시오. 미확인 금액은 자동으로 정하지 않습니다.");
+      texts.freelancerSettlementTerms = `용역기간: ${period}. ${feeName} ${won(fee)}${calc ? `(${calc})` : ""}. 지급일: ${payDate || input.savedPayDate || "별도 합의 필요"}. 지급방법: ${payMethod || input.savedPayMethod || "별도 합의 필요"}. 분할 지급·검수·해지 시 기성정산 기준은 직접 확인하여 추가한다.`;
+    } else warnings.push(`${FREELANCER_BASIS[basis].missing}을 입력하십시오. 미확인 금액은 자동으로 정하지 않습니다.`);
+    // 비차단 경고 — 저장·미리보기를 막지 않는다.
+    if (basis === "hourly" && known && fee < MIN_WAGE_2026)
+      warnings.push(`시급 ${won(fee)}은 2026년 최저임금 ${won(MIN_WAGE_2026)}보다 낮습니다. 근로자로 판정되면 최저임금 미달이 됩니다.`);
+    if (basis === "hourly" || basis === "daily") warnings.push(FREELANCER_LABOR_RISK_NOTICE);
     return { applies: true, hideWork: true, freelancer: true,
       period: { termKey, endDate }, texts, warnings, blockers,
       notes: ["근로시간·주휴·최저임금 계산 없이 용역기간·합의금액·업무범위를 반영합니다. 직접 수정한 약정은 보존합니다."],

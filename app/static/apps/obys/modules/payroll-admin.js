@@ -147,7 +147,7 @@
     host.innerHTML = `<h2>급여 초안 · 명세 관리</h2><p>직원과 월을 선택하고 계약·승인 근태 기준으로 작성합니다. 확정된 명세를 수정하면 기존 명세를 보존한 새 버전으로 저장합니다.</p>
       <div class="toolbar"><label>점포 선택<select class="field" data-payroll-branch><option value="">전체 점포</option>${[...new Set(allEmployees.map(row => row.branch || ""))].filter(Boolean).map(branch => `<option value="${esc(branch)}">${esc(branch)}</option>`).join("")}</select></label><label>직원 선택<select class="field" data-payroll-employee>${pickerOptions()}</select></label>
       <label>명세 선택<select class="field" data-payroll-statement></select></label></div>
-      <p data-payroll-blocked role="alert"></p><p data-payroll-link-notice role="status"></p><p data-payroll-state role="status"></p><p data-payroll-basis></p>
+      <p data-payroll-blocked role="alert"></p><p data-payroll-link-notice role="status"></p><p data-payroll-state role="status"></p><p data-payroll-basis></p><p><span class="badge warn" data-payroll-risk role="status" hidden></span></p>
       <form data-payroll-form class="toolbar">${amounts.map(([name, label]) => `<label data-wrap="${name}">${label}<input class="field" name="${name}" type="number" min="0" step="1" required></label>`).join("")}
       <label>임금지급일<input class="field" data-payroll-pay-date maxlength="40" placeholder="예: 2026-11-10 또는 매월 10일"></label>
       <button class="btn primary" type="submit">초안 저장</button></form>
@@ -328,6 +328,9 @@
         : active?.attendance_basis
         ? `승인 근태 ${active.attendance_basis.approved_days}일 · ${active.attendance_basis.approved_minutes}분 기준`
         : active?.source_contract_id ? "서명 계약서 기준값 적용" : "계약·근태 기준값을 조회하거나 금액을 확인해 입력하세요.";
+      const risk = host.querySelector("[data-payroll-risk]");
+      risk.textContent = active?.labor_risk_notice || "";
+      risk.hidden = !active?.labor_risk_notice;
       totals();restoreButtons();
     };
     const showNotices = () => {
@@ -436,6 +439,14 @@
         if (plan.contract_type !== "freelancer") throw new Error("서명 완료된 프리랜서 용역계약서가 필요합니다.");
         planTaxType = "freelancer_33";
         const gross = form.elements.gross_pay.value;
+        const contractWage = Number(plan.contract_terms?.wage) || 0;
+        // 월정액 계약은 칸이 비었거나 계약 금액 그대로면 금액을 보내지 않는다 — 서버가 계약 금액과 근거 문구로 초안을 만든다.
+        const useContractAmount = plan.wage_type === "monthly" && contractWage > 0 && (!gross || Number(gross) === contractWage);
+        if (useContractAmount) {
+          if (!confirm(`${month} ${employee().name || employee().employee_name} · 월 용역비 ${money(contractWage)}(계약 금액)으로 초안을 저장할까요? 확정·지급·발송은 별도입니다.`)) return;
+          const result = await api("/payroll/draft-from-contract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({business_id:businessId,employee_email:email(employee()),employee_request_id:employee().id||"",payroll_month:month})});
+          await saved(result.statement);return;
+        }
         if (!gross || !Number.isSafeInteger(Number(gross)) || Number(gross) <= 0) {
           host.querySelector("[data-payroll-basis]").textContent = `계약 용역비 ${money(plan.contract_terms?.wage)} · 용역기간 ${plan.contract_terms?.start_date || "확인 필요"} ~ ${plan.contract_terms?.end_date || "별도 합의"}. 총지급액 칸에 이번 지급의 확정금액을 입력한 후 다시 누르세요. 총계약금을 매월 자동 지급하지 않습니다.`;
           throw new Error("이번 지급의 확정 용역비를 총지급액에 입력하세요.");

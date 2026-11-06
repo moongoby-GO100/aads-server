@@ -682,6 +682,24 @@ async def employee_employment_history(request_id: str, current_user: dict = Depe
     return await run_in_threadpool(svc.employee_employment_history, request_id, current_user)
 
 
+@router.get("/employees/approved/{request_id}/work-pattern")
+async def get_employee_work_pattern(request_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await run_in_threadpool(svc.get_employee_work_pattern, request_id, current_user)
+
+
+@router.put("/employees/approved/{request_id}/work-pattern")
+async def set_employee_work_pattern(request_id: str, payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    # 근태설정의 직원별 근무 요일·예정 시간대. 계약서 본문에는 쓰지 않는다.
+    return await run_in_threadpool(svc.set_employee_work_pattern, request_id, payload.model_dump(), current_user)
+
+
+@router.get("/employees/approved/{request_id}/work-pattern/gaps")
+async def employee_work_pattern_gaps(
+    request_id: str, payroll_month: str = "", current_user: dict = Depends(get_current_user)
+) -> dict[str, Any]:
+    return await run_in_threadpool(svc.employee_work_pattern_gaps, request_id, payroll_month, current_user)
+
+
 @router.get("/onboarding/documents")
 async def list_onboarding_documents(
     business_id: str | None = None,

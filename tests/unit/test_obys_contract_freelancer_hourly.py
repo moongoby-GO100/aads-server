@@ -17,10 +17,11 @@ BASE = dict(
 )
 
 
-def test_freelancer_hourly_accepted_and_monthly_rejected():
+def test_freelancer_hourly_accepted_and_unknown_basis_rejected():
+    # 2026-11-06: 일급·월정액도 허용된다(tests/unit/test_obys_freelancer_pay_basis.py). 정해지지 않은 기준만 거절한다.
     assert svc._validate_contract_payload(dict(BASE))["wage_type"] == "hourly"
     with pytest.raises(HTTPException) as exc:
-        svc._validate_contract_payload({**BASE, "wage_type": "monthly"})
+        svc._validate_contract_payload({**BASE, "wage_type": "weekly"})
     assert exc.value.status_code == 400
 
 

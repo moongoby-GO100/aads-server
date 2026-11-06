@@ -40,6 +40,7 @@ console.log(JSON.stringify({
   hourly: check({ wageType: "hourly" }),
   caseFee: check({ wageType: "case_fee" }),
   monthly: check({ wageType: "monthly" }),
+  weekly: check({ wageType: "weekly" }),
   autoText: auto.texts.wageComposition || "",
 }));
 """
@@ -65,8 +66,10 @@ def test_freelancer_case_fee_still_passes(res):
     assert res["caseFee"]["ok"] is True, res["caseFee"]
 
 
-def test_freelancer_monthly_still_blocked(res):
-    assert res["monthly"]["ok"] is False
+def test_freelancer_unknown_basis_still_blocked(res):
+    # 2026-11-06 B안: 월정액·일급도 허용(tests/unit/test_obys_freelancer_pay_basis.py). 정해지지 않은 기준만 막는다.
+    assert res["weekly"]["ok"] is False
+    assert res["monthly"]["ok"] is True, res["monthly"]
 
 
 def test_autofill_describes_hourly_fee(res):
@@ -74,12 +77,13 @@ def test_autofill_describes_hourly_fee(res):
 
 
 def test_screen_rule_matches_server_rule():
-    assert 'const FREELANCER_WAGE_TYPES = ["case_fee", "hourly"];' in CORE
+    assert 'const FREELANCER_WAGE_TYPES = ["hourly", "daily", "monthly", "case_fee"];' in CORE
     assert 'draft.wageType !== "case_fee"' not in CORE
     assert "C.FREELANCER_WAGE_TYPES.includes(v.wageType)" in EDITOR
     assert 'v.wageType !== "case_fee"' not in EDITOR
     server = (REPO / "app" / "services" / "yeoljeong_finance_service.py").read_text(encoding="utf-8")
-    assert 'if wage_type not in {"case_fee", "hourly"}:' in server
+    assert "if wage_type not in FREELANCER_WAGE_TYPES:" in server
+    assert 'FREELANCER_WAGE_TYPES = ("hourly", "daily", "monthly", "case_fee")' in server
 
 
 def test_switch_to_freelancer_keeps_hourly():

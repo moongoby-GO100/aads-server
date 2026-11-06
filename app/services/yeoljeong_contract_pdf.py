@@ -124,7 +124,10 @@ FREELANCER_TERM_LABELS = {
 FREELANCER_SKIPPED_KEYS = {"probation_terms", "probation_period", "workplace_size_category", "meal_provision"}
 # 값이 0 이면 인쇄하지 않는 금액 키(용역계약 한정).
 FREELANCER_ZERO_HIDDEN_KEYS = {"base_salary", "non_tax_meal_allowance", "taxable_allowance"}
-# 시급 3.3% 용역계약에서 인쇄하지 않는 근로계약식 금액 키.
+# 시급·일급·월정액 3.3% 용역계약의 단가 칸 이름과 신고 구분 표기. 건별은 기존 용역계약 표기를 그대로 쓴다.
+FREELANCER_BASIS_NAMES = {"hourly": "시급", "daily": "일급", "monthly": "월 용역비"}
+FREELANCER_BASIS_SHORT = {"hourly": "시급", "daily": "일급", "monthly": "월정액"}
+# 시급·일급·월정액 3.3% 용역계약에서 인쇄하지 않는 근로계약식 금액 키.
 FREELANCER_HOURLY_HIDDEN_KEYS = {"base_salary", "non_tax_meal_allowance", "taxable_allowance", "converted_hourly_wage", "monthly_wage"}
 # 기타 기재사항에서 원문 키 대신 보여줄 이름(용역·근로 공통, 칸 이름만 바꾸고 값은 건드리지 않는다).
 EXTRA_LABELS = {
@@ -336,7 +339,8 @@ def _is_zero_amount(value: Any) -> bool:
 def term_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
     """'계약 조건' 표 행. 용역계약은 용역계약 용어와 생략 규칙을 적용한다."""
     freelancer = is_freelancer_snapshot(snapshot)
-    hourly_freelancer = freelancer and str(snapshot.get("wage_type") or "") == "hourly"
+    basis_name = FREELANCER_BASIS_NAMES.get(str(snapshot.get("wage_type") or "")) if freelancer else None
+    hourly_freelancer = bool(basis_name)
     rows: list[tuple[str, Any]] = []
     for key, name in TERM_FIELDS:
         value = snapshot.get(key)
@@ -353,11 +357,13 @@ def term_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
                 if key in FREELANCER_HOURLY_HIDDEN_KEYS:
                     continue
                 if key == "wage":
-                    name = "시급"
+                    name = basis_name
                 elif key == "wage_type":
                     name = "임금 산정 방식"
+                    if str(value) == "monthly":
+                        value = "월정액 용역비"
                 elif key == "employment_tax_type":
-                    value = "3.3% 프리랜서 원천징수 · 시급"
+                    value = f"3.3% 프리랜서 원천징수 · {FREELANCER_BASIS_SHORT[str(snapshot.get('wage_type'))]}"
         rows.append((name, display_value(key, value)))
     return rows
 

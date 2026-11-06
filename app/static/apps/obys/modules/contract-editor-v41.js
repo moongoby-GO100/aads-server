@@ -42,8 +42,8 @@
     { g: "basic", name: "workplace", label: "근무장소", type: "text", altLabels: ["용역 수행장소/방식"] },
     { g: "basic", name: "workplaceSizeCategory", label: "상시근로자 수", type: "select", options: () => [["under_5", "5인 미만"], ["five_plus", "5인 이상"], ["over_5", "5인 이상(기존값)"]] },
     { g: "basic", name: "jobDescription", label: "업무내용", type: "textarea", altLabels: ["용역 업무내용"] },
-    { g: "wage", name: "wageType", label: "임금 산정 방식", type: "select", options: () => Object.entries(C.wageTypeLabels) },
-    { g: "wage", name: "wage", label: "확정 임금", type: "number", altLabels: ["확정 용역비"], hint: "시급·월급·용역비 금액을 원 단위로 입력합니다. 기본값을 넣지 않습니다." },
+    { g: "wage", name: "wageType", label: "임금 산정 방식", type: "select", options: () => (E?.values?.contractType === "freelancer" ? Object.entries(C.freelancerWageLabels) : Object.entries(C.wageTypeLabels)) },
+    { g: "wage", name: "wage", label: "확정 임금", type: "number", altLabels: ["확정 용역비", "확정 시급", "확정 일급", "월 용역비"], hint: "시급·월급·용역비 금액을 원 단위로 입력합니다. 기본값을 넣지 않습니다." },
     { g: "wage", name: "mealProvision", label: "식사 제공", type: "select", options: () => [["employer_meal", "사용자가 식사 제공"], ["cash_no_meal", "식사 미제공·현금 식대"]] },
     { g: "wage", name: "baseSalary", label: "과세 기본급", type: "number", hint: "월급제에서 확정 임금 − 비과세 식대 − 기타 과세수당으로 자동 계산됩니다(직접 고치지 않습니다)." },
     { g: "wage", name: "nonTaxMealAllowance", label: "비과세 식대", type: "number" },
@@ -109,7 +109,15 @@
     monthly: ["월 총액", "식대·수당을 포함한 월 총액을 원 단위로 입력합니다. 과세 기본급은 월 총액 − 비과세 식대 − 기타 과세수당으로 자동 계산됩니다."]
   };
   const SERVICE_LABELS = {startDate:"용역 시작일",endDate:"용역 종료일",workplace:"용역 수행장소/방식",jobDescription:"용역 업무내용",wageType:"용역비 산정 방식",wage:"확정 용역비",payDate:"용역비 지급일",wageComposition:"용역비 구성/원천징수",workDays:"수행 일정",workTime:"수행 시간(별도 합의)",restTime:"휴식",weeklyHours:"수행 회차 기준",dailyWorkSchedule:"수행 일정 상세",holidays:"휴일 규정",overtimeTerms:"추가 수행",leaveTerms:"일정 변경",insuranceTerms:"세무 처리"};
+  const FREELANCER_WAGE_NAMES = { hourly: "확정 시급", daily: "확정 일급", monthly: "월 용역비", case_fee: "확정 용역비" };
+  const FREELANCER_WAGE_HINTS = {
+    hourly: "1시간당 용역비를 원 단위로 입력합니다. 정산 때 승인된 근태 분(分)을 곱해 3.3%를 뗀 금액을 계산합니다.",
+    daily: "1일 용역비를 원 단위로 입력합니다. 정산 때 승인된 근무 일수를 곱해 3.3%를 뗀 금액을 계산합니다.",
+    monthly: "매월 같은 금액을 지급하는 용역비를 원 단위로 입력합니다. 급여명세에서 계약 금액이 그대로 총액이 됩니다.",
+    case_fee: "산출물 1건당 확정 용역비를 원 단위로 입력합니다."
+  };
   function wageLabelOf(field) {
+    if (E?.values?.contractType === "freelancer" && field.name === "wage") return FREELANCER_WAGE_NAMES[E.values.wageType] || SERVICE_LABELS.wage;
     if (E?.values?.contractType === "freelancer" && SERVICE_LABELS[field.name]) return SERVICE_LABELS[field.name];
     const pair = field.name === "wage" ? WAGE_LABELS[E?.values?.wageType] : null;
     return pair ? pair[0] : field.label;
@@ -125,9 +133,10 @@
 
   // ---------- 월급제 임금 자동 분배 ----------
   /** 사용자가 직접 고친 값만 manual 로 취급한다(식대). 자동 값은 임금이 바뀌면 따라간다. */
+  const isSalaryMonthly = values => values?.wageType === "monthly" && values?.contractType !== "freelancer";
   function wageSplitPatch(values, manual, autoComposition, skipName) {
     const split = C.splitMonthlyWage({
-      wageType: values.wageType, wage: values.wage, mealProvision: values.mealProvision,
+      wageType: isSalaryMonthly(values) ? "monthly" : "none", wage: values.wage, mealProvision: values.mealProvision,
       taxableAllowance: values.taxableAllowance,
       nonTaxMealAllowance: manual.has("nonTaxMealAllowance") ? values.nonTaxMealAllowance : null
     });
@@ -149,7 +158,7 @@
   function wageManualFor(values) {
     const manual = new Set();
     const meal = String(values.nonTaxMealAllowance ?? "").trim();
-    if (meal !== "" && values.wageType === "monthly" && values.mealProvision === "cash_no_meal") {
+    if (meal !== "" && isSalaryMonthly(values) && values.mealProvision === "cash_no_meal") {
       const cap = Math.min(C.NON_TAX_MEAL_LIMIT, Math.round(Number(values.wage) || 0));
       if (Number(meal) !== cap) manual.add("nonTaxMealAllowance");
     }
@@ -157,7 +166,7 @@
   }
   function syncWageAuto(skipName) {
     if (!E || readOnly()) return;
-    if (E.values.wageType !== "monthly") {
+    if (!isSalaryMonthly(E.values)) {
       WAGE_SPLIT_FIELDS.forEach(name => { E.values[name] = ""; });
       E.wageManual.clear();
       return;
@@ -167,7 +176,7 @@
     if (patch.wageComposition !== undefined) E.autoComposition = patch.wageComposition;
   }
   function wageNoteHtml() {
-    if (!E || E.values.wageType !== "monthly") return "";
+    if (!E || !isSalaryMonthly(E.values)) return "";
     const { split } = wageSplitPatch(E.values, E.wageManual, E.autoComposition);
     const parts = [];
     if (E.wageNotice) parts.push(`<div class="cv41-alert warn" role="status">${esc(E.wageNotice)}</div>`);
@@ -462,7 +471,7 @@
     const standard = String(C.defaultsFor(v.contractType || "part_time", v.employmentTaxType || "four_insurance").wageComposition || "").trim();
     // 예전 버전이 만든 월급 구성 문구는 지금 입력값으로 다시 만든 문구와 한 글자도 다르지 않을 때만 자동 문구로 본다(뒤에 약정을 덧붙였으면 직접 수정).
     const legacy = C.splitMonthlyWage({
-      wageType: v.wageType, wage: v.wage, mealProvision: v.mealProvision, taxableAllowance: v.taxableAllowance,
+      wageType: isSalaryMonthly(v) ? "monthly" : "none", wage: v.wage, mealProvision: v.mealProvision, taxableAllowance: v.taxableAllowance,
       nonTaxMealAllowance: E.wageManual.has("nonTaxMealAllowance") ? v.nonTaxMealAllowance : null
     }).composition || "";
     if (composition === standard || (legacy && composition === legacy)) E.autoManual.delete("wageComposition");
@@ -511,7 +520,7 @@
     if (!r) return "";
     const head = "<h3>자동 계산 요약</h3>";
     if (!r.applies) return `${head}<p class="cv41-sum-empty">용역·비밀유지 계약은 근로시간·주휴·최저임금을 계산하지 않습니다.</p>`;
-    if (r.freelancer) return `${head}<dl class="cv41-sum-grid"><div><dt>용역기간</dt><dd>${esc(E.values.startDate || "시작일 확인 필요")} ~ ${esc(r.period.endDate || "별도 합의")}</dd></div><div><dt>합의 용역비</dt><dd>${r.fee === null ? "금액 확인 필요" : esc(C.formatMoney(r.fee))}</dd></div><div><dt>업무범위</dt><dd>${esc(E.values.freelancerScope || "업무내용을 입력하십시오")}</dd></div></dl><p>용역기간·금액·업무내용 변경이 자동 반영됩니다. 직접 수정한 약정은 보존합니다. 분할 지급·검수·해지 기준은 당사자 합의 내용을 확인하십시오.</p>`;
+    if (r.freelancer) return `${head}<dl class="cv41-sum-grid"><div><dt>용역기간</dt><dd>${esc(E.values.startDate || "시작일 확인 필요")} ~ ${esc(r.period.endDate || "별도 합의")}</dd></div><div><dt>지급 기준</dt><dd>${esc(C.freelancerWageLabels[E.values.wageType] || "건별 용역비")}</dd></div><div><dt>합의 용역비</dt><dd>${r.fee === null ? "금액 확인 필요" : esc(C.formatMoney(r.fee))}</dd></div><div><dt>업무범위</dt><dd>${esc(E.values.freelancerScope || "업무내용을 입력하십시오")}</dd></div></dl><p>용역기간·금액·업무내용 변경이 자동 반영됩니다. 직접 수정한 약정은 보존합니다. 분할 지급·검수·해지 기준은 당사자 합의 내용을 확인하십시오.</p>${r.warnings.length ? `<div class="cv41-alert warn" role="status"><ul>${r.warnings.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}`;
     const money = C.formatMoney;
     const rows = [];
     const v = E.values;
@@ -848,6 +857,8 @@
     }
     return parts.length ? ` ${parts.join(" ")}` : "";
   }
+  function riskBadge(contract) { return contract?.labor_risk_notice ? ` <span class="badge warn" role="note">${esc(contract.labor_risk_notice)}</span>` : ""; }
+  function warnBadge(contract) { return (contract?.pay_basis_warnings || []).map(text => ` <span class="badge bad" title="${esc(text)}">최저임금 미달 가능</span>`).join(""); }
   function gapBadge(count) { return count ? ` <span class="badge warn">빈 필수값 ${count}</span>` : ""; }
   /** 작성 전·작성중 계약의 빈 필수값 수. 서명요청 이후 계약은 0(이미 서버 검증 통과). */
   function rowMissingCount(employee, contract) {
@@ -906,7 +917,7 @@
         <td data-label="직원"><b>${esc(pick(contract, "employeeName") || "-")}</b><small>${esc(contract.employee_email_masked || "")}</small></td>
         <td data-label="사업자·지점">${esc(businessName(pick(contract, "businessId")))}<small>${esc(pick(contract, "branch") || "-")}</small></td>
         <td data-label="계약 유형">${esc(C.contractTypeLabels[pick(contract, "contractType")] || pick(contract, "contractType") || "-")}</td>
-        <td data-label="상태">${badge(statusOf(contract))}${amendmentBadges(contract)}<small>${esc(when)}</small>${gapBadge(rowMissingCount(null, contract))}</td>
+        <td data-label="상태">${badge(statusOf(contract))}${amendmentBadges(contract)}${riskBadge(contract)}${warnBadge(contract)}<small>${esc(when)}</small>${gapBadge(rowMissingCount(null, contract))}</td>
         <td data-label="처리"><button class="btn" type="button" data-cv41-contract="${esc(contract.id)}">${key === "draft" ? "이어서 작성" : "열기"}</button>${key === "signed" ? ` <button class="btn" type="button" data-cv41-pdf="${esc(contract.id)}">서명본 PDF</button> <button class="btn" type="button" data-cv41-amend-row="${esc(contract.id)}">변경 계약 작성</button>` : ""}${previewButton(pick(contract, "employeeEmail"), pick(contract, "employeeName"))}</td>
       </tr>`;
     }).join("");
@@ -1037,11 +1048,12 @@
   }
   function fieldControl(field) {
     const value = E.values[field.name] ?? "";
-    const monthly = E.values.wageType === "monthly";
+    const monthly = isSalaryMonthly(E.values);
     const mealLocked = field.name === "nonTaxMealAllowance" && monthly && E.values.mealProvision !== "cash_no_meal";
     const disabled = readOnly() || field.readonly || (field.name === "baseSalary" && monthly) || autoLocked(field.name) ? "readonly" : mealLocked ? "disabled" : "";
-    const wagePair = field.name === "wage" ? WAGE_LABELS[E.values.wageType] : null;
-    const hint = mealLocked ? EMPLOYER_MEAL_NOTE : wagePair ? wagePair[1] : field.hint;
+    const freelancerWage = field.name === "wage" && E.values.contractType === "freelancer";
+    const wagePair = field.name === "wage" ? (freelancerWage ? [null, FREELANCER_WAGE_HINTS[E.values.wageType]] : WAGE_LABELS[E.values.wageType]) : null;
+    const hint = mealLocked ? EMPLOYER_MEAL_NOTE : wagePair && wagePair[1] ? wagePair[1] : field.hint;
     const invalid = E.missing.some(label => FIELD_BY_LABEL.get(label) === field.name) || Boolean(E.live?.has(field.name));
     const suggestion = invalid && !readOnly() ? suggestionFor(field.name) : null;
     const id = `cv41_${field.name}`;
@@ -1060,7 +1072,7 @@
   }
   function stepConditions() {
     const type = E.values.contractType || "part_time";
-    const monthlyWage = E.values.wageType === "monthly";
+    const monthlyWage = isSalaryMonthly(E.values);
     const visible = field => (!field.only || field.only === type) && (monthlyWage || !WAGE_SPLIT_FIELDS.includes(field.name)) && !(type === "freelancer" && field.name === "probationPeriod");
     if (AUTO) autoRun();
     const live = liveCheck();
@@ -1315,11 +1327,11 @@
   }
   function freelancerBlockerHtml(conflicts) {
     const reasons = [];
-    if (conflicts.includes("wage")) reasons.push(`임금 방식이 '${esc(C.wageTypeLabels[E.values.wageType] || E.values.wageType || "미지정")}'입니다. 3.3% 용역계약은 시급 또는 건별/용역비로 작성합니다. 건별/용역비로 바꾸면 기존 금액은 1회 용역비가 아니므로 [확정 용역비]를 비웁니다.`);
+    if (conflicts.includes("wage")) reasons.push(`임금 방식이 '${esc(C.wageTypeLabels[E.values.wageType] || E.values.wageType || "미지정")}'입니다. 3.3% 용역계약은 시급·일급·월정액·건별 중 하나로 써야 합니다. 건별로 바꾸면 기존 금액은 1회 용역비가 아니므로 [확정 용역비]를 비웁니다.`);
     if (conflicts.includes("schedule")) reasons.push("근무일·근무시간·주 소정근로시간에 고정 요일·시간 표현이 있습니다. 정해진 요일·시간에 일하면 근로자로 판정될 수 있습니다.");
     const fixes = conflicts.length > 1
       ? [["freelancer_all", "3.3% 조건으로 모두 고치기"]]
-      : conflicts.includes("wage") ? [["case_fee", "임금 방식을 건별/용역비로 바꾸기"]] : [["clear_schedule", "근무일·근무시간·주 소정근로시간 문구 지우기"]];
+      : conflicts.includes("wage") ? [["case_fee", "지급 기준을 건별 용역비로 바꾸기"]] : [["clear_schedule", "근무일·근무시간·주 소정근로시간 문구 지우기"]];
     fixes.push(["to_part_time", "단시간 근로계약으로 바꾸기"]);
     return `<div class="cv41-alert bad" role="alert" id="cv41Blocker"><b>미리보기·저장이 막힌 이유 ${conflicts.length}가지</b><ul>${reasons.map(text => `<li>${text}</li>`).join("")}</ul><div class="cv41-fixes">${fixes.map(([key, label]) => `<button class="btn primary" type="button" data-cv41-fix="${key}">${esc(label)}</button>`).join(" ")}</div></div>`;
   }
@@ -1327,18 +1339,18 @@
   function blockerHtml(message) {
     if (!message) return "";
     const conflicts = freelancerConflicts();
-    if (conflicts.length && (message.includes("건별/용역비") || message.includes("고정 근무표"))) return freelancerBlockerHtml(conflicts);
+    if (conflicts.length && (message.includes("건별") || message.includes("고정 근무표"))) return freelancerBlockerHtml(conflicts);
     const fixes = [];
-    if (message.includes("건별/용역비")) {
-      fixes.push(['case_fee', "임금 방식을 건별/용역비로 바꾸기"]);
+    if (message.includes("건별")) {
+      fixes.push(['case_fee', "지급 기준을 건별 용역비로 바꾸기"]);
     }
     if (message.includes("고정 근무표")) {
       fixes.push(['clear_schedule', "근무일·근무시간·주 소정근로시간 문구 지우기"]);
       fixes.push(['to_part_time', "단시간 근로계약으로 바꾸기"]);
     }
     if (message.includes("4대보험 가입 근로자")) fixes.push(['four_insurance', "신고 구분을 4대보험 근로자로 바꾸기"]);
-    const hint = message.includes("건별/용역비")
-      ? "3.3% 용역계약은 임금 방식을 시급 또는 건별/용역비로 고르십시오. 건별/용역비로 바꾸면 [확정 용역비]에 1회 금액을 넣으십시오."
+    const hint = message.includes("건별")
+      ? "3.3% 용역계약의 지급 기준은 시급·일급·월정액·건별입니다. 바꾼 뒤 해당 금액을 입력하십시오."
       : message.includes("고정 근무표")
         ? "정해진 요일·시간에 매장에서 일하면 계약 이름과 관계없이 근로자로 판정될 수 있습니다. 실제 운영이 그렇다면 근로계약이 맞습니다."
         : "";

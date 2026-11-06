@@ -385,6 +385,16 @@ CONTRACT_TEMPLATE_META = {
 
 EMPLOYMENT_CONTRACT_TYPES = {"part_time", "regular", "manager", "fixed_term", "daily"}
 VALID_CONTRACT_TYPES = EMPLOYMENT_CONTRACT_TYPES | {"freelancer", "confidentiality"}
+# 3.3% 프리랜서 지급 기준 4종. 시급·일급은 승인된 근태로, 월정액은 계약 금액으로, 건별은 확정 금액으로 산정한다.
+FREELANCER_WAGE_TYPES = ("hourly", "daily", "monthly", "case_fee")
+FREELANCER_ATTENDANCE_WAGE_TYPES = ("hourly", "daily")
+FREELANCER_MISSING_WAGE_LABELS = {
+    "hourly": "확정 시급", "daily": "확정 일급", "monthly": "월 용역비", "case_fee": "확정 용역비",
+}
+FREELANCER_PAY_ITEM_LABELS = {
+    "hourly": "용역비(시급)", "daily": "용역비(일급)", "monthly": "용역비(월정액)", "case_fee": "용역비",
+}
+FREELANCER_LABOR_RISK_NOTICE = "정해진 요일·시간에 지시를 받고 일하면 근로자로 판정될 수 있습니다 — 노무 확인 권장"
 CONTRACT_SNAPSHOT_EXCLUDED_FIELDS = {
     "sign_token",
     "sign_token_hash",
@@ -5257,6 +5267,9 @@ def list_approved_employees(user: dict[str, Any], business_id: str | None = None
         employee["current_employment"] = employee.get("current_employment") or None
         employee["current_employment_contract_id"] = employee.get("current_employment_contract_id") or ""
         employee["needs_employment_sync"] = not _employment_snapshot_is_current(employee, derived)
+        derived_terms = (derived or {}).get("employment") or {}
+        employee["labor_risk_notice"] = freelancer_labor_risk_notice(
+            derived_terms.get("contract_type"), derived_terms.get("wage_type"), employee.get("work_pattern"))
         result.append(employee)
     return sorted(result, key=lambda row: row.get("reviewed_at") or row.get("updated_at") or row.get("requested_at") or "", reverse=True)
 
@@ -6743,8 +6756,8 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
     elif contract_type == "freelancer":
         if employment_tax_type != "freelancer_33":
             raise HTTPException(status_code=400, detail="프리랜서 용역계약서는 3.3% 원천징수 구분으로 작성해야 합니다")
-        if wage_type not in {"case_fee", "hourly"}:
-            raise HTTPException(status_code=400, detail="프리랜서 용역계약서는 시급 또는 건별/용역비 방식으로 작성해야 합니다")
+        if wage_type not in FREELANCER_WAGE_TYPES:
+            raise HTTPException(status_code=400, detail="프리랜서 용역계약서는 시급·일급·월정액·건별 중 하나의 지급 기준으로 작성해야 합니다")
         for label, key, camel in (
             ("용역 시작일", "start_date", "startDate"),
             ("용역 업무범위/산출물", "freelancer_scope", "freelancerScope"),
@@ -6753,7 +6766,7 @@ def _validate_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if _missing_contract_value(_contract_payload_value(result, key, camel)):
                 missing.append(label)
         if wage <= 0:
-            missing.append("확정 시급" if wage_type == "hourly" else "확정 용역비")
+            missing.append(FREELANCER_MISSING_WAGE_LABELS[wage_type])
 
     if missing:
         unique_missing = list(dict.fromkeys(missing))
@@ -6915,7 +6928,17 @@ def _normalize_contract_amendment(
 def list_contracts(user: dict[str, Any]) -> list[dict[str, Any]]:
     _require_owner_path_admin(user, "계약서 목록은 관리자만 조회할 수 있습니다")
     rows = _with_amendment_marks(_read_hr("contracts", user))
-    return sorted(_filter_user(rows, user, "employee_email"), key=lambda row: row.get("updated_at", ""), reverse=True)
+    patterns = {str(emp.get("id") or ""): emp.get("work_pattern") for emp in _read_hr("employee_join_requests", user)
+                if emp.get("work_pattern")}
+    marked = []
+    for row in _filter_user(rows, user, "employee_email"):
+        contract_type = _contract_payload_value(row, "contract_type", "contractType")
+        wage_type = _contract_payload_value(row, "wage_type", "wageType")
+        request_id = str(_contract_payload_value(row, "employee_request_id", "employeeRequestId") or "")
+        notice = freelancer_labor_risk_notice(contract_type, wage_type, patterns.get(request_id))
+        warnings = freelancer_pay_basis_warnings(contract_type, wage_type, row.get("wage"))
+        marked.append({**row, "labor_risk_notice": notice, "pay_basis_warnings": warnings} if notice or warnings else row)
+    return sorted(marked, key=lambda row: row.get("updated_at", ""), reverse=True)
 
 
 def _revoke_contract_signature_request(contract: dict[str, Any]) -> None:
@@ -9569,18 +9592,26 @@ def _payroll_defaults_from_employment(derived: dict[str, Any] | None) -> dict[st
         "reason": "",
     }
     defaults: dict[str, Any] = result["defaults"]
-    freelancer_hourly = contract_type == "freelancer" and wage_type == "hourly"
-    if freelancer_hourly:
-        # 3.3% 프리랜서 시급제 — 4대보험 없이 근태 확정 후 시급×분으로 산정한다(월급 분기로 가지 않는다).
+    freelancer_attendance = contract_type == "freelancer" and wage_type in FREELANCER_ATTENDANCE_WAGE_TYPES
+    if contract_type == "freelancer" and wage_type == "monthly" and wage:
+        # 3.3% 프리랜서 월정액 — 계약 금액 그대로 총지급액. 식대·4대보험 없음.
+        defaults["employment_tax_type"] = "freelancer_33"
+        defaults["gross_pay"] = wage
+        defaults["taxable_pay"] = wage
+        defaults["non_tax_meal_allowance"] = 0
+        result["basis"] = f"프리랜서 월정액 용역계약({derived['contract_id']}) 월 용역비 {wage:,}원 — 3.3% 원천징수"
+        return result
+    if freelancer_attendance:
+        # 3.3% 프리랜서 시급·일급제 — 4대보험 없이 근태 확정 후 단가×승인 근태로 산정한다(월급 분기로 가지 않는다).
         defaults["employment_tax_type"] = "freelancer_33"
     elif contract_type == "freelancer" or wage_type == "case_fee":
         defaults["employment_tax_type"] = "freelancer_33"
         result["basis"] = f"프리랜서 용역계약({derived['contract_id']}) — 3.3% 원천징수 구분만 채움"
         result["reason"] = "용역비는 건별로 확정되므로 총지급액 기본값이 없습니다"
         return result
-    if not freelancer_hourly and terms.get("employment_tax_type"):
+    if not freelancer_attendance and terms.get("employment_tax_type"):
         defaults["employment_tax_type"] = terms["employment_tax_type"]
-    if terms.get("meal_provision") and not freelancer_hourly:
+    if terms.get("meal_provision") and not freelancer_attendance:
         defaults["meal_provision"] = terms["meal_provision"]
     if wage_type == "monthly" and wage:
         non_tax = terms.get("non_tax_meal_allowance") or 0
@@ -9834,6 +9865,25 @@ def _payroll_with_totals(row: dict[str, Any]) -> dict[str, Any]:
     return {**row, "totals": payroll_totals(row)}
 
 
+def _with_freelancer_labor_risk(rows: list[dict[str, Any]], user: dict[str, Any]) -> list[dict[str, Any]]:
+    """관리자 급여 목록에 프리랜서 근로자성 배지 문구를 붙인다(저장값은 바꾸지 않는다)."""
+    if not any(str(row.get("employment_tax_type") or "") == "freelancer_33" for row in rows):
+        return rows
+    contracts = {str(c.get("id") or ""): c for c in _read_hr("contracts", user)}
+    patterns = {str(emp.get("id") or ""): emp.get("work_pattern") for emp in _read_hr("employee_join_requests", user)}
+    out = []
+    for row in rows:
+        if str(row.get("employment_tax_type") or "") != "freelancer_33":
+            out.append(row)
+            continue
+        contract = contracts.get(str(row.get("source_contract_id") or row.get("contract_id") or ""), {})
+        wage_type = ((row.get("attendance_basis") or {}).get("wage_type") or (row.get("settlement_basis") or {}).get("wage_type")
+                     or _contract_payload_value(contract, "wage_type", "wageType"))
+        notice = freelancer_labor_risk_notice("freelancer", wage_type, patterns.get(str(row.get("employee_request_id") or "")))
+        out.append({**row, "labor_risk_notice": notice} if notice else row)
+    return out
+
+
 def list_payroll(user: dict[str, Any], payroll_month: str = "", include_history: bool = False) -> list[dict[str, Any]]:
     """본인(관리자는 테넌트 전체) 급여명세. 직원에게는 확정 이상만, 새 버전으로 대체된 이전 버전은 이력 조회에서만 보인다."""
     all_rows = _read_hr("payroll_statements", user)
@@ -9841,6 +9891,7 @@ def list_payroll(user: dict[str, Any], payroll_month: str = "", include_history:
     if _is_admin(user):
         states = _settlement_states(all_rows)
         rows = [{**row, **states.get(str(row.get("id") or ""), {})} for row in rows]
+        rows = _with_freelancer_labor_risk(rows, user)
     else:
         # 차액 처리 메모·경고는 관리자 내부 기록이다 — 직원 응답에는 싣지 않는다.
         hidden = {"payout_diff_resolution", "payout_diff_completions", "settlement_warnings", "settlement_opt_out"}
@@ -10897,10 +10948,13 @@ def payroll_draft_from_contract(payload: dict[str, Any], user: dict[str, Any]) -
     if not month:
         raise HTTPException(status_code=400, detail="정산월이 필요합니다")
     raw = payload.get("gross_pay")
-    if isinstance(raw, bool) or not re.fullmatch(r"[0-9]+", str(raw or "")) or int(raw) <= 0 or int(raw) > 10**12:
-        raise HTTPException(status_code=400, detail="이번 지급의 확정 용역비를 원 단위 양수로 입력하십시오")
-    if payload.get("amount_confirmed") is not True:
-        raise HTTPException(status_code=400, detail="이번 지급금액 확인이 필요합니다")
+    # 금액을 보내지 않으면 월정액 계약의 계약 금액을 쓴다(건별 계약은 아래에서 같은 400 으로 거절한다).
+    use_contract_amount = raw is None or (isinstance(raw, str) and not raw.strip())
+    if not use_contract_amount:
+        if isinstance(raw, bool) or not re.fullmatch(r"[0-9]+", str(raw or "")) or int(raw) <= 0 or int(raw) > 10**12:
+            raise HTTPException(status_code=400, detail="이번 지급의 확정 용역비를 원 단위 양수로 입력하십시오")
+        if payload.get("amount_confirmed") is not True:
+            raise HTTPException(status_code=400, detail="이번 지급금액 확인이 필요합니다")
     email = str(employee.get("email") or "").strip().lower()
     def create():
         first = date.fromisoformat(month + "-01")
@@ -10918,7 +10972,15 @@ def payroll_draft_from_contract(payload: dict[str, Any], user: dict[str, Any]) -
         period_start, period_end = max(first, contract_start), min(last, contract_end)
         if period_end < period_start:
             raise HTTPException(status_code=409, detail="정산월이 용역기간과 겹치지 않습니다")
-        gross = int(raw)
+        wage_type = str(terms.get("wage_type") or "")
+        if use_contract_amount:
+            if wage_type != "monthly":
+                raise HTTPException(status_code=400, detail="이번 지급의 확정 용역비를 원 단위 양수로 입력하십시오")
+            gross = _employment_amount(terms.get("wage")) or 0
+            if gross <= 0:
+                raise HTTPException(status_code=409, detail="계약서에 월 용역비가 없어 정산 초안을 만들 수 없습니다")
+        else:
+            gross = int(raw)
         existing = [row for row in _read_hr("payroll_statements", user)
                     if row.get("source_contract_id") == derived["contract_id"]
                     and row.get("employee_request_id") == employee["id"]
@@ -10930,7 +10992,7 @@ def payroll_draft_from_contract(payload: dict[str, Any], user: dict[str, Any]) -
             return _payroll_with_totals(latest)
         basis = {"source": "signed_freelancer_contract", "contract_id": derived["contract_id"],
                  "period_start": period_start.isoformat(), "period_end": period_end.isoformat(),
-                 "agreed_fee": terms.get("wage"), "confirmed_amount": gross,
+                 "wage_type": wage_type, "agreed_fee": terms.get("wage"), "confirmed_amount": gross,
                  "scope": terms.get("freelancer_scope") or "", "terms": terms.get("freelancer_settlement_terms") or "",
                  "confirmed_by": _email(user), "confirmed_at": _now()}
         # Freelancer mode is 3.3% (소득세 3% + 지방소득세 소득세의 10%, 각 10원 미만 절사). This is a draft;
@@ -10943,7 +11005,11 @@ def payroll_draft_from_contract(payload: dict[str, Any], user: dict[str, Any]) -
             "branch": employee.get("branch") or "", "payroll_month": month,
             "employment_tax_type": "freelancer_33", "pay_date": terms.get("pay_date") or "",
             "gross_pay": gross, "taxable_pay": gross, "non_tax_meal_allowance": 0,
-            "pay_items": [{"code": "other", "label": "용역비", "amount": gross, "calc_note": "확인한 이번 지급 용역비"}],
+            "pay_items": [{
+                "code": "other", "label": FREELANCER_PAY_ITEM_LABELS["monthly"] if use_contract_amount else "용역비",
+                "amount": gross,
+                "calc_note": f"월 용역비 {gross:,}원(계약 금액)" if use_contract_amount else "확인한 이번 지급 용역비",
+            }],
             "deduction_items": [
                 {"code": "income_tax", "label": "사업소득세(3%)", "amount": tax["income_tax"]},
                 {"code": "local_income_tax", "label": "지방소득세(0.3%)", "amount": tax["local_income_tax"]},
@@ -11019,7 +11085,7 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
     if any(_payroll_state(row) in PAYROLL_LOCKED_STATUSES for row in existing):
         raise HTTPException(status_code=409, detail="이미 확정된 급여명세가 있습니다. 정정은 해당 명세를 수정해 새 버전으로 작성하십시오")
     draft = next((row for row in existing if _payroll_state(row) in PAYROLL_EDITABLE_STATUSES), None)
-    freelancer_hourly = str(terms.get("contract_type") or "") == "freelancer" and wage_type == "hourly"
+    freelancer_attendance = str(terms.get("contract_type") or "") == "freelancer"
     # 기존 초안의 전월 정산 회수분은 빼고 시작한다. 정산 항목은 저장 경로가 다시 계산해 붙인다.
     draft_other_base = max(int((draft or {}).get("other_deduction") or 0) - sum(
         int(item.get("amount") or 0) for item in ((draft or {}).get("deduction_items") or []) if _is_settlement_item(item)), 0)
@@ -11046,7 +11112,7 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         }],
         "work_summary": {"work_days": days, "work_minutes": minutes},
     }
-    if freelancer_hourly:
+    if freelancer_attendance:
         # 3.3% 프리랜서: 소득세 3% + 지방소득세 0.3%(각 10원 미만 절사), 4대보험 0. 총지급액이 바뀌므로 항상 재계산한다.
         from app.services.yeoljeong_payroll_pdf import freelancer_withholding
 
@@ -11056,8 +11122,9 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         request["tax_withholding"] = tax["total"]
         request["insurance_deduction"] = 0
         request["pay_items"] = [{
-            "code": "other", "label": "용역비(시급)", "amount": gross,
-            "calc_note": f"시급 {rate:,}원 × 승인 근무 {minutes}분(분 단위 환산, 원 미만 반올림)",
+            "code": "other", "label": FREELANCER_PAY_ITEM_LABELS[wage_type], "amount": gross,
+            "calc_note": f"시급 {rate:,}원 × 승인 {minutes}분(분 단위 환산, 원 미만 반올림)" if wage_type == "hourly"
+            else f"일급 {rate:,}원 × 승인 {days}일",
         }]
         # 기존 초안의 기타 공제(code=other)는 금액·항목 모두 유지해야 항목 합계와 other_deduction 이 일치한다.
         other_items = [dict(item) for item in ((draft or {}).get("deduction_items") or [])
@@ -11077,6 +11144,133 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         "approved_minutes": minutes, "approved_days": days, "rate": rate, "gross_pay": gross, "wage_type": wage_type,
     })
     return saved
+
+
+_WORK_PATTERN_TIME_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+def _normalize_work_pattern(payload: dict[str, Any]) -> dict[str, Any]:
+    """직원별 예정 근무 요일(월=0 … 일=6)과 선택 시간대. 계약서 본문에는 쓰지 않는다."""
+    raw_days = payload.get("weekdays")
+    if raw_days is None:
+        raw_days = []
+    if not isinstance(raw_days, list) or len(raw_days) > 7:
+        raise HTTPException(status_code=400, detail="근무 요일은 월요일 0부터 일요일 6까지의 목록이어야 합니다")
+    days: set[int] = set()
+    for day in raw_days:
+        if isinstance(day, bool) or not isinstance(day, int) or day not in range(7):
+            raise HTTPException(status_code=400, detail="근무 요일은 월요일 0부터 일요일 6까지의 정수여야 합니다")
+        days.add(day)
+    start = str(payload.get("start_time") or "").strip()
+    end = str(payload.get("end_time") or "").strip()
+    if bool(start) != bool(end):
+        raise HTTPException(status_code=400, detail="예정 시간대는 시작 시각과 종료 시각을 함께 입력하십시오")
+    if start and not (_WORK_PATTERN_TIME_RE.fullmatch(start) and _WORK_PATTERN_TIME_RE.fullmatch(end)):
+        raise HTTPException(status_code=400, detail="예정 시간대는 HH:MM 형식이어야 합니다")
+    if not days and start:
+        raise HTTPException(status_code=400, detail="근무 요일을 먼저 선택하십시오")
+    return {"weekdays": sorted(days), "start_time": start, "end_time": end}
+
+
+def freelancer_labor_risk_notice(contract_type: Any, wage_type: Any, work_pattern: Any = None) -> str:
+    """프리랜서인데 시급·일급이거나 근무 요일이 정해져 있으면 근로자성 투명성 경고. 막지 않고 숨기지 않는다."""
+    if str(contract_type or "") != "freelancer":
+        return ""
+    weekdays = (work_pattern or {}).get("weekdays") if isinstance(work_pattern, dict) else None
+    if str(wage_type or "") in FREELANCER_ATTENDANCE_WAGE_TYPES or weekdays:
+        return FREELANCER_LABOR_RISK_NOTICE
+    return ""
+
+
+def freelancer_pay_basis_warnings(contract_type: Any, wage_type: Any, wage: Any) -> list[str]:
+    if str(contract_type or "") != "freelancer" or str(wage_type or "") != "hourly":
+        return []
+    amount = _employment_amount(wage)
+    if amount is not None and 0 < amount < MIN_WAGE_2026:
+        return [f"시급 {amount:,}원은 2026년 최저임금 {MIN_WAGE_2026:,}원보다 낮습니다 — 근로자로 판정되면 최저임금 미달이 됩니다"]
+    return []
+
+
+def set_employee_work_pattern(request_id: str, payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """근태설정: 직원별 근무 요일·예정 시간대 저장(관리자만). 서명한 계약서는 건드리지 않는다."""
+    pattern = _normalize_work_pattern(payload)
+    employee = _employee_for_admin_or_403(request_id, user, detail="근무 요일 설정 권한이 없습니다")
+    email = str(employee.get("email") or "").strip().lower()
+
+    def save():
+        rows = _read_hr("employee_join_requests", user)
+        current = _find(rows, str(employee.get("id") or "")) or employee
+        before = current.get("work_pattern") or {}
+        now = _now()
+        stored = {**pattern, "updated_at": now, "updated_by": _email(user)}
+        _write_hr_record("employee_join_requests", {**current, "work_pattern": stored, "updated_at": now}, user)
+        _append_employment_audit(
+            tenant_id=str(current.get("tenant_id") or ""), business_id=_record_business_id(current), actor=_email(user),
+            action="attendance.work_pattern_set", resource_type=EMPLOYMENT_AUDIT_RESOURCE,
+            resource_id=str(current.get("id") or ""),
+            details={"before": {k: before.get(k) for k in ("weekdays", "start_time", "end_time")}, "after": pattern},
+        )
+        return stored
+
+    stored = _serialized_employee_write(email, save) if email else save()
+    derived = _derive_current_employment(
+        _read_hr("contracts", user), employee_email=email, employee_request_id=str(employee.get("id") or ""),
+        business_id=_record_business_id(employee),
+    )
+    terms = (derived or {}).get("employment") or {}
+    return {"work_pattern": stored,
+            "labor_risk_notice": freelancer_labor_risk_notice(terms.get("contract_type"), terms.get("wage_type"), stored)}
+
+
+def get_employee_work_pattern(request_id: str, user: dict[str, Any]) -> dict[str, Any]:
+    employee = _employee_for_admin_or_403(request_id, user, detail="근무 요일 조회 권한이 없습니다")
+    email = str(employee.get("email") or "").strip().lower()
+    pattern = employee.get("work_pattern") or {"weekdays": [], "start_time": "", "end_time": ""}
+    derived = _derive_current_employment(
+        _read_hr("contracts", user), employee_email=email, employee_request_id=str(employee.get("id") or ""),
+        business_id=_record_business_id(employee),
+    )
+    terms = (derived or {}).get("employment") or {}
+    return {"work_pattern": pattern,
+            "labor_risk_notice": freelancer_labor_risk_notice(terms.get("contract_type"), terms.get("wage_type"), pattern)}
+
+
+def employee_work_pattern_gaps(request_id: str, month: str, user: dict[str, Any]) -> dict[str, Any]:
+    """예정 근무일 중 출근 기록이 없는 날(오늘 이전만). 급여 산정에는 쓰지 않고 근태 화면 표시용이다."""
+    employee = _employee_for_admin_or_403(request_id, user, detail="근무 요일 조회 권한이 없습니다")
+    today = datetime.now(KST).date()
+    target = _normalize_payroll_month({"payroll_month": month}) if str(month or "").strip() else today.strftime("%Y-%m")
+    if not target:
+        raise HTTPException(status_code=400, detail="payroll_month(YYYY-MM)가 필요합니다")
+    pattern = employee.get("work_pattern") or {}
+    weekdays = {int(day) for day in (pattern.get("weekdays") or [])}
+    first = date.fromisoformat(target + "-01")
+    last = (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    result: dict[str, Any] = {"month": target, "weekdays": sorted(weekdays), "start_time": pattern.get("start_time") or "",
+                              "end_time": pattern.get("end_time") or "", "scheduled_days": [], "missing_days": []}
+    if not weekdays:
+        return result
+    email = str(employee.get("email") or "").strip().lower()
+    business_id = _record_business_id(employee)
+    derived = _derive_current_employment(
+        _read_hr("contracts", user), employee_email=email, employee_request_id=str(employee.get("id") or ""),
+        business_id=business_id, payroll_month=target,
+    )
+    terms = (derived or {}).get("employment") or {}
+    lower, upper = first, min(last, today - timedelta(days=1))
+    for key, clip in (("start_date", "lower"), ("end_date", "upper")):
+        try:
+            bound = date.fromisoformat(str(terms.get(key) or ""))
+        except ValueError:
+            continue
+        lower, upper = (max(lower, bound), upper) if clip == "lower" else (lower, min(upper, bound))
+    scheduled = [(lower + timedelta(days=i)).isoformat() for i in range(max((upper - lower).days + 1, 0))
+                 if (lower + timedelta(days=i)).weekday() in weekdays]
+    attended = {str(row.get("work_date"))[:10] for row in _payroll_attendance_rows(business_id, email, target)
+                if row.get("check_in_at") and str(row.get("status") or "").strip().lower() != "rejected"}
+    result["scheduled_days"] = scheduled
+    result["missing_days"] = [day for day in scheduled if day not in attended]
+    return result
 
 
 def _payroll_delivery_consent_ok(employee: dict[str, Any] | None) -> bool:
