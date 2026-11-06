@@ -7737,7 +7737,8 @@ rework_instruction_start_sha() {
 # want 가 있으면(7~40자 SHA) 그 커밋이 가져온 뒤 로컬에 있어야 성공이다 — 다른 커밋을 가리키는 ref 는 통과시키지 않는다.
 # want 가 비면 ref 가 가져와지는 것만 확인한다. 가져온 것은 임시 ref 로 받아 검증한 뒤에만 부모 ref 로 옮긴다.
 runner_artifact_fetch_from() {
-    local repo="$1" alias="$2" parent="$3" want="${4:-}" ref="${RUNNER_ARTIFACT_NS}/${parent}" src tmp tip full
+    local repo="$1" alias="$2" parent="$3" want="${4:-}" ref src tmp tip full
+    ref="${RUNNER_ARTIFACT_NS}/${parent}"
     local ssh_cmd
     ssh_cmd=$(runner_artifact_ssh_cmd 10)
     tmp="${RUNNER_ARTIFACT_NS}/incoming-${parent}-$$"
@@ -7763,6 +7764,58 @@ runner_artifact_fetch_from() {
         return 0
     done
     git -C "$repo" update-ref -d "$tmp" >/dev/null 2>&1 || true
+    if [[ "$want" =~ ^[0-9a-f]{7,40}$ ]]; then
+        runner_artifact_fetch_from_repo "$repo" "$alias" "$parent" "$want"
+        return $?
+    fi
+    return 1
+}
+
+# 작업 폴더가 사라져도 원격 저장소의 기존 ref 에서만 출발 커밋을 확보한다.
+# 원격 저장소는 읽기 전용이며, fetch 결과가 광고된 SHA 및 want 와 같을 때만 고정한다.
+runner_artifact_fetch_from_repo() {
+    local repo="$1" alias="$2" parent="$3" want="$4"
+    local tmp="${RUNNER_ARTIFACT_NS}/incoming-${parent}-$$" quoted_repo refs sha ref tip full priority
+    [[ "$want" =~ ^[0-9a-f]{7,40}$ ]] || return 1
+    quoted_repo="${repo//\'/\'\\\'\'}"
+    git -C "$repo" update-ref -d "$tmp" >/dev/null 2>&1 || true
+    if ! timeout "$RUNNER_ARTIFACT_FETCH_TIMEOUT" ssh -F "$RUNNER_ARTIFACT_SSH_CONFIG" \
+        -o BatchMode=yes -o ConnectTimeout=10 "$alias" \
+        "git -C '$quoted_repo' cat-file -e '${want}^{commit}'" </dev/null >/dev/null 2>&1; then
+        log "  REWORK_BASE_REPO_MISSING parent=$parent alias=$alias source=repo:$repo want=$want" >&2
+        return 1
+    fi
+    refs=$(GIT_SSH_COMMAND="$(runner_artifact_ssh_cmd 10)" timeout "$RUNNER_ARTIFACT_FETCH_TIMEOUT" \
+        git -C "$repo" ls-remote "${alias}:${repo}" </dev/null 2>/dev/null) || refs=""
+    # 부모 이름을 포함한 ref 를 먼저 시도하고, peeled tag 는 제외한다.
+    for priority in parent other; do
+        while read -r sha ref; do
+            [[ "$sha" =~ ^[0-9a-f]{40}$ && "$sha" == "$want"* && "$ref" == refs/* && "$ref" != *'^{}' ]] || continue
+            if [[ "$priority" == parent ]]; then
+                [[ "$ref" == *"$parent"* ]] || continue
+            else
+                [[ "$ref" != *"$parent"* ]] || continue
+            fi
+            git -C "$repo" update-ref -d "$tmp" >/dev/null 2>&1 || true
+            if ! GIT_SSH_COMMAND="$(runner_artifact_ssh_cmd 10)" timeout "$RUNNER_ARTIFACT_FETCH_TIMEOUT" \
+                git -C "$repo" fetch --no-tags -q "${alias}:${repo}" "+${ref}:${tmp}" </dev/null >/dev/null 2>&1; then
+                git -C "$repo" update-ref -d "$tmp" >/dev/null 2>&1 || true
+                continue
+            fi
+            tip=$(git -C "$repo" rev-parse --verify -q "${tmp}^{commit}" 2>/dev/null) || tip=""
+            full=$(git -C "$repo" rev-parse --verify -q "${want}^{commit}" 2>/dev/null) || full=""
+            git -C "$repo" update-ref -d "$tmp" >/dev/null 2>&1 || true
+            if [[ "$tip" != "$sha" || "$tip" != "$full" ]]; then
+                log "  REWORK_BASE_FETCH_MISMATCH parent=$parent alias=$alias source=repo:$repo ref=$ref tip=${tip:0:12} want=$want" >&2
+                continue
+            fi
+            git -C "$repo" update-ref "${RUNNER_ARTIFACT_NS}/${parent}" "$full" >/dev/null 2>&1 || continue
+            log "  REWORK_BASE_FETCHED parent=$parent alias=$alias source=repo:$repo ref=$ref sha=$full" >&2
+            return 0
+        done <<< "$refs"
+    done
+    git -C "$repo" update-ref -d "$tmp" >/dev/null 2>&1 || true
+    log "  REWORK_BASE_REPO_NO_REF parent=$parent alias=$alias source=repo:$repo want=$want" >&2
     return 1
 }
 

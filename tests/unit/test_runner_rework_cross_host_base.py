@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts" / "pipeline-runner.sh"
 FUNCS = ("runner_artifact_prune", "runner_artifact_pin", "runner_artifact_commit_sql",
          "runner_artifact_ssh_cmd", "runner_artifact_ssh_alias",
-         "rework_instruction_start_sha", "runner_artifact_fetch_from", "runner_artifact_remote_ref",
+         "rework_instruction_start_sha", "runner_artifact_fetch_from_repo", "runner_artifact_fetch_from", "runner_artifact_remote_ref",
          "ensure_rework_base_or_fail", "commit_job_worktree_for_approval")
 
 
@@ -521,3 +521,80 @@ def test_cli_failure_with_commit_pins_once_and_db_sql_carries_same_sha(tmp_path,
               f"_preserve_worktree_patch runner-dddd0004 {wt} {base}")
     assert f"commit_hash=COALESCE(NULLIF(commit_hash,''),'{sha}')" in r.stdout
     assert _git(repo, "rev-parse", "refs/runner-artifacts/runner-dddd0004") == sha
+
+
+def test_repo_fallback_after_missing_worktree(peer_env, sh):
+    peer, local, env, sshlog = peer_env
+    sha = _peer_commit(peer)
+    before = _git(peer, 'show-ref')
+    r, log = sh(f"runner_artifact_fetch_from {local} mesh-42 runner-aaaaaaaa {sha[:12]}", env=env)
+    assert r.returncode == 0, log + r.stderr
+    assert 'source=repo:' in log
+    assert _git(local, 'rev-parse', 'refs/runner-artifacts/runner-aaaaaaaa') == sha
+    assert _git(peer, 'show-ref') == before
+    assert 'cat-file -e' in sshlog.read_text()
+    assert 'incoming-' not in _git(local, 'for-each-ref', '--format=%(refname)')
+
+
+def test_repo_without_matching_ref_fails_closed(peer_env, sh):
+    peer, local, env, _ = peer_env
+    sha = _peer_commit(peer)
+    # 존재하는 commit 이지만 refs/* 에서 광고하지 않는 경우를 모킹한다.
+    body = f'''timeout() {{ shift; "$@"; }}
+    git() {{
+        if [[ "$*" == *ls-remote* ]]; then return 0; fi
+        command git "$@"
+    }}
+    ensure_rework_base_or_fail runner-n1 sess {local} $'{_instr(sha)}'
+    '''
+    r, log = sh(body, env=env, db="printf '%s\\x1e%s\\x1e%s' '' vmi3725547 0")
+    assert r.returncode == 1
+    assert 'REWORK_BASE_REPO_NO_REF' in log and 'rework_base_unavailable' in log
+
+
+def test_repo_moved_ref_is_rejected_and_next_ref_tried(peer_env, sh):
+    peer, local, env, _ = peer_env
+    sha = _peer_commit(peer)
+    wrong = _git(local, 'rev-parse', 'HEAD')
+    _git(peer, 'update-ref', 'refs/heads/other', sha)
+    body = f'''timeout() {{ shift; "$@"; }}
+    git() {{
+        if [[ "$*" == *ls-remote* ]]; then
+            printf '%s\\t%s\\n' {sha} refs/heads/runner-aaaaaaaa {sha} refs/heads/other
+        elif [[ "$*" == *fetch* && "$*" == *+refs/heads/runner-aaaaaaaa:* ]]; then
+            local spec="${{@: -1}}"
+            command git -C {local} update-ref "${{spec##*:}}" {wrong}
+        else command git "$@"; fi
+    }}
+    runner_artifact_fetch_from_repo {local} mesh-42 runner-aaaaaaaa {sha[:12]}
+    '''
+    r, log = sh(body, env=env)
+    assert r.returncode == 0, log + r.stderr
+    assert 'REWORK_BASE_FETCH_MISMATCH' in log and 'ref=refs/heads/other' in log
+    assert _git(local, 'rev-parse', 'refs/runner-artifacts/runner-aaaaaaaa') == sha
+    assert 'incoming-' not in _git(local, 'for-each-ref', '--format=%(refname)')
+
+
+def test_repo_invalid_sha_does_not_contact_remote(peer_env, sh):
+    _, local, env, sshlog = peer_env
+    r, _ = sh(f"runner_artifact_fetch_from_repo {local} mesh-42 runner-aaaaaaaa invalid", env=env)
+    assert r.returncode == 1 and not sshlog.read_text()
+
+
+def test_existing_parent_worktree_keeps_original_path(peer_env, sh):
+    peer, local, env, sshlog = peer_env
+    sha = _peer_commit(peer)
+    body = f'''timeout() {{ shift; "$@"; }}
+    git() {{
+        if [[ "$*" == *fetch* && "$*" == *HEAD:* ]]; then
+            command git -C {local} fetch --no-tags -q {peer} {sha}
+            local spec="${{@: -1}}"
+            command git -C {local} update-ref "${{spec##*:}}" {sha}
+        else command git "$@"; fi
+    }}
+    runner_artifact_fetch_from {local} mesh-42 runner-aaaaaaaa {sha[:12]}
+    '''
+    r, log = sh(body, env=env)
+    assert r.returncode == 0, log + r.stderr
+    assert 'source=/tmp/aads-wt-runner-aaaaaaaa' in log
+    assert 'source=repo:' not in log and 'cat-file -e' not in sshlog.read_text()
