@@ -503,6 +503,33 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
     return {"document_id": head["id"], "revision_id": revision["id"], "generation": head["generation"] + 1, "idempotent": False, **metadata, **source_meta}
 
 
+async def runner_revision_artifacts(job_id: str, project: str) -> list[dict]:
+    """Only persisted revisions belonging to a marked document job are evidence."""
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT h.document_key,r.version,r.content_hash,r.content,r.id AS revision_id "
+            "FROM pipeline_jobs j JOIN project_document_revisions r "
+            "ON r.source_task_id=j.job_id AND r.tenant_id=j.tenant_id "
+            "AND r.project_key=upper(j.project) "
+            "JOIN project_document_heads h ON h.id=r.head_id "
+            "WHERE j.job_id=$1 AND upper(j.project)=$2 "
+            "AND position('DOC_AUTO_RESOLVE_OF' in j.instruction)>0 ORDER BY r.created_at,r.id",
+            job_id, project.upper(),
+        )
+    artifacts = []
+    for row in rows:
+        item = dict(row)
+        digest = hashlib.sha256(item["content"].encode("utf-8")).hexdigest()
+        if digest != item["content_hash"]:
+            raise ValueError("registered_revision_hash_mismatch")
+        # Keep reviewer input bounded; hash is checked against the complete stored body above.
+        item["content_excerpt"] = item.pop("content")[:4000]
+        item["hash_verified"] = True
+        item["revision_id"] = str(item["revision_id"])
+        artifacts.append(item)
+    return artifacts
+
+
 @router.post("", status_code=201)
 async def create_revision(project_key: str, body: RevisionInput, context: dict = WRITE):
     project = _project(project_key)

@@ -123,6 +123,64 @@ require_tenant_member = require_pipeline_tenant_role(TenantRole.MEMBER)
 require_tenant_admin = require_pipeline_tenant_role(TenantRole.ADMIN)
 
 
+class RunnerDraftInput(BaseModel):
+    model_config = {"extra": "forbid"}
+    project_key: str
+    revision: dict
+    status: Literal["draft"] = "draft"
+
+
+async def authenticated_runner_job(request: Request) -> dict:
+    # Reuse the existing signed bearer credential, never a caller-selected header/job id.
+    from app.auth import verify_token
+    authorization = request.headers.get("authorization", "")
+    claims = verify_token(authorization[7:]) if authorization.startswith("Bearer ") else None
+    if not claims or not re.fullmatch(r"runner-[A-Za-z0-9_-]+", str(claims.get("sub", ""))):
+        raise HTTPException(401, "job_bound_bearer_required")
+    if not claims.get("tenant_id"):
+        raise HTTPException(401, "job_tenant_required")
+    return claims
+
+
+@router.post("/pipeline/documents/drafts", status_code=201)
+async def register_runner_draft(body: RunnerDraftInput, claims: dict = Depends(authenticated_runner_job)):
+    from app.api.canonical_documents import RevisionInput, _project, create_revision_in_tx
+    from app.core.db_pool import get_pool
+    from pydantic import ValidationError
+
+    job_id, tenant = claims["sub"], claims["tenant_id"]
+    project = _project(body.project_key)
+    fields = dict(body.revision)
+    fields["source_task_id"] = job_id
+    fields["source_session_id"] = None
+    # No approval flags or repository reads are accepted on the runner-only route.
+    if set(fields) - set(RevisionInput.model_fields) or fields.get("source_path"):
+        raise HTTPException(422, "runner_draft_fields_rejected")
+    try:
+        revision = RevisionInput(**fields)
+    except ValidationError:
+        raise HTTPException(422, "invalid_runner_revision") from None
+    if len((revision.change_summary or "").strip()) < 10:
+        raise HTTPException(422, "change_summary_required")
+    async with get_pool().acquire() as conn, conn.transaction():
+        job = await conn.fetchrow(
+            "SELECT project,status FROM pipeline_jobs WHERE job_id=$1 AND tenant_id=$2::uuid FOR UPDATE",
+            job_id, tenant,
+        )
+        if not job or job["project"].upper() != project:
+            raise HTTPException(403, "job_project_mismatch")
+        if job["status"] != "running":
+            raise HTTPException(409, "job_not_running")
+        result = await create_revision_in_tx(conn, tenant, job_id, project, revision)
+        await conn.execute(
+            "INSERT INTO pipeline_runner_events(job_id,tenant_id,project,event_type,metadata) "
+            "VALUES($1,$2::uuid,$3,'document_draft_registered',$4::jsonb)",
+            job_id, tenant, project, json.dumps({"job_id": job_id,
+                "document_key": revision.document_key, "revision_id": str(result["revision_id"])}),
+        )
+    return result
+
+
 def _tenant_id(context: TenantContext) -> str:
     return str(context["tenant"]["id"])  # type: ignore[index]
 

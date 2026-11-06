@@ -141,10 +141,11 @@ def _is_read_only_instruction(instruction: str) -> bool:
     )
 
 
-def _is_read_only_done(instruction: str, git_diff: str, result_output: str) -> bool:
+def _is_read_only_done(instruction: str, git_diff: str, result_output: str, revisions: list | None = None) -> bool:
     """읽기전용 완료 조건: 마커 + 변경(untracked 포함) 0건 + 출력 있음."""
     return (
         not (git_diff or "").strip()
+        and not ("DOC_AUTO_RESOLVE_OF" in instruction and revisions)
         and _is_read_only_instruction(instruction)
         and bool((result_output or "").strip())
     )
@@ -1036,7 +1037,9 @@ class PipelineCJob:
                 self.git_diff = await self._collect_change_diff(pre_exec_sha)
                 await self._refresh_review_diff(pre_exec_sha)
 
-                if _is_read_only_done(self.instruction, self.git_diff, self.result_output):
+                from app.api.canonical_documents import runner_revision_artifacts
+                revisions = await runner_revision_artifacts(self.job_id, self.project) if "DOC_AUTO_RESOLVE_OF" in self.instruction else []
+                if _is_read_only_done(self.instruction, self.git_diff, self.result_output, revisions):
                     # 변경 0건이라 배포·화면 검증 대상이 없다 — 화면 계획 게이트는 승인 경로에만 둔다.
                     self._log("read_only_done", "read-only 작업 완료 — 변경사항 0건이 정상 조건")
                     self.status = "done"
@@ -2256,6 +2259,12 @@ class PipelineCJob:
         diff_text = self.git_diff[:3000] if self.git_diff else "(변경사항 없음)"
         output_text = self.result_output[:2000] if self.result_output else "(출력 없음)"
 
+        from app.api.canonical_documents import runner_revision_artifacts
+        revisions = await runner_revision_artifacts(self.job_id, self.project) if "DOC_AUTO_RESOLVE_OF" in self.instruction else []
+        if revisions:
+            output_text += "\n등록된 문서 산출물(전체 본문 SHA-256 검증 완료):\n" + json.dumps(revisions, ensure_ascii=False)
+            output_text += "\n문서 작업은 등록된 revision을 산출물로 인정하고 key/version/hash/본문을 지시와 대조하세요."
+
         review_prompt = f"""당신은 코드 리뷰어입니다. Claude Code 작업 결과를 검수하세요.
 
 ## 원래 지시
@@ -2270,7 +2279,7 @@ class PipelineCJob:
 ## 검수 기준
 1. 원래 지시 사항이 정확히 반영됐는가?
 2. 명백한 버그가 새로 생기지 않았는가?
-3. 변경사항이 없으면 FAIL (작업 미수행)
+3. 코드 변경 또는 이 문서 작업에 등록된 revision 산출물이 없으면 FAIL (작업 미수행)
 4. 변경이 지시 범위를 벗어나지 않았는가? 지시서에 명시된 파일 밖 변경은 FAIL
 5. 기존 구현을 불필요하게 삭제/대체하지 않았는가? 함수/클래스/API 삭제나 삭제 라인 과다는 FAIL
 6. RESULT에 기존 구현 조사표([유지|수정|신규|삭제])와 삭제 사유가 있는가? 누락 시 FAIL
