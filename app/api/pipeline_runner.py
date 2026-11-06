@@ -2995,6 +2995,25 @@ _PROJECT_HOST_FALLBACK = {
 }
 
 
+_RUNNER_HOST_ALIASES = {
+    "vmi3267555": "contabo116",
+    "rfree-0009": "cafe24_114",
+    "rfree-0009.cafe24.com": "cafe24_114",
+}
+_RUNNER_HOST_LABELS = {
+    "contabo116": "contabo116 (AADS 보조)",
+    "contabo42": "contabo42 (AADS 주)",
+    "contabo92": "contabo92 (GO100 주)",
+    "contabo14": "contabo14 (GO100 보조)",
+    "cafe24_114": "cafe24_114 (SF·NTV2·NAS·ACCT)",
+}
+_PROJECT_PRIMARY_HOST = {"AADS": "contabo42", "GO100": "contabo92"}
+
+
+def _canonical_runner_host(host: str) -> str:
+    return _RUNNER_HOST_ALIASES.get(host, host)
+
+
 @router.get("/pipeline/runner/status", tags=["pipeline-runner"])
 async def runner_status(
     window_hours: int = Query(1, ge=1, le=24),
@@ -3005,6 +3024,9 @@ async def runner_status(
     화면이 "어느 서버가 막혔나"를 즉시 보여주기 위한 집계다. 2026-09-12 에
     GO100 러너가 인증 실패로 6시간 동안 37건을 실패시켰는데, 현황을 보여주는
     곳이 없어 아무도 알아차리지 못했다.
+
+    queued_shared는 주 서버가 꽉 차면 이 대기가 보조 서버로 넘어갈 수 있음을 뜻한다.
+    대기는 프로젝트별 주 서버 한 곳에만 집계한다.
 
     서버 가동 여부는 원격 systemctl 호출 없이 pipeline_runner_hosts 의
     하트비트로 판단한다. 원격 호출은 느리고 한 대가 응답하지 않으면 화면
@@ -3034,8 +3056,9 @@ async def runner_status(
             window_hours,
         )
         queued_rows = await conn.fetch(
-            "SELECT project, COUNT(*)::int AS cnt FROM pipeline_jobs "
-            "WHERE tenant_id = $1::uuid AND status = 'queued' GROUP BY project",
+            "SELECT project, COALESCE(NULLIF(runner_host, ''), '') AS runner_host, "
+            "COUNT(*)::int AS cnt FROM pipeline_jobs "
+            "WHERE tenant_id = $1::uuid AND status = 'queued' GROUP BY project, runner_host",
             tenant,
         )
         hosts = await conn.fetch(
@@ -3044,11 +3067,14 @@ async def runner_status(
             "FROM pipeline_runner_hosts"
         )
 
-    queued_by_project = {row["project"]: int(row["cnt"]) for row in queued_rows}
-    host_projects = {
-        row["host"]: {p.strip() for p in str(row["projects"] or "").split(",") if p.strip()}
-        for row in hosts
-    }
+    queued_by_project: dict[str, int] = {}
+    for row in queued_rows:
+        project = row["project"]
+        queued_by_project[project] = queued_by_project.get(project, 0) + int(row["cnt"])
+    host_projects: dict[str, set[str]] = {}
+    for row in hosts:
+        host_projects.setdefault(_canonical_runner_host(row["host"]), set()).update(
+            p.strip() for p in str(row["projects"] or "").split(",") if p.strip())
     project_host_counts: dict[str, int] = {}
     for projects in host_projects.values():
         for project in projects:
@@ -3056,12 +3082,17 @@ async def runner_status(
     agg: dict = {}
 
     def _bucket(host: str) -> dict:
-        return agg.setdefault(host, {
-            "host": host, "running": 0, "done": 0, "error": 0,
+        original = host
+        host = _canonical_runner_host(host)
+        bucket = agg.setdefault(host, {
+            "host": host, "label": _RUNNER_HOST_LABELS.get(host, host),
+            "aliases": set(), "running": 0, "done": 0, "error": 0,
             "cancelled": 0, "other": 0, "oldest_running_sec": 0,
             "projects": set(), "alive": None, "seen_ago_sec": None,
             "queued": 0, "queued_shared": False, "max_concurrent": None,
         })
+        bucket["aliases"].add(original)
+        return bucket
 
     for row in rows:
         host = row["runner_host"] or _PROJECT_HOST_FALLBACK.get(row["project"], "unknown")
@@ -3082,7 +3113,8 @@ async def runner_status(
         else:
             bucket["other"] += count
 
-    for row in hosts:
+    # Prefer the freshest heartbeat if both an alias and its canonical ID exist.
+    for row in sorted(hosts, key=lambda r: int(r["seen_ago"] or 0), reverse=True):
         bucket = _bucket(row["host"])
         seen = int(row["seen_ago"] or 0)
         bucket["seen_ago_sec"] = seen
@@ -3093,13 +3125,23 @@ async def runner_status(
                 p.strip() for p in str(row["projects"]).split(",") if p.strip())
         bucket["engine_mode"] = row["engine_mode"] or ""
         bucket["max_concurrent"] = row["max_concurrent"]
-        projects = host_projects[row["host"]]
-        bucket["queued"] = sum(queued_by_project.get(p, 0) for p in projects)
-        bucket["queued_shared"] = any(project_host_counts[p] > 1 for p in projects)
+    for row in queued_rows:
+        project, count = row["project"], int(row["cnt"])
+        candidates = sorted(host for host, projects in host_projects.items() if project in projects)
+        primary = _PROJECT_PRIMARY_HOST.get(project)
+        host = row.get("runner_host") or primary or (
+            candidates[0] if candidates else _PROJECT_HOST_FALLBACK.get(project, "unknown"))
+        bucket = _bucket(host)
+        bucket["projects"].add(project)
+        bucket["queued"] += count
+
+    for host, projects in host_projects.items():
+        agg[host]["queued_shared"] = any(project_host_counts[p] > 1 for p in projects)
 
     servers = []
     for bucket in agg.values():
         bucket["projects"] = sorted(bucket["projects"])
+        bucket["aliases"] = sorted(bucket["aliases"])
         servers.append(bucket)
     servers.sort(key=lambda b: (-b["error"], -b["running"], b["host"]))
 

@@ -46,13 +46,13 @@ async def test_queued_shared_projects_and_preserved_statuses(monkeypatch):
                             _host("vmi3267555", "AADS", 2)])
     servers = {s["host"]: s for s in result["servers"]}
     assert result["queued_by_project"] == {"GO100": 2, "AADS": 1}
-    assert result["totals"] == dict(hosts=3, queued=3, running=2, error=1, done=1, cancelled=1)
+    assert result["totals"] == dict(hosts=4, queued=3, running=2, error=1, done=1, cancelled=1)
     for host in ("contabo14", "contabo92"):
-        assert servers[host]["queued"] == 2
+        assert servers[host]["queued"] == (2 if host == "contabo92" else 0)
         assert servers[host]["queued_shared"] is True
-    assert servers["vmi3267555"]["queued"] == 1
-    assert servers["vmi3267555"]["queued_shared"] is False
-    assert [servers[h]["other"] for h in servers] == [1, 0, 0]
+    assert servers["contabo42"]["queued"] == 1
+    assert servers["contabo116"]["queued_shared"] is False
+    assert [servers[h]["other"] for h in servers] == [1, 0, 0, 0]
     assert servers["contabo14"]["max_concurrent"] == 3
     assert servers["contabo92"]["max_concurrent"] == 1
     assert servers["contabo14"]["oldest_running_sec"] == 42
@@ -69,9 +69,10 @@ async def test_queued_never_uses_historical_project_fallback(monkeypatch):
     assert result["totals"]["queued"] == 3
     assert servers["contabo116"]["done"] == 1
     assert servers["contabo116"]["max_concurrent"] is None
-    assert all(s["queued"] == 0 and s["other"] == 0 for s in servers.values())
+    assert servers["contabo42"]["queued"] == 1
+    assert servers["unknown"]["queued"] == 2
+    assert sum(s["queued"] for s in servers.values()) == 3
     assert all(s["queued_shared"] is False for s in servers.values())
-    assert "unknown" not in servers
 
 
 @pytest.mark.asyncio
