@@ -7,7 +7,7 @@ from typing import Any
 
 import asyncpg
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.db_pool import get_pool
@@ -796,6 +796,16 @@ async def get_model_routing_preferences() -> dict[str, Any]:
         if item["route_key"] == "runner_llm" and item["is_enabled"]
     ]
     return {
+        "auto_routing": {
+            "default_model": next((
+                {key: item[key] for key in ("provider", "model_id", "display_name")}
+                for item in preferences if item["route_key"] == "llm" and item["is_default"]
+            ), None),
+            "intent_policies": [
+                {"intent": item["route_key"][7:], "provider": item["provider"], "model_id": item["model_id"]}
+                for item in preferences if item["route_key"].startswith("intent_") and item["is_default"]
+            ],
+        },
         "preferences": preferences,
         "total": len(preferences),
         "route_keys": [k for k in AI_ROUTE_KEYS if not k.startswith("intent_")],
@@ -807,6 +817,84 @@ async def get_model_routing_preferences() -> dict[str, Any]:
         "runner_fallback_chain": runner_fallback_chain,
         "error_models": [_routing_error_model_payload(row) for row in error_rows],
     }
+
+
+class FallbackCandidateInput(BaseModel):
+    provider: str = Field(min_length=1)
+    model_id: str = Field(min_length=1)
+    display_order: int = Field(100, ge=0)
+    is_enabled: bool = True
+
+
+class FallbackChainUpdate(BaseModel):
+    chain: list[FallbackCandidateInput]
+
+
+@router.get("/fallback-chains")
+async def get_fallback_chains() -> dict[str, Any]:
+    from app.services.model_selector import GLOBAL_FALLBACK_EXCLUDED_PROVIDERS
+
+    routing = await get_model_routing_preferences()
+    chains: dict[str, dict[str, Any]] = {}
+    global_chain = []
+    for item in routing["preferences"]:
+        route = item["route_key"]
+        if route != "llm" and not route.startswith("llm_fallback:"):
+            continue
+        candidate = {key: item[key] for key in (
+            "provider", "model_id", "display_order", "is_enabled", "availability",
+        )}
+        candidate["excluded_reason"] = (
+            "global_provider_excluded:" + item["provider"]
+            if route == "llm" and item["provider"] in GLOBAL_FALLBACK_EXCLUDED_PROVIDERS else None
+        )
+        if route == "llm":
+            global_chain.append(candidate)
+        else:
+            provider, model_id = route[len("llm_fallback:"):].split("/", 1)
+            chains.setdefault(route, {"source_provider": provider, "source_model_id": model_id, "chain": []})["chain"].append(candidate)
+    for chain in chains.values():
+        chain["chain"].sort(key=lambda item: (item["display_order"], item["provider"], item["model_id"]))
+    return {"chains": list(chains.values()), "global_chain": global_chain}
+
+
+@router.put("/fallback-chains/{provider}/{model_id:path}")
+async def update_fallback_chain(provider: str, model_id: str, req: FallbackChainUpdate) -> dict[str, Any]:
+    from app.services.model_selector import invalidate_fallback_chain_cache
+
+    await _ensure_model_routing_preferences_table()
+    source = (normalize_provider(provider.strip().lower()), model_id.strip())
+    candidates = []
+    seen = set()
+    for item in req.chain:
+        identity = (normalize_provider(item.provider.strip().lower()), item.model_id.strip())
+        if identity == source or identity in seen or not all(identity):
+            raise HTTPException(422, "Self or duplicate fallback candidate")
+        seen.add(identity)
+        candidates.append((identity, item))
+    route_key = f"llm_fallback:{source[0]}/{source[1]}"
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            # Serialize replacements even when this route has no existing rows.
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", route_key)
+            for identity in [source, *(identity for identity, _ in candidates)]:
+                if not await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM llm_models WHERE provider = $1 AND model_id = $2)", *identity,
+                ):
+                    raise HTTPException(422, "Model is not registered in llm_models")
+            await conn.execute("DELETE FROM model_routing_preferences WHERE route_key = $1", route_key)
+            for (candidate_provider, candidate_model), item in candidates:
+                await conn.execute(
+                    """INSERT INTO model_routing_preferences
+                       (route_key, provider, model_id, display_order, is_enabled, is_default, updated_by)
+                       VALUES ($1, $2, $3, $4, $5, FALSE, 'settings_ui')""",
+                    route_key, candidate_provider, candidate_model, item.display_order, item.is_enabled,
+                )
+    invalidate_fallback_chain_cache()
+    return {"source_provider": source[0], "source_model_id": source[1], "chain": [
+        {"provider": identity[0], "model_id": identity[1], "display_order": item.display_order, "is_enabled": item.is_enabled}
+        for identity, item in candidates
+    ]}
 
 
 @router.put("/routing-preferences")
@@ -883,6 +971,8 @@ async def update_model_routing_preferences(req: ModelRoutingPreferencesUpdate) -
                         pref_provider,
                         pref_model,
                     )
+    from app.services.model_selector import invalidate_fallback_chain_cache
+    invalidate_fallback_chain_cache()
     return await get_model_routing_preferences()
 
 

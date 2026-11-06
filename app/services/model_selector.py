@@ -2104,6 +2104,48 @@ def _fallback_cost_distance(requested: Optional[Dict[str, Any]], candidate: Dict
     return float(abs(requested_input - candidate_input) + abs(requested_output - candidate_output))
 
 
+GLOBAL_FALLBACK_EXCLUDED_PROVIDERS = frozenset({"deepseek", "gemini", "google"})
+_fallback_rows_cache: dict[str, tuple[float, list]] = {}
+
+
+def invalidate_fallback_chain_cache() -> None:
+    _fallback_rows_cache.clear()
+
+
+async def _model_fallback_route_key(model: str) -> str:
+    provider, model_id = _split_provider_qualified_model(model)
+    row = await _get_registered_model_row(model_id, provider=provider)
+    if row:
+        provider = str(row["provider"])
+        model_id = str(row["model_id"])
+    return f"llm_fallback:{provider}/{model_id}" if provider else ""
+
+
+async def _per_model_fallback_rows(model: str) -> list:
+    import time
+    from app.core.db_pool import get_pool
+
+    key = await _model_fallback_route_key(model)
+    if not key:
+        return []
+    cached = _fallback_rows_cache.get(key)
+    if cached and time.monotonic() - cached[0] < 15:
+        return cached[1]
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT pref.provider, pref.model_id,
+                      models.model_id AS registry_model_id,
+                      models.execution_model_id, models.metadata
+               FROM model_routing_preferences pref
+               LEFT JOIN llm_models models
+                 ON models.provider = pref.provider AND models.model_id = pref.model_id
+               WHERE pref.route_key = $1 AND pref.is_enabled = TRUE
+               ORDER BY pref.display_order, pref.provider, pref.model_id""", key,
+        )
+    _fallback_rows_cache[key] = (time.monotonic(), rows)
+    return rows
+
+
 async def _configured_llm_fallback_candidates(
     model: str,
     available_models: set[str],
@@ -2115,9 +2157,16 @@ async def _configured_llm_fallback_candidates(
     try:
         from app.core.db_pool import get_pool
 
+        try:
+            per_model_rows = await _per_model_fallback_rows(model)
+        except Exception as exc:
+            logger.debug("per_model_fallback_lookup_failed: model=%s error=%s", model, exc)
+            per_model_rows = []
+        cached_global = _fallback_rows_cache.get("llm")
+        global_rows = cached_global[1] if cached_global and _time_mod.monotonic() - cached_global[0] < 15 else None
         pool = get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
+            rows = per_model_rows or (global_rows if global_rows is not None else await conn.fetch(
                 """
                 SELECT pref.provider, pref.model_id,
                        models.model_id AS registry_model_id,
@@ -2140,14 +2189,20 @@ async def _configured_llm_fallback_candidates(
                          pref.provider ASC,
                          pref.model_id ASC
                 """
-            )
+            ))
+        if not per_model_rows and global_rows is None:
+            _fallback_rows_cache["llm"] = (_time_mod.monotonic(), rows)
     except Exception as exc:
         logger.debug("configured_llm_fallback_lookup_failed: model=%s error=%s", model, exc)
         return []
 
     excluded_provider_set = {str(provider).strip().lower() for provider in (excluded_providers or set())}
-    excluded_provider_set.update({"deepseek", "gemini", "google"})
-    excluded = {str(model or "").strip(), _canonical_deepseek_model_id(str(model or "").strip())}
+    if per_model_rows:
+        excluded_provider_set -= GLOBAL_FALLBACK_EXCLUDED_PROVIDERS
+    else:
+        excluded_provider_set.update(GLOBAL_FALLBACK_EXCLUDED_PROVIDERS)
+    _, source_model = _split_provider_qualified_model(model)
+    excluded = {str(model or "").strip(), source_model, _canonical_deepseek_model_id(source_model)}
     candidates: list[str] = []
     seen: set[str] = set()
     for row in rows:
@@ -2356,7 +2411,10 @@ def _codex_error_is_quota(text: str) -> bool:
 
 def _codex_fallback_plan(
     model: str, *, pinned: bool, configured: list[str], defaults: list[str],
+    per_model: bool = False,
 ) -> list[str]:
+    if per_model:
+        return list(dict.fromkeys(candidate for candidate in configured if candidate != model))
     candidates = [_CODEX_AGY_FALLBACK_MODEL]
     if not pinned:
         candidates.extend(configured or defaults)
@@ -2400,6 +2458,10 @@ async def _stream_codex_fallback_chain(
             alias = _to_anthropic_runtime_alias(candidate)
             if buffered:
                 stream = _stream_antigravity_relay(
+                    candidate, system_prompt, messages, tools=tools, session_id=session_id,
+                )
+            elif candidate in _CODEX_MODELS:
+                stream = _stream_codex_relay(
                     candidate, system_prompt, messages, tools=tools, session_id=session_id,
                 )
             elif alias in _ANTHROPIC_MODEL_ID:
@@ -2858,14 +2920,18 @@ async def call_stream(
                 "gpt-5.4": ["claude-sonnet", "claude-opus"],
                 "gpt-5.4-mini": ["claude-haiku", "claude-sonnet"],
             }
+            try:
+                _has_model_chain = bool(await _per_model_fallback_rows(model))
+            except Exception:
+                _has_model_chain = False
             _configured_cfb = await _configured_llm_fallback_candidates(
                 model,
                 await get_available_model_ids(),
-                excluded_providers={"codex", "deepseek", "gemini", "google"},
+                excluded_providers=set() if _has_model_chain else {"codex", "deepseek", "gemini", "google"},
             )
             _plan = _codex_fallback_plan(
                 model, pinned=_codex_pinned, configured=_configured_cfb,
-                defaults=_CODEX_FB.get(model, []),
+                defaults=_CODEX_FB.get(model, []), per_model=_has_model_chain,
             )
             def _codex_final_error(errors: list[dict[str, Any]]) -> dict[str, Any]:
                 content = _codex_error_content

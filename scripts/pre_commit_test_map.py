@@ -53,6 +53,11 @@ class Group:
 
 # ── 대응표 ────────────────────────────────────────────────────────────
 GROUPS: tuple[Group, ...] = (
+    Group(
+        name="per_model_fallback",
+        tests=("tests/unit/test_model_fallback_per_model.py", "tests/unit/test_codex_quota_fallback_agy_claude.py", "tests/unit/test_model_selector_dynamic_routing.py"),
+        globs=("app/services/model_selector.py", "app/api/llm_models.py"),
+    ),
     Group(name="migration_direct_gate", tests=("tests/unit/test_apply_migration_direct_gate.py", "tests/unit/test_release_migration_autoverify.py"), globs=("scripts/apply_migration.sh", "scripts/apply_release_migrations.sh")),
     Group(
         name="tools",
