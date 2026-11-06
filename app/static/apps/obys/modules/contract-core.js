@@ -59,6 +59,36 @@
     };
     const MINIMUM_HOURLY_WAGE_2026 = 10320;
 
+    /** 3.3% 프리랜서 용역비 산정 기준. 계약의 wageType 은 항상 case_fee 이고 기준은 feeBasis 에 둔다(서버 FREELANCER_FEE_BASES 와 같다). */
+    const FREELANCER_FEE_BASES = ["lump", "hourly", "daily", "monthly"];
+    const feeBasisLabels = { lump: "건별", hourly: "시급", daily: "일급", monthly: "월정액" };
+    const feeRateLabels = { lump: "확정 용역비", hourly: "확정 시급", daily: "확정 일급", monthly: "월 용역비" };
+    const FREELANCER_LABOR_RISK_NOTICE = "정해진 요일·시간에 지시를 받고 일하면 근로자로 판정될 수 있습니다 — 노무 확인 권장";
+    /** 저장된 feeBasis 를 우선하고, 없으면 옛 계약(wageType=hourly)을 시급으로 읽는다. 프리랜서가 아니면 빈 문자열. */
+    function feeBasisOf(contractType, wageType, feeBasis) {
+      if (contractType !== "freelancer") return "";
+      if (FREELANCER_FEE_BASES.includes(feeBasis)) return feeBasis;
+      return wageType === "hourly" ? "hourly" : "lump";
+    }
+    function feeFormula(basis, rate) {
+      const money = formatMoney(rate);
+      if (basis === "hourly") return `시간당 ${money} × 승인된 수행 시간`;
+      if (basis === "daily") return `1일 ${money} × 수행일수`;
+      if (basis === "monthly") return `월 ${money}(정액)`;
+      return `건별 확정 ${money}`;
+    }
+    /** 막지 않는 경고. 화면과 서버(freelancer_fee_warnings)가 같은 규칙을 쓴다. */
+    function feeWarnings(contractType, basis, rate) {
+      const amount = Math.round(Number(rate) || 0);
+      if (contractType === "freelancer" && basis === "hourly" && amount > 0 && amount < MINIMUM_HOURLY_WAGE_2026) {
+        return [`시급 ${formatMoney(amount)}은 2026년 최저임금 ${formatMoney(MINIMUM_HOURLY_WAGE_2026)}보다 낮습니다 — 근로자로 판정되면 최저임금 미달이 됩니다`];
+      }
+      return [];
+    }
+    function laborRiskNotice(contractType, basis, weekdays) {
+      return contractType === "freelancer" && (basis === "hourly" || basis === "daily" || (Array.isArray(weekdays) && weekdays.length)) ? FREELANCER_LABOR_RISK_NOTICE : "";
+    }
+
     const DELIVERY_RESTAURANT_BUSINESS_IDS = Object.freeze([
       "biz-junghwa", "biz-mia", "biz-sungshin", "biz-eonni-naengmyeon"
     ]);
@@ -223,9 +253,12 @@
           if (conservativeHourly < MINIMUM_HOURLY_WAGE_2026) throw new Error(`과세 기본급 기준 환산시급 ${formatMoney(Math.floor(conservativeHourly))}은 2026년 최저임금 ${formatMoney(MINIMUM_HOURLY_WAGE_2026)}보다 낮습니다.`);
         }
       } else if (draft.contractType === "freelancer") {
-        // 서버(_validate_contract_payload)와 같은 기준: 3.3% 용역계약은 시급 또는 건별/용역비.
+        // 서버(_validate_contract_payload)와 같은 기준: 3.3% 용역계약은 건별/용역비 방식 + 산정 기준(건별·시급·일급·월정액), 옛 시급 계약은 허용.
         if (draft.employmentTaxType !== "freelancer_33" || !FREELANCER_WAGE_TYPES.includes(draft.wageType)) {
-          throw new Error("프리랜서 용역계약서는 3.3% 원천징수·시급 또는 건별/용역비 방식으로 작성해야 합니다.");
+          throw new Error("프리랜서 용역계약서는 3.3% 원천징수·건별/용역비 방식으로 작성하고 산정 기준(건별·시급·일급·월정액)을 고르십시오.");
+        }
+        if (draft.feeBasis && !FREELANCER_FEE_BASES.includes(draft.feeBasis)) {
+          throw new Error("용역비 산정 기준은 건별·시급·일급·월정액 중 하나여야 합니다.");
         }
         const fixedWorkSignals = [draft.workTime, draft.weeklyHours, draft.workDays].join(" ");
         if (/(출퇴근|근무표|주\s*\d+\s*시간|월\/화|화\/수|수\/목|목\/금|금\/토|토\/일|상시|교대)/.test(fixedWorkSignals)) {
@@ -238,7 +271,7 @@
         requireValue("용역비 정산/해지", draft.freelancerSettlementTerms);
         requireValue("계약 해지/기성정산 기준", draft.terminationTerms);
         requireValue("비밀유지/자료보호", draft.confidentialityTerms);
-        if (!draft.wage || draft.wage <= 0) missing.push("확정 용역비");
+        if (!draft.wage || draft.wage <= 0) missing.push(feeRateLabels[feeBasisOf("freelancer", draft.wageType, draft.feeBasis)]);
       }
       if (missing.length) throw new Error(`필수 입력값을 확인하십시오: ${[...new Set(missing)].join(", ")}`);
     }
@@ -372,14 +405,24 @@
           </tbody>
         </table>
       `;
-      const wageLine = `${wageTypeLabels[wageType] || wageType} ${formatMoney(wage)} / 지급일: ${payDate || "미입력"} / 지급방법: ${payMethod}`;
+      const storedFeeBasis = contractType === "freelancer" ? contractValue(contract, "feeBasis", "fee_basis") : "";
+      const payTail = `지급일: ${payDate || "미입력"} / 지급방법: ${payMethod}`;
+      const wageLine = FREELANCER_FEE_BASES.includes(storedFeeBasis)
+        ? `용역비 산정: ${feeFormula(storedFeeBasis, wage)} / ${payTail}`
+        : `${wageTypeLabels[wageType] || wageType} ${formatMoney(wage)} / ${payTail}`;
+      const settlementDefaults = {
+        lump: "검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다.",
+        hourly: "시급 × 승인된 근태 시간(분 단위 환산)을 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.",
+        daily: "일급 × 승인된 근태 일수를 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.",
+        monthly: "월 용역비를 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다."
+      };
       let clauses = [];
       if (contractType === "freelancer") {
         clauses = [
           contractClause("계약 목적", `${employerName || "위탁자"}는 ${employeeName || "수급인"}에게 ${/용역$/.test(String(jobDescription || "").trim()) ? String(jobDescription).trim() : "독립 용역"}을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.`),
           contractClause("용역 기간 및 장소", `${startDate || "용역 시작일 미입력"}부터 ${endDate || "종료일 별도 합의"}까지 수행한다. 수행 장소·일정은 산출물 납품과 검수에 필요한 범위에서 협의하며 고정 출퇴근, 매장 상시 근무표, 교대조 편입으로 운영하지 않는다.`),
           contractClause("업무범위, 산출물, 검수", freelancerScope || `${jobDescription || "업무 범위 미입력"}`),
-          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || "검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다."}`),
+          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || settlementDefaults[storedFeeBasis] || settlementDefaults.lump}`),
           contractClause("독립적 업무수행", "수급인은 독립 사업자로서 업무수행방법을 스스로 정한다. 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성 징표가 생기면 계약 명칭과 무관하게 근로계약 전환을 검토한다."),
           contractClause("안전보건 및 협조", "위탁자는 용역 수행에 필요한 자료와 안전·보건상 유의사항을 안내하고, 수급인은 관련 법령과 사업장 안전·위생 기준을 준수한다."),
           contractClause("비밀유지 및 자료보호", confidentialityTerms || "매출자료, 고객정보, 레시피, 정산자료, 계정정보를 외부에 공개하지 않는다."),
@@ -544,7 +587,7 @@
 
     const api = {
       contractTypeLabels, employmentTaxTypeLabels, wageTypeLabels, standardContractDefaults,
-      MINIMUM_HOURLY_WAGE_2026, CONTRACT_STATUS, EMPLOYMENT_TYPES,
+      MINIMUM_HOURLY_WAGE_2026, FREELANCER_FEE_BASES, feeBasisLabels, feeRateLabels, FREELANCER_LABOR_RISK_NOTICE, feeBasisOf, feeFormula, feeWarnings, laborRiskNotice, CONTRACT_STATUS, EMPLOYMENT_TYPES,
       DELIVERY_RESTAURANT_BUSINESS_IDS, DELIVERY_RESTAURANT_PRESET, isDeliveryRestaurant, deliveryRestaurantDefaults, defaultsFor, classificationFor, FREELANCER_WAGE_TYPES, splitMonthlyWage, NON_TAX_MEAL_LIMIT, validateContractDraft, checkDraft, contractPreviewHtml, contractDraftGuidanceHtml, setBusinessResolver,
       escapeHtml, formatMoney, today
     };

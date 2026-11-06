@@ -330,8 +330,13 @@ const hoursLabel = v => `${Number.isInteger(v) ? v : round2(v)}시간`;
     if (payMethod !== undefined) texts.payMethod = payMethod;
     const scope = String(input.jobDescription || "").trim();
     if (scope) texts.freelancerScope = scope;
-    const hourly = input.wageType === "hourly";
-    const feeText = hourly ? `시급 ${won(fee)}(수행시간 × 시급으로 정산)` : `합의 용역비 ${won(fee)}`;
+    // 저장된 산정 기준을 우선하고, 기준이 없는 옛 입력(wageType=hourly)은 시급으로 읽는다.
+    const basis = ["lump", "hourly", "daily", "monthly"].includes(input.feeBasis) ? input.feeBasis : input.wageType === "hourly" ? "hourly" : "lump";
+    const feeText = basis === "hourly" ? `시급 ${won(fee)}(수행시간 × 시급으로 정산)`
+      : basis === "daily" ? `일급 ${won(fee)}(수행일수 × 일급으로 정산)`
+        : basis === "monthly" ? `월 용역비 ${won(fee)}(정액)` : `합의 용역비 ${won(fee)}`;
+    if (known && basis === "hourly" && fee < MIN_WAGE_2026)
+      warnings.push(`시급 ${won(fee)}은 2026년 최저임금 ${won(MIN_WAGE_2026)}보다 낮습니다 — 근로자로 판정되면 최저임금 미달이 됩니다`);
     if (known) {
       texts.wageComposition = `${feeText}. 사업소득 원천징수 후 지급하며, 추가 용역비는 별도 합의한다.`;
       const period = input.startDate ? `${input.startDate}부터 ${endDate || "별도 합의한 종료일까지"}` : "용역기간 확인 필요";

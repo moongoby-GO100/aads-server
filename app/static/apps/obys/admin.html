@@ -98,6 +98,7 @@
   <script src="modules/contract-editor-v41.js?v=20261016-r1"></script>
   <script src="/static/apps/obys/modules/payroll-admin.js"></script>
   <script src="/static/apps/obys/modules/attendance-corrections.js?v=20261105-r1"></script>
+  <script src="/static/apps/obys/modules/work-pattern.js?v=20261106-r1"></script>
   <script>
     /* 오비서 V4.1 — 실데이터 화면 계약.
        샘플 배열·가짜 KPI를 두지 않는다. 화면의 모든 수치는 API 응답에서만 나오며,
@@ -428,7 +429,7 @@
           const realEmail=v=>v&&v!=="[MASKED]"&&!String(v).includes("*")?String(v):"",email=realEmail(raw(personal[0]||{}).employee_email)||scheduleRows.find(r=>r.employee_key===selected)?.employee_email||((e=>e?.email||e?.employee_email)(approvedPeople.find(e=>approvedKey(e)===selected)))||"";
           body+=section("계약 근무 조건",`<p role="status" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(state.scheduleNotice||"")}</p><button class="btn" id="personalContractPreview" data-email="${esc(email)}" ${email?"":"disabled"}>계약서 기준으로 이 직원 일정 만들기</button><div id="contractPreviewResult" role="status"></div>`);
         }
-      }else if(tab==="schedule")body=section("근무 일정 / 근무표",workSchedulePanelV41(esc));
+      }else if(tab==="schedule")body=section("근무 일정 / 근무표",workSchedulePanelV41(esc))+(["owner","admin"].includes(state.readRole)?section("근태설정 · 직원별 근무 요일",'<div id="workPatternHost"></div>'):"");
       else {
         const totalMinutes=inMonth.reduce((sum,r)=>sum+(Number(raw(r).worked_minutes)||0),0);
         const group=(key,label)=>{const counts={};inMonth.forEach(r=>{const value=key(raw(r));if(value!==null)counts[value]=(counts[value]||0)+1});return section(label,Object.keys(counts).length?`<div class="detail-grid">${Object.entries(counts).sort().map(([name,count])=>`<div class="detail-cell"><small>${esc(name)}</small><b>${count}건</b><progress max="${inMonth.length}" value="${count}" aria-label="${esc(name)} ${count}건"></progress></div>`).join("")}</div>`:'<div class="empty">집계할 기록이 없습니다.</div>')};
@@ -454,7 +455,7 @@
         const correctionHost=document.createElement("section");correctionHost.className="section";page.append(correctionHost);
         window.ObysAttendanceCorrections.mount(correctionHost,{api:workspaceApi,businessId:state.businessId,manager:true,onSaved:()=>loadLiveRoute()});
       }
-      if(!payroll&&tab==="schedule")bindWorkSchedulesV41();document.getElementById("personalContractPreview")?.addEventListener("click",e=>previewContractSchedulesV41(e.currentTarget.dataset.email));if(document.getElementById("personalContractPreview")?.dataset?.email)previewContractSchedulesV41(document.getElementById("personalContractPreview").dataset.email);
+      if(!payroll&&tab==="schedule")bindWorkSchedulesV41();if(!payroll&&tab==="schedule"){const wp=document.getElementById("workPatternHost");if(wp&&window.ObysWorkPattern)window.ObysWorkPattern.mount(wp,{api:financeApiV41,businessId:state.businessId,month:state.peopleMonth||""})}document.getElementById("personalContractPreview")?.addEventListener("click",e=>previewContractSchedulesV41(e.currentTarget.dataset.email));if(document.getElementById("personalContractPreview")?.dataset?.email)previewContractSchedulesV41(document.getElementById("personalContractPreview").dataset.email);
       page.querySelectorAll("[data-people-tab]").forEach(b=>b.onclick=()=>{captureScheduleDraftV41();state.peopleTab=b.dataset.peopleTab;renderPageV41()});
       page.querySelectorAll("[data-person]").forEach(b=>b.onclick=()=>{state.peoplePerson=b.dataset.person;if(payroll){state.payrollDetailKey=state.payrollDetailKey===b.dataset.person?"":b.dataset.person;const link=["owner","admin"].includes(state.readRole)?payrollSelectRowV41(inMonth.find(r=>identity(r)===b.dataset.person)):null;if(link&&state.payrollLinking)link.then(applied=>{if(applied&&state.route==="payroll")renderPageV41()})}else state.peopleTab="detail";renderPageV41()});document.getElementById("peoplePersonSelect")?.addEventListener("change",e=>{state.peoplePerson=e.target.value;renderPageV41()});
       page.querySelectorAll("[data-day]").forEach(b=>b.onclick=()=>{const r=personal.find(r=>String(raw(r).work_date).slice(0,10)===b.dataset.day);if(r)openDetailV41(r,c)});

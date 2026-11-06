@@ -759,6 +759,7 @@
     }
 
     .join-workplace-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:#52606d}
+    [data-fee-basis-row][hidden]{display:none}
     .join-workplace-status[hidden],.join-workplace-status [hidden]{display:none}
     .join-workplace-status.error{color:#b42318}
     .auth-help {
@@ -4200,6 +4201,14 @@
                     <option value="case_fee">건별/용역비</option>
                   </select>
                 </label>
+                <label data-fee-basis-row hidden>산정 기준
+                  <select name="feeBasis">
+                    <option value="lump">건별</option>
+                    <option value="hourly">시급</option>
+                    <option value="daily">일급</option>
+                    <option value="monthly">월정액</option>
+                  </select>
+                </label>
                 <label>사업장 규모 기준
                   <select name="workplaceSizeCategory">
                     <option value="under_5">상시 5인 미만</option>
@@ -4209,9 +4218,10 @@
                 <label>업무내용
                   <input name="jobDescription" placeholder="예: 홀 응대, 주방보조, 마감정산">
                 </label>
-                <label>시급/월급
+                <label><span data-wage-label>시급/월급</span>
                   <input name="wage" type="number" min="0" step="10" placeholder="예: 12000" required>
                 </label>
+                <div class="notice" id="contractFeeNotice" aria-live="polite"></div>
                 <label>식사/식대 처리
                   <select name="mealProvision">
                     <option value="employer_meal">사용자 식사 제공 · 비과세 식대 미적용</option>
@@ -8817,7 +8827,7 @@
           <tr>
             <td>${escapeHtml(String(createdAt).slice(0, 10) || "-")}</td>
             <td>${escapeHtml(employeeName || "-")}<br><span class="muted">${escapeHtml(item.employee_email_masked || employeeEmail || "")}</span></td>
-            <td>${escapeHtml(item.branch || "-")}<br><span class="muted">${escapeHtml(contractTypeLabels[contractType] || item.contract_label || contractType || "-")}</span><br><span class="muted">${escapeHtml(employmentTaxTypeLabels[employmentTaxType] || item.employment_tax_label || "-")}${foreignWorker ? " · 외국인" : ""}</span></td>
+            <td>${escapeHtml(item.branch || "-")}<br><span class="muted">${escapeHtml(contractTypeLabels[contractType] || item.contract_label || contractType || "-")}</span><br><span class="muted">${escapeHtml(employmentTaxTypeLabels[employmentTaxType] || item.employment_tax_label || "-")}${foreignWorker ? " · 외국인" : ""}</span>${item.labor_risk_notice ? `<br><span class="badge warn">${escapeHtml(item.labor_risk_notice)}</span>` : ""}</td>
             <td><span class="badge ${status[1]}">${escapeHtml(status[0])}</span>${requestedAt ? `<br><span class="muted">요청 ${escapeHtml(String(requestedAt).slice(0, 16))}</span>` : ""}</td>
             <td class="num" style="display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap">
               ${actions}
@@ -9162,6 +9172,38 @@
       };
     }
 
+    // 3.3% 프리랜서 용역비 산정 기준(contract-core.js 와 같은 규칙). wageType 은 case_fee, 기준은 feeBasis.
+    const FREELANCER_FEE_BASES = ["lump", "hourly", "daily", "monthly"];
+    const feeRateLabels = { lump: "확정 용역비", hourly: "확정 시급", daily: "확정 일급", monthly: "월 용역비" };
+    const FREELANCER_LABOR_RISK_NOTICE = "정해진 요일·시간에 지시를 받고 일하면 근로자로 판정될 수 있습니다 — 노무 확인 권장";
+    function feeBasisOf(contractType, wageType, feeBasis) {
+      if (contractType !== "freelancer") return "";
+      if (FREELANCER_FEE_BASES.includes(feeBasis)) return feeBasis;
+      return wageType === "hourly" ? "hourly" : "lump";
+    }
+    function freelancerFeeFields(data, wage) {
+      if (data.contractType !== "freelancer") return { feeBasis: "", feeRate: 0 };
+      const feeBasis = feeBasisOf("freelancer", data.wageType, data.feeBasis);
+      return { feeBasis, feeRate: wage, wageType: data.wageType === "hourly" ? "case_fee" : (data.wageType || "case_fee") };
+    }
+    function refreshFeeBasisUi() {
+      const form = els.contractForm;
+      if (!form) return;
+      const freelancer = form.contractType?.value === "freelancer";
+      const row = form.querySelector("[data-fee-basis-row]");
+      if (row) row.hidden = !freelancer;
+      const label = form.querySelector("[data-wage-label]");
+      const basis = feeBasisOf(freelancer ? "freelancer" : "", form.wageType?.value, form.feeBasis?.value);
+      if (label) label.textContent = freelancer ? feeRateLabels[basis] : "시급/월급";
+      const box = form.querySelector("#contractFeeNotice");
+      if (!box) return;
+      const wage = Number(form.wage?.value || 0);
+      const notices = [];
+      if (freelancer && basis === "hourly" && wage > 0 && wage < MINIMUM_HOURLY_WAGE_2026) notices.push(`시급 ${formatMoney(wage)}은 2026년 최저임금 ${formatMoney(MINIMUM_HOURLY_WAGE_2026)}보다 낮습니다 — 근로자로 판정되면 최저임금 미달이 됩니다`);
+      if (freelancer && (basis === "hourly" || basis === "daily")) notices.push(FREELANCER_LABOR_RISK_NOTICE);
+      box.replaceChildren(...notices.map(text => { const p = document.createElement("p"); p.className = "cv41-alert warn"; p.textContent = text; return p; }));
+    }
+
     function syncFreelancerWageOptions(freelancer) {
       const select = els.contractForm?.wageType;
       if (!select) return;
@@ -9200,7 +9242,9 @@
       const contractType = els.contractForm.contractType?.value || "part_time";
       if (contractType === "freelancer") {
         els.contractForm.employmentTaxType.value = "freelancer_33";
-        // 프리랜서는 시급 / 건별 용역비만 선택할 수 있다. 기본값은 건별 용역비, 이미 시급이면 유지한다.
+        // 프리랜서는 임금 방식이 건별 용역비이고 시급·일급·월정액·건별은 산정 기준(feeBasis)에서 고른다.
+        // 옛 시급 계약(wageType=hourly)은 시급 기준으로 읽고 임금 방식을 건별 용역비로 정리한다.
+        if (els.contractForm.wageType.value === "hourly" && !FREELANCER_FEE_BASES.includes(els.contractForm.feeBasis.value)) els.contractForm.feeBasis.value = "hourly";
         if (!["hourly", "case_fee"].includes(els.contractForm.wageType.value)) els.contractForm.wageType.value = "case_fee";
         syncFreelancerWageOptions(true);
         applyFreelancerHourlySettlementDefault();
@@ -9208,6 +9252,7 @@
         els.contractForm.employmentTaxType.value = "four_insurance";
         els.contractForm.wageType.value = contractType === "part_time" ? "hourly" : "monthly";
       }
+      refreshFeeBasisUi();
     }
 
     function applyRegularSalaryPreset(overwrite = false) {
@@ -9295,6 +9340,7 @@
         workplaceSizeCategory: data.workplaceSizeCategory || "under_5",
         jobDescription: String(data.jobDescription || "").trim(),
         wage: Number(data.wage || 0),
+        ...freelancerFeeFields(data, Number(data.wage || 0)),
         mealProvision: data.mealProvision || "employer_meal",
         baseSalary: Number(data.baseSalary || 0),
         nonTaxMealAllowance: Number(data.nonTaxMealAllowance || 0),
@@ -9391,7 +9437,10 @@
         }
       } else if (draft.contractType === "freelancer") {
         if (draft.employmentTaxType !== "freelancer_33" || !["case_fee", "hourly"].includes(draft.wageType)) {
-          throw new Error("프리랜서 용역계약서는 3.3% 원천징수·시급 또는 건별/용역비 방식으로 작성해야 합니다.");
+          throw new Error("프리랜서 용역계약서는 3.3% 원천징수·건별/용역비 방식으로 작성하고 산정 기준(건별·시급·일급·월정액)을 고르십시오.");
+        }
+        if (draft.feeBasis && !FREELANCER_FEE_BASES.includes(draft.feeBasis)) {
+          throw new Error("용역비 산정 기준은 건별·시급·일급·월정액 중 하나여야 합니다.");
         }
         const fixedWorkSignals = [draft.workTime, draft.weeklyHours, draft.workDays].join(" ");
         if (/(출퇴근|근무표|주\s*\d+\s*시간|월\/화|화\/수|수\/목|목\/금|금\/토|토\/일|상시|교대)/.test(fixedWorkSignals)) {
@@ -9404,7 +9453,7 @@
         requireValue("용역비 정산/해지", draft.freelancerSettlementTerms);
         requireValue("계약 해지/기성정산 기준", draft.terminationTerms);
         requireValue("비밀유지/자료보호", draft.confidentialityTerms);
-        if (!draft.wage || draft.wage <= 0) missing.push(draft.wageType === "hourly" ? "확정 시급" : "확정 용역비");
+        if (!draft.wage || draft.wage <= 0) missing.push(feeRateLabels[feeBasisOf("freelancer", draft.wageType, draft.feeBasis)]);
       }
       if (missing.length) throw new Error(`필수 입력값을 확인하십시오: ${[...new Set(missing)].join(", ")}`);
     }
@@ -9533,14 +9582,27 @@
       `;
       const freelancerHourly = contractType === "freelancer" && wageType === "hourly" && Boolean(contractValue(contract, "wageType", "wage_type"));
       const wageLabelText = freelancerHourly ? "3.3% 프리랜서 원천징수 · 시급" : (wageTypeLabels[wageType] || wageType);
-      const wageLine = `${wageLabelText} ${formatMoney(wage)} / 지급일: ${payDate || "미입력"} / 지급방법: ${payMethod}`;
+      const storedFeeBasis = contractType === "freelancer" ? contractValue(contract, "feeBasis", "fee_basis") : "";
+      const feeFormulas = {
+        lump: `건별 확정 ${formatMoney(wage)}`, hourly: `시간당 ${formatMoney(wage)} × 승인된 수행 시간`,
+        daily: `1일 ${formatMoney(wage)} × 수행일수`, monthly: `월 ${formatMoney(wage)}(정액)`
+      };
+      const feeSettlementDefaults = {
+        lump: "검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다.",
+        hourly: "시급 × 승인된 근태 시간(분 단위 환산)을 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.",
+        daily: "일급 × 승인된 근태 일수를 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.",
+        monthly: "월 용역비를 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다."
+      };
+      const wageLine = FREELANCER_FEE_BASES.includes(storedFeeBasis)
+        ? `용역비 산정: ${feeFormulas[storedFeeBasis]} / 지급일: ${payDate || "미입력"} / 지급방법: ${payMethod}`
+        : `${wageLabelText} ${formatMoney(wage)} / 지급일: ${payDate || "미입력"} / 지급방법: ${payMethod}`;
       let clauses = [];
       if (contractType === "freelancer") {
         clauses = [
           contractClause("계약 목적", `${employerName || "위탁자"}는 ${employeeName || "수급인"}에게 ${/용역$/.test(String(jobDescription || "").trim()) ? String(jobDescription).trim() : "독립 용역"}을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.`),
           contractClause("용역 기간 및 장소", `${startDate || "용역 시작일 미입력"}부터 ${endDate || "종료일 별도 합의"}까지 수행한다. 수행 장소·일정은 산출물 납품과 검수에 필요한 범위에서 협의하며 고정 출퇴근, 매장 상시 근무표, 교대조 편입으로 운영하지 않는다.`),
           contractClause("업무범위, 산출물, 검수", freelancerScope || `${jobDescription || "업무 범위 미입력"}`),
-          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || (freelancerHourly ? "시급 × 승인된 근태 시간(분 단위 환산)을 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다." : "검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다.")}`),
+          contractClause("용역비 및 정산", `${wageLine}. ${freelancerSettlementTerms || feeSettlementDefaults[storedFeeBasis] || (freelancerHourly ? "시급 × 승인된 근태 시간(분 단위 환산)을 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다." : "검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다.")}`),
           contractClause("독립적 업무수행", "수급인은 독립 사업자로서 업무수행방법을 스스로 정한다. 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성 징표가 생기면 계약 명칭과 무관하게 근로계약 전환을 검토한다."),
           contractClause("안전보건 및 협조", "위탁자는 용역 수행에 필요한 자료와 안전·보건상 유의사항을 안내하고, 수급인은 관련 법령과 사업장 안전·위생 기준을 준수한다."),
           contractClause("비밀유지 및 자료보호", confidentialityTerms || "매출자료, 고객정보, 레시피, 정산자료, 계정정보를 외부에 공개하지 않는다."),
@@ -9981,9 +10043,12 @@
       // 비활성 옵션은 FormData 에서 빠져 기본값(hourly)으로 저장되는 것을 막는다.
       syncFreelancerWageOptions(els.contractForm.contractType.value === "freelancer");
       els.contractForm.wageType.value = contract.wageType || contract.wage_type || "hourly";
+      els.contractForm.feeBasis.value = feeBasisOf(els.contractForm.contractType.value, els.contractForm.wageType.value, contract.feeBasis || contract.fee_basis) || "lump";
+      if (els.contractForm.contractType.value === "freelancer" && els.contractForm.wageType.value === "hourly") els.contractForm.wageType.value = "case_fee";
       els.contractForm.workplaceSizeCategory.value = contract.workplaceSizeCategory || contract.workplace_size_category || "under_5";
       els.contractForm.jobDescription.value = contract.jobDescription || contract.job_description || "";
       els.contractForm.wage.value = contract.wage || "";
+      refreshFeeBasisUi();
       els.contractForm.mealProvision.value = contract.mealProvision || contract.meal_provision || "employer_meal";
       els.contractForm.baseSalary.value = contract.baseSalary ?? contract.base_salary ?? "";
       els.contractForm.nonTaxMealAllowance.value = contract.nonTaxMealAllowance ?? contract.non_tax_meal_allowance ?? "";
@@ -17344,6 +17409,8 @@
               end_date: next.endDate,
               contract_date: next.contractDate,
               wage_type: next.wageType,
+              fee_basis: next.feeBasis || "",
+              fee_rate: next.feeBasis ? next.feeRate : undefined,
               workplace_size_category: next.workplaceSizeCategory,
               job_description: next.jobDescription,
               wage: next.wage,
@@ -17461,9 +17528,17 @@
       els.contractForm?.employmentTaxType?.addEventListener("change", () => applyContractDefaults(false));
       els.contractForm?.wageType?.addEventListener("change", () => {
         applyFreelancerHourlySettlementDefault();
+        refreshFeeBasisUi();
         updateContractPreview(null, "임금 방식 반영");
       });
-      els.contractForm?.wage?.addEventListener("input", applyFreelancerHourlySettlementDefault);
+      els.contractForm?.feeBasis?.addEventListener("change", () => {
+        refreshFeeBasisUi();
+        updateContractPreview(null, "산정 기준 반영");
+      });
+      els.contractForm?.wage?.addEventListener("input", () => {
+        applyFreelancerHourlySettlementDefault();
+        refreshFeeBasisUi();
+      });
       els.contractForm?.mealProvision?.addEventListener("change", () => {
         applyRegularSalaryPreset(true);
         updateContractPreview(null, "급여 구성 자동 반영");

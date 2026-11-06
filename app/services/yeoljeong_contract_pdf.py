@@ -126,6 +126,9 @@ FREELANCER_SKIPPED_KEYS = {"probation_terms", "probation_period", "workplace_siz
 FREELANCER_ZERO_HIDDEN_KEYS = {"base_salary", "non_tax_meal_allowance", "taxable_allowance"}
 # 시급 3.3% 용역계약에서 인쇄하지 않는 근로계약식 금액 키.
 FREELANCER_HOURLY_HIDDEN_KEYS = {"base_salary", "non_tax_meal_allowance", "taxable_allowance", "converted_hourly_wage", "monthly_wage"}
+# 산정 기준(fee_basis)이 저장된 3.3% 용역계약의 단가 칸 이름과 임금 산정 방식 표기. 건별은 기존 용역계약 표기를 그대로 쓴다.
+FREELANCER_FEE_BASIS_LABELS = {"lump": "건별", "hourly": "시급", "daily": "일급", "monthly": "월정액"}
+FREELANCER_FEE_RATE_NAMES = {"hourly": "시급", "daily": "일급", "monthly": "월 용역비"}
 # 기타 기재사항에서 원문 키 대신 보여줄 이름(용역·근로 공통, 칸 이름만 바꾸고 값은 건드리지 않는다).
 EXTRA_LABELS = {
     "employment_tax_type": "세무 처리 구분",
@@ -155,6 +158,8 @@ CODE_VALUE_LABELS = {
 FREELANCER_DOCUMENT_KIND = "freelancer_service_contract"
 # PDF 에 싣지 않는 키: 내부 식별자·감사 원문·서명 증적(별도 섹션에 표시)
 HIDDEN_FIELDS = {
+    "fee_basis",
+    "fee_rate",
     "id",
     "tenant_id",
     "business_id",
@@ -337,6 +342,9 @@ def term_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
     """'계약 조건' 표 행. 용역계약은 용역계약 용어와 생략 규칙을 적용한다."""
     freelancer = is_freelancer_snapshot(snapshot)
     hourly_freelancer = freelancer and str(snapshot.get("wage_type") or "") == "hourly"
+    fee_basis = str(snapshot.get("fee_basis") or "") if freelancer else ""
+    if fee_basis not in FREELANCER_FEE_BASIS_LABELS:
+        fee_basis = ""
     rows: list[tuple[str, Any]] = []
     for key, name in TERM_FIELDS:
         value = snapshot.get(key)
@@ -348,6 +356,18 @@ def term_rows(snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
             if key in FREELANCER_SKIPPED_KEYS or (key in FREELANCER_ZERO_HIDDEN_KEYS and _is_zero_amount(value)):
                 continue
             name = FREELANCER_TERM_LABELS.get(key, name)
+            if fee_basis:
+                if fee_basis != "lump" and key in FREELANCER_HOURLY_HIDDEN_KEYS:
+                    continue
+                if key == "wage" and fee_basis != "lump":
+                    name = FREELANCER_FEE_RATE_NAMES[fee_basis]
+                elif key == "wage_type":
+                    name = "임금 산정 방식"
+                    value = FREELANCER_FEE_BASIS_LABELS[fee_basis]
+                elif key == "employment_tax_type" and fee_basis != "lump":
+                    value = f"3.3% 프리랜서 원천징수 · {FREELANCER_FEE_BASIS_LABELS[fee_basis]}"
+                rows.append((name, value if key == "wage_type" else display_value(key, value)))
+                continue
             if hourly_freelancer:
                 # 시급 3.3% 용역: 근로계약식 기본급·식대 항목은 섞지 않고, 단가 칸은 '시급'으로 표시한다.
                 if key in FREELANCER_HOURLY_HIDDEN_KEYS:
@@ -581,6 +601,9 @@ def render_signed_contract_pdf(contract: dict[str, Any], seal: dict[str, Any] | 
         ),
     }
     covered_fields.update({key: True for key in _body_covered_fields(snapshot)})
+    if str(snapshot.get("contract_type") or "") == "freelancer" and str(snapshot.get("fee_basis") or "") in FREELANCER_FEE_BASIS_LABELS:
+        # 산정 기준 조항("용역비 산정: …")이 임금 산정 방식을 인쇄한다 — wage_type=case_fee 를 건별 용역비로 다시 찍지 않는다.
+        covered_fields["wage_type"] = True
     # These legacy identity fields are absent from the compact identity grid.
     residual = rows_for((("visa_status", "체류자격"),
                          ("foreign_registration_no_masked", "외국인등록번호")))

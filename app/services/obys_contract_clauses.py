@@ -13,6 +13,21 @@ CONTRACT_TITLES = {
 }
 
 
+# 3.3% 프리랜서 용역비 산정 기준별 계약 문구(fee_basis 가 저장된 계약에만 쓴다. 옛 계약의 문구는 바꾸지 않는다).
+FREELANCER_FEE_FORMULAS = {
+    'lump': lambda amount: f'건별 확정 {amount}',
+    'hourly': lambda amount: f'시간당 {amount} × 승인된 수행 시간',
+    'daily': lambda amount: f'1일 {amount} × 수행일수',
+    'monthly': lambda amount: f'월 {amount}(정액)',
+}
+FREELANCER_FEE_SETTLEMENT = {
+    'lump': '검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다.',
+    'hourly': '시급 × 승인된 근태 시간(분 단위 환산)을 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.',
+    'daily': '일급 × 승인된 근태 일수를 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.',
+    'monthly': '월 용역비를 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.',
+}
+
+
 def _contract_purpose_service(job_description) -> str:
     """계약 목적 조항의 용역 이름. 업무 내용이 '…용역'(예: 배달식당 운영관리 용역)이면 그 이름, 아니면 '독립 용역'."""
     text = str(job_description or '').strip()
@@ -59,7 +74,13 @@ def contract_clauses(contract: dict[str, Any]) -> list[tuple[str, str]]:
     freelancer_hourly = kind == 'freelancer' and bool(v('wage_type')) and wage_type == 'hourly'  # 값이 없던 옛 계약의 기본 표시는 바꾸지 않는다
     if freelancer_hourly:
         wage_label = '3.3% 프리랜서 원천징수 · 시급'
-    wage_line = f"{wage_label} {money(v('wage'))} / 지급일: {v('pay_date', '미입력')} / 지급방법: {v('pay_method', '직원 명의 계좌이체')}"
+    fee_basis = v('fee_basis') if kind == 'freelancer' else ''
+    fee_basis = fee_basis if fee_basis in FREELANCER_FEE_FORMULAS else ''
+    pay_tail = f"지급일: {v('pay_date', '미입력')} / 지급방법: {v('pay_method', '직원 명의 계좌이체')}"
+    if fee_basis:
+        wage_line = f"용역비 산정: {FREELANCER_FEE_FORMULAS[fee_basis](money(v('wage')))} / {pay_tail}"
+    else:
+        wage_line = f"{wage_label} {money(v('wage'))} / {pay_tail}"
     overtime, leave = v('overtime_terms'), v('leave_terms')
     if not is_v3:
         five = v('workplace_size_category', 'under_5') in ('five_plus', 'over_5')
@@ -87,7 +108,7 @@ def contract_clauses(contract: dict[str, Any]) -> list[tuple[str, str]]:
             ('계약 목적', f'{employer or "위탁자"}는 {employee or "수급인"}에게 {_contract_purpose_service(v("job_description"))}을 의뢰하고 수급인은 계약 범위의 산출물을 제공한다.'),
             ('용역 기간 및 장소', f'{start or "용역 시작일 미입력"}부터 {end or "종료일 별도 합의"}까지 수행한다. 수행 장소·일정은 산출물 납품과 검수에 필요한 범위에서 협의하며 고정 출퇴근, 매장 상시 근무표, 교대조 편입으로 운영하지 않는다.'),
             ('업무범위, 산출물, 검수', v('freelancer_scope') or v('job_description', '업무 범위 미입력')),
-            ('용역비 및 정산', f"{wage_line}. {v('freelancer_settlement_terms', '시급 × 승인된 근태 시간(분 단위 환산)을 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.' if freelancer_hourly else '검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다.')}"),
+            ('용역비 및 정산', f"{wage_line}. {v('freelancer_settlement_terms', FREELANCER_FEE_SETTLEMENT[fee_basis] if fee_basis else '시급 × 승인된 근태 시간(분 단위 환산)을 매월 정산일에 사업소득세 3%·지방소득세 0.3% 원천징수 후 지급한다.' if freelancer_hourly else '검수 완료 후 합의한 지급일에 지급하며, 사업소득세 3.3%를 원천징수한다.')}"),
             ('독립적 업무수행', '수급인은 독립 사업자로서 업무수행방법을 스스로 정한다. 고정 근무, 상시 지휘감독, 대체인력 제한, 매장 상시업무 편입 등 근로자성 징표가 생기면 계약 명칭과 무관하게 근로계약 전환을 검토한다.'),
             ('안전보건 및 협조', '위탁자는 용역 수행에 필요한 자료와 안전·보건상 유의사항을 안내하고, 수급인은 관련 법령과 사업장 안전·위생 기준을 준수한다.'),
             ('비밀유지 및 자료보호', v('confidentiality_terms', '매출자료, 고객정보, 레시피, 정산자료, 계정정보를 외부에 공개하지 않는다.')),

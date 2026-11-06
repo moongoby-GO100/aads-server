@@ -160,7 +160,7 @@
     host.innerHTML = `<h2>급여 초안 · 명세 관리</h2><p>직원과 월을 선택하고 계약·승인 근태 기준으로 작성합니다. 확정된 명세를 수정하면 기존 명세를 보존한 새 버전으로 저장합니다.</p>
       <div class="toolbar"><label>점포 선택<select class="field" data-payroll-branch><option value="">전체 점포</option>${[...new Set(allEmployees.map(row => row.branch || ""))].filter(Boolean).map(branch => `<option value="${esc(branch)}">${esc(branch)}</option>`).join("")}</select></label><label>직원 선택<select class="field" data-payroll-employee>${pickerOptions()}</select></label>
       <label>명세 선택<select class="field" data-payroll-statement></select></label></div>
-      <p data-payroll-blocked role="alert"></p><p data-payroll-link-notice role="status"></p><p data-payroll-state role="status"></p><p data-payroll-basis></p>
+      <p data-payroll-blocked role="alert"></p><p data-payroll-link-notice role="status"></p><p data-payroll-state role="status"></p><p data-payroll-basis></p><p data-payroll-labor-risk role="status"></p>
       <form data-payroll-form class="toolbar">${amounts.map(([name, label]) => `<label data-wrap="${name}">${label}<input class="field" name="${name}" type="number" min="0" step="1" required></label>`).join("")}
       <label>임금지급일<input class="field" data-payroll-pay-date maxlength="40" placeholder="예: 2026-11-10 또는 매월 10일"></label>
       <button class="btn primary" type="submit">초안 저장</button></form>
@@ -403,10 +403,11 @@
         ? `${month} · ${statusName(active.status)} · 버전 ${active.version || 1}${["confirmed", "paid"].includes(active.status) ? " · 수정 저장 시 새 초안 생성" : ""}`
         : `${month} · 새 초안`;
       host.querySelector("[data-payroll-basis]").textContent = active?.settlement_basis
-        ? `용역기간 ${active.settlement_basis.period_start} ~ ${active.settlement_basis.period_end} · 확인한 지급액 ${money(active.settlement_basis.confirmed_amount)} · ${active.settlement_basis.scope || "업무범위는 계약 확인"}`
+        ? `${{monthly:"월정액 · 계약 금액",lump:"건별 · 확인한 지급액"}[active.settlement_basis.fee_basis] || "확인한 지급액"} ${money(active.settlement_basis.confirmed_amount)} · 용역기간 ${active.settlement_basis.period_start} ~ ${active.settlement_basis.period_end} · ${active.settlement_basis.scope || "업무범위는 계약 확인"}`
         : active?.attendance_basis
         ? `승인 근태 ${active.attendance_basis.approved_days}일 · ${active.attendance_basis.approved_minutes}분 기준`
         : active?.source_contract_id ? "서명 계약서 기준값 적용" : "계약·근태 기준값을 조회하거나 금액을 확인해 입력하세요.";
+      showLaborRisk();
       totals();restoreButtons();
     };
     const showNotices = () => {
@@ -414,6 +415,7 @@
       host.querySelector("[data-payroll-blocked]").textContent = blocked;
       host.querySelector("[data-payroll-link-notice]").textContent = employee() && statements.some(row => row.payroll_month === month && statementOwner(row) === "ambiguous") ? AMBIGUOUS_STATEMENT_TEXT : "";
     };
+    const showLaborRisk = () => {host.querySelector("[data-payroll-labor-risk]").textContent = employee() ? (active?.labor_risk_notice || employee()?.labor_risk_notice || "") : "";};
     const selectEmployee = () => {
       generation++;
       planTaxType = "";
@@ -431,6 +433,7 @@
         renderItems();
         host.querySelector("[data-payroll-state]").textContent = "직원을 선택하기 전에는 저장·확정·지급·발송할 수 없습니다.";
         host.querySelector("[data-payroll-basis]").textContent = "";
+        showLaborRisk();
         totals(); restoreButtons();
         return;
       }
@@ -516,13 +519,26 @@
         const plan = await api(`/payroll/defaults?${new URLSearchParams({employee_email:email(employee()),employee_request_id:employee().id||"",payroll_month:month})}`);
         if (plan.contract_type !== "freelancer") throw new Error("서명 완료된 프리랜서 용역계약서가 필요합니다.");
         planTaxType = "freelancer_33";
+        const feeBasis = plan.fee_basis || "lump";
+        const draftHeaders = {"Content-Type":"application/json"};
+        const draftBase = {business_id:businessId,employee_email:email(employee()),employee_request_id:employee().id||"",payroll_month:month};
+        if (feeBasis === "hourly" || feeBasis === "daily") {
+          if (!confirm(`${month} ${employee().name || employee().employee_name} · ${feeBasis === "hourly" ? "시급" : "일급"} 용역 ${money(plan.contract_terms?.wage)} × 승인 근태로 초안을 저장할까요? 금액은 승인된 근태로 계산하며 확정·지급·발송은 별도입니다.`)) return;
+          const result = await api("/payroll/draft-from-attendance",{method:"POST",headers:draftHeaders,body:JSON.stringify(draftBase)});
+          await saved(result.statement);return;
+        }
+        if (feeBasis === "monthly") {
+          if (!confirm(`${month} ${employee().name || employee().employee_name} · 월정액 용역비 ${money(plan.contract_terms?.wage)}(계약 금액)으로 초안을 저장할까요? 확정·지급·발송은 별도입니다.`)) return;
+          const result = await api("/payroll/draft-from-contract",{method:"POST",headers:draftHeaders,body:JSON.stringify(draftBase)});
+          await saved(result.statement);return;
+        }
         const gross = form.elements.gross_pay.value;
         if (!gross || !Number.isSafeInteger(Number(gross)) || Number(gross) <= 0) {
           host.querySelector("[data-payroll-basis]").textContent = `계약 용역비 ${money(plan.contract_terms?.wage)} · 용역기간 ${plan.contract_terms?.start_date || "확인 필요"} ~ ${plan.contract_terms?.end_date || "별도 합의"}. 총지급액 칸에 이번 지급의 확정금액을 입력한 후 다시 누르세요. 총계약금을 매월 자동 지급하지 않습니다.`;
           throw new Error("이번 지급의 확정 용역비를 총지급액에 입력하세요.");
         }
         if (!confirm(`${month} ${employee().name || employee().employee_name} · 이번 용역 정산금액 ${money(gross)}으로 초안을 저장할까요? 계약 총액·검수·분할 지급 여부를 확인하세요. 확정·지급·발송은 별도입니다.`)) return;
-        const result = await api("/payroll/draft-from-contract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({business_id:businessId,employee_email:email(employee()),employee_request_id:employee().id||"",payroll_month:month,gross_pay:Number(gross),amount_confirmed:true})});
+        const result = await api("/payroll/draft-from-contract",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...draftBase,gross_pay:Number(gross),amount_confirmed:true})});
         await saved(result.statement);return;
       }
       if (action === "draft") {
