@@ -9786,12 +9786,16 @@ PAYROLL_SERVER_FIELDS = frozenset({
     "contract_id", "contract_applies_from", "contract_applies_to", "contract_payroll_month", "non_tax_meal_allowance_basis",
     "payout", "payout_diff_resolution", "payout_diff_completions", "settlement_warnings",
     "pending_amount", "settled_amount", "settled_in", "claimed_amount", "claimed_in", "resolution_invalid",
+    "held_amount", "held_applied", "held_balance", "held_origin_unreported", "held_balance_total", "held_employee_key",
 })
 PAYROLL_CONTENT_FIELDS = (
     "employee_name", "business_id", "branch", "payroll_month", "pay_date", "employment_tax_type", "meal_provision",
     "gross_pay", "taxable_pay", "non_tax_meal_allowance", "tax_withholding", "insurance_deduction", "other_deduction",
     "net_pay", "memo", "pay_items", "deduction_items", "work_summary", "deduction_basis",
+    "report_status", "unreported_reason", "held_items", "held_release_amount",
 )
+# 보류 금액 입력(클라이언트가 보내는 값). 요청에 없으면 이전 버전·초안의 값을 이어 간다.
+HELD_INPUT_FIELDS = ("report_status", "unreported_reason", "held_items", "held_release_amount")
 PAYROLL_DELIVERY_CONSENT_VERSION = "payroll-delivery-v1"
 PAYROLL_ATTENDANCE_WAGE_TYPES = ("hourly", "daily")
 _PAYROLL_DELIVERY_LOCK = threading.Lock()
@@ -9817,11 +9821,22 @@ def _normalize_payroll_month(payload: dict[str, Any]) -> str:
     return next(iter(found.values()), "")
 
 
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _payroll_content(record: dict[str, Any]) -> dict[str, Any]:
     content: dict[str, Any] = {}
     for field in PAYROLL_CONTENT_FIELDS:
         value = record.get(field)
-        if isinstance(value, (list, dict)):
+        if field == "report_status":
+            content[field] = "unreported" if str(value or "").strip().lower() == "unreported" else "reported"
+        elif field == "held_release_amount":
+            content[field] = _int_or_zero(value)
+        elif isinstance(value, (list, dict)):
             content[field] = json.dumps(value, ensure_ascii=False, sort_keys=True) if value else ""
         else:
             content[field] = value if isinstance(value, int) and not isinstance(value, bool) else str(value or "").strip()
@@ -9831,7 +9846,7 @@ def _payroll_content(record: dict[str, Any]) -> dict[str, Any]:
 def _payroll_changes(before: dict[str, Any], after: dict[str, Any]) -> dict[str, dict[str, Any]]:
     old, new = _payroll_content(before), _payroll_content(after)
     return {
-        key: {"before": str(old[key])[:200], "after": str(new[key])[:200]} if key in {"memo", "pay_items", "deduction_items", "work_summary"} else {"before": old[key], "after": new[key]}
+        key: {"before": str(old[key])[:200], "after": str(new[key])[:200]} if key in {"memo", "pay_items", "deduction_items", "work_summary", "held_items"} else {"before": old[key], "after": new[key]}
         for key in PAYROLL_CONTENT_FIELDS
         if old[key] != new[key]
     }
@@ -9865,8 +9880,8 @@ def list_payroll(user: dict[str, Any], payroll_month: str = "", include_history:
     all_rows = _read_hr("payroll_statements", user)
     rows = _filter_user(all_rows, user, "employee_email")
     if _is_admin(user):
-        states = _settlement_states(all_rows)
-        rows = [{**row, **states.get(str(row.get("id") or ""), {})} for row in rows]
+        states, held_states = _settlement_states(all_rows), _held_states(all_rows)
+        rows = [{**row, **states.get(str(row.get("id") or ""), {}), **held_states.get(str(row.get("id") or ""), {})} for row in rows]
     else:
         # 차액 처리 메모·경고는 관리자 내부 기록이다 — 직원 응답에는 싣지 않는다.
         hidden = {"payout_diff_resolution", "payout_diff_completions", "settlement_warnings", "settlement_opt_out"}
@@ -9911,7 +9926,7 @@ def _validated_payroll_amounts(payload: dict[str, Any], *, enforce_deduction_cap
     gross, taxable_pay, non_tax_meal = amounts["gross_pay"], amounts["taxable_pay"], amounts["non_tax_meal_allowance"]
     if taxable_pay or non_tax_meal:
         # 전월 정산 지급분은 이미 기준월에 신고된 금액이라 과세 기준(과세급여+비과세)에 들어가지 않는다.
-        if taxable_pay + non_tax_meal + _settlement_pay_total(payload) != gross:
+        if taxable_pay + non_tax_meal + _settlement_pay_total(payload) + _held_release_lines_total(payload) != gross:
             raise HTTPException(status_code=400, detail="과세급여와 비과세 식대 합계가 총지급액과 일치해야 합니다")
         if non_tax_meal > 200000:
             raise HTTPException(status_code=400, detail="비과세 식대는 월 200,000원 이내로 입력하십시오")
@@ -9978,7 +9993,7 @@ def _apply_statutory_payroll_deductions(statement: dict[str, Any], target: dict[
     entered["other_deduction"] = int(entered["other_deduction"] or 0) - sum(item["amount"] for item in settlement_items)
     taxable = _payroll_integer_for_api(statement.get("gross_pay"), field="gross_pay") - _payroll_integer_for_api(
         statement.get("non_tax_meal_allowance"), field="non_tax_meal_allowance"
-    ) - _settlement_pay_total(statement)  # 전월 정산 지급분은 과세 기준에서 제외
+    ) - _settlement_pay_total(statement) - _held_release_lines_total(statement)  # 전월 정산·보류금 지급분은 과세 기준에서 제외
     items, basis = apply_statutory_deductions(
         current,
         month=str(statement.get("payroll_month") or ""),
@@ -10013,6 +10028,7 @@ def _save_payroll_record(
     rows = _read_hr("payroll_statements", user)
     requested_row = _find(rows, requested_id) if requested_id else None
     fact_row = _chain_fact_row(rows, _payroll_root(requested_row)) if requested_row else None
+    payload = _strip_client_held_lines(payload)
     payload, requested_settlements = _strip_client_settlement_items(
         payload, rows, facts=_settlement_lines(fact_row, {str(row.get("id") or ""): row for row in rows}) if fact_row else [],
     )
@@ -10133,11 +10149,16 @@ def _save_payroll_record(
         if not _payroll_changes(existing, probe):
             return existing, False
         _apply_statutory_payroll_deductions(baseline, target)
+        _apply_held_amounts(baseline, rows, target=target, fact_row=_chain_fact_row(rows, _payroll_root(baseline)), enforce=False)
         if not _payroll_changes(existing, baseline):
             return existing, False
     _apply_statutory_payroll_deductions(statement, target)
     if has_settlement:
         _assert_settlement_fits(statement)
+    _apply_held_amounts(
+        statement, rows, target=target, fact_row=_chain_fact_row(rows, _payroll_root(statement)),
+        items_sent=bool(raw_payload.get("pay_items")),
+    )
 
     _set_settlement_warnings(statement)
     _write_hr_record("payroll_statements", statement, user)
@@ -10184,6 +10205,7 @@ def _confirm_payroll_unlocked(statement_id: str, user: dict[str, Any]) -> dict[s
 
     draft_row = row
     row = _row_with_current_claims(row, rows)
+    row = _row_with_current_held(row, rows)
     required_errors = wage_statement_required_errors(row)
     if required_errors:
         raise HTTPException(status_code=409, detail=required_errors[0])
@@ -10444,7 +10466,9 @@ def _settlement_states(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 def payroll_settlement_states(user: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """명세 id → 계산한 정산 상태. 목록 화면이 DB 행에 얹어 쓴다."""
-    return _settlement_states(_read_hr("payroll_statements", user))
+    rows = _read_hr("payroll_statements", user)
+    states, held = _settlement_states(rows), _held_states(rows)
+    return {row_id: {**states.get(row_id, {}), **held.get(row_id, {})} for row_id in {*states, *held}}
 
 
 def _row_settlement_state(rows: list[dict[str, Any]], row: dict[str, Any]) -> dict[str, Any] | None:
@@ -10506,6 +10530,240 @@ def _settlement_draft_parts(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     plan = _settlement_plan(rows, email=email, business_id=business_id, month=month)
     return [item for item in plan if item["code"] == SETTLEMENT_PAY_CODE], [item for item in plan if item["code"] == SETTLEMENT_RECOVER_CODE]
+
+
+def _held_release_lines_total(payload: dict[str, Any]) -> int:
+    """보류금 지급 항목의 합계. 이미 지급 대상으로 정해진 금액이라 과세 기준에서 제외된다."""
+    from app.services.yeoljeong_payroll_pdf import held_release_total
+
+    return held_release_total(payload)
+
+
+def _is_held_line(item: Any) -> bool:
+    from app.services.yeoljeong_payroll_pdf import HELD_RELEASE_CODE, HELD_RELEASE_SOURCE
+
+    return isinstance(item, dict) and (
+        str(item.get("code") or "").strip() == HELD_RELEASE_CODE or str(item.get("source") or "").strip().lower() == HELD_RELEASE_SOURCE
+    )
+
+
+def _strip_client_held_lines(payload: dict[str, Any]) -> dict[str, Any]:
+    """보류금 지급 항목은 서버만 만든다. 클라이언트가 보낸 것은 버리고, 합계에 이미 포함돼 있으면 총지급액에서도 뺀다."""
+    items = payload.get("pay_items")
+    if not isinstance(items, list):
+        return payload
+    kept = [item for item in items if not _is_held_line(item)]
+    dropped = sum(_item_amount(item) for item in items if _is_held_line(item))
+    if len(kept) == len(items):
+        return payload
+    result = {**payload, "pay_items": kept}
+    if not _payroll_value_missing(payload.get("gross_pay")):
+        gross = _payroll_integer_for_api(payload.get("gross_pay"), field="gross_pay")
+        if gross - dropped == sum(_item_amount(item) for item in kept if isinstance(item, dict)):
+            result["gross_pay"] = gross - dropped
+    return result
+
+
+def _held_owner_key(row: dict[str, Any]) -> str:
+    email = str(row.get("employee_email") or "").strip().lower()
+    return email or f"name:{_name_key(row.get('employee_name'))}"
+
+
+def _held_contribution(row: dict[str, Any]) -> int:
+    """체인의 최신 확정 버전이 보류 잔액에 더하는 금액 = 새 보류 - 보류금 지급 - 법정 공제 충당."""
+    from app.services.yeoljeong_payroll_pdf import held_amount_of, held_release_total
+
+    return held_amount_of(row) - held_release_total(row) - max(_int_or_zero(row.get("held_applied")), 0)
+
+
+def _held_activity(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    from app.services.yeoljeong_payroll_pdf import report_status_of
+
+    return bool(
+        report_status_of(row) == "unreported" or row.get("held_items") or _int_or_zero(row.get("held_release_amount"))
+        or _held_release_lines_total(row) or _int_or_zero(row.get("held_applied")) or row.get("held_origin_unreported")
+    )
+
+
+def _held_ledger(rows: list[dict[str, Any]], candidate: dict[str, Any] | None, *, owner: dict[str, Any]) -> list[tuple[str, int]]:
+    """직원 한 명의 보류 원장 [(정산월, 금액)]. 체인마다 최신 확정/지급 버전 하나만 세고, candidate 가 있으면 그 체인은 candidate 로 바꿔 센다."""
+    key, business = _held_owner_key(owner), _record_business_id(owner)
+    skip = _payroll_root(candidate) if candidate else ""
+    entries: list[tuple[str, int]] = []
+    for root, chain in _payroll_chains(rows).items():
+        if root == skip:
+            continue
+        fact = _chain_latest(chain, PAYROLL_LOCKED_STATUSES)
+        if fact and _held_owner_key(fact) == key and _record_business_id(fact) == business:
+            amount = _held_contribution(fact)
+            if amount:
+                entries.append((str(fact.get("payroll_month") or ""), amount))
+    if candidate is not None:
+        entries.append((str(candidate.get("payroll_month") or ""), _held_contribution(candidate)))
+    return entries
+
+
+def _assert_held_ledger(rows: list[dict[str, Any]], statement: dict[str, Any], *, enforce: bool = True) -> int:
+    """이 명세를 반영한 정산월 기준 보류 잔액을 돌려준다. 정산월 기준·전체 잔액 어느 쪽이든 음수면 409 (잔액은 음수가 될 수 없다)."""
+    entries = _held_ledger(rows, statement, owner=statement)
+    month = str(statement.get("payroll_month") or "")
+    as_of = sum(amount for entry_month, amount in entries if entry_month <= month)
+    total = sum(amount for _, amount in entries)
+    if enforce and as_of < 0:
+        raise HTTPException(
+            status_code=409, detail=f"보류금 지급·충당액이 보류 잔액을 넘습니다. 이 명세를 반영하면 잔액이 {as_of:,}원이 됩니다",
+        )
+    if enforce and total < 0:
+        raise HTTPException(
+            status_code=409, detail=f"이후 달 명세의 보류금 지급과 합치면 보류 잔액을 넘습니다. 반영하면 전체 잔액이 {total:,}원이 됩니다",
+        )
+    return as_of
+
+
+def _held_states(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """명세 id → 직원별 보류 누계 잔액(확정/지급 기준). 보류 이력이 있는 직원의 모든 명세에 같은 값을 얹는다."""
+    owners: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        if row.get("deleted_at"):
+            continue
+        owner = (_record_business_id(row), _held_owner_key(row))
+        owners.setdefault(owner, {"balance": 0, "active": False, "ids": []})["ids"].append(str(row.get("id") or ""))
+    for chain in _payroll_chains(rows).values():
+        fact = _chain_latest(chain, PAYROLL_LOCKED_STATUSES)
+        if not fact:
+            continue
+        owner = owners.get((_record_business_id(fact), _held_owner_key(fact)))
+        if owner is not None:
+            owner["balance"] += _held_contribution(fact)
+            owner["active"] = owner["active"] or _held_activity(fact)
+    states: dict[str, dict[str, Any]] = {}
+    for (_, key), owner in owners.items():
+        if owner["active"]:
+            states.update({row_id: {"held_balance_total": owner["balance"], "held_employee_key": key} for row_id in owner["ids"]})
+    return states
+
+
+def _apply_held_amounts(
+    statement: dict[str, Any], rows: list[dict[str, Any]], *, target: dict[str, Any] | None, fact_row: dict[str, Any] | None,
+    enforce: bool = True, items_sent: bool = True,
+) -> None:
+    """신고 상태·보류 금액·보류금 지급을 명세에 반영하고 실수령액을 다시 맞춘다(제자리 수정, 반복 호출해도 같은 결과).
+
+    net_pay = 총지급액 - 법정 공제 - 보류 금액 + 보류금 충당. 보류 금액은 공제 항목·세금 항목에 들어가지 않는다.
+    신고 미처리였던 체인이 신고 처리로 정정되면 보류 금액이 법정 공제(소득세·4대보험)를 먼저 충당하고, 남는 금액은 지급 항목이 된다.
+    이 함수가 만드는 보류금 지급 항목(source=held_release)은 과세 기준에서 제외된다."""
+    from app.services.yeoljeong_payroll_pdf import (
+        HELD_RELEASE_CODE,
+        HELD_RELEASE_SOURCE,
+        PayrollItemError,
+        held_errors,
+        held_release_total,
+        normalize_held_items,
+        normalize_payroll_items,
+        report_status_of,
+    )
+
+    for field in HELD_INPUT_FIELDS:
+        if field not in statement and target and field in target:
+            statement[field] = copy.deepcopy(target[field])
+    if not (_held_activity(statement) or _held_activity(fact_row) or (fact_row and _held_contribution(fact_row))):
+        return
+    statement.pop("held_applied", None)
+    statement.pop("held_amount", None)
+    errors = held_errors(statement)
+    if errors:
+        raise HTTPException(status_code=400, detail=errors[0])
+    try:
+        items = normalize_held_items(statement.get("held_items"))
+        manual = _payroll_integer_for_api(statement.get("held_release_amount"), field="held_release_amount")
+    except PayrollItemError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if manual < 0:
+        raise HTTPException(status_code=400, detail="held_release_amount 는 0 이상이어야 합니다")
+    status = report_status_of(statement)
+    statement["report_status"] = status
+    reason = str(statement.get("unreported_reason") or "").strip()
+    if status == "unreported":
+        statement["unreported_reason"] = reason
+    else:
+        statement.pop("unreported_reason", None)
+    for field, value in (("held_items", items), ("held_release_amount", manual)):
+        if value:
+            statement[field] = value
+        else:
+            statement.pop(field, None)
+
+    gross = _int_or_zero(statement.get("gross_pay")) - held_release_total(statement)
+    pay = [item for item in (statement.get("pay_items") or []) if not _is_held_line(item)]
+    if pay:
+        statement["pay_items"] = pay
+    else:
+        statement.pop("pay_items", None)
+    statement["gross_pay"] = gross
+
+    held = sum(item["amount"] for item in items or [])
+    statutory = _int_or_zero(statement.get("tax_withholding")) + _int_or_zero(statement.get("insurance_deduction"))
+    origin = bool(fact_row and (report_status_of(fact_row) == "unreported" or fact_row.get("held_origin_unreported")))
+    applied = conversion = 0
+    if status == "reported" and origin and held:
+        applied = min(held, statutory)
+        conversion = held - applied
+    if status == "unreported" or origin:
+        statement["held_origin_unreported"] = True
+    else:
+        statement.pop("held_origin_unreported", None)
+
+    lines: list[dict[str, Any]] = []
+    if conversion:
+        lines.append({
+            "code": HELD_RELEASE_CODE, "label": "보류금 지급(신고 전환 잔액)", "amount": conversion, "source": HELD_RELEASE_SOURCE,
+            "calc_note": "신고 처리로 정정: 보류 금액에서 법정 공제를 충당하고 남은 금액",
+        })
+    if manual:
+        lines.append({
+            "code": HELD_RELEASE_CODE, "label": "보류금 지급", "amount": manual, "source": HELD_RELEASE_SOURCE,
+            "calc_note": "이전 달 보류 금액 지급",
+        })
+    if lines:
+        if not items_sent and fact_row and held_release_total(fact_row):
+            raise HTTPException(status_code=400, detail="보류금 지급 항목이 있는 명세는 지급 항목을 함께 보내야 합니다")
+        base = statement.get("pay_items") or _simple_pay_items(statement)
+        try:
+            statement["pay_items"] = normalize_payroll_items({"pay_items": [*base, *lines]})["pay_items"]
+        except PayrollItemError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        statement["gross_pay"] = gross + conversion + manual
+
+    for field, value in (("held_amount", held), ("held_applied", applied)):
+        if value:
+            statement[field] = value
+        else:
+            statement.pop(field, None)
+    net = (
+        statement["gross_pay"] - _int_or_zero(statement.get("tax_withholding")) - _int_or_zero(statement.get("insurance_deduction"))
+        - _int_or_zero(statement.get("other_deduction")) - held + applied
+    )
+    if net < 0:
+        raise HTTPException(status_code=400, detail="보류 금액을 빼면 실수령액이 0원보다 작아집니다. 보류 금액을 확인하십시오")
+    statement["net_pay"] = net
+    balance = _assert_held_ledger(rows, statement, enforce=enforce)
+    if _held_activity(statement) or balance:
+        statement["held_balance"] = balance
+    else:
+        statement.pop("held_balance", None)
+
+
+def _row_with_current_held(row: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """확정 직전, 잠금 안에서 보류 잔액·충당을 다시 계산한 명세. 달라진 것이 없으면 받은 row 를 그대로 돌려준다."""
+    fact_row = _chain_fact_row(rows, _payroll_root(row))
+    if not (_held_activity(row) or _held_activity(fact_row) or (fact_row and _held_contribution(fact_row))):
+        return row
+    fresh = copy.deepcopy(row)
+    _apply_held_amounts(fresh, rows, target=row, fact_row=fact_row)
+    derived = ("held_balance", "held_amount", "held_applied", "held_origin_unreported")
+    return fresh if _payroll_changes(row, fresh) or any(fresh.get(key) != row.get(key) for key in derived) else row
 
 
 def _strip_client_settlement_items(
@@ -10666,7 +10924,7 @@ def _row_with_current_claims(row: dict[str, Any], rows: list[dict[str, Any]]) ->
 
     if keys([*facts, *plan]) == keys(_settlement_lines(row, by_id)):
         return row
-    statement, _ = _strip_client_settlement_items(row, rows)
+    statement, _ = _strip_client_settlement_items(_strip_client_held_lines(row), rows)
     statement.update({
         field: _payroll_integer_for_api(statement.get(field), field=field)
         for field in ("gross_pay", "tax_withholding", "insurance_deduction", "other_deduction")

@@ -66,6 +66,15 @@
   const settlementRowHtml = (kind, row, fact = false) => `<tr data-settlement-row>
       <td>전월 차액 정산</td><td>${esc(row.label)}</td><td>${esc(Number(row.amount).toLocaleString("ko-KR"))}</td>${kind === "pay" ? `<td>${esc(row.calc_note || "")}</td>` : ""}
       <td>${fact ? "<small>지급 완료 사실</small>" : `<button type="button" class="btn" style="min-height:44px" data-settle-off="${esc(row.settlement_of_root_id)}">이번 달 제외</button>`}</td></tr>`;
+  // 신고 상태·보류 금액: 보류 금액은 공제가 아니라 직원에게 지급할 예정인 금액이다. 비율은 원 단위 계산 보조일 뿐 저장하지 않는다.
+  const UNREPORTED_WARNING = "신고 미처리 · 노무·세무 확인 필요";
+  const HELD_NOTE = "보류 금액은 공제가 아니라 직원에게 지급할 예정인 금액입니다. 공제 항목·세금 항목에는 기록되지 않습니다.";
+  const isHeldLine = row => Boolean(row) && (row.code === "held_release" || String(row.source || "").toLowerCase() === "held_release");
+  const heldRowHtml = row => `<tr data-held-line>
+      <td>보류금 지급</td><td>${esc(row.label)}</td><td>${esc(Number(row.amount).toLocaleString("ko-KR"))}</td><td>${esc(row.calc_note || "")}</td><td><small>서버 계산 · 수정 불가</small></td></tr>`;
+  const heldSum = rows => (rows || []).reduce((total, row) => total + (Number(row.amount) || 0), 0);
+  const heldSnapshot = (status, reason, rows, release) => JSON.stringify({s:status || "reported", r:status === "unreported" ? String(reason || "").trim() : "",
+    h:(rows || []).map(row => [Number(row.amount), String(row.reason || "").trim()]), l:Number(release) || 0});
   const statusName = value => ({draft:"초안",needs_review:"검토 필요",confirmed:"확정",paid:"지급 완료"}[value] || "상태 확인 필요");
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
@@ -136,6 +145,10 @@
     let selected = mustChoose ? "" : wantedId || idOf(employees[0]);
     let active = null, busy = false, generation = 0;
     let pay = [], ded = [], work = {}, optOut = [], planTaxType = "";
+    let reportStatus = "reported", unreportedReason = "", heldItems = [], heldRelease = "";
+    const activeHeld = () => ({status:active?.report_status || "reported", reason:active?.unreported_reason || "", items:active?.held_items || [], release:active?.held_release_amount || 0});
+    const heldNow = () => heldSnapshot(reportStatus, unreportedReason, heldItems, heldRelease);
+    const heldBaseline = () => {const base = activeHeld(); return heldSnapshot(base.status, base.reason, base.items, base.release);};
     const sessionOwner = new Map();
     const key = () => `${businessId}|${month}|${selected}`;
     const employee = () => employees.find(row => idOf(row) === selected);
@@ -172,16 +185,33 @@
     const inputValues = () => Object.fromEntries(amounts.map(([name]) => [name, form.elements[name].value]));
     const snapshot = (p, d, w) => JSON.stringify({p:p.map(row => [row.code, row.label, Number(row.amount), row.calc_note || ""]), d:d.map(row => [row.code, row.label, Number(row.amount)]),
       w:workFields.map(([name]) => w[name] === undefined || w[name] === "" ? null : Number(w[name]))});
-    const remember = () => employee() && drafts.set(key(), {id:active?.id || "", ...inputValues(), pay_date:payDateInput.value, items:clone({pay, ded, work, optOut})});
+    const remember = () => employee() && drafts.set(key(), {id:active?.id || "", ...inputValues(), pay_date:payDateInput.value, items:clone({pay, ded, work, optOut, held:{status:reportStatus, reason:unreportedReason, items:heldItems, release:heldRelease}})});
     const dirty = () => amounts.some(([name]) => form.elements[name].value !== String(active?.[name] ?? ""))
       || payDateInput.value !== String(active?.pay_date ?? "")
       || snapshot(pay, ded, work) !== snapshot(active?.pay_items || [], active?.deduction_items || [], active?.work_summary || {})
-      || JSON.stringify(optOut) !== JSON.stringify(active?.settlement_opt_out || []);
+      || JSON.stringify(optOut) !== JSON.stringify(active?.settlement_opt_out || [])
+      || heldNow() !== heldBaseline();
+    const heldError = () => {
+      if (reportStatus === "unreported" && !unreportedReason.trim()) return "신고 미처리 사유를 입력하세요. 사유 없이는 저장할 수 없습니다.";
+      for (const row of heldItems) {
+        if (!/^\d+$/.test(String(row.amount ?? "").trim()) || !Number.isSafeInteger(Number(row.amount)) || Number(row.amount) <= 0) return "보류 금액은 1원 이상 원 단위 정수로 입력하세요.";
+        if (!String(row.reason || "").trim()) return "보류 금액마다 사유를 입력하세요.";
+      }
+      if (heldRelease !== "" && (!/^\d+$/.test(String(heldRelease).trim()) || !Number.isSafeInteger(Number(heldRelease)))) return "보류금 지급 금액은 0 이상 원 단위 정수로 입력하세요.";
+      return "";
+    };
+    const heldPayload = () => ({
+      report_status:reportStatus,
+      ...(reportStatus === "unreported" ? {unreported_reason:unreportedReason.trim()} : {}),
+      held_items:heldItems.map(row => ({amount:Number(row.amount), reason:String(row.reason || "").trim()})),
+      held_release_amount:Number(heldRelease) || 0
+    });
     const itemPayload = () => ({
       // 정산 항목은 서버가 버리고 다시 계산한다. 그래도 보내는 이유는 총지급액 칸에 포함된 금액을 서버가 빼기 위해서다.
       pay_items:pay.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), calc_note:row.calc_note || "", ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
       deduction_items:ded.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
       settlement_opt_out:optOut,
+      ...heldPayload(),
       work_summary:Object.fromEntries(workFields.filter(([name]) => work[name] !== undefined && work[name] !== "").map(([name]) => [name, Number(work[name])]))
     });
     const itemsComplete = () => [...pay, ...ded].every(row => row.amount !== "" && row.amount !== undefined && Number.isSafeInteger(Number(row.amount)) && Number(row.amount) >= 0);
@@ -189,7 +219,7 @@
     const syncDerived = () => {
       const lock = (name, on, value) => {const control = form.elements[name]; control.readOnly = on; if (on) control.value = String(value);};
       lock("gross_pay", pay.length > 0, sumItems(pay));
-      lock("taxable_pay", pay.length > 0, Math.max(sumItems(pay) - sumItems(pay.filter(isSettlement)) - (Number(form.elements.non_tax_meal_allowance.value) || 0), 0));  // 전월 정산 지급분은 과세 기준 제외
+      lock("taxable_pay", pay.length > 0, Math.max(sumItems(pay) - sumItems(pay.filter(row => isSettlement(row) || isHeldLine(row))) - (Number(form.elements.non_tax_meal_allowance.value) || 0), 0));  // 전월 정산·보류금 지급분은 과세 기준 제외
       lock("tax_withholding", ded.length > 0, sumItems(ded, taxCodes));
       lock("insurance_deduction", ded.length > 0, sumItems(ded, insuranceCodes));
       lock("other_deduction", ded.length > 0, sumItems(ded, ["other", RECOVER_CODE]));
@@ -198,16 +228,41 @@
       if (isFreelancer() && form.elements.insurance_deduction.value === "") form.elements.insurance_deduction.value = "0";
     };
     const isFactRow = row => Boolean(active?.supersedes_id || ["confirmed", "paid"].includes(active?.status)) && row.label !== TOPUP_LABEL;
-    const itemTable = (kind, rows, codes, title) => `<h3>${title}</h3>${rows.length ? `<table><thead><tr><th>구분</th><th>항목명</th><th>금액(원)</th>${kind === "pay" ? "<th>계산방법</th>" : ""}<th></th></tr></thead><tbody>${rows.map((row, index) => isSettlement(row) ? settlementRowHtml(kind, row, isFactRow(row)) : `<tr>
+    const itemTable = (kind, rows, codes, title) => `<h3>${title}</h3>${rows.length ? `<table><thead><tr><th>구분</th><th>항목명</th><th>금액(원)</th>${kind === "pay" ? "<th>계산방법</th>" : ""}<th></th></tr></thead><tbody>${rows.map((row, index) => isSettlement(row) ? settlementRowHtml(kind, row, isFactRow(row)) : kind === "pay" && isHeldLine(row) ? heldRowHtml(row) : `<tr>
       <td><select class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="code">${codes.map(([code, label]) => `<option value="${code}"${code === row.code ? " selected" : ""}>${label}</option>`).join("")}</select></td>
       <td><input class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="label" maxlength="40" value="${esc(row.label)}"></td>
       <td><input class="field" style="min-height:44px" type="number" min="0" step="1" data-item="${kind}" data-i="${index}" data-k="amount" value="${esc(row.amount)}"></td>
       ${kind === "pay" ? `<td><input class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="calc_note" maxlength="200" placeholder="예: 시급 × 시간" value="${esc(row.calc_note || "")}"></td>` : ""}
       <td><button type="button" class="btn" style="min-height:44px" data-item-del="${kind}" data-i="${index}">삭제</button></td></tr>`).join("")}</tbody></table>` : "<p>항목 없음 — 위 합계 칸에 간편 입력할 수 있습니다.</p>"}
       <button type="button" class="btn" style="min-height:44px" data-item-add="${kind}">${kind === "pay" ? "지급 항목 추가" : "공제 항목 추가"}</button>`;
+    const heldBalanceOf = () => {
+      const total = active?.held_balance_total ?? active?.statement_payload?.held_balance_total;
+      const own = active?.held_balance ?? active?.statement_payload?.held_balance;
+      return {total: total === undefined || total === null ? null : Number(total), own: own === undefined || own === null ? null : Number(own)};
+    };
+    const heldSectionHtml = () => {
+      const balance = heldBalanceOf();
+      const unreported = reportStatus === "unreported";
+      return `<h3>신고 상태 · 보류 금액</h3>
+      <div class="toolbar"><label>신고 상태<select class="field" style="min-height:44px" data-report-status><option value="reported"${unreported ? "" : " selected"}>신고 처리</option><option value="unreported"${unreported ? " selected" : ""}>신고 미처리</option></select></label>
+      ${unreported ? `<label>신고 미처리 사유(필수)<input class="field" style="min-height:44px" data-report-reason maxlength="100" value="${esc(unreportedReason)}"></label>` : ""}</div>
+      ${unreported ? `<p role="alert" data-unreported-warning><strong>${UNREPORTED_WARNING}</strong> · 이 명세는 신고(원천세·4대보험)가 처리되지 않은 상태로 기록됩니다.</p>` : ""}
+      <p>${HELD_NOTE}</p>
+      ${heldItems.length ? `<table><thead><tr><th>보류 금액(원)</th><th>보류 사유</th><th></th></tr></thead><tbody>${heldItems.map((row, index) => `<tr>
+        <td><input class="field" style="min-height:44px" type="number" min="1" step="1" data-held-field="amount" data-hi="${index}" value="${esc(row.amount)}"></td>
+        <td><input class="field" style="min-height:44px" maxlength="100" data-held-field="reason" data-hi="${index}" value="${esc(row.reason)}"></td>
+        <td><button type="button" class="btn" style="min-height:44px" data-held-del="${index}">삭제</button></td></tr>`).join("")}</tbody></table>` : "<p>보류 금액 없음</p>"}
+      <div class="toolbar"><button type="button" class="btn" style="min-height:44px" data-held-add="1">보류 금액 추가</button>
+      <label>비율 계산 보조(%)<input class="field" style="min-height:44px" type="number" min="0" step="any" data-held-ratio placeholder="직접 입력"></label>
+      <button type="button" class="btn" style="min-height:44px" data-held-calc="1">총지급액 기준 원 단위 계산</button></div>
+      <p><small>비율은 원 단위 금액을 계산하는 보조 도구입니다. 저장되는 것은 금액과 사유뿐이며 비율은 저장하지 않습니다.</small></p>
+      <label>이번 명세에서 지급할 보류금(원, 이전 달 보류 잔액 지급)<input class="field" style="min-height:44px" type="number" min="0" step="1" data-held-release value="${esc(heldRelease)}"></label>
+      <p role="status" data-held-balance>${balance.total !== null ? `직원 누적 보류 잔액 ${esc(money(balance.total))}(지급 예정, 공제 아님)` : "누적 보류 잔액은 저장 후 서버가 계산합니다."}${balance.own !== null && balance.total !== null && balance.own !== balance.total ? ` · 이 명세 기준월 잔액 ${esc(money(balance.own))}` : ""}</p>`;
+    };
     const renderItems = () => {
       const freelancer = isFreelancer();
       itemsHost.innerHTML = itemTable("pay", pay, payCodes, "지급 항목") + itemTable("ded", ded, freelancer ? dedCodes.filter(([code]) => !insuranceCodes.includes(code)) : dedCodes, freelancer ? "원천징수 항목" : "공제 항목")
+        + heldSectionHtml()
         + (optOut.length ? `<p role="status">이번 달 제외한 전월 차액 ${optOut.length}건 · 다음 명세에 다시 반영됩니다. <button type="button" class="btn" style="min-height:44px" data-settle-restore="1">제외 해제</button></p>` : "")
         + (freelancer ? '<button type="button" class="btn" style="min-height:44px" data-item-tax="1">3.3% 자동 계산(소득세 3% · 지방소득세 0.3%)</button>' : "")
         + `<h3>근로일수 및 근로시간</h3><div class="toolbar">${workFields.map(([name, label]) => `<label>${label}<input class="field" style="min-height:44px" type="number" min="0" step="1" data-work-field="${name}" value="${esc(work[name] ?? "")}"></label>`).join("")}</div>`;
@@ -216,6 +271,10 @@
     itemsHost.oninput = event => {
       const control = event.target, data = control.dataset || {};
       if (data.workField) work[data.workField] = control.value;
+      else if (data.heldField) {const row = heldItems[Number(data.hi)]; if (!row) return; row[data.heldField] = control.value;}
+      else if (control.matches && control.matches("[data-report-reason]")) unreportedReason = control.value;
+      else if (control.matches && control.matches("[data-held-release]")) heldRelease = control.value;
+      else if (control.matches && control.matches("[data-held-ratio]")) return;
       else if (data.item) {
         const row = (data.item === "pay" ? pay : ded)[Number(data.i)];
         if (!row) return;
@@ -223,6 +282,13 @@
         if (data.k === "code") {row.label = (((data.item === "pay" ? payCodes : dedCodes).find(([code]) => code === row.code)) || [])[1] || row.label; renderItems();}
       }
       refresh();
+    };
+    itemsHost.onchange = event => {
+      const control = event.target;
+      if (control.matches && control.matches("[data-report-status]")) {
+        reportStatus = control.value === "unreported" ? "unreported" : "reported";
+        renderItems(); refresh();
+      }
     };
     // 소득세+지방소득세 합계(지방소득세 = 소득세의 10%, 10원 미만 절사)를 둘로 나눈다. 정확히 나뉘지 않으면 null.
     const splitTax = total => {
@@ -274,6 +340,16 @@
         if (data.itemAdd === "ded" && !seedDeductions()) return;
         if (data.itemAdd === "pay") {const [code, label] = nextPayCode(); pay.push({code, label, amount:"", calc_note:""});}
         else ded.push({code:isFreelancer() ? "income_tax" : "national_pension", label:isFreelancer() ? "소득세" : "국민연금", amount:""});
+      } else if (data.heldAdd) {
+        heldItems = [...heldItems, {amount:"", reason:""}];
+      } else if (data.heldDel !== undefined) {
+        heldItems = heldItems.filter((_, index) => index !== Number(data.heldDel));
+      } else if (data.heldCalc) {
+        const ratio = Number(itemsHost.querySelector("[data-held-ratio]")?.value);
+        const base = Number(form.elements.gross_pay.value) - sumItems(pay.filter(isHeldLine));
+        if (!Number.isFinite(ratio) || ratio <= 0 || ratio > 100 || !Number.isSafeInteger(base) || base <= 0) {message.textContent = "비율(0 초과 100 이하)과 총지급액을 먼저 입력하세요. 비율은 계산 보조일 뿐 저장되지 않습니다."; return;}
+        heldItems = [...heldItems, {amount:String(Math.floor(base * ratio / 100)), reason:""}];
+        message.textContent = "계산한 원 단위 금액을 보류 금액 칸에 넣었습니다. 금액과 사유를 확인하세요. 비율은 저장되지 않습니다.";
       } else if (data.settleOff) {
         // 금액은 고칠 수 없고 끄기만 한다. 합계에서 빠지도록 목록에서 내리고 제외 대상만 서버에 알린다.
         pay = pay.filter(row => row.settlement_of_root_id !== data.settleOff);
@@ -285,7 +361,7 @@
       } else if (data.itemDel) {
         (data.itemDel === "pay" ? pay : ded).splice(Number(data.i), 1);
       } else if (data.itemTax) {
-        const gross = Number(form.elements.gross_pay.value) - sumItems(pay.filter(isSettlement));  // 전월 정산 지급분은 3.3% 기준 제외
+        const gross = Number(form.elements.gross_pay.value) - sumItems(pay.filter(row => isSettlement(row) || isHeldLine(row)));  // 전월 정산·보류금 지급분은 3.3% 기준 제외
         if (!Number.isSafeInteger(gross) || gross < 0 || form.elements.gross_pay.value === "") {message.textContent = "총지급액(용역비)을 먼저 입력하세요."; return;}
         if (!seedDeductions(true)) return;
         const tax = withholding(gross);
@@ -296,8 +372,9 @@
     const totals = () => {
       const values = inputValues();
       const known = amounts.every(([name]) => values[name] !== "" && Number.isSafeInteger(Number(values[name])) && Number(values[name]) >= 0);
+      const held = heldSum(heldItems.filter(row => Number.isSafeInteger(Number(row.amount)) && Number(row.amount) > 0));
       host.querySelector("[data-payroll-totals]").textContent = known
-        ? `공제 합계 ${money(Number(values.tax_withholding) + Number(values.insurance_deduction) + Number(values.other_deduction))} · 예상 실수령 ${money(Number(values.gross_pay) - Number(values.tax_withholding) - Number(values.insurance_deduction) - Number(values.other_deduction))} · 저장 후 서버 계산값을 확인하세요.`
+        ? `공제 합계 ${money(Number(values.tax_withholding) + Number(values.insurance_deduction) + Number(values.other_deduction))}${held ? ` · 보류 금액(지급 예정, 공제 아님) ${money(held)}` : ""} · 예상 실수령 ${money(Number(values.gross_pay) - Number(values.tax_withholding) - Number(values.insurance_deduction) - Number(values.other_deduction) - held)} · 저장 후 서버 계산값을 확인하세요.${reportStatus === "unreported" ? " · " + UNREPORTED_WARNING : ""}`
         : "미입력 금액을 확인하세요. 확인되지 않은 금액은 0원으로 채우지 않습니다.";
     };
     const buttons = () => host.querySelectorAll("button,select,input");
@@ -319,6 +396,8 @@
       payDateInput.value = values.pay_date ?? "";
       const source = values.items || {pay:clone(active?.pay_items) || [], ded:clone(active?.deduction_items) || [], work:clone(active?.work_summary) || {}, optOut:clone(active?.settlement_opt_out) || []};
       pay = source.pay || []; ded = source.ded || []; work = source.work || {}; optOut = source.optOut || [];
+      const held = source.held || {status:active?.report_status || "reported", reason:active?.unreported_reason || "", items:clone(active?.held_items) || [], release:active?.held_release_amount || ""};
+      reportStatus = held.status === "unreported" ? "unreported" : "reported"; unreportedReason = held.reason || ""; heldItems = held.items || []; heldRelease = held.release ? String(held.release) : "";
       renderItems(); syncDerived();
       host.querySelector("[data-payroll-state]").textContent = active
         ? `${month} · ${statusName(active.status)} · 버전 ${active.version || 1}${["confirmed", "paid"].includes(active.status) ? " · 수정 저장 시 새 초안 생성" : ""}`
@@ -343,6 +422,7 @@
       showNotices();
       if (!employee()) {
         active = null; pay = []; ded = []; work = {}; optOut = [];
+        reportStatus = "reported"; unreportedReason = ""; heldItems = []; heldRelease = "";
         statementPicker.innerHTML = '<option value="">새 초안 작성</option>';
         message.textContent = "";
         host.querySelector("[data-payroll-versions]").textContent = "";
@@ -397,13 +477,14 @@
       statementPicker.innerHTML = '<option value="">새 초안 작성</option>' + ownStatements().map(row => `<option value="${esc(row.id)}">${esc(month)} · ${statusName(row.status)} · 버전 ${row.version || 1}</option>`).join("");
       statementPicker.value = statement.id;
       fill(statement);
-      message.textContent = `저장 완료 · 총지급 ${money(statement.gross_pay)} · 공제 ${money(statement.totals?.total_deductions)} · 실수령 ${money(statement.net_pay)}${(statement.settlement_warnings || []).length ? " · 주의: " + statement.settlement_warnings.join(" ") : ""}`;
+      message.textContent = `저장 완료 · 총지급 ${money(statement.gross_pay)} · 공제 ${money(statement.totals?.total_deductions)} ${statement.held_amount ? ` · 보류 금액(지급 예정, 공제 아님) ${money(statement.held_amount)}` : ""} · 실수령 ${money(statement.net_pay)}${statement.report_status === "unreported" ? " · " + UNREPORTED_WARNING : ""}${(statement.settlement_warnings || []).length ? " · 주의: " + statement.settlement_warnings.join(" ") : ""}`;
       await onSaved?.();
     };
     form.onsubmit = event => {
       event.preventDefault();if (!form.reportValidity()) return;remember();
       execute(async () => {
         if (!itemsComplete()) throw new Error("지급·공제 항목의 금액을 0원 이상 정수로 입력하세요.");
+        if (heldError()) throw new Error(heldError());
         const person = employee(), payload = {business_id:businessId, employee_email:email(person),
           employee_name:person.name || person.employee_name, employee_request_id:person.id || "", payroll_month:month,
           ...(active?.employment_tax_type ? {employment_tax_type:active.employment_tax_type} : {}), ...itemPayload(),
@@ -471,6 +552,6 @@
     });});
     selectEmployee();
   }
-  window.ObysPayrollAdmin = {mount, payoutDialogHtml, parsePayoutInput, settlementRowHtml, resolvePayrollEmployee, statementOwnership, ownsStatement, employeeKeyFor, sha256Hex};
+  window.ObysPayrollAdmin = {mount, payoutDialogHtml, parsePayoutInput, settlementRowHtml, resolvePayrollEmployee, UNREPORTED_WARNING, isHeldLine, heldRowHtml, statementOwnership, ownsStatement, employeeKeyFor, sha256Hex};
   if (typeof module !== "undefined" && module.exports) module.exports = window.ObysPayrollAdmin;
 })();

@@ -24,7 +24,7 @@ FREELANCER_TAX_TYPE = "freelancer_33"
 PAY_ITEM_CODES = {
     "base": "기본급", "overtime": "연장근로수당", "night": "야간근로수당", "holiday": "휴일근로수당",
     "weekly_holiday": "주휴수당", "meal": "식대", "bonus": "상여금", "other": "기타수당",
-    "prior_month_unpaid_pay": "전월 미지급분 지급",
+    "prior_month_unpaid_pay": "전월 미지급분 지급", "held_release": "보류금 지급",
 }
 INSURANCE_DEDUCTION_CODES = ("national_pension", "health_insurance", "long_term_care", "employment_insurance")
 TAX_DEDUCTION_CODES = ("income_tax", "local_income_tax")
@@ -39,6 +39,13 @@ SETTLEMENT_RECOVER_CODE = "prior_month_overpaid_recover"
 SETTLEMENT_ITEM_CODES = (SETTLEMENT_PAY_CODE, SETTLEMENT_RECOVER_CODE)
 SETTLEMENT_SOURCE = "settlement"
 OTHER_DEDUCTION_CODES = ("other", SETTLEMENT_RECOVER_CODE)
+# 보류 금액은 공제가 아니라 직원에게 줄 돈이다. 지급 항목(보류금 지급)은 서버만 만들고 과세 기준에 들어가지 않는다.
+HELD_RELEASE_CODE = "held_release"
+HELD_RELEASE_SOURCE = "held_release"
+REPORT_STATUSES = ("reported", "unreported")
+UNREPORTED_WARNING = "신고 미처리 · 노무·세무 확인 필요"
+HELD_SECTION_TITLE = "보류 금액(지급 예정, 공제 아님)"
+_MAX_HELD_ITEMS = 10
 WORK_SUMMARY_FIELDS = ("work_days", "work_minutes", "overtime_minutes", "night_minutes", "holiday_minutes")
 _MINUTE_FIELDS = WORK_SUMMARY_FIELDS[1:]
 _ITEM_AMOUNT_LIMIT = 10**12
@@ -143,6 +150,8 @@ def _clean_item_list(
                 entry["confirmed"] = True
             if _flag(item.get("needs_input")) and not confirmed:
                 entry["needs_input"] = True
+        if code == HELD_RELEASE_CODE:
+            entry["source"] = HELD_RELEASE_SOURCE
         if code in SETTLEMENT_ITEM_CODES:
             # 정산 참조는 이 두 code 에만 남는다. 다른 code 에 붙은 정산 키는 여기서 사라진다.
             settlement_root = str(item.get("settlement_of_root_id") or "").strip()
@@ -152,6 +161,52 @@ def _clean_item_list(
             entry["settlement_of_root_id"] = settlement_root
         cleaned.append(entry)
     return cleaned
+
+
+def normalize_held_items(raw: Any) -> list[dict[str, Any]] | None:
+    """보류 금액 목록 [{amount, reason}]. 금액은 직접 입력한 원 단위 양의 정수이고 사유는 필수다(비율은 화면의 계산 보조일 뿐 저장하지 않는다)."""
+    if raw is None or raw == [] or raw == "":
+        return None
+    if not isinstance(raw, list):
+        raise PayrollItemError("보류 금액은 목록이어야 합니다")
+    if len(raw) > _MAX_HELD_ITEMS:
+        raise PayrollItemError(f"보류 금액은 {_MAX_HELD_ITEMS}개를 넘을 수 없습니다")
+    cleaned: list[dict[str, Any]] = []
+    for index, item in enumerate(raw, 1):
+        where = f"보류 금액 {index}번"
+        if not isinstance(item, dict):
+            raise PayrollItemError(f"{where} 형식이 올바르지 않습니다")
+        amount = _strict_amount(item.get("amount"), where)
+        if amount <= 0:
+            raise PayrollItemError(f"{where} 금액은 1원 이상이어야 합니다")
+        reason = str(item.get("reason") or "").strip()
+        if not reason:
+            raise PayrollItemError(f"{where} 보류 사유를 입력하십시오")
+        if _RRN_PATTERN.search(reason):
+            raise PayrollItemError(f"{where} 사유에 주민등록번호 형식의 값을 입력할 수 없습니다")
+        if len(reason) > 100:
+            raise PayrollItemError(f"{where} 사유는 100자 이내로 입력하십시오")
+        cleaned.append({"amount": amount, "reason": reason})
+    return cleaned
+
+
+def held_amount_of(statement: dict[str, Any]) -> int:
+    """이 명세가 새로 보류한 금액. held_items 합계이며, 항목이 잘못됐으면 0 (오류는 payroll_items_errors 가 낸다)."""
+    try:
+        return sum(item["amount"] for item in normalize_held_items(statement.get("held_items")) or [])
+    except PayrollItemError:
+        return 0
+
+
+def held_release_total(statement: dict[str, Any]) -> int:
+    items = statement.get("pay_items")
+    if not isinstance(items, list):
+        return 0
+    return sum(_int(item.get("amount")) for item in items if isinstance(item, dict) and item.get("code") == HELD_RELEASE_CODE)
+
+
+def report_status_of(statement: dict[str, Any]) -> str:
+    return "unreported" if str(statement.get("report_status") or "").strip().lower() == "unreported" else "reported"
 
 
 def _clean_work_summary(raw: Any) -> dict[str, int] | None:
@@ -200,6 +255,27 @@ def _group_sum(items: list[dict[str, Any]], codes: tuple[str, ...]) -> int:
     return sum(item["amount"] for item in items if item["code"] in codes)
 
 
+def held_errors(statement: dict[str, Any]) -> list[str]:
+    """신고 상태·보류 금액 입력 오류(한글). 신고 미처리는 사유가 필수이고, 보류 금액 항목은 형식과 합계를 지켜야 한다."""
+    errors: list[str] = []
+    raw_status = str(statement.get("report_status") or "").strip().lower()
+    if raw_status and raw_status not in REPORT_STATUSES:
+        errors.append("신고 상태는 신고 처리(reported) 또는 신고 미처리(unreported)여야 합니다")
+    if raw_status == "unreported" and not str(statement.get("unreported_reason") or "").strip():
+        errors.append("신고 미처리 명세는 미처리 사유를 입력해야 합니다")
+    if _RRN_PATTERN.search(str(statement.get("unreported_reason") or "")):
+        errors.append("미처리 사유에 주민등록번호 형식의 값을 입력할 수 없습니다")
+    if len(str(statement.get("unreported_reason") or "").strip()) > 200:
+        errors.append("미처리 사유는 200자 이내로 입력하십시오")
+    try:
+        normalize_held_items(statement.get("held_items"))
+    except PayrollItemError as exc:
+        errors.append(str(exc))
+    if _int(statement.get("held_applied")) > held_amount_of(statement):
+        errors.append("보류금 충당액이 보류 금액을 넘을 수 없습니다")
+    return errors
+
+
 def payroll_items_errors(statement: dict[str, Any]) -> list[str]:
     """항목 합계와 기존 합계 필드가 어긋나는 사유(한글). 항목이 없는 과거 명세는 빈 목록."""
     try:
@@ -223,6 +299,7 @@ def payroll_items_errors(statement: dict[str, Any]) -> list[str]:
             total, expected = _group_sum(deduction, codes), _int(statement.get(field))
             if total != expected:
                 errors.append(f"공제 항목의 {label} 합계({total:,}원)가 {field}({expected:,}원)와 일치해야 합니다")
+    errors.extend(held_errors(statement))
     if is_freelancer(statement):
         if _int(statement.get("insurance_deduction")) or (deduction and _group_sum(deduction, INSURANCE_DEDUCTION_CODES)):
             errors.append("프리랜서(3.3%) 명세에는 4대보험 공제를 입력할 수 없습니다")
@@ -269,13 +346,18 @@ def wage_statement_required_errors(statement: dict[str, Any]) -> list[str]:
 
 
 def payroll_totals(statement: dict[str, Any]) -> dict[str, Any]:
-    """명세 한 건의 금액 합계. net_pay 는 항상 총지급액 - 공제 합계로 다시 계산하고 저장값과의 일치 여부를 함께 낸다."""
+    """명세 한 건의 금액 합계. net_pay 는 항상 총지급액 - 법정 공제 - 보류 금액 + 보류금 충당으로 다시 계산하고 저장값과의 일치 여부를 함께 낸다.
+
+    보류 금액은 공제가 아니다. total_deductions 에는 들어가지 않고 held_amount 로 따로 나온다."""
     values = {field: _int(statement.get(field)) for field in TOTAL_FIELDS}
     deductions = values["tax_withholding"] + values["insurance_deduction"] + values["other_deduction"]
-    net = values["gross_pay"] - deductions
+    held, applied = held_amount_of(statement), max(_int(statement.get("held_applied")), 0)
+    net = values["gross_pay"] - deductions - held + applied
     item_errors = payroll_items_errors(statement)
     return {
         **values, "total_deductions": deductions, "net_pay": net,
+        "held_amount": held, "held_applied": applied, "held_release": held_release_total(statement),
+        "report_status": report_status_of(statement),
         "consistent": net == _int(statement.get("net_pay")) and not item_errors, "item_errors": item_errors,
     }
 
@@ -322,6 +404,31 @@ def _work_rows(statement: dict[str, Any]) -> list[tuple[str, ...]]:
     return rows or [("근로일수·근로시간", "기재 없음")]
 
 
+def _unreported_rows(statement: dict[str, Any]) -> list[tuple[str, ...]]:
+    if report_status_of(statement) != "unreported":
+        return []
+    return [("신고 상태", UNREPORTED_WARNING), ("미처리 사유", _text(statement.get("unreported_reason")))]
+
+
+def _held_sections(statement: dict[str, Any], totals: dict[str, Any]) -> list[dict[str, Any]]:
+    held, applied = totals["held_amount"], totals["held_applied"]
+    balance = statement.get("held_balance")
+    has_balance = balance is not None and str(balance).strip() != ""
+    if not (held or applied or totals["held_release"] or (has_balance and _int(balance))):
+        return []
+    rows: list[tuple[str, ...]] = []
+    for item in normalize_held_items(statement.get("held_items")) or []:
+        rows.append((f"보류 · {_text(item['reason'])}", _won(item["amount"])))
+    rows.append(("보류 금액 합계(지급 예정, 공제 아님)", _won(held)))
+    if applied:
+        rows.append(("보류금 충당(법정 공제 충당)", _won(applied)))
+    if totals["held_release"]:
+        rows.append(("보류금 지급(이번 명세 지급 항목에 포함)", _won(totals["held_release"])))
+    if has_balance:
+        rows.append(("보류 잔액(누계, 지급 예정)", _won(_int(balance))))
+    return [{"title": HELD_SECTION_TITLE, "header": None, "rows": rows}]
+
+
 def _wage_sections(statement: dict[str, Any]) -> list[dict[str, Any]]:
     totals = payroll_totals(statement)
     identity: list[tuple[str, ...]] = [
@@ -332,6 +439,7 @@ def _wage_sections(statement: dict[str, Any]) -> list[dict[str, Any]]:
     if _birth_date(statement):
         identity.append(("생년월일", _birth_date(statement)))
     identity += [("지점", _text(statement.get("branch"))), ("임금지급일", _text(statement.get("pay_date")))]
+    identity += _unreported_rows(statement)
     deduction_items = normalize_payroll_items(statement).get("deduction_items")
     if deduction_items:
         deductions: list[tuple[str, ...]] = [(_text(item["label"]), _won(item["amount"])) for item in deduction_items]
@@ -348,6 +456,7 @@ def _wage_sections(statement: dict[str, Any]) -> list[dict[str, Any]]:
          "rows": [*_pay_lines(statement, totals), ("임금 총액", _won(totals["gross_pay"]), "-")]},
         {"title": "근로일수 및 근로시간", "header": None, "rows": _work_rows(statement)},
         {"title": "공제 내역", "header": ("공제 항목", "금액"), "rows": deductions},
+        *_held_sections(statement, totals),
         {"title": None, "header": None, "rows": [("실지급액", _won(totals["net_pay"]))]},
     ]
 
@@ -389,9 +498,11 @@ def _freelancer_sections(statement: dict[str, Any]) -> list[dict[str, Any]]:
             ("용역계약 ID", _text(statement.get("source_contract_id") or basis.get("contract_id"))),
             ("용역기간", f"{start} ~ {end}" if start or end else "-"),
             ("업무범위", _text(basis.get("scope"))),
+            *_unreported_rows(statement),
         ]},
         {"title": None, "header": None, "rows": [("지급 용역비", _won(totals["gross_pay"]))]},
         {"title": "원천징수 내역", "header": ("항목", "금액"), "rows": tax_rows},
+        *_held_sections(statement, totals),
         {"title": None, "header": None, "rows": [("실지급액", _won(totals["net_pay"]))]},
     ]
 
@@ -442,7 +553,7 @@ def render_payroll_statement_pdf(statement: dict[str, Any]) -> bytes:
     if totals["item_errors"]:
         raise PayrollPdfError(f"항목과 합계가 달라 PDF 를 만들지 않습니다: {totals['item_errors'][0]}")
     if not totals["consistent"]:
-        raise PayrollPdfError("실수령액이 총지급액-공제 합계와 달라 PDF 를 만들지 않습니다")
+        raise PayrollPdfError("실수령액이 총지급액-공제 합계-보류 금액과 달라 PDF 를 만들지 않습니다")
     try:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
@@ -490,6 +601,10 @@ def render_payroll_statement_pdf(statement: dict[str, Any]) -> bytes:
         if is_freelancer(statement)
         else "근로기준법 제48조 제2항, 같은 법 시행령 제27조의2에 따라 교부하는 임금명세서입니다."
     )
+    if totals["held_amount"] or totals["held_applied"] or totals["held_release"]:
+        story.append(para("보류 금액은 공제가 아니라 직원에게 지급할 예정인 금액입니다.", small))
+    if totals["report_status"] == "unreported":
+        story.append(para(UNREPORTED_WARNING, small))
     footer = f"명세 ID {statement.get('id') or '-'} · 버전 {statement.get('version') or 1} · 상태 {status}"
     story += [Spacer(1, 4 * mm), para(basis_note, small), para(footer, small)]
     buffer = io.BytesIO()
