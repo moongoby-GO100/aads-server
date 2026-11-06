@@ -9662,6 +9662,70 @@ def _payroll_value_missing(value: Any) -> bool:
     return value is None or (isinstance(value, str) and value.strip() == "")
 
 
+# 일용 지원 원천징수·고용보험 상수 — 세무사 확인 대상.
+SUPPORT_DAILY_DEDUCTION = 150_000
+SUPPORT_INCOME_RATE_PERCENT = 6
+SUPPORT_TAX_CREDIT_PERCENT = 55
+SUPPORT_SMALL_TAX_LIMIT = 1_000
+SUPPORT_LOCAL_RATE_PERCENT = 10
+SUPPORT_EMPLOYMENT_RATE_PERMILLE = 9
+
+
+def _apply_support_payee_rules(payload: dict[str, Any], user: dict[str, Any], existing: dict[str, Any] | None = None) -> None:
+    """관리자 저장 경로 전용. 지급 항목에서 서버 계산한 분류·경고·일용 공제를 만든다."""
+    relation = str(payload.get("payee_relation") or "employee")
+    if relation not in {"employee", "owner", "family"}:
+        raise HTTPException(status_code=400, detail="급여 대상 관계가 올바르지 않습니다")
+    payload["payee_relation"] = relation
+    payload["relation_note"] = str(payload.get("relation_note") or "").strip()[:200]
+    payload["work_memo"] = str(payload.get("work_memo") or "").strip()[:200]
+    warnings = []
+    pay = payload.get("pay_items") or []
+    shifts = [item for item in pay if item["code"] == "support_shift"]
+    for item in shifts:
+        if item["work_date"][:7] != payload.get("payroll_month"):
+            raise HTTPException(status_code=400, detail="지원 근무 날짜는 급여월 안이어야 합니다")
+        if item["unit_price"] < MIN_WAGE_2026 * (8 if item["unit_type"] == "daily" else 1):
+            warnings.append("최저임금 미달 확인(일당은 8시간 환산)")
+    evidence = (payload.get("work_summary") or {}).get("work_minutes") or (payload.get("work_summary") or {}).get("work_days")
+    if relation == "family" and not (evidence or (existing or {}).get("attendance_basis") or payload.get("attendance_basis") or payload["work_memo"] or any(i.get("memo") for i in shifts)):
+        warnings.append("근무 증빙 필요")
+    payload["owner_withdrawal"] = False
+    payload.pop("business_type", None)
+    if relation == "owner":
+        settings = _run_db(get_settings_persisted(user)) if _db_available() else get_settings(user)
+        businesses = (settings or {}).get("settings", {}).get("businesses", [])
+        business = next((b for b in businesses if str(b.get("id")) == str(payload.get("business_id"))), None)
+        if not business or business.get("entityType") not in {"individual", "corporation"}:
+            raise HTTPException(status_code=400, detail="대표 급여의 사업자 유형을 먼저 확인하십시오")
+        payload["business_type"] = business["entityType"]
+        payload["owner_withdrawal"] = business["entityType"] == "individual"
+        if not payload["owner_withdrawal"]:
+            warnings.append("임원 보수 규정·결의 필요")
+    payload["payee_warnings"] = list(dict.fromkeys(warnings))
+    payload["contract_exempt"] = relation in {"owner", "family"}
+    if payload["owner_withdrawal"]:
+        payload.update(employment_tax_type="owner_withdrawal", taxable_pay=0, non_tax_meal_allowance=0,
+                       tax_withholding=0, insurance_deduction=0, other_deduction=0)
+        payload.pop("deduction_items", None)
+    elif shifts and all(i["code"] in {"support_shift", SETTLEMENT_PAY_CODE} for i in pay):
+        days: dict[str, int] = {}
+        for item in shifts:
+            days[item["work_date"]] = days.get(item["work_date"], 0) + item["amount"]
+        # 같은 날짜의 여러 점포 지원도 일별 합산. 지급 건 전체 소득세에 소액부징수 적용.
+        income = sum(max(0, amount - SUPPORT_DAILY_DEDUCTION) * SUPPORT_INCOME_RATE_PERCENT * (100 - SUPPORT_TAX_CREDIT_PERCENT) for amount in days.values()) // 10_000
+        if income < SUPPORT_SMALL_TAX_LIMIT:
+            income = 0
+        local = income * SUPPORT_LOCAL_RATE_PERCENT // 100
+        insurance = sum(days.values()) * SUPPORT_EMPLOYMENT_RATE_PERMILLE // 1000
+        retained = [i for i in payload.get("deduction_items", []) if i["code"] in {"other", SETTLEMENT_RECOVER_CODE}]
+        payload.update(employment_tax_type="daily_support", tax_withholding=income + local, insurance_deduction=insurance,
+                       other_deduction=sum(i["amount"] for i in retained),
+                       deduction_items=retained + [{"code": "income_tax", "label": "일용 소득세", "amount": income},
+                       {"code": "local_income_tax", "label": "지방소득세", "amount": local},
+                       {"code": "employment_insurance", "label": "일용 고용보험", "amount": insurance}])
+
+
 def _payroll_payload_with_items(payload: dict[str, Any]) -> dict[str, Any]:
     """pay_items·deduction_items·work_summary 를 검증·정리하고, 비어 있는 합계 칸만 항목 합계로 채운다."""
     from app.services.yeoljeong_payroll_pdf import (
@@ -9677,6 +9741,9 @@ def _payroll_payload_with_items(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     result = {key: value for key, value in payload.items() if key not in {"pay_items", "deduction_items", "work_summary"}}
     result.update(items)
+    if any(item["code"] == "support_shift" for item in items.get("pay_items", [])):
+        result["gross_pay"] = sum(item["amount"] for item in items["pay_items"])
+        result["taxable_pay"] = result["gross_pay"] - _payroll_integer_for_api(result.get("non_tax_meal_allowance"), field="non_tax_meal_allowance") - sum(item["amount"] for item in items["pay_items"] if item["code"] == SETTLEMENT_PAY_CODE)
     if "pay_items" in items and _payroll_value_missing(result.get("gross_pay")):
         result["gross_pay"] = sum(item["amount"] for item in items["pay_items"])
     for field, codes in (
@@ -9759,12 +9826,14 @@ PAYROLL_SERVER_FIELDS = frozenset({
     "employee_no", "employee_birth_date", "source_kind", "import_task", "statement_payload", "deduction_basis",
     "contract_id", "contract_applies_from", "contract_applies_to", "contract_payroll_month", "non_tax_meal_allowance_basis",
     "payout", "payout_diff_resolution", "payout_diff_completions", "settlement_warnings",
+    "owner_withdrawal", "business_type", "contract_exempt", "payee_warnings",
     "pending_amount", "settled_amount", "settled_in", "claimed_amount", "claimed_in", "resolution_invalid",
 })
 PAYROLL_CONTENT_FIELDS = (
     "employee_name", "business_id", "branch", "payroll_month", "pay_date", "employment_tax_type", "meal_provision",
     "gross_pay", "taxable_pay", "non_tax_meal_allowance", "tax_withholding", "insurance_deduction", "other_deduction",
     "net_pay", "memo", "pay_items", "deduction_items", "work_summary", "deduction_basis",
+    "payee_relation", "relation_note", "work_memo", "owner_withdrawal", "business_type",
 )
 PAYROLL_DELIVERY_CONSENT_VERSION = "payroll-delivery-v1"
 PAYROLL_ATTENDANCE_WAGE_TYPES = ("hourly", "daily")
@@ -9795,6 +9864,8 @@ def _payroll_content(record: dict[str, Any]) -> dict[str, Any]:
     content: dict[str, Any] = {}
     for field in PAYROLL_CONTENT_FIELDS:
         value = record.get(field)
+        if field == "payee_relation":
+            value = value or "employee"
         if isinstance(value, (list, dict)):
             content[field] = json.dumps(value, ensure_ascii=False, sort_keys=True) if value else ""
         else:
@@ -10010,9 +10081,19 @@ def _save_payroll_record(
         if employee
         else None
     )
+    for field in ("payee_relation", "relation_note", "work_memo"):
+        if field not in payload and requested_row and field in requested_row:
+            payload[field] = requested_row[field]
     plan = _payroll_defaults_from_employment(derived)
     payload = _payroll_payload_with_items(payload)
+    # 서버 전용 분류를 벗어난 수정은 계약의 일반 과세구분으로 돌아간다.
+    if (payload.get("employment_tax_type") == "owner_withdrawal" and payload.get("payee_relation") != "owner") or (
+        payload.get("employment_tax_type") == "daily_support" and any(i["code"] not in {"support_shift", SETTLEMENT_PAY_CODE} for i in payload.get("pay_items", []))
+    ):
+        payload.pop("employment_tax_type", None)
     payload, defaults_applied, deviation = _apply_payroll_contract_defaults(payload, plan)
+    payload["payroll_month"] = month
+    _apply_support_payee_rules(payload, user, requested_row)
     # 4대보험 근로자는 자동 항목을 저장 직전에 다시 계산하므로, 요청에 실려 온 이전 공제 합계로 지급액 초과를
     # 판단하면 총지급액을 낮추는 정상 수정이 막힌다. 초과 검증은 재계산 뒤 합계로 _apply_statutory_payroll_deductions 가 한다.
     amounts = _validated_payroll_amounts(

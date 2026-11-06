@@ -11,6 +11,7 @@ work_summary 가 없는 과거 명세는 기존 합계 필드만으로 그대로
 from __future__ import annotations
 
 import io
+from datetime import date
 import re
 from typing import Any
 from xml.sax.saxutils import escape
@@ -22,7 +23,7 @@ TOTAL_FIELDS = ("gross_pay", "taxable_pay", "non_tax_meal_allowance", "tax_withh
 FREELANCER_TAX_TYPE = "freelancer_33"
 
 PAY_ITEM_CODES = {
-    "base": "기본급", "overtime": "연장근로수당", "night": "야간근로수당", "holiday": "휴일근로수당",
+    "support_shift": "지원 근무", "base": "기본급", "overtime": "연장근로수당", "night": "야간근로수당", "holiday": "휴일근로수당",
     "weekly_holiday": "주휴수당", "meal": "식대", "bonus": "상여금", "other": "기타수당",
     "prior_month_unpaid_pay": "전월 미지급분 지급",
 }
@@ -97,6 +98,32 @@ def _flag(value: Any) -> bool:
     return value is True or (isinstance(value, int) and not isinstance(value, bool) and value == 1)
 
 
+def _support_shift(item: dict[str, Any]) -> dict[str, Any]:
+    work_date = str(item.get("work_date") or "")
+    try:
+        if date.fromisoformat(work_date).isoformat() != work_date:
+            raise ValueError
+    except ValueError:
+        raise PayrollItemError("지원 근무 날짜는 YYYY-MM-DD로 입력하십시오") from None
+    unit = item.get("unit_type")
+    if unit not in {"daily", "hourly"}:
+        raise PayrollItemError("지원 근무 단위는 일당 또는 시급이어야 합니다")
+    price = _strict_amount(item.get("unit_price"), "지원 근무 단가")
+    quantity = _strict_amount(item.get("quantity"), "지원 근무 수량")
+    if not 0 < quantity <= (1 if unit == "daily" else 1440):
+        raise PayrollItemError("지원 근무는 날짜별로 나누어 일수 1 또는 분(1~1440)을 입력하십시오")
+    branch = str(item.get("support_branch") or "").strip()
+    memo = str(item.get("memo") or "").strip()
+    if len(branch) > 100 or len(memo) > 200 or _RRN_PATTERN.search(branch + memo):
+        raise PayrollItemError("지원 점포·메모 형식이 올바르지 않습니다")
+    amount = price * quantity if unit == "daily" else (price * quantity + 30) // 60
+    _strict_amount(amount, "지원 근무")
+    quantity_label = f"{quantity}일" if unit == "daily" else _duration(quantity)
+    return {"work_date": work_date, "support_branch": branch, "unit_type": unit,
+            "unit_price": price, "quantity": quantity, "memo": memo, "amount": amount,
+            "calc_note": f"{work_date} {branch} · {price:,}원 × {quantity_label}" + (f" · {memo}" if memo else "")}
+
+
 def _clean_item_list(
     raw: Any, codes: dict[str, str], kind: str, *, with_note: bool, with_flags: bool = False
 ) -> list[dict[str, Any]] | None:
@@ -119,8 +146,9 @@ def _clean_item_list(
             raise PayrollItemError(f"{where} 항목명에 주민등록번호 형식의 값을 입력할 수 없습니다")
         if len(label) > 40:
             raise PayrollItemError(f"{where} 항목명은 40자 이내로 입력하십시오")
-        entry: dict[str, Any] = {"code": code, "label": label, "amount": _strict_amount(item.get("amount"), where)}
-        if with_note:
+        support = _support_shift(item) if code == "support_shift" else None
+        entry: dict[str, Any] = {"code": code, "label": label, "amount": support["amount"] if support else _strict_amount(item.get("amount"), where)}
+        if with_note and not support:
             note = str(item.get("calc_note") or "").strip()
             if _RRN_PATTERN.search(note):
                 raise PayrollItemError(f"{where} 계산방법에 주민등록번호 형식의 값을 입력할 수 없습니다")
@@ -143,6 +171,8 @@ def _clean_item_list(
                 entry["confirmed"] = True
             if _flag(item.get("needs_input")) and not confirmed:
                 entry["needs_input"] = True
+        if support:
+            entry.update(support)
         if code in SETTLEMENT_ITEM_CODES:
             # 정산 참조는 이 두 code 에만 남는다. 다른 code 에 붙은 정산 키는 여기서 사라진다.
             settlement_root = str(item.get("settlement_of_root_id") or "").strip()
@@ -401,6 +431,10 @@ def payroll_form(statement: dict[str, Any]) -> str:
 
 
 def payroll_form_title(statement: dict[str, Any]) -> str:
+    if statement.get("owner_withdrawal"):
+        return "대표 인출 내역(비용 아님)"
+    if statement.get("employment_tax_type") == "daily_support":
+        return "일용 지원 명세"
     return "용역비 지급명세서" if is_freelancer(statement) else "임금명세서"
 
 

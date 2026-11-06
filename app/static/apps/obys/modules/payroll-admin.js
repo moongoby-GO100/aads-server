@@ -7,7 +7,7 @@
     ["non_tax_meal_allowance", "비과세 식대"], ["tax_withholding", "원천세"],
     ["insurance_deduction", "보험 공제"], ["other_deduction", "기타 공제"]
   ];
-  const payCodes = [["base","기본급"],["overtime","연장근로수당"],["night","야간근로수당"],["holiday","휴일근로수당"],["weekly_holiday","주휴수당"],["meal","식대"],["bonus","상여금"],["other","기타수당"]];
+  const payCodes = [["support_shift","지원 근무"],["base","기본급"],["overtime","연장근로수당"],["night","야간근로수당"],["holiday","휴일근로수당"],["weekly_holiday","주휴수당"],["meal","식대"],["bonus","상여금"],["other","기타수당"]];
   const dedCodes = [["national_pension","국민연금"],["health_insurance","건강보험"],["long_term_care","노인장기요양보험"],["employment_insurance","고용보험"],["income_tax","소득세"],["local_income_tax","지방소득세"],["other","기타 공제"]];
   const insuranceCodes = ["national_pension","health_insurance","long_term_care","employment_insurance"], taxCodes = ["income_tax","local_income_tax"];
   const workFields = [["work_days","근로일수(일)"],["work_minutes","총 근로시간(분)"],["overtime_minutes","연장근로(분)"],["night_minutes","야간근로(분)"],["holiday_minutes","휴일근로(분)"]];
@@ -149,6 +149,9 @@
       <label>명세 선택<select class="field" data-payroll-statement></select></label></div>
       <p data-payroll-blocked role="alert"></p><p data-payroll-link-notice role="status"></p><p data-payroll-state role="status"></p><p data-payroll-basis></p>
       <form data-payroll-form class="toolbar">${amounts.map(([name, label]) => `<label data-wrap="${name}">${label}<input class="field" name="${name}" type="number" min="0" step="1" required></label>`).join("")}
+      <label>급여 대상<select class="field" name="payee_relation"><option value="employee">직원</option><option value="owner">대표 본인</option><option value="family">대표 가족</option></select></label>
+      <label>가족 관계<input class="field" name="relation_note" maxlength="200" placeholder="예: 배우자"></label>
+      <label>근무 메모<input class="field" name="work_memo" maxlength="200" placeholder="가족 근무 증빙"></label>
       <label>임금지급일<input class="field" data-payroll-pay-date maxlength="40" placeholder="예: 2026-11-10 또는 매월 10일"></label>
       <button class="btn primary" type="submit">초안 저장</button></form>
       <div data-payroll-items></div>
@@ -162,24 +165,25 @@
       <button type="button" class="btn" data-payroll-action="pay">지급 완료로 기록</button>
       <button type="button" class="btn" data-payroll-action="deliver">명세서 발송</button></div>
       <p role="status" data-payroll-message></p><div data-payroll-versions></div>`;
-    host.querySelectorAll("button,select,input").forEach(control => {control.style.minHeight = "44px";});
+    host.querySelectorAll("button,select,input").forEach(control => {control.style.minHeight = "44px";control.style.fontSize = "14px";});
     const form = host.querySelector("form"), picker = host.querySelector("[data-payroll-employee]");
     const statementPicker = host.querySelector("[data-payroll-statement]");
     const message = host.querySelector("[data-payroll-message]");
     const itemsHost = host.querySelector("[data-payroll-items]");
     const payDateInput = host.querySelector("[data-payroll-pay-date]");
     const isFreelancer = () => (active?.employment_tax_type || planTaxType || employee()?.current_employment?.employment_tax_type) === "freelancer_33";
+    const relationValues = () => Object.fromEntries(["payee_relation", "relation_note", "work_memo"].map(name => [name, form.elements[name].value]));
     const inputValues = () => Object.fromEntries(amounts.map(([name]) => [name, form.elements[name].value]));
-    const snapshot = (p, d, w) => JSON.stringify({p:p.map(row => [row.code, row.label, Number(row.amount), row.calc_note || ""]), d:d.map(row => [row.code, row.label, Number(row.amount)]),
+    const snapshot = (p, d, w) => JSON.stringify({p:p.map(row => [row.code, row.label, Number(row.amount), row.calc_note || "", row.work_date, row.support_branch, row.unit_type, row.unit_price, row.quantity, row.memo]), d:d.map(row => [row.code, row.label, Number(row.amount)]),
       w:workFields.map(([name]) => w[name] === undefined || w[name] === "" ? null : Number(w[name]))});
-    const remember = () => employee() && drafts.set(key(), {id:active?.id || "", ...inputValues(), pay_date:payDateInput.value, items:clone({pay, ded, work, optOut})});
-    const dirty = () => amounts.some(([name]) => form.elements[name].value !== String(active?.[name] ?? ""))
+    const remember = () => employee() && drafts.set(key(), {id:active?.id || "", ...inputValues(), ...relationValues(), pay_date:payDateInput.value, items:clone({pay, ded, work, optOut})});
+    const dirty = () => Object.entries(relationValues()).some(([k,v]) => v !== String(active?.[k] ?? (k === "payee_relation" ? "employee" : ""))) || amounts.some(([name]) => form.elements[name].value !== String(active?.[name] ?? ""))
       || payDateInput.value !== String(active?.pay_date ?? "")
       || snapshot(pay, ded, work) !== snapshot(active?.pay_items || [], active?.deduction_items || [], active?.work_summary || {})
       || JSON.stringify(optOut) !== JSON.stringify(active?.settlement_opt_out || []);
     const itemPayload = () => ({
       // 정산 항목은 서버가 버리고 다시 계산한다. 그래도 보내는 이유는 총지급액 칸에 포함된 금액을 서버가 빼기 위해서다.
-      pay_items:pay.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), calc_note:row.calc_note || "", ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
+      pay_items:pay.map(row => ({...(row.code === "support_shift" ? {work_date:row.work_date,support_branch:row.support_branch,unit_type:row.unit_type,unit_price:Number(row.unit_price),quantity:Number(row.quantity),memo:row.memo} : {}),code:row.code, label:row.label, amount:Number(row.amount), calc_note:row.calc_note || "", ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
       deduction_items:ded.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
       settlement_opt_out:optOut,
       work_summary:Object.fromEntries(workFields.filter(([name]) => work[name] !== undefined && work[name] !== "").map(([name]) => [name, Number(work[name])]))
@@ -187,9 +191,14 @@
     const itemsComplete = () => [...pay, ...ded].every(row => row.amount !== "" && row.amount !== undefined && Number.isSafeInteger(Number(row.amount)) && Number(row.amount) >= 0);
     // 항목을 쓰면 해당 합계 칸은 항목 합계로 고정(읽기 전용)한다. 항목이 없으면 기존 간편 입력 그대로.
     const syncDerived = () => {
+      pay.filter(row => row.code === "support_shift").forEach(row => {
+        row.amount = row.unit_type === "daily" ? Number(row.unit_price) * Number(row.quantity) : Math.round(Number(row.unit_price) * Number(row.quantity) / 60);
+        const index = pay.indexOf(row), control = itemsHost.querySelector(`[data-item="pay"][data-i="${index}"][data-k="amount"]`);
+        if (control) control.value = row.amount;
+      });
       const lock = (name, on, value) => {const control = form.elements[name]; control.readOnly = on; if (on) control.value = String(value);};
       lock("gross_pay", pay.length > 0, sumItems(pay));
-      lock("taxable_pay", pay.length > 0, Math.max(sumItems(pay) - sumItems(pay.filter(isSettlement)) - (Number(form.elements.non_tax_meal_allowance.value) || 0), 0));  // 전월 정산 지급분은 과세 기준 제외
+      lock("taxable_pay", pay.length > 0, form.elements.payee_relation.value === "owner" && active?.business_type === "individual" ? 0 : Math.max(sumItems(pay) - sumItems(pay.filter(isSettlement)) - (Number(form.elements.non_tax_meal_allowance.value) || 0), 0));  // 전월 정산 지급분은 과세 기준 제외
       lock("tax_withholding", ded.length > 0, sumItems(ded, taxCodes));
       lock("insurance_deduction", ded.length > 0, sumItems(ded, insuranceCodes));
       lock("other_deduction", ded.length > 0, sumItems(ded, ["other", RECOVER_CODE]));
@@ -198,19 +207,25 @@
       if (isFreelancer() && form.elements.insurance_deduction.value === "") form.elements.insurance_deduction.value = "0";
     };
     const isFactRow = row => Boolean(active?.supersedes_id || ["confirmed", "paid"].includes(active?.status)) && row.label !== TOPUP_LABEL;
+    const supportFields = (row, index) => {
+      const field = (key, title, type="text") => `<label>${title}<input class="field" style="min-height:44px;font-size:14px" type="${type}" data-item="pay" data-i="${index}" data-k="${key}" value="${esc(row[key] ?? "")}" ${type === "number" ? 'min="1" step="1"' : 'maxlength="200"'}></label>`;
+      return `<div style="display:flex;flex-wrap:wrap;gap:8px;font-size:14px">${field("work_date","날짜","date")}${field("support_branch","지원 점포")}<label>단위<select class="field" style="min-height:44px;font-size:14px" data-item="pay" data-i="${index}" data-k="unit_type"><option value="daily"${row.unit_type === "daily" ? " selected" : ""}>일당</option><option value="hourly"${row.unit_type === "hourly" ? " selected" : ""}>시급</option></select></label>${field("unit_price","단가(원)","number")}${field("quantity",row.unit_type === "daily" ? "일수(날짜별 1일)" : "근무시간(분)","number")}${field("memo","근무 메모")}</div>`;
+    };
     const itemTable = (kind, rows, codes, title) => `<h3>${title}</h3>${rows.length ? `<table><thead><tr><th>구분</th><th>항목명</th><th>금액(원)</th>${kind === "pay" ? "<th>계산방법</th>" : ""}<th></th></tr></thead><tbody>${rows.map((row, index) => isSettlement(row) ? settlementRowHtml(kind, row, isFactRow(row)) : `<tr>
       <td><select class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="code">${codes.map(([code, label]) => `<option value="${code}"${code === row.code ? " selected" : ""}>${label}</option>`).join("")}</select></td>
       <td><input class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="label" maxlength="40" value="${esc(row.label)}"></td>
-      <td><input class="field" style="min-height:44px" type="number" min="0" step="1" data-item="${kind}" data-i="${index}" data-k="amount" value="${esc(row.amount)}"></td>
-      ${kind === "pay" ? `<td><input class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="calc_note" maxlength="200" placeholder="예: 시급 × 시간" value="${esc(row.calc_note || "")}"></td>` : ""}
+      <td><input class="field" style="min-height:44px" type="number" min="0" step="1" data-item="${kind}" data-i="${index}" data-k="amount" ${row.code === "support_shift" ? "readonly" : ""} value="${esc(row.amount)}"></td>
+      ${kind === "pay" ? `<td>${row.code === "support_shift" ? supportFields(row,index) : `<input class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="calc_note" maxlength="200" placeholder="예: 시급 × 시간" value="${esc(row.calc_note || "")}">`}</td>` : ""}
       <td><button type="button" class="btn" style="min-height:44px" data-item-del="${kind}" data-i="${index}">삭제</button></td></tr>`).join("")}</tbody></table>` : "<p>항목 없음 — 위 합계 칸에 간편 입력할 수 있습니다.</p>"}
-      <button type="button" class="btn" style="min-height:44px" data-item-add="${kind}">${kind === "pay" ? "지급 항목 추가" : "공제 항목 추가"}</button>`;
+      ${kind === "pay" ? '<button type="button" class="btn" style="min-height:44px;font-size:14px" data-support-add="1">지원 근무 추가</button>' : ""}<button type="button" class="btn" style="min-height:44px" data-item-add="${kind}">${kind === "pay" ? "지급 항목 추가" : "공제 항목 추가"}</button>`;
     const renderItems = () => {
+      itemsHost.style.fontSize = "14px";
       const freelancer = isFreelancer();
       itemsHost.innerHTML = itemTable("pay", pay, payCodes, "지급 항목") + itemTable("ded", ded, freelancer ? dedCodes.filter(([code]) => !insuranceCodes.includes(code)) : dedCodes, freelancer ? "원천징수 항목" : "공제 항목")
         + (optOut.length ? `<p role="status">이번 달 제외한 전월 차액 ${optOut.length}건 · 다음 명세에 다시 반영됩니다. <button type="button" class="btn" style="min-height:44px" data-settle-restore="1">제외 해제</button></p>` : "")
         + (freelancer ? '<button type="button" class="btn" style="min-height:44px" data-item-tax="1">3.3% 자동 계산(소득세 3% · 지방소득세 0.3%)</button>' : "")
         + `<h3>근로일수 및 근로시간</h3><div class="toolbar">${workFields.map(([name, label]) => `<label>${label}<input class="field" style="min-height:44px" type="number" min="0" step="1" data-work-field="${name}" value="${esc(work[name] ?? "")}"></label>`).join("")}</div>`;
+      itemsHost.querySelectorAll("input,select,button,label").forEach(control => {control.style.fontSize = "14px"; control.style.minHeight = "44px";});
     };
     const refresh = () => {syncDerived(); remember(); totals(); restoreButtons();};
     itemsHost.oninput = event => {
@@ -220,6 +235,8 @@
         const row = (data.item === "pay" ? pay : ded)[Number(data.i)];
         if (!row) return;
         row[data.k] = control.value;
+        if (data.k === "unit_type") {row.quantity = row.unit_type === "daily" ? 1 : 60; renderItems();}
+        if (data.k === "code" && row.code === "support_shift") Object.assign(row, {work_date:`${month}-01`,support_branch:"",unit_type:"daily",unit_price:0,quantity:1,memo:""});
         if (data.k === "code") {row.label = (((data.item === "pay" ? payCodes : dedCodes).find(([code]) => code === row.code)) || [])[1] || row.label; renderItems();}
       }
       refresh();
@@ -266,10 +283,14 @@
       if (meal > 0) pay.push({code:"meal", label:"식대", amount:meal, calc_note:""});
       return true;
     };
-    const nextPayCode = () => payCodes.find(([code]) => !pay.some(row => row.code === code)) || payCodes[0];
+    const nextPayCode = () => payCodes.find(([code]) => code !== "support_shift" && !pay.some(row => row.code === code)) || payCodes[1];
     itemsHost.onclick = event => {
       const data = (event.target.closest ? event.target.closest("button") : event.target)?.dataset || {};
-      if (data.itemAdd) {
+      if (data.supportAdd) {
+        if (!seedPay()) return;
+        amounts.forEach(([name]) => {if (form.elements[name].value === "") form.elements[name].value = "0";});
+        pay.push({code:"support_shift",label:"지원 근무",amount:0,work_date:`${month}-01`,support_branch:"",unit_type:"daily",unit_price:0,quantity:1,memo:""});
+      } else if (data.itemAdd) {
         if (data.itemAdd === "pay" && !seedPay()) return;
         if (data.itemAdd === "ded" && !seedDeductions()) return;
         if (data.itemAdd === "pay") {const [code, label] = nextPayCode(); pay.push({code, label, amount:"", calc_note:""});}
@@ -317,6 +338,7 @@
       const values = draft && draft.id === (active?.id || "") ? draft : active || {};
       amounts.forEach(([name]) => {form.elements[name].value = values[name] ?? "";});
       payDateInput.value = values.pay_date ?? "";
+      ["payee_relation","relation_note","work_memo"].forEach(name => {form.elements[name].value = values[name] ?? (name === "payee_relation" ? "employee" : "");});
       const source = values.items || {pay:clone(active?.pay_items) || [], ded:clone(active?.deduction_items) || [], work:clone(active?.work_summary) || {}, optOut:clone(active?.settlement_opt_out) || []};
       pay = source.pay || []; ded = source.ded || []; work = source.work || {}; optOut = source.optOut || [];
       renderItems(); syncDerived();
@@ -328,6 +350,7 @@
         : active?.attendance_basis
         ? `승인 근태 ${active.attendance_basis.approved_days}일 · ${active.attendance_basis.approved_minutes}분 기준`
         : active?.source_contract_id ? "서명 계약서 기준값 적용" : "계약·근태 기준값을 조회하거나 금액을 확인해 입력하세요.";
+      if ((active?.payee_warnings || []).length) host.querySelector("[data-payroll-basis]").textContent += " · " + active.payee_warnings.join(" · ");
       totals();restoreButtons();
     };
     const showNotices = () => {
@@ -406,7 +429,7 @@
         if (!itemsComplete()) throw new Error("지급·공제 항목의 금액을 0원 이상 정수로 입력하세요.");
         const person = employee(), payload = {business_id:businessId, employee_email:email(person),
           employee_name:person.name || person.employee_name, employee_request_id:person.id || "", payroll_month:month,
-          ...(active?.employment_tax_type ? {employment_tax_type:active.employment_tax_type} : {}), ...itemPayload(),
+          ...(active?.employment_tax_type ? {employment_tax_type:active.employment_tax_type} : {}), ...itemPayload(), ...relationValues(),
           ...(payDateInput.value.trim() ? {pay_date:payDateInput.value.trim()} : {}),
           ...(active?.id ? {id:active.id} : {}), ...Object.fromEntries(amounts.map(([name]) => [name, Number(form.elements[name].value)]))};
         const result = await api("/payroll", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});

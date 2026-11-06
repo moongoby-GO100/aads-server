@@ -8956,8 +8956,11 @@
       // 정정 초안이 확정되기 전에는 서버가 원본도 함께 돌려준다. 같은 직원·월이 두 번 합산되지 않도록
       // 대체된 행(superseded_by)과, 목록 안에 원본이 있는 정정 초안(supersedes_id)은 제외한다.
       const ids = new Set(rows.map(item => String(item.id)));
-      const counted = rows.filter(item => !item.superseded_by && !(item.supersedes_id && ids.has(String(item.supersedes_id))));
-      const excluded = rows.length - counted.length;
+      const latest = rows.filter(item => !item.superseded_by && !(item.supersedes_id && ids.has(String(item.supersedes_id))));
+      const withdrawals = latest.filter(item => item.owner_withdrawal);
+      const counted = latest.filter(item => !item.owner_withdrawal);
+      const excluded = rows.length - latest.length;
+      const withdrawalNote = withdrawals.length ? ` · 대표 인출(비용 아님) ${formatMoney(withdrawals.reduce((sum, item) => sum + (payrollAmount(item, "gross_pay", "grossPay") || 0), 0))} 별도` : "";
       // 값이 없는 명세는 0원으로 치지 않는다. 합계는 값이 있는 명세만 더하고 누락 인원을 따로 표시한다.
       const total = (...keys) => {
         let sum = 0, known = 0;
@@ -8966,7 +8969,7 @@
         const text = known ? formatMoney(sum) : "미집계";
         return missing && known ? `${text} <span class="muted">(미집계 ${missing}명 제외)</span>` : text;
       };
-      return `<tr class="payroll-totals-row"><td colspan="3"><strong>합계</strong> <span class="muted">${counted.length}명${excluded ? ` · 정정 중복 ${excluded}건 제외` : ""}</span></td>`
+      return `<tr class="payroll-totals-row"><td colspan="3"><strong>합계</strong> <span class="muted">${counted.length}명${excluded ? ` · 정정 중복 ${excluded}건 제외` : ""}${withdrawalNote}</span></td>`
         + `<td class="num">총지급 ${total("gross_pay", "grossPay")}<br><span class="muted">실지급 ${total("net_pay", "netPay")}</span></td>`
         + `<td class="muted">4대보험 ${total("insurance_deduction", "insuranceDeduction")}<br>원천세 ${total("tax_withholding", "taxWithholding")}<br>기타 공제 ${total("other_deduction", "otherDeduction")}</td>`
         + `<td></td></tr>`;
