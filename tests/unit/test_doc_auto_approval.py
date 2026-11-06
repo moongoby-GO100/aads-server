@@ -806,6 +806,33 @@ def test_sweep_apply_first_review_shares_limit(monkeypatch):
     assert all(c.kwargs == {'follow_up': True} for c in execute.await_args_list)
 
 
+def test_follow_up_review_role_fits_db_check():
+    # 2026-11-06: follow_up 역할이 그대로 INSERT 돼 role CHECK 위반으로 후속 검토가 전부 실패했다.
+    sql = (Path(__file__).resolve().parents[2] / 'migrations' / '20261029_document_tier.sql').read_text()
+    for name in cross.STORED_ROLES:
+        assert f"'{name}'" in sql
+    assert cross.stored_role('follow_up', True) == 'cross'
+    assert cross.stored_role('follow_up', False) == 'same_company_other_model'
+    assert cross.stored_role('follow_up_rerun', True) == 'cross'
+    assert cross.stored_role('same_company_other_model', False) == 'same_company_other_model'
+    assert cross.stored_role('cross', True) == 'cross'
+
+
+def test_record_writes_allowed_role_for_follow_up():
+    conn = FakeConn(head(), revision(), [])
+    seen = []
+
+    async def execute(sql, *args):
+        seen.append(args)
+    conn.execute = execute
+    pick = cross.ReviewerPick(CODEX, 'follow_up')
+    run(cross._record(conn, 't1', 'AADS', head(), revision(), pick, 'pass', 'ok'))
+    assert seen and seen[0][6] in cross.STORED_ROLES and seen[0][6] == 'cross' and seen[0][7] is True
+    pick = cross.ReviewerPick(OPUS, 'follow_up_rerun')
+    run(cross._record(conn, 't1', 'AADS', head(), revision(), pick, 'pass', 'ok'))
+    assert seen[1][6] == 'same_company_other_model' and seen[1][7] is False
+
+
 # ── runner-e2f0c41e 반려 지적 4건 회귀 ──
 
 def test_high_risk_still_requires_base_min_score(monkeypatch):

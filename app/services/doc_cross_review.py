@@ -210,12 +210,29 @@ async def notify_blocked(tenant, project, reason):
         logger.exception('doc_cross_review_telegram_failed')
 
 
+# project_document_reviews.role CHECK 가 허용하는 값(migrations/20261029_document_tier.sql).
+STORED_ROLES = frozenset({'cross', 'same_company_other_model', 'code'})
+
+
+def stored_role(pick_role, cross_company):
+    """후속 검토 선택 역할(follow_up·follow_up_rerun)은 DB 제약에 없다 — 회사 관계로 저장 값을 정한다.
+
+    7d766b8e(2026-11-05) 이후 후속 검토 INSERT 가 전부 CheckViolation 으로 실패해, 두 번째 회사 검토가 한 건도
+    기록되지 않고 자동승인이 needs_second_company 로 멈췄다(2026-11-06 실측).
+    """
+    if pick_role in STORED_ROLES:
+        return pick_role
+    return 'cross' if cross_company else 'same_company_other_model'
+
+
 async def _record(conn, tenant, project, head, revision, pick, verdict, reason):
+    cross_company = (provider_of(pick.model) != provider_of(revision.get('author_model'))
+                     and provider_of(pick.model) in ('anthropic', 'openai'))
     await conn.execute('INSERT INTO project_document_reviews '
                        '(tenant_id,project_key,head_id,revision_id,reviewer_model,reviewer_provider,role,cross_company,verdict,reason,source_task_id) '
                        'VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
-                       tenant, project, head['id'], revision['id'], pick.model, provider_of(pick.model), pick.role,
-                       provider_of(pick.model) != provider_of(revision.get('author_model')) and provider_of(pick.model) in ('anthropic', 'openai'),
+                       tenant, project, head['id'], revision['id'], pick.model, provider_of(pick.model),
+                       stored_role(pick.role, cross_company), cross_company,
                        verdict, reason, revision.get('source_task_id'))
 
 
