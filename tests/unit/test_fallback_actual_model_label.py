@@ -6,7 +6,7 @@ import pytest
 from app.services import model_selector
 from tests.unit.test_antigravity_host_relay import _patch_routing, _row, _run
 
-AGY_MODEL = "gemini-3.1-pro-high"
+AGY_MODEL = "gemini-4-argon-high"
 CODEX_FALLBACK = "gpt-5.5"
 
 

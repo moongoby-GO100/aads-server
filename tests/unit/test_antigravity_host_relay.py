@@ -612,9 +612,9 @@ async def test_large_prompt_with_slow_reader_does_not_deadlock(relay, monkeypatc
 
 # ── model_selector: 집합·표시명 ────────────────────────────────────────────
 def test_selector_set_has_all_native_ids_and_aliases():
-    # relay 실측 목록(NATIVE_MODELS)과 selector 목록의 일치는 model_selector 갱신 작업이 맞춘다.
-    # 여기서는 selector 자신의 id·별칭·표시명이 빠짐없는지만 본다.
-    assert set(SELECTOR_CLI_MODELS) | set(ALIASES) <= model_selector._ANTIGRAVITY_MODELS
+    assert set(SELECTOR_CLI_MODELS) == set(NATIVE_MODELS)
+    assert model_selector._ANTIGRAVITY_MODELS == set(NATIVE_MODELS) | set(ALIASES)
+    assert model_selector._ANTIGRAVITY_MODEL_DISPLAY["antigravity-pro"] == "Antigravity Pro (Gemini 4 Argon High)"
     for model_id in SELECTOR_CLI_MODELS:
         assert model_selector._ANTIGRAVITY_MODEL_DISPLAY[model_id]
 
@@ -627,11 +627,8 @@ def test_antigravity_ids_never_collide_with_litellm_gemini_ids():
 
 
 def test_relay_knows_every_selector_id(relay):
-    # model_selector 가 relay 로 보내는 id 는 relay 가 실행하거나(map) 명시 거절(retired)해야 한다.
-    # 정확 일치였던 검사를 완화한 이유: 2026-11-06 relay 는 agy 실측 목록으로 바꿨고 model_selector 목록
-    # 갱신은 별도 작업(runner-1f42c94d)이다. 어느 쪽이 먼저 반영돼도 "모르는 id" 가 생기지 않으면 된다.
-    known = set(relay._ANTIGRAVITY_MODEL_MAP) | set(relay._ANTIGRAVITY_RETIRED_MODELS)
-    assert model_selector._ANTIGRAVITY_MODELS <= known
+    assert model_selector._ANTIGRAVITY_MODELS == set(relay._ANTIGRAVITY_MODEL_MAP)
+    assert not (model_selector._ANTIGRAVITY_MODELS & set(relay._ANTIGRAVITY_RETIRED_MODELS))
 
 
 # ── model_selector: 라우팅 순서 ────────────────────────────────────────────
@@ -733,7 +730,7 @@ async def test_antigravity_wins_even_if_registry_row_says_litellm_proxy(monkeypa
 @pytest.mark.asyncio
 async def test_antigravity_failure_falls_back_to_codex_chain(monkeypatch):
     calls = []
-    model_id = "gemini-3.1-pro-high"
+    model_id = "gemini-4-argon-high"
     _patch_routing(
         monkeypatch, [_row("antigravity", model_id)], calls,
         antigravity_events=[{"type": "error", "content": "Antigravity CLI timeout"}],
@@ -742,6 +739,124 @@ async def test_antigravity_failure_falls_back_to_codex_chain(monkeypatch):
     assert calls == [("antigravity", model_id), ("codex", "gpt-5.5")]
     assert any("Codex CLI gpt-5.5" in str(e.get("content", "")) for e in events)
     assert events[-1]["type"] == "done" and events[-1]["model"] == "gpt-5.5"
+
+
+# ── model_selector: _stream_antigravity_relay_once 도구 전달·이벤트 변환·타임아웃 ──
+def _patch_relay_http(monkeypatch, stream_lines, captured):
+    class _FakeResp:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def aiter_lines(self):
+            for line in stream_lines:
+                yield line
+
+    class _FakeClient:
+        def __init__(self, *, timeout=None, **_kw):
+            captured["client_timeout"] = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def get(self, url, **_kw):
+            return type("HC", (), {"status_code": 200})()
+
+        def stream(self, method, url, *, json=None, headers=None, timeout=None):
+            captured["method"] = method
+            captured["url"] = url
+            captured["json"] = json
+            captured["stream_timeout"] = timeout
+            return _FakeResp()
+
+    monkeypatch.setattr(model_selector.httpx, "AsyncClient", _FakeClient)
+
+
+@pytest.mark.asyncio
+async def test_stream_antigravity_relay_once_forwards_allow_tools_and_maps_tool_events(monkeypatch):
+    captured = {}
+    stream_lines = [
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "agy_s1_2",
+                    "name": "mcp__aads-tools__health_check",
+                    "input": {"component": "all"},
+                }],
+            },
+        }),
+        json.dumps({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "agy_s1_2",
+                    "content": '{"status":"healthy"}',
+                    "is_error": False,
+                }],
+            },
+        }),
+        json.dumps({"type": "assistant", "subtype": "text", "text": "정상입니다."}),
+        json.dumps({"type": "result", "subtype": "success", "input_tokens": 120, "output_tokens": 30, "mode": "tools"}),
+    ]
+    _patch_relay_http(monkeypatch, stream_lines, captured)
+
+    events = [
+        evt async for evt in model_selector._stream_antigravity_relay_once(
+            "antigravity-pro",
+            "sys",
+            [{"role": "user", "content": "상태 확인"}],
+            tools=[{"name": "health_check", "description": "check", "input_schema": {"type": "object"}}],
+            session_id="sess-agy-tools",
+        )
+    ]
+
+    assert captured["json"]["allow_tools"] is True
+    assert captured["json"]["model"] == "antigravity-pro"
+    assert captured["stream_timeout"].read == 630.0
+    assert [e["type"] for e in events] == ["tool_use", "tool_result", "delta", "done"]
+    assert events[0] == {
+        "type": "tool_use",
+        "tool_name": "health_check",
+        "tool_use_id": "agy_s1_2",
+        "tool_input": {"component": "all"},
+        "provider_executed": True,
+    }
+    assert events[1]["tool_name"] == "health_check"
+    assert events[1]["tool_use_id"] == "agy_s1_2"
+    assert events[1]["is_error"] is False
+    assert '"status":"healthy"' in events[1]["content"]
+    assert events[2] == {"type": "delta", "content": "정상입니다."}
+    assert events[3]["model"] == "Antigravity Pro (Gemini 4 Argon High)"
+
+
+@pytest.mark.asyncio
+async def test_stream_antigravity_relay_once_sets_allow_tools_false_when_no_tools(monkeypatch):
+    captured = {}
+    stream_lines = [
+        json.dumps({"type": "assistant", "subtype": "text", "text": "ok"}),
+        json.dumps({"type": "result", "subtype": "success", "input_tokens": 10, "output_tokens": 5}),
+    ]
+    _patch_relay_http(monkeypatch, stream_lines, captured)
+
+    events = [
+        evt async for evt in model_selector._stream_antigravity_relay_once(
+            "gemini-3.8-flash-medium", "sys", [{"role": "user", "content": "hi"}], tools=None, session_id="s-no-tools",
+        )
+    ]
+    assert captured["json"]["allow_tools"] is False
+    assert [e["type"] for e in events] == ["delta", "done"]
 
 
 # ── relay: /health ─────────────────────────────────────────────────────────

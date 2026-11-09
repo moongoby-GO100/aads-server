@@ -1468,25 +1468,27 @@ _CODEX_MODEL_ALIASES = {
     "gpt-5.3 codex (codex cli)": "gpt-5.3-codex",
 }
 
-# Antigravity CLI 모델 (Google Pro OAuth, relay /antigravity-stream 경유)
+# Antigravity CLI 모델 (Google Pro OAuth, relay /antigravity-stream 경유 — `agy models` 실측 13종)
 _ANTIGRAVITY_CLI_MODEL_LABELS = {
+    "gemini-4-argon-high": "Gemini 4 Argon High",
+    "gemini-4-argon-medium": "Gemini 4 Argon Medium",
+    "gemini-4-argon-low": "Gemini 4 Argon Low",
     "gemini-3.8-flash-high": "Gemini 3.8 Flash High",
     "gemini-3.8-flash-medium": "Gemini 3.8 Flash Medium",
     "gemini-3.8-flash-low": "Gemini 3.8 Flash Low",
-    "gemini-3.7-flash-high": "Gemini 3.7 Flash High",
-    "gemini-3.7-flash-medium": "Gemini 3.7 Flash Medium",
-    "gemini-3.7-flash-low": "Gemini 3.7 Flash Low",
-    "gemini-3.6-flash-high": "Gemini 3.6 Flash High",
-    "gemini-3.6-flash-medium": "Gemini 3.6 Flash Medium",
-    "gemini-3.6-flash-low": "Gemini 3.6 Flash Low",
-    "gemini-3.1-pro-high": "Gemini 3.1 Pro High",
-    "gemini-3.1-pro-low": "Gemini 3.1 Pro Low",
+    "claude-opus-5-5-high": "Claude Opus 5.5 High",
+    "claude-opus-5-5-medium": "Claude Opus 5.5 Medium",
+    "claude-opus-5-5-low": "Claude Opus 5.5 Low",
+    "claude-sonnet-5-5-high": "Claude Sonnet 5.5 High",
+    "claude-sonnet-5-5-medium": "Claude Sonnet 5.5 Medium",
+    "claude-sonnet-5-5-low": "Claude Sonnet 5.5 Low",
+    "gpt-oss-120b-medium": "GPT-OSS 120B Medium",
 }
 # 정확 일치로만 판정한다. LiteLLM 용 _GEMINI_MODELS("gemini-3.8-flash" 등 접미사 없는 id)와 겹치면 안 된다.
 _ANTIGRAVITY_MODELS = {"antigravity", "antigravity-pro", "antigravity-flash"} | set(_ANTIGRAVITY_CLI_MODEL_LABELS)
 _ANTIGRAVITY_MODEL_DISPLAY = {
     "antigravity": "Antigravity (Gemini 3.8 Flash Medium)",
-    "antigravity-pro": "Antigravity Pro (Gemini 3.1 Pro High)",
+    "antigravity-pro": "Antigravity Pro (Gemini 4 Argon High)",
     "antigravity-flash": "Antigravity Flash (Gemini 3.8 Flash Medium)",
     **{model_id: f"{label} (Antigravity CLI)" for model_id, label in _ANTIGRAVITY_CLI_MODEL_LABELS.items()},
 }
@@ -5701,6 +5703,9 @@ async def _stream_codex_relay(
         retry_messages = _build_codex_retry_messages(messages, partial_content)
 
 
+_ANTIGRAVITY_RELAY_TIMEOUT_SEC = 630.0
+
+
 async def _stream_antigravity_relay_once(
     model: str,
     system_prompt: str,
@@ -5708,17 +5713,20 @@ async def _stream_antigravity_relay_once(
     tools: Optional[List[Dict[str, Any]]] = None,
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """Antigravity CLI Relay (/antigravity-stream) 경유 Gemini 스트리밍. Google Pro OAuth."""
+    """Antigravity CLI Relay (/antigravity-stream) 경유 스트리밍. Google Pro OAuth."""
     formatted = _format_messages_for_llm(messages, has_resume=False)
-    req_body = {
+    req_body: Dict[str, Any] = {
         "model": model,
         "system_prompt": system_prompt,
         "messages_text": formatted,
         "session_id": session_id or "",
+        "allow_tools": bool(tools),
     }
     display_model = _ANTIGRAVITY_MODEL_DISPLAY.get(model, model)
+    _tool_id_to_name: Dict[str, str] = {}
+    _timeout = httpx.Timeout(_ANTIGRAVITY_RELAY_TIMEOUT_SEC, connect=10.0)
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+        async with httpx.AsyncClient(timeout=_timeout) as client:
             try:
                 hc = await client.get(
                     f"{_CLAUDE_RELAY_URL}/health",
@@ -5733,7 +5741,7 @@ async def _stream_antigravity_relay_once(
             async with client.stream(
                 "POST", f"{_CLAUDE_RELAY_URL}/antigravity-stream",
                 json=req_body, headers={"X-Claude-Relay-Secret": _load_relay_shared_secret()},
-                timeout=httpx.Timeout(300.0, connect=10.0),
+                timeout=_timeout,
             ) as resp:
                 if resp.status_code != 200:
                     body = await resp.aread()
@@ -5759,10 +5767,39 @@ async def _stream_antigravity_relay_once(
                         cost = _estimate_cost(model, in_tok, out_tok)
                         yield {"type": "done", "model": display_model, "cost": str(cost),
                                "input_tokens": in_tok, "output_tokens": out_tok}
+                    elif evt_type == "system" and event.get("subtype") == "warning":
+                        logger.warning(
+                            "antigravity_relay_warning: session=%s code=%s content=%s",
+                            (session_id or "default")[:8],
+                            event.get("code", ""),
+                            str(event.get("content", ""))[:240],
+                        )
+                    else:
+                        mapped = _map_cli_event(event, session_id=session_id, tool_names=_tool_id_to_name)
+                        for aads_evt in mapped or ():
+                            aads_type = aads_evt.get("type", "")
+                            if aads_type == "tool_use":
+                                tid = aads_evt.get("tool_use_id", "")
+                                tname = aads_evt.get("tool_name", "")
+                                if tid and tname:
+                                    _tool_id_to_name[tid] = tname
+                            elif aads_type == "tool_result":
+                                if not aads_evt.get("tool_name"):
+                                    tid = aads_evt.get("tool_use_id", "")
+                                    aads_evt["tool_name"] = _tool_id_to_name.get(tid, "")
+                                if aads_evt.get("is_error"):
+                                    logger.warning(
+                                        "antigravity_relay_tool_error: session=%s tool=%s error_type=%s content=%s",
+                                        (session_id or "default")[:8],
+                                        aads_evt.get("tool_name", ""),
+                                        aads_evt.get("error_type", "tool_error"),
+                                        str(aads_evt.get("raw_error") or aads_evt.get("content", ""))[:240],
+                                    )
+                            yield aads_evt
     except httpx.ConnectError as e:
         yield {"type": "error", "content": f"Antigravity Relay connect failed: {e}"}
     except httpx.ReadTimeout:
-        yield {"type": "error", "content": "Antigravity Relay timeout (300s)"}
+        yield {"type": "error", "content": f"Antigravity Relay timeout ({int(_ANTIGRAVITY_RELAY_TIMEOUT_SEC)}s)"}
     except Exception as e:
         logger.error(f"antigravity_relay_error: {e}")
         yield {"type": "error", "content": str(e)}
