@@ -503,7 +503,7 @@ async def _get_db_model_config(size: str) -> list[str]:
                 return ""
             if provider_name in {"codex", "openai"} and model_name.startswith("gpt-"):
                 return f"codex:{model_name}"
-            if provider_name == "anthropic":
+            if provider_name in {"anthropic", "antigravity"}:
                 return model_name
             if provider_name in {"gemini", "google", "deepseek", "kimi", "minimax", "qwen", "groq", "openrouter", "litellm"}:
                 return f"litellm:{model_name}"
@@ -981,6 +981,19 @@ class PipelineCJob:
                     f"지시: {self.instruction[:300]}"
                 )
                 work_result = await self._run_codex_cli(enriched_instruction, override_model=_codex_model)
+            elif _wm.startswith("antigravity") or _wm.startswith(("gemini-4-argon-", "gemini-3.8-flash-")) or _wm in {
+                "claude-opus-5-5-high", "claude-opus-5-5-medium", "claude-opus-5-5-low",
+                "claude-sonnet-5-5-high", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-low",
+                "gpt-oss-120b-medium",
+            }:
+                _agy_model = _wm.split(":", 1)[1] if ":" in _wm else _wm
+                self._log("antigravity_direct", f"Antigravity CLI 직접 실행 (CEO 명시 지정, model={_agy_model})")
+                await self._post_to_chat(
+                    f"🤖 **[Antigravity Runner 시작]** `{self.job_id}`\n"
+                    f"프로젝트: **{self.project}** | 모델: **{_agy_model}**\n"
+                    f"지시: {self.instruction[:300]}"
+                )
+                work_result = await self._run_antigravity_cli(enriched_instruction, override_model=_agy_model)
             elif _wm == "claude":
                 # Claude 명시 지정: Claude 직행 (크기별 모델 분기)
                 _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5-5")
@@ -2021,6 +2034,78 @@ class PipelineCJob:
         except Exception as e:
             return {"error": f"Codex 오류: {e}", "output": ""}
 
+    async def _run_antigravity_cli(self, instruction: str, override_model: str = "") -> dict:
+        """Antigravity CLI (agy) 실행. Google Pro OAuth 기반."""
+        raw_model = (override_model or "antigravity-pro").strip()
+        if raw_model.startswith("antigravity:"):
+            raw_model = raw_model.split(":", 1)[1].strip()
+        if raw_model in ("antigravity-pro", ""):
+            agy_model = "gemini-4-argon-high"
+        elif raw_model in ("antigravity", "antigravity-flash"):
+            agy_model = "gemini-3.8-flash-medium"
+        else:
+            agy_model = raw_model
+
+        self.actual_model = f"antigravity:{agy_model}"
+        self._log("antigravity_runner", f"Antigravity CLI 시작 (project={self.project}, model={agy_model})")
+
+        cmd_parts = [
+            "/usr/bin/agy",
+            "--print",
+            "--trust",
+            "--workspace",
+            self.workdir,
+            "--model",
+            agy_model,
+            instruction,
+        ]
+
+        proc = None
+        try:
+            if self.server == "localhost":
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd_parts,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            else:
+                remote_cmd = "cd {workdir} && {cmd}".format(
+                    workdir=shlex.quote(self.workdir),
+                    cmd=" ".join(shlex.quote(part) for part in cmd_parts),
+                )
+                proc = await asyncio.create_subprocess_exec(
+                    "ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
+                    "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+                    "-p", self.ssh_port,
+                    f"root@{self.server}", remote_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+
+            timeout = _get_timeout_for_job(self)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            output = stdout.decode("utf-8", errors="replace")
+            err = stderr.decode("utf-8", errors="replace")
+
+            if proc.returncode != 0:
+                return {"error": f"Antigravity exit={proc.returncode}: {(err or output)[:500]}", "output": output[-_MAX_OUTPUT_CHARS:]}
+
+            if output.lstrip().startswith(("FAILED:", "ERROR:")):
+                return {"error": output[:500], "output": output[-_MAX_OUTPUT_CHARS:]}
+
+            self._log("antigravity_runner_done", f"Antigravity 완료 ({len(output)}자, model={agy_model})")
+            return {"output": output[-_MAX_OUTPUT_CHARS:], "exit_code": proc.returncode, "error": None}
+        except asyncio.TimeoutError:
+            if proc and proc.returncode is None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            return {"error": f"Antigravity 타임아웃 ({_get_timeout_for_job(self) // 60}분)", "output": ""}
+        except Exception as e:
+            return {"error": f"Antigravity 오류: {e}", "output": ""}
+
     # ─── AADS-234: LiteLLM Runner 폴백 ─────────────────────────────────────
 
     async def _run_litellm_fallback(self, instruction: str, override_model: str = "") -> dict:
@@ -2108,6 +2193,18 @@ class PipelineCJob:
         if spec.startswith("codex:"):
             self._log("model_attempt", f"DB 모델 시도: {spec}")
             return await self._run_codex_cli(instruction, override_model=spec.split(":", 1)[1] or "gpt-5.6-terra")
+
+        if (
+            spec.startswith("antigravity")
+            or spec.startswith(("gemini-4-argon-", "gemini-3.8-flash-"))
+            or spec in {
+                "claude-opus-5-5-high", "claude-opus-5-5-medium", "claude-opus-5-5-low",
+                "claude-sonnet-5-5-high", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-low",
+                "gpt-oss-120b-medium",
+            }
+        ):
+            self._log("model_attempt", f"DB 모델 시도: {spec}")
+            return await self._run_antigravity_cli(instruction, override_model=spec)
 
         if spec.startswith("litellm:"):
             self._log("model_attempt", f"DB 모델 시도: {spec}")

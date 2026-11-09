@@ -1794,6 +1794,13 @@ async def _wait_for_resume_slot_cooldown() -> None:
 
     if len(remaining) == len(slots):
         next_slot, wait_seconds = min(remaining, key=lambda item: item[1])
+        if wait_seconds > 5.0:
+            logger.info(
+                "resume_slot_cooldown_skip: all slots cooling down (%.1fs for slot=%s > 5s), proceeding with fallback chain",
+                wait_seconds,
+                next_slot,
+            )
+            return
         logger.info(
             "resume_slot_cooldown_wait: all slots cooling down, waiting %.1fs for slot=%s",
             wait_seconds,
@@ -14915,7 +14922,7 @@ async def send_message_stream(
             "cto_code_analysis", "cto_verify", "service_inspection", "cto_impact",
         })
         _DIRECT_EXECUTION_TRIGGERS = (
-            "직접 해", "직접 수정", "여기서 해", "여기서 수정", "바로 고쳐",
+            "직접 해", "직접 수정", "여기서 해", "여기서 수정해", "여기서 바로 수정", "바로 고쳐",
             "바로 수정", "세션에서 해", "세션에서 수정", "직접 처리",
         )
         if (
@@ -15104,6 +15111,18 @@ async def send_message_stream(
                                 "WHERE id = $1 AND settings->>'sdk_session_id' = $2",
                                 sid, sdk_session_id,
                             )
+                    elif not tools_called and (
+                        "weekly limit" in full_response.lower()
+                        or "rate limit" in full_response.lower()
+                        or "hit your limit" in full_response.lower()
+                        or len(full_response.strip()) < 160
+                    ):
+                        logger.warning(
+                            "agent_sdk_quota_or_early_fail_fallback session=%s reason=%s response_ preview=%r -> falling through to call_stream/runner",
+                            sid_short,
+                            _sdk_reason,
+                            full_response[:120],
+                        )
                     else:
                         # Never repeat possibly side-effecting SDK work on a second
                         # execution path. Preserve its original failure and partial.

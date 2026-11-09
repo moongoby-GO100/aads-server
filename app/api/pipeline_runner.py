@@ -1197,7 +1197,7 @@ def _model_spec_from_routing(provider: str, model_id: str) -> str:
         return ""
     if provider_name in {"codex", "openai"} and model_name.startswith("gpt-"):
         return f"codex:{model_name}"
-    if provider_name == "anthropic":
+    if provider_name in {"anthropic", "antigravity"}:
         return model_name
     if provider_name in {"gemini", "google", "deepseek", "kimi", "minimax", "qwen", "groq", "openrouter", "litellm"}:
         return f"litellm:{model_name}"
@@ -5214,7 +5214,7 @@ class _RunnerModelItem(BaseModel):
         if self.size in {"AI_REVIEW_LIGHT", "AI_REVIEW_STD", "AI_REVIEW_HEAVY"}:
             from app.services.doc_tier import provider_of
             from app.services.code_reviewer import _is_cli_review_model
-            if not all(_is_cli_review_model(m) for m in self.models) or {provider_of(m) for m in self.models} != {"anthropic", "openai"}:
+            if not all(_is_cli_review_model(m) for m in self.models) or not ({"anthropic", "openai"} <= {provider_of(m) for m in self.models}):
                 raise ValueError("검토 모델에는 Claude·Codex CLI 두 회사가 모두 있어야 합니다")
         return self
 

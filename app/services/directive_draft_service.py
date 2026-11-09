@@ -557,6 +557,18 @@ async def _call_configured_model(
         )
         return await _collect_relay_text(stream, configured)
 
+    from app.services.model_selector import _ANTIGRAVITY_MODELS, _stream_antigravity_relay
+
+    if provider == "antigravity" or model in _ANTIGRAVITY_MODELS:
+        stream = _stream_antigravity_relay(
+            model,
+            system,
+            [{"role": "user", "content": prompt}],
+            tools=None,
+            session_id=None,
+        )
+        return await _collect_relay_text(stream, configured)
+
     if provider == "claude" or (not provider and model.startswith("claude")):
         from app.services.model_selector import _stream_cli_relay
 

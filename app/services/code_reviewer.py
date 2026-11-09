@@ -432,12 +432,16 @@ async def _get_review_models(size: str | None = None) -> list[str]:
 
 
 def _is_cli_review_model(model: str) -> bool:
-    """Whether a configured review model is backed by Codex/Claude CLI."""
+    """Whether a configured review model is backed by Codex/Claude/Antigravity CLI."""
     normalized = str(model or "").strip().lower()
     # Bare `gpt-*` identifiers can resolve to an API provider in the generic
-    # registry.  Reviews accept only explicit Codex or Claude CLI identifiers;
+    # registry.  Reviews accept only explicit Codex, Claude, or Antigravity CLI identifiers;
     # the DB's legacy `claude-*` names are Claude CLI aliases.
-    return normalized.startswith(("codex:gpt-", "claude:", "claude-"))
+    if normalized.startswith(("codex:gpt-", "claude:", "claude-", "antigravity")):
+        return True
+    if normalized.startswith(("gemini-4-argon-", "gemini-3.8-flash-")) or normalized == "gpt-oss-120b-medium":
+        return True
+    return False
 
 
 def _review_attempt_models(models: list[str], instruction: str) -> list[str]:

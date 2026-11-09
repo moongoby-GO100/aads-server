@@ -4288,6 +4288,10 @@ async def resume_interrupted(
                 ORDER BY GREATEST(te.updated_at, COALESCE(am.edited_at, am.created_at)) DESC
                 LIMIT 1
             """, session_id)
+        session_current_model = await conn.fetchval(
+            "SELECT current_model FROM chat_sessions WHERE id = $1",
+            session_id,
+        )
 
     if not row:
         return {
@@ -4297,6 +4301,10 @@ async def resume_interrupted(
         }
 
     requested_override = (payload.model_override or "").strip() if payload else ""
+    if not requested_override and not row["resume_model_override"]:
+        _sess_model = str(session_current_model or "").strip()
+        if _sess_model and _sess_model not in ("mixture", "auto"):
+            requested_override = _sess_model
     reset_retry_count = bool(payload and payload.reset_retry_count)
 
     # Manual resume claims the lease but does not consume retry budget until
@@ -4462,7 +4470,7 @@ async def regenerate_message(
             raise HTTPException(status_code=400, detail="regenerate는 AI 응답에만 사용 가능")
 
         user_msg = await conn.fetchrow(
-            """SELECT id, content, attachments FROM chat_messages
+            """SELECT id, content, attachments, model_used FROM chat_messages
                WHERE session_id = $1
                  AND created_at < $2
                  AND tenant_id = $3::uuid
@@ -4472,6 +4480,11 @@ async def regenerate_message(
         )
         if not user_msg:
             raise HTTPException(status_code=404, detail="이전 사용자 메시지를 찾을 수 없습니다")
+
+        session_current_model = await conn.fetchval(
+            "SELECT current_model FROM chat_sessions WHERE id = $1",
+            ai_msg["session_id"],
+        )
 
         effective_response_mode = "quality"
         if response_mode and response_mode.strip():
@@ -4519,11 +4532,18 @@ async def regenerate_message(
     from app.services.tool_executor import current_chat_session_id
     current_chat_session_id.set(session_id_str)
 
+    effective_model_override = None
+    for _cand_model in (session_current_model, user_msg.get("model_used")):
+        _cand_str = str(_cand_model or "").strip()
+        if _cand_str and _cand_str not in ("mixture", "auto"):
+            effective_model_override = _cand_str
+            break
+
     raw_stream = svc.send_message_stream(
         session_id=session_id_str,
         content=content,
         attachments=attachments,
-        model_override=None,
+        model_override=effective_model_override,
         response_mode=effective_response_mode,
         reply_to_id=str(ai_msg["id"]),
     )

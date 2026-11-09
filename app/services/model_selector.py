@@ -2485,7 +2485,14 @@ async def _stream_codex_fallback_chain(
                 if event.get("type") == "done":
                     done = True
                 if buffered:
-                    events.append(event)
+                    if event.get("type") in ("tool_use", "tool_result"):
+                        for ev in events:
+                            yield ev
+                        events.clear()
+                        buffered = False
+                        yield event
+                    else:
+                        events.append(event)
                 else:
                     yield event
         except Exception as exc:

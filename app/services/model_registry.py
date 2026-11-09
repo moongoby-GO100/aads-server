@@ -225,9 +225,41 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "kimi-8k": (_decimal(0.02), _decimal(0.06)),
     "minimax-m2.7": (_decimal(0.5), _decimal(2.0)),
     "minimax-m2.5": (_decimal(0.3), _decimal(1.2)),
+    "antigravity": (_decimal(0.0), _decimal(0.0)),
+    "antigravity-pro": (_decimal(0.0), _decimal(0.0)),
+    "antigravity-flash": (_decimal(0.0), _decimal(0.0)),
+    "gemini-4-argon-high": (_decimal(0.0), _decimal(0.0)),
+    "gemini-4-argon-medium": (_decimal(0.0), _decimal(0.0)),
+    "gemini-4-argon-low": (_decimal(0.0), _decimal(0.0)),
+    "gemini-3.8-flash-high": (_decimal(0.0), _decimal(0.0)),
+    "gemini-3.8-flash-medium": (_decimal(0.0), _decimal(0.0)),
+    "gemini-3.8-flash-low": (_decimal(0.0), _decimal(0.0)),
+    "claude-opus-5-5-high": (_decimal(0.0), _decimal(0.0)),
+    "claude-opus-5-5-medium": (_decimal(0.0), _decimal(0.0)),
+    "claude-opus-5-5-low": (_decimal(0.0), _decimal(0.0)),
+    "claude-sonnet-5-5-high": (_decimal(0.0), _decimal(0.0)),
+    "claude-sonnet-5-5-medium": (_decimal(0.0), _decimal(0.0)),
+    "claude-sonnet-5-5-low": (_decimal(0.0), _decimal(0.0)),
+    "gpt-oss-120b-medium": (_decimal(0.0), _decimal(0.0)),
 }
 
 _THINKING_MODELS = {
+    "antigravity",
+    "antigravity-pro",
+    "antigravity-flash",
+    "gemini-4-argon-high",
+    "gemini-4-argon-medium",
+    "gemini-4-argon-low",
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+    "claude-opus-5-5-high",
+    "claude-opus-5-5-medium",
+    "claude-opus-5-5-low",
+    "claude-sonnet-5-5-high",
+    "claude-sonnet-5-5-medium",
+    "claude-sonnet-5-5-low",
+    "gpt-oss-120b-medium",
     "claude-opus-5-5",
     "claude-sonnet-5-5",
     "claude-sonnet-5",
@@ -369,6 +401,22 @@ _DISPLAY_NAME_OVERRIDES = {
     "mistral-small-latest": "Mistral Small 4",
     "mistral-large-latest": "Mistral Large 3",
     "dashscope-deepseek-v3.2": "DashScope DeepSeek V3.2",
+    "antigravity": "Antigravity (Gemini 3.8 Flash Medium)",
+    "antigravity-pro": "Antigravity Pro (Gemini 4 Argon High)",
+    "antigravity-flash": "Antigravity Flash (Gemini 3.8 Flash Medium)",
+    "gemini-4-argon-high": "Gemini 4 Argon High (Antigravity CLI)",
+    "gemini-4-argon-medium": "Gemini 4 Argon Medium (Antigravity CLI)",
+    "gemini-4-argon-low": "Gemini 4 Argon Low (Antigravity CLI)",
+    "gemini-3.8-flash-high": "Gemini 3.8 Flash High (Antigravity CLI)",
+    "gemini-3.8-flash-medium": "Gemini 3.8 Flash Medium (Antigravity CLI)",
+    "gemini-3.8-flash-low": "Gemini 3.8 Flash Low (Antigravity CLI)",
+    "claude-opus-5-5-high": "Claude Opus 5.5 High (Antigravity CLI)",
+    "claude-opus-5-5-medium": "Claude Opus 5.5 Medium (Antigravity CLI)",
+    "claude-opus-5-5-low": "Claude Opus 5.5 Low (Antigravity CLI)",
+    "claude-sonnet-5-5-high": "Claude Sonnet 5.5 High (Antigravity CLI)",
+    "claude-sonnet-5-5-medium": "Claude Sonnet 5.5 Medium (Antigravity CLI)",
+    "claude-sonnet-5-5-low": "Claude Sonnet 5.5 Low (Antigravity CLI)",
+    "gpt-oss-120b-medium": "GPT-OSS 120B Medium (Antigravity CLI)",
 }
 
 _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
@@ -427,6 +475,24 @@ _PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
         "o3-pro",
     ),
     "codex": ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"),
+    "antigravity": (
+        "antigravity-pro",
+        "antigravity",
+        "antigravity-flash",
+        "gemini-4-argon-high",
+        "gemini-4-argon-medium",
+        "gemini-4-argon-low",
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low",
+        "claude-opus-5-5-high",
+        "claude-opus-5-5-medium",
+        "claude-opus-5-5-low",
+        "claude-sonnet-5-5-high",
+        "claude-sonnet-5-5-medium",
+        "claude-sonnet-5-5-low",
+        "gpt-oss-120b-medium",
+    ),
     "deepseek": ("deepseek-flash", "deepseek-v4-pro"),
     "openrouter": (
         "openrouter-grok-4-fast",
@@ -529,6 +595,14 @@ _FORCED_RETIRED_MODELS = {
     ("groq", "groq-qwen3-32b"),
     ("openai", "gpt-5.2-chat-latest"),
     ("openai", "gpt-5.3-chat-latest"),
+    ("antigravity", "gemini-3.6-pro"),
+    ("antigravity", "gemini-3.6-pro-low"),
+    ("antigravity", "gemini-3.6-flash"),
+    ("antigravity", "gemini-3.7-flash"),
+    ("antigravity", "gemini-3.7-pro-high"),
+    ("antigravity", "gemini-3.7-pro-low"),
+    ("antigravity", "claude-opus-4-6-thinking"),
+    ("antigravity", "claude-sonnet-4-6"),
 }
 from scripts.claude_model_contract import AADS_MODEL_IDS  # noqa: E402
 
@@ -679,6 +753,12 @@ def _commercial_metadata(provider: str, model_id: str) -> dict[str, Any]:
             "subscription_plans": ["Plus", "Pro", "Business", "Enterprise"],
             "api_billing_separate": True,
         }
+    if provider == "antigravity":
+        return {
+            "billing_mode": "google_pro_subscription_oauth",
+            "subscription_plans": ["Google AI Pro", "Google AI Ultra"],
+            "api_billing_separate": True,
+        }
     if provider == "anthropic":
         return {
             "billing_mode": "claude_subscription_oauth",
@@ -787,6 +867,12 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
         execution_base_url = _DIRECT_PROVIDER_BASE_URLS[provider]
     elif provider == "codex":
         execution_backend = "codex_cli"
+    elif provider == "antigravity":
+        execution_backend = "antigravity_cli"
+        if model_id == "antigravity-pro":
+            execution_model_id = "gemini-4-argon-high"
+        elif model_id in {"antigravity", "antigravity-flash"}:
+            execution_model_id = "gemini-3.8-flash-medium"
     elif provider == "anthropic":
         execution_backend = "claude_cli_relay"
         execution_model_id = _ANTHROPIC_RUNTIME_MODEL_IDS.get(model_id, execution_model_id)
@@ -800,8 +886,8 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
         category=category,
         supports_tools=_supports_tools_for(provider),
         supports_thinking=model_id in _THINKING_MODELS or category == "reasoning",
-        supports_vision=model_id in _VISION_MODELS or category == "vision",
-        supports_coding=model_id in _CODING_MODELS or category == "coding" or provider in {"anthropic", "codex"},
+        supports_vision=model_id in _VISION_MODELS or category == "vision" or provider == "antigravity",
+        supports_coding=model_id in _CODING_MODELS or category == "coding" or provider in {"anthropic", "codex", "antigravity"},
         input_cost=costs[0],
         output_cost=costs[1],
         execution_backend=execution_backend,
@@ -814,8 +900,8 @@ def _model_capabilities(provider: str, model_id: str, raw: dict[str, Any] | None
     capabilities = {
         "tools": _supports_tools_for(provider),
         "thinking": model_id in _THINKING_MODELS or _category_for(model_id) == "reasoning",
-        "vision": model_id in _VISION_MODELS or _category_for(model_id) == "vision",
-        "coding": model_id in _CODING_MODELS or _category_for(model_id) == "coding" or provider in {"anthropic", "codex"},
+        "vision": model_id in _VISION_MODELS or _category_for(model_id) == "vision" or provider == "antigravity",
+        "coding": model_id in _CODING_MODELS or _category_for(model_id) == "coding" or provider in {"anthropic", "codex", "antigravity"},
         "raw_generation_methods": (raw or {}).get("supportedGenerationMethods", []),
     }
     if provider in {"openai", "codex"} and model_id == "gpt-6-astra":
@@ -2644,9 +2730,9 @@ async def get_executable_model_ids() -> set[str] | None:
 
 
 def _normalize_model_id(model_id: str) -> str:
-    """접두사(codex:, litellm:, claude:) 제거 후 비교용 정규화."""
+    """접두사(codex:, litellm:, claude:, antigravity:) 제거 후 비교용 정규화."""
     normalized = str(model_id or "").strip()
-    for prefix in ("codex:", "litellm:", "claude:"):
+    for prefix in ("codex:", "litellm:", "claude:", "antigravity:"):
         if normalized.startswith(prefix):
             normalized = normalized[len(prefix):]
             break
