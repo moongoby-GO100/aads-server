@@ -3145,6 +3145,39 @@ def _antigravity_kill_group(proc):
             pass
 
 
+def _antigravity_flatten_prompt_inputs(system_prompt, messages_text, image_attachments, session_id):
+    """이미지 첨부 턴에서 list(content block)로 오는 입력을 agy 프롬프트용 문자열로 평탄화한다.
+
+    list 를 그대로 문자열 연결하면 TypeError(500)로 죽고 서버가 Codex 로 폴백한다.
+    이미지는 파일로 풀어 경로를 안내한다(tools 모드의 파일 읽기 도구로 열 수 있다).
+    """
+    def _to_text(value):
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            parts = []
+            for block in value:
+                if isinstance(block, dict):
+                    if block.get("type") == "text":
+                        parts.append(str(block.get("text", "")))
+                else:
+                    parts.append(str(block))
+            return "\n".join(part for part in parts if part)
+        return "" if value is None else str(value)
+
+    system_text = _to_text(system_prompt)
+    user_text = _to_text(messages_text)
+    image_paths = _materialize_codex_image_attachments(image_attachments, session_id) if image_attachments else []
+    if image_paths:
+        user_text = (
+            user_text.rstrip()
+            + "\n\n[첨부 이미지 파일 경로]\n"
+            + "\n".join("- " + path for path in image_paths)
+            + "\n위 이미지 파일을 열어 함께 분석해 답변하세요."
+        ).strip()
+    return system_text, user_text
+
+
 async def handle_antigravity_stream(request):
     """호스트 agy CLI 직접 실행 -> NDJSON pseudo-streaming."""
     try:
@@ -3155,6 +3188,8 @@ async def handle_antigravity_stream(request):
     messages_text = body.get("messages_text", "")
     model = body.get("model", "antigravity")
     session_id = body.get("session_id", "")
+    system_prompt, messages_text = _antigravity_flatten_prompt_inputs(
+        system_prompt, messages_text, body.get("image_attachments"), session_id)
     if not messages_text:
         return web.json_response({"error": "messages_text required"}, status=400)
     rejection = _antigravity_model_rejection(model)

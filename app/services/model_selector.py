@@ -5722,6 +5722,9 @@ async def _stream_antigravity_relay_once(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Antigravity CLI Relay (/antigravity-stream) 경유 스트리밍. Google Pro OAuth."""
     formatted = _format_messages_for_llm(messages, has_resume=False)
+    # 이미지 첨부 턴은 formatted 가 content block list 다. 그대로 보내면 릴레이가
+    # str+list 연결로 500 을 내고 Codex 로 폴백하므로, Codex 와 같이 텍스트/이미지로 분리한다.
+    formatted, image_attachments = _extract_codex_prompt_and_images(formatted)
     req_body: Dict[str, Any] = {
         "model": model,
         "system_prompt": system_prompt,
@@ -5729,6 +5732,8 @@ async def _stream_antigravity_relay_once(
         "session_id": session_id or "",
         "allow_tools": bool(tools),
     }
+    if image_attachments:
+        req_body["image_attachments"] = image_attachments
     display_model = _ANTIGRAVITY_MODEL_DISPLAY.get(model, model)
     _tool_id_to_name: Dict[str, str] = {}
     _timeout = httpx.Timeout(_ANTIGRAVITY_RELAY_TIMEOUT_SEC, connect=10.0)
