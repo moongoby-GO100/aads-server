@@ -140,62 +140,109 @@ V4.1은 8개 업무군, 36개 고유 메뉴 경로를 제공한다. 카드 승�
 
 ### 8.2 36개 메뉴 데이터 원천표
 
-목업 `mockup-v4-1.html` 의 `configs[route].source` 와 1:1로 대응한다. 목업은 이 표에 적힌
-경로만 호출하고, 응답이 없거나 막히면 그 상태를 그대로 화면에 표시한다. 샘플 행과 고정 KPI는 두지 않는다.
+판정 근거는 `app/api/obys_workspaces.py`의 실제 실행 순서다. 화면은
+`/api/v1/workspaces/{businessId}/{route}/summary`와 `/records`를 호출한다.
+`configs.source`: 화면 메타데이터(미사용).
 
-실측 기준: 2026-09-22 12:5x KST, 라일론 = `obys.yeoljeong_businesses.id='biz-lylon-e2e'`,
-tenant `d1695f15-6b68-4929-bc8d-646827363ff9`(ACCT tenant id 11).
-상태는 `실데이터`(1건 이상) · `0건`(연결되나 자료 없음) · `차단(403)`(테넌트 게이트) · `미연동`(원천 API 없음) 넷이다.
+포함 사업자는 중화·성신·미아·언니냉면이다. 실측 열은 이 네 사업자 순서의 건수를
+기록하는 자리이며, 이번에는 DB 조회 실패로 숫자를 비웠다. 상태는 실데이터(동일조건
+1건 이상), 0건(동일조건 0건), 미연동(처리 경로 없음 또는 고정 빈 응답), 조회 실패
+(실측 불가)로 구분한다. 경로가 존재한다는 이유로 실데이터나 0건으로 추정하지 않는다.
+권한에 따른 403은 미연동과 구분한다.
 
-| 페이지(route) | 현행 원천 API | 저장소 | 라일론 실측 | 상태 |
+공통 사업자 필터·조회 조건(L/A/B/C/H는 각 행의 조건 일부):
+
+- 모든 경로는 `_business` → `list_businesses`에서 `yeoljeong_businesses`의
+  `tenant_id=JWT tenant_id AND deleted_at IS NULL` 목록에 `id=business_id`가 있는지
+  먼저 확인한다. GENERIC SQL 자체에는 tenant_id를 추가하지 않는다.
+- L: 수기·업로드 모두 `tenant_id=$1 AND business_id=$2 AND category=$3`.
+  수기만 `deleted_at IS NULL`; 업로드 행에는 이 조건이 없다.
+  `occurred_on >= date_from`, `occurred_on <= date_to`는 지정 시 포함 경계로 적용한다.
+  `_ledger_records`는 두 조회 모두 `limit=None`으로 읽어 합친다.
+- B/C: 수기 계좌·카드 행은 `tenant_id=$1 AND business_id=$2 AND deleted_at IS NULL`.
+  날짜는 `(occurred_at AT TIME ZONE 'Asia/Seoul')::date`의 포함 경계이며 지정 시 적용한다.
+  업로드는 L의 업로드 조건으로 각각 `category=transaction`, `category=card`를 사용한다.
+  `home`만 카드·계좌 업로드를 합치지 않는다. 로컬 조회는 `limit=None`.
+- A: `_authorized_acct_scope`는 JWT 사업자 소유권을 검증한 뒤 사업자별 ACCT
+  tenant/company 매핑으로 범위를 정한다. 파일/rec_idx로 pivot하고 category별 marker로
+  후보를 정한 뒤 표의 전표 조건을 적용한다. `occurred_on ~ '^[0-9]{8}$'`,
+  `occurred_on > '19000101'`, 지정한 YYYYMMDD 시작·종료일의 포함 경계를 적용한다.
+  `DISTINCT ON (occurred_on, voucher_key)`로 최신 source_file_id를 남긴다.
+  voucher_key는 seq, 없으면 source_file_id/rec_idx다. `_source_rows`는 최대 2000행과
+  source_total_count를 읽고 로컬 원장을 더한다. `workspace_records`는 로컬 검색·상태
+  필터와 페이지를 먼저 채우고 남은 한도만 ACCT에서 검색·상태·offset 조건으로 읽는다.
+  매핑 403은 로컬만, 다른 조회 오류는 실패로 전파한다.
+- H: 근태·급여는 현재 DB와 `_legacy_people_rows` 결과를 id로 병합(현재 DB 우선)한다.
+  기존 소유 테넌트만 허용하고 canonical 사업자 id/등록번호(없으면 이름)가 유일하게
+  일치하고 ACCT 매핑이 있어야 한다. 별도 기존 원장의 같은 테이블에
+  `business_id=$1 AND (to_jsonb(h)->>'deleted_at') IS NULL` 및
+  `((to_jsonb(h)->>'tenant_id') IS NULL OR to_jsonb(h)->>'tenant_id'=$2)`와
+  `($5::text IS NULL OR lower(to_jsonb(h)->>'employee_email')=$5)`를 적용한다.
+  급여는 left(payroll_month,7), 근태는 work_date::text의 포함 날짜 조건이다.
+  summary 관리자 근태/급여 병합은 `limit=None`, member 근태 summary는 500행.
+  근태 records는 현재·기존 각각 offset+limit까지 읽고 병합하여 페이지를 자른다.
+  member는 본인 이메일만, 이메일 없는 member는 빈 응답, viewer는 403이다.
+  `yeoljeong_work_schedules`·`yeoljeong_contracts`는 records 근무판정 보강 자료이며
+  출퇴근 원장 행 수에 더하지 않는다. 급여 지급 차액도 행 수에 더하지 않는다.
+- GENERIC은 표의 WHERE·정렬·LIMIT를 그대로 따른다. `_filter_source_dates`는
+  원천 날짜를 포함 경계로 거르고 일반 records는 `_filter`의 검색·상태 조건 뒤
+  offset/limit로 자른다. summary 원천 수와 페이지 count를 혼동하지 않는다.
+
+| 페이지(route) | 서버 처리(경로·함수) | 저장소(테이블+조건) | 포함 사업자 실측(중화·성신·미아·언니냉면) | 상태 |
 |---|---|---|---|---|
-| `home` | `GET /yeoljeong-dashboard/kpis` | obys 집계(dashboard.get_kpis) | 게이트 차단 | 차단(403) |
-| `tasks` | `GET /yeoljeong-dashboard/tasks` | obys 집계(dashboard.get_tasks) | 게이트 차단 | 차단(403) |
-| `reports` | 없음 | 리포트 저장소 미정 | — | 미연동 |
-| `documents` | `GET /yeoljeong-finance/onboarding/documents` | `obys.yeoljeong_onboarding_documents` | 0건(전체 41건) | 차단(403) |
-| `sales` | `GET /yeoljeong-finance/sales` | `obys.yeoljeong_delivery_sales` | 0건(전체 3,813건) | 차단(403) |
-| `orders` | 없음 | 주문 원문 저장소 미정 | — | 미연동 |
-| `cards` | `GET /yeoljeong-finance/card-transactions` | `obys.yeoljeong_card_transactions` | 1건 | 실데이터 |
-| `settlements` | `GET /yeoljeong-finance/settlements` | `obys.yeoljeong_delivery_settlements` | 0건(전체 3,551건) | 차단(403) |
-| `accounts` | `GET /yeoljeong-finance/ledger-bank-transactions` | `obys.yeoljeong_manual_bank_transactions` | 1건 | 실데이터 |
-| `receivables` | 없음 | 미수 저장소 미정 | — | 미연동 |
-| `unmatched` | 없음 | 매칭 결과 저장소 미정 | — | 미연동 |
-| `purchases` | `GET /yeoljeong-finance/ledger-entries?category=purchase` | `obys.yeoljeong_manual_ledger_entries` | 2건 | 실데이터 |
-| `suppliers` | 없음 | 거래처 마스터 미정 | — | 미연동 |
-| `inventory` | `GET /yeoljeong-inventory/items` | `obys.yeoljeong_inventory_items` | 0건 | 0건 |
-| `purchase-orders` | `GET /yeoljeong-inventory/orders` | `obys.yeoljeong_purchase_orders` | 0건 | 0건 |
-| `employees` | `GET /yeoljeong-finance/employees/approved` | `obys.yeoljeong_employee_join_requests` | 0건(전체 17건) | 차단(403) |
-| `attendance` | 없음 | `obys.yeoljeong_attendance_records` | 0건 | 미연동 |
-| `payroll` | `GET /yeoljeong-finance/payroll` | `obys.yeoljeong_payroll_statements` | 0건(전체 2건) | 차단(403) |
-| `hr-docs` | `GET /yeoljeong-finance/contracts` | `obys.yeoljeong_contracts` | 0건(전체 29건) | 차단(403) |
-| `tax-evidence` | `GET /yeoljeong-finance/integration-evidence` | obys 증빙 파일 저장소 | 0건 | 차단(403) |
-| `tax-gap` | `GET /yeoljeong-finance/uploaded-ledger?category=purchase` | `obys.yeoljeong_uploaded_ledger_rows` | 3건 | 실데이터 |
-| `journals` | `GET /workspaces/{businessId}/journals/*` | 진아서버 `acct.journal_entry` + `journal_line` | 13,623건 | 실데이터 |
-| `tax-returns` | `GET /yeoljeong-accounting/tax-reports` | `obys.yeoljeong_tax_reports` | 0건 | 차단(403) |
-| `approvals` | `GET /yeoljeong-ops/approvals` | `obys.yeoljeong_approvals` | 0건 | 차단(403) |
-| `audit-history` | `GET /yeoljeong-ops/audit-logs` | `obys.yeoljeong_audit_logs` | 0건 | 차단(403) |
-| `alerts` | `GET /yeoljeong-ops/notifications` | `obys.yeoljeong_notifications` | 0건 | 차단(403) |
-| `errors` | `GET /yeoljeong-finance/collection-status` | `obys.yeoljeong_delivery_collection_status` | 0건(전체 4,967건) | 차단(403) |
-| `businesses` | `GET /yeoljeong-finance/tenant-registry/businesses` | `obys.yeoljeong_businesses` | 1건 | 실데이터 |
-| `branches` | 없음 | `obys.yeoljeong_branches`(전체 5건) | 0건 | 미연동 |
-| `margins` | 없음 | 원가 분석 저장소 미정 | — | 미연동 |
-| `menu-costs` | 없음 | 레시피 마스터 미정 | — | 미연동 |
-| `integrations` | `GET /yeoljeong-finance/automation` | obys 자동화 상태 집계 | 게이트 차단 | 차단(403) |
-| `sales-connect` | `GET /yeoljeong-finance/completion-matrix` | `obys.yeoljeong_delivery_collection_status` 집계 | 게이트 차단 | 차단(403) |
-| `bank-connect` | `GET /yeoljeong-finance/bank-accounts` | `obys.yeoljeong_bank_accounts` | 0건(전체 6건) | 차단(403) |
-| `tax-connect` | 없음 | 세무 연동 상태 저장소 미정 | — | 미연동 |
-| `access-log` | `GET /yeoljeong-ops/audit-logs` | `obys.yeoljeong_audit_logs` | 0건 | 차단(403) |
+| `home` | 전용 · `_source_rows` | L: `yeoljeong_manual_ledger_entries` + `yeoljeong_uploaded_ledger_rows` (`category=sales`, `category=purchase`) + C(업로드 제외) + B(업로드 제외); 사업자·날짜 조건은 L/C/B | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `tasks` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_approvals WHERE business_id=$1 ORDER BY created_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `reports` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_tax_reports WHERE business_id=$1 ORDER BY period_end DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `documents` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_uploads WHERE business_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `sales` | ACCT_SOURCE · `_source_rows / workspace_records / source_transactions / _local_source_rows` | A: `source_file` + `atom_record`; `sf.company_id=매핑 company_id`, `sf.is_current IS TRUE`, `sf.domain='wehago'`; `entry_type = '1'`; A 공통 날짜·중복제거 + L: `yeoljeong_manual_ledger_entries` + `yeoljeong_uploaded_ledger_rows` (`category=sales`) | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `orders` | LEDGER · `_source_rows / _ledger_records` | L: `yeoljeong_manual_ledger_entries` + `yeoljeong_uploaded_ledger_rows` (`category=sales`); L 공통 조건 | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `cards` | ACCT_SOURCE · `_source_rows / workspace_records / source_transactions / _local_source_rows` | A: `source_file` + `atom_record`; `sf.company_id=매핑 company_id`, `sf.is_current IS TRUE`, `sf.domain='wehago'`; `nullif(card_code, '') IS NOT NULL`; A 공통 날짜·중복제거 + C: `yeoljeong_card_transactions` + `yeoljeong_uploaded_ledger_rows` (`category=card`) | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `settlements` | LEDGER · `_source_rows / _ledger_records` | L: `yeoljeong_manual_ledger_entries` + `yeoljeong_uploaded_ledger_rows` (`category=sales`); L 공통 조건 | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `accounts` | ACCT_SOURCE · `_source_rows / workspace_records / source_transactions / _local_source_rows` | A: `source_file` + `atom_record`; `sf.company_id=매핑 company_id`, `sf.is_current IS TRUE`, `sf.domain='wehago'`; `seq IS NOT NULL AND seq NOT IN ('', '0') AND (coalesce(deposit_amount,0) <> 0 OR coalesce(withdraw_amount,0) <> 0)`; A 공통 날짜·중복제거 + B: `yeoljeong_manual_bank_transactions` + `yeoljeong_uploaded_ledger_rows` (`category=transaction`) | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `receivables` | BANK · `_source_rows / list_bank_transactions / list_ledger_rows` | B: `yeoljeong_manual_bank_transactions` + `yeoljeong_uploaded_ledger_rows` (`category=transaction`); B 공통 조건 | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `unmatched` | BANK · `_source_rows / list_bank_transactions / list_ledger_rows` | B: `yeoljeong_manual_bank_transactions` + `yeoljeong_uploaded_ledger_rows` (`category=transaction`); B 공통 조건 | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `purchases` | ACCT_SOURCE · `_source_rows / workspace_records / source_transactions / _local_source_rows` | A: `source_file` + `atom_record`; `sf.company_id=매핑 company_id`, `sf.is_current IS TRUE`, `sf.domain='wehago'`; `entry_type = '2'`; A 공통 날짜·중복제거 + L: `yeoljeong_manual_ledger_entries` + `yeoljeong_uploaded_ledger_rows` (`category=purchase`) | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `suppliers` | ACCT_SOURCE · `_source_rows / workspace_records / source_transactions / _local_source_rows` | A: `source_file` + `atom_record`; `sf.company_id=매핑 company_id`, `sf.is_current IS TRUE`, `sf.domain='wehago'`; `entry_type = '2'`; A 공통 날짜·중복제거 + L: `yeoljeong_manual_ledger_entries` + `yeoljeong_uploaded_ledger_rows` (`category=purchase`) | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `inventory` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_inventory_items WHERE business_id=$1 ORDER BY name LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `purchase-orders` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_purchase_orders WHERE business_id=$1 ORDER BY order_date DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `employees` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_employee_join_requests WHERE business_id=$1 AND deleted_at IS NULL AND status <> 'archived' ORDER BY requested_at DESC LIMIT 500`; approved 필터 없음 (가입 요청 조회) | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `attendance` | 전용 · `list_attendance_records / _source_rows / _legacy_people_rows` | `yeoljeong_attendance_records` WHERE `business_id=$1 AND deleted_at IS NULL`; records: `($2::date IS NULL OR work_date>=$2) AND ($3::date IS NULL OR work_date<=$3) AND ($4::text IS NULL OR lower(employee_email)=$4)`; `ORDER BY work_date DESC, start_at DESC LIMIT $5`; summary 관리자: `ORDER BY work_date DESC LIMIT 500`; member: `lower(employee_email)=$2`; H 병합 | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `payroll` | 전용 · `_source_rows / _legacy_people_rows / _with_payroll_settlement_state` | `yeoljeong_payroll_statements` WHERE `business_id=$1 AND deleted_at IS NULL AND ($2::text IS NULL OR left(payroll_month,7)>=$2) AND ($3::text IS NULL OR left(payroll_month,7)<=$3)`; `ORDER BY payroll_month DESC,id DESC` (로컬 LIMIT 없음); H 병합 후 지급 차액 계산 | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `hr-docs` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_onboarding_documents WHERE business_id=$1 AND deleted_at IS NULL ORDER BY uploaded_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `tax-evidence` | ACCT_SOURCE · `_source_rows / workspace_records / source_transactions / _local_source_rows` | A: `source_file` + `atom_record`; `sf.company_id=매핑 company_id`, `sf.is_current IS TRUE`, `sf.domain='wehago'`; `entry_type IN ('1','2') OR nullif(card_code,'') IS NOT NULL`; A 공통 날짜·중복제거 + L: `yeoljeong_manual_ledger_entries` + `yeoljeong_uploaded_ledger_rows` (`category=sales`, `category=purchase`) | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `tax-gap` | 전용 · `_source_rows` | L: `yeoljeong_manual_ledger_entries` + `yeoljeong_uploaded_ledger_rows` (`category=sales`, `category=purchase`) + C: `yeoljeong_card_transactions` + `yeoljeong_uploaded_ledger_rows` (`category=card`); L/C 조건 (LEDGER_ROUTES의 purchase 단독 분기보다 우선) | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `journals` | JOURNAL · `_source_rows / _acct_journal_records / list_journals` | ACCT 우선: `journal_entry e LEFT JOIN journal_line l ON l.entry_id=e.id` WHERE `e.company_id=매핑 company_id`; `e.entry_date >= date_from::date`, `e.entry_date <= date_to::date` (지정 시); 전표별 GROUP BY 집계, `LIMIT 500`; 매핑 없음/403일 때만 `yeoljeong_journal_vouchers v LEFT JOIN yeoljeong_journal_lines l ON l.voucher_id=v.id` WHERE `v.tenant_id=$1 AND v.business_id=$2 AND ($3::text IS NULL OR v.status=$3)` (status=None); ACCT 0건은 폴백하지 않음 | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `tax-returns` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_tax_reports WHERE business_id=$1 ORDER BY period_end DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `approvals` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_approvals WHERE business_id=$1 ORDER BY created_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `audit-history` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_audit_logs WHERE business_id=$1 ORDER BY created_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `alerts` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_notifications WHERE business_id=$1 ORDER BY created_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `errors` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_delivery_collection_status WHERE business_id=$1 AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `businesses` | 전용 · `_source_rows` | `yeoljeong_businesses` WHERE `tenant_id=JWT tenant_id AND deleted_at IS NULL`; `_business`: 승인된 목록 중 `id=business_id` 1행 선택 | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `branches` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_branches WHERE business_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `margins` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_manual_ledger_entries WHERE business_id=$1 AND deleted_at IS NULL ORDER BY occurred_on DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `menu-costs` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_inventory_items WHERE business_id=$1 ORDER BY name LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `integrations` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_bank_accounts WHERE business_id=$1 ORDER BY updated_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `sales-connect` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_platform_accounts WHERE business_id=$1 AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `bank-connect` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_bank_accounts WHERE business_id=$1 ORDER BY updated_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `tax-connect` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_tax_reports WHERE business_id=$1 ORDER BY updated_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
+| `access-log` | GENERIC · `_source_rows / GENERIC_ROUTE_SQL` | `FROM yeoljeong_audit_logs WHERE business_id=$1 ORDER BY created_at DESC LIMIT 500` | 서버 동일조건 재현 불가 — 코드 판정 | 조회 실패 |
 
-위 표의 레거시 API 상태는 V4.1 전환 착수 당시의 기준선이다. V4.1 운영 화면은
-`/api/v1/workspaces` 어댑터를 사용하며, `journals`는 라일론 사업자 매핑을 거쳐
-진아서버 ACCT 정본을 직접 읽는다. 나머지 메뉴는 각 행의 정본이 없는 경우 샘플로
-대체하지 않고 0건 또는 미연동으로 표시한다.
+실측 시도 시각: 2026-11-09 09:14:51 KST. 대상 DB: `obys`.
+허용된 읽기 전용 접속으로 먼저 사업자 목록을 확인하려고 실행한 SQL:
 
-`차단(403)` 은 `app/core/obys_tenant.py` 의 레거시 허용목록(`15055cac-…` 1개) 때문이다.
-라일론 테넌트는 허용목록에 없고, 목록에 없는 테넌트가 통과할 수 있는 경로는
-`/session` `/tenant-registry` `/uploads` `/uploaded-ledger` `/ledger-entries`
-`/card-transactions` `/card-uploads` `/ledger-bank-transactions` `/journals` 뿐이다.
-그래서 라일론이 실제 자료를 볼 수 있는 화면은 6개이고, 나머지 18개는 자료 유무와 무관하게 403이다.
+```sql
+SELECT * FROM yeoljeong_businesses;
+```
+
+결과: Docker 소켓 접근이 `operation not permitted`로 거부되어 SQL은 실행되지 않았다.
+포함 사업자 id·JWT tenant 매핑과 제외 사업자 부재 확인도 미완료다. 후속 count 쿼리는
+실행하지 않았으며 테이블 전체 count나 다른 사본을 사용하지 않았다.
+모든 36행이 **서버 동일조건 재현 불가 — 코드 판정**이다. 사업자 식별·권한·기간 및
+A/H의 다중 원천 조건을 확정하지 못했으므로 숫자가 없으며 위 조건은 코드 조사 결과다.
+상태 합계: 실데이터 0행 / 0건 0행 / 미연동 0행 / 조회 실패 36행.
+처리 경로 합계(우선 분기 반영): ACCT_SOURCE 6 / LEDGER 2 / BANK 2 / CARD 0 /
+JOURNAL 1 / GENERIC 20 / 전용 5. cards·accounts는 ACCT_SOURCE가 먼저 처리하며,
+tax-gap은 LEDGER 상수 소속이지만 전용 분기가 먼저 처리한다.
 
 ### 8.3 KPI·드릴다운 계산 규칙
 
@@ -264,7 +311,7 @@ V4.1은 더 이상 화면 안의 샘플 배열을 데이터로 사용하지 않�
 
 36개 route는 모두 DB 원천을 명시한다. 해당 사업자의 row가 없으면 샘플 값을 보여주지 않고 `0건`을 표시한다. 매출·매입·계좌·카드·세무증빙·전표는 각각 기존 tenant-scoped 서비스 함수를 재사용한다. 직원·급여·재고·승인·감사·설정 화면은 사업자 소유권 검증 후 해당 업무 테이블을 읽는다.
 
-### 12.1 라일론 검증 기준
+### 12.1 라일론 검증 기준 — 폐기(라일론 제외 — 2026-11-05)
 
 - 대상 사업자: `주식회사 라일론` (`biz-lylon-e2e`)
 - 검증 시 테넌트는 로그인 JWT에서만 결정하며 HTML이나 쿼리 파라미터로 받지 않는다.
@@ -280,6 +327,19 @@ V4.1은 더 이상 화면 안의 샘플 배열을 데이터로 사용하지 않�
 전표기간 2026-01-01~2026-08-24다. 이 값은 화면의 전표관리 원천이 테스트 원장
 2건으로 되돌아가지 않았는지 확인하는 배포 검증 기준이며, 화면 필터에 따라 표시
 건수는 달라질 수 있다.
+
+### 12.2 포함 사업자 검증 기준
+
+대상은 중화·성신·미아·언니냉면이다. 12.1의 폐기된 사업자·건수를 검증 기준으로
+사용하지 않는다. 8.2의 서버 처리·사업자 권한·날짜 조건으로 조회한 건수와 화면을
+대조한다. 동일조건을 재현하지 못한 행은 조회 실패로 남기며 0건으로 취급하지 않는다.
+현재는 DB 접근 실패로 사업자 목록과 건수 실측이 미완료다.
+
+- 테넌트는 로그인 JWT에서만 결정하고 사업자 소유권 검증을 먼저 수행한다.
+- 날짜는 KST 현재 월을 기준으로 화면과 서버에 동일하게 적용한다.
+- 목록과 상세는 같은 row ID로 대응하고 민감 원문은 서버에서 마스킹한다.
+- 업로드 미리보기는 DB를 변경하지 않고 확정 시에만 저장한다.
+- 다른 테넌트의 사업자 직접 요청은 404로 차단한다.
 
 ## 13. 운영 오비서 통합 계약
 
@@ -299,5 +359,5 @@ V4.1은 별도 검토 링크가 아니라 인증 후 오비서의 기본 업무 
 - 로그아웃은 서버 세션 종료를 시도한 뒤 브라우저 토큰·쿠키를 제거하고 기존 로그인
   화면으로 돌아간다.
 
-운영 통합 완료 판정은 `index.html 로그인 → V4.1 자동 진입 → 사업자 선택 → 라일론
+운영 통합 완료 판정은 `index.html 로그인 → V4.1 자동 진입 → 포함 사업자 선택 → 동일조건
 DB 조회 → 건별 상세 → 로그아웃/재로그인 복구`를 데스크톱과 모바일에서 확인한 때다.
