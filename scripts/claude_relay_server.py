@@ -2348,7 +2348,13 @@ _ANTIGRAVITY_MODEL_MAP = {
     # gemini-3.1-pro-high 가 목록에서 사라져 교체(2026-11-06 실측: argon-high 11초 정답 응답).
     "antigravity-pro": "gemini-4-argon-high",
 }
-_ANTIGRAVITY_MAX_CONCURRENT = max(1, int(os.getenv("AGY_RELAY_MAX_CONCURRENT", "2")))
+_ANTIGRAVITY_MAX_CONCURRENT = max(
+    1,
+    int(os.getenv("AGY_RELAY_MAX_CONCURRENT", os.getenv("AADS_ANTIGRAVITY_RELAY_MAX_CONCURRENT", "2"))),
+)
+_ANTIGRAVITY_ACQUIRE_TIMEOUT_SEC = float(
+    os.getenv("AGY_RELAY_ACQUIRE_TIMEOUT_SEC", os.getenv("CLAUDE_RELAY_ACQUIRE_TIMEOUT_SEC", "90"))
+)
 _ANTIGRAVITY_PRINT_TIMEOUT = os.getenv("AGY_RELAY_PRINT_TIMEOUT", "4m")
 _ANTIGRAVITY_HARD_TIMEOUT_SEC = float(os.getenv("AGY_RELAY_HARD_TIMEOUT_SEC", "270"))
 # 텍스트 채팅(270초)과 분리한다. 도구 모드는 MCP 호출이 여러 번 이어져 270초를 넘기기 쉽고,
@@ -3227,11 +3233,11 @@ async def handle_antigravity_stream(request):
     agy_sem = _get_antigravity_semaphore()
     agy_sem_held = False
     try:
-        await asyncio.wait_for(agy_sem.acquire(), timeout=_SEMAPHORE_ACQUIRE_TIMEOUT_SEC)
+        await asyncio.wait_for(agy_sem.acquire(), timeout=_ANTIGRAVITY_ACQUIRE_TIMEOUT_SEC)
         agy_sem_held = True
         async with _SemaphoreLease(
             _semaphore,
-            _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+            _ANTIGRAVITY_ACQUIRE_TIMEOUT_SEC,
             "antigravity",
             session_id,
         ) as _lease:
@@ -3490,7 +3496,7 @@ async def handle_antigravity_stream(request):
             "error": "antigravity_relay_busy",
             "error_type": "relay_semaphore_timeout",
             "detail": "No Antigravity relay slot became available within %.1f seconds"
-                      % _SEMAPHORE_ACQUIRE_TIMEOUT_SEC,
+                      % _ANTIGRAVITY_ACQUIRE_TIMEOUT_SEC,
         }, status=503)
     except Exception as e:
         if _is_client_disconnect_error(e):

@@ -2458,7 +2458,7 @@ async def _stream_codex_fallback_chain(
         error = None
         try:
             alias = _to_anthropic_runtime_alias(candidate)
-            if buffered:
+            if candidate in _ANTIGRAVITY_MODELS or buffered:
                 stream = _stream_antigravity_relay(
                     candidate, system_prompt, messages, tools=tools, session_id=session_id,
                 )
