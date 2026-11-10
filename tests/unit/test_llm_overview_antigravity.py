@@ -48,6 +48,11 @@ def _run_overview(monkeypatch, relay_payload, rows=None):
             raise HTTPException(status_code=503, detail="relay down")
         return relay_payload
 
+    async def no_usage():
+        return None
+
+    monkeypatch.setattr(llm_keys, "_agy_usage_binding", no_usage)
+
     async def no_clear():
         return {}
 
@@ -226,7 +231,7 @@ def test_antigravity_relay_unavailable_contract():
 
 def test_antigravity_accepts_attributed_quota_and_allowlists_fields():
     binding = {"bound": True, "account": "me@example.com", "quota_account": "ME@example.com",
-        "usage_status": "available", "usage_collected_at": "2026-10-30T10:00:00Z",
+        "usage_status": "available", "usage_collected_at": datetime.now(timezone.utc).isoformat(),
         "windows": [{"window_minutes": 300, "used_percent": 35,
                      "resets_at": "2026-10-30T15:00:00Z", "access_token": SECRET}]}
     account = llm_keys._antigravity_account({"antigravity:host": binding})
@@ -284,7 +289,7 @@ def test_host_identity_reaches_overview(monkeypatch, tmp_path):
 @pytest.mark.parametrize("percent", [-1, 101, float("nan"), True, "35"])
 def test_quota_invalid_percent_is_not_presented_as_usage(percent):
     binding = {"bound": True, "account": "me@example.com", "quota_account": "me@example.com",
-        "usage_status": "available", "usage_collected_at": "2026-10-30T10:00:00Z",
+        "usage_status": "available", "usage_collected_at": datetime.now(timezone.utc).isoformat(),
         "windows": [{"window_minutes": 300, "used_percent": percent, "resets_at": "2026-10-30T15:00:00Z"}]}
     account = llm_keys._antigravity_account({"antigravity:host": binding})
     assert account["usage_status"] == "collection_failed"

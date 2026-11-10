@@ -1,0 +1,19 @@
+[Unit]
+Description=AADS read-only Antigravity subscription usage
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=HOME=/root
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=AGY_USAGE_BIND=172.17.0.1
+WorkingDirectory=/root/aads/aads-server
+ExecStart=/usr/bin/python3 /root/aads/runtime/agy-usage/scripts/agy_usage_server.py
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

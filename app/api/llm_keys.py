@@ -278,6 +278,27 @@ async def _relay_call(method: str, path: str, payload: dict[str, Any] | None = N
     return body
 
 
+async def _agy_usage_binding() -> dict[str, Any] | None:
+    """A separate read-only host service keeps quota polling off model leases."""
+    import httpx
+    from urllib.parse import urlsplit
+    from app.api.ops import _CLAUDE_RELAY_URL, _load_relay_secret
+    host = urlsplit(_CLAUDE_RELAY_URL).hostname
+    if not host:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(1.0, connect=.3), trust_env=False) as client:
+            response = await client.get(f"http://{host}:8206/usage", headers={
+                "X-Claude-Relay-Secret": _load_relay_secret()})
+            response.raise_for_status()
+            binding = response.json()
+            if isinstance(binding, dict) and binding.get("target") == ANTIGRAVITY_BINDING_KEY:
+                return binding
+    except (httpx.HTTPError, ValueError):
+        pass
+    return None
+
+
 class AccountLoginStart(BaseModel):
     # 'codex:<KEY_NAME>' 또는 'claude:<slot 번호>'
     target: str
@@ -419,50 +440,11 @@ def _anthropic_slot_map(records: list[dict[str, Any]]) -> dict[str, str]:
     }
 
 
-def _antigravity_usage(binding, email, state, *, relay_available):
-    """Only accept measured provider quota explicitly attributed to this account.
+from app.core.agy_quota import _antigravity_usage as _collect_antigravity_usage
 
-    No installed collector currently supplies it. This adapter also supports a
-    future relay collector without passing arbitrary relay fields to the client.
-    """
-    result = {"windows": [], "used_percent": None, "resets_at": None,
-              "usage_status": "not_measured", "usage_note": "Quota has not been measured",
-              "usage_collected_at": None, "usage_summary": None}
-    if not relay_available:
-        result.update(usage_status="collection_failed", usage_note="Relay unavailable")
-        return result
-    if not binding:
-        return result
-    status = binding.get("usage_status", "unsupported")
-    if status != "available":
-        result.update(usage_status=status if status in {"unsupported", "collection_failed", "not_measured"} else "not_measured",
-                      usage_note={"unsupported": "Installed relay has no supported provider quota collector",
-                                  "collection_failed": "Provider quota collection failed"}.get(status, "Quota has not been measured"))
-        return result
-    try:
-        if state != "ok" or not email or str(binding.get("quota_account", "")).casefold() != email.casefold():
-            raise ValueError("account mismatch")
-        collected = datetime.fromisoformat(binding["usage_collected_at"].replace("Z", "+00:00"))
-        if collected.tzinfo is None:
-            raise ValueError("missing timezone")
-        windows = []
-        for win in binding["windows"]:
-            percent = win["used_percent"]
-            minutes = win["window_minutes"]
-            reset = datetime.fromisoformat(win["resets_at"].replace("Z", "+00:00"))
-            if (isinstance(percent, bool) or not isinstance(percent, (int, float))
-                    or not 0 <= percent <= 100 or type(minutes) is not int or minutes <= 0 or reset.tzinfo is None):
-                raise ValueError("invalid quota")
-            windows.append({"window_minutes": minutes, "used_percent": percent, "resets_at": reset.isoformat()})
-        if not windows:
-            raise ValueError("empty quota")
-    except (KeyError, TypeError, ValueError, AttributeError):
-        result.update(usage_status="collection_failed", usage_note="Quota missing valid measurement or account attribution")
-        return result
-    result.update(windows=windows, used_percent=windows[0]["used_percent"], resets_at=windows[0]["resets_at"],
-                  usage_status="available", usage_note="Account-attributed provider quota",
-                  usage_collected_at=collected.isoformat())
-    return result
+
+def _antigravity_usage(binding, email, state, *, relay_available):
+    return _collect_antigravity_usage(binding, email, state, relay_available=relay_available)
 
 
 ANTIGRAVITY_IDENTITY_SNAPSHOT = Path(__file__).resolve().parents[1] / "data" / "antigravity_identity.json"
@@ -584,6 +566,12 @@ async def llm_overview() -> dict[str, Any]:
     except HTTPException:
         bindings = None
         logger.warning("llm_keys.overview.bindings_unavailable")
+
+    quota_binding = await _agy_usage_binding()
+    if quota_binding is not None:
+        if bindings is None:
+            bindings = {}
+        bindings[ANTIGRAVITY_BINDING_KEY] = quota_binding
 
     # 클로드는 5시간 창과 주간 창을 따로 쓴다. 코덱스는 주간 하나뿐이다.
     # 슬롯별 스냅샷은 oauth_usage_tracker 가 이미 모으고 있으므로 가져다 쓴다.
