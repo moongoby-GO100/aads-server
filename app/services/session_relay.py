@@ -528,6 +528,7 @@ async def _deliver_answer(origin_session_id: str, content: str,
     async for chunk in cs.send_message_stream(
         session_id=origin_session_id,
         content=content,
+        model_override=await cs._resolve_auto_reaction_model_override(origin_session_id),
         intent_override="system_trigger",
         response_mode="quality",
     ):
@@ -599,6 +600,7 @@ async def _run_relay(relay_id: str, target_session_id: str, prompt: str,
         async for chunk in cs.send_message_stream(
             session_id=target_session_id,
             content=prompt,
+            model_override=await cs._resolve_auto_reaction_model_override(target_session_id),
             intent_override="system_trigger",
             response_mode="quality",
         ):

@@ -8,6 +8,10 @@ import datetime as _dt
 import inspect
 import json
 from pathlib import Path
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
+
+import pytest
 
 from app.services import session_relay
 
@@ -303,6 +307,11 @@ class _RunPool(_Pool):
 def _patch_stream(monkeypatch, pool, ids=(EXEC,)):
     from app.services import chat_service
 
+    async def selected_model(_sid):
+        return None
+
+    monkeypatch.setattr(chat_service, "_resolve_auto_reaction_model_override", selected_model)
+
     async def stream(**_kw):
         for eid in ids:
             yield "data: " + json.dumps({"type": "start", "execution_id": eid}) + "\n\n"
@@ -402,3 +411,108 @@ def test_migration_is_idempotent_and_never_drops():
     assert "ADD COLUMN IF NOT EXISTS target_execution_id uuid" in sql
     statements = "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--")).upper()
     assert "DROP COLUMN" not in statements and "DROP TABLE" not in statements
+
+
+class _SelectedModelPool:
+    """Read-only session store: any attempt to change a model fails the test."""
+
+    def __init__(self, selected):
+        self.selected = selected
+        self.reads = []
+
+    @asynccontextmanager
+    async def acquire(self):
+        yield self
+
+    async def fetchval(self, sql, sid):
+        assert sql.startswith("SELECT current_model FROM chat_sessions")
+        self.reads.append(str(sid))
+        return self.selected[str(sid)]
+
+
+@pytest.mark.parametrize("selected", ["codex:gpt-6.1-sol", "mixture", "auto", None, "", "   "])
+def test_relay_question_inherits_target_selection_without_writing(monkeypatch, selected):
+    from app.services import chat_service
+
+    pool = _RunPool()
+    _harness(monkeypatch, pool)
+    models = {TARGET: selected, ORIGIN: "claude-opus"}
+    store = _SelectedModelPool(dict(models))
+    monkeypatch.setattr(chat_service, "get_pool", lambda: store)
+    monkeypatch.setattr(session_relay, "_relay_paused", AsyncMock(return_value=False))
+    calls = []
+
+    async def stream(**kwargs):
+        calls.append(kwargs)
+        yield "data: " + json.dumps({"execution_id": EXEC}) + "\n\n"
+
+    monkeypatch.setattr(chat_service, "send_message_stream", stream)
+    asyncio.run(session_relay._run_relay(RELAY, TARGET, "prompt", ORIGIN, "question"))
+    assert calls[0]["model_override"] == (str(selected or "").strip() or None)
+    assert store.reads == [TARGET]
+    assert store.selected == models
+    assert pool.relays[RELAY]["status"] == "answered"
+
+
+@pytest.mark.parametrize("standby", [False, True])
+def test_relay_reply_uses_origin_selection_on_active_and_after_handoff(monkeypatch, standby):
+    from app.services import chat_service
+
+    models = {ORIGIN: "codex:gpt-6.1-sol", TARGET: "claude-opus"}
+    store = _SelectedModelPool(dict(models))
+    monkeypatch.setattr(chat_service, "get_pool", lambda: store)
+    monkeypatch.setattr(session_relay, "_target_is_busy", AsyncMock(return_value=False))
+    monkeypatch.setattr(session_relay, "_relay_paused", AsyncMock(return_value=False))
+    monkeypatch.setattr(chat_service, "_is_local_active_api_slot", lambda: not standby)
+    queued = []
+
+    async def enqueue(sid, content):
+        queued.append((sid, content))
+        return "deferred-id"
+
+    monkeypatch.setattr(chat_service, "_enqueue_deferred_reaction", enqueue)
+    calls = []
+
+    async def stream(**kwargs):
+        calls.append(kwargs)
+        yield "data: {}\n\n"
+
+    async def wrapper(stream, sid):
+        async for chunk in stream:
+            yield chunk
+
+    monkeypatch.setattr(chat_service, "send_message_stream", stream)
+    monkeypatch.setattr(chat_service, "with_background_completion", wrapper)
+
+    async def run():
+        assert await session_relay._deliver_answer(ORIGIN, "reply")
+        if standby:
+            assert not calls and not store.reads
+            # The active deferred consumer resolves the latest origin choice at execution time.
+            store.selected[ORIGIN] = "mixture"
+            await chat_service._consume_internal_reaction_stream(*queued[0])
+
+    asyncio.run(run())
+    assert calls[0]["session_id"] == ORIGIN
+    assert calls[0]["model_override"] == ("mixture" if standby else models[ORIGIN])
+    assert store.reads == [ORIGIN]
+    assert store.selected == ({**models, ORIGIN: "mixture"} if standby else models)
+
+
+def test_relay_lookup_failure_never_starts_another_model(monkeypatch):
+    from app.services import chat_service
+
+    pool = _RunPool()
+    _harness(monkeypatch, pool)
+    monkeypatch.setattr(session_relay, "_relay_paused", AsyncMock(return_value=False))
+    monkeypatch.setattr(chat_service, "_resolve_auto_reaction_model_override",
+                        AsyncMock(side_effect=RuntimeError("selected model lookup failed")))
+
+    async def forbidden(**kwargs):
+        pytest.fail("model stream started after selection lookup failure")
+        yield
+
+    monkeypatch.setattr(chat_service, "send_message_stream", forbidden)
+    asyncio.run(session_relay._run_relay(RELAY, TARGET, "prompt", ORIGIN, "question"))
+    assert pool.relays[RELAY]["status"] == "failed"
+    assert "selected model lookup failed" in pool.relays[RELAY]["error"]
