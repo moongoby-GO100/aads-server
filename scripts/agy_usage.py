@@ -126,12 +126,17 @@ def _native_usage(clean, account):
                                 'reset_description': '주간 한도 소진으로 5시간 한도 비적용'})
                 continue
             value = re.fullmatch(r'\[[█░]+\]\s*(\d+(?:\.\d+)?)%', lines.pop(0) if lines else '')
-            refresh = re.fullmatch(r'Refreshes in ((?:\d+[dhms]\s*)+)', lines.pop(0) if lines else '')
-            if not value or not refresh or not 0 <= float(value[1]) <= 100:
+            detail = lines.pop(0) if lines else ''
+            refresh = re.fullmatch(r'Refreshes in ((?:\d+[dhms]\s*)+)', detail)
+            # After a reset CLI 1.5.4 reports 100% with "Quota available"
+            # instead of a countdown. Do not invent a reset time or accept
+            # this status for a partly consumed window.
+            if (not value or not 0 <= float(value[1]) <= 100
+                    or not (refresh or (detail == 'Quota available' and float(value[1]) == 100))):
                 raise ValueError('invalid_quota_window')
             remaining = float(value[1])
             windows.append({'period': period, 'remaining_percent': remaining, 'used_percent': 100 - remaining,
-                            'reset_at': None, 'reset_description': refresh[1].strip(), 'disabled': False})
+                            'reset_at': None, 'reset_description': refresh[1].strip() if refresh else None, 'disabled': False})
         groups.append({'name': name, 'models': models, 'windows': windows})
     # The modal ends with the provider's explanation. Any extra window before
     # this fixed prose is a malformed/partial response, never decoration.

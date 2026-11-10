@@ -28,6 +28,21 @@ def test_live_modal_preserves_independent_pools_and_disabled_window():
     assert result['groups'][0]['windows'][0]['reset_at'] is None
 
 
+def test_reset_window_with_quota_available_has_no_invented_countdown():
+    screen = SCREEN.replace('86.66%', '100.00%').replace('Refreshes in 50m', 'Quota available')
+    groups = parse_usage(screen, ACCOUNT, [])
+    window = groups[0]['windows'][1]
+    assert window['remaining_percent'] == 100
+    assert window['used_percent'] == 0
+    assert window['reset_at'] is None
+    assert window['reset_description'] is None
+    assert groups[1]['windows'][1]['disabled']
+    with pytest.raises(ValueError):
+        parse_usage(screen.replace('100.00%', '99.99%'), ACCOUNT, [])
+    with pytest.raises(ValueError):
+        parse_usage(screen.replace('Quota available', 'Quota avail'), ACCOUNT, [])
+
+
 def test_each_truncated_native_line_is_rejected():
     lines = SCREEN.splitlines()
     for index in range(1, len(lines)):
