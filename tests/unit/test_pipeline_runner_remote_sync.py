@@ -59,8 +59,11 @@ def test_default_targets_add_contabo92_without_changing_existing_records():
     )
     assert result.stdout.splitlines() == [
         "contabo14|contabo14|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service|/s/aads-pipeline-litellm-runner.211.service",
+        "cafe24_114_general|server-114|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service",
         "cafe24_114|server-114|/root/scripts/pipeline-runner.sh|aads-pipeline-litellm-runner.service|/s/aads-pipeline-litellm-runner.114.service",
         "contabo92|mesh-92|/root/scripts/pipeline-runner.sh|aads-pipeline-runner.service",
+        "contabo42|mesh-42|/root/aads/runner-live/scripts/pipeline-runner.sh|aads-pipeline-runner.service",
+        "contabo116|mesh-116|/root/aads/runner-live/scripts/pipeline-runner.sh|aads-pipeline-runner.service",
     ]
     # Exercise the production parser without invoking sync or contacting any host.
     parser = next(
@@ -70,7 +73,7 @@ def test_default_targets_add_contabo92_without_changing_existing_records():
     parsed = subprocess.run(
         ["bash", "-c", 'record="$1"\n' + parser +
          '\nprintf "%s\\n" "$name" "$host" "$remote_runner" "$service" "$service_unit"',
-         "parse-target", result.stdout.splitlines()[-1]],
+         "parse-target", next(row for row in result.stdout.splitlines() if row.startswith("contabo92|"))],
         capture_output=True, text=True, check=True,
     )
     assert parsed.stdout.splitlines() == [

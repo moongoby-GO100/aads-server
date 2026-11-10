@@ -406,10 +406,22 @@ def _loop_harness(runner: Path) -> str:
 def _run_attempt_loop(runner: Path, tmp_path: Path, relay_url: str, cycle: list[str], *, other_exit=0, workdir="/tmp/aads-wt-runner-x", tokens=False):
     art = tmp_path / "artifacts"
     art.mkdir(exist_ok=True)
+    # This suite exercises the shell's auth/budget/fallback boundary. Keep its
+    # deterministic relay fixture as the transport double; the real local CLI
+    # protocol/cwd/admission failures are covered by test_runner_agy_local_transport.
+    boundary = tmp_path / "transport_double.py"
+    boundary.write_text(
+        "import importlib.util, os\n"
+        + "s=importlib.util.spec_from_file_location('agy', " + repr(str(EXEC)) + ")\n"
+        + "m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\n"
+        + "m.local_preflight=lambda workspace='': (True, 'fixture_ready')\n"
+        + "m.run_local=lambda model,workspace,instruction,timeout: m.run(model,workspace,instruction,os.environ['CLAUDE_RELAY_URL'],'runner-x',timeout)\n"
+        + "raise SystemExit(m.main())\n"
+    )
     env = {
         "PATH": os.environ["PATH"],
         "ART": str(art), "WORKDIR": workdir, "INSTRUCTION": "target.py 를 고쳐라",
-        "RUNNER_ANTIGRAVITY_EXEC": str(EXEC),
+        "RUNNER_ANTIGRAVITY_EXEC": str(boundary),
         "CLAUDE_RELAY_URL": relay_url, "CLAUDE_RELAY_SHARED_SECRET": "test-secret",
         "OTHER_EXIT": str(other_exit),
     }

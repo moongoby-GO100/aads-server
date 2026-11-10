@@ -147,6 +147,9 @@ GROUPS: tuple[Group, ...] = (
             "tests/unit/test_deploy_lock_renew.py",
             "tests/unit/test_stale_approval_trigger_guard.py",
             "tests/unit/test_pipeline_runner_deploy_preflight_ffonly_scoped.py",
+            "tests/unit/test_runner_agy_local_transport.py",
+            "tests/unit/test_runner_antigravity_exec.py",
+            "tests/unit/test_runner_antigravity_execution.py",
         ),
         globs=(
             "app/services/pipeline_runner_service.py",
@@ -154,6 +157,7 @@ GROUPS: tuple[Group, ...] = (
             "app/api/pipeline_runner.py",
             "scripts/pipeline-runner.sh",
             "scripts/pipeline-runner.sh.local",
+            "scripts/runner_antigravity_exec.py",
         ),
     ),
     Group(

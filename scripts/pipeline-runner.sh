@@ -5762,6 +5762,11 @@ _claim_queued_job() {
         engine_predicate="AND NOT (COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))"
         model_return_expr="COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), 'auto')"
     fi
+    # AGY needs a host-local CLI and credential. Never claim a remote worktree
+    # for the central relay; scanning/admission must not consume retry budget.
+    if ! timeout 10 python3 "$RUNNER_ANTIGRAVITY_EXEC" --preflight-local >/dev/null 2>&1; then
+        engine_predicate+=" AND COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') !~ '^(antigravity(:|-|$)|gemini-4-argon-|gemini-3\\.8-flash-|claude-(opus|sonnet)-5-5-(high|medium|low)$|gpt-oss-120b-)'"
+    fi
     # UTF-8 바이트 hex로 반환해 줄바꿈/RS/pipe를 포함한 원문을 보존한다.
     # AADS-211: depends_on 체크 — 의존 작업이 done이 아니면 스킵
     # RUNNER_ENGINE_MODE=litellm: litellm:* 작업만 claim. general은 원격 litellm 작업을 전용 러너에 넘김.
@@ -6885,11 +6890,19 @@ ${resume_brief}${safe_instruction}"
             local agy_model_name="${current_model#antigravity:}"
             runner_kind="antigravity_relay"
             log "  ANTIGRAVITY_RUNNER job=$job_id model=$agy_model_name workspace=$workdir"
+            local agy_preflight=""
+            if ! agy_preflight=$(timeout 10 python3 "$RUNNER_ANTIGRAVITY_EXEC" --preflight-local --workspace "$workdir" 2>&1); then
+                log "  AGY_INFRASTRUCTURE_UNAVAILABLE job=$job_id ${agy_preflight:0:200}"
+                db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold', error_detail='infrastructure_unavailable: local AGY CLI/auth/worktree', updated_at=NOW() WHERE job_id='${job_id}';"
+                record_runner_event "$job_id" "infrastructure_unavailable" "review_hold" "review_hold" "$current_model" "" "$job_size" "" '{}'
+                _release_work_lock "$project" "$job_id" "$parallel_group"
+                return 1
+            fi
             retry_execution_charge_or_abort "$job_id" "$session_id" "$project" "$parallel_group" "$instruction" "$current_model" || return 1
             local agy_instr_file="${ARTIFACT_DIR}/.agy_instr_${job_id}.txt"
             printf '%s' "$safe_instruction" > "$agy_instr_file"
             ${_worker_nice_cmd[@]+"${_worker_nice_cmd[@]}"} timeout "$MAX_RUNTIME" python3 "$RUNNER_ANTIGRAVITY_EXEC" \
-                --model "$agy_model_name" --workspace "$workdir" \
+                --local-cli --model "$agy_model_name" --workspace "$workdir" \
                 --instruction-file "$agy_instr_file" --session-id "$job_id" \
                 < /dev/null > "$output_file" 2> "$err_file" &
             local claude_pid=$!
