@@ -4535,3 +4535,21 @@ async def put_runner_host_policy(
         host=body.host, revision=int(row["revision"]), updated_by=updated_by,
     )
     return {"ok": True, "host": body.host, "policy": _runner_policy_row(row), "apply_hint_sec": 10}
+
+
+@router.get(
+    "/ops/servers/{server_id}/cpu-detail",
+    dependencies=[Depends(require_internal_admin)],
+    summary="Read existing host CPU records (contract v1; partial history)",
+)
+async def get_server_cpu_detail(
+    server_id: str,
+    minutes: int = Query(15, ge=1, le=60),
+    top_n: int = Query(10, ge=1, le=20),
+):
+    from app.services.server_cpu_detail import get_cpu_detail
+
+    try:
+        return await get_cpu_detail(server_id, minutes, top_n)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown CPU detail server")

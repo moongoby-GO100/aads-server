@@ -1,0 +1,825 @@
+{
+  "hostname": "vmi3267555",
+  "results": {
+    "status": {
+      "data": {
+        "status": "fresh",
+        "policy": {
+          "schema_version": 1,
+          "server_id": "contabo116",
+          "interval_seconds": 10,
+          "top_processes": 20,
+          "automatic_business_actions": false,
+          "privacy": "No raw argv, environment, account tokens, SQL text, journal messages."
+        },
+        "units": {
+          "status": "ok",
+          "returncode": 0,
+          "units": [
+            {
+              "MainPID": "2321678",
+              "Result": "success",
+              "NRestarts": "0",
+              "ExecMainStartTimestamp": "Sat 2026-10-24 06:48:26 CEST",
+              "ExecMainStatus": "0",
+              "ControlGroup": "/go100.slice/go100-observability.slice/go100-cpu-observer.service",
+              "MemoryCurrent": "66535424",
+              "CPUWeight": "10",
+              "CPUQuotaPerSecUSec": "100ms",
+              "Id": "go100-cpu-observer.service",
+              "LoadState": "loaded",
+              "ActiveState": "active",
+              "SubState": "running"
+            }
+          ]
+        }
+      },
+      "exit_code": 0
+    },
+    "snapshot": {
+      "data": {
+        "status": "fresh",
+        "checked_at_utc": "2026-11-10T06:01:30.087395+00:00",
+        "sample_age_s": 8.257783,
+        "sample": {
+          "schema_version": 1,
+          "timestamp_utc": "2026-11-10T06:01:21.829587+00:00",
+          "host": {
+            "hostname": "vmi3267555",
+            "hostname_sha256": "d01a476c8446f44a792438a876417cff429fd6606c5a9ce7d869d9bdabc0a15d",
+            "machine_id_sha256": "113fdc2504960d46f1b08a62eac5c4917ae2ba9735a3018aa9af2678c56c4f8c"
+          },
+          "interval_s": 10.0,
+          "cpu": {
+            "valid": true,
+            "invalid_reasons": [],
+            "logical_cpus": 8,
+            "tick_delta": {
+              "user": 3981,
+              "nice": 23,
+              "system": 2046,
+              "idle": 1555,
+              "iowait": 12,
+              "irq": 0,
+              "softirq": 127,
+              "steal": 0
+            },
+            "total_ticks": 7744,
+            "expected_ticks": 8000.196443,
+            "tick_ratio": 0.967976,
+            "execution_pct": 79.765,
+            "idle_pct": 20.0801,
+            "iowait_pct": 0.155,
+            "steal_pct": 0.0,
+            "counter_execution_pct": 79.765,
+            "physical_capacity_verified": false,
+            "capacity_basis": "kernel_logical_cpu_counters"
+          },
+          "psi": {
+            "cpu": {
+              "some": {
+                "avg10": 26.73,
+                "avg60": 24.76,
+                "avg300": 15.66,
+                "total": 264787492844
+              },
+              "full": {
+                "avg10": 0.0,
+                "avg60": 0.0,
+                "avg300": 0.0,
+                "total": 0
+              }
+            },
+            "memory": {
+              "some": {
+                "avg10": 0.02,
+                "avg60": 0.12,
+                "avg300": 0.05,
+                "total": 623273803
+              },
+              "full": {
+                "avg10": 0.0,
+                "avg60": 0.1,
+                "avg300": 0.04,
+                "total": 375051233
+              }
+            },
+            "io": {
+              "some": {
+                "avg10": 0.36,
+                "avg60": 0.92,
+                "avg300": 0.94,
+                "total": 18921704313
+              },
+              "full": {
+                "avg10": 0.08,
+                "avg60": 0.25,
+                "avg300": 0.37,
+                "total": 9825564139
+              }
+            }
+          },
+          "top_processes": [
+            {
+              "pid": 2643033,
+              "start_ticks": 187210383,
+              "ppid": 2642748,
+              "process_family": "python",
+              "sample_offset_s": 0.184428,
+              "parent_start_ticks": 187210199,
+              "job_kind": "unknown",
+              "cgroup_path": "/system.slice/docker-f46270025ece9fee33538115bc4fc27e26abd891265dbc6fb33914ee52eb8d7b.scope",
+              "ancestor_cgroup_paths": [
+                "/system.slice/docker-f46270025ece9fee33538115bc4fc27e26abd891265dbc6fb33914ee52eb8d7b.scope",
+                "/system.slice",
+                "/"
+              ],
+              "attribution_valid": true,
+              "service_unit": null,
+              "argv_hash_truncated": false,
+              "cgroup_version": 2,
+              "cpuacct_cgroup_path": "/system.slice/docker-f46270025ece9fee33538115bc4fc27e26abd891265dbc6fb33914ee52eb8d7b.scope",
+              "valid": true,
+              "invalid_reason": null,
+              "cpu_tick_delta": 384,
+              "observed_interval_s": 9.892982,
+              "cpu_one_logical_pct": 38.8154,
+              "cpu_host_pct": 4.8519,
+              "observed_cpu_limits": [
+                {
+                  "path": "/system.slice/docker-f46270025ece9fee33538115bc4fc27e26abd891265dbc6fb33914ee52eb8d7b.scope",
+                  "quota_cores": null,
+                  "scope": "direct_cgroup"
+                },
+                {
+                  "path": "/system.slice",
+                  "quota_cores": null,
+                  "scope": "shared_ancestor"
+                }
+              ],
+              "cpu_quota_is_pid_allocation": false,
+              "ancestor_metadata_complete": true
+            },
+            {
+              "pid": 2653000,
+              "start_ticks": 187217461,
+              "ppid": 2114,
+              "process_family": "postgresql",
+              "sample_offset_s": 0.187284,
+              "parent_start_ticks": 2612,
+              "job_kind": "unknown",
+              "cgroup_path": "/system.slice/docker-daa83a8cbe4f9a95fec24a3260fcbb82f419a71d34f0ff26ab5c6bc49dc4c766.scope",
+              "ancestor_cgroup_paths": [
+                "/system.slice/docker-daa83a8cbe4f9a95fec24a3260fcbb82f419a71d34f0ff26ab5c6bc49dc4c766.scope",
+                "/system.slice",
+                "/"
+              ],
+              "attribution_valid": true,
+              "service_unit": null,
+              "argv_hash_truncated": false,
+              "cgroup_version": 2,
+              "cpuacct_cgroup_path": "/system.slice/docker-daa83a8cbe4f9a95fec24a3260fcbb82f419a71d34f0ff26ab5c6bc49dc4c766.scope",
+              "valid": true,
+              "invalid_reason": null,
+              "cpu_tick_delta": 241,
+              "observed_interval_s": 9.892866,
+              "cpu_one_logical_pct": 24.361,
+              "cpu_host_pct": 3.0451,
+              "observed_cpu_limits": [
+                {
+                  "path": "/system.slice/docker-daa83a8cbe4f9a95fec24a3260fcbb82f419a71d34f0ff26ab5c6bc49dc4c766.scope",
+                  "quota_cores": null,
+                  "scope": "direct_cgroup"
+                },
+                {
+                  "path": "/system.slice",
+                  "quota_cores": null,
+                  "scope": "shared_ancestor"
+                }
+              ],
+              "cpu_quota_is_pid_allocation": false,
+              "ancestor_metadata_complete": true
+            }
+          ],
+          "cgroups": [
+            {
+              "path": "/system.slice/docker-f46270025ece9fee33538115bc4fc27e26abd891265dbc6fb33914ee52eb8d7b.scope",
+              "version": 2,
+              "inode": 37121562,
+              "device": 28,
+              "cpu_stat": {
+                "usage_usec": 1653939162,
+                "user_usec": 1160003580,
+                "system_usec": 493935582,
+                "nr_periods": 0,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "cpu_max": {
+                "quota_us": null,
+                "period_us": 100000,
+                "quota_cores": null
+              },
+              "monotonic_s": 1874391.545492928,
+              "psi": {
+                "some": {
+                  "avg10": 4.86,
+                  "avg60": 3.63,
+                  "avg300": 1.81,
+                  "total": 32523592
+                },
+                "full": {
+                  "avg10": 3.31,
+                  "avg60": 2.53,
+                  "avg300": 1.29,
+                  "total": 24913916
+                }
+              },
+              "psi_supported": true,
+              "scope_note": "Counters include descendants; shared ancestor quota is not an exclusive job allocation.",
+              "delta_valid": true,
+              "delta_invalid_reason": null,
+              "cpu_stat_delta": {
+                "throttled_usec": 0,
+                "nr_periods": 0,
+                "system_usec": 3302300,
+                "user_usec": 6983557,
+                "burst_usec": 0,
+                "nr_bursts": 0,
+                "usage_usec": 10285856,
+                "nr_throttled": 0
+              },
+              "cpu_one_logical_pct": 102.8098,
+              "cpu_host_pct": 12.8512,
+              "throttled_period_ratio": null
+            },
+            {
+              "path": "/system.slice",
+              "version": 2,
+              "inode": 148,
+              "device": 28,
+              "cpu_stat": {
+                "usage_usec": 5504846956990,
+                "user_usec": 3345398788561,
+                "system_usec": 2159448168428,
+                "nr_periods": 0,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "cpu_max": {
+                "quota_us": null,
+                "period_us": 100000,
+                "quota_cores": null
+              },
+              "monotonic_s": 1874391.54622763,
+              "psi": {
+                "some": {
+                  "avg10": 23.76,
+                  "avg60": 22.95,
+                  "avg300": 14.16,
+                  "total": 194621523268
+                },
+                "full": {
+                  "avg10": 1.35,
+                  "avg60": 2.04,
+                  "avg300": 1.47,
+                  "total": 25595122835
+                }
+              },
+              "psi_supported": true,
+              "scope_note": "Counters include descendants; shared ancestor quota is not an exclusive job allocation.",
+              "delta_valid": true,
+              "delta_invalid_reason": null,
+              "cpu_stat_delta": {
+                "throttled_usec": 0,
+                "nr_periods": 0,
+                "system_usec": 21028958,
+                "user_usec": 39949706,
+                "burst_usec": 0,
+                "nr_bursts": 0,
+                "usage_usec": 60978665,
+                "nr_throttled": 0
+              },
+              "cpu_one_logical_pct": 609.5112,
+              "cpu_host_pct": 76.1889,
+              "throttled_period_ratio": null
+            }
+          ]
+        }
+      },
+      "exit_code": 0
+    },
+    "history": {
+      "data": {
+        "status": "bounded_partial",
+        "requested_minutes": 15,
+        "checked_at_utc": "2026-11-10T06:01:30.585760+00:00",
+        "coverage": {
+          "samples": 90,
+          "valid_cpu_samples": 88,
+          "invalid_cpu_samples": 2,
+          "first_sample_utc": "2026-11-10T05:46:31.829521+00:00",
+          "last_sample_utc": "2026-11-10T06:01:21.829587+00:00",
+          "bytes_read": 16777216,
+          "error_counts": {}
+        },
+        "execution_cpu_summary": {
+          "min": 26.2807,
+          "mean": 49.077655681818186,
+          "max": 88.4223,
+          "physical_host_capacity_verified": false
+        },
+        "top_observed_jobs": [
+          {
+            "job_kind": "unknown",
+            "observations": 1427,
+            "max_one_logical_cpu_pct": 176.4468,
+            "cpu_seconds": 1504.6277118439925
+          },
+          {
+            "job_kind": "coding_agent",
+            "observations": 370,
+            "max_one_logical_cpu_pct": 29.1817,
+            "cpu_seconds": 155.27262678650197
+          },
+          {
+            "job_kind": "test_runner",
+            "observations": 3,
+            "max_one_logical_cpu_pct": 46.3143,
+            "cpu_seconds": 13.284418153087
+          }
+        ],
+        "job_attribution_caveat": "Top-20-only CPU observations omit other, exited and between-sample processes; these are observed CPU seconds, not complete job totals. Unclassified Python jobs remain unknown.",
+        "recent_samples": [
+          {
+            "timestamp_utc": "2026-11-10T06:00:31.829552+00:00",
+            "host": {
+              "hostname": "vmi3267555",
+              "hostname_sha256": "d01a476c8446f44a792438a876417cff429fd6606c5a9ce7d869d9bdabc0a15d",
+              "machine_id_sha256": "113fdc2504960d46f1b08a62eac5c4917ae2ba9735a3018aa9af2678c56c4f8c"
+            },
+            "cpu": {
+              "valid": true,
+              "invalid_reasons": [],
+              "logical_cpus": 8,
+              "tick_delta": {
+                "user": 2678,
+                "nice": 11,
+                "system": 2144,
+                "idle": 2276,
+                "iowait": 13,
+                "irq": 0,
+                "softirq": 145,
+                "steal": 0
+              },
+              "total_ticks": 7267,
+              "expected_ticks": 7998.415878,
+              "tick_ratio": 0.908555,
+              "execution_pct": 68.5014,
+              "idle_pct": 31.3197,
+              "iowait_pct": 0.1789,
+              "steal_pct": 0.0,
+              "counter_execution_pct": 68.5014,
+              "physical_capacity_verified": false,
+              "capacity_basis": "kernel_logical_cpu_counters"
+            },
+            "psi": {
+              "cpu": {
+                "some": {
+                  "avg10": 32.32,
+                  "avg60": 19.51,
+                  "avg300": 13.17,
+                  "total": 264773347397
+                },
+                "full": {
+                  "avg10": 0.0,
+                  "avg60": 0.0,
+                  "avg300": 0.0,
+                  "total": 0
+                }
+              },
+              "memory": {
+                "some": {
+                  "avg10": 0.36,
+                  "avg60": 0.23,
+                  "avg300": 0.05,
+                  "total": 623233273
+                },
+                "full": {
+                  "avg10": 0.36,
+                  "avg60": 0.23,
+                  "avg300": 0.05,
+                  "total": 375035201
+                }
+              },
+              "io": {
+                "some": {
+                  "avg10": 0.79,
+                  "avg60": 1.26,
+                  "avg300": 0.99,
+                  "total": 18921141311
+                },
+                "full": {
+                  "avg10": 0.1,
+                  "avg60": 0.28,
+                  "avg300": 0.4,
+                  "total": 9825270937
+                }
+              }
+            }
+          },
+          {
+            "timestamp_utc": "2026-11-10T06:00:41.829514+00:00",
+            "host": {
+              "hostname": "vmi3267555",
+              "hostname_sha256": "d01a476c8446f44a792438a876417cff429fd6606c5a9ce7d869d9bdabc0a15d",
+              "machine_id_sha256": "113fdc2504960d46f1b08a62eac5c4917ae2ba9735a3018aa9af2678c56c4f8c"
+            },
+            "cpu": {
+              "valid": true,
+              "invalid_reasons": [],
+              "logical_cpus": 8,
+              "tick_delta": {
+                "user": 2753,
+                "nice": 17,
+                "system": 2067,
+                "idle": 2464,
+                "iowait": 16,
+                "irq": 0,
+                "softirq": 123,
+                "steal": 0
+              },
+              "total_ticks": 7440,
+              "expected_ticks": 7999.945222,
+              "tick_ratio": 0.930006,
+              "execution_pct": 66.6667,
+              "idle_pct": 33.1183,
+              "iowait_pct": 0.2151,
+              "steal_pct": 0.0,
+              "counter_execution_pct": 66.6667,
+              "physical_capacity_verified": false,
+              "capacity_basis": "kernel_logical_cpu_counters"
+            },
+            "psi": {
+              "cpu": {
+                "some": {
+                  "avg10": 30.12,
+                  "avg60": 21.06,
+                  "avg300": 13.73,
+                  "total": 264775990077
+                },
+                "full": {
+                  "avg10": 0.0,
+                  "avg60": 0.0,
+                  "avg300": 0.0,
+                  "total": 0
+                }
+              },
+              "memory": {
+                "some": {
+                  "avg10": 0.13,
+                  "avg60": 0.2,
+                  "avg300": 0.05,
+                  "total": 623235471
+                },
+                "full": {
+                  "avg10": 0.13,
+                  "avg60": 0.2,
+                  "avg300": 0.05,
+                  "total": 375036765
+                }
+              },
+              "io": {
+                "some": {
+                  "avg10": 0.29,
+                  "avg60": 1.06,
+                  "avg300": 0.96,
+                  "total": 18921173793
+                },
+                "full": {
+                  "avg10": 0.03,
+                  "avg60": 0.24,
+                  "avg300": 0.39,
+                  "total": 9825287884
+                }
+              }
+            }
+          },
+          {
+            "timestamp_utc": "2026-11-10T06:00:51.831693+00:00",
+            "host": {
+              "hostname": "vmi3267555",
+              "hostname_sha256": "d01a476c8446f44a792438a876417cff429fd6606c5a9ce7d869d9bdabc0a15d",
+              "machine_id_sha256": "113fdc2504960d46f1b08a62eac5c4917ae2ba9735a3018aa9af2678c56c4f8c"
+            },
+            "cpu": {
+              "valid": true,
+              "invalid_reasons": [],
+              "logical_cpus": 8,
+              "tick_delta": {
+                "user": 2323,
+                "nice": 22,
+                "system": 2365,
+                "idle": 2542,
+                "iowait": 36,
+                "irq": 0,
+                "softirq": 150,
+                "steal": 0
+              },
+              "total_ticks": 7438,
+              "expected_ticks": 8001.767203,
+              "tick_ratio": 0.929545,
+              "execution_pct": 65.3401,
+              "idle_pct": 34.1759,
+              "iowait_pct": 0.484,
+              "steal_pct": 0.0,
+              "counter_execution_pct": 65.3401,
+              "physical_capacity_verified": false,
+              "capacity_basis": "kernel_logical_cpu_counters"
+            },
+            "psi": {
+              "cpu": {
+                "some": {
+                  "avg10": 27.36,
+                  "avg60": 21.71,
+                  "avg300": 14.12,
+                  "total": 264778498876
+                },
+                "full": {
+                  "avg10": 0.0,
+                  "avg60": 0.0,
+                  "avg300": 0.0,
+                  "total": 0
+                }
+              },
+              "memory": {
+                "some": {
+                  "avg10": 0.04,
+                  "avg60": 0.16,
+                  "avg300": 0.05,
+                  "total": 623235609
+                },
+                "full": {
+                  "avg10": 0.04,
+                  "avg60": 0.16,
+                  "avg300": 0.05,
+                  "total": 375036903
+                }
+              },
+              "io": {
+                "some": {
+                  "avg10": 0.28,
+                  "avg60": 0.93,
+                  "avg300": 0.93,
+                  "total": 18921254431
+                },
+                "full": {
+                  "avg10": 0.01,
+                  "avg60": 0.2,
+                  "avg300": 0.37,
+                  "total": 9825341883
+                }
+              }
+            }
+          },
+          {
+            "timestamp_utc": "2026-11-10T06:01:01.830248+00:00",
+            "host": {
+              "hostname": "vmi3267555",
+              "hostname_sha256": "d01a476c8446f44a792438a876417cff429fd6606c5a9ce7d869d9bdabc0a15d",
+              "machine_id_sha256": "113fdc2504960d46f1b08a62eac5c4917ae2ba9735a3018aa9af2678c56c4f8c"
+            },
+            "cpu": {
+              "valid": true,
+              "invalid_reasons": [],
+              "logical_cpus": 8,
+              "tick_delta": {
+                "user": 3110,
+                "nice": 12,
+                "system": 2758,
+                "idle": 1405,
+                "iowait": 131,
+                "irq": 0,
+                "softirq": 117,
+                "steal": 0
+              },
+              "total_ticks": 7533,
+              "expected_ticks": 7999.478952,
+              "tick_ratio": 0.941686,
+              "execution_pct": 79.6097,
+              "idle_pct": 18.6513,
+              "iowait_pct": 1.739,
+              "steal_pct": 0.0,
+              "counter_execution_pct": 79.6097,
+              "physical_capacity_verified": false,
+              "capacity_basis": "kernel_logical_cpu_counters"
+            },
+            "psi": {
+              "cpu": {
+                "some": {
+                  "avg10": 30.33,
+                  "avg60": 23.44,
+                  "avg300": 14.81,
+                  "total": 264782188144
+                },
+                "full": {
+                  "avg10": 0.0,
+                  "avg60": 0.0,
+                  "avg300": 0.0,
+                  "total": 0
+                }
+              },
+              "memory": {
+                "some": {
+                  "avg10": 0.13,
+                  "avg60": 0.16,
+                  "avg300": 0.05,
+                  "total": 623272193
+                },
+                "full": {
+                  "avg10": 0.01,
+                  "avg60": 0.13,
+                  "avg300": 0.05,
+                  "total": 375050169
+                }
+              },
+              "io": {
+                "some": {
+                  "avg10": 1.31,
+                  "avg60": 1.17,
+                  "avg300": 0.99,
+                  "total": 18921588385
+                },
+                "full": {
+                  "avg10": 0.52,
+                  "avg60": 0.34,
+                  "avg300": 0.4,
+                  "total": 9825508786
+                }
+              }
+            }
+          },
+          {
+            "timestamp_utc": "2026-11-10T06:01:11.829357+00:00",
+            "host": {
+              "hostname": "vmi3267555",
+              "hostname_sha256": "d01a476c8446f44a792438a876417cff429fd6606c5a9ce7d869d9bdabc0a15d",
+              "machine_id_sha256": "113fdc2504960d46f1b08a62eac5c4917ae2ba9735a3018aa9af2678c56c4f8c"
+            },
+            "cpu": {
+              "valid": true,
+              "invalid_reasons": [],
+              "logical_cpus": 8,
+              "tick_delta": {
+                "user": 3372,
+                "nice": 21,
+                "system": 2113,
+                "idle": 1883,
+                "iowait": 30,
+                "irq": 0,
+                "softirq": 123,
+                "steal": 0
+              },
+              "total_ticks": 7542,
+              "expected_ticks": 7998.672857,
+              "tick_ratio": 0.942906,
+              "execution_pct": 74.6354,
+              "idle_pct": 24.9669,
+              "iowait_pct": 0.3978,
+              "steal_pct": 0.0,
+              "counter_execution_pct": 74.6354,
+              "physical_capacity_verified": false,
+              "capacity_basis": "kernel_logical_cpu_counters"
+            },
+            "psi": {
+              "cpu": {
+                "some": {
+                  "avg10": 29.55,
+                  "avg60": 24.31,
+                  "avg300": 15.24,
+                  "total": 264785002790
+                },
+                "full": {
+                  "avg10": 0.0,
+                  "avg60": 0.0,
+                  "avg300": 0.0,
+                  "total": 0
+                }
+              },
+              "memory": {
+                "some": {
+                  "avg10": 0.06,
+                  "avg60": 0.14,
+                  "avg300": 0.05,
+                  "total": 623272572
+                },
+                "full": {
+                  "avg10": 0.0,
+                  "avg60": 0.11,
+                  "avg300": 0.04,
+                  "total": 375050320
+                }
+              },
+              "io": {
+                "some": {
+                  "avg10": 0.77,
+                  "avg60": 1.05,
+                  "avg300": 0.97,
+                  "total": 18921665763
+                },
+                "full": {
+                  "avg10": 0.23,
+                  "avg60": 0.29,
+                  "avg300": 0.38,
+                  "total": 9825545107
+                }
+              }
+            }
+          },
+          {
+            "timestamp_utc": "2026-11-10T06:01:21.829587+00:00",
+            "host": {
+              "hostname": "vmi3267555",
+              "hostname_sha256": "d01a476c8446f44a792438a876417cff429fd6606c5a9ce7d869d9bdabc0a15d",
+              "machine_id_sha256": "113fdc2504960d46f1b08a62eac5c4917ae2ba9735a3018aa9af2678c56c4f8c"
+            },
+            "cpu": {
+              "valid": true,
+              "invalid_reasons": [],
+              "logical_cpus": 8,
+              "tick_delta": {
+                "user": 3981,
+                "nice": 23,
+                "system": 2046,
+                "idle": 1555,
+                "iowait": 12,
+                "irq": 0,
+                "softirq": 127,
+                "steal": 0
+              },
+              "total_ticks": 7744,
+              "expected_ticks": 8000.196443,
+              "tick_ratio": 0.967976,
+              "execution_pct": 79.765,
+              "idle_pct": 20.0801,
+              "iowait_pct": 0.155,
+              "steal_pct": 0.0,
+              "counter_execution_pct": 79.765,
+              "physical_capacity_verified": false,
+              "capacity_basis": "kernel_logical_cpu_counters"
+            },
+            "psi": {
+              "cpu": {
+                "some": {
+                  "avg10": 26.73,
+                  "avg60": 24.76,
+                  "avg300": 15.66,
+                  "total": 264787492844
+                },
+                "full": {
+                  "avg10": 0.0,
+                  "avg60": 0.0,
+                  "avg300": 0.0,
+                  "total": 0
+                }
+              },
+              "memory": {
+                "some": {
+                  "avg10": 0.02,
+                  "avg60": 0.12,
+                  "avg300": 0.05,
+                  "total": 623273803
+                },
+                "full": {
+                  "avg10": 0.0,
+                  "avg60": 0.1,
+                  "avg300": 0.04,
+                  "total": 375051233
+                }
+              },
+              "io": {
+                "some": {
+                  "avg10": 0.36,
+                  "avg60": 0.92,
+                  "avg300": 0.94,
+                  "total": 18921704313
+                },
+                "full": {
+                  "avg10": 0.08,
+                  "avg60": 0.25,
+                  "avg300": 0.37,
+                  "total": 9825564139
+                }
+              }
+            }
+          }
+        ]
+      },
+      "exit_code": 0
+    }
+  }
+}
