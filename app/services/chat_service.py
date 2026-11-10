@@ -10334,16 +10334,29 @@ async def update_session(session_id: str, data: Dict[str, Any], tenant_id: Optio
                 tenant_uuid,
             )
             return _row_to_dict(row) if row else None
-        sets.append("updated_at = NOW()")
+        sets.append("updated_at = clock_timestamp()")
         vals.append(uuid.UUID(session_id))
         where_clause = f"id = ${idx}"
         idx += 1
         vals.append(tenant_uuid)
         where_clause += f" AND tenant_id = ${idx}"
+        # A timed-out HTTP request may still reach PostgreSQL. Fence the write
+        # against the exact version read by the client, in the UPDATE itself.
+        if data.get("expected_updated_at") is not None:
+            idx += 1
+            vals.append(data["expected_updated_at"])
+            where_clause += f" AND updated_at = ${idx}"
         row = await conn.fetchrow(
             f"UPDATE chat_sessions SET {', '.join(sets)} WHERE {where_clause} RETURNING *",
             *vals,
         )
+        if row is None and data.get("expected_updated_at") is not None:
+            exists = await conn.fetchval(
+                "SELECT 1 FROM chat_sessions WHERE id = $1 AND tenant_id = $2",
+                uuid.UUID(session_id), tenant_uuid,
+            )
+            if exists:
+                raise ValueError("session_version_conflict")
         return _row_to_dict(row) if row else None
 
 

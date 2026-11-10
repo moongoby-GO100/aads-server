@@ -1212,9 +1212,15 @@ async def update_session(
     context: TenantContext = Depends(require_tenant_member),
 ):
     """세션 수정 (title, pinned)."""
-    result = await svc.update_session(str(session_id), req.model_dump(exclude_none=True), tenant_id=_tenant_id(context))
+    try:
+        result = await svc.update_session(str(session_id), req.model_dump(exclude_none=True), tenant_id=_tenant_id(context))
+    except ValueError as exc:
+        if str(exc) == "session_version_conflict":
+            raise HTTPException(status_code=409, detail="session_version_conflict") from exc
+        raise
     if not result:
         raise _NOT_FOUND("session")
+    result["model_selection_guard"] = req.expected_updated_at is not None
     return result
 
 

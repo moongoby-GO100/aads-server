@@ -64,10 +64,12 @@ class SessionUpdate(BaseModel):
     summary: Optional[str] = None
     tags: Optional[List[str]] = None
     current_model: Optional[str] = Field(None, max_length=50)
+    expected_updated_at: Optional[datetime] = None
     role_key: Optional[str] = Field(None, max_length=40)
 
 
 class SessionOut(BaseModel):
+    model_selection_guard: bool = False
     id: uuid.UUID
     workspace_id: uuid.UUID
     title: Optional[str]
