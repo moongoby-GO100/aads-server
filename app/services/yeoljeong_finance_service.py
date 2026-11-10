@@ -11779,6 +11779,7 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
             "code": "base", "label": "기본급", "amount": gross,
             "calc_note": f"시급 {rate:,}원 × 승인 근로 {minutes}분(분 단위 환산, 원 미만 반올림)" if wage_type == "hourly"
             else f"일급 {rate:,}원 × 근로 {days}일",
+            **({"calc": {"rate": rate, "qty": minutes, "unit": "minute"}} if wage_type == "hourly" else {}),
         }],
         "work_summary": {"work_days": days, "work_minutes": minutes},
     }
@@ -11795,6 +11796,7 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
             "code": "other", "label": FREELANCER_PAY_ITEM_LABELS[wage_type], "amount": gross,
             "calc_note": (f"용역비(시급 {rate:,}원 × 승인 {minutes}분) — 분 단위 환산, 원 미만 반올림" if wage_type == "hourly"
                           else f"용역비(일급 {rate:,}원 × 승인 {days}일)"),
+            **({"calc": {"rate": rate, "qty": minutes, "unit": "minute"}} if wage_type == "hourly" else {}),
         }]
         # 기존 초안의 기타 공제(code=other)는 금액·항목 모두 유지해야 항목 합계와 other_deduction 이 일치한다.
         other_items = [dict(item) for item in ((draft or {}).get("deduction_items") or [])

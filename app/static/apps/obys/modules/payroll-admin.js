@@ -183,7 +183,8 @@
     const payDateInput = host.querySelector("[data-payroll-pay-date]");
     const isFreelancer = () => (active?.employment_tax_type || planTaxType || employee()?.current_employment?.employment_tax_type) === "freelancer_33";
     const inputValues = () => Object.fromEntries(amounts.map(([name]) => [name, form.elements[name].value]));
-    const snapshot = (p, d, w) => JSON.stringify({p:p.map(row => [row.code, row.label, Number(row.amount), row.calc_note || ""]), d:d.map(row => [row.code, row.label, Number(row.amount)]),
+    const calcPayload = row => row.calc && row.calc.rate !== "" && row.calc.qty !== "" && row.calc.rate !== undefined && row.calc.qty !== undefined ? {rate:Number(row.calc.rate), qty:Number(row.calc.qty), unit:row.calc.unit || "hour"} : null;
+    const snapshot = (p, d, w) => JSON.stringify({p:p.map(row => [row.code, row.label, Number(row.amount), row.calc_note || "", calcPayload(row)]), d:d.map(row => [row.code, row.label, Number(row.amount)]),
       w:workFields.map(([name]) => w[name] === undefined || w[name] === "" ? null : Number(w[name]))});
     const remember = () => employee() && drafts.set(key(), {id:active?.id || "", ...inputValues(), pay_date:payDateInput.value, items:clone({pay, ded, work, optOut, held:{status:reportStatus, reason:unreportedReason, items:heldItems, release:heldRelease}})});
     const dirty = () => amounts.some(([name]) => form.elements[name].value !== String(active?.[name] ?? ""))
@@ -208,7 +209,7 @@
     });
     const itemPayload = () => ({
       // 정산 항목은 서버가 버리고 다시 계산한다. 그래도 보내는 이유는 총지급액 칸에 포함된 금액을 서버가 빼기 위해서다.
-      pay_items:pay.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), calc_note:row.calc_note || "", ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
+      pay_items:pay.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), calc_note:row.calc_note || "", ...(calcPayload(row) ? {calc:calcPayload(row)} : {}), ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
       deduction_items:ded.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
       settlement_opt_out:optOut,
       ...heldPayload(),
@@ -228,12 +229,27 @@
       if (isFreelancer() && form.elements.insurance_deduction.value === "") form.elements.insurance_deduction.value = "0";
     };
     const isFactRow = row => Boolean(active?.supersedes_id || ["confirmed", "paid"].includes(active?.status)) && row.label !== TOPUP_LABEL;
-    const itemTable = (kind, rows, codes, title) => `<h3>${title}</h3>${rows.length ? `<table><thead><tr><th>구분</th><th>항목명</th><th>금액(원)</th>${kind === "pay" ? "<th>계산방법</th>" : ""}<th></th></tr></thead><tbody>${rows.map((row, index) => isSettlement(row) ? settlementRowHtml(kind, row, isFactRow(row)) : kind === "pay" && isHeldLine(row) ? heldRowHtml(row) : `<tr>
-      <td><select class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="code">${codes.map(([code, label]) => `<option value="${code}"${code === row.code ? " selected" : ""}>${label}</option>`).join("")}</select></td>
-      <td><input class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="label" maxlength="40" value="${esc(row.label)}"></td>
-      <td><input class="field" style="min-height:44px" type="number" min="0" step="1" data-item="${kind}" data-i="${index}" data-k="amount" value="${esc(row.amount)}"></td>
-      ${kind === "pay" ? `<td><input class="field" style="min-height:44px" data-item="${kind}" data-i="${index}" data-k="calc_note" maxlength="200" placeholder="예: 시급 × 시간" value="${esc(row.calc_note || "")}"></td>` : ""}
-      <td><button type="button" class="btn" style="min-height:44px" data-item-del="${kind}" data-i="${index}">삭제</button></td></tr>`).join("")}</tbody></table>` : "<p>항목 없음 — 위 합계 칸에 간편 입력할 수 있습니다.</p>"}
+    const AUTO_NOTE = /^(?:시급 [\d,]+원 × 승인 근로 \d+분\(분 단위 환산, 원 미만 반올림\)|용역비\(시급 [\d,]+원 × 승인 \d+분\) — 분 단위 환산, 원 미만 반올림)$/;
+    const CALC_UNITS = [["hour", "시간"], ["minute", "분"], ["day", "일"], ["month", "월"], ["count", "건"]];
+    const calcReady = row => {const c = row.calc; return Boolean(c) && c.rate !== "" && c.rate !== undefined && c.qty !== "" && c.qty !== undefined && Number.isFinite(Number(c.rate)) && Number(c.rate) >= 0 && Number.isFinite(Number(c.qty)) && Number(c.qty) >= 0 && CALC_UNITS.some(([unit]) => unit === c.unit);};
+    const calcAmount = c => Math.round(Number(c.rate) * Number(c.qty) / (c.unit === "minute" ? 60 : 1) + 1e-9);
+    const calcNote = c => `${c.unit === "hour" || c.unit === "minute" ? "시급" : "단가"} ${Number(c.rate).toLocaleString("ko-KR")}원 × ${Number(c.qty)}${(CALC_UNITS.find(([unit]) => unit === c.unit) || [])[1] || ""}`;
+    const calcFlagText = row => calcReady(row) && row.amount !== "" && Number(row.amount) !== calcAmount(row.calc) ? `계산값 ${calcAmount(row.calc).toLocaleString("ko-KR")}원과 다름` : "";
+    const calcRowHtml = (kind, row, index) => {
+      const c = row.calc || {rate:"", qty:"", unit:"hour"}, at = `data-item="${kind}" data-i="${index}"`;
+      return `<tr class="pi-calc" data-calc-row="${index}"><td colspan="5"><div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <label>단가(원)<input class="field" style="min-height:44px;min-width:110px" type="number" min="0" step="1" inputmode="numeric" ${at} data-k="calc_rate" value="${esc(c.rate)}"></label>
+        <label>수량<input class="field" style="min-height:44px;min-width:90px" type="number" min="0" step="0.01" inputmode="decimal" ${at} data-k="calc_qty" value="${esc(c.qty)}"></label>
+        <label>단위<select class="field" style="min-height:44px" ${at} data-k="calc_unit">${CALC_UNITS.map(([unit, label]) => `<option value="${unit}"${unit === (c.unit || "hour") ? " selected" : ""}>${label}</option>`).join("")}</select></label>
+        <small data-calc-flag="${index}" role="status">${esc(calcFlagText(row))}</small></div></td></tr>`;
+    };
+    const ITEM_CSS = `<style data-payroll-item-style>@media (max-width:480px){.payroll-item-table{display:block;white-space:normal}.payroll-item-table thead{display:none}.payroll-item-table tbody{display:block}.payroll-item-table tbody tr.pi-row,.payroll-item-table tbody tr.pi-calc{display:flex;flex-wrap:wrap;gap:6px;padding:8px 0;border-top:1px solid #eef1f5;cursor:default}.payroll-item-table tr.pi-row>td,.payroll-item-table tr.pi-calc>td{display:block;border:0;padding:0;min-width:0;box-sizing:border-box}.payroll-item-table tr.pi-row>td.pi-code{flex:1 1 30%}.payroll-item-table tr.pi-row>td.pi-label{flex:1 1 40%}.payroll-item-table tr.pi-row>td.pi-del{flex:0 0 64px;order:3}.payroll-item-table tr.pi-row>td.pi-amount{flex:1 1 35%;order:4}.payroll-item-table tr.pi-row>td.pi-note{flex:1 1 55%;order:5}.payroll-item-table tr.pi-calc>td[colspan]{flex:1 1 100%;order:6}.payroll-item-table tr.pi-row>td.pi-code select,.payroll-item-table tr.pi-row>td.pi-label input,.payroll-item-table tr.pi-row>td.pi-amount input,.payroll-item-table tr.pi-row>td.pi-note input,.payroll-item-table tr.pi-row>td.pi-del .btn,.payroll-item-table tr.pi-calc input,.payroll-item-table tr.pi-calc select{width:100%;min-height:44px;min-width:44px;box-sizing:border-box}.payroll-item-table tr.pi-calc label{flex:1 1 90px}}</style>`;
+    const itemTable = (kind, rows, codes, title) => `<h3>${title}</h3>${rows.length ? `${ITEM_CSS}<table class="payroll-item-table"><thead><tr><th>구분</th><th>항목명</th><th>금액(원)</th>${kind === "pay" ? "<th>계산방법</th>" : ""}<th></th></tr></thead><tbody>${rows.map((row, index) => isSettlement(row) ? settlementRowHtml(kind, row, isFactRow(row)) : kind === "pay" && isHeldLine(row) ? heldRowHtml(row) : `<tr class="pi-row">
+      <td class="pi-code"><select class="field" style="min-height:44px" aria-label="구분" data-item="${kind}" data-i="${index}" data-k="code">${codes.map(([code, label]) => `<option value="${code}"${code === row.code ? " selected" : ""}>${label}</option>`).join("")}</select></td>
+      <td class="pi-label"><input class="field" style="min-height:44px" aria-label="항목명" data-item="${kind}" data-i="${index}" data-k="label" maxlength="40" value="${esc(row.label)}"></td>
+      <td class="pi-amount"><input class="field" style="min-height:44px" aria-label="금액(원)" type="number" min="0" step="1" data-item="${kind}" data-i="${index}" data-k="amount" value="${esc(row.amount)}"></td>
+      ${kind === "pay" ? `<td class="pi-note"><input class="field" style="min-height:44px" aria-label="계산방법" data-item="${kind}" data-i="${index}" data-k="calc_note" maxlength="200" placeholder="예: 시급 × 시간" value="${esc(row.calc_note || "")}"></td>` : ""}
+      <td class="pi-del"><button type="button" class="btn" style="min-height:44px;min-width:44px" aria-label="삭제" data-item-del="${kind}" data-i="${index}">삭제</button></td></tr>${kind === "pay" ? calcRowHtml(kind, row, index) : ""}`).join("")}</tbody></table>` : "<p>항목 없음 — 위 합계 칸에 간편 입력할 수 있습니다.</p>"}
       <button type="button" class="btn" style="min-height:44px" data-item-add="${kind}">${kind === "pay" ? "지급 항목 추가" : "공제 항목 추가"}</button>`;
     const heldBalanceOf = () => {
       const total = active?.held_balance_total ?? active?.statement_payload?.held_balance_total;
@@ -278,7 +294,20 @@
       else if (data.item) {
         const row = (data.item === "pay" ? pay : ded)[Number(data.i)];
         if (!row) return;
-        row[data.k] = control.value;
+        if (data.k.startsWith("calc_")) {
+          const prev = row.calc && calcReady(row) ? calcNote(row.calc) : "";
+          // 서버 자동 생성 문구("시급 N원 × 승인 근로 M분(…)")도 계산 칸에서 만든 문구로 보고 함께 갱신한다. 관리자가 직접 쓴 문구는 보존한다.
+          const autoNote = note => !note || note === prev || AUTO_NOTE.test(note);
+          row.calc = {rate:"", qty:"", unit:"hour", ...(row.calc || {}), [data.k.slice(5)]:control.value};
+          if (calcReady(row)) {
+            row.amount = String(calcAmount(row.calc));
+            if (autoNote(row.calc_note)) row.calc_note = calcNote(row.calc);
+          }
+          const at = `[data-item="${data.item}"][data-i="${data.i}"]`;
+          const amountBox = itemsHost.querySelector?.(`${at}[data-k="amount"]`), noteBox = itemsHost.querySelector?.(`${at}[data-k="calc_note"]`);
+          if (amountBox) amountBox.value = row.amount; if (noteBox) noteBox.value = row.calc_note || "";
+        } else row[data.k] = control.value;
+        if (data.item === "pay") {const flag = itemsHost.querySelector?.(`[data-calc-flag="${data.i}"]`); if (flag) flag.textContent = calcFlagText(row);}
         if (data.k === "code") {row.label = (((data.item === "pay" ? payCodes : dedCodes).find(([code]) => code === row.code)) || [])[1] || row.label; renderItems();}
       }
       refresh();

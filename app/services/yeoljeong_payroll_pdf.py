@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import re
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 from xml.sax.saxutils import escape
 
@@ -104,6 +105,68 @@ def _flag(value: Any) -> bool:
     return value is True or (isinstance(value, int) and not isinstance(value, bool) and value == 1)
 
 
+CALC_UNITS = {"hour": "시간", "minute": "분", "day": "일", "month": "월", "count": "건"}
+_CALC_RATE_LIMIT = 100_000_000
+_CALC_QTY_LIMIT = Decimal("1000000")
+
+
+def _clean_calc(raw: Any, where: str) -> dict[str, Any] | None:
+    """계산 입력(단가×수량×단위). 없으면 None, 형식이 틀리면 PayrollItemError."""
+    if raw is None or raw == {} or raw == "":
+        return None
+    if not isinstance(raw, dict):
+        raise PayrollItemError(f"{where} 계산 입력 형식이 올바르지 않습니다")
+    rate, qty, unit = raw.get("rate"), raw.get("qty"), str(raw.get("unit") or "").strip()
+    if isinstance(rate, bool) or isinstance(rate, float) or not (
+        isinstance(rate, int) or (isinstance(rate, str) and re.fullmatch(r"\d+", rate.strip()))
+    ):
+        raise PayrollItemError(f"{where} 단가는 0 이상의 원 단위 정수여야 합니다")
+    rate = int(rate)
+    if rate < 0 or rate > _CALC_RATE_LIMIT:
+        raise PayrollItemError(f"{where} 단가는 0 이상의 원 단위 정수여야 합니다")
+    if isinstance(qty, bool) or qty is None or (isinstance(qty, str) and not re.fullmatch(r"\d+(\.\d{1,2})?", qty.strip())):
+        raise PayrollItemError(f"{where} 수량은 0 이상 소수 둘째 자리까지의 숫자여야 합니다")
+    try:
+        dec = Decimal(str(qty).strip())
+    except InvalidOperation:
+        raise PayrollItemError(f"{where} 수량은 0 이상 소수 둘째 자리까지의 숫자여야 합니다") from None
+    if not dec.is_finite() or dec < 0 or dec > _CALC_QTY_LIMIT or dec != dec.quantize(Decimal("0.01")):
+        raise PayrollItemError(f"{where} 수량은 0 이상 소수 둘째 자리까지의 숫자여야 합니다")
+    if unit not in CALC_UNITS:
+        raise PayrollItemError(f"{where} 단위는 시간·분·일·월·건 중 하나여야 합니다")
+    return {"rate": rate, "qty": int(dec) if dec == dec.to_integral_value() else float(dec), "unit": unit}
+
+
+def calc_amount(calc: dict[str, Any]) -> int:
+    """단가×수량(분 단위는 /60)을 원 미만 반올림한 금액."""
+    value = Decimal(calc["rate"]) * Decimal(str(calc["qty"]))
+    if calc["unit"] == "minute":
+        value = value / Decimal(60)
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def calc_note_text(calc: dict[str, Any]) -> str:
+    qty_text = format(Decimal(str(calc["qty"])).normalize(), "f")
+    prefix = "시급" if calc["unit"] in {"hour", "minute"} else "단가"
+    return f"{prefix} {calc['rate']:,}원 × {qty_text}{CALC_UNITS[calc['unit']]}"
+
+
+_AUTO_NOTE_RE = re.compile(
+    r"(?:시급 ([\d,]+)원 × 승인 근로 (\d+)분\(분 단위 환산, 원 미만 반올림\)"
+    r"|용역비\(시급 ([\d,]+)원 × 승인 (\d+)분\) — 분 단위 환산, 원 미만 반올림)"
+)
+
+
+def _auto_note_is_stale(note: str, calc: dict[str, Any]) -> bool:
+    """서버가 만든 시급 계산방법인데 단가·분이 현재 calc 와 다르면 True(관리자가 쓴 메모는 False)."""
+    match = _AUTO_NOTE_RE.fullmatch(note)
+    if not match or calc["unit"] != "minute":
+        return False
+    rate = int((match.group(1) or match.group(3)).replace(",", ""))
+    minutes = int(match.group(2) or match.group(4))
+    return rate != calc["rate"] or Decimal(minutes) != Decimal(str(calc["qty"]))
+
+
 def _clean_item_list(
     raw: Any, codes: dict[str, str], kind: str, *, with_note: bool, with_flags: bool = False
 ) -> list[dict[str, Any]] | None:
@@ -134,6 +197,13 @@ def _clean_item_list(
             if len(note) > 200:
                 raise PayrollItemError(f"{where} 계산방법은 200자 이내로 입력하십시오")
             entry["calc_note"] = note
+            calc = _clean_calc(item.get("calc"), where)
+            if calc:
+                entry["calc"] = calc
+                if not note or _auto_note_is_stale(note, calc):
+                    entry["calc_note"] = calc_note_text(calc)
+                if entry["amount"] != calc_amount(calc):
+                    entry["calc_override"] = True
         if with_flags:
             # 자동 산정 출처·입력 대기·0원 확인 표시. 이 값이 정규화에서 버려지면 관리자가 확인한 항목이
             # 다음 저장에서 다시 입력 대기로 돌아간다. 거짓 값은 키를 남기지 않는다.
