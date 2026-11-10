@@ -519,7 +519,9 @@ sync_one_target() {
         return 0
     fi
     expected=$(sha256_file "$archive")
-    remote_archive="/tmp/$(basename "$archive")"
+    # The target may be this same host: never alias the local archive, which
+    # is removed immediately after scp. Use a separate remote pathname.
+    remote_archive="/tmp/aads-runner-remote-${name}-$(basename "$archive")"
     scp_put "$archive" "$host" "$remote_archive" || { rm -f "$archive"; return 1; }
     rm -f "$archive"
     payload="$(remote_set_args "$service" "$remote_archive" "$expected" "$remote_runner" "$RESTART_SERVICES")"$'\n'

@@ -477,3 +477,30 @@ def test_sync_ships_runner_antigravity_exec_helper():
     required = launcher[launcher.index("REQUIRED_FILES=("):launcher.index(")", launcher.index("REQUIRED_FILES=("))]
     assert "scripts/runner_antigravity_exec.py" in required
     assert (ROOT / "scripts" / "runner_antigravity_exec.py").is_file()
+
+
+def test_same_host_bundle_survives_local_archive_cleanup(tmp_path):
+    """SCP to contabo116 shares /tmp with the caller, unlike other hosts."""
+    import os
+    import tempfile
+    import shutil
+
+    fd, filename = tempfile.mkstemp(prefix="aads-runner-bundle.", suffix=".tar", dir="/tmp")
+    os.close(fd)
+    archive = Path(filename)
+    archive.write_bytes(b"checksum-pinned-bundle")
+    assignment = next(line for line in _extract_function(_sync_script(), "sync_one_target").splitlines()
+                      if line.strip().startswith("remote_archive="))
+    result = subprocess.run(
+        ["bash", "-c", 'name=contabo116; archive="$1"\n' + assignment + '\nprintf "%s" "$remote_archive"',
+         "bundle-path", str(archive)], capture_output=True, text=True, check=True,
+    )
+    remote = Path(result.stdout)
+    try:
+        assert remote != archive and remote.parent == Path("/tmp")
+        shutil.copyfile(archive, remote)  # same-host scp semantics
+        archive.unlink()                 # production local cleanup after transfer
+        assert remote.read_bytes() == b"checksum-pinned-bundle"
+    finally:
+        archive.unlink(missing_ok=True)
+        remote.unlink(missing_ok=True)
