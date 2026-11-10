@@ -993,6 +993,38 @@ def _requires_quality_response_mode(user_message: str, intent: Optional[str] = N
     return any(trigger in text for trigger in _DETAILED_RESPONSE_TRIGGERS)
 
 
+def _preserve_realtime_response_enabled() -> bool:
+    """A안(기본 활성): 실시간 스트리밍으로 노출된 응답 원문을 후처리(완료보고서 재작성·stream_reset)로
+    덮어쓰지 않고 그대로 유지·저장한다.
+    롤백 시 환경변수 AADS_PRESERVE_REALTIME_RESPONSE=false 로 설정하면 기존 재작성 파이프라인으로 즉시 복원된다.
+    """
+    return os.getenv("AADS_PRESERVE_REALTIME_RESPONSE", "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _should_bypass_validator_for_realtime(validation: Any, full_response: str) -> bool:
+    """실시간 응답 유지 모드(A안)에서 구조/양식 재작성(REPORT_STRUCTURE_WEAK 등)으로 인한
+    stream_reset 을 우회한다. 단, 1줄짜리 빈 약속(EMPTY_PROMISE/TOO_SHORT 등)이나 날조(FABRICATED_*)는 차단한다.
+    """
+    if not _preserve_realtime_response_enabled():
+        return False
+    text = (full_response or "").strip()
+    if not text:
+        return False
+    vtype = str(getattr(validation, "violation_type", "") or "")
+    if vtype.startswith("FABRICATED"):
+        return False
+    if vtype in ("EMPTY_PROMISE", "NO_TOOL_FOR_ACTION", "TOO_SHORT"):
+        return False
+    if vtype == "PROGRESS_ONLY_RESPONSE" and len(text) < 250:
+        return False
+    return True
+
+
 def _should_enforce_completion_contract(response_mode: str) -> bool:
     """Fast mode must not turn a valid quick reply into a recoverable stream error.
 
@@ -11791,13 +11823,14 @@ async def _save_and_update_session(
         else None
     )
     intent = _normalize_final_assistant_intent(intent, content)
-    content = await _rewrite_incomplete_final_report_once(
-        content,
-        session_id=sid,
-        execution_id=_execution_uuid,
-        raw_messages=raw_messages,
-        tools_called=normalized_tools_called,
-    )
+    if not _preserve_realtime_response_enabled():
+        content = await _rewrite_incomplete_final_report_once(
+            content,
+            session_id=sid,
+            execution_id=_execution_uuid,
+            raw_messages=raw_messages,
+            tools_called=normalized_tools_called,
+        )
     async with get_pool().acquire() as conn:
         async with conn.transaction():
             _exec_generation_id = None
@@ -11955,7 +11988,11 @@ async def _save_and_update_session(
                 # placeholder → 최종 응답으로 전환 (같은 row, atomic)
                 # content 정리 (XML 태그, placeholder 마커 제거)
                 clean_content = _clean_assistant_final_content(content)
-                if _execution_uuid and _looks_like_incomplete_progress_tail(clean_content):
+                if (
+                    _execution_uuid
+                    and (not _preserve_realtime_response_enabled() or not clean_content.strip())
+                    and _looks_like_incomplete_progress_tail(clean_content)
+                ):
                     logger.warning(
                         "final_save_blocked_incomplete_progress_tail session=%s execution=%s content_len=%s tool_count=%s tail=%r",
                         str(sid)[:8],
@@ -11995,7 +12032,11 @@ async def _save_and_update_session(
                 except Exception:
                     pass
             else:
-                if _execution_uuid and _looks_like_incomplete_progress_tail(content):
+                if (
+                    _execution_uuid
+                    and (not _preserve_realtime_response_enabled() or not (content or "").strip())
+                    and _looks_like_incomplete_progress_tail(content)
+                ):
                     clean_content = _strip_streaming_progress_markers(content or "").strip()
                     logger.warning(
                         "final_insert_blocked_incomplete_progress_tail session=%s execution=%s content_len=%s tool_count=%s tail=%r",
@@ -15078,7 +15119,7 @@ async def send_message_stream(
                             intent=intent,
                             user_message=content,
                         )
-                        if not _sdk_val.is_valid:
+                        if not _sdk_val.is_valid and not _should_bypass_validator_for_realtime(_sdk_val, full_response):
                             logger.error(f"sdk_path_validation_failed: {_sdk_val.violation_type} — {_sdk_val.message}")
                             await _save_interrupted_partial_message(
                                 session_id=session_id,
@@ -15494,6 +15535,7 @@ async def send_message_stream(
                 _pending_switch_banner = _switch_banner
             _attempt_failure_reason = ""
             _interrupt_stream_break = False
+            _saw_tool_since_last_delta = False
             try:
                 from app.core.interrupt_queue import has_interrupt as _has_interrupt
 
@@ -15582,12 +15624,27 @@ async def send_message_stream(
                     elif etype == "interrupt_applied":
                         yield _interrupt_lifecycle.applied_sse(event)
                     elif etype == "delta":
-                        full_response += event.get("content", "")
-                        yield f"data: {json.dumps({'type': 'delta', 'content': event['content']})}\n\n"
+                        _delta_chunk = event.get("content", "")
+                        if (
+                            _saw_tool_since_last_delta
+                            and _preserve_realtime_response_enabled()
+                            and _delta_chunk
+                            and full_response.strip()
+                        ):
+                            _saw_tool_since_last_delta = False
+                            if not full_response.endswith("\n\n") and not _delta_chunk.startswith("\n"):
+                                _sep = "\n" if full_response.endswith("\n") else "\n\n"
+                                _delta_chunk = _sep + _delta_chunk
+                        elif _delta_chunk:
+                            _saw_tool_since_last_delta = False
+                        full_response += _delta_chunk
+                        yield f"data: {json.dumps({'type': 'delta', 'content': _delta_chunk})}\n\n"
                     elif etype == "thinking":
                         thinking_summary += event.get("thinking", "")
                         yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
                     elif etype == "tool_use":
+                        if full_response.strip():
+                            _saw_tool_since_last_delta = True
                         # 도구 호출 횟수를 턴 계측에 남긴다.
                         # chat_turn_timing.tool_calls 는 칼럼만 있고 아무도 채우지
                         # 않아 24시간 192턴이 전부 0 이었다(2026-09-16 실측).
@@ -15596,6 +15653,8 @@ async def send_message_stream(
                         tools_called.append(_tool_use_event_snapshot(event))
                         yield f"data: {json.dumps({'type': 'tool_use', 'tool_name': event['tool_name'], 'tool_use_id': event.get('tool_use_id', ''), 'tool_input': event.get('tool_input', {})})}\n\n"
                     elif etype == "tool_result":
+                        if full_response.strip():
+                            _saw_tool_since_last_delta = True
                         tool_result_payload = _tool_result_event_snapshot(event)
                         tools_called.append(tool_result_payload)
                         if tool_result_payload.get("is_error"):
@@ -15992,7 +16051,10 @@ async def send_message_stream(
             intent=intent,
             user_message=content,
         )
-        if not _validation.is_valid and response_mode in (_RESPONSE_MODE_FAST, _RESPONSE_MODE_PLAN):
+        if not _validation.is_valid and (
+            response_mode in (_RESPONSE_MODE_FAST, _RESPONSE_MODE_PLAN)
+            or _should_bypass_validator_for_realtime(_validation, full_response)
+        ):
             logger.warning(
                 f"output_validator_fast_mode_bypass: {_validation.violation_type} — "
                 f"{_validation.message} (intent={intent}, model={model_used}, tokens_out={output_tokens})"
@@ -16238,7 +16300,7 @@ async def send_message_stream(
 
         _critic_verdict = None
         try:
-            if response_mode in (_RESPONSE_MODE_FAST, _RESPONSE_MODE_PLAN):
+            if response_mode in (_RESPONSE_MODE_FAST, _RESPONSE_MODE_PLAN) or _preserve_realtime_response_enabled():
                 logger.info("response_critic_skipped_fast_mode session=%s", session_id[:8])
             else:
                 from app.services.response_critic import critique_response
@@ -16350,7 +16412,7 @@ async def send_message_stream(
         _completion_contract = None
         _completion_auto_continue_count = 0
         try:
-            if _should_enforce_completion_contract(response_mode):
+            if _should_enforce_completion_contract(response_mode) and not _preserve_realtime_response_enabled():
                 from app.services.response_completion_contract import enforce_completion_contract
 
                 _auto_continue_max = max(0, _COMPLETION_AUTO_CONTINUE_MAX)
@@ -16591,7 +16653,11 @@ async def send_message_stream(
                         """,
                         _violation_details, sid,
                     )
-                logger.info(f"output_validator_violation_recorded: {_validation.violation_type}", session_id=session_id)
+                logger.info(
+                    "output_validator_violation_recorded: %s session=%s",
+                    _validation.violation_type,
+                    session_id[:8] if session_id else "",
+                )
             except Exception as _viol_err:
                 logger.warning(f"output_validator_violation_save_error: {_viol_err}")
 

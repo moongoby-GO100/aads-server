@@ -1200,7 +1200,60 @@ async def test_rewrite_incomplete_final_report_once_keeps_original_when_rewrite_
 
 
 @pytest.mark.asyncio
-async def test_save_and_update_session_rewrites_incomplete_tail_before_final_save_guard():
+async def test_save_and_update_session_preserves_realtime_response_by_default(monkeypatch):
+    monkeypatch.delenv("AADS_PRESERVE_REALTIME_RESPONSE", raising=False)
+    session_id = uuid.uuid4()
+    execution_id = uuid.uuid4()
+    placeholder_id = uuid.uuid4()
+    realtime_text = "실시간 응답 원문입니다. 원하시는 방향을 알려주시면 즉시 수정 후 반영하겠습니다."
+    conn = AsyncMock()
+    conn.transaction = lambda: _TransactionCtx()
+    conn.fetchrow = AsyncMock(return_value={
+        "status": "running", "completed_at": None,
+        "owner_instance": chat_service._EXECUTION_OWNER_INSTANCE,
+        "owner_epoch": 1, "generation_id": None,
+    })
+    conn.fetchval = AsyncMock(return_value=placeholder_id)
+    conn.execute = AsyncMock()
+
+    with (
+        patch("app.services.chat_service.get_pool", return_value=_Pool(conn)),
+        patch(
+            "app.services.chat_service._rewrite_incomplete_final_report_once",
+            new=AsyncMock(),
+        ) as rewrite,
+        patch(
+            "app.services.chat_service._apply_todo_completion_gate",
+            new=AsyncMock(return_value=(realtime_text, {"all_completed": True})),
+        ),
+        patch("app.services.chat_service._execution_has_newer_user_message", new=AsyncMock(return_value=False)),
+        patch("app.services.chat_service._archive_interrupted_siblings_for_completed_execution", new=AsyncMock()),
+        patch("app.services.chat_service._mark_execution_interrupted", new=AsyncMock()) as mark_interrupted,
+        patch("app.services.chat_service._extract_artifacts", new=AsyncMock()),
+    ):
+        await chat_service._save_and_update_session(
+            session_id,
+            realtime_text,
+            execution_id=execution_id,
+            raw_messages=[{"role": "user", "content": "보고해"}],
+            model_used="antigravity-flash",
+            tools_called=[],
+            expected_owner_epoch=1,
+        )
+
+    rewrite.assert_not_awaited()
+    mark_interrupted.assert_not_awaited()
+    promoted = [
+        call for call in conn.execute.await_args_list
+        if "UPDATE chat_messages" in call.args[0] and "SET content = $1" in call.args[0]
+    ]
+    assert promoted
+    assert promoted[0].args[1] == realtime_text
+
+
+@pytest.mark.asyncio
+async def test_save_and_update_session_rewrites_incomplete_tail_before_final_save_guard(monkeypatch):
+    monkeypatch.setenv("AADS_PRESERVE_REALTIME_RESPONSE", "false")
     session_id = uuid.uuid4()
     execution_id = uuid.uuid4()
     placeholder_id = uuid.uuid4()
@@ -1256,7 +1309,8 @@ async def test_save_and_update_session_rewrites_incomplete_tail_before_final_sav
 
 
 @pytest.mark.asyncio
-async def test_save_and_update_session_preserves_interrupted_partial_when_rewrite_fails():
+async def test_save_and_update_session_preserves_interrupted_partial_when_rewrite_fails(monkeypatch):
+    monkeypatch.setenv("AADS_PRESERVE_REALTIME_RESPONSE", "false")
     session_id = uuid.uuid4()
     execution_id = uuid.uuid4()
     placeholder_id = uuid.uuid4()
