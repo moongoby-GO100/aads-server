@@ -5762,6 +5762,7 @@ _claim_queued_job() {
         engine_predicate="AND NOT (COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') LIKE 'litellm:%' AND p.project IN ('GO100','KIS','SF','NTV2'))"
         model_return_expr="COALESCE(NULLIF(worker_model, ''), NULLIF(model, ''), 'auto')"
     fi
+    engine_predicate+=" AND (COALESCE(NULLIF(p.worker_model, ''), NULLIF(p.model, ''), '') !~ '^(antigravity(:|-|$)|gemini-4-argon-|gemini-3\\.8-flash-|claude-(opus|sonnet)-5-5-(high|medium|low)$|gpt-oss-120b-)' OR NOT EXISTS (SELECT 1 FROM llm_api_keys WHERE provider='antigravity' AND (manual_disabled OR NOT is_active)))"
     # AGY needs a host-local CLI and credential. Never claim a remote worktree
     # for the central relay; scanning/admission must not consume retry budget.
     if ! timeout 10 python3 "$RUNNER_ANTIGRAVITY_EXEC" --preflight-local >/dev/null 2>&1; then
@@ -6891,9 +6892,11 @@ ${resume_brief}${safe_instruction}"
             runner_kind="antigravity_relay"
             log "  ANTIGRAVITY_RUNNER job=$job_id model=$agy_model_name workspace=$workdir"
             local agy_preflight=""
-            if ! agy_preflight=$(timeout 10 python3 "$RUNNER_ANTIGRAVITY_EXEC" --preflight-local --workspace "$workdir" 2>&1); then
+            local agy_enabled=""
+            agy_enabled=$(db_exec "SELECT CASE WHEN EXISTS(SELECT 1 FROM llm_api_keys WHERE provider='antigravity' AND (manual_disabled OR NOT is_active)) THEN 'disabled' ELSE 'enabled' END;") || agy_enabled="unknown"
+            if [[ "${agy_enabled//[[:space:]]/}" != "enabled" ]] || ! agy_preflight=$(timeout 10 python3 "$RUNNER_ANTIGRAVITY_EXEC" --preflight-local --workspace "$workdir" 2>&1); then
                 log "  AGY_INFRASTRUCTURE_UNAVAILABLE job=$job_id ${agy_preflight:0:200}"
-                db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold', error_detail='infrastructure_unavailable: local AGY CLI/auth/worktree', updated_at=NOW() WHERE job_id='${job_id}';"
+                db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold', error_detail='infrastructure_unavailable: AGY account disabled or local CLI/auth/worktree', updated_at=NOW() WHERE job_id='${job_id}';"
                 record_runner_event "$job_id" "infrastructure_unavailable" "review_hold" "review_hold" "$current_model" "" "$job_size" "" '{}'
                 _release_work_lock "$project" "$job_id" "$parallel_group"
                 return 1

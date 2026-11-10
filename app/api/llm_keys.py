@@ -259,13 +259,19 @@ async def _relay_call(method: str, path: str, payload: dict[str, Any] | None = N
 
     from app.api.ops import _CLAUDE_RELAY_URL, _load_relay_secret
 
+    # AGY auth runs separately from in-flight relay/model calls.
+    agy_login = (path == "/account-login" and (payload or {}).get("target") == "antigravity:host") or path.startswith("/account-login/agy-")
+    relay_url = _CLAUDE_RELAY_URL
+    if agy_login:
+        from urllib.parse import urlsplit
+        relay_url = f"http://{urlsplit(_CLAUDE_RELAY_URL).hostname}:8206"
     headers: dict[str, str] = {}
     secret = _load_relay_secret()
     if secret:
         headers["X-Claude-Relay-Secret"] = secret
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=2.0)) as client:
-            resp = await client.request(method, f"{_CLAUDE_RELAY_URL}{path}",
+            resp = await client.request(method, f"{relay_url}{path}",
                                         headers=headers, json=payload)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=503, detail=f"릴레이에 닿지 못했다: {str(exc)[:200]}") from exc
@@ -472,8 +478,8 @@ def _antigravity_identity() -> dict[str, str] | None:
 def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str, Any]:
     """Google(Antigravity) 구독 계정 1건을 합성한다.
 
-    llm_api_keys 에 행이 없고(키 붙여넣기로 등록할 수 없는 구독) 호스트 agy 로그인만
-    있으므로 릴레이 바인딩으로만 상태를 정한다. DB 행이 아니라서 켜기/끄기 대상이 아니다.
+    호스트 OAuth 신원·사용량과 DB 관리 메타데이터를 합친다.
+    자격증명을 키로 등록하지 않고 활성 상태와 표시 정보만 DB에서 관리한다.
     """
     binding = bindings.get(ANTIGRAVITY_BINDING_KEY) if bindings is not None else None
     # Old relay processes keep their imported metadata code until every chat
@@ -499,7 +505,7 @@ def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str
         "subscription_status": None, "subscription_checked_at": None, "subscription_hold": False,
         "key_name": "ANTIGRAVITY_HOST", "provider": "antigravity", "label": label,
         "priority": None, "is_active": True, "manual_disabled": False, "manual_disabled_at": None,
-        "toggleable": False,
+        "toggleable": True,
         "kind": "subscription", "masked_value": "", "slot": None,
         "state": state,
         "bound": bool(binding and binding.get("bound")),
@@ -510,7 +516,7 @@ def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str
         "account_source": "agy_credential_metadata" if (binding or {}).get("account_source") == "agy_credential_metadata" else None,
         "account_verified": bool((binding or {}).get("account_verified")),
         "login_in_progress": False,
-        "login_target": None,
+        "login_target": "antigravity:host",
         "subscription": None,
         "rate_limited_until": None,
         "windows": [],
@@ -518,6 +524,26 @@ def _antigravity_account(bindings: dict[str, dict[str, Any]] | None) -> dict[str
         "ok_72h": None, "limit_72h": None, "notes": None,
         **usage,
     }
+
+
+@router.post("/antigravity/registration")
+async def register_antigravity_account() -> dict[str, Any]:
+    """Idempotent metadata registration; OAuth credentials remain on the host."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext('antigravity-account-registration'))")
+            row = await conn.fetchrow("SELECT id FROM llm_api_keys WHERE provider='antigravity' ORDER BY id LIMIT 1")
+            if row is None:
+                row = await conn.fetchrow(
+                    """INSERT INTO llm_api_keys(provider,key_name,encrypted_value,label,priority,is_active,notes)
+                       VALUES('antigravity','ANTIGRAVITY_HOST',$1,'AGY',1,TRUE,'') RETURNING id""",
+                    encrypt_value("host-managed:antigravity"),
+                )
+                await append_key_audit_log(conn, key_id=row["id"], provider="antigravity",
+                    key_name="ANTIGRAVITY_HOST", event_type="create", actor="ceo-settings",
+                    details={"kind": "host_account_metadata", "credentials_imported": False})
+    return {"id": row["id"]}
 
 
 @router.get("/overview")
@@ -623,7 +649,12 @@ async def llm_overview() -> dict[str, Any]:
         if provider == "antigravity":
             # A legacy DB row must not import Codex snapshots as Google quota.
             account = _antigravity_account(bindings)
-            account.update(key_name=row["key_name"], is_active=row["is_active"])
+            account.update(id=row["id"], key_name=row["key_name"], is_active=row["is_active"],
+                           label=row["label"] or account["label"], priority=row["priority"],
+                           notes=row["notes"], manual_disabled=bool(row["manual_disabled"]),
+                           manual_disabled_at=row["manual_disabled_at"].isoformat() if row["manual_disabled_at"] else None)
+            if row["manual_disabled"] or not row["is_active"]:
+                account["state"] = "inactive"
             accounts.append(account)
             continue
         if provider in SUBSCRIPTION_PROVIDERS:

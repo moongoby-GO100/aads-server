@@ -344,6 +344,10 @@ log() { echo "log:$*" >&2; }
 slot_credentials_file() { return 1; }
 leased_slot_token() { return 1; }
 retry_execution_charge_or_abort() { echo "charge:$6" >&2; return 0; }
+db_exec() { printf '%s\n' "${AGY_ACCOUNT_STATE:-enabled}"; }
+db_update() { echo "db_update:$*" >&2; }
+record_runner_event() { echo "event:$*" >&2; }
+_release_work_lock() { echo "lock_released:$*" >&2; }
 OTHER_RAN=()
 
 run() {
@@ -403,7 +407,7 @@ def _loop_harness(runner: Path) -> str:
             .replace("@@AGY_CONTENT_GUARD@@", guard))
 
 
-def _run_attempt_loop(runner: Path, tmp_path: Path, relay_url: str, cycle: list[str], *, other_exit=0, workdir="/tmp/aads-wt-runner-x", tokens=False):
+def _run_attempt_loop(runner: Path, tmp_path: Path, relay_url: str, cycle: list[str], *, other_exit=0, workdir="/tmp/aads-wt-runner-x", tokens=False, account_state="enabled"):
     art = tmp_path / "artifacts"
     art.mkdir(exist_ok=True)
     # This suite exercises the shell's auth/budget/fallback boundary. Keep its
@@ -423,7 +427,7 @@ def _run_attempt_loop(runner: Path, tmp_path: Path, relay_url: str, cycle: list[
         "ART": str(art), "WORKDIR": workdir, "INSTRUCTION": "target.py 를 고쳐라",
         "RUNNER_ANTIGRAVITY_EXEC": str(boundary),
         "CLAUDE_RELAY_URL": relay_url, "CLAUDE_RELAY_SHARED_SECRET": "test-secret",
-        "OTHER_EXIT": str(other_exit),
+        "OTHER_EXIT": str(other_exit), "AGY_ACCOUNT_STATE": account_state,
     }
     if tokens:
         env.update({"T1": "tok-1", "T2": "tok-2"})
@@ -506,3 +510,13 @@ def test_token_switch_skips_only_non_antigravity_attempts_in_mixed_cycle(runner,
     assert proc.returncode == 0, proc.stderr
     assert proc.stderr.count("TOKEN_SWITCH_SKIP") == 1 and "EXECUTED:1" in proc.stdout
     assert len(relay.requests) == 1 and f"ACTUAL_MODEL:antigravity:{AGY_ID}" in proc.stdout
+
+
+@runner_param
+@pytest.mark.parametrize("account_state", ["disabled", "unknown"])
+def test_disabled_account_never_calls_model_or_charges_and_releases_lock(runner, tmp_path, account_state):
+    with _FakeRelay(_OK_EVENTS) as relay:
+        proc, _ = _run_attempt_loop(runner, tmp_path, relay.url, [f"antigravity:{AGY_ID}"], account_state=account_state)
+    assert proc.returncode != 0 and relay.requests == []
+    assert "charge:" not in proc.stderr and "lock_released:" in proc.stderr
+    assert "review_hold" in proc.stderr and "ACTUAL_MODEL" not in proc.stdout

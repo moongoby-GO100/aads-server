@@ -5721,6 +5721,15 @@ async def _stream_antigravity_relay_once(
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Antigravity CLI Relay (/antigravity-stream) 경유 스트리밍. Google Pro OAuth."""
+    from app.core.antigravity_account import antigravity_enabled
+    try:
+        enabled = await antigravity_enabled()
+    except Exception:
+        yield {"type": "error", "content": "AGY 계정 활성 상태를 확인하지 못했습니다. 다시 시도해 주세요."}
+        return
+    if not enabled:
+        yield {"type": "error", "content": "AGY 계정이 비활성화되어 있습니다. 설정에서 활성화해 주세요."}
+        return
     formatted = _format_messages_for_llm(messages, has_resume=False)
     # 이미지 첨부 턴은 formatted 가 content block list 다. 그대로 보내면 릴레이가
     # str+list 연결로 500 을 내고 Codex 로 폴백하므로, Codex 와 같이 텍스트/이미지로 분리한다.

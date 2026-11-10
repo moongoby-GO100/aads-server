@@ -84,8 +84,8 @@ def test_bound_binding_gives_ok(monkeypatch):
     assert acct["key_name"] == "ANTIGRAVITY_HOST"
     assert acct["kind"] == "subscription"
     assert acct["label"] == "Google 구독 (Antigravity) · me@example.com"
-    assert acct["login_target"] is None and acct["windows"] == []
-    assert acct["toggleable"] is False and "id" not in acct
+    assert acct["login_target"] == "antigravity:host" and acct["windows"] == []
+    assert acct["toggleable"] is True and "id" not in acct
 
 
 def test_needs_login_binding(monkeypatch):
@@ -295,3 +295,14 @@ def test_quota_invalid_percent_is_not_presented_as_usage(percent):
     assert account["usage_status"] == "collection_failed"
     assert account["windows"] == []
     assert account["used_percent"] is None
+
+
+def test_db_account_controls_survive_overview(monkeypatch):
+    rows = [_row(id=9, provider="antigravity", key_name="ANTIGRAVITY_HOST", label="AGY 표시 이름",
+                 notes="계정 메모", priority=2, is_active=False, manual_disabled=True)]
+    ov = _run_overview(monkeypatch, {"bindings": [{"target": "antigravity:host", "account": "me@example.com", "bound": True}]}, rows=rows)
+    (account,) = _agy(ov)
+    assert account["id"] == 9 and account["label"] == "AGY 표시 이름" and account["priority"] == 2
+    assert account["notes"] == "계정 메모" and account["state"] == "inactive" and account["manual_disabled"]
+    assert account["login_target"] == "antigravity:host" and account["toggleable"]
+    assert ov["summary"]["antigravity"]["usable"] == 0

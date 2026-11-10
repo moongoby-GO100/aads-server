@@ -10,15 +10,21 @@ from aiohttp import web
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.account_login import _antigravity_binding, ANTIGRAVITY_BIN
 from scripts.agy_usage import UsageCollector
+from scripts import agy_login
 
 collector = UsageCollector(timeout=25)
 SECRET_PATH = Path('/root/aads/aads-server/scripts/claude_relay_secret.txt')
 
 
-async def usage(request):
+@web.middleware
+async def authorize(request, handler):
     secret = SECRET_PATH.read_text().strip()
     if not secret or not hmac.compare_digest(request.headers.get('X-Claude-Relay-Secret', ''), secret):
         raise web.HTTPForbidden()
+    return await handler(request)
+
+
+async def usage(request):
     binding = _antigravity_binding()
     env = {k: v for k, v in os.environ.items() if k in ('HOME', 'PATH', 'LANG', 'LC_ALL', 'TZ')}
     env['TERM'] = 'xterm-256color'
@@ -37,9 +43,28 @@ async def usage(request):
     return web.json_response(binding)
 
 
+async def login(request):
+    try:
+        login_id = request.match_info.get('login_id')
+        if not login_id:
+            return web.json_response(await agy_login.start())
+        if request.method == 'DELETE':
+            return web.json_response(await agy_login.cancel(login_id))
+        if request.method == 'POST':
+            body = await request.json()
+            return web.json_response(await agy_login.submit(login_id, str(body.get('code', ''))))
+        return web.json_response(agy_login.public(agy_login.get(login_id)))
+    except ValueError as exc:
+        return web.json_response({'error': str(exc)}, status=400)
+
+
 def main():
-    app = web.Application()
+    app = web.Application(middlewares=[authorize])
     app.router.add_get('/usage', usage)
+    app.router.add_post('/account-login', login)
+    app.router.add_get('/account-login/{login_id}', login)
+    app.router.add_post('/account-login/{login_id}/code', login)
+    app.router.add_delete('/account-login/{login_id}', login)
     web.run_app(app, host=os.getenv('AGY_USAGE_BIND', '127.0.0.1'), port=8206, access_log=None)
 
 
