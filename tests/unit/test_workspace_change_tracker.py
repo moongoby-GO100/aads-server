@@ -462,6 +462,8 @@ def test_kis_aads_groups_commit_as_before(monkeypatch):
                 return "1111222233334444555566667777888899990000\n"
             if "abbrev-ref" in command:
                 return "main\n"
+            if "rev-list --left-right" in command:
+                return "0\t0\n"
             return ""
 
         async def fake_sensitive(*args):
@@ -539,3 +541,106 @@ def test_kis_prod_tree_finalize_reconciled_clean(monkeypatch):
     assert result["status"] == "reconciled_clean"
     assert not any(k in c for c in cmds for k in ("git add", "git commit", "git push"))
     assert store.rows[0]["status"] == "reconciled_clean"
+
+
+# ── R5C: 뒤처진/갈라진 브랜치에서는 커밋하지 않는다 ──
+def _run_branch_guard(monkeypatch, rev_list_out, fetch_out=""):
+    from app.services import workspace_change_tracker as tracker
+
+    @asynccontextmanager
+    async def fake_lock(*args, **kwargs):
+        yield
+
+    path = "app/api/route.py"
+    store = _FakeLedgerStore([
+        {
+            "session_id": "sess-guard",
+            "project": "AADS",
+            "repo": "aads-server",
+            "file_path": path,
+            "status": "dirty",
+            "git_status": " M",
+        }
+    ])
+    commands = []
+
+    async def fake_run_git(project, repo_name, command):
+        commands.append(command)
+        if "status --porcelain" in command:
+            return f" M {path}\n"
+        if "rev-parse HEAD" in command:
+            return "1111222233334444555566667777888899990000\n"
+        if "abbrev-ref" in command:
+            return "main\n"
+        if " fetch " in command:
+            return fetch_out
+        if "rev-list --left-right" in command:
+            return rev_list_out
+        return ""
+
+    async def fake_empty(*args):
+        return {}
+
+    monkeypatch.setattr(tracker, "_run_git_command", fake_run_git)
+    monkeypatch.setattr(tracker, "list_changes", store.list_changes)
+    monkeypatch.setattr(tracker, "_mark_group", store.mark_group)
+    monkeypatch.setattr(tracker, "git_project_lock", fake_lock)
+    monkeypatch.setattr(tracker, "_sensitive_paths", fake_empty)
+    monkeypatch.setattr(tracker, "_config_syntax_errors", fake_empty)
+    monkeypatch.setattr(tracker, "_content_regression_paths", fake_empty)
+
+    rows = asyncio.run(store.list_changes(session_id="sess-guard", project="AADS"))
+    result = asyncio.run(tracker._finalize_group(
+        session_id="sess-guard", project="AADS", repo="aads-server", rows=rows,
+    ))
+    return tracker, store, commands, result
+
+
+def _no_write_commands(commands):
+    return not any(
+        c.startswith(("git add", "git commit", "git push")) for c in commands
+    )
+
+
+def _no_history_rewrite(commands):
+    return not any(
+        k in c for c in commands for k in ("git pull", "rebase", "git reset", "git merge")
+    )
+
+
+@pytest.mark.parametrize("counts,behind,ahead", [("390\t4\n", 390, 4), ("3\t0\n", 3, 0), ("0\t2\n", 0, 2)])
+def test_finalize_blocked_when_branch_diverged(monkeypatch, counts, behind, ahead):
+    tracker, store, commands, result = _run_branch_guard(monkeypatch, counts)
+    assert result["ok"] is False
+    assert result["blocked"] is True
+    assert result["reason"] == "branch_diverged"
+    assert result["behind"] == behind and result["ahead"] == ahead
+    assert f"branch_diverged behind={behind} ahead={ahead}" in store.rows[0]["last_error"]
+    assert _no_write_commands(commands)
+    assert _no_history_rewrite(commands)
+    assert store.rows[0]["status"] == "dirty"
+    assert asyncio.run(tracker.has_pending_changes(session_id="sess-guard", project="AADS")) is True
+
+
+def test_finalize_commits_when_branch_in_sync(monkeypatch):
+    tracker, store, commands, result = _run_branch_guard(monkeypatch, "0\t0\n")
+    assert result["ok"] is True
+    assert result["status"] == "pushed"
+    assert any(c.startswith("git commit --only") for c in commands)
+    assert any(c.startswith("git push origin") for c in commands)
+    assert _no_history_rewrite(commands)
+
+
+@pytest.mark.parametrize("rev_list,fetch", [("", "fatal: unable to access remote\n"), ("garbage\n", ""), ("fatal: bad revision\n", ""),
+    # timeout/비정상 종료: 오류 문구 없이 헤더 exit 코드만 다르다 — 오래된 origin 으로 0/0 이 나와도 막아야 한다
+    ("0\t0\n", "[AADS 명령 실행 — exit=124]\n$ timeout 60 git fetch origin main\n"),
+    ("[AADS 명령 실행 — exit=1]\n$ git rev-list\n0\t0\n", ""),
+])
+def test_finalize_blocked_when_branch_state_unknown(monkeypatch, rev_list, fetch):
+    tracker, store, commands, result = _run_branch_guard(monkeypatch, rev_list, fetch)
+    assert result["ok"] is False
+    assert result["blocked"] is True
+    assert result["reason"] == "branch_state_unknown"
+    assert _no_write_commands(commands)
+    assert _no_history_rewrite(commands)
+    assert store.rows[0]["status"] == "dirty"

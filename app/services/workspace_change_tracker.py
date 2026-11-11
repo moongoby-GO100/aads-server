@@ -276,6 +276,20 @@ def _command_has_error(text: str) -> bool:
     )
 
 
+_EXEC_HEADER_RE = re.compile(r"^\[[^\]]*명령 실행 — exit=(-?\d+)\]")
+
+
+def _command_exit_failed(text: str) -> bool:
+    """실행기 헤더(`[AADS 명령 실행 — exit=N]`)의 종료코드가 0이 아니면 True.
+
+    timeout 124 처럼 오류 문구 없이 비정상 종료한 명령을 `_command_has_error` 는 놓친다.
+    헤더가 없으면(종료코드를 알 수 없으면) 이 검사로는 실패로 보지 않는다.
+    """
+    first = (text or "").lstrip().splitlines()[:1]
+    m = _EXEC_HEADER_RE.match(first[0].strip()) if first else None
+    return bool(m and m.group(1) != "0")
+
+
 def _is_remote_git_failure(text: str) -> bool:
     if not isinstance(text, str):
         return True
@@ -855,6 +869,41 @@ async def _notify_sensitive_skipped(
         logger.warning("sensitive skip telegram alert failed: %s", exc)
 
 
+_REV_LIST_COUNT_RE = re.compile(r"^(\d+)\s+(\d+)$")
+
+
+async def _check_branch_state(project: str, repo: str, push_branch: str) -> dict[str, Any]:
+    """커밋 전에 로컬 브랜치가 origin 과 같은 선 위에 있는지 잰다 (R5C).
+
+    뒤처진(behind) 또는 로컬 전용 커밋이 있는(ahead) 브랜치에서 Chat-Finalize 가 커밋하면
+    push 가 non-fast-forward 로 거부되어 커밋이 로컬에만 쌓인다(2026-11-11 호스트 main
+    390 behind / 4 ahead). pull/rebase/reset/merge 는 절대 하지 않는다 — rebase 는
+    pre-commit 서명을 지운다(R-PUSH). 재거나 읽지 못하면 fail-closed 로 막는다.
+
+    반환: {"state": "ok"|"diverged"|"unknown", "behind": int, "ahead": int, "detail": str}
+    """
+    quoted = shlex.quote(push_branch)
+    try:
+        fetch_out = await _run_git_command(
+            project, repo, f"timeout 60 git fetch origin {quoted}"
+        )
+        if _command_has_error(fetch_out) or _command_exit_failed(fetch_out):
+            return {"state": "unknown", "behind": 0, "ahead": 0, "detail": fetch_out[:300]}
+        count_out = await _run_git_command(
+            project, repo, f"git rev-list --left-right --count origin/{quoted}...HEAD"
+        )
+    except Exception as exc:
+        return {"state": "unknown", "behind": 0, "ahead": 0, "detail": str(exc)[:300]}
+    if _command_has_error(count_out) or _command_exit_failed(count_out):
+        return {"state": "unknown", "behind": 0, "ahead": 0, "detail": count_out[:300]}
+    match = _REV_LIST_COUNT_RE.match(_last_output_line(count_out))
+    if not match:
+        return {"state": "unknown", "behind": 0, "ahead": 0, "detail": count_out[:300]}
+    behind, ahead = int(match.group(1)), int(match.group(2))
+    state = "diverged" if (behind > 0 or ahead > 0) else "ok"
+    return {"state": state, "behind": behind, "ahead": ahead, "detail": ""}
+
+
 async def _finalize_group(
     *,
     session_id: str,
@@ -1148,6 +1197,40 @@ async def _finalize_group(
 
     try:
         async with git_project_lock(f"{project}:{repo}", timeout=60):
+            # R5C: push 가능 여부를 확인하기 전에는 커밋을 만들지 않는다.
+            guard_branch = await _resolve_push_branch(project, repo)
+            branch_state = await _check_branch_state(project, repo, guard_branch)
+            if branch_state["state"] != "ok":
+                if branch_state["state"] == "diverged":
+                    reason = "branch_diverged"
+                    last_error = (
+                        f"branch_diverged behind={branch_state['behind']} "
+                        f"ahead={branch_state['ahead']} — 러너로 main 에 옮길 것"
+                    )
+                else:
+                    reason = "branch_state_unknown"
+                    last_error = f"branch_state_unknown — {branch_state['detail']}"[:500]
+                await _mark_group(
+                    session_id=session_id,
+                    project=project,
+                    repo=repo,
+                    file_paths=file_paths,
+                    ledger_file_paths=ledger_file_paths,
+                    status=_STATUS_DIRTY,
+                    last_error=last_error,
+                )
+                result["blocked"] = True
+                result["reason"] = reason
+                result["behind"] = branch_state["behind"]
+                result["ahead"] = branch_state["ahead"]
+                result["push_branch"] = guard_branch
+                result["detail"] = last_error[:500]
+                logger.warning(
+                    "workspace_finalize_branch_guard project=%s repo=%s reason=%s detail=%s",
+                    project, repo, reason, last_error,
+                )
+                return result
+
             add_result = await _run_git_command(project, repo, f"git add -- {quoted_files}")
             if _command_has_error(add_result):
                 await _mark_group(

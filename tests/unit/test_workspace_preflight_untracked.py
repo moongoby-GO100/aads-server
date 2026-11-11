@@ -34,6 +34,8 @@ def test_finalize_ownership_and_config(monkeypatch, case):
             return 'a' * 40
         if 'abbrev-ref' in command:
             return 'main'
+        if 'rev-list --left-right' in command:
+            return '0\t0'
         return ''
 
     async def mark(**kwargs):
